@@ -47,15 +47,21 @@ describe("DESK-36 向导门：用户主动停止 ≠ 向导中途退出", () => 
 describe("DESK-36 接线（App.svelte）", () => {
   const body = (re) => app.match(re)?.[0] ?? "";
   const refreshBody = body(/async function refresh\(\) \{[\s\S]*?\n  \}\n/);
+  const selfHealBody = body(/async function maybeSelfHeal\(\) \{[\s\S]*?\n  \}\n/);
 
   it("向导门用 shouldShowWizard，不再内联 configured/installed 的 ||", () => {
-    expect(app).toContain("{#if shouldShowWizard(wizard, online)}");
+    // DESK-63 (#946): the gate takes the event-driven service state, not a
+    // boolean derived from one data refresh.
+    expect(app).toContain(
+      "{#if shouldShowWizard(wizard, isServiceRunning(serviceState))}",
+    );
     expect(app).not.toMatch(/!wizard\.configured \|\| !wizard\.installed/);
   });
 
-  it("refresh 的自愈走 self_heal_daemon（Rust 现场判停止标记），不直接 resume", () => {
-    expect(refreshBody).toContain('invoke("self_heal_daemon")');
-    expect(refreshBody).not.toContain('invoke("resume_daemon_after_update")');
+  it("自愈走 maybeSelfHeal（Rust 现场判停止标记）， refresh 不再触发自愈", () => {
+    expect(refreshBody).not.toContain('invoke("self_heal_daemon")');
+    expect(selfHealBody).toContain('invoke("self_heal_daemon")');
+    expect(selfHealBody).not.toContain('invoke("resume_daemon_after_update")');
   });
 
   it("更新流程仍然调 resume_daemon_after_update（成功与失败两条路都在）", () => {
@@ -88,9 +94,12 @@ describe("DESK-38 服务恢复判定", () => {
     expect(serviceCameBack(true, false)).toBe(false);
   });
 
-  it("接线：refresh 成功分支用它触发 onServiceBackOnline，失败分支记下离线", () => {
+  it("接线：service-state 到 running 时触发 onServiceBackOnline，数据刷新不再判恢复", () => {
+    const applyBody =
+      app.match(/function applyServiceState\(next\) \{[\s\S]*?\n  \}\n/)?.[0] ?? "";
     const refreshBody = app.match(/async function refresh\(\) \{[\s\S]*?\n  \}\n/)?.[0] ?? "";
-    expect(refreshBody).toContain("if (serviceCameBack(lastReachable, true)) onServiceBackOnline();");
-    expect(refreshBody).toContain("lastReachable = false;");
+    expect(applyBody).toContain("onServiceBackOnline()");
+    expect(refreshBody).not.toContain("onServiceBackOnline");
+    expect(refreshBody).not.toContain("lastReachable");
   });
 });

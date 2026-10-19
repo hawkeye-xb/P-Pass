@@ -56,8 +56,9 @@ const shell = lf(readFileSync(new URL("../src-tauri/src/lib.rs", import.meta.url
 
 describe("#413 §7 低空间通知接线", () => {
   it("每次 status 刷新都用 disk_free_bytes 过一遍判定", () => {
+    // DESK-63 (#946): `online = true` 已删除——数据刷新不再写服务状态。
     expect(app).toMatch(
-      /status = await call\("status"\);\s*\n\s*online = true;\s*\n\s*checkLowSpace\(status\.disk_free_bytes \?\? null\);/,
+      /status = await call\("status"\);\s*\n\s*checkLowSpace\(status\.disk_free_bytes \?\? null\);/,
     );
   });
 

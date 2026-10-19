@@ -45,6 +45,43 @@ async fn setup() -> (tempfile::TempDir, Db, Ingestor) {
     (dir, db, ing)
 }
 
+/// IDX-08 (#1010): a fake platform policy with the two names the issue
+/// names. The real Windows rules live in `crates/platform`; core only has to
+/// apply whatever policy it is handed, after its own traversal cleanup.
+fn fake_windows_name(name: &str) -> String {
+    match name {
+        "a:b.jpg" => "a_b.jpg".into(),
+        "CON.jpg" => "_CON.jpg".into(),
+        other => other.into(),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn platform_file_name_policy_rewrites_the_landed_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = Db::open_in_memory().await.unwrap();
+    let root = dir.path().join("library");
+    let ing = Ingestor::new(db, root.clone()).with_file_name_sanitizer(Some(fake_windows_name));
+
+    for (requested, expected, content) in [
+        // A path-shaped request proves the policy runs on the last component,
+        // not on the raw phone name.
+        ("dir/a:b.jpg", "a_b.jpg", &b"fake policy a"[..]),
+        ("CON.jpg", "_CON.jpg", &b"fake policy b"[..]),
+    ] {
+        let mut f = incoming(dir.path(), "safe.jpg", content);
+        f.file_name = requested.into();
+        let IngestOutcome::New(rel) = ing.ingest(&f).await.unwrap() else {
+            panic!("expected New for {requested}");
+        };
+        assert!(
+            rel.ends_with(&format!("/{expected}")),
+            "requested={requested}, expected suffix /{expected}, got {rel}"
+        );
+        assert!(root.join(&rel).is_file(), "landed file missing: {rel}");
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn new_file_lands_moved_and_indexed() {
     let (dir, db, ing) = setup().await;

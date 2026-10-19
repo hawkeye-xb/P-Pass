@@ -70,6 +70,8 @@ function desktop() {
     switch (cmd) {
       case "wizard_state":
         return { configured: true, installed: true, user_stopped: false };
+      case "service_state":
+        return { state: "running" };
       case "self_heal_daemon":
       case "notify_system":
         return null;

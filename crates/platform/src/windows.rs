@@ -409,6 +409,64 @@ fn io_err(action: &'static str) -> impl Fn(std::io::Error) -> PlatformError {
     move |source| PlatformError::Io { action, source }
 }
 
+/// IDX-08 (#1010): Windows-only file-name policy for new ingest paths.
+///
+/// Input is the last path component after core's traversal cleanup (no `/` or
+/// `\` should remain, but they are replaced anyway). Rules, per Microsoft's
+/// naming rules:
+/// - `< > : " / \ | ? *` and ASCII control characters 0x00-0x1F → `_`;
+/// - trailing `.` and spaces are not legal on Windows → strip them;
+/// - empty / `.` / `..` → `unnamed.bin` (core normally handles these first);
+/// - reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`-`COM9`,
+///   `LPT1`-`LPT9`, case-insensitive, with or without an extension) get a `_`
+///   prefix. Case is preserved, so `con.jpg` → `_con.jpg`, not `_CON.jpg`.
+///
+/// Deliberately **no length truncation**: the 255-character limit is a separate
+/// concern and would need its own rule for extension-preserving truncation.
+/// No case folding: Windows is case-insensitive, but folding would change
+/// readable names and is not needed for this bug.
+fn sanitize_windows_file_name(name: &str) -> String {
+    let mut cleaned = String::with_capacity(name.len());
+    for c in name.chars() {
+        let illegal =
+            matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') || (c as u32) < 0x20;
+        cleaned.push(if illegal { '_' } else { c });
+    }
+    // Windows trims trailing dots and spaces; a name like `photo.jpg.` is not
+    // the same file as `photo.jpg`, and `create_new` rejects it.
+    while cleaned.ends_with('.') || cleaned.ends_with(' ') {
+        cleaned.pop();
+    }
+    if cleaned.is_empty() || cleaned == "." || cleaned == ".." {
+        return "unnamed.bin".into();
+    }
+    // Reserved-name matching is on the base name before the first dot, and
+    // Windows ignores trailing spaces/dots in that base. `CON.jpg` and
+    // `CON.tar.gz` are both reserved.
+    let base = cleaned
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches([' ', '.']);
+    if is_windows_reserved_name(base) {
+        cleaned.insert(0, '_');
+    }
+    cleaned
+}
+
+fn is_windows_reserved_name(base: &str) -> bool {
+    let upper = base.to_ascii_uppercase();
+    if matches!(upper.as_str(), "CON" | "PRN" | "AUX" | "NUL") {
+        return true;
+    }
+    // COM1-COM9 / LPT1-LPT9. COM10 is legal; COM0 is not a reserved name.
+    let bytes = upper.as_bytes();
+    bytes.len() == 4
+        && (upper.starts_with("COM") || upper.starts_with("LPT"))
+        && bytes[3].is_ascii_digit()
+        && bytes[3] != b'0'
+}
+
 impl PlatformAdapter for WindowsAdapter {
     /// DESK-65 (#957)：登记计划任务并立刻运行它（= `launchctl bootstrap` +
     /// `RunAtLoad`）。向导紧接着就要连上 daemon，所以登记完就跑；已经在跑时
@@ -751,6 +809,11 @@ impl PlatformAdapter for WindowsAdapter {
     /// 指着一个空目录让 daemon 建一个崭新的空索引。
     fn data_dir(&self) -> PathBuf {
         crate::data_migration::resolve(&legacy_data_dir(), &current_data_dir())
+    }
+
+    /// IDX-08 (#1010)：Windows 的非法字符 / 保留名 / 结尾点空格规则。
+    fn ingest_file_name_sanitizer(&self) -> Option<fn(&str) -> String> {
+        Some(sanitize_windows_file_name)
     }
 
     /// DESK-24 (#173)：见 [`crate::PlatformAdapter::migrate_legacy_data_dir`]。
@@ -2955,5 +3018,85 @@ mod desk65_scheduled_task_tests {
         let mode = WindowsAdapter::new().service_mode();
         assert_eq!(mode, ServiceMode::ScheduledTask);
         assert!(mode.has_service_manager());
+    }
+}
+
+#[cfg(test)]
+mod ingest_file_name_tests {
+    use super::*;
+
+    #[test]
+    fn illegal_characters_become_underscores() {
+        assert_eq!(sanitize_windows_file_name("a:b.jpg"), "a_b.jpg");
+        assert_eq!(
+            sanitize_windows_file_name("a<b>c?d*e|f\"g.jpg"),
+            "a_b_c_d_e_f_g.jpg"
+        );
+        assert_eq!(sanitize_windows_file_name("a/b\\c.jpg"), "a_b_c.jpg");
+        assert_eq!(
+            sanitize_windows_file_name("a\u{1}b\u{1f}c.jpg"),
+            "a_b_c.jpg"
+        );
+    }
+
+    #[test]
+    fn del_is_not_in_the_ascii_control_range_we_replace() {
+        // Windows forbids 0x00-0x1F, not 0x7F. Keep the rule exact.
+        assert_eq!(sanitize_windows_file_name("a\u{7f}b.jpg"), "a\u{7f}b.jpg");
+    }
+
+    #[test]
+    fn reserved_names_get_underscore_prefix_case_insensitively() {
+        for (input, expected) in [
+            ("CON", "_CON"),
+            ("con", "_con"),
+            ("CON.jpg", "_CON.jpg"),
+            ("con.tar.gz", "_con.tar.gz"),
+            ("PRN", "_PRN"),
+            ("AUX.txt", "_AUX.txt"),
+            ("NUL", "_NUL"),
+            ("NUL.txt", "_NUL.txt"),
+            ("COM1", "_COM1"),
+            ("com9.txt", "_com9.txt"),
+            ("LPT1.log", "_LPT1.log"),
+            // Windows ignores trailing spaces/dots when matching the base.
+            ("CON .jpg", "_CON .jpg"),
+        ] {
+            assert_eq!(sanitize_windows_file_name(input), expected, "input={input}");
+        }
+
+        // Not reserved: COM0 / COM10 / names that merely start with a device
+        // name.
+        for legal in ["COM0.txt", "COM10.txt", "CONSOLE.txt", "LPT10.txt"] {
+            assert_eq!(sanitize_windows_file_name(legal), legal);
+        }
+    }
+
+    #[test]
+    fn trailing_dots_and_spaces_are_stripped() {
+        assert_eq!(sanitize_windows_file_name("photo.jpg."), "photo.jpg");
+        assert_eq!(sanitize_windows_file_name("photo.jpg "), "photo.jpg");
+        assert_eq!(sanitize_windows_file_name("photo.jpg. "), "photo.jpg");
+        assert_eq!(sanitize_windows_file_name("..."), "unnamed.bin");
+    }
+
+    #[test]
+    fn empty_and_dot_names_fall_back() {
+        assert_eq!(sanitize_windows_file_name(""), "unnamed.bin");
+        assert_eq!(sanitize_windows_file_name("."), "unnamed.bin");
+        assert_eq!(sanitize_windows_file_name(".."), "unnamed.bin");
+    }
+
+    #[test]
+    fn legal_names_are_unchanged() {
+        for legal in [
+            "IMG_1.jpg",
+            "照片.jpg",
+            "hello world.jpg",
+            "a_b.jpg",
+            "CONSOLE.jpg",
+        ] {
+            assert_eq!(sanitize_windows_file_name(legal), legal);
+        }
     }
 }

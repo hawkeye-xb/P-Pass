@@ -28,6 +28,7 @@ use tokio_util::sync::CancellationToken;
 use core_index::{
     device_dir, IncomingFile, IndexError, IngestOutcome, Ingestor, SupersedeApplied, SupersedeCheck,
 };
+use platform::PlatformAdapter as _;
 use proto::{
     DesktopHealth, FlowCompletionReceipt, FlowFetchRequest, FlowStatusReply, FlowSupersedeReply,
     FlowSupersedeRequest, FlowTupleRef,
@@ -559,7 +560,8 @@ impl FlowDelivery {
     pub fn new(db: Db, blobs: Arc<Blobs>, library_root: impl AsRef<Path>) -> Self {
         let root = library_root.as_ref().to_path_buf();
         Self {
-            ingestor: Ingestor::new(db.clone(), &root),
+            ingestor: Ingestor::new(db.clone(), &root)
+                .with_file_name_sanitizer(platform::adapter().ingest_file_name_sanitizer()),
             db,
             blobs,
             staging: root.join(".ppf/flow-staging"),

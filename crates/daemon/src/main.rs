@@ -671,7 +671,9 @@ async fn main() -> anyhow::Result<()> {
     // SYNC-01 的删幽灵那一半，索引一丢照片就永远回不来。
     // #851: 补完上次崩溃时停在「索引已改指原图、文件还没换过去」的替换——必须在启动对账之前，
     // 否则对账会拿磁盘上的旧副本去比索引里的新指纹。
+    use platform::PlatformAdapter as _;
     match core_index::Ingestor::new(db.clone(), &data_dir)
+        .with_file_name_sanitizer(platform::adapter().ingest_file_name_sanitizer())
         .finish_pending_swaps()
         .await
     {
