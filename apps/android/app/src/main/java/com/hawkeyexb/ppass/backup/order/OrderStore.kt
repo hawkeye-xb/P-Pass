@@ -73,7 +73,36 @@ data class Order(
      * （见 [OrderStore.locationRedactedAfter]）。
      */
     val locationRedacted: Boolean = false,
+    /** #851 / #1005：抹过地点、已有结论（不再是待办）时的原因；还是待办或没抹过时为 null。 */
+    val locationVerdict: LocationVerdict? = null,
 )
+
+/**
+ * #851 / #1005：「地点被抹」这一行的结论，存在 `location_redacted` 列里（0 = 原样字节，1 = 抹过、还是待办）。
+ * 每一种「这次补不成、以后也补不成」的情况都要落到一个结论上，否则这一行永远是待办，每次触发都会为它连桌面。
+ */
+enum class LocationVerdict(val code: Int) {
+    /** 重读出的原样字节与传过的一样：照片本来就没有地点。 */
+    NO_LOCATION(0),
+
+    /** 桌面拒绝替换。 */
+    REFUSED(2),
+
+    /** MediaStore 里查不到这张（删了，或部分相册权限下看不见）。 */
+    SOURCE_GONE(3),
+
+    /** 照片被编辑成了新版本：这一行描述的那份字节已不存在（新版本照常另传）。 */
+    VERSION_CHANGED(4),
+
+    /** 原图读不出来（导入当场重试后仍失败）。 */
+    UNREADABLE(5),
+    ;
+
+    companion object {
+        /** 列值 → 结论；0（原样字节）与 1（待办）没有结论。 */
+        fun ofCode(code: Int): LocationVerdict? = entries.firstOrNull { it.code == code && it != NO_LOCATION }
+    }
+}
 
 /** 新建一行 order 的输入；id 与时间戳由存储分配。 */
 data class NewOrder(
@@ -181,10 +210,10 @@ interface OrderStore {
     fun locationRedactedAfter(afterId: Long, limit: Int): List<Order>
 
     /**
-     * #851：这一行的「地点被抹」有了结论，不再是待办。[refused] = 桌面拒绝替换（它手里仍是抹过的副本，
-     * [Order.locationRedacted] 仍为 true）；否则 = 重读出的原样字节与传过的一样（照片本来就没有地点）。
+     * #851：这一行的「地点被抹」有了结论，不再是待办。[LocationVerdict.NO_LOCATION] = 重读出的原样字节与传过的一样
+     * （照片本来就没有地点）；其余结论 = 桌面手里仍是抹过的副本（[Order.locationRedacted] 仍为 true），原因见 [verdict]。
      */
-    fun resolveLocationRedaction(id: Long, refused: Boolean)
+    fun resolveLocationRedaction(id: Long, verdict: LocationVerdict)
 
     /**
      * 比较并转换：只有当前状态在 [expected] 里时才改成 [to]，单事务。

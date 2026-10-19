@@ -159,6 +159,7 @@ class SqliteOrderStore private constructor(
         updatedAtMs = getLong(9),
         sourceMissing = getInt(10) != 0,
         locationRedacted = getInt(11) != 0,
+        locationVerdict = LocationVerdict.ofCode(getInt(11)),
     )
 
     private fun queryOrders(sql: String, vararg args: String): List<Order> =
@@ -295,7 +296,7 @@ class SqliteOrderStore private constructor(
             afterId.toString(),
         )
 
-    // location_redacted：0 = 原样字节；1 = 抹过、待替换；2 = 抹过、桌面拒绝替换（#851，不再是待办）。
+    // location_redacted：0 = 原样字节；1 = 抹过、待替换；≥ 2 = 抹过、已有结论（[LocationVerdict]，不再是待办）。
     override fun locationRedactedAfter(afterId: Long, limit: Int): List<Order> =
         queryOrders(
             "SELECT $COLUMNS FROM orders o WHERE o.state = '${OrderState.CONFIRMED.name}' AND o.content_hash IS NOT NULL " +
@@ -303,9 +304,9 @@ class SqliteOrderStore private constructor(
             afterId.toString(),
         )
 
-    override fun resolveLocationRedaction(id: Long, refused: Boolean) {
+    override fun resolveLocationRedaction(id: Long, verdict: LocationVerdict) {
         inTransaction {
-            execSQL("UPDATE orders SET location_redacted = ? WHERE id = ?", arrayOf(if (refused) 2 else 0, id))
+            execSQL("UPDATE orders SET location_redacted = ? WHERE id = ?", arrayOf(verdict.code, id))
         }
     }
 

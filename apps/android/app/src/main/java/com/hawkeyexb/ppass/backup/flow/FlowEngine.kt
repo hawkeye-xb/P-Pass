@@ -14,6 +14,7 @@ package com.hawkeyexb.ppass.backup.flow
 
 import com.hawkeyexb.ppass.backup.order.AuditRecord
 import com.hawkeyexb.ppass.backup.order.GenerationAdvance
+import com.hawkeyexb.ppass.backup.order.LocationVerdict
 import com.hawkeyexb.ppass.backup.order.MediaDetails
 import com.hawkeyexb.ppass.backup.order.MediaSnapshot
 import com.hawkeyexb.ppass.backup.order.MediaSnapshotSource
@@ -33,6 +34,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -41,6 +43,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -69,7 +72,10 @@ internal class FlowEngine(
     private val io: CoroutineDispatcher,
     private val log: FlowLogger = FlowLogger { },
     private val clock: () -> Long = System::currentTimeMillis,
-    /** 每轮结束后（审计 outbox 冲刷等）。 */
+    /**
+     * 每轮结束后（审计 outbox 冲刷）。#1005：只在这一轮连上过桌面时调用——审计是给桌面看的历史、不急，搭已经建好的
+     * 连接走；没连桌面的一轮（没东西要传 / 桌面不可达）不为它单独建连接，积压的留到下一次连上。
+     */
     private val afterCycle: () -> Unit = {},
     /** 桌面宣布了新的配对代号（同一台桌面重新配对）：持久化它。 */
     private val onEpochAdvertised: (String) -> Unit = {},
@@ -114,8 +120,14 @@ internal class FlowEngine(
 
     // ---- 以下字段只在写者 scope 上读写 ----
     private var cycleJob: Job? = null
+
+    /** #1005：这一次 drain 里探测到过桌面（连接已建好）——[afterCycle] 只在此时搭车上报。 */
+    private var reachedDesktop = false
     private val pending = LinkedHashSet<TriggerReason>()
     private var started = false
+
+    /** #827：这一轮登记过续传哨兵（在跑时哨兵到点才再排；放弃登记的那一轮不再排）。 */
+    private var sentinelArmed = false
 
     /**
      * AUDIT-07（#499）：这一轮已经发出的、会挂到本轮证据上的逐张事实计数（键 == 桌面
@@ -143,9 +155,14 @@ internal class FlowEngine(
         kind: String,
         payload: Map<String, String>,
         roundId: String? = store.openRoundId(),
-    ): AuditRecord {
-        evidenceOutcomeOf(kind, payload)?.let { roundOutcomes[it] = (roundOutcomes[it] ?: 0) + 1 }
-        return AuditRecord(UUID.randomUUID().toString(), kind, roundId, clock(), payload)
+    ): AuditRecord = AuditRecord(UUID.randomUUID().toString(), kind, roundId, clock(), payload)
+
+    /**
+     * #902：把一条**已经落库**的事实计进本轮自报计数（`flow.round.finished` 的 payload）。构造时不计：
+     * 带审计的转换在行已被别处结掉时返回 false、审计不落库，这时计了就和桌面按证据重算的数对不上。
+     */
+    private fun countPersisted(record: AuditRecord) {
+        evidenceOutcomeOf(record.kind, record.payload)?.let { roundOutcomes[it] = (roundOutcomes[it] ?: 0) + 1 }
     }
 
     /**
@@ -215,6 +232,11 @@ internal class FlowEngine(
         if (control.paused()) {
             log.log("trigger $reason: paused by user, only intent recorded")
             refreshPending()
+            return false
+        }
+        if (reason == TriggerReason.RESUME_SENTINEL && cycleJob?.isActive == true) {
+            // #827：哨兵到点而这一轮还在跑——进程活着，只把它往后再排一次。不进 pending：否则这一轮结束后会白跑一轮。
+            if (sentinelArmed) registerWake(WakePlan.ResumeSentinel(RESUME_SENTINEL_DELAY_MS), "round still running")
             return false
         }
         pending += reason
@@ -376,16 +398,21 @@ internal class FlowEngine(
         val plan = wakePlanOf(reason) {
             fgsBlockedWakePlan(stall, control.fgsBudgetFacts(), bootClock(), appForegroundAt())
         }
+        registerWake(plan, "waiting for $reason", stall)
+    }
+
+    /** 唤醒的唯一登记口（等待中与在传都经过这里），[context] 只用于日志。 */
+    private fun registerWake(plan: WakePlan, context: String, stall: FgsStall = FgsStall.NOT_GRANTED) {
         when (plan) {
-            WakePlan.AwaitsUser -> log.log("waiting for $reason: needs the user, no wake registered")
+            WakePlan.AwaitsUser -> log.log("$context: needs the user, no wake registered")
             is WakePlan.WhenConditionsMet -> scheduler.scheduleWhenConditionsMet(plan.reason)
             WakePlan.RetryProbes -> if (control.retryLadderSpent()) {
                 // #762：这次故障已经排过一组。不再加排——否则「开始传之后才出错」会每轮重排、无界循环。
-                log.log("waiting for $reason: retry probes already used for this outage; the 5h fallback and events carry on until a success")
+                log.log("$context: retry probes already used for this outage; the 5h fallback and events carry on until a success")
             } else {
                 scheduler.scheduleUnreachableProbes()
                 control.setRetryLadderSpent(true)
-                log.log("waiting for $reason: retry probes registered ($RETRY_PROBES_LOG)")
+                log.log("$context: retry probes registered ($RETRY_PROBES_LOG)")
             }
             is WakePlan.BudgetReset -> {
                 // 唯一名、REPLACE：同一次耗尽算出的是同一个绝对时刻（最近一次授予 + 24h + 余量），重登记不会把它往后推。
@@ -394,9 +421,35 @@ internal class FlowEngine(
                     FgsStall.LOST -> "foreground lost; fallback wake past the system reset (last grant + 24h + margin)"
                     FgsStall.NOT_GRANTED -> "foreground budget exhausted (system reset + margin)"
                 }
-                log.log("waiting for $reason: one-off wake registered in ${plan.delayMs / 60_000}min; $why")
+                log.log("$context: one-off wake registered in ${plan.delayMs / 60_000}min; $why")
+            }
+            is WakePlan.ResumeSentinel -> {
+                scheduler.armResumeSentinel(plan.delayMs)
+                sentinelArmed = true
+                log.log("$context: resume sentinel registered in ${plan.delayMs / 60_000}min; cancelled when the round ends")
             }
         }
+    }
+
+    /**
+     * #827：一轮开了（FGS 到手）——登记哨兵，进程死在半路时由它拉起来续传。有界：连续
+     * [RESUME_SENTINEL_MAX_STRIKES] 轮都死在半路（没处理完任何一张）就不再登记，见 [WakePlan.ResumeSentinel]。
+     */
+    private fun armResumeSentinel(roundId: String) {
+        val strikes = control.resumeStrikes()
+        if (strikes >= RESUME_SENTINEL_MAX_STRIKES) {
+            log.log("round $roundId: $strikes rounds in a row died before finishing a photo; no resume sentinel, the 5h fallback and events carry on")
+            return
+        }
+        control.setResumeStrikes(strikes + 1)
+        registerWake(WakePlan.ResumeSentinel(RESUME_SENTINEL_DELAY_MS), "round $roundId")
+    }
+
+    /** #827：一轮收尾（进程还活着）：撤掉哨兵、清零计数。 */
+    private fun disarmResumeSentinel() {
+        sentinelArmed = false
+        scheduler.cancelResumeSentinel()
+        control.setResumeStrikes(0)
     }
 
     /**
@@ -502,28 +555,35 @@ internal class FlowEngine(
     // ---------------------------------------------------------------- 一轮
 
     private suspend fun drain() {
-        try {
-            while (pending.isNotEmpty()) {
-                val reasons = pending.toSet()
-                pending.clear()
-                try {
-                    runCycle(reasons)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (failure: Exception) {
-                    // 一轮失败（例如本地数据库写入抛错）不能让引擎死掉。#762：进「等待中」（原因可见）并按退避登记唤醒，
-                    // 不能只清成空闲——那样既不显示原因，也没有任何唤醒，只能等下一次外部触发。
-                    log.log("cycle $reasons failed: ${failure.javaClass.simpleName}: ${failure.message}")
-                    settle(WaitReason.UNEXPECTED_ERROR)
+        while (true) {
+            reachedDesktop = false
+            try {
+                while (pending.isNotEmpty()) {
+                    val reasons = pending.toSet()
+                    pending.clear()
+                    try {
+                        runCycle(reasons)
+                    } catch (cancelled: CancellationException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        // 一轮失败（例如本地数据库写入抛错）不能让引擎死掉。#762：进「等待中」（原因可见）并按退避登记唤醒，
+                        // 不能只清成空闲——那样既不显示原因，也没有任何唤醒，只能等下一次外部触发。
+                        log.log("cycle $reasons failed: ${failure.javaClass.simpleName}: ${failure.message}")
+                        settle(WaitReason.UNEXPECTED_ERROR)
+                    }
+                }
+            } finally {
+                if (_status.value.phase != LoopPhase.IDLE) _status.update { it.copy(phase = LoopPhase.IDLE, current = null) }
+                checksDone.update { it + 1 }
+                withContext(NonCancellable) {
+                    runCatching { refreshPending() }
+                    if (reachedDesktop) afterCycle()
                 }
             }
-        } finally {
-            if (_status.value.phase != LoopPhase.IDLE) _status.update { it.copy(phase = LoopPhase.IDLE, current = null) }
-            checksDone.update { it + 1 }
-            withContext(NonCancellable) {
-                runCatching { refreshPending() }
-                afterCycle()
-            }
+            // #900：收尾要在 io 上重算待办（会让出写者），这段时间 cycleJob 仍 active，到达的触发被合并进了 pending——
+            // 这里不再看一眼就丢了。看到空就结束：从这里到协程结束没有挂起点，之后的触发会自己起新一轮。
+            if (pending.isEmpty() || !currentCoroutineContext().isActive) break
+            log.log("triggers $pending arrived while the cycle was finishing; running again")
         }
     }
 
@@ -584,6 +644,7 @@ internal class FlowEngine(
             }
             ProbeResult.PairingLost -> return settle(WaitReason.NOT_PAIRED)
             is ProbeResult.Reachable -> {
+                reachedDesktop = true
                 // #652：探测梯在这里还不能撤——桌面可能可达但不健康，那时它正是唤醒；拿到 FGS 才撤（见下）。
                 reach.advertisedEpoch?.takeIf { it.isNotBlank() && it != epoch.value }?.let(onEpochAdvertised)
                 facts.update { it.copy(desktopHealth = reach.health) }
@@ -632,12 +693,14 @@ internal class FlowEngine(
         log.log("cycle $reasons: round $roundId open")
         var exit: WaitReason? = null
         try {
+            armResumeSentinel(roundId)
             // 一轮一条推送订阅（契约 §5），随 FGS 一起释放。
             exit = delivery.session { loop(Round(reconcile, userPresent)) }
             if (exit == null && !control.paused()) recovered("round finished")
         } finally {
             withContext(NonCancellable) {
                 foreground.release()
+                disarmResumeSentinel()
                 closeRound(roundId)
                 bump()
                 // 循环里以 FGS_BLOCKED 退出只有一种可能：每张开始前发现服务已不在前台（被系统收走）。
@@ -723,6 +786,8 @@ internal class FlowEngine(
                 StepResult.Next -> Unit
                 is StepResult.Exit -> return step.reason
             }
+            // #827：这一张处理完了（进程没死在它身上）：清零「连续死在半路」的计数。
+            control.setResumeStrikes(0)
             foreground.renew()
         }
     }
@@ -880,16 +945,24 @@ internal class FlowEngine(
      *
      * 全程**不建传输中的行**：进程在中途被杀，下一轮从同一张重来（桌面对重放回成功），绝不会被当成一次普通
      * 传输把原图当第二张交付。桌面不可达 / 暂时拉不到 → 留待下一轮；桌面拒绝 → 记结论，不再尝试。
+     *
+     * #1005：「以后也补不成」的每一种情况（原图查不到 / 被编辑成新版本 / 读不出来）都要落一个结论（[LocationVerdict]），
+     * 和主传输的 [processExisting] 一样推进状态。只跳过不记，这一行就永远是待办，每次触发都为它探测桌面、起一轮。
      */
     private suspend fun processUpgrade(order: Order, epoch: PairingEpoch): StepResult {
         val client = supersede ?: return StepResult.Next
         val old = order.contentHash ?: return StepResult.Next
         val details = withContext(io) { media.lookup(order.mediaId) }
-        if (details == null || details.snapshot.sourceVersion != order.sourceVersion || !inScope(details.snapshot.bucketId)) {
-            // 原图没了 / 已被编辑成新版本（新版本照常另传）/ 移出范围：这一行不是替换的对象。
-            return StepResult.Next
+            ?: return endUpgrade(order, LocationVerdict.SOURCE_GONE)
+        if (details.snapshot.sourceVersion != order.sourceVersion) return endUpgrade(order, LocationVerdict.VERSION_CHANGED)
+        // 范围是查询条件：移出范围的不是待办（[hasUpgradeCandidate] 不数它），相册加回来再补。
+        if (!inScope(details.snapshot.bucketId)) return StepResult.Next
+        val (result, failure) = importWithRetry(details)
+        val imported = when (result) {
+            is ImportResult.Imported -> result
+            ImportResult.SourceMissing -> return endUpgrade(order, LocationVerdict.SOURCE_GONE)
+            null -> return endUpgrade(order, LocationVerdict.UNREADABLE, failure)
         }
-        val imported = importWithRetry(details).first as? ImportResult.Imported ?: return StepResult.Next
         val hash = imported.contentHash
         return releasingOnAbort(hash) {
             when {
@@ -899,7 +972,7 @@ internal class FlowEngine(
                 }
                 hash == old -> {
                     importer.release(hash)
-                    store.resolveLocationRedaction(order.id, refused = false)
+                    store.resolveLocationRedaction(order.id, LocationVerdict.NO_LOCATION)
                     bump()
                 }
                 else -> {
@@ -925,7 +998,7 @@ internal class FlowEngine(
                         is SupersedeOutcome.Refused -> {
                             log.log("media ${order.mediaId}: desktop refused to supersede ${old.take(8)} → ${hash.take(8)}: ${outcome.reason}")
                             if (outcome.reason !in TRANSIENT_SUPERSEDE_REFUSALS) {
-                                store.resolveLocationRedaction(order.id, refused = true)
+                                store.resolveLocationRedaction(order.id, LocationVerdict.REFUSED)
                                 bump()
                             }
                         }
@@ -934,6 +1007,14 @@ internal class FlowEngine(
             }
             StepResult.Next
         }
+    }
+
+    /** #1005：这张的地点补不成了——记结论（原因），退出补地点的待办。 */
+    private fun endUpgrade(order: Order, verdict: LocationVerdict, detail: String? = null): StepResult {
+        store.resolveLocationRedaction(order.id, verdict)
+        bump()
+        log.log("media ${order.mediaId}: location upgrade ended: $verdict${detail?.let { " ($it)" }.orEmpty()}")
+        return StepResult.Next
     }
 
     /** 导入（准备这一步唯一读文件的地方），单张失败当场重试 1 次。first = null 表示两次都抛了，second 是原因。 */
@@ -971,12 +1052,14 @@ internal class FlowEngine(
             }
             ImportResult.SourceMissing -> {
                 // MediaStore 还列着、文件读不到：记「源已删」（同版本即结局，不再算待办），游标推进。
+                val fact = itemAudit(AuditKinds.ITEM_SOURCE_MISSING, snapshot.mediaId, mapOf("mediaId" to snapshot.mediaId.toString()))
                 store.insert(
                     NewOrder(snapshot.mediaId, version, bucket, null, OrderState.SKIPPED_SOURCE_MISSING, epoch.value),
                     advance = progress.advance,
                     scanTo = progress.scanTo,
-                    audit = itemAudit(AuditKinds.ITEM_SOURCE_MISSING, snapshot.mediaId, mapOf("mediaId" to snapshot.mediaId.toString())),
+                    audit = fact,
                 )
+                countPersisted(fact)
                 onSettled()
                 bump()
                 return StepResult.Next
@@ -1070,13 +1153,10 @@ internal class FlowEngine(
 
     /** 返回这一行是否由本次结掉（不在 OPEN 状态里的行不动）。 */
     private suspend fun settleSourceMissing(order: Order, reason: String, discard: Boolean): Boolean {
-        val settled = store.transition(
-                order.id,
-                OPEN,
-                OrderState.SKIPPED_SOURCE_MISSING,
-                audit = itemAudit(AuditKinds.ITEM_SOURCE_MISSING, order.mediaId, mapOf("queueSequence" to order.id.toString(), "reason" to reason)),
-            )
+        val fact = itemAudit(AuditKinds.ITEM_SOURCE_MISSING, order.mediaId, mapOf("queueSequence" to order.id.toString(), "reason" to reason))
+        val settled = store.transition(order.id, OPEN, OrderState.SKIPPED_SOURCE_MISSING, audit = fact)
         if (settled) {
+            countPersisted(fact)
             if (discard) delivery.discardPartial(order.id, PairingEpoch(order.pairingEpoch))
             bump()
         }
@@ -1098,6 +1178,16 @@ internal class FlowEngine(
                 val valid = receipt.queueSequence == order.id &&
                     receipt.pairingEpoch == epoch &&
                     (receipt.contentHash == null || receipt.contentHash == hash)
+                val fact = itemAudit(
+                    AuditKinds.ITEM_CONFIRMED,
+                    order.mediaId,
+                    mapOf(
+                        "queueSequence" to order.id.toString(),
+                        "sourceVersion" to order.sourceVersion,
+                        "contentHash" to hash,
+                        "receiptRef" to receipt.receiptId,
+                    ),
+                )
                 if (!valid) {
                     log.log("order ${order.id}: receipt does not match the request; treating as item failure")
                     fail(order, progress, "receipt_mismatch")
@@ -1108,18 +1198,10 @@ internal class FlowEngine(
                         advance = progress.advance,
                         scanTo = progress.scanTo,
                         // E-01 / O-07：CONFIRMED、hash 映射（行本身）、游标推进、确认审计——同一次写入。
-                        audit = itemAudit(
-                            AuditKinds.ITEM_CONFIRMED,
-                            order.mediaId,
-                            mapOf(
-                                "queueSequence" to order.id.toString(),
-                                "sourceVersion" to order.sourceVersion,
-                                "contentHash" to hash,
-                                "receiptRef" to receipt.receiptId,
-                            ),
-                        ),
+                        audit = fact,
                     )
                 ) {
+                    countPersisted(fact)
                     facts.update { it.copy(doneThisRound = it.doneThisRound + 1) }
                     onSettled()
                     recovered("a photo was confirmed")
@@ -1130,15 +1212,17 @@ internal class FlowEngine(
             DeliveryOutcome.SourceMissing -> {
                 // 原图在供数期间被删 / 被改：源已删，不计失败；丢弃桌面半截、放掉导入。
                 importer.release(hash)
+                val fact = itemAudit(AuditKinds.ITEM_SOURCE_MISSING, order.mediaId, mapOf("queueSequence" to order.id.toString()))
                 if (store.transition(
                         order.id,
                         setOf(OrderState.TRANSFERRING),
                         OrderState.SKIPPED_SOURCE_MISSING,
                         advance = progress.advance,
                         scanTo = progress.scanTo,
-                        audit = itemAudit(AuditKinds.ITEM_SOURCE_MISSING, order.mediaId, mapOf("queueSequence" to order.id.toString())),
+                        audit = fact,
                     )
                 ) {
+                    countPersisted(fact)
                     delivery.discardPartial(order.id, epoch)
                     onSettled()
                 }
@@ -1186,15 +1270,19 @@ internal class FlowEngine(
         //     现在推给用户的「备份失败」多半是误报（待分类确认后再决定哪一类要通知）；
         //  2. 兜底对账会自动再试一次 FAILED——现在就推通知，大多数是会自愈的问题。
         // 结构测试 ARCH14UiWiringTest.the_failure_notification_is_kept_but_never_posted 锁住「main 里没有 postFailure 调用点」。
-        store.transition(
-            order.id,
-            setOf(OrderState.TRANSFERRING),
-            OrderState.FAILED,
-            countAttempt = true,
-            advance = progress.advance,
-            scanTo = progress.scanTo,
-            audit = itemAudit(AuditKinds.ITEM_ATTENTION, order.mediaId, mapOf("reason" to reason, "queueSequence" to order.id.toString())),
-        )
+        val fact = itemAudit(AuditKinds.ITEM_ATTENTION, order.mediaId, mapOf("reason" to reason, "queueSequence" to order.id.toString()))
+        if (store.transition(
+                order.id,
+                setOf(OrderState.TRANSFERRING),
+                OrderState.FAILED,
+                countAttempt = true,
+                advance = progress.advance,
+                scanTo = progress.scanTo,
+                audit = fact,
+            )
+        ) {
+            countPersisted(fact)
+        }
         bump()
     }
 
@@ -1238,10 +1326,12 @@ internal class FlowEngine(
                     )
                     continue
                 }
+                val fact = audit(AuditKinds.RECONCILIATION_RESOLVED, mapOf("disposition" to "REUPLOAD", "contentHash" to hash))
                 store.insert(
                     NewOrder(order.mediaId, order.sourceVersion, order.bucketId, hash, OrderState.PENDING, order.pairingEpoch, order.locationRedacted),
-                    audit = audit(AuditKinds.RECONCILIATION_RESOLVED, mapOf("disposition" to "REUPLOAD", "contentHash" to hash)),
+                    audit = fact,
                 )
+                countPersisted(fact)
                 requeued++
             }
             after = page.last().id

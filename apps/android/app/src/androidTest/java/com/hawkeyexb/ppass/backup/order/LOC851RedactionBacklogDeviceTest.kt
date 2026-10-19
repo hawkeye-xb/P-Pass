@@ -36,10 +36,24 @@ class LOC851RedactionBacklogDeviceTest {
         assertEquals(listOf(redacted.id, refused.id, same.id), store.locationRedactedAfter(0L, 10).map { it.id })
         assertEquals(listOf(refused.id), store.locationRedactedAfter(redacted.id, 1).map { it.id })
 
-        store.resolveLocationRedaction(refused.id, refused = true)
-        store.resolveLocationRedaction(same.id, refused = false)
+        store.resolveLocationRedaction(refused.id, LocationVerdict.REFUSED)
+        store.resolveLocationRedaction(same.id, LocationVerdict.NO_LOCATION)
         assertEquals(listOf(redacted.id), store.locationRedactedAfter(0L, 10).map { it.id })
         assertTrue(store.get(refused.id)!!.locationRedacted)
         assertFalse(store.get(same.id)!!.locationRedacted)
+        assertEquals(LocationVerdict.REFUSED, store.get(refused.id)!!.locationVerdict)
+    }
+
+    // #1005：每一种结论都写进 location_redacted 列、退出待办、读得回来。
+    @Test
+    fun everyLocationVerdictEndsTheBacklogRowAndReadsBack() {
+        val ended = LocationVerdict.entries.filter { it != LocationVerdict.NO_LOCATION }
+        val rows = ended.mapIndexed { i, verdict -> verdict to store.insert(newOrder(10L + i, OrderState.CONFIRMED)) }
+        rows.forEach { (verdict, row) -> store.resolveLocationRedaction(row.id, verdict) }
+        assertEquals(emptyList<Long>(), store.locationRedactedAfter(0L, 10).map { it.id })
+        rows.forEach { (verdict, row) ->
+            assertEquals(verdict, store.get(row.id)!!.locationVerdict)
+            assertTrue(store.get(row.id)!!.locationRedacted)
+        }
     }
 }

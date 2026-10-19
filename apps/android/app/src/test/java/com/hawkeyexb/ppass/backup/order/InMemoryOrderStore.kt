@@ -124,21 +124,18 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
     override fun confirmedWithHashAfter(afterId: Long, limit: Int): List<Order> =
         currentRows().filter { it.state == OrderState.CONFIRMED && it.contentHash != null && it.id > afterId }.sortedBy { it.id }.take(limit)
 
-    /** #851：桌面拒绝替换过的行（SQLite 里 location_redacted = 2）。 */
-    private val redactionRefused = mutableSetOf<Long>()
-
     override fun locationRedactedAfter(afterId: Long, limit: Int): List<Order> =
         currentRows()
             .filter {
-                it.state == OrderState.CONFIRMED && it.contentHash != null && it.locationRedacted && !it.sourceMissing &&
-                    it.id > afterId && it.id !in redactionRefused
+                it.state == OrderState.CONFIRMED && it.contentHash != null && it.locationRedacted && it.locationVerdict == null &&
+                    !it.sourceMissing && it.id > afterId
             }
             .sortedBy { it.id }
             .take(limit)
 
-    override fun resolveLocationRedaction(id: Long, refused: Boolean) = inTransaction {
+    override fun resolveLocationRedaction(id: Long, verdict: LocationVerdict) = inTransaction {
         val row = rows[id] ?: return@inTransaction
-        if (refused) redactionRefused += id else rows[id] = row.copy(locationRedacted = false)
+        rows[id] = if (verdict == LocationVerdict.NO_LOCATION) row.copy(locationRedacted = false) else row.copy(locationVerdict = verdict)
     }
 
     override fun transition(

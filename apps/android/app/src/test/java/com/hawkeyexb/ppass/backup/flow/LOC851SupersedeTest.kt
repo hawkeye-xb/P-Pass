@@ -1,6 +1,7 @@
 // #851：拿到位置权限、桌面支持时，把当年抹过地点的已备份照片原地换成原图——不重传成第二张、不漏、可重放。
 package com.hawkeyexb.ppass.backup.flow
 
+import com.hawkeyexb.ppass.backup.order.LocationVerdict
 import com.hawkeyexb.ppass.backup.order.OrderState
 import com.hawkeyexb.ppass.proto.FLOW_SUPERSEDE_CAPABILITY
 import kotlinx.coroutines.test.TestScope
@@ -137,6 +138,59 @@ class LOC851SupersedeTest {
         repeat(3) { rig.trigger(TriggerReason.APP_FOREGROUND) }
         assertEquals(3, rig.supersedeCalls.size)
         assertEquals(original, rig.store.currentForMedia(1)!!.contentHash)
+        rig.close()
+    }
+
+    /**
+     * #1005：这一轮补不成、以后也补不成 → 落 [verdict]、退出待办；之后的触发（后台截图 / 换网这类）不再为它探测桌面。
+     * 反证：processUpgrade 在这些情况下只 return Next、不记结论 → 这一行一直是待办，每次触发 probes 都 +1，红。
+     */
+    private fun Rig.upgradeEndsWith(verdict: LocationVerdict) {
+        trigger(TriggerReason.MEDIA_CHANGE)
+        val row = store.currentForMedia(1)!!
+        assertEquals(verdict, row.locationVerdict)
+        assertTrue("桌面手里仍是抹过的副本", row.locationRedacted)
+        val probesAfter = probes
+        repeat(3) { trigger(TriggerReason.MEDIA_CHANGE) }
+        assertEquals("结论落下之后不再为它探测桌面", probesAfter, probes)
+        assertEquals(emptyList<Triple<String, String, String>>(), supersedeCalls)
+    }
+
+    // 部分相册权限下照片看不见（或已删）：MediaStore 查不到。完整权限下对账会先打 source_missing，这里关掉它，只靠补地点自己落结论。
+    @Test
+    fun `a photo that can no longer be found ends the upgrade`() = runTest {
+        val (rig, _) = backedUpRedacted()
+        rig.fullMediaAccess = false
+        rig.media.remove(1)
+        rig.upgradeEndsWith(LocationVerdict.SOURCE_GONE)
+        rig.close()
+    }
+
+    // MediaStore 还列着、打开时文件已不在。
+    @Test
+    fun `a photo whose file is gone at open ends the upgrade`() = runTest {
+        val (rig, _) = backedUpRedacted()
+        rig.importer.unreadable += 1L
+        rig.upgradeEndsWith(LocationVerdict.SOURCE_GONE)
+        rig.close()
+    }
+
+    // 照片被编辑成了新版本：这一行描述的字节已不存在（新版本照常另传）。
+    @Test
+    fun `an edited photo ends the upgrade of its old version`() = runTest {
+        val (rig, _) = backedUpRedacted()
+        val p = rig.media.photos.single { it.mediaId == 1L }
+        rig.media.put(p.copy(modified = p.modified + 1))
+        rig.upgradeEndsWith(LocationVerdict.VERSION_CHANGED)
+        rig.close()
+    }
+
+    // 导入当场重试后仍抛：读不出来。
+    @Test
+    fun `a photo that cannot be read ends the upgrade`() = runTest {
+        val (rig, _) = backedUpRedacted()
+        repeat(2) { rig.importer.failures += java.io.IOException("unreadable") }
+        rig.upgradeEndsWith(LocationVerdict.UNREADABLE)
         rig.close()
     }
 

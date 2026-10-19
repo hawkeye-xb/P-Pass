@@ -37,12 +37,33 @@ abstract class OrderStoreContract {
         assertEquals(listOf(redacted.id, refused.id, same.id), store.locationRedactedAfter(0L, 10).map { it.id })
         assertEquals(listOf(refused.id), store.locationRedactedAfter(redacted.id, 1).map { it.id })
 
-        store.resolveLocationRedaction(refused.id, refused = true)
-        store.resolveLocationRedaction(same.id, refused = false)
+        store.resolveLocationRedaction(refused.id, LocationVerdict.REFUSED)
+        store.resolveLocationRedaction(same.id, LocationVerdict.NO_LOCATION)
         assertEquals(listOf(redacted.id), store.locationRedactedAfter(0L, 10).map { it.id })
         assertTrue("拒绝替换：桌面那份仍是抹过的", store.get(refused.id)!!.locationRedacted)
         assertEquals(false, store.get(same.id)!!.locationRedacted)
         assertEquals(superseded.mediaId, 4L)
+    }
+
+    // #1005：每一种「补不成」的结论都让这一行退出待办，原因读得回来（抹过地点的事实不变）。
+    @Test
+    fun `every location verdict ends the backlog row and reads back`() {
+        val store = newStore(clock)
+        val ended = LocationVerdict.entries.filter { it != LocationVerdict.NO_LOCATION }
+        val rows = ended.mapIndexed { i, verdict ->
+            verdict to store.insert(newOrder(10L + i, OrderState.CONFIRMED).copy(locationRedacted = true))
+        }
+        assertEquals(rows.size, store.locationRedactedAfter(0L, 10).size)
+        assertNull("还是待办时没有结论", store.get(rows.first().second.id)!!.locationVerdict)
+
+        rows.forEach { (verdict, row) -> store.resolveLocationRedaction(row.id, verdict) }
+
+        assertEquals(emptyList<Long>(), store.locationRedactedAfter(0L, 10).map { it.id })
+        rows.forEach { (verdict, row) ->
+            val read = store.get(row.id)!!
+            assertEquals(verdict, read.locationVerdict)
+            assertTrue(read.locationRedacted)
+        }
     }
 
     @Test

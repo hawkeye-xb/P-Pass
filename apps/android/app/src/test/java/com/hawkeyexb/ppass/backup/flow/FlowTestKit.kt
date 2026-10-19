@@ -149,6 +149,18 @@ class FakeScheduler : WakeScheduler {
     override fun cancelBudgetResetWake() {
         budgetResetWakeCancels++
     }
+
+    /** #827：每次登记的续传哨兵延迟（ms）；撤掉的次数。 */
+    val resumeSentinels = mutableListOf<Long>()
+    var resumeSentinelCancels = 0
+
+    override fun armResumeSentinel(delayMs: Long) {
+        resumeSentinels += delayMs
+    }
+
+    override fun cancelResumeSentinel() {
+        resumeSentinelCancels++
+    }
 }
 
 class FakeControl : FlowControl {
@@ -188,6 +200,11 @@ class FakeControl : FlowControl {
     override fun retryLadderSpent() = ladderSpent
     override fun setRetryLadderSpent(spent: Boolean) {
         ladderSpent = spent
+    }
+    var strikes = 0
+    override fun resumeStrikes() = strikes
+    override fun setResumeStrikes(strikes: Int) {
+        this.strikes = strikes
     }
     override fun missingSourceAckAt() = ack
     override fun setMissingSourceAckAt(atMs: Long) {
@@ -232,8 +249,20 @@ internal class FakeImporter(private val media: FakeMedia) : MediaImporter {
  * 一套装好的引擎。[media] 默认范围是 bucket 7；照片内容即 hash 源（FakeMedia）。
  * [cursors] 为 true（默认）时预置 G = (0, 0)、getVersion 不变——视为「装好之后一直在跑」，只有显式置脏才扫描。
  */
-internal class Rig(test: TestScope, cursors: Boolean = true, openRound: String? = null, wakes: WakeScheduler? = null) {
+internal class Rig(
+    test: TestScope,
+    cursors: Boolean = true,
+    openRound: String? = null,
+    wakes: WakeScheduler? = null,
+    separateIo: Boolean = false,
+) {
     val dispatcher = StandardTestDispatcher(test.testScheduler)
+
+    /**
+     * #900：[separateIo] 为 true 时 io 是另一个调度器——`withContext(io)` 真的让出写者（生产就是这样：
+     * 写者单线程、io 是 Dispatchers.IO），写者上排着的触发能插进来。默认与写者同一个，切换不挂起。
+     */
+    val io = if (separateIo) StandardTestDispatcher(test.testScheduler) else dispatcher
     val scope = CoroutineScope(SupervisorJob() + dispatcher)
     private val testScope = test
     var now = 1_000L
@@ -251,6 +280,9 @@ internal class Rig(test: TestScope, cursors: Boolean = true, openRound: String? 
     var probeHook: suspend () -> Unit = {}
     var missingOnDesktop: Set<String> = emptySet()
     var presenceCalls = 0
+
+    /** #1005：引擎调 afterCycle（审计 outbox 冲刷）的次数。 */
+    var afterCycles = 0
     var conditions = Conditions()
 
     /** #762：非 null 时由它给条件（可以在第 N 次读取时抛异常，模拟一轮跑到一半的意外错误）。 */
@@ -300,7 +332,7 @@ internal class Rig(test: TestScope, cursors: Boolean = true, openRound: String? 
         mediaAbsenceTrusted = { fullMediaAccess },
         pairingEpoch = { epoch },
         scope = scope,
-        io = dispatcher,
+        io = io,
         log = FlowLogger { logs += it },
         clock = { now },
         monotonicClock = { test.testScheduler.currentTime },
@@ -311,6 +343,7 @@ internal class Rig(test: TestScope, cursors: Boolean = true, openRound: String? 
             supersedeReply(oldHash, newHash)
         },
         appForegroundAt = { appForegroundAt },
+        afterCycle = { afterCycles++ },
     ).also { it.start() }
 
     fun photo(mediaId: Long, generation: Long, content: String = "c$mediaId", bucketId: Long = 7, volume: String = LEGACY_VOLUME): FakePhoto =
