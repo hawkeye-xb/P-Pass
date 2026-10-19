@@ -26,7 +26,7 @@
 import { cleanup, render, screen, fireEvent } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { invokeMock } = vi.hoisted(() => {
+const { invokeMock, handlers } = vi.hoisted(() => {
   // 本机 Node 自带的实验性 localStorage 在没给 --localstorage-file 时是
   // undefined，会盖住 jsdom 的那个；App 依赖的 mode-watcher 在 import 时就读它。
   // 给一个内存版，必须在 import App 之前（所以放在 hoisted 里）。
