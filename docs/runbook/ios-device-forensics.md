@@ -43,6 +43,12 @@
   可重复的短任务场景用 `tools/ios/sim-bg-task.sh short-only | expire | budget`（脚本自己附加 lldb 触发）。
   要看「进程本身被后台拉起」的 `launch origin: background`，需让系统真实调度（锁屏、接电源、等待）；调试器模拟是在已运行进程内触发回调，来源仍是前台。
 
+## 真机回归的日志判定（#939）
+
+- `tools/ios/e3-judge.sh mark` 记下起点；人在手机上操作后，`tools/ios/e3-judge.sh check <阶段>` 拉日志（只看起点之后）并判 PASS / FAIL，可重跑。
+- 阶段：`foreground-notice`、`onboarded-at-finish`、`prewarm-park`、`no-inactive-catchup`、`956-offline`、`956-delivered`（顺带读本机桌面库的 device 表）、`onboarding`、`wifi`、`autobackup-on`、`notify-media`、`notify-media-dedupe`、`notify-bgrefresh`。
+- 判据都是日志里的成功行（#1026 起成功路径也落日志）；新卡在验收里写明「日志里出现哪一行算通过」，再把它加成一个阶段。
+
 ## 本机隔离 daemon 与端到端
 
 - 脚本：`tools/ios/e2e-device.sh`（真机）、`tools/ios/e2e-sim.sh`（模拟器）。两者都用 fake HOME + 临时库 + OS 分配端口（不碰 41145、不碰已装 P-Pass）。
