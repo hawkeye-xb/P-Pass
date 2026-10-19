@@ -1784,6 +1784,36 @@ async fn cancel_by_tuple_rejects_an_unknown_tuple() {
     );
 }
 
+/// #1027 counterexample: idempotency covers only a tuple that really exists and
+/// has already ended. A tuple with no matching grant (never offered, or a stale
+/// lease_token) is still a guard mismatch for `suspend`, as for `cancel_tuple`.
+#[tokio::test(flavor = "multi_thread")]
+async fn suspend_rejects_an_unknown_tuple() {
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&provider_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let db = paired_db("epoch-current", provider_transport.node_id()).await;
+    let delivery = FlowDelivery::new(db, receiver_blobs, root.path());
+
+    let result = delivery
+        .suspend(
+            provider_transport.node_id(),
+            &tuple_ref("epoch-current", "never-offered", 99),
+        )
+        .await;
+    assert!(
+        matches!(result, Err(DeliveryError::GuardMismatch)),
+        "an unknown tuple must be rejected, not silently accepted as a no-op"
+    );
+}
+
 /// (peer, queue_sequence, lease_token), never by content_hash alone — two
 /// distinct devices independently holding a grant for the *same* content
 /// (e.g. both backing up the same screenshot) must not let one device's
@@ -2522,14 +2552,23 @@ async fn cancel_before_complete_flow_grant_converges_to_cancelled() {
             ),
             "a repeat cancel on the cancelled tuple must lose"
         );
-        assert!(
-            matches!(
-                delivery
-                    .suspend(provider_node, &tuple_ref("epoch-current", "lease-x", 7))
-                    .await,
-                Err(DeliveryError::GuardMismatch)
-            ),
-            "a late suspend on the cancelled tuple must lose"
+        // #1027: a late suspend / cancel_tuple is idempotent — the goal (this
+        // tuple stops) is already reached, so it answers Ok and moves nothing.
+        delivery
+            .suspend(provider_node, &tuple_ref("epoch-current", "lease-x", 7))
+            .await
+            .expect("a late suspend on the cancelled tuple is an idempotent no-op");
+        delivery
+            .cancel_by_tuple(provider_node, &tuple_ref("epoch-current", "lease-x", 7))
+            .await
+            .expect("a repeat cancel_tuple on the cancelled tuple is an idempotent no-op");
+        let after = delivery
+            .status(provider_node, &tuple_ref("epoch-current", "lease-x", 7))
+            .await
+            .unwrap();
+        assert_eq!(
+            after.state, "cancelled",
+            "the idempotent no-ops must not move the cancelled tuple"
         );
 
         cancelled_before_the_boundary = true;
@@ -2566,15 +2605,16 @@ async fn cancel_before_complete_flow_grant_converges_to_cancelled() {
         ),
         "a cancel landing AFTER complete_flow_grant must not flip the completed tuple"
     );
-    assert!(
-        matches!(
-            delivery
-                .suspend(provider_node, &tuple_ref("epoch-current", "lease-y", 8))
-                .await,
-            Err(DeliveryError::GuardMismatch)
-        ),
-        "a suspend landing AFTER complete_flow_grant must not flip the completed tuple"
-    );
+    // #1027: suspend / cancel_tuple after completion answer Ok (idempotent)
+    // and must not flip the completed tuple — asserted by the status below.
+    delivery
+        .suspend(provider_node, &tuple_ref("epoch-current", "lease-y", 8))
+        .await
+        .expect("a suspend landing AFTER complete_flow_grant is an idempotent no-op");
+    delivery
+        .cancel_by_tuple(provider_node, &tuple_ref("epoch-current", "lease-y", 8))
+        .await
+        .expect("a cancel_tuple landing AFTER complete_flow_grant is an idempotent no-op");
     let status = delivery
         .status(provider_node, &tuple_ref("epoch-current", "lease-y", 8))
         .await
@@ -2594,7 +2634,8 @@ async fn cancel_before_complete_flow_grant_converges_to_cancelled() {
 }
 
 /// NET-17, race direction 2: once `complete_flow_grant` has executed, a late
-/// `cancel`/`suspend` must lose and the tuple stays `completed` with its
+/// `cancel` must lose (`suspend` / `cancel_tuple` answer Ok as idempotent
+/// no-ops, #1027) and the tuple stays `completed` with its
 /// receipt ("bytes were not wasted — the photo really is backed up"). The
 /// ordering is proven by observation, not sleep: `fetch` returns only after
 /// the durable completed state is readable. The same test then drives the
@@ -2672,15 +2713,16 @@ async fn complete_flow_grant_before_cancel_converges_to_completed() {
         ),
         "the late cancel must lose to the already-executed complete_flow_grant"
     );
-    assert!(
-        matches!(
-            delivery
-                .suspend(provider_node, &tuple_ref("epoch-current", "lease-y", 8))
-                .await,
-            Err(DeliveryError::GuardMismatch)
-        ),
-        "the late suspend must lose to the already-executed complete_flow_grant"
-    );
+    // #1027: the late suspend / cancel_tuple answer Ok (idempotent) without
+    // touching the completed tuple — the status below stays `completed`.
+    delivery
+        .suspend(provider_node, &tuple_ref("epoch-current", "lease-y", 8))
+        .await
+        .expect("the late suspend is an idempotent no-op");
+    delivery
+        .cancel_by_tuple(provider_node, &tuple_ref("epoch-current", "lease-y", 8))
+        .await
+        .expect("the late cancel_tuple is an idempotent no-op");
     let status = delivery
         .status(provider_node, &tuple_ref("epoch-current", "lease-y", 8))
         .await
