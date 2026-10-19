@@ -857,7 +857,11 @@
     serviceState = next;
     if (next === "running") {
       clearTimeout(selfHealRetry);
-      if (previous !== "running") onServiceBackOnline();
+      // DESK-38 (#475) semantics: only a real recovery resets/reconciles the
+      // wall. The first `starting -> running` is just the initial connect;
+      // the wall's own first load handles it. Treating that as a recovery
+      // made the first page load twice (#946 CI).
+      if (previous === "unreachable" || previous === "stopped") onServiceBackOnline();
       refresh();
     } else if (next === "unreachable") {
       maybeSelfHeal();
