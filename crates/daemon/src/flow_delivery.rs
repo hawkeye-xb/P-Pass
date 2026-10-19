@@ -1460,7 +1460,11 @@ impl FlowDelivery {
             }
             Ok(())
         } else {
-            Err(DeliveryError::GuardMismatch)
+            // #1027: the grant exists but is no longer active — it already
+            // completed or was cancelled. The caller's goal (this tuple stops)
+            // is reached: answer Ok as an idempotent no-op and move nothing.
+            // Only a missing / superseded tuple is a guard mismatch.
+            Ok(())
         }
     }
 
@@ -1547,8 +1551,10 @@ impl FlowDelivery {
         let Some(grant) = self.tuple_grant(peer, tuple).await? else {
             return Err(DeliveryError::GuardMismatch);
         };
+        // #1027: a grant that already completed or was cancelled has nothing
+        // left to interrupt — idempotent Ok, the stored state is untouched.
         if grant.state != FlowGrantState::Active {
-            return Err(DeliveryError::GuardMismatch);
+            return Ok(());
         }
         self.tasks.interrupt(peer, &grant);
         Ok(())
