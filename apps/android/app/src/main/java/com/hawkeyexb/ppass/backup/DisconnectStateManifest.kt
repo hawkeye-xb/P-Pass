@@ -178,7 +178,7 @@ enum class DisconnectState(
     ),
     SENTINEL(
         StateLocation.FILES, "sentinel.json", DisconnectDisposition.KEEP,
-        "$UNDECIDED：「3 天没连上电脑」哨兵（SENT-01），断开从来没碰过",
+        "$UNDECIDED：「失联 N 天」的上次可达时间（SENT-01 遗留），断开从来没碰过",
         owners = listOf("com.hawkeyexb.ppass.backup.SentinelStore"),
     ),
     DEFINITIVE_NOTICES(

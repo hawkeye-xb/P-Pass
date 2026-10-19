@@ -1,8 +1,8 @@
-// UI-10 item 4: SentinelStore had recordReachable/recordUnreachable methods
-// but zero production callers anywhere in the app — the home/photos "失联
-// N 天" field was frozen dead data (source-read finding, 2026-09-06). The
-// ForegroundHeartbeat's 30s hello was the only connectivity signal actually
-// running; this locks down that its outcome now reaches the store.
+// UI-10 item 4: SentinelStore had recordReachable but zero production
+// callers anywhere in the app — the home/photos "失联 N 天" field was frozen
+// dead data (source-read finding, 2026-09-06). The ForegroundHeartbeat's 30s
+// hello was the only connectivity signal actually running; this locks down
+// that its outcome now reaches the store.
 package com.hawkeyexb.ppass.transport
 
 import com.hawkeyexb.ppass.backup.SentinelStore
@@ -16,35 +16,27 @@ class ForegroundHeartbeatSentinelWiringTest {
         java.nio.file.Files.createTempDirectory("ppass-ui10-heartbeat-$case").toFile()
 
     @Test
-    fun successful_heartbeat_records_reachable_and_clears_failures() {
+    fun successful_heartbeat_records_reachable() {
         val dir = tempDir("success")
         val store = SentinelStore(dir)
-        store.recordUnreachable()
-        store.recordUnreachable()
-        assertEquals(2, store.load().failedAttempts)
 
         applyHeartbeatOutcome(store, Result.success(Unit))
 
-        val after = store.load()
-        assertTrue("a successful beat must record a fresh lastReachableAt", after.lastReachableAt > 0)
-        assertEquals("a successful beat must reset the failure streak", 0, after.failedAttempts)
+        assertTrue("a successful beat must record a fresh lastReachableAt", store.load().lastReachableAt > 0)
     }
 
     @Test
-    fun failed_heartbeat_increments_failure_count_without_touching_reachable_at() {
+    fun failed_heartbeat_does_not_touch_reachable_at() {
         val dir = tempDir("failure")
         val store = SentinelStore(dir)
         store.recordReachable(1_000L)
 
         applyHeartbeatOutcome(store, Result.failure<Unit>(RuntimeException("unreachable")))
-        applyHeartbeatOutcome(store, Result.failure<Unit>(RuntimeException("unreachable")))
 
-        val after = store.load()
-        assertEquals(2, after.failedAttempts)
         assertEquals(
             "a failed beat must not advance the last-known-reachable timestamp",
             1_000L,
-            after.lastReachableAt,
+            store.load().lastReachableAt,
         )
     }
 

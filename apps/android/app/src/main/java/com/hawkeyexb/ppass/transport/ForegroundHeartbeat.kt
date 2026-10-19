@@ -24,7 +24,7 @@ class ForegroundHeartbeat(
     private val client: DaemonClient,
     private val pairings: PairingStore,
     private val scope: CoroutineScope,
-    // UI-10 item 4: SentinelStore had `recordReachable`/`recordUnreachable`
+    // UI-10 item 4: SentinelStore had `recordReachable`
     // but no production caller anywhere in the app — the home/photos "失联
     // N 天" field was frozen data, never updated. This heartbeat is the
     // natural, already-scheduled connectivity signal (30s while foreground);
@@ -103,5 +103,4 @@ internal fun applyHeartbeatOutcome(
             sentinel?.recordReachable()
             onReachable?.invoke()
         }
-        .onFailure { sentinel?.recordUnreachable() }
 }
