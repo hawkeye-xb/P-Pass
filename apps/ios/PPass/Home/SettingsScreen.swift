@@ -31,7 +31,8 @@ struct SettingsScreen: View {
                                     .accessibilityIdentifier("backgroundNoticeAction")
                             }
                         }
-                        .padding(.vertical, 4)
+                        // 内边距照 Android NoticeCard 的 padding(16, 13)：直接设这一行的 insets，不在系统行距上再叠一层。
+                        .listRowInsets(EdgeInsets(top: 13, leading: 16, bottom: 13, trailing: 16))
                         .ppTinted(PPColor.waitingBg)
                         .accessibilityIdentifier("backgroundNotice")
                     }
