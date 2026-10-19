@@ -32,6 +32,9 @@ class FakeMedia(photos: List<FakePhoto> = emptyList(), var scope: Set<Long>? = s
     /** 每次元数据读取（不读文件）的次数：扫描 / 计数 / 发现都算。 */
     var metadataReads = 0
 
+    /** 每次 [readChangedSince] 开始时回调（例如「重算待办期间新拍一张」）。 */
+    var onReadChanged: () -> Unit = {}
+
     fun put(photo: FakePhoto) {
         photos.removeAll { it.mediaId == photo.mediaId }
         photos += photo
@@ -52,6 +55,7 @@ class FakeMedia(photos: List<FakePhoto> = emptyList(), var scope: Set<Long>? = s
 
     override fun <R> readChangedSince(volumeName: String, afterGeneration: Long, afterMediaId: Long, block: (Sequence<MediaSnapshot>) -> R): R {
         metadataReads++
+        onReadChanged()
         return block(
             photos.filter {
                 it.volume == volumeName && inScope(it.bucketId) &&

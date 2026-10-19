@@ -1,6 +1,6 @@
 // MOB-65: 自动备份开关只拥有「是否允许自动唤醒」这一条策略事实；当前轮的
 // 暂停/继续仍完全由 Flow ledger 的 ConsumerGate 拥有。
-// filesDir JSON，tmp+rename 崩溃安全，损坏回默认（自动备份开启）。
+// filesDir JSON，tmp+rename 崩溃安全，损坏回默认（自动备份关闭，同 [AutoBackupPrefsData] 的默认值）。
 package com.hawkeyexb.ppass.backup
 
 import java.io.File
