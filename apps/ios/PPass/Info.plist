@@ -69,7 +69,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Scan the pairing QR code shown on your home computer.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Connect to your home computer on the local network to back up your photos.</string>
+	<string>Used to find your computer on the same Wi‑Fi and transfer photos.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Back up your photos to your own computer at home.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
