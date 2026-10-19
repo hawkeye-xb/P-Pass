@@ -203,6 +203,9 @@ final class AppModel: ObservableObject {
 
     func cancelWifiOff() { pendingWifiOff = false; AppLog.log("wifi-only: off cancelled, still on") }
 
+    /// 弹框被系统收起（点了任一按钮之后，或被打断）：只清标志，不写盘、不记日志——按钮各自记。
+    func dismissWifiOffPrompt() { pendingWifiOff = false }
+
     private func writeWifiOnly(_ on: Bool) {
         do { try backend.engine.setWifiOnly(on); wifiOnly = on } catch { settingWriteFailed("wifi-only", error) }
     }

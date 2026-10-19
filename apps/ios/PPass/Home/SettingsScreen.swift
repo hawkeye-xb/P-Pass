@@ -74,9 +74,9 @@ struct SettingsScreen: View {
                 Button(L.s("back"), role: .cancel) {}
             } message: { Text(L.s("cancel_remaining_confirm_body")) }
             // 关「仅 Wi‑Fi」先确认（移动网络会消耗流量）；点「取消」开关不动、不写盘（Android MOB-02 §三，#982）。
-            .alert(L.s("wifi_off_confirm_title"), isPresented: Binding(get: { app.pendingWifiOff }, set: { if !$0 { app.cancelWifiOff() } })) {
+            .alert(L.s("wifi_off_confirm_title"), isPresented: Binding(get: { app.pendingWifiOff }, set: { if !$0 { app.dismissWifiOffPrompt() } })) {
                 Button(L.s("wifi_off_confirm_ok"), role: .destructive) { app.confirmWifiOff() }
-                Button(L.s("cancel"), role: .cancel) {}
+                Button(L.s("cancel"), role: .cancel) { app.cancelWifiOff() }
             } message: { Text(L.s("wifi_off_confirm_body")) }
             .navigationDestination(for: Route.self) { route in
                 switch route {
