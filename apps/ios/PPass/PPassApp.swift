@@ -79,17 +79,27 @@ enum AppBoot {
 final class LiveLifecycle {
     private let backend: LiveBackend
     private var finishing: UIBackgroundTaskIdentifier = .invalid
+    /// 真的在前台（没退到过 .background）。对位 Android 按 Activity started/stopped 计数、不按 resumed/paused：
+    /// 下拉控制中心 / 通知中心、App 切换器拉一半又松手、系统权限框，都只是 .inactive → .active，不算「回到前台」，
+    /// 不该每次都跑一遍带对账的前台补捞、重拍心跳。
+    private var inForeground = false
 
     init(backend: LiveBackend) { self.backend = backend }
 
     func scenePhase(_ phase: ScenePhase) {
         switch phase {
         case .active:
+            guard !inForeground else {
+                backend.logger.log("scene: active again without leaving the foreground (inactive → active); no catch-up")
+                return
+            }
+            inForeground = true
             LaunchOriginRecorder.shared.foregroundReached(logger: backend.logger)
             endFinishing(expired: false)
             backend.setActive(true)
             backend.flushPendingUnpairs()
         case .background:
+            inForeground = false
             backend.setActive(false)
             PPassBackgroundTasks.ensureShortScheduled(logger: backend.logger)
             guard finishing == .invalid else { return }

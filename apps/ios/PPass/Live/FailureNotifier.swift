@@ -31,6 +31,21 @@ enum SystemNotifications {
     }
 }
 
+extension UIApplication {
+    /// 日志用：通知回调可能不在主线程，读 applicationState 要回主线程。
+    static var sharedApplicationStateName: String {
+        let read = { () -> String in
+            switch UIApplication.shared.applicationState {
+            case .active: return "active"
+            case .inactive: return "inactive"
+            case .background: return "background"
+            @unknown default: return "unknown"
+            }
+        }
+        return Thread.isMainThread ? read() : DispatchQueue.main.sync(execute: read)
+    }
+}
+
 /// 前台也照常展示（#1018，对位 Android 前台照常弹系统通知）：不设代理时，App 在前台发出的通知既不弹横幅也不进通知中心。
 /// 代理必须在启动早期设上（`PPassApp.init`）；通知中心对代理是弱引用，所以用常驻单例。
 final class ForegroundNotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
@@ -40,8 +55,12 @@ final class ForegroundNotificationPresenter: NSObject, UNUserNotificationCenterD
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
                                 withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        AppLog.log("notify: \(notification.request.identifier) presented in foreground")
+        let id = notification.request.identifier
         completionHandler([.banner, .list, .sound])
+        // 展示与否最终由系统按用户的通知设置决定：把这几项一并记下，真机上「没看到」时据此区分是设置还是时机（#1018）。
+        center.getNotificationSettings { st in
+            AppLog.log("notify: \(id) presented in foreground (alert=\(st.alertSetting.rawValue) style=\(st.alertStyle.rawValue) center=\(st.notificationCenterSetting.rawValue) appState=\(UIApplication.sharedApplicationStateName))")
+        }
     }
 
     /// 点通知：系统已把 App 带到前台，首页自会按最新事实刷新；这里不做额外跳转（Android 点通知同样只是打开 App）。
