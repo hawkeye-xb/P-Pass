@@ -1976,11 +1976,6 @@
       <h3>{t("ui.pair_qr_title")}</h3>
       {#if qrDataUrl}
         <img class="qr-lg" src={qrDataUrl} alt={t("ui.pair_qr_title")} />
-        <!-- FIX-T3: 升级顺序地雷——旧 APK（≤0.3.0-test.2）只认 a=，
-             新码只带 r=，旧手机扫新码静默失败。把话说清：先升手机 App。 -->
-        <p class="hint modal-hint modal-upgrade-note">
-          {t("ui.qr_phone_version")}
-        </p>
         <p class="hint modal-hint">
           {t("ui.pair_qr_body")}
         </p>

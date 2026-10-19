@@ -86,7 +86,6 @@ msg_keys! {
     UI_GENERATE_QR => "ui.generate_qr",
     UI_QR_FALLBACK => "ui.qr_fallback",
     UI_QR_HINT => "ui.qr_hint",
-    UI_QR_PHONE_VERSION => "ui.qr_phone_version",
     UI_DEVICES => "ui.devices",
     UI_NO_DEVICES => "ui.no_devices",
     UI_REVOKED_TAG => "ui.revoked_tag",
@@ -464,7 +463,6 @@ mod tests {
             UI_GENERATE_QR,
             UI_QR_FALLBACK,
             UI_QR_HINT,
-            UI_QR_PHONE_VERSION,
             UI_DEVICES,
             UI_NO_DEVICES,
             UI_REVOKED_TAG,
@@ -751,7 +749,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 315);
+        assert_eq!(ALL.len(), 314);
     }
 
     #[test]
