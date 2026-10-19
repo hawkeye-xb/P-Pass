@@ -1,6 +1,7 @@
 import Foundation
 import PPassCore
 import SwiftUI
+import UIKit
 
 /// 一条需要用户看到的失败反馈（#971 / #972）：设置没存上、命令没执行成。界面用 alert 呈现，点掉即清。
 struct UserNotice: Identifiable, Equatable {
@@ -34,6 +35,15 @@ final class AppModel: ObservableObject {
     @Published private(set) var existingAlbums: Set<String>?
     /// #343：首页常驻告示（已解析成当前语言的句子）。
     @Published private(set) var promise: [String] = []
+    /// 「后台 App 刷新」不可用、而用户要后台备份时的全局告示（对位 Android `NoticeHost` 的 BACKUP_INTERRUPTED，UI-12）：
+    /// 照片 / 设置两页都看得到，不给「知道了」——事实还在就一直说，退出路径是去系统设置打开，或把「后台备份」关掉。
+    @Published private(set) var backgroundNotice: BackgroundNotice?
+
+    struct BackgroundNotice: Equatable {
+        let body: String
+        /// 用户自己能改（关掉了）才给「去处理」；被屏幕使用时间 / 设备管理限制时用户改不了，不给按钮。
+        let canResolve: Bool
+    }
     @Published var commandInFlight = false
     /// 最近一次失败反馈（设置写盘失败 / 命令出错）。界面 alert 绑定它。
     @Published var notice: UserNotice?
@@ -119,6 +129,9 @@ final class AppModel: ObservableObject {
 
     /// onboarding 完成页：该问通知就先问一次（结果同步回开关），再按用户的选择开 / 不开后台备份（Android `thenContinue` 包两个按钮），进首页。
     func finishOnboardingStarted(enableBackgroundBackup: Bool) {
+        AppLog.log("onboarding: finish tapped enableBackgroundBackup=\(enableBackgroundBackup)")
+        // 记不下来不挡进首页：后果只是下次重连同一台仍走一遍首次设置（偏安全的一侧），但要提示，不静默。
+        do { try backend.engine.finishOnboarding() } catch { settingWriteFailed("onboarded", error) }
         Task {
             await backend.engine.askNotificationAtOnboarding()
             if enableBackgroundBackup { setAutoBackup(true) }
@@ -152,7 +165,9 @@ final class AppModel: ObservableObject {
         wifiOnly = backend.engine.wifiOnly()
         autoBackup = backend.engine.autoBackup()
         notifyOnFailure = backend.engine.notifyOnFailure()
-        promise = backend.engine.promise().map { n in DiagText.resolve(n.key, vars: n.vars) ?? n.key }
+        let notices = backend.engine.promise()
+        promise = notices.map { n in DiagText.resolve(n.key, vars: n.vars) ?? n.key }
+        backgroundNotice = Self.backgroundNotice(notices, backgroundRequested: backend.engine.autoBackup())
     }
 
 
@@ -191,15 +206,19 @@ final class AppModel: ObservableObject {
 
     /// 「仅 Wi‑Fi」开关：打开直接写；关闭先弹确认（不写盘），确认后才保存（Android MOB-02 §三 / MainActivity `pendingWifiOff`）。
     func setWifiOnly(_ on: Bool) {
-        if on { writeWifiOnly(true) } else { pendingWifiOff = true }
+        if on { writeWifiOnly(true) } else { pendingWifiOff = true; AppLog.log("wifi-only: off requested, confirm shown") }
     }
 
     func confirmWifiOff() {
         pendingWifiOff = false
+        AppLog.log("wifi-only: off confirmed")
         writeWifiOnly(false)
     }
 
-    func cancelWifiOff() { pendingWifiOff = false }
+    func cancelWifiOff() { pendingWifiOff = false; AppLog.log("wifi-only: off cancelled, still on") }
+
+    /// 弹框被系统收起（点了任一按钮之后，或被打断）：只清标志，不写盘、不记日志——按钮各自记。
+    func dismissWifiOffPrompt() { pendingWifiOff = false }
 
     private func writeWifiOnly(_ on: Bool) {
         do { try backend.engine.setWifiOnly(on); wifiOnly = on } catch { settingWriteFailed("wifi-only", error) }
@@ -214,6 +233,24 @@ final class AppModel: ObservableObject {
     }
 
     var pairedAtMs: Int64? { backend.pairing.pairedAtMs() }
+
+    /// 只在用户要后台备份时才说（Android：OffByUser 不出告示）；关着后台备份时，后台刷新关不关与用户无关。
+    static func backgroundNotice(_ notices: [PromiseNotice], backgroundRequested: Bool) -> BackgroundNotice? {
+        guard backgroundRequested else { return nil }
+        if notices.contains(where: { $0.key == BackupPromise.refreshOff }) {
+            return BackgroundNotice(body: L.s("background_refresh_off_notice"), canResolve: true)
+        }
+        if notices.contains(where: { $0.key == BackupPromise.refreshRestricted }) {
+            return BackgroundNotice(body: L.s("background_refresh_restricted_notice"), canResolve: false)
+        }
+        return nil
+    }
+
+    /// 「去处理」：跳到系统设置里 P-Pass 的页面（「后台 App 刷新」开关就在那一页）。
+    @MainActor func openAppSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
+    }
 
     var pairingLost: Bool { if case .lost = pairing { return true } else { return false } }
     var desktopName: String? {

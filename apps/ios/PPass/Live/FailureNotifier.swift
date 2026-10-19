@@ -31,6 +31,46 @@ enum SystemNotifications {
     }
 }
 
+extension UIApplication {
+    /// 日志用：通知回调可能不在主线程，读 applicationState 要回主线程。
+    static var sharedApplicationStateName: String {
+        let read = { () -> String in
+            switch UIApplication.shared.applicationState {
+            case .active: return "active"
+            case .inactive: return "inactive"
+            case .background: return "background"
+            @unknown default: return "unknown"
+            }
+        }
+        return Thread.isMainThread ? read() : DispatchQueue.main.sync(execute: read)
+    }
+}
+
+/// 前台也照常展示（#1018，对位 Android 前台照常弹系统通知）：不设代理时，App 在前台发出的通知既不弹横幅也不进通知中心。
+/// 代理必须在启动早期设上（`PPassApp.init`）；通知中心对代理是弱引用，所以用常驻单例。
+final class ForegroundNotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
+    static let shared = ForegroundNotificationPresenter()
+
+    static func install() { UNUserNotificationCenter.current().delegate = shared }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        let id = notification.request.identifier
+        completionHandler([.banner, .list, .sound])
+        // 展示与否最终由系统按用户的通知设置决定：把这几项一并记下，真机上「没看到」时据此区分是设置还是时机（#1018）。
+        center.getNotificationSettings { st in
+            AppLog.log("notify: \(id) presented in foreground (alert=\(st.alertSetting.rawValue) style=\(st.alertStyle.rawValue) center=\(st.notificationCenterSetting.rawValue) appState=\(UIApplication.sharedApplicationStateName))")
+        }
+    }
+
+    /// 点通知：系统已把 App 带到前台，首页自会按最新事实刷新；这里不做额外跳转（Android 点通知同样只是打开 App）。
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        AppLog.log("notify: \(response.notification.request.identifier) tapped")
+        completionHandler()
+    }
+}
+
 /// 失败本地通知（Android `DefinitiveEventNotices`，#130 / #981）：只发三类确定事件——配对失效、相册权限变差、
 /// 「后台 App 刷新」被关；「备份出问题」不发（#418）。触发与去重是 PPassCore 的纯判定 + 落盘状态，这里只负责发 / 撤。
 /// iOS 上通知只能在 App 有执行时间时发出（前台，或后台任务拉起的那一轮），这是平台限制，不是遗漏。
@@ -38,6 +78,7 @@ enum SystemNotifications {
 enum FailureNotifier {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var loggedUndeliverable: Set<NoticeEvent> = []
+    nonisolated(unsafe) private static var loggedFacts: DefinitiveFacts?
 
     /// 评估 → 先落盘 → 发 / 撤。幂等；落盘失败只记日志（App 内红卡 / 告示才是状态真相，通知是补充渠道）。
     static func evaluate(facts: DefinitiveFacts, notifyEnabled: Bool, store: DefinitiveNoticeStore, logger: CoreLogger) async {
@@ -48,6 +89,11 @@ enum FailureNotifier {
         catch { logger.log("notify: cannot persist definitive_notices.json (\(error)); not posting"); return }
 
         lock.lock()
+        // 判定输入变了才记一行（真机上据此对账「为什么发 / 没发」，#939）；配对代号不落日志。
+        if loggedFacts != facts {
+            loggedFacts = facts
+            logger.log("notify: facts mediaAccess=\(facts.mediaAccess) backgroundRequested=\(facts.backgroundRequested) backgroundRefresh=\(facts.backgroundRefresh) paired=\(facts.pairingEpoch != nil) pairingLost=\(facts.pairingLost)")
+        }
         for event in decision.undeliverable where loggedUndeliverable.insert(event).inserted {
             logger.log("notify: \(event.rawValue) not delivered, enabled=\(notifyEnabled) system authorization=\(auth)")
         }
@@ -61,6 +107,7 @@ enum FailureNotifier {
         if !cancelIds.isEmpty {
             center.removeDeliveredNotifications(withIdentifiers: cancelIds)
             center.removePendingNotificationRequests(withIdentifiers: cancelIds)
+            logger.log("notify: withdrawn \(cancelIds.joined(separator: ","))")
         }
         for notice in decision.post {
             let (title, body) = text(for: notice)
@@ -69,7 +116,7 @@ enum FailureNotifier {
             content.body = body
             let id = notice.event.notificationIdentifier
             center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil)) { error in
-                guard let error else { return }
+                guard let error else { logger.log("notify: \(id) posted"); return }
                 // 状态已落盘，这一条不会自动补发；留日志，真机才能判定。
                 logger.log("notify: \(id) add failed: \(error)")
             }

@@ -15,8 +15,13 @@
 
 ## 取证
 
-- 列 App 容器文件：`xcrun devicectl device info files --device <id> --domain-type appDataContainer --domain-identifier com.hawkeyexb.ppass`（加 `--subdirectory "Library/Application Support/PPass"` 只看存储根）。
-  存储根里能看到 `backup-orders.db(-wal/-shm)`、`backup_scope*.json`、`blobs/iroh-blobs-provider/blobs.db`。
+- 列 App 容器文件：`xcrun devicectl device info files --device <id> --domain-type appDataContainer --domain-identifier com.hawkeyexb.ppass`。
+  App 容器里能看到 `Library/Logs/ppass.log`、`Documents/e2e/…`（DEBUG 驱动写的）、`tmp/…`；**存储根不在这里**。
+- **存储根在 App Group 容器**（`group.com.hawkeyexb.ppass`，每次启动日志有 `storage: using App Group container …`）：`backup-orders.db(-wal/-shm)`、`backup_scope*.json`、
+  各类偏好 / 去重 json、`blobs/` 都在里面。`devicectl` 只能取 App 容器，**拉不到 App Group**。
+  要看账本：用 DEBUG 驱动 `PPASS_BGTEST_DUMP=1` 启动 App（`devicectl device process launch --environment-variables '{"PPASS_E2E_DIR":"container","PPASS_BGTEST_DUMP":"1"}' …`），
+  它把 `backup-orders.db / -wal / -shm` 拷进 App 容器的 `Documents/e2e/db`，再按下一条拉回（`tools/ios/sim-bg-task.sh`、`tools/ios/e3-batch.sh` 都这么做）。
+  偏好 / 去重 json 目前没有导出入口，状态以日志为准（#1026 起成功路径也有日志）。
 - 拉文件：`xcrun devicectl device copy from --device <id> --domain-type appDataContainer --domain-identifier com.hawkeyexb.ppass --source <设备内相对路径> --destination <本机路径>`。
   SQLite 的 WAL 库要把 `.db`、`-wal`、`-shm` 三个文件拉到同一目录再用 `sqlite3 -readonly` 打开，只拉 `.db` 打不开。
 - 端到端脚本拿状态就是用这条：App 的 DEBUG 驱动把 `status.json` 写进 `Documents/e2e`，脚本循环拉回（见 `tools/ios/e2e-device.sh`）。
@@ -26,14 +31,23 @@
 ## 后台日志（#955）
 
 - App 把每一行 `[PPass]` 日志同时写进容器内 `Library/Logs/ppass.log`（`AppLog`，前台、BGTask / 静默唤醒拉起都写）。单文件约 1 MB，满了换成 `ppass.log.1`，只保留这 2 份；每行带 ISO8601 毫秒时间戳。写失败不影响业务。
-- 每次进程启动第一行是 `process start: origin=foreground|background (BGTask / silent wake) pid=… version=…`；后台任务被系统拉起时还有 `background task launched (<reason>)`。
+- 每次进程启动第一行是 `process start: pid=… version=… appState=active|inactive|background`（只是原始值，不据此判来源）；
+  第一个真实入口到达时另记一行 `launch origin: foreground|background (<任务标识>)`（`LaunchOriginRecorder`）。后台任务被系统拉起时还有 `background task launched (<reason>)`。
 - 取回：`tools/ios/pull-logs.sh [设备标识] [尾部行数]`（不给设备就取第一台 connected 的 iPhone），文件落在 `apps/ios/build/device-logs/<时间戳>/`，并打印尾部。
   等价的手工命令：`xcrun devicectl device copy from --device <id> --domain-type appDataContainer --domain-identifier com.hawkeyexb.ppass --source Library/Logs/ppass.log --destination <本机路径>`。
 - 隐私：不写照片文件名、相册名、配对票据 / peerToken；照片标识只写 8 位 hash 前缀（`LogRedact.id`），落盘前 `LogRedact.scrub` 再兜底抹掉媒体文件名与 ≥32 字符的 ticket / token 串。新增日志行照此口径，不拼文件名与凭据。
 - 在真机上触发一次 BGTask：App 已装并启动过、且已配对并开了自动备份（这样才有任务被提交）→ 用 Xcode 附加调试器运行（Debug），暂停后在 LLDB 里执行
   `e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"com.hawkeyexb.ppass.backup"]` 再继续；
-  再 `pull-logs.sh`，应看到 `background task launched`。此命令只在调试器里可用，命令行 / devicectl 触发不了。要看「进程本身被后台拉起」的 `origin=background`，
-  需让系统真实调度（锁屏、接电源、等待）；调试器模拟是在已运行进程内触发回调，`origin` 仍是前台。
+  再 `pull-logs.sh`，应看到 `background task launched`。此命令只在调试器里可用，命令行 / devicectl 触发不了。
+  两个任务标识：长任务（BGProcessingTask）`com.hawkeyexb.ppass.backup`，短任务（BGAppRefreshTask，#958）`com.hawkeyexb.ppass.refresh`。
+  可重复的短任务场景用 `tools/ios/sim-bg-task.sh short-only | expire | budget`（脚本自己附加 lldb 触发）。
+  要看「进程本身被后台拉起」的 `launch origin: background`，需让系统真实调度（锁屏、接电源、等待）；调试器模拟是在已运行进程内触发回调，来源仍是前台。
+
+## 真机回归的日志判定（#939）
+
+- `tools/ios/e3-judge.sh mark` 记下起点；人在手机上操作后，`tools/ios/e3-judge.sh check <阶段>` 拉日志（只看起点之后）并判 PASS / FAIL，可重跑。
+- 阶段：`foreground-notice`、`onboarded-at-finish`、`prewarm-park`、`no-inactive-catchup`、`956-offline`、`956-delivered`（顺带读本机桌面库的 device 表）、`onboarding`、`wifi`、`autobackup-on`、`notify-media`、`notify-media-dedupe`、`notify-bgrefresh`。
+- 判据都是日志里的成功行（#1026 起成功路径也落日志）；新卡在验收里写明「日志里出现哪一行算通过」，再把它加成一个阶段。
 
 ## 本机隔离 daemon 与端到端
 

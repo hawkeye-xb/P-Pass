@@ -16,6 +16,27 @@ struct SettingsScreen: View {
         NavigationStack(path: $path) {
             List {
                 HeroCard()
+                // 后台刷新告示（对位 Android NoticeHost BACKUP_INTERRUPTED）。只放设置页、作为列表里的一行，不盖英雄卡；
+                // 照片页只靠设置 tab 的角标提醒（照片页是浏览用的，顶部不占）。不给「知道了」：事实还在就一直说。
+                if let n = app.backgroundNotice {
+                    Section {
+                        // 布局对位 Android NoticeCard：一行正文 + 右侧加粗下划线的动作。
+                        HStack(alignment: .center, spacing: 12) {
+                            Text(n.body).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            if n.canResolve {
+                                Button(L.s("background_backup_notice_action")) { app.openAppSettings() }
+                                    .font(PPFont.subheadlineBold).underline().foregroundStyle(PPColor.ink)
+                                    .buttonStyle(.borderless)
+                                    .accessibilityIdentifier("backgroundNoticeAction")
+                            }
+                        }
+                        // 内边距照 Android NoticeCard 的 padding(16, 13)：直接设这一行的 insets，不在系统行距上再叠一层。
+                        .listRowInsets(EdgeInsets(top: 13, leading: 16, bottom: 13, trailing: 16))
+                        .ppTinted(PPColor.waitingBg)
+                        .accessibilityIdentifier("backgroundNotice")
+                    }
+                }
                 if let free = app.facts.view?.desktopFreeBytes, free < DesktopHealth.lowSpaceBytes {
                     Section {
                         Text(L.s("desktop_low_space_hint"))
@@ -74,9 +95,9 @@ struct SettingsScreen: View {
                 Button(L.s("back"), role: .cancel) {}
             } message: { Text(L.s("cancel_remaining_confirm_body")) }
             // 关「仅 Wi‑Fi」先确认（移动网络会消耗流量）；点「取消」开关不动、不写盘（Android MOB-02 §三，#982）。
-            .alert(L.s("wifi_off_confirm_title"), isPresented: Binding(get: { app.pendingWifiOff }, set: { if !$0 { app.cancelWifiOff() } })) {
+            .alert(L.s("wifi_off_confirm_title"), isPresented: Binding(get: { app.pendingWifiOff }, set: { if !$0 { app.dismissWifiOffPrompt() } })) {
                 Button(L.s("wifi_off_confirm_ok"), role: .destructive) { app.confirmWifiOff() }
-                Button(L.s("cancel"), role: .cancel) {}
+                Button(L.s("cancel"), role: .cancel) { app.cancelWifiOff() }
             } message: { Text(L.s("wifi_off_confirm_body")) }
             .navigationDestination(for: Route.self) { route in
                 switch route {

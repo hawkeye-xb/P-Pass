@@ -36,6 +36,8 @@ struct ScanScreen: View {
             }
             .frame(width: 260, height: 260)
             Text(L.s("scan_hint")).font(PPFont.body).multilineTextAlignment(.center).foregroundStyle(PPColor.paperDim)
+            // #1013：扫码成功后系统会弹「本地网络」权限框；先在这里说清用途，不另起弹窗。
+            Text(L.s("scan_local_network_note")).font(PPFont.subheadline).multilineTextAlignment(.center).foregroundStyle(PPColor.paperDim)
             Spacer()
             Button(L.s("scan_manual_link"), action: onManual)
                 .font(PPFont.bodyMedium).frame(minHeight: 48)

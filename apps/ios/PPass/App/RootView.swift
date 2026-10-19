@@ -72,6 +72,6 @@ struct MainTabs: View {
         }
     }
 
-    /// 设置 tab 的角标：配对失效（Android 另有后台被停两项，iOS 本轮不做后台）。
-    private var settingsAlert: Bool { app.pairingLost }
+    /// 设置 tab 的角标：配对失效，或后台备份被系统挡住（对位 Android `settingsAlert`：pairingLost || 后台待授权 / 被停）。
+    private var settingsAlert: Bool { app.pairingLost || app.backgroundNotice != nil }
 }

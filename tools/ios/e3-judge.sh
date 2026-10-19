@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# 真机回归的日志判定（#939）：拉手机落盘日志（只看起点之后的行）+ 本机桌面库，按阶段自动判 PASS / FAIL。
+# 需要人在手机上点的步骤由人做；本脚本只负责「从日志判定」，可在任意时刻重跑。
+#   tools/ios/e3-judge.sh mark                 记下起点（之后的判定只看起点之后的日志行）
+#   tools/ios/e3-judge.sh check <phase>        判定一个阶段：foreground-notice | onboarded-at-finish | prewarm-park | no-inactive-catchup | 956-offline | 956-delivered | onboarding | wifi | autobackup-on | notify-media | notify-media-dedupe | notify-bgrefresh
+#   tools/ios/e3-judge.sh tail [n]             看起点之后的日志尾部
+set -uo pipefail
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+S="$ROOT/apps/ios/build/e3-judge"; mkdir -p "$S"
+DEV="${PPASS_DEVICE:-B2805351-9CD1-55C7-81B0-DBEAD9E86BD3}"
+# 桌面库：本机正式桌面的 data_dir（Config.toml），可用 PPASS_DESKTOP_DB 覆盖。
+CONF="$HOME/Library/Application Support/P-Pass/Config.toml"
+DATA_DIR=$(sed -n 's/^data_dir *= *"\(.*\)"/\1/p' "$CONF" 2>/dev/null | head -1)
+DB="${PPASS_DESKTOP_DB:-$DATA_DIR/.ppf/index.sqlite}"
+MARK="$S/mark"
+
+pull() {
+  local out
+  out=$(PPASS_LOG_TAIL=0 "$ROOT/tools/ios/pull-logs.sh" "$DEV" 0 2>&1) || { echo "$out" >&2; return 1; }
+  local dir; dir=$(ls -td "$ROOT"/apps/ios/build/device-logs/*/ | head -1)
+  local since; since=$(cat "$MARK" 2>/dev/null || echo 0)
+  { cat "$dir"/ppass.log.1 2>/dev/null; cat "$dir"/ppass.log 2>/dev/null; } | awk -v s="$since" 'substr($0,1,29) >= s' > "$S/since.log"
+}
+
+expect() { # expect <描述> <正则>
+  if grep -E -q "$2" "$S/since.log"; then echo "PASS  $1"; grep -E "$2" "$S/since.log" | tail -2 | sed 's/^/        /'
+  else echo "FAIL  $1   （未见: $2）"; fails=$((fails+1)); fi
+}
+absent() { # absent <描述> <正则>
+  local n; n=$(grep -E -c "$2" "$S/since.log")
+  if [ "$n" -eq 0 ]; then echo "PASS  $1"; else echo "FAIL  $1   （出现 $n 次: $2）"; fails=$((fails+1)); fi
+}
+count() { # count <描述> <正则> <期望次数>
+  local n; n=$(grep -E -c "$2" "$S/since.log")
+  if [ "$n" -eq "$3" ]; then echo "PASS  $1（$n 次）"; else echo "FAIL  $1   （期望 $3 次，实际 $n: $2）"; fails=$((fails+1)); fi
+}
+
+fails=0
+case "${1:-}" in
+  mark) date +%Y-%m-%dT%H:%M:%S.000+08:00 > "$MARK"; echo "mark=$(cat "$MARK")" ;;
+  tail) pull && tail -n "${2:-60}" "$S/since.log" ;;
+  check)
+    pull || exit 2
+    case "${2:-}" in
+      foreground-notice)
+        expect "前台发出的通知被展示（#1018）" 'notify: ppass\.[a-z_]+ presented in foreground' ;;
+      onboarded-at-finish)
+        expect "完成页才记「连过这台电脑」（#1019）" 'onboarded: marked desktop=.* at finish' ;;
+      prewarm-park)
+        expect "探测前预热 provider（#979）" 'provider prewarm: endpoint bound in'
+        expect "退后台且空闲 → 回收（#979）" 'provider: park ok' ;;
+      no-inactive-catchup)
+        expect "半前台回来不补捞" 'scene: active again without leaving the foreground' ;;
+      956-offline)
+        expect "断开时先落盘待撤销并试发，电脑不可达 → 保留" 'unpair-outbox: desktop=.* unreachable .*kept'
+        expect "本地断开照常完成（provider 撤销）" 'disconnect: provider revoked' ;;
+      956-delivered)
+        expect "电脑恢复后补发成功 → 删除条目" 'unpair-outbox: delivered desktop=.*removed|NOT_AUTHORIZED\), treated as done'
+        echo "桌面库 device 表（最近撤销的 iPhone）："
+        sqlite3 -readonly "$DB" "select substr(hex(node_id),1,10), name, revoked, revoked_by, datetime(revoked_at/1000,'unixepoch','localtime') from device where name='iPhone' order by coalesce(revoked_at,0) desc limit 3" | sed 's/^/        /' ;;
+      onboarding)
+        expect "新电脑配对：后台备份意图被清（requested=false）" 'auto-backup prefs: applied on pairing knownDesktop=false requested=false'
+        expect "完成页选择了「暂不」" 'onboarding: finish tapped enableBackgroundBackup=false'
+        ;;
+      wifi)
+        expect "关「仅 Wi‑Fi」先弹确认" 'wifi-only: off requested, confirm shown'
+        expect "点取消 → 不写盘" 'wifi-only: off cancelled, still on'
+        expect "点确认 → 写盘 wifiOnly=false" 'wifi-only: off confirmed'
+        expect "确认后真的落盘" 'backup-settings: saved wifiOnly=false'
+        expect "再打开 → 落盘 wifiOnly=true" 'backup-settings: saved wifiOnly=true' ;;
+      autobackup-on)
+        expect "设置里打开后台备份 → 落盘" 'auto-backup prefs: saved on=true' ;;
+      notify-media)
+        expect "判定输入看到相册权限变差" 'notify: facts mediaAccess=(none|partial)'
+        expect "发出「相册权限变差」通知" 'notify: ppass.media_access_revoked posted' ;;
+      notify-media-dedupe)
+        absent "重启进程后不重复发" 'notify: ppass.media_access_revoked posted' ;;
+      notify-bgrefresh)
+        expect "判定输入看到后台刷新被关" 'notify: facts .*backgroundRequested=true backgroundRefresh=(denied|restricted)'
+        expect "发出「后台刷新被关」通知" 'notify: ppass.background_stopped posted' ;;
+      *) echo "未知阶段"; exit 2 ;;
+    esac
+    [ "$fails" -eq 0 ] && echo "== 阶段 ${2} 通过" || echo "== 阶段 ${2} 失败 $fails 项（明细见 $S/since.log）"
+    exit "$fails" ;;
+  *) sed -n 2,6p "$0"; exit 2 ;;
+esac

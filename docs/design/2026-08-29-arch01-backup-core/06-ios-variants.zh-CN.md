@@ -229,7 +229,7 @@ Android 的照片只在一个 bucket（文件夹）里；iOS 的一张照片可�
 - **平台差异（有意不同，不是遗漏）**：
   - **MOB-28「后台中断」iOS 没有对位物，不移植**：iOS 上 App 被 force-quit / 被系统杀掉，进程内无从区分，也没有「同一次开机内监听消失」可比的信号（BGTask 由系统调度，不是我们注册的常驻监听）；系统在 force-quit 之后是否还拉起后台任务没有 Apple 文档的明确保证（论坛有相反的报告：[developer.apple.com/forums/thread/793189](https://developer.apple.com/forums/thread/793189)）。「后台执行时间到期」是 iOS 的常态（见 C-05），不是故障，不通知。没有检测手段就不硬凑；回前台时首页「打开 P-Pass 时备份」告示与「最近备份」时间是用户能自己发现的渠道。
   - 通知点开只打开 App（没有深链进系统设置），所以相册权限通知的正文写 iOS 设置项名字（`IOS.strings` 覆盖 `notif_media_*_body`）；后台刷新通知为 iOS 独有 key（`notif_background_refresh_*`）。
-  - **前台展示**：App 没有 `UNUserNotificationCenterDelegate`，前台发出的通知不弹横幅、只进通知中心（iOS 默认）；Android 前台照常弹。未对齐，见 #1018。
+  - **前台展示**：已对齐（#1018）。启动时设 `UNUserNotificationCenterDelegate`，`willPresent` 返回横幅 + 通知中心 + 声音，前台发出的通知照常展示，同 Android。未设代理时 iOS 的默认行为是前台通知既不弹横幅也不进通知中心（2026-10-19 真机实测）。
 - **测试**：`DefinitiveNoticesTests`（PPassCore：触发集合只有三类 / 每类的发、不重发、复位、基线 / 未送达只不发、状态照常推进且之后不补发 / 落盘重启不重发与反证 / 文件名字段 / 缺失静默、损坏留日志、写失败抛出）、`DisconnectManifestTests.testDisconnectAppliesEveryRow`（新状态文件登记）。
 
 ### 首页计数读库失败（#973）
@@ -244,11 +244,19 @@ Android 的照片只在一个 bucket（文件夹）里；iOS 的一张照片可�
 - **Android**：`AutoBackupPrefs.autoEnabled` 默认 false；首次配对新电脑先 `setRequested(false)`，完成页给「开启后台备份 / 不开启后台备份」两个按钮由用户选；连回以前连过的电脑按留下的意图恢复；关闭「仅 Wi‑Fi」先弹确认框（移动网络会消耗流量），确认后才保存。
 - **iOS 对位**：全新安装后台备份默认**关**（删掉了 `LiveBackend.init` 里的默认置开）；`AutoBackupPrefs.applyOnPairing(knownDesktop:)`（PPassCore）——新电脑清意图、老电脑按意图恢复；完成页换成两个等高按钮，两个按钮都先走通知询问再继续；关「仅 Wi‑Fi」用 `.alert` 确认，点取消不写盘。「连没连过」改在 `onPaired` 标记**之前**判定（此前顺序反了，`firstTime` 恒为 false，首次配对进不了选相册与完成页）。
 - **平台差异（有意不同，不是遗漏）**：
-  1. **没有 App 内申请后台执行的系统框**。Android「开启」时要去申请电池白名单，被拒则挂起生产者、授权回来再恢复；iOS 的「后台 App 刷新」只能用户自己在系统设置里开，App 弹不出申请。所以 iOS「开启」直接写偏好、**不因后台刷新关着而挂起生产者**（否则还得补一条「授权回来再恢复」的路径）；关着的情况由首页告示说明（`BackupPromise.refreshOff` / `refreshRestricted`）。
+  1. **没有 App 内申请后台执行的系统框**。Android「开启」时要去申请电池白名单，被拒则挂起生产者、授权回来再恢复；iOS 的「后台 App 刷新」只能用户自己在系统设置里开，App 弹不出申请。所以 iOS「开启」直接写偏好、**不因后台刷新关着而挂起生产者**（否则还得补一条「授权回来再恢复」的路径）；关着的情况由全局告示说明（`AppModel.backgroundNotice` ← `BackupPromise.refreshOff` / `refreshRestricted`，对位 Android `NoticeHost` 的 BACKUP_INTERRUPTED）：只在用户要后台备份时出现，不给「知道了」；关掉的给「去处理」跳系统设置里 P-Pass 的页面，被限制的不给按钮；设置 tab 同时亮角标。**与 Android 的差别**：Android 两页顶部都显示；iOS 只放设置页、作为英雄卡下方的一行（用户 2026-10-19 拍板：照片页是浏览用的，顶部不占；浮在顶部会盖住英雄卡），照片页只靠设置 tab 角标。（10-13 的 f57a2942 曾把设置页这块连同固定说明一起删掉，2026-10-19 补回并改为全局告示。）
   2. **文案按 #343 只说能兑现的**：完成页多一句 `background_backup_ios_note`（iOS 可能找机会接着备份，是否执行、何时执行由系统决定，不保证），不写频率、不假装有后台。按钮文案沿用 Android 的 `background_backup_enable` / `background_backup_not_now`。
   3. 前台备份不受这个开关影响：`Conditions.autoBackupEnabled` 为 false 时，`userPresent` 的触发（回前台 / 手动 / 选相册 / 前台相册变化）照常起轮（`FlowTypes.swift` `.disabled` 判定只拦非用户在场的触发）。
-- **未对齐、另开 issue（#1019）**：Android 在完成页（`finishOnboarding`）才 `markOnboarded`，iOS 仍在配对成功时（`LiveBackend.paired`）就标——配对后、选完相册前被杀进程，下次再配这台会被当成老电脑跳过选相册。
+- **「连过这台电脑」的落盘时机（#1019，已对齐）**：同 Android `finishOnboarding`（MOB-114），在完成页点任一按钮时才 `markOnboarded`（`BackupEngine.finishOnboarding`），配对成功时不记——配对后、走完首次设置前被杀进程，下次再配这台仍按新电脑走选相册与后台备份选择。记不下来照样进首页，但弹 `setting_save_failed`（后果只是下次重连仍走一遍首次设置）。
 - **测试**：PPassCore 的 `PrefsTests`（老 / 新电脑 / 写失败）；PPassTests 的 PairingWiringTests（firstTime 在 onPaired 之前判定，模拟器上跑）与 SettingsFeedbackTests（Wi‑Fi 确认、默认关、完成页选择）。
+
+### provider 预热与空闲回收（#979）
+
+- **Android**（#434）：探测桌面前先 `native.prewarm()`，provider 的 endpoint 与 hello 并行去连 relay；`NetworkIdleReaper`：不在前台、且引擎这一轮结束（`engine.status.phase == IDLE`），等 30 秒宽限期后 `park()` 关掉 endpoint（store 不关），park 回 false（桌面还连着）就隔一个宽限期再试。控制通道 DaemonClient 的 endpoint 同样回收。
+- **iOS 对位**：`PrewarmingProbe` 包住 `ControlPlaneProbe`，探测前 `prewarm()`，失败只记日志、serve 时照常自己绑；`ProviderIdleParker`：不在前台（`setActive`）且引擎未持有租约（`ExecutionWindow.observeLease`）就 `park()`，回 false 隔 2 秒再试，直到不再空闲。
+- **有意不同**：
+  1. **没有 30 秒宽限期**：iOS 退到后台后进程很快被挂起，等不到 30 秒；条件一成立就关，挂起前把 endpoint 放掉。
+  2. **控制面 endpoint 不回收**：iOS 的 `CtrlClient` FFI 没有导出 park；补它要改 `crates/transport`（触发 Android / 桌面版本门禁）。iOS 后台进程被挂起后不再收发，Android 那种「后台空跑 endpoint 耗流量」的问题在 iOS 上不成立，暂不补。
 
 ### 设置写盘失败与用户命令出错的反馈（#971 / #972）
 

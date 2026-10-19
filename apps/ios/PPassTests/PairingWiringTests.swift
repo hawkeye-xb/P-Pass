@@ -134,7 +134,7 @@ final class PairingWiringTests: XCTestCase {
         ])
         let pairing = makePairing(transport, store: store, onboarded: { marked.contains($0) }) { record, known in
             knownSeenByOnPaired = known
-            marked.insert(record.daemonNodeId) // 对位 LiveBackend.paired 里的 markOnboarded
+            marked.insert(record.daemonNodeId) // 最坏情形：onPaired 里就标记（#1019 之前的写法），firstTime 也必须先定
         }
         let outcome = await pairing.pair(code: link)
         XCTAssertEqual(outcome, .joined(firstTime: true), "新电脑：onPaired 标记之后也必须报 firstTime")

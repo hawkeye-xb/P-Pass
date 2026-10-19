@@ -1,0 +1,31 @@
+import XCTest
+@testable import PPass
+
+/// #1013：系统权限弹窗的说明，每种语言都要有，且与 Info.plist 里声明的 *UsageDescription 一一对应。
+/// 新增一条权限说明却漏了某个语言的 InfoPlist.strings，系统弹窗就会回退成英文原文——本条红。
+final class InfoPlistStringsTests: XCTestCase {
+    func test_every_usage_description_is_localized_in_every_language() throws {
+        let keys = (Bundle.main.infoDictionary ?? [:]).keys.filter { $0.hasSuffix("UsageDescription") }.sorted()
+        XCTAssertFalse(keys.isEmpty)
+        for lang in ["en", "zh-Hans"] {
+            let path = try XCTUnwrap(Bundle.main.path(forResource: lang, ofType: "lproj"), "缺 \(lang).lproj")
+            let bundle = try XCTUnwrap(Bundle(path: path))
+            for key in keys {
+                let value = bundle.localizedString(forKey: key, value: "\u{0}", table: "InfoPlist")
+                XCTAssertNotEqual(value, "\u{0}", "\(lang).lproj/InfoPlist.strings 缺 \(key)")
+                XCTAssertFalse(value.isEmpty, "\(lang) 的 \(key) 是空串")
+            }
+        }
+    }
+
+    /// 扫码页的本地网络前置说明（iOS 独有文案）两种语言都在。
+    func test_scan_local_network_note_exists_in_every_language() throws {
+        for lang in ["en", "zh-Hans"] {
+            let path = try XCTUnwrap(Bundle.main.path(forResource: lang, ofType: "lproj"))
+            let bundle = try XCTUnwrap(Bundle(path: path))
+            for key in ["scan_local_network_note", "background_refresh_off_notice", "background_refresh_restricted_notice"] {
+                XCTAssertNotEqual(bundle.localizedString(forKey: key, value: "\u{0}", table: "IOS"), "\u{0}", "\(lang) 缺 \(key)")
+            }
+        }
+    }
+}

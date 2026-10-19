@@ -22,6 +22,7 @@ final class LiveBackend: @unchecked Sendable {
     let engine: FlowEngine
     let catchup: ForegroundCatchup
     let provider: NativeProvider
+    let providerParker: ProviderIdleParker
     let orders: SQLiteOrderStore
     let control: FlowControlStore
     let settings: BackupSettings
@@ -61,6 +62,8 @@ final class LiveBackend: @unchecked Sendable {
         media = LiveMediaLibrary { BackupScopeStore(directory: dir, daemonNodeId: pairingStore.load()?.daemonNodeId, logger: logger) }
         provider = try NativeProvider(root: dir)
         try? provider.ffi.setAllowedPeer(nodeId: pairingStore.load()?.daemonNodeId)
+        let parker = ProviderIdleParker(provider: provider, logger: logger)
+        providerParker = parker
         orders = try SQLiteOrderStore(directory: dir, logger: logger)
         // 收件箱（#958）：与账本同一个文件、独立的表和连接。必须在账本之后打开——账本发现文件损坏会删掉整个文件重建。
         let inbox = try Inbox(path: orders.path, history: PhotoKitChangeHistory(), log: { logger.log($0) })
@@ -105,7 +108,9 @@ final class LiveBackend: @unchecked Sendable {
             store: orders, media: PhotoMediaSource(selected: scope, inbox: inbox, log: { logger.log($0) }),
             importer: PhotoImporter(provider: provider, tempRoot: fm.temporaryDirectory.appendingPathComponent("ppass-originals")),
             delivery: delivery,
-            probe: ControlPlaneProbe(currentEpoch: epoch, desktop: desktop, logger: logger, pairingLoss: pairingLoss),
+            probe: PrewarmingProbe(provider: provider,
+                                   inner: ControlPlaneProbe(currentEpoch: epoch, desktop: desktop, logger: logger, pairingLoss: pairingLoss),
+                                   logger: logger),
             presence: ControlPlanePresence(desktop: desktop), lease: window, scheduler: scheduler, control: control,
             conditions: {
                 Conditions(paired: epoch() != nil, autoBackupEnabled: autoPrefs.enabled(), wifiOnly: settings.wifiOnly(),
@@ -208,10 +213,13 @@ final class LiveBackend: @unchecked Sendable {
         // #935：换了一台电脑就清旧账（已确认计数不能算给新电脑）；同一台重新配对不动。失败要暴露，不静默沿用旧账。
         do { _ = try adoptDesktop(orders, daemonNodeId: record.daemonNodeId, nowMs: Int64(Date().timeIntervalSince1970 * 1000)) }
         catch { logger.log("adoptDesktop failed: \(error)") }
-        do { try onboarded.markOnboarded(record.daemonNodeId) } catch { logger.log("onboarded: mark failed: \(error)") }
+        // 「连过这台电脑」不在这里记：要等用户走完首次设置，在完成页落盘（#1019，对位 Android finishOnboarding）。
         // 后台备份意图（#982，对位 Android）：断开时只停生产者、留意图（MOB-93）——连回以前连过的电脑按意图恢复；
         // 换新电脑 = 新的信任关系，清意图，由完成页让用户重新选。写失败要暴露，不静默沿用旧意图。
-        do { try autoPrefs.applyOnPairing(knownDesktop: knownDesktop) } catch { logger.log("auto-backup prefs: apply on pairing failed: \(error)") }
+        do {
+            try autoPrefs.applyOnPairing(knownDesktop: knownDesktop)
+            logger.log("auto-backup prefs: applied on pairing knownDesktop=\(knownDesktop) requested=\(autoPrefs.requested()) enabled=\(autoPrefs.enabled())")
+        } catch { logger.log("auto-backup prefs: apply on pairing failed: \(error)") }
         mediaWatcher.start() // 断开时注销了；重新配对后恢复（#978）
         timelineLive.session.pairingChanged() // 新配对：按新对端重建实时订阅（#963）
         Task { _ = await engine.trigger(.pairingRepaired) }
@@ -233,6 +241,8 @@ final class LiveBackend: @unchecked Sendable {
     }
 
     func start() {
+        let parker = providerParker
+        window.observeLease { held in parker.setEngineBusy(held) } // #979：对位 Android engine.status → setEngineBusy
         flushPendingUnpairs() // 启动
         Task {
             await repairEpochIfNeeded()
@@ -249,6 +259,7 @@ final class LiveBackend: @unchecked Sendable {
 
     func setActive(_ active: Bool) {
         window.setAppActive(active)
+        providerParker.setForeground(active) // #979：不在前台且引擎空闲 → 回收 provider endpoint
         // 心跳只在前台跑（两端一致，没有后台心跳）：回前台立即拍一次，退后台停。
         if active { heartbeat.start(); timelineLive.session.start() } else { heartbeat.stop(); timelineLive.session.stop() }
         if active {
@@ -402,6 +413,7 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
         do {
             try backend.autoPrefs.setEnabled(on)
             try backend.autoPrefs.setRequested(on)
+            backend.logger.log("auto-backup prefs: saved on=\(on)")
         } catch {
             backend.logger.log("auto-backup prefs: write failed (on=\(on)): \(error)")
             throw error
@@ -413,6 +425,7 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
     private func command<T>(_ name: String, _ body: () async throws -> T) async throws -> T {
         do {
             let result = try await body()
+            backend.logger.log("command \(name) ok")
             await backend.refreshFacts()
             return result
         } catch {
@@ -440,7 +453,7 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
 
     func notifyOnFailure() -> Bool { backend.notifyPrefs.enabled() }
     func setNotifyOnFailure(_ on: Bool) throws {
-        do { try backend.notifyPrefs.setEnabled(on) } catch {
+        do { try backend.notifyPrefs.setEnabled(on); backend.logger.log("notify-prefs: saved enabled=\(on)") } catch {
             backend.logger.log("notify-prefs: write failed: \(error)")
             throw error
         }
@@ -467,6 +480,19 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
     }
 
     /// 完成页点「好」：该问就先落盘「问过」再弹，结果同步回开关（Android `thenContinue` + `onResult`）。
+    func finishOnboarding() throws {
+        guard let record = backend.pairingStore.load() else {
+            backend.logger.log("onboarded: finish without a pairing; nothing to mark"); return
+        }
+        do {
+            try backend.onboarded.markOnboarded(record.daemonNodeId)
+            backend.logger.log("onboarded: marked desktop=\(LogRedact.id(record.daemonNodeId)) at finish")
+        } catch {
+            backend.logger.log("onboarded: mark failed: \(error)")
+            throw error
+        }
+    }
+
     func askNotificationAtOnboarding() async {
         let auth = await notificationAuthorization()
         let ask = backend.notificationAsk.shouldAsk(authorization: auth)
@@ -483,7 +509,7 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
 
     func wifiOnly() -> Bool { backend.settings.wifiOnly() }
     func setWifiOnly(_ on: Bool) throws {
-        do { try backend.settings.save(wifiOnly: on) } catch {
+        do { try backend.settings.save(wifiOnly: on); backend.logger.log("backup-settings: saved wifiOnly=\(on)") } catch {
             backend.logger.log("backup-settings: write failed (wifiOnly=\(on)): \(error)")
             throw error
         }

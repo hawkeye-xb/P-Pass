@@ -166,6 +166,7 @@ final class FakeEngine: BackupEngine {
     @MainActor func openNotificationSettings() {}
     func shouldAskNotificationAtOnboarding() async -> Bool { false }
     func askNotificationAtOnboarding() async {}
+    func finishOnboarding() throws {}
 
     func promise() -> [PromiseNotice] {
         var out = [PromiseNotice(BackupPromise.whileOpenTitle), PromiseNotice(BackupPromise.whileOpenBody)]
