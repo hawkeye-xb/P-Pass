@@ -358,4 +358,17 @@ final class InboxDiscoveryTests: XCTestCase {
         XCTAssertEqual(try rig.current(2)?.attempts, 0)
         XCTAssertEqual(try g(rig), 3, "G 越过视频，不挡后面的照片")
     }
+
+    /// #991：同一段视频在一轮里先被发现建待传行、又被待传取件看到——日志只算一次。
+    func testS6_11_aDeferredVideoIsCountedOncePerRound() async throws {
+        let (rig, inbox) = try await makeRig()
+        rig.lease.photosOnlyFlag.set(true)
+        shoot(rig, inbox, [1, 2, 3], video: [2])
+        await rig.start()
+        await rig.trigger()
+
+        let lines = rig.logger.lines.filter { $0.contains("left for another window") }
+        XCTAssertEqual(lines.count, 1, "\(lines)")
+        XCTAssertTrue(lines.first?.contains(": 1 video(s) left for another window") == true, "\(lines)")
+    }
 }

@@ -64,8 +64,8 @@ public actor FlowEngine {
     private var started = false
     /// AUDIT-07：这一轮已经发出的逐张事实计数（键 == 桌面 `audit_item_evidence.outcome`）。
     private var roundOutcomes: [String: Int] = [:]
-    /// #958：这一轮因「只传照片」没处理的视频张数。
-    private var roundVideosDeferred = 0
+    /// #958：这一轮因「只传照片」没处理的视频。按 mediaId 去重——同一段在一轮里可能先被发现建行、再被待传取件看到（#991）。
+    private var roundVideosDeferred = Set<String>()
     private var lastPublished: EngineView?
     private var lastPublishedAt: Int64 = .min
 
@@ -592,7 +592,7 @@ public actor FlowEngine {
         let roundId = UUID().uuidString.lowercased()
         try store.openRound(roundId)
         roundOutcomes = [:]
-        roundVideosDeferred = 0
+        roundVideosDeferred = []
         log("cycle \(names): round \(roundId) open (desktop reachable\(lease.photosOnly ? "; photos only" : ""))")
         let round = Round(reconcile: reconcile, userPresent: userPresent)
         let result: Result<WaitReason?, Error>
@@ -603,7 +603,7 @@ public actor FlowEngine {
         }
         // ---- 收尾（不论正常结束、被取消还是抛错）----
         lease.release()
-        if roundVideosDeferred > 0 { log("round \(roundId): \(roundVideosDeferred) video(s) left for another window (photos only)") }
+        if !roundVideosDeferred.isEmpty { log("round \(roundId): \(roundVideosDeferred.count) video(s) left for another window (photos only)") }
         closeRound(roundId)
         bump()
         let exit = (try? result.get()) ?? nil
@@ -888,7 +888,7 @@ public actor FlowEngine {
                 NewOrder(mediaId: snapshot.mediaId, sourceVersion: version, bucketId: bucket, contentHash: nil, state: .pending, pairingEpoch: epoch),
                 advance: progress.advance, scanTo: progress.scanTo, audit: nil
             )
-            roundVideosDeferred += 1
+            roundVideosDeferred.insert(snapshot.mediaId)
             bump()
             return .next
         }
@@ -950,7 +950,7 @@ public actor FlowEngine {
         }
         if lease.photosOnly, Self.isVideo(details) {
             // #958：只有短任务窗口：状态原样不动（不记失败、不加次数、不进跳过名单）；游标已越过它，本轮继续下一张。
-            roundVideosDeferred += 1
+            roundVideosDeferred.insert(order.mediaId)
             return .next
         }
         let (imported, failure) = try await importWithRetry(details)
