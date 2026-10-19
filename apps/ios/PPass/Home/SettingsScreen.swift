@@ -16,6 +16,23 @@ struct SettingsScreen: View {
         NavigationStack(path: $path) {
             List {
                 HeroCard()
+                // 后台刷新告示（对位 Android NoticeHost BACKUP_INTERRUPTED）。只放设置页、作为列表里的一行，不盖英雄卡；
+                // 照片页只靠设置 tab 的角标提醒（照片页是浏览用的，顶部不占）。不给「知道了」：事实还在就一直说。
+                if let n = app.backgroundNotice {
+                    Section {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text(n.body).font(PPFont.body).foregroundStyle(PPColor.ink60)
+                            if n.canResolve {
+                                Button(L.s("background_backup_notice_action")) { app.openAppSettings() }
+                                    .font(PPFont.subheadlineBold).buttonStyle(.borderless)
+                                    .accessibilityIdentifier("backgroundNoticeAction")
+                            }
+                        }
+                        .padding(.vertical, 4)
+                        .ppTinted(PPColor.waitingBg)
+                        .accessibilityIdentifier("backgroundNotice")
+                    }
+                }
                 if let free = app.facts.view?.desktopFreeBytes, free < DesktopHealth.lowSpaceBytes {
                     Section {
                         Text(L.s("desktop_low_space_hint"))
