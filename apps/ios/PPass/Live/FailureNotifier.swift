@@ -31,6 +31,27 @@ enum SystemNotifications {
     }
 }
 
+/// 前台也照常展示（#1018，对位 Android 前台照常弹系统通知）：不设代理时，App 在前台发出的通知既不弹横幅也不进通知中心。
+/// 代理必须在启动早期设上（`PPassApp.init`）；通知中心对代理是弱引用，所以用常驻单例。
+final class ForegroundNotificationPresenter: NSObject, UNUserNotificationCenterDelegate {
+    static let shared = ForegroundNotificationPresenter()
+
+    static func install() { UNUserNotificationCenter.current().delegate = shared }
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        AppLog.log("notify: \(notification.request.identifier) presented in foreground")
+        completionHandler([.banner, .list, .sound])
+    }
+
+    /// 点通知：系统已把 App 带到前台，首页自会按最新事实刷新；这里不做额外跳转（Android 点通知同样只是打开 App）。
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        AppLog.log("notify: \(response.notification.request.identifier) tapped")
+        completionHandler()
+    }
+}
+
 /// 失败本地通知（Android `DefinitiveEventNotices`，#130 / #981）：只发三类确定事件——配对失效、相册权限变差、
 /// 「后台 App 刷新」被关；「备份出问题」不发（#418）。触发与去重是 PPassCore 的纯判定 + 落盘状态，这里只负责发 / 撤。
 /// iOS 上通知只能在 App 有执行时间时发出（前台，或后台任务拉起的那一轮），这是平台限制，不是遗漏。

@@ -120,6 +120,8 @@ final class AppModel: ObservableObject {
     /// onboarding 完成页：该问通知就先问一次（结果同步回开关），再按用户的选择开 / 不开后台备份（Android `thenContinue` 包两个按钮），进首页。
     func finishOnboardingStarted(enableBackgroundBackup: Bool) {
         AppLog.log("onboarding: finish tapped enableBackgroundBackup=\(enableBackgroundBackup)")
+        // 记不下来不挡进首页：后果只是下次重连同一台仍走一遍首次设置（偏安全的一侧），但要提示，不静默。
+        do { try backend.engine.finishOnboarding() } catch { settingWriteFailed("onboarded", error) }
         Task {
             await backend.engine.askNotificationAtOnboarding()
             if enableBackgroundBackup { setAutoBackup(true) }

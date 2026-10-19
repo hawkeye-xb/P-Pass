@@ -15,8 +15,16 @@ public final class ExecutionWindow: ExecutionLease, @unchecked Sendable {
     private var shortTask = false
     private var acquired = false
     private var lastStatus = LoopStatus()
+    private var onLease: (@Sendable (Bool) -> Void)?
 
     public init() {}
+
+    /// 租约持有状态变化（true = 这一轮开始持有，false = 释放 / 没拿到）。给「引擎空闲才回收网络」用（#979，对位 Android
+    /// `engine.status` → `NetworkIdleReaper.setEngineBusy`）。接线时设一次；回调在锁外调用。
+    public func observeLease(_ onChange: @escaping @Sendable (Bool) -> Void) {
+        lock.lock(); defer { lock.unlock() }
+        onLease = onChange
+    }
 
     private func open() -> Bool { appActive || finishingTime || backgroundTask || shortTask }
 
@@ -82,9 +90,12 @@ public final class ExecutionWindow: ExecutionLease, @unchecked Sendable {
     public func acquire() async -> Bool { acquireNow() }
 
     private func acquireNow() -> Bool {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
         acquired = open()
-        return acquired
+        let held = acquired, notify = onLease
+        lock.unlock()
+        notify?(held)
+        return held
     }
 
     public func isHeld() -> Bool {
@@ -100,8 +111,11 @@ public final class ExecutionWindow: ExecutionLease, @unchecked Sendable {
     }
 
     public func release() {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
         acquired = false
+        let notify = onLease
+        lock.unlock()
+        notify?(false)
     }
 }
 

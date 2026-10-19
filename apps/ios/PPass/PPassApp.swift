@@ -8,7 +8,10 @@ struct PPassApp: App {
     @Environment(\.scenePhase) private var scenePhase
     private let boot = AppBoot.make()
 
-    init() { PPAppearance.install() }
+    init() {
+        PPAppearance.install()
+        ForegroundNotificationPresenter.install() // #1018：前台发出的通知也要展示，须在启动早期设代理
+    }
 
     var body: some Scene {
         WindowGroup {

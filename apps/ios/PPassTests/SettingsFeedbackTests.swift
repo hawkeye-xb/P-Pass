@@ -33,6 +33,8 @@ final class SettingsFeedbackTests: XCTestCase {
         @MainActor func openNotificationSettings() {}
         func shouldAskNotificationAtOnboarding() async -> Bool { false }
         func askNotificationAtOnboarding() async {}
+        var failOnboarded = false
+        func finishOnboarding() throws { calls.append("onboarded"); if failOnboarded { throw Boom() } }
         func wifiOnly() -> Bool { disk.wifi }
         func setWifiOnly(_ on: Bool) throws { calls.append("wifi=\(on)"); if failWrites { throw Boom() }; disk.wifi = on }
         func autoBackup() -> Bool { disk.auto }
@@ -63,6 +65,30 @@ final class SettingsFeedbackTests: XCTestCase {
 
     /// 等主 actor 上排队的 Task 跑完。
     private func settle() async { for _ in 0..<20 { await Task.yield() }; try? await Task.sleep(nanoseconds: 50_000_000) }
+
+    // MARK: #1019
+
+    /// 「连过这台电脑」在完成页点按钮时落盘，选不选后台备份都记（Android finishOnboarding）。反证：去掉 AppModel 里的调用，本条红。
+    func test_finishing_onboarding_marks_the_desktop_either_way() async {
+        for enable in [false, true] {
+            let (app, engine, _) = make()
+            app.finishOnboardingStarted(enableBackgroundBackup: enable)
+            await settle()
+            XCTAssertEqual(engine.calls.first, "onboarded", "完成页第一件事是记下连过（enable=\(enable)）")
+            XCTAssertEqual(engine.calls.contains("auto=true"), enable)
+            XCTAssertEqual(app.phase, .main)
+        }
+    }
+
+    /// 记不下来：照样进首页（后果只是下次重连仍走首次设置），但要提示用户，不静默。
+    func test_failed_onboarded_mark_still_enters_home_and_tells_the_user() async {
+        let (app, engine, _) = make()
+        engine.failOnboarded = true
+        app.finishOnboardingStarted(enableBackgroundBackup: false)
+        await settle()
+        XCTAssertEqual(app.phase, .main)
+        XCTAssertEqual(app.notice?.message, L.s("setting_save_failed"))
+    }
 
     // MARK: #971
 

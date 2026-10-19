@@ -137,3 +137,91 @@ struct FfiBlobProvider: BlobProvider {
 struct OSLogger: CoreLogger {
     func log(_ message: String) { AppLog.log(message) }
 }
+
+/// 探测前预热 provider（#979，对位 Android #434 `DesktopProbe { native.prewarm(); hello.probe() }`）：引擎只在「有东西要传」时
+/// 才探测桌面，此刻先把 endpoint 绑上，它和 hello 并行去连 relay；否则第一张 serve 才从零绑定，短任务窗口（20 秒）里这段开销占比很高。
+/// 预热失败不挡探测：serve 时照常自己绑。
+struct PrewarmingProbe: DesktopProbe {
+    let provider: NativeProvider
+    let inner: DesktopProbe
+    let logger: CoreLogger
+
+    func probe() async -> ProbeResult {
+        let started = Date()
+        do {
+            try await provider.run { try $0.prewarm() }
+            logger.log("provider prewarm: endpoint bound in \(Int(Date().timeIntervalSince(started) * 1000))ms")
+        } catch {
+            logger.log("provider prewarm failed; serve binds instead: \(error)")
+        }
+        return await inner.probe()
+    }
+}
+
+/// 空闲回收 provider 的 endpoint（#979，对位 Android #434 `NetworkIdleReaper`）：不在前台、且引擎这一轮已结束，就关掉 endpoint
+/// （store 不关），下次 serve / 预热时再懒绑定。provider 回 false（桌面还连着这一张）就隔一会儿再试，直到不再空闲。
+/// 与 Android 的差别（06-ios-variants 登记）：Android 等 30 秒宽限期再关；iOS 退到后台后进程很快被挂起，等不到 30 秒，
+/// 所以条件一成立就关——挂起前把 endpoint 放掉，而不是带着它挂起。控制面那条 endpoint 的 FFI 没有 park，不在本处。
+final class ProviderIdleParker: @unchecked Sendable {
+    static let retryMs: UInt64 = 2_000
+
+    private let provider: NativeProvider
+    private let logger: CoreLogger
+    private let lock = NSLock()
+    /// 起始按「不在前台」：后台任务拉起的进程不会收到 scenePhase 变化；前台启动时 `.active` 马上会把它翻成 true。
+    private var foreground = false
+    private var engineBusy = false
+    /// 每次「空闲 ↔ 不空闲」变化加一；回收任务只在自己那一代仍然空闲时动手。
+    private var generation = 0
+    private var reaping = false
+
+    init(provider: NativeProvider, logger: CoreLogger) {
+        self.provider = provider
+        self.logger = logger
+    }
+
+    func setForeground(_ visible: Bool) { update { $0.foreground = visible } }
+    func setEngineBusy(_ busy: Bool) { update { $0.engineBusy = busy } }
+
+    private var idle: Bool { !foreground && !engineBusy }
+
+    private func update(_ change: (ProviderIdleParker) -> Void) {
+        lock.lock()
+        let wasIdle = idle
+        change(self)
+        let nowIdle = idle
+        if wasIdle != nowIdle { generation += 1 }
+        let start = nowIdle && !reaping
+        if start { reaping = true }
+        let gen = generation
+        lock.unlock()
+        if start { Task.detached(priority: .utility) { [weak self] in await self?.reap(from: gen) } }
+    }
+
+    private func stillIdle(_ gen: Int) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        return idle && generation == gen
+    }
+
+    private func reap(from gen: Int) async {
+        var gen = gen
+        while true {
+            if stillIdle(gen) {
+                if provider.ffi.park() {
+                    logger.log("provider: park ok (background, engine idle; endpoint closed if it was bound)")
+                    break
+                }
+                logger.log("provider: idle but desktop still connected; retrying in \(Self.retryMs)ms")
+                try? await Task.sleep(nanoseconds: Self.retryMs * 1_000_000)
+                continue
+            }
+            // 这一代已经不空闲；若中途又回到空闲（新的一代），接着按新的一代回收，否则收工。
+            lock.lock()
+            let again = idle
+            if again { gen = generation } else { reaping = false }
+            lock.unlock()
+            if !again { return }
+        }
+        lock.lock(); reaping = false; lock.unlock()
+    }
+}
