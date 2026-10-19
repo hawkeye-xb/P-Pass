@@ -119,6 +119,7 @@ final class AppModel: ObservableObject {
 
     /// onboarding 完成页：该问通知就先问一次（结果同步回开关），再按用户的选择开 / 不开后台备份（Android `thenContinue` 包两个按钮），进首页。
     func finishOnboardingStarted(enableBackgroundBackup: Bool) {
+        AppLog.log("onboarding: finish tapped enableBackgroundBackup=\(enableBackgroundBackup)")
         Task {
             await backend.engine.askNotificationAtOnboarding()
             if enableBackgroundBackup { setAutoBackup(true) }
@@ -191,15 +192,16 @@ final class AppModel: ObservableObject {
 
     /// 「仅 Wi‑Fi」开关：打开直接写；关闭先弹确认（不写盘），确认后才保存（Android MOB-02 §三 / MainActivity `pendingWifiOff`）。
     func setWifiOnly(_ on: Bool) {
-        if on { writeWifiOnly(true) } else { pendingWifiOff = true }
+        if on { writeWifiOnly(true) } else { pendingWifiOff = true; AppLog.log("wifi-only: off requested, confirm shown") }
     }
 
     func confirmWifiOff() {
         pendingWifiOff = false
+        AppLog.log("wifi-only: off confirmed")
         writeWifiOnly(false)
     }
 
-    func cancelWifiOff() { pendingWifiOff = false }
+    func cancelWifiOff() { pendingWifiOff = false; AppLog.log("wifi-only: off cancelled, still on") }
 
     private func writeWifiOnly(_ on: Bool) {
         do { try backend.engine.setWifiOnly(on); wifiOnly = on } catch { settingWriteFailed("wifi-only", error) }

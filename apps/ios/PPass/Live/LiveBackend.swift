@@ -211,7 +211,10 @@ final class LiveBackend: @unchecked Sendable {
         do { try onboarded.markOnboarded(record.daemonNodeId) } catch { logger.log("onboarded: mark failed: \(error)") }
         // 后台备份意图（#982，对位 Android）：断开时只停生产者、留意图（MOB-93）——连回以前连过的电脑按意图恢复；
         // 换新电脑 = 新的信任关系，清意图，由完成页让用户重新选。写失败要暴露，不静默沿用旧意图。
-        do { try autoPrefs.applyOnPairing(knownDesktop: knownDesktop) } catch { logger.log("auto-backup prefs: apply on pairing failed: \(error)") }
+        do {
+            try autoPrefs.applyOnPairing(knownDesktop: knownDesktop)
+            logger.log("auto-backup prefs: applied on pairing knownDesktop=\(knownDesktop) requested=\(autoPrefs.requested()) enabled=\(autoPrefs.enabled())")
+        } catch { logger.log("auto-backup prefs: apply on pairing failed: \(error)") }
         mediaWatcher.start() // 断开时注销了；重新配对后恢复（#978）
         timelineLive.session.pairingChanged() // 新配对：按新对端重建实时订阅（#963）
         Task { _ = await engine.trigger(.pairingRepaired) }
@@ -402,6 +405,7 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
         do {
             try backend.autoPrefs.setEnabled(on)
             try backend.autoPrefs.setRequested(on)
+            backend.logger.log("auto-backup prefs: saved on=\(on)")
         } catch {
             backend.logger.log("auto-backup prefs: write failed (on=\(on)): \(error)")
             throw error
@@ -413,6 +417,7 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
     private func command<T>(_ name: String, _ body: () async throws -> T) async throws -> T {
         do {
             let result = try await body()
+            backend.logger.log("command \(name) ok")
             await backend.refreshFacts()
             return result
         } catch {
@@ -440,7 +445,7 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
 
     func notifyOnFailure() -> Bool { backend.notifyPrefs.enabled() }
     func setNotifyOnFailure(_ on: Bool) throws {
-        do { try backend.notifyPrefs.setEnabled(on) } catch {
+        do { try backend.notifyPrefs.setEnabled(on); backend.logger.log("notify-prefs: saved enabled=\(on)") } catch {
             backend.logger.log("notify-prefs: write failed: \(error)")
             throw error
         }
@@ -483,7 +488,7 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
 
     func wifiOnly() -> Bool { backend.settings.wifiOnly() }
     func setWifiOnly(_ on: Bool) throws {
-        do { try backend.settings.save(wifiOnly: on) } catch {
+        do { try backend.settings.save(wifiOnly: on); backend.logger.log("backup-settings: saved wifiOnly=\(on)") } catch {
             backend.logger.log("backup-settings: write failed (wifiOnly=\(on)): \(error)")
             throw error
         }

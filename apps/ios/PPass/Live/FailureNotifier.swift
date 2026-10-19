@@ -38,6 +38,7 @@ enum SystemNotifications {
 enum FailureNotifier {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var loggedUndeliverable: Set<NoticeEvent> = []
+    nonisolated(unsafe) private static var loggedFacts: DefinitiveFacts?
 
     /// 评估 → 先落盘 → 发 / 撤。幂等；落盘失败只记日志（App 内红卡 / 告示才是状态真相，通知是补充渠道）。
     static func evaluate(facts: DefinitiveFacts, notifyEnabled: Bool, store: DefinitiveNoticeStore, logger: CoreLogger) async {
@@ -48,6 +49,11 @@ enum FailureNotifier {
         catch { logger.log("notify: cannot persist definitive_notices.json (\(error)); not posting"); return }
 
         lock.lock()
+        // 判定输入变了才记一行（真机上据此对账「为什么发 / 没发」，#939）；配对代号不落日志。
+        if loggedFacts != facts {
+            loggedFacts = facts
+            logger.log("notify: facts mediaAccess=\(facts.mediaAccess) backgroundRequested=\(facts.backgroundRequested) backgroundRefresh=\(facts.backgroundRefresh) paired=\(facts.pairingEpoch != nil) pairingLost=\(facts.pairingLost)")
+        }
         for event in decision.undeliverable where loggedUndeliverable.insert(event).inserted {
             logger.log("notify: \(event.rawValue) not delivered, enabled=\(notifyEnabled) system authorization=\(auth)")
         }
@@ -61,6 +67,7 @@ enum FailureNotifier {
         if !cancelIds.isEmpty {
             center.removeDeliveredNotifications(withIdentifiers: cancelIds)
             center.removePendingNotificationRequests(withIdentifiers: cancelIds)
+            logger.log("notify: withdrawn \(cancelIds.joined(separator: ","))")
         }
         for notice in decision.post {
             let (title, body) = text(for: notice)
@@ -69,7 +76,7 @@ enum FailureNotifier {
             content.body = body
             let id = notice.event.notificationIdentifier
             center.add(UNNotificationRequest(identifier: id, content: content, trigger: nil)) { error in
-                guard let error else { return }
+                guard let error else { logger.log("notify: \(id) posted"); return }
                 // 状态已落盘，这一条不会自动补发；留日志，真机才能判定。
                 logger.log("notify: \(id) add failed: \(error)")
             }
