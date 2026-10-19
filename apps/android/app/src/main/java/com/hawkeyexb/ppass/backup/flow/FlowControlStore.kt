@@ -26,6 +26,8 @@ internal data class FlowControlState(
     val budgetRefusalElapsedMs: Long = -1L,
     /** #762：这次故障的退避探测已经排过；成功才清。 */
     val retryLadderSpent: Boolean = false,
+    /** #827：连续开了却没处理完任何一张的轮数。 */
+    val resumeStrikes: Int = 0,
 )
 
 private fun instantOf(boot: Int, elapsedMs: Long): BootInstant? =
@@ -118,6 +120,12 @@ class FlowControlStore(private val dir: File, private val clock: () -> Long = Sy
 
     override fun setRetryLadderSpent(spent: Boolean) {
         if (load().retryLadderSpent != spent) update { it.copy(retryLadderSpent = spent) }
+    }
+
+    override fun resumeStrikes(): Int = load().resumeStrikes
+
+    override fun setResumeStrikes(strikes: Int) {
+        if (load().resumeStrikes != strikes) update { it.copy(resumeStrikes = strikes) }
     }
 
     override fun missingSourceAckAt(): Long = load().missingSourceAckAtMs

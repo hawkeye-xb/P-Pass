@@ -149,6 +149,18 @@ class FakeScheduler : WakeScheduler {
     override fun cancelBudgetResetWake() {
         budgetResetWakeCancels++
     }
+
+    /** #827：每次登记的续传哨兵延迟（ms）；撤掉的次数。 */
+    val resumeSentinels = mutableListOf<Long>()
+    var resumeSentinelCancels = 0
+
+    override fun armResumeSentinel(delayMs: Long) {
+        resumeSentinels += delayMs
+    }
+
+    override fun cancelResumeSentinel() {
+        resumeSentinelCancels++
+    }
 }
 
 class FakeControl : FlowControl {
@@ -188,6 +200,11 @@ class FakeControl : FlowControl {
     override fun retryLadderSpent() = ladderSpent
     override fun setRetryLadderSpent(spent: Boolean) {
         ladderSpent = spent
+    }
+    var strikes = 0
+    override fun resumeStrikes() = strikes
+    override fun setResumeStrikes(strikes: Int) {
+        this.strikes = strikes
     }
     override fun missingSourceAckAt() = ack
     override fun setMissingSourceAckAt(atMs: Long) {
