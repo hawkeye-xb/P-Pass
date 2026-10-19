@@ -57,7 +57,7 @@ judge() { # 只读 ${OUT} 下的 run.log / short.log / db/，按 ${MODE}、$N �
       must "这一轮只传照片" 'round .* open \(desktop reachable; photos only\)'
       must "照片逐张开始" 'item start: '
       must "照片逐张送达" 'item end: .* result=next'
-      must "视频留给别的窗口" 'video\(s\) left for another window \(photos only\)'
+      must "1 段视频留给别的窗口、只计一次（#991）" ': 1 video\(s\) left for another window \(photos only\)'
       must "自己跑完收尾" 'short task: finished \(finish=done '
       DELIVERED=$(grep -c 'item end: .* result=next' "$OUT/run.log" || true)
       if [ "$DELIVERED" -eq "$N" ]; then echo "  ok   ${N} 张照片全部送达"; else echo "  FAIL 送达张数 ${DELIVERED} ≠ ${N}"; FAIL=1; fi
