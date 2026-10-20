@@ -1031,10 +1031,11 @@ impl HostingAdapter for WindowsAdapter {
 
     /// DESK-52 (#787)：直接调系统 API 结束进程，**不再拉起 `taskkill.exe`**。
     /// taskkill 是 console 子系统程序，从 GUI 子系统的桌面壳里拉起它会闪黑窗
-    /// （DESK-19 #168 那一类）；不启动外部程序，这一类问题就不存在。实现与
-    /// 理由见 [`kill_processes_named`]。
-    fn kill_daemon_process(&self) -> Result<crate::KillOutcome> {
-        kill_processes_named(self.daemon_executable_name())
+    /// （DESK-19 #168 那一类）；不启动外部程序，这一类问题就不存在。
+    /// B7（#1043）：判据从「映像名」收紧到「映像的完整路径」，见
+    /// [`stop_processes_at`]。
+    fn stop_daemon(&self, exe: &Path, pid_hint: Option<u32>) -> Result<crate::KillOutcome> {
+        stop_processes_at(exe, pid_hint)
     }
 }
 
@@ -1829,7 +1830,7 @@ pub fn kill_verdict(results: &[ProcessKill]) -> Result<crate::KillOutcome> {
         .collect();
     if !failures.is_empty() {
         return Err(PlatformError::Failed {
-            action: "kill_daemon_process",
+            action: "stop_daemon",
             detail: failures.join("; "),
         });
     }
@@ -1840,23 +1841,71 @@ pub fn kill_verdict(results: &[ProcessKill]) -> Result<crate::KillOutcome> {
     }
 }
 
-/// DESK-52 (#787)：结束**当前登录会话里**所有映像名为 `exe_name` 的进程。
+/// DESK-52 (#787) / B7（#1043）：结束**当前登录会话里**、映像完整路径就是
+/// `exe` 的进程，并等它们真的退出。
 ///
 /// 为什么不再用 `taskkill /F /IM`：
 /// 1. 它是 console 程序，从桌面壳拉起会闪黑窗——这是 #787 的症状；
 /// 2. 结论要靠解析它的退出码（128 = 没找到），判据依赖一个外部程序的约定；
 /// 3. `/IM` 按名字杀**整台机器**上能杀的同名进程，不分会话。
 ///
-/// 现在：进程快照 → 按映像名（不区分大小写）匹配 → 只留与本进程同一
-/// 会话（session）的 → `OpenProcess` + `TerminateProcess` → 等它真的退出。
-/// 只杀本会话的，是因为 daemon 由本用户的 Run key 拉起、跑在本会话里；
-/// 别的会话（快速用户切换的另一个用户）的 daemon 不归我们管。
-fn kill_processes_named(exe_name: &str) -> Result<crate::KillOutcome> {
-    let results: Vec<ProcessKill> = processes_named_in_this_session(exe_name)?
+/// 现在：进程快照 → 映像名（不区分大小写）先粗筛 → 只留与本进程同一会话
+/// （session）的 → `QueryFullProcessImageNameW` 核对完整路径（#1043：别处的
+/// 同名副本不算）→ `OpenProcess` + `TerminateProcess` → 等它真的退出。
+/// `pid_hint`（daemon 自报的 pid）在候选里就排到最前，路径不对照样不动。
+/// 只杀本会话的，是因为 daemon 由本用户的计划任务 / Run key 拉起、跑在本会话
+/// 里；别的会话（快速用户切换的另一个用户）的 daemon 不归我们管。
+fn stop_processes_at(exe: &Path, pid_hint: Option<u32>) -> Result<crate::KillOutcome> {
+    let want = std::fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf());
+    let Some(name) = exe.file_name().and_then(|n| n.to_str()) else {
+        return Ok(crate::KillOutcome::NotRunning);
+    };
+    let mut pids = processes_named_in_this_session(name)?;
+    if let Some(hint) = pid_hint {
+        if let Some(i) = pids.iter().position(|&p| p == hint) {
+            pids.swap(0, i);
+        }
+    }
+    let results: Vec<ProcessKill> = pids
         .into_iter()
+        .filter(|&pid| image_path(pid).is_some_and(|p| same_image_path(&p, &want)))
         .map(terminate_and_wait)
         .collect();
     kill_verdict(&results)
+}
+
+/// 进程映像的完整 Win32 路径；打不开（别人的进程、已经退了）= `None`。
+fn image_path(pid: u32) -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt as _;
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // SAFETY: 参数都是值；空句柄表示失败。
+    let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if h.is_null() {
+        return None;
+    }
+    let mut buf = vec![0u16; 32_768];
+    let mut len = buf.len() as u32;
+    // SAFETY: h 有效；buf 与 len 如实描述本函数持有的缓冲区。
+    let ok =
+        unsafe { QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len) }
+            != 0;
+    // SAFETY: h 是本函数打开的有效句柄，只关一次。
+    unsafe { CloseHandle(h) };
+    ok.then(|| PathBuf::from(std::ffi::OsString::from_wide(&buf[..len as usize])))
+}
+
+/// 两个映像路径是不是同一个文件：Windows 路径不区分大小写，`canonicalize`
+/// 会加 `\\?\` 前缀而 `QueryFullProcessImageNameW` 不加，比较前都去掉。
+fn same_image_path(a: &Path, b: &Path) -> bool {
+    fn norm(p: &Path) -> String {
+        let s = p.to_string_lossy().replace('/', "\\");
+        s.strip_prefix(r"\\?\").unwrap_or(&s).to_lowercase()
+    }
+    norm(a) == norm(b)
 }
 
 /// 本会话里映像名为 `exe_name` 的进程 pid（不含本进程自己）。
@@ -1878,7 +1927,7 @@ fn processes_named_in_this_session(exe_name: &str) -> Result<Vec<u32>> {
     // SAFETY: 无前置条件；失败时返回 INVALID_HANDLE_VALUE。
     let me = unsafe { GetCurrentProcessId() };
     let my_session = session_of(me).ok_or_else(|| PlatformError::Failed {
-        action: "kill_daemon_process",
+        action: "stop_daemon",
         // SAFETY: 紧跟失败调用之后读取本线程的错误码。
         detail: format!("读不到本进程的会话号（Win32 错误 {}）", unsafe {
             GetLastError()
@@ -1889,7 +1938,7 @@ fn processes_named_in_this_session(exe_name: &str) -> Result<Vec<u32>> {
     let snap = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
     if snap == INVALID_HANDLE_VALUE {
         return Err(PlatformError::Failed {
-            action: "kill_daemon_process",
+            action: "stop_daemon",
             // SAFETY: 紧跟失败调用之后读取本线程的错误码。
             detail: format!("进程快照失败（Win32 错误 {}）", unsafe {
                 GetLastError()
@@ -2276,25 +2325,33 @@ mod desk52_kill_tests {
         assert!(e.to_string().contains("pid 42"), "{e}");
     }
 
-    /// 真机：一个必然不存在的映像名 ⇒ NotRunning。
+    /// 真机：一个必然不存在的映像 ⇒ NotRunning。
     #[test]
     fn real_missing_process_is_not_running() {
         assert_eq!(
-            kill_processes_named("p-pass-no-such-process-zzz.exe").unwrap(),
+            stop_processes_at(
+                Path::new(r"C:\no\such\p-pass-no-such-process-zzz.exe"),
+                None
+            )
+            .unwrap(),
             KillOutcome::NotRunning
         );
     }
 
-    /// 真机：把测试二进制复制成一个独一无二的名字拉起来，按名字杀掉它。
-    /// 验三件事：报 Killed；返回时它**已经**退出（不是还在退）；再杀一次
-    /// 报 NotRunning。
     #[test]
-    fn kills_a_running_process_and_waits_for_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let name = format!("ppf-desk52-probe-{}.exe", std::process::id());
-        let exe = dir.path().join(&name);
-        std::fs::copy(std::env::current_exe().unwrap(), &exe).unwrap();
-        let mut child = std::process::Command::new(&exe)
+    fn image_paths_compare_case_insensitively_without_verbatim_prefix() {
+        assert!(same_image_path(
+            Path::new(r"\\?\C:\Users\X\AppData\Local\P-Pass\ppf-daemon.exe"),
+            Path::new(r"c:\users\x\appdata\local\p-pass\PPF-DAEMON.EXE"),
+        ));
+        assert!(!same_image_path(
+            Path::new(r"C:\Users\X\AppData\Local\P-Pass\ppf-daemon.exe"),
+            Path::new(r"C:\dev\target\debug\ppf-daemon.exe"),
+        ));
+    }
+
+    fn spawn_probe(exe: &Path) -> std::process::Child {
+        std::process::Command::new(exe)
             .args([
                 "--exact",
                 "windows::desk52_kill_tests::kill_probe_child",
@@ -2305,25 +2362,52 @@ mod desk52_kill_tests {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .unwrap();
+            .unwrap()
+    }
 
-        // 等它出现在快照里，免得把「还没起来」测成 NotRunning。
+    /// 真机：把测试二进制复制成一个独一无二的名字，在两个目录各放一份拉起来，
+    /// 按**其中一份的完整路径**结束它。验四件事：报 Killed；返回时它**已经**
+    /// 退出（不是还在退）；另一个目录里的同名副本还活着（B7 #1043：反证——
+    /// 判据退回按映像名就会把它一起杀掉）；再停一次报 NotRunning。
+    #[test]
+    fn kills_a_running_process_and_waits_for_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = format!("ppf-desk52-probe-{}.exe", std::process::id());
+        let exe = dir.path().join("bundle").join(&name);
+        let decoy = dir.path().join("dev").join(&name);
+        for p in [&exe, &decoy] {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::copy(std::env::current_exe().unwrap(), p).unwrap();
+        }
+        let mut child = spawn_probe(&exe);
+        let mut decoy_child = spawn_probe(&decoy);
+
+        // 等两份都出现在快照里，免得把「还没起来」测成 NotRunning。
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while processes_named_in_this_session(&name).unwrap().is_empty() {
+        while processes_named_in_this_session(&name).unwrap().len() < 2 {
             assert!(std::time::Instant::now() < deadline, "探针进程没起来");
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
 
-        assert_eq!(kill_processes_named(&name).unwrap(), KillOutcome::Killed);
+        assert_eq!(
+            stop_processes_at(&exe, Some(decoy_child.id())).unwrap(),
+            KillOutcome::Killed
+        );
         let status = child
             .try_wait()
             .unwrap()
             .expect("kill 返回时进程必须已经退出");
         assert_eq!(status.code(), Some(KILLED_EXIT_CODE as i32));
+        assert!(
+            decoy_child.try_wait().unwrap().is_none(),
+            "别处的同名副本被误杀"
+        );
         assert_eq!(
-            kill_processes_named(&name).unwrap(),
+            stop_processes_at(&exe, None).unwrap(),
             KillOutcome::NotRunning
         );
+        let _ = decoy_child.kill();
+        let _ = decoy_child.wait();
     }
 
     /// Windows 的文件名就是基名加 `.exe`——两者漂开会让按名字杀进程打空。

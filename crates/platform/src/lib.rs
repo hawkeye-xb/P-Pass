@@ -666,14 +666,26 @@ pub trait HostingAdapter: Send + Sync {
         DAEMON_EXECUTABLE_STEM
     }
 
-    /// 杀掉正在跑的内置 daemon 进程。
+    /// 结束正在跑的内置 daemon 进程（B7，#1043：两平台同一套语义）。
+    ///
+    /// - `exe`：内置 daemon 可执行文件的路径（壳旁边那个 sidecar）。**只认这个
+    ///   路径**上跑的进程——不按命令行、不按文件名匹配，所以命令行里恰好含
+    ///   `ppf-daemon` 的别的进程、别处的同名副本都不会被误杀。
+    /// - `pid_hint`：daemon 经 IPC 自报的 pid（读不到给 `None`）。优先结束它，
+    ///   但先核对它的可执行文件确实是 `exe`（pid 会被复用）；之后照样按路径
+    ///   枚举兜底（daemon 挂死、IPC 不通时靠这条）。
+    /// - 只动本用户 / 本会话的进程。结束方式沿用各平台改前的做法（unix 发
+    ///   SIGTERM 不等；Windows `TerminateProcess` 并等它退出）——macOS 上
+    ///   launchd 的 `KeepAlive{SuccessfulExit=false}` 靠「非正常退出」决定要不要
+    ///   重拉，「重启服务」那条路依赖这一点，所以这里不走 daemon 的 `step_down`
+    ///   （exit 0）。
     ///
     /// **没有默认实现**：三个系统都做得到这件事，编一个「不支持」的默认值
     /// 等于给将来的实现留一条静默什么都不做的路。
     ///
     /// 「进程本来就没在跑」返回 [`KillOutcome::NotRunning`]，**不是 `Err`**。
-    /// 真失败（权限不足、被杀软拦、参数错）才是 `Err`——判据见各平台实现。
-    fn kill_daemon_process(&self) -> Result<KillOutcome>;
+    /// 真失败（权限不足、被杀软拦）才是 `Err`——判据见各平台实现。
+    fn stop_daemon(&self, exe: &std::path::Path, pid_hint: Option<u32>) -> Result<KillOutcome>;
 
     // ── UPD-06 (#616)：让**系统**负责"重启桌面壳" ─────────────────────
     //
@@ -993,16 +1005,17 @@ impl HostingAdapter for HeadlessAdapter {
     fn service_mode(&self) -> ServiceMode {
         ServiceMode::UserAutostart
     }
-    fn kill_daemon_process(&self) -> Result<KillOutcome> {
+    fn stop_daemon(&self, exe: &std::path::Path, pid_hint: Option<u32>) -> Result<KillOutcome> {
         #[cfg(unix)]
         {
-            crate::unix::kill_daemon_process()
+            crate::unix::stop_processes_at(exe, pid_hint)
         }
         #[cfg(not(unix))]
         {
+            let _ = (exe, pid_hint);
             Err(PlatformError::Failed {
-                action: "kill_daemon_process",
-                detail: "这个平台没有实现杀进程".into(),
+                action: "stop_daemon",
+                detail: "这个平台没有实现结束进程".into(),
             })
         }
     }

@@ -548,8 +548,8 @@ impl HostingAdapter for MacosAdapter {
         ServiceMode::LaunchAgent
     }
 
-    fn kill_daemon_process(&self) -> Result<crate::KillOutcome> {
-        crate::unix::kill_daemon_process()
+    fn stop_daemon(&self, exe: &Path, pid_hint: Option<u32>) -> Result<crate::KillOutcome> {
+        crate::unix::stop_processes_at(exe, pid_hint)
     }
 
     // ── UPD-06 (#616)：壳的"按需启动"登记 + kickstart ─────────────────

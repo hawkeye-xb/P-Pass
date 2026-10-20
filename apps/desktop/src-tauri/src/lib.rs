@@ -1098,7 +1098,7 @@ fn stop_daemon_now() -> Result<(), String> {
     // QA-09 迁移（#211）：best-effort —— 杀不掉也继续（原来两个分支也是
     // 直接丢结果）。区别在于「什么退出码算进程本来就没在跑」这条判据
     // 现在只有一份、在 platform 里，不再是三个调用点各抄一遍。
-    let _ = platform::hosting().kill_daemon_process();
+    let _ = stop_bundled_daemon();
     // 3) DESK-36 (#456)：等它真的不可达了再返回（最长 5s）——调用方紧接着
     //    就要刷新状态点，socket 还活着的那一瞬读到「运行中」就白刷了。
     //    超时不算失败：标记已落、autostart 已卸，剩下的只是进程退得慢。
@@ -1131,8 +1131,40 @@ fn pause_daemon_for_update() -> Result<(), String> {
     // QA-09 迁移（#211）：best-effort —— 杀不掉也继续（原来两个分支也是
     // 直接丢结果）。区别在于「什么退出码算进程本来就没在跑」这条判据
     // 现在只有一份、在 platform 里，不再是三个调用点各抄一遍。
-    let _ = platform::hosting().kill_daemon_process();
+    let _ = stop_bundled_daemon();
     Ok(())
+}
+
+/// B7（#1043）：结束内置 daemon——两平台同一套语义，由平台端口实现
+/// （`HostingAdapter::stop_daemon`）：优先结束 daemon 自报的 pid，按壳旁边
+/// 那个 sidecar 的**完整路径**匹配兜底；不再 `pkill -f`（命令行里恰好带
+/// `ppf-daemon` 字样的别的进程不会被杀）。
+fn stop_bundled_daemon() -> Result<platform::KillOutcome, String> {
+    let sidecar = bundled_daemon_path()?;
+    platform::hosting()
+        .stop_daemon(&sidecar, daemon_reported_pid())
+        .map_err(|e| e.to_string())
+}
+
+/// 壳旁边那个内置 daemon 的路径（同目录、平台给文件名）。
+fn bundled_daemon_path() -> Result<std::path::PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    Ok(exe
+        .parent()
+        .ok_or("no parent dir")?
+        .join(platform::hosting().daemon_executable_name()))
+}
+
+/// daemon 经 IPC 自报的 pid（`status.pid`）；连不上 / 不答 = `None`。超时取短：
+/// daemon 挂死时正是要结束它的时候，不能被这次询问拖住。
+fn daemon_reported_pid() -> Option<u32> {
+    ipc::DaemonHandle::discover()
+        .ok()?
+        .call_with_timeout("status", json!({}), std::time::Duration::from_secs(1))
+        .ok()?
+        .get("pid")?
+        .as_u64()
+        .and_then(|p| u32::try_from(p).ok())
 }
 
 /// Counterpart to pause_daemon_for_update(): bring the (now updated on
@@ -1451,11 +1483,10 @@ fn restart_daemon_process_blocking() -> Result<Value, String> {
                 .and_then(|x| x.as_str())
                 .map(str::to_string)
         });
-    // 2) 杀进程——照抄 stop_daemon 的 kill 逻辑（同款 pkill/taskkill），
-    //    但绝不做任何 uninstall_autostart。
+    // 2) 杀进程——与停服务同一个 `stop_bundled_daemon`（B7 #1043：按 sidecar
+    //    完整路径），但绝不做任何 uninstall_autostart。
     // QA-09 迁移（#211）：这处**认真判错**（另两个调用点是 best-effort）。
-    // 「进程本来就没在跑」不是失败——判据在 platform 里，各系统一份
-    // （unix 的 pkill 退出码 1 / Windows 的 taskkill 128）。DESK-25 (#208)
+    // 「进程本来就没在跑」不是失败——判据在 platform 里。DESK-25 (#208)
     // 就是因为这条判据被抄散、其中一处没判，把「没杀掉」当成杀成功、
     // 紧接着去 spawn 第二个 daemon 才出的事。
     //
@@ -1497,9 +1528,7 @@ fn restart_daemon_process_blocking() -> Result<Value, String> {
 
 /// DAE-04 原路径（没有 LaunchAgent 语义时）：杀进程，Run key 平台再显式拉一次。
 fn restart_by_kill_and_respawn() -> Result<(), String> {
-    platform::hosting()
-        .kill_daemon_process()
-        .map_err(|e| ipc::ui_err("ui.err_kill_old", &[("err", &e)]))?;
+    stop_bundled_daemon().map_err(|e| ipc::ui_err("ui.err_kill_old", &[("err", &e)]))?;
 
     // 3) 被杀之后系统会不会自己把它拉回来，取决于常驻方式：
     //    LaunchAgent 的 KeepAlive 会（macOS），Run key 不会（Windows /
@@ -3812,7 +3841,7 @@ mod tests {
             .find("set_user_stopped(&platform::adapter().data_dir(), true)?;")
             .expect("stop_daemon_now 必须落「用户主动停止」标记，且失败要返回错误");
         let unregister = stop.find("uninstall_autostart()").expect("卸 autostart");
-        let kill = stop.find("kill_daemon_process()").expect("杀进程");
+        let kill = stop.find("stop_bundled_daemon()").expect("杀进程");
         assert!(mark < unregister && mark < kill, "标记必须先于停进程落下");
         // DESK-65 (#957)：撤登记的结果不许丢——真机上 Run 值没删掉、下次开机服务又起来了。
         assert!(
