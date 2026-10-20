@@ -103,6 +103,59 @@ fn version_prefix_is_the_desktop_probe_contract() {
     );
 }
 
+/// #1042：`--version --json` 是给桌面壳（#1045）与免 GUI 控制面（#749）用的
+/// **机读契约**，取代对纯文本前缀 `P-Pass daemon ` 的字面量匹配：
+///
+/// - exit 0，stdout 恰好一行 JSON，stderr 为空；
+/// - 键集合恰好是 `product` / `schema` / `version`；
+/// - `product == "P-Pass daemon"`，`schema == 1`（只增字段不升，改/删字段才升）；
+/// - `version` 与纯文本 `--version` 报的是同一个值；
+/// - `--json` 写在 `--version` 前后都一样；
+/// - 与 `--version` 一样在一切 daemon 机制之前短路。
+#[test]
+fn version_json_is_the_machine_readable_contract() {
+    let plain = daemon_bin().arg("--version").output().expect("spawn");
+    let plain = String::from_utf8_lossy(&plain.stdout).trim().to_string();
+    let plain_version = plain
+        .strip_prefix("P-Pass daemon ")
+        .expect("纯文本 --version 形状不变")
+        .to_string();
+    for args in [["--version", "--json"], ["--json", "--version"]] {
+        let out = daemon_bin().args(args).output().expect("spawn");
+        assert_eq!(out.status.code(), Some(0), "{args:?}: {:?}", out.status);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(stderr, "", "{args:?}: stderr 必须为空");
+        assert_eq!(
+            stdout.lines().count(),
+            1,
+            "{args:?}: 必须恰好一行：{stdout:?}"
+        );
+        let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("必须是 JSON");
+        let mut keys: Vec<_> = v.as_object().expect("必须是对象").keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["product", "schema", "version"], "键集合是契约：{v}");
+        assert_eq!(v["product"], "P-Pass daemon");
+        assert_eq!(v["schema"], 1);
+        assert_eq!(
+            v["version"],
+            plain_version.as_str(),
+            "与纯文本 --version 同源"
+        );
+        for marker in ["IPC:", "身份密钥已铸造", "已启动"] {
+            assert!(!stdout.contains(marker), "不得启动 daemon：{stdout}");
+        }
+    }
+}
+
+/// `--json` 单独出现是用法错误（exit 2），不能当成普通启动。
+#[test]
+fn json_without_version_is_a_usage_error() {
+    let out = daemon_bin().arg("--json").output().expect("spawn");
+    assert_eq!(out.status.code(), Some(2), "status: {:?}", out.status);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("用法"));
+}
+
 #[test]
 fn unknown_flag_fails_with_usage_on_stderr() {
     let out = daemon_bin()

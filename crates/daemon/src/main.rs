@@ -14,6 +14,25 @@
 use daemon::{Config, Router};
 use std::io::IsTerminal;
 
+/// #1042：`config …` 子命令的统一收尾（契约见 `cli::USAGE` 与
+/// `tests/config_cli.rs`）。成功：stdout 一行 `{"config":"<config.toml 路径>"}`、
+/// exit 0；失败：stderr 一行错误原文、exit 1。
+fn config_command_exit(result: Result<std::path::PathBuf, String>) -> ! {
+    match result {
+        Ok(path) => {
+            println!(
+                "{}",
+                serde_json::json!({ "config": path.display().to_string() })
+            );
+            std::process::exit(0);
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // DAE-03 ①：参数解析最先——--help/--version 在任何 daemon 机制
@@ -26,8 +45,35 @@ async fn main() -> anyhow::Result<()> {
             return Ok(());
         }
         Ok(daemon::cli::Cli::Version) => {
-            println!("P-Pass daemon {}", daemon::daemon_version());
+            println!(
+                "{} {}",
+                daemon::cli::VERSION_PRODUCT,
+                daemon::daemon_version()
+            );
             return Ok(());
+        }
+        Ok(daemon::cli::Cli::VersionJson) => {
+            println!("{}", daemon::cli::version_json(&daemon::daemon_version()));
+            return Ok(());
+        }
+        // #1042：config 的唯一写者。与 --help/--version 同一处短路——不搬
+        // 数据目录、不起日志、不读 config 做启动、不开库、不 claim、不 bind；
+        // 写完即退出。换库仍是重启后台服务后生效（daemon 只在启动时读一次）。
+        // 契约：成功 exit 0，stdout 一行 JSON；失败 exit 1，stderr 一行错误
+        // （keyed 的就是壳 ui_err 同款 JSON，原样可转交前端）。
+        Ok(daemon::cli::Cli::ConfigInit { library }) => {
+            let platform_dir = {
+                use platform::PlatformAdapter as _;
+                platform::adapter().data_dir()
+            };
+            config_command_exit(daemon::config::init_config(&platform_dir, &library));
+        }
+        Ok(daemon::cli::Cli::ConfigSetLibrary { library }) => {
+            let platform_dir = {
+                use platform::PlatformAdapter as _;
+                platform::adapter().data_dir()
+            };
+            config_command_exit(daemon::config::set_library(&platform_dir, &library));
         }
         Ok(daemon::cli::Cli::Run {
             ephemeral,

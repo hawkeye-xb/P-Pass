@@ -16,7 +16,7 @@ use crate::Claim;
 
 /// 解析后的 CLI 意图。`--help` / `--version` 必须在任何 daemon 机制
 /// （日志/配置/数据库/身份/claim/bind）之前短路退出。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Cli {
     /// 正常启动。`ephemeral` = UX-07 测试/脚本模式（stdin EOF 即退出）。
     Run {
@@ -28,6 +28,16 @@ pub enum Cli {
     },
     Help,
     Version,
+    /// #1042：`--version --json`——机读版本（契约见 [`version_json`]）。
+    VersionJson,
+    /// #1042：`config init --library <dir>`——首启写平台 config.toml。
+    ConfigInit {
+        library: String,
+    },
+    /// #1042：`config set-library <dir>`——换库（重启后台服务后生效）。
+    ConfigSetLibrary {
+        library: String,
+    },
 }
 
 pub const USAGE: &str = "\
@@ -43,7 +53,17 @@ P-Pass 存储端 daemon
                标记「我是被更新流程拉起的」：允许 owner 在更新窗口内换掉旧壳
                （UPD-07。桌面壳更新后 resume 时带；launchd/自愈不带）。
   --version    打印版本号并退出（不启动任何 daemon 机制）
+               加 --json 输出单行 JSON（product / schema / version 三个键）
   --help       显示本帮助并退出（不启动任何 daemon 机制）
+
+子命令（一次性短进程：不启动服务、不占端口，执行完即退出）:
+  config init --library <dir>
+               首启：建库目录并写平台 config.toml（整份模板）
+  config set-library <dir>
+               换库：校验（存在/可写/不嵌套）后只改 data_dir 一行；
+               重启后台服务后生效
+
+退出码：0 成功；1 操作失败（stderr 一行错误）；2 用法错误
 ";
 
 /// 解析命令行。规则：
@@ -53,22 +73,89 @@ P-Pass 存储端 daemon
 ///    任何参数都被当成普通启动一路走到 claim）；
 ///  - 无参数 = 普通启动。
 pub fn parse_cli(args: impl IntoIterator<Item = String>) -> Result<Cli, String> {
+    let args: Vec<String> = args.into_iter().collect();
+    // #1042：首个参数是子命令名 ⇒ 走子命令语法（同样在一切 daemon 机制之前
+    // 短路，见 main.rs）。
+    if args.first().map(String::as_str) == Some("config") {
+        return parse_subcommand(&args);
+    }
     let mut ephemeral = false;
     let mut post_update = false;
-    for a in args {
+    let mut json = false;
+    for (i, a) in args.iter().enumerate() {
         match a.as_str() {
             "--ephemeral" => ephemeral = true,
             "--post-update" => post_update = true,
+            "--json" => json = true,
             "--help" | "-h" => return Ok(Cli::Help),
-            "--version" | "-V" => return Ok(Cli::Version),
+            // `--json` 前后都认（`--version --json` / `--json --version`）。
+            "--version" | "-V" => {
+                return Ok(if json || args[i + 1..].iter().any(|x| x == "--json") {
+                    Cli::VersionJson
+                } else {
+                    Cli::Version
+                })
+            }
             other => return Err(format!("未知参数：{other}")),
         }
+    }
+    if json {
+        return Err("--json 只能与 --version 一起用".to_string());
     }
     Ok(Cli::Run {
         ephemeral,
         post_update,
     })
 }
+
+/// #1042：`config …` 的语法。严格匹配，多一个少一个都是用法
+/// 错误——与顶层「未知参数绝不静默忽略」同一纪律。`--help` / `-h` 出现在
+/// 子命令里同样短路成帮助。
+fn parse_subcommand(args: &[String]) -> Result<Cli, String> {
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        return Ok(Cli::Help);
+    }
+    let rest: Vec<&str> = args.iter().map(String::as_str).collect();
+    match rest.as_slice() {
+        ["config", "init", "--library", dir] => Ok(Cli::ConfigInit {
+            library: (*dir).to_string(),
+        }),
+        ["config", "init", ..] => Err("用法：config init --library <dir>".to_string()),
+        ["config", "set-library", dir] => Ok(Cli::ConfigSetLibrary {
+            library: (*dir).to_string(),
+        }),
+        ["config", "set-library", ..] => Err("用法：config set-library <dir>".to_string()),
+        [cmd, sub, ..] => Err(format!("未知子命令：{cmd} {sub}")),
+        [cmd] => Err(format!("缺少子命令：{cmd} <…>")),
+        [] => Err("缺少子命令".to_string()),
+    }
+}
+
+/// #1042：`--version --json` 的输出（单行 JSON，契约由
+/// `tests/cli_flow.rs` 钉住）：
+///
+/// ```text
+/// {"product":"P-Pass daemon","schema":1,"version":"<版本>"}
+/// ```
+///
+/// - `product` 固定为 `P-Pass daemon`：桌面壳据此确认「这确实是我们的
+///   daemon」，取代对纯文本 `--version` 前缀的字面量匹配；
+/// - `schema` 是本格式的版本，只增不改——加字段不升，改/删字段才升；
+/// - `version` 与纯文本 `--version`、IPC `status.version` 同源
+///   （[`crate::daemon_version`]）。
+pub fn version_json(version: &str) -> String {
+    serde_json::json!({
+        "product": VERSION_PRODUCT,
+        "schema": VERSION_JSON_SCHEMA,
+        "version": version,
+    })
+    .to_string()
+}
+
+/// `--version`（纯文本与 JSON）里的产品标识。
+pub const VERSION_PRODUCT: &str = "P-Pass daemon";
+/// `--version --json` 的格式版本。
+pub const VERSION_JSON_SCHEMA: u32 = 1;
 
 /// DAE-03 ②：autostart 只在升级接管（TookOver）时（重）安装——纯新启动
 /// （Proceed）与退位（StandDown）绝不写 launchd/注册表。手动/开发构建
@@ -216,6 +303,71 @@ mod tests {
     fn version_short_circuits_everything() {
         assert_eq!(parse_cli(args(&["--version"])), Ok(Cli::Version));
         assert_eq!(parse_cli(args(&["-V"])), Ok(Cli::Version));
+    }
+
+    /// #1042：`--json` 只改变 `--version` 的输出形状，前后都认；单独出现是
+    /// 用法错误（不能被当成普通启动）。
+    #[test]
+    fn version_json_flag_in_either_order() {
+        assert_eq!(
+            parse_cli(args(&["--version", "--json"])),
+            Ok(Cli::VersionJson)
+        );
+        assert_eq!(
+            parse_cli(args(&["--json", "--version"])),
+            Ok(Cli::VersionJson)
+        );
+        assert_eq!(parse_cli(args(&["-V", "--json"])), Ok(Cli::VersionJson));
+        assert!(parse_cli(args(&["--json"])).is_err());
+        assert!(parse_cli(args(&["--ephemeral", "--json"])).is_err());
+    }
+
+    #[test]
+    fn version_json_shape_is_stable() {
+        let v: serde_json::Value = serde_json::from_str(&version_json("1.2.3")).unwrap();
+        assert_eq!(
+            v,
+            serde_json::json!({"product": "P-Pass daemon", "schema": 1, "version": "1.2.3"})
+        );
+        assert!(!version_json("1.2.3").contains('\n'));
+    }
+
+    #[test]
+    fn config_subcommands_parse_strictly() {
+        assert_eq!(
+            parse_cli(args(&["config", "init", "--library", "/a b/c"])),
+            Ok(Cli::ConfigInit {
+                library: "/a b/c".into()
+            })
+        );
+        assert_eq!(
+            parse_cli(args(&["config", "set-library", "C:\\Lib"])),
+            Ok(Cli::ConfigSetLibrary {
+                library: "C:\\Lib".into()
+            })
+        );
+        for bad in [
+            &["config"][..],
+            &["config", "init"],
+            &["config", "init", "--library"],
+            &["config", "init", "/x"],
+            &["config", "init", "--library", "/x", "extra"],
+            &["config", "set-library"],
+            &["config", "set-library", "/a", "/b"],
+            &["config", "bogus"],
+        ] {
+            assert!(parse_cli(args(bad)).is_err(), "{bad:?} 应是用法错误");
+        }
+        assert_eq!(
+            parse_cli(args(&["config", "init", "--help"])),
+            Ok(Cli::Help)
+        );
+    }
+
+    /// 子命令名只在首位才是子命令：`--ephemeral config` 仍是未知参数。
+    #[test]
+    fn subcommand_words_elsewhere_are_unknown_args() {
+        assert!(parse_cli(args(&["--ephemeral", "config"])).is_err());
     }
 
     #[test]

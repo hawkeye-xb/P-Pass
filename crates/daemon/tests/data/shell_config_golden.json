@@ -1,0 +1,630 @@
+{
+  "merge": [
+    [
+      "",
+      "/Users/ethan/Pictures/P-Pass 家庭照片库",
+      "data_dir = \"/Users/ethan/Pictures/P-Pass 家庭照片库\"\n\n"
+    ],
+    [
+      "",
+      "/home/ethan/Pictures/P-Pass",
+      "data_dir = \"/home/ethan/Pictures/P-Pass\"\n\n"
+    ],
+    [
+      "",
+      "C:\\Users\\ethan\\Pictures\\P-Pass 家庭照片库",
+      "data_dir = 'C:\\Users\\ethan\\Pictures\\P-Pass 家庭照片库'\n\n"
+    ],
+    [
+      "",
+      "C:\\\\Users\\\\ethan\\\\Pictures",
+      "data_dir = 'C:\\Users\\ethan\\Pictures'\n\n"
+    ],
+    [
+      "",
+      "C:\\\\\\\\Users\\\\\\\\ethan\\\\\\\\Pictures",
+      "data_dir = 'C:\\Users\\ethan\\Pictures'\n\n"
+    ],
+    [
+      "",
+      "\\\\server\\share\\dir",
+      "data_dir = '\\\\server\\share\\dir'\n\n"
+    ],
+    [
+      "",
+      "\\\\\\\\server\\\\share\\\\dir",
+      "data_dir = '\\\\server\\share\\dir'\n\n"
+    ],
+    [
+      "",
+      "\\\\?\\C:\\Users\\x",
+      "data_dir = '\\\\?\\C:\\Users\\x'\n\n"
+    ],
+    [
+      "",
+      "C:\\Users\\O'Brien\\Pics",
+      "data_dir = '''C:\\Users\\O'Brien\\Pics'''\n\n"
+    ],
+    [
+      "",
+      "C:\\Users\\say \"hi\"\\Pics",
+      "data_dir = 'C:\\Users\\say \"hi\"\\Pics'\n\n"
+    ],
+    [
+      "",
+      "/Users/o'brien/it's \"quoted\"",
+      "data_dir = \"/Users/o'brien/it's \\\"quoted\\\"\"\n\n"
+    ],
+    [
+      "",
+      "/Volumes/My Passport",
+      "data_dir = \"/Volumes/My Passport\"\n\n"
+    ],
+    [
+      "",
+      "C:\\O'Brien\\say \"hi\"",
+      "data_dir = '''C:\\O'Brien\\say \"hi\"'''\n\n"
+    ],
+    [
+      "",
+      "/a/it''s/x",
+      "data_dir = \"/a/it''s/x\"\n\n"
+    ],
+    [
+      "",
+      "/a/it'''s/x",
+      "data_dir = \"/a/it'''s/x\"\n\n"
+    ],
+    [
+      "",
+      "C:\\a'''b",
+      "data_dir = \"C:\\\\a'''b\"\n\n"
+    ],
+    [
+      "",
+      "C:\\ends with quote'",
+      "data_dir = \"C:\\\\ends with quote'\"\n\n"
+    ],
+    [
+      "",
+      "/ends with quote'",
+      "data_dir = \"/ends with quote'\"\n\n"
+    ],
+    [
+      "",
+      "C:\\tab\there",
+      "data_dir = 'C:\\tab\there'\n\n"
+    ],
+    [
+      "",
+      "C:\\new\nline",
+      "data_dir = '''\nC:\\new\nline'''\n\n"
+    ],
+    [
+      "",
+      "/new\nline",
+      "data_dir = \"\"\"\n/new\nline\"\"\"\n\n"
+    ],
+    [
+      "",
+      "C:\\bell\u0007x",
+      "data_dir = \"C:\\\\bell\\u0007x\"\n\n"
+    ],
+    [
+      "",
+      "/delx",
+      "data_dir = \"/del\\u007Fx\"\n\n"
+    ],
+    [
+      "",
+      "/form\ffeed\rcr\bbs",
+      "data_dir = \"/form\\ffeed\\rcr\\bbs\"\n\n"
+    ],
+    [
+      "",
+      "",
+      "data_dir = \"\"\n\n"
+    ],
+    [
+      "",
+      "relative\\sub",
+      "data_dir = 'relative\\sub'\n\n"
+    ],
+    [
+      "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n",
+      "/Users/ethan/Pictures/P-Pass 家庭照片库",
+      "data_dir = \"/Users/ethan/Pictures/P-Pass 家庭照片库\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n"
+    ],
+    [
+      "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n",
+      "/home/ethan/Pictures/P-Pass",
+      "data_dir = \"/home/ethan/Pictures/P-Pass\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n"
+    ],
+    [
+      "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n",
+      "C:\\Users\\ethan\\Pictures\\P-Pass 家庭照片库",
+      "data_dir = 'C:\\Users\\ethan\\Pictures\\P-Pass 家庭照片库'\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n"
+    ],
+    [
+      "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n",
+      "C:\\\\Users\\\\ethan\\\\Pictures",
+      "data_dir = 'C:\\Users\\ethan\\Pictures'\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n"
+    ],
+    [
+      "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n",
+      "C:\\\\\\\\Users\\\\\\\\ethan\\\\\\\\Pictures",
+      "data_dir = 'C:\\Users\\ethan\\Pictures'\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n"
+    ],
+    [
+      "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n",
+      "\\\\server\\share\\dir",
+      "data_dir = '\\\\server\\share\\dir'\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n"
+    ],
+    [
+      "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n",
+      "\\\\\\\\server\\\\share\\\\dir",
+      "data_dir = '\\\\server\\share\\dir'\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n"
+    ],
+    [
+      "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n",
+      "\\\\?\\C:\\Users\\x",
+      "data_dir = '\\\\?\\C:\\Users\\x'\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n"
+    ],
+    [
+      "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n",
+      "C:\\Users\\O'Brien\\Pics",
+      "data_dir = '''C:\\Users\\O'Brien\\Pics'''\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n"
+    ],
+    [
+      "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n",
+      "C:\\Users\\say \"hi\"\\Pics",
+      "data_dir = 'C:\\Users\\say \"hi\"\\Pics'\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n"
+    ],
+    [
+      "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n",
+      "/Users/o'brien/it's \"quoted\"",
+      "data_dir = \"/Users/o'brien/it's \\\"quoted\\\"\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n"
+    ],
+    [
+      "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n",
+      "/Volumes/My Passport",
+      "data_dir = \"/Volumes/My Passport\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n"
+    ],
+    [
+      "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n",
+      "C:\\O'Brien\\say \"hi\"",
+      "data_dir = '''C:\\O'Brien\\say \"hi\"'''\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n"
+    ],
+    [
+      "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n",
+      "/a/it''s/x",
+      "data_dir = \"/a/it''s/x\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n"
+    ],
+    [
+      "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n",
+      "/a/it'''s/x",
+      "data_dir = \"/a/it'''s/x\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n"
+    ],
+    [
+      "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n",
+      "C:\\a'''b",
+      "data_dir = \"C:\\\\a'''b\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n"
+    ],
+    [
+      "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n",
+      "C:\\ends with quote'",
+      "data_dir = \"C:\\\\ends with quote'\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n"
+    ],
+    [
+      "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n",
+      "/ends with quote'",
+      "data_dir = \"/ends with quote'\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n"
+    ],
+    [
+      "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n",
+      "C:\\tab\there",
+      "data_dir = 'C:\\tab\there'\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n"
+    ],
+    [
+      "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n",
+      "C:\\new\nline",
+      "data_dir = '''\nC:\\new\nline'''\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n"
+    ],
+    [
+      "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n",
+      "/new\nline",
+      "data_dir = \"\"\"\n/new\nline\"\"\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n"
+    ],
+    [
+      "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n",
+      "C:\\bell\u0007x",
+      "data_dir = \"C:\\\\bell\\u0007x\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n"
+    ],
+    [
+      "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n",
+      "/delx",
+      "data_dir = \"/del\\u007Fx\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n"
+    ],
+    [
+      "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n",
+      "/form\ffeed\rcr\bbs",
+      "data_dir = \"/form\\ffeed\\rcr\\bbs\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n"
+    ],
+    [
+      "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n",
+      "",
+      "data_dir = \"\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n"
+    ],
+    [
+      "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n",
+      "relative\\sub",
+      "data_dir = 'relative\\sub'\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n"
+    ],
+    [
+      "bind_addr = \"0.0.0.0:41145\"\n  data_dir = 'x'\nrelay_urls = []",
+      "/Users/ethan/Pictures/P-Pass 家庭照片库",
+      "data_dir = \"/Users/ethan/Pictures/P-Pass 家庭照片库\"\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n"
+    ],
+    [
+      "bind_addr = \"0.0.0.0:41145\"\n  data_dir = 'x'\nrelay_urls = []",
+      "/home/ethan/Pictures/P-Pass",
+      "data_dir = \"/home/ethan/Pictures/P-Pass\"\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n"
+    ],
+    [
+      "bind_addr = \"0.0.0.0:41145\"\n  data_dir = 'x'\nrelay_urls = []",
+      "C:\\Users\\ethan\\Pictures\\P-Pass 家庭照片库",
+      "data_dir = 'C:\\Users\\ethan\\Pictures\\P-Pass 家庭照片库'\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n"
+    ],
+    [
+      "bind_addr = \"0.0.0.0:41145\"\n  data_dir = 'x'\nrelay_urls = []",
+      "C:\\\\Users\\\\ethan\\\\Pictures",
+      "data_dir = 'C:\\Users\\ethan\\Pictures'\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n"
+    ],
+    [
+      "bind_addr = \"0.0.0.0:41145\"\n  data_dir = 'x'\nrelay_urls = []",
+      "C:\\\\\\\\Users\\\\\\\\ethan\\\\\\\\Pictures",
+      "data_dir = 'C:\\Users\\ethan\\Pictures'\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n"
+    ],
+    [
+      "bind_addr = \"0.0.0.0:41145\"\n  data_dir = 'x'\nrelay_urls = []",
+      "\\\\server\\share\\dir",
+      "data_dir = '\\\\server\\share\\dir'\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n"
+    ],
+    [
+      "bind_addr = \"0.0.0.0:41145\"\n  data_dir = 'x'\nrelay_urls = []",
+      "\\\\\\\\server\\\\share\\\\dir",
+      "data_dir = '\\\\server\\share\\dir'\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n"
+    ],
+    [
+      "bind_addr = \"0.0.0.0:41145\"\n  data_dir = 'x'\nrelay_urls = []",
+      "\\\\?\\C:\\Users\\x",
+      "data_dir = '\\\\?\\C:\\Users\\x'\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n"
+    ],
+    [
+      "bind_addr = \"0.0.0.0:41145\"\n  data_dir = 'x'\nrelay_urls = []",
+      "C:\\Users\\O'Brien\\Pics",
+      "data_dir = '''C:\\Users\\O'Brien\\Pics'''\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n"
+    ],
+    [
+      "bind_addr = \"0.0.0.0:41145\"\n  data_dir = 'x'\nrelay_urls = []",
+      "C:\\Users\\say \"hi\"\\Pics",
+      "data_dir = 'C:\\Users\\say \"hi\"\\Pics'\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n"
+    ],
+    [
+      "bind_addr = \"0.0.0.0:41145\"\n  data_dir = 'x'\nrelay_urls = []",
+      "/Users/o'brien/it's \"quoted\"",
+      "data_dir = \"/Users/o'brien/it's \\\"quoted\\\"\"\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n"
+    ],
+    [
+      "bind_addr = \"0.0.0.0:41145\"\n  data_dir = 'x'\nrelay_urls = []",
+      "/Volumes/My Passport",
+      "data_dir = \"/Volumes/My Passport\"\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n"
+    ],
+    [
+      "bind_addr = \"0.0.0.0:41145\"\n  data_dir = 'x'\nrelay_urls = []",
+      "C:\\O'Brien\\say \"hi\"",
+      "data_dir = '''C:\\O'Brien\\say \"hi\"'''\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n"
+    ],
+    [
+      "bind_addr = \"0.0.0.0:41145\"\n  data_dir = 'x'\nrelay_urls = []",
+      "/a/it''s/x",
+      "data_dir = \"/a/it''s/x\"\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n"
+    ],
+    [
+      "bind_addr = \"0.0.0.0:41145\"\n  data_dir = 'x'\nrelay_urls = []",
+      "/a/it'''s/x",
+      "data_dir = \"/a/it'''s/x\"\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n"
+    ],
+    [
+      "bind_addr = \"0.0.0.0:41145\"\n  data_dir = 'x'\nrelay_urls = []",
+      "C:\\a'''b",
+      "data_dir = \"C:\\\\a'''b\"\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n"
+    ],
+    [
+      "bind_addr = \"0.0.0.0:41145\"\n  data_dir = 'x'\nrelay_urls = []",
+      "C:\\ends with quote'",
+      "data_dir = \"C:\\\\ends with quote'\"\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n"
+    ],
+    [
+      "bind_addr = \"0.0.0.0:41145\"\n  data_dir = 'x'\nrelay_urls = []",
+      "/ends with quote'",
+      "data_dir = \"/ends with quote'\"\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n"
+    ],
+    [
+      "bind_addr = \"0.0.0.0:41145\"\n  data_dir = 'x'\nrelay_urls = []",
+      "C:\\tab\there",
+      "data_dir = 'C:\\tab\there'\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n"
+    ],
+    [
+      "bind_addr = \"0.0.0.0:41145\"\n  data_dir = 'x'\nrelay_urls = []",
+      "C:\\new\nline",
+      "data_dir = '''\nC:\\new\nline'''\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n"
+    ],
+    [
+      "bind_addr = \"0.0.0.0:41145\"\n  data_dir = 'x'\nrelay_urls = []",
+      "/new\nline",
+      "data_dir = \"\"\"\n/new\nline\"\"\"\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n"
+    ],
+    [
+      "bind_addr = \"0.0.0.0:41145\"\n  data_dir = 'x'\nrelay_urls = []",
+      "C:\\bell\u0007x",
+      "data_dir = \"C:\\\\bell\\u0007x\"\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n"
+    ],
+    [
+      "bind_addr = \"0.0.0.0:41145\"\n  data_dir = 'x'\nrelay_urls = []",
+      "/delx",
+      "data_dir = \"/del\\u007Fx\"\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n"
+    ],
+    [
+      "bind_addr = \"0.0.0.0:41145\"\n  data_dir = 'x'\nrelay_urls = []",
+      "/form\ffeed\rcr\bbs",
+      "data_dir = \"/form\\ffeed\\rcr\\bbs\"\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n"
+    ],
+    [
+      "bind_addr = \"0.0.0.0:41145\"\n  data_dir = 'x'\nrelay_urls = []",
+      "",
+      "data_dir = \"\"\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n"
+    ],
+    [
+      "bind_addr = \"0.0.0.0:41145\"\n  data_dir = 'x'\nrelay_urls = []",
+      "relative\\sub",
+      "data_dir = 'relative\\sub'\nbind_addr = \"0.0.0.0:41145\"\nrelay_urls = []\n"
+    ],
+    [
+      "# only comment\r\nlog_level = \"debug\"\r\n",
+      "/Users/ethan/Pictures/P-Pass 家庭照片库",
+      "data_dir = \"/Users/ethan/Pictures/P-Pass 家庭照片库\"\n# only comment\nlog_level = \"debug\"\n"
+    ],
+    [
+      "# only comment\r\nlog_level = \"debug\"\r\n",
+      "/home/ethan/Pictures/P-Pass",
+      "data_dir = \"/home/ethan/Pictures/P-Pass\"\n# only comment\nlog_level = \"debug\"\n"
+    ],
+    [
+      "# only comment\r\nlog_level = \"debug\"\r\n",
+      "C:\\Users\\ethan\\Pictures\\P-Pass 家庭照片库",
+      "data_dir = 'C:\\Users\\ethan\\Pictures\\P-Pass 家庭照片库'\n# only comment\nlog_level = \"debug\"\n"
+    ],
+    [
+      "# only comment\r\nlog_level = \"debug\"\r\n",
+      "C:\\\\Users\\\\ethan\\\\Pictures",
+      "data_dir = 'C:\\Users\\ethan\\Pictures'\n# only comment\nlog_level = \"debug\"\n"
+    ],
+    [
+      "# only comment\r\nlog_level = \"debug\"\r\n",
+      "C:\\\\\\\\Users\\\\\\\\ethan\\\\\\\\Pictures",
+      "data_dir = 'C:\\Users\\ethan\\Pictures'\n# only comment\nlog_level = \"debug\"\n"
+    ],
+    [
+      "# only comment\r\nlog_level = \"debug\"\r\n",
+      "\\\\server\\share\\dir",
+      "data_dir = '\\\\server\\share\\dir'\n# only comment\nlog_level = \"debug\"\n"
+    ],
+    [
+      "# only comment\r\nlog_level = \"debug\"\r\n",
+      "\\\\\\\\server\\\\share\\\\dir",
+      "data_dir = '\\\\server\\share\\dir'\n# only comment\nlog_level = \"debug\"\n"
+    ],
+    [
+      "# only comment\r\nlog_level = \"debug\"\r\n",
+      "\\\\?\\C:\\Users\\x",
+      "data_dir = '\\\\?\\C:\\Users\\x'\n# only comment\nlog_level = \"debug\"\n"
+    ],
+    [
+      "# only comment\r\nlog_level = \"debug\"\r\n",
+      "C:\\Users\\O'Brien\\Pics",
+      "data_dir = '''C:\\Users\\O'Brien\\Pics'''\n# only comment\nlog_level = \"debug\"\n"
+    ],
+    [
+      "# only comment\r\nlog_level = \"debug\"\r\n",
+      "C:\\Users\\say \"hi\"\\Pics",
+      "data_dir = 'C:\\Users\\say \"hi\"\\Pics'\n# only comment\nlog_level = \"debug\"\n"
+    ],
+    [
+      "# only comment\r\nlog_level = \"debug\"\r\n",
+      "/Users/o'brien/it's \"quoted\"",
+      "data_dir = \"/Users/o'brien/it's \\\"quoted\\\"\"\n# only comment\nlog_level = \"debug\"\n"
+    ],
+    [
+      "# only comment\r\nlog_level = \"debug\"\r\n",
+      "/Volumes/My Passport",
+      "data_dir = \"/Volumes/My Passport\"\n# only comment\nlog_level = \"debug\"\n"
+    ],
+    [
+      "# only comment\r\nlog_level = \"debug\"\r\n",
+      "C:\\O'Brien\\say \"hi\"",
+      "data_dir = '''C:\\O'Brien\\say \"hi\"'''\n# only comment\nlog_level = \"debug\"\n"
+    ],
+    [
+      "# only comment\r\nlog_level = \"debug\"\r\n",
+      "/a/it''s/x",
+      "data_dir = \"/a/it''s/x\"\n# only comment\nlog_level = \"debug\"\n"
+    ],
+    [
+      "# only comment\r\nlog_level = \"debug\"\r\n",
+      "/a/it'''s/x",
+      "data_dir = \"/a/it'''s/x\"\n# only comment\nlog_level = \"debug\"\n"
+    ],
+    [
+      "# only comment\r\nlog_level = \"debug\"\r\n",
+      "C:\\a'''b",
+      "data_dir = \"C:\\\\a'''b\"\n# only comment\nlog_level = \"debug\"\n"
+    ],
+    [
+      "# only comment\r\nlog_level = \"debug\"\r\n",
+      "C:\\ends with quote'",
+      "data_dir = \"C:\\\\ends with quote'\"\n# only comment\nlog_level = \"debug\"\n"
+    ],
+    [
+      "# only comment\r\nlog_level = \"debug\"\r\n",
+      "/ends with quote'",
+      "data_dir = \"/ends with quote'\"\n# only comment\nlog_level = \"debug\"\n"
+    ],
+    [
+      "# only comment\r\nlog_level = \"debug\"\r\n",
+      "C:\\tab\there",
+      "data_dir = 'C:\\tab\there'\n# only comment\nlog_level = \"debug\"\n"
+    ],
+    [
+      "# only comment\r\nlog_level = \"debug\"\r\n",
+      "C:\\new\nline",
+      "data_dir = '''\nC:\\new\nline'''\n# only comment\nlog_level = \"debug\"\n"
+    ],
+    [
+      "# only comment\r\nlog_level = \"debug\"\r\n",
+      "/new\nline",
+      "data_dir = \"\"\"\n/new\nline\"\"\"\n# only comment\nlog_level = \"debug\"\n"
+    ],
+    [
+      "# only comment\r\nlog_level = \"debug\"\r\n",
+      "C:\\bell\u0007x",
+      "data_dir = \"C:\\\\bell\\u0007x\"\n# only comment\nlog_level = \"debug\"\n"
+    ],
+    [
+      "# only comment\r\nlog_level = \"debug\"\r\n",
+      "/delx",
+      "data_dir = \"/del\\u007Fx\"\n# only comment\nlog_level = \"debug\"\n"
+    ],
+    [
+      "# only comment\r\nlog_level = \"debug\"\r\n",
+      "/form\ffeed\rcr\bbs",
+      "data_dir = \"/form\\ffeed\\rcr\\bbs\"\n# only comment\nlog_level = \"debug\"\n"
+    ],
+    [
+      "# only comment\r\nlog_level = \"debug\"\r\n",
+      "",
+      "data_dir = \"\"\n# only comment\nlog_level = \"debug\"\n"
+    ],
+    [
+      "# only comment\r\nlog_level = \"debug\"\r\n",
+      "relative\\sub",
+      "data_dir = 'relative\\sub'\n# only comment\nlog_level = \"debug\"\n"
+    ]
+  ],
+  "render": [
+    [
+      "/Users/ethan/Pictures/P-Pass 家庭照片库",
+      "data_dir = \"/Users/ethan/Pictures/P-Pass 家庭照片库\"\n\n# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。\nbind_addr = \"0.0.0.0:41145\"\n\n# H-07 部署前必须为空（内置官方 relay 域名尚未上线）\nrelay_urls = []\n"
+    ],
+    [
+      "/home/ethan/Pictures/P-Pass",
+      "data_dir = \"/home/ethan/Pictures/P-Pass\"\n\n# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。\nbind_addr = \"0.0.0.0:41145\"\n\n# H-07 部署前必须为空（内置官方 relay 域名尚未上线）\nrelay_urls = []\n"
+    ],
+    [
+      "C:\\Users\\ethan\\Pictures\\P-Pass 家庭照片库",
+      "data_dir = 'C:\\Users\\ethan\\Pictures\\P-Pass 家庭照片库'\n\n# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。\nbind_addr = \"0.0.0.0:41145\"\n\n# H-07 部署前必须为空（内置官方 relay 域名尚未上线）\nrelay_urls = []\n"
+    ],
+    [
+      "C:\\\\Users\\\\ethan\\\\Pictures",
+      "data_dir = 'C:\\Users\\ethan\\Pictures'\n\n# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。\nbind_addr = \"0.0.0.0:41145\"\n\n# H-07 部署前必须为空（内置官方 relay 域名尚未上线）\nrelay_urls = []\n"
+    ],
+    [
+      "C:\\\\\\\\Users\\\\\\\\ethan\\\\\\\\Pictures",
+      "data_dir = 'C:\\Users\\ethan\\Pictures'\n\n# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。\nbind_addr = \"0.0.0.0:41145\"\n\n# H-07 部署前必须为空（内置官方 relay 域名尚未上线）\nrelay_urls = []\n"
+    ],
+    [
+      "\\\\server\\share\\dir",
+      "data_dir = '\\\\server\\share\\dir'\n\n# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。\nbind_addr = \"0.0.0.0:41145\"\n\n# H-07 部署前必须为空（内置官方 relay 域名尚未上线）\nrelay_urls = []\n"
+    ],
+    [
+      "\\\\\\\\server\\\\share\\\\dir",
+      "data_dir = '\\\\server\\share\\dir'\n\n# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。\nbind_addr = \"0.0.0.0:41145\"\n\n# H-07 部署前必须为空（内置官方 relay 域名尚未上线）\nrelay_urls = []\n"
+    ],
+    [
+      "\\\\?\\C:\\Users\\x",
+      "data_dir = '\\\\?\\C:\\Users\\x'\n\n# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。\nbind_addr = \"0.0.0.0:41145\"\n\n# H-07 部署前必须为空（内置官方 relay 域名尚未上线）\nrelay_urls = []\n"
+    ],
+    [
+      "C:\\Users\\O'Brien\\Pics",
+      "data_dir = '''C:\\Users\\O'Brien\\Pics'''\n\n# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。\nbind_addr = \"0.0.0.0:41145\"\n\n# H-07 部署前必须为空（内置官方 relay 域名尚未上线）\nrelay_urls = []\n"
+    ],
+    [
+      "C:\\Users\\say \"hi\"\\Pics",
+      "data_dir = 'C:\\Users\\say \"hi\"\\Pics'\n\n# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。\nbind_addr = \"0.0.0.0:41145\"\n\n# H-07 部署前必须为空（内置官方 relay 域名尚未上线）\nrelay_urls = []\n"
+    ],
+    [
+      "/Users/o'brien/it's \"quoted\"",
+      "data_dir = \"/Users/o'brien/it's \\\"quoted\\\"\"\n\n# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。\nbind_addr = \"0.0.0.0:41145\"\n\n# H-07 部署前必须为空（内置官方 relay 域名尚未上线）\nrelay_urls = []\n"
+    ],
+    [
+      "/Volumes/My Passport",
+      "data_dir = \"/Volumes/My Passport\"\n\n# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。\nbind_addr = \"0.0.0.0:41145\"\n\n# H-07 部署前必须为空（内置官方 relay 域名尚未上线）\nrelay_urls = []\n"
+    ],
+    [
+      "C:\\O'Brien\\say \"hi\"",
+      "data_dir = '''C:\\O'Brien\\say \"hi\"'''\n\n# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。\nbind_addr = \"0.0.0.0:41145\"\n\n# H-07 部署前必须为空（内置官方 relay 域名尚未上线）\nrelay_urls = []\n"
+    ],
+    [
+      "/a/it''s/x",
+      "data_dir = \"/a/it''s/x\"\n\n# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。\nbind_addr = \"0.0.0.0:41145\"\n\n# H-07 部署前必须为空（内置官方 relay 域名尚未上线）\nrelay_urls = []\n"
+    ],
+    [
+      "/a/it'''s/x",
+      "data_dir = \"/a/it'''s/x\"\n\n# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。\nbind_addr = \"0.0.0.0:41145\"\n\n# H-07 部署前必须为空（内置官方 relay 域名尚未上线）\nrelay_urls = []\n"
+    ],
+    [
+      "C:\\a'''b",
+      "data_dir = \"C:\\\\a'''b\"\n\n# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。\nbind_addr = \"0.0.0.0:41145\"\n\n# H-07 部署前必须为空（内置官方 relay 域名尚未上线）\nrelay_urls = []\n"
+    ],
+    [
+      "C:\\ends with quote'",
+      "data_dir = \"C:\\\\ends with quote'\"\n\n# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。\nbind_addr = \"0.0.0.0:41145\"\n\n# H-07 部署前必须为空（内置官方 relay 域名尚未上线）\nrelay_urls = []\n"
+    ],
+    [
+      "/ends with quote'",
+      "data_dir = \"/ends with quote'\"\n\n# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。\nbind_addr = \"0.0.0.0:41145\"\n\n# H-07 部署前必须为空（内置官方 relay 域名尚未上线）\nrelay_urls = []\n"
+    ],
+    [
+      "C:\\tab\there",
+      "data_dir = 'C:\\tab\there'\n\n# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。\nbind_addr = \"0.0.0.0:41145\"\n\n# H-07 部署前必须为空（内置官方 relay 域名尚未上线）\nrelay_urls = []\n"
+    ],
+    [
+      "C:\\new\nline",
+      "data_dir = '''\nC:\\new\nline'''\n\n# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。\nbind_addr = \"0.0.0.0:41145\"\n\n# H-07 部署前必须为空（内置官方 relay 域名尚未上线）\nrelay_urls = []\n"
+    ],
+    [
+      "/new\nline",
+      "data_dir = \"\"\"\n/new\nline\"\"\"\n\n# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。\nbind_addr = \"0.0.0.0:41145\"\n\n# H-07 部署前必须为空（内置官方 relay 域名尚未上线）\nrelay_urls = []\n"
+    ],
+    [
+      "C:\\bell\u0007x",
+      "data_dir = \"C:\\\\bell\\u0007x\"\n\n# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。\nbind_addr = \"0.0.0.0:41145\"\n\n# H-07 部署前必须为空（内置官方 relay 域名尚未上线）\nrelay_urls = []\n"
+    ],
+    [
+      "/delx",
+      "data_dir = \"/del\\u007Fx\"\n\n# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。\nbind_addr = \"0.0.0.0:41145\"\n\n# H-07 部署前必须为空（内置官方 relay 域名尚未上线）\nrelay_urls = []\n"
+    ],
+    [
+      "/form\ffeed\rcr\bbs",
+      "data_dir = \"/form\\ffeed\\rcr\\bbs\"\n\n# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。\nbind_addr = \"0.0.0.0:41145\"\n\n# H-07 部署前必须为空（内置官方 relay 域名尚未上线）\nrelay_urls = []\n"
+    ],
+    [
+      "",
+      "data_dir = \"\"\n\n# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。\nbind_addr = \"0.0.0.0:41145\"\n\n# H-07 部署前必须为空（内置官方 relay 域名尚未上线）\nrelay_urls = []\n"
+    ],
+    [
+      "relative\\sub",
+      "data_dir = 'relative\\sub'\n\n# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。\nbind_addr = \"0.0.0.0:41145\"\n\n# H-07 部署前必须为空（内置官方 relay 域名尚未上线）\nrelay_urls = []\n"
+    ]
+  ]
+}
