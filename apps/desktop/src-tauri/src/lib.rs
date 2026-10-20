@@ -1735,7 +1735,8 @@ mod tests {
     /// 反证：删掉 self_heal_daemon 里的 active() 判断，或 resume 里的 end() → 红。
     #[test]
     fn self_heal_respects_update_pause_window() {
-        let product = include_str!("lib.rs").split("#[cfg(test)]").next().unwrap();
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let product = src.split("#[cfg(test)]").next().unwrap();
         let heal = product.split("fn self_heal_daemon(").nth(1).unwrap();
         let heal = &heal[..heal.find("\n}\n").unwrap()];
         assert!(heal.contains("UpdatePause>().active()"));
@@ -1758,7 +1759,8 @@ mod tests {
     /// 是 Cargo.toml 里的号，发布构建不改它，test tag 时与 daemon 错开。
     #[test]
     fn shell_reports_tauri_package_version_not_cargo_pkg_version() {
-        let product = include_str!("lib.rs").split("#[cfg(test)]").next().unwrap();
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let product = src.split("#[cfg(test)]").next().unwrap();
         let banned = concat!("env!(\"CARGO_PKG", "_VERSION\")");
         assert!(
             !product.contains(banned),
@@ -1832,7 +1834,8 @@ mod tests {
     /// 拉 daemon、写登记都得在它之后，不在正式位置时一样都不能碰。
     #[test]
     fn install_location_gate_runs_before_anything_else() {
-        let product = include_str!("lib.rs").split("#[cfg(test)]").next().unwrap();
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let product = src.split("#[cfg(test)]").next().unwrap();
         let run = &product[product.find("pub fn run() {").expect("run()")..];
         let gate = run
             .find("running_from_install_location()")
@@ -1909,7 +1912,8 @@ mod tests {
 
         // 菜单必须从 TRAY_ITEMS 整体收集：按下标手写时加了项也进不了菜单，
         // 而上面的断言照样全绿。
-        let product = include_str!("lib.rs").split("#[cfg(test)]").next().unwrap();
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let product = src.split("#[cfg(test)]").next().unwrap();
         assert!(
             !product.contains("&tray_items[0]"),
             "托盘菜单又按下标手写了"
@@ -1987,7 +1991,7 @@ mod tests {
     /// 没有这样一条门禁。
     #[test]
     fn every_window_restore_unminimizes_first() {
-        let src = include_str!("lib.rs");
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
         // 判据在运行时拼，避免这段源码自己命中自己（#168 踩过一次）。
         let show = format!("let _ = win.{}();", "show");
         let unmin = format!("win.{}()", "unminimize");
@@ -2541,7 +2545,7 @@ mod tests {
         let v: Value = serde_json::from_str(&err).unwrap();
         assert_eq!(v["key"], "ui.library_dir_unknown");
         assert!(!err.contains("ppass-1059"), "不许透出路径: {err}");
-        let src = include_str!("lib.rs");
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
         assert!(
             src.contains("            library_dir,\n"),
             "library_dir 未注册进 invoke_handler"
@@ -2589,8 +2593,8 @@ mod tests {
     /// 不在测试里调。
     #[test]
     fn wizard_state_hands_the_verdict_not_the_ingredients() {
-        let src = include_str!("lib.rs");
-        let body = product_fn_body(src, "wizard_state");
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let body = product_fn_body(&src, "wizard_state");
         assert!(body.contains("\"show_wizard\": show_wizard("), "{body}");
         for ingredient in ["\"configured\":", "\"installed\":", "\"user_stopped\":"] {
             assert!(!body.contains(ingredient), "不许把 {ingredient} 交给前端");
@@ -2675,7 +2679,7 @@ mod tests {
     /// 反证：把 setup 里那句 `std::thread::spawn(register_shell_login_item);` 删掉 → 红。
     #[test]
     fn setup_registers_the_shell_login_item() {
-        let src = include_str!("lib.rs");
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
         assert!(
             src.contains("std::thread::spawn(register_shell_login_item);"),
             "启动时必须登记壳的登录项（否则 launchd 永远接管不到壳）"
@@ -2709,7 +2713,7 @@ mod tests {
     /// `tauri::process::restart` → 本测试必须红。
     #[test]
     fn relaunch_shell_gates_kickstart_on_registration_pointing_at_us() {
-        let src = include_str!("lib.rs");
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
         let start = src
             .find("fn relaunch_shell(app: tauri::AppHandle)")
             .expect("relaunch_shell 命令缺失");
@@ -2784,13 +2788,13 @@ mod tests {
 
     #[test]
     fn config_and_diag_commands_only_call_the_daemon_subcommands() {
-        let src = include_str!("lib.rs");
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
         for (cmd, call) in [
             ("write_config", "daemon_cli::config_init("),
             ("set_library_dir", "daemon_cli::config_set_library("),
             ("export_logs_bundle", "daemon_cli::diag_export("),
         ] {
-            let body = product_fn_body(src, cmd);
+            let body = product_fn_body(&src, cmd);
             assert!(body.contains(call), "{cmd} 必须调 {call}：{body}");
             for forbidden in ["fs::write", "create_dir", "OpenOptions", "zip::"] {
                 assert!(
@@ -2801,7 +2805,7 @@ mod tests {
         }
         // 向导的生效顺序不变：先探活再注册（DESK-29），探活走机读契约。
         assert!(
-            product_fn_body(src, "verify_sidecar_runs").contains("daemon_cli::probe_version("),
+            product_fn_body(&src, "verify_sidecar_runs").contains("daemon_cli::probe_version("),
             "探活必须走 --version --json"
         );
     }
