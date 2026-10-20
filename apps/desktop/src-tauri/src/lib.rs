@@ -923,15 +923,6 @@ fn start_daemon(app: tauri::AppHandle) -> Result<String, String> {
     }
 }
 
-/// The last non-empty line written by the sidecar to the LaunchAgent stderr
-/// log. The plist names the log location; if it is absent or unreadable, do
-/// not guess a path or invent a failure reason.
-fn daemon_startup_stderr_from(plist: &std::path::Path) -> Option<String> {
-    let plist = std::fs::read_to_string(plist).ok()?;
-    let (_, stderr_path) = daemon_logs::parse_plist_log_paths(&plist);
-    last_stderr_line(std::path::Path::new(stderr_path.as_deref()?))
-}
-
 fn last_stderr_line(path: &std::path::Path) -> Option<String> {
     let stderr = daemon_logs::tail(path, 64 * 1024)?;
     stderr
@@ -941,18 +932,12 @@ fn last_stderr_line(path: &std::path::Path) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// DESK-58 (#875)：stderr 的去处。平台给了固定落点（Windows 的
-/// `logs\daemon.err`，daemon 自己接上的）就读它；否则照旧从 LaunchAgent
-/// plist 里读（macOS，由 launchd 接）。
-fn daemon_startup_error_in(
-    platform_dir: &std::path::Path,
-    plist: &std::path::Path,
-) -> Option<String> {
-    use platform::PlatformAdapter as _;
-    match platform::adapter().startup_stderr_file(platform_dir) {
-        Some(file) => last_stderr_line(&file),
-        None => daemon_startup_stderr_from(plist),
-    }
+/// DESK-58 (#875) / #1043：daemon 启动早期 stderr 的最后一行非空内容。落点
+/// 问平台适配器（`daemon_log_paths().stderr`）：Windows 是 daemon 自己接的
+/// `logs\daemon.err`，macOS 是 launchd 的 `StandardErrorPath`。读不到就如实
+/// 返回 `None`，不猜路径、不编失败原因。
+fn daemon_startup_error_in(paths: &platform::DaemonLogPaths) -> Option<String> {
+    last_stderr_line(paths.stderr.as_deref()?)
 }
 
 /// The wizard asks only after its existing readiness wait has elapsed. This
@@ -960,8 +945,32 @@ fn daemon_startup_error_in(
 /// failures without replacing actionable diagnostic text.
 #[tauri::command]
 fn daemon_startup_error() -> Option<String> {
-    use platform::PlatformAdapter as _;
-    daemon_startup_error_in(&platform::adapter().data_dir(), &daemon_logs::plist_path())
+    let a = platform::adapter();
+    daemon_startup_error_in(&a.daemon_log_paths(&a.data_dir()))
+}
+
+/// #1043：服务管理器接的那对 stdio 路径（macOS launchd 的
+/// `StandardOutPath`/`StandardErrorPath`）——只在 stdio 归服务管理器、且已登记
+/// 常驻服务时才算数（与改前「plist 在才有路径」同一口径）。daemon 自己接的
+/// stderr（Windows）不在此列。
+fn service_stdio_paths(
+    paths: &platform::DaemonLogPaths,
+    service_registered: bool,
+) -> (Option<std::path::PathBuf>, Option<std::path::PathBuf>) {
+    if paths.stdio_by_service_manager && service_registered {
+        (paths.stdout.clone(), paths.stderr.clone())
+    } else {
+        (None, None)
+    }
+}
+
+/// 当前机器上的 [`service_stdio_paths`]。
+fn current_service_stdio_paths() -> (Option<std::path::PathBuf>, Option<std::path::PathBuf>) {
+    let a = platform::adapter();
+    service_stdio_paths(
+        &a.daemon_log_paths(&a.data_dir()),
+        platform::hosting().autostart_installed().unwrap_or(false),
+    )
 }
 
 /// DESK-36 (#456)：「用户主动停止了后台服务」的持久标记。
@@ -1239,15 +1248,13 @@ fn daemon_is_unmanaged(running_pid: Option<u32>, resident_pid: Option<u32>) -> b
 
 /// 一次性 spawn 时把 daemon 的 stdout/stderr 接到哪儿（#732 ③）。
 ///
-/// LaunchAgent plist 登记了日志路径就**追加**进同一对文件——与 launchd 托管时
-/// 同一去处，排障只看一处；读不到 plist（Windows / 未登记）= 接 null，与改前
-/// 一致（Windows 的 daemon 自己有落盘日志，DIAG-B1）。打不开文件也退回 null，
-/// 不能因为日志让内核起不来。
+/// 服务管理器登记了 stdio 落点（macOS LaunchAgent）就**追加**进同一对文件——
+/// 与 launchd 托管时同一去处，排障只看一处；没有（Windows / 未登记）= 接 null，
+/// 与改前一致（Windows 的 daemon 自己有落盘日志，DIAG-B1）。打不开文件也退回
+/// null，不能因为日志让内核起不来。
 fn oneshot_stdio() -> (std::process::Stdio, std::process::Stdio) {
-    let paths = std::fs::read_to_string(daemon_logs::plist_path())
-        .map(|t| daemon_logs::parse_plist_log_paths(&t))
-        .unwrap_or((None, None));
-    let open = |p: Option<String>| -> std::process::Stdio {
+    let paths = current_service_stdio_paths();
+    let open = |p: Option<std::path::PathBuf>| -> std::process::Stdio {
         p.and_then(|p| {
             std::fs::OpenOptions::new()
                 .create(true)
@@ -1548,10 +1555,12 @@ fn restart_outcome(old_version: Option<&str>, new_version: Option<&str>, answere
 /// 已经习惯了，不动）。
 #[tauri::command]
 fn export_logs_bundle(app: tauri::AppHandle) -> Result<Value, String> {
+    let platform_dir = platform::adapter().data_dir();
     let env = ExportEnv {
-        platform_dir: platform::adapter().data_dir(),
+        log_paths: platform::adapter().daemon_log_paths(&platform_dir),
+        service_registered: platform::hosting().autostart_installed().unwrap_or(false),
+        platform_dir,
         home: daemon_logs::home_dir(),
-        plist: daemon_logs::plist_path(),
         app_version: shell_version(&app),
     };
     // daemon 可达就把它那三份要过来（它写出来的 zip 先整份读进内存，
@@ -1583,14 +1592,16 @@ fn export_logs_bundle(app: tauri::AppHandle) -> Result<Value, String> {
 }
 
 /// 收集时需要知道的几个目录（测试注入 tempdir——绝不碰真实照片库/真实
-/// LaunchAgent plist）。
+/// 服务登记）。
 struct ExportEnv {
     /// 平台数据目录（config.toml 在这里）。
     platform_dir: std::path::PathBuf,
     /// 家目录（脱敏基准）。
     home: std::path::PathBuf,
-    /// LaunchAgent plist（日志路径的唯一真相）。
-    plist: std::path::PathBuf,
+    /// daemon 日志落点（#1043：问平台适配器，不读 plist）。
+    log_paths: platform::DaemonLogPaths,
+    /// 是否已登记常驻服务（服务管理器接的 stdio 只在登记了才有）。
+    service_registered: bool,
     /// 外壳版本（#809：取 [`shell_version`]，与 daemon 同源）。
     app_version: String,
 }
@@ -1642,29 +1653,29 @@ fn assemble_export(
     sidecar_version: impl Fn() -> Option<String>,
 ) -> Result<Value, String> {
     let home = env.home.display().to_string();
-    // 日志路径：只从 plist 读，不硬编码 ~/Library/Logs。
-    let plist = std::fs::read_to_string(&env.plist).ok();
-    let (out_path, err_path) = plist
-        .as_deref()
-        .map(daemon_logs::parse_plist_log_paths)
-        .unwrap_or((None, None));
-    // DESK-58 (#875)：没有 plist 的平台（Windows）stderr 有固定落点，收进
+    // 日志路径：问平台适配器（#1043），不硬编码、不读 plist。服务管理器接的
+    // 那对只在登记了常驻服务时算数（同改前「plist 在才有」）。
+    let (out_path, err_path) = service_stdio_paths(&env.log_paths, env.service_registered);
+    // DESK-58 (#875)：daemon 自己接 stderr 的平台（Windows）有固定落点，收进
     // daemon-stderr.log——「起不来的原因」就在这份里。
-    let err_path = err_path.or_else(|| {
-        platform::adapter()
-            .startup_stderr_file(&env.platform_dir)
-            .map(|p| p.display().to_string())
-    });
-    // DIAG-B1：daemon 自己的固定位置日志，不依赖 plist。DESK-32 (#367)：没读到
+    let err_path = err_path
+        .or_else(|| {
+            (!env.log_paths.stdio_by_service_manager)
+                .then(|| env.log_paths.stderr.clone())
+                .flatten()
+        })
+        .map(|p| p.display().to_string());
+    let out_path = out_path.map(|p| p.display().to_string());
+    // DIAG-B1：daemon 自己的固定位置日志，不依赖服务登记。DESK-32 (#367)：没读到
     // 也要把原因和本该在的位置带进包里。
-    let log_path = platform::adapter().default_log_file(&env.platform_dir);
+    let log_path = env.log_paths.log_file.clone();
     let (persistent_log_tail, persistent_log_missing) =
         daemon_logs::persistent_log(log_path.as_deref(), 1024 * 1024);
 
     let mut inputs = daemon_logs::BundleInputs {
         home: home.clone(),
         app_version: env.app_version.clone(),
-        plist_found: plist.is_some(),
+        plist_found: env.log_paths.stdio_by_service_manager && env.service_registered,
         config_toml: std::fs::read_to_string(env.platform_dir.join("config.toml")).ok(),
         stdout_tail: out_path
             .as_deref()
@@ -2801,122 +2812,48 @@ mod tests {
         ));
     }
 
-    /// QA-16（#326）：**向导 invoke 的是这一层，测试也必须打这一层**。
+    /// QA-16（#326）：**向导 invoke 的是这一层，测试也必须打这一层**——
+    /// 内部函数可以对、命令本体却返回 None / 读错文件 / 被整个摘掉，只有打
+    /// 命令本体的测试知道。
     ///
-    /// 下面那条 `startup_failure_reads_the_latest_sidecar_stderr_line` 打的是
-    /// 内部函数 `daemon_startup_stderr_from(plist)`；渲染进程真正调的却是
-    /// `#[tauri::command] daemon_startup_error()` 这层包装。#326 的 M2 变异
-    /// 把包装体强行改成 `return None`，整个 Rust 套件一条都不红——它可以
-    /// 返回 None、可以读错 plist、可以被整个摘掉，没有任何测试知道。
+    /// #1043：落点向平台适配器要（`daemon_log_paths().stderr`），测试不写死
+    /// 路径、不摆 plist。把适配器算路径用到的环境变量（macOS 的 HOME、Windows
+    /// 的 `%LOCALAPPDATA%`/`%APPDATA%`）都指到 tempdir，用完还原；全 crate 没有
+    /// 别的测试断言这些变量。
     ///
-    /// 这条测试补的正是那一段：包装层自己去找 plist（`plist_path()` →
-    /// `home_dir()` → `$HOME`），所以把 HOME 指到 tempdir，在里面摆一份
-    /// 真的 LaunchAgent plist 和一份真的 stderr 日志，然后**无参调用命令
-    /// 本体**，断言 daemon 那行错误原样回来了。
-    ///
-    /// 反证：`daemon_startup_error()` 体内改成 `None` → 本测试红。
-    ///
-    /// ⚠️ HOME 是进程级的，cargo 的测试线程共享它，所以这里就地改、用完
-    /// 还原。**全 crate 只有一条别的测试会间接读到 HOME**：
-    /// `ipc::tests::candidates_include_config_data_dir` → `token_candidates_from`
-    /// （ipc.rs 里那行 `env::var("HOME")`）。它不受影响——HOME 只决定候选表里
-    /// `home.join("ppf-library/ipc.token")` 那一项，而它的两条断言查的是
-    /// config 的 data_dir 和注入的 cfg_dir，跟 HOME 无关。
-    /// 将来谁加一条**断言到 HOME 那一项**的测试，必须跟本条一起串行化
-    /// （在 tests mod 里加个共享 Mutex，别退回 `--test-threads=1`）。
-    ///
-    /// DESK-58 (#875)：stderr 有固定落点的平台（Windows）不经 plist，见下面那条。
+    /// 反证：`daemon_startup_error()` 体内改成 `None`（或改回读 plist）→ 本测试红。
     #[test]
     fn the_startup_error_command_itself_surfaces_the_daemon_stderr() {
-        if platform_owns_startup_stderr() {
-            return;
-        }
         let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path();
-
-        let logs = home.join("Library/Logs");
-        std::fs::create_dir_all(&logs).unwrap();
-        let stderr_log = logs.join("p-pass-daemon.err");
+        let keys = ["HOME", "LOCALAPPDATA", "APPDATA"];
+        let saved: Vec<_> = keys.iter().map(|k| (*k, std::env::var_os(k))).collect();
+        for k in keys {
+            let dir = tmp.path().join(k);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::env::set_var(k, &dir);
+        }
+        let a = platform::adapter();
+        let err_file = a.daemon_log_paths(&a.data_dir()).stderr;
         let daemon_error =
             "Error: migration: migration 2 was previously applied but is missing in the resolved migrations";
-        // 尾部空行 + 前面的正常输出：命令要给出**最后一行非空**的那条。
-        std::fs::write(&stderr_log, format!("starting daemon\n{daemon_error}\n\n")).unwrap();
-
-        let agents = home.join("Library/LaunchAgents");
-        std::fs::create_dir_all(&agents).unwrap();
-        std::fs::write(
-            agents.join("com.p-pass.daemon.plist"),
-            format!(
-                "<plist><dict><key>StandardErrorPath</key><string>{}</string></dict></plist>",
-                stderr_log.display()
-            ),
-        )
-        .unwrap();
-
-        let saved_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", home);
-        // 命令本体，无参——与渲染进程 `invoke("daemon_startup_error")` 同一条路。
-        let got = daemon_startup_error();
-        match saved_home {
-            Some(h) => std::env::set_var("HOME", h),
-            None => std::env::remove_var("HOME"),
-        }
-
-        assert_eq!(got.as_deref(), Some(daemon_error));
-    }
-
-    /// DESK-58 (#875)：stderr 有没有平台固定落点。按能力分支、不写 `#[cfg]`
-    /// （arch-check B.2：平台分叉只在 crates/platform）。
-    fn platform_owns_startup_stderr() -> bool {
-        use platform::PlatformAdapter as _;
-        platform::adapter()
-            .startup_stderr_file(std::path::Path::new("probe"))
-            .is_some()
-    }
-
-    /// DESK-58 (#875)：有固定落点的平台（Windows）的命令层测试。daemon 把没人接
-    /// 的 stderr 落在 `<data dir>\logs\daemon.err`，向导无参调用命令，要拿到
-    /// daemon 那句原话（#871 现场就是「库目录不存在：…」，原先永远是 None，界面
-    /// 只能说「请检查日志」）。
-    ///
-    /// Windows 的 data dir 从 `%LOCALAPPDATA%` 算（`%APPDATA%\P-Pass` 还在时用
-    /// 老位置），两个都指到 tempdir，用完还原；与上面 HOME 那条同理，全 crate
-    /// 没有别的测试读这两个变量。文件位置向适配器要，不在测试里写死。
-    ///
-    /// 反证：命令体改回只读 plist（或 `None`）→ 本测试红。
-    #[test]
-    fn the_startup_error_command_reads_the_platform_stderr_file() {
-        use platform::PlatformAdapter as _;
-        if !platform_owns_startup_stderr() {
-            return;
-        }
-        let tmp = tempfile::tempdir().unwrap();
-        let local = tmp.path().join("Local");
-        let roaming = tmp.path().join("Roaming");
-        std::fs::create_dir_all(&local).unwrap();
-        std::fs::create_dir_all(&roaming).unwrap();
-        let daemon_error = r"库目录不存在：C:\Users\x\Pictures\P-Pass 家庭照片库——外置盘未挂载";
-
-        let saved: Vec<_> = ["LOCALAPPDATA", "APPDATA"]
-            .iter()
-            .map(|k| (*k, std::env::var_os(k)))
-            .collect();
-        std::env::set_var("LOCALAPPDATA", &local);
-        std::env::set_var("APPDATA", &roaming);
-        let a = platform::adapter();
-        let err_file = a.startup_stderr_file(&a.data_dir()).unwrap();
-        std::fs::create_dir_all(err_file.parent().unwrap()).unwrap();
-        std::fs::write(&err_file, format!("panic noise\n{daemon_error}\r\n\r\n")).unwrap();
-        let got = daemon_startup_error();
+        let got = err_file.as_ref().map(|f| {
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            // 尾部空行 + 前面的正常输出：命令要给出**最后一行非空**的那条。
+            std::fs::write(f, format!("starting daemon\n{daemon_error}\r\n\r\n")).unwrap();
+            // 命令本体，无参——与渲染进程 `invoke("daemon_startup_error")` 同一条路。
+            daemon_startup_error()
+        });
         for (k, v) in saved {
             match v {
                 Some(v) => std::env::set_var(k, v),
                 None => std::env::remove_var(k),
             }
         }
-
+        let Some(err_file) = err_file else {
+            return; // 本平台没有 stderr 落点（headless Linux 交给 systemd）。
+        };
         assert!(err_file.starts_with(tmp.path()), "{}", err_file.display());
-        assert_eq!(got.as_deref(), Some(daemon_error));
+        assert_eq!(got.flatten().as_deref(), Some(daemon_error));
     }
 
     #[test]
@@ -2926,20 +2863,54 @@ mod tests {
         let daemon_error =
             "Error: migration: migration 2 was previously applied but is missing in the resolved migrations";
         std::fs::write(&stderr, format!("starting daemon\n{daemon_error}\n")).unwrap();
-        let plist = tmp.path().join("com.p-pass.daemon.plist");
-        std::fs::write(
-            &plist,
-            format!(
-                "<plist><dict><key>StandardErrorPath</key><string>{}</string></dict></plist>",
-                stderr.display()
-            ),
-        )
-        .unwrap();
-
+        let paths = platform::DaemonLogPaths {
+            stderr: Some(stderr),
+            ..Default::default()
+        };
         assert_eq!(
-            daemon_startup_stderr_from(&plist).as_deref(),
+            daemon_startup_error_in(&paths).as_deref(),
             Some(daemon_error)
         );
+        // 没有落点 / 文件不在：如实 None，不编原因。
+        assert_eq!(
+            daemon_startup_error_in(&platform::DaemonLogPaths::default()),
+            None
+        );
+        let missing = platform::DaemonLogPaths {
+            stderr: Some(tmp.path().join("nope.err")),
+            ..Default::default()
+        };
+        assert_eq!(daemon_startup_error_in(&missing), None);
+    }
+
+    /// #1043：服务管理器接的 stdio 只在登记了常驻服务时算数（= 改前「plist 在
+    /// 才有路径」）；daemon 自己接的 stderr（Windows）不算服务管理器那对。
+    /// 反证：去掉 `service_registered` 判据 → 第二条红；去掉
+    /// `stdio_by_service_manager` 判据 → 第三条红。
+    #[test]
+    fn service_stdio_paths_need_a_registered_service_manager() {
+        let launchd = platform::DaemonLogPaths {
+            log_file: Some("/d/logs/daemon.log".into()),
+            stdout: Some("/h/Library/Logs/p-pass-daemon.log".into()),
+            stderr: Some("/h/Library/Logs/p-pass-daemon.err".into()),
+            stdio_by_service_manager: true,
+        };
+        assert_eq!(
+            service_stdio_paths(&launchd, true),
+            (launchd.stdout.clone(), launchd.stderr.clone())
+        );
+        assert_eq!(service_stdio_paths(&launchd, false), (None, None));
+        let self_captured = platform::DaemonLogPaths {
+            stderr: Some(r"C:\d\logs\daemon.err".into()),
+            stdio_by_service_manager: false,
+            ..launchd.clone()
+        };
+        assert_eq!(service_stdio_paths(&self_captured, true), (None, None));
+    }
+
+    /// 没登记常驻服务时的日志落点：适配器按注入的数据目录算。
+    fn unregistered_log_paths(platform_dir: &std::path::Path) -> platform::DaemonLogPaths {
+        platform::adapter().daemon_log_paths(platform_dir)
     }
 
     /// DESK-10 硬判据：**daemon 不可达时点导出也必须出 zip**，且包里有
@@ -2947,8 +2918,8 @@ mod tests {
     /// daemon 不可达就 `return Err`（= 退回"走 daemon IPC"的老行为），
     /// 本测试立刻变红。
     ///
-    /// 全程 tempdir：假 plist + 假日志 + 假 config，不碰真实照片库、
-    /// 不碰真实 LaunchAgent。
+    /// 全程 tempdir：注入的日志落点 + 假日志 + 假 config，不碰真实照片库、
+    /// 不碰真实服务登记。
     #[test]
     fn export_bundles_logs_even_when_the_daemon_is_unreachable() {
         let tmp = tempfile::tempdir().unwrap();
@@ -2966,18 +2937,6 @@ mod tests {
         let out_log = logs.join("p-pass-daemon.log");
         std::fs::write(&out_log, format!("library {} ready\n", home.display())).unwrap();
 
-        let plist = tmp.path().join("com.p-pass.daemon.plist");
-        std::fs::write(
-            &plist,
-            format!(
-                "<plist><dict>\n<key>StandardOutPath</key><string>{}</string>\n\
-                 <key>StandardErrorPath</key><string>{}</string>\n</dict></plist>\n",
-                out_log.display(),
-                err_log.display()
-            ),
-        )
-        .unwrap();
-
         let platform_dir = tmp.path().join("support");
         let library = tmp.path().join("library");
         std::fs::create_dir_all(&platform_dir).unwrap();
@@ -2990,10 +2949,17 @@ mod tests {
         )
         .unwrap();
 
+        // 服务管理器接的那对 stdio（macOS LaunchAgent 的形态），且已登记。
         let env = ExportEnv {
+            log_paths: platform::DaemonLogPaths {
+                log_file: Some(platform_dir.join("logs").join("daemon.log")),
+                stdout: Some(out_log.clone()),
+                stderr: Some(err_log.clone()),
+                stdio_by_service_manager: true,
+            },
+            service_registered: true,
             platform_dir,
             home: home.clone(),
-            plist,
             app_version: TEST_APP_VERSION.to_string(),
         };
         let res = assemble_export(
@@ -3046,11 +3012,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let platform_dir = tmp.path().join("support");
         std::fs::create_dir_all(&platform_dir).unwrap();
+        // 没登记常驻服务 → 如实记"未注册"，不猜 ~/Library/Logs。
         let env = ExportEnv {
+            log_paths: unregistered_log_paths(&platform_dir),
+            service_registered: false,
             platform_dir: platform_dir.clone(),
             home: tmp.path().join("home"),
-            // plist 不存在 → 如实记"未注册"，不猜 ~/Library/Logs。
-            plist: tmp.path().join("missing.plist"),
             app_version: TEST_APP_VERSION.to_string(),
         };
         let parts = DaemonParts {
@@ -3088,10 +3055,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let platform_dir = tmp.path().join("support");
         std::fs::create_dir_all(&platform_dir).unwrap();
+        // 没登记常驻服务 → 如实记"未注册"，不猜 ~/Library/Logs。
         let env = ExportEnv {
+            log_paths: unregistered_log_paths(&platform_dir),
+            service_registered: false,
             platform_dir,
             home: tmp.path().join("home"),
-            plist: tmp.path().join("missing.plist"),
             app_version: TEST_APP_VERSION.to_string(),
         };
         let collection = DaemonCollection::LogsUnavailable {
@@ -3151,10 +3120,12 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let platform_dir = tmp.path().join("support");
         std::fs::create_dir_all(&platform_dir).unwrap();
+        // 没登记常驻服务 → 如实记"未注册"，不猜 ~/Library/Logs。
         let env = ExportEnv {
+            log_paths: unregistered_log_paths(&platform_dir),
+            service_registered: false,
             platform_dir,
             home: tmp.path().join("home"),
-            plist: tmp.path().join("missing.plist"),
             app_version: TEST_APP_VERSION.to_string(),
         };
         let res = assemble_export(
@@ -3188,10 +3159,12 @@ mod tests {
         let platform_dir = tmp.path().join("support");
         std::fs::create_dir_all(&platform_dir).unwrap();
         let home = tmp.path().join("home");
+        // 没登记常驻服务 → 如实记"未注册"，不猜 ~/Library/Logs。
         let env = ExportEnv {
+            log_paths: unregistered_log_paths(&platform_dir),
+            service_registered: false,
             platform_dir,
             home: home.clone(),
-            plist: tmp.path().join("missing.plist"),
             app_version: TEST_APP_VERSION.to_string(),
         };
         let weird_version = format!("9.9.9-fake+{}", home.display());

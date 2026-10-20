@@ -460,12 +460,17 @@ fn pair_link_never_printed_when_stdout_is_not_a_terminal() {
     assert!(hits.is_empty(), "数据目录里的文件含配对链接: {hits:?}");
 }
 
-/// DESK-58 (#875)：本平台给了 stderr 固定落点（Windows）时就是它；`None` =
-/// stderr 由托管方负责（macOS 的 launchd），daemon 不自己接。按能力分支，
-/// 不写 `#[cfg]`（arch-check B.2：平台分叉只在 crates/platform）。
-fn startup_stderr_file(data_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+/// DESK-58 (#875)：本平台的 stderr 由 daemon 自己接（Windows）时就是那个落点；
+/// `None` = stderr 由服务管理器负责（macOS 的 launchd），daemon 不自己接。按
+/// 能力分支，不写 `#[cfg]`（arch-check B.2：平台分叉只在 crates/platform）。
+fn daemon_captured_stderr(data_dir: &std::path::Path) -> Option<std::path::PathBuf> {
     use platform::PlatformAdapter as _;
-    platform::adapter().startup_stderr_file(data_dir)
+    let paths = platform::adapter().daemon_log_paths(data_dir);
+    if paths.stdio_by_service_manager {
+        None
+    } else {
+        paths.stderr
+    }
 }
 
 /// DESK-58 (#875)：Windows 上 stderr 没人接（壳的一次性 spawn 给的是 `NUL`，
@@ -480,7 +485,7 @@ fn startup_stderr_file(data_dir: &std::path::Path) -> Option<std::path::PathBuf>
 fn desk58_early_error_lands_in_daemon_err_when_stderr_is_null() {
     use std::process::Stdio;
     let dir = tempfile::tempdir().expect("tempdir");
-    let Some(err_file) = startup_stderr_file(dir.path()) else {
+    let Some(err_file) = daemon_captured_stderr(dir.path()) else {
         return; // 本平台 stderr 由托管方接，daemon 不负责。
     };
     let status = daemon_bin()
@@ -515,7 +520,7 @@ fn desk58_a_piped_stderr_is_left_alone() {
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("PPF_LOG_FILE="), "stderr: {stderr}");
-    if let Some(f) = startup_stderr_file(dir.path()) {
+    if let Some(f) = daemon_captured_stderr(dir.path()) {
         assert!(!f.exists(), "管道 stderr 被改接到了 {}", f.display());
     }
 }

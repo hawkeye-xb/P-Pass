@@ -185,6 +185,26 @@ pub struct VolumeStats {
     pub total: u64,
 }
 
+/// #1043：daemon 日志落在哪（[`PlatformAdapter::daemon_log_paths`]）。
+///
+/// 路径是「应该在哪」，不保证文件已存在——读的一方自己处理读不到。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DaemonLogPaths {
+    /// daemon 自己写的运行日志（tracing；`PPF_LOG_FILE` 未设时）。`None` =
+    /// 本平台不落盘。
+    pub log_file: Option<PathBuf>,
+    /// 启动早期 stderr 的落点（文件日志之前的报错、`main` 返回的 `Err`、panic），
+    /// 尾行就是「为什么没起来」。
+    pub stderr: Option<PathBuf>,
+    /// 托管方接住的 stdout。
+    pub stdout: Option<PathBuf>,
+    /// `stdout`/`stderr` 是不是**服务管理器**接的（macOS launchd 的
+    /// `StandardOutPath`/`StandardErrorPath`）：是 = 只有登记了常驻服务、由它
+    /// 拉起的实例才写这两份；否 = daemon 自己接（Windows 的 `logs\daemon.err`，
+    /// 见 [`PlatformAdapter::capture_unattached_stderr`]）。
+    pub stdio_by_service_manager: bool,
+}
+
 /// DESK-16 (#165)：系统缩略图器产出的一帧，**未编码的 RGBA 像素**。
 ///
 /// 为什么不返回「写好的 PNG 文件路径」：那样本 crate 就得带一个图像编码
@@ -347,16 +367,6 @@ pub trait PlatformAdapter: Send + Sync {
     fn migrate_legacy_data_dir(&self) -> DataDirMigration {
         DataDirMigration::NothingToDo
     }
-    /// DEVLOG-02：daemon 在 `PPF_LOG_FILE` 未设时的**平台默认**日志文件。
-    ///
-    /// Windows 必须返回 `Some`：HKCU Run 键没有任何重定向能力，release 又不再
-    /// 分配控制台，不落盘就等于没有日志。
-    ///
-    /// macOS 也返回 `Some`（DIAG-B1）：原先指望 launchd plist 的
-    /// `StandardErrorPath`，但桌面壳还有好几条一次性 spawn 路径（注册失败兜底、
-    /// 更新后恢复、重启）把 stdio 全接到 `/dev/null`——真机上 0.6.0 的 daemon
-    /// 就是这么跑的，日志整段丢失。daemon 在 macOS 上**同时**写这个文件和
-    /// stderr（后者留给向导读启动错误），见 main.rs。
     /// DAE-05：`path` 所在卷的容量水位。`None` = 本平台没有实现（调用方
     /// 应当序列化成 null，而不是编一个数字出来）。
     ///
@@ -397,40 +407,38 @@ pub trait PlatformAdapter: Send + Sync {
         None
     }
 
+    /// #1043：daemon 日志的**全部落点**，一处回答（合并了原先的
+    /// `default_log_file` 与 `startup_stderr_file`）。daemon 写、壳读（向导报
+    /// 启动失败、诊断包、一次性 spawn 接 stdio）用的是这同一个函数，壳不再
+    /// 读 launchd plist 反推路径。
+    ///
     /// 入参是**生效的** data dir（由调用方解析 env / 平台约定后给出），
     /// 因为一次性 daemon 靠 `PPF_DATA_DIR` 做隔离，日志不跟着走就会污染
-    /// 真实日志文件。默认实现返回 `None`——既无 launchd 托管也无 Run 键的
-    /// 平台自己决定。
+    /// 真实日志文件。
     ///
-    /// 默认实现 = `<data_dir>/logs/daemon.log`（macOS 与 Windows 同构，轮转出
-    /// `daemon.log.1`）。跟着入参 data dir 走，`PPF_DATA_DIR` 隔离的一次性
-    /// daemon 不会写进用户真实日志。不落盘的平台（无桌面托管的 Linux）覆盖成 `None`。
-    fn default_log_file(&self, data_dir: &std::path::Path) -> Option<PathBuf> {
-        Some(data_dir.join("logs").join("daemon.log"))
+    /// 默认实现：`log_file` = `<data_dir>/logs/daemon.log`（macOS 与 Windows
+    /// 同构，轮转出 `daemon.log.1`），没有托管方接的 stdio。
+    /// - DEVLOG-02：Windows 必须有 `log_file`——计划任务 / Run 键没有任何
+    ///   重定向能力，release 又不再分配控制台，不落盘就等于没有日志。
+    /// - DIAG-B1：macOS 也要有——桌面壳有好几条一次性 spawn 路径把 stdio 接到
+    ///   `/dev/null`，只靠 launchd 的 `StandardErrorPath` 时 0.6.0 的日志整段丢失。
+    /// - 不落盘的平台（无桌面托管的 Linux）覆盖成 `log_file: None`。
+    fn daemon_log_paths(&self, data_dir: &std::path::Path) -> DaemonLogPaths {
+        DaemonLogPaths {
+            log_file: Some(data_dir.join("logs").join("daemon.log")),
+            ..DaemonLogPaths::default()
+        }
     }
 
-    /// DIAG-B1：写 [`default_log_file`](Self::default_log_file) 时是否**同时**照旧写
+    /// DIAG-B1：写 [`DaemonLogPaths::log_file`] 时是否**同时**照旧写
     /// stderr。macOS 为 true：launchd 托管时 stderr 是 `.err`，桌面向导读它的最后
     /// 一行报启动失败（DESK-09）。默认 false（Windows release 没有控制台可写）。
     fn default_log_tees_stderr(&self) -> bool {
         false
     }
 
-    /// DESK-58 (#875)：daemon 启动早期报错（文件日志之前的 `eprintln!`、`main`
-    /// 返回的 `Err`、panic）的**固定落点**。`None` = 由托管方接 stderr（macOS 的
-    /// launchd `StandardErrorPath`，壳从 plist 里读路径）。
-    ///
-    /// Windows 必须返回 `Some`：Run 键和壳的一次性 spawn 都不给 stderr 去处，
-    /// 不落盘的话「库目录不存在」这类原话谁都看不到，向导只能说「请检查日志」。
-    /// daemon 写（[`Self::capture_unattached_stderr`]）、壳读（向导 + 诊断包）
-    /// 用的是这同一个函数，路径只有一份。
-    fn startup_stderr_file(&self, data_dir: &std::path::Path) -> Option<PathBuf> {
-        let _ = data_dir;
-        None
-    }
-
     /// DESK-58 (#875)：本进程的 stderr **没人接**时，把它改接到
-    /// [`Self::startup_stderr_file`]（每次启动截断重写）。
+    /// [`DaemonLogPaths::stderr`]（每次启动截断重写）。
     ///
     /// 「没人接」只指：没有 stderr 句柄，或者接的是空设备（`NUL`）。控制台、
     /// 管道、磁盘文件都是有人**刻意**接的（终端前台、测试框架、手工重定向），
@@ -892,8 +900,8 @@ impl PlatformAdapter for HeadlessAdapter {
         }
     }
     /// 无桌面托管的 Linux：日志交给 stderr（systemd / Docker 接），不另写文件。
-    fn default_log_file(&self, _data_dir: &std::path::Path) -> Option<PathBuf> {
-        None
+    fn daemon_log_paths(&self, _data_dir: &std::path::Path) -> DaemonLogPaths {
+        DaemonLogPaths::default()
     }
     fn restrict_to_owner(&self, path: &std::path::Path) -> Result<Applied> {
         #[cfg(unix)]

@@ -182,7 +182,7 @@ async fn main() -> anyhow::Result<()> {
             } else {
                 daemon::log_guard::DedupGuard::for_file
             };
-            match platform::adapter().default_log_file(&base) {
+            match platform::adapter().daemon_log_paths(&base).log_file {
                 Some(path) => match open(&path) {
                     Ok(guard) => guard,
                     Err(e) => {

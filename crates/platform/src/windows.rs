@@ -689,11 +689,19 @@ impl PlatformAdapter for WindowsAdapter {
         })
     }
 
-    /// DESK-58 (#875)：与 `daemon.log` 同目录、分开放——`daemon.log` 是
-    /// tracing 的完整运行日志，这份只装 tracing 接不住的东西（文件日志之前的
-    /// 报错、`main` 返回的 `Err`、panic），尾行就是「为什么没起来」。
-    fn startup_stderr_file(&self, data_dir: &Path) -> Option<PathBuf> {
-        Some(data_dir.join("logs").join("daemon.err"))
+    /// DESK-58 (#875)：stderr 落在与 `daemon.log` 同目录的 `daemon.err`——
+    /// `daemon.log` 是 tracing 的完整运行日志，这份只装 tracing 接不住的东西
+    /// （文件日志之前的报错、`main` 返回的 `Err`、panic），尾行就是「为什么没
+    /// 起来」。由 daemon 自己接（[`Self::capture_unattached_stderr`]），不是
+    /// 服务管理器接；没有托管方接的 stdout。
+    fn daemon_log_paths(&self, data_dir: &Path) -> crate::DaemonLogPaths {
+        let logs = data_dir.join("logs");
+        crate::DaemonLogPaths {
+            log_file: Some(logs.join("daemon.log")),
+            stderr: Some(logs.join("daemon.err")),
+            stdout: None,
+            stdio_by_service_manager: false,
+        }
     }
 
     /// DESK-58 (#875)：Run 键（登录时 explorer 拉起）和壳的一次性 spawn 都把
@@ -713,7 +721,7 @@ impl PlatformAdapter for WindowsAdapter {
         if !stderr_needs_capture(classify_own_stderr()) {
             return crate::Applied::NotApplicable;
         }
-        let Some(path) = self.startup_stderr_file(data_dir) else {
+        let Some(path) = self.daemon_log_paths(data_dir).stderr else {
             return crate::Applied::NotApplicable;
         };
         if let Some(dir) = path.parent() {
@@ -2483,14 +2491,14 @@ mod desk58_stderr_capture_tests {
     fn the_startup_stderr_file_sits_next_to_the_daemon_log() {
         let dir = Path::new(r"C:\data");
         let a = WindowsAdapter::new();
+        let paths = a.daemon_log_paths(dir);
+        assert_eq!(paths.stderr, Some(dir.join("logs").join("daemon.err")));
         assert_eq!(
-            a.startup_stderr_file(dir),
-            Some(dir.join("logs").join("daemon.err"))
+            paths.stderr.as_deref().unwrap().parent(),
+            paths.log_file.as_deref().unwrap().parent()
         );
-        assert_eq!(
-            a.startup_stderr_file(dir).unwrap().parent(),
-            a.default_log_file(dir).unwrap().parent()
-        );
+        assert_eq!(paths.stdout, None);
+        assert!(!paths.stdio_by_service_manager, "daemon 自己接 stderr");
     }
 }
 

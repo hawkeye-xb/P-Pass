@@ -56,15 +56,26 @@ pub(crate) fn agent_plist(exec: &Path) -> String {
     <dict>
         <key>SuccessfulExit</key><false/>
     </dict>
-    <key>StandardOutPath</key><string>{}/Library/Logs/p-pass-daemon.log</string>
-    <key>StandardErrorPath</key><string>{}/Library/Logs/p-pass-daemon.err</string>
+    <key>StandardOutPath</key><string>{}</string>
+    <key>StandardErrorPath</key><string>{}</string>
 </dict>
 </plist>
 "#,
         exec.display(),
-        home().display(),
-        home().display(),
+        agent_stdout_path().display(),
+        agent_stderr_path().display(),
     )
+}
+
+/// daemon LaunchAgent 的 `StandardOutPath`。#1043：plist 生成与
+/// [`MacosAdapter::daemon_log_paths`] 共用这一份，壳不再解析 plist 反推。
+fn agent_stdout_path() -> PathBuf {
+    home().join("Library/Logs/p-pass-daemon.log")
+}
+
+/// daemon LaunchAgent 的 `StandardErrorPath`（同上）。
+fn agent_stderr_path() -> PathBuf {
+    home().join("Library/Logs/p-pass-daemon.err")
 }
 
 /// 【DESK-42 #604】从（我们自己生成的）plist 文本里取出 `ProgramArguments`
@@ -300,6 +311,17 @@ impl PlatformAdapter for MacosAdapter {
 
     fn data_dir(&self) -> PathBuf {
         home().join("Library/Application Support/P-Pass")
+    }
+
+    /// launchd 接 stdio（与 [`agent_plist`] 同一份路径）；运行日志用默认的
+    /// `<data_dir>/logs/daemon.log`。
+    fn daemon_log_paths(&self, data_dir: &Path) -> crate::DaemonLogPaths {
+        crate::DaemonLogPaths {
+            log_file: Some(data_dir.join("logs").join("daemon.log")),
+            stdout: Some(agent_stdout_path()),
+            stderr: Some(agent_stderr_path()),
+            stdio_by_service_manager: true,
+        }
     }
 
     fn default_log_tees_stderr(&self) -> bool {
@@ -690,15 +712,27 @@ mod diag_log_tests {
     use super::*;
 
     // DIAG-B1：macOS daemon 日志落在固定位置、跟着 data dir 走（PPF_DATA_DIR 隔离不漏），且 tee stderr。
-    // 反证：default_log_file 退回 None（改动前）→ 一次性 spawn 的 daemon 没有任何日志，红。
+    // 反证：log_file 退回 None（DIAG-B1 之前）→ 一次性 spawn 的 daemon 没有任何日志，红。
     #[test]
     fn daemon_log_lives_under_the_effective_data_dir_and_tees_stderr() {
         let adapter = MacosAdapter;
         let dir = Path::new("/var/ppf-isolated");
-        assert_eq!(
-            adapter.default_log_file(dir),
-            Some(dir.join("logs").join("daemon.log"))
-        );
+        let paths = adapter.daemon_log_paths(dir);
+        assert_eq!(paths.log_file, Some(dir.join("logs").join("daemon.log")));
+        // #1043：launchd 接的那对与生成的 plist 逐字一致——壳读这里，不再解析 plist。
+        let plist = agent_plist(Path::new(
+            "/Applications/P-Pass.app/Contents/MacOS/ppf-daemon",
+        ));
+        let (out, err) = (paths.stdout.unwrap(), paths.stderr.unwrap());
+        assert!(plist.contains(&format!(
+            "<key>StandardOutPath</key><string>{}</string>",
+            out.display()
+        )));
+        assert!(plist.contains(&format!(
+            "<key>StandardErrorPath</key><string>{}</string>",
+            err.display()
+        )));
+        assert!(paths.stdio_by_service_manager);
         assert!(adapter.default_log_tees_stderr());
     }
 }

@@ -1,18 +1,12 @@
 //! Daemon log access from the shell — DESK-10（诊断包由桌面壳本地组装，
 //! daemon 挂着照样能导出）用的一层。
 //!
-//! 铁律一条，真机事故换来的：**日志路径从 LaunchAgent plist 读，不硬编码**。
-//! plist 的 `StandardOutPath` / `StandardErrorPath` 是唯一真相；plist 不在
-//! （没注册成常驻服务）就如实说"没注册"，不去猜 `~/Library/Logs`。
+//! 日志路径不硬编码、不解析 plist：全部问平台适配器的
+//! `daemon_log_paths()`（#1043）——macOS 上那对路径与生成 LaunchAgent 时写进
+//! 去的是同一份，「没注册成常驻服务」由托管能力 `autostart_installed()` 回答。
 
 use std::io::{Read as _, Seek as _, SeekFrom};
 use std::path::{Path, PathBuf};
-
-/// LaunchAgent plist（macOS 常驻服务的唯一登记处，label 与
-/// `crates/platform/src/macos.rs` 的 `AGENT_LABEL` 一致）。
-pub fn plist_path() -> PathBuf {
-    home_dir().join("Library/LaunchAgents/com.p-pass.daemon.plist")
-}
 
 /// 家目录由平台适配器回答（#1043）；读不到时退回 `.`（与改前同一口径）。
 pub fn home_dir() -> PathBuf {
@@ -20,28 +14,6 @@ pub fn home_dir() -> PathBuf {
     platform::adapter()
         .home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-}
-
-/// plist 里的 stdout / stderr 路径。纯函数——单测直接喂 plist 文本。
-///
-/// 只认 `<key>X</key><string>path</string>` 这种紧挨着的写法（我们自己
-/// 生成的 plist 就是这么写的），跨行的也认（key 与 string 之间只允许
-/// 空白）。认不出来 = 返回 None，调用方如实报"读不到"，不猜路径。
-pub fn parse_plist_log_paths(xml: &str) -> (Option<String>, Option<String>) {
-    (
-        plist_string_value(xml, "StandardOutPath"),
-        plist_string_value(xml, "StandardErrorPath"),
-    )
-}
-
-fn plist_string_value(xml: &str, key: &str) -> Option<String> {
-    let needle = format!("<key>{key}</key>");
-    let rest = &xml[xml.find(&needle)? + needle.len()..];
-    let rest = rest.trim_start();
-    let rest = rest.strip_prefix("<string>")?;
-    let end = rest.find("</string>")?;
-    let val = rest[..end].trim();
-    (!val.is_empty()).then(|| val.to_string())
 }
 
 /// 文件当前长度（读不到 = 0，等价于"还没有任何输出"）。
@@ -195,7 +167,8 @@ pub struct BundleInputs {
     /// 与 `daemon_unreachable` 互斥：前者服务活着，排查路径完全不同。
     pub daemon_logs_unavailable: Option<String>,
     pub config_toml: Option<String>,
-    /// plist 是否存在（不存在 = 没注册成常驻服务，也就没有日志路径）。
+    /// stdout/stderr 由服务管理器（launchd）接、且已登记常驻服务（否则没有
+    /// 这两份日志可读）。
     pub plist_found: bool,
     pub stdout_path: Option<String>,
     pub stderr_path: Option<String>,
@@ -275,7 +248,11 @@ pub fn build_bundle(i: &BundleInputs) -> Vec<(String, Vec<u8>)> {
             .map(|v| scrub(v, home))
             .unwrap_or("(读不到)".into()),
         reachable,
-        std::env::consts::OS,
+        {
+            // #1043（G5）：平台名由适配器回答（与 std::env::consts::OS 同值）。
+            use platform::PlatformAdapter as _;
+            platform::adapter().platform_name()
+        },
     );
     entries.push(("versions.txt".into(), versions.into_bytes()));
     entries.push((
@@ -507,37 +484,6 @@ mod tests {
         assert!(out.contains("解析失败"), "{out}");
         assert!(out.contains("第 2 行"), "{out}");
         assert!(!out.contains("alice"), "{out}");
-    }
-
-    const PLIST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0">
-<dict>
-    <key>Label</key><string>com.p-pass.daemon</string>
-    <key>StandardOutPath</key><string>/Users/someone/Library/Logs/p-pass-daemon.log</string>
-    <key>StandardErrorPath</key><string>/Users/someone/Library/Logs/p-pass-daemon.err</string>
-</dict>
-</plist>
-"#;
-
-    // DESK-10: 日志路径必须从 plist 读出来（不硬编码 ~/Library/Logs）。
-    #[test]
-    fn plist_log_paths_come_from_the_plist() {
-        let (out, err) = parse_plist_log_paths(PLIST);
-        assert_eq!(
-            out.as_deref(),
-            Some("/Users/someone/Library/Logs/p-pass-daemon.log")
-        );
-        assert_eq!(
-            err.as_deref(),
-            Some("/Users/someone/Library/Logs/p-pass-daemon.err")
-        );
-    }
-
-    // plist 里没这两个 key（或压根不是我们的 plist）→ 老实说读不到。
-    #[test]
-    fn plist_without_log_keys_reads_nothing() {
-        let (out, err) = parse_plist_log_paths("<plist><dict></dict></plist>");
-        assert!(out.is_none() && err.is_none());
     }
 
     // DESK-10 硬判据：daemon 不可达时也必须出包，且含 .err/.log 与版本。
