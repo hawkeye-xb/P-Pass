@@ -4,10 +4,13 @@ use sqlx::Row;
 
 use crate::{Db, Result};
 
-/// Device role (§5 CHECK constraint mirrors this enum).
+/// Device role. #1050: `Owner` is retired — no code path ever created an
+/// owner row (the owner acts through the desktop UI/IPC, not as a network
+/// peer). The §5 CHECK constraint in migration 0001 still lists `'owner'`;
+/// migrations are append-only and narrowing a CHECK in SQLite means
+/// rebuilding the table for no behavioural gain, so it stays as dead slack.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
-    Owner,
     Member,
     Viewer,
 }
@@ -15,7 +18,6 @@ pub enum Role {
 impl Role {
     pub fn as_str(self) -> &'static str {
         match self {
-            Role::Owner => "owner",
             Role::Member => "member",
             Role::Viewer => "viewer",
         }
@@ -23,10 +25,9 @@ impl Role {
 
     fn from_db(s: &str) -> Role {
         match s {
-            "owner" => Role::Owner,
             "member" => Role::Member,
-            // The CHECK constraint admits exactly three values; anything
-            // else cannot have been inserted through this repo.
+            // Least privilege for anything else (`viewer`, or a stray
+            // `owner` that no code in this repo ever wrote).
             _ => Role::Viewer,
         }
     }
@@ -435,7 +436,7 @@ mod tests {
     #[tokio::test]
     async fn upsert_list_and_revoke_is_reflected() {
         let db = Db::open_in_memory().await.unwrap();
-        db.upsert_device(&device(1, Role::Owner)).await.unwrap();
+        db.upsert_device(&device(1, Role::Member)).await.unwrap();
         db.upsert_device(&device(2, Role::Viewer)).await.unwrap();
 
         let devices = db.list_devices(true).await.unwrap();
@@ -541,7 +542,7 @@ mod tests {
         // DESK-02②: 家人与设备列表只展示在用设备——被移除/吊销的设备
         // 不再挂着（审计流有 device.revoked/unpaired 历史可查）。
         let db = Db::open_in_memory().await.unwrap();
-        db.upsert_device(&device(1, Role::Owner)).await.unwrap();
+        db.upsert_device(&device(1, Role::Member)).await.unwrap();
         db.upsert_device(&device(2, Role::Viewer)).await.unwrap();
         assert!(db
             .revoke(&[2u8; 32], RevokedBy::Owner, 1_700_000_000_000)
@@ -566,7 +567,7 @@ mod tests {
     #[tokio::test]
     async fn the_family_view_keeps_self_disconnected_devices_and_hides_owner_removed_ones() {
         let db = Db::open_in_memory().await.unwrap();
-        db.upsert_device(&device(1, Role::Owner)).await.unwrap();
+        db.upsert_device(&device(1, Role::Member)).await.unwrap();
         db.upsert_device(&device(2, Role::Member)).await.unwrap();
         db.upsert_device(&device(3, Role::Member)).await.unwrap();
 
@@ -717,7 +718,7 @@ mod tests {
     #[tokio::test]
     async fn watermark_roundtrip_and_advance() {
         let db = Db::open_in_memory().await.unwrap();
-        db.upsert_device(&device(1, Role::Owner)).await.unwrap();
+        db.upsert_device(&device(1, Role::Member)).await.unwrap();
 
         assert_eq!(db.get_watermark(&[1u8; 32]).await.unwrap(), None);
         db.set_watermark(&[1u8; 32], 100, 1_753_770_000_000)

@@ -2,6 +2,9 @@
 //! gate, status, device management, pairing confirmation) and the
 //! logs.export zip carries no real user paths.
 
+mod common;
+
+use common::PairingExt;
 use std::sync::Arc;
 
 use daemon::{DiagAgg, IpcServer, Pairing};
@@ -524,7 +527,7 @@ async fn pairing_start_and_confirm_over_ipc() {
         let pairing = pairing.clone();
         tokio::spawn(async move {
             pairing
-                .handle_request(
+                .submit_and_wait(
                     transport::NodeId([0xDD; 32]),
                     &proto::PairRequest {
                         token: pairing_token,
@@ -587,7 +590,7 @@ async fn pairing_pending_lists_all_waiting_then_confirm_by_name() {
         let name = name.to_string();
         tokio::spawn(async move {
             pairing
-                .handle_request(
+                .submit_and_wait(
                     transport::NodeId([0xE0 + i as u8; 32]),
                     &proto::PairRequest {
                         token,
@@ -998,7 +1001,7 @@ async fn subscription_delivers_pending_change_under_100ms() {
     assert!(resp.ok, "{resp:?}");
     assert_eq!(resp.result.unwrap()["subscribed"], true);
 
-    // 注入配对请求：真实 pending 入队链路（handle_request 在 owner
+    // 注入配对请求：真实 pending 入队链路（submit_and_wait 在 owner
     // 决策前入队——spawn 后挂住在 decision 上，confirm 才收尾）。
     let qr = pairing.start([0x11; 12], now() + 60_000);
     assert!(qr.contains("t=111111111111111111111111"));
@@ -1011,7 +1014,7 @@ async fn subscription_delivers_pending_change_under_100ms() {
     let peer = transport::NodeId([0xBB; 32]);
     let pairing2 = pairing.clone();
     let handle = tokio::spawn(async move {
-        let _ = pairing2.handle_request(peer, &pair_req, now() + 1).await;
+        let _ = pairing2.submit_and_wait(peer, &pair_req, now() + 1).await;
     });
 
     let t0 = std::time::Instant::now();
@@ -1023,7 +1026,7 @@ async fn subscription_delivers_pending_change_under_100ms() {
         "事件延迟 {elapsed:?} 应 <100ms（对照轮询 3s）"
     );
 
-    // 收尾：confirm 让 handle_request 结束，避免悬空 task。
+    // 收尾：confirm 让 submit_and_wait 结束，避免悬空 task。
     let mut c2 = IpcClient::connect(&socket, &token).await;
     let resp = c2
         .call(
@@ -1064,7 +1067,7 @@ async fn subscription_filter_blocks_unwanted_event_types() {
     let pairing2 = pairing.clone();
     let handle = tokio::spawn(async move {
         let _ = pairing2
-            .handle_request(transport::NodeId([0xBC; 32]), &pair_req, now() + 1)
+            .submit_and_wait(transport::NodeId([0xBC; 32]), &pair_req, now() + 1)
             .await;
     });
 
@@ -1113,10 +1116,10 @@ async fn unsubscribe_closes_subscription_connection() {
     let pairing2 = pairing.clone();
     let handle = tokio::spawn(async move {
         let _ = pairing2
-            .handle_request(transport::NodeId([0xBD; 32]), &pair_req, now() + 1)
+            .submit_and_wait(transport::NodeId([0xBD; 32]), &pair_req, now() + 1)
             .await;
     });
-    // 让事件发送路径跑完（sleep 后 handle_request 仍在等 decision——无妨）。
+    // 让事件发送路径跑完（sleep 后 submit_and_wait 仍在等 decision——无妨）。
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     let mut c2 = IpcClient::connect(&socket, &token).await;
     let resp = c2
@@ -1339,7 +1342,7 @@ async fn devices_list_keeps_self_disconnected_and_hides_owner_removed() {
 /// 这里两台手机**自报同一个名字**——真机上就是这样（同型号默认名），
 /// 也正因如此，确认必须按 `node_id` 定位：按名字找会命中错的那台。
 ///
-/// 反证：把 `handle_request` 的 `name` 改回无条件
+/// 反证：把 `submit_and_wait` 的 `name` 改回无条件
 /// `safe_name(&req.device_name)`，「改过的名字必须活下来」立刻变红；
 /// 把 `pending_summary` 改回只传 `{name}`，「known」那几条全红。
 #[tokio::test(flavor = "multi_thread")]
@@ -1381,7 +1384,7 @@ async fn pairing_pending_knows_a_returning_device_by_node_id() {
         let pairing = pairing.clone();
         tokio::spawn(async move {
             pairing
-                .handle_request(
+                .submit_and_wait(
                     transport::NodeId([node; 32]),
                     &proto::PairRequest {
                         token,
@@ -1454,7 +1457,7 @@ async fn pairing_pending_knows_a_returning_device_by_node_id() {
     assert_eq!(left[0]["node_id"], "e0".repeat(32), "处理错了台: {left:?}");
 
     // 重连落定后，改过的名字必须活下来，首次配对时间不被重置。
-    // `confirm` 只是把决定投给 handle_request，落库在它那一侧——等写完
+    // `confirm` 只是把决定投给 submit_and_wait，落库在它那一侧——等写完
     // 再断言，否则读到的是**配对前**那一行，三条断言全部落空（真机上
     // 恰恰是配对之后才被冲掉的）。
     let mut row = db.get_device(&[0xE1; 32]).await.unwrap().unwrap();

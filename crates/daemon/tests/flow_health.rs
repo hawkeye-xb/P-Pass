@@ -882,7 +882,7 @@ async fn wait_until_not_running(m: &MidFlight) {
 
 /// `flow.suspend` keeps the grant active, so the partial stays in the GC
 /// protection set across many GC cycles; the phone's next `flow.offer` on
-/// the same tuple (no `flow.fetch`) resumes and finishes from that partial.
+/// the same tuple (status polling only) resumes and finishes from that partial.
 #[tokio::test(flavor = "multi_thread")]
 async fn suspended_partial_survives_gc_and_a_reoffer_of_the_same_tuple_resumes_it() {
     let m = caught_mid_flight(0xABCD_1234_9876_0001)

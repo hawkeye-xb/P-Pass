@@ -2,7 +2,9 @@
 //! expired-token rejection, and one-time token replay rejection.
 
 use daemon::{PairDecision, Pairing, Router};
-use proto::{codes, methods, PairRequest, Req, Resp};
+mod common;
+
+use proto::{codes, methods, Req, Resp};
 use storage::{Db, Role};
 use transport::{IrohTransport, Transport, TransportConfig};
 
@@ -81,26 +83,7 @@ async fn send_pair(
     token: &str,
     name: &str,
 ) -> Resp {
-    let mut stream = ctp.connect(daemon, transport::ALPN_CTRL).await.unwrap();
-    let req = Req {
-        id: "pair-1".into(),
-        method: "pair.request".into(),
-        params: serde_json::to_value(PairRequest {
-            token: token.into(),
-            device_name: name.into(),
-            role: "member".into(),
-            ..Default::default()
-        })
-        .unwrap(),
-        ..Default::default()
-    };
-    stream
-        .send_frame(&proto::codec::encode(&req).unwrap())
-        .await
-        .unwrap();
-    stream.finish().unwrap();
-    let frame = stream.recv_frame().await.unwrap().expect("a response");
-    proto::codec::decode::<Resp>(&frame).unwrap()
+    common::pair_settled(ctp, daemon, token, name).await
 }
 
 fn token_of(qr: &str) -> String {

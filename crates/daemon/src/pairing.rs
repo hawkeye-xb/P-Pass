@@ -327,37 +327,6 @@ impl Pairing {
         qr
     }
 
-    /// Legacy `pair.request` (old phones, `ack_then_poll == false`): the
-    /// reply still waits for the owner and its semantics are unchanged —
-    /// `Ok(pairing_epoch)` on Allow, `Err` otherwise. NET-10: internally it
-    /// is [`Self::submit_request`] plus a wait on the same ledger entry the
-    /// spawned decision task settles, so both protocol shapes share one
-    /// source of truth.
-    pub async fn handle_request(
-        &self,
-        peer: transport::NodeId,
-        req: &proto::PairRequest,
-        now_ms: i64,
-    ) -> Result<String, PairRejection> {
-        let submission = self.submit_request(peer, req, now_ms).await?;
-        let mut rx = {
-            let inner = self.inner.lock().expect("pairing lock");
-            inner
-                .tickets
-                .get(&submission.request_id)
-                .map(|t| t.state.subscribe())
-                .ok_or(PairRejection::OwnerDeclined)?
-        };
-        let settled = match rx.wait_for(|s| *s != PairState::Pending).await {
-            Ok(s) => s.clone(),
-            Err(_) => PairState::Expired,
-        };
-        match settled {
-            PairState::Accepted { pairing_epoch } => Ok(pairing_epoch),
-            _ => Err(PairRejection::OwnerDeclined),
-        }
-    }
-
     /// NET-10 (#128): accept-then-poll. Validates the token, parks the
     /// request in the owner's queue, records it in the ledger, spawns the
     /// task that waits for the owner — and returns at once.

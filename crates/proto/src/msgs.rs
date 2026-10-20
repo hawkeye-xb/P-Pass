@@ -147,9 +147,12 @@ pub struct PairRequest {
     /// NET-10 (#128): the caller will poll `pair.status` for the owner's
     /// verdict, so the daemon answers as soon as the request is queued
     /// ([`PairSubmitted`]) instead of holding this RPC open until a human
-    /// clicks. `false` (omitted — old phones never send it) keeps the
-    /// legacy blocking reply ([`PairAccepted`] or NOT_AUTHORIZED); the key
-    /// is skipped when false so legacy frames and snapshots stay identical.
+    /// clicks. #1050: this is the only shape the daemon serves — a request
+    /// with `false` (or the key omitted) is refused with `err.unsupported`;
+    /// the blocking reply is gone. The field stays on the wire because
+    /// every supported phone (Android ≥ v0.9.0, iOS) sends `true` and both
+    /// phones' golden snapshots pin it; the key is skipped when false so
+    /// the `pair_request` snapshot stays identical.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ack_then_poll: bool,
 }
@@ -368,7 +371,7 @@ pub struct BlobTicketResponse {
 
 // ── Single-item flow delivery ───────────────────────
 
-/// Register or execute one new-flow delivery. This is intentionally separate
+/// Register one new-flow delivery (`flow.offer`). This is intentionally separate
 /// from the legacy batch manifest/push/commit protocol: one queue item has one
 /// pairing epoch, one lease, and one BLAKE3 hash.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
@@ -502,7 +505,7 @@ pub struct FlowAuditEvent {
 }
 
 /// A batch of durable outbox events the phone is submitting for delivery.
-/// Intentionally separate from `flow.offer`/`flow.fetch`/`flow.cancel`:
+/// Intentionally separate from `flow.offer`:
 /// this channel carries no content and never blocks on native transport.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
@@ -628,12 +631,6 @@ pub mod methods {
     /// REBUILD-02: creates the Desktop-side current item grant. It carries no
     /// content and is not part of the frozen batch backup protocol.
     pub const FLOW_OFFER: &str = "flow.offer";
-    /// REBUILD-02: fetches one offered item via native iroh-blobs and returns
-    /// a receipt only after durable materialization.
-    pub const FLOW_FETCH: &str = "flow.fetch";
-    /// REBUILD-02: invalidates one exact active tuple; cancellation never
-    /// emits a receipt.
-    pub const FLOW_CANCEL: &str = "flow.cancel";
     /// NET-06: read-only status query for one exact tuple. Any network
     /// condition must answer within a short control-plane timeout — it
     /// never waits on the data plane. Replaces "RPC timed out" as a
@@ -641,21 +638,22 @@ pub mod methods {
     pub const FLOW_STATUS: &str = "flow.status";
     /// NET-06: pause semantics — interrupts the in-progress native fetch
     /// task for this exact tuple WITHOUT changing the durable grant state
-    /// (stays `active`). Distinct from `flow.cancel` (which marks the
+    /// (stays `active`). Distinct from `flow.cancel_tuple` (which marks the
     /// grant `cancelled` and lets partial bytes fall out of GC
     /// protection): suspend keeps the partial protected so a later
     /// `flow.offer` on the same tuple resumes instead of restarting.
     pub const FLOW_SUSPEND: &str = "flow.suspend";
     /// NET-06: cancel by tuple identity alone (queue_sequence +
-    /// pairing_epoch + lease_token) instead of `flow.cancel`'s full
+    /// pairing_epoch + lease_token). A phone that already gave up on an
+    /// item after exhausting its local retry budget has discarded that
+    /// item's one-shot provider ticket, so it cannot rebuild a full
     /// `FlowFetchRequest` (which additionally requires `content_hash` and
-    /// `provider` to match the stored row exactly). A phone that already
-    /// gave up on an item after exhausting its local retry budget has
-    /// discarded that item's one-shot provider ticket — it cannot
-    /// reconstruct a `flow.cancel` request for it. This method looks up
+    /// `provider` to match the stored row exactly). This method looks up
     /// the stored grant by tuple first (same as `flow.status`/
     /// `flow.suspend`) and cancels using the daemon's own recollection of
     /// content_hash/provider, so the phone never needs to supply them.
+    /// #1050: the older full-request `flow.cancel` is retired; this is the
+    /// only cancel.
     pub const FLOW_CANCEL_TUPLE: &str = "flow.cancel_tuple";
     /// AUDIT-01: phone-side durable outbox events → daemon v2 audit
     /// repository. Carries no data-plane content and is authorized the

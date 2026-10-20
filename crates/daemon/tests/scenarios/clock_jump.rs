@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 
 use daemon::Router;
-use proto::{codes, PairRequest, Req, Resp};
+use proto::{codes, Req, Resp};
 use storage::{Db, Device, Role};
 use transport::{IrohTransport, Transport, TransportConfig};
 
@@ -66,19 +66,7 @@ async fn call(
 }
 
 async fn send_pair(tp: &IrohTransport, daemon: transport::NodeId, token: &str, name: &str) -> Resp {
-    call(
-        tp,
-        daemon,
-        "pair.request",
-        serde_json::to_value(PairRequest {
-            token: token.into(),
-            device_name: name.into(),
-            role: "member".into(),
-            ..Default::default()
-        })
-        .unwrap(),
-    )
-    .await
+    crate::common::pair_settled(tp, daemon, token, name).await
 }
 
 #[tokio::test(flavor = "multi_thread")]
