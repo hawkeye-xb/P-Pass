@@ -101,6 +101,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag || github.ref_name }}
+          # #1062：plan-builds 只跑 `cargo metadata --no-deps`（读清单、不编译），用 runner 自带的 stable，
+          # 免得为它先装 rust-toolchain.toml 钉住的工具链。
+          RUSTUP_TOOLCHAIN: stable
         run: tools/release/plan-builds.sh
 
   android-reuse:

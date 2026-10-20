@@ -5,6 +5,7 @@
 #   plan-builds：test tag / 没有 Latest / Latest 就是本 tag / 版本号相同 / 缺清单 / 缺安装包 / 两端都相同。
 #   plan-builds（#852 test tag 按端发布）：基线 = test-channel 里该端清单的版本；只改 Android / 只改桌面 /
 #   改共享代码 / 只改文档 / 基线拿不到（无清单、坏清单、tag 不存在、不是祖先、就是本 tag）。
+#   plan-builds（#1062）：Rust 改动按 Cargo 依赖图归属到端；入口包与真实构建命令、真实依赖图一致。
 #   reuse-artifact：字节与 Latest 记录不符 ⇒ 红；包内版本号与本次不符 ⇒ 红；都对 ⇒ 取回。
 # 核心断言一句话：**拿不准一律构建；复用必须字节与版本号都对得上**。
 #
@@ -59,7 +60,7 @@ export PATH="$TMP/bin:$PATH"
 # ── 夹具：一个假仓库（plan-builds 从仓库根读 release/versions.json）+ Latest 的资产 ──
 REPO="$TMP/repo"
 mkdir -p "$REPO/tools/release" "$REPO/release"
-cp "$HERE/release/plan-builds.sh" "$HERE/release/reuse-artifact.sh" "$REPO/tools/release/"
+cp "$HERE/release/plan-builds.sh" "$HERE/release/rust-impact.py" "$HERE/release/reuse-artifact.sh" "$REPO/tools/release/"
 git -C "$REPO" init -q && git -C "$REPO" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
 
 sha() { python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
@@ -128,7 +129,7 @@ expect_ios() { # <说明> <ios 判定>
 REPO_MAIN="$REPO"
 REPO="$TMP/repo-ios"
 mkdir -p "$REPO/tools/release" "$REPO/release"
-cp "$HERE/release/plan-builds.sh" "$REPO/tools/release/"
+cp "$HERE/release/plan-builds.sh" "$HERE/release/rust-impact.py" "$REPO/tools/release/"
 git -C "$REPO" init -q
 GI=(git -C "$REPO" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t -c commit.gpgsign=false -c tag.gpgsign=false)
 printf '{"desktop":"2.0.0","android":"1.0.0","ios":"0.1.0"}\n' > "$REPO/release/versions.json"
@@ -227,6 +228,126 @@ printf 'not json' > "$TMP/state/test-channel/manifest-android.json"; tplan v0.1.
 "${G[@]}" checkout -q v0.1.0-test.1 && "${G[@]}" checkout -q -b side && commit_tag v0.1.0-test.90 apps/desktop/side.js
 channel 0.1.0-test.90 0.1.0-test.90; tplan v0.1.0-test.5; expect_plan "基线不是本次提交的祖先 ⇒ 构建" build build
 "${G[@]}" checkout -q v0.1.0-test.12
+
+echo "plan-builds（#1062 test tag：Rust 改动按 Cargo 依赖图归属到端）"
+# 最小 Cargo workspace：transport 的 proto 依赖只在 ios-ffi 下生效（另有一条 dev 依赖）——同真实仓库。
+# 入口（rust-impact.py ENTRIES）：Android transport[android-jni]、iOS transport[ios-ffi]、
+# macOS daemon、Windows daemon + testclient（夹具里没有桌面壳）。
+expect4() { # <说明> <android> <macos> <windows> <ios>
+  if [ "$RC" = 0 ] && [ "$(get android)" = "$2" ] && [ "$(get macos)" = "$3" ] && [ "$(get windows)" = "$4" ] && [ "$(get ios)" = "$5" ]; then ok "$1"
+  else bad "$1（期望 android=$2 macos=$3 windows=$4 ios=$5）" "$OUT"; fi
+}
+REPO_MAIN="$REPO"
+REPO="$TMP/repo-rust"
+mkdir -p "$REPO/tools/release" "$REPO/release"
+cp "$HERE/release/plan-builds.sh" "$HERE/release/rust-impact.py" "$REPO/tools/release/"
+printf '{"desktop":"2.0.0","android":"1.0.0","ios":"0.1.0"}\n' > "$REPO/release/versions.json"
+crate() { # <目录> <包名> <Cargo.toml 余下内容>
+  mkdir -p "$REPO/$1/src"; echo "// $2" > "$REPO/$1/src/lib.rs"
+  printf '[package]\nname = "%s"\nversion.workspace = true\nedition = "2021"\n\n%s\n' "$2" "$3" > "$REPO/$1/Cargo.toml"
+}
+ws_toml() { # <workspace 版本> [额外内容]
+  printf '[workspace]\nmembers = ["crates/proto", "crates/transport", "crates/daemon", "crates/platform", "tools/testclient"]\nresolver = "2"\n\n[workspace.package]\nversion = "%s"\n%s' "$1" "${2:-}" > "$REPO/Cargo.toml"
+}
+lock() { # <成员版本> <iroh-x 版本> <iroh-x checksum> <sqlite-x 版本>：transport 用 iroh-x，daemon 用 sqlite-x
+  python3 - "$REPO/Cargo.lock" "$@" <<'PY'
+import sys
+out, v, iv, ic, sv = sys.argv[1:]
+src = 'source = "registry+https://github.com/rust-lang/crates.io-index"'
+def ws(n, deps): return '[[package]]\nname = "%s"\nversion = "%s"\ndependencies = [\n%s]\n' % (n, v, "".join(' "%s",\n' % d for d in deps))
+def ext(n, ver, ck): return '[[package]]\nname = "%s"\nversion = "%s"\n%s\nchecksum = "%s"\n' % (n, ver, src, ck)
+parts = [ws("daemon", ["platform", "proto", "sqlite-x", "transport"]), ext("iroh-x", iv, ic), ws("platform", []), ws("proto", []),
+         ext("sqlite-x", sv, "s" + sv), ws("testclient", ["proto", "transport"]), ws("transport", ["iroh-x", "proto"])]
+open(out, "w").write("version = 4\n\n" + "\n".join(parts))
+PY
+}
+crate crates/proto proto ''
+echo '// extra' > "$REPO/crates/proto/src/extra.rs"
+crate crates/platform platform ''
+crate crates/transport transport '[features]
+android-jni = []
+ios-ffi = ["dep:proto"]
+
+[dependencies]
+proto = { path = "../proto", optional = true }
+
+[dev-dependencies]
+proto = { path = "../proto" }'
+crate crates/daemon daemon '[dependencies]
+proto = { path = "../proto" }
+transport = { path = "../transport" }
+platform = { path = "../platform" }'
+crate tools/testclient testclient '[dependencies]
+proto = { path = "../../crates/proto" }
+transport = { path = "../../crates/transport" }'
+ws_toml 0.9.0; lock 0.9.0 1.0.0 aaa 1.0.0
+git -C "$REPO" init -q
+G=(git -C "$REPO" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t -c commit.gpgsign=false -c tag.gpgsign=false)
+rtag() { "${G[@]}" add -A && "${G[@]}" commit -q -m "$1" && "${G[@]}" tag "$1"; }
+touch_() { local f; for f in "$@"; do mkdir -p "$REPO/$(dirname "$f")"; echo "// $1" >> "$REPO/$f"; done; }
+rtag v0.2.0-test.1
+touch_ crates/daemon/src/lib.rs;            rtag v0.2.0-test.2
+touch_ crates/transport/src/lib.rs;         rtag v0.2.0-test.3
+touch_ crates/proto/src/lib.rs;             rtag v0.2.0-test.4
+touch_ tools/testclient/src/lib.rs;         rtag v0.2.0-test.5
+touch_ crates/daemon/tests/flow.rs;         rtag v0.2.0-test.6
+ws_toml 0.9.1; lock 0.9.1 1.0.0 aaa 1.0.0;  rtag v0.2.0-test.7
+lock 0.9.1 1.0.0 aaa 1.1.0;                 rtag v0.2.0-test.8
+lock 0.9.1 1.0.0 bbb 1.1.0;                 rtag v0.2.0-test.9
+ws_toml 0.9.1 $'\n[profile.release]\nlto = true\n'; rtag v0.2.0-test.10
+touch_ crates/newcrate/src/lib.rs;          rtag v0.2.0-test.11
+"${G[@]}" rm -rq crates/newcrate; printf 'not toml [[[\n' > "$REPO/Cargo.lock"; rtag v0.2.0-test.12
+rchk() { # <tag> <说明> <android> <macos> <windows> <ios>：test-channel 四端都指向上一个 tag
+  local prev="v0.2.0-test.$(( ${1##*.} - 1 ))"
+  channel "${prev#v}" "${prev#v}" "${prev#v}" "${prev#v}"; tplan "$1"; expect4 "$2" "$3" "$4" "$5" "$6"
+}
+rchk v0.2.0-test.2  "只改 crates/daemon ⇒ 只构建桌面两端，Android / iOS 不陪跑" skip build build skip
+rchk v0.2.0-test.3  "改 crates/transport ⇒ 依赖它的四端都构建" build build build build
+rchk v0.2.0-test.4  "改 crates/proto ⇒ Android 不构建（transport 只在 ios-ffi 下依赖它，dev 依赖不进产物）" skip build build build
+rchk v0.2.0-test.5  "改 tools/testclient ⇒ 只有 Windows（只有它打包 testclient）" skip skip build skip
+rchk v0.2.0-test.6  "改 crates/daemon/tests/ ⇒ 按 daemon 算桌面两端（保守：测试目录不另行排除）" skip build build skip
+rchk v0.2.0-test.7  "桌面涨号的 Cargo 那一半（根 Cargo.toml 只变 workspace 版本、Cargo.lock 只变成员版本）⇒ 只构建桌面两端（同一提交里的 release/ 仍算所有端）" skip build build skip
+rchk v0.2.0-test.8  "Cargo.lock 只变 daemon 专用的外部依赖 ⇒ 只构建桌面两端" skip build build skip
+rchk v0.2.0-test.9  "Cargo.lock 变了 transport 的外部依赖（checksum）⇒ 四端都构建" build build build build
+rchk v0.2.0-test.10 "根 Cargo.toml 有版本号以外的变化 ⇒ 拿不准 ⇒ 四端都构建" build build build build
+rchk v0.2.0-test.11 "crates/ 下不属于任何 workspace 成员的路径 ⇒ 拿不准 ⇒ 四端都构建" build build build build
+rchk v0.2.0-test.12 "Cargo.lock 解析不了 ⇒ 拿不准 ⇒ 四端都构建" build build build build
+# 改名按原路径也算一次（--no-renames）：把 proto 的源文件挪出 crates/，proto 的改动不能因为只剩新路径而漏掉。
+"${G[@]}" checkout -q v0.2.0-test.4 && mkdir -p "$REPO/docs" && "${G[@]}" mv crates/proto/src/extra.rs docs/moved.md \
+  && "${G[@]}" commit -q -m mv && "${G[@]}" tag v0.2.0-test.20
+channel 0.2.0-test.4 0.2.0-test.4 0.2.0-test.4 0.2.0-test.4; tplan v0.2.0-test.20
+expect4 "proto 的文件被挪进 docs/（rename）⇒ 仍按 proto 归属：iOS 与桌面构建、Android 不陪跑" skip build build build
+# cargo 不可用 / metadata 失败 ⇒ 拿不准 ⇒ 所有端（假 cargo 恒失败；不靠删 PATH）。
+mkdir -p "$TMP/badcargo"; printf '#!/bin/sh\necho "boom" >&2\nexit 1\n' > "$TMP/badcargo/cargo"; chmod +x "$TMP/badcargo/cargo"
+channel 0.2.0-test.1 0.2.0-test.1 0.2.0-test.1 0.2.0-test.1; "${G[@]}" checkout -q v0.2.0-test.2
+OUT=$(cd "$REPO" && PATH="$TMP/badcargo:$PATH" TAG=v0.2.0-test.2 GITHUB_OUTPUT=/dev/stdout tools/release/plan-builds.sh 2>&1); RC=$?
+expect4 "cargo metadata 失败 ⇒ 只改 crates/daemon 也四端都构建" build build build build
+printf '%s' "$OUT" | grep -q "::warning::cargo metadata 失败" && ok "cargo metadata 失败时打 ::warning::（不静默降级）" || bad "cargo metadata 失败时打 ::warning::" "$OUT"
+REPO="$REPO_MAIN"
+
+echo "plan-builds（#1062 入口包与真实构建命令、真实依赖图一致）"
+ROOT="$(cd "$HERE/.." && pwd)"
+has() { grep -qF -- "$2" "$ROOT/$1" && ok "$1 含「$2」" || bad "$1 应含「$2」（入口包 / feature 变了要同步 rust-impact.py 的 ENTRIES）"; }
+has tools/build-android-iroh-blobs-bridge.sh "cargo build -p transport --features android-jni"
+has tools/build-ios-transport-xcframework.sh "-p transport --lib --features ios-ffi"
+has tools/build-ios-transport-xcframework.sh "-p transport --features ios-bindgen"
+grep -qE '^ +run: cargo build --release -p daemon$' "$ROOT/.github/workflows/release.yml" && ok "release.yml macOS 只编 daemon" || bad "release.yml macOS 应为 cargo build --release -p daemon（同步 ENTRIES.macos）"
+has .github/workflows/release.yml "run: cargo build --release -p daemon -p testclient"
+SHELL_PKG=$(sed -n 's/^name = "\(.*\)"/\1/p' "$ROOT/apps/desktop/src-tauri/Cargo.toml" | head -1)
+grep -qF "DESKTOP_SHELL = \"$SHELL_PKG\"" "$ROOT/tools/release/rust-impact.py" && ok "桌面壳包名（${SHELL_PKG}）与 ENTRIES 一致" || bad "桌面壳包名 ${SHELL_PKG} 与 rust-impact.py 的 DESKTOP_SHELL 不一致"
+# 真实仓库的依赖图：钉住「哪个 crate 归哪些端」的现状——有人给 transport 加了 path 依赖，这里先变。
+RM="$TMP/real-meta"; mkdir -p "$RM"
+if (cd "$ROOT" && RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-stable}" cargo metadata --no-deps --format-version 1 --offline >"$RM/ws.json" \
+  && RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-stable}" cargo metadata --no-deps --format-version 1 --offline \
+    --manifest-path apps/desktop/src-tauri/Cargo.toml >"$RM/shell.json"); then
+  REAL=$(cd "$ROOT" && printf '%s\n' crates/daemon/src/x.rs crates/transport/src/x.rs crates/proto/src/x.rs crates/platform/src/x.rs tools/testclient/src/x.rs \
+    | python3 -I tools/release/rust-impact.py --base HEAD --meta "$RM/ws.json" --meta "$RM/shell.json" 2>&1)
+  WANT=$(printf 'macos windows\tcrates/daemon/src/x.rs\nandroid ios macos windows\tcrates/transport/src/x.rs\nios macos windows\tcrates/proto/src/x.rs\nmacos windows\tcrates/platform/src/x.rs\nwindows\ttools/testclient/src/x.rs')
+  [ "$REAL" = "$WANT" ] && ok "真实依赖图：daemon/platform ⇒ 桌面两端，transport ⇒ 四端，proto ⇒ iOS + 桌面，testclient ⇒ Windows" \
+    || bad "真实依赖图的归属变了（确认是有意的再改这里）" "$REAL"
+else
+  bad "真实仓库 cargo metadata 失败（本测试需要 cargo）"
+fi
 
 echo "reuse-artifact"
 reuse() { OUT=$(cd "$REPO" && tools/release/reuse-artifact.sh "$1" v2026.1.1 "$2" "$TMP/out-$3" 2>&1); RC=$?; }
