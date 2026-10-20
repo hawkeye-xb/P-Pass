@@ -223,7 +223,7 @@ async fn zero_byte_files_are_neither_adopted_nor_deleted() {
     let root = dir.path().join("library");
     let dev = "ab".repeat(32);
     let empty = write(&root, &format!("originals/{dev}/2026/10/IMG_1.jpg"), b"");
-    let users_empty = write(&root, "originals/我的相册/placeholder.txt", b"");
+    let users_empty = write(&root, "originals/我的相册/placeholder.jpg", b"");
     write(
         &root,
         &format!("originals/{dev}/2026/10/IMG_2.jpg"),
@@ -241,4 +241,40 @@ async fn zero_byte_files_are_neither_adopted_nor_deleted() {
         "不得出现 bytes=0 的资产"
     );
     assert!(empty.exists() && users_empty.exists(), "0 字节文件不许被删");
+}
+
+/// #1044 B3：「什么算照片」只有一份口径（`core_index::media_kind`）。
+/// Windows 资源管理器留下的 `Thumbs.db`/`desktop.ini`、用户随手放的
+/// `notes.txt`、无扩展名文件都不是媒体，收编不许把它们变成照片墙上
+/// 永远解不出的灰块。反证：去掉扫描里的 `media_kind` 过滤，这条收 5 个。
+#[tokio::test(flavor = "multi_thread")]
+async fn non_media_files_are_never_adopted() {
+    let (dir, db) = setup().await;
+    let root = dir.path().join("library");
+    let dev = "ab".repeat(32);
+    write(
+        &root,
+        &format!("originals/{dev}/2026/09/Thumbs.db"),
+        b"thumbs cache",
+    );
+    write(
+        &root,
+        &format!("originals/{dev}/2026/09/desktop.ini"),
+        b"[.ShellClassInfo]",
+    );
+    write(&root, "originals/notes.txt", b"shopping list");
+    write(&root, "originals/noext", b"no extension");
+    write(
+        &root,
+        &format!("originals/{dev}/2026/09/IMG_1.JPG"),
+        b"real photo",
+    );
+
+    let report = adopt_orphans(&db, &root, &LOCAL).await.unwrap();
+
+    assert_eq!(report.adopted, 1, "只收那张照片");
+    let page = db.timeline_page(None, 10).await.unwrap();
+    assert_eq!(page.assets.len(), 1);
+    assert!(page.assets[0].rel_path.ends_with("IMG_1.JPG"));
+    assert_eq!(page.assets[0].media_type, "image/jpeg");
 }

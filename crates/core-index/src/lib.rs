@@ -10,12 +10,14 @@ use std::path::PathBuf;
 
 mod dedup;
 mod ingest;
+mod media;
 mod rebuild;
 mod supersede;
 mod timeline;
 
 pub use dedup::hash_file;
 pub use ingest::{device_dir, IncomingFile, IngestOutcome, Ingestor};
+pub use media::{media_kind, media_type_for, MediaKind};
 pub use rebuild::{adopt_orphans, rebuild, sweep_ingest_residue, AdoptReport, RebuildReport};
 pub use supersede::{
     SupersedeApplied, SupersedeCheck, SupersedePlan, MAX_REGION_BYTES, QUARANTINE_DIR,

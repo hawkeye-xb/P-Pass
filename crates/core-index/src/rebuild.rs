@@ -168,7 +168,7 @@ async fn index_missing_files(
     let mut inserted = 0u64;
     let mut skipped = 0u64;
     let mut empty = 0u64;
-    for path in &files {
+    for (path, media_type) in &files {
         // #1047: 0 字节文件不是照片，不收编。入库被杀在「占位」与「写完」之间
         // 的老版本会留下占着最终文件名的 0 字节文件，旧逻辑把它按空内容的
         // hash 收成一条正式资产（时间线上出现打不开的「照片」）。
@@ -219,7 +219,7 @@ async fn index_missing_files(
             .insert_asset(&Asset {
                 hash: hash.to_vec(),
                 rel_path: rel_path.clone(),
-                media_type: media_type_for(path),
+                media_type: (*media_type).into(),
                 bytes: meta.len() as i64,
                 taken_at: Some(ingest::taken_at_ms(path, None)?),
                 width,
@@ -306,8 +306,10 @@ fn collect_ingest_temps(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-/// Depth-first listing of regular files, skipping hidden names.
-fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+/// Depth-first listing of media files (#1044 B3: the shared table behind
+/// [`crate::media_kind`] is the only judge — `Thumbs.db`/`desktop.ini`/`notes.txt` never enter the
+/// index), skipping hidden names.
+fn collect_files(dir: &Path, out: &mut Vec<(PathBuf, &'static str)>) -> Result<()> {
     let io_err = |source| IndexError::Io {
         path: dir.to_path_buf(),
         source,
@@ -322,7 +324,9 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
         if kind.is_dir() {
             collect_files(&path, out)?;
         } else if kind.is_file() {
-            out.push(path);
+            if let Some(media_type) = crate::media_type_for(&path) {
+                out.push((path, media_type));
+            }
         }
     }
     Ok(())
@@ -365,26 +369,6 @@ fn device_of(rel_path: &str, local_node_id: &[u8]) -> Vec<u8> {
     id
 }
 
-/// MIME from extension — the media types this product stores. Unknown
-/// extensions are honest `application/octet-stream`, never a guess.
-fn media_type_for(path: &Path) -> String {
-    let ext = path
-        .extension()
-        .map(|e| e.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
-    match ext.as_str() {
-        "jpg" | "jpeg" => "image/jpeg",
-        "png" => "image/png",
-        "heic" | "heif" => "image/heic",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "mp4" => "video/mp4",
-        "mov" => "video/quicktime",
-        _ => "application/octet-stream",
-    }
-    .into()
-}
-
 fn unix_ms_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -424,17 +408,6 @@ mod tests {
             device_of(&format!("originals/{not_hex}/a.jpg"), &LOCAL),
             LOCAL.to_vec(),
             "长度对但不是 hex 也归本机"
-        );
-    }
-
-    #[test]
-    fn media_type_covers_product_formats() {
-        assert_eq!(media_type_for(Path::new("a/B.JPG")), "image/jpeg");
-        assert_eq!(media_type_for(Path::new("a/b.heic")), "image/heic");
-        assert_eq!(media_type_for(Path::new("a/b.mov")), "video/quicktime");
-        assert_eq!(
-            media_type_for(Path::new("a/noext")),
-            "application/octet-stream"
         );
     }
 }
