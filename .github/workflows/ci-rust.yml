@@ -6,7 +6,7 @@
 #   Cargo.lock      —— 锁文件变更（依赖解析结果）
 #   config/**       —— 运行配置（arch-check 读它做架构门禁）
 #   assets/i18n/**  —— i18n 字典（diag keys.rs ALL 断言消费）
-#   tools/arch-check.sh —— 架构门禁脚本本身
+#   tools/arch-check.sh —— 架构门禁脚本本身（连同白名单、自测脚本）
 # 反向依赖检查：crates/proto 的金样本 snapshots.rs 被 Android GoldenDriftTest
 # 消费——改 crates/** 触发本 workflow（Rust 侧自检），Android 侧由
 # ci-android.yml（apps/android/**）触发时 GoldenDriftTest 比对，两域都覆盖。
@@ -56,6 +56,8 @@ on:
       - "config/**"
       - "assets/i18n/**"
       - "tools/arch-check.sh"
+      - "tools/arch-allowlist.txt"
+      - "tools/test-arch-check.sh"
       - "rust-toolchain.toml"
       - "tools/setup-rust-toolchain.sh"
       - "tools/check-rust-toolchain-ci.sh"
@@ -598,6 +600,41 @@ jobs:
           VCPKG_ROOT: "C:\\vcpkg"
         run: cargo clippy --all-targets -- -D warnings
 
+  # #1040：crates/platform 里有 macOS 专属单测（macos::diag_log_tests、
+  # tests/fsevents_shapes.rs），而 PR 门禁对 macOS 之前只做交叉编译的 clippy
+  # （见 test job 末尾那步）——**编得过但从没在 macOS 上跑过**。真 macOS runner
+  # 跑 `cargo test -p platform`，改坏 macOS 实现不必等到发版才暴露。
+  #
+  # 为什么单开 job、不改 test：test 的名字在 main 的必需检查里，改名/改成矩阵
+  # 会让所有 PR 永久 Pending（见 AGENTS.md「job 的 name 不许随手改」）。
+  # name 写死、不用 matrix。本 job **刻意不进必需检查**——是否设为必需由验收人
+  # 在量过稳定耗时之后再定。
+  #
+  # 只构建 platform 一个 crate：纯 Rust、无外部依赖，不需要 libheif/ffmpeg。
+  test-platform-macos:
+    name: test (platform, macos)
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set Rust toolchain from rust-toolchain.toml
+        shell: bash
+        run: tools/setup-rust-toolchain.sh
+
+      # 防「cfg 把 macOS 专属测试悄悄排除掉、job 照样绿」：列出测试，macos::
+      # 模块下一个都没有就失败。
+      - name: Guard - macOS-only tests are actually compiled in
+        run: |
+          n=$(cargo test -p platform --all-targets --features test-support -- --list 2>/dev/null | grep -c '^macos::' || true)
+          echo "macOS-only tests listed: $n"
+          test "$n" -ge 1
+
+      - name: Test (cargo test -p platform, macOS)
+        run: cargo test -p platform --all-targets --features test-support
+
   arch:
     name: architecture enforcement
     # CI-11 (#255)：**只有明确收到 'false' 才跳过**。
@@ -618,7 +655,26 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # #1040：门禁本身的自测。先证明「违规样例必须红、合规样例必须过」，再用
+      # 它去判真实代码——否则门禁坏了（比如又退回逐行 grep）没人知道。
+      - name: Gate self-test (tools/test-arch-check.sh)
+        run: bash tools/test-arch-check.sh
+
+      # #1040：白名单「只降不升」要和基线分支比，PR 里得有基线。fetch 失败就让
+      # 本步骤红——拿不到基线就证明不了没增加，不能静默放行。
+      - name: Fetch ratchet baseline (PR only)
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: git fetch --no-tags --depth=1 origin "+refs/heads/${BASE_REF}:refs/remotes/origin/${BASE_REF}"
+
       - name: Architecture enforcement
+        # push 到 main 时不比基线（PR 阶段已经比过，合并后的 main 就是新基线）；
+        # 这是显式跳过，不是「取不到就算了」——后者在 CI 里会直接判红。
+        env:
+          ARCH_BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || '' }}
+          ARCH_RATCHET_SKIP: ${{ github.event_name == 'pull_request' && '0' || '1' }}
         run: bash tools/arch-check.sh
 
   deny:

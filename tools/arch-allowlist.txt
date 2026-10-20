@@ -1,0 +1,29 @@
+# 架构门禁 G1 / G5 的存量白名单（#1040，里程碑 #9「桌面架构收口」）。
+#
+# 规则：只许缩、不许增。tools/arch-check.sh 逐项校验——
+#   · 命中数必须与登记的计数精确相等：多了 = 新增越界（红）；少了 = 登记已
+#     过期，必须把计数改小或删掉条目（红）。所以迁移卡做完，门禁会逼你缩表。
+#   · 条目、计数、永久例外相对基线分支（origin/main）都不许变大（ratchet）。
+#   · 迁移全部完成后本文件应只剩 [permanent] 段；届时删除白名单机制。
+# 不要为了让 CI 变绿往里加条目——那正是这道门禁要拦的事。
+#
+# [ratchet] 格式：文件 | 规则 | 计数 | 理由        （计数 = 该文件该规则的命中行数）
+# [permanent] 格式：文件 | 规则 | 理由               （客观平台差异，不计入存量；
+#   新增永久例外同样要 issue 拍板。#998 安装位置闸门、#999 防睡眠的平台差异目前
+#   落在 crates/platform 与 daemon 的 adapter 调用里，不触发 G1/G5，所以暂无条目。）
+#
+# 规则含义见 tools/arch-check.sh 的 G1/G5 段。
+# 生成方式：ARCH_REPORT_ONLY=1 bash tools/arch-check.sh
+
+[ratchet]
+apps/desktop/src/platformUx.js | G1 | 11 | 壳内 JS 判平台：plugin-os 取平台 + 三个 switch 按 macos/windows/linux 分支（DESK-69 #997 遗留；应改读 adapter/daemon 字段）
+apps/desktop/src/App.svelte | G1 | 2 | 匹配 Windows 错误原文的正则（第 1200 行）+ 按平台选向导（wizardVariant(currentPlatform()) === "windows"）
+apps/desktop/src-tauri/src/daemon_logs.rs | G1 | 4 | plist_path() 拼 LaunchAgents plist 路径 + 读 HOME/USERPROFILE + std::env::consts::OS（壳里读 macOS plist，所有平台都编译）
+apps/desktop/src-tauri/src/daemon_logs.rs | G5 | 1 | std::env::consts::OS 写进诊断包（平台信息应由 adapter 提供）
+apps/desktop/src-tauri/src/ipc.rs | G1 | 1 | 壳直接读 HOME 拼 daemon 候选路径
+apps/desktop/src-tauri/src/lib.rs | G1 | 14 | 读 LANG 判托盘语言(2)、读 HOME/USERPROFILE(2)、读 plist 的启动错误/日志接管（1700）、以及依赖 LaunchAgents/plist 路径的 9 处单测夹具
+apps/desktop/src-tauri/src/redact.rs | G1 | 1 | 脱敏白名单里的字面量 com.p-pass.daemon.plist（随 plist 路径一起迁出）
+crates/daemon/src/main.rs | G5 | 1 | std::env::consts::OS 写进状态字段（应改由 platform adapter 提供）
+crates/transport/src/provider.rs | G5 | 1 | 测试里 use std::os::unix::fs::MetadataExt（测试辅助，待挪进 platform test-support 或改跨平台写法）
+
+[permanent]
