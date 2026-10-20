@@ -313,15 +313,36 @@ final class TransportFFITests: XCTestCase {
         let link = try parsePairLink(link: linkText)
         let peer = try parsePairLink(link: "ppf://pair?node=\(link.nodeId)&t=\(link.token)&a=\(directToken)").peerToken
 
-        // ② 配对：pair.request（阻塞到业主点允许；宿主脚本的 owner_loop 代点）。
+        // ② 配对：pair.request(ack_then_poll) 立即回执 → 轮询 pair.status 到业主点允许
+        //    （宿主脚本的 owner_loop 代点）。阻塞式 pair.request 已退役（#1050）。
         let client = try CtrlClient.bind(
             config: CtrlConfig(secretKey: nil, relayUrls: [], offline: true, bindTimeoutMs: 0))
         defer { client.close() }
-        let paired = try ctrl(client, peer, "pair.request",
-                              ["token": link.token, "device_name": "iOS 模拟器 G2", "role": "member"],
-                              timeoutMs: 60_000)
-        XCTAssertEqual(paired["ok"] as? Bool, true, "\(paired)")
-        let epoch = try XCTUnwrap((paired["result"] as? [String: Any])?["pairing_epoch"] as? String, "\(paired)")
+        let submitted = try ctrl(client, peer, "pair.request",
+                                 ["token": link.token, "device_name": "iOS 模拟器 G2", "role": "member",
+                                  "ack_then_poll": true],
+                                 timeoutMs: 15_000)
+        XCTAssertEqual(submitted["ok"] as? Bool, true, "\(submitted)")
+        let ack = try XCTUnwrap(submitted["result"] as? [String: Any], "\(submitted)")
+        let requestId = try XCTUnwrap(ack["request_id"] as? String, "\(submitted)")
+        let ttlMs = (ack["ttl_ms"] as? NSNumber)?.doubleValue ?? 60_000
+        var acceptedEpoch: String?
+        let pollDeadline = Date().addingTimeInterval(ttlMs / 1000 + 5)
+        while acceptedEpoch == nil {
+            let st = try ctrl(client, peer, "pair.status", ["request_id": requestId], timeoutMs: 15_000)
+            XCTAssertEqual(st["ok"] as? Bool, true, "\(st)")
+            let reply = try XCTUnwrap(st["result"] as? [String: Any], "\(st)")
+            switch reply["state"] as? String {
+            case "accepted":
+                acceptedEpoch = try XCTUnwrap((reply["accepted"] as? [String: Any])?["pairing_epoch"] as? String, "\(st)")
+            case "pending":
+                guard Date() < pollDeadline else { return XCTFail("pair.status still pending after ttl: \(st)") }
+                Thread.sleep(forTimeInterval: 0.5)
+            default:
+                return XCTFail("pairing not accepted: \(st)")
+            }
+        }
+        let epoch = try XCTUnwrap(acceptedEpoch)
         print("G2 paired: epoch=\(epoch.prefix(8))… phone=\(try client.nodeId().prefix(8))…")
 
         // ③ provider 的 FsStore 落在存储根下（模拟一个 App Group 容器；真 entitlement 是 App 线的事）。
