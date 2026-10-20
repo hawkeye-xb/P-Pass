@@ -71,8 +71,6 @@ function desktop({ auditFails = false, events = [] } = {}) {
             return { devices: [] };
           case "device.watermarks":
             return { watermarks: [] };
-          case "activity.list":
-            return { batches: [] };
           case "audit.list":
             if (d.auditFails) throw new Error("audit list exploded");
             return { events: d.events };

@@ -177,6 +177,138 @@ fn unknown_flag_fails_with_usage_on_stderr() {
     );
 }
 
+/// 起一个真的 `--ephemeral` daemon（数据目录隔离、不连 relay、随机端口），
+/// 等到 stdout 上出现「配对」那一行（= 启动序列走到了 stdin 循环之前），
+/// 返回 `(退出前的 stdout, stderr, 关 stdin 到进程退出的耗时)`。
+/// 关 stdin 后 15 秒内没退出则返回 `None` 耗时（调用方据此断言失败）。
+fn run_ephemeral_until_stdin_eof(
+    extra_args: &[&str],
+) -> (String, String, Option<std::time::Duration>) {
+    use std::io::{BufRead, BufReader, Read};
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    struct KillOnDrop(std::process::Child);
+    impl Drop for KillOnDrop {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let child = daemon_bin()
+        .arg("--ephemeral")
+        .args(extra_args)
+        .env("PPF_DATA_DIR", dir.path())
+        .env("PPF_RELAY_URLS", "")
+        .env("PPF_BIND_ADDR", "127.0.0.1:0")
+        .env_remove("PPF_LOG_FILE")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn daemon --ephemeral");
+    let mut child = KillOnDrop(child);
+
+    let mut stderr_pipe = child.0.stderr.take().expect("stderr piped");
+    let stderr_reader = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = stderr_pipe.read_to_string(&mut s);
+        s
+    });
+    let (tx, rx) = mpsc::channel::<String>();
+    let stdout_pipe = child.0.stdout.take().expect("stdout piped");
+    let stdout_reader = std::thread::spawn(move || {
+        for line in BufReader::new(stdout_pipe).lines() {
+            let Ok(line) = line else { break };
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(40);
+    let mut stdout = String::new();
+    while Instant::now() < deadline {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(line) => {
+                stdout.push_str(&line);
+                stdout.push('\n');
+                if line.contains("配对") {
+                    break;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+
+    // 关 stdin（写入端 EOF）→ --ephemeral 自己退出。
+    let closed_at = Instant::now();
+    drop(child.0.stdin.take());
+    let mut exited_after = None;
+    while closed_at.elapsed() < Duration::from_secs(15) {
+        if child.0.try_wait().expect("try_wait").is_some() {
+            exited_after = Some(closed_at.elapsed());
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = child.0.kill();
+    let _ = child.0.wait();
+    stdout_reader.join().expect("stdout reader");
+    while let Ok(line) = rx.try_recv() {
+        stdout.push_str(&line);
+        stdout.push('\n');
+    }
+    let stderr = stderr_reader.join().expect("stderr reader");
+    (stdout, stderr, exited_after)
+}
+
+/// #1041 E2：删掉 stdin 的 y/n 确认器后，**EOF → 退出**这条契约必须原样保留——
+/// `tools/` 下所有脚本（dogfood-smoke / ios e2e / testclient）都靠「关掉 stdin 写入端」
+/// 收掉 `--ephemeral` daemon（UX-07：3 秒内）。
+/// 反证：让 main.rs 的 stdin 循环不再在 EOF 时发退出信号（EOF 分支永不触发）→ daemon
+/// 不退出，本测试必红（已手工验证）。
+#[test]
+fn ephemeral_daemon_exits_on_stdin_eof() {
+    let (stdout, stderr, exited_after) = run_ephemeral_until_stdin_eof(&[]);
+    assert!(
+        stdout.contains("配对"),
+        "daemon 没走到启动序列的配对那一步:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    let exited_after = exited_after.unwrap_or_else(|| {
+        panic!("关 stdin 后 15 秒内 daemon 没退出:\nstdout:\n{stdout}\nstderr:\n{stderr}")
+    });
+    assert!(
+        exited_after < std::time::Duration::from_secs(5),
+        "UX-07 要求 3 秒内退出，实测 {exited_after:?}"
+    );
+}
+
+/// #1041 E2：`--post-update` 已退役（接受并忽略，下一个版本删除）。旧版桌面壳升级后
+/// 仍会带它拉起新 daemon：必须**不报未知参数、照常启动**，且行为与不带它相同
+/// （同样走到配对那一步、同样在 stdin EOF 时退出）。
+/// 反证：从 `cli::parse_cli` 删掉 `--post-update` 分支 → exit 2 + 未知参数，本测试必红。
+#[test]
+fn retired_post_update_flag_does_not_stop_daemon_from_starting() {
+    let (stdout, stderr, exited_after) = run_ephemeral_until_stdin_eof(&["--post-update"]);
+    assert!(
+        !stderr.contains("未知参数"),
+        "--post-update 必须被接受:\nstderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("配对"),
+        "带 --post-update 的 daemon 没有照常启动:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        exited_after.is_some(),
+        "带 --post-update 的 daemon 在 stdin EOF 后没退出（行为应与不带时相同）"
+    );
+}
+
 /// SEC-11 (#496)：stdout 不是终端时，配对链接（含 10 分钟有效的令牌）
 /// **一个字都不能出现在任何流里**，也不能出现在数据目录下的任何文件里。
 ///

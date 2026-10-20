@@ -45,8 +45,6 @@
   import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
   // T-091: 人性化时间 + 哨兵判定纯函数（时间戳单位见模块头注释：unix 毫秒）
   import { humanTime, needsAttention, daysSince, relativeTime } from "./lib/humanTime.js";
-  // T-092: connection 四态 → 文案/点色；字节 → 人读容量（纯函数，
-  // apps/desktop/scripts/check-wire-fns.mjs 断言）
   // PRES-01: presence 三档 → 文案/点色（connection 路径事实优先展示）
   import { presenceText, flowConnectionText } from "./lib/connection.js";
   // DEV-03: 「自己断开」与「业主移除」的判据 + 已断开行文案（纯函数，
@@ -240,9 +238,6 @@
   let showConfirmModal = $state(false);
   // T-091: node_id -> {last_backup_at, asset_count}（device.watermarks，毫秒）
   let watermarks = $state({});
-  // T-092: activity.list 批次（{node_id,name,at,asset_count}，at=unix 毫秒，
-  // name 可能 null）——活动记录页数据源
-  let activity = $state([]);
   // AUDIT-01: 审计事件流 v2（{ts, kind, actor, roundId, payload}）——
   // 配对请求/允许/拒绝、吊销、外部删除、Flow 用户操作/终态，活动页的
   // 主数据源。v1 的 action/detail 自由文本已随 audit_log 一并移除。
@@ -346,11 +341,6 @@
         const w = await call("device.watermarks");
         watermarks = Object.fromEntries((w.watermarks ?? []).map((x) => [x.node_id, x]));
       } catch (_) {}
-      // T-092: 活动记录同样单独容错——倒序（新的在上）由 UI 兜底保证
-      try {
-        const a = await call("activity.list", { limit: 100 });
-        activity = (a.batches ?? []).slice().sort((x, y) => (y.at ?? 0) - (x.at ?? 0));
-      } catch (_) {}
       // AUDIT-01: 审计事件流 v2（配对/吊销/外部删除/Flow 事实）——活动页
       // 主数据源。2026-08-18（用户反馈④）：limit 200 → 500。ingest.*
       // 逐文件行占绝大多数（每张照片一行），但展示层把它们过滤掉——
@@ -369,7 +359,7 @@
       }
     } catch (e) {
       // DESK-63 (#946): only the `status` probe can reach here now
-      // (devices.list has its own catch below; watermarks / activity /
+      // (devices.list has its own catch below; watermarks /
       // audit were already individually guarded). This is a data failure
       // for THIS refresh — not a service-state decision. The Rust event
       // stream owns that, and the failure reason is in desktop.log.
@@ -394,8 +384,8 @@
   }
   // AUDIT-01: 批次备份的 backup.started/backup.finished 会话审计已经
   // 随本卡移除（card 决定：旧 batch backup.* 不再作为任何活动页或统计
-  // 来源）——耗时统计随之一起下线，不用 activity.list 的批次时间伪造
-  // 一个「耗时」出来（那张表只有到达时间，没有会话起止）。
+  // 来源）——耗时统计随之一起下线，不拿批次到达时间伪造一个「耗时」出来
+  // （没有会话起止）。
 
   // MOB-29: 用户点过「知道了」的时刻——**只压住这一刻及之前的删除**，
   // 之后再删又会出来（一次 dismiss 不换来永久静默）。刻意只存在内存里：
@@ -2350,10 +2340,9 @@
 
   /* 2026-08-13：列表本身内部滚动，不是靠整个右边内容区变高再滚动
      （用户实测反馈：应该是表格内滚动，游标加载，不是整个右边区域
-     滚动）。真正的游标分页（滚到底再补一批，而不是一次性 limit=100
-     取全量）需要 activity.list 后端加 cursor 参数——现状后端只有
-     limit，没有 before_ts/cursor，这部分先留白不假装做了，只把
-     "列表内部滚动"这一半先落地。 */
+     滚动）。真正的游标分页（滚到底再补一批，而不是一次性取全量）需要
+     后端加 cursor 参数，这部分先留白不假装做了，只把"列表内部滚动"
+     这一半先落地。 */
   main[data-page="log"] .page,
   main[data-page="photos"] .page,
   /* 2026-08-18（用户反馈③）：设备列表卡内滚——.page 撑满内容区高度是
@@ -2384,32 +2373,6 @@
   /* DESK-15：原生 button/.primary/.link-more 视觉规则已删——全部收编进
      Button 组件（variant=primary/secondary/danger/link，tone=safe），
      不再有第二套按钮视觉实现。 */
-  .qr-fallback {
-    align-self: stretch;
-    text-align: center;
-  }
-  .qr-fallback summary {
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--pp-safe);
-    list-style: none;
-  }
-  .qr-fallback summary::-webkit-details-marker {
-    display: none;
-  }
-  .qr-fallback .qrtext {
-    text-align: left;
-  }
-  .qrtext {
-    display: block;
-    word-break: break-all;
-    font-size: 12px;
-    background: var(--pp-linen);
-    padding: 10px;
-    border-radius: var(--pp-radius-control-sm);
-    margin-top: 6px;
-  }
   .version-footer {
     position: fixed;
     right: 14px;
@@ -2507,11 +2470,6 @@
 
 
 
-  /* UI-04b: 提示条脱离文档流——fixed 浮层，出现/消失不顶动下方内容。
-     改名成功/失败、复制成功等瞬时反馈都走这里；错误反馈同样可见
-     （5s 自动消失 + 手动 ×），只是不再占布局空间。 */
-  /* DESK-15：提示条（.message/.message-close）已收进 Notice 组件
-     （lib/components/ui/notice/notice.svelte），这里不再重复定义。 */
 
   
 

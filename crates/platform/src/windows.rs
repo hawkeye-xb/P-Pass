@@ -7,18 +7,13 @@
 //!   it is migrated away and still recognised.
 //! - Awake: `SetThreadExecutionState(ES_SYSTEM_REQUIRED|ES_CONTINUOUS)`
 //!   held RAII-style; drop restores `ES_CONTINUOUS`.
-//! - Keys: DPAPI (`CryptProtectData`/`CryptUnprotectData`), blob stored
-//!   in the data dir — decryptable only by this Windows user **on this
-//!   machine**. DESK-24 (#173): that is precisely why the data dir must
-//!   live under `%LOCALAPPDATA%` and never under roaming `%APPDATA%`.
-//! - Power hint: `powercfg /query` through the shared pure parser.
 //!
 //! Compile-checked cross-platform in CI (`cargo check --target
 //! x86_64-pc-windows-msvc`); live smoke runs on the H-09 Windows box.
 
 use std::path::{Path, PathBuf};
 
-use crate::{AwakeGuard, KeyStore, PlatformAdapter, PlatformError, PowerHint, Result, ServiceMode};
+use crate::{AwakeGuard, PlatformAdapter, PlatformError, Result, ServiceMode};
 
 /// 老版本（#957 之前）daemon 的登记方式：HKCU Run 值。现在只读它、删它（迁移），不再写。
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -656,12 +651,6 @@ impl PlatformAdapter for WindowsAdapter {
         })
     }
 
-    fn key_store(&self) -> Box<dyn KeyStore> {
-        Box::new(DpapiStore {
-            dir: self.data_dir().join("keys"),
-        })
-    }
-
     /// NET-26 (#419)：`SetThreadExecutionState` 的状态挂在**调用线程**上。
     /// daemon 在 tokio 多线程 runtime 里拿锁、放锁，两次调用多半落在不同的
     /// worker 上——放锁那一下清的是别的线程的状态，拿锁的那个线程会一直让
@@ -717,50 +706,6 @@ impl PlatformAdapter for WindowsAdapter {
         }
     }
 
-    fn power_hint(&self) -> PowerHint {
-        // NOTE (2026-08-26, W1 real-box run): `powercfg /query` output is
-        // localized (zh-CN Windows prints "当前交流电源设置索引" instead of
-        // "Current AC Power Setting Index"), so the English-only text
-        // parser in crate::parse_powercfg silently matched nothing and
-        // this always returned Unknown on non-English systems. Read the
-        // effective value straight from the registry instead — locale
-        // independent, and it's literally what powercfg itself reads.
-        // Path: HKLM\SYSTEM\CurrentControlSet\Control\Power\User\
-        //   PowerSchemes\<ActiveScheme>\238c9fa8...(SUB_SLEEP)\
-        //   29f6c1db...(STANDBYIDLE), values AC/DCSettingIndex (seconds, 0 = never).
-        // DESK-30 (#294)：AC 和 DC 都要看——只看 AC，笔记本拔掉电源后会睡却报
-        // 「永不睡眠」。
-        hint_from_standby(
-            read_standby_idle_seconds(STANDBY_AC),
-            read_standby_idle_seconds(STANDBY_DC),
-        )
-    }
-
-    /// DESK-22 (#171)：一键关闭「空闲自动睡眠」，让备份能在无人值守时跑完。
-    ///
-    /// 等价物是 `powercfg /x standby-timeout-ac 0`，它写的是 HKLM 下的电源
-    /// 方案键，**非管理员没有写权限**（2026-09-21 实测：以写权限打开该键
-    /// 直接被拒，`Requested registry access is not allowed`）。所以必须提权，
-    /// 走 `ShellExecuteExW` 的 `runas` 动词弹 UAC——与 macOS 侧那个管理员
-    /// 授权弹窗对等。
-    ///
-    /// ⚠️ **只设 AC，不设 DC**，回读也只读 AC，所以本函数自身自洽。DESK-30
-    /// (#294) 之后 [`power_hint`](Self::power_hint) 已经同时看 AC / DC：在
-    /// DC ≠ 0 的笔记本上点完这里，向导会如实显示「用电池时仍会睡」。把这里
-    /// 也扩到 DC 是 DESK-41（#486）的事，这里没有做。
-    /// （macOS 侧 `pmset -a` 设所有场景，`parse_pmset` 也检测所有场景。）
-    ///
-    /// ⚠️ **不信退出码，动手后回读**。2026-09-21 在 Windows 11 26200 上实测
-    /// （非管理员）：`powercfg /x standby-timeout-ac 0` 退出码是 **0**，而那个
-    /// 注册表键的最后写入时间**一点没变**——它压根没写成，却报了成功。拿退出
-    /// 码当"已生效"就是本仓这一轮在修的那类缺陷（#268 那个 0 字节 daemon
-    /// 注册完报 resident 是同一形状）。
-    fn disable_auto_sleep(&self) -> Result<crate::Applied> {
-        let before = read_standby_idle_seconds(STANDBY_AC);
-        elevated_powercfg("/x standby-timeout-ac 0")?;
-        verdict_from_readback(before, read_standby_idle_seconds(STANDBY_AC))
-    }
-
     // ── QA-09 迁移（#211）桌面壳批次 ───────────────────────────────
     fn platform_name(&self) -> &'static str {
         "windows"
@@ -771,12 +716,6 @@ impl PlatformAdapter for WindowsAdapter {
     /// 字面量是因为 `const` 里没法做字符串拼接。
     fn daemon_executable_name(&self) -> &'static str {
         "ppf-daemon.exe"
-    }
-
-    /// 「电源和睡眠」设置页。迁移前桌面壳直接把这个字符串交给 opener
-    /// 插件；现在字符串归这里，打开动作仍归桌面壳（理由见 trait 上的说明）。
-    fn power_settings_uri(&self) -> Option<&'static str> {
-        Some("ms-settings:powersleep")
     }
 
     /// DESK-52 (#787)：直接调系统 API 结束进程，**不再拉起 `taskkill.exe`**。
@@ -1213,161 +1152,6 @@ pub fn ac_line_verdict(ac_line_status: u8) -> Option<bool> {
     }
 }
 
-/// Registry value names of the plugged-in / on-battery standby timeout.
-const STANDBY_AC: &str = "ACSettingIndex";
-const STANDBY_DC: &str = "DCSettingIndex";
-
-/// DESK-30 (#294)：与 macOS 的 `parse_pmset` 同口径——取所有电源场景里最小
-/// 的正数；读到的全是 0 才是「永不睡眠」；一个都没读到才是 `Unknown`。
-/// 纯函数：注册表读取那半在 CI 上没法造数据。
-fn hint_from_standby(ac: Option<u32>, dc: Option<u32>) -> PowerHint {
-    let read: Vec<u32> = [ac, dc].into_iter().flatten().collect();
-    if read.is_empty() {
-        return PowerHint::Unknown;
-    }
-    match read.into_iter().filter(|s| *s > 0).min() {
-        None => PowerHint::NeverSleeps,
-        Some(seconds) => PowerHint::SleepsWhenIdle {
-            minutes: seconds.div_ceil(60),
-        },
-    }
-}
-
-/// Read one of the active power scheme's standby-idle timeouts (seconds;
-/// 0 = never) straight from the registry — locale-independent, unlike
-/// parsing `powercfg /query`'s localized text output. `value` is
-/// [`STANDBY_AC`] or [`STANDBY_DC`].
-fn read_standby_idle_seconds(value: &str) -> Option<u32> {
-    use winreg::enums::HKEY_LOCAL_MACHINE;
-    use winreg::RegKey;
-    const SUB_SLEEP: &str = "238c9fa8-0aad-41ed-83f4-97be242c8f20";
-    const STANDBYIDLE: &str = "29f6c1db-86da-48c5-9fdb-f2b67b1f44da";
-    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    let schemes = hklm
-        .open_subkey(r"SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes")
-        .ok()?;
-    let active: String = schemes.get_value("ActivePowerScheme").ok()?;
-    let setting = schemes
-        .open_subkey(format!("{active}\\{SUB_SLEEP}\\{STANDBYIDLE}"))
-        .ok()?;
-    setting.get_value::<u32, _>(value).ok()
-}
-
-/// DESK-22 (#171)：把「回读到的值」翻译成结果。
-///
-/// 抽成纯函数是刻意的——提权那半只能真机手测（要 UAC 交互、要改这台机器的
-/// 电源设置），但**「回读不是 0 就不许报成功」这条判据本身**可以在不提权、
-/// 不改任何设置的前提下锁成断言。判据一旦松掉（比如有人图省事让 `None` 也
-/// 返回 `Done`），单测必须立刻红。
-fn verdict_from_readback(before: Option<u32>, after: Option<u32>) -> Result<crate::Applied> {
-    match after {
-        Some(0) => Ok(crate::Applied::Done),
-        Some(seconds) => Err(PlatformError::Failed {
-            action: "disable_auto_sleep",
-            detail: format!(
-                "powercfg 报了成功，但回读到空闲睡眠仍是 {seconds} 秒（改动前 {before:?}）——设置没有生效"
-            ),
-        }),
-        None => Err(PlatformError::Failed {
-            action: "disable_auto_sleep",
-            detail: "powercfg 报了成功，但读不回设置值，无法确认是否生效".into(),
-        }),
-    }
-}
-
-/// 以管理员身份、**隐藏窗口**地跑 `powercfg.exe`，等它结束并检查退出码。
-///
-/// 为什么不用 `std::process::Command`：只有 shell 的 `runas` 动词能触发 UAC，
-/// `CreateProcess`（`Command` 走的那条）做不到提权。
-///
-/// 为什么 `SW_HIDE`：`powercfg.exe` 是 console 子系统程序，桌面壳自己是 GUI
-/// 子系统、手上没有控制台，不隐藏的话 Windows 会给它新分配一个 ⇒ 闪一下黑窗。
-/// 这正是 DESK-19 (#168) 修过的那一类。`ShellExecuteEx` **不接受**
-/// `CREATE_NO_WINDOW`（那是 `CreateProcess` 的标志），`nShow` 是唯一的手柄。
-/// ⚠️ 这一条只能真机肉眼验，代码里锁不住——列在 #171 的手测清单第一条。
-fn elevated_powercfg(params: &str) -> Result<()> {
-    use std::os::windows::ffi::OsStrExt as _;
-    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_CANCELLED};
-    use windows_sys::Win32::System::Threading::{
-        GetExitCodeProcess, WaitForSingleObject, INFINITE,
-    };
-    use windows_sys::Win32::UI::Shell::{
-        ShellExecuteExW, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
-    };
-    use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
-
-    fn wide(s: &str) -> Vec<u16> {
-        std::ffi::OsStr::new(s)
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect()
-    }
-    let verb = wide("runas");
-    let file = wide("powercfg.exe");
-    let args = wide(params);
-
-    let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
-    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
-    // NOCLOSEPROCESS: 要拿到进程句柄才能等它结束、读退出码。
-    // NOASYNC: 本调用返回后我们还要立刻回读注册表，必须确保动作已经完成。
-    info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
-    info.lpVerb = verb.as_ptr();
-    info.lpFile = file.as_ptr();
-    info.lpParameters = args.as_ptr();
-    info.nShow = SW_HIDE;
-
-    // SAFETY: info 已零初始化并填好 cbSize；三个宽字符串都是 NUL 结尾且在
-    // 整个调用期间存活（它们的所有权在本函数栈上，晚于本次调用释放）。
-    let started = unsafe { ShellExecuteExW(&mut info) };
-    if started == 0 {
-        // SAFETY: 紧跟失败调用之后读取本线程的错误码。
-        let code = unsafe { GetLastError() };
-        // 用户在 UAC 上点了「否」——这不是失败，是他的选择。
-        if code == ERROR_CANCELLED {
-            return Err(PlatformError::Cancelled {
-                action: "disable_auto_sleep",
-            });
-        }
-        return Err(PlatformError::Failed {
-            action: "disable_auto_sleep",
-            detail: format!("提权启动失败（Win32 错误码 {code}）"),
-        });
-    }
-
-    if info.hProcess.is_null() {
-        // 拿不到句柄就等不了、也读不到退出码。不装作成功——反正后面还有
-        // 回读兜底，但这里先把"没法确认"说出来。
-        return Err(PlatformError::Failed {
-            action: "disable_auto_sleep",
-            detail: "提权进程已启动，但拿不到句柄，无法确认它是否跑完".into(),
-        });
-    }
-
-    // SAFETY: hProcess 由 SEE_MASK_NOCLOSEPROCESS 保证有效，且下面只用一次。
-    unsafe { WaitForSingleObject(info.hProcess, INFINITE) };
-    let mut exit_code: u32 = 0;
-    // SAFETY: 同上；exit_code 是栈上的 u32 出参。
-    let got = unsafe { GetExitCodeProcess(info.hProcess, &mut exit_code) };
-    // SAFETY: 同上；之后不再使用该句柄。
-    unsafe { CloseHandle(info.hProcess) };
-
-    if got == 0 {
-        return Err(PlatformError::Failed {
-            action: "disable_auto_sleep",
-            detail: "读不到提权进程的退出码，无法确认它是否成功".into(),
-        });
-    }
-    if exit_code != 0 {
-        return Err(PlatformError::Failed {
-            action: "disable_auto_sleep",
-            detail: format!("powercfg 退出码 {exit_code}"),
-        });
-    }
-    // ⚠️ 退出码 0 **不代表设置生效**（见 disable_auto_sleep 的注释）。
-    // 判定交给调用方的回读。
-    Ok(())
-}
-
 /// RAII wrapper over the execution state held by the dedicated awake
 /// thread (see `assert_awake`). Dropping disconnects the channel; the
 /// thread clears its own state and is joined here.
@@ -1381,57 +1165,6 @@ impl Drop for ExecutionStateGuard {
         drop(self.release.take());
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
-        }
-    }
-}
-
-/// DPAPI-protected key files under the data dir — only this Windows
-/// user (on this machine) can decrypt them.
-struct DpapiStore {
-    dir: PathBuf,
-}
-
-impl DpapiStore {
-    fn path(&self, name: &str) -> PathBuf {
-        // Names are internal identifiers (e.g. "device-key"), sanitized
-        // defensively anyway.
-        let safe: String = name
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || c == '-' {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        self.dir.join(format!("{safe}.dpapi"))
-    }
-}
-
-impl KeyStore for DpapiStore {
-    fn store(&self, name: &str, secret: &[u8]) -> Result<()> {
-        std::fs::create_dir_all(&self.dir).map_err(io_err("create keys dir"))?;
-        let blob = dpapi_protect(secret)?;
-        std::fs::write(self.path(name), blob).map_err(io_err("write key blob"))?;
-        Ok(())
-    }
-
-    fn load(&self, name: &str) -> Result<Option<Vec<u8>>> {
-        let path = self.path(name);
-        let blob = match std::fs::read(&path) {
-            Ok(b) => b,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(io_err("read key blob")(e)),
-        };
-        dpapi_unprotect(&blob).map(Some)
-    }
-
-    fn delete(&self, name: &str) -> Result<()> {
-        match std::fs::remove_file(self.path(name)) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(io_err("delete key blob")(e)),
         }
     }
 }
@@ -1679,77 +1412,6 @@ pub(crate) fn restore_dacl(dir: &Path, original: &[u8]) {
             std::ptr::null(),
         )
     };
-}
-
-fn dpapi_protect(data: &[u8]) -> Result<Vec<u8>> {
-    use windows_sys::Win32::Foundation::LocalFree;
-    use windows_sys::Win32::Security::Cryptography::{CryptProtectData, CRYPT_INTEGER_BLOB};
-    let input = CRYPT_INTEGER_BLOB {
-        cbData: data.len() as u32,
-        pbData: data.as_ptr() as *mut u8,
-    };
-    let mut output = CRYPT_INTEGER_BLOB {
-        cbData: 0,
-        pbData: std::ptr::null_mut(),
-    };
-    // SAFETY: input points at valid memory for the duration of the call;
-    // on success output is a LocalAlloc'd buffer we copy then free.
-    let ok = unsafe {
-        CryptProtectData(
-            &input,
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            0,
-            &mut output,
-        )
-    };
-    if ok == 0 {
-        return Err(PlatformError::Failed {
-            action: "CryptProtectData",
-            detail: "returned FALSE".into(),
-        });
-    }
-    let blob =
-        unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
-    unsafe { LocalFree(output.pbData as _) };
-    Ok(blob)
-}
-
-fn dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>> {
-    use windows_sys::Win32::Foundation::LocalFree;
-    use windows_sys::Win32::Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB};
-    let input = CRYPT_INTEGER_BLOB {
-        cbData: blob.len() as u32,
-        pbData: blob.as_ptr() as *mut u8,
-    };
-    let mut output = CRYPT_INTEGER_BLOB {
-        cbData: 0,
-        pbData: std::ptr::null_mut(),
-    };
-    // SAFETY: as in dpapi_protect.
-    let ok = unsafe {
-        CryptUnprotectData(
-            &input,
-            std::ptr::null_mut(),
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            0,
-            &mut output,
-        )
-    };
-    if ok == 0 {
-        return Err(PlatformError::Failed {
-            action: "CryptUnprotectData",
-            detail: "returned FALSE (wrong user or corrupted blob)".into(),
-        });
-    }
-    let data =
-        unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
-    unsafe { LocalFree(output.pbData as _) };
-    Ok(data)
 }
 
 #[cfg(test)]
@@ -2099,73 +1761,6 @@ mod qa09_migrated_capability_tests {
     }
 }
 
-#[cfg(test)]
-mod desk22_disable_auto_sleep_tests {
-    use super::*;
-
-    /// 唯一可信的成功条件：回读到 0。
-    #[test]
-    fn readback_zero_is_the_only_success() {
-        assert_eq!(
-            verdict_from_readback(Some(1200), Some(0)).unwrap(),
-            crate::Applied::Done
-        );
-    }
-
-    /// 回读仍是非零 ⇒ 没生效，必须报错。
-    ///
-    /// 这条守的是那个实测事实：非管理员下 `powercfg /x` 退出码是 0 但注册表
-    /// 没被写。谁把判据放松成"退出码 0 就算成功"，这里必须红。
-    #[test]
-    fn readback_nonzero_must_not_be_reported_as_success() {
-        let e = verdict_from_readback(Some(1200), Some(1200)).unwrap_err();
-        let msg = e.to_string();
-        assert!(msg.contains("1200"), "错误信息要带上实际读到的值：{msg}");
-        assert!(msg.contains("没有生效"), "错误信息要说清没生效：{msg}");
-    }
-
-    /// 读不回值 ⇒ **不许**当成功。「没法确认」不等于「成功」——
-    /// 这是 fail-closed 的方向，放松它就是静默放行。
-    #[test]
-    fn unreadable_state_must_not_be_reported_as_success() {
-        assert!(verdict_from_readback(None, None).is_err());
-        assert!(verdict_from_readback(Some(0), None).is_err());
-    }
-
-    /// DESK-30 (#294) RED：AC / DC 取最小正数，与 macOS `parse_pmset` 同口径。
-    /// `(0, 1200)` 与 `(1200, 600)` 是「只看 AC」会答错的两组。
-    #[test]
-    fn desk30_power_hint_takes_the_smallest_positive_of_ac_and_dc() {
-        let sleeps = |minutes| PowerHint::SleepsWhenIdle { minutes };
-        assert_eq!(hint_from_standby(Some(0), Some(0)), PowerHint::NeverSleeps);
-        assert_eq!(hint_from_standby(Some(0), Some(1200)), sleeps(20));
-        assert_eq!(hint_from_standby(Some(1200), Some(0)), sleeps(20));
-        assert_eq!(hint_from_standby(Some(600), Some(1200)), sleeps(10));
-        assert_eq!(hint_from_standby(Some(1200), Some(600)), sleeps(10));
-    }
-
-    #[test]
-    fn desk30_power_hint_with_values_missing() {
-        assert_eq!(hint_from_standby(None, None), PowerHint::Unknown);
-        assert_eq!(hint_from_standby(Some(0), None), PowerHint::NeverSleeps);
-        assert_eq!(
-            hint_from_standby(None, Some(90)),
-            PowerHint::SleepsWhenIdle { minutes: 2 }
-        );
-    }
-
-    /// 取消是独立的一类，不能被归成失败——否则 UI 会把用户自己的选择
-    /// 说成出错。
-    #[test]
-    fn cancelled_is_its_own_variant_not_a_failure() {
-        let c = PlatformError::Cancelled {
-            action: "disable_auto_sleep",
-        };
-        assert!(matches!(c, PlatformError::Cancelled { .. }));
-        assert!(c.to_string().contains("取消"), "{c}");
-    }
-}
-
 /// DESK-52 (#787)：TerminateProcess 给被杀进程的退出码。与 `taskkill /F`
 /// 一致用 1——非零，表示「不是自己正常退出的」。
 const KILLED_EXIT_CODE: u32 = 1;
@@ -2399,43 +1994,6 @@ mod desk24_data_dir_tests {
     fn the_directory_name_is_the_bundle_identifier() {
         assert_eq!(DATA_DIR_NAME, "com.p-pass.desktop");
         assert_eq!(current_data_dir().file_name().unwrap(), DATA_DIR_NAME);
-    }
-
-    /// 卡面验收标准第 3 条点名的那条性质：**DPAPI 密文搬了位置照样解得开。**
-    ///
-    /// 用的是真的 `CryptProtectData` / `CryptUnprotectData`，不是模拟——
-    /// DPAPI 的用户态密钥挂在 Windows 账户上，与密文文件躺在哪个目录毫无
-    /// 关系，所以同机搬家不影响解密。**跨机器才解不开**，而那正是本卡要
-    /// 把数据目录挪出漫游目录的理由。
-    ///
-    /// 今天产品代码还没有一处调 `key_store()`（身份密钥是 data_dir 里的
-    /// 明文文件，等 T-071 才进系统密钥仓），所以真机上没有密文可验。
-    /// 这条把性质本身钉死，等密文真落地时不必回头补。
-    #[test]
-    fn a_dpapi_blob_still_decrypts_after_its_directory_moves() {
-        let tmp = tempfile::tempdir().unwrap();
-        let legacy_keys = tmp.path().join("Roaming").join("P-Pass").join("keys");
-        let current = tmp.path().join("Local").join("com.p-pass.desktop");
-        let secret = b"32-bytes-of-pretend-device-key!!";
-
-        let before = DpapiStore {
-            dir: legacy_keys.clone(),
-        };
-        before.store("device-key", secret).unwrap();
-        assert!(legacy_keys.join("device-key.dpapi").is_file());
-
-        // 搬家：同一台机器、同一个 Windows 用户，换个目录。
-        std::fs::create_dir_all(&current).unwrap();
-        std::fs::rename(&legacy_keys, current.join("keys")).unwrap();
-
-        let after = DpapiStore {
-            dir: current.join("keys"),
-        };
-        assert_eq!(
-            after.load("device-key").unwrap().as_deref(),
-            Some(&secret[..]),
-            "同机搬家之后必须还解得开"
-        );
     }
 
     /// 适配器返回的是**生效**目录：两者都不存在（全新安装）时应当是新位置。

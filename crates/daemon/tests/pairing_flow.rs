@@ -24,7 +24,7 @@ async fn start_daemon_with_clock(
 ) -> (IrohTransport, transport::PeerAddr, Pairing) {
     let tp = endpoint().await;
     let addr = tp.local_addr();
-    let (pairing, mut pending) = Pairing::new(db.clone(), tp.node_id(), None, None);
+    let (pairing, mut pending) = Pairing::new(db.clone(), tp.node_id(), None);
     tokio::spawn(async move {
         while let Some(req) = pending.recv().await {
             let _ = req.decide(if accept {
@@ -462,7 +462,7 @@ fn now() -> i64 {
 async fn park_daemon(db: Db, request_ttl_ms: u64) -> (IrohTransport, transport::PeerAddr, Pairing) {
     let tp = endpoint().await;
     let addr = tp.local_addr();
-    let (pairing, mut pending) = Pairing::new(db.clone(), tp.node_id(), None, None);
+    let (pairing, mut pending) = Pairing::new(db.clone(), tp.node_id(), None);
     let pairing = pairing.with_pending_ttl(request_ttl_ms as i64);
     tokio::spawn(async move {
         // Keep the received PendingPairs ALIVE (holding them keeps their
@@ -589,7 +589,7 @@ async fn start_daemon_slow_owner(
 ) -> (IrohTransport, transport::PeerAddr, Pairing) {
     let tp = endpoint().await;
     let addr = tp.local_addr();
-    let (pairing, mut pending) = Pairing::new(db.clone(), tp.node_id(), None, None);
+    let (pairing, mut pending) = Pairing::new(db.clone(), tp.node_id(), None);
     tokio::spawn(async move {
         while let Some(req) = pending.recv().await {
             tokio::time::sleep(std::time::Duration::from_millis(owner_delay_ms)).await;

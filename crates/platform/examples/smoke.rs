@@ -1,5 +1,5 @@
 //! T-040 人工验收剧本 (`just platform-smoke`):
-//! 自启注册→查询→注销；防睡眠断言可见→释放后消失；Keychain/DPAPI 往返。
+//! 自启注册→查询→注销；防睡眠断言可见→释放后消失。
 //! Exits non-zero on any failed step. H-09 runs this on both platforms.
 
 // DESK-33 (#325)：这是开发者手动 / 测试框架跑的冒烟 example，不是产品进程，
@@ -12,7 +12,7 @@ fn main() {
 }
 
 #[cfg(any(target_os = "macos", windows))]
-use platform::{PlatformAdapter, PowerHint};
+use platform::PlatformAdapter;
 
 #[cfg(any(target_os = "macos", windows))]
 fn main() {
@@ -21,8 +21,10 @@ fn main() {
 
     println!("── service_mode: {:?}", a.service_mode());
     println!("── data_dir: {}", a.data_dir().display());
+    // power_hint 只有 macOS 实现（Windows 向导不展示睡眠策略，#1041 起默认 Unknown）。
+    #[cfg(target_os = "macos")]
     match a.power_hint() {
-        PowerHint::Unknown => {
+        platform::PowerHint::Unknown => {
             println!("✗ power_hint: Unknown（解析失败？）");
             failures += 1;
         }
@@ -79,29 +81,6 @@ fn main() {
         }
         Err(e) => {
             println!("✗ assert_awake: {e}");
-            failures += 1;
-        }
-    }
-
-    // Key store round-trip.
-    let ks = a.key_store();
-    let secret = b"smoke-secret-42".to_vec();
-    match ks
-        .store("smoke-test", &secret)
-        .and_then(|()| ks.load("smoke-test"))
-    {
-        Ok(Some(loaded)) if loaded == secret => {
-            let _ = ks.delete("smoke-test");
-            match ks.load("smoke-test") {
-                Ok(None) => println!("✓ key store: 存取删全通"),
-                _ => {
-                    println!("✗ key store: 删除后仍可读");
-                    failures += 1;
-                }
-            }
-        }
-        other => {
-            println!("✗ key store 往返失败: {other:?}");
             failures += 1;
         }
     }

@@ -88,8 +88,6 @@ function desktop() {
             return { devices: [] };
           case "device.watermarks":
             return { watermarks: [] };
-          case "activity.list":
-            return { batches: [] };
           case "audit.list":
             return { events: [] };
           case "timeline.page":

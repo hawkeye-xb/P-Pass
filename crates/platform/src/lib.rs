@@ -4,8 +4,8 @@
 //! Architecture enforcement: this is the ONLY crate allowed to use
 //! `#[cfg(windows)]` / `#[cfg(target_os = "macos")]` (rule B.2).
 //!
-//! The pure parsers (`pmset` / `powercfg` output → [`PowerHint`]) are
-//! platform-independent functions so both are unit-tested everywhere;
+//! The pure parser (`pmset` output → [`PowerHint`]) is a
+//! platform-independent function so it is unit-tested everywhere;
 //! only the syscall/process wrappers live behind cfg.
 
 // DESK-33 (#325)：clippy.toml 禁止产品代码直接 `Command::new`；单元测试
@@ -127,13 +127,6 @@ impl PowerWatch {
             inner: Box::new(inner),
         }
     }
-}
-
-/// Device private-key storage (DPAPI / Keychain).
-pub trait KeyStore {
-    fn store(&self, name: &str, secret: &[u8]) -> Result<()>;
-    fn load(&self, name: &str) -> Result<Option<Vec<u8>>>;
-    fn delete(&self, name: &str) -> Result<()>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -369,11 +362,14 @@ pub trait PlatformAdapter: Send + Sync {
     }
 
     fn service_mode(&self) -> ServiceMode;
-    // 安全
-    fn key_store(&self) -> Box<dyn KeyStore>;
     // 电源（MVP 尽力而为）
     fn assert_awake(&self) -> Result<AwakeGuard>;
-    fn power_hint(&self) -> PowerHint;
+    /// 当前睡眠策略（给 macOS 向导第 2 步用）。**默认 `Unknown`**：Windows 向导
+    /// 不展示睡眠策略（DAE-11 起由 daemon 的 AwakeGuard 自动保持唤醒），#1041 起
+    /// Windows 不再实现，这里的默认值就是它的行为。
+    fn power_hint(&self) -> PowerHint {
+        PowerHint::Unknown
+    }
     // 系统集成
     fn notify(&self, title: &str, body: &str);
     /// 本平台**生效的**数据目录。
@@ -520,9 +516,10 @@ pub trait PlatformAdapter: Send + Sync {
 
     /// DESK-22 (#171)：关掉「空闲自动睡眠」，让备份能在无人值守时跑完。
     ///
-    /// 两个平台都要走系统的授权弹窗（macOS 是 Touch ID/密码，Windows 是
-    /// UAC），所以 `Err(PlatformError::Cancelled)` 是**正常路径之一**，
-    /// 调用方必须把它和真失败分开呈现。
+    /// 要走系统的授权弹窗（macOS 是 Touch ID/密码；Windows 的 UAC 实现随
+    /// #1041 删除，Windows 向导不再提供这个入口），所以
+    /// `Err(PlatformError::Cancelled)` 是**正常路径之一**，调用方必须把它和
+    /// 真失败分开呈现。
     ///
     /// ⚠️ 实现方**必须回读确认**再返回 `Done`。Windows 上实测过：
     /// `powercfg /x standby-timeout-ac 0` 在非管理员下**退出码是 0，但注册表
@@ -632,7 +629,7 @@ pub trait PlatformAdapter: Send + Sync {
     // ── UPD-06 (#616)：让**系统**负责"重启桌面壳" ─────────────────────
     //
     // 背景：更新装完磁盘上已是新版，但正在跑的壳仍是旧版，而**壳不能原地
-    // 换代码**。0.7.5 的解法是壳自己 `restart_app`（spawn 自己 + exit），
+    // 换代码**。0.7.5 的解法是壳自己重启（spawn 自己 + exit，今天是 `relaunch_shell` 的退化路径），
     // 那要在被替换的进程里自证没竞态（托盘常驻 + single-instance）。
     //
     // 更好的一层：把"杀 + 拉"交给系统的服务管理器（macOS = launchd），
@@ -703,17 +700,6 @@ pub trait PlatformAdapter: Send + Sync {
     /// 调用方**必须先比对这个路径**再 kickstart，否则可能拉起另一份副本。
     fn shell_agent_registered_exec(&self) -> Result<Option<std::path::PathBuf>> {
         Ok(None)
-    }
-
-    /// **服务管理器眼里正在跑的壳**的 pid（`None` = 没在跑 / 没登记 / 本平台没有）。
-    ///
-    /// 为什么需要它（UPD-07 #617）：owner（daemon）在动手换壳前，必须先确认
-    /// "壳登记里的那个实例**就是用户现在用的这一把**" —— `kickstart -k` 只杀得到
-    /// 服务管理器自己启动的进程；pid 对不上（壳是用户手动打开的、或登记里的实例
-    /// 已经死了）⇒ kickstart 只会再拉起一个实例、被 single-instance 顶掉 ⇒
-    /// 用户点"重启"看起来什么都没发生。**宁可不动，也不要制造这种假动作。**
-    fn shell_agent_running_pid(&self) -> Option<u32> {
-        None
     }
 
     /// 让服务管理器**杀掉并重启**壳，返回新实例 pid。
@@ -844,9 +830,6 @@ impl PlatformAdapter for HeadlessAdapter {
     fn service_mode(&self) -> ServiceMode {
         ServiceMode::UserAutostart
     }
-    fn key_store(&self) -> Box<dyn KeyStore> {
-        Box::new(NoKeyStore)
-    }
     fn assert_awake(&self) -> Result<AwakeGuard> {
         // Servers don't idle-sleep; a no-op guard keeps callers simple.
         Ok(AwakeGuard { inner: () })
@@ -931,25 +914,6 @@ impl PlatformAdapter for HeadlessAdapter {
     }
 }
 
-#[cfg(not(any(target_os = "macos", windows)))]
-struct NoKeyStore;
-
-#[cfg(not(any(target_os = "macos", windows)))]
-impl KeyStore for NoKeyStore {
-    fn store(&self, _name: &str, _secret: &[u8]) -> Result<()> {
-        Err(PlatformError::Failed {
-            action: "key store",
-            detail: "no secure store on this platform".into(),
-        })
-    }
-    fn load(&self, _name: &str) -> Result<Option<Vec<u8>>> {
-        Ok(None)
-    }
-    fn delete(&self, _name: &str) -> Result<()> {
-        Ok(())
-    }
-}
-
 // ── Pure parsers (unit-tested on every platform) ─────────────────────
 
 /// Parse `pmset -g custom` output: the smallest positive `sleep` value
@@ -978,36 +942,20 @@ pub fn parse_pmset(output: &str) -> PowerHint {
     }
 }
 
-/// Parse `powercfg /query <scheme> SUB_SLEEP STANDBYIDLE` style output:
-/// the current AC setting index is seconds (0 = never).
-pub fn parse_powercfg(output: &str) -> PowerHint {
-    for line in output.lines() {
-        let t = line.trim();
-        // "Current AC Power Setting Index: 0x00000384"
-        if let Some(rest) = t
-            .strip_prefix("Current AC Power Setting Index:")
-            .map(str::trim)
-        {
-            let seconds = if let Some(hex) = rest.strip_prefix("0x") {
-                u32::from_str_radix(hex, 16).ok()
-            } else {
-                rest.parse::<u32>().ok()
-            };
-            return match seconds {
-                Some(0) => PowerHint::NeverSleeps,
-                Some(s) => PowerHint::SleepsWhenIdle {
-                    minutes: s.div_ceil(60),
-                },
-                None => PowerHint::Unknown,
-            };
-        }
-    }
-    PowerHint::Unknown
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 取消是独立的一类，不能被归成失败——否则 UI 会把用户自己的选择
+    /// 说成出错（macOS 的 `disable_auto_sleep` 仍走这条路径）。
+    #[test]
+    fn cancelled_is_its_own_variant_not_a_failure() {
+        let c = PlatformError::Cancelled {
+            action: "disable_auto_sleep",
+        };
+        assert!(matches!(c, PlatformError::Cancelled { .. }));
+        assert!(c.to_string().contains("取消"), "{c}");
+    }
 
     #[test]
     fn pmset_sleep_zero_means_never() {
@@ -1025,26 +973,6 @@ mod tests {
     fn pmset_displaysleep_is_not_system_sleep() {
         let out = " displaysleep 5\n disksleep 10\n";
         assert_eq!(parse_pmset(out), PowerHint::Unknown);
-    }
-
-    #[test]
-    fn powercfg_hex_seconds_to_minutes() {
-        let out = "  Current AC Power Setting Index: 0x00000384\n"; // 900 s
-        assert_eq!(
-            parse_powercfg(out),
-            PowerHint::SleepsWhenIdle { minutes: 15 }
-        );
-    }
-
-    #[test]
-    fn powercfg_zero_means_never() {
-        let out = "Current AC Power Setting Index: 0x00000000";
-        assert_eq!(parse_powercfg(out), PowerHint::NeverSleeps);
-    }
-
-    #[test]
-    fn powercfg_garbage_is_unknown() {
-        assert_eq!(parse_powercfg("no such section"), PowerHint::Unknown);
     }
 
     #[cfg(target_os = "macos")]

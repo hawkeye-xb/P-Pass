@@ -45,7 +45,7 @@ struct Daemon {
 async fn start_daemon(root: &Path) -> Daemon {
     let db = Db::open_in_memory().await.unwrap();
     let tp = bind(&[transport::ALPN_CTRL, transport::ALPN_BLOBS]).await;
-    let (pairing, mut pending) = Pairing::new(db.clone(), tp.node_id(), None, None);
+    let (pairing, mut pending) = Pairing::new(db.clone(), tp.node_id(), None);
     // The owner taps "allow" on the desktop.
     tokio::spawn(async move {
         while let Some(req) = pending.recv().await {

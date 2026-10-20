@@ -250,24 +250,11 @@ pub struct Pairing {
     /// [`PENDING_TTL_MS`]; tests inject a short one via
     /// [`Pairing::with_pending_ttl`] instead of sleeping 110 s.
     pending_ttl_ms: i64,
-    /// Live dialable-address provider — historically appended to QR
-    /// strings as `&a=` (full PeerAddr base64) so a scan connects without
-    /// discovery services (真机冒烟教训: 办公网屏蔽 n0 发现,纯 NodeId
-    /// 拨号失败). A PROVIDER, not a cached string: the relay attaches
-    /// seconds after bind and addresses drift over a daemon's weeks-long
-    /// life — a QR must carry NOW's address (真机教训: 常驻 20 分钟的
-    /// daemon 发着启动瞬间的裸内网地址).
-    ///
-    /// H-10b rework (2026-08-08): the full PeerAddr QR (id + relay +
-    /// direct IPs, 100–180 chars base64) was too dense to scan. The QR
-    /// now carries only the relay URL as `&r=`; the Android side rebuilds
-    /// the address token from node + relay. Kept for reference only —
-    /// start() no longer appends `&a=`.
-    #[allow(dead_code)]
-    addr_provider: Option<Arc<dyn Fn() -> String + Send + Sync>>,
     /// Relay URL provider, appended to QR strings as `&r=` (H-10b).
-    /// Separate from addr_provider because the QR must stay short — a
-    /// relay URL (~30 chars) instead of the full PeerAddr (~150 chars).
+    /// The QR must stay short — a relay URL (~30 chars) instead of the full
+    /// PeerAddr (~150 chars) — so the full dialable address is never embedded
+    /// (H-10b rework 2026-08-08: the `&a=` PeerAddr QR was too dense to scan;
+    /// the Android side rebuilds the address token from node + relay).
     relay_provider: Option<Arc<dyn Fn() -> Option<String> + Send + Sync>>,
     /// IPC-02: 事件总线（可选）——配对落定（accept/merge）后发
     /// device.changed，桌面设备行即时更新。
@@ -277,13 +264,11 @@ pub struct Pairing {
 
 impl Pairing {
     /// Returns the engine plus the receiver the owner UI listens on.
-    /// `addr_provider` returns `transport.local_addr().to_string()` in
-    /// production (None keeps QR strings short in unit tests);
-    /// `relay_provider` returns `transport.local_addr().relay_url()`.
+    /// `relay_provider` returns `transport.local_addr().relay_url()` in
+    /// production (None keeps QR strings short in unit tests).
     pub fn new(
         db: Db,
         node_id: transport::NodeId,
-        addr_provider: Option<Arc<dyn Fn() -> String + Send + Sync>>,
         relay_provider: Option<Arc<dyn Fn() -> Option<String> + Send + Sync>>,
     ) -> (Self, tokio::sync::mpsc::UnboundedReceiver<PendingPair>) {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -292,7 +277,6 @@ impl Pairing {
                 db,
                 node_id,
                 pending_ttl_ms: PENDING_TTL_MS,
-                addr_provider,
                 relay_provider,
                 events: None,
                 inner: Arc::new(Mutex::new(Inner {
@@ -855,7 +839,7 @@ mod tests {
             .unwrap();
         rt.block_on(async {
             let db = Db::open_in_memory().await.unwrap();
-            let (pairing, _rx) = Pairing::new(db, transport::NodeId([0xAB; 32]), None, None);
+            let (pairing, _rx) = Pairing::new(db, transport::NodeId([0xAB; 32]), None);
             let qr = pairing.start([0x11; 12], 1_000);
             assert_eq!(
                 qr,

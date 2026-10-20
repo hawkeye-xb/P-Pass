@@ -278,7 +278,7 @@ async fn device_revoke_over_ipc_closes_the_quic_subscription() {
 
     // 与 main.rs 同款接线：IpcServer 拿的是 Router 那份 subscriptions
     // 的 clone（同一张表），不是另开一份。
-    let (pairing, pending_rx) = Pairing::new(f.db.clone(), f.storage_tp.node_id(), None, None);
+    let (pairing, pending_rx) = Pairing::new(f.db.clone(), f.storage_tp.node_id(), None);
     let diag = DiagAgg::new(f.db.clone());
     let ipc_dir = tempfile::tempdir().unwrap();
     let mut ipc = IpcServer::new(

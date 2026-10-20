@@ -27,8 +27,6 @@ pub struct Config {
     /// Cloud/dogfood deployments pin this to the firewall-allowed port.
     pub bind_addr: Option<std::net::SocketAddr>,
     pub relay_urls: Vec<String>,
-    pub rendezvous_url: String,
-    pub log_level: String,
 }
 
 /// Partial overlay as read from `config.toml` — every field optional.
@@ -38,8 +36,16 @@ struct Overlay {
     data_dir: Option<PathBuf>,
     bind_addr: Option<std::net::SocketAddr>,
     relay_urls: Option<Vec<String>>,
-    rendezvous_url: Option<String>,
-    log_level: Option<String>,
+    /// #1041 兼容字段：`rendezvous_url` 没有任何读者（配对短码会合服务从未接线），
+    /// 旧版示例配置与自建文档却教用户写过它；`log_level` 同理（日志级别一直只认
+    /// `RUST_LOG`）。`deny_unknown_fields` 会把它们当未知字段拒掉、daemon 起不来，
+    /// 所以**接收并忽略**（`IgnoredAny`：任何形状都吃下、不读取）。
+    /// 对应的环境变量 `PPF_RENDEZVOUS_URL` / `PPF_LOG_LEVEL` 不再被读取（同样是静默忽略）。
+    /// 下一个破坏性版本再删。反证：去掉这两个字段，`retired_config_fields_are_accepted_and_ignored` 必红。
+    #[serde(rename = "rendezvous_url")]
+    _retired_rendezvous_url: Option<serde::de::IgnoredAny>,
+    #[serde(rename = "log_level")]
+    _retired_log_level: Option<serde::de::IgnoredAny>,
     /// #949 兼容字段：遥测上报已下线，但已装桌面用户的 config.toml 里都有
     /// 首启写入的 `[telemetry]` 段（`enabled = false`，个别还带 `url`）。
     /// `deny_unknown_fields` 会把它当未知字段拒掉、daemon 起不来，所以这里
@@ -58,8 +64,6 @@ impl Config {
             data_dir: None,
             bind_addr: None,
             relay_urls: overlay.relay_urls.unwrap_or_default(),
-            rendezvous_url: overlay.rendezvous_url.unwrap_or_default(),
-            log_level: overlay.log_level.unwrap_or_else(|| "info".to_string()),
         })
     }
 
@@ -96,12 +100,6 @@ impl Config {
             if let Some(v) = overlay.relay_urls {
                 cfg.relay_urls = v;
             }
-            if let Some(v) = overlay.rendezvous_url {
-                cfg.rendezvous_url = v;
-            }
-            if let Some(v) = overlay.log_level {
-                cfg.log_level = v;
-            }
         }
 
         // Layer 3: PPF_* environment variables (highest precedence).
@@ -120,12 +118,6 @@ impl Config {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
-        }
-        if let Some(v) = env.get("PPF_RENDEZVOUS_URL") {
-            cfg.rendezvous_url = v.clone();
-        }
-        if let Some(v) = env.get("PPF_LOG_LEVEL") {
-            cfg.log_level = v.clone();
         }
 
         Ok(cfg)
@@ -534,8 +526,6 @@ mod tests {
         // 不存在，会毒害路径协商（dogfood 实证）；H-07 上线后恢复三区域列表
         // （见 config/endpoints.default.toml 注释）。
         assert!(cfg.relay_urls.is_empty());
-        assert!(cfg.rendezvous_url.contains("rendezvous"));
-        assert_eq!(cfg.log_level, "info");
         assert_eq!(cfg.data_dir, None);
     }
 
@@ -548,24 +538,19 @@ mod tests {
         let cfg = Config::resolve(Some(file), &env(&[])).unwrap();
         assert_eq!(cfg.data_dir, Some(PathBuf::from("/tmp/lib")));
         assert_eq!(cfg.relay_urls, vec!["https://relay.self-host.example"]);
-        // Untouched fields keep defaults.
-        assert!(cfg.rendezvous_url.contains("p-pass.hawkeye-xb.com"));
-        assert_eq!(cfg.log_level, "info");
     }
 
     #[test]
     fn layer3_env_overrides_file_and_defaults() {
         let file = r#"
-            log_level = "debug"
+            relay_urls = ["https://from-file.example"]
         "#;
         let e = env(&[
             ("PPF_BIND_ADDR", "0.0.0.0:41145"),
-            ("PPF_LOG_LEVEL", "warn"),
             ("PPF_RELAY_URLS", "https://a.example, https://b.example"),
             ("PPF_DATA_DIR", "/env/dir"),
         ]);
         let cfg = Config::resolve(Some(file), &e).unwrap();
-        assert_eq!(cfg.log_level, "warn");
         assert_eq!(
             cfg.relay_urls,
             vec!["https://a.example", "https://b.example"]
@@ -598,6 +583,37 @@ mod tests {
             assert_eq!(cfg.bind_addr, Some("0.0.0.0:41145".parse().unwrap()));
             assert!(cfg.relay_urls.is_empty());
         }
+    }
+
+    /// #1041 E2：`rendezvous_url` / `log_level` 已退役（没有读者），但旧版
+    /// config.toml（示例配置、自建文档都教过写）里带着它们必须照常启动，且
+    /// 不影响其它字段；对应 `PPF_*` 环境变量同样被忽略。
+    /// 反证：从 `Overlay` 删掉 `_retired_*` 两个字段，本测试必须红。
+    #[test]
+    fn retired_config_fields_are_accepted_and_ignored() {
+        let file = r#"
+            data_dir = "/old/library"
+            bind_addr = "0.0.0.0:41145"
+            relay_urls = ["https://relay.old.example"]
+            rendezvous_url = "https://rendezvous.example.com"
+            log_level = "debug"
+        "#;
+        let e = env(&[
+            ("PPF_LOG_LEVEL", "trace"),
+            ("PPF_RENDEZVOUS_URL", "https://env.example"),
+        ]);
+        let cfg = Config::resolve(Some(file), &e)
+            .unwrap_or_else(|e| panic!("旧 config 必须能加载：{e:#}"));
+        assert_eq!(cfg.data_dir, Some(PathBuf::from("/old/library")));
+        assert_eq!(cfg.bind_addr, Some("0.0.0.0:41145".parse().unwrap()));
+        assert_eq!(cfg.relay_urls, vec!["https://relay.old.example"]);
+        // 与不带这两个字段的 config 解析结果逐字段相同 = 「不生效」。
+        let without = r#"
+            data_dir = "/old/library"
+            bind_addr = "0.0.0.0:41145"
+            relay_urls = ["https://relay.old.example"]
+        "#;
+        assert_eq!(cfg, Config::resolve(Some(without), &env(&[])).unwrap());
     }
 
     /// 内置默认值不再带 `[telemetry]` 段（#949）。

@@ -16,7 +16,6 @@ pub mod flow_delivery;
 pub mod inbox;
 pub mod ipc;
 pub mod log_guard;
-pub mod owner;
 pub mod pairing;
 pub mod presence;
 pub mod query;
@@ -26,7 +25,6 @@ pub mod router;
 pub mod stats;
 pub mod subscriptions;
 pub mod thumb_pregen;
-pub mod update;
 pub mod watcher;
 
 pub use authz::Decision;

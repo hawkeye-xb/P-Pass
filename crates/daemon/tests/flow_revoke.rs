@@ -121,7 +121,7 @@ impl IpcClient {
 /// (`set_flow_delivery`), serving on a real local socket.
 async fn ipc_for(db: &Db, delivery: &FlowDelivery, dir: &Path, tag: &str) -> IpcClient {
     let (event_bus, _probe) = daemon::events::bus();
-    let (pairing, pending_rx) = Pairing::new(db.clone(), NodeId([0xCC; 32]), None, None);
+    let (pairing, pending_rx) = Pairing::new(db.clone(), NodeId([0xCC; 32]), None);
     let ipc = Arc::new(IpcServer::new(
         db.clone(),
         pairing,

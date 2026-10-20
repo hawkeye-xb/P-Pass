@@ -17,12 +17,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::{
-    AutostartRegistration, AwakeGuard, KeyStore, PlatformAdapter, PlatformError, PowerHint, Result,
+    AutostartRegistration, AwakeGuard, PlatformAdapter, PlatformError, PowerHint, Result,
     ServiceMode,
 };
 
 const AGENT_LABEL: &str = "com.p-pass.daemon";
-const KEYCHAIN_SERVICE: &str = "P-Pass";
 
 pub struct MacosAdapter;
 
@@ -359,10 +358,6 @@ impl PlatformAdapter for MacosAdapter {
         ServiceMode::LaunchAgent
     }
 
-    fn key_store(&self) -> Box<dyn KeyStore> {
-        Box::new(KeychainStore)
-    }
-
     fn assert_awake(&self) -> Result<AwakeGuard> {
         let child = Command::new("caffeinate")
             .arg("-i") // prevent idle sleep while we run
@@ -556,20 +551,6 @@ impl PlatformAdapter for MacosAdapter {
         }
     }
 
-    /// `launchctl print` 的输出里只有"正在跑"的实例会带 `pid = N`（见 `launchd_job_pid`
-    /// 的注释）。命令本身失败（没登记 / 域不对）也是 `None`——对调用方来说都是"不知道"。
-    fn shell_agent_running_pid(&self) -> Option<u32> {
-        let uid = current_uid().ok()?;
-        let out = Command::new("launchctl")
-            .args(["print", &format!("gui/{uid}/{SHELL_AGENT_LABEL}")])
-            .output()
-            .ok()?;
-        if !out.status.success() {
-            return None;
-        }
-        launchd_job_pid(&String::from_utf8_lossy(&out.stdout))
-    }
-
     /// 磁盘上**安装包**的版本（`Contents/Info.plist` 的 `CFBundleShortVersionString`）。
     ///
     /// 用 `defaults read` 而不是自己解 plist：真实 `.app` 里的 `Info.plist` 是
@@ -715,84 +696,6 @@ impl Drop for CaffeinateGuard {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
-    }
-}
-
-/// Login-keychain generic passwords via the `security` CLI. Secrets are
-/// stored hex-encoded (the CLI is text-oriented).
-struct KeychainStore;
-
-impl KeyStore for KeychainStore {
-    fn store(&self, name: &str, secret: &[u8]) -> Result<()> {
-        let hex: String = secret.iter().map(|b| format!("{b:02x}")).collect();
-        let out = Command::new("security")
-            .args([
-                "add-generic-password",
-                "-U", // update if exists
-                "-s",
-                KEYCHAIN_SERVICE,
-                "-a",
-                name,
-                "-w",
-                &hex,
-            ])
-            .output()
-            .map_err(io_err("security add-generic-password"))?;
-        if !out.status.success() {
-            return Err(PlatformError::Failed {
-                action: "keychain store",
-                detail: String::from_utf8_lossy(&out.stderr).trim().to_string(),
-            });
-        }
-        Ok(())
-    }
-
-    fn load(&self, name: &str) -> Result<Option<Vec<u8>>> {
-        let out = Command::new("security")
-            .args([
-                "find-generic-password",
-                "-s",
-                KEYCHAIN_SERVICE,
-                "-a",
-                name,
-                "-w",
-            ])
-            .output()
-            .map_err(io_err("security find-generic-password"))?;
-        if !out.status.success() {
-            return Ok(None); // not found (or locked — treated as absent)
-        }
-        let hex = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        let mut bytes = Vec::with_capacity(hex.len() / 2);
-        let raw = hex.as_bytes();
-        for chunk in raw.as_chunks::<2>().0 {
-            let hi = (chunk[0] as char).to_digit(16);
-            let lo = (chunk[1] as char).to_digit(16);
-            match (hi, lo) {
-                (Some(h), Some(l)) => bytes.push(((h << 4) | l) as u8),
-                _ => {
-                    return Err(PlatformError::Failed {
-                        action: "keychain load",
-                        detail: "stored value is not hex".into(),
-                    })
-                }
-            }
-        }
-        Ok(Some(bytes))
-    }
-
-    fn delete(&self, name: &str) -> Result<()> {
-        let _ = Command::new("security")
-            .args([
-                "delete-generic-password",
-                "-s",
-                KEYCHAIN_SERVICE,
-                "-a",
-                name,
-            ])
-            .output()
-            .map_err(io_err("security delete-generic-password"))?;
-        Ok(())
     }
 }
 

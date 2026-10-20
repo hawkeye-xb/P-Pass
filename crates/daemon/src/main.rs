@@ -39,7 +39,7 @@ async fn main() -> anyhow::Result<()> {
     // （日志/配置/数据库/身份/claim/bind）之前短路退出。8/6 事故：daemon
     // 无解析，--help 被当普通启动一路走到单实例 claim 触发误接管、常驻
     // 停机数分钟。未知参数报错退出（exit 2），绝不静默忽略。
-    let (ephemeral, post_update) = match daemon::cli::parse_cli(std::env::args().skip(1)) {
+    let ephemeral = match daemon::cli::parse_cli(std::env::args().skip(1)) {
         Ok(daemon::cli::Cli::Help) => {
             print!("{}", daemon::cli::USAGE);
             return Ok(());
@@ -75,10 +75,7 @@ async fn main() -> anyhow::Result<()> {
             };
             config_command_exit(daemon::config::set_library(&platform_dir, &library));
         }
-        Ok(daemon::cli::Cli::Run {
-            ephemeral,
-            post_update,
-        }) => (ephemeral, post_update),
+        Ok(daemon::cli::Cli::Run { ephemeral }) => ephemeral,
         Err(e) => {
             eprintln!("{e}");
             eprint!("{}", daemon::cli::USAGE);
@@ -242,9 +239,9 @@ async fn main() -> anyhow::Result<()> {
 
     let db = storage::Db::open(&data_dir.join(".ppf/index.sqlite")).await?;
     // ── Persistent daemon identity (真机 P0: 每次重启换 NodeId 会把
-    // 所有已配对手机变成孤儿——配对绑的就是 NodeId). Keychain/DPAPI
-    // first; headless platforms fall back to a 0600 file in the data
-    // dir (same trust domain as ipc.token).
+    // 所有已配对手机变成孤儿——配对绑的就是 NodeId). 身份密钥当前存在
+    // 数据目录里的 identity.key（unix 0600 / Windows 仅属主 DACL，与
+    // ipc.token 同一信任域），不进 Keychain/DPAPI，见 load_or_mint_identity。
     let secret = load_or_mint_identity(&data_dir)?;
 
     // ── DAE-02: 单实例 claim 先于 transport bind ──────────────────
@@ -263,19 +260,11 @@ async fn main() -> anyhow::Result<()> {
         data_dir.display()
     );
 
-    // addr_provider 惰性填充：transport 在 claim 之后才 bind，配对二维码
-    // 也在这之后生成（&a= 要带 live endpoint 的当前地址，见 Pairing）。
-    // H-10b: QR 只带 relay（&r=）——relay_provider 同样惰性，从
-    // local_addr() 的 addrs 里取 Relay 变体。
+    // relay_provider 惰性填充：transport 在 claim 之后才 bind，配对二维码
+    // 也在这之后生成。H-10b: QR 只带 relay（&r=），从 local_addr() 的 addrs
+    // 里取 Relay 变体。
     let transport_slot: std::sync::Arc<std::sync::OnceLock<transport::IrohTransport>> =
         std::sync::Arc::new(std::sync::OnceLock::new());
-    let slot = std::sync::Arc::clone(&transport_slot);
-    let addr_provider: Option<std::sync::Arc<dyn Fn() -> String + Send + Sync>> =
-        Some(std::sync::Arc::new(move || {
-            slot.get()
-                .map(|t| t.local_addr().to_string())
-                .unwrap_or_default()
-        }));
     let relay_slot = std::sync::Arc::clone(&transport_slot);
     let relay_provider: Option<std::sync::Arc<dyn Fn() -> Option<String> + Send + Sync>> =
         Some(std::sync::Arc::new(move || {
@@ -291,8 +280,7 @@ async fn main() -> anyhow::Result<()> {
     // SYNC-03: 一份订阅登记表，Router（QUIC 订阅入口）和 IpcServer
     // （device.revoke 在此发起主动断连）共用同一个实例。
     let subscriptions = daemon::subscriptions::SubscriptionRegistry::new();
-    let (pairing, pending_rx) =
-        daemon::Pairing::new(db.clone(), node_id, addr_provider, relay_provider);
+    let (pairing, pending_rx) = daemon::Pairing::new(db.clone(), node_id, relay_provider);
     let pairing = pairing.with_events(event_bus.clone());
 
     // IPC (T-034): local socket + per-launch token in the data dir.
@@ -491,45 +479,22 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     });
-    // UPD-07 (#617)：**版本一致性的 owner**。只有被更新流程拉起的这一份 daemon
-    // （`--post-update`）才开火——平时绝不碰用户正在用的壳。
-    //
-    // 为什么等：壳在更新成功后紧接着被拉起（resume），它的自报（`shell.announce`）
-    // 可能比我们晚到几十毫秒到几秒。等不到就什么都不做（老壳/壳没起来 ⇒ 不知道
-    // 它的版本 ⇒ fail-safe，见 `owner::decide`）。
-    if post_update {
-        tokio::spawn(async move {
-            for _ in 0..20 {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                if daemon::owner::recorded_announce().is_some() {
-                    break;
-                }
-            }
-            let announced = daemon::owner::recorded_announce();
-            // 判定里要起 launchctl/defaults 子进程：放到阻塞线程上，别占住执行器。
-            let _ =
-                tokio::task::spawn_blocking(move || daemon::owner::check_and_act(true, announced))
-                    .await;
-        });
-    }
-    // Interim console confirmer (until the tray, T-041): y = 允许队首.
-    // stdin EOF（后台运行）⇒ 退出这个循环，确认只走 IPC——绝不把
-    // "没有输入" 当成任何决定（狗粮冒烟抓到的真 bug：EOF 曾被当 n 秒拒）.
+    // stdin 只剩一个用途：EOF = 退出信号。
+    // 托盘审批早已落地（配对确认只走 IPC）；终端里敲 y/n 批准配对的临时确认器
+    // （T-041 之前的过渡物）已在 #1041 删除——所有脚本都只用 stdin EOF 收掉 daemon。
+    // stdin EOF（后台运行）⇒ 退出这个循环；绝不把「没有输入」当成任何决定。
     // UX-07: --ephemeral 模式下 EOF 同时发退出信号（main 的 select 收到
     // 即整体退出，3 秒内）——测试脚本关掉 stdin 写入端即可收掉 daemon。
     tokio::spawn({
-        let ipc = std::sync::Arc::clone(&ipc);
         let eof_tx = eof_tx;
         async move {
             loop {
-                let line = tokio::task::spawn_blocking(|| {
+                let bytes_read = tokio::task::spawn_blocking(|| {
                     let mut line = String::new();
-                    let n = std::io::stdin().read_line(&mut line).unwrap_or(0);
-                    (n, line)
+                    std::io::stdin().read_line(&mut line).unwrap_or(0)
                 })
                 .await
-                .unwrap_or((0, String::new()));
-                let (bytes_read, line) = line;
+                .unwrap_or(0);
                 if bytes_read == 0 {
                     tracing::info!("stdin closed — pairing confirmation is IPC-only from here");
                     if let Some(tx) = eof_tx {
@@ -537,19 +502,7 @@ async fn main() -> anyhow::Result<()> {
                     }
                     return;
                 }
-                if ipc.pending_names().is_empty() {
-                    continue;
-                }
-                let accept = line.trim().eq_ignore_ascii_case("y");
-                match ipc.confirm(None, None, accept) {
-                    daemon::ConfirmOutcome::Decided(name) => {
-                        println!("「{name}」：{}", if accept { "已允许" } else { "已拒绝" });
-                    }
-                    daemon::ConfirmOutcome::Expired(name) => {
-                        println!("「{name}」：请求已失效（对方已放弃），这次点击没有生效");
-                    }
-                    daemon::ConfirmOutcome::NotFound => {}
-                }
+                // 读到的行一律丢弃：配对确认只走 IPC。
             }
         }
     });
@@ -868,11 +821,14 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The daemon's stable identity key, in a 0600 file beside the index —
-/// same trust domain as ipc.token. NOT the OS keychain for now: an
-/// ad-hoc-signed binary re-triggers the Keychain authorization dialog
-/// on every restart (live finding — an unattended service cannot answer
-/// dialogs). Keychain migration lands with real release signing (T-071).
+/// The daemon's stable identity key, in `identity.key` beside the index
+/// (0600 on unix, owner-only DACL on Windows) — same trust domain as ipc.token.
+///
+/// 当初弃用钥匙串的原因：ad-hoc 签名的二进制每次重启都会重新弹出钥匙串授权
+/// 弹窗（真机实测；无人值守的常驻服务答不了弹窗）。这是现状，不是「以后迁回」
+/// 的占位：若要迁回 Keychain/DPAPI，必须先在**正式签名包**上实测是否还弹窗，
+/// 再设计旧 identity.key 的迁移（改身份存放位置 = 改行为，已配对手机绑的是 NodeId）。
+/// （#1041 已删掉从未被产品代码调用的 `KeyStore` 端口。）
 fn load_or_mint_identity(data_dir: &std::path::Path) -> anyhow::Result<[u8; 32]> {
     use platform::PlatformAdapter as _;
     load_or_mint_identity_with(data_dir, |p| platform::adapter().restrict_to_owner(p))

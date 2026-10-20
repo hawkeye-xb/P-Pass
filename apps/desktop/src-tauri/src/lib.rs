@@ -186,8 +186,7 @@ fn daemon_call(app: tauri::AppHandle, method: String, params: Value) -> Result<V
     }
 }
 
-/// Daemon reachable? (tray tooltip + frontend banner)
-#[tauri::command]
+/// Daemon reachable?（壳内部探测用；#1041 起不再注册成前端 command——前端从不 invoke）
 fn daemon_online() -> bool {
     ipc::DaemonHandle::discover()
         .and_then(|d| d.call("status", json!({})))
@@ -222,7 +221,9 @@ fn service_state(app: tauri::AppHandle) -> Value {
 /// ready to talk"; a dropped/failed connection means "not reachable"; the
 /// user's stop marker wins over both. The frontend no longer decides this
 /// from a single `status` call inside `refresh()`.
-#[tauri::command]
+///
+/// #1041：只由 `setup` 调一次，不再注册成前端 command——重复 invoke 会再起一条订阅线程、
+/// 让事件重复（`mark_stream_started` 只是兜底）。
 fn start_event_stream(app: tauri::AppHandle) {
     let manager = app.state::<ServiceStateManager>().inner().clone();
     if !manager.mark_stream_started() {
@@ -1028,9 +1029,8 @@ fn self_heal_daemon(app: tauri::AppHandle) -> Result<bool, String> {
     }
     let manager = app.state::<ServiceStateManager>().inner().clone();
     manager.set(&app, ServiceState::Starting, Some("self heal"));
-    // UPD-07 (#617)：自愈与"更新"无关 ⇒ **不带** `--post-update`（不带 = owner 不开火）。
     // #732：有 LaunchAgent 时交给 launchd 拉（不杀在跑的——自愈只补"没在跑"）。
-    match bring_up_daemon(false, false) {
+    match bring_up_daemon(false) {
         Ok(_) => Ok(true),
         Err(e) => {
             manager.set(&app, ServiceState::Unreachable, Some(&e));
@@ -1138,7 +1138,7 @@ fn resume_daemon_after_update(app: tauri::AppHandle) -> Result<bool, String> {
         return Ok(false);
     }
     manager.set(&app, ServiceState::Starting, Some("update resume"));
-    match bring_up_daemon(true, true) {
+    match bring_up_daemon(true) {
         Ok(_) => Ok(true),
         Err(e) => {
             manager.set(&app, ServiceState::Unreachable, Some(&e));
@@ -1178,8 +1178,8 @@ fn resident_service_available() -> bool {
 /// `kill_running = false`（自愈）：launchd 在跑就不动，没在跑才拉。
 ///
 /// 服务管理器那条走不通（未登记 / 本平台没有 / 命令失败）⇒ 退回一次性 spawn，
-/// 与改前一致；`post_update` 只对这条退路有意义（见 `spawn_bundled_daemon_oneshot`）。
-fn bring_up_daemon(kill_running: bool, post_update: bool) -> Result<BroughtUp, String> {
+/// 与改前一致。
+fn bring_up_daemon(kill_running: bool) -> Result<BroughtUp, String> {
     if resident_service_available() {
         if kill_running {
             retire_unmanaged_daemon(platform::adapter().resident_daemon_pid());
@@ -1194,7 +1194,7 @@ fn bring_up_daemon(kill_running: bool, post_update: bool) -> Result<BroughtUp, S
             Err(e) => eprintln!("#732: 服务管理器拉起失败，退回一次性 spawn：{e}"),
         }
     }
-    spawn_bundled_daemon_oneshot(post_update).map(|()| BroughtUp::OneShot)
+    spawn_bundled_daemon_oneshot().map(|()| BroughtUp::OneShot)
 }
 
 /// 在跑的 daemon 不是服务管理器那份（pid 对不上）⇒ 请它体面退位并等它退干净
@@ -1257,12 +1257,7 @@ fn oneshot_stdio() -> (std::process::Stdio, std::process::Stdio) {
 /// 一次性 spawn 同目录下的内置 daemon（不注册 autostart）。#732 起只是
 /// `bring_up_daemon` 的退路（服务管理器接不了手时）。
 ///
-/// `post_update`（UPD-07 #617）：这一份是**被更新流程拉起的**吗？只有它会带上
-/// `--post-update`，从而允许 daemon 在更新窗口内换掉旧壳（见 `crates/daemon/src/owner.rs`）。
-/// 自愈/用户点「启动服务」绝不带——那两件事与"更新"无关，不该让 owner 开火。
-/// ⚠️ 走 launchd 那条（`kickstart` 不能带参数）时 owner 不开火——见 PR 登记：
-/// owner 这条路在新旧壳上都走不通（#667 评论），新壳装完会自己换壳。
-fn spawn_bundled_daemon_oneshot(post_update: bool) -> Result<(), String> {
+fn spawn_bundled_daemon_oneshot() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let sidecar = exe
         .parent()
@@ -1275,9 +1270,6 @@ fn spawn_bundled_daemon_oneshot(post_update: bool) -> Result<(), String> {
         ));
     }
     let mut cmd = platform::command(&sidecar);
-    if post_update {
-        cmd.arg("--post-update");
-    }
     let (out, err) = oneshot_stdio();
     cmd.stdout(out)
         .stderr(err)
@@ -1320,56 +1312,6 @@ fn register_shell_login_item() {
 /// 前端 `getVersion()`、Info.plist、updater 当前版本用的同一个值。
 fn shell_version<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> String {
     app.package_info().version.to_string()
-}
-
-/// UPD-07 (#617)：把自己的身份（版本 + pid）报给 daemon —— owner 对账的**唯一**来源。
-///
-/// 为什么必须由壳自己报：更新装完"磁盘已是新版、运行中的壳还是旧版"时，只有 daemon
-/// （每跳必被换新）能当 owner；而它要判断"壳旧不旧"，必须有**编译进这只壳的版本**——
-/// 去读磁盘上的 `Info.plist` 只会读到新版，读不出壳自己的版本。
-///
-/// 老壳不来这一条 ⇒ daemon 记录为空 ⇒ 它什么都不做（fail-safe）。重试几轮是因为
-/// 启动时序：登录项拉起的壳可能比常驻服务先就绪。
-fn announce_shell_identity(version: String) {
-    let params = serde_json::json!({
-        "version": version,
-        "pid": std::process::id(),
-    });
-    for _ in 0..30 {
-        if let Ok(handle) = ipc::DaemonHandle::discover() {
-            if handle.call("shell.announce", params.clone()).is_ok() {
-                return;
-            }
-        }
-        std::thread::sleep(std::time::Duration::from_secs(2));
-    }
-    eprintln!("#617: 壳身份自报失败（daemon 一直不可达）——owner 那条换壳路会按 fail-safe 不动");
-}
-
-/// UPD-05 (#605)：更新装完后重启桌面壳自己。
-///
-/// 为什么必须重启：tauri-plugin-updater 的 downloadAndInstall() 只替换
-/// 磁盘上的 .app，**正在运行的外壳进程仍是旧版**——0.7.3→0.7.4 真机现场：
-/// 装完后 resume_daemon_after_update 从新版包拉起新 daemon，页脚
-/// displayVersion = status?.version || version 先跳 0.7.4（显示的是
-/// daemon 版本），外壳二进制还是 0.7.3，于是设置页再弹同一个更新，
-/// 用户以为「版本不对」去重启后台，又跳回 0.7.3——鬼打墙。装完重启
-/// 外壳后，新外壳启动即跑 #604 的自启对账，daemon 已是新版，版本闭环。
-///
-/// 为什么不用 `app.restart()`：它走事件循环（ExitRequested +
-/// RESTART_EXIT_CODE 约定），在 macOS 上有两个与我们配置雷同
-/// （tray 常驻 + 关窗 prevent_close + single-instance）的未结上游
-/// issue——tauri#11392、tauri#13923（tauri 2.5.1 仍复现：只关不拉）。
-/// `tauri::process::restart` 不走事件循环：直接 spawn 当前二进制 +
-/// 立即 exit(0)，与官方 plugin-process 的 relaunch() 是同一底层调用，
-/// 零新依赖（不为这一个命令引入 plugin-process 整 crate）。
-///
-/// Windows 说明：NSIS 静默安装在 downloadAndInstall() 中途就杀掉调用
-/// 进程（见 App.svelte 的 W1 注释），本命令在 Windows 实际走不到——
-/// 装完由安装器自己拉起新外壳。本命令服务 macOS（#605 的事发平台）。
-#[tauri::command]
-fn restart_app(app: tauri::AppHandle) {
-    tauri::process::restart(&app.env());
 }
 
 /// UPD-06 (#616)：磁盘上**安装包**的版本（`Contents/Info.plist`）。
@@ -1503,7 +1445,7 @@ fn restart_daemon_process_blocking() -> Result<Value, String> {
     // 的野生实例。改为：野生实例先退位 + `kickstart -k`（launchd 立刻按磁盘上的
     // 文件拉新的），内核从此归 launchd 托管。走不通才退回下面的老路。
     if resident_service_available() {
-        bring_up_daemon(true, false).map_err(|e| ipc::ui_err("ui.err_restart", &[("err", &e)]))?;
+        bring_up_daemon(true).map_err(|e| ipc::ui_err("ui.err_restart", &[("err", &e)]))?;
     } else {
         restart_by_kill_and_respawn()?;
     }
@@ -2029,7 +1971,6 @@ fn converge_kernel_on_startup(app: tauri::AppHandle) {
     }
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // DESK-68 (#996)：发布版只许从正式安装位置运行——排在**一切**之前（搬数据
     // 目录、单实例、拉 daemon、写登记都在后面），不在位置就提示后退出，什么都
@@ -2094,8 +2035,6 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             daemon_call,
-            daemon_online,
-            start_event_stream,
             service_state,
             wizard_state,
             power_hint,
@@ -2108,7 +2047,6 @@ pub fn run() {
             stop_daemon,
             pause_daemon_for_update,
             resume_daemon_after_update,
-            restart_app,
             installed_app_version,
             relaunch_shell,
             self_heal_daemon,
@@ -2137,12 +2075,6 @@ pub fn run() {
             // UPD-06 (#616)：把壳登记成登录项（写 plist；下一次登录起由 launchd 接管，
             // 从那时起 kickstart 才是可用路径）。独立线程：只做一次文件读写。
             std::thread::spawn(register_shell_login_item);
-            // UPD-07 (#617)：把自己（版本 + pid）报给 daemon —— owner 判断"壳旧不旧"
-            // 的唯一来源。独立线程 + 重试，不阻塞启动，也不拖慢首屏。
-            {
-                let version = shell_version(app.handle());
-                std::thread::spawn(move || announce_shell_identity(version));
-            }
             // #667：内核比磁盘上的旧 / 不归 launchd 管 ⇒ 自动换（尊重用户停止与传输中）。
             {
                 let app = app.handle().clone();
@@ -2304,7 +2236,7 @@ mod tests {
     /// 诊断包测试注入的外壳版本（#809：生产里来自 [`shell_version`]）。
     const TEST_APP_VERSION: &str = "9.9.9-test.1";
 
-    /// #809：外壳自报版本（shell.announce / 诊断包）只认 tauri `package_info`——
+    /// #809：外壳自报版本（诊断包）只认 tauri `package_info`——
     /// 它是发布构建经 `--config` 注入、与 daemon 同源的那个号。`CARGO_PKG_VERSION`
     /// 是 Cargo.toml 里的号，发布构建不改它，test tag 时与 daemon 错开。
     #[test]
@@ -2316,10 +2248,6 @@ mod tests {
             "外壳生产代码不许再用 {banned} 自报版本——改用 shell_version(app)"
         );
         assert!(product.contains("app.package_info().version.to_string()"));
-        assert!(
-            product.contains("\"version\": version,"),
-            "shell.announce 报的是传入的 shell_version"
-        );
     }
 
     // ── I18N-03 (#492)：托盘文案 + keyed 错误 ─────────────────────────
@@ -3514,7 +3442,7 @@ mod tests {
         assert!(retire < restart);
         let manual = body("restart_daemon_process_blocking");
         assert!(manual.contains("if resident_service_available() {"));
-        assert!(manual.contains("bring_up_daemon(true, false)"));
+        assert!(manual.contains("bring_up_daemon(true)"));
         let oneshot = body("spawn_bundled_daemon_oneshot");
         assert!(oneshot.contains("oneshot_stdio()"));
         assert!(
@@ -3959,45 +3887,42 @@ mod tests {
             .find("if !update_resume_allowed(&platform::adapter().data_dir()) {")
             .expect("resume_daemon_after_update 必须先读盘上的「用户主动停止」标记");
         // #732：更新后恢复 = 换版本（kill_running=true），走共用的 bring_up_daemon
-        // （先交给 launchd，退路才一次性 spawn），退路必须带 post_update=true
-        // （UPD-07 #617：只有更新拉起的 daemon 才允许换壳）。
+        // （先交给 launchd，退路才一次性 spawn）。
         let spawn = resume
-            .find("bring_up_daemon(true, true)")
-            .expect("resume_daemon_after_update 走共用 bring_up_daemon(kill_running=true, post_update=true)");
+            .find("bring_up_daemon(true)")
+            .expect("resume_daemon_after_update 走共用 bring_up_daemon(kill_running=true)");
         assert!(gate < spawn, "判据必须在 spawn 之前");
         let heal = body("self_heal_daemon");
         assert!(heal.contains("self_heal_allowed(&platform::adapter().data_dir())"));
         assert!(
-            heal.contains("bring_up_daemon(false, false)"),
-            "自愈与更新无关：不许带 post_update（否则 owner 会在非更新场合去换壳），也不许杀在跑的内核"
+            heal.contains("bring_up_daemon(false)"),
+            "自愈与更新无关：不许杀在跑的内核（kill_running=false）"
         );
-        // 退路的一次性 spawn 仍按 post_update 带参数。
+        // 退路的一次性 spawn：不再带任何参数（#1041：`--post-update` 链路已退役，
+        // 新壳不再透传它；daemon 侧只对旧壳「接受并忽略」）。
         let up = body("bring_up_daemon");
-        assert!(up.contains("spawn_bundled_daemon_oneshot(post_update)"));
+        assert!(up.contains("spawn_bundled_daemon_oneshot()"));
+        let oneshot = body("spawn_bundled_daemon_oneshot");
+        assert!(
+            !oneshot.contains(".arg("),
+            "一次性 spawn 不带任何命令行参数（含已退役的 --post-update）"
+        );
         assert!(
             !heal.contains("resume_daemon_after_update()"),
             "自愈不该绕进更新路径的判据"
         );
     }
-    /// UPD-05 (#605)：restart_app 命令已注册，且 App.svelte 在
-    /// downloadAndInstall 成功路径里调用它（装完重启外壳）。
+    /// UPD-05 (#605)：App.svelte 在 downloadAndInstall 成功路径里调用
+    /// relaunch_shell（装完换壳）。#1041 删掉了前端从不 invoke 的 `restart_app`
+    /// 命令，这里只保留对 relaunch_shell 调用次序的钉子。
     #[test]
-    fn restart_app_is_registered_and_called_after_install() {
-        let src = include_str!("lib.rs");
-        assert!(
-            src.contains("fn restart_app(app: tauri::AppHandle)"),
-            "restart_app 命令缺失"
-        );
-        assert!(
-            src.contains("restart_app,"),
-            "restart_app 未注册进 invoke_handler"
-        );
+    fn relaunch_shell_is_called_after_install() {
         let app = include_str!("../../src/App.svelte");
         let install = app
             .find("await update.downloadAndInstall(")
             .expect("App.svelte 缺 downloadAndInstall");
         // UPD-06 (#616)：换壳走 relaunch_shell（系统路径 kickstart 优先、壳自己
-        // 重启兜底），不再是裸的 restart_app——restart_app 现在只是它的退化分支。
+        // 重启兜底）。
         // ⚠️ 比的是**调用点**：`relaunchShellNow` 的定义体在文件里更靠前，比定义
         // 位置会得出反向结论（本测试第一版就是这么红的）。
         let call = app

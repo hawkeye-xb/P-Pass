@@ -93,7 +93,7 @@ async fn start_with_clock(
 ) -> (Db, Pairing, String, String) {
     let db = Db::open_in_memory().await.unwrap();
     let (event_bus, _probe) = daemon::events::bus();
-    let (pairing, pending_rx) = Pairing::new(db.clone(), transport::NodeId([0xCC; 32]), None, None);
+    let (pairing, pending_rx) = Pairing::new(db.clone(), transport::NodeId([0xCC; 32]), None);
     let pairing = pairing.with_events(event_bus.clone());
     let diag = DiagAgg::new(db.clone());
     let ipc = IpcServer::new(

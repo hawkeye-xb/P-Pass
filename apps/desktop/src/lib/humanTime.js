@@ -1,6 +1,6 @@
 // T-091: 人性化时间 + 哨兵判定 —— 纯函数，无 DOM/Tauri 依赖。I18N-03 (#492)
 // 起文案经 ./i18n.js 取自 assets/i18n（JSON import 要 Vite/vitest 解析），
-// 裸 node 不再能直跑——scripts/check-human-time.mjs 因此失效，未在本卡修。
+// 裸 node 不能直跑。
 //
 // 时间戳单位 = unix 毫秒。代码依据（不是猜的）：
 // - device.watermarks.last_backup_at ← backup_watermark.updated_at，

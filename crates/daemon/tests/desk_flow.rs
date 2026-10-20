@@ -104,7 +104,7 @@ async fn query_plane_over_ipc_and_three_way_count() {
     let query = QueryEngine::new(db.clone(), blobs, dir.path().join("library"));
 
     let (event_bus, _probe) = daemon::events::bus();
-    let (pairing, pending_rx) = Pairing::new(db.clone(), transport::NodeId([0xCC; 32]), None, None);
+    let (pairing, pending_rx) = Pairing::new(db.clone(), transport::NodeId([0xCC; 32]), None);
     let pairing = pairing.with_events(event_bus.clone());
     let diag = DiagAgg::new(db.clone());
     let ipc = Arc::new(IpcServer::new(
@@ -223,8 +223,7 @@ async fn query_plane_over_ipc_and_three_way_count() {
 
     // ── 未注入查询平面的旧构造（回归：老测试零波及）──
     let (event_bus2, _probe2) = daemon::events::bus();
-    let (pairing2, pending_rx2) =
-        Pairing::new(db.clone(), transport::NodeId([0xDD; 32]), None, None);
+    let (pairing2, pending_rx2) = Pairing::new(db.clone(), transport::NodeId([0xDD; 32]), None);
     let ipc2 = Arc::new(IpcServer::new(
         db.clone(),
         pairing2,

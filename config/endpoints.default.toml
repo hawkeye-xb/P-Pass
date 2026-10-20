@@ -12,5 +12,4 @@
 #   "https://relay-ap.p-pass.hawkeye-xb.com"
 
 relay_urls = []
-rendezvous_url = "https://rendezvous.p-pass.hawkeye-xb.com"
 

@@ -34,7 +34,7 @@
 | Android 一次性迁移 | `AndroidFlowRuntime.kt` `migrateLegacyFlowState`，marker `files/flow-migrated-arch13` | #413 起删除旧账本 `flow-state/` 与旧保护状态文件，只做一次 | 读码 |
 | Android 私有状态清单 | `backup/DisconnectStateManifest.kt`（MOB-95 [#282](https://github.com/hawkeye-xb/P-Pass/issues/282) / [#528](https://github.com/hawkeye-xb/P-Pass/pull/528)） | 列全手机每一样持久状态及断开时的处置；升级数据承诺按它逐项对账 | E2 |
 | 版本号规则 | `tools/bump-version.sh`、`docs/RELEASING.md` §1/§5 | 新版本必须高于当前；tag 不复用；Android versionCode 单调 +1 | E2 |
-| 更新判定 | Android `update/UpdateChecker.kt:67` `isNewer`、daemon `crates/daemon/src/update.rs:141` `is_newer` | 候选版本**严格更新**才提示；正式版 > 同核心预发布 | E2 |
+| 更新判定 | Android `update/UpdateChecker.kt:67` `isNewer`；桌面端由 tauri updater 插件判定（daemon 里没有接线的 `update.rs` 已在 #1041 删除） | 候选版本**严格更新**才提示；正式版 > 同核心预发布 | E2 |
 
 盘点出的缺口（只登记，另开卡处理）：
 

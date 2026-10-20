@@ -32,7 +32,7 @@ async fn start_pairing_harness(
 ) -> (Db, Pairing, Arc<IpcServer>) {
     let db = Db::open_in_memory().await.unwrap();
     let (event_bus, _probe) = daemon::events::bus();
-    let (pairing, pending_rx) = Pairing::new(db.clone(), transport::NodeId([0xCC; 32]), None, None);
+    let (pairing, pending_rx) = Pairing::new(db.clone(), transport::NodeId([0xCC; 32]), None);
     let pairing = pairing
         .with_events(event_bus.clone())
         .with_pending_ttl(req_ttl_ms);

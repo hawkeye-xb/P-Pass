@@ -228,7 +228,7 @@ async fn devices_list_presence_three_tiers() {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open_in_memory().await.unwrap();
     let (event_bus, _probe) = daemon::events::bus();
-    let (pairing, pending_rx) = Pairing::new(db.clone(), transport::NodeId([0xCC; 32]), None, None);
+    let (pairing, pending_rx) = Pairing::new(db.clone(), transport::NodeId([0xCC; 32]), None);
     let pairing = pairing.with_events(event_bus.clone());
     let diag = DiagAgg::new(db.clone());
     let mut ipc = IpcServer::new(

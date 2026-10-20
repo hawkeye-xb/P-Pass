@@ -33,13 +33,6 @@ notify = "7"
 # OS randomness for one-time pairing tokens (T-031). Already in the tree
 # via iroh; declared directly because tokens are a security surface.
 getrandom = "0.3"
-# Update manifest (T-062): semver compare + Ed25519 verify. Both already in
-# the tree via iroh; declared directly because they are a security surface.
-semver = "1"
-ed25519-dalek = "3"
-# Update artifact verify (T-062b): sha256 + hex. Already in the tree via iroh;
-# declared directly because artifact integrity is a security surface.
-sha2 = "0.10"
 hex = "0.4"
 interprocess = { version = "2", features = ["tokio"] }
 zip = { version = "9.0.3", default-features = false, features = ["deflate"] }

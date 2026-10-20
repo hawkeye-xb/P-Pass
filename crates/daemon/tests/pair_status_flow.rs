@@ -54,7 +54,7 @@ async fn desk(db: Db, ttl_ms: Option<i64>) -> Desk {
     let tp = endpoint().await;
     let addr = tp.local_addr();
     let (bus, _probe) = daemon::events::bus();
-    let (pairing, pending_rx) = Pairing::new(db.clone(), tp.node_id(), None, None);
+    let (pairing, pending_rx) = Pairing::new(db.clone(), tp.node_id(), None);
     let mut pairing = pairing.with_events(bus.clone());
     if let Some(ttl) = ttl_ms {
         pairing = pairing.with_pending_ttl(ttl);
@@ -684,8 +684,7 @@ async fn hello_advertises_the_pair_cancel_capability_to_unpaired_peers() {
 #[tokio::test(flavor = "current_thread")]
 async fn a_decision_already_delivered_beats_a_simultaneous_withdrawal() {
     let db = Db::open_in_memory().await.unwrap();
-    let (pairing, mut pending_rx) =
-        Pairing::new(db.clone(), transport::NodeId([0x01; 32]), None, None);
+    let (pairing, mut pending_rx) = Pairing::new(db.clone(), transport::NodeId([0x01; 32]), None);
     let peer = transport::NodeId([0x74; 32]);
     let qr = pairing.start([0x74; 12], now());
     let sub = pairing
