@@ -38,6 +38,11 @@ class AutoBackupPrefs(private val dir: File) {
         save(load().copy(userRequested = requested))
     }
 
+    /** #1020：意图与生产者一次落盘。分两次写的话，第二次失败会把盘上留在半截（意图改了、生产者没改）。 */
+    fun set(requested: Boolean, enabled: Boolean) = synchronized(LOCK) {
+        save(AutoBackupPrefsData(autoEnabled = enabled, userRequested = requested))
+    }
+
     companion object {
         /**
          * #540：进程启动线程（`reconcileWatchOnProcessStart`）与主线程（`ON_RESUME`）都会写这份文件；

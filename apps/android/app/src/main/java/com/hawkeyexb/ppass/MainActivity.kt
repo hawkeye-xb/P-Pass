@@ -66,6 +66,8 @@ import com.hawkeyexb.ppass.transport.PairingStore
 import com.hawkeyexb.ppass.transport.bindThenPair
 import com.hawkeyexb.ppass.transport.pairWithQr
 import com.hawkeyexb.ppass.backup.BackupScopeStore
+import com.hawkeyexb.ppass.backup.ScopeRead
+import com.hawkeyexb.ppass.backup.SettingsWriter
 import com.hawkeyexb.ppass.backup.OnboardedDesktopsStore
 import com.hawkeyexb.ppass.backup.backfillOnboardedOnHome
 import com.hawkeyexb.ppass.backup.isKnownDesktop
@@ -188,6 +190,10 @@ fun PPassApp() {
     // ②系统授权弹窗的结果回调（同意/拒绝，各一句文案）。不做"报错"
     // Snackbar：点击这个动作本身没有可诚实上报的失败信号，编一个是假的。
     val snackbarHostState = remember { SnackbarHostState() }
+    // #1020：设置写盘的唯一 UI 边界——写失败不崩溃，记日志 + 一过性提示，显示值由调用方从盘上重读。
+    val settingsWriter = remember {
+        SettingsWriter { res -> scope.launch { snackbarHostState.showSnackbar(context.getString(res)) } }
+    }
     val identity = remember { IdentityStore(context.filesDir) }
     val pairings = remember { PairingStore(context.filesDir) }
     val app = context.applicationContext as PPassApplication
@@ -670,6 +676,12 @@ fun PPassApp() {
             DisposableEffect(holder) {
                 onDispose { holder.dispose() }
             }
+            // #1020：命令执行出错的一过性提示（UI-12 Snackbar）。
+            LaunchedEffect(holder) {
+                holder.notices.collect { snackbarHostState.showSnackbar(context.getString(it)) }
+            }
+            // #1038：回到前台重读账目（账本读不到时的「打开 App 时会再试」）。
+            LaunchedEffect(holder, resumeCount) { holder.onResume() }
             // #541：权限档位（ON_RESUME / 权限弹窗回调重读）变了要让 holder 重数 n——授权不会触发
             // MediaStore 的 ContentObserver，也不会杀进程，不接这一下英雄卡就停在无权限时数出来的 0 / 0。
             LaunchedEffect(holder, mediaAccess) { holder.onMediaAccess(mediaAccess) }
@@ -707,8 +719,9 @@ fun PPassApp() {
                 ActivityResultContracts.RequestPermission(),
             ) { granted ->
                 notificationRequestInFlight = false
-                notifyOnFailure = granted
-                notifyOnFailurePrefs.setEnabled(granted)
+                notifyOnFailure = settingsWriter.persist("notifyOnFailure", granted, notifyOnFailurePrefs::setEnabled) {
+                    notifyOnFailurePrefs.enabled()
+                } && hasNotificationPermission(context)
             }
             val batteryPermission = rememberLauncherForActivityResult(
                 ActivityResultContracts.StartActivityForResult(),
@@ -716,26 +729,30 @@ fun PPassApp() {
                 batteryRequestInFlight = false
                 batteryWhitelisted = backgroundAuthorization.isGranted()
                 if (batteryWhitelisted) {
-                    if (backupInterrupted) {
+                    val saved = if (backupInterrupted) {
                         resumeAfterInterruption(context)
                         backupInterrupted = false
-                    } else enableAutoBackup(context)
+                        true
+                    } else settingsWriter.write("autoBackup", true) { enableAutoBackup(context) }
                     // UI-12: 系统授权弹窗的结果——这个 launcher 被「去处理」
                     // 和「首次开启开关」两条路径共用，两者都是同一个系统
                     // 权限请求，结果反馈理应一致，不用按入口拆分。
-                    scope.launch {
-                        snackbarHostState.showSnackbar(
-                            context.getString(R.string.background_backup_authorized),
-                        )
+                    // #1020：没存上时 SettingsWriter 已经提示过，这里不再说「已允许」。
+                    if (saved) {
+                        scope.launch {
+                            snackbarHostState.showSnackbar(
+                                context.getString(R.string.background_backup_authorized),
+                            )
+                        }
                     }
-                } else {
-                    suspendAutoBackupUntilAuthorized(context)
+                } else if (settingsWriter.write("autoBackup", "suspended") { suspendAutoBackupUntilAuthorized(context) }) {
                     scope.launch {
                         snackbarHostState.showSnackbar(
                             context.getString(R.string.background_backup_authorization_denied),
                         )
                     }
                 }
+                userRequestedBackgroundBackup = prefs.requested()
             }
             // MOB-02 §三: 「需要 Wi-Fi」关闭需二次确认（移动网络消耗流量）。
             var pendingWifiOff by remember { mutableStateOf(false) }
@@ -752,7 +769,7 @@ fun PPassApp() {
             LaunchedEffect(batteryWhitelisted) {
                 userRequestedBackgroundBackup = prefs.requested()
                 if (!batteryWhitelisted && userRequestedBackgroundBackup) {
-                    suspendAutoBackupUntilAuthorized(context)
+                    settingsWriter.write("autoBackup", "suspended") { suspendAutoBackupUntilAuthorized(context) }
                 }
             }
             val backgroundBackupState = backgroundBackupStateOf(
@@ -798,7 +815,10 @@ fun PPassApp() {
             // #836：「已选相册」按已选且当前存在计数（与选相册页同源：MediaStore 里实际有的相册）。
             // 先用存下的个数占位，IO 上查完相册再校正；照片权限变化、每次回到前台都重算。
             var selectedBucketCount by remember { mutableStateOf(BackupScopeStore(context).selectedBucketIds()?.size) }
+            // #1020：存了范围但读不出来——设置行说「读不到已保存的选择」，不说「未选相册」。
+            var scopeUnreadable by remember { mutableStateOf(false) }
             LaunchedEffect(mediaAccess, resumeCount) {
+                scopeUnreadable = withContext(Dispatchers.IO) { BackupScopeStore(context).readScope() is ScopeRead.Unreadable }
                 selectedBucketCount = withContext(Dispatchers.IO) {
                     val existing = if (mediaAccess == MediaAccess.FULL) {
                         runCatching { MediaScanner(context.contentResolver).listBuckets().map { it.id }.toSet() }.getOrNull()
@@ -913,19 +933,19 @@ fun PPassApp() {
                             // （移动网络也会备份，可能消耗流量）。
                             if (!enable) pendingWifiOff = true
                             else {
-                                wifiOnly = true
-                                backupSettings.save(wifiOnly)
-                                rescheduleAutoBackup(context)
+                                wifiOnly = settingsWriter.persist("wifiOnly", true, backupSettings::save) {
+                                    backupSettings.load().wifiOnly
+                                }
+                                if (wifiOnly) rescheduleAutoBackup(context)
                             }
                         },
                         notifyOnFailure = notifyOnFailure,
                         onNotifyOnFailureChange = { enabled ->
-                            if (!enabled) {
-                                notifyOnFailure = false
-                                notifyOnFailurePrefs.setEnabled(false)
-                            } else if (hasNotificationPermission(context)) {
-                                notifyOnFailure = true
-                                notifyOnFailurePrefs.setEnabled(true)
+                            if (!enabled || hasNotificationPermission(context)) {
+                                // #1020：显示值 = 盘上的值（且有系统通知权限）；写失败回到原来的值并提示。
+                                notifyOnFailure = settingsWriter.persist("notifyOnFailure", enabled, notifyOnFailurePrefs::setEnabled) {
+                                    notifyOnFailurePrefs.enabled()
+                                } && hasNotificationPermission(context)
                             } else if (!notificationRequestInFlight) {
                                 notificationRequestInFlight = true
                                 notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -936,23 +956,30 @@ fun PPassApp() {
                         backgroundBackupState = backgroundBackupState,
                         onResolveBackgroundBackup = resolveBackgroundBackup,
                         onToggleAutoBackup = { enabled ->
+                            // #1020：先落盘，写成功才做副作用（确认中断、重挂 / 取消任务、申请白名单）；
+                            // 写失败不崩溃，开关回到盘上的意图并提示。
                             if (!enabled) {
                                 batteryRequestInFlight = false
-                                userRequestedBackgroundBackup = false
-                                BackupHealthPrefs(context.filesDir).acknowledge()
-                                backupInterrupted = false
-                                disableAutoBackup(context)
+                                if (settingsWriter.write("autoBackup", false) { disableAutoBackup(context) }) {
+                                    BackupHealthPrefs(context.filesDir).acknowledge()
+                                    backupInterrupted = false
+                                }
+                                userRequestedBackgroundBackup = prefs.requested()
                             } else if (batteryWhitelisted) {
-                                userRequestedBackgroundBackup = true
                                 if (backupInterrupted) {
                                     resumeAfterInterruption(context)
                                     backupInterrupted = false
-                                } else enableAutoBackup(context)
+                                    userRequestedBackgroundBackup = true
+                                } else {
+                                    settingsWriter.write("autoBackup", true) { enableAutoBackup(context) }
+                                    userRequestedBackgroundBackup = prefs.requested()
+                                }
                             } else if (!batteryRequestInFlight) {
-                                batteryRequestInFlight = true
-                                prefs.setRequested(true)
-                                userRequestedBackgroundBackup = true
-                                batteryPermission.launch(backgroundAuthorization.requestIntent())
+                                if (settingsWriter.write("autoBackup", "requested") { prefs.setRequested(true) }) {
+                                    batteryRequestInFlight = true
+                                    batteryPermission.launch(backgroundAuthorization.requestIntent())
+                                }
+                                userRequestedBackgroundBackup = prefs.requested()
                             }
                         },
                         // UX-06 单方停止：本地断开不依赖 daemon 回应。确认
@@ -985,6 +1012,9 @@ fun PPassApp() {
                         // T6: 备份范围——「选择相册」与「发起备份」两个动作。
                         // #836：按「已选且当前存在」计数，与选相册页同一口径。
                         selectedBucketCount = selectedBucketCount,
+                        scopeUnreadable = scopeUnreadable,
+                        countsReadable = holder.countsReadable.value,
+                        scopeSaved = holder.scopeSaved.value,
                         // MOB-03: 相册选择入口走完整权限链——MOB-02 删首页手动
                         // 备份按钮时把挂在它身上的权限申请链一起删没了，
                         // 无权限直接进列表 = MediaStore 空查询 = 全白。
@@ -1037,12 +1067,15 @@ fun PPassApp() {
                     confirmButton = {
                         TextButton(onClick = {
                             pendingWifiOff = false
-                            wifiOnly = false
-                            backupSettings.save(false)
-                            rescheduleAutoBackup(context)
-                            // #413：引擎可能正因为 Wi‑Fi 在等——用户刚放开限制，人在场，立即重新检查一次，
-                            // 等待原因随之更新（否则「将在连上 Wi-Fi 后进行」会挂到下一次触发）。
-                            requestFlowWake(context, TriggerReason.MANUAL)
+                            wifiOnly = settingsWriter.persist("wifiOnly", false, backupSettings::save) {
+                                backupSettings.load().wifiOnly
+                            }
+                            if (!wifiOnly) {
+                                rescheduleAutoBackup(context)
+                                // #413：引擎可能正因为 Wi‑Fi 在等——用户刚放开限制，人在场，立即重新检查一次，
+                                // 等待原因随之更新（否则「将在连上 Wi-Fi 后进行」会挂到下一次触发）。
+                                requestFlowWake(context, TriggerReason.MANUAL)
+                            }
                         }) { Text(stringResource(R.string.wifi_off_confirm_ok)) }
                     },
                     dismissButton = {
@@ -1085,7 +1118,8 @@ fun PPassApp() {
                         // MOB-02 §六: 保存范围 + 记录当前全部相册（新相册
                         // 基准）；新出现的相册默认不包含（不在 sel 里）。
                         // MOB-20: 必须在 saveScope 覆盖旧集合**之前**算差集。
-                        val prevScope = BackupScopeStore(context).selectedBucketIds()
+                        // #1020：读不出来的旧范围按「从未选过」算（全部新增，宁可多扫），同 iOS。
+                        val prevScope = (BackupScopeStore(context).readScope() as? ScopeRead.Saved)?.ids
                         // MOB-40: `prevScope == null` = **从未选过范围**。旧语义下
                         // 那意味着「已经全备过了」，所以差集算空；新语义下没选过
                         // = 一张都没备过，首次选择就是**全部新增**，按 MOB-20 的
@@ -1093,10 +1127,14 @@ fun PPassApp() {
                         // 语义不自洽）。
                         val added = if (prevScope == null) sel else sel - prevScope
 
-                        scopeStore.saveScope(
-                            selected = sel,
-                            allCurrent = list.map { it.id }.toSet(),
-                        )
+                        // #1020：没存上就不往下走——不进完成页、不叫醒引擎，留在选相册页让用户看到提示并能重试。
+                        val saved = settingsWriter.write("backupScope", sel.size, R.string.scope_save_failed) {
+                            scopeStore.saveScope(
+                                selected = sel,
+                                allCurrent = list.map { it.id }.toSet(),
+                            )
+                        }
+                        if (!saved) return@BucketScreen
                         // REBUILD-05: 范围扩大不再重置 legacy watermark。
                         // 新 Flow 以当前 discovery cursor 为上界持久化历史补扫；
                         // 它不扰动当前严格队头，结果只会追加到后续队列。
@@ -1139,17 +1177,22 @@ fun PPassApp() {
             val batteryPermission = rememberLauncherForActivityResult(
                 ActivityResultContracts.StartActivityForResult(),
             ) {
-                if (backgroundAuthorization.isGranted()) enableAutoBackup(context)
-                else suspendAutoBackupUntilAuthorized(context)
+                // #1020：记不下来不挡进首页（同 iOS 完成页），但要提示，不崩溃。
+                if (backgroundAuthorization.isGranted()) {
+                    settingsWriter.write("autoBackup", true) { enableAutoBackup(context) }
+                } else {
+                    settingsWriter.write("autoBackup", "suspended") { suspendAutoBackupUntilAuthorized(context) }
+                }
                 finishOnboarding()
             }
             val onEnableBackgroundBackup = {
                 if (backgroundAuthorization.isGranted()) {
-                    enableAutoBackup(context)
+                    settingsWriter.write("autoBackup", true) { enableAutoBackup(context) }
                     finishOnboarding()
-                } else {
-                    AutoBackupPrefs(context.filesDir).setRequested(true)
+                } else if (settingsWriter.write("autoBackup", "requested") { AutoBackupPrefs(context.filesDir).setRequested(true) }) {
                     batteryPermission.launch(backgroundAuthorization.requestIntent())
+                } else {
+                    finishOnboarding()
                 }
             }
             val askNotifications = remember {
@@ -1159,7 +1202,9 @@ fun PPassApp() {
             val onboardingNotificationPermission = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestPermission(),
             ) { granted ->
-                notificationAsk.onResult(granted, com.hawkeyexb.ppass.backup.NotifyOnFailurePrefs(context.filesDir))
+                settingsWriter.write("notifyOnFailure", granted) {
+                    notificationAsk.onResult(granted, com.hawkeyexb.ppass.backup.NotifyOnFailurePrefs(context.filesDir))
+                }
                 afterNotificationAsk?.invoke()
                 afterNotificationAsk = null
             }

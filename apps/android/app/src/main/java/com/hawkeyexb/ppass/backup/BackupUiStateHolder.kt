@@ -34,7 +34,6 @@ import com.hawkeyexb.ppass.backup.flow.flowCommandOf
 import com.hawkeyexb.ppass.backup.flow.flowDeliveryPairingLoss
 import com.hawkeyexb.ppass.backup.flow.flowMissingSourceNotice
 import com.hawkeyexb.ppass.backup.flow.requestFlowWake
-import com.hawkeyexb.ppass.backup.flow.retryFailedFlow
 import com.hawkeyexb.ppass.backup.flow.flowTripletOf
 import com.hawkeyexb.ppass.backup.flow.visibleEngineView
 import com.hawkeyexb.ppass.backup.flow.runtimeFor
@@ -53,7 +52,10 @@ import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PairingStore
 import com.hawkeyexb.ppass.transport.parsePeerAddrToken
+import com.hawkeyexb.ppass.R
+import com.hawkeyexb.ppass.log.PLog
 import com.hawkeyexb.ppass.ui.BackupUiState
+import com.hawkeyexb.ppass.ui.selectedExistingCount
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -63,6 +65,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
@@ -136,6 +140,22 @@ class BackupUiStateHolder(
     private val _desktopLowSpace = mutableStateOf(false)
     val desktopLowSpace: State<Boolean> get() = _desktopLowSpace
 
+    /**
+     * #1038：账本读不读得到（[FlowProjection.countsReadable]）、范围存没存——英雄区据此在「读不到」「未选相册」
+     * 「相册数量读取失败」之间选（[com.hawkeyexb.ppass.ui.heroRenderOf]）。
+     */
+    private val _countsReadable = mutableStateOf(true)
+    val countsReadable: State<Boolean> get() = _countsReadable
+    private val _scopeSaved = mutableStateOf(true)
+    val scopeSaved: State<Boolean> get() = _scopeSaved
+
+    /**
+     * #1020：一过性提示（字符串资源 id）——命令执行出错时发；首页收集后交给 UI-12 的 Snackbar。
+     * 「状态不允许」不发（不是错误，那一行随状态收起）。
+     */
+    private val _notices = MutableSharedFlow<Int>(extraBufferCapacity = 4)
+    val notices: SharedFlow<Int> get() = _notices
+
     /** #418 交接：完整投影（引擎视图 + 账目）。 */
     private val _projection = mutableStateOf<FlowProjection?>(null)
     val projection: State<FlowProjection?> get() = _projection
@@ -143,8 +163,13 @@ class BackupUiStateHolder(
     private val mediaObserver: ContentObserver
     private val refreshPending = AtomicBoolean(false)
     @Volatile private var inScopeTotal: Long? = null
+    /** #1038：当前存在的相册（MediaStore）；null = 读不到（没权限 / 查询失败）。与 n 一起在 recount 时重读。 */
+    @Volatile private var existingBuckets: Set<Long>? = null
     @Volatile private var gateway: EngineGateway? = null
     private var lastBucketIds: Set<Long>? = null
+    private var lastNoAlbums = false
+    /** 读库失败只在由好转坏时记一行，不随每次视图变化刷屏。 */
+    private var countsUnreadableLogged = false
     private val accessGate = MediaAccessRecountGate()
 
     init {
@@ -212,6 +237,9 @@ class BackupUiStateHolder(
         scope.launch { refresh(recount = true) }
     }
 
+    /** #1038：回到前台重读一次账目——账本读不到时「打开 App 时会再试」靠这一下兑现。 */
+    fun onResume() = scheduleRefresh(recount = false)
+
     fun dispose() {
         runCatching { context.contentResolver.unregisterContentObserver(mediaObserver) }
         gateway?.close()
@@ -221,30 +249,39 @@ class BackupUiStateHolder(
     /** MOB-100（B4）：「已跳过 N 张…不会再重传」的确认路径（水位 = 确认时刻）。 */
     fun acknowledgeMissingSourceNotice() {
         if (_missingSourceNotice.value == null) return
-        command { acknowledgeFlowMissingSource(context) }
+        command("acknowledge-missing-source") { acknowledgeFlowMissingSource(context) }
     }
 
-    private fun command(block: suspend () -> Unit) {
+    /**
+     * #1020（对位 iOS `AppModel.runCommand`）：用户命令。执行出错 → 记日志 + 提示 `command_failed`；
+     * 「状态不允许」（引擎返回 false / null、运行时还没就绪）不是错误，只刷新——那一行随状态收起。
+     * 此前只有 try/finally：异常抛进 Main 上的 SupervisorJob，没有 handler，进程直接崩。
+     */
+    private fun command(what: String, block: suspend () -> Unit) {
         if (_commandPending.value) return
         _commandPending.value = true
         scope.launch {
             try {
-                withContext(Dispatchers.IO) { block() }
-                refresh(recount = false)
+                withContext(Dispatchers.IO) { attemptUserCommand(what) { block() } }
+                    .onFailure { _notices.tryEmit(R.string.command_failed) }
             } finally {
                 _commandPending.value = false
+                refresh(recount = false)
             }
         }
     }
 
     /** Pause/Continue/Retry/Wake，按与按钮文案同一个投影路由（MOB-51）。 */
-    fun backupNow() = command {
-        val p = _projection.value
-        when (p?.let(::flowCommandOf) ?: FlowCommand.Wake) {
-            FlowCommand.Pause -> gateway?.pause()
-            FlowCommand.Continue -> gateway?.resume()
-            FlowCommand.Retry -> retryFailedFlow(context)
-            FlowCommand.Wake -> requestFlowWake(context, TriggerReason.MANUAL)
+    fun backupNow() {
+        val c = _projection.value?.let(::flowCommandOf) ?: FlowCommand.Wake
+        command(c.name.lowercase()) {
+            when (c) {
+                FlowCommand.Pause -> gateway?.pause()
+                FlowCommand.Continue -> gateway?.resume()
+                // #1020：经 gateway 等引擎做完——此前另起线程 fire-and-forget，出错只进 logcat，界面无从知道。
+                FlowCommand.Retry -> gateway?.retryFailed()
+                FlowCommand.Wake -> requestFlowWake(context, TriggerReason.MANUAL)
+            }
         }
     }
 
@@ -258,7 +295,12 @@ class BackupUiStateHolder(
         _commandPending.value = true
         scope.launch {
             try {
-                val snapshot = withContext(Dispatchers.IO) { runCatching { g.remainingSnapshot() }.getOrNull() } ?: return@launch
+                // #1020：算不出来 → 记日志 + 提示，不弹框（此前 runCatching{}.getOrNull() 吞掉，点了没反应）。
+                val snapshot = withContext(Dispatchers.IO) { attemptUserCommand("remaining-snapshot") { g.remainingSnapshot() } }
+                    .getOrElse {
+                        _notices.tryEmit(R.string.command_failed)
+                        return@launch
+                    }
                 cancelSnapshot = snapshot.takeIf { it.count > 0 }
                 _cancelConfirmCount.value = cancelSnapshot?.count
             } finally {
@@ -268,7 +310,7 @@ class BackupUiStateHolder(
     }
 
     /** 「已跳过的照片 · 点击恢复」：从跳过名单移除，待办现算自然包含（#413 §5）。 */
-    fun restoreSkipped() = command { gateway?.restoreSkipped() }
+    fun restoreSkipped() = command("restore-skipped") { gateway?.restoreSkipped() }
 
     fun dismissCancelRemaining() {
         cancelSnapshot = null
@@ -282,7 +324,7 @@ class BackupUiStateHolder(
         val snapshot = cancelSnapshot ?: return
         cancelSnapshot = null
         _cancelConfirmCount.value = null
-        command { gateway?.cancelRemaining(snapshot) }
+        command("cancel-remaining") { gateway?.cancelRemaining(snapshot) }
     }
 
     private suspend fun repairEpochIfNeeded() {
@@ -306,32 +348,51 @@ class BackupUiStateHolder(
         }
     }
 
-    /** 账目（读库）。引擎视图取最新值带上。 */
-    private fun currentFacts(recount: Boolean): FlowProjection? {
+    /**
+     * 账目（读库）。引擎视图取最新值带上。null = 运行时还没就绪（不是读失败：不发布，等订阅接上再读）。
+     * #1038：读库抛出 → [FlowProjection.unreadable]（记日志），不再沿用上一次投影、不再静默。
+     */
+    private fun currentFacts(recount: Boolean, bucketIds: Set<Long>?): FlowProjection? {
         val g = gateway ?: return null
-        val bucketIds = scopeStore.selectedBucketIds()
         if (recount || inScopeTotal == null) {
             inScopeTotal = try {
                 bucketIds?.let { MediaScanner(context.contentResolver).countAll(it) }
             } catch (_: Throwable) {
                 null
             }
+            existingBuckets = try {
+                MediaScanner(context.contentResolver).listBuckets().map { it.id }.toSet()
+            } catch (_: Throwable) {
+                null
+            }
         }
-        return g.facts(bucketIds, inScopeTotal).copy(view = accessGate.visible(g.view.value))
+        val view = accessGate.visible(g.view.value)
+        val total = inScopeTotal
+        val p = factsOrUnreadable(
+            total, view,
+            // 由好转坏时记一行，持续读不到不随每次刷新刷屏。
+            onUnreadable = { e -> if (!countsUnreadableLogged) PLog.w(TAG, "home-facts: order counts unreadable", e) },
+        ) { g.facts(bucketIds, total) }
+        countsUnreadableLogged = !p.countsReadable
+        return p
     }
 
     private suspend fun refresh(recount: Boolean) {
         pairingLostState.syncFrom(flowDeliveryPairingLoss, PairingEpoch(pairing.pairingEpoch))
-        val bucketIds = withContext(Dispatchers.IO) { scopeStore.selectedBucketIds() }
-        val p = withContext(Dispatchers.IO) { runCatching { currentFacts(recount) }.getOrNull() } ?: return
+        // #1020：读不到的范围与「从未保存」一样不给三元组（英雄区说「未选相册」，设置行另说「读不到」），同 iOS。
+        val bucketIds = (withContext(Dispatchers.IO) { scopeStore.readScope() } as? ScopeRead.Saved)?.ids
+        val p = withContext(Dispatchers.IO) { currentFacts(recount, bucketIds) } ?: return
         lastBucketIds = bucketIds
+        lastNoAlbums = noAlbumsOf(bucketIds, existingBuckets)
         publish(p)
     }
 
     /** 投影 → 各个 State。全部裁决在 FlowUiProjection.kt 的纯函数里。 */
     private fun publish(p: FlowProjection) {
         _projection.value = p
-        _state.value = backupUiStateOf(p)
+        _state.value = backupUiStateOf(p, noAlbums = lastNoAlbums)
+        _countsReadable.value = p.countsReadable
+        _scopeSaved.value = lastBucketIds != null
         _missingSourceNotice.value = flowMissingSourceNotice(p)
         _acknowledgedMissingSourceCount.value = p.missingSourceAcknowledged.toInt()
         _transferProgress.value = transferPermilleOf(p.current)?.let { it / 1000f }
@@ -364,6 +425,7 @@ class BackupUiStateHolder(
     }
 
     private companion object {
+        const val TAG = "PPassHome"
         const val RUNTIME_RETRY_MS = 2_000L
         /** 「N 秒没有新数据」按秒走；与引擎的字节刷新节流同一个节拍。 */
         const val TRANSFER_TICK_MS = 1_000L
@@ -430,6 +492,9 @@ internal interface EngineGateway {
 
     suspend fun restoreSkipped()
 
+    /** 「再试一次」：FAILED 改回待传输并叫醒循环，等引擎做完（#1020）。 */
+    suspend fun retryFailed()
+
     /** MediaStore 变了（待办可能变了）。 */
     fun onMediaChanged()
 
@@ -473,6 +538,10 @@ private class EngineViewGateway(private val runtime: AndroidFlowRuntime) : Engin
         engine.restoreSkipped().await()
     }
 
+    override suspend fun retryFailed() {
+        engine.retryFailed().await()
+    }
+
     /**
      * App 在前台时 MediaStore 变了：叫醒引擎（人在场的触发，不查后台开关；在跑就合并）。引擎在入口 / 合并时重算待办
      * （只读元数据），首页的待备份与 m 随之更新——不依赖 MediaWatchJob（后台备份关着时它不注册）。
@@ -484,6 +553,47 @@ private class EngineViewGateway(private val runtime: AndroidFlowRuntime) : Engin
     override fun close() = scope.cancel()
 }
 // ================================================================ W1 接线点结束
+
+/**
+ * #1038（对位 iOS `FlowFacts.applying(counts:)`）：读账本；读库抛出 → [FlowProjection.unreadable]（计数是占位 0、
+ * `countsReadable = false`），不抛给调用方、也不沿用上一次投影。n 与引擎视图照常带上。
+ */
+internal fun factsOrUnreadable(
+    inScopeTotal: Long?,
+    view: EngineView?,
+    onUnreadable: (Exception) -> Unit,
+    read: () -> FlowProjection,
+): FlowProjection =
+    try {
+        read().copy(view = view)
+    } catch (e: Exception) {
+        onUnreadable(e)
+        FlowProjection.unreadable(inScopeTotal, view)
+    }
+
+/**
+ * #1038（对位 iOS `AppModel.noAlbums`）：一张都不在范围内——范围从未保存 / 读不到（[bucketIds] 为 null）、保存了空集、
+ * 或选中的相册都已不存在（#836 的「已选且当前存在」口径，[existing] 为 null 时沿用已选个数）。
+ */
+internal fun noAlbumsOf(bucketIds: Set<Long>?, existing: Set<Long>?): Boolean =
+    (selectedExistingCount(bucketIds, existing) ?: 0) == 0
+
+/**
+ * #1020（对位 iOS `AppModel.runCommand` / `commandFailed`）：执行一条用户命令，成功与出错各记一行日志
+ * （`command <what> ok` / `command failed (<what>)`，真机取证用）。出错返回 failure，由调用方提示——不吞、不崩。
+ * 协程取消照常抛出，不算命令出错。
+ */
+internal suspend fun <T> attemptUserCommand(what: String, op: suspend () -> T): Result<T> =
+    try {
+        Result.success(op()).also { PLog.i(USER_COMMAND_TAG, "command $what ok") }
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        PLog.w(USER_COMMAND_TAG, "command failed ($what)", e)
+        Result.failure(e)
+    }
+
+private const val USER_COMMAND_TAG = "PPassHome"
 
 /** The holder's existing pairing-lost UI state, factored for Flow error projection. */
 internal class HolderPairingLostState {

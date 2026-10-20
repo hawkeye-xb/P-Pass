@@ -199,6 +199,8 @@
     <string name="hero_of_n">/ %1$s photos home</string>
     <string name="pending_count">%1$d to back up</string>
     <string name="triplet_unavailable">Couldn\'t read album count. Will retry later.</string>
+    <!-- #1038: the backup ledger (order table) can't be read — no progress verdict at all. Not triplet_unavailable (album count). -->
+    <string name="hero_counts_unreadable">Can\'t read the backup ledger right now, so no progress is shown — it will retry when you open the app.</string>
     <!-- UI-16 rule H-C: the two counts disagree, so no fraction may be shown.
          Deliberately NOT triplet_unavailable — that one means "cannot read the
          phone's album count", a different fact. -->
@@ -237,6 +239,8 @@
     <string name="bucket_new">New</string>
     <string name="backup_scope">Albums to back up</string>
     <string name="backup_scope_none">None selected</string>
+    <!-- #1020: a scope was saved but can't be read — not the same as "None selected". -->
+    <string name="backup_scope_unreadable">Can’t read the saved selection</string>
     <plurals name="backup_scope_n">
         <item quantity="one">%1$d album</item>
         <item quantity="other">%1$d albums</item>
@@ -291,6 +295,10 @@
          covers signals that can be honestly reported (see MainActivity.kt
          comments for why there is no "failed" variant). -->
     <string name="background_backup_resuming">Reconnecting background monitoring…</string>
+    <!-- #1020 (iOS #971 / #972): transient feedback when a setting wasn't saved or a command failed (UI-12 Snackbar). -->
+    <string name="setting_save_failed">The setting could not be saved on this phone, so it was put back to its previous value. Check the free storage and try again.</string>
+    <string name="scope_save_failed">Your album selection could not be saved on this phone. Check the free storage and try again.</string>
+    <string name="command_failed">That didn’t go through. Please try again later.</string>
     <string name="background_backup_authorized">Background access granted</string>
     <string name="background_backup_authorization_denied">Authorization not granted — background backup stays paused</string>
     <!-- UI-12: shared amber-banner action label for both background-backup
