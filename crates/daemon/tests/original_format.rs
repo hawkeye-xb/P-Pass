@@ -1,6 +1,6 @@
-//! #1054：`QueryEngine::original()` 的格式分流——只有 WebView `<img>` 能直接
-//! 显示的 jpeg/png/gif/webp 返回原图（连同真实 MIME），HEIC/RAW/TIFF/视频
-//! 一律 NotFound，让桌面壳回退 1024 缩略图（否则 `<img>` 解不了 = 全黑）。
+//! #1054：`QueryEngine::original()` 的格式分流——所有静态图片（含 HEIC/RAW/
+//! TIFF）都返回原图并带真实 MIME，能不能解码交给渲染端，解不了由壳回退缩略图；
+//! 视频一律 NotFound。daemon 不维护「浏览器能显示哪些格式」的白名单。
 
 use std::sync::Arc;
 
@@ -40,18 +40,18 @@ async fn engine_with(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn original_only_serves_browser_displayable_formats() {
+async fn original_serves_every_still_image_with_its_real_mime() {
     // (文件名, 入库 MIME, 是否应返回原图)
     let cases: &[(&str, &str, bool)] = &[
         ("a.jpg", "image/jpeg", true),
         ("a.png", "image/png", true),
         ("a.gif", "image/gif", true),
         ("a.webp", "image/webp", true),
-        ("a.heic", "image/heic", false),
-        ("a.heif", "image/heif", false),
-        ("a.dng", "image/x-adobe-dng", false),
-        ("a.cr2", "image/x-canon-cr2", false),
-        ("a.tif", "image/tiff", false),
+        ("a.heic", "image/heic", true),
+        ("a.heif", "image/heif", true),
+        ("a.dng", "image/x-adobe-dng", true),
+        ("a.cr2", "image/x-canon-cr2", true),
+        ("a.tif", "image/tiff", true),
         ("a.mp4", "video/mp4", false),
     ];
     for (i, (name, mime, served)) in cases.iter().enumerate() {

@@ -2,19 +2,20 @@
 // `<img>` 解不了（onerror）时回退 1024 缩略图。可单测，App.svelte 只做接线。
 import { loadVideoThumbnail } from "./viewerVideo.js";
 
-// WebView `<img>` 能直接显示的原图 MIME（与 daemon is_browser_displayable 同口径）。
-const DISPLAYABLE = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+// 只接受形如 image/<子类型> 的 MIME，防止任意字符串（含 `;`、`,`）拼进 URL。
+// 不限定具体格式：能不能解码由 `<img>` 决定，解不了走 onerror 回退。
+const IMAGE_MIME = /^image\/[a-z0-9][a-z0-9.+-]*$/;
 
-/** `asset.original` 回复 → data URL；media_type 缺失/不在白名单（旧 daemon）按 jpeg。 */
+/** `asset.original` 回复 → data URL；media_type 缺失/不合法（旧 daemon）按 jpeg。 */
 export function originalDataUrl(o) {
   const mt = String(o?.media_type ?? "").toLowerCase();
-  const type = DISPLAYABLE.has(mt) ? mt : "image/jpeg";
+  const type = IMAGE_MIME.test(mt) ? mt : "image/jpeg";
   return `data:${type};base64,${o.data_base64}`;
 }
 
 /**
- * 打开图片大图：asset.original 成功给原图；失败（含 daemon 对 HEIC/RAW 等
- * 返回 NotFound）→ thumb.get 1024；都失败才 failed。每步过 isCancelled 闸。
+ * 打开图片大图：asset.original 成功给原图；失败（含超过上限、视频等
+ * daemon 返回 NotFound）→ thumb.get 1024；都失败才 failed。每步过 isCancelled 闸。
  *
  * @returns {Promise<{kind:"original"|"thumb", src:string}|{kind:"failed"}|{kind:"cancelled"}>}
  */
@@ -36,10 +37,18 @@ export async function loadImageViewer(deps, { hash }) {
  *
  * @returns {Promise<{kind:"thumb", src:string}|{kind:"failed"}|{kind:"ignored"}>}
  */
-export async function handleImageError({ call, hash, showingOriginal, isActive }) {
+export async function handleImageError({
+  call,
+  hash,
+  showingOriginal,
+  isActive,
+}) {
   if (!isActive()) return { kind: "ignored" };
   if (!showingOriginal) return { kind: "failed" };
-  const r = await loadVideoThumbnail({ call, isCancelled: () => !isActive() }, { hash });
+  const r = await loadVideoThumbnail(
+    { call, isCancelled: () => !isActive() },
+    { hash },
+  );
   if (r.kind === "cancelled") return { kind: "ignored" };
   return r;
 }

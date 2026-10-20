@@ -522,9 +522,9 @@ impl QueryEngine {
     /// 体量护栏，base64 后约 16 MiB），桌面端降级到 1024 缩略图。
     /// 只服务 photo（video 原片体量必然超限，桌面大图只看照片）。
     ///
-    /// #1054：只对 WebView `<img>` 能直接显示的格式（[`is_browser_displayable`]：
-    /// jpeg/png/gif/webp）返回原图，连同真实 MIME 一起给壳组 data URL；HEIC/HEIF/
-    /// RAW/TIFF 等返回 NotFound，让壳回退 1024 缩略图（否则 `<img>` 解不了 = 全黑）。
+    /// #1054：所有静态图片（[`is_still_image`]）都返回原图，连同真实 MIME 一起给
+    /// 壳组 data URL；渲染端解不了（如 WebView2 的 HEIC/RAW）由壳的 `<img>`
+    /// onerror 回退 1024 缩略图，不再全黑。
     pub async fn original(&self, hash_hex: &str) -> Result<(String, Vec<u8>), QueryError> {
         let started = std::time::Instant::now();
         let hash = parse_hash(hash_hex).ok_or(QueryError::NotFound)?;
@@ -533,8 +533,8 @@ impl QueryEngine {
             .get_asset(&hash)
             .await?
             .ok_or(QueryError::NotFound)?;
-        if !is_browser_displayable(&asset.media_type) {
-            return Err(QueryError::NotFound); // video / HEIC / RAW 等不走大图
+        if !is_still_image(&asset.media_type) {
+            return Err(QueryError::NotFound); // 视频不走大图
         }
         if asset.bytes > ORIGINAL_CAP {
             return Err(QueryError::NotFound);
@@ -552,12 +552,12 @@ impl QueryEngine {
     }
 }
 
-/// #1054：WebView `<img>` 能直接解码显示的原图 MIME（两平台同一口径）。
-pub(crate) fn is_browser_displayable(media_type: &str) -> bool {
-    matches!(
-        media_type.to_ascii_lowercase().as_str(),
-        "image/jpeg" | "image/png" | "image/gif" | "image/webp"
-    )
+/// #1054：大图只认静态图片 MIME。能不能解码交给渲染端（WebView `<img>`）：
+/// macOS WebKit 能解 HEIC，WebView2 不能；解不了时壳在 onerror 里回退缩略图。
+/// 不在 daemon 维护「哪些格式浏览器能显示」的白名单——那是渲染端的能力，
+/// 写死在这里会让能显示的平台平白降级。
+pub(crate) fn is_still_image(media_type: &str) -> bool {
+    media_type.to_ascii_lowercase().starts_with("image/")
 }
 
 /// storage 行 → 线上元数据: taken_at ms→s, MIME → "photo"/"video" 粗类.
