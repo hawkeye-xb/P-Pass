@@ -19,8 +19,8 @@ mod service_state;
 // 每个函数各写一遍 `use ... as _` 已经不划算；提到文件级。
 use distribution::{
     daemon_is_unmanaged, is_user_stopped, kernel_convergence_verdict,
-    reconcile_autostart_registration, self_heal_allowed, set_user_stopped, show_wizard,
-    KernelFacts, KernelVerdict,
+    reconcile_autostart_registration, self_heal_allowed, set_user_stopped, should_pause_for_update,
+    show_wizard, update_resume_needed, KernelFacts, KernelVerdict,
 };
 use platform::{HostingAdapter as _, PlatformAdapter as _};
 use serde_json::{json, Value};
@@ -757,29 +757,27 @@ fn stop_daemon_now() -> Result<(), String> {
     unregistered.map_err(|e| e.to_string())
 }
 
-/// W1 (2026-08-26 real-box run): the updater's downloadAndInstall() was
-/// failing on Windows because `ppf-daemon.exe` — a resident background
-/// process the user never explicitly stopped (closing the main window
-/// only hides it to tray, by design; see the on_window_event handler
-/// below) — kept the installer from overwriting its own file. Same
-/// class of bug as the manual-reinstall report ("退出desktop app主进程，
-/// 有后台进程，无法覆盖安装"). Unlike stop_daemon(), this must NOT
-/// touch autostart registration — the update is expected to succeed
-/// and the daemon should come back exactly as before, not require the
-/// user to re-run the wizard. Frontend calls this before
-/// update.downloadAndInstall(). #1046（S-11）：装完不再由旧壳把 daemon 拉
-/// 回来——更新流程是「停 → 替换 → 重启壳 → 新壳启动对账」（`startup_reconcile`）；
-/// 装失败时前端走 `self_heal_daemon`（同一份「用户主动停止」判据）。
-/// Best-effort: NOT finding a running daemon is not an error (nothing
-/// to pause), and this must never block the update attempt itself —
-/// downloadAndInstall() still runs even if this errors, so a stuck
-/// pause degrades to the pre-existing failure mode (caught, surfaced
-/// with a human-readable hint) instead of blocking updates entirely.
+/// W1 (2026-08-26)：Windows 上常驻的 `ppf-daemon.exe` 占着自己的文件，安装器
+/// 覆盖不了；#1060 起两平台一致——前端**下载完成后、`install()` 之前**调这个，
+/// 下载期间服务照常工作（备份不被打断）。
+///
+/// 这是「为更新暂停」，不是用户的停止：不写停止标记、不删开机自启登记
+/// （区别于 `stop_daemon`）；用户本来就停过服务则整个不动。恢复：安装成功 →
+/// 新壳启动对账（`resume_after_update`）；安装失败（旧壳还在）→ 前端走
+/// `self_heal_daemon`。Best-effort：失败只记日志，不挡更新本身。
 #[tauri::command]
 fn pause_daemon_for_update() -> Result<(), String> {
-    // QA-09 迁移（#211）：best-effort —— 杀不掉也继续（原来两个分支也是
-    // 直接丢结果）。区别在于「什么退出码算进程本来就没在跑」这条判据
-    // 现在只有一份、在 platform 里，不再是三个调用点各抄一遍。
+    // #1060：用户停过服务 = 本来就停着，更新前后都保持停止——不动。
+    if !should_pause_for_update(&platform::adapter().data_dir()) {
+        return Ok(());
+    }
+    // 先让服务管理器卸下常驻那份（登记保留、不写停止标记）：只 kill 的话 launchd
+    // KeepAlive / 计划任务看门狗几秒内就用旧文件拉回来，等于没停。
+    match platform::hosting().pause_resident_daemon() {
+        Ok(outcome) => eprintln!("#1060: 为更新暂停常驻服务：{outcome:?}"),
+        Err(e) => eprintln!("#1060: 为更新暂停常驻服务失败（继续）：{e}"),
+    }
+    // 再清掉服务管理器管不到的（一次性 spawn 的）。QA-09 迁移（#211）：best-effort。
     let _ = stop_bundled_daemon();
     Ok(())
 }
@@ -1322,7 +1320,27 @@ fn gather_kernel_facts() -> KernelFacts {
 /// 的 `kickstart -k` 并发会连着重启两次。
 fn startup_reconcile(app: tauri::AppHandle) {
     reconcile_autostart_registration();
+    resume_after_update(&app);
     converge_kernel_on_startup(app);
+}
+
+/// #1060「更新后恢复」：更新前为替换文件暂停了常驻服务（登记保留），新壳起来后
+/// 把它拉回来——直接就是新内核，不再经过「旧内核被 KeepAlive 拉起、再被换一次」。
+/// 判据见 `update_resume_needed`（用户停过的保持停止）。排在登记对账之后：登记
+/// 被重写时那一下 bootstrap 已经起了服务，这里看到在线就不动，避免并发重启。
+fn resume_after_update(app: &tauri::AppHandle) {
+    if !update_resume_needed(
+        &platform::adapter().data_dir(),
+        resident_service_available(),
+        daemon_online(),
+    ) {
+        return;
+    }
+    match self_heal_now(app, "resume after update") {
+        Ok(true) => eprintln!("#1060: 新壳启动，已把常驻服务拉回"),
+        Ok(false) => eprintln!("#1060: 新壳启动，按判据不拉"),
+        Err(e) => eprintln!("#1060: 新壳启动，拉回常驻服务失败：{e}"),
+    }
 }
 
 /// 等内核答上 status，再按判据换（#667）。
@@ -2565,8 +2583,8 @@ mod tests {
     fn relaunch_shell_is_called_after_install() {
         let app = include_str!("../../src/App.svelte");
         let install = app
-            .find("await update.downloadAndInstall(")
-            .expect("App.svelte 缺 downloadAndInstall");
+            .find("await runUpdate(")
+            .expect("App.svelte 缺 runUpdate（下载→暂停→安装）");
         // UPD-06 (#616)：换壳走 relaunch_shell（系统路径 kickstart 优先、壳自己
         // 重启兜底）。
         // ⚠️ 比的是**调用点**：`relaunchShellNow` 的定义体在文件里更靠前，比定义
@@ -2574,7 +2592,7 @@ mod tests {
         let call = app
             .find("await relaunchShellNow();")
             .expect("App.svelte 缺换壳调用点");
-        assert!(call > install, "换壳必须在 downloadAndInstall 之后调用");
+        assert!(call > install, "换壳必须在 runUpdate（install）之后调用");
         assert!(
             app.contains("await invoke(\"relaunch_shell\");"),
             "换壳必须调 relaunch_shell 命令"

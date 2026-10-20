@@ -996,6 +996,22 @@ impl HostingAdapter for WindowsAdapter {
         .flatten()
     }
 
+    /// #1060：结束在跑的实例并**禁用**任务（看门狗不会在替换文件时把服务拉起），
+    /// 任务定义保留、不写任何用户停止标记。恢复是 `restart_resident_daemon`：
+    /// 它会先 `SetEnabled(true)` 再运行。
+    fn pause_resident_daemon(&self) -> Result<crate::ResidentPause> {
+        use windows::Win32::Foundation::VARIANT_FALSE;
+        with_task_folder("pause scheduled task", |folder| {
+            let Some(task) = get_task(folder)? else {
+                return Ok(crate::ResidentPause::NotRegistered);
+            };
+            // SAFETY: task 是有效的 COM 接口。
+            unsafe { task.SetEnabled(VARIANT_FALSE)? };
+            stop_task_instances(&task)?;
+            Ok(crate::ResidentPause::Paused)
+        })
+    }
+
     /// DESK-65 (#957)：= `launchctl kickstart [-k]`。`kill_running` 时先结束在跑
     /// 的实例再运行任务（换版本）；否则在跑就不动（自愈）。
     fn restart_resident_daemon(&self, kill_running: bool) -> Result<crate::ResidentRestart> {

@@ -44,10 +44,10 @@ describe("DESK-36 接线（App.svelte）", () => {
   it("更新装完不再由旧壳拉 daemon（新壳启动对账），装失败走自愈（#1046）", () => {
     const update = body(/async function checkForUpdate[\s\S]*?\n  \}\n/);
     expect(update).not.toContain("resume_daemon_after_update");
-    const failure = update.slice(update.lastIndexOf("} catch (e) {"));
+    // #1060：失败自愈在 runUpdate（updateFlow.js，有单测）里，App 只把 self_heal_daemon
+    // 接进去；成功路径（catch 之前）不碰。
     const success = update.slice(0, update.lastIndexOf("} catch (e) {"));
-    expect(success).not.toContain('invoke("self_heal_daemon")');
-    expect(failure).toContain('invoke("self_heal_daemon")');
+    expect(success).toContain('selfHeal: () => invoke("self_heal_daemon")');
   });
 
   it("停服后立即对账，托盘停止也订阅了", () => {

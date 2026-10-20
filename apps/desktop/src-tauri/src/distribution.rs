@@ -157,6 +157,25 @@ pub(crate) fn self_heal_allowed(data_dir: &std::path::Path) -> bool {
     data_dir.join("config.toml").exists() && !is_user_stopped(data_dir)
 }
 
+/// #1060：更新前要不要「为更新暂停」常驻服务。用户自己停过（停止标记在）就**不动**：
+/// 它本来就停着，更新前后都保持停止（暂停本身不碰标记，所以也不会改写这份意图）。
+pub(crate) fn should_pause_for_update(data_dir: &std::path::Path) -> bool {
+    !is_user_stopped(data_dir)
+}
+
+/// #1060：新壳启动时要不要把服务拉回来（「更新后恢复」）。三个条件缺一不可：
+/// 自愈判据过（配置过、且用户没停——停过的更新前后都保持停止）、服务管理器里
+/// 有登记（`resident_service_available`）、此刻内核不在线（在线 = 无事可做；
+/// 登录时 launchd 并发拉起的那份也落在这条，随后 `restart_resident_daemon(false)`
+/// 会报 AlreadyRunning，不会二次重启）。
+pub(crate) fn update_resume_needed(
+    data_dir: &std::path::Path,
+    registered: bool,
+    online: bool,
+) -> bool {
+    registered && !online && self_heal_allowed(data_dir)
+}
+
 /// DESK-60 (#877)：登记缺失时要不要补。与自愈同一条判据——配置过（不是首启，
 /// DAE-03 ②）、且不是用户主动停的（DESK-36 的停止标记）——再加上平台声明
 /// 「登记会被系统流程删掉」。
@@ -236,6 +255,33 @@ pub(crate) fn kernel_convergence_verdict(f: &KernelFacts) -> KernelVerdict {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── #1060：为更新暂停 / 更新后恢复的判据 ───────────────────────────
+
+    /// 用户停过服务：更新前后都保持停止——不暂停、不恢复。
+    /// 反证：把 `should_pause_for_update` 改成恒 true / `update_resume_needed` 去掉
+    /// `self_heal_allowed` → 对应断言红。
+    #[test]
+    fn user_stopped_service_is_neither_paused_nor_resumed() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        assert!(should_pause_for_update(dir.path()));
+        assert!(update_resume_needed(dir.path(), true, false));
+        set_user_stopped(dir.path(), true).unwrap();
+        assert!(!should_pause_for_update(dir.path()));
+        assert!(!update_resume_needed(dir.path(), true, false));
+    }
+
+    /// 已登记、没停过、内核不在线 ⇒ 拉；在线 / 没登记 / 没配置过 ⇒ 不拉。
+    #[test]
+    fn resume_only_when_registered_configured_and_offline() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!update_resume_needed(dir.path(), true, false), "没配置过（首启向导的事）");
+        std::fs::write(dir.path().join("config.toml"), "").unwrap();
+        assert!(update_resume_needed(dir.path(), true, false));
+        assert!(!update_resume_needed(dir.path(), true, true), "已在线");
+        assert!(!update_resume_needed(dir.path(), false, false), "没登记");
+    }
 
     // ── #667 / #732：自动换内核判据 ───────────────────────────────────
 

@@ -22,6 +22,7 @@
   import { check as checkUpdate } from "@tauri-apps/plugin-updater";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
   import { openLibraryDir } from "./lib/openLibrary.js";
+  import { runUpdate } from "./lib/updateFlow.js";
   import QRCode from "qrcode";
   import { onMount, onDestroy } from "svelte";
   import Wizard from "./Wizard.svelte";
@@ -110,11 +111,11 @@
   let platformUx = $state(null);
   let starting = $state(false);
   // W1 (2026-08-26 real-box run): the update flow pauses ppf-daemon.exe
-  // before downloadAndInstall() (see checkForUpdate() below) so the
+  // before install() (#1060: after download; see checkForUpdate() below) so the
   // Windows installer can overwrite its file — but NSIS's silent
   // installer terminates the calling process itself (CheckIfAppIsRunning
   // macro) partway through, so the resume call queued right after
-  // downloadAndInstall() may never run: the shell that would call it is
+  // install() may never run: the shell that would call it is
   // dead. Rather than depend on that one line of JS surviving, self-heal
   // is triggered by the Rust-owned `unreachable` state (see
   // maybeSelfHeal): if a config already exists and the user did not stop
@@ -1040,40 +1041,18 @@
       updatePhase = "idle";
       return;
     }
-    // W1 (2026-08-26 real-box run): downloadAndInstall() was failing on
-    // Windows because the resident ppf-daemon.exe (never stopped just
-    // by closing the window — it lives on in the tray by design) holds
-    // its own exe file open, so the installer can't overwrite it.
-    // Normal users shouldn't have to know "go stop the background
-    // service in the tray first" — pause it ourselves, then resume it
-    // after a successful install. Best-effort on both ends: pause/resume
-    // failures are logged but never block the update attempt or hide a
-    // real downloadAndInstall error behind a pause/resume error.
+    // #1060：下载 → 暂停 daemon → 安装（两平台一致），顺序在 updateFlow.js。
+    // 暂停放在下载之后：下载期间备份不被打断；暂停由壳侧完成（不写用户停止标记）。
     try {
-      await invoke("pause_daemon_for_update");
-    } catch (e) {
-      console.warn("[updater] pause_daemon_for_update failed (continuing anyway):", e);
-    }
-    try {
-      updatePhase = "downloading";
-      let total = 0;
-      let done = 0;
-      // UPD-06 (#616)：官方进度回调（Started / Progress / Finished）——"过程可见"
-      // 的唯一来源。旧实现是裸调用 downloadAndInstall()，用户只能干等几分钟，
-      // 期间还能重复点。总长拿不到时 updateProgress 保持 null（只画不确定态，
-      // 绝不编一个假百分比）。
-      await update.downloadAndInstall((ev) => {
-        if (ev.event === "Started") {
-          total = ev.data?.contentLength || 0;
-          done = 0;
-          updateProgress = total ? 0 : null;
-        } else if (ev.event === "Progress") {
-          done += ev.data?.chunkLength || 0;
-          updateProgress = total ? Math.min(100, Math.round((done / total) * 100)) : null;
-        } else if (ev.event === "Finished") {
-          updatePhase = "installing";
-          updateProgress = 100;
-        }
+      await runUpdate({
+        update,
+        pauseDaemon: () => invoke("pause_daemon_for_update"),
+        selfHeal: () => invoke("self_heal_daemon"),
+        onPhase: (p) => (updatePhase = p),
+        // UPD-06 (#616)：官方进度回调是"过程可见"的唯一来源；总长拿不到时
+        // 保持 null（只画不确定态，绝不编假百分比）。
+        onProgress: (pct) => (updateProgress = pct),
+        warn: (m, e) => console.warn("[updater]", m, e),
       });
       // #1046（S-11）：装完不在这里把 daemon 拉回来——更新流程是「停 → 替换 →
       // 重启壳 → 新壳启动对账」：新壳启动时由 Rust 对账（开机自启登记 + 内核，
@@ -1087,12 +1066,7 @@
       updatePhase = "installed";
       await relaunchShellNow();
     } catch (e) {
-      // The daemon we paused above is still down and no new shell is coming —
-      // bring it back so a failed update doesn't also leave backups silently
-      // stopped. 走自愈（#1046）：用户主动停过的不拉，判据在 Rust 侧现场读盘。
-      try {
-        await invoke("self_heal_daemon");
-      } catch (_) {}
+      // 失败时的自愈已在 runUpdate 里做过（#1046：用户主动停过的不拉）。
       const msg = String(e);
       // UPD-06 (#616)：失败也是一个**显式状态**（原因留在界面上，可重试），
       // 不再只靠一闪而过的 toast。

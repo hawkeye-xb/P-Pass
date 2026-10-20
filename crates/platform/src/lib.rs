@@ -892,6 +892,19 @@ pub trait HostingAdapter: Send + Sync {
         let _ = kill_running;
         Ok(ResidentRestart::Unsupported)
     }
+
+    /// #1060：应用内更新替换文件前，让服务管理器那份常驻 daemon **停下且不被
+    /// 自动重拉**（launchd KeepAlive / 计划任务看门狗都会把「仅仅被杀」的进程
+    /// 几秒内用旧文件拉回来，等于没停）。
+    ///
+    /// 与 [`Self::uninstall_autostart`] 的区别：**登记保留**（plist / 计划任务
+    /// 还在），也不写任何「用户停止」标记——它只是「为更新暂停」，不是用户的
+    /// 停止意图；恢复走 [`Self::restart_resident_daemon`]`(false)`。
+    ///
+    /// 默认 `Unsupported`（没有服务管理器的平台）。
+    fn pause_resident_daemon(&self) -> Result<ResidentPause> {
+        Ok(ResidentPause::Unsupported)
+    }
 }
 
 /// [`PlatformAdapter::restart_resident_daemon`] 的结论。
@@ -902,6 +915,18 @@ pub enum ResidentRestart {
     /// 没杀也没拉：`kill_running=false` 且它本来就在跑。
     AlreadyRunning { pid: u32 },
     /// 本机没有登记常驻服务（用户停过服务 / 首启向导没走完）——什么都没做。
+    NotRegistered,
+    /// 本平台没有服务管理器语义——什么都没做。
+    Unsupported,
+}
+
+/// [`HostingAdapter::pause_resident_daemon`] 的结论。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResidentPause {
+    /// 服务管理器那份已被卸下 / 停下且**不会被它自动重拉**；登记保留，
+    /// [`HostingAdapter::restart_resident_daemon`] 可原样拉回。
+    Paused,
+    /// 本机没有登记常驻服务——什么都没做。
     NotRegistered,
     /// 本平台没有服务管理器语义——什么都没做。
     Unsupported,

@@ -724,6 +724,23 @@ impl HostingAdapter for MacosAdapter {
 
     // ── #667 / #732：常驻 daemon 归 launchd ─────────────────────────────
 
+    /// #1060：`launchctl bootout` 把 job 从 launchd 卸下（进程收 SIGTERM、KeepAlive
+    /// 随 job 一起消失），**plist 留着**——「仅仅 kill」会被 KeepAlive 3 秒内用
+    /// 旧文件拉回来。恢复由 `restart_resident_daemon` 的 bootstrap 分支负责。
+    fn pause_resident_daemon(&self) -> Result<crate::ResidentPause> {
+        let uid = current_uid()?;
+        pause_resident_with(Self::agent_plist_path().exists(), &uid, &mut |args| {
+            let out = Command::new("launchctl")
+                .args(args)
+                .output()
+                .map_err(io_err("launchctl bootout"))?;
+            Ok((
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            ))
+        })
+    }
+
     fn resident_daemon_pid(&self) -> Option<u32> {
         let uid = current_uid().ok()?;
         let out = Command::new("launchctl")
@@ -804,6 +821,34 @@ impl HostingAdapter for MacosAdapter {
     }
 }
 
+/// `launchctl bootout` 的退出码里「job 本来就没加载」的两个：3（No such process）、
+/// 113（Could not find specified service）——对「要它停着」而言已达成。
+const BOOTOUT_NOT_LOADED_CODES: [i32; 2] = [3, 113];
+
+/// launchctl 执行器：收参数、回 (退出码, stderr)。
+type LaunchctlRun<'a> = dyn FnMut(&[String]) -> Result<(Option<i32>, String)> + 'a;
+
+/// [`MacosAdapter::pause_resident_daemon`] 的判据，命令执行器可注入（单测不跑真
+/// launchctl）。`run` 收参数、回 (退出码, stderr)。
+pub(crate) fn pause_resident_with(
+    plist_exists: bool,
+    uid: &str,
+    run: &mut LaunchctlRun,
+) -> Result<crate::ResidentPause> {
+    if !plist_exists {
+        return Ok(crate::ResidentPause::NotRegistered);
+    }
+    let args = ["bootout".to_string(), format!("gui/{uid}/{AGENT_LABEL}")];
+    match run(&args)? {
+        (Some(0), _) => Ok(crate::ResidentPause::Paused),
+        (Some(c), _) if BOOTOUT_NOT_LOADED_CODES.contains(&c) => Ok(crate::ResidentPause::Paused),
+        (code, stderr) => Err(PlatformError::Failed {
+            action: "launchctl bootout",
+            detail: format!("exit {code:?}: {stderr}"),
+        }),
+    }
+}
+
 /// RAII wrapper over a `caffeinate -i` child: alive = system stays awake.
 pub struct CaffeinateGuard {
     child: std::process::Child,
@@ -813,6 +858,53 @@ impl Drop for CaffeinateGuard {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+    }
+}
+
+#[cfg(test)]
+mod pause_resident_tests {
+    use super::*;
+    use crate::ResidentPause;
+
+    fn run_with(code: Option<i32>) -> (Vec<Vec<String>>, Result<ResidentPause>) {
+        let mut calls = Vec::new();
+        let r = pause_resident_with(true, "501", &mut |a| {
+            calls.push(a.to_vec());
+            Ok((code, "boom".into()))
+        });
+        (calls, r)
+    }
+
+    /// #1060：暂停 = bootout 该 job（卸载、KeepAlive 随之消失），不是 kill。
+    /// 反证：把 bootout 换成别的命令 / 漏调 → 第一条红。
+    #[test]
+    fn pause_boots_the_job_out() {
+        let (calls, r) = run_with(Some(0));
+        assert_eq!(r.unwrap(), ResidentPause::Paused);
+        assert_eq!(
+            calls,
+            vec![vec![
+                "bootout".to_string(),
+                format!("gui/501/{AGENT_LABEL}")
+            ]]
+        );
+    }
+
+    /// 没登记就什么都不跑；本来就没加载 = 已停；其余失败如实报错（不静默当成功）。
+    #[test]
+    fn pause_edge_cases() {
+        let mut called = false;
+        let r = pause_resident_with(false, "501", &mut |_| {
+            called = true;
+            Ok((Some(0), String::new()))
+        });
+        assert_eq!(r.unwrap(), ResidentPause::NotRegistered);
+        assert!(!called);
+        for code in [3, 113] {
+            assert_eq!(run_with(Some(code)).1.unwrap(), ResidentPause::Paused);
+        }
+        assert!(run_with(Some(1)).1.is_err());
+        assert!(run_with(None).1.is_err());
     }
 }
 
