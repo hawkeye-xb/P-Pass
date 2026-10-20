@@ -97,7 +97,7 @@
   "ui.logs_exported": "诊断包已导出（已脱敏，可发给开发者排查）：{path}",
   "ui.export_failed": "导出失败：{err}",
   "ui.status": "状态",
-  "ui.library_dir_unknown": "后台服务还没报告库位置",
+  "ui.library_dir_unknown": "找不到照片库的位置",
   "ui.env_badge_test": "测试版",
   "ui.nav_photos": "照片",
   "ui.photos_count": "共 {n} 张 · 来自 {m} 台设备",

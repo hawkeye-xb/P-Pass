@@ -1197,6 +1197,33 @@ fn restart_outcome(old_version: Option<&str>, new_version: Option<&str>, answere
     })
 }
 
+/// 库目录：平台 config 里的 `data_dir`，没配置则退回平台数据目录。**只读**，
+/// 不依赖常驻服务在线（#1059）——「打开照片库」「诊断包落点」共用这一口径。
+fn configured_library_dir(platform_dir: &std::path::Path) -> std::path::PathBuf {
+    ipc::read_config_data_dir(platform_dir)
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| platform_dir.to_path_buf())
+}
+
+/// 给「打开照片库」用：库目录必须是真实存在的目录，否则 keyed 错误
+/// （前端用 `errText` 翻成人话，不透出系统原文与路径）。
+fn existing_library_dir(platform_dir: &std::path::Path) -> Result<String, String> {
+    let dir = configured_library_dir(platform_dir);
+    if dir.is_dir() {
+        Ok(dir.to_string_lossy().into_owned())
+    } else {
+        Err(ipc::ui_err("ui.library_dir_unknown", &[]))
+    }
+}
+
+/// #1059：照片库只是磁盘上的目录，打开它不需要后台服务。壳从平台 config 只读
+/// 解析库目录（与服务在线时 `status.library_dir` 同源：daemon 也读这份 config），
+/// 服务停止时「打开照片库」照样可用。
+#[tauri::command]
+fn library_dir() -> Result<String, String> {
+    existing_library_dir(&platform::adapter().data_dir())
+}
+
 /// 诊断包由 daemon 组装并脱敏（#1042 / #1045）：壳只调内置 daemon 的
 /// `diag export --out <库目录>/ppf-logs.zip --app-version <壳版本>`。
 ///
@@ -1209,10 +1236,7 @@ fn restart_outcome(old_version: Option<&str>, new_version: Option<&str>, answere
 /// 没配置则退回平台数据目录。返回值就是 daemon 的 `{"zip","daemon_reachable"}`。
 #[tauri::command]
 fn export_logs_bundle(app: tauri::AppHandle) -> Result<Value, String> {
-    let platform_dir = platform::adapter().data_dir();
-    let library = ipc::read_config_data_dir(&platform_dir)
-        .map(std::path::PathBuf::from)
-        .unwrap_or(platform_dir);
+    let library = configured_library_dir(&platform::adapter().data_dir());
     daemon_cli::diag_export(
         &daemon_cli::bundled_sidecar()?,
         &library.join("ppf-logs.zip"),
@@ -1460,6 +1484,7 @@ pub fn run() {
             restart_daemon_process,
             kernel_convergence_phase,
             export_logs_bundle,
+            library_dir,
             allow_media_scope,
             notify_system,
             set_tray_locale
@@ -2396,6 +2421,43 @@ mod tests {
         assert!(
             src.contains("            platform_ux,\n"),
             "platform_ux 未注册进 invoke_handler"
+        );
+    }
+
+    /// #1059：库目录由壳只读解析，不经 IPC。config 有 data_dir 用它；没配置退回
+    /// 平台目录；目录不存在 → keyed 错误（不含路径/系统原文）。
+    /// 反证：existing_library_dir 去掉 is_dir 判断 → 第三条红；configured 不读 config → 第一条红。
+    #[test]
+    fn library_dir_is_read_from_config_without_the_daemon() {
+        let platform = tempfile::tempdir().unwrap();
+        let lib = tempfile::tempdir().unwrap();
+        std::fs::write(
+            platform.path().join("config.toml"),
+            format!("data_dir = '{}'\n", lib.path().display()),
+        )
+        .unwrap();
+        assert_eq!(
+            existing_library_dir(platform.path()).unwrap(),
+            lib.path().to_string_lossy()
+        );
+        let bare = tempfile::tempdir().unwrap();
+        assert_eq!(
+            existing_library_dir(bare.path()).unwrap(),
+            bare.path().to_string_lossy()
+        );
+        std::fs::write(
+            platform.path().join("config.toml"),
+            "data_dir = '/definitely/not/here/ppass-1059'\n",
+        )
+        .unwrap();
+        let err = existing_library_dir(platform.path()).unwrap_err();
+        let v: Value = serde_json::from_str(&err).unwrap();
+        assert_eq!(v["key"], "ui.library_dir_unknown");
+        assert!(!err.contains("ppass-1059"), "不许透出路径: {err}");
+        let src = include_str!("lib.rs");
+        assert!(
+            src.contains("            library_dir,\n"),
+            "library_dir 未注册进 invoke_handler"
         );
     }
 

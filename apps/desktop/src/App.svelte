@@ -21,6 +21,7 @@
   } from "@tauri-apps/plugin-dialog";
   import { check as checkUpdate } from "@tauri-apps/plugin-updater";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
+  import { openLibraryDir } from "./lib/openLibrary.js";
   import QRCode from "qrcode";
   import { onMount, onDestroy } from "svelte";
   import Wizard from "./Wizard.svelte";
@@ -620,15 +621,10 @@
 
   async function openLibrary() {
     try {
-      const s = await call("status");
-      const dir = s.library_dir;
-      if (!dir) throw new Error(t("ui.library_dir_unknown"));
-      // originals/ 是照片所在；库刚建还没照片时打开库根目录。
-      try {
-        await revealItemInDir(`${dir}/originals`);
-      } catch (_) {
-        await revealItemInDir(dir);
-      }
+      await openLibraryDir({
+        getDir: () => invoke("library_dir"),
+        reveal: revealItemInDir,
+      });
     } catch (e) {
       flashMessage(t("ui.open_failed", { err: errText(e) }), "error");
     }
