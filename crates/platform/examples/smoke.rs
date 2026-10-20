@@ -38,28 +38,39 @@ fn main() {
     } else {
         std::path::PathBuf::from("/usr/bin/true")
     };
-    match h.install_autostart(&target) {
-        Ok(()) => match h.autostart_installed() {
-            Ok(true) => {
-                println!("✓ autostart: 注册并查询到");
-                match h.uninstall_autostart() {
-                    Ok(()) if !h.autostart_installed().unwrap_or(true) => {
-                        println!("✓ autostart: 注销干净")
-                    }
-                    _ => {
-                        println!("✗ autostart: 注销失败或残留");
-                        failures += 1;
+    // #1056：托管端口的登记名固定（Windows 计划任务 `P-Pass`、macOS LaunchAgent），
+    // 不支持一次性名字；机器上已有真实登记时，install 会覆盖、uninstall 会删掉它，
+    // 所以直接跳过本项，绝不改写真实登记。
+    let real_registration = h.autostart_installed();
+    if !matches!(real_registration, Ok(false)) {
+        println!(
+            "- autostart: 跳过（本机已有真实 P-Pass 自启登记或无法确认：{real_registration:?}；\
+             本检查会覆盖并注销它，故不执行）"
+        );
+    } else {
+        match h.install_autostart(&target) {
+            Ok(()) => match h.autostart_installed() {
+                Ok(true) => {
+                    println!("✓ autostart: 注册并查询到");
+                    match h.uninstall_autostart() {
+                        Ok(()) if !h.autostart_installed().unwrap_or(true) => {
+                            println!("✓ autostart: 注销干净")
+                        }
+                        _ => {
+                            println!("✗ autostart: 注销失败或残留");
+                            failures += 1;
+                        }
                     }
                 }
-            }
-            _ => {
-                println!("✗ autostart: 注册后查询不到");
+                _ => {
+                    println!("✗ autostart: 注册后查询不到");
+                    failures += 1;
+                }
+            },
+            Err(e) => {
+                println!("✗ autostart 注册失败: {e}");
                 failures += 1;
             }
-        },
-        Err(e) => {
-            println!("✗ autostart 注册失败: {e}");
-            failures += 1;
         }
     }
 
