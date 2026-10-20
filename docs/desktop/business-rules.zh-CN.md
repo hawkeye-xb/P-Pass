@@ -340,6 +340,7 @@ daemon 是 `config.toml` 与诊断包的唯一写者（壳经子命令调用，�
 - 新壳启动（`lib.rs::startup_reconcile`，独立线程）：先 `reconcile_autostart_registration`（用户停过只撤残留登记；否则按内容对账：Rewritten #604 / Refreshed #1046 / Repaired #726；Windows 登记缺失时补登记 DESK-60），再 `converge_kernel_on_startup`。
 - `converge_kernel_on_startup` 先等 daemon 应答，最长 `RESTART_GRACE`；超时后**只有服务状态为 Unreachable** 才 `self_heal_now`（NotConfigured / Stopped 不拉，以免把用户踢出向导）。
 - 前端自愈 `maybeSelfHeal`：只在 `serviceState === "unreachable"` 时调 `self_heal_daemon`，重试冷却 `SELF_HEAL_COOLDOWN_MS`。与启动对账共用 `self_heal_now` 同一道门。
+- 应用内更新（#1060，两平台一致）：下载期间不停服务；下载完成后 `pause_daemon_for_update` 先进入「为更新暂停」窗口（进程内 `UpdatePause`，不落盘、不写用户停止标记），再经服务管理器卸下常驻实例（登记保留），然后 `install()`。窗口内 `self_heal_daemon` 一律跳过，避免旧二进制在替换前被拉回。下载或安装失败走 `resume_after_failed_update`：先关窗口，再按 `self_heal_allowed` 自愈。安装成功后由新壳启动对账拉起新版。
 - 服务状态（`service_state::ServiceState`）：`not_configured` / `stopped` / `starting` / `running` / `unreachable`；失败不会把 NotConfigured / Stopped「发明」成 Starting。
 
 ### 8.4 内核对账（自动换内核，#667 / #732）

@@ -276,7 +276,10 @@ mod tests {
     #[test]
     fn resume_only_when_registered_configured_and_offline() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(!update_resume_needed(dir.path(), true, false), "没配置过（首启向导的事）");
+        assert!(
+            !update_resume_needed(dir.path(), true, false),
+            "没配置过（首启向导的事）"
+        );
         std::fs::write(dir.path().join("config.toml"), "").unwrap();
         assert!(update_resume_needed(dir.path(), true, false));
         assert!(!update_resume_needed(dir.path(), true, true), "已在线");

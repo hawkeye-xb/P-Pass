@@ -1048,7 +1048,8 @@
       await runUpdate({
         update,
         pauseDaemon: () => invoke("pause_daemon_for_update"),
-        selfHeal: () => invoke("self_heal_daemon"),
+        // 失败恢复必须走 resume_after_failed_update：先关「为更新暂停」窗口再自愈。
+        selfHeal: () => invoke("resume_after_failed_update"),
         onPhase: (p) => (updatePhase = p),
         // UPD-06 (#616)：官方进度回调是"过程可见"的唯一来源；总长拿不到时
         // 保持 null（只画不确定态，绝不编假百分比）。

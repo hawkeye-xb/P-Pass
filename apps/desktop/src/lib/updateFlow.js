@@ -6,7 +6,9 @@
 // - 下载阶段绝不停；
 // - 下载完成后、install() 之前暂停一次（壳侧：服务管理器卸下、登记保留、不写
 //   用户停止标记；用户本来就停过的壳侧不动）；
-// - 失败（下载或安装）走自愈（用户主动停过的不拉，判据在 Rust 侧）。
+// - 暂停到安装结束是「为更新暂停」窗口：断连不触发自愈（Rust 侧 UpdatePause），
+//   否则旧二进制在替换前被拉回、一次更新停两次；
+// - 失败（下载或安装）先关窗口再自愈（用户主动停过的不拉，判据在 Rust 侧）。
 // 装完不在这里拉回 daemon：新壳启动时的「更新后恢复」负责（#1060 / #1046）。
 // 依赖注入，便于不起 Tauri 直接测。
 
@@ -38,7 +40,9 @@ export async function runUpdate({
         onProgress(total ? 0 : null);
       } else if (ev.event === "Progress") {
         done += ev.data?.chunkLength || 0;
-        onProgress(total ? Math.min(100, Math.round((done / total) * 100)) : null);
+        onProgress(
+          total ? Math.min(100, Math.round((done / total) * 100)) : null,
+        );
       } else if (ev.event === "Finished") {
         onPhase("installing");
         onProgress(100);

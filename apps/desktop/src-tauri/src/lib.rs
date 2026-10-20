@@ -690,7 +690,39 @@ fn current_service_stdio_paths() -> (Option<std::path::PathBuf>, Option<std::pat
 /// 竞态。返回 true = 真的拉起了；false = 按判据跳过（不是错误）。
 #[tauri::command]
 fn self_heal_daemon(app: tauri::AppHandle) -> Result<bool, String> {
+    // #1060：为更新暂停期间断连是本壳自己造成的，不是服务崩了——不拉，
+    // 否则旧二进制在安装器替换前被拉回来，一次更新停两次。
+    if app.state::<UpdatePause>().active() {
+        eprintln!("#1060: 为更新暂停中，跳过自愈");
+        return Ok(false);
+    }
     self_heal_now(&app, "self heal")
+}
+
+/// #1060：本壳「为更新暂停了后台服务」的进程内状态。只活在发起更新的这个壳里：
+/// 安装成功 → 旧壳退出、状态随之消失，新壳启动对账负责拉起新版；安装失败 →
+/// `resume_after_failed_update` 清掉它再自愈。不落盘：重启后的壳本来就不在
+/// 暂停窗口里。
+#[derive(Default)]
+struct UpdatePause(std::sync::atomic::AtomicBool);
+
+impl UpdatePause {
+    fn begin(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    fn end(&self) {
+        self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+    fn active(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// #1060：下载或安装失败——结束暂停窗口，再按常规判据自愈（用户停过的不拉）。
+#[tauri::command]
+fn resume_after_failed_update(app: tauri::AppHandle) -> Result<bool, String> {
+    app.state::<UpdatePause>().end();
+    self_heal_now(&app, "update failed")
 }
 
 /// 自愈本体（前端触发的 `self_heal_daemon` 与壳启动对账共用，#1046）：配置过、且
@@ -766,11 +798,13 @@ fn stop_daemon_now() -> Result<(), String> {
 /// 新壳启动对账（`resume_after_update`）；安装失败（旧壳还在）→ 前端走
 /// `self_heal_daemon`。Best-effort：失败只记日志，不挡更新本身。
 #[tauri::command]
-fn pause_daemon_for_update() -> Result<(), String> {
+fn pause_daemon_for_update(app: tauri::AppHandle) -> Result<(), String> {
     // #1060：用户停过服务 = 本来就停着，更新前后都保持停止——不动。
     if !should_pause_for_update(&platform::adapter().data_dir()) {
         return Ok(());
     }
+    // 先进入暂停窗口、再停：停掉那一刻前端就会收到断连并请求自愈。
+    app.state::<UpdatePause>().begin();
     // 先让服务管理器卸下常驻那份（登记保留、不写停止标记）：只 kill 的话 launchd
     // KeepAlive / 计划任务看门狗几秒内就用旧文件拉回来，等于没停。
     match platform::hosting().pause_resident_daemon() {
@@ -1499,6 +1533,7 @@ pub fn run() {
             pending_shell_version,
             relaunch_shell,
             self_heal_daemon,
+            resume_after_failed_update,
             restart_daemon_process,
             kernel_convergence_phase,
             export_logs_bundle,
@@ -1511,6 +1546,7 @@ pub fn run() {
             // DESK-63 (#946): register the state owner BEFORE the event
             // stream starts. The stream's handshake and the stop/start
             // commands all write through this one object.
+            let _ = app.manage(UpdatePause::default());
             let _ = app.manage(ServiceStateManager::new(
                 initial_service_state(),
                 service_state::desktop_log_path(&platform::adapter().data_dir()),
@@ -1683,6 +1719,39 @@ mod business_rules_table;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1060：暂停窗口只由本壳开关；默认不在窗口里（新壳启动对账照常拉起）。
+    #[test]
+    fn update_pause_window_opens_and_closes() {
+        let p = UpdatePause::default();
+        assert!(!p.active(), "新壳不在暂停窗口里");
+        p.begin();
+        assert!(p.active());
+        p.end();
+        assert!(!p.active(), "安装失败后必须能退出窗口，否则永不自愈");
+    }
+
+    /// #1060：自愈命令在暂停窗口里必须先看窗口再拉；失败恢复命令必须先关窗口。
+    /// 反证：删掉 self_heal_daemon 里的 active() 判断，或 resume 里的 end() → 红。
+    #[test]
+    fn self_heal_respects_update_pause_window() {
+        let product = include_str!("lib.rs").split("#[cfg(test)]").next().unwrap();
+        let heal = product.split("fn self_heal_daemon(").nth(1).unwrap();
+        let heal = &heal[..heal.find("\n}\n").unwrap()];
+        assert!(heal.contains("UpdatePause>().active()"));
+        let resume = product
+            .split("fn resume_after_failed_update(")
+            .nth(1)
+            .unwrap();
+        let resume = &resume[..resume.find("\n}\n").unwrap()];
+        let end_at = resume.find("UpdatePause>().end()").expect("先结束暂停窗口");
+        assert!(end_at < resume.find("self_heal_now").unwrap());
+        let pause = product.split("fn pause_daemon_for_update(").nth(1).unwrap();
+        let begin_at = pause
+            .find("UpdatePause>().begin()")
+            .expect("暂停前进入窗口");
+        assert!(begin_at < pause.find("pause_resident_daemon").unwrap());
+    }
 
     /// #809：外壳自报版本（诊断包）只认 tauri `package_info`——
     /// 它是发布构建经 `--config` 注入、与 daemon 同源的那个号。`CARGO_PKG_VERSION`

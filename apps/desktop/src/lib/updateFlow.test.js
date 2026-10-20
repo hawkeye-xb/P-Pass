@@ -87,5 +87,7 @@ describe("App.svelte 接线", () => {
     expect(src).toContain("runUpdate(");
     expect(src).toContain('pauseDaemon: () => invoke("pause_daemon_for_update")');
     expect(src).not.toMatch(/await invoke\("pause_daemon_for_update"\)/);
+    // #1060：失败恢复走关窗口的命令；普通自愈在暂停窗口里会被跳过。
+    expect(src).toContain('selfHeal: () => invoke("resume_after_failed_update")');
   });
 });
