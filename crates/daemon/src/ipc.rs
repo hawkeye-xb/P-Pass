@@ -1473,6 +1473,11 @@ impl IpcServer {
                 .filter(|d| !crate::device_projection::Removal::of(d).is_listed())
                 .count(),
             "pending_pairs": pending,
+            // #1044：是否正有 Flow 传输——任何在用设备有活跃的 blobs 路由。
+            // 与设备行「传输中」同一信号；壳（#667 内核对账推迟）只读这个结论。
+            "transfer_active": devices
+                .iter()
+                .any(|d| !d.revoked && (self.flow_connection)(&d.node_id).is_some()),
             // Where the photos physically live — the UI's "open the
             // photo folder" needs an answer to "传到哪儿了" (real
             // walkthrough question, 2026-07-31).

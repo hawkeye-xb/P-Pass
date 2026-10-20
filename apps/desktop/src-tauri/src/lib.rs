@@ -1380,7 +1380,7 @@ fn sidecar_daemon_version() -> Option<String> {
 //
 // 两个既有语义先于"换"：
 // ① 用户主动停过服务（`desktop-user-stopped`）⇒ 一律不动；
-// ② 正在传输（任何设备 `devices.list` 报出非空 `flow_connection`——与设备行
+// ② 正在传输（daemon 给的 `status.transfer_active`，#1044——与设备行
 //    「传输中」同一信号，NET-05）⇒ 推迟，传输停下来连续两次（~20s）才换；
 //    推迟期间界面给事实句（`ui.kernel_converge_deferred`），不是失败。
 
@@ -1507,23 +1507,11 @@ fn kernel_convergence_verdict(f: &KernelFacts) -> KernelVerdict {
     KernelVerdict::Converge(reason)
 }
 
-/// 任何设备报出非空 `flow_connection` = 正在传输（与设备行「传输中」同一信号）。
-fn any_transfer_active(devices: &Value) -> bool {
-    devices
-        .get("devices")
-        .and_then(|d| d.as_array())
-        .map(|list| list.iter().any(|d| !d["flow_connection"].is_null()))
-        .unwrap_or(false)
-}
-
 fn gather_kernel_facts() -> KernelFacts {
     let handle = ipc::DaemonHandle::discover().ok();
     let status = handle
         .as_ref()
         .and_then(|h| h.call("status", json!({})).ok());
-    let devices = handle
-        .as_ref()
-        .and_then(|h| h.call("devices.list", json!({})).ok());
     KernelFacts {
         running_version: status
             .as_ref()
@@ -1536,7 +1524,12 @@ fn gather_kernel_facts() -> KernelFacts {
         resident_registered: resident_service_available(),
         resident_pid: platform::hosting().resident_daemon_pid(),
         user_stopped: is_user_stopped(&platform::adapter().data_dir()),
-        transfer_active: devices.as_ref().map(any_transfer_active).unwrap_or(false),
+        // #1044：是否正在传输由 daemon 给结论（status.transfer_active）。读不到
+        // （旧内核没有这个字段）按「没在传」——换内核是幂等对账，Flow 可续传。
+        transfer_active: status
+            .as_ref()
+            .and_then(|s| s["transfer_active"].as_bool())
+            .unwrap_or(false),
     }
 }
 
@@ -2391,16 +2384,6 @@ mod tests {
             !daemon_is_unmanaged(None, None),
             "读不到自报 pid 不许当野生实例去请它退位"
         );
-    }
-
-    /// 「传输中」= 任何设备 `flow_connection` 非空——与设备行「传输中」同一信号（NET-05）。
-    #[test]
-    fn transfer_signal_is_the_flow_connection_field() {
-        let idle = json!({"devices": [{"flow_connection": null}, {"name": "x"}]});
-        assert!(!any_transfer_active(&idle));
-        let busy = json!({"devices": [{"flow_connection": null}, {"flow_connection": "direct"}]});
-        assert!(any_transfer_active(&busy));
-        assert!(!any_transfer_active(&json!({})));
     }
 
     /// 与 daemon DAE-01 `version_cmp`（crates/daemon/src/ipc.rs）同一组样例——两份
