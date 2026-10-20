@@ -33,7 +33,6 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.coroutines.withTimeout
 
 sealed class PairOutcome {
     data class Joined(val pairing: Pairing) : PairOutcome()
@@ -92,6 +91,37 @@ sealed class PairVerdict {
     data object DesktopTooOld : PairVerdict()
     /** The RPCs themselves kept failing (network / computer off). */
     data class Unreachable(val reason: String) : PairVerdict()
+}
+
+/** #1051: how long the membership probe may take before we give up and
+ *  fall back to normal pairing. */
+const val MEMBER_PROBE_TIMEOUT_MS = 20_000L
+
+/**
+ * #1051: "am I already a member of this computer?" — one `hello`.
+ * Member = the reply carries a non-empty `pairing_epoch` (the desktop sends
+ * it only to a paired, non-revoked peer). Returns that [Hello], or null for
+ * unpaired (no epoch), revoked (hello denied), unparseable, timed out or
+ * failed — every null means "go through normal pairing". Caller
+ * cancellation still propagates.
+ */
+suspend fun probeMembership(
+    rpc: PairRpc,
+    timeoutMs: Long = MEMBER_PROBE_TIMEOUT_MS,
+): Hello? {
+    return try {
+        val resp = withTimeoutOrNull(timeoutMs) { rpc.call(Methods.HELLO, buildJsonObject {}) }
+            ?: return null
+        if (!resp.ok) return null
+        val hello = resp.result?.let {
+            ProtoJson.decodeFromJsonElement(Hello.serializer(), it)
+        } ?: return null
+        hello.takeIf { !it.pairingEpoch.isNullOrEmpty() }
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        null
+    }
 }
 
 /**
@@ -307,32 +337,23 @@ suspend fun pairWithQr(
 
     // Already a member on this storage (same phone, the computer's
     // identity/address changed)? Then no pair.request is needed — and
-    // it would be REFUSED (members can't re-apply). backup.begin is
-    // member-gated: an ok means we're recognised; just re-save.
-    try {
-        val probe = withTimeout(20_000) {
-            client.call(addr, Methods.BACKUP_BEGIN, buildJsonObject {})
-        }
-        if (probe.ok) {
-            val hello = withTimeout(20_000) {
-                client.call(addr, Methods.HELLO, buildJsonObject {})
-            }
-            val helloInfo = hello.result?.let {
-                ProtoJson.decodeFromJsonElement(Hello.serializer(), it)
-            }
-            val name = helloInfo?.deviceName?.takeIf { it.isNotBlank() } ?: storageDeviceNameFallback
-            return PairOutcome.Joined(
-                Pairing(
-                    daemonNodeId = parsed.nodeIdHex,
-                    daemonAddrToken = addrToken,
-                    storageDeviceName = name,
-                    pairedAt = System.currentTimeMillis(),
-                    pairingEpoch = helloInfo?.pairingEpoch.orEmpty(),
-                )
+    // it would be REFUSED (members can't re-apply). #1051: hello is the
+    // probe; the desktop returns pairing_epoch only to a paired,
+    // non-revoked member. Unpaired / revoked / unreachable → pair normally.
+    val member = probeMembership(
+        rpc = { method, params -> client.call(addr, method, params) },
+    )
+    if (member != null) {
+        val name = member.deviceName.takeIf { it.isNotBlank() } ?: storageDeviceNameFallback
+        return PairOutcome.Joined(
+            Pairing(
+                daemonNodeId = parsed.nodeIdHex,
+                daemonAddrToken = addrToken,
+                storageDeviceName = name,
+                pairedAt = System.currentTimeMillis(),
+                pairingEpoch = member.pairingEpoch.orEmpty(),
             )
-        }
-    } catch (_: Exception) {
-        // Not reachable or not recognised — fall through to pairing.
+        )
     }
 
     // NET-10: each RPC is a short control-plane call (DaemonClient.call's
