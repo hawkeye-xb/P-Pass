@@ -98,10 +98,10 @@ O orders and the three-layer model
 
 | ID | Given | When | Then | Negative proof | Device acceptance |
 |---|---|---|---|---|---|
-| H-01 | The probe reply’s `health` says the photo library is not writable (or the index store is broken, or space is exhausted) | entry probe | No FGS; global = waiting (specific reason); Desktop shows a system notification | Acquiring the FGS and transferring regardless of health must fail | Make the Desktop photo library folder read-only: the phone shows the matching reason with no FGS notification, and Desktop shows a system notification |
+| H-01 | The probe reply’s `health` says the photo library is not writable (or the index store is broken, or space is exhausted) | entry probe | No FGS; global = waiting (specific reason) | Acquiring the FGS and transferring regardless of health must fail | Make the Desktop photo library folder read-only: the phone shows the matching reason with no FGS notification |
 | H-02 | An older Desktop whose probe reply has no `health` field | entry probe | Treated as healthy; proceed as usual | Treating the missing field as unhealthy must fail | Mostly automated |
 | H-03 | Desktop free space is smaller than the photo | offer (with `size_bytes`) | Desktop pre-checks against the photo size and rejects on the spot with code `storage_full`; the phone handles it as C-12 | Skipping the pre-check and filling the disk mid-fetch must fail | Fill the Desktop test volume to a few MB free and send a large photo: storage full is shown immediately |
-| H-04 | The Desktop photo library volume has < 5 GiB free | probe or offer | Desktop shows a low-space warning; the phone reads low space from `health` | A non-fixed threshold or no warning must fail | Mostly automated |
+| H-04 | The Desktop photo library volume has < about 5 GB free | triggered when the app refreshes `status` | Desktop shows a low-space warning; the phone reads low space from `health` | A non-fixed threshold or no warning must fail | Mostly automated |
 | H-05 | Desktop has an active grant with no resume for more than 3 days | Desktop cleanup | Marked cancelled and its partial reclaimed; no orphan order remains on the phone | Keeping the partial forever must fail | Mostly automated |
 
 ## P0: Completion receipt

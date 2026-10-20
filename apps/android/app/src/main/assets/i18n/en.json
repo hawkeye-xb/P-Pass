@@ -120,7 +120,7 @@
   "ui.device_open_folder": "Open folder",
   "ui.device_open_folder_failed": "Failed to open device folder: {err}",
   "ui.low_space_title": "Photo library is running low on space",
-  "ui.low_space_body": "Only {free} left on the photo library's disk (below 5 GB). Free up disk space or move the photo library to a bigger drive.",
+  "ui.low_space_body": "Only {free} left on the photo library's disk (below about 5 GB). Free up disk space or move the photo library to a bigger drive.",
   "ui.conn_direct": "Connected directly",
   "ui.conn_relay": "Connected via relay — encrypted, the relay can't read it",
   "ui.conn_offline_since": "Offline, last online {time}",

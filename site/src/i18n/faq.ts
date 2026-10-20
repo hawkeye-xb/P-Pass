@@ -320,7 +320,7 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
           q: 'What happens when the computer runs out of space?',
           a: [
             'Backup pauses and waits, and nothing already stored is deleted. The phone says the storage computer is full.',
-            'Backup continues on its own once there is space again. The phone warns early, once the computer has less than 5 GB left.',
+            'Backup continues on its own once there is space again. The phone warns early, once the computer has less than about 5 GB left.',
           ],
         },
         {
@@ -560,7 +560,7 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
           q: '电脑空间满了会怎样？',
           a: [
             '备份会停下来等着，已经存好的照片不会被删。手机首页会显示存储电脑的空间满了。',
-            '腾出空间之后备份会自己继续。电脑剩余空间不到 5 GB 时，手机端会提前提示。',
+            '腾出空间之后备份会自己继续。电脑剩余空间不到约 5 GB 时，手机端会提前提示。',
           ],
         },
         {

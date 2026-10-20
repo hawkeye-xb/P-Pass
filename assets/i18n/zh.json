@@ -120,7 +120,7 @@
   "ui.device_open_folder": "打开文件夹",
   "ui.device_open_folder_failed": "打开设备文件夹失败：{err}",
   "ui.low_space_title": "照片库空间不足",
-  "ui.low_space_body": "照片库所在磁盘只剩 {free}（低于 5 GB）。请清理磁盘或把照片库换到更大的位置。",
+  "ui.low_space_body": "照片库所在磁盘只剩 {free}（低于约 5 GB）。请清理磁盘或把照片库换到更大的位置。",
   "ui.conn_direct": "已直连",
   "ui.conn_relay": "经中继连接——内容加密，中继无法读取",
   "ui.conn_offline_since": "离线，最后在线 {time}",
