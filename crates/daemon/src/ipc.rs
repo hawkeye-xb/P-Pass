@@ -863,7 +863,22 @@ impl IpcServer {
                     .get("limit")
                     .and_then(|v| v.as_u64())
                     .map_or(100, |v| v.min(1000) as u32);
-                match self.db.list_operations(limit).await {
+                // #1044 B1：用户口径在截断之前过滤（见 audit_projection.rs）；
+                // 不带 visibility = 全量（诊断口径）。
+                let user_only =
+                    req.params.get("visibility").and_then(|v| v.as_str()) == Some("user");
+                let listed = if user_only {
+                    self.db
+                        .list_operations_excluding(
+                            limit,
+                            crate::audit_projection::HIDDEN_KINDS,
+                            crate::audit_projection::HIDDEN_PREFIXES,
+                        )
+                        .await
+                } else {
+                    self.db.list_operations(limit).await
+                };
+                match listed {
                     Ok(records) => {
                         let list: Vec<_> = records
                             .iter()
@@ -883,6 +898,12 @@ impl IpcServer {
                                     "targetHash": r.entry.target_hash.as_ref().map(|b| hex(b)),
                                     "payload": r.entry.payload.as_ref().and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok()),
                                     "evidenceSummary": r.entry.evidence_summary.as_ref().and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()),
+                                    // #1044 B1：每轮计数由 daemon 分好类（已备份/需处理/已跳过）。
+                                    "counts": (r.entry.kind == "flow.round.finished").then(|| {
+                                        crate::audit_projection::round_counts(
+                                            &r.entry.evidence_summary.as_ref().and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()).unwrap_or_default(),
+                                        )
+                                    }),
                                 })
                             })
                             .collect();

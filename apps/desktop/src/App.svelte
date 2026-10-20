@@ -61,7 +61,7 @@
   // MOB-29: 「刚从库里删掉照片」警告的判据（纯函数，externalDelete.test.js
   // 钉边界）——删除会被手机传回来，这是对的，但得让用户知道。
   import { externalDeleteNotice } from "./lib/externalDelete.js";
-  import { auditText, auditWho, isVisibleAudit } from "./auditProjection.js";
+  import { auditText, auditWho } from "./auditProjection.js";
   // MOB-47: 视频查看器加载编排（asset 协议 hash 授权 + thumb.get 兜底 +
   // isCancelled 竞态闸）——纯函数可单测，App.svelte 只做接线的薄壳。
   import { loadVideoViewer, loadVideoThumbnail, handleVideoError } from "./lib/viewerVideo.js";
@@ -349,13 +349,10 @@
         watermarks = Object.fromEntries((w.watermarks ?? []).map((x) => [x.node_id, x]));
       } catch (_) {}
       // AUDIT-01: 审计事件流 v2（配对/吊销/外部删除/Flow 事实）——活动页
-      // 主数据源。2026-08-18（用户反馈④）：limit 200 → 500。ingest.*
-      // 逐文件行占绝大多数（每张照片一行），但展示层把它们过滤掉——
-      // 200 条上限下，一次几百张的备份就能把全部设备级事件挤出窗口，
-      // 活动记录页看着"没几条"其实是被饿死的。IPC 侧 clamp 上限 1000
-      // （ipc.rs audit.list），500 在上限内。
+      // 主数据源。#1044 B1：给用户看哪些由 daemon 决定，且在截断之前过滤
+      // （visibility:"user"），逐文件的 ingest.* 不再占 500 条窗口。
       try {
-        const au = await call("audit.list", { limit: 500 });
+        const au = await call("audit.list", { limit: 500, visibility: "user" });
         auditEvents = (au.events ?? []).slice().sort((x, y) => (y.ts ?? 0) - (x.ts ?? 0));
         auditError = "";
       } catch (e) {
@@ -376,8 +373,8 @@
     }
   }
 
-  // AUDIT-02：操作结果、身份和诊断噪音过滤由 auditProjection.js 统一
-  // 处理，页面只传当前设备索引，避免各页面重新实现审计合同。
+  // AUDIT-02：文案与身份由 auditProjection.js 统一渲染，页面只传当前设备
+  // 索引；可见集与计数分类由 daemon 给出（#1044）。
 
   // 2026-08-18（用户反馈④）：精确时刻——humanTime 的相对说法（"昨天
   // 14:32"/"周三"/"08-11"）读起来舒服，但超过 7 天就只剩日期没有钟点，
@@ -403,11 +400,9 @@
     externalDeleteNotice(auditEvents, nowMs, { dismissedAt: deleteWarnDismissedAt })
   );
 
-  // AUDIT-02：活动表只展示用户结果、数据风险和安全事实。连接、控制、
-  // 路径/逐项 ingest 噪音仍留在诊断层，不伪装成用户历史。
-  const visibleAudit = $derived(
-    auditEvents.filter(isVisibleAudit)
-  );
+  // AUDIT-02：活动表只展示用户结果、数据风险和安全事实——可见集由
+  // daemon 给出（audit.list visibility:"user"），这里不再二次过滤。
+  const visibleAudit = $derived(auditEvents);
   // AUDIT-01: 本周「新备份/去重跳过」统计原本读 backup.finished 的
   // ingested=/duplicates= 汇总；该审计事件已随本卡移除（card 决定：
   // 旧 batch backup.* 不再作为任何活动页或统计来源），且 Flow 路径的

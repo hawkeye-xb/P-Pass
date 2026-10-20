@@ -2,8 +2,9 @@
 //!
 //! 契约 (T-011): `ingest(IncomingFile) -> IngestOutcome{New|Duplicate|Moved}`.
 //! EXIF `DateTimeOriginal` is the timeline key; missing EXIF falls back to
-//! the file's mtime. Every ingest is audited to device granularity
-//! (审计裁决 2026-07-29).
+//! the file's mtime. Watcher/legacy ingest is audited to device granularity
+//! (审计裁决 2026-07-29); Flow ingest only audits the two exceptions
+//! (`Ingestor::ingest_flow`, #1044 B1).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -52,6 +53,16 @@ pub enum IngestOutcome {
     /// 字节又出现在别处 —— 这是「移动」，不是新增也不是重复。索引改指
     /// 新位置（hash 是身份，路径只是当前住址），行不删。
     Moved(String),
+}
+
+/// 入库的审计口径（#1044 B1）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuditPolicy {
+    /// 目录监听、旧批量管线：逐张记 `ingest.new` / `ingest.duplicate`，
+    /// 例外照记。
+    Full,
+    /// Flow：只记 `asset.relocated` / `asset.replaced_in_place` 两种例外。
+    ExceptionsOnly,
 }
 
 /// Ingest façade over one library directory + its index.
@@ -129,21 +140,21 @@ impl Ingestor {
     }
 
     pub async fn ingest(&self, f: &IncomingFile) -> Result<IngestOutcome> {
-        self.ingest_inner(f, true).await
+        self.ingest_inner(f, AuditPolicy::Full).await
     }
 
-    /// AUDIT-01: Flow item materialization must not create a per-item
-    /// long-term audit row — a Flow window writes exactly one
-    /// `flow.round.finished` summary, never one row per file (card decision
-    /// #3). This variant is otherwise byte-identical to [`Self::ingest`];
-    /// only the audit side effect is suppressed. Legacy batch backup,
-    /// rebuild, and the directory watcher keep calling the audited
-    /// [`Self::ingest`] — their per-file audit trail is unaffected.
-    pub async fn ingest_unaudited(&self, f: &IncomingFile) -> Result<IngestOutcome> {
-        self.ingest_inner(f, false).await
+    /// AUDIT-01（#1044 B1）：Flow 逐张入库不写长期审计——一轮只有一条
+    /// `flow.round.finished`（daemon 路由手机事实写入）。只有两种「数据层面
+    /// 真发生了事」的例外照记：文件重新落盘（`asset.relocated`）、落位时
+    /// 让掉了占着同一路径的老行（`asset.replaced_in_place`）。
+    /// `ingest.new` / `ingest.duplicate` 不写。其余与 [`Self::ingest`] 逐字
+    /// 相同；目录监听与 rebuild 仍走全量审计的 [`Self::ingest`]。
+    pub async fn ingest_flow(&self, f: &IncomingFile) -> Result<IngestOutcome> {
+        self.ingest_inner(f, AuditPolicy::ExceptionsOnly).await
     }
 
-    async fn ingest_inner(&self, f: &IncomingFile, audited: bool) -> Result<IngestOutcome> {
+    async fn ingest_inner(&self, f: &IncomingFile, policy: AuditPolicy) -> Result<IngestOutcome> {
+        let audited = policy == AuditPolicy::Full;
         // block_in_place: hashing and (cross-volume) copying a large file
         // are CPU/IO-bound synchronous work whose cost scales with file
         // size — running them inline on a tokio worker thread starves every
@@ -181,10 +192,8 @@ impl Ingestor {
                 None => self.place(f, taken_at_ms(&f.src_path, f.capture_at_ms_hint)?)?,
             };
             self.db.update_asset_rel_path(&hash, &new_rel).await?;
-            if audited {
-                self.audit(now_ms, f, &hash, "asset.relocated", Some(new_rel.clone()))
-                    .await?;
-            }
+            self.audit(now_ms, f, &hash, "asset.relocated", Some(new_rel.clone()))
+                .await?;
             return Ok(IngestOutcome::Moved(new_rel));
         }
 
@@ -226,16 +235,14 @@ impl Ingestor {
         if let Some(evicted) = self.db.hash_at_rel_path(&rel_path).await? {
             if evicted != hash {
                 self.db.delete_asset(&evicted).await?;
-                if audited {
-                    self.audit(
-                        now_ms,
-                        f,
-                        &hash,
-                        "asset.replaced_in_place",
-                        Some(rel_path.clone()),
-                    )
-                    .await?;
-                }
+                self.audit(
+                    now_ms,
+                    f,
+                    &hash,
+                    "asset.replaced_in_place",
+                    Some(rel_path.clone()),
+                )
+                .await?;
             }
         }
 

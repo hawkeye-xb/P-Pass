@@ -1235,6 +1235,100 @@ async fn audit_list_exposes_canonical_evidence_summary_for_activity_projection()
     );
 }
 
+/// #1044 B1：`audit.list(visibility:"user")` 在截断**之前**过滤。监听一次拖入
+/// 几百张写几百条 `ingest.new`，过去 daemon 先取最新 N 条再由前端过滤，
+/// 可见事件被挤出窗口。反证：去掉 storage 层的排除条件，这里只剩 ingest 行，
+/// `pair.accepted` 拿不回来。
+#[tokio::test(flavor = "multi_thread")]
+async fn user_visibility_filters_before_the_limit_truncates() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, _pairing, socket, token) = start(dir.path(), "audit-visibility").await;
+    db.append_audit(&storage::AuditEntry::local(
+        1_000,
+        None,
+        "pair.accepted",
+        None,
+        None,
+    ))
+    .await
+    .unwrap();
+    for i in 0..20 {
+        for kind in [
+            "ingest.new",
+            "asset.relocated",
+            "index.adopted",
+            "flow.round.controlled",
+        ] {
+            db.append_audit(&storage::AuditEntry::local(
+                2_000 + i,
+                None,
+                kind,
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        }
+    }
+
+    let mut c = IpcClient::connect(&socket, &token).await;
+    let resp = c
+        .call(
+            "audit.list",
+            serde_json::json!({ "limit": 5, "visibility": "user" }),
+        )
+        .await;
+    assert!(resp.ok, "{resp:?}");
+    let kinds: Vec<String> = resp.result.unwrap()["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        kinds,
+        vec!["pair.accepted".to_string()],
+        "隐藏 kind 不占窗口"
+    );
+
+    // 不带 visibility = 全量（诊断口径），行为不变。
+    let all = c
+        .call("audit.list", serde_json::json!({ "limit": 5 }))
+        .await;
+    assert_eq!(all.result.unwrap()["events"].as_array().unwrap().len(), 5);
+}
+
+/// #1044 B1：每轮的计数由 daemon 分好类给出（已备份 / 需处理 / 已跳过），
+/// 前端不再自己把 failed + remote_missing 加起来。
+#[tokio::test(flavor = "multi_thread")]
+async fn round_counts_are_classified_by_the_daemon() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, _pairing, socket, token) = start(dir.path(), "audit-round-counts").await;
+    db.append_operation(&storage::AuditOperationEntry {
+        operation_id: "round-counts".into(),
+        occurred_at: 1_700_000_000_000,
+        kind: "flow.round.finished".into(),
+        evidence_summary: Some(
+            serde_json::json!({ "confirmed": 2, "failed": 1, "remote_missing": 2, "source_missing": 1 })
+                .to_string(),
+        ),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+
+    let mut c = IpcClient::connect(&socket, &token).await;
+    let resp = c
+        .call("audit.list", serde_json::json!({ "visibility": "user" }))
+        .await;
+    let result = resp.result.unwrap();
+    let event = &result["events"][0];
+    assert_eq!(
+        event["counts"],
+        serde_json::json!({ "backedUp": 2, "needsAttention": 3, "skipped": 1 })
+    );
+}
+
 /// DEV-03：`devices.list` 默认口径 = 「家人与设备」该看见的。
 ///
 /// 旧口径 `WHERE revoked = 0` 把两件事混成一件：手机点「断开与这台电脑的

@@ -1132,9 +1132,11 @@ impl FlowDelivery {
         self.require_authorized(grant).await?;
         let item_bytes = std::fs::metadata(&staged).map(|m| m.len()).unwrap_or(0);
 
+        // #1044 B1（AUDIT-01）：Flow 一轮只有一条 `flow.round.finished`；
+        // 逐张入库只在两种例外写审计（见 `Ingestor::ingest_flow`）。
         match self
             .ingestor
-            .ingest(&IncomingFile {
+            .ingest_flow(&IncomingFile {
                 src_path: staged.clone(),
                 file_name: grant.file_name.clone(),
                 media_type: grant.media_type.clone(),

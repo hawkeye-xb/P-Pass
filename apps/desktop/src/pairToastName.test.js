@@ -105,7 +105,7 @@ describe("DEV-06 接线", () => {
     const hits = app.match(/auditWho\(e, devices\)/g) ?? [];
     expect(hits.length).toBe(2); // 总览页 + 活动记录页两个渲染点
     expect(app).toContain(
-      'import { auditText, auditWho, isVisibleAudit } from "./auditProjection.js"'
+      'import { auditText, auditWho } from "./auditProjection.js"'
     );
   });
 });

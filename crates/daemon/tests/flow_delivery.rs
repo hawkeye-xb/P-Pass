@@ -149,6 +149,19 @@ async fn verified_native_fetch_materializes_before_a_durable_receipt() {
         db.get_asset(&hash).await.unwrap().is_some(),
         "receipt requires indexed materialization"
     );
+    // #1044 B1（AUDIT-01）：Flow 逐张入库不写 `ingest.*` 长期审计。
+    // 反证：flow_delivery 退回 `ingest()`，这里会多出一条 `ingest.new`。
+    let kinds: Vec<String> = db
+        .list_audit(50)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.entry.kind)
+        .collect();
+    assert!(
+        !kinds.iter().any(|k| k.starts_with("ingest.")),
+        "Flow 入库不许写逐张审计, got {kinds:?}"
+    );
     let persisted = db
         .flow_receipt(
             provider_transport.node_id().0.as_slice(),

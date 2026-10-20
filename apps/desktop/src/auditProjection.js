@@ -1,18 +1,13 @@
 // AUDIT-02: canonical audit operations → user-facing activity text.
-// This module deliberately receives only daemon-provided evidenceSummary:
-// phone final_counts are advisory and must never determine displayed counts.
+// #1044 B1：哪些事件给用户看、每轮计数怎么分类，都由 daemon 决定
+// （crates/daemon/src/audit_projection.rs；`audit.list(visibility:"user")`
+// 已在截断前过滤，`flow.round.finished` 带分好类的 `counts`）。本模块只按
+// kind 取文案。
 
 import { t } from "./lib/i18n.js";
 
-const HIDDEN_KINDS = new Set([
-  "device.connected",
-  "flow.round.controlled",
-  "flow.scope.changed",
-  "flow.epoch.invalidated",
-]);
-
-function count(summary, key) {
-  const value = summary?.[key];
+function count(counts, key) {
+  const value = counts?.[key];
   return Number.isSafeInteger(value) && value > 0 ? value : 0;
 }
 
@@ -22,21 +17,16 @@ function shortName(path) {
   return index >= 0 ? text.slice(index + 1) : text;
 }
 
-function backupResult(summary) {
-  const confirmed = count(summary, "confirmed");
-  const needsAttention = count(summary, "failed") + count(summary, "remote_missing");
-  const skipped = count(summary, "source_missing");
+function backupResult(counts) {
+  const confirmed = count(counts, "backedUp");
+  const needsAttention = count(counts, "needsAttention");
+  const skipped = count(counts, "skipped");
   const parts = [];
 
   if (confirmed) parts.push(t("ui.audit_backed_up", { n: confirmed }));
   if (needsAttention) parts.push(t("ui.audit_needs_attention", { n: needsAttention }));
   if (skipped) parts.push(t("ui.audit_skipped", { n: skipped }));
   return parts.length ? parts.join(t("ui.audit_part_sep")) : t("ui.audit_backup_done");
-}
-
-export function isVisibleAudit(event) {
-  const kind = event?.kind;
-  return Boolean(kind) && !kind.startsWith("ingest.") && !kind.startsWith("flow.item.") && !HIDDEN_KINDS.has(kind);
 }
 
 export function auditWho(event, devices) {
@@ -75,7 +65,7 @@ export function auditText(event) {
     case "device.merged":
       return t("ui.audit_merged");
     case "flow.round.finished":
-      return backupResult(event.evidenceSummary);
+      return backupResult(event.counts);
     case "flow.reconciliation.resolved":
       return t("ui.audit_reconciled");
     default:

@@ -155,7 +155,7 @@ describe("AUDIT-07：活动记录读失败不再静默吞掉", () => {
           actor: null,
           roundId: "round-1",
           payload: null,
-          evidenceSummary: { confirmed: 2 },
+          counts: { backedUp: 2, needsAttention: 0, skipped: 0 },
         },
       ],
     });
