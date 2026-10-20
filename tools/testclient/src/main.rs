@@ -219,8 +219,7 @@ async fn pair(qr: &str, name: &str, identity: &str) -> anyhow::Result<String> {
             err.msg_key
         );
     }
-    let submitted: proto::PairSubmitted =
-        serde_json::from_value(resp.result.unwrap_or_default())?;
+    let submitted: proto::PairSubmitted = serde_json::from_value(resp.result.unwrap_or_default())?;
     let deadline = std::time::Instant::now()
         + std::time::Duration::from_millis(submitted.ttl_ms.max(0) as u64 + 5_000);
     let accepted = loop {
