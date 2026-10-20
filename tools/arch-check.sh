@@ -457,7 +457,7 @@ fi
 #   ③ 托管机制的名字：LaunchAgents、launchctl、schtasks、kickstart。
 # 扫 crates/**（除 crates/platform）的 Rust，去掉注释（讲「为什么不在这里做」
 # 的注释不算）。无白名单：现存命中为零。
-G2_METHODS='autostart_installed|autostart_reconcile_allowed|autostart_registration|autostart_registration_current|autostart_restore_when_missing|daemon_executable_name|install_autostart|install_location_hint_key|installed_bundle_version|is_install_location|kickstart_shell_agent|reconcile_autostart|register_shell_agent|register_shell_login_item|resident_daemon_pid|restart_resident_daemon|service_mode|shell_agent_label|shell_agent_registered_exec|shell_agent_started_us|stop_daemon|uninstall_autostart'
+G2_METHODS='autostart_installed|autostart_reconcile_allowed|autostart_registration|autostart_registration_current|autostart_restore_when_missing|daemon_executable_name|install_autostart|install_location_hint_key|installed_bundle_version|is_install_location|kickstart_shell_agent|pause_resident_daemon|reconcile_autostart|register_shell_agent|register_shell_login_item|resident_daemon_pid|restart_resident_daemon|service_mode|shell_agent_label|shell_agent_registered_exec|shell_agent_started_us|stop_daemon|uninstall_autostart'
 G2_RE="\\.(?:${G2_METHODS})\\s*\\(|\\b(?:AutostartRegistration|AutostartReconcile|ResidentRestart|ServiceMode|KillOutcome)\\b|\\b(?:LaunchAgents|launchctl|schtasks|kickstart)\\b"
 echo "==> G2: no hosting code in the core (hosting belongs to the distribution layer)"
 G2_HITS=$(list_files "$ROOT/crates" -- '*.rs' \

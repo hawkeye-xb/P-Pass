@@ -351,8 +351,8 @@ pub trait PlatformAdapter: Send + Sync {
     ///
     /// 只回答「系统是什么语言」，不做「用不用中文」的判断——那是调用方（壳）
     /// 的事。macOS 读 NSLocale 的首选语言（`CFLocaleCopyPreferredLanguages`），
-    /// Windows 读 `GetUserPreferredUILanguages` 的首个（界面语言，不是区域格式，#1056）。默认实现按 POSIX 约定读
-    /// `LC_ALL` → `LC_MESSAGES` → `LANG`（无桌面的 Linux）；`C`/`POSIX` 算读不到。
+    /// Windows 读 `GetUserPreferredUILanguages` 的首个（界面语言，不是区域格式，#1056）。
+    /// 默认实现按 POSIX 约定读 `LC_ALL` → `LC_MESSAGES` → `LANG`（无桌面的 Linux）；`C`/`POSIX` 算读不到。
     fn system_locale(&self) -> Option<String> {
         posix_env_locale(
             std::env::var("LC_ALL").ok().as_deref(),
@@ -1182,8 +1182,7 @@ mod tests {
         assert_eq!(SleepOwner::Daemon.as_str(), "daemon");
     }
 
-    /// #1043（B6）：POSIX 环境变量的优先级与清洗。反证：把 `C`/`POSIX` 当成
-    /// 语言、或 `LANG` 抢在 `LC_ALL` 前面 → 红。
+    /// #1056：multi-sz（界面语言列表）只取首项。
     #[test]
     fn multi_sz_first_entry() {
         let w = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
@@ -1201,6 +1200,8 @@ mod tests {
         assert_eq!(first_multi_sz_entry(&[0xD800, 0]), None);
     }
 
+    /// #1043（B6）：POSIX 环境变量的优先级与清洗。反证：把 `C`/`POSIX` 当成
+    /// 语言、或 `LANG` 抢在 `LC_ALL` 前面 → 红。
     #[test]
     fn posix_env_locale_follows_priority_and_strips_encoding() {
         assert_eq!(
