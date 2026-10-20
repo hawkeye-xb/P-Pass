@@ -590,11 +590,6 @@ impl PlatformAdapter for WindowsAdapter {
             .filter(|t| !t.is_empty())
     }
 
-    /// #1043（B10）：Known Folder `FOLDERID_Profile`（不读 `USERPROFILE`）。
-    fn home_dir(&self) -> Option<PathBuf> {
-        known_folder(&windows::Win32::UI::Shell::FOLDERID_Profile)
-    }
-
     /// #1043（B10）：Known Folder `FOLDERID_Pictures`——用户在资源管理器里把
     /// 「图片」搬到 D 盘的话，这里给的就是 D 盘那个，而不是 `%USERPROFILE%\Pictures`。
     fn pictures_dir(&self) -> Option<PathBuf> {

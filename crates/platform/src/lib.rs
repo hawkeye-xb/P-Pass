@@ -357,13 +357,12 @@ pub trait PlatformAdapter: Send + Sync {
 
     /// #1043（B10）：当前用户的家目录。`None` = 读不到（不编一个出来）。
     ///
-    /// 默认实现读 `HOME`（macOS / Linux 的约定）；Windows 走 Known Folder
-    /// （`FOLDERID_Profile`），不靠 `USERPROFILE` 环境变量。壳与 daemon 不许
-    /// 自己读这些环境变量（门禁 G1）。
+    /// 用标准库的 `std::env::home_dir`：unix 先 `HOME` 再查 passwd，Windows 先
+    /// `USERPROFILE` 再 `GetUserProfileDirectoryW`——与改前壳 / daemon 各自读
+    /// `HOME`→`USERPROFILE` 的取值一致，测试用环境变量隔离家目录的做法照样
+    /// 有效。壳与 daemon 不许自己读这些环境变量（门禁 G1）。
     fn home_dir(&self) -> Option<PathBuf> {
-        std::env::var_os("HOME")
-            .filter(|v| !v.is_empty())
-            .map(PathBuf::from)
+        std::env::home_dir().filter(|p| !p.as_os_str().is_empty())
     }
 
     /// #1043（B10）：当前用户的「图片」目录——新建照片库默认放在它下面。

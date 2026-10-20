@@ -580,16 +580,14 @@ pub struct ExportEnv {
 }
 
 impl ExportEnv {
-    /// 生产环境：平台目录来自 adapter，家目录与壳同口径（HOME → USERPROFILE → "."）。
+    /// 生产环境：平台目录与家目录都来自 adapter（#1043：不读 HOME/USERPROFILE；
+    /// 读不到家目录退回 "."，与壳同口径）。
     pub fn from_process(out: PathBuf, app_version: Option<String>) -> Self {
         use platform::PlatformAdapter as _;
+        let adapter = platform::adapter();
         Self {
-            platform_dir: platform::adapter().data_dir(),
-            home: PathBuf::from(
-                std::env::var("HOME")
-                    .or_else(|_| std::env::var("USERPROFILE"))
-                    .unwrap_or_else(|_| ".".into()),
-            ),
+            platform_dir: adapter.data_dir(),
+            home: adapter.home_dir().unwrap_or_else(|| PathBuf::from(".")),
             app_version,
             out,
         }
@@ -610,15 +608,21 @@ fn log_part(path: Option<PathBuf>, max: u64) -> LogPart {
 pub fn gather(env: &ExportEnv, daemon: DaemonCollection) -> BundleInputs {
     use platform::PlatformAdapter as _;
     let adapter = platform::adapter();
-    let log_path = adapter.default_log_file(&env.platform_dir);
+    // #1043：落点问 daemon_log_paths()（合并了原 default_log_file /
+    // startup_stderr_file）。
+    let paths = adapter.daemon_log_paths(&env.platform_dir);
+    let log_path = paths.log_file.clone();
     let daemon_log = log_part(log_path.clone(), DAEMON_LOG_TAIL);
     // 上一代只在存在时收（还没轮转过不是缺失）。
     let daemon_log_rotated = log_path
         .map(|p| rotated(&p))
         .filter(|p| p.exists())
         .map(|p| log_part(Some(p), DAEMON_LOG_TAIL));
-    let startup_stderr = adapter
-        .startup_stderr_file(&env.platform_dir)
+    // 只收 daemon 自己接的 stderr（Windows `<logs>/daemon.err`）；服务管理器接
+    // 的那份（macOS launchd）不在 daemon 自己的日志目录里，不收（同改前）。
+    let startup_stderr = (!paths.stdio_by_service_manager)
+        .then_some(paths.stderr)
+        .flatten()
         .map(|p| log_part(Some(p), SMALL_LOG_TAIL));
     let desktop_path = env.platform_dir.join("logs").join("desktop.log");
     let desktop_tail = tail(&desktop_path, SMALL_LOG_TAIL);
