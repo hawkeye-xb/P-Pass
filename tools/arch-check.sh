@@ -13,6 +13,8 @@
 #   G1  — 桌面壳（apps/desktop）不判断平台、不读 HOME/USERPROFILE/LANG、
 #         不拼 plist 路径。平台信息只许经 adapter 或 daemon 返回的字段（#1040）。
 #   G5  — 平台实现只在 crates/platform（#1040，细则见下方 G1/G5 段）。
+#   G4  — 桌面壳（apps/desktop）不写 config.toml、不渲染 config 模板（#1045，
+#         S-5：config 的唯一写者是 daemon 的 `config` 子命令）。无白名单，零容忍。
 #   G3  — 核心 crate 只依赖「平台能力」trait（PlatformAdapter），不许引用
 #         「托管」trait（HostingAdapter / platform::hosting）（#1043，S-9）。
 #   G1/G5 是「存量不增」的锁：现有越界登记在 tools/arch-allowlist.txt，
@@ -126,7 +128,10 @@ fi
 # perl -0777 把整个文件当一个字符串，正则里 \s 能跨过换行；行号用匹配起点之前
 # 的换行数还原。macOS 与 ubuntu 都自带 perl。
 #
-# 用法：scan_files <perl 正则> <strip 注释 0|1> <flags> < NUL 分隔的文件清单
+# 用法：scan_files <perl 正则> <strip 0|1|2> <flags> < NUL 分隔的文件清单
+#   strip=1 去掉注释；strip=2 在 1 之外再丢掉文件尾部的 `#[cfg(test)] mod … {` 测试模块
+#   （Rust 约定测试模块放文件末尾；测试夹具里造 config 文件不是产品代码）。只认
+#   「cfg(test) 紧跟 mod」的写法——挂在 use / fn 上的 `#[cfg(test)]` 不会藏住后面的代码。
 # 输出：<相对 ROOT 的路径>\t<行号>（同一行只记一次）
 scan_files() {
   local re="$1" strip="$2" flags="$3"
@@ -146,6 +151,7 @@ scan_files() {
         # 与 B.2 同一条豁免：windows_subsystem 是语言要求写在 bin 根上的链接器
         # 指令，不分叉任何代码路径。
         $t =~ s{windows_subsystem\s*=\s*"windows"}{}g if $strip;
+        $t =~ s{^\#\[cfg\(test\)\]\s*mod\s+\w+\s*\{.*}{}ms if $strip == 2;
         my %seen;
         while ($t =~ /$qr/g) {
           my $ln = (substr($t, 0, $-[0]) =~ tr/\n//) + 1;
@@ -397,6 +403,37 @@ else
       fi
     fi
   fi
+fi
+
+# ── G4：壳不写 config.toml（#1045）─────────────────
+
+echo "==> G4: desktop shell never writes config.toml (the daemon's \`config\` subcommands are the only writer)"
+
+# S-5（里程碑 #9）：config.toml 的写者只有 daemon（`config init` /
+# `config set-library`，#1042），壳只调子命令。壳里曾有第二份写入实现
+# （render_config / merge_library_dir …），与 daemon 两份拷贝漂移出过
+# DESK-27 / DESK-46 / DESK-49 三次事故。
+#
+# G4 拦 apps/desktop/src-tauri/src/**/*.rs 产品代码（注释与文件尾部的
+# `#[cfg(test)]` 模块不算）里的三类写法，**不看函数名**——改名绕不过去：
+#   ① 同一条语句（不跨 ; 与 {}）里既有写文件的 API（fs::write / File::create / OpenOptions /
+#      fs::rename / fs::copy / write_all）又出现 `config.toml`；
+#   ② config 的键写成模板字面量：`data_dir = …` / `bind_addr = …` /
+#      `relay_urls = …`（渲染 config 文本）；
+#   ③ 序列化 TOML：`toml::to_string*` / `toml::ser` / `toml_edit` /
+#      `toml::Value::String(…).to_string()`（壳只读 config，读用 `toml::Table`）。
+# 已知限制：①只认同一条语句，先把路径存进变量、下一条语句再写的绕法拦不到——
+# 但真要写出 config 内容就绕不开 ②（模板）或 ③（序列化）；这是「防止回流」的
+# 门禁，不是对恶意绕过的证明。
+# 无白名单：这是「零容忍」规则，不存在存量。自测：tools/test-arch-check.sh。
+G4_WRITE='(?:fs::write|File::create|OpenOptions|fs::rename|fs::copy|\bwrite_all)'
+G4_RE="${G4_WRITE}\\b[^;{}]*config\\.toml|config\\.toml[^;{}]*${G4_WRITE}|\\b(?:data_dir|bind_addr|relay_urls)\\s*=\\s*[{\\[\\\\\"']|toml::(?:to_string|to_string_pretty|ser)\\b|\\btoml_edit\\b|toml::Value::String\\([^;]*\\)\\s*\\.to_string"
+G4_HITS=$(list_files "$ROOT/apps/desktop/src-tauri/src" -- '*.rs' | scan_files "$G4_RE" 2 '' | sort || true)
+if [ -z "$G4_HITS" ]; then
+  echo "   ✅ G4: clean"
+else
+  printf '%s\n' "$G4_HITS" | awk -F'\t' '{print "❌ G4 VIOLATION（壳不许写 config.toml，改调 daemon 的 config 子命令）：" $1 " 行 " $2}'
+  FAIL=1
 fi
 
 # ── G3: core depends only on the capability trait ───

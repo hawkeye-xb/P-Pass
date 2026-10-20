@@ -317,6 +317,56 @@ OUT="$(env -u CI ARCH_ROOT="$R" ARCH_BASE_REF=no-such-ref bash "$CHECK" 2>&1)" \
 OUT="$(env ARCH_ROOT="$R" ARCH_BASE_REF=no-such-ref CI=true bash "$CHECK" 2>&1)" \
   && bad "CI 取不到基线必须失败（fail-closed）" || ok "CI 取不到基线 → 失败（fail-closed）"
 
+# ── G4（#1045）────────────────────────────────────
+echo "== G4 正样例（壳里写 config.toml 的各种写法，必须报红；无白名单）"
+SHELL_RS=apps/desktop/src-tauri/src/a.rs
+g4_red() { expect_red "G4 $1" "$(sample "$SHELL_RS" "$2")" "G4 VIOLATION"; }
+# 改调子命令前壳里的真实写法（逐字摘自 #1045 之前的 write_first_run_config / render_config /
+# merge_library_dir）：三个函数名都改掉也必须拦——门禁看的是写法，不是名字。
+g4_red "fs::write 写 config.toml（旧 write_first_run_config）" 'fn f(d: &Path, c: &str) -> Result<(), String> {
+    std::fs::write(d.join("config.toml"), c).map_err(|e| e.to_string())
+}'
+g4_red "config.toml 在写 API 之后、跨行" 'std::fs::write(
+    platform_dir.join("config.toml"),
+    merged,
+)'
+g4_red "File::create" 'let f = std::fs::File::create(dir.join("config.toml"))?;'
+g4_red "OpenOptions" 'let f = OpenOptions::new().write(true).open(dir.join("config.toml"))?;'
+g4_red "fs::rename 覆盖 config.toml" 'std::fs::rename(&tmp, dir.join("config.toml"))?;'
+g4_red "config 模板字面量（旧 render_config）" 'fn render(d: &str) -> String {
+    format!("data_dir = {d}\n\nbind_addr = \"0.0.0.0:41145\"\n")
+}'
+g4_red "只渲染 relay_urls 模板" 'let t = "relay_urls = []\n";'
+g4_red "TOML 序列化（旧 merge_library_dir 的 data_dir 值）" 'let v = toml::Value::String(normalize(dir)).to_string();'
+g4_red "toml::to_string" 'let t = toml::to_string(&cfg).unwrap();'
+g4_red "toml_edit" 'use toml_edit::Document;'
+
+echo "== G4 反样例（必须不报）"
+g4_green() { expect_green "G4 $1" "$(sample "${3:-$SHELL_RS}" "$2")"; }
+g4_green "只读 config（toml::Table 解析）" 'let raw = std::fs::read_to_string(dir.join("config.toml")).ok()?;
+let t = raw.parse::<toml::Table>().ok()?;'
+g4_green "判断 config.toml 是否存在" 'fn configured(d: &Path) -> bool { d.join("config.toml").exists() }'
+g4_green "写别的文件（停止标记）" 'fn mark(m: &Path) { std::fs::write(m, b"stopped\n").unwrap(); }
+fn cfg(d: &Path) -> PathBuf { d.join("config.toml") }'
+g4_green "写与读各自在不同语句（; 隔开）" 'std::fs::write(marker, b"x")?;
+let cfg = dir.join("config.toml");'
+g4_green "注释里讲 config.toml 与 fs::write" '// 以前这里 std::fs::write(dir.join("config.toml"), …)，现在调 daemon 的 config 子命令
+/// data_dir = "x" 的模板归 daemon'
+g4_green "文件尾部测试模块里造 config 夹具不算" 'fn product() {}
+#[cfg(test)]
+mod tests {
+    fn fixture(d: &Path) {
+        std::fs::write(d.join("config.toml"), "data_dir = \"/x\"\n").unwrap();
+    }
+}'
+g4_green "别的目录（crates/daemon 是 config 的写者）" 'pub fn init(d: &Path) { std::fs::write(d.join("config.toml"), "data_dir = \"/x\"\n").unwrap(); }' crates/daemon/src/config.rs
+g4_green "前端 invoke(\"write_config\") 不是写文件" 'await invoke("write_config", { libraryDir });' apps/desktop/src/Wizard.svelte
+
+echo "== G4 反证：测试夹具豁免只认「cfg(test) 紧跟 mod」；挂在别的条目上的不藏后面的代码"
+expect_red "G4 #[cfg(test)] use 之后的产品代码仍被扫到" "$(sample "$SHELL_RS" '#[cfg(test)]
+use std::fs as _;
+fn product(d: &Path) { std::fs::write(d.join("config.toml"), "x").unwrap(); }')" "G4 VIOLATION"
+
 # ── G3（#1043）────────────────────────────────────
 echo "== G3 正样例（enforce 模式必须报红）"
 G3_USE='use platform::HostingAdapter as _;'
