@@ -73,7 +73,16 @@ fn main() {
             drop(guard);
             std::thread::sleep(std::time::Duration::from_millis(600));
             let after = awake_assertion_count();
-            if held > before && after <= before {
+            // #1056 真机：Windows 没有**免管理员**的「当前断言计数」接口——
+            // `powercfg /requests` 要提升权限，旧实现只好返回常量 1，于是
+            // `held > before` 永远不成立、这条冒烟在 Windows 上结构性必红。
+            // 这里只验 guard 能拿到并释放（`assert_awake` 失败会走 Err 分支）；
+            // OS 级断言是否存在由 H-09 在管理员提示符下人工核对。
+            if cfg!(windows) {
+                println!(
+                    "✓ awake guard: 获取/释放成功（计数 {before}→{held}→{after}；Windows 无免管理员计数接口，OS 级断言见 H-09 手工）"
+                );
+            } else if held > before && after <= before {
                 println!("✓ awake guard: 断言计数 {before}→{held}→{after}");
             } else {
                 println!("✗ awake guard: 计数 {before}→{held}→{after}");

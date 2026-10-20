@@ -678,7 +678,13 @@ async fn pairing_pending_lists_all_waiting_then_confirm_by_name() {
 async fn logs_export_zip_leaks_no_username() {
     let dir = tempfile::tempdir().unwrap();
     let (db, _pairing, socket, token) = start(dir.path(), "logs").await;
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/testuser".into());
+    // #1056 Windows 真机：原来只读 `HOME`，Windows 上它是空的，于是造出一条
+    // `/home/testuser/...` 的 Unix 形状路径——脱敏基准是真实家目录，这条路径
+    // 不在它下面，断言 `<DATA>` 必红。按平台变量取真实家目录（与
+    // `platform::adapter().home_dir()` 同一来源）。
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .unwrap_or_else(|_| "/home/testuser".into());
 
     // A diag event that embeds a real user path — the classic leak.
     db.append_diag(&storage::DiagEvent {
