@@ -16,8 +16,7 @@
 # 生成方式：ARCH_REPORT_ONLY=1 bash tools/arch-check.sh
 
 [ratchet]
-apps/desktop/src/platformUx.js | G1 | 11 | 壳内 JS 判平台：plugin-os 取平台 + 三个 switch 按 macos/windows/linux 分支（DESK-69 #997 遗留；应改读 adapter/daemon 字段）
-apps/desktop/src/App.svelte | G1 | 2 | 匹配 Windows 错误原文的正则（第 1200 行）+ 按平台选向导（wizardVariant(currentPlatform()) === "windows"）
+apps/desktop/src/App.svelte | G1 | 1 | 匹配 Windows 错误原文的正则（更新失败「文件被占用」）
 apps/desktop/src-tauri/src/redact.rs | G1 | 1 | 脱敏白名单里的字面量 com.p-pass.daemon.plist（随 plist 路径一起迁出）
 crates/transport/src/provider.rs | G5 | 1 | 测试里 use std::os::unix::fs::MetadataExt（测试辅助，待挪进 platform test-support 或改跨平台写法）
 

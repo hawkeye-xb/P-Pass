@@ -185,6 +185,25 @@ pub struct VolumeStats {
     pub total: u64,
 }
 
+/// #1043：电脑睡眠由谁负责（[`PlatformAdapter::sleep_owner`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SleepOwner {
+    /// 由用户在系统里设置（macOS：向导请用户关掉「空闲自动睡眠」，可一键代改）。
+    User,
+    /// daemon 自动保持唤醒（Windows：DAE-11 插电时持有 AwakeGuard），向导只说明。
+    Daemon,
+}
+
+impl SleepOwner {
+    /// 下发给前端的取值（`platform_ux` 命令）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SleepOwner::User => "user",
+            SleepOwner::Daemon => "daemon",
+        }
+    }
+}
+
 /// #1043：daemon 日志落在哪（[`PlatformAdapter::daemon_log_paths`]）。
 ///
 /// 路径是「应该在哪」，不保证文件已存在——读的一方自己处理读不到。
@@ -567,6 +586,28 @@ pub trait PlatformAdapter: Send + Sync {
     /// 地方，没有说出为什么要分叉。
     fn tray_icon_is_template(&self) -> bool {
         false
+    }
+
+    /// #1043：关窗（藏到托盘）时要不要提示一次「还在后台运行」。
+    ///
+    /// 默认 `true`：Windows 用户普遍以为点 X 就是退出（#303），Linux 的 GNOME
+    /// 默认没有托盘、不提示的话 App 关窗后就像「消失」了。macOS 覆盖成
+    /// `false`——点红灯不退出在那儿是常态（#303 验收标准 3）。
+    fn close_to_tray_hint(&self) -> bool {
+        true
+    }
+
+    /// #1043：窗口标题栏是不是透明 Overlay（前端要自己放拖拽命中区）。
+    /// `titleBarStyle: "Overlay"` 只在 macOS 生效，默认 `false` = 系统原生标题栏。
+    fn overlay_titlebar(&self) -> bool {
+        false
+    }
+
+    /// #1043：电脑睡眠由谁负责，决定首启向导第 2 步怎么讲、用哪份向导视图。
+    ///
+    /// `None` = 本平台没有桌面向导（Linux，#752）。默认 `None`。
+    fn sleep_owner(&self) -> Option<SleepOwner> {
+        None
     }
 
     /// 托盘左键是出菜单（macOS 习惯）还是开窗口（Windows / Linux 习惯）。
@@ -1055,6 +1096,23 @@ mod tests {
 
     /// 取消是独立的一类，不能被归成失败——否则 UI 会把用户自己的选择
     /// 说成出错（macOS 的 `disable_auto_sleep` 仍走这条路径）。
+    /// #1043：没有桌面向导的平台（headless Linux）——关窗提示照 Windows/Linux
+    /// 习惯、原生标题栏、不回答睡眠归属。
+    #[cfg(not(any(target_os = "macos", windows)))]
+    #[test]
+    fn headless_ui_capabilities() {
+        let a = adapter();
+        assert!(a.close_to_tray_hint());
+        assert!(!a.overlay_titlebar());
+        assert_eq!(a.sleep_owner(), None);
+    }
+
+    #[test]
+    fn sleep_owner_wire_values() {
+        assert_eq!(SleepOwner::User.as_str(), "user");
+        assert_eq!(SleepOwner::Daemon.as_str(), "daemon");
+    }
+
     /// #1043（B6）：POSIX 环境变量的优先级与清洗。反证：把 `C`/`POSIX` 当成
     /// 语言、或 `LANG` 抢在 `LC_ALL` 前面 → 红。
     #[test]

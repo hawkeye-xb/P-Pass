@@ -461,6 +461,21 @@ impl PlatformAdapter for MacosAdapter {
 
     /// macOS 上托盘左键出菜单是系统习惯；Windows / Linux 左键开窗口
     /// （DESK-18 / #167）。
+    /// 点红灯不退出是 macOS 常态，不用解释（#303 验收标准 3）。
+    fn close_to_tray_hint(&self) -> bool {
+        false
+    }
+
+    /// `titleBarStyle: "Overlay"` 只在 macOS 生效。
+    fn overlay_titlebar(&self) -> bool {
+        true
+    }
+
+    /// 向导第 2 步请用户关掉空闲自动睡眠（`power_hint` / `disable_auto_sleep`）。
+    fn sleep_owner(&self) -> Option<crate::SleepOwner> {
+        Some(crate::SleepOwner::User)
+    }
+
     fn tray_shows_menu_on_left_click(&self) -> bool {
         true
     }
@@ -826,5 +841,19 @@ mod b6_system_locale_tests {
         let tag = MacosAdapter.system_locale().expect("macOS 总有首选语言");
         assert!(!tag.is_empty() && !tag.contains('.'), "{tag:?}");
         println!("system_locale = {tag}");
+    }
+}
+
+#[cfg(test)]
+mod ux_capability_tests {
+    use super::*;
+
+    /// #1043：界面层的平台能力（原先前端按平台名 switch 判出来的三项）。
+    #[test]
+    fn macos_ui_capabilities() {
+        let a = MacosAdapter;
+        assert!(!a.close_to_tray_hint());
+        assert!(a.overlay_titlebar());
+        assert_eq!(a.sleep_owner(), Some(crate::SleepOwner::User));
     }
 }

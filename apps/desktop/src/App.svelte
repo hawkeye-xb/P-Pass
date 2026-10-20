@@ -1,7 +1,7 @@
 <script>
   import { reconcilePhotoWall } from "./photoWall.js";
   import { shouldShowTrayHint, TRAY_HINT_SHOWN_KEY } from "./trayHint.js";
-  import { currentPlatform, wizardVariant } from "./platformUx.js";
+  import { loadPlatformUx, wizardVariant } from "./platformUx.js";
   import { shouldShowWizard } from "./serviceGate.js";
   import {
     canStartService,
@@ -105,6 +105,8 @@
   }
 
   let wizard = $state(null); // null=检测中, {configured, default_dir}
+  // #1043：平台界面能力（platform_ux）。null = 还没问到；向导等它到了再选视图。
+  let platformUx = $state(null);
   let starting = $state(false);
   // W1 (2026-08-26 real-box run): the update flow pauses ppf-daemon.exe
   // before downloadAndInstall() (see checkForUpdate() below) so the
@@ -706,7 +708,7 @@
   // DESK-23 (#172)：Rust 侧每次关窗都会发 `hidden-to-tray`，要不要弹在这里判。
   // 判定规则本身抽在 trayHint.js 里单测（macOS 那条没 Mac 验不了端到端，
   // 但规则可以测）；这里只负责读写标记和真正把话说出来。
-  // DESK-69 (#997)：平台统一取 plugin-os 的 platform()（platformUx.js）。
+  // #1043：要不要提示由 Rust 侧平台适配器回答（platformUx.js 的 platform_ux）。
   async function onHiddenToTray() {
     let shown = null;
     try {
@@ -715,7 +717,7 @@
       // 隐私模式/存储被禁时 localStorage 会抛。当成"没提示过"继续走：
       // 多提示一次可以忍，静默不行。
     }
-    if (!shouldShowTrayHint(currentPlatform(), shown)) return;
+    if (!shouldShowTrayHint(await loadPlatformUx(), shown)) return;
     try {
       localStorage.setItem(TRAY_HINT_SHOWN_KEY, "1");
     } catch {
@@ -746,6 +748,9 @@
     // I18N-03 (#492)：托盘菜单跟窗口同一种语言——把这里判出来的语言报给
     // Rust 壳，它从同一份 assets/i18n 取托盘文案。失败只影响托盘语言，静默。
     invoke("set_tray_locale", { lang: getLocale() }).catch(() => {});
+    loadPlatformUx()
+      .then((ux) => (platformUx = ux))
+      .catch((e) => console.warn("[platform_ux] unavailable:", e));
     checkWizard();
     // DESK-02①: 更新检查放首次 status 落地后（#852 起 test / stable 同一条插件路径，
     // 通道由构建期写进插件的清单地址决定，不再在前端推导）。
@@ -1462,9 +1467,12 @@
     <!-- W1 (2026-08-26): 整块按平台选择组件渲染，不在单个 Wizard 内部
          塞 if isWindows —— macOS/Windows 的 onboarding 是两条完全独立的
          文案+流程分支，拆成两个组件更好维护、也不会互相牵连回归。 -->
-    <!-- DESK-69 (#997)：按 platformUx 的显式分支选；Linux 等未覆盖的平台
-         直接报错，不再默认落到 macOS 那份。 -->
-    {#if wizardVariant(currentPlatform()) === "windows"}
+    <!-- DESK-69 (#997) / #1043：按 Rust 侧给的「睡眠由谁负责」选视图
+         （platformUx.wizardVariant）；没有桌面向导的平台直接报错，不再默认落到
+         macOS 那份。能力还没问到时先不渲染。 -->
+    {#if !platformUx}
+      <!-- platform_ux 尚未返回 -->
+    {:else if wizardVariant(platformUx) === "daemon-sleep"}
       <WizardWindows
         defaultDir={wizard.default_dir}
         configuredLibraryDir={wizard.configured_library_dir}

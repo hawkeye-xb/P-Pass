@@ -562,6 +562,12 @@ impl PlatformAdapter for WindowsAdapter {
         crate::data_migration::resolve(&legacy_data_dir(), &current_data_dir())
     }
 
+    /// DAE-11 (#804)：插电时 daemon 自动持有 AwakeGuard，Windows 向导只说明
+    /// 不让用户改设置（#1041 删掉了 Windows 侧的电源设置代改）。
+    fn sleep_owner(&self) -> Option<crate::SleepOwner> {
+        Some(crate::SleepOwner::Daemon)
+    }
+
     /// #1043（B6）：`GetUserDefaultLocaleName`（按拍板读用户区域设置，如
     /// `zh-CN`、`en-US`）。返回值含结尾 NUL；0 = 失败 → `None`。
     fn system_locale(&self) -> Option<String> {
@@ -2034,6 +2040,15 @@ mod b10_known_folder_tests {
         assert!(home.is_absolute(), "{}", home.display());
         assert!(pictures.is_absolute(), "{}", pictures.display());
         assert_ne!(home, pictures);
+    }
+
+    /// #1043：界面层的平台能力（原先前端按平台名 switch 判出来的三项）。
+    #[test]
+    fn windows_ui_capabilities() {
+        let a = WindowsAdapter::new();
+        assert!(a.close_to_tray_hint());
+        assert!(!a.overlay_titlebar());
+        assert_eq!(a.sleep_owner(), Some(crate::SleepOwner::Daemon));
     }
 
     /// #1043（B6）：真调 `GetUserDefaultLocaleName`，读得到、形状对（如 `en-US`）。

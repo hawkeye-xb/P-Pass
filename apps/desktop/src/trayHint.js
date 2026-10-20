@@ -5,8 +5,8 @@
 // **判定规则本身**可以在任何平台上单测——真正会出错的是这条规则，不是
 // 它的调用处。
 //
-// DESK-69 (#997)：「哪个平台要提示」挪进 platformUx.js 的 closeToTrayHint，
-// 平台来源统一为 plugin-os；这里只剩「提示过就不再打扰」。
+// DESK-69 (#997)：「哪个平台要提示」挪进 platformUx.js 的 closeToTrayHint；
+// #1043 起答案来自 Rust 侧平台适配器（`platform_ux`）。这里只剩「提示过就不再打扰」。
 import { closeToTrayHint } from "./platformUx.js";
 
 /**
@@ -19,11 +19,11 @@ import { closeToTrayHint } from "./platformUx.js";
 export const TRAY_HINT_SHOWN_KEY = "ppf.trayHintShown";
 
 /**
- * @param {string} platform  plugin-os 的 `platform()`（未覆盖的平台会抛错）
+ * @param {object} ux  `platform_ux` 命令的结果（字段缺失会抛错）
  * @param {string|null} alreadyShown  localStorage 读到的值；读不到传 null
  * @returns {boolean} 要不要弹
  */
-export function shouldShowTrayHint(platform, alreadyShown) {
-  if (!closeToTrayHint(platform)) return false;
+export function shouldShowTrayHint(ux, alreadyShown) {
+  if (!closeToTrayHint(ux)) return false;
   return !alreadyShown;
 }

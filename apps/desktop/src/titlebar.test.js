@@ -44,10 +44,13 @@ describe("DESK-14 透明 Overlay 拖拽命中区", () => {
     expect(css).toContain("background: transparent;");
   });
 
-  // DESK-69 (#997)：平台门的判据在 platformUx.test.js（usesOverlayTitlebar）；
-  // 这里只锁住 titlebar.js 问的是它、而不是 UserAgent。
-  it("平台门问 platformUx，不嗅探 UserAgent", () => {
-    expect(titlebar).toContain("usesOverlayTitlebar(platform)");
+  // DESK-69 (#997) / #1043：平台门的判据在 platformUx.test.js（usesOverlayTitlebar），
+  // 能力来自 Rust 侧 platform_ux；这里只锁住 titlebar.js 问的是它、而不是
+  // UserAgent 或平台名。
+  it("平台门问 platformUx 的能力，不嗅探 UserAgent", () => {
+    expect(titlebar).toContain("usesOverlayTitlebar(ux)");
+    expect(titlebar).toContain("loadPlatformUx()");
     expect(titlebar).not.toContain("userAgent");
+    expect(titlebar).not.toContain("currentPlatform");
   });
 });

@@ -356,8 +356,8 @@ fn wizard_state() -> Value {
         // the wizard prefills this so re-running it never orphans the
         // existing library (T-042b).
         "configured_library_dir": configured_dir,
-        // DESK-69 (#997)：平台不再从这里给——前端统一读 plugin-os 的
-        // platform()，一个来源。
+        // #1043：平台相关的界面决定由 `platform_ux` 命令给（适配器回答），
+        // 这里不给平台名。
     })
 }
 
@@ -373,6 +373,19 @@ fn default_library_dir(pictures: Option<std::path::PathBuf>) -> std::path::PathB
     pictures
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join(DEFAULT_LIBRARY_DIR_NAME)
+}
+
+/// #1043：界面层要的平台能力，由平台适配器回答——关窗要不要提示「还在后台
+/// 运行」、标题栏是不是透明 Overlay、电脑睡眠由谁负责（决定用哪份向导视图）。
+/// 前端（`platformUx.js`）只读这些字段，自己不判断平台。
+#[tauri::command]
+fn platform_ux() -> Value {
+    let a = platform::adapter();
+    json!({
+        "close_to_tray_hint": a.close_to_tray_hint(),
+        "overlay_titlebar": a.overlay_titlebar(),
+        "sleep_owner": a.sleep_owner().map(platform::SleepOwner::as_str),
+    })
 }
 
 /// Current sleep policy, humanized for the wizard.
@@ -2082,13 +2095,15 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        // DESK-69 (#997)：前端按平台分支只认 plugin-os 的 platform()。
+        // DESK-69 (#997) 引入；#1043 起前端改读 `platform_ux`，不再调用它
+        // （依赖清理不在 #1043 范围内）。
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             daemon_call,
             service_state,
             wizard_state,
+            platform_ux,
             power_hint,
             open_power_settings,
             disable_auto_sleep,
@@ -3861,6 +3876,25 @@ mod tests {
             .contains("set_user_stopped(&platform::adapter().data_dir(), false)?;"));
         // 托盘停止与窗口按钮必须是同一个实现（同一份标记）。
         assert!(product.contains("let result = stop_daemon_now();"));
+    }
+
+    /// #1043：`platform_ux` 原样转述适配器的能力，字段名是与 platformUx.js 的
+    /// 契约；且注册进了 invoke_handler（漏注册 = 前端拿不到、向导永远不出现）。
+    #[test]
+    fn platform_ux_forwards_the_adapter_capabilities() {
+        let a = platform::adapter();
+        let got = platform_ux();
+        assert_eq!(got["close_to_tray_hint"], json!(a.close_to_tray_hint()));
+        assert_eq!(got["overlay_titlebar"], json!(a.overlay_titlebar()));
+        assert_eq!(
+            got["sleep_owner"],
+            json!(a.sleep_owner().map(platform::SleepOwner::as_str))
+        );
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        assert!(
+            src.contains("            platform_ux,\n"),
+            "platform_ux 未注册进 invoke_handler"
+        );
     }
 
     #[test]
