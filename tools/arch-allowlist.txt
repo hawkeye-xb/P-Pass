@@ -16,7 +16,6 @@
 # 生成方式：ARCH_REPORT_ONLY=1 bash tools/arch-check.sh
 
 [ratchet]
-apps/desktop/src-tauri/src/redact.rs | G1 | 1 | 脱敏白名单里的字面量 com.p-pass.daemon.plist（壳的脱敏代码由 #1045 整体删除；#1043 起壳已不读 plist）
 crates/transport/src/provider.rs | G5 | 1 | 测试里 use std::os::unix::fs::MetadataExt（测试辅助，待挪进 platform test-support 或改跨平台写法）
 
 [permanent]

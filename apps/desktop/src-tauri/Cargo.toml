@@ -35,25 +35,14 @@ tauri-plugin-dialog = "2"
 # served as release asset; pubkey in tauri.conf.json, minisign format)
 tauri-plugin-updater = "2"
 tauri-plugin-opener = "2"
-# DESK-69 (#997)：前端唯一的平台来源（platform() 编译期确定）。与 JS 端
-# @tauri-apps/plugin-os 同为 2.3.x——tauri 构建要求两边 major.minor 一致。
-tauri-plugin-os = "~2.3"
 # DESK-68 (#996)：Tauri 起来之前弹「请正式安装」的系统对话框。不是新依赖：
 # tauri-plugin-dialog 已带进来，版本与特性照抄它（gtk3 等后端由它统一开）。
 rfd = { version = "0.16", default-features = false, features = ["common-controls-v6"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 interprocess = "2"
-# DESK-10: 诊断包由桌面壳本地组装（daemon 挂着也要能导出）——打包/
-# 读回 daemon 那份 zip 都要 zip crate（与 daemon 侧同一大版本）。
-# SEC-15 (#1003)：上游 yank 了 9.0.3 以前全部版本，5 → 9。只开 deflate
-# 与 daemon 同口径——默认特性会拉进 zstd-sys（C 编译）、aes、lzma 等，
-# 我们写的和读的都只有 deflate 条目。
-zip ={ version = "9.0.3", default-features = false, features = ["deflate"] }
-# DESK-27 (#219)：写 config.toml 要用**真的 TOML 序列化器**，不能再用
-# `{:?}`（Debug）——两者只在反斜杠和引号上碰巧一致，而那个"碰巧"正是
-# 反斜杠翻倍回路的起点。toml 0.8 已在本 workspace 的依赖树里（tauri 拖进
-# 来的），提为直接依赖不引入新 crate。
+# #1045：壳里唯一的 config.toml 读者（`ipc::read_config_data_dir`）要真 TOML 解析，
+# 不手写逐行读。写 config 的是 daemon，壳只读。toml 已在依赖树里（tauri 拖进来的）。
 toml = "0.8"
 # System adapter (power hint, data dir) — not business logic.
 platform = { path = "../../../crates/platform" }

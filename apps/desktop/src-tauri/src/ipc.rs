@@ -82,71 +82,30 @@ fn one_round_trip(
         Err(e) => Err(ui_err("ui.err_read_response", &[("err", &e)])),
     }
 }
-/// 反转义一个 TOML basic string 的内容（引号已去掉）。
+/// 壳里**唯一**的 config.toml 读者：读 `data_dir`（库目录），按 TOML 解析取值。
+/// 令牌发现（本模块）、向导预填、诊断包落点共用这一条（#1045）。
 ///
-/// 只覆盖 `write_config` 的 `{:?}` 实际会产出的那几种转义。**不认识的转义
-/// 原样保留**——宁可留着让人看见，也不要靠猜去改写用户的路径。
+/// 为什么只许一份、且必须是真 TOML 解析：以前壳里有两个读者——这里逐行手写
+/// 解析（要自己反转义），诊断包那边另用 toml 解析——格式的任何细节都得两边同时
+/// 对上，DESK-26 / DESK-27 / DESK-40 三次事故都出在这里。写入方现在是 daemon
+/// （真 TOML 序列化），读取方就该用同一套语义。
 ///
-/// 这不是完整的 TOML 反转义器（`\uXXXX`、`\b`、`\f` 都没做）：桌面壳按
-/// ADR-012 是薄壳，工作区里刻意没有 `toml` 依赖。写入方拿 `Debug` 当 TOML
-/// 序列化器这件事本身也是隐患，那条记在 #219。
-fn unescape_toml_basic(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c != '\\' {
-            out.push(c);
-            continue;
-        }
-        match chars.next() {
-            Some('\\') => out.push('\\'),
-            Some('\"') => out.push('\"'),
-            Some('n') => out.push('\n'),
-            Some('r') => out.push('\r'),
-            Some('t') => out.push('\t'),
-            // 不认识的转义：把反斜杠和它后面那个字符都原样吐回去。
-            Some(other) => {
-                out.push('\\');
-                out.push(other);
-            }
-            None => out.push('\\'),
-        }
-    }
-    out
-}
-
-/// Read the `data_dir` value out of a config.toml, if any. Shared by the
-/// desktop IPC token discovery and the wizard prefill (one config parser).
+/// 解析不了 / 没设 `data_dir` / 值是空串 = `None`（daemon 对这样的 config 也会
+/// 拒绝启动或回落到平台目录，壳不替它猜）。
 pub fn read_config_data_dir(dir: &Path) -> Option<String> {
     let raw = std::fs::read_to_string(dir.join("config.toml")).ok()?;
-    for line in raw.lines() {
-        let line = line.trim();
-        if let Some(rest) = line.strip_prefix("data_dir") {
-            let rest = rest.trim_start();
-            if let Some(val) = rest.strip_prefix('=') {
-                let val = val.trim();
-                // DESK-26 (#209)：写入方 `write_config` 用 `{:?}` 产出 TOML，
-                // 每个反斜杠都被转义成两个——那对 TOML basic string 是对的，
-                // 错的是这里读回来时不反转义。少了这一步，Windows 路径一路
-                // 带着字面的双反斜杠往下走（导出的 zip 路径就是前四后二的
-                // 形状），而且它会被向导预填、再经 write_config 转义一次
-                // ⇒ 每跑一次向导翻一倍（回路与存量修复见 #219）。
-                let val = match val.strip_prefix('"').and_then(|v| v.strip_suffix('"')) {
-                    // basic string：必须反转义。
-                    Some(inner) => unescape_toml_basic(inner),
-                    // literal string（单引号）按 TOML 定义不做任何转义；
-                    // 没有引号的裸值也原样返回。
-                    None => val.trim_matches('\'').to_string(),
-                };
-                let val = val.trim();
-                if !val.is_empty() {
-                    return Some(val.to_string());
-                }
-            }
-            break;
-        }
-    }
-    None
+    data_dir_of(&raw)
+}
+
+/// [`read_config_data_dir`] 的纯函数部分（便于单测，不碰盘）。
+fn data_dir_of(raw: &str) -> Option<String> {
+    raw.parse::<toml::Table>()
+        .ok()?
+        .get("data_dir")?
+        .as_str()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
 }
 
 /// Where to look for a daemon's ipc.token, in order.
@@ -412,54 +371,26 @@ mod tests {
         );
     }
 
-    /// DESK-26 (#209) 的核心契约：`write_config` 写出去的值，
-    /// `read_config_data_dir` 必须**原样**读回来。
-    ///
-    /// 这里用的 `format!("data_dir = {:?}", …)` 就是 `write_config` 里的那个
-    /// 表达式（它不是 pub，而且真调用会写到平台真实的 data_dir，不能在测试里
-    /// 碰）。所以这条锁的是「Debug 转义 ⇄ 反转义」这一对；写入方本身换写法
-    /// 的话这条测试盯不住，那部分归 #219。
+    /// DESK-26 (#209) / #1045：config 里写的值，读回来必须**原样**——不论写成
+    /// basic string（双引号，反斜杠转义）还是 literal string（单引号，不转义）。
+    /// 两种都是 daemon 的 TOML 序列化器会选的写法（Windows 路径选 literal）。
     #[test]
-    fn write_config_format_round_trips_through_the_reader() {
-        // 故意用 Windows 形状的路径：单反斜杠、带空格、带非 ASCII。
-        // unix 上这只是个普通文件名，断言照样成立——所以 ubuntu lane 也跑得到。
-        let original = r"C:\Users\ethan\Pictures\P-Pass 家庭照片库";
-        let tmp = tempfile::tempdir().unwrap();
-        // write_config 的原话。
-        let body = format!(
-            "data_dir = {original:?}\n\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n"
-        );
-        // 前提自检：写出去的确实是被转义过的（否则这条测试就是恒真式）。
+    fn reader_returns_the_value_for_both_toml_string_styles() {
+        // basic：双引号，每个反斜杠写成两个；literal：单引号，原样。
+        let basic = "data_dir = \"C:\\\\Users\\\\ethan\"\n";
+        let literal = "data_dir = 'C:\\Users\\ethan'\n";
+        // 前提自检：两段确实是两种不同的字面形状，否则这条就是恒真式。
+        assert_ne!(basic, literal);
+        assert!(basic.contains(r"C:\\Users"), "{basic}");
         assert!(
-            body.contains(r"C:\\Users"),
-            "write_config 的 {{:?}} 应当把反斜杠转义成两个，实际写出：{body}"
+            literal.contains(r"C:\Users") && !literal.contains(r"\\"),
+            "{literal}"
         );
-        std::fs::write(tmp.path().join("config.toml"), &body).unwrap();
-
-        assert_eq!(
-            read_config_data_dir(tmp.path()).as_deref(),
-            Some(original),
-            "读回来必须和写进去的完全一致，不能带转义残留"
-        );
+        assert_eq!(data_dir_of(basic).as_deref(), Some(r"C:\Users\ethan"));
+        assert_eq!(data_dir_of(literal).as_deref(), Some(r"C:\Users\ethan"));
     }
 
-    /// 反转义只做一层：文件里两个反斜杠 → 结果一个。
-    /// （存量里已经被转义过多轮的值救不回来，那是 #219 的存量修复。）
-    #[test]
-    fn reader_unescapes_exactly_one_layer() {
-        assert_eq!(unescape_toml_basic(r"C:\\Users"), r"C:\Users");
-        assert_eq!(unescape_toml_basic(r#"a\"b"#), r#"a"b"#);
-    }
-
-    /// 不认识的转义原样保留——不靠猜改写用户的路径。
-    #[test]
-    fn reader_leaves_unknown_escapes_verbatim() {
-        assert_eq!(unescape_toml_basic(r"C:\qWeird"), r"C:\qWeird");
-        // 结尾孤立的反斜杠也不吞掉。
-        assert_eq!(unescape_toml_basic(r"tail\"), r"tail\");
-    }
-
-    /// TOML literal string（单引号）按定义不做转义，读取方不得反转义它。
+    /// 单引号 literal 里的两个反斜杠就是两个反斜杠（TOML 定义：不转义）。
     #[test]
     fn literal_string_value_is_not_unescaped() {
         let tmp = tempfile::tempdir().unwrap();
@@ -468,11 +399,39 @@ mod tests {
             "data_dir = 'C:\\\\Users\\\\ethan'\n",
         )
         .unwrap();
-        // 单引号里的两个反斜杠就是两个反斜杠。
         assert_eq!(
             read_config_data_dir(tmp.path()).as_deref(),
             Some(r"C:\\Users\\ethan")
         );
+    }
+
+    /// 读不出来的形态一律 None，不 panic、不猜：空值、没设、不是字符串、
+    /// 整份 TOML 解析不了、文件不存在。
+    #[test]
+    fn reader_gives_none_for_every_unreadable_shape() {
+        for raw in [
+            "",
+            "bind_addr = \"0.0.0.0:41145\"\n",
+            "data_dir = \"\"\n",
+            "data_dir = \"   \"\n",
+            "data_dir = 5\n",
+            "data_dir = \"/x\"\n[broken",
+        ] {
+            assert_eq!(data_dir_of(raw), None, "{raw:?}");
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(read_config_data_dir(tmp.path()), None);
+    }
+
+    /// 首个 `[section]` 之后的同名键不是顶层 `data_dir`（真 TOML 解析才分得清，
+    /// 逐行读会把它当成库目录）。
+    #[test]
+    fn a_data_dir_inside_a_section_is_not_the_library() {
+        assert_eq!(
+            data_dir_of("data_dir = \"/top\"\n[other]\ndata_dir = \"/nested\"\n").as_deref(),
+            Some("/top")
+        );
+        assert_eq!(data_dir_of("[other]\ndata_dir = \"/nested\"\n"), None);
     }
 
     // ── NET-11: IPC 读超时保险丝 ──────────────────────────────────────
