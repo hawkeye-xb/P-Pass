@@ -43,12 +43,12 @@
   import SettingsIcon from "@lucide/svelte/icons/settings";
   import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
   // T-091: 人性化时间 + 哨兵判定纯函数（时间戳单位见模块头注释：unix 毫秒）
-  import { humanTime, needsAttention, daysSince, relativeTime } from "./lib/humanTime.js";
+  import { humanTime, daysSince, relativeTime } from "./lib/humanTime.js";
   // PRES-01: presence 三档 → 文案/点色（connection 路径事实优先展示）
   import { presenceText, flowConnectionText } from "./lib/connection.js";
   // DEV-03: 「自己断开」与「业主移除」的判据 + 已断开行文案（纯函数，
   // disconnected.test.js 钉边界）。
-  import { isOwnerRemoved, disconnectedRow } from "./lib/disconnected.js";
+  import { disconnectedRow } from "./lib/disconnected.js";
   import {
     pendingDialogText,
     pendingSubText,
@@ -417,34 +417,30 @@
   // 颜色值全来自 tokens.css，见其注释）
   const DOT_BG = { idle: "bg-idle", act: "bg-act", safe: "bg-safe", wait: "bg-waiting" };
 
+  // #1044 B4：行状态（含优先级：已断开 > 需要看看 > 正在传输 > 在线态）
+  // 由 daemon 给出（devices.list 的 `row_state`），这里只按结论取文案。
   function deviceRow(d, now) {
-    // DEV-03: 已断开的设备先于一切分支返回——它不该参与「几天没备份了」
-    // 告警（授权都没了，催用户去开 App 是错的），也不该借用「离线」话术。
-    const disconnected = disconnectedRow(d, humanTime(d.revoked_at, now));
-    if (disconnected) return disconnected;
     const wm = watermarks[d.node_id];
     const lastBackupAt = wm?.last_backup_at ?? null;
     const backupTime = humanTime(lastBackupAt, now);
-    const alert = needsAttention(lastBackupAt, now);
-    if (alert) {
-      return {
-        alert: true,
-        dot: "act",
-        sub: t("ui.device_no_backup_days", { n: daysSince(lastBackupAt, now) }),
-        right: t("ui.device_needs_attention"),
-      };
-    }
-    // NET-05 has priority over generic presence only while this exact device
-    // owns an active Flow fetch. On every terminal path flow_connection=null,
-    // so the established presence display immediately resumes.
-    const flow = flowConnectionText(d.flow_connection);
-    if (flow) {
-      return {
-        alert: false,
-        dot: flow.dot,
-        sub: flow.sub,
-        right: backupTime ? t("ui.device_last_backup", { time: backupTime }) : t("ui.device_never_backed_up"),
-      };
+    const backupRight = backupTime ? t("ui.device_last_backup", { time: backupTime }) : t("ui.device_never_backed_up");
+    switch (d.row_state) {
+      case "disconnected":
+        // DEV-03: 不借用「离线」话术，也不参与「几天没备份」告警。
+        return disconnectedRow(humanTime(d.revoked_at, now));
+      case "needs_attention":
+        return {
+          alert: true,
+          dot: "act",
+          sub: t("ui.device_no_backup_days", { n: daysSince(lastBackupAt, now) }),
+          right: t("ui.device_needs_attention"),
+        };
+      case "transferring": {
+        // NET-05: 只在这台设备正有 Flow 传输时显示传输路径。
+        const flow = flowConnectionText(d.flow_connection);
+        if (flow) return { alert: false, dot: flow.dot, sub: flow.sub, right: backupRight };
+        break;
+      }
     }
     const pres = presenceText(
       d.presence,
@@ -452,12 +448,7 @@
       relativeTime(d.last_seen, now),
       humanTime(d.last_seen, now)
     );
-    return {
-      alert: false,
-      dot: pres.dot,
-      sub: pres.sub,
-      right: backupTime ? t("ui.device_last_backup", { time: backupTime }) : t("ui.device_never_backed_up"),
-    };
+    return { alert: false, dot: pres.dot, sub: pres.sub, right: backupRight };
   }
 
   // 设计稿离线版：总览标题副标题是"全家 N 张照片…"+"最近一次备份：
@@ -467,7 +458,7 @@
   const lastBackupOverall = $derived.by(() => {
     let best = null;
     for (const d of devices) {
-      if (d.revoked) continue;
+      if (d.removal !== "none") continue;
       const wm = watermarks[d.node_id];
       if (!wm?.last_backup_at) continue;
       if (!best || wm.last_backup_at > best.at) best = { at: wm.last_backup_at, name: d.name };
@@ -481,24 +472,20 @@
   // 2026-08-18（用户反馈①）：卡里展示 3 行、按「最新活跃」排。活跃度
   // 取 max(last_seen, last_backup_at)——两者都是"这台设备最近有动静"的
   // 真实证据，只看其中一个都会漏（刚连上还没备份 / 备份完就锁屏离线）。
-  // 告警设备（needsAttention）仍然全部置顶且不受 3 行上限挤出：这张卡的
+  // 告警设备（needs_attention）仍然全部置顶且不受 3 行上限挤出：这张卡的
   // 使命是"一眼确认备份没坏"，而告警设备按定义就是最不活跃的那批，纯
   // 活跃排序恰好会把最该看见的行排到最后。
   const OVERVIEW_ROWS = 3;
-  function lastActivityAt(d) {
-    const wm = watermarks[d.node_id];
-    return Math.max(d.last_seen ?? 0, wm?.last_backup_at ?? 0);
-  }
+  // #1044 B4：最近活跃（max(last_seen, last_backup_at)）与告警判定由 daemon 给出。
+  const byActivity = (a, b) => (b.last_activity_at ?? 0) - (a.last_activity_at ?? 0);
   const waterRows = $derived.by(() => {
-    // 水位卡问的是「在用设备的备份健康度」——已断开/已移除的都不该算进来，
-    // 所以这里是 `!d.revoked`（比「家人与设备」列表的口径更窄），不是 DEV-03
-    // 那个 isOwnerRemoved。已断开的设备催用户「去开 App 备份」是错的。
-    const active = devices.filter((d) => !d.revoked);
-    const withRow = active
-      .map((d) => ({ d, row: deviceRow(d, nowMs) }))
-      .sort((a, b) => lastActivityAt(b.d) - lastActivityAt(a.d));
-    const alerts = withRow.filter((x) => x.row.alert);
-    const ok = withRow.filter((x) => !x.row.alert);
+    // 水位卡问的是「在用设备的备份健康度」——已断开/已移除的都不该算进来
+    // （比「家人与设备」列表的口径更窄）。已断开的设备催用户「去开 App
+    // 备份」是错的。
+    const active = devices.filter((d) => d.removal === "none").sort(byActivity);
+    const withRow = active.map((d) => ({ d, row: deviceRow(d, nowMs) }));
+    const alerts = withRow.filter((x) => x.d.needs_attention);
+    const ok = withRow.filter((x) => !x.d.needs_attention);
     const shown = [...alerts, ...ok.slice(0, Math.max(0, OVERVIEW_ROWS - alerts.length))];
     return { shown, moreOk: Math.max(0, active.length - shown.length) };
   });
@@ -1195,7 +1182,8 @@
   // 状态机默认值，当作徽章文案是假话）。T-081: 徽章落位侧栏底部胶囊，
   // 只说服务状态；连接状态归属每台设备行（daemon 尚未暴露 per-device
   // 连接事实，行内先留结构：状态点 + 右侧槽位）。
-  const pairedCount = $derived(status ? status.devices - status.revoked : 0);
+  // #1044 B4：「已配对 N 台」= 设备页列表正常行数（含自己断开的），daemon 给数。
+  const pairedCount = $derived(status?.paired_devices ?? 0);
   // T-092: 磁盘水位（status.disk_free_bytes/disk_total_bytes 可能 null——
   // 拿不到时三个值都是 null，设置页整行隐藏，绝不渲染 undefined/NaN）
   const diskFree = $derived(formatBytes(status?.disk_free_bytes ?? null));
@@ -1519,7 +1507,7 @@
               {:else}
                 {t("ui.paired_count", { n: pairedCount })}{#if photoCount !== null}{` · ${t("ui.overview_library_count", { n: photoCount })}`}{/if}
               {/if}
-              {#if status && status.revoked > 0}{t("ui.revoked_count", { n: status.revoked })}{/if}
+              {#if status?.removed_devices > 0}{t("ui.revoked_count", { n: status.removed_devices })}{/if}
             </p>
           </div>
 
@@ -1609,7 +1597,7 @@
                     {devicesError}
                   </p>
                 {/if}
-                {#if devices.filter((d) => !d.revoked).length === 0}
+                {#if devices.filter((d) => d.removal === "none").length === 0}
                   <!-- 2026-08-17：等高后空状态垂直居中——不然矮内容顶在
                        卡片顶部，下面一截空白显得像没做完。 -->
                   <div class="flex flex-1 items-center justify-center">
@@ -1712,7 +1700,7 @@
                    槽位；daemon 尚未暴露机型/连接事实，数据未接前显示中性占位，
                    不捏造「已直连」。不再渲染原始 role 字串。 -->
               <!-- 2026-08-18（用户反馈③）：按最近一次有动静倒序（新的在上）
-                   ——与总览水位卡同一个 lastActivityAt 口径（last_seen 与
+                   ——与总览水位卡同一个 last_activity_at 口径（last_seen 与
                    last_backup_at 取大者），不是 daemon 返回的入库顺序。 -->
               <!-- DEV-03: 两种「离开」要分开。手机点「断开与这台电脑的连接」
                    不是业主的决定，那台设备必须留在主列表里标「已断开」——
@@ -1721,9 +1709,9 @@
                    判据是 daemon 给的 revoked_by，不是 revoked 这个布尔位。
                    来源未知的历史行（DEV-03 之前留下的）按「已移除」处理。 -->
               {@const activeDevices = devices
-                .filter((d) => !isOwnerRemoved(d))
-                .sort((a, b) => lastActivityAt(b) - lastActivityAt(a))}
-              {@const removedDevices = devices.filter(isOwnerRemoved)}
+                .filter((d) => d.removal !== "removed")
+                .sort(byActivity)}
+              {@const removedDevices = devices.filter((d) => d.removal === "removed")}
               {#if activeDevices.length === 0}
                 <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.no_devices")}</p>
               {:else}

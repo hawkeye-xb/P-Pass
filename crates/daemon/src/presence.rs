@@ -16,7 +16,16 @@
 /// 心跳新鲜窗口：30s 心跳的两跳间隔 + 余量 → 2 分钟内算在线。
 pub const ONLINE_HEARTBEAT_MS: i64 = 2 * 60 * 1000;
 /// 哨兵口径：超过 5 天 = 离线（与设计稿「>5 天亮红」同源，改不得）。
+///
+/// ⚠️ 与 [`BACKUP_ATTENTION_MS`] 同值、**不同义**：这里量的是「多久没
+/// 上报在线」（last_seen，连接/心跳事实），那里量的是「多久没备份成功」
+/// （最近一次备份时刻）。一台天天在线却一直备份失败的手机，在线态是
+/// online，同时亮「需要看看」——两条判据各管各的，不许互相替代。
 pub const OFFLINE_SENTINEL_MS: i64 = 5 * 24 * 3600 * 1000;
+
+/// 设备行「需要看看」哨兵（#1044 B4）：最近一次备份距今超过 5 天。
+/// 与 [`OFFLINE_SENTINEL_MS`] 放在一处定义，语义差别见其注释。
+pub const BACKUP_ATTENTION_MS: i64 = 5 * 24 * 3600 * 1000;
 
 /// 三档在线态字符串（devices.list 直出的 wire 值）。
 pub fn presence(conn: &str, last_seen: Option<i64>, now_ms: i64) -> &'static str {

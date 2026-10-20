@@ -765,6 +765,16 @@ impl IpcServer {
                 } else {
                     self.db.list_devices_for_family_view().await
                 };
+                // #1044 B4：「需要看看」与「最近活跃」要用最近备份时刻。
+                let last_backup: std::collections::HashMap<Vec<u8>, i64> = self
+                    .db
+                    .list_device_watermarks()
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|w| w.last_backup_at.map(|t| (w.node_id, t)))
+                    .collect();
+                let now = now_ms();
                 match listed {
                     Ok(devices) => {
                         let list: Vec<_> = devices
@@ -791,14 +801,26 @@ impl IpcServer {
                                 } else {
                                     (self.flow_connection)(&d.node_id)
                                 };
+                                let presence = if d.revoked {
+                                    "offline"
+                                } else {
+                                    crate::presence::presence(connection.as_str(), d.last_seen, now)
+                                };
+                                // #1044 B4：分组、哨兵、行状态优先级、最近活跃由
+                                // daemon 给结论（device_projection.rs），桌面只渲染。
+                                let removal = crate::device_projection::Removal::of(d);
+                                let last_backup_at = last_backup.get(&d.node_id).copied();
+                                let needs_attention = crate::device_projection::needs_attention(
+                                    removal,
+                                    last_backup_at,
+                                    now,
+                                );
                                 serde_json::json!({
                                     "node_id": hex(&d.node_id),
                                     "name": d.name,
                                     "role": d.role.as_str(),
                                     "revoked": d.revoked,
                                     // DEV-03：谁让它离开的 + 什么时候。
-                                    // 展示层据此把「已断开」和「在用」分开渲染，
-                                    // 并能答「它什么时候断的」。
                                     "revoked_by": d.revoked_by.map(|b| b.as_str()),
                                     "revoked_at": d.revoked_at,
                                     "last_seen": d.last_seen,
@@ -810,15 +832,19 @@ impl IpcServer {
                                     "flow_connection": flow_connection.map(|s| s.as_str()),
                                     // PRES-01: 三档在线态只用既有泛连接/心跳口径，
                                     // 不让短暂文件传输改写在线语义。
-                                    "presence": if d.revoked {
-                                        "offline"
-                                    } else {
-                                        crate::presence::presence(
-                                            connection.as_str(),
-                                            d.last_seen,
-                                            now_ms(),
-                                        )
-                                    },
+                                    "presence": presence,
+                                    "removal": removal.as_str(),
+                                    "needs_attention": needs_attention,
+                                    "row_state": crate::device_projection::row_state(
+                                        removal,
+                                        needs_attention,
+                                        flow_connection.is_some(),
+                                        presence,
+                                    ),
+                                    "last_activity_at": crate::device_projection::last_activity_at(
+                                        d.last_seen,
+                                        last_backup_at,
+                                    ),
                                 })
                             })
                             .collect();
@@ -1418,6 +1444,16 @@ impl IpcServer {
             "msg_key": state.msg_key(),
             "devices": devices.len(),
             "revoked": devices.iter().filter(|d| d.revoked).count(),
+            // #1044 B4：「已配对 N 台」= 设备页主列表行数（含自己断开的）；
+            // 已移除的单独计。桌面不再自己做减法。
+            "paired_devices": devices
+                .iter()
+                .filter(|d| crate::device_projection::Removal::of(d).is_listed())
+                .count(),
+            "removed_devices": devices
+                .iter()
+                .filter(|d| !crate::device_projection::Removal::of(d).is_listed())
+                .count(),
             "pending_pairs": pending,
             // Where the photos physically live — the UI's "open the
             // photo folder" needs an answer to "传到哪儿了" (real

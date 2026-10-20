@@ -10,6 +10,7 @@ pub mod backup;
 pub mod blobs_gate;
 pub mod cli;
 pub mod config;
+pub mod device_projection;
 pub mod diag_agg;
 pub mod diag_bundle;
 pub mod download;

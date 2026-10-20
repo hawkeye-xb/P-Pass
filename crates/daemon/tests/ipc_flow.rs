@@ -1422,6 +1422,84 @@ async fn devices_list_keeps_self_disconnected_and_hides_owner_removed() {
     assert_eq!(resp.result.unwrap()["devices"].as_array().unwrap().len(), 3);
 }
 
+/// #1044 B4：设备分组、「需要看看」、行状态、最近活跃、页头计数由 daemon
+/// 给结论。【改行为】「已配对 N 台」= 列表正常行数（含自己断开的）；已移除
+/// 单独计。反证：把 `paired_devices` 改回 `devices - revoked`，这里是 1 不是 2。
+#[tokio::test(flavor = "multi_thread")]
+async fn device_rows_carry_daemon_conclusions_and_status_counts_match_the_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, _pairing, socket, token) = start(dir.path(), "dev-projection").await;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    const DAY: i64 = 24 * 3600 * 1000;
+    for (n, name) in [
+        (0xAAu8, "在用的"),
+        (0xBB, "自己断开的"),
+        (0xCC, "业主移除的"),
+    ] {
+        db.upsert_device(&Device {
+            node_id: vec![n; 32],
+            name: name.into(),
+            role: Role::Member,
+            paired_at: i64::from(n),
+            last_seen: Some(now - 6 * DAY),
+            revoked: false,
+            revoked_at: None,
+            revoked_by: None,
+        })
+        .await
+        .unwrap();
+    }
+    db.set_watermark(&[0xAA; 32], 1, now - 6 * DAY - 5)
+        .await
+        .unwrap();
+    db.revoke(&[0xBB; 32], storage::RevokedBy::Device, now)
+        .await
+        .unwrap();
+    db.revoke(&[0xCC; 32], storage::RevokedBy::Owner, now)
+        .await
+        .unwrap();
+
+    let mut c = IpcClient::connect(&socket, &token).await;
+    let status = c
+        .call("status", serde_json::Value::Null)
+        .await
+        .result
+        .unwrap();
+    assert_eq!(status["paired_devices"], 2, "含自己断开的");
+    assert_eq!(status["removed_devices"], 1);
+
+    let listed = c
+        .call(
+            "devices.list",
+            serde_json::json!({ "include_revoked": true }),
+        )
+        .await
+        .result
+        .unwrap();
+    let row = |name: &str| {
+        listed["devices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["name"] == name)
+            .unwrap()
+            .clone()
+    };
+    let active = row("在用的");
+    assert_eq!(active["removal"], "none");
+    assert_eq!(active["needs_attention"], true, "6 天没备份");
+    assert_eq!(active["row_state"], "needs_attention");
+    assert_eq!(active["last_activity_at"], now - 6 * DAY);
+    let selfgone = row("自己断开的");
+    assert_eq!(selfgone["removal"], "disconnected");
+    assert_eq!(selfgone["row_state"], "disconnected");
+    assert_eq!(selfgone["needs_attention"], false);
+    assert_eq!(row("业主移除的")["removal"], "removed");
+}
+
 /// DEV-04：老设备重连，`pairing.pending` 必须认得出来——判据是
 /// `node_id`，不是名字。
 ///
