@@ -367,6 +367,40 @@ expect_red "G4 #[cfg(test)] use 之后的产品代码仍被扫到" "$(sample "$S
 use std::fs as _;
 fn product(d: &Path) { std::fs::write(d.join("config.toml"), "x").unwrap(); }')" "G4 VIOLATION"
 
+# ── G2（#1046）────────────────────────────────────
+echo "== G2 正样例（核心里的托管代码，必须报红；无白名单）"
+g2_red() { expect_red "G2 $1" "$(sample crates/daemon/src/a.rs "$2")" "G2 VIOLATION"; }
+# 反证样例：#1046 删掉的那段 daemon 接管后重装登记，原样放回必须红。
+g2_red "接管后重装登记（#1046 删除的原代码形状）" 'fn f(exe: &Path) {
+    let registered = h.autostart_registration();
+    if !h.is_install_location(&exe) {} else if let Err(e) = h.install_autostart(&exe) {}
+}'
+g2_red "绕开 hosting() 入口、换个接收者调托管方法" 'fn f(a: &A) { let _ = a.uninstall_autostart(); }'
+g2_red "方法名与括号之间有空白" 'fn f(a: &A) { let _ = a.restart_resident_daemon (true); }'
+g2_red "托管类型" 'fn f(m: platform::ServiceMode) {}'
+g2_red "直接拼 launchctl" 'fn f() { let _ = platform::command("launchctl"); }'
+g2_red "计划任务" 'const T: &str = "schtasks";'
+g2_red "测试代码也算（核心的测试也不碰托管）" '#[cfg(test)]
+mod tests { fn t() { let _ = a.install_autostart(p); } }'
+echo "== G2 反样例（必须不报）"
+expect_green "G2 注释里讲托管不算" "$(sample crates/daemon/src/a.rs '// 接管后不再 install_autostart()；launchctl 归发行层
+/// 见 HostingAdapter::reconcile_autostart')"
+expect_green "G2 crates/platform 自己实现托管不算" "$(sample crates/platform/src/macos.rs 'fn f() { let _ = a.install_autostart(p); let _ = "launchctl"; }')"
+expect_green "G2 桌面壳（发行层）调托管不算" "$(sample apps/desktop/src-tauri/src/distribution.rs 'fn f() { let _ = platform::hosting().reconcile_autostart(p); }')"
+expect_green "G2 同名前缀的别的符号不算" "$(sample crates/daemon/src/a.rs 'fn f() { let _ = a.install_autostart_hint(); let service_mode = 1; let x = stop_daemon_now(); }')"
+echo "== G2 清单与 trait HostingAdapter 的方法一一对应（trait 加方法而 G2 没加 → 红）"
+REAL_TRAIT="$HERE/../crates/platform/src/lib.rs"
+TRAIT_FNS="$(awk '/^pub trait HostingAdapter/,/^}/' "$REAL_TRAIT" | grep -oE 'fn [a-z_0-9]+' | sed 's/^fn //' | sort -u)"
+G2_LIST="$(sed -n "s/^G2_METHODS='\(.*\)'$/\1/p" "$CHECK" | tr '|' '\n' | sort -u)"
+if [ -z "$TRAIT_FNS" ]; then
+  bad "G2 清单核对：读不到 trait HostingAdapter 的方法"
+elif [ "$TRAIT_FNS" = "$G2_LIST" ]; then
+  ok "G2 清单覆盖 trait HostingAdapter 全部 $(printf '%s\n' "$TRAIT_FNS" | wc -l | tr -d ' ') 个方法"
+else
+  bad "G2 清单与 trait HostingAdapter 不一致"
+  diff <(printf '%s\n' "$TRAIT_FNS") <(printf '%s\n' "$G2_LIST") | sed 's/^/       /'
+fi
+
 # ── G3（#1043）────────────────────────────────────
 echo "== G3 正样例（enforce 模式必须报红）"
 G3_USE='use platform::HostingAdapter as _;'

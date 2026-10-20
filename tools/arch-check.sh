@@ -15,6 +15,9 @@
 #   G5  — 平台实现只在 crates/platform（#1040，细则见下方 G1/G5 段）。
 #   G4  — 桌面壳（apps/desktop）不写 config.toml、不渲染 config 模板（#1045，
 #         S-5：config 的唯一写者是 daemon 的 `config` 子命令）。无白名单，零容忍。
+#   G2  — 核心（crates/**，除 crates/platform）里没有托管代码：不调托管端口的
+#         方法、不用托管类型、不碰 launchd/计划任务机制（#1046，S3/S-11）。
+#         无白名单，零容忍。
 #   G3  — 核心 crate 只依赖「平台能力」trait（PlatformAdapter），不许引用
 #         「托管」trait（HostingAdapter / platform::hosting）（#1043，S-9）。
 #   G1/G5 是「存量不增」的锁：现有越界登记在 tools/arch-allowlist.txt，
@@ -433,6 +436,37 @@ if [ -z "$G4_HITS" ]; then
   echo "   ✅ G4: clean"
 else
   printf '%s\n' "$G4_HITS" | awk -F'\t' '{print "❌ G4 VIOLATION（壳不许写 config.toml，改调 daemon 的 config 子命令）：" $1 " 行 " $2}'
+  FAIL=1
+fi
+
+# ── G2: no hosting code in the core（#1046）─────────
+#
+# S3（盘点 §5）：进程守护——谁拉起 daemon、开机自启登记、服务管理器、更新后
+# 恢复——属于各平台的发行层（mac/Win 是 apps/desktop，Linux 交给 systemd /
+# Docker），核心只承诺「可被托管」。daemon 曾在接管旧实例后自己重装开机自启
+# 登记（S-9 核查的两处之一），#1046 删除；G2 防它回流。
+#
+# G3 只看「入口」（HostingAdapter / platform::hosting 这两个名字）；G2 看
+# 「动作」——绕开入口（例如以后有人往 PlatformAdapter 上加同名方法、或直接
+# 拼 launchctl 命令）也拦得住：
+#   ① 以方法调用形式出现托管端口的任一方法（`.install_autostart(` …）。清单与
+#      crates/platform 里 `trait HostingAdapter` 的方法一一对应，自测
+#      （tools/test-arch-check.sh）逐个核对，trait 加方法而这里没加会红；
+#   ② 托管类型：AutostartRegistration / AutostartReconcile / ResidentRestart /
+#      ServiceMode / KillOutcome；
+#   ③ 托管机制的名字：LaunchAgents、launchctl、schtasks、kickstart。
+# 扫 crates/**（除 crates/platform）的 Rust，去掉注释（讲「为什么不在这里做」
+# 的注释不算）。无白名单：现存命中为零。
+G2_METHODS='autostart_installed|autostart_reconcile_allowed|autostart_registration|autostart_registration_current|autostart_restore_when_missing|daemon_executable_name|install_autostart|install_location_hint_key|installed_bundle_version|is_install_location|kickstart_shell_agent|reconcile_autostart|register_shell_agent|register_shell_login_item|resident_daemon_pid|restart_resident_daemon|service_mode|shell_agent_label|shell_agent_registered_exec|shell_agent_started_us|stop_daemon|uninstall_autostart'
+G2_RE="\\.(?:${G2_METHODS})\\s*\\(|\\b(?:AutostartRegistration|AutostartReconcile|ResidentRestart|ServiceMode|KillOutcome)\\b|\\b(?:LaunchAgents|launchctl|schtasks|kickstart)\\b"
+echo "==> G2: no hosting code in the core (hosting belongs to the distribution layer)"
+G2_HITS=$(list_files "$ROOT/crates" -- '*.rs' \
+  | tr '\0' '\n' | { grep -v '/crates/platform/' || true; } | tr '\n' '\0' \
+  | scan_files "$G2_RE" 1 '' | sort || true)
+if [ -z "$G2_HITS" ]; then
+  echo "   ✅ G2: clean"
+else
+  printf '%s\n' "$G2_HITS" | awk -F'\t' '{print "❌ G2 VIOLATION（核心里出现托管代码，托管归发行层 apps/desktop）：" $1 " 行 " $2}'
   FAIL=1
 fi
 
