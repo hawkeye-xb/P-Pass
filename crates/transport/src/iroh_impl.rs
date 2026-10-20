@@ -20,7 +20,7 @@ use crate::{NodeId, Result, Transport, TransportError, MAX_FRAME};
 /// Construction inputs, mapped from the daemon `Config` (T-004): the daemon
 /// passes `Config.relay_urls` in here. Address lookup (发现) stays on n0
 /// public infrastructure for MVP per ADR-009 (Phase 2: self-hosted pkarr);
-/// `Config.rendezvous_url` belongs to the pairing flow (T-031), not here.
+/// `Config.rendezvous_url` is retired (#1041: accepted and ignored).
 #[derive(Debug, Clone)]
 pub struct TransportConfig {
     /// Custom relay servers. Empty = n0 default relays (when `n0_services`
@@ -755,8 +755,9 @@ impl BiStream {
         Ok(Some(frame))
     }
 
-    /// Read the next chunk of raw (unframed) bytes — the upload plane's
-    /// payload after its header frame. `Ok(None)` = sender finished.
+    /// Read the next chunk of raw (unframed) bytes — a raw-stream plane's
+    /// payload after its header frame (the download plane, T-056).
+    /// `Ok(None)` = sender finished.
     pub async fn recv_chunk(&mut self, max: usize) -> Result<Option<Vec<u8>>> {
         let mut buf = vec![0u8; max];
         match self.recv.read(&mut buf).await {

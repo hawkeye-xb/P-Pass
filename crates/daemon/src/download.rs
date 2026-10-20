@@ -3,7 +3,7 @@
 //! asset per bidirectional stream, gated by the same authz checkpoint
 //! (viewer+: downloading IS browsing).
 //!
-//! Stream shape (mirror of the upload plane):
+//! Stream shape (header frame, then raw bytes; the old upload plane was removed in #988):
 //!   client:  Req{method: "asset.download", params: {"hash": <hex64>}}
 //!   daemon:  Resp{ok, result: {"bytes": n}}  — then the raw bytes, then EOF
 //! Errors answer a Resp with ok=false and no bytes follow.

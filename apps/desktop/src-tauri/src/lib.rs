@@ -182,7 +182,7 @@ fn validate_asset_file(path: &std::path::Path) -> Result<std::path::PathBuf, Str
 /// #413 §7: desktop system notification (the low-space warning). The shell
 /// only relays already-localized text; the "when" rule lives in the
 /// daemon (`crates/daemon/src/low_space.rs`, #1044), the "how" in the platform adapter
-/// (macOS: osascript, best effort; Windows: not implemented yet, no-op).
+/// (macOS: osascript, best effort; Windows: toast, DESK-17).
 #[tauri::command]
 fn notify_system(title: String, body: String) {
     platform::adapter().notify(&title, &body);
@@ -1047,9 +1047,10 @@ fn relaunch_shell(app: tauri::AppHandle) -> Result<(), String> {
 /// 与 stop_daemon 相反：本命令**绝不碰 autostart 注册**（uninstall 会
 /// 阻止复活）——注册从头到尾没动过，这正是设计要点。体面退出（exit 0）
 /// 反而不会被复活，所以必须是真的"杀"（信号终止），不走 step_down 那套
-/// 版本协商。Windows 的 autostart 是普通 Run key、没有 KeepAlive 复活
-/// 语义——杀掉后显式重新拉起一次（start_daemon 的一次性 spawn 分支，
-/// 不注册 autostart）。
+/// 版本协商。Windows 的计划任务（#957）同样由系统托管，走
+/// `restart_resident_daemon`；只有没有服务管理器的兜底实现
+/// （`ServiceMode::UserAutostart`）才杀掉后显式重新拉起一次（start_daemon
+/// 的一次性 spawn 分支，不注册 autostart）。
 ///
 /// **DESK-44 (#606) 两处修正**（2026-10-03 真机现场）：
 /// ① **判据从"固定时钟"改成"可观察进度"**：旧实现"12 秒内版本必须变，否则报错"
@@ -1138,13 +1139,13 @@ fn restart_daemon_process_blocking() -> Result<Value, String> {
     ))
 }
 
-/// DAE-04 原路径（没有 LaunchAgent 语义时）：杀进程，Run key 平台再显式拉一次。
+/// DAE-04 原路径（没有服务管理器时，`ServiceMode::UserAutostart`）：杀进程，再显式拉一次。
 fn restart_by_kill_and_respawn() -> Result<(), String> {
     stop_bundled_daemon().map_err(|e| ipc::ui_err("ui.err_kill_old", &[("err", &e)]))?;
 
     // 3) 被杀之后系统会不会自己把它拉回来，取决于常驻方式：
-    //    LaunchAgent 的 KeepAlive 会（macOS），Run key 不会（Windows /
-    //    Linux）——后者必须显式重新拉起一次（一次性 spawn，不碰 autostart
+    //    LaunchAgent 的 KeepAlive 与计划任务看门狗会（macOS / Windows），
+    //    `UserAutostart` 兜底实现不会——后者必须显式重新拉起一次（一次性 spawn，不碰 autostart
     //    注册，注册从头到尾没动过，这正是本命令的设计要点）。
     //
     //    ⚠️ 这一句在 Linux 上是**行为改变**，已在 PR 里登记：迁移前
@@ -1554,8 +1555,8 @@ pub fn run() {
                         // #550：诊断包入口从设置页收进托盘。先把窗口拉起来
                         // 再让前端导出——结果（路径 + 「只发给开发者」的
                         // 提醒，或失败原因）走窗口里的 toast，窗口藏着时
-                        // 用户看不见；notify_system 在 Windows 上是 no-op，
-                        // 靠不住。导出本身仍是前端 invoke export_logs_bundle，
+                        // 用户看不见；系统通知（notify_system）只承载短提醒，
+                        // 不承载带路径的导出结果。导出本身仍是前端 invoke export_logs_bundle，
                         // 不另开第二条导出路径。
                         bring_main_window_to_front(app);
                         let _ = app.emit(EVENT_EXPORT_LOGS_REQUESTED, ());
@@ -1597,8 +1598,8 @@ pub fn run() {
                 //      localStorage。卡面禁止新造文件，而桌面壳其余的持久化
                 //      通道要么会被 write_config 整体重写（config.toml），
                 //      要么根本是 daemon 的配置（#172 里逐条核过）。
-                //   2. 平台判断放前端就不用在本文件再加一处 cfg——#211 正在
-                //      往外搬这些，别一边搬一边添。
+                //   2. 要不要提示由适配器能力回答（`platform_ux`，#1043），
+                //      本文件不判断平台。
                 //
                 // hide() 与 prevent_close() 留在 Rust 不动是刻意的：前端万一
                 // 没注册上监听，最坏只是**少提示一次**，关窗行为不会退化成
@@ -2287,8 +2288,8 @@ mod tests {
     #[test]
     fn verify_rejects_a_zero_byte_sidecar() {
         let tmp = tempfile::tempdir().unwrap();
-        // 一律带 .exe 后缀：不为了这个测试在本文件再加一处平台 cfg
-        // （#211 正在往外搬）。Windows 上 spawn 直接被拒（不是有效的
+        // 一律带 .exe 后缀：平台 cfg 只许在 crates/platform（arch-check B.2），
+        // 本文件不加。Windows 上 spawn 直接被拒（不是有效的
         // Win32 程序），unix 上没有执行位同样被拒——两边都走 Err。
         let fake = tmp.path().join("ppf-daemon.exe");
         std::fs::write(&fake, b"").unwrap();

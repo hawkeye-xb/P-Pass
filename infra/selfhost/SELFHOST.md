@@ -83,7 +83,6 @@ curl -s https://$RENDEZVOUS_DOMAIN/            # → {"ok":true,"service":"ppass
 **8. 客户端指向自建端点**（daemon `config.toml`）：
 ```toml
 relay_urls = ["https://relay.example.com:8443"]
-rendezvous_url = "https://rendezvous.example.com"
 ```
 
 **9. Kuma 探针**（T-064）：`infra/relay/kuma.example.yml` 导入 Uptime Kuma →
@@ -149,5 +148,5 @@ cd infra/workers/rendezvous && npm i && npx wrangler dev --port 8787
 
 ## 自建≠零官方依赖 / What still needs n0/Cloudflare
 
-iroh 客户端的**发现**默认走 n0 官方 DNS 发现（pkarr 未自建前）。配对用 QR
-地址段（`&a=<addr>`）时零发现依赖；离线/纯内网场景完全自洽。
+iroh 客户端的**发现**默认走 n0 官方 DNS 发现（pkarr 未自建前）。配对 QR
+只带 node、token 与 relay URL（`&r=`），不带地址段（H-10b 起移除 `&a=`）。

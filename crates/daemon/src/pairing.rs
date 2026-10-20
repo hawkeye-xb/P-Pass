@@ -2,14 +2,14 @@
 //! confirmation, whitelist write.
 //!
 //! ```text
-//! owner UI:  start()  ──► QR "ppf://pair?node=<id>&t=<token>"
+//! owner UI:  start()  ──► QR "ppf://pair?node=<id>&t=<token>[&r=<relay>]"
 //! phone:     scan     ──► PairRequest{token, name, role} over ctrl
 //! daemon:    token valid (unused, unexpired)? ──► pending queue
 //! owner UI:  confirm(name) / reject(name)
 //! daemon:    confirm ──► device row written ──► PairAccepted
 //! ```
 //!
-//! Tokens are 32 random bytes, TTL 600 s, strictly one-time: the first
+//! Tokens are 12 random bytes (24 hex), TTL 600 s, strictly one-time: the first
 //! PairRequest consumes the token whatever happens afterwards — a replay
 //! from another device is rejected even while the first request is still
 //! pending.

@@ -4,11 +4,11 @@
 //
 // 时间戳单位 = unix 毫秒。代码依据（不是猜的）：
 // - device.watermarks.last_backup_at ← backup_watermark.updated_at，
-//   写入点 crates/daemon/src/backup.rs:208 set_watermark(..., unix_ms_now())，
-//   unix_ms_now() = SystemTime as_millis()（backup.rs:216）；
-//   storage 层测试断言 1_753_770_500_000（13 位毫秒，device_repo.rs:299）。
-// - devices.list.last_seen ← 配对时 pairing.rs:168 last_seen: Some(now_ms)，
-//   now_ms 由 ipc.rs:696 now_ms() = as_millis() 传入。
+//   写入点 crates/daemon/src/backup.rs 的 set_watermark(..., unix_ms_now())，
+//   unix_ms_now() = SystemTime as_millis()；
+//   storage 层 device_repo.rs 的测试断言 13 位毫秒值。
+// - devices.list.last_seen ← 配对时 pairing.rs `Pairing::apply_verdict` 写
+//   last_seen: Some(now_ms)；hello 时 router.rs `record_presence` 刷新。
 
 import { t } from "./i18n.js";
 

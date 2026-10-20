@@ -1055,7 +1055,7 @@ impl HostingAdapter for WindowsAdapter {
 /// DESK-58 (#875)：本进程 stderr 此刻接在什么上。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StderrTarget {
-    /// 没有句柄（GUI 子系统进程被 Run 键拉起时就是这样）。
+    /// 没有句柄（GUI 子系统进程被计划任务登录拉起时就是这样）。
     Missing,
     /// 字符设备但不是控制台——实际就是 `NUL`（`Stdio::null()`）。
     NullDevice,
@@ -1864,7 +1864,7 @@ pub fn kill_verdict(results: &[ProcessKill]) -> Result<crate::KillOutcome> {
 /// `pid_hint`（daemon 自报的 pid）优先：同会话、映像**文件名**对得上就结束它
 /// （防 pid 复用；不核对目录——应答 IPC 的 daemon 跑在别处时改前也停得掉）；
 /// 其余候选必须完整路径对得上。
-/// 只杀本会话的，是因为 daemon 由本用户的计划任务 / Run key 拉起、跑在本会话
+/// 只杀本会话的，是因为 daemon 由本用户的计划任务拉起、跑在本会话
 /// 里；别的会话（快速用户切换的另一个用户）的 daemon 不归我们管。
 fn stop_processes_at(exe: &Path, pid_hint: Option<u32>) -> Result<crate::KillOutcome> {
     let want = std::fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf());

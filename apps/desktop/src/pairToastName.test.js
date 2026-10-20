@@ -3,11 +3,11 @@
 // 真机实测（#349 第二条评论）：同一屏上「已允许 SM-S9210 加入」与活动记录
 // 的「客厅的手机 已加入」并排出现——同一事件两个名字。弹窗标题和活动记录
 // 都对，错的只有 `confirmPair` 里那一行 toast，它用了 `pairing.confirm` 回
-// 的 `r.device`。那个字段就是队列里的自报名（crates/daemon/src/ipc.rs:1155
-// `let name = p.device_name.clone()`），永远不会是业主改过的称呼。
+// 的 `r.device`。那个字段就是队列里的自报名（crates/daemon/src/ipc.rs
+// `IpcServer::confirm` 取请求里的 device_name），永远不会是业主改过的称呼。
 //
 // 正确来源是 `pairing.pending` 那一行的 `name`：daemon 已经按 DEV-04 的口径
-// 解析过了（ipc.rs:1189-1193，known 时取 device 表的 name，否则自报名），
+// 解析过了（ipc.rs `IpcServer::pending_summary`：known 时取 device 表的 name，否则自报名），
 // 弹窗标题正因为用它才是对的。
 //
 // 反证：把 pairResultName 改回 `resp.device` 优先，或让 App.svelte 那行退回

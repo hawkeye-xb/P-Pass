@@ -457,7 +457,7 @@ pub trait PlatformAdapter: Send + Sync {
     ///
     /// 默认实现：`log_file` = `<data_dir>/logs/daemon.log`（macOS 与 Windows
     /// 同构，轮转出 `daemon.log.1`），没有托管方接的 stdio。
-    /// - DEVLOG-02：Windows 必须有 `log_file`——计划任务 / Run 键没有任何
+    /// - DEVLOG-02：Windows 必须有 `log_file`——计划任务没有任何
     ///   重定向能力，release 又不再分配控制台，不落盘就等于没有日志。
     /// - DIAG-B1：macOS 也要有——桌面壳有好几条一次性 spawn 路径把 stdio 接到
     ///   `/dev/null`，只靠 launchd 的 `StandardErrorPath` 时 0.6.0 的日志整段丢失。
@@ -887,7 +887,7 @@ pub trait HostingAdapter: Send + Sync {
     /// ⇒ 结果仍是野生实例在岗。所以调用方要先让野生实例退位，再调本方法。
     ///
     /// 返回 `NotRegistered` / `Unsupported` 时**什么都没做**，调用方退回
-    /// 一次性 spawn（Windows 的 Run key 没有服务管理器语义，行为不变）。
+    /// 一次性 spawn（`ServiceMode::UserAutostart` 没有服务管理器语义）。
     fn restart_resident_daemon(&self, kill_running: bool) -> Result<ResidentRestart> {
         let _ = kill_running;
         Ok(ResidentRestart::Unsupported)

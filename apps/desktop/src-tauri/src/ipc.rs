@@ -1,7 +1,7 @@
 //! Blocking IPC client for the daemon's local socket (T-034 wire:
 //! first line = token, then one JSON request per line, one JSON
 //! response per line). One fresh connection per call — simple and
-//! stateless, plenty for a 3 s poll cadence.
+//! stateless, plenty for the 60 s fallback poll plus event-driven refreshes.
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -184,7 +184,7 @@ impl DaemonHandle {
     ///
     /// NET-11：带固定读超时保险丝（[`IPC_READ_TIMEOUT`]）——daemon 活着但
     /// 僵住时，壳必须报「哪个方法超时了」而不是陪着无限等（同步 command
-    /// 占 Tauri blocking 池，无上限等待会被 3s 轮询堆满、整壳冻结）。
+    /// 占 Tauri blocking 池，无上限等待会被轮询与事件触发的刷新堆满、整壳冻结）。
     pub fn call(&self, method: &str, params: Value) -> Result<Value, String> {
         self.call_with_timeout(method, params, IPC_READ_TIMEOUT)
     }
@@ -253,7 +253,7 @@ impl DaemonHandle {
     /// 就是「等事件」——事件之间空闲多久都合法（daemon 静默=没事发生），
     /// 装上读超时反而会把正常静默误判成失联。挂死风险已有独立闭环：
     /// 断线 2s 退避重连（lib.rs `start_event_stream`），且壳侧冻结的元凶
-    /// 是 3s 轮询的同步 call 堆积，不是这条只读长连接。
+    /// 是轮询与刷新的同步 call 堆积，不是这条只读长连接。
     ///
     /// 阻塞直到连接断开（daemon 退出/重启/网络错误），返回 Err 后由
     /// 调用方决定重连。握手失败（老 daemon 无 events.subscribe）也返回

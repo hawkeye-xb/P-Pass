@@ -5,7 +5,6 @@
 //! - Awake: a `caffeinate -i` child process held RAII-style — zero FFI,
 //!   visible in `pmset -g assertions` (the smoke check). IOKit
 //!   assertions are the Phase-2 upgrade, interface unchanged.
-//! - Keys: the login Keychain via the `security` CLI (generic password).
 //! - Power hint: `pmset -g custom` through the shared pure parser.
 
 // DESK-33 (#325)：clippy.toml 禁止直接 `Command::new`，那条约束只为 Windows

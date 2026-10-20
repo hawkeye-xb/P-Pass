@@ -605,7 +605,7 @@ async fn pairing_pending_lists_all_waiting_then_confirm_by_name() {
     }
 
     // 轮询直到三台都在 pending 列表里（一屏三行）。
-    // DEV-01: pending 项是 {name, hint_match} 对象（兼容老 daemon 字符串）。
+    // pending 项是对象（`IpcServer::pending_summary`；DEV-01 的 hint_match 已删）。
     let mut list: Vec<String> = Vec::new();
     for _ in 0..200 {
         let resp = c.call("pairing.pending", serde_json::Value::Null).await;

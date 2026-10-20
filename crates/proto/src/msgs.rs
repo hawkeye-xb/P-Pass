@@ -138,7 +138,7 @@ impl Default for Hello {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct PairRequest {
-    /// One-time token from the QR code (32B hex).
+    /// One-time token from the QR code (12 bytes, 24 hex chars).
     pub token: String,
     /// Human-readable device name.
     pub device_name: String,

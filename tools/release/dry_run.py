@@ -386,7 +386,7 @@ def build_versions(ck: Check, sc: "Scenario", wf: dict, tag: str, want: str):
         ck(r.result == "success", f"#809 {job_id} @ {tag}：版本相关构建步骤全部成功", r.log)
         ck(resolved == want, f"#809 {job_id} @ {tag}：release-version.sh desktop = {want}", f"实际 {resolved!r}")
         ck(daemon == [want], f"#809 {job_id} @ {tag}：daemon 版本 = {want}", f"实际 {daemon}")
-        # build（编进壳的 package_info，shell.announce / getVersion() 报的就是它）每一次都得是 want
+        # build（编进壳的 package_info，getVersion() 报的就是它）每一次都得是 want
         ck(shell_build != [] and set(shell_build) == {want}, f"#809 {job_id} @ {tag}：外壳二进制版本（tauri build）= {want}",
            f"实际 {shell_build}（tauri.conf.json 里是 {STALE_TAURI_CONF_VERSION}）")
         if job_id == "macos-arm64":

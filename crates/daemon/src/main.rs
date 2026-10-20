@@ -1,6 +1,6 @@
 // DEVLOG-02: Windows release 产物必须是 GUI 子系统。CONSOLE 子系统的进程被
-// explorer 按 HKCU Run 键启动时，Windows 会自动给它分配一个控制台窗口——
-// Run 键是纯命令行，创建进程的是 Windows，`spawn_windowless` 的
+// 计划任务（#957；更早的版本是 HKCU Run 键）登录拉起时，Windows 会自动给它
+// 分配一个控制台窗口——创建进程的是 Windows，`spawn_windowless` 的
 // CREATE_NO_WINDOW 只管桌面壳自己那一次 spawn，管不到登录自启这条路径。
 // `not(debug_assertions)` 保住开发体验：`just dev-daemon` 是 debug 构建，
 // 终端照样有输出。与 `apps/desktop/src-tauri/src/main.rs` 同构。
@@ -123,7 +123,7 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    // DESK-58 (#875)：stderr 没人接（Windows 的 Run 键 / 壳一次性 spawn）时改接
+    // DESK-58 (#875)：stderr 没人接（Windows 计划任务登录拉起 / 壳一次性 spawn）时改接
     // 到 `logs\daemon.err`。必须排在搬家**之后**（文件在 data dir 里，开着句柄
     // 目录就搬不动）、日志初始化与库目录检查**之前**（那几处的报错只走 stderr，
     // 向导读的就是它们）。目录与平台默认日志同源：`PPF_DATA_DIR` 优先。
@@ -659,8 +659,8 @@ async fn main() -> anyhow::Result<()> {
     // 磁盘（originals）↔ 索引（asset 表）diff：磁盘上没了的条目 = 外部
     // 删除（Finder/终端手动删），清 asset 行 + thumb 文件 + 审计
     // asset.removed_external（actor=NULL）。启动即跑一轮（重启即收敛），
-    // 之后每小时 re-diff——低频轮询而非目录监听的理由见 reconcile.rs
-    // 模块注释（收敛延迟最多 1 小时 vs FSEvents/inotify 双平台复杂度）。
+    // 之后每小时 re-diff——目录监听（WATCH-01）为主，本循环兜底，监听起不来时
+    // 收敛延迟退回最多 1 小时（见 reconcile.rs 模块注释）。
     // IDX-01: `with_local_node_id` 是「收孤儿」方向的开关——不接就只剩
     // SYNC-01 的删幽灵那一半，索引一丢照片就永远回不来。
     // #851: 补完上次崩溃时停在「索引已改指原图、文件还没换过去」的替换——必须在启动对账之前，

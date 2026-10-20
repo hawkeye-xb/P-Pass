@@ -287,7 +287,7 @@ impl IpcServer {
                     q.push(p);
                 }
                 // IPC-02: 新扫码请求入队——桌面壳即时从「二维码弹窗」切到
-                // 「授权列表」，不再等下一次 3s 轮询。
+                // 「授权列表」，不再等下一次兜底轮询。
                 events::emit(
                     &events2,
                     events::PAIRING_PENDING_CHANGED,

@@ -293,12 +293,7 @@
   // 场合；旧实现只判"不一致"、不判方向，于是在"壳旧/服务新"方向按了永不收敛
   // ——杀 daemon 拉起来的还是同版本，按钮永远不消失（0.7.5 真机现场）。
   const serviceIsStale = $derived(shellRelation === "shell_newer" && !shellIsStale);
-  // DEV-01b: 重装识别/「替换旧的」入口先隐藏（用户拍板 2026-08-12）——
-  // 现阶段统一走「重新扫码 = 全新授权」，不给用户多一个要理解的概念。
-  // 编译期 flag 默认关；打开 = DEV-01 行为原样回来（反证路径）。
-  // 底层不拆：pair.request 的 device_hint 照发照存（数据继续积累），
-  // 未来打开入口即用。关闭时对话框与 DEV-01 之前完全一致。
-  // 人性化时间的「现在」——随 3s 轮询一起刷新，行文案不会停在旧相对时间
+  // 人性化时间的「现在」——随每次 refresh 一起推进，行文案不会停在旧相对时间
   let nowMs = $state(Date.now());
 
   async function call(method, params = {}) {
@@ -945,12 +940,10 @@
   // UPD-01: 启动时检查一次更新（tauri-plugin-updater；manifest 在
   // tauri.conf.json endpoints，release 资产直链——draft/无 release 时
   // 404 = 无更新，静默）。失败静默，绝不打扰用户。
-  // UPD-01 返工：check 阶段任何错误（404=无正式 release、网络不可达）
-  // 一律静默返回——tauri 的 check() 只有 204 才当「无更新」，404 会
-  // reject，原实现把 404 也显示成「更新失败」，无 release 时每次启动
-  // 都弹错。只有用户点了「下载安装」后的下载/安装失败才上文案。
-  // T-081: 设置页「检查更新」手动入口复用同一函数（manual=true 时
-  // 「已是最新」也给一句反馈，不再沉默）。
+  // UPD-01 / #616：check 阶段失败记为 updatePhase = "failed"（不弹窗），
+  // 与「没有新版本」（up-to-date）分开，不把网络问题伪装成已是最新。
+  // T-081: 设置页「检查更新」手动入口复用同一函数。形参 `manual` 目前未被读取：
+  // 自动与手动检查都把结果写进 updatePhase（含 up-to-date / failed），由设置页展示。
   // #852：test 通道与 stable 走同一条插件应用内更新（检查 → 下载 → 验签 → 替换 → 重启），
   // 只有清单地址不同。地址是构建期写进插件配置的：tools/release/tauri-config.mjs 在 test 版本上
   // 把 endpoints 换成 test-channel 里本端的分端清单（macOS = manifest-macos.json，
@@ -1123,8 +1116,8 @@
   // UX-04: 徽章 = 服务态二元（运行中 / 后台服务未运行），不再展示连接
   // 状态（直连/中继是连接路径事实，不属于服务态；现状 ONLINE_DIRECT 是
   // 状态机默认值，当作徽章文案是假话）。T-081: 徽章落位侧栏底部胶囊，
-  // 只说服务状态；连接状态归属每台设备行（daemon 尚未暴露 per-device
-  // 连接事实，行内先留结构：状态点 + 右侧槽位）。
+  // 只说服务状态；连接状态归属每台设备行（daemon 的 devices.list 每行给出
+  // presence / connection / flow_connection / row_state）。
   // #1044 B4：「已配对 N 台」= 设备页列表正常行数（含自己断开的），daemon 给数。
   const pairedCount = $derived(status?.paired_devices ?? 0);
   // T-092: 磁盘水位（status.disk_free_bytes/disk_total_bytes 可能 null——
@@ -1752,7 +1745,7 @@
         </section>
       {:else if page === "photos"}
         <!-- DESK-03: 照片墙——与手机时间线同一数据源（query.timeline +
-             thumb.get），本机直连 daemon 拉取；分组 今天/本月/更早；
+             thumb.get），本机直连 daemon 拉取；分组 今天/昨天/本周/本月/更早；
              点开 = 原图内存查看（不落盘）+「在 Finder 中显示」原文件。 -->
         <section class="page" data-testid="page-photos">
           <!-- DESK-08: 照片页已迁 Tailwind + 组件库（Card + Button）；数据流
@@ -1875,7 +1868,7 @@
       {:else if page === "settings"}
         <section class="page" data-testid="page-settings">
           <!-- DESK-08: 设置页已迁 Tailwind + Card/Button；所有 IPC 调用与
-               条件渲染（daemonStale 重启行/磁盘水位行）一字未动。 -->
+               条件渲染（serviceIsStale 重启行/磁盘水位行）一字未动。 -->
           <div>
             <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.settings")}</h2>
           </div>

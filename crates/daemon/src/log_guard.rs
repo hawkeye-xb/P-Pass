@@ -181,9 +181,9 @@ fn rotate_file(path: &Path) -> io::Result<()> {
 /// 操作 fd 2。现在 fd 级别的细节在
 /// `crates/platform/src/unix.rs`，这里只调用。
 ///
-/// Windows 上适配器回 `Unsupported`——**已知缺口，没装作修好了**：计数器
-/// 照样清零（所以不会每行都重复触发），但底层文件不会真的变小。上面那道
-/// 「折叠重复行」才是所有平台共同的主防线。
+/// Windows 由适配器实现（DEVLOG-04）。stderr 不是磁盘文件时什么都不做，
+/// 计数器照样清零（所以不会每行都重复触发）。上面那道「折叠重复行」才是
+/// 所有平台共同的主防线。
 fn truncate_stderr() {
     use platform::PlatformAdapter as _;
     let _ = platform::adapter().truncate_own_stderr();

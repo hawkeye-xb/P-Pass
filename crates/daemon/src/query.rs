@@ -514,11 +514,12 @@ impl QueryEngine {
     /// DESK-03: `asset.original` — 原图字节（大图查看用，不落盘）。
     ///
     /// 同机桌面壳直接读原文件字节，内存展示后即弃——「不长期落盘」由
-    /// 不写任何临时文件天然满足。受 ctrl 帧上限约束：> 12 MiB 的原图
-    /// 返回 NotFound（base64 后超 16 MiB 帧），桌面端降级到 1024 缩略图。
+    /// 不写任何临时文件天然满足。只走桌面本机 IPC（不经 QUIC ctrl）；
+    /// > 12 MiB 的原图返回 NotFound（单条 IPC 回包的体量护栏，base64 后约
+    /// 16 MiB），桌面端降级到 1024 缩略图。
     /// 只服务 photo（video 原片体量必然超限，桌面大图只看照片）。
     pub async fn original(&self, hash_hex: &str) -> Result<Vec<u8>, QueryError> {
-        const ORIGINAL_CAP: i64 = 12 * 1024 * 1024; // base64(12MiB) ≈ 16MiB 帧上限
+        const ORIGINAL_CAP: i64 = 12 * 1024 * 1024; // base64(12MiB) ≈ 16MiB 单条回包
         let started = std::time::Instant::now();
         let hash = parse_hash(hash_hex).ok_or(QueryError::NotFound)?;
         let asset = self

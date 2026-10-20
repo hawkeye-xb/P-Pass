@@ -3,7 +3,7 @@
 //! catch-all `audit_event` table (card decision #9) — no migration, no
 //! historical v1/v2 event rows carried forward or faked as canonical facts.
 //!
-//! Routing summary (see `crates/daemon/src/router.rs::route_flow_audit_event`
+//! Routing summary (see `crates/daemon/src/audit_route.rs::route`
 //! for the authoritative dispatch):
 //! - Flow round terminal summaries (`flow.round.finished`) → `audit_operation`,
 //!   keyed by the phone's persistent `round_id` as `operation_id` (never a
@@ -172,8 +172,9 @@ pub struct TombstoneRecord {
 #[derive(Debug, Clone, Default)]
 pub struct DecisionEntry {
     pub decision_id: String,
-    /// cancel | restore | give_up_recovery | scope_changed |
-    /// revoke_authorization | pause | continue | retry
+    /// `flow.round.controlled` 的 action（cancel | restore | give_up_recovery |
+    /// pause | continue | retry；缺省 controlled）| scope_changed |
+    /// epoch_invalidated | revoke_authorization（见 daemon `audit_route::route_decision`）
     pub decision_kind: String,
     pub actor: Option<Vec<u8>>,
     pub causal_operation_id: Option<String>,

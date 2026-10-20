@@ -23,7 +23,8 @@ tokio = { version = "1", features = ["signal", "rt"] }
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-# HKCU Run key (user-level autostart, §4).
+# HKCU Run key: the shell's login item (DESK-72) and cleanup of the legacy
+# daemon Run value (daemon autostart is a scheduled task since #957).
 winreg = "0.55"
 # SetThreadExecutionState.
 windows-sys = { version = "0.61", features = [

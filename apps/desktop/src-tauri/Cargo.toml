@@ -10,8 +10,8 @@
 # consume it below. #1044 B13 added the second path dependency,
 # crates/version-cmp: a zero-dependency pure function shared with the
 # daemon so the version relation has exactly one implementation.
-# "ZERO business logic" still holds:
-# platform is a system adapter, not business logic. A path dependency
+# Neither carries business logic (platform is a system adapter,
+# version-cmp a pure comparison). A path dependency
 # does not require same-workspace membership, so the standalone
 # decision stands on the Tauri-tree argument alone.
 #

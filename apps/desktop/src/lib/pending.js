@@ -93,8 +93,8 @@ export function pendingAllowKey(item) {
  * DEV-06: 配对结果提示（`ui.pair_allowed` / `ui.pair_denied`）该怎么称呼
  * 这台设备。
  *
- * `pairing.confirm` 回的 `device` 是队列里的**自报名**（ipc.rs:1155
- * `let name = p.device_name.clone()`），业主在桌面改过的名字它不知道。
+ * `pairing.confirm` 回的 `device` 是队列里的**自报名**（daemon
+ * `IpcServer::confirm` 取的是请求里的 device_name），业主在桌面改过的名字它不知道。
  * pending 行的 `name` 则已经由 daemon 按上面那条口径解析过：known 时是
  * 设备表里的名字，否则才是自报名——审批弹窗标题正因为用它才是对的。
  *

@@ -287,7 +287,7 @@ mod tests {
             kernel_convergence_verdict(&f),
             KernelVerdict::Converge(_)
         ));
-        // 没有常驻登记（Windows Run key / 未登记）：没有"归谁管"可言 ⇒ 不动。
+        // 没有常驻登记（UserAutostart 兜底实现 / 未登记）：没有"归谁管"可言 ⇒ 不动。
         f.resident_registered = false;
         assert_eq!(kernel_convergence_verdict(&f), KernelVerdict::InSync);
     }

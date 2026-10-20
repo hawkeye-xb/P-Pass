@@ -123,7 +123,7 @@ async fn clock_jump_expires_inflight_pairing_tokens() {
         "daemon must stay healthy after clock jump: {hello2:?}"
     );
 
-    // 钟恢复正常 → 过期在请求时评估（pairing.rs:140）：同一令牌当时只是
+    // 钟恢复正常 → 过期在请求时评估（pairing.rs `Pairing::submit_request`）：同一令牌当时只是
     // 被拒、未被消耗，现在重新有效——走通全链（自动确认 → 设备落表 → 审计）。
     //
     // ⚠️ 这是已知、故意的权衡（T-070b 注记）：令牌"过期在请求时评估"意味着

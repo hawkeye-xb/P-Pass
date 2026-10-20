@@ -474,7 +474,7 @@ fn daemon_captured_stderr(data_dir: &std::path::Path) -> Option<std::path::PathB
 }
 
 /// DESK-58 (#875)：Windows 上 stderr 没人接（壳的一次性 spawn 给的是 `NUL`，
-/// Run 键登录拉起时干脆没有句柄）⇒ daemon 自己把它接到 `logs\daemon.err`，
+/// 计划任务登录拉起时干脆没有句柄）⇒ daemon 自己把它接到 `logs\daemon.err`，
 /// 文件日志初始化之前的报错原话落在那里，向导和诊断包读的就是它。
 ///
 /// 触发器选 `PPF_LOG_FILE` 指向一个目录：打不开 ⇒ `eprintln!` + exit(2)，
