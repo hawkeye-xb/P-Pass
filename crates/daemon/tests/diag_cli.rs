@@ -13,6 +13,7 @@
 
 #![allow(clippy::disallowed_methods)]
 
+use platform::PlatformAdapter as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::time::{Duration, Instant};
@@ -100,17 +101,28 @@ fn offline_export_bundles_own_logs_and_starts_nothing() {
     let entries = read_zip(&out);
     let get = |n: &str| entries.iter().find(|(k, _)| k == n).map(|(_, v)| v.clone());
     let names: Vec<_> = entries.iter().map(|(k, _)| k.as_str()).collect();
+    // daemon 日志文件是否存在由平台端口决定：桌面平台落 `<平台目录>/logs/daemon.log`；
+    // 无桌面托管的 Linux 只写 stderr（交给 systemd / Docker），包里如实写缺失说明。
+    let daemon_logs_to_file = platform::adapter()
+        .daemon_log_paths(&platform_dir)
+        .log_file
+        .is_some();
     for want in [
         "README.txt",
         "versions.txt",
         "config-summary.txt",
         "log-sources.txt",
-        "daemon.log",
-        "daemon.log.1",
         "desktop.log",
         "daemon-unreachable.txt",
     ] {
         assert!(names.contains(&want), "缺 {want}：{names:?}");
+    }
+    if daemon_logs_to_file {
+        assert!(get("daemon.log").unwrap().contains("current run"));
+        assert!(get("daemon.log.1").unwrap().contains("previous run"));
+    } else {
+        assert!(names.contains(&"daemon-log-missing.txt"), "{names:?}");
+        assert!(!names.contains(&"daemon.log"), "{names:?}");
     }
     for gone in [
         "diag_events.json",
@@ -130,8 +142,6 @@ fn offline_export_bundles_own_logs_and_starts_nothing() {
         versions.contains("daemon_version = P-Pass daemon "),
         "{versions}"
     );
-    assert!(get("daemon.log").unwrap().contains("current run"));
-    assert!(get("daemon.log.1").unwrap().contains("previous run"));
     assert!(get("desktop.log").unwrap().contains("to=running"));
     let all: String = entries.iter().map(|(_, v)| v.as_str()).collect();
     assert!(!all.contains(&home_s), "家目录不得出包");
