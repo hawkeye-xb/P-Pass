@@ -42,7 +42,12 @@ impl MacosAdapter {
 /// plist 无限复活，永久空转 churn（验收人实锤：升级接管场景必现）。
 /// `SuccessfulExit=false` 的语义 = 成功退出不重拉；崩溃/被杀（非零退出
 /// 或信号）照样复活——pkill 复活验收不回归。
-pub(crate) fn agent_plist(exec: &Path) -> String {
+pub(crate) fn agent_plist(exec: &Path, logs: &crate::DaemonLogPaths) -> String {
+    let path = |p: &Option<PathBuf>| {
+        p.as_deref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default()
+    };
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -62,20 +67,36 @@ pub(crate) fn agent_plist(exec: &Path) -> String {
 </plist>
 "#,
         exec.display(),
-        agent_stdout_path().display(),
-        agent_stderr_path().display(),
+        path(&logs.stdout),
+        path(&logs.stderr),
     )
 }
 
-/// daemon LaunchAgent 的 `StandardOutPath`。#1043：plist 生成与
-/// [`MacosAdapter::daemon_log_paths`] 共用这一份，壳不再解析 plist 反推。
-fn agent_stdout_path() -> PathBuf {
-    home().join("Library/Logs/p-pass-daemon.log")
+/// daemon 日志的全部落点（[`MacosAdapter::daemon_log_paths`] 与 LaunchAgent plist
+/// 共用这一份）。#1046：launchd 接的 stdout/stderr 也落在 daemon 自己的
+/// `<data_dir>/logs/` 里（`daemon.out` / `daemon.err`，与 Windows 的 `daemon.err`
+/// 同名），由 daemon 管容量（`log_guard`），诊断包只读这个目录就收得全。
+/// `daemon.log` 是 daemon 自己 append 的运行日志，launchd 不能也写它。
+pub(crate) fn daemon_log_paths_in(data_dir: &Path) -> crate::DaemonLogPaths {
+    let logs = data_dir.join("logs");
+    crate::DaemonLogPaths {
+        log_file: Some(logs.join("daemon.log")),
+        stdout: Some(logs.join("daemon.out")),
+        stderr: Some(logs.join("daemon.err")),
+        stdio_by_service_manager: true,
+    }
 }
 
-/// daemon LaunchAgent 的 `StandardErrorPath`（同上）。
-fn agent_stderr_path() -> PathBuf {
-    home().join("Library/Logs/p-pass-daemon.err")
+/// launchd 拉起的 daemon 用的是平台默认数据目录（plist 不带 `PPF_DATA_DIR`），
+/// 所以登记里的日志落点按它算。
+fn agent_log_paths() -> crate::DaemonLogPaths {
+    daemon_log_paths_in(&MacosAdapter.data_dir())
+}
+
+/// #1046：已登记的 plist 是不是本版本 [`agent_plist`] 会写出的那一份（逐字比较）。
+/// 老版本的 plist（日志落点在 `~/Library/Logs`）判为不是 ⇒ 对账重写。
+pub(crate) fn plist_is_current(text: &str, exec: &Path, logs: &crate::DaemonLogPaths) -> bool {
+    text == agent_plist(exec, logs)
 }
 
 /// 【DESK-42 #604】从（我们自己生成的）plist 文本里取出 `ProgramArguments`
@@ -377,15 +398,10 @@ impl PlatformAdapter for MacosAdapter {
         cf_locale::first_preferred_language()
     }
 
-    /// launchd 接 stdio（与 [`agent_plist`] 同一份路径）；运行日志用默认的
-    /// `<data_dir>/logs/daemon.log`。
+    /// launchd 接 stdio（与 [`agent_plist`] 同一份路径，#1046 起在
+    /// `<data_dir>/logs/` 里）；运行日志是 `<data_dir>/logs/daemon.log`。
     fn daemon_log_paths(&self, data_dir: &Path) -> crate::DaemonLogPaths {
-        crate::DaemonLogPaths {
-            log_file: Some(data_dir.join("logs").join("daemon.log")),
-            stdout: Some(agent_stdout_path()),
-            stderr: Some(agent_stderr_path()),
-            stdio_by_service_manager: true,
-        }
+        daemon_log_paths_in(data_dir)
     }
 
     fn default_log_tees_stderr(&self) -> bool {
@@ -505,10 +521,18 @@ impl HostingAdapter for MacosAdapter {
                 detail: exec_str,
             });
         }
-        let plist = agent_plist(exec);
+        let logs = agent_log_paths();
+        let plist = agent_plist(exec, &logs);
         let path = Self::agent_plist_path();
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(io_err("create LaunchAgents dir"))?;
+        }
+        // #1046：launchd 只打开 StandardOutPath/StandardErrorPath，不建父目录——
+        // 日志目录不在（首启、数据目录刚搬过）时先建好，否则 stdio 接不上。
+        for p in [&logs.stdout, &logs.stderr].into_iter().flatten() {
+            if let Some(dir) = p.parent() {
+                std::fs::create_dir_all(dir).map_err(io_err("create daemon logs dir"))?;
+            }
         }
         write_atomic(&path, &plist).map_err(io_err("write LaunchAgent plist"))?;
         // Load now (idempotent-ish: bootout first, ignore its failure).
@@ -541,6 +565,13 @@ impl HostingAdapter for MacosAdapter {
     /// 【#726】文件不存在 = 没登记；读得到但解析不出路径 = 损坏，由对账重写。
     fn autostart_registration(&self) -> Result<AutostartRegistration> {
         registration_from_read(std::fs::read_to_string(Self::agent_plist_path()))
+    }
+
+    /// #1046：plist 全文与本版本会写出的一致（日志落点等），才算「登记是新的」。
+    fn autostart_registration_current(&self, expected: &Path) -> Result<bool> {
+        let text = std::fs::read_to_string(Self::agent_plist_path())
+            .map_err(io_err("read LaunchAgent plist"))?;
+        Ok(plist_is_current(&text, expected, &agent_log_paths()))
     }
 
     fn uninstall_autostart(&self) -> Result<()> {
@@ -792,17 +823,27 @@ mod diag_log_tests {
 
     // DIAG-B1：macOS daemon 日志落在固定位置、跟着 data dir 走（PPF_DATA_DIR 隔离不漏），且 tee stderr。
     // 反证：log_file 退回 None（DIAG-B1 之前）→ 一次性 spawn 的 daemon 没有任何日志，红。
+    // #1046：launchd 接的 stdout/stderr 也在 `<data_dir>/logs/` 里，plist 与
+    // daemon_log_paths 同源（逐字一致）；不许与 daemon 自己 append 的 daemon.log 同名。
+    // 反证：plist 退回 `~/Library/Logs/p-pass-daemon.*` → 前两条红。
     #[test]
     fn daemon_log_lives_under_the_effective_data_dir_and_tees_stderr() {
         let adapter = MacosAdapter;
         let dir = Path::new("/var/ppf-isolated");
         let paths = adapter.daemon_log_paths(dir);
-        assert_eq!(paths.log_file, Some(dir.join("logs").join("daemon.log")));
-        // #1043：launchd 接的那对与生成的 plist 逐字一致——壳读这里，不再解析 plist。
-        let plist = agent_plist(Path::new(
-            "/Applications/P-Pass.app/Contents/MacOS/ppf-daemon",
-        ));
-        let (out, err) = (paths.stdout.unwrap(), paths.stderr.unwrap());
+        let logs = dir.join("logs");
+        assert_eq!(paths.log_file, Some(logs.join("daemon.log")));
+        assert_eq!(paths.stdout, Some(logs.join("daemon.out")));
+        assert_eq!(paths.stderr, Some(logs.join("daemon.err")));
+        assert_ne!(
+            paths.stdout, paths.log_file,
+            "launchd 不能和 daemon 写同一个文件"
+        );
+        let plist = agent_plist(
+            Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon"),
+            &paths,
+        );
+        let (out, err) = (paths.stdout.clone().unwrap(), paths.stderr.clone().unwrap());
         assert!(plist.contains(&format!(
             "<key>StandardOutPath</key><string>{}</string>",
             out.display()
@@ -813,6 +854,29 @@ mod diag_log_tests {
         )));
         assert!(paths.stdio_by_service_manager);
         assert!(adapter.default_log_tees_stderr());
+    }
+
+    /// #1046：老版本登记（exe 相同、日志落点在 `~/Library/Logs`）判为「不是本版本
+    /// 的登记」⇒ 对账会重写成新路径；本版本自己写出的那份判为是（幂等）。
+    #[test]
+    fn a_plist_with_the_old_log_paths_is_not_current() {
+        let exe = Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon");
+        let logs = daemon_log_paths_in(Path::new("/Users/x/Library/Application Support/P-Pass"));
+        let current = agent_plist(exe, &logs);
+        assert!(plist_is_current(&current, exe, &logs));
+        let old = current
+            .replace(
+                &logs.stdout.clone().unwrap().display().to_string(),
+                "/Users/x/Library/Logs/p-pass-daemon.log",
+            )
+            .replace(
+                &logs.stderr.clone().unwrap().display().to_string(),
+                "/Users/x/Library/Logs/p-pass-daemon.err",
+            );
+        assert_ne!(old, current);
+        assert!(!plist_is_current(&old, exe, &logs));
+        // exe 仍读得回同一个（所以 #604 的路径比较会判 Unchanged，必须靠内容比较发现）。
+        assert_eq!(plist_program_argument(&old).as_deref(), exe.to_str());
     }
 }
 

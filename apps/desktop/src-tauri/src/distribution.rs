@@ -79,6 +79,14 @@ pub(crate) fn reconcile_autostart_registration() {
                 sidecar.display()
             );
         }
+        Ok(platform::AutostartReconcile::Refreshed) => {
+            // #1046（S-11）：指向没变、内容是老版本的（如 launchd 日志落点）——
+            // 更新后由新壳按本版本重新登记，原先由 daemon 接管时重装。
+            eprintln!(
+                "#1046: 开机自启登记内容不是本版本的——已按本版本重写为 {}",
+                sidecar.display()
+            );
+        }
         Ok(platform::AutostartReconcile::Repaired) => {
             eprintln!(
                 "#726: 开机自启登记文件读不出（已损坏）——已重写为 {}",

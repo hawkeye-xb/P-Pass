@@ -10,8 +10,8 @@
 //! - **只打包 daemon 自己拥有的东西**：`<平台数据目录>/logs/` 下 daemon 写的
 //!   日志（含轮转份）与启动早期 stderr 落点、在线时 IPC `logs.export` 给的
 //!   diag / devices / audit 三份。**不读 launchd plist、不收
-//!   `~/Library/Logs/p-pass-daemon.{log,err}`**——那两份改由 #1046 让 launchd
-//!   直接写进 daemon 自己的 logs 目录；
+//!   `~/Library/Logs/p-pass-daemon.{log,err}`**——#1046 起 launchd 直接写进
+//!   daemon 自己的 logs 目录（`daemon.out` / `daemon.err`），随 logs 目录收进包；
 //! - 壳自己的 `desktop.log` 在同一个 logs 目录下，按固定路径收进包；
 //! - **脱敏一条都不放宽**：只用 [`crate::redact`] 的现行规则（不为了好读把
 //!   `desktop.log` 加进安全文件名）。
@@ -194,9 +194,12 @@ pub struct BundleInputs {
     pub daemon_log: LogPart,
     /// `<logs>/daemon.log.1`（轮转出来的上一代；不存在不算缺失）。
     pub daemon_log_rotated: Option<LogPart>,
-    /// 启动早期 stderr 的固定落点（DESK-58；Windows `<logs>/daemon.err`，
-    /// 其它平台 None）。
+    /// daemon 的 stderr（启动早期报错、panic）：`<logs>/daemon.err`。Windows 由
+    /// daemon 自己接（DESK-58），macOS 由 launchd 接（#1046 起也落在 logs 目录）。
     pub startup_stderr: Option<LogPart>,
+    /// 服务管理器接的 stdout（macOS launchd：`<logs>/daemon.out`，#1046）；
+    /// 本平台没有时 None。
+    pub service_stdout: Option<LogPart>,
     /// `<logs>/desktop.log`（桌面壳自己的状态 / 连接日志，DESK-63）。
     pub desktop_log: LogPart,
     /// 常驻服务在线时它给的那几份（diag_events.json / devices.json / audit.json）。
@@ -209,7 +212,8 @@ P-Pass 诊断包（导出时间见各文件内容）
 先看哪个：
   0. daemon.log         ← 后台服务自己写的完整运行日志（固定位置，每次运行都有）；
                           daemon.log.1 是轮转出来的上一段
-  1. daemon-stderr.log  ← 后台服务启动早期的报错（只有 Windows 有固定落点）
+  1. daemon-stderr.log  ← 后台服务的 stderr：启动早期的报错、崩溃信息
+                          （daemon-stdout.log 是同一来源的 stdout，macOS 才有）
   2. versions.txt       ← App 与后台服务的版本号（版本装反是常见原因）
   3. config-summary.txt ← 照片库目录 / 监听地址
   4. log-sources.txt    ← 每份日志从哪来、收没收进来
@@ -295,6 +299,13 @@ pub fn build_bundle(i: &BundleInputs) -> Vec<(String, Vec<u8>)> {
         )),
         None => src.push_str("启动早期 stderr = (本平台没有固定落点)\n"),
     }
+    if let Some(o) = &i.service_stdout {
+        src.push_str(&format!(
+            "stdout = {} —— {}\n",
+            scrub_path(o.path.as_deref(), "(本平台没有)"),
+            status(o),
+        ));
+    }
     src.push_str(&format!(
         "desktop.log（桌面壳）= {} —— {}\n",
         scrub_path(i.desktop_log.path.as_deref(), "(没有记录)"),
@@ -330,6 +341,9 @@ pub fn build_bundle(i: &BundleInputs) -> Vec<(String, Vec<u8>)> {
     }
     if let Some(t) = i.startup_stderr.as_ref().and_then(|e| e.tail.as_ref()) {
         entries.push(("daemon-stderr.log".into(), scrub(t).into_bytes()));
+    }
+    if let Some(t) = i.service_stdout.as_ref().and_then(|o| o.tail.as_ref()) {
+        entries.push(("daemon-stdout.log".into(), scrub(t).into_bytes()));
     }
     if let Some(reason) = &i.daemon_unreachable {
         let text = format!(
@@ -618,12 +632,10 @@ pub fn gather(env: &ExportEnv, daemon: DaemonCollection) -> BundleInputs {
         .map(|p| rotated(&p))
         .filter(|p| p.exists())
         .map(|p| log_part(Some(p), DAEMON_LOG_TAIL));
-    // 只收 daemon 自己接的 stderr（Windows `<logs>/daemon.err`）；服务管理器接
-    // 的那份（macOS launchd）不在 daemon 自己的日志目录里，不收（同改前）。
-    let startup_stderr = (!paths.stdio_by_service_manager)
-        .then_some(paths.stderr)
-        .flatten()
-        .map(|p| log_part(Some(p), SMALL_LOG_TAIL));
+    // #1046：stderr / stdout 不论谁接（Windows daemon 自己、macOS launchd），都在
+    // daemon 自己的 `<logs>/` 里——只读这个目录，不读 plist 反推。
+    let startup_stderr = paths.stderr.map(|p| log_part(Some(p), SMALL_LOG_TAIL));
+    let service_stdout = paths.stdout.map(|p| log_part(Some(p), SMALL_LOG_TAIL));
     let desktop_path = env.platform_dir.join("logs").join("desktop.log");
     let desktop_tail = tail(&desktop_path, SMALL_LOG_TAIL);
     let desktop_log = LogPart {
@@ -644,6 +656,7 @@ pub fn gather(env: &ExportEnv, daemon: DaemonCollection) -> BundleInputs {
         daemon_log,
         daemon_log_rotated,
         startup_stderr,
+        service_stdout,
         desktop_log,
         ..Default::default()
     };
@@ -904,6 +917,7 @@ mod tests {
             daemon_log: part(format!("{blob}ingest {library}/originals/x.jpg ok\n")),
             daemon_log_rotated: Some(part(blob.clone())),
             startup_stderr: Some(part(blob.clone())),
+            service_stdout: Some(part(blob.clone())),
             desktop_log: part(blob.clone()),
             daemon_entries: vec![
                 ("devices.json".into(), devices.as_bytes().to_vec()),
@@ -1241,5 +1255,55 @@ mod tests {
         );
         assert!(i.config_toml.unwrap().contains("41145"));
         assert!(!i.platform.is_empty());
+    }
+
+    /// #1046：服务管理器接的 stdout/stderr（macOS launchd）也在 `<logs>/` 里，
+    /// 诊断包照收；Windows 是 daemon 自己接的 stderr。所有落点都在本平台目录的
+    /// logs 下——不读 plist、不读 `~/Library/Logs`。
+    /// 反证：gather 退回「服务管理器接的不收」→ macOS 上 stderr 那条红。
+    #[test]
+    fn gather_collects_the_service_stdio_from_the_logs_dir() {
+        use platform::PlatformAdapter as _;
+        let tmp = tempfile::tempdir().unwrap();
+        let platform_dir = tmp.path().join("platform");
+        let logs = platform_dir.join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        let paths = platform::adapter().daemon_log_paths(&platform_dir);
+        for p in [&paths.log_file, &paths.stdout, &paths.stderr]
+            .into_iter()
+            .flatten()
+        {
+            assert!(
+                p.starts_with(&logs),
+                "日志落点必须在 logs 目录里：{}",
+                p.display()
+            );
+        }
+        if let Some(p) = &paths.stderr {
+            std::fs::write(p, "panicked at boot\n").unwrap();
+        }
+        if let Some(p) = &paths.stdout {
+            std::fs::write(p, "stdout line\n").unwrap();
+        }
+        let env = ExportEnv {
+            platform_dir: platform_dir.clone(),
+            home: tmp.path().to_path_buf(),
+            app_version: None,
+            out: tmp.path().join("out.zip"),
+        };
+        let i = gather(&env, DaemonCollection::Unreachable("no".into()));
+        if paths.stderr.is_some() {
+            let e = i.startup_stderr.as_ref().expect("stderr 要收");
+            assert_eq!(e.tail.as_deref(), Some("panicked at boot\n"));
+        }
+        if paths.stdout.is_some() {
+            let o = i.service_stdout.as_ref().expect("stdout 要收");
+            assert_eq!(o.tail.as_deref(), Some("stdout line\n"));
+            let entries = build_bundle(&i);
+            assert_eq!(
+                entry(&entries, "daemon-stdout.log").as_deref(),
+                Some("stdout line\n")
+            );
+        }
     }
 }

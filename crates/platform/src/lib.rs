@@ -275,6 +275,12 @@ pub enum AutostartReconcile {
     ///
     /// 与 `Rewritten` 分开：日志要能说清是「修好了一个坏文件」还是「改了一个旧路径」。
     Repaired,
+    /// #1046：登记指向期望路径，但条目的其余内容不是本版本会写出的样子（例如
+    /// macOS 老版本 plist 的日志落点还在 `~/Library/Logs`）：已按本版本重写。
+    ///
+    /// 这是「自启重新登记」的职责（S-11，原先由 daemon 接管时重装）：更新后由新壳
+    /// 启动对账收敛到本版本的登记内容。只在内容真的不同时才写，一致后幂等。
+    Refreshed,
     /// **闸门拦下**：当前可执行文件不在「稳定安装位置」（dmg 挂载点 / 下载目录 /
     /// App Translocation 随机路径 / 备份副本 …），一律不碰登记。
     ///
@@ -645,6 +651,16 @@ pub trait HostingAdapter: Send + Sync {
         Ok(AutostartRegistration::Absent)
     }
 
+    /// #1046：登记已指向 `expected` 时，条目的**其余内容**是不是本版本
+    /// [`Self::install_autostart`] 会写出的样子（macOS：plist 全文，含日志落点）。
+    /// `false` ⇒ 对账按本版本重写（[`AutostartReconcile::Refreshed`]）。
+    ///
+    /// 默认 `true`：本平台的登记只有「指向哪个可执行文件」这一项信息。
+    fn autostart_registration_current(&self, expected: &std::path::Path) -> Result<bool> {
+        let _ = expected;
+        Ok(true)
+    }
+
     /// 【DESK-42 #604】对账**闸门**：本平台是否允许用 `expected` 改写开机自启登记。
     ///
     /// 默认 `false` = **保守拒绝**：平台必须显式声明哪些位置算「稳定安装位置」，
@@ -696,10 +712,18 @@ pub trait HostingAdapter: Send + Sync {
             return Ok(AutostartReconcile::SkippedUnstableLocation);
         }
         let registered = self.autostart_registration()?;
-        let action = reconcile_decision(&registered, expected);
+        let mut action = reconcile_decision(&registered, expected);
+        // #1046：指向对了还不够——内容也要是本版本写出的样子（日志落点等）。
+        if action == AutostartReconcile::Unchanged
+            && !self.autostart_registration_current(expected)?
+        {
+            action = AutostartReconcile::Refreshed;
+        }
         if matches!(
             action,
-            AutostartReconcile::Rewritten | AutostartReconcile::Repaired
+            AutostartReconcile::Rewritten
+                | AutostartReconcile::Repaired
+                | AutostartReconcile::Refreshed
         ) {
             self.install_autostart(expected)?;
         }
@@ -1174,9 +1198,10 @@ mod tests {
         // DAE-02 缺陷①：退位实例 exit(0) 后 launchd 不得重拉（无条件
         // KeepAlive 会把它无限复活成 churn）。plist 必须是
         // SuccessfulExit=false 语义——成功退出不重拉、崩溃/被杀才复活。
-        let plist = macos::agent_plist(std::path::Path::new(
-            "/Applications/P-Pass.app/Contents/MacOS/ppf-daemon",
-        ));
+        let plist = macos::agent_plist(
+            std::path::Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon"),
+            &macos::daemon_log_paths_in(std::path::Path::new("/var/ppf")),
+        );
         assert!(
             plist.contains("<key>SuccessfulExit</key><false/>"),
             "clean exit (stand-down) must not relaunch: {plist}"
@@ -1225,12 +1250,96 @@ mod tests {
         );
     }
 
+    /// #1046：对账用的假托管端口——登记指向哪、内容是不是本版本的样子都可注入，
+    /// 记下 `install_autostart` 被调了几次。
+    struct FakeHosting {
+        registration: AutostartRegistration,
+        current: bool,
+        installs: std::sync::Mutex<Vec<std::path::PathBuf>>,
+    }
+
+    impl HostingAdapter for FakeHosting {
+        fn install_autostart(&self, exec: &std::path::Path) -> Result<()> {
+            self.installs.lock().unwrap().push(exec.to_path_buf());
+            Ok(())
+        }
+        fn autostart_installed(&self) -> Result<bool> {
+            Ok(!matches!(self.registration, AutostartRegistration::Absent))
+        }
+        fn uninstall_autostart(&self) -> Result<()> {
+            Ok(())
+        }
+        fn autostart_registration(&self) -> Result<AutostartRegistration> {
+            Ok(self.registration.clone())
+        }
+        fn autostart_registration_current(&self, _expected: &std::path::Path) -> Result<bool> {
+            Ok(self.current)
+        }
+        fn autostart_reconcile_allowed(&self, _expected: &std::path::Path) -> bool {
+            true
+        }
+        fn service_mode(&self) -> ServiceMode {
+            ServiceMode::UserAutostart
+        }
+        fn stop_daemon(
+            &self,
+            _exe: &std::path::Path,
+            _pid_hint: Option<u32>,
+        ) -> Result<KillOutcome> {
+            Ok(KillOutcome::NotRunning)
+        }
+    }
+
+    /// #1046（S-11）：老版本登记的 exe 没变、但内容（macOS plist 的日志落点）是旧的
+    /// ⇒ 对账必须按本版本重写一次；重写后内容一致 ⇒ 不再动（幂等，不反复 bootout）。
+    /// 反证：去掉 `reconcile_autostart` 里的内容比对 → 第一条断言得到 Unchanged，红。
+    #[test]
+    fn reconcile_refreshes_a_registration_whose_content_is_stale() {
+        let exe = std::path::Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon");
+        let stale = FakeHosting {
+            registration: AutostartRegistration::At(exe.into()),
+            current: false,
+            installs: Default::default(),
+        };
+        assert_eq!(
+            stale.reconcile_autostart(exe).unwrap(),
+            AutostartReconcile::Refreshed
+        );
+        assert_eq!(*stale.installs.lock().unwrap(), vec![exe.to_path_buf()]);
+
+        let fresh = FakeHosting {
+            registration: AutostartRegistration::At(exe.into()),
+            current: true,
+            installs: Default::default(),
+        };
+        assert_eq!(
+            fresh.reconcile_autostart(exe).unwrap(),
+            AutostartReconcile::Unchanged
+        );
+        assert!(fresh.installs.lock().unwrap().is_empty(), "一致时不许重写");
+
+        // 未登记仍然不动（DAE-03 ②），内容比对不改变这一条。
+        let absent = FakeHosting {
+            registration: AutostartRegistration::Absent,
+            current: false,
+            installs: Default::default(),
+        };
+        assert_eq!(
+            absent.reconcile_autostart(exe).unwrap(),
+            AutostartReconcile::NotRegistered
+        );
+        assert!(absent.installs.lock().unwrap().is_empty());
+    }
+
     /// 【DESK-42 #604】读得出登记路径，是对账的前提；读不出来就永远发现不了漂移。
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_plist_round_trips_its_program_argument() {
         let exec = std::path::Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon");
-        let text = macos::agent_plist(exec);
+        let text = macos::agent_plist(
+            exec,
+            &macos::daemon_log_paths_in(std::path::Path::new("/var/ppf")),
+        );
         assert_eq!(
             macos::plist_program_argument(&text).as_deref(),
             Some("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon"),
@@ -1253,7 +1362,10 @@ mod tests {
         use macos::registration_from_read as classify;
         use AutostartRegistration::{Absent, At, Unreadable};
         let exec = std::path::Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon");
-        let good = macos::agent_plist(exec);
+        let good = macos::agent_plist(
+            exec,
+            &macos::daemon_log_paths_in(std::path::Path::new("/var/ppf")),
+        );
 
         assert_eq!(classify(Ok(good.clone())).unwrap(), At(exec.into()));
         let not_found = std::io::Error::from(std::io::ErrorKind::NotFound);

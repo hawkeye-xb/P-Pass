@@ -177,12 +177,22 @@ async fn main() -> anyhow::Result<()> {
             // DIAG-B1：macOS 文件 + stderr 双写——stderr 在 launchd 托管时是
             // `.err`，桌面向导读它的最后一行报启动失败（DESK-09）；被一次性
             // spawn 时 stderr 是 /dev/null，文件是唯一留痕。
-            let open = if platform::adapter().default_log_tees_stderr() {
-                daemon::log_guard::DedupGuard::for_file_and_stderr
-            } else {
-                daemon::log_guard::DedupGuard::for_file
+            // #1046：launchd 接的 `.err` 在 `<logs>/` 里，容量由 daemon 管——stderr
+            // 那份的计数从现有文件大小起算（跨运行封顶，同 daemon.log）。
+            let paths = platform::adapter().daemon_log_paths(&base);
+            let tees = platform::adapter().default_log_tees_stderr();
+            let service_stderr = paths
+                .stdio_by_service_manager
+                .then_some(paths.stderr.as_deref())
+                .flatten();
+            let open = |path: &std::path::Path| {
+                if tees {
+                    daemon::log_guard::DedupGuard::for_file_and_stderr(path, service_stderr)
+                } else {
+                    daemon::log_guard::DedupGuard::for_file(path)
+                }
             };
-            match platform::adapter().daemon_log_paths(&base).log_file {
+            match paths.log_file.clone() {
                 Some(path) => match open(&path) {
                     Ok(guard) => guard,
                     Err(e) => {
@@ -482,7 +492,7 @@ async fn main() -> anyhow::Result<()> {
     // DEVLOG-03 / SEC-11 (#496)：配对链接**绝不进任何持久文件**。它带着
     // 10 分钟内有效的配对令牌（红线 4：凭据不落任何持久文件）。
     // DEVLOG-03 当初的做法是「只进 stdout」，但 stdout 不等于屏幕：macOS
-    // launchd 的 StandardOutPath 就是 ~/Library/Logs/p-pass-daemon.log，
+    // launchd 的 StandardOutPath 就是 <数据目录>/logs/daemon.out（#1046 前是 ~/Library/Logs），
     // systemd/nohup/脚本重定向同理。所以只在 stdout 是终端时才打印链接，
     // 否则打一句不含链接的提示（见 cli::pair_link_stdout_line）。
     // 机读契约随之改为 IPC `pairing.start`：tools/ipc-lib.sh 的

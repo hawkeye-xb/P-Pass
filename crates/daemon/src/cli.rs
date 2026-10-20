@@ -223,7 +223,7 @@ pub fn humanize_bind_error(addr: Option<std::net::SocketAddr>, raw: &str) -> Str
 ///
 /// 配对链接带 10 分钟内有效的令牌，**只能给眼前的终端看**。stdout 不是终端
 /// 时它几乎一定落进了某个文件——macOS launchd 的 `StandardOutPath`
-/// （`~/Library/Logs/p-pass-daemon.log`）、systemd/journald、`nohup … >`、
+/// （`<数据目录>/logs/daemon.out`）、systemd/journald、`nohup … >`、
 /// 脚本的 `> daemon.log`——这时只打一句不含链接的提示，告诉人/脚本改走
 /// IPC `pairing.start`（桌面端显示二维码走的也是它）。
 ///

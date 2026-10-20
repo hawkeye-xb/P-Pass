@@ -312,7 +312,7 @@ fn retired_post_update_flag_does_not_stop_daemon_from_starting() {
 /// SEC-11 (#496)：stdout 不是终端时，配对链接（含 10 分钟有效的令牌）
 /// **一个字都不能出现在任何流里**，也不能出现在数据目录下的任何文件里。
 ///
-/// 背景：macOS launchd 的 `StandardOutPath` 就是 `~/Library/Logs/p-pass-daemon.log`，
+/// 背景：macOS launchd 的 `StandardOutPath` 就是 `<数据目录>/logs/daemon.out`，
 /// DEVLOG-03 那句「只进 stdout」在托管下等于「进日志文件」。这里用 piped
 /// stdout（天然非终端）起一个真的 `--ephemeral` daemon，等到 stdout 上出现
 /// 配对那一行的位置（门控点确实执行过），再关 stdin 让它自己退出，然后查

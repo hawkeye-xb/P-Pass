@@ -73,9 +73,16 @@ struct BoundedSink {
 
 impl BoundedSink {
     fn stderr() -> Self {
+        Self::stderr_with_existing(0)
+    }
+
+    /// stderr 被重定向到一个**跨运行 append** 的文件（macOS launchd 的
+    /// `StandardErrorPath`）时，计数从该文件现有大小起算——否则上限只管得住单次
+    /// 运行，文件随重启无限增长（#1046：由 daemon 管 `.err` 的容量）。
+    fn stderr_with_existing(existing: usize) -> Self {
         Self {
             sink: Arc::new(Sink::Stderr),
-            written: Arc::new(Mutex::new(0)),
+            written: Arc::new(Mutex::new(existing)),
         }
     }
 
@@ -239,9 +246,16 @@ impl DedupGuard {
     /// DIAG-B1：写持久文件（主），同时照旧写 stderr。给 macOS 用：daemon 可能
     /// 被 launchd 拉起（stderr → `.err`），也可能被桌面壳一次性 spawn
     /// （stdio 全是 `/dev/null`）——两种情况下日志都必须落在同一个固定文件里。
-    pub fn for_file_and_stderr(path: &Path) -> io::Result<Self> {
+    ///
+    /// `stderr_file`：stderr 被服务管理器接到的那个文件（macOS launchd 的
+    /// `<logs>/daemon.err`）；给了就从它现有大小起算 stderr 的上限（#1046）。
+    pub fn for_file_and_stderr(path: &Path, stderr_file: Option<&Path>) -> io::Result<Self> {
         let mut guard = Self::file_without_sweeper(path)?;
-        guard.tee = Some(BoundedSink::stderr());
+        let existing = stderr_file
+            .and_then(|p| std::fs::metadata(p).ok())
+            .map(|m| m.len() as usize)
+            .unwrap_or(0);
+        guard.tee = Some(BoundedSink::stderr_with_existing(existing));
         Ok(guard.spawn_sweeper())
     }
 
@@ -561,12 +575,27 @@ mod tests {
     fn tee_mode_writes_the_file_and_counts_stderr_separately() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("logs").join("daemon.log");
-        let guard = DedupGuard::for_file_and_stderr(&path).unwrap();
+        let guard = DedupGuard::for_file_and_stderr(&path, None).unwrap();
         let line = b"2026-09-24T00:00:00.000000Z  INFO x: tee line\n";
         guard.on_line(line);
         assert!(std::fs::read_to_string(&path).unwrap().contains("tee line"));
         let tee = guard.tee.as_ref().expect("tee sink");
         assert_eq!(*tee.written.lock().unwrap(), line.len());
+    }
+
+    // #1046：launchd 把 stderr 接到 `<logs>/daemon.err`（跨运行 append）——stderr
+    // 的计数从那个文件现有大小起算，上一轮留下的字节也算进上限。
+    // 反证：退回 `BoundedSink::stderr()`（从 0 数）→ 计数只有本行，红。
+    #[test]
+    fn tee_stderr_cap_counts_bytes_left_in_the_service_err_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("logs").join("daemon.log");
+        let err = tmp.path().join("logs").join("daemon.err");
+        std::fs::create_dir_all(err.parent().unwrap()).unwrap();
+        std::fs::write(&err, vec![b'x'; 1000]).unwrap();
+        let guard = DedupGuard::for_file_and_stderr(&path, Some(&err)).unwrap();
+        let tee = guard.tee.as_ref().expect("tee sink");
+        assert_eq!(*tee.written.lock().unwrap(), 1000);
     }
 
     // 环境变量读取：不设/空串都视为"不启用"，绝不猜默认路径。
