@@ -31,12 +31,12 @@ use crate::config::ui_err;
 
 /// 一次 IPC 往返的上限（与壳 NET-11 的 `IPC_READ_TIMEOUT` 同值）：daemon
 /// 活着但僵住时导出不能跟着挂死。
-const IPC_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const IPC_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// daemon 固定位置日志收进包的尾部上限（与壳现行一致）。
-const DAEMON_LOG_TAIL: u64 = 1024 * 1024;
+pub(crate) const DAEMON_LOG_TAIL: u64 = 1024 * 1024;
 /// 启动早期 stderr、壳日志收进包的尾部上限（与壳现行一致）。
-const SMALL_LOG_TAIL: u64 = 256 * 1024;
+pub(crate) const SMALL_LOG_TAIL: u64 = 256 * 1024;
 
 // ── 读文件 ───────────────────────────────────────────────────────────
 

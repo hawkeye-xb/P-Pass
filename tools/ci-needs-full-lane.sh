@@ -69,6 +69,7 @@ set -uo pipefail
 # 每一条都必须先证明它对 Rust / 桌面壳 lane 是惰性的，再往里加。
 # 2026-09-20 的核实依据（grep 全仓 .rs 与 tools/arch-check.sh）：
 #   docs/ cards/ .claude/  没有任何 Rust 代码或门禁脚本读取它们
+#                          （例外：docs/desktop/business-rules.zh-CN.md，见 is_inert）
 #                          （core-index/src/ingest.rs 里有一句注释提到 docs
 #                            路径，不是读取）
 #   *.md                   任何位置的 markdown 都不参与编译
@@ -76,6 +77,10 @@ set -uo pipefail
 # ⚠️ assets/i18n/** 被 diag 的 keys 测试消费，**绝不能**加进来。
 is_inert() {
   case "$1" in
+    # #1049 E2：桌面业务规则文档 §12 常量表被三处测试读取（daemon 与壳的
+    # cargo 测试 include_str!、前端 vitest readFileSync），只改它也必须跑
+    # 两条 lane，否则「改表不改代码」不会变红。必须排在 docs/* 之前。
+    docs/desktop/business-rules.zh-CN.md) return 1 ;;
     docs/* | cards/* | .claude/*) return 0 ;;
     *.md) return 0 ;;
   esac

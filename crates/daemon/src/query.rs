@@ -28,7 +28,10 @@ use transport::Blobs;
 use crate::stats;
 
 /// The 5 s thumb-generation budget (契约).
-const THUMB_BUDGET: Duration = Duration::from_secs(5);
+/// `asset.original` 的原图上限：base64(12 MiB) ≈ 16 MiB 单条 IPC 回包。
+pub(crate) const ORIGINAL_CAP: i64 = 12 * 1024 * 1024;
+
+pub(crate) const THUMB_BUDGET: Duration = Duration::from_secs(5);
 
 /// DESK-34 (#428): how long a failed / over-budget generation keeps its
 /// negative-cache entry. Within this window `thumb.get` for that hash answers
@@ -42,7 +45,7 @@ const THUMB_BUDGET: Duration = Duration::from_secs(5);
 /// DESK-35 (#441): a failed generation leaves nothing at the final thumb
 /// paths (and [`settle_generation`] purges any stale file there), so this
 /// window is the one and only retry bound for every failure kind.
-const THUMB_RETRY_AFTER: Duration = Duration::from_secs(10 * 60);
+pub(crate) const THUMB_RETRY_AFTER: Duration = Duration::from_secs(10 * 60);
 
 /// Above this many entries, expired negative records are pruned on insert —
 /// keeps the table bounded without a background sweeper.
@@ -515,11 +518,10 @@ impl QueryEngine {
     ///
     /// 同机桌面壳直接读原文件字节，内存展示后即弃——「不长期落盘」由
     /// 不写任何临时文件天然满足。只走桌面本机 IPC（不经 QUIC ctrl）；
-    /// > 12 MiB 的原图返回 NotFound（单条 IPC 回包的体量护栏，base64 后约
-    /// 16 MiB），桌面端降级到 1024 缩略图。
+    /// 超过 [`ORIGINAL_CAP`]（12 MiB）的原图返回 NotFound（单条 IPC 回包的
+    /// 体量护栏，base64 后约 16 MiB），桌面端降级到 1024 缩略图。
     /// 只服务 photo（video 原片体量必然超限，桌面大图只看照片）。
     pub async fn original(&self, hash_hex: &str) -> Result<Vec<u8>, QueryError> {
-        const ORIGINAL_CAP: i64 = 12 * 1024 * 1024; // base64(12MiB) ≈ 16MiB 单条回包
         let started = std::time::Instant::now();
         let hash = parse_hash(hash_hex).ok_or(QueryError::NotFound)?;
         let asset = self

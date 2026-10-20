@@ -11,7 +11,7 @@
 //! T-030: bind the endpoint, open the index, run the ctrl router with the
 //! authz checkpoint. Pairing/IPC/tray integration land with T-031/T-034.
 
-use daemon::{Config, Router};
+use daemon::{Config, Router, SHUTDOWN_DEADLINE};
 use std::io::IsTerminal;
 
 /// #1042：`config …` 子命令的统一收尾（契约见 `cli::USAGE` 与
@@ -838,9 +838,6 @@ async fn main() -> anyhow::Result<()> {
     }
     Ok(())
 }
-
-/// #1047：收尾总死线。短于 Docker 的 10s SIGKILL 宽限。
-const SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(8);
 
 /// 收尾并退出（不返回）。`req` 为 `Some` = 由停止信号触发：收尾后以「被该信号
 /// 终止」的方式离开（见 `platform::StopRequest::finish`，保持服务管理器看到

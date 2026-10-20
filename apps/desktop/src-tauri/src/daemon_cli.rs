@@ -35,10 +35,10 @@ pub(crate) const DAEMON_PRODUCT: &str = "P-Pass daemon";
 pub(crate) const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// config 子命令的上限：建目录 + 写一个小文件，慢盘 / 网络盘留足余量。
-const CONFIG_TIMEOUT: Duration = Duration::from_secs(30);
+pub(crate) const CONFIG_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 诊断包的上限：daemon 在线时它要等 IPC（单次 10s 保险丝）再打包。
-const DIAG_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const DIAG_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// 子进程的结局。`code` 为 `None` = 被信号杀掉。
 #[derive(Debug, PartialEq, Eq)]

@@ -15,6 +15,9 @@ mod distribution;
 mod ipc;
 mod service_state;
 
+#[cfg(test)]
+mod business_rules_table;
+
 // QA-09 迁移（#211）：桌面壳现在有 9 个地方要调 platform 的能力，
 // 每个函数各写一遍 `use ... as _` 已经不划算；提到文件级。
 use distribution::{

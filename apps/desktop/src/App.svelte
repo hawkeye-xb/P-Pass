@@ -1,5 +1,6 @@
 <script>
   import { reconcilePhotoWall } from "./photoWall.js";
+  import { FALLBACK_REFRESH_MS, SELF_HEAL_COOLDOWN_MS } from "./lib/serviceTiming.js";
   import { shouldShowTrayHint, TRAY_HINT_SHOWN_KEY } from "./trayHint.js";
   import { loadPlatformUx, wizardVariant } from "./platformUx.js";
     import {
@@ -121,7 +122,6 @@
   // genuinely offline for another reason.
   let lastSelfHealAttempt = 0;
   let selfHealRetry;
-  const SELF_HEAL_COOLDOWN_MS = 30000;
 
   // #557: Settings → language. Options render their own labels via t();
   // the switch persists, re-tells the tray and reloads (t() is not reactive;
@@ -735,7 +735,7 @@
     refresh().then(() => checkForUpdate(false));
     // IPC-02: 事件驱动为主——daemon 事件（扫码/配对落定/备份落地/设备
     // 变化）即时刷新；轮询降级为 60s 兜底对账（防漏事件，不再是主通道）。
-    timer = setInterval(refresh, 60000); // 契约: 兜底对账 60s
+    timer = setInterval(refresh, FALLBACK_REFRESH_MS); // 契约: 兜底对账 60s
     // 订阅线程在 src-tauri setup 启动（start_event_stream），事件经
     // `daemon-event` 转发——这里只负责收。
     listen("daemon-event", onDaemonEvent).then((f) => (unlisten = f));

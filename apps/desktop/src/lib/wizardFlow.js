@@ -27,8 +27,8 @@ import { errText, t } from "./i18n.js";
 export const WIZARD_STEP_COUNT = 3;
 
 /** 就绪轮询：20 次 × 500ms = 10 秒（daemon 拉起来到能答 status 的上限）。 */
-const READY_POLLS = 20;
-const READY_POLL_MS = 500;
+export const READY_POLLS = 20;
+export const READY_POLL_MS = 500;
 
 /**
  * 步骤条：每一步的编号、文案与状态（current / done / todo）。视图只管把它渲染

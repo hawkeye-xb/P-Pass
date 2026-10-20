@@ -42,13 +42,13 @@ use std::time::{Duration, Instant};
 use tracing_subscriber::fmt::MakeWriter;
 
 /// 同一条消息安静这么久，才认为"这一轮折叠结束"并打汇总行。
-const IDLE_GAP: Duration = Duration::from_secs(2);
+pub(crate) const IDLE_GAP: Duration = Duration::from_secs(2);
 
 /// 同一个 sink 的字节上限。stderr：单次运行里超过就地 truncate 重来——不是
 /// 等外部工具（launchd/logrotate）来做，那些工具从没为这个配过。
 /// 持久日志文件：**跨运行**计数（打开时从现有文件大小起算），超过就轮转成
 /// `<name>.1`（只留一代），所以磁盘占用上限是 2 × 本值。
-const SINK_CAP_BYTES: usize = 8 * 1024 * 1024;
+pub(crate) const SINK_CAP_BYTES: usize = 8 * 1024 * 1024;
 
 struct KeyState {
     first_seen: Instant,

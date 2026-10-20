@@ -21,7 +21,7 @@ use image::DynamicImage;
 use crate::{decode, ffmpeg, quicklook, system_thumb, CodecError, Result};
 
 pub const THUMB_SIZES: [u32; 2] = [256, 1024];
-const JPEG_QUALITY: u8 = 85;
+pub const JPEG_QUALITY: u8 = 85;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThumbPaths {

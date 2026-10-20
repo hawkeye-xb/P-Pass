@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use diag::state::{DaemonEvent, DaemonState};
 use storage::Db;
 
-const RING_DAYS_MS: i64 = 30 * 24 * 3600 * 1000;
+pub(crate) const RING_DAYS_MS: i64 = 30 * 24 * 3600 * 1000;
 
 /// Shared daemon state: subsystems feed events, IPC reads the snapshot.
 #[derive(Clone)]
