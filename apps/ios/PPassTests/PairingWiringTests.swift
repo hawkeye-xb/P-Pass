@@ -97,7 +97,6 @@ final class PairingWiringTests: XCTestCase {
         let store = PairingStore(root: dir)
         try blockPairingFile()
         let transport = ScriptedTransport([
-            Methods.backupBegin: try .ok(EmptyParams()),
             Methods.hello: try .ok(Hello(deviceName: "Mac", pairingEpoch: "e9")),
         ])
         var paired = 0
@@ -129,7 +128,6 @@ final class PairingWiringTests: XCTestCase {
         var marked = Set<String>()
         var knownSeenByOnPaired: Bool?
         let transport = ScriptedTransport([
-            Methods.backupBegin: try .ok(EmptyParams()),
             Methods.hello: try .ok(Hello(deviceName: "Mac", pairingEpoch: "e9")),
         ])
         let pairing = makePairing(transport, store: store, onboarded: { marked.contains($0) }) { record, known in
@@ -145,7 +143,6 @@ final class PairingWiringTests: XCTestCase {
         let store = PairingStore(root: dir)
         var knownSeenByOnPaired: Bool?
         let transport = ScriptedTransport([
-            Methods.backupBegin: try .ok(EmptyParams()),
             Methods.hello: try .ok(Hello(deviceName: "Mac", pairingEpoch: "e9")),
         ])
         let outcome = await makePairing(transport, store: store, onboarded: { _ in true }) { _, known in knownSeenByOnPaired = known }.pair(code: link)
@@ -156,7 +153,6 @@ final class PairingWiringTests: XCTestCase {
     func test_member_fast_path_saves_name_and_epoch_when_hello_succeeds() async throws {
         let store = PairingStore(root: dir)
         let transport = ScriptedTransport([
-            Methods.backupBegin: try .ok(EmptyParams()),
             Methods.hello: try .ok(Hello(deviceName: "Mac", pairingEpoch: "e9")),
         ])
         var paired: PairingRecord?
@@ -171,21 +167,58 @@ final class PairingWiringTests: XCTestCase {
 
     func test_member_fast_path_hello_failure_falls_back_to_pairing_without_saving_empty_epoch() async throws {
         let store = PairingStore(root: dir)
-        // backup.begin 通过、hello 连不上：落回正常配对（它自己的 hello 同样连不上 → unreachable），不能存空记录。
-        let transport = ScriptedTransport([Methods.backupBegin: try .ok(EmptyParams()), Methods.hello: .fail])
+        // hello 连不上（超时 / 异常）：落回正常配对（它自己的 hello 同样连不上 → unreachable），不能存空记录。
+        let transport = ScriptedTransport([Methods.hello: .fail])
         var paired = 0
         let outcome = await makePairing(transport, store: store) { _, _ in paired += 1 }.pair(code: link)
         guard case .failed = outcome else { return XCTFail("实际 \(outcome)") }
         XCTAssertNil(store.load(), "hello 失败不许存空 epoch / 空电脑名")
         XCTAssertEqual(paired, 0)
-        XCTAssertEqual(transport.calls, [Methods.backupBegin, Methods.hello, Methods.hello],
+        XCTAssertEqual(transport.calls, [Methods.hello, Methods.hello],
                        "第二次 hello 来自正常配对流程——证明确实落回了配对")
+    }
+
+    /// #1052 E2 三种情况（成员见 test_member_fast_path_saves_name_and_epoch_when_hello_succeeds）。
+    /// 非成员：未配对的电脑 hello 只回能力握手，不带 pairing_epoch → 走正常配对，且绝不再调 backup.begin。
+    func test_non_member_hello_without_epoch_goes_through_normal_pairing() async throws {
+        let store = PairingStore(root: dir)
+        let transport = ScriptedTransport([
+            Methods.hello: try .ok(Hello(capabilities: [PairVerdictLoop.statusCapability], deviceName: "Mac")),
+            Methods.pairRequest: try .ok(PairAccepted(storageDeviceName: "Mac", pairingEpoch: "e5")),
+        ])
+        let outcome = await makePairing(transport, store: store).pair(code: link)
+        XCTAssertEqual(outcome, .joined(firstTime: true))
+        XCTAssertEqual(transport.calls, [Methods.hello, Methods.hello, Methods.pairRequest], "第一次 hello 判成员未过，第二次来自正常配对")
+        XCTAssertFalse(transport.calls.contains(Methods.backupBegin), "成员探针不得再用 backup.begin")
+        XCTAssertEqual(store.load()?.pairingEpoch, "e5")
+    }
+
+    /// 空串 epoch 也不算成员。
+    func test_empty_epoch_is_not_member() async throws {
+        let store = PairingStore(root: dir)
+        let transport = ScriptedTransport([Methods.hello: try .ok(Hello(deviceName: "Mac", pairingEpoch: ""))])
+        _ = await makePairing(transport, store: store).pair(code: link)
+        XCTAssertNil(store.load(), "空 epoch 不许当成员存盘")
+        XCTAssertEqual(transport.calls.first, Methods.hello)
+        XCTAssertGreaterThan(transport.calls.count, 1, "必须落回正常配对")
+    }
+
+    /// 已撤销：桌面对已撤销设备连 hello 都拒（authz `revoked_gets_nothing_not_even_hello`）→ 落回正常配对。
+    func test_revoked_hello_denied_falls_back_to_pairing_and_never_calls_backup_begin() async throws {
+        let store = PairingStore(root: dir)
+        let transport = ScriptedTransport([
+            Methods.hello: .resp(Resp(ok: false, error: RespError(code: "denied", msgKey: "err.not_authorized"))),
+        ])
+        let outcome = await makePairing(transport, store: store).pair(code: link)
+        XCTAssertNil(store.load())
+        guard case .failed = outcome else { return XCTFail("实际 \(outcome)") }
+        XCTAssertFalse(transport.calls.contains(Methods.backupBegin))
+        XCTAssertEqual(transport.calls.prefix(2), [Methods.hello, Methods.hello])
     }
 
     func test_member_fast_path_rejected_hello_also_falls_back() async throws {
         let store = PairingStore(root: dir)
         let transport = ScriptedTransport([
-            Methods.backupBegin: try .ok(EmptyParams()),
             Methods.hello: .resp(Resp(ok: false, error: RespError(code: "x", msgKey: "err.x"))),
         ])
         _ = await makePairing(transport, store: store).pair(code: link)

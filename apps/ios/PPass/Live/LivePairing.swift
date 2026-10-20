@@ -142,17 +142,16 @@ final class LivePairing: PairingService, @unchecked Sendable {
         let rpc: (String, Encodable) async throws -> Resp = { method, params in
             try await client.callRaw(method, AnyEncodable(params), timeoutMs: 15_000)
         }
-        // 已是这台电脑的成员（电脑换了地址 / 身份）：backup.begin 只认成员，ok 就不必再申请。
-        // 取名字和 epoch 的 hello 失败就落回正常配对，不存空 epoch / 空电脑名（对位 Android PairFlow 的外层 catch，#970）。
-        if let probe = try? await rpc(Methods.backupBegin, EmptyParams()), probe.ok {
-            if let hello = await memberHello(rpc) {
-                // 「连没连过」必须在 save 之前定：save 里的 onPaired 会把这台标成连过（#982：之前顺序反了，firstTime 恒为 false）。
-                let known = onboarded(code.nodeId)
-                do { try save(code, name: hello.deviceName, epoch: hello.pairingEpoch ?? "", known: known) } catch {
-                    return saveFailure(error)
-                }
-                return .joined(firstTime: !known)
+        // 已是这台电脑的成员（电脑换了地址 / 身份）：hello 对成员带回非空 pairing_epoch，未配对 / 已撤销的设备拿不到
+        // （已撤销的 hello 直接被拒），语义对位 Android（#1051）。hello 超时 / 被拒 / 没带 epoch 都落回正常配对，
+        // 不存空 epoch / 空电脑名（#970）。
+        if let hello = await memberHello(rpc), let epoch = hello.pairingEpoch, !epoch.isEmpty {
+            // 「连没连过」必须在 save 之前定：save 里的 onPaired 会把这台标成连过（#982：之前顺序反了，firstTime 恒为 false）。
+            let known = onboarded(code.nodeId)
+            do { try save(code, name: hello.deviceName, epoch: epoch, known: known) } catch {
+                return saveFailure(error)
             }
+            return .joined(firstTime: !known)
         }
         let task = Task { try await PairVerdictLoop(rpc: rpc).run(token: code.token, deviceName: UIDevice.current.name) }
         current = task
