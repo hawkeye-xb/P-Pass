@@ -136,6 +136,11 @@ msg_keys! {
     UI_SHELL_RESTART_NEEDED => "ui.shell_restart_needed",
     UI_RESTART_APP_NOW => "ui.restart_app_now",
     UI_VERSION_MISMATCH => "ui.version_mismatch",
+    // ── Settings「关于」：壳与内核版本分开列（#1044 B13）──────────────
+    UI_ABOUT => "ui.about",
+    UI_ABOUT_SHELL_VERSION => "ui.about_shell_version",
+    UI_ABOUT_SERVICE_VERSION => "ui.about_service_version",
+    UI_ABOUT_VERSIONS_DIFFER => "ui.about_versions_differ",
     // ── Desktop daemon restart after shell update (DAE-04) ───────────
     UI_RESTART_SERVICE => "ui.restart_service",
     UI_RESTART_SERVICE_BTN => "ui.restart_service_btn",
@@ -495,6 +500,10 @@ mod tests {
             UI_SHELL_RESTART_NEEDED,
             UI_RESTART_APP_NOW,
             UI_VERSION_MISMATCH,
+            UI_ABOUT,
+            UI_ABOUT_SHELL_VERSION,
+            UI_ABOUT_SERVICE_VERSION,
+            UI_ABOUT_VERSIONS_DIFFER,
             UI_RESTART_SERVICE,
             UI_RESTART_SERVICE_BTN,
             UI_RESTARTING_SERVICE,
@@ -729,7 +738,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 308);
+        assert_eq!(ALL.len(), 312);
     }
 
     #[test]

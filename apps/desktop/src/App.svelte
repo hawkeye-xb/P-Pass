@@ -260,7 +260,15 @@
   let auditError = $state("");
   // T1 (H-10b): 界面显示版本号——报问题/排查时先知道装的是什么版本。
   let version = $state("");
-  getVersion().then((v) => (version = v)).catch(() => {});
+  // #1044 B13：壳版本要随 status 报给 daemon 才有 shell_relation。首轮 refresh
+  // 可能早于这里返回（那一轮报的是空串 → relation 为 null），拿到版本立刻
+  // 补一轮，不让「关于」页/重启服务行等到下一次事件或 60s 兜底。
+  getVersion()
+    .then((v) => {
+      version = v;
+      void refresh();
+    })
+    .catch(() => {});
   // UPD-06 (#616): **磁盘上装的那个版本**，只在它与运行中的壳不同时才有值——
   // "更新装完了、但运行中的壳还是旧的"。同不同由壳的 Rust 侧按共享的版本规则
   // 判（#1044 B13，crates/version-cmp），前端不比版本。读不到就空着。
@@ -1988,6 +1996,25 @@
                   <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{kernelPhase === "deferred" ? t("ui.kernel_converge_deferred") : t("ui.restart_service_hint")}</p>
                 {/if}
                 <!-- #550：诊断包入口已收进托盘菜单（「导出诊断包」），设置页不再展示。 -->
+              </Card>
+              <!-- #1044 B13：「关于」——壳与后台服务（内核）版本分开列；两者不一致
+                   （daemon 下发的 status.shell_relation ≠ same）时标出来。
+                   日常只显示一个产品版本号（页脚），这里才把两者摆开。 -->
+              <Card size="flush" class="text-[16px]" data-testid="about-card">
+                <h3 class="m-0 px-[22px] pt-[16px] text-[15px] font-semibold">{t("ui.about")}</h3>
+                <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[14px] text-[15px] font-medium">
+                  <span>{t("ui.about_shell_version")}</span>
+                  <span class="font-mono text-[13.5px] font-normal text-ink-40" data-testid="about-shell-version">{shellVersion ? `v${shellVersion}` : "—"}</span>
+                </div>
+                <div class="flex items-center justify-between gap-[12px] px-[22px] py-[14px] text-[15px] font-medium">
+                  <span>{t("ui.about_service_version")}</span>
+                  <span class="flex items-center gap-[8px] font-mono text-[13.5px] font-normal text-ink-40" data-testid="about-service-version">
+                    {#if versionsDiffer}
+                      <span class="env-badge" data-testid="about-versions-differ">{t("ui.about_versions_differ")}</span>
+                    {/if}
+                    {serviceVersion ? `v${serviceVersion}` : "—"}
+                  </span>
+                </div>
               </Card>
               {#if canStopService(serviceState)}
                 <Card variant="danger" class="text-[16px]">
