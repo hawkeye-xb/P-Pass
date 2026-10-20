@@ -210,8 +210,13 @@ async fn query_plane_over_ipc_and_three_way_count() {
         .call("asset.original", serde_json::json!({ "hash": first_hash }))
         .await;
     assert!(resp.ok, "asset.original must work: {resp:?}");
+    let result = resp.result.unwrap();
+    assert_eq!(
+        result["media_type"], "image/jpeg",
+        "reply must carry the real media_type"
+    );
     let original = base64::engine::general_purpose::STANDARD
-        .decode(resp.result.unwrap()["data_base64"].as_str().unwrap())
+        .decode(result["data_base64"].as_str().unwrap())
         .unwrap();
     // first_hash 对应 i=0 的 seed（timeline 新→旧，taken_at 相同按 hash 升序——
     // 无法确定是哪一张，但必须是三张之一且可解码）。

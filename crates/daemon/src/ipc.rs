@@ -1224,11 +1224,12 @@ impl IpcServer {
                             );
                         };
                         match query.original(hash).await {
-                            Ok(bytes) => {
+                            Ok((media_type, bytes)) => {
                                 use base64::Engine as _;
                                 Resp::ok(
                                     id,
                                     serde_json::json!({
+                                        "media_type": media_type,
                                         "data_base64": base64::engine::general_purpose::STANDARD.encode(bytes),
                                     }),
                                 )

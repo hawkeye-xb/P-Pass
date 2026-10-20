@@ -521,7 +521,11 @@ impl QueryEngine {
     /// 超过 [`ORIGINAL_CAP`]（12 MiB）的原图返回 NotFound（单条 IPC 回包的
     /// 体量护栏，base64 后约 16 MiB），桌面端降级到 1024 缩略图。
     /// 只服务 photo（video 原片体量必然超限，桌面大图只看照片）。
-    pub async fn original(&self, hash_hex: &str) -> Result<Vec<u8>, QueryError> {
+    ///
+    /// #1054：只对 WebView `<img>` 能直接显示的格式（[`is_browser_displayable`]：
+    /// jpeg/png/gif/webp）返回原图，连同真实 MIME 一起给壳组 data URL；HEIC/HEIF/
+    /// RAW/TIFF 等返回 NotFound，让壳回退 1024 缩略图（否则 `<img>` 解不了 = 全黑）。
+    pub async fn original(&self, hash_hex: &str) -> Result<(String, Vec<u8>), QueryError> {
         let started = std::time::Instant::now();
         let hash = parse_hash(hash_hex).ok_or(QueryError::NotFound)?;
         let asset = self
@@ -529,8 +533,8 @@ impl QueryEngine {
             .get_asset(&hash)
             .await?
             .ok_or(QueryError::NotFound)?;
-        if !asset.media_type.starts_with("image/") {
-            return Err(QueryError::NotFound); // video 不走大图
+        if !is_browser_displayable(&asset.media_type) {
+            return Err(QueryError::NotFound); // video / HEIC / RAW 等不走大图
         }
         if asset.bytes > ORIGINAL_CAP {
             return Err(QueryError::NotFound);
@@ -544,8 +548,16 @@ impl QueryEngine {
         // recording latency for them would not measure what the card asks
         // for ("翻相册卡不卡").
         self.record_first_byte(started, "blob");
-        Ok(bytes)
+        Ok((asset.media_type.to_ascii_lowercase(), bytes))
     }
+}
+
+/// #1054：WebView `<img>` 能直接解码显示的原图 MIME（两平台同一口径）。
+pub(crate) fn is_browser_displayable(media_type: &str) -> bool {
+    matches!(
+        media_type.to_ascii_lowercase().as_str(),
+        "image/jpeg" | "image/png" | "image/gif" | "image/webp"
+    )
 }
 
 /// storage 行 → 线上元数据: taken_at ms→s, MIME → "photo"/"video" 粗类.

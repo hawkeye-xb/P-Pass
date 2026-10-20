@@ -276,7 +276,7 @@ daemon 是 `config.toml` 与诊断包的唯一写者（壳经子命令调用，�
 
 ### 6.3 原图与设备目录
 
-- `asset.original`（`QueryEngine::original`，只走本机 IPC）：MIME 以 `image/` 开头且 ≤ `ORIGINAL_CAP` 才返回字节，否则 NotFound，桌面退到 1024 缩略图。HEIC/RAW 在 WebView 里的解码回退待 #1054。
+- `asset.original`（`QueryEngine::original`，只走本机 IPC）：MIME 为 image/jpeg、png、gif、webp（WebView `<img>` 能直接显示）且 ≤ `ORIGINAL_CAP` 才返回字节，回复带真实 `media_type`（壳按它组 data URL）；HEIC/HEIF/RAW/TIFF/视频一律 NotFound，桌面退到 1024 缩略图，`<img>` 加载失败同样回退（#1054；真正解码预览另开卡）。
 - `device.folder`：返回 `{path, is_device_dir}`：`originals/<device_dir>` 存在则用它，否则 `originals/`，再否则库根。壳不自己拼存储路径。
 
 ### 6.4 审计用户投影（`audit.list`）

@@ -66,6 +66,7 @@
   // MOB-47: 视频查看器加载编排（asset 协议 hash 授权 + thumb.get 兜底 +
   // isCancelled 竞态闸）——纯函数可单测，App.svelte 只做接线的薄壳。
   import { loadVideoViewer, loadVideoThumbnail, handleVideoError } from "./lib/viewerVideo.js";
+  import { loadImageViewer, handleImageError } from "./lib/viewerImage.js";
   // T-072: 状态/错误文案的唯一来源是 diag 字典（crates/diag 注册表 +
   // assets/i18n/*.json，Rust 测试保证双语文案齐全）。
   // I18N-03 (#492): t() 抽到 lib/i18n.js 共享（向导、lib/*.js 同源）；
@@ -1125,6 +1126,7 @@
   let sentinelEl = $state(null); // 墙底哨兵 → 触发下一页
   let photoViewer = $state(null); // {hash, taken_at, media_type} 大图目标
   let viewerSrc = $state(null); // 大图 data URL（原图或 1024 降级）
+  let viewerSrcIsOriginal = $state(false); // viewerSrc 是原图（true）还是缩略图
   let viewerPath = $state(null); // 原文件绝对路径（Finder 揭示）
   // MOB-47: 视频走 asset 协议磁盘 streaming 的 src；video 资产打开时设置，
   // 图片资产永远为 null（图片仍走 viewerSrc 的 <img> data URL 路径）。
@@ -1234,6 +1236,7 @@
   $effect(() => {
     const v = photoViewer;
     viewerSrc = null;
+    viewerSrcIsOriginal = false;
     viewerPath = null;
     viewerVideoSrc = null;
     viewerVideoToken = null;
@@ -1270,16 +1273,14 @@
         }
       })();
     } else {
-      // 图片：原图 data URL，失败 → 1024 缩略图（与改动前完全一致）。
+      // 图片（#1054）：原图按 daemon 给的真实 media_type 组 data URL；daemon 对
+      // HEIC/RAW 等不可显示格式返回 NotFound → 1024 缩略图；<img> 加载失败另有
+      // onViewerImgError 兜底。编排在 lib/viewerImage.js（可单测）。
       (async () => {
-        try {
-          const o = await call("asset.original", { hash: v.hash });
-          if (!cancelled) viewerSrc = `data:image/jpeg;base64,${o.data_base64}`;
-        } catch (_) {
-          try {
-            const t = await call("thumb.get", { hash: v.hash, size: 1024 });
-            if (!cancelled) viewerSrc = `data:image/jpeg;base64,${t.jpeg_base64}`;
-          } catch (_) {}
+        const r = await loadImageViewer({ call, isCancelled }, { hash: v.hash });
+        if (!cancelled && (r.kind === "original" || r.kind === "thumb")) {
+          viewerSrcIsOriginal = r.kind === "original";
+          viewerSrc = r.src;
         }
         try {
           const p = await call("asset.path", { hash: v.hash });
@@ -1309,6 +1310,26 @@
   // 错误事件必须归属于「发起它的那一次渲染」：从事件元素的 data-* 读出该
   // 元素自己渲染时的 gen/hash（不可变快照），而不是读可变全局；这样旧 A
   // 的迟到错误（即使 hash 与 B 不同、或关闭重开同 hash）都不会覆盖新 viewer。
+  // #1054：`<img>` 解不了原图（WebView 不支持的编码等）→ 回退 1024 缩略图；
+  // 缩略图也出错才亮降级提示。
+  async function onViewerImgError(event) {
+    const hash = event?.currentTarget?.dataset?.imgHash;
+    if (!hash) return;
+    const r = await handleImageError({
+      call,
+      hash,
+      showingOriginal: viewerSrcIsOriginal,
+      isActive: () => photoViewer?.hash === hash,
+    });
+    if (r.kind === "thumb") {
+      viewerSrcIsOriginal = false;
+      viewerSrc = r.src;
+    } else if (r.kind === "failed") {
+      viewerSrc = null;
+      viewerFailed = true;
+    }
+  }
+
   async function onVideoError(event) {
     const el = event?.currentTarget;
     const rawGen = el?.dataset?.videoGen;
@@ -1326,6 +1347,7 @@
     const r = out.result;
     if (r.kind === "thumb") {
       viewerVideoSrc = null;
+      viewerSrcIsOriginal = false;
       viewerSrc = r.src;
     } else {
       viewerFailed = true;
@@ -2054,7 +2076,13 @@
                   onerror={onVideoError}></video>
               {/key}
             {:else if viewerSrc}
-              <img class="photo-viewer-img" src={viewerSrc} alt="" />
+              <img
+                class="photo-viewer-img"
+                src={viewerSrc}
+                alt=""
+                data-img-hash={photoViewer?.hash}
+                onerror={onViewerImgError}
+              />
             {:else if viewerFailed}
               <div class="photo-viewer-loading">{t("ui.video_load_failed")}</div>
             {:else}
