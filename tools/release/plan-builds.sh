@@ -28,7 +28,15 @@
 #       apps/desktop/（其余）                                       两个桌面端（macOS + Windows）
 #       apps/ios/、tools/ios/、tools/build-ios-*                    只算 iOS（#887；#348 起有发版 lane：TestFlight）
 #       apps/android/…/values{,-zh}/strings.xml                     Android + iOS（iOS 界面文案由它生成，gen-strings.py）
-#       其余（crates/、Cargo.*、assets/、release/、tools/、.github/ …） 所有端
+#       crates/、tools/testclient/、根 Cargo.toml / Cargo.lock       按 Cargo 依赖图归属到端（#1062，见下）
+#       其余（assets/、release/、tools/、.github/、rust-toolchain.toml …） 所有端
+#   - Rust 改动（#1062，tools/release/rust-impact.py）：cargo metadata（--no-deps，不联网）算出每端入口包
+#     （Android transport[android-jni]、iOS transport[ios-ffi]、macOS daemon + 桌面壳、Windows daemon +
+#     testclient + 桌面壳）传递依赖哪些 workspace crate，改动的 crate 只触发依赖它的端。根 Cargo.toml 只变
+#     workspace 版本号 ⇒ 桌面两端；Cargo.lock 按变动的外部包反查依赖它的 crate。拿不准（cargo / python3
+#     不可用、metadata 失败、crates/ 下的非成员路径、lock 对不上号）⇒ 所有端。
+#   - assets/（含 assets/i18n/）仍算所有端：i18n 由 daemon（diag）、Android（逐字节捆绑副本）与
+#     iOS（sync-i18n）三方各自打进产物，按需裁剪另行设计，在那之前不拆。
 #   - 没改动的一端判 skip：不构建、也不复用（不复制任何产物），test-channel 里它的清单不动。
 #   - Windows（2026-10-12 验收人：只改别的端时不陪跑 Windows）按同一规则判，基线是
 #     test-channel/manifest-windows.json。正式 tag 不构建 Windows（windows=skip），手动 dispatch 不看这里。
@@ -67,6 +75,20 @@ if [[ "$TAG" == *-test.* ]]; then
       if [ -n "$v" ]; then echo "v${v#v}"; return; fi
     done
   }
+  # #1062：Rust 依赖图只取一次（本次提交）。plan-builds job 用 RUSTUP_TOOLCHAIN=stable（release.yml）免装钉住的
+  # 工具链——--no-deps 只读清单，不编译。取不到 ⇒ 不传 --meta，rust-impact.py 把 Rust 路径一律判 all。
+  RUST_META_DIR=$(mktemp -d)
+  trap 'rm -rf "$RUST_META_DIR"' EXIT
+  RUST_META=()
+  if cargo metadata --no-deps --format-version 1 --offline >"$RUST_META_DIR/ws.json" 2>"$RUST_META_DIR/err" \
+    && { [ ! -f apps/desktop/src-tauri/Cargo.toml ] \
+      || cargo metadata --no-deps --format-version 1 --offline --manifest-path apps/desktop/src-tauri/Cargo.toml \
+        >"$RUST_META_DIR/shell.json" 2>>"$RUST_META_DIR/err"; }; then
+    RUST_META=(--meta "$RUST_META_DIR/ws.json")
+    [ -s "$RUST_META_DIR/shell.json" ] && RUST_META+=(--meta "$RUST_META_DIR/shell.json")
+  else
+    echo "::warning::cargo metadata 失败，Rust 改动无法按依赖图归属，一律算所有端：$(tr '\n' ' ' <"$RUST_META_DIR/err")"
+  fi
   # 改动路径 → 影响哪些端（空格分隔）：android / macos / windows / desktop（两个桌面端）/ ios / all / none（分类见文件头）。
   classify() {
     case "$1" in
@@ -99,18 +121,23 @@ if [[ "$TAG" == *-test.* ]]; then
     if ! git merge-base --is-ancestor "$base" HEAD 2>/dev/null; then
       echo "${end}：基线 ${base} 不是本次提交的祖先 ⇒ 构建" >&2; echo build; return
     fi
-    if ! changed=$(git diff --name-only "$base" HEAD --); then
+    # --no-renames：移走的文件按原路径也算一次（否则只剩新路径，原 crate 的改动会被漏掉）。
+    if ! changed=$(git diff --no-renames --name-only "$base" HEAD --); then
       echo "${end}：git diff ${base} HEAD 失败 ⇒ 构建" >&2; echo build; return
     fi
-    while IFS= read -r f; do
+    # #1062：Rust 路径先交 rust-impact.py 按依赖图归属（每行「归属<TAB>路径」，- = 交回 classify）。
+    if ! attributed=$(printf '%s\n' "$changed" | python3 -I tools/release/rust-impact.py --base "$base" ${RUST_META[@]+"${RUST_META[@]}"}); then
+      echo "${end}：Rust 依赖归属失败 ⇒ 构建" >&2; echo build; return
+    fi
+    while IFS=$'\t' read -r ks f; do
       [ -n "$f" ] || continue
-      ks=$(classify "$f")
+      [ "$ks" = - ] && ks=$(classify "$f")
       for k in $ks; do
         if [ "$k" = all ] || [[ " $kinds " == *" $k "* ]]; then
           echo "${end}：自 ${base} 起改了 ${f}（${k}）⇒ 构建" >&2; echo build; return
         fi
       done
-    done <<<"$changed"
+    done <<<"$attributed"
     echo "${end}：自 ${base} 起没有影响该端的改动 ⇒ 不构建，test-channel 里该端清单不动" >&2
     echo skip
   }

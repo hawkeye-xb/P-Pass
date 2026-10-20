@@ -55,6 +55,11 @@ on:
       - "tools/release-notes.test.mjs"
       - "release/**"
       - "tools/release/**"
+      # #1062：release-plan 钉住真实依赖图（各端入口包传递依赖哪些 crate）——Cargo 清单变了也要跑。
+      - "Cargo.toml"
+      - "crates/*/Cargo.toml"
+      - "tools/testclient/Cargo.toml"
+      - "apps/desktop/src-tauri/Cargo.toml"
       - "tools/bundle-desktop-macos.sh"
       - "tools/test-release-timeouts.sh"
   push:
@@ -91,6 +96,11 @@ on:
       - "tools/release-notes.test.mjs"
       - "release/**"
       - "tools/release/**"
+      # #1062：release-plan 钉住真实依赖图（各端入口包传递依赖哪些 crate）——Cargo 清单变了也要跑。
+      - "Cargo.toml"
+      - "crates/*/Cargo.toml"
+      - "tools/testclient/Cargo.toml"
+      - "apps/desktop/src-tauri/Cargo.toml"
       - "tools/bundle-desktop-macos.sh"
       - "tools/test-release-timeouts.sh"
   workflow_dispatch:

@@ -185,10 +185,28 @@ default** (family devices are never touched by test builds):
   whose inputs changed since the version that platform's test-channel
   manifest points at (`tools/release/plan-builds.sh`): `apps/android/` →
   Android; `apps/desktop/` → macOS + Windows; macOS packaging scripts →
-  macOS; `tauri.windows.conf.json` → Windows; docs → none; anything else
-  (`crates/`, `tools/`, `.github/`, …) or anything uncertain → all. An
+  macOS; `tauri.windows.conf.json` → Windows; docs → none; Rust
+  (`crates/`, `tools/testclient/`, root `Cargo.toml` / `Cargo.lock`) → by the
+  Cargo dependency graph (#1062, `tools/release/rust-impact.py`): a changed
+  workspace crate triggers only the platforms whose entry package depends on
+  it (Android `transport[android-jni]`, iOS `transport[ios-ffi]`, macOS
+  `daemon` + desktop shell, Windows `daemon` + `testclient` + desktop shell),
+  so `crates/daemon` → macOS + Windows and `crates/transport` → all four; a
+  root `Cargo.toml` change that only bumps `[workspace.package].version` →
+  macOS + Windows; `Cargo.lock` → the platforms that reach the changed
+  external packages; anything Rust it cannot resolve → all. Everything else
+  (`assets/` incl. `assets/i18n/`, `tools/`, `.github/`, `release/`,
+  `rust-toolchain.toml`, …) or anything uncertain → all. An
   unchanged platform is not built and its test-channel manifest is left as
   is. Nothing changed anywhere ⇒ `plan-builds` fails, no draft.
+  **Rebuilding one platform of a test tag:** dispatching `release.yml` with
+  `tag` = an existing test tag and `platforms` = e.g. `macos` re-runs only
+  that platform and re-points its test-channel manifest — but only when
+  `plan-builds` still says `build` for it (it does when test-channel already
+  points that platform at this tag, i.e. a re-run). Dispatch cannot force a
+  platform that `plan-builds` skips (Windows is the exception: a dispatch
+  naming it always builds it), and it cannot replace the tag push: the tag
+  must exist first, and pushing it already runs the per-platform plan.
   **Test channel (REL-07 / #872):** `test-channel` is a fixed, rolling
   prerelease (created on the first test release, never latest; do not
   delete it) holding both the per-platform manifests (`manifest-android.json`,
@@ -393,9 +411,21 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
   **test 按端构建（#852）**：test tag 只构建自「该端 test-channel 清单所指版本」以来
   输入有改动的那几端（`tools/release/plan-builds.sh`）：`apps/android/` → Android；
   `apps/desktop/` → macOS + Windows；macOS 打包脚本 → macOS；`tauri.windows.conf.json`
-  → Windows；文档 → 都不算；其余（`crates/`、`tools/`、`.github/` …）或拿不准 → 所有端。
+  → Windows；文档 → 都不算；Rust（`crates/`、`tools/testclient/`、根 `Cargo.toml` /
+  `Cargo.lock`）→ 按 Cargo 依赖图归属（#1062，`tools/release/rust-impact.py`）：改动的
+  workspace crate 只触发入口包依赖它的端（Android `transport[android-jni]`、iOS
+  `transport[ios-ffi]`、macOS `daemon` + 桌面壳、Windows `daemon` + `testclient` + 桌面壳），
+  所以 `crates/daemon` → macOS + Windows，`crates/transport` → 四端；根 `Cargo.toml` 只涨
+  `[workspace.package].version` → macOS + Windows；`Cargo.lock` → 能走到变动外部包的端；
+  判定不了的 Rust 改动 → 所有端。其余（`assets/` 含 `assets/i18n/`、`tools/`、`.github/`、
+  `release/`、`rust-toolchain.toml` …）或拿不准 → 所有端。
   没改动的一端不构建，它在 test-channel 里的清单不动；所有端都没改动 ⇒ `plan-builds`
   报错、不建草稿。
+  **单独重出某一端的 test 包**：dispatch `release.yml`，`tag` 填已存在的 test tag、`platforms`
+  填如 `macos`，只重跑这一端并重新指向它在 test-channel 的清单——前提是 `plan-builds` 对这一端
+  仍判 `build`（test-channel 已把该端指向本 tag，即补跑时成立）。dispatch 不能强制构建
+  `plan-builds` 判 skip 的一端（Windows 例外：dispatch 点名就构建），也替代不了推 tag：
+  tag 必须先存在，而推 tag 本身就会按端判定跑一遍。
   **test 通道（REL-07 / #872）**：`test-channel` 是固定的滚动 prerelease（首次 test 发布时
   自动创建，永不是 latest，勿删），同时放分端清单（`manifest-android.json`、
   `manifest-macos.json`、`manifest-windows.json`，外加给旧版 Android test 包读的老格式
