@@ -1,5 +1,10 @@
-//! P-Pass tray shell (T-041, ADR-012): zero business logic — every
-//! command is a thin forward to the daemon's local IPC.
+//! P-Pass 桌面壳（T-041, ADR-012）：壳 = UI + 托管（#1046，S3）。
+//!
+//! - **UI**：把 daemon 给出的结论呈现出来、接收输入；业务判断不在这里（经本机
+//!   IPC 与 daemon 的一次性 `config` / `diag` 子命令调用核心）。
+//! - **托管**：mac / Windows 的发行层——拉起 daemon、开机自启登记、用户停服标记、
+//!   更新后新壳启动对账、自动换内核。判据与动作在 [`distribution`]（纯 Rust，不依赖
+//!   Tauri），Tauri command 只负责调用；核心里没有托管代码（门禁 G2/G3）。
 
 // DESK-33 (#325)：clippy.toml 禁止产品代码直接 `Command::new`；单元测试
 // 里的子进程（拉起测试二进制自身等）不面向用户，统一放行。

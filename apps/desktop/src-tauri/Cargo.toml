@@ -1,6 +1,9 @@
-# Standalone workspace on purpose: the tray shell has ZERO business
-# logic (ADR-012) — it speaks the daemon's local IPC protocol only,
-# and the huge Tauri tree stays out of the main workspace's build/CI.
+# Standalone workspace on purpose: the desktop shell = UI + hosting
+# (ADR-012, #1046). Business rules live in the daemon (reached over its
+# local IPC and its one-shot `config` / `diag` subcommands); hosting —
+# starting the daemon, autostart registration, update hand-over — is the
+# distribution layer's job and lives here (src/distribution.rs). The huge
+# Tauri tree stays out of the main workspace's build/CI.
 #
 # DOC-05: the old "depends on no internal crate" line was retired when
 # QA-09 moved platform forking into crates/platform — src-tauri DOES
