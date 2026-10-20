@@ -713,8 +713,9 @@ pub trait HostingAdapter: Send + Sync {
     ///   路径**上跑的进程——不按命令行、不按文件名匹配，所以命令行里恰好含
     ///   `ppf-daemon` 的别的进程、别处的同名副本都不会被误杀。
     /// - `pid_hint`：daemon 经 IPC 自报的 pid（读不到给 `None`）。优先结束它，
-    ///   但先核对它的可执行文件确实是 `exe`（pid 会被复用）；之后照样按路径
-    ///   枚举兜底（daemon 挂死、IPC 不通时靠这条）。
+    ///   但先核对它的可执行文件**名**与 `exe` 相同（pid 会被复用）；不核对目录
+    ///   ——应答 IPC 的 daemon 跑在别处（开发构建、解压副本）时改前也停得掉。
+    ///   之后照样按完整路径枚举兜底（daemon 挂死、IPC 不通时靠这条）。
     /// - 只动本用户 / 本会话的进程。结束方式沿用各平台改前的做法（unix 发
     ///   SIGTERM 不等；Windows `TerminateProcess` 并等它退出）——macOS 上
     ///   launchd 的 `KeepAlive{SuccessfulExit=false}` 靠「非正常退出」决定要不要

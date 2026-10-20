@@ -1858,7 +1858,9 @@ pub fn kill_verdict(results: &[ProcessKill]) -> Result<crate::KillOutcome> {
 /// 现在：进程快照 → 映像名（不区分大小写）先粗筛 → 只留与本进程同一会话
 /// （session）的 → `QueryFullProcessImageNameW` 核对完整路径（#1043：别处的
 /// 同名副本不算）→ `OpenProcess` + `TerminateProcess` → 等它真的退出。
-/// `pid_hint`（daemon 自报的 pid）在候选里就排到最前，路径不对照样不动。
+/// `pid_hint`（daemon 自报的 pid）优先：同会话、映像**文件名**对得上就结束它
+/// （防 pid 复用；不核对目录——应答 IPC 的 daemon 跑在别处时改前也停得掉）；
+/// 其余候选必须完整路径对得上。
 /// 只杀本会话的，是因为 daemon 由本用户的计划任务 / Run key 拉起、跑在本会话
 /// 里；别的会话（快速用户切换的另一个用户）的 daemon 不归我们管。
 fn stop_processes_at(exe: &Path, pid_hint: Option<u32>) -> Result<crate::KillOutcome> {
@@ -1866,15 +1868,14 @@ fn stop_processes_at(exe: &Path, pid_hint: Option<u32>) -> Result<crate::KillOut
     let Some(name) = exe.file_name().and_then(|n| n.to_str()) else {
         return Ok(crate::KillOutcome::NotRunning);
     };
-    let mut pids = processes_named_in_this_session(name)?;
-    if let Some(hint) = pid_hint {
-        if let Some(i) = pids.iter().position(|&p| p == hint) {
-            pids.swap(0, i);
-        }
-    }
-    let results: Vec<ProcessKill> = pids
+    // 快照已按映像名 + 本会话筛过，所以 hint 在里面 = 同名同会话。
+    let pids = processes_named_in_this_session(name)?;
+    let hinted = pid_hint.filter(|h| pids.contains(h));
+    let results: Vec<ProcessKill> = hinted
         .into_iter()
-        .filter(|&pid| image_path(pid).is_some_and(|p| same_image_path(&p, &want)))
+        .chain(pids.into_iter().filter(|&pid| {
+            Some(pid) != hinted && image_path(pid).is_some_and(|p| same_image_path(&p, &want))
+        }))
         .map(terminate_and_wait)
         .collect();
     kill_verdict(&results)
@@ -2404,10 +2405,7 @@ mod desk52_kill_tests {
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
 
-        assert_eq!(
-            stop_processes_at(&exe, Some(decoy_child.id())).unwrap(),
-            KillOutcome::Killed
-        );
+        assert_eq!(stop_processes_at(&exe, None).unwrap(), KillOutcome::Killed);
         let status = child
             .try_wait()
             .unwrap()
@@ -2421,8 +2419,16 @@ mod desk52_kill_tests {
             stop_processes_at(&exe, None).unwrap(),
             KillOutcome::NotRunning
         );
-        let _ = decoy_child.kill();
-        let _ = decoy_child.wait();
+        // daemon 自报的 pid 优先：跑在别处的同名 daemon 只要是它在应答 IPC，
+        // 照样停得掉（同改前按映像名的覆盖面）。
+        assert_eq!(
+            stop_processes_at(&exe, Some(decoy_child.id())).unwrap(),
+            KillOutcome::Killed
+        );
+        assert!(
+            decoy_child.try_wait().unwrap().is_some(),
+            "hint 指向的进程应已退出"
+        );
     }
 
     /// Windows 的文件名就是基名加 `.exe`——两者漂开会让按名字杀进程打空。

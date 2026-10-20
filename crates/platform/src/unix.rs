@@ -131,28 +131,30 @@ mod tests {
 /// 会把命令行里恰好带这几个字的任何进程一起杀掉（编辑器开着同名文件、
 /// `tail -f …/ppf-daemon.log`、另一份开发构建……）。
 ///
-/// 1. `pid_hint`（daemon 经 IPC 自报的 pid）优先：它的可执行文件确实是 `exe`
-///    才动它——pid 会被复用，不核对就可能杀错人。
-/// 2. 兜底：枚举进程，可执行文件路径等于 `exe` 的都结束（daemon 挂死、IPC
-///    不通时靠这条）。
+/// 1. `pid_hint`（daemon 经 IPC 自报的 pid）优先：它的可执行文件**名**确实是
+///    `exe` 的文件名才动它——pid 会被复用，不核对就可能杀错人。只核对文件名、
+///    不核对目录：应答 IPC 的那个 daemon 跑在别处（开发构建、解压副本）时，
+///    改前的 `pkill -f` 也停得掉它，「停止服务」不能因此变成停不下来。
+/// 2. 兜底：枚举进程，可执行文件**完整路径**等于 `exe` 的都结束（daemon 挂死、
+///    IPC 不通时靠这条）。
 ///
 /// 只动本用户的进程：别的用户（快速用户切换）同一个 App 里的 daemon，
 /// `kill(pid, 0)` 报 `EPERM`，跳过，不算失败。
 pub fn stop_processes_at(exe: &Path, pid_hint: Option<u32>) -> crate::Result<KillOutcome> {
     let want = std::fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf());
     let me = std::process::id();
-    let mut pids: Vec<u32> = pid_hint.into_iter().collect();
-    pids.extend(all_pids()?);
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = std::collections::HashSet::from([me]);
     let mut outcomes = Vec::new();
-    for pid in pids {
-        if pid == me || !seen.insert(pid) {
-            continue;
+    if let Some(pid) = pid_hint {
+        let same_name = process_exe(pid).is_some_and(|p| p.file_name() == want.file_name());
+        if seen.insert(pid) && same_name {
+            outcomes.push(sigterm(pid));
         }
-        if process_exe(pid).as_deref() != Some(want.as_path()) {
-            continue;
+    }
+    for pid in all_pids()? {
+        if seen.insert(pid) && process_exe(pid).as_deref() == Some(want.as_path()) {
+            outcomes.push(sigterm(pid));
         }
-        outcomes.push(sigterm(pid));
     }
     stop_verdict(&outcomes)
 }
@@ -348,7 +350,7 @@ mod stop_tests {
             crate::DAEMON_EXECUTABLE_STEM
         );
 
-        // pid 提示指向诱饵：路径对不上，不许动它。
+        // pid 提示指向命令行诱饵（sh）：文件名对不上，不许动它。
         let got = stop_processes_at(&target, Some(decoy_cmdline.id())).unwrap();
         assert_eq!(got, KillOutcome::Killed);
         let status = daemon.wait().unwrap();
@@ -366,6 +368,18 @@ mod stop_tests {
         assert_eq!(
             stop_processes_at(&target, None).unwrap(),
             KillOutcome::NotRunning
+        );
+
+        // daemon 自报的 pid 优先：跑在别处的同名 daemon（开发构建）只要是它在
+        // 应答 IPC，照样停得掉（同改前 `pkill -f` 的覆盖面）。
+        assert_eq!(
+            stop_processes_at(&target, Some(decoy_copy.id())).unwrap(),
+            KillOutcome::Killed
+        );
+        assert!(!decoy_copy.wait().unwrap().success());
+        assert!(
+            decoy_cmdline.try_wait().unwrap().is_none(),
+            "命令行诱饵被误杀"
         );
 
         for c in [&mut decoy_cmdline, &mut decoy_copy] {
