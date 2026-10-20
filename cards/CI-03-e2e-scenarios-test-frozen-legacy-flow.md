@@ -12,9 +12,9 @@
 
 - **`e2e` job**（`tools/android-hello.sh` / `android-pair.sh` /
   `android-backup.sh` → `DaemonBackupTest`）：走 `manifest→push→commit`
-  批次协议（T-054，2026-07-31）。`docs/design/2026-08-29-arch01-backup-core/
-  05-legacy-flow-boundary.zh-CN.md` 的"Legacy 机制：冻结，不再作为新 Flow
-  门禁"表格里，`DaemonBackupTest` 被明确列在其中。
+  批次协议（T-054，2026-07-31）。REBUILD-00 的 Legacy/Flow 边界清单把
+  `DaemonBackupTest` 列为"冻结，不再作为新 Flow 门禁"（该清单已并入
+  `docs/desktop/business-rules.zh-CN.md` §11.3；`DaemonBackupTest` 现已删除）。
 - **`scenarios` job**（`tools/scenarios/huge_file.sh` /
   `crash_recovery.sh` / `disk_full.sh` → `testclient backup`）：走的协议更
   旧——T-032（2026-07-30）的"daemon 反向 pull"语义，`testclient` 的
@@ -82,8 +82,8 @@
 1. 确认生产方向：`crates/daemon/src/backup.rs` MOB-32 注释"手机永远发
    provider=null（推送型会话，手机不提供拉取）"——旧 T-032 pull 分支对
    真实设备不可达。
-2. 确认核心已换代：`docs/design/2026-08-29-arch01-backup-core/
-   05-legacy-flow-boundary.zh-CN.md` 明文冻结 `DaemonBackupTest` 等；
+2. 确认核心已换代：REBUILD-00 边界清单（现并入
+   `docs/desktop/business-rules.zh-CN.md` §11.3）明文冻结 `DaemonBackupTest` 等；
    `docs/PROGRESS.md` REBUILD-00~04 记录 2026-09-01/02 生产纵切完成，
    REBUILD-04 三星真机通过。
 3. 确认 CI 现状：`.github/workflows/e2e.yml` 的 `e2e`/`scenarios` job

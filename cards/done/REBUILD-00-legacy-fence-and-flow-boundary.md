@@ -33,6 +33,6 @@
 - ARCH-02～09 的账本、消费者、completion、取消、epoch 与对账骨架已物理迁入
   `backup/flow/`；`FlowBoundaryTest` 阻止该包引用旧 batch API。
 - `BackupWorker`、`BackupRunner`、`ConfirmedStore`、`ReuploadQueue` 已标为 `LEGACY`；
-  对应旧机制和需重写的产品不变量分类见
-  `docs/design/2026-08-29-arch01-backup-core/05-legacy-flow-boundary.zh-CN.md`。
+  对应旧机制和需重写的产品不变量分类曾单独成文（ARCH-01 设计目录下的 05 号边界清单）；
+  该文件已并入 `docs/desktop/business-rules.zh-CN.md` §11.3 后删除（#1049）。
 - 验证：Android JVM 387 tests / 0 failures / 4 skipped；`just ci` all green。

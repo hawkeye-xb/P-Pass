@@ -241,6 +241,15 @@ daemon 是 `config.toml` 与诊断包的唯一写者（壳经子命令调用，�
 - `thumb.get`（`QueryEngine`）：即时生成预算 `THUMB_BUDGET`，超时回占位图；失败负缓存 `THUMB_RETRY_AFTER`（内存，重启清空）；同 hash 同时只生成一次。
 - 预生成（`daemon::thumb_pregen`）：前台 `thumb.get` 生成时让路；启动回填重试 `thumb_state=2` 的行。
 
+### 5.6 运行模型纪律
+
+- 单进程、单 tokio 多线程运行时。常驻任务只有 §5.4 那张表；其余都是来活才 spawn、干完即灭（每个 IPC 连接、每个 QUIC 会话、每次 Flow 拉取 `spawn_fetch_task`）。
+- 会等磁盘或吃 CPU 的活（扫盘、批量 stat、缩略图解码、大文件入库、读 stdin）一律 `spawn_blocking`，不压在事件循环上（DESK-13）。
+- 有界：入库并发 `DEFAULT_INGEST_CONCURRENCY`；预生成 `PREGEN_WORKERS`；transport 入站连接 `mpsc::channel(16)`；事件总线 64；事件节流 `DEFAULT_THROTTLE_WINDOW`。
+- 等待必须带死线，错误串带方法名：daemon 探活对端 800 ms（`ipc.rs` `peer_call`）；壳每次 IPC 读 `IPC_READ_TIMEOUT`（NET-11，事件订阅长连接豁免）；壳等重启 `RESTART_GRACE`；收尾 `SHUTDOWN_DEADLINE`。
+- SQLite WAL，读不挡写。
+- 新增后台任务时：会等盘 / CPU → `spawn_blocking`；没有并发上限 → 加 `Semaphore` 或有界 channel；有等待 → 死线 + 错误串带标识；事件会爆发 → 走 `Throttle`；常驻任务 → 更新 §5.4 的表；新增业务数字 → 具名常量 + §12 一行 + 测试登记。
+
 ## 6 对 UI 暴露的事实
 
 壳只读下面这些字段，不再自己推导。
