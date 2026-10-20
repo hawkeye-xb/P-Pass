@@ -2,7 +2,19 @@ package com.hawkeyexb.ppass.backup
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.hawkeyexb.ppass.log.PLog
 import com.hawkeyexb.ppass.transport.PairingStore
+
+/** #1020：备份范围的三种读法（对位 iOS：`savedScope` 返回 nil / 集合 / 抛出）。 */
+sealed interface ScopeRead {
+    /** 从未保存过范围。 */
+    data object NeverSaved : ScopeRead
+
+    data class Saved(val ids: Set<Long>) : ScopeRead
+
+    /** 存了东西但读不出来——不是「从未保存」，界面要如实说「读不到」。 */
+    data class Unreadable(val cause: Throwable) : ScopeRead
+}
 
 /**
  * 备份范围（选了哪些相册）——**每台桌面一份**。
@@ -38,30 +50,63 @@ class BackupScopeStore(context: Context, daemonNodeId: String? = null) {
     }
 
     /** 选中的相册 id。null = 从未保存过范围——**不是**「全部」：引擎把 null 与空集都当成一张都不在范围内
-     *  （MOB-40；#541 起设置行也按这个显示「未选相册」）。 */
-    fun selectedBucketIds(): Set<Long>? {
-        val raw = prefs.getString("bucket_ids", null) ?: return null
-        return raw.split(",").mapNotNull { it.toLongOrNull() }.toSet()
+     *  （MOB-40；#541 起设置行也按这个显示「未选相册」）。
+     *  #1020：读不出来（[readScope] 为 [ScopeRead.Unreadable]）也返回 null——引擎记日志后按空范围，
+     *  需要区分「读不到」与「从未保存」的界面读 [readScope]。 */
+    fun selectedBucketIds(): Set<Long>? = when (val read = readScope()) {
+        ScopeRead.NeverSaved -> null
+        is ScopeRead.Saved -> read.ids
+        is ScopeRead.Unreadable -> {
+            PLog.w(TAG, "backup-scope: unreadable, treating as no album selected", read.cause)
+            null
+        }
+    }
+
+    /** #1020（对位 iOS `MediaLibrary.savedScope` 抛出）：范围的三种读法——从未保存 / 已保存 / 读不出来。 */
+    fun readScope(): ScopeRead = try {
+        parseScope(prefs.getString(KEY_BUCKETS, null))
+    } catch (e: Exception) {
+        ScopeRead.Unreadable(e)
     }
 
     /** MOB-02: 最近一次保存范围时看到的全部相册 id；null = 从未选过范围
      *  （选相册页不标「新」徽标；范围本身仍是空的，见 [selectedBucketIds]）。 */
     fun knownBucketIds(): Set<Long>? {
-        val raw = prefs.getString("known_bucket_ids", null) ?: return null
+        val raw = prefs.getString(KEY_KNOWN, null) ?: return null
         return raw.split(",").mapNotNull { it.toLongOrNull() }.toSet()
     }
 
     /** MOB-02: 保存范围的同时记录当前全部相册集合——下次进来不在
      *  known 里的相册标「新」、默认不勾选（选中集语义天然排除）。 */
     fun saveScope(selected: Set<Long>, allCurrent: Set<Long>) {
-        prefs.edit()
-            .putString("bucket_ids", selected.sorted().joinToString(","))
-            .putString("known_bucket_ids", allCurrent.sorted().joinToString(","))
-            .apply()
+        // #1020：commit 而不是 apply——apply 的写盘失败只在系统日志里，调用方永远不知道没存上。
+        val ok = prefs.edit()
+            .putString(KEY_BUCKETS, selected.sorted().joinToString(","))
+            .putString(KEY_KNOWN, allCurrent.sorted().joinToString(","))
+            .commit()
+        check(ok) { "cannot persist backup scope" }
+        PLog.i(TAG, "backup-scope: saved ${selected.size} albums")
     }
 
     companion object {
         internal const val LEGACY_PREFS = "backup_scope"
+        private const val KEY_BUCKETS = "bucket_ids"
+        private const val KEY_KNOWN = "known_bucket_ids"
+        private const val TAG = "PPassScope"
+
+        /**
+         * #1020：存下来的字符串 → 三种读法。空串 = 保存了空集；任何一段解析不出数字 = 读不出来——
+         * 不再 `mapNotNull` 静默丢掉坏的那段（那会把范围悄悄缩小，用户看不到）。
+         * SharedPreferences 自己吞掉的 XML 损坏（整份当空）在这里分辨不出，只能当「从未保存」。
+         */
+        internal fun parseScope(raw: String?): ScopeRead {
+            if (raw == null) return ScopeRead.NeverSaved
+            if (raw.isEmpty()) return ScopeRead.Saved(emptySet())
+            val ids = raw.split(",").map { token ->
+                token.toLongOrNull() ?: return ScopeRead.Unreadable(IllegalStateException("bad album id in saved scope: '$token'"))
+            }
+            return ScopeRead.Saved(ids.toSet())
+        }
 
         /** 老的全局那份被哪台桌面认领了——只认领一次。 */
         internal const val KEY_ADOPTED_BY = "adopted_by"

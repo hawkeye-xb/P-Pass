@@ -185,6 +185,8 @@
     <string name="hero_of_n">/ %1$s 张已回家</string>
     <string name="pending_count">待备份 %1$d 张</string>
     <string name="triplet_unavailable">相册数量读取失败，稍后重试</string>
+    <!-- #1038：账本（order 表）读不出来——不给任何完成度结论。与 triplet_unavailable（读不到相册数量）是两件事。 -->
+    <string name="hero_counts_unreadable">账本暂时读不出来，所以现在不给出备份进度——打开 App 时会再试。</string>
     <!-- UI-16 规则 H-C：两个数对不上，一律不渲染分数。刻意不复用
          triplet_unavailable——那条说的是「读不到手机相册的数量」，是另一件事。 -->
     <string name="hero_unreconciled_title">正在重新清点照片</string>
@@ -223,6 +225,8 @@
          "备份哪些相册"，跟下面几行同款"问句式"标签。 -->
     <string name="backup_scope">备份哪些相册</string>
     <string name="backup_scope_none">未选相册</string>
+    <!-- #1020：存了范围但读不出来，不是「未选相册」。 -->
+    <string name="backup_scope_unreadable">读不到已保存的选择</string>
     <plurals name="backup_scope_n">
         <item quantity="other">%1$d 个相册</item>
     </plurals>
@@ -279,6 +283,10 @@
          本代码库第一个非持久反馈机制。只覆盖能诚实上报的信号（为什么
          没有"失败"文案，见 MainActivity.kt 的注释）。 -->
     <string name="background_backup_resuming">正在重新连接后台监听…</string>
+    <!-- #1020（对位 iOS #971 / #972）：设置没存上、命令没执行成时的一过性提示（UI-12 Snackbar）。 -->
+    <string name="setting_save_failed">设置没能保存到手机上，已恢复为原来的值。请检查存储空间后再试。</string>
+    <string name="scope_save_failed">相册选择没能保存到手机上，请检查存储空间后再试。</string>
+    <string name="command_failed">操作没能完成，请稍后再试。</string>
     <string name="background_backup_authorized">已获得后台运行权限</string>
     <string name="background_backup_authorization_denied">未获得授权，后台备份暂时无法自动运行</string>
     <!-- UI-12: 琥珀通知条的"去处理"动作文案（与设置页 CellRow 共用同一

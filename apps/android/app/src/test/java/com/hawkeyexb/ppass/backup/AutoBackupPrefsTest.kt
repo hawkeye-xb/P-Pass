@@ -95,7 +95,8 @@ class AutoBackupPrefsTest {
         val disableBody = source.substringAfter("fun disableAutoBackup(context: Context)")
             .substringBefore("/** Re-enables normal automatic producers")
 
-        assertTrue("the switch must persist the automatic policy", disableBody.contains("setEnabled(false)"))
+        // #1020：意图与生产者改为一次落盘（分两次写，第二次失败会留半截）；「落盘关掉生产者」的意图不变。
+        assertTrue("the switch must persist the automatic policy", disableBody.contains("set(requested = false, enabled = false)"))
         assertTrue("the switch must cancel only its automatic producers", disableBody.contains("autoBackupWorkNames()"))
         assertFalse("automatic policy is not a user pause", disableBody.contains("pauseFlow("))
         assertFalse("automatic policy is not a user resume", disableBody.contains("continueFlow("))

@@ -57,21 +57,14 @@
 /* PPassCore WaitReason.localStorageFull：手机自己空间不够放临时原图。 */
 "state_waiting_local_storage_full" = "手机存储空间不够，腾出一些空间后接着备份。";
 
-/* #973：首页计数读库失败——不给任何完成度结论（Android 读失败不会变成 0）。 */
-"hero_counts_unreadable" = "账本暂时读不出来，所以现在不给出备份进度——打开 App 时会再试。";
-
 /* #975：iOS 系统授权框只弹一次，被拒后只能去系统设置（Android 会再弹一次申请框）。 */
 "rule_notify_denied_hint" = "通知已在系统设置里关闭。点开关前往系统设置打开。";
 
 /* 配对成功但 pairing.json 写不进去（#969）：不能让用户进入「已配对」却重启即丢。 */
 "pair_save_failed" = "配对信息没能保存到手机上，请检查存储空间后重新扫码。";
 
-/* #971 / #972：设置没存上、命令没执行成时的可见反馈。Android 这些路径要么崩溃要么静默吞掉（Android 侧另开 issue），没有可对位的文案。 */
+/* #971 / #972：一过性提示的弹框标题。Android 用无标题的 Snackbar；提示正文两端共用（#1020，由 Android strings.xml 生成）。 */
 "notice_title" = "没能完成";
-"setting_save_failed" = "设置没能保存到手机上，已恢复为原来的值。请检查存储空间后再试。";
-"scope_save_failed" = "相册选择没能保存到手机上，请检查存储空间后再试。";
-"command_failed" = "操作没能完成，请稍后再试。";
-"backup_scope_unreadable" = "读不到已保存的选择";
 
 /* #982：首次选完相册的完成页。Android 在这里申请电池白名单；iOS 没有对应物，后台只能由系统挑时机（#343：不写频率、不假装能保证）。 */
 "background_backup_ios_note" = "开启后，离开 P-Pass 时 iOS 可能会找机会接着备份；是否执行、何时执行由系统决定，不保证。";

@@ -234,10 +234,11 @@ Android 的照片只在一个 bucket（文件夹）里；iOS 的一张照片可�
 
 ### 首页计数读库失败（#973）
 
-- **Android**：`FlowProjection.facts` 直接读库、读失败抛出，不当 0；`BackupUiStateHolder.refresh` 在外层 `runCatching{…}.getOrNull() ?: return`，即**不发布、沿用上一次投影**（初始为空投影，三元组为 null）；该路径不打日志。
-- **iOS 对位**：`OrderCounts.read`（PPassCore）五个读口任一失败整体抛出；`refreshFacts` 记日志（`home-facts: order counts unreadable: …`）并把事实标为 `countsReadable = false`（计数全是占位 0）。投影层对它一律不给完成度结论：`triplet` 为 nil、`allDone` 为 false、状态行走中性 idle（不出 allSafe，也不据占位 0 出 trouble 红卡），英雄区显示 `hero_counts_unreadable`，「上次成功」不落成「还没成功过」。
-- **有意不同**：Android 读失败是「沿用旧值、用户看不到」，iOS 改为**明示读不到**（审计 #973 的方向：失败要暴露）；这条 Android 行为的差异另开 issue 跟踪，本批不改 Android。
-- **测试**：`OrderCountsTests`（读失败抛出而不是 0）、PPassTests 的 NotificationAndCountsTests（模拟器上跑；反证组合：引擎视图 pending=0、范围已知、计数不可读）。
+- **已对齐（#1038）**：两端同一语义——读失败要暴露，不沿用旧值、不当 0。
+- **iOS**：`OrderCounts.read`（PPassCore）五个读口任一失败整体抛出；`refreshFacts` 记日志（`home-facts: order counts unreadable: …`）并把事实标为 `countsReadable = false`（计数全是占位 0）。投影层对它一律不给完成度结论：`triplet` 为 nil、`allDone` 为 false、状态行走中性 idle（不出 allSafe，也不据占位 0 出 trouble 红卡），英雄区显示 `hero_counts_unreadable`，「上次成功」不落成「还没成功过」。
+- **Android**：`BackupUiStateHolder` 读账本经 `factsOrUnreadable`：`FlowProjection.facts` 抛出 → `FlowProjection.unreadable`（`countsReadable = false`，n 与引擎视图照常带上），记日志（`home-facts: order counts unreadable`，由好转坏时记一次）。`backupUiStateOf` / `flowAllDone` / `flowTripletOf` 对它与 iOS 同样短路，`heroRenderOf` 给 `CountsUnreadable`。运行时还没就绪（gateway 为 null）不是读失败，照旧不发布。回到前台重读一次（`holder.onResume`），所以文案「打开 App 时会再试」两端都成立。
+- **没选相册（同批对齐）**：范围从未保存 / 读不到、保存了空集、或已选相册都不存在（#836 口径）→ 空闲时状态行 `state_no_albums`（排在 trouble 之前）；英雄区在三元组为空时看范围存没存：没存 → `backup_scope_none`，存了 → `triplet_unavailable`。Android 此前 `BackupUiState.NoAlbums` 没有生产者，现由 `noAlbumsOf` 接上。
+- **测试**：iOS——`OrderCountsTests`（读失败抛出而不是 0）、PPassTests 的 NotificationAndCountsTests / HomeProjectionTests（模拟器上跑；反证组合：引擎视图 pending=0、范围已知、计数不可读）。Android——`UserCommandAndHomeFactsTest`（同一反证组合、未选相册的四种来源与优先级、英雄区六选一的顺序）。
 
 ### 后台备份默认值、首次配对完成页与「仅 Wi‑Fi」确认（#982）
 
@@ -260,10 +261,14 @@ Android 的照片只在一个 bucket（文件夹）里；iOS 的一张照片可�
 
 ### 设置写盘失败与用户命令出错的反馈（#971 / #972）
 
-- **Android**：`BackupSettings` / `AutoBackupPrefs` / `NotifyOnFailurePrefs` 写失败是 `check(rename)` 抛出，Wi‑Fi 确认框的回调没有 catch；`BackupUiStateHolder.command{}` 只有 try/finally，`requestCancelRemaining` 用 `runCatching{…}.getOrNull()` 吞掉。Android 没有可对位的「失败反馈」——要么崩溃要么静默。
-- **iOS**：端口 setter / 命令改为 `throws`，`AppModel` 只在写成功时更新显示值；失败 → 记日志、`refresh()` 回到盘上的真实值、弹 alert（`setting_save_failed` / `scope_save_failed` / `command_failed`，iOS 独有文案放 `IOS.strings`）。命令里「状态不允许」（`cancelRemaining` 返回 nil）与「执行出错」（抛出）分开：前者只刷新、那一行随状态收起（Android 同），后者弹提示。相册范围读失败与「从未保存」区分（`MediaLibrary.savedScope` 抛出，设置行显示 `backup_scope_unreadable`，引擎侧记日志后按空范围）。
-- **有意不同**：这是 iOS 比 Android 更严的一侧（审计方向「失败要暴露」）；Android 的崩溃 / 吞错另开 issue（#1020）跟踪，本批不改 Android。
-- **测试**：`SettingsFeedbackTests`（写失败回滚 + 提示、命令出错提示、状态不允许不报错、范围读失败 ≠ 从未保存）。
+- **已对齐（#1020）**：两端同一语义——写失败不崩溃、不静默；命令出错要提示，「状态不允许」不是错误。
+- **设置写盘**：store 写失败照旧抛出（后台写者靠它暴露问题），界面这一侧统一接住——成功才更新显示值 / 做后续副作用（重排任务、叫醒引擎、申请白名单），失败记日志（`settings: write failed (…)`）、显示值回到盘上的真实值、给一过性提示 `setting_save_failed`；成功也记一行（`settings: saved …`）。iOS 在 `AppModel`（`settingWriteFailed`），Android 在 `SettingsWriter`（`MainActivity` 的仅 Wi‑Fi、后台备份、通知开关、完成页、权限弹窗回调都经过它）。后台备份的「意图 + 生产者」两个字段 Android 改为一次落盘（`AutoBackupPrefs.set`），不会写成半截。
+- **相册范围**：读失败与「从未保存」区分——iOS `MediaLibrary.savedScope` 抛出，Android `BackupScopeStore.readScope` 返回 `ScopeRead.Unreadable`（存下的串里有解析不出的段；此前 `mapNotNull` 静默丢掉）；设置行显示 `backup_scope_unreadable`，引擎侧记日志后按空范围，选相册时旧范围按「从未选过」算。写失败（Android 由 `apply` 改为 `commit` 并检查返回值）→ 提示 `scope_save_failed`，不进完成页、不叫醒引擎。
+- **用户命令**（再试一次 / 恢复已跳过 / 取消剩余 / 弹框前的快照）：执行出错 → 记日志（`command failed (…)`）+ 提示 `command_failed`；「状态不允许」（iOS `cancelRemaining` 返回 nil；Android 引擎返回 false / null、运行时未就绪）只刷新，那一行随状态收起。成功记 `command … ok`。iOS 在 `AppModel.runCommand`，Android 在 `BackupUiStateHolder.command` / `attemptUserCommand`；Android「再试一次」改为经 gateway 等引擎做完（此前另起线程，出错只进 logcat）。
+- **平台差异（客观，不是遗漏）**：
+  1. 提示的载体：iOS 用 alert（标题 `notice_title`，iOS 独有），Android 用 UI-12 的 Snackbar（无标题）；提示正文两端共用（Android `strings.xml` 为源）。
+  2. Android 的 SharedPreferences 文件损坏时由系统整份当空读出，App 分辨不出——这一种只能当「从未保存」；能分辨的（存下的值解析不出来、读取抛出）一律按读不到。
+- **测试**：iOS——`SettingsFeedbackTests`（写失败回滚 + 提示、命令出错提示、状态不允许不报错、范围读失败 ≠ 从未保存）。Android——`SettingsWriteFeedbackTest`（偏好目录只读，真实制造写失败：显示值回到盘上的值、提示、日志；store 照旧抛出；范围三种读法）、`UserCommandAndHomeFactsTest`（命令出错 / 状态不允许 / 取消不算出错；接线门禁）。
 
 ### Android 专属、不移植
 

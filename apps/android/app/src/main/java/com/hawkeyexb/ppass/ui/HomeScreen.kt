@@ -90,12 +90,18 @@ sealed class BackupUiState {
 // 依旧恒绿——那是假修。G4/G5 两票因此随三元组从 BackupUiStateHolder 走
 // 同一个 tick 过来（见 tripletOf 的注释）。
 
-/** 规则 H：英雄卡主位四选一，互斥、无第五种。 */
+/** 规则 H：英雄卡主位六选一，互斥（与 iOS `HeroRender` 同一组；CountsUnreadable、NoAlbums 由 #1038 补上）。 */
 enum class HeroRender {
     /** H-A：相册权限不足，引导卡顶替整块三元组。 */
     AccessBlocked,
 
-    /** H-B：读不到手机相册的数量（三元组为 null）。 */
+    /** #1038：账本（order 表）读不出来——不给任何完成度结论。与 H-B「读不到相册数量」是两件事，分开说。 */
+    CountsUnreadable,
+
+    /** #1038：没选相册（范围从未保存或读不到）——说「未选相册」，不说成读取失败。 */
+    NoAlbums,
+
+    /** H-B：读不到手机相册的数量（范围已保存，三元组为 null）。 */
     Unreadable,
 
     /** H-C：两个数对不上（clamp 前的原始已确认数 > N）——不渲染任何 m/n
@@ -128,9 +134,20 @@ internal fun selectedExistingCount(selected: Set<Long>?, existing: Set<Long>?): 
     else -> selected.count { it in existing }
 }
 
-fun heroRenderOf(mediaAccess: MediaAccess, triplet: BackupTriplet?): HeroRender = when {
+/**
+ * 顺序同 iOS `HomeProjection.heroRender`：权限 → 账本读不到 → 三元组为 null 时看范围存没存（存了 = 相册数量读不到，
+ * 没存 = 未选相册）→ 对不上 → 三元组。[countsReadable] / [scopeSaved] 由 [com.hawkeyexb.ppass.backup.BackupUiStateHolder] 给，
+ * HomeScreen 必须把它们传进来（默认值只为旧测试的调用形状）。
+ */
+fun heroRenderOf(
+    mediaAccess: MediaAccess,
+    triplet: BackupTriplet?,
+    countsReadable: Boolean = true,
+    scopeSaved: Boolean = true,
+): HeroRender = when {
     mediaAccess != MediaAccess.FULL -> HeroRender.AccessBlocked
-    triplet == null -> HeroRender.Unreadable
+    !countsReadable -> HeroRender.CountsUnreadable
+    triplet == null -> if (scopeSaved) HeroRender.Unreadable else HeroRender.NoAlbums
     // clamp 后的 m 恒 ≤ n，所以这里必须读 confirmedRaw：真机「23 / 23」那一例
     // m == n，clamp 是恒等变换，一行代码都没执行，英雄卡照样撒谎。
     triplet.confirmedRaw > triplet.n -> HeroRender.Unreconciled
@@ -252,6 +269,11 @@ fun HomeScreen(
     // T6: 备份范围（选了几个相册）——「选择相册」与「发起备份」分离。null = 从未保存过范围，
     // 引擎按「一个都不在范围内」处理（#541，见 [backupScopeRowCount]）。
     selectedBucketCount: Int? = null,
+    // #1020：存了范围但读不出来——设置行说「读不到已保存的选择」，不说「未选相册」。
+    scopeUnreadable: Boolean = false,
+    // #1038：账本读不到 / 范围存没存——英雄区据此在「读不到」「未选相册」「相册数量读取失败」之间选（[heroRenderOf]）。
+    countsReadable: Boolean = true,
+    scopeSaved: Boolean = true,
     onOpenBucketPicker: () -> Unit = {},
     // MOB-02 §二 / MOB-94: 相册权限三档——非 FULL 时 hero 显示引导卡顶替
     // 三元组（拿不到完整相册时 N/M 是假数），一键去系统设置。
@@ -399,7 +421,7 @@ fun HomeScreen(
                     }
                 } else {
                 val t = triplet
-                val heroRender = heroRenderOf(mediaAccess, t)
+                val heroRender = heroRenderOf(mediaAccess, t, countsReadable = countsReadable, scopeSaved = scopeSaved)
                 if (heroRender == HeroRender.Triplet && t != null) {
                     // UI-16 规则 G：五条闸门全过才准绿；任一条不成立退回墨色。
                     // 恒绿的那两行是本卡要修的缺陷本体——配对已断/有失败待处理/
@@ -449,8 +471,15 @@ fun HomeScreen(
                     )
                 } else {
                     // DOG-01d: 三元组不可用（媒体查询失败）→ 不编数字。
+                    // #1038：账本读不到 / 没选相册各说各的，不混成「相册数量读取失败」。
                     Text(
-                        stringResource(R.string.triplet_unavailable),
+                        stringResource(
+                            when (heroRender) {
+                                HeroRender.CountsUnreadable -> R.string.hero_counts_unreadable
+                                HeroRender.NoAlbums -> R.string.backup_scope_none
+                                else -> R.string.triplet_unavailable
+                            },
+                        ),
                         fontSize = 15.sp, color = PPColor.Ink60,
                     )
                 }
@@ -728,9 +757,13 @@ fun HomeScreen(
             Column {
                 CellRow(
                     label = stringResource(R.string.backup_scope),
-                    value = backupScopeRowCount(selectedBucketCount)?.let {
-                        pluralStringResource(R.plurals.backup_scope_n, it, it)
-                    } ?: stringResource(R.string.backup_scope_none),
+                    value = if (scopeUnreadable) {
+                        stringResource(R.string.backup_scope_unreadable)
+                    } else {
+                        backupScopeRowCount(selectedBucketCount)?.let {
+                            pluralStringResource(R.plurals.backup_scope_n, it, it)
+                        } ?: stringResource(R.string.backup_scope_none)
+                    },
                     onClick = onOpenBucketPicker,
                 )
                 // #418：「取消剩余 N 张」——跟「备份哪些相册」同属「这次备份包含什么」的
