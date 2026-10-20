@@ -141,7 +141,11 @@ impl Reconcile {
     /// 外部删除，是旧口径收错了。Flow 行的 MIME 由手机给（`image/*`、
     /// `video/*`），即使文件名没有扩展名也不在候选集里。
     async fn purge_non_media_rows(&self) {
-        let candidates = match self.db.list_non_media_typed_assets().await {
+        let candidates = match self
+            .db
+            .list_non_media_typed_assets(core_index::NON_MEDIA_IMAGE_TYPES)
+            .await
+        {
             Ok(c) => c,
             Err(e) => {
                 tracing::warn!("#1044: 非媒体存量行查询失败，等下一轮：{e}");
@@ -392,11 +396,25 @@ mod tests {
             .await
             .unwrap();
 
+        // #1044 追加拍板：旧监听收过的 svg（MIME 记成 image/svg+xml）也是存量。
+        std::fs::write(month.join("logo.svg"), b"<svg/>").unwrap();
+        db.insert_asset(&row(4, "originals/aa/2026/09/logo.svg", "image/svg+xml"))
+            .await
+            .unwrap();
+
         let report = Reconcile::new(db.clone(), dir.path()).run_once().await;
 
         assert!(
             db.get_asset(&[1u8; 32]).await.unwrap().is_none(),
             "非媒体存量行要清掉"
+        );
+        assert!(
+            db.get_asset(&[4u8; 32]).await.unwrap().is_none(),
+            "svg 存量行要清掉"
+        );
+        assert!(
+            month.join("logo.svg").exists(),
+            "只清索引，svg 文件原地不动"
         );
         assert!(month.join("Thumbs.db").exists(), "只清索引，文件原地不动");
         assert!(

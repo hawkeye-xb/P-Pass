@@ -365,3 +365,20 @@ async fn rebuild_indexes_only_media_files() {
         "avi 经重建入库也是视频（与监听同一张表）"
     );
 }
+
+/// #1044 追加拍板：rebuild 同一口径——svg/ico 不入库，tiff 照收。
+#[tokio::test(flavor = "multi_thread")]
+async fn rebuild_skips_vector_images_and_icons() {
+    let (dir, db, _ing) = setup().await;
+    let root = dir.path().join("library");
+    let originals = root.join("originals");
+    fs::create_dir_all(&originals).unwrap();
+    fs::write(originals.join("logo.svg"), b"<svg/>").unwrap();
+    fs::write(originals.join("favicon.ico"), b"ico").unwrap();
+    fs::write(originals.join("scan.tiff"), b"tiff").unwrap();
+
+    let report = rebuild(&db, &root, &LOCAL).await.unwrap();
+
+    assert_eq!(report.indexed, 1);
+    assert_eq!(dump(&db).await[0].1, "originals/scan.tiff");
+}

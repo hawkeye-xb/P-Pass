@@ -278,3 +278,38 @@ async fn non_media_files_are_never_adopted() {
     assert!(page.assets[0].rel_path.ends_with("IMG_1.JPG"));
     assert_eq!(page.assets[0].media_type, "image/jpeg");
 }
+
+/// #1044 追加拍板：svg/svgz/ico 不收编；tiff/avif/jxl/RAW 照收。
+/// 反证：去掉 media.rs 里的排除表，这条收 7 个。
+#[tokio::test(flavor = "multi_thread")]
+async fn vector_images_and_icons_are_not_adopted_but_other_images_are() {
+    let (dir, db) = setup().await;
+    let root = dir.path().join("library");
+    for (name, body) in [
+        ("logo.svg", &b"<svg/>"[..]),
+        ("logo.svgz", b"gz"),
+        ("favicon.ico", b"ico"),
+        ("scan.tiff", b"tiff"),
+        ("a.avif", b"avif"),
+        ("a.jxl", b"jxl"),
+        ("a.raf", b"raf"),
+    ] {
+        write(&root, &format!("originals/{name}"), body);
+    }
+
+    let report = adopt_orphans(&db, &root, &LOCAL).await.unwrap();
+
+    assert_eq!(report.adopted, 4);
+    let page = db.timeline_page(None, 10).await.unwrap();
+    let mut names: Vec<&str> = page.assets.iter().map(|a| a.rel_path.as_str()).collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec![
+            "originals/a.avif",
+            "originals/a.jxl",
+            "originals/a.raf",
+            "originals/scan.tiff"
+        ]
+    );
+}

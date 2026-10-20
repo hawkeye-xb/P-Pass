@@ -6,8 +6,9 @@
 //! 经重建入库变成 octet-stream 再被当成照片……）。现在全部问这里。
 //!
 //! 判据：扩展名经成熟的扩展名→MIME 表（`mime_guess`）查出的首选类型，
-//! 主类型为 `image` 或 `video` 才算媒体；其余（含查不到、无扩展名）一律
-//! 不是。不手维护格式清单。
+//! 主类型为 `image` 或 `video` 才算媒体，矢量图与图标除外
+//! （[`NON_MEDIA_IMAGE_TYPES`]）；其余（含查不到、无扩展名）一律不是。
+//! 不手维护格式清单。
 //!
 //! 不在这里判的：Flow 路径——手机端已按系统的图片/视频类别过滤，
 //! MIME 由手机给出，桌面不复检。
@@ -32,11 +33,19 @@ pub fn media_kind(path: &Path) -> Option<MediaKind> {
     }
 }
 
+/// 主类型是 `image` 但不算媒体的 MIME（#1044 追加拍板）：矢量图与图标——
+/// 不是照片，缩略图也解不出（照片墙上永远是灰块）。按 MIME 排除而不是按
+/// 扩展名，`.svg`/`.svgz`/`.ico` 都经同一张表落到这里。
+pub const NON_MEDIA_IMAGE_TYPES: &[&str] =
+    &["image/svg+xml", "image/x-icon", "image/vnd.microsoft.icon"];
+
 /// 文件路径 → 入库记录的 MIME（`asset.media_type`）；不是媒体返回 `None`。
 pub fn media_type_for(path: &Path) -> Option<&'static str> {
     let ext = path.extension()?.to_str()?;
     let mime = mime_guess::from_ext(ext).first_raw()?;
-    (mime.starts_with("image/") || mime.starts_with("video/")).then_some(mime)
+    ((mime.starts_with("image/") || mime.starts_with("video/"))
+        && !NON_MEDIA_IMAGE_TYPES.contains(&mime))
+    .then_some(mime)
 }
 
 #[cfg(test)]
@@ -73,6 +82,35 @@ mod tests {
         ] {
             assert_eq!(kind(n), None, "{n}");
         }
+    }
+
+    /// #1044 追加拍板：矢量图与图标不算媒体（不是照片，缩略图也解不出）；
+    /// 其余 image/*、video/*（含 tiff/avif/jxl/各家 RAW）照收。
+    #[test]
+    fn vector_images_and_icons_are_not_media_but_other_images_are() {
+        for n in [
+            "logo.svg",
+            "logo.SVG",
+            "logo.svgz",
+            "favicon.ico",
+            "favicon.ICO",
+        ] {
+            assert_eq!(kind(n), None, "{n}");
+            assert_eq!(media_type_for(Path::new(n)), None, "{n}");
+        }
+        for n in [
+            "scan.tif",
+            "scan.tiff",
+            "a.avif",
+            "a.jxl",
+            "a.raf",
+            "a.orf",
+            "a.rw2",
+            "a.dng",
+        ] {
+            assert_eq!(kind(n), Some(MediaKind::Image), "{n}");
+        }
+        assert_eq!(kind("clip.webm"), Some(MediaKind::Video));
     }
 
     #[test]

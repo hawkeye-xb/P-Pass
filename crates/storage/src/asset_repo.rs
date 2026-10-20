@@ -95,16 +95,28 @@ impl Db {
     }
 
     /// (hash, rel_path) of rows whose stored MIME is neither `image/*` nor
-    /// `video/*` — #1044 B3 存量清理的候选集（旧版 adopt/rebuild 把非媒体
-    /// 文件收成过 octet-stream 行）。是否真不是媒体由调用方按
-    /// `core_index::media_kind` 再判一次；本层只做 MIME 前缀筛选。
-    pub async fn list_non_media_typed_assets(&self) -> Result<Vec<(Vec<u8>, String)>> {
-        let rows = sqlx::query(
+    /// `video/*`, or is one of `also_non_media` — #1044 B3 存量清理的候选集
+    /// （旧版 adopt/rebuild 把非媒体文件收成过 octet-stream 行，旧监听收过
+    /// svg/ico）。是否真不是媒体由调用方按 `core_index::media_kind` 再判一次；
+    /// 本层只做 MIME 筛选，排除哪些 MIME 是调用方的业务规则。
+    pub async fn list_non_media_typed_assets(
+        &self,
+        also_non_media: &[&str],
+    ) -> Result<Vec<(Vec<u8>, String)>> {
+        let mut sql = String::from(
             "SELECT hash, rel_path FROM asset
-             WHERE media_type NOT LIKE 'image/%' AND media_type NOT LIKE 'video/%'",
-        )
-        .fetch_all(self.pool())
-        .await?;
+             WHERE (media_type NOT LIKE 'image/%' AND media_type NOT LIKE 'video/%')",
+        );
+        if !also_non_media.is_empty() {
+            sql.push_str(" OR media_type IN (");
+            sql.push_str(&vec!["?"; also_non_media.len()].join(", "));
+            sql.push(')');
+        }
+        let mut q = sqlx::query(&sql);
+        for m in also_non_media {
+            q = q.bind(*m);
+        }
+        let rows = q.fetch_all(self.pool()).await?;
         Ok(rows
             .iter()
             .map(|r| (r.get("hash"), r.get("rel_path")))
