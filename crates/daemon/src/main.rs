@@ -68,6 +68,23 @@ async fn main() -> anyhow::Result<()> {
             };
             config_command_exit(daemon::config::init_config(&platform_dir, &library));
         }
+        // #1042：诊断包的唯一写者。同样在一切 daemon 机制之前短路：不开库
+        // （常驻服务在线时经 IPC logs.export 要那三份，不在线就不要）。契约：
+        // 成功 exit 0，stdout 一行 {"zip","daemon_reachable"}；写不出 zip 时
+        // exit 1，stderr 一行错误。常驻服务不在线不算失败。
+        Ok(daemon::cli::Cli::DiagExport { out, app_version }) => {
+            let env = daemon::diag_bundle::ExportEnv::from_process(out.into(), app_version);
+            match daemon::diag_bundle::export(&env).await {
+                Ok(v) => {
+                    println!("{v}");
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
+        }
         Ok(daemon::cli::Cli::ConfigSetLibrary { library }) => {
             let platform_dir = {
                 use platform::PlatformAdapter as _;

@@ -34,6 +34,11 @@ pub enum Cli {
     ConfigSetLibrary {
         library: String,
     },
+    /// #1042：`diag export --out <zip> [--app-version <v>]`——组装并脱敏诊断包。
+    DiagExport {
+        out: String,
+        app_version: Option<String>,
+    },
 }
 
 pub const USAGE: &str = "\
@@ -58,6 +63,8 @@ P-Pass 存储端 daemon
   config set-library <dir>
                换库：校验（存在/可写/不嵌套）后只改 data_dir 一行；
                重启后台服务后生效
+  diag export --out <zip> [--app-version <v>]
+               组装并脱敏诊断包，写到 <zip>（后台服务不在线也能导出）
 
 退出码：0 成功；1 操作失败（stderr 一行错误）；2 用法错误
 ";
@@ -75,7 +82,7 @@ pub fn parse_cli(args: impl IntoIterator<Item = String>) -> Result<Cli, String> 
     let args: Vec<String> = args.into_iter().collect();
     // #1042：首个参数是子命令名 ⇒ 走子命令语法（同样在一切 daemon 机制之前
     // 短路，见 main.rs）。
-    if args.first().map(String::as_str) == Some("config") {
+    if matches!(args.first().map(String::as_str), Some("config" | "diag")) {
         return parse_subcommand(&args);
     }
     let mut ephemeral = false;
@@ -104,7 +111,7 @@ pub fn parse_cli(args: impl IntoIterator<Item = String>) -> Result<Cli, String> 
     Ok(Cli::Run { ephemeral })
 }
 
-/// #1042：`config …` 的语法。严格匹配，多一个少一个都是用法
+/// #1042：`config …` / `diag …` 的语法。严格匹配，多一个少一个都是用法
 /// 错误——与顶层「未知参数绝不静默忽略」同一纪律。`--help` / `-h` 出现在
 /// 子命令里同样短路成帮助。
 fn parse_subcommand(args: &[String]) -> Result<Cli, String> {
@@ -121,9 +128,34 @@ fn parse_subcommand(args: &[String]) -> Result<Cli, String> {
             library: (*dir).to_string(),
         }),
         ["config", "set-library", ..] => Err("用法：config set-library <dir>".to_string()),
+        ["diag", "export", flags @ ..] => parse_diag_export(flags),
         [cmd, sub, ..] => Err(format!("未知子命令：{cmd} {sub}")),
         [cmd] => Err(format!("缺少子命令：{cmd} <…>")),
         [] => Err("缺少子命令".to_string()),
+    }
+}
+
+/// `diag export` 的选项：`--out <zip>` 必填、`--app-version <v>` 可选，顺序
+/// 不限，各最多一次；其余一律是用法错误。
+fn parse_diag_export(flags: &[&str]) -> Result<Cli, String> {
+    const USAGE_DIAG: &str = "用法：diag export --out <zip> [--app-version <v>]";
+    let mut out = None;
+    let mut app_version = None;
+    let mut it = flags.iter();
+    while let Some(flag) = it.next() {
+        let slot = match *flag {
+            "--out" => &mut out,
+            "--app-version" => &mut app_version,
+            _ => return Err(USAGE_DIAG.to_string()),
+        };
+        match (slot.is_some(), it.next()) {
+            (false, Some(v)) => *slot = Some((*v).to_string()),
+            _ => return Err(USAGE_DIAG.to_string()),
+        }
+    }
+    match out {
+        Some(out) if !out.is_empty() => Ok(Cli::DiagExport { out, app_version }),
+        _ => Err(USAGE_DIAG.to_string()),
     }
 }
 
@@ -344,6 +376,43 @@ mod tests {
             parse_cli(args(&["config", "init", "--help"])),
             Ok(Cli::Help)
         );
+    }
+
+    #[test]
+    fn diag_export_parses_strictly() {
+        assert_eq!(
+            parse_cli(args(&["diag", "export", "--out", "/tmp/x.zip"])),
+            Ok(Cli::DiagExport {
+                out: "/tmp/x.zip".into(),
+                app_version: None
+            })
+        );
+        assert_eq!(
+            parse_cli(args(&[
+                "diag",
+                "export",
+                "--app-version",
+                "0.9.1",
+                "--out",
+                "o.zip"
+            ])),
+            Ok(Cli::DiagExport {
+                out: "o.zip".into(),
+                app_version: Some("0.9.1".into())
+            })
+        );
+        for bad in [
+            &["diag"][..],
+            &["diag", "export"],
+            &["diag", "export", "--app-version", "1"],
+            &["diag", "export", "--out"],
+            &["diag", "export", "--out", ""],
+            &["diag", "export", "--out", "a", "--out", "b"],
+            &["diag", "export", "--out", "a", "--bogus"],
+            &["diag", "import"],
+        ] {
+            assert!(parse_cli(args(bad)).is_err(), "{bad:?} 应是用法错误");
+        }
     }
 
     /// 子命令名只在首位才是子命令：`--ephemeral config` 仍是未知参数。

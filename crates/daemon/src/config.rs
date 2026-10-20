@@ -150,7 +150,7 @@ pub const CONFIG_FILE_NAME: &str = "config.toml";
 /// 会回到桌面前端展示的错误：`{"key":"ui.err_…","params":{…}}`，与壳
 /// `ipc::ui_err` 同一线上格式（I18N-03 #492），#1045 可以原样转交前端的
 /// `errText` 渲染。参数值一律字符串化、不翻译。
-fn ui_err(key: &str, params: &[(&str, &dyn std::fmt::Display)]) -> String {
+pub(crate) fn ui_err(key: &str, params: &[(&str, &dyn std::fmt::Display)]) -> String {
     let params: serde_json::Map<String, serde_json::Value> = params
         .iter()
         .map(|(k, v)| ((*k).to_string(), serde_json::Value::String(v.to_string())))

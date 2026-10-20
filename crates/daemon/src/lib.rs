@@ -10,6 +10,7 @@ pub mod blobs_gate;
 pub mod cli;
 pub mod config;
 pub mod diag_agg;
+pub mod diag_bundle;
 pub mod download;
 pub mod events;
 pub mod flow_delivery;
