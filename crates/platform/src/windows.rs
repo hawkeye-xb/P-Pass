@@ -562,6 +562,20 @@ impl PlatformAdapter for WindowsAdapter {
         crate::data_migration::resolve(&legacy_data_dir(), &current_data_dir())
     }
 
+    /// #1043（B6）：`GetUserDefaultLocaleName`（按拍板读用户区域设置，如
+    /// `zh-CN`、`en-US`）。返回值含结尾 NUL；0 = 失败 → `None`。
+    fn system_locale(&self) -> Option<String> {
+        use windows_sys::Win32::Globalization::GetUserDefaultLocaleName;
+        // LOCALE_NAME_MAX_LENGTH = 85（含结尾 NUL）。
+        let mut buf = [0u16; 85];
+        // SAFETY: buf 在本栈上，长度如实传入。
+        let n = unsafe { GetUserDefaultLocaleName(buf.as_mut_ptr(), buf.len() as i32) };
+        let len = usize::try_from(n).ok()?.checked_sub(1)?;
+        String::from_utf16(&buf[..len])
+            .ok()
+            .filter(|t| !t.is_empty())
+    }
+
     /// #1043（B10）：Known Folder `FOLDERID_Profile`（不读 `USERPROFILE`）。
     fn home_dir(&self) -> Option<PathBuf> {
         known_folder(&windows::Win32::UI::Shell::FOLDERID_Profile)
@@ -1971,6 +1985,16 @@ mod b10_known_folder_tests {
         assert!(home.is_absolute(), "{}", home.display());
         assert!(pictures.is_absolute(), "{}", pictures.display());
         assert_ne!(home, pictures);
+    }
+
+    /// #1043（B6）：真调 `GetUserDefaultLocaleName`，读得到、形状对（如 `en-US`）。
+    #[test]
+    fn user_default_locale_name_is_readable() {
+        let tag = WindowsAdapter::new()
+            .system_locale()
+            .expect("GetUserDefaultLocaleName");
+        assert!(!tag.is_empty() && !tag.contains('\0'), "{tag:?}");
+        println!("system_locale = {tag}");
     }
 }
 

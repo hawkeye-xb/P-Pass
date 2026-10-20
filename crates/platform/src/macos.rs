@@ -278,6 +278,64 @@ fn io_err(action: &'static str) -> impl Fn(std::io::Error) -> PlatformError {
     move |source| PlatformError::Io { action, source }
 }
 
+/// #1043（B6）：NSLocale 的首选语言——`[NSLocale preferredLanguages]` 的
+/// CoreFoundation 对等物（toll-free bridged）。直接链系统框架、裸 FFI，不为
+/// 这一次调用引入 objc/core-foundation crate。
+mod cf_locale {
+    use std::ffi::{c_char, c_void};
+
+    type CFIndex = isize;
+    type CFTypeRef = *const c_void;
+    const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFLocaleCopyPreferredLanguages() -> CFTypeRef;
+        fn CFArrayGetCount(array: CFTypeRef) -> CFIndex;
+        fn CFArrayGetValueAtIndex(array: CFTypeRef, idx: CFIndex) -> CFTypeRef;
+        fn CFStringGetCString(
+            s: CFTypeRef,
+            buffer: *mut c_char,
+            size: CFIndex,
+            encoding: u32,
+        ) -> u8;
+        fn CFRelease(cf: CFTypeRef);
+    }
+
+    /// 首选语言列表的第一项（如 `zh-Hans-CN`、`en-US`）；读不到 = `None`。
+    pub(super) fn first_preferred_language() -> Option<String> {
+        // SAFETY: Copy 规则——返回的数组归我们，函数末尾 CFRelease 一次；数组
+        // 元素是 Get 规则（不持有），只在数组存活期间读。缓冲区在本栈上，
+        // 长度如实传入，CFStringGetCString 保证 NUL 结尾。
+        unsafe {
+            let langs = CFLocaleCopyPreferredLanguages();
+            if langs.is_null() {
+                return None;
+            }
+            let mut out = None;
+            if CFArrayGetCount(langs) > 0 {
+                let first = CFArrayGetValueAtIndex(langs, 0);
+                let mut buf = [0 as c_char; 128];
+                if !first.is_null()
+                    && CFStringGetCString(
+                        first,
+                        buf.as_mut_ptr(),
+                        buf.len() as CFIndex,
+                        K_CF_STRING_ENCODING_UTF8,
+                    ) != 0
+                {
+                    out = std::ffi::CStr::from_ptr(buf.as_ptr())
+                        .to_str()
+                        .ok()
+                        .map(str::to_owned);
+                }
+            }
+            CFRelease(langs);
+            out.filter(|t| !t.is_empty())
+        }
+    }
+}
+
 impl PlatformAdapter for MacosAdapter {
     fn assert_awake(&self) -> Result<AwakeGuard> {
         let child = Command::new("caffeinate")
@@ -311,6 +369,12 @@ impl PlatformAdapter for MacosAdapter {
 
     fn data_dir(&self) -> PathBuf {
         home().join("Library/Application Support/P-Pass")
+    }
+
+    /// #1043（B6）：NSLocale 首选语言（系统设置 → 通用 → 语言与地区的第一项）。
+    /// 不读 `LANG`：从访达 / launchd 启动的 GUI 进程通常没有它。
+    fn system_locale(&self) -> Option<String> {
+        cf_locale::first_preferred_language()
     }
 
     /// launchd 接 stdio（与 [`agent_plist`] 同一份路径）；运行日志用默认的
@@ -748,5 +812,19 @@ mod b10_user_dirs_tests {
         let home = a.home_dir().expect("测试环境有 HOME");
         assert_eq!(home, PathBuf::from(std::env::var("HOME").unwrap()));
         assert_eq!(a.pictures_dir(), Some(home.join("Pictures")));
+    }
+}
+
+#[cfg(test)]
+mod b6_system_locale_tests {
+    use super::*;
+
+    /// #1043（B6）：真调一次 CoreFoundation，读得到首选语言、不 panic。
+    /// 具体值随机器而定，只断言形状（非空、不含编码后缀）。
+    #[test]
+    fn preferred_language_is_readable() {
+        let tag = MacosAdapter.system_locale().expect("macOS 总有首选语言");
+        assert!(!tag.is_empty() && !tag.contains('.'), "{tag:?}");
+        println!("system_locale = {tag}");
     }
 }

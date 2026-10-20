@@ -28,10 +28,10 @@ use tauri::Manager;
 
 // ── I18N-03 (#492)：托盘菜单文案 ───────────────────────────────────────
 // 与前端同一份字典：编译期 include_str! 仓库根的 assets/i18n/*.json，不另开
-// 副本。语言判定规则与 `src/lib/i18n.js` 的 `localeFor` 一字不差（zh* → zh，
-// 其它 → en，拿不到 → zh）。系统语言由前端报上来（`set_tray_locale`，传的
-// 就是它自己按 navigator.language 判出来的那个），所以托盘和窗口永远同一种
-// 语言；在前端报到之前（启动后不到一秒），先按 LANG 环境变量猜一次。
+// 副本。系统语言由前端报上来（`set_tray_locale`，传的就是它自己按
+// navigator.language 判出来的 zh / en），所以托盘和窗口永远同一种语言；在前端
+// 报到之前（启动后不到一秒，以及前端还没起来时的安装位置对话框），按平台适配器
+// 的 `system_locale()` 定初值：zh* → zh，其它和读不到 → en（B6，#1043）。
 const I18N_EN: &str = include_str!("../../../../assets/i18n/en.json");
 const I18N_ZH: &str = include_str!("../../../../assets/i18n/zh.json");
 
@@ -62,12 +62,20 @@ fn bring_main_window_to_front(app: &tauri::AppHandle) {
     }
 }
 
-fn tray_locale(lang: &str) -> &'static str {
-    if lang.is_empty() || lang.to_lowercase().starts_with("zh") {
-        "zh"
-    } else {
-        "en"
+/// B6（#1043）：托盘与安装位置对话框的**初始**语言（前端起来后会用
+/// `set_tray_locale` 报它实际用的语言）。系统语言由平台适配器回答；只有明确是
+/// 中文才用中文，读不到一律英文（改前读 `LANG`，为空时默认中文——英文 Windows
+/// 与从访达启动的 macOS GUI 都拿不到 `LANG`，于是显示中文）。
+fn tray_locale(system_locale: Option<&str>) -> &'static str {
+    match system_locale {
+        Some(tag) if tag.trim().to_lowercase().starts_with("zh") => "zh",
+        _ => "en",
     }
+}
+
+/// 本机的 [`tray_locale`]。
+fn system_tray_locale() -> &'static str {
+    tray_locale(platform::adapter().system_locale().as_deref())
 }
 
 /// 取一条托盘文案；key 缺失时退回 key 本身（与前端 t() 同一兜底）。
@@ -93,7 +101,7 @@ fn running_from_install_location() -> bool {
     if adapter.is_install_location(&exe) {
         return true;
     }
-    let locale = tray_locale(&std::env::var("LANG").unwrap_or_default());
+    let locale = system_tray_locale();
     rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Warning)
         .set_title(tray_text(locale, "ui.install_location_required_title"))
@@ -109,7 +117,7 @@ struct TrayMenuItems(Vec<(&'static str, MenuItem<tauri::Wry>)>);
 /// 前端启动时报一次它用的语言，托盘菜单跟着换字。
 #[tauri::command]
 fn set_tray_locale(app: tauri::AppHandle, lang: String) {
-    let locale = tray_locale(&lang);
+    let locale = tray_locale(Some(&lang));
     if let Some(items) = app.try_state::<TrayMenuItems>() {
         for (key, item) in &items.0 {
             let _ = item.set_text(tray_text(locale, key));
@@ -2097,7 +2105,7 @@ pub fn run() {
             }
             // I18N-03 (#492)：文案取自 assets/i18n（见 TRAY_ITEMS）；前端
             // 报上语言后 set_tray_locale 会再改一次字。
-            let locale = tray_locale(&std::env::var("LANG").unwrap_or_default());
+            let locale = system_tray_locale();
             let mut tray_items = Vec::with_capacity(TRAY_ITEMS.len());
             for (id, key) in TRAY_ITEMS {
                 let item = MenuItem::with_id(app, id, tray_text(locale, key), true, None::<&str>)?;
@@ -2304,22 +2312,25 @@ mod tests {
         );
     }
 
+    /// B6（#1043）：只有系统语言明确是中文才用中文，读不到 / 空 / 其他语言一律
+    /// 英文。反证：恢复「空串默认中文」→ `None` 与 `""` 两条红。
     #[test]
-    fn tray_locale_matches_the_frontend_rule() {
-        // 与 src/lib/i18n.js 的 localeFor 同一条规则。
+    fn tray_locale_is_chinese_only_when_the_system_says_so() {
+        assert_eq!(tray_locale(None), "en");
         for (lang, want) in [
             ("zh", "zh"),
             ("zh-CN", "zh"),
             ("zh-Hans", "zh"),
+            ("zh-Hans-CN", "zh"),
             ("zh_CN.UTF-8", "zh"),
             ("ZH-TW", "zh"),
-            ("", "zh"),
+            ("", "en"),
             ("en", "en"),
             ("en-US", "en"),
             ("en_US.UTF-8", "en"),
             ("ja-JP", "en"),
         ] {
-            assert_eq!(tray_locale(lang), want, "{lang:?}");
+            assert_eq!(tray_locale(Some(lang)), want, "{lang:?}");
         }
     }
 

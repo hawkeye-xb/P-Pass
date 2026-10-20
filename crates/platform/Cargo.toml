@@ -46,6 +46,8 @@ windows-sys = { version = "0.61", features = [
   # DESK-58 (#875): GetStdHandle/SetStdHandle/GetConsoleMode——没人接的
   # stderr 改接到 logs\daemon.err。
   "Win32_System_Console",
+  # #1043 (B6): GetUserDefaultLocaleName——托盘与安装位置对话框的初始语言。
+  "Win32_Globalization",
 ] }
 
 # DESK-16 (#165)：Windows 的系统缩略图走 COM（IShellItemImageFactory），

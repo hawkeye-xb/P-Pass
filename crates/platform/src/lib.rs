@@ -321,6 +321,21 @@ pub trait PlatformAdapter: Send + Sync {
     /// 想真正换过去，调用方得先调 [`Self::migrate_legacy_data_dir`]。
     fn data_dir(&self) -> PathBuf;
 
+    /// #1043（B6）：系统界面语言（BCP 47 风格的标签，如 `zh-Hans-CN`、`en-US`）。
+    /// `None` = 读不到。
+    ///
+    /// 只回答「系统是什么语言」，不做「用不用中文」的判断——那是调用方（壳）
+    /// 的事。macOS 读 NSLocale 的首选语言（`CFLocaleCopyPreferredLanguages`），
+    /// Windows 读 `GetUserDefaultLocaleName`。默认实现按 POSIX 约定读
+    /// `LC_ALL` → `LC_MESSAGES` → `LANG`（无桌面的 Linux）；`C`/`POSIX` 算读不到。
+    fn system_locale(&self) -> Option<String> {
+        posix_env_locale(
+            std::env::var("LC_ALL").ok().as_deref(),
+            std::env::var("LC_MESSAGES").ok().as_deref(),
+            std::env::var("LANG").ok().as_deref(),
+        )
+    }
+
     /// #1043（B10）：当前用户的家目录。`None` = 读不到（不编一个出来）。
     ///
     /// 默认实现读 `HOME`（macOS / Linux 的约定）；Windows 走 Known Folder
@@ -805,6 +820,25 @@ pub enum ResidentRestart {
     Unsupported,
 }
 
+/// #1043（B6）：按 POSIX 优先级（`LC_ALL` > `LC_MESSAGES` > `LANG`）取语言环境，
+/// 去掉编码与修饰（`zh_CN.UTF-8@x` → `zh-CN`）。空串、`C`、`POSIX` 都不是语言，
+/// 算读不到。纯函数，三平台都测得到。
+pub(crate) fn posix_env_locale(
+    lc_all: Option<&str>,
+    lc_messages: Option<&str>,
+    lang: Option<&str>,
+) -> Option<String> {
+    let raw = [lc_all, lc_messages, lang]
+        .into_iter()
+        .flatten()
+        .find(|v| !v.trim().is_empty())?;
+    let tag = raw.split(['.', '@']).next().unwrap_or("").trim();
+    if tag.is_empty() || tag == "C" || tag == "POSIX" {
+        return None;
+    }
+    Some(tag.replace('_', "-"))
+}
+
 /// DESK-33 (#325) / DESK-54 (#814)：产品代码启动子进程的**唯一入口**。
 ///
 /// 等价于 `std::process::Command::new(program)`，只多一件事：在 Windows 上
@@ -1008,6 +1042,24 @@ mod tests {
 
     /// 取消是独立的一类，不能被归成失败——否则 UI 会把用户自己的选择
     /// 说成出错（macOS 的 `disable_auto_sleep` 仍走这条路径）。
+    /// #1043（B6）：POSIX 环境变量的优先级与清洗。反证：把 `C`/`POSIX` 当成
+    /// 语言、或 `LANG` 抢在 `LC_ALL` 前面 → 红。
+    #[test]
+    fn posix_env_locale_follows_priority_and_strips_encoding() {
+        assert_eq!(
+            posix_env_locale(Some("zh_CN.UTF-8"), Some("en_US"), Some("fr_FR")),
+            Some("zh-CN".into())
+        );
+        assert_eq!(
+            posix_env_locale(None, Some(""), Some("en_US.UTF-8@euro")),
+            Some("en-US".into())
+        );
+        assert_eq!(posix_env_locale(None, None, Some("C.UTF-8")), None);
+        assert_eq!(posix_env_locale(Some("POSIX"), None, None), None);
+        assert_eq!(posix_env_locale(None, None, None), None);
+        assert_eq!(posix_env_locale(Some("  "), None, Some("")), None);
+    }
+
     #[test]
     fn cancelled_is_its_own_variant_not_a_failure() {
         let c = PlatformError::Cancelled {
