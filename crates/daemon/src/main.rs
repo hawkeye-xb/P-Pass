@@ -540,7 +540,11 @@ async fn main() -> anyhow::Result<()> {
             loop {
                 daemon::stats::record(daemon::stats::Event::DaemonAlive {
                     uptime_h: started.elapsed().as_secs() / 3600,
-                    os: std::env::consts::OS.to_string(),
+                    // #1043（G5）：平台名由适配器回答（与 consts::OS 同值）。
+                    os: {
+                        use platform::PlatformAdapter as _;
+                        platform::adapter().platform_name().to_string()
+                    },
                     ver: daemon::daemon_version(),
                 });
                 tokio::time::sleep(std::time::Duration::from_secs(24 * 3600)).await;
