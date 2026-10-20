@@ -502,15 +502,6 @@ impl PlatformAdapter for WindowsAdapter {
         Ok(task || legacy_run_value()?.is_some())
     }
 
-    /// DESK-60 (#877)：Run 值指向哪个可执行文件。原先没实现（默认 `None`），
-    /// 对账和 daemon 接管都把「登记着别的路径」当成「没登记」。
-    fn autostart_registered_exec(&self) -> Result<Option<PathBuf>> {
-        Ok(match self.autostart_registration()? {
-            crate::AutostartRegistration::At(p) => Some(p),
-            _ => None,
-        })
-    }
-
     /// 计划任务的执行路径。老版本的 Run 值一律算「读不出」：对账因此走
     /// `Repaired` ⇒ `install_autostart` 换成计划任务并删掉 Run 值（迁移只发生
     /// 在壳的对账里，那里先判了用户有没有停过服务）。
@@ -864,16 +855,6 @@ impl PlatformAdapter for WindowsAdapter {
             free: free_to_caller,
             total,
         })
-    }
-
-    /// DEVLOG-02：Run 键启动的 daemon，其 stderr 唯一去处就是 Windows 自动
-    /// 分配的那个控制台——而 release 已经不再分配它，所以必须有确定的落盘
-    /// 位置。放在生效的 data dir 下，与 DPAPI blob、索引同域。
-    ///
-    /// DESK-24 (#173) 那次从 Roaming 迁到 Local，这里**一个字都没改**——
-    /// 日志路径是从入参 data dir 算出来的，data dir 换地方它就跟着走。
-    fn default_log_file(&self, data_dir: &Path) -> Option<PathBuf> {
-        Some(data_dir.join("logs").join("daemon.log"))
     }
 
     /// DESK-58 (#875)：与 `daemon.log` 同目录、分开放——`daemon.log` 是

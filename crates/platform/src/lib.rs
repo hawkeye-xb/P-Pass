@@ -284,22 +284,13 @@ pub trait PlatformAdapter: Send + Sync {
     fn autostart_installed(&self) -> Result<bool>;
     fn uninstall_autostart(&self) -> Result<()>;
 
-    /// 【DESK-42 #604】已登记的开机自启**目标可执行路径**。
+    /// 【DESK-42 #604 / #726】登记条目的状态：没登记、读不出、指向哪个可执行文件。
     ///
-    /// `None` = 没有登记（或本平台读不出，如 Windows 的 Run key 未实现读取）——
-    /// 注意这与「登记正确」不是一回事，调用方必须自己能分开（见 `AutostartReconcile`）。
-    fn autostart_registered_exec(&self) -> Result<Option<std::path::PathBuf>> {
-        Ok(None)
-    }
-
-    /// 【#726】登记条目的状态：比 [`Self::autostart_registered_exec`] 多分出「读不出」。
-    ///
-    /// 默认实现只能分出两种（读不出的平台没有「坏文件」这个概念）；能分的平台覆盖它。
+    /// 「指向哪里」与「是否读得出」是同一份信息，只有这一个入口（#1043 合并了
+    /// 原先只给路径的 `autostart_registered_exec`）。默认实现 = 本平台没有登记
+    /// 这回事，一律 `Absent`；能读登记的平台覆盖它。
     fn autostart_registration(&self) -> Result<AutostartRegistration> {
-        Ok(match self.autostart_registered_exec()? {
-            Some(p) => AutostartRegistration::At(p),
-            None => AutostartRegistration::Absent,
-        })
+        Ok(AutostartRegistration::Absent)
     }
 
     /// 【DESK-42 #604】对账**闸门**：本平台是否允许用 `expected` 改写开机自启登记。
@@ -463,9 +454,12 @@ pub trait PlatformAdapter: Send + Sync {
     /// 因为一次性 daemon 靠 `PPF_DATA_DIR` 做隔离，日志不跟着走就会污染
     /// 真实日志文件。默认实现返回 `None`——既无 launchd 托管也无 Run 键的
     /// 平台自己决定。
+    ///
+    /// 默认实现 = `<data_dir>/logs/daemon.log`（macOS 与 Windows 同构，轮转出
+    /// `daemon.log.1`）。跟着入参 data dir 走，`PPF_DATA_DIR` 隔离的一次性
+    /// daemon 不会写进用户真实日志。不落盘的平台（无桌面托管的 Linux）覆盖成 `None`。
     fn default_log_file(&self, data_dir: &std::path::Path) -> Option<PathBuf> {
-        let _ = data_dir;
-        None
+        Some(data_dir.join("logs").join("daemon.log"))
     }
 
     /// DIAG-B1：写 [`default_log_file`](Self::default_log_file) 时是否**同时**照旧写
@@ -863,6 +857,10 @@ impl PlatformAdapter for HeadlessAdapter {
             let _ = path;
             None
         }
+    }
+    /// 无桌面托管的 Linux：日志交给 stderr（systemd / Docker 接），不另写文件。
+    fn default_log_file(&self, _data_dir: &std::path::Path) -> Option<PathBuf> {
+        None
     }
     fn restrict_to_owner(&self, path: &std::path::Path) -> Result<Applied> {
         #[cfg(unix)]

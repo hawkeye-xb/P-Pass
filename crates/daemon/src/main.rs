@@ -364,11 +364,8 @@ async fn main() -> anyhow::Result<()> {
             if daemon::cli::autostart_install_required(&daemon::Claim::TookOver) {
                 use platform::PlatformAdapter as _;
                 if let Ok(exe) = std::env::current_exe() {
-                    let registered = platform::adapter().autostart_registered_exec();
-                    match takeover_autostart(
-                        registered.as_ref().ok().and_then(|r| r.as_deref()),
-                        &exe,
-                    ) {
+                    let registered = platform::adapter().autostart_registration();
+                    match takeover_autostart(registered.as_ref().ok(), &exe) {
                         TakeoverAutostart::Foreign => {
                             // #604 [DESK-42]：**只在本实例有权写登记时**才重装。
                             // 真机事故：登记被钉在 `~/P-Pass-Backups/<日期>/old-app/…`
@@ -376,7 +373,7 @@ async fn main() -> anyhow::Result<()> {
                             // 路径改了登记」。已有登记指向别处 → 一个字节都不动，只留痕。
                             tracing::warn!(
                                 "#604: 已有开机自启登记指向 {:?}（本实例 {}）——不覆盖，避免从备份/临时副本启动的实例篡改用户登记",
-                                registered.ok().flatten(),
+                                registered.ok(),
                                 exe.display()
                             );
                         }
@@ -992,16 +989,19 @@ enum TakeoverAutostart {
     Foreign,
 }
 
-/// 纯函数，单测钉死三条分支。`registered` = `autostart_registered_exec()` 的
-/// `Ok(Some(_))`；`Ok(None)` 与 `Err` 都传 `None`（与改前一致：照旧安装）。
+/// 纯函数，单测钉死三条分支。`registered` = `autostart_registration()` 的
+/// `Ok(_)`；读登记失败（`Err`）传 `None`。未登记、读不出、读失败都照旧安装
+/// （与改用 `autostart_registration` 之前一致）。
 fn takeover_autostart(
-    registered: Option<&std::path::Path>,
+    registered: Option<&platform::AutostartRegistration>,
     exe: &std::path::Path,
 ) -> TakeoverAutostart {
     match registered {
-        None => TakeoverAutostart::Install,
-        Some(r) if r == exe => TakeoverAutostart::AlreadyOurs,
-        Some(_) => TakeoverAutostart::Foreign,
+        Some(platform::AutostartRegistration::At(r)) if r == exe => TakeoverAutostart::AlreadyOurs,
+        Some(platform::AutostartRegistration::At(_)) => TakeoverAutostart::Foreign,
+        Some(platform::AutostartRegistration::Absent)
+        | Some(platform::AutostartRegistration::Unreadable)
+        | None => TakeoverAutostart::Install,
     }
 }
 
@@ -1103,22 +1103,31 @@ mod tests {
     // sockets`）。反证：把 AlreadyOurs 分支并回 Install，本测试必红。
     #[test]
     fn takeover_does_not_reinstall_an_autostart_that_already_points_at_us() {
+        use platform::AutostartRegistration as R;
         let exe = Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon");
         assert_eq!(
-            takeover_autostart(Some(exe), exe),
+            takeover_autostart(Some(&R::At(exe.to_path_buf())), exe),
             TakeoverAutostart::AlreadyOurs
         );
         // #604：指向别处 → 不覆盖
         assert_eq!(
             takeover_autostart(
-                Some(Path::new(
+                Some(&R::At(PathBuf::from(
                     "/Users/x/P-Pass-Backups/old-app/P-Pass.app/Contents/MacOS/ppf-daemon"
-                )),
+                ))),
                 exe
             ),
             TakeoverAutostart::Foreign
         );
-        // 未登记 → 照旧安装（DAE-01 原行为不变）
+        // 未登记 / 读不出 / 读失败 → 照旧安装（DAE-01 原行为不变）
+        assert_eq!(
+            takeover_autostart(Some(&R::Absent), exe),
+            TakeoverAutostart::Install
+        );
+        assert_eq!(
+            takeover_autostart(Some(&R::Unreadable), exe),
+            TakeoverAutostart::Install
+        );
         assert_eq!(takeover_autostart(None, exe), TakeoverAutostart::Install);
     }
 

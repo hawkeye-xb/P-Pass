@@ -324,15 +324,6 @@ impl PlatformAdapter for MacosAdapter {
         Ok(Self::agent_plist_path().exists())
     }
 
-    /// 【DESK-42 #604】读登记条目里的目标路径：文件不存在或读不出路径都是 `None`。
-    /// 对账要分开这两种，用 [`Self::autostart_registration`]。
-    fn autostart_registered_exec(&self) -> Result<Option<PathBuf>> {
-        Ok(match self.autostart_registration()? {
-            AutostartRegistration::At(p) => Some(p),
-            AutostartRegistration::Absent | AutostartRegistration::Unreadable => None,
-        })
-    }
-
     /// 【#726】文件不存在 = 没登记；读得到但解析不出路径 = 损坏，由对账重写。
     fn autostart_registration(&self) -> Result<AutostartRegistration> {
         registration_from_read(std::fs::read_to_string(Self::agent_plist_path()))
@@ -390,13 +381,6 @@ impl PlatformAdapter for MacosAdapter {
 
     fn data_dir(&self) -> PathBuf {
         home().join("Library/Application Support/P-Pass")
-    }
-
-    /// DIAG-B1：固定位置，与 Windows 同构（`<data_dir>/logs/daemon.log`，轮转
-    /// 出 `daemon.log.1`）。跟着 data dir 走，`PPF_DATA_DIR` 隔离的一次性
-    /// daemon 不会写进用户真实日志。
-    fn default_log_file(&self, data_dir: &Path) -> Option<PathBuf> {
-        Some(data_dir.join("logs").join("daemon.log"))
     }
 
     fn default_log_tees_stderr(&self) -> bool {
