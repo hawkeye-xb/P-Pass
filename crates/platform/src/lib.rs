@@ -351,7 +351,7 @@ pub trait PlatformAdapter: Send + Sync {
     ///
     /// 只回答「系统是什么语言」，不做「用不用中文」的判断——那是调用方（壳）
     /// 的事。macOS 读 NSLocale 的首选语言（`CFLocaleCopyPreferredLanguages`），
-    /// Windows 读 `GetUserDefaultLocaleName`。默认实现按 POSIX 约定读
+    /// Windows 读 `GetUserPreferredUILanguages` 的首个（界面语言，不是区域格式，#1056）。默认实现按 POSIX 约定读
     /// `LC_ALL` → `LC_MESSAGES` → `LANG`（无桌面的 Linux）；`C`/`POSIX` 算读不到。
     fn system_locale(&self) -> Option<String> {
         posix_env_locale(
@@ -932,6 +932,16 @@ pub enum ResidentPause {
     Unsupported,
 }
 
+/// Windows 的 `GetUserPreferredUILanguages` 返回 multi-sz（`a\0b\0\0`）的 UTF-16：
+/// 取第一个非空条目；空缓冲 / 首项为空 / 非法 UTF-16 → `None`。
+#[cfg(any(windows, test))]
+pub(crate) fn first_multi_sz_entry(buf: &[u16]) -> Option<String> {
+    let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    String::from_utf16(&buf[..end])
+        .ok()
+        .filter(|t| !t.is_empty())
+}
+
 /// #1043（B6）：按 POSIX 优先级（`LC_ALL` > `LC_MESSAGES` > `LANG`）取语言环境，
 /// 去掉编码与修饰（`zh_CN.UTF-8@x` → `zh-CN`）。空串、`C`、`POSIX` 都不是语言，
 /// 算读不到。纯函数，三平台都测得到。
@@ -1174,6 +1184,23 @@ mod tests {
 
     /// #1043（B6）：POSIX 环境变量的优先级与清洗。反证：把 `C`/`POSIX` 当成
     /// 语言、或 `LANG` 抢在 `LC_ALL` 前面 → 红。
+    #[test]
+    fn multi_sz_first_entry() {
+        let w = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+        assert_eq!(
+            first_multi_sz_entry(&w("zh-CN\0en-US\0\0")).as_deref(),
+            Some("zh-CN")
+        );
+        assert_eq!(
+            first_multi_sz_entry(&w("en-US\0\0")).as_deref(),
+            Some("en-US")
+        );
+        assert_eq!(first_multi_sz_entry(&w("en-US")).as_deref(), Some("en-US"));
+        assert_eq!(first_multi_sz_entry(&w("\0\0")), None);
+        assert_eq!(first_multi_sz_entry(&[]), None);
+        assert_eq!(first_multi_sz_entry(&[0xD800, 0]), None);
+    }
+
     #[test]
     fn posix_env_locale_follows_priority_and_strips_encoding() {
         assert_eq!(

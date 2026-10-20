@@ -576,18 +576,35 @@ impl PlatformAdapter for WindowsAdapter {
         Some(crate::SleepOwner::Daemon)
     }
 
-    /// #1043（B6）：`GetUserDefaultLocaleName`（按拍板读用户区域设置，如
-    /// `zh-CN`、`en-US`）。返回值含结尾 NUL；0 = 失败 → `None`。
+    /// #1043（B6）/ #1056：用户**界面语言**（`GetUserPreferredUILanguages`，
+    /// 取首个，如 `zh-CN`、`en-US`），与 macOS 读首选语言同一口径；区域格式
+    /// （`GetUserDefaultLocaleName`）不参与——英文界面 + 中文区域不该显示中文。
+    /// 读不到 → `None`（调用方一律按英文）。
     fn system_locale(&self) -> Option<String> {
-        use windows_sys::Win32::Globalization::GetUserDefaultLocaleName;
-        // LOCALE_NAME_MAX_LENGTH = 85（含结尾 NUL）。
-        let mut buf = [0u16; 85];
-        // SAFETY: buf 在本栈上，长度如实传入。
-        let n = unsafe { GetUserDefaultLocaleName(buf.as_mut_ptr(), buf.len() as i32) };
-        let len = usize::try_from(n).ok()?.checked_sub(1)?;
-        String::from_utf16(&buf[..len])
-            .ok()
-            .filter(|t| !t.is_empty())
+        use windows_sys::Win32::Globalization::{GetUserPreferredUILanguages, MUI_LANGUAGE_NAME};
+        let mut count = 0u32;
+        let mut len = 0u32;
+        // SAFETY: 第一次传空缓冲区只取所需长度（含双 NUL）。
+        let ok = unsafe {
+            GetUserPreferredUILanguages(
+                MUI_LANGUAGE_NAME,
+                &mut count,
+                std::ptr::null_mut(),
+                &mut len,
+            )
+        };
+        if ok == 0 || len == 0 {
+            return None;
+        }
+        let mut buf = vec![0u16; len as usize];
+        // SAFETY: buf 长度与 len 一致。
+        let ok = unsafe {
+            GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &mut count, buf.as_mut_ptr(), &mut len)
+        };
+        if ok == 0 {
+            return None;
+        }
+        crate::first_multi_sz_entry(&buf)
     }
 
     /// #1043（B10）：Known Folder `FOLDERID_Pictures`——用户在资源管理器里把
@@ -2081,12 +2098,12 @@ mod b10_known_folder_tests {
         assert_eq!(a.sleep_owner(), Some(crate::SleepOwner::Daemon));
     }
 
-    /// #1043（B6）：真调 `GetUserDefaultLocaleName`，读得到、形状对（如 `en-US`）。
+    /// #1043（B6）/ #1056：真调 `GetUserPreferredUILanguages`，读得到、形状对（如 `en-US`）。
     #[test]
-    fn user_default_locale_name_is_readable() {
+    fn user_ui_language_is_readable() {
         let tag = WindowsAdapter::new()
             .system_locale()
-            .expect("GetUserDefaultLocaleName");
+            .expect("GetUserPreferredUILanguages");
         assert!(!tag.is_empty() && !tag.contains('\0'), "{tag:?}");
         println!("system_locale = {tag}");
     }
