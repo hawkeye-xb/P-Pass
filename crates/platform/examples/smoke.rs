@@ -38,29 +38,35 @@ fn main() {
     } else {
         std::path::PathBuf::from("/usr/bin/true")
     };
-    match h.install_autostart(&target) {
-        Ok(()) => match h.autostart_installed() {
-            Ok(true) => {
-                println!("✓ autostart: 注册并查询到");
-                match h.uninstall_autostart() {
-                    Ok(()) if !h.autostart_installed().unwrap_or(true) => {
-                        println!("✓ autostart: 注销干净")
-                    }
-                    _ => {
-                        println!("✗ autostart: 注销失败或残留");
-                        failures += 1;
+    // #1056 拍板：冒烟**不得改写 / 删除真实的 P-Pass 登记**。只要本机已经有
+    // 登记（指向真实 daemon、老 Run 值、或读不出），就跳过这段；只有完全没
+    // 登记的机器（CI / 干净环境）才跑注册→查询→注销。
+    match h.autostart_registration() {
+        Ok(platform::AutostartRegistration::Absent) => match h.install_autostart(&target) {
+            Ok(()) => match h.autostart_installed() {
+                Ok(true) => {
+                    println!("✓ autostart: 注册并查询到");
+                    match h.uninstall_autostart() {
+                        Ok(()) if !h.autostart_installed().unwrap_or(true) => {
+                            println!("✓ autostart: 注销干净")
+                        }
+                        _ => {
+                            println!("✗ autostart: 注销失败或残留");
+                            failures += 1;
+                        }
                     }
                 }
-            }
-            _ => {
-                println!("✗ autostart: 注册后查询不到");
+                _ => {
+                    println!("✗ autostart: 注册后查询不到");
+                    failures += 1;
+                }
+            },
+            Err(e) => {
+                println!("✗ autostart 注册失败: {e}");
                 failures += 1;
             }
         },
-        Err(e) => {
-            println!("✗ autostart 注册失败: {e}");
-            failures += 1;
-        }
+        other => println!("✓ autostart: SKIP（本机已有登记，冒烟不改动真实登记）: {other:?}"),
     }
 
     // Awake guard: assertion count rises while held, falls after drop
