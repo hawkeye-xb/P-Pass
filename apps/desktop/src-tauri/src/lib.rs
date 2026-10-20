@@ -1150,15 +1150,23 @@ fn shell_version<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> String {
     app.package_info().version.to_string()
 }
 
-/// UPD-06 (#616)：磁盘上**安装包**的版本（`Contents/Info.plist`）。
+/// UPD-06 (#616)：磁盘上**安装包**的版本（`Contents/Info.plist`）与运行中
+/// 这只壳的版本不同 ⇒ 返回磁盘上那个版本（"更新装完了、但运行中的壳还是旧的"）。
 ///
-/// 与 `getVersion()`（**编译进这只壳**的版本）比对就是"更新装完了、但运行中的
-/// 这只壳还是旧的"的**确定性判据**：壳的可执行文件在 `/Applications` 下跨更新
-/// 路径不变，包在它下面被换掉，于是"读到的包版本 ≠ 我的编译版本"只有一种解释。
-/// 读不到 = `None` = 不知道（前端必须按"什么都不做"处理）。
+/// 这是确定性判据：壳的可执行文件在 `/Applications` 下跨更新路径不变，包在它
+/// 下面被换掉，于是"读到的包版本 ≠ 我的编译版本"只有一种解释。同版本或读不到
+/// = `None`（前端什么都不做）。#1044 B13：判「同不同」用共享的 `version_cmp`，
+/// 前端不再自己比版本。
 #[tauri::command]
-fn installed_app_version() -> Option<String> {
-    platform::hosting().installed_bundle_version()
+fn pending_shell_version(app: tauri::AppHandle) -> Option<String> {
+    pending_shell_version_of(
+        platform::hosting().installed_bundle_version(),
+        &shell_version(&app),
+    )
+}
+
+fn pending_shell_version_of(installed: Option<String>, running: &str) -> Option<String> {
+    installed.filter(|v| version_cmp(v, running) != std::cmp::Ordering::Equal)
 }
 
 /// UPD-06 (#616)：换壳——让**运行中的这只壳**变成磁盘上已经是新版的那一份。
@@ -1427,53 +1435,8 @@ fn kernel_convergence_phase() -> &'static str {
     KERNEL_CONVERGENCE.lock().map(|p| *p).unwrap_or("idle")
 }
 
-/// 与 daemon 的 DAE-01 `version_cmp`（crates/daemon/src/ipc.rs）**同一语义**：
-/// 数字段逐段比；同核心时正式版 > 预发布；预发布按数字段比（test.10 > test.9）。
-/// 桌面壳是独立 workspace、不依赖 daemon crate，所以抄一份，单测用同一组样例钉住。
-fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
-    use std::cmp::Ordering;
-    let nums = |seg: &str| -> Vec<u64> {
-        seg.split(|c: char| !c.is_ascii_digit())
-            .filter(|p| !p.is_empty())
-            .map(|p| p.parse().unwrap_or(0))
-            .collect()
-    };
-    let parse = |s: &str| -> (Vec<u64>, Vec<u64>, bool) {
-        let (core, pre) = match s.split_once('-') {
-            Some((c, p)) => (c, Some(p)),
-            None => (s, None),
-        };
-        (nums(core), pre.map(nums).unwrap_or_default(), pre.is_some())
-    };
-    let (na, npa, pa) = parse(a);
-    let (nb, npb, pb) = parse(b);
-    for i in 0..na.len().max(nb.len()) {
-        let (x, y) = (
-            na.get(i).copied().unwrap_or(0),
-            nb.get(i).copied().unwrap_or(0),
-        );
-        if x != y {
-            return x.cmp(&y);
-        }
-    }
-    match (pa, pb) {
-        (false, true) => Ordering::Greater,
-        (true, false) => Ordering::Less,
-        (true, true) => {
-            for i in 0..npa.len().max(npb.len()) {
-                let (x, y) = (
-                    npa.get(i).copied().unwrap_or(0),
-                    npb.get(i).copied().unwrap_or(0),
-                );
-                if x != y {
-                    return x.cmp(&y);
-                }
-            }
-            Ordering::Equal
-        }
-        (false, false) => Ordering::Equal,
-    }
-}
+// #1044 B13：版本关系只有一份实现（crates/version-cmp，daemon 共用）。
+use version_cmp::version_cmp;
 
 /// 对账用的事实（全部现取，不信缓存）。
 #[derive(Debug, Clone, Default)]
@@ -1697,7 +1660,7 @@ pub fn run() {
             stop_daemon,
             pause_daemon_for_update,
             resume_daemon_after_update,
-            installed_app_version,
+            pending_shell_version,
             relaunch_shell,
             self_heal_daemon,
             restart_daemon_process,
@@ -2441,36 +2404,6 @@ mod tests {
         );
     }
 
-    /// 与 daemon DAE-01 `version_cmp`（crates/daemon/src/ipc.rs）同一组样例——两份
-    /// 实现若漂移，这里先红。
-    #[test]
-    fn version_cmp_matches_the_daemon_handshake() {
-        use std::cmp::Ordering;
-        assert_eq!(version_cmp("0.1.0", "0.1.0"), Ordering::Equal);
-        assert_eq!(version_cmp("0.2.0", "0.1.0"), Ordering::Greater);
-        assert_eq!(version_cmp("0.1.0", "0.2.0"), Ordering::Less);
-        assert_eq!(version_cmp("1.0.0", "0.9.9"), Ordering::Greater);
-        assert_eq!(version_cmp("0.10.0", "0.9.0"), Ordering::Greater);
-        assert_eq!(version_cmp("0.2.0-test.7", "0.1.0"), Ordering::Greater);
-        assert_eq!(version_cmp("0.1.0", "0.2.0-test.7"), Ordering::Less);
-        assert_eq!(
-            version_cmp("0.2.0-test.8", "0.2.0-test.7"),
-            Ordering::Greater
-        );
-        assert_eq!(version_cmp("0.2.0-test.7", "0.2.0-test.8"), Ordering::Less);
-        assert_eq!(
-            version_cmp("0.2.0-test.10", "0.2.0-test.9"),
-            Ordering::Greater
-        );
-        assert_eq!(version_cmp("0.2.0-test.8", "0.2.0-test.8"), Ordering::Equal);
-        assert_eq!(version_cmp("0.2.0", "0.2.0-test.8"), Ordering::Greater);
-        assert_eq!(version_cmp("0.2.0-test.8", "0.2.0"), Ordering::Less);
-        assert_eq!(version_cmp("0.1.0", "0.1.0-test.3"), Ordering::Greater);
-        assert_eq!(version_cmp("0.1.0-test.3", "0.1.0"), Ordering::Less);
-        assert_eq!(version_cmp("", "0.0.0"), Ordering::Equal);
-        assert_eq!(version_cmp("alpha", "0.1.0"), Ordering::Less);
-    }
-
     /// 接线：启动时跑对账；换内核先让野生实例退位、再交给服务管理器；手动「立即重启」
     /// 有 LaunchAgent 时也走同一条；一次性 spawn 的日志不再接 null（#732 ③）。
     #[test]
@@ -3118,8 +3051,27 @@ mod tests {
             "relaunch_shell 未注册进 invoke_handler"
         );
         assert!(
-            src.contains("installed_app_version,"),
-            "installed_app_version 未注册进 invoke_handler"
+            src.contains("pending_shell_version,"),
+            "pending_shell_version 未注册进 invoke_handler"
+        );
+    }
+
+    /// #1044 B13：「装好的壳 ≠ 运行中的壳」按共享的 Rust 语义判（同核心的
+    /// test 包与正式包算不同），同版本或读不到都不提示。
+    #[test]
+    fn pending_shell_version_uses_the_shared_version_rule() {
+        assert_eq!(
+            pending_shell_version_of(Some("0.9.8".into()), "0.9.7"),
+            Some("0.9.8".into())
+        );
+        assert_eq!(
+            pending_shell_version_of(Some("0.9.7".into()), "0.9.7"),
+            None
+        );
+        assert_eq!(pending_shell_version_of(None, "0.9.7"), None);
+        assert_eq!(
+            pending_shell_version_of(Some("0.9.12".into()), "0.9.12-test.17"),
+            Some("0.9.12".into())
         );
     }
 

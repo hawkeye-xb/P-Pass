@@ -261,11 +261,11 @@
   // T1 (H-10b): 界面显示版本号——报问题/排查时先知道装的是什么版本。
   let version = $state("");
   getVersion().then((v) => (version = v)).catch(() => {});
-  // UPD-06 (#616): **磁盘上装的那个版本**（读安装包的 Info.plist）。它与上面
-  // 那个"编译进这只壳的版本"一旦不同，就是"更新装完了、但运行中的壳还是旧的"
-  // ——这是"要不要换壳"的确定性判据。读不到就空着（不判，什么都不做）。
+  // UPD-06 (#616): **磁盘上装的那个版本**，只在它与运行中的壳不同时才有值——
+  // "更新装完了、但运行中的壳还是旧的"。同不同由壳的 Rust 侧按共享的版本规则
+  // 判（#1044 B13，crates/version-cmp），前端不比版本。读不到就空着。
   let installedVersion = $state("");
-  invoke("installed_app_version")
+  invoke("pending_shell_version")
     .then((v) => (installedVersion = v || ""))
     .catch(() => {});
   // UPD-06 (#616): **版本真相源**——壳版本与服务版本分开，不再互相冒充。
@@ -275,19 +275,16 @@
   const shellVersion = $derived(version);
   const serviceVersion = $derived(status?.version || "");
   const displayVersion = $derived(serviceVersion || shellVersion);
-  const versionsDiffer = $derived(
-    !!shellVersion && !!serviceVersion && !sameRelease(shellVersion, serviceVersion)
-  );
-  const shellIsStale = $derived(
-    !!installedVersion && !!shellVersion && !sameRelease(installedVersion, shellVersion)
-  );
+  // #1044 B13：壳与内核的版本关系由 daemon 下结论（status.shell_relation：
+  // same / shell_older / shell_newer；壳没报版本时为 null = 不提示）。
+  const shellRelation = $derived(status?.shell_relation ?? null);
+  const versionsDiffer = $derived(!!shellRelation && shellRelation !== "same");
+  const shellIsStale = $derived(!!installedVersion);
   const isTestBuild = $derived(displayVersion.includes("-test."));
   // DAE-04 + UPD-06 (#616)：**分向**。服务旧（且壳不旧）才是「重启后台服务」的
   // 场合；旧实现只判"不一致"、不判方向，于是在"壳旧/服务新"方向按了永不收敛
   // ——杀 daemon 拉起来的还是同版本，按钮永远不消失（0.7.5 真机现场）。
-  const serviceIsStale = $derived(
-    versionsDiffer && !shellIsStale && isOlder(serviceVersion, shellVersion)
-  );
+  const serviceIsStale = $derived(shellRelation === "shell_newer" && !shellIsStale);
   // DEV-01b: 重装识别/「替换旧的」入口先隐藏（用户拍板 2026-08-12）——
   // 现阶段统一走「重新扫码 = 全新授权」，不给用户多一个要理解的概念。
   // 编译期 flag 默认关；打开 = DEV-01 行为原样回来（反证路径）。
@@ -309,7 +306,7 @@
 
   async function refresh() {
     try {
-      status = await call("status");
+      status = await call("status", { shell_version: version });
       void showLowSpaceNotice(status.low_space_notice);
       pendingCount = status.pending_pairs ?? 0;
       // UX-08: pending 全量列表（pairing.pending，只读）——列表化显示
@@ -950,46 +947,6 @@
   // 只有清单地址不同。地址是构建期写进插件配置的：tools/release/tauri-config.mjs 在 test 版本上
   // 把 endpoints 换成 test-channel 里本端的分端清单（macOS = manifest-macos.json，
   // Windows = manifest-windows.json），这里不再区分通道。
-
-  // DAE-04: 「桌面壳自己的版本」与「daemon 版本」是否同一次发布——只比
-  // 核心三段数字，忽略 v 前缀和 -test.N 后缀：release 里 daemon 报
-  // "v0.3.3-test.1"、壳报 "0.3.3"（tauri.conf.json），是同一份；更新
-  // 装好后壳变 0.3.4、daemon 还是 v0.3.3-test.1 → 核心不同 → 真不一致。
-  function sameRelease(a, b) {
-    const core = (s) =>
-      String(s)
-        .replace(/^v/i, "")
-        .split("-")[0]
-        .split(".")
-        .map((x) => parseInt(x, 10) || 0);
-    const ca = core(a);
-    const cb = core(b);
-    return (
-      ca.length === 3 &&
-      cb.length === 3 &&
-      ca[0] === cb[0] &&
-      ca[1] === cb[1] &&
-      ca[2] === cb[2]
-    );
-  }
-
-  // UPD-06 (#616)：版本高低判据（只比核心三段，忽略 v 前缀与 -test.N 后缀）。
-  // 用来**分向**：服务版本低于壳版本才是 DAE-04「重启后台服务」的场合。
-  function isOlder(a, b) {
-    const core = (s) =>
-      String(s)
-        .replace(/^v/i, "")
-        .split("-")[0]
-        .split(".")
-        .map((x) => parseInt(x, 10) || 0);
-    const ca = core(a);
-    const cb = core(b);
-    if (ca.length !== 3 || cb.length !== 3) return false;
-    for (let i = 0; i < 3; i += 1) {
-      if (ca[i] !== cb[i]) return ca[i] < cb[i];
-    }
-    return false;
-  }
 
   // UPD-06 (#616)：更新流程 = **显式状态机**。界面只呈现，不靠用户猜。
   // idle → checking → (up-to-date | available → downloading → installing → installed → relaunching) | failed

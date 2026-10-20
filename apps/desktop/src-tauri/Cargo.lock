@@ -2476,6 +2476,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tempfile",
  "toml 0.8.2",
+ "version-cmp",
 ]
 
 [[package]]
@@ -4506,6 +4507,10 @@ dependencies = [
  "serde_core",
  "wasm-bindgen",
 ]
+
+[[package]]
+name = "version-cmp"
+version = "0.9.7"
 
 [[package]]
 name = "version-compare"

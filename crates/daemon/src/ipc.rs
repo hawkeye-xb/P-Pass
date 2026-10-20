@@ -237,55 +237,9 @@ pub fn daemon_version() -> String {
         .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
 }
 
-/// Numeric-segment semver compare ("0.2.0-test.7" vs "0.1.0" → Greater).
-/// Pre-release suffixes sort below the same core ("0.1.0" > "0.1.0-test.3"),
-/// so a formal build always takes over from a test build of the same core.
-/// Two pre-releases of the same core compare by their numeric segments
-/// ("0.2.0-test.8" > "0.2.0-test.7" — DAE-01b blocker②), so dogfood test
-/// packages can take over from each other.
-fn version_cmp(a: &str, b: &str) -> Ordering {
-    let nums = |seg: &str| -> Vec<u64> {
-        seg.split(|c: char| !c.is_ascii_digit())
-            .filter(|p| !p.is_empty())
-            .map(|p| p.parse().unwrap_or(0))
-            .collect()
-    };
-    let parse = |s: &str| -> (Vec<u64>, Vec<u64>, bool) {
-        let (core, pre) = match s.split_once('-') {
-            Some((c, p)) => (c, Some(p)),
-            None => (s, None),
-        };
-        (nums(core), pre.map(nums).unwrap_or_default(), pre.is_some())
-    };
-    let (na, npa, pa) = parse(a);
-    let (nb, npb, pb) = parse(b);
-    for i in 0..na.len().max(nb.len()) {
-        let (x, y) = (
-            na.get(i).copied().unwrap_or(0),
-            nb.get(i).copied().unwrap_or(0),
-        );
-        if x != y {
-            return x.cmp(&y);
-        }
-    }
-    match (pa, pb) {
-        (false, true) => Ordering::Greater,
-        (true, false) => Ordering::Less,
-        (true, true) => {
-            for i in 0..npa.len().max(npb.len()) {
-                let (x, y) = (
-                    npa.get(i).copied().unwrap_or(0),
-                    npb.get(i).copied().unwrap_or(0),
-                );
-                if x != y {
-                    return x.cmp(&y);
-                }
-            }
-            Ordering::Equal
-        }
-        (false, false) => Ordering::Equal,
-    }
-}
+// DAE-01 newest-wins 与 #1044 B13 的 `status.shell_relation` 共用唯一的版本
+// 比较实现（crates/version-cmp，桌面壳也依赖它）。
+use version_cmp::version_cmp;
 
 impl IpcServer {
     /// `pending_rx` is the receiver returned by [`Pairing::new`] — the
@@ -679,7 +633,10 @@ impl IpcServer {
             )
         };
         match req.method.as_str() {
-            "status" => match self.status().await {
+            "status" => match self
+                .status(req.params.get("shell_version").and_then(|v| v.as_str()))
+                .await
+            {
                 Ok(v) => Resp::ok(id, v),
                 Err(_) => internal(id),
             },
@@ -1461,7 +1418,8 @@ impl IpcServer {
             .collect()
     }
 
-    async fn status(&self) -> anyhow::Result<serde_json::Value> {
+    /// `shell_version`：调用方（桌面壳）自报的版本；给了才算 `shell_relation`。
+    async fn status(&self, shell_version: Option<&str>) -> anyhow::Result<serde_json::Value> {
         let devices = self.db.list_devices(true).await?;
         let state = self.diag.state();
         // DEV-07 follow-up (#463): the banner is gated on this count — a
@@ -1518,6 +1476,11 @@ impl IpcServer {
             // DAE-01: identity fields for newest-wins handshake + ops
             // visibility (验收①：status 报 PID/版本/路径/启动时间).
             "version": daemon_version(),
+            // #1044 B13：壳与内核的版本关系由 daemon 下结论（same / shell_older /
+            // shell_newer）；壳没报版本 = null（不知道就不提示）。
+            "shell_relation": shell_version
+                .filter(|v| !v.is_empty())
+                .map(|v| version_cmp::ShellRelation::of(v, &daemon_version()).as_str()),
             "pid": std::process::id(),
             "started_at": self.started_at,
             "exe_path": std::env::current_exe()
@@ -1752,39 +1715,5 @@ mod tests {
     fn hex32_roundtrip_and_rejects() {
         assert!(parse_hex32("xyz").is_none());
         assert_eq!(parse_hex32(&"ab".repeat(32)).unwrap(), vec![0xab; 32]);
-    }
-
-    // ── DAE-01: version comparison (newest-wins handshake) ──
-    #[test]
-    fn version_cmp_semver_segments() {
-        assert_eq!(version_cmp("0.1.0", "0.1.0"), Ordering::Equal);
-        assert_eq!(version_cmp("0.2.0", "0.1.0"), Ordering::Greater);
-        assert_eq!(version_cmp("0.1.0", "0.2.0"), Ordering::Less);
-        assert_eq!(version_cmp("1.0.0", "0.9.9"), Ordering::Greater);
-        assert_eq!(version_cmp("0.10.0", "0.9.0"), Ordering::Greater);
-        // 预发布后缀：数字段比较为主（0.2.0-test.7 > 0.1.0）
-        assert_eq!(version_cmp("0.2.0-test.7", "0.1.0"), Ordering::Greater);
-        assert_eq!(version_cmp("0.1.0", "0.2.0-test.7"), Ordering::Less);
-        // DAE-01b blocker②: pre-release numeric segments — dogfood test
-        // packages must take over from each other (test.8 > test.7).
-        assert_eq!(
-            version_cmp("0.2.0-test.8", "0.2.0-test.7"),
-            Ordering::Greater
-        );
-        assert_eq!(version_cmp("0.2.0-test.7", "0.2.0-test.8"), Ordering::Less);
-        assert_eq!(
-            version_cmp("0.2.0-test.10", "0.2.0-test.9"),
-            Ordering::Greater
-        );
-        assert_eq!(version_cmp("0.2.0-test.8", "0.2.0-test.8"), Ordering::Equal);
-        // A formal build outranks any test build of the same core.
-        assert_eq!(version_cmp("0.2.0", "0.2.0-test.8"), Ordering::Greater);
-        assert_eq!(version_cmp("0.2.0-test.8", "0.2.0"), Ordering::Less);
-        // 同核心数字段：正式 > 预发布（正式构建接管 test 构建）
-        assert_eq!(version_cmp("0.1.0", "0.1.0-test.3"), Ordering::Greater);
-        assert_eq!(version_cmp("0.1.0-test.3", "0.1.0"), Ordering::Less);
-        // 垃圾输入退化为 0
-        assert_eq!(version_cmp("", "0.0.0"), Ordering::Equal);
-        assert_eq!(version_cmp("alpha", "0.1.0"), Ordering::Less);
     }
 }

@@ -4,8 +4,10 @@
 #
 # DOC-05: the old "depends on no internal crate" line was retired when
 # QA-09 moved platform forking into crates/platform — src-tauri DOES
-# consume it below (the only path dependency in this file; verified
-# with `grep -n 'path = '`). "ZERO business logic" still holds:
+# consume it below. #1044 B13 added the second path dependency,
+# crates/version-cmp: a zero-dependency pure function shared with the
+# daemon so the version relation has exactly one implementation.
+# "ZERO business logic" still holds:
 # platform is a system adapter, not business logic. A path dependency
 # does not require same-workspace membership, so the standalone
 # decision stands on the Tauri-tree argument alone.
@@ -46,6 +48,8 @@ interprocess = "2"
 toml = "0.8"
 # System adapter (power hint, data dir) — not business logic.
 platform = { path = "../../../crates/platform" }
+# #1044 B13: 版本关系的唯一实现（与 daemon 共用）。
+version-cmp = { path = "../../../crates/version-cmp" }
 tauri-plugin-single-instance = "2"
 
 [lib]

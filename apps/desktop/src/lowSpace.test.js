@@ -13,7 +13,7 @@ const shell = lf(readFileSync(new URL("../src-tauri/src/lib.rs", import.meta.url
 describe("#413 §7 低空间通知接线", () => {
   it("每次 status 刷新都把 daemon 给的待展示通知交出去，弹完就 ack", () => {
     expect(app).toMatch(
-      /status = await call\("status"\);\s*\n\s*void showLowSpaceNotice\(status\.low_space_notice\);/,
+      /status = await call\("status", \{ shell_version: version \}\);\s*\n\s*void showLowSpaceNotice\(status\.low_space_notice\);/,
     );
     expect(app).toContain('await call("low_space.ack")');
   });

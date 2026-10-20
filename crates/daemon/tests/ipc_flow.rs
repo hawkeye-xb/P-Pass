@@ -1583,6 +1583,38 @@ async fn device_folder_returns_the_absolute_landing_directory() {
     assert!(!bad.ok, "非法 node_id 拒绝");
 }
 
+/// #1044 B13：壳与内核的版本关系由 daemon 下结论；壳不报版本时为 null。
+#[tokio::test(flavor = "multi_thread")]
+async fn status_reports_the_shell_relation_from_the_shared_version_rule() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_db, _pairing, socket, token) = start(dir.path(), "shell-relation").await;
+    let mut c = IpcClient::connect(&socket, &token).await;
+    let daemon = c
+        .call("status", serde_json::Value::Null)
+        .await
+        .result
+        .unwrap();
+    assert!(daemon["shell_relation"].is_null(), "壳没报版本就不下结论");
+    let ours = daemon["version"].as_str().unwrap().to_string();
+
+    let rel = |v: serde_json::Value| v["shell_relation"].as_str().unwrap().to_string();
+    let same = c
+        .call("status", serde_json::json!({ "shell_version": ours }))
+        .await;
+    assert_eq!(rel(same.result.unwrap()), "same");
+    let newer = c
+        .call("status", serde_json::json!({ "shell_version": "9999.1.1" }))
+        .await;
+    assert_eq!(rel(newer.result.unwrap()), "shell_newer");
+    let older = c
+        .call(
+            "status",
+            serde_json::json!({ "shell_version": "0.0.1-test.1" }),
+        )
+        .await;
+    assert_eq!(rel(older.result.unwrap()), "shell_older");
+}
+
 /// DEV-04：老设备重连，`pairing.pending` 必须认得出来——判据是
 /// `node_id`，不是名字。
 ///
