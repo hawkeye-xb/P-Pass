@@ -301,6 +301,25 @@ pub trait PlatformAdapter: Send + Sync {
     /// 想真正换过去，调用方得先调 [`Self::migrate_legacy_data_dir`]。
     fn data_dir(&self) -> PathBuf;
 
+    /// #1043（B10）：当前用户的家目录。`None` = 读不到（不编一个出来）。
+    ///
+    /// 默认实现读 `HOME`（macOS / Linux 的约定）；Windows 走 Known Folder
+    /// （`FOLDERID_Profile`），不靠 `USERPROFILE` 环境变量。壳与 daemon 不许
+    /// 自己读这些环境变量（门禁 G1）。
+    fn home_dir(&self) -> Option<PathBuf> {
+        std::env::var_os("HOME")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    }
+
+    /// #1043（B10）：当前用户的「图片」目录——新建照片库默认放在它下面。
+    ///
+    /// 默认实现 = 家目录下的 `Pictures`（macOS / 多数 Linux 桌面）；Windows 走
+    /// Known Folder（`FOLDERID_Pictures`），用户把「图片」挪到别的盘也认得出。
+    fn pictures_dir(&self) -> Option<PathBuf> {
+        self.home_dir().map(|h| h.join("Pictures"))
+    }
+
     /// IDX-08 (#1010)：入库落盘文件名的**平台策略**。
     ///
     /// core 先把手机传来的名字去掉路径、做路径穿越兜底（最后一段、`.`/`..`、

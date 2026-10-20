@@ -333,7 +333,7 @@ fn wizard_state() -> Value {
     let dir = platform::adapter().data_dir();
     // Photos must land somewhere a person can FIND (real walkthrough:
     // "传到哪儿了" had no answer while the library hid in ~/Library).
-    let pictures = dirs_pictures().join("P-Pass 家庭照片库");
+    let pictures = default_library_dir(platform::adapter().pictures_dir());
     let installed = platform::hosting().autostart_installed().unwrap_or(false);
     let configured_dir = configured_library_dir(&dir);
     json!({
@@ -353,11 +353,18 @@ fn wizard_state() -> Value {
     })
 }
 
-fn dirs_pictures() -> std::path::PathBuf {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| ".".into());
-    std::path::PathBuf::from(home).join("Pictures")
+/// B10（#1043）：新建库的默认目录名。固定英文、不随界面语言变——目录名会
+/// 写进 config、出现在资源管理器/访达里，跟着语言变就会一台机器两个名字。
+/// 只影响新建库：已有库的路径存在 config.toml 里，不动。
+const DEFAULT_LIBRARY_DIR_NAME: &str = "P-Pass Library";
+
+/// 新建库的默认位置：「图片」目录（由平台适配器回答）下的
+/// [`DEFAULT_LIBRARY_DIR_NAME`]。读不到「图片」目录时退回当前目录（与改前
+/// 读不到 HOME 时的 `.` 同一口径）。
+fn default_library_dir(pictures: Option<std::path::PathBuf>) -> std::path::PathBuf {
+    pictures
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(DEFAULT_LIBRARY_DIR_NAME)
 }
 
 /// Current sleep policy, humanized for the wizard.
@@ -2268,6 +2275,22 @@ mod tests {
             out = out.replace(&format!("{{{name}}}"), &val);
         }
         out
+    }
+
+    /// B10（#1043）：新建库默认目录 =「图片」目录 + 固定英文名，与界面语言
+    /// 无关。反证：名字改回「P-Pass 家庭照片库」或随语言取 → 红。
+    #[test]
+    fn default_library_dir_is_a_fixed_english_name_under_pictures() {
+        let pictures = std::path::PathBuf::from("/Users/x/Pictures");
+        assert_eq!(
+            default_library_dir(Some(pictures.clone())),
+            pictures.join("P-Pass Library")
+        );
+        // 读不到「图片」目录：退回当前目录，名字不变。
+        assert_eq!(
+            default_library_dir(None),
+            std::path::PathBuf::from(".").join("P-Pass Library")
+        );
     }
 
     #[test]

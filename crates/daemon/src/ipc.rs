@@ -1419,9 +1419,14 @@ impl IpcServer {
     async fn export_logs(&self) -> anyhow::Result<PathBuf> {
         let events = self.db.list_diag(1000).await?;
         let devices = self.db.list_devices(true).await?;
-        let home = std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .unwrap_or_default();
+        // #1043：家目录由平台适配器回答；读不到 = 空串（与改前同一口径）。
+        let home = {
+            use platform::PlatformAdapter as _;
+            platform::adapter()
+                .home_dir()
+                .map(|h| h.display().to_string())
+                .unwrap_or_default()
+        };
         let library = self.data_dir.display().to_string();
 
         let diag_json = serde_json::to_string_pretty(

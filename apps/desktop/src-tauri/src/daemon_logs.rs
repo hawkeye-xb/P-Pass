@@ -14,12 +14,12 @@ pub fn plist_path() -> PathBuf {
     home_dir().join("Library/LaunchAgents/com.p-pass.daemon.plist")
 }
 
+/// 家目录由平台适配器回答（#1043）；读不到时退回 `.`（与改前同一口径）。
 pub fn home_dir() -> PathBuf {
-    PathBuf::from(
-        std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .unwrap_or_else(|_| ".".into()),
-    )
+    use platform::PlatformAdapter as _;
+    platform::adapter()
+        .home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 /// plist 里的 stdout / stderr 路径。纯函数——单测直接喂 plist 文本。

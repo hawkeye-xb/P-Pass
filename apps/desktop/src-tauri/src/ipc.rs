@@ -159,13 +159,14 @@ pub fn read_config_data_dir(dir: &Path) -> Option<String> {
 /// token discovery fix must work on Windows too.
 pub fn token_candidates() -> Vec<PathBuf> {
     use platform::PlatformAdapter as _;
-    let data_dir = platform::adapter().data_dir();
-    token_candidates_from(&data_dir)
+    let adapter = platform::adapter();
+    // #1043：家目录由平台适配器回答，壳不读 HOME；读不到退回 `.`（同改前）。
+    let home = adapter.home_dir().unwrap_or_else(|| PathBuf::from("."));
+    token_candidates_from(&adapter.data_dir(), &home)
 }
 
-/// Testable core: same order, but the platform data dir is injected.
-pub fn token_candidates_from(data_dir: &Path) -> Vec<PathBuf> {
-    let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()));
+/// Testable core: same order, but the platform data dir and home are injected.
+pub fn token_candidates_from(data_dir: &Path, home: &Path) -> Vec<PathBuf> {
     let mut v = Vec::new();
     if let Ok(dir) = std::env::var("PPF_DATA_DIR") {
         v.push(PathBuf::from(dir).join("ipc.token"));
@@ -378,7 +379,13 @@ mod tests {
         )
         .unwrap();
 
-        let candidates = token_candidates_from(&cfg_dir);
+        let home = tmp.path().join("home");
+        let candidates = token_candidates_from(&cfg_dir, &home);
+        // 家目录由调用方注入（#1043：壳不读 HOME），dev 库候选跟着它走。
+        assert!(
+            candidates.contains(&home.join("ppf-library/ipc.token")),
+            "candidates must include the injected home's dev library: {candidates:?}"
+        );
         assert!(
             candidates.contains(&PathBuf::from("/tmp/ppf-wizard-lib/ipc.token")),
             "candidates must include the config data_dir: {candidates:?}"

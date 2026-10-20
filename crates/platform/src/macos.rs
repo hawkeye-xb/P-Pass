@@ -702,3 +702,17 @@ mod diag_log_tests {
         assert!(adapter.default_log_tees_stderr());
     }
 }
+
+#[cfg(test)]
+mod b10_user_dirs_tests {
+    use super::*;
+
+    /// #1043（B10）：macOS 的家目录与「图片」目录由适配器回答，与系统约定一致。
+    #[test]
+    fn pictures_dir_is_home_pictures() {
+        let a = MacosAdapter;
+        let home = a.home_dir().expect("测试环境有 HOME");
+        assert_eq!(home, PathBuf::from(std::env::var("HOME").unwrap()));
+        assert_eq!(a.pictures_dir(), Some(home.join("Pictures")));
+    }
+}

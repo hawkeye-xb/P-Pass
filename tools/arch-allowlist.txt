@@ -18,10 +18,9 @@
 [ratchet]
 apps/desktop/src/platformUx.js | G1 | 11 | 壳内 JS 判平台：plugin-os 取平台 + 三个 switch 按 macos/windows/linux 分支（DESK-69 #997 遗留；应改读 adapter/daemon 字段）
 apps/desktop/src/App.svelte | G1 | 2 | 匹配 Windows 错误原文的正则（第 1200 行）+ 按平台选向导（wizardVariant(currentPlatform()) === "windows"）
-apps/desktop/src-tauri/src/daemon_logs.rs | G1 | 4 | plist_path() 拼 LaunchAgents plist 路径 + 读 HOME/USERPROFILE + std::env::consts::OS（壳里读 macOS plist，所有平台都编译）
+apps/desktop/src-tauri/src/daemon_logs.rs | G1 | 2 | plist_path() 拼 LaunchAgents plist 路径 + std::env::consts::OS（壳里读 macOS plist，所有平台都编译）
 apps/desktop/src-tauri/src/daemon_logs.rs | G5 | 1 | std::env::consts::OS 写进诊断包（平台信息应由 adapter 提供）
-apps/desktop/src-tauri/src/ipc.rs | G1 | 1 | 壳直接读 HOME 拼 daemon 候选路径
-apps/desktop/src-tauri/src/lib.rs | G1 | 14 | 读 LANG 判托盘语言(2)、读 HOME/USERPROFILE(2)、读 plist 的启动错误/日志接管（1700）、以及依赖 LaunchAgents/plist 路径的 9 处单测夹具
+apps/desktop/src-tauri/src/lib.rs | G1 | 12 | 读 LANG 判托盘语言(2)、读 plist 的启动错误/日志接管（1700）、以及依赖 LaunchAgents/plist 路径的 9 处单测夹具
 apps/desktop/src-tauri/src/redact.rs | G1 | 1 | 脱敏白名单里的字面量 com.p-pass.daemon.plist（随 plist 路径一起迁出）
 crates/daemon/src/main.rs | G5 | 1 | std::env::consts::OS 写进状态字段（应改由 platform adapter 提供）
 crates/transport/src/provider.rs | G5 | 1 | 测试里 use std::os::unix::fs::MetadataExt（测试辅助，待挪进 platform test-support 或改跨平台写法）

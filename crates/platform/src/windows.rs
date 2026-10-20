@@ -311,6 +311,21 @@ fn delete_legacy_run_value() -> Result<()> {
 /// `$INSTDIR` 就变成 `C:\Program Files\P-Pass`，普通用户根本写不进去。
 const DATA_DIR_NAME: &str = "com.p-pass.desktop";
 
+/// #1043：`SHGetKnownFolderPath`。读不到（极少见：漫游配置坏了、服务账户）
+/// 返回 `None`，调用方自己决定怎么兜底，这里不编路径。
+fn known_folder(id: &windows::core::GUID) -> Option<PathBuf> {
+    use windows::Win32::System::Com::CoTaskMemFree;
+    use windows::Win32::UI::Shell::{SHGetKnownFolderPath, KF_FLAG_DEFAULT};
+    // SAFETY: id 指向 'static GUID；htoken = None 表示当前用户。成功时返回的
+    // 缓冲区归调用方，读完立刻用 CoTaskMemFree 释放。
+    let raw = unsafe { SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None) }.ok()?;
+    // SAFETY: raw 是系统刚分配的、以 NUL 结尾的 UTF-16 串。
+    let text = unsafe { raw.to_string() };
+    // SAFETY: raw 由 SHGetKnownFolderPath 分配，只释放这一次。
+    unsafe { CoTaskMemFree(Some(raw.0 as *const core::ffi::c_void)) };
+    text.ok().filter(|t| !t.is_empty()).map(PathBuf::from)
+}
+
 /// 搬家前的老位置：`%APPDATA%`（= Roaming）下的 `P-Pass`。
 ///
 /// 为什么是错的（DESK-24 #173）：Roaming 在域环境里会被系统复制到用户登录
@@ -545,6 +560,17 @@ impl PlatformAdapter for WindowsAdapter {
     /// 指着一个空目录让 daemon 建一个崭新的空索引。
     fn data_dir(&self) -> PathBuf {
         crate::data_migration::resolve(&legacy_data_dir(), &current_data_dir())
+    }
+
+    /// #1043（B10）：Known Folder `FOLDERID_Profile`（不读 `USERPROFILE`）。
+    fn home_dir(&self) -> Option<PathBuf> {
+        known_folder(&windows::Win32::UI::Shell::FOLDERID_Profile)
+    }
+
+    /// #1043（B10）：Known Folder `FOLDERID_Pictures`——用户在资源管理器里把
+    /// 「图片」搬到 D 盘的话，这里给的就是 D 盘那个，而不是 `%USERPROFILE%\Pictures`。
+    fn pictures_dir(&self) -> Option<PathBuf> {
+        known_folder(&windows::Win32::UI::Shell::FOLDERID_Pictures)
     }
 
     /// IDX-08 (#1010)：Windows 的非法字符 / 保留名 / 结尾点空格规则。
@@ -1923,6 +1949,23 @@ fn terminate_and_wait(pid: u32) -> ProcessKill {
 /// QA-09 迁移（#211）：这组用例原来住在
 /// `apps/desktop/src-tauri/src/lib.rs`，随被测函数一起搬过来。
 /// 判据一个字没改，只是换了地方——搬家途中丢掉判别力是本次迁移最大的风险。
+#[cfg(test)]
+mod b10_known_folder_tests {
+    use super::*;
+
+    /// #1043（B10）：家目录与「图片」目录走 Known Folder，真调系统 API。
+    /// 默认配置下「图片」在家目录里；只断言绝对路径 + 名字非空，不假设盘符。
+    #[test]
+    fn known_folders_resolve_to_absolute_paths() {
+        let a = WindowsAdapter::new();
+        let home = a.home_dir().expect("FOLDERID_Profile");
+        let pictures = a.pictures_dir().expect("FOLDERID_Pictures");
+        assert!(home.is_absolute(), "{}", home.display());
+        assert!(pictures.is_absolute(), "{}", pictures.display());
+        assert_ne!(home, pictures);
+    }
+}
+
 #[cfg(test)]
 mod desk24_data_dir_tests {
     use super::*;
