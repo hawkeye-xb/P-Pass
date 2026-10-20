@@ -606,14 +606,6 @@ impl PlatformAdapter for WindowsAdapter {
         crate::data_migration::migrate(&legacy_data_dir(), &current_data_dir())
     }
 
-    /// DAE-05：`GetDiskFreeSpaceExW`。free 取 `lpFreeBytesAvailableToCaller`
-    /// 而不是 `lpTotalNumberOfFreeBytes`——前者是「本调用者（受配额约束后）
-    /// 真正能写多少」，正是 unix 侧 `statvfs.f_bavail` 的对等语义，也是
-    /// 资源管理器显示的那个数。取错的话在带配额的卷上会偏大。
-    ///
-    /// 路径要先转成 UTF-16 + NUL 结尾的宽字符串（Win32 W 系列 API 的要求）。
-    /// 目录不存在或无权限时 API 返回 0，此处回 `None`——调用方序列化成 null，
-    /// 绝不编造数字。
     /// DAE-11 (#804)：`GetSystemPowerStatus` 的 `ACLineStatus`。不需要权限、
     /// 不起进程、与系统语言无关。判据见 [`ac_line_verdict`]。
     fn on_external_power(&self) -> Option<bool> {
@@ -681,6 +673,14 @@ impl PlatformAdapter for WindowsAdapter {
         }))
     }
 
+    /// DAE-05：`GetDiskFreeSpaceExW`。free 取 `lpFreeBytesAvailableToCaller`
+    /// 而不是 `lpTotalNumberOfFreeBytes`——前者是「本调用者（受配额约束后）
+    /// 真正能写多少」，正是 unix 侧 `statvfs.f_bavail` 的对等语义，也是
+    /// 资源管理器显示的那个数。取错的话在带配额的卷上会偏大。
+    ///
+    /// 路径要先转成 UTF-16 + NUL 结尾的宽字符串（Win32 W 系列 API 的要求）。
+    /// 目录不存在或无权限时 API 返回 0，此处回 `None`——调用方序列化成 null，
+    /// 绝不编造数字。
     fn volume_stats(&self, path: &Path) -> Option<crate::VolumeStats> {
         use std::os::windows::ffi::OsStrExt as _;
         use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
