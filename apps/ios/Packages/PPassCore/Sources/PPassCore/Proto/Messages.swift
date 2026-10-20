@@ -472,7 +472,7 @@ public struct BlobTicketResponse: Codable, Equatable, Sendable {
 
 // MARK: - Flow 逐张交付
 
-/// `flow.offer` / `flow.fetch` / `flow.cancel` 的参数。queue_sequence = order 行 id，lease_token = `lease-<id>`。
+/// `flow.offer` 的参数。queue_sequence = order 行 id，lease_token = `lease-<id>`。
 public struct FlowFetchRequest: Codable, Equatable, Sendable {
     public var queueSequence: UInt64
     public var pairingEpoch: String
@@ -842,8 +842,6 @@ public enum Methods {
     public static let thumbGet = "thumb.get"
     public static let assetBlobTicket = "asset.blob_ticket"
     public static let flowOffer = "flow.offer"
-    public static let flowFetch = "flow.fetch"
-    public static let flowCancel = "flow.cancel"
     public static let flowStatus = "flow.status"
     public static let flowSuspend = "flow.suspend"
     public static let flowCancelTuple = "flow.cancel_tuple"

@@ -356,15 +356,13 @@ object Methods {
     const val THUMB_GET = "thumb.get"
     const val ASSET_BLOB_TICKET = "asset.blob_ticket"
     const val FLOW_OFFER = "flow.offer"
-    const val FLOW_FETCH = "flow.fetch"
-    const val FLOW_CANCEL = "flow.cancel"
     /** NET-06: read-only status query for one exact tuple. */
     const val FLOW_STATUS = "flow.status"
     /** NET-06: pause — interrupts the in-progress native fetch task
      *  WITHOUT changing the durable grant state (stays active). */
     const val FLOW_SUSPEND = "flow.suspend"
     /** NET-06: cancel by tuple identity alone — no content_hash/provider
-     *  required, unlike [FLOW_CANCEL]. */
+     *  required. */
     const val FLOW_CANCEL_TUPLE = "flow.cancel_tuple"
     /** AUDIT-01: phone-side durable outbox events -> daemon v2 audit repo. */
     const val FLOW_AUDIT_SUBMIT = "flow.audit.submit"
