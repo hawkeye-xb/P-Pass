@@ -56,8 +56,6 @@
     pairResultName,
   } from "./lib/pending.js";
   import { formatBytes, diskUsedPercent } from "./lib/formatBytes.js";
-  // #413 §7：照片库卷低于 5 GiB 发一次系统通知（判定规则见 lowSpace.js）。
-  import { nextLowSpace } from "./lowSpace.js";
   // MOB-29: 「刚从库里删掉照片」警告的判据（纯函数，externalDelete.test.js
   // 钉边界）——删除会被手机传回来，这是对的，但得让用户知道。
   import { externalDeleteNotice } from "./lib/externalDelete.js";
@@ -217,18 +215,25 @@
   // DESK-63 (#946): a devices.list failure is a data error, not a service
   // outage. It gets its own state and its own message.
   let devicesError = $state("");
-  // #413 §7：低空间通知的布防状态——每个进程最多在跌破时报一次，回升到
-  // 6 GiB 以上才重新布防。不是 $state：它不驱动任何渲染。
-  let lowSpaceArmed = true;
-  function checkLowSpace(freeBytes) {
-    const next = nextLowSpace(lowSpaceArmed, freeBytes);
-    lowSpaceArmed = next.armed;
-    if (!next.notify) return;
-    // 尽力而为：系统通知失败不影响任何界面状态。
-    invoke("notify_system", {
-      title: t("ui.low_space_title"),
-      body: t("ui.low_space_body", { free: formatBytes(freeBytes) }),
-    }).catch(() => {});
+  // #413 §7 / #1044 B11：低空间通知何时该弹由 daemon 判定并持久化（阈值、
+  // 回差、布防状态都在 crates/daemon/src/low_space.rs）。status 带出待展示的
+  // 那一次（low_space_notice），这里弹完就 ack 消费掉；重开 App 不再重弹。
+  // 正在弹/正在 ack 时跳过：refresh 可能并发（轮询 + 事件触发），两次都在
+  // ack 之前看到同一条 notice 就会弹两遍。
+  let lowSpaceNoticeBusy = false;
+  async function showLowSpaceNotice(notice) {
+    if (!notice || lowSpaceNoticeBusy) return;
+    lowSpaceNoticeBusy = true;
+    try {
+      // 尽力而为：系统通知失败不影响任何界面状态。
+      await invoke("notify_system", {
+        title: t("ui.low_space_title"),
+        body: t("ui.low_space_body", { free: formatBytes(notice.free_bytes ?? null) }),
+      }).catch(() => {});
+      await call("low_space.ack").catch(() => {});
+    } finally {
+      lowSpaceNoticeBusy = false;
+    }
   }
   let devices = $state([]);
   let qrDataUrl = $state("");
@@ -305,7 +310,7 @@
   async function refresh() {
     try {
       status = await call("status");
-      checkLowSpace(status.disk_free_bytes ?? null);
+      void showLowSpaceNotice(status.low_space_notice);
       pendingCount = status.pending_pairs ?? 0;
       // UX-08: pending 全量列表（pairing.pending，只读）——列表化显示
       // 的基础；拿不到时回退数量（老 daemon 升级过渡）。

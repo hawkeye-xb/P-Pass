@@ -1500,6 +1500,50 @@ async fn device_rows_carry_daemon_conclusions_and_status_counts_match_the_list()
     assert_eq!(row("业主移除的")["removal"], "removed");
 }
 
+/// #1044 B11：待展示的低空间通知随 status 带出，`low_space.ack` 消费掉；
+/// 状态在库里，换一个连接（= 重开 App）也不会再出现。
+#[tokio::test(flavor = "multi_thread")]
+async fn low_space_notice_rides_on_status_until_acknowledged() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, _pairing, socket, token) = start(dir.path(), "low-space").await;
+    // 布防中且有一次待展示。本机真实剩余空间 ≥ 5 GiB 时状态不变（仍是 123）；
+    // < 5 GiB 时会被新的一次判定替换——两种都必须带出一条通知。
+    db.set_low_space_notice(&storage::LowSpaceNotice {
+        armed: true,
+        pending_free_bytes: Some(123),
+    })
+    .await
+    .unwrap();
+
+    let mut c = IpcClient::connect(&socket, &token).await;
+    let status = c
+        .call("status", serde_json::Value::Null)
+        .await
+        .result
+        .unwrap();
+    let first = status["low_space_notice"]["free_bytes"].as_i64();
+    assert!(first.is_some(), "待展示的通知随 status 带出：{status}");
+    let again = c
+        .call("status", serde_json::Value::Null)
+        .await
+        .result
+        .unwrap();
+    assert_eq!(
+        again["low_space_notice"]["free_bytes"].as_i64(),
+        first,
+        "确认之前一直挂着"
+    );
+
+    assert!(c.call("low_space.ack", serde_json::Value::Null).await.ok);
+    let mut reopened = IpcClient::connect(&socket, &token).await;
+    let after = reopened
+        .call("status", serde_json::Value::Null)
+        .await
+        .result
+        .unwrap();
+    assert!(after["low_space_notice"].is_null(), "确认过就不再弹");
+}
+
 /// DEV-04：老设备重连，`pairing.pending` 必须认得出来——判据是
 /// `node_id`，不是名字。
 ///

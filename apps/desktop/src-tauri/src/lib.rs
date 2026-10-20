@@ -170,7 +170,7 @@ fn validate_asset_file(path: &std::path::Path) -> Result<std::path::PathBuf, Str
 /// Forward one IPC method. The frontend does the rest.
 /// #413 §7: desktop system notification (the low-space warning). The shell
 /// only relays already-localized text; the "when" rule lives in the
-/// frontend (`src/lowSpace.js`), the "how" in the platform adapter
+/// daemon (`crates/daemon/src/low_space.rs`, #1044), the "how" in the platform adapter
 /// (macOS: osascript, best effort; Windows: not implemented yet, no-op).
 #[tauri::command]
 fn notify_system(title: String, body: String) {

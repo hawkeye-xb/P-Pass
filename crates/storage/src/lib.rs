@@ -12,6 +12,7 @@ mod db;
 mod device_repo;
 mod diag_repo;
 mod flow_delivery_repo;
+mod low_space_repo;
 mod supersede_repo;
 
 pub use asset_repo::{ActivityBatch, Asset, TimelinePage};
@@ -23,6 +24,7 @@ pub use db::Db;
 pub use device_repo::{Device, RevokedBy, Role};
 pub use diag_repo::DiagEvent;
 pub use flow_delivery_repo::{FlowGrant, FlowGrantState, FlowReceipt};
+pub use low_space_repo::LowSpaceNotice;
 pub use supersede_repo::PendingSwap;
 
 /// Storage-layer errors.

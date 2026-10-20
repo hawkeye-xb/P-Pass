@@ -52,10 +52,6 @@ type FreeSpaceProbe = Arc<dyn Fn(&Path) -> Option<u64> + Send + Sync>;
 /// dropped while the Desktop was unreachable).
 pub const GRANT_RESUME_TTL_MS: i64 = 3 * 24 * 60 * 60 * 1000;
 
-/// #413 §7: fixed low-space warning line for the photo library's volume.
-/// Same value as the phone's `DesktopHealth.lowSpace` (FlowContract.kt).
-pub const LOW_SPACE_THRESHOLD_BYTES: u64 = 5 * 1024 * 1024 * 1024;
-
 /// Headroom kept free on top of what one item needs at offer time, and the
 /// line below which an unexplained write failure is read as "disk full".
 /// Covers the index WAL, thumbnails and other writers sharing the volume.

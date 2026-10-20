@@ -754,6 +754,11 @@ impl IpcServer {
             // 新口径：在用的 + **设备自己断开的**（标「已断开」）；业主主动
             // 移除的不列——那正是业主的意图。
             // `include_revoked=true` 仍是全量（内部统计/诊断用），不变。
+            // #1044 B11：桌面已把待展示的低空间通知弹出来了。
+            "low_space.ack" => match crate::low_space::ack(&self.db).await {
+                Ok(()) => Resp::ok(id, serde_json::json!({})),
+                Err(_) => internal(id),
+            },
             "devices.list" => {
                 let include_revoked = req
                     .params
@@ -1433,6 +1438,18 @@ impl IpcServer {
         let photo_count = self.db.count_assets().await?;
         let photo_sources = self.db.count_asset_sources().await?;
         let disk = disk_stats(&self.data_dir);
+        // #1044 B11：低空间通知由 daemon 判定并持久化（low_space.rs）；
+        // 待展示的那一次随 status 带出，桌面弹完调 `low_space.ack`。
+        // 尽力而为：盘真满时索引库写入可能失败（SQLITE_FULL），那正是最需要
+        // status 的时候——不许为了一个通知把整个 status 拖垮。
+        let low_space_notice = match crate::low_space::observe(&self.db, disk.map(|d| d.free)).await
+        {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!("#1044: 低空间通知状态读写失败（本轮不带通知）：{e}");
+                None
+            }
+        };
         Ok(serde_json::json!({
             // T-090 data-plane fields (桌面总览卡直接消费).
             "photo_count": photo_count,
@@ -1440,6 +1457,7 @@ impl IpcServer {
             "photo_sources": photo_sources,
             "disk_free_bytes": disk.map(|d| d.free),
             "disk_total_bytes": disk.map(|d| d.total),
+            "low_space_notice": low_space_notice.map(|free| serde_json::json!({ "free_bytes": free })),
             "state": state_name(&state),
             "msg_key": state.msg_key(),
             "devices": devices.len(),
