@@ -161,7 +161,8 @@ describe("第 3 步 finishSetup", () => {
     invokeMock.mockImplementation(async (cmd) => {
       if (cmd === "start_daemon") return "resident";
       if (cmd === "daemon_call") throw new Error("no daemon");
-      if (cmd === "daemon_startup_error") return "Error: address already in use";
+      // #1044：壳把 daemon 的 stderr 拆成 { key, detail }（没认出原因时 key 为空）。
+      if (cmd === "daemon_startup_error") return { key: null, detail: "Error: address already in use" };
       throw new Error(`未预期：${cmd}`);
     });
     const { flow, view, onDone } = make();

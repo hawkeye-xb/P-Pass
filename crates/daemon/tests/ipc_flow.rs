@@ -1544,6 +1544,45 @@ async fn low_space_notice_rides_on_status_until_acknowledged() {
     assert!(after["low_space_notice"].is_null(), "确认过就不再弹");
 }
 
+/// #1044：设备目录由 daemon 给绝对路径（与入库落位同一口径），桌面不再用
+/// `/` 拼。目录还不存在时退回 originals/，并如实标出。
+#[tokio::test(flavor = "multi_thread")]
+async fn device_folder_returns_the_absolute_landing_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_db, _pairing, socket, token) = start(dir.path(), "device-folder").await;
+    let mut c = IpcClient::connect(&socket, &token).await;
+    let node = "ab".repeat(32);
+
+    std::fs::create_dir_all(dir.path().join("originals")).unwrap();
+    let r = c
+        .call("device.folder", serde_json::json!({ "node_id": node }))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(r["is_device_dir"], false, "还没落过照片");
+    assert_eq!(
+        std::path::PathBuf::from(r["path"].as_str().unwrap()),
+        dir.path().join("originals")
+    );
+
+    let device_dir = dir.path().join("originals").join(&node);
+    std::fs::create_dir_all(&device_dir).unwrap();
+    let r = c
+        .call("device.folder", serde_json::json!({ "node_id": node }))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(r["is_device_dir"], true);
+    let path = std::path::PathBuf::from(r["path"].as_str().unwrap());
+    assert!(path.is_absolute());
+    assert_eq!(path, device_dir);
+
+    let bad = c
+        .call("device.folder", serde_json::json!({ "node_id": "zz" }))
+        .await;
+    assert!(!bad.ok, "非法 node_id 拒绝");
+}
+
 /// DEV-04：老设备重连，`pairing.pending` 必须认得出来——判据是
 /// `node_id`，不是名字。
 ///

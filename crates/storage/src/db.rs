@@ -53,3 +53,32 @@ impl Db {
         &self.pool
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #1044：新版本建过的库被旧版本打开 = 库里有本二进制不认识的
+    /// migration。这一种失败要能被认出来（daemon 输出 keyed 错误）。
+    #[tokio::test]
+    async fn a_library_from_a_newer_version_is_recognised() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("index.sqlite");
+        let db = Db::open(&path).await.unwrap();
+        sqlx::query(
+            "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time)
+             VALUES (99999, 'from the future', 1, x'00', 0)",
+        )
+        .execute(db.pool())
+        .await
+        .unwrap();
+        db.pool().close().await;
+
+        let err = Db::open(&path)
+            .await
+            .err()
+            .expect("must refuse a newer schema");
+        assert!(err.is_schema_newer_than_binary(), "{err}");
+        assert!(!crate::StorageError::InvalidCursor.is_schema_newer_than_binary());
+    }
+}

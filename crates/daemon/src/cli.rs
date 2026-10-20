@@ -238,6 +238,20 @@ pub fn pair_link_stdout_line(qr: &str, stdout_is_terminal: bool) -> String {
     }
 }
 
+/// #1044：daemon 起不来时写到 stderr 的**最后一行**——一行 JSON
+/// `{"error_key": <i18n key 或 null>, "detail": <原文>}`。桌面壳读这一行，
+/// 按 key 出人话指引、原文照常给出；不再拿正则去猜 sqlx 的英文报错。
+pub fn startup_error_line(key: Option<&str>, detail: &str) -> String {
+    serde_json::json!({ "error_key": key, "detail": detail }).to_string()
+}
+
+/// 打开索引库失败时的已知原因 → i18n key。目前只有一种：库里记着本版本
+/// 没有的 migration（装了更旧的版本去开新版本建过的库）。
+pub fn startup_error_key(err: &storage::StorageError) -> Option<&'static str> {
+    err.is_schema_newer_than_binary()
+        .then_some(diag::keys::UI_STARTUP_MIGRATION_GUIDANCE)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -466,5 +480,27 @@ mod tests {
         // 合法错误会被误伤成人话化——透传断言必红。
         let tricky = "bind endpoint: use-after-free in relay resolver";
         assert_eq!(humanize_bind_error(None, tricky), tricky);
+    }
+
+    #[test]
+    fn a_keyed_startup_error_is_one_json_line() {
+        let line = startup_error_line(
+            Some("ui.startup_migration_guidance"),
+            "migration 12 ... missing",
+        );
+        assert!(!line.contains('\n'), "壳只读最后一行");
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v["error_key"], "ui.startup_migration_guidance");
+        assert_eq!(v["detail"], "migration 12 ... missing");
+    }
+
+    #[test]
+    fn unknown_startup_failures_carry_no_key_but_keep_the_detail() {
+        let err = storage::StorageError::InvalidCursor;
+        assert_eq!(startup_error_key(&err), None);
+        let line: serde_json::Value =
+            serde_json::from_str(&startup_error_line(None, "boom")).unwrap();
+        assert!(line["error_key"].is_null());
+        assert_eq!(line["detail"], "boom");
     }
 }

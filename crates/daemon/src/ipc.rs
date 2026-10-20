@@ -1051,6 +1051,39 @@ impl IpcServer {
                     Err(_) => internal(id),
                 }
             }
+            // #1044：某台设备在照片库里的目录（绝对路径，平台分隔符由 Path 给）。
+            // 与入库落位同一口径（core_index::device_dir）。这台设备还没落过
+            // 照片时目录不存在 → 退回 originals/，库刚建还没有 originals/ →
+            // 库根目录；`is_device_dir` 说清给的是哪一个，不假装有内容。
+            "device.folder" => {
+                let Some(node_id) = req
+                    .params
+                    .get("node_id")
+                    .and_then(|v| v.as_str())
+                    .and_then(parse_hex32)
+                else {
+                    return Resp::err(
+                        id,
+                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+                    );
+                };
+                let originals = self.data_dir.join("originals");
+                let device = originals.join(core_index::device_dir(&node_id));
+                let (path, is_device_dir) = if device.is_dir() {
+                    (device, true)
+                } else if originals.is_dir() {
+                    (originals, false)
+                } else {
+                    (self.data_dir.clone(), false)
+                };
+                Resp::ok(
+                    id,
+                    serde_json::json!({
+                        "path": path.display().to_string(),
+                        "is_device_dir": is_device_dir,
+                    }),
+                )
+            }
             "device.rename" => {
                 // NAME-01: 改显示名（ID 与显示名分离——decisions ②）。
                 // 本机 owner 经 IPC 操作（与 device.revoke 同鉴权面）。

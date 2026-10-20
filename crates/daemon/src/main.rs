@@ -254,7 +254,18 @@ async fn main() -> anyhow::Result<()> {
     // #949：清掉旧版遥测遗留的 anon_id（尽力而为，失败只 warn）。
     daemon::stats::purge_legacy_anon_id(&data_dir);
 
-    let db = storage::Db::open(&data_dir.join(".ppf/index.sqlite")).await?;
+    // #1044：打不开索引库时输出 keyed 错误行（cli::startup_error_line），
+    // 桌面按 key 出指引，不再用正则猜 stderr 原文。
+    let db = match storage::Db::open(&data_dir.join(".ppf/index.sqlite")).await {
+        Ok(db) => db,
+        Err(e) => {
+            eprintln!(
+                "{}",
+                daemon::cli::startup_error_line(daemon::cli::startup_error_key(&e), &e.to_string())
+            );
+            std::process::exit(1);
+        }
+    };
     // ── Persistent daemon identity (真机 P0: 每次重启换 NodeId 会把
     // 所有已配对手机变成孤儿——配对绑的就是 NodeId). 身份密钥当前存在
     // 数据目录里的 identity.key（unix 0600 / Windows 仅属主 DACL，与

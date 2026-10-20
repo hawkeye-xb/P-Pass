@@ -28,9 +28,11 @@ import { setLocale } from "./lib/i18n.js";
 // 只搬字不改措辞，zh 下渲染结果必须和搬迁前逐字相同。
 setLocale("zh");
 
-// 那次真实事故的 stderr（装回旧版本 → 库的 migration 比二进制新）。
+// 那次真实事故的 stderr（装回旧版本 → 库的 migration 比二进制新）。#1044 起
+// daemon 自己认出原因、给 keyed 错误，壳拆成 { key, detail } 交给向导。
 const DAEMON_STDERR =
-  "Error: migration: migration 2 was previously applied but is missing in the resolved migrations";
+  "migration: migration 2 was previously applied but is missing in the resolved migrations";
+const STARTUP_ERROR = { key: "ui.startup_migration_guidance", detail: DAEMON_STDERR };
 // `startupFailureText` 认出 migration mismatch 时给的人话。
 const HUMAN = "这个版本比你的照片库旧。请装回新版本。";
 // 只在 stderr 拿不到时才该出现的兜底——它赢了就说明 stderr 那条路断了。
@@ -109,7 +111,7 @@ describe.each([
   });
 
   it("红条同时显示人话与 daemon 的 stderr 原文，兜底文案不许顶替它们", async () => {
-    daemonNeverBecomesReady({ startupError: DAEMON_STDERR });
+    daemonNeverBecomesReady({ startupError: STARTUP_ERROR });
 
     const text = await runToStartupFailure(Component);
 

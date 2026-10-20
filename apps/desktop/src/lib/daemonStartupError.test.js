@@ -16,13 +16,20 @@ setLocale("zh");
 // 像"向导被测了"的东西在这里。
 
 describe("startupFailureText", () => {
-  it("keeps daemon stderr visible and explains a migration mismatch", () => {
-    const stderr =
-      "Error: migration: migration 2 was previously applied but is missing in the resolved migrations";
+  it("daemon 认出的原因给人话，stderr 原文照常透出", () => {
+    const detail =
+      "migration: migration 12 was previously applied but is missing in the resolved migrations";
 
-    const text = startupFailureText(stderr);
+    const text = startupFailureText({ key: "ui.startup_migration_guidance", detail });
 
-    expect(text).toContain(stderr);
+    expect(text).toContain(detail);
     expect(text).toContain("这个版本比你的照片库旧。请装回新版本。");
+  });
+
+  it("#1044：没有 key 就不猜——即使原文看起来像 migration 报错", () => {
+    const detail =
+      "Error: migration: migration 2 was previously applied but is missing in the resolved migrations";
+    expect(startupFailureText({ key: null, detail })).toBe(detail);
+    expect(startupFailureText(null)).toBe("");
   });
 });

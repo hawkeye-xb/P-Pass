@@ -56,15 +56,9 @@ describe("DEV-06 配对结果提示的名字来源", () => {
     expect(name).not.toContain("a".repeat(8));
   });
 
-  it("横幅那条路（App.svelte:1265-1266 不带 item）同样说桌面上的名字", () => {
-    // 横幅走 daemon 队首语义，但队首前端也知道：confirm() 在两个定位参数
-    // 都缺时取 queue 的 0 号（ipc.rs:1142），pending_summary 遍历的是同一
-    // 个 queue、同一个顺序（ipc.rs:1178-1183）。横幅自己显示的就是
-    // pendingList[0].name（App.svelte:1259）——toast 必须跟它同一个名字，
-    // 否则同一屏又是两个名字，正是本卡要消掉的那个症状。
-    const item = undefined; // 横幅按钮 onclick={() => confirmPair(true)}
+  it("#1044：横幅按钮显式带上点名的那一台，toast 与横幅同一个名字", () => {
     const pendingList = [renamed];
-    const name = pairResultName(item ?? pendingList[0], renamedResp);
+    const name = pairResultName(pendingList[0], renamedResp);
     expect(t("ui.pair_allowed", { name })).toBe("已允许「客厅的手机」加入");
   });
 
@@ -90,12 +84,18 @@ const app = readFileSync(new URL("./App.svelte", import.meta.url), "utf8").repla
 );
 
 describe("DEV-06 接线", () => {
-  it("confirmPair 的 toast 走 pairResultName（行 item 优先、队首兜底），不再直接用 r.device", () => {
+  it("#1044：横幅的允许/拒绝显式传 pendingList[0]，不再有不带行的 confirmPair 调用", () => {
+    expect(app).toContain("confirmPair(true, pendingList[0])");
+    expect(app).toContain("confirmPair(false, pendingList[0])");
+    expect(app).not.toMatch(/confirmPair\((true|false)\)/);
+  });
+
+  it("confirmPair 的 toast 走 pairResultName（行 item 优先、回执兜底），不再直接用 r.device", () => {
     const fn = app.slice(
       app.indexOf("async function confirmPair("),
       app.indexOf("async function revoke(")
     );
-    expect(fn).toContain("pairResultName(item ?? pendingList[0], r)");
+    expect(fn).toContain("pairResultName(item, r)");
     expect(fn).not.toContain("{ name: r.device }");
     expect(app).toContain("pairResultName");
   });

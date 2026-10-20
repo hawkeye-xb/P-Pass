@@ -706,13 +706,38 @@ fn daemon_startup_error_in(paths: &platform::DaemonLogPaths) -> Option<String> {
     last_stderr_line(paths.stderr.as_deref()?)
 }
 
+/// daemon 起不来时的结论（#1044）：`key` 是 daemon 认出的已知原因（i18n key），
+/// `detail` 是 stderr 原文（照常给出，不许被模板文案吃掉）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+struct StartupError {
+    key: Option<String>,
+    detail: String,
+}
+
+/// daemon 的 keyed 错误行是一行 JSON `{"error_key", "detail"}`
+/// （`crates/daemon/src/cli.rs::startup_error_line`）；不是这个形状的行（旧内核、
+/// panic 等）原样当 detail，key 为空——壳不猜原因。
+fn parse_startup_error(line: String) -> StartupError {
+    match serde_json::from_str::<Value>(&line) {
+        Ok(v) if v.get("detail").and_then(Value::as_str).is_some() => StartupError {
+            key: v["error_key"].as_str().map(str::to_owned),
+            detail: v["detail"].as_str().unwrap_or_default().to_owned(),
+        },
+        _ => StartupError {
+            key: None,
+            detail: line,
+        },
+    }
+}
+
 /// The wizard asks only after its existing readiness wait has elapsed. This
-/// exposes the daemon's own stderr unchanged, so the UI can explain known
-/// failures without replacing actionable diagnostic text.
+/// exposes the daemon's own stderr unchanged (plus the daemon's keyed
+/// reason, when it gave one), so the UI can explain known failures without
+/// replacing actionable diagnostic text.
 #[tauri::command]
-fn daemon_startup_error() -> Option<String> {
+fn daemon_startup_error() -> Option<StartupError> {
     let a = platform::adapter();
-    daemon_startup_error_in(&a.daemon_log_paths(&a.data_dir()))
+    daemon_startup_error_in(&a.daemon_log_paths(&a.data_dir())).map(parse_startup_error)
 }
 
 /// #1043：服务管理器接的那对 stdio 路径（macOS launchd 的
@@ -2210,7 +2235,37 @@ mod tests {
             return; // 本平台没有 stderr 落点（headless Linux 交给 systemd）。
         };
         assert!(err_file.starts_with(tmp.path()), "{}", err_file.display());
-        assert_eq!(got.flatten().as_deref(), Some(daemon_error));
+        assert_eq!(
+            got.flatten(),
+            Some(StartupError {
+                key: None,
+                detail: daemon_error.to_owned()
+            })
+        );
+    }
+
+    /// #1044：daemon 的 keyed 错误行拆成 key + 原文；不是这个形状的行原样
+    /// 当原文、不带 key——壳不靠正则猜原因。
+    #[test]
+    fn keyed_startup_error_lines_are_split_and_other_lines_pass_through() {
+        let keyed = r#"{"error_key":"ui.startup_migration_guidance","detail":"migration: migration 12 was previously applied but is missing in the resolved migrations"}"#;
+        assert_eq!(
+            parse_startup_error(keyed.to_owned()),
+            StartupError {
+                key: Some("ui.startup_migration_guidance".into()),
+                detail: "migration: migration 12 was previously applied but is missing in the resolved migrations".into(),
+            }
+        );
+        let unkeyed = r#"{"error_key":null,"detail":"boom"}"#;
+        assert_eq!(parse_startup_error(unkeyed.to_owned()).key, None);
+        let legacy = "Error: migration: migration 2 was previously applied but is missing in the resolved migrations";
+        assert_eq!(
+            parse_startup_error(legacy.to_owned()),
+            StartupError {
+                key: None,
+                detail: legacy.into()
+            }
+        );
     }
 
     #[test]

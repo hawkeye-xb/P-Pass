@@ -40,4 +40,15 @@ pub enum StorageError {
     InvalidCursor,
 }
 
+impl StorageError {
+    /// #1044：库里记着本二进制没有的 migration——用更旧的版本打开了新版本
+    /// 建过的库。daemon 据此输出 keyed 启动错误，桌面给「装回新版本」指引。
+    pub fn is_schema_newer_than_binary(&self) -> bool {
+        matches!(
+            self,
+            StorageError::Migrate(sqlx::migrate::MigrateError::VersionMissing(_))
+        )
+    }
+}
+
 pub type Result<T> = std::result::Result<T, StorageError>;

@@ -548,8 +548,8 @@
 
   async function confirmPair(accept, item) {
     try {
-      // UX-08: 逐行处理——pairing.confirm 精确确认该台；不带定位参数则
-      // 默认队首（老调用方兼容，语义不动）。
+      // UX-08: 逐行处理——pairing.confirm 精确确认该台。#1044：横幅与弹窗
+      // 都显式传要决定的那一行（node_id），不靠「不带参数 = daemon 队首」。
       //
       // DEV-04: 定位必须按 node_id。老设备改过名之后，弹窗上显示的是
       // 桌面的名字，而队列里存的是手机自报名——继续按名字找就是
@@ -562,14 +562,8 @@
       // DEV-06: 结果提示的名字以设备表为准。`r.device` 是队列里的自报名
       // （SM-S9210），弹窗标题用的却是 pending 行里 daemon 解析过的名字
       // （客厅的手机）——同一次操作两个名字。
-      //
-      // 横幅那两个按钮不带 item（走 daemon 队首语义），但队首前端也知道：
-      // `confirm()` 在 node_id/device_name 都缺时取 `queue` 的 0 号
-      // （ipc.rs:1142），而 `pending_summary` 遍历的就是同一个 `queue`、
-      // 同一个顺序（ipc.rs:1178-1183）——所以 `pendingList[0]` 正是要被
-      // 决定的那台，也正是横幅上已经显示着的那个名字（:1259）。
-      // `r.device` 留作最后兜底（老 daemon / 列表取不到）。
-      const shown = pairResultName(item ?? pendingList[0], r);
+      // `r.device` 留作最后兜底（列表取不到）。
+      const shown = pairResultName(item, r);
       flashMessage(
         accept ? t("ui.pair_allowed", { name: shown }) : t("ui.pair_denied", { name: shown }),
         accept ? "success" : "warning"
@@ -640,21 +634,13 @@
     }
   }
 
-  // NET-13: 打开某台设备自己的存储目录——`originals/<node_id 全量 hex>/`
-  // 与 ingest 落位口径完全一致（crates/core-index/src/ingest.rs
-  // device_dir()：node_id 字节逐位 hex，devices.list 返回的 node_id 已经是
-  // 同一份 hex 字符串，不需要额外转换）。该设备还没备份过时目录不存在，
-  // 退回打开 originals/ 根目录，不假装有内容。
+  // NET-13: 打开某台设备自己的存储目录。路径由 daemon 给（#1044
+  // `device.folder`：与入库落位同一口径的绝对路径；该设备还没备份过时
+  // daemon 退回 originals/），桌面不再自己拼路径。
   async function openDeviceFolder(nodeId) {
     try {
-      const s = await call("status");
-      const dir = s.library_dir;
-      if (!dir) throw new Error(t("ui.library_dir_unknown"));
-      try {
-        await revealItemInDir(`${dir}/originals/${nodeId}`);
-      } catch (_) {
-        await revealItemInDir(`${dir}/originals`);
-      }
+      const r = await call("device.folder", { node_id: nodeId });
+      await revealItemInDir(r.path);
     } catch (e) {
       flashMessage(t("ui.device_open_folder_failed", { err: errText(e) }), "error");
     }
@@ -1546,8 +1532,10 @@
                   {/if}
                 </div>
                 <div class="flex flex-none flex-wrap gap-[10px]">
-                  <Button variant="secondary" onclick={() => confirmPair(false)}>{t("ui.deny")}</Button>
-                  <Button onclick={() => confirmPair(true)}>{t("ui.allow")}</Button>
+                  <!-- #1044：按钮显式带横幅上点名的那一台（node_id），列表还没
+                       取到时不可点——不让 daemon 按「队首」替我们猜是哪台。 -->
+                  <Button variant="secondary" disabled={pendingList.length === 0} onclick={() => confirmPair(false, pendingList[0])}>{t("ui.deny")}</Button>
+                  <Button disabled={pendingList.length === 0} onclick={() => confirmPair(true, pendingList[0])}>{t("ui.allow")}</Button>
                 </div>
               </div>
             {/if}
