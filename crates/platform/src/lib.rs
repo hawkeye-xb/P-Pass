@@ -276,85 +276,13 @@ pub fn reconcile_decision(
     }
 }
 
-/// 架构 §4 trait —— 签名原样实施（updater/notify 的完整实现随
-/// T-041/T-062 落地，此处为可用的最小形态）.
+/// 「平台能力」端口（#1043 / S-9）：回答「在这个系统上怎么做」——数据目录、
+/// 防休眠、通知、卷空间、日志落点、系统缩略图、壳的界面习惯等。
+///
+/// daemon 与其他核心 crate **只依赖这个 trait**（经 [`adapter`] 拿实现）。
+/// 托管类能力（开机自启、服务管理器、结束进程、安装位置）在 [`HostingAdapter`]，
+/// 只给桌面发行层用；门禁 G3 拦 `crates/` 引用它。两个 trait 的实现都留在本 crate。
 pub trait PlatformAdapter: Send + Sync {
-    // 生命周期
-    fn install_autostart(&self, exec: &std::path::Path) -> Result<()>;
-    fn autostart_installed(&self) -> Result<bool>;
-    fn uninstall_autostart(&self) -> Result<()>;
-
-    /// 【DESK-42 #604 / #726】登记条目的状态：没登记、读不出、指向哪个可执行文件。
-    ///
-    /// 「指向哪里」与「是否读得出」是同一份信息，只有这一个入口（#1043 合并了
-    /// 原先只给路径的 `autostart_registered_exec`）。默认实现 = 本平台没有登记
-    /// 这回事，一律 `Absent`；能读登记的平台覆盖它。
-    fn autostart_registration(&self) -> Result<AutostartRegistration> {
-        Ok(AutostartRegistration::Absent)
-    }
-
-    /// 【DESK-42 #604】对账**闸门**：本平台是否允许用 `expected` 改写开机自启登记。
-    ///
-    /// 默认 `false` = **保守拒绝**：平台必须显式声明哪些位置算「稳定安装位置」，
-    /// 没声明就不许动用户的登记。真机风险（外部评审 2026-10-01 拦停）：dmg 挂载点、
-    /// 「下载」目录、macOS App Translocation 随机路径都是一次性路径，把登记改指到
-    /// 那里 → 下次开机 launchd 拉起一个已消失的可执行文件，服务静默起不来。
-    fn autostart_reconcile_allowed(&self, _expected: &std::path::Path) -> bool {
-        false
-    }
-
-    /// DESK-68 (#996)：这个程序文件是不是在本平台的**正式安装位置**。
-    ///
-    /// 发布版不在正式位置就不许运行（桌面壳启动时拦），也不许写开机自启登记
-    /// （daemon 升级接管时拦）——登记一旦指向解压副本、备份副本，以后每次开机
-    /// 都跑那个旧程序，新版接不了岗（#604 真机事故）。入口守住，所有写登记的
-    /// 地方自然只会写正式路径。
-    ///
-    /// 默认 `true`：没实现的平台保持现状，由各平台线自己覆盖（macOS 见 #998）。
-    fn is_install_location(&self, exe: &std::path::Path) -> bool {
-        let _ = exe;
-        true
-    }
-
-    /// DESK-68 (#996)：不在正式安装位置时，告诉用户该怎么办的文案 key
-    /// （`assets/i18n`）。怎么「正式安装」是平台知识：Windows 是跑安装程序，
-    /// macOS 是拖进「应用程序」。
-    fn install_location_hint_key(&self) -> &'static str {
-        "ui.install_location_required"
-    }
-
-    /// DESK-60 (#877)：对账结果是「未登记」时，本平台是否允许壳**补登记**
-    /// （壳另外还要确认：配置过、且用户没有主动停服务）。
-    ///
-    /// 默认 `false`：「未登记」历来可能就是用户停过服务（DAE-03 ②：纯新启动
-    /// 不许顺手装）。只有「登记会被系统流程删掉、而用户意图没变」的平台才
-    /// 打开——Windows 的卸载会删 Run 值但保留配置和照片库。
-    fn autostart_restore_when_missing(&self) -> bool {
-        false
-    }
-
-    /// 【DESK-42 #604】开机自启登记对账：登记存在但指向别处或读不出 → 用 `expected`
-    /// 重写（幂等）；未登记 → 不动；一致 → 不动；**位置不稳定 → 闸门拦下，不碰**。
-    ///
-    /// 由启动路径调用一次即可自愈「换目录 / 更新后路径漂移」的历史登记。
-    /// ⚠️ 闸门在**读登记之前**判定：不稳定的位置连读都不读，避免任何后续分支
-    /// 有机会写。
-    fn reconcile_autostart(&self, expected: &std::path::Path) -> Result<AutostartReconcile> {
-        if !self.autostart_reconcile_allowed(expected) {
-            return Ok(AutostartReconcile::SkippedUnstableLocation);
-        }
-        let registered = self.autostart_registration()?;
-        let action = reconcile_decision(&registered, expected);
-        if matches!(
-            action,
-            AutostartReconcile::Rewritten | AutostartReconcile::Repaired
-        ) {
-            self.install_autostart(expected)?;
-        }
-        Ok(action)
-    }
-
-    fn service_mode(&self) -> ServiceMode;
     // 电源（MVP 尽力而为）
     fn assert_awake(&self) -> Result<AwakeGuard>;
     /// 当前睡眠策略（给 macOS 向导第 2 步用）。**默认 `Unknown`**：Windows 向导
@@ -562,24 +490,17 @@ pub trait PlatformAdapter: Send + Sync {
 
     // ── QA-09 迁移（#211）桌面壳批次 ─────────────────────────────
     //
-    // 以下五个能力此前以 `#[cfg]` / `cfg!()` 的形式散在
+    // 以下能力此前以 `#[cfg]` / `cfg!()` 的形式散在
     // `apps/desktop/src-tauri/src/lib.rs` 里（18 处）。搬过来之后调用点
     // 一个 cfg 不留，`tools/arch-check.sh` 对那个文件的整文件豁免因此
-    // 可以删掉——那是本卡的销号条件。
+    // 可以删掉——那是本卡的销号条件。（#1043 起其中 `daemon_executable_name`、
+    // 结束 daemon 进程两项归 [`HostingAdapter`]。）
 
     /// 这个系统的名字，喂给前端 `wizard_state` 的 json。
     ///
     /// **没有默认实现**：每个系统都有名字，编一个默认值只会在某天悄悄
     /// 把平台标错，而前端拿它决定显示哪套文案。
     fn platform_name(&self) -> &'static str;
-
-    /// 内置 daemon 可执行文件的文件名。
-    ///
-    /// 默认是不带扩展名的 [`DAEMON_EXECUTABLE_STEM`]——这对除 Windows 外的
-    /// 每个系统都成立，所以它是个诚实的默认值，不是猜的。
-    fn daemon_executable_name(&self) -> &'static str {
-        DAEMON_EXECUTABLE_STEM
-    }
 
     /// 这个系统「电源与睡眠」设置页的 URI；`None` = 没有可直接跳转的页面。
     ///
@@ -611,6 +532,96 @@ pub trait PlatformAdapter: Send + Sync {
     /// DESK-18 (#167)：Windows 上左键出菜单与系统习惯相反。
     fn tray_shows_menu_on_left_click(&self) -> bool {
         false
+    }
+}
+
+/// 「托管」端口（#1043 / S-9）：进程怎么被拉起、守护、开机自启，以及壳怎么被
+/// 系统重启。只给桌面发行层（`apps/desktop`）用，经 [`hosting`] 拿实现；
+/// 核心 crate 不许依赖（门禁 G3，见 `tools/arch-check.sh`）。
+pub trait HostingAdapter: Send + Sync {
+    // 生命周期
+    fn install_autostart(&self, exec: &std::path::Path) -> Result<()>;
+    fn autostart_installed(&self) -> Result<bool>;
+    fn uninstall_autostart(&self) -> Result<()>;
+
+    /// 【DESK-42 #604 / #726】登记条目的状态：没登记、读不出、指向哪个可执行文件。
+    ///
+    /// 「指向哪里」与「是否读得出」是同一份信息，只有这一个入口（#1043 合并了
+    /// 原先只给路径的 `autostart_registered_exec`）。默认实现 = 本平台没有登记
+    /// 这回事，一律 `Absent`；能读登记的平台覆盖它。
+    fn autostart_registration(&self) -> Result<AutostartRegistration> {
+        Ok(AutostartRegistration::Absent)
+    }
+
+    /// 【DESK-42 #604】对账**闸门**：本平台是否允许用 `expected` 改写开机自启登记。
+    ///
+    /// 默认 `false` = **保守拒绝**：平台必须显式声明哪些位置算「稳定安装位置」，
+    /// 没声明就不许动用户的登记。真机风险（外部评审 2026-10-01 拦停）：dmg 挂载点、
+    /// 「下载」目录、macOS App Translocation 随机路径都是一次性路径，把登记改指到
+    /// 那里 → 下次开机 launchd 拉起一个已消失的可执行文件，服务静默起不来。
+    fn autostart_reconcile_allowed(&self, _expected: &std::path::Path) -> bool {
+        false
+    }
+
+    /// DESK-68 (#996)：这个程序文件是不是在本平台的**正式安装位置**。
+    ///
+    /// 发布版不在正式位置就不许运行（桌面壳启动时拦），也不许写开机自启登记
+    /// （daemon 升级接管时拦）——登记一旦指向解压副本、备份副本，以后每次开机
+    /// 都跑那个旧程序，新版接不了岗（#604 真机事故）。入口守住，所有写登记的
+    /// 地方自然只会写正式路径。
+    ///
+    /// 默认 `true`：没实现的平台保持现状，由各平台线自己覆盖（macOS 见 #998）。
+    fn is_install_location(&self, exe: &std::path::Path) -> bool {
+        let _ = exe;
+        true
+    }
+
+    /// DESK-68 (#996)：不在正式安装位置时，告诉用户该怎么办的文案 key
+    /// （`assets/i18n`）。怎么「正式安装」是平台知识：Windows 是跑安装程序，
+    /// macOS 是拖进「应用程序」。
+    fn install_location_hint_key(&self) -> &'static str {
+        "ui.install_location_required"
+    }
+
+    /// DESK-60 (#877)：对账结果是「未登记」时，本平台是否允许壳**补登记**
+    /// （壳另外还要确认：配置过、且用户没有主动停服务）。
+    ///
+    /// 默认 `false`：「未登记」历来可能就是用户停过服务（DAE-03 ②：纯新启动
+    /// 不许顺手装）。只有「登记会被系统流程删掉、而用户意图没变」的平台才
+    /// 打开——Windows 的卸载会删 Run 值但保留配置和照片库。
+    fn autostart_restore_when_missing(&self) -> bool {
+        false
+    }
+
+    /// 【DESK-42 #604】开机自启登记对账：登记存在但指向别处或读不出 → 用 `expected`
+    /// 重写（幂等）；未登记 → 不动；一致 → 不动；**位置不稳定 → 闸门拦下，不碰**。
+    ///
+    /// 由启动路径调用一次即可自愈「换目录 / 更新后路径漂移」的历史登记。
+    /// ⚠️ 闸门在**读登记之前**判定：不稳定的位置连读都不读，避免任何后续分支
+    /// 有机会写。
+    fn reconcile_autostart(&self, expected: &std::path::Path) -> Result<AutostartReconcile> {
+        if !self.autostart_reconcile_allowed(expected) {
+            return Ok(AutostartReconcile::SkippedUnstableLocation);
+        }
+        let registered = self.autostart_registration()?;
+        let action = reconcile_decision(&registered, expected);
+        if matches!(
+            action,
+            AutostartReconcile::Rewritten | AutostartReconcile::Repaired
+        ) {
+            self.install_autostart(expected)?;
+        }
+        Ok(action)
+    }
+
+    fn service_mode(&self) -> ServiceMode;
+
+    /// 内置 daemon 可执行文件的文件名。
+    ///
+    /// 默认是不带扩展名的 [`DAEMON_EXECUTABLE_STEM`]——这对除 Windows 外的
+    /// 每个系统都成立，所以它是个诚实的默认值，不是猜的。
+    fn daemon_executable_name(&self) -> &'static str {
+        DAEMON_EXECUTABLE_STEM
     }
 
     /// 杀掉正在跑的内置 daemon 进程。
@@ -790,7 +801,10 @@ pub fn command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
     cmd
 }
 
-/// The adapter for the current platform.
+/// 本平台的「平台能力」（[`PlatformAdapter`]）。daemon 与其他核心 crate 只走这个入口。
+///
+/// #1043（S-9）：返回值是 `impl PlatformAdapter`，**看不到** [`HostingAdapter`]
+/// 的方法——核心想调托管能力在编译期就过不去；托管只经 [`hosting`] 拿。
 #[cfg(target_os = "macos")]
 pub fn adapter() -> impl PlatformAdapter {
     MacosAdapter::new()
@@ -799,10 +813,25 @@ pub fn adapter() -> impl PlatformAdapter {
 pub fn adapter() -> impl PlatformAdapter {
     WindowsAdapter::new()
 }
+
+/// 本平台的「托管」能力（[`HostingAdapter`]）：开机自启登记、服务管理器、结束
+/// daemon 进程、安装位置。只给桌面发行层（壳）用；daemon 不许调（门禁 G3）。
+#[cfg(target_os = "macos")]
+pub fn hosting() -> impl HostingAdapter {
+    MacosAdapter::new()
+}
+#[cfg(windows)]
+pub fn hosting() -> impl HostingAdapter {
+    WindowsAdapter::new()
+}
 /// Headless/server platforms (Linux cloud boxes run the daemon too):
 /// data dir follows XDG; desktop-only capabilities answer honestly.
 #[cfg(not(any(target_os = "macos", windows)))]
 pub fn adapter() -> impl PlatformAdapter {
+    HeadlessAdapter
+}
+#[cfg(not(any(target_os = "macos", windows)))]
+pub fn hosting() -> impl HostingAdapter {
     HeadlessAdapter
 }
 
@@ -811,21 +840,6 @@ pub struct HeadlessAdapter;
 
 #[cfg(not(any(target_os = "macos", windows)))]
 impl PlatformAdapter for HeadlessAdapter {
-    fn install_autostart(&self, _exec: &std::path::Path) -> Result<()> {
-        Err(PlatformError::Failed {
-            action: "autostart",
-            detail: "unsupported on this platform (use systemd)".into(),
-        })
-    }
-    fn autostart_installed(&self) -> Result<bool> {
-        Ok(false)
-    }
-    fn uninstall_autostart(&self) -> Result<()> {
-        Ok(())
-    }
-    fn service_mode(&self) -> ServiceMode {
-        ServiceMode::UserAutostart
-    }
     fn assert_awake(&self) -> Result<AwakeGuard> {
         // Servers don't idle-sleep; a no-op guard keeps callers simple.
         Ok(AwakeGuard { inner: () })
@@ -888,6 +902,36 @@ impl PlatformAdapter for HeadlessAdapter {
         // 给的也是 "linux"，行为一字不变。
         "linux"
     }
+    fn remove_stale_ipc_endpoint(&self, name: &str) -> Applied {
+        #[cfg(unix)]
+        {
+            crate::unix::remove_stale_ipc_endpoint(name)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = name;
+            Applied::NotApplicable
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+impl HostingAdapter for HeadlessAdapter {
+    fn install_autostart(&self, _exec: &std::path::Path) -> Result<()> {
+        Err(PlatformError::Failed {
+            action: "autostart",
+            detail: "unsupported on this platform (use systemd)".into(),
+        })
+    }
+    fn autostart_installed(&self) -> Result<bool> {
+        Ok(false)
+    }
+    fn uninstall_autostart(&self) -> Result<()> {
+        Ok(())
+    }
+    fn service_mode(&self) -> ServiceMode {
+        ServiceMode::UserAutostart
+    }
     fn kill_daemon_process(&self) -> Result<KillOutcome> {
         #[cfg(unix)]
         {
@@ -899,17 +943,6 @@ impl PlatformAdapter for HeadlessAdapter {
                 action: "kill_daemon_process",
                 detail: "这个平台没有实现杀进程".into(),
             })
-        }
-    }
-    fn remove_stale_ipc_endpoint(&self, name: &str) -> Applied {
-        #[cfg(unix)]
-        {
-            crate::unix::remove_stale_ipc_endpoint(name)
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = name;
-            Applied::NotApplicable
         }
     }
 }
@@ -1130,7 +1163,7 @@ mod tests {
         );
         // 能力要真的暴露出来：调用方靠它决定走"系统重启"还是退化到自己重启。
         assert_eq!(
-            PlatformAdapter::shell_agent_label(&macos::MacosAdapter::new()),
+            HostingAdapter::shell_agent_label(&macos::MacosAdapter::new()),
             Some("com.p-pass.shell")
         );
     }
@@ -1196,10 +1229,10 @@ mod tests {
     #[test]
     fn resident_restart_is_a_no_op_without_a_service_manager() {
         assert_eq!(
-            adapter().restart_resident_daemon(true).unwrap(),
+            hosting().restart_resident_daemon(true).unwrap(),
             ResidentRestart::Unsupported
         );
-        assert_eq!(adapter().resident_daemon_pid(), None);
+        assert_eq!(hosting().resident_daemon_pid(), None);
     }
 
     /// 【DESK-42 #604】闸门判据：只放行稳定安装位置。

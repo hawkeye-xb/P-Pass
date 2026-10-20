@@ -362,9 +362,11 @@ async fn main() -> anyhow::Result<()> {
             // cli::autostart_install_required（单测钉死）——只有 TookOver
             // 装；Proceed（纯新启动）与 StandDown（退位）绝不碰。
             if daemon::cli::autostart_install_required(&daemon::Claim::TookOver) {
-                use platform::PlatformAdapter as _;
+                // #1043：核心里仅剩的托管调用，整块随 #1046（S-11）删除，届时门禁
+                // G3 切阻断。
+                use platform::HostingAdapter as _;
                 if let Ok(exe) = std::env::current_exe() {
-                    let registered = platform::adapter().autostart_registration();
+                    let registered = platform::hosting().autostart_registration();
                     match takeover_autostart(registered.as_ref().ok(), &exe) {
                         TakeoverAutostart::Foreign => {
                             // #604 [DESK-42]：**只在本实例有权写登记时**才重装。
@@ -388,12 +390,12 @@ async fn main() -> anyhow::Result<()> {
                         TakeoverAutostart::Install => {
                             // DESK-68 (#996)：不在正式安装位置的实例（开发构建、解压
                             // 副本）不许写登记——各平台同一条判据。
-                            if !platform::adapter().is_install_location(&exe) {
+                            if !platform::hosting().is_install_location(&exe) {
                                 tracing::warn!(
                                     "DESK-68: 本实例不在正式安装位置（{}）——不写开机自启登记",
                                     exe.display()
                                 );
-                            } else if let Err(e) = platform::adapter().install_autostart(&exe) {
+                            } else if let Err(e) = platform::hosting().install_autostart(&exe) {
                                 tracing::warn!("DAE-01: autostart re-install skipped: {e}");
                             }
                         }

@@ -13,6 +13,8 @@
 #   G1  — 桌面壳（apps/desktop）不判断平台、不读 HOME/USERPROFILE/LANG、
 #         不拼 plist 路径。平台信息只许经 adapter 或 daemon 返回的字段（#1040）。
 #   G5  — 平台实现只在 crates/platform（#1040，细则见下方 G1/G5 段）。
+#   G3  — 核心 crate 只依赖「平台能力」trait（PlatformAdapter），不许引用
+#         「托管」trait（HostingAdapter / platform::hosting）（#1043，S-9）。
 #   G1/G5 是「存量不增」的锁：现有越界登记在 tools/arch-allowlist.txt，
 #   登记数必须与命中数精确相等，且登记相对基线分支只许降、不许升。
 #   迁移卡做完后该文件清零。自测：tools/test-arch-check.sh。
@@ -23,6 +25,8 @@
 #   ARCH_REPORT_ONLY=1  G1/G5 只打印全部命中，不比对白名单、不判红
 #   ARCH_BASE_REF       白名单「只降不升」的基线 git ref（默认 origin/main）
 #   ARCH_RATCHET_SKIP=1 显式跳过基线比对（push 到 main：PR 阶段已比过）
+#   ARCH_G3_MODE        G3 的模式：report（只列命中）/ enforce（命中即红）；
+#                       不设时取下方 G3_DEFAULT_MODE
 set -euo pipefail
 
 FAIL=0
@@ -393,6 +397,38 @@ else
       fi
     fi
   fi
+fi
+
+# ── G3: core depends only on the capability trait ───
+#
+# S-9（#1043）：`PlatformAdapter` 拆成「平台能力」（PlatformAdapter，经
+# platform::adapter() 拿）和「托管」（HostingAdapter，经 platform::hosting()
+# 拿）两个 trait。核心只依赖前者：开机自启、服务管理器、结束进程、安装位置
+# 这些托管能力只给桌面发行层（apps/desktop）用。
+#
+# 编译期已经挡了一层：adapter() 返回 `impl PlatformAdapter`，看不到托管方法。
+# 所以门禁只需守住「入口」——crates/**（除 crates/platform）的 Rust 里不许出现
+# `HostingAdapter` 这个名字、不许调 `platform::hosting`（含 `use platform::{…,
+# hosting}` 的跨行写法）。注释不算。
+#
+# 模式：先「只报告」再切阻断（盘点 §5 P 段的门禁上线规矩）。现存命中只有
+# daemon main.rs 接管后重装开机自启那一块，随 #1046（S-11）删除；删完把
+# G3_DEFAULT_MODE 改成 enforce。
+G3_DEFAULT_MODE=report
+G3_MODE="${ARCH_G3_MODE:-$G3_DEFAULT_MODE}"
+echo "==> G3: core crates depend only on the capability trait (no HostingAdapter)"
+G3_RE='\bHostingAdapter\b|\bplatform::hosting\b|\buse\s+platform::\{[^}]*\bhosting\b'
+G3_HITS=$(list_files "$ROOT/crates" -- '*.rs' \
+  | tr '\0' '\n' | { grep -v '/crates/platform/' || true; } | tr '\n' '\0' \
+  | scan_files "$G3_RE" 1 '')
+if [ -z "$G3_HITS" ]; then
+  echo "   ✅ G3: clean"
+elif [ "$G3_MODE" = "enforce" ]; then
+  printf '%s\n' "$G3_HITS" | awk -F'\t' '{print "❌ G3 VIOLATION（核心引用了托管 trait）：" $1 " 行 " $2}'
+  FAIL=1
+else
+  printf '%s\n' "$G3_HITS" | awk -F'\t' '{print "   ⚠️  G3（只报告）：" $1 " 行 " $2}'
+  echo "   ℹ️  G3 处于只报告模式（#1046 删除 daemon 托管代码后切 enforce）"
 fi
 
 # ── Result ──────────────────────────────────────────

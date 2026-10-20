@@ -17,8 +17,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::{
-    AutostartRegistration, AwakeGuard, PlatformAdapter, PlatformError, PowerHint, Result,
-    ServiceMode,
+    AutostartRegistration, AwakeGuard, HostingAdapter, PlatformAdapter, PlatformError, PowerHint,
+    Result, ServiceMode,
 };
 
 const AGENT_LABEL: &str = "com.p-pass.daemon";
@@ -268,87 +268,6 @@ fn io_err(action: &'static str) -> impl Fn(std::io::Error) -> PlatformError {
 }
 
 impl PlatformAdapter for MacosAdapter {
-    /// 【DESK-42 #604】对账闸门：**只有稳定安装位置**里的 App 才允许改写开机自启登记。
-    ///
-    /// 真机风险（外部评审 2026-10-01 在 PR #611 上拦停）：Mac 用户从「下载」目录直接
-    /// 打开 dmg 里的 App 是极常见操作，macOS 还会对带 quarantine 的 App 做 App
-    /// Translocation（跑在 `/private/var/folders/…/AppTranslocation/…` 随机路径）——
-    /// 这些都是一次性路径。若此时改登记，用户下次开机就被指向一个已消失的可执行文件，
-    /// **服务静默起不来，且没有任何提示**。原缺陷要用户手点「启动后台服务」才写错，
-    /// 「每次启动静默对账」不判位置的话危险面更大。
-    fn autostart_reconcile_allowed(&self, expected: &Path) -> bool {
-        is_stable_install_location(expected)
-    }
-
-    fn install_autostart(&self, exec: &Path) -> Result<()> {
-        // DAE-01 稳定路径纪律：plist 绝不指向 target/ 开发路径或 /tmp/——
-        // 指向那里的 launchd 条目会把旧构建永远钉在岗上（用户机实锤：
-        // launchd 至今指向 7/31 开发构建路径）。非法路径直接拒绝，不写。
-        let exec_str = exec.display().to_string();
-        if exec_str.contains("/target/") || exec_str.contains("/tmp/") {
-            return Err(PlatformError::Failed {
-                action: "install_autostart rejects unstable path",
-                detail: exec_str,
-            });
-        }
-        let plist = agent_plist(exec);
-        let path = Self::agent_plist_path();
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(io_err("create LaunchAgents dir"))?;
-        }
-        write_atomic(&path, &plist).map_err(io_err("write LaunchAgent plist"))?;
-        // Load now (idempotent-ish: bootout first, ignore its failure).
-        let uid = Command::new("id")
-            .arg("-u")
-            .output()
-            .map_err(io_err("id -u"))?;
-        let uid = String::from_utf8_lossy(&uid.stdout).trim().to_string();
-        let _ = Command::new("launchctl")
-            .args(["bootout", &format!("gui/{uid}/{AGENT_LABEL}")])
-            .output();
-        let out = Command::new("launchctl")
-            .args(["bootstrap", &format!("gui/{uid}")])
-            .arg(&path)
-            .output()
-            .map_err(io_err("launchctl bootstrap"))?;
-        if !out.status.success() {
-            return Err(PlatformError::Failed {
-                action: "launchctl bootstrap",
-                detail: String::from_utf8_lossy(&out.stderr).trim().to_string(),
-            });
-        }
-        Ok(())
-    }
-
-    fn autostart_installed(&self) -> Result<bool> {
-        Ok(Self::agent_plist_path().exists())
-    }
-
-    /// 【#726】文件不存在 = 没登记；读得到但解析不出路径 = 损坏，由对账重写。
-    fn autostart_registration(&self) -> Result<AutostartRegistration> {
-        registration_from_read(std::fs::read_to_string(Self::agent_plist_path()))
-    }
-
-    fn uninstall_autostart(&self) -> Result<()> {
-        let uid = Command::new("id")
-            .arg("-u")
-            .output()
-            .map_err(io_err("id -u"))?;
-        let uid = String::from_utf8_lossy(&uid.stdout).trim().to_string();
-        let _ = Command::new("launchctl")
-            .args(["bootout", &format!("gui/{uid}/{AGENT_LABEL}")])
-            .output();
-        let path = Self::agent_plist_path();
-        if path.exists() {
-            std::fs::remove_file(&path).map_err(io_err("remove LaunchAgent plist"))?;
-        }
-        Ok(())
-    }
-
-    fn service_mode(&self) -> ServiceMode {
-        ServiceMode::LaunchAgent
-    }
-
     fn assert_awake(&self) -> Result<AwakeGuard> {
         let child = Command::new("caffeinate")
             .arg("-i") // prevent idle sleep while we run
@@ -458,6 +377,89 @@ impl PlatformAdapter for MacosAdapter {
     /// （DESK-18 / #167）。
     fn tray_shows_menu_on_left_click(&self) -> bool {
         true
+    }
+}
+
+impl HostingAdapter for MacosAdapter {
+    /// 【DESK-42 #604】对账闸门：**只有稳定安装位置**里的 App 才允许改写开机自启登记。
+    ///
+    /// 真机风险（外部评审 2026-10-01 在 PR #611 上拦停）：Mac 用户从「下载」目录直接
+    /// 打开 dmg 里的 App 是极常见操作，macOS 还会对带 quarantine 的 App 做 App
+    /// Translocation（跑在 `/private/var/folders/…/AppTranslocation/…` 随机路径）——
+    /// 这些都是一次性路径。若此时改登记，用户下次开机就被指向一个已消失的可执行文件，
+    /// **服务静默起不来，且没有任何提示**。原缺陷要用户手点「启动后台服务」才写错，
+    /// 「每次启动静默对账」不判位置的话危险面更大。
+    fn autostart_reconcile_allowed(&self, expected: &Path) -> bool {
+        is_stable_install_location(expected)
+    }
+
+    fn install_autostart(&self, exec: &Path) -> Result<()> {
+        // DAE-01 稳定路径纪律：plist 绝不指向 target/ 开发路径或 /tmp/——
+        // 指向那里的 launchd 条目会把旧构建永远钉在岗上（用户机实锤：
+        // launchd 至今指向 7/31 开发构建路径）。非法路径直接拒绝，不写。
+        let exec_str = exec.display().to_string();
+        if exec_str.contains("/target/") || exec_str.contains("/tmp/") {
+            return Err(PlatformError::Failed {
+                action: "install_autostart rejects unstable path",
+                detail: exec_str,
+            });
+        }
+        let plist = agent_plist(exec);
+        let path = Self::agent_plist_path();
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(io_err("create LaunchAgents dir"))?;
+        }
+        write_atomic(&path, &plist).map_err(io_err("write LaunchAgent plist"))?;
+        // Load now (idempotent-ish: bootout first, ignore its failure).
+        let uid = Command::new("id")
+            .arg("-u")
+            .output()
+            .map_err(io_err("id -u"))?;
+        let uid = String::from_utf8_lossy(&uid.stdout).trim().to_string();
+        let _ = Command::new("launchctl")
+            .args(["bootout", &format!("gui/{uid}/{AGENT_LABEL}")])
+            .output();
+        let out = Command::new("launchctl")
+            .args(["bootstrap", &format!("gui/{uid}")])
+            .arg(&path)
+            .output()
+            .map_err(io_err("launchctl bootstrap"))?;
+        if !out.status.success() {
+            return Err(PlatformError::Failed {
+                action: "launchctl bootstrap",
+                detail: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn autostart_installed(&self) -> Result<bool> {
+        Ok(Self::agent_plist_path().exists())
+    }
+
+    /// 【#726】文件不存在 = 没登记；读得到但解析不出路径 = 损坏，由对账重写。
+    fn autostart_registration(&self) -> Result<AutostartRegistration> {
+        registration_from_read(std::fs::read_to_string(Self::agent_plist_path()))
+    }
+
+    fn uninstall_autostart(&self) -> Result<()> {
+        let uid = Command::new("id")
+            .arg("-u")
+            .output()
+            .map_err(io_err("id -u"))?;
+        let uid = String::from_utf8_lossy(&uid.stdout).trim().to_string();
+        let _ = Command::new("launchctl")
+            .args(["bootout", &format!("gui/{uid}/{AGENT_LABEL}")])
+            .output();
+        let path = Self::agent_plist_path();
+        if path.exists() {
+            std::fs::remove_file(&path).map_err(io_err("remove LaunchAgent plist"))?;
+        }
+        Ok(())
+    }
+
+    fn service_mode(&self) -> ServiceMode {
+        ServiceMode::LaunchAgent
     }
 
     fn kill_daemon_process(&self) -> Result<crate::KillOutcome> {

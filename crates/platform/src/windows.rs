@@ -13,7 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::{AwakeGuard, PlatformAdapter, PlatformError, Result, ServiceMode};
+use crate::{AwakeGuard, HostingAdapter, PlatformAdapter, PlatformError, Result, ServiceMode};
 
 /// 老版本（#957 之前）daemon 的登记方式：HKCU Run 值。现在只读它、删它（迁移），不再写。
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -463,185 +463,6 @@ fn is_windows_reserved_name(base: &str) -> bool {
 }
 
 impl PlatformAdapter for WindowsAdapter {
-    /// DESK-65 (#957)：登记计划任务并立刻运行它（= `launchctl bootstrap` +
-    /// `RunAtLoad`）。向导紧接着就要连上 daemon，所以登记完就跑；已经在跑时
-    /// `IgnoreNew` 让这次运行什么都不多拉。顺手删掉老版本的 Run 值（迁移）。
-    fn install_autostart(&self, exec: &Path) -> Result<()> {
-        use windows::core::BSTR;
-        use windows::Win32::System::TaskScheduler::{
-            TASK_CREATE_OR_UPDATE, TASK_LOGON_INTERACTIVE_TOKEN,
-        };
-        use windows::Win32::System::Variant::VARIANT;
-
-        let xml = task_xml(exec, &current_user()?);
-        with_task_folder("register scheduled task", move |folder| {
-            let none = VARIANT::default();
-            // SAFETY: folder 是有效的 COM 接口；参数都在调用期间有效。
-            unsafe {
-                let task = folder.RegisterTask(
-                    &BSTR::from(TASK_NAME),
-                    &BSTR::from(xml.as_str()),
-                    TASK_CREATE_OR_UPDATE.0,
-                    &none,
-                    &none,
-                    TASK_LOGON_INTERACTIVE_TOKEN,
-                    &none,
-                )?;
-                task.Run(&none)?;
-            }
-            Ok(())
-        })?;
-        delete_legacy_run_value()
-    }
-
-    /// 计划任务在，或者老版本的 Run 值还在（还没迁移）。
-    fn autostart_installed(&self) -> Result<bool> {
-        let task = with_task_folder("query scheduled task", |folder| {
-            Ok(get_task(folder)?.is_some())
-        })?;
-        Ok(task || legacy_run_value()?.is_some())
-    }
-
-    /// 计划任务的执行路径。老版本的 Run 值一律算「读不出」：对账因此走
-    /// `Repaired` ⇒ `install_autostart` 换成计划任务并删掉 Run 值（迁移只发生
-    /// 在壳的对账里，那里先判了用户有没有停过服务）。
-    fn autostart_registration(&self) -> Result<crate::AutostartRegistration> {
-        use windows::core::{Interface as _, BSTR};
-        use windows::Win32::System::TaskScheduler::IExecAction;
-
-        let task = with_task_folder("read scheduled task", |folder| {
-            let Some(task) = get_task(folder)? else {
-                return Ok(None);
-            };
-            // SAFETY: task 是有效的 COM 接口；动作集合下标从 1 开始。
-            let path = unsafe {
-                task.Definition()?
-                    .Actions()?
-                    .get_Item(1)
-                    .and_then(|a| a.cast::<IExecAction>())
-                    .and_then(|exec| {
-                        let mut p = BSTR::new();
-                        exec.Path(&mut p).map(|()| p.to_string())
-                    })
-                    .ok()
-            };
-            Ok(Some(path))
-        })?;
-        Ok(match task {
-            Some(Some(p)) if !p.trim().is_empty() => {
-                crate::AutostartRegistration::At(PathBuf::from(p.trim()))
-            }
-            Some(_) => crate::AutostartRegistration::Unreadable,
-            None if legacy_run_value()?.is_some() => crate::AutostartRegistration::Unreadable,
-            None => crate::AutostartRegistration::Absent,
-        })
-    }
-
-    /// DESK-60 (#877)：对账闸门——只认**安装程序登记的安装目录**里的 daemon。
-    ///
-    /// 依据是 NSIS 写的 `HKCU\…\Uninstall\P-Pass` 的 `InstallLocation`，而不是
-    /// 硬编码 `%LOCALAPPDATA%\P-Pass`：用户在安装向导里改过目录也认得出；
-    /// 解压到「下载」目录直接跑的、开发构建 `target\` 里的，都不在那里，
-    /// 照旧拒绝（#604 的同一条风险：把登记改指向一次性路径）。
-    fn autostart_reconcile_allowed(&self, expected: &Path) -> bool {
-        // DESK-68 (#996)：与「能不能运行」同一条判据，规则只写一处。
-        self.is_install_location(expected)
-    }
-
-    /// DESK-68 (#996)：只认 NSIS 登记的安装目录里的那份（判据同上面的对账闸门）。
-    /// 注册表里没有安装记录 = 没装过 ⇒ 不是。
-    fn is_install_location(&self, exe: &Path) -> bool {
-        installed_location().is_some_and(|dir| is_in_install_dir(exe, &dir))
-    }
-
-    fn install_location_hint_key(&self) -> &'static str {
-        "ui.install_location_required_win"
-    }
-
-    /// DESK-72 (#1012)：HKCU `Run` 值——Windows 上 GUI 程序登录自启的标准做法。
-    /// 免管理员；出现在任务管理器「启动应用」里，用户可以自己关；没有崩溃复活，
-    /// 托盘「退出」就是真退出（与 macOS 壳的 LaunchAgent 不挂 KeepAlive 同一语义）。
-    fn register_shell_login_item(&self, exec: &Path) -> Result<()> {
-        if !self.is_install_location(exec) {
-            return Err(PlatformError::Failed {
-                action: "register_shell_login_item outside the install location",
-                detail: exec.display().to_string(),
-            });
-        }
-        write_run_value(RUN_KEY, SHELL_RUN_VALUE, &shell_run_command(exec))
-    }
-
-    /// DESK-60 (#877)：卸载程序删掉登记（现在是计划任务，见 NSIS 钩子），配置
-    /// 和照片库却保留——重装后「服务该在、登记没了」是这个平台上的常规路径，
-    /// 壳要补登记。macOS 卸载就是拖进废纸篓，plist 不会被删，没有这条路径。
-    fn autostart_restore_when_missing(&self) -> bool {
-        true
-    }
-
-    /// DESK-65 (#957)：结束任务正在跑的实例，再删任务（= `launchctl bootout`），
-    /// 老版本的 Run 值一并删掉。之后登录不再拉起、看门狗也不再拉。
-    fn uninstall_autostart(&self) -> Result<()> {
-        use windows::core::BSTR;
-        with_task_folder("delete scheduled task", |folder| {
-            let Some(task) = get_task(folder)? else {
-                return Ok(());
-            };
-            stop_task_instances(&task)?;
-            // SAFETY: folder 是有效的 COM 接口。
-            unsafe { folder.DeleteTask(&BSTR::from(TASK_NAME), 0) }
-        })?;
-        delete_legacy_run_value()
-    }
-
-    fn service_mode(&self) -> ServiceMode {
-        ServiceMode::ScheduledTask
-    }
-
-    /// 任务正在跑的实例的进程号。
-    fn resident_daemon_pid(&self) -> Option<u32> {
-        with_task_folder("query scheduled task", |folder| match get_task(folder)? {
-            Some(task) => task_running_pid(&task),
-            None => Ok(None),
-        })
-        .ok()
-        .flatten()
-    }
-
-    /// DESK-65 (#957)：= `launchctl kickstart [-k]`。`kill_running` 时先结束在跑
-    /// 的实例再运行任务（换版本）；否则在跑就不动（自愈）。
-    fn restart_resident_daemon(&self, kill_running: bool) -> Result<crate::ResidentRestart> {
-        use windows::Win32::Foundation::{E_FAIL, VARIANT_TRUE};
-        use windows::Win32::System::Variant::VARIANT;
-
-        with_task_folder("run scheduled task", move |folder| {
-            let Some(task) = get_task(folder)? else {
-                return Ok(crate::ResidentRestart::NotRegistered);
-            };
-            if kill_running {
-                stop_task_instances(&task)?;
-            } else if let Some(pid) = task_running_pid(&task)? {
-                return Ok(crate::ResidentRestart::AlreadyRunning { pid });
-            }
-            // SAFETY: task 是有效的 COM 接口。
-            unsafe {
-                // NSIS 安装前会禁用任务（防止看门狗在复制文件时把服务拉起），
-                // 安装后的钩子再启用；那一步没跑到时由这里补上。
-                task.SetEnabled(VARIANT_TRUE)?;
-                task.Run(&VARIANT::default())?;
-            }
-            for _ in 0..50 {
-                if let Some(pid) = task_running_pid(&task)? {
-                    return Ok(crate::ResidentRestart::Started { pid });
-                }
-                std::thread::sleep(std::time::Duration::from_millis(100));
-            }
-            Err(windows::core::Error::new(
-                E_FAIL,
-                "计划任务已运行，但 5 秒内没有出现在跑的实例",
-            ))
-        })
-    }
-
     /// NET-26 (#419)：`SetThreadExecutionState` 的状态挂在**调用线程**上。
     /// daemon 在 tokio 多线程 runtime 里拿锁、放锁，两次调用多半落在不同的
     /// worker 上——放锁那一下清的是别的线程的状态，拿锁的那个线程会一直让
@@ -700,21 +521,6 @@ impl PlatformAdapter for WindowsAdapter {
     // ── QA-09 迁移（#211）桌面壳批次 ───────────────────────────────
     fn platform_name(&self) -> &'static str {
         "windows"
-    }
-
-    /// Windows 的可执行文件带 `.exe`。与 [`crate::DAEMON_EXECUTABLE_STEM`]
-    /// 的关系有单测钉着（`executable_name_is_the_stem_plus_exe`）——写成
-    /// 字面量是因为 `const` 里没法做字符串拼接。
-    fn daemon_executable_name(&self) -> &'static str {
-        "ppf-daemon.exe"
-    }
-
-    /// DESK-52 (#787)：直接调系统 API 结束进程，**不再拉起 `taskkill.exe`**。
-    /// taskkill 是 console 子系统程序，从 GUI 子系统的桌面壳里拉起它会闪黑窗
-    /// （DESK-19 #168 那一类）；不启动外部程序，这一类问题就不存在。实现与
-    /// 理由见 [`kill_processes_named`]。
-    fn kill_daemon_process(&self) -> Result<crate::KillOutcome> {
-        kill_processes_named(self.daemon_executable_name())
     }
 
     /// DESK-17 (#166)：Windows toast（WinRT `ToastNotificationManager`）。
@@ -985,6 +791,202 @@ impl PlatformAdapter for WindowsAdapter {
         max_px: u32,
     ) -> crate::Result<Option<crate::SystemThumbnail>> {
         system_video_thumbnail(src, max_px)
+    }
+}
+
+impl HostingAdapter for WindowsAdapter {
+    /// DESK-65 (#957)：登记计划任务并立刻运行它（= `launchctl bootstrap` +
+    /// `RunAtLoad`）。向导紧接着就要连上 daemon，所以登记完就跑；已经在跑时
+    /// `IgnoreNew` 让这次运行什么都不多拉。顺手删掉老版本的 Run 值（迁移）。
+    fn install_autostart(&self, exec: &Path) -> Result<()> {
+        use windows::core::BSTR;
+        use windows::Win32::System::TaskScheduler::{
+            TASK_CREATE_OR_UPDATE, TASK_LOGON_INTERACTIVE_TOKEN,
+        };
+        use windows::Win32::System::Variant::VARIANT;
+
+        let xml = task_xml(exec, &current_user()?);
+        with_task_folder("register scheduled task", move |folder| {
+            let none = VARIANT::default();
+            // SAFETY: folder 是有效的 COM 接口；参数都在调用期间有效。
+            unsafe {
+                let task = folder.RegisterTask(
+                    &BSTR::from(TASK_NAME),
+                    &BSTR::from(xml.as_str()),
+                    TASK_CREATE_OR_UPDATE.0,
+                    &none,
+                    &none,
+                    TASK_LOGON_INTERACTIVE_TOKEN,
+                    &none,
+                )?;
+                task.Run(&none)?;
+            }
+            Ok(())
+        })?;
+        delete_legacy_run_value()
+    }
+
+    /// 计划任务在，或者老版本的 Run 值还在（还没迁移）。
+    fn autostart_installed(&self) -> Result<bool> {
+        let task = with_task_folder("query scheduled task", |folder| {
+            Ok(get_task(folder)?.is_some())
+        })?;
+        Ok(task || legacy_run_value()?.is_some())
+    }
+
+    /// 计划任务的执行路径。老版本的 Run 值一律算「读不出」：对账因此走
+    /// `Repaired` ⇒ `install_autostart` 换成计划任务并删掉 Run 值（迁移只发生
+    /// 在壳的对账里，那里先判了用户有没有停过服务）。
+    fn autostart_registration(&self) -> Result<crate::AutostartRegistration> {
+        use windows::core::{Interface as _, BSTR};
+        use windows::Win32::System::TaskScheduler::IExecAction;
+
+        let task = with_task_folder("read scheduled task", |folder| {
+            let Some(task) = get_task(folder)? else {
+                return Ok(None);
+            };
+            // SAFETY: task 是有效的 COM 接口；动作集合下标从 1 开始。
+            let path = unsafe {
+                task.Definition()?
+                    .Actions()?
+                    .get_Item(1)
+                    .and_then(|a| a.cast::<IExecAction>())
+                    .and_then(|exec| {
+                        let mut p = BSTR::new();
+                        exec.Path(&mut p).map(|()| p.to_string())
+                    })
+                    .ok()
+            };
+            Ok(Some(path))
+        })?;
+        Ok(match task {
+            Some(Some(p)) if !p.trim().is_empty() => {
+                crate::AutostartRegistration::At(PathBuf::from(p.trim()))
+            }
+            Some(_) => crate::AutostartRegistration::Unreadable,
+            None if legacy_run_value()?.is_some() => crate::AutostartRegistration::Unreadable,
+            None => crate::AutostartRegistration::Absent,
+        })
+    }
+
+    /// DESK-60 (#877)：对账闸门——只认**安装程序登记的安装目录**里的 daemon。
+    ///
+    /// 依据是 NSIS 写的 `HKCU\…\Uninstall\P-Pass` 的 `InstallLocation`，而不是
+    /// 硬编码 `%LOCALAPPDATA%\P-Pass`：用户在安装向导里改过目录也认得出；
+    /// 解压到「下载」目录直接跑的、开发构建 `target\` 里的，都不在那里，
+    /// 照旧拒绝（#604 的同一条风险：把登记改指向一次性路径）。
+    fn autostart_reconcile_allowed(&self, expected: &Path) -> bool {
+        // DESK-68 (#996)：与「能不能运行」同一条判据，规则只写一处。
+        self.is_install_location(expected)
+    }
+
+    /// DESK-68 (#996)：只认 NSIS 登记的安装目录里的那份（判据同上面的对账闸门）。
+    /// 注册表里没有安装记录 = 没装过 ⇒ 不是。
+    fn is_install_location(&self, exe: &Path) -> bool {
+        installed_location().is_some_and(|dir| is_in_install_dir(exe, &dir))
+    }
+
+    fn install_location_hint_key(&self) -> &'static str {
+        "ui.install_location_required_win"
+    }
+
+    /// DESK-72 (#1012)：HKCU `Run` 值——Windows 上 GUI 程序登录自启的标准做法。
+    /// 免管理员；出现在任务管理器「启动应用」里，用户可以自己关；没有崩溃复活，
+    /// 托盘「退出」就是真退出（与 macOS 壳的 LaunchAgent 不挂 KeepAlive 同一语义）。
+    fn register_shell_login_item(&self, exec: &Path) -> Result<()> {
+        if !self.is_install_location(exec) {
+            return Err(PlatformError::Failed {
+                action: "register_shell_login_item outside the install location",
+                detail: exec.display().to_string(),
+            });
+        }
+        write_run_value(RUN_KEY, SHELL_RUN_VALUE, &shell_run_command(exec))
+    }
+
+    /// DESK-60 (#877)：卸载程序删掉登记（现在是计划任务，见 NSIS 钩子），配置
+    /// 和照片库却保留——重装后「服务该在、登记没了」是这个平台上的常规路径，
+    /// 壳要补登记。macOS 卸载就是拖进废纸篓，plist 不会被删，没有这条路径。
+    fn autostart_restore_when_missing(&self) -> bool {
+        true
+    }
+
+    /// DESK-65 (#957)：结束任务正在跑的实例，再删任务（= `launchctl bootout`），
+    /// 老版本的 Run 值一并删掉。之后登录不再拉起、看门狗也不再拉。
+    fn uninstall_autostart(&self) -> Result<()> {
+        use windows::core::BSTR;
+        with_task_folder("delete scheduled task", |folder| {
+            let Some(task) = get_task(folder)? else {
+                return Ok(());
+            };
+            stop_task_instances(&task)?;
+            // SAFETY: folder 是有效的 COM 接口。
+            unsafe { folder.DeleteTask(&BSTR::from(TASK_NAME), 0) }
+        })?;
+        delete_legacy_run_value()
+    }
+
+    fn service_mode(&self) -> ServiceMode {
+        ServiceMode::ScheduledTask
+    }
+
+    /// 任务正在跑的实例的进程号。
+    fn resident_daemon_pid(&self) -> Option<u32> {
+        with_task_folder("query scheduled task", |folder| match get_task(folder)? {
+            Some(task) => task_running_pid(&task),
+            None => Ok(None),
+        })
+        .ok()
+        .flatten()
+    }
+
+    /// DESK-65 (#957)：= `launchctl kickstart [-k]`。`kill_running` 时先结束在跑
+    /// 的实例再运行任务（换版本）；否则在跑就不动（自愈）。
+    fn restart_resident_daemon(&self, kill_running: bool) -> Result<crate::ResidentRestart> {
+        use windows::Win32::Foundation::{E_FAIL, VARIANT_TRUE};
+        use windows::Win32::System::Variant::VARIANT;
+
+        with_task_folder("run scheduled task", move |folder| {
+            let Some(task) = get_task(folder)? else {
+                return Ok(crate::ResidentRestart::NotRegistered);
+            };
+            if kill_running {
+                stop_task_instances(&task)?;
+            } else if let Some(pid) = task_running_pid(&task)? {
+                return Ok(crate::ResidentRestart::AlreadyRunning { pid });
+            }
+            // SAFETY: task 是有效的 COM 接口。
+            unsafe {
+                // NSIS 安装前会禁用任务（防止看门狗在复制文件时把服务拉起），
+                // 安装后的钩子再启用；那一步没跑到时由这里补上。
+                task.SetEnabled(VARIANT_TRUE)?;
+                task.Run(&VARIANT::default())?;
+            }
+            for _ in 0..50 {
+                if let Some(pid) = task_running_pid(&task)? {
+                    return Ok(crate::ResidentRestart::Started { pid });
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Err(windows::core::Error::new(
+                E_FAIL,
+                "计划任务已运行，但 5 秒内没有出现在跑的实例",
+            ))
+        })
+    }
+
+    /// Windows 的可执行文件带 `.exe`。与 [`crate::DAEMON_EXECUTABLE_STEM`]
+    /// 的关系有单测钉着（`executable_name_is_the_stem_plus_exe`）——写成
+    /// 字面量是因为 `const` 里没法做字符串拼接。
+    fn daemon_executable_name(&self) -> &'static str {
+        "ppf-daemon.exe"
+    }
+
+    /// DESK-52 (#787)：直接调系统 API 结束进程，**不再拉起 `taskkill.exe`**。
+    /// taskkill 是 console 子系统程序，从 GUI 子系统的桌面壳里拉起它会闪黑窗
+    /// （DESK-19 #168 那一类）；不启动外部程序，这一类问题就不存在。实现与
+    /// 理由见 [`kill_processes_named`]。
+    fn kill_daemon_process(&self) -> Result<crate::KillOutcome> {
+        kill_processes_named(self.daemon_executable_name())
     }
 }
 
@@ -2252,7 +2254,7 @@ mod desk52_kill_tests {
     /// Windows 的文件名就是基名加 `.exe`——两者漂开会让按名字杀进程打空。
     #[test]
     fn executable_name_is_the_stem_plus_exe() {
-        use crate::PlatformAdapter as _;
+        use crate::HostingAdapter as _;
         assert_eq!(
             WindowsAdapter::new().daemon_executable_name(),
             format!("{}.exe", crate::DAEMON_EXECUTABLE_STEM)

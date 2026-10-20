@@ -12,14 +12,15 @@ fn main() {
 }
 
 #[cfg(any(target_os = "macos", windows))]
-use platform::PlatformAdapter;
+use platform::{HostingAdapter, PlatformAdapter};
 
 #[cfg(any(target_os = "macos", windows))]
 fn main() {
     let a = platform::adapter();
+    let h = platform::hosting();
     let mut failures = 0;
 
-    println!("── service_mode: {:?}", a.service_mode());
+    println!("── service_mode: {:?}", h.service_mode());
     println!("── data_dir: {}", a.data_dir().display());
     // power_hint 只有 macOS 实现（Windows 向导不展示睡眠策略，#1041 起默认 Unknown）。
     #[cfg(target_os = "macos")]
@@ -37,12 +38,12 @@ fn main() {
     } else {
         std::path::PathBuf::from("/usr/bin/true")
     };
-    match a.install_autostart(&target) {
-        Ok(()) => match a.autostart_installed() {
+    match h.install_autostart(&target) {
+        Ok(()) => match h.autostart_installed() {
             Ok(true) => {
                 println!("✓ autostart: 注册并查询到");
-                match a.uninstall_autostart() {
-                    Ok(()) if !a.autostart_installed().unwrap_or(true) => {
+                match h.uninstall_autostart() {
+                    Ok(()) if !h.autostart_installed().unwrap_or(true) => {
                         println!("✓ autostart: 注销干净")
                     }
                     _ => {

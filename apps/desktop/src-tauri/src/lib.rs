@@ -12,7 +12,7 @@ mod service_state;
 
 // QA-09 迁移（#211）：桌面壳现在有 9 个地方要调 platform 的能力，
 // 每个函数各写一遍 `use ... as _` 已经不划算；提到文件级。
-use platform::PlatformAdapter as _;
+use platform::{HostingAdapter as _, PlatformAdapter as _};
 use serde_json::{json, Value};
 use service_state::{ServiceState, ServiceStateManager};
 use tauri::menu::{Menu, MenuItem};
@@ -80,13 +80,13 @@ fn tray_text(locale: &str, key: &str) -> String {
 }
 
 /// DESK-68 (#996)：本进程是不是从正式安装位置启动的；不是就弹系统对话框说明
-/// 怎么办，返回 `false`。判据在平台层（`PlatformAdapter::is_install_location`）。
+/// 怎么办，返回 `false`。判据在平台层（`HostingAdapter::is_install_location`）。
 ///
 /// 用 rfd 直接弹（tauri-plugin-dialog 的底层，已在依赖树里）：这时 Tauri 还没
 /// 起来，也不该为一个提示把整个应用跑起来。读不到自身路径时放行——拦了用户
 /// 也无从照提示去做。
 fn running_from_install_location() -> bool {
-    let adapter = platform::adapter();
+    let adapter = platform::hosting();
     let Ok(exe) = std::env::current_exe() else {
         return true;
     };
@@ -200,7 +200,7 @@ fn daemon_online() -> bool {
 fn initial_service_state() -> ServiceState {
     let dir = platform::adapter().data_dir();
     let configured = dir.join("config.toml").exists();
-    let installed = platform::adapter().autostart_installed().unwrap_or(false);
+    let installed = platform::hosting().autostart_installed().unwrap_or(false);
     ServiceState::initial(configured, installed, is_user_stopped(&dir))
 }
 
@@ -334,7 +334,7 @@ fn wizard_state() -> Value {
     // Photos must land somewhere a person can FIND (real walkthrough:
     // "传到哪儿了" had no answer while the library hid in ~/Library).
     let pictures = dirs_pictures().join("P-Pass 家庭照片库");
-    let installed = platform::adapter().autostart_installed().unwrap_or(false);
+    let installed = platform::hosting().autostart_installed().unwrap_or(false);
     let configured_dir = configured_library_dir(&dir);
     json!({
         "configured": dir.join("config.toml").exists(),
@@ -813,7 +813,7 @@ fn reconcile_autostart_registration() {
         return;
     };
     let Some(dir) = exe.parent() else { return };
-    let sidecar = dir.join(platform::adapter().daemon_executable_name());
+    let sidecar = dir.join(platform::hosting().daemon_executable_name());
     // 开发运行（target/ 里没有 sidecar）等情况：没有可对账的目标，直接跳过。
     if !sidecar.is_file() {
         return;
@@ -822,14 +822,14 @@ fn reconcile_autostart_registration() {
     // 只往这个方向收敛：残留的登记（上次停止时没撤掉、或老版本留下的）撤掉，
     // 绝不改写、更不拉起——改写登记在 Windows 上会顺带把服务跑起来。
     if is_user_stopped(&platform::adapter().data_dir()) {
-        if platform::adapter().autostart_installed().unwrap_or(false) {
-            if let Err(e) = platform::adapter().uninstall_autostart() {
+        if platform::hosting().autostart_installed().unwrap_or(false) {
+            if let Err(e) = platform::hosting().uninstall_autostart() {
                 eprintln!("#957: 用户停过服务，但撤销残留的开机自启登记失败: {e}");
             }
         }
         return;
     }
-    match platform::adapter().reconcile_autostart(&sidecar) {
+    match platform::hosting().reconcile_autostart(&sidecar) {
         Ok(platform::AutostartReconcile::Rewritten) => {
             // 走 stderr：与 daemon_logs 收集的日志同一去处，排障时看得到。
             eprintln!(
@@ -845,14 +845,14 @@ fn reconcile_autostart_registration() {
         }
         Ok(platform::AutostartReconcile::NotRegistered)
             if restore_missing_autostart_allowed(
-                platform::adapter().autostart_restore_when_missing(),
+                platform::hosting().autostart_restore_when_missing(),
                 &platform::adapter().data_dir(),
             ) =>
         {
             // DESK-60 (#877)：卸载删了登记、配置还在、用户没停过 ⇒ 补回来，
             // 否则下次开机不再自动备份，界面却显示一切正常。闸门（稳定安装
             // 位置）已在 reconcile_autostart 里判过，走到这里的 sidecar 可信。
-            match platform::adapter().install_autostart(&sidecar) {
+            match platform::hosting().install_autostart(&sidecar) {
                 Ok(()) => eprintln!("#877: 开机自启登记缺失——已补登记为 {}", sidecar.display()),
                 Err(e) => eprintln!("#877: 开机自启登记缺失，补登记失败: {e}"),
             }
@@ -872,7 +872,7 @@ fn start_daemon(app: tauri::AppHandle) -> Result<String, String> {
     let sidecar = exe
         .parent()
         .ok_or("no parent dir")?
-        .join(platform::adapter().daemon_executable_name());
+        .join(platform::hosting().daemon_executable_name());
     if !sidecar.is_file() {
         return Err(ipc::ui_err(
             "ui.err_sidecar_missing",
@@ -891,7 +891,7 @@ fn start_daemon(app: tauri::AppHandle) -> Result<String, String> {
     set_user_stopped(&platform::adapter().data_dir(), false)?;
     let manager = app.state::<ServiceStateManager>().inner().clone();
     manager.set(&app, ServiceState::Starting, Some("user start"));
-    match platform::adapter().install_autostart(&sidecar) {
+    match platform::hosting().install_autostart(&sidecar) {
         // LaunchAgent RunAtLoad+KeepAlive: starts immediately, survives
         // crashes and reboots.
         Ok(()) => Ok("resident".into()),
@@ -1067,14 +1067,14 @@ fn stop_daemon_now() -> Result<(), String> {
     //    (launchd KeepAlive / the Task Scheduler watchdog).
     //    DESK-65 (#957)：结果不许丢——撤不掉登记，下次开机服务照样起来，
     //    「停止」就是假的。照样把进程停掉，但最后如实报错。
-    let unregistered = platform::adapter().uninstall_autostart();
+    let unregistered = platform::hosting().uninstall_autostart();
     // 2) Best-effort: kill the bundled daemon process. launchctl bootout
     //    (inside uninstall_autostart) already stopped the managed one;
     //    this also covers a one-shot fallback spawn.
     // QA-09 迁移（#211）：best-effort —— 杀不掉也继续（原来两个分支也是
     // 直接丢结果）。区别在于「什么退出码算进程本来就没在跑」这条判据
     // 现在只有一份、在 platform 里，不再是三个调用点各抄一遍。
-    let _ = platform::adapter().kill_daemon_process();
+    let _ = platform::hosting().kill_daemon_process();
     // 3) DESK-36 (#456)：等它真的不可达了再返回（最长 5s）——调用方紧接着
     //    就要刷新状态点，socket 还活着的那一瞬读到「运行中」就白刷了。
     //    超时不算失败：标记已落、autostart 已卸，剩下的只是进程退得慢。
@@ -1107,7 +1107,7 @@ fn pause_daemon_for_update() -> Result<(), String> {
     // QA-09 迁移（#211）：best-effort —— 杀不掉也继续（原来两个分支也是
     // 直接丢结果）。区别在于「什么退出码算进程本来就没在跑」这条判据
     // 现在只有一份、在 platform 里，不再是三个调用点各抄一遍。
-    let _ = platform::adapter().kill_daemon_process();
+    let _ = platform::hosting().kill_daemon_process();
     Ok(())
 }
 
@@ -1162,7 +1162,7 @@ enum BroughtUp {
 /// macOS 是 launchd，Windows 是任务计划程序。业务流程（自愈、更新后恢复、
 /// 重启服务）因此在两个平台上走同一条路。
 fn resident_service_available() -> bool {
-    let a = platform::adapter();
+    let a = platform::hosting();
     a.service_mode().has_service_manager() && a.autostart_installed().unwrap_or(false)
 }
 
@@ -1182,9 +1182,9 @@ fn resident_service_available() -> bool {
 fn bring_up_daemon(kill_running: bool) -> Result<BroughtUp, String> {
     if resident_service_available() {
         if kill_running {
-            retire_unmanaged_daemon(platform::adapter().resident_daemon_pid());
+            retire_unmanaged_daemon(platform::hosting().resident_daemon_pid());
         }
-        match platform::adapter().restart_resident_daemon(kill_running) {
+        match platform::hosting().restart_resident_daemon(kill_running) {
             Ok(platform::ResidentRestart::Started { pid })
             | Ok(platform::ResidentRestart::AlreadyRunning { pid }) => {
                 eprintln!("#732: 内核交由服务管理器拉起 pid={pid}");
@@ -1262,7 +1262,7 @@ fn spawn_bundled_daemon_oneshot() -> Result<(), String> {
     let sidecar = exe
         .parent()
         .ok_or("no parent dir")?
-        .join(platform::adapter().daemon_executable_name());
+        .join(platform::hosting().daemon_executable_name());
     if !sidecar.is_file() {
         return Err(ipc::ui_err(
             "ui.err_sidecar_missing",
@@ -1293,11 +1293,10 @@ fn spawn_bundled_daemon_oneshot() -> Result<(), String> {
 /// DESK-72 (#1012)：怎么登记是平台知识（macOS 写 LaunchAgent，Windows 写 HKCU
 /// `Run` 值，没有登录项的平台什么都不做），这里只调平台能力。
 fn register_shell_login_item() {
-    use platform::PlatformAdapter as _;
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
-    if let Err(e) = platform::adapter().register_shell_login_item(&exe) {
+    if let Err(e) = platform::hosting().register_shell_login_item(&exe) {
         // 开发构建 / 从 dmg 或下载目录直跑（非正式安装位置）被拒是**预期**的——不当错误刷屏。
         eprintln!("#616: 壳登录项未登记（{e}）——非正式安装位置时属预期");
     }
@@ -1322,8 +1321,7 @@ fn shell_version<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> String {
 /// 读不到 = `None` = 不知道（前端必须按"什么都不做"处理）。
 #[tauri::command]
 fn installed_app_version() -> Option<String> {
-    use platform::PlatformAdapter as _;
-    platform::adapter().installed_bundle_version()
+    platform::hosting().installed_bundle_version()
 }
 
 /// UPD-06 (#616)：换壳——让**运行中的这只壳**变成磁盘上已经是新版的那一份。
@@ -1341,23 +1339,22 @@ fn installed_app_version() -> Option<String> {
 /// 前端据此给"手动完全退出再打开"的兜底提示。
 #[tauri::command]
 fn relaunch_shell(app: tauri::AppHandle) -> Result<(), String> {
-    use platform::PlatformAdapter as _;
     // ⚠️ 闸门一：只有**launchd 自己拉起来的**这一份壳才走系统路径。
     // `kickstart -k` 的 "kill the running instance" 只能杀服务管理器启动的进程；
     // 从访达/Dock 打开的壳，launchd 手里没有它的 pid ⇒ `-k` 无物可杀 ⇒ kickstart
     // 只会再拉一个实例，而 single-instance 会让新实例把焦点交回旧壳后自杀 ⇒
     // 用户点"重启"什么都没发生（比不重启更糟）。所以非 launchd 实例直接走退化路径。
-    if let Some(label) = platform::adapter().shell_agent_label() {
-        if !platform::adapter().shell_agent_started_us() {
+    if let Some(label) = platform::hosting().shell_agent_label() {
+        if !platform::hosting().shell_agent_started_us() {
             eprintln!(
                 "#616: 本进程不是 {label} 拉起的（用户直接打开），kickstart 无物可杀，走壳自己重启"
             );
         } else {
             match std::env::current_exe() {
-                Ok(exe) => match platform::adapter().register_shell_agent(&exe) {
-                    Ok(()) => match platform::adapter().shell_agent_registered_exec() {
+                Ok(exe) => match platform::hosting().register_shell_agent(&exe) {
+                    Ok(()) => match platform::hosting().shell_agent_registered_exec() {
                         Ok(Some(registered)) if registered == exe => {
-                            match platform::adapter().kickstart_shell_agent() {
+                            match platform::hosting().kickstart_shell_agent() {
                                 Ok(pid) => {
                                     eprintln!("#616: kickstart {label} 拉起新壳 pid={pid}");
                                     return Ok(());
@@ -1478,7 +1475,7 @@ fn restart_daemon_process_blocking() -> Result<Value, String> {
 
 /// DAE-04 原路径（没有 LaunchAgent 语义时）：杀进程，Run key 平台再显式拉一次。
 fn restart_by_kill_and_respawn() -> Result<(), String> {
-    platform::adapter()
+    platform::hosting()
         .kill_daemon_process()
         .map_err(|e| ipc::ui_err("ui.err_kill_old", &[("err", &e)]))?;
 
@@ -1491,12 +1488,12 @@ fn restart_by_kill_and_respawn() -> Result<(), String> {
     //    Linux 走的是原来那个 unix 分支、杀完不拉起，然后下面那段等待必然
     //    超时报错（Linux 没有任何东西会复活它）。桌面壳在 Linux 上不是发布
     //    形态，但既然改了就写明，不混在"纯搬家"里带过去。
-    if platform::adapter().service_mode() == platform::ServiceMode::UserAutostart {
+    if platform::hosting().service_mode() == platform::ServiceMode::UserAutostart {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let sidecar = exe
             .parent()
             .ok_or("no parent dir")?
-            .join(platform::adapter().daemon_executable_name());
+            .join(platform::hosting().daemon_executable_name());
         if !sidecar.is_file() {
             return Err(ipc::ui_err(
                 "ui.err_sidecar_missing",
@@ -1722,7 +1719,7 @@ fn sidecar_daemon_version() -> Option<String> {
     let exe = std::env::current_exe().ok()?;
     let sidecar = exe
         .parent()?
-        .join(platform::adapter().daemon_executable_name());
+        .join(platform::hosting().daemon_executable_name());
     if !sidecar.is_file() {
         return None;
     }
@@ -1902,7 +1899,7 @@ fn gather_kernel_facts() -> KernelFacts {
             .map(|p| p as u32),
         on_disk_version: sidecar_daemon_version().and_then(|t| parse_sidecar_version(&t)),
         resident_registered: resident_service_available(),
-        resident_pid: platform::adapter().resident_daemon_pid(),
+        resident_pid: platform::hosting().resident_daemon_pid(),
         user_stopped: is_user_stopped(&platform::adapter().data_dir()),
         transfer_active: devices.as_ref().map(any_transfer_active).unwrap_or(false),
     }
@@ -3812,7 +3809,7 @@ mod tests {
         assert!(mark < unregister && mark < kill, "标记必须先于停进程落下");
         // DESK-65 (#957)：撤登记的结果不许丢——真机上 Run 值没删掉、下次开机服务又起来了。
         assert!(
-            !stop.contains("let _ = platform::adapter().uninstall_autostart()"),
+            !stop.contains("let _ = platform::hosting().uninstall_autostart()"),
             "撤销开机自启失败必须报给用户"
         );
         // DESK-65 (#957)：启动对账先看停止标记，停过就只撤不写。
@@ -3952,7 +3949,7 @@ mod tests {
             .expect("register_shell_login_item 缺失");
         let body: String = src[f..].chars().take(1200).collect();
         assert!(
-            body.contains("platform::adapter().register_shell_login_item(&exe)"),
+            body.contains("platform::hosting().register_shell_login_item(&exe)"),
             "DESK-72：怎么登记交给平台层（Windows 也要登记，不能借 launchd 专用的 shell_agent_label 判断）"
         );
         assert!(

@@ -317,6 +317,33 @@ OUT="$(env -u CI ARCH_ROOT="$R" ARCH_BASE_REF=no-such-ref bash "$CHECK" 2>&1)" \
 OUT="$(env ARCH_ROOT="$R" ARCH_BASE_REF=no-such-ref CI=true bash "$CHECK" 2>&1)" \
   && bad "CI 取不到基线必须失败（fail-closed）" || ok "CI 取不到基线 → 失败（fail-closed）"
 
+# ── G3（#1043）────────────────────────────────────
+echo "== G3 正样例（enforce 模式必须报红）"
+G3_USE='use platform::HostingAdapter as _;'
+G3_CALL='fn f() { let _ = platform::hosting().service_mode(); }'
+G3_BRACE_ML='use platform::{
+    adapter,
+    hosting,
+};'
+G3_PATH='fn f(h: &dyn platform::HostingAdapter) {}'
+for pair in "use-trait:$G3_USE" "call-hosting:$G3_CALL" "brace-use-multiline:$G3_BRACE_ML" "trait-object:$G3_PATH"; do
+  expect_red "G3 ${pair%%:*}" "$(sample crates/daemon/src/a.rs "${pair#*:}")" "G3 VIOLATION" ARCH_G3_MODE=enforce
+done
+echo "== G3 反样例（必须不报）"
+expect_green "G3 平台能力入口不算" "$(sample crates/daemon/src/a.rs 'fn f() { let _ = platform::adapter().data_dir(); }')" ARCH_G3_MODE=enforce
+expect_green "G3 注释里提到 HostingAdapter 不算" "$(sample crates/daemon/src/a.rs '// HostingAdapter 只给壳用；platform::hosting() 同理')" ARCH_G3_MODE=enforce
+expect_green "G3 crates/platform 自己定义托管 trait 不算" "$(sample crates/platform/src/lib.rs 'pub trait HostingAdapter {}
+pub fn hosting() {}')" ARCH_G3_MODE=enforce
+expect_green "G3 桌面壳用托管能力不算" "$(sample apps/desktop/src-tauri/src/lib.rs 'fn f() { let _ = platform::hosting(); }')" ARCH_G3_MODE=enforce
+expect_green "G3 名字里含 hosting 的别的符号不算" "$(sample crates/daemon/src/a.rs 'fn f() { let _ = platform::hosting_hint(); let HostingAdapterX = 1; }')" ARCH_G3_MODE=enforce
+echo "== G3 只报告模式：命中照列、不判红"
+R="$(sample crates/daemon/src/a.rs "$G3_USE")"
+if run "$R" ARCH_G3_MODE=report && printf '%s' "$OUT" | grep -qF "G3（只报告）：crates/daemon/src/a.rs"; then
+  ok "G3 report 模式列出命中且通过"
+else
+  bad "G3 report 模式应列出命中且通过"; echo "$OUT" | sed 's/^/       /'
+fi
+
 echo
 echo "arch-check 自测：通过 ${PASS}，失败 $FAILED"
 [ "$FAILED" -eq 0 ]
