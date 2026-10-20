@@ -1,4 +1,4 @@
-//! DAE-03: daemon CLI 纪律——参数解析 + autostart 决策 + bind 人话报错。
+//! DAE-03: daemon CLI 纪律——参数解析 + bind 人话报错。
 //!
 //! 事故背景（2026-08-06）：daemon 无参数解析，`daemon --help` 被当成普通
 //! 启动一路走到单实例 claim，触发误接管、常驻停机数分钟（PROGRESS 当日
@@ -7,12 +7,10 @@
 //!
 //!   1. `--help` / `--version` / `--ephemeral` 的解析——未知参数报错退出，
 //!      绝不静默忽略（静默忽略正是事故根因）；
-//!   2. autostart 安装决策——只有升级接管（TookOver）才装，纯新启动
-//!      （Proceed）/退位（StandDown）绝不碰开机自启配置；
+//!   2. （原「autostart 安装决策」：#1046 起核心不碰开机自启登记，由桌面
+//!      发行层启动对账负责；手动/开发构建启动因此天然不会改用户的配置。）
 //!   3. 固定端口被异身份实例/其它程序占用时的人话报错（含修复指引），
 //!      原始英文底层错误照常留日志。
-
-use crate::Claim;
 
 /// 解析后的 CLI 意图。`--help` / `--version` 必须在任何 daemon 机制
 /// （日志/配置/数据库/身份/claim/bind）之前短路退出。
@@ -184,15 +182,6 @@ pub fn version_json(version: &str) -> String {
 pub const VERSION_PRODUCT: &str = "P-Pass daemon";
 /// `--version --json` 的格式版本。
 pub const VERSION_JSON_SCHEMA: u32 = 1;
-
-/// DAE-03 ②：autostart 只在升级接管（TookOver）时（重）安装——纯新启动
-/// （Proceed）与退位（StandDown）绝不写 launchd/注册表。手动/开发构建
-/// 启动不得篡改用户的开机自启配置（8/6 --help 事故的第二个缺口）。
-/// 真·安装动作在 platform adapter（其路径守卫拒绝 /target/、/tmp/），
-/// 本函数只负责「何时该装」的决策，main 按它执行。
-pub fn autostart_install_required(claim: &Claim) -> bool {
-    matches!(claim, Claim::TookOver)
-}
 
 /// 把 transport bind 失败翻译成人话。固定端口（config.toml bind_addr）被
 /// 异身份 P-Pass 实例或其它程序占用时，原始报错是英文底层错误（如
@@ -442,15 +431,6 @@ mod tests {
         assert!(err.contains("未知参数"), "err: {err}");
         // 反证：把未知分支改成静默忽略 → 本测试必红
         assert!(parse_cli(args(&["--bogus"])).is_err());
-    }
-
-    #[test]
-    fn fresh_start_never_installs_autostart() {
-        // DAE-03 ②：只有升级接管装 autostart。
-        // 反证：改成恒 true / 恒 false → 本测试必红。
-        assert!(!autostart_install_required(&Claim::Proceed));
-        assert!(!autostart_install_required(&Claim::StandDown));
-        assert!(autostart_install_required(&Claim::TookOver));
     }
 
     #[test]

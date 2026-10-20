@@ -386,6 +386,8 @@ expect_green "G3 crates/platform 自己定义托管 trait 不算" "$(sample crat
 pub fn hosting() {}')" ARCH_G3_MODE=enforce
 expect_green "G3 桌面壳用托管能力不算" "$(sample apps/desktop/src-tauri/src/lib.rs 'fn f() { let _ = platform::hosting(); }')" ARCH_G3_MODE=enforce
 expect_green "G3 名字里含 hosting 的别的符号不算" "$(sample crates/daemon/src/a.rs 'fn f() { let _ = platform::hosting_hint(); let HostingAdapterX = 1; }')" ARCH_G3_MODE=enforce
+echo "== G3 默认模式（#1046 起为 enforce）：不设 ARCH_G3_MODE 也必须报红"
+expect_red "G3 默认即阻断" "$(sample crates/daemon/src/a.rs "$G3_USE")" "G3 VIOLATION"
 echo "== G3 只报告模式：命中照列、不判红"
 R="$(sample crates/daemon/src/a.rs "$G3_USE")"
 if run "$R" ARCH_G3_MODE=report && printf '%s' "$OUT" | grep -qF "G3（只报告）：crates/daemon/src/a.rs"; then

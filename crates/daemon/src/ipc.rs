@@ -112,8 +112,8 @@ const ACTIVITY_GAP_MS: i64 = 10 * 60 * 1000;
 pub enum Claim {
     /// No live peer — bind now.
     Proceed,
-    /// We took over from an older instance (it stepped down) — bind now,
-    /// and re-install autostart so launchd points at this (stable) path.
+    /// We took over from an older instance (it stepped down) — bind now.
+    /// (#1046: the autostart registration is the desktop shell's to reconcile.)
     TookOver,
     /// A same-or-newer instance is already serving — exit this process.
     StandDown,

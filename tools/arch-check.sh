@@ -448,10 +448,10 @@ fi
 # `HostingAdapter` 这个名字、不许调 `platform::hosting`（含 `use platform::{…,
 # hosting}` 的跨行写法）。注释不算。
 #
-# 模式：先「只报告」再切阻断（盘点 §5 P 段的门禁上线规矩）。现存命中只有
-# daemon main.rs 接管后重装开机自启那一块，随 #1046（S-11）删除；删完把
-# G3_DEFAULT_MODE 改成 enforce。
-G3_DEFAULT_MODE=report
+# 模式：先「只报告」再切阻断（盘点 §5 P 段的门禁上线规矩）。原先仅剩的命中
+# （daemon main.rs 接管后重装开机自启）已随 #1046（S-11）删除，默认切为 enforce；
+# `ARCH_G3_MODE=report` 只留给自测。
+G3_DEFAULT_MODE=enforce
 G3_MODE="${ARCH_G3_MODE:-$G3_DEFAULT_MODE}"
 echo "==> G3: core crates depend only on the capability trait (no HostingAdapter)"
 G3_RE='\bHostingAdapter\b|\bplatform::hosting\b|\buse\s+platform::\{[^}]*\bhosting\b'
@@ -465,7 +465,7 @@ elif [ "$G3_MODE" = "enforce" ]; then
   FAIL=1
 else
   printf '%s\n' "$G3_HITS" | awk -F'\t' '{print "   ⚠️  G3（只报告）：" $1 " 行 " $2}'
-  echo "   ℹ️  G3 处于只报告模式（#1046 删除 daemon 托管代码后切 enforce）"
+  echo "   ℹ️  G3 处于只报告模式（ARCH_G3_MODE=report）"
 fi
 
 # ── Result ──────────────────────────────────────────

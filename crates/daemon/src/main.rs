@@ -376,57 +376,11 @@ async fn main() -> anyhow::Result<()> {
             );
             std::process::exit(0);
         }
-        daemon::Claim::TookOver => {
-            // 升级退位收尾：重装 autostart，让 launchd 指向本实例的稳定
-            // 路径。守卫拒绝 target/、/tmp/ 等开发路径（不写坏 plist）。
-            // DAE-03 ②：autostart 安装决策收敛在
-            // cli::autostart_install_required（单测钉死）——只有 TookOver
-            // 装；Proceed（纯新启动）与 StandDown（退位）绝不碰。
-            if daemon::cli::autostart_install_required(&daemon::Claim::TookOver) {
-                // #1043：核心里仅剩的托管调用，整块随 #1046（S-11）删除，届时门禁
-                // G3 切阻断。
-                use platform::HostingAdapter as _;
-                if let Ok(exe) = std::env::current_exe() {
-                    let registered = platform::hosting().autostart_registration();
-                    match takeover_autostart(registered.as_ref().ok(), &exe) {
-                        TakeoverAutostart::Foreign => {
-                            // #604 [DESK-42]：**只在本实例有权写登记时**才重装。
-                            // 真机事故：登记被钉在 `~/P-Pass-Backups/<日期>/old-app/…`
-                            // 里的旧 App 上——那正是「某个从备份副本起来的实例按自己的
-                            // 路径改了登记」。已有登记指向别处 → 一个字节都不动，只留痕。
-                            tracing::warn!(
-                                "#604: 已有开机自启登记指向 {:?}（本实例 {}）——不覆盖，避免从备份/临时副本启动的实例篡改用户登记",
-                                registered.ok(),
-                                exe.display()
-                            );
-                        }
-                        TakeoverAutostart::AlreadyOurs => {
-                            // #732 ②：登记本来就指向自己 ⇒ 不重装。重装 = bootout +
-                            // bootstrap，而 plist 是 RunAtLoad ⇒ launchd **当场**再拉一个
-                            // 实例，它在我们 bind transport 之前看不到 IPC socket ⇒
-                            // Proceed ⇒ 撞上我们刚绑的端口报 `bind endpoint: Failed to
-                            // bind sockets`（2026-10-08 本机日志：step_down 后 70ms）。
-                            tracing::info!("#732: 开机自启登记已指向本实例，不重装（避免 RunAtLoad 多拉一个实例抢端口）");
-                        }
-                        TakeoverAutostart::Install => {
-                            // DESK-68 (#996)：不在正式安装位置的实例（开发构建、解压
-                            // 副本）不许写登记——各平台同一条判据。
-                            if !platform::hosting().is_install_location(&exe) {
-                                tracing::warn!(
-                                    "DESK-68: 本实例不在正式安装位置（{}）——不写开机自启登记",
-                                    exe.display()
-                                );
-                            } else if let Err(e) = platform::hosting().install_autostart(&exe) {
-                                tracing::warn!("DAE-01: autostart re-install skipped: {e}");
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        daemon::Claim::Proceed => {
-            // DAE-03 ②：纯新启动绝不装 autostart——手动/开发构建启动
-            // 不得篡改用户的开机自启配置（决策见 cli.rs 单测）。
+        daemon::Claim::TookOver | daemon::Claim::Proceed => {
+            // #1046（S-11）：核心不管托管——接管旧实例后不再碰开机自启登记。
+            // 登记的校正（含 #604 不覆盖备份副本、#732 已指向自己不重装、DESK-68
+            // 不在正式安装位置不写）由桌面发行层在新壳启动时对账完成
+            // （apps/desktop/src-tauri/src/distribution.rs）。
         }
     }
 
@@ -1005,33 +959,6 @@ fn rand_pair_token() -> anyhow::Result<[u8; 12]> {
     Ok(token)
 }
 
-/// 升级接管（TookOver）之后，开机自启登记怎么处理。
-#[derive(Debug, PartialEq, Eq)]
-enum TakeoverAutostart {
-    /// 未登记 / 读不出：照旧安装（DAE-01 原行为）。
-    Install,
-    /// 已登记且就指向本实例：什么都不做（#732 ②）。
-    AlreadyOurs,
-    /// 已登记但指向别处：不覆盖（#604）。
-    Foreign,
-}
-
-/// 纯函数，单测钉死三条分支。`registered` = `autostart_registration()` 的
-/// `Ok(_)`；读登记失败（`Err`）传 `None`。未登记、读不出、读失败都照旧安装
-/// （与改用 `autostart_registration` 之前一致）。
-fn takeover_autostart(
-    registered: Option<&platform::AutostartRegistration>,
-    exe: &std::path::Path,
-) -> TakeoverAutostart {
-    match registered {
-        Some(platform::AutostartRegistration::At(r)) if r == exe => TakeoverAutostart::AlreadyOurs,
-        Some(platform::AutostartRegistration::At(_)) => TakeoverAutostart::Foreign,
-        Some(platform::AutostartRegistration::Absent)
-        | Some(platform::AutostartRegistration::Unreadable)
-        | None => TakeoverAutostart::Install,
-    }
-}
-
 fn unix_ms_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1122,40 +1049,6 @@ mod tests {
     #[test]
     fn desk46_default_or_env_library_may_be_created() {
         assert!(library_root_check(false, false, Path::new("/tmp/ppf-scene/library")).is_ok());
-    }
-
-    // #732 ②：接管者的登记已经指向自己时**不许**重装 autostart——重装是
-    // bootout + bootstrap，RunAtLoad 会当场多拉一个实例跟接管者抢端口
-    // （2026-10-08 本机：step_down 后 70ms 出 `bind endpoint: Failed to bind
-    // sockets`）。反证：把 AlreadyOurs 分支并回 Install，本测试必红。
-    #[test]
-    fn takeover_does_not_reinstall_an_autostart_that_already_points_at_us() {
-        use platform::AutostartRegistration as R;
-        let exe = Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon");
-        assert_eq!(
-            takeover_autostart(Some(&R::At(exe.to_path_buf())), exe),
-            TakeoverAutostart::AlreadyOurs
-        );
-        // #604：指向别处 → 不覆盖
-        assert_eq!(
-            takeover_autostart(
-                Some(&R::At(PathBuf::from(
-                    "/Users/x/P-Pass-Backups/old-app/P-Pass.app/Contents/MacOS/ppf-daemon"
-                ))),
-                exe
-            ),
-            TakeoverAutostart::Foreign
-        );
-        // 未登记 / 读不出 / 读失败 → 照旧安装（DAE-01 原行为不变）
-        assert_eq!(
-            takeover_autostart(Some(&R::Absent), exe),
-            TakeoverAutostart::Install
-        );
-        assert_eq!(
-            takeover_autostart(Some(&R::Unreadable), exe),
-            TakeoverAutostart::Install
-        );
-        assert_eq!(takeover_autostart(None, exe), TakeoverAutostart::Install);
     }
 
     #[test]
