@@ -144,7 +144,10 @@ gen:
 # ── Architecture Enforcement ────────────────────────
 
 # Architecture check: enforce isolation rules
+# #1040：先跑门禁自测（违规样例必须红、合规样例必须过），再判真实代码。
+# 想只看 G1/G5 现状而不判红：ARCH_REPORT_ONLY=1 ./tools/arch-check.sh
 arch-check:
+  @./tools/test-arch-check.sh
   @./tools/arch-check.sh
 
 # Markdown tables in docs/ and cards/ must not be split by a stray blank line

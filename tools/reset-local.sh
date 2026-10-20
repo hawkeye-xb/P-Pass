@@ -23,6 +23,8 @@ AGENT_LABEL="com.p-pass.daemon"
 PLIST="$HOME/Library/LaunchAgents/${AGENT_LABEL}.plist"
 APP="/Applications/P-Pass.app"
 CONFIG_DIR="$HOME/Library/Application Support/P-Pass"
+# 老版本 launchd 的 stdout/stderr 落点（#1046 起改在 $CONFIG_DIR/logs/，随 CONFIG_DIR 一起删）；
+# 升级上来的机器上可能还留着，照删。
 LOG_OUT="$HOME/Library/Logs/p-pass-daemon.log"
 LOG_ERR="$HOME/Library/Logs/p-pass-daemon.err"
 

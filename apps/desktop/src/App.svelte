@@ -1,9 +1,9 @@
 <script>
   import { reconcilePhotoWall } from "./photoWall.js";
+  import { FALLBACK_REFRESH_MS, SELF_HEAL_COOLDOWN_MS } from "./lib/serviceTiming.js";
   import { shouldShowTrayHint, TRAY_HINT_SHOWN_KEY } from "./trayHint.js";
-  import { currentPlatform, wizardVariant } from "./platformUx.js";
-  import { shouldShowWizard } from "./serviceGate.js";
-  import {
+  import { loadPlatformUx, wizardVariant } from "./platformUx.js";
+    import {
     canStartService,
     canStopService,
     isServiceRunning,
@@ -21,6 +21,8 @@
   } from "@tauri-apps/plugin-dialog";
   import { check as checkUpdate } from "@tauri-apps/plugin-updater";
   import { revealItemInDir } from "@tauri-apps/plugin-opener";
+  import { openLibraryDir } from "./lib/openLibrary.js";
+  import { runUpdate } from "./lib/updateFlow.js";
   import QRCode from "qrcode";
   import { onMount, onDestroy } from "svelte";
   import Wizard from "./Wizard.svelte";
@@ -44,14 +46,12 @@
   import SettingsIcon from "@lucide/svelte/icons/settings";
   import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
   // T-091: 人性化时间 + 哨兵判定纯函数（时间戳单位见模块头注释：unix 毫秒）
-  import { humanTime, needsAttention, daysSince, relativeTime } from "./lib/humanTime.js";
-  // T-092: connection 四态 → 文案/点色；字节 → 人读容量（纯函数，
-  // apps/desktop/scripts/check-wire-fns.mjs 断言）
+  import { humanTime, daysSince, relativeTime } from "./lib/humanTime.js";
   // PRES-01: presence 三档 → 文案/点色（connection 路径事实优先展示）
   import { presenceText, flowConnectionText } from "./lib/connection.js";
   // DEV-03: 「自己断开」与「业主移除」的判据 + 已断开行文案（纯函数，
   // disconnected.test.js 钉边界）。
-  import { isOwnerRemoved, disconnectedRow } from "./lib/disconnected.js";
+  import { disconnectedRow } from "./lib/disconnected.js";
   import {
     pendingDialogText,
     pendingSubText,
@@ -59,15 +59,14 @@
     pairResultName,
   } from "./lib/pending.js";
   import { formatBytes, diskUsedPercent } from "./lib/formatBytes.js";
-  // #413 §7：照片库卷低于 5 GiB 发一次系统通知（判定规则见 lowSpace.js）。
-  import { nextLowSpace } from "./lowSpace.js";
   // MOB-29: 「刚从库里删掉照片」警告的判据（纯函数，externalDelete.test.js
   // 钉边界）——删除会被手机传回来，这是对的，但得让用户知道。
   import { externalDeleteNotice } from "./lib/externalDelete.js";
-  import { auditText, auditWho, isVisibleAudit } from "./auditProjection.js";
+  import { auditText, auditWho } from "./auditProjection.js";
   // MOB-47: 视频查看器加载编排（asset 协议 hash 授权 + thumb.get 兜底 +
   // isCancelled 竞态闸）——纯函数可单测，App.svelte 只做接线的薄壳。
   import { loadVideoViewer, loadVideoThumbnail, handleVideoError } from "./lib/viewerVideo.js";
+  import { loadImageViewer, handleImageError } from "./lib/viewerImage.js";
   // T-072: 状态/错误文案的唯一来源是 diag 字典（crates/diag 注册表 +
   // assets/i18n/*.json，Rust 测试保证双语文案齐全）。
   // I18N-03 (#492): t() 抽到 lib/i18n.js 共享（向导、lib/*.js 同源）；
@@ -106,14 +105,18 @@
     page = pageFromHash();
   }
 
-  let wizard = $state(null); // null=检测中, {configured, default_dir}
+  // null=检测中。`show_wizard` 是 Rust 给的结论（判据只在 Rust，#1045）；
+  // 前端不拿 configured / installed / user_stopped 自己拼。
+  let wizard = $state(null); // {show_wizard, default_dir, configured_library_dir}
+  // #1043：平台界面能力（platform_ux）。null = 还没问到；向导等它到了再选视图。
+  let platformUx = $state(null);
   let starting = $state(false);
   // W1 (2026-08-26 real-box run): the update flow pauses ppf-daemon.exe
-  // before downloadAndInstall() (see checkForUpdate() below) so the
+  // before install() (#1060: after download; see checkForUpdate() below) so the
   // Windows installer can overwrite its file — but NSIS's silent
   // installer terminates the calling process itself (CheckIfAppIsRunning
   // macro) partway through, so the resume call queued right after
-  // downloadAndInstall() may never run: the shell that would call it is
+  // install() may never run: the shell that would call it is
   // dead. Rather than depend on that one line of JS surviving, self-heal
   // is triggered by the Rust-owned `unreachable` state (see
   // maybeSelfHeal): if a config already exists and the user did not stop
@@ -122,7 +125,6 @@
   // genuinely offline for another reason.
   let lastSelfHealAttempt = 0;
   let selfHealRetry;
-  const SELF_HEAL_COOLDOWN_MS = 30000;
 
   // #557: Settings → language. Options render their own labels via t();
   // the switch persists, re-tells the tray and reloads (t() is not reactive;
@@ -142,8 +144,12 @@
     }
   }
 
+  // 并发读取只认最后发出的那次：服务状态连续变化时，先发后到的旧应答不许覆盖新结论。
+  let wizardSeq = 0;
   async function checkWizard() {
-    wizard = await invoke("wizard_state");
+    const seq = ++wizardSeq;
+    const next = await invoke("wizard_state");
+    if (seq === wizardSeq) wizard = next;
   }
 
   async function stopService() {
@@ -212,18 +218,25 @@
   // DESK-63 (#946): a devices.list failure is a data error, not a service
   // outage. It gets its own state and its own message.
   let devicesError = $state("");
-  // #413 §7：低空间通知的布防状态——每个进程最多在跌破时报一次，回升到
-  // 6 GiB 以上才重新布防。不是 $state：它不驱动任何渲染。
-  let lowSpaceArmed = true;
-  function checkLowSpace(freeBytes) {
-    const next = nextLowSpace(lowSpaceArmed, freeBytes);
-    lowSpaceArmed = next.armed;
-    if (!next.notify) return;
-    // 尽力而为：系统通知失败不影响任何界面状态。
-    invoke("notify_system", {
-      title: t("ui.low_space_title"),
-      body: t("ui.low_space_body", { free: formatBytes(freeBytes) }),
-    }).catch(() => {});
+  // #413 §7 / #1044 B11：低空间通知何时该弹由 daemon 判定并持久化（阈值、
+  // 回差、布防状态都在 crates/daemon/src/low_space.rs）。status 带出待展示的
+  // 那一次（low_space_notice），这里弹完就 ack 消费掉；重开 App 不再重弹。
+  // 正在弹/正在 ack 时跳过：refresh 可能并发（轮询 + 事件触发），两次都在
+  // ack 之前看到同一条 notice 就会弹两遍。
+  let lowSpaceNoticeBusy = false;
+  async function showLowSpaceNotice(notice) {
+    if (!notice || lowSpaceNoticeBusy) return;
+    lowSpaceNoticeBusy = true;
+    try {
+      // 尽力而为：系统通知失败不影响任何界面状态。
+      await invoke("notify_system", {
+        title: t("ui.low_space_title"),
+        body: t("ui.low_space_body", { free: formatBytes(notice.free_bytes ?? null) }),
+      }).catch(() => {});
+      await call("low_space.ack").catch(() => {});
+    } finally {
+      lowSpaceNoticeBusy = false;
+    }
   }
   let devices = $state([]);
   let qrDataUrl = $state("");
@@ -240,9 +253,6 @@
   let showConfirmModal = $state(false);
   // T-091: node_id -> {last_backup_at, asset_count}（device.watermarks，毫秒）
   let watermarks = $state({});
-  // T-092: activity.list 批次（{node_id,name,at,asset_count}，at=unix 毫秒，
-  // name 可能 null）——活动记录页数据源
-  let activity = $state([]);
   // AUDIT-01: 审计事件流 v2（{ts, kind, actor, roundId, payload}）——
   // 配对请求/允许/拒绝、吊销、外部删除、Flow 用户操作/终态，活动页的
   // 主数据源。v1 的 action/detail 自由文本已随 audit_log 一并移除。
@@ -253,12 +263,20 @@
   let auditError = $state("");
   // T1 (H-10b): 界面显示版本号——报问题/排查时先知道装的是什么版本。
   let version = $state("");
-  getVersion().then((v) => (version = v)).catch(() => {});
-  // UPD-06 (#616): **磁盘上装的那个版本**（读安装包的 Info.plist）。它与上面
-  // 那个"编译进这只壳的版本"一旦不同，就是"更新装完了、但运行中的壳还是旧的"
-  // ——这是"要不要换壳"的确定性判据。读不到就空着（不判，什么都不做）。
+  // #1044 B13：壳版本要随 status 报给 daemon 才有 shell_relation。首轮 refresh
+  // 可能早于这里返回（那一轮报的是空串 → relation 为 null），拿到版本立刻
+  // 补一轮，不让「关于」页/重启服务行等到下一次事件或 60s 兜底。
+  getVersion()
+    .then((v) => {
+      version = v;
+      void refresh();
+    })
+    .catch(() => {});
+  // UPD-06 (#616): **磁盘上装的那个版本**，只在它与运行中的壳不同时才有值——
+  // "更新装完了、但运行中的壳还是旧的"。同不同由壳的 Rust 侧按共享的版本规则
+  // 判（#1044 B13，crates/version-cmp），前端不比版本。读不到就空着。
   let installedVersion = $state("");
-  invoke("installed_app_version")
+  invoke("pending_shell_version")
     .then((v) => (installedVersion = v || ""))
     .catch(() => {});
   // UPD-06 (#616): **版本真相源**——壳版本与服务版本分开，不再互相冒充。
@@ -268,25 +286,17 @@
   const shellVersion = $derived(version);
   const serviceVersion = $derived(status?.version || "");
   const displayVersion = $derived(serviceVersion || shellVersion);
-  const versionsDiffer = $derived(
-    !!shellVersion && !!serviceVersion && !sameRelease(shellVersion, serviceVersion)
-  );
-  const shellIsStale = $derived(
-    !!installedVersion && !!shellVersion && !sameRelease(installedVersion, shellVersion)
-  );
+  // #1044 B13：壳与内核的版本关系由 daemon 下结论（status.shell_relation：
+  // same / shell_older / shell_newer；壳没报版本时为 null = 不提示）。
+  const shellRelation = $derived(status?.shell_relation ?? null);
+  const versionsDiffer = $derived(!!shellRelation && shellRelation !== "same");
+  const shellIsStale = $derived(!!installedVersion);
   const isTestBuild = $derived(displayVersion.includes("-test."));
   // DAE-04 + UPD-06 (#616)：**分向**。服务旧（且壳不旧）才是「重启后台服务」的
   // 场合；旧实现只判"不一致"、不判方向，于是在"壳旧/服务新"方向按了永不收敛
   // ——杀 daemon 拉起来的还是同版本，按钮永远不消失（0.7.5 真机现场）。
-  const serviceIsStale = $derived(
-    versionsDiffer && !shellIsStale && isOlder(serviceVersion, shellVersion)
-  );
-  // DEV-01b: 重装识别/「替换旧的」入口先隐藏（用户拍板 2026-08-12）——
-  // 现阶段统一走「重新扫码 = 全新授权」，不给用户多一个要理解的概念。
-  // 编译期 flag 默认关；打开 = DEV-01 行为原样回来（反证路径）。
-  // 底层不拆：pair.request 的 device_hint 照发照存（数据继续积累），
-  // 未来打开入口即用。关闭时对话框与 DEV-01 之前完全一致。
-  // 人性化时间的「现在」——随 3s 轮询一起刷新，行文案不会停在旧相对时间
+  const serviceIsStale = $derived(shellRelation === "shell_newer" && !shellIsStale);
+  // 人性化时间的「现在」——随每次 refresh 一起推进，行文案不会停在旧相对时间
   let nowMs = $state(Date.now());
 
   async function call(method, params = {}) {
@@ -302,8 +312,8 @@
 
   async function refresh() {
     try {
-      status = await call("status");
-      checkLowSpace(status.disk_free_bytes ?? null);
+      status = await call("status", { shell_version: version });
+      void showLowSpaceNotice(status.low_space_notice);
       pendingCount = status.pending_pairs ?? 0;
       // UX-08: pending 全量列表（pairing.pending，只读）——列表化显示
       // 的基础；拿不到时回退数量（老 daemon 升级过渡）。
@@ -346,19 +356,11 @@
         const w = await call("device.watermarks");
         watermarks = Object.fromEntries((w.watermarks ?? []).map((x) => [x.node_id, x]));
       } catch (_) {}
-      // T-092: 活动记录同样单独容错——倒序（新的在上）由 UI 兜底保证
-      try {
-        const a = await call("activity.list", { limit: 100 });
-        activity = (a.batches ?? []).slice().sort((x, y) => (y.at ?? 0) - (x.at ?? 0));
-      } catch (_) {}
       // AUDIT-01: 审计事件流 v2（配对/吊销/外部删除/Flow 事实）——活动页
-      // 主数据源。2026-08-18（用户反馈④）：limit 200 → 500。ingest.*
-      // 逐文件行占绝大多数（每张照片一行），但展示层把它们过滤掉——
-      // 200 条上限下，一次几百张的备份就能把全部设备级事件挤出窗口，
-      // 活动记录页看着"没几条"其实是被饿死的。IPC 侧 clamp 上限 1000
-      // （ipc.rs audit.list），500 在上限内。
+      // 主数据源。#1044 B1：给用户看哪些由 daemon 决定，且在截断之前过滤
+      // （visibility:"user"），逐文件的 ingest.* 不再占 500 条窗口。
       try {
-        const au = await call("audit.list", { limit: 500 });
+        const au = await call("audit.list", { limit: 500, visibility: "user" });
         auditEvents = (au.events ?? []).slice().sort((x, y) => (y.ts ?? 0) - (x.ts ?? 0));
         auditError = "";
       } catch (e) {
@@ -369,7 +371,7 @@
       }
     } catch (e) {
       // DESK-63 (#946): only the `status` probe can reach here now
-      // (devices.list has its own catch below; watermarks / activity /
+      // (devices.list has its own catch below; watermarks /
       // audit were already individually guarded). This is a data failure
       // for THIS refresh — not a service-state decision. The Rust event
       // stream owns that, and the failure reason is in desktop.log.
@@ -379,8 +381,8 @@
     }
   }
 
-  // AUDIT-02：操作结果、身份和诊断噪音过滤由 auditProjection.js 统一
-  // 处理，页面只传当前设备索引，避免各页面重新实现审计合同。
+  // AUDIT-02：文案与身份由 auditProjection.js 统一渲染，页面只传当前设备
+  // 索引；可见集与计数分类由 daemon 给出（#1044）。
 
   // 2026-08-18（用户反馈④）：精确时刻——humanTime 的相对说法（"昨天
   // 14:32"/"周三"/"08-11"）读起来舒服，但超过 7 天就只剩日期没有钟点，
@@ -394,8 +396,8 @@
   }
   // AUDIT-01: 批次备份的 backup.started/backup.finished 会话审计已经
   // 随本卡移除（card 决定：旧 batch backup.* 不再作为任何活动页或统计
-  // 来源）——耗时统计随之一起下线，不用 activity.list 的批次时间伪造
-  // 一个「耗时」出来（那张表只有到达时间，没有会话起止）。
+  // 来源）——耗时统计随之一起下线，不拿批次到达时间伪造一个「耗时」出来
+  // （没有会话起止）。
 
   // MOB-29: 用户点过「知道了」的时刻——**只压住这一刻及之前的删除**，
   // 之后再删又会出来（一次 dismiss 不换来永久静默）。刻意只存在内存里：
@@ -406,11 +408,9 @@
     externalDeleteNotice(auditEvents, nowMs, { dismissedAt: deleteWarnDismissedAt })
   );
 
-  // AUDIT-02：活动表只展示用户结果、数据风险和安全事实。连接、控制、
-  // 路径/逐项 ingest 噪音仍留在诊断层，不伪装成用户历史。
-  const visibleAudit = $derived(
-    auditEvents.filter(isVisibleAudit)
-  );
+  // AUDIT-02：活动表只展示用户结果、数据风险和安全事实——可见集由
+  // daemon 给出（audit.list visibility:"user"），这里不再二次过滤。
+  const visibleAudit = $derived(auditEvents);
   // AUDIT-01: 本周「新备份/去重跳过」统计原本读 backup.finished 的
   // ingested=/duplicates= 汇总；该审计事件已随本卡移除（card 决定：
   // 旧 batch backup.* 不再作为任何活动页或统计来源），且 Flow 路径的
@@ -425,34 +425,30 @@
   // 颜色值全来自 tokens.css，见其注释）
   const DOT_BG = { idle: "bg-idle", act: "bg-act", safe: "bg-safe", wait: "bg-waiting" };
 
+  // #1044 B4：行状态（含优先级：已断开 > 需要看看 > 正在传输 > 在线态）
+  // 由 daemon 给出（devices.list 的 `row_state`），这里只按结论取文案。
   function deviceRow(d, now) {
-    // DEV-03: 已断开的设备先于一切分支返回——它不该参与「几天没备份了」
-    // 告警（授权都没了，催用户去开 App 是错的），也不该借用「离线」话术。
-    const disconnected = disconnectedRow(d, humanTime(d.revoked_at, now));
-    if (disconnected) return disconnected;
     const wm = watermarks[d.node_id];
     const lastBackupAt = wm?.last_backup_at ?? null;
     const backupTime = humanTime(lastBackupAt, now);
-    const alert = needsAttention(lastBackupAt, now);
-    if (alert) {
-      return {
-        alert: true,
-        dot: "act",
-        sub: t("ui.device_no_backup_days", { n: daysSince(lastBackupAt, now) }),
-        right: t("ui.device_needs_attention"),
-      };
-    }
-    // NET-05 has priority over generic presence only while this exact device
-    // owns an active Flow fetch. On every terminal path flow_connection=null,
-    // so the established presence display immediately resumes.
-    const flow = flowConnectionText(d.flow_connection);
-    if (flow) {
-      return {
-        alert: false,
-        dot: flow.dot,
-        sub: flow.sub,
-        right: backupTime ? t("ui.device_last_backup", { time: backupTime }) : t("ui.device_never_backed_up"),
-      };
+    const backupRight = backupTime ? t("ui.device_last_backup", { time: backupTime }) : t("ui.device_never_backed_up");
+    switch (d.row_state) {
+      case "disconnected":
+        // DEV-03: 不借用「离线」话术，也不参与「几天没备份」告警。
+        return disconnectedRow(humanTime(d.revoked_at, now));
+      case "needs_attention":
+        return {
+          alert: true,
+          dot: "act",
+          sub: t("ui.device_no_backup_days", { n: daysSince(lastBackupAt, now) }),
+          right: t("ui.device_needs_attention"),
+        };
+      case "transferring": {
+        // NET-05: 只在这台设备正有 Flow 传输时显示传输路径。
+        const flow = flowConnectionText(d.flow_connection);
+        if (flow) return { alert: false, dot: flow.dot, sub: flow.sub, right: backupRight };
+        break;
+      }
     }
     const pres = presenceText(
       d.presence,
@@ -460,12 +456,7 @@
       relativeTime(d.last_seen, now),
       humanTime(d.last_seen, now)
     );
-    return {
-      alert: false,
-      dot: pres.dot,
-      sub: pres.sub,
-      right: backupTime ? t("ui.device_last_backup", { time: backupTime }) : t("ui.device_never_backed_up"),
-    };
+    return { alert: false, dot: pres.dot, sub: pres.sub, right: backupRight };
   }
 
   // 设计稿离线版：总览标题副标题是"全家 N 张照片…"+"最近一次备份：
@@ -475,7 +466,7 @@
   const lastBackupOverall = $derived.by(() => {
     let best = null;
     for (const d of devices) {
-      if (d.revoked) continue;
+      if (d.removal !== "none") continue;
       const wm = watermarks[d.node_id];
       if (!wm?.last_backup_at) continue;
       if (!best || wm.last_backup_at > best.at) best = { at: wm.last_backup_at, name: d.name };
@@ -489,24 +480,20 @@
   // 2026-08-18（用户反馈①）：卡里展示 3 行、按「最新活跃」排。活跃度
   // 取 max(last_seen, last_backup_at)——两者都是"这台设备最近有动静"的
   // 真实证据，只看其中一个都会漏（刚连上还没备份 / 备份完就锁屏离线）。
-  // 告警设备（needsAttention）仍然全部置顶且不受 3 行上限挤出：这张卡的
+  // 告警设备（needs_attention）仍然全部置顶且不受 3 行上限挤出：这张卡的
   // 使命是"一眼确认备份没坏"，而告警设备按定义就是最不活跃的那批，纯
   // 活跃排序恰好会把最该看见的行排到最后。
   const OVERVIEW_ROWS = 3;
-  function lastActivityAt(d) {
-    const wm = watermarks[d.node_id];
-    return Math.max(d.last_seen ?? 0, wm?.last_backup_at ?? 0);
-  }
+  // #1044 B4：最近活跃（max(last_seen, last_backup_at)）与告警判定由 daemon 给出。
+  const byActivity = (a, b) => (b.last_activity_at ?? 0) - (a.last_activity_at ?? 0);
   const waterRows = $derived.by(() => {
-    // 水位卡问的是「在用设备的备份健康度」——已断开/已移除的都不该算进来，
-    // 所以这里是 `!d.revoked`（比「家人与设备」列表的口径更窄），不是 DEV-03
-    // 那个 isOwnerRemoved。已断开的设备催用户「去开 App 备份」是错的。
-    const active = devices.filter((d) => !d.revoked);
-    const withRow = active
-      .map((d) => ({ d, row: deviceRow(d, nowMs) }))
-      .sort((a, b) => lastActivityAt(b.d) - lastActivityAt(a.d));
-    const alerts = withRow.filter((x) => x.row.alert);
-    const ok = withRow.filter((x) => !x.row.alert);
+    // 水位卡问的是「在用设备的备份健康度」——已断开/已移除的都不该算进来
+    // （比「家人与设备」列表的口径更窄）。已断开的设备催用户「去开 App
+    // 备份」是错的。
+    const active = devices.filter((d) => d.removal === "none").sort(byActivity);
+    const withRow = active.map((d) => ({ d, row: deviceRow(d, nowMs) }));
+    const alerts = withRow.filter((x) => x.d.needs_attention);
+    const ok = withRow.filter((x) => !x.d.needs_attention);
     const shown = [...alerts, ...ok.slice(0, Math.max(0, OVERVIEW_ROWS - alerts.length))];
     return { shown, moreOk: Math.max(0, active.length - shown.length) };
   });
@@ -564,8 +551,8 @@
 
   async function confirmPair(accept, item) {
     try {
-      // UX-08: 逐行处理——pairing.confirm 精确确认该台；不带定位参数则
-      // 默认队首（老调用方兼容，语义不动）。
+      // UX-08: 逐行处理——pairing.confirm 精确确认该台。#1044：横幅与弹窗
+      // 都显式传要决定的那一行（node_id），不靠「不带参数 = daemon 队首」。
       //
       // DEV-04: 定位必须按 node_id。老设备改过名之后，弹窗上显示的是
       // 桌面的名字，而队列里存的是手机自报名——继续按名字找就是
@@ -578,14 +565,8 @@
       // DEV-06: 结果提示的名字以设备表为准。`r.device` 是队列里的自报名
       // （SM-S9210），弹窗标题用的却是 pending 行里 daemon 解析过的名字
       // （客厅的手机）——同一次操作两个名字。
-      //
-      // 横幅那两个按钮不带 item（走 daemon 队首语义），但队首前端也知道：
-      // `confirm()` 在 node_id/device_name 都缺时取 `queue` 的 0 号
-      // （ipc.rs:1142），而 `pending_summary` 遍历的就是同一个 `queue`、
-      // 同一个顺序（ipc.rs:1178-1183）——所以 `pendingList[0]` 正是要被
-      // 决定的那台，也正是横幅上已经显示着的那个名字（:1259）。
-      // `r.device` 留作最后兜底（老 daemon / 列表取不到）。
-      const shown = pairResultName(item ?? pendingList[0], r);
+      // `r.device` 留作最后兜底（列表取不到）。
+      const shown = pairResultName(item, r);
       flashMessage(
         accept ? t("ui.pair_allowed", { name: shown }) : t("ui.pair_denied", { name: shown }),
         accept ? "success" : "warning"
@@ -642,35 +623,22 @@
 
   async function openLibrary() {
     try {
-      const s = await call("status");
-      const dir = s.library_dir;
-      if (!dir) throw new Error(t("ui.library_dir_unknown"));
-      // originals/ 是照片所在；库刚建还没照片时打开库根目录。
-      try {
-        await revealItemInDir(`${dir}/originals`);
-      } catch (_) {
-        await revealItemInDir(dir);
-      }
+      await openLibraryDir({
+        getDir: () => invoke("library_dir"),
+        reveal: revealItemInDir,
+      });
     } catch (e) {
       flashMessage(t("ui.open_failed", { err: errText(e) }), "error");
     }
   }
 
-  // NET-13: 打开某台设备自己的存储目录——`originals/<node_id 全量 hex>/`
-  // 与 ingest 落位口径完全一致（crates/core-index/src/ingest.rs
-  // device_dir()：node_id 字节逐位 hex，devices.list 返回的 node_id 已经是
-  // 同一份 hex 字符串，不需要额外转换）。该设备还没备份过时目录不存在，
-  // 退回打开 originals/ 根目录，不假装有内容。
+  // NET-13: 打开某台设备自己的存储目录。路径由 daemon 给（#1044
+  // `device.folder`：与入库落位同一口径的绝对路径；该设备还没备份过时
+  // daemon 退回 originals/），桌面不再自己拼路径。
   async function openDeviceFolder(nodeId) {
     try {
-      const s = await call("status");
-      const dir = s.library_dir;
-      if (!dir) throw new Error(t("ui.library_dir_unknown"));
-      try {
-        await revealItemInDir(`${dir}/originals/${nodeId}`);
-      } catch (_) {
-        await revealItemInDir(`${dir}/originals`);
-      }
+      const r = await call("device.folder", { node_id: nodeId });
+      await revealItemInDir(r.path);
     } catch (e) {
       flashMessage(t("ui.device_open_folder_failed", { err: errText(e) }), "error");
     }
@@ -716,7 +684,7 @@
   // DESK-23 (#172)：Rust 侧每次关窗都会发 `hidden-to-tray`，要不要弹在这里判。
   // 判定规则本身抽在 trayHint.js 里单测（macOS 那条没 Mac 验不了端到端，
   // 但规则可以测）；这里只负责读写标记和真正把话说出来。
-  // DESK-69 (#997)：平台统一取 plugin-os 的 platform()（platformUx.js）。
+  // #1043：要不要提示由 Rust 侧平台适配器回答（platformUx.js 的 platform_ux）。
   async function onHiddenToTray() {
     let shown = null;
     try {
@@ -725,7 +693,7 @@
       // 隐私模式/存储被禁时 localStorage 会抛。当成"没提示过"继续走：
       // 多提示一次可以忍，静默不行。
     }
-    if (!shouldShowTrayHint(currentPlatform(), shown)) return;
+    if (!shouldShowTrayHint(await loadPlatformUx(), shown)) return;
     try {
       localStorage.setItem(TRAY_HINT_SHOWN_KEY, "1");
     } catch {
@@ -756,13 +724,16 @@
     // I18N-03 (#492)：托盘菜单跟窗口同一种语言——把这里判出来的语言报给
     // Rust 壳，它从同一份 assets/i18n 取托盘文案。失败只影响托盘语言，静默。
     invoke("set_tray_locale", { lang: getLocale() }).catch(() => {});
+    loadPlatformUx()
+      .then((ux) => (platformUx = ux))
+      .catch((e) => console.warn("[platform_ux] unavailable:", e));
     checkWizard();
     // DESK-02①: 更新检查放首次 status 落地后（#852 起 test / stable 同一条插件路径，
     // 通道由构建期写进插件的清单地址决定，不再在前端推导）。
     refresh().then(() => checkForUpdate(false));
     // IPC-02: 事件驱动为主——daemon 事件（扫码/配对落定/备份落地/设备
     // 变化）即时刷新；轮询降级为 60s 兜底对账（防漏事件，不再是主通道）。
-    timer = setInterval(refresh, 60000); // 契约: 兜底对账 60s
+    timer = setInterval(refresh, FALLBACK_REFRESH_MS); // 契约: 兜底对账 60s
     // 订阅线程在 src-tauri setup 启动（start_event_stream），事件经
     // `daemon-event` 转发——这里只负责收。
     listen("daemon-event", onDaemonEvent).then((f) => (unlisten = f));
@@ -855,6 +826,9 @@
     if (!next) return;
     const previous = serviceState;
     serviceState = next;
+    // 向导要不要显示取决于「服务是否在线」，那是 Rust 一侧的状态——每次服务状态
+    // 变化都重读 wizard_state，拿 Rust 的结论（#1045）。
+    checkWizard().catch(() => {});
     if (next === "running") {
       clearTimeout(selfHealRetry);
       // DESK-38 (#475) semantics: only a real recovery resets/reconciles the
@@ -867,9 +841,8 @@
       maybeSelfHeal();
     } else if (next === "stopped") {
       clearTimeout(selfHealRetry);
-      // Tray stop reaches here before the toast; re-read the wizard so a
-      // user-stopped service is not mistaken for an abandoned wizard.
-      checkWizard().catch(() => {});
+      // 托盘停止先走到这里、再弹 toast：上面已经按 Rust 的结论重读了
+      // wizard_state（用户停的不会被当成向导中途退出）。
     }
   }
 
@@ -886,16 +859,8 @@
       return;
     }
     clearTimeout(selfHealRetry);
-    // The state event can arrive before the first wizard_state response.
-    // Load it now instead of silently skipping the one self-heal window.
-    if (!wizard) {
-      try {
-        await checkWizard();
-      } catch (_) {
-        return;
-      }
-    }
-    if (!wizard?.configured || wizard?.user_stopped) return;
+    // 要不要自愈（配置过、且不是用户主动停的）由 Rust 的 `self_heal_allowed`
+    // 在调用那一刻判；前端只管冷却节流，不拿向导状态自己拼一份判据（#1045）。
     const now = Date.now();
     const wait = SELF_HEAL_COOLDOWN_MS - (now - lastSelfHealAttempt);
     if (wait > 0) {
@@ -973,56 +938,14 @@
   // UPD-01: 启动时检查一次更新（tauri-plugin-updater；manifest 在
   // tauri.conf.json endpoints，release 资产直链——draft/无 release 时
   // 404 = 无更新，静默）。失败静默，绝不打扰用户。
-  // UPD-01 返工：check 阶段任何错误（404=无正式 release、网络不可达）
-  // 一律静默返回——tauri 的 check() 只有 204 才当「无更新」，404 会
-  // reject，原实现把 404 也显示成「更新失败」，无 release 时每次启动
-  // 都弹错。只有用户点了「下载安装」后的下载/安装失败才上文案。
-  // T-081: 设置页「检查更新」手动入口复用同一函数（manual=true 时
-  // 「已是最新」也给一句反馈，不再沉默）。
+  // UPD-01 / #616：check 阶段失败记为 updatePhase = "failed"（不弹窗），
+  // 与「没有新版本」（up-to-date）分开，不把网络问题伪装成已是最新。
+  // T-081: 设置页「检查更新」手动入口复用同一函数。形参 `manual` 目前未被读取：
+  // 自动与手动检查都把结果写进 updatePhase（含 up-to-date / failed），由设置页展示。
   // #852：test 通道与 stable 走同一条插件应用内更新（检查 → 下载 → 验签 → 替换 → 重启），
   // 只有清单地址不同。地址是构建期写进插件配置的：tools/release/tauri-config.mjs 在 test 版本上
   // 把 endpoints 换成 test-channel 里本端的分端清单（macOS = manifest-macos.json，
   // Windows = manifest-windows.json），这里不再区分通道。
-
-  // DAE-04: 「桌面壳自己的版本」与「daemon 版本」是否同一次发布——只比
-  // 核心三段数字，忽略 v 前缀和 -test.N 后缀：release 里 daemon 报
-  // "v0.3.3-test.1"、壳报 "0.3.3"（tauri.conf.json），是同一份；更新
-  // 装好后壳变 0.3.4、daemon 还是 v0.3.3-test.1 → 核心不同 → 真不一致。
-  function sameRelease(a, b) {
-    const core = (s) =>
-      String(s)
-        .replace(/^v/i, "")
-        .split("-")[0]
-        .split(".")
-        .map((x) => parseInt(x, 10) || 0);
-    const ca = core(a);
-    const cb = core(b);
-    return (
-      ca.length === 3 &&
-      cb.length === 3 &&
-      ca[0] === cb[0] &&
-      ca[1] === cb[1] &&
-      ca[2] === cb[2]
-    );
-  }
-
-  // UPD-06 (#616)：版本高低判据（只比核心三段，忽略 v 前缀与 -test.N 后缀）。
-  // 用来**分向**：服务版本低于壳版本才是 DAE-04「重启后台服务」的场合。
-  function isOlder(a, b) {
-    const core = (s) =>
-      String(s)
-        .replace(/^v/i, "")
-        .split("-")[0]
-        .split(".")
-        .map((x) => parseInt(x, 10) || 0);
-    const ca = core(a);
-    const cb = core(b);
-    if (ca.length !== 3 || cb.length !== 3) return false;
-    for (let i = 0; i < 3; i += 1) {
-      if (ca[i] !== cb[i]) return ca[i] < cb[i];
-    }
-    return false;
-  }
 
   // UPD-06 (#616)：更新流程 = **显式状态机**。界面只呈现，不靠用户猜。
   // idle → checking → (up-to-date | available → downloading → installing → installed → relaunching) | failed
@@ -1119,57 +1042,23 @@
       updatePhase = "idle";
       return;
     }
-    // W1 (2026-08-26 real-box run): downloadAndInstall() was failing on
-    // Windows because the resident ppf-daemon.exe (never stopped just
-    // by closing the window — it lives on in the tray by design) holds
-    // its own exe file open, so the installer can't overwrite it.
-    // Normal users shouldn't have to know "go stop the background
-    // service in the tray first" — pause it ourselves, then resume it
-    // after a successful install. Best-effort on both ends: pause/resume
-    // failures are logged but never block the update attempt or hide a
-    // real downloadAndInstall error behind a pause/resume error.
+    // #1060：下载 → 暂停 daemon → 安装（两平台一致），顺序在 updateFlow.js。
+    // 暂停放在下载之后：下载期间备份不被打断；暂停由壳侧完成（不写用户停止标记）。
     try {
-      await invoke("pause_daemon_for_update");
-    } catch (e) {
-      console.warn("[updater] pause_daemon_for_update failed (continuing anyway):", e);
-    }
-    try {
-      updatePhase = "downloading";
-      let total = 0;
-      let done = 0;
-      // UPD-06 (#616)：官方进度回调（Started / Progress / Finished）——"过程可见"
-      // 的唯一来源。旧实现是裸调用 downloadAndInstall()，用户只能干等几分钟，
-      // 期间还能重复点。总长拿不到时 updateProgress 保持 null（只画不确定态，
-      // 绝不编一个假百分比）。
-      await update.downloadAndInstall((ev) => {
-        if (ev.event === "Started") {
-          total = ev.data?.contentLength || 0;
-          done = 0;
-          updateProgress = total ? 0 : null;
-        } else if (ev.event === "Progress") {
-          done += ev.data?.chunkLength || 0;
-          updateProgress = total ? Math.min(100, Math.round((done / total) * 100)) : null;
-        } else if (ev.event === "Finished") {
-          updatePhase = "installing";
-          updateProgress = 100;
-        }
+      await runUpdate({
+        update,
+        pauseDaemon: () => invoke("pause_daemon_for_update"),
+        // 失败恢复必须走 resume_after_failed_update：先关「为更新暂停」窗口再自愈。
+        selfHeal: () => invoke("resume_after_failed_update"),
+        onPhase: (p) => (updatePhase = p),
+        // UPD-06 (#616)：官方进度回调是"过程可见"的唯一来源；总长拿不到时
+        // 保持 null（只画不确定态，绝不编假百分比）。
+        onProgress: (pct) => (updateProgress = pct),
+        warn: (m, e) => console.warn("[updater]", m, e),
       });
-      // Bring the daemon back — on macOS launchd's KeepAlive would
-      // eventually do this on its own, but Windows has no such
-      // self-healing (plain Run key), so this must be explicit on
-      // every platform rather than relying on macOS's safety net to
-      // mask a Windows gap. Daemon's single-instance claim protocol
-      // makes a redundant spawn harmless if something already revived
-      // it first.
-      // #456 后续：用户主动停了服务就不拉——Rust 在调用这一刻读盘上的
-      // 停止标记（和 self_heal_daemon 同一来源），返回 false = 按规则跳过，
-      // 服务保持停止，界面照旧给「启动后台服务」。
-      try {
-        const resumed = await invoke("resume_daemon_after_update");
-        if (resumed === false) console.info("[updater] service was stopped by the user; keeping it stopped after the update");
-      } catch (e) {
-        console.warn("[updater] resume_daemon_after_update failed after a successful install:", e);
-      }
+      // #1046（S-11）：装完不在这里把 daemon 拉回来——更新流程是「停 → 替换 →
+      // 重启壳 → 新壳启动对账」：新壳启动时由 Rust 对账（开机自启登记 + 内核，
+      // 不是用户停的才拉）。Windows 的安装器本来就会退出旧壳、拉起新壳。
       // UPD-05 (#605) + UPD-06 (#616)：装完由用户点「好」后换壳——这一跳跑的是
       // **旧壳的代码**，所以"新对话框"只对装过这一版之后的机器生效；旧壳仍会走到
       // 这里（它自己的老文案 + 老动作），这也是"存量壳只能靠 daemon owner 兜"的原因。
@@ -1179,38 +1068,30 @@
       updatePhase = "installed";
       await relaunchShellNow();
     } catch (e) {
-      // The daemon we paused above is still down — bring it back so a
-      // failed update doesn't also leave backups silently stopped.
-      // （用户主动停过的不拉，判据同上，在 Rust 侧。）
-      try {
-        await invoke("resume_daemon_after_update");
-      } catch (_) {}
+      // 失败时的自愈已在 runUpdate 里做过（#1046：用户主动停过的不拉）。
       const msg = String(e);
       // UPD-06 (#616)：失败也是一个**显式状态**（原因留在界面上，可重试），
       // 不再只靠一闪而过的 toast。
       updatePhase = "failed";
       updateError = msg;
-      // Heuristic for the Windows file-in-use class of failure (the one
-      // this pause/resume dance is meant to prevent) — if pause/resume
-      // itself couldn't clear it (third-party lock, AV scan holding the
-      // handle, etc.), tell the user the one concrete thing they can do
-      // instead of surfacing a raw OS error string.
-      // The \u escapes are the zh-CN Windows wording of the same two OS errors
-      // (拒绝访问 / 正被另一个进程使用) — OS text we match, not our copy.
-      if (/being used by another process|access is denied|\u62d2\u7edd\u8bbf\u95ee|\u6b63\u88ab\u53e6\u4e00\u4e2a\u8fdb\u7a0b\u4f7f\u7528/i.test(msg)) {
-        flashMessage(t("ui.update_failed_file_locked"), "error");
-      } else {
-        flashMessage(t("ui.update_failed", { err: msg }), "error");
-      }
+      // Windows「文件被占用」这类失败（pause/resume 也清不掉的：第三方占用、
+      // 杀软扫描握着句柄等）给用户一句能照做的话，而不是系统原文。判据在
+      // Rust 侧（#1043：按系统错误码，由平台适配器回答），这里只拿 key。
+      let key = "ui.update_failed";
+      try {
+        key = await invoke("update_failure_key", { message: msg });
+      } catch (_) {}
+      flashMessage(t(key, { err: msg }), "error");
     }
   }
 
   // UX-04: 徽章 = 服务态二元（运行中 / 后台服务未运行），不再展示连接
   // 状态（直连/中继是连接路径事实，不属于服务态；现状 ONLINE_DIRECT 是
   // 状态机默认值，当作徽章文案是假话）。T-081: 徽章落位侧栏底部胶囊，
-  // 只说服务状态；连接状态归属每台设备行（daemon 尚未暴露 per-device
-  // 连接事实，行内先留结构：状态点 + 右侧槽位）。
-  const pairedCount = $derived(status ? status.devices - status.revoked : 0);
+  // 只说服务状态；连接状态归属每台设备行（daemon 的 devices.list 每行给出
+  // presence / connection / flow_connection / row_state）。
+  // #1044 B4：「已配对 N 台」= 设备页列表正常行数（含自己断开的），daemon 给数。
+  const pairedCount = $derived(status?.paired_devices ?? 0);
   // T-092: 磁盘水位（status.disk_free_bytes/disk_total_bytes 可能 null——
   // 拿不到时三个值都是 null，设置页整行隐藏，绝不渲染 undefined/NaN）
   const diskFree = $derived(formatBytes(status?.disk_free_bytes ?? null));
@@ -1246,6 +1127,7 @@
   let sentinelEl = $state(null); // 墙底哨兵 → 触发下一页
   let photoViewer = $state(null); // {hash, taken_at, media_type} 大图目标
   let viewerSrc = $state(null); // 大图 data URL（原图或 1024 降级）
+  let viewerSrcIsOriginal = $state(false); // viewerSrc 是原图（true）还是缩略图
   let viewerPath = $state(null); // 原文件绝对路径（Finder 揭示）
   // MOB-47: 视频走 asset 协议磁盘 streaming 的 src；video 资产打开时设置，
   // 图片资产永远为 null（图片仍走 viewerSrc 的 <img> data URL 路径）。
@@ -1355,6 +1237,7 @@
   $effect(() => {
     const v = photoViewer;
     viewerSrc = null;
+    viewerSrcIsOriginal = false;
     viewerPath = null;
     viewerVideoSrc = null;
     viewerVideoToken = null;
@@ -1391,16 +1274,14 @@
         }
       })();
     } else {
-      // 图片：原图 data URL，失败 → 1024 缩略图（与改动前完全一致）。
+      // 图片（#1054）：原图按 daemon 给的真实 media_type 组 data URL；daemon 对
+      // HEIC/RAW 等不可显示格式返回 NotFound → 1024 缩略图；<img> 加载失败另有
+      // onViewerImgError 兜底。编排在 lib/viewerImage.js（可单测）。
       (async () => {
-        try {
-          const o = await call("asset.original", { hash: v.hash });
-          if (!cancelled) viewerSrc = `data:image/jpeg;base64,${o.data_base64}`;
-        } catch (_) {
-          try {
-            const t = await call("thumb.get", { hash: v.hash, size: 1024 });
-            if (!cancelled) viewerSrc = `data:image/jpeg;base64,${t.jpeg_base64}`;
-          } catch (_) {}
+        const r = await loadImageViewer({ call, isCancelled }, { hash: v.hash });
+        if (!cancelled && (r.kind === "original" || r.kind === "thumb")) {
+          viewerSrcIsOriginal = r.kind === "original";
+          viewerSrc = r.src;
         }
         try {
           const p = await call("asset.path", { hash: v.hash });
@@ -1430,6 +1311,26 @@
   // 错误事件必须归属于「发起它的那一次渲染」：从事件元素的 data-* 读出该
   // 元素自己渲染时的 gen/hash（不可变快照），而不是读可变全局；这样旧 A
   // 的迟到错误（即使 hash 与 B 不同、或关闭重开同 hash）都不会覆盖新 viewer。
+  // #1054：`<img>` 解不了原图（WebView 不支持的编码等）→ 回退 1024 缩略图；
+  // 缩略图也出错才亮降级提示。
+  async function onViewerImgError(event) {
+    const hash = event?.currentTarget?.dataset?.imgHash;
+    if (!hash) return;
+    const r = await handleImageError({
+      call,
+      hash,
+      showingOriginal: viewerSrcIsOriginal,
+      isActive: () => photoViewer?.hash === hash,
+    });
+    if (r.kind === "thumb") {
+      viewerSrcIsOriginal = false;
+      viewerSrc = r.src;
+    } else if (r.kind === "failed") {
+      viewerSrc = null;
+      viewerFailed = true;
+    }
+  }
+
   async function onVideoError(event) {
     const el = event?.currentTarget;
     const rawGen = el?.dataset?.videoGen;
@@ -1447,6 +1348,7 @@
     const r = out.result;
     if (r.kind === "thumb") {
       viewerVideoSrc = null;
+      viewerSrcIsOriginal = false;
       viewerSrc = r.src;
     } else {
       viewerFailed = true;
@@ -1456,7 +1358,7 @@
 
 <Toaster position="top-right" />
 
-{#if shouldShowWizard(wizard, isServiceRunning(serviceState))}
+{#if wizard?.show_wizard}
   <!-- T-042: onboarding 进行中不展示"后台服务未运行"终态——服务本来
        就要在这一步才被拉起，提前暴露只有困惑（xixi 实测反馈 1）。
        配置写了但服务没注册 = wizard 中途退出，重进继续走 wizard
@@ -1472,9 +1374,12 @@
     <!-- W1 (2026-08-26): 整块按平台选择组件渲染，不在单个 Wizard 内部
          塞 if isWindows —— macOS/Windows 的 onboarding 是两条完全独立的
          文案+流程分支，拆成两个组件更好维护、也不会互相牵连回归。 -->
-    <!-- DESK-69 (#997)：按 platformUx 的显式分支选；Linux 等未覆盖的平台
-         直接报错，不再默认落到 macOS 那份。 -->
-    {#if wizardVariant(currentPlatform()) === "windows"}
+    <!-- DESK-69 (#997) / #1043：按 Rust 侧给的「睡眠由谁负责」选视图
+         （platformUx.wizardVariant）；没有桌面向导的平台直接报错，不再默认落到
+         macOS 那份。能力还没问到时先不渲染。 -->
+    {#if !platformUx}
+      <!-- platform_ux 尚未返回 -->
+    {:else if wizardVariant(platformUx) === "daemon-sleep"}
       <WizardWindows
         defaultDir={wizard.default_dir}
         configuredLibraryDir={wizard.configured_library_dir}
@@ -1531,7 +1436,7 @@
               {:else}
                 {t("ui.paired_count", { n: pairedCount })}{#if photoCount !== null}{` · ${t("ui.overview_library_count", { n: photoCount })}`}{/if}
               {/if}
-              {#if status && status.revoked > 0}{t("ui.revoked_count", { n: status.revoked })}{/if}
+              {#if status?.removed_devices > 0}{t("ui.revoked_count", { n: status.removed_devices })}{/if}
             </p>
           </div>
 
@@ -1565,8 +1470,10 @@
                   {/if}
                 </div>
                 <div class="flex flex-none flex-wrap gap-[10px]">
-                  <Button variant="secondary" onclick={() => confirmPair(false)}>{t("ui.deny")}</Button>
-                  <Button onclick={() => confirmPair(true)}>{t("ui.allow")}</Button>
+                  <!-- #1044：按钮显式带横幅上点名的那一台（node_id），列表还没
+                       取到时不可点——不让 daemon 按「队首」替我们猜是哪台。 -->
+                  <Button variant="secondary" disabled={pendingList.length === 0} onclick={() => confirmPair(false, pendingList[0])}>{t("ui.deny")}</Button>
+                  <Button disabled={pendingList.length === 0} onclick={() => confirmPair(true, pendingList[0])}>{t("ui.allow")}</Button>
                 </div>
               </div>
             {/if}
@@ -1621,7 +1528,7 @@
                     {devicesError}
                   </p>
                 {/if}
-                {#if devices.filter((d) => !d.revoked).length === 0}
+                {#if devices.filter((d) => d.removal === "none").length === 0}
                   <!-- 2026-08-17：等高后空状态垂直居中——不然矮内容顶在
                        卡片顶部，下面一截空白显得像没做完。 -->
                   <div class="flex flex-1 items-center justify-center">
@@ -1724,7 +1631,7 @@
                    槽位；daemon 尚未暴露机型/连接事实，数据未接前显示中性占位，
                    不捏造「已直连」。不再渲染原始 role 字串。 -->
               <!-- 2026-08-18（用户反馈③）：按最近一次有动静倒序（新的在上）
-                   ——与总览水位卡同一个 lastActivityAt 口径（last_seen 与
+                   ——与总览水位卡同一个 last_activity_at 口径（last_seen 与
                    last_backup_at 取大者），不是 daemon 返回的入库顺序。 -->
               <!-- DEV-03: 两种「离开」要分开。手机点「断开与这台电脑的连接」
                    不是业主的决定，那台设备必须留在主列表里标「已断开」——
@@ -1733,9 +1640,9 @@
                    判据是 daemon 给的 revoked_by，不是 revoked 这个布尔位。
                    来源未知的历史行（DEV-03 之前留下的）按「已移除」处理。 -->
               {@const activeDevices = devices
-                .filter((d) => !isOwnerRemoved(d))
-                .sort((a, b) => lastActivityAt(b) - lastActivityAt(a))}
-              {@const removedDevices = devices.filter(isOwnerRemoved)}
+                .filter((d) => d.removal !== "removed")
+                .sort(byActivity)}
+              {@const removedDevices = devices.filter((d) => d.removal === "removed")}
               {#if activeDevices.length === 0}
                 <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.no_devices")}</p>
               {:else}
@@ -1831,7 +1738,7 @@
         </section>
       {:else if page === "photos"}
         <!-- DESK-03: 照片墙——与手机时间线同一数据源（query.timeline +
-             thumb.get），本机直连 daemon 拉取；分组 今天/本月/更早；
+             thumb.get），本机直连 daemon 拉取；分组 今天/昨天/本周/本月/更早；
              点开 = 原图内存查看（不落盘）+「在 Finder 中显示」原文件。 -->
         <section class="page" data-testid="page-photos">
           <!-- DESK-08: 照片页已迁 Tailwind + 组件库（Card + Button）；数据流
@@ -1954,7 +1861,7 @@
       {:else if page === "settings"}
         <section class="page" data-testid="page-settings">
           <!-- DESK-08: 设置页已迁 Tailwind + Card/Button；所有 IPC 调用与
-               条件渲染（daemonStale 重启行/磁盘水位行）一字未动。 -->
+               条件渲染（serviceIsStale 重启行/磁盘水位行）一字未动。 -->
           <div>
             <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.settings")}</h2>
           </div>
@@ -2063,6 +1970,25 @@
                 {/if}
                 <!-- #550：诊断包入口已收进托盘菜单（「导出诊断包」），设置页不再展示。 -->
               </Card>
+              <!-- #1044 B13：「关于」——壳与后台服务（内核）版本分开列；两者不一致
+                   （daemon 下发的 status.shell_relation ≠ same）时标出来。
+                   日常只显示一个产品版本号（页脚），这里才把两者摆开。 -->
+              <Card size="flush" class="text-[16px]" data-testid="about-card">
+                <h3 class="m-0 px-[22px] pt-[16px] text-[15px] font-semibold">{t("ui.about")}</h3>
+                <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[14px] text-[15px] font-medium">
+                  <span>{t("ui.about_shell_version")}</span>
+                  <span class="font-mono text-[13.5px] font-normal text-ink-40" data-testid="about-shell-version">{shellVersion ? `v${shellVersion}` : "—"}</span>
+                </div>
+                <div class="flex items-center justify-between gap-[12px] px-[22px] py-[14px] text-[15px] font-medium">
+                  <span>{t("ui.about_service_version")}</span>
+                  <span class="flex items-center gap-[8px] font-mono text-[13.5px] font-normal text-ink-40" data-testid="about-service-version">
+                    {#if versionsDiffer}
+                      <span class="env-badge" data-testid="about-versions-differ">{t("ui.about_versions_differ")}</span>
+                    {/if}
+                    {serviceVersion ? `v${serviceVersion}` : "—"}
+                  </span>
+                </div>
+              </Card>
               {#if canStopService(serviceState)}
                 <Card variant="danger" class="text-[16px]">
                   <h3 class="mb-[12px] text-[15px] font-semibold text-act">{t("ui.stop_service")}</h3>
@@ -2151,7 +2077,13 @@
                   onerror={onVideoError}></video>
               {/key}
             {:else if viewerSrc}
-              <img class="photo-viewer-img" src={viewerSrc} alt="" />
+              <img
+                class="photo-viewer-img"
+                src={viewerSrc}
+                alt=""
+                data-img-hash={photoViewer?.hash}
+                onerror={onViewerImgError}
+              />
             {:else if viewerFailed}
               <div class="photo-viewer-loading">{t("ui.video_load_failed")}</div>
             {:else}
@@ -2350,10 +2282,9 @@
 
   /* 2026-08-13：列表本身内部滚动，不是靠整个右边内容区变高再滚动
      （用户实测反馈：应该是表格内滚动，游标加载，不是整个右边区域
-     滚动）。真正的游标分页（滚到底再补一批，而不是一次性 limit=100
-     取全量）需要 activity.list 后端加 cursor 参数——现状后端只有
-     limit，没有 before_ts/cursor，这部分先留白不假装做了，只把
-     "列表内部滚动"这一半先落地。 */
+     滚动）。真正的游标分页（滚到底再补一批，而不是一次性取全量）需要
+     后端加 cursor 参数，这部分先留白不假装做了，只把"列表内部滚动"
+     这一半先落地。 */
   main[data-page="log"] .page,
   main[data-page="photos"] .page,
   /* 2026-08-18（用户反馈③）：设备列表卡内滚——.page 撑满内容区高度是
@@ -2384,32 +2315,6 @@
   /* DESK-15：原生 button/.primary/.link-more 视觉规则已删——全部收编进
      Button 组件（variant=primary/secondary/danger/link，tone=safe），
      不再有第二套按钮视觉实现。 */
-  .qr-fallback {
-    align-self: stretch;
-    text-align: center;
-  }
-  .qr-fallback summary {
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--pp-safe);
-    list-style: none;
-  }
-  .qr-fallback summary::-webkit-details-marker {
-    display: none;
-  }
-  .qr-fallback .qrtext {
-    text-align: left;
-  }
-  .qrtext {
-    display: block;
-    word-break: break-all;
-    font-size: 12px;
-    background: var(--pp-linen);
-    padding: 10px;
-    border-radius: var(--pp-radius-control-sm);
-    margin-top: 6px;
-  }
   .version-footer {
     position: fixed;
     right: 14px;
@@ -2507,11 +2412,6 @@
 
 
 
-  /* UI-04b: 提示条脱离文档流——fixed 浮层，出现/消失不顶动下方内容。
-     改名成功/失败、复制成功等瞬时反馈都走这里；错误反馈同样可见
-     （5s 自动消失 + 手动 ×），只是不再占布局空间。 */
-  /* DESK-15：提示条（.message/.message-close）已收进 Notice 组件
-     （lib/components/ui/notice/notice.svelte），这里不再重复定义。 */
 
   
 

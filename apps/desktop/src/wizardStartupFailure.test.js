@@ -5,7 +5,7 @@
 //
 // 在这之前（QA-16 / #326）本仓没有组件渲染能力，这条链路的"护栏"是
 // `daemonStartupError.test.js` 里一段 `readFileSync` 源码 grep——它只检查
-// `invoke("daemon_startup_error")` 这个字符串在不在。把 Wizard.svelte:101 的
+// `invoke("daemon_startup_error")` 这个字符串在不在。把向导状态机（lib/wizardFlow.js）里的
 // `startupFailureText(stderr) ||` 删掉（只留兜底文案），字符串还在、行为已
 // 断，那条测试照样绿（#326 的 M3 变异，实测全绿）。
 //
@@ -15,7 +15,7 @@
 //   3. 兜底文案**没有**赢——`startupFailureText` 被摘掉时正是它顶上来，
 //      这条才是真正把 M3 钉死的判据。
 //
-// 反证（复现 #326 M3）：删掉 `Wizard.svelte:101` / `WizardWindows.svelte:99`
+// 反证（复现 #326 M3）：删掉 `lib/wizardFlow.js` finishSetup 里
 // 的 `startupFailureText(stderr) ||`，本文件必须红。
 import { cleanup, render, screen, fireEvent } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,9 +28,11 @@ import { setLocale } from "./lib/i18n.js";
 // 只搬字不改措辞，zh 下渲染结果必须和搬迁前逐字相同。
 setLocale("zh");
 
-// 那次真实事故的 stderr（装回旧版本 → 库的 migration 比二进制新）。
+// 那次真实事故的 stderr（装回旧版本 → 库的 migration 比二进制新）。#1044 起
+// daemon 自己认出原因、给 keyed 错误，壳拆成 { key, detail } 交给向导。
 const DAEMON_STDERR =
-  "Error: migration: migration 2 was previously applied but is missing in the resolved migrations";
+  "migration: migration 2 was previously applied but is missing in the resolved migrations";
+const STARTUP_ERROR = { key: "ui.startup_migration_guidance", detail: DAEMON_STDERR };
 // `startupFailureText` 认出 migration mismatch 时给的人话。
 const HUMAN = "这个版本比你的照片库旧。请装回新版本。";
 // 只在 stderr 拿不到时才该出现的兜底——它赢了就说明 stderr 那条路断了。
@@ -109,7 +111,7 @@ describe.each([
   });
 
   it("红条同时显示人话与 daemon 的 stderr 原文，兜底文案不许顶替它们", async () => {
-    daemonNeverBecomesReady({ startupError: DAEMON_STDERR });
+    daemonNeverBecomesReady({ startupError: STARTUP_ERROR });
 
     const text = await runToStartupFailure(Component);
 

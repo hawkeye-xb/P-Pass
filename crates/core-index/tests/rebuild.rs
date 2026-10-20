@@ -90,11 +90,7 @@ async fn ingest_one(
 ) {
     let src = dir.join(format!("staging-{tag}-{name}"));
     fs::write(&src, content).unwrap();
-    let media_type = match name.rsplit_once('.').map(|(_, e)| e) {
-        Some("jpg") => "image/jpeg",
-        Some("mp4") => "video/mp4",
-        _ => "application/octet-stream",
-    };
+    let media_type = core_index::media_type_for(Path::new(name)).unwrap();
     ing.ingest(&IncomingFile {
         src_path: src,
         file_name: name.into(),
@@ -340,4 +336,49 @@ async fn hidden_files_skipped_and_missing_originals_is_empty() {
     let report = rebuild(&db, &root, &LOCAL).await.unwrap();
     assert_eq!(report.indexed, 1);
     assert_eq!(dump(&db).await[0].1, "originals/real.jpg");
+}
+
+/// #1044 B3：rebuild 与 adopt 共用同一扫描，口径同上——非媒体文件不入库，
+/// 视频按 `media_kind` 给出 `video/*`。反证：去掉过滤，`indexed` 变成 5。
+#[tokio::test(flavor = "multi_thread")]
+async fn rebuild_indexes_only_media_files() {
+    let (dir, db, _ing) = setup().await;
+    let root = dir.path().join("library");
+    let originals = root.join("originals");
+    fs::create_dir_all(&originals).unwrap();
+    fs::write(originals.join("Thumbs.db"), b"thumbs cache").unwrap();
+    fs::write(originals.join("desktop.ini"), b"[.ShellClassInfo]").unwrap();
+    fs::write(originals.join("notes.txt"), b"shopping list").unwrap();
+    fs::write(originals.join("clip.avi"), b"a video").unwrap();
+    fs::write(originals.join("real.jpg"), b"real photo").unwrap();
+
+    let report = rebuild(&db, &root, &LOCAL).await.unwrap();
+
+    assert_eq!(report.indexed, 2);
+    let rows = dump(&db).await;
+    let paths: Vec<&str> = rows.iter().map(|r| r.1.as_str()).collect();
+    assert!(paths.contains(&"originals/clip.avi"));
+    assert!(paths.contains(&"originals/real.jpg"));
+    let avi = rows.iter().find(|r| r.1 == "originals/clip.avi").unwrap();
+    assert_eq!(
+        avi.2, "video/x-msvideo",
+        "avi 经重建入库也是视频（与监听同一张表）"
+    );
+}
+
+/// #1044 追加拍板：rebuild 同一口径——svg/ico 不入库，tiff 照收。
+#[tokio::test(flavor = "multi_thread")]
+async fn rebuild_skips_vector_images_and_icons() {
+    let (dir, db, _ing) = setup().await;
+    let root = dir.path().join("library");
+    let originals = root.join("originals");
+    fs::create_dir_all(&originals).unwrap();
+    fs::write(originals.join("logo.svg"), b"<svg/>").unwrap();
+    fs::write(originals.join("favicon.ico"), b"ico").unwrap();
+    fs::write(originals.join("scan.tiff"), b"tiff").unwrap();
+
+    let report = rebuild(&db, &root, &LOCAL).await.unwrap();
+
+    assert_eq!(report.indexed, 1);
+    assert_eq!(dump(&db).await[0].1, "originals/scan.tiff");
 }

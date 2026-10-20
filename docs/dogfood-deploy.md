@@ -74,12 +74,14 @@ sleep 3 && cat ~/ppf-daemon.log
 Record / 记下三样:
 1. `NodeId: <64hex>` (in the startup output) — the storage identity
    / 存储端身份（启动输出里有）
-2. `ppf://pair?...` — pairing string (address included, 10 min TTL).
+2. `ppf://pair?...` — pairing string (`node` + one-time token + relay URL `&r=`,
+   no address; 10 min TTL).
    It carries a pairing token, so the daemon prints it **only when stdout
    is a terminal**; with `nohup … >` it is deliberately absent from the
    log (SEC-11). Fetch it over IPC instead / 配对串（含地址，10 分钟有效）。
    它含配对令牌，daemon **只在 stdout 是终端时**才打印；上面 `nohup … >`
-   重定向进了文件，日志里刻意没有它（SEC-11）。改经 IPC 现取
+   重定向进了文件，日志里刻意没有它（SEC-11）。配对串只带 node、一次性令牌与
+   relay（`&r=`），不带地址。改经 IPC 现取
    (helper ships in the release assets next to the binaries; in a repo
    checkout it is `tools/ipc-lib.sh` / 助手函数随 release 资产与二进制平铺，
    仓库里是 `tools/ipc-lib.sh`):
@@ -116,8 +118,9 @@ Acceptance (same as dogfood-smoke.sh) / 验收标准（与冒烟脚本同源）:
   repeats and thumbnails decode; after IPC `device.revoke`,
   `revoke-check` reports a correct rejection.
 
-Known cross-network caveat / 已知跨网注意: at daemon boot the QR's
-`&a=` may contain only LAN/IPv6 addresses. Same-Wi-Fi clients connect
+Known cross-network caveat / 已知跨网注意: the QR carries no address
+(only node + token + relay `&r=`, H-10b); clients find the daemon via
+relay/discovery. Same-Wi-Fi clients connect
 directly; clients on other networks rely on hole punching via the n0
 relays, which needs both ends to reach them. If pairing times out
 cross-network, that is the H-07 (self-hosted relay) motivation, not a

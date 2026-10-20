@@ -41,13 +41,6 @@ pub const DEFAULT_DEBOUNCE: Duration = Duration::from_millis(500);
 /// ingest 并发上限（批量拖入时限制打爆）。
 pub const DEFAULT_INGEST_CONCURRENCY: usize = 4;
 
-/// 媒体扩展名白名单（只收照片/视频；`.DS_Store`、`Thumbs.db` 之类不 ingest）。
-const MEDIA_EXTS: &[&str] = &[
-    "jpg", "jpeg", "png", "heic", "heif", "gif", "webp", "bmp", //
-    "mp4", "mov", "m4v", "avi", "mkv", "3gp", //
-    "arw", "cr2", "nef", "dng",
-];
-
 /// 本地目录监听器。`Clone` 廉价（`Arc` 共享状态）——`spawn` 后句柄
 /// 可丢弃，监听任务自己活着。
 #[derive(Clone)]
@@ -260,6 +253,9 @@ impl LibraryWatcher {
             let thumbs = self.thumbs.clone();
             set.spawn(async move {
                 let _permit = permit;
+                // #1044 B3：「什么算照片」与 MIME 只问 core-index 的唯一口径。
+                // 扫描已按它过滤，这里查不到 = 不是媒体，不入库。
+                let media_type = core_index::media_type_for(&path)?;
                 let name = path
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
@@ -267,7 +263,7 @@ impl LibraryWatcher {
                 let incoming = IncomingFile {
                     src_path: path.clone(),
                     file_name: name.clone(),
-                    media_type: media_type_for(&name).to_string(),
+                    media_type: media_type.to_string(),
                     src_device,
                     capture_at_ms_hint: None,
                 };
@@ -413,38 +409,11 @@ fn walk_media(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
         };
         if ft.is_dir() {
             walk_media(&entry.path(), out)?;
-        } else if ft.is_file() && is_supported_media(&name_str) {
+        } else if ft.is_file() && core_index::media_kind(&entry.path()).is_some() {
             out.push(entry.path());
         }
     }
     Ok(())
-}
-
-fn is_supported_media(name: &str) -> bool {
-    MEDIA_EXTS.contains(&ext_of(name).as_str())
-}
-
-fn media_type_for(name: &str) -> &'static str {
-    match ext_of(name).as_str() {
-        "jpg" | "jpeg" => "image/jpeg",
-        "png" => "image/png",
-        "heic" | "heif" => "image/heic",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "bmp" => "image/bmp",
-        "mp4" => "video/mp4",
-        "mov" => "video/quicktime",
-        "m4v" => "video/x-m4v",
-        "avi" => "video/x-msvideo",
-        "mkv" => "video/x-matroska",
-        "3gp" => "video/3gpp",
-        "arw" | "cr2" | "nef" | "dng" => "image/x-raw",
-        _ => "application/octet-stream",
-    }
-}
-
-fn ext_of(name: &str) -> String {
-    name.rsplit('.').next().unwrap_or("").to_ascii_lowercase()
 }
 
 fn notify_err(e: std::io::Error) -> notify::Error {
@@ -506,34 +475,6 @@ mod tests {
     fn filter_parents_single_dir() {
         let set = HashSet::from([PathBuf::from("/originals/ab12/2026/08")]);
         assert_eq!(filter_parent_paths(set).len(), 1);
-    }
-
-    #[test]
-    fn media_whitelist_accepts_photos_and_videos() {
-        assert!(is_supported_media("IMG_0001.jpg"));
-        assert!(is_supported_media("IMG_0001.JPG")); // 大小写不敏感
-        assert!(is_supported_media("VID_20260812.mp4"));
-        assert!(is_supported_media("DSC_1234.HEIC"));
-        assert!(is_supported_media("RAW_1.DNG"));
-    }
-
-    #[test]
-    fn media_whitelist_rejects_junk_and_hidden() {
-        assert!(!is_supported_media(".DS_Store"));
-        assert!(!is_supported_media("Thumbs.db"));
-        assert!(!is_supported_media("notes.txt"));
-        assert!(!is_supported_media("archive.zip"));
-        assert!(!is_supported_media("noext"));
-    }
-
-    #[test]
-    fn media_type_maps_known_extensions() {
-        assert_eq!(media_type_for("a.jpg"), "image/jpeg");
-        assert_eq!(media_type_for("a.heic"), "image/heic");
-        assert_eq!(media_type_for("a.mp4"), "video/mp4");
-        assert_eq!(media_type_for("a.mov"), "video/quicktime");
-        assert_eq!(media_type_for("a.dng"), "image/x-raw");
-        assert_eq!(media_type_for("a.xyz"), "application/octet-stream");
     }
 
     /// E2 IDX-06 (#442): a file the watcher ingests gets both thumbnail

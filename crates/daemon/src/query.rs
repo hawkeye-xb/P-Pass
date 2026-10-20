@@ -28,7 +28,10 @@ use transport::Blobs;
 use crate::stats;
 
 /// The 5 s thumb-generation budget (契约).
-const THUMB_BUDGET: Duration = Duration::from_secs(5);
+/// `asset.original` 的原图上限：base64(12 MiB) ≈ 16 MiB 单条 IPC 回包。
+pub(crate) const ORIGINAL_CAP: i64 = 12 * 1024 * 1024;
+
+pub(crate) const THUMB_BUDGET: Duration = Duration::from_secs(5);
 
 /// DESK-34 (#428): how long a failed / over-budget generation keeps its
 /// negative-cache entry. Within this window `thumb.get` for that hash answers
@@ -42,7 +45,7 @@ const THUMB_BUDGET: Duration = Duration::from_secs(5);
 /// DESK-35 (#441): a failed generation leaves nothing at the final thumb
 /// paths (and [`settle_generation`] purges any stale file there), so this
 /// window is the one and only retry bound for every failure kind.
-const THUMB_RETRY_AFTER: Duration = Duration::from_secs(10 * 60);
+pub(crate) const THUMB_RETRY_AFTER: Duration = Duration::from_secs(10 * 60);
 
 /// Above this many entries, expired negative records are pruned on insert —
 /// keeps the table bounded without a background sweeper.
@@ -514,11 +517,15 @@ impl QueryEngine {
     /// DESK-03: `asset.original` — 原图字节（大图查看用，不落盘）。
     ///
     /// 同机桌面壳直接读原文件字节，内存展示后即弃——「不长期落盘」由
-    /// 不写任何临时文件天然满足。受 ctrl 帧上限约束：> 12 MiB 的原图
-    /// 返回 NotFound（base64 后超 16 MiB 帧），桌面端降级到 1024 缩略图。
+    /// 不写任何临时文件天然满足。只走桌面本机 IPC（不经 QUIC ctrl）；
+    /// 超过 [`ORIGINAL_CAP`]（12 MiB）的原图返回 NotFound（单条 IPC 回包的
+    /// 体量护栏，base64 后约 16 MiB），桌面端降级到 1024 缩略图。
     /// 只服务 photo（video 原片体量必然超限，桌面大图只看照片）。
-    pub async fn original(&self, hash_hex: &str) -> Result<Vec<u8>, QueryError> {
-        const ORIGINAL_CAP: i64 = 12 * 1024 * 1024; // base64(12MiB) ≈ 16MiB 帧上限
+    ///
+    /// #1054：所有静态图片（[`is_still_image`]）都返回原图，连同真实 MIME 一起给
+    /// 壳组 data URL；渲染端解不了（如 WebView2 的 HEIC/RAW）由壳的 `<img>`
+    /// onerror 回退 1024 缩略图，不再全黑。
+    pub async fn original(&self, hash_hex: &str) -> Result<(String, Vec<u8>), QueryError> {
         let started = std::time::Instant::now();
         let hash = parse_hash(hash_hex).ok_or(QueryError::NotFound)?;
         let asset = self
@@ -526,8 +533,8 @@ impl QueryEngine {
             .get_asset(&hash)
             .await?
             .ok_or(QueryError::NotFound)?;
-        if !asset.media_type.starts_with("image/") {
-            return Err(QueryError::NotFound); // video 不走大图
+        if !is_still_image(&asset.media_type) {
+            return Err(QueryError::NotFound); // 视频不走大图
         }
         if asset.bytes > ORIGINAL_CAP {
             return Err(QueryError::NotFound);
@@ -541,8 +548,16 @@ impl QueryEngine {
         // recording latency for them would not measure what the card asks
         // for ("翻相册卡不卡").
         self.record_first_byte(started, "blob");
-        Ok(bytes)
+        Ok((asset.media_type.to_ascii_lowercase(), bytes))
     }
+}
+
+/// #1054：大图只认静态图片 MIME。能不能解码交给渲染端（WebView `<img>`）：
+/// macOS WebKit 能解 HEIC，WebView2 不能；解不了时壳在 onerror 里回退缩略图。
+/// 不在 daemon 维护「哪些格式浏览器能显示」的白名单——那是渲染端的能力，
+/// 写死在这里会让能显示的平台平白降级。
+pub(crate) fn is_still_image(media_type: &str) -> bool {
+    media_type.to_ascii_lowercase().starts_with("image/")
 }
 
 /// storage 行 → 线上元数据: taken_at ms→s, MIME → "photo"/"video" 粗类.

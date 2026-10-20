@@ -1,14 +1,14 @@
 // T-091: 人性化时间 + 哨兵判定 —— 纯函数，无 DOM/Tauri 依赖。I18N-03 (#492)
 // 起文案经 ./i18n.js 取自 assets/i18n（JSON import 要 Vite/vitest 解析），
-// 裸 node 不再能直跑——scripts/check-human-time.mjs 因此失效，未在本卡修。
+// 裸 node 不能直跑。
 //
 // 时间戳单位 = unix 毫秒。代码依据（不是猜的）：
 // - device.watermarks.last_backup_at ← backup_watermark.updated_at，
-//   写入点 crates/daemon/src/backup.rs:208 set_watermark(..., unix_ms_now())，
-//   unix_ms_now() = SystemTime as_millis()（backup.rs:216）；
-//   storage 层测试断言 1_753_770_500_000（13 位毫秒，device_repo.rs:299）。
-// - devices.list.last_seen ← 配对时 pairing.rs:168 last_seen: Some(now_ms)，
-//   now_ms 由 ipc.rs:696 now_ms() = as_millis() 传入。
+//   写入点 crates/daemon/src/backup.rs 的 set_watermark(..., unix_ms_now())，
+//   unix_ms_now() = SystemTime as_millis()；
+//   storage 层 device_repo.rs 的测试断言 13 位毫秒值。
+// - devices.list.last_seen ← 配对时 pairing.rs `Pairing::apply_verdict` 写
+//   last_seen: Some(now_ms)；hello 时 router.rs `record_presence` 刷新。
 
 import { t } from "./i18n.js";
 
@@ -47,9 +47,6 @@ export function humanTime(tsMs, nowMs = Date.now()) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-/** 设计稿哨兵阈值：最近备份超过 5 天 → 亮红「需要看看」。 */
-export const BACKUP_ATTENTION_DAYS = 5;
-
 /**
  * PRES-01: 相对时间（「3 分钟前在线」的数据源）。
  * <60s 刚刚 / <60min N 分钟前 / <24h N 小时前 / <30d N 天前 / 更早或
@@ -67,17 +64,6 @@ export function relativeTime(tsMs, nowMs = Date.now()) {
   const days = Math.max(1, Math.floor(hours / 24));
   if (days < 30) return t("ui.time_days_ago", { n: days });
   return null;
-}
-
-/**
- * 哨兵判定（纯函数）：最近备份距今 > thresholdDays 天 → true。
- * 从未备份（缺失/0/负值）不算哨兵态——那是「还没备份过」，另有文案。
- */
-export function needsAttention(lastBackupAtMs, nowMs = Date.now(), thresholdDays = BACKUP_ATTENTION_DAYS) {
-  if (typeof lastBackupAtMs !== "number" || !Number.isFinite(lastBackupAtMs) || lastBackupAtMs <= 0) {
-    return false;
-  }
-  return nowMs - lastBackupAtMs > thresholdDays * DAY_MS;
 }
 
 /** 距今整天数（向下取整，最小 0）；缺失/0/负值 → null。哨兵行文案用。 */

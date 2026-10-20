@@ -50,7 +50,8 @@ const UNPAIRED_METHODS: &[&str] = &[
 ];
 
 /// 权限表 (T-030): viewer 只许浏览/诊断; member 加 backup.* 和新 Flow
-/// delivery; owner 全部（pair 确认走 IPC 而非网络方法，见 T-034）。
+/// delivery。pair 确认走 IPC 而非网络方法（见 T-034），所以没有任何已配对
+/// 角色能经网络调 pair.request（#1050：Owner 角色已退役）。
 fn role_allows(role: Role, method: &str) -> bool {
     let viewer_ok = matches!(
         method,
@@ -75,9 +76,6 @@ fn role_allows(role: Role, method: &str) -> bool {
     match role {
         Role::Viewer => viewer_ok || self_unpair,
         Role::Member => viewer_ok || self_unpair || member_delivery,
-        Role::Owner => {
-            viewer_ok || self_unpair || member_delivery || method == methods::PAIR_REQUEST
-        }
     }
 }
 
@@ -165,7 +163,7 @@ mod tests {
 
     #[test]
     fn revoked_gets_nothing_not_even_hello() {
-        let d = device(Role::Owner, true);
+        let d = device(Role::Member, true);
         for m in [
             methods::HELLO,
             methods::TIMELINE_PAGE,
@@ -201,8 +199,6 @@ mod tests {
             methods::BACKUP_MANIFEST,
             methods::BACKUP_COMMIT,
             methods::FLOW_OFFER,
-            methods::FLOW_FETCH,
-            methods::FLOW_CANCEL,
             methods::FLOW_STATUS,
             methods::FLOW_SUSPEND,
             methods::FLOW_CANCEL_TUPLE,
@@ -220,26 +216,11 @@ mod tests {
         assert!(allowed(Some(&d), methods::BACKUP_MANIFEST));
         assert!(allowed(Some(&d), methods::BACKUP_COMMIT));
         assert!(allowed(Some(&d), methods::FLOW_OFFER));
-        assert!(allowed(Some(&d), methods::FLOW_FETCH));
-        assert!(allowed(Some(&d), methods::FLOW_CANCEL));
         assert!(allowed(Some(&d), methods::FLOW_STATUS));
         assert!(allowed(Some(&d), methods::FLOW_SUSPEND));
         assert!(allowed(Some(&d), methods::FLOW_CANCEL_TUPLE));
         assert!(allowed(Some(&d), methods::FLOW_AUDIT_SUBMIT));
         assert!(!allowed(Some(&d), methods::PAIR_REQUEST));
-    }
-
-    #[test]
-    fn owner_has_everything() {
-        let d = device(Role::Owner, false);
-        for m in [
-            methods::HELLO,
-            methods::TIMELINE_PAGE,
-            methods::BACKUP_COMMIT,
-            methods::PAIR_REQUEST,
-        ] {
-            assert!(allowed(Some(&d), m), "owner must reach {m}");
-        }
     }
 
     /// NET-10: the phone polls pair.status across its own state change —
@@ -252,7 +233,7 @@ mod tests {
             Some(&device(Role::Member, true)),
             methods::PAIR_STATUS
         ));
-        for role in [Role::Viewer, Role::Member, Role::Owner] {
+        for role in [Role::Viewer, Role::Member] {
             assert!(
                 allowed(Some(&device(role, false)), methods::PAIR_STATUS),
                 "{role:?} must be able to read its own pair.status"
@@ -271,7 +252,7 @@ mod tests {
             Some(&device(Role::Member, true)),
             methods::PAIR_CANCEL
         ));
-        for role in [Role::Viewer, Role::Member, Role::Owner] {
+        for role in [Role::Viewer, Role::Member] {
             assert!(
                 allowed(Some(&device(role, false)), methods::PAIR_CANCEL),
                 "{role:?} must be able to withdraw its own pair.request"
@@ -288,7 +269,7 @@ mod tests {
                 msg_key: diag::keys::ERR_NOT_PAIRED
             }
         );
-        for role in [Role::Viewer, Role::Member, Role::Owner] {
+        for role in [Role::Viewer, Role::Member] {
             assert!(allowed(Some(&device(role, false)), BLOBS_FETCH));
             assert_eq!(
                 check(Some(&device(role, true)), BLOBS_FETCH),
@@ -304,7 +285,7 @@ mod tests {
     fn unknown_methods_are_denied_for_everyone() {
         assert!(!allowed(None, "asset.delete_all"));
         assert!(!allowed(
-            Some(&device(Role::Owner, false)),
+            Some(&device(Role::Member, false)),
             "asset.delete_all"
         ));
     }
@@ -313,7 +294,7 @@ mod tests {
     // 未配对/已吊销的不行（吊销只剩 pair.request 一扇门）。
     #[test]
     fn paired_roles_may_unpair_themselves() {
-        for role in [Role::Viewer, Role::Member, Role::Owner] {
+        for role in [Role::Viewer, Role::Member] {
             assert!(
                 allowed(Some(&device(role, false)), methods::DEVICE_UNPAIR),
                 "{role:?} must be able to unpair itself"

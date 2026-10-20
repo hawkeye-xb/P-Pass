@@ -21,7 +21,7 @@ use image::DynamicImage;
 use crate::{decode, ffmpeg, quicklook, system_thumb, CodecError, Result};
 
 pub const THUMB_SIZES: [u32; 2] = [256, 1024];
-const JPEG_QUALITY: u8 = 85;
+pub const JPEG_QUALITY: u8 = 85;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThumbPaths {
@@ -75,7 +75,8 @@ pub fn make_thumbs(hash: &[u8; 32], src_path: &Path, thumbs_root: &Path) -> Thum
 }
 
 fn generate(src_path: &Path, paths: &ThumbPaths) -> Result<()> {
-    let img = if is_video(src_path) {
+    // #1044 B3：图/视频的判定只问 core-index 的唯一口径。
+    let img = if core_index::media_kind(src_path) == Some(core_index::MediaKind::Video) {
         first_frame(src_path)?
     } else {
         decode::decode_image(src_path)?
@@ -83,16 +84,6 @@ fn generate(src_path: &Path, paths: &ThumbPaths) -> Result<()> {
     write_thumb(&img, 256, &paths.t256)?;
     write_thumb(&img, 1024, &paths.t1024)?;
     Ok(())
-}
-
-fn is_video(path: &Path) -> bool {
-    matches!(
-        path.extension()
-            .map(|e| e.to_string_lossy().to_lowercase())
-            .unwrap_or_default()
-            .as_str(),
-        "mp4" | "mov" | "m4v"
-    )
 }
 
 fn first_frame(src: &Path) -> Result<DynamicImage> {
@@ -222,12 +213,5 @@ mod tests {
     fn placeholder_is_decodable_and_sized() {
         let img = placeholder_image(256);
         assert_eq!((img.width(), img.height()), (256, 256));
-    }
-
-    #[test]
-    fn video_extensions_detected_case_insensitively() {
-        assert!(is_video(Path::new("a/CLIP.MP4")));
-        assert!(is_video(Path::new("a/b.mov")));
-        assert!(!is_video(Path::new("a/b.jpg")));
     }
 }

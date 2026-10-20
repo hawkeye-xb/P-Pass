@@ -1,61 +1,38 @@
-// DESK-36 (#456)：向导门的判定。
-//
-// 反证：把 serviceGate.js 里的 `&& !wizard.user_stopped` 去掉，
-// 「用户停了服务再重开 App」那两条必须红。
+// DESK-36 (#456) 向导门的判据矩阵在 Rust（`show_wizard`，lib.rs 的
+// `the_wizard_gate_separates_user_stop_from_an_abandoned_wizard`，#1045）；
+// 这里只钉前端接线：向导门读 Rust 给的 `wizard.show_wizard`，不再自己拼。
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
-import { shouldShowWizard, serviceCameBack } from "./serviceGate.js";
+import { serviceCameBack } from "./serviceGate.js";
 
 const app = readFileSync(new URL("./App.svelte", import.meta.url), "utf8").replace(
   /\r\n/g,
   "\n",
 );
 
-describe("DESK-36 向导门：用户主动停止 ≠ 向导中途退出", () => {
-  it("从没配置过 → 完整向导（原语义不变）", () => {
-    expect(shouldShowWizard({ configured: false, installed: false }, false)).toBe(true);
-    // 残留的停止标记也不能让新机器跳过向导。
-    expect(
-      shouldShowWizard({ configured: false, installed: false, user_stopped: true }, false),
-    ).toBe(true);
-  });
-
-  it("配过、服务没注册、不是用户停的 → 回向导（向导中途退出，xixi 实测反馈 3）", () => {
-    expect(
-      shouldShowWizard({ configured: true, installed: false, user_stopped: false }, false),
-    ).toBe(true);
-  });
-
-  it("用户停了服务（autostart 被卸）→ 不回向导，留在主界面", () => {
-    expect(
-      shouldShowWizard({ configured: true, installed: false, user_stopped: true }, false),
-    ).toBe(false);
-  });
-
-  it("服务在线或 wizard_state 还没查到 → 不显示向导", () => {
-    expect(shouldShowWizard({ configured: false, installed: false }, true)).toBe(false);
-    expect(shouldShowWizard(null, false)).toBe(false);
-  });
-
-  it("正常常驻、只是暂时离线 → 不显示向导（走自愈 / 启动按钮）", () => {
-    expect(
-      shouldShowWizard({ configured: true, installed: true, user_stopped: false }, false),
-    ).toBe(false);
-  });
-});
-
 describe("DESK-36 接线（App.svelte）", () => {
   const body = (re) => app.match(re)?.[0] ?? "";
   const refreshBody = body(/async function refresh\(\) \{[\s\S]*?\n  \}\n/);
   const selfHealBody = body(/async function maybeSelfHeal\(\) \{[\s\S]*?\n  \}\n/);
 
-  it("向导门用 shouldShowWizard，不再内联 configured/installed 的 ||", () => {
-    // DESK-63 (#946): the gate takes the event-driven service state, not a
-    // boolean derived from one data refresh.
-    expect(app).toContain(
-      "{#if shouldShowWizard(wizard, isServiceRunning(serviceState))}",
-    );
-    expect(app).not.toMatch(/!wizard\.configured \|\| !wizard\.installed/);
+  it("向导门读 Rust 的 show_wizard，前端不再拿 configured/installed/user_stopped 自己拼", () => {
+    expect(app).toContain("{#if wizard?.show_wizard}");
+    expect(app).not.toMatch(/shouldShowWizard/);
+    // 配置、安装、停止三个原料字段都不许在前端被读（`configured_library_dir` 是预填值，不算）。
+    for (const ingredient of [/wizard\??\.configured\b(?!_)/, /wizard\??\.installed\b/, /wizard\??\.user_stopped\b/]) {
+      expect(app, String(ingredient)).not.toMatch(ingredient);
+    }
+  });
+
+  it("服务状态每次变化都重读 wizard_state（show_wizard 依赖 Rust 持有的在线状态）", () => {
+    const applyBody =
+      app.match(/function applyServiceState\(next\) \{[\s\S]*?\n  \}\n/)?.[0] ?? "";
+    expect(applyBody).toContain("checkWizard()");
+  });
+
+  it("自愈只做冷却节流，要不要自愈由 Rust 的 self_heal_allowed 现场判", () => {
+    expect(selfHealBody).not.toContain("wizard");
+    expect(selfHealBody).toContain("SELF_HEAL_COOLDOWN_MS");
   });
 
   it("自愈走 maybeSelfHeal（Rust 现场判停止标记）， refresh 不再触发自愈", () => {
@@ -64,9 +41,13 @@ describe("DESK-36 接线（App.svelte）", () => {
     expect(selfHealBody).not.toContain('invoke("resume_daemon_after_update")');
   });
 
-  it("更新流程仍然调 resume_daemon_after_update（成功与失败两条路都在）", () => {
+  it("更新装完不再由旧壳拉 daemon（新壳启动对账），装失败走自愈（#1046）", () => {
     const update = body(/async function checkForUpdate[\s\S]*?\n  \}\n/);
-    expect(update.match(/invoke\("resume_daemon_after_update"\)/g)?.length).toBe(2);
+    expect(update).not.toContain("resume_daemon_after_update");
+    // #1060：失败恢复在 runUpdate（updateFlow.js，有单测）里，App 只把
+    // resume_after_failed_update（先关「为更新暂停」窗口再自愈）接进去；成功路径不碰。
+    const success = update.slice(0, update.lastIndexOf("} catch (e) {"));
+    expect(success).toContain('selfHeal: () => invoke("resume_after_failed_update")');
   });
 
   it("停服后立即对账，托盘停止也订阅了", () => {

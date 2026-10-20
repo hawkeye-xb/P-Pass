@@ -55,11 +55,11 @@ class DiagTextTest {
     @Test
     fun placeholder_formatting_works() {
         val en = dict("en")
-        val withVars = DiagText.resolveFromJson(en, "diag.storage_offline", mapOf("last_seen" to "2 小时前"))
-        assertEquals("The storage computer is offline. Last seen 2 小时前.", withVars)
+        val withVars = DiagText.resolveFromJson(en, "ui.paired_count", mapOf("n" to "3"))
+        assertEquals("3 paired devices", withVars)
         // 无变量时占位符原样保留（调用方负责传参）
-        val raw = DiagText.resolveFromJson(en, "diag.storage_offline")
-        assertEquals("The storage computer is offline. Last seen {last_seen}.", raw)
+        val raw = DiagText.resolveFromJson(en, "ui.paired_count")
+        assertEquals("{n} paired devices", raw)
     }
 
     @Test

@@ -22,16 +22,6 @@
 
 import { t } from "./i18n.js";
 
-/** 这台是「自己断开的」吗——该留在主列表里标「已断开」。 */
-export function isSelfDisconnected(device) {
-  return Boolean(device?.revoked) && device?.revoked_by === "device";
-}
-
-/** 这台是「业主移除的」吗——该收进折叠区。 */
-export function isOwnerRemoved(device) {
-  return Boolean(device?.revoked) && device?.revoked_by !== "device";
-}
-
 /**
  * 已断开设备的行文案。
  *
@@ -39,11 +29,12 @@ export function isOwnerRemoved(device) {
  * **授权**上的终止。一台刚断开、连接还没散干净的设备如果显示「离线，
  * 最后在线 3 分钟前」，读起来像「它还在备份，只是暂时不在线」——正好相反。
  *
- * @param {object} device devices.list 的一行
+ * 哪一行是「已断开」由 daemon 判定（devices.list 的 `row_state`，#1044），
+ * 这里只出文案。
+ *
  * @param {string|null} disconnectedAtText 已人性化的断开时刻（humanTime 输出）
  */
-export function disconnectedRow(device, disconnectedAtText = null) {
-  if (!isSelfDisconnected(device)) return null;
+export function disconnectedRow(disconnectedAtText = null) {
   return {
     alert: false,
     dot: "idle",

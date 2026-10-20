@@ -3,7 +3,7 @@
 //! catch-all `audit_event` table (card decision #9) — no migration, no
 //! historical v1/v2 event rows carried forward or faked as canonical facts.
 //!
-//! Routing summary (see `crates/daemon/src/router.rs::route_flow_audit_event`
+//! Routing summary (see `crates/daemon/src/audit_route.rs::route`
 //! for the authoritative dispatch):
 //! - Flow round terminal summaries (`flow.round.finished`) → `audit_operation`,
 //!   keyed by the phone's persistent `round_id` as `operation_id` (never a
@@ -172,8 +172,9 @@ pub struct TombstoneRecord {
 #[derive(Debug, Clone, Default)]
 pub struct DecisionEntry {
     pub decision_id: String,
-    /// cancel | restore | give_up_recovery | scope_changed |
-    /// revoke_authorization | pause | continue | retry
+    /// `flow.round.controlled` 的 action（cancel | restore | give_up_recovery |
+    /// pause | continue | retry；缺省 controlled）| scope_changed |
+    /// epoch_invalidated | revoke_authorization（见 daemon `audit_route::route_decision`）
     pub decision_kind: String,
     pub actor: Option<Vec<u8>>,
     pub causal_operation_id: Option<String>,
@@ -291,6 +292,47 @@ impl Db {
         .bind(i64::from(limit.clamp(1, 10_000)))
         .fetch_all(self.pool())
         .await?;
+        Ok(rows.iter().map(operation_from_row).collect())
+    }
+
+    /// [`Self::list_operations`] minus the given kinds — exact names in
+    /// `kinds`, families in `prefixes` (`"ingest."`) — filtered **in SQL,
+    /// before** `LIMIT` truncates (#1044 B1: a watcher burst of hundreds
+    /// of `ingest.new` rows must not push user-facing events out of the
+    /// window). Which kinds to exclude is the caller's business rule.
+    pub async fn list_operations_excluding(
+        &self,
+        limit: u32,
+        kinds: &[&str],
+        prefixes: &[&str],
+    ) -> Result<Vec<AuditOperationRecord>> {
+        let mut sql = String::from(
+            "SELECT id, operation_id, occurred_at, confirmed_at, actor, actor_name, kind,
+                    trigger, round_id, target_hash, scope_summary, final_counts,
+                    evidence_summary, causal_ref, payload
+             FROM audit_operation WHERE 1 = 1",
+        );
+        if !kinds.is_empty() {
+            sql.push_str(" AND kind NOT IN (");
+            sql.push_str(&vec!["?"; kinds.len()].join(", "));
+            sql.push(')');
+        }
+        // substr 比较而非 LIKE：前缀里的 `_` 不该被当成通配符。
+        for _ in prefixes {
+            sql.push_str(" AND substr(kind, 1, length(?)) <> ?");
+        }
+        sql.push_str(" ORDER BY occurred_at DESC, id DESC LIMIT ?");
+        let mut q = sqlx::query(&sql);
+        for k in kinds {
+            q = q.bind(*k);
+        }
+        for p in prefixes {
+            q = q.bind(*p).bind(*p);
+        }
+        let rows = q
+            .bind(i64::from(limit.clamp(1, 10_000)))
+            .fetch_all(self.pool())
+            .await?;
         Ok(rows.iter().map(operation_from_row).collect())
     }
 

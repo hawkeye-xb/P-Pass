@@ -12,6 +12,7 @@ mod db;
 mod device_repo;
 mod diag_repo;
 mod flow_delivery_repo;
+mod low_space_repo;
 mod supersede_repo;
 
 pub use asset_repo::{ActivityBatch, Asset, TimelinePage};
@@ -23,6 +24,7 @@ pub use db::Db;
 pub use device_repo::{Device, RevokedBy, Role};
 pub use diag_repo::DiagEvent;
 pub use flow_delivery_repo::{FlowGrant, FlowGrantState, FlowReceipt};
+pub use low_space_repo::LowSpaceNotice;
 pub use supersede_repo::PendingSwap;
 
 /// Storage-layer errors.
@@ -36,6 +38,17 @@ pub enum StorageError {
 
     #[error("invalid timeline cursor")]
     InvalidCursor,
+}
+
+impl StorageError {
+    /// #1044：库里记着本二进制没有的 migration——用更旧的版本打开了新版本
+    /// 建过的库。daemon 据此输出 keyed 启动错误，桌面给「装回新版本」指引。
+    pub fn is_schema_newer_than_binary(&self) -> bool {
+        matches!(
+            self,
+            StorageError::Migrate(sqlx::migrate::MigrateError::VersionMissing(_))
+        )
+    }
 }
 
 pub type Result<T> = std::result::Result<T, StorageError>;

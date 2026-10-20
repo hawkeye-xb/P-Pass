@@ -1,6 +1,6 @@
 // DEVLOG-02: Windows release 产物必须是 GUI 子系统。CONSOLE 子系统的进程被
-// explorer 按 HKCU Run 键启动时，Windows 会自动给它分配一个控制台窗口——
-// Run 键是纯命令行，创建进程的是 Windows，`spawn_windowless` 的
+// 计划任务（#957；更早的版本是 HKCU Run 键）登录拉起时，Windows 会自动给它
+// 分配一个控制台窗口——创建进程的是 Windows，`spawn_windowless` 的
 // CREATE_NO_WINDOW 只管桌面壳自己那一次 spawn，管不到登录自启这条路径。
 // `not(debug_assertions)` 保住开发体验：`just dev-daemon` 是 debug 构建，
 // 终端照样有输出。与 `apps/desktop/src-tauri/src/main.rs` 同构。
@@ -11,8 +11,27 @@
 //! T-030: bind the endpoint, open the index, run the ctrl router with the
 //! authz checkpoint. Pairing/IPC/tray integration land with T-031/T-034.
 
-use daemon::{Config, Router};
+use daemon::{Config, Router, SHUTDOWN_DEADLINE};
 use std::io::IsTerminal;
+
+/// #1042：`config …` 子命令的统一收尾（契约见 `cli::USAGE` 与
+/// `tests/config_cli.rs`）。成功：stdout 一行 `{"config":"<config.toml 路径>"}`、
+/// exit 0；失败：stderr 一行错误原文、exit 1。
+fn config_command_exit(result: Result<std::path::PathBuf, String>) -> ! {
+    match result {
+        Ok(path) => {
+            println!(
+                "{}",
+                serde_json::json!({ "config": path.display().to_string() })
+            );
+            std::process::exit(0);
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -20,19 +39,60 @@ async fn main() -> anyhow::Result<()> {
     // （日志/配置/数据库/身份/claim/bind）之前短路退出。8/6 事故：daemon
     // 无解析，--help 被当普通启动一路走到单实例 claim 触发误接管、常驻
     // 停机数分钟。未知参数报错退出（exit 2），绝不静默忽略。
-    let (ephemeral, post_update) = match daemon::cli::parse_cli(std::env::args().skip(1)) {
+    let ephemeral = match daemon::cli::parse_cli(std::env::args().skip(1)) {
         Ok(daemon::cli::Cli::Help) => {
             print!("{}", daemon::cli::USAGE);
             return Ok(());
         }
         Ok(daemon::cli::Cli::Version) => {
-            println!("P-Pass daemon {}", daemon::daemon_version());
+            println!(
+                "{} {}",
+                daemon::cli::VERSION_PRODUCT,
+                daemon::daemon_version()
+            );
             return Ok(());
         }
-        Ok(daemon::cli::Cli::Run {
-            ephemeral,
-            post_update,
-        }) => (ephemeral, post_update),
+        Ok(daemon::cli::Cli::VersionJson) => {
+            println!("{}", daemon::cli::version_json(&daemon::daemon_version()));
+            return Ok(());
+        }
+        // #1042：config 的唯一写者。与 --help/--version 同一处短路——不搬
+        // 数据目录、不起日志、不读 config 做启动、不开库、不 claim、不 bind；
+        // 写完即退出。换库仍是重启后台服务后生效（daemon 只在启动时读一次）。
+        // 契约：成功 exit 0，stdout 一行 JSON；失败 exit 1，stderr 一行错误
+        // （keyed 的就是壳 ui_err 同款 JSON，原样可转交前端）。
+        Ok(daemon::cli::Cli::ConfigInit { library }) => {
+            let platform_dir = {
+                use platform::PlatformAdapter as _;
+                platform::adapter().data_dir()
+            };
+            config_command_exit(daemon::config::init_config(&platform_dir, &library));
+        }
+        // #1042：诊断包的唯一写者。同样在一切 daemon 机制之前短路：不开库
+        // （常驻服务在线时经 IPC logs.export 要那三份，不在线就不要）。契约：
+        // 成功 exit 0，stdout 一行 {"zip","daemon_reachable"}；写不出 zip 时
+        // exit 1，stderr 一行错误。常驻服务不在线不算失败。
+        Ok(daemon::cli::Cli::DiagExport { out, app_version }) => {
+            let env = daemon::diag_bundle::ExportEnv::from_process(out.into(), app_version);
+            match daemon::diag_bundle::export(&env).await {
+                Ok(v) => {
+                    println!("{v}");
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+        Ok(daemon::cli::Cli::ConfigSetLibrary { library }) => {
+            let platform_dir = {
+                use platform::PlatformAdapter as _;
+                platform::adapter().data_dir()
+            };
+            config_command_exit(daemon::config::set_library(&platform_dir, &library));
+        }
+        Ok(daemon::cli::Cli::Run { ephemeral }) => ephemeral,
         Err(e) => {
             eprintln!("{e}");
             eprint!("{}", daemon::cli::USAGE);
@@ -63,7 +123,7 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
-    // DESK-58 (#875)：stderr 没人接（Windows 的 Run 键 / 壳一次性 spawn）时改接
+    // DESK-58 (#875)：stderr 没人接（Windows 计划任务登录拉起 / 壳一次性 spawn）时改接
     // 到 `logs\daemon.err`。必须排在搬家**之后**（文件在 data dir 里，开着句柄
     // 目录就搬不动）、日志初始化与库目录检查**之前**（那几处的报错只走 stderr，
     // 向导读的就是它们）。目录与平台默认日志同源：`PPF_DATA_DIR` 优先。
@@ -117,12 +177,22 @@ async fn main() -> anyhow::Result<()> {
             // DIAG-B1：macOS 文件 + stderr 双写——stderr 在 launchd 托管时是
             // `.err`，桌面向导读它的最后一行报启动失败（DESK-09）；被一次性
             // spawn 时 stderr 是 /dev/null，文件是唯一留痕。
-            let open = if platform::adapter().default_log_tees_stderr() {
-                daemon::log_guard::DedupGuard::for_file_and_stderr
-            } else {
-                daemon::log_guard::DedupGuard::for_file
+            // #1046：launchd 接的 `.err` 在 `<logs>/` 里，容量由 daemon 管——stderr
+            // 那份的计数从现有文件大小起算（跨运行封顶，同 daemon.log）。
+            let paths = platform::adapter().daemon_log_paths(&base);
+            let tees = platform::adapter().default_log_tees_stderr();
+            let service_stderr = paths
+                .stdio_by_service_manager
+                .then_some(paths.stderr.as_deref())
+                .flatten();
+            let open = |path: &std::path::Path| {
+                if tees {
+                    daemon::log_guard::DedupGuard::for_file_and_stderr(path, service_stderr)
+                } else {
+                    daemon::log_guard::DedupGuard::for_file(path)
+                }
             };
-            match platform::adapter().default_log_file(&base) {
+            match paths.log_file.clone() {
                 Some(path) => match open(&path) {
                     Ok(guard) => guard,
                     Err(e) => {
@@ -194,11 +264,22 @@ async fn main() -> anyhow::Result<()> {
     // #949：清掉旧版遥测遗留的 anon_id（尽力而为，失败只 warn）。
     daemon::stats::purge_legacy_anon_id(&data_dir);
 
-    let db = storage::Db::open(&data_dir.join(".ppf/index.sqlite")).await?;
+    // #1044：打不开索引库时输出 keyed 错误行（cli::startup_error_line），
+    // 桌面按 key 出指引，不再用正则猜 stderr 原文。
+    let db = match storage::Db::open(&data_dir.join(".ppf/index.sqlite")).await {
+        Ok(db) => db,
+        Err(e) => {
+            eprintln!(
+                "{}",
+                daemon::cli::startup_error_line(daemon::cli::startup_error_key(&e), &e.to_string())
+            );
+            std::process::exit(1);
+        }
+    };
     // ── Persistent daemon identity (真机 P0: 每次重启换 NodeId 会把
-    // 所有已配对手机变成孤儿——配对绑的就是 NodeId). Keychain/DPAPI
-    // first; headless platforms fall back to a 0600 file in the data
-    // dir (same trust domain as ipc.token).
+    // 所有已配对手机变成孤儿——配对绑的就是 NodeId). 身份密钥当前存在
+    // 数据目录里的 identity.key（unix 0600 / Windows 仅属主 DACL，与
+    // ipc.token 同一信任域），不进 Keychain/DPAPI，见 load_or_mint_identity。
     let secret = load_or_mint_identity(&data_dir)?;
 
     // ── DAE-02: 单实例 claim 先于 transport bind ──────────────────
@@ -217,19 +298,11 @@ async fn main() -> anyhow::Result<()> {
         data_dir.display()
     );
 
-    // addr_provider 惰性填充：transport 在 claim 之后才 bind，配对二维码
-    // 也在这之后生成（&a= 要带 live endpoint 的当前地址，见 Pairing）。
-    // H-10b: QR 只带 relay（&r=）——relay_provider 同样惰性，从
-    // local_addr() 的 addrs 里取 Relay 变体。
+    // relay_provider 惰性填充：transport 在 claim 之后才 bind，配对二维码
+    // 也在这之后生成。H-10b: QR 只带 relay（&r=），从 local_addr() 的 addrs
+    // 里取 Relay 变体。
     let transport_slot: std::sync::Arc<std::sync::OnceLock<transport::IrohTransport>> =
         std::sync::Arc::new(std::sync::OnceLock::new());
-    let slot = std::sync::Arc::clone(&transport_slot);
-    let addr_provider: Option<std::sync::Arc<dyn Fn() -> String + Send + Sync>> =
-        Some(std::sync::Arc::new(move || {
-            slot.get()
-                .map(|t| t.local_addr().to_string())
-                .unwrap_or_default()
-        }));
     let relay_slot = std::sync::Arc::clone(&transport_slot);
     let relay_provider: Option<std::sync::Arc<dyn Fn() -> Option<String> + Send + Sync>> =
         Some(std::sync::Arc::new(move || {
@@ -245,8 +318,7 @@ async fn main() -> anyhow::Result<()> {
     // SYNC-03: 一份订阅登记表，Router（QUIC 订阅入口）和 IpcServer
     // （device.revoke 在此发起主动断连）共用同一个实例。
     let subscriptions = daemon::subscriptions::SubscriptionRegistry::new();
-    let (pairing, pending_rx) =
-        daemon::Pairing::new(db.clone(), node_id, addr_provider, relay_provider);
+    let (pairing, pending_rx) = daemon::Pairing::new(db.clone(), node_id, relay_provider);
     let pairing = pairing.with_events(event_bus.clone());
 
     // IPC (T-034): local socket + per-launch token in the data dir.
@@ -304,58 +376,11 @@ async fn main() -> anyhow::Result<()> {
             );
             std::process::exit(0);
         }
-        daemon::Claim::TookOver => {
-            // 升级退位收尾：重装 autostart，让 launchd 指向本实例的稳定
-            // 路径。守卫拒绝 target/、/tmp/ 等开发路径（不写坏 plist）。
-            // DAE-03 ②：autostart 安装决策收敛在
-            // cli::autostart_install_required（单测钉死）——只有 TookOver
-            // 装；Proceed（纯新启动）与 StandDown（退位）绝不碰。
-            if daemon::cli::autostart_install_required(&daemon::Claim::TookOver) {
-                use platform::PlatformAdapter as _;
-                if let Ok(exe) = std::env::current_exe() {
-                    let registered = platform::adapter().autostart_registered_exec();
-                    match takeover_autostart(
-                        registered.as_ref().ok().and_then(|r| r.as_deref()),
-                        &exe,
-                    ) {
-                        TakeoverAutostart::Foreign => {
-                            // #604 [DESK-42]：**只在本实例有权写登记时**才重装。
-                            // 真机事故：登记被钉在 `~/P-Pass-Backups/<日期>/old-app/…`
-                            // 里的旧 App 上——那正是「某个从备份副本起来的实例按自己的
-                            // 路径改了登记」。已有登记指向别处 → 一个字节都不动，只留痕。
-                            tracing::warn!(
-                                "#604: 已有开机自启登记指向 {:?}（本实例 {}）——不覆盖，避免从备份/临时副本启动的实例篡改用户登记",
-                                registered.ok().flatten(),
-                                exe.display()
-                            );
-                        }
-                        TakeoverAutostart::AlreadyOurs => {
-                            // #732 ②：登记本来就指向自己 ⇒ 不重装。重装 = bootout +
-                            // bootstrap，而 plist 是 RunAtLoad ⇒ launchd **当场**再拉一个
-                            // 实例，它在我们 bind transport 之前看不到 IPC socket ⇒
-                            // Proceed ⇒ 撞上我们刚绑的端口报 `bind endpoint: Failed to
-                            // bind sockets`（2026-10-08 本机日志：step_down 后 70ms）。
-                            tracing::info!("#732: 开机自启登记已指向本实例，不重装（避免 RunAtLoad 多拉一个实例抢端口）");
-                        }
-                        TakeoverAutostart::Install => {
-                            // DESK-68 (#996)：不在正式安装位置的实例（开发构建、解压
-                            // 副本）不许写登记——各平台同一条判据。
-                            if !platform::adapter().is_install_location(&exe) {
-                                tracing::warn!(
-                                    "DESK-68: 本实例不在正式安装位置（{}）——不写开机自启登记",
-                                    exe.display()
-                                );
-                            } else if let Err(e) = platform::adapter().install_autostart(&exe) {
-                                tracing::warn!("DAE-01: autostart re-install skipped: {e}");
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        daemon::Claim::Proceed => {
-            // DAE-03 ②：纯新启动绝不装 autostart——手动/开发构建启动
-            // 不得篡改用户的开机自启配置（决策见 cli.rs 单测）。
+        daemon::Claim::TookOver | daemon::Claim::Proceed => {
+            // #1046（S-11）：核心不管托管——接管旧实例后不再碰开机自启登记。
+            // 登记的校正（含 #604 不覆盖备份副本、#732 已指向自己不重装、DESK-68
+            // 不在正式安装位置不写）由桌面发行层在新壳启动时对账完成
+            // （apps/desktop/src-tauri/src/distribution.rs）。
         }
     }
 
@@ -421,7 +446,7 @@ async fn main() -> anyhow::Result<()> {
     // DEVLOG-03 / SEC-11 (#496)：配对链接**绝不进任何持久文件**。它带着
     // 10 分钟内有效的配对令牌（红线 4：凭据不落任何持久文件）。
     // DEVLOG-03 当初的做法是「只进 stdout」，但 stdout 不等于屏幕：macOS
-    // launchd 的 StandardOutPath 就是 ~/Library/Logs/p-pass-daemon.log，
+    // launchd 的 StandardOutPath 就是 <数据目录>/logs/daemon.out（#1046 前是 ~/Library/Logs），
     // systemd/nohup/脚本重定向同理。所以只在 stdout 是终端时才打印链接，
     // 否则打一句不含链接的提示（见 cli::pair_link_stdout_line）。
     // 机读契约随之改为 IPC `pairing.start`：tools/ipc-lib.sh 的
@@ -445,45 +470,22 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     });
-    // UPD-07 (#617)：**版本一致性的 owner**。只有被更新流程拉起的这一份 daemon
-    // （`--post-update`）才开火——平时绝不碰用户正在用的壳。
-    //
-    // 为什么等：壳在更新成功后紧接着被拉起（resume），它的自报（`shell.announce`）
-    // 可能比我们晚到几十毫秒到几秒。等不到就什么都不做（老壳/壳没起来 ⇒ 不知道
-    // 它的版本 ⇒ fail-safe，见 `owner::decide`）。
-    if post_update {
-        tokio::spawn(async move {
-            for _ in 0..20 {
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                if daemon::owner::recorded_announce().is_some() {
-                    break;
-                }
-            }
-            let announced = daemon::owner::recorded_announce();
-            // 判定里要起 launchctl/defaults 子进程：放到阻塞线程上，别占住执行器。
-            let _ =
-                tokio::task::spawn_blocking(move || daemon::owner::check_and_act(true, announced))
-                    .await;
-        });
-    }
-    // Interim console confirmer (until the tray, T-041): y = 允许队首.
-    // stdin EOF（后台运行）⇒ 退出这个循环，确认只走 IPC——绝不把
-    // "没有输入" 当成任何决定（狗粮冒烟抓到的真 bug：EOF 曾被当 n 秒拒）.
+    // stdin 只剩一个用途：EOF = 退出信号。
+    // 托盘审批早已落地（配对确认只走 IPC）；终端里敲 y/n 批准配对的临时确认器
+    // （T-041 之前的过渡物）已在 #1041 删除——所有脚本都只用 stdin EOF 收掉 daemon。
+    // stdin EOF（后台运行）⇒ 退出这个循环；绝不把「没有输入」当成任何决定。
     // UX-07: --ephemeral 模式下 EOF 同时发退出信号（main 的 select 收到
     // 即整体退出，3 秒内）——测试脚本关掉 stdin 写入端即可收掉 daemon。
     tokio::spawn({
-        let ipc = std::sync::Arc::clone(&ipc);
         let eof_tx = eof_tx;
         async move {
             loop {
-                let line = tokio::task::spawn_blocking(|| {
+                let bytes_read = tokio::task::spawn_blocking(|| {
                     let mut line = String::new();
-                    let n = std::io::stdin().read_line(&mut line).unwrap_or(0);
-                    (n, line)
+                    std::io::stdin().read_line(&mut line).unwrap_or(0)
                 })
                 .await
-                .unwrap_or((0, String::new()));
-                let (bytes_read, line) = line;
+                .unwrap_or(0);
                 if bytes_read == 0 {
                     tracing::info!("stdin closed — pairing confirmation is IPC-only from here");
                     if let Some(tx) = eof_tx {
@@ -491,19 +493,7 @@ async fn main() -> anyhow::Result<()> {
                     }
                     return;
                 }
-                if ipc.pending_names().is_empty() {
-                    continue;
-                }
-                let accept = line.trim().eq_ignore_ascii_case("y");
-                match ipc.confirm(None, None, accept) {
-                    daemon::ConfirmOutcome::Decided(name) => {
-                        println!("「{name}」：{}", if accept { "已允许" } else { "已拒绝" });
-                    }
-                    daemon::ConfirmOutcome::Expired(name) => {
-                        println!("「{name}」：请求已失效（对方已放弃），这次点击没有生效");
-                    }
-                    daemon::ConfirmOutcome::NotFound => {}
-                }
+                // 读到的行一律丢弃：配对确认只走 IPC。
             }
         }
     });
@@ -525,7 +515,11 @@ async fn main() -> anyhow::Result<()> {
             loop {
                 daemon::stats::record(daemon::stats::Event::DaemonAlive {
                     uptime_h: started.elapsed().as_secs() / 3600,
-                    os: std::env::consts::OS.to_string(),
+                    // #1043（G5）：平台名由适配器回答（与 consts::OS 同值）。
+                    os: {
+                        use platform::PlatformAdapter as _;
+                        platform::adapter().platform_name().to_string()
+                    },
                     ver: daemon::daemon_version(),
                 });
                 tokio::time::sleep(std::time::Duration::from_secs(24 * 3600)).await;
@@ -665,8 +659,8 @@ async fn main() -> anyhow::Result<()> {
     // 磁盘（originals）↔ 索引（asset 表）diff：磁盘上没了的条目 = 外部
     // 删除（Finder/终端手动删），清 asset 行 + thumb 文件 + 审计
     // asset.removed_external（actor=NULL）。启动即跑一轮（重启即收敛），
-    // 之后每小时 re-diff——低频轮询而非目录监听的理由见 reconcile.rs
-    // 模块注释（收敛延迟最多 1 小时 vs FSEvents/inotify 双平台复杂度）。
+    // 之后每小时 re-diff——目录监听（WATCH-01）为主，本循环兜底，监听起不来时
+    // 收敛延迟退回最多 1 小时（见 reconcile.rs 模块注释）。
     // IDX-01: `with_local_node_id` 是「收孤儿」方向的开关——不接就只剩
     // SYNC-01 的删幽灵那一半，索引一丢照片就永远回不来。
     // #851: 补完上次崩溃时停在「索引已改指原图、文件还没换过去」的替换——必须在启动对账之前，
@@ -680,6 +674,16 @@ async fn main() -> anyhow::Result<()> {
         Ok(0) => {}
         Ok(n) => tracing::info!("#851: 补完 {n} 条未换完的原图替换"),
         Err(e) => tracing::warn!("#851: 补完原图替换失败，下次启动再试: {e}"),
+    }
+    // #1047：清掉上次入库被打断（kill -9 / 断电）留下的临时文件。必须在启动
+    // 对账之前、且在 watcher / router / IPC 能触发入库之前——运行期正在写的
+    // 临时文件与残留长得一模一样，只有此刻能确定没有入库在进行。判据见
+    // `core_index::sweep_ingest_residue`（文件名严格匹配 + 没有索引行；
+    // 绝不按内容特征猜，免得误删用户自己放进库里的文件）。
+    match core_index::sweep_ingest_residue(&db, &data_dir).await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!("#1047: 清理入库中断残留的临时文件 {n} 个"),
+        Err(e) => tracing::warn!("#1047: 清理入库残留失败，下次启动再试: {e}"),
     }
     let reconcile = daemon::Reconcile::new(db.clone(), &data_dir)
         .with_events(event_bus.clone())
@@ -798,35 +802,78 @@ async fn main() -> anyhow::Result<()> {
         daemon::events::STATUS_CHANGED,
         serde_json::json!({}),
     );
-    if ephemeral {
+    // #1047：停止信号（SIGTERM / Windows 控制台事件）与 --ephemeral 的 stdin
+    // EOF 走同一条收尾路径。离开 `router.serve` 即停止接新连接；之后只剩
+    // 收尾 + 退出，整体死线 SHUTDOWN_DEADLINE（Docker 默认 10s 后 SIGKILL，
+    // launchd 20s）。
+    //
+    // 这里只能保证「收得到信号时体面地走」；SIGKILL / 断电 / TerminateProcess
+    // 谁也收不到，那一类的安全由落盘侧兜底（入库不留占位文件 + 启动清残留，
+    // 见 core_index::sweep_ingest_residue）。
+    let stop = if ephemeral {
         // UX-07: --ephemeral — stdin EOF 即优雅退出（3 秒内），测试脚本
-        // 用它杜绝 A 类孤儿。router.serve 跑到 transport 关闭为止；EOF
-        // 信号一到，select 走退出分支，main 返回，进程干净结束。
+        // 用它杜绝 A 类孤儿。
         tokio::select! {
-            _ = router.serve(&transport) => {}
+            _ = router.serve(&transport) => None,
+            req = platform::stop_signal() => {
+                tracing::info!("#1047: 收到 {}，开始收尾退出", req.name());
+                Some(Some(req))
+            }
             _ = eof_rx => {
                 println!("--ephemeral: stdin 关闭，daemon 退出。");
-                // 显式 close endpoint：flush 连接关闭帧，否则 drop 清理
-                // 要数秒（验收限 3 秒内退出）。close 本身在部分环境下也
-                // 可能慢——给它 2s 上限，超时即强制退出：close 已 flush
-                // 协议层关闭帧，剩余 tokio 任务（定时循环）abort 无副作用。
-                tokio::time::timeout(std::time::Duration::from_secs(2), transport.close())
-                    .await
-                    .ok();
-                std::process::exit(0);
+                Some(None)
             }
         }
     } else {
-        router.serve(&transport).await;
+        tokio::select! {
+            _ = router.serve(&transport) => None,
+            req = platform::stop_signal() => {
+                tracing::info!("#1047: 收到 {}，开始收尾退出", req.name());
+                Some(Some(req))
+            }
+        }
+    };
+    if let Some(req) = stop {
+        shutdown(&transport, req).await;
     }
     Ok(())
 }
 
-/// The daemon's stable identity key, in a 0600 file beside the index —
-/// same trust domain as ipc.token. NOT the OS keychain for now: an
-/// ad-hoc-signed binary re-triggers the Keychain authorization dialog
-/// on every restart (live finding — an unattended service cannot answer
-/// dialogs). Keychain migration lands with real release signing (T-071).
+/// 收尾并退出（不返回）。`req` 为 `Some` = 由停止信号触发：收尾后以「被该信号
+/// 终止」的方式离开（见 `platform::StopRequest::finish`，保持服务管理器看到
+/// 的退出状态不变）；`None` = `--ephemeral` 的 stdin EOF，`exit(0)`。
+///
+/// 做的事：显式 close endpoint（flush 连接关闭帧，否则 drop 清理要数秒），
+/// 整体受 `SHUTDOWN_DEADLINE` 限制；收尾期间再收到一次停止信号 = 别等了，
+/// 立刻走。close 已 flush 协议层关闭帧，剩余 tokio 任务（定时循环）abort
+/// 无副作用；SQLite 是 WAL + synchronous=FULL，被中断的事务回滚，下次打开
+/// 自动恢复。
+async fn shutdown(transport: &transport::IrohTransport, req: Option<platform::StopRequest>) -> ! {
+    let graceful = tokio::time::timeout(SHUTDOWN_DEADLINE, transport.close());
+    tokio::select! {
+        r = graceful => {
+            if r.is_err() {
+                tracing::warn!("#1047: 收尾超过 {SHUTDOWN_DEADLINE:?}，强制退出");
+            }
+        }
+        again = platform::stop_signal() => {
+            tracing::warn!("#1047: 收尾期间又收到 {}，立即退出", again.name());
+        }
+    }
+    match req {
+        Some(req) => req.finish(),
+        None => std::process::exit(0),
+    }
+}
+
+/// The daemon's stable identity key, in `identity.key` beside the index
+/// (0600 on unix, owner-only DACL on Windows) — same trust domain as ipc.token.
+///
+/// 当初弃用钥匙串的原因：ad-hoc 签名的二进制每次重启都会重新弹出钥匙串授权
+/// 弹窗（真机实测；无人值守的常驻服务答不了弹窗）。这是现状，不是「以后迁回」
+/// 的占位：若要迁回 Keychain/DPAPI，必须先在**正式签名包**上实测是否还弹窗，
+/// 再设计旧 identity.key 的迁移（改身份存放位置 = 改行为，已配对手机绑的是 NodeId）。
+/// （#1041 已删掉从未被产品代码调用的 `KeyStore` 端口。）
 fn load_or_mint_identity(data_dir: &std::path::Path) -> anyhow::Result<[u8; 32]> {
     use platform::PlatformAdapter as _;
     load_or_mint_identity_with(data_dir, |p| platform::adapter().restrict_to_owner(p))
@@ -907,30 +954,6 @@ fn rand_pair_token() -> anyhow::Result<[u8; 12]> {
     let mut token = [0u8; 12];
     getrandom::fill(&mut token).map_err(|e| anyhow::anyhow!("系统随机数不可用：{e}"))?;
     Ok(token)
-}
-
-/// 升级接管（TookOver）之后，开机自启登记怎么处理。
-#[derive(Debug, PartialEq, Eq)]
-enum TakeoverAutostart {
-    /// 未登记 / 读不出：照旧安装（DAE-01 原行为）。
-    Install,
-    /// 已登记且就指向本实例：什么都不做（#732 ②）。
-    AlreadyOurs,
-    /// 已登记但指向别处：不覆盖（#604）。
-    Foreign,
-}
-
-/// 纯函数，单测钉死三条分支。`registered` = `autostart_registered_exec()` 的
-/// `Ok(Some(_))`；`Ok(None)` 与 `Err` 都传 `None`（与改前一致：照旧安装）。
-fn takeover_autostart(
-    registered: Option<&std::path::Path>,
-    exe: &std::path::Path,
-) -> TakeoverAutostart {
-    match registered {
-        None => TakeoverAutostart::Install,
-        Some(r) if r == exe => TakeoverAutostart::AlreadyOurs,
-        Some(_) => TakeoverAutostart::Foreign,
-    }
 }
 
 fn unix_ms_now() -> i64 {
@@ -1023,31 +1046,6 @@ mod tests {
     #[test]
     fn desk46_default_or_env_library_may_be_created() {
         assert!(library_root_check(false, false, Path::new("/tmp/ppf-scene/library")).is_ok());
-    }
-
-    // #732 ②：接管者的登记已经指向自己时**不许**重装 autostart——重装是
-    // bootout + bootstrap，RunAtLoad 会当场多拉一个实例跟接管者抢端口
-    // （2026-10-08 本机：step_down 后 70ms 出 `bind endpoint: Failed to bind
-    // sockets`）。反证：把 AlreadyOurs 分支并回 Install，本测试必红。
-    #[test]
-    fn takeover_does_not_reinstall_an_autostart_that_already_points_at_us() {
-        let exe = Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon");
-        assert_eq!(
-            takeover_autostart(Some(exe), exe),
-            TakeoverAutostart::AlreadyOurs
-        );
-        // #604：指向别处 → 不覆盖
-        assert_eq!(
-            takeover_autostart(
-                Some(Path::new(
-                    "/Users/x/P-Pass-Backups/old-app/P-Pass.app/Contents/MacOS/ppf-daemon"
-                )),
-                exe
-            ),
-            TakeoverAutostart::Foreign
-        );
-        // 未登记 → 照旧安装（DAE-01 原行为不变）
-        assert_eq!(takeover_autostart(None, exe), TakeoverAutostart::Install);
     }
 
     #[test]

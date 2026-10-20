@@ -1,0 +1,10 @@
+# #1044 B13：版本关系的唯一实现，daemon 与桌面壳（src-tauri，path 依赖）共用。
+# 纯函数、零依赖——壳依赖它不会把任何业务或平台代码带进壳。
+[package]
+name = "version-cmp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]

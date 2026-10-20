@@ -9,6 +9,8 @@
 //! - the pre-ingest re-check drops the item when the device was revoked
 //!   behind the sweep's back (plain `db.revoke`, no sweep).
 
+mod common;
+
 use std::path::Path;
 use std::sync::Arc;
 
@@ -121,7 +123,7 @@ impl IpcClient {
 /// (`set_flow_delivery`), serving on a real local socket.
 async fn ipc_for(db: &Db, delivery: &FlowDelivery, dir: &Path, tag: &str) -> IpcClient {
     let (event_bus, _probe) = daemon::events::bus();
-    let (pairing, pending_rx) = Pairing::new(db.clone(), NodeId([0xCC; 32]), None, None);
+    let (pairing, pending_rx) = Pairing::new(db.clone(), NodeId([0xCC; 32]), None);
     let ipc = Arc::new(IpcServer::new(
         db.clone(),
         pairing,
@@ -218,11 +220,11 @@ async fn device_revoke_cancels_the_in_flight_fetch_before_it_can_finish() {
         delivery.offer(phone_b, &offer_b).await.unwrap();
         let fetch_a = tokio::spawn({
             let (d, o) = (delivery.clone(), offer_a.clone());
-            async move { d.fetch(phone_a, &o).await }
+            async move { common::await_receipt(&d, phone_a, &o).await }
         });
         let fetch_b = tokio::spawn({
             let (d, o) = (delivery.clone(), offer_b.clone());
-            async move { d.fetch(phone_b, &o).await }
+            async move { common::await_receipt(&d, phone_b, &o).await }
         });
 
         let started = std::time::Instant::now();
@@ -310,7 +312,9 @@ async fn device_revoke_cancels_the_in_flight_fetch_before_it_can_finish() {
         db.set_pairing_epoch(&phone_a.0, "epoch-new").await.unwrap();
         let offer_a_new = request("epoch-new", "lease-a2", hash_a, ticket_a.clone());
         delivery.offer(phone_a, &offer_a_new).await.unwrap();
-        delivery.fetch(phone_a, &offer_a_new).await.unwrap();
+        common::await_receipt(&delivery, phone_a, &offer_a_new)
+            .await
+            .unwrap();
         assert_eq!(
             grant_state(&db, phone_a, "epoch-new").await,
             Some(FlowGrantState::Completed)
@@ -376,7 +380,7 @@ async fn revoked_device_is_rechecked_before_ingest_even_without_the_sweep() {
         delivery.offer(phone, &offer).await.unwrap();
         let fetch = tokio::spawn({
             let (d, o) = (delivery.clone(), offer.clone());
-            async move { d.fetch(phone, &o).await }
+            async move { common::await_receipt(&d, phone, &o).await }
         });
         let started = std::time::Instant::now();
         while !fetch.is_finished() && dir_bytes(&receiver_store) < KILL_THRESHOLD {

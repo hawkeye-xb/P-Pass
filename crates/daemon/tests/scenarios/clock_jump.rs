@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 
 use daemon::Router;
-use proto::{codes, PairRequest, Req, Resp};
+use proto::{codes, Req, Resp};
 use storage::{Db, Device, Role};
 use transport::{IrohTransport, Transport, TransportConfig};
 
@@ -29,7 +29,7 @@ async fn start_daemon(
     let tp = endpoint().await;
     let addr = tp.local_addr();
     let now = clock.clone();
-    let (pairing, mut pending) = daemon::Pairing::new(db.clone(), tp.node_id(), None, None);
+    let (pairing, mut pending) = daemon::Pairing::new(db.clone(), tp.node_id(), None);
     tokio::spawn(async move {
         while let Some(req) = pending.recv().await {
             let _ = req.decide(daemon::PairDecision::Accept); // 剧本自动确认（owner 在 IPC 侧）
@@ -66,19 +66,7 @@ async fn call(
 }
 
 async fn send_pair(tp: &IrohTransport, daemon: transport::NodeId, token: &str, name: &str) -> Resp {
-    call(
-        tp,
-        daemon,
-        "pair.request",
-        serde_json::to_value(PairRequest {
-            token: token.into(),
-            device_name: name.into(),
-            role: "member".into(),
-            ..Default::default()
-        })
-        .unwrap(),
-    )
-    .await
+    crate::common::pair_settled(tp, daemon, token, name).await
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -135,7 +123,7 @@ async fn clock_jump_expires_inflight_pairing_tokens() {
         "daemon must stay healthy after clock jump: {hello2:?}"
     );
 
-    // 钟恢复正常 → 过期在请求时评估（pairing.rs:140）：同一令牌当时只是
+    // 钟恢复正常 → 过期在请求时评估（pairing.rs `Pairing::submit_request`）：同一令牌当时只是
     // 被拒、未被消耗，现在重新有效——走通全链（自动确认 → 设备落表 → 审计）。
     //
     // ⚠️ 这是已知、故意的权衡（T-070b 注记）：令牌"过期在请求时评估"意味着

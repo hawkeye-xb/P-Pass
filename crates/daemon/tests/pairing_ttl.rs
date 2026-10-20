@@ -5,6 +5,9 @@
 //! 同一手机新的顶掉旧的）。**请求侧**的修复（`pairing.rs`：等待有界、
 //! 审计取决定时刻）见 `pairing_flow.rs` 末尾的 DEV-05 用例。
 
+mod common;
+
+use common::PairingExt;
 use std::sync::Arc;
 
 use daemon::{ConfirmOutcome, DiagAgg, IpcServer, PairRejection, Pairing};
@@ -32,7 +35,7 @@ async fn start_pairing_harness(
 ) -> (Db, Pairing, Arc<IpcServer>) {
     let db = Db::open_in_memory().await.unwrap();
     let (event_bus, _probe) = daemon::events::bus();
-    let (pairing, pending_rx) = Pairing::new(db.clone(), transport::NodeId([0xCC; 32]), None, None);
+    let (pairing, pending_rx) = Pairing::new(db.clone(), transport::NodeId([0xCC; 32]), None);
     let pairing = pairing
         .with_events(event_bus.clone())
         .with_pending_ttl(req_ttl_ms);
@@ -66,7 +69,7 @@ fn knock(
         let qr = pairing.start(token, now());
         let token_hex = qr.rsplit("&t=").next().unwrap().to_string();
         pairing
-            .handle_request(
+            .submit_and_wait(
                 transport::NodeId([peer; 32]),
                 &proto::PairRequest {
                     token: token_hex,

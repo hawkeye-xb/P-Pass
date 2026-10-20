@@ -2,8 +2,9 @@
 //!
 //! 契约 (T-011): `ingest(IncomingFile) -> IngestOutcome{New|Duplicate|Moved}`.
 //! EXIF `DateTimeOriginal` is the timeline key; missing EXIF falls back to
-//! the file's mtime. Every ingest is audited to device granularity
-//! (审计裁决 2026-07-29).
+//! the file's mtime. Watcher/legacy ingest is audited to device granularity
+//! (审计裁决 2026-07-29); Flow ingest only audits the two exceptions
+//! (`Ingestor::ingest_flow`, #1044 B1).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -52,6 +53,16 @@ pub enum IngestOutcome {
     /// 字节又出现在别处 —— 这是「移动」，不是新增也不是重复。索引改指
     /// 新位置（hash 是身份，路径只是当前住址），行不删。
     Moved(String),
+}
+
+/// 入库的审计口径（#1044 B1）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuditPolicy {
+    /// 目录监听、旧批量管线：逐张记 `ingest.new` / `ingest.duplicate`，
+    /// 例外照记。
+    Full,
+    /// Flow：只记 `asset.relocated` / `asset.replaced_in_place` 两种例外。
+    ExceptionsOnly,
 }
 
 /// Ingest façade over one library directory + its index.
@@ -129,21 +140,21 @@ impl Ingestor {
     }
 
     pub async fn ingest(&self, f: &IncomingFile) -> Result<IngestOutcome> {
-        self.ingest_inner(f, true).await
+        self.ingest_inner(f, AuditPolicy::Full).await
     }
 
-    /// AUDIT-01: Flow item materialization must not create a per-item
-    /// long-term audit row — a Flow window writes exactly one
-    /// `flow.round.finished` summary, never one row per file (card decision
-    /// #3). This variant is otherwise byte-identical to [`Self::ingest`];
-    /// only the audit side effect is suppressed. Legacy batch backup,
-    /// rebuild, and the directory watcher keep calling the audited
-    /// [`Self::ingest`] — their per-file audit trail is unaffected.
-    pub async fn ingest_unaudited(&self, f: &IncomingFile) -> Result<IngestOutcome> {
-        self.ingest_inner(f, false).await
+    /// AUDIT-01（#1044 B1）：Flow 逐张入库不写长期审计——一轮只有一条
+    /// `flow.round.finished`（daemon 路由手机事实写入）。只有两种「数据层面
+    /// 真发生了事」的例外照记：文件重新落盘（`asset.relocated`）、落位时
+    /// 让掉了占着同一路径的老行（`asset.replaced_in_place`）。
+    /// `ingest.new` / `ingest.duplicate` 不写。其余与 [`Self::ingest`] 逐字
+    /// 相同；目录监听与 rebuild 仍走全量审计的 [`Self::ingest`]。
+    pub async fn ingest_flow(&self, f: &IncomingFile) -> Result<IngestOutcome> {
+        self.ingest_inner(f, AuditPolicy::ExceptionsOnly).await
     }
 
-    async fn ingest_inner(&self, f: &IncomingFile, audited: bool) -> Result<IngestOutcome> {
+    async fn ingest_inner(&self, f: &IncomingFile, policy: AuditPolicy) -> Result<IngestOutcome> {
+        let audited = policy == AuditPolicy::Full;
         // block_in_place: hashing and (cross-volume) copying a large file
         // are CPU/IO-bound synchronous work whose cost scales with file
         // size — running them inline on a tokio worker thread starves every
@@ -181,10 +192,8 @@ impl Ingestor {
                 None => self.place(f, taken_at_ms(&f.src_path, f.capture_at_ms_hint)?)?,
             };
             self.db.update_asset_rel_path(&hash, &new_rel).await?;
-            if audited {
-                self.audit(now_ms, f, &hash, "asset.relocated", Some(new_rel.clone()))
-                    .await?;
-            }
+            self.audit(now_ms, f, &hash, "asset.relocated", Some(new_rel.clone()))
+                .await?;
             return Ok(IngestOutcome::Moved(new_rel));
         }
 
@@ -226,16 +235,14 @@ impl Ingestor {
         if let Some(evicted) = self.db.hash_at_rel_path(&rel_path).await? {
             if evicted != hash {
                 self.db.delete_asset(&evicted).await?;
-                if audited {
-                    self.audit(
-                        now_ms,
-                        f,
-                        &hash,
-                        "asset.replaced_in_place",
-                        Some(rel_path.clone()),
-                    )
-                    .await?;
-                }
+                self.audit(
+                    now_ms,
+                    f,
+                    &hash,
+                    "asset.replaced_in_place",
+                    Some(rel_path.clone()),
+                )
+                .await?;
             }
         }
 
@@ -301,7 +308,7 @@ impl Ingestor {
     /// suffixing `-1`, `-2`, … on name collisions. Returns the rel path.
     ///
     /// `block_in_place`: a cross-volume move falls back to a full-file copy
-    /// (`move_file`) — for a large Flow-delivered video this can run for
+    /// (`publish_no_clobber`) — for a large Flow-delivered video this can run for
     /// seconds, and without this it runs inline on the async runtime the
     /// same way the hash above did (2026-09-07 real-device symptom: desktop
     /// UI froze for the duration).
@@ -328,6 +335,9 @@ impl Ingestor {
         })?;
 
         let (stem, ext) = split_name(&name);
+        // 跨卷（或文件系统不支持硬链接）时才会用到的临时文件，惰性创建、
+        // 各候选名共用一份。**只在最终目录里**，所以与最终文件同卷。
+        let mut temp: Option<PathBuf> = None;
         for i in 0..10_000u32 {
             let candidate = match (i, ext) {
                 (0, _) => name.clone(),
@@ -335,21 +345,19 @@ impl Ingestor {
                 (_, None) => format!("{stem}-{i}"),
             };
             let dest = dir_abs.join(&candidate);
-            // create_new reserves the name atomically — two concurrent
-            // ingests can't pick the same slot, only fall through to -N.
-            match fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&dest)
-            {
-                Ok(_) => {
-                    move_file(&f.src_path, &dest)?;
+            match publish_no_clobber(&f.src_path, &dest, &dir_abs, &mut temp) {
+                Ok(()) => {
+                    discard_temp(&mut temp);
                     return Ok(format!("{dir_rel}/{candidate}"));
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(source) => return Err(IndexError::Io { path: dest, source }),
+                Err(source) => {
+                    discard_temp(&mut temp);
+                    return Err(IndexError::Io { path: dest, source });
+                }
             }
         }
+        discard_temp(&mut temp);
         Err(IndexError::NameSpaceExhausted(name))
     }
 
@@ -434,20 +442,100 @@ fn split_name(name: &str) -> (&str, Option<&str>) {
     }
 }
 
-/// rename() when possible (same volume), copy+delete across volumes.
-fn move_file(src: &Path, dest: &Path) -> Result<()> {
-    if fs::rename(src, dest).is_ok() {
-        return Ok(());
+/// 入库临时文件的命名特征（#1047）：`.ppf-ingest-<随机>.part`。
+///
+/// 点文件——`collect_files` / watcher 本来就跳过——所以半截内容即使留在
+/// `originals/` 里也不会被当成照片收编；启动清理只认这一种名字
+/// （[`is_ingest_temp_name`]），绝不按「0 字节」「看起来不完整」之类的
+/// 内容特征去猜，因为用户自己放进库里的文件在内容上与它们无法区分。
+const INGEST_TEMP_PREFIX: &str = ".ppf-ingest-";
+const INGEST_TEMP_SUFFIX: &str = ".part";
+
+/// 文件名是否是入库临时文件（前缀与后缀必须**同时**严格匹配）。
+pub(crate) fn is_ingest_temp_name(name: &str) -> bool {
+    name.len() > INGEST_TEMP_PREFIX.len() + INGEST_TEMP_SUFFIX.len()
+        && name.starts_with(INGEST_TEMP_PREFIX)
+        && name.ends_with(INGEST_TEMP_SUFFIX)
+}
+
+/// 把 `src` 的内容以 `dest` 为名**不覆盖地**放进目录（#1047）。
+///
+/// 目标是「`dest` 这个名字一出现，里面就是完整内容」——没有「先占位 0 字节、
+/// 再填内容」的窗口，所以进程在任何一刻被杀（SIGKILL / 断电）都不会在
+/// `originals/` 里留下占着最终文件名的 0 字节或半截文件：
+///
+/// 1. `hard_link(src, dest)`：同卷时一步到位。目标已存在则原子地报
+///    `AlreadyExists`（调用方换下一个候选名）——和旧的 `create_new` 同样
+///    不会被并发入库抢到同一个名字，也不会盖掉用户已有的文件。随后删 `src`；
+///    被杀在两步之间只会留下「两份都完整」。
+/// 2. 跨卷 / 文件系统不支持硬链接：先把内容复制到**目标目录里**的点文件临时
+///    名（半截内容只会出现在这个名字下，源文件此时仍完好，所以启动清理删它
+///    不会丢任何数据），再对临时文件做 `hard_link(temp, dest)`。
+/// 3. 连硬链接都做不了（FAT/exFAT 一类）：退回 `create_new` 占位 + 同目录
+///    rename 覆盖——窗口缩到两次系统调用之间，且内容此刻已完整落在临时文件
+///    里，对账看到的至多是一个被 rename 立刻覆盖的占位。
+///
+/// `temp` 由调用方持有，跨候选名复用，结束时用 [`discard_temp`] 清掉。
+fn publish_no_clobber(
+    src: &Path,
+    dest: &Path,
+    dir: &Path,
+    temp: &mut Option<PathBuf>,
+) -> std::io::Result<()> {
+    use std::io::ErrorKind;
+    if temp.is_none() {
+        match fs::hard_link(src, dest) {
+            Ok(()) => return fs::remove_file(src),
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => return Err(e),
+            // 跨卷 / 不支持硬链接 / 源是不能链接的东西：走临时文件路径。
+            Err(_) => {}
+        }
     }
-    fs::copy(src, dest).map_err(|source| IndexError::Io {
-        path: dest.to_path_buf(),
-        source,
-    })?;
-    fs::remove_file(src).map_err(|source| IndexError::Io {
-        path: src.to_path_buf(),
-        source,
-    })?;
-    Ok(())
+    let tmp = match temp {
+        Some(t) => t.clone(),
+        None => {
+            let t = dir.join(format!(
+                "{INGEST_TEMP_PREFIX}{}-{}{INGEST_TEMP_SUFFIX}",
+                std::process::id(),
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+            *temp = Some(t.clone());
+            fs::copy(src, &t)?;
+            // 内容在 rename 之前就要落到介质上，否则断电后可能得到
+            // 「名字在、内容是空」。
+            fs::File::open(&t)?.sync_all()?;
+            t
+        }
+    };
+    match fs::hard_link(&tmp, dest) {
+        Ok(()) => {}
+        Err(e) if e.kind() == ErrorKind::AlreadyExists => return Err(e),
+        Err(_) => {
+            // 文件系统不支持硬链接：占位后立刻 rename 覆盖。
+            fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(dest)?;
+            if let Err(e) = fs::rename(&tmp, dest) {
+                let _ = fs::remove_file(dest);
+                return Err(e);
+            }
+            *temp = None;
+            return fs::remove_file(src);
+        }
+    }
+    fs::remove_file(&tmp)?;
+    *temp = None;
+    fs::remove_file(src)
+}
+
+fn discard_temp(temp: &mut Option<PathBuf>) {
+    if let Some(t) = temp.take() {
+        let _ = fs::remove_file(t);
+    }
 }
 
 fn is_unique_violation(e: &storage::StorageError) -> bool {
@@ -508,5 +596,80 @@ mod tests {
         let d = device_dir(&[0xab; 32]);
         assert_eq!(d.len(), 64);
         assert_eq!(d, "ab".repeat(32));
+    }
+}
+
+#[cfg(test)]
+mod publish_tests {
+    use super::*;
+
+    fn dirs() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let t = tempfile::tempdir().unwrap();
+        let src = t.path().join("src.bin");
+        fs::write(&src, b"payload").unwrap();
+        let dir = t.path().join("originals");
+        fs::create_dir_all(&dir).unwrap();
+        (t, src, dir)
+    }
+
+    fn listing(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// 同卷：一步到位，目录里只有最终文件，源被移走。
+    #[test]
+    fn same_volume_publish_leaves_only_the_final_file() {
+        let (_t, src, dir) = dirs();
+        let mut temp = None;
+        publish_no_clobber(&src, &dir.join("a.jpg"), &dir, &mut temp).unwrap();
+        assert!(temp.is_none());
+        assert_eq!(listing(&dir), ["a.jpg"]);
+        assert_eq!(fs::read(dir.join("a.jpg")).unwrap(), b"payload");
+        assert!(!src.exists());
+    }
+
+    /// 已存在的名字（用户的文件）绝不被覆盖，源保持原样。
+    #[test]
+    fn existing_destination_is_never_clobbered() {
+        let (_t, src, dir) = dirs();
+        fs::write(dir.join("a.jpg"), b"users own").unwrap();
+        let mut temp = None;
+        let e = publish_no_clobber(&src, &dir.join("a.jpg"), &dir, &mut temp).unwrap_err();
+        assert_eq!(e.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(dir.join("a.jpg")).unwrap(), b"users own");
+        assert!(src.exists());
+    }
+
+    /// 跨卷路径（这里强制 `temp` 已存在来走它）：内容先完整落在点文件临时名，
+    /// 最终名一出现就是完整内容；完成后临时名消失。
+    #[test]
+    fn temp_path_publishes_complete_content_and_cleans_up() {
+        let (_t, src, dir) = dirs();
+        let tmp = dir.join(format!("{INGEST_TEMP_PREFIX}t-1{INGEST_TEMP_SUFFIX}"));
+        fs::copy(&src, &tmp).unwrap();
+        let mut temp = Some(tmp.clone());
+        publish_no_clobber(&src, &dir.join("b.jpg"), &dir, &mut temp).unwrap();
+        assert_eq!(listing(&dir), ["b.jpg"]);
+        assert_eq!(fs::read(dir.join("b.jpg")).unwrap(), b"payload");
+        assert!(temp.is_none() && !tmp.exists() && !src.exists());
+    }
+
+    #[test]
+    fn temp_name_matcher_is_strict() {
+        assert!(is_ingest_temp_name(".ppf-ingest-1-2.part"));
+        for bad in [
+            ".ppf-ingest-.part",
+            ".ppf-ingest-1-2",
+            "ppf-ingest-1-2.part",
+            ".ppf-ingest-1-2.part.bak",
+            "IMG.part",
+        ] {
+            assert!(!is_ingest_temp_name(bad), "{bad}");
+        }
     }
 }

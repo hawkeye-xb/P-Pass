@@ -127,7 +127,7 @@ fn original_logs_one_first_byte_stats_line_on_success() {
 async fn original_logs_one_first_byte_stats_line_on_success_body(cap: &Capture) {
     let root = tempfile::tempdir().unwrap();
     let (query, hash) = seeded_query(root.path()).await;
-    let bytes = query
+    let (_media_type, bytes) = query
         .original(&hex::encode(hash))
         .await
         .expect("seeded asset must be readable");

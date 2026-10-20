@@ -212,3 +212,104 @@ async fn unprobeable_files_keep_honest_null_dimensions() {
         "探不到就是探不到，不许拿 0 充数"
     );
 }
+
+/// #1047 反证：0 字节文件（入库被杀留下的占位，或用户自己放的空文件）
+/// 不得被收编成资产，也不得被删——删没有安全的判据。正常文件照常收编。
+/// 去掉 `index_missing_files` 里的 `len == 0` 跳过，这条必红（asset 表会多出
+/// 一条 bytes=0 的行）。
+#[tokio::test(flavor = "multi_thread")]
+async fn zero_byte_files_are_neither_adopted_nor_deleted() {
+    let (dir, db) = setup().await;
+    let root = dir.path().join("library");
+    let dev = "ab".repeat(32);
+    let empty = write(&root, &format!("originals/{dev}/2026/10/IMG_1.jpg"), b"");
+    let users_empty = write(&root, "originals/我的相册/placeholder.jpg", b"");
+    write(
+        &root,
+        &format!("originals/{dev}/2026/10/IMG_2.jpg"),
+        b"real",
+    );
+
+    let report = adopt_orphans(&db, &root, &LOCAL).await.unwrap();
+
+    assert_eq!(report.adopted, 1, "只收编有内容的那一个");
+    assert_eq!(report.skipped_empty, 2);
+    let page = db.timeline_page(None, 10).await.unwrap();
+    assert_eq!(page.assets.len(), 1);
+    assert!(
+        page.assets.iter().all(|a| a.bytes > 0),
+        "不得出现 bytes=0 的资产"
+    );
+    assert!(empty.exists() && users_empty.exists(), "0 字节文件不许被删");
+}
+
+/// #1044 B3：「什么算照片」只有一份口径（`core_index::media_kind`）。
+/// Windows 资源管理器留下的 `Thumbs.db`/`desktop.ini`、用户随手放的
+/// `notes.txt`、无扩展名文件都不是媒体，收编不许把它们变成照片墙上
+/// 永远解不出的灰块。反证：去掉扫描里的 `media_kind` 过滤，这条收 5 个。
+#[tokio::test(flavor = "multi_thread")]
+async fn non_media_files_are_never_adopted() {
+    let (dir, db) = setup().await;
+    let root = dir.path().join("library");
+    let dev = "ab".repeat(32);
+    write(
+        &root,
+        &format!("originals/{dev}/2026/09/Thumbs.db"),
+        b"thumbs cache",
+    );
+    write(
+        &root,
+        &format!("originals/{dev}/2026/09/desktop.ini"),
+        b"[.ShellClassInfo]",
+    );
+    write(&root, "originals/notes.txt", b"shopping list");
+    write(&root, "originals/noext", b"no extension");
+    write(
+        &root,
+        &format!("originals/{dev}/2026/09/IMG_1.JPG"),
+        b"real photo",
+    );
+
+    let report = adopt_orphans(&db, &root, &LOCAL).await.unwrap();
+
+    assert_eq!(report.adopted, 1, "只收那张照片");
+    let page = db.timeline_page(None, 10).await.unwrap();
+    assert_eq!(page.assets.len(), 1);
+    assert!(page.assets[0].rel_path.ends_with("IMG_1.JPG"));
+    assert_eq!(page.assets[0].media_type, "image/jpeg");
+}
+
+/// #1044 追加拍板：svg/svgz/ico 不收编；tiff/avif/jxl/RAW 照收。
+/// 反证：去掉 media.rs 里的排除表，这条收 7 个。
+#[tokio::test(flavor = "multi_thread")]
+async fn vector_images_and_icons_are_not_adopted_but_other_images_are() {
+    let (dir, db) = setup().await;
+    let root = dir.path().join("library");
+    for (name, body) in [
+        ("logo.svg", &b"<svg/>"[..]),
+        ("logo.svgz", b"gz"),
+        ("favicon.ico", b"ico"),
+        ("scan.tiff", b"tiff"),
+        ("a.avif", b"avif"),
+        ("a.jxl", b"jxl"),
+        ("a.raf", b"raf"),
+    ] {
+        write(&root, &format!("originals/{name}"), body);
+    }
+
+    let report = adopt_orphans(&db, &root, &LOCAL).await.unwrap();
+
+    assert_eq!(report.adopted, 4);
+    let page = db.timeline_page(None, 10).await.unwrap();
+    let mut names: Vec<&str> = page.assets.iter().map(|a| a.rel_path.as_str()).collect();
+    names.sort();
+    assert_eq!(
+        names,
+        vec![
+            "originals/a.avif",
+            "originals/a.jxl",
+            "originals/a.raf",
+            "originals/scan.tiff"
+        ]
+    );
+}

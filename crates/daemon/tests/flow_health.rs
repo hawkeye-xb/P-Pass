@@ -10,8 +10,8 @@ use std::sync::Arc;
 use daemon::events;
 use daemon::flow_delivery::{
     classify_peer_failure, DeliveryError, FlowDelivery, PeerFailure, GRANT_RESUME_TTL_MS,
-    LOW_SPACE_THRESHOLD_BYTES,
 };
+use daemon::low_space::LOW_SPACE_THRESHOLD_BYTES;
 use daemon::Router;
 use proto::{FlowFetchRequest, FlowTupleRef, Req, Resp};
 use storage::{Asset, Db, Device, Role};
@@ -319,6 +319,45 @@ async fn a_failed_landing_folder_keeps_health_unwritable_until_it_accepts_files(
 #[test]
 fn low_space_threshold_is_exactly_five_gib() {
     assert_eq!(LOW_SPACE_THRESHOLD_BYTES, 5 * GIB);
+}
+
+/// #1044 B11：低空间线三端同值。读手机源码里的同名常量（只读，不改手机），
+/// 把它算出来与 daemon 的常量比；任何一端改了另一端没改，这里变红。
+#[test]
+fn low_space_threshold_matches_both_phone_sources() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    for (file, needle) in [
+        (
+            "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/flow/FlowContract.kt",
+            "const val LOW_SPACE_BYTES: Long =",
+        ),
+        (
+            "apps/ios/Packages/PPassCore/Sources/PPassCore/Flow/FlowTypes.swift",
+            "public static let lowSpaceBytes: Int64 =",
+        ),
+    ] {
+        let text = std::fs::read_to_string(root.join(file)).expect(file);
+        let line = text
+            .lines()
+            .find(|l| l.contains(needle))
+            .unwrap_or_else(|| panic!("{file}: 找不到 `{needle}`"));
+        // 形如 `5L * 1024 * 1024 * 1024` / `5 * 1024 * 1024 * 1024`：逐项相乘。
+        let expr = line.split('=').nth(1).unwrap();
+        let value: u64 = expr
+            .split('*')
+            .map(|t| {
+                t.trim()
+                    .trim_end_matches(';')
+                    .trim_end_matches('L')
+                    .parse::<u64>()
+                    .unwrap_or_else(|_| panic!("{file}: 无法解析 `{expr}`"))
+            })
+            .product();
+        assert_eq!(
+            value, LOW_SPACE_THRESHOLD_BYTES,
+            "{file} 与 daemon 低空间线不一致"
+        );
+    }
 }
 
 // ── Router: hello carries health only for a paired member ────────────────
@@ -882,7 +921,7 @@ async fn wait_until_not_running(m: &MidFlight) {
 
 /// `flow.suspend` keeps the grant active, so the partial stays in the GC
 /// protection set across many GC cycles; the phone's next `flow.offer` on
-/// the same tuple (no `flow.fetch`) resumes and finishes from that partial.
+/// the same tuple (status polling only) resumes and finishes from that partial.
 #[tokio::test(flavor = "multi_thread")]
 async fn suspended_partial_survives_gc_and_a_reoffer_of_the_same_tuple_resumes_it() {
     let m = caught_mid_flight(0xABCD_1234_9876_0001)

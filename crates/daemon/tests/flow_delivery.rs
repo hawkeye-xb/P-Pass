@@ -1,4 +1,5 @@
-use std::path::Path;
+mod common;
+
 use std::sync::Arc;
 
 use daemon::events;
@@ -75,13 +76,17 @@ async fn mismatched_epoch_lease_or_hash_never_starts_a_native_fetch() {
         .await
         .unwrap();
 
+    // The active protocol addresses a grant by tuple (epoch + lease + seq):
+    // a stale epoch or lease names no grant, and a status poll on it must
+    // neither find one nor start a native fetch. #1050: the old full-request
+    // `flow.fetch` also compared content_hash/provider; no active method
+    // takes those any more, so that third variant is gone with it.
     for invalid in [
         request("epoch-stale", "lease-current", hash, provider.clone()),
-        request("epoch-current", "lease-stale", hash, provider.clone()),
-        request("epoch-current", "lease-current", [0x44; 32], provider),
+        request("epoch-current", "lease-stale", hash, provider),
     ] {
         assert!(matches!(
-            delivery.fetch(provider_transport.node_id(), &invalid).await,
+            common::await_receipt(&delivery, provider_transport.node_id(), &invalid).await,
             Err(DeliveryError::GuardMismatch)
         ));
     }
@@ -132,8 +137,7 @@ async fn verified_native_fetch_materializes_before_a_durable_receipt() {
         .await
         .unwrap();
 
-    let receipt = delivery
-        .fetch(provider_transport.node_id(), &offer)
+    let receipt = common::await_receipt(&delivery, provider_transport.node_id(), &offer)
         .await
         .unwrap();
     assert_eq!(receipt.queue_sequence, 7);
@@ -144,6 +148,19 @@ async fn verified_native_fetch_materializes_before_a_durable_receipt() {
     assert!(
         db.get_asset(&hash).await.unwrap().is_some(),
         "receipt requires indexed materialization"
+    );
+    // #1044 B1（AUDIT-01）：Flow 逐张入库不写 `ingest.*` 长期审计。
+    // 反证：flow_delivery 退回 `ingest()`，这里会多出一条 `ingest.new`。
+    let kinds: Vec<String> = db
+        .list_audit(50)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| r.entry.kind)
+        .collect();
+    assert!(
+        !kinds.iter().any(|k| k.starts_with("ingest.")),
+        "Flow 入库不许写逐张审计, got {kinds:?}"
     );
     let persisted = db
         .flow_receipt(
@@ -164,8 +181,7 @@ async fn verified_native_fetch_materializes_before_a_durable_receipt() {
         .offer(provider_transport.node_id(), &resumed)
         .await
         .expect("same epoch and hash may rebind a recovered lease");
-    let resumed_receipt = delivery
-        .fetch(provider_transport.node_id(), &resumed)
+    let resumed_receipt = common::await_receipt(&delivery, provider_transport.node_id(), &resumed)
         .await
         .expect("completed content must replay its durable receipt");
     assert_eq!(resumed_receipt.receipt_id, receipt.receipt_id);
@@ -210,8 +226,8 @@ async fn concurrent_retries_of_one_grant_share_the_durable_receipt() {
         .unwrap();
 
     let (first, second) = tokio::join!(
-        delivery.fetch(provider_transport.node_id(), &offer),
-        delivery.fetch(provider_transport.node_id(), &offer),
+        common::await_receipt(&delivery, provider_transport.node_id(), &offer),
+        common::await_receipt(&delivery, provider_transport.node_id(), &offer),
     );
     let first = first.expect("first fetch must materialize");
     let second = second.expect("concurrent retry must replay receipt");
@@ -257,8 +273,7 @@ async fn rejoined_device_reuses_a_sequence_in_its_new_pairing_epoch() {
         .offer(provider_transport.node_id(), &old_request)
         .await
         .unwrap();
-    delivery
-        .fetch(provider_transport.node_id(), &old_request)
+    common::await_receipt(&delivery, provider_transport.node_id(), &old_request)
         .await
         .unwrap();
     assert!(db.get_asset(&old_hash).await.unwrap().is_some());
@@ -277,8 +292,7 @@ async fn rejoined_device_reuses_a_sequence_in_its_new_pairing_epoch() {
         .offer(provider_transport.node_id(), &new_request)
         .await
         .expect("the new pairing epoch owns a fresh sequence namespace");
-    delivery
-        .fetch(provider_transport.node_id(), &new_request)
+    common::await_receipt(&delivery, provider_transport.node_id(), &new_request)
         .await
         .expect("newly authorised work with the reused sequence must complete");
     assert!(db.get_asset(&old_hash).await.unwrap().is_some());
@@ -344,8 +358,7 @@ async fn completed_flow_fetch_is_reclaimed_by_periodic_gc() {
         .offer(provider_transport.node_id(), &offer)
         .await
         .unwrap();
-    delivery
-        .fetch(provider_transport.node_id(), &offer)
+    common::await_receipt(&delivery, provider_transport.node_id(), &offer)
         .await
         .unwrap();
     assert!(db
@@ -406,8 +419,7 @@ async fn authenticated_control_peer_may_offer_a_distinct_native_provider_ticket(
         .offer(control_transport.node_id(), &offer)
         .await
         .unwrap();
-    let receipt = delivery
-        .fetch(control_transport.node_id(), &offer)
+    let receipt = common::await_receipt(&delivery, control_transport.node_id(), &offer)
         .await
         .unwrap();
 
@@ -423,8 +435,8 @@ async fn authenticated_control_peer_may_offer_a_distinct_native_provider_ticket(
 /// offer 一返回后台下载就开始了，30 字节的小文件可能在 cancel 生效前就下完，
 /// 那句断言是在和后台下载赛跑（#744 在 Windows runner 上红过）。
 /// cancel 与完成谁先到都合法：
-/// - cancel 先到：当下 fetch 报 Cancelled、没有回执；
-/// - 完成先到：cancel 打不中 active 行（GuardMismatch），回执已经在了。
+/// - cancel 先到：状态是 cancelled、没有回执；
+/// - 完成先到：cancel 打不中 active 行（幂等 Ok、不改状态），回执已经在了。
 ///
 /// 两种情况下，继续之后都必须收敛到「完成 + 恰好一份回执」。
 #[tokio::test(flavor = "multi_thread")]
@@ -469,10 +481,21 @@ async fn cancel_is_honored_now_and_a_later_offer_completes_the_item() {
     };
 
     delivery.offer(peer, &offer).await.unwrap();
-    match delivery.cancel(peer, &offer).await {
-        Ok(()) => {
+    // #1027：cancel_tuple 幂等，两种先后都答 Ok；谁先到由随后的状态判定。
+    delivery
+        .cancel_by_tuple(peer, &common::tuple_of(&offer))
+        .await
+        .expect("cancel_tuple is idempotent whichever side won the race");
+    match delivery
+        .status(peer, &common::tuple_of(&offer))
+        .await
+        .unwrap()
+        .state
+        .as_str()
+    {
+        "cancelled" => {
             assert!(matches!(
-                delivery.fetch(peer, &offer).await,
+                common::await_receipt(&delivery, peer, &offer).await,
                 Err(DeliveryError::Cancelled)
             ));
             assert!(
@@ -481,17 +504,16 @@ async fn cancel_is_honored_now_and_a_later_offer_completes_the_item() {
             );
         }
         // 完成先到：传完了就是传完了。
-        Err(DeliveryError::GuardMismatch) => assert!(
+        "completed" => assert!(
             receipt_row().await.is_some(),
-            "cancel only misses the active row when the item already completed"
+            "a completed item must carry its receipt"
         ),
-        Err(other) => panic!("unexpected cancel outcome: {other:?}"),
+        other => panic!("unexpected state after cancel: {other}"),
     }
 
     // 手机继续：同一 tuple 再 offer，必须收敛到完成。
     delivery.offer(peer, &offer).await.unwrap();
-    let receipt = delivery
-        .fetch(peer, &offer)
+    let receipt = common::await_receipt(&delivery, peer, &offer)
         .await
         .expect("continuing a cancelled item must complete it");
     assert_eq!(receipt.content_hash, hex::encode(hash));
@@ -546,11 +568,13 @@ async fn bytes_already_local_complete_a_cancelled_item_without_refetching() {
 
     delivery.offer(peer, &offer).await.unwrap();
     // 谁先到都行（见上一条）；这里只关心继续之后的结果。
-    let _ = delivery.cancel(peer, &offer).await;
+    let _ = delivery
+        .cancel_by_tuple(peer, &common::tuple_of(&offer))
+        .await;
     delivery.offer(peer, &offer).await.unwrap();
     let receipt = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        delivery.fetch(peer, &offer),
+        common::await_receipt(&delivery, peer, &offer),
     )
     .await
     .expect("must not hang when the bytes are already local")
@@ -604,8 +628,7 @@ async fn successful_flow_fetch_notifies_the_desktop_timeline() {
         .await
         .unwrap();
 
-    delivery
-        .fetch(provider_transport.node_id(), &offer)
+    common::await_receipt(&delivery, provider_transport.node_id(), &offer)
         .await
         .unwrap();
 
@@ -853,8 +876,7 @@ async fn successful_fetch_logs_one_conn_and_one_flow_item_stats_line_body(cap: &
         .offer(provider_transport.node_id(), &offer)
         .await
         .unwrap();
-    delivery
-        .fetch(provider_transport.node_id(), &offer)
+    common::await_receipt(&delivery, provider_transport.node_id(), &offer)
         .await
         .unwrap();
 
@@ -906,7 +928,7 @@ async fn network_fetch_failure_logs_conn_lines_at_the_fetch_stage_body(cap: &Log
     );
     let db = paired_db("epoch-current", provider_node).await;
 
-    let delivery = FlowDelivery::new(db, receiver_blobs, root.path());
+    let delivery = FlowDelivery::new(db.clone(), receiver_blobs, root.path());
     let offer = request("epoch-current", "lease-current", hash, ticket);
     delivery.offer(provider_node, &offer).await.unwrap();
 
@@ -917,13 +939,26 @@ async fn network_fetch_failure_logs_conn_lines_at_the_fetch_stage_body(cap: &Log
     drop(provider_blobs);
     drop(provider_transport);
 
-    assert!(matches!(
-        delivery.fetch(provider_node, &offer).await,
-        Err(DeliveryError::Fetch(_))
-    ));
+    // The background attempt `offer()` started fails at the fetch stage. Wait
+    // (bounded) until it has left its conn line, then assert no terminal state.
+    let started = std::time::Instant::now();
+    while cap.stats_lines().is_empty() {
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(90),
+            "the failed background fetch left no conn line within 90s"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(
+        db.flow_receipt(provider_node.0.as_slice(), "epoch-current", 7)
+            .await
+            .unwrap()
+            .is_none(),
+        "a failed fetch must not leave a receipt"
+    );
 
-    // #620: 条数不是不变量——`offer()` 起的那次尝试已失败退场时，`fetch()`
-    // 会合法地再起一次尝试，多出第二条 conn。这里断言语义：至少一条，且每条
+    // #620: 条数不是不变量——失败退场后，状态轮询可能合法地再起一次尝试，
+    // 多出第二条 conn。这里断言语义：至少一条，且每条
     // 都是 fetch 阶段失败的 conn；成功路径的 flow_item 一条都不能有。
     let lines = cap.stats_lines();
     assert!(!lines.is_empty(), "至少一次后台尝试要留下 conn");
@@ -1119,8 +1154,7 @@ async fn reoffering_an_already_completed_tuple_under_a_new_lease_still_pushes_fl
         .offer(provider_transport.node_id(), &first_offer)
         .await
         .unwrap();
-    delivery
-        .fetch(provider_transport.node_id(), &first_offer)
+    common::await_receipt(&delivery, provider_transport.node_id(), &first_offer)
         .await
         .unwrap();
     // Drain the first pass's events (device changes x3, timeline, delivered)
@@ -1542,8 +1576,7 @@ async fn status_reports_completed_with_the_durable_receipt() {
         .offer(provider_transport.node_id(), &offer)
         .await
         .unwrap();
-    let receipt = delivery
-        .fetch(provider_transport.node_id(), &offer)
+    let receipt = common::await_receipt(&delivery, provider_transport.node_id(), &offer)
         .await
         .unwrap();
 
@@ -1601,7 +1634,9 @@ async fn repeated_fetch_and_status_on_a_completed_grant_never_retouch_the_data_p
     let peer = provider_transport.node_id();
 
     delivery.offer(peer, &offer).await.unwrap();
-    let first = delivery.fetch(peer, &offer).await.unwrap();
+    let first = common::await_receipt(&delivery, peer, &offer)
+        .await
+        .unwrap();
     // The first fetch really did run the data plane — bytes landed locally.
     assert_eq!(
         receiver_blobs.local_bytes(hash).await.unwrap(),
@@ -1614,8 +1649,7 @@ async fn repeated_fetch_and_status_on_a_completed_grant_never_retouch_the_data_p
     provider_transport.close().await;
 
     for round in 1..=3 {
-        let again = delivery
-            .fetch(peer, &offer)
+        let again = common::await_receipt(&delivery, peer, &offer)
             .await
             .unwrap_or_else(|error| {
                 panic!("repeat fetch #{round} on a completed grant must replay the durable receipt, got {error:?}")
@@ -1677,7 +1711,7 @@ async fn status_reports_cancelled_after_cancel() {
         .await
         .unwrap();
     delivery
-        .cancel(provider_transport.node_id(), &offer)
+        .cancel_by_tuple(provider_transport.node_id(), &common::tuple_of(&offer))
         .await
         .unwrap();
 
@@ -1749,14 +1783,13 @@ async fn cancel_by_tuple_cancels_without_content_hash_or_provider() {
         .unwrap();
     assert_eq!(
         reply.state, "cancelled",
-        "cancel_by_tuple must mark the grant cancelled, same terminal state as flow.cancel"
+        "cancel_by_tuple must mark the grant cancelled, same terminal state as any cancel"
     );
 }
 
 /// Counterexample: a tuple with no matching grant (never offered, or a
 /// stale lease_token from a superseded offer) must not be silently
-/// accepted — it is a guard mismatch, same as `flow.cancel` against an
-/// unknown tuple.
+/// accepted — it is a guard mismatch.
 #[tokio::test(flavor = "multi_thread")]
 async fn cancel_by_tuple_rejects_an_unknown_tuple() {
     let root = tempdir().unwrap();
@@ -1888,8 +1921,12 @@ async fn suspend_on_one_device_does_not_touch_another_devices_grant_for_the_same
     );
 
     // Both fetches must still be able to complete independently.
-    delivery.fetch(device_a, &offer_a).await.unwrap();
-    delivery.fetch(device_b, &offer_b).await.unwrap();
+    common::await_receipt(&delivery, device_a, &offer_a)
+        .await
+        .unwrap();
+    common::await_receipt(&delivery, device_b, &offer_b)
+        .await
+        .unwrap();
 }
 
 /// Core NET-06 review fix #1 + suspend acceptance: interrupting the
@@ -1947,20 +1984,11 @@ async fn suspend_interrupts_an_in_progress_fetch_and_keeps_the_grant_active() {
         let delivery = FlowDelivery::new(db.clone(), receiver_blobs.clone(), root.path());
         delivery.offer(provider_node, &offer).await.unwrap();
 
-        let fetch_delivery = delivery.clone();
-        let fetch_offer = offer.clone();
-        let fetch =
-            tokio::spawn(async move { fetch_delivery.fetch(provider_node, &fetch_offer).await });
-
-        let started = std::time::Instant::now();
-        while !fetch.is_finished() && dir_bytes(&receiver_store) < KILL_THRESHOLD {
-            assert!(
-                started.elapsed() < std::time::Duration::from_secs(60),
-                "fetch moved no bytes toward the kill threshold in 60s"
-            );
-            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
-        }
-        if fetch.is_finished() {
+        // Never poll the delivery here: a status poll would respawn the very
+        // task this test is about to interrupt (NET-15).
+        if !common::wait_mid_flight(&db, provider_node, &offer, &receiver_store, KILL_THRESHOLD)
+            .await
+        {
             eprintln!("attempt {attempt}: transfer outran the kill threshold, retrying");
             continue;
         }
@@ -1973,14 +2001,9 @@ async fn suspend_interrupts_an_in_progress_fetch_and_keeps_the_grant_active() {
             .await
             .unwrap();
 
-        let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), fetch)
-            .await
-            .expect("suspend must interrupt the fetch task within 2s, not wait for it to finish naturally")
-            .expect("the spawned test task itself must not panic/be cancelled");
-        assert!(
-            matches!(outcome, Err(DeliveryError::Fetch(_))),
-            "a suspended fetch's poll must resolve as an error (task ended without completing), got: {outcome:?}"
-        );
+        // The interrupt is observed as "the task stopped moving bytes" within
+        // 2 s; the grant itself must stay active (checked below).
+        common::wait_bytes_settled(&receiver_store, std::time::Duration::from_secs(2)).await;
 
         // The grant must still be active — suspend never touches durable
         // state — so status must NOT report cancelled/not_found. NET-15
@@ -2017,7 +2040,7 @@ async fn suspend_interrupts_an_in_progress_fetch_and_keeps_the_grant_active() {
 }
 
 /// Suspend→resume: after an interrupted fetch, a fresh `flow.offer` +
-/// `flow.fetch` on the same tuple must complete using the partial bytes
+/// status polling on the same tuple must complete using the partial bytes
 /// already on disk (iroh-blobs' own resume, same guarantee `blobs_resume.rs`
 /// validates), not restart the transfer from zero.
 #[tokio::test(flavor = "multi_thread")]
@@ -2068,17 +2091,11 @@ async fn suspend_then_resume_completes_from_the_retained_partial() {
         let delivery = FlowDelivery::new(db.clone(), receiver_blobs.clone(), root.path());
         delivery.offer(provider_node, &offer).await.unwrap();
 
-        let fetch_delivery = delivery.clone();
-        let fetch_offer = offer.clone();
-        let fetch =
-            tokio::spawn(async move { fetch_delivery.fetch(provider_node, &fetch_offer).await });
-
-        let started = std::time::Instant::now();
-        while !fetch.is_finished() && dir_bytes(&receiver_store) < KILL_THRESHOLD {
-            assert!(started.elapsed() < std::time::Duration::from_secs(60));
-            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
-        }
-        if fetch.is_finished() {
+        // Never poll the delivery here: a status poll would respawn the very
+        // task this test is about to interrupt (NET-15).
+        if !common::wait_mid_flight(&db, provider_node, &offer, &receiver_store, KILL_THRESHOLD)
+            .await
+        {
             eprintln!("attempt {attempt}: transfer outran the kill threshold, retrying");
             continue;
         }
@@ -2090,7 +2107,7 @@ async fn suspend_then_resume_completes_from_the_retained_partial() {
             )
             .await
             .unwrap();
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), fetch).await;
+        common::wait_bytes_settled(&receiver_store, std::time::Duration::from_secs(2)).await;
         let partial_bytes_on_disk = receiver_blobs.local_bytes(hash).await.unwrap();
         assert!(
             partial_bytes_on_disk > 0 && partial_bytes_on_disk < PAYLOAD as u64,
@@ -2101,8 +2118,7 @@ async fn suspend_then_resume_completes_from_the_retained_partial() {
         // "continue" tap) — resume must not restart from zero.
         let resume_delivery = FlowDelivery::new(db.clone(), receiver_blobs.clone(), root.path());
         resume_delivery.offer(provider_node, &offer).await.unwrap();
-        let receipt = resume_delivery
-            .fetch(provider_node, &offer)
+        let receipt = common::await_receipt(&resume_delivery, provider_node, &offer)
             .await
             .expect("resume after suspend must complete, not restart-and-fail");
         assert_eq!(receipt.content_hash, hex::encode(hash));
@@ -2178,19 +2194,11 @@ async fn status_respawns_the_delivery_task_lost_to_a_daemon_restart() {
         let delivery = FlowDelivery::new(db.clone(), receiver_blobs.clone(), root.path());
         delivery.offer(provider_node, &offer).await.unwrap();
 
-        let fetch_delivery = delivery.clone();
-        let fetch_offer = offer.clone();
-        let fetch =
-            tokio::spawn(async move { fetch_delivery.fetch(provider_node, &fetch_offer).await });
-        let started = std::time::Instant::now();
-        while !fetch.is_finished() && dir_bytes(&receiver_store) < KILL_THRESHOLD {
-            assert!(
-                started.elapsed() < std::time::Duration::from_secs(60),
-                "fetch moved no bytes toward the kill threshold in 60s"
-            );
-            tokio::time::sleep(std::time::Duration::from_millis(2)).await;
-        }
-        if fetch.is_finished() {
+        // Never poll the delivery here: a status poll would respawn the very
+        // task this test is about to interrupt (NET-15).
+        if !common::wait_mid_flight(&db, provider_node, &offer, &receiver_store, KILL_THRESHOLD)
+            .await
+        {
             eprintln!("attempt {attempt}: transfer outran the kill threshold, retrying");
             continue;
         }
@@ -2204,7 +2212,7 @@ async fn status_respawns_the_delivery_task_lost_to_a_daemon_restart() {
             )
             .await
             .unwrap();
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), fetch).await;
+        common::wait_bytes_settled(&receiver_store, std::time::Duration::from_secs(2)).await;
         let partial = receiver_blobs.local_bytes(hash).await.unwrap();
         assert!(
             partial > 0 && partial < PAYLOAD as u64,
@@ -2370,11 +2378,12 @@ async fn cancel_after_interrupt_lets_the_partial_fall_out_of_gc_protection() {
 
         let fetch_delivery = delivery.clone();
         let fetch_offer = offer.clone();
-        let fetch =
-            tokio::spawn(async move { fetch_delivery.fetch(provider_node, &fetch_offer).await });
+        let fetch = tokio::spawn(async move {
+            common::await_receipt(&fetch_delivery, provider_node, &fetch_offer).await
+        });
 
         let started = std::time::Instant::now();
-        while !fetch.is_finished() && dir_bytes(&receiver_store) < KILL_THRESHOLD {
+        while !fetch.is_finished() && common::dir_bytes(&receiver_store) < KILL_THRESHOLD {
             assert!(started.elapsed() < std::time::Duration::from_secs(60));
             tokio::time::sleep(std::time::Duration::from_millis(2)).await;
         }
@@ -2383,7 +2392,10 @@ async fn cancel_after_interrupt_lets_the_partial_fall_out_of_gc_protection() {
             continue;
         }
 
-        delivery.cancel(provider_node, &offer).await.unwrap();
+        delivery
+            .cancel_by_tuple(provider_node, &common::tuple_of(&offer))
+            .await
+            .unwrap();
         let _ = tokio::time::timeout(std::time::Duration::from_secs(2), fetch).await;
 
         let status = delivery
@@ -2500,11 +2512,12 @@ async fn cancel_before_complete_flow_grant_converges_to_cancelled() {
 
         let fetch_delivery = delivery.clone();
         let fetch_offer = offer_x.clone();
-        let fetch =
-            tokio::spawn(async move { fetch_delivery.fetch(provider_node, &fetch_offer).await });
+        let fetch = tokio::spawn(async move {
+            common::await_receipt(&fetch_delivery, provider_node, &fetch_offer).await
+        });
 
         let started = std::time::Instant::now();
-        while !fetch.is_finished() && dir_bytes(&receiver_store) < KILL_THRESHOLD {
+        while !fetch.is_finished() && common::dir_bytes(&receiver_store) < KILL_THRESHOLD {
             assert!(
                 started.elapsed() < std::time::Duration::from_secs(60),
                 "fetch moved no bytes toward the kill threshold in 60s"
@@ -2517,7 +2530,10 @@ async fn cancel_before_complete_flow_grant_converges_to_cancelled() {
         }
         // Still in flight => complete_flow_grant provably not executed =>
         // this cancel is deterministically FIRST across the boundary.
-        delivery.cancel(provider_node, &offer_x).await.unwrap();
+        delivery
+            .cancel_by_tuple(provider_node, &common::tuple_of(&offer_x))
+            .await
+            .unwrap();
 
         let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), fetch)
             .await
@@ -2545,13 +2561,6 @@ async fn cancel_before_complete_flow_grant_converges_to_cancelled() {
         );
         // The terminal state is final: neither a repeat cancel nor a late
         // suspend may move it (both require the grant to still be active).
-        assert!(
-            matches!(
-                delivery.cancel(provider_node, &offer_x).await,
-                Err(DeliveryError::GuardMismatch)
-            ),
-            "a repeat cancel on the cancelled tuple must lose"
-        );
         // #1027: a late suspend / cancel_tuple is idempotent — the goal (this
         // tuple stops) is already reached, so it answers Ok and moves nothing.
         delivery
@@ -2592,19 +2601,11 @@ async fn cancel_before_complete_flow_grant_converges_to_cancelled() {
         ..request("epoch-current", "lease-y", hash_y, String::new())
     };
     delivery.offer(provider_node, &offer_y).await.unwrap();
-    let receipt = delivery
-        .fetch(provider_node, &offer_y)
+    let receipt = common::await_receipt(&delivery, provider_node, &offer_y)
         .await
         .expect("the second item must complete normally");
     assert_eq!(receipt.queue_sequence, 8);
 
-    assert!(
-        matches!(
-            delivery.cancel(provider_node, &offer_y).await,
-            Err(DeliveryError::GuardMismatch)
-        ),
-        "a cancel landing AFTER complete_flow_grant must not flip the completed tuple"
-    );
     // #1027: suspend / cancel_tuple after completion answer Ok (idempotent)
     // and must not flip the completed tuple — asserted by the status below.
     delivery
@@ -2700,19 +2701,11 @@ async fn complete_flow_grant_before_cancel_converges_to_completed() {
         ..request("epoch-current", "lease-y", hash_y, String::new())
     };
     delivery.offer(provider_node, &offer_y).await.unwrap();
-    let receipt = delivery
-        .fetch(provider_node, &offer_y)
+    let receipt = common::await_receipt(&delivery, provider_node, &offer_y)
         .await
         .expect("the small item must complete normally");
     assert_eq!(receipt.queue_sequence, 8);
 
-    assert!(
-        matches!(
-            delivery.cancel(provider_node, &offer_y).await,
-            Err(DeliveryError::GuardMismatch)
-        ),
-        "the late cancel must lose to the already-executed complete_flow_grant"
-    );
     // #1027: the late suspend / cancel_tuple answer Ok (idempotent) without
     // touching the completed tuple — the status below stays `completed`.
     delivery
@@ -2767,11 +2760,12 @@ async fn complete_flow_grant_before_cancel_converges_to_completed() {
 
         let fetch_delivery = attempt_delivery.clone();
         let fetch_offer = offer_x.clone();
-        let fetch =
-            tokio::spawn(async move { fetch_delivery.fetch(provider_node, &fetch_offer).await });
+        let fetch = tokio::spawn(async move {
+            common::await_receipt(&fetch_delivery, provider_node, &fetch_offer).await
+        });
 
         let started = std::time::Instant::now();
-        while !fetch.is_finished() && dir_bytes(&receiver_store) < KILL_THRESHOLD {
+        while !fetch.is_finished() && common::dir_bytes(&receiver_store) < KILL_THRESHOLD {
             assert!(
                 started.elapsed() < std::time::Duration::from_secs(60),
                 "fetch moved no bytes toward the kill threshold in 60s"
@@ -2785,7 +2779,7 @@ async fn complete_flow_grant_before_cancel_converges_to_completed() {
         // Still in flight => complete_flow_grant provably not executed =>
         // this cancel is deterministically FIRST across the boundary.
         attempt_delivery
-            .cancel(provider_node, &offer_x)
+            .cancel_by_tuple(provider_node, &common::tuple_of(&offer_x))
             .await
             .unwrap();
 
@@ -2821,25 +2815,6 @@ async fn complete_flow_grant_before_cancel_converges_to_completed() {
         cancelled_before_the_boundary,
         "never captured a mid-flight cancel across 8 attempts"
     );
-}
-
-fn dir_bytes(dir: &Path) -> u64 {
-    fn walk(dir: &Path, total: &mut u64) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                walk(&path, total);
-            } else if let Ok(meta) = entry.metadata() {
-                *total += meta.len();
-            }
-        }
-    }
-    let mut total = 0u64;
-    walk(dir, &mut total);
-    total
 }
 
 /// NET-29 (#467) capture 1 RED→GREEN: the provider accepts the blobs

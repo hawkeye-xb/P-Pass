@@ -9,6 +9,7 @@ members = [
   "crates/platform",
   "crates/daemon",
   "crates/diag",
+  "crates/version-cmp",
   "tools/testclient",
 ]
 exclude = ["spikes/iroh-probe", "spikes/thumb-bench"]

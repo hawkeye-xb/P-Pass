@@ -558,3 +558,94 @@ async fn sqlx_count(db: &Db, action: &str) -> i64 {
         .filter(|r| r.entry.kind == action)
         .count() as i64
 }
+
+// ---------------------------------------------------------------------------
+// #1044 B1（AUDIT-01）：Flow 入库只在两种例外写审计
+// ---------------------------------------------------------------------------
+
+/// Flow 一轮只写一条 `flow.round.finished`（由 daemon 路由手机事实写入），
+/// 逐张的 `ingest.new` / `ingest.duplicate` 不进长期审计。
+/// 反证：`ingest_flow` 退回全量审计，这条立刻变红。
+#[tokio::test(flavor = "multi_thread")]
+async fn flow_ingest_writes_no_per_item_audit_rows() {
+    let (dir, db, ing) = setup().await;
+    let content = jpeg_with_exif("2024:05:06 07:08:09");
+    let first = ing
+        .ingest_flow(&incoming(dir.path(), "IMG_F.jpg", &content))
+        .await
+        .unwrap();
+    assert!(matches!(first, IngestOutcome::New(_)));
+    let again = ing
+        .ingest_flow(&incoming(dir.path(), "IMG_F2.jpg", &content))
+        .await
+        .unwrap();
+    assert_eq!(again, IngestOutcome::Duplicate);
+
+    let log = db.list_audit(10).await.unwrap();
+    let kinds: Vec<&str> = log.iter().map(|r| r.entry.kind.as_str()).collect();
+    assert!(kinds.is_empty(), "Flow 逐张入库不写审计, got {kinds:?}");
+}
+
+/// 例外①：手机重传一张「索引里有、文件已丢」的照片——文件重新落盘，
+/// 这是数据层面真正发生的事，记 `asset.relocated`。
+#[tokio::test(flavor = "multi_thread")]
+async fn flow_reupload_of_a_lost_file_is_audited_as_relocated() {
+    let (dir, db, ing) = setup().await;
+    let root = dir.path().join("library");
+    let content = jpeg_with_exif("2024:05:06 07:08:09");
+    let IngestOutcome::New(rel) = ing
+        .ingest_flow(&incoming(dir.path(), "IMG_R.jpg", &content))
+        .await
+        .unwrap()
+    else {
+        panic!("first ingest must be New");
+    };
+    fs::remove_file(root.join(&rel)).unwrap();
+
+    let outcome = ing
+        .ingest_flow(&incoming(dir.path(), "IMG_R.jpg", &content))
+        .await
+        .unwrap();
+    assert!(
+        matches!(outcome, IngestOutcome::Moved(_)),
+        "got {outcome:?}"
+    );
+    assert_eq!(sqlx_count(&db, "asset.relocated").await, 1);
+    assert_eq!(sqlx_count(&db, "ingest.new").await, 0);
+}
+
+/// 例外②：落位的路径被另一条（文件已不在的）行占着——老行让位，记
+/// `asset.replaced_in_place`。
+#[tokio::test(flavor = "multi_thread")]
+async fn flow_landing_on_an_occupied_path_is_audited_as_replaced_in_place() {
+    let (dir, db, ing) = setup().await;
+    let root = dir.path().join("library");
+    let IngestOutcome::New(rel) = ing
+        .ingest_flow(&incoming(
+            dir.path(),
+            "IMG_P.jpg",
+            &jpeg_with_exif("2024:05:06 07:08:09"),
+        ))
+        .await
+        .unwrap()
+    else {
+        panic!("first ingest must be New");
+    };
+    fs::remove_file(root.join(&rel)).unwrap();
+
+    // 同名、同拍摄时间、不同内容 → canonical 布局落到同一个路径。
+    let outcome = ing
+        .ingest_flow(&incoming(
+            dir.path(),
+            "IMG_P.jpg",
+            &jpeg_with_exif("2024:05:06 07:08:09")
+                .into_iter()
+                .chain(*b"edit")
+                .collect::<Vec<u8>>(),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(outcome, IngestOutcome::New(rel));
+    assert_eq!(sqlx_count(&db, "asset.replaced_in_place").await, 1);
+    assert_eq!(sqlx_count(&db, "ingest.new").await, 0);
+}

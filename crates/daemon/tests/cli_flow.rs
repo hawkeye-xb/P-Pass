@@ -103,6 +103,59 @@ fn version_prefix_is_the_desktop_probe_contract() {
     );
 }
 
+/// #1042：`--version --json` 是给桌面壳（#1045）与免 GUI 控制面（#749）用的
+/// **机读契约**，取代对纯文本前缀 `P-Pass daemon ` 的字面量匹配：
+///
+/// - exit 0，stdout 恰好一行 JSON，stderr 为空；
+/// - 键集合恰好是 `product` / `schema` / `version`；
+/// - `product == "P-Pass daemon"`，`schema == 1`（只增字段不升，改/删字段才升）；
+/// - `version` 与纯文本 `--version` 报的是同一个值；
+/// - `--json` 写在 `--version` 前后都一样；
+/// - 与 `--version` 一样在一切 daemon 机制之前短路。
+#[test]
+fn version_json_is_the_machine_readable_contract() {
+    let plain = daemon_bin().arg("--version").output().expect("spawn");
+    let plain = String::from_utf8_lossy(&plain.stdout).trim().to_string();
+    let plain_version = plain
+        .strip_prefix("P-Pass daemon ")
+        .expect("纯文本 --version 形状不变")
+        .to_string();
+    for args in [["--version", "--json"], ["--json", "--version"]] {
+        let out = daemon_bin().args(args).output().expect("spawn");
+        assert_eq!(out.status.code(), Some(0), "{args:?}: {:?}", out.status);
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(stderr, "", "{args:?}: stderr 必须为空");
+        assert_eq!(
+            stdout.lines().count(),
+            1,
+            "{args:?}: 必须恰好一行：{stdout:?}"
+        );
+        let v: serde_json::Value = serde_json::from_str(stdout.trim()).expect("必须是 JSON");
+        let mut keys: Vec<_> = v.as_object().expect("必须是对象").keys().cloned().collect();
+        keys.sort();
+        assert_eq!(keys, ["product", "schema", "version"], "键集合是契约：{v}");
+        assert_eq!(v["product"], "P-Pass daemon");
+        assert_eq!(v["schema"], 1);
+        assert_eq!(
+            v["version"],
+            plain_version.as_str(),
+            "与纯文本 --version 同源"
+        );
+        for marker in ["IPC:", "身份密钥已铸造", "已启动"] {
+            assert!(!stdout.contains(marker), "不得启动 daemon：{stdout}");
+        }
+    }
+}
+
+/// `--json` 单独出现是用法错误（exit 2），不能当成普通启动。
+#[test]
+fn json_without_version_is_a_usage_error() {
+    let out = daemon_bin().arg("--json").output().expect("spawn");
+    assert_eq!(out.status.code(), Some(2), "status: {:?}", out.status);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("用法"));
+}
+
 #[test]
 fn unknown_flag_fails_with_usage_on_stderr() {
     let out = daemon_bin()
@@ -124,10 +177,142 @@ fn unknown_flag_fails_with_usage_on_stderr() {
     );
 }
 
+/// 起一个真的 `--ephemeral` daemon（数据目录隔离、不连 relay、随机端口），
+/// 等到 stdout 上出现「配对」那一行（= 启动序列走到了 stdin 循环之前），
+/// 返回 `(退出前的 stdout, stderr, 关 stdin 到进程退出的耗时)`。
+/// 关 stdin 后 15 秒内没退出则返回 `None` 耗时（调用方据此断言失败）。
+fn run_ephemeral_until_stdin_eof(
+    extra_args: &[&str],
+) -> (String, String, Option<std::time::Duration>) {
+    use std::io::{BufRead, BufReader, Read};
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    struct KillOnDrop(std::process::Child);
+    impl Drop for KillOnDrop {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let child = daemon_bin()
+        .arg("--ephemeral")
+        .args(extra_args)
+        .env("PPF_DATA_DIR", dir.path())
+        .env("PPF_RELAY_URLS", "")
+        .env("PPF_BIND_ADDR", "127.0.0.1:0")
+        .env_remove("PPF_LOG_FILE")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn daemon --ephemeral");
+    let mut child = KillOnDrop(child);
+
+    let mut stderr_pipe = child.0.stderr.take().expect("stderr piped");
+    let stderr_reader = std::thread::spawn(move || {
+        let mut s = String::new();
+        let _ = stderr_pipe.read_to_string(&mut s);
+        s
+    });
+    let (tx, rx) = mpsc::channel::<String>();
+    let stdout_pipe = child.0.stdout.take().expect("stdout piped");
+    let stdout_reader = std::thread::spawn(move || {
+        for line in BufReader::new(stdout_pipe).lines() {
+            let Ok(line) = line else { break };
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(40);
+    let mut stdout = String::new();
+    while Instant::now() < deadline {
+        match rx.recv_timeout(Duration::from_millis(200)) {
+            Ok(line) => {
+                stdout.push_str(&line);
+                stdout.push('\n');
+                if line.contains("配对") {
+                    break;
+                }
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+
+    // 关 stdin（写入端 EOF）→ --ephemeral 自己退出。
+    let closed_at = Instant::now();
+    drop(child.0.stdin.take());
+    let mut exited_after = None;
+    while closed_at.elapsed() < Duration::from_secs(15) {
+        if child.0.try_wait().expect("try_wait").is_some() {
+            exited_after = Some(closed_at.elapsed());
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let _ = child.0.kill();
+    let _ = child.0.wait();
+    stdout_reader.join().expect("stdout reader");
+    while let Ok(line) = rx.try_recv() {
+        stdout.push_str(&line);
+        stdout.push('\n');
+    }
+    let stderr = stderr_reader.join().expect("stderr reader");
+    (stdout, stderr, exited_after)
+}
+
+/// #1041 E2：删掉 stdin 的 y/n 确认器后，**EOF → 退出**这条契约必须原样保留——
+/// `tools/` 下所有脚本（dogfood-smoke / ios e2e / testclient）都靠「关掉 stdin 写入端」
+/// 收掉 `--ephemeral` daemon（UX-07：3 秒内）。
+/// 反证：让 main.rs 的 stdin 循环不再在 EOF 时发退出信号（EOF 分支永不触发）→ daemon
+/// 不退出，本测试必红（已手工验证）。
+#[test]
+fn ephemeral_daemon_exits_on_stdin_eof() {
+    let (stdout, stderr, exited_after) = run_ephemeral_until_stdin_eof(&[]);
+    assert!(
+        stdout.contains("配对"),
+        "daemon 没走到启动序列的配对那一步:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    let exited_after = exited_after.unwrap_or_else(|| {
+        panic!("关 stdin 后 15 秒内 daemon 没退出:\nstdout:\n{stdout}\nstderr:\n{stderr}")
+    });
+    assert!(
+        exited_after < std::time::Duration::from_secs(5),
+        "UX-07 要求 3 秒内退出，实测 {exited_after:?}"
+    );
+}
+
+/// #1041 E2：`--post-update` 已退役（接受并忽略，下一个版本删除）。旧版桌面壳升级后
+/// 仍会带它拉起新 daemon：必须**不报未知参数、照常启动**，且行为与不带它相同
+/// （同样走到配对那一步、同样在 stdin EOF 时退出）。
+/// 反证：从 `cli::parse_cli` 删掉 `--post-update` 分支 → exit 2 + 未知参数，本测试必红。
+#[test]
+fn retired_post_update_flag_does_not_stop_daemon_from_starting() {
+    let (stdout, stderr, exited_after) = run_ephemeral_until_stdin_eof(&["--post-update"]);
+    assert!(
+        !stderr.contains("未知参数"),
+        "--post-update 必须被接受:\nstderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("配对"),
+        "带 --post-update 的 daemon 没有照常启动:\nstdout:\n{stdout}\nstderr:\n{stderr}"
+    );
+    assert!(
+        exited_after.is_some(),
+        "带 --post-update 的 daemon 在 stdin EOF 后没退出（行为应与不带时相同）"
+    );
+}
+
 /// SEC-11 (#496)：stdout 不是终端时，配对链接（含 10 分钟有效的令牌）
 /// **一个字都不能出现在任何流里**，也不能出现在数据目录下的任何文件里。
 ///
-/// 背景：macOS launchd 的 `StandardOutPath` 就是 `~/Library/Logs/p-pass-daemon.log`，
+/// 背景：macOS launchd 的 `StandardOutPath` 就是 `<数据目录>/logs/daemon.out`，
 /// DEVLOG-03 那句「只进 stdout」在托管下等于「进日志文件」。这里用 piped
 /// stdout（天然非终端）起一个真的 `--ephemeral` daemon，等到 stdout 上出现
 /// 配对那一行的位置（门控点确实执行过），再关 stdin 让它自己退出，然后查
@@ -275,16 +460,21 @@ fn pair_link_never_printed_when_stdout_is_not_a_terminal() {
     assert!(hits.is_empty(), "数据目录里的文件含配对链接: {hits:?}");
 }
 
-/// DESK-58 (#875)：本平台给了 stderr 固定落点（Windows）时就是它；`None` =
-/// stderr 由托管方负责（macOS 的 launchd），daemon 不自己接。按能力分支，
-/// 不写 `#[cfg]`（arch-check B.2：平台分叉只在 crates/platform）。
-fn startup_stderr_file(data_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+/// DESK-58 (#875)：本平台的 stderr 由 daemon 自己接（Windows）时就是那个落点；
+/// `None` = stderr 由服务管理器负责（macOS 的 launchd），daemon 不自己接。按
+/// 能力分支，不写 `#[cfg]`（arch-check B.2：平台分叉只在 crates/platform）。
+fn daemon_captured_stderr(data_dir: &std::path::Path) -> Option<std::path::PathBuf> {
     use platform::PlatformAdapter as _;
-    platform::adapter().startup_stderr_file(data_dir)
+    let paths = platform::adapter().daemon_log_paths(data_dir);
+    if paths.stdio_by_service_manager {
+        None
+    } else {
+        paths.stderr
+    }
 }
 
 /// DESK-58 (#875)：Windows 上 stderr 没人接（壳的一次性 spawn 给的是 `NUL`，
-/// Run 键登录拉起时干脆没有句柄）⇒ daemon 自己把它接到 `logs\daemon.err`，
+/// 计划任务登录拉起时干脆没有句柄）⇒ daemon 自己把它接到 `logs\daemon.err`，
 /// 文件日志初始化之前的报错原话落在那里，向导和诊断包读的就是它。
 ///
 /// 触发器选 `PPF_LOG_FILE` 指向一个目录：打不开 ⇒ `eprintln!` + exit(2)，
@@ -295,7 +485,7 @@ fn startup_stderr_file(data_dir: &std::path::Path) -> Option<std::path::PathBuf>
 fn desk58_early_error_lands_in_daemon_err_when_stderr_is_null() {
     use std::process::Stdio;
     let dir = tempfile::tempdir().expect("tempdir");
-    let Some(err_file) = startup_stderr_file(dir.path()) else {
+    let Some(err_file) = daemon_captured_stderr(dir.path()) else {
         return; // 本平台 stderr 由托管方接，daemon 不负责。
     };
     let status = daemon_bin()
@@ -330,7 +520,7 @@ fn desk58_a_piped_stderr_is_left_alone() {
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("PPF_LOG_FILE="), "stderr: {stderr}");
-    if let Some(f) = startup_stderr_file(dir.path()) {
+    if let Some(f) = daemon_captured_stderr(dir.path()) {
         assert!(!f.exists(), "管道 stderr 被改接到了 {}", f.display());
     }
 }

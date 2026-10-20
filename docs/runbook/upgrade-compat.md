@@ -28,13 +28,13 @@
 | 金样本 | `crates/proto/tests/snapshots/*.snap`（35 个）+ Android `GoldenDriftTest` | 两端 wire 形状同一 commit 内对齐；既有 `.snap` 零改动 = 没有破坏旧形状 | E2 |
 | hello 能力位 | `crates/daemon/src/router.rs` `SERVER_CAPABILITIES`：`thumbnail.v1`、`pair.status.v1`、`pair.cancel.v1` | 新行为按能力协商开启，**这是目前唯一真正在起作用的版本协商** | E2 |
 | 桌面索引迁移 | `crates/storage/migrations/0001…0010`，`crates/storage/src/db.rs` 嵌入 `sqlx::migrate!`，首次打开自动跑，记在 `_sqlx_migrations` | 只进不退；旧程序打开已迁移的库报 `migration N was previously applied but is missing in the resolved migrations` 并拒绝启动 | E3（#432：7 → 10） |
-| 库比程序新的提示 | `apps/desktop/src/lib/daemonStartupError.js`：匹配上面那句，显示「这个版本比你的照片库旧。请装回新版本。」 | DESK-09 [#103](https://github.com/hawkeye-xb/P-Pass/issues/103)，代码与单测已合入，**真机验收欠账，卡仍 OPEN** | E2 |
+| 库比程序新的提示 | daemon `cli::startup_error_key` 认出「库 schema 比程序新」，stderr 最后一行输出带 `ui.startup_migration_guidance` key 的 JSON（#1044）；壳 `daemon_startup_error` 转给前端 `startupFailureText` 显示 | DESK-09 [#103](https://github.com/hawkeye-xb/P-Pass/issues/103)，代码与单测已合入，**真机验收欠账，卡仍 OPEN** | E2 |
 | 桌面数据目录搬迁 | `crates/platform/src/data_migration.rs`（DESK-24 [#173](https://github.com/hawkeye-xb/P-Pass/issues/173)） | 失败时退化为「保持原样」，不切到空目录 | E3（#432 Windows） |
 | Android 账本 | `apps/android/.../backup/order/SqliteOrderStore.kt`，`SCHEMA_VERSION = 3` | `onUpgrade` 与 `onDowngrade` 都是**删表重建**，不做数据迁移（注释依据：#413 契约 §0「测试设备上都是测试数据」） | 读码；升级路径从未实跑（#432 A 格 `user_version` 3 → 3） |
 | Android 一次性迁移 | `AndroidFlowRuntime.kt` `migrateLegacyFlowState`，marker `files/flow-migrated-arch13` | #413 起删除旧账本 `flow-state/` 与旧保护状态文件，只做一次 | 读码 |
 | Android 私有状态清单 | `backup/DisconnectStateManifest.kt`（MOB-95 [#282](https://github.com/hawkeye-xb/P-Pass/issues/282) / [#528](https://github.com/hawkeye-xb/P-Pass/pull/528)） | 列全手机每一样持久状态及断开时的处置；升级数据承诺按它逐项对账 | E2 |
 | 版本号规则 | `tools/bump-version.sh`、`docs/RELEASING.md` §1/§5 | 新版本必须高于当前；tag 不复用；Android versionCode 单调 +1 | E2 |
-| 更新判定 | Android `update/UpdateChecker.kt:67` `isNewer`、daemon `crates/daemon/src/update.rs:141` `is_newer` | 候选版本**严格更新**才提示；正式版 > 同核心预发布 | E2 |
+| 更新判定 | Android `update/UpdateChecker.kt` `isNewer`；桌面端由 tauri updater 插件判定（daemon 里没有接线的 `update.rs` 已在 #1041 删除） | 候选版本**严格更新**才提示；正式版 > 同核心预发布 | E2 |
 
 盘点出的缺口（只登记，另开卡处理）：
 
@@ -46,12 +46,12 @@
 
 | 路径 | 方式 | 承诺（草案） | 验证格 |
 |---|---|---|---|
-| 桌面 旧 → 新 | 手动下载安装包覆盖安装（桌面应用内更新受 REL-05 [#232](https://github.com/hawkeye-xb/P-Pass/issues/232) / [#398](https://github.com/hawkeye-xb/P-Pass/issues/398) 所限，manifest 没有桌面条目） | 覆盖安装后 daemon 正常起，数据按 §3 保留 | B |
+| 桌面 旧 → 新 | 应用内更新（tauri-plugin-updater，`manifest-macos.json` / `manifest-windows.json`，见 `docs/RELEASING.md` §3.5）或手动覆盖安装。更新流程：停旧 daemon（不写用户停止标记）→ 替换整包 → 重启壳 → 新壳启动对账拉起 daemon（`docs/desktop/business-rules.zh-CN.md` §8） | 覆盖安装后 daemon 正常起，数据按 §3 保留 | B |
 | Android 旧 → 新 | 应用内更新（manifest `android-arm64` 条目）或覆盖安装 APK | 同签名覆盖安装，数据按 §3 保留；传输中途升级，未完成的单由新版续完 | A |
 | 版本跨度 | — | **D1（已定）**：只前进、任意直升——从起算版本起的任意已发布版本，直接升到最新；不支持降级（见 §5） | A、B |
 | 起算版本 | — | 从 `v0.6.0-test.2` 起算：更早的版本升到 #413 之后，`flow-state/` 旧账本会被一次性删除（见 §1），不属于平滑升级 | A、B |
 | 两端错配 | 手机与桌面各自升级 | 见 §4；互通范围按 **D3（已定）**：只承诺**相邻版本**互通；更远只保证「明确报错、不损数据」 | C |
-| test ↔ stable 通道 | 设置页切换 | 当前 test 版比 stable 新时切到 stable 不会提示「更新」（`isNewer` 严格大于），会停在 test 版直到 stable 追上；边界按 **D6（已定）**：test 版与正式版同受本文件承诺约束 | D |
+| test ↔ stable 通道 | 构建期决定（各端无切换入口），换通道 = 装另一通道的安装包 | 当前 test 版比 stable 新时切到 stable 不会提示「更新」（`isNewer` 严格大于），会停在 test 版直到 stable 追上；边界按 **D6（已定）**：test 版与正式版同受本文件承诺约束 | D |
 
 ## 3. 数据承诺
 

@@ -54,7 +54,7 @@ async fn desk(db: Db, ttl_ms: Option<i64>) -> Desk {
     let tp = endpoint().await;
     let addr = tp.local_addr();
     let (bus, _probe) = daemon::events::bus();
-    let (pairing, pending_rx) = Pairing::new(db.clone(), tp.node_id(), None, None);
+    let (pairing, pending_rx) = Pairing::new(db.clone(), tp.node_id(), None);
     let mut pairing = pairing.with_events(bus.clone());
     if let Some(ttl) = ttl_ms {
         pairing = pairing.with_pending_ttl(ttl);
@@ -684,8 +684,7 @@ async fn hello_advertises_the_pair_cancel_capability_to_unpaired_peers() {
 #[tokio::test(flavor = "current_thread")]
 async fn a_decision_already_delivered_beats_a_simultaneous_withdrawal() {
     let db = Db::open_in_memory().await.unwrap();
-    let (pairing, mut pending_rx) =
-        Pairing::new(db.clone(), transport::NodeId([0x01; 32]), None, None);
+    let (pairing, mut pending_rx) = Pairing::new(db.clone(), transport::NodeId([0x01; 32]), None);
     let peer = transport::NodeId([0x74; 32]);
     let qr = pairing.start([0x74; 12], now());
     let sub = pairing
@@ -711,4 +710,67 @@ async fn a_decision_already_delivered_beats_a_simultaneous_withdrawal() {
         "{settled:?}"
     );
     assert!(db.get_device(&peer.0).await.unwrap().is_some());
+}
+
+/// #1050：阻塞式 `pair.request`（不带 `ack_then_poll`）已退役。低于最低支持版本
+/// 的手机得到明确的 `err.unsupported`，且**不消耗**一次性令牌、不进主人队列——
+/// 同一张二维码随后用现役形状照样能配。
+/// 反证靶子：把 router 的 `!ack_then_poll` 拒绝删掉，本用例在第一个断言处变红。
+#[tokio::test(flavor = "multi_thread")]
+async fn a_blocking_pair_request_is_refused_up_front_and_keeps_the_token() {
+    let d = desk(Db::open_in_memory().await.unwrap(), None).await;
+    let ctp = phone(&d).await;
+    let qr = d.pairing.start([0x91; 12], now());
+
+    let resp = rpc(
+        &ctp,
+        d.tp.node_id(),
+        methods::PAIR_REQUEST,
+        serde_json::to_value(PairRequest {
+            token: token_of(&qr),
+            device_name: "旧版手机".into(),
+            ..Default::default()
+        })
+        .unwrap(),
+    )
+    .await;
+    assert!(!resp.ok, "{resp:?}");
+    let err = resp.error.unwrap();
+    assert_eq!(err.code, codes::INVALID_REQUEST);
+    assert_eq!(err.msg_key, diag::keys::ERR_UNSUPPORTED);
+    assert!(
+        d.ipc.pending_names().is_empty(),
+        "nothing reaches the owner"
+    );
+
+    let sub = submitted(submit(&ctp, &d, &token_of(&qr), "新版手机").await);
+    assert!(!sub.request_id.is_empty());
+}
+
+/// #1050：`flow.fetch` / `flow.cancel` 已从路由退役——已配对成员调它们也只得到
+/// `err.unsupported`（`flow.offer`/`flow.status`/`flow.cancel_tuple` 仍是现役）。
+#[tokio::test(flavor = "multi_thread")]
+async fn retired_flow_fetch_and_cancel_are_not_routed() {
+    let db = Db::open_in_memory().await.unwrap();
+    let d = desk(db.clone(), None).await;
+    let ctp = phone(&d).await;
+    db.upsert_device(&storage::Device {
+        node_id: ctp.node_id().0.to_vec(),
+        name: "手机".into(),
+        role: storage::Role::Member,
+        paired_at: 1,
+        last_seen: None,
+        revoked: false,
+        revoked_at: None,
+        revoked_by: None,
+    })
+    .await
+    .unwrap();
+    for method in ["flow.fetch", "flow.cancel"] {
+        let resp = rpc(&ctp, d.tp.node_id(), method, serde_json::json!({})).await;
+        assert!(!resp.ok, "{method}: {resp:?}");
+        let err = resp.error.unwrap();
+        assert_eq!(err.code, codes::INVALID_REQUEST, "{method}");
+        assert_eq!(err.msg_key, diag::keys::ERR_UNSUPPORTED, "{method}");
+    }
 }

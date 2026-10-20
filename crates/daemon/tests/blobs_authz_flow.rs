@@ -8,14 +8,16 @@
 //! table). Phone side: the Android provider only serves the NodeId the
 //! pairing record names — here taken from the QR code, as the app stores it.
 
+mod common;
+
 use std::path::Path;
 use std::sync::Arc;
 
 use daemon::flow_delivery::FlowDelivery;
 use daemon::{PairDecision, Pairing, Router};
-use proto::{FlowFetchRequest, PairRequest, Req, Resp};
+use proto::FlowFetchRequest;
 use storage::{Db, RevokedBy};
-use transport::{AndroidBlobsProvider, Blobs, IrohTransport, NodeId, Transport, TransportConfig};
+use transport::{AndroidBlobsProvider, Blobs, IrohTransport, NodeId, TransportConfig};
 
 fn now() -> i64 {
     std::time::SystemTime::now()
@@ -45,7 +47,7 @@ struct Daemon {
 async fn start_daemon(root: &Path) -> Daemon {
     let db = Db::open_in_memory().await.unwrap();
     let tp = bind(&[transport::ALPN_CTRL, transport::ALPN_BLOBS]).await;
-    let (pairing, mut pending) = Pairing::new(db.clone(), tp.node_id(), None, None);
+    let (pairing, mut pending) = Pairing::new(db.clone(), tp.node_id(), None);
     // The owner taps "allow" on the desktop.
     tokio::spawn(async move {
         while let Some(req) = pending.recv().await {
@@ -73,26 +75,7 @@ async fn start_daemon(root: &Path) -> Daemon {
 }
 
 async fn pair(phone: &IrohTransport, daemon: NodeId, token: &str) -> proto::PairAccepted {
-    let mut stream = phone.connect(daemon, transport::ALPN_CTRL).await.unwrap();
-    let req = Req {
-        id: "pair-1".into(),
-        method: "pair.request".into(),
-        params: serde_json::to_value(PairRequest {
-            token: token.into(),
-            device_name: "妈妈的手机".into(),
-            role: "member".into(),
-            ..Default::default()
-        })
-        .unwrap(),
-        ..Default::default()
-    };
-    stream
-        .send_frame(&proto::codec::encode(&req).unwrap())
-        .await
-        .unwrap();
-    stream.finish().unwrap();
-    let frame = stream.recv_frame().await.unwrap().expect("a response");
-    let resp: Resp = proto::codec::decode(&frame).unwrap();
+    let resp = common::pair_settled(phone, daemon, token, "妈妈的手机").await;
     assert!(resp.ok, "first pairing must succeed: {resp:?}");
     serde_json::from_value(resp.result.unwrap()).unwrap()
 }
@@ -206,9 +189,7 @@ async fn first_pairing_then_photo_delivery_over_gated_data_planes() {
 
     let offer = flow_request(&accepted.pairing_epoch, photo_hash, ticket);
     d.delivery.offer(phone.node_id(), &offer).await.unwrap();
-    let receipt = d
-        .delivery
-        .fetch(phone.node_id(), &offer)
+    let receipt = common::await_receipt(&d.delivery, phone.node_id(), &offer)
         .await
         .expect("the paired desktop receives the phone's photo");
     assert_eq!(receipt.content_hash, hex::encode(photo_hash));

@@ -205,33 +205,59 @@ async fn pair(qr: &str, name: &str, identity: &str) -> anyhow::Result<String> {
             token: token.trim().into(),
             device_name: name.into(),
             role: "member".into(),
-            ..Default::default()
+            // #1050：daemon 只认「先回执、再轮询 pair.status」这一种配对形状。
+            ack_then_poll: true,
         })?,
         ..Default::default()
     };
     println!("已发送配对请求，等待存储端上的确认……");
     let resp = roundtrip(&mut stream, &req).await?;
-    match resp.error {
-        None => {
-            let accepted: proto::PairAccepted =
-                serde_json::from_value(resp.result.unwrap_or_default())?;
-            // 存储端地址存进 sidecar——backup/browse 等后续命令免发现服务.
-            let _ = std::fs::write(
-                format!("{identity}.daemon"),
-                format!("{daemon}\n{}\n", link.peer_addr),
-            );
-            Ok(format!(
-                "✅ 配对成功：已加入「{}」。本机 NodeId: {}",
-                accepted.storage_device_name,
-                tp.node_id()
-            ))
-        }
-        Some(err) => anyhow::bail!(
+    if let Some(err) = resp.error {
+        anyhow::bail!(
             "配对被拒绝（{} / {}）——令牌过期、已用过，或 owner 拒绝了。",
             err.code,
             err.msg_key
-        ),
+        );
     }
+    let submitted: proto::PairSubmitted = serde_json::from_value(resp.result.unwrap_or_default())?;
+    let deadline = std::time::Instant::now()
+        + std::time::Duration::from_millis(submitted.ttl_ms.max(0) as u64 + 5_000);
+    let accepted = loop {
+        let poll = proto::Req {
+            id: "pair-status".into(),
+            method: "pair.status".into(),
+            params: serde_json::to_value(proto::PairStatusRequest {
+                request_id: submitted.request_id.clone(),
+            })?,
+            ..Default::default()
+        };
+        let reply = roundtrip(&mut stream, &poll).await?;
+        if let Some(err) = reply.error {
+            anyhow::bail!("查询配对结果失败（{} / {}）", err.code, err.msg_key);
+        }
+        let status: proto::PairStatusReply =
+            serde_json::from_value(reply.result.unwrap_or_default())?;
+        match status.state.as_str() {
+            "accepted" => break status.accepted.unwrap_or_default(),
+            "pending" if std::time::Instant::now() < deadline => {
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+            other => anyhow::bail!(
+                "配对被拒绝（{other} / {}）——令牌过期、已用过，或 owner 拒绝了。",
+                status.msg_key.unwrap_or_default()
+            ),
+        }
+    };
+    // 存储端地址存进 sidecar——backup/browse 等后续命令免发现服务.
+    let _ = std::fs::write(
+        format!("{identity}.daemon"),
+        format!("{daemon}\n{}\n", link.peer_addr),
+    );
+    Ok(format!(
+        "✅ 配对成功：已加入「{}」。本机 NodeId: {}",
+        accepted.storage_device_name,
+        tp.node_id()
+    ))
 }
 
 /// T-032 剧本：生成 N 个混合文件（每 10 个 1 个重复内容），本机作为

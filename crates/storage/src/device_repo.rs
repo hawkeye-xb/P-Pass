@@ -4,10 +4,13 @@ use sqlx::Row;
 
 use crate::{Db, Result};
 
-/// Device role (§5 CHECK constraint mirrors this enum).
+/// Device role. #1050: `Owner` is retired — no code path ever created an
+/// owner row (the owner acts through the desktop UI/IPC, not as a network
+/// peer). The §5 CHECK constraint in migration 0001 still lists `'owner'`;
+/// migrations are append-only and narrowing a CHECK in SQLite means
+/// rebuilding the table for no behavioural gain, so it stays as dead slack.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
-    Owner,
     Member,
     Viewer,
 }
@@ -15,7 +18,6 @@ pub enum Role {
 impl Role {
     pub fn as_str(self) -> &'static str {
         match self {
-            Role::Owner => "owner",
             Role::Member => "member",
             Role::Viewer => "viewer",
         }
@@ -23,10 +25,9 @@ impl Role {
 
     fn from_db(s: &str) -> Role {
         match s {
-            "owner" => Role::Owner,
             "member" => Role::Member,
-            // The CHECK constraint admits exactly three values; anything
-            // else cannot have been inserted through this repo.
+            // Least privilege for anything else (`viewer`, or a stray
+            // `owner` that no code in this repo ever wrote).
             _ => Role::Viewer,
         }
     }
@@ -113,6 +114,52 @@ impl Db {
         .execute(self.pool())
         .await?;
         Ok(())
+    }
+
+    /// 配对落定：设备行、复位吊销、新纪元三次写入合进**一个事务**。
+    ///
+    /// 旧写法是三次独立写入，中途失败会留下中间态（行已写、纪元没写，
+    /// 手机拿不到能验证的纪元）。现在任何一步失败整体回滚。
+    ///
+    /// 配对流程是唯一被允许复位吊销的地方（业主确认 = 重新授权），所以
+    /// 复位在这里无条件执行——对没被吊销过的行是空操作。
+    /// 返回 `false` = 纪元没有落到恰好一行（此时已回滚，库里什么都没变）。
+    pub async fn accept_pairing(&self, d: &Device, pairing_epoch: &str) -> Result<bool> {
+        let mut tx = self.pool().begin().await?;
+        sqlx::query(
+            "INSERT INTO device (node_id, name, role, paired_at, last_seen, revoked)
+             VALUES (?, ?, ?, ?, ?, ?)
+             ON CONFLICT(node_id) DO UPDATE SET
+               name = excluded.name,
+               role = excluded.role,
+               last_seen = excluded.last_seen",
+        )
+        .bind(&d.node_id)
+        .bind(&d.name)
+        .bind(d.role.as_str())
+        .bind(d.paired_at)
+        .bind(d.last_seen)
+        .bind(i64::from(d.revoked))
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "UPDATE device SET revoked = 0, revoked_at = NULL, revoked_by = NULL WHERE node_id = ?",
+        )
+        .bind(&d.node_id)
+        .execute(&mut *tx)
+        .await?;
+        let set =
+            sqlx::query("UPDATE device SET pairing_epoch = ? WHERE node_id = ? AND revoked = 0")
+                .bind(pairing_epoch)
+                .bind(&d.node_id)
+                .execute(&mut *tx)
+                .await?;
+        if set.rows_affected() != 1 {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        tx.commit().await?;
+        Ok(true)
     }
 
     /// PRES-01: 心跳落点——更新设备 last_seen（revoked 设备不碰，
@@ -389,7 +436,7 @@ mod tests {
     #[tokio::test]
     async fn upsert_list_and_revoke_is_reflected() {
         let db = Db::open_in_memory().await.unwrap();
-        db.upsert_device(&device(1, Role::Owner)).await.unwrap();
+        db.upsert_device(&device(1, Role::Member)).await.unwrap();
         db.upsert_device(&device(2, Role::Viewer)).await.unwrap();
 
         let devices = db.list_devices(true).await.unwrap();
@@ -415,6 +462,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn accept_pairing_commits_row_unrevoke_and_epoch_together() {
+        let db = Db::open_in_memory().await.unwrap();
+        db.upsert_device(&device(1, Role::Member)).await.unwrap();
+        db.revoke(&[1u8; 32], RevokedBy::Owner, 1_700_000_000_000)
+            .await
+            .unwrap();
+
+        let mut again = device(1, Role::Member);
+        again.name = "back".into();
+        assert!(db.accept_pairing(&again, "epoch-2").await.unwrap());
+
+        let d = db.get_device(&[1u8; 32]).await.unwrap().unwrap();
+        assert_eq!(d.name, "back");
+        assert!(!d.revoked && d.revoked_at.is_none() && d.revoked_by.is_none());
+        let epoch: Option<String> =
+            sqlx::query_scalar("SELECT pairing_epoch FROM device WHERE node_id = ?")
+                .bind(vec![1u8; 32])
+                .fetch_one(db.pool())
+                .await
+                .unwrap();
+        assert_eq!(epoch.as_deref(), Some("epoch-2"));
+    }
+
+    #[tokio::test]
+    async fn accept_pairing_rolls_back_everything_when_the_last_step_fails() {
+        let db = Db::open_in_memory().await.unwrap();
+        db.upsert_device(&device(1, Role::Member)).await.unwrap();
+        db.revoke(&[1u8; 32], RevokedBy::Owner, 1_700_000_000_000)
+            .await
+            .unwrap();
+        // 注入故障：写纪元那一步必败。
+        sqlx::query(
+            "CREATE TRIGGER fail_epoch BEFORE UPDATE OF pairing_epoch ON device
+             BEGIN SELECT RAISE(ABORT, 'injected'); END",
+        )
+        .execute(db.pool())
+        .await
+        .unwrap();
+
+        // 已吊销的老设备重连：改名 + 复位 + 纪元，三项都不许生效。
+        let mut again = device(1, Role::Member);
+        again.name = "back".into();
+        assert!(db.accept_pairing(&again, "epoch-2").await.is_err());
+        let d = db.get_device(&[1u8; 32]).await.unwrap().unwrap();
+        assert_eq!(d.name, "device-1", "name write rolled back");
+        assert!(d.revoked, "unrevoke rolled back");
+        assert_eq!(d.revoked_at, Some(1_700_000_000_000));
+        assert_eq!(d.revoked_by, Some(RevokedBy::Owner));
+
+        // 全新设备：整行都不许留下。
+        assert!(db
+            .accept_pairing(&device(2, Role::Viewer), "epoch-x")
+            .await
+            .is_err());
+        assert!(db.get_device(&[2u8; 32]).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
     async fn upsert_updates_but_never_unrevokes() {
         let db = Db::open_in_memory().await.unwrap();
         db.upsert_device(&device(1, Role::Member)).await.unwrap();
@@ -437,7 +542,7 @@ mod tests {
         // DESK-02②: 家人与设备列表只展示在用设备——被移除/吊销的设备
         // 不再挂着（审计流有 device.revoked/unpaired 历史可查）。
         let db = Db::open_in_memory().await.unwrap();
-        db.upsert_device(&device(1, Role::Owner)).await.unwrap();
+        db.upsert_device(&device(1, Role::Member)).await.unwrap();
         db.upsert_device(&device(2, Role::Viewer)).await.unwrap();
         assert!(db
             .revoke(&[2u8; 32], RevokedBy::Owner, 1_700_000_000_000)
@@ -462,7 +567,7 @@ mod tests {
     #[tokio::test]
     async fn the_family_view_keeps_self_disconnected_devices_and_hides_owner_removed_ones() {
         let db = Db::open_in_memory().await.unwrap();
-        db.upsert_device(&device(1, Role::Owner)).await.unwrap();
+        db.upsert_device(&device(1, Role::Member)).await.unwrap();
         db.upsert_device(&device(2, Role::Member)).await.unwrap();
         db.upsert_device(&device(3, Role::Member)).await.unwrap();
 
@@ -613,7 +718,7 @@ mod tests {
     #[tokio::test]
     async fn watermark_roundtrip_and_advance() {
         let db = Db::open_in_memory().await.unwrap();
-        db.upsert_device(&device(1, Role::Owner)).await.unwrap();
+        db.upsert_device(&device(1, Role::Member)).await.unwrap();
 
         assert_eq!(db.get_watermark(&[1u8; 32]).await.unwrap(), None);
         db.set_watermark(&[1u8; 32], 100, 1_753_770_000_000)

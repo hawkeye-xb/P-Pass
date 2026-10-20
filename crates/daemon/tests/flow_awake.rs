@@ -3,6 +3,8 @@
 //! one ends, whether it completed, failed, or was cancelled. The platform
 //! guard is replaced by an injected counting fake.
 
+mod common;
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -168,7 +170,9 @@ async fn completed_fetch_acquires_then_releases_the_awake_assertion() {
         1,
         "starting a fetch task must assert awake"
     );
-    delivery.fetch(fx.provider(), &offer).await.unwrap();
+    common::await_receipt(&delivery, fx.provider(), &offer)
+        .await
+        .unwrap();
 
     fake.wait_released(1, Duration::from_secs(10)).await;
     assert_eq!(fake.acquired(), 1);
@@ -211,7 +215,10 @@ async fn overlapping_fetches_share_one_assertion_until_the_last_is_cancelled() {
     assert_eq!(fake.acquired(), 1, "overlapping tasks share one assertion");
     assert_eq!(hold.active_leases(), 2);
 
-    delivery.cancel(fx.provider(), &first).await.unwrap();
+    delivery
+        .cancel_by_tuple(fx.provider(), &common::tuple_of(&first))
+        .await
+        .unwrap();
     tokio::time::timeout(Duration::from_secs(5), async {
         while hold.active_leases() > 1 {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -225,7 +232,10 @@ async fn overlapping_fetches_share_one_assertion_until_the_last_is_cancelled() {
         "one transfer still running — must stay awake"
     );
 
-    delivery.cancel(fx.provider(), &second).await.unwrap();
+    delivery
+        .cancel_by_tuple(fx.provider(), &common::tuple_of(&second))
+        .await
+        .unwrap();
     fake.wait_released(1, Duration::from_secs(5)).await;
     assert_eq!(fake.acquired(), 1);
     assert_eq!(hold.active_leases(), 0);

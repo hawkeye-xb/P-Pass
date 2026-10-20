@@ -104,7 +104,7 @@ async fn query_plane_over_ipc_and_three_way_count() {
     let query = QueryEngine::new(db.clone(), blobs, dir.path().join("library"));
 
     let (event_bus, _probe) = daemon::events::bus();
-    let (pairing, pending_rx) = Pairing::new(db.clone(), transport::NodeId([0xCC; 32]), None, None);
+    let (pairing, pending_rx) = Pairing::new(db.clone(), transport::NodeId([0xCC; 32]), None);
     let pairing = pairing.with_events(event_bus.clone());
     let diag = DiagAgg::new(db.clone());
     let ipc = Arc::new(IpcServer::new(
@@ -210,8 +210,13 @@ async fn query_plane_over_ipc_and_three_way_count() {
         .call("asset.original", serde_json::json!({ "hash": first_hash }))
         .await;
     assert!(resp.ok, "asset.original must work: {resp:?}");
+    let result = resp.result.unwrap();
+    assert_eq!(
+        result["media_type"], "image/jpeg",
+        "reply must carry the real media_type"
+    );
     let original = base64::engine::general_purpose::STANDARD
-        .decode(resp.result.unwrap()["data_base64"].as_str().unwrap())
+        .decode(result["data_base64"].as_str().unwrap())
         .unwrap();
     // first_hash 对应 i=0 的 seed（timeline 新→旧，taken_at 相同按 hash 升序——
     // 无法确定是哪一张，但必须是三张之一且可解码）。
@@ -223,8 +228,7 @@ async fn query_plane_over_ipc_and_three_way_count() {
 
     // ── 未注入查询平面的旧构造（回归：老测试零波及）──
     let (event_bus2, _probe2) = daemon::events::bus();
-    let (pairing2, pending_rx2) =
-        Pairing::new(db.clone(), transport::NodeId([0xDD; 32]), None, None);
+    let (pairing2, pending_rx2) = Pairing::new(db.clone(), transport::NodeId([0xDD; 32]), None);
     let ipc2 = Arc::new(IpcServer::new(
         db.clone(),
         pairing2,

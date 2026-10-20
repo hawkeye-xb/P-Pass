@@ -4,8 +4,8 @@
 //! Architecture enforcement: this is the ONLY crate allowed to use
 //! `#[cfg(windows)]` / `#[cfg(target_os = "macos")]` (rule B.2).
 //!
-//! The pure parsers (`pmset` / `powercfg` output → [`PowerHint`]) are
-//! platform-independent functions so both are unit-tested everywhere;
+//! The pure parser (`pmset` output → [`PowerHint`]) is a
+//! platform-independent function so it is unit-tested everywhere;
 //! only the syscall/process wrappers live behind cfg.
 
 // DESK-33 (#325)：clippy.toml 禁止产品代码直接 `Command::new`；单元测试
@@ -33,6 +33,7 @@ mod data_migration;
 mod macos;
 // QA-09 迁移（#211）：macOS 与 Linux 共享的 unix 实现。迁过来的分叉里有
 // 3 处是 `#[cfg(unix)]`（同时覆盖两者），没有共享模块就得抄两遍。
+mod signal;
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]
@@ -42,6 +43,7 @@ mod windows;
 pub mod test_support;
 
 pub use data_migration::DataDirMigration;
+pub use signal::{stop_signal, StopRequest};
 
 #[cfg(target_os = "macos")]
 pub use macos::MacosAdapter;
@@ -129,13 +131,6 @@ impl PowerWatch {
     }
 }
 
-/// Device private-key storage (DPAPI / Keychain).
-pub trait KeyStore {
-    fn store(&self, name: &str, secret: &[u8]) -> Result<()>;
-    fn load(&self, name: &str) -> Result<Option<Vec<u8>>>;
-    fn delete(&self, name: &str) -> Result<()>;
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum PlatformError {
     #[error("{action}: {source}")]
@@ -190,6 +185,45 @@ pub struct VolumeStats {
     pub total: u64,
 }
 
+/// #1043：电脑睡眠由谁负责（[`PlatformAdapter::sleep_owner`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SleepOwner {
+    /// 由用户在系统里设置（macOS：向导请用户关掉「空闲自动睡眠」，可一键代改）。
+    User,
+    /// daemon 自动保持唤醒（Windows：DAE-11 插电时持有 AwakeGuard），向导只说明。
+    Daemon,
+}
+
+impl SleepOwner {
+    /// 下发给前端的取值（`platform_ux` 命令）。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SleepOwner::User => "user",
+            SleepOwner::Daemon => "daemon",
+        }
+    }
+}
+
+/// #1043：daemon 日志落在哪（[`PlatformAdapter::daemon_log_paths`]）。
+///
+/// 路径是「应该在哪」，不保证文件已存在——读的一方自己处理读不到。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DaemonLogPaths {
+    /// daemon 自己写的运行日志（tracing；`PPF_LOG_FILE` 未设时）。`None` =
+    /// 本平台不落盘。
+    pub log_file: Option<PathBuf>,
+    /// 启动早期 stderr 的落点（文件日志之前的报错、`main` 返回的 `Err`、panic），
+    /// 尾行就是「为什么没起来」。
+    pub stderr: Option<PathBuf>,
+    /// 托管方接住的 stdout。
+    pub stdout: Option<PathBuf>,
+    /// `stdout`/`stderr` 是不是**服务管理器**接的（macOS launchd 的
+    /// `StandardOutPath`/`StandardErrorPath`）：是 = 只有登记了常驻服务、由它
+    /// 拉起的实例才写这两份；否 = daemon 自己接（Windows 的 `logs\daemon.err`，
+    /// 见 [`PlatformAdapter::capture_unattached_stderr`]）。
+    pub stdio_by_service_manager: bool,
+}
+
 /// DESK-16 (#165)：系统缩略图器产出的一帧，**未编码的 RGBA 像素**。
 ///
 /// 为什么不返回「写好的 PNG 文件路径」：那样本 crate 就得带一个图像编码
@@ -241,6 +275,12 @@ pub enum AutostartReconcile {
     ///
     /// 与 `Rewritten` 分开：日志要能说清是「修好了一个坏文件」还是「改了一个旧路径」。
     Repaired,
+    /// #1046：登记指向期望路径，但条目的其余内容不是本版本会写出的样子（例如
+    /// macOS 老版本 plist 的日志落点还在 `~/Library/Logs`）：已按本版本重写。
+    ///
+    /// 这是「自启重新登记」的职责（S-11，原先由 daemon 接管时重装）：更新后由新壳
+    /// 启动对账收敛到本版本的登记内容。只在内容真的不同时才写，一致后幂等。
+    Refreshed,
     /// **闸门拦下**：当前可执行文件不在「稳定安装位置」（dmg 挂载点 / 下载目录 /
     /// App Translocation 随机路径 / 备份副本 …），一律不碰登记。
     ///
@@ -281,30 +321,344 @@ pub fn reconcile_decision(
     }
 }
 
-/// 架构 §4 trait —— 签名原样实施（updater/notify 的完整实现随
-/// T-041/T-062 落地，此处为可用的最小形态）.
+/// 「平台能力」端口（#1043 / S-9）：回答「在这个系统上怎么做」——数据目录、
+/// 防休眠、通知、卷空间、日志落点、系统缩略图、壳的界面习惯等。
+///
+/// daemon 与其他核心 crate **只依赖这个 trait**（经 [`adapter`] 拿实现）。
+/// 托管类能力（开机自启、服务管理器、结束进程、安装位置）在 [`HostingAdapter`]，
+/// 只给桌面发行层用；门禁 G3 拦 `crates/` 引用它。两个 trait 的实现都留在本 crate。
 pub trait PlatformAdapter: Send + Sync {
+    // 电源（MVP 尽力而为）
+    fn assert_awake(&self) -> Result<AwakeGuard>;
+    /// 当前睡眠策略（给 macOS 向导第 2 步用）。**默认 `Unknown`**：Windows 向导
+    /// 不展示睡眠策略（DAE-11 起由 daemon 的 AwakeGuard 自动保持唤醒），#1041 起
+    /// Windows 不再实现，这里的默认值就是它的行为。
+    fn power_hint(&self) -> PowerHint {
+        PowerHint::Unknown
+    }
+    // 系统集成
+    fn notify(&self, title: &str, body: &str);
+    /// 本平台**生效的**数据目录。
+    ///
+    /// DESK-24 (#173)：Windows 上这个值不是常量——`%APPDATA%`（Roaming）时代
+    /// 的老目录只要还在，返回的就是它，搬完了才换成新位置。这样「搬迁失败」
+    /// 退化成「保持原样」，而不是指着一个空目录（见 [`DataDirMigration`]）。
+    /// 想真正换过去，调用方得先调 [`Self::migrate_legacy_data_dir`]。
+    fn data_dir(&self) -> PathBuf;
+
+    /// #1043（B6）：系统界面语言（BCP 47 风格的标签，如 `zh-Hans-CN`、`en-US`）。
+    /// `None` = 读不到。
+    ///
+    /// 只回答「系统是什么语言」，不做「用不用中文」的判断——那是调用方（壳）
+    /// 的事。macOS 读 NSLocale 的首选语言（`CFLocaleCopyPreferredLanguages`），
+    /// Windows 读 `GetUserPreferredUILanguages` 的首个（界面语言，不是区域格式，#1056）。
+    /// 默认实现按 POSIX 约定读 `LC_ALL` → `LC_MESSAGES` → `LANG`（无桌面的 Linux）；`C`/`POSIX` 算读不到。
+    fn system_locale(&self) -> Option<String> {
+        posix_env_locale(
+            std::env::var("LC_ALL").ok().as_deref(),
+            std::env::var("LC_MESSAGES").ok().as_deref(),
+            std::env::var("LANG").ok().as_deref(),
+        )
+    }
+
+    /// #1043（B10）：当前用户的家目录。`None` = 读不到（不编一个出来）。
+    ///
+    /// 用标准库的 `std::env::home_dir`：unix 先 `HOME` 再查 passwd，Windows 先
+    /// `USERPROFILE` 再 `GetUserProfileDirectoryW`——与改前壳 / daemon 各自读
+    /// `HOME`→`USERPROFILE` 的取值一致，测试用环境变量隔离家目录的做法照样
+    /// 有效。壳与 daemon 不许自己读这些环境变量（门禁 G1）。
+    fn home_dir(&self) -> Option<PathBuf> {
+        std::env::home_dir().filter(|p| !p.as_os_str().is_empty())
+    }
+
+    /// #1043（B10）：当前用户的「图片」目录——新建照片库默认放在它下面。
+    ///
+    /// 默认实现 = 家目录下的 `Pictures`（macOS / 多数 Linux 桌面）；Windows 走
+    /// Known Folder（`FOLDERID_Pictures`），用户把「图片」挪到别的盘也认得出。
+    fn pictures_dir(&self) -> Option<PathBuf> {
+        self.home_dir().map(|h| h.join("Pictures"))
+    }
+
+    /// IDX-08 (#1010)：入库落盘文件名的**平台策略**。
+    ///
+    /// core 先把手机传来的名字去掉路径、做路径穿越兜底（最后一段、`.`/`..`、
+    /// 空名），再把**那一段**交给这里。返回的名字只负责「在当前文件系统上合法」；
+    /// `None` = 本平台没有额外规则（macOS / Linux 保持现状）。
+    ///
+    /// 为什么是能力而不是 core 里的 `#[cfg]`：合法名字的规则是平台知识
+    /// （Windows 的非法字符、保留名、结尾点/空格），按架构红线只能住在
+    /// `crates/platform`。返回函数指针而不是 `String` 策略对象，是为了让
+    /// core 的 `Ingestor` 保持 `Clone`/轻量，且不需要把平台依赖传进核心层。
+    fn ingest_file_name_sanitizer(&self) -> Option<fn(&str) -> String> {
+        None
+    }
+
+    /// DESK-24 (#173)：把遗留位置的数据搬到 [`Self::data_dir`] 现在该在的地方。
+    ///
+    /// **在任何人读 data dir 之前调一次**，进程生命周期里一次就够。daemon 那边
+    /// 还得排在日志初始化**之前**——日志文件路径本身就是从 data dir 算出来的。
+    ///
+    /// 不返回 `Result`：搬迁失败不得导致启动失败（卡面第 2 条），所以类型上
+    /// 就没给出「炸掉」这个选项，失败表达成 [`DataDirMigration::Deferred`]。
+    ///
+    /// 默认实现 = 本平台**没有遗留位置这回事**（macOS 的 Application Support、
+    /// Linux 的 XDG 目录当初就选对了）。这不是缺口。
+    fn migrate_legacy_data_dir(&self) -> DataDirMigration {
+        DataDirMigration::NothingToDo
+    }
+    /// DAE-05：`path` 所在卷的容量水位。`None` = 本平台没有实现（调用方
+    /// 应当序列化成 null，而不是编一个数字出来）。
+    ///
+    /// `free` 的语义**必须**是「无特权写入者真正可用的字节数」，对齐 unix
+    /// 侧 `statvfs` 的 `f_bavail`（也就是 `df` / Finder 显示的那个数），
+    /// 而不是卷上的物理空闲量——两者在有配额/保留区的卷上不一样。
+    fn volume_stats(&self, path: &std::path::Path) -> Option<VolumeStats> {
+        let _ = path;
+        None
+    }
+
+    /// DAE-11 (#804)：电脑此刻是否接着外部电源（插电）。
+    ///
+    /// 用途：daemon 运行且插电时一直持有「别因空闲而睡」的声明，拔电就释放、
+    /// 照常睡（验收人 2026-10-10 拍板，只管插电）。没有电池的台式机算插电。
+    ///
+    /// `None` = 不知道（本平台没实现，或系统答不出来）。**不许**把不知道编成
+    /// `Some(..)`：插电与否决定要不要阻止睡眠，猜错哪边都是用户可见的后果，
+    /// 怎么处理「不知道」由调用方（daemon）定。默认实现是 `None`，与
+    /// [`Self::installed_bundle_version`] 同一口径。
+    fn on_external_power(&self) -> Option<bool> {
+        None
+    }
+
+    /// DAE-11 (#804)：订阅「插电 / 用电池」的变化，**事件驱动，不轮询**。
+    ///
+    /// 登记成功后先以当前状态回调一次，之后每次电源切换再回调；入参口径同
+    /// [`Self::on_external_power`]（`None` = 不知道）。回调在系统线程上跑，
+    /// 必须快进快出。返回的 [`PowerWatch`] drop 即退订。
+    ///
+    /// 返回 `None` = 本平台不支持订阅（默认实现）。调用方据此**不做**常驻
+    /// 保持唤醒——只拿一次快照的话，拔电后没人知道，会一直挡着睡眠耗电池。
+    fn watch_external_power(
+        &self,
+        on_change: Box<dyn Fn(Option<bool>) + Send + Sync>,
+    ) -> Option<PowerWatch> {
+        let _ = on_change;
+        None
+    }
+
+    /// #1043：daemon 日志的**全部落点**，一处回答（合并了原先的
+    /// `default_log_file` 与 `startup_stderr_file`）。daemon 写、壳读（向导报
+    /// 启动失败、诊断包、一次性 spawn 接 stdio）用的是这同一个函数，壳不再
+    /// 读 launchd plist 反推路径。
+    ///
+    /// 入参是**生效的** data dir（由调用方解析 env / 平台约定后给出），
+    /// 因为一次性 daemon 靠 `PPF_DATA_DIR` 做隔离，日志不跟着走就会污染
+    /// 真实日志文件。
+    ///
+    /// 默认实现：`log_file` = `<data_dir>/logs/daemon.log`（macOS 与 Windows
+    /// 同构，轮转出 `daemon.log.1`），没有托管方接的 stdio。
+    /// - DEVLOG-02：Windows 必须有 `log_file`——计划任务没有任何
+    ///   重定向能力，release 又不再分配控制台，不落盘就等于没有日志。
+    /// - DIAG-B1：macOS 也要有——桌面壳有好几条一次性 spawn 路径把 stdio 接到
+    ///   `/dev/null`，只靠 launchd 的 `StandardErrorPath` 时 0.6.0 的日志整段丢失。
+    /// - 不落盘的平台（无桌面托管的 Linux）覆盖成 `log_file: None`。
+    fn daemon_log_paths(&self, data_dir: &std::path::Path) -> DaemonLogPaths {
+        DaemonLogPaths {
+            log_file: Some(data_dir.join("logs").join("daemon.log")),
+            ..DaemonLogPaths::default()
+        }
+    }
+
+    /// DIAG-B1：写 [`DaemonLogPaths::log_file`] 时是否**同时**照旧写
+    /// stderr。macOS 为 true：launchd 托管时 stderr 是 `.err`，桌面向导读它的最后
+    /// 一行报启动失败（DESK-09）。默认 false（Windows release 没有控制台可写）。
+    fn default_log_tees_stderr(&self) -> bool {
+        false
+    }
+
+    /// DESK-58 (#875)：本进程的 stderr **没人接**时，把它改接到
+    /// [`DaemonLogPaths::stderr`]（每次启动截断重写）。
+    ///
+    /// 「没人接」只指：没有 stderr 句柄，或者接的是空设备（`NUL`）。控制台、
+    /// 管道、磁盘文件都是有人**刻意**接的（终端前台、测试框架、手工重定向），
+    /// 一律不动。默认实现 `NotApplicable`：别的平台由托管方负责 stderr。
+    fn capture_unattached_stderr(&self, data_dir: &std::path::Path) -> Applied {
+        let _ = data_dir;
+        Applied::NotApplicable
+    }
+
+    /// QA-09 迁移（#211）：把文件权限收紧到「只有属主可读写」。
+    ///
+    /// 用在身份密钥这类文件上。默认实现返回 [`Applied::Unsupported`] 而
+    /// **不是** `Ok(Applied::Done)`——没实现却报做过了，正是这套口径要防的。
+    fn restrict_to_owner(&self, path: &std::path::Path) -> Result<Applied> {
+        let _ = path;
+        Ok(Applied::Unsupported)
+    }
+
+    /// QA-09 迁移（#211）：把本进程自己的 stderr 截断到 0 字节。
+    ///
+    /// 日志洪水防线的最后一环（前面还有「折叠重复行」那道，那道是所有
+    /// 平台共同的主防线）。只有当 stderr 被托管方重定向到文件时才有意义。
+    fn truncate_own_stderr(&self) -> Applied {
+        Applied::Unsupported
+    }
+
+    /// DESK-22 (#171)：关掉「空闲自动睡眠」，让备份能在无人值守时跑完。
+    ///
+    /// 要走系统的授权弹窗（macOS 是 Touch ID/密码；Windows 的 UAC 实现随
+    /// #1041 删除，Windows 向导不再提供这个入口），所以
+    /// `Err(PlatformError::Cancelled)` 是**正常路径之一**，调用方必须把它和
+    /// 真失败分开呈现。
+    ///
+    /// ⚠️ 实现方**必须回读确认**再返回 `Done`。Windows 上实测过：
+    /// `powercfg /x standby-timeout-ac 0` 在非管理员下**退出码是 0，但注册表
+    /// 根本没被写**（用注册表键的最后写入时间比对出来的）。拿退出码当"已
+    /// 生效"就是本仓这一轮在修的那类缺陷——静默没做却报成功。
+    fn disable_auto_sleep(&self) -> Result<Applied> {
+        Ok(Applied::Unsupported)
+    }
+
+    /// QA-09 迁移（#211）：清掉被强杀的前任留在文件系统里的 IPC 端点。
+    ///
+    /// 默认 [`Applied::NotApplicable`]：只有 unix domain socket 会落文件，
+    /// 命名管道这类端点不存在「残留」这个问题。
+    fn remove_stale_ipc_endpoint(&self, name: &str) -> Applied {
+        let _ = name;
+        Applied::NotApplicable
+    }
+
+    /// DESK-16 (#165)：向系统自带的缩略图器要一帧视频首帧。
+    ///
+    /// 这是回退链 `ffmpeg → 系统兜底` 里「系统兜底」那一环在**本 crate** 的
+    /// 落点。两个平台的形态不对称，原因是系统能力不对称：
+    ///
+    /// - **macOS** 有 `/usr/bin/qlmanage` 这个 CLI，所以 `media-codec` 自己
+    ///   探测那个固定路径就够了（`quicklook.rs`），**不经过本方法** —— 探测
+    ///   一个 unix 路径不需要 cfg，那是它能待在 media-codec 里的原因。
+    /// - **Windows** 没有对等的 CLI，只能走 COM（`IShellItemImageFactory`）。
+    ///   COM 调用必然带 `#[cfg(windows)]`，而红线 B.2 要求平台 cfg 只许待在
+    ///   本 crate —— 所以 Windows 那半必须从这里出去。
+    ///
+    /// `Ok(None)` = **本平台没有实现**（不是「这个文件没有缩略图」）。
+    /// 真取不到缩略图返回 `Err`，让调用方能把「平台不支持」与「这个文件
+    /// 失败了」分开 —— 混成一个 `None` 就又回到「静默降级说不清原因」。
+    ///
+    /// `max_px` 是最长边的**上界**，实现方不许放大（与 `qlmanage -s` 同义）。
+    fn system_video_thumbnail(
+        &self,
+        src: &std::path::Path,
+        max_px: u32,
+    ) -> Result<Option<SystemThumbnail>> {
+        let _ = (src, max_px);
+        Ok(None)
+    }
+
+    // ── QA-09 迁移（#211）桌面壳批次 ─────────────────────────────
+    //
+    // 以下能力此前以 `#[cfg]` / `cfg!()` 的形式散在
+    // `apps/desktop/src-tauri/src/lib.rs` 里（18 处）。搬过来之后调用点
+    // 一个 cfg 不留，`tools/arch-check.sh` 对那个文件的整文件豁免因此
+    // 可以删掉——那是本卡的销号条件。（#1043 起其中 `daemon_executable_name`、
+    // 结束 daemon 进程两项归 [`HostingAdapter`]。）
+
+    /// 这个系统的名字，喂给前端 `wizard_state` 的 json。
+    ///
+    /// **没有默认实现**：每个系统都有名字，编一个默认值只会在某天悄悄
+    /// 把平台标错，而前端拿它决定显示哪套文案。
+    fn platform_name(&self) -> &'static str;
+
+    /// 这个系统「电源与睡眠」设置页的 URI；`None` = 没有可直接跳转的页面。
+    ///
+    /// 只给 URI，**不给「怎么打开」**。理由：
+    ///
+    /// 1. 本 crate 是 **daemon 也在用**的，而 daemon 不是 Tauri 应用——
+    ///    把 `tauri_plugin_opener` 引进来是错的方向。
+    /// 2. 另一条路是在这里手写 `ShellExecuteW`，那等于把 DESK-19 (#168)
+    ///    刚修好的「不闪黑窗」用手写代码重做一遍，**有回归风险、换不来
+    ///    任何好处**。opener 插件的候选命令条条带 `CREATE_NO_WINDOW`。
+    ///
+    /// 真正属于平台知识的是「这个系统的电源设置在哪」，不是「怎么打开一个
+    /// URI」。后者是桌面壳（Tauri 层）的事。
+    fn power_settings_uri(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// 托盘图标是不是「模板图标」（单色、随系统深浅色自动反色）。
+    ///
+    /// 这是 macOS 的习惯，所以默认 `false`——**默认值取的是多数派行为，
+    /// 不是「不知道」**。命名上刻意不叫 `is_macos()`：那只是把 cfg 挪了个
+    /// 地方，没有说出为什么要分叉。
+    fn tray_icon_is_template(&self) -> bool {
+        false
+    }
+
+    /// #1043：系统错误码 `code`（`std::io::Error::raw_os_error`）是不是「文件被
+    /// 别的进程占着」——更新装不上时据此给用户一句能照做的话，而不是系统原文。
+    ///
+    /// 只回答系统错误码的含义，不匹配任何语言的错误文案。默认 `false`：只有
+    /// Windows 有「文件被占用就不能覆盖」这回事。
+    fn is_file_in_use_os_error(&self, code: i32) -> bool {
+        let _ = code;
+        false
+    }
+
+    /// #1043：关窗（藏到托盘）时要不要提示一次「还在后台运行」。
+    ///
+    /// 默认 `true`：Windows 用户普遍以为点 X 就是退出（#303），Linux 的 GNOME
+    /// 默认没有托盘、不提示的话 App 关窗后就像「消失」了。macOS 覆盖成
+    /// `false`——点红灯不退出在那儿是常态（#303 验收标准 3）。
+    fn close_to_tray_hint(&self) -> bool {
+        true
+    }
+
+    /// #1043：窗口标题栏是不是透明 Overlay（前端要自己放拖拽命中区）。
+    /// `titleBarStyle: "Overlay"` 只在 macOS 生效，默认 `false` = 系统原生标题栏。
+    fn overlay_titlebar(&self) -> bool {
+        false
+    }
+
+    /// #1043：电脑睡眠由谁负责，决定首启向导第 2 步怎么讲、用哪份向导视图。
+    ///
+    /// `None` = 本平台没有桌面向导（Linux，#752）。默认 `None`。
+    fn sleep_owner(&self) -> Option<SleepOwner> {
+        None
+    }
+
+    /// 托盘左键是出菜单（macOS 习惯）还是开窗口（Windows / Linux 习惯）。
+    ///
+    /// DESK-18 (#167)：Windows 上左键出菜单与系统习惯相反。
+    fn tray_shows_menu_on_left_click(&self) -> bool {
+        false
+    }
+}
+
+/// 「托管」端口（#1043 / S-9）：进程怎么被拉起、守护、开机自启，以及壳怎么被
+/// 系统重启。只给桌面发行层（`apps/desktop`）用，经 [`hosting`] 拿实现；
+/// 核心 crate 不许依赖（门禁 G3，见 `tools/arch-check.sh`）。
+pub trait HostingAdapter: Send + Sync {
     // 生命周期
     fn install_autostart(&self, exec: &std::path::Path) -> Result<()>;
     fn autostart_installed(&self) -> Result<bool>;
     fn uninstall_autostart(&self) -> Result<()>;
 
-    /// 【DESK-42 #604】已登记的开机自启**目标可执行路径**。
+    /// 【DESK-42 #604 / #726】登记条目的状态：没登记、读不出、指向哪个可执行文件。
     ///
-    /// `None` = 没有登记（或本平台读不出，如 Windows 的 Run key 未实现读取）——
-    /// 注意这与「登记正确」不是一回事，调用方必须自己能分开（见 `AutostartReconcile`）。
-    fn autostart_registered_exec(&self) -> Result<Option<std::path::PathBuf>> {
-        Ok(None)
+    /// 「指向哪里」与「是否读得出」是同一份信息，只有这一个入口（#1043 合并了
+    /// 原先只给路径的 `autostart_registered_exec`）。默认实现 = 本平台没有登记
+    /// 这回事，一律 `Absent`；能读登记的平台覆盖它。
+    fn autostart_registration(&self) -> Result<AutostartRegistration> {
+        Ok(AutostartRegistration::Absent)
     }
 
-    /// 【#726】登记条目的状态：比 [`Self::autostart_registered_exec`] 多分出「读不出」。
+    /// #1046：登记已指向 `expected` 时，条目的**其余内容**是不是本版本
+    /// [`Self::install_autostart`] 会写出的样子（macOS：plist 全文，含日志落点）。
+    /// `false` ⇒ 对账按本版本重写（[`AutostartReconcile::Refreshed`]）。
     ///
-    /// 默认实现只能分出两种（读不出的平台没有「坏文件」这个概念）；能分的平台覆盖它。
-    fn autostart_registration(&self) -> Result<AutostartRegistration> {
-        Ok(match self.autostart_registered_exec()? {
-            Some(p) => AutostartRegistration::At(p),
-            None => AutostartRegistration::Absent,
-        })
+    /// 默认 `true`：本平台的登记只有「指向哪个可执行文件」这一项信息。
+    fn autostart_registration_current(&self, expected: &std::path::Path) -> Result<bool> {
+        let _ = expected;
+        Ok(true)
     }
 
     /// 【DESK-42 #604】对账**闸门**：本平台是否允许用 `expected` 改写开机自启登记。
@@ -358,10 +712,18 @@ pub trait PlatformAdapter: Send + Sync {
             return Ok(AutostartReconcile::SkippedUnstableLocation);
         }
         let registered = self.autostart_registration()?;
-        let action = reconcile_decision(&registered, expected);
+        let mut action = reconcile_decision(&registered, expected);
+        // #1046：指向对了还不够——内容也要是本版本写出的样子（日志落点等）。
+        if action == AutostartReconcile::Unchanged
+            && !self.autostart_registration_current(expected)?
+        {
+            action = AutostartReconcile::Refreshed;
+        }
         if matches!(
             action,
-            AutostartReconcile::Rewritten | AutostartReconcile::Repaired
+            AutostartReconcile::Rewritten
+                | AutostartReconcile::Repaired
+                | AutostartReconcile::Refreshed
         ) {
             self.install_autostart(expected)?;
         }
@@ -369,216 +731,6 @@ pub trait PlatformAdapter: Send + Sync {
     }
 
     fn service_mode(&self) -> ServiceMode;
-    // 安全
-    fn key_store(&self) -> Box<dyn KeyStore>;
-    // 电源（MVP 尽力而为）
-    fn assert_awake(&self) -> Result<AwakeGuard>;
-    fn power_hint(&self) -> PowerHint;
-    // 系统集成
-    fn notify(&self, title: &str, body: &str);
-    /// 本平台**生效的**数据目录。
-    ///
-    /// DESK-24 (#173)：Windows 上这个值不是常量——`%APPDATA%`（Roaming）时代
-    /// 的老目录只要还在，返回的就是它，搬完了才换成新位置。这样「搬迁失败」
-    /// 退化成「保持原样」，而不是指着一个空目录（见 [`DataDirMigration`]）。
-    /// 想真正换过去，调用方得先调 [`Self::migrate_legacy_data_dir`]。
-    fn data_dir(&self) -> PathBuf;
-
-    /// IDX-08 (#1010)：入库落盘文件名的**平台策略**。
-    ///
-    /// core 先把手机传来的名字去掉路径、做路径穿越兜底（最后一段、`.`/`..`、
-    /// 空名），再把**那一段**交给这里。返回的名字只负责「在当前文件系统上合法」；
-    /// `None` = 本平台没有额外规则（macOS / Linux 保持现状）。
-    ///
-    /// 为什么是能力而不是 core 里的 `#[cfg]`：合法名字的规则是平台知识
-    /// （Windows 的非法字符、保留名、结尾点/空格），按架构红线只能住在
-    /// `crates/platform`。返回函数指针而不是 `String` 策略对象，是为了让
-    /// core 的 `Ingestor` 保持 `Clone`/轻量，且不需要把平台依赖传进核心层。
-    fn ingest_file_name_sanitizer(&self) -> Option<fn(&str) -> String> {
-        None
-    }
-
-    /// DESK-24 (#173)：把遗留位置的数据搬到 [`Self::data_dir`] 现在该在的地方。
-    ///
-    /// **在任何人读 data dir 之前调一次**，进程生命周期里一次就够。daemon 那边
-    /// 还得排在日志初始化**之前**——日志文件路径本身就是从 data dir 算出来的。
-    ///
-    /// 不返回 `Result`：搬迁失败不得导致启动失败（卡面第 2 条），所以类型上
-    /// 就没给出「炸掉」这个选项，失败表达成 [`DataDirMigration::Deferred`]。
-    ///
-    /// 默认实现 = 本平台**没有遗留位置这回事**（macOS 的 Application Support、
-    /// Linux 的 XDG 目录当初就选对了）。这不是缺口。
-    fn migrate_legacy_data_dir(&self) -> DataDirMigration {
-        DataDirMigration::NothingToDo
-    }
-    /// DEVLOG-02：daemon 在 `PPF_LOG_FILE` 未设时的**平台默认**日志文件。
-    ///
-    /// Windows 必须返回 `Some`：HKCU Run 键没有任何重定向能力，release 又不再
-    /// 分配控制台，不落盘就等于没有日志。
-    ///
-    /// macOS 也返回 `Some`（DIAG-B1）：原先指望 launchd plist 的
-    /// `StandardErrorPath`，但桌面壳还有好几条一次性 spawn 路径（注册失败兜底、
-    /// 更新后恢复、重启）把 stdio 全接到 `/dev/null`——真机上 0.6.0 的 daemon
-    /// 就是这么跑的，日志整段丢失。daemon 在 macOS 上**同时**写这个文件和
-    /// stderr（后者留给向导读启动错误），见 main.rs。
-    /// DAE-05：`path` 所在卷的容量水位。`None` = 本平台没有实现（调用方
-    /// 应当序列化成 null，而不是编一个数字出来）。
-    ///
-    /// `free` 的语义**必须**是「无特权写入者真正可用的字节数」，对齐 unix
-    /// 侧 `statvfs` 的 `f_bavail`（也就是 `df` / Finder 显示的那个数），
-    /// 而不是卷上的物理空闲量——两者在有配额/保留区的卷上不一样。
-    fn volume_stats(&self, path: &std::path::Path) -> Option<VolumeStats> {
-        let _ = path;
-        None
-    }
-
-    /// DAE-11 (#804)：电脑此刻是否接着外部电源（插电）。
-    ///
-    /// 用途：daemon 运行且插电时一直持有「别因空闲而睡」的声明，拔电就释放、
-    /// 照常睡（验收人 2026-10-10 拍板，只管插电）。没有电池的台式机算插电。
-    ///
-    /// `None` = 不知道（本平台没实现，或系统答不出来）。**不许**把不知道编成
-    /// `Some(..)`：插电与否决定要不要阻止睡眠，猜错哪边都是用户可见的后果，
-    /// 怎么处理「不知道」由调用方（daemon）定。默认实现是 `None`，与
-    /// [`Self::installed_bundle_version`] 同一口径。
-    fn on_external_power(&self) -> Option<bool> {
-        None
-    }
-
-    /// DAE-11 (#804)：订阅「插电 / 用电池」的变化，**事件驱动，不轮询**。
-    ///
-    /// 登记成功后先以当前状态回调一次，之后每次电源切换再回调；入参口径同
-    /// [`Self::on_external_power`]（`None` = 不知道）。回调在系统线程上跑，
-    /// 必须快进快出。返回的 [`PowerWatch`] drop 即退订。
-    ///
-    /// 返回 `None` = 本平台不支持订阅（默认实现）。调用方据此**不做**常驻
-    /// 保持唤醒——只拿一次快照的话，拔电后没人知道，会一直挡着睡眠耗电池。
-    fn watch_external_power(
-        &self,
-        on_change: Box<dyn Fn(Option<bool>) + Send + Sync>,
-    ) -> Option<PowerWatch> {
-        let _ = on_change;
-        None
-    }
-
-    /// 入参是**生效的** data dir（由调用方解析 env / 平台约定后给出），
-    /// 因为一次性 daemon 靠 `PPF_DATA_DIR` 做隔离，日志不跟着走就会污染
-    /// 真实日志文件。默认实现返回 `None`——既无 launchd 托管也无 Run 键的
-    /// 平台自己决定。
-    fn default_log_file(&self, data_dir: &std::path::Path) -> Option<PathBuf> {
-        let _ = data_dir;
-        None
-    }
-
-    /// DIAG-B1：写 [`default_log_file`](Self::default_log_file) 时是否**同时**照旧写
-    /// stderr。macOS 为 true：launchd 托管时 stderr 是 `.err`，桌面向导读它的最后
-    /// 一行报启动失败（DESK-09）。默认 false（Windows release 没有控制台可写）。
-    fn default_log_tees_stderr(&self) -> bool {
-        false
-    }
-
-    /// DESK-58 (#875)：daemon 启动早期报错（文件日志之前的 `eprintln!`、`main`
-    /// 返回的 `Err`、panic）的**固定落点**。`None` = 由托管方接 stderr（macOS 的
-    /// launchd `StandardErrorPath`，壳从 plist 里读路径）。
-    ///
-    /// Windows 必须返回 `Some`：Run 键和壳的一次性 spawn 都不给 stderr 去处，
-    /// 不落盘的话「库目录不存在」这类原话谁都看不到，向导只能说「请检查日志」。
-    /// daemon 写（[`Self::capture_unattached_stderr`]）、壳读（向导 + 诊断包）
-    /// 用的是这同一个函数，路径只有一份。
-    fn startup_stderr_file(&self, data_dir: &std::path::Path) -> Option<PathBuf> {
-        let _ = data_dir;
-        None
-    }
-
-    /// DESK-58 (#875)：本进程的 stderr **没人接**时，把它改接到
-    /// [`Self::startup_stderr_file`]（每次启动截断重写）。
-    ///
-    /// 「没人接」只指：没有 stderr 句柄，或者接的是空设备（`NUL`）。控制台、
-    /// 管道、磁盘文件都是有人**刻意**接的（终端前台、测试框架、手工重定向），
-    /// 一律不动。默认实现 `NotApplicable`：别的平台由托管方负责 stderr。
-    fn capture_unattached_stderr(&self, data_dir: &std::path::Path) -> Applied {
-        let _ = data_dir;
-        Applied::NotApplicable
-    }
-
-    /// QA-09 迁移（#211）：把文件权限收紧到「只有属主可读写」。
-    ///
-    /// 用在身份密钥这类文件上。默认实现返回 [`Applied::Unsupported`] 而
-    /// **不是** `Ok(Applied::Done)`——没实现却报做过了，正是这套口径要防的。
-    fn restrict_to_owner(&self, path: &std::path::Path) -> Result<Applied> {
-        let _ = path;
-        Ok(Applied::Unsupported)
-    }
-
-    /// QA-09 迁移（#211）：把本进程自己的 stderr 截断到 0 字节。
-    ///
-    /// 日志洪水防线的最后一环（前面还有「折叠重复行」那道，那道是所有
-    /// 平台共同的主防线）。只有当 stderr 被托管方重定向到文件时才有意义。
-    fn truncate_own_stderr(&self) -> Applied {
-        Applied::Unsupported
-    }
-
-    /// DESK-22 (#171)：关掉「空闲自动睡眠」，让备份能在无人值守时跑完。
-    ///
-    /// 两个平台都要走系统的授权弹窗（macOS 是 Touch ID/密码，Windows 是
-    /// UAC），所以 `Err(PlatformError::Cancelled)` 是**正常路径之一**，
-    /// 调用方必须把它和真失败分开呈现。
-    ///
-    /// ⚠️ 实现方**必须回读确认**再返回 `Done`。Windows 上实测过：
-    /// `powercfg /x standby-timeout-ac 0` 在非管理员下**退出码是 0，但注册表
-    /// 根本没被写**（用注册表键的最后写入时间比对出来的）。拿退出码当"已
-    /// 生效"就是本仓这一轮在修的那类缺陷——静默没做却报成功。
-    fn disable_auto_sleep(&self) -> Result<Applied> {
-        Ok(Applied::Unsupported)
-    }
-
-    /// QA-09 迁移（#211）：清掉被强杀的前任留在文件系统里的 IPC 端点。
-    ///
-    /// 默认 [`Applied::NotApplicable`]：只有 unix domain socket 会落文件，
-    /// 命名管道这类端点不存在「残留」这个问题。
-    fn remove_stale_ipc_endpoint(&self, name: &str) -> Applied {
-        let _ = name;
-        Applied::NotApplicable
-    }
-
-    /// DESK-16 (#165)：向系统自带的缩略图器要一帧视频首帧。
-    ///
-    /// 这是回退链 `ffmpeg → 系统兜底` 里「系统兜底」那一环在**本 crate** 的
-    /// 落点。两个平台的形态不对称，原因是系统能力不对称：
-    ///
-    /// - **macOS** 有 `/usr/bin/qlmanage` 这个 CLI，所以 `media-codec` 自己
-    ///   探测那个固定路径就够了（`quicklook.rs`），**不经过本方法** —— 探测
-    ///   一个 unix 路径不需要 cfg，那是它能待在 media-codec 里的原因。
-    /// - **Windows** 没有对等的 CLI，只能走 COM（`IShellItemImageFactory`）。
-    ///   COM 调用必然带 `#[cfg(windows)]`，而红线 B.2 要求平台 cfg 只许待在
-    ///   本 crate —— 所以 Windows 那半必须从这里出去。
-    ///
-    /// `Ok(None)` = **本平台没有实现**（不是「这个文件没有缩略图」）。
-    /// 真取不到缩略图返回 `Err`，让调用方能把「平台不支持」与「这个文件
-    /// 失败了」分开 —— 混成一个 `None` 就又回到「静默降级说不清原因」。
-    ///
-    /// `max_px` 是最长边的**上界**，实现方不许放大（与 `qlmanage -s` 同义）。
-    fn system_video_thumbnail(
-        &self,
-        src: &std::path::Path,
-        max_px: u32,
-    ) -> Result<Option<SystemThumbnail>> {
-        let _ = (src, max_px);
-        Ok(None)
-    }
-
-    // ── QA-09 迁移（#211）桌面壳批次 ─────────────────────────────
-    //
-    // 以下五个能力此前以 `#[cfg]` / `cfg!()` 的形式散在
-    // `apps/desktop/src-tauri/src/lib.rs` 里（18 处）。搬过来之后调用点
-    // 一个 cfg 不留，`tools/arch-check.sh` 对那个文件的整文件豁免因此
-    // 可以删掉——那是本卡的销号条件。
-
-    /// 这个系统的名字，喂给前端 `wizard_state` 的 json。
-    ///
-    /// **没有默认实现**：每个系统都有名字，编一个默认值只会在某天悄悄
-    /// 把平台标错，而前端拿它决定显示哪套文案。
-    fn platform_name(&self) -> &'static str;
 
     /// 内置 daemon 可执行文件的文件名。
     ///
@@ -588,51 +740,32 @@ pub trait PlatformAdapter: Send + Sync {
         DAEMON_EXECUTABLE_STEM
     }
 
-    /// 这个系统「电源与睡眠」设置页的 URI；`None` = 没有可直接跳转的页面。
+    /// 结束正在跑的内置 daemon 进程（B7，#1043：两平台同一套语义）。
     ///
-    /// 只给 URI，**不给「怎么打开」**。理由：
-    ///
-    /// 1. 本 crate 是 **daemon 也在用**的，而 daemon 不是 Tauri 应用——
-    ///    把 `tauri_plugin_opener` 引进来是错的方向。
-    /// 2. 另一条路是在这里手写 `ShellExecuteW`，那等于把 DESK-19 (#168)
-    ///    刚修好的「不闪黑窗」用手写代码重做一遍，**有回归风险、换不来
-    ///    任何好处**。opener 插件的候选命令条条带 `CREATE_NO_WINDOW`。
-    ///
-    /// 真正属于平台知识的是「这个系统的电源设置在哪」，不是「怎么打开一个
-    /// URI」。后者是桌面壳（Tauri 层）的事。
-    fn power_settings_uri(&self) -> Option<&'static str> {
-        None
-    }
-
-    /// 托盘图标是不是「模板图标」（单色、随系统深浅色自动反色）。
-    ///
-    /// 这是 macOS 的习惯，所以默认 `false`——**默认值取的是多数派行为，
-    /// 不是「不知道」**。命名上刻意不叫 `is_macos()`：那只是把 cfg 挪了个
-    /// 地方，没有说出为什么要分叉。
-    fn tray_icon_is_template(&self) -> bool {
-        false
-    }
-
-    /// 托盘左键是出菜单（macOS 习惯）还是开窗口（Windows / Linux 习惯）。
-    ///
-    /// DESK-18 (#167)：Windows 上左键出菜单与系统习惯相反。
-    fn tray_shows_menu_on_left_click(&self) -> bool {
-        false
-    }
-
-    /// 杀掉正在跑的内置 daemon 进程。
+    /// - `exe`：内置 daemon 可执行文件的路径（壳旁边那个 sidecar）。**只认这个
+    ///   路径**上跑的进程——不按命令行、不按文件名匹配，所以命令行里恰好含
+    ///   `ppf-daemon` 的别的进程、别处的同名副本都不会被误杀。
+    /// - `pid_hint`：daemon 经 IPC 自报的 pid（读不到给 `None`）。优先结束它，
+    ///   但先核对它的可执行文件**名**与 `exe` 相同（pid 会被复用）；不核对目录
+    ///   ——应答 IPC 的 daemon 跑在别处（开发构建、解压副本）时改前也停得掉。
+    ///   之后照样按完整路径枚举兜底（daemon 挂死、IPC 不通时靠这条）。
+    /// - 只动本用户 / 本会话的进程。结束方式沿用各平台改前的做法（unix 发
+    ///   SIGTERM 不等；Windows `TerminateProcess` 并等它退出）——macOS 上
+    ///   launchd 的 `KeepAlive{SuccessfulExit=false}` 靠「非正常退出」决定要不要
+    ///   重拉，「重启服务」那条路依赖这一点，所以这里不走 daemon 的 `step_down`
+    ///   （exit 0）。
     ///
     /// **没有默认实现**：三个系统都做得到这件事，编一个「不支持」的默认值
     /// 等于给将来的实现留一条静默什么都不做的路。
     ///
     /// 「进程本来就没在跑」返回 [`KillOutcome::NotRunning`]，**不是 `Err`**。
-    /// 真失败（权限不足、被杀软拦、参数错）才是 `Err`——判据见各平台实现。
-    fn kill_daemon_process(&self) -> Result<KillOutcome>;
+    /// 真失败（权限不足、被杀软拦）才是 `Err`——判据见各平台实现。
+    fn stop_daemon(&self, exe: &std::path::Path, pid_hint: Option<u32>) -> Result<KillOutcome>;
 
     // ── UPD-06 (#616)：让**系统**负责"重启桌面壳" ─────────────────────
     //
     // 背景：更新装完磁盘上已是新版，但正在跑的壳仍是旧版，而**壳不能原地
-    // 换代码**。0.7.5 的解法是壳自己 `restart_app`（spawn 自己 + exit），
+    // 换代码**。0.7.5 的解法是壳自己重启（spawn 自己 + exit，今天是 `relaunch_shell` 的退化路径），
     // 那要在被替换的进程里自证没竞态（托盘常驻 + single-instance）。
     //
     // 更好的一层：把"杀 + 拉"交给系统的服务管理器（macOS = launchd），
@@ -705,17 +838,6 @@ pub trait PlatformAdapter: Send + Sync {
         Ok(None)
     }
 
-    /// **服务管理器眼里正在跑的壳**的 pid（`None` = 没在跑 / 没登记 / 本平台没有）。
-    ///
-    /// 为什么需要它（UPD-07 #617）：owner（daemon）在动手换壳前，必须先确认
-    /// "壳登记里的那个实例**就是用户现在用的这一把**" —— `kickstart -k` 只杀得到
-    /// 服务管理器自己启动的进程；pid 对不上（壳是用户手动打开的、或登记里的实例
-    /// 已经死了）⇒ kickstart 只会再拉起一个实例、被 single-instance 顶掉 ⇒
-    /// 用户点"重启"看起来什么都没发生。**宁可不动，也不要制造这种假动作。**
-    fn shell_agent_running_pid(&self) -> Option<u32> {
-        None
-    }
-
     /// 让服务管理器**杀掉并重启**壳，返回新实例 pid。
     /// 调用方：`shell_agent_label().is_some()` 且登记路径 == 当前可执行文件时才用。
     fn kickstart_shell_agent(&self) -> Result<u32> {
@@ -765,10 +887,23 @@ pub trait PlatformAdapter: Send + Sync {
     /// ⇒ 结果仍是野生实例在岗。所以调用方要先让野生实例退位，再调本方法。
     ///
     /// 返回 `NotRegistered` / `Unsupported` 时**什么都没做**，调用方退回
-    /// 一次性 spawn（Windows 的 Run key 没有服务管理器语义，行为不变）。
+    /// 一次性 spawn（`ServiceMode::UserAutostart` 没有服务管理器语义）。
     fn restart_resident_daemon(&self, kill_running: bool) -> Result<ResidentRestart> {
         let _ = kill_running;
         Ok(ResidentRestart::Unsupported)
+    }
+
+    /// #1060：应用内更新替换文件前，让服务管理器那份常驻 daemon **停下且不被
+    /// 自动重拉**（launchd KeepAlive / 计划任务看门狗都会把「仅仅被杀」的进程
+    /// 几秒内用旧文件拉回来，等于没停）。
+    ///
+    /// 与 [`Self::uninstall_autostart`] 的区别：**登记保留**（plist / 计划任务
+    /// 还在），也不写任何「用户停止」标记——它只是「为更新暂停」，不是用户的
+    /// 停止意图；恢复走 [`Self::restart_resident_daemon`]`(false)`。
+    ///
+    /// 默认 `Unsupported`（没有服务管理器的平台）。
+    fn pause_resident_daemon(&self) -> Result<ResidentPause> {
+        Ok(ResidentPause::Unsupported)
     }
 }
 
@@ -783,6 +918,47 @@ pub enum ResidentRestart {
     NotRegistered,
     /// 本平台没有服务管理器语义——什么都没做。
     Unsupported,
+}
+
+/// [`HostingAdapter::pause_resident_daemon`] 的结论。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResidentPause {
+    /// 服务管理器那份已被卸下 / 停下且**不会被它自动重拉**；登记保留，
+    /// [`HostingAdapter::restart_resident_daemon`] 可原样拉回。
+    Paused,
+    /// 本机没有登记常驻服务——什么都没做。
+    NotRegistered,
+    /// 本平台没有服务管理器语义——什么都没做。
+    Unsupported,
+}
+
+/// Windows 的 `GetUserPreferredUILanguages` 返回 multi-sz（`a\0b\0\0`）的 UTF-16：
+/// 取第一个非空条目；空缓冲 / 首项为空 / 非法 UTF-16 → `None`。
+#[cfg(any(windows, test))]
+pub(crate) fn first_multi_sz_entry(buf: &[u16]) -> Option<String> {
+    let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    String::from_utf16(&buf[..end])
+        .ok()
+        .filter(|t| !t.is_empty())
+}
+
+/// #1043（B6）：按 POSIX 优先级（`LC_ALL` > `LC_MESSAGES` > `LANG`）取语言环境，
+/// 去掉编码与修饰（`zh_CN.UTF-8@x` → `zh-CN`）。空串、`C`、`POSIX` 都不是语言，
+/// 算读不到。纯函数，三平台都测得到。
+pub(crate) fn posix_env_locale(
+    lc_all: Option<&str>,
+    lc_messages: Option<&str>,
+    lang: Option<&str>,
+) -> Option<String> {
+    let raw = [lc_all, lc_messages, lang]
+        .into_iter()
+        .flatten()
+        .find(|v| !v.trim().is_empty())?;
+    let tag = raw.split(['.', '@']).next().unwrap_or("").trim();
+    if tag.is_empty() || tag == "C" || tag == "POSIX" {
+        return None;
+    }
+    Some(tag.replace('_', "-"))
 }
 
 /// DESK-33 (#325) / DESK-54 (#814)：产品代码启动子进程的**唯一入口**。
@@ -808,7 +984,10 @@ pub fn command(program: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
     cmd
 }
 
-/// The adapter for the current platform.
+/// 本平台的「平台能力」（[`PlatformAdapter`]）。daemon 与其他核心 crate 只走这个入口。
+///
+/// #1043（S-9）：返回值是 `impl PlatformAdapter`，**看不到** [`HostingAdapter`]
+/// 的方法——核心想调托管能力在编译期就过不去；托管只经 [`hosting`] 拿。
 #[cfg(target_os = "macos")]
 pub fn adapter() -> impl PlatformAdapter {
     MacosAdapter::new()
@@ -817,10 +996,25 @@ pub fn adapter() -> impl PlatformAdapter {
 pub fn adapter() -> impl PlatformAdapter {
     WindowsAdapter::new()
 }
+
+/// 本平台的「托管」能力（[`HostingAdapter`]）：开机自启登记、服务管理器、结束
+/// daemon 进程、安装位置。只给桌面发行层（壳）用；daemon 不许调（门禁 G3）。
+#[cfg(target_os = "macos")]
+pub fn hosting() -> impl HostingAdapter {
+    MacosAdapter::new()
+}
+#[cfg(windows)]
+pub fn hosting() -> impl HostingAdapter {
+    WindowsAdapter::new()
+}
 /// Headless/server platforms (Linux cloud boxes run the daemon too):
 /// data dir follows XDG; desktop-only capabilities answer honestly.
 #[cfg(not(any(target_os = "macos", windows)))]
 pub fn adapter() -> impl PlatformAdapter {
+    HeadlessAdapter
+}
+#[cfg(not(any(target_os = "macos", windows)))]
+pub fn hosting() -> impl HostingAdapter {
     HeadlessAdapter
 }
 
@@ -829,24 +1023,6 @@ pub struct HeadlessAdapter;
 
 #[cfg(not(any(target_os = "macos", windows)))]
 impl PlatformAdapter for HeadlessAdapter {
-    fn install_autostart(&self, _exec: &std::path::Path) -> Result<()> {
-        Err(PlatformError::Failed {
-            action: "autostart",
-            detail: "unsupported on this platform (use systemd)".into(),
-        })
-    }
-    fn autostart_installed(&self) -> Result<bool> {
-        Ok(false)
-    }
-    fn uninstall_autostart(&self) -> Result<()> {
-        Ok(())
-    }
-    fn service_mode(&self) -> ServiceMode {
-        ServiceMode::UserAutostart
-    }
-    fn key_store(&self) -> Box<dyn KeyStore> {
-        Box::new(NoKeyStore)
-    }
     fn assert_awake(&self) -> Result<AwakeGuard> {
         // Servers don't idle-sleep; a no-op guard keeps callers simple.
         Ok(AwakeGuard { inner: () })
@@ -879,6 +1055,10 @@ impl PlatformAdapter for HeadlessAdapter {
             None
         }
     }
+    /// 无桌面托管的 Linux：日志交给 stderr（systemd / Docker 接），不另写文件。
+    fn daemon_log_paths(&self, _data_dir: &std::path::Path) -> DaemonLogPaths {
+        DaemonLogPaths::default()
+    }
     fn restrict_to_owner(&self, path: &std::path::Path) -> Result<Applied> {
         #[cfg(unix)]
         {
@@ -905,19 +1085,6 @@ impl PlatformAdapter for HeadlessAdapter {
         // 给的也是 "linux"，行为一字不变。
         "linux"
     }
-    fn kill_daemon_process(&self) -> Result<KillOutcome> {
-        #[cfg(unix)]
-        {
-            crate::unix::kill_daemon_process()
-        }
-        #[cfg(not(unix))]
-        {
-            Err(PlatformError::Failed {
-                action: "kill_daemon_process",
-                detail: "这个平台没有实现杀进程".into(),
-            })
-        }
-    }
     fn remove_stale_ipc_endpoint(&self, name: &str) -> Applied {
         #[cfg(unix)]
         {
@@ -932,21 +1099,35 @@ impl PlatformAdapter for HeadlessAdapter {
 }
 
 #[cfg(not(any(target_os = "macos", windows)))]
-struct NoKeyStore;
-
-#[cfg(not(any(target_os = "macos", windows)))]
-impl KeyStore for NoKeyStore {
-    fn store(&self, _name: &str, _secret: &[u8]) -> Result<()> {
+impl HostingAdapter for HeadlessAdapter {
+    fn install_autostart(&self, _exec: &std::path::Path) -> Result<()> {
         Err(PlatformError::Failed {
-            action: "key store",
-            detail: "no secure store on this platform".into(),
+            action: "autostart",
+            detail: "unsupported on this platform (use systemd)".into(),
         })
     }
-    fn load(&self, _name: &str) -> Result<Option<Vec<u8>>> {
-        Ok(None)
+    fn autostart_installed(&self) -> Result<bool> {
+        Ok(false)
     }
-    fn delete(&self, _name: &str) -> Result<()> {
+    fn uninstall_autostart(&self) -> Result<()> {
         Ok(())
+    }
+    fn service_mode(&self) -> ServiceMode {
+        ServiceMode::UserAutostart
+    }
+    fn stop_daemon(&self, exe: &std::path::Path, pid_hint: Option<u32>) -> Result<KillOutcome> {
+        #[cfg(unix)]
+        {
+            crate::unix::stop_processes_at(exe, pid_hint)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (exe, pid_hint);
+            Err(PlatformError::Failed {
+                action: "stop_daemon",
+                detail: "这个平台没有实现结束进程".into(),
+            })
+        }
     }
 }
 
@@ -978,36 +1159,73 @@ pub fn parse_pmset(output: &str) -> PowerHint {
     }
 }
 
-/// Parse `powercfg /query <scheme> SUB_SLEEP STANDBYIDLE` style output:
-/// the current AC setting index is seconds (0 = never).
-pub fn parse_powercfg(output: &str) -> PowerHint {
-    for line in output.lines() {
-        let t = line.trim();
-        // "Current AC Power Setting Index: 0x00000384"
-        if let Some(rest) = t
-            .strip_prefix("Current AC Power Setting Index:")
-            .map(str::trim)
-        {
-            let seconds = if let Some(hex) = rest.strip_prefix("0x") {
-                u32::from_str_radix(hex, 16).ok()
-            } else {
-                rest.parse::<u32>().ok()
-            };
-            return match seconds {
-                Some(0) => PowerHint::NeverSleeps,
-                Some(s) => PowerHint::SleepsWhenIdle {
-                    minutes: s.div_ceil(60),
-                },
-                None => PowerHint::Unknown,
-            };
-        }
-    }
-    PowerHint::Unknown
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 取消是独立的一类，不能被归成失败——否则 UI 会把用户自己的选择
+    /// 说成出错（macOS 的 `disable_auto_sleep` 仍走这条路径）。
+    /// #1043：没有桌面向导的平台（headless Linux）——关窗提示照 Windows/Linux
+    /// 习惯、原生标题栏、不回答睡眠归属。
+    #[cfg(not(any(target_os = "macos", windows)))]
+    #[test]
+    fn headless_ui_capabilities() {
+        let a = adapter();
+        assert!(a.close_to_tray_hint());
+        assert!(!a.overlay_titlebar());
+        assert_eq!(a.sleep_owner(), None);
+    }
+
+    #[test]
+    fn sleep_owner_wire_values() {
+        assert_eq!(SleepOwner::User.as_str(), "user");
+        assert_eq!(SleepOwner::Daemon.as_str(), "daemon");
+    }
+
+    /// #1056：multi-sz（界面语言列表）只取首项。
+    #[test]
+    fn multi_sz_first_entry() {
+        let w = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+        assert_eq!(
+            first_multi_sz_entry(&w("zh-CN\0en-US\0\0")).as_deref(),
+            Some("zh-CN")
+        );
+        assert_eq!(
+            first_multi_sz_entry(&w("en-US\0\0")).as_deref(),
+            Some("en-US")
+        );
+        assert_eq!(first_multi_sz_entry(&w("en-US")).as_deref(), Some("en-US"));
+        assert_eq!(first_multi_sz_entry(&w("\0\0")), None);
+        assert_eq!(first_multi_sz_entry(&[]), None);
+        assert_eq!(first_multi_sz_entry(&[0xD800, 0]), None);
+    }
+
+    /// #1043（B6）：POSIX 环境变量的优先级与清洗。反证：把 `C`/`POSIX` 当成
+    /// 语言、或 `LANG` 抢在 `LC_ALL` 前面 → 红。
+    #[test]
+    fn posix_env_locale_follows_priority_and_strips_encoding() {
+        assert_eq!(
+            posix_env_locale(Some("zh_CN.UTF-8"), Some("en_US"), Some("fr_FR")),
+            Some("zh-CN".into())
+        );
+        assert_eq!(
+            posix_env_locale(None, Some(""), Some("en_US.UTF-8@euro")),
+            Some("en-US".into())
+        );
+        assert_eq!(posix_env_locale(None, None, Some("C.UTF-8")), None);
+        assert_eq!(posix_env_locale(Some("POSIX"), None, None), None);
+        assert_eq!(posix_env_locale(None, None, None), None);
+        assert_eq!(posix_env_locale(Some("  "), None, Some("")), None);
+    }
+
+    #[test]
+    fn cancelled_is_its_own_variant_not_a_failure() {
+        let c = PlatformError::Cancelled {
+            action: "disable_auto_sleep",
+        };
+        assert!(matches!(c, PlatformError::Cancelled { .. }));
+        assert!(c.to_string().contains("取消"), "{c}");
+    }
 
     #[test]
     fn pmset_sleep_zero_means_never() {
@@ -1027,35 +1245,16 @@ mod tests {
         assert_eq!(parse_pmset(out), PowerHint::Unknown);
     }
 
-    #[test]
-    fn powercfg_hex_seconds_to_minutes() {
-        let out = "  Current AC Power Setting Index: 0x00000384\n"; // 900 s
-        assert_eq!(
-            parse_powercfg(out),
-            PowerHint::SleepsWhenIdle { minutes: 15 }
-        );
-    }
-
-    #[test]
-    fn powercfg_zero_means_never() {
-        let out = "Current AC Power Setting Index: 0x00000000";
-        assert_eq!(parse_powercfg(out), PowerHint::NeverSleeps);
-    }
-
-    #[test]
-    fn powercfg_garbage_is_unknown() {
-        assert_eq!(parse_powercfg("no such section"), PowerHint::Unknown);
-    }
-
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_plist_keepalive_spares_clean_exit() {
         // DAE-02 缺陷①：退位实例 exit(0) 后 launchd 不得重拉（无条件
         // KeepAlive 会把它无限复活成 churn）。plist 必须是
         // SuccessfulExit=false 语义——成功退出不重拉、崩溃/被杀才复活。
-        let plist = macos::agent_plist(std::path::Path::new(
-            "/Applications/P-Pass.app/Contents/MacOS/ppf-daemon",
-        ));
+        let plist = macos::agent_plist(
+            std::path::Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon"),
+            &macos::daemon_log_paths_in(std::path::Path::new("/var/ppf")),
+        );
         assert!(
             plist.contains("<key>SuccessfulExit</key><false/>"),
             "clean exit (stand-down) must not relaunch: {plist}"
@@ -1104,12 +1303,96 @@ mod tests {
         );
     }
 
+    /// #1046：对账用的假托管端口——登记指向哪、内容是不是本版本的样子都可注入，
+    /// 记下 `install_autostart` 被调了几次。
+    struct FakeHosting {
+        registration: AutostartRegistration,
+        current: bool,
+        installs: std::sync::Mutex<Vec<std::path::PathBuf>>,
+    }
+
+    impl HostingAdapter for FakeHosting {
+        fn install_autostart(&self, exec: &std::path::Path) -> Result<()> {
+            self.installs.lock().unwrap().push(exec.to_path_buf());
+            Ok(())
+        }
+        fn autostart_installed(&self) -> Result<bool> {
+            Ok(!matches!(self.registration, AutostartRegistration::Absent))
+        }
+        fn uninstall_autostart(&self) -> Result<()> {
+            Ok(())
+        }
+        fn autostart_registration(&self) -> Result<AutostartRegistration> {
+            Ok(self.registration.clone())
+        }
+        fn autostart_registration_current(&self, _expected: &std::path::Path) -> Result<bool> {
+            Ok(self.current)
+        }
+        fn autostart_reconcile_allowed(&self, _expected: &std::path::Path) -> bool {
+            true
+        }
+        fn service_mode(&self) -> ServiceMode {
+            ServiceMode::UserAutostart
+        }
+        fn stop_daemon(
+            &self,
+            _exe: &std::path::Path,
+            _pid_hint: Option<u32>,
+        ) -> Result<KillOutcome> {
+            Ok(KillOutcome::NotRunning)
+        }
+    }
+
+    /// #1046（S-11）：老版本登记的 exe 没变、但内容（macOS plist 的日志落点）是旧的
+    /// ⇒ 对账必须按本版本重写一次；重写后内容一致 ⇒ 不再动（幂等，不反复 bootout）。
+    /// 反证：去掉 `reconcile_autostart` 里的内容比对 → 第一条断言得到 Unchanged，红。
+    #[test]
+    fn reconcile_refreshes_a_registration_whose_content_is_stale() {
+        let exe = std::path::Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon");
+        let stale = FakeHosting {
+            registration: AutostartRegistration::At(exe.into()),
+            current: false,
+            installs: Default::default(),
+        };
+        assert_eq!(
+            stale.reconcile_autostart(exe).unwrap(),
+            AutostartReconcile::Refreshed
+        );
+        assert_eq!(*stale.installs.lock().unwrap(), vec![exe.to_path_buf()]);
+
+        let fresh = FakeHosting {
+            registration: AutostartRegistration::At(exe.into()),
+            current: true,
+            installs: Default::default(),
+        };
+        assert_eq!(
+            fresh.reconcile_autostart(exe).unwrap(),
+            AutostartReconcile::Unchanged
+        );
+        assert!(fresh.installs.lock().unwrap().is_empty(), "一致时不许重写");
+
+        // 未登记仍然不动（DAE-03 ②），内容比对不改变这一条。
+        let absent = FakeHosting {
+            registration: AutostartRegistration::Absent,
+            current: false,
+            installs: Default::default(),
+        };
+        assert_eq!(
+            absent.reconcile_autostart(exe).unwrap(),
+            AutostartReconcile::NotRegistered
+        );
+        assert!(absent.installs.lock().unwrap().is_empty());
+    }
+
     /// 【DESK-42 #604】读得出登记路径，是对账的前提；读不出来就永远发现不了漂移。
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_plist_round_trips_its_program_argument() {
         let exec = std::path::Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon");
-        let text = macos::agent_plist(exec);
+        let text = macos::agent_plist(
+            exec,
+            &macos::daemon_log_paths_in(std::path::Path::new("/var/ppf")),
+        );
         assert_eq!(
             macos::plist_program_argument(&text).as_deref(),
             Some("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon"),
@@ -1132,7 +1415,10 @@ mod tests {
         use macos::registration_from_read as classify;
         use AutostartRegistration::{Absent, At, Unreadable};
         let exec = std::path::Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon");
-        let good = macos::agent_plist(exec);
+        let good = macos::agent_plist(
+            exec,
+            &macos::daemon_log_paths_in(std::path::Path::new("/var/ppf")),
+        );
 
         assert_eq!(classify(Ok(good.clone())).unwrap(), At(exec.into()));
         let not_found = std::io::Error::from(std::io::ErrorKind::NotFound);
@@ -1202,7 +1488,7 @@ mod tests {
         );
         // 能力要真的暴露出来：调用方靠它决定走"系统重启"还是退化到自己重启。
         assert_eq!(
-            PlatformAdapter::shell_agent_label(&macos::MacosAdapter::new()),
+            HostingAdapter::shell_agent_label(&macos::MacosAdapter::new()),
             Some("com.p-pass.shell")
         );
     }
@@ -1268,10 +1554,10 @@ mod tests {
     #[test]
     fn resident_restart_is_a_no_op_without_a_service_manager() {
         assert_eq!(
-            adapter().restart_resident_daemon(true).unwrap(),
+            hosting().restart_resident_daemon(true).unwrap(),
             ResidentRestart::Unsupported
         );
-        assert_eq!(adapter().resident_daemon_pid(), None);
+        assert_eq!(hosting().resident_daemon_pid(), None);
     }
 
     /// 【DESK-42 #604】闸门判据：只放行稳定安装位置。

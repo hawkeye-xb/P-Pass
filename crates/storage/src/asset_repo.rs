@@ -94,6 +94,35 @@ impl Db {
             .collect())
     }
 
+    /// (hash, rel_path) of rows whose stored MIME is neither `image/*` nor
+    /// `video/*`, or is one of `also_non_media` — #1044 B3 存量清理的候选集
+    /// （旧版 adopt/rebuild 把非媒体文件收成过 octet-stream 行，旧监听收过
+    /// svg/ico）。是否真不是媒体由调用方按 `core_index::media_kind` 再判一次；
+    /// 本层只做 MIME 筛选，排除哪些 MIME 是调用方的业务规则。
+    pub async fn list_non_media_typed_assets(
+        &self,
+        also_non_media: &[&str],
+    ) -> Result<Vec<(Vec<u8>, String)>> {
+        let mut sql = String::from(
+            "SELECT hash, rel_path FROM asset
+             WHERE (media_type NOT LIKE 'image/%' AND media_type NOT LIKE 'video/%')",
+        );
+        if !also_non_media.is_empty() {
+            sql.push_str(" OR media_type IN (");
+            sql.push_str(&vec!["?"; also_non_media.len()].join(", "));
+            sql.push(')');
+        }
+        let mut q = sqlx::query(&sql);
+        for m in also_non_media {
+            q = q.bind(*m);
+        }
+        let rows = q.fetch_all(self.pool()).await?;
+        Ok(rows
+            .iter()
+            .map(|r| (r.get("hash"), r.get("rel_path")))
+            .collect())
+    }
+
     /// (hash, rel_path) pairs whose rel_path lives under `prefix` —
     /// WATCH-01 局部对账（变化目录）数据源：只枚举受影响子树，不用
     /// 全量拉。`prefix` 按目录边界匹配（`originals/ab` 不误中
@@ -157,6 +186,18 @@ impl Db {
 
     /// Record the thumbnail pipeline's verdict for one asset
     /// (0 pending / 1 done / 2 failed-placeholder, T-013/T-033).
+    /// #1044 B3：改正一条资产记录的 MIME（旧口径把 `.avi` 之类记成了
+    /// octet-stream），同时把缩略图状态归零——旧的生成结论是按错的类型
+    /// 下的，让它按正确的类型重来。
+    pub async fn correct_asset_media_type(&self, hash: &[u8], media_type: &str) -> Result<u64> {
+        let res = sqlx::query("UPDATE asset SET media_type = ?, thumb_state = 0 WHERE hash = ?")
+            .bind(media_type)
+            .bind(hash)
+            .execute(self.pool())
+            .await?;
+        Ok(res.rows_affected())
+    }
+
     pub async fn set_thumb_state(&self, hash: &[u8], state: i64) -> Result<()> {
         sqlx::query("UPDATE asset SET thumb_state = ? WHERE hash = ?")
             .bind(state)

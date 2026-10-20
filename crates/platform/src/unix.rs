@@ -124,74 +124,267 @@ mod tests {
     }
 }
 
-/// `pkill` 退出码 1 = 没有匹配进程。
+/// B7（#1043）：结束以 `exe` 这个可执行文件运行的 daemon 进程（SIGTERM，与改前
+/// `pkill` 的默认信号相同；不等它退出，同改前）。
 ///
-/// 也就是「服务本来就没在跑」——**不是失败**。迁移前这个 1 以裸字面量的
-/// 形式写在桌面壳的 if 里，且只有三个调用点中的一个真的判了它。
-pub const PKILL_NO_MATCH: i32 = 1;
-
-/// 杀掉正在跑的内置 daemon 进程（`pkill -f`）。
+/// 判据是**可执行文件的绝对路径**，不是命令行：改前的 `pkill -f ppf-daemon`
+/// 会把命令行里恰好带这几个字的任何进程一起杀掉（编辑器开着同名文件、
+/// `tail -f …/ppf-daemon.log`、另一份开发构建……）。
 ///
-/// 用 `-f`（匹配完整命令行）而不是进程名：迁移前就是这么写的，改成匹配
-/// 进程名会改变行为——从 `target/debug/` 跑起来的开发版命令行长得不一样。
-pub fn kill_daemon_process() -> crate::Result<KillOutcome> {
-    let out = std::process::Command::new("pkill")
-        .args(["-f", crate::DAEMON_EXECUTABLE_STEM])
-        .output()
-        .map_err(|e| crate::PlatformError::Io {
-            action: "kill_daemon_process",
-            source: e,
-        })?;
-    pkill_verdict(out.status.success(), out.status.code())
+/// 1. `pid_hint`（daemon 经 IPC 自报的 pid）优先：它的可执行文件**名**确实是
+///    `exe` 的文件名才动它——pid 会被复用，不核对就可能杀错人。只核对文件名、
+///    不核对目录：应答 IPC 的那个 daemon 跑在别处（开发构建、解压副本）时，
+///    改前的 `pkill -f` 也停得掉它，「停止服务」不能因此变成停不下来。
+/// 2. 兜底：枚举进程，可执行文件**完整路径**等于 `exe` 的都结束（daemon 挂死、
+///    IPC 不通时靠这条）。
+///
+/// 只动本用户的进程：别的用户（快速用户切换）同一个 App 里的 daemon，
+/// `kill(pid, 0)` 报 `EPERM`，跳过，不算失败。
+pub fn stop_processes_at(exe: &Path, pid_hint: Option<u32>) -> crate::Result<KillOutcome> {
+    let want = std::fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf());
+    let me = std::process::id();
+    let mut seen = std::collections::HashSet::from([me]);
+    let mut outcomes = Vec::new();
+    if let Some(pid) = pid_hint {
+        let same_name = process_exe(pid).is_some_and(|p| p.file_name() == want.file_name());
+        if seen.insert(pid) && same_name {
+            outcomes.push(sigterm(pid));
+        }
+    }
+    for pid in all_pids()? {
+        if seen.insert(pid) && process_exe(pid).as_deref() == Some(want.as_path()) {
+            outcomes.push(sigterm(pid));
+        }
+    }
+    stop_verdict(&outcomes)
 }
 
-/// 把 `pkill` 的退出码翻译成结论。
-///
-/// 抽成纯函数是刻意的：真的杀进程只能在有 daemon 在跑的机器上验，但
-/// **「什么退出码算没跑」这条判据**可以在任何地方单测。Windows 侧有同款
-/// （`windows::kill_verdict`）——DESK-25 (#208) 的教训是这条判据一旦
-/// 内联成裸 if 就没人守着，然后「没杀掉」被当成杀成功。
-pub fn pkill_verdict(success: bool, code: Option<i32>) -> crate::Result<KillOutcome> {
-    if success {
-        Ok(KillOutcome::Killed)
-    } else if code == Some(PKILL_NO_MATCH) {
-        Ok(KillOutcome::NotRunning)
-    } else {
-        Err(crate::PlatformError::Failed {
-            action: "kill_daemon_process",
-            detail: format!("pkill 退出码 {code:?}"),
-        })
+/// 一次 `kill(SIGTERM)` 的结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Signal {
+    Sent,
+    /// 枚举之后它自己退了（ESRCH），或不是本用户的进程（EPERM）——都不归我们。
+    NotOurs,
+    Failed(String),
+}
+
+fn sigterm(pid: u32) -> Signal {
+    let Ok(raw) = libc::pid_t::try_from(pid) else {
+        return Signal::NotOurs;
+    };
+    // SAFETY: kill 只读两个整数参数。
+    if unsafe { libc::kill(raw, libc::SIGTERM) } == 0 {
+        return Signal::Sent;
     }
+    let err = std::io::Error::last_os_error();
+    match err.raw_os_error() {
+        Some(libc::ESRCH) | Some(libc::EPERM) => Signal::NotOurs,
+        _ => Signal::Failed(format!("pid {pid}：{err}")),
+    }
+}
+
+/// 把逐个进程的结果合成结论。纯函数，单测钉死：有一个没结束掉就是 `Err`
+/// （DESK-25 #208 的教训：「没杀掉」被当成杀成功，调用方接着拉第二个 daemon）。
+pub(crate) fn stop_verdict(outcomes: &[Signal]) -> crate::Result<KillOutcome> {
+    let failures: Vec<&str> = outcomes
+        .iter()
+        .filter_map(|o| match o {
+            Signal::Failed(d) => Some(d.as_str()),
+            _ => None,
+        })
+        .collect();
+    if !failures.is_empty() {
+        return Err(PlatformError::Failed {
+            action: "stop_daemon",
+            detail: failures.join("; "),
+        });
+    }
+    Ok(if outcomes.contains(&Signal::Sent) {
+        KillOutcome::Killed
+    } else {
+        KillOutcome::NotRunning
+    })
+}
+
+/// 进程的可执行文件绝对路径（已解析符号链接）；读不到 = `None`。
+#[cfg(target_os = "macos")]
+fn process_exe(pid: u32) -> Option<std::path::PathBuf> {
+    use std::os::unix::ffi::OsStrExt as _;
+    let pid = libc::c_int::try_from(pid).ok()?;
+    let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    // SAFETY: buf 是本函数持有的缓冲区，长度如实传入。
+    let n = unsafe { libc::proc_pidpath(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
+    let n = usize::try_from(n).ok().filter(|&n| n > 0)?;
+    Some(std::ffi::OsStr::from_bytes(&buf[..n]).into())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn process_exe(pid: u32) -> Option<std::path::PathBuf> {
+    std::fs::read_link(format!("/proc/{pid}/exe")).ok()
+}
+
+/// 本机全部进程的 pid。
+#[cfg(target_os = "macos")]
+fn all_pids() -> crate::Result<Vec<u32>> {
+    // 先问个数再取；进程数在两次调用之间会涨，多留余量。
+    // SAFETY: 传空缓冲区只查询数量。
+    let n = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+    if n <= 0 {
+        return Err(PlatformError::Io {
+            action: "stop_daemon",
+            source: std::io::Error::last_os_error(),
+        });
+    }
+    let mut buf = vec![0 as libc::c_int; n as usize + 64];
+    let bytes = libc::c_int::try_from(buf.len() * std::mem::size_of::<libc::c_int>())
+        .unwrap_or(libc::c_int::MAX);
+    // SAFETY: buf 是本函数持有的缓冲区，字节数如实传入。
+    let got = unsafe { libc::proc_listallpids(buf.as_mut_ptr().cast(), bytes) };
+    if got <= 0 {
+        return Err(PlatformError::Io {
+            action: "stop_daemon",
+            source: std::io::Error::last_os_error(),
+        });
+    }
+    buf.truncate(got as usize);
+    Ok(buf
+        .into_iter()
+        .filter_map(|p| u32::try_from(p).ok())
+        .collect())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn all_pids() -> crate::Result<Vec<u32>> {
+    let dir = std::fs::read_dir("/proc").map_err(|e| PlatformError::Io {
+        action: "stop_daemon",
+        source: e,
+    })?;
+    Ok(dir
+        .filter_map(|e| e.ok()?.file_name().to_str()?.parse::<u32>().ok())
+        .collect())
 }
 
 #[cfg(test)]
-mod kill_tests {
+mod stop_tests {
     use super::*;
 
     #[test]
-    fn success_means_killed() {
-        assert_eq!(pkill_verdict(true, Some(0)).unwrap(), KillOutcome::Killed);
-    }
-
-    /// 退出码 1 = 没有匹配进程 ⇒ 正常结果，不是错误。
-    #[test]
-    fn no_match_is_not_running_not_an_error() {
+    fn nothing_signalled_is_not_running() {
+        assert_eq!(stop_verdict(&[]).unwrap(), KillOutcome::NotRunning);
         assert_eq!(
-            pkill_verdict(false, Some(PKILL_NO_MATCH)).unwrap(),
+            stop_verdict(&[Signal::NotOurs]).unwrap(),
             KillOutcome::NotRunning
         );
     }
 
-    /// 其余非零 = 真失败。放松这条就是把「没杀掉」当成杀成功
-    /// ——DESK-25 (#208) 在 Windows 侧的原病。
     #[test]
-    fn other_nonzero_is_a_failure() {
-        assert!(pkill_verdict(false, Some(2)).is_err());
+    fn a_sent_signal_is_killed() {
+        assert_eq!(
+            stop_verdict(&[Signal::NotOurs, Signal::Sent]).unwrap(),
+            KillOutcome::Killed
+        );
     }
 
-    /// 拿不到退出码（被信号终止）⇒ 保守算失败，「没法确认」不等于「成功」。
+    /// 结束了一个、另一个失败 ⇒ 必须是 Err（DESK-25 #208）。
     #[test]
-    fn unknown_exit_status_is_a_failure() {
-        assert!(pkill_verdict(false, None).is_err());
+    fn any_failure_is_a_failure() {
+        let e = stop_verdict(&[Signal::Sent, Signal::Failed("pid 42：boom".into())]).unwrap_err();
+        assert!(e.to_string().contains("pid 42"), "{e}");
+    }
+
+    fn spawn(cmd: &mut std::process::Command) -> std::process::Child {
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    fn wait_until_exe(pid: u32, exe: &Path) {
+        let want = std::fs::canonicalize(exe).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while process_exe(pid).as_deref() != Some(want.as_path()) {
+            assert!(std::time::Instant::now() < deadline, "pid {pid} 没起来");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    /// B7（#1043）真进程：按可执行文件路径结束，**命令行里带 `ppf-daemon` 的
+    /// 其他进程不会被杀**，同名但不在这个路径上的副本也不会。
+    ///
+    /// 反证：把判据改回「命令行含 ppf-daemon」（= 改前的 `pkill -f`）→
+    /// 两个诱饵都被杀，`try_wait` 那两条红。
+    #[test]
+    fn stops_only_the_process_running_from_that_exact_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sleep = Path::new("/bin/sleep");
+        let target = tmp
+            .path()
+            .join("bundle")
+            .join(crate::DAEMON_EXECUTABLE_STEM);
+        let elsewhere = tmp.path().join("dev").join(crate::DAEMON_EXECUTABLE_STEM);
+        for p in [&target, &elsewhere] {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::copy(sleep, p).unwrap();
+        }
+        let mut daemon = spawn(std::process::Command::new(&target).arg("30"));
+        // 诱饵 1：命令行里恰好含 `ppf-daemon`（pkill -f 会命中）。脚本写两条
+        // 命令，免得 sh 直接 exec 成 sleep、命令行里没了这几个字。
+        let mut decoy_cmdline = spawn(std::process::Command::new("/bin/sh").args([
+            "-c",
+            "sleep 20; :",
+            crate::DAEMON_EXECUTABLE_STEM,
+        ]));
+        // 诱饵 2：同名可执行文件，但在另一个目录（开发构建）。
+        let mut decoy_copy = spawn(std::process::Command::new(&elsewhere).arg("30"));
+        wait_until_exe(daemon.id(), &target);
+        wait_until_exe(decoy_copy.id(), &elsewhere);
+        // 诱饵确实是改前判据会命中的形状（否则这条测试证明不了什么）。
+        let args = std::process::Command::new("ps")
+            .args(["-o", "args=", "-p", &decoy_cmdline.id().to_string()])
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&args.stdout).contains(crate::DAEMON_EXECUTABLE_STEM),
+            "诱饵命令行里应含 {}",
+            crate::DAEMON_EXECUTABLE_STEM
+        );
+
+        // pid 提示指向命令行诱饵（sh）：文件名对不上，不许动它。
+        let got = stop_processes_at(&target, Some(decoy_cmdline.id())).unwrap();
+        assert_eq!(got, KillOutcome::Killed);
+        let status = daemon.wait().unwrap();
+        assert!(!status.success(), "目标应被 SIGTERM 结束：{status:?}");
+        assert!(
+            decoy_cmdline.try_wait().unwrap().is_none(),
+            "命令行诱饵被误杀"
+        );
+        assert!(
+            decoy_copy.try_wait().unwrap().is_none(),
+            "别处的同名副本被误杀"
+        );
+
+        // 再停一次：已经没有在那个路径上跑的了。
+        assert_eq!(
+            stop_processes_at(&target, None).unwrap(),
+            KillOutcome::NotRunning
+        );
+
+        // daemon 自报的 pid 优先：跑在别处的同名 daemon（开发构建）只要是它在
+        // 应答 IPC，照样停得掉（同改前 `pkill -f` 的覆盖面）。
+        assert_eq!(
+            stop_processes_at(&target, Some(decoy_copy.id())).unwrap(),
+            KillOutcome::Killed
+        );
+        assert!(!decoy_copy.wait().unwrap().success());
+        assert!(
+            decoy_cmdline.try_wait().unwrap().is_none(),
+            "命令行诱饵被误杀"
+        );
+
+        for c in [&mut decoy_cmdline, &mut decoy_copy] {
+            let _ = c.kill();
+            let _ = c.wait();
+        }
     }
 }

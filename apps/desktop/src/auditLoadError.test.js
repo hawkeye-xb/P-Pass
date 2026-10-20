@@ -57,7 +57,7 @@ function desktop({ auditFails = false, events = [] } = {}) {
   invokeMock.mockImplementation(async (cmd, args) => {
     switch (cmd) {
       case "wizard_state":
-        return { configured: true, installed: true, user_stopped: false };
+        return { show_wizard: false };
       case "self_heal_daemon":
       case "notify_system":
         return null;
@@ -71,8 +71,6 @@ function desktop({ auditFails = false, events = [] } = {}) {
             return { devices: [] };
           case "device.watermarks":
             return { watermarks: [] };
-          case "activity.list":
-            return { batches: [] };
           case "audit.list":
             if (d.auditFails) throw new Error("audit list exploded");
             return { events: d.events };
@@ -157,7 +155,7 @@ describe("AUDIT-07：活动记录读失败不再静默吞掉", () => {
           actor: null,
           roundId: "round-1",
           payload: null,
-          evidenceSummary: { confirmed: 2 },
+          counts: { backedUp: 2, needsAttention: 0, skipped: 0 },
         },
       ],
     });

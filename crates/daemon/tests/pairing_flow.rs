@@ -2,7 +2,9 @@
 //! expired-token rejection, and one-time token replay rejection.
 
 use daemon::{PairDecision, Pairing, Router};
-use proto::{codes, methods, PairRequest, Req, Resp};
+mod common;
+
+use proto::{codes, methods, Req, Resp};
 use storage::{Db, Role};
 use transport::{IrohTransport, Transport, TransportConfig};
 
@@ -14,9 +16,17 @@ async fn endpoint() -> IrohTransport {
 
 /// Daemon with pairing attached; owner decisions scripted by `accept`.
 async fn start_daemon(db: Db, accept: bool) -> (IrohTransport, transport::PeerAddr, Pairing) {
+    start_daemon_with_clock(db, accept, now).await
+}
+
+async fn start_daemon_with_clock(
+    db: Db,
+    accept: bool,
+    clock: impl Fn() -> i64 + Send + Sync + 'static,
+) -> (IrohTransport, transport::PeerAddr, Pairing) {
     let tp = endpoint().await;
     let addr = tp.local_addr();
-    let (pairing, mut pending) = Pairing::new(db.clone(), tp.node_id(), None, None);
+    let (pairing, mut pending) = Pairing::new(db.clone(), tp.node_id(), None);
     tokio::spawn(async move {
         while let Some(req) = pending.recv().await {
             let _ = req.decide(if accept {
@@ -26,10 +36,45 @@ async fn start_daemon(db: Db, accept: bool) -> (IrohTransport, transport::PeerAd
             });
         }
     });
-    let router = Router::new(db, "客厅的电脑").with_pairing(pairing.clone());
+    let router = Router::new(db, "客厅的电脑")
+        .with_pairing(pairing.clone())
+        .with_clock(clock);
     let tp2 = tp.clone();
     tokio::spawn(async move { router.serve(&tp2).await });
     (tp, addr, pairing)
+}
+
+/// #1055: 设备自断开的 `revoked_at` 与审计时间都取注入的时钟。
+#[tokio::test]
+async fn unpair_stamps_revoked_at_from_the_injected_clock() {
+    const FAKE_NOW: i64 = 1_999_000_000_000;
+    let db = Db::open_in_memory().await.unwrap();
+    let (dtp, daddr, pairing) = start_daemon_with_clock(db.clone(), true, || FAKE_NOW).await;
+    let ctp = endpoint().await;
+    ctp.add_peer(daddr);
+    let qr = pairing.start([0x70; 12], FAKE_NOW);
+    assert!(
+        send_pair(&ctp, dtp.node_id(), &token_of(&qr), "手机")
+            .await
+            .ok
+    );
+
+    let resp = send_method(
+        &ctp,
+        dtp.node_id(),
+        methods::DEVICE_UNPAIR,
+        serde_json::json!({}),
+    )
+    .await;
+    assert!(resp.ok, "{resp:?}");
+    let d = db.get_device(&ctp.node_id().0).await.unwrap().unwrap();
+    assert_eq!(d.revoked_at, Some(FAKE_NOW));
+    let audit = db.list_audit(20).await.unwrap();
+    let unpaired = audit
+        .iter()
+        .find(|r| r.entry.kind == "device.unpaired")
+        .expect("unpair audit row");
+    assert_eq!(unpaired.entry.ts, FAKE_NOW);
 }
 
 async fn send_pair(
@@ -38,26 +83,7 @@ async fn send_pair(
     token: &str,
     name: &str,
 ) -> Resp {
-    let mut stream = ctp.connect(daemon, transport::ALPN_CTRL).await.unwrap();
-    let req = Req {
-        id: "pair-1".into(),
-        method: "pair.request".into(),
-        params: serde_json::to_value(PairRequest {
-            token: token.into(),
-            device_name: name.into(),
-            role: "member".into(),
-            ..Default::default()
-        })
-        .unwrap(),
-        ..Default::default()
-    };
-    stream
-        .send_frame(&proto::codec::encode(&req).unwrap())
-        .await
-        .unwrap();
-    stream.finish().unwrap();
-    let frame = stream.recv_frame().await.unwrap().expect("a response");
-    proto::codec::decode::<Resp>(&frame).unwrap()
+    common::pair_settled(ctp, daemon, token, name).await
 }
 
 fn token_of(qr: &str) -> String {
@@ -419,7 +445,7 @@ fn now() -> i64 {
 async fn park_daemon(db: Db, request_ttl_ms: u64) -> (IrohTransport, transport::PeerAddr, Pairing) {
     let tp = endpoint().await;
     let addr = tp.local_addr();
-    let (pairing, mut pending) = Pairing::new(db.clone(), tp.node_id(), None, None);
+    let (pairing, mut pending) = Pairing::new(db.clone(), tp.node_id(), None);
     let pairing = pairing.with_pending_ttl(request_ttl_ms as i64);
     tokio::spawn(async move {
         // Keep the received PendingPairs ALIVE (holding them keeps their
@@ -546,7 +572,7 @@ async fn start_daemon_slow_owner(
 ) -> (IrohTransport, transport::PeerAddr, Pairing) {
     let tp = endpoint().await;
     let addr = tp.local_addr();
-    let (pairing, mut pending) = Pairing::new(db.clone(), tp.node_id(), None, None);
+    let (pairing, mut pending) = Pairing::new(db.clone(), tp.node_id(), None);
     tokio::spawn(async move {
         while let Some(req) = pending.recv().await {
             tokio::time::sleep(std::time::Duration::from_millis(owner_delay_ms)).await;

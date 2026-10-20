@@ -2,6 +2,9 @@
 //! gate, status, device management, pairing confirmation) and the
 //! logs.export zip carries no real user paths.
 
+mod common;
+
+use common::PairingExt;
 use std::sync::Arc;
 
 use daemon::{DiagAgg, IpcServer, Pairing};
@@ -83,19 +86,31 @@ fn socket_name(tag: &str) -> String {
 }
 
 async fn start(dir: &std::path::Path, tag: &str) -> (Db, Pairing, String, String) {
+    start_with_clock(dir, tag, None).await
+}
+
+async fn start_with_clock(
+    dir: &std::path::Path,
+    tag: &str,
+    clock: Option<i64>,
+) -> (Db, Pairing, String, String) {
     let db = Db::open_in_memory().await.unwrap();
     let (event_bus, _probe) = daemon::events::bus();
-    let (pairing, pending_rx) = Pairing::new(db.clone(), transport::NodeId([0xCC; 32]), None, None);
+    let (pairing, pending_rx) = Pairing::new(db.clone(), transport::NodeId([0xCC; 32]), None);
     let pairing = pairing.with_events(event_bus.clone());
     let diag = DiagAgg::new(db.clone());
-    let ipc = Arc::new(IpcServer::new(
+    let ipc = IpcServer::new(
         db.clone(),
         pairing.clone(),
         diag,
         dir.to_path_buf(),
         pending_rx,
         event_bus,
-    ));
+    );
+    let ipc = Arc::new(match clock {
+        Some(fixed) => ipc.with_clock(move || fixed),
+        None => ipc,
+    });
     let socket = socket_name(tag);
     let token = [0x5A; 32];
     let token_hex: String = token.iter().map(|b| format!("{b:02x}")).collect();
@@ -176,6 +191,43 @@ async fn status_devices_and_revoke_roundtrip() {
         revoke_decision.entry.causal_object_ref.as_deref(),
         Some("aa".repeat(32).as_str())
     );
+}
+
+/// #1055: 业主移除设备时 `revoked_at` 与审计时间取注入的时钟。
+#[tokio::test(flavor = "multi_thread")]
+async fn device_revoke_stamps_time_from_the_injected_clock() {
+    const FAKE_NOW: i64 = 1_999_000_000_000;
+    let dir = tempfile::tempdir().unwrap();
+    let (db, _pairing, socket, token) =
+        start_with_clock(dir.path(), "revclock", Some(FAKE_NOW)).await;
+    db.upsert_device(&Device {
+        node_id: vec![0xAB; 32],
+        name: "手机".into(),
+        role: Role::Member,
+        paired_at: 1,
+        last_seen: None,
+        revoked: false,
+        revoked_at: None,
+        revoked_by: None,
+    })
+    .await
+    .unwrap();
+    let mut c = IpcClient::connect(&socket, &token).await;
+    let resp = c
+        .call(
+            "device.revoke",
+            serde_json::json!({ "node_id": "ab".repeat(32) }),
+        )
+        .await;
+    assert_eq!(resp.result.unwrap()["revoked"], true);
+    let d = db.get_device(&[0xAB; 32]).await.unwrap().unwrap();
+    assert_eq!(d.revoked_at, Some(FAKE_NOW));
+    let decisions = db.list_decisions(10).await.unwrap();
+    let dec = decisions
+        .iter()
+        .find(|d| d.entry.decision_kind == "revoke_authorization")
+        .unwrap();
+    assert_eq!(dec.entry.occurred_at, FAKE_NOW);
 }
 
 // ── NAME-01: device.rename（ID 与显示名分离，decisions ②）──────────
@@ -475,7 +527,7 @@ async fn pairing_start_and_confirm_over_ipc() {
         let pairing = pairing.clone();
         tokio::spawn(async move {
             pairing
-                .handle_request(
+                .submit_and_wait(
                     transport::NodeId([0xDD; 32]),
                     &proto::PairRequest {
                         token: pairing_token,
@@ -538,7 +590,7 @@ async fn pairing_pending_lists_all_waiting_then_confirm_by_name() {
         let name = name.to_string();
         tokio::spawn(async move {
             pairing
-                .handle_request(
+                .submit_and_wait(
                     transport::NodeId([0xE0 + i as u8; 32]),
                     &proto::PairRequest {
                         token,
@@ -553,7 +605,7 @@ async fn pairing_pending_lists_all_waiting_then_confirm_by_name() {
     }
 
     // 轮询直到三台都在 pending 列表里（一屏三行）。
-    // DEV-01: pending 项是 {name, hint_match} 对象（兼容老 daemon 字符串）。
+    // pending 项是对象（`IpcServer::pending_summary`；DEV-01 的 hint_match 已删）。
     let mut list: Vec<String> = Vec::new();
     for _ in 0..200 {
         let resp = c.call("pairing.pending", serde_json::Value::Null).await;
@@ -626,7 +678,13 @@ async fn pairing_pending_lists_all_waiting_then_confirm_by_name() {
 async fn logs_export_zip_leaks_no_username() {
     let dir = tempfile::tempdir().unwrap();
     let (db, _pairing, socket, token) = start(dir.path(), "logs").await;
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/home/testuser".into());
+    // #1056 Windows 真机：原来只读 `HOME`，Windows 上它是空的，于是造出一条
+    // `/home/testuser/...` 的 Unix 形状路径——脱敏基准是真实家目录，这条路径
+    // 不在它下面，断言 `<DATA>` 必红。按平台变量取真实家目录（与
+    // `platform::adapter().home_dir()` 同一来源）。
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .unwrap_or_else(|_| "/home/testuser".into());
 
     // A diag event that embeds a real user path — the classic leak.
     db.append_diag(&storage::DiagEvent {
@@ -949,7 +1007,7 @@ async fn subscription_delivers_pending_change_under_100ms() {
     assert!(resp.ok, "{resp:?}");
     assert_eq!(resp.result.unwrap()["subscribed"], true);
 
-    // 注入配对请求：真实 pending 入队链路（handle_request 在 owner
+    // 注入配对请求：真实 pending 入队链路（submit_and_wait 在 owner
     // 决策前入队——spawn 后挂住在 decision 上，confirm 才收尾）。
     let qr = pairing.start([0x11; 12], now() + 60_000);
     assert!(qr.contains("t=111111111111111111111111"));
@@ -962,7 +1020,7 @@ async fn subscription_delivers_pending_change_under_100ms() {
     let peer = transport::NodeId([0xBB; 32]);
     let pairing2 = pairing.clone();
     let handle = tokio::spawn(async move {
-        let _ = pairing2.handle_request(peer, &pair_req, now() + 1).await;
+        let _ = pairing2.submit_and_wait(peer, &pair_req, now() + 1).await;
     });
 
     let t0 = std::time::Instant::now();
@@ -974,7 +1032,7 @@ async fn subscription_delivers_pending_change_under_100ms() {
         "事件延迟 {elapsed:?} 应 <100ms（对照轮询 3s）"
     );
 
-    // 收尾：confirm 让 handle_request 结束，避免悬空 task。
+    // 收尾：confirm 让 submit_and_wait 结束，避免悬空 task。
     let mut c2 = IpcClient::connect(&socket, &token).await;
     let resp = c2
         .call(
@@ -1015,7 +1073,7 @@ async fn subscription_filter_blocks_unwanted_event_types() {
     let pairing2 = pairing.clone();
     let handle = tokio::spawn(async move {
         let _ = pairing2
-            .handle_request(transport::NodeId([0xBC; 32]), &pair_req, now() + 1)
+            .submit_and_wait(transport::NodeId([0xBC; 32]), &pair_req, now() + 1)
             .await;
     });
 
@@ -1064,10 +1122,10 @@ async fn unsubscribe_closes_subscription_connection() {
     let pairing2 = pairing.clone();
     let handle = tokio::spawn(async move {
         let _ = pairing2
-            .handle_request(transport::NodeId([0xBD; 32]), &pair_req, now() + 1)
+            .submit_and_wait(transport::NodeId([0xBD; 32]), &pair_req, now() + 1)
             .await;
     });
-    // 让事件发送路径跑完（sleep 后 handle_request 仍在等 decision——无妨）。
+    // 让事件发送路径跑完（sleep 后 submit_and_wait 仍在等 decision——无妨）。
     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     let mut c2 = IpcClient::connect(&socket, &token).await;
     let resp = c2
@@ -1183,6 +1241,100 @@ async fn audit_list_exposes_canonical_evidence_summary_for_activity_projection()
     );
 }
 
+/// #1044 B1：`audit.list(visibility:"user")` 在截断**之前**过滤。监听一次拖入
+/// 几百张写几百条 `ingest.new`，过去 daemon 先取最新 N 条再由前端过滤，
+/// 可见事件被挤出窗口。反证：去掉 storage 层的排除条件，这里只剩 ingest 行，
+/// `pair.accepted` 拿不回来。
+#[tokio::test(flavor = "multi_thread")]
+async fn user_visibility_filters_before_the_limit_truncates() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, _pairing, socket, token) = start(dir.path(), "audit-visibility").await;
+    db.append_audit(&storage::AuditEntry::local(
+        1_000,
+        None,
+        "pair.accepted",
+        None,
+        None,
+    ))
+    .await
+    .unwrap();
+    for i in 0..20 {
+        for kind in [
+            "ingest.new",
+            "asset.relocated",
+            "index.adopted",
+            "flow.round.controlled",
+        ] {
+            db.append_audit(&storage::AuditEntry::local(
+                2_000 + i,
+                None,
+                kind,
+                None,
+                None,
+            ))
+            .await
+            .unwrap();
+        }
+    }
+
+    let mut c = IpcClient::connect(&socket, &token).await;
+    let resp = c
+        .call(
+            "audit.list",
+            serde_json::json!({ "limit": 5, "visibility": "user" }),
+        )
+        .await;
+    assert!(resp.ok, "{resp:?}");
+    let kinds: Vec<String> = resp.result.unwrap()["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        kinds,
+        vec!["pair.accepted".to_string()],
+        "隐藏 kind 不占窗口"
+    );
+
+    // 不带 visibility = 全量（诊断口径），行为不变。
+    let all = c
+        .call("audit.list", serde_json::json!({ "limit": 5 }))
+        .await;
+    assert_eq!(all.result.unwrap()["events"].as_array().unwrap().len(), 5);
+}
+
+/// #1044 B1：每轮的计数由 daemon 分好类给出（已备份 / 需处理 / 已跳过），
+/// 前端不再自己把 failed + remote_missing 加起来。
+#[tokio::test(flavor = "multi_thread")]
+async fn round_counts_are_classified_by_the_daemon() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, _pairing, socket, token) = start(dir.path(), "audit-round-counts").await;
+    db.append_operation(&storage::AuditOperationEntry {
+        operation_id: "round-counts".into(),
+        occurred_at: 1_700_000_000_000,
+        kind: "flow.round.finished".into(),
+        evidence_summary: Some(
+            serde_json::json!({ "confirmed": 2, "failed": 1, "remote_missing": 2, "source_missing": 1 })
+                .to_string(),
+        ),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+
+    let mut c = IpcClient::connect(&socket, &token).await;
+    let resp = c
+        .call("audit.list", serde_json::json!({ "visibility": "user" }))
+        .await;
+    let result = resp.result.unwrap();
+    let event = &result["events"][0];
+    assert_eq!(
+        event["counts"],
+        serde_json::json!({ "backedUp": 2, "needsAttention": 3, "skipped": 1 })
+    );
+}
+
 /// DEV-03：`devices.list` 默认口径 = 「家人与设备」该看见的。
 ///
 /// 旧口径 `WHERE revoked = 0` 把两件事混成一件：手机点「断开与这台电脑的
@@ -1276,6 +1428,199 @@ async fn devices_list_keeps_self_disconnected_and_hides_owner_removed() {
     assert_eq!(resp.result.unwrap()["devices"].as_array().unwrap().len(), 3);
 }
 
+/// #1044 B4：设备分组、「需要看看」、行状态、最近活跃、页头计数由 daemon
+/// 给结论。【改行为】「已配对 N 台」= 列表正常行数（含自己断开的）；已移除
+/// 单独计。反证：把 `paired_devices` 改回 `devices - revoked`，这里是 1 不是 2。
+#[tokio::test(flavor = "multi_thread")]
+async fn device_rows_carry_daemon_conclusions_and_status_counts_match_the_list() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, _pairing, socket, token) = start(dir.path(), "dev-projection").await;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    const DAY: i64 = 24 * 3600 * 1000;
+    for (n, name) in [
+        (0xAAu8, "在用的"),
+        (0xBB, "自己断开的"),
+        (0xCC, "业主移除的"),
+    ] {
+        db.upsert_device(&Device {
+            node_id: vec![n; 32],
+            name: name.into(),
+            role: Role::Member,
+            paired_at: i64::from(n),
+            last_seen: Some(now - 6 * DAY),
+            revoked: false,
+            revoked_at: None,
+            revoked_by: None,
+        })
+        .await
+        .unwrap();
+    }
+    db.set_watermark(&[0xAA; 32], 1, now - 6 * DAY - 5)
+        .await
+        .unwrap();
+    db.revoke(&[0xBB; 32], storage::RevokedBy::Device, now)
+        .await
+        .unwrap();
+    db.revoke(&[0xCC; 32], storage::RevokedBy::Owner, now)
+        .await
+        .unwrap();
+
+    let mut c = IpcClient::connect(&socket, &token).await;
+    let status = c
+        .call("status", serde_json::Value::Null)
+        .await
+        .result
+        .unwrap();
+    assert_eq!(status["paired_devices"], 2, "含自己断开的");
+    assert_eq!(status["removed_devices"], 1);
+
+    let listed = c
+        .call(
+            "devices.list",
+            serde_json::json!({ "include_revoked": true }),
+        )
+        .await
+        .result
+        .unwrap();
+    let row = |name: &str| {
+        listed["devices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["name"] == name)
+            .unwrap()
+            .clone()
+    };
+    let active = row("在用的");
+    assert_eq!(active["removal"], "none");
+    assert_eq!(active["needs_attention"], true, "6 天没备份");
+    assert_eq!(active["row_state"], "needs_attention");
+    assert_eq!(active["last_activity_at"], now - 6 * DAY);
+    let selfgone = row("自己断开的");
+    assert_eq!(selfgone["removal"], "disconnected");
+    assert_eq!(selfgone["row_state"], "disconnected");
+    assert_eq!(selfgone["needs_attention"], false);
+    assert_eq!(row("业主移除的")["removal"], "removed");
+}
+
+/// #1044 B11：待展示的低空间通知随 status 带出，`low_space.ack` 消费掉；
+/// 状态在库里，换一个连接（= 重开 App）也不会再出现。
+#[tokio::test(flavor = "multi_thread")]
+async fn low_space_notice_rides_on_status_until_acknowledged() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, _pairing, socket, token) = start(dir.path(), "low-space").await;
+    // 布防中且有一次待展示。本机真实剩余空间 ≥ 5 GiB 时状态不变（仍是 123）；
+    // < 5 GiB 时会被新的一次判定替换——两种都必须带出一条通知。
+    db.set_low_space_notice(&storage::LowSpaceNotice {
+        armed: true,
+        pending_free_bytes: Some(123),
+    })
+    .await
+    .unwrap();
+
+    let mut c = IpcClient::connect(&socket, &token).await;
+    let status = c
+        .call("status", serde_json::Value::Null)
+        .await
+        .result
+        .unwrap();
+    let first = status["low_space_notice"]["free_bytes"].as_i64();
+    assert!(first.is_some(), "待展示的通知随 status 带出：{status}");
+    let again = c
+        .call("status", serde_json::Value::Null)
+        .await
+        .result
+        .unwrap();
+    assert_eq!(
+        again["low_space_notice"]["free_bytes"].as_i64(),
+        first,
+        "确认之前一直挂着"
+    );
+
+    assert!(c.call("low_space.ack", serde_json::Value::Null).await.ok);
+    let mut reopened = IpcClient::connect(&socket, &token).await;
+    let after = reopened
+        .call("status", serde_json::Value::Null)
+        .await
+        .result
+        .unwrap();
+    assert!(after["low_space_notice"].is_null(), "确认过就不再弹");
+}
+
+/// #1044：设备目录由 daemon 给绝对路径（与入库落位同一口径），桌面不再用
+/// `/` 拼。目录还不存在时退回 originals/，并如实标出。
+#[tokio::test(flavor = "multi_thread")]
+async fn device_folder_returns_the_absolute_landing_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_db, _pairing, socket, token) = start(dir.path(), "device-folder").await;
+    let mut c = IpcClient::connect(&socket, &token).await;
+    let node = "ab".repeat(32);
+
+    std::fs::create_dir_all(dir.path().join("originals")).unwrap();
+    let r = c
+        .call("device.folder", serde_json::json!({ "node_id": node }))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(r["is_device_dir"], false, "还没落过照片");
+    assert_eq!(
+        std::path::PathBuf::from(r["path"].as_str().unwrap()),
+        dir.path().join("originals")
+    );
+
+    let device_dir = dir.path().join("originals").join(&node);
+    std::fs::create_dir_all(&device_dir).unwrap();
+    let r = c
+        .call("device.folder", serde_json::json!({ "node_id": node }))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(r["is_device_dir"], true);
+    let path = std::path::PathBuf::from(r["path"].as_str().unwrap());
+    assert!(path.is_absolute());
+    assert_eq!(path, device_dir);
+
+    let bad = c
+        .call("device.folder", serde_json::json!({ "node_id": "zz" }))
+        .await;
+    assert!(!bad.ok, "非法 node_id 拒绝");
+}
+
+/// #1044 B13：壳与内核的版本关系由 daemon 下结论；壳不报版本时为 null。
+#[tokio::test(flavor = "multi_thread")]
+async fn status_reports_the_shell_relation_from_the_shared_version_rule() {
+    let dir = tempfile::tempdir().unwrap();
+    let (_db, _pairing, socket, token) = start(dir.path(), "shell-relation").await;
+    let mut c = IpcClient::connect(&socket, &token).await;
+    let daemon = c
+        .call("status", serde_json::Value::Null)
+        .await
+        .result
+        .unwrap();
+    assert!(daemon["shell_relation"].is_null(), "壳没报版本就不下结论");
+    let ours = daemon["version"].as_str().unwrap().to_string();
+
+    let rel = |v: serde_json::Value| v["shell_relation"].as_str().unwrap().to_string();
+    let same = c
+        .call("status", serde_json::json!({ "shell_version": ours }))
+        .await;
+    assert_eq!(rel(same.result.unwrap()), "same");
+    let newer = c
+        .call("status", serde_json::json!({ "shell_version": "9999.1.1" }))
+        .await;
+    assert_eq!(rel(newer.result.unwrap()), "shell_newer");
+    let older = c
+        .call(
+            "status",
+            serde_json::json!({ "shell_version": "0.0.1-test.1" }),
+        )
+        .await;
+    assert_eq!(rel(older.result.unwrap()), "shell_older");
+}
+
 /// DEV-04：老设备重连，`pairing.pending` 必须认得出来——判据是
 /// `node_id`，不是名字。
 ///
@@ -1290,7 +1635,7 @@ async fn devices_list_keeps_self_disconnected_and_hides_owner_removed() {
 /// 这里两台手机**自报同一个名字**——真机上就是这样（同型号默认名），
 /// 也正因如此，确认必须按 `node_id` 定位：按名字找会命中错的那台。
 ///
-/// 反证：把 `handle_request` 的 `name` 改回无条件
+/// 反证：把 `submit_and_wait` 的 `name` 改回无条件
 /// `safe_name(&req.device_name)`，「改过的名字必须活下来」立刻变红；
 /// 把 `pending_summary` 改回只传 `{name}`，「known」那几条全红。
 #[tokio::test(flavor = "multi_thread")]
@@ -1332,7 +1677,7 @@ async fn pairing_pending_knows_a_returning_device_by_node_id() {
         let pairing = pairing.clone();
         tokio::spawn(async move {
             pairing
-                .handle_request(
+                .submit_and_wait(
                     transport::NodeId([node; 32]),
                     &proto::PairRequest {
                         token,
@@ -1405,7 +1750,7 @@ async fn pairing_pending_knows_a_returning_device_by_node_id() {
     assert_eq!(left[0]["node_id"], "e0".repeat(32), "处理错了台: {left:?}");
 
     // 重连落定后，改过的名字必须活下来，首次配对时间不被重置。
-    // `confirm` 只是把决定投给 handle_request，落库在它那一侧——等写完
+    // `confirm` 只是把决定投给 submit_and_wait，落库在它那一侧——等写完
     // 再断言，否则读到的是**配对前**那一行，三条断言全部落空（真机上
     // 恰恰是配对之后才被冲掉的）。
     let mut row = db.get_device(&[0xE1; 32]).await.unwrap().unwrap();

@@ -65,6 +65,8 @@ expect "$SUT" true  "改了 crates/"                    crates/daemon/src/main.r
 expect "$SUT" true  "改了桌面壳（默认 lane 必须照跑）"  apps/desktop/src-tauri/src/lib.rs
 expect "$SUT" true  "改了 Cargo.lock"                 Cargo.lock
 expect "$SUT" true  "文档 + 代码混合（一个不无害就要跑）" docs/a.md crates/proto/src/lib.rs
+expect "$SUT" true  "#1049：桌面业务规则文档有常量表测试读它" docs/desktop/business-rules.zh-CN.md
+expect_lane "$SUT" rust-workspace true "#1049：桌面业务规则文档（宽 lane 也要跑）" docs/desktop/business-rules.zh-CN.md
 
 echo
 echo "==> 2. fail-closed 的命门：不认识的东西一律要跑"

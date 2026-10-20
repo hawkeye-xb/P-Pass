@@ -18,10 +18,6 @@ export default defineConfig({
     // 的解析条件一个字没动。
     conditions: process.env.VITEST ? ["browser"] : undefined,
   },
-  // DESK-69 (#997)：给 plugin-os 一个测试替身（见 src/testSetup.js）。
-  test: {
-    setupFiles: ["./src/testSetup.js"],
-  },
   server: {
     fs: { allow: ["../.."] }, // design tokens live at repo assets/design
     port: 1420,

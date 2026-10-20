@@ -8,7 +8,7 @@
 //! revoke_before_commit，不夸大。若未来 upload 管线引入长传输，再扩展
 //! 为真正的 mid-upload 吊销。
 //!
-//! 架构语义（backup.rs:131 注释）：commit 一旦分发就跑到完、无二次鉴权——
+//! 架构语义（旧批量管线 `backup.commit`，#990 退役对象）：commit 一旦分发就跑到完、无二次鉴权——
 //! 所以"中断"发生在门禁：吊销落在 commit 分发前，整场传输被切且零残留。
 
 use std::path::Path;

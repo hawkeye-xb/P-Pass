@@ -9,10 +9,8 @@
 //! `asset.removed_external`。
 //!
 //! 触发：①daemon 启动时跑一轮（重启即收敛）；②运行期每小时 re-diff。
-//! 选低频轮询而非目录监听的理由：目录监听要 FSEvents/inotify 双平台
-//! 实现 + 事件风暴处理，收益只是把收敛提前最多 1 小时；照片墙打开时
-//! timeline 从 db 读、thumb 按需生成，对账影响的是「已删照片的残留」，
-//! 低频足够且零平台复杂度。
+//! 现状是「目录监听为主（WATCH-01 `LibraryWatcher`），本对账每小时兜底」：
+//! 监听启动失败时 daemon 不退出，收敛延迟退回最多 1 小时。
 //!
 //! ⚠️ 对账竞态安全依赖 T-011 ingest 先落文件后插行的顺序（先写盘再
 //! INSERT asset 行）——磁盘写入与索引插入之间没有窗口，对账永远不会把
@@ -106,6 +104,11 @@ impl Reconcile {
             }
         }
 
+        // #1044 B3：口径统一前 adopt/rebuild 收进来的非媒体行（`Thumbs.db`、
+        // `desktop.ini`……）在这里清掉。每轮都跑：稳态零命中，只是一条带
+        // 索引的筛选查询。
+        self.purge_non_media_rows().await;
+
         // IDX-01: 另一半方向——文件在、索引行没了就补回来。
         //
         // 为什么先删后收：两个方向的作用集天然不相交（删的是"行在文件没了"，
@@ -131,6 +134,53 @@ impl Reconcile {
         report
     }
 
+    /// #1044 B3：清掉「存的 MIME 不是图/视频、按扩展名也不是媒体」的行。
+    /// 只删索引行与缩略图——文件原地不动，不写墓碑也不写审计：这不是
+    /// 外部删除，是旧口径收错了。Flow 行的 MIME 由手机给（`image/*`、
+    /// `video/*`），即使文件名没有扩展名也不在候选集里。
+    async fn purge_non_media_rows(&self) {
+        let candidates = match self
+            .db
+            .list_non_media_typed_assets(core_index::NON_MEDIA_IMAGE_TYPES)
+            .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("#1044: 非媒体存量行查询失败，等下一轮：{e}");
+                return;
+            }
+        };
+        let mut purged = 0usize;
+        for (hash, rel_path) in candidates {
+            // 按扩展名其实是媒体（旧 rebuild 只认 9 个扩展名，`.avi` 之类被记成
+            // octet-stream、又被当成照片）：只改正 MIME，不删。
+            if let Some(mime) = core_index::media_type_for(std::path::Path::new(&rel_path)) {
+                if let Err(e) = self.db.correct_asset_media_type(&hash, mime).await {
+                    tracing::warn!("#1044: 改正 {rel_path} 的 MIME 失败：{e}");
+                }
+                continue;
+            }
+            self.remove_thumbs(&hash);
+            match self.db.delete_asset(&hash).await {
+                Ok(n) => purged += n as usize,
+                Err(e) => tracing::warn!("#1044: 清理非媒体行 {rel_path} 失败：{e}"),
+            }
+        }
+        if purged > 0 {
+            tracing::info!("#1044: 清掉 {purged} 条非媒体索引行（文件未动）");
+        }
+    }
+
+    /// 缩略图两个文件（.ppf/thumbs/<2hex>/<hex>.{256,1024}.jpg）——纯文件，
+    /// 直接删；不存在（从未生成过缩略图）也正常。
+    fn remove_thumbs(&self, hash: &[u8]) {
+        if let Ok(h32) = <[u8; 32]>::try_from(hash) {
+            let paths = media_codec::thumb_paths(&self.library_root.join(".ppf/thumbs"), &h32);
+            let _ = std::fs::remove_file(&paths.t256);
+            let _ = std::fs::remove_file(&paths.t1024);
+        }
+    }
+
     /// 清理单个幽灵资产：thumb 文件 + asset 行 + 审计。
     /// WATCH-01: `pub(crate)`——目录监听的局部对账复用同一清理逻辑
     /// （thumb 路径约定 + 审计口径只此一份，不复制）。
@@ -143,13 +193,7 @@ impl Reconcile {
     /// prior item evidence for the same hash (card decision #3) — the
     /// `asset_ref` column is intentionally not a foreign key.
     pub(crate) async fn remove_asset(&self, hash: &[u8], rel_path: &str) -> storage::Result<()> {
-        // thumb 文件（.ppf/thumbs/<2hex>/<hex>.{256,1024}.jpg）——纯文件，
-        // 直接删；不存在（从未生成过缩略图）也正常。
-        if let Ok(h32) = <[u8; 32]>::try_from(hash) {
-            let paths = media_codec::thumb_paths(&self.library_root.join(".ppf/thumbs"), &h32);
-            let _ = std::fs::remove_file(&paths.t256);
-            let _ = std::fs::remove_file(&paths.t1024);
-        }
+        self.remove_thumbs(hash);
         // asset 行（索引是派生数据，文件没了行就没意义）。
         self.db.delete_asset(hash).await?;
         // AUDIT-04: tombstone first — this is the case-matrix "外部删除"
@@ -304,6 +348,90 @@ mod tests {
         assert_eq!(kept_row.thumb_state, 1, "thumb_state 不许被归零");
         assert_eq!(kept_row.width, Some(640), "width 不许被抹成 NULL");
         assert_eq!(kept_row.src_device, vec![7u8; 32], "归属不许被改写");
+    }
+
+    // #1044 B3：旧版 adopt/rebuild 把 `Thumbs.db` 之类收成过 octet-stream 行。
+    // 口径统一后，对账要把这些存量行清掉——只清索引行与缩略图，文件原地
+    // 不动、不写墓碑（这不是「外部删除」）。Flow 行（MIME 由手机给、文件名
+    // 可能没有扩展名）不许误伤。反证：去掉 run_once 里的清理调用，第一条
+    // 断言变红。
+    #[tokio::test]
+    async fn non_media_rows_left_by_old_adopt_are_purged_without_touching_files() {
+        let db = Db::open_in_memory().await.unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let month = dir.path().join("originals/aa/2026/09");
+        std::fs::create_dir_all(&month).unwrap();
+        let row = |hash: u8, rel: &str, media_type: &str| storage::Asset {
+            hash: vec![hash; 32],
+            rel_path: rel.into(),
+            media_type: media_type.into(),
+            bytes: 1,
+            taken_at: None,
+            width: None,
+            height: None,
+            src_device: vec![7u8; 32],
+            added_at: 1,
+            thumb_state: 2,
+        };
+        std::fs::write(month.join("Thumbs.db"), b"junk").unwrap();
+        db.insert_asset(&row(
+            1,
+            "originals/aa/2026/09/Thumbs.db",
+            "application/octet-stream",
+        ))
+        .await
+        .unwrap();
+        std::fs::write(month.join("clip.avi"), b"old adopt video").unwrap();
+        db.insert_asset(&row(
+            3,
+            "originals/aa/2026/09/clip.avi",
+            "application/octet-stream",
+        ))
+        .await
+        .unwrap();
+        std::fs::write(month.join("IMG_flow"), b"flow photo").unwrap();
+        db.insert_asset(&row(2, "originals/aa/2026/09/IMG_flow", "image/jpeg"))
+            .await
+            .unwrap();
+
+        // #1044 追加拍板：旧监听收过的 svg（MIME 记成 image/svg+xml）也是存量。
+        std::fs::write(month.join("logo.svg"), b"<svg/>").unwrap();
+        db.insert_asset(&row(4, "originals/aa/2026/09/logo.svg", "image/svg+xml"))
+            .await
+            .unwrap();
+
+        let report = Reconcile::new(db.clone(), dir.path()).run_once().await;
+
+        assert!(
+            db.get_asset(&[1u8; 32]).await.unwrap().is_none(),
+            "非媒体存量行要清掉"
+        );
+        assert!(
+            db.get_asset(&[4u8; 32]).await.unwrap().is_none(),
+            "svg 存量行要清掉"
+        );
+        assert!(
+            month.join("logo.svg").exists(),
+            "只清索引，svg 文件原地不动"
+        );
+        assert!(month.join("Thumbs.db").exists(), "只清索引，文件原地不动");
+        assert!(
+            db.get_asset(&[2u8; 32]).await.unwrap().is_some(),
+            "Flow 行按手机给的 MIME 保留"
+        );
+        let avi = db
+            .get_asset(&[3u8; 32])
+            .await
+            .unwrap()
+            .expect("是媒体，不删");
+        assert_eq!(
+            avi.media_type, "video/x-msvideo",
+            "旧口径记错的 MIME 要改正"
+        );
+        assert_eq!(avi.thumb_state, 0, "按正确类型重新生成缩略图");
+        assert_eq!(report.removed, 0, "这不是外部删除，不计入 removed");
+        let tombstones = db.list_tombstones_for_asset(&[1u8; 32]).await.unwrap();
+        assert!(tombstones.is_empty(), "不写墓碑");
     }
 
     fn hex_to_bytes(hex: &str) -> Vec<u8> {

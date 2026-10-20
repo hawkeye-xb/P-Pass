@@ -5,7 +5,7 @@
  * Facts only, and every one of them is traceable inside this repo: src/i18n/faq.ts
  * (the setup steps incl. the allow prompt, the status line on the phone, the
  * photos on the computer app, device support, the relay, the Wi-Fi default, the
- * 5 GB warning, originals kept uncompressed), README, and src/consts.ts.
+ * ~5 GB warning, originals kept uncompressed), README, and src/consts.ts.
  * If a sentence cannot be sourced, it does not go on the page.
  *
  * `title` and `metaDescription` are the page's metadata; the visible copy
@@ -46,7 +46,7 @@ export const GUIDE = {
       title: '家里的电脑够不够用',
       paras: [
         '电脑要 Apple 芯片的 Mac（M1 及以后）。备份进行的时候电脑得开着，其余时间它自己待着就行；电脑关着时照片留在手机里，开机连上会接着传，传过的不会重传。',
-        '硬盘剩下不到 5 GB 的时候，手机会提前提示你。',
+        '硬盘剩下不到约 5 GB 的时候，手机会提前提示你。',
         'iPhone 版和 Windows 版都还没有发布。',
       ],
     },

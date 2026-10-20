@@ -11,9 +11,13 @@ import zhDict from "../../../../assets/i18n/zh.json";
 
 const DICTS = { en: enDict, zh: zhDict };
 
-/** "zh-CN" / "zh-Hans" / "zh" → zh; anything else → en; unknown → zh. */
+/**
+ * "zh-CN" / "zh-Hans" / "zh" → zh; anything else → en, **including an empty or
+ * missing language** (#1045: the platform layer answers "can't read it → English"
+ * everywhere, so the UI must not pick a different default).
+ */
 export function localeFor(lang) {
-  if (!lang) return "zh";
+  if (!lang) return "en";
   return String(lang).toLowerCase().startsWith("zh") ? "zh" : "en";
 }
 

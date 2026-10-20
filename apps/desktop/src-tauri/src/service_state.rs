@@ -33,11 +33,11 @@ use tauri::{AppHandle, Emitter};
 
 /// Keep the shell log small; rotate to `desktop.log.1` when it grows past
 /// this. The file is diagnostic only, never a data source.
-const MAX_LOG_BYTES: u64 = 2 * 1024 * 1024;
+pub(crate) const MAX_LOG_BYTES: u64 = 2 * 1024 * 1024;
 /// Do not write the same connection failure every two seconds while the
 /// daemon is down — that is 40k identical lines a day. State changes are
 /// always logged; repeated failures are throttled.
-const FAILURE_LOG_INTERVAL_MS: i64 = 30_000;
+pub(crate) const FAILURE_LOG_INTERVAL_MS: i64 = 30_000;
 
 /// The desktop shell's view of the background service.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -160,7 +160,7 @@ impl ServiceStateManager {
     /// overridden by a connection failure.
     pub fn user_stopped(&self) -> bool {
         use platform::PlatformAdapter as _;
-        crate::is_user_stopped(&platform::adapter().data_dir())
+        crate::distribution::is_user_stopped(&platform::adapter().data_dir())
     }
 
     pub fn next_after_failure(&self, had_connection: bool, within_grace: bool) -> ServiceState {

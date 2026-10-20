@@ -57,6 +57,10 @@ pub struct AdoptReport {
     pub adopted: u64,
     /// Files whose content was already indexed — the healthy steady state.
     pub already_indexed: u64,
+    /// #1047: 0-byte files left alone — never adopted, never deleted. An
+    /// empty file is not a photo, but it also cannot be proven to be ours
+    /// (a user may have dropped it there), so the only safe move is to skip.
+    pub skipped_empty: u64,
 }
 
 /// Clear the asset table and re-index everything under
@@ -67,10 +71,10 @@ pub struct AdoptReport {
 pub async fn rebuild(db: &Db, library_root: &Path, local_node_id: &[u8]) -> Result<RebuildReport> {
     db.clear_assets().await?;
 
-    let (indexed, duplicates) = index_missing_files(db, library_root, local_node_id).await?;
+    let scan = index_missing_files(db, library_root, local_node_id).await?;
     let report = RebuildReport {
-        indexed,
-        duplicates,
+        indexed: scan.inserted,
+        duplicates: scan.skipped,
     };
 
     db.append_audit(&AuditEntry::local(
@@ -110,10 +114,11 @@ pub async fn adopt_orphans(
     library_root: &Path,
     local_node_id: &[u8],
 ) -> Result<AdoptReport> {
-    let (adopted, already_indexed) = index_missing_files(db, library_root, local_node_id).await?;
+    let scan = index_missing_files(db, library_root, local_node_id).await?;
     let report = AdoptReport {
-        adopted,
-        already_indexed,
+        adopted: scan.inserted,
+        already_indexed: scan.skipped,
+        skipped_empty: scan.empty,
     };
 
     // WATCH-07 的噪声纪律：这个函数每小时跑一轮，稳态就是「一条没收」——
@@ -137,6 +142,13 @@ pub async fn adopt_orphans(
     Ok(report)
 }
 
+/// What one [`index_missing_files`] scan did.
+struct ScanOutcome {
+    inserted: u64,
+    skipped: u64,
+    empty: u64,
+}
+
 /// The scan shared by [`rebuild`] and [`adopt_orphans`]: walk
 /// `<library_root>/originals` and insert a row for every file whose
 /// content is not indexed yet. Returns `(inserted, skipped)`.
@@ -144,7 +156,7 @@ async fn index_missing_files(
     db: &Db,
     library_root: &Path,
     local_node_id: &[u8],
-) -> Result<(u64, u64)> {
+) -> Result<ScanOutcome> {
     let originals = library_root.join("originals");
     let mut files = Vec::new();
     if originals.is_dir() {
@@ -155,7 +167,23 @@ async fn index_missing_files(
 
     let mut inserted = 0u64;
     let mut skipped = 0u64;
-    for path in &files {
+    let mut empty = 0u64;
+    for (path, media_type) in &files {
+        // #1047: 0 字节文件不是照片，不收编。入库被杀在「占位」与「写完」之间
+        // 的老版本会留下占着最终文件名的 0 字节文件，旧逻辑把它按空内容的
+        // hash 收成一条正式资产（时间线上出现打不开的「照片」）。
+        // 只跳过、不删：这种文件与用户自己放进库里的空文件在磁盘上无法区分，
+        // 删除没有安全的判据。
+        let len = fs::metadata(path)
+            .map_err(|source| IndexError::Io {
+                path: path.clone(),
+                source,
+            })?
+            .len();
+        if len == 0 {
+            empty += 1;
+            continue;
+        }
         let hash = crate::hash_file(path)?;
         if db.get_asset(&hash).await?.is_some() {
             skipped += 1;
@@ -191,7 +219,7 @@ async fn index_missing_files(
             .insert_asset(&Asset {
                 hash: hash.to_vec(),
                 rel_path: rel_path.clone(),
-                media_type: media_type_for(path),
+                media_type: (*media_type).into(),
                 bytes: meta.len() as i64,
                 taken_at: Some(ingest::taken_at_ms(path, None)?),
                 width,
@@ -212,11 +240,76 @@ async fn index_missing_files(
             Err(e) => return Err(e.into()),
         }
     }
-    Ok((inserted, skipped))
+    Ok(ScanOutcome {
+        inserted,
+        skipped,
+        empty,
+    })
 }
 
-/// Depth-first listing of regular files, skipping hidden names.
-fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+/// #1047: 清掉入库被打断留下的临时文件，返回删除个数。
+///
+/// **判据（只此一条，全部满足才删）**：
+/// 1. 位于 `<library_root>/originals/` 之下的普通文件（符号链接不跟、不删）；
+/// 2. 文件名严格匹配入库临时名 `.ppf-ingest-<随机>.part`（前缀与后缀同时匹配）；
+/// 3. 索引里没有任何一行指向这个路径。
+///
+/// 不按「0 字节」「内容残缺」「mtime」等内容特征判断——用户自己放进库里的
+/// 文件（含空文件、残缺文件）在内容上与残留无法区分，误删就是删用户数据。
+/// 临时文件永远是**复制出来的副本**（源文件在入库完成前一直留在 staging），
+/// 所以删掉它不会丢任何数据。
+///
+/// ⚠️ 只能在启动时、任何入库路径（watcher / router / IPC）开始工作**之前**
+/// 调用：运行期正在写的临时文件与残留在磁盘上长得一模一样，每小时的对账
+/// （[`adopt_orphans`]）因此不调用它。
+pub async fn sweep_ingest_residue(db: &Db, library_root: &Path) -> Result<u64> {
+    let originals = library_root.join("originals");
+    if !originals.is_dir() {
+        return Ok(0);
+    }
+    let mut candidates = Vec::new();
+    collect_ingest_temps(&originals, &mut candidates)?;
+    let mut removed = 0u64;
+    for path in candidates {
+        let rel = rel_path_of(library_root, &path)?;
+        if db.hash_at_rel_path(&rel).await?.is_some() {
+            continue;
+        }
+        if fs::remove_file(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    Ok(removed)
+}
+
+/// Like [`collect_files`] but matches only temp names, and does descend into
+/// nothing it cannot prove is a plain directory (no symlink following).
+fn collect_ingest_temps(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+    let io_err = |source| IndexError::Io {
+        path: dir.to_path_buf(),
+        source,
+    };
+    for entry in fs::read_dir(dir).map_err(io_err)? {
+        let entry = entry.map_err(io_err)?;
+        let kind = entry.file_type().map_err(io_err)?;
+        if kind.is_dir() {
+            collect_ingest_temps(&entry.path(), out)?;
+        } else if kind.is_file()
+            && entry
+                .file_name()
+                .to_str()
+                .is_some_and(ingest::is_ingest_temp_name)
+        {
+            out.push(entry.path());
+        }
+    }
+    Ok(())
+}
+
+/// Depth-first listing of media files (#1044 B3: the shared table behind
+/// [`crate::media_kind`] is the only judge — `Thumbs.db`/`desktop.ini`/`notes.txt` never enter the
+/// index), skipping hidden names.
+fn collect_files(dir: &Path, out: &mut Vec<(PathBuf, &'static str)>) -> Result<()> {
     let io_err = |source| IndexError::Io {
         path: dir.to_path_buf(),
         source,
@@ -231,7 +324,9 @@ fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
         if kind.is_dir() {
             collect_files(&path, out)?;
         } else if kind.is_file() {
-            out.push(path);
+            if let Some(media_type) = crate::media_type_for(&path) {
+                out.push((path, media_type));
+            }
         }
     }
     Ok(())
@@ -274,26 +369,6 @@ fn device_of(rel_path: &str, local_node_id: &[u8]) -> Vec<u8> {
     id
 }
 
-/// MIME from extension — the media types this product stores. Unknown
-/// extensions are honest `application/octet-stream`, never a guess.
-fn media_type_for(path: &Path) -> String {
-    let ext = path
-        .extension()
-        .map(|e| e.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
-    match ext.as_str() {
-        "jpg" | "jpeg" => "image/jpeg",
-        "png" => "image/png",
-        "heic" | "heif" => "image/heic",
-        "gif" => "image/gif",
-        "webp" => "image/webp",
-        "mp4" => "video/mp4",
-        "mov" => "video/quicktime",
-        _ => "application/octet-stream",
-    }
-    .into()
-}
-
 fn unix_ms_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -333,17 +408,6 @@ mod tests {
             device_of(&format!("originals/{not_hex}/a.jpg"), &LOCAL),
             LOCAL.to_vec(),
             "长度对但不是 hex 也归本机"
-        );
-    }
-
-    #[test]
-    fn media_type_covers_product_formats() {
-        assert_eq!(media_type_for(Path::new("a/B.JPG")), "image/jpeg");
-        assert_eq!(media_type_for(Path::new("a/b.heic")), "image/heic");
-        assert_eq!(media_type_for(Path::new("a/b.mov")), "video/quicktime");
-        assert_eq!(
-            media_type_for(Path::new("a/noext")),
-            "application/octet-stream"
         );
     }
 }

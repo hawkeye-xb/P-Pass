@@ -228,7 +228,7 @@ async fn devices_list_presence_three_tiers() {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open_in_memory().await.unwrap();
     let (event_bus, _probe) = daemon::events::bus();
-    let (pairing, pending_rx) = Pairing::new(db.clone(), transport::NodeId([0xCC; 32]), None, None);
+    let (pairing, pending_rx) = Pairing::new(db.clone(), transport::NodeId([0xCC; 32]), None);
     let pairing = pairing.with_events(event_bus.clone());
     let diag = DiagAgg::new(db.clone());
     let mut ipc = IpcServer::new(
@@ -314,6 +314,14 @@ async fn devices_list_presence_three_tiers() {
     }
 
     let mut c = IpcClient::connect(&socket, &token_hex).await;
+    // #1044：「是否正在传输」由 daemon 下结论（status.transfer_active），
+    // 壳不再从 devices.list[].flow_connection 推断。0xAA 正有 Flow 传输。
+    let status = c
+        .call("status", serde_json::json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(status["transfer_active"], true);
     let resp = c.call("devices.list", serde_json::json!({})).await;
     assert!(resp.ok, "devices.list must work: {resp:?}");
     let devices = resp.result.unwrap()["devices"].clone();
@@ -358,6 +366,16 @@ async fn devices_list_presence_three_tiers() {
         "offline",
         "从未上报 = 离线"
     );
+
+    db.revoke(&[0xAA; 32], storage::RevokedBy::Owner, now)
+        .await
+        .unwrap();
+    let status = c
+        .call("status", serde_json::json!({}))
+        .await
+        .result
+        .unwrap();
+    assert_eq!(status["transfer_active"], false, "已吊销的设备不算在传输");
 }
 
 fn now_ms() -> i64 {

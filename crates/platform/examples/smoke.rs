@@ -1,5 +1,5 @@
 //! T-040 人工验收剧本 (`just platform-smoke`):
-//! 自启注册→查询→注销；防睡眠断言可见→释放后消失；Keychain/DPAPI 往返。
+//! 自启注册→查询→注销；防睡眠断言可见→释放后消失。
 //! Exits non-zero on any failed step. H-09 runs this on both platforms.
 
 // DESK-33 (#325)：这是开发者手动 / 测试框架跑的冒烟 example，不是产品进程，
@@ -12,17 +12,20 @@ fn main() {
 }
 
 #[cfg(any(target_os = "macos", windows))]
-use platform::{PlatformAdapter, PowerHint};
+use platform::{HostingAdapter, PlatformAdapter};
 
 #[cfg(any(target_os = "macos", windows))]
 fn main() {
     let a = platform::adapter();
+    let h = platform::hosting();
     let mut failures = 0;
 
-    println!("── service_mode: {:?}", a.service_mode());
+    println!("── service_mode: {:?}", h.service_mode());
     println!("── data_dir: {}", a.data_dir().display());
+    // power_hint 只有 macOS 实现（Windows 向导不展示睡眠策略，#1041 起默认 Unknown）。
+    #[cfg(target_os = "macos")]
     match a.power_hint() {
-        PowerHint::Unknown => {
+        platform::PowerHint::Unknown => {
             println!("✗ power_hint: Unknown（解析失败？）");
             failures += 1;
         }
@@ -35,28 +38,39 @@ fn main() {
     } else {
         std::path::PathBuf::from("/usr/bin/true")
     };
-    match a.install_autostart(&target) {
-        Ok(()) => match a.autostart_installed() {
-            Ok(true) => {
-                println!("✓ autostart: 注册并查询到");
-                match a.uninstall_autostart() {
-                    Ok(()) if !a.autostart_installed().unwrap_or(true) => {
-                        println!("✓ autostart: 注销干净")
-                    }
-                    _ => {
-                        println!("✗ autostart: 注销失败或残留");
-                        failures += 1;
+    // #1056：托管端口的登记名固定（Windows 计划任务 `P-Pass`、macOS LaunchAgent），
+    // 不支持一次性名字；机器上已有真实登记时，install 会覆盖、uninstall 会删掉它，
+    // 所以直接跳过本项，绝不改写真实登记。
+    let real_registration = h.autostart_installed();
+    if !matches!(real_registration, Ok(false)) {
+        println!(
+            "- autostart: 跳过（本机已有真实 P-Pass 自启登记或无法确认：{real_registration:?}；\
+             本检查会覆盖并注销它，故不执行）"
+        );
+    } else {
+        match h.install_autostart(&target) {
+            Ok(()) => match h.autostart_installed() {
+                Ok(true) => {
+                    println!("✓ autostart: 注册并查询到");
+                    match h.uninstall_autostart() {
+                        Ok(()) if !h.autostart_installed().unwrap_or(true) => {
+                            println!("✓ autostart: 注销干净")
+                        }
+                        _ => {
+                            println!("✗ autostart: 注销失败或残留");
+                            failures += 1;
+                        }
                     }
                 }
-            }
-            _ => {
-                println!("✗ autostart: 注册后查询不到");
+                _ => {
+                    println!("✗ autostart: 注册后查询不到");
+                    failures += 1;
+                }
+            },
+            Err(e) => {
+                println!("✗ autostart 注册失败: {e}");
                 failures += 1;
             }
-        },
-        Err(e) => {
-            println!("✗ autostart 注册失败: {e}");
-            failures += 1;
         }
     }
 
@@ -70,7 +84,16 @@ fn main() {
             drop(guard);
             std::thread::sleep(std::time::Duration::from_millis(600));
             let after = awake_assertion_count();
-            if held > before && after <= before {
+            // #1056 真机：Windows 没有**免管理员**的「当前断言计数」接口——
+            // `powercfg /requests` 要提升权限，旧实现只好返回常量 1，于是
+            // `held > before` 永远不成立、这条冒烟在 Windows 上结构性必红。
+            // 这里只验 guard 能拿到并释放（`assert_awake` 失败会走 Err 分支）；
+            // OS 级断言是否存在由 H-09 在管理员提示符下人工核对。
+            if cfg!(windows) {
+                println!(
+                    "✓ awake guard: 获取/释放成功（计数 {before}→{held}→{after}；Windows 无免管理员计数接口，OS 级断言见 H-09 手工）"
+                );
+            } else if held > before && after <= before {
                 println!("✓ awake guard: 断言计数 {before}→{held}→{after}");
             } else {
                 println!("✗ awake guard: 计数 {before}→{held}→{after}");
@@ -79,29 +102,6 @@ fn main() {
         }
         Err(e) => {
             println!("✗ assert_awake: {e}");
-            failures += 1;
-        }
-    }
-
-    // Key store round-trip.
-    let ks = a.key_store();
-    let secret = b"smoke-secret-42".to_vec();
-    match ks
-        .store("smoke-test", &secret)
-        .and_then(|()| ks.load("smoke-test"))
-    {
-        Ok(Some(loaded)) if loaded == secret => {
-            let _ = ks.delete("smoke-test");
-            match ks.load("smoke-test") {
-                Ok(None) => println!("✓ key store: 存取删全通"),
-                _ => {
-                    println!("✗ key store: 删除后仍可读");
-                    failures += 1;
-                }
-            }
-        }
-        other => {
-            println!("✗ key store 往返失败: {other:?}");
             failures += 1;
         }
     }

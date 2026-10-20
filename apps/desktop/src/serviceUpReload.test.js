@@ -82,9 +82,9 @@ function stoppedDesktop({ slowOfflineTimeline = 0 } = {}) {
   invokeMock.mockImplementation(async (cmd, args) => {
     switch (cmd) {
       case "wizard_state":
-        // 配过、用户主动停的 → 留在主界面（shouldShowWizard = false）；
+        // 配过、用户主动停的 → 留在主界面（Rust 的 show_wizard = false）；
         // 正常常驻时 autostart 在，偶尔探活失败也不回向导。
-        return { configured: true, installed: !d.userStopped, user_stopped: d.userStopped };
+        return { show_wizard: false };
       case "service_state":
         // DESK-63 (#946)：Rust 侧状态；测试按 d.up/d.userStopped 扮演它。
         return { state: d.up ? "running" : d.userStopped ? "stopped" : "starting" };
@@ -117,8 +117,6 @@ function stoppedDesktop({ slowOfflineTimeline = 0 } = {}) {
             };
           case "device.watermarks":
             return { watermarks: [] };
-          case "activity.list":
-            return { batches: [] };
           case "audit.list":
             return { events: [] };
           case "timeline.page":
@@ -224,6 +222,22 @@ describe("DESK-38：服务恢复后照片墙自动重载", () => {
     await settle(65000); // 过期的首拉失败回来
     await settle();
     expect(wallCount()).toBe(PHOTOS.length);
+  });
+
+  it("#1041：每轮 refresh 不再调用 activity.list（结果没有任何读者）", async () => {
+    const d = stoppedDesktop();
+    d.up = true;
+    d.userStopped = false;
+    render(App);
+    await settle();
+    await settle();
+    const methods = invokeMock.mock.calls
+      .filter(([cmd]) => cmd === "daemon_call")
+      .map(([, args]) => args.method);
+    // 对照：refresh 确实跑过（拉了水位和审计），只是不再拉 activity.list。
+    expect(methods).toContain("device.watermarks");
+    expect(methods).toContain("audit.list");
+    expect(methods).not.toContain("activity.list");
   });
 
   it("墙上已有照片时一次探活失败再恢复：只做增量对账，不清墙（缩略图 DOM 不重建）", async () => {

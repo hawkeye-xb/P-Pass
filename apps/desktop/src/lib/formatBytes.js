@@ -1,6 +1,5 @@
 // T-092: 字节 → 人读容量（设置页磁盘水位「可用 X GB / 共 Y GB」用）。
-// 纯函数，无 DOM/Tauri 依赖，node 可直跑
-// （apps/desktop/scripts/check-wire-fns.mjs 是对应断言脚本）。
+// 纯函数，无 DOM/Tauri 依赖。
 //
 // 数据来源：status.disk_free_bytes / disk_total_bytes（crates/daemon/src/
 // ipc.rs status()，disk_stats 拿不到时为 null）。null/缺失/负值 → null，

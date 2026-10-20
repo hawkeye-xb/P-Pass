@@ -27,7 +27,8 @@ pub use ffmpeg::{extract_frame, ffmpeg_path};
 pub use pool::{ThumbGenerator, ThumbPool};
 pub use system_thumb::capable as system_thumbnail_capable;
 pub use thumb::{
-    make_thumbs, placeholder_jpeg, thumb_paths, ThumbOutcome, ThumbPaths, ThumbResult, THUMB_SIZES,
+    make_thumbs, placeholder_jpeg, thumb_paths, ThumbOutcome, ThumbPaths, ThumbResult,
+    JPEG_QUALITY, THUMB_SIZES,
 };
 
 /// Codec-layer errors. Like core-index, every I/O failure names its path —

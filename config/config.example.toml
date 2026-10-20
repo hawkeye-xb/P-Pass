@@ -10,10 +10,5 @@
 # env: PPF_RELAY_URLS（逗号分隔）
 #relay_urls = ["https://relay.example.com"]
 
-# 配对短码会合服务。
-# env: PPF_RENDEZVOUS_URL
-#rendezvous_url = "https://rendezvous.example.com"
-
-# 日志级别：trace | debug | info | warn | error
-# env: PPF_LOG_LEVEL
-#log_level = "info"
+# 注：旧版示例里的 rendezvous_url / log_level 已退役（无任何读者）。旧 config.toml 里
+# 留着它们不会报错，但也不会生效；日志级别请用环境变量 RUST_LOG。

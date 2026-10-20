@@ -7,18 +7,13 @@
 //!   it is migrated away and still recognised.
 //! - Awake: `SetThreadExecutionState(ES_SYSTEM_REQUIRED|ES_CONTINUOUS)`
 //!   held RAII-style; drop restores `ES_CONTINUOUS`.
-//! - Keys: DPAPI (`CryptProtectData`/`CryptUnprotectData`), blob stored
-//!   in the data dir — decryptable only by this Windows user **on this
-//!   machine**. DESK-24 (#173): that is precisely why the data dir must
-//!   live under `%LOCALAPPDATA%` and never under roaming `%APPDATA%`.
-//! - Power hint: `powercfg /query` through the shared pure parser.
 //!
 //! Compile-checked cross-platform in CI (`cargo check --target
 //! x86_64-pc-windows-msvc`); live smoke runs on the H-09 Windows box.
 
 use std::path::{Path, PathBuf};
 
-use crate::{AwakeGuard, KeyStore, PlatformAdapter, PlatformError, PowerHint, Result, ServiceMode};
+use crate::{AwakeGuard, HostingAdapter, PlatformAdapter, PlatformError, Result, ServiceMode};
 
 /// 老版本（#957 之前）daemon 的登记方式：HKCU Run 值。现在只读它、删它（迁移），不再写。
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -316,6 +311,21 @@ fn delete_legacy_run_value() -> Result<()> {
 /// `$INSTDIR` 就变成 `C:\Program Files\P-Pass`，普通用户根本写不进去。
 const DATA_DIR_NAME: &str = "com.p-pass.desktop";
 
+/// #1043：`SHGetKnownFolderPath`。读不到（极少见：漫游配置坏了、服务账户）
+/// 返回 `None`，调用方自己决定怎么兜底，这里不编路径。
+fn known_folder(id: &windows::core::GUID) -> Option<PathBuf> {
+    use windows::Win32::System::Com::CoTaskMemFree;
+    use windows::Win32::UI::Shell::{SHGetKnownFolderPath, KF_FLAG_DEFAULT};
+    // SAFETY: id 指向 'static GUID；htoken = None 表示当前用户。成功时返回的
+    // 缓冲区归调用方，读完立刻用 CoTaskMemFree 释放。
+    let raw = unsafe { SHGetKnownFolderPath(id, KF_FLAG_DEFAULT, None) }.ok()?;
+    // SAFETY: raw 是系统刚分配的、以 NUL 结尾的 UTF-16 串。
+    let text = unsafe { raw.to_string() };
+    // SAFETY: raw 由 SHGetKnownFolderPath 分配，只释放这一次。
+    unsafe { CoTaskMemFree(Some(raw.0 as *const core::ffi::c_void)) };
+    text.ok().filter(|t| !t.is_empty()).map(PathBuf::from)
+}
+
 /// 搬家前的老位置：`%APPDATA%`（= Roaming）下的 `P-Pass`。
 ///
 /// 为什么是错的（DESK-24 #173）：Roaming 在域环境里会被系统复制到用户登录
@@ -468,6 +478,397 @@ fn is_windows_reserved_name(base: &str) -> bool {
 }
 
 impl PlatformAdapter for WindowsAdapter {
+    /// NET-26 (#419)：`SetThreadExecutionState` 的状态挂在**调用线程**上。
+    /// daemon 在 tokio 多线程 runtime 里拿锁、放锁，两次调用多半落在不同的
+    /// worker 上——放锁那一下清的是别的线程的状态，拿锁的那个线程会一直让
+    /// 系统保持唤醒。所以这里起一个专属线程：它设置状态、汇报结果、阻塞等
+    /// guard 被 drop，再在**同一个线程**上清掉状态退出。guard 因此可以在任意
+    /// 线程上 drop，语义与 macOS 的 caffeinate 子进程对称。
+    fn assert_awake(&self) -> Result<AwakeGuard> {
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let thread = std::thread::Builder::new()
+            .name("ppf-awake".into())
+            .spawn(move || {
+                use windows_sys::Win32::System::Power::{
+                    SetThreadExecutionState, ES_CONTINUOUS, ES_SYSTEM_REQUIRED,
+                };
+                // SAFETY: SetThreadExecutionState has no memory-safety
+                // preconditions; a zero return means failure.
+                let prev = unsafe { SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED) };
+                if prev == 0 {
+                    let _ = ready_tx.send(Err("returned 0".into()));
+                    return;
+                }
+                let _ = ready_tx.send(Ok(()));
+                // Blocks until the guard drops (its sender disconnects).
+                let _ = release_rx.recv();
+                // SAFETY: as above.
+                unsafe {
+                    SetThreadExecutionState(ES_CONTINUOUS);
+                }
+            })
+            .map_err(io_err("spawn awake thread"))?;
+        match ready_rx.recv() {
+            Ok(Ok(())) => Ok(AwakeGuard {
+                inner: ExecutionStateGuard {
+                    release: Some(release_tx),
+                    thread: Some(thread),
+                },
+            }),
+            Ok(Err(detail)) => {
+                let _ = thread.join();
+                Err(PlatformError::Failed {
+                    action: "SetThreadExecutionState",
+                    detail,
+                })
+            }
+            Err(_) => {
+                let _ = thread.join();
+                Err(PlatformError::Failed {
+                    action: "SetThreadExecutionState",
+                    detail: "awake thread exited before reporting".into(),
+                })
+            }
+        }
+    }
+
+    // ── QA-09 迁移（#211）桌面壳批次 ───────────────────────────────
+    fn platform_name(&self) -> &'static str {
+        "windows"
+    }
+
+    /// DESK-17 (#166)：Windows toast（WinRT `ToastNotificationManager`）。
+    ///
+    /// ⚠️ Windows 的 toast 要挂在一个 **AppUserModelID** 名下，而且这个 ID
+    /// 必须有一个开始菜单快捷方式认领它，否则 `Show()` 返回成功、通知却不显示。
+    /// 本应用的快捷方式由 Tauri 的 NSIS 模板创建，模板会用 `SetLnkAppUserModelId`
+    /// 把它设成 bundle identifier（真机实测已安装的 `P-Pass.lnk` 的
+    /// `System.AppUserModel.ID` = `com.p-pass.desktop`）。所以这里用同一个 ID，
+    /// 不需要改安装脚本。
+    ///
+    /// 不阻塞调用方：WinRT 调用放进一个一次性线程。trait 的返回值是 `()`，
+    /// 失败只能吞掉——与 macOS 侧 osascript 的「尽力而为」口径一致。
+    fn notify(&self, title: &str, body: &str) {
+        notify_as(APP_USER_MODEL_ID, title, body);
+    }
+
+    /// DESK-24 (#173)：**生效的**数据目录。老目录还在就是老目录，搬完了
+    /// 才是新目录——判据见 [`crate::data_migration::resolve`]。
+    ///
+    /// 不写死返回新位置，是为了让「搬迁失败」退化成「保持原样」，而不是
+    /// 指着一个空目录让 daemon 建一个崭新的空索引。
+    fn data_dir(&self) -> PathBuf {
+        crate::data_migration::resolve(&legacy_data_dir(), &current_data_dir())
+    }
+
+    /// #1043：`ERROR_SHARING_VIOLATION`（32，文件正被另一进程使用）与
+    /// `ERROR_ACCESS_DENIED`（5，覆盖正在运行的 exe 时常见）——与改前前端正则
+    /// 匹配的两句系统原文一一对应，只是改成按错误码判，与系统语言无关。
+    fn is_file_in_use_os_error(&self, code: i32) -> bool {
+        use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION};
+        u32::try_from(code).is_ok_and(|c| c == ERROR_SHARING_VIOLATION || c == ERROR_ACCESS_DENIED)
+    }
+
+    /// DAE-11 (#804)：插电时 daemon 自动持有 AwakeGuard，Windows 向导只说明
+    /// 不让用户改设置（#1041 删掉了 Windows 侧的电源设置代改）。
+    fn sleep_owner(&self) -> Option<crate::SleepOwner> {
+        Some(crate::SleepOwner::Daemon)
+    }
+
+    /// #1043（B6）/ #1056：用户**界面语言**（`GetUserPreferredUILanguages`，
+    /// 取首个，如 `zh-CN`、`en-US`），与 macOS 读首选语言同一口径；区域格式
+    /// （`GetUserDefaultLocaleName`）不参与——英文界面 + 中文区域不该显示中文。
+    /// 读不到 → `None`（调用方一律按英文）。
+    fn system_locale(&self) -> Option<String> {
+        use windows_sys::Win32::Globalization::{GetUserPreferredUILanguages, MUI_LANGUAGE_NAME};
+        let mut count = 0u32;
+        let mut len = 0u32;
+        // SAFETY: 第一次传空缓冲区只取所需长度（含双 NUL）。
+        let ok = unsafe {
+            GetUserPreferredUILanguages(
+                MUI_LANGUAGE_NAME,
+                &mut count,
+                std::ptr::null_mut(),
+                &mut len,
+            )
+        };
+        if ok == 0 || len == 0 {
+            return None;
+        }
+        let mut buf = vec![0u16; len as usize];
+        // SAFETY: buf 长度与 len 一致。
+        let ok = unsafe {
+            GetUserPreferredUILanguages(MUI_LANGUAGE_NAME, &mut count, buf.as_mut_ptr(), &mut len)
+        };
+        if ok == 0 {
+            return None;
+        }
+        crate::first_multi_sz_entry(&buf)
+    }
+
+    /// #1043（B10）：Known Folder `FOLDERID_Pictures`——用户在资源管理器里把
+    /// 「图片」搬到 D 盘的话，这里给的就是 D 盘那个，而不是 `%USERPROFILE%\Pictures`。
+    fn pictures_dir(&self) -> Option<PathBuf> {
+        known_folder(&windows::Win32::UI::Shell::FOLDERID_Pictures)
+    }
+
+    /// IDX-08 (#1010)：Windows 的非法字符 / 保留名 / 结尾点空格规则。
+    fn ingest_file_name_sanitizer(&self) -> Option<fn(&str) -> String> {
+        Some(sanitize_windows_file_name)
+    }
+
+    /// DESK-24 (#173)：见 [`crate::PlatformAdapter::migrate_legacy_data_dir`]。
+    fn migrate_legacy_data_dir(&self) -> crate::DataDirMigration {
+        crate::data_migration::migrate(&legacy_data_dir(), &current_data_dir())
+    }
+
+    /// DAE-11 (#804)：`GetSystemPowerStatus` 的 `ACLineStatus`。不需要权限、
+    /// 不起进程、与系统语言无关。判据见 [`ac_line_verdict`]。
+    fn on_external_power(&self) -> Option<bool> {
+        use windows_sys::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
+        let mut status: SYSTEM_POWER_STATUS = unsafe { std::mem::zeroed() };
+        // SAFETY: status 是本栈上零初始化的结构体，调用期间有效。
+        if unsafe { GetSystemPowerStatus(&mut status) } == 0 {
+            return None;
+        }
+        ac_line_verdict(status.ACLineStatus)
+    }
+
+    /// DAE-11 (#804)：`PowerSettingRegisterNotification(GUID_ACDC_POWER_SOURCE)`
+    /// 回调式订阅——系统在登记时先推一次当前状态，之后每次插拔再推，**没有轮询**。
+    /// 用 `DEVICE_NOTIFY_CALLBACK` 而不是窗口消息：daemon 没有窗口。
+    ///
+    /// 回调存在进程级静态槽里，而不是把指针塞进 Context：退订之后系统还有没有
+    /// 在途回调，文档没担保；静态槽 + 锁保证退订后的迟到回调只会看到空槽，
+    /// 不会碰到已释放的内存。代价是同一时刻只能有一个订阅者（daemon 只要一个），
+    /// 第二个直接返回 `None`。
+    fn watch_external_power(
+        &self,
+        on_change: Box<dyn Fn(Option<bool>) + Send + Sync>,
+    ) -> Option<crate::PowerWatch> {
+        use windows_sys::Win32::System::Power::{
+            PowerSettingRegisterNotification, DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS,
+        };
+        use windows_sys::Win32::UI::WindowsAndMessaging::DEVICE_NOTIFY_CALLBACK;
+
+        {
+            let mut slot = POWER_CALLBACK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if slot.is_some() {
+                return None;
+            }
+            // 先放回调再登记：登记那一刻系统就会推第一次。
+            *slot = Some(on_change);
+        }
+        // 放在堆上、随 guard 活着：文档没说系统会不会在登记后继续引用它。
+        let params = Box::new(DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS {
+            Callback: Some(power_source_changed),
+            Context: std::ptr::null_mut(),
+        });
+        let mut handle: *mut std::ffi::c_void = std::ptr::null_mut();
+        // SAFETY: GUID 是 'static 常量；params 在 guard 存活期间有效；handle 是
+        // 本栈上的出参。
+        let err = unsafe {
+            PowerSettingRegisterNotification(
+                &GUID_ACDC_POWER_SOURCE,
+                DEVICE_NOTIFY_CALLBACK,
+                std::ptr::from_ref(&*params).cast_mut().cast(),
+                &mut handle,
+            )
+        };
+        if err != 0 {
+            *POWER_CALLBACK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+            return None;
+        }
+        Some(crate::PowerWatch::new(PowerNotifyGuard {
+            handle,
+            _params: params,
+        }))
+    }
+
+    /// DAE-05：`GetDiskFreeSpaceExW`。free 取 `lpFreeBytesAvailableToCaller`
+    /// 而不是 `lpTotalNumberOfFreeBytes`——前者是「本调用者（受配额约束后）
+    /// 真正能写多少」，正是 unix 侧 `statvfs.f_bavail` 的对等语义，也是
+    /// 资源管理器显示的那个数。取错的话在带配额的卷上会偏大。
+    ///
+    /// 路径要先转成 UTF-16 + NUL 结尾的宽字符串（Win32 W 系列 API 的要求）。
+    /// 目录不存在或无权限时 API 返回 0，此处回 `None`——调用方序列化成 null，
+    /// 绝不编造数字。
+    fn volume_stats(&self, path: &Path) -> Option<crate::VolumeStats> {
+        use std::os::windows::ffi::OsStrExt as _;
+        use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+
+        let wide: Vec<u16> = path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let mut free_to_caller: u64 = 0;
+        let mut total: u64 = 0;
+        // SAFETY: wide 是 NUL 结尾的合法宽字符串且在调用期间存活；两个出参
+        // 是栈上的 u64，指针非空且对齐。第三个出参传 null 表示不关心
+        // 「卷上物理空闲量」（我们要的是 caller-available 那个）。
+        let ok = unsafe {
+            GetDiskFreeSpaceExW(
+                wide.as_ptr(),
+                &mut free_to_caller,
+                &mut total,
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            return None;
+        }
+        Some(crate::VolumeStats {
+            free: free_to_caller,
+            total,
+        })
+    }
+
+    /// DESK-58 (#875)：stderr 落在与 `daemon.log` 同目录的 `daemon.err`——
+    /// `daemon.log` 是 tracing 的完整运行日志，这份只装 tracing 接不住的东西
+    /// （文件日志之前的报错、`main` 返回的 `Err`、panic），尾行就是「为什么没
+    /// 起来」。由 daemon 自己接（[`Self::capture_unattached_stderr`]），不是
+    /// 服务管理器接；没有托管方接的 stdout。
+    fn daemon_log_paths(&self, data_dir: &Path) -> crate::DaemonLogPaths {
+        let logs = data_dir.join("logs");
+        crate::DaemonLogPaths {
+            log_file: Some(logs.join("daemon.log")),
+            stderr: Some(logs.join("daemon.err")),
+            stdout: None,
+            stdio_by_service_manager: false,
+        }
+    }
+
+    /// DESK-58 (#875)：Run 键（登录时 explorer 拉起）和壳的一次性 spawn 都把
+    /// stderr 给成空——前者是 GUI 子系统进程没有句柄，后者是 `Stdio::null()`
+    /// 的 `NUL`。两条路都由 daemon 自己接住，不靠各个拉起方分别重定向
+    /// （拉起方有好几个，登录那条我们根本插不上手）。
+    ///
+    /// Rust 的 `eprintln!` 与 panic 输出每次写都现取 `GetStdHandle`，所以
+    /// `SetStdHandle` 之后的所有 stderr 都进文件。
+    ///
+    /// 先截断、再以**追加**方式持有：同时有第二个实例起来（自愈与登录撞车）
+    /// 把文件截断时，本进程之后的写入落在新文件尾，而不是旧偏移处留一段空洞。
+    fn capture_unattached_stderr(&self, data_dir: &Path) -> crate::Applied {
+        use std::os::windows::io::{FromRawHandle as _, IntoRawHandle as _};
+        use windows_sys::Win32::System::Console::{SetStdHandle, STD_ERROR_HANDLE};
+
+        if !stderr_needs_capture(classify_own_stderr()) {
+            return crate::Applied::NotApplicable;
+        }
+        let Some(path) = self.daemon_log_paths(data_dir).stderr else {
+            return crate::Applied::NotApplicable;
+        };
+        if let Some(dir) = path.parent() {
+            if std::fs::create_dir_all(dir).is_err() {
+                return crate::Applied::Unsupported;
+            }
+        }
+        if std::fs::File::create(&path).is_err() {
+            return crate::Applied::Unsupported;
+        }
+        let Ok(file) = std::fs::OpenOptions::new().append(true).open(&path) else {
+            return crate::Applied::Unsupported;
+        };
+        let handle = file.into_raw_handle();
+        // SAFETY: handle 是刚打开、所有权已交出的文件句柄；交给 SetStdHandle
+        // 后由进程标准错误持有，进程退出时由系统回收。
+        if unsafe { SetStdHandle(STD_ERROR_HANDLE, handle as _) } == 0 {
+            // SAFETY: 没交出去，收回所有权关掉。
+            drop(unsafe { std::fs::File::from_raw_handle(handle) });
+            return crate::Applied::Unsupported;
+        }
+        crate::Applied::Done
+    }
+
+    /// SEC-07 (#289)：把文件的 DACL 重写成**只有当前用户一条 ACE**，并切断
+    /// 从父目录的继承——与 unix 侧 `0o600` 同一个意思。
+    ///
+    /// 为什么要显式做（而不是信 `%LOCALAPPDATA%` 的默认 ACL）：默认值只在
+    /// 默认位置成立。data_dir 一旦被改到别处（自定义路径、共享盘、
+    /// `ProgramData`），继承来的 ACE 就不再有这个保证。
+    ///
+    /// `PROTECTED_DACL_SECURITY_INFORMATION` 是关键：不带它，父目录继承下来
+    /// 的 ACE 照样生效，等于没收紧。路径不存在时 `SetNamedSecurityInfoW`
+    /// 返回 `ERROR_FILE_NOT_FOUND`，这里如实报 `Err`，不静默回 `Done`。
+    fn restrict_to_owner(&self, path: &Path) -> Result<crate::Applied> {
+        restrict_to_current_user(path)?;
+        Ok(crate::Applied::Done)
+    }
+
+    /// DEVLOG-04 (#290)：把本进程 stderr 背后的**磁盘文件**截到 0 字节。
+    ///
+    /// 与 unix 侧对 fd 2 `set_len(0)` + `seek(0)` 同义：先把文件指针移回开头
+    /// （`SetFilePointerEx`），再在那里截断（`SetEndOfFile`）。
+    ///
+    /// 三态口径：
+    /// - **`Done`**：stderr 是磁盘文件，而且真的截断了。
+    /// - **`NotApplicable`**：stderr 不是磁盘文件——控制台、管道、`NUL`，
+    ///   或者根本没有 stderr（release 是 `windows_subsystem = "windows"`，
+    ///   没人重定向时句柄为空）。这些都没有「磁盘上越长越大的文件」可截，
+    ///   机制上就不需要，不是缺口。
+    /// - **`Unsupported`**：stderr 是磁盘文件但截不动。典型情形是托管方以
+    ///   **只追加**方式打开的文件（`FILE_APPEND_DATA` 没有 `FILE_WRITE_DATA`，
+    ///   `SetEndOfFile` 会被拒绝）。那种情况下**文件确实没变小**，绝不能报
+    ///   `Done`。`Applied` 眼下没有「试了但失败」这一态，那是 QA-15（#291）
+    ///   要收口的事；这里先保证「没做成就不说做成」。
+    ///
+    /// ⚠️ 句柄是**借来的**：只拿 raw handle 调 Win32，不包进任何会 Drop 的
+    /// owned 类型——关掉它等于把 stderr 从整个进程手里拿走（unix 侧
+    /// `ManuallyDrop` 那条教训）。
+    fn truncate_own_stderr(&self) -> crate::Applied {
+        use std::os::windows::io::AsRawHandle as _;
+        use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
+        use windows_sys::Win32::Storage::FileSystem::{
+            GetFileType, SetEndOfFile, SetFilePointerEx, FILE_BEGIN, FILE_TYPE_DISK,
+        };
+
+        let handle = std::io::stderr().as_raw_handle() as HANDLE;
+        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
+            return crate::Applied::NotApplicable;
+        }
+        // SAFETY: handle 是本进程的标准错误句柄，进程存活期间有效；这里只查询
+        // 类型，不接管所有权。
+        if unsafe { GetFileType(handle) } != FILE_TYPE_DISK {
+            return crate::Applied::NotApplicable;
+        }
+        // SAFETY: 同上；新位置出参传 null 表示不关心。
+        if unsafe { SetFilePointerEx(handle, 0, std::ptr::null_mut(), FILE_BEGIN) } == 0 {
+            return crate::Applied::Unsupported;
+        }
+        // SAFETY: 同上；在当前位置（刚移到 0）截断。
+        if unsafe { SetEndOfFile(handle) } == 0 {
+            return crate::Applied::Unsupported;
+        }
+        crate::Applied::Done
+    }
+
+    /// QA-09 迁移（#211）：**机制上不需要**，这不是缺口。
+    ///
+    /// Windows 侧的 IPC 端点是命名管道，内核对象，不在文件系统里留文件，
+    /// 所以不存在「被强杀的前任留下一个文件挡住 bind」这个问题。
+    fn remove_stale_ipc_endpoint(&self, name: &str) -> crate::Applied {
+        let _ = name;
+        crate::Applied::NotApplicable
+    }
+
+    /// DESK-16 (#165)：Windows 这半的系统兜底 —— Shell 缩略图（COM）。
+    /// 实现与注释在本文件下方的 `system_video_thumbnail`。
+    fn system_video_thumbnail(
+        &self,
+        src: &Path,
+        max_px: u32,
+    ) -> crate::Result<Option<crate::SystemThumbnail>> {
+        system_video_thumbnail(src, max_px)
+    }
+}
+
+impl HostingAdapter for WindowsAdapter {
     /// DESK-65 (#957)：登记计划任务并立刻运行它（= `launchctl bootstrap` +
     /// `RunAtLoad`）。向导紧接着就要连上 daemon，所以登记完就跑；已经在跑时
     /// `IgnoreNew` 让这次运行什么都不多拉。顺手删掉老版本的 Run 值（迁移）。
@@ -505,15 +906,6 @@ impl PlatformAdapter for WindowsAdapter {
             Ok(get_task(folder)?.is_some())
         })?;
         Ok(task || legacy_run_value()?.is_some())
-    }
-
-    /// DESK-60 (#877)：Run 值指向哪个可执行文件。原先没实现（默认 `None`），
-    /// 对账和 daemon 接管都把「登记着别的路径」当成「没登记」。
-    fn autostart_registered_exec(&self) -> Result<Option<PathBuf>> {
-        Ok(match self.autostart_registration()? {
-            crate::AutostartRegistration::At(p) => Some(p),
-            _ => None,
-        })
     }
 
     /// 计划任务的执行路径。老版本的 Run 值一律算「读不出」：对账因此走
@@ -621,6 +1013,22 @@ impl PlatformAdapter for WindowsAdapter {
         .flatten()
     }
 
+    /// #1060：结束在跑的实例并**禁用**任务（看门狗不会在替换文件时把服务拉起），
+    /// 任务定义保留、不写任何用户停止标记。恢复是 `restart_resident_daemon`：
+    /// 它会先 `SetEnabled(true)` 再运行。
+    fn pause_resident_daemon(&self) -> Result<crate::ResidentPause> {
+        use windows::Win32::Foundation::VARIANT_FALSE;
+        with_task_folder("pause scheduled task", |folder| {
+            let Some(task) = get_task(folder)? else {
+                return Ok(crate::ResidentPause::NotRegistered);
+            };
+            // SAFETY: task 是有效的 COM 接口。
+            unsafe { task.SetEnabled(VARIANT_FALSE)? };
+            stop_task_instances(&task)?;
+            Ok(crate::ResidentPause::Paused)
+        })
+    }
+
     /// DESK-65 (#957)：= `launchctl kickstart [-k]`。`kill_running` 时先结束在跑
     /// 的实例再运行任务（换版本）；否则在跑就不动（自愈）。
     fn restart_resident_daemon(&self, kill_running: bool) -> Result<crate::ResidentRestart> {
@@ -656,116 +1064,6 @@ impl PlatformAdapter for WindowsAdapter {
         })
     }
 
-    fn key_store(&self) -> Box<dyn KeyStore> {
-        Box::new(DpapiStore {
-            dir: self.data_dir().join("keys"),
-        })
-    }
-
-    /// NET-26 (#419)：`SetThreadExecutionState` 的状态挂在**调用线程**上。
-    /// daemon 在 tokio 多线程 runtime 里拿锁、放锁，两次调用多半落在不同的
-    /// worker 上——放锁那一下清的是别的线程的状态，拿锁的那个线程会一直让
-    /// 系统保持唤醒。所以这里起一个专属线程：它设置状态、汇报结果、阻塞等
-    /// guard 被 drop，再在**同一个线程**上清掉状态退出。guard 因此可以在任意
-    /// 线程上 drop，语义与 macOS 的 caffeinate 子进程对称。
-    fn assert_awake(&self) -> Result<AwakeGuard> {
-        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
-        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
-        let thread = std::thread::Builder::new()
-            .name("ppf-awake".into())
-            .spawn(move || {
-                use windows_sys::Win32::System::Power::{
-                    SetThreadExecutionState, ES_CONTINUOUS, ES_SYSTEM_REQUIRED,
-                };
-                // SAFETY: SetThreadExecutionState has no memory-safety
-                // preconditions; a zero return means failure.
-                let prev = unsafe { SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED) };
-                if prev == 0 {
-                    let _ = ready_tx.send(Err("returned 0".into()));
-                    return;
-                }
-                let _ = ready_tx.send(Ok(()));
-                // Blocks until the guard drops (its sender disconnects).
-                let _ = release_rx.recv();
-                // SAFETY: as above.
-                unsafe {
-                    SetThreadExecutionState(ES_CONTINUOUS);
-                }
-            })
-            .map_err(io_err("spawn awake thread"))?;
-        match ready_rx.recv() {
-            Ok(Ok(())) => Ok(AwakeGuard {
-                inner: ExecutionStateGuard {
-                    release: Some(release_tx),
-                    thread: Some(thread),
-                },
-            }),
-            Ok(Err(detail)) => {
-                let _ = thread.join();
-                Err(PlatformError::Failed {
-                    action: "SetThreadExecutionState",
-                    detail,
-                })
-            }
-            Err(_) => {
-                let _ = thread.join();
-                Err(PlatformError::Failed {
-                    action: "SetThreadExecutionState",
-                    detail: "awake thread exited before reporting".into(),
-                })
-            }
-        }
-    }
-
-    fn power_hint(&self) -> PowerHint {
-        // NOTE (2026-08-26, W1 real-box run): `powercfg /query` output is
-        // localized (zh-CN Windows prints "当前交流电源设置索引" instead of
-        // "Current AC Power Setting Index"), so the English-only text
-        // parser in crate::parse_powercfg silently matched nothing and
-        // this always returned Unknown on non-English systems. Read the
-        // effective value straight from the registry instead — locale
-        // independent, and it's literally what powercfg itself reads.
-        // Path: HKLM\SYSTEM\CurrentControlSet\Control\Power\User\
-        //   PowerSchemes\<ActiveScheme>\238c9fa8...(SUB_SLEEP)\
-        //   29f6c1db...(STANDBYIDLE), values AC/DCSettingIndex (seconds, 0 = never).
-        // DESK-30 (#294)：AC 和 DC 都要看——只看 AC，笔记本拔掉电源后会睡却报
-        // 「永不睡眠」。
-        hint_from_standby(
-            read_standby_idle_seconds(STANDBY_AC),
-            read_standby_idle_seconds(STANDBY_DC),
-        )
-    }
-
-    /// DESK-22 (#171)：一键关闭「空闲自动睡眠」，让备份能在无人值守时跑完。
-    ///
-    /// 等价物是 `powercfg /x standby-timeout-ac 0`，它写的是 HKLM 下的电源
-    /// 方案键，**非管理员没有写权限**（2026-09-21 实测：以写权限打开该键
-    /// 直接被拒，`Requested registry access is not allowed`）。所以必须提权，
-    /// 走 `ShellExecuteExW` 的 `runas` 动词弹 UAC——与 macOS 侧那个管理员
-    /// 授权弹窗对等。
-    ///
-    /// ⚠️ **只设 AC，不设 DC**，回读也只读 AC，所以本函数自身自洽。DESK-30
-    /// (#294) 之后 [`power_hint`](Self::power_hint) 已经同时看 AC / DC：在
-    /// DC ≠ 0 的笔记本上点完这里，向导会如实显示「用电池时仍会睡」。把这里
-    /// 也扩到 DC 是 DESK-41（#486）的事，这里没有做。
-    /// （macOS 侧 `pmset -a` 设所有场景，`parse_pmset` 也检测所有场景。）
-    ///
-    /// ⚠️ **不信退出码，动手后回读**。2026-09-21 在 Windows 11 26200 上实测
-    /// （非管理员）：`powercfg /x standby-timeout-ac 0` 退出码是 **0**，而那个
-    /// 注册表键的最后写入时间**一点没变**——它压根没写成，却报了成功。拿退出
-    /// 码当"已生效"就是本仓这一轮在修的那类缺陷（#268 那个 0 字节 daemon
-    /// 注册完报 resident 是同一形状）。
-    fn disable_auto_sleep(&self) -> Result<crate::Applied> {
-        let before = read_standby_idle_seconds(STANDBY_AC);
-        elevated_powercfg("/x standby-timeout-ac 0")?;
-        verdict_from_readback(before, read_standby_idle_seconds(STANDBY_AC))
-    }
-
-    // ── QA-09 迁移（#211）桌面壳批次 ───────────────────────────────
-    fn platform_name(&self) -> &'static str {
-        "windows"
-    }
-
     /// Windows 的可执行文件带 `.exe`。与 [`crate::DAEMON_EXECUTABLE_STEM`]
     /// 的关系有单测钉着（`executable_name_is_the_stem_plus_exe`）——写成
     /// 字面量是因为 `const` 里没法做字符串拼接。
@@ -773,298 +1071,13 @@ impl PlatformAdapter for WindowsAdapter {
         "ppf-daemon.exe"
     }
 
-    /// 「电源和睡眠」设置页。迁移前桌面壳直接把这个字符串交给 opener
-    /// 插件；现在字符串归这里，打开动作仍归桌面壳（理由见 trait 上的说明）。
-    fn power_settings_uri(&self) -> Option<&'static str> {
-        Some("ms-settings:powersleep")
-    }
-
     /// DESK-52 (#787)：直接调系统 API 结束进程，**不再拉起 `taskkill.exe`**。
     /// taskkill 是 console 子系统程序，从 GUI 子系统的桌面壳里拉起它会闪黑窗
-    /// （DESK-19 #168 那一类）；不启动外部程序，这一类问题就不存在。实现与
-    /// 理由见 [`kill_processes_named`]。
-    fn kill_daemon_process(&self) -> Result<crate::KillOutcome> {
-        kill_processes_named(self.daemon_executable_name())
-    }
-
-    /// DESK-17 (#166)：Windows toast（WinRT `ToastNotificationManager`）。
-    ///
-    /// ⚠️ Windows 的 toast 要挂在一个 **AppUserModelID** 名下，而且这个 ID
-    /// 必须有一个开始菜单快捷方式认领它，否则 `Show()` 返回成功、通知却不显示。
-    /// 本应用的快捷方式由 Tauri 的 NSIS 模板创建，模板会用 `SetLnkAppUserModelId`
-    /// 把它设成 bundle identifier（真机实测已安装的 `P-Pass.lnk` 的
-    /// `System.AppUserModel.ID` = `com.p-pass.desktop`）。所以这里用同一个 ID，
-    /// 不需要改安装脚本。
-    ///
-    /// 不阻塞调用方：WinRT 调用放进一个一次性线程。trait 的返回值是 `()`，
-    /// 失败只能吞掉——与 macOS 侧 osascript 的「尽力而为」口径一致。
-    fn notify(&self, title: &str, body: &str) {
-        notify_as(APP_USER_MODEL_ID, title, body);
-    }
-
-    /// DESK-24 (#173)：**生效的**数据目录。老目录还在就是老目录，搬完了
-    /// 才是新目录——判据见 [`crate::data_migration::resolve`]。
-    ///
-    /// 不写死返回新位置，是为了让「搬迁失败」退化成「保持原样」，而不是
-    /// 指着一个空目录让 daemon 建一个崭新的空索引。
-    fn data_dir(&self) -> PathBuf {
-        crate::data_migration::resolve(&legacy_data_dir(), &current_data_dir())
-    }
-
-    /// IDX-08 (#1010)：Windows 的非法字符 / 保留名 / 结尾点空格规则。
-    fn ingest_file_name_sanitizer(&self) -> Option<fn(&str) -> String> {
-        Some(sanitize_windows_file_name)
-    }
-
-    /// DESK-24 (#173)：见 [`crate::PlatformAdapter::migrate_legacy_data_dir`]。
-    fn migrate_legacy_data_dir(&self) -> crate::DataDirMigration {
-        crate::data_migration::migrate(&legacy_data_dir(), &current_data_dir())
-    }
-
-    /// DAE-05：`GetDiskFreeSpaceExW`。free 取 `lpFreeBytesAvailableToCaller`
-    /// 而不是 `lpTotalNumberOfFreeBytes`——前者是「本调用者（受配额约束后）
-    /// 真正能写多少」，正是 unix 侧 `statvfs.f_bavail` 的对等语义，也是
-    /// 资源管理器显示的那个数。取错的话在带配额的卷上会偏大。
-    ///
-    /// 路径要先转成 UTF-16 + NUL 结尾的宽字符串（Win32 W 系列 API 的要求）。
-    /// 目录不存在或无权限时 API 返回 0，此处回 `None`——调用方序列化成 null，
-    /// 绝不编造数字。
-    /// DAE-11 (#804)：`GetSystemPowerStatus` 的 `ACLineStatus`。不需要权限、
-    /// 不起进程、与系统语言无关。判据见 [`ac_line_verdict`]。
-    fn on_external_power(&self) -> Option<bool> {
-        use windows_sys::Win32::System::Power::{GetSystemPowerStatus, SYSTEM_POWER_STATUS};
-        let mut status: SYSTEM_POWER_STATUS = unsafe { std::mem::zeroed() };
-        // SAFETY: status 是本栈上零初始化的结构体，调用期间有效。
-        if unsafe { GetSystemPowerStatus(&mut status) } == 0 {
-            return None;
-        }
-        ac_line_verdict(status.ACLineStatus)
-    }
-
-    /// DAE-11 (#804)：`PowerSettingRegisterNotification(GUID_ACDC_POWER_SOURCE)`
-    /// 回调式订阅——系统在登记时先推一次当前状态，之后每次插拔再推，**没有轮询**。
-    /// 用 `DEVICE_NOTIFY_CALLBACK` 而不是窗口消息：daemon 没有窗口。
-    ///
-    /// 回调存在进程级静态槽里，而不是把指针塞进 Context：退订之后系统还有没有
-    /// 在途回调，文档没担保；静态槽 + 锁保证退订后的迟到回调只会看到空槽，
-    /// 不会碰到已释放的内存。代价是同一时刻只能有一个订阅者（daemon 只要一个），
-    /// 第二个直接返回 `None`。
-    fn watch_external_power(
-        &self,
-        on_change: Box<dyn Fn(Option<bool>) + Send + Sync>,
-    ) -> Option<crate::PowerWatch> {
-        use windows_sys::Win32::System::Power::{
-            PowerSettingRegisterNotification, DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS,
-        };
-        use windows_sys::Win32::UI::WindowsAndMessaging::DEVICE_NOTIFY_CALLBACK;
-
-        {
-            let mut slot = POWER_CALLBACK
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if slot.is_some() {
-                return None;
-            }
-            // 先放回调再登记：登记那一刻系统就会推第一次。
-            *slot = Some(on_change);
-        }
-        // 放在堆上、随 guard 活着：文档没说系统会不会在登记后继续引用它。
-        let params = Box::new(DEVICE_NOTIFY_SUBSCRIBE_PARAMETERS {
-            Callback: Some(power_source_changed),
-            Context: std::ptr::null_mut(),
-        });
-        let mut handle: *mut std::ffi::c_void = std::ptr::null_mut();
-        // SAFETY: GUID 是 'static 常量；params 在 guard 存活期间有效；handle 是
-        // 本栈上的出参。
-        let err = unsafe {
-            PowerSettingRegisterNotification(
-                &GUID_ACDC_POWER_SOURCE,
-                DEVICE_NOTIFY_CALLBACK,
-                std::ptr::from_ref(&*params).cast_mut().cast(),
-                &mut handle,
-            )
-        };
-        if err != 0 {
-            *POWER_CALLBACK
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-            return None;
-        }
-        Some(crate::PowerWatch::new(PowerNotifyGuard {
-            handle,
-            _params: params,
-        }))
-    }
-
-    fn volume_stats(&self, path: &Path) -> Option<crate::VolumeStats> {
-        use std::os::windows::ffi::OsStrExt as _;
-        use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
-
-        let wide: Vec<u16> = path
-            .as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-        let mut free_to_caller: u64 = 0;
-        let mut total: u64 = 0;
-        // SAFETY: wide 是 NUL 结尾的合法宽字符串且在调用期间存活；两个出参
-        // 是栈上的 u64，指针非空且对齐。第三个出参传 null 表示不关心
-        // 「卷上物理空闲量」（我们要的是 caller-available 那个）。
-        let ok = unsafe {
-            GetDiskFreeSpaceExW(
-                wide.as_ptr(),
-                &mut free_to_caller,
-                &mut total,
-                std::ptr::null_mut(),
-            )
-        };
-        if ok == 0 {
-            return None;
-        }
-        Some(crate::VolumeStats {
-            free: free_to_caller,
-            total,
-        })
-    }
-
-    /// DEVLOG-02：Run 键启动的 daemon，其 stderr 唯一去处就是 Windows 自动
-    /// 分配的那个控制台——而 release 已经不再分配它，所以必须有确定的落盘
-    /// 位置。放在生效的 data dir 下，与 DPAPI blob、索引同域。
-    ///
-    /// DESK-24 (#173) 那次从 Roaming 迁到 Local，这里**一个字都没改**——
-    /// 日志路径是从入参 data dir 算出来的，data dir 换地方它就跟着走。
-    fn default_log_file(&self, data_dir: &Path) -> Option<PathBuf> {
-        Some(data_dir.join("logs").join("daemon.log"))
-    }
-
-    /// DESK-58 (#875)：与 `daemon.log` 同目录、分开放——`daemon.log` 是
-    /// tracing 的完整运行日志，这份只装 tracing 接不住的东西（文件日志之前的
-    /// 报错、`main` 返回的 `Err`、panic），尾行就是「为什么没起来」。
-    fn startup_stderr_file(&self, data_dir: &Path) -> Option<PathBuf> {
-        Some(data_dir.join("logs").join("daemon.err"))
-    }
-
-    /// DESK-58 (#875)：Run 键（登录时 explorer 拉起）和壳的一次性 spawn 都把
-    /// stderr 给成空——前者是 GUI 子系统进程没有句柄，后者是 `Stdio::null()`
-    /// 的 `NUL`。两条路都由 daemon 自己接住，不靠各个拉起方分别重定向
-    /// （拉起方有好几个，登录那条我们根本插不上手）。
-    ///
-    /// Rust 的 `eprintln!` 与 panic 输出每次写都现取 `GetStdHandle`，所以
-    /// `SetStdHandle` 之后的所有 stderr 都进文件。
-    ///
-    /// 先截断、再以**追加**方式持有：同时有第二个实例起来（自愈与登录撞车）
-    /// 把文件截断时，本进程之后的写入落在新文件尾，而不是旧偏移处留一段空洞。
-    fn capture_unattached_stderr(&self, data_dir: &Path) -> crate::Applied {
-        use std::os::windows::io::{FromRawHandle as _, IntoRawHandle as _};
-        use windows_sys::Win32::System::Console::{SetStdHandle, STD_ERROR_HANDLE};
-
-        if !stderr_needs_capture(classify_own_stderr()) {
-            return crate::Applied::NotApplicable;
-        }
-        let Some(path) = self.startup_stderr_file(data_dir) else {
-            return crate::Applied::NotApplicable;
-        };
-        if let Some(dir) = path.parent() {
-            if std::fs::create_dir_all(dir).is_err() {
-                return crate::Applied::Unsupported;
-            }
-        }
-        if std::fs::File::create(&path).is_err() {
-            return crate::Applied::Unsupported;
-        }
-        let Ok(file) = std::fs::OpenOptions::new().append(true).open(&path) else {
-            return crate::Applied::Unsupported;
-        };
-        let handle = file.into_raw_handle();
-        // SAFETY: handle 是刚打开、所有权已交出的文件句柄；交给 SetStdHandle
-        // 后由进程标准错误持有，进程退出时由系统回收。
-        if unsafe { SetStdHandle(STD_ERROR_HANDLE, handle as _) } == 0 {
-            // SAFETY: 没交出去，收回所有权关掉。
-            drop(unsafe { std::fs::File::from_raw_handle(handle) });
-            return crate::Applied::Unsupported;
-        }
-        crate::Applied::Done
-    }
-
-    /// SEC-07 (#289)：把文件的 DACL 重写成**只有当前用户一条 ACE**，并切断
-    /// 从父目录的继承——与 unix 侧 `0o600` 同一个意思。
-    ///
-    /// 为什么要显式做（而不是信 `%LOCALAPPDATA%` 的默认 ACL）：默认值只在
-    /// 默认位置成立。data_dir 一旦被改到别处（自定义路径、共享盘、
-    /// `ProgramData`），继承来的 ACE 就不再有这个保证。
-    ///
-    /// `PROTECTED_DACL_SECURITY_INFORMATION` 是关键：不带它，父目录继承下来
-    /// 的 ACE 照样生效，等于没收紧。路径不存在时 `SetNamedSecurityInfoW`
-    /// 返回 `ERROR_FILE_NOT_FOUND`，这里如实报 `Err`，不静默回 `Done`。
-    fn restrict_to_owner(&self, path: &Path) -> Result<crate::Applied> {
-        restrict_to_current_user(path)?;
-        Ok(crate::Applied::Done)
-    }
-
-    /// DEVLOG-04 (#290)：把本进程 stderr 背后的**磁盘文件**截到 0 字节。
-    ///
-    /// 与 unix 侧对 fd 2 `set_len(0)` + `seek(0)` 同义：先把文件指针移回开头
-    /// （`SetFilePointerEx`），再在那里截断（`SetEndOfFile`）。
-    ///
-    /// 三态口径：
-    /// - **`Done`**：stderr 是磁盘文件，而且真的截断了。
-    /// - **`NotApplicable`**：stderr 不是磁盘文件——控制台、管道、`NUL`，
-    ///   或者根本没有 stderr（release 是 `windows_subsystem = "windows"`，
-    ///   没人重定向时句柄为空）。这些都没有「磁盘上越长越大的文件」可截，
-    ///   机制上就不需要，不是缺口。
-    /// - **`Unsupported`**：stderr 是磁盘文件但截不动。典型情形是托管方以
-    ///   **只追加**方式打开的文件（`FILE_APPEND_DATA` 没有 `FILE_WRITE_DATA`，
-    ///   `SetEndOfFile` 会被拒绝）。那种情况下**文件确实没变小**，绝不能报
-    ///   `Done`。`Applied` 眼下没有「试了但失败」这一态，那是 QA-15（#291）
-    ///   要收口的事；这里先保证「没做成就不说做成」。
-    ///
-    /// ⚠️ 句柄是**借来的**：只拿 raw handle 调 Win32，不包进任何会 Drop 的
-    /// owned 类型——关掉它等于把 stderr 从整个进程手里拿走（unix 侧
-    /// `ManuallyDrop` 那条教训）。
-    fn truncate_own_stderr(&self) -> crate::Applied {
-        use std::os::windows::io::AsRawHandle as _;
-        use windows_sys::Win32::Foundation::{HANDLE, INVALID_HANDLE_VALUE};
-        use windows_sys::Win32::Storage::FileSystem::{
-            GetFileType, SetEndOfFile, SetFilePointerEx, FILE_BEGIN, FILE_TYPE_DISK,
-        };
-
-        let handle = std::io::stderr().as_raw_handle() as HANDLE;
-        if handle.is_null() || handle == INVALID_HANDLE_VALUE {
-            return crate::Applied::NotApplicable;
-        }
-        // SAFETY: handle 是本进程的标准错误句柄，进程存活期间有效；这里只查询
-        // 类型，不接管所有权。
-        if unsafe { GetFileType(handle) } != FILE_TYPE_DISK {
-            return crate::Applied::NotApplicable;
-        }
-        // SAFETY: 同上；新位置出参传 null 表示不关心。
-        if unsafe { SetFilePointerEx(handle, 0, std::ptr::null_mut(), FILE_BEGIN) } == 0 {
-            return crate::Applied::Unsupported;
-        }
-        // SAFETY: 同上；在当前位置（刚移到 0）截断。
-        if unsafe { SetEndOfFile(handle) } == 0 {
-            return crate::Applied::Unsupported;
-        }
-        crate::Applied::Done
-    }
-
-    /// QA-09 迁移（#211）：**机制上不需要**，这不是缺口。
-    ///
-    /// Windows 侧的 IPC 端点是命名管道，内核对象，不在文件系统里留文件，
-    /// 所以不存在「被强杀的前任留下一个文件挡住 bind」这个问题。
-    fn remove_stale_ipc_endpoint(&self, name: &str) -> crate::Applied {
-        let _ = name;
-        crate::Applied::NotApplicable
-    }
-
-    /// DESK-16 (#165)：Windows 这半的系统兜底 —— Shell 缩略图（COM）。
-    /// 实现与注释在本文件下方的 `system_video_thumbnail`。
-    fn system_video_thumbnail(
-        &self,
-        src: &Path,
-        max_px: u32,
-    ) -> crate::Result<Option<crate::SystemThumbnail>> {
-        system_video_thumbnail(src, max_px)
+    /// （DESK-19 #168 那一类）；不启动外部程序，这一类问题就不存在。
+    /// B7（#1043）：判据从「映像名」收紧到「映像的完整路径」，见
+    /// [`stop_processes_at`]。
+    fn stop_daemon(&self, exe: &Path, pid_hint: Option<u32>) -> Result<crate::KillOutcome> {
+        stop_processes_at(exe, pid_hint)
     }
 }
 
@@ -1075,7 +1088,7 @@ impl PlatformAdapter for WindowsAdapter {
 /// DESK-58 (#875)：本进程 stderr 此刻接在什么上。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum StderrTarget {
-    /// 没有句柄（GUI 子系统进程被 Run 键拉起时就是这样）。
+    /// 没有句柄（GUI 子系统进程被计划任务登录拉起时就是这样）。
     Missing,
     /// 字符设备但不是控制台——实际就是 `NUL`（`Stdio::null()`）。
     NullDevice,
@@ -1213,161 +1226,6 @@ pub fn ac_line_verdict(ac_line_status: u8) -> Option<bool> {
     }
 }
 
-/// Registry value names of the plugged-in / on-battery standby timeout.
-const STANDBY_AC: &str = "ACSettingIndex";
-const STANDBY_DC: &str = "DCSettingIndex";
-
-/// DESK-30 (#294)：与 macOS 的 `parse_pmset` 同口径——取所有电源场景里最小
-/// 的正数；读到的全是 0 才是「永不睡眠」；一个都没读到才是 `Unknown`。
-/// 纯函数：注册表读取那半在 CI 上没法造数据。
-fn hint_from_standby(ac: Option<u32>, dc: Option<u32>) -> PowerHint {
-    let read: Vec<u32> = [ac, dc].into_iter().flatten().collect();
-    if read.is_empty() {
-        return PowerHint::Unknown;
-    }
-    match read.into_iter().filter(|s| *s > 0).min() {
-        None => PowerHint::NeverSleeps,
-        Some(seconds) => PowerHint::SleepsWhenIdle {
-            minutes: seconds.div_ceil(60),
-        },
-    }
-}
-
-/// Read one of the active power scheme's standby-idle timeouts (seconds;
-/// 0 = never) straight from the registry — locale-independent, unlike
-/// parsing `powercfg /query`'s localized text output. `value` is
-/// [`STANDBY_AC`] or [`STANDBY_DC`].
-fn read_standby_idle_seconds(value: &str) -> Option<u32> {
-    use winreg::enums::HKEY_LOCAL_MACHINE;
-    use winreg::RegKey;
-    const SUB_SLEEP: &str = "238c9fa8-0aad-41ed-83f4-97be242c8f20";
-    const STANDBYIDLE: &str = "29f6c1db-86da-48c5-9fdb-f2b67b1f44da";
-    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
-    let schemes = hklm
-        .open_subkey(r"SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes")
-        .ok()?;
-    let active: String = schemes.get_value("ActivePowerScheme").ok()?;
-    let setting = schemes
-        .open_subkey(format!("{active}\\{SUB_SLEEP}\\{STANDBYIDLE}"))
-        .ok()?;
-    setting.get_value::<u32, _>(value).ok()
-}
-
-/// DESK-22 (#171)：把「回读到的值」翻译成结果。
-///
-/// 抽成纯函数是刻意的——提权那半只能真机手测（要 UAC 交互、要改这台机器的
-/// 电源设置），但**「回读不是 0 就不许报成功」这条判据本身**可以在不提权、
-/// 不改任何设置的前提下锁成断言。判据一旦松掉（比如有人图省事让 `None` 也
-/// 返回 `Done`），单测必须立刻红。
-fn verdict_from_readback(before: Option<u32>, after: Option<u32>) -> Result<crate::Applied> {
-    match after {
-        Some(0) => Ok(crate::Applied::Done),
-        Some(seconds) => Err(PlatformError::Failed {
-            action: "disable_auto_sleep",
-            detail: format!(
-                "powercfg 报了成功，但回读到空闲睡眠仍是 {seconds} 秒（改动前 {before:?}）——设置没有生效"
-            ),
-        }),
-        None => Err(PlatformError::Failed {
-            action: "disable_auto_sleep",
-            detail: "powercfg 报了成功，但读不回设置值，无法确认是否生效".into(),
-        }),
-    }
-}
-
-/// 以管理员身份、**隐藏窗口**地跑 `powercfg.exe`，等它结束并检查退出码。
-///
-/// 为什么不用 `std::process::Command`：只有 shell 的 `runas` 动词能触发 UAC，
-/// `CreateProcess`（`Command` 走的那条）做不到提权。
-///
-/// 为什么 `SW_HIDE`：`powercfg.exe` 是 console 子系统程序，桌面壳自己是 GUI
-/// 子系统、手上没有控制台，不隐藏的话 Windows 会给它新分配一个 ⇒ 闪一下黑窗。
-/// 这正是 DESK-19 (#168) 修过的那一类。`ShellExecuteEx` **不接受**
-/// `CREATE_NO_WINDOW`（那是 `CreateProcess` 的标志），`nShow` 是唯一的手柄。
-/// ⚠️ 这一条只能真机肉眼验，代码里锁不住——列在 #171 的手测清单第一条。
-fn elevated_powercfg(params: &str) -> Result<()> {
-    use std::os::windows::ffi::OsStrExt as _;
-    use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_CANCELLED};
-    use windows_sys::Win32::System::Threading::{
-        GetExitCodeProcess, WaitForSingleObject, INFINITE,
-    };
-    use windows_sys::Win32::UI::Shell::{
-        ShellExecuteExW, SEE_MASK_NOASYNC, SEE_MASK_NOCLOSEPROCESS, SHELLEXECUTEINFOW,
-    };
-    use windows_sys::Win32::UI::WindowsAndMessaging::SW_HIDE;
-
-    fn wide(s: &str) -> Vec<u16> {
-        std::ffi::OsStr::new(s)
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect()
-    }
-    let verb = wide("runas");
-    let file = wide("powercfg.exe");
-    let args = wide(params);
-
-    let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
-    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
-    // NOCLOSEPROCESS: 要拿到进程句柄才能等它结束、读退出码。
-    // NOASYNC: 本调用返回后我们还要立刻回读注册表，必须确保动作已经完成。
-    info.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_NOASYNC;
-    info.lpVerb = verb.as_ptr();
-    info.lpFile = file.as_ptr();
-    info.lpParameters = args.as_ptr();
-    info.nShow = SW_HIDE;
-
-    // SAFETY: info 已零初始化并填好 cbSize；三个宽字符串都是 NUL 结尾且在
-    // 整个调用期间存活（它们的所有权在本函数栈上，晚于本次调用释放）。
-    let started = unsafe { ShellExecuteExW(&mut info) };
-    if started == 0 {
-        // SAFETY: 紧跟失败调用之后读取本线程的错误码。
-        let code = unsafe { GetLastError() };
-        // 用户在 UAC 上点了「否」——这不是失败，是他的选择。
-        if code == ERROR_CANCELLED {
-            return Err(PlatformError::Cancelled {
-                action: "disable_auto_sleep",
-            });
-        }
-        return Err(PlatformError::Failed {
-            action: "disable_auto_sleep",
-            detail: format!("提权启动失败（Win32 错误码 {code}）"),
-        });
-    }
-
-    if info.hProcess.is_null() {
-        // 拿不到句柄就等不了、也读不到退出码。不装作成功——反正后面还有
-        // 回读兜底，但这里先把"没法确认"说出来。
-        return Err(PlatformError::Failed {
-            action: "disable_auto_sleep",
-            detail: "提权进程已启动，但拿不到句柄，无法确认它是否跑完".into(),
-        });
-    }
-
-    // SAFETY: hProcess 由 SEE_MASK_NOCLOSEPROCESS 保证有效，且下面只用一次。
-    unsafe { WaitForSingleObject(info.hProcess, INFINITE) };
-    let mut exit_code: u32 = 0;
-    // SAFETY: 同上；exit_code 是栈上的 u32 出参。
-    let got = unsafe { GetExitCodeProcess(info.hProcess, &mut exit_code) };
-    // SAFETY: 同上；之后不再使用该句柄。
-    unsafe { CloseHandle(info.hProcess) };
-
-    if got == 0 {
-        return Err(PlatformError::Failed {
-            action: "disable_auto_sleep",
-            detail: "读不到提权进程的退出码，无法确认它是否成功".into(),
-        });
-    }
-    if exit_code != 0 {
-        return Err(PlatformError::Failed {
-            action: "disable_auto_sleep",
-            detail: format!("powercfg 退出码 {exit_code}"),
-        });
-    }
-    // ⚠️ 退出码 0 **不代表设置生效**（见 disable_auto_sleep 的注释）。
-    // 判定交给调用方的回读。
-    Ok(())
-}
-
 /// RAII wrapper over the execution state held by the dedicated awake
 /// thread (see `assert_awake`). Dropping disconnects the channel; the
 /// thread clears its own state and is joined here.
@@ -1381,57 +1239,6 @@ impl Drop for ExecutionStateGuard {
         drop(self.release.take());
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
-        }
-    }
-}
-
-/// DPAPI-protected key files under the data dir — only this Windows
-/// user (on this machine) can decrypt them.
-struct DpapiStore {
-    dir: PathBuf,
-}
-
-impl DpapiStore {
-    fn path(&self, name: &str) -> PathBuf {
-        // Names are internal identifiers (e.g. "device-key"), sanitized
-        // defensively anyway.
-        let safe: String = name
-            .chars()
-            .map(|c| {
-                if c.is_ascii_alphanumeric() || c == '-' {
-                    c
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        self.dir.join(format!("{safe}.dpapi"))
-    }
-}
-
-impl KeyStore for DpapiStore {
-    fn store(&self, name: &str, secret: &[u8]) -> Result<()> {
-        std::fs::create_dir_all(&self.dir).map_err(io_err("create keys dir"))?;
-        let blob = dpapi_protect(secret)?;
-        std::fs::write(self.path(name), blob).map_err(io_err("write key blob"))?;
-        Ok(())
-    }
-
-    fn load(&self, name: &str) -> Result<Option<Vec<u8>>> {
-        let path = self.path(name);
-        let blob = match std::fs::read(&path) {
-            Ok(b) => b,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(io_err("read key blob")(e)),
-        };
-        dpapi_unprotect(&blob).map(Some)
-    }
-
-    fn delete(&self, name: &str) -> Result<()> {
-        match std::fs::remove_file(self.path(name)) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(io_err("delete key blob")(e)),
         }
     }
 }
@@ -1679,77 +1486,6 @@ pub(crate) fn restore_dacl(dir: &Path, original: &[u8]) {
             std::ptr::null(),
         )
     };
-}
-
-fn dpapi_protect(data: &[u8]) -> Result<Vec<u8>> {
-    use windows_sys::Win32::Foundation::LocalFree;
-    use windows_sys::Win32::Security::Cryptography::{CryptProtectData, CRYPT_INTEGER_BLOB};
-    let input = CRYPT_INTEGER_BLOB {
-        cbData: data.len() as u32,
-        pbData: data.as_ptr() as *mut u8,
-    };
-    let mut output = CRYPT_INTEGER_BLOB {
-        cbData: 0,
-        pbData: std::ptr::null_mut(),
-    };
-    // SAFETY: input points at valid memory for the duration of the call;
-    // on success output is a LocalAlloc'd buffer we copy then free.
-    let ok = unsafe {
-        CryptProtectData(
-            &input,
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            0,
-            &mut output,
-        )
-    };
-    if ok == 0 {
-        return Err(PlatformError::Failed {
-            action: "CryptProtectData",
-            detail: "returned FALSE".into(),
-        });
-    }
-    let blob =
-        unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
-    unsafe { LocalFree(output.pbData as _) };
-    Ok(blob)
-}
-
-fn dpapi_unprotect(blob: &[u8]) -> Result<Vec<u8>> {
-    use windows_sys::Win32::Foundation::LocalFree;
-    use windows_sys::Win32::Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB};
-    let input = CRYPT_INTEGER_BLOB {
-        cbData: blob.len() as u32,
-        pbData: blob.as_ptr() as *mut u8,
-    };
-    let mut output = CRYPT_INTEGER_BLOB {
-        cbData: 0,
-        pbData: std::ptr::null_mut(),
-    };
-    // SAFETY: as in dpapi_protect.
-    let ok = unsafe {
-        CryptUnprotectData(
-            &input,
-            std::ptr::null_mut(),
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            0,
-            &mut output,
-        )
-    };
-    if ok == 0 {
-        return Err(PlatformError::Failed {
-            action: "CryptUnprotectData",
-            detail: "returned FALSE (wrong user or corrupted blob)".into(),
-        });
-    }
-    let data =
-        unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
-    unsafe { LocalFree(output.pbData as _) };
-    Ok(data)
 }
 
 #[cfg(test)]
@@ -2099,73 +1835,6 @@ mod qa09_migrated_capability_tests {
     }
 }
 
-#[cfg(test)]
-mod desk22_disable_auto_sleep_tests {
-    use super::*;
-
-    /// 唯一可信的成功条件：回读到 0。
-    #[test]
-    fn readback_zero_is_the_only_success() {
-        assert_eq!(
-            verdict_from_readback(Some(1200), Some(0)).unwrap(),
-            crate::Applied::Done
-        );
-    }
-
-    /// 回读仍是非零 ⇒ 没生效，必须报错。
-    ///
-    /// 这条守的是那个实测事实：非管理员下 `powercfg /x` 退出码是 0 但注册表
-    /// 没被写。谁把判据放松成"退出码 0 就算成功"，这里必须红。
-    #[test]
-    fn readback_nonzero_must_not_be_reported_as_success() {
-        let e = verdict_from_readback(Some(1200), Some(1200)).unwrap_err();
-        let msg = e.to_string();
-        assert!(msg.contains("1200"), "错误信息要带上实际读到的值：{msg}");
-        assert!(msg.contains("没有生效"), "错误信息要说清没生效：{msg}");
-    }
-
-    /// 读不回值 ⇒ **不许**当成功。「没法确认」不等于「成功」——
-    /// 这是 fail-closed 的方向，放松它就是静默放行。
-    #[test]
-    fn unreadable_state_must_not_be_reported_as_success() {
-        assert!(verdict_from_readback(None, None).is_err());
-        assert!(verdict_from_readback(Some(0), None).is_err());
-    }
-
-    /// DESK-30 (#294) RED：AC / DC 取最小正数，与 macOS `parse_pmset` 同口径。
-    /// `(0, 1200)` 与 `(1200, 600)` 是「只看 AC」会答错的两组。
-    #[test]
-    fn desk30_power_hint_takes_the_smallest_positive_of_ac_and_dc() {
-        let sleeps = |minutes| PowerHint::SleepsWhenIdle { minutes };
-        assert_eq!(hint_from_standby(Some(0), Some(0)), PowerHint::NeverSleeps);
-        assert_eq!(hint_from_standby(Some(0), Some(1200)), sleeps(20));
-        assert_eq!(hint_from_standby(Some(1200), Some(0)), sleeps(20));
-        assert_eq!(hint_from_standby(Some(600), Some(1200)), sleeps(10));
-        assert_eq!(hint_from_standby(Some(1200), Some(600)), sleeps(10));
-    }
-
-    #[test]
-    fn desk30_power_hint_with_values_missing() {
-        assert_eq!(hint_from_standby(None, None), PowerHint::Unknown);
-        assert_eq!(hint_from_standby(Some(0), None), PowerHint::NeverSleeps);
-        assert_eq!(
-            hint_from_standby(None, Some(90)),
-            PowerHint::SleepsWhenIdle { minutes: 2 }
-        );
-    }
-
-    /// 取消是独立的一类，不能被归成失败——否则 UI 会把用户自己的选择
-    /// 说成出错。
-    #[test]
-    fn cancelled_is_its_own_variant_not_a_failure() {
-        let c = PlatformError::Cancelled {
-            action: "disable_auto_sleep",
-        };
-        assert!(matches!(c, PlatformError::Cancelled { .. }));
-        assert!(c.to_string().contains("取消"), "{c}");
-    }
-}
-
 /// DESK-52 (#787)：TerminateProcess 给被杀进程的退出码。与 `taskkill /F`
 /// 一致用 1——非零，表示「不是自己正常退出的」。
 const KILLED_EXIT_CODE: u32 = 1;
@@ -2203,7 +1872,7 @@ pub fn kill_verdict(results: &[ProcessKill]) -> Result<crate::KillOutcome> {
         .collect();
     if !failures.is_empty() {
         return Err(PlatformError::Failed {
-            action: "kill_daemon_process",
+            action: "stop_daemon",
             detail: failures.join("; "),
         });
     }
@@ -2214,23 +1883,78 @@ pub fn kill_verdict(results: &[ProcessKill]) -> Result<crate::KillOutcome> {
     }
 }
 
-/// DESK-52 (#787)：结束**当前登录会话里**所有映像名为 `exe_name` 的进程。
+/// DESK-52 (#787) / B7（#1043）：结束**当前登录会话里**、映像完整路径就是
+/// `exe` 的进程，并等它们真的退出。
 ///
 /// 为什么不再用 `taskkill /F /IM`：
 /// 1. 它是 console 程序，从桌面壳拉起会闪黑窗——这是 #787 的症状；
 /// 2. 结论要靠解析它的退出码（128 = 没找到），判据依赖一个外部程序的约定；
 /// 3. `/IM` 按名字杀**整台机器**上能杀的同名进程，不分会话。
 ///
-/// 现在：进程快照 → 按映像名（不区分大小写）匹配 → 只留与本进程同一
-/// 会话（session）的 → `OpenProcess` + `TerminateProcess` → 等它真的退出。
-/// 只杀本会话的，是因为 daemon 由本用户的 Run key 拉起、跑在本会话里；
-/// 别的会话（快速用户切换的另一个用户）的 daemon 不归我们管。
-fn kill_processes_named(exe_name: &str) -> Result<crate::KillOutcome> {
-    let results: Vec<ProcessKill> = processes_named_in_this_session(exe_name)?
+/// 现在：进程快照 → 映像名（不区分大小写）先粗筛 → 只留与本进程同一会话
+/// （session）的 → `QueryFullProcessImageNameW` 核对完整路径（#1043：别处的
+/// 同名副本不算）→ `OpenProcess` + `TerminateProcess` → 等它真的退出。
+/// `pid_hint`（daemon 自报的 pid）优先：同会话、映像**文件名**对得上就结束它
+/// （防 pid 复用；不核对目录——应答 IPC 的 daemon 跑在别处时改前也停得掉）；
+/// 其余候选必须完整路径对得上。
+/// 只杀本会话的，是因为 daemon 由本用户的计划任务拉起、跑在本会话
+/// 里；别的会话（快速用户切换的另一个用户）的 daemon 不归我们管。
+fn stop_processes_at(exe: &Path, pid_hint: Option<u32>) -> Result<crate::KillOutcome> {
+    let want = std::fs::canonicalize(exe).unwrap_or_else(|_| exe.to_path_buf());
+    let Some(name) = exe.file_name().and_then(|n| n.to_str()) else {
+        return Ok(crate::KillOutcome::NotRunning);
+    };
+    // 快照已按映像名 + 本会话筛过，所以 hint 在里面 = 同名同会话。
+    let pids = processes_named_in_this_session(name)?;
+    let hinted = pid_hint.filter(|h| pids.contains(h));
+    let results: Vec<ProcessKill> = hinted
         .into_iter()
+        .chain(pids.into_iter().filter(|&pid| {
+            Some(pid) != hinted
+                && image_path(pid)
+                    .map(|p| std::fs::canonicalize(&p).unwrap_or(p))
+                    .is_some_and(|p| same_image_path(&p, &want))
+        }))
         .map(terminate_and_wait)
         .collect();
     kill_verdict(&results)
+}
+
+/// 进程映像的完整 Win32 路径；打不开（别人的进程、已经退了）= `None`。
+fn image_path(pid: u32) -> Option<PathBuf> {
+    use std::os::windows::ffi::OsStringExt as _;
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    // SAFETY: 参数都是值；空句柄表示失败。
+    let h = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid) };
+    if h.is_null() {
+        return None;
+    }
+    let mut buf = vec![0u16; 32_768];
+    let mut len = buf.len() as u32;
+    // SAFETY: h 有效；buf 与 len 如实描述本函数持有的缓冲区。
+    let ok =
+        unsafe { QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len) }
+            != 0;
+    // SAFETY: h 是本函数打开的有效句柄，只关一次。
+    unsafe { CloseHandle(h) };
+    ok.then(|| PathBuf::from(std::ffi::OsString::from_wide(&buf[..len as usize])))
+}
+
+/// 两个映像路径是不是同一个文件：Windows 路径不区分大小写，`canonicalize`
+/// 会加 `\\?\` 前缀而 `QueryFullProcessImageNameW` 不加，比较前都去掉。
+/// 两边都要先 `canonicalize`：进程映像名保留拉起时用的写法，可能是 8.3 短名
+/// （GitHub Windows runner 的 TEMP 是 `C:\Users\RUNNER~1\…`），只规范一边
+/// 就会把同一个文件判成两个。
+fn same_image_path(a: &Path, b: &Path) -> bool {
+    fn norm(p: &Path) -> String {
+        let s = p.to_string_lossy().replace('/', "\\");
+        s.strip_prefix(r"\\?\").unwrap_or(&s).to_lowercase()
+    }
+    norm(a) == norm(b)
 }
 
 /// 本会话里映像名为 `exe_name` 的进程 pid（不含本进程自己）。
@@ -2252,7 +1976,7 @@ fn processes_named_in_this_session(exe_name: &str) -> Result<Vec<u32>> {
     // SAFETY: 无前置条件；失败时返回 INVALID_HANDLE_VALUE。
     let me = unsafe { GetCurrentProcessId() };
     let my_session = session_of(me).ok_or_else(|| PlatformError::Failed {
-        action: "kill_daemon_process",
+        action: "stop_daemon",
         // SAFETY: 紧跟失败调用之后读取本线程的错误码。
         detail: format!("读不到本进程的会话号（Win32 错误 {}）", unsafe {
             GetLastError()
@@ -2263,7 +1987,7 @@ fn processes_named_in_this_session(exe_name: &str) -> Result<Vec<u32>> {
     let snap = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
     if snap == INVALID_HANDLE_VALUE {
         return Err(PlatformError::Failed {
-            action: "kill_daemon_process",
+            action: "stop_daemon",
             // SAFETY: 紧跟失败调用之后读取本线程的错误码。
             detail: format!("进程快照失败（Win32 错误 {}）", unsafe {
                 GetLastError()
@@ -2346,6 +2070,52 @@ fn terminate_and_wait(pid: u32) -> ProcessKill {
 /// `apps/desktop/src-tauri/src/lib.rs`，随被测函数一起搬过来。
 /// 判据一个字没改，只是换了地方——搬家途中丢掉判别力是本次迁移最大的风险。
 #[cfg(test)]
+mod b10_known_folder_tests {
+    use super::*;
+
+    /// #1043（B10）：家目录与「图片」目录走 Known Folder，真调系统 API。
+    /// 默认配置下「图片」在家目录里；只断言绝对路径 + 名字非空，不假设盘符。
+    #[test]
+    fn known_folders_resolve_to_absolute_paths() {
+        let a = WindowsAdapter::new();
+        let home = a.home_dir().expect("FOLDERID_Profile");
+        let pictures = a.pictures_dir().expect("FOLDERID_Pictures");
+        assert!(home.is_absolute(), "{}", home.display());
+        assert!(pictures.is_absolute(), "{}", pictures.display());
+        assert_ne!(home, pictures);
+    }
+
+    /// #1043：「文件被占用」只认 32 / 5 两个错误码。
+    #[test]
+    fn file_in_use_os_errors() {
+        let a = WindowsAdapter::new();
+        assert!(a.is_file_in_use_os_error(32));
+        assert!(a.is_file_in_use_os_error(5));
+        assert!(!a.is_file_in_use_os_error(2)); // 找不到文件
+        assert!(!a.is_file_in_use_os_error(-1));
+    }
+
+    /// #1043：界面层的平台能力（原先前端按平台名 switch 判出来的三项）。
+    #[test]
+    fn windows_ui_capabilities() {
+        let a = WindowsAdapter::new();
+        assert!(a.close_to_tray_hint());
+        assert!(!a.overlay_titlebar());
+        assert_eq!(a.sleep_owner(), Some(crate::SleepOwner::Daemon));
+    }
+
+    /// #1043（B6）/ #1056：真调 `GetUserPreferredUILanguages`，读得到、形状对（如 `en-US`）。
+    #[test]
+    fn user_ui_language_is_readable() {
+        let tag = WindowsAdapter::new()
+            .system_locale()
+            .expect("GetUserPreferredUILanguages");
+        assert!(!tag.is_empty() && !tag.contains('\0'), "{tag:?}");
+        println!("system_locale = {tag}");
+    }
+}
+
+#[cfg(test)]
 mod desk24_data_dir_tests {
     use super::*;
 
@@ -2399,43 +2169,6 @@ mod desk24_data_dir_tests {
     fn the_directory_name_is_the_bundle_identifier() {
         assert_eq!(DATA_DIR_NAME, "com.p-pass.desktop");
         assert_eq!(current_data_dir().file_name().unwrap(), DATA_DIR_NAME);
-    }
-
-    /// 卡面验收标准第 3 条点名的那条性质：**DPAPI 密文搬了位置照样解得开。**
-    ///
-    /// 用的是真的 `CryptProtectData` / `CryptUnprotectData`，不是模拟——
-    /// DPAPI 的用户态密钥挂在 Windows 账户上，与密文文件躺在哪个目录毫无
-    /// 关系，所以同机搬家不影响解密。**跨机器才解不开**，而那正是本卡要
-    /// 把数据目录挪出漫游目录的理由。
-    ///
-    /// 今天产品代码还没有一处调 `key_store()`（身份密钥是 data_dir 里的
-    /// 明文文件，等 T-071 才进系统密钥仓），所以真机上没有密文可验。
-    /// 这条把性质本身钉死，等密文真落地时不必回头补。
-    #[test]
-    fn a_dpapi_blob_still_decrypts_after_its_directory_moves() {
-        let tmp = tempfile::tempdir().unwrap();
-        let legacy_keys = tmp.path().join("Roaming").join("P-Pass").join("keys");
-        let current = tmp.path().join("Local").join("com.p-pass.desktop");
-        let secret = b"32-bytes-of-pretend-device-key!!";
-
-        let before = DpapiStore {
-            dir: legacy_keys.clone(),
-        };
-        before.store("device-key", secret).unwrap();
-        assert!(legacy_keys.join("device-key.dpapi").is_file());
-
-        // 搬家：同一台机器、同一个 Windows 用户，换个目录。
-        std::fs::create_dir_all(&current).unwrap();
-        std::fs::rename(&legacy_keys, current.join("keys")).unwrap();
-
-        let after = DpapiStore {
-            dir: current.join("keys"),
-        };
-        assert_eq!(
-            after.load("device-key").unwrap().as_deref(),
-            Some(&secret[..]),
-            "同机搬家之后必须还解得开"
-        );
     }
 
     /// 适配器返回的是**生效**目录：两者都不存在（全新安装）时应当是新位置。
@@ -2660,25 +2393,33 @@ mod desk52_kill_tests {
         assert!(e.to_string().contains("pid 42"), "{e}");
     }
 
-    /// 真机：一个必然不存在的映像名 ⇒ NotRunning。
+    /// 真机：一个必然不存在的映像 ⇒ NotRunning。
     #[test]
     fn real_missing_process_is_not_running() {
         assert_eq!(
-            kill_processes_named("p-pass-no-such-process-zzz.exe").unwrap(),
+            stop_processes_at(
+                Path::new(r"C:\no\such\p-pass-no-such-process-zzz.exe"),
+                None
+            )
+            .unwrap(),
             KillOutcome::NotRunning
         );
     }
 
-    /// 真机：把测试二进制复制成一个独一无二的名字拉起来，按名字杀掉它。
-    /// 验三件事：报 Killed；返回时它**已经**退出（不是还在退）；再杀一次
-    /// 报 NotRunning。
     #[test]
-    fn kills_a_running_process_and_waits_for_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let name = format!("ppf-desk52-probe-{}.exe", std::process::id());
-        let exe = dir.path().join(&name);
-        std::fs::copy(std::env::current_exe().unwrap(), &exe).unwrap();
-        let mut child = std::process::Command::new(&exe)
+    fn image_paths_compare_case_insensitively_without_verbatim_prefix() {
+        assert!(same_image_path(
+            Path::new(r"\\?\C:\Users\X\AppData\Local\P-Pass\ppf-daemon.exe"),
+            Path::new(r"c:\users\x\appdata\local\p-pass\PPF-DAEMON.EXE"),
+        ));
+        assert!(!same_image_path(
+            Path::new(r"C:\Users\X\AppData\Local\P-Pass\ppf-daemon.exe"),
+            Path::new(r"C:\dev\target\debug\ppf-daemon.exe"),
+        ));
+    }
+
+    fn spawn_probe(exe: &Path) -> std::process::Child {
+        std::process::Command::new(exe)
             .args([
                 "--exact",
                 "windows::desk52_kill_tests::kill_probe_child",
@@ -2689,31 +2430,63 @@ mod desk52_kill_tests {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .unwrap();
+            .unwrap()
+    }
 
-        // 等它出现在快照里，免得把「还没起来」测成 NotRunning。
+    /// 真机：把测试二进制复制成一个独一无二的名字，在两个目录各放一份拉起来，
+    /// 按**其中一份的完整路径**结束它。验四件事：报 Killed；返回时它**已经**
+    /// 退出（不是还在退）；另一个目录里的同名副本还活着（B7 #1043：反证——
+    /// 判据退回按映像名就会把它一起杀掉）；再停一次报 NotRunning。
+    #[test]
+    fn kills_a_running_process_and_waits_for_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let name = format!("ppf-desk52-probe-{}.exe", std::process::id());
+        let exe = dir.path().join("bundle").join(&name);
+        let decoy = dir.path().join("dev").join(&name);
+        for p in [&exe, &decoy] {
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::copy(std::env::current_exe().unwrap(), p).unwrap();
+        }
+        let mut child = spawn_probe(&exe);
+        let mut decoy_child = spawn_probe(&decoy);
+
+        // 等两份都出现在快照里，免得把「还没起来」测成 NotRunning。
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while processes_named_in_this_session(&name).unwrap().is_empty() {
+        while processes_named_in_this_session(&name).unwrap().len() < 2 {
             assert!(std::time::Instant::now() < deadline, "探针进程没起来");
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
 
-        assert_eq!(kill_processes_named(&name).unwrap(), KillOutcome::Killed);
+        assert_eq!(stop_processes_at(&exe, None).unwrap(), KillOutcome::Killed);
         let status = child
             .try_wait()
             .unwrap()
             .expect("kill 返回时进程必须已经退出");
         assert_eq!(status.code(), Some(KILLED_EXIT_CODE as i32));
+        assert!(
+            decoy_child.try_wait().unwrap().is_none(),
+            "别处的同名副本被误杀"
+        );
         assert_eq!(
-            kill_processes_named(&name).unwrap(),
+            stop_processes_at(&exe, None).unwrap(),
             KillOutcome::NotRunning
+        );
+        // daemon 自报的 pid 优先：跑在别处的同名 daemon 只要是它在应答 IPC，
+        // 照样停得掉（同改前按映像名的覆盖面）。
+        assert_eq!(
+            stop_processes_at(&exe, Some(decoy_child.id())).unwrap(),
+            KillOutcome::Killed
+        );
+        assert!(
+            decoy_child.try_wait().unwrap().is_some(),
+            "hint 指向的进程应已退出"
         );
     }
 
     /// Windows 的文件名就是基名加 `.exe`——两者漂开会让按名字杀进程打空。
     #[test]
     fn executable_name_is_the_stem_plus_exe() {
-        use crate::PlatformAdapter as _;
+        use crate::HostingAdapter as _;
         assert_eq!(
             WindowsAdapter::new().daemon_executable_name(),
             format!("{}.exe", crate::DAEMON_EXECUTABLE_STEM)
@@ -2899,14 +2672,14 @@ mod desk58_stderr_capture_tests {
     fn the_startup_stderr_file_sits_next_to_the_daemon_log() {
         let dir = Path::new(r"C:\data");
         let a = WindowsAdapter::new();
+        let paths = a.daemon_log_paths(dir);
+        assert_eq!(paths.stderr, Some(dir.join("logs").join("daemon.err")));
         assert_eq!(
-            a.startup_stderr_file(dir),
-            Some(dir.join("logs").join("daemon.err"))
+            paths.stderr.as_deref().unwrap().parent(),
+            paths.log_file.as_deref().unwrap().parent()
         );
-        assert_eq!(
-            a.startup_stderr_file(dir).unwrap().parent(),
-            a.default_log_file(dir).unwrap().parent()
-        );
+        assert_eq!(paths.stdout, None);
+        assert!(!paths.stdio_by_service_manager, "daemon 自己接 stderr");
     }
 }
 

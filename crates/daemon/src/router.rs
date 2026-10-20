@@ -402,9 +402,7 @@ impl Router {
             methods::PAIR_STATUS => self.handle_pair_status(peer, req),
             methods::PAIR_CANCEL => self.handle_pair_cancel(peer, req).await,
             methods::DEVICE_UNPAIR => self.handle_unpair(peer, req).await,
-            methods::FLOW_OFFER | methods::FLOW_FETCH | methods::FLOW_CANCEL => {
-                self.handle_flow_delivery(peer, req).await
-            }
+            methods::FLOW_OFFER => self.handle_flow_delivery(peer, req).await,
             methods::FLOW_STATUS | methods::FLOW_SUSPEND | methods::FLOW_CANCEL_TUPLE => {
                 self.handle_flow_control(peer, req).await
             }
@@ -530,8 +528,10 @@ impl Router {
         }
     }
 
-    /// New Flow control plane: offer → native fetch → durable receipt, or
-    /// exact cancellation. It does not call the frozen batch backup engine.
+    /// `flow.offer`: registers the grant and starts the native fetch task.
+    /// The result is read through `flow.status` / the delivered push; this
+    /// call never blocks on the data plane. It does not call the frozen
+    /// batch backup engine.
     async fn handle_flow_delivery(&self, peer: transport::NodeId, req: &Req) -> Resp {
         let Some(delivery) = &self.flow_delivery else {
             return Resp::err(
@@ -551,15 +551,7 @@ impl Router {
         // it from a push it had not subscribed for yet, and fell back to a
         // 30s local-idle timeout. It now answers with the same
         // `FlowStatusReply` a `status()` call would give.
-        let result = match req.method.as_str() {
-            methods::FLOW_OFFER => delivery.offer(peer, &flow).await.map(serde_json::to_value),
-            methods::FLOW_FETCH => delivery.fetch(peer, &flow).await.map(serde_json::to_value),
-            methods::FLOW_CANCEL => delivery
-                .cancel(peer, &flow)
-                .await
-                .map(|_| Ok(serde_json::Value::Null)),
-            _ => unreachable!("dispatch only calls this for flow methods"),
-        };
+        let result = delivery.offer(peer, &flow).await.map(serde_json::to_value);
         match result {
             Ok(Ok(value)) => Resp::ok(req.id.clone(), value),
             Ok(Err(_)) => Resp::err(
@@ -881,8 +873,9 @@ impl Router {
         }
     }
 
-    /// `pair.request` (T-031): token check → owner confirmation → device
-    /// row → PairAccepted. Every rejection is the same NOT_AUTHORIZED —
+    /// `pair.request` (T-031): token check → queued for owner confirmation
+    /// → `PairSubmitted`; the verdict (and the device row) comes through
+    /// `pair.status`. Every token rejection is the same NOT_AUTHORIZED —
     /// a prober learns nothing about which part failed.
     async fn handle_pair(&self, peer: transport::NodeId, req: &Req) -> Resp {
         let Some(pairing) = &self.pairing else {
@@ -897,43 +890,30 @@ impl Router {
                 RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
             );
         };
+        // #1050: the blocking shape (hold the RPC open until the owner
+        // clicks) is retired. A request that does not ask for accept-then-
+        // poll comes from a phone older than the supported minimum; say so
+        // explicitly instead of silently serving it the new shape it cannot
+        // decode. Checked before the token so an old phone never burns a
+        // one-time token on a reply it cannot read.
+        if !pair_req.ack_then_poll {
+            return Resp::err(
+                req.id.clone(),
+                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+            );
+        }
         // NET-10 (#128): accept-then-poll — answer as soon as the request
         // is queued; the verdict is read through `pair.status`. A bad or
         // replayed token is still the same immediate NOT_AUTHORIZED.
-        if pair_req.ack_then_poll {
-            return match pairing.submit_request(peer, &pair_req, (self.now)()).await {
-                Ok(sub) => ok_json(
-                    &req.id,
-                    &proto::PairSubmitted {
-                        accepted: true,
-                        request_id: sub.request_id,
-                        ttl_ms: sub.ttl_ms,
-                    },
-                ),
-                Err(_) => {
-                    self.record_denial(peer, methods::PAIR_REQUEST, diag::keys::ERR_NOT_AUTHORIZED)
-                        .await;
-                    Resp::err(
-                        req.id.clone(),
-                        RespError::new(codes::NOT_AUTHORIZED, diag::keys::ERR_NOT_AUTHORIZED),
-                    )
-                }
-            };
-        }
-        match pairing.handle_request(peer, &pair_req, (self.now)()).await {
-            Ok(pairing_epoch) => {
-                let accepted = proto::PairAccepted {
-                    storage_device_name: self.device_name.clone(),
-                    pairing_epoch,
-                };
-                match serde_json::to_value(&accepted) {
-                    Ok(v) => Resp::ok(req.id.clone(), v),
-                    Err(_) => Resp::err(
-                        req.id.clone(),
-                        RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
-                    ),
-                }
-            }
+        match pairing.submit_request(peer, &pair_req, (self.now)()).await {
+            Ok(sub) => ok_json(
+                &req.id,
+                &proto::PairSubmitted {
+                    accepted: true,
+                    request_id: sub.request_id,
+                    ttl_ms: sub.ttl_ms,
+                },
+            ),
             Err(_) => {
                 self.record_denial(peer, methods::PAIR_REQUEST, diag::keys::ERR_NOT_AUTHORIZED)
                     .await;
@@ -1044,12 +1024,12 @@ impl Router {
         let revoked = match epoch {
             Some(epoch) => {
                 self.db
-                    .revoke_pairing(&peer.0, epoch, storage::RevokedBy::Device, unix_ms_now())
+                    .revoke_pairing(&peer.0, epoch, storage::RevokedBy::Device, (self.now)())
                     .await
             }
             None => {
                 self.db
-                    .revoke(&peer.0, storage::RevokedBy::Device, unix_ms_now())
+                    .revoke(&peer.0, storage::RevokedBy::Device, (self.now)())
                     .await
             }
         };
@@ -1059,16 +1039,18 @@ impl Router {
                 Resp::ok(req.id.clone(), serde_json::json!({ "unpaired": false }))
             }
             Ok(_) => {
-                let _ = self
-                    .db
-                    .append_audit(&storage::AuditEntry::local(
-                        unix_ms_now(),
-                        Some(peer.0.to_vec()), // 设备自我撤销（UX-06）
-                        "device.unpaired",
-                        None,
-                        None,
-                    ))
-                    .await;
+                crate::pairing::warn_if_audit_failed(
+                    "device.unpaired",
+                    self.db
+                        .append_audit(&storage::AuditEntry::local(
+                            (self.now)(),
+                            Some(peer.0.to_vec()), // 设备自我撤销（UX-06）
+                            "device.unpaired",
+                            None,
+                            None,
+                        ))
+                        .await,
+                );
                 // IPC-02: 设备自我断开——桌面设备行即时刷新。
                 // DEV-03：刷新后它仍在列表里，状态变成「已断开」，不再消失。
                 if let Some(bus) = &self.events {

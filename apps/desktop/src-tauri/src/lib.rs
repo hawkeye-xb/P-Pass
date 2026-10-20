@@ -1,18 +1,28 @@
-//! P-Pass tray shell (T-041, ADR-012): zero business logic — every
-//! command is a thin forward to the daemon's local IPC.
+//! P-Pass 桌面壳（T-041, ADR-012）：壳 = UI + 托管（#1046，S3）。
+//!
+//! - **UI**：把 daemon 给出的结论呈现出来、接收输入；业务判断不在这里（经本机
+//!   IPC 与 daemon 的一次性 `config` / `diag` 子命令调用核心）。
+//! - **托管**：mac / Windows 的发行层——拉起 daemon、开机自启登记、用户停服标记、
+//!   更新后新壳启动对账、自动换内核。判据与动作在 [`distribution`]（纯 Rust，不依赖
+//!   Tauri），Tauri command 只负责调用；核心里没有托管代码（门禁 G2/G3）。
 
 // DESK-33 (#325)：clippy.toml 禁止产品代码直接 `Command::new`；单元测试
 // 里的子进程（拉起测试二进制自身等）不面向用户，统一放行。
 #![cfg_attr(test, allow(clippy::disallowed_methods))]
 
-mod daemon_logs;
+mod daemon_cli;
+mod distribution;
 mod ipc;
-mod redact;
 mod service_state;
 
 // QA-09 迁移（#211）：桌面壳现在有 9 个地方要调 platform 的能力，
 // 每个函数各写一遍 `use ... as _` 已经不划算；提到文件级。
-use platform::PlatformAdapter as _;
+use distribution::{
+    daemon_is_unmanaged, is_user_stopped, kernel_convergence_verdict,
+    reconcile_autostart_registration, self_heal_allowed, set_user_stopped, should_pause_for_update,
+    show_wizard, update_resume_needed, KernelFacts, KernelVerdict,
+};
+use platform::{HostingAdapter as _, PlatformAdapter as _};
 use serde_json::{json, Value};
 use service_state::{ServiceState, ServiceStateManager};
 use tauri::menu::{Menu, MenuItem};
@@ -28,10 +38,10 @@ use tauri::Manager;
 
 // ── I18N-03 (#492)：托盘菜单文案 ───────────────────────────────────────
 // 与前端同一份字典：编译期 include_str! 仓库根的 assets/i18n/*.json，不另开
-// 副本。语言判定规则与 `src/lib/i18n.js` 的 `localeFor` 一字不差（zh* → zh，
-// 其它 → en，拿不到 → zh）。系统语言由前端报上来（`set_tray_locale`，传的
-// 就是它自己按 navigator.language 判出来的那个），所以托盘和窗口永远同一种
-// 语言；在前端报到之前（启动后不到一秒），先按 LANG 环境变量猜一次。
+// 副本。系统语言由前端报上来（`set_tray_locale`，传的就是它自己按
+// navigator.language 判出来的 zh / en），所以托盘和窗口永远同一种语言；在前端
+// 报到之前（启动后不到一秒，以及前端还没起来时的安装位置对话框），按平台适配器
+// 的 `system_locale()` 定初值：zh* → zh，其它和读不到 → en（B6，#1043）。
 const I18N_EN: &str = include_str!("../../../../assets/i18n/en.json");
 const I18N_ZH: &str = include_str!("../../../../assets/i18n/zh.json");
 
@@ -62,12 +72,20 @@ fn bring_main_window_to_front(app: &tauri::AppHandle) {
     }
 }
 
-fn tray_locale(lang: &str) -> &'static str {
-    if lang.is_empty() || lang.to_lowercase().starts_with("zh") {
-        "zh"
-    } else {
-        "en"
+/// B6（#1043）：托盘与安装位置对话框的**初始**语言（前端起来后会用
+/// `set_tray_locale` 报它实际用的语言）。系统语言由平台适配器回答；只有明确是
+/// 中文才用中文，读不到一律英文（改前读 `LANG`，为空时默认中文——英文 Windows
+/// 与从访达启动的 macOS GUI 都拿不到 `LANG`，于是显示中文）。
+fn tray_locale(system_locale: Option<&str>) -> &'static str {
+    match system_locale {
+        Some(tag) if tag.trim().to_lowercase().starts_with("zh") => "zh",
+        _ => "en",
     }
+}
+
+/// 本机的 [`tray_locale`]。
+fn system_tray_locale() -> &'static str {
+    tray_locale(platform::adapter().system_locale().as_deref())
 }
 
 /// 取一条托盘文案；key 缺失时退回 key 本身（与前端 t() 同一兜底）。
@@ -80,20 +98,20 @@ fn tray_text(locale: &str, key: &str) -> String {
 }
 
 /// DESK-68 (#996)：本进程是不是从正式安装位置启动的；不是就弹系统对话框说明
-/// 怎么办，返回 `false`。判据在平台层（`PlatformAdapter::is_install_location`）。
+/// 怎么办，返回 `false`。判据在平台层（`HostingAdapter::is_install_location`）。
 ///
 /// 用 rfd 直接弹（tauri-plugin-dialog 的底层，已在依赖树里）：这时 Tauri 还没
 /// 起来，也不该为一个提示把整个应用跑起来。读不到自身路径时放行——拦了用户
 /// 也无从照提示去做。
 fn running_from_install_location() -> bool {
-    let adapter = platform::adapter();
+    let adapter = platform::hosting();
     let Ok(exe) = std::env::current_exe() else {
         return true;
     };
     if adapter.is_install_location(&exe) {
         return true;
     }
-    let locale = tray_locale(&std::env::var("LANG").unwrap_or_default());
+    let locale = system_tray_locale();
     rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Warning)
         .set_title(tray_text(locale, "ui.install_location_required_title"))
@@ -109,7 +127,7 @@ struct TrayMenuItems(Vec<(&'static str, MenuItem<tauri::Wry>)>);
 /// 前端启动时报一次它用的语言，托盘菜单跟着换字。
 #[tauri::command]
 fn set_tray_locale(app: tauri::AppHandle, lang: String) {
-    let locale = tray_locale(&lang);
+    let locale = tray_locale(Some(&lang));
     if let Some(items) = app.try_state::<TrayMenuItems>() {
         for (key, item) in &items.0 {
             let _ = item.set_text(tray_text(locale, key));
@@ -163,8 +181,8 @@ fn validate_asset_file(path: &std::path::Path) -> Result<std::path::PathBuf, Str
 /// Forward one IPC method. The frontend does the rest.
 /// #413 §7: desktop system notification (the low-space warning). The shell
 /// only relays already-localized text; the "when" rule lives in the
-/// frontend (`src/lowSpace.js`), the "how" in the platform adapter
-/// (macOS: osascript, best effort; Windows: not implemented yet, no-op).
+/// daemon (`crates/daemon/src/low_space.rs`, #1044), the "how" in the platform adapter
+/// (macOS: osascript, best effort; Windows: toast, DESK-17).
 #[tauri::command]
 fn notify_system(title: String, body: String) {
     platform::adapter().notify(&title, &body);
@@ -186,8 +204,7 @@ fn daemon_call(app: tauri::AppHandle, method: String, params: Value) -> Result<V
     }
 }
 
-/// Daemon reachable? (tray tooltip + frontend banner)
-#[tauri::command]
+/// Daemon reachable?（壳内部探测用；#1041 起不再注册成前端 command——前端从不 invoke）
 fn daemon_online() -> bool {
     ipc::DaemonHandle::discover()
         .and_then(|d| d.call("status", json!({})))
@@ -201,7 +218,7 @@ fn daemon_online() -> bool {
 fn initial_service_state() -> ServiceState {
     let dir = platform::adapter().data_dir();
     let configured = dir.join("config.toml").exists();
-    let installed = platform::adapter().autostart_installed().unwrap_or(false);
+    let installed = platform::hosting().autostart_installed().unwrap_or(false);
     ServiceState::initial(configured, installed, is_user_stopped(&dir))
 }
 
@@ -222,7 +239,9 @@ fn service_state(app: tauri::AppHandle) -> Value {
 /// ready to talk"; a dropped/failed connection means "not reachable"; the
 /// user's stop marker wins over both. The frontend no longer decides this
 /// from a single `status` call inside `refresh()`.
-#[tauri::command]
+///
+/// #1041：只由 `setup` 调一次，不再注册成前端 command——重复 invoke 会再起一条订阅线程、
+/// 让事件重复（`mark_stream_started` 只是兜底）。
 fn start_event_stream(app: tauri::AppHandle) {
     let manager = app.state::<ServiceStateManager>().inner().clone();
     if !manager.mark_stream_started() {
@@ -317,46 +336,96 @@ fn start_event_stream(app: tauri::AppHandle) {
     });
 }
 
-/// First-run wizard state (T-042): configured = a config.toml exists in
-/// the platform data dir; installed = the daemon has been registered as
-/// a resident service. A config without an installed service means the
-/// wizard was abandoned mid-way — route back into the wizard instead of
-/// dumping the user on a bare "start the service" screen (xixi 实测反馈 3).
+/// First-run wizard state (T-042)：直接回答「要不要显示向导」（`show_wizard`，
+/// 判据见 [`show_wizard`]），外加向导自己要用的预填值。
 /// T-042b: `configured_library_dir` prefills the wizard's folder step from
 /// the existing config, so a oneshot-degraded user (autostart registration
 /// failed → fallback spawn; lib.rs start_daemon Err branch) who bounces back
 /// into the wizard does NOT re-point the library to a fresh empty folder
 /// (orphaned-library risk) — the wizard shows what's already configured.
+///
+/// 服务状态变化时前端要重读这个命令（`service-state` 事件到了就读）——
+/// `show_wizard` 依赖「服务是否在线」，那是 Rust 一侧的状态。
 #[tauri::command]
-fn wizard_state() -> Value {
+fn wizard_state(app: tauri::AppHandle) -> Value {
     let dir = platform::adapter().data_dir();
     // Photos must land somewhere a person can FIND (real walkthrough:
     // "传到哪儿了" had no answer while the library hid in ~/Library).
-    let pictures = dirs_pictures().join("P-Pass 家庭照片库");
-    let installed = platform::adapter().autostart_installed().unwrap_or(false);
-    let configured_dir = configured_library_dir(&dir);
+    let pictures = default_library_dir(platform::adapter().pictures_dir());
+    let installed = platform::hosting().autostart_installed().unwrap_or(false);
+    let online = app.state::<ServiceStateManager>().current() == ServiceState::Running;
     json!({
-        "configured": dir.join("config.toml").exists(),
-        "installed": installed,
-        // DESK-36 (#456)：用户主动停了服务。停服会卸 autostart（installed
-        // 变 false），没有这一位的话重开 App 会被当成「向导中途退出」打回
-        // 完整 onboard（#155 的停服路径）；有了它，前端落回主界面给「启动服务」。
-        "user_stopped": is_user_stopped(&dir),
+        "show_wizard": show_wizard(
+            dir.join("config.toml").exists(),
+            installed,
+            is_user_stopped(&dir),
+            online,
+        ),
         "default_dir": pictures.to_string_lossy(),
         // Some of the library, if the config already points somewhere —
         // the wizard prefills this so re-running it never orphans the
         // existing library (T-042b).
-        "configured_library_dir": configured_dir,
-        // DESK-69 (#997)：平台不再从这里给——前端统一读 plugin-os 的
-        // platform()，一个来源。
+        "configured_library_dir": ipc::read_config_data_dir(&dir),
+        // #1043：平台相关的界面决定由 `platform_ux` 命令给（适配器回答），
+        // 这里不给平台名。
     })
 }
 
-fn dirs_pictures() -> std::path::PathBuf {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_else(|_| ".".into());
-    std::path::PathBuf::from(home).join("Pictures")
+/// B10（#1043）：新建库的默认目录名。固定英文、不随界面语言变——目录名会
+/// 写进 config、出现在资源管理器/访达里，跟着语言变就会一台机器两个名字。
+/// 只影响新建库：已有库的路径存在 config.toml 里，不动。
+const DEFAULT_LIBRARY_DIR_NAME: &str = "P-Pass Library";
+
+/// 新建库的默认位置：「图片」目录（由平台适配器回答）下的
+/// [`DEFAULT_LIBRARY_DIR_NAME`]。读不到「图片」目录时退回当前目录（与改前
+/// 读不到 HOME 时的 `.` 同一口径）。
+fn default_library_dir(pictures: Option<std::path::PathBuf>) -> std::path::PathBuf {
+    pictures
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join(DEFAULT_LIBRARY_DIR_NAME)
+}
+
+/// #1043：界面层要的平台能力，由平台适配器回答——关窗要不要提示「还在后台
+/// 运行」、标题栏是不是透明 Overlay、电脑睡眠由谁负责（决定用哪份向导视图）。
+/// 前端（`platformUx.js`）只读这些字段，自己不判断平台。
+#[tauri::command]
+fn platform_ux() -> Value {
+    let a = platform::adapter();
+    json!({
+        "close_to_tray_hint": a.close_to_tray_hint(),
+        "overlay_titlebar": a.overlay_titlebar(),
+        "sleep_owner": a.sleep_owner().map(platform::SleepOwner::as_str),
+    })
+}
+
+/// #1043：更新失败时给用户看哪句话（i18n key）。「文件被占用」由 Rust 侧判：
+/// 从 std `io::Error` 的 Display 尾巴 `(os error N)` 取系统错误码，含义问平台
+/// 适配器（`is_file_in_use_os_error`），不再在前端用正则匹配各语言的系统原文。
+///
+/// 注：tauri-plugin-updater 2.10 在 Windows 上把 NSIS 安装器拉起来就退出进程，
+/// 安装器覆盖文件失败发生在壳退出之后，到不了这里；能到这里的只有下载 / 写
+/// 临时文件阶段的 io 错误。
+#[tauri::command]
+fn update_failure_key(message: String) -> &'static str {
+    update_failure_key_with(&message, |code| {
+        platform::adapter().is_file_in_use_os_error(code)
+    })
+}
+
+/// [`update_failure_key`] 的纯函数部分（判据注入，三平台都测得到）。
+fn update_failure_key_with(message: &str, is_file_in_use: impl Fn(i32) -> bool) -> &'static str {
+    match os_error_code(message) {
+        Some(code) if is_file_in_use(code) => "ui.update_failed_file_locked",
+        _ => "ui.update_failed",
+    }
+}
+
+/// std `io::Error` 的 Display 以 ` (os error N)` 结尾（Rust 标准库的固定格式，
+/// 与系统语言无关）；取出 N。不是这个形状 = `None`。
+fn os_error_code(message: &str) -> Option<i32> {
+    let rest = message.trim_end().strip_suffix(')')?;
+    let start = rest.rfind("(os error ")? + "(os error ".len();
+    rest[start..].parse().ok()
 }
 
 /// Current sleep policy, humanized for the wizard.
@@ -438,427 +507,41 @@ fn disable_auto_sleep() -> Result<(), String> {
     }
 }
 
-/// DESK-27 (#219)：向导预填用的库目录——读回 config 后**先归一**。
-///
-/// 为什么读侧也要归一（写侧已经归一了）：**存量**配置在本卡合入前就已经
-/// 被翻倍过，而向导要在用户重跑之前就把**正确**的路径显示出来 —— 卡面记的
-/// 危害之一正是"UI 显示给用户的路径是错的"。写侧归一只能让下一次写入变好，
-/// 读侧归一让这一次显示就对。两侧都归一不冗余：写侧管"不再变坏"，读侧管
-/// "立刻看起来对"。
-///
-/// 单独提成函数是为了让测试走**和 `wizard_state` 同一条**读路径，而不是在
-/// 测试里抄一份——抄的那份改坏产品代码也不会红。
-fn configured_library_dir(data_dir: &std::path::Path) -> Option<String> {
-    ipc::read_config_data_dir(data_dir).map(|v| normalize_separators(&v))
-}
-
-/// DESK-27 (#219)：把路径里重复的反斜杠折回单个，**但保住前导的那一对**。
-///
-/// 为什么需要它：`write_config` 原先用 `format!("{:?}")` 当 TOML 序列化器，
-/// 而读取方（#209 修好前）不反转义 —— 于是「写→读→预填→再写」每轮把反斜杠
-/// 数量翻一倍，2 → 4 → 8 → 16，没有收敛点。#209 修了读取方，本函数负责
-/// **打断回路**（写入前归一，保证幂等）与**修存量**（任意 N 轮的损坏都收敛）。
-///
-/// ⚠️ **为什么不用 `Path::components()`** —— 那是本卡实施时实测否掉的第一版。
-/// 它对被翻倍过的 UNC 路径会给出**另一个错路径**（下面用 `/` 代替反斜杠画，
-/// 免得注释本身被转义规则绕晕）：
-///
-/// ```text
-///   输入        ////server//share     （UNC 被翻倍一次）
-///   components() → /server/share      ← 只剩一个前导分隔符，不再是 UNC
-///   本函数       → //server/share     ← 对
-/// ```
-///
-/// UNC（`//server/share` 形状）与 verbatim（`//?/C:/x` 形状）的**前导两个**
-/// 分隔符是语义的一部分，折成一个就指向别的地方。而 Windows 会折叠**中间**的
-/// 重复分隔符，所以中间折回一个是安全的 —— 这个不对称正是 `components()` 没
-/// 处理好的地方。
-///
-/// 非 Windows 平台上路径里没有反斜杠可折，本函数是恒等变换（有测试钉住）。
-fn normalize_separators(p: &str) -> String {
-    const SEP: char = '\\';
-    let leading = p.chars().take_while(|&c| c == SEP).count();
-    let mut out = String::with_capacity(p.len());
-    // 前导：>=2 一律收成 2（UNC / verbatim），1 保持 1（根相对路径），0 不加。
-    match leading {
-        0 => {}
-        1 => out.push(SEP),
-        _ => {
-            out.push(SEP);
-            out.push(SEP);
-        }
-    }
-    let mut prev_sep = false;
-    for ch in p[leading..].chars() {
-        if ch == SEP {
-            if !prev_sep {
-                out.push(ch);
-            }
-            prev_sep = true;
-        } else {
-            out.push(ch);
-            prev_sep = false;
-        }
-    }
-    out
-}
-
-/// DESK-27 (#219)：把 config.toml 的内容渲染出来。
-///
-/// **单独提成纯函数是为了让归一那一步可被测试覆盖到调用点。** 卡面验收
-/// 标准 3 要的是「把归一那步去掉必须变红」—— 如果只测 `normalize_separators`
-/// 本身，删掉下面那句调用测试照样是绿的，那种反证等于没做。
-///
-/// 两处改动缺一不可：
-/// ① **先归一**：打断「写→读→预填→再写」的翻倍回路，并顺带把已损坏的存量
-///    救回来（任意 N 轮翻倍都收敛到单分隔符）。
-/// ② **用真的 TOML 序列化器**，不再拿 `{:?}`（Debug）冒充。两者只在反斜杠
-///    和引号上碰巧一致，而那个"碰巧"正是本缺陷的起点。实测 `toml::Value`
-///    对 Windows 路径会选 literal string（单引号，TOML 里不做任何转义），
-///    路径里带单引号时还会自动改用三引号 —— 那是手写转义最容易漏的边界。
-fn render_config(library_dir: &str) -> String {
-    let normalized = normalize_separators(library_dir);
-    let data_dir_value = toml::Value::String(normalized).to_string();
-    format!(
-        "data_dir = {data_dir_value}
-
-# 固定端口：手机存的回连地址跨服务重启依然有效（真机教训）。
-bind_addr = \"0.0.0.0:41145\"
-
-# H-07 部署前必须为空（内置官方 relay 域名尚未上线）
-relay_urls = []
-"
-    )
-}
-
-/// Write the initial config.toml (T-042 step 1) into the platform dir.
+/// 首启向导确认库位置：config.toml 的写者是 daemon（#1042 / #1045），壳只调
+/// 内置 daemon 的 `config init --library <dir>`——建库目录、写整份模板、归一
+/// 路径分隔符、用真 TOML 序列化都在 daemon 一侧（`crates/daemon/src/config.rs`）。
+/// 失败原样把 daemon 的错误交给前端（校验类本身就是 keyed JSON）。
 #[tauri::command]
 fn write_config(library_dir: String) -> Result<(), String> {
-    write_first_run_config(&platform::adapter().data_dir(), &library_dir)
+    daemon_cli::config_init(&daemon_cli::bundled_sidecar()?, &library_dir)
 }
 
-/// DESK-57 (#871)：首启向导确认库位置的这一刻，就是用户表达「库在这里」意图
-/// 的时刻——库目录在这里建，建不出来就如实报错、**不写配置**。
-///
-/// 为什么不在 daemon 建：DESK-46 (#638) 让 daemon 对「显式配置却不存在」的
-/// 库目录拒绝启动（防外置盘未挂载时在 /Volumes 下造影子目录），这条保持不变。
-/// #638 之前首启一直靠 daemon 启动时顺手 create_dir_all，那个副作用删掉后，
-/// 默认库位置（`<图片>/P-Pass 家庭照片库`，新机器上不存在）的首启必失败。
-fn write_first_run_config(platform_dir: &std::path::Path, library_dir: &str) -> Result<(), String> {
-    std::fs::create_dir_all(library_dir).map_err(|e| format!("{library_dir}: {e}"))?;
-    std::fs::create_dir_all(platform_dir).map_err(|e| e.to_string())?;
-    std::fs::write(platform_dir.join("config.toml"), render_config(library_dir))
-        .map_err(|e| e.to_string())
-}
-
-/// DESK-46 (#638)：更改照片库位置——平台 config.toml 的 read-modify-write。
-///
-/// 为什么在壳、不在 daemon：daemon 的 folder.set 是 MVP 残留的第二写者，
-/// 写的是 `self.data_dir.join("config.toml")`（**当前库目录**）——一个
-/// 没有任何读者的孤儿文件，自定义库下切换静默无效（本卡根因，真机
-/// 取证：旧库目录里躺着只含一行 data_dir 的孤儿 config.toml）。平台
-/// config 的写者只有壳这一个：write_config 管首启向导，本命令管事后更改。
-///
-/// 顺序：先校验（不碰盘），再写入，最后清理旧库里的孤儿 config.toml。
-/// 生效时机不变——daemon 只在启动时读一次 config，重启后台服务后生效
-/// （确认弹窗与保存提示的文案都这么说）。
+/// 更改照片库位置：同上，壳只调 `config set-library <dir>`（存在 / 可写 / 不嵌套
+/// 的校验、只改 data_dir 一行、清旧库里的孤儿 config 都在 daemon）。生效时机
+/// 不变——daemon 只在启动时读一次 config，重启后台服务后生效。
 #[tauri::command]
 fn set_library_dir(library_dir: String) -> Result<(), String> {
-    let dir = platform::adapter().data_dir();
-    let cfg_path = dir.join("config.toml");
-    let current = configured_library_dir(&dir);
-    let target = std::path::Path::new(&library_dir);
-    library_target_verdict(
-        &library_dir,
-        current.as_deref(),
-        target.is_dir(),
-        dir_writable(target),
-    )?;
-    rewrite_library_dir(&cfg_path, &library_dir)?;
-    // ⑤ 孤儿清理：folder.set 时代留在旧库目录里的 config.toml 没有任何
-    // 读者，留着只会误导排查。防误伤：与平台 config 是同一个文件
-    // （库 == 平台目录，含大小写/拼写差异）则跳过——canonicalize 两边
-    // 都落到磁盘真实路径再比。
-    if let Some(old) = current {
-        let orphan = std::path::Path::new(&old).join("config.toml");
-        let same_file = match (orphan.canonicalize(), cfg_path.canonicalize()) {
-            (Ok(a), Ok(b)) => a == b,
-            _ => false,
-        };
-        if !same_file && orphan.is_file() {
-            let _ = std::fs::remove_file(&orphan);
-        }
-    }
-    Ok(())
+    daemon_cli::config_set_library(&daemon_cli::bundled_sidecar()?, &library_dir)
 }
 
-/// DESK-49 (#710)：平台 config.toml 的 read-modify-write 本体。
-///
-/// 读失败必须分两档：文件不存在 ⇒ 当空配置（首次写入，正常创建）；
-/// 其它读错误（权限 / 非 UTF-8 / IO）⇒ 如实报错、**不写文件**。
-/// 曾经的 `unwrap_or_default()` 把后者也读成空串，写回只剩 data_dir，
-/// bind_addr / relay_urls 等既有内容被抹掉，界面却报成功。
-fn rewrite_library_dir(cfg_path: &std::path::Path, library_dir: &str) -> Result<(), String> {
-    let doc = match std::fs::read_to_string(cfg_path) {
-        Ok(s) => s,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
-        Err(e) => return Err(ipc::ui_err("ui.err_set_library", &[("err", &e)])),
-    };
-    let merged = merge_library_dir(&doc, library_dir);
-    std::fs::write(cfg_path, merged).map_err(|e| ipc::ui_err("ui.err_set_library", &[("err", &e)]))
-}
-
-/// DESK-46 (#638)：换库目标的判据（纯函数——文件系统事实由调用点探测后
-/// 传入，判据本身不碰盘，好做单测与反证）。错误走 keyed ui_err（前端
-/// errText 渲染成 i18n 人话）。
-fn library_target_verdict(
-    target: &str,
-    current: Option<&str>,
-    target_is_dir: bool,
-    target_writable: bool,
-) -> Result<(), String> {
-    if target.trim().is_empty() || !target_is_dir {
-        return Err(ipc::ui_err(
-            "ui.err_library_target_missing",
-            &[("dir", &target)],
-        ));
-    }
-    if !target_writable {
-        return Err(ipc::ui_err(
-            "ui.err_library_target_readonly",
-            &[("dir", &target)],
-        ));
-    }
-    if let Some(cur) = current {
-        if paths_overlap(cur, target) {
-            return Err(ipc::ui_err("ui.err_library_nested", &[]));
-        }
-    }
-    Ok(())
-}
-
-/// DESK-46 (#638)：可写探测——真建一个临时文件再删掉。只看权限位不够：
-/// ACL、只读挂载、沙箱限制都不体现在 mode 里，只有真写一次才知道。
-fn dir_writable(p: &std::path::Path) -> bool {
-    if !p.is_dir() {
-        return false;
-    }
-    let probe = p.join(format!(".ppf-write-probe-{}", std::process::id()));
-    match std::fs::File::create(&probe) {
-        Ok(_) => {
-            let _ = std::fs::remove_file(&probe);
-            true
-        }
-        Err(_) => false,
-    }
-}
-
-/// DESK-46 (#638)：把 data_dir 换进既有 config 文本（read-modify-write）。
-///
-/// 与 render_config（首启向导的整份模板）不同：这里**只改 data_dir 一行，
-/// 其余逐字节保留**——bind_addr / relay_urls / 旧版留下的 section / 注释都是
-/// 用户与发版流程的既有事实，不能因为换个库位置被重写。
-///
-/// 两条老规矩照守（与被删的 daemon write_folder_config 同一教训）：
-/// ① 顶层键必须落在第一个 [section] 之前（2026-07-31 crash-loop）——
-///    所以新 data_dir 永远插在文首；
-/// ② 路径值先归一、再用真 TOML 序列化（DESK-27 同款），不拿 `{:?}` 冒充。
-fn merge_library_dir(doc: &str, library_dir: &str) -> String {
-    let data_dir_value = toml::Value::String(normalize_separators(library_dir)).to_string();
-    let body: String = doc
-        .lines()
-        .filter(|l| !l.trim_start().starts_with("data_dir"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!("data_dir = {data_dir_value}\n{body}\n")
-}
-
-/// DESK-46 (#638)：两个路径是否相同或一方包含另一方（纯字符串判据，
-/// 不碰盘）。嵌套库是灾难配方：新库在旧库里面 ⇒ 索引/收编会互相看见
-/// 对方的文件；旧库在新库里面 ⇒ 换完库「旧照片」出现在新库眼皮底下。
-/// 分隔符两种都认（Windows 用户可能混输 / 与 \），结尾分隔符先剥掉，
-/// 大小写不敏感（macOS 默认与 Windows 的文件系统都不分大小写）。
-fn paths_overlap(a: &str, b: &str) -> bool {
-    // DESK-46 落地修正：分隔符必须整体归一（不只尾部分隔符）——Windows 下
-    // `C:/Lib/sub` 与 `C:\Lib` 是同一路径的两种写法，只归一尾部会把它们
-    // 判成不重叠（正是 `desk46_paths_overlap_boundaries` 抓到的）。
-    let norm = |p: &str| {
-        p.trim_end_matches(['/', '\\'])
-            .replace('\\', "/")
-            .to_lowercase()
-    };
-    let (a, b) = (norm(a), norm(b));
-    if a == b {
-        return true;
-    }
-    // 前缀必须断在分隔符边界上：/old/lib2 不是 /old/lib 的子目录。
-    let contains = |outer: &str, inner: &str| {
-        outer.len() > inner.len()
-            && outer.starts_with(inner)
-            && outer.as_bytes()[inner.len()] == b'/'
-    };
-    contains(&a, &b) || contains(&b, &a)
-}
-
-/// DESK-29 (#268)：`--version` 输出里那个"这确实是我们的 daemon"的记号。
-///
-/// 取的是 `crates/daemon/src/main.rs` 打印的固定前缀，**刻意不比对版本号**：
-/// 桌面壳与 daemon 是两个独立 workspace（ADR-012），而 daemon 的版本还会被
-/// `PPF_DAEMON_VERSION` / `PPF_BUILD_VERSION` 覆盖，比对版本号只会造出一个
-/// 隔三差五自己红的判据。
-///
-/// ⚠️ 这是一处**跨 crate 的字符串耦合，目前没有守卫**：daemon 那边改了这句
-/// 话，这里就会开始把好 daemon 判成坏的。错误方向是安全的（向导会明确报错，
-/// 不是静默放行），但应该有个契约测试盯着——已开卡，本卡范围内不动 daemon。
-const DAEMON_VERSION_MARKER: &str = "P-Pass daemon";
-
-/// 探活子进程的上限。`--version` 在任何机器上都是毫秒级的事；给到 5 秒是
-/// 为了「坏掉但仍能被 CreateProcess 接受」的文件——那种可能直接挂住，而
-/// 向导不能跟着一起卡死。
-const SIDECAR_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-
-/// DESK-29 (#268)：把探活结果翻译成结论。
-///
-/// 抽成纯函数是刻意的：起子进程那半只能真机验，但**「什么才算通过」这条
-/// 判据**可以单测。判据一旦松掉（比如有人图省事只看退出码），单测必须立刻红。
-///
-/// `code` = 子进程退出码；`None` 表示被信号/超时干掉，拿不到码。
-fn sidecar_probe_verdict(code: Option<i32>, stdout: &str) -> Result<(), String> {
-    match code {
-        Some(0) if stdout.contains(DAEMON_VERSION_MARKER) => Ok(()),
-        Some(0) => Err(ipc::ui_err(
-            "ui.err_sidecar_not_daemon",
-            &[(
-                "output",
-                &stdout.trim().chars().take(120).collect::<String>(),
-            )],
-        )),
-        Some(other) => Err(ipc::ui_err("ui.err_sidecar_exit_code", &[("code", &other)])),
-        None => Err(ipc::ui_err("ui.err_sidecar_version_timeout", &[])),
-    }
-}
-
-/// DESK-29 (#268)：注册开机自启**之前**，先确认这个 sidecar 真的能跑。
+/// DESK-29 (#268)：注册开机自启**之前**，先确认这个 sidecar 真的能跑、真的是
+/// 我们的 daemon。
 ///
 /// 为什么不能只看 `is_file()`（改之前唯一的守卫）：**0 字节的文件
 /// `is_file()` 返回 true**。杀毒软件把未签名的 exe 掏空、安装/更新写到一半
 /// 被打断、开发机上的构建 stub——任何一种都会让一个跑不起来的文件被写进
-/// 开机自启，**覆盖掉原来那条好的**，而向导报告"已启动"。用户的备份从此
-/// 不再自动运行，且他不会知道。
+/// 开机自启，**覆盖掉原来那条好的**，而向导报告"已启动"。
 ///
-/// 判法选的是「**真的跑一次 `--version`**」而不是「查文件大小」：
-/// 前者直接回答"能不能跑"这个问题本身，后者只是个代理指标，挡不住
-/// 「非零但坏掉」。前置条件是现成的——daemon 的 `--version` 有实现
-/// （`crates/daemon/src/cli.rs`）也有集成测试守着（`cli_flow.rs`）。
+/// 判法是「**真的跑一次 `--version --json`**」而不是「查文件大小」：前者直接回答
+/// "能不能跑"这个问题本身。#1045 起走 daemon 的机读契约（`product` 字段 +
+/// schema 版本），不再匹配纯文本 `--version` 的前缀；判据与起进程见
+/// `daemon_cli::{probe_version, version_reply}`。
 ///
 /// ⚠️ Windows 上 release 的 daemon 是 GUI 子系统（`main.rs` 顶部的
-/// `windows_subsystem`），不会分配控制台，所以不闪窗；**debug 构建是
-/// console 子系统，可能闪一下**。要彻底消掉得用 `CREATE_NO_WINDOW`，那是
-/// 平台专属 API，会往本文件再加一处 cfg——而 #211 正在往外搬这些，不加。
+/// `windows_subsystem`），不会分配控制台，所以不闪窗；起子进程走
+/// `platform::command`（Windows 上带 `CREATE_NO_WINDOW`）。
 fn verify_sidecar_runs(sidecar: &std::path::Path) -> Result<(), String> {
-    let mut child = platform::command(sidecar)
-        .arg("--version")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        // 0 字节文件就死在这一步：CreateProcess 直接拒绝
-        // （Windows 错误 193「不是有效的 Win32 应用程序」）。
-        .map_err(|e| {
-            ipc::ui_err(
-                "ui.err_sidecar_spawn",
-                &[("err", &e), ("path", &sidecar.display())],
-            )
-        })?;
-
-    let deadline = std::time::Instant::now() + SIDECAR_PROBE_TIMEOUT;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) => {
-                if std::time::Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return sidecar_probe_verdict(None, "");
-                }
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            Err(e) => return Err(ipc::ui_err("ui.err_sidecar_wait", &[("err", &e)])),
-        }
-    }
-    // 已经退出了，这一步立即返回。`--version` 的输出只有一行，塞不满管道。
-    let out = child
-        .wait_with_output()
-        .map_err(|e| ipc::ui_err("ui.err_sidecar_read", &[("err", &e)]))?;
-    sidecar_probe_verdict(out.status.code(), &String::from_utf8_lossy(&out.stdout))
-}
-
-/// 【DESK-42 #604】开机自启登记对账（App 启动时跑一次，独立线程）。
-///
-/// 缺陷现场：`~/Library/LaunchAgents/com.p-pass.daemon.plist` 被钉在
-/// `~/P-Pass-Backups/<日期>/old-app/P-Pass.app/...` 里的旧 App 上，而实际安装
-/// 在 `/Applications`——开机/登录/KeepAlive 拉起的是那份旧服务。成因是登记
-/// 路径只在「用户主动启动服务」或「daemon 接管」两个时机写入，此后换目录、
-/// 更新覆盖、从备份副本启动过，都没有任何东西去校验它。
-///
-/// 现在每次启动对一次账：登记存在但指向别处 → 用**当前 App 内**的 daemon 路径
-/// 重写（幂等）；未登记 → 不动（纯新启动不许顺手装，DAE-03 ②）；一致 → 不动。
-///
-/// DESK-60 (#877)：例外是「平台声明登记会被系统流程删掉」（Windows 卸载）——
-/// 配置在、用户没停过 ⇒ 补登记，见 `restore_missing_autostart_allowed`。
-fn reconcile_autostart_registration() {
-    use platform::PlatformAdapter as _;
-    let Ok(exe) = std::env::current_exe() else {
-        return;
-    };
-    let Some(dir) = exe.parent() else { return };
-    let sidecar = dir.join(platform::adapter().daemon_executable_name());
-    // 开发运行（target/ 里没有 sidecar）等情况：没有可对账的目标，直接跳过。
-    if !sidecar.is_file() {
-        return;
-    }
-    // DESK-65 (#957)：用户主动停过服务 ⇒ 唯一正确的状态是「没有登记」。对账
-    // 只往这个方向收敛：残留的登记（上次停止时没撤掉、或老版本留下的）撤掉，
-    // 绝不改写、更不拉起——改写登记在 Windows 上会顺带把服务跑起来。
-    if is_user_stopped(&platform::adapter().data_dir()) {
-        if platform::adapter().autostart_installed().unwrap_or(false) {
-            if let Err(e) = platform::adapter().uninstall_autostart() {
-                eprintln!("#957: 用户停过服务，但撤销残留的开机自启登记失败: {e}");
-            }
-        }
-        return;
-    }
-    match platform::adapter().reconcile_autostart(&sidecar) {
-        Ok(platform::AutostartReconcile::Rewritten) => {
-            // 走 stderr：与 daemon_logs 收集的日志同一去处，排障时看得到。
-            eprintln!(
-                "#604: 开机自启登记与当前安装不一致——已重写为 {}",
-                sidecar.display()
-            );
-        }
-        Ok(platform::AutostartReconcile::Repaired) => {
-            eprintln!(
-                "#726: 开机自启登记文件读不出（已损坏）——已重写为 {}",
-                sidecar.display()
-            );
-        }
-        Ok(platform::AutostartReconcile::NotRegistered)
-            if restore_missing_autostart_allowed(
-                platform::adapter().autostart_restore_when_missing(),
-                &platform::adapter().data_dir(),
-            ) =>
-        {
-            // DESK-60 (#877)：卸载删了登记、配置还在、用户没停过 ⇒ 补回来，
-            // 否则下次开机不再自动备份，界面却显示一切正常。闸门（稳定安装
-            // 位置）已在 reconcile_autostart 里判过，走到这里的 sidecar 可信。
-            match platform::adapter().install_autostart(&sidecar) {
-                Ok(()) => eprintln!("#877: 开机自启登记缺失——已补登记为 {}", sidecar.display()),
-                Err(e) => eprintln!("#877: 开机自启登记缺失，补登记失败: {e}"),
-            }
-        }
-        Ok(_) => {}
-        Err(e) => eprintln!("#604: 开机自启登记对账失败: {e}"),
-    }
+    daemon_cli::probe_version(sidecar).map(|_| ())
 }
 
 /// Install the bundled daemon as a resident service (T-040 autostart:
@@ -871,7 +554,7 @@ fn start_daemon(app: tauri::AppHandle) -> Result<String, String> {
     let sidecar = exe
         .parent()
         .ok_or("no parent dir")?
-        .join(platform::adapter().daemon_executable_name());
+        .join(platform::hosting().daemon_executable_name());
     if !sidecar.is_file() {
         return Err(ipc::ui_err(
             "ui.err_sidecar_missing",
@@ -890,7 +573,7 @@ fn start_daemon(app: tauri::AppHandle) -> Result<String, String> {
     set_user_stopped(&platform::adapter().data_dir(), false)?;
     let manager = app.state::<ServiceStateManager>().inner().clone();
     manager.set(&app, ServiceState::Starting, Some("user start"));
-    match platform::adapter().install_autostart(&sidecar) {
+    match platform::hosting().install_autostart(&sidecar) {
         // LaunchAgent RunAtLoad+KeepAlive: starts immediately, survives
         // crashes and reboots.
         Ok(()) => Ok("resident".into()),
@@ -915,17 +598,20 @@ fn start_daemon(app: tauri::AppHandle) -> Result<String, String> {
     }
 }
 
-/// The last non-empty line written by the sidecar to the LaunchAgent stderr
-/// log. The plist names the log location; if it is absent or unreadable, do
-/// not guess a path or invent a failure reason.
-fn daemon_startup_stderr_from(plist: &std::path::Path) -> Option<String> {
-    let plist = std::fs::read_to_string(plist).ok()?;
-    let (_, stderr_path) = daemon_logs::parse_plist_log_paths(&plist);
-    last_stderr_line(std::path::Path::new(stderr_path.as_deref()?))
+/// 文件尾部最多 `max_bytes` 字节（日志一路累积，取尾部就够）。
+fn tail_of(path: &std::path::Path, max_bytes: u64) -> Option<String> {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let mut f = std::fs::File::open(path).ok()?;
+    f.seek(SeekFrom::Start(len.saturating_sub(max_bytes)))
+        .ok()?;
+    let mut buf = Vec::new();
+    f.take(max_bytes).read_to_end(&mut buf).ok()?;
+    Some(String::from_utf8_lossy(&buf).to_string())
 }
 
 fn last_stderr_line(path: &std::path::Path) -> Option<String> {
-    let stderr = daemon_logs::tail(path, 64 * 1024)?;
+    let stderr = tail_of(path, 64 * 1024)?;
     stderr
         .lines()
         .rev()
@@ -933,107 +619,125 @@ fn last_stderr_line(path: &std::path::Path) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// DESK-58 (#875)：stderr 的去处。平台给了固定落点（Windows 的
-/// `logs\daemon.err`，daemon 自己接上的）就读它；否则照旧从 LaunchAgent
-/// plist 里读（macOS，由 launchd 接）。
-fn daemon_startup_error_in(
-    platform_dir: &std::path::Path,
-    plist: &std::path::Path,
-) -> Option<String> {
-    use platform::PlatformAdapter as _;
-    match platform::adapter().startup_stderr_file(platform_dir) {
-        Some(file) => last_stderr_line(&file),
-        None => daemon_startup_stderr_from(plist),
+/// DESK-58 (#875) / #1043：daemon 启动早期 stderr 的最后一行非空内容。落点
+/// 问平台适配器（`daemon_log_paths().stderr`）：Windows 是 daemon 自己接的
+/// `logs\daemon.err`，macOS 是 launchd 的 `StandardErrorPath`。读不到就如实
+/// 返回 `None`，不猜路径、不编失败原因。
+fn daemon_startup_error_in(paths: &platform::DaemonLogPaths) -> Option<String> {
+    last_stderr_line(paths.stderr.as_deref()?)
+}
+
+/// daemon 起不来时的结论（#1044）：`key` 是 daemon 认出的已知原因（i18n key），
+/// `detail` 是 stderr 原文（照常给出，不许被模板文案吃掉）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+struct StartupError {
+    key: Option<String>,
+    detail: String,
+}
+
+/// daemon 的 keyed 错误行是一行 JSON `{"error_key", "detail"}`
+/// （`crates/daemon/src/cli.rs::startup_error_line`）；不是这个形状的行（旧内核、
+/// panic 等）原样当 detail，key 为空——壳不猜原因。
+fn parse_startup_error(line: String) -> StartupError {
+    match serde_json::from_str::<Value>(&line) {
+        Ok(v) if v.get("detail").and_then(Value::as_str).is_some() => StartupError {
+            key: v["error_key"].as_str().map(str::to_owned),
+            detail: v["detail"].as_str().unwrap_or_default().to_owned(),
+        },
+        _ => StartupError {
+            key: None,
+            detail: line,
+        },
     }
 }
 
 /// The wizard asks only after its existing readiness wait has elapsed. This
-/// exposes the daemon's own stderr unchanged, so the UI can explain known
-/// failures without replacing actionable diagnostic text.
+/// exposes the daemon's own stderr unchanged (plus the daemon's keyed
+/// reason, when it gave one), so the UI can explain known failures without
+/// replacing actionable diagnostic text.
 #[tauri::command]
-fn daemon_startup_error() -> Option<String> {
-    use platform::PlatformAdapter as _;
-    daemon_startup_error_in(&platform::adapter().data_dir(), &daemon_logs::plist_path())
+fn daemon_startup_error() -> Option<StartupError> {
+    let a = platform::adapter();
+    daemon_startup_error_in(&a.daemon_log_paths(&a.data_dir())).map(parse_startup_error)
 }
 
-/// DESK-36 (#456)：「用户主动停止了后台服务」的持久标记。
-///
-/// 自愈（前端 refresh 失败分支 → `self_heal_daemon`）原来分不清「服务崩了」
-/// 和「用户点了停止」，冷却窗口一过就把用户刚停掉的服务拉回来。这个标记是
-/// 两者唯一的区分依据，前端按钮和托盘菜单共用同一份（都走 `stop_daemon`）。
-///
-/// 为什么是 data dir 里的独立文件、而不是 config.toml 的一个字段：
-/// `write_config` 会整体重写 config.toml（向导每走一次就重写一次），字段放
-/// 进去会被冲掉；而且 config.toml 是 daemon 的配置，这是壳自己的状态。
-/// 持久化（而不是进程内变量）是因为语义要跨 App 重开：用户停了服务、关掉
-/// App 再打开，服务仍应保持停止，直到用户点「启动服务」。
-const USER_STOPPED_MARKER: &str = "desktop-user-stopped";
-
-fn user_stopped_marker(data_dir: &std::path::Path) -> std::path::PathBuf {
-    data_dir.join(USER_STOPPED_MARKER)
-}
-
-fn is_user_stopped(data_dir: &std::path::Path) -> bool {
-    user_stopped_marker(data_dir).exists()
-}
-
-/// 落标记 / 清标记。失败要报出来：标记没落下 = 自愈照样会把服务拉回来，
-/// 用户意图被静默撤销，这正是 #456 本身。
-fn set_user_stopped(data_dir: &std::path::Path, stopped: bool) -> Result<(), String> {
-    let marker = user_stopped_marker(data_dir);
-    if stopped {
-        std::fs::create_dir_all(data_dir)
-            .map_err(|e| ipc::ui_err("ui.err_stop_mark_write", &[("err", &e)]))?;
-        std::fs::write(&marker, b"user stopped the background service\n")
-            .map_err(|e| ipc::ui_err("ui.err_stop_mark_write", &[("err", &e)]))
+/// #1043：服务管理器接的那对 stdio 路径（macOS launchd 的
+/// `StandardOutPath`/`StandardErrorPath`）——只在 stdio 归服务管理器、且已登记
+/// 常驻服务时才算数（与改前「plist 在才有路径」同一口径）。daemon 自己接的
+/// stderr（Windows）不在此列。
+fn service_stdio_paths(
+    paths: &platform::DaemonLogPaths,
+    service_registered: bool,
+) -> (Option<std::path::PathBuf>, Option<std::path::PathBuf>) {
+    if paths.stdio_by_service_manager && service_registered {
+        (paths.stdout.clone(), paths.stderr.clone())
     } else {
-        match std::fs::remove_file(&marker) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(ipc::ui_err("ui.err_stop_mark_clear", &[("err", &e)])),
-        }
+        (None, None)
     }
 }
 
-/// 自愈判据（纯函数，单测覆盖）：配置过、且不是用户主动停的，才允许自愈。
-/// 「没配置过」是首启向导的事；「用户停的」要等用户自己点「启动服务」。
-fn self_heal_allowed(data_dir: &std::path::Path) -> bool {
-    data_dir.join("config.toml").exists() && !is_user_stopped(data_dir)
+/// 当前机器上的 [`service_stdio_paths`]。
+fn current_service_stdio_paths() -> (Option<std::path::PathBuf>, Option<std::path::PathBuf>) {
+    let a = platform::adapter();
+    service_stdio_paths(
+        &a.daemon_log_paths(&a.data_dir()),
+        platform::hosting().autostart_installed().unwrap_or(false),
+    )
 }
 
-/// DESK-60 (#877)：登记缺失时要不要补。与自愈同一条判据——配置过（不是首启，
-/// DAE-03 ②）、且不是用户主动停的（DESK-36 的停止标记）——再加上平台声明
-/// 「登记会被系统流程删掉」。
-fn restore_missing_autostart_allowed(platform_restores: bool, data_dir: &std::path::Path) -> bool {
-    platform_restores && self_heal_allowed(data_dir)
-}
-
-/// #456 后续：更新流程装完（或装失败）之后要不要把 daemon 拉回来。
-/// 用户主动停了服务 = 一直停着，直到用户自己点「启动后台服务」；更新不算
-/// 用户的启动意图。其余情况（包括向导还没走完的机器）行为和原来一样：
-/// pause 杀掉了什么就拉回什么。不复用 `self_heal_allowed`——它多一条
-/// config.toml 判断，会改掉「没停过」时的更新行为。
-fn update_resume_allowed(data_dir: &std::path::Path) -> bool {
-    !is_user_stopped(data_dir)
-}
-
-/// DESK-36 (#456)：前端 refresh 发现 daemon 不可达时调这个，而不是直接调
-/// `resume_daemon_after_update`。判据在**调用这一刻**读磁盘上的标记——
-/// 前端缓存的状态可能是旧的（比如刚在托盘里点了停止），只有这里读才没有竞态。
-/// 返回 true = 真的拉起了；false = 按判据跳过（不是错误）。
+/// DESK-36 (#456)：前端发现 daemon 不可达时调这个。判据在**调用这一刻**读磁盘上
+/// 的标记——前端缓存的状态可能是旧的（比如刚在托盘里点了停止），只有这里读才没有
+/// 竞态。返回 true = 真的拉起了；false = 按判据跳过（不是错误）。
 #[tauri::command]
 fn self_heal_daemon(app: tauri::AppHandle) -> Result<bool, String> {
+    // #1060：为更新暂停期间断连是本壳自己造成的，不是服务崩了——不拉，
+    // 否则旧二进制在安装器替换前被拉回来，一次更新停两次。
+    if app.state::<UpdatePause>().active() {
+        eprintln!("#1060: 为更新暂停中，跳过自愈");
+        return Ok(false);
+    }
+    self_heal_now(&app, "self heal")
+}
+
+/// #1060：本壳「为更新暂停了后台服务」的进程内状态。只活在发起更新的这个壳里：
+/// 安装成功 → 旧壳退出、状态随之消失，新壳启动对账负责拉起新版；安装失败 →
+/// `resume_after_failed_update` 清掉它再自愈。不落盘：重启后的壳本来就不在
+/// 暂停窗口里。
+#[derive(Default)]
+struct UpdatePause(std::sync::atomic::AtomicBool);
+
+impl UpdatePause {
+    fn begin(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+    fn end(&self) {
+        self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+    fn active(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+/// #1060：下载或安装失败——结束暂停窗口，再按常规判据自愈（用户停过的不拉）。
+#[tauri::command]
+fn resume_after_failed_update(app: tauri::AppHandle) -> Result<bool, String> {
+    app.state::<UpdatePause>().end();
+    self_heal_now(&app, "update failed")
+}
+
+/// 自愈本体（前端触发的 `self_heal_daemon` 与壳启动对账共用，#1046）：配置过、且
+/// 不是用户主动停的（`self_heal_allowed`，调用这一刻读盘）才拉。
+fn self_heal_now(app: &tauri::AppHandle, reason: &str) -> Result<bool, String> {
     if !self_heal_allowed(&platform::adapter().data_dir()) {
         return Ok(false);
     }
     let manager = app.state::<ServiceStateManager>().inner().clone();
-    manager.set(&app, ServiceState::Starting, Some("self heal"));
-    // UPD-07 (#617)：自愈与"更新"无关 ⇒ **不带** `--post-update`（不带 = owner 不开火）。
+    manager.set(app, ServiceState::Starting, Some(reason));
     // #732：有 LaunchAgent 时交给 launchd 拉（不杀在跑的——自愈只补"没在跑"）。
-    match bring_up_daemon(false, false) {
+    match bring_up_daemon(false) {
         Ok(_) => Ok(true),
         Err(e) => {
-            manager.set(&app, ServiceState::Unreachable, Some(&e));
+            manager.set(app, ServiceState::Unreachable, Some(&e));
             Err(e)
         }
     }
@@ -1067,14 +771,14 @@ fn stop_daemon_now() -> Result<(), String> {
     //    (launchd KeepAlive / the Task Scheduler watchdog).
     //    DESK-65 (#957)：结果不许丢——撤不掉登记，下次开机服务照样起来，
     //    「停止」就是假的。照样把进程停掉，但最后如实报错。
-    let unregistered = platform::adapter().uninstall_autostart();
+    let unregistered = platform::hosting().uninstall_autostart();
     // 2) Best-effort: kill the bundled daemon process. launchctl bootout
     //    (inside uninstall_autostart) already stopped the managed one;
     //    this also covers a one-shot fallback spawn.
     // QA-09 迁移（#211）：best-effort —— 杀不掉也继续（原来两个分支也是
     // 直接丢结果）。区别在于「什么退出码算进程本来就没在跑」这条判据
     // 现在只有一份、在 platform 里，不再是三个调用点各抄一遍。
-    let _ = platform::adapter().kill_daemon_process();
+    let _ = stop_bundled_daemon();
     // 3) DESK-36 (#456)：等它真的不可达了再返回（最长 5s）——调用方紧接着
     //    就要刷新状态点，socket 还活着的那一瞬读到「运行中」就白刷了。
     //    超时不算失败：标记已落、autostart 已卸，剩下的只是进程退得慢。
@@ -1085,66 +789,63 @@ fn stop_daemon_now() -> Result<(), String> {
     unregistered.map_err(|e| e.to_string())
 }
 
-/// W1 (2026-08-26 real-box run): the updater's downloadAndInstall() was
-/// failing on Windows because `ppf-daemon.exe` — a resident background
-/// process the user never explicitly stopped (closing the main window
-/// only hides it to tray, by design; see the on_window_event handler
-/// below) — kept the installer from overwriting its own file. Same
-/// class of bug as the manual-reinstall report ("退出desktop app主进程，
-/// 有后台进程，无法覆盖安装"). Unlike stop_daemon(), this must NOT
-/// touch autostart registration — the update is expected to succeed
-/// and the daemon should come back exactly as before, not require the
-/// user to re-run the wizard. Frontend calls this before
-/// update.downloadAndInstall() and calls resume_daemon_after_update()
-/// after a successful install (see App.svelte checkForUpdate()).
-/// Best-effort: NOT finding a running daemon is not an error (nothing
-/// to pause), and this must never block the update attempt itself —
-/// downloadAndInstall() still runs even if this errors, so a stuck
-/// pause degrades to the pre-existing failure mode (caught, surfaced
-/// with a human-readable hint) instead of blocking updates entirely.
+/// W1 (2026-08-26)：Windows 上常驻的 `ppf-daemon.exe` 占着自己的文件，安装器
+/// 覆盖不了；#1060 起两平台一致——前端**下载完成后、`install()` 之前**调这个，
+/// 下载期间服务照常工作（备份不被打断）。
+///
+/// 这是「为更新暂停」，不是用户的停止：不写停止标记、不删开机自启登记
+/// （区别于 `stop_daemon`）；用户本来就停过服务则整个不动。恢复：安装成功 →
+/// 新壳启动对账（`resume_after_update`）；安装失败（旧壳还在）→ 前端走
+/// `self_heal_daemon`。Best-effort：失败只记日志，不挡更新本身。
 #[tauri::command]
-fn pause_daemon_for_update() -> Result<(), String> {
-    // QA-09 迁移（#211）：best-effort —— 杀不掉也继续（原来两个分支也是
-    // 直接丢结果）。区别在于「什么退出码算进程本来就没在跑」这条判据
-    // 现在只有一份、在 platform 里，不再是三个调用点各抄一遍。
-    let _ = platform::adapter().kill_daemon_process();
+fn pause_daemon_for_update(app: tauri::AppHandle) -> Result<(), String> {
+    // #1060：用户停过服务 = 本来就停着，更新前后都保持停止——不动。
+    if !should_pause_for_update(&platform::adapter().data_dir()) {
+        return Ok(());
+    }
+    // 先进入暂停窗口、再停：停掉那一刻前端就会收到断连并请求自愈。
+    app.state::<UpdatePause>().begin();
+    // 先让服务管理器卸下常驻那份（登记保留、不写停止标记）：只 kill 的话 launchd
+    // KeepAlive / 计划任务看门狗几秒内就用旧文件拉回来，等于没停。
+    match platform::hosting().pause_resident_daemon() {
+        Ok(outcome) => eprintln!("#1060: 为更新暂停常驻服务：{outcome:?}"),
+        Err(e) => eprintln!("#1060: 为更新暂停常驻服务失败（继续）：{e}"),
+    }
+    // 再清掉服务管理器管不到的（一次性 spawn 的）。QA-09 迁移（#211）：best-effort。
+    let _ = stop_bundled_daemon();
     Ok(())
 }
 
-/// Counterpart to pause_daemon_for_update(): bring the (now updated on
-/// disk) daemon back after the installer finishes (no autostart touch —
-/// it was never unregistered). #732：有 LaunchAgent 就交给 launchd
-/// `kickstart -k`，内核从此归 launchd 托管、日志进 LaunchAgent 的 `.err`；
-/// 没有（Windows Run key / 未登记）才退回一次性 spawn。Best-effort; the
-/// frontend degrades to "restart the app" guidance if this fails,
-/// rather than silently leaving the daemon down after an update the
-/// user believes succeeded.
-///
-/// #456 后续：用户主动停了服务（盘上有 `desktop-user-stopped` 标记）就不拉，
-/// 标记原样保留，界面仍给「启动后台服务」。判据在 Rust 这一侧、调用这一刻
-/// 读盘（和 `self_heal_daemon` 同一来源），不信前端缓存——托盘停止之后
-/// 前端的 wizard 状态可能还是旧的。之后用户手动启动走 `start_daemon`，它每次
-/// 都从 `current_exe()` 旁边现取 sidecar 并探活、重写 autostart，用的就是
-/// 更新后的新文件。返回 true = 拉起了；false = 按判据跳过（不是错误）。
-#[tauri::command]
-fn resume_daemon_after_update(app: tauri::AppHandle) -> Result<bool, String> {
-    let manager = app.state::<ServiceStateManager>().inner().clone();
-    if !update_resume_allowed(&platform::adapter().data_dir()) {
-        manager.set(
-            &app,
-            ServiceState::Stopped,
-            Some("user stopped; update keeps it stopped"),
-        );
-        return Ok(false);
-    }
-    manager.set(&app, ServiceState::Starting, Some("update resume"));
-    match bring_up_daemon(true, true) {
-        Ok(_) => Ok(true),
-        Err(e) => {
-            manager.set(&app, ServiceState::Unreachable, Some(&e));
-            Err(e)
-        }
-    }
+/// B7（#1043）：结束内置 daemon——两平台同一套语义，由平台端口实现
+/// （`HostingAdapter::stop_daemon`）：优先结束 daemon 自报的 pid，按壳旁边
+/// 那个 sidecar 的**完整路径**匹配兜底；不再 `pkill -f`（命令行里恰好带
+/// `ppf-daemon` 字样的别的进程不会被杀）。
+fn stop_bundled_daemon() -> Result<platform::KillOutcome, String> {
+    let sidecar = bundled_daemon_path()?;
+    platform::hosting()
+        .stop_daemon(&sidecar, daemon_reported_pid())
+        .map_err(|e| e.to_string())
+}
+
+/// 壳旁边那个内置 daemon 的路径（同目录、平台给文件名）。
+fn bundled_daemon_path() -> Result<std::path::PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    Ok(exe
+        .parent()
+        .ok_or("no parent dir")?
+        .join(platform::hosting().daemon_executable_name()))
+}
+
+/// daemon 经 IPC 自报的 pid（`status.pid`）；连不上 / 不答 = `None`。超时取短：
+/// daemon 挂死时正是要结束它的时候，不能被这次询问拖住。
+fn daemon_reported_pid() -> Option<u32> {
+    ipc::DaemonHandle::discover()
+        .ok()?
+        .call_with_timeout("status", json!({}), std::time::Duration::from_secs(1))
+        .ok()?
+        .get("pid")?
+        .as_u64()
+        .and_then(|p| u32::try_from(p).ok())
 }
 
 /// #732：内核是怎么被拉起来的。
@@ -1162,7 +863,7 @@ enum BroughtUp {
 /// macOS 是 launchd，Windows 是任务计划程序。业务流程（自愈、更新后恢复、
 /// 重启服务）因此在两个平台上走同一条路。
 fn resident_service_available() -> bool {
-    let a = platform::adapter();
+    let a = platform::hosting();
     a.service_mode().has_service_manager() && a.autostart_installed().unwrap_or(false)
 }
 
@@ -1178,13 +879,13 @@ fn resident_service_available() -> bool {
 /// `kill_running = false`（自愈）：launchd 在跑就不动，没在跑才拉。
 ///
 /// 服务管理器那条走不通（未登记 / 本平台没有 / 命令失败）⇒ 退回一次性 spawn，
-/// 与改前一致；`post_update` 只对这条退路有意义（见 `spawn_bundled_daemon_oneshot`）。
-fn bring_up_daemon(kill_running: bool, post_update: bool) -> Result<BroughtUp, String> {
+/// 与改前一致。
+fn bring_up_daemon(kill_running: bool) -> Result<BroughtUp, String> {
     if resident_service_available() {
         if kill_running {
-            retire_unmanaged_daemon(platform::adapter().resident_daemon_pid());
+            retire_unmanaged_daemon(platform::hosting().resident_daemon_pid());
         }
-        match platform::adapter().restart_resident_daemon(kill_running) {
+        match platform::hosting().restart_resident_daemon(kill_running) {
             Ok(platform::ResidentRestart::Started { pid })
             | Ok(platform::ResidentRestart::AlreadyRunning { pid }) => {
                 eprintln!("#732: 内核交由服务管理器拉起 pid={pid}");
@@ -1194,7 +895,7 @@ fn bring_up_daemon(kill_running: bool, post_update: bool) -> Result<BroughtUp, S
             Err(e) => eprintln!("#732: 服务管理器拉起失败，退回一次性 spawn：{e}"),
         }
     }
-    spawn_bundled_daemon_oneshot(post_update).map(|()| BroughtUp::OneShot)
+    spawn_bundled_daemon_oneshot().map(|()| BroughtUp::OneShot)
 }
 
 /// 在跑的 daemon 不是服务管理器那份（pid 对不上）⇒ 请它体面退位并等它退干净
@@ -1221,26 +922,15 @@ fn retire_unmanaged_daemon(resident_pid: Option<u32>) {
     }
 }
 
-/// 纯函数：在跑的内核（自报 pid）是不是"野生"的——服务管理器手里的 job pid
-/// 与它对不上。读不到自报 pid = 不知道 = 不算（fail-safe：不去动它）。
-fn daemon_is_unmanaged(running_pid: Option<u32>, resident_pid: Option<u32>) -> bool {
-    match running_pid {
-        Some(p) => resident_pid != Some(p),
-        None => false,
-    }
-}
-
 /// 一次性 spawn 时把 daemon 的 stdout/stderr 接到哪儿（#732 ③）。
 ///
-/// LaunchAgent plist 登记了日志路径就**追加**进同一对文件——与 launchd 托管时
-/// 同一去处，排障只看一处；读不到 plist（Windows / 未登记）= 接 null，与改前
-/// 一致（Windows 的 daemon 自己有落盘日志，DIAG-B1）。打不开文件也退回 null，
-/// 不能因为日志让内核起不来。
+/// 服务管理器登记了 stdio 落点（macOS LaunchAgent）就**追加**进同一对文件——
+/// 与 launchd 托管时同一去处，排障只看一处；没有（Windows / 未登记）= 接 null，
+/// 与改前一致（Windows 的 daemon 自己有落盘日志，DIAG-B1）。打不开文件也退回
+/// null，不能因为日志让内核起不来。
 fn oneshot_stdio() -> (std::process::Stdio, std::process::Stdio) {
-    let paths = std::fs::read_to_string(daemon_logs::plist_path())
-        .map(|t| daemon_logs::parse_plist_log_paths(&t))
-        .unwrap_or((None, None));
-    let open = |p: Option<String>| -> std::process::Stdio {
+    let paths = current_service_stdio_paths();
+    let open = |p: Option<std::path::PathBuf>| -> std::process::Stdio {
         p.and_then(|p| {
             std::fs::OpenOptions::new()
                 .create(true)
@@ -1257,17 +947,12 @@ fn oneshot_stdio() -> (std::process::Stdio, std::process::Stdio) {
 /// 一次性 spawn 同目录下的内置 daemon（不注册 autostart）。#732 起只是
 /// `bring_up_daemon` 的退路（服务管理器接不了手时）。
 ///
-/// `post_update`（UPD-07 #617）：这一份是**被更新流程拉起的**吗？只有它会带上
-/// `--post-update`，从而允许 daemon 在更新窗口内换掉旧壳（见 `crates/daemon/src/owner.rs`）。
-/// 自愈/用户点「启动服务」绝不带——那两件事与"更新"无关，不该让 owner 开火。
-/// ⚠️ 走 launchd 那条（`kickstart` 不能带参数）时 owner 不开火——见 PR 登记：
-/// owner 这条路在新旧壳上都走不通（#667 评论），新壳装完会自己换壳。
-fn spawn_bundled_daemon_oneshot(post_update: bool) -> Result<(), String> {
+fn spawn_bundled_daemon_oneshot() -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let sidecar = exe
         .parent()
         .ok_or("no parent dir")?
-        .join(platform::adapter().daemon_executable_name());
+        .join(platform::hosting().daemon_executable_name());
     if !sidecar.is_file() {
         return Err(ipc::ui_err(
             "ui.err_sidecar_missing",
@@ -1275,9 +960,6 @@ fn spawn_bundled_daemon_oneshot(post_update: bool) -> Result<(), String> {
         ));
     }
     let mut cmd = platform::command(&sidecar);
-    if post_update {
-        cmd.arg("--post-update");
-    }
     let (out, err) = oneshot_stdio();
     cmd.stdout(out)
         .stderr(err)
@@ -1301,11 +983,10 @@ fn spawn_bundled_daemon_oneshot(post_update: bool) -> Result<(), String> {
 /// DESK-72 (#1012)：怎么登记是平台知识（macOS 写 LaunchAgent，Windows 写 HKCU
 /// `Run` 值，没有登录项的平台什么都不做），这里只调平台能力。
 fn register_shell_login_item() {
-    use platform::PlatformAdapter as _;
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
-    if let Err(e) = platform::adapter().register_shell_login_item(&exe) {
+    if let Err(e) = platform::hosting().register_shell_login_item(&exe) {
         // 开发构建 / 从 dmg 或下载目录直跑（非正式安装位置）被拒是**预期**的——不当错误刷屏。
         eprintln!("#616: 壳登录项未登记（{e}）——非正式安装位置时属预期");
     }
@@ -1322,66 +1003,23 @@ fn shell_version<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> String {
     app.package_info().version.to_string()
 }
 
-/// UPD-07 (#617)：把自己的身份（版本 + pid）报给 daemon —— owner 对账的**唯一**来源。
+/// UPD-06 (#616)：磁盘上**安装包**的版本（`Contents/Info.plist`）与运行中
+/// 这只壳的版本不同 ⇒ 返回磁盘上那个版本（"更新装完了、但运行中的壳还是旧的"）。
 ///
-/// 为什么必须由壳自己报：更新装完"磁盘已是新版、运行中的壳还是旧版"时，只有 daemon
-/// （每跳必被换新）能当 owner；而它要判断"壳旧不旧"，必须有**编译进这只壳的版本**——
-/// 去读磁盘上的 `Info.plist` 只会读到新版，读不出壳自己的版本。
-///
-/// 老壳不来这一条 ⇒ daemon 记录为空 ⇒ 它什么都不做（fail-safe）。重试几轮是因为
-/// 启动时序：登录项拉起的壳可能比常驻服务先就绪。
-fn announce_shell_identity(version: String) {
-    let params = serde_json::json!({
-        "version": version,
-        "pid": std::process::id(),
-    });
-    for _ in 0..30 {
-        if let Ok(handle) = ipc::DaemonHandle::discover() {
-            if handle.call("shell.announce", params.clone()).is_ok() {
-                return;
-            }
-        }
-        std::thread::sleep(std::time::Duration::from_secs(2));
-    }
-    eprintln!("#617: 壳身份自报失败（daemon 一直不可达）——owner 那条换壳路会按 fail-safe 不动");
+/// 这是确定性判据：壳的可执行文件在 `/Applications` 下跨更新路径不变，包在它
+/// 下面被换掉，于是"读到的包版本 ≠ 我的编译版本"只有一种解释。同版本或读不到
+/// = `None`（前端什么都不做）。#1044 B13：判「同不同」用共享的 `version_cmp`，
+/// 前端不再自己比版本。
+#[tauri::command]
+fn pending_shell_version(app: tauri::AppHandle) -> Option<String> {
+    pending_shell_version_of(
+        platform::hosting().installed_bundle_version(),
+        &shell_version(&app),
+    )
 }
 
-/// UPD-05 (#605)：更新装完后重启桌面壳自己。
-///
-/// 为什么必须重启：tauri-plugin-updater 的 downloadAndInstall() 只替换
-/// 磁盘上的 .app，**正在运行的外壳进程仍是旧版**——0.7.3→0.7.4 真机现场：
-/// 装完后 resume_daemon_after_update 从新版包拉起新 daemon，页脚
-/// displayVersion = status?.version || version 先跳 0.7.4（显示的是
-/// daemon 版本），外壳二进制还是 0.7.3，于是设置页再弹同一个更新，
-/// 用户以为「版本不对」去重启后台，又跳回 0.7.3——鬼打墙。装完重启
-/// 外壳后，新外壳启动即跑 #604 的自启对账，daemon 已是新版，版本闭环。
-///
-/// 为什么不用 `app.restart()`：它走事件循环（ExitRequested +
-/// RESTART_EXIT_CODE 约定），在 macOS 上有两个与我们配置雷同
-/// （tray 常驻 + 关窗 prevent_close + single-instance）的未结上游
-/// issue——tauri#11392、tauri#13923（tauri 2.5.1 仍复现：只关不拉）。
-/// `tauri::process::restart` 不走事件循环：直接 spawn 当前二进制 +
-/// 立即 exit(0)，与官方 plugin-process 的 relaunch() 是同一底层调用，
-/// 零新依赖（不为这一个命令引入 plugin-process 整 crate）。
-///
-/// Windows 说明：NSIS 静默安装在 downloadAndInstall() 中途就杀掉调用
-/// 进程（见 App.svelte 的 W1 注释），本命令在 Windows 实际走不到——
-/// 装完由安装器自己拉起新外壳。本命令服务 macOS（#605 的事发平台）。
-#[tauri::command]
-fn restart_app(app: tauri::AppHandle) {
-    tauri::process::restart(&app.env());
-}
-
-/// UPD-06 (#616)：磁盘上**安装包**的版本（`Contents/Info.plist`）。
-///
-/// 与 `getVersion()`（**编译进这只壳**的版本）比对就是"更新装完了、但运行中的
-/// 这只壳还是旧的"的**确定性判据**：壳的可执行文件在 `/Applications` 下跨更新
-/// 路径不变，包在它下面被换掉，于是"读到的包版本 ≠ 我的编译版本"只有一种解释。
-/// 读不到 = `None` = 不知道（前端必须按"什么都不做"处理）。
-#[tauri::command]
-fn installed_app_version() -> Option<String> {
-    use platform::PlatformAdapter as _;
-    platform::adapter().installed_bundle_version()
+fn pending_shell_version_of(installed: Option<String>, running: &str) -> Option<String> {
+    installed.filter(|v| version_cmp(v, running) != std::cmp::Ordering::Equal)
 }
 
 /// UPD-06 (#616)：换壳——让**运行中的这只壳**变成磁盘上已经是新版的那一份。
@@ -1399,23 +1037,22 @@ fn installed_app_version() -> Option<String> {
 /// 前端据此给"手动完全退出再打开"的兜底提示。
 #[tauri::command]
 fn relaunch_shell(app: tauri::AppHandle) -> Result<(), String> {
-    use platform::PlatformAdapter as _;
     // ⚠️ 闸门一：只有**launchd 自己拉起来的**这一份壳才走系统路径。
     // `kickstart -k` 的 "kill the running instance" 只能杀服务管理器启动的进程；
     // 从访达/Dock 打开的壳，launchd 手里没有它的 pid ⇒ `-k` 无物可杀 ⇒ kickstart
     // 只会再拉一个实例，而 single-instance 会让新实例把焦点交回旧壳后自杀 ⇒
     // 用户点"重启"什么都没发生（比不重启更糟）。所以非 launchd 实例直接走退化路径。
-    if let Some(label) = platform::adapter().shell_agent_label() {
-        if !platform::adapter().shell_agent_started_us() {
+    if let Some(label) = platform::hosting().shell_agent_label() {
+        if !platform::hosting().shell_agent_started_us() {
             eprintln!(
                 "#616: 本进程不是 {label} 拉起的（用户直接打开），kickstart 无物可杀，走壳自己重启"
             );
         } else {
             match std::env::current_exe() {
-                Ok(exe) => match platform::adapter().register_shell_agent(&exe) {
-                    Ok(()) => match platform::adapter().shell_agent_registered_exec() {
+                Ok(exe) => match platform::hosting().register_shell_agent(&exe) {
+                    Ok(()) => match platform::hosting().shell_agent_registered_exec() {
                         Ok(Some(registered)) if registered == exe => {
-                            match platform::adapter().kickstart_shell_agent() {
+                            match platform::hosting().kickstart_shell_agent() {
                                 Ok(pid) => {
                                     eprintln!("#616: kickstart {label} 拉起新壳 pid={pid}");
                                     return Ok(());
@@ -1442,9 +1079,10 @@ fn relaunch_shell(app: tauri::AppHandle) -> Result<(), String> {
 /// 与 stop_daemon 相反：本命令**绝不碰 autostart 注册**（uninstall 会
 /// 阻止复活）——注册从头到尾没动过，这正是设计要点。体面退出（exit 0）
 /// 反而不会被复活，所以必须是真的"杀"（信号终止），不走 step_down 那套
-/// 版本协商。Windows 的 autostart 是普通 Run key、没有 KeepAlive 复活
-/// 语义——杀掉后显式重新拉起一次（start_daemon 的一次性 spawn 分支，
-/// 不注册 autostart）。
+/// 版本协商。Windows 的计划任务（#957）同样由系统托管，走
+/// `restart_resident_daemon`；只有没有服务管理器的兜底实现
+/// （`ServiceMode::UserAutostart`）才杀掉后显式重新拉起一次（start_daemon
+/// 的一次性 spawn 分支，不注册 autostart）。
 ///
 /// **DESK-44 (#606) 两处修正**（2026-10-03 真机现场）：
 /// ① **判据从"固定时钟"改成"可观察进度"**：旧实现"12 秒内版本必须变，否则报错"
@@ -1490,11 +1128,10 @@ fn restart_daemon_process_blocking() -> Result<Value, String> {
                 .and_then(|x| x.as_str())
                 .map(str::to_string)
         });
-    // 2) 杀进程——照抄 stop_daemon 的 kill 逻辑（同款 pkill/taskkill），
-    //    但绝不做任何 uninstall_autostart。
+    // 2) 杀进程——与停服务同一个 `stop_bundled_daemon`（B7 #1043：按 sidecar
+    //    完整路径），但绝不做任何 uninstall_autostart。
     // QA-09 迁移（#211）：这处**认真判错**（另两个调用点是 best-effort）。
-    // 「进程本来就没在跑」不是失败——判据在 platform 里，各系统一份
-    // （unix 的 pkill 退出码 1 / Windows 的 taskkill 128）。DESK-25 (#208)
+    // 「进程本来就没在跑」不是失败——判据在 platform 里。DESK-25 (#208)
     // 就是因为这条判据被抄散、其中一处没判，把「没杀掉」当成杀成功、
     // 紧接着去 spawn 第二个 daemon 才出的事。
     //
@@ -1503,7 +1140,7 @@ fn restart_daemon_process_blocking() -> Result<Value, String> {
     // 的野生实例。改为：野生实例先退位 + `kickstart -k`（launchd 立刻按磁盘上的
     // 文件拉新的），内核从此归 launchd 托管。走不通才退回下面的老路。
     if resident_service_available() {
-        bring_up_daemon(true, false).map_err(|e| ipc::ui_err("ui.err_restart", &[("err", &e)]))?;
+        bring_up_daemon(true).map_err(|e| ipc::ui_err("ui.err_restart", &[("err", &e)]))?;
     } else {
         restart_by_kill_and_respawn()?;
     }
@@ -1534,27 +1171,25 @@ fn restart_daemon_process_blocking() -> Result<Value, String> {
     ))
 }
 
-/// DAE-04 原路径（没有 LaunchAgent 语义时）：杀进程，Run key 平台再显式拉一次。
+/// DAE-04 原路径（没有服务管理器时，`ServiceMode::UserAutostart`）：杀进程，再显式拉一次。
 fn restart_by_kill_and_respawn() -> Result<(), String> {
-    platform::adapter()
-        .kill_daemon_process()
-        .map_err(|e| ipc::ui_err("ui.err_kill_old", &[("err", &e)]))?;
+    stop_bundled_daemon().map_err(|e| ipc::ui_err("ui.err_kill_old", &[("err", &e)]))?;
 
     // 3) 被杀之后系统会不会自己把它拉回来，取决于常驻方式：
-    //    LaunchAgent 的 KeepAlive 会（macOS），Run key 不会（Windows /
-    //    Linux）——后者必须显式重新拉起一次（一次性 spawn，不碰 autostart
+    //    LaunchAgent 的 KeepAlive 与计划任务看门狗会（macOS / Windows），
+    //    `UserAutostart` 兜底实现不会——后者必须显式重新拉起一次（一次性 spawn，不碰 autostart
     //    注册，注册从头到尾没动过，这正是本命令的设计要点）。
     //
     //    ⚠️ 这一句在 Linux 上是**行为改变**，已在 PR 里登记：迁移前
     //    Linux 走的是原来那个 unix 分支、杀完不拉起，然后下面那段等待必然
     //    超时报错（Linux 没有任何东西会复活它）。桌面壳在 Linux 上不是发布
     //    形态，但既然改了就写明，不混在"纯搬家"里带过去。
-    if platform::adapter().service_mode() == platform::ServiceMode::UserAutostart {
+    if platform::hosting().service_mode() == platform::ServiceMode::UserAutostart {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let sidecar = exe
             .parent()
             .ok_or("no parent dir")?
-            .join(platform::adapter().daemon_executable_name());
+            .join(platform::hosting().daemon_executable_name());
         if !sidecar.is_file() {
             return Err(ipc::ui_err(
                 "ui.err_sidecar_missing",
@@ -1594,199 +1229,57 @@ fn restart_outcome(old_version: Option<&str>, new_version: Option<&str>, answere
     })
 }
 
-/// DESK-10：诊断包由**桌面壳本地组装**，不是 daemon 的 IPC 方法——
-/// daemon 起不来时这个按钮必须照样工作，那正是最需要日志的场景。
-/// daemon 活着时再附加它能提供的那三份（diag / devices / audit）；
-/// 不可达时包里放 `daemon-unreachable.txt` 说明，其余照常收集。
-/// 落盘位置与文件名沿用 daemon 原来的 `<库目录>/ppf-logs.zip`（验收人
-/// 已经习惯了，不动）。
+/// 库目录：平台 config 里的 `data_dir`，没配置则退回平台数据目录。**只读**，
+/// 不依赖常驻服务在线（#1059）——「打开照片库」「诊断包落点」共用这一口径。
+fn configured_library_dir(platform_dir: &std::path::Path) -> std::path::PathBuf {
+    ipc::read_config_data_dir(platform_dir)
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| platform_dir.to_path_buf())
+}
+
+/// 给「打开照片库」用：库目录必须是真实存在的目录，否则 keyed 错误
+/// （前端用 `errText` 翻成人话，不透出系统原文与路径）。
+fn existing_library_dir(platform_dir: &std::path::Path) -> Result<String, String> {
+    let dir = configured_library_dir(platform_dir);
+    if dir.is_dir() {
+        Ok(dir.to_string_lossy().into_owned())
+    } else {
+        Err(ipc::ui_err("ui.library_dir_unknown", &[]))
+    }
+}
+
+/// #1059：照片库只是磁盘上的目录，打开它不需要后台服务。壳从平台 config 只读
+/// 解析库目录（与服务在线时 `status.library_dir` 同源：daemon 也读这份 config），
+/// 服务停止时「打开照片库」照样可用。
+#[tauri::command]
+fn library_dir() -> Result<String, String> {
+    existing_library_dir(&platform::adapter().data_dir())
+}
+
+/// 诊断包由 daemon 组装并脱敏（#1042 / #1045）：壳只调内置 daemon 的
+/// `diag export --out <库目录>/ppf-logs.zip --app-version <壳版本>`。
+///
+/// DESK-10 的核心不变量由 daemon 一侧守：常驻服务不在线**不是失败路径**，包照出
+/// （少三份 JSON、多一份说明），所以这个按钮在 daemon 起不来时照样能用——
+/// `diag export` 是独立的短进程，不依赖常驻服务。脱敏规则只有 daemon 一份
+/// （`crates/daemon/src/redact.rs`），壳不再二次脱敏。
+///
+/// 落盘位置与文件名沿用 `<库目录>/ppf-logs.zip`：库目录取 config 里的 `data_dir`，
+/// 没配置则退回平台数据目录。返回值就是 daemon 的 `{"zip","daemon_reachable"}`。
 #[tauri::command]
 fn export_logs_bundle(app: tauri::AppHandle) -> Result<Value, String> {
-    let env = ExportEnv {
-        platform_dir: platform::adapter().data_dir(),
-        home: daemon_logs::home_dir(),
-        plist: daemon_logs::plist_path(),
-        app_version: shell_version(&app),
-    };
-    // daemon 可达就把它那三份要过来（它写出来的 zip 先整份读进内存，
-    // 之后才允许覆盖同名文件）；不可达只记原因，收集继续。
-    // DESK-31：版本号在 status 那一步就拿定了，必须独立于「三份日志要不
-    // 要得到」传下去——logs.export 被拒 / zip 读不出时，包里印的仍是在线
-    // 服务自报的版本，不是 App 自带 sidecar 的版本。
-    let daemon = match ipc::DaemonHandle::discover() {
-        Ok(handle) => {
-            let version = handle
-                .call("status", json!({}))
-                .ok()
-                .and_then(|v| v["version"].as_str().map(str::to_string));
-            let logs =
-                daemon_entries_from_logs_export(handle.call("logs.export", json!({})), |zip| {
-                    daemon_logs::read_zip_entries(std::path::Path::new(zip))
-                        .map_err(|e| format!("后台服务的日志包读不出来：{e}"))
-                });
-            match logs {
-                Ok(entries) => DaemonCollection::Complete(DaemonParts { version, entries }),
-                Err(reason) => DaemonCollection::LogsUnavailable { version, reason },
-            }
-        }
-        // 版本号仍然要有：直接问内置的服务程序自己（真机事故里正是
-        // `ppf-daemon --version` 一句话拿到了真相）。
-        Err(e) => DaemonCollection::Unreachable(e),
-    };
-    assemble_export(&env, daemon, sidecar_daemon_version)
+    let library = configured_library_dir(&platform::adapter().data_dir());
+    daemon_cli::diag_export(
+        &daemon_cli::bundled_sidecar()?,
+        &library.join("ppf-logs.zip"),
+        &shell_version(&app),
+    )
 }
 
-/// 收集时需要知道的几个目录（测试注入 tempdir——绝不碰真实照片库/真实
-/// LaunchAgent plist）。
-struct ExportEnv {
-    /// 平台数据目录（config.toml 在这里）。
-    platform_dir: std::path::PathBuf,
-    /// 家目录（脱敏基准）。
-    home: std::path::PathBuf,
-    /// LaunchAgent plist（日志路径的唯一真相）。
-    plist: std::path::PathBuf,
-    /// 外壳版本（#809：取 [`shell_version`]，与 daemon 同源）。
-    app_version: String,
-}
-
-/// daemon 活着时它能给的那部分。
-struct DaemonParts {
-    version: Option<String>,
-    entries: Vec<(String, Vec<u8>)>,
-}
-
-/// daemon 收集结果的三态（DESK-31）。`LogsUnavailable` 与 `Unreachable`
-/// 必须分开：前者服务活着、只是三份日志没拿到，versions.txt 印的是
-/// **在线服务自报版本**；后者服务压根没起来，才退回 sidecar 版本。
-enum DaemonCollection {
-    /// discover() 失败：后台服务压根没起来（DESK-10 的不可达分支）。
-    Unreachable(String),
-    /// 服务在线（version 已拿到或为 None），但 diag / devices / audit
-    /// 三份没拿到。version 独立于日志获取成败——这是本卡的修复点。
-    LogsUnavailable {
-        version: Option<String>,
-        reason: String,
-    },
-    /// 三份日志完整拿到（version 是服务自报版本，旧 daemon 可能 None）。
-    Complete(DaemonParts),
-}
-
-/// logs.export 的 IPC 结果 → 三份日志条目。两条失败路径——应答被拒、
-/// zip 读不出——都在这一步落成 Err(String)，版本号的去留由调用方决定。
-/// 单独成函数，是为了让两条分支都能在不起真 daemon 的情况下被单测喂到。
-fn daemon_entries_from_logs_export(
-    export: Result<serde_json::Value, String>,
-    read_zip: impl FnOnce(&str) -> Result<Vec<(String, Vec<u8>)>, String>,
-) -> Result<Vec<(String, Vec<u8>)>, String> {
-    match export {
-        Ok(v) => {
-            let daemon_zip = v["zip"].as_str().unwrap_or_default().to_string();
-            read_zip(&daemon_zip)
-        }
-        Err(e) => Err(format!("后台服务拒绝了 logs.export：{e}")),
-    }
-}
-
-/// 组装并落盘。**daemon 那部分不是失败路径**——它只是少了三份文件、
-/// 多一份说明 txt，zip 照出。这个函数里一行 `return Err` 都不能因为
-/// daemon 不可达而触发（DESK-10 的核心）。
-fn assemble_export(
-    env: &ExportEnv,
-    daemon: DaemonCollection,
-    sidecar_version: impl Fn() -> Option<String>,
-) -> Result<Value, String> {
-    let home = env.home.display().to_string();
-    // 日志路径：只从 plist 读，不硬编码 ~/Library/Logs。
-    let plist = std::fs::read_to_string(&env.plist).ok();
-    let (out_path, err_path) = plist
-        .as_deref()
-        .map(daemon_logs::parse_plist_log_paths)
-        .unwrap_or((None, None));
-    // DESK-58 (#875)：没有 plist 的平台（Windows）stderr 有固定落点，收进
-    // daemon-stderr.log——「起不来的原因」就在这份里。
-    let err_path = err_path.or_else(|| {
-        platform::adapter()
-            .startup_stderr_file(&env.platform_dir)
-            .map(|p| p.display().to_string())
-    });
-    // DIAG-B1：daemon 自己的固定位置日志，不依赖 plist。DESK-32 (#367)：没读到
-    // 也要把原因和本该在的位置带进包里。
-    let log_path = platform::adapter().default_log_file(&env.platform_dir);
-    let (persistent_log_tail, persistent_log_missing) =
-        daemon_logs::persistent_log(log_path.as_deref(), 1024 * 1024);
-
-    let mut inputs = daemon_logs::BundleInputs {
-        home: home.clone(),
-        app_version: env.app_version.clone(),
-        plist_found: plist.is_some(),
-        config_toml: std::fs::read_to_string(env.platform_dir.join("config.toml")).ok(),
-        stdout_tail: out_path
-            .as_deref()
-            .and_then(|p| daemon_logs::tail(std::path::Path::new(p), 256 * 1024)),
-        stderr_tail: err_path
-            .as_deref()
-            .and_then(|p| daemon_logs::tail(std::path::Path::new(p), 256 * 1024)),
-        stdout_path: out_path,
-        stderr_path: err_path,
-        persistent_log_tail,
-        persistent_log_path: log_path.map(|p| p.display().to_string()),
-        persistent_log_missing,
-        ..Default::default()
-    };
-    // DESK-63 (#946): the shell's own state/connection log. This is the file
-    // that used to not exist at all — support could see the daemon was fine
-    // but had nothing explaining why the UI called it unreachable.
-    let desktop_log_path = env.platform_dir.join("logs").join("desktop.log");
-    let desktop_log_tail = daemon_logs::tail(&desktop_log_path, 256 * 1024);
-    inputs.desktop_log_path = Some(desktop_log_path.display().to_string());
-    inputs.desktop_log_tail = desktop_log_tail;
-    if inputs.desktop_log_tail.is_none() {
-        inputs.desktop_log_missing = Some("文件不存在或读不出来（桌面壳还没写过日志）".into());
-    }
-    match daemon {
-        DaemonCollection::Complete(parts) => {
-            inputs.daemon_version = parts.version;
-            inputs.daemon_entries = parts.entries;
-        }
-        // DESK-31：服务在线、日志没拿到——版本用在线自报的，不退回
-        // sidecar；reachable 不是 no，单独写 daemon-logs-unavailable.txt。
-        DaemonCollection::LogsUnavailable { version, reason } => {
-            inputs.daemon_version = version;
-            inputs.daemon_logs_unavailable = Some(reason);
-        }
-        DaemonCollection::Unreachable(reason) => {
-            inputs.daemon_unreachable = Some(reason);
-            inputs.daemon_version = sidecar_version();
-        }
-    }
-
-    // 库目录：config 里的 data_dir 优先（daemon 就是往那儿写 ppf-logs.zip
-    // 的），没有则退回平台数据目录。
-    let data_dir = ipc::read_config_data_dir(&env.platform_dir)
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| env.platform_dir.clone());
-    let zip_path = data_dir.join("ppf-logs.zip");
-    let entries = daemon_logs::build_bundle(&inputs);
-    daemon_logs::write_zip(&zip_path, &entries)?;
-    Ok(json!({
-        "zip": zip_path.display().to_string(),
-        "daemon_reachable": inputs.daemon_unreachable.is_none(),
-    }))
-}
-
-/// 内置服务程序自报版本（daemon 不可达时的版本来源）。取不到 → None，
-/// 绝不因此让导出失败。
+/// 内置服务程序自报版本（`--version --json`；kernel 对账用）。取不到 → None，
+/// 绝不因此让别的流程失败。
 fn sidecar_daemon_version() -> Option<String> {
-    let exe = std::env::current_exe().ok()?;
-    let sidecar = exe
-        .parent()?
-        .join(platform::adapter().daemon_executable_name());
-    if !sidecar.is_file() {
-        return None;
-    }
-    let out = platform::command(&sidecar).arg("--version").output().ok()?;
-    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (!text.is_empty()).then_some(text)
+    daemon_cli::probe_version(&daemon_cli::bundled_sidecar().ok()?).ok()
 }
 
 // ── #667：壳启动时自动换内核 ─────────────────────────────────────────
@@ -1798,7 +1291,7 @@ fn sidecar_daemon_version() -> Option<String> {
 //
 // 两个既有语义先于"换"：
 // ① 用户主动停过服务（`desktop-user-stopped`）⇒ 一律不动；
-// ② 正在传输（任何设备 `devices.list` 报出非空 `flow_connection`——与设备行
+// ② 正在传输（daemon 给的 `status.transfer_active`，#1044——与设备行
 //    「传输中」同一信号，NET-05）⇒ 推迟，传输停下来连续两次（~20s）才换；
 //    推迟期间界面给事实句（`ui.kernel_converge_deferred`），不是失败。
 
@@ -1820,136 +1313,14 @@ fn kernel_convergence_phase() -> &'static str {
     KERNEL_CONVERGENCE.lock().map(|p| *p).unwrap_or("idle")
 }
 
-/// 与 daemon 的 DAE-01 `version_cmp`（crates/daemon/src/ipc.rs）**同一语义**：
-/// 数字段逐段比；同核心时正式版 > 预发布；预发布按数字段比（test.10 > test.9）。
-/// 桌面壳是独立 workspace、不依赖 daemon crate，所以抄一份，单测用同一组样例钉住。
-fn version_cmp(a: &str, b: &str) -> std::cmp::Ordering {
-    use std::cmp::Ordering;
-    let nums = |seg: &str| -> Vec<u64> {
-        seg.split(|c: char| !c.is_ascii_digit())
-            .filter(|p| !p.is_empty())
-            .map(|p| p.parse().unwrap_or(0))
-            .collect()
-    };
-    let parse = |s: &str| -> (Vec<u64>, Vec<u64>, bool) {
-        let (core, pre) = match s.split_once('-') {
-            Some((c, p)) => (c, Some(p)),
-            None => (s, None),
-        };
-        (nums(core), pre.map(nums).unwrap_or_default(), pre.is_some())
-    };
-    let (na, npa, pa) = parse(a);
-    let (nb, npb, pb) = parse(b);
-    for i in 0..na.len().max(nb.len()) {
-        let (x, y) = (
-            na.get(i).copied().unwrap_or(0),
-            nb.get(i).copied().unwrap_or(0),
-        );
-        if x != y {
-            return x.cmp(&y);
-        }
-    }
-    match (pa, pb) {
-        (false, true) => Ordering::Greater,
-        (true, false) => Ordering::Less,
-        (true, true) => {
-            for i in 0..npa.len().max(npb.len()) {
-                let (x, y) = (
-                    npa.get(i).copied().unwrap_or(0),
-                    npb.get(i).copied().unwrap_or(0),
-                );
-                if x != y {
-                    return x.cmp(&y);
-                }
-            }
-            Ordering::Equal
-        }
-        (false, false) => Ordering::Equal,
-    }
-}
-
-/// 对账用的事实（全部现取，不信缓存）。
-#[derive(Debug, Clone, Default)]
-struct KernelFacts {
-    /// 在跑的内核自报（`status.version` / `status.pid`）。
-    running_version: Option<String>,
-    running_pid: Option<u32>,
-    /// 磁盘上 sidecar 的版本（`ppf-daemon --version`）——换完会是它。
-    on_disk_version: Option<String>,
-    /// 常驻服务登记在吗（launchd 语义），以及 launchd 眼里在跑的 pid。
-    resident_registered: bool,
-    resident_pid: Option<u32>,
-    user_stopped: bool,
-    transfer_active: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum KernelVerdict {
-    /// 内核 = 磁盘版本，且（有 launchd 时）归 launchd 管：无事可做。
-    InSync,
-    /// 按规则不动（理由写日志）。
-    Skip(&'static str),
-    /// 该换，但正在传输 ⇒ 推迟。
-    Defer,
-    /// 现在就换。
-    Converge(&'static str),
-}
-
-/// #667 判据（纯函数，单测覆盖每条分支）。
-fn kernel_convergence_verdict(f: &KernelFacts) -> KernelVerdict {
-    use std::cmp::Ordering;
-    if f.user_stopped {
-        return KernelVerdict::Skip("用户主动停了服务");
-    }
-    let (Some(running), Some(on_disk)) =
-        (f.running_version.as_deref(), f.on_disk_version.as_deref())
-    else {
-        // 读不到 = 不知道 = 什么都不做（fail-safe）。
-        return KernelVerdict::Skip("读不到内核或磁盘版本");
-    };
-    let reason = match version_cmp(running, on_disk) {
-        // 只在"内核比磁盘旧"时换：dmg 降级安装不许把内核也降下去。
-        Ordering::Greater => return KernelVerdict::Skip("内核比磁盘上的新，不降级"),
-        Ordering::Less => "内核比磁盘上的旧",
-        Ordering::Equal => {
-            if f.resident_registered && daemon_is_unmanaged(f.running_pid, f.resident_pid) {
-                "内核不归服务管理器管"
-            } else {
-                return KernelVerdict::InSync;
-            }
-        }
-    };
-    if f.transfer_active {
-        return KernelVerdict::Defer;
-    }
-    KernelVerdict::Converge(reason)
-}
-
-/// `ppf-daemon --version` 的输出是 `P-Pass daemon <ver>`；取版本号。
-fn parse_sidecar_version(text: &str) -> Option<String> {
-    text.trim()
-        .strip_prefix("P-Pass daemon ")
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-}
-
-/// 任何设备报出非空 `flow_connection` = 正在传输（与设备行「传输中」同一信号）。
-fn any_transfer_active(devices: &Value) -> bool {
-    devices
-        .get("devices")
-        .and_then(|d| d.as_array())
-        .map(|list| list.iter().any(|d| !d["flow_connection"].is_null()))
-        .unwrap_or(false)
-}
+// #1044 B13：版本关系只有一份实现（crates/version-cmp，daemon 共用）。
+use version_cmp::version_cmp;
 
 fn gather_kernel_facts() -> KernelFacts {
     let handle = ipc::DaemonHandle::discover().ok();
     let status = handle
         .as_ref()
         .and_then(|h| h.call("status", json!({})).ok());
-    let devices = handle
-        .as_ref()
-        .and_then(|h| h.call("devices.list", json!({})).ok());
     KernelFacts {
         running_version: status
             .as_ref()
@@ -1958,22 +1329,77 @@ fn gather_kernel_facts() -> KernelFacts {
             .as_ref()
             .and_then(|s| s["pid"].as_u64())
             .map(|p| p as u32),
-        on_disk_version: sidecar_daemon_version().and_then(|t| parse_sidecar_version(&t)),
+        on_disk_version: sidecar_daemon_version(),
         resident_registered: resident_service_available(),
-        resident_pid: platform::adapter().resident_daemon_pid(),
+        resident_pid: platform::hosting().resident_daemon_pid(),
         user_stopped: is_user_stopped(&platform::adapter().data_dir()),
-        transfer_active: devices.as_ref().map(any_transfer_active).unwrap_or(false),
+        // #1044：是否正在传输由 daemon 给结论（status.transfer_active）。读不到
+        // （旧内核没有这个字段）按「没在传」——换内核是幂等对账，Flow 可续传。
+        transfer_active: status
+            .as_ref()
+            .and_then(|s| s["transfer_active"].as_bool())
+            .unwrap_or(false),
     }
 }
 
-/// 壳启动时跑一次（独立线程）。等内核答上 status，再按判据换。
+/// #1046（S-8 / S-11）：新壳启动时的幂等对账，一条线程里**按顺序**跑——更新流程
+/// 「停 → 替换 → 重启壳 → 新壳对账」的最后一步就是它：
+/// 1. 开机自启登记对账（`distribution::reconcile_autostart_registration`）：指向
+///    当前安装、内容是本版本的（含 launchd 日志落点）；用户停过就只撤不写。
+///    原先 daemon 接管旧实例后自己重装登记，这份职责归到这里。
+/// 2. 内核对账（#667）：内核比磁盘旧 / 不归服务管理器管 ⇒ 换；一直不可达 ⇒ 按自愈
+///    判据拉起（不是用户停的才拉）。原先由旧壳的 `resume_daemon_after_update` 先拉。
+///
+/// 先 1 后 2：登记重写（bootout + bootstrap）本身会重启 launchd 那份内核，与换内核
+/// 的 `kickstart -k` 并发会连着重启两次。
+fn startup_reconcile(app: tauri::AppHandle) {
+    reconcile_autostart_registration();
+    resume_after_update(&app);
+    converge_kernel_on_startup(app);
+}
+
+/// #1060「更新后恢复」：更新前为替换文件暂停了常驻服务（登记保留），新壳起来后
+/// 把它拉回来——直接就是新内核，不再经过「旧内核被 KeepAlive 拉起、再被换一次」。
+/// 判据见 `update_resume_needed`（用户停过的保持停止）。排在登记对账之后：登记
+/// 被重写时那一下 bootstrap 已经起了服务，这里看到在线就不动，避免并发重启。
+fn resume_after_update(app: &tauri::AppHandle) {
+    if !update_resume_needed(
+        &platform::adapter().data_dir(),
+        resident_service_available(),
+        daemon_online(),
+    ) {
+        return;
+    }
+    match self_heal_now(app, "resume after update") {
+        Ok(true) => eprintln!("#1060: 新壳启动，已把常驻服务拉回"),
+        Ok(false) => eprintln!("#1060: 新壳启动，按判据不拉"),
+        Err(e) => eprintln!("#1060: 新壳启动，拉回常驻服务失败：{e}"),
+    }
+}
+
+/// 等内核答上 status，再按判据换（#667）。
 fn converge_kernel_on_startup(app: tauri::AppHandle) {
-    // 内核可能还没起来（登录时壳比内核先就绪）——最多等 90s；一直不答上
-    // 就交给既有的自愈，不在这里拉。
+    // 内核可能还没起来（登录时壳比内核先就绪）——最多等 90s。一直不答上就按自愈
+    // 判据拉一次（#1046：不依赖前端是否已加载、是否已触发自愈）。
     let deadline = std::time::Instant::now() + RESTART_GRACE;
     while !daemon_online() {
         if std::time::Instant::now() >= deadline {
-            eprintln!("#667: 内核一直不可达，跳过启动对账（交给自愈）");
+            // 与前端自愈同一道门：只有服务状态是 Unreachable（配置过、已登记、不是
+            // 用户停的、过了启动宽限仍连不上）才拉。Stopped（向导中途退出 / 用户
+            // 停过）与 NotConfigured 是用户动作的事——拉起来会把人踢出向导。
+            let manager = app.state::<ServiceStateManager>().inner().clone();
+            if manager.current() != ServiceState::Unreachable {
+                eprintln!(
+                    "#1046: 内核一直不可达，服务状态为 {}，不在启动对账里拉",
+                    manager.current().as_str()
+                );
+                return;
+            }
+            match self_heal_now(&app, "startup reconcile") {
+                Ok(true) => eprintln!("#1046: 内核一直不可达，启动对账已按自愈判据拉起"),
+                Ok(false) => eprintln!("#1046: 内核一直不可达，按判据不拉（未配置或用户停过）"),
+                Err(e) => eprintln!("#1046: 内核一直不可达，启动对账拉起失败：{e}"),
+            }
             return;
         }
         std::thread::sleep(std::time::Duration::from_secs(2));
@@ -2029,7 +1455,6 @@ fn converge_kernel_on_startup(app: tauri::AppHandle) {
     }
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // DESK-68 (#996)：发布版只许从正式安装位置运行——排在**一切**之前（搬数据
     // 目录、单实例、拉 daemon、写登记都在后面），不在位置就提示后退出，什么都
@@ -2089,15 +1514,13 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        // DESK-69 (#997)：前端按平台分支只认 plugin-os 的 platform()。
-        .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             daemon_call,
-            daemon_online,
-            start_event_stream,
             service_state,
             wizard_state,
+            platform_ux,
+            update_failure_key,
             power_hint,
             open_power_settings,
             disable_auto_sleep,
@@ -2107,14 +1530,14 @@ pub fn run() {
             daemon_startup_error,
             stop_daemon,
             pause_daemon_for_update,
-            resume_daemon_after_update,
-            restart_app,
-            installed_app_version,
+            pending_shell_version,
             relaunch_shell,
             self_heal_daemon,
+            resume_after_failed_update,
             restart_daemon_process,
             kernel_convergence_phase,
             export_logs_bundle,
+            library_dir,
             allow_media_scope,
             notify_system,
             set_tray_locale
@@ -2123,6 +1546,7 @@ pub fn run() {
             // DESK-63 (#946): register the state owner BEFORE the event
             // stream starts. The stream's handshake and the stop/start
             // commands all write through this one object.
+            let _ = app.manage(UpdatePause::default());
             let _ = app.manage(ServiceStateManager::new(
                 initial_service_state(),
                 service_state::desktop_log_path(&platform::adapter().data_dir()),
@@ -2130,27 +1554,19 @@ pub fn run() {
             // IPC-02: 启动即订阅——daemon 事件驱动 UI（扫码即时切弹窗、
             // 备份落地即时刷新），不依赖前端渲染时序。
             start_event_stream(app.handle().clone());
-            // #604 [DESK-42]：开机自启登记对账——注册条目必须指向**当前安装
-            // App 内**的 daemon。放独立线程：不一致时它会动 launchctl
-            // （bootout + bootstrap），不该堵启动。
-            std::thread::spawn(reconcile_autostart_registration);
             // UPD-06 (#616)：把壳登记成登录项（写 plist；下一次登录起由 launchd 接管，
             // 从那时起 kickstart 才是可用路径）。独立线程：只做一次文件读写。
             std::thread::spawn(register_shell_login_item);
-            // UPD-07 (#617)：把自己（版本 + pid）报给 daemon —— owner 判断"壳旧不旧"
-            // 的唯一来源。独立线程 + 重试，不阻塞启动，也不拖慢首屏。
-            {
-                let version = shell_version(app.handle());
-                std::thread::spawn(move || announce_shell_identity(version));
-            }
-            // #667：内核比磁盘上的旧 / 不归 launchd 管 ⇒ 自动换（尊重用户停止与传输中）。
+            // #1046：新壳启动对账——先开机自启登记（#604，含老版本 plist 重新登记），
+            // 再内核（#667 自动换 / 一直不可达按自愈判据拉起）。独立线程：会动
+            // launchctl、要等内核，不该堵启动。
             {
                 let app = app.handle().clone();
-                std::thread::spawn(move || converge_kernel_on_startup(app));
+                std::thread::spawn(move || startup_reconcile(app));
             }
             // I18N-03 (#492)：文案取自 assets/i18n（见 TRAY_ITEMS）；前端
             // 报上语言后 set_tray_locale 会再改一次字。
-            let locale = tray_locale(&std::env::var("LANG").unwrap_or_default());
+            let locale = system_tray_locale();
             let mut tray_items = Vec::with_capacity(TRAY_ITEMS.len());
             for (id, key) in TRAY_ITEMS {
                 let item = MenuItem::with_id(app, id, tray_text(locale, key), true, None::<&str>)?;
@@ -2218,8 +1634,8 @@ pub fn run() {
                         // #550：诊断包入口从设置页收进托盘。先把窗口拉起来
                         // 再让前端导出——结果（路径 + 「只发给开发者」的
                         // 提醒，或失败原因）走窗口里的 toast，窗口藏着时
-                        // 用户看不见；notify_system 在 Windows 上是 no-op，
-                        // 靠不住。导出本身仍是前端 invoke export_logs_bundle，
+                        // 用户看不见；系统通知（notify_system）只承载短提醒，
+                        // 不承载带路径的导出结果。导出本身仍是前端 invoke export_logs_bundle，
                         // 不另开第二条导出路径。
                         bring_main_window_to_front(app);
                         let _ = app.emit(EVENT_EXPORT_LOGS_REQUESTED, ());
@@ -2261,8 +1677,8 @@ pub fn run() {
                 //      localStorage。卡面禁止新造文件，而桌面壳其余的持久化
                 //      通道要么会被 write_config 整体重写（config.toml），
                 //      要么根本是 daemon 的配置（#172 里逐条核过）。
-                //   2. 平台判断放前端就不用在本文件再加一处 cfg——#211 正在
-                //      往外搬这些，别一边搬一边添。
+                //   2. 要不要提示由适配器能力回答（`platform_ux`，#1043），
+                //      本文件不判断平台。
                 //
                 // hide() 与 prevent_close() 留在 Rust 不动是刻意的：前端万一
                 // 没注册上监听，最坏只是**少提示一次**，关窗行为不会退化成
@@ -2298,28 +1714,59 @@ fn tray_left_click_opens_window(
 }
 
 #[cfg(test)]
+mod business_rules_table;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    /// 诊断包测试注入的外壳版本（#809：生产里来自 [`shell_version`]）。
-    const TEST_APP_VERSION: &str = "9.9.9-test.1";
+    /// #1060：暂停窗口只由本壳开关；默认不在窗口里（新壳启动对账照常拉起）。
+    #[test]
+    fn update_pause_window_opens_and_closes() {
+        let p = UpdatePause::default();
+        assert!(!p.active(), "新壳不在暂停窗口里");
+        p.begin();
+        assert!(p.active());
+        p.end();
+        assert!(!p.active(), "安装失败后必须能退出窗口，否则永不自愈");
+    }
 
-    /// #809：外壳自报版本（shell.announce / 诊断包）只认 tauri `package_info`——
+    /// #1060：自愈命令在暂停窗口里必须先看窗口再拉；失败恢复命令必须先关窗口。
+    /// 反证：删掉 self_heal_daemon 里的 active() 判断，或 resume 里的 end() → 红。
+    #[test]
+    fn self_heal_respects_update_pause_window() {
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let product = src.split("#[cfg(test)]").next().unwrap();
+        let heal = product.split("fn self_heal_daemon(").nth(1).unwrap();
+        let heal = &heal[..heal.find("\n}\n").unwrap()];
+        assert!(heal.contains("UpdatePause>().active()"));
+        let resume = product
+            .split("fn resume_after_failed_update(")
+            .nth(1)
+            .unwrap();
+        let resume = &resume[..resume.find("\n}\n").unwrap()];
+        let end_at = resume.find("UpdatePause>().end()").expect("先结束暂停窗口");
+        assert!(end_at < resume.find("self_heal_now").unwrap());
+        let pause = product.split("fn pause_daemon_for_update(").nth(1).unwrap();
+        let begin_at = pause
+            .find("UpdatePause>().begin()")
+            .expect("暂停前进入窗口");
+        assert!(begin_at < pause.find("pause_resident_daemon").unwrap());
+    }
+
+    /// #809：外壳自报版本（诊断包）只认 tauri `package_info`——
     /// 它是发布构建经 `--config` 注入、与 daemon 同源的那个号。`CARGO_PKG_VERSION`
     /// 是 Cargo.toml 里的号，发布构建不改它，test tag 时与 daemon 错开。
     #[test]
     fn shell_reports_tauri_package_version_not_cargo_pkg_version() {
-        let product = include_str!("lib.rs").split("#[cfg(test)]").next().unwrap();
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let product = src.split("#[cfg(test)]").next().unwrap();
         let banned = concat!("env!(\"CARGO_PKG", "_VERSION\")");
         assert!(
             !product.contains(banned),
             "外壳生产代码不许再用 {banned} 自报版本——改用 shell_version(app)"
         );
         assert!(product.contains("app.package_info().version.to_string()"));
-        assert!(
-            product.contains("\"version\": version,"),
-            "shell.announce 报的是传入的 shell_version"
-        );
     }
 
     // ── I18N-03 (#492)：托盘文案 + keyed 错误 ─────────────────────────
@@ -2345,22 +1792,41 @@ mod tests {
         out
     }
 
+    /// B10（#1043）：新建库默认目录 =「图片」目录 + 固定英文名，与界面语言
+    /// 无关。反证：名字改回「P-Pass 家庭照片库」或随语言取 → 红。
     #[test]
-    fn tray_locale_matches_the_frontend_rule() {
-        // 与 src/lib/i18n.js 的 localeFor 同一条规则。
+    fn default_library_dir_is_a_fixed_english_name_under_pictures() {
+        let pictures = std::path::PathBuf::from("/Users/x/Pictures");
+        assert_eq!(
+            default_library_dir(Some(pictures.clone())),
+            pictures.join("P-Pass Library")
+        );
+        // 读不到「图片」目录：退回当前目录，名字不变。
+        assert_eq!(
+            default_library_dir(None),
+            std::path::PathBuf::from(".").join("P-Pass Library")
+        );
+    }
+
+    /// B6（#1043）：只有系统语言明确是中文才用中文，读不到 / 空 / 其他语言一律
+    /// 英文。反证：恢复「空串默认中文」→ `None` 与 `""` 两条红。
+    #[test]
+    fn tray_locale_is_chinese_only_when_the_system_says_so() {
+        assert_eq!(tray_locale(None), "en");
         for (lang, want) in [
             ("zh", "zh"),
             ("zh-CN", "zh"),
             ("zh-Hans", "zh"),
+            ("zh-Hans-CN", "zh"),
             ("zh_CN.UTF-8", "zh"),
             ("ZH-TW", "zh"),
-            ("", "zh"),
+            ("", "en"),
             ("en", "en"),
             ("en-US", "en"),
             ("en_US.UTF-8", "en"),
             ("ja-JP", "en"),
         ] {
-            assert_eq!(tray_locale(lang), want, "{lang:?}");
+            assert_eq!(tray_locale(Some(lang)), want, "{lang:?}");
         }
     }
 
@@ -2368,7 +1834,8 @@ mod tests {
     /// 拉 daemon、写登记都得在它之后，不在正式位置时一样都不能碰。
     #[test]
     fn install_location_gate_runs_before_anything_else() {
-        let product = include_str!("lib.rs").split("#[cfg(test)]").next().unwrap();
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let product = src.split("#[cfg(test)]").next().unwrap();
         let run = &product[product.find("pub fn run() {").expect("run()")..];
         let gate = run
             .find("running_from_install_location()")
@@ -2445,7 +1912,8 @@ mod tests {
 
         // 菜单必须从 TRAY_ITEMS 整体收集：按下标手写时加了项也进不了菜单，
         // 而上面的断言照样全绿。
-        let product = include_str!("lib.rs").split("#[cfg(test)]").next().unwrap();
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let product = src.split("#[cfg(test)]").next().unwrap();
         assert!(
             !product.contains("&tray_items[0]"),
             "托盘菜单又按下标手写了"
@@ -2457,7 +1925,11 @@ mod tests {
     #[test]
     fn every_shell_error_key_is_translated() {
         let mut keys = Vec::new();
-        for src in [include_str!("lib.rs"), include_str!("ipc.rs")] {
+        for src in [
+            include_str!("lib.rs"),
+            include_str!("ipc.rs"),
+            include_str!("daemon_cli.rs"),
+        ] {
             let product = src.split("#[cfg(test)]").next().unwrap_or(src);
             let mut rest = product;
             // 调用可能被 rustfmt 折成多行：`ui_err(` 之后跳过空白再取字面量。
@@ -2505,263 +1977,6 @@ mod tests {
         );
     }
 
-    // ── DESK-27 (#219)：反斜杠翻倍回路 ────────────────────────────────
-    //
-    // 这一组测试就是卡面验收标准 3 要的「锁住幂等性」：把 `write_config` 里
-    // 那句 `normalize_separators` 去掉，下面 doubled/quadrupled 那几条会立刻
-    // 变红（本卡实施时实测过，反证输出贴在 PR 里）。
-
-    /// 正常路径必须原样通过 —— 归一不许"顺手美化"没坏的东西。
-    #[test]
-    fn desk27_a_healthy_path_is_untouched() {
-        for p in [
-            "C:\\Users\\ethan\\Pictures",
-            "C:\\",
-            "relative\\sub",
-            "/unix/style",
-        ] {
-            assert_eq!(normalize_separators(p), p, "健康路径被改动了: {p}");
-        }
-    }
-
-    /// 被翻倍过的路径必须收敛回单分隔符 —— **任意轮数**。
-    ///
-    /// 这是本卡的正题：真机上已经翻到过每个分隔符四个反斜杠。修法按「折叠
-    /// 重复分隔符」而不是「反转义 N 次」，所以不需要事先知道 N。
-    #[test]
-    fn desk27_any_number_of_doublings_converges() {
-        let want = "C:\\Users\\ethan\\Pictures";
-        for p in [
-            "C:\\\\Users\\\\ethan\\\\Pictures",             // N=2
-            "C:\\\\\\\\Users\\\\\\\\ethan\\\\\\\\Pictures", // N=4
-            "C:\\\\\\\\\\\\\\\\Users\\\\\\\\\\\\\\\\ethan\\\\\\\\\\\\\\\\Pictures", // N=8
-        ] {
-            assert_eq!(normalize_separators(p), want, "没收敛: {p}");
-        }
-    }
-
-    /// ⚠️ UNC 的**前导两个**分隔符是语义，不许折掉。
-    ///
-    /// 这条是本卡实施时实测否掉 `Path::components()` 方案的那个反例：
-    /// `components()` 会把翻倍过的 UNC 折成**单个**前导分隔符，得到另一个
-    /// （错的）路径 —— 比放着不修更坏，因为 Windows 至少还能折叠解析损坏的
-    /// 那个，而单前导的版本指向完全不同的地方。
-    #[test]
-    fn desk27_unc_and_verbatim_prefixes_keep_their_leading_pair() {
-        // 健康的 UNC / verbatim：原样。
-        assert_eq!(
-            normalize_separators("\\\\server\\share\\dir"),
-            "\\\\server\\share\\dir"
-        );
-        assert_eq!(
-            normalize_separators("\\\\?\\C:\\Users\\x"),
-            "\\\\?\\C:\\Users\\x"
-        );
-        // 被翻倍过的 UNC / verbatim：前导收成两个，中间收成一个。
-        assert_eq!(
-            normalize_separators("\\\\\\\\server\\\\share\\\\dir"),
-            "\\\\server\\share\\dir"
-        );
-        assert_eq!(
-            normalize_separators("\\\\\\\\?\\\\C:\\\\Users\\\\x"),
-            "\\\\?\\C:\\Users\\x"
-        );
-        // 单个前导分隔符（根相对路径）不许被撑成两个。
-        assert_eq!(normalize_separators("\\Users\\x"), "\\Users\\x");
-    }
-
-    /// 幂等：再归一一次不再变。这条保证「写→读→再写」不会漂移。
-    #[test]
-    fn desk27_normalization_is_idempotent() {
-        for p in [
-            "C:\\Users\\x",
-            "C:\\\\Users\\\\x",
-            "C:\\\\\\\\Users\\\\\\\\x",
-            "\\\\server\\share",
-            "\\\\\\\\server\\\\share",
-            "\\\\?\\C:\\x",
-            "\\Users\\x",
-            "no-separators-at-all",
-            "",
-        ] {
-            let once = normalize_separators(p);
-            let twice = normalize_separators(&once);
-            assert_eq!(once, twice, "不幂等: {p} -> {once} -> {twice}");
-        }
-    }
-
-    /// 非 Windows 的路径形状（无反斜杠）必须是恒等变换 —— 卡面验收标准 5：
-    /// Linux/macOS 行为完全不变。
-    #[test]
-    fn desk27_paths_without_backslashes_are_identity() {
-        for p in [
-            "/home/ethan/Pictures/P-Pass",
-            "/Users/ethan/Pictures/P-Pass 家庭照片库",
-            "relative/path",
-        ] {
-            assert_eq!(normalize_separators(p), p);
-        }
-    }
-
-    /// DESK-27 (#219) 验收标准 1 的可重复版本：**连续三轮，字节数必须相同**。
-    ///
-    /// 走的是向导的真实代码路径 —— `read_config_data_dir`（#209 的反转义）
-    /// → 预填归一 → `render_config` → 写盘 —— 只是没有 GUI。真机点三次向导
-    /// 与这三轮跑的是同一串函数；把它做成测试的好处是**可重复、会在回归时
-    /// 变红**，而点 GUI 的记录只能证明当时那一次。
-    ///
-    /// 起点刻意用真机上观测到的**损坏形状**（每个分隔符四个反斜杠，卡面
-    /// 2026-09-18 记的 309 字节 / 16 个 0x5C 就是这个形状），所以这条测试
-    /// 同时覆盖了验收标准 2（存量修复）。
-    /// DESK-57 (#871)：新机器上默认库位置不存在——向导写配置时必须把它建出来，
-    /// 否则 daemon 按 DESK-46 拒绝启动，首启必失败。反证：去掉
-    /// `write_first_run_config` 里建库目录那一行，本测试变红。
-    #[test]
-    fn desk57_first_run_creates_missing_library_then_writes_config() {
-        let tmp = tempfile::tempdir().unwrap();
-        let platform_dir = tmp.path().join("platform");
-        let library = tmp.path().join("Pictures").join("P-Pass 家庭照片库");
-        assert!(!library.exists());
-
-        write_first_run_config(&platform_dir, library.to_str().unwrap()).unwrap();
-
-        assert!(library.is_dir(), "库目录应在写配置时被建出来");
-        let cfg = std::fs::read_to_string(platform_dir.join("config.toml")).unwrap();
-        assert_eq!(
-            configured_library_dir(&platform_dir).as_deref(),
-            library.to_str(),
-            "{cfg}"
-        );
-    }
-
-    /// DESK-57 (#871)：库目录建不出来（这里用「父路径是个普通文件」造，三平台
-    /// CI 都成立，不依赖权限）⇒ 报错，且**不写配置**——不能留下一份指向不存在
-    /// 目录的配置，让 daemon 下次启动再失败一次。
-    #[test]
-    fn desk57_uncreatable_library_errors_without_writing_config() {
-        let tmp = tempfile::tempdir().unwrap();
-        let platform_dir = tmp.path().join("platform");
-        let blocker = tmp.path().join("not-a-dir");
-        std::fs::write(&blocker, b"file").unwrap();
-        let library = blocker.join("P-Pass 家庭照片库");
-
-        let err = write_first_run_config(&platform_dir, library.to_str().unwrap()).unwrap_err();
-
-        assert!(
-            err.contains("P-Pass 家庭照片库"),
-            "错误要点名是哪个目录：{err}"
-        );
-        assert!(
-            !platform_dir.join("config.toml").exists(),
-            "建库失败时不得写配置"
-        );
-    }
-
-    #[test]
-    fn desk27_three_wizard_rounds_are_byte_identical_and_repair_legacy() {
-        let dir = tempfile::tempdir().unwrap();
-        let cfg = dir.path().join("config.toml");
-
-        // 真机损坏态：data_dir = "C:@@@@Users@@@@ethan@@@@Pictures"
-        // （文件里每个分隔符四个反斜杠）
-        let legacy = format!(
-            "data_dir = \"C:{s}{s}{s}{s}Users{s}{s}{s}{s}ethan{s}{s}{s}{s}Pictures\"\n",
-            s = '\\'
-        );
-        std::fs::write(&cfg, &legacy).unwrap();
-        let legacy_backslashes = std::fs::read(&cfg)
-            .unwrap()
-            .iter()
-            .filter(|&&b| b == b'\\')
-            .count();
-        assert_eq!(legacy_backslashes, 12, "起点应当是损坏态（12 个 0x5C）");
-
-        let mut rounds = Vec::new();
-        let mut prefills = Vec::new();
-        for _ in 0..3 {
-            // 向导做的事：读回已配置的库目录 → 预填（归一）→ 用户不改 → 写回。
-            let prefill = configured_library_dir(dir.path()).expect("读不到 data_dir");
-            // 读侧归一：**第一轮**（还没写过）向导显示的就必须是正确路径——
-            // 锁的是"UI 显示给用户的路径是错的"那条危害。
-            prefills.push(prefill.clone());
-            std::fs::write(&cfg, render_config(&prefill)).unwrap();
-            let bytes = std::fs::read(&cfg).unwrap();
-            let n = bytes.iter().filter(|&&b| b == b'\\').count();
-            let parsed: toml::Value =
-                toml::from_str(&String::from_utf8(bytes).unwrap()).expect("必须是合法 TOML");
-            rounds.push((n, parsed["data_dir"].as_str().unwrap().to_string()));
-        }
-
-        // 打出来便于取证（`--nocapture` 可见；卡面要求贴三次的真实字节数）。
-        println!(
-            "DESK-27 起点 0x5C={legacy_backslashes}  三轮 0x5C={:?}  data_dir={:?}",
-            rounds.iter().map(|r| r.0).collect::<Vec<_>>(),
-            rounds[2].1
-        );
-        // 三轮的字节数必须完全相同 —— 改前是 N、2N、4N。
-        assert_eq!(
-            rounds[0].0, rounds[1].0,
-            "第 1→2 轮反斜杠数变了: {rounds:?}"
-        );
-        assert_eq!(
-            rounds[1].0, rounds[2].0,
-            "第 2→3 轮反斜杠数变了: {rounds:?}"
-        );
-
-        // 且三轮解析出来都是**归一后的真实路径**（存量已修复）。
-        let want = format!("C:{s}Users{s}ethan{s}Pictures", s = '\\');
-        for (i, (_, v)) in rounds.iter().enumerate() {
-            assert_eq!(v, &want, "第 {} 轮的 data_dir 不是归一值", i + 1);
-        }
-        for (i, v) in prefills.iter().enumerate() {
-            assert_eq!(v, &want, "第 {} 轮向导预填的不是归一值", i + 1);
-        }
-    }
-
-    /// 写入方产出的必须是**真 TOML**，且读回来等于**归一后**的路径。
-    ///
-    /// ⚠️ 刻意走 `render_config`（而不是直接调 `normalize_separators`）——
-    /// 这样「把归一那步去掉」才会让本测试变红。卡面验收标准 3 要的就是这个；
-    /// 只测归一函数本身的话，删掉调用点测试照样绿，那种反证等于没做。
-    #[test]
-    fn desk27_rendered_config_round_trips_and_is_normalized() {
-        let want = "C:\\Users\\ethan\\Pictures\\P-Pass 家庭照片库";
-        // 损坏输入（每个分隔符两个/四个反斜杠）必须写出健康值。
-        for input in [
-            want,
-            "C:\\\\Users\\\\ethan\\\\Pictures\\\\P-Pass 家庭照片库",
-            "C:\\\\\\\\Users\\\\\\\\ethan\\\\\\\\Pictures\\\\\\\\P-Pass 家庭照片库",
-        ] {
-            let doc = render_config(input);
-            let parsed: toml::Value = toml::from_str(&doc)
-                .unwrap_or_else(|e| panic!("产出的不是合法 TOML: {e} / doc={doc}"));
-            assert_eq!(
-                parsed["data_dir"].as_str().unwrap(),
-                want,
-                "render_config 没把 {input} 归一"
-            );
-        }
-        // UNC / 含引号这些边界也要能往返（值等于归一后的自己）。
-        for input in [
-            "\\\\server\\share\\dir",
-            "\\\\\\\\server\\\\share\\\\dir",
-            "C:\\Users\\O'Brien\\Pics",
-            "C:\\Users\\say \"hi\"\\Pics",
-            // macOS / Linux 形状（家里 Mac 狗粮走的就是这条写入路径）。
-            "/Users/ethan/Pictures/P-Pass 家庭照片库",
-            "/home/ethan/Pictures/P-Pass",
-        ] {
-            let doc = render_config(input);
-            let parsed: toml::Value =
-                toml::from_str(&doc).unwrap_or_else(|e| panic!("不是合法 TOML: {e}"));
-            assert_eq!(
-                parsed["data_dir"].as_str().unwrap(),
-                normalize_separators(input),
-                "往返后值变了: {input}"
-            );
-        }
-    }
-
     /// DESK-28 回归锁：**每一个把窗口拉回来的入口都必须先 unminimize**。
     ///
     /// 判据依据是 #170 的真机实测：窗口最小化时只做 `show()` + `set_focus()`
@@ -2776,7 +1991,7 @@ mod tests {
     /// 没有这样一条门禁。
     #[test]
     fn every_window_restore_unminimizes_first() {
-        let src = include_str!("lib.rs");
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
         // 判据在运行时拼，避免这段源码自己命中自己（#168 踩过一次）。
         let show = format!("let _ = win.{}();", "show");
         let unmin = format!("win.{}()", "unminimize");
@@ -2853,122 +2068,78 @@ mod tests {
         ));
     }
 
-    /// QA-16（#326）：**向导 invoke 的是这一层，测试也必须打这一层**。
+    /// QA-16（#326）：**向导 invoke 的是这一层，测试也必须打这一层**——
+    /// 内部函数可以对、命令本体却返回 None / 读错文件 / 被整个摘掉，只有打
+    /// 命令本体的测试知道。
     ///
-    /// 下面那条 `startup_failure_reads_the_latest_sidecar_stderr_line` 打的是
-    /// 内部函数 `daemon_startup_stderr_from(plist)`；渲染进程真正调的却是
-    /// `#[tauri::command] daemon_startup_error()` 这层包装。#326 的 M2 变异
-    /// 把包装体强行改成 `return None`，整个 Rust 套件一条都不红——它可以
-    /// 返回 None、可以读错 plist、可以被整个摘掉，没有任何测试知道。
+    /// #1043：落点向平台适配器要（`daemon_log_paths().stderr`），测试不写死
+    /// 路径、不摆 plist。把适配器算路径用到的环境变量（macOS 的 HOME、Windows
+    /// 的 `%LOCALAPPDATA%`/`%APPDATA%`）都指到 tempdir，用完还原；全 crate 没有
+    /// 别的测试断言这些变量。
     ///
-    /// 这条测试补的正是那一段：包装层自己去找 plist（`plist_path()` →
-    /// `home_dir()` → `$HOME`），所以把 HOME 指到 tempdir，在里面摆一份
-    /// 真的 LaunchAgent plist 和一份真的 stderr 日志，然后**无参调用命令
-    /// 本体**，断言 daemon 那行错误原样回来了。
-    ///
-    /// 反证：`daemon_startup_error()` 体内改成 `None` → 本测试红。
-    ///
-    /// ⚠️ HOME 是进程级的，cargo 的测试线程共享它，所以这里就地改、用完
-    /// 还原。**全 crate 只有一条别的测试会间接读到 HOME**：
-    /// `ipc::tests::candidates_include_config_data_dir` → `token_candidates_from`
-    /// （ipc.rs 里那行 `env::var("HOME")`）。它不受影响——HOME 只决定候选表里
-    /// `home.join("ppf-library/ipc.token")` 那一项，而它的两条断言查的是
-    /// config 的 data_dir 和注入的 cfg_dir，跟 HOME 无关。
-    /// 将来谁加一条**断言到 HOME 那一项**的测试，必须跟本条一起串行化
-    /// （在 tests mod 里加个共享 Mutex，别退回 `--test-threads=1`）。
-    ///
-    /// DESK-58 (#875)：stderr 有固定落点的平台（Windows）不经 plist，见下面那条。
+    /// 反证：`daemon_startup_error()` 体内改成 `None`（或改回读 plist）→ 本测试红。
     #[test]
     fn the_startup_error_command_itself_surfaces_the_daemon_stderr() {
-        if platform_owns_startup_stderr() {
-            return;
-        }
         let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path();
-
-        let logs = home.join("Library/Logs");
-        std::fs::create_dir_all(&logs).unwrap();
-        let stderr_log = logs.join("p-pass-daemon.err");
+        let keys = ["HOME", "LOCALAPPDATA", "APPDATA"];
+        let saved: Vec<_> = keys.iter().map(|k| (*k, std::env::var_os(k))).collect();
+        for k in keys {
+            let dir = tmp.path().join(k);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::env::set_var(k, &dir);
+        }
+        let a = platform::adapter();
+        let err_file = a.daemon_log_paths(&a.data_dir()).stderr;
         let daemon_error =
             "Error: migration: migration 2 was previously applied but is missing in the resolved migrations";
-        // 尾部空行 + 前面的正常输出：命令要给出**最后一行非空**的那条。
-        std::fs::write(&stderr_log, format!("starting daemon\n{daemon_error}\n\n")).unwrap();
-
-        let agents = home.join("Library/LaunchAgents");
-        std::fs::create_dir_all(&agents).unwrap();
-        std::fs::write(
-            agents.join("com.p-pass.daemon.plist"),
-            format!(
-                "<plist><dict><key>StandardErrorPath</key><string>{}</string></dict></plist>",
-                stderr_log.display()
-            ),
-        )
-        .unwrap();
-
-        let saved_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", home);
-        // 命令本体，无参——与渲染进程 `invoke("daemon_startup_error")` 同一条路。
-        let got = daemon_startup_error();
-        match saved_home {
-            Some(h) => std::env::set_var("HOME", h),
-            None => std::env::remove_var("HOME"),
-        }
-
-        assert_eq!(got.as_deref(), Some(daemon_error));
-    }
-
-    /// DESK-58 (#875)：stderr 有没有平台固定落点。按能力分支、不写 `#[cfg]`
-    /// （arch-check B.2：平台分叉只在 crates/platform）。
-    fn platform_owns_startup_stderr() -> bool {
-        use platform::PlatformAdapter as _;
-        platform::adapter()
-            .startup_stderr_file(std::path::Path::new("probe"))
-            .is_some()
-    }
-
-    /// DESK-58 (#875)：有固定落点的平台（Windows）的命令层测试。daemon 把没人接
-    /// 的 stderr 落在 `<data dir>\logs\daemon.err`，向导无参调用命令，要拿到
-    /// daemon 那句原话（#871 现场就是「库目录不存在：…」，原先永远是 None，界面
-    /// 只能说「请检查日志」）。
-    ///
-    /// Windows 的 data dir 从 `%LOCALAPPDATA%` 算（`%APPDATA%\P-Pass` 还在时用
-    /// 老位置），两个都指到 tempdir，用完还原；与上面 HOME 那条同理，全 crate
-    /// 没有别的测试读这两个变量。文件位置向适配器要，不在测试里写死。
-    ///
-    /// 反证：命令体改回只读 plist（或 `None`）→ 本测试红。
-    #[test]
-    fn the_startup_error_command_reads_the_platform_stderr_file() {
-        use platform::PlatformAdapter as _;
-        if !platform_owns_startup_stderr() {
-            return;
-        }
-        let tmp = tempfile::tempdir().unwrap();
-        let local = tmp.path().join("Local");
-        let roaming = tmp.path().join("Roaming");
-        std::fs::create_dir_all(&local).unwrap();
-        std::fs::create_dir_all(&roaming).unwrap();
-        let daemon_error = r"库目录不存在：C:\Users\x\Pictures\P-Pass 家庭照片库——外置盘未挂载";
-
-        let saved: Vec<_> = ["LOCALAPPDATA", "APPDATA"]
-            .iter()
-            .map(|k| (*k, std::env::var_os(k)))
-            .collect();
-        std::env::set_var("LOCALAPPDATA", &local);
-        std::env::set_var("APPDATA", &roaming);
-        let a = platform::adapter();
-        let err_file = a.startup_stderr_file(&a.data_dir()).unwrap();
-        std::fs::create_dir_all(err_file.parent().unwrap()).unwrap();
-        std::fs::write(&err_file, format!("panic noise\n{daemon_error}\r\n\r\n")).unwrap();
-        let got = daemon_startup_error();
+        let got = err_file.as_ref().map(|f| {
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            // 尾部空行 + 前面的正常输出：命令要给出**最后一行非空**的那条。
+            std::fs::write(f, format!("starting daemon\n{daemon_error}\r\n\r\n")).unwrap();
+            // 命令本体，无参——与渲染进程 `invoke("daemon_startup_error")` 同一条路。
+            daemon_startup_error()
+        });
         for (k, v) in saved {
             match v {
                 Some(v) => std::env::set_var(k, v),
                 None => std::env::remove_var(k),
             }
         }
-
+        let Some(err_file) = err_file else {
+            return; // 本平台没有 stderr 落点（headless Linux 交给 systemd）。
+        };
         assert!(err_file.starts_with(tmp.path()), "{}", err_file.display());
-        assert_eq!(got.as_deref(), Some(daemon_error));
+        assert_eq!(
+            got.flatten(),
+            Some(StartupError {
+                key: None,
+                detail: daemon_error.to_owned()
+            })
+        );
+    }
+
+    /// #1044：daemon 的 keyed 错误行拆成 key + 原文；不是这个形状的行原样
+    /// 当原文、不带 key——壳不靠正则猜原因。
+    #[test]
+    fn keyed_startup_error_lines_are_split_and_other_lines_pass_through() {
+        let keyed = r#"{"error_key":"ui.startup_migration_guidance","detail":"migration: migration 12 was previously applied but is missing in the resolved migrations"}"#;
+        assert_eq!(
+            parse_startup_error(keyed.to_owned()),
+            StartupError {
+                key: Some("ui.startup_migration_guidance".into()),
+                detail: "migration: migration 12 was previously applied but is missing in the resolved migrations".into(),
+            }
+        );
+        let unkeyed = r#"{"error_key":null,"detail":"boom"}"#;
+        assert_eq!(parse_startup_error(unkeyed.to_owned()).key, None);
+        let legacy = "Error: migration: migration 2 was previously applied but is missing in the resolved migrations";
+        assert_eq!(
+            parse_startup_error(legacy.to_owned()),
+            StartupError {
+                key: None,
+                detail: legacy.into()
+            }
+        );
     }
 
     #[test]
@@ -2978,514 +2149,49 @@ mod tests {
         let daemon_error =
             "Error: migration: migration 2 was previously applied but is missing in the resolved migrations";
         std::fs::write(&stderr, format!("starting daemon\n{daemon_error}\n")).unwrap();
-        let plist = tmp.path().join("com.p-pass.daemon.plist");
-        std::fs::write(
-            &plist,
-            format!(
-                "<plist><dict><key>StandardErrorPath</key><string>{}</string></dict></plist>",
-                stderr.display()
-            ),
-        )
-        .unwrap();
-
+        let paths = platform::DaemonLogPaths {
+            stderr: Some(stderr),
+            ..Default::default()
+        };
         assert_eq!(
-            daemon_startup_stderr_from(&plist).as_deref(),
+            daemon_startup_error_in(&paths).as_deref(),
             Some(daemon_error)
         );
-    }
-
-    /// DESK-10 硬判据：**daemon 不可达时点导出也必须出 zip**，且包里有
-    /// daemon 的 .err/.log 与版本号。反证做法：把 `assemble_export` 改成
-    /// daemon 不可达就 `return Err`（= 退回"走 daemon IPC"的老行为），
-    /// 本测试立刻变红。
-    ///
-    /// 全程 tempdir：假 plist + 假日志 + 假 config，不碰真实照片库、
-    /// 不碰真实 LaunchAgent。
-    #[test]
-    fn export_bundles_logs_even_when_the_daemon_is_unreachable() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path().join("home");
-        let logs = home.join("Library/Logs");
-        std::fs::create_dir_all(&logs).unwrap();
-        let err_log = logs.join("p-pass-daemon.err");
-        // 那次真实事故的 stderr（launchd KeepAlive 重复了 8 次）。
-        std::fs::write(
-            &err_log,
-            "Error: migration: migration 2 was previously applied but is missing in the resolved migrations\n"
-                .repeat(8),
-        )
-        .unwrap();
-        let out_log = logs.join("p-pass-daemon.log");
-        std::fs::write(&out_log, format!("library {} ready\n", home.display())).unwrap();
-
-        let plist = tmp.path().join("com.p-pass.daemon.plist");
-        std::fs::write(
-            &plist,
-            format!(
-                "<plist><dict>\n<key>StandardOutPath</key><string>{}</string>\n\
-                 <key>StandardErrorPath</key><string>{}</string>\n</dict></plist>\n",
-                out_log.display(),
-                err_log.display()
-            ),
-        )
-        .unwrap();
-
-        let platform_dir = tmp.path().join("support");
-        let library = tmp.path().join("library");
-        std::fs::create_dir_all(&platform_dir).unwrap();
-        std::fs::write(
-            platform_dir.join("config.toml"),
-            format!(
-                "data_dir = {:?}\nbind_addr = \"0.0.0.0:41145\"\n",
-                library.display()
-            ),
-        )
-        .unwrap();
-
-        let env = ExportEnv {
-            platform_dir,
-            home: home.clone(),
-            plist,
-            app_version: TEST_APP_VERSION.to_string(),
-        };
-        let res = assemble_export(
-            &env,
-            DaemonCollection::Unreachable(
-                "找不到运行中的 P-Pass 后台服务（ipc.token 不存在）".into(),
-            ),
-            || Some("0.3.0".into()),
-        )
-        .expect("daemon 不可达也必须出包");
-        assert_eq!(res["daemon_reachable"], false);
-
-        let zip_path = res["zip"].as_str().unwrap();
-        assert_eq!(zip_path, library.join("ppf-logs.zip").display().to_string());
-        let entries = daemon_logs::read_zip_entries(std::path::Path::new(zip_path)).unwrap();
-        let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
-        for want in [
-            "README.txt",
-            "versions.txt",
-            "config-summary.txt",
-            "daemon-stderr.log",
-            "daemon-stdout.log",
-            "daemon-unreachable.txt",
-        ] {
-            assert!(names.contains(&want), "缺 {want}：{names:?}");
-        }
-        let text: String = entries
-            .iter()
-            .map(|(_, b)| String::from_utf8_lossy(b).to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-        // 复现事故：真错误必须在包里，且是原文。
-        assert!(
-            text.contains(
-                "migration 2 was previously applied but is missing in the resolved migrations"
-            ),
-            "{text}"
-        );
-        // 版本号（App + daemon）都在。
-        assert!(text.contains(TEST_APP_VERSION), "{text}");
-        assert!(text.contains("daemon_version = 0.3.0"), "{text}");
-        // 脱敏不回退：家目录不出现在包里。
-        assert!(!text.contains(&home.display().to_string()), "{text}");
-        assert!(text.contains("<DATA>"), "{text}");
-    }
-
-    /// daemon 活着时：它那三份原样进包，且不出现"不可达"说明文件。
-    #[test]
-    fn export_adds_daemon_parts_when_reachable() {
-        let tmp = tempfile::tempdir().unwrap();
-        let platform_dir = tmp.path().join("support");
-        std::fs::create_dir_all(&platform_dir).unwrap();
-        let env = ExportEnv {
-            platform_dir: platform_dir.clone(),
-            home: tmp.path().join("home"),
-            // plist 不存在 → 如实记"未注册"，不猜 ~/Library/Logs。
-            plist: tmp.path().join("missing.plist"),
-            app_version: TEST_APP_VERSION.to_string(),
-        };
-        let parts = DaemonParts {
-            version: Some("0.4.0".into()),
-            entries: vec![
-                ("diag_events.json".into(), b"[]".to_vec()),
-                ("devices.json".into(), b"[]".to_vec()),
-                ("audit.json".into(), b"[]".to_vec()),
-            ],
-        };
-        let res = assemble_export(&env, DaemonCollection::Complete(parts), || None).unwrap();
-        assert_eq!(res["daemon_reachable"], true);
-        let entries =
-            daemon_logs::read_zip_entries(std::path::Path::new(res["zip"].as_str().unwrap()))
-                .unwrap();
-        let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
-        for want in ["diag_events.json", "devices.json", "audit.json"] {
-            assert!(names.contains(&want), "缺 {want}：{names:?}");
-        }
-        assert!(!names.contains(&"daemon-unreachable.txt"), "{names:?}");
-        let sources = entries
-            .iter()
-            .find(|(n, _)| n == "log-sources.txt")
-            .map(|(_, b)| String::from_utf8_lossy(b).to_string())
-            .unwrap();
-        assert!(sources.contains("未注册"), "{sources}");
-    }
-
-    /// DESK-31 反证（logs.export 被拒那条）：服务在线（status 自报
-    /// 9.9.9-fake），但 logs.export 返回 Err——versions.txt 必须印在线
-    /// 版本。修复前这条真红：版本被丢、退回 sidecar 0.3.0、reachable
-    /// 印 no、还多写一份 daemon-unreachable.txt。
-    #[test]
-    fn export_keeps_live_version_when_logs_export_rejected() {
-        let tmp = tempfile::tempdir().unwrap();
-        let platform_dir = tmp.path().join("support");
-        std::fs::create_dir_all(&platform_dir).unwrap();
-        let env = ExportEnv {
-            platform_dir,
-            home: tmp.path().join("home"),
-            plist: tmp.path().join("missing.plist"),
-            app_version: TEST_APP_VERSION.to_string(),
-        };
-        let collection = DaemonCollection::LogsUnavailable {
-            version: Some("9.9.9-fake".into()),
-            reason: "后台服务拒绝了 logs.export：模拟拒绝".into(),
-        };
-        // 输入构造自检：status 那一步确实已拿到在线版本。
-        assert!(
-            matches!(
-                &collection,
-                DaemonCollection::LogsUnavailable { version: Some(v), .. } if v == "9.9.9-fake"
-            ),
-            "status 自报版本必须在输入里"
-        );
-        let res = assemble_export(&env, collection, || Some("0.3.0".into()))
-            .expect("日志要不到也必须出包（DESK-10）");
-        // 服务起来了——daemon_reachable 不得是 no。
-        assert_eq!(res["daemon_reachable"], true);
-        let entries =
-            daemon_logs::read_zip_entries(std::path::Path::new(res["zip"].as_str().unwrap()))
-                .unwrap();
-        let names: Vec<&str> = entries.iter().map(|(n, _)| n.as_str()).collect();
-        assert!(
-            !names.contains(&"daemon-unreachable.txt"),
-            "服务在线，不许写「不可达」说明：{names:?}"
-        );
-        assert!(
-            names.contains(&"daemon-logs-unavailable.txt"),
-            "缺 daemon-logs-unavailable.txt：{names:?}"
-        );
-        let text: String = entries
-            .iter()
-            .map(|(_, b)| String::from_utf8_lossy(b).to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-        // 核心断言：版本是在线服务自报的，不是 sidecar 的。
-        assert!(text.contains("daemon_version = 9.9.9-fake"), "{text}");
-        assert!(!text.contains("daemon_version = 0.3.0"), "{text}");
-        // 三态措辞：不得印 no。
-        assert!(text.contains("daemon_reachable = partial"), "{text}");
-        assert!(!text.contains("daemon_reachable = no"), "{text}");
-        // 说明文件把「在线但要不到日志」和「压根没起来」区分开。
-        let note = entries
-            .iter()
-            .find(|(n, _)| n == "daemon-logs-unavailable.txt")
-            .map(|(_, b)| String::from_utf8_lossy(b).to_string())
-            .unwrap();
-        assert!(note.contains("在线"), "{note}");
-        assert!(note.contains("两回事"), "{note}");
-    }
-
-    /// DESK-31 反证（zip 读不出来那条）：logs.export 应答了，但 zip 读
-    /// 不出——同样必须保住在线版本。与上一条是两条不同的失败路径，各
-    /// 一个用例。
-    #[test]
-    fn export_keeps_live_version_when_daemon_zip_unreadable() {
-        let tmp = tempfile::tempdir().unwrap();
-        let platform_dir = tmp.path().join("support");
-        std::fs::create_dir_all(&platform_dir).unwrap();
-        let env = ExportEnv {
-            platform_dir,
-            home: tmp.path().join("home"),
-            plist: tmp.path().join("missing.plist"),
-            app_version: TEST_APP_VERSION.to_string(),
-        };
-        let res = assemble_export(
-            &env,
-            DaemonCollection::LogsUnavailable {
-                version: Some("9.9.9-fake".into()),
-                reason: "后台服务的日志包读不出来：模拟 zip 损坏".into(),
-            },
-            || Some("0.3.0".into()),
-        )
-        .expect("日志要不到也必须出包（DESK-10）");
-        assert_eq!(res["daemon_reachable"], true);
-        let entries =
-            daemon_logs::read_zip_entries(std::path::Path::new(res["zip"].as_str().unwrap()))
-                .unwrap();
-        let text: String = entries
-            .iter()
-            .map(|(_, b)| String::from_utf8_lossy(b).to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(text.contains("daemon_version = 9.9.9-fake"), "{text}");
-        assert!(!text.contains("daemon_version = 0.3.0"), "{text}");
-        assert!(text.contains("daemon_reachable = partial"), "{text}");
-    }
-
-    /// DESK-31 验收 (e)：新暴露的在线版本串同样过 scrub——daemon 自报
-    /// 什么我们控制不了，出包的每个字节都过同一道脱敏。
-    #[test]
-    fn export_scrubs_live_version_string() {
-        let tmp = tempfile::tempdir().unwrap();
-        let platform_dir = tmp.path().join("support");
-        std::fs::create_dir_all(&platform_dir).unwrap();
-        let home = tmp.path().join("home");
-        let env = ExportEnv {
-            platform_dir,
-            home: home.clone(),
-            plist: tmp.path().join("missing.plist"),
-            app_version: TEST_APP_VERSION.to_string(),
-        };
-        let weird_version = format!("9.9.9-fake+{}", home.display());
-        let res = assemble_export(
-            &env,
-            DaemonCollection::LogsUnavailable {
-                version: Some(weird_version),
-                reason: "模拟".into(),
-            },
-            || None,
-        )
-        .unwrap();
-        let entries =
-            daemon_logs::read_zip_entries(std::path::Path::new(res["zip"].as_str().unwrap()))
-                .unwrap();
-        let text: String = entries
-            .iter()
-            .map(|(_, b)| String::from_utf8_lossy(b).to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            !text.contains(&home.display().to_string()),
-            "在线版本串不许泄漏家目录：{text}"
-        );
-        assert!(text.contains("<DATA>"), "{text}");
-    }
-
-    /// DESK-31 接线层：logs.export 被拒那条分支（修复前位于 lib.rs 的
-    /// logs.export Err 臂）——reason 原样带出，且根本不去读 zip。
-    #[test]
-    fn daemon_entries_from_logs_export_rejected() {
-        let err = daemon_entries_from_logs_export(Err("模拟拒绝".into()), |_| {
-            panic!("logs.export 被拒时不该去读 zip")
-        })
-        .unwrap_err();
-        assert!(err.contains("后台服务拒绝了 logs.export"), "{err}");
-        assert!(err.contains("模拟拒绝"), "{err}");
-    }
-
-    /// DESK-31 接线层：zip 读不出来那条分支（修复前的 read_zip_entries
-    /// Err 臂）——读 zip 的错误原样带出。
-    #[test]
-    fn daemon_entries_from_logs_export_zip_unreadable() {
-        let err = daemon_entries_from_logs_export(
-            Ok(json!({ "zip": "/tmp/fake-daemon.zip" })),
-            // 生产接线里由调用方的 map_err 包上「日志包读不出来」前缀，
-            // 闭包按同一契约模拟。
-            |zip| {
-                assert_eq!(zip, "/tmp/fake-daemon.zip");
-                Err("后台服务的日志包读不出来：模拟 zip 损坏".into())
-            },
-        )
-        .unwrap_err();
-        assert!(err.contains("后台服务的日志包读不出来"), "{err}");
-        assert!(err.contains("模拟 zip 损坏"), "{err}");
-    }
-
-    /// DESK-31 接线层：happy path——按应答里的 zip 路径读条目。
-    #[test]
-    fn daemon_entries_from_logs_export_happy_path() {
-        let entries =
-            daemon_entries_from_logs_export(Ok(json!({ "zip": "/tmp/fake-daemon.zip" })), |_| {
-                Ok(vec![("audit.json".into(), b"[]".to_vec())])
-            })
-            .unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].0, "audit.json");
-    }
-
-    // ── #667 / #732：自动换内核判据 ───────────────────────────────────
-
-    fn facts(running: &str, on_disk: &str) -> KernelFacts {
-        KernelFacts {
-            running_version: Some(running.into()),
-            running_pid: Some(100),
-            on_disk_version: Some(on_disk.into()),
-            resident_registered: true,
-            resident_pid: Some(100),
-            user_stopped: false,
-            transfer_active: false,
-        }
-    }
-
-    /// #667 验收 1 的判据：dmg 覆盖安装后内核比磁盘旧 ⇒ 现在就换。
-    /// 反证：把 `Ordering::Less` 分支改成 InSync（= 去掉自动收敛），本测试必红。
-    #[test]
-    fn kernel_older_than_disk_converges() {
-        assert!(matches!(
-            kernel_convergence_verdict(&facts("0.9.1", "0.9.5")),
-            KernelVerdict::Converge(_)
-        ));
-        assert!(matches!(
-            kernel_convergence_verdict(&facts("0.9.5-test.1", "0.9.5")),
-            KernelVerdict::Converge(_)
-        ));
-    }
-
-    #[test]
-    fn kernel_in_sync_and_managed_is_left_alone() {
+        // 没有落点 / 文件不在：如实 None，不编原因。
         assert_eq!(
-            kernel_convergence_verdict(&facts("0.9.5", "0.9.5")),
-            KernelVerdict::InSync
+            daemon_startup_error_in(&platform::DaemonLogPaths::default()),
+            None
         );
+        let missing = platform::DaemonLogPaths {
+            stderr: Some(tmp.path().join("nope.err")),
+            ..Default::default()
+        };
+        assert_eq!(daemon_startup_error_in(&missing), None);
     }
 
-    /// #732 ①：同版本但在跑的不是 launchd 那份（旧壳更新时一次性 spawn 的）⇒ 收编。
+    /// #1043：服务管理器接的 stdio 只在登记了常驻服务时算数（= 改前「plist 在
+    /// 才有路径」）；daemon 自己接的 stderr（Windows）不算服务管理器那对。
+    /// 反证：去掉 `service_registered` 判据 → 第二条红；去掉
+    /// `stdio_by_service_manager` 判据 → 第三条红。
     #[test]
-    fn kernel_same_version_but_unmanaged_converges() {
-        let mut f = facts("0.9.5", "0.9.5");
-        f.resident_pid = None; // launchd: not running
-        assert!(matches!(
-            kernel_convergence_verdict(&f),
-            KernelVerdict::Converge(_)
-        ));
-        f.resident_pid = Some(999); // launchd 手里是另一个 pid
-        assert!(matches!(
-            kernel_convergence_verdict(&f),
-            KernelVerdict::Converge(_)
-        ));
-        // 没有常驻登记（Windows Run key / 未登记）：没有"归谁管"可言 ⇒ 不动。
-        f.resident_registered = false;
-        assert_eq!(kernel_convergence_verdict(&f), KernelVerdict::InSync);
-    }
-
-    /// dmg 降级安装：内核比磁盘新 ⇒ 绝不把内核也降下去。
-    #[test]
-    fn kernel_newer_than_disk_is_never_downgraded() {
-        assert!(matches!(
-            kernel_convergence_verdict(&facts("0.9.5", "0.9.4")),
-            KernelVerdict::Skip(_)
-        ));
-        let mut f = facts("0.9.5", "0.9.4");
-        f.resident_pid = None; // 即使不归 launchd 管
-        assert!(matches!(
-            kernel_convergence_verdict(&f),
-            KernelVerdict::Skip(_)
-        ));
-    }
-
-    /// #667 验收 2 ①：用户主动停过服务 ⇒ 一律不动（哪怕内核旧）。
-    #[test]
-    fn user_stop_beats_kernel_convergence() {
-        let mut f = facts("0.9.1", "0.9.5");
-        f.user_stopped = true;
-        assert!(matches!(
-            kernel_convergence_verdict(&f),
-            KernelVerdict::Skip(_)
-        ));
-    }
-
-    /// #667 验收 2 ②：正在传输 ⇒ 推迟（不是失败、也不是放弃）。
-    #[test]
-    fn transfer_in_progress_defers_kernel_convergence() {
-        let mut f = facts("0.9.1", "0.9.5");
-        f.transfer_active = true;
-        assert_eq!(kernel_convergence_verdict(&f), KernelVerdict::Defer);
-        // 一致时传输与否都不动
-        let mut g = facts("0.9.5", "0.9.5");
-        g.transfer_active = true;
-        assert_eq!(kernel_convergence_verdict(&g), KernelVerdict::InSync);
-    }
-
-    /// 读不到 = 不知道 = 不动（fail-safe）。
-    #[test]
-    fn unknown_versions_never_trigger_a_restart() {
-        let mut f = facts("0.9.1", "0.9.5");
-        f.on_disk_version = None;
-        assert!(matches!(
-            kernel_convergence_verdict(&f),
-            KernelVerdict::Skip(_)
-        ));
-        let mut g = facts("0.9.1", "0.9.5");
-        g.running_version = None;
-        assert!(matches!(
-            kernel_convergence_verdict(&g),
-            KernelVerdict::Skip(_)
-        ));
-    }
-
-    #[test]
-    fn unmanaged_needs_a_known_running_pid() {
-        assert!(daemon_is_unmanaged(Some(1), None));
-        assert!(daemon_is_unmanaged(Some(1), Some(2)));
-        assert!(!daemon_is_unmanaged(Some(1), Some(1)));
-        assert!(
-            !daemon_is_unmanaged(None, None),
-            "读不到自报 pid 不许当野生实例去请它退位"
-        );
-    }
-
-    #[test]
-    fn sidecar_version_line_is_parsed() {
+    fn service_stdio_paths_need_a_registered_service_manager() {
+        let launchd = platform::DaemonLogPaths {
+            log_file: Some("/d/logs/daemon.log".into()),
+            stdout: Some("/h/Library/Logs/p-pass-daemon.log".into()),
+            stderr: Some("/h/Library/Logs/p-pass-daemon.err".into()),
+            stdio_by_service_manager: true,
+        };
         assert_eq!(
-            parse_sidecar_version("P-Pass daemon 0.9.5\n").as_deref(),
-            Some("0.9.5")
+            service_stdio_paths(&launchd, true),
+            (launchd.stdout.clone(), launchd.stderr.clone())
         );
-        assert_eq!(
-            parse_sidecar_version("P-Pass daemon 0.9.5-test.2").as_deref(),
-            Some("0.9.5-test.2")
-        );
-        assert_eq!(parse_sidecar_version("something else"), None);
-        assert_eq!(parse_sidecar_version("P-Pass daemon "), None);
-    }
-
-    /// 「传输中」= 任何设备 `flow_connection` 非空——与设备行「传输中」同一信号（NET-05）。
-    #[test]
-    fn transfer_signal_is_the_flow_connection_field() {
-        let idle = json!({"devices": [{"flow_connection": null}, {"name": "x"}]});
-        assert!(!any_transfer_active(&idle));
-        let busy = json!({"devices": [{"flow_connection": null}, {"flow_connection": "direct"}]});
-        assert!(any_transfer_active(&busy));
-        assert!(!any_transfer_active(&json!({})));
-    }
-
-    /// 与 daemon DAE-01 `version_cmp`（crates/daemon/src/ipc.rs）同一组样例——两份
-    /// 实现若漂移，这里先红。
-    #[test]
-    fn version_cmp_matches_the_daemon_handshake() {
-        use std::cmp::Ordering;
-        assert_eq!(version_cmp("0.1.0", "0.1.0"), Ordering::Equal);
-        assert_eq!(version_cmp("0.2.0", "0.1.0"), Ordering::Greater);
-        assert_eq!(version_cmp("0.1.0", "0.2.0"), Ordering::Less);
-        assert_eq!(version_cmp("1.0.0", "0.9.9"), Ordering::Greater);
-        assert_eq!(version_cmp("0.10.0", "0.9.0"), Ordering::Greater);
-        assert_eq!(version_cmp("0.2.0-test.7", "0.1.0"), Ordering::Greater);
-        assert_eq!(version_cmp("0.1.0", "0.2.0-test.7"), Ordering::Less);
-        assert_eq!(
-            version_cmp("0.2.0-test.8", "0.2.0-test.7"),
-            Ordering::Greater
-        );
-        assert_eq!(version_cmp("0.2.0-test.7", "0.2.0-test.8"), Ordering::Less);
-        assert_eq!(
-            version_cmp("0.2.0-test.10", "0.2.0-test.9"),
-            Ordering::Greater
-        );
-        assert_eq!(version_cmp("0.2.0-test.8", "0.2.0-test.8"), Ordering::Equal);
-        assert_eq!(version_cmp("0.2.0", "0.2.0-test.8"), Ordering::Greater);
-        assert_eq!(version_cmp("0.2.0-test.8", "0.2.0"), Ordering::Less);
-        assert_eq!(version_cmp("0.1.0", "0.1.0-test.3"), Ordering::Greater);
-        assert_eq!(version_cmp("0.1.0-test.3", "0.1.0"), Ordering::Less);
-        assert_eq!(version_cmp("", "0.0.0"), Ordering::Equal);
-        assert_eq!(version_cmp("alpha", "0.1.0"), Ordering::Less);
+        assert_eq!(service_stdio_paths(&launchd, false), (None, None));
+        let self_captured = platform::DaemonLogPaths {
+            stderr: Some(r"C:\d\logs\daemon.err".into()),
+            stdio_by_service_manager: false,
+            ..launchd.clone()
+        };
+        assert_eq!(service_stdio_paths(&self_captured, true), (None, None));
     }
 
     /// 接线：启动时跑对账；换内核先让野生实例退位、再交给服务管理器；手动「立即重启」
@@ -3501,7 +2207,20 @@ mod tests {
             let rest = &product[start..];
             rest[..rest.find("\n}\n").expect("函数结尾")].to_string()
         };
-        assert!(product.contains("std::thread::spawn(move || converge_kernel_on_startup(app));"));
+        assert!(product.contains("std::thread::spawn(move || startup_reconcile(app));"));
+        // #1046：同一条线程先对账登记、再对账内核（登记重写会重启内核，并发会连着重启两次）。
+        let startup = body("startup_reconcile");
+        let reg = startup
+            .find("reconcile_autostart_registration();")
+            .expect("先对账登记");
+        let kernel = startup
+            .find("converge_kernel_on_startup(app);")
+            .expect("再对账内核");
+        assert!(reg < kernel);
+        assert!(
+            !product.contains("std::thread::spawn(reconcile_autostart_registration)"),
+            "登记对账不许再单开一条与换内核并发的线程"
+        );
         assert!(
             product.contains("kernel_convergence_phase,"),
             "查询命令要注册"
@@ -3514,7 +2233,7 @@ mod tests {
         assert!(retire < restart);
         let manual = body("restart_daemon_process_blocking");
         assert!(manual.contains("if resident_service_available() {"));
-        assert!(manual.contains("bring_up_daemon(true, false)"));
+        assert!(manual.contains("bring_up_daemon(true)"));
         let oneshot = body("spawn_bundled_daemon_oneshot");
         assert!(oneshot.contains("oneshot_stdio()"));
         assert!(
@@ -3658,40 +2377,6 @@ mod tests {
     // is_file() 返回 true** ——于是一个跑不起来的 daemon 被写进开机自启、
     // 覆盖掉好的那条，向导还报成功。
 
-    #[test]
-    fn probe_passes_only_on_exit_zero_with_our_marker() {
-        assert!(sidecar_probe_verdict(Some(0), "P-Pass daemon 0.5.7-test.1\n").is_ok());
-    }
-
-    #[test]
-    fn probe_rejects_a_program_that_is_not_our_daemon() {
-        // 退出码 0 但不是我们的 daemon（被换成了别的 exe）。
-        let e = sidecar_probe_verdict(Some(0), "Python 3.9.13\n").unwrap_err();
-        assert!(
-            render_err("zh", &e).contains("不是 P-Pass 的 daemon"),
-            "{e}"
-        );
-        assert!(render_err("zh", &e).contains("Python 3.9.13"), "{e}");
-    }
-
-    #[test]
-    fn probe_rejects_empty_output() {
-        assert!(sidecar_probe_verdict(Some(0), "").is_err());
-    }
-
-    #[test]
-    fn probe_rejects_nonzero_exit() {
-        let e = sidecar_probe_verdict(Some(2), "P-Pass daemon 0.5.7-test.1").unwrap_err();
-        assert!(render_err("zh", &e).contains("退出码 2"), "{e}");
-    }
-
-    /// 超时/被干掉 ⇒ 拿不到退出码 ⇒ **不许当通过**。
-    /// 「没法确认」不等于「没问题」——放松这条就是静默放行。
-    #[test]
-    fn probe_rejects_unknown_exit_status() {
-        assert!(sidecar_probe_verdict(None, "P-Pass daemon 0.5.7-test.1").is_err());
-    }
-
     /// 本机上能找到的、真的 daemon 产物。找不到就返回 None——
     /// CI 上 `binaries/` 里放的是 0 字节 stub（ci-desktop.yml 的 "Stub sidecar"
     /// 步骤造的），所以那边天然没有。
@@ -3722,8 +2407,8 @@ mod tests {
     #[test]
     fn verify_rejects_a_zero_byte_sidecar() {
         let tmp = tempfile::tempdir().unwrap();
-        // 一律带 .exe 后缀：不为了这个测试在本文件再加一处平台 cfg
-        // （#211 正在往外搬）。Windows 上 spawn 直接被拒（不是有效的
+        // 一律带 .exe 后缀：平台 cfg 只许在 crates/platform（arch-check B.2），
+        // 本文件不加。Windows 上 spawn 直接被拒（不是有效的
         // Win32 程序），unix 上没有执行位同样被拒——两边都走 Err。
         let fake = tmp.path().join("ppf-daemon.exe");
         std::fs::write(&fake, b"").unwrap();
@@ -3761,36 +2446,6 @@ mod tests {
         }
     }
 
-    // ── DESK-36 (#456)：「用户主动停止」标记 + 自愈判据 ───────────────────
-    //
-    // 全部用 tempdir 注入 data dir——绝不调 stop_daemon / start_daemon 本体，
-    // 它们会走真实 adapter（pkill ppf-daemon、launchctl bootout 真 agent）。
-
-    /// 一个「向导走完了」的 data dir：config.toml 在。
-    fn configured_data_dir() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("config.toml"), "library_dir = \"x\"\n").unwrap();
-        dir
-    }
-
-    #[test]
-    fn self_heal_revives_a_configured_daemon_that_was_not_stopped_by_the_user() {
-        // 崩了 / 被更新流程停了又没拉回来（W1 那个 NSIS 场景）——自愈的本职。
-        let dir = configured_data_dir();
-        assert!(self_heal_allowed(dir.path()));
-    }
-
-    #[test]
-    fn self_heal_never_revives_a_daemon_the_user_stopped() {
-        // #456 本体：用户点了停止 → 自愈不许在冷却窗口过后把它拉回来。
-        let dir = configured_data_dir();
-        set_user_stopped(dir.path(), true).unwrap();
-        assert!(
-            !self_heal_allowed(dir.path()),
-            "用户主动停止了服务，自愈却仍然判定要拉起它（#456）"
-        );
-    }
-
     /// DESK-59 (#876)：托盘必须有名字——Windows 折叠区里认图标、读屏、回归
     /// SOP 用 UI Automation 找托盘，靠的都是它。
     #[test]
@@ -3806,58 +2461,6 @@ mod tests {
             chain.contains(".tooltip(\"P-Pass\")"),
             "托盘没设 tooltip（#876）"
         );
-    }
-
-    /// DESK-60 (#877)：登记缺失时补不补——#877 卡面要求的三种状态 + 平台开关。
-    /// 反证：判据去掉停止标记那条 → 第二条断言红；去掉配置那条 → 第三条红。
-    #[test]
-    fn a_missing_autostart_is_restored_only_for_a_configured_unstopped_install() {
-        let dir = configured_data_dir();
-        assert!(
-            restore_missing_autostart_allowed(true, dir.path()),
-            "配置在、没停过、登记丢了：应补登记（#877 现场）"
-        );
-        assert!(
-            !restore_missing_autostart_allowed(false, dir.path()),
-            "平台没声明会被系统删登记：保持「未登记 → 不动」"
-        );
-        set_user_stopped(dir.path(), true).unwrap();
-        assert!(
-            !restore_missing_autostart_allowed(true, dir.path()),
-            "用户主动停过服务：重装后也不许补（尊重停止）"
-        );
-        let fresh = tempfile::tempdir().unwrap();
-        assert!(
-            !restore_missing_autostart_allowed(true, fresh.path()),
-            "没配置过（首启）：不许顺手登记（DAE-03 ②）"
-        );
-    }
-    #[test]
-    fn user_stop_survives_an_app_restart() {
-        // 持久化语义：标记在盘上，换一个「进程」（重新读同一目录）仍然在。
-        let dir = configured_data_dir();
-        set_user_stopped(dir.path(), true).unwrap();
-        let reopened = dir.path().to_path_buf();
-        assert!(is_user_stopped(&reopened));
-        assert!(!self_heal_allowed(&reopened));
-    }
-
-    #[test]
-    fn starting_the_service_clears_the_user_stop() {
-        let dir = configured_data_dir();
-        set_user_stopped(dir.path(), true).unwrap();
-        set_user_stopped(dir.path(), false).unwrap();
-        assert!(!is_user_stopped(dir.path()));
-        assert!(self_heal_allowed(dir.path()), "点了启动之后自愈应当恢复");
-        // 没停过也能清（首启向导调 start_daemon 时就是这种情况）。
-        set_user_stopped(dir.path(), false).unwrap();
-    }
-
-    #[test]
-    fn self_heal_stays_out_of_an_unconfigured_machine() {
-        // 向导没走完不自愈——这条是原有语义，本卡不许改掉。
-        let dir = tempfile::tempdir().unwrap();
-        assert!(!self_heal_allowed(dir.path()));
     }
 
     /// stop_daemon / start_daemon 本体走真实 adapter，测试里不能调；这里钉
@@ -3880,71 +2483,134 @@ mod tests {
             .find("set_user_stopped(&platform::adapter().data_dir(), true)?;")
             .expect("stop_daemon_now 必须落「用户主动停止」标记，且失败要返回错误");
         let unregister = stop.find("uninstall_autostart()").expect("卸 autostart");
-        let kill = stop.find("kill_daemon_process()").expect("杀进程");
+        let kill = stop.find("stop_bundled_daemon()").expect("杀进程");
         assert!(mark < unregister && mark < kill, "标记必须先于停进程落下");
         // DESK-65 (#957)：撤登记的结果不许丢——真机上 Run 值没删掉、下次开机服务又起来了。
         assert!(
-            !stop.contains("let _ = platform::adapter().uninstall_autostart()"),
+            !stop.contains("let _ = platform::hosting().uninstall_autostart()"),
             "撤销开机自启失败必须报给用户"
         );
-        // DESK-65 (#957)：启动对账先看停止标记，停过就只撤不写。
-        let reconcile = body("reconcile_autostart_registration");
-        let guard = reconcile
-            .find("is_user_stopped(")
-            .expect("对账必须先看停止标记");
-        let rewrite = reconcile
-            .find("reconcile_autostart(&sidecar)")
-            .expect("对账");
-        assert!(guard < rewrite, "停止标记必须在改写登记之前判定");
         assert!(body("start_daemon")
             .contains("set_user_stopped(&platform::adapter().data_dir(), false)?;"));
         // 托盘停止与窗口按钮必须是同一个实现（同一份标记）。
         assert!(product.contains("let result = stop_daemon_now();"));
     }
 
+    /// #1043：`platform_ux` 原样转述适配器的能力，字段名是与 platformUx.js 的
+    /// 契约；且注册进了 invoke_handler（漏注册 = 前端拿不到、向导永远不出现）。
     #[test]
-    fn wizard_state_reports_the_user_stop_to_the_frontend() {
-        // 前端的向导门靠这一位区分「用户停了」和「向导中途退出」。
-        // 只钉字段名与来源——wizard_state() 本体读真实 data dir，不在测试里调。
-        let src = include_str!("lib.rs");
-        let product = src.split("#[cfg(test)]").next().unwrap_or(src);
-        assert!(product.contains("\"user_stopped\": is_user_stopped(&dir)"));
-    }
-
-    // ── #456 后续：更新流程也尊重「用户主动停止」 ─────────────────────────
-
-    #[test]
-    fn update_brings_back_a_daemon_the_user_did_not_stop() {
-        // 没停过：pause 杀了什么，装完就拉回什么（W1 原语义不变）。
-        let dir = configured_data_dir();
-        assert!(update_resume_allowed(dir.path()));
-    }
-
-    #[test]
-    fn update_never_revives_a_daemon_the_user_stopped() {
-        // 规则：用户点了停止 → 一直停着，只有用户点「启动后台服务」才恢复。
-        let dir = configured_data_dir();
-        set_user_stopped(dir.path(), true).unwrap();
-        assert!(
-            !update_resume_allowed(dir.path()),
-            "用户主动停止了服务，更新装完却仍然判定要拉起它（#456 后续）"
+    fn platform_ux_forwards_the_adapter_capabilities() {
+        let a = platform::adapter();
+        let got = platform_ux();
+        assert_eq!(got["close_to_tray_hint"], json!(a.close_to_tray_hint()));
+        assert_eq!(got["overlay_titlebar"], json!(a.overlay_titlebar()));
+        assert_eq!(
+            got["sleep_owner"],
+            json!(a.sleep_owner().map(platform::SleepOwner::as_str))
         );
-        // 标记原样保留：更新之后界面仍是「启动后台服务」。
-        assert!(is_user_stopped(dir.path()));
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        assert!(
+            src.contains("            platform_ux,\n"),
+            "platform_ux 未注册进 invoke_handler"
+        );
     }
 
+    /// #1059：库目录由壳只读解析，不经 IPC。config 有 data_dir 用它；没配置退回
+    /// 平台目录；目录不存在 → keyed 错误（不含路径/系统原文）。
+    /// 反证：existing_library_dir 去掉 is_dir 判断 → 第三条红；configured 不读 config → 第一条红。
     #[test]
-    fn update_resume_does_not_require_a_finished_wizard() {
-        // 「没停过时行为不变」：原来更新后恢复不看 config.toml，这里也不许加。
-        let dir = tempfile::tempdir().unwrap();
-        assert!(update_resume_allowed(dir.path()));
+    fn library_dir_is_read_from_config_without_the_daemon() {
+        let platform = tempfile::tempdir().unwrap();
+        let lib = tempfile::tempdir().unwrap();
+        std::fs::write(
+            platform.path().join("config.toml"),
+            format!("data_dir = '{}'\n", lib.path().display()),
+        )
+        .unwrap();
+        assert_eq!(
+            existing_library_dir(platform.path()).unwrap(),
+            lib.path().to_string_lossy()
+        );
+        let bare = tempfile::tempdir().unwrap();
+        assert_eq!(
+            existing_library_dir(bare.path()).unwrap(),
+            bare.path().to_string_lossy()
+        );
+        std::fs::write(
+            platform.path().join("config.toml"),
+            "data_dir = '/definitely/not/here/ppass-1059'\n",
+        )
+        .unwrap();
+        let err = existing_library_dir(platform.path()).unwrap_err();
+        let v: Value = serde_json::from_str(&err).unwrap();
+        assert_eq!(v["key"], "ui.library_dir_unknown");
+        assert!(!err.contains("ppass-1059"), "不许透出路径: {err}");
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        assert!(
+            src.contains("            library_dir,\n"),
+            "library_dir 未注册进 invoke_handler"
+        );
     }
 
+    /// #1043：更新失败的「文件被占用」由 Rust 侧按系统错误码判。输入就是前端
+    /// 实际拿到的那串——插件的 `Error::Io` 是 transparent，`to_string()` 即
+    /// `io::Error` 的 Display。判据注入，所以在任何平台上都能测。
+    /// 反证：改回匹配文案（不看错误码）→ 第三条红；判据不再问平台 → 第二条红。
     #[test]
-    fn update_resume_command_checks_the_on_disk_marker_before_spawning() {
-        // resume_daemon_after_update 本体走真实 adapter / current_exe，测试里不能调；
-        // 钉接线：判据读的是 Rust 侧 data dir 上的标记，且在 spawn 之前；
-        // 自愈与更新共用同一个 spawn，但各走各的判据。
+    fn update_failure_key_reads_the_os_error_code() {
+        let locked = |c: i32| c == 32;
+        let io32 = std::io::Error::from_raw_os_error(32).to_string();
+        assert_eq!(os_error_code(&io32), Some(32), "{io32}");
+        assert_eq!(
+            update_failure_key_with(&io32, locked),
+            "ui.update_failed_file_locked"
+        );
+        let io2 = std::io::Error::from_raw_os_error(2).to_string();
+        assert_eq!(update_failure_key_with(&io2, locked), "ui.update_failed");
+        // 不是 io 错误（网络、签名……）：哪怕文案里提到「另一个进程」，也只给通用 key。
+        assert_eq!(
+            update_failure_key_with("Network error: the file is used by another process", locked),
+            "ui.update_failed"
+        );
+        assert_eq!(os_error_code("(os error x)"), None);
+        assert_eq!(os_error_code(""), None);
+        // 命令本体问的是平台适配器，且注册进了 invoke_handler。
+        let a = platform::adapter();
+        assert_eq!(
+            update_failure_key(io32.clone()),
+            if a.is_file_in_use_os_error(32) {
+                "ui.update_failed_file_locked"
+            } else {
+                "ui.update_failed"
+            }
+        );
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        assert!(src.contains("            update_failure_key,\n"));
+    }
+
+    /// 接线：`wizard_state` 把判据结果交给前端，且**不再**把拼判据用的三个原料
+    /// 递出去（前端拿到就会忍不住再拼一份）。wizard_state() 本体读真实 data dir，
+    /// 不在测试里调。
+    #[test]
+    fn wizard_state_hands_the_verdict_not_the_ingredients() {
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        let body = product_fn_body(&src, "wizard_state");
+        assert!(body.contains("\"show_wizard\": show_wizard("), "{body}");
+        for ingredient in ["\"configured\":", "\"installed\":", "\"user_stopped\":"] {
+            assert!(!body.contains(ingredient), "不许把 {ingredient} 交给前端");
+        }
+        assert!(
+            body.contains("ServiceState::Running"),
+            "在线要读 Rust 持有的服务状态"
+        );
+    }
+
+    /// #1046（S-11）：更新后拉起 daemon 不再由旧壳的 `resume_daemon_after_update`
+    /// 做，改由新壳启动对账（内核一直不可达 ⇒ 按自愈判据拉起）。钉接线：
+    /// 命令已删、前端不再调；自愈与启动对账共用 `self_heal_now`，判据先于 spawn；
+    /// 自愈不杀在跑的内核。
+    #[test]
+    fn update_resume_is_the_new_shells_startup_reconcile() {
         let src = include_str!("lib.rs").replace("\r\n", "\n");
         let product = src.split("#[cfg(test)]").next().unwrap_or(&src);
         let body = |name: &str| {
@@ -3954,56 +2620,52 @@ mod tests {
             let rest = &product[start..];
             rest[..rest.find("\n}\n").expect("函数结尾")].to_string()
         };
-        let resume = body("resume_daemon_after_update");
-        let gate = resume
-            .find("if !update_resume_allowed(&platform::adapter().data_dir()) {")
-            .expect("resume_daemon_after_update 必须先读盘上的「用户主动停止」标记");
-        // #732：更新后恢复 = 换版本（kill_running=true），走共用的 bring_up_daemon
-        // （先交给 launchd，退路才一次性 spawn），退路必须带 post_update=true
-        // （UPD-07 #617：只有更新拉起的 daemon 才允许换壳）。
-        let spawn = resume
-            .find("bring_up_daemon(true, true)")
-            .expect("resume_daemon_after_update 走共用 bring_up_daemon(kill_running=true, post_update=true)");
+        assert!(!product.contains("fn resume_daemon_after_update("));
+        assert!(!include_str!("../../src/App.svelte").contains("resume_daemon_after_update"));
+        let heal = body("self_heal_now");
+        let gate = heal
+            .find("if !self_heal_allowed(&platform::adapter().data_dir()) {")
+            .expect("先读盘上的「用户主动停止」标记与配置");
+        let spawn = heal
+            .find("bring_up_daemon(false)")
+            .expect("自愈不杀在跑的内核");
         assert!(gate < spawn, "判据必须在 spawn 之前");
-        let heal = body("self_heal_daemon");
-        assert!(heal.contains("self_heal_allowed(&platform::adapter().data_dir())"));
-        assert!(
-            heal.contains("bring_up_daemon(false, false)"),
-            "自愈与更新无关：不许带 post_update（否则 owner 会在非更新场合去换壳），也不许杀在跑的内核"
-        );
-        // 退路的一次性 spawn 仍按 post_update 带参数。
+        assert!(body("self_heal_daemon").contains("self_heal_now(&app, "));
+        let converge = body("converge_kernel_on_startup");
+        let state_gate = converge
+            .find("if manager.current() != ServiceState::Unreachable {")
+            .expect("启动对账兜底与前端自愈同一道门：只在 Unreachable 时拉");
+        let heal_at = converge
+            .find("self_heal_now(&app, \"startup reconcile\")")
+            .expect("启动对账：内核一直不可达时按自愈判据拉起（不依赖前端）");
+        assert!(state_gate < heal_at, "状态门必须在拉起之前");
+        // 退路的一次性 spawn：不带任何参数（#1041：`--post-update` 已退役）。
         let up = body("bring_up_daemon");
-        assert!(up.contains("spawn_bundled_daemon_oneshot(post_update)"));
+        assert!(up.contains("spawn_bundled_daemon_oneshot()"));
+        let oneshot = body("spawn_bundled_daemon_oneshot");
         assert!(
-            !heal.contains("resume_daemon_after_update()"),
-            "自愈不该绕进更新路径的判据"
+            !oneshot.contains(".arg("),
+            "一次性 spawn 不带任何命令行参数（含已退役的 --post-update）"
         );
     }
-    /// UPD-05 (#605)：restart_app 命令已注册，且 App.svelte 在
-    /// downloadAndInstall 成功路径里调用它（装完重启外壳）。
+
+    /// UPD-05 (#605)：App.svelte 在 downloadAndInstall 成功路径里调用
+    /// relaunch_shell（装完换壳）。#1041 删掉了前端从不 invoke 的 `restart_app`
+    /// 命令，这里只保留对 relaunch_shell 调用次序的钉子。
     #[test]
-    fn restart_app_is_registered_and_called_after_install() {
-        let src = include_str!("lib.rs");
-        assert!(
-            src.contains("fn restart_app(app: tauri::AppHandle)"),
-            "restart_app 命令缺失"
-        );
-        assert!(
-            src.contains("restart_app,"),
-            "restart_app 未注册进 invoke_handler"
-        );
+    fn relaunch_shell_is_called_after_install() {
         let app = include_str!("../../src/App.svelte");
         let install = app
-            .find("await update.downloadAndInstall(")
-            .expect("App.svelte 缺 downloadAndInstall");
+            .find("await runUpdate(")
+            .expect("App.svelte 缺 runUpdate（下载→暂停→安装）");
         // UPD-06 (#616)：换壳走 relaunch_shell（系统路径 kickstart 优先、壳自己
-        // 重启兜底），不再是裸的 restart_app——restart_app 现在只是它的退化分支。
+        // 重启兜底）。
         // ⚠️ 比的是**调用点**：`relaunchShellNow` 的定义体在文件里更靠前，比定义
         // 位置会得出反向结论（本测试第一版就是这么红的）。
         let call = app
             .find("await relaunchShellNow();")
             .expect("App.svelte 缺换壳调用点");
-        assert!(call > install, "换壳必须在 downloadAndInstall 之后调用");
+        assert!(call > install, "换壳必须在 runUpdate（install）之后调用");
         assert!(
             app.contains("await invoke(\"relaunch_shell\");"),
             "换壳必须调 relaunch_shell 命令"
@@ -4017,7 +2679,7 @@ mod tests {
     /// 反证：把 setup 里那句 `std::thread::spawn(register_shell_login_item);` 删掉 → 红。
     #[test]
     fn setup_registers_the_shell_login_item() {
-        let src = include_str!("lib.rs");
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
         assert!(
             src.contains("std::thread::spawn(register_shell_login_item);"),
             "启动时必须登记壳的登录项（否则 launchd 永远接管不到壳）"
@@ -4027,7 +2689,7 @@ mod tests {
             .expect("register_shell_login_item 缺失");
         let body: String = src[f..].chars().take(1200).collect();
         assert!(
-            body.contains("platform::adapter().register_shell_login_item(&exe)"),
+            body.contains("platform::hosting().register_shell_login_item(&exe)"),
             "DESK-72：怎么登记交给平台层（Windows 也要登记，不能借 launchd 专用的 shell_agent_label 判断）"
         );
         assert!(
@@ -4051,7 +2713,7 @@ mod tests {
     /// `tauri::process::restart` → 本测试必须红。
     #[test]
     fn relaunch_shell_gates_kickstart_on_registration_pointing_at_us() {
-        let src = include_str!("lib.rs");
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
         let start = src
             .find("fn relaunch_shell(app: tauri::AppHandle)")
             .expect("relaunch_shell 命令缺失");
@@ -4082,186 +2744,69 @@ mod tests {
             "relaunch_shell 未注册进 invoke_handler"
         );
         assert!(
-            src.contains("installed_app_version,"),
-            "installed_app_version 未注册进 invoke_handler"
+            src.contains("pending_shell_version,"),
+            "pending_shell_version 未注册进 invoke_handler"
         );
     }
 
-    // #949：首启 config 不再写 [telemetry] 段（遥测上报已下线）。
-    // 反证：把该段加回 render_config，本测试必须红。
+    /// #1044 B13：「装好的壳 ≠ 运行中的壳」按共享的 Rust 语义判（同核心的
+    /// test 包与正式包算不同），同版本或读不到都不提示。
     #[test]
-    fn tel06_first_run_config_has_no_telemetry_section() {
-        let doc = render_config("/Users/alice/Pictures/lib");
-        let parsed: toml::Value = toml::from_str(&doc).expect("首启 config 必须是合法 TOML");
-        assert!(parsed.get("telemetry").is_none(), "{doc}");
-        assert!(!doc.contains("telemetry"), "{doc}");
+    fn pending_shell_version_uses_the_shared_version_rule() {
+        assert_eq!(
+            pending_shell_version_of(Some("0.9.8".into()), "0.9.7"),
+            Some("0.9.8".into())
+        );
+        assert_eq!(
+            pending_shell_version_of(Some("0.9.7".into()), "0.9.7"),
+            None
+        );
+        assert_eq!(pending_shell_version_of(None, "0.9.7"), None);
+        assert_eq!(
+            pending_shell_version_of(Some("0.9.12".into()), "0.9.12-test.17"),
+            Some("0.9.12".into())
+        );
     }
 
-    // ══ DESK-46 (#638)：set_library_dir —— 换库写职责归壳 ═════════════
+    // ══ #1045：config 与诊断包的写者是 daemon，壳只调子命令 ══════════════
+    //
+    // 判据本身（退出码 / stdout 形状）在 `daemon_cli::tests`；写入语义（模板、
+    // 归一、校验、合并）在 daemon `tests/config_cli.rs`。这里只钉「接线」：三个
+    // 命令各自走对子命令，且壳里没有第二条写 config / 打包诊断的路径。
+    // G4（tools/arch-check.sh）是同一条约束的门禁版，这条是编译进 cargo test
+    // 的快速版。
 
-    // merge 是纯函数：只换 data_dir，其余逐字节保留；新键落在首个
-    // [section] 之前（2026-07-31 crash-loop 教训）；值是真 TOML。
-    // 反证：merge 若改成整份重写（丢掉 bind_addr 等），本测试必须红。
-    #[test]
-    fn desk46_merge_replaces_data_dir_and_keeps_everything_else() {
-        let doc = "data_dir = \"/old/library\"\n\n# 固定端口\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n";
-        let out = merge_library_dir(doc, "/Volumes/My Passport");
-        let parsed: toml::Value = toml::from_str(&out).expect("merge 产物必须是合法 TOML");
-        assert_eq!(parsed["data_dir"].as_str().unwrap(), "/Volumes/My Passport");
-        assert_eq!(parsed["bind_addr"].as_str().unwrap(), "0.0.0.0:41145");
-        assert_eq!(parsed["relay_urls"].as_array().unwrap().len(), 0);
-        // 注释与旧版首启写入的 [telemetry] 段（#949 后 daemon 只接收并忽略）
-        // 都逐字节还在——其余内容不许被重写（E4）。
-        assert!(out.contains("# 固定端口"));
-        assert!(out.ends_with("\n[telemetry]\nenabled = false\n"), "{out}");
-        // 顶层键必须落在首个 [section] 之前。
-        let key_pos = out.find("data_dir").unwrap();
-        let section_pos = out.find("\n[").expect("原文有 [telemetry] section");
-        assert!(key_pos < section_pos, "顶层键必须落在首个 [section] 之前");
+    fn product_fn_body<'a>(src: &'a str, name: &str) -> &'a str {
+        let product = src.split("#[cfg(test)]").next().unwrap();
+        let start = product
+            .find(&format!("fn {name}("))
+            .unwrap_or_else(|| panic!("找不到 fn {name}"));
+        let rest = &product[start..];
+        let end = rest.find("\n}\n").expect("函数结尾");
+        &rest[..end]
     }
 
-    // DESK-46 + DESK-27 同款：Windows 路径先归一、再走真 TOML 序列化，
-    // 写→读→再写必须逐字节幂等。反证：换回 `{:?}` 或去掉归一必须红。
     #[test]
-    fn desk46_merge_windows_path_roundtrip_is_idempotent() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = "C:\\Users\\ethan\\P-Pass 家庭照片库";
-        let once = merge_library_dir("", path);
-        std::fs::write(dir.path().join("config.toml"), &once).unwrap();
-        let back = configured_library_dir(dir.path()).expect("写出去必须读得回");
-        assert_eq!(back, path, "写→读不得变形（反斜杠不许翻倍）");
-        let twice = merge_library_dir(&once, &back);
-        assert_eq!(once, twice, "写→读→再写必须逐字节幂等");
-    }
-
-    // 校验判据（纯函数，文件系统事实由调用点注入）。
-    // 反证：把任一 arm 摘掉，对应断言必须红。
-    #[test]
-    fn desk46_target_verdicts() {
-        // 正常：存在 + 可写 + 不嵌套。
-        assert!(library_target_verdict("/new/lib", Some("/old/lib"), true, true).is_ok());
-        // 不存在（或不是目录）⇒ keyed missing。
-        let e = library_target_verdict("/nope", Some("/old/lib"), false, true).unwrap_err();
-        assert!(e.contains("ui.err_library_target_missing"), "{e}");
-        // 不可写 ⇒ keyed readonly。
-        let e = library_target_verdict("/ro", None, true, false).unwrap_err();
-        assert!(e.contains("ui.err_library_target_readonly"), "{e}");
-        // 相同 / 嵌套 ⇒ keyed nested（三个方向都要拦）。
-        for (cur, new) in [
-            ("/old/lib", "/old/lib"),
-            ("/old/lib", "/old/lib/sub"),
-            ("/old/lib/photos", "/old/lib"),
+    fn config_and_diag_commands_only_call_the_daemon_subcommands() {
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        for (cmd, call) in [
+            ("write_config", "daemon_cli::config_init("),
+            ("set_library_dir", "daemon_cli::config_set_library("),
+            ("export_logs_bundle", "daemon_cli::diag_export("),
         ] {
-            let e = library_target_verdict(new, Some(cur), true, true).unwrap_err();
-            assert!(e.contains("ui.err_library_nested"), "{cur} vs {new}: {e}");
+            let body = product_fn_body(&src, cmd);
+            assert!(body.contains(call), "{cmd} 必须调 {call}：{body}");
+            for forbidden in ["fs::write", "create_dir", "OpenOptions", "zip::"] {
+                assert!(
+                    !body.contains(forbidden),
+                    "{cmd} 不许自己 {forbidden}（config / 诊断包只有 daemon 写）"
+                );
+            }
         }
-        // 兄弟目录不算嵌套（分隔符边界：/old/lib2 ⊄ /old/lib）。
-        assert!(library_target_verdict("/old/lib2", Some("/old/lib"), true, true).is_ok());
-        // 没配过库（current=None）不做嵌套检查。
-        assert!(library_target_verdict("/anywhere", None, true, true).is_ok());
-    }
-
-    #[test]
-    fn desk46_paths_overlap_boundaries() {
-        assert!(paths_overlap("/a/b", "/a/b/"));
-        assert!(paths_overlap("/a/b", "/a/b/c"));
-        assert!(paths_overlap("/a/b/c", "/a/b"));
-        assert!(!paths_overlap("/a/b", "/a/bc"));
-        assert!(!paths_overlap("/a/b", "/a/c"));
-        // Windows：混输分隔符与大小写。
-        assert!(paths_overlap("C:\\Lib", "c:\\lib\\sub"));
-        assert!(!paths_overlap("C:\\Lib", "C:\\Lib2"));
-        assert!(paths_overlap("C:/Lib/sub", "C:\\Lib"));
-    }
-
-    // ══ DESK-49 (#710)：换库读 config 失败不得被吞 ═══════════════════
-
-    // 已装用户的真实形态：旧版首启写入了 [telemetry] 段（#949 后 daemon
-    // 只接收并忽略），换库时必须原样保留，不得被删。
-    const DESK49_FULL_CFG: &str = "data_dir = \"/old/library\"\n\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n";
-
-    // 读失败但写能成功 ⇒ 返回 keyed 错误、文件内容逐字节不变（E2 反证主测）。
-    // 用非 UTF-8 造读失败：跨平台、不需要平台分叉（B.2）。
-    // 为什么不用「权限 000」：000 连写都失败，旧实现会因「写失败」同样返回
-    // Err，测试假绿（反证实测如此）；可写不可读（0o200）需要按平台设权限，
-    // 该能力应进 crates/platform 的 test-support，不在本卡范围。
-    // 反证：换回 `read_to_string(..).unwrap_or_default()`，本测试必须红。
-    #[test]
-    fn desk49_non_utf8_config_errors_and_keeps_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let cfg = dir.path().join("config.toml");
-        let bytes: &[u8] = b"data_dir = \"/old\"\nbind_addr = \"\xff\xfe\"\n";
-        std::fs::write(&cfg, bytes).unwrap();
-        let e = rewrite_library_dir(&cfg, "/new/library").unwrap_err();
-        assert!(e.contains("ui.err_set_library"), "{e}");
-        assert_eq!(std::fs::read(&cfg).unwrap(), bytes, "读失败时不得写文件");
-    }
-
-    // 不存在 ⇒ 当空配置，正常创建，只含新 data_dir。
-    #[test]
-    fn desk49_missing_config_is_created() {
-        let dir = tempfile::tempdir().unwrap();
-        let cfg = dir.path().join("config.toml");
-        rewrite_library_dir(&cfg, "/new/library").expect("不存在应正常创建");
-        let parsed: toml::Value = toml::from_str(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
-        assert_eq!(parsed["data_dir"].as_str().unwrap(), "/new/library");
-    }
-
-    // 正常可读 ⇒ 只换 data_dir，其它字段保留。
-    #[test]
-    fn desk49_readable_config_keeps_other_fields() {
-        let dir = tempfile::tempdir().unwrap();
-        let cfg = dir.path().join("config.toml");
-        std::fs::write(&cfg, DESK49_FULL_CFG).unwrap();
-        rewrite_library_dir(&cfg, "/new/library").unwrap();
-        let parsed: toml::Value = toml::from_str(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
-        assert_eq!(parsed["data_dir"].as_str().unwrap(), "/new/library");
-        assert_eq!(parsed["bind_addr"].as_str().unwrap(), "0.0.0.0:41145");
-        assert_eq!(parsed["relay_urls"].as_array().unwrap().len(), 0);
+        // 向导的生效顺序不变：先探活再注册（DESK-29），探活走机读契约。
         assert!(
-            std::fs::read_to_string(&cfg)
-                .unwrap()
-                .ends_with("\n[telemetry]\nenabled = false\n"),
-            "旧版 [telemetry] 段必须逐字节保留"
-        );
-    }
-
-    // DESK-46 (#638) 契约门禁（源码扫描）：
-    // ① 写入目标必须是平台目录的 config.toml（孤儿文件不得复活）；
-    // ② 前端只调壳侧 set_library_dir，folder.set 永远退役；
-    // ③ 命令注册进 invoke_handler；
-    // ④ daemon 侧的 folder.set 写者已删除（跨 crate 扫描）。
-    #[test]
-    fn desk46_library_dir_writer_is_shell_only() {
-        let src = include_str!("lib.rs");
-        assert!(src.contains("fn set_library_dir(library_dir: String)"));
-        assert!(
-            src.contains("set_library_dir,"),
-            "set_library_dir 未注册进 invoke_handler"
-        );
-        let f = src.find("fn set_library_dir").expect("命令必须存在");
-        let body: String = src[f..].chars().take(1200).collect();
-        assert!(
-            body.contains("platform::adapter().data_dir()"),
-            "写入目标必须是平台目录（DESK-46 根因就是写去了库目录）"
-        );
-        let app = include_str!("../../src/App.svelte");
-        assert!(
-            app.contains("invoke(\"set_library_dir\""),
-            "前端 chooseFolder 必须改调壳侧 set_library_dir"
-        );
-        assert!(
-            !app.contains("\"folder.set\""),
-            "folder.set 已退役（DESK-46），前端不得再调"
-        );
-        let daemon_ipc = include_str!("../../../../crates/daemon/src/ipc.rs");
-        assert!(
-            !daemon_ipc.contains("\"folder.set\" =>"),
-            "daemon 侧的 folder.set 写者必须删除（DESK-46：写职责归壳）"
-        );
-        assert!(
-            !daemon_ipc.contains("write_folder_config"),
-            "write_folder_config 必须随 folder.set 一起删除"
+            product_fn_body(&src, "verify_sidecar_runs").contains("daemon_cli::probe_version("),
+            "探活必须走 --version --json"
         );
     }
 }

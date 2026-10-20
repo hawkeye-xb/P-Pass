@@ -36,32 +36,18 @@ msg_keys! {
     ERR_PAIR_RESTARTED => "err.pair_restarted",
     /// Connected to the storage daemon over a direct (or LAN) path.
     DIAG_ONLINE_DIRECT => "diag.online_direct",
-    /// Connected, but through a relay — bandwidth may be limited.
-    DIAG_ONLINE_RELAY => "diag.online_relay",
-    /// Storage daemon unreachable; UI shows last_seen in human terms.
-    /// Phone-perspective (the phone is looking at the storage computer).
-    DIAG_STORAGE_OFFLINE => "diag.storage_offline",
-    /// Media pipeline is (re)indexing the library. Phone-perspective.
-    DIAG_INDEXING => "diag.indexing",
     /// A pairing request is waiting for owner confirmation.
     /// Phone-perspective ("waiting on the storage computer").
     DIAG_PAIRING => "diag.pairing",
 
     // ── Desktop-perspective variants (T-042b) ─────────────────────────
     // The phone-perspective keys above read oddly ON the storage computer
-    // itself ("存储电脑离线了" shown by the storage computer is nonsense).
-    // The desktop shell maps STATE_KEYS to these; msg_key sharing stays,
-    // the dictionary gains per-surface variants. Placeholder-free on
-    // purpose: the daemon status payload carries no progress/last_seen
-    // values, so a placeholder would render as a literal "{progress}".
-    /// Desktop shell: this computer's network link is down.
-    DIAG_DESKTOP_STORAGE_OFFLINE => "diag.desktop.storage_offline",
+    // itself ("等待存储电脑确认" shown by the storage computer is nonsense).
+    // The desktop shell uses this variant; msg_key sharing stays, the
+    // dictionary gains per-surface variants. Placeholder-free on purpose:
+    // the daemon status payload carries no values to fill in.
     /// Desktop shell: a device is waiting for the owner to confirm pairing.
     DIAG_DESKTOP_PAIRING => "diag.desktop.pairing",
-    /// Desktop shell: the library is being indexed (no progress value).
-    DIAG_DESKTOP_INDEXING => "diag.desktop.indexing",
-    /// Desktop shell: this computer's disk is full.
-    DIAG_DESKTOP_DISK_FULL => "diag.desktop.disk_full",
 
     // ── Desktop shell UI copy (T-042b: finish the screen) ─────────────
     // UI-layer strings that were hardcoded zh in App.svelte — half-migrated
@@ -133,10 +119,10 @@ msg_keys! {
     UI_UPDATE_CHECK_FAILED => "ui.update_check_failed",
     // W1 (2026-08-26): the Windows-specific "a background process still
     // holds the file" failure mode of the update flow — see App.svelte
-    // checkForUpdate()'s pause_daemon_for_update/resume_daemon_after_update
-    // dance and its file-locked heuristic.
+    // checkForUpdate()'s pause_daemon_for_update step and its file-locked
+    // heuristic.
     UI_UPDATE_FAILED_FILE_LOCKED => "ui.update_failed_file_locked",
-    /// UPD-05 (#605): the update installed but `restart_app` itself failed —
+    /// UPD-05 (#605): the update installed but `relaunch_shell` itself failed —
     /// the user must quit and reopen the app by hand to finish.
     UI_UPDATE_RELAUNCH_FAILED => "ui.update_relaunch_failed",
     /// UPD-06 (#616)：更新状态机/版本真相源的界面文案。
@@ -150,6 +136,11 @@ msg_keys! {
     UI_SHELL_RESTART_NEEDED => "ui.shell_restart_needed",
     UI_RESTART_APP_NOW => "ui.restart_app_now",
     UI_VERSION_MISMATCH => "ui.version_mismatch",
+    // ── Settings「关于」：壳与内核版本分开列（#1044 B13）──────────────
+    UI_ABOUT => "ui.about",
+    UI_ABOUT_SHELL_VERSION => "ui.about_shell_version",
+    UI_ABOUT_SERVICE_VERSION => "ui.about_service_version",
+    UI_ABOUT_VERSIONS_DIFFER => "ui.about_versions_differ",
     // ── Desktop daemon restart after shell update (DAE-04) ───────────
     UI_RESTART_SERVICE => "ui.restart_service",
     UI_RESTART_SERVICE_BTN => "ui.restart_service_btn",
@@ -440,14 +431,8 @@ mod tests {
             ERR_PAIR_EXPIRED,
             ERR_PAIR_RESTARTED,
             DIAG_ONLINE_DIRECT,
-            DIAG_ONLINE_RELAY,
-            DIAG_STORAGE_OFFLINE,
-            DIAG_INDEXING,
             DIAG_PAIRING,
-            DIAG_DESKTOP_STORAGE_OFFLINE,
             DIAG_DESKTOP_PAIRING,
-            DIAG_DESKTOP_INDEXING,
-            DIAG_DESKTOP_DISK_FULL,
             UI_OFFLINE_BANNER,
             UI_OFFLINE_ACTION,
             UI_START_SERVICE,
@@ -515,6 +500,10 @@ mod tests {
             UI_SHELL_RESTART_NEEDED,
             UI_RESTART_APP_NOW,
             UI_VERSION_MISMATCH,
+            UI_ABOUT,
+            UI_ABOUT_SHELL_VERSION,
+            UI_ABOUT_SERVICE_VERSION,
+            UI_ABOUT_VERSIONS_DIFFER,
             UI_RESTART_SERVICE,
             UI_RESTART_SERVICE_BTN,
             UI_RESTARTING_SERVICE,
@@ -749,7 +738,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 314);
+        assert_eq!(ALL.len(), 312);
     }
 
     #[test]

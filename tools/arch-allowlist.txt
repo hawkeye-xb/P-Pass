@@ -1,0 +1,21 @@
+# 架构门禁 G1 / G5 的存量白名单（#1040，里程碑 #9「桌面架构收口」）。
+#
+# 规则：只许缩、不许增。tools/arch-check.sh 逐项校验——
+#   · 命中数必须与登记的计数精确相等：多了 = 新增越界（红）；少了 = 登记已
+#     过期，必须把计数改小或删掉条目（红）。所以迁移卡做完，门禁会逼你缩表。
+#   · 条目、计数、永久例外相对基线分支（origin/main）都不许变大（ratchet）。
+#   · 迁移全部完成后本文件应只剩 [permanent] 段；届时删除白名单机制。
+# 不要为了让 CI 变绿往里加条目——那正是这道门禁要拦的事。
+#
+# [ratchet] 格式：文件 | 规则 | 计数 | 理由        （计数 = 该文件该规则的命中行数）
+# [permanent] 格式：文件 | 规则 | 理由               （客观平台差异，不计入存量；
+#   新增永久例外同样要 issue 拍板。#998 安装位置闸门、#999 防睡眠的平台差异目前
+#   落在 crates/platform 与 daemon 的 adapter 调用里，不触发 G1/G5，所以暂无条目。）
+#
+# 规则含义见 tools/arch-check.sh 的 G1/G5 段。
+# 生成方式：ARCH_REPORT_ONLY=1 bash tools/arch-check.sh
+
+[ratchet]
+crates/transport/src/provider.rs | G5 | 1 | 测试里 use std::os::unix::fs::MetadataExt（测试辅助，待挪进 platform test-support 或改跨平台写法）
+
+[permanent]

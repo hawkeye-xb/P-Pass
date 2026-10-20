@@ -2,14 +2,14 @@
 //! confirmation, whitelist write.
 //!
 //! ```text
-//! owner UI:  start()  ──► QR "ppf://pair?node=<id>&t=<token>"
+//! owner UI:  start()  ──► QR "ppf://pair?node=<id>&t=<token>[&r=<relay>]"
 //! phone:     scan     ──► PairRequest{token, name, role} over ctrl
 //! daemon:    token valid (unused, unexpired)? ──► pending queue
 //! owner UI:  confirm(name) / reject(name)
 //! daemon:    confirm ──► device row written ──► PairAccepted
 //! ```
 //!
-//! Tokens are 32 random bytes, TTL 600 s, strictly one-time: the first
+//! Tokens are 12 random bytes (24 hex), TTL 600 s, strictly one-time: the first
 //! PairRequest consumes the token whatever happens afterwards — a replay
 //! from another device is rejected even while the first request is still
 //! pending.
@@ -250,24 +250,11 @@ pub struct Pairing {
     /// [`PENDING_TTL_MS`]; tests inject a short one via
     /// [`Pairing::with_pending_ttl`] instead of sleeping 110 s.
     pending_ttl_ms: i64,
-    /// Live dialable-address provider — historically appended to QR
-    /// strings as `&a=` (full PeerAddr base64) so a scan connects without
-    /// discovery services (真机冒烟教训: 办公网屏蔽 n0 发现,纯 NodeId
-    /// 拨号失败). A PROVIDER, not a cached string: the relay attaches
-    /// seconds after bind and addresses drift over a daemon's weeks-long
-    /// life — a QR must carry NOW's address (真机教训: 常驻 20 分钟的
-    /// daemon 发着启动瞬间的裸内网地址).
-    ///
-    /// H-10b rework (2026-08-08): the full PeerAddr QR (id + relay +
-    /// direct IPs, 100–180 chars base64) was too dense to scan. The QR
-    /// now carries only the relay URL as `&r=`; the Android side rebuilds
-    /// the address token from node + relay. Kept for reference only —
-    /// start() no longer appends `&a=`.
-    #[allow(dead_code)]
-    addr_provider: Option<Arc<dyn Fn() -> String + Send + Sync>>,
     /// Relay URL provider, appended to QR strings as `&r=` (H-10b).
-    /// Separate from addr_provider because the QR must stay short — a
-    /// relay URL (~30 chars) instead of the full PeerAddr (~150 chars).
+    /// The QR must stay short — a relay URL (~30 chars) instead of the full
+    /// PeerAddr (~150 chars) — so the full dialable address is never embedded
+    /// (H-10b rework 2026-08-08: the `&a=` PeerAddr QR was too dense to scan;
+    /// the Android side rebuilds the address token from node + relay).
     relay_provider: Option<Arc<dyn Fn() -> Option<String> + Send + Sync>>,
     /// IPC-02: 事件总线（可选）——配对落定（accept/merge）后发
     /// device.changed，桌面设备行即时更新。
@@ -277,13 +264,11 @@ pub struct Pairing {
 
 impl Pairing {
     /// Returns the engine plus the receiver the owner UI listens on.
-    /// `addr_provider` returns `transport.local_addr().to_string()` in
-    /// production (None keeps QR strings short in unit tests);
-    /// `relay_provider` returns `transport.local_addr().relay_url()`.
+    /// `relay_provider` returns `transport.local_addr().relay_url()` in
+    /// production (None keeps QR strings short in unit tests).
     pub fn new(
         db: Db,
         node_id: transport::NodeId,
-        addr_provider: Option<Arc<dyn Fn() -> String + Send + Sync>>,
         relay_provider: Option<Arc<dyn Fn() -> Option<String> + Send + Sync>>,
     ) -> (Self, tokio::sync::mpsc::UnboundedReceiver<PendingPair>) {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -292,7 +277,6 @@ impl Pairing {
                 db,
                 node_id,
                 pending_ttl_ms: PENDING_TTL_MS,
-                addr_provider,
                 relay_provider,
                 events: None,
                 inner: Arc::new(Mutex::new(Inner {
@@ -341,37 +325,6 @@ impl Pairing {
             }
         }
         qr
-    }
-
-    /// Legacy `pair.request` (old phones, `ack_then_poll == false`): the
-    /// reply still waits for the owner and its semantics are unchanged —
-    /// `Ok(pairing_epoch)` on Allow, `Err` otherwise. NET-10: internally it
-    /// is [`Self::submit_request`] plus a wait on the same ledger entry the
-    /// spawned decision task settles, so both protocol shapes share one
-    /// source of truth.
-    pub async fn handle_request(
-        &self,
-        peer: transport::NodeId,
-        req: &proto::PairRequest,
-        now_ms: i64,
-    ) -> Result<String, PairRejection> {
-        let submission = self.submit_request(peer, req, now_ms).await?;
-        let mut rx = {
-            let inner = self.inner.lock().expect("pairing lock");
-            inner
-                .tickets
-                .get(&submission.request_id)
-                .map(|t| t.state.subscribe())
-                .ok_or(PairRejection::OwnerDeclined)?
-        };
-        let settled = match rx.wait_for(|s| *s != PairState::Pending).await {
-            Ok(s) => s.clone(),
-            Err(_) => PairState::Expired,
-        };
-        match settled {
-            PairState::Accepted { pairing_epoch } => Ok(pairing_epoch),
-            _ => Err(PairRejection::OwnerDeclined),
-        }
     }
 
     /// NET-10 (#128): accept-then-poll. Validates the token, parks the
@@ -450,16 +403,18 @@ impl Pairing {
         };
 
         // T5: 扫码请求到达即审计（含后续被拒/超时——审计要全，不只看成功）。
-        let _ = self
-            .db
-            .append_audit(&storage::AuditEntry::local(
-                now_ms,
-                Some(peer.0.to_vec()),
-                "pair.requested",
-                None,
-                Some(serde_json::json!({ "deviceName": req.device_name.clone() }).to_string()),
-            ))
-            .await;
+        warn_if_audit_failed(
+            "pair.requested",
+            self.db
+                .append_audit(&storage::AuditEntry::local(
+                    now_ms,
+                    Some(peer.0.to_vec()),
+                    "pair.requested",
+                    None,
+                    Some(serde_json::json!({ "deviceName": req.device_name.clone() }).to_string()),
+                ))
+                .await,
+        );
 
         let this = self.clone();
         let device_name = req.device_name.clone();
@@ -669,16 +624,18 @@ impl Pairing {
             // T5: 没成的配对同样入审计。#552：按结局分 kind——业主拒绝
             // `pair.denied`、手机取消 `pair.cancelled`、没人及时决策
             // `pair.expired`，桌面活动记录据此显示不同文案。
-            let _ = self
-                .db
-                .append_audit(&storage::AuditEntry::local(
-                    decided_at,
-                    Some(peer.0.to_vec()),
-                    kind,
-                    None,
-                    Some(serde_json::json!({ "deviceName": device_name }).to_string()),
-                ))
-                .await;
+            warn_if_audit_failed(
+                kind,
+                self.db
+                    .append_audit(&storage::AuditEntry::local(
+                        decided_at,
+                        Some(peer.0.to_vec()),
+                        kind,
+                        None,
+                        Some(serde_json::json!({ "deviceName": device_name }).to_string()),
+                    ))
+                    .await,
+            );
             return Err(PairRejection::OwnerDeclined);
         }
 
@@ -710,24 +667,20 @@ impl Pairing {
             revoked_at: None,
             revoked_by: None,
         };
-        self.db
-            .upsert_device(&device)
-            .await
-            .map_err(|_| PairRejection::OwnerDeclined)?;
-        if rejoining {
-            // Owner confirmation = renewed trust; upsert never clears the
-            // flag by design, so reinstate explicitly.
-            let _ = self.db.unrevoke(&peer.0).await;
-        }
         // REBUILD-02: a newly accepted pairing replaces every old Flow
         // grant. Persist the epoch before replying so the phone never starts
         // a fetch against an epoch the Desktop cannot verify after restart.
+        // #1055：设备行、复位吊销（重连时 owner 确认 = 重新授权）、新纪元
+        // 在 storage 里是**一个事务**，中途失败不留中间态。
         let pairing_epoch = fresh_pairing_epoch().map_err(|_| PairRejection::OwnerDeclined)?;
         if !self
             .db
-            .set_pairing_epoch(&peer.0, &pairing_epoch)
+            .accept_pairing(&device, &pairing_epoch)
             .await
-            .map_err(|_| PairRejection::OwnerDeclined)?
+            .map_err(|e| {
+                tracing::warn!("#1055: accept_pairing failed, pairing rolled back: {e}");
+                PairRejection::OwnerDeclined
+            })?
         {
             return Err(PairRejection::OwnerDeclined);
         }
@@ -740,16 +693,18 @@ impl Pairing {
             device.name.clone()
         };
 
-        let _ = self
-            .db
-            .append_audit(&storage::AuditEntry::local(
-                decided_at,
-                Some(peer.0.to_vec()),
-                "pair.accepted",
-                None,
-                Some(serde_json::json!({ "detail": detail }).to_string()),
-            ))
-            .await;
+        warn_if_audit_failed(
+            "pair.accepted",
+            self.db
+                .append_audit(&storage::AuditEntry::local(
+                    decided_at,
+                    Some(peer.0.to_vec()),
+                    "pair.accepted",
+                    None,
+                    Some(serde_json::json!({ "detail": detail }).to_string()),
+                ))
+                .await,
+        );
         // IPC-02: 配对落定——桌面设备行即时出现（新设备/替换旧设备）。
         if let Some(bus) = &self.events {
             crate::events::emit(
@@ -785,9 +740,25 @@ fn fresh_request_id() -> Result<String, getrandom::Error> {
     Ok(hex(&bytes))
 }
 
+/// 设备名上限，按**字符数**（`chars().count()`）计，不是字节数。
+/// 配对自报名（[`safe_name`]）与 `device.rename`（ipc.rs）共用这一个常量。
+pub const MAX_DEVICE_NAME_CHARS: usize = 64;
+
+/// #1055：审计写入是尽力而为，不因它让配对/撤销失败；但失败不能静默——
+/// 至少留一条 warn，事后查日志能知道这条审计缺了。
+pub(crate) fn warn_if_audit_failed<T, E: std::fmt::Display>(action: &str, result: Result<T, E>) {
+    if let Err(e) = result {
+        tracing::warn!("audit write failed for {action}: {e}");
+    }
+}
+
 /// Device names come from the network — cap length, strip control chars.
 fn safe_name(name: &str) -> String {
-    let cleaned: String = name.chars().filter(|c| !c.is_control()).take(64).collect();
+    let cleaned: String = name
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_DEVICE_NAME_CHARS)
+        .collect();
     if cleaned.trim().is_empty() {
         "未命名设备".into()
     } else {
@@ -837,7 +808,7 @@ mod tests {
             .unwrap();
         rt.block_on(async {
             let db = Db::open_in_memory().await.unwrap();
-            let (pairing, _rx) = Pairing::new(db, transport::NodeId([0xAB; 32]), None, None);
+            let (pairing, _rx) = Pairing::new(db, transport::NodeId([0xAB; 32]), None);
             let qr = pairing.start([0x11; 12], 1_000);
             assert_eq!(
                 qr,
@@ -858,6 +829,13 @@ mod tests {
         assert_eq!(safe_name("妈妈的手机"), "妈妈的手机");
         assert_eq!(safe_name("a\x00b\x1fc"), "abc");
         assert_eq!(safe_name("   "), "未命名设备");
-        assert_eq!(safe_name(&"x".repeat(200)).len(), 64);
+        assert_eq!(
+            safe_name(&"x".repeat(200)).chars().count(),
+            MAX_DEVICE_NAME_CHARS
+        );
+        assert_eq!(
+            safe_name(&"设".repeat(200)).chars().count(),
+            MAX_DEVICE_NAME_CHARS
+        );
     }
 }

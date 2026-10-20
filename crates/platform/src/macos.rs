@@ -5,7 +5,6 @@
 //! - Awake: a `caffeinate -i` child process held RAII-style — zero FFI,
 //!   visible in `pmset -g assertions` (the smoke check). IOKit
 //!   assertions are the Phase-2 upgrade, interface unchanged.
-//! - Keys: the login Keychain via the `security` CLI (generic password).
 //! - Power hint: `pmset -g custom` through the shared pure parser.
 
 // DESK-33 (#325)：clippy.toml 禁止直接 `Command::new`，那条约束只为 Windows
@@ -17,12 +16,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::{
-    AutostartRegistration, AwakeGuard, KeyStore, PlatformAdapter, PlatformError, PowerHint, Result,
-    ServiceMode,
+    AutostartRegistration, AwakeGuard, HostingAdapter, PlatformAdapter, PlatformError, PowerHint,
+    Result, ServiceMode,
 };
 
 const AGENT_LABEL: &str = "com.p-pass.daemon";
-const KEYCHAIN_SERVICE: &str = "P-Pass";
 
 pub struct MacosAdapter;
 
@@ -43,7 +41,12 @@ impl MacosAdapter {
 /// plist 无限复活，永久空转 churn（验收人实锤：升级接管场景必现）。
 /// `SuccessfulExit=false` 的语义 = 成功退出不重拉；崩溃/被杀（非零退出
 /// 或信号）照样复活——pkill 复活验收不回归。
-pub(crate) fn agent_plist(exec: &Path) -> String {
+pub(crate) fn agent_plist(exec: &Path, logs: &crate::DaemonLogPaths) -> String {
+    let path = |p: &Option<PathBuf>| {
+        p.as_deref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default()
+    };
     format!(
         r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -57,15 +60,42 @@ pub(crate) fn agent_plist(exec: &Path) -> String {
     <dict>
         <key>SuccessfulExit</key><false/>
     </dict>
-    <key>StandardOutPath</key><string>{}/Library/Logs/p-pass-daemon.log</string>
-    <key>StandardErrorPath</key><string>{}/Library/Logs/p-pass-daemon.err</string>
+    <key>StandardOutPath</key><string>{}</string>
+    <key>StandardErrorPath</key><string>{}</string>
 </dict>
 </plist>
 "#,
         exec.display(),
-        home().display(),
-        home().display(),
+        path(&logs.stdout),
+        path(&logs.stderr),
     )
+}
+
+/// daemon 日志的全部落点（[`MacosAdapter::daemon_log_paths`] 与 LaunchAgent plist
+/// 共用这一份）。#1046：launchd 接的 stdout/stderr 也落在 daemon 自己的
+/// `<data_dir>/logs/` 里（`daemon.out` / `daemon.err`，与 Windows 的 `daemon.err`
+/// 同名），由 daemon 管容量（`log_guard`），诊断包只读这个目录就收得全。
+/// `daemon.log` 是 daemon 自己 append 的运行日志，launchd 不能也写它。
+pub(crate) fn daemon_log_paths_in(data_dir: &Path) -> crate::DaemonLogPaths {
+    let logs = data_dir.join("logs");
+    crate::DaemonLogPaths {
+        log_file: Some(logs.join("daemon.log")),
+        stdout: Some(logs.join("daemon.out")),
+        stderr: Some(logs.join("daemon.err")),
+        stdio_by_service_manager: true,
+    }
+}
+
+/// launchd 拉起的 daemon 用的是平台默认数据目录（plist 不带 `PPF_DATA_DIR`），
+/// 所以登记里的日志落点按它算。
+fn agent_log_paths() -> crate::DaemonLogPaths {
+    daemon_log_paths_in(&MacosAdapter.data_dir())
+}
+
+/// #1046：已登记的 plist 是不是本版本 [`agent_plist`] 会写出的那一份（逐字比较）。
+/// 老版本的 plist（日志落点在 `~/Library/Logs`）判为不是 ⇒ 对账重写。
+pub(crate) fn plist_is_current(text: &str, exec: &Path, logs: &crate::DaemonLogPaths) -> bool {
+    text == agent_plist(exec, logs)
 }
 
 /// 【DESK-42 #604】从（我们自己生成的）plist 文本里取出 `ProgramArguments`
@@ -268,101 +298,65 @@ fn io_err(action: &'static str) -> impl Fn(std::io::Error) -> PlatformError {
     move |source| PlatformError::Io { action, source }
 }
 
+/// #1043（B6）：NSLocale 的首选语言——`[NSLocale preferredLanguages]` 的
+/// CoreFoundation 对等物（toll-free bridged）。直接链系统框架、裸 FFI，不为
+/// 这一次调用引入 objc/core-foundation crate。
+mod cf_locale {
+    use std::ffi::{c_char, c_void};
+
+    type CFIndex = isize;
+    type CFTypeRef = *const c_void;
+    const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFLocaleCopyPreferredLanguages() -> CFTypeRef;
+        fn CFArrayGetCount(array: CFTypeRef) -> CFIndex;
+        fn CFArrayGetValueAtIndex(array: CFTypeRef, idx: CFIndex) -> CFTypeRef;
+        fn CFStringGetCString(
+            s: CFTypeRef,
+            buffer: *mut c_char,
+            size: CFIndex,
+            encoding: u32,
+        ) -> u8;
+        fn CFRelease(cf: CFTypeRef);
+    }
+
+    /// 首选语言列表的第一项（如 `zh-Hans-CN`、`en-US`）；读不到 = `None`。
+    pub(super) fn first_preferred_language() -> Option<String> {
+        // SAFETY: Copy 规则——返回的数组归我们，函数末尾 CFRelease 一次；数组
+        // 元素是 Get 规则（不持有），只在数组存活期间读。缓冲区在本栈上，
+        // 长度如实传入，CFStringGetCString 保证 NUL 结尾。
+        unsafe {
+            let langs = CFLocaleCopyPreferredLanguages();
+            if langs.is_null() {
+                return None;
+            }
+            let mut out = None;
+            if CFArrayGetCount(langs) > 0 {
+                let first = CFArrayGetValueAtIndex(langs, 0);
+                let mut buf = [0 as c_char; 128];
+                if !first.is_null()
+                    && CFStringGetCString(
+                        first,
+                        buf.as_mut_ptr(),
+                        buf.len() as CFIndex,
+                        K_CF_STRING_ENCODING_UTF8,
+                    ) != 0
+                {
+                    out = std::ffi::CStr::from_ptr(buf.as_ptr())
+                        .to_str()
+                        .ok()
+                        .map(str::to_owned);
+                }
+            }
+            CFRelease(langs);
+            out.filter(|t| !t.is_empty())
+        }
+    }
+}
+
 impl PlatformAdapter for MacosAdapter {
-    /// 【DESK-42 #604】对账闸门：**只有稳定安装位置**里的 App 才允许改写开机自启登记。
-    ///
-    /// 真机风险（外部评审 2026-10-01 在 PR #611 上拦停）：Mac 用户从「下载」目录直接
-    /// 打开 dmg 里的 App 是极常见操作，macOS 还会对带 quarantine 的 App 做 App
-    /// Translocation（跑在 `/private/var/folders/…/AppTranslocation/…` 随机路径）——
-    /// 这些都是一次性路径。若此时改登记，用户下次开机就被指向一个已消失的可执行文件，
-    /// **服务静默起不来，且没有任何提示**。原缺陷要用户手点「启动后台服务」才写错，
-    /// 「每次启动静默对账」不判位置的话危险面更大。
-    fn autostart_reconcile_allowed(&self, expected: &Path) -> bool {
-        is_stable_install_location(expected)
-    }
-
-    fn install_autostart(&self, exec: &Path) -> Result<()> {
-        // DAE-01 稳定路径纪律：plist 绝不指向 target/ 开发路径或 /tmp/——
-        // 指向那里的 launchd 条目会把旧构建永远钉在岗上（用户机实锤：
-        // launchd 至今指向 7/31 开发构建路径）。非法路径直接拒绝，不写。
-        let exec_str = exec.display().to_string();
-        if exec_str.contains("/target/") || exec_str.contains("/tmp/") {
-            return Err(PlatformError::Failed {
-                action: "install_autostart rejects unstable path",
-                detail: exec_str,
-            });
-        }
-        let plist = agent_plist(exec);
-        let path = Self::agent_plist_path();
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(io_err("create LaunchAgents dir"))?;
-        }
-        write_atomic(&path, &plist).map_err(io_err("write LaunchAgent plist"))?;
-        // Load now (idempotent-ish: bootout first, ignore its failure).
-        let uid = Command::new("id")
-            .arg("-u")
-            .output()
-            .map_err(io_err("id -u"))?;
-        let uid = String::from_utf8_lossy(&uid.stdout).trim().to_string();
-        let _ = Command::new("launchctl")
-            .args(["bootout", &format!("gui/{uid}/{AGENT_LABEL}")])
-            .output();
-        let out = Command::new("launchctl")
-            .args(["bootstrap", &format!("gui/{uid}")])
-            .arg(&path)
-            .output()
-            .map_err(io_err("launchctl bootstrap"))?;
-        if !out.status.success() {
-            return Err(PlatformError::Failed {
-                action: "launchctl bootstrap",
-                detail: String::from_utf8_lossy(&out.stderr).trim().to_string(),
-            });
-        }
-        Ok(())
-    }
-
-    fn autostart_installed(&self) -> Result<bool> {
-        Ok(Self::agent_plist_path().exists())
-    }
-
-    /// 【DESK-42 #604】读登记条目里的目标路径：文件不存在或读不出路径都是 `None`。
-    /// 对账要分开这两种，用 [`Self::autostart_registration`]。
-    fn autostart_registered_exec(&self) -> Result<Option<PathBuf>> {
-        Ok(match self.autostart_registration()? {
-            AutostartRegistration::At(p) => Some(p),
-            AutostartRegistration::Absent | AutostartRegistration::Unreadable => None,
-        })
-    }
-
-    /// 【#726】文件不存在 = 没登记；读得到但解析不出路径 = 损坏，由对账重写。
-    fn autostart_registration(&self) -> Result<AutostartRegistration> {
-        registration_from_read(std::fs::read_to_string(Self::agent_plist_path()))
-    }
-
-    fn uninstall_autostart(&self) -> Result<()> {
-        let uid = Command::new("id")
-            .arg("-u")
-            .output()
-            .map_err(io_err("id -u"))?;
-        let uid = String::from_utf8_lossy(&uid.stdout).trim().to_string();
-        let _ = Command::new("launchctl")
-            .args(["bootout", &format!("gui/{uid}/{AGENT_LABEL}")])
-            .output();
-        let path = Self::agent_plist_path();
-        if path.exists() {
-            std::fs::remove_file(&path).map_err(io_err("remove LaunchAgent plist"))?;
-        }
-        Ok(())
-    }
-
-    fn service_mode(&self) -> ServiceMode {
-        ServiceMode::LaunchAgent
-    }
-
-    fn key_store(&self) -> Box<dyn KeyStore> {
-        Box::new(KeychainStore)
-    }
-
     fn assert_awake(&self) -> Result<AwakeGuard> {
         let child = Command::new("caffeinate")
             .arg("-i") // prevent idle sleep while we run
@@ -397,11 +391,16 @@ impl PlatformAdapter for MacosAdapter {
         home().join("Library/Application Support/P-Pass")
     }
 
-    /// DIAG-B1：固定位置，与 Windows 同构（`<data_dir>/logs/daemon.log`，轮转
-    /// 出 `daemon.log.1`）。跟着 data dir 走，`PPF_DATA_DIR` 隔离的一次性
-    /// daemon 不会写进用户真实日志。
-    fn default_log_file(&self, data_dir: &Path) -> Option<PathBuf> {
-        Some(data_dir.join("logs").join("daemon.log"))
+    /// #1043（B6）：NSLocale 首选语言（系统设置 → 通用 → 语言与地区的第一项）。
+    /// 不读 `LANG`：从访达 / launchd 启动的 GUI 进程通常没有它。
+    fn system_locale(&self) -> Option<String> {
+        cf_locale::first_preferred_language()
+    }
+
+    /// launchd 接 stdio（与 [`agent_plist`] 同一份路径，#1046 起在
+    /// `<data_dir>/logs/` 里）；运行日志是 `<data_dir>/logs/daemon.log`。
+    fn daemon_log_paths(&self, data_dir: &Path) -> crate::DaemonLogPaths {
+        daemon_log_paths_in(data_dir)
     }
 
     fn default_log_tees_stderr(&self) -> bool {
@@ -477,12 +476,125 @@ impl PlatformAdapter for MacosAdapter {
 
     /// macOS 上托盘左键出菜单是系统习惯；Windows / Linux 左键开窗口
     /// （DESK-18 / #167）。
-    fn tray_shows_menu_on_left_click(&self) -> bool {
+    /// 点红灯不退出是 macOS 常态，不用解释（#303 验收标准 3）。
+    fn close_to_tray_hint(&self) -> bool {
+        false
+    }
+
+    /// `titleBarStyle: "Overlay"` 只在 macOS 生效。
+    fn overlay_titlebar(&self) -> bool {
         true
     }
 
-    fn kill_daemon_process(&self) -> Result<crate::KillOutcome> {
-        crate::unix::kill_daemon_process()
+    /// 向导第 2 步请用户关掉空闲自动睡眠（`power_hint` / `disable_auto_sleep`）。
+    fn sleep_owner(&self) -> Option<crate::SleepOwner> {
+        Some(crate::SleepOwner::User)
+    }
+
+    fn tray_shows_menu_on_left_click(&self) -> bool {
+        true
+    }
+}
+
+impl HostingAdapter for MacosAdapter {
+    /// 【DESK-42 #604】对账闸门：**只有稳定安装位置**里的 App 才允许改写开机自启登记。
+    ///
+    /// 真机风险（外部评审 2026-10-01 在 PR #611 上拦停）：Mac 用户从「下载」目录直接
+    /// 打开 dmg 里的 App 是极常见操作，macOS 还会对带 quarantine 的 App 做 App
+    /// Translocation（跑在 `/private/var/folders/…/AppTranslocation/…` 随机路径）——
+    /// 这些都是一次性路径。若此时改登记，用户下次开机就被指向一个已消失的可执行文件，
+    /// **服务静默起不来，且没有任何提示**。原缺陷要用户手点「启动后台服务」才写错，
+    /// 「每次启动静默对账」不判位置的话危险面更大。
+    fn autostart_reconcile_allowed(&self, expected: &Path) -> bool {
+        is_stable_install_location(expected)
+    }
+
+    fn install_autostart(&self, exec: &Path) -> Result<()> {
+        // DAE-01 稳定路径纪律：plist 绝不指向 target/ 开发路径或 /tmp/——
+        // 指向那里的 launchd 条目会把旧构建永远钉在岗上（用户机实锤：
+        // launchd 至今指向 7/31 开发构建路径）。非法路径直接拒绝，不写。
+        let exec_str = exec.display().to_string();
+        if exec_str.contains("/target/") || exec_str.contains("/tmp/") {
+            return Err(PlatformError::Failed {
+                action: "install_autostart rejects unstable path",
+                detail: exec_str,
+            });
+        }
+        let logs = agent_log_paths();
+        let plist = agent_plist(exec, &logs);
+        let path = Self::agent_plist_path();
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(io_err("create LaunchAgents dir"))?;
+        }
+        // #1046：launchd 只打开 StandardOutPath/StandardErrorPath，不建父目录——
+        // 日志目录不在（首启、数据目录刚搬过）时先建好，否则 stdio 接不上。
+        for p in [&logs.stdout, &logs.stderr].into_iter().flatten() {
+            if let Some(dir) = p.parent() {
+                std::fs::create_dir_all(dir).map_err(io_err("create daemon logs dir"))?;
+            }
+        }
+        write_atomic(&path, &plist).map_err(io_err("write LaunchAgent plist"))?;
+        // Load now (idempotent-ish: bootout first, ignore its failure).
+        let uid = Command::new("id")
+            .arg("-u")
+            .output()
+            .map_err(io_err("id -u"))?;
+        let uid = String::from_utf8_lossy(&uid.stdout).trim().to_string();
+        let _ = Command::new("launchctl")
+            .args(["bootout", &format!("gui/{uid}/{AGENT_LABEL}")])
+            .output();
+        let out = Command::new("launchctl")
+            .args(["bootstrap", &format!("gui/{uid}")])
+            .arg(&path)
+            .output()
+            .map_err(io_err("launchctl bootstrap"))?;
+        if !out.status.success() {
+            return Err(PlatformError::Failed {
+                action: "launchctl bootstrap",
+                detail: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn autostart_installed(&self) -> Result<bool> {
+        Ok(Self::agent_plist_path().exists())
+    }
+
+    /// 【#726】文件不存在 = 没登记；读得到但解析不出路径 = 损坏，由对账重写。
+    fn autostart_registration(&self) -> Result<AutostartRegistration> {
+        registration_from_read(std::fs::read_to_string(Self::agent_plist_path()))
+    }
+
+    /// #1046：plist 全文与本版本会写出的一致（日志落点等），才算「登记是新的」。
+    fn autostart_registration_current(&self, expected: &Path) -> Result<bool> {
+        let text = std::fs::read_to_string(Self::agent_plist_path())
+            .map_err(io_err("read LaunchAgent plist"))?;
+        Ok(plist_is_current(&text, expected, &agent_log_paths()))
+    }
+
+    fn uninstall_autostart(&self) -> Result<()> {
+        let uid = Command::new("id")
+            .arg("-u")
+            .output()
+            .map_err(io_err("id -u"))?;
+        let uid = String::from_utf8_lossy(&uid.stdout).trim().to_string();
+        let _ = Command::new("launchctl")
+            .args(["bootout", &format!("gui/{uid}/{AGENT_LABEL}")])
+            .output();
+        let path = Self::agent_plist_path();
+        if path.exists() {
+            std::fs::remove_file(&path).map_err(io_err("remove LaunchAgent plist"))?;
+        }
+        Ok(())
+    }
+
+    fn service_mode(&self) -> ServiceMode {
+        ServiceMode::LaunchAgent
+    }
+
+    fn stop_daemon(&self, exe: &Path, pid_hint: Option<u32>) -> Result<crate::KillOutcome> {
+        crate::unix::stop_processes_at(exe, pid_hint)
     }
 
     // ── UPD-06 (#616)：壳的"按需启动"登记 + kickstart ─────────────────
@@ -556,20 +668,6 @@ impl PlatformAdapter for MacosAdapter {
         }
     }
 
-    /// `launchctl print` 的输出里只有"正在跑"的实例会带 `pid = N`（见 `launchd_job_pid`
-    /// 的注释）。命令本身失败（没登记 / 域不对）也是 `None`——对调用方来说都是"不知道"。
-    fn shell_agent_running_pid(&self) -> Option<u32> {
-        let uid = current_uid().ok()?;
-        let out = Command::new("launchctl")
-            .args(["print", &format!("gui/{uid}/{SHELL_AGENT_LABEL}")])
-            .output()
-            .ok()?;
-        if !out.status.success() {
-            return None;
-        }
-        launchd_job_pid(&String::from_utf8_lossy(&out.stdout))
-    }
-
     /// 磁盘上**安装包**的版本（`Contents/Info.plist` 的 `CFBundleShortVersionString`）。
     ///
     /// 用 `defaults read` 而不是自己解 plist：真实 `.app` 里的 `Info.plist` 是
@@ -625,6 +723,23 @@ impl PlatformAdapter for MacosAdapter {
     }
 
     // ── #667 / #732：常驻 daemon 归 launchd ─────────────────────────────
+
+    /// #1060：`launchctl bootout` 把 job 从 launchd 卸下（进程收 SIGTERM、KeepAlive
+    /// 随 job 一起消失），**plist 留着**——「仅仅 kill」会被 KeepAlive 3 秒内用
+    /// 旧文件拉回来。恢复由 `restart_resident_daemon` 的 bootstrap 分支负责。
+    fn pause_resident_daemon(&self) -> Result<crate::ResidentPause> {
+        let uid = current_uid()?;
+        pause_resident_with(Self::agent_plist_path().exists(), &uid, &mut |args| {
+            let out = Command::new("launchctl")
+                .args(args)
+                .output()
+                .map_err(io_err("launchctl bootout"))?;
+            Ok((
+                out.status.code(),
+                String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            ))
+        })
+    }
 
     fn resident_daemon_pid(&self) -> Option<u32> {
         let uid = current_uid().ok()?;
@@ -706,6 +821,34 @@ impl PlatformAdapter for MacosAdapter {
     }
 }
 
+/// `launchctl bootout` 的退出码里「job 本来就没加载」的两个：3（No such process）、
+/// 113（Could not find specified service）——对「要它停着」而言已达成。
+const BOOTOUT_NOT_LOADED_CODES: [i32; 2] = [3, 113];
+
+/// launchctl 执行器：收参数、回 (退出码, stderr)。
+type LaunchctlRun<'a> = dyn FnMut(&[String]) -> Result<(Option<i32>, String)> + 'a;
+
+/// [`MacosAdapter::pause_resident_daemon`] 的判据，命令执行器可注入（单测不跑真
+/// launchctl）。`run` 收参数、回 (退出码, stderr)。
+pub(crate) fn pause_resident_with(
+    plist_exists: bool,
+    uid: &str,
+    run: &mut LaunchctlRun,
+) -> Result<crate::ResidentPause> {
+    if !plist_exists {
+        return Ok(crate::ResidentPause::NotRegistered);
+    }
+    let args = ["bootout".to_string(), format!("gui/{uid}/{AGENT_LABEL}")];
+    match run(&args)? {
+        (Some(0), _) => Ok(crate::ResidentPause::Paused),
+        (Some(c), _) if BOOTOUT_NOT_LOADED_CODES.contains(&c) => Ok(crate::ResidentPause::Paused),
+        (code, stderr) => Err(PlatformError::Failed {
+            action: "launchctl bootout",
+            detail: format!("exit {code:?}: {stderr}"),
+        }),
+    }
+}
+
 /// RAII wrapper over a `caffeinate -i` child: alive = system stays awake.
 pub struct CaffeinateGuard {
     child: std::process::Child,
@@ -718,81 +861,50 @@ impl Drop for CaffeinateGuard {
     }
 }
 
-/// Login-keychain generic passwords via the `security` CLI. Secrets are
-/// stored hex-encoded (the CLI is text-oriented).
-struct KeychainStore;
+#[cfg(test)]
+mod pause_resident_tests {
+    use super::*;
+    use crate::ResidentPause;
 
-impl KeyStore for KeychainStore {
-    fn store(&self, name: &str, secret: &[u8]) -> Result<()> {
-        let hex: String = secret.iter().map(|b| format!("{b:02x}")).collect();
-        let out = Command::new("security")
-            .args([
-                "add-generic-password",
-                "-U", // update if exists
-                "-s",
-                KEYCHAIN_SERVICE,
-                "-a",
-                name,
-                "-w",
-                &hex,
-            ])
-            .output()
-            .map_err(io_err("security add-generic-password"))?;
-        if !out.status.success() {
-            return Err(PlatformError::Failed {
-                action: "keychain store",
-                detail: String::from_utf8_lossy(&out.stderr).trim().to_string(),
-            });
-        }
-        Ok(())
+    fn run_with(code: Option<i32>) -> (Vec<Vec<String>>, Result<ResidentPause>) {
+        let mut calls = Vec::new();
+        let r = pause_resident_with(true, "501", &mut |a| {
+            calls.push(a.to_vec());
+            Ok((code, "boom".into()))
+        });
+        (calls, r)
     }
 
-    fn load(&self, name: &str) -> Result<Option<Vec<u8>>> {
-        let out = Command::new("security")
-            .args([
-                "find-generic-password",
-                "-s",
-                KEYCHAIN_SERVICE,
-                "-a",
-                name,
-                "-w",
-            ])
-            .output()
-            .map_err(io_err("security find-generic-password"))?;
-        if !out.status.success() {
-            return Ok(None); // not found (or locked — treated as absent)
-        }
-        let hex = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        let mut bytes = Vec::with_capacity(hex.len() / 2);
-        let raw = hex.as_bytes();
-        for chunk in raw.as_chunks::<2>().0 {
-            let hi = (chunk[0] as char).to_digit(16);
-            let lo = (chunk[1] as char).to_digit(16);
-            match (hi, lo) {
-                (Some(h), Some(l)) => bytes.push(((h << 4) | l) as u8),
-                _ => {
-                    return Err(PlatformError::Failed {
-                        action: "keychain load",
-                        detail: "stored value is not hex".into(),
-                    })
-                }
-            }
-        }
-        Ok(Some(bytes))
+    /// #1060：暂停 = bootout 该 job（卸载、KeepAlive 随之消失），不是 kill。
+    /// 反证：把 bootout 换成别的命令 / 漏调 → 第一条红。
+    #[test]
+    fn pause_boots_the_job_out() {
+        let (calls, r) = run_with(Some(0));
+        assert_eq!(r.unwrap(), ResidentPause::Paused);
+        assert_eq!(
+            calls,
+            vec![vec![
+                "bootout".to_string(),
+                format!("gui/501/{AGENT_LABEL}")
+            ]]
+        );
     }
 
-    fn delete(&self, name: &str) -> Result<()> {
-        let _ = Command::new("security")
-            .args([
-                "delete-generic-password",
-                "-s",
-                KEYCHAIN_SERVICE,
-                "-a",
-                name,
-            ])
-            .output()
-            .map_err(io_err("security delete-generic-password"))?;
-        Ok(())
+    /// 没登记就什么都不跑；本来就没加载 = 已停；其余失败如实报错（不静默当成功）。
+    #[test]
+    fn pause_edge_cases() {
+        let mut called = false;
+        let r = pause_resident_with(false, "501", &mut |_| {
+            called = true;
+            Ok((Some(0), String::new()))
+        });
+        assert_eq!(r.unwrap(), ResidentPause::NotRegistered);
+        assert!(!called);
+        for code in [3, 113] {
+            assert_eq!(run_with(Some(code)).1.unwrap(), ResidentPause::Paused);
+        }
+        assert!(run_with(Some(1)).1.is_err());
+        assert!(run_with(None).1.is_err());
     }
 }
 
@@ -801,15 +913,102 @@ mod diag_log_tests {
     use super::*;
 
     // DIAG-B1：macOS daemon 日志落在固定位置、跟着 data dir 走（PPF_DATA_DIR 隔离不漏），且 tee stderr。
-    // 反证：default_log_file 退回 None（改动前）→ 一次性 spawn 的 daemon 没有任何日志，红。
+    // 反证：log_file 退回 None（DIAG-B1 之前）→ 一次性 spawn 的 daemon 没有任何日志，红。
+    // #1046：launchd 接的 stdout/stderr 也在 `<data_dir>/logs/` 里，plist 与
+    // daemon_log_paths 同源（逐字一致）；不许与 daemon 自己 append 的 daemon.log 同名。
+    // 反证：plist 退回 `~/Library/Logs/p-pass-daemon.*` → 前两条红。
     #[test]
     fn daemon_log_lives_under_the_effective_data_dir_and_tees_stderr() {
         let adapter = MacosAdapter;
         let dir = Path::new("/var/ppf-isolated");
-        assert_eq!(
-            adapter.default_log_file(dir),
-            Some(dir.join("logs").join("daemon.log"))
+        let paths = adapter.daemon_log_paths(dir);
+        let logs = dir.join("logs");
+        assert_eq!(paths.log_file, Some(logs.join("daemon.log")));
+        assert_eq!(paths.stdout, Some(logs.join("daemon.out")));
+        assert_eq!(paths.stderr, Some(logs.join("daemon.err")));
+        assert_ne!(
+            paths.stdout, paths.log_file,
+            "launchd 不能和 daemon 写同一个文件"
         );
+        let plist = agent_plist(
+            Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon"),
+            &paths,
+        );
+        let (out, err) = (paths.stdout.clone().unwrap(), paths.stderr.clone().unwrap());
+        assert!(plist.contains(&format!(
+            "<key>StandardOutPath</key><string>{}</string>",
+            out.display()
+        )));
+        assert!(plist.contains(&format!(
+            "<key>StandardErrorPath</key><string>{}</string>",
+            err.display()
+        )));
+        assert!(paths.stdio_by_service_manager);
         assert!(adapter.default_log_tees_stderr());
+    }
+
+    /// #1046：老版本登记（exe 相同、日志落点在 `~/Library/Logs`）判为「不是本版本
+    /// 的登记」⇒ 对账会重写成新路径；本版本自己写出的那份判为是（幂等）。
+    #[test]
+    fn a_plist_with_the_old_log_paths_is_not_current() {
+        let exe = Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon");
+        let logs = daemon_log_paths_in(Path::new("/Users/x/Library/Application Support/P-Pass"));
+        let current = agent_plist(exe, &logs);
+        assert!(plist_is_current(&current, exe, &logs));
+        let old = current
+            .replace(
+                &logs.stdout.clone().unwrap().display().to_string(),
+                "/Users/x/Library/Logs/p-pass-daemon.log",
+            )
+            .replace(
+                &logs.stderr.clone().unwrap().display().to_string(),
+                "/Users/x/Library/Logs/p-pass-daemon.err",
+            );
+        assert_ne!(old, current);
+        assert!(!plist_is_current(&old, exe, &logs));
+        // exe 仍读得回同一个（所以 #604 的路径比较会判 Unchanged，必须靠内容比较发现）。
+        assert_eq!(plist_program_argument(&old).as_deref(), exe.to_str());
+    }
+}
+
+#[cfg(test)]
+mod b10_user_dirs_tests {
+    use super::*;
+
+    /// #1043（B10）：macOS 的家目录与「图片」目录由适配器回答，与系统约定一致。
+    #[test]
+    fn pictures_dir_is_home_pictures() {
+        let a = MacosAdapter;
+        let home = a.home_dir().expect("测试环境有 HOME");
+        assert_eq!(home, PathBuf::from(std::env::var("HOME").unwrap()));
+        assert_eq!(a.pictures_dir(), Some(home.join("Pictures")));
+    }
+}
+
+#[cfg(test)]
+mod b6_system_locale_tests {
+    use super::*;
+
+    /// #1043（B6）：真调一次 CoreFoundation，读得到首选语言、不 panic。
+    /// 具体值随机器而定，只断言形状（非空、不含编码后缀）。
+    #[test]
+    fn preferred_language_is_readable() {
+        let tag = MacosAdapter.system_locale().expect("macOS 总有首选语言");
+        assert!(!tag.is_empty() && !tag.contains('.'), "{tag:?}");
+        println!("system_locale = {tag}");
+    }
+}
+
+#[cfg(test)]
+mod ux_capability_tests {
+    use super::*;
+
+    /// #1043：界面层的平台能力（原先前端按平台名 switch 判出来的三项）。
+    #[test]
+    fn macos_ui_capabilities() {
+        let a = MacosAdapter;
+        assert!(!a.close_to_tray_hint());
+        assert!(a.overlay_titlebar());
+        assert_eq!(a.sleep_owner(), Some(crate::SleepOwner::User));
     }
 }

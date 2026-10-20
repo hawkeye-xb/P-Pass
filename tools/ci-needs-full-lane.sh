@@ -39,16 +39,16 @@
 #                   test (windows) / license+deny / fmt。
 #
 # `apps/**` 能进第二个清单的依据（CI-17 逐条核实过，别凭印象改）：
-#   - `apps/desktop/src-tauri` 是**刻意独立的 workspace**（其 Cargo.toml 头部
-#     注释：ZERO business logic / depends on no internal crate），不在根
+#   - `apps/desktop/src-tauri` 是**刻意独立的 workspace**（壳 = UI + 托管，
+#     ADR-012；单向依赖 crates/platform 与 crates/version-cmp），不在根
 #     Cargo.toml 的 members 里 ⇒ `cargo nextest` / `clippy` / `cargo deny` /
 #     `cargo fmt --all` 编译不到它；
 #   - `grep -rn "apps/" crates/ --include="*.rs"` 的命中**全是注释**，
 #     `include_str!` / `fs::read` / `File::open` 指向 apps/ 的**一条都没有**；
 #   - `crates/daemon/build.rs` 只读 `PPF_BUILD_VERSION` 环境变量，不碰路径。
-#   - ⚠️ 方向别看反：`crates/daemon/tests/cli_flow.rs` 提到 src-tauri 的
-#     `DAEMON_VERSION_MARKER`，那是**反向**依赖（daemon 的 `--version` 是契约，
-#     src-tauri 消费它）。改 src-tauri 弄不红 daemon 的测试；反过来才会，
+#   - ⚠️ 方向别看反：daemon 的 `--version --json`（`cli::VERSION_PRODUCT`）是
+#     契约，src-tauri 的 `daemon_cli::DAEMON_PRODUCT` 消费它，那是**反向**依赖。
+#     改 src-tauri 弄不红 daemon 的测试；反过来才会，
 #     而那种改动落在 `crates/**`，本来就判跑。
 #   - ⚠️ `apps/` 里的 Rust **仍然被检查**，只是不由本 lane 检查：src-tauri 的
 #     fmt/clippy/test 由 `ci-desktop` 在它自己的 workspace 里跑。
@@ -69,13 +69,18 @@ set -uo pipefail
 # 每一条都必须先证明它对 Rust / 桌面壳 lane 是惰性的，再往里加。
 # 2026-09-20 的核实依据（grep 全仓 .rs 与 tools/arch-check.sh）：
 #   docs/ cards/ .claude/  没有任何 Rust 代码或门禁脚本读取它们
-#                          （唯一命中是 core-index/src/ingest.rs:182 的一句
-#                            注释里提到 docs 路径，不是读取）
+#                          （例外：docs/desktop/business-rules.zh-CN.md，见 is_inert）
+#                          （core-index/src/ingest.rs 里有一句注释提到 docs
+#                            路径，不是读取）
 #   *.md                   任何位置的 markdown 都不参与编译
 # ⚠️ 往这里加东西之前先问：有没有测试/构建脚本会读它？读了就不能加。
 # ⚠️ assets/i18n/** 被 diag 的 keys 测试消费，**绝不能**加进来。
 is_inert() {
   case "$1" in
+    # #1049 E2：桌面业务规则文档 §12 常量表被三处测试读取（daemon 与壳的
+    # cargo 测试 include_str!、前端 vitest readFileSync），只改它也必须跑
+    # 两条 lane，否则「改表不改代码」不会变红。必须排在 docs/* 之前。
+    docs/desktop/business-rules.zh-CN.md) return 1 ;;
     docs/* | cards/* | .claude/*) return 0 ;;
     *.md) return 0 ;;
   esac

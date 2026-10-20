@@ -13,6 +13,9 @@ vendored = ["libheif-rs/embedded-libheif"]
 
 [dependencies]
 core-media = { path = "../core-media" }
+# #1044 B3: 「是不是视频」只问 core-index 的唯一口径 `media_kind`，不在
+# 本 crate 另留扩展名表。代价：codec 层会经 core-index 连带编进 storage。
+core-index = { path = "../core-index" }
 # DESK-16 (#165)：Windows 的系统缩略图要走 COM，而平台 cfg 只许待在
 # crates/platform（红线 B.2）。本 crate 只向它要像素，自己不带任何 cfg。
 platform = { path = "../platform" }

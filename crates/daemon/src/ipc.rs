@@ -31,7 +31,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::diag_agg::DiagAgg;
 use crate::events::{self, EventBus};
-use crate::pairing::{PairDecision, Pairing, PendingPair, PENDING_TTL_MS};
+use crate::pairing::{
+    warn_if_audit_failed, PairDecision, Pairing, PendingPair, MAX_DEVICE_NAME_CHARS, PENDING_TTL_MS,
+};
 use crate::subscriptions::SubscriptionRegistry;
 
 /// Outcome of an owner decision on one pending pairing request
@@ -69,7 +71,9 @@ pub struct IpcServer {
     /// Production keeps [`PENDING_TTL_MS`]; a test that must exercise
     /// "row still fresh but requester already timed out" injects a long
     /// queue TTL against a short request-side TTL without sleeping.
-    pending_ttl_ms: i64,
+    pending_ttl_ms: Arc<std::sync::atomic::AtomicI64>,
+    /// Clock seam（同 Router::with_clock）：撤销时间戳走它，测试注入假时钟。
+    now: Arc<dyn Fn() -> i64 + Send + Sync>,
     /// T-090: live connection status per device (raw 32-byte NodeId in).
     /// main injects a closure over the transport slot; the default says
     /// `Unknown` — 拿不到实况就如实报 unknown，绝不用 last_seen 推断.
@@ -108,8 +112,8 @@ const ACTIVITY_GAP_MS: i64 = 10 * 60 * 1000;
 pub enum Claim {
     /// No live peer — bind now.
     Proceed,
-    /// We took over from an older instance (it stepped down) — bind now,
-    /// and re-install autostart so launchd points at this (stable) path.
+    /// We took over from an older instance (it stepped down) — bind now.
+    /// (#1046: the autostart registration is the desktop shell's to reconcile.)
     TookOver,
     /// A same-or-newer instance is already serving — exit this process.
     StandDown,
@@ -233,55 +237,9 @@ pub fn daemon_version() -> String {
         .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
 }
 
-/// Numeric-segment semver compare ("0.2.0-test.7" vs "0.1.0" → Greater).
-/// Pre-release suffixes sort below the same core ("0.1.0" > "0.1.0-test.3"),
-/// so a formal build always takes over from a test build of the same core.
-/// Two pre-releases of the same core compare by their numeric segments
-/// ("0.2.0-test.8" > "0.2.0-test.7" — DAE-01b blocker②), so dogfood test
-/// packages can take over from each other.
-fn version_cmp(a: &str, b: &str) -> Ordering {
-    let nums = |seg: &str| -> Vec<u64> {
-        seg.split(|c: char| !c.is_ascii_digit())
-            .filter(|p| !p.is_empty())
-            .map(|p| p.parse().unwrap_or(0))
-            .collect()
-    };
-    let parse = |s: &str| -> (Vec<u64>, Vec<u64>, bool) {
-        let (core, pre) = match s.split_once('-') {
-            Some((c, p)) => (c, Some(p)),
-            None => (s, None),
-        };
-        (nums(core), pre.map(nums).unwrap_or_default(), pre.is_some())
-    };
-    let (na, npa, pa) = parse(a);
-    let (nb, npb, pb) = parse(b);
-    for i in 0..na.len().max(nb.len()) {
-        let (x, y) = (
-            na.get(i).copied().unwrap_or(0),
-            nb.get(i).copied().unwrap_or(0),
-        );
-        if x != y {
-            return x.cmp(&y);
-        }
-    }
-    match (pa, pb) {
-        (false, true) => Ordering::Greater,
-        (true, false) => Ordering::Less,
-        (true, true) => {
-            for i in 0..npa.len().max(npb.len()) {
-                let (x, y) = (
-                    npa.get(i).copied().unwrap_or(0),
-                    npb.get(i).copied().unwrap_or(0),
-                );
-                if x != y {
-                    return x.cmp(&y);
-                }
-            }
-            Ordering::Equal
-        }
-        (false, false) => Ordering::Equal,
-    }
-}
+// DAE-01 newest-wins 与 #1044 B13 的 `status.shell_relation` 共用唯一的版本
+// 比较实现（crates/version-cmp，桌面壳也依赖它）。
+use version_cmp::version_cmp;
 
 impl IpcServer {
     /// `pending_rx` is the receiver returned by [`Pairing::new`] — the
@@ -298,6 +256,8 @@ impl IpcServer {
         let queue = Arc::clone(&pending);
         let diag2 = diag.clone();
         let events2 = events.clone();
+        let pending_ttl_ms = Arc::new(std::sync::atomic::AtomicI64::new(PENDING_TTL_MS));
+        let ttl_for_sweep = Arc::clone(&pending_ttl_ms);
         tokio::spawn(async move {
             while let Some(p) = pending_rx.recv().await {
                 diag2.apply(diag::DaemonEvent::PairingStarted);
@@ -316,7 +276,7 @@ impl IpcServer {
                     // (expiry judgment happens here because the queue holds
                     // `requested_at`, see pairing.rs).
                     let now = now_ms();
-                    let ttl = PENDING_TTL_MS;
+                    let ttl = ttl_for_sweep.load(std::sync::atomic::Ordering::Relaxed);
                     let mut q = queue.lock().expect("pending lock");
                     // DEV-07 follow-up (#463): withdrawn rows leave too.
                     q.retain(|old| {
@@ -327,7 +287,7 @@ impl IpcServer {
                     q.push(p);
                 }
                 // IPC-02: 新扫码请求入队——桌面壳即时从「二维码弹窗」切到
-                // 「授权列表」，不再等下一次 3s 轮询。
+                // 「授权列表」，不再等下一次兜底轮询。
                 events::emit(
                     &events2,
                     events::PAIRING_PENDING_CHANGED,
@@ -343,7 +303,8 @@ impl IpcServer {
             pending,
             events,
             started_at: now_ms(),
-            pending_ttl_ms: PENDING_TTL_MS,
+            pending_ttl_ms,
+            now: Arc::new(now_ms),
             step_down_exit: Arc::new(|| std::process::exit(0)),
             conn_status: Arc::new(|_| transport::ConnectionStatus::Unknown),
             flow_connection: Arc::new(|_| None),
@@ -384,7 +345,20 @@ impl IpcServer {
     /// [`Pairing::with_pending_ttl`] to exercise the two-sided expiry
     /// without sleeping minutes.
     pub fn set_pending_ttl_for_test(&mut self, ttl_ms: i64) {
-        self.pending_ttl_ms = ttl_ms;
+        self.pending_ttl_ms
+            .store(ttl_ms, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Override the clock (#1055; tests only): lets a test assert the exact
+    /// `revoked_at` that `device.revoke` stamps.
+    pub fn with_clock(mut self, now: impl Fn() -> i64 + Send + Sync + 'static) -> Self {
+        self.now = Arc::new(now);
+        self
+    }
+
+    fn pending_ttl(&self) -> i64 {
+        self.pending_ttl_ms
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// T-090: inject the live connection-status source (main wires this
@@ -659,39 +633,13 @@ impl IpcServer {
             )
         };
         match req.method.as_str() {
-            "status" => match self.status().await {
+            "status" => match self
+                .status(req.params.get("shell_version").and_then(|v| v.as_str()))
+                .await
+            {
                 Ok(v) => Resp::ok(id, v),
                 Err(_) => internal(id),
             },
-            // UPD-07 (#617)：壳启动时自报身份（版本 + pid）——owner 对账的**唯一**来源。
-            // 老壳不来这一条 ⇒ 记录保持为空 ⇒ owner 一律不动（fail-safe，见
-            // `owner::decide` 的第一条）。
-            "shell.announce" => {
-                let Some(version) = req.params.get("version").and_then(|v| v.as_str()) else {
-                    return Resp::err(
-                        id,
-                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-                    );
-                };
-                let Some(pid) = req.params.get("pid").and_then(|v| v.as_u64()) else {
-                    return Resp::err(
-                        id,
-                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-                    );
-                };
-                let version = version.trim();
-                if version.is_empty() || pid == 0 || pid > u32::MAX as u64 {
-                    return Resp::err(
-                        id,
-                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-                    );
-                }
-                crate::owner::record_announce(crate::owner::ShellAnnounce {
-                    version: version.to_string(),
-                    pid: pid as u32,
-                });
-                Resp::ok(id, serde_json::json!({ "recorded": true }))
-            }
             // DAE-01: newest-wins takeover — the newer instance asks the
             // older one to exit; launchd (KeepAlive) relaunches it from
             // the new plist, which now points at the stable path.
@@ -763,6 +711,11 @@ impl IpcServer {
             // 新口径：在用的 + **设备自己断开的**（标「已断开」）；业主主动
             // 移除的不列——那正是业主的意图。
             // `include_revoked=true` 仍是全量（内部统计/诊断用），不变。
+            // #1044 B11：桌面已把待展示的低空间通知弹出来了。
+            "low_space.ack" => match crate::low_space::ack(&self.db).await {
+                Ok(()) => Resp::ok(id, serde_json::json!({})),
+                Err(_) => internal(id),
+            },
             "devices.list" => {
                 let include_revoked = req
                     .params
@@ -774,6 +727,16 @@ impl IpcServer {
                 } else {
                     self.db.list_devices_for_family_view().await
                 };
+                // #1044 B4：「需要看看」与「最近活跃」要用最近备份时刻。
+                let last_backup: std::collections::HashMap<Vec<u8>, i64> = self
+                    .db
+                    .list_device_watermarks()
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|w| w.last_backup_at.map(|t| (w.node_id, t)))
+                    .collect();
+                let now = now_ms();
                 match listed {
                     Ok(devices) => {
                         let list: Vec<_> = devices
@@ -800,14 +763,26 @@ impl IpcServer {
                                 } else {
                                     (self.flow_connection)(&d.node_id)
                                 };
+                                let presence = if d.revoked {
+                                    "offline"
+                                } else {
+                                    crate::presence::presence(connection.as_str(), d.last_seen, now)
+                                };
+                                // #1044 B4：分组、哨兵、行状态优先级、最近活跃由
+                                // daemon 给结论（device_projection.rs），桌面只渲染。
+                                let removal = crate::device_projection::Removal::of(d);
+                                let last_backup_at = last_backup.get(&d.node_id).copied();
+                                let needs_attention = crate::device_projection::needs_attention(
+                                    removal,
+                                    last_backup_at,
+                                    now,
+                                );
                                 serde_json::json!({
                                     "node_id": hex(&d.node_id),
                                     "name": d.name,
                                     "role": d.role.as_str(),
                                     "revoked": d.revoked,
                                     // DEV-03：谁让它离开的 + 什么时候。
-                                    // 展示层据此把「已断开」和「在用」分开渲染，
-                                    // 并能答「它什么时候断的」。
                                     "revoked_by": d.revoked_by.map(|b| b.as_str()),
                                     "revoked_at": d.revoked_at,
                                     "last_seen": d.last_seen,
@@ -819,15 +794,19 @@ impl IpcServer {
                                     "flow_connection": flow_connection.map(|s| s.as_str()),
                                     // PRES-01: 三档在线态只用既有泛连接/心跳口径，
                                     // 不让短暂文件传输改写在线语义。
-                                    "presence": if d.revoked {
-                                        "offline"
-                                    } else {
-                                        crate::presence::presence(
-                                            connection.as_str(),
-                                            d.last_seen,
-                                            now_ms(),
-                                        )
-                                    },
+                                    "presence": presence,
+                                    "removal": removal.as_str(),
+                                    "needs_attention": needs_attention,
+                                    "row_state": crate::device_projection::row_state(
+                                        removal,
+                                        needs_attention,
+                                        flow_connection.is_some(),
+                                        presence,
+                                    ),
+                                    "last_activity_at": crate::device_projection::last_activity_at(
+                                        d.last_seen,
+                                        last_backup_at,
+                                    ),
                                 })
                             })
                             .collect();
@@ -872,7 +851,22 @@ impl IpcServer {
                     .get("limit")
                     .and_then(|v| v.as_u64())
                     .map_or(100, |v| v.min(1000) as u32);
-                match self.db.list_operations(limit).await {
+                // #1044 B1：用户口径在截断之前过滤（见 audit_projection.rs）；
+                // 不带 visibility = 全量（诊断口径）。
+                let user_only =
+                    req.params.get("visibility").and_then(|v| v.as_str()) == Some("user");
+                let listed = if user_only {
+                    self.db
+                        .list_operations_excluding(
+                            limit,
+                            crate::audit_projection::HIDDEN_KINDS,
+                            crate::audit_projection::HIDDEN_PREFIXES,
+                        )
+                        .await
+                } else {
+                    self.db.list_operations(limit).await
+                };
+                match listed {
                     Ok(records) => {
                         let list: Vec<_> = records
                             .iter()
@@ -892,6 +886,12 @@ impl IpcServer {
                                     "targetHash": r.entry.target_hash.as_ref().map(|b| hex(b)),
                                     "payload": r.entry.payload.as_ref().and_then(|p| serde_json::from_str::<serde_json::Value>(p).ok()),
                                     "evidenceSummary": r.entry.evidence_summary.as_ref().and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()),
+                                    // #1044 B1：每轮计数由 daemon 分好类（已备份/需处理/已跳过）。
+                                    "counts": (r.entry.kind == "flow.round.finished").then(|| {
+                                        crate::audit_projection::round_counts(
+                                            &r.entry.evidence_summary.as_ref().and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok()).unwrap_or_default(),
+                                        )
+                                    }),
                                 })
                             })
                             .collect();
@@ -937,7 +937,7 @@ impl IpcServer {
                 // 禁止物理删除这一条不变）。
                 match self
                     .db
-                    .revoke(&node_id, storage::RevokedBy::Owner, now_ms())
+                    .revoke(&node_id, storage::RevokedBy::Owner, (self.now)())
                     .await
                 {
                     Ok(revoked) => {
@@ -955,33 +955,37 @@ impl IpcServer {
                             }
                         }
                         if revoked {
-                            let _ = self
-                                .db
-                                .append_audit(&storage::AuditEntry::local(
-                                    now_ms(),
-                                    None, // 本机 owner 经 IPC 操作
-                                    "device.revoked",
-                                    None,
-                                    Some(serde_json::json!({ "nodeId": node_hex }).to_string()),
-                                ))
-                                .await;
+                            warn_if_audit_failed(
+                                "device.revoked",
+                                self.db
+                                    .append_audit(&storage::AuditEntry::local(
+                                        (self.now)(),
+                                        None, // 本机 owner 经 IPC 操作
+                                        "device.revoked",
+                                        None,
+                                        Some(serde_json::json!({ "nodeId": node_hex }).to_string()),
+                                    ))
+                                    .await,
+                            );
                             // AUDIT-04 card decision #4: 撤销授权是用户决定，
                             // 必须落 audit_decision（causal_object_ref = 被撤销
                             // 设备），不能只靠上面兼容层的 audit_operation 行。
-                            let _ = self
-                                .db
-                                .append_decision(&storage::DecisionEntry {
-                                    decision_id: fresh_audit_id(),
-                                    decision_kind: "revoke_authorization".into(),
-                                    actor: None, // 本机 owner 经 IPC 操作
-                                    causal_operation_id: None,
-                                    causal_object_ref: Some(node_hex.to_string()),
-                                    occurred_at: now_ms(),
-                                    payload: Some(
-                                        serde_json::json!({ "nodeId": node_hex }).to_string(),
-                                    ),
-                                })
-                                .await;
+                            warn_if_audit_failed(
+                                "revoke_authorization",
+                                self.db
+                                    .append_decision(&storage::DecisionEntry {
+                                        decision_id: fresh_audit_id(),
+                                        decision_kind: "revoke_authorization".into(),
+                                        actor: None, // 本机 owner 经 IPC 操作
+                                        causal_operation_id: None,
+                                        causal_object_ref: Some(node_hex.to_string()),
+                                        occurred_at: (self.now)(),
+                                        payload: Some(
+                                            serde_json::json!({ "nodeId": node_hex }).to_string(),
+                                        ),
+                                    })
+                                    .await,
+                            );
                             // IPC-02: 设备移除——桌面设备行即时消失。
                             events::emit(
                                 &self.events,
@@ -1003,6 +1007,39 @@ impl IpcServer {
                     }
                     Err(_) => internal(id),
                 }
+            }
+            // #1044：某台设备在照片库里的目录（绝对路径，平台分隔符由 Path 给）。
+            // 与入库落位同一口径（core_index::device_dir）。这台设备还没落过
+            // 照片时目录不存在 → 退回 originals/，库刚建还没有 originals/ →
+            // 库根目录；`is_device_dir` 说清给的是哪一个，不假装有内容。
+            "device.folder" => {
+                let Some(node_id) = req
+                    .params
+                    .get("node_id")
+                    .and_then(|v| v.as_str())
+                    .and_then(parse_hex32)
+                else {
+                    return Resp::err(
+                        id,
+                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+                    );
+                };
+                let originals = self.data_dir.join("originals");
+                let device = originals.join(core_index::device_dir(&node_id));
+                let (path, is_device_dir) = if device.is_dir() {
+                    (device, true)
+                } else if originals.is_dir() {
+                    (originals, false)
+                } else {
+                    (self.data_dir.clone(), false)
+                };
+                Resp::ok(
+                    id,
+                    serde_json::json!({
+                        "path": path.display().to_string(),
+                        "is_device_dir": is_device_dir,
+                    }),
+                )
             }
             "device.rename" => {
                 // NAME-01: 改显示名（ID 与显示名分离——decisions ②）。
@@ -1027,7 +1064,7 @@ impl IpcServer {
                     );
                 };
                 let new_name = new_name.trim();
-                if new_name.is_empty() || new_name.chars().count() > 64 {
+                if new_name.is_empty() || new_name.chars().count() > MAX_DEVICE_NAME_CHARS {
                     return Resp::err(
                         id,
                         RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
@@ -1037,23 +1074,25 @@ impl IpcServer {
                     Ok(Some(old_name)) => {
                         // 审计：旧名→新名 + node_id（decisions ②「audit 记
                         // device.renamed 旧名→新名+node_id」）。
-                        let _ = self
-                            .db
-                            .append_audit(&storage::AuditEntry::local(
-                                now_ms(),
-                                None, // 本机 owner 经 IPC 操作
-                                "device.renamed",
-                                None,
-                                Some(
-                                    serde_json::json!({
-                                        "nodeId": node_hex,
-                                        "oldName": old_name,
-                                        "newName": new_name,
-                                    })
-                                    .to_string(),
-                                ),
-                            ))
-                            .await;
+                        warn_if_audit_failed(
+                            "device.renamed",
+                            self.db
+                                .append_audit(&storage::AuditEntry::local(
+                                    now_ms(),
+                                    None, // 本机 owner 经 IPC 操作
+                                    "device.renamed",
+                                    None,
+                                    Some(
+                                        serde_json::json!({
+                                            "nodeId": node_hex,
+                                            "oldName": old_name,
+                                            "newName": new_name,
+                                        })
+                                        .to_string(),
+                                    ),
+                                ))
+                                .await,
+                        );
                         // IPC-02: 改名后设备行即时刷新。
                         events::emit(
                             &self.events,
@@ -1185,11 +1224,12 @@ impl IpcServer {
                             );
                         };
                         match query.original(hash).await {
-                            Ok(bytes) => {
+                            Ok((media_type, bytes)) => {
                                 use base64::Engine as _;
                                 Resp::ok(
                                     id,
                                     serde_json::json!({
+                                        "media_type": media_type,
                                         "data_base64": base64::engine::general_purpose::STANDARD.encode(bytes),
                                     }),
                                 )
@@ -1255,7 +1295,7 @@ impl IpcServer {
         let Some(idx) = idx else {
             // Nothing to decide — still sweep stale rows, and report the
             // queue emptying to diag exactly as the success path would.
-            queue.retain(|p| p.requested_at + self.pending_ttl_ms > now);
+            queue.retain(|p| p.requested_at + self.pending_ttl() > now);
             if queue.is_empty() {
                 self.diag.apply(diag::DaemonEvent::PairingEnded);
             }
@@ -1264,9 +1304,9 @@ impl IpcServer {
         let p = queue.remove(idx);
         // The located row itself may be past TTL: answer Expired, not a
         // fake success and not a NotFound that hides which row failed.
-        let stale = p.requested_at + self.pending_ttl_ms <= now;
+        let stale = p.requested_at + self.pending_ttl() <= now;
         // Any other rows that aged out leave the queue with this touch.
-        queue.retain(|q| q.requested_at + self.pending_ttl_ms > now);
+        queue.retain(|q| q.requested_at + self.pending_ttl() > now);
         if queue.is_empty() {
             self.diag.apply(diag::DaemonEvent::PairingEnded);
         }
@@ -1355,7 +1395,7 @@ impl IpcServer {
                 // DEV-07 (#463): a row whose request side already ended
                 // (request-side TTL) is as unapprovable as one past the
                 // queue TTL. Withdrawn rows never get here (`live_queue`).
-                "expired": abandoned || requested_at + self.pending_ttl_ms <= now,
+                "expired": abandoned || requested_at + self.pending_ttl() <= now,
             });
             if let Some(d) = existing {
                 row["paired_at"] = serde_json::json!(d.paired_at);
@@ -1379,7 +1419,8 @@ impl IpcServer {
             .collect()
     }
 
-    async fn status(&self) -> anyhow::Result<serde_json::Value> {
+    /// `shell_version`：调用方（桌面壳）自报的版本；给了才算 `shell_relation`。
+    async fn status(&self, shell_version: Option<&str>) -> anyhow::Result<serde_json::Value> {
         let devices = self.db.list_devices(true).await?;
         let state = self.diag.state();
         // DEV-07 follow-up (#463): the banner is gated on this count — a
@@ -1389,6 +1430,18 @@ impl IpcServer {
         let photo_count = self.db.count_assets().await?;
         let photo_sources = self.db.count_asset_sources().await?;
         let disk = disk_stats(&self.data_dir);
+        // #1044 B11：低空间通知由 daemon 判定并持久化（low_space.rs）；
+        // 待展示的那一次随 status 带出，桌面弹完调 `low_space.ack`。
+        // 尽力而为：盘真满时索引库写入可能失败（SQLITE_FULL），那正是最需要
+        // status 的时候——不许为了一个通知把整个 status 拖垮。
+        let low_space_notice = match crate::low_space::observe(&self.db, disk.map(|d| d.free)).await
+        {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!("#1044: 低空间通知状态读写失败（本轮不带通知）：{e}");
+                None
+            }
+        };
         Ok(serde_json::json!({
             // T-090 data-plane fields (桌面总览卡直接消费).
             "photo_count": photo_count,
@@ -1396,11 +1449,27 @@ impl IpcServer {
             "photo_sources": photo_sources,
             "disk_free_bytes": disk.map(|d| d.free),
             "disk_total_bytes": disk.map(|d| d.total),
+            "low_space_notice": low_space_notice.map(|free| serde_json::json!({ "free_bytes": free })),
             "state": state_name(&state),
             "msg_key": state.msg_key(),
             "devices": devices.len(),
             "revoked": devices.iter().filter(|d| d.revoked).count(),
+            // #1044 B4：「已配对 N 台」= 设备页主列表行数（含自己断开的）；
+            // 已移除的单独计。桌面不再自己做减法。
+            "paired_devices": devices
+                .iter()
+                .filter(|d| crate::device_projection::Removal::of(d).is_listed())
+                .count(),
+            "removed_devices": devices
+                .iter()
+                .filter(|d| !crate::device_projection::Removal::of(d).is_listed())
+                .count(),
             "pending_pairs": pending,
+            // #1044：是否正有 Flow 传输——任何在用设备有活跃的 blobs 路由。
+            // 与设备行「传输中」同一信号；壳（#667 内核对账推迟）只读这个结论。
+            "transfer_active": devices
+                .iter()
+                .any(|d| !d.revoked && (self.flow_connection)(&d.node_id).is_some()),
             // Where the photos physically live — the UI's "open the
             // photo folder" needs an answer to "传到哪儿了" (real
             // walkthrough question, 2026-07-31).
@@ -1408,6 +1477,11 @@ impl IpcServer {
             // DAE-01: identity fields for newest-wins handshake + ops
             // visibility (验收①：status 报 PID/版本/路径/启动时间).
             "version": daemon_version(),
+            // #1044 B13：壳与内核的版本关系由 daemon 下结论（same / shell_older /
+            // shell_newer）；壳没报版本 = null（不知道就不提示）。
+            "shell_relation": shell_version
+                .filter(|v| !v.is_empty())
+                .map(|v| version_cmp::ShellRelation::of(v, &daemon_version()).as_str()),
             "pid": std::process::id(),
             "started_at": self.started_at,
             "exe_path": std::env::current_exe()
@@ -1422,9 +1496,14 @@ impl IpcServer {
     async fn export_logs(&self) -> anyhow::Result<PathBuf> {
         let events = self.db.list_diag(1000).await?;
         let devices = self.db.list_devices(true).await?;
-        let home = std::env::var("HOME")
-            .or_else(|_| std::env::var("USERPROFILE"))
-            .unwrap_or_default();
+        // #1043：家目录由平台适配器回答；读不到 = 空串（与改前同一口径）。
+        let home = {
+            use platform::PlatformAdapter as _;
+            platform::adapter()
+                .home_dir()
+                .map(|h| h.display().to_string())
+                .unwrap_or_default()
+        };
         let library = self.data_dir.display().to_string();
 
         let diag_json = serde_json::to_string_pretty(
@@ -1552,11 +1631,7 @@ fn scrub(s: &str, home: &str, library: &str) -> String {
 fn state_name(s: &DaemonState) -> &'static str {
     match s {
         DaemonState::OnlineDirect => "ONLINE_DIRECT",
-        DaemonState::OnlineRelay => "ONLINE_RELAY",
-        DaemonState::StorageOffline { .. } => "STORAGE_OFFLINE",
         DaemonState::Pairing => "PAIRING",
-        DaemonState::DiskFull { .. } => "DISK_FULL",
-        DaemonState::Indexing { .. } => "INDEXING",
     }
 }
 
@@ -1641,39 +1716,5 @@ mod tests {
     fn hex32_roundtrip_and_rejects() {
         assert!(parse_hex32("xyz").is_none());
         assert_eq!(parse_hex32(&"ab".repeat(32)).unwrap(), vec![0xab; 32]);
-    }
-
-    // ── DAE-01: version comparison (newest-wins handshake) ──
-    #[test]
-    fn version_cmp_semver_segments() {
-        assert_eq!(version_cmp("0.1.0", "0.1.0"), Ordering::Equal);
-        assert_eq!(version_cmp("0.2.0", "0.1.0"), Ordering::Greater);
-        assert_eq!(version_cmp("0.1.0", "0.2.0"), Ordering::Less);
-        assert_eq!(version_cmp("1.0.0", "0.9.9"), Ordering::Greater);
-        assert_eq!(version_cmp("0.10.0", "0.9.0"), Ordering::Greater);
-        // 预发布后缀：数字段比较为主（0.2.0-test.7 > 0.1.0）
-        assert_eq!(version_cmp("0.2.0-test.7", "0.1.0"), Ordering::Greater);
-        assert_eq!(version_cmp("0.1.0", "0.2.0-test.7"), Ordering::Less);
-        // DAE-01b blocker②: pre-release numeric segments — dogfood test
-        // packages must take over from each other (test.8 > test.7).
-        assert_eq!(
-            version_cmp("0.2.0-test.8", "0.2.0-test.7"),
-            Ordering::Greater
-        );
-        assert_eq!(version_cmp("0.2.0-test.7", "0.2.0-test.8"), Ordering::Less);
-        assert_eq!(
-            version_cmp("0.2.0-test.10", "0.2.0-test.9"),
-            Ordering::Greater
-        );
-        assert_eq!(version_cmp("0.2.0-test.8", "0.2.0-test.8"), Ordering::Equal);
-        // A formal build outranks any test build of the same core.
-        assert_eq!(version_cmp("0.2.0", "0.2.0-test.8"), Ordering::Greater);
-        assert_eq!(version_cmp("0.2.0-test.8", "0.2.0"), Ordering::Less);
-        // 同核心数字段：正式 > 预发布（正式构建接管 test 构建）
-        assert_eq!(version_cmp("0.1.0", "0.1.0-test.3"), Ordering::Greater);
-        assert_eq!(version_cmp("0.1.0-test.3", "0.1.0"), Ordering::Less);
-        // 垃圾输入退化为 0
-        assert_eq!(version_cmp("", "0.0.0"), Ordering::Equal);
-        assert_eq!(version_cmp("alpha", "0.1.0"), Ordering::Less);
     }
 }

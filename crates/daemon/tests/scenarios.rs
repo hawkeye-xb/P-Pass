@@ -7,5 +7,7 @@
 
 #[path = "scenarios/clock_jump.rs"]
 mod clock_jump;
+#[path = "common/mod.rs"]
+mod common;
 #[path = "scenarios/revoke_before_commit.rs"]
 mod revoke_before_commit;
