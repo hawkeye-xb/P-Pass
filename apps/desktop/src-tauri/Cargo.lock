@@ -2667,6 +2667,7 @@ version = "0.9.7"
 dependencies = [
  "libc",
  "thiserror 2.0.19",
+ "tokio",
  "windows 0.62.2",
  "windows-sys 0.61.2",
  "winreg",
@@ -4203,6 +4204,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "windows-sys 0.61.2",
 ]
