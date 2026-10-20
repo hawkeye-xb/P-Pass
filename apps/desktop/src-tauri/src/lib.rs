@@ -1307,6 +1307,17 @@ fn converge_kernel_on_startup(app: tauri::AppHandle) {
     let deadline = std::time::Instant::now() + RESTART_GRACE;
     while !daemon_online() {
         if std::time::Instant::now() >= deadline {
+            // 与前端自愈同一道门：只有服务状态是 Unreachable（配置过、已登记、不是
+            // 用户停的、过了启动宽限仍连不上）才拉。Stopped（向导中途退出 / 用户
+            // 停过）与 NotConfigured 是用户动作的事——拉起来会把人踢出向导。
+            let manager = app.state::<ServiceStateManager>().inner().clone();
+            if manager.current() != ServiceState::Unreachable {
+                eprintln!(
+                    "#1046: 内核一直不可达，服务状态为 {}，不在启动对账里拉",
+                    manager.current().as_str()
+                );
+                return;
+            }
             match self_heal_now(&app, "startup reconcile") {
                 Ok(true) => eprintln!("#1046: 内核一直不可达，启动对账已按自愈判据拉起"),
                 Ok(false) => eprintln!("#1046: 内核一直不可达，按判据不拉（未配置或用户停过）"),
@@ -2463,11 +2474,14 @@ mod tests {
             .expect("自愈不杀在跑的内核");
         assert!(gate < spawn, "判据必须在 spawn 之前");
         assert!(body("self_heal_daemon").contains("self_heal_now(&app, "));
-        assert!(
-            body("converge_kernel_on_startup")
-                .contains("self_heal_now(&app, \"startup reconcile\")"),
-            "启动对账：内核一直不可达时按自愈判据拉起（不依赖前端）"
-        );
+        let converge = body("converge_kernel_on_startup");
+        let state_gate = converge
+            .find("if manager.current() != ServiceState::Unreachable {")
+            .expect("启动对账兜底与前端自愈同一道门：只在 Unreachable 时拉");
+        let heal_at = converge
+            .find("self_heal_now(&app, \"startup reconcile\")")
+            .expect("启动对账：内核一直不可达时按自愈判据拉起（不依赖前端）");
+        assert!(state_gate < heal_at, "状态门必须在拉起之前");
         // 退路的一次性 spawn：不带任何参数（#1041：`--post-update` 已退役）。
         let up = body("bring_up_daemon");
         assert!(up.contains("spawn_bundled_daemon_oneshot()"));
