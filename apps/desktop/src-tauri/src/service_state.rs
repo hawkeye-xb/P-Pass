@@ -160,7 +160,7 @@ impl ServiceStateManager {
     /// overridden by a connection failure.
     pub fn user_stopped(&self) -> bool {
         use platform::PlatformAdapter as _;
-        crate::is_user_stopped(&platform::adapter().data_dir())
+        crate::distribution::is_user_stopped(&platform::adapter().data_dir())
     }
 
     pub fn next_after_failure(&self, had_connection: bool, within_grace: bool) -> ServiceState {
