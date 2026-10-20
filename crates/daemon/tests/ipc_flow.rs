@@ -83,19 +83,31 @@ fn socket_name(tag: &str) -> String {
 }
 
 async fn start(dir: &std::path::Path, tag: &str) -> (Db, Pairing, String, String) {
+    start_with_clock(dir, tag, None).await
+}
+
+async fn start_with_clock(
+    dir: &std::path::Path,
+    tag: &str,
+    clock: Option<i64>,
+) -> (Db, Pairing, String, String) {
     let db = Db::open_in_memory().await.unwrap();
     let (event_bus, _probe) = daemon::events::bus();
     let (pairing, pending_rx) = Pairing::new(db.clone(), transport::NodeId([0xCC; 32]), None, None);
     let pairing = pairing.with_events(event_bus.clone());
     let diag = DiagAgg::new(db.clone());
-    let ipc = Arc::new(IpcServer::new(
+    let ipc = IpcServer::new(
         db.clone(),
         pairing.clone(),
         diag,
         dir.to_path_buf(),
         pending_rx,
         event_bus,
-    ));
+    );
+    let ipc = Arc::new(match clock {
+        Some(fixed) => ipc.with_clock(move || fixed),
+        None => ipc,
+    });
     let socket = socket_name(tag);
     let token = [0x5A; 32];
     let token_hex: String = token.iter().map(|b| format!("{b:02x}")).collect();
@@ -176,6 +188,43 @@ async fn status_devices_and_revoke_roundtrip() {
         revoke_decision.entry.causal_object_ref.as_deref(),
         Some("aa".repeat(32).as_str())
     );
+}
+
+/// #1055: 业主移除设备时 `revoked_at` 与审计时间取注入的时钟。
+#[tokio::test(flavor = "multi_thread")]
+async fn device_revoke_stamps_time_from_the_injected_clock() {
+    const FAKE_NOW: i64 = 1_999_000_000_000;
+    let dir = tempfile::tempdir().unwrap();
+    let (db, _pairing, socket, token) =
+        start_with_clock(dir.path(), "revclock", Some(FAKE_NOW)).await;
+    db.upsert_device(&Device {
+        node_id: vec![0xAB; 32],
+        name: "手机".into(),
+        role: Role::Member,
+        paired_at: 1,
+        last_seen: None,
+        revoked: false,
+        revoked_at: None,
+        revoked_by: None,
+    })
+    .await
+    .unwrap();
+    let mut c = IpcClient::connect(&socket, &token).await;
+    let resp = c
+        .call(
+            "device.revoke",
+            serde_json::json!({ "node_id": "ab".repeat(32) }),
+        )
+        .await;
+    assert_eq!(resp.result.unwrap()["revoked"], true);
+    let d = db.get_device(&[0xAB; 32]).await.unwrap().unwrap();
+    assert_eq!(d.revoked_at, Some(FAKE_NOW));
+    let decisions = db.list_decisions(10).await.unwrap();
+    let dec = decisions
+        .iter()
+        .find(|d| d.entry.decision_kind == "revoke_authorization")
+        .unwrap();
+    assert_eq!(dec.entry.occurred_at, FAKE_NOW);
 }
 
 // ── NAME-01: device.rename（ID 与显示名分离，decisions ②）──────────

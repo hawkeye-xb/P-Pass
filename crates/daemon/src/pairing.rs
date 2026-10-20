@@ -450,16 +450,18 @@ impl Pairing {
         };
 
         // T5: 扫码请求到达即审计（含后续被拒/超时——审计要全，不只看成功）。
-        let _ = self
-            .db
-            .append_audit(&storage::AuditEntry::local(
-                now_ms,
-                Some(peer.0.to_vec()),
-                "pair.requested",
-                None,
-                Some(serde_json::json!({ "deviceName": req.device_name.clone() }).to_string()),
-            ))
-            .await;
+        warn_if_audit_failed(
+            "pair.requested",
+            self.db
+                .append_audit(&storage::AuditEntry::local(
+                    now_ms,
+                    Some(peer.0.to_vec()),
+                    "pair.requested",
+                    None,
+                    Some(serde_json::json!({ "deviceName": req.device_name.clone() }).to_string()),
+                ))
+                .await,
+        );
 
         let this = self.clone();
         let device_name = req.device_name.clone();
@@ -669,16 +671,18 @@ impl Pairing {
             // T5: 没成的配对同样入审计。#552：按结局分 kind——业主拒绝
             // `pair.denied`、手机取消 `pair.cancelled`、没人及时决策
             // `pair.expired`，桌面活动记录据此显示不同文案。
-            let _ = self
-                .db
-                .append_audit(&storage::AuditEntry::local(
-                    decided_at,
-                    Some(peer.0.to_vec()),
-                    kind,
-                    None,
-                    Some(serde_json::json!({ "deviceName": device_name }).to_string()),
-                ))
-                .await;
+            warn_if_audit_failed(
+                kind,
+                self.db
+                    .append_audit(&storage::AuditEntry::local(
+                        decided_at,
+                        Some(peer.0.to_vec()),
+                        kind,
+                        None,
+                        Some(serde_json::json!({ "deviceName": device_name }).to_string()),
+                    ))
+                    .await,
+            );
             return Err(PairRejection::OwnerDeclined);
         }
 
@@ -710,24 +714,20 @@ impl Pairing {
             revoked_at: None,
             revoked_by: None,
         };
-        self.db
-            .upsert_device(&device)
-            .await
-            .map_err(|_| PairRejection::OwnerDeclined)?;
-        if rejoining {
-            // Owner confirmation = renewed trust; upsert never clears the
-            // flag by design, so reinstate explicitly.
-            let _ = self.db.unrevoke(&peer.0).await;
-        }
         // REBUILD-02: a newly accepted pairing replaces every old Flow
         // grant. Persist the epoch before replying so the phone never starts
         // a fetch against an epoch the Desktop cannot verify after restart.
+        // #1055：设备行、复位吊销（重连时 owner 确认 = 重新授权）、新纪元
+        // 在 storage 里是**一个事务**，中途失败不留中间态。
         let pairing_epoch = fresh_pairing_epoch().map_err(|_| PairRejection::OwnerDeclined)?;
         if !self
             .db
-            .set_pairing_epoch(&peer.0, &pairing_epoch)
+            .accept_pairing(&device, &pairing_epoch)
             .await
-            .map_err(|_| PairRejection::OwnerDeclined)?
+            .map_err(|e| {
+                tracing::warn!("#1055: accept_pairing failed, pairing rolled back: {e}");
+                PairRejection::OwnerDeclined
+            })?
         {
             return Err(PairRejection::OwnerDeclined);
         }
@@ -740,16 +740,18 @@ impl Pairing {
             device.name.clone()
         };
 
-        let _ = self
-            .db
-            .append_audit(&storage::AuditEntry::local(
-                decided_at,
-                Some(peer.0.to_vec()),
-                "pair.accepted",
-                None,
-                Some(serde_json::json!({ "detail": detail }).to_string()),
-            ))
-            .await;
+        warn_if_audit_failed(
+            "pair.accepted",
+            self.db
+                .append_audit(&storage::AuditEntry::local(
+                    decided_at,
+                    Some(peer.0.to_vec()),
+                    "pair.accepted",
+                    None,
+                    Some(serde_json::json!({ "detail": detail }).to_string()),
+                ))
+                .await,
+        );
         // IPC-02: 配对落定——桌面设备行即时出现（新设备/替换旧设备）。
         if let Some(bus) = &self.events {
             crate::events::emit(
@@ -785,9 +787,25 @@ fn fresh_request_id() -> Result<String, getrandom::Error> {
     Ok(hex(&bytes))
 }
 
+/// 设备名上限，按**字符数**（`chars().count()`）计，不是字节数。
+/// 配对自报名（[`safe_name`]）与 `device.rename`（ipc.rs）共用这一个常量。
+pub const MAX_DEVICE_NAME_CHARS: usize = 64;
+
+/// #1055：审计写入是尽力而为，不因它让配对/撤销失败；但失败不能静默——
+/// 至少留一条 warn，事后查日志能知道这条审计缺了。
+pub(crate) fn warn_if_audit_failed<T, E: std::fmt::Display>(action: &str, result: Result<T, E>) {
+    if let Err(e) = result {
+        tracing::warn!("audit write failed for {action}: {e}");
+    }
+}
+
 /// Device names come from the network — cap length, strip control chars.
 fn safe_name(name: &str) -> String {
-    let cleaned: String = name.chars().filter(|c| !c.is_control()).take(64).collect();
+    let cleaned: String = name
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_DEVICE_NAME_CHARS)
+        .collect();
     if cleaned.trim().is_empty() {
         "未命名设备".into()
     } else {
@@ -858,6 +876,13 @@ mod tests {
         assert_eq!(safe_name("妈妈的手机"), "妈妈的手机");
         assert_eq!(safe_name("a\x00b\x1fc"), "abc");
         assert_eq!(safe_name("   "), "未命名设备");
-        assert_eq!(safe_name(&"x".repeat(200)).len(), 64);
+        assert_eq!(
+            safe_name(&"x".repeat(200)).chars().count(),
+            MAX_DEVICE_NAME_CHARS
+        );
+        assert_eq!(
+            safe_name(&"设".repeat(200)).chars().count(),
+            MAX_DEVICE_NAME_CHARS
+        );
     }
 }

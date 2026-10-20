@@ -31,7 +31,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::diag_agg::DiagAgg;
 use crate::events::{self, EventBus};
-use crate::pairing::{PairDecision, Pairing, PendingPair, PENDING_TTL_MS};
+use crate::pairing::{
+    warn_if_audit_failed, PairDecision, Pairing, PendingPair, MAX_DEVICE_NAME_CHARS, PENDING_TTL_MS,
+};
 use crate::subscriptions::SubscriptionRegistry;
 
 /// Outcome of an owner decision on one pending pairing request
@@ -69,7 +71,9 @@ pub struct IpcServer {
     /// Production keeps [`PENDING_TTL_MS`]; a test that must exercise
     /// "row still fresh but requester already timed out" injects a long
     /// queue TTL against a short request-side TTL without sleeping.
-    pending_ttl_ms: i64,
+    pending_ttl_ms: Arc<std::sync::atomic::AtomicI64>,
+    /// Clock seam（同 Router::with_clock）：撤销时间戳走它，测试注入假时钟。
+    now: Arc<dyn Fn() -> i64 + Send + Sync>,
     /// T-090: live connection status per device (raw 32-byte NodeId in).
     /// main injects a closure over the transport slot; the default says
     /// `Unknown` — 拿不到实况就如实报 unknown，绝不用 last_seen 推断.
@@ -298,6 +302,8 @@ impl IpcServer {
         let queue = Arc::clone(&pending);
         let diag2 = diag.clone();
         let events2 = events.clone();
+        let pending_ttl_ms = Arc::new(std::sync::atomic::AtomicI64::new(PENDING_TTL_MS));
+        let ttl_for_sweep = Arc::clone(&pending_ttl_ms);
         tokio::spawn(async move {
             while let Some(p) = pending_rx.recv().await {
                 diag2.apply(diag::DaemonEvent::PairingStarted);
@@ -316,7 +322,7 @@ impl IpcServer {
                     // (expiry judgment happens here because the queue holds
                     // `requested_at`, see pairing.rs).
                     let now = now_ms();
-                    let ttl = PENDING_TTL_MS;
+                    let ttl = ttl_for_sweep.load(std::sync::atomic::Ordering::Relaxed);
                     let mut q = queue.lock().expect("pending lock");
                     // DEV-07 follow-up (#463): withdrawn rows leave too.
                     q.retain(|old| {
@@ -343,7 +349,8 @@ impl IpcServer {
             pending,
             events,
             started_at: now_ms(),
-            pending_ttl_ms: PENDING_TTL_MS,
+            pending_ttl_ms,
+            now: Arc::new(now_ms),
             step_down_exit: Arc::new(|| std::process::exit(0)),
             conn_status: Arc::new(|_| transport::ConnectionStatus::Unknown),
             flow_connection: Arc::new(|_| None),
@@ -384,7 +391,20 @@ impl IpcServer {
     /// [`Pairing::with_pending_ttl`] to exercise the two-sided expiry
     /// without sleeping minutes.
     pub fn set_pending_ttl_for_test(&mut self, ttl_ms: i64) {
-        self.pending_ttl_ms = ttl_ms;
+        self.pending_ttl_ms
+            .store(ttl_ms, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Override the clock (#1055; tests only): lets a test assert the exact
+    /// `revoked_at` that `device.revoke` stamps.
+    pub fn with_clock(mut self, now: impl Fn() -> i64 + Send + Sync + 'static) -> Self {
+        self.now = Arc::new(now);
+        self
+    }
+
+    fn pending_ttl(&self) -> i64 {
+        self.pending_ttl_ms
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// T-090: inject the live connection-status source (main wires this
@@ -937,7 +957,7 @@ impl IpcServer {
                 // 禁止物理删除这一条不变）。
                 match self
                     .db
-                    .revoke(&node_id, storage::RevokedBy::Owner, now_ms())
+                    .revoke(&node_id, storage::RevokedBy::Owner, (self.now)())
                     .await
                 {
                     Ok(revoked) => {
@@ -955,33 +975,37 @@ impl IpcServer {
                             }
                         }
                         if revoked {
-                            let _ = self
-                                .db
-                                .append_audit(&storage::AuditEntry::local(
-                                    now_ms(),
-                                    None, // 本机 owner 经 IPC 操作
-                                    "device.revoked",
-                                    None,
-                                    Some(serde_json::json!({ "nodeId": node_hex }).to_string()),
-                                ))
-                                .await;
+                            warn_if_audit_failed(
+                                "device.revoked",
+                                self.db
+                                    .append_audit(&storage::AuditEntry::local(
+                                        (self.now)(),
+                                        None, // 本机 owner 经 IPC 操作
+                                        "device.revoked",
+                                        None,
+                                        Some(serde_json::json!({ "nodeId": node_hex }).to_string()),
+                                    ))
+                                    .await,
+                            );
                             // AUDIT-04 card decision #4: 撤销授权是用户决定，
                             // 必须落 audit_decision（causal_object_ref = 被撤销
                             // 设备），不能只靠上面兼容层的 audit_operation 行。
-                            let _ = self
-                                .db
-                                .append_decision(&storage::DecisionEntry {
-                                    decision_id: fresh_audit_id(),
-                                    decision_kind: "revoke_authorization".into(),
-                                    actor: None, // 本机 owner 经 IPC 操作
-                                    causal_operation_id: None,
-                                    causal_object_ref: Some(node_hex.to_string()),
-                                    occurred_at: now_ms(),
-                                    payload: Some(
-                                        serde_json::json!({ "nodeId": node_hex }).to_string(),
-                                    ),
-                                })
-                                .await;
+                            warn_if_audit_failed(
+                                "revoke_authorization",
+                                self.db
+                                    .append_decision(&storage::DecisionEntry {
+                                        decision_id: fresh_audit_id(),
+                                        decision_kind: "revoke_authorization".into(),
+                                        actor: None, // 本机 owner 经 IPC 操作
+                                        causal_operation_id: None,
+                                        causal_object_ref: Some(node_hex.to_string()),
+                                        occurred_at: (self.now)(),
+                                        payload: Some(
+                                            serde_json::json!({ "nodeId": node_hex }).to_string(),
+                                        ),
+                                    })
+                                    .await,
+                            );
                             // IPC-02: 设备移除——桌面设备行即时消失。
                             events::emit(
                                 &self.events,
@@ -1027,7 +1051,7 @@ impl IpcServer {
                     );
                 };
                 let new_name = new_name.trim();
-                if new_name.is_empty() || new_name.chars().count() > 64 {
+                if new_name.is_empty() || new_name.chars().count() > MAX_DEVICE_NAME_CHARS {
                     return Resp::err(
                         id,
                         RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
@@ -1037,23 +1061,25 @@ impl IpcServer {
                     Ok(Some(old_name)) => {
                         // 审计：旧名→新名 + node_id（decisions ②「audit 记
                         // device.renamed 旧名→新名+node_id」）。
-                        let _ = self
-                            .db
-                            .append_audit(&storage::AuditEntry::local(
-                                now_ms(),
-                                None, // 本机 owner 经 IPC 操作
-                                "device.renamed",
-                                None,
-                                Some(
-                                    serde_json::json!({
-                                        "nodeId": node_hex,
-                                        "oldName": old_name,
-                                        "newName": new_name,
-                                    })
-                                    .to_string(),
-                                ),
-                            ))
-                            .await;
+                        warn_if_audit_failed(
+                            "device.renamed",
+                            self.db
+                                .append_audit(&storage::AuditEntry::local(
+                                    now_ms(),
+                                    None, // 本机 owner 经 IPC 操作
+                                    "device.renamed",
+                                    None,
+                                    Some(
+                                        serde_json::json!({
+                                            "nodeId": node_hex,
+                                            "oldName": old_name,
+                                            "newName": new_name,
+                                        })
+                                        .to_string(),
+                                    ),
+                                ))
+                                .await,
+                        );
                         // IPC-02: 改名后设备行即时刷新。
                         events::emit(
                             &self.events,
@@ -1255,7 +1281,7 @@ impl IpcServer {
         let Some(idx) = idx else {
             // Nothing to decide — still sweep stale rows, and report the
             // queue emptying to diag exactly as the success path would.
-            queue.retain(|p| p.requested_at + self.pending_ttl_ms > now);
+            queue.retain(|p| p.requested_at + self.pending_ttl() > now);
             if queue.is_empty() {
                 self.diag.apply(diag::DaemonEvent::PairingEnded);
             }
@@ -1264,9 +1290,9 @@ impl IpcServer {
         let p = queue.remove(idx);
         // The located row itself may be past TTL: answer Expired, not a
         // fake success and not a NotFound that hides which row failed.
-        let stale = p.requested_at + self.pending_ttl_ms <= now;
+        let stale = p.requested_at + self.pending_ttl() <= now;
         // Any other rows that aged out leave the queue with this touch.
-        queue.retain(|q| q.requested_at + self.pending_ttl_ms > now);
+        queue.retain(|q| q.requested_at + self.pending_ttl() > now);
         if queue.is_empty() {
             self.diag.apply(diag::DaemonEvent::PairingEnded);
         }
@@ -1355,7 +1381,7 @@ impl IpcServer {
                 // DEV-07 (#463): a row whose request side already ended
                 // (request-side TTL) is as unapprovable as one past the
                 // queue TTL. Withdrawn rows never get here (`live_queue`).
-                "expired": abandoned || requested_at + self.pending_ttl_ms <= now,
+                "expired": abandoned || requested_at + self.pending_ttl() <= now,
             });
             if let Some(d) = existing {
                 row["paired_at"] = serde_json::json!(d.paired_at);

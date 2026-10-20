@@ -1044,12 +1044,12 @@ impl Router {
         let revoked = match epoch {
             Some(epoch) => {
                 self.db
-                    .revoke_pairing(&peer.0, epoch, storage::RevokedBy::Device, unix_ms_now())
+                    .revoke_pairing(&peer.0, epoch, storage::RevokedBy::Device, (self.now)())
                     .await
             }
             None => {
                 self.db
-                    .revoke(&peer.0, storage::RevokedBy::Device, unix_ms_now())
+                    .revoke(&peer.0, storage::RevokedBy::Device, (self.now)())
                     .await
             }
         };
@@ -1059,16 +1059,18 @@ impl Router {
                 Resp::ok(req.id.clone(), serde_json::json!({ "unpaired": false }))
             }
             Ok(_) => {
-                let _ = self
-                    .db
-                    .append_audit(&storage::AuditEntry::local(
-                        unix_ms_now(),
-                        Some(peer.0.to_vec()), // 设备自我撤销（UX-06）
-                        "device.unpaired",
-                        None,
-                        None,
-                    ))
-                    .await;
+                crate::pairing::warn_if_audit_failed(
+                    "device.unpaired",
+                    self.db
+                        .append_audit(&storage::AuditEntry::local(
+                            (self.now)(),
+                            Some(peer.0.to_vec()), // 设备自我撤销（UX-06）
+                            "device.unpaired",
+                            None,
+                            None,
+                        ))
+                        .await,
+                );
                 // IPC-02: 设备自我断开——桌面设备行即时刷新。
                 // DEV-03：刷新后它仍在列表里，状态变成「已断开」，不再消失。
                 if let Some(bus) = &self.events {
