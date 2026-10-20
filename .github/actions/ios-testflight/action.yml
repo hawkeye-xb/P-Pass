@@ -104,7 +104,7 @@ runs:
         set -euo pipefail
         args=()
         [ "$REQUIRE_PRERELEASE" = "true" ] && args+=(--require-prerelease)
-        tools/ios/testflight-upload.sh "${args[@]}"
+        tools/ios/testflight-upload.sh ${args[@]+"${args[@]}"}
         cat apps/ios/build/testflight/version.env >> "$GITHUB_OUTPUT"
 
     # 上传成功的 App Store Connect 侧证据：构建出现在 ASC 里（PROCESSING / VALID）。
