@@ -1910,7 +1910,10 @@ fn stop_processes_at(exe: &Path, pid_hint: Option<u32>) -> Result<crate::KillOut
     let results: Vec<ProcessKill> = hinted
         .into_iter()
         .chain(pids.into_iter().filter(|&pid| {
-            Some(pid) != hinted && image_path(pid).is_some_and(|p| same_image_path(&p, &want))
+            Some(pid) != hinted
+                && image_path(pid)
+                    .map(|p| std::fs::canonicalize(&p).unwrap_or(p))
+                    .is_some_and(|p| same_image_path(&p, &want))
         }))
         .map(terminate_and_wait)
         .collect();
@@ -1943,6 +1946,9 @@ fn image_path(pid: u32) -> Option<PathBuf> {
 
 /// 两个映像路径是不是同一个文件：Windows 路径不区分大小写，`canonicalize`
 /// 会加 `\\?\` 前缀而 `QueryFullProcessImageNameW` 不加，比较前都去掉。
+/// 两边都要先 `canonicalize`：进程映像名保留拉起时用的写法，可能是 8.3 短名
+/// （GitHub Windows runner 的 TEMP 是 `C:\Users\RUNNER~1\…`），只规范一边
+/// 就会把同一个文件判成两个。
 fn same_image_path(a: &Path, b: &Path) -> bool {
     fn norm(p: &Path) -> String {
         let s = p.to_string_lossy().replace('/', "\\");
