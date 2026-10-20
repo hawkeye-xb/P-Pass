@@ -1549,11 +1549,7 @@ fn scrub(s: &str, home: &str, library: &str) -> String {
 fn state_name(s: &DaemonState) -> &'static str {
     match s {
         DaemonState::OnlineDirect => "ONLINE_DIRECT",
-        DaemonState::OnlineRelay => "ONLINE_RELAY",
-        DaemonState::StorageOffline { .. } => "STORAGE_OFFLINE",
         DaemonState::Pairing => "PAIRING",
-        DaemonState::DiskFull { .. } => "DISK_FULL",
-        DaemonState::Indexing { .. } => "INDEXING",
     }
 }
 

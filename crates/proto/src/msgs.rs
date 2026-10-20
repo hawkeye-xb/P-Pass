@@ -596,9 +596,7 @@ pub struct DiagStatusQuery {}
 
 /// Diagnostic status response.
 ///
-/// `state` is one of the canonical states:
-/// `ONLINE_DIRECT`, `ONLINE_RELAY`, `STORAGE_OFFLINE`, `PAIRING`,
-/// `DISK_FULL`, `INDEXING`.
+/// `state` is one of the canonical states: `ONLINE_DIRECT`, `PAIRING`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
 pub struct DiagStatus {
