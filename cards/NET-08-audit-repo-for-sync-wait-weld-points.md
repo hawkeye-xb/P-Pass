@@ -80,7 +80,7 @@ NET-01/06 的教训不是"一个超时值设错了"，而是一个**可复发的
       backup.begin|manifest|presence|commit/timeline.page/asset.meta/thumb.get/
       asset.blob.ticket）、flow_delivery.rs、backup.rs、query.rs、upload.rs、
       download.rs、pairing.rs、telemetry.rs、ipc.rs（本地 socket 全部方法）、
-      main.rs、watcher.rs、inbox.rs、update.rs（纯解析，无网络调用，零焊点）
+      main.rs、watcher.rs、inbox.rs、update.rs（纯解析，无网络调用，零焊点；#1041 已删除）
 - [x] `apps/android`：DaemonClient.kt 全部 call/connect/download/subscribe 点
       （grep `client.call(` 共 14 处调用点，逐一过：PhotosScreen×2、PairFlow×3、
       ForegroundHeartbeat×1、BackupRunner×1、BackupUiStateHolder×1、

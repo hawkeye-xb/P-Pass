@@ -157,21 +157,25 @@
   exists), that URL 404s — clients must treat it as "no update",
   **silently** (no error banner; a test tag you forgot to publish must
   never alarm users).
-- **Current manifest scope: `android-arm64` only.** Desktop auto-update
-  is wired (tauri-plugin-updater + pubkey) but has no artifact yet:
-  - **darwin 挂账 (H-10c 衔接)**: the macOS updater artifact is a
-    `.app.tar.gz` (not the dmg), and it must include `lib/` (daemon
-    dylibs) — `createUpdaterArtifacts` alone does not; producing the
-    tar.gz from the bundle output is still open.
-  - **windows 挂账**: desktop shell on Windows pending (H-09 lane).
+- **Manifest scope**: Android reads `manifest-android.json`; the desktop
+  shell updates in-app through tauri-plugin-updater from its own per-platform
+  manifest — `manifest-macos.json` (the `.app.tar.gz` with `lib/` embedded)
+  and `manifest-windows.json` (NSIS, written by `finalize-manifest-windows`).
+  Test and stable use the same mechanism; only the manifest URL differs,
+  and it is written into the plugin config at build time
+  (`tools/release/tauri-config.mjs`, #852). The legacy `manifest.json`
+  carries no desktop entry.
 - Signing: `UPDATE_SIGNING_KEY` (tauri signer, minisign hashed format).
   Without it the manifest ships with empty signatures and the release
   notes say "unsigned".
 
 ## 3.6 Update channels (REL-02) — test / stable
 
-Two channels, explicit switch in settings, **stable is always the
-default** (family devices are never touched by test builds):
+Two channels, **stable is always the default** (family devices are never
+touched by test builds). No client has a channel switch: the channel is
+fixed at build time — desktop via the updater endpoint written into the
+plugin config (#852), Android via `channelFromVersion()` on the injected
+version string (`-test.` ⇒ test):
 
 - **stable** (family devices): clients keep hitting GitHub
   `releases/latest/download/manifest.json` directly — URL and semantics
@@ -371,10 +375,29 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
    > （`.github/workflows/` 里的 `gh` 跑在 runner 上用 `GITHUB_TOKEN`，
    > 不在此列。）
 
+## 3.5 更新清单（UPD-01）— 范围
+
+- 每次发版都产出分端清单（UPD-13 #660）：`manifest-android.json`、
+  `manifest-macos.json`、`manifest-windows.json`，顶层 `version` 是该端自己的
+  版本号，只含该端条目；老格式 `manifest.json` 只服务旧 Android 客户端（已冻结，
+  见 §1），不含桌面条目。
+- 桌面壳经 tauri-plugin-updater 应用内更新：macOS 产物是内嵌 `lib/` 的
+  `.app.tar.gz`，Windows 是 NSIS（清单由 `finalize-manifest-windows` 出）。
+  test 与 stable 同一套机制，只有清单地址不同，地址在构建期写进插件配置
+  （`tools/release/tauri-config.mjs`，#852），桌面设置页不区分通道。
+- 客户端按有序候选列表取清单（R2 镜像优先、GitHub 兜底，UPD-12 #650）；
+  R2 只镜像正式版（UPD-18 #706）。某个来源回 404 或失败才跳过；最新版仍是
+  draft 时 404，一律静默当作「没有更新」。
+- `notes` / `notes_i18n` 取自手写说明 `release/notes/<端>/<版本>.<zh|en>.txt`
+  （#741），不取 Release 正文。
+- 签名：`UPDATE_SIGNING_KEY`（tauri signer，minisign 格式）；缺失时清单签名为空，
+  发版说明标注 unsigned。
+
 ## 3.6 更新通道（REL-02）— test / stable
 
-两条通道，设置页显式切换，**默认永远 stable**（家人设备绝不被 test
-构建波及）：
+两条通道，**默认永远 stable**（家人设备绝不被 test 构建波及）。桌面的
+各端都没有通道切换，通道在构建期定死：桌面靠写进插件配置的清单地址（#852），
+Android 靠 `channelFromVersion()` 读注入的版本串（含 `-test.` 即 test）：
 
 - **stable**（家人设备）：客户端按**有序候选列表**解析（UPD-12 #650）——
   ① R2 镜像 `https://p-pass-dl.hawkeye-xb.com/manifest.json`（镜像侧已把

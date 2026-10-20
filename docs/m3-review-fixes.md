@@ -65,8 +65,9 @@ Blocks: any runtime wiring of update checks (T-071 follow-up).
 
 - [ ] `verify_artifact(bytes, artifact)`: BLAKE3/SHA-256 hash check +
       per-artifact signature check — the download half of the story is
-      currently absent (`update.rs:29-33` fields are carried, never
-      enforced).
+      currently absent (`update.rs` fields are carried, never
+      enforced). — Moot: `update.rs` was deleted in #1041; desktop updates go
+      through tauri-plugin-updater.
 - [ ] Validate `sha256` is 64-hex at parse time; drop
       `#[serde(default)]` on `signature` (empty sig must be a loud
       error, not a skippable field).

@@ -46,6 +46,8 @@ Gate G1：
 ### W2｜Windows 常驻、日志与诊断导出（需先拍板服务模型）
 **产品结论要回答**：后台服务不能“看着在跑，其实死了没人知道”；出问题能导出真正有用的日志。
 
+**已落地结论**：选 C 的每用户计划任务（DESK-65 #957）——登录触发 + 每分钟看门狗（已在跑就跳过），不需要管理员；旧版的 Run 值在登记时清掉。日志落 `<data_dir>/logs/daemon.log`（8 MiB 轮转一代）与 `daemon.err`（stderr 无人接时由 daemon 自己接上，DESK-58 #875）；落点由 `PlatformAdapter::daemon_log_paths` 回答，诊断包由 daemon `diag export` 子命令组装（#1042/#1045），不读 LaunchAgent plist。现行规则见 `docs/desktop/business-rules.zh-CN.md` §8、§9。以下为决策前的原始方案，保留作记录。
+
 必须先决策：
 - A. 继续注册表 Run key：简单、免管理员；崩溃不自动复活，stdout/stderr 无天然落点。
 - B. Run key + 轻量 watchdog：更接近 macOS KeepAlive；要处理重复拉起、升级互斥、误杀。

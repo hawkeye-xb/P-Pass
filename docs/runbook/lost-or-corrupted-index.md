@@ -1,8 +1,8 @@
 # 索引丢了/坏了怎么排查（`index.sqlite` 丢失或损坏）
 
 > 遇事翻这里（`docs/runbook/README.md` §9）。本文档面向内部排障，不是
-> 用户自助文档——现状没有任何用户可点的"重建索引"入口，出现这个场景
-> 目前只能工程介入。2026-08-13 讨论落档，优先级明确降低（见文末）。
+> 用户自助文档。没有用户可点的"重建索引"入口；索引丢失后由 daemon 启动
+> 对账自动收编（见下）。
 
 ## 会出现什么症状
 
@@ -27,47 +27,40 @@ P-Pass 的资产索引（`.ppf/index.sqlite`，`crates/storage`）在架构上�
   （有些备份工具默认跳过点号隐藏目录）
 - 未来某次数据库 schema 升级出 bug，daemon 打不开旧库，需要硬重置
 
-## 理论上的恢复路径（`rebuild()`，现状：代码有，入口没有）
+## 恢复路径：重启 daemon，启动对账自动收编（`adopt_orphans`）
 
-`crates/core-index/src/rebuild.rs` 的 `rebuild(db, library_root)`：
-清空 `asset` 表 → 全量重新扫描 `<library_root>/originals` → 按目录
-结构重新推导每一行（哈希、EXIF 拍摄时间、`src_device`）。**这个函数
-现在在整个产品里没有任何调用点**（`grep -rn "core_index::rebuild"`
-只会命中 `crates/core-index/tests/rebuild.rs`）——没有 CLI flag、没有
-IPC 方法、没有 UI 按钮。
+daemon 启动时跑一轮对账，之后每小时一轮（`crates/daemon/src/reconcile.rs`
+`Reconcile::run_once`，接了 `with_local_node_id` 才开收编方向）。其中
+`core_index::adopt_orphans`（`crates/core-index/src/rebuild.rs`）把
+`originals/` 下「文件在、索引行没有」的文件补成索引行：
 
-**如果现在真的遇到这个场景，临时手工恢复的办法**（工程介入，非用户
-自助）：写一个一次性小程序/临时测试用例，直接调用
-`core_index::rebuild(&db, &library_root)`（签名见 `rebuild.rs` 第 39
-行），指向出问题的库目录。跑完新的 `index.sqlite` 就会按磁盘现状
-重新生成。
+- 不清表：已有行的 `added_at`、尺寸、缩略图状态不动；稳态一轮零写入。
+- 只收媒体文件：判据是 `core_index::media_type_for`（扩展名 → MIME 表，
+  `image/*`、`video/*`，排除 svg/svgz/ico）；隐藏文件、0 字节文件不收。
+- 有收编时写一条审计 `index.adopted`（actor 为空）。
+- 收编后触发缩略图预生成回填。
 
-### `src_device` 解码规则（决定"来源不明"怎么产生）
+因此：
+- **`.ppf/index.sqlite` 丢了**（被删、换电脑只拷了 `originals/`）：启动
+  daemon，空库建好后启动对账把整棵 `originals/` 收编回来。
+- **`index.sqlite` 损坏打不开**：daemon 启动失败（stderr 最后一行是
+  `cli::startup_error_line` 的 JSON；只有「库 schema 比程序新」带
+  `ui.startup_migration_guidance` key）。把损坏的 `index.sqlite` 移出
+  `.ppf/` 后重启，即走上一条。
+- 已经丢失、只存在于索引里的信息（审计历史、设备行、配对 epoch）不在
+  `originals/` 里，收编找不回；设备需要重新配对。
 
-`rebuild()` 按目录名 `originals/<64位十六进制NodeId>/<yyyy>/<mm>/文件`
-解码 `src_device`（`rebuild.rs::device_of`）。不符合这个精确格式的
-文件（比如 daemon 没开着时手动塞进 `originals/`、还没被 WATCH-01
-本地目录监听接住搬进规范目录的文件），`src_device` 会解出空值——
-"来源不明"，如实记录，不代为归因（呼应 `rebuild.rs` 模块头注释）。
+## `src_device` 解码规则
 
-**正常运行时基本不会撞到这种空值**：手机备份走 `Ingestor::ingest`
-（`src_device` = 手机真实 NodeId）；WATCH-01 监听到的本地新文件也走
-同一个 `ingest`（`src_device` = 本机 node_id，"本机导入"）——两条路
-都会把文件正确搬进规范目录、正确赋值。只有 `rebuild()` 这条"从磁盘
-硬推导"的路径，才会遇到目录结构不规范导致解不出来的情况。
+按目录名 `originals/<64位十六进制NodeId>/<yyyy>/<mm>/文件` 解码
+`src_device`（`rebuild.rs::device_of`）。不符合这个格式的文件（daemon
+没开时手动塞进 `originals/` 的）**归本机**（2026-08-21 裁决），不再有
+"来源不明"一档。
 
-### 手机端筛选器怎么处理这种"来源不明"资产
+## `core_index::rebuild`（只在测试里调用）
 
-`AssetMeta.src_device` 字段（`SYNC-05` 卡）目前还没接线到手机端筛选
-器；即使接了，"来源不明"这一类具体该归到"家人的"/单独一档/两个
-筛选器都不显示，也还没最终拍板——因为现实中还撞不到，这个决策被
-明确推后（见下）。
-
-## 优先级裁决（2026-08-13）
-
-用户明确裁决：**这个功能优先级降低，等真的需要时才排期开发，不要
-反复拿出来问**。理由是触发场景概率很低（正常使用路径下几乎不会真的
-遇到"来源不明"，见上）。本文档就是为了在那一天真的发生时能快速排
-障，不代表现在要动手实现"重建索引"入口或者把筛选器分类规则最终拍
-死——`SYNC-05` 卡里对应的"待确认"项已经改成"先定安全默认，真正决策
-延后到 `rebuild()` 被排期实现的时候"，不阻塞 `SYNC-05` 本身。
+`rebuild(db, library_root, local_node_id)`：清空 `asset` 表 → 全量重扫
+`originals/` → 写一条 `index.rebuild` 审计。生产代码零调用（只有
+`crates/core-index/tests/rebuild.rs` 与 daemon 的 `backup_flow` 测试），
+作为 ADR-006「索引可由文件树重新推导」的可执行证明保留。与
+`adopt_orphans` 共用扫描口径。

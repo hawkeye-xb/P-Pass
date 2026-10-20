@@ -1,7 +1,9 @@
 # Roadmap / 里程碑看板
 
-> Single source of truth for milestone status. Updated with every card.
-> 里程碑状态的唯一权威来源，每张卡完成即更新。
+> Historical milestone board (archive). Current status lives in GitHub
+> Issues and milestones (see `AGENTS.md`); this file is not the source of truth.
+> 历史里程碑看板（档案）。当前状态以 GitHub Issues 与 milestone 为准（见
+> `AGENTS.md`），本文件不是真相源。
 > Detail per card: [PROGRESS.md](PROGRESS.md).
 
 **Now / 当前位置**（2026-09-14）: MOB-66 (Android brand-font wiring:
@@ -376,7 +378,7 @@ gated on review-fix cards — see [m3-review-fixes.md](m3-review-fixes.md))
       PackageInstaller same-signature check; no embedded pubkey needed
       — system enforces it). **Key done (2026-08-04, user authorized)**:
       UPDATE_SIGNING_KEY secret set (tauri signer rsign format),
-      update.rs OFFICIAL_PUBLIC_KEY real-key swap (tamper-rejected
+      update.rs (deleted in #1041) OFFICIAL_PUBLIC_KEY real-key swap (tamper-rejected
       tests green), desktop tauri-plugin-updater wired (pubkey =
       .pub full content, createUpdaterArtifacts, updater:default
       capability, Svelte check dialog). **UPD-01 rework items**:

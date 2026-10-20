@@ -19,9 +19,10 @@
 //! 4. **长 hex 串**（≥24 位连续 hex：全长 NodeId、hash、配对令牌）只留前 8 位
 //!    ——旧规则，口径与 `devices.json` 的前缀一致。
 //!
-//! 桌面壳是独立 workspace（ADR-012），`apps/desktop/src-tauri/src/redact.rs`
-//! 是同一份代码的第二份拷贝。两份都跑 `assets/privacy/redact-vectors.json`
-//! 这组共用向量，靠它锁死不漂移。
+//! 本文件是正本。桌面壳不再有拷贝（#1045 起诊断包由 daemon `diag export`
+//! 组装并脱敏）；`crates/transport/src/redact.rs`（logcat 出口）与 Android
+//! `Redact.kt` 是副本，三份都跑 `assets/privacy/redact-vectors.json` 这组共用
+//! 向量，靠它锁死不漂移。
 
 use std::net::{Ipv4Addr, Ipv6Addr};
 
@@ -634,7 +635,7 @@ pub fn redact_export_json_or_text(s: &str, pre: &dyn Fn(&str) -> String) -> Stri
 mod tests {
     use super::*;
 
-    /// 两个 workspace 共用的向量（桌面壳的拷贝跑同一份文件）。
+    /// 共用向量（transport 与 Android 的副本跑同一份文件）。
     const VECTORS: &str = include_str!("../../../assets/privacy/redact-vectors.json");
 
     #[test]

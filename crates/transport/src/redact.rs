@@ -4,11 +4,11 @@
 //! 自建 relay 域名、NodeId 等。`android_logcat` 把每一行写进 logcat 之前都过 [`logcat_line`]
 //! （先 [`redact`] 再截断——反过来截断可能切坏一个 IP / hex 串，让它逃过识别）。
 //!
-//! **这是第三份拷贝**：正本在 `crates/daemon/src/redact.rs`（daemon 的日志写入器 `log_guard`
+//! **这是副本**：正本在 `crates/daemon/src/redact.rs`（daemon 的日志写入器 `log_guard`
 //! 落盘前用它）。transport 不能依赖 daemon（依赖方向是 daemon → transport），所以复制日志
 //! 写入器用到的 `redact()`（规则 0–4）；导出件专用的路径 / 文件名规则（`redact_export`）不属于
-//! 日志口径，没有复制。四份实现（daemon、桌面壳、本文件、Android Kotlin 的
-//! `apps/android/.../log/Redact.kt`）都跑 `assets/privacy/redact-vectors.json`，靠它锁死不漂移。
+//! 日志口径，没有复制。三份实现（daemon、本文件、Android Kotlin 的
+//! `apps/android/.../log/Redact.kt`；桌面壳的拷贝已随 #1045 删除）都跑 `assets/privacy/redact-vectors.json`，靠它锁死不漂移。
 //! 改一处就改全部。
 //!
 //! 规则按顺序（与正本同文）：
@@ -309,7 +309,7 @@ pub fn logcat_line(target: &str, fields: &str, max_bytes: usize) -> String {
 mod tests {
     use super::*;
 
-    /// 与 daemon / 桌面壳 / Android 共用的向量。日志口径只跑 exact + keep。
+    /// 与 daemon / Android 共用的向量。日志口径只跑 exact + keep。
     const VECTORS: &str = include_str!("../../../assets/privacy/redact-vectors.json");
 
     #[test]
