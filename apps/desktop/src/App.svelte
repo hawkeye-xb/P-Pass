@@ -1086,22 +1086,9 @@
           updateProgress = 100;
         }
       });
-      // Bring the daemon back — on macOS launchd's KeepAlive would
-      // eventually do this on its own, but Windows has no such
-      // self-healing (plain Run key), so this must be explicit on
-      // every platform rather than relying on macOS's safety net to
-      // mask a Windows gap. Daemon's single-instance claim protocol
-      // makes a redundant spawn harmless if something already revived
-      // it first.
-      // #456 后续：用户主动停了服务就不拉——Rust 在调用这一刻读盘上的
-      // 停止标记（和 self_heal_daemon 同一来源），返回 false = 按规则跳过，
-      // 服务保持停止，界面照旧给「启动后台服务」。
-      try {
-        const resumed = await invoke("resume_daemon_after_update");
-        if (resumed === false) console.info("[updater] service was stopped by the user; keeping it stopped after the update");
-      } catch (e) {
-        console.warn("[updater] resume_daemon_after_update failed after a successful install:", e);
-      }
+      // #1046（S-11）：装完不在这里把 daemon 拉回来——更新流程是「停 → 替换 →
+      // 重启壳 → 新壳启动对账」：新壳启动时由 Rust 对账（开机自启登记 + 内核，
+      // 不是用户停的才拉）。Windows 的安装器本来就会退出旧壳、拉起新壳。
       // UPD-05 (#605) + UPD-06 (#616)：装完由用户点「好」后换壳——这一跳跑的是
       // **旧壳的代码**，所以"新对话框"只对装过这一版之后的机器生效；旧壳仍会走到
       // 这里（它自己的老文案 + 老动作），这也是"存量壳只能靠 daemon owner 兜"的原因。
@@ -1111,11 +1098,11 @@
       updatePhase = "installed";
       await relaunchShellNow();
     } catch (e) {
-      // The daemon we paused above is still down — bring it back so a
-      // failed update doesn't also leave backups silently stopped.
-      // （用户主动停过的不拉，判据同上，在 Rust 侧。）
+      // The daemon we paused above is still down and no new shell is coming —
+      // bring it back so a failed update doesn't also leave backups silently
+      // stopped. 走自愈（#1046）：用户主动停过的不拉，判据在 Rust 侧现场读盘。
       try {
-        await invoke("resume_daemon_after_update");
+        await invoke("self_heal_daemon");
       } catch (_) {}
       const msg = String(e);
       // UPD-06 (#616)：失败也是一个**显式状态**（原因留在界面上，可重试），

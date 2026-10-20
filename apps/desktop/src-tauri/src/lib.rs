@@ -15,7 +15,7 @@ mod service_state;
 use distribution::{
     daemon_is_unmanaged, is_user_stopped, kernel_convergence_verdict,
     reconcile_autostart_registration, self_heal_allowed, set_user_stopped, show_wizard,
-    update_resume_allowed, KernelFacts, KernelVerdict,
+    KernelFacts, KernelVerdict,
 };
 use platform::{HostingAdapter as _, PlatformAdapter as _};
 use serde_json::{json, Value};
@@ -680,22 +680,27 @@ fn current_service_stdio_paths() -> (Option<std::path::PathBuf>, Option<std::pat
     )
 }
 
-/// DESK-36 (#456)：前端 refresh 发现 daemon 不可达时调这个，而不是直接调
-/// `resume_daemon_after_update`。判据在**调用这一刻**读磁盘上的标记——
-/// 前端缓存的状态可能是旧的（比如刚在托盘里点了停止），只有这里读才没有竞态。
-/// 返回 true = 真的拉起了；false = 按判据跳过（不是错误）。
+/// DESK-36 (#456)：前端发现 daemon 不可达时调这个。判据在**调用这一刻**读磁盘上
+/// 的标记——前端缓存的状态可能是旧的（比如刚在托盘里点了停止），只有这里读才没有
+/// 竞态。返回 true = 真的拉起了；false = 按判据跳过（不是错误）。
 #[tauri::command]
 fn self_heal_daemon(app: tauri::AppHandle) -> Result<bool, String> {
+    self_heal_now(&app, "self heal")
+}
+
+/// 自愈本体（前端触发的 `self_heal_daemon` 与壳启动对账共用，#1046）：配置过、且
+/// 不是用户主动停的（`self_heal_allowed`，调用这一刻读盘）才拉。
+fn self_heal_now(app: &tauri::AppHandle, reason: &str) -> Result<bool, String> {
     if !self_heal_allowed(&platform::adapter().data_dir()) {
         return Ok(false);
     }
     let manager = app.state::<ServiceStateManager>().inner().clone();
-    manager.set(&app, ServiceState::Starting, Some("self heal"));
+    manager.set(app, ServiceState::Starting, Some(reason));
     // #732：有 LaunchAgent 时交给 launchd 拉（不杀在跑的——自愈只补"没在跑"）。
     match bring_up_daemon(false) {
         Ok(_) => Ok(true),
         Err(e) => {
-            manager.set(&app, ServiceState::Unreachable, Some(&e));
+            manager.set(app, ServiceState::Unreachable, Some(&e));
             Err(e)
         }
     }
@@ -757,8 +762,9 @@ fn stop_daemon_now() -> Result<(), String> {
 /// touch autostart registration — the update is expected to succeed
 /// and the daemon should come back exactly as before, not require the
 /// user to re-run the wizard. Frontend calls this before
-/// update.downloadAndInstall() and calls resume_daemon_after_update()
-/// after a successful install (see App.svelte checkForUpdate()).
+/// update.downloadAndInstall(). #1046（S-11）：装完不再由旧壳把 daemon 拉
+/// 回来——更新流程是「停 → 替换 → 重启壳 → 新壳启动对账」（`startup_reconcile`）；
+/// 装失败时前端走 `self_heal_daemon`（同一份「用户主动停止」判据）。
 /// Best-effort: NOT finding a running daemon is not an error (nothing
 /// to pause), and this must never block the update attempt itself —
 /// downloadAndInstall() still runs even if this errors, so a stuck
@@ -803,42 +809,6 @@ fn daemon_reported_pid() -> Option<u32> {
         .get("pid")?
         .as_u64()
         .and_then(|p| u32::try_from(p).ok())
-}
-
-/// Counterpart to pause_daemon_for_update(): bring the (now updated on
-/// disk) daemon back after the installer finishes (no autostart touch —
-/// it was never unregistered). #732：有 LaunchAgent 就交给 launchd
-/// `kickstart -k`，内核从此归 launchd 托管、日志进 LaunchAgent 的 `.err`；
-/// 没有（Windows Run key / 未登记）才退回一次性 spawn。Best-effort; the
-/// frontend degrades to "restart the app" guidance if this fails,
-/// rather than silently leaving the daemon down after an update the
-/// user believes succeeded.
-///
-/// #456 后续：用户主动停了服务（盘上有 `desktop-user-stopped` 标记）就不拉，
-/// 标记原样保留，界面仍给「启动后台服务」。判据在 Rust 这一侧、调用这一刻
-/// 读盘（和 `self_heal_daemon` 同一来源），不信前端缓存——托盘停止之后
-/// 前端的 wizard 状态可能还是旧的。之后用户手动启动走 `start_daemon`，它每次
-/// 都从 `current_exe()` 旁边现取 sidecar 并探活、重写 autostart，用的就是
-/// 更新后的新文件。返回 true = 拉起了；false = 按判据跳过（不是错误）。
-#[tauri::command]
-fn resume_daemon_after_update(app: tauri::AppHandle) -> Result<bool, String> {
-    let manager = app.state::<ServiceStateManager>().inner().clone();
-    if !update_resume_allowed(&platform::adapter().data_dir()) {
-        manager.set(
-            &app,
-            ServiceState::Stopped,
-            Some("user stopped; update keeps it stopped"),
-        );
-        return Ok(false);
-    }
-    manager.set(&app, ServiceState::Starting, Some("update resume"));
-    match bring_up_daemon(true) {
-        Ok(_) => Ok(true),
-        Err(e) => {
-            manager.set(&app, ServiceState::Unreachable, Some(&e));
-            Err(e)
-        }
-    }
 }
 
 /// #732：内核是怎么被拉起来的。
@@ -1310,14 +1280,33 @@ fn gather_kernel_facts() -> KernelFacts {
     }
 }
 
-/// 壳启动时跑一次（独立线程）。等内核答上 status，再按判据换。
+/// #1046（S-8 / S-11）：新壳启动时的幂等对账，一条线程里**按顺序**跑——更新流程
+/// 「停 → 替换 → 重启壳 → 新壳对账」的最后一步就是它：
+/// 1. 开机自启登记对账（`distribution::reconcile_autostart_registration`）：指向
+///    当前安装、内容是本版本的（含 launchd 日志落点）；用户停过就只撤不写。
+///    原先 daemon 接管旧实例后自己重装登记，这份职责归到这里。
+/// 2. 内核对账（#667）：内核比磁盘旧 / 不归服务管理器管 ⇒ 换；一直不可达 ⇒ 按自愈
+///    判据拉起（不是用户停的才拉）。原先由旧壳的 `resume_daemon_after_update` 先拉。
+///
+/// 先 1 后 2：登记重写（bootout + bootstrap）本身会重启 launchd 那份内核，与换内核
+/// 的 `kickstart -k` 并发会连着重启两次。
+fn startup_reconcile(app: tauri::AppHandle) {
+    reconcile_autostart_registration();
+    converge_kernel_on_startup(app);
+}
+
+/// 等内核答上 status，再按判据换（#667）。
 fn converge_kernel_on_startup(app: tauri::AppHandle) {
-    // 内核可能还没起来（登录时壳比内核先就绪）——最多等 90s；一直不答上
-    // 就交给既有的自愈，不在这里拉。
+    // 内核可能还没起来（登录时壳比内核先就绪）——最多等 90s。一直不答上就按自愈
+    // 判据拉一次（#1046：不依赖前端是否已加载、是否已触发自愈）。
     let deadline = std::time::Instant::now() + RESTART_GRACE;
     while !daemon_online() {
         if std::time::Instant::now() >= deadline {
-            eprintln!("#667: 内核一直不可达，跳过启动对账（交给自愈）");
+            match self_heal_now(&app, "startup reconcile") {
+                Ok(true) => eprintln!("#1046: 内核一直不可达，启动对账已按自愈判据拉起"),
+                Ok(false) => eprintln!("#1046: 内核一直不可达，按判据不拉（未配置或用户停过）"),
+                Err(e) => eprintln!("#1046: 内核一直不可达，启动对账拉起失败：{e}"),
+            }
             return;
         }
         std::thread::sleep(std::time::Duration::from_secs(2));
@@ -1448,7 +1437,6 @@ pub fn run() {
             daemon_startup_error,
             stop_daemon,
             pause_daemon_for_update,
-            resume_daemon_after_update,
             pending_shell_version,
             relaunch_shell,
             self_heal_daemon,
@@ -1470,17 +1458,15 @@ pub fn run() {
             // IPC-02: 启动即订阅——daemon 事件驱动 UI（扫码即时切弹窗、
             // 备份落地即时刷新），不依赖前端渲染时序。
             start_event_stream(app.handle().clone());
-            // #604 [DESK-42]：开机自启登记对账——注册条目必须指向**当前安装
-            // App 内**的 daemon。放独立线程：不一致时它会动 launchctl
-            // （bootout + bootstrap），不该堵启动。
-            std::thread::spawn(reconcile_autostart_registration);
             // UPD-06 (#616)：把壳登记成登录项（写 plist；下一次登录起由 launchd 接管，
             // 从那时起 kickstart 才是可用路径）。独立线程：只做一次文件读写。
             std::thread::spawn(register_shell_login_item);
-            // #667：内核比磁盘上的旧 / 不归 launchd 管 ⇒ 自动换（尊重用户停止与传输中）。
+            // #1046：新壳启动对账——先开机自启登记（#604，含老版本 plist 重新登记），
+            // 再内核（#667 自动换 / 一直不可达按自愈判据拉起）。独立线程：会动
+            // launchctl、要等内核，不该堵启动。
             {
                 let app = app.handle().clone();
-                std::thread::spawn(move || converge_kernel_on_startup(app));
+                std::thread::spawn(move || startup_reconcile(app));
             }
             // I18N-03 (#492)：文案取自 assets/i18n（见 TRAY_ITEMS）；前端
             // 报上语言后 set_tray_locale 会再改一次字。
@@ -2085,7 +2071,20 @@ mod tests {
             let rest = &product[start..];
             rest[..rest.find("\n}\n").expect("函数结尾")].to_string()
         };
-        assert!(product.contains("std::thread::spawn(move || converge_kernel_on_startup(app));"));
+        assert!(product.contains("std::thread::spawn(move || startup_reconcile(app));"));
+        // #1046：同一条线程先对账登记、再对账内核（登记重写会重启内核，并发会连着重启两次）。
+        let startup = body("startup_reconcile");
+        let reg = startup
+            .find("reconcile_autostart_registration();")
+            .expect("先对账登记");
+        let kernel = startup
+            .find("converge_kernel_on_startup(app);")
+            .expect("再对账内核");
+        assert!(reg < kernel);
+        assert!(
+            !product.contains("std::thread::spawn(reconcile_autostart_registration)"),
+            "登记对账不许再单开一条与换内核并发的线程"
+        );
         assert!(
             product.contains("kernel_convergence_phase,"),
             "查询命令要注册"
@@ -2433,11 +2432,12 @@ mod tests {
         );
     }
 
+    /// #1046（S-11）：更新后拉起 daemon 不再由旧壳的 `resume_daemon_after_update`
+    /// 做，改由新壳启动对账（内核一直不可达 ⇒ 按自愈判据拉起）。钉接线：
+    /// 命令已删、前端不再调；自愈与启动对账共用 `self_heal_now`，判据先于 spawn；
+    /// 自愈不杀在跑的内核。
     #[test]
-    fn update_resume_command_checks_the_on_disk_marker_before_spawning() {
-        // resume_daemon_after_update 本体走真实 adapter / current_exe，测试里不能调；
-        // 钉接线：判据读的是 Rust 侧 data dir 上的标记，且在 spawn 之前；
-        // 自愈与更新共用同一个 spawn，但各走各的判据。
+    fn update_resume_is_the_new_shells_startup_reconcile() {
         let src = include_str!("lib.rs").replace("\r\n", "\n");
         let product = src.split("#[cfg(test)]").next().unwrap_or(&src);
         let body = |name: &str| {
@@ -2447,24 +2447,23 @@ mod tests {
             let rest = &product[start..];
             rest[..rest.find("\n}\n").expect("函数结尾")].to_string()
         };
-        let resume = body("resume_daemon_after_update");
-        let gate = resume
-            .find("if !update_resume_allowed(&platform::adapter().data_dir()) {")
-            .expect("resume_daemon_after_update 必须先读盘上的「用户主动停止」标记");
-        // #732：更新后恢复 = 换版本（kill_running=true），走共用的 bring_up_daemon
-        // （先交给 launchd，退路才一次性 spawn）。
-        let spawn = resume
-            .find("bring_up_daemon(true)")
-            .expect("resume_daemon_after_update 走共用 bring_up_daemon(kill_running=true)");
+        assert!(!product.contains("fn resume_daemon_after_update("));
+        assert!(!include_str!("../../src/App.svelte").contains("resume_daemon_after_update"));
+        let heal = body("self_heal_now");
+        let gate = heal
+            .find("if !self_heal_allowed(&platform::adapter().data_dir()) {")
+            .expect("先读盘上的「用户主动停止」标记与配置");
+        let spawn = heal
+            .find("bring_up_daemon(false)")
+            .expect("自愈不杀在跑的内核");
         assert!(gate < spawn, "判据必须在 spawn 之前");
-        let heal = body("self_heal_daemon");
-        assert!(heal.contains("self_heal_allowed(&platform::adapter().data_dir())"));
+        assert!(body("self_heal_daemon").contains("self_heal_now(&app, "));
         assert!(
-            heal.contains("bring_up_daemon(false)"),
-            "自愈与更新无关：不许杀在跑的内核（kill_running=false）"
+            body("converge_kernel_on_startup")
+                .contains("self_heal_now(&app, \"startup reconcile\")"),
+            "启动对账：内核一直不可达时按自愈判据拉起（不依赖前端）"
         );
-        // 退路的一次性 spawn：不再带任何参数（#1041：`--post-update` 链路已退役，
-        // 新壳不再透传它；daemon 侧只对旧壳「接受并忽略」）。
+        // 退路的一次性 spawn：不带任何参数（#1041：`--post-update` 已退役）。
         let up = body("bring_up_daemon");
         assert!(up.contains("spawn_bundled_daemon_oneshot()"));
         let oneshot = body("spawn_bundled_daemon_oneshot");
@@ -2472,11 +2471,8 @@ mod tests {
             !oneshot.contains(".arg("),
             "一次性 spawn 不带任何命令行参数（含已退役的 --post-update）"
         );
-        assert!(
-            !heal.contains("resume_daemon_after_update()"),
-            "自愈不该绕进更新路径的判据"
-        );
     }
+
     /// UPD-05 (#605)：App.svelte 在 downloadAndInstall 成功路径里调用
     /// relaunch_shell（装完换壳）。#1041 删掉了前端从不 invoke 的 `restart_app`
     /// 命令，这里只保留对 relaunch_shell 调用次序的钉子。

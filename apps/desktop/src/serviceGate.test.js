@@ -41,9 +41,13 @@ describe("DESK-36 接线（App.svelte）", () => {
     expect(selfHealBody).not.toContain('invoke("resume_daemon_after_update")');
   });
 
-  it("更新流程仍然调 resume_daemon_after_update（成功与失败两条路都在）", () => {
+  it("更新装完不再由旧壳拉 daemon（新壳启动对账），装失败走自愈（#1046）", () => {
     const update = body(/async function checkForUpdate[\s\S]*?\n  \}\n/);
-    expect(update.match(/invoke\("resume_daemon_after_update"\)/g)?.length).toBe(2);
+    expect(update).not.toContain("resume_daemon_after_update");
+    const failure = update.slice(update.lastIndexOf("} catch (e) {"));
+    const success = update.slice(0, update.lastIndexOf("} catch (e) {"));
+    expect(success).not.toContain('invoke("self_heal_daemon")');
+    expect(failure).toContain('invoke("self_heal_daemon")');
   });
 
   it("停服后立即对账，托盘停止也订阅了", () => {

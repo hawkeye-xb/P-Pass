@@ -167,15 +167,6 @@ pub(crate) fn restore_missing_autostart_allowed(
     platform_restores && self_heal_allowed(data_dir)
 }
 
-/// #456 后续：更新流程装完（或装失败）之后要不要把 daemon 拉回来。
-/// 用户主动停了服务 = 一直停着，直到用户自己点「启动后台服务」；更新不算
-/// 用户的启动意图。其余情况（包括向导还没走完的机器）行为和原来一样：
-/// pause 杀掉了什么就拉回什么。不复用 `self_heal_allowed`——它多一条
-/// config.toml 判断，会改掉「没停过」时的更新行为。
-pub(crate) fn update_resume_allowed(data_dir: &std::path::Path) -> bool {
-    !is_user_stopped(data_dir)
-}
-
 /// 纯函数：在跑的内核（自报 pid）是不是"野生"的——服务管理器手里的 job pid
 /// 与它对不上。读不到自报 pid = 不知道 = 不算（fail-safe：不去动它）。
 pub(crate) fn daemon_is_unmanaged(running_pid: Option<u32>, resident_pid: Option<u32>) -> bool {
@@ -474,35 +465,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    // ── #456 后续：更新流程也尊重「用户主动停止」 ─────────────────────────
-
-    #[test]
-    fn update_brings_back_a_daemon_the_user_did_not_stop() {
-        // 没停过：pause 杀了什么，装完就拉回什么（W1 原语义不变）。
-        let dir = configured_data_dir();
-        assert!(update_resume_allowed(dir.path()));
-    }
-
-    #[test]
-    fn update_never_revives_a_daemon_the_user_stopped() {
-        // 规则：用户点了停止 → 一直停着，只有用户点「启动后台服务」才恢复。
-        let dir = configured_data_dir();
-        set_user_stopped(dir.path(), true).unwrap();
-        assert!(
-            !update_resume_allowed(dir.path()),
-            "用户主动停止了服务，更新装完却仍然判定要拉起它（#456 后续）"
-        );
-        // 标记原样保留：更新之后界面仍是「启动后台服务」。
-        assert!(is_user_stopped(dir.path()));
-    }
-
-    #[test]
-    fn update_resume_does_not_require_a_finished_wizard() {
-        // 「没停过时行为不变」：原来更新后恢复不看 config.toml，这里也不许加。
-        let dir = tempfile::tempdir().unwrap();
-        assert!(update_resume_allowed(dir.path()));
     }
 
     /// DESK-65 (#957)：启动对账先看停止标记，停过就只撤不写。

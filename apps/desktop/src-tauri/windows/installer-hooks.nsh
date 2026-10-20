@@ -10,8 +10,9 @@
 ; while they're held open by the running process — install fails.
 ;
 ; The app-side auto-update path (checkForUpdate() in App.svelte) already
-; handles this by calling pause_daemon_for_update/resume_daemon_after_update
-; around update.downloadAndInstall(). But that JS never runs when the
+; handles this by calling pause_daemon_for_update before
+; update.downloadAndInstall() (#1046: bringing it back is the POSTINSTALL
+; hook below plus the new shell's startup reconcile). But that JS never runs when the
 ; user bypasses the in-app updater entirely — downloading and
 ; double-clicking a new installer.exe directly, or the user closed the
 ; app and forgot it's still running in the tray. This hook covers that

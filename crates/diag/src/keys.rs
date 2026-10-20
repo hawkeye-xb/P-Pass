@@ -119,8 +119,8 @@ msg_keys! {
     UI_UPDATE_CHECK_FAILED => "ui.update_check_failed",
     // W1 (2026-08-26): the Windows-specific "a background process still
     // holds the file" failure mode of the update flow — see App.svelte
-    // checkForUpdate()'s pause_daemon_for_update/resume_daemon_after_update
-    // dance and its file-locked heuristic.
+    // checkForUpdate()'s pause_daemon_for_update step and its file-locked
+    // heuristic.
     UI_UPDATE_FAILED_FILE_LOCKED => "ui.update_failed_file_locked",
     /// UPD-05 (#605): the update installed but `relaunch_shell` itself failed —
     /// the user must quit and reopen the app by hand to finish.
