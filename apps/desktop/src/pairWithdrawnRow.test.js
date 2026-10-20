@@ -69,7 +69,7 @@ function desktop() {
   invokeMock.mockImplementation(async (cmd, args) => {
     switch (cmd) {
       case "wizard_state":
-        return { configured: true, installed: true, user_stopped: false };
+        return { show_wizard: false };
       case "service_state":
         return { state: "running" };
       case "self_heal_daemon":

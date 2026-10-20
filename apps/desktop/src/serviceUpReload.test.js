@@ -82,9 +82,9 @@ function stoppedDesktop({ slowOfflineTimeline = 0 } = {}) {
   invokeMock.mockImplementation(async (cmd, args) => {
     switch (cmd) {
       case "wizard_state":
-        // 配过、用户主动停的 → 留在主界面（shouldShowWizard = false）；
+        // 配过、用户主动停的 → 留在主界面（Rust 的 show_wizard = false）；
         // 正常常驻时 autostart 在，偶尔探活失败也不回向导。
-        return { configured: true, installed: !d.userStopped, user_stopped: d.userStopped };
+        return { show_wizard: false };
       case "service_state":
         // DESK-63 (#946)：Rust 侧状态；测试按 d.up/d.userStopped 扮演它。
         return { state: d.up ? "running" : d.userStopped ? "stopped" : "starting" };

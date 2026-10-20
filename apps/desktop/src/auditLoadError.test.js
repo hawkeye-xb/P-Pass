@@ -57,7 +57,7 @@ function desktop({ auditFails = false, events = [] } = {}) {
   invokeMock.mockImplementation(async (cmd, args) => {
     switch (cmd) {
       case "wizard_state":
-        return { configured: true, installed: true, user_stopped: false };
+        return { show_wizard: false };
       case "self_heal_daemon":
       case "notify_system":
         return null;

@@ -325,36 +325,58 @@ fn start_event_stream(app: tauri::AppHandle) {
     });
 }
 
-/// First-run wizard state (T-042): configured = a config.toml exists in
-/// the platform data dir; installed = the daemon has been registered as
-/// a resident service. A config without an installed service means the
-/// wizard was abandoned mid-way — route back into the wizard instead of
-/// dumping the user on a bare "start the service" screen (xixi 实测反馈 3).
+/// 首启向导**什么时候接管整个窗口**——判据只在这里（#1045，S-7）。前端只读
+/// `wizard_state.show_wizard`，不再自己拿 configured / installed / user_stopped
+/// 拼（那份拷贝在 `serviceGate.js`，与这里的 `self_heal_allowed` 各写一遍）。
+///
+/// - `online`：服务在线（Rust 持有的服务状态 = running）。在线永不显示向导。
+/// - `configured`：平台数据目录里有 config.toml。从没配置过 = 完整向导。
+/// - 配过、服务没注册（`!installed`）= 向导中途退出，回向导继续走（xixi 实测反馈 3）；
+///   但用户自己点了停止（`user_stopped`，DESK-36 #456）不算中途退出——停服会卸
+///   autostart，把它当中途退出会让重开 App 被打回完整 onboard，所以留在主界面给
+///   「启动服务」。
+///
+/// 纯函数：文件系统与服务状态由调用点探测后传入，判据本身单测（含反证）。
+fn show_wizard(configured: bool, installed: bool, user_stopped: bool, online: bool) -> bool {
+    if online {
+        return false;
+    }
+    if !configured {
+        return true;
+    }
+    !installed && !user_stopped
+}
+
+/// First-run wizard state (T-042)：直接回答「要不要显示向导」（`show_wizard`，
+/// 判据见 [`show_wizard`]），外加向导自己要用的预填值。
 /// T-042b: `configured_library_dir` prefills the wizard's folder step from
 /// the existing config, so a oneshot-degraded user (autostart registration
 /// failed → fallback spawn; lib.rs start_daemon Err branch) who bounces back
 /// into the wizard does NOT re-point the library to a fresh empty folder
 /// (orphaned-library risk) — the wizard shows what's already configured.
+///
+/// 服务状态变化时前端要重读这个命令（`service-state` 事件到了就读）——
+/// `show_wizard` 依赖「服务是否在线」，那是 Rust 一侧的状态。
 #[tauri::command]
-fn wizard_state() -> Value {
+fn wizard_state(app: tauri::AppHandle) -> Value {
     let dir = platform::adapter().data_dir();
     // Photos must land somewhere a person can FIND (real walkthrough:
     // "传到哪儿了" had no answer while the library hid in ~/Library).
     let pictures = default_library_dir(platform::adapter().pictures_dir());
     let installed = platform::hosting().autostart_installed().unwrap_or(false);
-    let configured_dir = ipc::read_config_data_dir(&dir);
+    let online = app.state::<ServiceStateManager>().current() == ServiceState::Running;
     json!({
-        "configured": dir.join("config.toml").exists(),
-        "installed": installed,
-        // DESK-36 (#456)：用户主动停了服务。停服会卸 autostart（installed
-        // 变 false），没有这一位的话重开 App 会被当成「向导中途退出」打回
-        // 完整 onboard（#155 的停服路径）；有了它，前端落回主界面给「启动服务」。
-        "user_stopped": is_user_stopped(&dir),
+        "show_wizard": show_wizard(
+            dir.join("config.toml").exists(),
+            installed,
+            is_user_stopped(&dir),
+            online,
+        ),
         "default_dir": pictures.to_string_lossy(),
         // Some of the library, if the config already points somewhere —
         // the wizard prefills this so re-running it never orphans the
         // existing library (T-042b).
-        "configured_library_dir": configured_dir,
+        "configured_library_dir": ipc::read_config_data_dir(&dir),
         // #1043：平台相关的界面决定由 `platform_ux` 命令给（适配器回答），
         // 这里不给平台名。
     })
@@ -2846,13 +2868,48 @@ mod tests {
         assert!(src.contains("            update_failure_key,\n"));
     }
 
+    /// 向导门的判据（DESK-36 #456 的矩阵，#1045 起在 Rust）。反证：去掉
+    /// `show_wizard` 里的 `&& !user_stopped`，「用户停了服务」那条必须红；去掉
+    /// 开头的 `online` 判断，「在线永不显示」那条必须红。
     #[test]
-    fn wizard_state_reports_the_user_stop_to_the_frontend() {
-        // 前端的向导门靠这一位区分「用户停了」和「向导中途退出」。
-        // 只钉字段名与来源——wizard_state() 本体读真实 data dir，不在测试里调。
+    fn the_wizard_gate_separates_user_stop_from_an_abandoned_wizard() {
+        // 从没配置过 → 完整向导；残留的停止标记也不能让新机器跳过向导。
+        assert!(show_wizard(false, false, false, false));
+        assert!(show_wizard(false, false, true, false));
+        // 配过、服务没注册、不是用户停的 → 向导中途退出，回向导。
+        assert!(show_wizard(true, false, false, false));
+        // 用户停了服务（autostart 被卸）→ 不回向导。
+        assert!(!show_wizard(true, false, true, false));
+        // 正常常驻、只是暂时离线 → 不显示（走自愈 / 启动按钮）。
+        assert!(!show_wizard(true, true, false, false));
+        // 服务在线 → 任何配置状态都不显示。
+        for configured in [false, true] {
+            for installed in [false, true] {
+                for user_stopped in [false, true] {
+                    assert!(
+                        !show_wizard(configured, installed, user_stopped, true),
+                        "online 时不许显示向导：{configured} {installed} {user_stopped}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// 接线：`wizard_state` 把判据结果交给前端，且**不再**把拼判据用的三个原料
+    /// 递出去（前端拿到就会忍不住再拼一份）。wizard_state() 本体读真实 data dir，
+    /// 不在测试里调。
+    #[test]
+    fn wizard_state_hands_the_verdict_not_the_ingredients() {
         let src = include_str!("lib.rs");
-        let product = src.split("#[cfg(test)]").next().unwrap_or(src);
-        assert!(product.contains("\"user_stopped\": is_user_stopped(&dir)"));
+        let body = product_fn_body(src, "wizard_state");
+        assert!(body.contains("\"show_wizard\": show_wizard("), "{body}");
+        for ingredient in ["\"configured\":", "\"installed\":", "\"user_stopped\":"] {
+            assert!(!body.contains(ingredient), "不许把 {ingredient} 交给前端");
+        }
+        assert!(
+            body.contains("ServiceState::Running"),
+            "在线要读 Rust 持有的服务状态"
+        );
     }
 
     // ── #456 后续：更新流程也尊重「用户主动停止」 ─────────────────────────

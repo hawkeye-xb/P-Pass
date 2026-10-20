@@ -2,8 +2,7 @@
   import { reconcilePhotoWall } from "./photoWall.js";
   import { shouldShowTrayHint, TRAY_HINT_SHOWN_KEY } from "./trayHint.js";
   import { loadPlatformUx, wizardVariant } from "./platformUx.js";
-  import { shouldShowWizard } from "./serviceGate.js";
-  import {
+    import {
     canStartService,
     canStopService,
     isServiceRunning,
@@ -104,7 +103,9 @@
     page = pageFromHash();
   }
 
-  let wizard = $state(null); // null=检测中, {configured, default_dir}
+  // null=检测中。`show_wizard` 是 Rust 给的结论（判据只在 Rust，#1045）；
+  // 前端不拿 configured / installed / user_stopped 自己拼。
+  let wizard = $state(null); // {show_wizard, default_dir, configured_library_dir}
   // #1043：平台界面能力（platform_ux）。null = 还没问到；向导等它到了再选视图。
   let platformUx = $state(null);
   let starting = $state(false);
@@ -142,8 +143,12 @@
     }
   }
 
+  // 并发读取只认最后发出的那次：服务状态连续变化时，先发后到的旧应答不许覆盖新结论。
+  let wizardSeq = 0;
   async function checkWizard() {
-    wizard = await invoke("wizard_state");
+    const seq = ++wizardSeq;
+    const next = await invoke("wizard_state");
+    if (seq === wizardSeq) wizard = next;
   }
 
   async function stopService() {
@@ -850,6 +855,9 @@
     if (!next) return;
     const previous = serviceState;
     serviceState = next;
+    // 向导要不要显示取决于「服务是否在线」，那是 Rust 一侧的状态——每次服务状态
+    // 变化都重读 wizard_state，拿 Rust 的结论（#1045）。
+    checkWizard().catch(() => {});
     if (next === "running") {
       clearTimeout(selfHealRetry);
       // DESK-38 (#475) semantics: only a real recovery resets/reconciles the
@@ -862,9 +870,8 @@
       maybeSelfHeal();
     } else if (next === "stopped") {
       clearTimeout(selfHealRetry);
-      // Tray stop reaches here before the toast; re-read the wizard so a
-      // user-stopped service is not mistaken for an abandoned wizard.
-      checkWizard().catch(() => {});
+      // 托盘停止先走到这里、再弹 toast：上面已经按 Rust 的结论重读了
+      // wizard_state（用户停的不会被当成向导中途退出）。
     }
   }
 
@@ -881,16 +888,8 @@
       return;
     }
     clearTimeout(selfHealRetry);
-    // The state event can arrive before the first wizard_state response.
-    // Load it now instead of silently skipping the one self-heal window.
-    if (!wizard) {
-      try {
-        await checkWizard();
-      } catch (_) {
-        return;
-      }
-    }
-    if (!wizard?.configured || wizard?.user_stopped) return;
+    // 要不要自愈（配置过、且不是用户主动停的）由 Rust 的 `self_heal_allowed`
+    // 在调用那一刻判；前端只管冷却节流，不拿向导状态自己拼一份判据（#1045）。
     const now = Date.now();
     const wait = SELF_HEAL_COOLDOWN_MS - (now - lastSelfHealAttempt);
     if (wait > 0) {
@@ -1447,7 +1446,7 @@
 
 <Toaster position="top-right" />
 
-{#if shouldShowWizard(wizard, isServiceRunning(serviceState))}
+{#if wizard?.show_wizard}
   <!-- T-042: onboarding 进行中不展示"后台服务未运行"终态——服务本来
        就要在这一步才被拉起，提前暴露只有困惑（xixi 实测反馈 1）。
        配置写了但服务没注册 = wizard 中途退出，重进继续走 wizard
