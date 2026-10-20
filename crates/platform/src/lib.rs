@@ -588,6 +588,16 @@ pub trait PlatformAdapter: Send + Sync {
         false
     }
 
+    /// #1043：系统错误码 `code`（`std::io::Error::raw_os_error`）是不是「文件被
+    /// 别的进程占着」——更新装不上时据此给用户一句能照做的话，而不是系统原文。
+    ///
+    /// 只回答系统错误码的含义，不匹配任何语言的错误文案。默认 `false`：只有
+    /// Windows 有「文件被占用就不能覆盖」这回事。
+    fn is_file_in_use_os_error(&self, code: i32) -> bool {
+        let _ = code;
+        false
+    }
+
     /// #1043：关窗（藏到托盘）时要不要提示一次「还在后台运行」。
     ///
     /// 默认 `true`：Windows 用户普遍以为点 X 就是退出（#303），Linux 的 GNOME

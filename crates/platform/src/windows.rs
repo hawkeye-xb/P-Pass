@@ -562,6 +562,14 @@ impl PlatformAdapter for WindowsAdapter {
         crate::data_migration::resolve(&legacy_data_dir(), &current_data_dir())
     }
 
+    /// #1043：`ERROR_SHARING_VIOLATION`（32，文件正被另一进程使用）与
+    /// `ERROR_ACCESS_DENIED`（5，覆盖正在运行的 exe 时常见）——与改前前端正则
+    /// 匹配的两句系统原文一一对应，只是改成按错误码判，与系统语言无关。
+    fn is_file_in_use_os_error(&self, code: i32) -> bool {
+        use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_SHARING_VIOLATION};
+        u32::try_from(code).is_ok_and(|c| c == ERROR_SHARING_VIOLATION || c == ERROR_ACCESS_DENIED)
+    }
+
     /// DAE-11 (#804)：插电时 daemon 自动持有 AwakeGuard，Windows 向导只说明
     /// 不让用户改设置（#1041 删掉了 Windows 侧的电源设置代改）。
     fn sleep_owner(&self) -> Option<crate::SleepOwner> {
@@ -2041,6 +2049,16 @@ mod b10_known_folder_tests {
         assert!(home.is_absolute(), "{}", home.display());
         assert!(pictures.is_absolute(), "{}", pictures.display());
         assert_ne!(home, pictures);
+    }
+
+    /// #1043：「文件被占用」只认 32 / 5 两个错误码。
+    #[test]
+    fn file_in_use_os_errors() {
+        let a = WindowsAdapter::new();
+        assert!(a.is_file_in_use_os_error(32));
+        assert!(a.is_file_in_use_os_error(5));
+        assert!(!a.is_file_in_use_os_error(2)); // 找不到文件
+        assert!(!a.is_file_in_use_os_error(-1));
     }
 
     /// #1043：界面层的平台能力（原先前端按平台名 switch 判出来的三项）。

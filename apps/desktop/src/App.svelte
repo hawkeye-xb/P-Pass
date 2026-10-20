@@ -1185,18 +1185,14 @@
       // 不再只靠一闪而过的 toast。
       updatePhase = "failed";
       updateError = msg;
-      // Heuristic for the Windows file-in-use class of failure (the one
-      // this pause/resume dance is meant to prevent) — if pause/resume
-      // itself couldn't clear it (third-party lock, AV scan holding the
-      // handle, etc.), tell the user the one concrete thing they can do
-      // instead of surfacing a raw OS error string.
-      // The \u escapes are the zh-CN Windows wording of the same two OS errors
-      // (拒绝访问 / 正被另一个进程使用) — OS text we match, not our copy.
-      if (/being used by another process|access is denied|\u62d2\u7edd\u8bbf\u95ee|\u6b63\u88ab\u53e6\u4e00\u4e2a\u8fdb\u7a0b\u4f7f\u7528/i.test(msg)) {
-        flashMessage(t("ui.update_failed_file_locked"), "error");
-      } else {
-        flashMessage(t("ui.update_failed", { err: msg }), "error");
-      }
+      // Windows「文件被占用」这类失败（pause/resume 也清不掉的：第三方占用、
+      // 杀软扫描握着句柄等）给用户一句能照做的话，而不是系统原文。判据在
+      // Rust 侧（#1043：按系统错误码，由平台适配器回答），这里只拿 key。
+      let key = "ui.update_failed";
+      try {
+        key = await invoke("update_failure_key", { message: msg });
+      } catch (_) {}
+      flashMessage(t(key, { err: msg }), "error");
     }
   }
 

@@ -388,6 +388,36 @@ fn platform_ux() -> Value {
     })
 }
 
+/// #1043：更新失败时给用户看哪句话（i18n key）。「文件被占用」由 Rust 侧判：
+/// 从 std `io::Error` 的 Display 尾巴 `(os error N)` 取系统错误码，含义问平台
+/// 适配器（`is_file_in_use_os_error`），不再在前端用正则匹配各语言的系统原文。
+///
+/// 注：tauri-plugin-updater 2.10 在 Windows 上把 NSIS 安装器拉起来就退出进程，
+/// 安装器覆盖文件失败发生在壳退出之后，到不了这里；能到这里的只有下载 / 写
+/// 临时文件阶段的 io 错误。
+#[tauri::command]
+fn update_failure_key(message: String) -> &'static str {
+    update_failure_key_with(&message, |code| {
+        platform::adapter().is_file_in_use_os_error(code)
+    })
+}
+
+/// [`update_failure_key`] 的纯函数部分（判据注入，三平台都测得到）。
+fn update_failure_key_with(message: &str, is_file_in_use: impl Fn(i32) -> bool) -> &'static str {
+    match os_error_code(message) {
+        Some(code) if is_file_in_use(code) => "ui.update_failed_file_locked",
+        _ => "ui.update_failed",
+    }
+}
+
+/// std `io::Error` 的 Display 以 ` (os error N)` 结尾（Rust 标准库的固定格式，
+/// 与系统语言无关）；取出 N。不是这个形状 = `None`。
+fn os_error_code(message: &str) -> Option<i32> {
+    let rest = message.trim_end().strip_suffix(')')?;
+    let start = rest.rfind("(os error ")? + "(os error ".len();
+    rest[start..].parse().ok()
+}
+
 /// Current sleep policy, humanized for the wizard.
 #[tauri::command]
 fn power_hint() -> Value {
@@ -2104,6 +2134,7 @@ pub fn run() {
             service_state,
             wizard_state,
             platform_ux,
+            update_failure_key,
             power_hint,
             open_power_settings,
             disable_auto_sleep,
@@ -3895,6 +3926,42 @@ mod tests {
             src.contains("            platform_ux,\n"),
             "platform_ux 未注册进 invoke_handler"
         );
+    }
+
+    /// #1043：更新失败的「文件被占用」由 Rust 侧按系统错误码判。输入就是前端
+    /// 实际拿到的那串——插件的 `Error::Io` 是 transparent，`to_string()` 即
+    /// `io::Error` 的 Display。判据注入，所以在任何平台上都能测。
+    /// 反证：改回匹配文案（不看错误码）→ 第三条红；判据不再问平台 → 第二条红。
+    #[test]
+    fn update_failure_key_reads_the_os_error_code() {
+        let locked = |c: i32| c == 32;
+        let io32 = std::io::Error::from_raw_os_error(32).to_string();
+        assert_eq!(os_error_code(&io32), Some(32), "{io32}");
+        assert_eq!(
+            update_failure_key_with(&io32, locked),
+            "ui.update_failed_file_locked"
+        );
+        let io2 = std::io::Error::from_raw_os_error(2).to_string();
+        assert_eq!(update_failure_key_with(&io2, locked), "ui.update_failed");
+        // 不是 io 错误（网络、签名……）：哪怕文案里提到「另一个进程」，也只给通用 key。
+        assert_eq!(
+            update_failure_key_with("Network error: the file is used by another process", locked),
+            "ui.update_failed"
+        );
+        assert_eq!(os_error_code("(os error x)"), None);
+        assert_eq!(os_error_code(""), None);
+        // 命令本体问的是平台适配器，且注册进了 invoke_handler。
+        let a = platform::adapter();
+        assert_eq!(
+            update_failure_key(io32.clone()),
+            if a.is_file_in_use_os_error(32) {
+                "ui.update_failed_file_locked"
+            } else {
+                "ui.update_failed"
+            }
+        );
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        assert!(src.contains("            update_failure_key,\n"));
     }
 
     #[test]
