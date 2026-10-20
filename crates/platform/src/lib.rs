@@ -33,6 +33,7 @@ mod data_migration;
 mod macos;
 // QA-09 迁移（#211）：macOS 与 Linux 共享的 unix 实现。迁过来的分叉里有
 // 3 处是 `#[cfg(unix)]`（同时覆盖两者），没有共享模块就得抄两遍。
+mod signal;
 #[cfg(unix)]
 mod unix;
 #[cfg(windows)]
@@ -42,6 +43,7 @@ mod windows;
 pub mod test_support;
 
 pub use data_migration::DataDirMigration;
+pub use signal::{stop_signal, StopRequest};
 
 #[cfg(target_os = "macos")]
 pub use macos::MacosAdapter;

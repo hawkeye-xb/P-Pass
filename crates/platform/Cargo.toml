@@ -13,6 +13,9 @@ test-support = []
 
 [dependencies]
 thiserror.workspace = true
+# #1047：停止信号（SIGTERM / Windows 控制台事件）。只开 signal + 运行时，
+# 不拉 net/io。
+tokio = { version = "1", features = ["signal", "rt"] }
 
 # QA-09 迁移（#211）：statvfs（卷容量水位 / DAE-05）。原先这个调用长在
 # crates/daemon 里，libc 也声明在那边；迁进来之后 daemon 不再需要它。
@@ -73,6 +76,7 @@ windows = { version = "0.62", features = [
 ] }
 
 [dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
 # fsevents_shapes 集成测试（macOS 目录监听平台行为实测）：直接驱动 notify。
 notify = "7"
 tempfile = "3"

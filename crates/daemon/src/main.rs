@@ -697,6 +697,16 @@ async fn main() -> anyhow::Result<()> {
         Ok(n) => tracing::info!("#851: 补完 {n} 条未换完的原图替换"),
         Err(e) => tracing::warn!("#851: 补完原图替换失败，下次启动再试: {e}"),
     }
+    // #1047：清掉上次入库被打断（kill -9 / 断电）留下的临时文件。必须在启动
+    // 对账之前、且在 watcher / router / IPC 能触发入库之前——运行期正在写的
+    // 临时文件与残留长得一模一样，只有此刻能确定没有入库在进行。判据见
+    // `core_index::sweep_ingest_residue`（文件名严格匹配 + 没有索引行；
+    // 绝不按内容特征猜，免得误删用户自己放进库里的文件）。
+    match core_index::sweep_ingest_residue(&db, &data_dir).await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!("#1047: 清理入库中断残留的临时文件 {n} 个"),
+        Err(e) => tracing::warn!("#1047: 清理入库残留失败，下次启动再试: {e}"),
+    }
     let reconcile = daemon::Reconcile::new(db.clone(), &data_dir)
         .with_events(event_bus.clone())
         .with_local_node_id(node_id.0);
@@ -814,28 +824,71 @@ async fn main() -> anyhow::Result<()> {
         daemon::events::STATUS_CHANGED,
         serde_json::json!({}),
     );
-    if ephemeral {
+    // #1047：停止信号（SIGTERM / Windows 控制台事件）与 --ephemeral 的 stdin
+    // EOF 走同一条收尾路径。离开 `router.serve` 即停止接新连接；之后只剩
+    // 收尾 + 退出，整体死线 SHUTDOWN_DEADLINE（Docker 默认 10s 后 SIGKILL，
+    // launchd 20s）。
+    //
+    // 这里只能保证「收得到信号时体面地走」；SIGKILL / 断电 / TerminateProcess
+    // 谁也收不到，那一类的安全由落盘侧兜底（入库不留占位文件 + 启动清残留，
+    // 见 core_index::sweep_ingest_residue）。
+    let stop = if ephemeral {
         // UX-07: --ephemeral — stdin EOF 即优雅退出（3 秒内），测试脚本
-        // 用它杜绝 A 类孤儿。router.serve 跑到 transport 关闭为止；EOF
-        // 信号一到，select 走退出分支，main 返回，进程干净结束。
+        // 用它杜绝 A 类孤儿。
         tokio::select! {
-            _ = router.serve(&transport) => {}
+            _ = router.serve(&transport) => None,
+            req = platform::stop_signal() => {
+                tracing::info!("#1047: 收到 {}，开始收尾退出", req.name());
+                Some(Some(req))
+            }
             _ = eof_rx => {
                 println!("--ephemeral: stdin 关闭，daemon 退出。");
-                // 显式 close endpoint：flush 连接关闭帧，否则 drop 清理
-                // 要数秒（验收限 3 秒内退出）。close 本身在部分环境下也
-                // 可能慢——给它 2s 上限，超时即强制退出：close 已 flush
-                // 协议层关闭帧，剩余 tokio 任务（定时循环）abort 无副作用。
-                tokio::time::timeout(std::time::Duration::from_secs(2), transport.close())
-                    .await
-                    .ok();
-                std::process::exit(0);
+                Some(None)
             }
         }
     } else {
-        router.serve(&transport).await;
+        tokio::select! {
+            _ = router.serve(&transport) => None,
+            req = platform::stop_signal() => {
+                tracing::info!("#1047: 收到 {}，开始收尾退出", req.name());
+                Some(Some(req))
+            }
+        }
+    };
+    if let Some(req) = stop {
+        shutdown(&transport, req).await;
     }
     Ok(())
+}
+
+/// #1047：收尾总死线。短于 Docker 的 10s SIGKILL 宽限。
+const SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// 收尾并退出（不返回）。`req` 为 `Some` = 由停止信号触发：收尾后以「被该信号
+/// 终止」的方式离开（见 `platform::StopRequest::finish`，保持服务管理器看到
+/// 的退出状态不变）；`None` = `--ephemeral` 的 stdin EOF，`exit(0)`。
+///
+/// 做的事：显式 close endpoint（flush 连接关闭帧，否则 drop 清理要数秒），
+/// 整体受 `SHUTDOWN_DEADLINE` 限制；收尾期间再收到一次停止信号 = 别等了，
+/// 立刻走。close 已 flush 协议层关闭帧，剩余 tokio 任务（定时循环）abort
+/// 无副作用；SQLite 是 WAL + synchronous=FULL，被中断的事务回滚，下次打开
+/// 自动恢复。
+async fn shutdown(transport: &transport::IrohTransport, req: Option<platform::StopRequest>) -> ! {
+    let graceful = tokio::time::timeout(SHUTDOWN_DEADLINE, transport.close());
+    tokio::select! {
+        r = graceful => {
+            if r.is_err() {
+                tracing::warn!("#1047: 收尾超过 {SHUTDOWN_DEADLINE:?}，强制退出");
+            }
+        }
+        again = platform::stop_signal() => {
+            tracing::warn!("#1047: 收尾期间又收到 {}，立即退出", again.name());
+        }
+    }
+    match req {
+        Some(req) => req.finish(),
+        None => std::process::exit(0),
+    }
 }
 
 /// The daemon's stable identity key, in `identity.key` beside the index
