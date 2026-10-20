@@ -157,14 +157,17 @@
   exists), that URL 404s — clients must treat it as "no update",
   **silently** (no error banner; a test tag you forgot to publish must
   never alarm users).
-- **Manifest scope**: Android reads `manifest-android.json`; the desktop
-  shell updates in-app through tauri-plugin-updater from its own per-platform
-  manifest — `manifest-macos.json` (the `.app.tar.gz` with `lib/` embedded)
-  and `manifest-windows.json` (NSIS, written by `finalize-manifest-windows`).
-  Test and stable use the same mechanism; only the manifest URL differs,
-  and it is written into the plugin config at build time
-  (`tools/release/tauri-config.mjs`, #852). The legacy `manifest.json`
-  carries no desktop entry.
+- **Manifest scope**: each platform a release builds writes its own manifest.
+  Android reads `manifest-android.json`; the desktop shell updates in-app
+  through tauri-plugin-updater — macOS from `manifest-macos.json` (the
+  `.app.tar.gz` with `lib/` embedded), Windows from `manifest-windows.json`
+  (NSIS, written by `finalize-manifest-windows`). Formal tags do not build
+  Windows yet (`plan-builds.sh`: `windows=skip`), so Windows updates exist on
+  the test channel only. Test and stable use the same mechanism; only the
+  manifest URL differs, written into the plugin config at build time
+  (`tools/release/tauri-config.mjs`, #852). The R2 mirror carries the
+  Android and macOS stable manifests. The legacy `manifest.json` carries no
+  desktop entry.
 - Signing: `UPDATE_SIGNING_KEY` (tauri signer, minisign hashed format).
   Without it the manifest ships with empty signatures and the release
   notes say "unsigned".
@@ -377,17 +380,19 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
 
 ## 3.5 更新清单（UPD-01）— 范围
 
-- 每次发版都产出分端清单（UPD-13 #660）：`manifest-android.json`、
-  `manifest-macos.json`、`manifest-windows.json`，顶层 `version` 是该端自己的
-  版本号，只含该端条目；老格式 `manifest.json` 只服务旧 Android 客户端（已冻结，
-  见 §1），不含桌面条目。
+- 分端清单（UPD-13 #660）：一次发版构建了哪一端，就产出哪一端的清单
+  （`manifest-android.json` / `manifest-macos.json` / `manifest-windows.json`），
+  顶层 `version` 是该端自己的版本号，只含该端条目；老格式 `manifest.json`
+  只服务旧 Android 客户端（已冻结，见 §1），不含桌面条目。
 - 桌面壳经 tauri-plugin-updater 应用内更新：macOS 产物是内嵌 `lib/` 的
   `.app.tar.gz`，Windows 是 NSIS（清单由 `finalize-manifest-windows` 出）。
-  test 与 stable 同一套机制，只有清单地址不同，地址在构建期写进插件配置
-  （`tools/release/tauri-config.mjs`，#852），桌面设置页不区分通道。
-- 客户端按有序候选列表取清单（R2 镜像优先、GitHub 兜底，UPD-12 #650）；
-  R2 只镜像正式版（UPD-18 #706）。某个来源回 404 或失败才跳过；最新版仍是
-  draft 时 404，一律静默当作「没有更新」。
+  正式 tag 目前不构建 Windows（`plan-builds.sh` 里 `windows=skip`），Windows
+  只在 test 通道有更新。test 与 stable 同一套机制，只有清单地址不同，地址在
+  构建期写进插件配置（`tools/release/tauri-config.mjs`，#852），桌面设置页不
+  区分通道。
+- Android 与 macOS 的正式版清单有 R2 镜像（UPD-12 #650 有序候选列表：R2 优先、
+  GitHub 兜底；R2 只镜像正式版，UPD-18 #706）。某个来源回 404 或失败才跳过；
+  最新版仍是 draft 时 404，一律静默当作「没有更新」。
 - `notes` / `notes_i18n` 取自手写说明 `release/notes/<端>/<版本>.<zh|en>.txt`
   （#741），不取 Release 正文。
 - 签名：`UPDATE_SIGNING_KEY`（tauri signer，minisign 格式）；缺失时清单签名为空，

@@ -45,8 +45,9 @@ daemon 启动时跑一轮对账，之后每小时一轮（`crates/daemon/src/rec
   daemon，空库建好后启动对账把整棵 `originals/` 收编回来。
 - **`index.sqlite` 损坏打不开**：daemon 启动失败（stderr 最后一行是
   `cli::startup_error_line` 的 JSON；只有「库 schema 比程序新」带
-  `ui.startup_migration_guidance` key）。把损坏的 `index.sqlite` 移出
-  `.ppf/` 后重启，即走上一条。
+  `ui.startup_migration_guidance` key）。把 `index.sqlite` 连同同目录的
+  `index.sqlite-wal`、`index.sqlite-shm` 三个文件一起移出 `.ppf/` 后重启（只移
+  主文件会让旧 WAL 与新库错配），即走上一条。
 - 已经丢失、只存在于索引里的信息（审计历史、设备行、配对 epoch）不在
   `originals/` 里，收编找不回；设备需要重新配对。
 

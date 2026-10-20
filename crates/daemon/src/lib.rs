@@ -34,9 +34,6 @@ pub mod watcher;
 /// #1047：收到停止信号后的收尾总死线。短于 Docker 的 10s SIGKILL 宽限。
 pub const SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(8);
 
-#[cfg(test)]
-mod business_rules_table;
-
 pub use authz::Decision;
 pub use backup::{BackupEngine, CommitOutcome, SESSION_IDLE_TTL, STAGING_ORPHAN_GRACE};
 pub use config::Config;
@@ -55,3 +52,6 @@ pub use reconcile::Reconcile;
 pub use router::Router;
 pub use thumb_pregen::{ThumbPregen, PREGEN_WORKERS};
 pub use watcher::LibraryWatcher;
+
+#[cfg(test)]
+mod business_rules_table;

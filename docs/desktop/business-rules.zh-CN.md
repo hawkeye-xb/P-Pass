@@ -28,7 +28,7 @@ daemon 是 `config.toml` 与诊断包的唯一写者（壳经子命令调用，�
 
 ### 1.2 `crates/platform` = 端口
 
-两个 trait，入口 `platform::adapter()` / `platform::hosting()`：
+两个 trait，入口 `platform::adapter()` / `platform::hosting()`（方法清单以 `crates/platform/src/lib.rs` 的 trait 定义为准，下面只列归属）：
 
 - `PlatformAdapter`（平台能力，`crates/` 任何 crate 可依赖）：`assert_awake`、`power_hint`、`notify`、`data_dir`、`system_locale`、`home_dir`、`pictures_dir`、`ingest_file_name_sanitizer`、`migrate_legacy_data_dir`、`volume_stats`、`on_external_power`、`watch_external_power`、`daemon_log_paths`、`default_log_tees_stderr`、`capture_unattached_stderr`、`restrict_to_owner`、`truncate_own_stderr`、`disable_auto_sleep`、`remove_stale_ipc_endpoint`、`system_video_thumbnail`、`platform_name`、`power_settings_uri`、`tray_icon_is_template`、`is_file_in_use_os_error`、`close_to_tray_hint`、`overlay_titlebar`、`sleep_owner`、`tray_shows_menu_on_left_click`。
 - `HostingAdapter`（托管，只许 `apps/desktop` 用）：自启登记（`install_autostart` / `uninstall_autostart` / `autostart_registration` / `reconcile_autostart` …）、`service_mode`、`stop_daemon`、`resident_daemon_pid`、`restart_resident_daemon`、壳登录项与换壳（`register_shell_login_item`、`kickstart_shell_agent` …）、`installed_bundle_version`、安装位置闸门（`is_install_location`）。
@@ -282,7 +282,7 @@ daemon 是 `config.toml` 与诊断包的唯一写者（壳经子命令调用，�
 ### 6.4 审计用户投影（`audit.list`）
 
 - 带 `visibility:"user"`：`Db::list_operations_excluding` 在 SQL 里先排除隐藏项、再截断（壳请求 500 条）。不带为全量（诊断口径）。
-- 隐藏：`HIDDEN_KINDS`（`device.connected`、`flow.round.controlled`、`flow.scope.changed`、`flow.epoch.invalidated`、`asset.relocated`、`asset.replaced_in_place`、`asset.superseded`、`index.rebuild`、`index.adopted`、`backup.commit`）与 `HIDDEN_PREFIXES`（`ingest.`、`flow.item.`）。有文案的 kind 在 `USER_KINDS_WITH_COPY`；未知 kind 保持可见、走兜底文案。`DAEMON_WRITTEN_KINDS` 里每个 kind 必须恰好属于两类之一（测试 `every_daemon_written_kind_has_copy_or_is_explicitly_hidden`）。
+- 隐藏清单是 `daemon::audit_projection::HIDDEN_KINDS` 与 `HIDDEN_PREFIXES`（`ingest.`、`flow.item.` 前缀，内部过程类 kind 如 `asset.relocated`、`index.adopted` 都在其中）；有文案的 kind 在 `USER_KINDS_WITH_COPY`。清单以代码为准，本文不复制；未知 kind 保持可见、走兜底文案。`DAEMON_WRITTEN_KINDS` 里每个 kind 必须恰好属于两类之一（测试 `every_daemon_written_kind_has_copy_or_is_explicitly_hidden`）。
 - `flow.round.finished` 的 `counts` 由 daemon 按 evidence 重算（`audit_projection::round_counts`），不读手机自报。
 - 外部删除提醒：前端 `lib/externalDelete.js`，只认 `asset.removed_external`，窗口 `EXTERNAL_DELETE_WINDOW_MS`；关闭状态只在内存。
 
