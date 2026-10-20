@@ -3,7 +3,7 @@
 > Base：`main@1954288f444315e64ed59e99ec896c6ee146b6fe`（开工前必须重新 fetch；验证前再确认 HEAD）。
 > 执行边界：Kimi 在远端 Linux 沙箱/GitHub 侧做代码、脚本、文档、CI 触发与判据；Windows 真机 L3 验证由本机执行并回贴原始输出。
 > 明确跳过：SmartScreen / 杀软信誉建设暂不纳入验收，只记录状态，不作为通过条件。
-> 纪律：不基于旧 `bin-*` 分支；不把 CI 绿当真机绿；不把计划写成已完成事实；平台 `cfg` 仍只许进 `crates/platform/`；桌面壳保持零业务逻辑。
+> 纪律：不基于旧 `bin-*` 分支；不把 CI 绿当真机绿；不把计划写成已完成事实；平台 `cfg` 仍只许进 `crates/platform/`；桌面壳 = UI + 托管、不做业务判断（ADR-012，见 `docs/desktop/business-rules.zh-CN.md` §1）。
 
 ## 一、目标与非目标
 
