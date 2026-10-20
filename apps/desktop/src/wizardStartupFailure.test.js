@@ -5,7 +5,7 @@
 //
 // 在这之前（QA-16 / #326）本仓没有组件渲染能力，这条链路的"护栏"是
 // `daemonStartupError.test.js` 里一段 `readFileSync` 源码 grep——它只检查
-// `invoke("daemon_startup_error")` 这个字符串在不在。把 Wizard.svelte:101 的
+// `invoke("daemon_startup_error")` 这个字符串在不在。把向导状态机（lib/wizardFlow.js）里的
 // `startupFailureText(stderr) ||` 删掉（只留兜底文案），字符串还在、行为已
 // 断，那条测试照样绿（#326 的 M3 变异，实测全绿）。
 //
@@ -15,7 +15,7 @@
 //   3. 兜底文案**没有**赢——`startupFailureText` 被摘掉时正是它顶上来，
 //      这条才是真正把 M3 钉死的判据。
 //
-// 反证（复现 #326 M3）：删掉 `Wizard.svelte:101` / `WizardWindows.svelte:99`
+// 反证（复现 #326 M3）：删掉 `lib/wizardFlow.js` finishSetup 里
 // 的 `startupFailureText(stderr) ||`，本文件必须红。
 import { cleanup, render, screen, fireEvent } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

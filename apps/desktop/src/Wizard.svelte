@@ -1,9 +1,8 @@
 <script>
   import { invoke } from "@tauri-apps/api/core";
-  import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import { Button } from "$lib/components/ui/button";
-  import { startupFailureText } from "$lib/daemonStartupError.js";
-  import { t, errText } from "$lib/i18n.js";
+  import { errText, t } from "$lib/i18n.js";
+  import { createWizardFlow, stepBar } from "$lib/wizardFlow.js";
 
   // DESK-15：按钮视觉合同收进 Button 组件本身（primary/secondary/danger/
   // link variant），本页只保留一个真实的版式例外——向导主按钮比全站其它
@@ -12,28 +11,22 @@
 
   let { defaultDir, configuredLibraryDir, onDone } = $props();
 
-  let step = $state(1);
-  // T-042b: 若 config 已指向某库（oneshot 降级/中途退出回 wizard），预填它——
-  // 用户直接"下一步"不会把库改到新空目录（孤儿库风险）。
-  // DESK-05: 新装时默认填充 defaultDir——不再要求先点「用默认位置」才能
-  // 继续；选了别的文件夹后路径旁出现「回到默认」按钮。
-  let libraryDir = $state(configuredLibraryDir || defaultDir);
+  // 三步状态机（选库 / 睡眠 / 常驻服务）与 chooseFolder、finishSetup 都在
+  // $lib/wizardFlow.js，两份向导共用（#1045）；本视图只保留 macOS 的文案和
+  // 第 2 步（电源状态）。
+  let view = $state({ step: 1, libraryDir: "", busy: false, error: "" });
   let power = $state(null); // {kind, minutes}
-  let busy = $state(false);
-  let error = $state("");
-
-  async function chooseFolder() {
-    const dir = await openDialog({
-      directory: true,
-      title: t("ui.wizard_choose_folder_title"),
-      defaultPath: defaultDir,
-    });
-    if (dir) libraryDir = dir;
-  }
-
-  function useDefault() {
-    libraryDir = defaultDir;
-  }
+  const flow = createWizardFlow({
+    defaultDir,
+    configuredLibraryDir,
+    onDone,
+    onChange: (patch) => Object.assign(view, patch),
+    // config 写成功后问一次电源状态，第 2 步据此渲染。
+    afterLibrarySaved: async () => {
+      power = await invoke("power_hint");
+    },
+  });
+  Object.assign(view, flow.snapshot());
 
   // 2026-08-17：一键关闭自动睡眠——独立的 busy/error 状态，不复用向导
   // 全局 busy（那个会连累"继续"按钮跟着置灰，这里只是个局部小动作）。
@@ -51,64 +44,6 @@
       sleepFixBusy = false;
     }
   }
-
-  async function toStep2() {
-    error = "";
-    busy = true;
-    try {
-      await invoke("write_config", { libraryDir });
-      power = await invoke("power_hint");
-      step = 2;
-    } catch (e) {
-      error = t("ui.wizard_save_failed", { err: errText(e) });
-    } finally {
-      busy = false;
-    }
-  }
-
-  async function toStep3() {
-    // 设计稿 v2：第 3 步 = 「设为常驻服务」说明页——先讲清楚会弹什么
-    // （开机自启通知 + 本地网络授权弹窗，#481）/不会做什么/被拦怎么办，再动手。真正的 start_daemon（含 autostart
-    // 注册）在用户点「完成」的 finishSetup 里才执行。
-    step = 3;
-  }
-
-  // 2026-08-17：第 3 步完成 = 整个 onboarding 完成，不再单开第 4 步扫码
-  // 页——总览页本来就有常驻的"添加设备"卡片（含"显示配对二维码"
-  // 按钮，不受配对状态影响一直显示），用户落地主界面自然看得到，不需要
-  // 在向导里重复一遍相同的能力。启动 daemon（此刻才注册开机自启）→
-  // 轮询 status 确认真的就绪（不然主界面会闪一下"服务未连接"）→ 直接
-  // onDone() 进主界面。
-  async function finishSetup() {
-    error = "";
-    busy = true;
-    try {
-      await invoke("start_daemon");
-      let ready = false;
-      for (let i = 0; i < 20; i++) {
-        await new Promise((r) => setTimeout(r, 500));
-        try {
-          await invoke("daemon_call", { method: "status", params: {} });
-          ready = true;
-          break;
-        } catch (_) {}
-      }
-      if (!ready) {
-        let stderr = null;
-        try {
-          stderr = await invoke("daemon_startup_error");
-        } catch (_) {}
-        throw new Error(
-          startupFailureText(stderr) || t("ui.wizard_daemon_not_started"),
-        );
-      }
-      onDone();
-    } catch (e) {
-      error = t("ui.wizard_start_failed", { err: errText(e) });
-    } finally {
-      busy = false;
-    }
-  }
 </script>
 
 <!-- 2026-08-17：整页对齐设计稿 v2（用户实测反馈"onboarding 整个流程
@@ -124,18 +59,18 @@
      主界面，用户落地总览页自然看得到那张卡片。 -->
 <div class="mt-4 flex flex-col gap-[22px] rounded-xl border border-border bg-paper px-8 py-7">
   <div class="flex gap-2">
-    {#each [t("ui.wizard_step_library"), t("ui.wizard_step_sleep"), t("ui.wizard_step_service")] as label, i}
-      <span class="text-[13px] font-semibold {step === i + 1 ? 'text-ink' : step > i + 1 ? 'text-safe' : 'text-ink-40'}">
-        {i + 1}. {label}
+    {#each stepBar(view.step) as s}
+      <span class="text-[13px] font-semibold {s.state === 'current' ? 'text-ink' : s.state === 'done' ? 'text-safe' : 'text-ink-40'}">
+        {s.n}. {s.label}
       </span>
     {/each}
   </div>
 
-  {#if error}
-    <p class="m-0 rounded-md bg-act-bg px-[14px] py-[10px] text-[15px] text-act">{error}</p>
+  {#if view.error}
+    <p class="m-0 rounded-md bg-act-bg px-[14px] py-[10px] text-[15px] text-act">{view.error}</p>
   {/if}
 
-  {#if step === 1}
+  {#if view.step === 1}
     <div class="flex flex-col gap-4">
       <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_library_title")}</h2>
       <p class="m-0 text-[15px] leading-[1.7] text-ink-60">{t("ui.wizard_library_body_mac")}</p>
@@ -143,11 +78,11 @@
            不再要求先点按钮才能继续。路径 ≠ 默认时旁挂「回到默认」链接，
            路径 = 默认时不显示（没有可回退的目标）。 -->
       <div class="flex items-center gap-[10px]">
-        <code class="flex-1 rounded-xl bg-linen px-4 py-[13px] font-mono text-[14px] text-ink-60 break-all">{libraryDir}</code>
-        <Button variant="secondary" class="flex-none" onclick={chooseFolder}>{t("ui.wizard_change_folder")}</Button>
+        <code class="flex-1 rounded-xl bg-linen px-4 py-[13px] font-mono text-[14px] text-ink-60 break-all">{view.libraryDir}</code>
+        <Button variant="secondary" class="flex-none" onclick={flow.chooseFolder}>{t("ui.wizard_change_folder")}</Button>
       </div>
-      {#if libraryDir !== defaultDir}
-        <Button variant="link" tone="safe" class="self-start" onclick={useDefault} title={t("ui.wizard_use_default")}>↺ {t("ui.wizard_use_default")}</Button>
+      {#if view.libraryDir !== defaultDir}
+        <Button variant="link" tone="safe" class="self-start" onclick={flow.useDefault} title={t("ui.wizard_use_default")}>↺ {t("ui.wizard_use_default")}</Button>
       {/if}
       <!-- 设计稿 v2：TCC 保护目录提醒——「桌面」「文稿」受 macOS 保护会
            额外弹一次权限申请，放不下时也更难搬家。 -->
@@ -155,9 +90,9 @@
     </div>
     <div class="mt-auto flex items-center justify-between">
       <span></span>
-      <Button class={WIZARD_PRIMARY_WIDE} disabled={!libraryDir || busy} onclick={toStep2}>{t("ui.wizard_continue")}</Button>
+      <Button class={WIZARD_PRIMARY_WIDE} disabled={!view.libraryDir || view.busy} onclick={flow.toStep2}>{t("ui.wizard_continue")}</Button>
     </div>
-  {:else if step === 2}
+  {:else if view.step === 2}
     <div class="flex flex-col gap-4">
       <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_sleep_title")}</h2>
       <p class="m-0 text-[15px] leading-[1.7] text-ink-60">{t("ui.wizard_sleep_body")}</p>
@@ -197,10 +132,10 @@
       {/if}
     </div>
     <div class="mt-auto flex items-center justify-between">
-      <Button variant="link" onclick={() => (step = 1)}>‹ {t("ui.wizard_back")}</Button>
-      <Button class={WIZARD_PRIMARY_WIDE} onclick={toStep3}>{t("ui.wizard_continue")}</Button>
+      <Button variant="link" onclick={flow.back}>‹ {t("ui.wizard_back")}</Button>
+      <Button class={WIZARD_PRIMARY_WIDE} onclick={flow.toStep3}>{t("ui.wizard_continue")}</Button>
     </div>
-  {:else if step === 3}
+  {:else if view.step === 3}
     <!-- 设计稿 v2：第 3 步 = 「设为常驻服务」——先讲清会弹什么（#481：
          开机自启通知 + 本地网络授权弹窗）/不会做什么/被拦怎么办，点「完成」才真正启动 daemon（含 autostart
          注册，finishSetup）。 -->
@@ -237,9 +172,9 @@
       </div>
     </div>
     <div class="mt-auto flex items-center justify-between">
-      <Button variant="link" onclick={() => (step = 2)}>‹ {t("ui.wizard_back")}</Button>
-      <Button class={WIZARD_PRIMARY_WIDE} disabled={busy} onclick={finishSetup}>
-        {busy ? t("ui.starting") : t("ui.wizard_finish")}
+      <Button variant="link" onclick={flow.back}>‹ {t("ui.wizard_back")}</Button>
+      <Button class={WIZARD_PRIMARY_WIDE} disabled={view.busy} onclick={flow.finishSetup}>
+        {view.busy ? t("ui.starting") : t("ui.wizard_finish")}
       </Button>
     </div>
   {/if}
