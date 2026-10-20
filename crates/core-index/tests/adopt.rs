@@ -212,3 +212,33 @@ async fn unprobeable_files_keep_honest_null_dimensions() {
         "探不到就是探不到，不许拿 0 充数"
     );
 }
+
+/// #1047 反证：0 字节文件（入库被杀留下的占位，或用户自己放的空文件）
+/// 不得被收编成资产，也不得被删——删没有安全的判据。正常文件照常收编。
+/// 去掉 `index_missing_files` 里的 `len == 0` 跳过，这条必红（asset 表会多出
+/// 一条 bytes=0 的行）。
+#[tokio::test(flavor = "multi_thread")]
+async fn zero_byte_files_are_neither_adopted_nor_deleted() {
+    let (dir, db) = setup().await;
+    let root = dir.path().join("library");
+    let dev = "ab".repeat(32);
+    let empty = write(&root, &format!("originals/{dev}/2026/10/IMG_1.jpg"), b"");
+    let users_empty = write(&root, "originals/我的相册/placeholder.txt", b"");
+    write(
+        &root,
+        &format!("originals/{dev}/2026/10/IMG_2.jpg"),
+        b"real",
+    );
+
+    let report = adopt_orphans(&db, &root, &LOCAL).await.unwrap();
+
+    assert_eq!(report.adopted, 1, "只收编有内容的那一个");
+    assert_eq!(report.skipped_empty, 2);
+    let page = db.timeline_page(None, 10).await.unwrap();
+    assert_eq!(page.assets.len(), 1);
+    assert!(
+        page.assets.iter().all(|a| a.bytes > 0),
+        "不得出现 bytes=0 的资产"
+    );
+    assert!(empty.exists() && users_empty.exists(), "0 字节文件不许被删");
+}
