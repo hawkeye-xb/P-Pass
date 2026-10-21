@@ -12,6 +12,8 @@
     "dialog:allow-confirm",
     "dialog:allow-message",
     "opener:allow-reveal-item-in-dir",
+    "opener:allow-open-url",
+    "opener:allow-default-urls",
     "updater:default"
   ]
 }

@@ -930,6 +930,10 @@ pub enum ResidentPause {
     NotRegistered,
     /// 本平台没有服务管理器语义——什么都没做。
     Unsupported,
+    /// 本平台不需要壳来暂停：安装器在替换文件前自己停服务，成功/失败都由
+    /// 安装器恢复（Windows 的 NSIS PREINSTALL / POSTINSTALL / `.onInstFailed`）。
+    /// 壳不动任务、不杀进程；安装器没启动时服务也不会中断。
+    NotApplicable,
 }
 
 /// Windows 的 `GetUserPreferredUILanguages` 返回 multi-sz（`a\0b\0\0`）的 UTF-16：
