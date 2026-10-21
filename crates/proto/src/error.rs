@@ -14,6 +14,20 @@
 //! // The unknown-reason holder is decode-only: nothing outside this crate can fill it.
 //! let _ = proto::RespError::new(proto::Reason::Unknown(proto::UnknownReason("x".into())));
 //! ```
+//!
+//! ```compile_fail
+//! // ... nor through the decode-side parser.
+//! let _ = proto::RespError::new(proto::Reason::from_wire("err.not_paired"));
+//! ```
+//!
+//! ```
+//! // The public parser only yields registered reasons.
+//! assert!(proto::Reason::registered("err.not_paired").is_none());
+//! assert_eq!(proto::Reason::registered("not_paired"), Some(proto::Reason::NotPaired));
+//! ```
+//!
+//! The one remaining way to hold an unregistered reason is decoding a peer's
+//! frame (`serde`) — by design, so a newer peer's reason survives.
 
 use std::collections::BTreeMap;
 
@@ -140,8 +154,14 @@ impl Reason {
         }
     }
 
-    /// Parse a wire string; anything unregistered is kept as [`Reason::Unknown`].
-    pub fn from_wire(s: &str) -> Reason {
+    /// A registered reason by its wire string (`None` for anything else).
+    pub fn registered(s: &str) -> Option<Reason> {
+        Reason::ALL.iter().find(|r| r.as_str() == s).cloned()
+    }
+
+    /// Decode-side parse: anything unregistered is kept as [`Reason::Unknown`].
+    /// Crate-private so no caller can turn a string into a sendable error.
+    pub(crate) fn from_wire(s: &str) -> Reason {
         Reason::ALL
             .iter()
             .find(|r| r.as_str() == s)

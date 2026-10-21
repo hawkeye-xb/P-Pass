@@ -7,7 +7,7 @@
 //!   state label for the bundled shell, not an error; out of #1070's scope).
 //!
 //! `crates/diag` is excluded: it is the UI text dictionary, not the wire.
-//! Comment lines and each file's trailing `#[cfg(test)]` module are skipped
+//! Comment lines and each file's `#[cfg(test)] mod` (from there on) are skipped
 //! (tests assert the absence / the shim, so they must name it).
 
 use std::path::{Path, PathBuf};
@@ -49,9 +49,16 @@ fn rust_sources(dir: &Path, out: &mut Vec<PathBuf>) {
 /// Offending `(file, line no, line)` triples in one source text.
 fn offenders(rel: &str, src: &str) -> Vec<(String, usize, String)> {
     let mut hits = Vec::new();
-    for (i, line) in src.lines().enumerate() {
+    let lines: Vec<&str> = src.lines().collect();
+    for (i, line) in lines.iter().enumerate() {
         let t = line.trim_start();
-        if t.starts_with("#[cfg(test)]") {
+        // Stop only at a test *module*; a lone `#[cfg(test)]` fn or impl in
+        // the middle of a file must not hide the production code after it.
+        if t.starts_with("#[cfg(test)]")
+            && lines
+                .get(i + 1)
+                .is_some_and(|next| next.trim_start().starts_with("mod "))
+        {
             break;
         }
         if t.starts_with("//") {
@@ -122,6 +129,9 @@ fn the_scanner_catches_the_old_shapes() {
     let ok =
         "// msg_key was here\nfn f() {}\n#[cfg(test)]\nmod tests { const K: &str = \"err.x\"; }\n";
     assert!(offenders("crates/daemon/src/x.rs", ok).is_empty());
+    // A lone test-only item mid-file does not end the scan.
+    let mid = "#[cfg(test)]\nfn helper() {}\nfn prod() { let k = \"err.x\"; }\n";
+    assert_eq!(offenders("crates/daemon/src/x.rs", mid).len(), 1);
     // The allow-list is per file.
     let shim = "const V1_SHIM: [&str; 3] = [\"msg_key\", \"err.unsupported\", \"fetch_failed\"];";
     assert!(offenders("crates/proto/src/error.rs", shim).is_empty());

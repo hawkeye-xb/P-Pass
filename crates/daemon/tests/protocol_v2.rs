@@ -518,8 +518,8 @@ fn every_reason_has_a_send_point_test() {
             "v2_errors_name_their_reason_on_the_wire",
             "Reason::NotFound",
         ),
-        // No wire path can make the store fail on demand; the mapping of the
-        // one Flow source of `internal` is pinned at unit level.
+        // No wire path makes the store contradict itself on demand; the
+        // mapping of the Flow source of `internal` is pinned at unit level.
         (
             Reason::Internal,
             "../src/flow_delivery.rs",
