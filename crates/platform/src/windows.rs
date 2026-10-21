@@ -1013,20 +1013,12 @@ impl HostingAdapter for WindowsAdapter {
         .flatten()
     }
 
-    /// #1060：结束在跑的实例并**禁用**任务（看门狗不会在替换文件时把服务拉起），
-    /// 任务定义保留、不写任何用户停止标记。恢复是 `restart_resident_daemon`：
-    /// 它会先 `SetEnabled(true)` 再运行。
+    /// #1063：Windows 上更新时**不需要壳暂停**。安装器的 PREINSTALL 会在替换
+    /// 文件前 disable 任务并 taskkill，POSTINSTALL 重启，失败由 `.onInstFailed`
+    /// 恢复；壳不动任务、不杀进程，所以下载与启动安装器期间服务照常跑，安装器
+    /// 根本没启动时服务也不会中断。macOS 仍由壳 `bootout`（DMG 替换没有钩子）。
     fn pause_resident_daemon(&self) -> Result<crate::ResidentPause> {
-        use windows::Win32::Foundation::VARIANT_FALSE;
-        with_task_folder("pause scheduled task", |folder| {
-            let Some(task) = get_task(folder)? else {
-                return Ok(crate::ResidentPause::NotRegistered);
-            };
-            // SAFETY: task 是有效的 COM 接口。
-            unsafe { task.SetEnabled(VARIANT_FALSE)? };
-            stop_task_instances(&task)?;
-            Ok(crate::ResidentPause::Paused)
-        })
+        Ok(crate::ResidentPause::NotApplicable)
     }
 
     /// DESK-65 (#957)：= `launchctl kickstart [-k]`。`kill_running` 时先结束在跑
@@ -2102,6 +2094,17 @@ mod b10_known_folder_tests {
         assert!(a.close_to_tray_hint());
         assert!(!a.overlay_titlebar());
         assert_eq!(a.sleep_owner(), Some(crate::SleepOwner::Daemon));
+    }
+
+    /// #1063：Windows 的「为更新暂停」退化为不做事——停/起由安装器负责。
+    /// 反证：把它改回 disable+kill，这个断言红，且安装器没启动时服务会中断。
+    #[test]
+    fn update_pause_is_not_applicable_on_windows() {
+        use crate::HostingAdapter as _;
+        assert_eq!(
+            WindowsAdapter::new().pause_resident_daemon().unwrap(),
+            crate::ResidentPause::NotApplicable
+        );
     }
 
     /// #1043（B6）/ #1056：真调 `GetUserPreferredUILanguages`，读得到、形状对（如 `en-US`）。

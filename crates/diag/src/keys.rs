@@ -133,6 +133,15 @@ msg_keys! {
     UI_UPDATE_INSTALLING => "ui.update_installing",
     UI_UPDATE_INSTALLED_STATE => "ui.update_installed_state",
     UI_UPDATE_RETRY => "ui.update_retry",
+    // #1063：安装失败后的横幅（重试 / 手动下载 / 关闭）。
+    UI_UPDATE_FAILED_BANNER_TITLE => "ui.update_failed_banner_title",
+    UI_UPDATE_FAILED_BANNER_BODY => "ui.update_failed_banner_body",
+    UI_UPDATE_FAILED_BANNER_BODY_VERSION => "ui.update_failed_banner_body_version",
+    UI_UPDATE_FAILED_SERVICE_RESTORED => "ui.update_failed_service_restored",
+    UI_UPDATE_FAILED_SERVICE_PENDING => "ui.update_failed_service_pending",
+    UI_UPDATE_FAILED_SERVICE_STOPPED => "ui.update_failed_service_stopped",
+    UI_UPDATE_MANUAL_DOWNLOAD => "ui.update_manual_download",
+    UI_UPDATE_FAILED_MANUAL_HINT => "ui.update_failed_manual_hint",
     UI_SHELL_RESTART_NEEDED => "ui.shell_restart_needed",
     UI_RESTART_APP_NOW => "ui.restart_app_now",
     UI_VERSION_MISMATCH => "ui.version_mismatch",
@@ -497,6 +506,14 @@ mod tests {
             UI_UPDATE_INSTALLING,
             UI_UPDATE_INSTALLED_STATE,
             UI_UPDATE_RETRY,
+            UI_UPDATE_FAILED_BANNER_TITLE,
+            UI_UPDATE_FAILED_BANNER_BODY,
+            UI_UPDATE_FAILED_BANNER_BODY_VERSION,
+            UI_UPDATE_FAILED_SERVICE_RESTORED,
+            UI_UPDATE_FAILED_SERVICE_PENDING,
+            UI_UPDATE_FAILED_SERVICE_STOPPED,
+            UI_UPDATE_MANUAL_DOWNLOAD,
+            UI_UPDATE_FAILED_MANUAL_HINT,
             UI_SHELL_RESTART_NEEDED,
             UI_RESTART_APP_NOW,
             UI_VERSION_MISMATCH,
@@ -738,7 +755,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 312);
+        assert_eq!(ALL.len(), 320);
     }
 
     #[test]

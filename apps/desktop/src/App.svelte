@@ -20,9 +20,15 @@
     message as messageDialog,
   } from "@tauri-apps/plugin-dialog";
   import { check as checkUpdate } from "@tauri-apps/plugin-updater";
-  import { revealItemInDir } from "@tauri-apps/plugin-opener";
+  import { revealItemInDir, openUrl } from "@tauri-apps/plugin-opener";
   import { openLibraryDir } from "./lib/openLibrary.js";
   import { runUpdate } from "./lib/updateFlow.js";
+  import {
+    RELEASES_URL,
+    updateFailureBodyKey,
+    updateFailureBodyParams,
+    updateFailureServiceKey,
+  } from "./lib/updateFailure.js";
   import QRCode from "qrcode";
   import { onMount, onDestroy } from "svelte";
   import Wizard from "./Wizard.svelte";
@@ -748,6 +754,8 @@
     invoke("kernel_convergence_phase")
       .then((p) => (kernelPhase = p || "idle"))
       .catch(() => {});
+    // #1063：上次安装失败留下的标记——读一次，主界面顶部给横幅。
+    loadUpdateFailure();
     // DESK-63 (#946): service state is event-driven. Subscribe first, then
     // read the snapshot — the event may fire before the listener is ready.
     listen("service-state", (ev) => applyServiceState(serviceStateFromEvent(ev?.payload))).then(
@@ -960,6 +968,46 @@
       updatePhase === "installing" ||
       updatePhase === "relaunching"
   );
+
+  // #1063：上一次安装失败（安装器 `.onInstFailed` 写的标记）。App 启动读一次，
+  // 在主界面顶部给横幅：重试 / 手动下载 / 关闭。关闭或重试都会清标记。
+  let updateFailure = $state(null);
+
+  async function loadUpdateFailure() {
+    try {
+      const s = await invoke("update_failure_state");
+      if (s?.failed) updateFailure = s;
+    } catch (e) {
+      console.warn("[updater] update_failure_state failed:", e);
+    }
+  }
+
+  async function clearUpdateFailureMarker() {
+    try {
+      await invoke("clear_update_failure");
+    } catch (e) {
+      console.warn("[updater] clear_update_failure failed:", e);
+    }
+  }
+
+  async function retryFailedUpdate() {
+    await clearUpdateFailureMarker();
+    updateFailure = null;
+    await checkForUpdate(true);
+  }
+
+  async function dismissUpdateFailure() {
+    await clearUpdateFailureMarker();
+    updateFailure = null;
+  }
+
+  async function openManualDownload() {
+    try {
+      await openUrl(RELEASES_URL);
+    } catch (e) {
+      console.warn("[updater] open releases page failed:", e);
+    }
+  }
 
   // 换壳（UPD-06）：壳旧时点「立即重启 App」。Rust 侧先试系统路径（launchd
   // kickstart：杀 + 拉都不在壳里发生），不行退化到壳自己重启；都走不到才报错。
@@ -1417,6 +1465,41 @@
     </aside>
 
     <main class="content" data-page={page}>
+
+      {#if updateFailure}
+        <!-- #1063：安装器写下的「上次更新失败」标记。旧版本继续可用；服务已由
+             安装器按判据恢复（用户停过的保持停止）。重试复用设置页的检查更新。 -->
+        <div
+          class="mb-4 rounded-xl border border-act/30 bg-act-bg px-5 py-4"
+          role="alert"
+          data-testid="update-failure-banner"
+        >
+          <p class="m-0 text-[15px] font-semibold text-act">
+            {t("ui.update_failed_banner_title")}
+          </p>
+          <p class="m-0 mt-1 text-[13.5px] leading-[1.6] text-ink-60">
+            {t(updateFailureBodyKey(updateFailure), updateFailureBodyParams(updateFailure))}
+            {" "}
+            {t(updateFailureServiceKey(updateFailure, isServiceRunning(serviceState)))}
+          </p>
+          <p class="m-0 mt-1 text-[12.5px] leading-[1.6] text-ink-40">
+            {t("ui.update_failed_manual_hint")}
+          </p>
+          <div class="mt-3 flex items-center gap-2">
+            <Button class="h-[34px] px-4 text-[13px]" onclick={retryFailedUpdate}>
+              {t("ui.update_retry")}
+            </Button>
+            <Button
+              variant="secondary"
+              class="h-[34px] px-4 text-[13px]"
+              onclick={openManualDownload}
+            >
+              {t("ui.update_manual_download")}
+            </Button>
+            <Button variant="link" onclick={dismissUpdateFailure}>{t("ui.close")}</Button>
+          </div>
+        </div>
+      {/if}
 
       {#if page === "overview"}
         <section class="page" data-testid="page-overview">

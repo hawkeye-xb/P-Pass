@@ -808,12 +808,81 @@ fn pause_daemon_for_update(app: tauri::AppHandle) -> Result<(), String> {
     // 先让服务管理器卸下常驻那份（登记保留、不写停止标记）：只 kill 的话 launchd
     // KeepAlive / 计划任务看门狗几秒内就用旧文件拉回来，等于没停。
     match platform::hosting().pause_resident_daemon() {
+        // #1063：Windows 不需要壳暂停——安装器 PREINSTALL/POSTINSTALL/onInstFailed
+        // 负责停、起、失败恢复。这里必须**连 stop_bundled_daemon 都不做**，否则又会
+        // 把服务杀掉、回到「安装器没启动就没人恢复」的老问题。
+        Ok(platform::ResidentPause::NotApplicable) => {
+            app.state::<UpdatePause>().end();
+            eprintln!("#1063: 本平台由安装器负责停/起服务，壳不暂停");
+            return Ok(());
+        }
         Ok(outcome) => eprintln!("#1060: 为更新暂停常驻服务：{outcome:?}"),
         Err(e) => eprintln!("#1060: 为更新暂停常驻服务失败（继续）：{e}"),
     }
     // 再清掉服务管理器管不到的（一次性 spawn 的）。QA-09 迁移（#211）：best-effort。
     let _ = stop_bundled_daemon();
     Ok(())
+}
+
+/// #1063：安装器失败标记。`.onInstFailed` 写、新壳启动读：
+///   install-failed
+///   version=<目标版本>
+///   service=1|0（安装器是否把服务恢复运行）
+/// 文件放在平台数据目录，与 `windows/installer-hooks.nsh` 是同一份契约。
+const UPDATE_FAILED_MARKER: &str = "update-failed";
+
+#[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
+struct UpdateFailureState {
+    failed: bool,
+    version: Option<String>,
+    service_restored: bool,
+}
+
+/// 读失败标记（纯函数，便于单测）。缺失/读不出/首行不是 `install-failed` 一律
+/// 当作没有失败——绝不因为一个坏文件让 App 每次启动都弹横幅。
+fn read_update_failure_at(dir: &std::path::Path) -> UpdateFailureState {
+    let Ok(text) = std::fs::read_to_string(dir.join(UPDATE_FAILED_MARKER)) else {
+        return UpdateFailureState::default();
+    };
+    let mut state = UpdateFailureState {
+        failed: text
+            .lines()
+            .next()
+            .is_some_and(|l| l.trim() == "install-failed"),
+        ..Default::default()
+    };
+    for line in text.lines().skip(1) {
+        let line = line.trim();
+        if let Some(v) = line.strip_prefix("version=") {
+            let v = v.trim();
+            if !v.is_empty() {
+                state.version = Some(v.to_string());
+            }
+        } else if let Some(v) = line.strip_prefix("service=") {
+            state.service_restored = v.trim() == "1";
+        }
+    }
+    state
+}
+
+fn clear_update_failure_at(dir: &std::path::Path) -> std::io::Result<()> {
+    match std::fs::remove_file(dir.join(UPDATE_FAILED_MARKER)) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+/// 前端启动时读一次：有没有「上次更新失败」的横幅要显示。
+#[tauri::command]
+fn update_failure_state() -> Value {
+    json!(read_update_failure_at(&platform::adapter().data_dir()))
+}
+
+/// 用户点了「重试更新」/「关闭」后清掉标记；没有标记也返回成功（幂等）。
+#[tauri::command]
+fn clear_update_failure() -> Result<(), String> {
+    clear_update_failure_at(&platform::adapter().data_dir()).map_err(|e| e.to_string())
 }
 
 /// B7（#1043）：结束内置 daemon——两平台同一套语义，由平台端口实现
@@ -1534,6 +1603,8 @@ pub fn run() {
             relaunch_shell,
             self_heal_daemon,
             resume_after_failed_update,
+            update_failure_state,
+            clear_update_failure,
             restart_daemon_process,
             kernel_convergence_phase,
             export_logs_bundle,
@@ -2807,6 +2878,91 @@ mod tests {
         assert!(
             product_fn_body(&src, "verify_sidecar_runs").contains("daemon_cli::probe_version("),
             "探活必须走 --version --json"
+        );
+    }
+
+    // ── #1063：安装失败标记（安装器写、新壳读、用户处理后清）────────────
+
+    #[test]
+    fn update_failure_marker_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            read_update_failure_at(dir.path()),
+            UpdateFailureState::default(),
+            "没有标记 = 没有失败"
+        );
+
+        std::fs::write(
+            dir.path().join(UPDATE_FAILED_MARKER),
+            "install-failed\nversion=0.10.1-dev.1012\nservice=1\n",
+        )
+        .unwrap();
+        let got = read_update_failure_at(dir.path());
+        assert!(got.failed);
+        assert_eq!(got.version.as_deref(), Some("0.10.1-dev.1012"));
+        assert!(got.service_restored);
+
+        clear_update_failure_at(dir.path()).unwrap();
+        assert!(!read_update_failure_at(dir.path()).failed, "清掉后不再提示");
+        // 幂等：没有标记时再清一次也算成功。
+        clear_update_failure_at(dir.path()).unwrap();
+    }
+
+    #[test]
+    fn update_failure_marker_rejects_garbage_and_service_zero() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(UPDATE_FAILED_MARKER), "hello\nversion=\n").unwrap();
+        assert_eq!(
+            read_update_failure_at(dir.path()),
+            UpdateFailureState::default(),
+            "首行不是 install-failed 就当没有失败"
+        );
+
+        std::fs::write(
+            dir.path().join(UPDATE_FAILED_MARKER),
+            "install-failed\nversion=\nservice=0\n",
+        )
+        .unwrap();
+        let got = read_update_failure_at(dir.path());
+        assert!(got.failed);
+        assert_eq!(got.version, None, "空版本不进横幅");
+        assert!(!got.service_restored, "service=0 = 用户停过，没恢复");
+    }
+
+    /// 安装器脚本和壳的契约：失败回调必须恢复服务、写标记，而且静默安装
+    /// 不弹对话框（提示留给下次启动的横幅）。
+    #[test]
+    fn installer_hooks_fail_recovery_contract() {
+        let hooks = include_str!("../windows/installer-hooks.nsh");
+        for needle in [
+            "Function .onInstFailed",
+            "Function UpdateFailureRecover",
+            "Call UpdateFailureRecover",
+            "--version --json",
+            "${StrStr}",
+            "update-failed",
+            "desktop-user-stopped",
+            "\"$SYSDIR\\schtasks.exe\" /Change /TN \"P-Pass\" /ENABLE",
+            "\"$SYSDIR\\schtasks.exe\" /Run /TN \"P-Pass\"",
+            "${IfNot} ${Silent}",
+        ] {
+            assert!(hooks.contains(needle), "installer-hooks.nsh 缺 {needle}");
+        }
+    }
+
+    #[test]
+    fn update_failure_commands_are_registered() {
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        assert!(src.contains("            update_failure_state,\n"));
+        assert!(src.contains("            clear_update_failure,\n"));
+        // 横幅的「手动下载」走前端 openUrl，缺这条权限会被 Tauri 直接拒。
+        assert!(
+            include_str!("../capabilities/default.json").contains("opener:allow-open-url"),
+            "capabilities/default.json 缺 opener:allow-open-url"
+        );
+        assert!(
+            include_str!("../capabilities/default.json").contains("opener:allow-default-urls"),
+            "capabilities/default.json 缺 opener:allow-default-urls（http/https 作用域）"
         );
     }
 }

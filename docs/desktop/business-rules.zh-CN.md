@@ -337,10 +337,11 @@ daemon 是 `config.toml` 与诊断包的唯一写者（壳经子命令调用，�
 ### 8.3 自愈与启动对账
 
 - `distribution::self_heal_allowed`：`config.toml` 存在 **且** 非用户停止。
-- 新壳启动（`lib.rs::startup_reconcile`，独立线程）：先 `reconcile_autostart_registration`（用户停过只撤残留登记；否则按内容对账：Rewritten #604 / Refreshed #1046 / Repaired #726；Windows 登记缺失时补登记 DESK-60），再 `converge_kernel_on_startup`。
+- 新壳启动（`lib.rs::startup_reconcile`，独立线程）：先 `reconcile_autostart_registration`（用户停过只撤残留登记；否则按内容对账：Rewritten #604 / Refreshed #1046 / Repaired #726；Windows 登记缺失时补登记 DESK-60），再 `resume_after_update`（#1060：更新期间暂停过、登记在、内核不在线才拉回），再 `converge_kernel_on_startup`。
 - `converge_kernel_on_startup` 先等 daemon 应答，最长 `RESTART_GRACE`；超时后**只有服务状态为 Unreachable** 才 `self_heal_now`（NotConfigured / Stopped 不拉，以免把用户踢出向导）。
 - 前端自愈 `maybeSelfHeal`：只在 `serviceState === "unreachable"` 时调 `self_heal_daemon`，重试冷却 `SELF_HEAL_COOLDOWN_MS`。与启动对账共用 `self_heal_now` 同一道门。
-- 应用内更新（#1060，两平台一致）：下载期间不停服务；下载完成后 `pause_daemon_for_update` 先进入「为更新暂停」窗口（进程内 `UpdatePause`，不落盘、不写用户停止标记），再经服务管理器卸下常驻实例（登记保留），然后 `install()`。窗口内 `self_heal_daemon` 一律跳过，避免旧二进制在替换前被拉回。下载或安装失败走 `resume_after_failed_update`：先关窗口，再按 `self_heal_allowed` 自愈。安装成功后由新壳启动对账拉起新版。
+- 应用内更新（#1060，两平台一致）：下载期间不停服务；下载完成后 `pause_daemon_for_update` 先进入「为更新暂停」窗口（进程内 `UpdatePause`，不落盘、不写用户停止标记），再经服务管理器卸下常驻实例（登记保留），然后 `install()`。窗口内 `self_heal_daemon` 一律跳过，避免旧二进制在替换前被拉回。下载失败走 `resume_after_failed_update`：先关窗口，再按 `self_heal_allowed` 自愈。安装成功后由新壳启动对账拉起新版。
+  - **Windows 例外（#1063）**：`HostingAdapter::pause_resident_daemon` 返回 `NotApplicable`，壳不暂停——安装器的 PREINSTALL 在替换文件前 disable + taskkill，POSTINSTALL 重启，失败由 `.onInstFailed` 恢复。这样下载/启动安装器期间服务照常跑，安装器根本没启动时也不会中断。macOS 的 DMG 替换没有安装钩子，仍由壳 `bootout`。
 - 服务状态（`service_state::ServiceState`）：`not_configured` / `stopped` / `starting` / `running` / `unreachable`；失败不会把 NotConfigured / Stopped「发明」成 Starting。
 
 ### 8.4 内核对账（自动换内核，#667 / #732）
@@ -368,8 +369,8 @@ daemon 是 `config.toml` 与诊断包的唯一写者（壳经子命令调用，�
 ### 8.7 应用内更新
 
 - 壳经 tauri-plugin-updater 检查 → 下载 → 验签 → 替换 → 重启；清单与通道见 `docs/RELEASING.md` §3.5、§3.6。
-- 流程：`pause_daemon_for_update` 停旧 daemon（**不写**用户停止标记、不动登记）→ 替换整包 → `relaunch_shell` 重启壳（macOS 已登记且指向自己时 `kickstart_shell_agent`，否则 `tauri::process::restart`；Windows 由 NSIS 安装器拉起新壳）→ 新壳启动对账（§8.3）拉起新 daemon。旧壳不再负责拉起（`resume_daemon_after_update` 已删，#1046）。
-- 安装失败：前端调 `self_heal_daemon`，并显示 `update_failure_key`（Windows「文件被占用」按系统错误码 `is_file_in_use_os_error` 给 key）。
+- 流程：下载 → 按平台暂停（macOS 壳 `bootout`；Windows 不暂停、交给安装器）→ 替换整包 → `relaunch_shell` 重启壳（macOS 已登记且指向自己时 `kickstart_shell_agent`，否则 `tauri::process::restart`；Windows 由 NSIS 安装器拉起新壳）→ 新壳启动对账（§8.3）拉起新 daemon。旧壳不再负责拉起（`resume_daemon_after_update` 已删，#1046）。
+- 安装失败：macOS 旧壳还在 → `resume_after_failed_update` 自愈并显示 `update_failure_key`；Windows 旧壳已由 updater 退出 → `.onInstFailed` 恢复服务（用户停过的保持停止）并写 `update-failed` 标记。NSIS 的 `File` 覆盖被占用时只置错误位、不触发 `.onInstFailed`，所以 POSTINSTALL 还会用 `ppf-daemon.exe --version --json` 复查是否真的换成了目标版本，不匹配走同一恢复路径。新壳启动时主界面横幅「上次更新没有完成」+ 重试 / 手动下载（发布页）/ 关闭；静默更新不弹安装器对话框，用户双击安装包（交互安装）失败才弹错误对话框。不做文件回滚（换安装模型另开卡）。
 
 ### 8.8 崩溃恢复时长
 
