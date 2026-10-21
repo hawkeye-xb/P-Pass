@@ -371,9 +371,10 @@ final class FlowEngineIOSTests: XCTestCase {
     func testEveryWaitReasonRegistersTheRightWake() {
         for reason in WaitReason.allCases {
             switch wakePlanOf(reason) {
-            case .awaitsUser: XCTAssertTrue([.notPaired, .disabled].contains(reason), "\(reason)")
+            // #1069：手机上的 P-Pass 太旧只能等用户更新。
+            case .awaitsUser: XCTAssertTrue([.notPaired, .disabled, .phoneOutdated].contains(reason), "\(reason)")
             case let .whenConditionsMet(r): XCTAssertEqual(r, reason); XCTAssertTrue([.wifi, .battery].contains(reason))
-            case .retryProbes: XCTAssertFalse([.notPaired, .disabled, .wifi, .battery].contains(reason))
+            case .retryProbes: XCTAssertFalse([.notPaired, .disabled, .wifi, .battery, .phoneOutdated].contains(reason))
             }
         }
     }

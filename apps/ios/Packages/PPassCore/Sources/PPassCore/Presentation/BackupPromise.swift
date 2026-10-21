@@ -54,7 +54,8 @@ public enum BackupPromise {
             case .executionBlocked: out.append(PromiseNotice(waitOpenApp))
             case .originalUnavailable: out.append(PromiseNotice(waitICloudOriginal))
             case .localStorageFull: out.append(PromiseNotice(waitPhoneStorageFull))
-            case .notPaired, .disabled, .wifi, .battery, .desktopUnreachable, .desktopStorageFull, .desktopLibraryUnavailable, .desktopStorageError, .unexpectedError:
+            case .notPaired, .disabled, .wifi, .battery, .desktopUnreachable, .desktopStorageFull, .desktopLibraryUnavailable, .desktopStorageError, .unexpectedError,
+                 .desktopInternal, .phoneOutdated, .desktopOutdated:
                 break
             }
         }

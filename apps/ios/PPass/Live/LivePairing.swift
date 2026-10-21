@@ -6,8 +6,8 @@ import UIKit
 /// 配对结局的判决（对位 Android `PairVerdict`）。
 enum PairVerdict: Equatable {
     case accepted(PairAccepted)
-    /// 电脑那边说不：pair.status 的 `denied`，或 pair.request 被拒（note 按 `reason` 本端挑，nil = 通用文案）。
-    case denied(PairNote?)
+    /// 电脑那边说不：pair.status 的 `denied`，或 pair.request 被拒（note 按 `reason` 本端挑）。
+    case denied(PairNote)
     case expired, desktopRestarted, desktopTooOld
     /// #1069：协议版本不兼容（`VERSION_MISMATCH`）。不是电脑主人拒绝的，提示更新。
     case versionMismatch(OutdatedSide)
@@ -19,15 +19,14 @@ enum PairVerdict: Equatable {
         case .denied(let note): return .refused(note: note, ownerSaidNo: true)
         case .expired: return .refused(note: .expired, ownerSaidNo: false)
         case .desktopRestarted: return .refused(note: .desktopRestarted, ownerSaidNo: false)
-        case .desktopTooOld, .versionMismatch: return .refused(note: .versionMismatch, ownerSaidNo: false)
+        case .desktopTooOld: return .needsUpdate(.desktop)
+        case .versionMismatch(let side): return .needsUpdate(side)
         case .unreachable(let reason): return .failed(reason: reason)
         }
     }
 
     /// pair.request 被拒（#1073 归类表配对通道）：版本不兼容单独成判决，其余都是「电脑那边说不」。
     static func rejected(_ error: RespError?) -> PairVerdict {
-        // 没带 error 的拒绝：与 v1 同一句「没有访问权限」。
-        guard let error else { return .denied(.notAuthorized) }
         let reason = DesktopReason(error)
         if case let .versionMismatch(side) = reasonClass(reason, channel: .reply) { return .versionMismatch(side) }
         return .denied(PairNote(rejection: reason))
@@ -49,6 +48,8 @@ struct PairVerdictLoop {
         let hello: Resp
         do { hello = try await rpc(Methods.hello, EmptyParams()) } catch { return .unreachable(String(describing: error)) }
         var mayWithdraw = true
+        // #1069：版本在握手时判定——不兼容就不发起配对请求，直接提示更新哪一端。
+        if !hello.ok, let side = hello.outdatedSide { return .versionMismatch(side) }
         if hello.ok {
             let caps = (try? hello.result?.decode(Hello.self))?.capabilities ?? []
             if !caps.contains(Self.statusCapability) { return .desktopTooOld }
@@ -101,8 +102,8 @@ struct PairVerdictLoop {
                 failures += 1
                 lastFailure = "pair.status: accepted without payload"
                 if failures >= maxConsecutiveFailures { return .unreachable(lastFailure) }
-            // v2 的 denied 不带说明（#1070）；本端给 v1 时代同一句「没有访问权限」。
-            case "denied": return .denied(.notAuthorized)
+            // v2 的 denied 不带说明（#1070），本端自己说（#1072 §5）。
+            case "denied": return .denied(.denied)
             case "expired": return .expired
             case "not_found": return .desktopRestarted
             default: break
@@ -158,7 +159,9 @@ final class LivePairing: PairingService, @unchecked Sendable {
         // 已是这台电脑的成员（电脑换了地址 / 身份）：hello 对成员带回非空 pairing_epoch，未配对 / 已撤销的设备拿不到
         // （已撤销的 hello 直接被拒），语义对位 Android（#1051）。hello 超时 / 被拒 / 没带 epoch 都落回正常配对，
         // 不存空 epoch / 空电脑名（#970）。
-        if let hello = await memberHello(rpc), let epoch = hello.pairingEpoch, !epoch.isEmpty {
+        let member = await memberHello(rpc)
+        if case let .outdated(side) = member { return PairVerdict.versionMismatch(side).outcome }
+        if case let .hello(hello) = member, let epoch = hello.pairingEpoch, !epoch.isEmpty {
             // 「连没连过」必须在 save 之前定：save 里的 onPaired 会把这台标成连过（#982：之前顺序反了，firstTime 恒为 false）。
             let known = onboarded(code.nodeId)
             do { try save(code, name: hello.deviceName, epoch: epoch, known: known) } catch {
@@ -197,17 +200,23 @@ final class LivePairing: PairingService, @unchecked Sendable {
         await onDisconnect()
     }
 
-    private func memberHello(_ rpc: (String, Encodable) async throws -> Resp) async -> Hello? {
+    private enum MemberHello { case hello(Hello), outdated(OutdatedSide), none }
+
+    private func memberHello(_ rpc: (String, Encodable) async throws -> Resp) async -> MemberHello {
         do {
             let reply = try await rpc(Methods.hello, EmptyParams())
+            if !reply.ok, let side = reply.outdatedSide {
+                AppLog.log("pair: hello says the \(side.rawValue) is outdated; not pairing")
+                return .outdated(side)
+            }
             guard reply.ok, let hello = try reply.result?.decode(Hello.self) else {
                 AppLog.log("pair: member fast path hello gave no usable result (ok=\(reply.ok)); falling back to pairing")
-                return nil
+                return .none
             }
-            return hello
+            return .hello(hello)
         } catch {
             AppLog.log("pair: member fast path hello failed (\(error)); falling back to pairing")
-            return nil
+            return .none
         }
     }
 

@@ -18,6 +18,12 @@ public enum WaitReason: String, CaseIterable, Codable, Sendable {
     case desktopStorageFull = "DESKTOP_STORAGE_FULL"
     case desktopLibraryUnavailable = "DESKTOP_LIBRARY_UNAVAILABLE"
     case desktopStorageError = "DESKTOP_STORAGE_ERROR"
+    /// #1069：电脑上的 P-Pass 自己出错了（`internal`）。退避探测重试。
+    case desktopInternal = "DESKTOP_INTERNAL"
+    /// #1069：手机上的 P-Pass 太旧，电脑不接受——等用户更新 App。不计失败、不动配对。
+    case phoneOutdated = "PHONE_OUTDATED"
+    /// #1069：电脑上的 P-Pass 太旧（它自己说的，或旧电脑的应答不带 `ver`）——等电脑更新，退避探测。
+    case desktopOutdated = "DESKTOP_OUTDATED"
     /// #762：手机这边一轮跑到一半抛了没分类的异常。按偶发处理：退避探测重试。
     case unexpectedError = "UNEXPECTED_ERROR"
     /// iOS 新增（#311 D4）：iCloud 优化存储下原图不在本机，拉取因网络失败——不计失败预算，等网络 / 探测梯。

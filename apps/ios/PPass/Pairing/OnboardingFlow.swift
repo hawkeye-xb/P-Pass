@@ -1,4 +1,5 @@
 import AVFoundation
+import PPassCore
 import SwiftUI
 
 /// 欢迎 → 扫码 / 手动输入配对串 → 配对状态（对位 Android Onboarding.kt + ScanScreen.kt + PairStatusScreen）。
@@ -6,7 +7,7 @@ import SwiftUI
 /// 没有相机（模拟器）或没给相机权限时，扫码页直接说明并给出「手动输入」入口。
 struct OnboardingFlow: View {
     enum Step: Equatable { case welcome, scan, manual, status(PairStep) }
-    enum PairStep: Equatable { case waiting, refused(lapsed: Bool, note: String?), failed(String) }
+    enum PairStep: Equatable { case waiting, refused(lapsed: Bool, note: String?), needsUpdate(OutdatedSide), failed(String) }
 
     @EnvironmentObject var app: AppModel
     @State private var step: Step = .welcome
@@ -66,6 +67,7 @@ struct OnboardingFlow: View {
             case .joined(let firstTime): app.paired(firstTime: firstTime)
             case .refused(let note, let ownerSaidNo):
                 step = .status(.refused(lapsed: !ownerSaidNo, note: note?.text))
+            case .needsUpdate(let side): step = .status(.needsUpdate(side))
             case .failed(let reason): step = .status(.failed(reason))
             }
         }
@@ -167,6 +169,11 @@ struct PairStatusScreen: View {
                     symbol("xmark.circle.fill", PPColor.act)
                     message(title: L.s(lapsed ? "pair_lapsed_title" : "pair_refused_title"), body: L.s("pair_refused_body"),
                             note: note)
+                case .needsUpdate(let side):
+                    // #1069：配对过程中发现版本不兼容——标题「需要更新」，正文说清是哪一端的 P-Pass。
+                    symbol("arrow.down.circle.fill", PPColor.act)
+                    message(title: L.s(side == .phone ? "update_needed_phone_title" : "update_needed_desktop_title"),
+                            body: L.s(side == .phone ? "pair_needs_update_phone_body" : "pair_needs_update_desktop_body"))
                 case .failed(let reason):
                     symbol("exclamationmark.triangle.fill", PPColor.act)
                     message(title: L.s("pair_failed_title"), body: L.s("pair_failed_body"),

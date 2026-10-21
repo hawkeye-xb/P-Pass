@@ -47,6 +47,8 @@ public enum PeerFailureKind: String, Sendable {
     case storageFull = "STORAGE_FULL"
     case libraryUnavailable = "LIBRARY_UNAVAILABLE"
     case storageError = "STORAGE_ERROR"
+    /// #1069：电脑上的 P-Pass 自己出错了（`internal`）。
+    case desktopInternal = "DESKTOP_INTERNAL"
 }
 
 public func waitReasonOf(_ kind: PeerFailureKind) -> WaitReason {
@@ -54,6 +56,15 @@ public func waitReasonOf(_ kind: PeerFailureKind) -> WaitReason {
     case .storageFull: return .desktopStorageFull
     case .libraryUnavailable: return .desktopLibraryUnavailable
     case .storageError: return .desktopStorageError
+    case .desktopInternal: return .desktopInternal
+    }
+}
+
+/// 版本不兼容 → 等待原因。
+public func waitReasonOf(_ side: OutdatedSide) -> WaitReason {
+    switch side {
+    case .phone: return .phoneOutdated
+    case .desktop: return .desktopOutdated
     }
 }
 
@@ -149,7 +160,10 @@ public func wakePlanOf(_ reason: WaitReason) -> WakePlan {
     case .wifi, .battery: return .whenConditionsMet(reason)
     // iOS 变体：执行时间被收回 / 拿不到——没有 Android 的 FGS 额度窗口可算，交给探测梯（由 BGTask 尽力兑现）。
     case .executionBlocked: return .retryProbes
-    case .desktopUnreachable, .desktopStorageFull, .desktopLibraryUnavailable, .desktopStorageError, .unexpectedError: return .retryProbes
+    case .desktopUnreachable, .desktopStorageFull, .desktopLibraryUnavailable, .desktopStorageError, .desktopInternal, .unexpectedError: return .retryProbes
+    // #1069：手机太旧要用户去更新（更新后 App 重启自然重来）；电脑太旧时手机能做的只有过一阵再问（与 Android 同）。
+    case .phoneOutdated: return .awaitsUser
+    case .desktopOutdated: return .retryProbes
     // D4：iCloud 原图因网络拉不下来——与桌面不可达同一类（网络回来时网络变化就是触发，探测梯兜底）。
     case .originalUnavailable: return .retryProbes
     // #911：空间释放没有系统事件可等；探测梯 + 回前台 / 周期兜底接住。
@@ -309,6 +323,10 @@ public enum DeliveryOutcome: Equatable, Sendable {
     /// 桌面自身的问题：退出循环，不计次数，原因带回手机显示。
     case peerFailure(PeerFailureKind, code: String)
     case pairingLost
+    /// #1069：协议版本不兼容。退出循环，不计次数，不动配对，提示更新哪一端。
+    case versionMismatch(OutdatedSide)
+    /// #1069：桌面拒绝了这条请求，但不是照片的问题（手机发错请求 / 不认识的 reason）：退出循环、退避，不计次数。
+    case desktopRejected(String)
 }
 
 /// 传输端口。
@@ -335,6 +353,8 @@ public enum ProbeResult: Equatable, Sendable {
     case reachable(advertisedEpoch: String?, health: DesktopHealth?, capabilities: Set<String>)
     case unreachable
     case pairingLost
+    /// #1069：握手（hello）发现版本不兼容——不申请租约、不发起传输。
+    case versionMismatch(OutdatedSide)
 }
 
 /// 实现自己带超时；被取消时应尽快返回（引擎在返回后检查取消）。

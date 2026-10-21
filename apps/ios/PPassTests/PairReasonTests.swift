@@ -19,58 +19,60 @@ final class PairReasonTests: XCTestCase {
 
     private func rejected(_ code: String, _ reason: String) -> Resp { Resp(ok: false, error: RespError(code: code, reason: reason)) }
 
-    /// 令牌无效：与 v1 同一句「没有访问权限」，算电脑那边说不。
-    func test_bad_token_is_a_refusal_with_the_same_note_as_v1() async throws {
+    /// 令牌无效：本端文案「配对码无效或已被使用」，算电脑那边说不（#1072 §5）。
+    func test_bad_token_is_a_refusal_with_its_own_note() async throws {
         let v = try await loop([Methods.hello: try hello(), Methods.pairRequest: rejected(Codes.notAuthorized, "pair_token_invalid")]).run(token: "t", deviceName: "d")
-        XCTAssertEqual(v, .denied(.notAuthorized))
-        XCTAssertEqual(v.outcome, .refused(note: .notAuthorized, ownerSaidNo: true))
+        XCTAssertEqual(v, .denied(.tokenInvalid))
+        XCTAssertEqual(v.outcome, .refused(note: .tokenInvalid, ownerSaidNo: true))
     }
 
-    /// 版本不兼容：不是电脑主人拒绝的（ownerSaidNo=false），说明是「可能有一端需要更新版本」。
-    func test_version_mismatch_is_not_the_owner_saying_no() async throws {
+    /// 版本在握手（hello）时判定：不兼容就不发 pair.request，直接「需要更新」（#1069）。
+    func test_version_mismatch_at_hello_never_sends_the_pair_request() async throws {
         for (reason, side) in [("phone_outdated", OutdatedSide.phone), ("desktop_outdated", .desktop)] {
-            let v = try await loop([Methods.hello: try hello(), Methods.pairRequest: rejected("VERSION_MISMATCH", reason)]).run(token: "t", deviceName: "d")
+            var calls: [String] = []
+            var l = PairVerdictLoop(rpc: { method, _ in
+                calls.append(method)
+                return Resp(ok: false, error: RespError(code: Codes.versionMismatch, reason: reason))
+            })
+            l.pollIntervalNs = 1_000_000
+            let v = try await l.run(token: "t", deviceName: "d")
             XCTAssertEqual(v, .versionMismatch(side), reason)
-            XCTAssertEqual(v.outcome, .refused(note: .versionMismatch, ownerSaidNo: false), reason)
+            XCTAssertEqual(v.outcome, .needsUpdate(side), reason)
+            XCTAssertEqual(calls, [Methods.hello], "不发起配对请求")
         }
     }
 
-    /// 拒绝却没带 error：与 v1 同一句。
-    func test_rejection_without_an_error_keeps_the_v1_note() {
-        XCTAssertEqual(PairVerdict.rejected(nil), .denied(.notAuthorized))
+    /// pair.request 上才收到版本拒绝（兜底）：同样是「需要更新」。电脑不认识方法 = 电脑太旧。
+    func test_version_rejection_on_the_request_is_needs_update() async throws {
+        for (reason, side) in [("phone_outdated", OutdatedSide.phone), ("unsupported_method", .desktop)] {
+            let code = reason == "unsupported_method" ? Codes.invalidRequest : Codes.versionMismatch
+            let v = try await loop([Methods.hello: try hello(), Methods.pairRequest: rejected(code, reason)]).run(token: "t", deviceName: "d")
+            XCTAssertEqual(v.outcome, .needsUpdate(side), reason)
+        }
     }
 
-    /// 不认识的 reason：只显示通用文案（note=nil），绝不显示原始代码。
-    func test_unknown_reason_shows_only_the_generic_text() async throws {
+    /// 不认识的 reason：通用提示，绝不显示原始代码。
+    func test_unknown_reason_shows_the_generic_note() async throws {
         let v = try await loop([Methods.hello: try hello(), Methods.pairRequest: rejected("SOMETHING_NEW", "from_the_future")]).run(token: "t", deviceName: "d")
-        XCTAssertEqual(v.outcome, .refused(note: nil, ownerSaidNo: true))
+        XCTAssertEqual(v.outcome, .refused(note: .generic, ownerSaidNo: true))
     }
 
-    /// v2 的 pair.status denied 不带说明：本端给 v1 时代同一句。
+    /// v2 的 pair.status denied 不带说明：本端「电脑上拒绝了这次加入」。
     func test_denied_status_uses_the_local_note() async throws {
         let submitted = Resp(ok: true, result: try JSONValue.from(PairSubmitted(accepted: true, requestId: "r1", ttlMs: 60_000)))
         let denied = Resp(ok: true, result: try JSONValue.from(PairStatusReply(state: "denied")))
         let v = try await loop([Methods.hello: try hello(), Methods.pairRequest: submitted, Methods.pairStatus: denied]).run(token: "t", deviceName: "d")
-        XCTAssertEqual(v.outcome, .refused(note: .notAuthorized, ownerSaidNo: true))
+        XCTAssertEqual(v.outcome, .refused(note: .denied, ownerSaidNo: true))
     }
 
-    /// 每条说明都能在本机字典里解析出人话（缺了就会退回只显示通用文案）。
-    func test_every_note_resolves_to_text() {
-        for note in [PairNote.notAuthorized, .notPaired, .versionMismatch, .expired, .desktopRestarted] {
+    /// 每条说明的 key 都在打包的文案表里（en / zh-Hans）。
+    func test_every_note_key_is_bundled() {
+        for note in PairNote.allCases {
             for lang in ["en", "zh-Hans"] {
-                XCTAssertNotNil(DiagText.resolve(note.diagKey, language: lang), "\(note) / \(lang)")
+                let path = Bundle.main.path(forResource: lang, ofType: "lproj").flatMap(Bundle.init(path:))
+                let text = path?.localizedString(forKey: note.key, value: "\u{1}", table: nil)
+                XCTAssertNotEqual(text, "\u{1}", "\(note.key) / \(lang)")
             }
-        }
-    }
-
-    /// 穷举：登记表里每个 reason 在配对通道都有显式说明或显式「通用文案」（switch 无 default，编译期兜住新值）。
-    func test_pair_note_for_every_registered_reason() {
-        let expected: [ProtoReason: PairNote?] = [
-            .pairTokenInvalid: .notAuthorized, .revoked: .notAuthorized, .roleForbidden: .notAuthorized, .notPaired: .notPaired,
-            .phoneOutdated: .versionMismatch, .desktopOutdated: .versionMismatch, .unsupportedMethod: .versionMismatch, .badRequest: .versionMismatch,
-        ]
-        for r in ProtoReason.allCases where r != .unknown {
-            XCTAssertEqual(PairNote(rejection: .registered(r)), expected[r] ?? nil, r.rawValue)
         }
     }
 }

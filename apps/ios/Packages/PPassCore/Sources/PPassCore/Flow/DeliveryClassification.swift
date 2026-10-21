@@ -29,22 +29,25 @@ public enum OutdatedSide: String, Equatable, Sendable {
     case desktop
 }
 
-/// 一条 `reason` 的控制流归类（#1073，与 Android #1072 逐条一致）。
+/// 一条 `reason` 的控制流归类（#1069 拍板：按「问题出在哪、谁能解决」，#1072 / #1073 两端逐条一致）。
 public enum ReasonClass: Equatable, Sendable {
     /// 配对已失效：红卡、停备份，出路是重新扫码。
     case pairingLost
     /// 协议版本不兼容：停备份、不计失败、不动配对，提示更新 [OutdatedSide] 那一端。
     case versionMismatch(OutdatedSide)
-    /// 桌面自身的问题：不计次数，原因带回手机显示。
+    /// 电脑端的问题：退出本轮，不计次数，原因带回手机显示。
     case peerFailure(PeerFailureKind)
-    /// 路走不通：可续传，不计次数。
+    /// 网络：路走不通，可续传，不计次数。
     case pathFailure
-    /// 这一张的问题（今天的兜底）：计次数、有上限。
+    /// 手机发错了请求（程序缺陷）/ 不认识的 reason：不算照片失败，退出本轮、退避，写日志，显示通用提示。
+    case requestRejected
+    /// 这张照片本身的问题：计次数、有上限。#1069：只有 `bad_request` 里「票据内容与 hash 不一致」这一种，
+    /// 线上还分不出来（待 daemon 补细分 reason），所以目前没有 reason 落在这里；推送通道的 `grant_*` 维持今天。
     case itemFailure
 }
 
-/// 桌面错误是从哪条通道来的。今天两条通道的判据不同（基线 = v1 桌面实际发的 msg_key / 推送 code）：
-/// 应答拒绝先看「配对失效」，`flow.failed` 推送从来不判配对失效。
+/// 桌面错误是从哪条通道来的。归类只有一张表；唯一的区别是待拍板的 `grant_not_found` / `grant_conflict`
+/// 暂时维持今天的行为（应答 = 配对失效，`flow.failed` 推送 = 单张失败）。
 public enum ReasonChannel: Sendable {
     /// 一条请求的 `ok=false` 应答（offer / status / hello 探测 / 前台心跳 / 配对失效红卡）。
     case reply
@@ -53,24 +56,21 @@ public enum ReasonChannel: Sendable {
 }
 
 /// #1073 归类表。`ProtoReason` 的 switch 不带 `default`：登记表新增一个值，这里编译不过，逼着显式归类。
-///
-/// 应答通道的「配对失效」= v1 桌面回 `err.not_paired` / `err.not_authorized` 的全部情况（今天的 `isPairingLostText`）：
-/// authz 的未配对 / 已移除 / 角色不允许，offer 的 GuardMismatch（v2 拆成 epoch_mismatch / grant_not_found /
-/// grant_conflict）与 Cancelled，pair.request 的令牌无效。`unsupported_method` 在 v1 有两个来源：authz 拒未知方法
-/// （err.not_authorized）与 router 未注入（err.unsupported）；手机只调已知方法，实际只会是后者 → 单张失败。
 public func reasonClass(_ reason: DesktopReason, channel: ReasonChannel) -> ReasonClass {
-    guard case let .registered(r) = reason else { return .itemFailure }
+    guard case let .registered(r) = reason else { return .requestRejected }
     switch r {
+    case .notPaired, .revoked, .epochMismatch, .roleForbidden: return .pairingLost
+    case .phoneOutdated: return .versionMismatch(.phone)
+    // 电脑不认识手机调用的方法：电脑那边的 P-Pass 太旧。
+    case .desktopOutdated, .unsupportedMethod: return .versionMismatch(.desktop)
     case .storageFull: return .peerFailure(.storageFull)
     case .libraryUnavailable: return .peerFailure(.libraryUnavailable)
     case .storageFailed: return .peerFailure(.storageError)
+    case .internal: return .peerFailure(.desktopInternal)
     case .fetchFailed: return .pathFailure
-    case .phoneOutdated: return channel == .reply ? .versionMismatch(.phone) : .itemFailure
-    case .desktopOutdated: return channel == .reply ? .versionMismatch(.desktop) : .itemFailure
-    case .notPaired, .revoked, .roleForbidden, .pairTokenInvalid, .epochMismatch, .grantNotFound, .grantConflict, .cancelled:
-        return channel == .reply ? .pairingLost : .itemFailure
-    case .unsupportedMethod, .badRequest, .notFound, .internal, .backupFailed, .unknown:
-        return .itemFailure
+    // 待 #1072 查清后拍板：先维持今天（v1 的 offer 应答是 err.not_authorized、推送是 guard_mismatch）。
+    case .grantNotFound, .grantConflict: return channel == .reply ? .pairingLost : .itemFailure
+    case .badRequest, .notFound, .backupFailed, .cancelled, .pairTokenInvalid, .unknown: return .requestRejected
     }
 }
 
@@ -90,12 +90,15 @@ public struct DesktopRejected: Error, Equatable, Sendable {
     public var isPairingLost: Bool { reasonClass == .pairingLost }
 }
 
-/// 不计失败的那几类归类 → 传输结局；配对失效 / 版本不兼容 / 单张失败由调用方决定（两条通道的去向不同）。
+/// 归类 → 传输结局；单张失败由调用方带上自己的说明（两条通道的前缀不同）。
 func deliveryOutcome(_ reason: DesktopReason, _ cls: ReasonClass) -> DeliveryOutcome? {
     switch cls {
+    case .pairingLost: return .pairingLost
+    case let .versionMismatch(side): return .versionMismatch(side)
     case let .peerFailure(kind): return .peerFailure(kind, code: reason.description)
     case .pathFailure: return .pathFailure(reason.description)
-    case .pairingLost, .versionMismatch, .itemFailure: return nil
+    case .requestRejected: return .desktopRejected(reason.description)
+    case .itemFailure: return nil
     }
 }
 
@@ -117,9 +120,7 @@ public struct InconsistentReply: Error, Equatable, Sendable {
 /// 传输过程中抛出的错误的分类。桌面可达且明确拒绝不是路径问题（否则一条坏请求每次都把循环停下、且永不计次）。
 public func classifyDeliveryFailure(_ error: Error) -> DeliveryOutcome {
     if let rejected = error as? DesktopRejected {
-        let cls = rejected.reasonClass
-        if cls == .pairingLost { return .pairingLost }
-        return deliveryOutcome(rejected.reason, cls) ?? .itemFailure("rejected:\(rejected.reason)")
+        return deliveryOutcome(rejected.reason, rejected.reasonClass) ?? .itemFailure("rejected:\(rejected.reason)")
     }
     if error is ReceiptMismatch || error is InconsistentReply || error is DecodingError || error is ProtoMalformed {
         return .itemFailure("invalid:\(type(of: error))")

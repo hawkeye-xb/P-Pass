@@ -4,28 +4,29 @@ import XCTest
 
 /// #1073：协议 v2 `reason` 的控制流归类。与 Android #1072 是同一张表（两端逐条一致，改一端必须改另一端）。
 final class ReasonClassificationTests: XCTestCase {
-    /// reason → 应答通道 / 推送通道的归类。行序与 `reasons_registry` 金样一致。
+    /// reason → 应答通道 / 推送通道的归类（#1069 拍板 https://github.com/hawkeye-xb/P-Pass/issues/1069#issuecomment-6306902273）。
+    /// 行序与 `reasons_registry` 金样一致。两列只在待拍板的 `grant_*` 上不同（维持今天）。
     /// 应答通道 = offer / status / hello 探测 / 前台心跳 / 配对失效红卡；推送通道 = `flow.failed`。
     static let table: [(reason: String, reply: String, push: String)] = [
-        ("not_paired", "pairing_lost", "item_failure"),
-        ("revoked", "pairing_lost", "item_failure"),
-        ("role_forbidden", "pairing_lost", "item_failure"),
-        ("pair_token_invalid", "pairing_lost", "item_failure"),
-        ("phone_outdated", "version_mismatch:phone", "item_failure"),
-        ("desktop_outdated", "version_mismatch:desktop", "item_failure"),
-        ("unsupported_method", "item_failure", "item_failure"),
-        ("bad_request", "item_failure", "item_failure"),
-        ("not_found", "item_failure", "item_failure"),
-        ("internal", "item_failure", "item_failure"),
-        ("backup_failed", "item_failure", "item_failure"),
+        ("not_paired", "pairing_lost", "pairing_lost"),
+        ("revoked", "pairing_lost", "pairing_lost"),
+        ("role_forbidden", "pairing_lost", "pairing_lost"),
+        ("pair_token_invalid", "request_rejected", "request_rejected"),
+        ("phone_outdated", "version_mismatch:phone", "version_mismatch:phone"),
+        ("desktop_outdated", "version_mismatch:desktop", "version_mismatch:desktop"),
+        ("unsupported_method", "version_mismatch:desktop", "version_mismatch:desktop"),
+        ("bad_request", "request_rejected", "request_rejected"),
+        ("not_found", "request_rejected", "request_rejected"),
+        ("internal", "peer_failure:DESKTOP_INTERNAL", "peer_failure:DESKTOP_INTERNAL"),
+        ("backup_failed", "request_rejected", "request_rejected"),
         ("storage_full", "peer_failure:STORAGE_FULL", "peer_failure:STORAGE_FULL"),
         ("library_unavailable", "peer_failure:LIBRARY_UNAVAILABLE", "peer_failure:LIBRARY_UNAVAILABLE"),
         ("storage_failed", "peer_failure:STORAGE_ERROR", "peer_failure:STORAGE_ERROR"),
         ("fetch_failed", "path_failure", "path_failure"),
-        ("epoch_mismatch", "pairing_lost", "item_failure"),
-        ("grant_not_found", "pairing_lost", "item_failure"),
-        ("grant_conflict", "pairing_lost", "item_failure"),
-        ("cancelled", "pairing_lost", "item_failure"),
+        ("epoch_mismatch", "pairing_lost", "pairing_lost"),
+        ("grant_not_found", "pairing_lost", "item_failure"), // 待 #1072 拍板，维持今天
+        ("grant_conflict", "pairing_lost", "item_failure"), // 待 #1072 拍板，维持今天
+        ("cancelled", "request_rejected", "request_rejected"),
     ]
 
     static func label(_ c: ReasonClass) -> String {
@@ -34,6 +35,7 @@ final class ReasonClassificationTests: XCTestCase {
         case let .versionMismatch(side): return "version_mismatch:\(side.rawValue)"
         case let .peerFailure(kind): return "peer_failure:\(kind.rawValue)"
         case .pathFailure: return "path_failure"
+        case .requestRejected: return "request_rejected"
         case .itemFailure: return "item_failure"
         }
     }
@@ -49,17 +51,17 @@ final class ReasonClassificationTests: XCTestCase {
         }
     }
 
-    /// 不认识的 reason（更新的桌面）与缺 reason：两条通道都走兜底（单张失败），原值只进日志。
+    /// 不认识的 reason（更新的桌面）与缺 reason：不算照片失败，退出本轮、退避；原值只进日志。
     func testUnknownReasonsFallBackOnBothChannels() {
         for raw in ["from_the_future", ""] {
             let reason = DesktopReason(wire: raw)
             XCTAssertEqual(reason, .unknown(raw))
-            XCTAssertEqual(reasonClass(reason, channel: .reply), .itemFailure)
-            XCTAssertEqual(reasonClass(reason, channel: .push), .itemFailure)
+            XCTAssertEqual(reasonClass(reason, channel: .reply), .requestRejected)
+            XCTAssertEqual(reasonClass(reason, channel: .push), .requestRejected)
         }
         XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(reason: .unknown("from_the_future"), method: "flow.offer")),
-                       .itemFailure("rejected:unknown:from_the_future"))
-        XCTAssertEqual(classifyPushedFailure(.unknown("from_the_future")), .itemFailure("pushed:unknown:from_the_future"))
+                       .desktopRejected("unknown:from_the_future"))
+        XCTAssertEqual(classifyPushedFailure(.unknown("from_the_future")), .desktopRejected("unknown:from_the_future"))
     }
 
     // MARK: 行为基线（v1 桌面发什么、今天的 iOS 怎么判）
@@ -115,20 +117,34 @@ final class ReasonClassificationTests: XCTestCase {
         "internal": "internal",
     ]
 
-    /// 应答通道：同一情形下 v2 应答与 v1 应答的结论相同（配对失效 / 对端失败 / 路径失败 / 单张失败）。
-    func testV2RepliesKeepTodaysOutcome() {
-        let versioned: Set = ["phone_outdated", "desktop_outdated"]
-        XCTAssertEqual(Set(Self.v1ReplyKey.keys).union(versioned), Set(Self.table.map(\.reason)), "基线必须覆盖全部非版本 reason")
-        for (reason, key) in Self.v1ReplyKey {
-            XCTAssertEqual(Self.label(reasonClass(DesktopReason(wire: reason), channel: .reply)), Self.v1Reply(key), reason)
+    /// 相对 v1 有意改变的格子（#1069 拍板）。其余格子 v2 与 v1 结论必须相同。
+    static let approvedReplyChanges: Set = [
+        "pair_token_invalid", // 配对失效 → 发错请求（只出现在配对通道，那里另有文案）
+        "unsupported_method", // 单张失败 → 需要更新（电脑太旧）
+        "bad_request", "not_found", "backup_failed", // 单张失败 → 发错请求：不算照片失败，退避
+        "internal", // 单张失败 → 对端失败（电脑上的 P-Pass 出错了）
+        "cancelled", // 配对失效 → 发错请求
+    ]
+    static let approvedPushChanges: Set = [
+        "epoch_mismatch", "cancelled", "bad_request", "internal", // 推送也走同一张表
+    ]
+
+    /// 应答通道：v2 与 v1 不同的格子必须恰好是拍板过的那些（多一个、少一个都红）。
+    func testReplyChangesAgainstV1AreExactlyTheApprovedOnes() {
+        var changed = Set<String>()
+        for (reason, key) in Self.v1ReplyKey where Self.label(reasonClass(DesktopReason(wire: reason), channel: .reply)) != Self.v1Reply(key) {
+            changed.insert(reason)
         }
+        XCTAssertEqual(changed, Self.approvedReplyChanges)
     }
 
-    /// 推送通道：今天的推送从不判配对失效，GuardMismatch / Cancelled 推送是单张失败。
-    func testV2PushesKeepTodaysOutcome() {
-        for (reason, code) in Self.v1PushCode {
-            XCTAssertEqual(Self.label(reasonClass(DesktopReason(wire: reason), channel: .push)), Self.v1Code(code), reason)
+    /// 推送通道：同上。
+    func testPushChangesAgainstV1AreExactlyTheApprovedOnes() {
+        var changed = Set<String>()
+        for (reason, code) in Self.v1PushCode where Self.label(reasonClass(DesktopReason(wire: reason), channel: .push)) != Self.v1Code(code) {
+            changed.insert(reason)
         }
+        XCTAssertEqual(changed, Self.approvedPushChanges)
     }
 
     /// 端到端：应答拒绝 → 传输结局；配对失效红卡只认应答通道的配对失效。
@@ -137,7 +153,12 @@ final class ReasonClassificationTests: XCTestCase {
         XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(reason: .registered(.libraryUnavailable), method: "flow.offer")),
                        .peerFailure(.libraryUnavailable, code: "library_unavailable"))
         XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(reason: .registered(.fetchFailed), method: "flow.offer")), .pathFailure("fetch_failed"))
-        XCTAssertEqual(classifyPushedFailure(.registered(.epochMismatch)), .itemFailure("pushed:epoch_mismatch"))
+        XCTAssertEqual(classifyPushedFailure(.registered(.epochMismatch)), .pairingLost)
+        XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(reason: .registered(.internal), method: "flow.offer")),
+                       .peerFailure(.desktopInternal, code: "internal"))
+        XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(reason: .registered(.badRequest), method: "flow.offer")), .desktopRejected("bad_request"))
+        XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(reason: .registered(.phoneOutdated), method: "flow.offer")), .versionMismatch(.phone))
+        XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(reason: .registered(.unsupportedMethod), method: "flow.offer")), .versionMismatch(.desktop))
 
         let loss = PairingLoss()
         loss.record(epoch: "e1", failure: DesktopRejected(reason: .registered(.notFound), method: "flow.status"))

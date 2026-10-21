@@ -92,6 +92,11 @@ public final class PairingLoss: @unchecked Sendable {
 
     public func record(epoch: String, failure: Error) {
         guard let rejected = failure as? DesktopRejected, rejected.isPairingLost else { return }
+        markLost(epoch: epoch)
+    }
+
+    /// `flow.failed` 推送归类为配对失效（#1069：推送与应答同一张表）。
+    public func markLost(epoch: String) {
         lock.lock(); defer { lock.unlock() }
         lostEpoch = epoch
         changes += 1
@@ -449,7 +454,9 @@ public final class FlowDeliveryPort: ItemDelivery, @unchecked Sendable {
                 }
             case let .failed(reason):
                 provider.pause(lease)
-                return classifyPushedFailure(reason)
+                let outcome = classifyPushedFailure(reason)
+                if outcome == .pairingLost { pairingLoss.markLost(epoch: epoch) }
+                return outcome
             case .stalled:
                 // C-10：连接还在、很久没有新的文件字节 → 主动断开，路径失败。
                 log("order \(seq): no new file bytes for \(timings.byteStallThresholdMs)ms; disconnecting")
@@ -589,8 +596,12 @@ public struct ControlPlaneProbe: DesktopProbe {
                 logger.log("Flow probe result=rejected:\(rejected.reason)")
                 // #466：每轮先探测，桌面移除这台手机时走不到投递——探测这里也要记，红卡才会亮。
                 pairingLoss.record(epoch: epoch, failure: rejected)
-                if rejected.isPairingLost { return .pairingLost }
-                return .unreachable
+                switch rejected.reasonClass {
+                case .pairingLost: return .pairingLost
+                case let .versionMismatch(side): return .versionMismatch(side)
+                // 其余拒绝（含电脑出错、发错请求）：hello 这一步答不上来，按不可达走探测梯（与今天同）。
+                case .peerFailure, .pathFailure, .requestRejected, .itemFailure: return .unreachable
+                }
             }
             logger.log("Flow probe result=unreachable error=\(error)")
             return .unreachable
