@@ -153,7 +153,8 @@ final class TransportFFITests: XCTestCase {
             as! [String: Any]
         XCTAssertEqual(back["method"] as? String, "hello")
         XCTAssertThrowsError(try decodeFrameJson(frame: frame.prefix(frame.count - 1)))
-        XCTAssertEqual(protoVersion(), 1)
+        // #1070：Rust 侧 PROTO_VER 与 Swift 侧 ProtoVersion.current 必须是同一个数，不写死字面量。
+        XCTAssertEqual(protoVersion(), ProtoVersion.current)
     }
 
     // MARK: - 配对链接（Rust transport::parse_pair_link，Swift 不写第二份）
