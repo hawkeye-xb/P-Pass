@@ -184,7 +184,7 @@ class TimelineLoader(
                 TimelineQuery(cursor = cursor, limit = 60),
             ),
         )
-        check(resp.ok) { "timeline: ${resp.error?.msgKey}" }
+        check(resp.ok) { "timeline rejected: ${resp.error?.reason}" }
         return ProtoJson.decodeFromJsonElement(TimelinePage.serializer(), resp.result!!)
     }
 

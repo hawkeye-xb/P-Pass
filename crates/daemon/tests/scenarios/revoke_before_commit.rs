@@ -152,7 +152,7 @@ async fn revoke_before_commit_cuts_session_at_the_gate() {
     let resp = client.commit(42).await;
     assert!(!resp.ok, "commit must be cut at the gate");
     let err = resp.error.expect("error payload");
-    assert_eq!(err.code, codes::NOT_AUTHORIZED);
+    assert_eq!(err.code(), codes::NOT_AUTHORIZED);
 
     // 水位不推进、零入库——被切断的会话不留下任何半成品。
     assert_eq!(

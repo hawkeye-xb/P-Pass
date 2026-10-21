@@ -49,7 +49,7 @@ pub async fn await_receipt(
                     .expect("a completed status carries its receipt"))
             }
             "cancelled" => return Err(DeliveryError::Cancelled),
-            "not_found" => return Err(DeliveryError::GuardMismatch),
+            "not_found" => return Err(DeliveryError::GrantNotFound),
             _ => {}
         }
         if started.elapsed() > AWAIT_DEADLINE {
@@ -118,35 +118,10 @@ pub async fn wait_mid_flight(
     }
 }
 
-/// After `suspend`/`cancel_by_tuple`: wait until the interrupted task has
-/// stopped moving bytes (three equal samples 100 ms apart), within `within`.
-/// This is the observable of "the fetch task was actually interrupted".
-pub async fn wait_bytes_settled(store: &Path, within: Duration) {
-    let started = Instant::now();
-    let mut last = dir_bytes(store);
-    let mut stable = 0;
-    while stable < 3 {
-        assert!(
-            started.elapsed() < within,
-            "the interrupted fetch task kept moving bytes for more than {within:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        let now = dir_bytes(store);
-        if now == last {
-            stable += 1;
-        } else {
-            stable = 0;
-            last = now;
-        }
-    }
-}
-
 // ── pairing ────────────────────────────────────────────────────────────
 
 use daemon::pairing::{PairRejection, PairState, Pairing};
-use proto::{
-    codes, methods, PairRequest, PairStatusReply, PairStatusRequest, PairSubmitted, Req, Resp,
-};
+use proto::{methods, PairRequest, PairStatusReply, PairStatusRequest, PairSubmitted, Req, Resp};
 use transport::{IrohTransport, Transport};
 
 /// #1050: the blocking `pair.request` reply is retired. This is the active
@@ -192,9 +167,9 @@ pub async fn pair_settled(
         .await;
         assert!(reply.ok, "pair.status must answer ok: {reply:?}");
         let status: PairStatusReply = serde_json::from_value(reply.result.unwrap()).unwrap();
-        match status.state.as_str() {
-            "pending" => {}
-            "accepted" => {
+        match status.state {
+            proto::PairStatusState::Pending => {}
+            proto::PairStatusState::Accepted => {
                 return Resp::ok(
                     submit.id.clone(),
                     serde_json::to_value(status.accepted.expect("accepted carries its payload"))
@@ -204,7 +179,7 @@ pub async fn pair_settled(
             _ => {
                 return Resp::err(
                     submit.id.clone(),
-                    proto::RespError::new(codes::NOT_AUTHORIZED, diag::keys::ERR_NOT_AUTHORIZED),
+                    proto::RespError::new(proto::Reason::PairTokenInvalid),
                 )
             }
         }

@@ -207,7 +207,7 @@ final class PairingWiringTests: XCTestCase {
     func test_revoked_hello_denied_falls_back_to_pairing_and_never_calls_backup_begin() async throws {
         let store = PairingStore(root: dir)
         let transport = ScriptedTransport([
-            Methods.hello: .resp(Resp(ok: false, error: RespError(code: "denied", msgKey: "err.not_authorized"))),
+            Methods.hello: .resp(Resp(ok: false, error: RespError(code: Codes.notAuthorized, reason: "revoked"))),
         ])
         let outcome = await makePairing(transport, store: store).pair(code: link)
         XCTAssertNil(store.load())
@@ -219,7 +219,7 @@ final class PairingWiringTests: XCTestCase {
     func test_member_fast_path_rejected_hello_also_falls_back() async throws {
         let store = PairingStore(root: dir)
         let transport = ScriptedTransport([
-            Methods.hello: .resp(Resp(ok: false, error: RespError(code: "x", msgKey: "err.x"))),
+            Methods.hello: .resp(Resp(ok: false, error: RespError(code: "x", reason: "from_the_future"))),
         ])
         _ = await makePairing(transport, store: store).pair(code: link)
         XCTAssertNil(store.load())
@@ -233,6 +233,10 @@ final class PairingWiringTests: XCTestCase {
         XCTAssertEqual(applyEpochRepairOutcome(.success("  ")), .lost)
         XCTAssertEqual(applyEpochRepairOutcome(.success(nil)), .lost)
         XCTAssertEqual(applyEpochRepairOutcome(.failure(ScriptedTransport.Unreachable())), .lost)
+        // #1072 / #1073：版本不兼容不是对配对的判决，更新后再修；配对失效的拒绝照旧标失联。
+        XCTAssertEqual(applyEpochRepairOutcome(.failure(DesktopRejected(reason: .registered(.desktopOutdated), method: "hello"))), .deferred)
+        XCTAssertEqual(applyEpochRepairOutcome(.failure(DesktopRejected(reason: .registered(.unsupportedMethod), method: "hello"))), .deferred)
+        XCTAssertEqual(applyEpochRepairOutcome(.failure(DesktopRejected(reason: .registered(.revoked), method: "hello"))), .lost)
         XCTAssertTrue(needsEpochRepair(""))
         XCTAssertFalse(needsEpochRepair("e1"))
     }

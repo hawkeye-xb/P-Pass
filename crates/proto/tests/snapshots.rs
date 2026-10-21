@@ -106,12 +106,11 @@ fn snapshot_pair_status_request() {
 #[test]
 fn snapshot_pair_status_reply_accepted() {
     let r = PairStatusReply {
-        state: "accepted".into(),
+        state: PairStatusState::Accepted,
         accepted: Some(PairAccepted {
             storage_device_name: "Home PC".into(),
             pairing_epoch: "epoch-1".into(),
         }),
-        msg_key: None,
     };
     assert_roundtrip(&r);
     snapshot_message("pair_status_reply_accepted", &r);
@@ -119,10 +118,10 @@ fn snapshot_pair_status_reply_accepted() {
 
 #[test]
 fn snapshot_pair_status_reply_denied() {
+    // #1070: a denial is the state alone — no reason key on the wire.
     let r = PairStatusReply {
-        state: "denied".into(),
+        state: PairStatusState::Denied,
         accepted: None,
-        msg_key: Some("err.not_authorized".into()),
     };
     assert_roundtrip(&r);
     snapshot_message("pair_status_reply_denied", &r);
@@ -318,14 +317,14 @@ fn snapshot_flow_supersede() {
 
     let replaced = FlowSupersedeReply {
         outcome: "replaced".into(),
-        reason: String::new(),
+        reason: None,
     };
     assert_roundtrip(&replaced);
     snapshot_message("flow_supersede_reply_replaced", &replaced);
 
     let refused = FlowSupersedeReply {
         outcome: "refused".into(),
-        reason: "not_a_redaction".into(),
+        reason: Some(SupersedeRefusal::NotARedaction),
     };
     assert_roundtrip(&refused);
     snapshot_message("flow_supersede_reply_refused", &refused);
@@ -490,7 +489,7 @@ fn snapshot_req_envelope() {
         id: "550e8400-e29b-41d4-a716-446655440000".into(),
         method: "timeline.page".into(),
         params: serde_json::json!({"cursor": null, "limit": 200}),
-        min_ver: 1,
+        ..Req::default()
     };
     assert_roundtrip(&req);
     snapshot_message("req_envelope", &req);
@@ -512,9 +511,74 @@ fn snapshot_resp_ok_envelope() {
 fn snapshot_resp_err_envelope() {
     let resp = Resp::err(
         "550e8400-e29b-41d4-a716-446655440000",
-        proto::RespError::new("NOT_FOUND", "err.not_found"),
+        proto::RespError::new(proto::Reason::NotFound),
     );
     assert_roundtrip(&resp);
     snapshot_message("resp_err_envelope", &resp);
     snapshot_frame("resp_err_envelope", &resp);
+}
+
+// ── #1070 protocol v2: errors and version negotiation ─
+
+/// An error with params: the version rejection a v2 phone sees.
+#[test]
+fn snapshot_resp_err_with_params() {
+    let resp = Resp::err(
+        "550e8400-e29b-41d4-a716-446655440000",
+        proto::RespError::new(proto::Reason::PhoneOutdated)
+            .with_param("min_ver", proto::MIN_SUPPORTED_VER),
+    );
+    assert_roundtrip(&resp);
+    snapshot_message("resp_err_with_params", &resp);
+}
+
+/// The rejection a v1 envelope gets: the same error plus the frozen shim key.
+/// (Not round-tripped: the shim is send-only, decoders drop it.)
+#[test]
+fn snapshot_resp_err_v1_shim() {
+    for (name, method) in [
+        ("resp_err_v1_shim_flow", "flow.offer"),
+        ("resp_err_v1_shim_pair", "pair.request"),
+    ] {
+        let resp = Resp::err(
+            "550e8400-e29b-41d4-a716-446655440000",
+            proto::RespError::new(proto::Reason::PhoneOutdated)
+                .with_param("min_ver", proto::MIN_SUPPORTED_VER)
+                .with_v1_shim(method),
+        );
+        snapshot_message(name, &resp);
+    }
+}
+
+/// Every registered reason's wire string and the code it travels under.
+#[test]
+fn snapshot_reasons_registry() {
+    let registry: Vec<serde_json::Value> = proto::Reason::ALL
+        .iter()
+        .map(|r| serde_json::json!({"reason": r, "code": r.category()}))
+        .collect();
+    snapshot_message("reasons_registry", &registry);
+}
+
+/// An unknown reason from a newer peer decodes and keeps its string.
+#[test]
+fn unknown_reason_from_a_newer_peer_decodes() {
+    let json = r#"{"id":"1","ok":false,"error":{"code":"FUTURE","reason":"from_the_future"},"ver":3,"min_ver":2}"#;
+    let resp: Resp = serde_json::from_str(json).unwrap();
+    let error = resp.error.unwrap();
+    assert_eq!(error.reason().as_str(), "from_the_future");
+    assert!(matches!(error.reason(), proto::Reason::Unknown(_)));
+}
+
+#[test]
+fn snapshot_flow_failed_push() {
+    let push = FlowFailedPush {
+        node_id: "ab".repeat(32),
+        queue_sequence: 7,
+        pairing_epoch: "epoch-1".into(),
+        lease_token: "lease-7".into(),
+        reason: proto::Reason::StorageFull,
+    };
+    assert_roundtrip(&push);
+    snapshot_message("flow_failed_push", &push);
 }

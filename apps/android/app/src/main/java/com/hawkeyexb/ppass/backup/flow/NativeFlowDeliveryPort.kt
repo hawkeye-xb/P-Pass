@@ -16,7 +16,6 @@
 // - offer 带 `size_bytes`，桌面按它预检剩余空间。
 package com.hawkeyexb.ppass.backup.flow
 
-import com.hawkeyexb.ppass.backup.isPairingLostText
 import com.hawkeyexb.ppass.backup.order.AuditRecord
 import com.hawkeyexb.ppass.backup.order.OrderStore
 import com.hawkeyexb.ppass.backup.order.SequencedAudit
@@ -31,10 +30,15 @@ import com.hawkeyexb.ppass.proto.Hello
 import com.hawkeyexb.ppass.proto.HelloHealth
 import com.hawkeyexb.ppass.proto.Methods
 import com.hawkeyexb.ppass.proto.ProtoJson
+import com.hawkeyexb.ppass.proto.Reason
+import com.hawkeyexb.ppass.proto.outdatedSideOf
 import com.hawkeyexb.ppass.transport.CallTrace
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PeerAddrParts
+import com.hawkeyexb.ppass.transport.ReasonClass
+import com.hawkeyexb.ppass.transport.isPairingLost
+import com.hawkeyexb.ppass.transport.reasonClassOf
 import java.util.concurrent.TimeoutException
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -57,9 +61,14 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 
-/** 桌面对一条请求回了 `ok=false`：对端**可达**、明确拒绝——不是路径问题。 */
-internal class DesktopRejectedException(val msgKey: String?, method: String) :
-    IllegalStateException("$method: $msgKey")
+/**
+ * 桌面对一条请求回了 `ok=false`：对端**可达**、明确拒绝——不是路径问题。
+ * #1072：只带 [reason]（线上原样）与它在登记表里的 [kind]；判断一律看 [kind]，绝不看文字。
+ */
+internal class DesktopRejectedException(val reason: String, method: String) :
+    IllegalStateException("$method rejected: $reason") {
+    val kind: Reason get() = Reason.fromWire(reason)
+}
 
 /** The only Desktop interaction accepted by the Android Flow delivery port. */
 internal interface FlowReceiptClient {
@@ -114,7 +123,7 @@ internal class DaemonFlowAuditTransport(
                 ),
             ),
         )
-        check(response.ok) { "flow.audit.submit: ${response.error?.msgKey}" }
+        check(response.ok) { "flow.audit.submit rejected: ${response.error?.reason}" }
         return ProtoJson.decodeFromJsonElement(FlowAuditAccepted.serializer(), checkNotNull(response.result))
     }
 }
@@ -179,7 +188,8 @@ internal class FlowDeliveryPairingLoss {
     val changes: kotlinx.coroutines.flow.StateFlow<Long> get() = _changes
 
     fun record(epoch: PairingEpoch, failure: Throwable) {
-        if (failure.message?.let(::isPairingLostText) == true) {
+        // 与分类同一个结论（含待拍板的 grant_* 被拒）——红卡和引擎出口不会说两样话。
+        if (desktopReasonOf(failure) != null && classifyDeliveryFailure(failure) == DeliveryOutcome.PairingLost) {
             lostEpoch = epoch.value
             _changes.value += 1
         }
@@ -212,19 +222,19 @@ internal class DaemonFlowReceiptClient(
 ) : FlowReceiptClient {
     override suspend fun currentPairingEpoch(): String? {
         val response = client.call(peer, Methods.HELLO, buildJsonObject {})
-        if (!response.ok) throw DesktopRejectedException(response.error?.msgKey, "hello")
+        if (!response.ok) throw DesktopRejectedException(response.error?.reason.orEmpty(), "hello")
         return ProtoJson.decodeFromJsonElement(Hello.serializer(), checkNotNull(response.result)).pairingEpoch
     }
 
     override suspend fun probeHello(trace: (CallTrace) -> Unit): Hello {
         val response = client.callTraced(peer, Methods.HELLO, buildJsonObject {}, trace)
-        if (!response.ok) throw DesktopRejectedException(response.error?.msgKey, "hello")
+        if (!response.ok) throw DesktopRejectedException(response.error?.reason.orEmpty(), "hello")
         return ProtoJson.decodeFromJsonElement(Hello.serializer(), checkNotNull(response.result))
     }
 
     override suspend fun offer(request: FlowFetchRequest): FlowStatusReply {
         val response = client.call(peer, Methods.FLOW_OFFER, ProtoJson.encodeToJsonElement(FlowFetchRequest.serializer(), request))
-        if (!response.ok) throw DesktopRejectedException(response.error?.msgKey, "flow.offer")
+        if (!response.ok) throw DesktopRejectedException(response.error?.reason.orEmpty(), "flow.offer")
         // NET-24: a null result means the peer daemon predates NET-24. Fail loudly.
         val result = response.result
         check(result != null && result !is JsonNull) {
@@ -235,7 +245,7 @@ internal class DaemonFlowReceiptClient(
 
     override suspend fun status(tuple: FlowTupleRef): FlowStatusReply {
         val response = client.call(peer, Methods.FLOW_STATUS, ProtoJson.encodeToJsonElement(FlowTupleRef.serializer(), tuple))
-        if (!response.ok) throw DesktopRejectedException(response.error?.msgKey, "flow.status")
+        if (!response.ok) throw DesktopRejectedException(response.error?.reason.orEmpty(), "flow.status")
         return ProtoJson.decodeFromJsonElement(FlowStatusReply.serializer(), checkNotNull(response.result))
     }
 
@@ -247,31 +257,48 @@ internal fun desktopHealthOf(health: HelloHealth?): DesktopHealth? =
     health?.let { DesktopHealth(freeBytes = it.freeBytes, libraryWritable = it.libraryWritable, indexOk = it.indexOk) }
 
 /**
- * #413 契约 §5：桌面失败码（`flow.failed` 推送的 code、offer 被拒的 msgKey）的分类。
- * - `storage_full` / `library_unavailable` / `storage_failed` → 对端失败：退出循环，不计次数，原因带回手机显示。
- * - `fetch_failed`（拉不到——relay 限流、断网、对端忙）→ 路径失败：保持可续传，不计次数。
- * - 其它（含旧桌面的 `materialize_*`）→ null，由调用方当单张失败（计次数、有上限——不会无限重试）。
+ * #413 契约 §5 / #1072：桌面给出的失败原因 → 这一张的结局。offer / status 被拒与 `flow.failed` 推送用同一张表
+ * （[reasonClassOf]，#1069 拍板：按「问题出在哪、谁能解决」）。[channel] 只用于日志前缀。
  */
-internal fun classifyDesktopCode(code: String?): DeliveryOutcome? = when (code) {
-    "storage_full" -> DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_FULL, code)
-    "library_unavailable" -> DeliveryOutcome.PeerFailure(PeerFailureKind.LIBRARY_UNAVAILABLE, code)
-    "storage_failed" -> DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_ERROR, code)
-    "fetch_failed" -> DeliveryOutcome.PathFailure(code)
-    else -> null
+internal fun deliveryOutcomeOf(raw: String, channel: String): DeliveryOutcome {
+    val kind = Reason.fromWire(raw)
+    return when (reasonClassOf(kind)) {
+        ReasonClass.PAIRING_LOST -> DeliveryOutcome.PairingLost
+        ReasonClass.OUTDATED -> DeliveryOutcome.NeedsUpdate(checkNotNull(outdatedSideOf(kind)))
+        ReasonClass.STORAGE_FULL -> DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_FULL, raw)
+        ReasonClass.LIBRARY_UNAVAILABLE -> DeliveryOutcome.PeerFailure(PeerFailureKind.LIBRARY_UNAVAILABLE, raw)
+        ReasonClass.STORAGE_FAILED -> DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_ERROR, raw)
+        ReasonClass.DESKTOP_INTERNAL -> DeliveryOutcome.PeerFailure(PeerFailureKind.DESKTOP_INTERNAL, raw)
+        ReasonClass.PATH -> DeliveryOutcome.PathFailure(raw)
+        // 不该发生的错误：单张失败——跳过这一张、继续本轮、计次数（日志带 reason 与 queueSequence，见 FlowEngine）。
+        ReasonClass.ITEM_FAILED -> DeliveryOutcome.ItemFailure("$channel:$raw")
+    }
 }
 
 /** 推送的 `flow.failed`。 */
-internal fun classifyPushedFailure(code: String): DeliveryOutcome =
-    classifyDesktopCode(code) ?: DeliveryOutcome.ItemFailure("pushed:$code")
+internal fun classifyPushedFailure(reason: String): DeliveryOutcome = deliveryOutcomeOf(reason, PUSHED)
+
+private const val REJECTED = "rejected"
+private const val PUSHED = "pushed"
+
+/** 桌面明确拒绝（offer / status）。 */
+internal fun classifyRejection(rejected: DesktopRejectedException): DeliveryOutcome =
+    deliveryOutcomeOf(rejected.reason, REJECTED)
+
+/** #1072：这次失败里桌面给的原因（拒绝或推送）；不是桌面的结论 → null。 */
+internal fun desktopReasonOf(failure: Throwable): Reason? = when (failure) {
+    is DesktopRejectedException -> failure.kind
+    is FlowPushedFailureException -> Reason.fromWire(failure.reason)
+    else -> null
+}
 
 /**
  * 传输过程中抛出的异常的分类。桌面可达且明确拒绝（[DesktopRejectedException]）不是路径问题：
  * 当路径失败会让一条坏请求每次都把循环停下、且永不计次数。
  */
 internal fun classifyDeliveryFailure(failure: Throwable): DeliveryOutcome = when {
-    failure is DesktopRejectedException && failure.msgKey?.let(::isPairingLostText) == true -> DeliveryOutcome.PairingLost
-    failure is DesktopRejectedException -> classifyDesktopCode(failure.msgKey) ?: DeliveryOutcome.ItemFailure("rejected:${failure.msgKey}")
-    failure is FlowPushedFailureException -> classifyPushedFailure(failure.code)
+    failure is DesktopRejectedException -> classifyRejection(failure)
+    failure is FlowPushedFailureException -> classifyPushedFailure(failure.reason)
     failure is IllegalArgumentException || failure is IllegalStateException ->
         DeliveryOutcome.ItemFailure("invalid:${failure.javaClass.simpleName}")
     else -> DeliveryOutcome.PathFailure("network:${failure.javaClass.simpleName}")
@@ -571,10 +598,8 @@ internal class NativeFlowDeliveryPort(
                     }
                     FlowStatusPollOutcome.KeepPolling -> continue
                 }
-                is FlowWaitStep.Failed -> {
-                    bridge.pause(lease)
-                    return classifyPushedFailure(step.code)
-                }
+                // #1072：推送的失败与被拒走同一出口（外层 catch：停传输、核 epoch、记配对失效、分类）。
+                is FlowWaitStep.Failed -> throw FlowPushedFailureException(step.reason)
                 FlowWaitStep.Stalled -> {
                     // #410：连接还在、3 分钟没有新的文件字节 → 主动断开，路径失败。
                     log.log("order $seq: no new file bytes for ${byteStallThresholdMs}ms; disconnecting")
@@ -707,10 +732,16 @@ internal class DaemonDesktopProbe(
                 ProbeResult.Reachable(hello.pairingEpoch, desktopHealthOf(hello.health), hello.capabilities.toSet())
             }.also { report("reachable", null) }
         } catch (rejected: DesktopRejectedException) {
-            report("rejected:${rejected.msgKey}", rejected)
+            report("rejected:${rejected.reason}", rejected)
             // #466：#424 之后每轮先探测，桌面移除这台手机时走不到投递——探测这里不记，红卡就永远不亮。
             pairingLoss.record(PairingEpoch(current.pairingEpoch), rejected)
-            if (rejected.msgKey?.let(::isPairingLostText) == true) ProbeResult.PairingLost else ProbeResult.Unreachable
+            // #1072：握手就判版本——不兼容就不发起任何传输。
+            val outdated = outdatedSideOf(rejected.kind)
+            when {
+                outdated != null -> ProbeResult.NeedsUpdate(outdated)
+                isPairingLost(rejected.kind) -> ProbeResult.PairingLost
+                else -> ProbeResult.Unreachable
+            }
         } catch (cancelled: CancellationException) {
             // withTimeout 的超时也是 CancellationException——区分「我被取消了」与「对端没回」。
             currentCoroutineContext().ensureActive()
@@ -745,12 +776,12 @@ internal fun flowStatusPollOutcome(reply: FlowStatusReply): FlowStatusPollOutcom
 /** NET-14: a `flow.delivered`/`flow.failed` push matched against this attempt's exact tuple. */
 internal sealed interface FlowPushOutcome {
     data class Delivered(val receipt: FlowCompletionReceipt) : FlowPushOutcome
-    data class Failed(val code: String) : FlowPushOutcome
+    data class Failed(val reason: String) : FlowPushOutcome
 }
 
-/** The daemon pushed a terminal failure for this exact tuple; [code] is now classified (#410). */
-internal class FlowPushedFailureException(val code: String) :
-    Exception("desktop pushed a terminal flow.failed: $code")
+/** The daemon pushed a terminal failure for this exact tuple; [reason] is now classified (#410). */
+internal class FlowPushedFailureException(val reason: String) :
+    Exception("desktop pushed a terminal flow.failed: $reason")
 
 internal fun parseFlowPushOutcome(kind: String, data: JsonObject, tuple: FlowTupleRef): FlowPushOutcome? {
     val queueSequence = (data["queue_sequence"] as? JsonPrimitive)?.content?.toLongOrNull() ?: return null
@@ -764,7 +795,8 @@ internal fun parseFlowPushOutcome(kind: String, data: JsonObject, tuple: FlowTup
             val receiptElement = data["receipt"] ?: return null
             FlowPushOutcome.Delivered(ProtoJson.decodeFromJsonElement(FlowCompletionReceipt.serializer(), receiptElement))
         }
-        "flow.failed" -> FlowPushOutcome.Failed((data["code"] as? JsonPrimitive)?.content ?: "unknown")
+        // #1070：载荷是 proto::FlowFailedPush，原因在 `reason`（v2 之前叫 `code`）。
+        "flow.failed" -> FlowPushOutcome.Failed((data["reason"] as? JsonPrimitive)?.content ?: "unknown")
         else -> null
     }
 }
@@ -772,7 +804,7 @@ internal fun parseFlowPushOutcome(kind: String, data: JsonObject, tuple: FlowTup
 /** NET-14 / #410: the wait loop's next action. */
 internal sealed interface FlowWaitStep {
     data class Resolved(val outcome: FlowStatusPollOutcome) : FlowWaitStep
-    data class Failed(val code: String) : FlowWaitStep
+    data class Failed(val reason: String) : FlowWaitStep
     /** #410：3 分钟没有新的文件字节——主动断开，路径失败。 */
     object Stalled : FlowWaitStep
     object KeepWaitingForPush : FlowWaitStep
@@ -798,7 +830,7 @@ internal fun flowWaitStep(
 ): FlowWaitStep {
     when (pushed) {
         is FlowPushOutcome.Delivered -> return FlowWaitStep.Resolved(FlowStatusPollOutcome.Completed(pushed.receipt))
-        is FlowPushOutcome.Failed -> return FlowWaitStep.Failed(pushed.code)
+        is FlowPushOutcome.Failed -> return FlowWaitStep.Failed(pushed.reason)
         null -> {}
     }
     return when (localStatus) {

@@ -286,10 +286,15 @@ async fn device_revoke_cancels_the_in_flight_fetch_before_it_can_finish() {
             Some(FlowGrantState::Completed)
         );
 
-        // Give a hypothetical late transfer/ingest time to happen, then
-        // look: B (same size, started together) is done, so an A transfer
-        // that kept running would be complete by now too.
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // #1084: device.revoke answers only after the revoked device's fetch
+        // task has ended, so nothing can still be pulling A's bytes.
+        assert!(
+            !delivery
+                .task_running(phone_a, &common::tuple_of(&offer_a))
+                .await
+                .unwrap(),
+            "device.revoke must not answer before the revoked fetch task has ended"
+        );
         assert!(
             receiver_blobs.local_bytes(hash_a).await.unwrap() < PAYLOAD as u64,
             "the revoked device's fetch task must actually stop pulling bytes"

@@ -167,7 +167,8 @@ async fn expired_token_is_rejected() {
     let qr = pairing.start([0x43; 12], now() - 11 * 60 * 1000);
     let resp = send_pair(&ctp, dtp.node_id(), &token_of(&qr), "过期设备").await;
     let err = resp.error.expect("expired token must be rejected");
-    assert_eq!(err.code, codes::NOT_AUTHORIZED);
+    assert_eq!(err.code(), codes::NOT_AUTHORIZED);
+    assert_eq!(err.reason(), &proto::Reason::PairTokenInvalid);
     assert!(db.get_device(&ctp.node_id().0).await.unwrap().is_none());
 }
 
@@ -189,7 +190,8 @@ async fn token_replay_is_rejected() {
     // Same token again from a different device: one-time means one time.
     let resp = send_pair(&second, dtp.node_id(), &token, "重放攻击者").await;
     let err = resp.error.expect("replay must be rejected");
-    assert_eq!(err.code, codes::NOT_AUTHORIZED);
+    assert_eq!(err.code(), codes::NOT_AUTHORIZED);
+    assert_eq!(err.reason(), &proto::Reason::PairTokenInvalid);
     assert!(db.get_device(&second.node_id().0).await.unwrap().is_none());
 }
 
@@ -203,7 +205,7 @@ async fn owner_decline_writes_nothing() {
     let qr = pairing.start([0x45; 12], now());
     let resp = send_pair(&ctp, dtp.node_id(), &token_of(&qr), "被拒绝的设备").await;
     let err = resp.error.expect("owner said no");
-    assert_eq!(err.code, codes::NOT_AUTHORIZED);
+    assert_eq!(err.code(), codes::NOT_AUTHORIZED);
     assert!(db.get_device(&ctp.node_id().0).await.unwrap().is_none());
 }
 
@@ -327,7 +329,7 @@ async fn unpair_revokes_self_and_hello_is_denied_then_fresh_token_rejoins() {
     // hello is now denied (revoked ⇒ not even hello).
     let hello = send_method(&ctp, dtp.node_id(), methods::HELLO, serde_json::json!({})).await;
     assert!(!hello.ok, "revoked device must not reach hello");
-    assert_eq!(hello.error.unwrap().code, codes::NOT_AUTHORIZED);
+    assert_eq!(hello.error.unwrap().code(), codes::NOT_AUTHORIZED);
 
     // …but a fresh owner-issued token lets the SAME identity rejoin.
     let qr2 = pairing.start([0x61; 12], now());
@@ -423,7 +425,7 @@ async fn unpair_by_unpaired_device_is_denied() {
     )
     .await;
     assert!(!resp.ok, "unpaired device must not unpair");
-    assert_eq!(resp.error.unwrap().code, codes::NOT_AUTHORIZED);
+    assert_eq!(resp.error.unwrap().code(), codes::NOT_AUTHORIZED);
 }
 
 fn now() -> i64 {
@@ -484,7 +486,7 @@ async fn stale_pending_times_out_denied_with_no_writes() {
     let waited = t0.elapsed();
 
     assert!(!resp.ok, "expired pending must be denied: {resp:?}");
-    assert_eq!(resp.error.unwrap().code, codes::NOT_AUTHORIZED);
+    assert_eq!(resp.error.unwrap().code(), codes::NOT_AUTHORIZED);
     assert!(
         waited >= std::time::Duration::from_millis(250),
         "denied before the TTL is up = instant-fail, not expiry: {waited:?}"

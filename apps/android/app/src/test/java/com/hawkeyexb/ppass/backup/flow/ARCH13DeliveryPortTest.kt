@@ -304,7 +304,7 @@ class ARCH13DeliveryPortTest {
             h.status = { """{"state":"in_progress","connected":true,"idle_for_ms":0,"bytes_sent":1,"byte_idle_for_ms":0}""" }
             val job = h.start()
             runCurrent()
-            h.pushEvent("flow.failed", mapOf("code" to JsonPrimitive(code)))
+            h.pushEvent("flow.failed", mapOf("reason" to JsonPrimitive(code)))
             advanceTimeBy(1_000)
             runCurrent()
             assertEquals(code, expected, job.await())
@@ -313,7 +313,7 @@ class ARCH13DeliveryPortTest {
 
     @Test
     fun `exceptions are classified - a reachable rejection is not a path failure`() {
-        assertEquals(DeliveryOutcome.PairingLost, classifyDeliveryFailure(DesktopRejectedException("err.not_paired", "flow.offer")))
+        assertEquals(DeliveryOutcome.PairingLost, classifyDeliveryFailure(DesktopRejectedException("not_paired", "flow.offer")))
         assertEquals(DeliveryOutcome.ItemFailure("rejected:err.grant_mismatch"), classifyDeliveryFailure(DesktopRejectedException("err.grant_mismatch", "flow.offer")))
         assertEquals(DeliveryOutcome.PathFailure("network:IOException"), classifyDeliveryFailure(java.io.IOException("reset")))
         assertEquals(DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_ERROR, "storage_failed"), classifyDeliveryFailure(FlowPushedFailureException("storage_failed")))

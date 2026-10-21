@@ -87,7 +87,7 @@ async fn mismatched_epoch_lease_or_hash_never_starts_a_native_fetch() {
     ] {
         assert!(matches!(
             common::await_receipt(&delivery, provider_transport.node_id(), &invalid).await,
-            Err(DeliveryError::GuardMismatch)
+            Err(DeliveryError::GrantNotFound)
         ));
     }
     assert_eq!(receiver_blobs.local_bytes(hash).await.unwrap(), 0);
@@ -747,7 +747,7 @@ async fn failed_background_fetch_pushes_flow_failed_with_node_id_and_tuple() {
         failed["data"]["lease_token"].as_str(),
         Some("lease-current")
     );
-    assert_eq!(failed["data"]["code"].as_str(), Some("fetch_failed"));
+    assert_eq!(failed["data"]["reason"].as_str(), Some("fetch_failed"));
 }
 
 // must not erase the new item's data-plane path. The key is the exact Flow
@@ -1789,7 +1789,7 @@ async fn cancel_by_tuple_cancels_without_content_hash_or_provider() {
 
 /// Counterexample: a tuple with no matching grant (never offered, or a
 /// stale lease_token from a superseded offer) must not be silently
-/// accepted — it is a guard mismatch.
+/// accepted — it is `grant_not_found` (#1070).
 #[tokio::test(flavor = "multi_thread")]
 async fn cancel_by_tuple_rejects_an_unknown_tuple() {
     let root = tempdir().unwrap();
@@ -1812,14 +1812,14 @@ async fn cancel_by_tuple_rejects_an_unknown_tuple() {
         )
         .await;
     assert!(
-        matches!(result, Err(DeliveryError::GuardMismatch)),
+        matches!(result, Err(DeliveryError::GrantNotFound)),
         "an unknown tuple must be rejected, not silently accepted as a no-op"
     );
 }
 
 /// #1027 counterexample: idempotency covers only a tuple that really exists and
 /// has already ended. A tuple with no matching grant (never offered, or a stale
-/// lease_token) is still a guard mismatch for `suspend`, as for `cancel_tuple`.
+/// lease_token) is still `grant_not_found` for `suspend`, as for `cancel_tuple`.
 #[tokio::test(flavor = "multi_thread")]
 async fn suspend_rejects_an_unknown_tuple() {
     let root = tempdir().unwrap();
@@ -1842,7 +1842,7 @@ async fn suspend_rejects_an_unknown_tuple() {
         )
         .await;
     assert!(
-        matches!(result, Err(DeliveryError::GuardMismatch)),
+        matches!(result, Err(DeliveryError::GrantNotFound)),
         "an unknown tuple must be rejected, not silently accepted as a no-op"
     );
 }
@@ -2003,7 +2003,18 @@ async fn suspend_interrupts_an_in_progress_fetch_and_keeps_the_grant_active() {
 
         // The interrupt is observed as "the task stopped moving bytes" within
         // 2 s; the grant itself must stay active (checked below).
-        common::wait_bytes_settled(&receiver_store, std::time::Duration::from_secs(2)).await;
+        // #1084: suspend returns only once the fetch task has ended — no
+        // byte-count sampling or wall-clock guess needed.
+        assert!(
+            !delivery
+                .task_running(
+                    provider_node,
+                    &tuple_ref("epoch-current", "lease-current", 7)
+                )
+                .await
+                .unwrap(),
+            "suspend must not return before the interrupted fetch task has ended"
+        );
 
         // The grant must still be active — suspend never touches durable
         // state — so status must NOT report cancelled/not_found. NET-15
@@ -2107,7 +2118,18 @@ async fn suspend_then_resume_completes_from_the_retained_partial() {
             )
             .await
             .unwrap();
-        common::wait_bytes_settled(&receiver_store, std::time::Duration::from_secs(2)).await;
+        // #1084: suspend returns only once the fetch task has ended — no
+        // byte-count sampling or wall-clock guess needed.
+        assert!(
+            !delivery
+                .task_running(
+                    provider_node,
+                    &tuple_ref("epoch-current", "lease-current", 7)
+                )
+                .await
+                .unwrap(),
+            "suspend must not return before the interrupted fetch task has ended"
+        );
         let partial_bytes_on_disk = receiver_blobs.local_bytes(hash).await.unwrap();
         assert!(
             partial_bytes_on_disk > 0 && partial_bytes_on_disk < PAYLOAD as u64,
@@ -2212,7 +2234,18 @@ async fn status_respawns_the_delivery_task_lost_to_a_daemon_restart() {
             )
             .await
             .unwrap();
-        common::wait_bytes_settled(&receiver_store, std::time::Duration::from_secs(2)).await;
+        // #1084: suspend returns only once the fetch task has ended — no
+        // byte-count sampling or wall-clock guess needed.
+        assert!(
+            !delivery
+                .task_running(
+                    provider_node,
+                    &tuple_ref("epoch-current", "lease-current", 7)
+                )
+                .await
+                .unwrap(),
+            "suspend must not return before the interrupted fetch task has ended"
+        );
         let partial = receiver_blobs.local_bytes(hash).await.unwrap();
         assert!(
             partial > 0 && partial < PAYLOAD as u64,
@@ -2879,7 +2912,7 @@ async fn a_fetch_that_receives_no_bytes_fails_within_the_stall_limit_and_pushes_
     .expect("a fetch with no byte progress must fail and push flow.failed, not hang");
     let took = started.elapsed();
     assert!(took >= STALL, "failed before the stall limit: {took:?}");
-    assert_eq!(failed["data"]["code"].as_str(), Some("fetch_failed"));
+    assert_eq!(failed["data"]["reason"].as_str(), Some("fetch_failed"));
     assert_eq!(failed["data"]["queue_sequence"].as_u64(), Some(7));
     assert_eq!(
         failed["data"]["lease_token"].as_str(),

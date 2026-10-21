@@ -92,9 +92,35 @@ enum PairingStatus: Equatable {
 enum PairOutcome: Equatable {
     /// firstTime = 这台电脑以前没连过（要去选相册）。
     case joined(firstTime: Bool)
-    /// 电脑那边说不（ownerSaidNo）或这次没完成（过期 / 电脑重启 / 版本太旧）。msgKey 是 diag 的说明。
-    case refused(msgKey: String?, ownerSaidNo: Bool)
+    /// 电脑那边说不（ownerSaidNo）或这次没完成（过期 / 电脑重启 / 版本太旧）。note 是本端挑的补充说明（nil = 只显示通用文案）。
+    case refused(note: PairNote?, ownerSaidNo: Bool)
+    /// #1069：版本不兼容，要先更新 [OutdatedSide] 那一端的 P-Pass（不是电脑主人拒绝的）。
+    case needsUpdate(OutdatedSide)
     case failed(reason: String)
+}
+
+/// 配对页的补充说明：本端按判决 / `reason` 挑，文字是本机文案（#1072 / #1073：线上不再带文案 key）。
+enum PairNote: Equatable, CaseIterable {
+    case tokenInvalid, denied, expired, desktopRestarted, generic
+
+    /// 与 Android 同一套 key（strings.xml → Localizable.strings）。
+    var key: String {
+        switch self {
+        case .tokenInvalid: return "pair_refused_detail_token_invalid"
+        case .denied: return "pair_refused_detail_denied"
+        case .expired: return "pair_refused_detail_expired"
+        case .desktopRestarted: return "pair_refused_detail_restarted"
+        case .generic: return "error_generic"
+        }
+    }
+
+    var text: String { L.s(key) }
+
+    /// pair.request 被拒时的说明（#1072 §5）：配对码无效有专门一句，其余与不认识的 reason 一律通用提示。
+    /// 版本不兼容不走这里（单独成判决）。
+    init(rejection reason: DesktopReason) {
+        self = reason == .registered(.pairTokenInvalid) ? .tokenInvalid : .generic
+    }
 }
 
 protocol PairingService: AnyObject {

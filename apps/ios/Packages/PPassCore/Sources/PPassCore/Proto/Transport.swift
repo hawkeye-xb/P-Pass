@@ -45,7 +45,7 @@ public struct ProtoClient: Sendable {
     /// 发一个请求，返回原始 `Resp`（调用方自己看 ok / error）。
     public func callRaw<P: Encodable>(_ method: String, _ params: P, timeoutMs: UInt64? = nil) async throws -> Resp {
         let data = try await transport.call(method: method, paramsJSON: ProtoJSON.encode(params), timeoutMs: timeoutMs)
-        return try ProtoJSON.decode(Resp.self, from: data)
+        return try ProtoJSON.decode(Resp.self, from: data).versionChecked()
     }
 
     /// 发一个请求，`ok=false` 抛 [ProtoRejection]，否则把 result 解成 [R]。
@@ -58,5 +58,37 @@ public struct ProtoClient: Sendable {
         } catch {
             throw ProtoMalformed(method: method, detail: "\(error)")
         }
+    }
+}
+
+// MARK: - #1072 / #1073 版本协商（手机这一半）
+
+extension Resp {
+    /// 对位 `proto::compatibility(LOCAL, peer, Role::Phone)`：对端版本低于本端最低接受版本 → 电脑太旧；
+    /// 本端版本低于对端最低接受版本 → 手机太旧；nil = 兼容。v2 之前的电脑应答不带 `ver`（解码为 1），只有手机能判出来。
+    static func outdatedSide(peerVer: UInt16, peerMinVer: UInt16) -> OutdatedSide? {
+        if peerVer < ProtoVersion.minSupported { return .desktop }
+        if ProtoVersion.current < peerMinVer { return .phone }
+        return nil
+    }
+
+    /// 这条应答说哪一端太旧：先听电脑自己说的（`phone_outdated` / `desktop_outdated`），再自己核一次。
+    public var outdatedSide: OutdatedSide? {
+        if let error, case let .versionMismatch(side) = reasonClass(DesktopReason(error)),
+           error.code == Codes.versionMismatch { return side }
+        return Self.outdatedSide(peerVer: ver, peerMinVer: minVer)
+    }
+
+    /// 每条应答都过这里（[ProtoClient.callRaw]）：不兼容的电脑——不管它自己说了，还是旧到说不出来——对所有调用方
+    /// 都是同一个样子：`VERSION_MISMATCH` + 那一端的 reason。兼容的应答原样返回。
+    public func versionChecked() -> Resp {
+        guard let side = outdatedSide else { return self }
+        if !ok, error?.code == Codes.versionMismatch { return self }
+        let reason: ProtoReason = side == .phone ? .phoneOutdated : .desktopOutdated
+        var out = self
+        out.ok = false
+        out.result = nil
+        out.error = RespError(code: Codes.versionMismatch, reason: reason.rawValue)
+        return out
     }
 }

@@ -7,6 +7,8 @@ expression: json
   "ok": false,
   "error": {
     "code": "NOT_FOUND",
-    "msg_key": "err.not_found"
-  }
+    "reason": "not_found"
+  },
+  "ver": 2,
+  "min_ver": 2
 }

@@ -10,9 +10,11 @@
 // 不重试不告警，等下一拍。
 package com.hawkeyexb.ppass.transport
 
-import com.hawkeyexb.ppass.backup.isPairingLostText
+import com.hawkeyexb.ppass.backup.flow.DesktopRejectedException
 import com.hawkeyexb.ppass.proto.Methods
 import com.hawkeyexb.ppass.proto.Resp
+import com.hawkeyexb.ppass.proto.outdatedSideOf
+import com.hawkeyexb.ppass.proto.reasonKind
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -95,10 +97,14 @@ internal fun applyHeartbeatOutcome(
     outcome
         .onSuccess { value ->
             // #466: `DaemonClient.call` 被拒时不抛，回 ok=false 的 Resp——原来这里把「你已被移除」也当成可达。
-            val rejectedKey = (value as? Resp)?.takeIf { !it.ok }?.error?.msgKey
-            if (rejectedKey != null && isPairingLostText(rejectedKey)) {
-                onPairingLost?.invoke(IllegalStateException("hello: $rejectedKey"))
-                return
+            val rejected = (value as? Resp)?.takeIf { !it.ok }?.error
+            if (rejected != null) {
+                // #1072：版本不兼容先判——不算可达（DaemonClient 已把它记进 [ProtocolVersionGate]，首页整屏提示）。
+                if (outdatedSideOf(rejected.reasonKind) != null) return
+                if (isPairingLost(rejected.reasonKind)) {
+                    onPairingLost?.invoke(DesktopRejectedException(rejected.reason, "hello"))
+                    return
+                }
             }
             sentinel?.recordReachable()
             onReachable?.invoke()

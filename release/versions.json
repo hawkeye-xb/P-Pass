@@ -1,6 +1,6 @@
 {
-  "desktop": "0.9.7",
-  "android": "0.9.12",
-  "androidVersionCode": 65,
-  "ios": "0.10.0"
+  "desktop": "0.10.0",
+  "android": "0.10.0",
+  "androidVersionCode": 66,
+  "ios": "0.10.1"
 }

@@ -11,33 +11,42 @@
 import Foundation
 
 public enum ProtoVersion {
-    public static let current: UInt16 = 1
-    public static let minSupported: UInt16 = 1
+    public static let current: UInt16 = 2
+    public static let minSupported: UInt16 = 2
+    /// #1070：缺 `ver` / `min_ver` 的帧来自 v2 之前的发送方。
+    public static let v1: UInt16 = 1
 }
 
 // MARK: - Envelope
 
+/// #1070：`ver` / `min_ver` = 发送方的协议版本 / 最低接受版本。新建时取本端版本；解码缺键 = v1 发送方（与 Rust 一致）。
 public struct Req: Codable, Equatable, Sendable {
     public var id: String
     public var method: String
     public var params: JSONValue
     public var minVer: UInt16
+    public var ver: UInt16
 
-    public init(id: String = "", method: String = "", params: JSONValue = .null, minVer: UInt16 = ProtoVersion.minSupported) {
+    public init(
+        id: String = "", method: String = "", params: JSONValue = .null,
+        minVer: UInt16 = ProtoVersion.minSupported, ver: UInt16 = ProtoVersion.current
+    ) {
         self.id = id
         self.method = method
         self.params = params
         self.minVer = minVer
+        self.ver = ver
     }
 
-    enum CodingKeys: String, CodingKey { case id, method, params, minVer = "min_ver" }
+    enum CodingKeys: String, CodingKey { case id, method, params, minVer = "min_ver", ver }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.value(.id, default: "")
         method = try c.value(.method, default: "")
         params = try c.value(.params, default: .null)
-        minVer = try c.value(.minVer, default: ProtoVersion.minSupported)
+        minVer = try c.value(.minVer, default: ProtoVersion.v1)
+        ver = try c.value(.ver, default: ProtoVersion.v1)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -45,37 +54,99 @@ public struct Req: Codable, Equatable, Sendable {
         try c.encode(id, forKey: .id)
         try c.encode(method, forKey: .method)
         try c.encode(params, forKey: .params)
+        try c.encode(ver, forKey: .ver)
         try c.encode(minVer, forKey: .minVer)
     }
 }
 
-/// 错误载荷。Rust 侧这个类型**没有** `#[serde(default)]`：两个字段缺一个就解码失败，这里同样严格。
+/// #1070 协议 v2 错误：粗类别 `code` + 登记表里的 `reason`（见 `ProtoReason`）+ 可选 `params`。
+/// `msgKey` 为现有调用点保留：v2 桌面从不发（恒为空串），只有它对 v1 信封的拒绝带冻结的垫片值。
+/// 与 Rust 一致，缺键取默认值；未登记的 `reason` 原样保留在字符串里。
 public struct RespError: Codable, Equatable, Sendable, Error {
     public var code: String
     public var msgKey: String
+    public var reason: String
+    public var params: JSONValue?
 
-    public init(code: String, msgKey: String) {
+    public init(code: String, msgKey: String = "", reason: String = "", params: JSONValue? = nil) {
         self.code = code
         self.msgKey = msgKey
+        self.reason = reason
+        self.params = params
     }
 
-    enum CodingKeys: String, CodingKey { case code, msgKey = "msg_key" }
+    /// `reason` 映射到登记表；未登记 → `.unknown`。
+    public var reasonKind: ProtoReason { ProtoReason(wire: reason) }
+
+    enum CodingKeys: String, CodingKey { case code, msgKey = "msg_key", reason, params }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        code = try c.value(.code, default: "")
+        msgKey = try c.value(.msgKey, default: "")
+        reason = try c.value(.reason, default: "")
+        params = try c.decodeIfPresent(JSONValue.self, forKey: .params).flatMap { $0 == .null ? nil : $0 }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(code, forKey: .code)
+        try c.encode(reason, forKey: .reason)
+        try c.encodeIfPresent(params, forKey: .params)
+        if !msgKey.isEmpty { try c.encode(msgKey, forKey: .msgKey) }
+    }
 }
 
+/// #1070：`proto::Reason` 的镜像（线上字符串由 `reasons_registry` 金样钉死）。新值解码不失败，落到 `.unknown`。
+public enum ProtoReason: String, CaseIterable, Sendable {
+    case notPaired = "not_paired"
+    case revoked = "revoked"
+    case roleForbidden = "role_forbidden"
+    case pairTokenInvalid = "pair_token_invalid"
+    case phoneOutdated = "phone_outdated"
+    case desktopOutdated = "desktop_outdated"
+    case unsupportedMethod = "unsupported_method"
+    case badRequest = "bad_request"
+    case notFound = "not_found"
+    case `internal` = "internal"
+    case backupFailed = "backup_failed"
+    case storageFull = "storage_full"
+    case libraryUnavailable = "library_unavailable"
+    case storageFailed = "storage_failed"
+    case fetchFailed = "fetch_failed"
+    case epochMismatch = "epoch_mismatch"
+    case grantNotFound = "grant_not_found"
+    case grantConflict = "grant_conflict"
+    case cancelled = "cancelled"
+    case unknown = ""
+
+    public init(wire: String) {
+        self = wire.isEmpty ? .unknown : (ProtoReason(rawValue: wire) ?? .unknown)
+    }
+}
+
+/// #1070：`ver` / `min_ver` 解码缺键 = v1 桌面；新建时取本端版本（对位 Rust `Resp::default`）。
 public struct Resp: Codable, Equatable, Sendable {
     public var id: String
     public var ok: Bool
     public var result: JSONValue?
     public var error: RespError?
+    public var ver: UInt16
+    public var minVer: UInt16
 
-    public init(id: String = "", ok: Bool = false, result: JSONValue? = nil, error: RespError? = nil) {
+    public init(
+        id: String = "", ok: Bool = false, result: JSONValue? = nil, error: RespError? = nil,
+        ver: UInt16 = ProtoVersion.current, minVer: UInt16 = ProtoVersion.minSupported
+    ) {
         self.id = id
         self.ok = ok
         self.result = result
         self.error = error
+        self.ver = ver
+        self.minVer = minVer
     }
 
-    enum CodingKeys: String, CodingKey { case id, ok, result, error }
+    enum CodingKeys: String, CodingKey { case id, ok, result, error, ver, minVer = "min_ver" }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -84,6 +155,8 @@ public struct Resp: Codable, Equatable, Sendable {
         // serde 把 `"result": null` 解成 None。
         result = try c.decodeIfPresent(JSONValue.self, forKey: .result).flatMap { $0 == .null ? nil : $0 }
         error = try c.decodeIfPresent(RespError.self, forKey: .error)
+        ver = try c.value(.ver, default: ProtoVersion.v1)
+        minVer = try c.value(.minVer, default: ProtoVersion.v1)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -92,6 +165,8 @@ public struct Resp: Codable, Equatable, Sendable {
         try c.encode(ok, forKey: .ok)
         try c.encodeIfPresent(result, forKey: .result)
         try c.encodeIfPresent(error, forKey: .error)
+        try c.encode(ver, forKey: .ver)
+        try c.encode(minVer, forKey: .minVer)
     }
 }
 
@@ -544,6 +619,28 @@ public struct FlowSupersedeRequest: Codable, Equatable, Sendable {
     }
 }
 
+/// #1070：`flow.failed` 推送载荷（`reason` 取代了 `code`）。对位 Rust `proto::FlowFailedPush`。
+public struct FlowFailedPush: Codable, Equatable, Sendable {
+    public var nodeId: String
+    public var queueSequence: Int64
+    public var pairingEpoch: String
+    public var leaseToken: String
+    public var reason: String
+
+    public init(nodeId: String = "", queueSequence: Int64 = 0, pairingEpoch: String = "", leaseToken: String = "", reason: String = "") {
+        self.nodeId = nodeId
+        self.queueSequence = queueSequence
+        self.pairingEpoch = pairingEpoch
+        self.leaseToken = leaseToken
+        self.reason = reason
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case nodeId = "node_id", queueSequence = "queue_sequence", pairingEpoch = "pairing_epoch"
+        case leaseToken = "lease_token", reason
+    }
+}
+
 public struct FlowSupersedeReply: Codable, Equatable, Sendable {
     /// replaced / refused
     public var outcome: String
@@ -869,4 +966,8 @@ public enum Codes {
     public static let storageFull = "STORAGE_FULL"
     public static let versionMismatch = "VERSION_MISMATCH"
     public static let `internal` = "INTERNAL"
+    /// #1070 新类别。
+    public static let desktopStorage = "DESKTOP_STORAGE"
+    public static let pathFailed = "PATH_FAILED"
+    public static let flowRejected = "FLOW_REJECTED"
 }

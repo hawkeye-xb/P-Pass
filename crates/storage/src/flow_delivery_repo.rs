@@ -225,18 +225,20 @@ impl Db {
     }
 
     /// Record cancellation only if this still is the exact current item.
+    /// #1076: the item is the tuple; `provider` (where the bytes come from)
+    /// is not part of it, so a re-offer that only swapped the provider ticket
+    /// is still the same item.
     pub async fn cancel_flow_grant(&self, grant: &FlowGrant) -> Result<bool> {
         let result = sqlx::query(
             "UPDATE flow_delivery SET state = 'cancelled'
              WHERE node_id = ? AND queue_sequence = ? AND pairing_epoch = ? AND lease_token = ?
-               AND content_hash = ? AND provider = ? AND state = 'active'",
+               AND content_hash = ? AND state = 'active'",
         )
         .bind(&grant.node_id)
         .bind(grant.queue_sequence)
         .bind(&grant.pairing_epoch)
         .bind(&grant.lease_token)
         .bind(&grant.content_hash)
-        .bind(&grant.provider)
         .execute(self.pool())
         .await?;
         Ok(result.rows_affected() == 1)
@@ -263,12 +265,14 @@ impl Db {
 
     /// Atomically record a receipt after the original is materialized. The
     /// exact active tuple is rechecked here, so cancellation/supersession can
-    /// never receive a completion receipt.
+    /// never receive a completion receipt. #1076: the provider is not
+    /// rechecked — it only says where the bytes came from, and a re-offer may
+    /// have replaced it while this fetch was running.
     pub async fn complete_flow_grant(&self, grant: &FlowGrant, receipt_id: &str) -> Result<bool> {
         let result = sqlx::query(
             "UPDATE flow_delivery SET state = 'completed', receipt_id = ?
              WHERE node_id = ? AND queue_sequence = ? AND pairing_epoch = ? AND lease_token = ?
-               AND content_hash = ? AND provider = ? AND state = 'active'",
+               AND content_hash = ? AND state = 'active'",
         )
         .bind(receipt_id)
         .bind(&grant.node_id)
@@ -276,7 +280,6 @@ impl Db {
         .bind(&grant.pairing_epoch)
         .bind(&grant.lease_token)
         .bind(&grant.content_hash)
-        .bind(&grant.provider)
         .execute(self.pool())
         .await?;
         Ok(result.rows_affected() == 1)
@@ -443,6 +446,34 @@ mod tests {
             db.stale_active_flow_grants(10_000).await.unwrap(),
             vec![grant(1, FlowGrantState::Active, 1)]
         );
+    }
+
+    /// #1076: a re-offer that only swaps the provider ticket is the same item.
+    /// A fetch still holding the old provider can complete it or cancel it.
+    #[tokio::test]
+    async fn complete_and_cancel_ignore_a_replaced_provider() {
+        let db = Db::open_in_memory().await.unwrap();
+        let old = grant(1, FlowGrantState::Active, 1);
+        let mut reoffered = old.clone();
+        reoffered.provider = "provider-2".into();
+
+        db.upsert_flow_grant(&old).await.unwrap();
+        db.upsert_flow_grant(&reoffered).await.unwrap();
+        assert!(db.complete_flow_grant(&old, "receipt").await.unwrap());
+
+        let other = grant(2, FlowGrantState::Active, 2);
+        let mut other_reoffered = other.clone();
+        other_reoffered.provider = "provider-2".into();
+        db.upsert_flow_grant(&other).await.unwrap();
+        db.upsert_flow_grant(&other_reoffered).await.unwrap();
+        assert!(db.cancel_flow_grant(&other).await.unwrap());
+
+        // Counter-proof: the tuple still guards — another lease cannot finish it.
+        let third = grant(3, FlowGrantState::Active, 3);
+        db.upsert_flow_grant(&third).await.unwrap();
+        let mut stranger = third.clone();
+        stranger.lease_token = "lease-other".into();
+        assert!(!db.complete_flow_grant(&stranger, "receipt").await.unwrap());
     }
 
     #[tokio::test]

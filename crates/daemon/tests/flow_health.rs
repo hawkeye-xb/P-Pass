@@ -457,7 +457,7 @@ async fn hello_reply_carries_health_for_a_paired_member_only() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn offer_that_cannot_fit_is_refused_with_the_storage_full_msg_key() {
+async fn offer_that_cannot_fit_is_refused_with_the_storage_full_reason() {
     let h = router_harness(Some(GIB)).await;
     let hash = *blake3::hash(b"too big").as_bytes();
     let offer = request(
@@ -475,8 +475,8 @@ async fn offer_that_cannot_fit_is_refused_with_the_storage_full_msg_key() {
     .await;
     assert!(!resp.ok);
     let error = resp.error.unwrap();
-    assert_eq!(error.msg_key, "storage_full");
-    assert_eq!(error.code, proto::codes::STORAGE_FULL);
+    assert_eq!(error.reason(), &proto::Reason::StorageFull);
+    assert_eq!(error.code(), proto::codes::DESKTOP_STORAGE);
 }
 
 // ── Offer-time precheck ─────────────────────────────────────────────────
@@ -503,7 +503,7 @@ async fn offer_refuses_an_item_that_does_not_fit_and_writes_nothing() {
         matches!(error, DeliveryError::InsufficientSpace { .. }),
         "{error:?}"
     );
-    assert_eq!(error.wire_code(), "storage_full");
+    assert_eq!(error.wire_code(), proto::Reason::StorageFull);
     let status = delivery.status(peer, &tuple("lease-1")).await.unwrap();
     assert_eq!(
         status.state, "not_found",
@@ -585,7 +585,11 @@ async fn offer_refuses_with_library_unavailable_when_the_library_folder_is_gone(
     let offer = request("lease-1", hash, transport.local_addr().to_string(), 10);
 
     let error = delivery.offer(peer, &offer).await.unwrap_err();
-    assert_eq!(error.wire_code(), "library_unavailable", "{error:?}");
+    assert_eq!(
+        error.wire_code(),
+        proto::Reason::LibraryUnavailable,
+        "{error:?}"
+    );
     let status = delivery.status(peer, &tuple("lease-1")).await.unwrap();
     assert_eq!(status.state, "not_found");
     assert!(!library.exists());
@@ -632,12 +636,15 @@ fn failure_classification_trusts_the_io_error_first_then_the_environment() {
         PeerFailure::StorageFailed,
         "unknown free space is never guessed as full"
     );
-    assert_eq!(PeerFailure::StorageFull.code(), "storage_full");
+    assert_eq!(PeerFailure::StorageFull.reason().as_str(), "storage_full");
     assert_eq!(
-        PeerFailure::LibraryUnavailable.code(),
+        PeerFailure::LibraryUnavailable.reason().as_str(),
         "library_unavailable"
     );
-    assert_eq!(PeerFailure::StorageFailed.code(), "storage_failed");
+    assert_eq!(
+        PeerFailure::StorageFailed.reason().as_str(),
+        "storage_failed"
+    );
 }
 
 // ── #555：盘满 ≠ 文件夹打不开 ───────────────────────────────────────────
@@ -718,7 +725,7 @@ async fn pushed_failure_code(free: Option<u64>) -> String {
     .await
     .expect("materialize failure must push flow.failed");
     drop(provider_blobs);
-    failed["data"]["code"].as_str().unwrap().to_owned()
+    failed["data"]["reason"].as_str().unwrap().to_owned()
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -888,35 +895,17 @@ async fn caught_mid_flight(seed: u64) -> Option<MidFlight> {
     None
 }
 
-/// Waits until the suspended fetch has gone quiet: `STABLE_SAMPLES`
-/// consecutive 100 ms samples with no byte growth.
-///
-/// QA-20 (#443): this used to demand quiet within a 2 s wall clock, which a
-/// loaded Windows runner missed while the interrupt was still landing (or
-/// in-flight bytes were still being written). The claim under test is that
-/// the fetch *does* stop, not how fast; a suspend that never takes effect
-/// runs the transfer to completion, and the callers' `partial < size`
-/// assertion goes red. `HANG_GUARD` only bounds a test that would
-/// otherwise never finish.
-async fn wait_until_not_running(m: &MidFlight) {
-    const STABLE_SAMPLES: u32 = 5;
-    const HANG_GUARD: std::time::Duration = std::time::Duration::from_secs(60);
-    let started = std::time::Instant::now();
-    // `status` would respawn a stopped task, so observe the registry
-    // through a fresh handle over the same state instead: the grant's
-    // durable state plus "is anything still pulling bytes".
-    let mut last = m.blobs.local_bytes(m.hash).await.unwrap();
-    let mut stable = 0;
-    while stable < STABLE_SAMPLES {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        let now = m.blobs.local_bytes(m.hash).await.unwrap();
-        stable = if now == last { stable + 1 } else { 0 };
-        last = now;
-        assert!(
-            started.elapsed() < HANG_GUARD,
-            "suspended fetch never went quiet (still at {last} bytes after {HANG_GUARD:?})"
-        );
-    }
+/// #1084: `suspend` returns only after the interrupted fetch task has ended,
+/// so "it stopped" is a direct check, not a quiet-bytes sampling loop
+/// (QA-20 / #443 had to keep widening that loop's wall-clock budget).
+async fn assert_stopped(m: &MidFlight) {
+    assert!(
+        !m.delivery
+            .task_running(m.provider_node, &tuple("lease-1"))
+            .await
+            .unwrap(),
+        "suspend must not return before the interrupted fetch task has ended"
+    );
 }
 
 /// `flow.suspend` keeps the grant active, so the partial stays in the GC
@@ -931,7 +920,7 @@ async fn suspended_partial_survives_gc_and_a_reoffer_of_the_same_tuple_resumes_i
         .suspend(m.provider_node, &tuple("lease-1"))
         .await
         .unwrap();
-    wait_until_not_running(&m).await;
+    assert_stopped(&m).await;
     let partial = m.blobs.local_bytes(m.hash).await.unwrap();
     assert!(
         partial > 0 && partial < m.size,
@@ -998,7 +987,7 @@ async fn a_grant_nobody_resumes_for_three_days_is_cancelled_and_its_partial_recl
         .suspend(m.provider_node, &tuple("lease-1"))
         .await
         .unwrap();
-    wait_until_not_running(&m).await;
+    assert_stopped(&m).await;
     let partial = m.blobs.local_bytes(m.hash).await.unwrap();
     assert!(partial > 0 && partial < m.size);
 

@@ -30,7 +30,7 @@ use core_index::{
 use platform::PlatformAdapter as _;
 use proto::{
     DesktopHealth, FlowCompletionReceipt, FlowFetchRequest, FlowStatusReply, FlowSupersedeReply,
-    FlowSupersedeRequest, FlowTupleRef,
+    FlowSupersedeRequest, FlowTupleRef, Reason, SupersedeRefusal,
 };
 use storage::{Db, FlowGrant, FlowGrantState};
 use transport::{Blobs, ConnectionStatus, NodeId};
@@ -45,6 +45,22 @@ type PeerFetchLock = Arc<AsyncMutex<()>>;
 type FetchLocks = Arc<Mutex<HashMap<[u8; 32], PeerFetchLock>>>;
 type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 type FreeSpaceProbe = Arc<dyn Fn(&Path) -> Option<u64> + Send + Sync>;
+type StageHook = Arc<
+    dyn Fn(FetchStage) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// #1076: the points a background fetch passes between its tuple checks.
+/// Only [`FlowDelivery::with_fetch_stage_hook`] observes them (tests pause a
+/// fetch there to land a re-offer inside the window).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FetchStage {
+    /// Bytes fetched and `require_active` passed; nothing materialized yet.
+    Verified,
+    /// The photo is in the library; the receipt is not written yet.
+    Ingested,
+}
 
 /// #413 §6: an active grant nobody resumed (offer / status respawn) for this
 /// long is cancelled, so its partial leaves the GC protection set. Covers a
@@ -58,7 +74,7 @@ pub const GRANT_RESUME_TTL_MS: i64 = 3 * 24 * 60 * 60 * 1000;
 pub const SPACE_RESERVE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// #413 contract §5: the public reason a Desktop could not store an item,
-/// carried as `flow.failed.code` and as an offer rejection's `msg_key`. The
+/// carried as `flow.failed.reason` and as an offer rejection's `reason`. The
 /// phone maps each one to `PeerFailure(PeerFailureKind)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PeerFailure {
@@ -71,11 +87,11 @@ pub enum PeerFailure {
 }
 
 impl PeerFailure {
-    pub fn code(self) -> &'static str {
+    pub fn reason(self) -> Reason {
         match self {
-            Self::StorageFull => "storage_full",
-            Self::LibraryUnavailable => "library_unavailable",
-            Self::StorageFailed => "storage_failed",
+            Self::StorageFull => Reason::StorageFull,
+            Self::LibraryUnavailable => Reason::LibraryUnavailable,
+            Self::StorageFailed => Reason::StorageFailed,
         }
     }
 }
@@ -108,8 +124,19 @@ pub fn classify_peer_failure(
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeliveryError {
-    #[error("request does not match the current pairing epoch, lease, and hash")]
-    GuardMismatch,
+    /// #1070: the request's pairing epoch is not the current one.
+    #[error("request does not carry the current pairing epoch")]
+    EpochMismatch,
+    /// #1070: no grant matches this exact tuple and can still advance.
+    #[error("no grant matches this exact tuple and can still advance")]
+    GrantNotFound,
+    /// #1070: the queue sequence is already held by another completed item.
+    #[error("queue sequence is already held by another completed item")]
+    GrantConflict,
+    /// #1070: durable delivery state contradicts itself (a bug, not the
+    /// phone's fault).
+    #[error("inconsistent delivery state: {0}")]
+    Inconsistent(&'static str),
     #[error("delivery was cancelled before completion")]
     Cancelled,
     #[error("invalid flow delivery request: {0}")]
@@ -153,7 +180,10 @@ impl DeliveryError {
     /// (filesystem, blob store, index) with different fix-it implications.
     fn detail_code(&self) -> &'static str {
         match self {
-            DeliveryError::GuardMismatch => "guard_mismatch",
+            DeliveryError::EpochMismatch => "epoch_mismatch",
+            DeliveryError::GrantNotFound => "grant_not_found",
+            DeliveryError::GrantConflict => "grant_conflict",
+            DeliveryError::Inconsistent(_) => "inconsistent_state",
             DeliveryError::Cancelled => "cancelled",
             DeliveryError::InvalidRequest(_) => "invalid_request",
             DeliveryError::Fetch(_) => "fetch_failed",
@@ -166,20 +196,25 @@ impl DeliveryError {
         }
     }
 
-    /// #413 contract §5: the code the phone sees — `flow.failed.code` and
-    /// an offer rejection's `msg_key`. Storage-side failures collapse to the
-    /// three [`PeerFailure`] codes; `fetch_failed` (path problem) and the
-    /// control-flow codes keep their names. The log line keeps the finer
+    /// #413 contract §5 / #1070: the reason the phone sees — `flow.failed.reason`
+    /// and an offer rejection's `reason`. Storage-side failures collapse to
+    /// the three [`PeerFailure`] reasons. The log line keeps the finer
     /// [`Self::detail_code`].
-    pub fn wire_code(&self) -> &'static str {
+    pub fn wire_code(&self) -> Reason {
         match self {
             DeliveryError::MaterializeStaging { failure, .. }
             | DeliveryError::MaterializeExport { failure, .. }
-            | DeliveryError::MaterializeIngest { failure, .. } => failure.code(),
-            DeliveryError::InsufficientSpace { .. } => PeerFailure::StorageFull.code(),
-            DeliveryError::LibraryUnavailable(_) => PeerFailure::LibraryUnavailable.code(),
-            DeliveryError::Storage(_) => PeerFailure::StorageFailed.code(),
-            other => other.detail_code(),
+            | DeliveryError::MaterializeIngest { failure, .. } => failure.reason(),
+            DeliveryError::InsufficientSpace { .. } => Reason::StorageFull,
+            DeliveryError::LibraryUnavailable(_) => Reason::LibraryUnavailable,
+            DeliveryError::Storage(_) => Reason::StorageFailed,
+            DeliveryError::EpochMismatch => Reason::EpochMismatch,
+            DeliveryError::GrantNotFound => Reason::GrantNotFound,
+            DeliveryError::GrantConflict => Reason::GrantConflict,
+            DeliveryError::Cancelled => Reason::Cancelled,
+            DeliveryError::InvalidRequest(_) => Reason::BadRequest,
+            DeliveryError::Fetch(_) => Reason::FetchFailed,
+            DeliveryError::Inconsistent(_) => Reason::Internal,
         }
     }
 
@@ -383,6 +418,45 @@ impl TaskKey {
 struct TaskEntry {
     token: CancellationToken,
     generation: u64,
+    /// #1084: fired by the task itself when it has actually ended (success,
+    /// error, cancel, panic or runtime shutdown — it is a drop guard held by
+    /// the task). Cancelling `token` only *asks* the task to stop;
+    /// `interrupt*` hand this back so callers wait for the stop to happen.
+    exited: CancellationToken,
+}
+
+/// #1084: the exit signals of interrupted tasks. Awaiting it is the standard
+/// cancel-and-await: once it returns, the interrupted fetch tasks have ended
+/// and no longer pull bytes, so the caller may answer "stopped" truthfully
+/// and a respawn for the same tuple cannot overlap the old task.
+/// Held by a running fetch task; dropping it is the task's exit.
+struct TaskExit {
+    tasks: FlowTaskRegistry,
+    key: TaskKey,
+    generation: u64,
+    exited: CancellationToken,
+}
+
+impl Drop for TaskExit {
+    fn drop(&mut self) {
+        self.tasks.unregister(&self.key, self.generation);
+        self.exited.cancel();
+    }
+}
+
+#[must_use = "await the interrupted tasks' exit"]
+struct Interrupted(Vec<CancellationToken>);
+
+impl Interrupted {
+    fn count(&self) -> usize {
+        self.0.len()
+    }
+
+    async fn exited(self) {
+        for exited in self.0 {
+            exited.cancelled().await;
+        }
+    }
 }
 
 impl FlowTaskRegistry {
@@ -401,34 +475,40 @@ impl FlowTaskRegistry {
     /// adds a new concurrent spawn source, making the atomic form
     /// structural rather than theoretical. Does not change the key
     /// structure or any existing semantics.
-    fn try_register(&self, peer: NodeId, grant: &FlowGrant) -> Option<(CancellationToken, u64)> {
+    fn try_register(
+        &self,
+        peer: NodeId,
+        grant: &FlowGrant,
+    ) -> Option<(CancellationToken, u64, CancellationToken)> {
         let mut entries = self.entries.lock().expect("flow task registry lock");
         if entries.contains_key(&TaskKey::of(peer, grant)) {
             return None;
         }
-        let (token, generation) = self.fresh_entry();
+        let (token, generation, exited) = self.fresh_entry();
         entries.insert(
             TaskKey::of(peer, grant),
             TaskEntry {
                 token: token.clone(),
                 generation,
+                exited: exited.clone(),
             },
         );
-        Some((token, generation))
+        Some((token, generation, exited))
     }
 
-    fn fresh_entry(&self) -> (CancellationToken, u64) {
+    fn fresh_entry(&self) -> (CancellationToken, u64, CancellationToken) {
         (
             CancellationToken::new(),
             self.next_generation.fetch_add(1, Ordering::Relaxed),
+            CancellationToken::new(),
         )
     }
 
     /// Called by the spawned task itself once it exits (completed, failed,
     /// or was cancelled) — removes its own entry, but only if it is still
-    /// *this* task's registration (a concurrent `interrupt()` may already
-    /// have removed it, or a newer spawn for the same reused key may have
-    /// replaced it; either way this is then a safe no-op).
+    /// *this* task's registration (a newer spawn for the same reused key may
+    /// have replaced it; then this is a safe no-op). #1084: the only remover,
+    /// so a registered entry always means a live task.
     fn unregister(&self, key: &TaskKey, generation: u64) {
         let mut entries = self.entries.lock().expect("flow task registry lock");
         if entries
@@ -439,43 +519,42 @@ impl FlowTaskRegistry {
         }
     }
 
-    /// `flow.suspend`/`flow.cancel_tuple`: cancel and remove the task registered
-    /// for this exact tuple, if any. Returns whether one was found.
-    fn interrupt(&self, peer: NodeId, grant: &FlowGrant) -> bool {
-        let entry = self
-            .entries
-            .lock()
-            .expect("flow task registry lock")
-            .remove(&TaskKey::of(peer, grant));
-        match entry {
-            Some(entry) => {
-                entry.token.cancel();
-                true
-            }
-            None => false,
-        }
+    /// `flow.suspend`/`flow.cancel_tuple`: cancel the task registered for this
+    /// exact tuple, if any. The caller awaits [`Interrupted::exited`].
+    ///
+    /// #1084: the entry is NOT removed here — the task removes it itself
+    /// (`unregister`) on its way out. So "registered" means "still alive":
+    /// `is_running` stays true while it winds down, and a racing
+    /// `offer`/`status` cannot spawn a second task for the tuple meanwhile.
+    fn interrupt(&self, peer: NodeId, grant: &FlowGrant) -> Interrupted {
+        let entries = self.entries.lock().expect("flow task registry lock");
+        Interrupted(
+            entries
+                .get(&TaskKey::of(peer, grant))
+                .map(|entry| {
+                    entry.token.cancel();
+                    entry.exited.clone()
+                })
+                .into_iter()
+                .collect(),
+        )
     }
 
     /// #563 `device.revoke`: cancel and remove every task registered for
     /// this control peer, whatever its tuple. Same per-tuple tokens as
-    /// [`Self::interrupt`]; returns how many were cancelled.
-    fn interrupt_peer(&self, peer: NodeId) -> usize {
-        let mut cancelled = Vec::new();
-        self.entries
-            .lock()
-            .expect("flow task registry lock")
-            .retain(|key, entry| {
-                if key.peer == peer.0 {
-                    cancelled.push(entry.token.clone());
-                    false
-                } else {
-                    true
-                }
-            });
-        for token in &cancelled {
-            token.cancel();
-        }
-        cancelled.len()
+    /// [`Self::interrupt`]; the caller awaits [`Interrupted::exited`].
+    fn interrupt_peer(&self, peer: NodeId) -> Interrupted {
+        let entries = self.entries.lock().expect("flow task registry lock");
+        Interrupted(
+            entries
+                .iter()
+                .filter(|(key, _)| key.peer == peer.0)
+                .map(|(_, entry)| {
+                    entry.token.cancel();
+                    entry.exited.clone()
+                })
+                .collect(),
+        )
     }
 }
 
@@ -530,6 +609,8 @@ pub struct FlowDelivery {
     /// again. Process-local: a daemon restart forgets them (one more failed
     /// item re-learns the folder).
     landing_failures: Arc<Mutex<std::collections::HashSet<PathBuf>>>,
+    /// #1076: see [`FetchStage`]. `None` in production.
+    stage_hook: Option<StageHook>,
 }
 
 /// #763: bound on remembered failing landing folders. Each is one month of
@@ -573,6 +654,7 @@ impl FlowDelivery {
             thumbs: None,
             fetch_byte_stall: FETCH_BYTE_STALL_LIMIT,
             landing_failures: Arc::default(),
+            stage_hook: None,
         }
     }
 
@@ -580,6 +662,24 @@ impl FlowDelivery {
     pub fn with_fetch_byte_stall(mut self, limit: std::time::Duration) -> Self {
         self.fetch_byte_stall = limit;
         self
+    }
+
+    /// #1076: await `hook` at each [`FetchStage`] of a background fetch (tests).
+    pub fn with_fetch_stage_hook(
+        mut self,
+        hook: impl Fn(FetchStage) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+            + Send
+            + Sync
+            + 'static,
+    ) -> Self {
+        self.stage_hook = Some(Arc::new(hook));
+        self
+    }
+
+    async fn reached(&self, stage: FetchStage) {
+        if let Some(hook) = &self.stage_hook {
+            hook(stage).await;
+        }
     }
 
     /// IDX-06 (#442): hand every freshly materialized item to the
@@ -895,14 +995,15 @@ impl FlowDelivery {
         // NET-06: this is the async-202 trigger — offer's job ends here; the
         // actual transfer runs on its own task, tracked by `self.tasks` so
         // `suspend`/`cancel`/`status` can observe or interrupt it.
-        self.spawn_fetch_task(peer, stored, request.clone());
+        self.spawn_fetch_task(peer, stored.clone(), request.clone());
         // NET-24: the genuinely-async case, and the only one that still
-        // answers "202 — go wait". `task_running` is asserted rather than
-        // queried: `spawn_fetch_task` just registered this tuple.
+        // answers "202 — go wait". #1076: `task_running` is queried, not
+        // asserted — a re-offer whose task was already running keeps that
+        // task, and one that ended in between reports so.
         Ok(FlowStatusReply {
             state: "active".into(),
             receipt: None,
-            task_running: true,
+            task_running: self.tasks.is_running(peer, &stored),
         })
     }
 
@@ -954,7 +1055,10 @@ impl FlowDelivery {
         // NET-15: `try_register` makes the idempotency check atomic — a
         // concurrent `offer`/`status` respawn can no longer both
         // pass the "not running" check and double-spawn for this tuple.
-        let Some((token, generation)) = self.tasks.try_register(peer, &grant) else {
+        // #1076: a re-offer carrying a new provider ticket lands here too and
+        // keeps the running task: the provider is where the bytes come from,
+        // not which item this is. A later attempt reads the stored provider.
+        let Some((token, generation, exited)) = self.tasks.try_register(peer, &grant) else {
             return;
         };
         let key = TaskKey::of(peer, &grant);
@@ -962,10 +1066,18 @@ impl FlowDelivery {
         // NET-26: taken only after `try_register` won (the idempotent early
         // return above holds nothing) and moved into the task, so every way
         // the task ends — success, error, cancel, panic, runtime shutdown —
-        // drops it. Not derived from the registry: `interrupt()` removes the
-        // entry while the task may still be winding down.
+        // drops it, same as the `TaskExit` guard below.
         let awake = self.awake.lease();
         tokio::spawn(async move {
+            // #1084: dropped last, on every way out (including panic and
+            // runtime shutdown): unregisters, then fires `exited` — what
+            // `Interrupted::exited` waits for.
+            let _exit = TaskExit {
+                tasks: delivery.tasks.clone(),
+                key,
+                generation,
+                exited,
+            };
             let _awake = awake;
             let outcome = tokio::select! {
                 result = delivery.run_fetch_body(peer, &grant, &request) => Some(result),
@@ -990,7 +1102,6 @@ impl FlowDelivery {
                     );
                 }
             }
-            delivery.tasks.unregister(&key, generation);
         });
     }
 
@@ -1046,15 +1157,16 @@ impl FlowDelivery {
         crate::events::emit(
             events,
             crate::events::FLOW_FAILED,
-            serde_json::json!({
-                "node_id": peer.to_string(),
-                "queue_sequence": grant.queue_sequence,
-                "pairing_epoch": grant.pairing_epoch,
-                "lease_token": grant.lease_token,
-                // #413 contract §5: public code only; the fine-grained
-                // detail code stays in the log line above.
-                "code": error.wire_code(),
-            }),
+            // #413 contract §5: public reason only; the fine-grained
+            // detail code stays in the log line above.
+            serde_json::to_value(proto::FlowFailedPush {
+                node_id: peer.to_string(),
+                queue_sequence: grant.queue_sequence,
+                pairing_epoch: grant.pairing_epoch.clone(),
+                lease_token: grant.lease_token.clone(),
+                reason: error.wire_code(),
+            })
+            .unwrap_or_default(),
         );
     }
 
@@ -1100,6 +1212,7 @@ impl FlowDelivery {
         // A concurrent cancel/superseding offer may have landed while the
         // fetch was in flight. Do not materialize or finalize old work.
         self.require_active(grant).await?;
+        self.reached(FetchStage::Verified).await;
         // #413: `create_dir_all` below would quietly recreate a library
         // folder that vanished (external drive unplugged) and ingest into an
         // empty stand-in. Refuse instead: the phone waits, nothing is lost.
@@ -1164,6 +1277,7 @@ impl FlowDelivery {
             }
             Err(e) => return Err(self.ingest_failure(&e)),
         }
+        self.reached(FetchStage::Ingested).await;
 
         // This update is the receipt adapter's irreversible boundary. It
         // repeats all tuple guards inside SQL and writes receipt_id before
@@ -1175,6 +1289,14 @@ impl FlowDelivery {
             .await
             .map_err(storage_error)?
         {
+            // #1076: lost the race. A re-offer that found the photo already
+            // in the library completed this same tuple (`complete_without_fetch`);
+            // that receipt is this item's outcome, not a failure. Only a
+            // cancellation stays one — as in `complete_without_fetch`.
+            let current = self.matching_grant(grant).await?;
+            if current.state == FlowGrantState::Completed {
+                return self.persisted_receipt(&current).await;
+            }
             return Err(DeliveryError::Cancelled);
         }
         // TEL-02: `resumed` has no cheap signal yet from this call path —
@@ -1199,13 +1321,13 @@ impl FlowDelivery {
         peer: NodeId,
         request: &FlowSupersedeRequest,
     ) -> Result<FlowSupersedeReply, DeliveryError> {
-        let refused = |reason: &str| FlowSupersedeReply {
+        let refused = |reason: SupersedeRefusal| FlowSupersedeReply {
             outcome: "refused".into(),
-            reason: reason.into(),
+            reason: Some(reason),
         };
         let (Some(old), Some(new)) = (parse_hash(&request.old_hash), parse_hash(&request.new_hash))
         else {
-            return Ok(refused("bad_request"));
+            return Ok(refused(SupersedeRefusal::BadRequest));
         };
         let epoch = self
             .db
@@ -1215,15 +1337,15 @@ impl FlowDelivery {
         if request.pairing_epoch.is_empty()
             || epoch.as_deref() != Some(request.pairing_epoch.as_str())
         {
-            return Ok(refused("epoch_mismatch"));
+            return Ok(refused(SupersedeRefusal::EpochMismatch));
         }
         let Ok((provider, ticket_hash)) = self.blobs.register_blob_ticket(&request.provider) else {
-            return Ok(refused("bad_request"));
+            return Ok(refused(SupersedeRefusal::BadRequest));
         };
         // 提供方是手机的 blobs 端点（独立于控制面身份，与 flow.offer 一样不比对）；取到的每个字节都按
         // new_hash 校验，票据指向别的内容就拒绝。
         if ticket_hash != new {
-            return Ok(refused("bad_request"));
+            return Ok(refused(SupersedeRefusal::BadRequest));
         }
         let fetch_lock = self.fetch_lock(peer);
         let _guard = fetch_lock.lock().await;
@@ -1237,7 +1359,7 @@ impl FlowDelivery {
             SupersedeCheck::AlreadyDone => {
                 return Ok(FlowSupersedeReply {
                     outcome: "replaced".into(),
-                    reason: String::new(),
+                    reason: None,
                 })
             }
             SupersedeCheck::Refused(reason) => {
@@ -1246,7 +1368,7 @@ impl FlowDelivery {
                     &request.old_hash[..8],
                     &request.new_hash[..8]
                 );
-                return Ok(refused(reason));
+                return Ok(refused(supersede_refusal(reason)));
             }
             SupersedeCheck::Ready(plan) => plan,
         };
@@ -1261,7 +1383,7 @@ impl FlowDelivery {
                     "#851 supersede {}: ranged fetch failed: {e}",
                     &request.new_hash[..8]
                 );
-                return Ok(refused("fetch_failed"));
+                return Ok(refused(SupersedeRefusal::FetchFailed));
             }
         };
         let fetched: u64 = pieces.iter().map(|(_, b)| b.len() as u64).sum();
@@ -1277,7 +1399,7 @@ impl FlowDelivery {
                     &request.old_hash[..8],
                     &request.new_hash[..8]
                 );
-                Ok(refused(reason))
+                Ok(refused(supersede_refusal(reason)))
             }
             SupersedeApplied::Replaced {
                 rel_path,
@@ -1316,7 +1438,7 @@ impl FlowDelivery {
                 tracing::info!("#851 supersede {} → {} replaced at {rel_path} ({fetched} of {size} bytes fetched)", &request.old_hash[..8], &request.new_hash[..8]);
                 Ok(FlowSupersedeReply {
                     outcome: "replaced".into(),
-                    reason: String::new(),
+                    reason: None,
                 })
             }
         }
@@ -1344,7 +1466,7 @@ impl FlowDelivery {
         tuple: &FlowTupleRef,
     ) -> Result<(), DeliveryError> {
         let Some(grant) = self.tuple_grant(peer, tuple).await? else {
-            return Err(DeliveryError::GuardMismatch);
+            return Err(DeliveryError::GrantNotFound);
         };
         if self
             .db
@@ -1352,7 +1474,7 @@ impl FlowDelivery {
             .await
             .map_err(storage_error)?
         {
-            self.tasks.interrupt(peer, &grant);
+            self.tasks.interrupt(peer, &grant).exited().await;
             if self
                 .paths
                 .clear_if_current(peer, grant.queue_sequence, &grant.lease_token)
@@ -1450,15 +1572,30 @@ impl FlowDelivery {
     /// out of protection.
     pub async fn suspend(&self, peer: NodeId, tuple: &FlowTupleRef) -> Result<(), DeliveryError> {
         let Some(grant) = self.tuple_grant(peer, tuple).await? else {
-            return Err(DeliveryError::GuardMismatch);
+            return Err(DeliveryError::GrantNotFound);
         };
         // #1027: a grant that already completed or was cancelled has nothing
         // left to interrupt — idempotent Ok, the stored state is untouched.
         if grant.state != FlowGrantState::Active {
             return Ok(());
         }
-        self.tasks.interrupt(peer, &grant);
+        // #1084: answer only once the fetch has really stopped.
+        self.tasks.interrupt(peer, &grant).exited().await;
         Ok(())
+    }
+
+    /// #1084: read-only "is a fetch task running for this tuple" — unlike
+    /// [`Self::status`], never respawns one. After [`Self::suspend`] returns
+    /// this is `false`: suspend waits for the task to end.
+    pub async fn task_running(
+        &self,
+        peer: NodeId,
+        tuple: &FlowTupleRef,
+    ) -> Result<bool, DeliveryError> {
+        Ok(self
+            .tuple_grant(peer, tuple)
+            .await?
+            .is_some_and(|grant| self.tasks.is_running(peer, &grant)))
     }
 
     /// Looks up the exact grant a [`FlowTupleRef`] names, or `None` if
@@ -1510,7 +1647,7 @@ impl FlowDelivery {
             .await
             .map_err(storage_error)?;
         if epoch.as_deref() != Some(request.pairing_epoch.as_str()) {
-            return Err(DeliveryError::GuardMismatch);
+            return Err(DeliveryError::EpochMismatch);
         }
         Ok(FlowGrant {
             node_id: peer.0.to_vec(),
@@ -1533,22 +1670,26 @@ impl FlowDelivery {
             .await
             .map_err(storage_error)?
         else {
-            return Err(DeliveryError::GuardMismatch);
+            return Err(DeliveryError::GrantNotFound);
         };
+        // #1076: identity is the tuple. `provider` only says where the bytes
+        // come from — a re-offer may replace it while a fetch runs — so it is
+        // never compared. The content itself is pinned by `content_hash`.
         if stored.pairing_epoch != grant.pairing_epoch
             || stored.lease_token != grant.lease_token
             || stored.content_hash != grant.content_hash
-            || stored.provider != grant.provider
         {
-            return Err(DeliveryError::GuardMismatch);
+            return Err(DeliveryError::GrantConflict);
         }
         Ok(stored)
     }
 
     /// The authenticated control peer owns the Flow grant, while Android's
-    /// native iroh-blobs provider owns its own endpoint and ticket. The ticket
-    /// is immutable inside the grant and its hash is rechecked before every
-    /// fetch, so accepting a distinct provider does not weaken the tuple gate.
+    /// native iroh-blobs provider owns its own endpoint and ticket. A re-offer
+    /// may replace the ticket (#1076); whichever one a fetch uses, its hash is
+    /// rechecked against the grant's content hash here and iroh-blobs verifies
+    /// every byte against that hash, so the provider never decides what
+    /// content lands and does not weaken the tuple gate.
     fn provider_for(&self, grant: &FlowGrant) -> Result<NodeId, DeliveryError> {
         let (provider, ticket_hash) = match self.blobs.register_blob_ticket(&grant.provider) {
             Ok((provider, ticket_hash)) => (provider, Some(ticket_hash)),
@@ -1562,7 +1703,9 @@ impl FlowDelivery {
             ),
         };
         if ticket_hash.is_some_and(|hash| hash.as_slice() != grant.content_hash.as_slice()) {
-            return Err(DeliveryError::GuardMismatch);
+            return Err(DeliveryError::InvalidRequest(
+                "provider ticket names different content".into(),
+            ));
         }
         Ok(provider)
     }
@@ -1604,7 +1747,9 @@ impl FlowDelivery {
             .cancel_active_flow_grants_for_node(&peer.0)
             .await
             .map_err(storage_error)?;
-        let interrupted = self.tasks.interrupt_peer(peer);
+        let tasks = self.tasks.interrupt_peer(peer);
+        let interrupted = tasks.count();
+        tasks.exited().await;
         let mut path_cleared = false;
         for grant in &cancelled {
             path_cleared |=
@@ -1625,7 +1770,7 @@ impl FlowDelivery {
         match self.matching_grant(grant).await?.state {
             FlowGrantState::Active => Ok(()),
             FlowGrantState::Cancelled => Err(DeliveryError::Cancelled),
-            FlowGrantState::Completed => Err(DeliveryError::GuardMismatch),
+            FlowGrantState::Completed => Err(DeliveryError::GrantNotFound),
         }
     }
 
@@ -1639,13 +1784,17 @@ impl FlowDelivery {
             .await
             .map_err(storage_error)?
         else {
-            return Err(DeliveryError::GuardMismatch);
+            return Err(DeliveryError::Inconsistent(
+                "completed grant has no receipt",
+            ));
         };
         if receipt.pairing_epoch != grant.pairing_epoch
             || receipt.lease_token != grant.lease_token
             || receipt.content_hash != grant.content_hash
         {
-            return Err(DeliveryError::GuardMismatch);
+            return Err(DeliveryError::Inconsistent(
+                "receipt does not match its grant",
+            ));
         }
         Ok(receipt_from(grant, receipt.receipt_id))
     }
@@ -1721,6 +1870,18 @@ fn receipt_from(grant: &FlowGrant, receipt_id: String) -> FlowCompletionReceipt 
         lease_token: grant.lease_token.clone(),
         content_hash: hex::encode(&grant.content_hash),
     }
+}
+
+/// #1070: core-index names a supersede refusal with a `&'static str`; the
+/// wire carries the registered [`SupersedeRefusal`]. Every string core-index
+/// returns is registered (pinned by `every_core_index_refusal_is_registered`);
+/// an unregistered one is a bug, logged and answered as `bad_request` —
+/// either way nothing changed on disk.
+fn supersede_refusal(reason: &str) -> SupersedeRefusal {
+    SupersedeRefusal::from_wire(reason).unwrap_or_else(|| {
+        tracing::error!("#1070: unregistered supersede refusal {reason:?}");
+        SupersedeRefusal::BadRequest
+    })
 }
 
 fn parse_hash(value: &str) -> Option<[u8; 32]> {
@@ -1905,4 +2066,75 @@ fn unix_ms_now() -> i64 {
 
 fn storage_error(error: storage::StorageError) -> DeliveryError {
     DeliveryError::Storage(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #1070: every refusal string core-index can return is a registered
+    /// `SupersedeRefusal` (scanned from its source, so a new one fails here).
+    #[test]
+    fn every_core_index_refusal_is_registered() {
+        let src = include_str!("../../core-index/src/supersede.rs");
+        let mut seen = 0;
+        for line in src.lines() {
+            for marker in ["Refused(\"", "Err(\""] {
+                if let Some(at) = line.find(marker) {
+                    let rest = &line[at + marker.len()..];
+                    let name = &rest[..rest.find('"').unwrap()];
+                    assert!(
+                        SupersedeRefusal::from_wire(name).is_some(),
+                        "core-index refusal {name:?} is not registered"
+                    );
+                    seen += 1;
+                }
+            }
+        }
+        assert!(seen >= 9, "scanner found only {seen} refusals");
+        assert_eq!(
+            supersede_refusal("not_a_redaction"),
+            SupersedeRefusal::NotARedaction
+        );
+        assert_eq!(
+            supersede_refusal("never_registered"),
+            SupersedeRefusal::BadRequest
+        );
+    }
+
+    /// #1070: each DeliveryError names one registered reason.
+    #[test]
+    fn delivery_errors_map_to_registered_reasons() {
+        let cases = [
+            (DeliveryError::EpochMismatch, Reason::EpochMismatch),
+            (DeliveryError::GrantNotFound, Reason::GrantNotFound),
+            (DeliveryError::GrantConflict, Reason::GrantConflict),
+            (DeliveryError::Cancelled, Reason::Cancelled),
+            (
+                DeliveryError::InvalidRequest("x".into()),
+                Reason::BadRequest,
+            ),
+            (DeliveryError::Fetch("x".into()), Reason::FetchFailed),
+            (DeliveryError::Inconsistent("x"), Reason::Internal),
+            (DeliveryError::Storage("x".into()), Reason::StorageFailed),
+            (
+                DeliveryError::InsufficientSpace { needed: 2, free: 1 },
+                Reason::StorageFull,
+            ),
+            (
+                DeliveryError::LibraryUnavailable("x".into()),
+                Reason::LibraryUnavailable,
+            ),
+            (
+                DeliveryError::MaterializeIngest {
+                    failure: PeerFailure::StorageFull,
+                    detail: "x".into(),
+                },
+                Reason::StorageFull,
+            ),
+        ];
+        for (error, reason) in cases {
+            assert_eq!(error.wire_code(), reason, "{error}");
+        }
+    }
 }

@@ -33,6 +33,64 @@ pub(crate) fn ui_err(key: &str, params: &[(&str, &dyn std::fmt::Display)]) -> St
     json!({ "key": key, "params": params }).to_string()
 }
 
+/// 协议 v2（#1071）：daemon 应答错误 `{code, reason, params}` 里，线上只传机器码
+/// `reason`，不传文案 key；壳自己决定这个 reason 在界面上说什么。
+/// 下表对 `crates/proto` 的 `reasons_registry` 快照里**每个** reason 给出显式去向
+/// （穷举测试 `every_registry_reason_has_an_explicit_mapping` 卡死漏项）：
+/// 要么是一条具体文案 key，要么显式归入 [`UI_ERR_GENERIC`]。
+pub(crate) const UI_ERR_GENERIC: &str = "ui.err_generic";
+const REASON_UI_KEYS: &[(&str, &str)] = &[
+    ("not_paired", "err.not_paired"),
+    ("revoked", "err.not_authorized"),
+    ("role_forbidden", "err.not_authorized"),
+    ("pair_token_invalid", "err.not_authorized"),
+    ("phone_outdated", "ui.err_phone_outdated"),
+    ("desktop_outdated", "ui.err_desktop_outdated"),
+    ("unsupported_method", "err.unsupported"),
+    ("backup_failed", "err.backup_failed"),
+    ("storage_full", "err.disk_full"),
+    // 以下显式归入通用：对用户没有比「出错了」更有用的话可说。
+    ("bad_request", UI_ERR_GENERIC),
+    ("not_found", UI_ERR_GENERIC),
+    ("internal", UI_ERR_GENERIC),
+    ("library_unavailable", UI_ERR_GENERIC),
+    ("storage_failed", UI_ERR_GENERIC),
+    ("fetch_failed", UI_ERR_GENERIC),
+    ("epoch_mismatch", UI_ERR_GENERIC),
+    ("grant_not_found", UI_ERR_GENERIC),
+    ("grant_conflict", UI_ERR_GENERIC),
+    ("cancelled", UI_ERR_GENERIC),
+];
+
+/// reason → 壳文案 key；表外（含老 daemon 没带 reason、将来新增的值）一律通用。
+pub(crate) fn reason_ui_key(reason: &str) -> &'static str {
+    REASON_UI_KEYS
+        .iter()
+        .find(|(r, _)| *r == reason)
+        .map_or(UI_ERR_GENERIC, |(_, k)| k)
+}
+
+/// daemon 应答的 `error` 对象 → 壳的 keyed 错误串（与 [`ui_err`] 同形）。
+/// 原 `reason` 放进 `params.reason` 只供排查，通用文案不引用它，永不进界面；
+/// 表外的 reason 另写一行 stderr 日志。
+pub(crate) fn daemon_error(error: &Value) -> String {
+    let reason = error["reason"].as_str().unwrap_or("");
+    let key = reason_ui_key(reason);
+    if key == UI_ERR_GENERIC && !REASON_UI_KEYS.iter().any(|(r, _)| *r == reason) {
+        eprintln!(
+            "daemon 回了壳不认识的 reason {reason:?}（code={}），显示通用错误",
+            error["code"]
+        );
+    }
+    ui_err(key, &[("reason", &reason)])
+}
+
+/// 壳是否收到了「daemon 不认识这个方法」。`daemon_error` 的产物是 keyed JSON，
+/// 不能再拿整串和裸 key 比。
+pub(crate) fn is_unsupported_error(e: &str) -> bool {
+    serde_json::from_str::<Value>(e).is_ok_and(|v| v["key"] == "err.unsupported")
+}
+
 /// NET-11: socket 读超时在 std::io 里的表现跨平台不统一（TimedOut 是
 /// 稳定档；部分平台映射成 WouldBlock——非阻塞语义的超时即此）。只认
 /// 这两档，且调用方（BufReader）可能已消耗部分字节，故超时即弃连接。
@@ -240,10 +298,7 @@ impl DaemonHandle {
         if resp["ok"].as_bool() == Some(true) {
             Ok(resp["result"].clone())
         } else {
-            Err(resp["error"]["msg_key"]
-                .as_str()
-                .unwrap_or("err.unsupported")
-                .to_string())
+            Err(daemon_error(&resp["error"]))
         }
     }
 
@@ -290,10 +345,7 @@ impl DaemonHandle {
         let resp: Value =
             serde_json::from_str(line.trim()).map_err(|e| format!("响应不是 JSON: {e}"))?;
         if resp["ok"].as_bool() != Some(true) {
-            return Err(resp["error"]["msg_key"]
-                .as_str()
-                .unwrap_or("err.unsupported")
-                .to_string());
+            return Err(daemon_error(&resp["error"]));
         }
         // DESK-63 (#946): the handshake is the readiness signal. Call back
         // before the first event read so a daemon that is alive but silent
@@ -527,6 +579,68 @@ mod tests {
             .call_with_timeout("status", json!({}), Duration::from_millis(800))
             .expect("responsive server must not trip the fuse");
         assert_eq!(v["pong"], json!(true));
+    }
+
+    /// #1071 验收 1：proto 快照里每个 reason 都必须在映射表里有显式一行；
+    /// 表里也不许留快照没有的陈旧 reason。
+    fn registry_reasons() -> Vec<String> {
+        let snap = include_str!(
+            "../../../../crates/proto/tests/snapshots/snapshots__reasons_registry.snap"
+        );
+        let json = &snap[snap.find('[').expect("snapshot has a JSON array")..];
+        let v: Value = serde_json::from_str(json).expect("snapshot body is JSON");
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["reason"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn every_registry_reason_has_an_explicit_mapping() {
+        let reasons = registry_reasons();
+        assert!(reasons.len() >= 19, "快照读空了？{reasons:?}");
+        for r in &reasons {
+            assert!(
+                REASON_UI_KEYS.iter().any(|(k, _)| k == r),
+                "reason {r} 没有显式映射（具体文案或显式归入 UI_ERR_GENERIC）"
+            );
+        }
+        for (k, _) in REASON_UI_KEYS {
+            assert!(
+                reasons.iter().any(|r| r == k),
+                "映射表里有快照没有的 reason: {k}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_or_missing_reason_is_generic_and_never_leaks_raw() {
+        let e = daemon_error(&json!({"code": "INTERNAL", "reason": "brand_new_reason"}));
+        let v: Value = serde_json::from_str(&e).unwrap();
+        assert_eq!(v["key"], UI_ERR_GENERIC);
+        let none = daemon_error(&json!({"code": "X"}));
+        assert_eq!(
+            serde_json::from_str::<Value>(&none).unwrap()["key"],
+            UI_ERR_GENERIC
+        );
+        // 旧形状的 msg_key 不再被读。
+        let old = daemon_error(&json!({"msg_key": "storage_full"}));
+        assert_eq!(
+            serde_json::from_str::<Value>(&old).unwrap()["key"],
+            UI_ERR_GENERIC
+        );
+        assert!(!is_unsupported_error(&old));
+    }
+
+    #[test]
+    fn known_reasons_map_and_unsupported_is_detectable() {
+        let e = daemon_error(&json!({"code": "INVALID_REQUEST", "reason": "unsupported_method"}));
+        assert!(is_unsupported_error(&e));
+        let v: Value =
+            serde_json::from_str(&daemon_error(&json!({"reason": "storage_full"}))).unwrap();
+        assert_eq!(v["key"], "err.disk_full");
+        assert_eq!(v["params"]["reason"], "storage_full");
     }
 
     /// 生产阈值唯一且为 10s（卡定值；改动必须先过对照表，防摆钟）。

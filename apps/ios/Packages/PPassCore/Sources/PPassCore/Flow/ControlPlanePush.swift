@@ -5,7 +5,7 @@ import Foundation
 /// 桌面拒绝了这次订阅（第一帧就是 `ok:false` 的应答），例如设备已被撤销时的 `NOT_AUTHORIZED`。
 public struct SubscribeRejected: Error, Equatable, Sendable {
     public let code: String
-    public let msgKey: String
+    public let reason: DesktopReason
 }
 
 /// [FlowPushSource] 的控制面实现：一条 `timeline.subscribe` 流。
@@ -36,12 +36,12 @@ public struct ControlPlanePush: FlowPushSource {
     /// 只认显式的 `ok:false` 且不是推送帧。
     static func rejection(_ fields: [String: JSONValue]) -> SubscribeRejected? {
         guard fields["event"] == nil, fields["ok"] == .bool(false) else { return nil }
-        var code = "", msgKey = ""
+        var code = "", reason = ""
         if case let .object(error)? = fields["error"] {
             if case let .string(c)? = error["code"] { code = c }
-            if case let .string(k)? = error["msg_key"] { msgKey = k }
+            if case let .string(r)? = error["reason"] { reason = r }
         }
-        return SubscribeRejected(code: code, msgKey: msgKey)
+        return SubscribeRejected(code: code, reason: DesktopReason(wire: reason))
     }
 }
 

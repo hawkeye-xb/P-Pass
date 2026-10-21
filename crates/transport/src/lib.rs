@@ -48,8 +48,11 @@ use futures_core::Stream;
 
 /// ALPN for the control plane: pairing, timeline queries, thumbnails,
 /// diagnostics. Payload: length-prefixed JSON frames (`proto::codec`).
-/// 详细设计 §3.2 — the trailing number is the major version; incompatible
-/// changes open a new ALPN and run dual-stack during transition.
+/// #1069: this ALPN never follows the protocol version — it stays
+/// `ppf/ctrl/1`. Incompatibility is negotiated in band (`Req`/`Resp`
+/// `ver` / `min_ver`, `proto::compatibility`), so an outdated peer still
+/// connects and is told which device to update instead of failing at the
+/// connection layer. (Supersedes 详细设计 §3.2's "new ALPN + dual-stack".)
 pub const ALPN_CTRL: &str = "ppf/ctrl/1";
 
 /// #544：给宿主进程 `EnvFilter` 追加的指令——iroh 的 net_report 在 warn

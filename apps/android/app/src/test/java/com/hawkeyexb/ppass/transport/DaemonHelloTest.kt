@@ -50,7 +50,7 @@ class DaemonHelloTest {
                 assertTrue("hello must succeed: ${resp.error}", resp.ok)
                 val hello: Hello =
                     ProtoJson.decodeFromJsonElement(Hello.serializer(), resp.result!!)
-                assertEquals(1, hello.protoVer)
+                assertEquals(com.hawkeyexb.ppass.proto.PROTO_VER, hello.protoVer)
                 assertTrue(
                     "daemon must announce thumbnail.v1: ${hello.capabilities}",
                     hello.capabilities.contains("thumbnail.v1"),

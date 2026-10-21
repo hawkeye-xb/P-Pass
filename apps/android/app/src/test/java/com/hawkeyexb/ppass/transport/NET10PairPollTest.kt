@@ -4,9 +4,9 @@
 // deadline are asserted exactly, without sleeping.
 package com.hawkeyexb.ppass.transport
 
-import com.hawkeyexb.ppass.i18n.DiagText
 import com.hawkeyexb.ppass.proto.Hello
 import com.hawkeyexb.ppass.proto.Methods
+import com.hawkeyexb.ppass.proto.OutdatedSide
 import com.hawkeyexb.ppass.proto.PairAccepted
 import com.hawkeyexb.ppass.proto.PairRequest
 import com.hawkeyexb.ppass.proto.PairStatusReply
@@ -14,14 +14,12 @@ import com.hawkeyexb.ppass.proto.PairSubmitted
 import com.hawkeyexb.ppass.proto.ProtoJson
 import com.hawkeyexb.ppass.proto.Resp
 import com.hawkeyexb.ppass.proto.RespError
-import java.io.File
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonElement
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -47,7 +45,7 @@ class NET10PairPollTest {
             calls += method to scope.currentTime
             return when (method) {
                 Methods.HELLO -> if (caps == null) {
-                    Resp(id = "h", ok = false, error = RespError("NOT_AUTHORIZED", "err.not_authorized"))
+                    Resp(id = "h", ok = false, error = RespError("NOT_AUTHORIZED", "revoked"))
                 } else {
                     ok(ProtoJson.encodeToJsonElement(Hello.serializer(), Hello(capabilities = caps)))
                 }
@@ -88,13 +86,13 @@ class NET10PairPollTest {
         assertEquals("t", req.token)
     }
 
-    /** 死因 1：主人拒绝 → Denied（带桌面给的码），下一次轮询即出结果。 */
+    /** 死因 1：主人拒绝 → Denied(DENIED)，下一次轮询即出结果（#1072：v2 的 denied 不带任何文案 key）。 */
     @Test
     fun ownerDeny_isItsOwnBranch() = runTest {
         val desk = FakeDesk(this, submit = { queued() }, status = { at ->
-            if (at < 10_000) pending() else PairStatusReply(state = "denied", msgKey = ERR_NOT_AUTHORIZED)
+            if (at < 10_000) pending() else PairStatusReply(state = "denied")
         })
-        assertEquals(PairVerdict.Denied(ERR_NOT_AUTHORIZED), awaitPairVerdict(desk, "t", "d"))
+        assertEquals(PairVerdict.Denied(PairRefusal.DENIED), awaitPairVerdict(desk, "t", "d"))
         assertEquals(listOf(5_000L, 10_000L), desk.statusTimes())
     }
 
@@ -164,10 +162,10 @@ class NET10PairPollTest {
     fun badToken_isRefusedOnSubmit_withoutPolling() = runTest {
         val desk = FakeDesk(
             this,
-            submit = { Resp(id = "s", ok = false, error = RespError("NOT_AUTHORIZED", ERR_NOT_AUTHORIZED)) },
+            submit = { Resp(id = "s", ok = false, error = RespError("NOT_AUTHORIZED", "pair_token_invalid")) },
             status = { error("no poll") },
         )
-        assertEquals(PairVerdict.Denied(ERR_NOT_AUTHORIZED), awaitPairVerdict(desk, "t", "d"))
+        assertEquals(PairVerdict.Denied(PairRefusal.TOKEN_INVALID), awaitPairVerdict(desk, "t", "d"))
         assertTrue(desk.statusTimes().isEmpty())
     }
 
@@ -189,33 +187,28 @@ class NET10PairPollTest {
         assertEquals(PairVerdict.Accepted(accepted), awaitPairVerdict(desk, "t", "d"))
     }
 
-    /** 屏幕映射：每个死因一条独立出口；自行失效的三种不说「电脑拒绝了」，且文案键在双语字典里都有。 */
+    /** 屏幕映射：每个死因一条独立出口；自行失效的不说「电脑拒绝了」；桌面太旧走「需要更新电脑端」（#1072）。 */
     @Test
-    fun everyCause_mapsToItsOwnScreen_withRealCopy() {
+    fun everyCause_mapsToItsOwnScreen() {
         val join = { a: PairAccepted -> Pairing("n", "t", a.storageDeviceName, 1L, a.pairingEpoch) }
         val joined = PairVerdict.Accepted(accepted).toOutcome(join)
         assertTrue(joined is PairOutcome.Joined)
-        assertEquals(PairOutcome.Refused(ERR_NOT_AUTHORIZED, ownerSaidNo = true),
-            PairVerdict.Denied(ERR_NOT_AUTHORIZED).toOutcome(join))
+        for (cause in listOf(PairRefusal.DENIED, PairRefusal.TOKEN_INVALID)) {
+            val o = PairVerdict.Denied(cause).toOutcome(join) as PairOutcome.Refused
+            assertEquals(cause, o.cause)
+            assertTrue("$cause is the computer saying no", o.ownerSaidNo)
+        }
         val lapsed = listOf(
-            PairVerdict.Expired to ERR_PAIR_EXPIRED,
-            PairVerdict.DesktopRestarted to ERR_PAIR_RESTARTED,
-            PairVerdict.DesktopTooOld to ERR_UNSUPPORTED,
+            PairVerdict.Expired to PairRefusal.EXPIRED,
+            PairVerdict.DesktopRestarted to PairRefusal.DESKTOP_RESTARTED,
         )
-        for ((verdict, key) in lapsed) {
-            val o = verdict.toOutcome(join)
-            assertEquals(PairOutcome.Refused(key, ownerSaidNo = false), o)
+        for ((verdict, cause) in lapsed) {
+            val o = verdict.toOutcome(join) as PairOutcome.Refused
+            assertEquals(cause, o.cause)
+            assertFalse("$cause lapsed on its own", o.ownerSaidNo)
         }
-        assertEquals(3, lapsed.map { it.second }.toSet().size)
+        assertEquals(PairOutcome.NeedsUpdate(OutdatedSide.DESKTOP), PairVerdict.DesktopTooOld.toOutcome(join))
+        assertEquals(PairOutcome.NeedsUpdate(OutdatedSide.PHONE), PairVerdict.NeedsUpdate(OutdatedSide.PHONE).toOutcome(join))
         assertTrue(PairVerdict.Unreachable("x").toOutcome(join) is PairOutcome.Failed)
-
-        for (lang in listOf("en", "zh")) {
-            val dict = File("src/main/assets/i18n/$lang.json").readText()
-            for (key in listOf(ERR_PAIR_EXPIRED, ERR_PAIR_RESTARTED, ERR_UNSUPPORTED, ERR_NOT_AUTHORIZED)) {
-                val text = DiagText.resolveFromJson(dict, key)
-                assertNotNull("$lang missing $key", text)
-                assertFalse(text!!.isBlank())
-            }
-        }
     }
 }

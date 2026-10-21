@@ -215,8 +215,8 @@ async fn pair(qr: &str, name: &str, identity: &str) -> anyhow::Result<String> {
     if let Some(err) = resp.error {
         anyhow::bail!(
             "配对被拒绝（{} / {}）——令牌过期、已用过，或 owner 拒绝了。",
-            err.code,
-            err.msg_key
+            err.code(),
+            err.reason()
         );
     }
     let submitted: proto::PairSubmitted = serde_json::from_value(resp.result.unwrap_or_default())?;
@@ -233,19 +233,16 @@ async fn pair(qr: &str, name: &str, identity: &str) -> anyhow::Result<String> {
         };
         let reply = roundtrip(&mut stream, &poll).await?;
         if let Some(err) = reply.error {
-            anyhow::bail!("查询配对结果失败（{} / {}）", err.code, err.msg_key);
+            anyhow::bail!("查询配对结果失败（{} / {}）", err.code(), err.reason());
         }
         let status: proto::PairStatusReply =
             serde_json::from_value(reply.result.unwrap_or_default())?;
-        match status.state.as_str() {
-            "accepted" => break status.accepted.unwrap_or_default(),
-            "pending" if std::time::Instant::now() < deadline => {
+        match status.state {
+            proto::PairStatusState::Accepted => break status.accepted.unwrap_or_default(),
+            proto::PairStatusState::Pending if std::time::Instant::now() < deadline => {
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
             }
-            other => anyhow::bail!(
-                "配对被拒绝（{other} / {}）——令牌过期、已用过，或 owner 拒绝了。",
-                status.msg_key.unwrap_or_default()
-            ),
+            other => anyhow::bail!("配对被拒绝（{other:?}）——令牌过期、已用过，或 owner 拒绝了。"),
         }
     };
     // 存储端地址存进 sidecar——backup/browse 等后续命令免发现服务.
@@ -386,7 +383,7 @@ async fn backup(
             Some(err) => {
                 println!(
                     "传输第 {attempt} 次未完成（{}），自动重试续传……",
-                    err.msg_key
+                    err.reason()
                 );
                 last_err = Some(err);
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -396,8 +393,8 @@ async fn backup(
     let err = last_err.expect("loop ran at least once");
     anyhow::bail!(
         "备份多次未完成（{} / {}），请检查网络后重试。",
-        err.code,
-        err.msg_key
+        err.code(),
+        err.reason()
     )
 }
 
@@ -495,14 +492,14 @@ async fn revoke_check(node: &str, identity: &str) -> anyhow::Result<String> {
     let resp = roundtrip(&mut stream, &req).await?;
 
     match resp.error {
-        Some(err) if err.code == proto::codes::NOT_AUTHORIZED => Ok(format!(
+        Some(err) if err.code() == proto::codes::NOT_AUTHORIZED => Ok(format!(
             "✅ 授权检查点在岗：本机被正确拒绝（{}）。吊销/未配对语义生效。",
-            err.msg_key
+            err.reason()
         )),
         Some(err) => anyhow::bail!(
             "收到了错误但不是 NOT_AUTHORIZED：{} / {}",
-            err.code,
-            err.msg_key
+            err.code(),
+            err.reason()
         ),
         None => anyhow::bail!("存储端竟然放行了未授权设备的浏览请求——检查点失守！"),
     }

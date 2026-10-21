@@ -11,9 +11,10 @@ final class WireSemanticsTests: XCTestCase {
 
     /// `{}` 解出 Rust 的 `Default`——不是 Swift 的零值。逐个写死 Rust 那边的非零默认。
     func testEmptyObjectDecodesToRustDefaults() throws {
-        XCTAssertEqual(try decodeEmpty(Req.self), Req(id: "", method: "", params: .null, minVer: 1))
-        XCTAssertEqual(try decodeEmpty(Resp.self), Resp(id: "", ok: false, result: nil, error: nil))
-        XCTAssertEqual(try decodeEmpty(Hello.self), Hello(protoVer: 1, capabilities: [], deviceName: ""))
+        // #1070：缺 `ver` / `min_ver` = v1 发送方（新建时才取本端版本）。
+        XCTAssertEqual(try decodeEmpty(Req.self), Req(id: "", method: "", params: .null, minVer: 1, ver: 1))
+        XCTAssertEqual(try decodeEmpty(Resp.self), Resp(id: "", ok: false, result: nil, error: nil, ver: 1, minVer: 1))
+        XCTAssertEqual(try decodeEmpty(Hello.self), Hello(protoVer: ProtoVersion.current, capabilities: [], deviceName: ""))
         XCTAssertEqual(try decodeEmpty(PairRequest.self).role, "member")
         XCTAssertFalse(try decodeEmpty(PairRequest.self).ackThenPoll)
         XCTAssertEqual(try decodeEmpty(TimelineQuery.self), TimelineQuery(cursor: nil, limit: 200))
@@ -46,9 +47,42 @@ final class WireSemanticsTests: XCTestCase {
         XCTAssertEqual(tuple.queueSequence, 7)
     }
 
-    /// Rust 的 `RespError` 没有 `#[serde(default)]`：缺字段解码失败，这里同样严格。
-    func testRespErrorIsStrict() {
-        XCTAssertThrowsError(try ProtoJSON.decode(RespError.self, from: Data(#"{"code":"NOT_FOUND"}"#.utf8)))
+    /// #1070：Rust 的 `RespError` 缺键取默认（code/reason 空串、无 params），这里同样宽容。
+    func testRespErrorMissingKeysTakeDefaults() throws {
+        let e = try ProtoJSON.decode(RespError.self, from: Data(#"{"code":"NOT_FOUND"}"#.utf8))
+        XCTAssertEqual(e, RespError(code: "NOT_FOUND", msgKey: "", reason: "", params: nil))
+        XCTAssertEqual(e.reasonKind, .unknown)
+    }
+
+    /// #1070 验收 4：未登记的 reason 解码不失败，原值保留，映射为 `.unknown`。
+    func testUnknownReasonDecodesAndKeepsItsString() throws {
+        let resp = try ProtoJSON.decode(
+            Resp.self,
+            from: Data(#"{"id":"1","ok":false,"error":{"code":"FUTURE","reason":"from_the_future","params":{"n":1}},"ver":3,"min_ver":2}"#.utf8)
+        )
+        let error = try XCTUnwrap(resp.error)
+        XCTAssertEqual(error.reason, "from_the_future")
+        XCTAssertEqual(error.reasonKind, .unknown)
+        XCTAssertEqual(error.msgKey, "")
+        XCTAssertEqual(resp.ver, 3)
+    }
+
+    /// #1070：Swift 的 `ProtoReason` 与 Rust 登记表一一对应（`reasons_registry` 金样）。
+    func testReasonRegistryMatchesRust() throws {
+        let rust = try ProtoJSON.decode([RespError].self, from: RepoFixtures.goldenBody("snapshots__reasons_registry"))
+        for e in rust {
+            XCTAssertNotEqual(e.reasonKind, .unknown, "Swift 没有登记 Rust reason \(e.reason)")
+        }
+        XCTAssertEqual(
+            Set(ProtoReason.allCases.filter { $0 != .unknown }.map(\.rawValue)),
+            Set(rust.map(\.reason))
+        )
+    }
+
+    /// #1070：新建的请求带本端版本。
+    func testBuiltRequestCarriesThisBuildsVersions() throws {
+        let wire = try JSONValue.parse(ProtoJSON.encode(Req(id: "1", method: "hello")))
+        XCTAssertEqual(wire, try JSONValue.parse(Data(#"{"id":"1","method":"hello","params":null,"ver":2,"min_ver":2}"#.utf8)))
     }
 
     func testThumbSizeRejectsUnknownValues() {
@@ -60,7 +94,11 @@ final class WireSemanticsTests: XCTestCase {
     func testRespNullResultIsNone() throws {
         let resp = try ProtoJSON.decode(Resp.self, from: Data(#"{"id":"1","ok":true,"result":null}"#.utf8))
         XCTAssertNil(resp.result)
-        XCTAssertEqual(try JSONValue.from(resp), .object(["id": .string("1"), "ok": .bool(true)]))
+        // #1070：信封总是写出 ver / min_ver（与 Rust 一致）；缺键解码 = v1。
+        XCTAssertEqual(
+            try JSONValue.from(resp),
+            .object(["id": .string("1"), "ok": .bool(true), "ver": .int(1), "min_ver": .int(1)])
+        )
     }
 
     /// u64 的 queue_sequence 不能过 Double：取一个 Double 表示不了的值往返。

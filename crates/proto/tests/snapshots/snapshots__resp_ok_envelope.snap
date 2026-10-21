@@ -8,5 +8,7 @@ expression: json
   "result": {
     "items": [],
     "next": null
-  }
+  },
+  "ver": 2,
+  "min_ver": 2
 }

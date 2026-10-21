@@ -23,18 +23,18 @@ class UnpairNoticeTest {
         assertEquals(
             "电脑已不认这台手机（已吊销 / 没有这行）= 目标已达成",
             UnpairDelivery.Done,
-            unpairDeliveryOf(Resp(ok = false, error = RespError(code = UNPAIR_ALREADY_GONE_CODE, msgKey = "err.not_authorized"))),
+            unpairDeliveryOf(Resp(ok = false, error = RespError(code = UNPAIR_ALREADY_GONE_CODE, reason = "revoked"))),
         )
         assertEquals(
             "服务端内部错误：稍后再投",
             UnpairDelivery.Retry,
-            unpairDeliveryOf(Resp(ok = false, error = RespError(code = "INTERNAL", msgKey = "err.unsupported"))),
+            unpairDeliveryOf(Resp(ok = false, error = RespError(code = "INTERNAL", reason = "internal"))),
         )
         assertEquals("连不上：稍后再投", UnpairDelivery.Retry, unpairDeliveryOf(null))
         assertEquals(
             "只认结构化错误码，不认文案",
             UnpairDelivery.Retry,
-            unpairDeliveryOf(Resp(ok = false, error = RespError(code = "INTERNAL", msgKey = "err.not_authorized"))),
+            unpairDeliveryOf(Resp(ok = false, error = RespError(code = "INTERNAL", reason = "revoked"))),
         )
     }
 
