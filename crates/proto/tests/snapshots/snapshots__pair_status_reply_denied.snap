@@ -3,6 +3,5 @@ source: crates/proto/tests/snapshots.rs
 expression: json
 ---
 {
-  "state": "denied",
-  "msg_key": "err.not_authorized"
+  "state": "denied"
 }

@@ -5,8 +5,10 @@ expression: pretty
 {
   "error": {
     "code": "NOT_FOUND",
-    "msg_key": "err.not_found"
+    "reason": "not_found"
   },
   "id": "550e8400-e29b-41d4-a716-446655440000",
-  "ok": false
+  "min_ver": 2,
+  "ok": false,
+  "ver": 2
 }

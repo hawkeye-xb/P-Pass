@@ -56,7 +56,7 @@ async fn ctrl_loopback_1000_proto_messages() {
             id: format!("req-{i}"),
             method: "diag.status".into(),
             params: serde_json::json!({ "seq": i }),
-            min_ver: 1,
+            ..Default::default()
         };
         let out = proto::codec::encode(&req).expect("encode req");
         bi.send_frame(&out).await.expect("send req");

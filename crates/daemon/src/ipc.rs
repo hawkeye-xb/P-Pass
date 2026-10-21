@@ -25,7 +25,7 @@ use std::time::Duration;
 use diag::state::DaemonState;
 use interprocess::local_socket::tokio::prelude::*;
 use interprocess::local_socket::{GenericNamespaced, ListenerOptions};
-use proto::{codes, Req, Resp, RespError};
+use proto::{Reason, Req, Resp, RespError};
 use storage::Db;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -85,7 +85,7 @@ pub struct IpcServer {
     /// 同机，照片墙直接走本地 IPC 消费查询平面（与手机同一数据源）。
     /// OnceLock：main 在 transport bind 之后才建 QueryEngine（blobs 依赖
     /// 已绑定 transport），而 IpcServer 早已 Arc 化——用 set_query(&self)
-    /// 后注入，dispatch 端 get() 零锁零等待。未注入时答 err.unsupported。
+    /// 后注入，dispatch 端 get() 零锁零等待。未注入时答 unsupported_method。
     query: std::sync::OnceLock<crate::query::QueryEngine>,
     /// SYNC-03: 与 Router 共用同一份登记表——`device.revoke` 命中一个
     /// 挂着 `timeline.subscribe` 长连接的设备时主动断连。main 未注入时
@@ -95,6 +95,9 @@ pub struct IpcServer {
     /// device. OnceLock for the same reason as `query`: main builds
     /// FlowDelivery after IpcServer is already shared. Unset = no-op.
     flow_delivery: std::sync::OnceLock<crate::flow_delivery::FlowDelivery>,
+    /// #1070: the router's version-mismatch registry — feeds the device
+    /// list's `needs_update`. Unset = an empty registry (never flags anyone).
+    outdated: crate::router::OutdatedPeers,
 }
 
 /// See [`IpcServer::set_conn_status_provider`].
@@ -311,7 +314,14 @@ impl IpcServer {
             query: std::sync::OnceLock::new(),
             subscriptions: SubscriptionRegistry::new(),
             flow_delivery: std::sync::OnceLock::new(),
+            outdated: crate::router::OutdatedPeers::new(),
         }
+    }
+
+    /// #1070: share the router's version-mismatch registry (main wires the
+    /// same instance into `Router::with_outdated_peers`).
+    pub fn set_outdated_peers(&mut self, outdated: crate::router::OutdatedPeers) {
+        self.outdated = outdated;
     }
 
     /// SYNC-03: 与 Router 共用同一份订阅登记表——不注入时是一份独立空表
@@ -523,10 +533,7 @@ impl IpcServer {
             let req = match serde_json::from_str::<Req>(&line) {
                 Ok(req) => req,
                 Err(_) => {
-                    let resp = Resp::err(
-                        String::new(),
-                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-                    );
+                    let resp = Resp::err(String::new(), RespError::new(Reason::BadRequest));
                     let mut out = serde_json::to_string(&resp)?;
                     out.push('\n');
                     tx.write_all(out.as_bytes()).await?;
@@ -587,7 +594,7 @@ impl IpcServer {
                     let Ok(req) = serde_json::from_str::<Req>(&line) else {
                         let resp = Resp::err(
                             String::new(),
-                            RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
+                            RespError::new(Reason::BadRequest),
                         );
                         let mut out = serde_json::to_string(&resp)?;
                         out.push('\n');
@@ -626,12 +633,7 @@ impl IpcServer {
 
     async fn dispatch(&self, req: Req) -> Resp {
         let id = req.id.clone();
-        let internal = |id: String| {
-            Resp::err(
-                id,
-                RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
-            )
-        };
+        let internal = |id: String| Resp::err(id, RespError::new(Reason::Internal));
         match req.method.as_str() {
             "status" => match self
                 .status(req.params.get("shell_version").and_then(|v| v.as_str()))
@@ -686,10 +688,9 @@ impl IpcServer {
                     // DEV-05 (#276): the click landed on a dead request —
                     // report failure honestly (the old code answered ok
                     // and the phone never received anything).
-                    ConfirmOutcome::Expired(_) | ConfirmOutcome::NotFound => Resp::err(
-                        id,
-                        RespError::new(codes::NOT_FOUND, diag::keys::ERR_UNSUPPORTED),
-                    ),
+                    ConfirmOutcome::Expired(_) | ConfirmOutcome::NotFound => {
+                        Resp::err(id, RespError::new(Reason::NotFound))
+                    }
                 }
             }
             // UX-08: 待确认配对请求全量列表（只读）——桌面端一屏列出所有
@@ -807,6 +808,10 @@ impl IpcServer {
                                         d.last_seen,
                                         last_backup_at,
                                     ),
+                                    // #1070: `"phone"` / `"desktop"` = that side must
+                                    // update before this device can talk to us; null =
+                                    // no known protocol-version mismatch.
+                                    "needs_update": self.outdated.needs_update(&d.node_id),
                                 })
                             })
                             .collect();
@@ -921,16 +926,10 @@ impl IpcServer {
             },
             "device.revoke" => {
                 let Some(node_hex) = req.params.get("node_id").and_then(|v| v.as_str()) else {
-                    return Resp::err(
-                        id,
-                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-                    );
+                    return Resp::err(id, RespError::new(Reason::BadRequest));
                 };
                 let Some(node_id) = parse_hex32(node_hex) else {
-                    return Resp::err(
-                        id,
-                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-                    );
+                    return Resp::err(id, RespError::new(Reason::BadRequest));
                 };
                 // DEV-03：业主主动移除——这正是业主的意图，之后它不再出现在
                 // 「家人与设备」里（行仍在库里，审计可查，`arch-check B.3`
@@ -1019,10 +1018,7 @@ impl IpcServer {
                     .and_then(|v| v.as_str())
                     .and_then(parse_hex32)
                 else {
-                    return Resp::err(
-                        id,
-                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-                    );
+                    return Resp::err(id, RespError::new(Reason::BadRequest));
                 };
                 let originals = self.data_dir.join("originals");
                 let device = originals.join(core_index::device_dir(&node_id));
@@ -1045,30 +1041,18 @@ impl IpcServer {
                 // NAME-01: 改显示名（ID 与显示名分离——decisions ②）。
                 // 本机 owner 经 IPC 操作（与 device.revoke 同鉴权面）。
                 let Some(node_hex) = req.params.get("node_id").and_then(|v| v.as_str()) else {
-                    return Resp::err(
-                        id,
-                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-                    );
+                    return Resp::err(id, RespError::new(Reason::BadRequest));
                 };
                 let Some(node_id) = parse_hex32(node_hex) else {
-                    return Resp::err(
-                        id,
-                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-                    );
+                    return Resp::err(id, RespError::new(Reason::BadRequest));
                 };
                 // 新名必填（空名 = 非法请求）；长度上限防滥用。
                 let Some(new_name) = req.params.get("name").and_then(|v| v.as_str()) else {
-                    return Resp::err(
-                        id,
-                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-                    );
+                    return Resp::err(id, RespError::new(Reason::BadRequest));
                 };
                 let new_name = new_name.trim();
                 if new_name.is_empty() || new_name.chars().count() > MAX_DEVICE_NAME_CHARS {
-                    return Resp::err(
-                        id,
-                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-                    );
+                    return Resp::err(id, RespError::new(Reason::BadRequest));
                 }
                 match self.db.rename_device(&node_id, new_name).await {
                     Ok(Some(old_name)) => {
@@ -1111,10 +1095,7 @@ impl IpcServer {
                     }
                     Ok(None) => {
                         // 设备不存在（已吊销/从未配对）——NOT_FOUND 语义。
-                        Resp::err(
-                            id,
-                            RespError::new(codes::NOT_FOUND, diag::keys::ERR_UNSUPPORTED),
-                        )
+                        Resp::err(id, RespError::new(Reason::NotFound))
                     }
                     Err(_) => internal(id),
                 }
@@ -1129,44 +1110,32 @@ impl IpcServer {
                 }
             },
             // DESK-03: 查询平面（桌面照片墙，与手机同一数据源）——
-            // 未注入 QueryEngine 时统一答 err.unsupported（老测试构造
+            // 未注入 QueryEngine 时统一答 unsupported_method（老测试构造
             // 零波及；main 总是注入）。响应形状与网络平面逐字段一致，
             // 桌面端消费代码可与手机端镜像。
             "timeline.page" | "thumb.get" | "asset.meta" | "asset.path" | "asset.original" => {
                 let Some(query) = self.query.get() else {
-                    return Resp::err(
-                        id,
-                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-                    );
+                    return Resp::err(id, RespError::new(Reason::UnsupportedMethod));
                 };
                 match req.method.as_str() {
                     "timeline.page" => {
                         let Ok(q) =
                             serde_json::from_value::<proto::TimelineQuery>(req.params.clone())
                         else {
-                            return Resp::err(
-                                id,
-                                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-                            );
+                            return Resp::err(id, RespError::new(Reason::BadRequest));
                         };
                         match query.timeline(&q).await {
                             Ok(page) => match serde_json::to_value(&page) {
                                 Ok(v) => Resp::ok(id, v),
                                 Err(_) => internal(id),
                             },
-                            Err(_) => Resp::err(
-                                id,
-                                RespError::new(codes::NOT_FOUND, diag::keys::ERR_UNSUPPORTED),
-                            ),
+                            Err(_) => Resp::err(id, RespError::new(Reason::NotFound)),
                         }
                     }
                     "thumb.get" => {
                         let Ok(t) = serde_json::from_value::<proto::ThumbGet>(req.params.clone())
                         else {
-                            return Resp::err(
-                                id,
-                                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-                            );
+                            return Resp::err(id, RespError::new(Reason::BadRequest));
                         };
                         // DESK-34 (#428): carries `placeholder` / `retry_after_ms`
                         // so PhotoThumb can re-fetch a placeholder once.
@@ -1175,53 +1144,35 @@ impl IpcServer {
                                 Ok(v) => Resp::ok(id, v),
                                 Err(_) => internal(id),
                             },
-                            Err(_) => Resp::err(
-                                id,
-                                RespError::new(codes::NOT_FOUND, diag::keys::ERR_UNSUPPORTED),
-                            ),
+                            Err(_) => Resp::err(id, RespError::new(Reason::NotFound)),
                         }
                     }
                     "asset.meta" => {
                         let Some(hash) = req.params.get("hash").and_then(|v| v.as_str()) else {
-                            return Resp::err(
-                                id,
-                                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-                            );
+                            return Resp::err(id, RespError::new(Reason::BadRequest));
                         };
                         match query.asset_meta(hash).await {
                             Ok(meta) => match serde_json::to_value(&meta) {
                                 Ok(v) => Resp::ok(id, v),
                                 Err(_) => internal(id),
                             },
-                            Err(_) => Resp::err(
-                                id,
-                                RespError::new(codes::NOT_FOUND, diag::keys::ERR_UNSUPPORTED),
-                            ),
+                            Err(_) => Resp::err(id, RespError::new(Reason::NotFound)),
                         }
                     }
                     "asset.path" => {
                         let Some(hash) = req.params.get("hash").and_then(|v| v.as_str()) else {
-                            return Resp::err(
-                                id,
-                                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-                            );
+                            return Resp::err(id, RespError::new(Reason::BadRequest));
                         };
                         match query.asset_path(hash).await {
                             Ok(path) => {
                                 Resp::ok(id, serde_json::json!({ "path": path.to_string_lossy() }))
                             }
-                            Err(_) => Resp::err(
-                                id,
-                                RespError::new(codes::NOT_FOUND, diag::keys::ERR_UNSUPPORTED),
-                            ),
+                            Err(_) => Resp::err(id, RespError::new(Reason::NotFound)),
                         }
                     }
                     "asset.original" => {
                         let Some(hash) = req.params.get("hash").and_then(|v| v.as_str()) else {
-                            return Resp::err(
-                                id,
-                                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-                            );
+                            return Resp::err(id, RespError::new(Reason::BadRequest));
                         };
                         match query.original(hash).await {
                             Ok((media_type, bytes)) => {
@@ -1234,19 +1185,13 @@ impl IpcServer {
                                     }),
                                 )
                             }
-                            Err(_) => Resp::err(
-                                id,
-                                RespError::new(codes::NOT_FOUND, diag::keys::ERR_UNSUPPORTED),
-                            ),
+                            Err(_) => Resp::err(id, RespError::new(Reason::NotFound)),
                         }
                     }
                     _ => unreachable!("covered by the outer arm"),
                 }
             }
-            _ => Resp::err(
-                id,
-                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-            ),
+            _ => Resp::err(id, RespError::new(Reason::UnsupportedMethod)),
         }
     }
 

@@ -8,8 +8,8 @@
 //! let req = Req {
 //!     id: "uuid-1".into(),
 //!     method: "hello".into(),
-//!     params: serde_json::json!({"proto_ver": 1}),
-//!     min_ver: 1,
+//!     params: serde_json::json!({"proto_ver": 2}),
+//!     ..Req::default()
 //! };
 //! let frame = codec::encode(&req).unwrap();
 //! let back: Req = codec::decode(&frame).unwrap();
@@ -21,6 +21,6 @@ pub mod error;
 pub mod msgs;
 pub mod version;
 
-pub use error::{codes, RespError};
+pub use error::{codes, Reason, RespError, UnknownReason};
 pub use msgs::*;
-pub use version::{MIN_SUPPORTED_VER, PROTO_VER};
+pub use version::{compatibility, Role, Versions, MIN_SUPPORTED_VER, PROTO_VER};

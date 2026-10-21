@@ -29,15 +29,15 @@ pub async fn allow(db: &Db, peer: NodeId) -> bool {
         Ok(device) => device,
         Err(error) => {
             tracing::error!("blobs gate: device lookup failed, denying: {error}");
-            record_denial(db, peer, diag::keys::ERR_NOT_AUTHORIZED).await;
+            record_denial(db, peer, &proto::Reason::Internal).await;
             return false;
         }
     };
     match authz::check(device.as_ref(), authz::BLOBS_FETCH) {
         Decision::Allow => true,
-        Decision::Deny { msg_key } => {
-            tracing::warn!("blobs gate: denied peer={} ({msg_key})", peer_prefix(peer));
-            record_denial(db, peer, msg_key).await;
+        Decision::Deny { reason } => {
+            tracing::warn!("blobs gate: denied peer={} ({reason})", peer_prefix(peer));
+            record_denial(db, peer, &reason).await;
             false
         }
     }
@@ -51,9 +51,9 @@ pub fn peer_prefix(peer: NodeId) -> String {
 
 /// Same event kind as the ctrl plane's denials (`authz.denied`); the method
 /// field says which plane. No address, no hash.
-async fn record_denial(db: &Db, peer: NodeId, msg_key: &str) {
+async fn record_denial(db: &Db, peer: NodeId, reason: &proto::Reason) {
     let detail = format!(
-        "{{\"peer\":\"{}\",\"method\":\"{}\",\"msg_key\":\"{msg_key}\"}}",
+        "{{\"peer\":\"{}\",\"method\":\"{}\",\"reason\":\"{reason}\"}}",
         peer_prefix(peer),
         authz::BLOBS_FETCH
     );

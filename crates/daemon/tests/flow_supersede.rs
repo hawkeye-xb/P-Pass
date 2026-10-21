@@ -98,7 +98,10 @@ async fn supersede_fetches_only_the_metadata_and_replaces_in_place() {
 
     let reply = delivery.supersede(peer, &req).await.unwrap();
     assert_eq!(
-        (reply.outcome.as_str(), reply.reason.as_str()),
+        (
+            reply.outcome.as_str(),
+            reply.reason.map_or("", |r| r.as_str())
+        ),
         ("replaced", "")
     );
     assert_eq!(
@@ -159,7 +162,10 @@ async fn supersede_refuses_a_stale_epoch_without_touching_the_library() {
         .await
         .unwrap();
     assert_eq!(
-        (reply.outcome.as_str(), reply.reason.as_str()),
+        (
+            reply.outcome.as_str(),
+            reply.reason.map_or("", |r| r.as_str())
+        ),
         ("refused", "epoch_mismatch")
     );
 }

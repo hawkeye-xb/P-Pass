@@ -30,7 +30,7 @@ use core_index::{
 use platform::PlatformAdapter as _;
 use proto::{
     DesktopHealth, FlowCompletionReceipt, FlowFetchRequest, FlowStatusReply, FlowSupersedeReply,
-    FlowSupersedeRequest, FlowTupleRef,
+    FlowSupersedeRequest, FlowTupleRef, Reason, SupersedeRefusal,
 };
 use storage::{Db, FlowGrant, FlowGrantState};
 use transport::{Blobs, ConnectionStatus, NodeId};
@@ -58,7 +58,7 @@ pub const GRANT_RESUME_TTL_MS: i64 = 3 * 24 * 60 * 60 * 1000;
 pub const SPACE_RESERVE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// #413 contract §5: the public reason a Desktop could not store an item,
-/// carried as `flow.failed.code` and as an offer rejection's `msg_key`. The
+/// carried as `flow.failed.reason` and as an offer rejection's `reason`. The
 /// phone maps each one to `PeerFailure(PeerFailureKind)`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PeerFailure {
@@ -71,11 +71,11 @@ pub enum PeerFailure {
 }
 
 impl PeerFailure {
-    pub fn code(self) -> &'static str {
+    pub fn reason(self) -> Reason {
         match self {
-            Self::StorageFull => "storage_full",
-            Self::LibraryUnavailable => "library_unavailable",
-            Self::StorageFailed => "storage_failed",
+            Self::StorageFull => Reason::StorageFull,
+            Self::LibraryUnavailable => Reason::LibraryUnavailable,
+            Self::StorageFailed => Reason::StorageFailed,
         }
     }
 }
@@ -108,8 +108,19 @@ pub fn classify_peer_failure(
 
 #[derive(Debug, thiserror::Error)]
 pub enum DeliveryError {
-    #[error("request does not match the current pairing epoch, lease, and hash")]
-    GuardMismatch,
+    /// #1070: the request's pairing epoch is not the current one.
+    #[error("request does not carry the current pairing epoch")]
+    EpochMismatch,
+    /// #1070: no grant matches this exact tuple and can still advance.
+    #[error("no grant matches this exact tuple and can still advance")]
+    GrantNotFound,
+    /// #1070: the queue sequence is already held by another completed item.
+    #[error("queue sequence is already held by another completed item")]
+    GrantConflict,
+    /// #1070: durable delivery state contradicts itself (a bug, not the
+    /// phone's fault).
+    #[error("inconsistent delivery state: {0}")]
+    Inconsistent(&'static str),
     #[error("delivery was cancelled before completion")]
     Cancelled,
     #[error("invalid flow delivery request: {0}")]
@@ -153,7 +164,10 @@ impl DeliveryError {
     /// (filesystem, blob store, index) with different fix-it implications.
     fn detail_code(&self) -> &'static str {
         match self {
-            DeliveryError::GuardMismatch => "guard_mismatch",
+            DeliveryError::EpochMismatch => "epoch_mismatch",
+            DeliveryError::GrantNotFound => "grant_not_found",
+            DeliveryError::GrantConflict => "grant_conflict",
+            DeliveryError::Inconsistent(_) => "inconsistent_state",
             DeliveryError::Cancelled => "cancelled",
             DeliveryError::InvalidRequest(_) => "invalid_request",
             DeliveryError::Fetch(_) => "fetch_failed",
@@ -166,20 +180,25 @@ impl DeliveryError {
         }
     }
 
-    /// #413 contract §5: the code the phone sees — `flow.failed.code` and
-    /// an offer rejection's `msg_key`. Storage-side failures collapse to the
-    /// three [`PeerFailure`] codes; `fetch_failed` (path problem) and the
-    /// control-flow codes keep their names. The log line keeps the finer
+    /// #413 contract §5 / #1070: the reason the phone sees — `flow.failed.reason`
+    /// and an offer rejection's `reason`. Storage-side failures collapse to
+    /// the three [`PeerFailure`] reasons. The log line keeps the finer
     /// [`Self::detail_code`].
-    pub fn wire_code(&self) -> &'static str {
+    pub fn wire_code(&self) -> Reason {
         match self {
             DeliveryError::MaterializeStaging { failure, .. }
             | DeliveryError::MaterializeExport { failure, .. }
-            | DeliveryError::MaterializeIngest { failure, .. } => failure.code(),
-            DeliveryError::InsufficientSpace { .. } => PeerFailure::StorageFull.code(),
-            DeliveryError::LibraryUnavailable(_) => PeerFailure::LibraryUnavailable.code(),
-            DeliveryError::Storage(_) => PeerFailure::StorageFailed.code(),
-            other => other.detail_code(),
+            | DeliveryError::MaterializeIngest { failure, .. } => failure.reason(),
+            DeliveryError::InsufficientSpace { .. } => Reason::StorageFull,
+            DeliveryError::LibraryUnavailable(_) => Reason::LibraryUnavailable,
+            DeliveryError::Storage(_) => Reason::StorageFailed,
+            DeliveryError::EpochMismatch => Reason::EpochMismatch,
+            DeliveryError::GrantNotFound => Reason::GrantNotFound,
+            DeliveryError::GrantConflict => Reason::GrantConflict,
+            DeliveryError::Cancelled => Reason::Cancelled,
+            DeliveryError::InvalidRequest(_) => Reason::BadRequest,
+            DeliveryError::Fetch(_) => Reason::FetchFailed,
+            DeliveryError::Inconsistent(_) => Reason::Internal,
         }
     }
 
@@ -1046,15 +1065,16 @@ impl FlowDelivery {
         crate::events::emit(
             events,
             crate::events::FLOW_FAILED,
-            serde_json::json!({
-                "node_id": peer.to_string(),
-                "queue_sequence": grant.queue_sequence,
-                "pairing_epoch": grant.pairing_epoch,
-                "lease_token": grant.lease_token,
-                // #413 contract §5: public code only; the fine-grained
-                // detail code stays in the log line above.
-                "code": error.wire_code(),
-            }),
+            // #413 contract §5: public reason only; the fine-grained
+            // detail code stays in the log line above.
+            serde_json::to_value(proto::FlowFailedPush {
+                node_id: peer.to_string(),
+                queue_sequence: grant.queue_sequence,
+                pairing_epoch: grant.pairing_epoch.clone(),
+                lease_token: grant.lease_token.clone(),
+                reason: error.wire_code(),
+            })
+            .unwrap_or_default(),
         );
     }
 
@@ -1199,13 +1219,13 @@ impl FlowDelivery {
         peer: NodeId,
         request: &FlowSupersedeRequest,
     ) -> Result<FlowSupersedeReply, DeliveryError> {
-        let refused = |reason: &str| FlowSupersedeReply {
+        let refused = |reason: SupersedeRefusal| FlowSupersedeReply {
             outcome: "refused".into(),
-            reason: reason.into(),
+            reason: Some(reason),
         };
         let (Some(old), Some(new)) = (parse_hash(&request.old_hash), parse_hash(&request.new_hash))
         else {
-            return Ok(refused("bad_request"));
+            return Ok(refused(SupersedeRefusal::BadRequest));
         };
         let epoch = self
             .db
@@ -1215,15 +1235,15 @@ impl FlowDelivery {
         if request.pairing_epoch.is_empty()
             || epoch.as_deref() != Some(request.pairing_epoch.as_str())
         {
-            return Ok(refused("epoch_mismatch"));
+            return Ok(refused(SupersedeRefusal::EpochMismatch));
         }
         let Ok((provider, ticket_hash)) = self.blobs.register_blob_ticket(&request.provider) else {
-            return Ok(refused("bad_request"));
+            return Ok(refused(SupersedeRefusal::BadRequest));
         };
         // 提供方是手机的 blobs 端点（独立于控制面身份，与 flow.offer 一样不比对）；取到的每个字节都按
         // new_hash 校验，票据指向别的内容就拒绝。
         if ticket_hash != new {
-            return Ok(refused("bad_request"));
+            return Ok(refused(SupersedeRefusal::BadRequest));
         }
         let fetch_lock = self.fetch_lock(peer);
         let _guard = fetch_lock.lock().await;
@@ -1237,7 +1257,7 @@ impl FlowDelivery {
             SupersedeCheck::AlreadyDone => {
                 return Ok(FlowSupersedeReply {
                     outcome: "replaced".into(),
-                    reason: String::new(),
+                    reason: None,
                 })
             }
             SupersedeCheck::Refused(reason) => {
@@ -1246,7 +1266,7 @@ impl FlowDelivery {
                     &request.old_hash[..8],
                     &request.new_hash[..8]
                 );
-                return Ok(refused(reason));
+                return Ok(refused(supersede_refusal(reason)));
             }
             SupersedeCheck::Ready(plan) => plan,
         };
@@ -1261,7 +1281,7 @@ impl FlowDelivery {
                     "#851 supersede {}: ranged fetch failed: {e}",
                     &request.new_hash[..8]
                 );
-                return Ok(refused("fetch_failed"));
+                return Ok(refused(SupersedeRefusal::FetchFailed));
             }
         };
         let fetched: u64 = pieces.iter().map(|(_, b)| b.len() as u64).sum();
@@ -1277,7 +1297,7 @@ impl FlowDelivery {
                     &request.old_hash[..8],
                     &request.new_hash[..8]
                 );
-                Ok(refused(reason))
+                Ok(refused(supersede_refusal(reason)))
             }
             SupersedeApplied::Replaced {
                 rel_path,
@@ -1316,7 +1336,7 @@ impl FlowDelivery {
                 tracing::info!("#851 supersede {} → {} replaced at {rel_path} ({fetched} of {size} bytes fetched)", &request.old_hash[..8], &request.new_hash[..8]);
                 Ok(FlowSupersedeReply {
                     outcome: "replaced".into(),
-                    reason: String::new(),
+                    reason: None,
                 })
             }
         }
@@ -1344,7 +1364,7 @@ impl FlowDelivery {
         tuple: &FlowTupleRef,
     ) -> Result<(), DeliveryError> {
         let Some(grant) = self.tuple_grant(peer, tuple).await? else {
-            return Err(DeliveryError::GuardMismatch);
+            return Err(DeliveryError::GrantNotFound);
         };
         if self
             .db
@@ -1450,7 +1470,7 @@ impl FlowDelivery {
     /// out of protection.
     pub async fn suspend(&self, peer: NodeId, tuple: &FlowTupleRef) -> Result<(), DeliveryError> {
         let Some(grant) = self.tuple_grant(peer, tuple).await? else {
-            return Err(DeliveryError::GuardMismatch);
+            return Err(DeliveryError::GrantNotFound);
         };
         // #1027: a grant that already completed or was cancelled has nothing
         // left to interrupt — idempotent Ok, the stored state is untouched.
@@ -1510,7 +1530,7 @@ impl FlowDelivery {
             .await
             .map_err(storage_error)?;
         if epoch.as_deref() != Some(request.pairing_epoch.as_str()) {
-            return Err(DeliveryError::GuardMismatch);
+            return Err(DeliveryError::EpochMismatch);
         }
         Ok(FlowGrant {
             node_id: peer.0.to_vec(),
@@ -1533,14 +1553,14 @@ impl FlowDelivery {
             .await
             .map_err(storage_error)?
         else {
-            return Err(DeliveryError::GuardMismatch);
+            return Err(DeliveryError::GrantNotFound);
         };
         if stored.pairing_epoch != grant.pairing_epoch
             || stored.lease_token != grant.lease_token
             || stored.content_hash != grant.content_hash
             || stored.provider != grant.provider
         {
-            return Err(DeliveryError::GuardMismatch);
+            return Err(DeliveryError::GrantConflict);
         }
         Ok(stored)
     }
@@ -1562,7 +1582,9 @@ impl FlowDelivery {
             ),
         };
         if ticket_hash.is_some_and(|hash| hash.as_slice() != grant.content_hash.as_slice()) {
-            return Err(DeliveryError::GuardMismatch);
+            return Err(DeliveryError::InvalidRequest(
+                "provider ticket names different content".into(),
+            ));
         }
         Ok(provider)
     }
@@ -1625,7 +1647,7 @@ impl FlowDelivery {
         match self.matching_grant(grant).await?.state {
             FlowGrantState::Active => Ok(()),
             FlowGrantState::Cancelled => Err(DeliveryError::Cancelled),
-            FlowGrantState::Completed => Err(DeliveryError::GuardMismatch),
+            FlowGrantState::Completed => Err(DeliveryError::GrantNotFound),
         }
     }
 
@@ -1639,13 +1661,17 @@ impl FlowDelivery {
             .await
             .map_err(storage_error)?
         else {
-            return Err(DeliveryError::GuardMismatch);
+            return Err(DeliveryError::Inconsistent(
+                "completed grant has no receipt",
+            ));
         };
         if receipt.pairing_epoch != grant.pairing_epoch
             || receipt.lease_token != grant.lease_token
             || receipt.content_hash != grant.content_hash
         {
-            return Err(DeliveryError::GuardMismatch);
+            return Err(DeliveryError::Inconsistent(
+                "receipt does not match its grant",
+            ));
         }
         Ok(receipt_from(grant, receipt.receipt_id))
     }
@@ -1721,6 +1747,18 @@ fn receipt_from(grant: &FlowGrant, receipt_id: String) -> FlowCompletionReceipt 
         lease_token: grant.lease_token.clone(),
         content_hash: hex::encode(&grant.content_hash),
     }
+}
+
+/// #1070: core-index names a supersede refusal with a `&'static str`; the
+/// wire carries the registered [`SupersedeRefusal`]. Every string core-index
+/// returns is registered (pinned by `every_core_index_refusal_is_registered`);
+/// an unregistered one is a bug, logged and answered as `bad_request` —
+/// either way nothing changed on disk.
+fn supersede_refusal(reason: &str) -> SupersedeRefusal {
+    SupersedeRefusal::from_wire(reason).unwrap_or_else(|| {
+        tracing::error!("#1070: unregistered supersede refusal {reason:?}");
+        SupersedeRefusal::BadRequest
+    })
 }
 
 fn parse_hash(value: &str) -> Option<[u8; 32]> {
@@ -1905,4 +1943,75 @@ fn unix_ms_now() -> i64 {
 
 fn storage_error(error: storage::StorageError) -> DeliveryError {
     DeliveryError::Storage(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #1070: every refusal string core-index can return is a registered
+    /// `SupersedeRefusal` (scanned from its source, so a new one fails here).
+    #[test]
+    fn every_core_index_refusal_is_registered() {
+        let src = include_str!("../../core-index/src/supersede.rs");
+        let mut seen = 0;
+        for line in src.lines() {
+            for marker in ["Refused(\"", "Err(\""] {
+                if let Some(at) = line.find(marker) {
+                    let rest = &line[at + marker.len()..];
+                    let name = &rest[..rest.find('"').unwrap()];
+                    assert!(
+                        SupersedeRefusal::from_wire(name).is_some(),
+                        "core-index refusal {name:?} is not registered"
+                    );
+                    seen += 1;
+                }
+            }
+        }
+        assert!(seen >= 9, "scanner found only {seen} refusals");
+        assert_eq!(
+            supersede_refusal("not_a_redaction"),
+            SupersedeRefusal::NotARedaction
+        );
+        assert_eq!(
+            supersede_refusal("never_registered"),
+            SupersedeRefusal::BadRequest
+        );
+    }
+
+    /// #1070: each DeliveryError names one registered reason.
+    #[test]
+    fn delivery_errors_map_to_registered_reasons() {
+        let cases = [
+            (DeliveryError::EpochMismatch, Reason::EpochMismatch),
+            (DeliveryError::GrantNotFound, Reason::GrantNotFound),
+            (DeliveryError::GrantConflict, Reason::GrantConflict),
+            (DeliveryError::Cancelled, Reason::Cancelled),
+            (
+                DeliveryError::InvalidRequest("x".into()),
+                Reason::BadRequest,
+            ),
+            (DeliveryError::Fetch("x".into()), Reason::FetchFailed),
+            (DeliveryError::Inconsistent("x"), Reason::Internal),
+            (DeliveryError::Storage("x".into()), Reason::StorageFailed),
+            (
+                DeliveryError::InsufficientSpace { needed: 2, free: 1 },
+                Reason::StorageFull,
+            ),
+            (
+                DeliveryError::LibraryUnavailable("x".into()),
+                Reason::LibraryUnavailable,
+            ),
+            (
+                DeliveryError::MaterializeIngest {
+                    failure: PeerFailure::StorageFull,
+                    detail: "x".into(),
+                },
+                Reason::StorageFull,
+            ),
+        ];
+        for (error, reason) in cases {
+            assert_eq!(error.wire_code(), reason, "{error}");
+        }
+    }
 }

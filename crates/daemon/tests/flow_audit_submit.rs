@@ -194,7 +194,7 @@ async fn unpaired_device_cannot_submit_audit_events() {
     )
     .await;
     assert!(!resp.ok, "unpaired device must not reach flow.audit.submit");
-    assert_eq!(resp.error.unwrap().code, codes::NOT_AUTHORIZED);
+    assert_eq!(resp.error.unwrap().code(), codes::NOT_AUTHORIZED);
     assert!(db.get_operation("round-1").await.unwrap().is_none());
 }
 

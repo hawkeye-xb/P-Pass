@@ -457,7 +457,7 @@ async fn hello_reply_carries_health_for_a_paired_member_only() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn offer_that_cannot_fit_is_refused_with_the_storage_full_msg_key() {
+async fn offer_that_cannot_fit_is_refused_with_the_storage_full_reason() {
     let h = router_harness(Some(GIB)).await;
     let hash = *blake3::hash(b"too big").as_bytes();
     let offer = request(
@@ -475,8 +475,8 @@ async fn offer_that_cannot_fit_is_refused_with_the_storage_full_msg_key() {
     .await;
     assert!(!resp.ok);
     let error = resp.error.unwrap();
-    assert_eq!(error.msg_key, "storage_full");
-    assert_eq!(error.code, proto::codes::STORAGE_FULL);
+    assert_eq!(error.reason(), &proto::Reason::StorageFull);
+    assert_eq!(error.code(), proto::codes::DESKTOP_STORAGE);
 }
 
 // ── Offer-time precheck ─────────────────────────────────────────────────
@@ -503,7 +503,7 @@ async fn offer_refuses_an_item_that_does_not_fit_and_writes_nothing() {
         matches!(error, DeliveryError::InsufficientSpace { .. }),
         "{error:?}"
     );
-    assert_eq!(error.wire_code(), "storage_full");
+    assert_eq!(error.wire_code(), proto::Reason::StorageFull);
     let status = delivery.status(peer, &tuple("lease-1")).await.unwrap();
     assert_eq!(
         status.state, "not_found",
@@ -585,7 +585,11 @@ async fn offer_refuses_with_library_unavailable_when_the_library_folder_is_gone(
     let offer = request("lease-1", hash, transport.local_addr().to_string(), 10);
 
     let error = delivery.offer(peer, &offer).await.unwrap_err();
-    assert_eq!(error.wire_code(), "library_unavailable", "{error:?}");
+    assert_eq!(
+        error.wire_code(),
+        proto::Reason::LibraryUnavailable,
+        "{error:?}"
+    );
     let status = delivery.status(peer, &tuple("lease-1")).await.unwrap();
     assert_eq!(status.state, "not_found");
     assert!(!library.exists());
@@ -632,12 +636,15 @@ fn failure_classification_trusts_the_io_error_first_then_the_environment() {
         PeerFailure::StorageFailed,
         "unknown free space is never guessed as full"
     );
-    assert_eq!(PeerFailure::StorageFull.code(), "storage_full");
+    assert_eq!(PeerFailure::StorageFull.reason().as_str(), "storage_full");
     assert_eq!(
-        PeerFailure::LibraryUnavailable.code(),
+        PeerFailure::LibraryUnavailable.reason().as_str(),
         "library_unavailable"
     );
-    assert_eq!(PeerFailure::StorageFailed.code(), "storage_failed");
+    assert_eq!(
+        PeerFailure::StorageFailed.reason().as_str(),
+        "storage_failed"
+    );
 }
 
 // ── #555：盘满 ≠ 文件夹打不开 ───────────────────────────────────────────
@@ -718,7 +725,7 @@ async fn pushed_failure_code(free: Option<u64>) -> String {
     .await
     .expect("materialize failure must push flow.failed");
     drop(provider_blobs);
-    failed["data"]["code"].as_str().unwrap().to_owned()
+    failed["data"]["reason"].as_str().unwrap().to_owned()
 }
 
 #[tokio::test(flavor = "multi_thread")]

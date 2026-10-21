@@ -500,10 +500,11 @@ impl DaemonHandle {
         if resp["ok"].as_bool() == Some(true) {
             Ok(resp["result"].clone())
         } else {
-            Err(resp["error"]["msg_key"]
-                .as_str()
-                .unwrap_or("err.unsupported")
-                .to_string())
+            // #1070: errors are `{code, reason, params}`; the reason names the cause.
+            let reason = serde_json::from_value::<proto::RespError>(resp["error"].clone())
+                .map(|e| e.reason().to_string())
+                .unwrap_or_else(|_| "unknown".to_string());
+            Err(format!("ipc {method}: {reason}"))
         }
     }
 }

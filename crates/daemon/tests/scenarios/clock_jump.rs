@@ -114,7 +114,7 @@ async fn clock_jump_expires_inflight_pairing_tokens() {
     let resp = send_pair(&phone, dtp.node_id(), &token_hex, "跳钟设备").await;
     assert!(!resp.ok, "expired token must be rejected");
     let err = resp.error.expect("error payload");
-    assert_eq!(err.code, codes::NOT_AUTHORIZED);
+    assert_eq!(err.code(), codes::NOT_AUTHORIZED);
 
     // daemon 仍健康：已配对设备的 hello 照常。
     let hello2 = call(&ctp, dtp.node_id(), "hello", serde_json::Value::Null).await;

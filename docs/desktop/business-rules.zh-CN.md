@@ -421,9 +421,16 @@ Windows 真机验证清单：#1056。
 
 ### 11.1 最低支持版本
 
-- 手机：Android ≥ v0.9.0（拍板 2026-10-19）；iOS 无已发布旧版，直接用新协议。
+- 手机：首个说协议 v2 的版本（#1069 一刀切，不兼容现有 test / beta）；iOS 无已发布旧版，直接用新协议。
 - 待 #990：旧批量管线退役后，最低 Android 版本提到首个带 #1051（成员探针改用 hello）的正式版；更旧的手机只有「已配对状态下重扫码」会被拒，在桌面移除设备后重新配对即可。
-- 协议版本 `proto::PROTO_VER` / `proto::MIN_SUPPORTED_VER`；握手 `min_ver` 目前不生效（空机制）。
+- 协议版本（#1069 / #1070，带内协商）：
+  - 每个 `Req` / `Resp` 带发送方的 `ver`（`proto::PROTO_VER`）与 `min_ver`（`proto::MIN_SUPPORTED_VER`）；缺这两个键 = v1 发送方，按 1 处理。
+  - 判定是纯函数 `proto::compatibility`：对方 `ver` < 本端 `min_ver` → 对方太旧；本端 `ver` < 对方 `min_ver` → 本端太旧。daemon 在控制平面与下载平面的**每个请求**、鉴权之前判定；手机对应答再核一次（覆盖旧桌面）。
+  - 不兼容 → `VERSION_MISMATCH` + `phone_outdated` / `desktop_outdated`，`params.min_ver` = 太旧一方要达到的版本；不写任何状态（不吊销、不删授权、不动设备行、不记 diag），只在进程内登记，设备列表据此投影 `needs_update`（`"phone"` / `"desktop"` / null）。
+  - 何时升版本：只有不兼容改动（删字段、改含义、改必填）才 +1；加可选字段、加 `reason`、改文案不升。`MIN_SUPPORTED_VER` 恒等于 `PROTO_VER`，不保留双版本窗口。
+  - ALPN 不随协议版本变（一直 `ppf/ctrl/1`），否则旧版本在连接层失败、看不到更新提示。
+  - v1 垫片：对 v1 信封的拒绝额外带一个冻结的 `msg_key`（`pair.*` 为 `err.unsupported`，其余为 `fetch_failed`），让已发布 Android 0.9.12 安全降级：不解除配对、照片不进入永久失败。
+- daemon ↔ 桌面壳的本地 IPC 不在本规则内（两者同包发版，#667 锁步），只共用同一套错误结构。
 
 ### 11.2 仍保留的兼容分支与退役条件
 
@@ -487,8 +494,8 @@ Windows 真机验证清单：#1056。
 | `daemon::diag_bundle::DAEMON_LOG_TAIL` | daemon | 1048576 | B | 诊断包 daemon.log 尾部 1 MiB（§9.3） |
 | `daemon::diag_bundle::SMALL_LOG_TAIL` | daemon | 262144 | B | 诊断包其余日志尾部 256 KiB（§9.3） |
 | `daemon::diag_bundle::IPC_TIMEOUT` | daemon | 10000 | ms | 诊断包经 IPC 取数超时（§9.3） |
-| `proto::PROTO_VER` | daemon | 1 | 个 | 协议版本（§11.1） |
-| `proto::MIN_SUPPORTED_VER` | daemon | 1 | 个 | 最低协议版本（§11.1） |
+| `proto::PROTO_VER` | daemon | 2 | 个 | 协议版本（§11.1） |
+| `proto::MIN_SUPPORTED_VER` | daemon | 2 | 个 | 最低协议版本（§11.1） |
 | `desktop::RESTART_GRACE` | desktop-shell | 90000 | ms | 重启 / 启动对账等应答宽限（§8.3、§8.4） |
 | `desktop::KERNEL_CONVERGE_POLL` | desktop-shell | 10000 | ms | 内核对账推迟后的复查间隔（§8.4） |
 | `desktop::ipc::IPC_READ_TIMEOUT` | desktop-shell | 10000 | ms | 壳 → daemon 每次 IPC 读超时（NET-11） |
