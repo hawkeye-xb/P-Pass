@@ -92,9 +92,40 @@ enum PairingStatus: Equatable {
 enum PairOutcome: Equatable {
     /// firstTime = 这台电脑以前没连过（要去选相册）。
     case joined(firstTime: Bool)
-    /// 电脑那边说不（ownerSaidNo）或这次没完成（过期 / 电脑重启 / 版本太旧）。msgKey 是 diag 的说明。
-    case refused(msgKey: String?, ownerSaidNo: Bool)
+    /// 电脑那边说不（ownerSaidNo）或这次没完成（过期 / 电脑重启 / 版本太旧）。note 是本端挑的补充说明（nil = 只显示通用文案）。
+    case refused(note: PairNote?, ownerSaidNo: Bool)
     case failed(reason: String)
+}
+
+/// 配对页的补充说明：本端按判决 / `reason` 挑，文字取本机字典（#1073：线上不再带文案 key）。
+enum PairNote: Equatable {
+    case notAuthorized, notPaired, versionMismatch, expired, desktopRestarted
+
+    /// 本机 diag 字典（`DiagText`）里的说明；与 v1 桌面发来的 key 同一句话，显示不变。
+    var diagKey: String {
+        switch self {
+        case .notAuthorized: return "err.not_authorized"
+        case .notPaired: return "err.not_paired"
+        case .versionMismatch: return "err.unsupported"
+        case .expired: return "err.pair_expired"
+        case .desktopRestarted: return "err.pair_restarted"
+        }
+    }
+
+    var text: String? { DiagText.resolve(diagKey) }
+
+    /// pair.request / pair.status 被拒时的说明（#1073 归类表配对通道）。登记表外的 reason → nil：只显示通用文案。
+    init?(rejection reason: DesktopReason) {
+        guard case let .registered(r) = reason else { return nil }
+        switch r {
+        case .pairTokenInvalid, .revoked, .roleForbidden: self = .notAuthorized
+        case .notPaired: self = .notPaired
+        case .phoneOutdated, .desktopOutdated, .unsupportedMethod, .badRequest: self = .versionMismatch
+        case .notFound, .internal, .backupFailed, .storageFull, .libraryUnavailable, .storageFailed, .fetchFailed,
+             .epochMismatch, .grantNotFound, .grantConflict, .cancelled, .unknown:
+            return nil
+        }
+    }
 }
 
 protocol PairingService: AnyObject {

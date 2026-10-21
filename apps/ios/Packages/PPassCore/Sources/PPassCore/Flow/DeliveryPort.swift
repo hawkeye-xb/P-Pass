@@ -60,13 +60,13 @@ public struct ControlPlaneDesktop: FlowDesktop {
         do {
             return try await client.call(method, params, as: R.self)
         } catch let rejection as ProtoRejection {
-            throw DesktopRejected(msgKey: rejection.error?.msgKey, method: method)
+            throw DesktopRejected(rejection.error, method: method)
         }
     }
 
     private func callOk<P: Encodable>(_ method: String, _ params: P) async throws {
         let resp = try await client.callRaw(method, params)
-        guard resp.ok else { throw DesktopRejected(msgKey: resp.error?.msgKey, method: method) }
+        guard resp.ok else { throw DesktopRejected(resp.error, method: method) }
     }
 
     public func hello() async throws -> Hello { try await call(Methods.hello, JSONValue.object([:]), as: Hello.self) }
@@ -82,7 +82,7 @@ public struct ControlPlaneDesktop: FlowDesktop {
     }
 }
 
-/// 进程内的「配对已失效」事实（某个配对代号被桌面以 not_authorized / not_paired 拒绝过）。UI 的红卡读它。
+/// 进程内的「配对已失效」事实（某个配对代号被桌面以归类为配对失效的 reason 拒绝过，见 `reasonClass`）。UI 的红卡读它。
 public final class PairingLoss: @unchecked Sendable {
     private let lock = NSLock()
     private var lostEpoch: String?
@@ -91,7 +91,7 @@ public final class PairingLoss: @unchecked Sendable {
     public init() {}
 
     public func record(epoch: String, failure: Error) {
-        guard let rejected = failure as? DesktopRejected, let key = rejected.msgKey, isPairingLostText(key) else { return }
+        guard let rejected = failure as? DesktopRejected, rejected.isPairingLost else { return }
         lock.lock(); defer { lock.unlock() }
         lostEpoch = epoch
         changes += 1
@@ -447,9 +447,9 @@ public final class FlowDeliveryPort: ItemDelivery, @unchecked Sendable {
                 case .keepPolling:
                     continue
                 }
-            case let .failed(code):
+            case let .failed(reason):
                 provider.pause(lease)
-                return classifyPushedFailure(code)
+                return classifyPushedFailure(reason)
             case .stalled:
                 // C-10：连接还在、很久没有新的文件字节 → 主动断开，路径失败。
                 log("order \(seq): no new file bytes for \(timings.byteStallThresholdMs)ms; disconnecting")
@@ -586,10 +586,10 @@ public struct ControlPlaneProbe: DesktopProbe {
             return .reachable(advertisedEpoch: hello.pairingEpoch, health: hello.health.map(DesktopHealth.init(wire:)), capabilities: Set(hello.capabilities))
         case let .failure(error)?:
             if let rejected = error as? DesktopRejected {
-                logger.log("Flow probe result=rejected:\(rejected.msgKey ?? "nil")")
+                logger.log("Flow probe result=rejected:\(rejected.reason)")
                 // #466：每轮先探测，桌面移除这台手机时走不到投递——探测这里也要记，红卡才会亮。
                 pairingLoss.record(epoch: epoch, failure: rejected)
-                if let key = rejected.msgKey, isPairingLostText(key) { return .pairingLost }
+                if rejected.isPairingLost { return .pairingLost }
                 return .unreachable
             }
             logger.log("Flow probe result=unreachable error=\(error)")

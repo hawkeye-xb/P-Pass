@@ -2,34 +2,106 @@
 // 全是纯函数：失败码分类（#410 / #413 契约 §5）、回执核对、推送匹配、等待循环下一步（C-10 / C-11）、状态轮询退避。
 import Foundation
 
+/// #1073：桌面错误应答里的 `reason`（协议 v2 登记表，见 `ProtoReason`）。登记表外的值原样保留在 `.unknown` 里，
+/// 只用于日志——控制流与文案都只认登记过的值，不认识的一律走兜底。
+public enum DesktopReason: Equatable, Sendable, CustomStringConvertible {
+    case registered(ProtoReason)
+    case unknown(String)
+
+    public init(wire: String) {
+        let known = ProtoReason(wire: wire)
+        self = known == .unknown ? .unknown(wire) : .registered(known)
+    }
+
+    public init(_ error: RespError?) { self.init(wire: error?.reason ?? "") }
+
+    public var description: String {
+        switch self {
+        case let .registered(r): return r.rawValue
+        case let .unknown(raw): return raw.isEmpty ? "unknown" : "unknown:\(raw)"
+        }
+    }
+}
+
+/// 版本不兼容时太旧的是哪一端（#1069 §2）。
+public enum OutdatedSide: String, Equatable, Sendable {
+    case phone
+    case desktop
+}
+
+/// 一条 `reason` 的控制流归类（#1073，与 Android #1072 逐条一致）。
+public enum ReasonClass: Equatable, Sendable {
+    /// 配对已失效：红卡、停备份，出路是重新扫码。
+    case pairingLost
+    /// 协议版本不兼容：停备份、不计失败、不动配对，提示更新 [OutdatedSide] 那一端。
+    case versionMismatch(OutdatedSide)
+    /// 桌面自身的问题：不计次数，原因带回手机显示。
+    case peerFailure(PeerFailureKind)
+    /// 路走不通：可续传，不计次数。
+    case pathFailure
+    /// 这一张的问题（今天的兜底）：计次数、有上限。
+    case itemFailure
+}
+
+/// 桌面错误是从哪条通道来的。今天两条通道的判据不同（基线 = v1 桌面实际发的 msg_key / 推送 code）：
+/// 应答拒绝先看「配对失效」，`flow.failed` 推送从来不判配对失效。
+public enum ReasonChannel: Sendable {
+    /// 一条请求的 `ok=false` 应答（offer / status / hello 探测 / 前台心跳 / 配对失效红卡）。
+    case reply
+    /// `flow.failed` 推送。
+    case push
+}
+
+/// #1073 归类表。`ProtoReason` 的 switch 不带 `default`：登记表新增一个值，这里编译不过，逼着显式归类。
+///
+/// 应答通道的「配对失效」= v1 桌面回 `err.not_paired` / `err.not_authorized` 的全部情况（今天的 `isPairingLostText`）：
+/// authz 的未配对 / 已移除 / 角色不允许，offer 的 GuardMismatch（v2 拆成 epoch_mismatch / grant_not_found /
+/// grant_conflict）与 Cancelled，pair.request 的令牌无效。`unsupported_method` 在 v1 有两个来源：authz 拒未知方法
+/// （err.not_authorized）与 router 未注入（err.unsupported）；手机只调已知方法，实际只会是后者 → 单张失败。
+public func reasonClass(_ reason: DesktopReason, channel: ReasonChannel) -> ReasonClass {
+    guard case let .registered(r) = reason else { return .itemFailure }
+    switch r {
+    case .storageFull: return .peerFailure(.storageFull)
+    case .libraryUnavailable: return .peerFailure(.libraryUnavailable)
+    case .storageFailed: return .peerFailure(.storageError)
+    case .fetchFailed: return .pathFailure
+    case .phoneOutdated: return channel == .reply ? .versionMismatch(.phone) : .itemFailure
+    case .desktopOutdated: return channel == .reply ? .versionMismatch(.desktop) : .itemFailure
+    case .notPaired, .revoked, .roleForbidden, .pairTokenInvalid, .epochMismatch, .grantNotFound, .grantConflict, .cancelled:
+        return channel == .reply ? .pairingLost : .itemFailure
+    case .unsupportedMethod, .badRequest, .notFound, .internal, .backupFailed, .unknown:
+        return .itemFailure
+    }
+}
+
 /// 桌面对一条请求回了 `ok=false`：对端**可达**、明确拒绝——不是路径问题。
 public struct DesktopRejected: Error, Equatable, Sendable {
-    public let msgKey: String?
+    public let reason: DesktopReason
     public let method: String
+
+    public init(reason: DesktopReason, method: String) {
+        self.reason = reason
+        self.method = method
+    }
+
+    public init(_ error: RespError?, method: String) { self.init(reason: DesktopReason(error), method: method) }
+
+    public var reasonClass: ReasonClass { PPassCore.reasonClass(reason, channel: .reply) }
+    public var isPairingLost: Bool { reasonClass == .pairingLost }
 }
 
-/// 配对已失效的拒绝文案（与 Android `isPairingLostText` 同一判据）。
-public func isPairingLostText(_ text: String) -> Bool {
-    text.contains("err.not_paired") || text.contains("err.not_authorized")
-}
-
-/// #413 契约 §5：桌面失败码的分类。
-/// - `storage_full` / `library_unavailable` / `storage_failed` → 对端失败；
-/// - `fetch_failed` → 路径失败；
-/// - 其它（含旧桌面的 `materialize_*`）→ nil，由调用方当单张失败（计次数、有上限）。
-public func classifyDesktopCode(_ code: String?) -> DeliveryOutcome? {
-    switch code {
-    case "storage_full": return .peerFailure(.storageFull, code: "storage_full")
-    case "library_unavailable": return .peerFailure(.libraryUnavailable, code: "library_unavailable")
-    case "storage_failed": return .peerFailure(.storageError, code: "storage_failed")
-    case "fetch_failed": return .pathFailure("fetch_failed")
-    default: return nil
+/// 不计失败的那几类归类 → 传输结局；配对失效 / 版本不兼容 / 单张失败由调用方决定（两条通道的去向不同）。
+func deliveryOutcome(_ reason: DesktopReason, _ cls: ReasonClass) -> DeliveryOutcome? {
+    switch cls {
+    case let .peerFailure(kind): return .peerFailure(kind, code: reason.description)
+    case .pathFailure: return .pathFailure(reason.description)
+    case .pairingLost, .versionMismatch, .itemFailure: return nil
     }
 }
 
 /// 推送的 `flow.failed`。
-public func classifyPushedFailure(_ code: String) -> DeliveryOutcome {
-    classifyDesktopCode(code) ?? .itemFailure("pushed:\(code)")
+public func classifyPushedFailure(_ reason: DesktopReason) -> DeliveryOutcome {
+    deliveryOutcome(reason, reasonClass(reason, channel: .push)) ?? .itemFailure("pushed:\(reason)")
 }
 
 /// 回执与请求不符（四个字段任何一个对不上）：不许确认这张 order。
@@ -45,8 +117,9 @@ public struct InconsistentReply: Error, Equatable, Sendable {
 /// 传输过程中抛出的错误的分类。桌面可达且明确拒绝不是路径问题（否则一条坏请求每次都把循环停下、且永不计次）。
 public func classifyDeliveryFailure(_ error: Error) -> DeliveryOutcome {
     if let rejected = error as? DesktopRejected {
-        if let key = rejected.msgKey, isPairingLostText(key) { return .pairingLost }
-        return classifyDesktopCode(rejected.msgKey) ?? .itemFailure("rejected:\(rejected.msgKey ?? "nil")")
+        let cls = rejected.reasonClass
+        if cls == .pairingLost { return .pairingLost }
+        return deliveryOutcome(rejected.reason, cls) ?? .itemFailure("rejected:\(rejected.reason)")
     }
     if error is ReceiptMismatch || error is InconsistentReply || error is DecodingError || error is ProtoMalformed {
         return .itemFailure("invalid:\(type(of: error))")
@@ -110,7 +183,7 @@ public func flowStatusPollOutcome(_ reply: FlowStatusReply) throws -> FlowStatus
 /// NET-14：与这次尝试的 tuple 精确匹配的 `flow.delivered` / `flow.failed` 推送。
 public enum FlowPushOutcome: Equatable, Sendable {
     case delivered(FlowCompletionReceipt)
-    case failed(String)
+    case failed(DesktopReason)
 }
 
 public func parseFlowPushOutcome(kind: String, data: JSONValue, tuple: FlowTupleRef) -> FlowPushOutcome? {
@@ -129,8 +202,9 @@ public func parseFlowPushOutcome(kind: String, data: JSONValue, tuple: FlowTuple
         guard let element = fields["receipt"], let receipt = try? element.decode(FlowCompletionReceipt.self) else { return nil }
         return .delivered(receipt)
     case "flow.failed":
-        if case let .string(code)? = fields["code"] { return .failed(code) }
-        return .failed("unknown")
+        // #1070：载荷的 `code` 改名为 `reason`。
+        if case let .string(reason)? = fields["reason"] { return .failed(DesktopReason(wire: reason)) }
+        return .failed(.unknown(""))
     default:
         return nil
     }
@@ -177,21 +251,21 @@ public enum TransferStatus: Equatable, Sendable {
 /// NET-14 / #410：等待循环的下一步。
 public enum FlowWaitStep: Equatable, Sendable {
     case resolved(FlowStatusPollOutcome)
-    case failed(String)
+    case failed(DesktopReason)
     /// C-10：连着、但很久没有新的文件字节——主动断开，路径失败。
     case stalled
     case keepWaitingForPush
     case checkStatusNow
 }
 
-/// - 推送优先：Delivered → 结账；Failed(code) → 按 code 分类。
+/// - 推送优先：Delivered → 结账；Failed(reason) → 按 reason 分类。
 /// - 本地终态（Completed / Aborted / NoLease）→ 问桌面要持久回执，绝不拿本地信号当回执。
 /// - 进行中：字节停滞 ≥ [byteStallThresholdMs] → stalled（从最后一次字节前进算；还没字节就从这次尝试开始算）；
 ///   连着 → 安静等推送；没连着且空闲 ≥ [idleStallThresholdMs]（C-11：15 s）→ 问桌面。
 public func flowWaitStep(pushed: FlowPushOutcome?, local: TransferStatus, idleStallThresholdMs: Int64, byteStallThresholdMs: Int64, attemptElapsedMs: Int64) -> FlowWaitStep {
     switch pushed {
     case let .delivered(receipt)?: return .resolved(.completed(receipt))
-    case let .failed(code)?: return .failed(code)
+    case let .failed(reason)?: return .failed(reason)
     case nil: break
     }
     switch local {

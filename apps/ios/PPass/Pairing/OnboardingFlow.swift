@@ -64,8 +64,8 @@ struct OnboardingFlow: View {
             guard !Task.isCancelled else { return }
             switch outcome {
             case .joined(let firstTime): app.paired(firstTime: firstTime)
-            case .refused(let key, let ownerSaidNo):
-                step = .status(.refused(lapsed: !ownerSaidNo, note: key.flatMap { DiagText.resolve($0) }))
+            case .refused(let note, let ownerSaidNo):
+                step = .status(.refused(lapsed: !ownerSaidNo, note: note?.text))
             case .failed(let reason): step = .status(.failed(reason))
             }
         }
@@ -83,7 +83,7 @@ struct OnboardingFlow: View {
         case .manual: step = .manual
         case .pairWaiting: step = .status(.waiting)
         case .pairRefused: step = .status(.refused(lapsed: false, note: nil))
-        case .pairLapsed: step = .status(.refused(lapsed: true, note: DiagText.resolve("err.pair_expired")))
+        case .pairLapsed: step = .status(.refused(lapsed: true, note: PairNote.expired.text))
         case .pairFailed: step = .status(.failed("demo: unreachable"))
         default: break
         }

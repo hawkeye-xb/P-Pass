@@ -93,12 +93,12 @@ public final class ForegroundHeartbeat: @unchecked Sendable {
         case .success?:
             await markReachable()
         case let .failure(rejected as DesktopRejected)?:
-            if let key = rejected.msgKey, isPairingLostText(key) {
-                logger.log("Heartbeat hello rejected: \(key) → pairing lost")
+            if rejected.isPairingLost {
+                logger.log("Heartbeat hello rejected: \(rejected.reason) → pairing lost")
                 await onPairingLost(epoch, rejected)
             } else {
                 // 对端在答话，只是拒了别的：算可达（与 Android 同）。
-                logger.log("Heartbeat hello rejected: \(rejected.msgKey ?? "nil") (desktop reachable)")
+                logger.log("Heartbeat hello rejected: \(rejected.reason) (desktop reachable)")
                 await markReachable()
             }
         case let .failure(error)?:

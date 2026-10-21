@@ -140,7 +140,7 @@ final class TimelineLiveTests: XCTestCase {
     }
 
     func testRejectedAckIsAFailureNotAConnection() async {
-        let r = Rig([.end([#"{"id":"x","ok":false,"error":{"code":"NOT_AUTHORIZED","msg_key":"err.not_authorized"}}"#, invalidated])])
+        let r = Rig([.end([#"{"id":"x","ok":false,"error":{"code":"NOT_AUTHORIZED","reason":"revoked"}}"#, invalidated])])
         r.live.start()
         await eventually("进入退避等待") { r.sleeper.pending(ms: 1_000) == 1 }
         XCTAssertFalse(r.state.connected)

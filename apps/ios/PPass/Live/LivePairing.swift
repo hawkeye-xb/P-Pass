@@ -6,19 +6,29 @@ import UIKit
 /// 配对结局的判决（对位 Android `PairVerdict`）。
 enum PairVerdict: Equatable {
     case accepted(PairAccepted)
-    case denied(msgKey: String)
+    /// 电脑那边说不：pair.status 的 `denied`，或 pair.request 被拒（note 按 `reason` 本端挑，nil = 通用文案）。
+    case denied(PairNote?)
     case expired, desktopRestarted, desktopTooOld
+    /// #1069：协议版本不兼容（`VERSION_MISMATCH`）。不是电脑主人拒绝的，提示更新。
+    case versionMismatch(OutdatedSide)
     case unreachable(String)
 
     var outcome: PairOutcome {
         switch self {
         case .accepted: return .joined(firstTime: true)
-        case .denied(let key): return .refused(msgKey: key, ownerSaidNo: true)
-        case .expired: return .refused(msgKey: "err.pair_expired", ownerSaidNo: false)
-        case .desktopRestarted: return .refused(msgKey: "err.pair_restarted", ownerSaidNo: false)
-        case .desktopTooOld: return .refused(msgKey: "err.unsupported", ownerSaidNo: false)
+        case .denied(let note): return .refused(note: note, ownerSaidNo: true)
+        case .expired: return .refused(note: .expired, ownerSaidNo: false)
+        case .desktopRestarted: return .refused(note: .desktopRestarted, ownerSaidNo: false)
+        case .desktopTooOld, .versionMismatch: return .refused(note: .versionMismatch, ownerSaidNo: false)
         case .unreachable(let reason): return .failed(reason: reason)
         }
+    }
+
+    /// pair.request 被拒（#1073 归类表配对通道）：版本不兼容单独成判决，其余都是「电脑那边说不」。
+    static func rejected(_ error: RespError?) -> PairVerdict {
+        let reason = DesktopReason(error)
+        if case let .versionMismatch(side) = reasonClass(reason, channel: .reply) { return .versionMismatch(side) }
+        return .denied(PairNote(rejection: reason))
     }
 }
 
@@ -46,7 +56,7 @@ struct PairVerdictLoop {
         do {
             submit = try await rpc(Methods.pairRequest, PairRequest(token: token, deviceName: deviceName, ackThenPoll: true))
         } catch { return .unreachable(String(describing: error)) }
-        guard submit.ok else { return .denied(msgKey: submit.error?.msgKey ?? "err.not_authorized") }
+        guard submit.ok else { return .rejected(submit.error) }
         guard let submitted = try? submit.result?.decode(PairSubmitted.self), !submitted.requestId.isEmpty else {
             if let legacy = try? submit.result?.decode(PairAccepted.self), !legacy.pairingEpoch.isEmpty { return .accepted(legacy) }
             return .desktopTooOld
@@ -71,7 +81,7 @@ struct PairVerdictLoop {
             var reply: PairStatusReply?
             do {
                 let r = try await rpc(Methods.pairStatus, query)
-                if r.ok { reply = try r.result?.decode(PairStatusReply.self) } else { lastFailure = "pair.status: \(r.error?.msgKey ?? "")" }
+                if r.ok { reply = try r.result?.decode(PairStatusReply.self) } else { lastFailure = "pair.status: \(DesktopReason(r.error))" }
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -89,7 +99,8 @@ struct PairVerdictLoop {
                 failures += 1
                 lastFailure = "pair.status: accepted without payload"
                 if failures >= maxConsecutiveFailures { return .unreachable(lastFailure) }
-            case "denied": return .denied(msgKey: reply.msgKey ?? "err.not_authorized")
+            // v2 的 denied 不带说明（#1070）；本端给 v1 时代同一句「没有访问权限」。
+            case "denied": return .denied(.notAuthorized)
             case "expired": return .expired
             case "not_found": return .desktopRestarted
             default: break

@@ -207,7 +207,7 @@ final class PairingWiringTests: XCTestCase {
     func test_revoked_hello_denied_falls_back_to_pairing_and_never_calls_backup_begin() async throws {
         let store = PairingStore(root: dir)
         let transport = ScriptedTransport([
-            Methods.hello: .resp(Resp(ok: false, error: RespError(code: "denied", msgKey: "err.not_authorized"))),
+            Methods.hello: .resp(Resp(ok: false, error: RespError(code: Codes.notAuthorized, reason: "revoked"))),
         ])
         let outcome = await makePairing(transport, store: store).pair(code: link)
         XCTAssertNil(store.load())
@@ -219,7 +219,7 @@ final class PairingWiringTests: XCTestCase {
     func test_member_fast_path_rejected_hello_also_falls_back() async throws {
         let store = PairingStore(root: dir)
         let transport = ScriptedTransport([
-            Methods.hello: .resp(Resp(ok: false, error: RespError(code: "x", msgKey: "err.x"))),
+            Methods.hello: .resp(Resp(ok: false, error: RespError(code: "x", reason: "from_the_future"))),
         ])
         _ = await makePairing(transport, store: store).pair(code: link)
         XCTAssertNil(store.load())

@@ -85,8 +85,8 @@ final class FakePairing: PairingService {
     /// 演示规则：串里带 `t=deny` → 电脑拒绝；`t=expired` → 过期；`t=fail` → 连不上；其余 → 加入成功。
     func pair(code: String) async -> PairOutcome {
         try? await Task.sleep(nanoseconds: 1_200_000_000)
-        if code.contains("t=deny") { return .refused(msgKey: nil, ownerSaidNo: true) }
-        if code.contains("t=expired") { return .refused(msgKey: "err.pair_expired", ownerSaidNo: false) }
+        if code.contains("t=deny") { return .refused(note: nil, ownerSaidNo: true) }
+        if code.contains("t=expired") { return .refused(note: .expired, ownerSaidNo: false) }
         if code.contains("t=fail") { return .failed(reason: "demo: unreachable") }
         current = .paired(desktopName: "Home-Mac")
         return .joined(firstTime: true)

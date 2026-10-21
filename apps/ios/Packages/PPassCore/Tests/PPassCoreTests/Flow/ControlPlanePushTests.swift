@@ -39,7 +39,7 @@ final class ControlPlanePushTests: XCTestCase {
             #"{"id":"x","ok":true,"result":{"subscribed":true}}"#,
             #"{"event":"timeline.invalidated","data":{}}"#,
             #"{"event":"flow.delivered","data":{"queue_sequence":7}}"#,
-            #"{"event":"flow.failed","data":{"queue_sequence":8,"code":"fetch_failed"}}"#,
+            #"{"event":"flow.failed","data":{"queue_sequence":8,"reason":"fetch_failed"}}"#,
             #"{"event":"flow.delivered"}"#,
             #"{"no_event":true}"#,
         ])
@@ -51,9 +51,9 @@ final class ControlPlanePushTests: XCTestCase {
     }
 
     func testRejectedFirstFrameThrowsAndNeverConnects() async {
-        let r = await run([#"{"id":"x","ok":false,"error":{"code":"NOT_AUTHORIZED","msg_key":"err.not_authorized"}}"#])
+        let r = await run([#"{"id":"x","ok":false,"error":{"code":"NOT_AUTHORIZED","reason":"revoked"}}"#])
         XCTAssertEqual(r.connected, 0)
-        XCTAssertEqual(r.error as? SubscribeRejected, SubscribeRejected(code: "NOT_AUTHORIZED", msgKey: "err.not_authorized"))
+        XCTAssertEqual(r.error as? SubscribeRejected, SubscribeRejected(code: "NOT_AUTHORIZED", reason: .registered(.revoked)))
     }
 
     func testStreamErrorPropagatesAfterConnecting() async {
