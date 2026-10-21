@@ -47,6 +47,8 @@ import com.hawkeyexb.ppass.backup.flow.waitReasonTextRes
 import com.hawkeyexb.ppass.proto.Hello
 import com.hawkeyexb.ppass.proto.Methods
 import com.hawkeyexb.ppass.proto.ProtoJson
+import com.hawkeyexb.ppass.proto.ProtocolOutdatedException
+import com.hawkeyexb.ppass.proto.outdatedSide
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.Pairing
@@ -334,6 +336,7 @@ class BackupUiStateHolder(
             withContext(Dispatchers.IO) {
                 withTimeout(5_000) {
                     val response = client.call(parsePeerAddrToken(pairing.daemonAddrToken), Methods.HELLO, buildJsonObject {})
+                    response.outdatedSide()?.let { throw ProtocolOutdatedException(it) }
                     check(response.ok) { "hello rejected: ${response.error?.reason}" }
                     ProtoJson.decodeFromJsonElement(Hello.serializer(), checkNotNull(response.result)).pairingEpoch
                 }
@@ -345,6 +348,8 @@ class BackupUiStateHolder(
                 store.load()?.let { store.save(it.copy(pairingEpoch = result.epoch)) }
             }
             EpochRepairResult.Lost -> pairingLostState.markLost()
+            // #1072：版本不兼容不是配对失效（首页整屏提示更新）；更新之后再修一次。
+            EpochRepairResult.Deferred -> epochRepairAttempted = false
         }
     }
 
@@ -643,6 +648,8 @@ internal fun needsEpochRepair(pairingEpoch: String): Boolean = pairingEpoch.isBl
 internal sealed class EpochRepairResult {
     data class Repaired(val epoch: String) : EpochRepairResult()
     data object Lost : EpochRepairResult()
+    /** #1072: the desktop's version is incompatible — not a verdict on the pairing; try again later. */
+    data object Deferred : EpochRepairResult()
 }
 
 /**
@@ -653,6 +660,7 @@ internal sealed class EpochRepairResult {
  * repair to.
  */
 internal fun applyEpochRepairOutcome(outcome: Result<String?>): EpochRepairResult {
+    if (outcome.exceptionOrNull() is ProtocolOutdatedException) return EpochRepairResult.Deferred
     val epoch = outcome.getOrNull()
     return if (outcome.isSuccess && !epoch.isNullOrBlank()) {
         EpochRepairResult.Repaired(epoch)

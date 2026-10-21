@@ -38,4 +38,13 @@ class EpochRepairTest {
         val outcome = applyEpochRepairOutcome(Result.failure(RuntimeException("unreachable")))
         assertEquals(EpochRepairResult.Lost, outcome)
     }
+
+    /** #1072: an incompatible desktop (e.g. a pre-v2 one) says nothing about the pairing — no red card, retry later. */
+    @Test
+    fun version_mismatch_is_deferred_not_lost() {
+        for (side in com.hawkeyexb.ppass.proto.OutdatedSide.entries) {
+            val outcome = applyEpochRepairOutcome(Result.failure(com.hawkeyexb.ppass.proto.ProtocolOutdatedException(side)))
+            assertEquals(EpochRepairResult.Deferred, outcome)
+        }
+    }
 }
