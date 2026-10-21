@@ -1,9 +1,10 @@
 // #1072: phone-side wording for the protocol outcomes — the desktop sends a reason, the phone picks
-// the words. Pure resource mappings so the choice is testable without Compose.
+// the words. Pure mappings so the choice is testable without Compose.
 package com.hawkeyexb.ppass.ui
 
 import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.proto.OutdatedSide
+import com.hawkeyexb.ppass.backup.MediaAccess
 import com.hawkeyexb.ppass.transport.PairRefusal
 
 /** The detail line under a pairing that ended without joining. */
@@ -15,22 +16,23 @@ internal fun pairRefusalDetailRes(cause: PairRefusal): Int = when (cause) {
     PairRefusal.OTHER -> R.string.error_generic
 }
 
-internal fun updateNeededTitleRes(side: OutdatedSide): Int = when (side) {
-    OutdatedSide.PHONE -> R.string.update_needed_phone_title
-    OutdatedSide.DESKTOP -> R.string.update_needed_desktop_title
+/**
+ * #1069 sign-off: it is the P-Pass app that is out of date, not the device. One sentence per side,
+ * used on the home status card and as the pairing result's body.
+ */
+internal fun outdatedTextRes(side: OutdatedSide): Int = when (side) {
+    OutdatedSide.PHONE -> R.string.state_waiting_phone_outdated
+    OutdatedSide.DESKTOP -> R.string.state_waiting_desktop_outdated
 }
 
-/** Full-screen prompt on the home screen (already paired: pairing and photos are kept). */
-internal fun updateNeededBodyRes(side: OutdatedSide): Int = when (side) {
-    OutdatedSide.PHONE -> R.string.update_needed_phone_body
-    OutdatedSide.DESKTOP -> R.string.update_needed_desktop_body
-}
-
-/** The pairing screen's version of the prompt (nothing paired yet). */
-internal fun pairNeedsUpdateBodyRes(side: OutdatedSide): Int = when (side) {
-    OutdatedSide.PHONE -> R.string.pair_needs_update_phone_body
-    OutdatedSide.DESKTOP -> R.string.pair_needs_update_desktop_body
-}
-
-/** Only an outdated phone can be fixed from here: offer the in-app update check. */
+/** Only an outdated phone app can be fixed from here: offer the in-app update check. */
 internal fun offersAppUpdate(side: OutdatedSide): Boolean = side == OutdatedSide.PHONE
+
+/**
+ * The home status card's version line: shown whenever the last reply said the versions are
+ * incompatible (any channel, see ProtocolVersionGate), in place of the waiting/idle line — no dialog,
+ * no full-screen block. Same gates as the waiting line: hidden behind the media-access card and
+ * when the pairing is lost (the red card is the way out then).
+ */
+internal fun visibleOutdatedSide(outdated: OutdatedSide?, mediaAccess: MediaAccess, pairingLost: Boolean): OutdatedSide? =
+    outdated?.takeIf { mediaAccess == MediaAccess.FULL && !pairingLost }

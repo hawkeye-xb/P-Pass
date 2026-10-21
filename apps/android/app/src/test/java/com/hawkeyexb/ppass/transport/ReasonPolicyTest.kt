@@ -1,7 +1,6 @@
 // #1072 acceptance 1 + 2: every reason in the Rust registry has an explicit control-flow class and
-// phone-side wording, and on every channel a v2 reply reaches the same conclusion the pre-v2
-// `msg_key` did — except the rows the reviewer signed off on (grant_not_found / grant_conflict and
-// the two cases #1070 split out of GuardMismatch), which are pinned separately below.
+// phone-side wording, per the #1069 sign-off table (one table for offer / status rejections and
+// `flow.failed` pushes alike; hello probe and heartbeat keep their own narrower verdicts).
 package com.hawkeyexb.ppass.transport
 
 import com.hawkeyexb.ppass.R
@@ -27,8 +26,7 @@ import com.hawkeyexb.ppass.proto.Reason
 import com.hawkeyexb.ppass.proto.Resp
 import com.hawkeyexb.ppass.proto.RespError
 import com.hawkeyexb.ppass.ui.pairRefusalDetailRes
-import com.hawkeyexb.ppass.ui.updateNeededBodyRes
-import com.hawkeyexb.ppass.ui.updateNeededTitleRes
+import com.hawkeyexb.ppass.ui.outdatedTextRes
 import java.io.File
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.builtins.ListSerializer
@@ -49,20 +47,20 @@ class ReasonPolicyTest {
         Reason.ROLE_FORBIDDEN to ReasonClass.PAIRING_LOST,
         Reason.PHONE_OUTDATED to ReasonClass.OUTDATED,
         Reason.DESKTOP_OUTDATED to ReasonClass.OUTDATED,
+        Reason.UNSUPPORTED_METHOD to ReasonClass.OUTDATED,
         Reason.STORAGE_FULL to ReasonClass.STORAGE_FULL,
         Reason.LIBRARY_UNAVAILABLE to ReasonClass.LIBRARY_UNAVAILABLE,
         Reason.STORAGE_FAILED to ReasonClass.STORAGE_FAILED,
+        Reason.INTERNAL to ReasonClass.DESKTOP_INTERNAL,
         Reason.FETCH_FAILED to ReasonClass.PATH,
-        Reason.GRANT_NOT_FOUND to ReasonClass.OTHER,
-        Reason.GRANT_CONFLICT to ReasonClass.OTHER,
-        Reason.CANCELLED to ReasonClass.OTHER,
-        Reason.PAIR_TOKEN_INVALID to ReasonClass.OTHER,
-        Reason.UNSUPPORTED_METHOD to ReasonClass.OTHER,
-        Reason.BAD_REQUEST to ReasonClass.OTHER,
-        Reason.NOT_FOUND to ReasonClass.OTHER,
-        Reason.INTERNAL to ReasonClass.OTHER,
-        Reason.BACKUP_FAILED to ReasonClass.OTHER,
-        Reason.UNKNOWN to ReasonClass.OTHER,
+        Reason.GRANT_NOT_FOUND to ReasonClass.GRANT_OUT_OF_STEP,
+        Reason.GRANT_CONFLICT to ReasonClass.GRANT_OUT_OF_STEP,
+        Reason.BAD_REQUEST to ReasonClass.PHONE_ERROR,
+        Reason.NOT_FOUND to ReasonClass.PHONE_ERROR,
+        Reason.BACKUP_FAILED to ReasonClass.PHONE_ERROR,
+        Reason.CANCELLED to ReasonClass.PHONE_ERROR,
+        Reason.PAIR_TOKEN_INVALID to ReasonClass.PHONE_ERROR,
+        Reason.UNKNOWN to ReasonClass.PHONE_ERROR,
     )
 
     private fun registry(): List<String> {
@@ -96,10 +94,12 @@ class ReasonPolicyTest {
         assertNotNull(waitReasonTextRes(WaitReason.DESKTOP_LIBRARY_UNAVAILABLE, null))
         assertNotNull(waitReasonTextRes(WaitReason.DESKTOP_STORAGE_ERROR, null))
         assertNotNull(waitReasonTextRes(WaitReason.DESKTOP_UNREACHABLE, null))
-        // OUTDATED → the new update prompt, one per side, plus the waiting line.
-        for (side in OutdatedSide.entries) {
-            assertTrue(updateNeededTitleRes(side) != 0 && updateNeededBodyRes(side) != 0)
-        }
+        // DESKTOP_INTERNAL → "P-Pass on the computer ran into an error"; PHONE_ERROR → the generic backoff line.
+        assertEquals(R.string.state_waiting_desktop_internal, waitReasonTextRes(WaitReason.DESKTOP_INTERNAL, null))
+        assertNotNull(waitReasonTextRes(WaitReason.UNEXPECTED_ERROR, null))
+        // OUTDATED → one sentence per side (status card + pairing body).
+        assertEquals(R.string.state_waiting_phone_outdated, outdatedTextRes(OutdatedSide.PHONE))
+        assertEquals(R.string.state_waiting_desktop_outdated, outdatedTextRes(OutdatedSide.DESKTOP))
         assertEquals(R.string.state_waiting_phone_outdated, waitReasonTextRes(WaitReason.PHONE_OUTDATED, null))
         assertEquals(R.string.state_waiting_desktop_outdated, waitReasonTextRes(WaitReason.DESKTOP_OUTDATED, null))
         // Pairing: one detail line per cause, and an unknown reason gets the generic one — never blank.
@@ -113,9 +113,8 @@ class ReasonPolicyTest {
     fun `the new wording exists in both languages`() {
         val names = listOf(
             "pair_refused_detail_token_invalid", "pair_refused_detail_denied", "pair_refused_detail_expired",
-            "pair_refused_detail_restarted", "error_generic", "update_needed_phone_title", "update_needed_desktop_title",
-            "update_needed_phone_body", "update_needed_desktop_body", "pair_needs_update_phone_body",
-            "pair_needs_update_desktop_body", "state_waiting_phone_outdated", "state_waiting_desktop_outdated",
+            "pair_refused_detail_restarted", "error_generic", "pair_needs_update_title",
+            "state_waiting_phone_outdated", "state_waiting_desktop_outdated", "state_waiting_desktop_internal",
         )
         for (dir in listOf("values", "values-zh")) {
             val xml = File("src/main/res/$dir/strings.xml").readText()
@@ -123,47 +122,51 @@ class ReasonPolicyTest {
         }
     }
 
-    // ── acceptance 2: same conclusion as before v2, channel by channel ──
+    // ── acceptance 2: the sign-off table on every delivery channel ──
 
     private fun rejected(reason: String) = classifyDeliveryFailure(DesktopRejectedException(reason, "flow.offer"))
 
-    @Test
-    fun `offer and status rejections keep their pre-v2 outcome`() {
-        // err.not_paired / err.not_authorized (revoked, epoch, role) → pairing lost.
-        for (r in listOf("not_paired", "revoked", "epoch_mismatch", "role_forbidden")) {
-            assertEquals(r, DeliveryOutcome.PairingLost, rejected(r))
-        }
-        // storage_full / library_unavailable / storage_failed → peer failure (not counted).
-        assertEquals(DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_FULL, "storage_full"), rejected("storage_full"))
-        assertEquals(DeliveryOutcome.PeerFailure(PeerFailureKind.LIBRARY_UNAVAILABLE, "library_unavailable"), rejected("library_unavailable"))
-        assertEquals(DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_ERROR, "storage_failed"), rejected("storage_failed"))
-        // err.unsupported (bad request, internal, not found, …) → one item failed.
-        for (r in listOf("bad_request", "internal", "not_found", "backup_failed", "unsupported_method", "pair_token_invalid", "from_the_future")) {
-            assertEquals(r, DeliveryOutcome.ItemFailure("rejected:$r"), rejected(r))
-        }
+    /** The conclusion for [reason] on a delivery channel; the same table for rejections and pushes. */
+    private fun expected(reason: String, channel: String): DeliveryOutcome = when (reason) {
+        "not_paired", "revoked", "epoch_mismatch", "role_forbidden" -> DeliveryOutcome.PairingLost
+        "phone_outdated" -> DeliveryOutcome.NeedsUpdate(OutdatedSide.PHONE)
+        "desktop_outdated", "unsupported_method" -> DeliveryOutcome.NeedsUpdate(OutdatedSide.DESKTOP)
+        "storage_full" -> DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_FULL, reason)
+        "library_unavailable" -> DeliveryOutcome.PeerFailure(PeerFailureKind.LIBRARY_UNAVAILABLE, reason)
+        "storage_failed" -> DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_ERROR, reason)
+        "internal" -> DeliveryOutcome.PeerFailure(PeerFailureKind.DESKTOP_INTERNAL, reason)
+        "fetch_failed" -> DeliveryOutcome.PathFailure(reason)
+        "grant_not_found", "grant_conflict" -> DeliveryOutcome.ItemFailure("$channel:$reason")
+        else -> DeliveryOutcome.PhoneError("$channel:$reason")
     }
 
     @Test
-    fun `signed-off change - a grant out of step is one item, not a lost pairing`() {
-        // Before v2 these came as err.not_authorized and lit the "pairing lost" card + notice (#1072 sign-off).
-        for (r in listOf("grant_not_found", "grant_conflict", "cancelled")) {
-            assertEquals(r, DeliveryOutcome.ItemFailure("rejected:$r"), rejected(r))
-        }
+    fun `offer and status rejections follow the sign-off table`() {
+        for (r in registry() + "from_the_future") assertEquals(r, expected(r, "rejected"), rejected(r))
+    }
+
+    @Test
+    fun `flow failed pushes follow the same table`() {
+        for (r in registry() + "from_the_future") assertEquals(r, expected(r, "pushed"), classifyPushedFailure(r))
+    }
+
+    @Test
+    fun `only a problem with the photo itself is counted - nothing the phone or desktop got wrong`() {
+        val counted = (registry() + "from_the_future").filter { rejected(it) is DeliveryOutcome.ItemFailure }
+        // grant_* stays counted only until its handling is signed off (#1072); bad_request's photo case
+        // needs a finer reason from the daemon first.
+        assertEquals(listOf("grant_not_found", "grant_conflict"), counted)
+    }
+
+    @Test
+    fun `a lost pairing is recorded from a push as well as from a rejection`() {
         val loss = FlowDeliveryPairingLoss()
-        loss.record(PairingEpoch("e1"), DesktopRejectedException("grant_conflict", "flow.offer"))
-        assertFalse(loss.isLost(PairingEpoch("e1")))
-    }
-
-    @Test
-    fun `flow failed pushes keep their pre-v2 outcome - never pairing lost`() {
-        assertEquals(DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_FULL, "storage_full"), classifyPushedFailure("storage_full"))
-        assertEquals(DeliveryOutcome.PeerFailure(PeerFailureKind.LIBRARY_UNAVAILABLE, "library_unavailable"), classifyPushedFailure("library_unavailable"))
-        assertEquals(DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_ERROR, "storage_failed"), classifyPushedFailure("storage_failed"))
-        assertEquals(DeliveryOutcome.PathFailure("fetch_failed"), classifyPushedFailure("fetch_failed"))
-        // Before v2: guard_mismatch / cancelled / invalid_request → one item failed. Same now.
-        for (r in listOf("epoch_mismatch", "grant_not_found", "grant_conflict", "cancelled", "bad_request", "internal", "from_the_future")) {
-            assertEquals(r, DeliveryOutcome.ItemFailure("pushed:$r"), classifyPushedFailure(r))
-        }
+        loss.record(PairingEpoch("e1"), com.hawkeyexb.ppass.backup.flow.FlowPushedFailureException("epoch_mismatch"))
+        assertTrue(loss.isLost(PairingEpoch("e1")))
+        val other = FlowDeliveryPairingLoss()
+        other.record(PairingEpoch("e1"), DesktopRejectedException("grant_conflict", "flow.offer"))
+        other.record(PairingEpoch("e1"), DesktopRejectedException("internal", "flow.offer"))
+        assertFalse(other.isLost(PairingEpoch("e1")))
     }
 
     private fun rejectingHello(reason: String) = object : FlowReceiptClient {
@@ -183,7 +186,7 @@ class ReasonPolicyTest {
     fun `hello probes - pairing lost for not_paired and revoked, unreachable otherwise`() = runTest {
         assertEquals(ProbeResult.PairingLost, probe("not_paired"))
         assertEquals(ProbeResult.PairingLost, probe("revoked"))
-        for (r in listOf("internal", "unsupported_method", "bad_request", "from_the_future")) {
+        for (r in listOf("internal", "bad_request", "from_the_future")) {
             assertEquals(r, ProbeResult.Unreachable, probe(r))
         }
     }
@@ -212,6 +215,7 @@ class ReasonPolicyTest {
         assertFalse("版本不兼容不点亮配对失效红卡", loss.isLost(PairingEpoch("e1")))
         assertEquals(DeliveryOutcome.NeedsUpdate(OutdatedSide.PHONE), rejected("phone_outdated"))
         assertEquals(DeliveryOutcome.NeedsUpdate(OutdatedSide.DESKTOP), rejected("desktop_outdated"))
+        assertEquals(DeliveryOutcome.NeedsUpdate(OutdatedSide.DESKTOP), rejected("unsupported_method"))
         var reachable = 0
         var lost = 0
         applyHeartbeatOutcome(null, Result.success(Resp(ok = false, error = RespError("VERSION_MISMATCH", "desktop_outdated"))), onPairingLost = { lost++ }) { reachable++ }

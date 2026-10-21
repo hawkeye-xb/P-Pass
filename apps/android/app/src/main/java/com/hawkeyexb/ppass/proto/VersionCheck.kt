@@ -16,10 +16,13 @@ fun outdatedSideOf(peerVer: Int, peerMinVer: Int): OutdatedSide? = when {
 /** Thrown where a caller needs to unwind on an incompatible reply (it is never a lost pairing). */
 class ProtocolOutdatedException(val side: OutdatedSide) : IllegalStateException("protocol version mismatch: $side outdated")
 
-/** `phone_outdated` / `desktop_outdated` → the side; any other reason → null. */
+/**
+ * `phone_outdated` / `desktop_outdated` → the side; `unsupported_method` (the desktop does not know a
+ * method this phone relies on) → the desktop (#1069 sign-off); any other reason → null.
+ */
 fun outdatedSideOf(reason: Reason): OutdatedSide? = when (reason) {
     Reason.PHONE_OUTDATED -> OutdatedSide.PHONE
-    Reason.DESKTOP_OUTDATED -> OutdatedSide.DESKTOP
+    Reason.DESKTOP_OUTDATED, Reason.UNSUPPORTED_METHOD -> OutdatedSide.DESKTOP
     else -> null
 }
 

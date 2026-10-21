@@ -62,10 +62,8 @@ import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.PairOutcome
 import com.hawkeyexb.ppass.transport.ProtocolVersionGate
 import com.hawkeyexb.ppass.ui.offersAppUpdate
-import com.hawkeyexb.ppass.ui.pairNeedsUpdateBodyRes
+import com.hawkeyexb.ppass.ui.outdatedTextRes
 import com.hawkeyexb.ppass.ui.pairRefusalDetailRes
-import com.hawkeyexb.ppass.ui.updateNeededBodyRes
-import com.hawkeyexb.ppass.ui.updateNeededTitleRes
 import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PairingStore
 import com.hawkeyexb.ppass.transport.bindThenPair
@@ -656,10 +654,10 @@ fun PPassApp() {
                         // #1072：具体原因由桌面的 reason 决定、手机自己的文案；不认识的 → 通用提示。
                         context.getString(pairRefusalDetailRes(outcome.cause)),
                     )
-                    // #1072：握手就发现版本不兼容——没发配对请求。提示更新哪台设备；手机过旧给更新入口。
+                    // #1072：握手就发现版本不兼容——没发配对请求。说清是哪一端的 P-Pass 太旧；手机太旧给更新入口。
                     is PairOutcome.NeedsUpdate -> screen = Screen.Trouble(
-                        updateNeededTitleRes(outcome.side),
-                        pairNeedsUpdateBodyRes(outcome.side),
+                        R.string.pair_needs_update_title,
+                        outdatedTextRes(outcome.side),
                         offerAppUpdate = offersAppUpdate(outcome.side),
                     )
                     is PairOutcome.Failed -> screen = Screen.Trouble(
@@ -875,20 +873,9 @@ fun PPassApp() {
                 }
                 Unit
             }
-            // #1072：和电脑版本不兼容时整屏提示更新哪台设备（握手时发现，不发起任何传输）。
-            // 配对与已备份的照片都不动；心跳或探测一旦遇到兼容的应答，这一屏自己消失。
+            // #1072：版本不兼容显示在首页状态卡上（不弹窗、不遮挡），见 HomeScreen 的 outdated。
             val outdatedSide = ProtocolVersionGate.outdated.collectAsState().value
-            if (outdatedSide != null) {
-                PairStatusScreen(
-                    title = stringResource(updateNeededTitleRes(outdatedSide)),
-                    body = stringResource(updateNeededBodyRes(outdatedSide)),
-                    action = if (offersAppUpdate(outdatedSide)) {
-                        stringResource(R.string.update_check_now) to { updateController.onCheckRowClick() }
-                    } else {
-                        null
-                    },
-                )
-            } else TwoTabs(
+            TwoTabs(
                 tab = tab,
                 onTab = { tab = it },
                 showTabBar = !photoViewerOpen && !storageDetailOpen,
@@ -953,6 +940,7 @@ fun PPassApp() {
                         onDismissCancelRemaining = { holder.dismissCancelRemaining() },
                         // 规则 P（#418）：FGS 受阻而等待时的人话（null ⇒ 状态行一个字都不加）。
                         waitReasonRes = holder.waitReasonNotice.value,
+                        outdated = outdatedSide,
                         // #413 §7：桌面剩余空间不足 5 GiB 的预警。
                         desktopLowSpace = holder.desktopLowSpace.value,
                         wifiOnly = wifiOnly,

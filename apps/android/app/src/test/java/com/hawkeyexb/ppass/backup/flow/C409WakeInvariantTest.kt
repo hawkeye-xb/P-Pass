@@ -48,6 +48,7 @@ class C409WakeInvariantTest {
         WaitReason.DESKTOP_LIBRARY_UNAVAILABLE to WakePlan.RetryProbes,
         WaitReason.DESKTOP_STORAGE_ERROR to WakePlan.RetryProbes,
         WaitReason.UNEXPECTED_ERROR to WakePlan.RetryProbes,
+        WaitReason.DESKTOP_INTERNAL to WakePlan.RetryProbes,
         WaitReason.PHONE_OUTDATED to WakePlan.AwaitsUser,
         WaitReason.DESKTOP_OUTDATED to WakePlan.RetryProbes,
     )
@@ -114,6 +115,7 @@ class C409WakeInvariantTest {
             WaitReason.DESKTOP_LIBRARY_UNAVAILABLE -> rig.probeResult = ProbeResult.Reachable("e1", DesktopHealth(freeBytes = null, libraryWritable = false))
             WaitReason.DESKTOP_STORAGE_ERROR -> rig.probeResult = ProbeResult.Reachable("e1", DesktopHealth(freeBytes = null, indexOk = false))
             WaitReason.UNEXPECTED_ERROR -> rig.probeHook = { throw IllegalStateException("unclassified failure in the cycle") }
+            WaitReason.DESKTOP_INTERNAL -> rig.delivery.script += { DeliveryOutcome.PeerFailure(PeerFailureKind.DESKTOP_INTERNAL, "internal") }
             WaitReason.PHONE_OUTDATED -> rig.probeResult = ProbeResult.NeedsUpdate(com.hawkeyexb.ppass.proto.OutdatedSide.PHONE)
             WaitReason.DESKTOP_OUTDATED -> rig.probeResult = ProbeResult.NeedsUpdate(com.hawkeyexb.ppass.proto.OutdatedSide.DESKTOP)
         }
@@ -135,6 +137,7 @@ class C409WakeInvariantTest {
         WaitReason.DESKTOP_STORAGE_ERROR to setOf(Wake.PROBES),
         WaitReason.UNEXPECTED_ERROR to setOf(Wake.PROBES),
         // #1072：手机过旧只能等用户更新 App；电脑过旧时电脑可能自己更新，周期重探。
+        WaitReason.DESKTOP_INTERNAL to setOf(Wake.PROBES),
         WaitReason.PHONE_OUTDATED to setOf(Wake.NONE),
         WaitReason.DESKTOP_OUTDATED to setOf(Wake.PROBES),
     )

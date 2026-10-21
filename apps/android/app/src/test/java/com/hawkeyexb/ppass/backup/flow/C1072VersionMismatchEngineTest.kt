@@ -40,6 +40,34 @@ class C1072VersionMismatchEngineTest {
         rig.close()
     }
 
+    // #1069 sign-off: a request the desktop could not use is not the photo's fault.
+    // Counter-proof: treating PhoneError like an ItemFailure retries once and counts — attempts 1, red.
+    @Test
+    fun `a phone-side error stops the round, backs off and counts nothing`() = runTest {
+        val rig = Rig(this)
+        rig.photo(1, generation = 1)
+        rig.delivery.script += { DeliveryOutcome.PhoneError("rejected:bad_request") }
+        rig.trigger()
+        assertEquals(OrderState.TRANSFERRING, rig.state(1))
+        assertEquals("不计失败次数", 0, rig.store.currentForMedia(1)!!.attempts)
+        assertEquals("不立即重试", 1, rig.delivery.requests.size)
+        assertEquals(WaitReason.UNEXPECTED_ERROR, rig.engine.view.value.waitReason)
+        assertEquals("走退避探测", 1, rig.scheduler.unreachableProbes)
+        rig.close()
+    }
+
+    @Test
+    fun `desktop internal error is a peer failure - not counted, says so`() = runTest {
+        val rig = Rig(this)
+        rig.photo(1, generation = 1)
+        rig.delivery.script += { DeliveryOutcome.PeerFailure(PeerFailureKind.DESKTOP_INTERNAL, "internal") }
+        rig.trigger()
+        assertEquals(OrderState.TRANSFERRING, rig.state(1))
+        assertEquals(0, rig.store.currentForMedia(1)!!.attempts)
+        assertEquals(WaitReason.DESKTOP_INTERNAL, rig.engine.view.value.waitReason)
+        rig.close()
+    }
+
     @Test
     fun `an outdated phone waits for the user, an outdated desktop keeps probing`() {
         assertEquals(WakePlan.AwaitsUser, wakePlanOf(WaitReason.PHONE_OUTDATED) { error("unused") })

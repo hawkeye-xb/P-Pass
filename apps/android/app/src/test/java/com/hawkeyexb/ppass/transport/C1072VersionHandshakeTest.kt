@@ -76,6 +76,17 @@ class C1072VersionHandshakeTest {
         assertEquals("every Resp decode must go through checkedReply", decodes, checked)
     }
 
+    @Test
+    fun `the home status card shows the version line - unless the media card or the red card takes the place`() {
+        val full = com.hawkeyexb.ppass.backup.MediaAccess.FULL
+        assertEquals(OutdatedSide.PHONE, com.hawkeyexb.ppass.ui.visibleOutdatedSide(OutdatedSide.PHONE, full, pairingLost = false))
+        assertNull(com.hawkeyexb.ppass.ui.visibleOutdatedSide(OutdatedSide.PHONE, full, pairingLost = true))
+        assertNull(com.hawkeyexb.ppass.ui.visibleOutdatedSide(OutdatedSide.DESKTOP, com.hawkeyexb.ppass.backup.MediaAccess.NONE, pairingLost = false))
+        assertNull(com.hawkeyexb.ppass.ui.visibleOutdatedSide(null, full, pairingLost = false))
+        assertTrue(com.hawkeyexb.ppass.ui.offersAppUpdate(OutdatedSide.PHONE))
+        assertEquals(false, com.hawkeyexb.ppass.ui.offersAppUpdate(OutdatedSide.DESKTOP))
+    }
+
     // ── pairing: no pair.request once the hello says incompatible ──
 
     private class Desk(val hello: Resp, val submit: Resp = Resp(ok = false)) : PairRpc {

@@ -188,7 +188,7 @@ internal class FlowDeliveryPairingLoss {
     val changes: kotlinx.coroutines.flow.StateFlow<Long> get() = _changes
 
     fun record(epoch: PairingEpoch, failure: Throwable) {
-        if (failure is DesktopRejectedException && isPairingLost(failure.kind)) {
+        if (desktopReasonOf(failure)?.let(::isPairingLost) == true) {
             lostEpoch = epoch.value
             _changes.value += 1
         }
@@ -256,33 +256,36 @@ internal fun desktopHealthOf(health: HelloHealth?): DesktopHealth? =
     health?.let { DesktopHealth(freeBytes = it.freeBytes, libraryWritable = it.libraryWritable, indexOk = it.indexOk) }
 
 /**
- * #413 契约 §5 / #1072：桌面失败原因（`flow.failed` 推送的 reason、offer 被拒的 reason）里与存储 / 路径有关的部分，
- * 按 [reasonClassOf] 归类：
- * - `storage_full` / `library_unavailable` / `storage_failed` → 对端失败：退出循环，不计次数，原因带回手机显示。
- * - `fetch_failed`（拉不到——relay 限流、断网、对端忙）→ 路径失败：保持可续传，不计次数。
- * - 其它 → null，由调用方决定（拒绝通道还要先看配对失效 / 版本；最后都是单张失败——计次数、有上限）。
+ * #413 契约 §5 / #1072：桌面给出的失败原因 → 这一张的结局。offer / status 被拒与 `flow.failed` 推送用同一张表
+ * （[reasonClassOf]，#1069 拍板：按「问题出在哪、谁能解决」）。[channel] 只用于日志前缀。
  */
-internal fun classifyDesktopReason(reason: Reason): DeliveryOutcome? = when (reasonClassOf(reason)) {
-    ReasonClass.STORAGE_FULL -> DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_FULL, reason.wire)
-    ReasonClass.LIBRARY_UNAVAILABLE -> DeliveryOutcome.PeerFailure(PeerFailureKind.LIBRARY_UNAVAILABLE, reason.wire)
-    ReasonClass.STORAGE_FAILED -> DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_ERROR, reason.wire)
-    ReasonClass.PATH -> DeliveryOutcome.PathFailure(reason.wire)
-    ReasonClass.PAIRING_LOST, ReasonClass.OUTDATED, ReasonClass.OTHER -> null
+internal fun deliveryOutcomeOf(raw: String, channel: String): DeliveryOutcome {
+    val kind = Reason.fromWire(raw)
+    return when (reasonClassOf(kind)) {
+        ReasonClass.PAIRING_LOST -> DeliveryOutcome.PairingLost
+        ReasonClass.OUTDATED -> DeliveryOutcome.NeedsUpdate(checkNotNull(outdatedSideOf(kind)))
+        ReasonClass.STORAGE_FULL -> DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_FULL, raw)
+        ReasonClass.LIBRARY_UNAVAILABLE -> DeliveryOutcome.PeerFailure(PeerFailureKind.LIBRARY_UNAVAILABLE, raw)
+        ReasonClass.STORAGE_FAILED -> DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_ERROR, raw)
+        ReasonClass.DESKTOP_INTERNAL -> DeliveryOutcome.PeerFailure(PeerFailureKind.DESKTOP_INTERNAL, raw)
+        ReasonClass.PATH -> DeliveryOutcome.PathFailure(raw)
+        ReasonClass.GRANT_OUT_OF_STEP -> DeliveryOutcome.ItemFailure("$channel:$raw")
+        ReasonClass.PHONE_ERROR -> DeliveryOutcome.PhoneError("$channel:$raw")
+    }
 }
 
-/**
- * 推送的 `flow.failed`。和 #1072 之前一样只分存储 / 路径，其余一律单张失败——推送通道从不判配对失效
- * （桌面在推送里报的 `epoch_mismatch` / `grant_*` / `cancelled` 是这一张的结论）。
- */
-internal fun classifyPushedFailure(reason: String): DeliveryOutcome =
-    classifyDesktopReason(Reason.fromWire(reason)) ?: DeliveryOutcome.ItemFailure("pushed:$reason")
+/** 推送的 `flow.failed`。 */
+internal fun classifyPushedFailure(reason: String): DeliveryOutcome = deliveryOutcomeOf(reason, "pushed")
 
-/** #1072：桌面明确拒绝（offer / status）：配对失效、版本不兼容先判，再按存储 / 路径，其余单张失败。 */
-internal fun classifyRejection(rejected: DesktopRejectedException): DeliveryOutcome {
-    val kind = rejected.kind
-    outdatedSideOf(kind)?.let { return DeliveryOutcome.NeedsUpdate(it) }
-    if (isPairingLost(kind)) return DeliveryOutcome.PairingLost
-    return classifyDesktopReason(kind) ?: DeliveryOutcome.ItemFailure("rejected:${rejected.reason}")
+/** 桌面明确拒绝（offer / status）。 */
+internal fun classifyRejection(rejected: DesktopRejectedException): DeliveryOutcome =
+    deliveryOutcomeOf(rejected.reason, "rejected")
+
+/** #1072：这次失败里桌面给的原因（拒绝或推送）；不是桌面的结论 → null。 */
+internal fun desktopReasonOf(failure: Throwable): Reason? = when (failure) {
+    is DesktopRejectedException -> failure.kind
+    is FlowPushedFailureException -> Reason.fromWire(failure.reason)
+    else -> null
 }
 
 /**
@@ -591,10 +594,8 @@ internal class NativeFlowDeliveryPort(
                     }
                     FlowStatusPollOutcome.KeepPolling -> continue
                 }
-                is FlowWaitStep.Failed -> {
-                    bridge.pause(lease)
-                    return classifyPushedFailure(step.reason)
-                }
+                // #1072：推送的失败与被拒走同一出口（外层 catch：停传输、核 epoch、记配对失效、分类）。
+                is FlowWaitStep.Failed -> throw FlowPushedFailureException(step.reason)
                 FlowWaitStep.Stalled -> {
                     // #410：连接还在、3 分钟没有新的文件字节 → 主动断开，路径失败。
                     log.log("order $seq: no new file bytes for ${byteStallThresholdMs}ms; disconnecting")

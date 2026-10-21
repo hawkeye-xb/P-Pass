@@ -282,6 +282,7 @@ internal fun waitReasonTextRes(reason: WaitReason, fgsBlock: FgsBlockReason?): I
     WaitReason.DESKTOP_LIBRARY_UNAVAILABLE -> R.string.state_waiting_desktop_library
     WaitReason.DESKTOP_STORAGE_ERROR -> R.string.state_waiting_desktop_error
     WaitReason.UNEXPECTED_ERROR -> R.string.state_waiting_unexpected_error
+    WaitReason.DESKTOP_INTERNAL -> R.string.state_waiting_desktop_internal
     WaitReason.PHONE_OUTDATED -> R.string.state_waiting_phone_outdated
     WaitReason.DESKTOP_OUTDATED -> R.string.state_waiting_desktop_outdated
 }
