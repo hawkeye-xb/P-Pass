@@ -6,11 +6,13 @@ package com.hawkeyexb.ppass.proto
 
 import java.io.File
 import kotlinx.serialization.KSerializer
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -121,6 +123,63 @@ class GoldenDriftTest {
     @Test fun flowAuditAccepted() = check("snapshots__flow_audit_accepted", FlowAuditAccepted.serializer())
     @Test fun backupPresenceQuery() = check("snapshots__backup_presence_query", BackupPresenceQuery.serializer())
 
+    // ── #1070 protocol v2 ──────────────────────────
+    @Test fun respErrWithParams() = check("snapshots__resp_err_with_params", Resp.serializer())
+    @Test fun respErrV1ShimFlow() = check("snapshots__resp_err_v1_shim_flow", Resp.serializer())
+    @Test fun respErrV1ShimPair() = check("snapshots__resp_err_v1_shim_pair", Resp.serializer())
+    @Test fun flowFailedPush() = check("snapshots__flow_failed_push", FlowFailedPush.serializer())
+    /** The registry golden is a JSON array; [assertSubset] compares objects, so go per element. */
+    @Test
+    fun reasonsRegistry() {
+        val golden = goldenJson("snapshots__reasons_registry") as kotlinx.serialization.json.JsonArray
+        for (element in golden) {
+            val decoded = ProtoJson.decodeFromJsonElement(RespError.serializer(), element)
+            assertSubset(element, ProtoJson.encodeToJsonElement(RespError.serializer(), decoded))
+        }
+    }
+
+    /** Every Rust reason is a known Kotlin [Reason]; nothing Kotlin knows is missing from Rust. */
+    @Test
+    fun reasonRegistryMatchesRust() {
+        val rust = ProtoJson.decodeFromJsonElement(
+            ListSerializer(RespError.serializer()),
+            goldenJson("snapshots__reasons_registry"),
+        )
+        for (e in rust) {
+            assertNotEquals("unmapped Rust reason ${e.reason}", Reason.UNKNOWN, e.reasonKind)
+            assertEquals(e.reason, e.reasonKind.wire)
+        }
+        assertEquals(
+            Reason.entries.filter { it != Reason.UNKNOWN }.map { it.wire }.toSet(),
+            rust.map { it.reason }.toSet(),
+        )
+    }
+
+    /** Acceptance 4: an unknown reason decodes, keeps its string, and maps to UNKNOWN. */
+    @Test
+    fun unknownReasonDecodesAndKeepsItsString() {
+        val resp = ProtoJson.decodeFromString(
+            Resp.serializer(),
+            """{"id":"1","ok":false,"error":{"code":"FUTURE","reason":"from_the_future","params":{"n":1}},"ver":3,"min_ver":2}""",
+        )
+        val error = resp.error!!
+        assertEquals("from_the_future", error.reason)
+        assertEquals(Reason.UNKNOWN, error.reasonKind)
+        assertEquals("", error.msgKey)
+        assertEquals(3, resp.ver)
+    }
+
+    /** #1070 envelope: a reply without version keys is a v1 desktop; a built request carries v2. */
+    @Test
+    fun envelopeVersionDefaults() {
+        val old = ProtoJson.decodeFromString(Resp.serializer(), """{"id":"1","ok":true}""")
+        assertEquals(V1, old.ver)
+        assertEquals(V1, old.minVer)
+        val wire = ProtoJson.encodeToJsonElement(Req.serializer(), Req(id = "1", method = "hello")) as JsonObject
+        assertEquals(PROTO_VER.toString(), wire["ver"].toString())
+        assertEquals(MIN_SUPPORTED_VER.toString(), wire["min_ver"].toString())
+    }
+
     /** Every JSON-shaped snapshot must be covered — a new Rust message
      *  without a Kotlin mirror fails here, not in the field. */
     @Test
@@ -150,6 +209,9 @@ class GoldenDriftTest {
             "snapshots__flow_status_reply_completed", "snapshots__flow_status_reply_active",
             "snapshots__flow_audit_submit", "snapshots__flow_audit_accepted",
             "snapshots__backup_presence_query",
+            "snapshots__resp_err_with_params",
+            "snapshots__resp_err_v1_shim_flow", "snapshots__resp_err_v1_shim_pair",
+            "snapshots__flow_failed_push", "snapshots__reasons_registry",
         )
         val onDisk = snapshotsDir.listFiles()!!
             .map { it.name.removeSuffix(".snap") }

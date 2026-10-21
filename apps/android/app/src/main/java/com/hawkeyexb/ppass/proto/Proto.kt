@@ -22,9 +22,13 @@ import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
 
-const val PROTO_VER: Int = 1
-const val MIN_SUPPORTED_VER: Int = 1
+const val PROTO_VER: Int = 2
+const val MIN_SUPPORTED_VER: Int = 2
+
+/** #1070: a frame without `ver` / `min_ver` comes from a pre-v2 sender. */
+const val V1: Int = 1
 
 /** The one Json instance every wire encode/decode must go through. */
 val ProtoJson: Json = Json {
@@ -35,26 +39,74 @@ val ProtoJson: Json = Json {
 
 // ── Envelope ────────────────────────────────────────
 
+/** #1070: `ver` / `min_ver` = this build's [PROTO_VER] / [MIN_SUPPORTED_VER] (always encoded). */
 @Serializable
 data class Req(
     val id: String = "",
     val method: String = "",
     val params: JsonElement = JsonNull,
     @SerialName("min_ver") val minVer: Int = MIN_SUPPORTED_VER,
+    val ver: Int = PROTO_VER,
 )
 
+/**
+ * #1070 protocol v2 error: coarse [code], registered [reason] (see [Reason]), optional [params].
+ * [msgKey] stays for the existing call sites: a v2 desktop never sends it (always `""`); only its
+ * rejection of a v1 envelope carries the frozen shim value.
+ */
 @Serializable
 data class RespError(
     val code: String = "",
     @SerialName("msg_key") val msgKey: String = "",
+    val reason: String = "",
+    val params: JsonObject? = null,
 )
 
+/** [RespError.reason] mapped onto the registry; anything unregistered is [Reason.UNKNOWN]. */
+val RespError.reasonKind: Reason get() = Reason.fromWire(reason)
+
+/**
+ * #1070: mirror of `proto::Reason` (wire strings pinned by the `reasons_registry` golden).
+ * Decoding never fails on a new value — it lands on [UNKNOWN] and the raw string stays in
+ * [RespError.reason].
+ */
+enum class Reason(val wire: String) {
+    NOT_PAIRED("not_paired"),
+    REVOKED("revoked"),
+    ROLE_FORBIDDEN("role_forbidden"),
+    PAIR_TOKEN_INVALID("pair_token_invalid"),
+    PHONE_OUTDATED("phone_outdated"),
+    DESKTOP_OUTDATED("desktop_outdated"),
+    UNSUPPORTED_METHOD("unsupported_method"),
+    BAD_REQUEST("bad_request"),
+    NOT_FOUND("not_found"),
+    INTERNAL("internal"),
+    BACKUP_FAILED("backup_failed"),
+    STORAGE_FULL("storage_full"),
+    LIBRARY_UNAVAILABLE("library_unavailable"),
+    STORAGE_FAILED("storage_failed"),
+    FETCH_FAILED("fetch_failed"),
+    EPOCH_MISMATCH("epoch_mismatch"),
+    GRANT_NOT_FOUND("grant_not_found"),
+    GRANT_CONFLICT("grant_conflict"),
+    CANCELLED("cancelled"),
+    UNKNOWN("");
+
+    companion object {
+        fun fromWire(wire: String): Reason =
+            entries.firstOrNull { it != UNKNOWN && it.wire == wire } ?: UNKNOWN
+    }
+}
+
+/** #1070: `ver` / `min_ver` default to [V1] — a reply without them is from a pre-v2 desktop. */
 @Serializable
 data class Resp(
     val id: String = "",
     val ok: Boolean = false,
     val result: JsonElement? = null,
     val error: RespError? = null,
+    val ver: Int = V1,
+    @SerialName("min_ver") val minVer: Int = V1,
 )
 
 // ── Hello ───────────────────────────────────────────
@@ -228,6 +280,16 @@ data class FlowSupersedeRequest(
     val provider: String = "",
 )
 
+/** #1070: Kotlin mirror of proto::FlowFailedPush (`flow.failed` push payload; `reason` replaced `code`). */
+@Serializable
+data class FlowFailedPush(
+    @SerialName("node_id") val nodeId: String = "",
+    @SerialName("queue_sequence") val queueSequence: Long = 0L,
+    @SerialName("pairing_epoch") val pairingEpoch: String = "",
+    @SerialName("lease_token") val leaseToken: String = "",
+    val reason: String = "",
+)
+
 /** #851：Kotlin mirror of proto::FlowSupersedeReply。`outcome` = `replaced` / `refused`。 */
 @Serializable
 data class FlowSupersedeReply(
@@ -387,4 +449,8 @@ object Codes {
     const val STORAGE_FULL = "STORAGE_FULL"
     const val VERSION_MISMATCH = "VERSION_MISMATCH"
     const val INTERNAL = "INTERNAL"
+    /** #1070 categories. */
+    const val DESKTOP_STORAGE = "DESKTOP_STORAGE"
+    const val PATH_FAILED = "PATH_FAILED"
+    const val FLOW_REJECTED = "FLOW_REJECTED"
 }
