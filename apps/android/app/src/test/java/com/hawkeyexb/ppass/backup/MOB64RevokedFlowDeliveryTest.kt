@@ -13,10 +13,10 @@ class MOB64RevokedFlowDeliveryTest {
         val deliveryLoss = FlowDeliveryPairingLoss()
         val holderFlag = HolderPairingLostState()
 
-        deliveryLoss.record(epoch, IllegalStateException("flow.offer: err.not_paired"))
+        deliveryLoss.record(epoch, com.hawkeyexb.ppass.backup.flow.DesktopRejectedException("not_paired", "flow.offer"))
         holderFlag.syncFrom(deliveryLoss, epoch)
 
-        assertTrue("ERR_NOT_PAIRED delivery must show the existing pairing-lost card", holderFlag.value.value)
+        assertTrue("not_paired delivery must show the existing pairing-lost card", holderFlag.value.value)
     }
 
     @Test
@@ -26,10 +26,10 @@ class MOB64RevokedFlowDeliveryTest {
         val holderFlag = HolderPairingLostState()
 
         // Real Samsung revoke returns this at hello before any Flow offer/fetch.
-        deliveryLoss.record(epoch, IllegalStateException("hello: err.not_authorized"))
+        deliveryLoss.record(epoch, com.hawkeyexb.ppass.backup.flow.DesktopRejectedException("revoked", "hello"))
         holderFlag.syncFrom(deliveryLoss, epoch)
 
-        assertTrue("ERR_NOT_AUTHORIZED delivery must show the existing pairing-lost card", holderFlag.value.value)
+        assertTrue("revoked delivery must show the existing pairing-lost card", holderFlag.value.value)
     }
 
     @Test

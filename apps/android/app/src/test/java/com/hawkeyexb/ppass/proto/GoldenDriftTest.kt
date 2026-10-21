@@ -125,8 +125,21 @@ class GoldenDriftTest {
 
     // ── #1070 protocol v2 ──────────────────────────
     @Test fun respErrWithParams() = check("snapshots__resp_err_with_params", Resp.serializer())
-    @Test fun respErrV1ShimFlow() = check("snapshots__resp_err_v1_shim_flow", Resp.serializer())
-    @Test fun respErrV1ShimPair() = check("snapshots__resp_err_v1_shim_pair", Resp.serializer())
+    /**
+     * #1072: the v1 shim's `msg_key` exists only for pre-v2 phones; this phone dropped the field and
+     * must still read the shimmed refusal as "phone outdated" (never as a pairing or item verdict).
+     */
+    @Test fun respErrV1ShimFlow() = checkShim("snapshots__resp_err_v1_shim_flow")
+    @Test fun respErrV1ShimPair() = checkShim("snapshots__resp_err_v1_shim_pair")
+
+    private fun checkShim(name: String) {
+        val golden = goldenJson(name) as JsonObject
+        val decoded = ProtoJson.decodeFromJsonElement(Resp.serializer(), golden)
+        assertEquals(Reason.PHONE_OUTDATED, decoded.error!!.reasonKind)
+        assertEquals(OutdatedSide.PHONE, decoded.outdatedSide())
+        val withoutShim = JsonObject(golden + ("error" to JsonObject((golden["error"] as JsonObject) - "msg_key")))
+        assertSubset(withoutShim, ProtoJson.encodeToJsonElement(Resp.serializer(), decoded))
+    }
     @Test fun flowFailedPush() = check("snapshots__flow_failed_push", FlowFailedPush.serializer())
     /** The registry golden is a JSON array; [assertSubset] compares objects, so go per element. */
     @Test
@@ -155,6 +168,17 @@ class GoldenDriftTest {
         )
     }
 
+    /** #1072: the Kotlin SupersedeRefusal mirrors every `proto::SupersedeRefusal::as_str` wire string. */
+    @Test
+    fun supersedeRefusalsMatchRust() {
+        val msgs = File(snapshotsDir.parentFile.parentFile, "src/msgs.rs").readText()
+        val body = msgs.substringAfter("impl SupersedeRefusal {").substringAfter("fn as_str").substringBefore("}\n    }")
+        val rust = Regex("""Self::\w+ => "([a-z_]+)"""").findAll(body).map { it.groupValues[1] }.toSet()
+        assertEquals(12, rust.size)
+        assertEquals(rust, SupersedeRefusal.entries.filter { it != SupersedeRefusal.UNKNOWN }.map { it.wire }.toSet())
+        assertEquals(SupersedeRefusal.UNKNOWN, SupersedeRefusal.fromWire("never_registered"))
+    }
+
     /** Acceptance 4: an unknown reason decodes, keeps its string, and maps to UNKNOWN. */
     @Test
     fun unknownReasonDecodesAndKeepsItsString() {
@@ -165,7 +189,6 @@ class GoldenDriftTest {
         val error = resp.error!!
         assertEquals("from_the_future", error.reason)
         assertEquals(Reason.UNKNOWN, error.reasonKind)
-        assertEquals("", error.msgKey)
         assertEquals(3, resp.ver)
     }
 

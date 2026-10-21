@@ -26,6 +26,7 @@ import com.hawkeyexb.ppass.backup.order.SkipTarget
 import com.hawkeyexb.ppass.backup.order.VolumeState
 import java.util.UUID
 import com.hawkeyexb.ppass.proto.FLOW_SUPERSEDE_CAPABILITY
+import com.hawkeyexb.ppass.proto.SupersedeRefusal
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -468,6 +469,10 @@ internal class FlowEngine(
         val waiting = control.waitReason() ?: return@launch
         val wake = when (waiting) {
             WaitReason.DESKTOP_UNREACHABLE -> true
+            // #1072：心跳只在版本兼容时才算可达——能走到这里说明已经不再过旧。
+            WaitReason.PHONE_OUTDATED,
+            WaitReason.DESKTOP_OUTDATED,
+            -> true
             WaitReason.DESKTOP_STORAGE_FULL,
             WaitReason.DESKTOP_LIBRARY_UNAVAILABLE,
             WaitReason.DESKTOP_STORAGE_ERROR,
@@ -643,6 +648,10 @@ internal class FlowEngine(
                 return settle(WaitReason.DESKTOP_UNREACHABLE)
             }
             ProbeResult.PairingLost -> return settle(WaitReason.NOT_PAIRED)
+            is ProbeResult.NeedsUpdate -> {
+                log.log("cycle $reasons: version mismatch at hello (${reach.side} outdated); no foreground service, no transfer, nothing counted")
+                return settle(waitReasonOf(reach.side))
+            }
             is ProbeResult.Reachable -> {
                 reachedDesktop = true
                 // #652：探测梯在这里还不能撤——桌面可能可达但不健康，那时它正是唤醒；拿到 FGS 才撤（见下）。
@@ -997,7 +1006,7 @@ internal class FlowEngine(
                         }
                         is SupersedeOutcome.Refused -> {
                             log.log("media ${order.mediaId}: desktop refused to supersede ${old.take(8)} → ${hash.take(8)}: ${outcome.reason}")
-                            if (outcome.reason !in TRANSIENT_SUPERSEDE_REFUSALS) {
+                            if (SupersedeRefusal.fromWire(outcome.reason) !in TRANSIENT_SUPERSEDE_REFUSALS) {
                                 store.resolveLocationRedaction(order.id, LocationVerdict.REFUSED)
                                 bump()
                             }
@@ -1245,6 +1254,11 @@ internal class FlowEngine(
                 StepResult.Exit(waitReasonOf(outcome.kind))
             }
             DeliveryOutcome.PairingLost -> StepResult.Exit(WaitReason.NOT_PAIRED)
+            is DeliveryOutcome.NeedsUpdate -> {
+                // #1072：兜底（握手时兼容、传到一半对端换了版本）。不计次数，order 保持可续传。
+                log.log("order ${order.id}: version mismatch (${outcome.side} outdated); leaving it resumable")
+                StepResult.Exit(waitReasonOf(outcome.side))
+            }
         }
     }
 
@@ -1485,7 +1499,7 @@ internal class FlowEngine(
          * #851：桌面这样拒绝是暂时的，下一轮再试——`fetch_failed`（拉原图的块失败）、`epoch_mismatch`（配对代号
          * 正在更新）。其余拒绝是对这张照片的结论（不是本机传的、格式不认识、不只是抹地点……），记下不再试。
          */
-        private val TRANSIENT_SUPERSEDE_REFUSALS = setOf("fetch_failed", "epoch_mismatch")
+        private val TRANSIENT_SUPERSEDE_REFUSALS = setOf(SupersedeRefusal.FETCH_FAILED, SupersedeRefusal.EPOCH_MISMATCH)
         private val OPEN = OrderState.entries.filter { it.isOpen }.toSet()
 
         /** 在跑时合并进来的这些触发意味着待办可能变了：当场重算（只读元数据），不等这一轮结束。 */

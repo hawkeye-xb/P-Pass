@@ -6,6 +6,7 @@
 package com.hawkeyexb.ppass.backup.flow
 
 import com.hawkeyexb.ppass.backup.order.MediaDetails
+import com.hawkeyexb.ppass.proto.OutdatedSide
 import kotlinx.serialization.Serializable
 
 /** 配对代号（授权凭证的版本号，不是身份）。 */
@@ -127,6 +128,16 @@ enum class WaitReason {
      * 原因说不清，按偶发处理：退避探测重试，用完不再加排。
      */
     UNEXPECTED_ERROR,
+    /** #1072：桌面说手机版本过旧——要更新手机 App。不计失败、不动配对。 */
+    PHONE_OUTDATED,
+    /** #1072：桌面版本过旧（它自己说的，或旧桌面的应答不带 `ver`）——要更新电脑端。不计失败、不动配对。 */
+    DESKTOP_OUTDATED,
+}
+
+/** #1072：版本不兼容 → 等待原因。 */
+fun waitReasonOf(side: OutdatedSide): WaitReason = when (side) {
+    OutdatedSide.PHONE -> WaitReason.PHONE_OUTDATED
+    OutdatedSide.DESKTOP -> WaitReason.DESKTOP_OUTDATED
 }
 
 /** 对端失败 → 等待原因。 */
@@ -195,6 +206,8 @@ sealed interface DeliveryOutcome {
     data class PathFailure(val reason: String) : DeliveryOutcome
     data class PeerFailure(val kind: PeerFailureKind, val code: String) : DeliveryOutcome
     data object PairingLost : DeliveryOutcome
+    /** #1072：版本不兼容——退出循环，不计次数，不动配对。 */
+    data class NeedsUpdate(val side: OutdatedSide) : DeliveryOutcome
 }
 
 /**
@@ -227,6 +240,8 @@ sealed interface ProbeResult {
     ) : ProbeResult
     data object Unreachable : ProbeResult
     data object PairingLost : ProbeResult
+    /** #1072：握手（hello）就发现版本不兼容——不申请 FGS、不发起任何传输。 */
+    data class NeedsUpdate(val side: OutdatedSide) : ProbeResult
 }
 
 fun interface DesktopProbe {
@@ -374,6 +389,9 @@ internal fun wakePlanOf(reason: WaitReason, fgsBlocked: () -> WakePlan): WakePla
     WaitReason.DESKTOP_STORAGE_ERROR,
     -> WakePlan.RetryProbes
     WaitReason.UNEXPECTED_ERROR -> WakePlan.RetryProbes
+    // #1072：手机过旧只能等用户更新 App（更新后进程重启）；电脑过旧时电脑端可能自己更新，周期重探，兼容了就续传。
+    WaitReason.PHONE_OUTDATED -> WakePlan.AwaitsUser
+    WaitReason.DESKTOP_OUTDATED -> WakePlan.RetryProbes
 }
 
 /**

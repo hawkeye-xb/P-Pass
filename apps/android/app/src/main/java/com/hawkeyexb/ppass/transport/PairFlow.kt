@@ -25,7 +25,11 @@ import com.hawkeyexb.ppass.proto.PairStatusReply
 import com.hawkeyexb.ppass.proto.PairStatusRequest
 import com.hawkeyexb.ppass.proto.PairSubmitted
 import com.hawkeyexb.ppass.proto.ProtoJson
+import com.hawkeyexb.ppass.proto.OutdatedSide
+import com.hawkeyexb.ppass.proto.Reason
 import com.hawkeyexb.ppass.proto.Resp
+import com.hawkeyexb.ppass.proto.outdatedSideOf
+import com.hawkeyexb.ppass.proto.reasonKind
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
@@ -37,22 +41,38 @@ import kotlinx.serialization.json.buildJsonObject
 sealed class PairOutcome {
     data class Joined(val pairing: Pairing) : PairOutcome()
     /**
-     * The pairing ended without joining; [msgKey] names the cause (diag
-     * dictionary). [ownerSaidNo] = the desktop actually refused (owner
-     * denied, or the code was invalid/used); false = it lapsed on its own
-     * (expired, desktop restarted, desktop too old) — NET-10 keeps those
-     * apart so the screen does not claim "the computer said no".
+     * The pairing ended without joining; [cause] names why (#1072: decided on the desktop's
+     * `reason` / `pair.status` state, worded by the phone). [ownerSaidNo] = the desktop actually
+     * refused (owner denied, or the code was invalid/used); false = it lapsed on its own — NET-10
+     * keeps those apart so the screen does not claim "the computer said no".
      */
-    data class Refused(val msgKey: String, val ownerSaidNo: Boolean = true) : PairOutcome()
+    data class Refused(val cause: PairRefusal) : PairOutcome() {
+        val ownerSaidNo: Boolean get() = cause == PairRefusal.TOKEN_INVALID || cause == PairRefusal.DENIED
+    }
+    /** #1072: versions are incompatible — found at the hello, before any pairing request is sent. */
+    data class NeedsUpdate(val side: OutdatedSide) : PairOutcome()
     data class Failed(val reason: String) : PairOutcome()
 }
 
-/** NET-10: msg_keys for the lapsed causes (assets/i18n, crates/diag keys.rs). */
-const val ERR_PAIR_EXPIRED = "err.pair_expired"
-const val ERR_PAIR_RESTARTED = "err.pair_restarted"
-/** Reused as-is: "the storage computer doesn't understand this request". */
-const val ERR_UNSUPPORTED = "err.unsupported"
-const val ERR_NOT_AUTHORIZED = "err.not_authorized"
+/** #1072: why a pairing ended without joining (one phone-side wording each). */
+enum class PairRefusal {
+    /** `pair_token_invalid`: the code was wrong, used or expired on the desktop. */
+    TOKEN_INVALID,
+    /** `pair.status` = `denied`: the owner said no. */
+    DENIED,
+    /** Nobody decided within the desktop's pending window. */
+    EXPIRED,
+    /** `pair.status` = `not_found`: the desktop service restarted and lost the request. */
+    DESKTOP_RESTARTED,
+    /** Any other reason, including one this build does not know. */
+    OTHER,
+}
+
+/** #1072: a rejected pair.request → its cause; never looks at text. */
+internal fun pairRefusalOf(reason: Reason): PairRefusal = when (reason) {
+    Reason.PAIR_TOKEN_INVALID -> PairRefusal.TOKEN_INVALID
+    else -> PairRefusal.OTHER
+}
 
 /** NET-10: hello capability of a desktop that serves pair.status (router.rs). */
 const val PAIR_STATUS_CAPABILITY = "pair.status.v1"
@@ -81,7 +101,9 @@ fun interface PairRpc {
 sealed class PairVerdict {
     data class Accepted(val accepted: PairAccepted) : PairVerdict()
     /** Owner said no, or the code was rejected on submit (invalid/used). */
-    data class Denied(val msgKey: String) : PairVerdict()
+    data class Denied(val cause: PairRefusal) : PairVerdict()
+    /** #1072: one side is too old for the other (hello, submit or status said so). */
+    data class NeedsUpdate(val side: OutdatedSide) : PairVerdict()
     /** Nobody decided within the desktop's pending window. */
     data object Expired : PairVerdict()
     /** pair.status → not_found: the desktop service restarted and lost
@@ -152,6 +174,8 @@ suspend fun awaitPairVerdict(
     // older desktop denies the unknown method and logs a denial). A revoked
     // phone's hello is denied, so it cannot know — it tries anyway.
     var mayWithdraw = true
+    // #1072: version first — an incompatible desktop gets no pairing request at all.
+    if (!hello.ok) hello.error?.let { outdatedSideOf(it.reasonKind) }?.let { return PairVerdict.NeedsUpdate(it) }
     if (hello.ok) {
         val caps = hello.result?.let {
             runCatching { ProtoJson.decodeFromJsonElement(Hello.serializer(), it) }.getOrNull()
@@ -173,7 +197,11 @@ suspend fun awaitPairVerdict(
     } catch (e: Exception) {
         return PairVerdict.Unreachable(e.toString())
     }
-    if (!submit.ok) return PairVerdict.Denied(submit.error?.msgKey ?: ERR_NOT_AUTHORIZED)
+    if (!submit.ok) {
+        val reason = submit.error?.reasonKind ?: Reason.UNKNOWN
+        outdatedSideOf(reason)?.let { return PairVerdict.NeedsUpdate(it) }
+        return PairVerdict.Denied(pairRefusalOf(reason))
+    }
     val result = submit.result ?: return PairVerdict.DesktopTooOld
     val submitted = runCatching {
         ProtoJson.decodeFromJsonElement(PairSubmitted.serializer(), result)
@@ -239,7 +267,8 @@ private suspend fun pollPairStatus(
             if (r.ok) {
                 r.result?.let { ProtoJson.decodeFromJsonElement(PairStatusReply.serializer(), it) }
             } else {
-                lastFailure = "pair.status: ${r.error?.msgKey}"
+                r.error?.let { outdatedSideOf(it.reasonKind) }?.let { return PairVerdict.NeedsUpdate(it) }
+                lastFailure = "pair.status rejected: ${r.error?.reason}"
                 null
             }
         } catch (e: CancellationException) {
@@ -267,7 +296,7 @@ private suspend fun pollPairStatus(
                 lastFailure = "pair.status: accepted without payload"
                 if (failures >= maxConsecutiveFailures) return PairVerdict.Unreachable(lastFailure)
             }
-            "denied" -> return PairVerdict.Denied(reply.msgKey ?: ERR_NOT_AUTHORIZED)
+            "denied" -> return PairVerdict.Denied(PairRefusal.DENIED)
             "expired" -> return PairVerdict.Expired
             "not_found" -> return PairVerdict.DesktopRestarted
         }
@@ -278,10 +307,12 @@ private suspend fun pollPairStatus(
 /** NET-10: verdict → what the pairing screen shows (one branch per cause). */
 fun PairVerdict.toOutcome(join: (PairAccepted) -> Pairing): PairOutcome = when (this) {
     is PairVerdict.Accepted -> PairOutcome.Joined(join(accepted))
-    is PairVerdict.Denied -> PairOutcome.Refused(msgKey)
-    PairVerdict.Expired -> PairOutcome.Refused(ERR_PAIR_EXPIRED, ownerSaidNo = false)
-    PairVerdict.DesktopRestarted -> PairOutcome.Refused(ERR_PAIR_RESTARTED, ownerSaidNo = false)
-    PairVerdict.DesktopTooOld -> PairOutcome.Refused(ERR_UNSUPPORTED, ownerSaidNo = false)
+    is PairVerdict.Denied -> PairOutcome.Refused(cause)
+    PairVerdict.Expired -> PairOutcome.Refused(PairRefusal.EXPIRED)
+    PairVerdict.DesktopRestarted -> PairOutcome.Refused(PairRefusal.DESKTOP_RESTARTED)
+    // A desktop without pair.status predates the current pairing flow: the computer needs updating.
+    PairVerdict.DesktopTooOld -> PairOutcome.NeedsUpdate(OutdatedSide.DESKTOP)
+    is PairVerdict.NeedsUpdate -> PairOutcome.NeedsUpdate(side)
     is PairVerdict.Unreachable -> PairOutcome.Failed(reason)
 }
 

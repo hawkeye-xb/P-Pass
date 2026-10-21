@@ -56,11 +56,16 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.work.WorkManager
 import com.hawkeyexb.ppass.battery.AndroidBackgroundAuthorizationAdapter
-import com.hawkeyexb.ppass.i18n.DiagText
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.ForegroundHeartbeat
 import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.PairOutcome
+import com.hawkeyexb.ppass.transport.ProtocolVersionGate
+import com.hawkeyexb.ppass.ui.offersAppUpdate
+import com.hawkeyexb.ppass.ui.pairNeedsUpdateBodyRes
+import com.hawkeyexb.ppass.ui.pairRefusalDetailRes
+import com.hawkeyexb.ppass.ui.updateNeededBodyRes
+import com.hawkeyexb.ppass.ui.updateNeededTitleRes
 import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PairingStore
 import com.hawkeyexb.ppass.transport.bindThenPair
@@ -129,7 +134,8 @@ internal sealed class Screen {
     // 「无法扫码？」都落到这里；返回回 Welcome，不经过会再弹权限的路径。
     data object ManualPair : Screen()
     data class Waiting(val qr: String) : Screen()
-    data class Trouble(val titleRes: Int, val bodyRes: Int, val detail: String = "") : Screen()
+    // #1072：offerAppUpdate = 手机版本过旧，按钮换成「检查更新」（应用内更新入口）。
+    data class Trouble(val titleRes: Int, val bodyRes: Int, val detail: String = "", val offerAppUpdate: Boolean = false) : Screen()
     data class Home(val pairing: Pairing) : Screen()
     // T6: 相册选择（配对成功直接进这页，或从 Home 的设置区重进）；
     // M4（全页面状态稿）：配对成功不再停一个要点按钮的 Joined 中间页，
@@ -644,13 +650,17 @@ fun PPassApp() {
                         }
                     }
                     is PairOutcome.Refused -> screen = Screen.Trouble(
-                        // NET-10: expired / desktop restarted / desktop too old
-                        // are not "the computer said no".
+                        // NET-10: expired / desktop restarted are not "the computer said no".
                         if (outcome.ownerSaidNo) R.string.pair_refused_title else R.string.pair_lapsed_title,
                         R.string.pair_refused_body,
-                        // T-072: 具体拒绝原因走 diag 字典（msg_key → 双语人话）
-                        // 渲染在通用文案下方；未知 key 显示空详情，绝不崩溃。
-                        DiagText.resolve(context, outcome.msgKey) ?: "",
+                        // #1072：具体原因由桌面的 reason 决定、手机自己的文案；不认识的 → 通用提示。
+                        context.getString(pairRefusalDetailRes(outcome.cause)),
+                    )
+                    // #1072：握手就发现版本不兼容——没发配对请求。提示更新哪台设备；手机过旧给更新入口。
+                    is PairOutcome.NeedsUpdate -> screen = Screen.Trouble(
+                        updateNeededTitleRes(outcome.side),
+                        pairNeedsUpdateBodyRes(outcome.side),
+                        offerAppUpdate = offersAppUpdate(outcome.side),
                     )
                     is PairOutcome.Failed -> screen = Screen.Trouble(
                         R.string.pair_failed_title, R.string.pair_failed_body,
@@ -664,8 +674,13 @@ fun PPassApp() {
             title = androidx.compose.ui.res.stringResource(s.titleRes),
             body = androidx.compose.ui.res.stringResource(s.bodyRes) +
                 if (s.detail.isNotEmpty()) "\n${s.detail}" else "",
-            action = androidx.compose.ui.res.stringResource(R.string.scan_again) to
-                { screen = Screen.Scan },
+            action = if (s.offerAppUpdate) {
+                androidx.compose.ui.res.stringResource(R.string.update_check_now) to
+                    { updateController.onCheckRowClick() }
+            } else {
+                androidx.compose.ui.res.stringResource(R.string.scan_again) to
+                    { screen = Screen.Scan }
+            },
         )
 
         is Screen.Home -> {
@@ -860,7 +875,20 @@ fun PPassApp() {
                 }
                 Unit
             }
-            TwoTabs(
+            // #1072：和电脑版本不兼容时整屏提示更新哪台设备（握手时发现，不发起任何传输）。
+            // 配对与已备份的照片都不动；心跳或探测一旦遇到兼容的应答，这一屏自己消失。
+            val outdatedSide = ProtocolVersionGate.outdated.collectAsState().value
+            if (outdatedSide != null) {
+                PairStatusScreen(
+                    title = stringResource(updateNeededTitleRes(outdatedSide)),
+                    body = stringResource(updateNeededBodyRes(outdatedSide)),
+                    action = if (offersAppUpdate(outdatedSide)) {
+                        stringResource(R.string.update_check_now) to { updateController.onCheckRowClick() }
+                    } else {
+                        null
+                    },
+                )
+            } else TwoTabs(
                 tab = tab,
                 onTab = { tab = it },
                 showTabBar = !photoViewerOpen && !storageDetailOpen,

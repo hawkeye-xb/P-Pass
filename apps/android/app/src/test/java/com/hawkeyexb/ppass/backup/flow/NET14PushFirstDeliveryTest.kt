@@ -104,7 +104,7 @@ class NET14PushFirstDeliveryTest {
             put("queue_sequence", JsonPrimitive(7L))
             put("pairing_epoch", JsonPrimitive("epoch-1"))
             put("lease_token", JsonPrimitive("lease-7"))
-            put("code", JsonPrimitive("fetch_failed"))
+            put("reason", JsonPrimitive("fetch_failed"))
         }
         val outcome = parseFlowPushOutcome("flow.failed", data, tuple.toRef())
         assertEquals(FlowPushOutcome.Failed("fetch_failed"), outcome)
@@ -119,7 +119,7 @@ class NET14PushFirstDeliveryTest {
             put("queue_sequence", JsonPrimitive(7L))
             put("pairing_epoch", JsonPrimitive("epoch-1"))
             put("lease_token", JsonPrimitive("lease-STALE"))
-            put("code", JsonPrimitive("fetch_failed"))
+            put("reason", JsonPrimitive("fetch_failed"))
         }
         assertNull(parseFlowPushOutcome("flow.failed", data, tuple.toRef()))
     }

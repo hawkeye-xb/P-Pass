@@ -9,6 +9,7 @@ package com.hawkeyexb.ppass.transport
 import com.hawkeyexb.ppass.proto.Methods
 import com.hawkeyexb.ppass.proto.Req
 import com.hawkeyexb.ppass.proto.Resp
+import com.hawkeyexb.ppass.proto.versionChecked
 import com.hawkeyexb.ppass.proto.encodeFrame
 import com.hawkeyexb.ppass.proto.decodePayload
 import com.hawkeyexb.ppass.proto.frameLen
@@ -215,6 +216,14 @@ class DaemonClient internal constructor(
      * The peer address must carry enough to dial (relay and/or direct).
      */
     /** [timeoutMs]：整个往返的上限。默认 15 s；#851 `flow.supersede` 要等桌面拉块、拼接、算指纹，单独放宽。 */
+    /**
+     * #1072: every reply goes through here. An incompatible desktop — one that refused us as
+     * outdated, or one too old to send `ver` at all — becomes a `VERSION_MISMATCH` rejection, so no
+     * caller ever acts on a pre-v2 reply; the verdict also feeds [ProtocolVersionGate].
+     */
+    private fun checkedReply(reply: Resp): Resp =
+        reply.versionChecked().also(ProtocolVersionGate::observe)
+
     suspend fun call(peer: PeerAddrParts, method: String, params: JsonElement, timeoutMs: Long = CONNECT_TIMEOUT_MS): Resp =
         withContext(Dispatchers.IO) { using { ep ->
             // relayUrl is nullable in the ffi — an empty string fails
@@ -246,7 +255,7 @@ class DaemonClient internal constructor(
                         val header = recv.readExact(4u)
                         val len = frameLen(header)
                         val payload = recv.readExact(len.toUInt())
-                        decodePayload(Resp.serializer(), payload)
+                        checkedReply(decodePayload(Resp.serializer(), payload))
                     } finally {
                         conn.close(0L, ByteArray(0))
                     }
@@ -308,7 +317,7 @@ class DaemonClient internal constructor(
                             send.finish()
                             val header = recv.readExact(4u)
                             val payload = recv.readExact(frameLen(header).toUInt())
-                            decodePayload(Resp.serializer(), payload).also { roundTripMs = sinceStart() }
+                            checkedReply(decodePayload(Resp.serializer(), payload)).also { roundTripMs = sinceStart() }
                         } finally {
                             conn.close(0L, ByteArray(0))
                         }
@@ -368,7 +377,7 @@ class DaemonClient internal constructor(
      */
     suspend fun flowStatus(peer: PeerAddrParts, tuple: FlowTupleRef): FlowStatusReply {
         val resp = call(peer, Methods.FLOW_STATUS, ProtoJson.encodeToJsonElement(FlowTupleRef.serializer(), tuple))
-        check(resp.ok) { "flow.status: ${resp.error?.msgKey}" }
+        check(resp.ok) { "flow.status rejected: ${resp.error?.reason}" }
         return ProtoJson.decodeFromJsonElement(FlowStatusReply.serializer(), resp.result ?: error("flow.status: empty result"))
     }
 
@@ -382,7 +391,7 @@ class DaemonClient internal constructor(
      */
     suspend fun flowSuspend(peer: PeerAddrParts, tuple: FlowTupleRef) {
         val resp = call(peer, Methods.FLOW_SUSPEND, ProtoJson.encodeToJsonElement(FlowTupleRef.serializer(), tuple))
-        check(resp.ok) { "flow.suspend: ${resp.error?.msgKey}" }
+        check(resp.ok) { "flow.suspend rejected: ${resp.error?.reason}" }
     }
 
     /**
@@ -397,7 +406,7 @@ class DaemonClient internal constructor(
      */
     suspend fun flowCancelTuple(peer: PeerAddrParts, tuple: FlowTupleRef) {
         val resp = call(peer, Methods.FLOW_CANCEL_TUPLE, ProtoJson.encodeToJsonElement(FlowTupleRef.serializer(), tuple))
-        check(resp.ok) { "flow.cancel_tuple: ${resp.error?.msgKey}" }
+        check(resp.ok) { "flow.cancel_tuple rejected: ${resp.error?.reason}" }
     }
 
     /**
@@ -516,10 +525,12 @@ class DaemonClient internal constructor(
 
             val header = stall.read(0, null) { recv.readExact(4u) }
             val len = com.hawkeyexb.ppass.proto.frameLen(header)
-            val resp = com.hawkeyexb.ppass.proto.decodePayload(
-                Resp.serializer(), stall.read(0, null) { recv.readExact(len.toUInt()) }
+            val resp = checkedReply(
+                com.hawkeyexb.ppass.proto.decodePayload(
+                    Resp.serializer(), stall.read(0, null) { recv.readExact(len.toUInt()) }
+                )
             )
-            check(resp.ok) { "download $hash: ${resp.error?.msgKey}" }
+            check(resp.ok) { "download $hash rejected: ${resp.error?.reason}" }
             val total = (resp.result as? kotlinx.serialization.json.JsonObject)
                 ?.get("bytes")?.let {
                     (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull()

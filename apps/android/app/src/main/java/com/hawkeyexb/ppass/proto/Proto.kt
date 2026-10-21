@@ -51,13 +51,11 @@ data class Req(
 
 /**
  * #1070 protocol v2 error: coarse [code], registered [reason] (see [Reason]), optional [params].
- * [msgKey] stays for the existing call sites: a v2 desktop never sends it (always `""`); only its
- * rejection of a v1 envelope carries the frozen shim value.
+ * #1072: the phone decides on [reason] only; wording is the phone's own (strings.xml).
  */
 @Serializable
 data class RespError(
     val code: String = "",
-    @SerialName("msg_key") val msgKey: String = "",
     val reason: String = "",
     val params: JsonObject? = null,
 )
@@ -171,7 +169,6 @@ data class PairStatusRequest(
 data class PairStatusReply(
     val state: String = "",
     val accepted: PairAccepted? = null,
-    @SerialName("msg_key") val msgKey: String? = null,
 )
 
 // ── Timeline ────────────────────────────────────────
@@ -296,6 +293,32 @@ data class FlowSupersedeReply(
     val outcome: String = "",
     val reason: String = "",
 )
+
+/**
+ * #1072: mirror of `proto::SupersedeRefusal` (wire strings pinned against crates/proto msgs.rs by
+ * GoldenDriftTest). A refusal this build does not know is [UNKNOWN]; the raw string stays in
+ * [FlowSupersedeReply.reason].
+ */
+enum class SupersedeRefusal(val wire: String) {
+    OLD_MISSING("old_missing"),
+    NOT_UPLOADER("not_uploader"),
+    OLD_CHANGED("old_changed"),
+    UNKNOWN_FORMAT("unknown_format"),
+    REGION_TOO_LARGE("region_too_large"),
+    SIZE_MISMATCH("size_mismatch"),
+    INCOMPLETE_RANGES("incomplete_ranges"),
+    NOT_A_REDACTION("not_a_redaction"),
+    HASH_MISMATCH("hash_mismatch"),
+    EPOCH_MISMATCH("epoch_mismatch"),
+    BAD_REQUEST("bad_request"),
+    FETCH_FAILED("fetch_failed"),
+    UNKNOWN("");
+
+    companion object {
+        fun fromWire(wire: String): SupersedeRefusal =
+            entries.firstOrNull { it != UNKNOWN && it.wire == wire } ?: UNKNOWN
+    }
+}
 
 /** Kotlin mirror of proto::FlowCompletionReceipt. */
 @Serializable

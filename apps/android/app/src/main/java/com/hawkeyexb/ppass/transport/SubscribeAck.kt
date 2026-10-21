@@ -11,9 +11,9 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
-/** 桌面拒绝了这次订阅（第一帧就是 ok=false 的应答）。[code] 例如 `NOT_AUTHORIZED`。 */
-class SubscribeRejectedException(val code: String, val msgKey: String) :
-    IOException("subscribe rejected by the desktop ($code: $msgKey)")
+/** 桌面拒绝了这次订阅（第一帧就是 ok=false 的应答）。[code] 例如 `NOT_AUTHORIZED`，[reason] 例如 `revoked`。 */
+class SubscribeRejectedException(val code: String, val reason: String) :
+    IOException("subscribe rejected by the desktop ($code: $reason)")
 
 /**
  * 第一帧是拒绝就返回对应异常，否则 null（= 订阅确认，真的连上了）。
@@ -26,8 +26,8 @@ internal fun subscribeRejectionOf(firstFrame: JsonElement): SubscribeRejectedExc
     if (ok != "false") return null
     val error = obj["error"] as? JsonObject
     val code = (error?.get("code") as? JsonPrimitive)?.content.orEmpty()
-    val msgKey = (error?.get("msg_key") as? JsonPrimitive)?.content.orEmpty()
-    return SubscribeRejectedException(code, msgKey)
+    val reason = (error?.get("reason") as? JsonPrimitive)?.content.orEmpty()
+    return SubscribeRejectedException(code, reason)
 }
 
 /**

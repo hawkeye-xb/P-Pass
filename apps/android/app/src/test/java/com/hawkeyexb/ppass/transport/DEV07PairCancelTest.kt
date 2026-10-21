@@ -52,7 +52,7 @@ class DEV07PairCancelTest {
             calls += Triple(method, scope.currentTime, params)
             return when (method) {
                 Methods.HELLO -> if (caps == null) {
-                    Resp(id = "h", ok = false, error = RespError("NOT_AUTHORIZED", "err.not_authorized"))
+                    Resp(id = "h", ok = false, error = RespError("NOT_AUTHORIZED", "revoked"))
                 } else {
                     ok(ProtoJson.encodeToJsonElement(Hello.serializer(), Hello(capabilities = caps)))
                 }
@@ -174,7 +174,7 @@ class DEV07PairCancelTest {
         val accepted = PairAccepted(storageDeviceName = "Home PC", pairingEpoch = "e".repeat(32))
         for (terminal in listOf(
             PairStatusReply(state = "accepted", accepted = accepted),
-            PairStatusReply(state = "denied", msgKey = ERR_NOT_AUTHORIZED),
+            PairStatusReply(state = "denied"),
             PairStatusReply(state = "expired"),
         )) {
             val desk = Desk(this, status = { reply(terminal) })

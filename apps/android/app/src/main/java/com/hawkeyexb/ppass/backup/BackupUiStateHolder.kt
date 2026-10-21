@@ -334,7 +334,7 @@ class BackupUiStateHolder(
             withContext(Dispatchers.IO) {
                 withTimeout(5_000) {
                     val response = client.call(parsePeerAddrToken(pairing.daemonAddrToken), Methods.HELLO, buildJsonObject {})
-                    check(response.ok) { "hello: ${response.error?.msgKey}" }
+                    check(response.ok) { "hello rejected: ${response.error?.reason}" }
                     ProtoJson.decodeFromJsonElement(Hello.serializer(), checkNotNull(response.result)).pairingEpoch
                 }
             }
@@ -621,12 +621,6 @@ internal fun computeTripletSafe(
 } catch (_: Throwable) {
     null
 }
-
-internal fun isPairingLostError(t: Throwable): Boolean =
-    t.message?.let { it.contains("err.not_paired") || it.contains("err.not_authorized") } ?: false
-
-internal fun isPairingLostText(text: String): Boolean =
-    text.contains("err.not_paired") || text.contains("err.not_authorized")
 
 /**
  * UI-10 item 1: `AndroidFlowRuntime.runtimeFor()` returns null when a stored
