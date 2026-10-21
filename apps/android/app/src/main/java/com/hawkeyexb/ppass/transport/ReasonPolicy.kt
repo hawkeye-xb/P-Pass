@@ -22,7 +22,8 @@ enum class ReasonClass {
     /** The path did not carry the item: stays resumable, counts nothing. */
     PATH,
     /** The two sides' records of this one item disagree. Handling pending sign-off (#1072); until
-     *  then it stays what it was signed off as first: one item failed. */
+     *  then it keeps the pre-v2 behaviour: a rejection was `err.not_authorized` (pairing lost), a
+     *  push was `guard_mismatch` (one item failed). The only class that still depends on the channel. */
     GRANT_OUT_OF_STEP,
     /** The phone sent something the desktop could not use (a phone bug), or a reason this build does
      *  not know: not the photo's fault — stop the round, back off, count nothing, log it. */

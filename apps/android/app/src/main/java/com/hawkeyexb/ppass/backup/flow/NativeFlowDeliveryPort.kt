@@ -188,7 +188,8 @@ internal class FlowDeliveryPairingLoss {
     val changes: kotlinx.coroutines.flow.StateFlow<Long> get() = _changes
 
     fun record(epoch: PairingEpoch, failure: Throwable) {
-        if (desktopReasonOf(failure)?.let(::isPairingLost) == true) {
+        // 与分类同一个结论（含待拍板的 grant_* 被拒）——红卡和引擎出口不会说两样话。
+        if (desktopReasonOf(failure) != null && classifyDeliveryFailure(failure) == DeliveryOutcome.PairingLost) {
             lostEpoch = epoch.value
             _changes.value += 1
         }
@@ -269,17 +270,22 @@ internal fun deliveryOutcomeOf(raw: String, channel: String): DeliveryOutcome {
         ReasonClass.STORAGE_FAILED -> DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_ERROR, raw)
         ReasonClass.DESKTOP_INTERNAL -> DeliveryOutcome.PeerFailure(PeerFailureKind.DESKTOP_INTERNAL, raw)
         ReasonClass.PATH -> DeliveryOutcome.PathFailure(raw)
-        ReasonClass.GRANT_OUT_OF_STEP -> DeliveryOutcome.ItemFailure("$channel:$raw")
+        // 待拍板（#1072）：维持 v2 之前的行为——被拒 = 配对失效，推送 = 单张失败。
+        ReasonClass.GRANT_OUT_OF_STEP ->
+            if (channel == REJECTED) DeliveryOutcome.PairingLost else DeliveryOutcome.ItemFailure("$channel:$raw")
         ReasonClass.PHONE_ERROR -> DeliveryOutcome.PhoneError("$channel:$raw")
     }
 }
 
 /** 推送的 `flow.failed`。 */
-internal fun classifyPushedFailure(reason: String): DeliveryOutcome = deliveryOutcomeOf(reason, "pushed")
+internal fun classifyPushedFailure(reason: String): DeliveryOutcome = deliveryOutcomeOf(reason, PUSHED)
+
+private const val REJECTED = "rejected"
+private const val PUSHED = "pushed"
 
 /** 桌面明确拒绝（offer / status）。 */
 internal fun classifyRejection(rejected: DesktopRejectedException): DeliveryOutcome =
-    deliveryOutcomeOf(rejected.reason, "rejected")
+    deliveryOutcomeOf(rejected.reason, REJECTED)
 
 /** #1072：这次失败里桌面给的原因（拒绝或推送）；不是桌面的结论 → null。 */
 internal fun desktopReasonOf(failure: Throwable): Reason? = when (failure) {

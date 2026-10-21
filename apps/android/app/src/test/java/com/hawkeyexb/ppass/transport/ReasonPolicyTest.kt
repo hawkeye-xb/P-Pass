@@ -136,7 +136,9 @@ class ReasonPolicyTest {
         "storage_failed" -> DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_ERROR, reason)
         "internal" -> DeliveryOutcome.PeerFailure(PeerFailureKind.DESKTOP_INTERNAL, reason)
         "fetch_failed" -> DeliveryOutcome.PathFailure(reason)
-        "grant_not_found", "grant_conflict" -> DeliveryOutcome.ItemFailure("$channel:$reason")
+        // 待拍板：维持 v2 之前——被拒 = err.not_authorized（配对失效），推送 = guard_mismatch（单张失败）。
+        "grant_not_found", "grant_conflict" ->
+            if (channel == "rejected") DeliveryOutcome.PairingLost else DeliveryOutcome.ItemFailure("$channel:$reason")
         else -> DeliveryOutcome.PhoneError("$channel:$reason")
     }
 
@@ -152,9 +154,10 @@ class ReasonPolicyTest {
 
     @Test
     fun `only a problem with the photo itself is counted - nothing the phone or desktop got wrong`() {
-        val counted = (registry() + "from_the_future").filter { rejected(it) is DeliveryOutcome.ItemFailure }
-        // grant_* stays counted only until its handling is signed off (#1072); bad_request's photo case
-        // needs a finer reason from the daemon first.
+        val counted = (registry() + "from_the_future").filter {
+            rejected(it) is DeliveryOutcome.ItemFailure || classifyPushedFailure(it) is DeliveryOutcome.ItemFailure
+        }
+        // grant_* pushes stay counted only until their handling is signed off (#1072).
         assertEquals(listOf("grant_not_found", "grant_conflict"), counted)
     }
 
@@ -164,7 +167,7 @@ class ReasonPolicyTest {
         loss.record(PairingEpoch("e1"), com.hawkeyexb.ppass.backup.flow.FlowPushedFailureException("epoch_mismatch"))
         assertTrue(loss.isLost(PairingEpoch("e1")))
         val other = FlowDeliveryPairingLoss()
-        other.record(PairingEpoch("e1"), DesktopRejectedException("grant_conflict", "flow.offer"))
+        other.record(PairingEpoch("e1"), com.hawkeyexb.ppass.backup.flow.FlowPushedFailureException("grant_conflict"))
         other.record(PairingEpoch("e1"), DesktopRejectedException("internal", "flow.offer"))
         assertFalse(other.isLost(PairingEpoch("e1")))
     }
