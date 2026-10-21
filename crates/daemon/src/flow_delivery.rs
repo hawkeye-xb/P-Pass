@@ -45,6 +45,22 @@ type PeerFetchLock = Arc<AsyncMutex<()>>;
 type FetchLocks = Arc<Mutex<HashMap<[u8; 32], PeerFetchLock>>>;
 type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 type FreeSpaceProbe = Arc<dyn Fn(&Path) -> Option<u64> + Send + Sync>;
+type StageHook = Arc<
+    dyn Fn(FetchStage) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// #1076: the points a background fetch passes between its tuple checks.
+/// Only [`FlowDelivery::with_fetch_stage_hook`] observes them (tests pause a
+/// fetch there to land a re-offer inside the window).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FetchStage {
+    /// Bytes fetched and `require_active` passed; nothing materialized yet.
+    Verified,
+    /// The photo is in the library; the receipt is not written yet.
+    Ingested,
+}
 
 /// #413 §6: an active grant nobody resumed (offer / status respawn) for this
 /// long is cancelled, so its partial leaves the GC protection set. Covers a
@@ -549,6 +565,8 @@ pub struct FlowDelivery {
     /// again. Process-local: a daemon restart forgets them (one more failed
     /// item re-learns the folder).
     landing_failures: Arc<Mutex<std::collections::HashSet<PathBuf>>>,
+    /// #1076: see [`FetchStage`]. `None` in production.
+    stage_hook: Option<StageHook>,
 }
 
 /// #763: bound on remembered failing landing folders. Each is one month of
@@ -592,6 +610,7 @@ impl FlowDelivery {
             thumbs: None,
             fetch_byte_stall: FETCH_BYTE_STALL_LIMIT,
             landing_failures: Arc::default(),
+            stage_hook: None,
         }
     }
 
@@ -599,6 +618,24 @@ impl FlowDelivery {
     pub fn with_fetch_byte_stall(mut self, limit: std::time::Duration) -> Self {
         self.fetch_byte_stall = limit;
         self
+    }
+
+    /// #1076: await `hook` at each [`FetchStage`] of a background fetch (tests).
+    pub fn with_fetch_stage_hook(
+        mut self,
+        hook: impl Fn(FetchStage) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+            + Send
+            + Sync
+            + 'static,
+    ) -> Self {
+        self.stage_hook = Some(Arc::new(hook));
+        self
+    }
+
+    async fn reached(&self, stage: FetchStage) {
+        if let Some(hook) = &self.stage_hook {
+            hook(stage).await;
+        }
     }
 
     /// IDX-06 (#442): hand every freshly materialized item to the
@@ -914,14 +951,15 @@ impl FlowDelivery {
         // NET-06: this is the async-202 trigger — offer's job ends here; the
         // actual transfer runs on its own task, tracked by `self.tasks` so
         // `suspend`/`cancel`/`status` can observe or interrupt it.
-        self.spawn_fetch_task(peer, stored, request.clone());
+        self.spawn_fetch_task(peer, stored.clone(), request.clone());
         // NET-24: the genuinely-async case, and the only one that still
-        // answers "202 — go wait". `task_running` is asserted rather than
-        // queried: `spawn_fetch_task` just registered this tuple.
+        // answers "202 — go wait". #1076: `task_running` is queried, not
+        // asserted — a re-offer whose task was already running keeps that
+        // task, and one that ended in between reports so.
         Ok(FlowStatusReply {
             state: "active".into(),
             receipt: None,
-            task_running: true,
+            task_running: self.tasks.is_running(peer, &stored),
         })
     }
 
@@ -973,6 +1011,9 @@ impl FlowDelivery {
         // NET-15: `try_register` makes the idempotency check atomic — a
         // concurrent `offer`/`status` respawn can no longer both
         // pass the "not running" check and double-spawn for this tuple.
+        // #1076: a re-offer carrying a new provider ticket lands here too and
+        // keeps the running task: the provider is where the bytes come from,
+        // not which item this is. A later attempt reads the stored provider.
         let Some((token, generation)) = self.tasks.try_register(peer, &grant) else {
             return;
         };
@@ -1120,6 +1161,7 @@ impl FlowDelivery {
         // A concurrent cancel/superseding offer may have landed while the
         // fetch was in flight. Do not materialize or finalize old work.
         self.require_active(grant).await?;
+        self.reached(FetchStage::Verified).await;
         // #413: `create_dir_all` below would quietly recreate a library
         // folder that vanished (external drive unplugged) and ingest into an
         // empty stand-in. Refuse instead: the phone waits, nothing is lost.
@@ -1184,6 +1226,7 @@ impl FlowDelivery {
             }
             Err(e) => return Err(self.ingest_failure(&e)),
         }
+        self.reached(FetchStage::Ingested).await;
 
         // This update is the receipt adapter's irreversible boundary. It
         // repeats all tuple guards inside SQL and writes receipt_id before
@@ -1195,6 +1238,14 @@ impl FlowDelivery {
             .await
             .map_err(storage_error)?
         {
+            // #1076: lost the race. A re-offer that found the photo already
+            // in the library completed this same tuple (`complete_without_fetch`);
+            // that receipt is this item's outcome, not a failure. Only a
+            // cancellation stays one — as in `complete_without_fetch`.
+            let current = self.matching_grant(grant).await?;
+            if current.state == FlowGrantState::Completed {
+                return self.persisted_receipt(&current).await;
+            }
             return Err(DeliveryError::Cancelled);
         }
         // TEL-02: `resumed` has no cheap signal yet from this call path —
@@ -1555,10 +1606,12 @@ impl FlowDelivery {
         else {
             return Err(DeliveryError::GrantNotFound);
         };
+        // #1076: identity is the tuple. `provider` only says where the bytes
+        // come from — a re-offer may replace it while a fetch runs — so it is
+        // never compared. The content itself is pinned by `content_hash`.
         if stored.pairing_epoch != grant.pairing_epoch
             || stored.lease_token != grant.lease_token
             || stored.content_hash != grant.content_hash
-            || stored.provider != grant.provider
         {
             return Err(DeliveryError::GrantConflict);
         }
@@ -1566,9 +1619,11 @@ impl FlowDelivery {
     }
 
     /// The authenticated control peer owns the Flow grant, while Android's
-    /// native iroh-blobs provider owns its own endpoint and ticket. The ticket
-    /// is immutable inside the grant and its hash is rechecked before every
-    /// fetch, so accepting a distinct provider does not weaken the tuple gate.
+    /// native iroh-blobs provider owns its own endpoint and ticket. A re-offer
+    /// may replace the ticket (#1076); whichever one a fetch uses, its hash is
+    /// rechecked against the grant's content hash here and iroh-blobs verifies
+    /// every byte against that hash, so the provider never decides what
+    /// content lands and does not weaken the tuple gate.
     fn provider_for(&self, grant: &FlowGrant) -> Result<NodeId, DeliveryError> {
         let (provider, ticket_hash) = match self.blobs.register_blob_ticket(&grant.provider) {
             Ok((provider, ticket_hash)) => (provider, Some(ticket_hash)),
