@@ -48,18 +48,30 @@ final class VersionMismatchEngineTests: XCTestCase {
         XCTAssertEqual(view.waitReason, .desktopOutdated)
     }
 
-    /// 桌面拒了请求但不是照片的问题（手机发错请求 / 不认识的 reason）：不计次数，退出本轮、退避（#762 的探测梯）。
-    func testARejectedRequestIsNotThePhotosFault() async throws {
+    /// 不该发生的错误（这里用 `grant_conflict`，`bad_request` / 未登记值等同一条路）：一张照片反复被拒，只算它自己的单张失败，
+    /// 后面的照片照常传完；不进等待、不退出本轮。反证：把 `reasonClass` 里这类 reason 改回退出本轮（如对端失败），本条红。
+    func testARepeatedlyRejectedPhotoDoesNotBlockTheOnesAfterIt() async throws {
         let rig = try Rig()
-        rig.photo(1, generation: 1)
+        for n in 1...3 { rig.photo(n, generation: Int64(n)) }
+        let stuck = mid(1)
+        rig.delivery.script.update { s in
+            for _ in 0..<12 {
+                s.append { r in
+                    r.details.snapshot.mediaId == stuck
+                        ? classifyDeliveryFailure(DesktopRejected(reason: .registered(.grantConflict), method: "flow.offer"))
+                        : FakeDelivery.confirmed(r)
+                }
+            }
+        }
         await rig.start()
-        rig.delivery.script.update { $0.append { _ in .desktopRejected("bad_request") } }
         await rig.trigger()
-        XCTAssertEqual(try rig.state(1), .transferring)
-        XCTAssertEqual(try rig.current(1)?.attempts, 0)
+        XCTAssertEqual(try rig.state(1), .failed)
+        XCTAssertEqual(try rig.current(1)?.attempts, 1, "当场重试一次后记一次失败")
+        XCTAssertEqual(try rig.state(2), .confirmed)
+        XCTAssertEqual(try rig.state(3), .confirmed)
         let view = await rig.engine.view
-        XCTAssertEqual(view.waitReason, .unexpectedError)
-        XCTAssertEqual(rig.scheduler.unreachableProbes.get(), 1, "退避")
+        XCTAssertNotEqual(view.state, .waiting, "不进等待")
+        XCTAssertEqual(rig.scheduler.unreachableProbes.get(), 0, "不排探测梯")
     }
 
     /// 电脑上的 P-Pass 出错了（internal）：对端失败，等待原因单独一种。

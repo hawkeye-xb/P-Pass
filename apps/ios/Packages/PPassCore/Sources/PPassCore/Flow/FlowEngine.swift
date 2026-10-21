@@ -1101,10 +1101,6 @@ public actor FlowEngine {
             // 握手之后才收到版本拒绝（兜底）：同样不计次数、不动配对，order 保持可续传。
             log("order \(order.id): protocol version mismatch (\(side.rawValue) outdated); leaving it resumable")
             return .exit(waitReasonOf(side))
-        case let .desktopRejected(reason):
-            // #1069：桌面拒了这条请求但不是照片的问题（手机发错请求 / 不认识的 reason）：不计次数，退出本轮、退避。
-            log("order \(order.id): desktop rejected the request (\(reason)); not the photo's fault, backing off")
-            return .exit(.unexpectedError)
         }
     }
 

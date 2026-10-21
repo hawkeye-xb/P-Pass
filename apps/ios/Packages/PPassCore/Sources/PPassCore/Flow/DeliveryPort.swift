@@ -600,7 +600,7 @@ public struct ControlPlaneProbe: DesktopProbe {
                 case .pairingLost: return .pairingLost
                 case let .versionMismatch(side): return .versionMismatch(side)
                 // 其余拒绝（含电脑出错、发错请求）：hello 这一步答不上来，按不可达走探测梯（与今天同）。
-                case .peerFailure, .pathFailure, .requestRejected, .itemFailure: return .unreachable
+                case .peerFailure, .pathFailure, .itemFailure: return .unreachable
                 }
             }
             logger.log("Flow probe result=unreachable error=\(error)")

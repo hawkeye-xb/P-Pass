@@ -28,7 +28,7 @@ enum PairVerdict: Equatable {
     /// pair.request 被拒（#1073 归类表配对通道）：版本不兼容单独成判决，其余都是「电脑那边说不」。
     static func rejected(_ error: RespError?) -> PairVerdict {
         let reason = DesktopReason(error)
-        if case let .versionMismatch(side) = reasonClass(reason, channel: .reply) { return .versionMismatch(side) }
+        if case let .versionMismatch(side) = reasonClass(reason) { return .versionMismatch(side) }
         return .denied(PairNote(rejection: reason))
     }
 }

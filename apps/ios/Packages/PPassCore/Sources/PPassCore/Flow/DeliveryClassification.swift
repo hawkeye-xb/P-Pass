@@ -39,25 +39,15 @@ public enum ReasonClass: Equatable, Sendable {
     case peerFailure(PeerFailureKind)
     /// 网络：路走不通，可续传，不计次数。
     case pathFailure
-    /// 手机发错了请求（程序缺陷）/ 不认识的 reason：不算照片失败，退出本轮、退避，写日志，显示通用提示。
-    case requestRejected
-    /// 这张照片本身的问题：计次数、有上限。#1069：只有 `bad_request` 里「票据内容与 hash 不一致」这一种，
-    /// 线上还分不出来（待 daemon 补细分 reason），所以目前没有 reason 落在这里；推送通道的 `grant_*` 维持今天。
+    /// 不该发生的错误（手机发错请求 / 两端记录对不上 / 不认识的 reason）：走现有的单张失败——跳过这一张、计次数、
+    /// 继续后面的照片，由对账轮重试，日志记下 reason（#1069 / #1072 最终拍板）。
     case itemFailure
 }
 
-/// 桌面错误是从哪条通道来的。归类只有一张表；唯一的区别是待拍板的 `grant_not_found` / `grant_conflict`
-/// 暂时维持今天的行为（应答 = 配对失效，`flow.failed` 推送 = 单张失败）。
-public enum ReasonChannel: Sendable {
-    /// 一条请求的 `ok=false` 应答（offer / status / hello 探测 / 前台心跳 / 配对失效红卡）。
-    case reply
-    /// `flow.failed` 推送。
-    case push
-}
-
-/// #1073 归类表。`ProtoReason` 的 switch 不带 `default`：登记表新增一个值，这里编译不过，逼着显式归类。
-public func reasonClass(_ reason: DesktopReason, channel: ReasonChannel) -> ReasonClass {
-    guard case let .registered(r) = reason else { return .requestRejected }
+/// #1073 归类表（与 Android `ReasonPolicy.kt` 同一张，应答与 `flow.failed` 推送共用）。
+/// `ProtoReason` 的 switch 不带 `default`：登记表新增一个值，这里编译不过，逼着显式归类。
+public func reasonClass(_ reason: DesktopReason) -> ReasonClass {
+    guard case let .registered(r) = reason else { return .itemFailure }
     switch r {
     case .notPaired, .revoked, .epochMismatch, .roleForbidden: return .pairingLost
     case .phoneOutdated: return .versionMismatch(.phone)
@@ -68,9 +58,8 @@ public func reasonClass(_ reason: DesktopReason, channel: ReasonChannel) -> Reas
     case .storageFailed: return .peerFailure(.storageError)
     case .internal: return .peerFailure(.desktopInternal)
     case .fetchFailed: return .pathFailure
-    // 待 #1072 查清后拍板：先维持今天（v1 的 offer 应答是 err.not_authorized、推送是 guard_mismatch）。
-    case .grantNotFound, .grantConflict: return channel == .reply ? .pairingLost : .itemFailure
-    case .badRequest, .notFound, .backupFailed, .cancelled, .pairTokenInvalid, .unknown: return .requestRejected
+    case .badRequest, .notFound, .backupFailed, .cancelled, .pairTokenInvalid, .grantNotFound, .grantConflict, .unknown:
+        return .itemFailure
     }
 }
 
@@ -86,25 +75,24 @@ public struct DesktopRejected: Error, Equatable, Sendable {
 
     public init(_ error: RespError?, method: String) { self.init(reason: DesktopReason(error), method: method) }
 
-    public var reasonClass: ReasonClass { PPassCore.reasonClass(reason, channel: .reply) }
+    public var reasonClass: ReasonClass { PPassCore.reasonClass(reason) }
     public var isPairingLost: Bool { reasonClass == .pairingLost }
 }
 
-/// 归类 → 传输结局；单张失败由调用方带上自己的说明（两条通道的前缀不同）。
+/// 归类 → 传输结局；单张失败由调用方带上自己的说明（`rejected:` / `pushed:` 前缀，日志里看得出来源）。
 func deliveryOutcome(_ reason: DesktopReason, _ cls: ReasonClass) -> DeliveryOutcome? {
     switch cls {
     case .pairingLost: return .pairingLost
     case let .versionMismatch(side): return .versionMismatch(side)
     case let .peerFailure(kind): return .peerFailure(kind, code: reason.description)
     case .pathFailure: return .pathFailure(reason.description)
-    case .requestRejected: return .desktopRejected(reason.description)
     case .itemFailure: return nil
     }
 }
 
 /// 推送的 `flow.failed`。
 public func classifyPushedFailure(_ reason: DesktopReason) -> DeliveryOutcome {
-    deliveryOutcome(reason, reasonClass(reason, channel: .push)) ?? .itemFailure("pushed:\(reason)")
+    deliveryOutcome(reason, reasonClass(reason)) ?? .itemFailure("pushed:\(reason)")
 }
 
 /// 回执与请求不符（四个字段任何一个对不上）：不许确认这张 order。

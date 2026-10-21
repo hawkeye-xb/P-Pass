@@ -325,8 +325,6 @@ public enum DeliveryOutcome: Equatable, Sendable {
     case pairingLost
     /// #1069：协议版本不兼容。退出循环，不计次数，不动配对，提示更新哪一端。
     case versionMismatch(OutdatedSide)
-    /// #1069：桌面拒绝了这条请求，但不是照片的问题（手机发错请求 / 不认识的 reason）：退出循环、退避，不计次数。
-    case desktopRejected(String)
 }
 
 /// 传输端口。

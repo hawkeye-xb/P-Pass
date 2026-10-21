@@ -459,13 +459,13 @@ final class DeliveryPortTests: XCTestCase {
         XCTAssertEqual(classifyPushedFailure(.registered(.libraryUnavailable)), .peerFailure(.libraryUnavailable, code: "library_unavailable"))
         XCTAssertEqual(classifyPushedFailure(.registered(.storageFailed)), .peerFailure(.storageError, code: "storage_failed"))
         XCTAssertEqual(classifyPushedFailure(.registered(.fetchFailed)), .pathFailure("fetch_failed"))
-        XCTAssertEqual(classifyPushedFailure(DesktopReason(wire: "materialize_io")), .desktopRejected("unknown:materialize_io"))
+        XCTAssertEqual(classifyPushedFailure(DesktopReason(wire: "materialize_io")), .itemFailure("pushed:unknown:materialize_io"))
     }
 
     /// 桌面可达但拒绝不是路径问题；配对失效单独一类；网络错误是路径失败。
     func testExceptionsAreClassified() {
         XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(reason: .registered(.revoked), method: "flow.offer")), .pairingLost)
-        XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(reason: .registered(.badRequest), method: "flow.offer")), .desktopRejected("bad_request"))
+        XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(reason: .registered(.badRequest), method: "flow.offer")), .itemFailure("rejected:bad_request"))
         XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(reason: .registered(.storageFull), method: "flow.offer")), .peerFailure(.storageFull, code: "storage_full"))
         guard case let .pathFailure(reason) = classifyDeliveryFailure(URLError(.timedOut)) else { return XCTFail("network error must be a path failure") }
         XCTAssertTrue(reason.hasPrefix("network:"), reason)

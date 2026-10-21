@@ -74,7 +74,7 @@ extension Resp {
 
     /// 这条应答说哪一端太旧：先听电脑自己说的（`phone_outdated` / `desktop_outdated`），再自己核一次。
     public var outdatedSide: OutdatedSide? {
-        if let error, case let .versionMismatch(side) = reasonClass(DesktopReason(error), channel: .reply),
+        if let error, case let .versionMismatch(side) = reasonClass(DesktopReason(error)),
            error.code == Codes.versionMismatch { return side }
         return Self.outdatedSide(peerVer: ver, peerMinVer: minVer)
     }
