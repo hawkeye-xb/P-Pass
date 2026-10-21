@@ -93,12 +93,15 @@ public final class ForegroundHeartbeat: @unchecked Sendable {
         case .success?:
             await markReachable()
         case let .failure(rejected as DesktopRejected)?:
-            if let key = rejected.msgKey, isPairingLostText(key) {
-                logger.log("Heartbeat hello rejected: \(key) → pairing lost")
+            if case let .versionMismatch(side) = rejected.reasonClass {
+                // #1069：版本不兼容——既不是配对失效，也不叫醒引擎（醒了也传不了）；等用户 / 电脑更新，引擎下一次握手时显示原因。
+                logger.log("Heartbeat hello rejected: \(rejected.reason) → \(side.rawValue) outdated; not waking the engine")
+            } else if rejected.isPairingLost {
+                logger.log("Heartbeat hello rejected: \(rejected.reason) → pairing lost")
                 await onPairingLost(epoch, rejected)
             } else {
                 // 对端在答话，只是拒了别的：算可达（与 Android 同）。
-                logger.log("Heartbeat hello rejected: \(rejected.msgKey ?? "nil") (desktop reachable)")
+                logger.log("Heartbeat hello rejected: \(rejected.reason) (desktop reachable)")
                 await markReachable()
             }
         case let .failure(error)?:

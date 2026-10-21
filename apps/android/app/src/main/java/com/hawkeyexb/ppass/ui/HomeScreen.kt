@@ -316,6 +316,8 @@ fun HomeScreen(
     // 规则 P（#413：每个等待原因一句）：为什么在等。null = 不在等 / 不在状态行说 ⇒ 不渲染任何理由。
     // 由 BackupUiStateHolder 从投影算出；HomeScreen 自己不碰数据源。出场闸门见 [visibleWaitReasonRes]。
     waitReasonRes: Int? = null,
+    // #1072：最近一次应答说版本不兼容（哪一端的 P-Pass 太旧）。状态行换成那句话；手机太旧时按钮换成「检查更新」。
+    outdated: com.hawkeyexb.ppass.proto.OutdatedSide? = null,
     // UPD-02：「检查更新」行。value 跟随更新状态机（下载中 % / 待安装「可安装」）；
     // onCheckUpdate 非 null 才渲染该行——行为判定全在 UpdateUiController。
     updateRowValue: String? = null,
@@ -555,13 +557,14 @@ fun HomeScreen(
                             // 规则 P（#413）：等待中这一行换成那句人话（每个等待原因一句）——
                             // **不新增横幅**。说不清（reasonRes == null）时一个字都不加，
                             // 退回 idleStatusText 既有的分支。
-                            val waitReason = visibleWaitReasonRes(
-                                state = state,
-                                mediaAccess = mediaAccess,
-                                pairingLost = pairingLost,
-                                reasonRes = waitReasonRes,
-                                wifiOnly = wifiOnly,
-                            )
+                            val waitReason = visibleOutdatedSide(outdated, mediaAccess, pairingLost)?.let(::outdatedTextRes)
+                                ?: visibleWaitReasonRes(
+                                    state = state,
+                                    mediaAccess = mediaAccess,
+                                    pairingLost = pairingLost,
+                                    reasonRes = waitReasonRes,
+                                    wifiOnly = wifiOnly,
+                                )
                             Text(
                                 if (waitReason != null) stringResource(waitReason) else idleStatusText(
                                     line,
@@ -586,7 +589,12 @@ fun HomeScreen(
                     // 的按钮？」）。裁决在 heroActionOf（纯函数，有单测），
                     // 两个分支共用 onBackupNow——MOB-19 红线：只有一条管线。
                     val heroAction = heroActionOf(state, pairingLost)
-                    if (heroAction != null) {
+                    val outdatedNow = visibleOutdatedSide(outdated, mediaAccess, pairingLost)
+                    if (outdatedNow != null && offersAppUpdate(outdatedNow) && onCheckUpdate != null) {
+                        // #1072：手机上的 P-Pass 太旧——这里唯一有用的动作是检查更新（复用 UpdateUiController）。
+                        Spacer(Modifier.width(12.dp))
+                        HeroSecondaryButton(label = stringResource(R.string.update_check_now), onClick = onCheckUpdate)
+                    } else if (heroAction != null) {
                         Spacer(Modifier.width(12.dp))
                         HeroSecondaryButton(
                             label = when {

@@ -76,7 +76,7 @@ print('confirmed', resp['result'])
                 // hello is now denied (revoked ⇒ not even hello).
                 val hello = client.call(peer, "hello", buildJsonObject {})
                 assertFalse("revoked device must not reach hello", hello.ok)
-                println("UNPAIR OK: hello denied (${hello.error?.msgKey})")
+                println("UNPAIR OK: hello denied (${hello.error?.reason})")
             } finally {
                 client.close()
             }

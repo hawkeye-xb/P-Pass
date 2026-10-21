@@ -1,0 +1,17 @@
+---
+source: crates/proto/tests/snapshots.rs
+expression: json
+---
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "ok": false,
+  "error": {
+    "code": "VERSION_MISMATCH",
+    "reason": "phone_outdated",
+    "params": {
+      "min_ver": 2
+    }
+  },
+  "ver": 2,
+  "min_ver": 2
+}

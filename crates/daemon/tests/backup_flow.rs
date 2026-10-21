@@ -392,7 +392,7 @@ async fn interrupted_commit_rerun_converges_and_survives_rebuild() {
         )
         .await;
     assert!(!resp.ok, "commit over a half-dead client must fail");
-    assert_eq!(resp.error.unwrap().msg_key, "err.backup_failed");
+    assert_eq!(resp.error.unwrap().reason(), &proto::Reason::BackupFailed);
 
     let after_crash = asset_count(&storage.db).await;
     assert!(

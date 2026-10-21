@@ -71,3 +71,6 @@
 /* 设置页后台刷新告示（对位 Android background_backup_system_stopped 的句式：事实 · 后果，配「去处理」）。iOS 的系统开关叫「后台 App 刷新」。 */
 "background_refresh_off_notice" = "Background App Refresh is off · backs up only when P-Pass is open";
 "background_refresh_restricted_notice" = "Background refresh is restricted · backs up only when P-Pass is open";
+
+/* 首页告示缺文案时的通用提示（#1073：绝不显示原始 key）。 */
+"notice_text_unavailable" = "This status message can't be shown right now";

@@ -15,8 +15,10 @@ use crate::error::RespError;
 ///
 /// `id` is a client-generated UUID v4 string for request/response correlation.
 /// `params` is method-specific; its shape is validated by the method handler.
-/// `min_ver` lets the sender declare the oldest protocol version it accepts
-/// in the response (defaults to `PROTO_VER` when omitted).
+/// `ver` / `min_ver` are the sender's [`crate::PROTO_VER`] /
+/// [`crate::MIN_SUPPORTED_VER`] (#1070 in-band negotiation). A frame without
+/// them comes from a v1 peer and decodes as `1` / `1`; a freshly built
+/// `Req::default()` carries this build's numbers.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Req {
@@ -25,19 +27,37 @@ pub struct Req {
     pub method: String,
     /// Method-specific parameters as a JSON value.
     pub params: Value,
-    /// Minimum protocol version the sender expects in the response.
-    /// Defaults to `MIN_SUPPORTED_VER` (most conservative: assume oldest peer).
+    /// Sender's protocol version.
+    #[serde(default = "v1")]
+    pub ver: u16,
+    /// Oldest protocol version the sender still accepts.
+    #[serde(default = "v1")]
     pub min_ver: u16,
 }
 
-#[allow(clippy::derivable_impls)]
+/// Wire default for a missing `ver` / `min_ver`: the peer predates v2.
+fn v1() -> u16 {
+    crate::version::V1
+}
+
 impl Default for Req {
     fn default() -> Self {
         Self {
             id: String::new(),
             method: String::new(),
             params: Value::Null,
+            ver: super::PROTO_VER,
             min_ver: super::MIN_SUPPORTED_VER,
+        }
+    }
+}
+
+impl Req {
+    /// The sender's declared versions.
+    pub fn versions(&self) -> crate::Versions {
+        crate::Versions {
+            ver: self.ver,
+            min_ver: self.min_ver,
         }
     }
 }
@@ -45,8 +65,9 @@ impl Default for Req {
 /// Unified response envelope.
 ///
 /// When `ok` is `true`, `result` carries the method-specific payload.
-/// When `ok` is `false`, `error` carries the error code and localisation key.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+/// When `ok` is `false`, `error` carries the [`RespError`] (code / reason / params).
+/// `ver` / `min_ver` follow the same rule as [`Req`]: missing = a v1 sender.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Resp {
     pub id: String,
@@ -55,6 +76,23 @@ pub struct Resp {
     pub result: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<RespError>,
+    #[serde(default = "v1")]
+    pub ver: u16,
+    #[serde(default = "v1")]
+    pub min_ver: u16,
+}
+
+impl Default for Resp {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            ok: false,
+            result: None,
+            error: None,
+            ver: super::PROTO_VER,
+            min_ver: super::MIN_SUPPORTED_VER,
+        }
+    }
 }
 
 impl Resp {
@@ -64,7 +102,7 @@ impl Resp {
             id: id.into(),
             ok: true,
             result: Some(result),
-            error: None,
+            ..Self::default()
         }
     }
 
@@ -73,8 +111,16 @@ impl Resp {
         Self {
             id: id.into(),
             ok: false,
-            result: None,
             error: Some(error),
+            ..Self::default()
+        }
+    }
+
+    /// The sender's declared versions.
+    pub fn versions(&self) -> crate::Versions {
+        crate::Versions {
+            ver: self.ver,
+            min_ver: self.min_ver,
         }
     }
 }
@@ -148,7 +194,7 @@ pub struct PairRequest {
     /// verdict, so the daemon answers as soon as the request is queued
     /// ([`PairSubmitted`]) instead of holding this RPC open until a human
     /// clicks. #1050: this is the only shape the daemon serves — a request
-    /// with `false` (or the key omitted) is refused with `err.unsupported`;
+    /// with `false` (or the key omitted) is refused as `phone_outdated` (#1070);
     /// the blocking reply is gone. The field stays on the wire because
     /// every supported phone (Android ≥ v0.9.0, iOS) sends `true` and both
     /// phones' golden snapshots pin it; the key is skipped when false so
@@ -195,21 +241,30 @@ pub struct PairStatusRequest {
 }
 
 /// NET-10 (#128): `pair.status` reply — same shape as [`FlowStatusReply`]:
-/// a state string plus the terminal payload when there is one.
+/// a state plus the terminal payload when there is one.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
 pub struct PairStatusReply {
-    /// One of: `"pending"`, `"accepted"`, `"denied"`, `"expired"`,
-    /// `"not_found"` (unknown id, another device's id, or the daemon
-    /// restarted and its in-memory ledger is gone).
-    pub state: String,
-    /// Present only when `state == "accepted"`. Replayed identically on
+    pub state: PairStatusState,
+    /// Present only when `state == accepted`. Replayed identically on
     /// every query for as long as the ledger keeps the entry.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accepted: Option<PairAccepted>,
-    /// Present only when `state == "denied"`: the msg_key the phone shows.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub msg_key: Option<String>,
+}
+
+/// #1070: the `pair.status` / `pair.cancel` verdict. A denial carries no
+/// reason key any more — "the owner said no" is the state itself.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PairStatusState {
+    #[default]
+    Pending,
+    Accepted,
+    Denied,
+    Expired,
+    /// Unknown id, another device's id, or the daemon restarted and its
+    /// in-memory ledger is gone.
+    NotFound,
 }
 
 /// Pairing accepted response.
@@ -427,11 +482,79 @@ pub struct FlowSupersedeReply {
     /// `"replaced"` (now holds `new_hash`, including a replay of a finished request) or
     /// `"refused"` (nothing changed; the old copy stays).
     pub outcome: String,
-    /// Why it was refused: `old_missing` / `not_uploader` / `old_changed` / `unknown_format` /
-    /// `region_too_large` / `size_mismatch` / `incomplete_ranges` / `not_a_redaction` /
-    /// `hash_mismatch` / `epoch_mismatch` / `bad_request` / `fetch_failed`. Empty when replaced.
-    #[serde(skip_serializing_if = "String::is_empty")]
-    pub reason: String,
+    /// Why it was refused. Absent when replaced.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<SupersedeRefusal>,
+}
+
+/// #1070: why a `flow.supersede` was refused. Wire strings are unchanged
+/// from the pre-v2 free-text field.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SupersedeRefusal {
+    OldMissing,
+    NotUploader,
+    OldChanged,
+    UnknownFormat,
+    RegionTooLarge,
+    SizeMismatch,
+    IncompleteRanges,
+    NotARedaction,
+    HashMismatch,
+    EpochMismatch,
+    BadRequest,
+    FetchFailed,
+}
+
+impl SupersedeRefusal {
+    pub const ALL: &'static [SupersedeRefusal] = &[
+        Self::OldMissing,
+        Self::NotUploader,
+        Self::OldChanged,
+        Self::UnknownFormat,
+        Self::RegionTooLarge,
+        Self::SizeMismatch,
+        Self::IncompleteRanges,
+        Self::NotARedaction,
+        Self::HashMismatch,
+        Self::EpochMismatch,
+        Self::BadRequest,
+        Self::FetchFailed,
+    ];
+
+    /// The wire string.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::OldMissing => "old_missing",
+            Self::NotUploader => "not_uploader",
+            Self::OldChanged => "old_changed",
+            Self::UnknownFormat => "unknown_format",
+            Self::RegionTooLarge => "region_too_large",
+            Self::SizeMismatch => "size_mismatch",
+            Self::IncompleteRanges => "incomplete_ranges",
+            Self::NotARedaction => "not_a_redaction",
+            Self::HashMismatch => "hash_mismatch",
+            Self::EpochMismatch => "epoch_mismatch",
+            Self::BadRequest => "bad_request",
+            Self::FetchFailed => "fetch_failed",
+        }
+    }
+
+    /// Parse a wire string (`None` for an unregistered one).
+    pub fn from_wire(s: &str) -> Option<Self> {
+        Self::ALL.iter().copied().find(|r| r.as_str() == s)
+    }
+}
+
+/// #1070: payload of the `flow.failed` push (the item could not be stored or
+/// fetched). `reason` replaces the pre-v2 `code` key.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FlowFailedPush {
+    pub node_id: String,
+    pub queue_sequence: i64,
+    pub pairing_epoch: String,
+    pub lease_token: String,
+    pub reason: crate::Reason,
 }
 
 /// A durable Desktop acknowledgement for exactly one materialized item.
@@ -695,7 +818,8 @@ mod tests {
             id: "abc-123".into(),
             method: "hello".into(),
             params: serde_json::json!({"proto_ver": 1}),
-            min_ver: 1,
+            ver: 2,
+            min_ver: 2,
         };
         let json = serde_json::to_string(&req).unwrap();
         let back: Req = serde_json::from_str(&json).unwrap();
@@ -712,7 +836,7 @@ mod tests {
 
     #[test]
     fn resp_err_roundtrip() {
-        let resp = Resp::err("abc-123", RespError::new("NOT_FOUND", "err.not_found"));
+        let resp = Resp::err("abc-123", RespError::new(crate::Reason::NotFound));
         let json = serde_json::to_string(&resp).unwrap();
         let back: Resp = serde_json::from_str(&json).unwrap();
         assert_eq!(resp, back);
@@ -839,24 +963,70 @@ mod tests {
         pair_status_reply_accepted_roundtrip,
         PairStatusReply,
         PairStatusReply {
-            state: "accepted".into(),
+            state: PairStatusState::Accepted,
             accepted: Some(PairAccepted {
                 storage_device_name: "Home PC".into(),
                 pairing_epoch: "epoch-1".into(),
             }),
-            msg_key: None,
         }
     );
 
-    /// NET-10: pending carries neither payload nor reason key.
+    /// NET-10: pending carries no payload; #1070: no state carries a reason key.
     #[test]
     fn pair_status_reply_pending_has_only_state() {
         let v = serde_json::to_value(PairStatusReply {
-            state: "pending".into(),
+            state: PairStatusState::Pending,
             ..PairStatusReply::default()
         })
         .unwrap();
         assert_eq!(v, serde_json::json!({"state": "pending"}));
+        for (state, wire) in [
+            (PairStatusState::Accepted, "accepted"),
+            (PairStatusState::Denied, "denied"),
+            (PairStatusState::Expired, "expired"),
+            (PairStatusState::NotFound, "not_found"),
+        ] {
+            assert_eq!(serde_json::to_value(state).unwrap(), wire);
+        }
+    }
+
+    /// #1070: the supersede refusal enum keeps the pre-v2 wire strings.
+    #[test]
+    fn supersede_refusal_wire_strings_are_stable() {
+        for r in SupersedeRefusal::ALL {
+            assert_eq!(serde_json::to_value(r).unwrap(), r.as_str());
+            assert_eq!(SupersedeRefusal::from_wire(r.as_str()), Some(*r));
+        }
+        assert_eq!(SupersedeRefusal::ALL.len(), 12);
+        let replaced = serde_json::to_value(FlowSupersedeReply {
+            outcome: "replaced".into(),
+            reason: None,
+        })
+        .unwrap();
+        assert_eq!(replaced, serde_json::json!({"outcome": "replaced"}));
+    }
+
+    /// #1070: envelope defaults — built = this build's numbers, decoded
+    /// without the keys = a v1 peer.
+    #[test]
+    fn envelope_versions_default_to_local_when_built_and_v1_when_missing() {
+        let built = Req::default();
+        assert_eq!(
+            (built.ver, built.min_ver),
+            (crate::PROTO_VER, crate::MIN_SUPPORTED_VER)
+        );
+        let v1: Req =
+            serde_json::from_str(r#"{"id":"1","method":"hello","params":{},"min_ver":1}"#).unwrap();
+        assert_eq!((v1.ver, v1.min_ver), (1, 1));
+        let bare: Req = serde_json::from_str(r#"{"id":"1","method":"hello"}"#).unwrap();
+        assert_eq!((bare.ver, bare.min_ver), (1, 1));
+        let resp = Resp::ok("1", Value::Null);
+        assert_eq!(
+            (resp.ver, resp.min_ver),
+            (crate::PROTO_VER, crate::MIN_SUPPORTED_VER)
+        );
+        let old: Resp = serde_json::from_str(r#"{"id":"1","ok":true}"#).unwrap();
+        assert_eq!((old.ver, old.min_ver), (1, 1));
     }
 
     /// DEV-02: 老版本手机仍会发 `device_hint`（DEV-01b 只藏了设置页那行
@@ -1152,7 +1322,9 @@ mod tests {
         assert_eq!(req.id, "");
         assert_eq!(req.method, "");
         assert_eq!(req.params, Value::Null);
-        assert_eq!(req.min_ver, super::super::MIN_SUPPORTED_VER);
+        // #1070: a frame without version keys is a v1 peer.
+        assert_eq!(req.min_ver, crate::version::V1);
+        assert_eq!(req.ver, crate::version::V1);
     }
 
     #[test]

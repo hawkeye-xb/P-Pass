@@ -1,0 +1,82 @@
+---
+source: crates/proto/tests/snapshots.rs
+expression: json
+---
+[
+  {
+    "code": "NOT_AUTHORIZED",
+    "reason": "not_paired"
+  },
+  {
+    "code": "NOT_AUTHORIZED",
+    "reason": "revoked"
+  },
+  {
+    "code": "NOT_AUTHORIZED",
+    "reason": "role_forbidden"
+  },
+  {
+    "code": "NOT_AUTHORIZED",
+    "reason": "pair_token_invalid"
+  },
+  {
+    "code": "VERSION_MISMATCH",
+    "reason": "phone_outdated"
+  },
+  {
+    "code": "VERSION_MISMATCH",
+    "reason": "desktop_outdated"
+  },
+  {
+    "code": "INVALID_REQUEST",
+    "reason": "unsupported_method"
+  },
+  {
+    "code": "INVALID_REQUEST",
+    "reason": "bad_request"
+  },
+  {
+    "code": "NOT_FOUND",
+    "reason": "not_found"
+  },
+  {
+    "code": "INTERNAL",
+    "reason": "internal"
+  },
+  {
+    "code": "INTERNAL",
+    "reason": "backup_failed"
+  },
+  {
+    "code": "DESKTOP_STORAGE",
+    "reason": "storage_full"
+  },
+  {
+    "code": "DESKTOP_STORAGE",
+    "reason": "library_unavailable"
+  },
+  {
+    "code": "DESKTOP_STORAGE",
+    "reason": "storage_failed"
+  },
+  {
+    "code": "PATH_FAILED",
+    "reason": "fetch_failed"
+  },
+  {
+    "code": "FLOW_REJECTED",
+    "reason": "epoch_mismatch"
+  },
+  {
+    "code": "FLOW_REJECTED",
+    "reason": "grant_not_found"
+  },
+  {
+    "code": "FLOW_REJECTED",
+    "reason": "grant_conflict"
+  },
+  {
+    "code": "FLOW_REJECTED",
+    "reason": "cancelled"
+  }
+]

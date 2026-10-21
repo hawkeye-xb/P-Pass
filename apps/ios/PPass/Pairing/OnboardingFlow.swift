@@ -1,4 +1,5 @@
 import AVFoundation
+import PPassCore
 import SwiftUI
 
 /// 欢迎 → 扫码 / 手动输入配对串 → 配对状态（对位 Android Onboarding.kt + ScanScreen.kt + PairStatusScreen）。
@@ -6,7 +7,7 @@ import SwiftUI
 /// 没有相机（模拟器）或没给相机权限时，扫码页直接说明并给出「手动输入」入口。
 struct OnboardingFlow: View {
     enum Step: Equatable { case welcome, scan, manual, status(PairStep) }
-    enum PairStep: Equatable { case waiting, refused(lapsed: Bool, note: String?), failed(String) }
+    enum PairStep: Equatable { case waiting, refused(lapsed: Bool, note: String?), needsUpdate(OutdatedSide), failed(String) }
 
     @EnvironmentObject var app: AppModel
     @State private var step: Step = .welcome
@@ -64,8 +65,9 @@ struct OnboardingFlow: View {
             guard !Task.isCancelled else { return }
             switch outcome {
             case .joined(let firstTime): app.paired(firstTime: firstTime)
-            case .refused(let key, let ownerSaidNo):
-                step = .status(.refused(lapsed: !ownerSaidNo, note: key.flatMap { DiagText.resolve($0) }))
+            case .refused(let note, let ownerSaidNo):
+                step = .status(.refused(lapsed: !ownerSaidNo, note: note?.text))
+            case .needsUpdate(let side): step = .status(.needsUpdate(side))
             case .failed(let reason): step = .status(.failed(reason))
             }
         }
@@ -83,7 +85,7 @@ struct OnboardingFlow: View {
         case .manual: step = .manual
         case .pairWaiting: step = .status(.waiting)
         case .pairRefused: step = .status(.refused(lapsed: false, note: nil))
-        case .pairLapsed: step = .status(.refused(lapsed: true, note: DiagText.resolve("err.pair_expired")))
+        case .pairLapsed: step = .status(.refused(lapsed: true, note: PairNote.expired.text))
         case .pairFailed: step = .status(.failed("demo: unreachable"))
         default: break
         }
@@ -167,6 +169,11 @@ struct PairStatusScreen: View {
                     symbol("xmark.circle.fill", PPColor.act)
                     message(title: L.s(lapsed ? "pair_lapsed_title" : "pair_refused_title"), body: L.s("pair_refused_body"),
                             note: note)
+                case .needsUpdate(let side):
+                    // #1069：配对过程中发现版本不兼容——标题「需要更新」，正文说清是哪一端的 P-Pass。
+                    symbol("arrow.down.circle.fill", PPColor.act)
+                    message(title: L.s("pair_needs_update_title"),
+                            body: L.s(side == .phone ? "state_waiting_phone_outdated" : "state_waiting_desktop_outdated"))
                 case .failed(let reason):
                     symbol("exclamationmark.triangle.fill", PPColor.act)
                     message(title: L.s("pair_failed_title"), body: L.s("pair_failed_body"),

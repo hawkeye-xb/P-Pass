@@ -338,7 +338,7 @@ async fn device_rename_rejects_bad_input_and_unknown_device() {
         .await;
     assert!(!resp.ok, "unknown device must fail");
     assert_eq!(
-        resp.error.as_ref().unwrap().code,
+        resp.error.as_ref().unwrap().code(),
         "NOT_FOUND",
         "unknown device must be NOT_FOUND",
     );

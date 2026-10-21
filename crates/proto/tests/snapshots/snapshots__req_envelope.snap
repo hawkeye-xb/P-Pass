@@ -9,5 +9,6 @@ expression: json
     "cursor": null,
     "limit": 200
   },
-  "min_ver": 1
+  "ver": 2,
+  "min_ver": 2
 }

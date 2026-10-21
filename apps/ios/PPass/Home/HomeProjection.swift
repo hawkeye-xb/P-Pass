@@ -239,6 +239,9 @@ enum HomeProjection {
         case .unexpectedError: return "state_waiting_unexpected_error"
         case .originalUnavailable: return "state_waiting_original_unavailable"
         case .localStorageFull: return "state_waiting_local_storage_full"
+        case .desktopInternal: return "state_waiting_desktop_internal"
+        case .phoneOutdated: return "state_waiting_phone_outdated"
+        case .desktopOutdated: return "state_waiting_desktop_outdated"
         }
     }
 }

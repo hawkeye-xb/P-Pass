@@ -166,10 +166,18 @@ final class AppModel: ObservableObject {
         autoBackup = backend.engine.autoBackup()
         notifyOnFailure = backend.engine.notifyOnFailure()
         let notices = backend.engine.promise()
-        promise = notices.map { n in DiagText.resolve(n.key, vars: n.vars) ?? n.key }
+        promise = notices.map(Self.noticeText)
         backgroundNotice = Self.backgroundNotice(notices, backgroundRequested: backend.engine.autoBackup())
     }
 
+
+    /// 告示 key → 人话。字典缺 key 是打包漏了（`BackupPromise.allKeys` 有测试核对）：显示通用提示、记日志，绝不把 key 本身显示给用户（#1073）。
+    static func noticeText(_ n: PromiseNotice) -> String {
+        if let text = DiagText.resolve(n.key, vars: n.vars) { return text }
+        AppLog.log("promise: no text for notice key \(n.key); showing the generic notice")
+        assertionFailure("缺告示文案：\(n.key)")
+        return L.s("notice_text_unavailable")
+    }
 
     /// 「取消剩余 N 张」行的 N（Android cancelRemainingRowCount）：只在已暂停 / 等待中、配对没失效、确有剩余时出现。
     var cancelRemainingCount: Int64? {

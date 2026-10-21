@@ -24,6 +24,15 @@
 "pair_lapsed_title" = "这次加入没有完成";
 "pair_failed_title" = "没能连上电脑";
 "pair_failed_body" = "确认电脑开着、两边都能上网，然后重新扫码。";
+"pair_refused_detail_token_invalid" = "配对码无效或已被使用，请在电脑上重新生成后再扫。";
+"pair_refused_detail_denied" = "电脑上拒绝了这次加入。";
+"pair_refused_detail_expired" = "电脑上一直没人确认，这次配对请求已过期。请在电脑上重新生成配对码再扫。";
+"pair_refused_detail_restarted" = "电脑端服务重启了，这次配对请求已失效。请在电脑上重新生成配对码再扫。";
+"error_generic" = "出了点问题，请重试；如果反复出现，请把手机和电脑上的 P-Pass 都更新到最新版。";
+"state_waiting_phone_outdated" = "手机上的 P-Pass 版本太旧，请更新到最新版";
+"state_waiting_desktop_outdated" = "电脑上的 P-Pass 版本太旧，请在电脑上更新";
+"pair_needs_update_title" = "需要更新";
+"state_waiting_desktop_internal" = "电脑上的 P-Pass 出错了";
 "scan_again" = "重新扫码";
 "backup_started_title" = "%1$@ 张照片，正在回家。";
 "backup_started_body" = "之后什么都不用做。任何时候打开 App，都能看到照片安不安全。";

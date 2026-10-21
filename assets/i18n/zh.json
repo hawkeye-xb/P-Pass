@@ -318,5 +318,10 @@
   "ui.ios_background_refresh_restricted": "这台 iPhone 不允许 P-Pass 后台刷新（可能被屏幕使用时间或设备管理限制），只在打开 P-Pass 时备份。",
   "ui.ios_wait_open_app": "App 在后台，回到 P-Pass 后继续",
   "ui.ios_wait_icloud_original": "这张照片的原图在 iCloud，联网后会自动取回再备份",
-  "ui.ios_wait_phone_storage_full": "手机存储空间不足，腾出空间后会自动继续"
+  "ui.ios_wait_phone_storage_full": "手机存储空间不足，腾出空间后会自动继续",
+  "ui.err_generic": "出错了，请重试；如果一直这样，请到设置里导出日志。",
+  "ui.err_phone_outdated": "手机上的 App 版本过旧，请先在手机上更新 App 再试。",
+  "ui.err_desktop_outdated": "这台电脑上的 P-Pass 版本过旧，请先更新再试。",
+  "ui.device_needs_update_phone": "需要更新手机 App",
+  "ui.device_needs_update_desktop": "需要更新这台电脑上的 P-Pass"
 }

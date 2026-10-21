@@ -326,7 +326,7 @@ final class DeliveryPortTests: XCTestCase {
     /// H-03 / C-12：offer 因空间被拒 = 对端失败（不计次）。
     func testAnOfferRefusedForSpaceIsAPeerFailure() async throws {
         let h = PortHarness()
-        h.desktop.offerError.set(DesktopRejected(msgKey: "storage_full", method: "flow.offer"))
+        h.desktop.offerError.set(DesktopRejected(reason: .registered(.storageFull), method: "flow.offer"))
         let outcome = try await h.deliver()
         XCTAssertEqual(outcome, .peerFailure(.storageFull, code: "storage_full"))
     }
@@ -455,19 +455,18 @@ final class DeliveryPortTests: XCTestCase {
     // MARK: 分类（纯函数）
 
     func testDesktopCodesMapToTheContract() {
-        XCTAssertEqual(classifyDesktopCode("storage_full"), .peerFailure(.storageFull, code: "storage_full"))
-        XCTAssertEqual(classifyDesktopCode("library_unavailable"), .peerFailure(.libraryUnavailable, code: "library_unavailable"))
-        XCTAssertEqual(classifyDesktopCode("storage_failed"), .peerFailure(.storageError, code: "storage_failed"))
-        XCTAssertEqual(classifyDesktopCode("fetch_failed"), .pathFailure("fetch_failed"))
-        XCTAssertNil(classifyDesktopCode("materialize_io"))
-        XCTAssertEqual(classifyPushedFailure("materialize_io"), .itemFailure("pushed:materialize_io"))
+        XCTAssertEqual(classifyPushedFailure(.registered(.storageFull)), .peerFailure(.storageFull, code: "storage_full"))
+        XCTAssertEqual(classifyPushedFailure(.registered(.libraryUnavailable)), .peerFailure(.libraryUnavailable, code: "library_unavailable"))
+        XCTAssertEqual(classifyPushedFailure(.registered(.storageFailed)), .peerFailure(.storageError, code: "storage_failed"))
+        XCTAssertEqual(classifyPushedFailure(.registered(.fetchFailed)), .pathFailure("fetch_failed"))
+        XCTAssertEqual(classifyPushedFailure(DesktopReason(wire: "materialize_io")), .itemFailure("pushed:unknown:materialize_io"))
     }
 
     /// 桌面可达但拒绝不是路径问题；配对失效单独一类；网络错误是路径失败。
     func testExceptionsAreClassified() {
-        XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(msgKey: "err.not_authorized", method: "flow.offer")), .pairingLost)
-        XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(msgKey: "err.bad_request", method: "flow.offer")), .itemFailure("rejected:err.bad_request"))
-        XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(msgKey: "storage_full", method: "flow.offer")), .peerFailure(.storageFull, code: "storage_full"))
+        XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(reason: .registered(.revoked), method: "flow.offer")), .pairingLost)
+        XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(reason: .registered(.badRequest), method: "flow.offer")), .itemFailure("rejected:bad_request"))
+        XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(reason: .registered(.storageFull), method: "flow.offer")), .peerFailure(.storageFull, code: "storage_full"))
         guard case let .pathFailure(reason) = classifyDeliveryFailure(URLError(.timedOut)) else { return XCTFail("network error must be a path failure") }
         XCTAssertTrue(reason.hasPrefix("network:"), reason)
         XCTAssertEqual(classifyDeliveryFailure(ReceiptMismatch(field: "content_hash")), .itemFailure("invalid:ReceiptMismatch"))
@@ -503,7 +502,7 @@ final class DeliveryPortTests: XCTestCase {
         XCTAssertEqual(flowWaitStep(pushed: nil, local: idle, idleStallThresholdMs: 15_000, byteStallThresholdMs: 180_000, attemptElapsedMs: 1), .checkStatusNow)
         let stuck = TransferStatus.inProgress(connected: true, idleForMs: 0, bytesSent: 1, byteIdleForMs: 180_000, source: nil)
         XCTAssertEqual(flowWaitStep(pushed: nil, local: stuck, idleStallThresholdMs: 15_000, byteStallThresholdMs: 180_000, attemptElapsedMs: 1), .stalled)
-        XCTAssertEqual(flowWaitStep(pushed: .failed("fetch_failed"), local: stuck, idleStallThresholdMs: 15_000, byteStallThresholdMs: 180_000, attemptElapsedMs: 1), .failed("fetch_failed"))
+        XCTAssertEqual(flowWaitStep(pushed: .failed(.registered(.fetchFailed)), local: stuck, idleStallThresholdMs: 15_000, byteStallThresholdMs: 180_000, attemptElapsedMs: 1), .failed(.registered(.fetchFailed)))
         XCTAssertEqual(flowWaitStep(pushed: nil, local: .noLease, idleStallThresholdMs: 15_000, byteStallThresholdMs: 180_000, attemptElapsedMs: 1), .checkStatusNow)
         XCTAssertEqual(DeliveryTimings().idleStallThresholdMs, 15_000, "#410：15 秒")
         XCTAssertEqual(DeliveryTimings().byteStallThresholdMs, 180_000, "#410：3 分钟")
@@ -516,8 +515,8 @@ final class DeliveryPortTests: XCTestCase {
         other["lease_token"] = .string("lease-1")
         XCTAssertNil(parseFlowPushOutcome(kind: "flow.failed", data: .object(other), tuple: h.tuple))
         var mine = h.tupleFields()
-        mine["code"] = .string("storage_full")
-        XCTAssertEqual(parseFlowPushOutcome(kind: "flow.failed", data: .object(mine), tuple: h.tuple), .failed("storage_full"))
+        mine["reason"] = .string("storage_full")
+        XCTAssertEqual(parseFlowPushOutcome(kind: "flow.failed", data: .object(mine), tuple: h.tuple), .failed(.registered(.storageFull)))
         mine["receipt"] = try JSONValue.from(h.receipt())
         XCTAssertEqual(parseFlowPushOutcome(kind: "flow.delivered", data: .object(mine), tuple: h.tuple), .delivered(h.receipt()))
         XCTAssertNil(parseFlowPushOutcome(kind: "timeline.invalidated", data: .object(mine), tuple: h.tuple))
@@ -563,7 +562,7 @@ final class DeliveryPortTests: XCTestCase {
 
     func testAProbeRejectedAsNotAuthorizedReportsPairingLostForThatEpoch() async {
         let h = PortHarness()
-        h.desktop.helloResult.set(.failure(DesktopRejected(msgKey: "err.not_authorized", method: "hello")))
+        h.desktop.helloResult.set(.failure(DesktopRejected(reason: .registered(.revoked), method: "hello")))
         let probe = ControlPlaneProbe(currentEpoch: { "e1" }, desktop: h.desktop, logger: h.logger, pairingLoss: h.loss)
         let result = await probe.probe()
         XCTAssertEqual(result, .pairingLost)
@@ -573,7 +572,7 @@ final class DeliveryPortTests: XCTestCase {
 
     func testAnOrdinaryRejectionOrTimeoutIsUnreachableNotLost() async {
         let h = PortHarness()
-        h.desktop.helloResult.set(.failure(DesktopRejected(msgKey: "err.busy", method: "hello")))
+        h.desktop.helloResult.set(.failure(DesktopRejected(reason: .registered(.badRequest), method: "hello")))
         let probe = ControlPlaneProbe(currentEpoch: { "e1" }, desktop: h.desktop, logger: h.logger, pairingLoss: h.loss)
         let rejected = await probe.probe()
         XCTAssertEqual(rejected, .unreachable)

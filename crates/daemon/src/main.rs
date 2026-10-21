@@ -318,6 +318,8 @@ async fn main() -> anyhow::Result<()> {
     // SYNC-03: 一份订阅登记表，Router（QUIC 订阅入口）和 IpcServer
     // （device.revoke 在此发起主动断连）共用同一个实例。
     let subscriptions = daemon::subscriptions::SubscriptionRegistry::new();
+    // #1070: version-mismatch registry — Router writes, IPC device list reads.
+    let outdated = daemon::router::OutdatedPeers::new();
     let (pairing, pending_rx) = daemon::Pairing::new(db.clone(), node_id, relay_provider);
     let pairing = pairing.with_events(event_bus.clone());
 
@@ -331,6 +333,7 @@ async fn main() -> anyhow::Result<()> {
         pending_rx,
         event_bus.clone(),
     );
+    ipc.set_outdated_peers(outdated.clone());
     // T-090: devices.list connection 字段的实况来源——同样走惰性 slot
     // （transport 在 claim 之后才 bind）。bind 之前如实报 unknown，
     // 绝不用 last_seen 推断在线（卡片契约）。
@@ -791,6 +794,7 @@ async fn main() -> anyhow::Result<()> {
     let router = Router::new(db, "P-Pass 存储端")
         .with_events(event_bus.clone())
         .with_subscriptions(subscriptions)
+        .with_outdated_peers(outdated)
         .with_pairing(pairing)
         .with_backup(backup)
         .with_flow_delivery(flow_delivery)

@@ -48,6 +48,9 @@ class C409WakeInvariantTest {
         WaitReason.DESKTOP_LIBRARY_UNAVAILABLE to WakePlan.RetryProbes,
         WaitReason.DESKTOP_STORAGE_ERROR to WakePlan.RetryProbes,
         WaitReason.UNEXPECTED_ERROR to WakePlan.RetryProbes,
+        WaitReason.DESKTOP_INTERNAL to WakePlan.RetryProbes,
+        WaitReason.PHONE_OUTDATED to WakePlan.AwaitsUser,
+        WaitReason.DESKTOP_OUTDATED to WakePlan.RetryProbes,
     )
 
     // 反证：把任一个不健康原因映射成 AwaitsUser（#652 的旧行为：settle 后无唤醒）→ 值不等，红；
@@ -59,7 +62,7 @@ class C409WakeInvariantTest {
             assertEquals(reason.name, plan, wakePlanOf(reason) { WakePlan.BudgetReset(-1L) })
         }
         val exceptions = WaitReason.entries.filter { wakePlanOf(it) { WakePlan.RetryProbes } == WakePlan.AwaitsUser }
-        assertEquals("例外只有要用户动手的", listOf(WaitReason.NOT_PAIRED, WaitReason.DISABLED), exceptions)
+        assertEquals("例外只有要用户动手的", listOf(WaitReason.NOT_PAIRED, WaitReason.DISABLED, WaitReason.PHONE_OUTDATED), exceptions)
     }
 
     private val grant = BootInstant(bootCount = 3, elapsedMs = 10_000L)
@@ -112,6 +115,9 @@ class C409WakeInvariantTest {
             WaitReason.DESKTOP_LIBRARY_UNAVAILABLE -> rig.probeResult = ProbeResult.Reachable("e1", DesktopHealth(freeBytes = null, libraryWritable = false))
             WaitReason.DESKTOP_STORAGE_ERROR -> rig.probeResult = ProbeResult.Reachable("e1", DesktopHealth(freeBytes = null, indexOk = false))
             WaitReason.UNEXPECTED_ERROR -> rig.probeHook = { throw IllegalStateException("unclassified failure in the cycle") }
+            WaitReason.DESKTOP_INTERNAL -> rig.delivery.script += { DeliveryOutcome.PeerFailure(PeerFailureKind.DESKTOP_INTERNAL, "internal") }
+            WaitReason.PHONE_OUTDATED -> rig.probeResult = ProbeResult.NeedsUpdate(com.hawkeyexb.ppass.proto.OutdatedSide.PHONE)
+            WaitReason.DESKTOP_OUTDATED -> rig.probeResult = ProbeResult.NeedsUpdate(com.hawkeyexb.ppass.proto.OutdatedSide.DESKTOP)
         }
         rig.trigger(TriggerReason.MEDIA_CHANGE)
         assertEquals("$reason: 引擎应停在这个等待上", reason, rig.control.wait)
@@ -130,6 +136,10 @@ class C409WakeInvariantTest {
         WaitReason.DESKTOP_LIBRARY_UNAVAILABLE to setOf(Wake.PROBES),
         WaitReason.DESKTOP_STORAGE_ERROR to setOf(Wake.PROBES),
         WaitReason.UNEXPECTED_ERROR to setOf(Wake.PROBES),
+        // #1072：手机过旧只能等用户更新 App；电脑过旧时电脑可能自己更新，周期重探。
+        WaitReason.DESKTOP_INTERNAL to setOf(Wake.PROBES),
+        WaitReason.PHONE_OUTDATED to setOf(Wake.NONE),
+        WaitReason.DESKTOP_OUTDATED to setOf(Wake.PROBES),
     )
 
     // 反证（修复前的 main 上实测红）：FGS_BLOCKED（说不清原因的拒绝）与三个不健康原因登记到的是 NONE。

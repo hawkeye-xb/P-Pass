@@ -5,18 +5,20 @@
 //! Pure logic, fully unit-tested; the router feeds it the device row.
 
 use proto::msgs::methods;
+use proto::Reason;
 use storage::{Device, Role};
 
 /// The verdict for one request.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
     Allow,
-    /// Denied: respond `NOT_AUTHORIZED` with this msg_key, close the
-    /// stream, record a diag event.
+    /// Denied: respond with this reason, close the stream, record a diag
+    /// event.
     Deny {
-        /// `err.not_paired` (unknown NodeId) or `err.not_authorized`
-        /// (revoked, or role does not permit the method).
-        msg_key: &'static str,
+        /// `not_paired` (no device row), `revoked` (removed),
+        /// `unsupported_method` (the method is in no role's table) or
+        /// `role_forbidden` (the role does not permit the method).
+        reason: Reason,
     },
 }
 
@@ -48,6 +50,12 @@ const UNPAIRED_METHODS: &[&str] = &[
     methods::PAIR_STATUS,
     methods::PAIR_CANCEL,
 ];
+
+/// #1070: a method some door admits — the unpaired door or any role's
+/// table. Anything else is not "forbidden for this role", it does not exist.
+fn is_known_method(method: &str) -> bool {
+    UNPAIRED_METHODS.contains(&method) || role_allows(Role::Member, method)
+}
 
 /// 权限表 (T-030): viewer 只许浏览/诊断; member 加 backup.* 和新 Flow
 /// delivery。pair 确认走 IPC 而非网络方法（见 T-034），所以没有任何已配对
@@ -88,7 +96,7 @@ pub fn check(device: Option<&Device>, method: &str) -> Decision {
                 Decision::Allow
             } else {
                 Decision::Deny {
-                    msg_key: diag::keys::ERR_NOT_PAIRED,
+                    reason: Reason::NotPaired,
                 }
             }
         }
@@ -103,16 +111,20 @@ pub fn check(device: Option<&Device>, method: &str) -> Decision {
                 Decision::Allow
             } else {
                 Decision::Deny {
-                    msg_key: diag::keys::ERR_NOT_AUTHORIZED,
+                    reason: Reason::Revoked,
                 }
             }
         }
         Some(d) => {
             if role_allows(d.role, method) {
                 Decision::Allow
+            } else if !is_known_method(method) {
+                Decision::Deny {
+                    reason: Reason::UnsupportedMethod,
+                }
             } else {
                 Decision::Deny {
-                    msg_key: diag::keys::ERR_NOT_AUTHORIZED,
+                    reason: Reason::RoleForbidden,
                 }
             }
         }
@@ -154,7 +166,7 @@ mod tests {
             assert_eq!(
                 check(None, m),
                 Decision::Deny {
-                    msg_key: diag::keys::ERR_NOT_PAIRED
+                    reason: Reason::NotPaired
                 },
                 "unpaired must not reach {m}"
             );
@@ -173,7 +185,7 @@ mod tests {
             assert_eq!(
                 check(Some(&d), m),
                 Decision::Deny {
-                    msg_key: diag::keys::ERR_NOT_AUTHORIZED
+                    reason: Reason::Revoked
                 },
                 "revoked must not reach {m}"
             );
@@ -266,7 +278,7 @@ mod tests {
         assert_eq!(
             check(None, BLOBS_FETCH),
             Decision::Deny {
-                msg_key: diag::keys::ERR_NOT_PAIRED
+                reason: Reason::NotPaired
             }
         );
         for role in [Role::Viewer, Role::Member] {
@@ -274,11 +286,41 @@ mod tests {
             assert_eq!(
                 check(Some(&device(role, true)), BLOBS_FETCH),
                 Decision::Deny {
-                    msg_key: diag::keys::ERR_NOT_AUTHORIZED
+                    reason: Reason::Revoked
                 },
                 "revoked {role:?} must not fetch blobs"
             );
         }
+    }
+
+    /// #1070: the three denials carry three distinct reasons.
+    #[test]
+    fn each_denial_names_its_own_reason() {
+        let deny = |reason| Decision::Deny { reason };
+        assert_eq!(check(None, methods::TIMELINE_PAGE), deny(Reason::NotPaired));
+        assert_eq!(
+            check(Some(&device(Role::Member, true)), methods::TIMELINE_PAGE),
+            deny(Reason::Revoked)
+        );
+        assert_eq!(
+            check(Some(&device(Role::Viewer, false)), methods::FLOW_OFFER),
+            deny(Reason::RoleForbidden)
+        );
+        assert_eq!(
+            check(Some(&device(Role::Member, false)), methods::PAIR_REQUEST),
+            deny(Reason::RoleForbidden),
+            "pair.request is a known door, just not for a paired role"
+        );
+        assert_eq!(
+            check(Some(&device(Role::Member, false)), "asset.delete_all"),
+            deny(Reason::UnsupportedMethod)
+        );
+        assert_eq!(
+            check(Some(&device(Role::Viewer, false)), "asset.delete_all"),
+            deny(Reason::UnsupportedMethod)
+        );
+        // No device row wins over "unknown method".
+        assert_eq!(check(None, "asset.delete_all"), deny(Reason::NotPaired));
     }
 
     #[test]

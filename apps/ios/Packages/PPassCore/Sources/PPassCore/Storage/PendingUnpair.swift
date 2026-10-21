@@ -137,7 +137,7 @@ public final class PendingUnpairFlusher: @unchecked Sendable {
                 logger.log("unpair-outbox: \(tag) no longer knows this phone (NOT_AUTHORIZED), treated as done, removed")
                 return true
             }
-            logger.log("unpair-outbox: \(tag) rejected code=\(resp.error?.code ?? "?") msg_key=\(resp.error?.msgKey ?? "?"), kept")
+            logger.log("unpair-outbox: \(tag) rejected code=\(resp.error?.code ?? "?") reason=\(DesktopReason(resp.error)), kept")
         } catch {
             logger.log("unpair-outbox: \(tag) unreachable (\(type(of: error))), kept")
         }

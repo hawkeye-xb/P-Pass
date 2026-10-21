@@ -1,15 +1,21 @@
 //! ALPN router (T-030): accept inbound ctrl streams, run every request
 //! through the authz checkpoint (§2.3), dispatch what's allowed.
 //!
-//! Denials answer `Resp{err: NOT_AUTHORIZED}` with the precise msg_key,
+//! Denials answer `Resp{err: NOT_AUTHORIZED}` with the precise reason,
 //! close the stream, and record a `authz.denied` diag event — the
 //! self-diagnosis UI and log export feed on those.
+//!
+//! #1070: before authz, every request passes the protocol-version check
+//! ([`OutdatedPeers::check`]). An incompatible peer gets `VERSION_MISMATCH`
+//! and nothing else happens — no state is written.
 
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures_core::Stream;
 use proto::msgs::methods;
-use proto::{codes, Hello, Req, Resp, RespError, PROTO_VER};
+use proto::{Hello, Reason, Req, Resp, RespError, Versions, MIN_SUPPORTED_VER, PROTO_VER};
 use storage::{Db, DiagEvent};
 use transport::{BiStream, Incoming, Transport};
 
@@ -45,6 +51,70 @@ pub const PAIR_STATUS_CAPABILITY: &str = "pair.status.v1";
 /// method and log a denial) is never probed with it.
 pub const PAIR_CANCEL_CAPABILITY: &str = "pair.cancel.v1";
 
+/// #1070: which paired-or-not peers last failed the protocol-version check,
+/// and which side must update. Process-local on purpose: the check never
+/// writes durable state (no revoke, no grant change, no device-row write).
+/// Written by the ctrl plane and the download plane, read by the IPC device
+/// list (`needs_update`). Cleared for a peer the moment it sends a
+/// compatible request; a daemon restart forgets it until the next probe.
+#[derive(Clone, Default)]
+pub struct OutdatedPeers {
+    inner: Arc<Mutex<HashMap<[u8; 32], Reason>>>,
+}
+
+impl OutdatedPeers {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The version check for one request from `peer`. `Err` is the error to
+    /// answer with: `VERSION_MISMATCH`, `phone_outdated` / `desktop_outdated`,
+    /// `params.min_ver` (the version the outdated side must reach), plus the
+    /// frozen v1 shim when the envelope itself is v1.
+    pub fn check(&self, peer: transport::NodeId, req: &Req) -> Result<(), RespError> {
+        let peer_versions = req.versions();
+        let verdict = proto::compatibility(Versions::LOCAL, peer_versions, proto::Role::Desktop);
+        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        match verdict {
+            Ok(()) => {
+                map.remove(&peer.0);
+                Ok(())
+            }
+            Err(reason) => {
+                let min_ver = match reason {
+                    Reason::DesktopOutdated => peer_versions.min_ver,
+                    _ => MIN_SUPPORTED_VER,
+                };
+                // One line per change, not per request: an old phone probes
+                // every ~30 s in the foreground.
+                if map.insert(peer.0, reason.clone()).as_ref() != Some(&reason) {
+                    tracing::info!(
+                        "#1070: version mismatch peer={peer:?} peer_ver={} peer_min={} → {reason}",
+                        peer_versions.ver,
+                        peer_versions.min_ver
+                    );
+                }
+                let mut error = RespError::new(reason).with_param("min_ver", min_ver);
+                if peer_versions.ver <= proto::version::V1 {
+                    error = error.with_v1_shim(&req.method);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Device-list projection: `"phone"` / `"desktop"` = which side must
+    /// update for this NodeId to talk to us; `None` = no known mismatch.
+    pub fn needs_update(&self, node_id: &[u8]) -> Option<&'static str> {
+        let map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        let key: [u8; 32] = node_id.try_into().ok()?;
+        map.get(&key).map(|reason| match reason {
+            Reason::DesktopOutdated => "desktop",
+            _ => "phone",
+        })
+    }
+}
+
 /// The ctrl-plane router: one per daemon process.
 #[derive(Clone)]
 pub struct Router {
@@ -62,6 +132,8 @@ pub struct Router {
     /// 默认值）时是独立空表，`timeline.subscribe` 仍能跑但 revoke 摘不到
     /// 它（测试/单组件构造场景，不影响现有行为）。
     subscriptions: SubscriptionRegistry,
+    /// #1070: shared with the IPC device list (see [`OutdatedPeers`]).
+    outdated: OutdatedPeers,
     /// Clock seam (T-070 时钟前跳剧本): production uses the wall clock;
     /// integration scenarios inject a controllable clock.
     now: std::sync::Arc<dyn Fn() -> i64 + Send + Sync>,
@@ -79,6 +151,7 @@ impl Router {
             download: None,
             events: None,
             subscriptions: SubscriptionRegistry::new(),
+            outdated: OutdatedPeers::new(),
             now: std::sync::Arc::new(unix_ms_now),
         }
     }
@@ -98,6 +171,12 @@ impl Router {
         self
     }
 
+    /// #1070: share the version-mismatch registry with the IPC device list.
+    pub fn with_outdated_peers(mut self, outdated: OutdatedPeers) -> Self {
+        self.outdated = outdated;
+        self
+    }
+
     /// Override the clock (T-070): lets integration scenarios simulate a
     /// wall-clock jump without touching the system clock.
     pub fn with_clock(mut self, now: impl Fn() -> i64 + Send + Sync + 'static) -> Self {
@@ -112,14 +191,14 @@ impl Router {
     }
 
     /// Attach the pairing engine (T-031). Without it, `pair.request`
-    /// answers `err.unsupported`.
+    /// answers `unsupported_method`.
     pub fn with_pairing(mut self, pairing: crate::pairing::Pairing) -> Self {
         self.pairing = Some(pairing);
         self
     }
 
     /// Attach the backup engine (T-032). Without it, `backup.*` answers
-    /// `err.unsupported`.
+    /// `unsupported_method`.
     pub fn with_backup(mut self, backup: crate::backup::BackupEngine) -> Self {
         self.backup = Some(backup);
         self
@@ -132,7 +211,7 @@ impl Router {
     }
 
     /// Attach the query engine (T-033). Without it, browse methods
-    /// answer `err.unsupported`.
+    /// answer `unsupported_method`.
     pub fn with_query(mut self, query: crate::query::QueryEngine) -> Self {
         self.query = Some(query);
         self
@@ -172,7 +251,7 @@ impl Router {
         // Data-plane dispatch: download connections never speak ctrl.
         if conn.alpn() == transport::ALPN_DOWNLOAD {
             if let Some(download) = &self.download {
-                download.serve_conn(conn).await;
+                download.serve_conn(conn, &self.outdated).await;
             }
             return;
         }
@@ -201,10 +280,7 @@ impl Router {
             Ok(Some(frame)) => match proto::codec::decode::<Req>(&frame) {
                 Ok(req) => req,
                 Err(_) => {
-                    let resp = Resp::err(
-                        String::new(),
-                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-                    );
+                    let resp = Resp::err(String::new(), RespError::new(Reason::BadRequest));
                     let _ = self.send(stream, &resp).await;
                     return false;
                 }
@@ -212,30 +288,32 @@ impl Router {
             _ => return false, // clean finish or broken stream
         };
 
+        // #1070: version first — an incompatible peer is told to update and
+        // nothing else is looked at or written (not even a diag row: an old
+        // phone probes every ~30 s).
+        if let Err(error) = self.outdated.check(peer, &req) {
+            let _ = self.send(stream, &Resp::err(req.id.clone(), error)).await;
+            return false;
+        }
+
         let device = match self.db.get_device(&peer.0).await {
             Ok(d) => d,
             Err(e) => {
                 tracing::error!("device lookup failed: {e}");
-                let resp = Resp::err(
-                    req.id.clone(),
-                    RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
-                );
+                let resp = Resp::err(req.id.clone(), RespError::new(Reason::Internal));
                 let _ = self.send(stream, &resp).await;
                 return false;
             }
         };
 
         match authz::check(device.as_ref(), &req.method) {
-            Decision::Deny { msg_key } => {
+            Decision::Deny { reason } => {
                 // QA-17：diag 必须先于拒答响应落库。曾经先发响应再记
                 // diag——客户端收到 NOT_AUTHORIZED 的瞬间即可读 diag，
                 // 两条 sqlx 命令的调度顺序没保证，整轮并行下偶发断言
                 // 跑在 INSERT 之前（压 29 轮 1 红，见 #357）。
-                self.record_denial(peer, &req.method, msg_key).await;
-                let resp = Resp::err(
-                    req.id.clone(),
-                    RespError::new(codes::NOT_AUTHORIZED, msg_key),
-                );
+                self.record_denial(peer, &req.method, &reason).await;
+                let resp = Resp::err(req.id.clone(), RespError::new(reason));
                 let _ = self.send(stream, &resp).await;
                 false // 关流 (§2.3: deny closes the connection)
             }
@@ -442,17 +520,11 @@ impl Router {
                 };
                 match serde_json::to_value(&ours) {
                     Ok(v) => Resp::ok(req.id.clone(), v),
-                    Err(_) => Resp::err(
-                        req.id.clone(),
-                        RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
-                    ),
+                    Err(_) => Resp::err(req.id.clone(), RespError::new(Reason::Internal)),
                 }
             }
             // Authorized but not implemented yet (T-031..T-033 land them).
-            _ => Resp::err(
-                req.id.clone(),
-                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-            ),
+            _ => Resp::err(req.id.clone(), RespError::new(Reason::UnsupportedMethod)),
         }
     }
 
@@ -460,29 +532,13 @@ impl Router {
     /// thumbnails (base64 JPEG in-frame), blob tickets for originals.
     async fn handle_query(&self, req: &Req) -> Resp {
         let Some(query) = &self.query else {
-            return Resp::err(
-                req.id.clone(),
-                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-            );
+            return Resp::err(req.id.clone(), RespError::new(Reason::UnsupportedMethod));
         };
-        let bad_request = || {
-            Resp::err(
-                req.id.clone(),
-                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-            )
-        };
-        let not_found = || {
-            Resp::err(
-                req.id.clone(),
-                RespError::new(codes::NOT_FOUND, diag::keys::ERR_UNSUPPORTED),
-            )
-        };
+        let bad_request = || Resp::err(req.id.clone(), RespError::new(Reason::BadRequest));
+        let not_found = || Resp::err(req.id.clone(), RespError::new(Reason::NotFound));
         let ok_or = |id: &str, v: Result<serde_json::Value, serde_json::Error>| match v {
             Ok(v) => Resp::ok(id.to_string(), v),
-            Err(_) => Resp::err(
-                id.to_string(),
-                RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
-            ),
+            Err(_) => Resp::err(id.to_string(), RespError::new(Reason::Internal)),
         };
         match req.method.as_str() {
             methods::TIMELINE_PAGE => {
@@ -534,16 +590,10 @@ impl Router {
     /// batch backup engine.
     async fn handle_flow_delivery(&self, peer: transport::NodeId, req: &Req) -> Resp {
         let Some(delivery) = &self.flow_delivery else {
-            return Resp::err(
-                req.id.clone(),
-                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-            );
+            return Resp::err(req.id.clone(), RespError::new(Reason::UnsupportedMethod));
         };
         let Ok(flow) = serde_json::from_value::<proto::FlowFetchRequest>(req.params.clone()) else {
-            return Resp::err(
-                req.id.clone(),
-                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-            );
+            return Resp::err(req.id.clone(), RespError::new(Reason::BadRequest));
         };
         // NET-24: `flow.offer` used to be hard-wired to a null reply
         // (`.map(|_| None)`), which threw away a terminal receipt the
@@ -554,36 +604,17 @@ impl Router {
         let result = delivery.offer(peer, &flow).await.map(serde_json::to_value);
         match result {
             Ok(Ok(value)) => Resp::ok(req.id.clone(), value),
-            Ok(Err(_)) => Resp::err(
-                req.id.clone(),
-                RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
-            ),
-            Err(crate::flow_delivery::DeliveryError::GuardMismatch)
-            | Err(crate::flow_delivery::DeliveryError::Cancelled) => Resp::err(
-                req.id.clone(),
-                RespError::new(codes::NOT_AUTHORIZED, diag::keys::ERR_NOT_AUTHORIZED),
-            ),
-            // #413 contract §5: a Desktop-side storage refusal names its
-            // reason in `msg_key` (`storage_full` / `library_unavailable` /
-            // `storage_failed`) so the phone can wait with the right cause
-            // instead of counting a per-item failure.
-            Err(error) if error.peer_failure().is_some() => {
+            Ok(Err(_)) => Resp::err(req.id.clone(), RespError::new(Reason::Internal)),
+            // #413 contract §5 / #1070: every refusal names its reason —
+            // a Desktop-side storage refusal (`storage_full` /
+            // `library_unavailable` / `storage_failed`) lets the phone wait
+            // with the right cause instead of counting a per-item failure.
+            Err(error) => {
                 tracing::warn!(
                     "flow delivery from {peer:?} refused ({}): {error}",
                     error.wire_code()
                 );
-                let code = match error.peer_failure() {
-                    Some(crate::flow_delivery::PeerFailure::StorageFull) => codes::STORAGE_FULL,
-                    _ => codes::INTERNAL,
-                };
-                Resp::err(req.id.clone(), RespError::new(code, error.wire_code()))
-            }
-            Err(error) => {
-                tracing::warn!("flow delivery from {peer:?} failed: {error}");
-                Resp::err(
-                    req.id.clone(),
-                    RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
-                )
+                Resp::err(req.id.clone(), RespError::new(error.wire_code()))
             }
         }
     }
@@ -598,65 +629,39 @@ impl Router {
     /// network condition.
     async fn handle_flow_control(&self, peer: transport::NodeId, req: &Req) -> Resp {
         let Some(delivery) = &self.flow_delivery else {
-            return Resp::err(
-                req.id.clone(),
-                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-            );
+            return Resp::err(req.id.clone(), RespError::new(Reason::UnsupportedMethod));
         };
         let Ok(tuple) = serde_json::from_value::<proto::FlowTupleRef>(req.params.clone()) else {
-            return Resp::err(
-                req.id.clone(),
-                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-            );
+            return Resp::err(req.id.clone(), RespError::new(Reason::BadRequest));
         };
         match req.method.as_str() {
             methods::FLOW_STATUS => match delivery.status(peer, &tuple).await {
                 Ok(reply) => match serde_json::to_value(reply) {
                     Ok(value) => Resp::ok(req.id.clone(), value),
-                    Err(_) => Resp::err(
-                        req.id.clone(),
-                        RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
-                    ),
+                    Err(_) => Resp::err(req.id.clone(), RespError::new(Reason::Internal)),
                 },
-                // status is read-only and has no GuardMismatch path in
+                // status is read-only and has no GrantNotFound path in
                 // practice (a missing/mismatched tuple resolves to
                 // `not_found` inside `status()`, not an error) — this arm
                 // exists for exhaustiveness against DeliveryError's other
                 // variants (storage failure, etc.).
                 Err(error) => {
                     tracing::warn!("flow status from {peer:?} failed: {error}");
-                    Resp::err(
-                        req.id.clone(),
-                        RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
-                    )
+                    Resp::err(req.id.clone(), RespError::new(Reason::Internal))
                 }
             },
             methods::FLOW_SUSPEND => match delivery.suspend(peer, &tuple).await {
                 Ok(()) => Resp::ok(req.id.clone(), serde_json::Value::Null),
-                Err(crate::flow_delivery::DeliveryError::GuardMismatch) => Resp::err(
-                    req.id.clone(),
-                    RespError::new(codes::NOT_AUTHORIZED, diag::keys::ERR_NOT_AUTHORIZED),
-                ),
                 Err(error) => {
                     tracing::warn!("flow suspend from {peer:?} failed: {error}");
-                    Resp::err(
-                        req.id.clone(),
-                        RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
-                    )
+                    Resp::err(req.id.clone(), RespError::new(error.wire_code()))
                 }
             },
             methods::FLOW_CANCEL_TUPLE => match delivery.cancel_by_tuple(peer, &tuple).await {
                 Ok(()) => Resp::ok(req.id.clone(), serde_json::Value::Null),
-                Err(crate::flow_delivery::DeliveryError::GuardMismatch) => Resp::err(
-                    req.id.clone(),
-                    RespError::new(codes::NOT_AUTHORIZED, diag::keys::ERR_NOT_AUTHORIZED),
-                ),
                 Err(error) => {
                     tracing::warn!("flow cancel_tuple from {peer:?} failed: {error}");
-                    Resp::err(
-                        req.id.clone(),
-                        RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
-                    )
+                    Resp::err(req.id.clone(), RespError::new(error.wire_code()))
                 }
             },
             _ => unreachable!(
@@ -683,25 +688,16 @@ impl Router {
             &self.flow_delivery,
             serde_json::from_value::<proto::FlowSupersedeRequest>(req.params.clone()),
         ) else {
-            return Resp::err(
-                req.id.clone(),
-                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-            );
+            return Resp::err(req.id.clone(), RespError::new(Reason::BadRequest));
         };
         match delivery.supersede(peer, &request).await {
             Ok(reply) => match serde_json::to_value(reply) {
                 Ok(value) => Resp::ok(req.id.clone(), value),
-                Err(_) => Resp::err(
-                    req.id.clone(),
-                    RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
-                ),
+                Err(_) => Resp::err(req.id.clone(), RespError::new(Reason::Internal)),
             },
             Err(error) => {
                 tracing::warn!("flow supersede from {peer:?} failed: {error}");
-                Resp::err(
-                    req.id.clone(),
-                    RespError::new(codes::INTERNAL, error.wire_code()),
-                )
+                Resp::err(req.id.clone(), RespError::new(error.wire_code()))
             }
         }
     }
@@ -709,10 +705,7 @@ impl Router {
     async fn handle_flow_audit_submit(&self, peer: transport::NodeId, req: &Req) -> Resp {
         let Ok(submit) = serde_json::from_value::<proto::FlowAuditSubmit>(req.params.clone())
         else {
-            return Resp::err(
-                req.id.clone(),
-                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-            );
+            return Resp::err(req.id.clone(), RespError::new(Reason::BadRequest));
         };
         let mut accepted = Vec::with_capacity(submit.events.len());
         for event in &submit.events {
@@ -748,10 +741,7 @@ impl Router {
             event_ids: accepted,
         }) {
             Ok(v) => Resp::ok(req.id.clone(), v),
-            Err(_) => Resp::err(
-                req.id.clone(),
-                RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
-            ),
+            Err(_) => Resp::err(req.id.clone(), RespError::new(Reason::Internal)),
         }
     }
 
@@ -760,17 +750,10 @@ impl Router {
     /// retries and the pipeline converges (idempotent).
     async fn handle_backup(&self, peer: transport::NodeId, req: &Req) -> Resp {
         let Some(backup) = &self.backup else {
-            return Resp::err(
-                req.id.clone(),
-                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-            );
+            return Resp::err(req.id.clone(), RespError::new(Reason::UnsupportedMethod));
         };
-        let internal_err = |id: &str| {
-            Resp::err(
-                id.to_string(),
-                RespError::new(codes::INTERNAL, diag::keys::ERR_BACKUP_FAILED),
-            )
-        };
+        let internal_err =
+            |id: &str| Resp::err(id.to_string(), RespError::new(Reason::BackupFailed));
         match req.method.as_str() {
             methods::BACKUP_BEGIN => {
                 backup.begin(peer);
@@ -782,10 +765,7 @@ impl Router {
             methods::BACKUP_MANIFEST => {
                 let Ok(m) = serde_json::from_value::<proto::BackupManifest>(req.params.clone())
                 else {
-                    return Resp::err(
-                        req.id.clone(),
-                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-                    );
+                    return Resp::err(req.id.clone(), RespError::new(Reason::BadRequest));
                 };
                 match backup.manifest(peer, &m).await {
                     Ok(missing) => match serde_json::to_value(&missing) {
@@ -802,20 +782,16 @@ impl Router {
                 let Ok(query) =
                     serde_json::from_value::<proto::BackupPresenceQuery>(req.params.clone())
                 else {
-                    return Resp::err(
-                        req.id.clone(),
-                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-                    );
+                    return Resp::err(req.id.clone(), RespError::new(Reason::BadRequest));
                 };
                 match backup.presence(&query.hashes).await {
                     Ok(missing) => match serde_json::to_value(&missing) {
                         Ok(v) => Resp::ok(req.id.clone(), v),
                         Err(_) => internal_err(&req.id),
                     },
-                    Err(crate::backup::BackupError::InvalidPresenceQuery) => Resp::err(
-                        req.id.clone(),
-                        RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-                    ),
+                    Err(crate::backup::BackupError::InvalidPresenceQuery) => {
+                        Resp::err(req.id.clone(), RespError::new(Reason::BadRequest))
+                    }
                     Err(e) => {
                         tracing::warn!("backup.presence from {peer:?} failed: {e}");
                         internal_err(&req.id)
@@ -879,16 +855,10 @@ impl Router {
     /// a prober learns nothing about which part failed.
     async fn handle_pair(&self, peer: transport::NodeId, req: &Req) -> Resp {
         let Some(pairing) = &self.pairing else {
-            return Resp::err(
-                req.id.clone(),
-                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-            );
+            return Resp::err(req.id.clone(), RespError::new(Reason::UnsupportedMethod));
         };
         let Ok(pair_req) = serde_json::from_value::<proto::PairRequest>(req.params.clone()) else {
-            return Resp::err(
-                req.id.clone(),
-                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-            );
+            return Resp::err(req.id.clone(), RespError::new(Reason::BadRequest));
         };
         // #1050: the blocking shape (hold the RPC open until the owner
         // clicks) is retired. A request that does not ask for accept-then-
@@ -897,10 +867,7 @@ impl Router {
         // decode. Checked before the token so an old phone never burns a
         // one-time token on a reply it cannot read.
         if !pair_req.ack_then_poll {
-            return Resp::err(
-                req.id.clone(),
-                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-            );
+            return Resp::err(req.id.clone(), RespError::new(Reason::PhoneOutdated));
         }
         // NET-10 (#128): accept-then-poll — answer as soon as the request
         // is queued; the verdict is read through `pair.status`. A bad or
@@ -915,12 +882,9 @@ impl Router {
                 },
             ),
             Err(_) => {
-                self.record_denial(peer, methods::PAIR_REQUEST, diag::keys::ERR_NOT_AUTHORIZED)
+                self.record_denial(peer, methods::PAIR_REQUEST, &Reason::PairTokenInvalid)
                     .await;
-                Resp::err(
-                    req.id.clone(),
-                    RespError::new(codes::NOT_AUTHORIZED, diag::keys::ERR_NOT_AUTHORIZED),
-                )
+                Resp::err(req.id.clone(), RespError::new(Reason::PairTokenInvalid))
             }
         }
     }
@@ -932,17 +896,11 @@ impl Router {
     /// as `not_found`, same as an id that never existed.
     fn handle_pair_status(&self, peer: transport::NodeId, req: &Req) -> Resp {
         let Some(pairing) = &self.pairing else {
-            return Resp::err(
-                req.id.clone(),
-                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-            );
+            return Resp::err(req.id.clone(), RespError::new(Reason::UnsupportedMethod));
         };
         let Ok(query) = serde_json::from_value::<proto::PairStatusRequest>(req.params.clone())
         else {
-            return Resp::err(
-                req.id.clone(),
-                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-            );
+            return Resp::err(req.id.clone(), RespError::new(Reason::BadRequest));
         };
         let state = pairing.status(peer, &query.request_id, (self.now)());
         ok_json(&req.id, &self.pair_status_reply(state))
@@ -956,17 +914,11 @@ impl Router {
     /// longer be approved), or the verdict that had already landed.
     async fn handle_pair_cancel(&self, peer: transport::NodeId, req: &Req) -> Resp {
         let Some(pairing) = &self.pairing else {
-            return Resp::err(
-                req.id.clone(),
-                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-            );
+            return Resp::err(req.id.clone(), RespError::new(Reason::UnsupportedMethod));
         };
         let Ok(query) = serde_json::from_value::<proto::PairStatusRequest>(req.params.clone())
         else {
-            return Resp::err(
-                req.id.clone(),
-                RespError::new(codes::INVALID_REQUEST, diag::keys::ERR_UNSUPPORTED),
-            );
+            return Resp::err(req.id.clone(), RespError::new(Reason::BadRequest));
         };
         let state = pairing.cancel(peer, &query.request_id, (self.now)()).await;
         ok_json(&req.id, &self.pair_status_reply(state))
@@ -978,33 +930,24 @@ impl Router {
         state: Option<crate::pairing::PairState>,
     ) -> proto::PairStatusReply {
         use crate::pairing::PairState;
+        use proto::PairStatusState as S;
+        let only = |state| proto::PairStatusReply {
+            state,
+            accepted: None,
+        };
         match state {
-            Some(PairState::Pending) => proto::PairStatusReply {
-                state: "pending".into(),
-                ..Default::default()
-            },
+            Some(PairState::Pending) => only(S::Pending),
             // Idempotent replay: the same payload the legacy reply carries.
             Some(PairState::Accepted { pairing_epoch }) => proto::PairStatusReply {
-                state: "accepted".into(),
+                state: S::Accepted,
                 accepted: Some(proto::PairAccepted {
                     storage_device_name: self.device_name.clone(),
                     pairing_epoch,
                 }),
-                msg_key: None,
             },
-            Some(PairState::Denied) => proto::PairStatusReply {
-                state: "denied".into(),
-                accepted: None,
-                msg_key: Some(diag::keys::ERR_NOT_AUTHORIZED.into()),
-            },
-            Some(PairState::Expired) => proto::PairStatusReply {
-                state: "expired".into(),
-                ..Default::default()
-            },
-            None => proto::PairStatusReply {
-                state: "not_found".into(),
-                ..Default::default()
-            },
+            Some(PairState::Denied) => only(S::Denied),
+            Some(PairState::Expired) => only(S::Expired),
+            None => only(S::NotFound),
         }
     }
 
@@ -1070,10 +1013,7 @@ impl Router {
                 self.subscriptions.close(peer);
                 Resp::ok(req.id.clone(), serde_json::json!({ "unpaired": true }))
             }
-            Err(_) => Resp::err(
-                req.id.clone(),
-                RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
-            ),
+            Err(_) => Resp::err(req.id.clone(), RespError::new(Reason::Internal)),
         }
     }
 
@@ -1084,10 +1024,10 @@ impl Router {
         stream.finish()
     }
 
-    async fn record_denial(&self, peer: transport::NodeId, method: &str, msg_key: &str) {
+    async fn record_denial(&self, peer: transport::NodeId, method: &str, reason: &Reason) {
         let detail =
             // #544：diag 库里只存前缀（`{:?}` = 前 5 字节），全长 NodeId 不落库。
-            format!("{{\"peer\":\"{peer:?}\",\"method\":\"{method}\",\"msg_key\":\"{msg_key}\"}}",);
+            format!("{{\"peer\":\"{peer:?}\",\"method\":\"{method}\",\"reason\":\"{reason}\"}}",);
         let event = DiagEvent {
             ts: unix_ms_now(),
             kind: "authz.denied".into(),
@@ -1104,10 +1044,7 @@ impl Router {
 fn ok_json(id: &str, value: &impl serde::Serialize) -> Resp {
     match serde_json::to_value(value) {
         Ok(v) => Resp::ok(id.to_string(), v),
-        Err(_) => Resp::err(
-            id.to_string(),
-            RespError::new(codes::INTERNAL, diag::keys::ERR_UNSUPPORTED),
-        ),
+        Err(_) => Resp::err(id.to_string(), RespError::new(Reason::Internal)),
     }
 }
 

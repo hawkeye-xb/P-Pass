@@ -112,9 +112,9 @@ final class ForegroundHeartbeatTests: XCTestCase {
     }
 
     func testRejectedAsNotPairedOrNotAuthorizedReportsPairingLostForThatEpoch() async throws {
-        for key in ["err.not_paired", "err.not_authorized"] {
+        for key in ["not_paired", "revoked"] {
             let r = Rig()
-            r.desktop.helloResult.set(.failure(DesktopRejected(msgKey: key, method: "hello")))
+            r.desktop.helloResult.set(.failure(DesktopRejected(reason: DesktopReason(wire: key), method: "hello")))
             r.heartbeat.start()
             await eventually(key) { r.lost.get() == ["e1"] }
             await settle()
@@ -161,7 +161,7 @@ final class ForegroundHeartbeatTests: XCTestCase {
 
     func testARejectionOtherThanPairingLostStillMeansTheDesktopAnswered() async {
         let r = Rig()
-        r.desktop.helloResult.set(.failure(DesktopRejected(msgKey: "err.busy", method: "hello")))
+        r.desktop.helloResult.set(.failure(DesktopRejected(reason: DesktopReason(wire: "bad_request"), method: "hello")))
         r.heartbeat.start()
         await eventually { r.wakes.get() == 1 }
         XCTAssertEqual(r.sentinel.load().lastReachableAt, 5_000_000)

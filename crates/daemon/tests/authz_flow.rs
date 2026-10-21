@@ -66,8 +66,8 @@ async fn unpaired_node_gets_not_authorized() {
     let resp = call(&ctp, dtp.node_id(), "timeline.page").await;
     assert!(!resp.ok);
     let err = resp.error.expect("error payload");
-    assert_eq!(err.code, codes::NOT_AUTHORIZED);
-    assert_eq!(err.msg_key, "err.not_paired");
+    assert_eq!(err.code(), codes::NOT_AUTHORIZED);
+    assert_eq!(err.reason(), &proto::Reason::NotPaired);
 
     // The denial is on the diagnostic record (§2.3: 记诊断事件).
     let events = db.list_diag(10).await.unwrap();
@@ -137,18 +137,18 @@ async fn viewer_browses_but_backup_is_denied() {
         .await
         .unwrap();
 
-    // Browsing methods reach dispatch (not implemented yet → err.unsupported,
-    // but crucially NOT not_authorized).
+    // Browsing methods reach dispatch (no query engine in this harness →
+    // unsupported_method, but crucially NOT an authorization denial).
     let resp = call(&ctp, dtp.node_id(), "timeline.page").await;
     let err = resp.error.expect("unimplemented for now");
-    assert_eq!(err.code, codes::INVALID_REQUEST);
-    assert_eq!(err.msg_key, "err.unsupported");
+    assert_eq!(err.code(), codes::INVALID_REQUEST);
+    assert_eq!(err.reason(), &proto::Reason::UnsupportedMethod);
 
     // backup.* is cut off at the checkpoint.
     let resp = call(&ctp, dtp.node_id(), "backup.begin").await;
     let err = resp.error.expect("denied");
-    assert_eq!(err.code, codes::NOT_AUTHORIZED);
-    assert_eq!(err.msg_key, "err.not_authorized");
+    assert_eq!(err.code(), codes::NOT_AUTHORIZED);
+    assert_eq!(err.reason(), &proto::Reason::RoleForbidden);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -176,6 +176,6 @@ async fn revoked_device_is_shut_out_at_once() {
         .unwrap());
     let resp = call(&ctp, dtp.node_id(), "hello").await;
     let err = resp.error.expect("denied after revocation");
-    assert_eq!(err.code, codes::NOT_AUTHORIZED);
-    assert_eq!(err.msg_key, "err.not_authorized");
+    assert_eq!(err.code(), codes::NOT_AUTHORIZED);
+    assert_eq!(err.reason(), &proto::Reason::Revoked);
 }

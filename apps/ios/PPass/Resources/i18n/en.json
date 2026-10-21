@@ -318,5 +318,10 @@
   "ui.ios_background_refresh_restricted": "This iPhone doesn't allow Background App Refresh for P-Pass (Screen Time or device management may be limiting it), so it backs up only while open.",
   "ui.ios_wait_open_app": "P-Pass is in the background. Backup continues when you return to it.",
   "ui.ios_wait_icloud_original": "This photo's original is in iCloud. It will be fetched and backed up once you're online.",
-  "ui.ios_wait_phone_storage_full": "Your phone is out of storage. Backup continues once space is freed."
+  "ui.ios_wait_phone_storage_full": "Your phone is out of storage. Backup continues once space is freed.",
+  "ui.err_generic": "Something went wrong. Please try again; if it keeps happening, export the logs from Settings.",
+  "ui.err_phone_outdated": "The phone's app is out of date. Update the app on the phone and try again.",
+  "ui.err_desktop_outdated": "This computer's P-Pass is out of date. Update it and try again.",
+  "ui.device_needs_update_phone": "Phone app needs an update",
+  "ui.device_needs_update_desktop": "Update P-Pass on this computer"
 }

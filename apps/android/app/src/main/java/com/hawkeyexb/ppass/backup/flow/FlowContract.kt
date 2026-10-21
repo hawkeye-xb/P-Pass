@@ -35,7 +35,8 @@ data class DesktopHealth(
 }
 
 /** 对端失败的具体原因：桌面自身的问题，不计入这张照片的失败次数。 */
-enum class PeerFailureKind { STORAGE_FULL, LIBRARY_UNAVAILABLE, STORAGE_ERROR }
+/** #1072：DESKTOP_INTERNAL = 桌面回 `internal`（电脑上的 P-Pass 出错了）。 */
+enum class PeerFailureKind { STORAGE_FULL, LIBRARY_UNAVAILABLE, STORAGE_ERROR, DESKTOP_INTERNAL }
 
 /** UI 与 FGS 通知读的唯一视图。[pending] 是现算的待办张数。 */
 data class EngineView(

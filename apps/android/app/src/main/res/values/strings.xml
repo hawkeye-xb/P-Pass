@@ -34,6 +34,16 @@
     <string name="pair_lapsed_title">This pairing didn\'t go through.</string>
     <string name="pair_failed_title">Could not reach the computer.</string>
     <string name="pair_failed_body">Make sure the computer is on and both devices have internet, then scan again.</string>
+    <!-- #1072: pairing result details (decided on the desktop's reason / pair.status; worded by the phone) -->
+    <string name="pair_refused_detail_token_invalid">This pairing code is invalid or has already been used. Generate a new one on the computer and scan again.</string>
+    <string name="pair_refused_detail_denied">The request was declined on the computer.</string>
+    <string name="pair_refused_detail_expired">Nobody confirmed on the computer, so this pairing request expired. Generate a new code on the computer and scan again.</string>
+    <string name="pair_refused_detail_restarted">The computer\'s service restarted, so this pairing request is no longer valid. Generate a new code on the computer and scan again.</string>
+    <string name="error_generic">Something went wrong. Please try again; if it keeps happening, update P-Pass on both the phone and the computer.</string>
+    <string name="state_waiting_phone_outdated">P-Pass on this phone is out of date. Please update to the latest version</string>
+    <string name="state_waiting_desktop_outdated">P-Pass on the computer is out of date. Please update it on the computer</string>
+    <string name="pair_needs_update_title">Update needed</string>
+    <string name="state_waiting_desktop_internal">P-Pass on the computer ran into an error</string>
     <string name="scan_again">Scan again</string>
     <!-- M6 completion screen (full-page-states doc): shown right after the first backup is triggered. -->
     <string name="backup_started_title">%1$s photos, on their way home.</string>

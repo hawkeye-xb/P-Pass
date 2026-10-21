@@ -202,7 +202,7 @@ public final class TimelineLive: @unchecked Sendable {
             } catch is CancellationError {
                 return
             } catch let rejected as SubscribeRejected {
-                logger.log("timeline subscribe: rejected by the desktop (\(rejected.code): \(rejected.msgKey))")
+                logger.log("timeline subscribe: rejected by the desktop (\(rejected.code): \(rejected.reason))")
             } catch {
                 logger.log("timeline subscribe: ended (\(error))")
             }

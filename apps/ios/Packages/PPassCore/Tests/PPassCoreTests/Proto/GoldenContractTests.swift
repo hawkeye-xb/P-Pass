@@ -54,6 +54,12 @@ final class GoldenContractTests: XCTestCase {
         "snapshots__flow_status_reply_active": roundtrip(FlowStatusReply.self),
         "snapshots__flow_audit_submit": roundtrip(FlowAuditSubmit.self),
         "snapshots__flow_audit_accepted": roundtrip(FlowAuditAccepted.self),
+        // #1070 协议 v2
+        "snapshots__resp_err_with_params": roundtrip(Resp.self),
+        "snapshots__resp_err_v1_shim_flow": roundtrip(Resp.self),
+        "snapshots__resp_err_v1_shim_pair": roundtrip(Resp.self),
+        "snapshots__flow_failed_push": roundtrip(FlowFailedPush.self),
+        "snapshots__reasons_registry": roundtrip([RespError].self),
     ]
 
     /// decode → encode，并确认再 decode 一次与第一次相等（往返稳定）。

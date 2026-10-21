@@ -28,7 +28,7 @@ class RemoteSupersede(private val client: DaemonClient) {
             ProtoJson.encodeToJsonElement(FlowSupersedeRequest.serializer(), request),
             timeoutMs = SUPERSEDE_TIMEOUT_MS,
         )
-        check(response.ok) { "flow.supersede rejected: ${response.error?.msgKey}" }
+        check(response.ok) { "flow.supersede rejected: ${response.error?.reason}" }
         return supersedeOutcomeOf(ProtoJson.decodeFromJsonElement(FlowSupersedeReply.serializer(), response.result!!))
     }
 }

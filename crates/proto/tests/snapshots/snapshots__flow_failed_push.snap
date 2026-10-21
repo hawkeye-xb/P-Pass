@@ -1,0 +1,11 @@
+---
+source: crates/proto/tests/snapshots.rs
+expression: json
+---
+{
+  "node_id": "abababababababababababababababababababababababababababababababab",
+  "queue_sequence": 7,
+  "pairing_epoch": "epoch-1",
+  "lease_token": "lease-7",
+  "reason": "storage_full"
+}

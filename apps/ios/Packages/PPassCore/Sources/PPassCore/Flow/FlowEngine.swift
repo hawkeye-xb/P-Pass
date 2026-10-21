@@ -415,7 +415,11 @@ public actor FlowEngine {
         case .desktopUnreachable: wake = true
         case .desktopStorageFull, .desktopLibraryUnavailable, .desktopStorageError: wake = waitReasonOf(desktopHealth) != nil
         // iCloud 原图在等的是互联网，不是桌面——连得上桌面证明不了 iCloud 拉得到。
-        case .notPaired, .disabled, .wifi, .battery, .executionBlocked, .unexpectedError, .originalUnavailable, .localStorageFull: wake = false
+        // #1072 / #1073：心跳只在版本兼容时才报可达——能走到这里说明已经不再过旧。
+        case .phoneOutdated, .desktopOutdated: wake = true
+        // 健康探针看不出 `internal`：同「探测报健康的对端失败」，交给退避探测。
+        case .notPaired, .disabled, .wifi, .battery, .executionBlocked, .unexpectedError, .originalUnavailable, .localStorageFull,
+             .desktopInternal: wake = false
         }
         guard wake else { return }
         log("desktop reachable (foreground heartbeat) while waiting for \(waiting.rawValue): waking the loop")
@@ -566,6 +570,10 @@ public actor FlowEngine {
             return settle(.desktopUnreachable)
         case .pairingLost:
             return settle(.notPaired)
+        case let .versionMismatch(side):
+            // #1069：握手时就发现版本不兼容——不申请租约、不发起传输、不计失败、不动配对。
+            log("cycle \(names): protocol version mismatch (\(side.rawValue) outdated); no lease, no attempt counted")
+            return settle(waitReasonOf(side))
         case let .reachable(advertised, health, _):
             if let advertised, !advertised.isBlank, advertised != pairingEpoch() { onEpochAdvertised(advertised) }
             desktopHealth = health
@@ -1089,6 +1097,10 @@ public actor FlowEngine {
             return .exit(waitReasonOf(kind))
         case .pairingLost:
             return .exit(.notPaired)
+        case let .versionMismatch(side):
+            // 握手之后才收到版本拒绝（兜底）：同样不计次数、不动配对，order 保持可续传。
+            log("order \(order.id): protocol version mismatch (\(side.rawValue) outdated); leaving it resumable")
+            return .exit(waitReasonOf(side))
         }
     }
 

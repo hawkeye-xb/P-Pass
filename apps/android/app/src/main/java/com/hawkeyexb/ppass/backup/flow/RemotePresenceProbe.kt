@@ -26,7 +26,7 @@ class RemotePresenceProbe(private val client: DaemonClient) {
             Methods.BACKUP_PRESENCE,
             ProtoJson.encodeToJsonElement(BackupPresenceQuery.serializer(), query),
         )
-        check(response.ok) { "backup.presence rejected: ${response.error?.msgKey}" }
+        check(response.ok) { "backup.presence rejected: ${response.error?.reason}" }
         return ProtoJson.decodeFromJsonElement(BackupMissing.serializer(), response.result!!).hashes.toSet()
     }
 }

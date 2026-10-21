@@ -30,8 +30,8 @@ import org.junit.Test
 @OptIn(ExperimentalCoroutinesApi::class)
 class C522SubscribeRejectedTest {
 
-    // daemon router.rs：鉴权拒绝 = Resp::err(NOT_AUTHORIZED, msg_key)；允许 = Resp::ok({"subscribed":true}) 再推一次当前态。
-    private val deny = Json.parseToJsonElement("""{"id":"r1","ok":false,"error":{"code":"NOT_AUTHORIZED","msg_key":"err.not_authorized"}}""")
+    // daemon router.rs：鉴权拒绝 = Resp::err(revoked / not_paired)；允许 = Resp::ok({"subscribed":true}) 再推一次当前态。
+    private val deny = Json.parseToJsonElement("""{"id":"r1","ok":false,"error":{"code":"NOT_AUTHORIZED","reason":"revoked"}}""")
     private val ack = Json.parseToJsonElement("""{"id":"r1","ok":true,"result":{"subscribed":true}}""")
     private val invalidated = Json.parseToJsonElement("""{"event":"timeline.invalidated","data":{}}""")
 
@@ -48,7 +48,7 @@ class C522SubscribeRejectedTest {
             readSubscriptionFrames(frames(deny), onConnected = { connected++ }, onFlowEvent = { _, _ -> }, onInvalidated = {})
         } catch (rejected: SubscribeRejectedException) {
             assertEquals("NOT_AUTHORIZED", rejected.code)
-            assertEquals("err.not_authorized", rejected.msgKey)
+            assertEquals("revoked", rejected.reason)
             assertEquals("被拒不得算连上", 0, connected)
             return@runTest
         }
@@ -103,7 +103,7 @@ class C522SubscribeRejectedTest {
         advanceTimeBy(61_000)
         runCurrent()
         assertTrue(ch.calls > 1)
-        assertEquals("subscribe: rejected by the desktop (NOT_AUTHORIZED: err.not_authorized)", logs.first())
+        assertEquals("subscribe: rejected by the desktop (NOT_AUTHORIZED: revoked)", logs.first())
         assertFalse("撤销后不得出现 connected", logs.any { it == "subscribe: connected" })
         assertFalse(h.state.subscribeConnected)
         assertEquals(ch.calls, logs.count { it.startsWith("subscribe: rejected") })

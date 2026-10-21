@@ -49,7 +49,7 @@ pub async fn await_receipt(
                     .expect("a completed status carries its receipt"))
             }
             "cancelled" => return Err(DeliveryError::Cancelled),
-            "not_found" => return Err(DeliveryError::GuardMismatch),
+            "not_found" => return Err(DeliveryError::GrantNotFound),
             _ => {}
         }
         if started.elapsed() > AWAIT_DEADLINE {
@@ -144,9 +144,7 @@ pub async fn wait_bytes_settled(store: &Path, within: Duration) {
 // ── pairing ────────────────────────────────────────────────────────────
 
 use daemon::pairing::{PairRejection, PairState, Pairing};
-use proto::{
-    codes, methods, PairRequest, PairStatusReply, PairStatusRequest, PairSubmitted, Req, Resp,
-};
+use proto::{methods, PairRequest, PairStatusReply, PairStatusRequest, PairSubmitted, Req, Resp};
 use transport::{IrohTransport, Transport};
 
 /// #1050: the blocking `pair.request` reply is retired. This is the active
@@ -192,9 +190,9 @@ pub async fn pair_settled(
         .await;
         assert!(reply.ok, "pair.status must answer ok: {reply:?}");
         let status: PairStatusReply = serde_json::from_value(reply.result.unwrap()).unwrap();
-        match status.state.as_str() {
-            "pending" => {}
-            "accepted" => {
+        match status.state {
+            proto::PairStatusState::Pending => {}
+            proto::PairStatusState::Accepted => {
                 return Resp::ok(
                     submit.id.clone(),
                     serde_json::to_value(status.accepted.expect("accepted carries its payload"))
@@ -204,7 +202,7 @@ pub async fn pair_settled(
             _ => {
                 return Resp::err(
                     submit.id.clone(),
-                    proto::RespError::new(codes::NOT_AUTHORIZED, diag::keys::ERR_NOT_AUTHORIZED),
+                    proto::RespError::new(proto::Reason::PairTokenInvalid),
                 )
             }
         }

@@ -7,15 +7,20 @@
 //!   client:  Req{method: "asset.download", params: {"hash": <hex64>}}
 //!   daemon:  Resp{ok, result: {"bytes": n}}  — then the raw bytes, then EOF
 //! Errors answer a Resp with ok=false and no bytes follow.
+//!
+//! #1070: the request header is read first so its protocol version is
+//! checked before authz — an incompatible phone is told to update and
+//! nothing is read or written.
 
 use std::path::PathBuf;
 
 use proto::msgs::methods;
-use proto::{codes, Req, Resp, RespError};
+use proto::{Reason, Req, Resp, RespError};
 use storage::Db;
 use transport::Incoming;
 
 use crate::authz;
+use crate::router::OutdatedPeers;
 
 #[derive(Clone)]
 pub struct DownloadPlane {
@@ -28,14 +33,15 @@ impl DownloadPlane {
         Self { db, library_root }
     }
 
-    pub async fn serve_conn(&self, conn: Incoming) {
+    /// `outdated` is the router's version-mismatch registry (#1070).
+    pub async fn serve_conn(&self, conn: Incoming, outdated: &OutdatedPeers) {
         let peer = conn.peer();
         loop {
             let Ok(mut stream) = conn.accept_bi().await else {
                 return;
             };
             let plane = self.clone();
-            if !plane.serve_stream(peer, &mut stream).await {
+            if !plane.serve_stream(peer, &mut stream, outdated).await {
                 return;
             }
         }
@@ -45,42 +51,44 @@ impl DownloadPlane {
         &self,
         peer: transport::NodeId,
         stream: &mut transport::BiStream,
+        outdated: &OutdatedPeers,
     ) -> bool {
+        let req = match stream.recv_frame().await {
+            Ok(Some(frame)) => match proto::codec::decode::<Req>(&frame) {
+                Ok(req) => req,
+                Err(_) => return self.reject(stream, Reason::BadRequest).await,
+            },
+            _ => return false,
+        };
+        if let Err(error) = outdated.check(peer, &req) {
+            let _ = self.send(stream, &Resp::err(String::new(), error)).await;
+            return false;
+        }
+
         let device = match self.db.get_device(&peer.0).await {
             Ok(d) => d,
             Err(_) => return false,
         };
-        if let authz::Decision::Deny { msg_key } =
+        if let authz::Decision::Deny { reason } =
             authz::check(device.as_ref(), methods::ASSET_DOWNLOAD)
         {
-            let resp = Resp::err(
-                String::new(),
-                RespError::new(codes::NOT_AUTHORIZED, msg_key),
-            );
-            let _ = self.send(stream, &resp).await;
-            return false;
+            return self.reject(stream, reason).await;
         }
 
-        let hash_hex = match stream.recv_frame().await {
-            Ok(Some(frame)) => match proto::codec::decode::<Req>(&frame) {
-                Ok(req) => req.params["hash"].as_str().unwrap_or_default().to_string(),
-                Err(_) => return self.reject(stream, "err.unsupported").await,
-            },
-            _ => return false,
-        };
+        let hash_hex = req.params["hash"].as_str().unwrap_or_default().to_string();
         let Some(hash) = parse_hash(&hash_hex) else {
-            return self.reject(stream, "err.unsupported").await;
+            return self.reject(stream, Reason::BadRequest).await;
         };
 
         let asset = match self.db.get_asset(&hash).await {
             Ok(Some(a)) => a,
-            Ok(None) => return self.reject(stream, "err.not_found").await,
-            Err(_) => return self.reject(stream, "err.internal").await,
+            Ok(None) => return self.reject(stream, Reason::NotFound).await,
+            Err(_) => return self.reject(stream, Reason::Internal).await,
         };
         let path = self.library_root.join(&asset.rel_path);
         let Ok(file) = std::fs::File::open(&path) else {
             tracing::warn!("download {hash_hex}: file missing at {path:?}");
-            return self.reject(stream, "err.not_found").await;
+            return self.reject(stream, Reason::NotFound).await;
         };
         let bytes = file.metadata().map(|m| m.len()).unwrap_or(0);
 
@@ -108,11 +116,8 @@ impl DownloadPlane {
         true
     }
 
-    async fn reject(&self, stream: &mut transport::BiStream, msg_key: &'static str) -> bool {
-        let resp = Resp::err(
-            String::new(),
-            RespError::new(codes::INVALID_REQUEST, msg_key),
-        );
+    async fn reject(&self, stream: &mut transport::BiStream, reason: Reason) -> bool {
+        let resp = Resp::err(String::new(), RespError::new(reason));
         let _ = self.send(stream, &resp).await;
         false
     }

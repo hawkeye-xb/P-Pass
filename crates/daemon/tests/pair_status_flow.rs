@@ -174,7 +174,7 @@ async fn poll_until_settled(
     let mut pending_seen = 0;
     loop {
         let r = status(ctp, d, request_id).await;
-        if r.state != "pending" {
+        if r.state != proto::PairStatusState::Pending {
             return (r, pending_seen);
         }
         pending_seen += 1;
@@ -238,7 +238,7 @@ async fn owner_clicks_allow_after_20s_and_phone_reaches_accepted_via_status() {
         Duration::from_secs(40),
     )
     .await;
-    assert_eq!(r.state, "accepted", "{r:?}");
+    assert_eq!(r.state, proto::PairStatusState::Accepted, "{r:?}");
     assert!(
         pending_seen >= 10,
         "the wait must be spent in pending polls: {pending_seen}"
@@ -284,12 +284,15 @@ async fn resubmitting_the_same_token_reuses_the_request_and_the_queue_stays_one_
         "不堆重复 pending: {:?}",
         d.ipc.pending_names()
     );
-    assert_eq!(status(&ctp, &d, &first.request_id).await.state, "pending");
+    assert_eq!(
+        status(&ctp, &d, &first.request_id).await.state,
+        proto::PairStatusState::Pending
+    );
 
     let stranger = phone(&d).await;
     let replay = submit(&stranger, &d, &token, "重放者").await;
     assert_eq!(
-        replay.error.expect("replay rejected").code,
+        replay.error.expect("replay rejected").code(),
         codes::NOT_AUTHORIZED
     );
     assert_eq!(d.ipc.pending_names().len(), 1);
@@ -306,7 +309,7 @@ async fn resubmitting_the_same_token_reuses_the_request_and_the_queue_stays_one_
         Duration::from_secs(5),
     )
     .await;
-    assert_eq!(r.state, "accepted");
+    assert_eq!(r.state, proto::PairStatusState::Accepted);
 }
 
 /// authz 口径：request_id 只对提交它的 NodeId 可见；别人查 = not_found，
@@ -319,7 +322,10 @@ async fn status_is_visible_only_to_the_submitting_device() {
     let qr = d.pairing.start([0x12; 12], now());
     let s = submitted(submit(&ctp, &d, &token_of(&qr), "本人").await);
 
-    assert_eq!(status(&other, &d, &s.request_id).await.state, "not_found");
+    assert_eq!(
+        status(&other, &d, &s.request_id).await.state,
+        proto::PairStatusState::NotFound
+    );
     wait_queue(&d.ipc, 1).await;
     d.ipc.confirm(Some(&ctp.node_id().0), None, true);
     let (mine, _) = poll_until_settled(
@@ -330,9 +336,9 @@ async fn status_is_visible_only_to_the_submitting_device() {
         Duration::from_secs(5),
     )
     .await;
-    assert_eq!(mine.state, "accepted");
+    assert_eq!(mine.state, proto::PairStatusState::Accepted);
     let theirs = status(&other, &d, &s.request_id).await;
-    assert_eq!(theirs.state, "not_found", "{theirs:?}");
+    assert_eq!(theirs.state, proto::PairStatusState::NotFound, "{theirs:?}");
     assert!(theirs.accepted.is_none());
 }
 
@@ -368,8 +374,7 @@ async fn owner_deny_surfaces_as_denied_with_a_reason_key() {
         Duration::from_secs(5),
     )
     .await;
-    assert_eq!(r.state, "denied");
-    assert_eq!(r.msg_key.as_deref(), Some(diag::keys::ERR_NOT_AUTHORIZED));
+    assert_eq!(r.state, proto::PairStatusState::Denied);
     assert!(r.accepted.is_none());
     assert!(d.db.get_device(&ctp.node_id().0).await.unwrap().is_none());
     // #552: the owner's No is the only ending audited as `pair.denied`.
@@ -392,7 +397,7 @@ async fn owner_never_clicks_surfaces_as_expired() {
         Duration::from_secs(5),
     )
     .await;
-    assert_eq!(r.state, "expired", "{r:?}");
+    assert_eq!(r.state, proto::PairStatusState::Expired, "{r:?}");
     assert!(d.db.get_device(&ctp.node_id().0).await.unwrap().is_none());
     assert!(d
         .db
@@ -413,13 +418,16 @@ async fn daemon_restart_loses_the_ledger_and_status_says_not_found() {
     let ctp = phone(&before).await;
     let qr = before.pairing.start([0x15; 12], now());
     let s = submitted(submit(&ctp, &before, &token_of(&qr), "赶上重启的手机").await);
-    assert_eq!(status(&ctp, &before, &s.request_id).await.state, "pending");
+    assert_eq!(
+        status(&ctp, &before, &s.request_id).await.state,
+        proto::PairStatusState::Pending
+    );
 
     // "Restart": a fresh Pairing/Router/IpcServer over the same database.
     let after = desk(db, None).await;
     let ctp2 = phone(&after).await;
     let r = status(&ctp2, &after, &s.request_id).await;
-    assert_eq!(r.state, "not_found", "{r:?}");
+    assert_eq!(r.state, proto::PairStatusState::NotFound, "{r:?}");
 }
 
 /// token 无效 → 立即明确拒绝，不进队列。
@@ -429,7 +437,7 @@ async fn bad_token_is_refused_at_once() {
     let ctp = phone(&d).await;
     let t0 = std::time::Instant::now();
     let resp = submit(&ctp, &d, &"ee".repeat(12), "拿错码的手机").await;
-    assert_eq!(resp.error.expect("refused").code, codes::NOT_AUTHORIZED);
+    assert_eq!(resp.error.expect("refused").code(), codes::NOT_AUTHORIZED);
     assert!(t0.elapsed() < Duration::from_secs(5));
     assert!(d.ipc.pending_names().is_empty());
 }
@@ -452,14 +460,17 @@ async fn revoked_device_can_poll_its_own_rejoin() {
         Duration::from_secs(5),
     )
     .await;
-    assert_eq!(r.state, "accepted");
+    assert_eq!(r.state, proto::PairStatusState::Accepted);
 
     d.db.revoke(&ctp.node_id().0, storage::RevokedBy::Owner, now())
         .await
         .unwrap();
     let qr2 = d.pairing.start([0x17; 12], now());
     let s2 = submitted(submit(&ctp, &d, &token_of(&qr2), "回来的手机").await);
-    assert_eq!(status(&ctp, &d, &s2.request_id).await.state, "pending");
+    assert_eq!(
+        status(&ctp, &d, &s2.request_id).await.state,
+        proto::PairStatusState::Pending
+    );
     wait_queue(&d.ipc, 1).await;
     d.ipc.confirm(Some(&ctp.node_id().0), None, true);
     let (r2, _) = poll_until_settled(
@@ -470,7 +481,7 @@ async fn revoked_device_can_poll_its_own_rejoin() {
         Duration::from_secs(5),
     )
     .await;
-    assert_eq!(r2.state, "accepted");
+    assert_eq!(r2.state, proto::PairStatusState::Accepted);
     assert!(
         !d.db
             .get_device(&ctp.node_id().0)
@@ -529,7 +540,8 @@ async fn phone_cancel_then_owner_allow_is_expired_and_writes_no_device() {
 
     let c = cancel(&ctp, &d, &s.request_id).await;
     assert_eq!(
-        c.state, "expired",
+        c.state,
+        proto::PairStatusState::Expired,
         "a withdrawn request is no longer pending: {c:?}"
     );
 
@@ -561,7 +573,10 @@ async fn phone_cancel_then_owner_allow_is_expired_and_writes_no_device() {
     // #552: the phone walked away — its own ending on the trail, not the
     // owner's No (改前与主人拒绝共用 `pair.denied`，桌面显示「被拒绝」)。
     assert_eq!(pair_endings(&d).await, ["pair.cancelled"]);
-    assert_eq!(status(&ctp, &d, &s.request_id).await.state, "expired");
+    assert_eq!(
+        status(&ctp, &d, &s.request_id).await.state,
+        proto::PairStatusState::Expired
+    );
 }
 
 /// DEV-07 后续（#463，产品拍板）：手机撤回之后，这一行**离开主人队列**
@@ -582,7 +597,7 @@ async fn a_withdrawn_row_leaves_the_owner_queue() {
     assert_eq!(before.len(), 2, "{before:?}");
 
     let c = cancel(&ctp, &d, &s.request_id).await;
-    assert_eq!(c.state, "expired", "{c:?}");
+    assert_eq!(c.state, proto::PairStatusState::Expired, "{c:?}");
     let rows = d.ipc.pending_summary().await;
     assert_eq!(rows.len(), 1, "撤回的那一行必须离开队列: {rows:?}");
     assert_eq!(rows[0]["name"], "还在等的手机", "{rows:?}");
@@ -602,8 +617,11 @@ async fn another_device_cannot_withdraw_someone_elses_request() {
     wait_queue(&d.ipc, 1).await;
 
     let c = cancel(&intruder, &d, &s.request_id).await;
-    assert_eq!(c.state, "not_found", "{c:?}");
-    assert_eq!(status(&ctp, &d, &s.request_id).await.state, "pending");
+    assert_eq!(c.state, proto::PairStatusState::NotFound, "{c:?}");
+    assert_eq!(
+        status(&ctp, &d, &s.request_id).await.state,
+        proto::PairStatusState::Pending
+    );
 
     let outcome = d.ipc.confirm(Some(&ctp.node_id().0), None, true);
     assert!(
@@ -618,7 +636,7 @@ async fn another_device_cannot_withdraw_someone_elses_request() {
         Duration::from_secs(5),
     )
     .await;
-    assert_eq!(r.state, "accepted");
+    assert_eq!(r.state, proto::PairStatusState::Accepted);
 }
 
 /// 主人的「允许」先到、手机的取消后到：已落定的结论不被撤回改写——
@@ -637,7 +655,7 @@ async fn cancel_after_the_owner_allowed_does_not_undo_the_join() {
     );
 
     let c = cancel(&ctp, &d, &s.request_id).await;
-    assert_eq!(c.state, "accepted", "{c:?}");
+    assert_eq!(c.state, proto::PairStatusState::Accepted, "{c:?}");
     assert!(c.accepted.is_some());
     assert!(d.db.get_device(&ctp.node_id().0).await.unwrap().is_some());
 }
@@ -652,11 +670,17 @@ async fn rescanning_the_same_code_after_cancel_reads_expired() {
     let qr = d.pairing.start([0x73; 12], now());
     let s = submitted(submit(&ctp, &d, &token_of(&qr), "反悔又回来的手机").await);
     wait_queue(&d.ipc, 1).await;
-    assert_eq!(cancel(&ctp, &d, &s.request_id).await.state, "expired");
+    assert_eq!(
+        cancel(&ctp, &d, &s.request_id).await.state,
+        proto::PairStatusState::Expired
+    );
 
     let again = submitted(submit(&ctp, &d, &token_of(&qr), "反悔又回来的手机").await);
     assert_eq!(again.request_id, s.request_id);
-    assert_eq!(status(&ctp, &d, &again.request_id).await.state, "expired");
+    assert_eq!(
+        status(&ctp, &d, &again.request_id).await.state,
+        proto::PairStatusState::Expired
+    );
     tokio::time::sleep(Duration::from_millis(100)).await;
     // 撤回的行已离开队列；重扫也不会把它（或第二行）放回来。
     assert!(d.ipc.pending_names().is_empty(), "no queue row comes back");
@@ -736,8 +760,9 @@ async fn a_blocking_pair_request_is_refused_up_front_and_keeps_the_token() {
     .await;
     assert!(!resp.ok, "{resp:?}");
     let err = resp.error.unwrap();
-    assert_eq!(err.code, codes::INVALID_REQUEST);
-    assert_eq!(err.msg_key, diag::keys::ERR_UNSUPPORTED);
+    // #1070: a phone that cannot poll is older than the supported minimum.
+    assert_eq!(err.code(), codes::VERSION_MISMATCH);
+    assert_eq!(err.reason(), &proto::Reason::PhoneOutdated);
     assert!(
         d.ipc.pending_names().is_empty(),
         "nothing reaches the owner"
@@ -770,7 +795,7 @@ async fn retired_flow_fetch_and_cancel_are_not_routed() {
         let resp = rpc(&ctp, d.tp.node_id(), method, serde_json::json!({})).await;
         assert!(!resp.ok, "{method}: {resp:?}");
         let err = resp.error.unwrap();
-        assert_eq!(err.code, codes::INVALID_REQUEST, "{method}");
-        assert_eq!(err.msg_key, diag::keys::ERR_UNSUPPORTED, "{method}");
+        assert_eq!(err.code(), codes::INVALID_REQUEST, "{method}");
+        assert_eq!(err.reason(), &proto::Reason::UnsupportedMethod, "{method}");
     }
 }
