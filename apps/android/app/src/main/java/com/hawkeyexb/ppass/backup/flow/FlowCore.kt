@@ -211,8 +211,6 @@ sealed interface DeliveryOutcome {
     data object PairingLost : DeliveryOutcome
     /** #1072：版本不兼容——退出循环，不计次数，不动配对。 */
     data class NeedsUpdate(val side: OutdatedSide) : DeliveryOutcome
-    /** #1072：手机发了桌面用不了的请求（程序问题）或不认识的原因——不是这张照片的错：退出本轮、退避、不计次数。 */
-    data class PhoneError(val reason: String) : DeliveryOutcome
 }
 
 /**

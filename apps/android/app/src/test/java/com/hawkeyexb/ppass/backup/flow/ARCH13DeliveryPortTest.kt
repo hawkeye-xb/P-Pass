@@ -292,14 +292,13 @@ class ARCH13DeliveryPortTest {
     // #410 / #415 裁决 3：桌面推来的 flow.failed 按 code 分类，code 终于被读。
     // 反证：classifyPushedFailure 一律返回 ItemFailure（原先「只有一种失败」）→ 前两条红。
     @Test
-    fun `pushed failure codes are classified - storage is a peer failure, fetch is a path failure, unknown is not the photo's fault`() = runTest {
+    fun `pushed failure codes are classified - storage is a peer failure, fetch is a path failure, unknown is an item failure`() = runTest {
         for ((code, expected) in listOf(
             "storage_full" to DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_FULL, "storage_full"),
             "library_unavailable" to DeliveryOutcome.PeerFailure(PeerFailureKind.LIBRARY_UNAVAILABLE, "library_unavailable"),
             "storage_failed" to DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_ERROR, "storage_failed"),
             "fetch_failed" to DeliveryOutcome.PathFailure("fetch_failed"),
-            // #1072：不认识的原因不是这张照片的错——退出本轮、退避、不计次数。
-            "something_new" to DeliveryOutcome.PhoneError("pushed:something_new"),
+            "something_new" to DeliveryOutcome.ItemFailure("pushed:something_new"),
         )) {
             val h = Harness(this)
             h.status = { """{"state":"in_progress","connected":true,"idle_for_ms":0,"bytes_sent":1,"byte_idle_for_ms":0}""" }
@@ -315,7 +314,7 @@ class ARCH13DeliveryPortTest {
     @Test
     fun `exceptions are classified - a reachable rejection is not a path failure`() {
         assertEquals(DeliveryOutcome.PairingLost, classifyDeliveryFailure(DesktopRejectedException("not_paired", "flow.offer")))
-        assertEquals(DeliveryOutcome.PhoneError("rejected:err.grant_mismatch"), classifyDeliveryFailure(DesktopRejectedException("err.grant_mismatch", "flow.offer")))
+        assertEquals(DeliveryOutcome.ItemFailure("rejected:err.grant_mismatch"), classifyDeliveryFailure(DesktopRejectedException("err.grant_mismatch", "flow.offer")))
         assertEquals(DeliveryOutcome.PathFailure("network:IOException"), classifyDeliveryFailure(java.io.IOException("reset")))
         assertEquals(DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_ERROR, "storage_failed"), classifyDeliveryFailure(FlowPushedFailureException("storage_failed")))
     }

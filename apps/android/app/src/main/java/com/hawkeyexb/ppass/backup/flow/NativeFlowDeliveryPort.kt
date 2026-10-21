@@ -270,10 +270,8 @@ internal fun deliveryOutcomeOf(raw: String, channel: String): DeliveryOutcome {
         ReasonClass.STORAGE_FAILED -> DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_ERROR, raw)
         ReasonClass.DESKTOP_INTERNAL -> DeliveryOutcome.PeerFailure(PeerFailureKind.DESKTOP_INTERNAL, raw)
         ReasonClass.PATH -> DeliveryOutcome.PathFailure(raw)
-        // 待拍板（#1072）：维持 v2 之前的行为——被拒 = 配对失效，推送 = 单张失败。
-        ReasonClass.GRANT_OUT_OF_STEP ->
-            if (channel == REJECTED) DeliveryOutcome.PairingLost else DeliveryOutcome.ItemFailure("$channel:$raw")
-        ReasonClass.PHONE_ERROR -> DeliveryOutcome.PhoneError("$channel:$raw")
+        // 不该发生的错误：单张失败——跳过这一张、继续本轮、计次数（日志带 reason 与 queueSequence，见 FlowEngine）。
+        ReasonClass.ITEM_FAILED -> DeliveryOutcome.ItemFailure("$channel:$raw")
     }
 }
 

@@ -1256,11 +1256,6 @@ internal class FlowEngine(
                 StepResult.Exit(waitReasonOf(outcome.kind))
             }
             DeliveryOutcome.PairingLost -> StepResult.Exit(WaitReason.NOT_PAIRED)
-            is DeliveryOutcome.PhoneError -> {
-                // #1072：不是这张照片的错——不计次数，order 保持可续传；退出本轮走退避（同 #762 意外错误）。
-                log.log("order ${order.id}: the desktop could not use our request (${outcome.reason}); backing off, nothing counted")
-                StepResult.Exit(WaitReason.UNEXPECTED_ERROR)
-            }
             is DeliveryOutcome.NeedsUpdate -> {
                 // #1072：兜底（握手时兼容、传到一半对端换了版本）。不计次数，order 保持可续传。
                 log.log("order ${order.id}: version mismatch (${outcome.side} outdated); leaving it resumable")

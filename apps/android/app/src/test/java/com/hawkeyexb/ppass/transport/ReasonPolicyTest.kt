@@ -53,14 +53,14 @@ class ReasonPolicyTest {
         Reason.STORAGE_FAILED to ReasonClass.STORAGE_FAILED,
         Reason.INTERNAL to ReasonClass.DESKTOP_INTERNAL,
         Reason.FETCH_FAILED to ReasonClass.PATH,
-        Reason.GRANT_NOT_FOUND to ReasonClass.GRANT_OUT_OF_STEP,
-        Reason.GRANT_CONFLICT to ReasonClass.GRANT_OUT_OF_STEP,
-        Reason.BAD_REQUEST to ReasonClass.PHONE_ERROR,
-        Reason.NOT_FOUND to ReasonClass.PHONE_ERROR,
-        Reason.BACKUP_FAILED to ReasonClass.PHONE_ERROR,
-        Reason.CANCELLED to ReasonClass.PHONE_ERROR,
-        Reason.PAIR_TOKEN_INVALID to ReasonClass.PHONE_ERROR,
-        Reason.UNKNOWN to ReasonClass.PHONE_ERROR,
+        Reason.GRANT_NOT_FOUND to ReasonClass.ITEM_FAILED,
+        Reason.GRANT_CONFLICT to ReasonClass.ITEM_FAILED,
+        Reason.BAD_REQUEST to ReasonClass.ITEM_FAILED,
+        Reason.NOT_FOUND to ReasonClass.ITEM_FAILED,
+        Reason.BACKUP_FAILED to ReasonClass.ITEM_FAILED,
+        Reason.CANCELLED to ReasonClass.ITEM_FAILED,
+        Reason.PAIR_TOKEN_INVALID to ReasonClass.ITEM_FAILED,
+        Reason.UNKNOWN to ReasonClass.ITEM_FAILED,
     )
 
     private fun registry(): List<String> {
@@ -94,9 +94,8 @@ class ReasonPolicyTest {
         assertNotNull(waitReasonTextRes(WaitReason.DESKTOP_LIBRARY_UNAVAILABLE, null))
         assertNotNull(waitReasonTextRes(WaitReason.DESKTOP_STORAGE_ERROR, null))
         assertNotNull(waitReasonTextRes(WaitReason.DESKTOP_UNREACHABLE, null))
-        // DESKTOP_INTERNAL → "P-Pass on the computer ran into an error"; PHONE_ERROR → the generic backoff line.
+        // DESKTOP_INTERNAL → "P-Pass on the computer ran into an error"; ITEM_FAILED → the existing failed-photo UI.
         assertEquals(R.string.state_waiting_desktop_internal, waitReasonTextRes(WaitReason.DESKTOP_INTERNAL, null))
-        assertNotNull(waitReasonTextRes(WaitReason.UNEXPECTED_ERROR, null))
         // OUTDATED → one sentence per side (status card + pairing body).
         assertEquals(R.string.state_waiting_phone_outdated, outdatedTextRes(OutdatedSide.PHONE))
         assertEquals(R.string.state_waiting_desktop_outdated, outdatedTextRes(OutdatedSide.DESKTOP))
@@ -136,10 +135,7 @@ class ReasonPolicyTest {
         "storage_failed" -> DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_ERROR, reason)
         "internal" -> DeliveryOutcome.PeerFailure(PeerFailureKind.DESKTOP_INTERNAL, reason)
         "fetch_failed" -> DeliveryOutcome.PathFailure(reason)
-        // 待拍板：维持 v2 之前——被拒 = err.not_authorized（配对失效），推送 = guard_mismatch（单张失败）。
-        "grant_not_found", "grant_conflict" ->
-            if (channel == "rejected") DeliveryOutcome.PairingLost else DeliveryOutcome.ItemFailure("$channel:$reason")
-        else -> DeliveryOutcome.PhoneError("$channel:$reason")
+        else -> DeliveryOutcome.ItemFailure("$channel:$reason")
     }
 
     @Test
@@ -153,12 +149,14 @@ class ReasonPolicyTest {
     }
 
     @Test
-    fun `only a problem with the photo itself is counted - nothing the phone or desktop got wrong`() {
+    fun `what should not happen is one item failed - and nothing the desktop or the network did is`() {
         val counted = (registry() + "from_the_future").filter {
-            rejected(it) is DeliveryOutcome.ItemFailure || classifyPushedFailure(it) is DeliveryOutcome.ItemFailure
+            rejected(it) is DeliveryOutcome.ItemFailure && classifyPushedFailure(it) is DeliveryOutcome.ItemFailure
         }
-        // grant_* pushes stay counted only until their handling is signed off (#1072).
-        assertEquals(listOf("grant_not_found", "grant_conflict"), counted)
+        assertEquals(
+            listOf("pair_token_invalid", "bad_request", "not_found", "backup_failed", "grant_not_found", "grant_conflict", "cancelled", "from_the_future"),
+            counted,
+        )
     }
 
     @Test
@@ -167,7 +165,8 @@ class ReasonPolicyTest {
         loss.record(PairingEpoch("e1"), com.hawkeyexb.ppass.backup.flow.FlowPushedFailureException("epoch_mismatch"))
         assertTrue(loss.isLost(PairingEpoch("e1")))
         val other = FlowDeliveryPairingLoss()
-        other.record(PairingEpoch("e1"), com.hawkeyexb.ppass.backup.flow.FlowPushedFailureException("grant_conflict"))
+        other.record(PairingEpoch("e1"), DesktopRejectedException("grant_conflict", "flow.offer"))
+        other.record(PairingEpoch("e1"), com.hawkeyexb.ppass.backup.flow.FlowPushedFailureException("grant_not_found"))
         other.record(PairingEpoch("e1"), DesktopRejectedException("internal", "flow.offer"))
         assertFalse(other.isLost(PairingEpoch("e1")))
     }

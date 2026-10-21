@@ -2,9 +2,10 @@
 // (offer / status rejections and `flow.failed` pushes alike). Decided on the reason alone, never on
 // text. Exhaustive over [Reason] with no `else`: a reason added to the registry (and mirrored in
 // Proto.kt) does not compile until it is placed here.
-// Principle (#1069 sign-off): classify by where the problem is and who can fix it. Only a problem
-// with the photo itself counts against the photo. iOS mirrors this table (#1073); ReasonPolicyTest
-// pins it row by row.
+// Principle (#1069 sign-off): classify by where the problem is and who can fix it. Everything that
+// should not happen (a phone bug, records out of step, a reason this build does not know) takes the
+// ordinary one-item-failed path: skip this photo, carry on with the round, count it (bounded), let
+// reconciliation retry (#1072 final). iOS mirrors this table (#1073); ReasonPolicyTest pins it.
 package com.hawkeyexb.ppass.transport
 
 import com.hawkeyexb.ppass.proto.Reason
@@ -21,13 +22,11 @@ enum class ReasonClass {
     DESKTOP_INTERNAL,
     /** The path did not carry the item: stays resumable, counts nothing. */
     PATH,
-    /** The two sides' records of this one item disagree. Handling pending sign-off (#1072); until
-     *  then it keeps the pre-v2 behaviour: a rejection was `err.not_authorized` (pairing lost), a
-     *  push was `guard_mismatch` (one item failed). The only class that still depends on the channel. */
-    GRANT_OUT_OF_STEP,
-    /** The phone sent something the desktop could not use (a phone bug), or a reason this build does
-     *  not know: not the photo's fault — stop the round, back off, count nothing, log it. */
-    PHONE_ERROR,
+    /** Should not happen — a request the desktop could not use, the two sides' records of this one
+     *  item out of step, or a reason this build does not know: one item failed. Skip it, carry on
+     *  with the round, count an attempt (MAX_FAILURES), reconciliation retries it; logged with its
+     *  reason and queue sequence. */
+    ITEM_FAILED,
 }
 
 fun reasonClassOf(reason: Reason): ReasonClass = when (reason) {
@@ -39,12 +38,9 @@ fun reasonClassOf(reason: Reason): ReasonClass = when (reason) {
     Reason.STORAGE_FAILED -> ReasonClass.STORAGE_FAILED
     Reason.INTERNAL -> ReasonClass.DESKTOP_INTERNAL
     Reason.FETCH_FAILED -> ReasonClass.PATH
-    Reason.GRANT_NOT_FOUND, Reason.GRANT_CONFLICT -> ReasonClass.GRANT_OUT_OF_STEP
-    // bad_request: the wire cannot yet tell "ticket names different content" (the photo's problem)
-    // from "malformed request" (a phone bug) — both are bad_request today. Reported on #1072.
     Reason.BAD_REQUEST, Reason.NOT_FOUND, Reason.BACKUP_FAILED, Reason.CANCELLED,
-    Reason.PAIR_TOKEN_INVALID, Reason.UNKNOWN,
-    -> ReasonClass.PHONE_ERROR
+    Reason.PAIR_TOKEN_INVALID, Reason.GRANT_NOT_FOUND, Reason.GRANT_CONFLICT, Reason.UNKNOWN,
+    -> ReasonClass.ITEM_FAILED
 }
 
 fun isPairingLost(reason: Reason): Boolean = reasonClassOf(reason) == ReasonClass.PAIRING_LOST

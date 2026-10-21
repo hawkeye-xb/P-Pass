@@ -40,19 +40,31 @@ class C1072VersionMismatchEngineTest {
         rig.close()
     }
 
-    // #1069 sign-off: a request the desktop could not use is not the photo's fault.
-    // Counter-proof: treating PhoneError like an ItemFailure retries once and counts — attempts 1, red.
+    // #1072 final: an error that should not happen (bad_request, grant_*, unknown, …) is one item
+    // failed — it must not hold up the rest of the round. Counter-proof: classifying it as a round
+    // exit (the earlier PhoneError → UNEXPECTED_ERROR) leaves photo 2 untouched — red.
     @Test
-    fun `a phone-side error stops the round, backs off and counts nothing`() = runTest {
+    fun `a photo that keeps getting should-not-happen errors does not block the rest of the round`() = runTest {
         val rig = Rig(this)
         rig.photo(1, generation = 1)
-        rig.delivery.script += { DeliveryOutcome.PhoneError("rejected:bad_request") }
+        rig.photo(2, generation = 1)
+        val stuck = listOf("bad_request", "grant_conflict", "grant_not_found", "from_the_future")
+        var n = 0
+        repeat(20) {
+            rig.delivery.script += { r ->
+                if (r.details.snapshot.mediaId == 1L) {
+                    classifyDeliveryFailure(DesktopRejectedException(stuck[n++ % stuck.size], "flow.offer"))
+                } else {
+                    FakeDelivery.confirmed(r)
+                }
+            }
+        }
         rig.trigger()
-        assertEquals(OrderState.TRANSFERRING, rig.state(1))
-        assertEquals("不计失败次数", 0, rig.store.currentForMedia(1)!!.attempts)
-        assertEquals("不立即重试", 1, rig.delivery.requests.size)
-        assertEquals(WaitReason.UNEXPECTED_ERROR, rig.engine.view.value.waitReason)
-        assertEquals("走退避探测", 1, rig.scheduler.unreachableProbes)
+        assertEquals("后面的照片在同一轮传完", OrderState.CONFIRMED, rig.state(2))
+        assertEquals(OrderState.FAILED, rig.state(1))
+        assertEquals("计次数（立即重试一次后记一次）", 1, rig.store.currentForMedia(1)!!.attempts)
+        assertEquals("本轮没有因此退出等待", null, rig.engine.view.value.waitReason)
+        assertEquals(listOf(1L, 1L, 2L), rig.delivery.deliveredMediaIds)
         rig.close()
     }
 
