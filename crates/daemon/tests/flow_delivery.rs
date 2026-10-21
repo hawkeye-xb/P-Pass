@@ -2003,7 +2003,18 @@ async fn suspend_interrupts_an_in_progress_fetch_and_keeps_the_grant_active() {
 
         // The interrupt is observed as "the task stopped moving bytes" within
         // 2 s; the grant itself must stay active (checked below).
-        common::wait_bytes_settled(&receiver_store, std::time::Duration::from_secs(2)).await;
+        // #1084: suspend returns only once the fetch task has ended — no
+        // byte-count sampling or wall-clock guess needed.
+        assert!(
+            !delivery
+                .task_running(
+                    provider_node,
+                    &tuple_ref("epoch-current", "lease-current", 7)
+                )
+                .await
+                .unwrap(),
+            "suspend must not return before the interrupted fetch task has ended"
+        );
 
         // The grant must still be active — suspend never touches durable
         // state — so status must NOT report cancelled/not_found. NET-15
@@ -2107,7 +2118,18 @@ async fn suspend_then_resume_completes_from_the_retained_partial() {
             )
             .await
             .unwrap();
-        common::wait_bytes_settled(&receiver_store, std::time::Duration::from_secs(2)).await;
+        // #1084: suspend returns only once the fetch task has ended — no
+        // byte-count sampling or wall-clock guess needed.
+        assert!(
+            !delivery
+                .task_running(
+                    provider_node,
+                    &tuple_ref("epoch-current", "lease-current", 7)
+                )
+                .await
+                .unwrap(),
+            "suspend must not return before the interrupted fetch task has ended"
+        );
         let partial_bytes_on_disk = receiver_blobs.local_bytes(hash).await.unwrap();
         assert!(
             partial_bytes_on_disk > 0 && partial_bytes_on_disk < PAYLOAD as u64,
@@ -2212,7 +2234,18 @@ async fn status_respawns_the_delivery_task_lost_to_a_daemon_restart() {
             )
             .await
             .unwrap();
-        common::wait_bytes_settled(&receiver_store, std::time::Duration::from_secs(2)).await;
+        // #1084: suspend returns only once the fetch task has ended — no
+        // byte-count sampling or wall-clock guess needed.
+        assert!(
+            !delivery
+                .task_running(
+                    provider_node,
+                    &tuple_ref("epoch-current", "lease-current", 7)
+                )
+                .await
+                .unwrap(),
+            "suspend must not return before the interrupted fetch task has ended"
+        );
         let partial = receiver_blobs.local_bytes(hash).await.unwrap();
         assert!(
             partial > 0 && partial < PAYLOAD as u64,

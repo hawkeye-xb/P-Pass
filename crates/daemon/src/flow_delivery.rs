@@ -418,6 +418,45 @@ impl TaskKey {
 struct TaskEntry {
     token: CancellationToken,
     generation: u64,
+    /// #1084: fired by the task itself when it has actually ended (success,
+    /// error, cancel, panic or runtime shutdown — it is a drop guard held by
+    /// the task). Cancelling `token` only *asks* the task to stop;
+    /// `interrupt*` hand this back so callers wait for the stop to happen.
+    exited: CancellationToken,
+}
+
+/// #1084: the exit signals of interrupted tasks. Awaiting it is the standard
+/// cancel-and-await: once it returns, the interrupted fetch tasks have ended
+/// and no longer pull bytes, so the caller may answer "stopped" truthfully
+/// and a respawn for the same tuple cannot overlap the old task.
+/// Held by a running fetch task; dropping it is the task's exit.
+struct TaskExit {
+    tasks: FlowTaskRegistry,
+    key: TaskKey,
+    generation: u64,
+    exited: CancellationToken,
+}
+
+impl Drop for TaskExit {
+    fn drop(&mut self) {
+        self.tasks.unregister(&self.key, self.generation);
+        self.exited.cancel();
+    }
+}
+
+#[must_use = "await the interrupted tasks' exit"]
+struct Interrupted(Vec<CancellationToken>);
+
+impl Interrupted {
+    fn count(&self) -> usize {
+        self.0.len()
+    }
+
+    async fn exited(self) {
+        for exited in self.0 {
+            exited.cancelled().await;
+        }
+    }
 }
 
 impl FlowTaskRegistry {
@@ -436,34 +475,40 @@ impl FlowTaskRegistry {
     /// adds a new concurrent spawn source, making the atomic form
     /// structural rather than theoretical. Does not change the key
     /// structure or any existing semantics.
-    fn try_register(&self, peer: NodeId, grant: &FlowGrant) -> Option<(CancellationToken, u64)> {
+    fn try_register(
+        &self,
+        peer: NodeId,
+        grant: &FlowGrant,
+    ) -> Option<(CancellationToken, u64, CancellationToken)> {
         let mut entries = self.entries.lock().expect("flow task registry lock");
         if entries.contains_key(&TaskKey::of(peer, grant)) {
             return None;
         }
-        let (token, generation) = self.fresh_entry();
+        let (token, generation, exited) = self.fresh_entry();
         entries.insert(
             TaskKey::of(peer, grant),
             TaskEntry {
                 token: token.clone(),
                 generation,
+                exited: exited.clone(),
             },
         );
-        Some((token, generation))
+        Some((token, generation, exited))
     }
 
-    fn fresh_entry(&self) -> (CancellationToken, u64) {
+    fn fresh_entry(&self) -> (CancellationToken, u64, CancellationToken) {
         (
             CancellationToken::new(),
             self.next_generation.fetch_add(1, Ordering::Relaxed),
+            CancellationToken::new(),
         )
     }
 
     /// Called by the spawned task itself once it exits (completed, failed,
     /// or was cancelled) — removes its own entry, but only if it is still
-    /// *this* task's registration (a concurrent `interrupt()` may already
-    /// have removed it, or a newer spawn for the same reused key may have
-    /// replaced it; either way this is then a safe no-op).
+    /// *this* task's registration (a newer spawn for the same reused key may
+    /// have replaced it; then this is a safe no-op). #1084: the only remover,
+    /// so a registered entry always means a live task.
     fn unregister(&self, key: &TaskKey, generation: u64) {
         let mut entries = self.entries.lock().expect("flow task registry lock");
         if entries
@@ -474,43 +519,42 @@ impl FlowTaskRegistry {
         }
     }
 
-    /// `flow.suspend`/`flow.cancel_tuple`: cancel and remove the task registered
-    /// for this exact tuple, if any. Returns whether one was found.
-    fn interrupt(&self, peer: NodeId, grant: &FlowGrant) -> bool {
-        let entry = self
-            .entries
-            .lock()
-            .expect("flow task registry lock")
-            .remove(&TaskKey::of(peer, grant));
-        match entry {
-            Some(entry) => {
-                entry.token.cancel();
-                true
-            }
-            None => false,
-        }
+    /// `flow.suspend`/`flow.cancel_tuple`: cancel the task registered for this
+    /// exact tuple, if any. The caller awaits [`Interrupted::exited`].
+    ///
+    /// #1084: the entry is NOT removed here — the task removes it itself
+    /// (`unregister`) on its way out. So "registered" means "still alive":
+    /// `is_running` stays true while it winds down, and a racing
+    /// `offer`/`status` cannot spawn a second task for the tuple meanwhile.
+    fn interrupt(&self, peer: NodeId, grant: &FlowGrant) -> Interrupted {
+        let entries = self.entries.lock().expect("flow task registry lock");
+        Interrupted(
+            entries
+                .get(&TaskKey::of(peer, grant))
+                .map(|entry| {
+                    entry.token.cancel();
+                    entry.exited.clone()
+                })
+                .into_iter()
+                .collect(),
+        )
     }
 
     /// #563 `device.revoke`: cancel and remove every task registered for
     /// this control peer, whatever its tuple. Same per-tuple tokens as
-    /// [`Self::interrupt`]; returns how many were cancelled.
-    fn interrupt_peer(&self, peer: NodeId) -> usize {
-        let mut cancelled = Vec::new();
-        self.entries
-            .lock()
-            .expect("flow task registry lock")
-            .retain(|key, entry| {
-                if key.peer == peer.0 {
-                    cancelled.push(entry.token.clone());
-                    false
-                } else {
-                    true
-                }
-            });
-        for token in &cancelled {
-            token.cancel();
-        }
-        cancelled.len()
+    /// [`Self::interrupt`]; the caller awaits [`Interrupted::exited`].
+    fn interrupt_peer(&self, peer: NodeId) -> Interrupted {
+        let entries = self.entries.lock().expect("flow task registry lock");
+        Interrupted(
+            entries
+                .iter()
+                .filter(|(key, _)| key.peer == peer.0)
+                .map(|(_, entry)| {
+                    entry.token.cancel();
+                    entry.exited.clone()
+                })
+                .collect(),
+        )
     }
 }
 
@@ -1014,7 +1058,7 @@ impl FlowDelivery {
         // #1076: a re-offer carrying a new provider ticket lands here too and
         // keeps the running task: the provider is where the bytes come from,
         // not which item this is. A later attempt reads the stored provider.
-        let Some((token, generation)) = self.tasks.try_register(peer, &grant) else {
+        let Some((token, generation, exited)) = self.tasks.try_register(peer, &grant) else {
             return;
         };
         let key = TaskKey::of(peer, &grant);
@@ -1022,10 +1066,18 @@ impl FlowDelivery {
         // NET-26: taken only after `try_register` won (the idempotent early
         // return above holds nothing) and moved into the task, so every way
         // the task ends — success, error, cancel, panic, runtime shutdown —
-        // drops it. Not derived from the registry: `interrupt()` removes the
-        // entry while the task may still be winding down.
+        // drops it, same as the `TaskExit` guard below.
         let awake = self.awake.lease();
         tokio::spawn(async move {
+            // #1084: dropped last, on every way out (including panic and
+            // runtime shutdown): unregisters, then fires `exited` — what
+            // `Interrupted::exited` waits for.
+            let _exit = TaskExit {
+                tasks: delivery.tasks.clone(),
+                key,
+                generation,
+                exited,
+            };
             let _awake = awake;
             let outcome = tokio::select! {
                 result = delivery.run_fetch_body(peer, &grant, &request) => Some(result),
@@ -1050,7 +1102,6 @@ impl FlowDelivery {
                     );
                 }
             }
-            delivery.tasks.unregister(&key, generation);
         });
     }
 
@@ -1423,7 +1474,7 @@ impl FlowDelivery {
             .await
             .map_err(storage_error)?
         {
-            self.tasks.interrupt(peer, &grant);
+            self.tasks.interrupt(peer, &grant).exited().await;
             if self
                 .paths
                 .clear_if_current(peer, grant.queue_sequence, &grant.lease_token)
@@ -1528,8 +1579,23 @@ impl FlowDelivery {
         if grant.state != FlowGrantState::Active {
             return Ok(());
         }
-        self.tasks.interrupt(peer, &grant);
+        // #1084: answer only once the fetch has really stopped.
+        self.tasks.interrupt(peer, &grant).exited().await;
         Ok(())
+    }
+
+    /// #1084: read-only "is a fetch task running for this tuple" — unlike
+    /// [`Self::status`], never respawns one. After [`Self::suspend`] returns
+    /// this is `false`: suspend waits for the task to end.
+    pub async fn task_running(
+        &self,
+        peer: NodeId,
+        tuple: &FlowTupleRef,
+    ) -> Result<bool, DeliveryError> {
+        Ok(self
+            .tuple_grant(peer, tuple)
+            .await?
+            .is_some_and(|grant| self.tasks.is_running(peer, &grant)))
     }
 
     /// Looks up the exact grant a [`FlowTupleRef`] names, or `None` if
@@ -1681,7 +1747,9 @@ impl FlowDelivery {
             .cancel_active_flow_grants_for_node(&peer.0)
             .await
             .map_err(storage_error)?;
-        let interrupted = self.tasks.interrupt_peer(peer);
+        let tasks = self.tasks.interrupt_peer(peer);
+        let interrupted = tasks.count();
+        tasks.exited().await;
         let mut path_cleared = false;
         for grant in &cancelled {
             path_cleared |=

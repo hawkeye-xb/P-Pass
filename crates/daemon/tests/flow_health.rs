@@ -895,35 +895,17 @@ async fn caught_mid_flight(seed: u64) -> Option<MidFlight> {
     None
 }
 
-/// Waits until the suspended fetch has gone quiet: `STABLE_SAMPLES`
-/// consecutive 100 ms samples with no byte growth.
-///
-/// QA-20 (#443): this used to demand quiet within a 2 s wall clock, which a
-/// loaded Windows runner missed while the interrupt was still landing (or
-/// in-flight bytes were still being written). The claim under test is that
-/// the fetch *does* stop, not how fast; a suspend that never takes effect
-/// runs the transfer to completion, and the callers' `partial < size`
-/// assertion goes red. `HANG_GUARD` only bounds a test that would
-/// otherwise never finish.
-async fn wait_until_not_running(m: &MidFlight) {
-    const STABLE_SAMPLES: u32 = 5;
-    const HANG_GUARD: std::time::Duration = std::time::Duration::from_secs(60);
-    let started = std::time::Instant::now();
-    // `status` would respawn a stopped task, so observe the registry
-    // through a fresh handle over the same state instead: the grant's
-    // durable state plus "is anything still pulling bytes".
-    let mut last = m.blobs.local_bytes(m.hash).await.unwrap();
-    let mut stable = 0;
-    while stable < STABLE_SAMPLES {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        let now = m.blobs.local_bytes(m.hash).await.unwrap();
-        stable = if now == last { stable + 1 } else { 0 };
-        last = now;
-        assert!(
-            started.elapsed() < HANG_GUARD,
-            "suspended fetch never went quiet (still at {last} bytes after {HANG_GUARD:?})"
-        );
-    }
+/// #1084: `suspend` returns only after the interrupted fetch task has ended,
+/// so "it stopped" is a direct check, not a quiet-bytes sampling loop
+/// (QA-20 / #443 had to keep widening that loop's wall-clock budget).
+async fn assert_stopped(m: &MidFlight) {
+    assert!(
+        !m.delivery
+            .task_running(m.provider_node, &tuple("lease-1"))
+            .await
+            .unwrap(),
+        "suspend must not return before the interrupted fetch task has ended"
+    );
 }
 
 /// `flow.suspend` keeps the grant active, so the partial stays in the GC
@@ -938,7 +920,7 @@ async fn suspended_partial_survives_gc_and_a_reoffer_of_the_same_tuple_resumes_i
         .suspend(m.provider_node, &tuple("lease-1"))
         .await
         .unwrap();
-    wait_until_not_running(&m).await;
+    assert_stopped(&m).await;
     let partial = m.blobs.local_bytes(m.hash).await.unwrap();
     assert!(
         partial > 0 && partial < m.size,
@@ -1005,7 +987,7 @@ async fn a_grant_nobody_resumes_for_three_days_is_cancelled_and_its_partial_recl
         .suspend(m.provider_node, &tuple("lease-1"))
         .await
         .unwrap();
-    wait_until_not_running(&m).await;
+    assert_stopped(&m).await;
     let partial = m.blobs.local_bytes(m.hash).await.unwrap();
     assert!(partial > 0 && partial < m.size);
 

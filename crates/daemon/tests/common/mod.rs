@@ -118,29 +118,6 @@ pub async fn wait_mid_flight(
     }
 }
 
-/// After `suspend`/`cancel_by_tuple`: wait until the interrupted task has
-/// stopped moving bytes (three equal samples 100 ms apart), within `within`.
-/// This is the observable of "the fetch task was actually interrupted".
-pub async fn wait_bytes_settled(store: &Path, within: Duration) {
-    let started = Instant::now();
-    let mut last = dir_bytes(store);
-    let mut stable = 0;
-    while stable < 3 {
-        assert!(
-            started.elapsed() < within,
-            "the interrupted fetch task kept moving bytes for more than {within:?}"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        let now = dir_bytes(store);
-        if now == last {
-            stable += 1;
-        } else {
-            stable = 0;
-            last = now;
-        }
-    }
-}
-
 // ── pairing ────────────────────────────────────────────────────────────
 
 use daemon::pairing::{PairRejection, PairState, Pairing};
