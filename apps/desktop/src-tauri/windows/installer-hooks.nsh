@@ -31,13 +31,23 @@ ${Using:StrFunc} StrStr
 ; end the running instance, so taskkill below is still needed. No task
 ; (fresh install, or the user stopped the service) = schtasks fails, which
 ; is swallowed like taskkill's.
+; #1075：先关壳、再停 daemon。反过来时，仍在跑的壳会在两次 taskkill 之间
+; 把 daemon 自愈拉起来，安装/卸载都可能留下旧 daemon（安装时还会导致文件
+; 替换失败，触发 #1063 的失败横幅）。先杀壳，自愈者没了，再停 daemon 就干净。
 !macro NSIS_HOOK_PREINSTALL
-  DetailPrint "Stopping P-Pass background service if it's running..."
+  DetailPrint "Closing P-Pass app, then stopping its background service..."
   nsExec::ExecToLog '"$SYSDIR\schtasks.exe" /Change /TN "P-Pass" /DISABLE'
   Pop $0
+  ; 1) 先杀壳：壳在，就可能把下面刚停掉的 daemon 自愈拉回来。
+  nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /F /IM p-pass-desktop.exe'
+  Pop $0
+  Sleep 1500
+  ; 2) 再停 daemon（看门狗任务已 disable，壳已退，没人会再拉起它）。
   nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /F /IM ppf-daemon.exe'
   Pop $0
-  nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /F /IM p-pass-desktop.exe'
+  ; 3) 补杀：极端时序下壳退出前可能刚好又拉起一个。
+  Sleep 500
+  nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /F /IM ppf-daemon.exe'
   Pop $0
   ; Give the OS a moment to actually release the file handles — taskkill
   ; returning doesn't guarantee the handle is closed yet (observed
@@ -88,16 +98,26 @@ ${Using:StrFunc} StrStr
 ; value "P-Pass Desktop", written by the shell at startup; see
 ; crates/platform/src/windows.rs SHELL_RUN_VALUE). Tauri's template only
 ; removes the value named after the product ("P-Pass").
+;
+; #1075：先关壳、再停 daemon。反过来（先停 daemon）时，仍在跑的壳会在两次
+; taskkill 之间把 daemon 自愈拉起来，卸载完留下孤儿进程；先杀壳，自愈者没了，
+; 再停 daemon 就干净。补杀一次是为了盖住壳退出/任务删除前后的短窗口。
 !macro NSIS_HOOK_PREUNINSTALL
-  DetailPrint "Stopping P-Pass background service before uninstall..."
+  DetailPrint "Closing P-Pass app, then stopping its background service..."
   nsExec::ExecToLog '"$SYSDIR\schtasks.exe" /Delete /TN "P-Pass" /F'
   Pop $0
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "P-Pass Desktop"
-  nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /F /IM ppf-daemon.exe'
-  Pop $0
+  ; 1) 先杀壳：壳在，就可能把下面刚停掉的 daemon 自愈拉回来。
   nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /F /IM p-pass-desktop.exe'
   Pop $0
+  Sleep 1500
+  ; 2) 再停 daemon（看门狗任务已删，壳已退，没人会再拉起它）。
+  nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /F /IM ppf-daemon.exe'
+  Pop $0
   Sleep 500
+  ; 3) 补杀：极端时序下壳退出前可能刚好又拉起一个。
+  nsExec::ExecToLog '"$SYSDIR\taskkill.exe" /F /IM ppf-daemon.exe'
+  Pop $0
 !macroend
 
 !macro NSIS_HOOK_POSTUNINSTALL

@@ -2950,6 +2950,36 @@ mod tests {
         }
     }
 
+    /// #1075：安装/卸载都要先关壳、再停 daemon，否则壳会在两次 taskkill
+    /// 之间把 daemon 自愈拉回来（安装时还会让文件替换失败）。反证：换回
+    /// daemon 在前，本测试红。
+    #[test]
+    fn install_and_uninstall_kill_shell_before_daemon() {
+        let hooks = include_str!("../windows/installer-hooks.nsh");
+        for name in ["NSIS_HOOK_PREINSTALL", "NSIS_HOOK_PREUNINSTALL"] {
+            let marker = format!("!macro {name}");
+            let start = hooks
+                .find(&marker)
+                .unwrap_or_else(|| panic!("{name} 宏缺失"));
+            let end = start
+                + hooks[start..]
+                    .find("!macroend")
+                    .unwrap_or_else(|| panic!("{name} 宏没有结束"));
+            let block = &hooks[start..end];
+            let shell = block.find("p-pass-desktop.exe").expect("没有杀壳");
+            let daemon = block.find("ppf-daemon.exe").expect("没有杀 daemon");
+            assert!(
+                shell < daemon,
+                "{name} 必须先杀 p-pass-desktop 再杀 ppf-daemon（#1075）"
+            );
+            assert_eq!(
+                block.matches("ppf-daemon.exe").count(),
+                2,
+                "{name} 的 daemon 要补杀一次，盖住壳退出前的短窗口"
+            );
+        }
+    }
+
     #[test]
     fn update_failure_commands_are_registered() {
         let src = include_str!("lib.rs").replace("\r\n", "\n");
