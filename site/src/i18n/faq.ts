@@ -453,6 +453,12 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
             '默认只在 Wi-Fi 下自动备份，流量备份的开关在设置里，默认是关的。',
             '没有照片要传的时候它不工作。鸿蒙、三星这类系统会为省电停掉后台任务；App 会在需要设置的时候提示你。',
           ],
+          more: [
+            {
+              label: '按手机品牌设置后台运行',
+              href: 'https://github.com/hawkeye-xb/P-Pass/blob/main/docs/troubleshooting/android-background.md',
+            },
+          ],
         },
         {
           id: 'computer-on',
@@ -537,6 +543,12 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
           a: [
             '意思是暂时还没满足自动备份的条件，满足后会自动开始，不用你操作。',
             '默认条件是连上 Wi-Fi、电量不低。系统为省电停掉后台任务时也会停，App 会在需要设置的时候提示你。',
+          ],
+          more: [
+            {
+              label: '按手机品牌设置后台运行',
+              href: 'https://github.com/hawkeye-xb/P-Pass/blob/main/docs/troubleshooting/android-background.md',
+            },
           ],
         },
         {
