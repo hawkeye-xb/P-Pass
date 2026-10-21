@@ -26,6 +26,8 @@ enum PairVerdict: Equatable {
 
     /// pair.request 被拒（#1073 归类表配对通道）：版本不兼容单独成判决，其余都是「电脑那边说不」。
     static func rejected(_ error: RespError?) -> PairVerdict {
+        // 没带 error 的拒绝：与 v1 同一句「没有访问权限」。
+        guard let error else { return .denied(.notAuthorized) }
         let reason = DesktopReason(error)
         if case let .versionMismatch(side) = reasonClass(reason, channel: .reply) { return .versionMismatch(side) }
         return .denied(PairNote(rejection: reason))

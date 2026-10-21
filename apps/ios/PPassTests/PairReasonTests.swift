@@ -35,6 +35,11 @@ final class PairReasonTests: XCTestCase {
         }
     }
 
+    /// 拒绝却没带 error：与 v1 同一句。
+    func test_rejection_without_an_error_keeps_the_v1_note() {
+        XCTAssertEqual(PairVerdict.rejected(nil), .denied(.notAuthorized))
+    }
+
     /// 不认识的 reason：只显示通用文案（note=nil），绝不显示原始代码。
     func test_unknown_reason_shows_only_the_generic_text() async throws {
         let v = try await loop([Methods.hello: try hello(), Methods.pairRequest: rejected("SOMETHING_NEW", "from_the_future")]).run(token: "t", deviceName: "d")
