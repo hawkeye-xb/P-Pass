@@ -34,10 +34,13 @@ func needsEpochRepair(_ pairingEpoch: String) -> Bool { pairingEpoch.trimmingCha
 enum EpochRepairResult: Equatable {
     case repaired(String)
     case lost
+    /// #1072 / #1073：电脑版本不兼容——不是对配对的判决；不写盘，更新之后再修一次。
+    case deferred
 }
 
 /// `outcome` = 向桌面问当前 epoch 的结果（同一个 `hello`）。成功但 epoch 为空与失败同等对待：桌面自己也给不出，没有可修的目标。
 func applyEpochRepairOutcome(_ outcome: Result<String?, Error>) -> EpochRepairResult {
+    if case .failure(let error) = outcome, let rejected = error as? DesktopRejected, case .versionMismatch = rejected.reasonClass { return .deferred }
     if case .success(let epoch?) = outcome, !needsEpochRepair(epoch) { return .repaired(epoch) }
     return .lost
 }
@@ -62,16 +65,27 @@ final class EpochRepairer: @unchecked Sendable {
         let outcome: Result<String?, Error>
         do { outcome = .success(try await hello()) } catch { outcome = .failure(error) }
         let result = applyEpochRepairOutcome(outcome)
+        if result == .deferred {
+            release()
+            logger.log("epoch repair: protocol version mismatch; not a verdict on the pairing, will retry after an update")
+            return result
+        }
         do {
             switch result {
             case .repaired(let epoch): try store.update { $0.pairingEpoch = epoch }
             case .lost: try store.markLost()
+            case .deferred: break // 上面已提前返回
             }
         } catch {
             logger.log("epoch repair: cannot persist \(result) (\(error))")
         }
         if case .failure(let error) = outcome { logger.log("epoch repair: hello failed (\(error)); pairing marked lost") }
         return result
+    }
+
+    private func release() {
+        lock.lock(); defer { lock.unlock() }
+        attempted = false
     }
 
     private func claim() -> Bool {

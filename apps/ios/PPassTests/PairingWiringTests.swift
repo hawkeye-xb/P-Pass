@@ -233,6 +233,10 @@ final class PairingWiringTests: XCTestCase {
         XCTAssertEqual(applyEpochRepairOutcome(.success("  ")), .lost)
         XCTAssertEqual(applyEpochRepairOutcome(.success(nil)), .lost)
         XCTAssertEqual(applyEpochRepairOutcome(.failure(ScriptedTransport.Unreachable())), .lost)
+        // #1072 / #1073：版本不兼容不是对配对的判决，更新后再修；配对失效的拒绝照旧标失联。
+        XCTAssertEqual(applyEpochRepairOutcome(.failure(DesktopRejected(reason: .registered(.desktopOutdated), method: "hello"))), .deferred)
+        XCTAssertEqual(applyEpochRepairOutcome(.failure(DesktopRejected(reason: .registered(.unsupportedMethod), method: "hello"))), .deferred)
+        XCTAssertEqual(applyEpochRepairOutcome(.failure(DesktopRejected(reason: .registered(.revoked), method: "hello"))), .lost)
         XCTAssertTrue(needsEpochRepair(""))
         XCTAssertFalse(needsEpochRepair("e1"))
     }

@@ -22,6 +22,19 @@ final class VersionMismatchEngineTests: XCTestCase {
         }
     }
 
+    /// 心跳只在版本兼容时报可达：「需要更新」等待中收到可达 → 叫醒引擎，重新握手后照常备份（与 Android 同）。
+    func testAReachableHeartbeatWakesTheLoopOutOfAVersionWait() async throws {
+        let rig = try Rig()
+        rig.photo(1, generation: 1)
+        await rig.start()
+        rig.probe.result.set(.versionMismatch(.desktop))
+        await rig.trigger()
+        XCTAssertEqual(rig.lease.acquires.get(), 0)
+        rig.probe.result.set(.reachable(advertisedEpoch: "e1", health: nil, capabilities: []))
+        await rig.engine.onDesktopReachable()
+        await eventually("lease requested after the wake") { rig.lease.acquires.get() == 1 }
+    }
+
     /// 传输中途才收到版本拒绝（兜底）：不计次数，order 保持传输中可续传。
     func testMidTransferMismatchCountsNothingAndStaysResumable() async throws {
         let rig = try Rig()

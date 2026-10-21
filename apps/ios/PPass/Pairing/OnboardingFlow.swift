@@ -172,8 +172,8 @@ struct PairStatusScreen: View {
                 case .needsUpdate(let side):
                     // #1069：配对过程中发现版本不兼容——标题「需要更新」，正文说清是哪一端的 P-Pass。
                     symbol("arrow.down.circle.fill", PPColor.act)
-                    message(title: L.s(side == .phone ? "update_needed_phone_title" : "update_needed_desktop_title"),
-                            body: L.s(side == .phone ? "pair_needs_update_phone_body" : "pair_needs_update_desktop_body"))
+                    message(title: L.s("pair_needs_update_title"),
+                            body: L.s(side == .phone ? "state_waiting_phone_outdated" : "state_waiting_desktop_outdated"))
                 case .failed(let reason):
                     symbol("exclamationmark.triangle.fill", PPColor.act)
                     message(title: L.s("pair_failed_title"), body: L.s("pair_failed_body"),

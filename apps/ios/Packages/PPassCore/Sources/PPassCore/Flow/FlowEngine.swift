@@ -415,9 +415,11 @@ public actor FlowEngine {
         case .desktopUnreachable: wake = true
         case .desktopStorageFull, .desktopLibraryUnavailable, .desktopStorageError: wake = waitReasonOf(desktopHealth) != nil
         // iCloud 原图在等的是互联网，不是桌面——连得上桌面证明不了 iCloud 拉得到。
-        // #1069：电脑自己出错 / 版本不兼容——连得上证明不了问题已解决（版本由 hello 本身判定，心跳不会把它当可达）。
+        // #1072 / #1073：心跳只在版本兼容时才报可达——能走到这里说明已经不再过旧。
+        case .phoneOutdated, .desktopOutdated: wake = true
+        // 健康探针看不出 `internal`：同「探测报健康的对端失败」，交给退避探测。
         case .notPaired, .disabled, .wifi, .battery, .executionBlocked, .unexpectedError, .originalUnavailable, .localStorageFull,
-             .desktopInternal, .phoneOutdated, .desktopOutdated: wake = false
+             .desktopInternal: wake = false
         }
         guard wake else { return }
         log("desktop reachable (foreground heartbeat) while waiting for \(waiting.rawValue): waking the loop")
