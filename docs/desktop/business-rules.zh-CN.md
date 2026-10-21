@@ -431,6 +431,7 @@ Windows 真机验证清单：#1056。
   - ALPN 不随协议版本变（一直 `ppf/ctrl/1`），否则旧版本在连接层失败、看不到更新提示。
   - v1 垫片：对 v1 信封的拒绝额外带一个冻结的 `msg_key`（`pair.*` 为 `err.unsupported`，其余为 `fetch_failed`），让已发布 Android 0.9.12 安全降级：不解除配对、照片不进入永久失败。
 - daemon ↔ 桌面壳的本地 IPC 不在本规则内（两者同包发版，#667 锁步），只共用同一套错误结构。
+- 壳的错误显示（#1071）：daemon 应答 `{code, reason, params}` 里线上只有机器码 `reason`，文案由壳自己选。`ipc.rs` 的 `REASON_UI_KEYS` 对 `reasons_registry` 快照里每个 reason 给显式去向（具体文案 key，或显式归入 `ui.err_generic`），穷举测试卡死漏项；表外 / 缺失的 reason 一律通用文案，原 reason 只进 `params.reason` 与 stderr 日志。前端 `errText` 对未注册串同样显示通用文案、原串只进 console；嵌在「失败：{err}」句子里的细节用 `errDetail`，自由文本（stderr、OS 错误）原样保留。设备列表对 `needs_update` 非空的行显示「需要更新手机 App」/「需要更新这台电脑上的 P-Pass」。
 
 ### 11.2 仍保留的兼容分支与退役条件
 

@@ -71,8 +71,8 @@
   // assets/i18n/*.json，Rust 测试保证双语文案齐全）。
   // I18N-03 (#492): t() 抽到 lib/i18n.js 共享（向导、lib/*.js 同源）；
   // T-081 暂写死在组件里的导航/页面文案已全部收编进字典。errText 负责
-  // 把 Rust 壳回来的错误（key + 参数 / 裸 msg_key / 原串）渲染成人话。
-  import { t, errText, getLocale, readLangPref, applyLangPref } from "./lib/i18n.js";
+  // 把 Rust 壳回来的错误（key + 参数 / 裸已注册 key；不认识的一律通用错误，原串只进 console）渲染成人话。
+  import { t, errText, errDetail, getLocale, readLangPref, applyLangPref } from "./lib/i18n.js";
 
   // ---- T-081 布局 v1：侧边栏四页（总览 / 家人与设备 / 活动记录 / 设置，
   // 照片库并入设置）。hash 同步只为可验证/可深链，不引入路由依赖。
@@ -140,7 +140,7 @@
     try {
       await applyLangPref(pref, { invoke, reload: () => location.reload() });
     } catch (e) {
-      flashMessage(t("ui.save_failed", { err: errText(e) }), "error");
+      flashMessage(t("ui.save_failed", { err: errDetail(e) }), "error");
     }
   }
 
@@ -162,7 +162,7 @@
       await invoke("stop_daemon");
       flashMessage(t("ui.service_stopped"), "warning");
     } catch (e) {
-      flashMessage(t("ui.stop_failed", { err: errText(e) }), "error");
+      flashMessage(t("ui.stop_failed", { err: errDetail(e) }), "error");
     }
     // DESK-63 (#946)：状态点由 Rust 的 service-state 事件立刻更新；这里只
     // 重新对账数据与 wizard_state（user_stopped 刚落盘，向导门靠它不把人
@@ -174,7 +174,7 @@
   // 失败原因，成功为 null）。和窗口里的按钮同一个 stop_daemon、同一份标记。
   async function onServiceStopped(ev) {
     const err = ev?.payload;
-    if (err) flashMessage(t("ui.stop_failed", { err: errText(err) }), "error");
+    if (err) flashMessage(t("ui.stop_failed", { err: errDetail(err) }), "error");
     else flashMessage(t("ui.service_stopped"), "warning");
     await syncServiceState();
   }
@@ -191,7 +191,7 @@
     try {
       await invoke("start_daemon");
     } catch (e) {
-      flashMessage(t("ui.start_failed", { err: errText(e) }), "error");
+      flashMessage(t("ui.start_failed", { err: errDetail(e) }), "error");
     } finally {
       setTimeout(() => (starting = false), 3000);
     }
@@ -367,7 +367,7 @@
         // AUDIT-07（#499）：这里原来是 `catch (_) {}`——失败被吞掉，活动记录页
         // 只是变空（跟「确实还没有记录」长得一模一样）。改成把错误显示在那一页上。
         auditEvents = [];
-        auditError = errText(e);
+        auditError = errDetail(e);
       }
     } catch (e) {
       // DESK-63 (#946): only the `status` probe can reach here now
@@ -511,7 +511,7 @@
         errorCorrectionLevel: "L",
       });
     } catch (e) {
-      flashMessage(t("ui.pair_failed", { err: errText(e) }), "error");
+      flashMessage(t("ui.pair_failed", { err: errDetail(e) }), "error");
     }
   }
 
@@ -574,7 +574,7 @@
       // T4: 处理完由下一轮 refresh 关模态（pending 清 0）——状态消失不残留。
       await refresh();
     } catch (e) {
-      flashMessage(t("ui.confirm_failed", { err: errText(e) }), "error");
+      flashMessage(t("ui.confirm_failed", { err: errDetail(e) }), "error");
     }
   }
 
@@ -589,7 +589,7 @@
       flashMessage(t("ui.revoked", { name }), "warning");
       await refresh();
     } catch (e) {
-      flashMessage(t("ui.revoke_failed", { err: errText(e) }), "error");
+      flashMessage(t("ui.revoke_failed", { err: errDetail(e) }), "error");
     }
   }
 
@@ -617,7 +617,7 @@
       toast.success(t("ui.rename_saved", { name: r.name ?? trimmed }));
       await refresh();
     } catch (e) {
-      toast.error(t("ui.rename_failed", { err: errText(e) }));
+      toast.error(t("ui.rename_failed", { err: errDetail(e) }));
     }
   }
 
@@ -628,7 +628,7 @@
         reveal: revealItemInDir,
       });
     } catch (e) {
-      flashMessage(t("ui.open_failed", { err: errText(e) }), "error");
+      flashMessage(t("ui.open_failed", { err: errDetail(e) }), "error");
     }
   }
 
@@ -640,7 +640,7 @@
       const r = await call("device.folder", { node_id: nodeId });
       await revealItemInDir(r.path);
     } catch (e) {
-      flashMessage(t("ui.device_open_folder_failed", { err: errText(e) }), "error");
+      flashMessage(t("ui.device_open_folder_failed", { err: errDetail(e) }), "error");
     }
   }
 
@@ -659,7 +659,7 @@
       await invoke("set_library_dir", { libraryDir: dir });
       flashMessage(t("ui.change_saved", { dir }));
     } catch (e) {
-      flashMessage(t("ui.save_failed", { err: errText(e) }), "error");
+      flashMessage(t("ui.save_failed", { err: errDetail(e) }), "error");
     }
   }
 
@@ -677,7 +677,7 @@
         await revealItemInDir(r.zip); // 在 Finder/资源管理器中直接展示
       } catch (_) {}
     } catch (e) {
-      flashMessage(t("ui.export_failed", { err: errText(e) }), "error");
+      flashMessage(t("ui.export_failed", { err: errDetail(e) }), "error");
     }
   }
 
@@ -1004,7 +1004,7 @@
         flashMessage(t("ui.restart_service_no_change", { version: r.new_version ?? "?" }), "warning");
       }
     } catch (e) {
-      flashMessage(t("ui.restart_service_failed", { err: errText(e) }), "error");
+      flashMessage(t("ui.restart_service_failed", { err: errDetail(e) }), "error");
     } finally {
       restartingService = false;
     }
@@ -1026,7 +1026,7 @@
       // （10-01 真机就是被这句误导的）。
       console.warn("[updater] check failed:", e);
       updatePhase = "failed";
-      updateError = errText(e);
+      updateError = errDetail(e);
       return;
     }
     if (!update) {
@@ -1302,7 +1302,7 @@
     try {
       await revealItemInDir(viewerPath);
     } catch (e) {
-      flashMessage(t("ui.reveal_failed", { err: errText(e) }), "error");
+      flashMessage(t("ui.reveal_failed", { err: errDetail(e) }), "error");
     }
   }
 
@@ -1681,6 +1681,13 @@
                             title={t("ui.rename")}
                             onclick={() => startRename(d)}
                           >{d.name}</Button>
+                        {/if}
+                        <!-- #1071：协议版本不符的一端要更新才能互通；daemon 在
+                             devices.list 每行给 needs_update（"phone" | "desktop" | null）。 -->
+                        {#if d.needs_update === "phone" || d.needs_update === "desktop"}
+                          <span class="text-[12.5px] font-semibold text-act" data-testid="device-needs-update">
+                            {t(d.needs_update === "phone" ? "ui.device_needs_update_phone" : "ui.device_needs_update_desktop")}
+                          </span>
                         {/if}
                       </span>
                       <!-- NET-13: 设备 ID 独立列——8 位短指纹，与活动记录页

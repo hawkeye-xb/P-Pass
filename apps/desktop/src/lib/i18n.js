@@ -91,25 +91,50 @@ export function hasKey(key) {
 
 /**
  * Render an error coming back from the Rust shell (`invoke` rejection or an
- * event payload) for the user. Three shapes:
+ * event payload) for the user. Shapes:
  *   - keyed error `{"key":"ui.…","params":{…}}` (JSON string or object) —
  *     rendered via t(); param values may themselves be keyed errors (a shell
  *     error wrapping an IPC error) and are rendered recursively. Low-level
  *     `{e}` details arrive as plain strings and pass through untranslated.
- *   - a bare registered key (the daemon answers with msg_keys like
- *     `err.not_authorized`) — rendered via t().
- *   - anything else — shown as-is.
+ *   - a bare registered key — rendered via t().
+ *   - anything else (a string nobody registered, an Error object) — the
+ *     generic error text. The raw value only goes to the console: protocol
+ *     v2 (#1071) never shows a machine string such as `storage_full` to the
+ *     user.
  */
 export function errText(e) {
+  return render(e, true);
+}
+
+/**
+ * Same as [`errText`] but for an error that is embedded as the `{err}` detail
+ * of a larger sentence ("Failed to save: {err}"): keyed errors and registered
+ * keys are still translated, while free-form text — a daemon stderr tail, an
+ * OS error, a JS `Error` — stays as the diagnostic detail the sentence is
+ * meant to carry. A standalone error line must use `errText`.
+ */
+export function errDetail(e) {
+  return render(e, false);
+}
+
+function render(e, top) {
   const keyed = asKeyed(e);
   if (keyed) {
     const vars = {};
-    for (const [k, v] of Object.entries(keyed.params || {})) vars[k] = errText(v);
-    return t(keyed.key, vars);
+    for (const [k, v] of Object.entries(keyed.params || {})) vars[k] = render(v, false);
+    return hasKey(keyed.key) ? t(keyed.key, vars) : genericErr(e);
   }
-  // String(e), not e.message: same text the call sites showed before.
   const s = String(e);
-  return hasKey(s) ? t(s) : s;
+  if (hasKey(s)) return t(s);
+  // Nested params are diagnostic detail the shell composed on purpose (an OS
+  // error text inside a keyed shell error); only the outermost value is the
+  // sentence the user reads.
+  return top ? genericErr(e) : s;
+}
+
+function genericErr(raw) {
+  console.warn("errText: unregistered error shown as generic:", raw);
+  return t("ui.err_generic");
 }
 
 function asKeyed(e) {

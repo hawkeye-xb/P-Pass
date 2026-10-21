@@ -21,7 +21,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 import { startupFailureText } from "./daemonStartupError.js";
-import { errText, t } from "./i18n.js";
+import { errDetail, t } from "./i18n.js";
 
 /** 向导共三步。 */
 export const WIZARD_STEP_COUNT = 3;
@@ -101,7 +101,7 @@ export function createWizardFlow({
       if (afterLibrarySaved) await afterLibrarySaved();
       set({ step: 2 });
     } catch (e) {
-      set({ error: t("ui.wizard_save_failed", { err: errText(e) }) });
+      set({ error: t("ui.wizard_save_failed", { err: errDetail(e) }) });
     } finally {
       set({ busy: false });
     }
@@ -147,7 +147,7 @@ export function createWizardFlow({
       }
       onDone();
     } catch (e) {
-      set({ error: t("ui.wizard_start_failed", { err: errText(e) }) });
+      set({ error: t("ui.wizard_start_failed", { err: errDetail(e) }) });
     } finally {
       set({ busy: false });
     }

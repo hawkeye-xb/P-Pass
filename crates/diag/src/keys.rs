@@ -414,6 +414,12 @@ msg_keys! {
     UI_IOS_WAIT_OPEN_APP => "ui.ios_wait_open_app",
     UI_IOS_WAIT_ICLOUD_ORIGINAL => "ui.ios_wait_icloud_original",
     UI_IOS_WAIT_PHONE_STORAGE_FULL => "ui.ios_wait_phone_storage_full",
+    /// 协议 v2（#1071）：桌面壳按 daemon 应答的 `reason` 选自己的文案；表外的值一律用通用错误，绝不显示原始串；设备列表对协议版本过旧的一端给出「需要更新」。
+    UI_ERR_GENERIC => "ui.err_generic",
+    UI_ERR_PHONE_OUTDATED => "ui.err_phone_outdated",
+    UI_ERR_DESKTOP_OUTDATED => "ui.err_desktop_outdated",
+    UI_DEVICE_NEEDS_UPDATE_PHONE => "ui.device_needs_update_phone",
+    UI_DEVICE_NEEDS_UPDATE_DESKTOP => "ui.device_needs_update_desktop",
 }
 
 #[cfg(test)]
@@ -735,10 +741,15 @@ mod tests {
             UI_IOS_WAIT_OPEN_APP,
             UI_IOS_WAIT_ICLOUD_ORIGINAL,
             UI_IOS_WAIT_PHONE_STORAGE_FULL,
+            UI_ERR_GENERIC,
+            UI_ERR_PHONE_OUTDATED,
+            UI_ERR_DESKTOP_OUTDATED,
+            UI_DEVICE_NEEDS_UPDATE_PHONE,
+            UI_DEVICE_NEEDS_UPDATE_DESKTOP,
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 312);
+        assert_eq!(ALL.len(), 317);
     }
 
     #[test]

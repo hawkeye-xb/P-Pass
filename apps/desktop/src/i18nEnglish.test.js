@@ -114,15 +114,29 @@ describe("errText：Rust 壳回来的三种错误形状", () => {
     expect(errText({ key: "ui.err_no_daemon", params: {} })).toBe(t("ui.err_no_daemon"));
   });
 
-  it("裸 msg_key（daemon 回的 err.*）按 key 渲染，不再原样显示 key", () => {
+  it("裸已注册 key 按 key 渲染，不显示 key 本身", () => {
     expect(errText("err.not_authorized")).toBe(t("err.not_authorized"));
     expect(errText("err.not_authorized")).not.toContain("err.");
   });
 
-  it("其它一律原样：普通串、看起来像 JSON 的串、Error 对象", () => {
-    expect(errText("ipc timeout: status > 10s")).toBe("ipc timeout: status > 10s");
-    expect(errText("{not json")).toBe("{not json");
-    expect(errText(new Error("boom"))).toBe("Error: boom");
+  it("未注册的串（含 daemon 机器码）一律通用文案，原串不进界面、只进 console", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      for (const raw of ["storage_full", "ipc timeout: status > 10s", "{not json", "err.never_registered"]) {
+        expect(errText(raw)).toBe(t("ui.err_generic"));
+        expect(errText(raw)).not.toContain(raw);
+      }
+      expect(errText(new Error("boom"))).toBe(t("ui.err_generic"));
+      expect(errText({ key: "ui.never_registered", params: {} })).toBe(t("ui.err_generic"));
+      expect(warn).toHaveBeenCalledWith(expect.any(String), "storage_full");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("keyed 错误的参数里的底层细节（OS 错误文本）仍原样透传", () => {
+    const e = JSON.stringify({ key: "ui.err_sleep_fix_failed", params: { err: "exit 1" } });
+    expect(errText(e)).toBe("Setup failed: exit 1");
   });
 
   it("中文环境下同一条 keyed 错误渲染成中文原文", () => {

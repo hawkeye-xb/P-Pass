@@ -296,7 +296,7 @@ fn start_event_stream(app: tauri::AppHandle) {
                         // proved `status` answers, so it is running. There is
                         // no event source, so fall back to a slow probe; this
                         // is the only timed status probe that drives state.
-                        Err(e) if e == "err.unsupported" => {
+                        Err(e) if ipc::is_unsupported_error(&e) => {
                             had_connection = true;
                             manager.set(
                                 &app,

@@ -1,7 +1,7 @@
 <script>
   import { invoke } from "@tauri-apps/api/core";
   import { Button } from "$lib/components/ui/button";
-  import { errText, t } from "$lib/i18n.js";
+  import { errDetail, t } from "$lib/i18n.js";
   import { createWizardFlow, stepBar } from "$lib/wizardFlow.js";
 
   // DESK-15：按钮视觉合同收进 Button 组件本身（primary/secondary/danger/
@@ -39,7 +39,7 @@
       await invoke("disable_auto_sleep");
       power = await invoke("power_hint"); // 刷新，成功的话这里应该变成 never
     } catch (e) {
-      sleepFixError = errText(e);
+      sleepFixError = errDetail(e);
     } finally {
       sleepFixBusy = false;
     }
