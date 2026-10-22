@@ -3,7 +3,7 @@ import Foundation
 import Photos
 import PPassCore
 
-/// 仅 DEBUG：tools/ios/sim-bg-task.sh（#958 后台短任务真机模拟）与 tools/ios/delete-test-assets.sh 用的驱动。
+/// 仅 DEBUG：tools/ios/sim-bg-task.sh（#958 后台短任务真机模拟）、tools/ios/e3-batch.sh 与 tools/ios/delete-test-assets.sh 用的驱动。
 /// 经 E2EDriver 进来（PPASS_E2E_DIR=container），状态写 `<dir>/status.json`，脚本用 devicectl 拉回。一次启动只做一种：
 ///
 ///   PPASS_BGTEST_SCOPE_EXPORT=1  导出当前相册范围（selected / known）和测试相册里的资源数，不改任何东西。
@@ -14,6 +14,8 @@ import PPassCore
 ///   PPASS_BGTEST_PAIR_ONLY=1     配回正式桌面：先把范围清空 → 配对（PPASS_E2E_PAIR_LINK）→ 若给了
 ///                                PPASS_BGTEST_SCOPE_RESTORE（导出时的 JSON {selected, known}），且所选相册里**没有任何测试资源**，
 ///                                恢复成那组范围；有交集就保持空范围并报 `scope_conflict`（不让测试照片进用户真实的照片库）。
+///                                PPASS_BGTEST_ALLOW_TEST_SCOPE=1：对端是测试沙盒 daemon（e3-batch.sh），没有真实照片库要护，
+///                                测试相册照样恢复。
 ///   PPASS_BGTEST_DELETE_TEST=1   删除所有「PPass BGTest *」相册里的资源和这些相册。iOS 会弹系统确认框，要人在手机上点「删除」。
 @MainActor
 enum BGTestDriver {
@@ -31,7 +33,10 @@ enum BGTestDriver {
         } else if env["PPASS_BGTEST_DUMP"] == "1" {
             dumpLedger(dir: dir, status: status)
         } else if env["PPASS_BGTEST_PAIR_ONLY"] == "1" {
-            Task { await pairOnly(model: model, link: link, restore: env["PPASS_BGTEST_SCOPE_RESTORE"], status: status) }
+            Task {
+                await pairOnly(model: model, link: link, restore: env["PPASS_BGTEST_SCOPE_RESTORE"],
+                               allowTestScope: env["PPASS_BGTEST_ALLOW_TEST_SCOPE"] == "1", status: status)
+            }
         } else if env["PPASS_BGTEST_DELETE_TEST"] == "1" {
             Task { await deleteTestAssets(status: status) }
         } else {
@@ -53,7 +58,8 @@ enum BGTestDriver {
                                "test_assets": testAssetIds().count, "done": true])
     }
 
-    private static func pairOnly(model: AppModel, link: String, restore: String?, status: StatusFile) async {
+    private static func pairOnly(model: AppModel, link: String, restore: String?, allowTestScope: Bool,
+                                 status: StatusFile) async {
         let media = model.backend.media
         // 先清空：范围里可能还是测试相册，一连上正式桌面就会把测试照片备份进用户的真实库。
         let all = Set(((try? await media.albums()) ?? []).map(\.id))
@@ -79,7 +85,7 @@ enum BGTestDriver {
             let test = testAssetIds()
             var inSelected = Set<String>()
             for id in selected { inSelected.formUnion(PhotoKitAlbums.assetIds(inCollection: id)) }
-            let conflict = inSelected.intersection(test)
+            let conflict = allowTestScope ? [] : inSelected.intersection(test)
             if conflict.isEmpty {
                 do {
                     try await media.saveScope(selected, known: known)

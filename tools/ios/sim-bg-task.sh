@@ -15,7 +15,7 @@
 # 输出：apps/ios/build/sim-bg-task/<场景>-<时间>/（daemon 日志、App 落盘日志、本轮切片 run.log）
 #
 # 怎么造出「只剩短任务窗口」（细节与实测依据见 sim-bg-task-lldb.py 头注释）：
-#   1. 本机起隔离 daemon（fake HOME + 临时库 + --ephemeral，同 e2e-device.sh），App 用 DEBUG 驱动（E2EDriver，PPASS_BGTEST=1）
+#   1. 本机起测试沙盒桌面（tools/ios/sandbox-desk.sh：fake HOME + daemon 自建的临时库，--ephemeral），App 用 DEBUG 驱动（E2EDriver，PPASS_BGTEST=1）
 #      清存储根 → 配对 → 新建空相册「PPass BGTest <run>」并只选它；等选相册那一轮收场。
 #   2. daemon SIGSTOP（桌面不可达）→ 测试照片 + 1 段视频写进这个相册（iOS 前台没有图库变化触发，照片留着待传）。
 #   3. LLDB 附加 → App 切到后台（前台换成「设置」）→ 跳过「打开宽限期窗口」那一行（系统断言照常申请）
@@ -133,70 +133,37 @@ if [ "${PPASS_SKIP_BUILD:-}" != 1 ]; then
     >"$OUT/install.log" 2>&1 || { cat "$OUT/install.log"; exit 1; }
 fi
 cargo build -q -p daemon --release
-DAEMON="$ROOT/target/release/daemon"
+DAEMON="${CARGO_TARGET_DIR:-$ROOT/target}/release/daemon"
 
-# ---- 隔离 daemon + 自动允许配对（同 e2e-device.sh）----
+# ---- 测试沙盒桌面 + 自动允许配对（tools/ios/sandbox-desk.sh，同 e3-batch.sh）----
+# shellcheck source=tools/ios/sandbox-desk.sh
+source "$ROOT/tools/ios/sandbox-desk.sh"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/ppass-bgsim.XXXXXX")
+DESK="$WORK/desk"
 DAEMON_PID=
-OWNER_PID=
-TOUCHED_PAIRING= # App 带 PPASS_E2E_RESET 启动之后置 1：从这一刻起手机可能配着临时 daemon，退出时必须配回
+TOUCHED_PAIRING= # App 带 PPASS_E2E_RESET 启动之后置 1：从这一刻起手机配着测试沙盒
 cleanup() {
   local rc=$?
   trap - EXIT INT TERM
-  [ -n "$DAEMON_PID" ] && kill -CONT "$DAEMON_PID" 2>/dev/null || true
-  cp "$WORK/daemon.err" "$OUT/daemon.err" 2>/dev/null || true
-  [ -n "$OWNER_PID" ] && kill "$OWNER_PID" 2>/dev/null || true
-  exec 4>&- 2>/dev/null || true
-  if [ -n "$DAEMON_PID" ]; then kill "$DAEMON_PID" 2>/dev/null || true; wait "$DAEMON_PID" 2>/dev/null || true; fi
+  cp "$DESK/daemon.err" "$OUT/daemon.err" 2>/dev/null || true
+  desk_stop "$DESK"
   rm -rf "$WORK"
-  # 手机这时配着刚杀掉的临时 daemon：配回本机正式桌面，并恢复开跑前导出的相册范围
-  # （所选相册里有测试资源就不恢复、保持空范围，测试照片不会进真实照片库）。
-  # 正常结束、判 FAIL、中途出错、Ctrl-C 都走这里。
-  # #1115：配回正式桌面只能由人在桌面 App 里操作（打开 P-Pass →「添加设备」→ 手机扫码 → 桌面点「允许」），
-  #        脚本不再能用正式桌面的 IPC 令牌自己发起并批准配对（那正是 #1115 要堵的攻击形状）。
+  # 手机这时配着刚退出的测试沙盒。正常结束、判 FAIL、中途出错、Ctrl-C 都走这里。
+  # #1115：配回正式桌面只能由人在桌面 App 里操作——脚本连不上正式桌面（常驻 daemon 只认签名程序）。
   if [ -n "$TOUCHED_PAIRING" ]; then
-    echo "==> 手机这时配着刚退出的临时 daemon。要配回正式桌面：打开 P-Pass 桌面 →「添加设备」→ 手机扫码 → 桌面点「允许」。"
+    echo "==> 手机这时配着刚退出的测试沙盒。要配回正式桌面：打开 P-Pass 桌面 →「添加设备」→ 手机扫码 → 桌面点「允许」。"
     echo "    范围备份在 $OUT/scope-before.json（另存于 apps/ios/build/sim-bg-task/scope-backup.json），在手机 App 里按它重新选相册。"
   fi
   exit "$rc"
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
-mkdir -p "$WORK/home" "$WORK/seed"
-mkfifo "$WORK/stdin"
-HOME="$WORK/home" PPF_BIND_ADDR="0.0.0.0:0" PPF_RELAY_URLS="" PPF_TELEMETRY_ENABLED=false \
-  RUST_LOG="${PPASS_E2E_RUST_LOG:-info}" "$DAEMON" --ephemeral <"$WORK/stdin" >"$WORK/daemon.out" 2>"$WORK/daemon.err" &
-DAEMON_PID=$!
-exec 4>"$WORK/stdin"
-NODE_ID=
-for _ in $(seq 1 150); do
-  NODE_ID=$(sed -n 's/^NodeId: \([0-9a-f]\{64\}\).*/\1/p' "$WORK/daemon.out" | head -1)
-  [ -n "$NODE_ID" ] && break
-  kill -0 "$DAEMON_PID" 2>/dev/null || break
-  sleep 0.2
-done
-[ -n "$NODE_ID" ] || { echo "error: daemon 没打出 NodeId" >&2; cat "$WORK/daemon.err" >&2; exit 1; }
-sleep 1
-# shellcheck source=tools/ipc-lib.sh
-source "$ROOT/tools/ipc-lib.sh"
-# #1115：--ephemeral 是测试沙盒，库目录由 daemon 自建（stdout 的 SANDBOX: 行），不收路径输入。
-ipc_sandbox_dir "$WORK/daemon.out"
-ipc_pair_qr "$SANDBOX_DIR/ipc.token"
-owner_loop() {
-  local resp ids n body
-  while kill -0 "$DAEMON_PID" 2>/dev/null; do
-    if resp=$(ipc pairing.pending 2>/dev/null); then
-      ids=$(printf '%s' "$resp" | jq -r '.result.pending[]?.node_id // empty')
-      for n in $ids; do
-        body=$(jq -cn --arg n "$n" '{accept: true, node_id: $n}')
-        ipc pairing.confirm "$body" >/dev/null 2>&1 && echo "  owner: 已允许 ${n:0:8}…"
-      done
-    fi
-    sleep 0.3
-  done
-}
-owner_loop &
-OWNER_PID=$!
+mkdir -p "$DESK" "$WORK/seed"
+desk_start "$DESK" "$DAEMON"
+desk_auto_allow "$DESK"
+DAEMON_PID=$(cat "$DESK/pid")
+NODE_ID=$(desk_node "$DESK")
+desk_qr "$DESK"
 echo "  daemon pid=${DAEMON_PID} node=${NODE_ID:0:8}…"
 
 # ---- 测试照片（噪声图，不可压缩；每轮不同字节）与 1 段视频 ----
@@ -273,7 +240,7 @@ done
 [ -n "$SETTLED" ] || { echo "FAIL: 选相册那一轮 60 秒内没收场（见 $OUT/ppass.log）"; exit 1; }
 
 # ---- 桌面不可达 → 写入测试照片 ----
-kill -STOP "$DAEMON_PID"
+desk_pause "$DESK"
 echo "==> daemon 已暂停（SIGSTOP）；把测试照片 / 视频拷进 App 容器并写入相册"
 for f in "$WORK/seed"/*; do
   xcrun devicectl device copy to --device "$DEV" --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
@@ -307,7 +274,7 @@ echo "---"
 # expire：账本在 App Group 容器里（devicectl 拉不到）：先停掉 daemon（下一次启动连不上桌面，不会接着传这张），
 # 再用 DEBUG 驱动（PPASS_BGTEST_DUMP=1）把账本拷进 App 容器，拉回 $OUT/db 给判定查。
 if [ "$MODE" = expire ]; then
-  kill "$DAEMON_PID" 2>/dev/null || true; wait "$DAEMON_PID" 2>/dev/null || true; DAEMON_PID=
+  desk_stop "$DESK"
   RUN="$RUN-dump"
   xcrun devicectl device process launch --device "$DEV" --terminate-existing \
     --environment-variables "$(jq -cn --arg r "$RUN" '{PPASS_E2E_DIR:"container", PPASS_E2E_RUN:$r, PPASS_BGTEST_DUMP:"1"}')" \
