@@ -79,7 +79,7 @@ extension AutoBackupPrefs {
     /// 配对成功后的后台意图（#982；对位 Android：以前连过的电脑 → `restoreAutoBackupAfterRepair` 按意图恢复；
     /// 换新电脑 → `setRequested(false)`，由完成页让用户重新选）。
     /// iOS 没有 App 内申请「后台执行」的系统框（后台 App 刷新只能用户在系统设置里开），所以恢复时不因它而挂起，
-    /// 关着的情况由首页告示说明（BackupPromise.refreshOff）——见 06-ios-variants「后台备份默认值与完成页」。
+    /// 关着的情况由设置页告示说明（AppModel.backgroundNotice）——见 06-ios-variants「后台备份默认值与完成页」。
     public func applyOnPairing(knownDesktop: Bool) throws {
         guard knownDesktop else { try setRequested(false); return }
         if AutoBackupResume.decide(userRequested: requested(), backgroundAuthorized: true) == .enable { try setEnabled(true) }

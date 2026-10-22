@@ -168,11 +168,7 @@ final class FakeEngine: BackupEngine {
     func askNotificationAtOnboarding() async {}
     func finishOnboarding() throws {}
 
-    func promise() -> [PromiseNotice] {
-        var out = [PromiseNotice(BackupPromise.whileOpenTitle), PromiseNotice(BackupPromise.whileOpenBody)]
-        if scenario == .waiting { out.append(PromiseNotice(BackupPromise.waitOpenApp)) }
-        return out
-    }
+    func backgroundRefresh() -> BackgroundRefreshAvailability { .available }
 }
 
 /// 演示数据没有电脑可订阅：不产生任何信号（页面行为 = 演示数据本身），状态恒为初始。

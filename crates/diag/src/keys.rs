@@ -415,14 +415,6 @@ msg_keys! {
     UI_WIZARD_AUTOSTART_NOTICE_MAC => "ui.wizard_autostart_notice_mac",
     UI_WIZARD_ALLOW_LABEL => "ui.wizard_allow_label",
     UI_WIZARD_LOCAL_NETWORK_MAC => "ui.wizard_local_network_mac",
-    /// #343（IOS-17）：iOS 不承诺什么——首页常驻告示、后台 App 刷新关闭 / 受限、iOS 特有的等待原因。
-    UI_IOS_BACKUP_WHILE_OPEN_TITLE => "ui.ios_backup_while_open_title",
-    UI_IOS_BACKUP_WHILE_OPEN_BODY => "ui.ios_backup_while_open_body",
-    UI_IOS_BACKGROUND_REFRESH_OFF => "ui.ios_background_refresh_off",
-    UI_IOS_BACKGROUND_REFRESH_RESTRICTED => "ui.ios_background_refresh_restricted",
-    UI_IOS_WAIT_OPEN_APP => "ui.ios_wait_open_app",
-    UI_IOS_WAIT_ICLOUD_ORIGINAL => "ui.ios_wait_icloud_original",
-    UI_IOS_WAIT_PHONE_STORAGE_FULL => "ui.ios_wait_phone_storage_full",
     /// 协议 v2（#1071）：桌面壳按 daemon 应答的 `reason` 选自己的文案；表外的值一律用通用错误，绝不显示原始串；设备列表对协议版本过旧的一端给出「需要更新」。
     UI_ERR_GENERIC => "ui.err_generic",
     UI_ERR_PHONE_OUTDATED => "ui.err_phone_outdated",
@@ -751,13 +743,6 @@ mod tests {
             UI_WIZARD_AUTOSTART_NOTICE_MAC,
             UI_WIZARD_ALLOW_LABEL,
             UI_WIZARD_LOCAL_NETWORK_MAC,
-            UI_IOS_BACKUP_WHILE_OPEN_TITLE,
-            UI_IOS_BACKUP_WHILE_OPEN_BODY,
-            UI_IOS_BACKGROUND_REFRESH_OFF,
-            UI_IOS_BACKGROUND_REFRESH_RESTRICTED,
-            UI_IOS_WAIT_OPEN_APP,
-            UI_IOS_WAIT_ICLOUD_ORIGINAL,
-            UI_IOS_WAIT_PHONE_STORAGE_FULL,
             UI_ERR_GENERIC,
             UI_ERR_PHONE_OUTDATED,
             UI_ERR_DESKTOP_OUTDATED,
@@ -766,7 +751,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 325);
+        assert_eq!(ALL.len(), 318);
     }
 
     #[test]

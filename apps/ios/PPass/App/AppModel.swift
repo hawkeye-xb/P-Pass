@@ -33,8 +33,6 @@ final class AppModel: ObservableObject {
     @Published private(set) var scope: Set<String>?
     /// 系统里当前实际存在的相册（nil = 没有完整授权，读不到）。「已选相册」只数已选且现存的（#983，Android #836）。
     @Published private(set) var existingAlbums: Set<String>?
-    /// #343：首页常驻告示（已解析成当前语言的句子）。
-    @Published private(set) var promise: [String] = []
     /// 「后台 App 刷新」不可用、而用户要后台备份时的全局告示（对位 Android `NoticeHost` 的 BACKUP_INTERRUPTED，UI-12）：
     /// 照片 / 设置两页都看得到，不给「知道了」——事实还在就一直说，退出路径是去系统设置打开，或把「后台备份」关掉。
     @Published private(set) var backgroundNotice: BackgroundNotice?
@@ -165,18 +163,7 @@ final class AppModel: ObservableObject {
         wifiOnly = backend.engine.wifiOnly()
         autoBackup = backend.engine.autoBackup()
         notifyOnFailure = backend.engine.notifyOnFailure()
-        let notices = backend.engine.promise()
-        promise = notices.map(Self.noticeText)
-        backgroundNotice = Self.backgroundNotice(notices, backgroundRequested: backend.engine.autoBackup())
-    }
-
-
-    /// 告示 key → 人话。字典缺 key 是打包漏了（`BackupPromise.allKeys` 有测试核对）：显示通用提示、记日志，绝不把 key 本身显示给用户（#1073）。
-    static func noticeText(_ n: PromiseNotice) -> String {
-        if let text = DiagText.resolve(n.key, vars: n.vars) { return text }
-        AppLog.log("promise: no text for notice key \(n.key); showing the generic notice")
-        assertionFailure("缺告示文案：\(n.key)")
-        return L.s("notice_text_unavailable")
+        backgroundNotice = Self.backgroundNotice(backend.engine.backgroundRefresh(), backgroundRequested: autoBackup)
     }
 
     /// 「取消剩余 N 张」行的 N（Android cancelRemainingRowCount）：只在已暂停 / 等待中、配对没失效、确有剩余时出现。
@@ -243,15 +230,13 @@ final class AppModel: ObservableObject {
     var pairedAtMs: Int64? { backend.pairing.pairedAtMs() }
 
     /// 只在用户要后台备份时才说（Android：OffByUser 不出告示）；关着后台备份时，后台刷新关不关与用户无关。
-    static func backgroundNotice(_ notices: [PromiseNotice], backgroundRequested: Bool) -> BackgroundNotice? {
+    static func backgroundNotice(_ refresh: BackgroundRefreshAvailability, backgroundRequested: Bool) -> BackgroundNotice? {
         guard backgroundRequested else { return nil }
-        if notices.contains(where: { $0.key == BackupPromise.refreshOff }) {
-            return BackgroundNotice(body: L.s("background_refresh_off_notice"), canResolve: true)
+        switch refresh {
+        case .available: return nil
+        case .denied: return BackgroundNotice(body: L.s("background_refresh_off_notice"), canResolve: true)
+        case .restricted: return BackgroundNotice(body: L.s("background_refresh_restricted_notice"), canResolve: false)
         }
-        if notices.contains(where: { $0.key == BackupPromise.refreshRestricted }) {
-            return BackgroundNotice(body: L.s("background_refresh_restricted_notice"), canResolve: false)
-        }
-        return nil
     }
 
     /// 「去处理」：跳到系统设置里 P-Pass 的页面（「后台 App 刷新」开关就在那一页）。

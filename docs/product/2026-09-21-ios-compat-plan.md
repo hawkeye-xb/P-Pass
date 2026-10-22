@@ -238,7 +238,7 @@ PHAssetResourceUploadJob.h:39   @property NSURLRequest *destination;   // 我们
 - `IOS-14` 前台追赶（对位 `ForegroundCatchupOnResume`）+ `BGProcessingTask` 尽力而为路径。
 - `IOS-15`（**已挂起**，等后台方案定）背景上传扩展：登记任务、`jobLimit` 配额管理、`acknowledge`/`retry(destination:)` 与账本对账、从 `responseHeaderFields` 收凭据。
 - `IOS-16`（**已挂起**，等后台方案定）daemon 侧 HTTP ingest + 鉴权 + 回执头；`Hello.capabilities` 增 `"ios.http-ingest.v1"`，`PROTO_VER` 不动。
-- `IOS-17` 「iOS 能承诺什么、不能承诺什么」的用户可见表达（首页文案 + 引导），对位 Android 的电池白名单引导。iOS 没有 FGS、没有开机广播、没有电池白名单三层开关，**不许用文案假装有**。
+- `IOS-17` 「iOS 能承诺什么、不能承诺什么」的用户可见表达（首页文案 + 引导），对位 Android 的电池白名单引导。（2026-10-22 调整，#343：首页不放常驻说明，与 Android 一致；只在后台 App 刷新关 / 受限时出告示，「后台不保证」的解释归 Q&A。）iOS 没有 FGS、没有开机广播、没有电池白名单三层开关，**不许用文案假装有**。
 
 **Gate G5**：真机放置 24h 不开 App，回贴实际发生的备份条数与系统日志；条数为 0 也是合法结论，但必须如实写进产品一页纸。**本轮只做 `IOS-14` 与 `IOS-17`**——即「前台追赶 + `BGProcessingTask` 尽力而为」，加上把 iOS 不承诺什么如实告诉用户。
 
