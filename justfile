@@ -73,10 +73,11 @@ fmt:
 #
 # BUILD-06: 刻意**不用** `--all-features`。本仓只有两个 feature，两个都是特殊
 # 构建模式，不该被默认打开：
-#   - `transport/android-jni` —— 只给 Android 桥用（全仓唯一启用处是
-#     tools/build-android-iroh-blobs-bridge.sh）。它的代码用 `std::os::fd`，
-#     在 Windows 上直接编不过（E0432/E0599）⇒ `--all-features` 等于把这个
-#     刻意做出来的平台闸门又强行打开。Android 那条路径见下方 lint-android。
+#   - `transport/mobile-ffi` —— 只给两端手机的绑定用（启用处是
+#     tools/build-android-iroh-blobs-bridge.sh 与 tools/build-ios-transport-xcframework.sh）。
+#     它的代码用 `std::os::fd`（#1126 起 Android 的描述符导入在这里），在 Windows 上
+#     直接编不过（E0432/E0599）⇒ `--all-features` 等于把这个刻意做出来的平台闸门又强行
+#     打开。手机那条路径见下方 lint-mobile。
 #   - `media-codec/vendored` —— 从源码编 libheif。该 crate 自己的注释就写着
 #     「Default stays on the system library for fast dev/CI builds」。
 # 远端 ci-rust.yml 仍用 `--all-features`（Linux 上两者都编得过），所以覆盖没丢；
@@ -102,11 +103,11 @@ lint:
 lint-cross:
   for t in x86_64-pc-windows-msvc x86_64-unknown-linux-gnu x86_64-apple-darwin; do rustup target add "$t" >/dev/null 2>&1 && echo "==> clippy -p platform --target $t" && cargo clippy -p platform --all-targets --features test-support --target "$t" -- -D warnings || exit 1; done
 
-# BUILD-06: android-jni 的专项 lint。**只能在 unix 上跑**——该 feature 的代码
-# 用 `std::os::fd`，Windows 上必然 E0432。所以刻意没挂进 `ci`：挂进去等于让
-# Windows 的 `just ci` 永远红。
-lint-android:
-  cargo clippy -p transport --all-targets --features android-jni -- -D warnings
+# BUILD-06 / #1126: 手机绑定（mobile-ffi，原 android-jni 已并入）的专项 lint。**只能在 unix
+# 上跑**——该 feature 的代码用 `std::os::fd`，Windows 上必然 E0432。所以刻意没挂进 `ci`：
+# 挂进去等于让 Windows 的 `just ci` 永远红（Linux CI 的 `--all-features` clippy 覆盖它）。
+lint-mobile:
+  cargo clippy -p transport --all-targets --features mobile-ffi -- -D warnings
 
 # ── Test ────────────────────────────────────────────
 

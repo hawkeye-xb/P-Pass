@@ -1,8 +1,7 @@
 //! Platform-neutral one-lease iroh-blobs provider kernel (IOS-05 #312).
 //!
-//! No binding lives here: the Android JNI binding is `android_jni.rs` (and its
-//! JSON wire shapes `android_wire.rs`); a second binding (iOS, IOS-06) sits on
-//! the same public API. Everything a binding needs is `pub` on [`BlobsProvider`].
+//! No binding lives here: both phones reach it through the one uniffi binding
+//! (`mobile_ffi::Provider`, #1126). Everything a binding needs is `pub` on [`BlobsProvider`].
 //!
 //! A provider keeps one endpoint across Flow items. Registrations add their
 //! current source to the same private store; revocation only stops the active
@@ -87,6 +86,8 @@ pub struct BlobsProvider {
     /// desktop's NodeId, set by the app from its pairing record. `None`
     /// (the initial state, and after unpair) refuses everyone.
     allowed_peer: AllowedPeer,
+    /// #1126: see [`PeerClosedHook`].
+    close_hook: CloseHook,
     /// #584: retire tasks that have not finished shutting the old endpoint
     /// down — a park only counts as settled once this drains back to zero.
     retire_pending: Arc<AtomicU64>,
@@ -95,6 +96,29 @@ pub struct BlobsProvider {
 /// #547: shared by every endpoint generation's dispatch (NET-29 replacement
 /// must keep the same gate, never open or close it by accident).
 type AllowedPeer = Arc<Mutex<Option<crate::NodeId>>>;
+
+/// #1126：允许的那台电脑用应用关闭码关掉了一条入站连接——(电脑 NodeId, 关闭码)。电脑删掉这台
+/// 设备时用 410 关掉它正在拉图的连接，手机靠这个在没有控制面连接时也能立刻知道。
+pub type PeerClosedHook = Arc<dyn Fn(crate::NodeId, u64) + Send + Sync>;
+/// 所有端点代共享同一个槽（与 [`AllowedPeer`] 同理）。
+#[derive(Clone, Default)]
+struct CloseHook(Arc<Mutex<Option<PeerClosedHook>>>);
+
+impl std::fmt::Debug for CloseHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CloseHook")
+    }
+}
+
+impl CloseHook {
+    fn get(&self) -> Option<PeerClosedHook> {
+        self.0.lock().expect("provider close hook lock").clone()
+    }
+
+    fn set(&self, hook: Option<PeerClosedHook>) {
+        *self.0.lock().expect("provider close hook lock") = hook;
+    }
+}
 
 /// QUIC application close code for a peer the provider refuses.
 const NOT_PAIRED_CLOSE_CODE: u32 = 403;
@@ -195,6 +219,7 @@ impl ProviderEndpoint {
         config: TransportConfig,
         dispatch: &Arc<Mutex<Option<StopAwareBlobsProtocol>>>,
         allowed_peer: &AllowedPeer,
+        close_hook: &CloseHook,
     ) -> Result<Self> {
         let transport = IrohTransport::bind(config.clone()).await?;
         let retired = Arc::new(AtomicBool::new(false));
@@ -206,6 +231,7 @@ impl ProviderEndpoint {
                     handler: Arc::clone(dispatch),
                     retired: Arc::clone(&retired),
                     allowed_peer: Arc::clone(allowed_peer),
+                    close_hook: close_hook.clone(),
                     connections: Arc::clone(&connections),
                 },
             )
@@ -289,6 +315,8 @@ struct ActiveBlobsDispatch {
     retired: Arc<AtomicBool>,
     /// #547: see [`BlobsProvider::allowed_peer`].
     allowed_peer: AllowedPeer,
+    /// #1126: see [`PeerClosedHook`].
+    close_hook: CloseHook,
     /// #729: see [`ProviderEndpoint::connections`] (the same table).
     connections: Arc<EndpointConnections>,
 }
@@ -332,13 +360,29 @@ impl ProtocolHandler for ActiveBlobsDispatch {
             .lock()
             .expect("Android provider dispatch lock")
             .clone();
-        match handler {
-            Some(handler) => handler.accept(connection).await,
+        let result = match handler {
+            Some(handler) => handler.accept(connection.clone()).await,
             None => {
                 connection.close(0u32.into(), b"provider revoked");
-                Ok(())
+                return Ok(());
+            }
+        };
+        // #1126: the serve loop ends when the connection does (or on an error while it is still
+        // open — then wait for it to close, the guard keeps it registered until then). Only a
+        // close frame FROM the paired desktop counts: local closes (park / retire / revoke) and
+        // timeouts never reach the hook (`ApplicationClosed` is the remote's frame only).
+        // Code 0 is this protocol's ordinary close (a finished pull, an endpoint going away) —
+        // a verdict always carries its own code (401 / 410).
+        if let iroh::endpoint::ConnectionError::ApplicationClosed(close) = connection.closed().await
+        {
+            let code = close.error_code.into_inner();
+            if let (Some(hook), true) = (self.close_hook.get(), code != 0) {
+                // Off the runtime: the app's reaction (forget the pairing → revoke / shutdown)
+                // calls back into this provider's blocking API.
+                std::thread::spawn(move || hook(peer, code));
             }
         }
+        result
     }
 
     async fn shutdown(&self) {
@@ -791,6 +835,7 @@ impl BlobsProvider {
             stored: Mutex::default(),
             import_lock: Mutex::default(),
             allowed_peer,
+            close_hook: CloseHook::default(),
             retire_pending: Arc::default(),
         })
     }
@@ -806,6 +851,12 @@ impl BlobsProvider {
         if let Some(active) = self.active.lock().expect("active provider lock").as_ref() {
             active.handler.close_foreign(peer);
         }
+    }
+
+    /// #1126: register (or clear with `None`) the [`PeerClosedHook`]. Applies to connections
+    /// that close from now on, on every endpoint generation.
+    pub fn set_peer_close_hook(&self, hook: Option<PeerClosedHook>) {
+        self.close_hook.set(hook);
     }
 
     /// Imports [path] under [declared_hash] into the provider's persistent
@@ -1019,6 +1070,7 @@ impl BlobsProvider {
                 (self.endpoint_config)(generation),
                 &self.dispatch,
                 &self.allowed_peer,
+                &self.close_hook,
             )
             .await?,
         );
@@ -1114,6 +1166,7 @@ impl BlobsProvider {
             (self.endpoint_config)(next_generation),
             &self.dispatch,
             &self.allowed_peer,
+            &self.close_hook,
         )
         .await
         {
@@ -1296,6 +1349,7 @@ mod endpoint_ownership_tests {
                     TransportConfig::loopback(vec![ALPN_BLOBS.to_owned()]),
                     &provider.dispatch,
                     &provider.allowed_peer,
+                    &provider.close_hook,
                 ))
                 .unwrap(),
         );
@@ -1506,7 +1560,7 @@ fn describe(meta: &Metadata) -> String {
     }
 }
 
-/// What `stat` says about one file. Only the Android bridge build reads it;
+/// What `stat` says about one file. Only the phone binding build (`mobile-ffi`) reads it;
 /// every other build has no identity and therefore always copies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct FileIdentity {
@@ -1517,7 +1571,7 @@ struct FileIdentity {
     mtime_nsec: i64,
 }
 
-#[cfg(feature = "android-jni")]
+#[cfg(feature = "mobile-ffi")]
 fn file_id(meta: &Metadata) -> Option<FileIdentity> {
     use std::os::unix::fs::MetadataExt;
     Some(FileIdentity {
@@ -1529,7 +1583,7 @@ fn file_id(meta: &Metadata) -> Option<FileIdentity> {
     })
 }
 
-#[cfg(not(feature = "android-jni"))]
+#[cfg(not(feature = "mobile-ffi"))]
 fn file_id(_meta: &Metadata) -> Option<FileIdentity> {
     None
 }

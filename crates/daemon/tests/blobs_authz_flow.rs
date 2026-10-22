@@ -224,3 +224,77 @@ async fn first_pairing_then_photo_delivery_over_gated_data_planes() {
         .await
         .unwrap();
 }
+
+/// #1126：电脑删掉这台手机时，手机上传 provider 的入站连接也以 410 关掉——手机在后台、没有
+/// 控制面连接时也能立刻知道（provider 的关闭钩子）。daemon 拉图连的是 provider 自己的端点身份，
+/// 不是手机的控制面 NodeId，所以删配对必须把这台设备拉图用过的 provider 端点一起关掉。
+#[tokio::test(flavor = "multi_thread")]
+async fn removing_the_phone_closes_its_provider_connection_with_410() {
+    let root = tempfile::tempdir().unwrap();
+    let d = start_daemon(root.path()).await;
+    let phone = bind(&[transport::ALPN_CTRL, transport::ALPN_BLOBS]).await;
+    phone.add_peer(d.tp.local_addr());
+    let qr = d.pairing.start([0x43; 12], now());
+    let daemon_node_id = qr_param(&qr, "node").to_string();
+    let accepted = pair(&phone, d.tp.node_id(), qr_param(&qr, "t")).await;
+
+    let photo = b"photo before the owner removes the phone".to_vec();
+    let photo_hash = *blake3::hash(&photo).as_bytes();
+    let photo_src = root.path().join("IMG_0002.jpg");
+    std::fs::write(&photo_src, &photo).unwrap();
+    let provider_root = root.path().join("phone-files");
+    let (tx, rx) = std::sync::mpsc::channel::<(NodeId, u64)>();
+    let (provider, ticket) = tokio::task::spawn_blocking(move || {
+        let provider = AndroidBlobsProvider::new_loopback(&provider_root).unwrap();
+        provider.set_allowed_peer(Some(daemon_node_id.parse().unwrap()));
+        let tx = std::sync::Mutex::new(tx);
+        provider.set_peer_close_hook(Some(Arc::new(move |peer, code| {
+            let _ = tx.lock().unwrap().send((peer, code));
+        })));
+        let ticket = provider.register_path(photo_hash, &photo_src).unwrap();
+        (provider, ticket)
+    })
+    .await
+    .unwrap();
+
+    let offer = flow_request(&accepted.pairing_id, photo_hash, ticket);
+    d.delivery.offer(phone.node_id(), &offer).await.unwrap();
+    common::await_receipt(&d.delivery, phone.node_id(), &offer)
+        .await
+        .expect("delivered");
+
+    // The owner removes the phone (the IPC `device.revoke` path).
+    let closer: daemon::unpair::PeerCloser = {
+        let tp = d.tp.clone();
+        Arc::new(move |peer| tp.close_peer(peer))
+    };
+    let holders = daemon::unpair::Holders {
+        flow: Some(&d.delivery),
+        connections: Some(&closer),
+        ..Default::default()
+    };
+    daemon::unpair::remove_pairing(
+        &d.db,
+        holders,
+        phone.node_id(),
+        None,
+        DepartedBy::Owner,
+        now(),
+    )
+    .await
+    .unwrap()
+    .expect("removed");
+
+    let got =
+        tokio::task::spawn_blocking(move || rx.recv_timeout(std::time::Duration::from_secs(10)))
+            .await
+            .unwrap();
+    assert_eq!(
+        got,
+        Ok((d.tp.node_id(), 410)),
+        "the phone's provider hears the removal"
+    );
+    tokio::task::spawn_blocking(move || drop(provider))
+        .await
+        .unwrap();
+}

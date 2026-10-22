@@ -235,7 +235,7 @@ channel 0.1.0-test.90 0.1.0-test.90; tplan v0.1.0-test.5; expect_plan "基线不
 
 echo "plan-builds（#1062 test tag：Rust 改动按 Cargo 依赖图归属到端）"
 # 最小 Cargo workspace：transport 的 proto 依赖只在 mobile-ffi 下生效（另有一条 dev 依赖）——同真实仓库。
-# 入口（rust-impact.py ENTRIES）：Android transport[android-jni, mobile-ffi]、iOS transport[mobile-ffi]、
+# 入口（rust-impact.py ENTRIES）：Android transport[mobile-ffi]、iOS transport[mobile-ffi]、
 # macOS daemon、Windows daemon + testclient（夹具里没有桌面壳）。
 expect4() { # <说明> <android> <macos> <windows> <ios>
   if [ "$RC" = 0 ] && [ "$(get android)" = "$2" ] && [ "$(get macos)" = "$3" ] && [ "$(get windows)" = "$4" ] && [ "$(get ios)" = "$5" ]; then ok "$1"
@@ -269,7 +269,6 @@ crate crates/proto proto ''
 echo '// extra' > "$REPO/crates/proto/src/extra.rs"
 crate crates/platform platform ''
 crate crates/transport transport '[features]
-android-jni = []
 mobile-ffi = ["dep:proto"]
 
 [dependencies]
@@ -332,7 +331,7 @@ REPO="$REPO_MAIN"
 echo "plan-builds（#1062 入口包与真实构建命令、真实依赖图一致）"
 ROOT="$(cd "$HERE/.." && pwd)"
 has() { grep -qF -- "$2" "$ROOT/$1" && ok "$1 含「$2」" || bad "$1 应含「$2」（入口包 / feature 变了要同步 rust-impact.py 的 ENTRIES）"; }
-has tools/build-android-iroh-blobs-bridge.sh "cargo build -p transport --features android-jni,mobile-ffi"
+has tools/build-android-iroh-blobs-bridge.sh "cargo build -p transport --features mobile-ffi --release"
 has tools/build-android-iroh-blobs-bridge.sh "-p transport --features mobile-bindgen"
 has tools/build-ios-transport-xcframework.sh "-p transport --lib --features mobile-ffi"
 has tools/build-ios-transport-xcframework.sh "-p transport --features mobile-bindgen"

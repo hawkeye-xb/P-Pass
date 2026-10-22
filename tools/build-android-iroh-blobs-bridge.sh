@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Build Android's libtransport.so into Gradle's generated jniLibs: the hand-written JNI
-# iroh-blobs provider (android-jni, until #1126) plus the uniffi exports shared with iOS
-# (mobile-ffi, #1124: control-plane client, original fetch, close codes). With a second
-# argument, also generate the Kotlin bindings for those exports into that directory.
+# Build Android's libtransport.so into Gradle's generated jniLibs: the uniffi exports shared
+# with iOS (mobile-ffi: control-plane client, original fetch, close codes (#1124), and the
+# iroh-blobs upload provider (#1126, the hand-written JNI is gone)). With a second argument,
+# also generate the Kotlin bindings for those exports into that directory.
 set -euo pipefail
 
 if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then
@@ -30,7 +30,7 @@ export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$CLANG"
 export CARGO_TARGET_AARCH64_LINUX_ANDROID_AR="$TOOLCHAIN_ROOT/bin/llvm-ar"
 export CC_aarch64_linux_android="$CLANG"
 export AR_aarch64_linux_android="$TOOLCHAIN_ROOT/bin/llvm-ar"
-cargo build -p transport --features android-jni,mobile-ffi --release --target "$TARGET"
+cargo build -p transport --features mobile-ffi --release --target "$TARGET"
 
 SO="${CARGO_TARGET_DIR:-target}/$TARGET/release/libtransport.so"
 OUT="$1/arm64-v8a"

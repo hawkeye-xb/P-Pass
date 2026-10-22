@@ -567,6 +567,13 @@ impl FlowTaskRegistry {
     }
 }
 
+/// #1126: see [`FlowDelivery::provider_endpoints`].
+type ProviderEndpoints = Arc<Mutex<HashMap<[u8; 32], Vec<NodeId>>>>;
+
+/// #1126: how many provider endpoints to remember per phone (it rebinds on network trouble and
+/// after parking; older ones are long closed).
+const PROVIDER_ENDPOINTS_PER_PEER: usize = 4;
+
 /// Adapter from a current flow item to the native iroh-blobs receiver.
 #[derive(Clone)]
 pub struct FlowDelivery {
@@ -588,6 +595,10 @@ pub struct FlowDelivery {
     /// still materializing that same fetch. One lock per paired phone prevents
     /// the retry from deleting or moving the first fetch's staging path.
     fetch_locks: FetchLocks,
+    /// #1126: the provider endpoints each paired phone's fetches dialled (a phone's upload
+    /// provider runs its own endpoint identity, not the phone's control-plane NodeId). Removing
+    /// the phone closes these too, so its provider hears the 410. A few most recent per phone.
+    provider_endpoints: ProviderEndpoints,
     /// NET-06: process-local registry of the background native-fetch task
     /// per exact tuple, so `suspend`/`cancel_by_tuple` can interrupt it and
     /// `status` can tell "still working" from "stopped".
@@ -654,6 +665,7 @@ impl FlowDelivery {
             paths: FlowPathRegistry::default(),
             events: None,
             fetch_locks: Arc::default(),
+            provider_endpoints: Arc::default(),
             tasks: FlowTaskRegistry::default(),
             subscriptions: None,
             awake: AwakeHold::noop(),
@@ -1193,6 +1205,7 @@ impl FlowDelivery {
         let item_started = std::time::Instant::now();
         let hash = array32(&grant.content_hash).expect("validated by checked_request");
         let provider = self.provider_for(grant)?;
+        self.note_provider_endpoint(peer, provider);
 
         // The visible path is scoped to this exact strict item and cleared by
         // its guard on every terminal branch. Start as unknown before opening
@@ -1740,6 +1753,30 @@ impl FlowDelivery {
     /// 它的交付记录已随配对记录级联删除；这里收掉内存态：中断它的全部在途拉取
     /// 并等其退出（在途的那张不会进照片库），清掉它的传输路径登记与拉取锁。
     /// 返回中断了几个任务。
+    /// #1126: remember that [peer]'s fetch dials [provider].
+    fn note_provider_endpoint(&self, peer: NodeId, provider: NodeId) {
+        let mut map = self
+            .provider_endpoints
+            .lock()
+            .expect("flow provider endpoints lock");
+        let seen = map.entry(peer.0).or_default();
+        seen.retain(|p| *p != provider);
+        seen.push(provider);
+        if seen.len() > PROVIDER_ENDPOINTS_PER_PEER {
+            seen.remove(0);
+        }
+    }
+
+    /// #1126: the provider endpoints [peer]'s fetches dialled, forgotten as they are handed out
+    /// (the unpair path closes their connections).
+    pub fn take_provider_endpoints(&self, peer: NodeId) -> Vec<NodeId> {
+        self.provider_endpoints
+            .lock()
+            .expect("flow provider endpoints lock")
+            .remove(&peer.0)
+            .unwrap_or_default()
+    }
+
     pub async fn release_peer(&self, peer: NodeId) -> usize {
         let tasks = self.tasks.interrupt_peer(peer);
         let interrupted = tasks.count();

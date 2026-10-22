@@ -485,6 +485,38 @@ impl From<ActiveTransferStatus> for TransferStatus {
     }
 }
 
+impl From<crate::provider::MediaImport> for MediaImport {
+    fn from(import: crate::provider::MediaImport) -> Self {
+        MediaImport {
+            hash: hex32(&import.hash),
+            size: import.size,
+            by_reference: import.by_reference,
+            fallback: import
+                .fallback
+                .map(ImportFallback::as_str)
+                .map(str::to_owned),
+            detail: import.detail,
+        }
+    }
+}
+
+/// Owned duplicate of a caller-owned descriptor (the caller closes its own).
+fn duplicate_fd(fd: i32) -> Result<File, FfiError> {
+    use std::os::fd::FromRawFd;
+    // SAFETY: `dup` only reads the descriptor number; a bad one returns -1.
+    let duplicated = unsafe { libc::dup(fd) };
+    if duplicated < 0 {
+        return Err(FfiError::Transport {
+            msg: format!(
+                "duplicate source descriptor: {}",
+                std::io::Error::last_os_error()
+            ),
+        });
+    }
+    // SAFETY: `dup` returned a fresh descriptor that nothing else owns.
+    Ok(unsafe { File::from_raw_fd(duplicated) })
+}
+
 /// The one-lease iroh-blobs provider (one long-lived endpoint, one lease at
 /// a time, `TempTag`-protected against the 60s GC). Same kernel as Android.
 #[derive(uniffi::Object)]
@@ -547,17 +579,30 @@ impl Provider {
         let source = File::open(PathBuf::from(&path)).map_err(|error| FfiError::Transport {
             msg: format!("open {path:?}: {error}"),
         })?;
-        let import = self.inner.import_media(None, source)?;
-        Ok(MediaImport {
-            hash: hex32(&import.hash),
-            size: import.size,
-            by_reference: import.by_reference,
-            fallback: import
-                .fallback
-                .map(ImportFallback::as_str)
-                .map(str::to_owned),
-            detail: import.detail,
-        })
+        Ok(self.inner.import_media(None, source)?.into())
+    }
+
+    /// #413 / #1126 (Android): imports one original from the ContentResolver descriptor [fd],
+    /// by reference to [path] (the MediaStore `_data` path) when it is the same file, else by
+    /// copy (`path` = `nil` always copies). The descriptor is duplicated first: the caller keeps
+    /// ownership of [fd] and may close it as soon as this returns.
+    pub fn import_media(&self, path: Option<String>, fd: i32) -> Result<MediaImport, FfiError> {
+        let source = duplicate_fd(fd)?;
+        let path = path.map(PathBuf::from);
+        Ok(self.inner.import_media(path.as_deref(), source)?.into())
+    }
+
+    /// #1126: register (or clear with `nil`) the [`PeerCloseListener`] for this provider's
+    /// incoming connections: the paired desktop closing one with an application code (410 when
+    /// it removed this phone) is reported as (desktop NodeId, code) — the same listener and the
+    /// same "forget the pairing" judgement as [`CtrlClient`]'s. Code 0 (an ordinary close) and
+    /// local closes are not reported. Called on a thread of its own, never the runtime's.
+    pub fn set_peer_close_listener(&self, listener: Option<Arc<dyn PeerCloseListener>>) {
+        self.inner.set_peer_close_hook(listener.map(|listener| {
+            Arc::new(move |peer: crate::NodeId, code: u64| {
+                listener.on_peer_closed(peer.to_string(), code)
+            }) as crate::provider::PeerClosedHook
+        }));
     }
 
     /// Serves a held import as the current lease; returns its ticket.
@@ -1265,6 +1310,37 @@ impl Drop for CtrlClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1126（Android 原 JNI 的契约）：`import_media` 先 dup 描述符——调用方的 fd 调用后照样有效、
+    /// 由调用方自己关；导入的内容就是那个文件的内容。
+    #[test]
+    fn import_media_duplicates_the_callers_descriptor() {
+        use std::os::fd::AsRawFd;
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("IMG_1126.jpg");
+        std::fs::write(&src, b"an original behind a content descriptor").unwrap();
+        let provider = Provider::new(dir.path().join("p").display().to_string()).unwrap();
+        let file = std::fs::File::open(&src).unwrap();
+        let fd = file.as_raw_fd();
+        let import = provider.import_media(None, fd).unwrap();
+        assert_eq!(
+            import.hash,
+            hex32(blake3::hash(b"an original behind a content descriptor").as_bytes())
+        );
+        assert!(!import.by_reference, "no path: copied");
+        // SAFETY: only queries the descriptor's flags.
+        assert_ne!(
+            unsafe { libc::fcntl(fd, libc::F_GETFD) },
+            -1,
+            "the caller's fd is still open"
+        );
+        drop(file);
+        assert!(
+            provider.import_media(None, -1).is_err(),
+            "a bad descriptor is an error"
+        );
+        provider.shutdown();
+    }
     use crate::Transport;
     use futures_core::Stream;
     use std::pin::Pin;

@@ -48,7 +48,11 @@ pub async fn remove_pairing(
 
 /// 清掉挂在 `peer` 上的内存态。
 async fn release(holders: Holders<'_>, peer: transport::NodeId) {
+    // #1126: its upload provider runs an endpoint identity of its own — close those connections
+    // with the same 410, so the phone hears the removal even with no control connection open.
+    let mut providers = Vec::new();
     if let Some(flow) = holders.flow {
+        providers = flow.take_provider_endpoints(peer);
         flow.release_peer(peer).await;
     }
     if let Some(backup) = holders.backup {
@@ -60,6 +64,9 @@ async fn release(holders: Holders<'_>, peer: transport::NodeId) {
     // 最后关连接：前面几步收掉的任务此时已退出，不会再借这条连接发东西。
     if let Some(close) = holders.connections {
         let closed = close(peer);
-        tracing::info!("#1119: pairing removed, closed {closed} connection(s) peer={peer:?}");
+        let provider_closed: usize = providers.iter().map(|p| close(*p)).sum();
+        tracing::info!(
+            "#1119: pairing removed, closed {closed} connection(s) + {provider_closed} provider connection(s) peer={peer:?}"
+        );
     }
 }

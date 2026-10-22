@@ -9,18 +9,13 @@ publish = false
 crate-type = ["rlib", "cdylib"]
 
 [features]
-# Enabled only by the Android bridge build. This keeps JNI descriptor APIs out
-# of non-Android release targets without platform cfg outside crates/platform/.
-# IOS-05 (#312): jni/libc are only reachable through this feature, so the
-# platform-neutral provider kernel (src/provider.rs) cannot name `jni::` —
-# the default build has no such crate to import.
-android-jni = ["dep:jni", "dep:libc"]
-# IOS-06 (#313) / #1124: UniFFI binding shared by both phones — the iOS
+# IOS-06 (#313) / #1124 / #1126: UniFFI binding shared by both phones — the iOS
 # XCFramework (Swift) and Android's libtransport.so (Kotlin) export the same
-# objects. Same rule as android-jni: a feature, never a target_os cfg
-# (arch-check B.2); enabled only by tools/build-ios-transport-xcframework.sh
-# and tools/build-android-iroh-blobs-bridge.sh.
-mobile-ffi = ["dep:uniffi", "dep:blake3", "dep:pair-pake"]
+# objects, the upload provider included (Android's hand-written JNI is gone).
+# A feature, never a target_os cfg (arch-check B.2); enabled only by
+# tools/build-ios-transport-xcframework.sh and tools/build-android-iroh-blobs-bridge.sh.
+# libc: descriptor dup for Android's ContentResolver imports and the logcat bridge's dlopen.
+mobile-ffi = ["dep:uniffi", "dep:blake3", "dep:pair-pake", "dep:libc"]
 # Swift / Kotlin binding generator (host-only tool, run by the same scripts).
 mobile-bindgen = ["mobile-ffi", "uniffi/cli"]
 
@@ -32,7 +27,6 @@ tokio = { workspace = true, features = ["rt-multi-thread", "fs", "time", "sync"]
 tokio-util = { version = "0.7", features = ["io"] }
 # #1122：对端地址簿有上限、按最近使用淘汰（已在依赖树里）。
 lru = "0.18"
-jni = { version = "0.21", optional = true }
 libc = { version = "0.2", optional = true }
 futures-core.workspace = true
 thiserror.workspace = true

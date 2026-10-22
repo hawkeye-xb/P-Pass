@@ -509,11 +509,11 @@ jobs:
 
       # ⚠️⚠️ **刻意不带 `--all-features`** —— 上面那个 Linux job 带，这里不带，
       # 这个差异是有理由的，不是抄漏了：
-      #   本仓的 android-jni feature 用到 `std::os::fd`，Windows 上**不存在**，
-      #   `--all-features` 把这个「只给 Android 桥用」的 feature 强开到 Windows
+      #   本仓的 mobile-ffi feature（手机绑定，#1126 起含原 android-jni）用到 `std::os::fd`，
+      #   Windows 上**不存在**，`--all-features` 把这个「只给手机绑定用」的 feature 强开到 Windows
       #   ⇒ transport crate 当场 E0432/E0599 编不过。那正是 BUILD-06 (#174)
       #   的根因，也是 justfile:74-82 刻意不用这个 flag 的原因。
-      # 覆盖账：android-jni 那条路径仍由 Linux job 的 --all-features 覆盖，没丢。
+      # 覆盖账：mobile-ffi 那条路径仍由 Linux job 的 --all-features 覆盖，没丢。
       # 👉 谁要在这里"顺手补上" --all-features，先去读 #174。
       # `--no-fail-fast`：nextest 默认一红就掐断。首次跑本 lane 时一条
       # ffmpeg 失败**掩掉了后面 130 个测试**（307/437 就停了）—— 跟本仓
@@ -537,8 +537,8 @@ jobs:
   # 挡不住合并，等于没加。单独成 job 才能按自己的耗时决定要不要设为必需。
   #
   # ⚠️ 与上面那条 `clippy` 的差别都是有理由的，不是抄漏了：
-  #   - **不带 `--all-features`**：android-jni 在 Windows 上编不过，理由见
-  #     BUILD-06 (#174) 与上面 test-windows 那段注释。android-jni 那条路径的
+  #   - **不带 `--all-features`**：mobile-ffi 在 Windows 上编不过，理由见
+  #     BUILD-06 (#174) 与上面 test-windows 那段注释。mobile-ffi 那条路径的
   #     lint 仍由 Linux 的 `clippy` 覆盖，没丢。
   #   - **缓存全部复用 test (windows) 的 key**（vcpkg 安装树 + cargo 依赖源码），
   #     不新增任何缓存条目：本仓 10 GB 配额实测已顶满（CI-19 #392），多占一份

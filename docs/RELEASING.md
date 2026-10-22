@@ -196,7 +196,7 @@ version string (`-test.` ⇒ test):
   (`crates/`, `tools/testclient/`, root `Cargo.toml` / `Cargo.lock`) → by the
   Cargo dependency graph (#1062, `tools/release/rust-impact.py`): a changed
   workspace crate triggers only the platforms whose entry package depends on
-  it (Android `transport[android-jni]`, iOS `transport[mobile-ffi]`, macOS
+  it (Android and iOS `transport[mobile-ffi]`, macOS
   `daemon` + desktop shell, Windows `daemon` + `testclient` + desktop shell),
   so `crates/daemon` → macOS + Windows and `crates/transport` → all four; a
   root `Cargo.toml` change that only bumps `[workspace.package].version` →
@@ -441,7 +441,7 @@ Android 靠 `channelFromVersion()` 读注入的版本串（含 `-test.` 即 test
   `apps/desktop/` → macOS + Windows；macOS 打包脚本 → macOS；`tauri.windows.conf.json`
   → Windows；文档 → 都不算；Rust（`crates/`、`tools/testclient/`、根 `Cargo.toml` /
   `Cargo.lock`）→ 按 Cargo 依赖图归属（#1062，`tools/release/rust-impact.py`）：改动的
-  workspace crate 只触发入口包依赖它的端（Android `transport[android-jni]`、iOS
+  workspace crate 只触发入口包依赖它的端（Android 与 iOS
   `transport[mobile-ffi]`、macOS `daemon` + 桌面壳、Windows `daemon` + `testclient` + 桌面壳），
   所以 `crates/daemon` → macOS + Windows，`crates/transport` → 四端；根 `Cargo.toml` 只涨
   `[workspace.package].version` → macOS + Windows；`Cargo.lock` → 能走到变动外部包的端；

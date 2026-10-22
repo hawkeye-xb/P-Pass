@@ -6,14 +6,10 @@
 //! (ADR-001); the Phase-2 WebRTC read-only subset hangs off the same
 //! interface, at which point these concrete types become enums.
 
-// IOS-05 (#312)：provider 内核与绑定分离。`provider` 平台中立、不含任何
-// `jni::` 符号；JNI 是绑定 #1，只在 `android-jni` feature 下编进来。
-#[cfg(feature = "android-jni")]
-mod android_jni;
-#[cfg(feature = "android-jni")]
+// IOS-05 (#312)：provider 内核与绑定分离。`provider` 平台中立；#1126 起两端手机都经
+// `mobile_ffi`（uniffi）这一份绑定调用它，Android 的手写 JNI 已删除。
+#[cfg(feature = "mobile-ffi")]
 mod android_logcat;
-#[cfg(any(feature = "android-jni", test))]
-mod android_wire;
 mod blobs;
 mod conninfo;
 mod iroh_impl;
