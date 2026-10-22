@@ -68,7 +68,7 @@ public struct Order: Equatable, Sendable {
     /// 失败次数（每记一次 FAILED 加 1；当场重试那一次不单独算）。
     public let attempts: Int
     /// 建这行时的配对代号（防护列，#415 裁决 6）。
-    public let pairingEpoch: String
+    public let pairingId: String
     public let createdAtMs: Int64
     public let updatedAtMs: Int64
     /// 照片库里已经没有这张的原图。CONFIRMED 不改写，只打这个标记（#416 裁决 2 / #459）。
@@ -81,9 +81,9 @@ public struct NewOrder: Equatable, Sendable {
     public let bucketId: String
     public let contentHash: String?
     public let state: OrderState
-    public let pairingEpoch: String
+    public let pairingId: String
 
-    public init(mediaId: String, sourceVersion: String, bucketId: String, contentHash: String?, state: OrderState, pairingEpoch: String) {
+    public init(mediaId: String, sourceVersion: String, bucketId: String, contentHash: String?, state: OrderState, pairingId: String) {
         precondition(!mediaId.isEmpty, "mediaId must not be empty")
         precondition(!sourceVersion.isBlank, "sourceVersion must not be blank")
         precondition(contentHash == nil || !contentHash!.isBlank, "contentHash must be nil or non-blank")
@@ -92,7 +92,7 @@ public struct NewOrder: Equatable, Sendable {
         self.bucketId = bucketId
         self.contentHash = contentHash
         self.state = state
-        self.pairingEpoch = pairingEpoch
+        self.pairingId = pairingId
     }
 }
 

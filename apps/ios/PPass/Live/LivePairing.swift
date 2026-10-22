@@ -61,7 +61,7 @@ struct PairVerdictLoop {
         } catch { return .unreachable(String(describing: error)) }
         guard submit.ok else { return .rejected(submit.error) }
         guard let submitted = try? submit.result?.decode(PairSubmitted.self), !submitted.requestId.isEmpty else {
-            if let legacy = try? submit.result?.decode(PairAccepted.self), !legacy.pairingEpoch.isEmpty { return .accepted(legacy) }
+            if let legacy = try? submit.result?.decode(PairAccepted.self), !legacy.pairingId.isEmpty { return .accepted(legacy) }
             return .desktopTooOld
         }
         let ttl = submitted.ttlMs > 0 ? UInt64(submitted.ttlMs) : 600_000
@@ -98,7 +98,7 @@ struct PairVerdictLoop {
             failures = 0
             switch reply.state {
             case "accepted":
-                if let a = reply.accepted, !a.pairingEpoch.isEmpty { return .accepted(a) }
+                if let a = reply.accepted, !a.pairingId.isEmpty { return .accepted(a) }
                 failures += 1
                 lastFailure = "pair.status: accepted without payload"
                 if failures >= maxConsecutiveFailures { return .unreachable(lastFailure) }
@@ -155,16 +155,16 @@ final class LivePairing: PairingService, @unchecked Sendable {
         let rpc: (String, Encodable) async throws -> Resp = { method, params in
             try await client.callRaw(method, AnyEncodable(params), timeoutMs: 15_000)
         }
-        // 已是这台电脑的成员（电脑换了地址 / 身份）：hello 对成员带回非空 pairing_epoch，未配对 / 已撤销的设备拿不到
-        // （已撤销的 hello 直接被拒），语义对位 Android（#1051）。hello 超时 / 被拒 / 没带 epoch 都落回正常配对，
-        // 不存空 epoch / 空电脑名（#970）。
+        // 已是这台电脑的成员（电脑换了地址 / 身份）：hello 对成员带回非空 pairing_id，未配对（含配对记录已被电脑删除）的设备拿不到
+        // （这类 hello 直接被拒 not_paired），语义对位 Android（#1051）。hello 超时 / 被拒 / 没带 pairingId 都落回正常配对，
+        // 不存空 pairingId / 空电脑名（#970）。
         let member = await memberHello(rpc)
         if case let .outdated(side) = member { return PairVerdict.versionMismatch(side).outcome }
-        if case let .hello(hello) = member, let epoch = hello.pairingEpoch, !epoch.isEmpty {
+        if case let .hello(hello) = member, let pairingId = hello.pairingId, !pairingId.isEmpty {
             // 「连没连过」必须在 save 之前定：save 里的 onPaired 会把这台标成连过（#982：之前顺序反了，firstTime 恒为 false）。
             let known = onboarded(code.nodeId)
             do {
-                let settingSaveFailed = try save(code, name: hello.deviceName, epoch: epoch, known: known)
+                let settingSaveFailed = try save(code, name: hello.deviceName, pairingId: pairingId, known: known)
                 return .joined(firstTime: !known, settingSaveFailed: settingSaveFailed)
             } catch {
                 return saveFailure(error)
@@ -177,7 +177,7 @@ final class LivePairing: PairingService, @unchecked Sendable {
         if case .accepted(let a) = verdict {
             let known = onboarded(code.nodeId)
             do {
-                let settingSaveFailed = try save(code, name: a.storageDeviceName, epoch: a.pairingEpoch, known: known)
+                let settingSaveFailed = try save(code, name: a.storageDeviceName, pairingId: a.pairingId, known: known)
                 return .joined(firstTime: !known, settingSaveFailed: settingSaveFailed)
             } catch { return saveFailure(error) }
         }
@@ -195,7 +195,7 @@ final class LivePairing: PairingService, @unchecked Sendable {
             notify: {
                 guard let r = record, !r.lost else { return }
                 await UnpairNotice.sendOnce(transportFor(r.peerToken), daemonNodeId: r.daemonNodeId,
-                                            pairingEpoch: r.pairingEpoch, logger: logger)
+                                            pairingId: r.pairingId, logger: logger)
             },
             clearLocal: onDisconnect)
     }
@@ -222,9 +222,9 @@ final class LivePairing: PairingService, @unchecked Sendable {
 
     /// 写盘成功才算配对成功：失败不调 `onPaired`，让用户看到失败而不是进入重启即丢的「已配对」（#969）。
     /// 返回 `onPaired` 的结果：配对之后的设置有没有没写下来、要提示的（#1039）。
-    private func save(_ code: ParsedPairLink, name: String, epoch: String, known: Bool) throws -> Bool {
+    private func save(_ code: ParsedPairLink, name: String, pairingId: String, known: Bool) throws -> Bool {
         let record = PairingRecord(daemonNodeId: code.nodeId, peerToken: code.peerToken, storageDeviceName: name,
-                                   pairedAt: Int64(Date().timeIntervalSince1970 * 1000), pairingEpoch: epoch)
+                                   pairedAt: Int64(Date().timeIntervalSince1970 * 1000), pairingId: pairingId)
         try store.save(record)
         return onPaired(record, known)
     }

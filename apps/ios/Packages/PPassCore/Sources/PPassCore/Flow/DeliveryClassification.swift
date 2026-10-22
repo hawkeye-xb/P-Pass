@@ -49,7 +49,7 @@ public enum ReasonClass: Equatable, Sendable {
 public func reasonClass(_ reason: DesktopReason) -> ReasonClass {
     guard case let .registered(r) = reason else { return .itemFailure }
     switch r {
-    case .notPaired, .revoked, .epochMismatch, .roleForbidden: return .pairingLost
+    case .notPaired, .pairingMismatch, .roleForbidden: return .pairingLost
     case .phoneOutdated: return .versionMismatch(.phone)
     // 电脑不认识手机调用的方法：电脑那边的 P-Pass 太旧。
     case .desktopOutdated, .unsupportedMethod: return .versionMismatch(.desktop)
@@ -142,11 +142,11 @@ public func classifyProviderFailure(_ error: Error) -> DeliveryOutcome {
 /// 回执四字段核对通过之前，不许确认 order（REBUILD-03）。
 public func relayFlowCompletion(_ receipt: FlowCompletionReceipt, _ request: FlowFetchRequest) throws -> CompletionReceipt {
     guard receipt.queueSequence == request.queueSequence else { throw ReceiptMismatch(field: "queue_sequence") }
-    guard receipt.pairingEpoch == request.pairingEpoch else { throw ReceiptMismatch(field: "pairing_epoch") }
+    guard receipt.pairingId == request.pairingId else { throw ReceiptMismatch(field: "pairing_id") }
     guard receipt.leaseToken == request.leaseToken else { throw ReceiptMismatch(field: "lease_token") }
     guard receipt.contentHash == request.contentHash else { throw ReceiptMismatch(field: "content_hash") }
     return CompletionReceipt(
-        queueSequence: Int64(receipt.queueSequence), receiptId: receipt.receiptId, pairingEpoch: receipt.pairingEpoch,
+        queueSequence: Int64(receipt.queueSequence), receiptId: receipt.receiptId, pairingId: receipt.pairingId,
         contentHash: receipt.contentHash, leaseToken: receipt.leaseToken
     )
 }
@@ -184,8 +184,8 @@ public func parseFlowPushOutcome(kind: String, data: JSONValue, tuple: FlowTuple
     case let .string(s)?: seq = UInt64(s)
     default: seq = nil
     }
-    guard let seq, case let .string(epoch)? = fields["pairing_epoch"], case let .string(lease)? = fields["lease_token"] else { return nil }
-    guard seq == tuple.queueSequence, epoch == tuple.pairingEpoch, lease == tuple.leaseToken else { return nil }
+    guard let seq, case let .string(pairingId)? = fields["pairing_id"], case let .string(lease)? = fields["lease_token"] else { return nil }
+    guard seq == tuple.queueSequence, pairingId == tuple.pairingId, lease == tuple.leaseToken else { return nil }
     switch kind {
     case "flow.delivered":
         guard let element = fields["receipt"], let receipt = try? element.decode(FlowCompletionReceipt.self) else { return nil }

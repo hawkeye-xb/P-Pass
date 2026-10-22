@@ -11,8 +11,8 @@
 import Foundation
 
 public enum ProtoVersion {
-    public static let current: UInt16 = 2
-    public static let minSupported: UInt16 = 2
+    public static let current: UInt16 = 3
+    public static let minSupported: UInt16 = 3
     /// #1070：缺 `ver` / `min_ver` 的帧来自 v2 之前的发送方。
     public static let v1: UInt16 = 1
 }
@@ -100,7 +100,6 @@ public struct RespError: Codable, Equatable, Sendable, Error {
 /// #1070：`proto::Reason` 的镜像（线上字符串由 `reasons_registry` 金样钉死）。新值解码不失败，落到 `.unknown`。
 public enum ProtoReason: String, CaseIterable, Sendable {
     case notPaired = "not_paired"
-    case revoked = "revoked"
     case roleForbidden = "role_forbidden"
     case pairTokenInvalid = "pair_token_invalid"
     case phoneOutdated = "phone_outdated"
@@ -114,7 +113,7 @@ public enum ProtoReason: String, CaseIterable, Sendable {
     case libraryUnavailable = "library_unavailable"
     case storageFailed = "storage_failed"
     case fetchFailed = "fetch_failed"
-    case epochMismatch = "epoch_mismatch"
+    case pairingMismatch = "pairing_mismatch"
     case grantNotFound = "grant_not_found"
     case grantConflict = "grant_conflict"
     case cancelled = "cancelled"
@@ -177,20 +176,20 @@ public struct Hello: Codable, Equatable, Sendable {
     public var capabilities: [String]
     public var deviceName: String
     /// 只有已配对成员会收到；未配对时省略。
-    public var pairingEpoch: String?
+    public var pairingId: String?
     /// #413 §7：桌面健康。旧桌面不报 → nil，手机视为健康。
     public var health: DesktopHealthWire?
 
-    public init(protoVer: UInt16 = ProtoVersion.current, capabilities: [String] = [], deviceName: String = "", pairingEpoch: String? = nil, health: DesktopHealthWire? = nil) {
+    public init(protoVer: UInt16 = ProtoVersion.current, capabilities: [String] = [], deviceName: String = "", pairingId: String? = nil, health: DesktopHealthWire? = nil) {
         self.protoVer = protoVer
         self.capabilities = capabilities
         self.deviceName = deviceName
-        self.pairingEpoch = pairingEpoch
+        self.pairingId = pairingId
         self.health = health
     }
 
     enum CodingKeys: String, CodingKey {
-        case protoVer = "proto_ver", capabilities, deviceName = "device_name", pairingEpoch = "pairing_epoch", health
+        case protoVer = "proto_ver", capabilities, deviceName = "device_name", pairingId = "pairing_id", health
     }
 
     public init(from decoder: Decoder) throws {
@@ -198,7 +197,7 @@ public struct Hello: Codable, Equatable, Sendable {
         protoVer = try c.value(.protoVer, default: ProtoVersion.current)
         capabilities = try c.value(.capabilities, default: [])
         deviceName = try c.value(.deviceName, default: "")
-        pairingEpoch = try c.decodeIfPresent(String.self, forKey: .pairingEpoch)
+        pairingId = try c.decodeIfPresent(String.self, forKey: .pairingId)
         health = try c.decodeIfPresent(DesktopHealthWire.self, forKey: .health)
     }
 
@@ -207,7 +206,7 @@ public struct Hello: Codable, Equatable, Sendable {
         try c.encode(protoVer, forKey: .protoVer)
         try c.encode(capabilities, forKey: .capabilities)
         try c.encode(deviceName, forKey: .deviceName)
-        try c.encodeIfPresent(pairingEpoch, forKey: .pairingEpoch)
+        try c.encodeIfPresent(pairingId, forKey: .pairingId)
         try c.encodeIfPresent(health, forKey: .health)
     }
 }
@@ -345,19 +344,19 @@ public struct PairStatusReply: Codable, Equatable, Sendable {
 
 public struct PairAccepted: Codable, Equatable, Sendable {
     public var storageDeviceName: String
-    public var pairingEpoch: String
+    public var pairingId: String
 
-    public init(storageDeviceName: String = "", pairingEpoch: String = "") {
+    public init(storageDeviceName: String = "", pairingId: String = "") {
         self.storageDeviceName = storageDeviceName
-        self.pairingEpoch = pairingEpoch
+        self.pairingId = pairingId
     }
 
-    enum CodingKeys: String, CodingKey { case storageDeviceName = "storage_device_name", pairingEpoch = "pairing_epoch" }
+    enum CodingKeys: String, CodingKey { case storageDeviceName = "storage_device_name", pairingId = "pairing_id" }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         storageDeviceName = try c.value(.storageDeviceName, default: "")
-        pairingEpoch = try c.value(.pairingEpoch, default: "")
+        pairingId = try c.value(.pairingId, default: "")
     }
 }
 
@@ -550,7 +549,7 @@ public struct BlobTicketResponse: Codable, Equatable, Sendable {
 /// `flow.offer` 的参数。queue_sequence = order 行 id，lease_token = `lease-<id>`。
 public struct FlowFetchRequest: Codable, Equatable, Sendable {
     public var queueSequence: UInt64
-    public var pairingEpoch: String
+    public var pairingId: String
     public var leaseToken: String
     public var contentHash: String
     public var fileName: String
@@ -562,9 +561,9 @@ public struct FlowFetchRequest: Codable, Equatable, Sendable {
     /// 字节数（0 = 不知道）；桌面 offer 时按它预检空间。
     public var sizeBytes: Int64
 
-    public init(queueSequence: UInt64 = 0, pairingEpoch: String = "", leaseToken: String = "", contentHash: String = "", fileName: String = "", mediaType: String = "", provider: String = "", captureAtMs: Int64 = 0, sizeBytes: Int64 = 0) {
+    public init(queueSequence: UInt64 = 0, pairingId: String = "", leaseToken: String = "", contentHash: String = "", fileName: String = "", mediaType: String = "", provider: String = "", captureAtMs: Int64 = 0, sizeBytes: Int64 = 0) {
         self.queueSequence = queueSequence
-        self.pairingEpoch = pairingEpoch
+        self.pairingId = pairingId
         self.leaseToken = leaseToken
         self.contentHash = contentHash
         self.fileName = fileName
@@ -575,7 +574,7 @@ public struct FlowFetchRequest: Codable, Equatable, Sendable {
     }
 
     enum CodingKeys: String, CodingKey {
-        case queueSequence = "queue_sequence", pairingEpoch = "pairing_epoch", leaseToken = "lease_token"
+        case queueSequence = "queue_sequence", pairingId = "pairing_id", leaseToken = "lease_token"
         case contentHash = "content_hash", fileName = "file_name", mediaType = "media_type", provider
         case captureAtMs = "capture_at_ms", sizeBytes = "size_bytes"
     }
@@ -583,7 +582,7 @@ public struct FlowFetchRequest: Codable, Equatable, Sendable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         queueSequence = try c.value(.queueSequence, default: 0)
-        pairingEpoch = try c.value(.pairingEpoch, default: "")
+        pairingId = try c.value(.pairingId, default: "")
         leaseToken = try c.value(.leaseToken, default: "")
         contentHash = try c.value(.contentHash, default: "")
         fileName = try c.value(.fileName, default: "")
@@ -596,23 +595,23 @@ public struct FlowFetchRequest: Codable, Equatable, Sendable {
 
 /// #851：用原图原地替换桌面上抹过地点的旧副本。iOS 不发它（见变体登记），只做线上镜像。
 public struct FlowSupersedeRequest: Codable, Equatable, Sendable {
-    public var pairingEpoch: String
+    public var pairingId: String
     public var oldHash: String
     public var newHash: String
     public var provider: String
 
-    public init(pairingEpoch: String = "", oldHash: String = "", newHash: String = "", provider: String = "") {
-        self.pairingEpoch = pairingEpoch
+    public init(pairingId: String = "", oldHash: String = "", newHash: String = "", provider: String = "") {
+        self.pairingId = pairingId
         self.oldHash = oldHash
         self.newHash = newHash
         self.provider = provider
     }
 
-    enum CodingKeys: String, CodingKey { case pairingEpoch = "pairing_epoch", oldHash = "old_hash", newHash = "new_hash", provider }
+    enum CodingKeys: String, CodingKey { case pairingId = "pairing_id", oldHash = "old_hash", newHash = "new_hash", provider }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        pairingEpoch = try c.value(.pairingEpoch, default: "")
+        pairingId = try c.value(.pairingId, default: "")
         oldHash = try c.value(.oldHash, default: "")
         newHash = try c.value(.newHash, default: "")
         provider = try c.value(.provider, default: "")
@@ -623,20 +622,20 @@ public struct FlowSupersedeRequest: Codable, Equatable, Sendable {
 public struct FlowFailedPush: Codable, Equatable, Sendable {
     public var nodeId: String
     public var queueSequence: Int64
-    public var pairingEpoch: String
+    public var pairingId: String
     public var leaseToken: String
     public var reason: String
 
-    public init(nodeId: String = "", queueSequence: Int64 = 0, pairingEpoch: String = "", leaseToken: String = "", reason: String = "") {
+    public init(nodeId: String = "", queueSequence: Int64 = 0, pairingId: String = "", leaseToken: String = "", reason: String = "") {
         self.nodeId = nodeId
         self.queueSequence = queueSequence
-        self.pairingEpoch = pairingEpoch
+        self.pairingId = pairingId
         self.leaseToken = leaseToken
         self.reason = reason
     }
 
     enum CodingKeys: String, CodingKey {
-        case nodeId = "node_id", queueSequence = "queue_sequence", pairingEpoch = "pairing_epoch"
+        case nodeId = "node_id", queueSequence = "queue_sequence", pairingId = "pairing_id"
         case leaseToken = "lease_token", reason
     }
 }
@@ -671,20 +670,20 @@ public struct FlowSupersedeReply: Codable, Equatable, Sendable {
 public struct FlowCompletionReceipt: Codable, Equatable, Sendable {
     public var queueSequence: UInt64
     public var receiptId: String
-    public var pairingEpoch: String
+    public var pairingId: String
     public var leaseToken: String
     public var contentHash: String
 
-    public init(queueSequence: UInt64 = 0, receiptId: String = "", pairingEpoch: String = "", leaseToken: String = "", contentHash: String = "") {
+    public init(queueSequence: UInt64 = 0, receiptId: String = "", pairingId: String = "", leaseToken: String = "", contentHash: String = "") {
         self.queueSequence = queueSequence
         self.receiptId = receiptId
-        self.pairingEpoch = pairingEpoch
+        self.pairingId = pairingId
         self.leaseToken = leaseToken
         self.contentHash = contentHash
     }
 
     enum CodingKeys: String, CodingKey {
-        case queueSequence = "queue_sequence", receiptId = "receipt_id", pairingEpoch = "pairing_epoch"
+        case queueSequence = "queue_sequence", receiptId = "receipt_id", pairingId = "pairing_id"
         case leaseToken = "lease_token", contentHash = "content_hash"
     }
 
@@ -692,7 +691,7 @@ public struct FlowCompletionReceipt: Codable, Equatable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         queueSequence = try c.value(.queueSequence, default: 0)
         receiptId = try c.value(.receiptId, default: "")
-        pairingEpoch = try c.value(.pairingEpoch, default: "")
+        pairingId = try c.value(.pairingId, default: "")
         leaseToken = try c.value(.leaseToken, default: "")
         contentHash = try c.value(.contentHash, default: "")
     }
@@ -701,21 +700,21 @@ public struct FlowCompletionReceipt: Codable, Equatable, Sendable {
 /// `flow.status` / `flow.suspend` / `flow.cancel_tuple` 的参数：只按 tuple 身份定位，不带 hash / provider。
 public struct FlowTupleRef: Codable, Equatable, Sendable {
     public var queueSequence: UInt64
-    public var pairingEpoch: String
+    public var pairingId: String
     public var leaseToken: String
 
-    public init(queueSequence: UInt64 = 0, pairingEpoch: String = "", leaseToken: String = "") {
+    public init(queueSequence: UInt64 = 0, pairingId: String = "", leaseToken: String = "") {
         self.queueSequence = queueSequence
-        self.pairingEpoch = pairingEpoch
+        self.pairingId = pairingId
         self.leaseToken = leaseToken
     }
 
-    enum CodingKeys: String, CodingKey { case queueSequence = "queue_sequence", pairingEpoch = "pairing_epoch", leaseToken = "lease_token" }
+    enum CodingKeys: String, CodingKey { case queueSequence = "queue_sequence", pairingId = "pairing_id", leaseToken = "lease_token" }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         queueSequence = try c.value(.queueSequence, default: 0)
-        pairingEpoch = try c.value(.pairingEpoch, default: "")
+        pairingId = try c.value(.pairingId, default: "")
         leaseToken = try c.value(.leaseToken, default: "")
     }
 }

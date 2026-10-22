@@ -121,9 +121,9 @@ const val MEMBER_PROBE_TIMEOUT_MS = 20_000L
 
 /**
  * #1051: "am I already a member of this computer?" — one `hello`.
- * Member = the reply carries a non-empty `pairing_epoch` (the desktop sends
+ * Member = the reply carries a non-empty `pairing_id` (the desktop sends
  * it only to a paired, non-revoked peer). Returns that [Hello], or null for
- * unpaired (no epoch), revoked (hello denied), unparseable, timed out or
+ * unpaired (no pairing id), revoked (hello denied), unparseable, timed out or
  * failed — every null means "go through normal pairing". Caller
  * cancellation still propagates.
  */
@@ -138,7 +138,7 @@ suspend fun probeMembership(
         val hello = resp.result?.let {
             ProtoJson.decodeFromJsonElement(Hello.serializer(), it)
         } ?: return null
-        hello.takeIf { !it.pairingEpoch.isNullOrEmpty() }
+        hello.takeIf { !it.pairingId.isNullOrEmpty() }
     } catch (e: CancellationException) {
         throw e
     } catch (_: Exception) {
@@ -212,7 +212,7 @@ suspend fun awaitPairVerdict(
         val legacy = runCatching {
             ProtoJson.decodeFromJsonElement(PairAccepted.serializer(), result)
         }.getOrNull()
-        return if (legacy != null && legacy.pairingEpoch.isNotBlank()) {
+        return if (legacy != null && legacy.pairingId.isNotBlank()) {
             PairVerdict.Accepted(legacy)
         } else {
             PairVerdict.DesktopTooOld
@@ -287,7 +287,7 @@ private suspend fun pollPairStatus(
             "pending" -> Unit
             "accepted" -> {
                 val payload = reply.accepted
-                if (payload != null && payload.pairingEpoch.isNotBlank()) {
+                if (payload != null && payload.pairingId.isNotBlank()) {
                     return PairVerdict.Accepted(payload)
                 }
                 // accepted without its payload is a malformed reply —
@@ -369,7 +369,7 @@ suspend fun pairWithQr(
     // Already a member on this storage (same phone, the computer's
     // identity/address changed)? Then no pair.request is needed — and
     // it would be REFUSED (members can't re-apply). #1051: hello is the
-    // probe; the desktop returns pairing_epoch only to a paired,
+    // probe; the desktop returns pairing_id only to a paired,
     // non-revoked member. Unpaired / revoked / unreachable → pair normally.
     val member = probeMembership(
         rpc = { method, params -> client.call(addr, method, params) },
@@ -382,7 +382,7 @@ suspend fun pairWithQr(
                 daemonAddrToken = addrToken,
                 storageDeviceName = name,
                 pairedAt = System.currentTimeMillis(),
-                pairingEpoch = member.pairingEpoch.orEmpty(),
+                pairingId = member.pairingId.orEmpty(),
             )
         )
     }
@@ -400,7 +400,7 @@ suspend fun pairWithQr(
             daemonAddrToken = addrToken,
             storageDeviceName = accepted.storageDeviceName,
             pairedAt = System.currentTimeMillis(),
-            pairingEpoch = accepted.pairingEpoch,
+            pairingId = accepted.pairingId,
         )
     }
 }

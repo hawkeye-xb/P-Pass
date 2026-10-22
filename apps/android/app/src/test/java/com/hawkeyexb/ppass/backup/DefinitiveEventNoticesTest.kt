@@ -18,7 +18,7 @@ class DefinitiveEventNoticesTest {
     }
 
     private val healthy = DefinitiveFacts(
-        pairingEpoch = "e1",
+        pairingId = "e1",
         pairingLost = false,
         mediaAccess = MediaAccess.FULL,
         backgroundRequested = true,
@@ -35,12 +35,12 @@ class DefinitiveEventNoticesTest {
     // ---- 配对失效 ----
 
     @Test
-    fun pairing_lost_is_posted_once_per_epoch_even_across_process_restarts() {
+    fun pairing_lost_is_posted_once_per_pairing_id_even_across_process_restarts() {
         val n = FakeNotifier()
         run(healthy, n)
         run(healthy.copy(pairingLost = true), n)
         run(healthy.copy(pairingLost = true), n)
-        // 进程重启：内存里的 lostEpoch 没了（isLost = false），epoch 还是同一个——不算恢复。
+        // 进程重启：内存里的 lostPairingId 没了（isLost = false），pairing id 还是同一个——不算恢复。
         run(healthy.copy(pairingLost = false), n)
         run(healthy.copy(pairingLost = true), n)
         assertEquals(listOf<DefinitiveNotice>(DefinitiveNotice.PairingLost), n.posted)
@@ -52,18 +52,18 @@ class DefinitiveEventNoticesTest {
         val n = FakeNotifier()
         run(healthy.copy(pairingLost = true), n)
         // 用户点「重新扫码」：本地配对清掉 → 复位并撤掉旧通知。
-        run(healthy.copy(pairingEpoch = null), n)
+        run(healthy.copy(pairingId = null), n)
         assertEquals(listOf(DefinitiveEvent.PAIRING_LOST), n.cancelled)
-        run(healthy.copy(pairingEpoch = "e2"), n)
-        run(healthy.copy(pairingEpoch = "e2", pairingLost = true), n)
+        run(healthy.copy(pairingId = "e2"), n)
+        run(healthy.copy(pairingId = "e2", pairingLost = true), n)
         assertEquals(2, n.posted.count { it == DefinitiveNotice.PairingLost })
     }
 
     @Test
-    fun a_new_epoch_alone_resets_the_pairing_latch() {
+    fun a_new_pairing_id_alone_resets_the_pairing_latch() {
         val n = FakeNotifier()
         run(healthy.copy(pairingLost = true), n)
-        run(healthy.copy(pairingEpoch = "e2", pairingLost = true), n)
+        run(healthy.copy(pairingId = "e2", pairingLost = true), n)
         assertEquals(2, n.posted.size)
     }
 
@@ -109,8 +109,8 @@ class DefinitiveEventNoticesTest {
     @Test
     fun media_downgrade_while_unpaired_is_recorded_but_not_posted() {
         val n = FakeNotifier()
-        run(healthy.copy(pairingEpoch = null), n)
-        run(healthy.copy(pairingEpoch = null, mediaAccess = MediaAccess.NONE), n)
+        run(healthy.copy(pairingId = null), n)
+        run(healthy.copy(pairingId = null, mediaAccess = MediaAccess.NONE), n)
         assertEquals(emptyList<DefinitiveNotice>(), n.posted)
     }
 
@@ -184,7 +184,7 @@ class DefinitiveEventNoticesTest {
             override fun cancel(event: DefinitiveEvent) = error("boom")
         }
         DefinitiveEventMonitor(DefinitiveNoticeStore(dir), boom).evaluate(healthy.copy(pairingLost = true))
-        assertEquals("e1", DefinitiveNoticeStore(dir).load().notifiedLostEpoch)
+        assertEquals("e1", DefinitiveNoticeStore(dir).load().notifiedLostPairingId)
     }
 
     // ---- 接线点（源文本）：四个评估入口都在，且都不在 #162 的文件里 ----

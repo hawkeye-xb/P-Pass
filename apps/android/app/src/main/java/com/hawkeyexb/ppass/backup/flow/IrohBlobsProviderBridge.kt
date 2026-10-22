@@ -132,7 +132,7 @@ internal data class ProviderLease(val orderId: Long, val leaseToken: String, val
 
 /**
  * Admits exactly the current order's lease to the native provider. The loop owns the order and lease;
- * this adapter deliberately has no fallback to an old item, old epoch, raw upload, or chunk map.
+ * this adapter deliberately has no fallback to an old item, old pairing id, raw upload, or chunk map.
  */
 internal class IrohBlobsProviderBridge(
     private val native: NativeIrohBlobsProvider,

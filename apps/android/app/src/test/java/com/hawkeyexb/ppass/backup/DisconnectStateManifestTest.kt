@@ -93,7 +93,7 @@ class DisconnectStateManifestTest {
             DisconnectState.BACKUP_HEALTH -> BackupHealthPrefs(filesDir).recordInterrupted(now = 1L)
             DisconnectState.SENTINEL -> SentinelStore(filesDir).recordReachable(now = 1L)
             DisconnectState.DEFINITIVE_NOTICES ->
-                DefinitiveNoticeStore(filesDir).save(DefinitiveNoticeState(notifiedLostEpoch = "e1"))
+                DefinitiveNoticeStore(filesDir).save(DefinitiveNoticeState(notifiedLostPairingId = "e1"))
             DisconnectState.LEGACY_BACKUP_STATE -> {
                 ConfirmedStore(legacyDir).recordRun(confirmed = setOf("h1"), lastSuccessAt = 1L)
                 ReuploadQueue(legacyDir).add(setOf("k1"))

@@ -27,8 +27,8 @@ private fun ok(v: JsonElement) = Resp(id = "x", ok = true, result = v)
 
 class NET10PairPollTest {
 
-    private val epoch = "e".repeat(32)
-    private val accepted = PairAccepted(storageDeviceName = "Home PC", pairingEpoch = epoch)
+    private val pid = "e".repeat(32)
+    private val accepted = PairAccepted(storageDeviceName = "Home PC", pairingId = pid)
 
     /** Scripted desktop. [status] answers one pair.status call given the
      *  virtual time it arrived at; throwing = the RPC itself failed. */
@@ -45,7 +45,7 @@ class NET10PairPollTest {
             calls += method to scope.currentTime
             return when (method) {
                 Methods.HELLO -> if (caps == null) {
-                    Resp(id = "h", ok = false, error = RespError("NOT_AUTHORIZED", "revoked"))
+                    Resp(id = "h", ok = false, error = RespError("NOT_AUTHORIZED", "not_paired"))
                 } else {
                     ok(ProtoJson.encodeToJsonElement(Hello.serializer(), Hello(capabilities = caps)))
                 }
@@ -190,7 +190,7 @@ class NET10PairPollTest {
     /** 屏幕映射：每个死因一条独立出口；自行失效的不说「电脑拒绝了」；桌面太旧走「需要更新电脑端」（#1072）。 */
     @Test
     fun everyCause_mapsToItsOwnScreen() {
-        val join = { a: PairAccepted -> Pairing("n", "t", a.storageDeviceName, 1L, a.pairingEpoch) }
+        val join = { a: PairAccepted -> Pairing("n", "t", a.storageDeviceName, 1L, a.pairingId) }
         val joined = PairVerdict.Accepted(accepted).toOutcome(join)
         assertTrue(joined is PairOutcome.Joined)
         for (cause in listOf(PairRefusal.DENIED, PairRefusal.TOKEN_INVALID)) {

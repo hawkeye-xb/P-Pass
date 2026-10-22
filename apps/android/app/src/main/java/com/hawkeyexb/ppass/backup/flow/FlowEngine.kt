@@ -66,8 +66,8 @@ internal class FlowEngine(
      * 部分授权 / 没授权时看不见的照片同样查不到。**没有默认值**：新的构造点必须想清楚再接（失败关闭）。
      */
     private val mediaAbsenceTrusted: () -> Boolean,
-    /** 当前配对代号；null = 未配对。 */
-    private val pairingEpoch: () -> PairingEpoch?,
+    /** 当前配对 id；null = 未配对。 */
+    private val pairingId: () -> PairingId?,
     /** 单写者 scope。 */
     private val scope: CoroutineScope,
     private val io: CoroutineDispatcher,
@@ -78,8 +78,8 @@ internal class FlowEngine(
      * 连接走；没连桌面的一轮（没东西要传 / 桌面不可达）不为它单独建连接，积压的留到下一次连上。
      */
     private val afterCycle: () -> Unit = {},
-    /** 桌面宣布了新的配对代号（同一台桌面重新配对）：持久化它。 */
-    private val onEpochAdvertised: (String) -> Unit = {},
+    /** 桌面宣布了新的配对 id（同一台桌面重新配对）：持久化它。 */
+    private val onPairingIdAdvertised: (String) -> Unit = {},
     /** 单调时钟（ms），只给刷新节流用；[clock] 是墙钟（审计时间戳）。 */
     private val monotonicClock: () -> Long = { System.nanoTime() / 1_000_000 },
     /** #522：系统额度时钟（开机序号 + elapsedRealtime）。null = 读不到 → 从不跳过申请。 */
@@ -337,7 +337,7 @@ internal class FlowEngine(
             snapshot.targets,
             audit = audit(AuditKinds.ROUND_CONTROLLED, mapOf("action" to "cancel", "skipped" to snapshot.count.toString())),
         )
-        inFlight.forEach { order -> delivery.discardPartial(order.id, PairingEpoch(order.pairingEpoch)) }
+        inFlight.forEach { order -> delivery.discardPartial(order.id, PairingId(order.pairingId)) }
         log.log("cancel: ${result.written} photos skipped (${result.ordersSkipped} orders, ${result.untouched} settled since the dialog)")
         setPausedFlag(false)
         setWait(null)
@@ -615,7 +615,7 @@ internal class FlowEngine(
         if (userPresent) resetBudgetRefusal("user present ($reasons)")
         _status.value = LoopStatus(phase = LoopPhase.CHECKING)
         if (control.paused()) return settle(null)
-        val epoch = pairingEpoch() ?: return settle(WaitReason.NOT_PAIRED)
+        val pid = pairingId() ?: return settle(WaitReason.NOT_PAIRED)
 
         // ---- 入口：不持有 FGS，只读元数据 ----
         val cycleStarted = System.nanoTime()
@@ -657,7 +657,7 @@ internal class FlowEngine(
             is ProbeResult.Reachable -> {
                 reachedDesktop = true
                 // #652：探测梯在这里还不能撤——桌面可能可达但不健康，那时它正是唤醒；拿到 FGS 才撤（见下）。
-                reach.advertisedEpoch?.takeIf { it.isNotBlank() && it != epoch.value }?.let(onEpochAdvertised)
+                reach.advertisedPairingId?.takeIf { it.isNotBlank() && it != pid.value }?.let(onPairingIdAdvertised)
                 facts.update { it.copy(desktopHealth = reach.health) }
                 desktopCanSupersede = FLOW_SUPERSEDE_CAPABILITY in reach.capabilities
                 if (!transferWork && !desktopCanSupersede) {
@@ -787,13 +787,13 @@ internal class FlowEngine(
             if (control.paused()) return null
             waitReasonOf(conditions(), round.userPresent)?.let { return it }
             if (!foreground.isHeld()) return WaitReason.FGS_BLOCKED
-            val epoch = pairingEpoch() ?: return WaitReason.NOT_PAIRED
+            val pid = pairingId() ?: return WaitReason.NOT_PAIRED
             val item = pickNext(round) ?: return null
             if (item is WorkItem.Existing && !round.handled.add(item.order.id)) {
                 log.log("order ${item.order.id} picked twice in one round; stopping to avoid a spin")
                 return null
             }
-            when (val step = process(item, epoch)) {
+            when (val step = process(item, pid)) {
                 StepResult.Next -> Unit
                 is StepResult.Exit -> return step.reason
             }
@@ -944,10 +944,10 @@ internal class FlowEngine(
         scanTo?.let(store::advanceScan)
     }
 
-    private suspend fun process(item: WorkItem, epoch: PairingEpoch): StepResult = when (item) {
-        is WorkItem.Existing -> processExisting(item.order, epoch)
-        is WorkItem.Fresh -> processFresh(item.snapshot, item.origin, epoch)
-        is WorkItem.Upgrade -> processUpgrade(item.order, epoch)
+    private suspend fun process(item: WorkItem, pid: PairingId): StepResult = when (item) {
+        is WorkItem.Existing -> processExisting(item.order, pid)
+        is WorkItem.Fresh -> processFresh(item.snapshot, item.origin, pid)
+        is WorkItem.Upgrade -> processUpgrade(item.order, pid)
     }
 
     /**
@@ -960,7 +960,7 @@ internal class FlowEngine(
      * #1005：「以后也补不成」的每一种情况（原图查不到 / 被编辑成新版本 / 读不出来）都要落一个结论（[LocationVerdict]），
      * 和主传输的 [processExisting] 一样推进状态。只跳过不记，这一行就永远是待办，每次触发都为它探测桌面、起一轮。
      */
-    private suspend fun processUpgrade(order: Order, epoch: PairingEpoch): StepResult {
+    private suspend fun processUpgrade(order: Order, pid: PairingId): StepResult {
         val client = supersede ?: return StepResult.Next
         val old = order.contentHash ?: return StepResult.Next
         val details = withContext(io) { media.lookup(order.mediaId) }
@@ -989,7 +989,7 @@ internal class FlowEngine(
                 else -> {
                     val outcome = try {
                         val ticket = importer.serve(ProviderLease(order.id, "supersede-${order.id}", hash))
-                        client.supersede(epoch, old, hash, ticket)
+                        client.supersede(pid, old, hash, ticket)
                     } catch (cancelled: CancellationException) {
                         throw cancelled
                     } catch (failure: Exception) {
@@ -1001,7 +1001,7 @@ internal class FlowEngine(
                         null -> Unit
                         SupersedeOutcome.Replaced -> {
                             store.insert(
-                                NewOrder(order.mediaId, order.sourceVersion, order.bucketId, hash, OrderState.CONFIRMED, epoch.value, locationRedacted = false),
+                                NewOrder(order.mediaId, order.sourceVersion, order.bucketId, hash, OrderState.CONFIRMED, pid.value, locationRedacted = false),
                             )
                             bump()
                             log.log("media ${order.mediaId}: desktop copy ${old.take(8)} replaced by the original ${hash.take(8)}")
@@ -1044,7 +1044,7 @@ internal class FlowEngine(
         return null to reason
     }
 
-    private suspend fun processFresh(snapshot: MediaSnapshot, origin: Origin, epoch: PairingEpoch): StepResult {
+    private suspend fun processFresh(snapshot: MediaSnapshot, origin: Origin, pid: PairingId): StepResult {
         val progress = progressOf(snapshot, origin)
         val details = withContext(io) { media.lookup(snapshot.mediaId) }
         if (details == null || !inScope(details.snapshot.bucketId)) {
@@ -1057,7 +1057,7 @@ internal class FlowEngine(
         when (imported) {
             null -> {
                 // 读不出来（两次）：记一次失败（有上限），游标照常推进，不在这张上打转。
-                val row = store.insert(NewOrder(snapshot.mediaId, version, bucket, null, OrderState.TRANSFERRING, epoch.value))
+                val row = store.insert(NewOrder(snapshot.mediaId, version, bucket, null, OrderState.TRANSFERRING, pid.value))
                 fail(row, progress, failure)
                 return StepResult.Next
             }
@@ -1065,7 +1065,7 @@ internal class FlowEngine(
                 // MediaStore 还列着、文件读不到：记「源已删」（同版本即结局，不再算待办），游标推进。
                 val fact = itemAudit(AuditKinds.ITEM_SOURCE_MISSING, snapshot.mediaId, mapOf("mediaId" to snapshot.mediaId.toString()))
                 store.insert(
-                    NewOrder(snapshot.mediaId, version, bucket, null, OrderState.SKIPPED_SOURCE_MISSING, epoch.value),
+                    NewOrder(snapshot.mediaId, version, bucket, null, OrderState.SKIPPED_SOURCE_MISSING, pid.value),
                     advance = progress.advance,
                     scanTo = progress.scanTo,
                     audit = fact,
@@ -1080,10 +1080,10 @@ internal class FlowEngine(
                 // #775：导入一拿到手就进作用域——建 order 本身也可能失败（存储满时的 SQLiteFullException）。
                 return releasingOnAbort(imported.contentHash) {
                     val row = store.insert(
-                        NewOrder(snapshot.mediaId, version, bucket, imported.contentHash, OrderState.TRANSFERRING, epoch.value, imported.locationRedacted),
+                        NewOrder(snapshot.mediaId, version, bucket, imported.contentHash, OrderState.TRANSFERRING, pid.value, imported.locationRedacted),
                     )
                     bump()
-                    deliverAndCommit(row, imported.contentHash, details, progress, epoch)
+                    deliverAndCommit(row, imported.contentHash, details, progress, pid)
                 }
             }
         }
@@ -1093,7 +1093,7 @@ internal class FlowEngine(
      * 已有 order（遗留续传 / 对账补传）：开始前按原图、版本、范围重检；重新导入（暂停 / revoke 会放掉全部导入）
      * 拿 hash 与行里记的比对，通过后置为传输中。已有 order 提交时**不推进任何游标**。
      */
-    private suspend fun processExisting(order: Order, epoch: PairingEpoch): StepResult {
+    private suspend fun processExisting(order: Order, pid: PairingId): StepResult {
         val transferring = order.state == OrderState.TRANSFERRING
         val details = withContext(io) { media.lookup(order.mediaId) }
         if (details == null || details.snapshot.sourceVersion != order.sourceVersion) {
@@ -1104,7 +1104,7 @@ internal class FlowEngine(
         if (!inScope(details.snapshot.bucketId)) {
             // 在途的这张所在相册被移出范围：不续传，丢弃半截（#413 裁定 8）；它从待办里消失（范围是查询条件）。
             if (transferring && store.transition(order.id, setOf(OrderState.TRANSFERRING), OrderState.PENDING)) {
-                delivery.discardPartial(order.id, epoch)
+                delivery.discardPartial(order.id, pid)
                 bump()
             }
             return StepResult.Next
@@ -1134,17 +1134,17 @@ internal class FlowEngine(
                     return@releasingOnAbort StepResult.Next
                 }
                 val row = store.insert(
-                    NewOrder(order.mediaId, order.sourceVersion, order.bucketId, hash, OrderState.TRANSFERRING, epoch.value, current.locationRedacted),
+                    NewOrder(order.mediaId, order.sourceVersion, order.bucketId, hash, OrderState.TRANSFERRING, pid.value, current.locationRedacted),
                 )
                 bump()
-                return@releasingOnAbort deliverAndCommit(row, hash, details, Progress(), epoch)
+                return@releasingOnAbort deliverAndCommit(row, hash, details, Progress(), pid)
             }
             if (!store.transition(order.id, OPEN, OrderState.TRANSFERRING, contentHash = hash)) {
                 importer.release(hash)
                 return@releasingOnAbort StepResult.Next
             }
             val row = store.get(order.id)!!.copy(contentHash = hash)
-            deliverAndCommit(row, hash, details, Progress(), epoch)
+            deliverAndCommit(row, hash, details, Progress(), pid)
         }
     }
 
@@ -1168,14 +1168,14 @@ internal class FlowEngine(
         val settled = store.transition(order.id, OPEN, OrderState.SKIPPED_SOURCE_MISSING, audit = fact)
         if (settled) {
             countPersisted(fact)
-            if (discard) delivery.discardPartial(order.id, PairingEpoch(order.pairingEpoch))
+            if (discard) delivery.discardPartial(order.id, PairingId(order.pairingId))
             bump()
         }
         return settled
     }
 
-    private suspend fun deliverAndCommit(order: Order, hash: String, details: MediaDetails, progress: Progress, epoch: PairingEpoch): StepResult {
-        val request = DeliveryRequest(order.id, epoch, hash, details)
+    private suspend fun deliverAndCommit(order: Order, hash: String, details: MediaDetails, progress: Progress, pid: PairingId): StepResult {
+        val request = DeliveryRequest(order.id, pid, hash, details)
         _status.value = LoopStatus(LoopPhase.RUNNING, CurrentItem(order.id, details.fileName, 0L, details.sizeBytes))
         var outcome = deliverOnce(request)
         if (outcome is DeliveryOutcome.ItemFailure) {
@@ -1187,7 +1187,7 @@ internal class FlowEngine(
             is DeliveryOutcome.Confirmed -> {
                 val receipt = outcome.receipt
                 val valid = receipt.queueSequence == order.id &&
-                    receipt.pairingEpoch == epoch &&
+                    receipt.pairingId == pid &&
                     (receipt.contentHash == null || receipt.contentHash == hash)
                 val fact = itemAudit(
                     AuditKinds.ITEM_CONFIRMED,
@@ -1234,7 +1234,7 @@ internal class FlowEngine(
                     )
                 ) {
                     countPersisted(fact)
-                    delivery.discardPartial(order.id, epoch)
+                    delivery.discardPartial(order.id, pid)
                     onSettled()
                 }
                 bump()
@@ -1334,17 +1334,17 @@ internal class FlowEngine(
                 if (order.sourceMissing) {
                     // 桌面缺 + 手机原图也没了（#415 裁决 2；MOB-87 卡面「对账边界」第 6 条：标 UNRECOVERABLE、落审计事实、
                     // **不提示**）：不补传、不建行，所以也不进「无法恢复」横幅。这条审计的读者是我们（查「账本说谎」），
-                    // 不是用户。CONFIRMED 行留着、每个对账轮都会再遇到它：同一行同一配对代号只记一次。
-                    val epochKey = pairingEpoch()?.value ?: order.pairingEpoch
+                    // 不是用户。CONFIRMED 行留着、每个对账轮都会再遇到它：同一行同一配对 id只记一次。
+                    val pairingKey = pairingId()?.value ?: order.pairingId
                     store.appendAuditOnce(
-                        "unrecoverable:${order.id}:$epochKey",
+                        "unrecoverable:${order.id}:$pairingKey",
                         audit(AuditKinds.RECONCILIATION_RESOLVED, mapOf("disposition" to "UNRECOVERABLE", "contentHash" to hash)),
                     )
                     continue
                 }
                 val fact = audit(AuditKinds.RECONCILIATION_RESOLVED, mapOf("disposition" to "REUPLOAD", "contentHash" to hash))
                 store.insert(
-                    NewOrder(order.mediaId, order.sourceVersion, order.bucketId, hash, OrderState.PENDING, order.pairingEpoch, order.locationRedacted),
+                    NewOrder(order.mediaId, order.sourceVersion, order.bucketId, hash, OrderState.PENDING, order.pairingId, order.locationRedacted),
                     audit = fact,
                 )
                 countPersisted(fact)
@@ -1498,10 +1498,10 @@ internal class FlowEngine(
         private const val RETRY_BATCH = 32
 
         /**
-         * #851：桌面这样拒绝是暂时的，下一轮再试——`fetch_failed`（拉原图的块失败）、`epoch_mismatch`（配对代号
+         * #851：桌面这样拒绝是暂时的，下一轮再试——`fetch_failed`（拉原图的块失败）、`pairing_mismatch`（配对 id
          * 正在更新）。其余拒绝是对这张照片的结论（不是本机传的、格式不认识、不只是抹地点……），记下不再试。
          */
-        private val TRANSIENT_SUPERSEDE_REFUSALS = setOf(SupersedeRefusal.FETCH_FAILED, SupersedeRefusal.EPOCH_MISMATCH)
+        private val TRANSIENT_SUPERSEDE_REFUSALS = setOf(SupersedeRefusal.FETCH_FAILED, SupersedeRefusal.PAIRING_MISMATCH)
         private val OPEN = OrderState.entries.filter { it.isOpen }.toSet()
 
         /** 在跑时合并进来的这些触发意味着待办可能变了：当场重算（只读元数据），不等这一轮结束。 */

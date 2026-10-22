@@ -37,7 +37,7 @@ final class ProtoClientTests: XCTestCase {
             Resp(id: "1", ok: true, result: try JSONValue.from(FlowStatusReply(state: "active", taskRunning: true)))
         }
         let client = ProtoClient(transport: transport)
-        let tuple = FlowTupleRef(queueSequence: 42, pairingEpoch: "epoch-7", leaseToken: "lease-42")
+        let tuple = FlowTupleRef(queueSequence: 42, pairingId: "pairingId-7", leaseToken: "lease-42")
         let reply = try await client.call(Methods.flowStatus, tuple, as: FlowStatusReply.self, timeoutMs: 3_000)
         XCTAssertEqual(reply, FlowStatusReply(state: "active", taskRunning: true))
         XCTAssertEqual(transport.calls.count, 1)
@@ -45,7 +45,7 @@ final class ProtoClientTests: XCTestCase {
         XCTAssertEqual(transport.calls[0].timeoutMs, 3_000)
         XCTAssertEqual(
             transport.calls[0].params,
-            .object(["queue_sequence": .int(42), "pairing_epoch": .string("epoch-7"), "lease_token": .string("lease-42")])
+            .object(["queue_sequence": .int(42), "pairing_id": .string("pairingId-7"), "lease_token": .string("lease-42")])
         )
     }
 

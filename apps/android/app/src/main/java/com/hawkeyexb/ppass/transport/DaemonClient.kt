@@ -468,12 +468,12 @@ class DaemonClient internal constructor(
     /** UX-06: unilateral stop — ask the daemon to revoke THIS device.
      *  Success means hello is denied from now on; a fresh owner-issued
      *  token can rejoin.
-     *  #565: [pairingEpoch] names the pairing being ended (blank = legacy
+     *  #565: [pairingId] names the pairing being ended (blank = legacy
      *  pairing without one); the daemon only revokes while that pairing is
      *  still current. Sent once on disconnect ([sendUnpairNoticeOnce]); the
      *  reply is only logged (#956). */
-    suspend fun unpair(peer: PeerAddrParts, pairingEpoch: String): Resp = withContext(Dispatchers.IO) {
-        call(peer, "device.unpair", unpairParams(pairingEpoch))
+    suspend fun unpair(peer: PeerAddrParts, pairingId: String): Resp = withContext(Dispatchers.IO) {
+        call(peer, "device.unpair", unpairParams(pairingId))
     }
 
     /** Open a raw connection on any ALPN (upload plane reuses it for

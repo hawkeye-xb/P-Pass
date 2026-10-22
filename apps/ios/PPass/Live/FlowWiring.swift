@@ -3,14 +3,14 @@ import PPassCore
 
 /// 引擎回调的真实接线（#966 / #967 / #970）。引擎构造参数不再有默认空闭包，这里是 App 侧唯一的实现。
 enum FlowWiring {
-    /// 同一台电脑换了配对代号（`hello` 里宣布了新 epoch）：只更新配对记录里的 epoch，order 账本不动
-    /// （内容寻址，CONFIRMED 跨代号成立）。对位 Android `AndroidFlowRuntime` 的 `onEpochAdvertised`。写盘失败记日志。
-    static func epochAdvertised(store: PairingStore, logger: CoreLogger) -> @Sendable (String) -> Void {
+    /// 同一台电脑换了配对代号（`hello` 里宣布了新 pairingId）：只更新配对记录里的 pairingId，order 账本不动
+    /// （内容寻址，CONFIRMED 跨代号成立）。对位 Android `AndroidFlowRuntime` 的 `onPairingIdAdvertised`。写盘失败记日志。
+    static func pairingIdAdvertised(store: PairingStore, logger: CoreLogger) -> @Sendable (String) -> Void {
         { advertised in
             do {
-                try store.update { if $0.pairingEpoch != advertised { $0.pairingEpoch = advertised } }
+                try store.update { if $0.pairingId != advertised { $0.pairingId = advertised } }
             } catch {
-                logger.log("epoch advertised: cannot persist new pairing epoch (\(error))")
+                logger.log("pairingId advertised: cannot persist new pairing pairingId (\(error))")
             }
         }
     }
@@ -28,25 +28,25 @@ enum FlowWiring {
     }
 }
 
-/// 空 epoch 的老配对修复（对位 Android `needsEpochRepair` / `applyEpochRepairOutcome` / `repairEpochIfNeeded`，#970）。
-func needsEpochRepair(_ pairingEpoch: String) -> Bool { pairingEpoch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+/// 空 pairingId 的老配对修复（对位 Android `needsPairingIdRepair` / `applyPairingIdRepairOutcome` / `repairPairingIdIfNeeded`，#970）。
+func needsPairingIdRepair(_ pairingId: String) -> Bool { pairingId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
-enum EpochRepairResult: Equatable {
+enum PairingIdRepairResult: Equatable {
     case repaired(String)
     case lost
     /// #1072 / #1073：电脑版本不兼容——不是对配对的判决；不写盘，更新之后再修一次。
     case deferred
 }
 
-/// `outcome` = 向桌面问当前 epoch 的结果（同一个 `hello`）。成功但 epoch 为空与失败同等对待：桌面自己也给不出，没有可修的目标。
-func applyEpochRepairOutcome(_ outcome: Result<String?, Error>) -> EpochRepairResult {
+/// `outcome` = 向桌面问当前 pairingId 的结果（同一个 `hello`）。成功但 pairingId 为空与失败同等对待：桌面自己也给不出，没有可修的目标。
+func applyPairingIdRepairOutcome(_ outcome: Result<String?, Error>) -> PairingIdRepairResult {
     if case .failure(let error) = outcome, let rejected = error as? DesktopRejected, case .versionMismatch = rejected.reasonClass { return .deferred }
-    if case .success(let epoch?) = outcome, !needsEpochRepair(epoch) { return .repaired(epoch) }
+    if case .success(let pairingId?) = outcome, !needsPairingIdRepair(pairingId) { return .repaired(pairingId) }
     return .lost
 }
 
-/// 每个进程只试一次。修好 → 写回 epoch；修不了 → 标失联（首页引导重新配对，而不是停在「未配对」里不探测、不备份）。
-final class EpochRepairer: @unchecked Sendable {
+/// 每个进程只试一次。修好 → 写回 pairingId；修不了 → 标失联（首页引导重新配对，而不是停在「未配对」里不探测、不备份）。
+final class PairingIdRepairer: @unchecked Sendable {
     private let store: PairingStore
     private let hello: @Sendable () async throws -> String?
     private let logger: CoreLogger
@@ -59,27 +59,27 @@ final class EpochRepairer: @unchecked Sendable {
         self.logger = logger
     }
 
-    /// 没有要修的（没配对 / 已失联 / epoch 非空 / 本进程试过了）返回 nil。
-    func repairIfNeeded() async -> EpochRepairResult? {
-        guard let record = store.load(), !record.lost, needsEpochRepair(record.pairingEpoch), claim() else { return nil }
+    /// 没有要修的（没配对 / 已失联 / pairingId 非空 / 本进程试过了）返回 nil。
+    func repairIfNeeded() async -> PairingIdRepairResult? {
+        guard let record = store.load(), !record.lost, needsPairingIdRepair(record.pairingId), claim() else { return nil }
         let outcome: Result<String?, Error>
         do { outcome = .success(try await hello()) } catch { outcome = .failure(error) }
-        let result = applyEpochRepairOutcome(outcome)
+        let result = applyPairingIdRepairOutcome(outcome)
         if result == .deferred {
             release()
-            logger.log("epoch repair: protocol version mismatch; not a verdict on the pairing, will retry after an update")
+            logger.log("pairingId repair: protocol version mismatch; not a verdict on the pairing, will retry after an update")
             return result
         }
         do {
             switch result {
-            case .repaired(let epoch): try store.update { $0.pairingEpoch = epoch }
+            case .repaired(let pairingId): try store.update { $0.pairingId = pairingId }
             case .lost: try store.markLost()
             case .deferred: break // 上面已提前返回
             }
         } catch {
-            logger.log("epoch repair: cannot persist \(result) (\(error))")
+            logger.log("pairingId repair: cannot persist \(result) (\(error))")
         }
-        if case .failure(let error) = outcome { logger.log("epoch repair: hello failed (\(error)); pairing marked lost") }
+        if case .failure(let error) = outcome { logger.log("pairingId repair: hello failed (\(error)); pairing marked lost") }
         return result
     }
 

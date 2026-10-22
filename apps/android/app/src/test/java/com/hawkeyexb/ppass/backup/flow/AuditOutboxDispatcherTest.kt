@@ -15,7 +15,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AuditOutboxDispatcherTest {
-    private fun pairing() = Pairing(daemonNodeId = "daemon-1", daemonAddrToken = "unused", storageDeviceName = "desk", pairingEpoch = "epoch-1")
+    private fun pairing() = Pairing(daemonNodeId = "daemon-1", daemonAddrToken = "unused", storageDeviceName = "desk", pairingId = "pid-1")
 
     private val store = InMemoryOrderStore { 1L }
 

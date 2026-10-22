@@ -6,10 +6,10 @@ import XCTest
 /// 反证：去掉 `ProtoClient.callRaw` 的 `.versionChecked()`，`testEveryCallSeesAnOldDesktopAsDesktopOutdated` 红。
 final class VersionCheckTests: XCTestCase {
     func testCompatibilityMirrorsRustForThePhoneRole() {
-        XCTAssertNil(Resp.outdatedSide(peerVer: 2, peerMinVer: 2))
-        XCTAssertNil(Resp.outdatedSide(peerVer: 3, peerMinVer: 2), "更新的电脑仍接受本端")
+        XCTAssertNil(Resp.outdatedSide(peerVer: 3, peerMinVer: 3))
+        XCTAssertNil(Resp.outdatedSide(peerVer: 4, peerMinVer: 3), "更新的电脑仍接受本端")
         XCTAssertEqual(Resp.outdatedSide(peerVer: 1, peerMinVer: 1), .desktop, "v1 电脑（缺 ver）")
-        XCTAssertEqual(Resp.outdatedSide(peerVer: 3, peerMinVer: 3), .phone, "电脑不再接受本端")
+        XCTAssertEqual(Resp.outdatedSide(peerVer: 4, peerMinVer: 4), .phone, "电脑不再接受本端")
     }
 
     func testAnOldDesktopsOkReplyBecomesAVersionRejection() throws {
@@ -27,7 +27,7 @@ final class VersionCheckTests: XCTestCase {
         XCTAssertEqual(said.outdatedSide, .phone)
         let fine = Resp(id: "1", ok: true, result: .object([:]))
         XCTAssertEqual(fine.versionChecked(), fine)
-        let other = Resp(id: "1", ok: false, error: RespError(code: Codes.notAuthorized, reason: "revoked"))
+        let other = Resp(id: "1", ok: false, error: RespError(code: Codes.notAuthorized, reason: "not_paired"))
         XCTAssertEqual(other.versionChecked(), other)
         XCTAssertNil(other.outdatedSide)
     }
@@ -49,7 +49,7 @@ final class VersionCheckTests: XCTestCase {
             XCTAssertEqual(rejected.reasonClass, .versionMismatch(.desktop))
             XCTAssertFalse(rejected.isPairingLost)
         }
-        let probe = ControlPlaneProbe(currentEpoch: { "e1" }, desktop: desktop, logger: NoopLogger(), pairingLoss: PairingLoss())
+        let probe = ControlPlaneProbe(currentPairingId: { "e1" }, desktop: desktop, logger: NoopLogger(), pairingLoss: PairingLoss())
         let result = await probe.probe()
         XCTAssertEqual(result, .versionMismatch(.desktop))
     }

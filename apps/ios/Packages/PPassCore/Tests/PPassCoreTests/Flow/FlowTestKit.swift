@@ -39,7 +39,7 @@ struct FakePhoto: Equatable {
 
 /// 假的发现位置：(token 代, generation, id)。id 为 nil = 这个 generation 整个过去了。
 struct FakePosition: Codable, Equatable {
-    var epoch: Int
+    var pairingId: Int
     var generation: Int64
     var id: String?
 
@@ -56,7 +56,7 @@ struct FakePosition: Codable, Equatable {
 
 /// 假照片库。语义与 PhotoKit 适配层的契约相同：inScope 按 id 字节序；changes 按 (generation, id) 升序、每张带位置。
 final class FakeMedia: MediaSource, @unchecked Sendable {
-    private let state = Locked<(photos: [FakePhoto], scope: Set<String>?, epoch: Int, identity: String?, duplicate: Set<String>, existingUnreadable: Bool)>(([], ["B7"], 1, "lib-1", [], false))
+    private let state = Locked<(photos: [FakePhoto], scope: Set<String>?, pairingId: Int, identity: String?, duplicate: Set<String>, existingUnreadable: Bool)>(([], ["B7"], 1, "lib-1", [], false))
     let metadataReads = Locked(0)
     /// iOS（#1016）：lookup 给不出字节数（0），只有导入后才知道。
     let sizeUnknownBeforeImport = Locked(false)
@@ -86,7 +86,7 @@ final class FakeMedia: MediaSource, @unchecked Sendable {
     func put(_ p: FakePhoto) { state.update { s in s.photos.removeAll { $0.n == p.n }; s.photos.append(p) } }
     func remove(_ n: Int) { state.update { s in s.photos.removeAll { $0.n == n } } }
     /// F3 / 3105：之前发出去的位置全部失效。
-    func expireTokens() { state.update { $0.epoch += 1 } }
+    func expireTokens() { state.update { $0.pairingId += 1 } }
 
     func isInScope(_ bucket: String) -> Bool { state.get().scope?.contains(bucket) == true }
 
@@ -108,17 +108,17 @@ final class FakeMedia: MediaSource, @unchecked Sendable {
         metadataReads.update { $0 += 1 }
         let s = state.get()
         let from = FakePosition.decode(position)
-        if from.epoch != s.epoch { throw DiscoveryCursorExpired() }
+        if from.pairingId != s.pairingId { throw DiscoveryCursorExpired() }
         return s.photos
             .filter { from.isBefore($0) && s.scope?.contains($0.bucket) == true }
             .sorted { $0.generation != $1.generation ? $0.generation < $1.generation : MediaOrder.precedes($0.mediaId, $1.mediaId) }
             .prefix(limit)
-            .map { snapshot($0, position: FakePosition(epoch: s.epoch, generation: $0.generation, id: $0.mediaId).encoded) }
+            .map { snapshot($0, position: FakePosition(pairingId: s.pairingId, generation: $0.generation, id: $0.mediaId).encoded) }
     }
 
     func currentPosition() async throws -> DiscoveryPosition {
         let s = state.get()
-        return FakePosition(epoch: s.epoch, generation: s.photos.map(\.generation).max() ?? 0, id: nil).encoded
+        return FakePosition(pairingId: s.pairingId, generation: s.photos.map(\.generation).max() ?? 0, id: nil).encoded
     }
 
     func libraryIdentity() async throws -> String? { state.get().identity }
@@ -264,12 +264,12 @@ final class FakeDelivery: ItemDelivery, @unchecked Sendable {
         return (next ?? Self.confirmed)(request)
     }
 
-    func discardPartial(orderId: Int64, pairingEpoch: String) async {
+    func discardPartial(orderId: Int64, pairingId: String) async {
         discarded.update { $0.append(orderId) }
     }
 
     static func confirmed(_ r: DeliveryRequest) -> DeliveryOutcome {
-        .confirmed(CompletionReceipt(queueSequence: r.orderId, receiptId: "receipt-\(r.orderId)", pairingEpoch: r.pairingEpoch, contentHash: r.contentHash, leaseToken: r.leaseToken))
+        .confirmed(CompletionReceipt(queueSequence: r.orderId, receiptId: "receipt-\(r.orderId)", pairingId: r.pairingId, contentHash: r.contentHash, leaseToken: r.leaseToken))
     }
 }
 
@@ -311,7 +311,7 @@ final class FakeScheduler: WakeScheduler, @unchecked Sendable {
 }
 
 final class FakeProbe: DesktopProbe, @unchecked Sendable {
-    let result = Locked<ProbeResult>(.reachable(advertisedEpoch: "e1", health: nil, capabilities: []))
+    let result = Locked<ProbeResult>(.reachable(advertisedPairingId: "e1", health: nil, capabilities: []))
     let calls = Locked(0)
     let hold = Locked(false)
     private let gate = Gate()
@@ -380,7 +380,7 @@ final class Rig: @unchecked Sendable {
     let fakeControl: FakeControl?
     let logger = RecordingLogger()
     let conditions = Locked(Conditions())
-    let epoch = Locked<String?>("e1")
+    let pairingId = Locked<String?>("e1")
     let fullMediaAccess = Locked(true)
     let afterCycles = Locked(0)
     /// 收尾（审计冲刷）挂起，直到放行。
@@ -414,7 +414,7 @@ final class Rig: @unchecked Sendable {
             fakeControl = f
         }
         if cursors {
-            try store.saveDiscoveryState(DiscoveryState(position: FakePosition(epoch: 1, generation: 0, id: "").encoded, libraryIdentity: "lib-1"))
+            try store.saveDiscoveryState(DiscoveryState(position: FakePosition(pairingId: 1, generation: 0, id: "").encoded, libraryIdentity: "lib-1"))
         }
         if let openRound { try store.openRound(openRound) }
         self.source = source?(media) ?? media
@@ -428,7 +428,7 @@ final class Rig: @unchecked Sendable {
             conditions: { [conditions, conditionsHook] in (try? conditionsHook.get()?()) ?? conditions.get() },
             inScope: { [media] in media.isInScope($0) },
             mediaAbsenceTrusted: { [fullMediaAccess] in fullMediaAccess.get() },
-            pairingEpoch: { [epoch] in epoch.get() },
+            pairingId: { [pairingId] in pairingId.get() },
             logger: logger,
             clock: clock.function,
             monotonic: { 0 },
@@ -436,7 +436,7 @@ final class Rig: @unchecked Sendable {
                 if afterCycleHold.get() { try? await afterCycleGate.wait() }
                 afterCycles.update { $0 += 1 }
             },
-            onEpochAdvertised: { [advertised] e in advertised.update { $0.append(e) } },
+            onPairingIdAdvertised: { [advertised] e in advertised.update { $0.append(e) } },
             onView: { [views] v in views.update { $0.append(v) } }
         )
     }
@@ -450,7 +450,7 @@ final class Rig: @unchecked Sendable {
 
     @discardableResult
     func order(_ p: FakePhoto, _ state: OrderState) throws -> Order {
-        try store.insert(NewOrder(mediaId: p.mediaId, sourceVersion: p.sourceVersion, bucketId: p.bucket, contentHash: p.hash, state: state, pairingEpoch: "e1"))
+        try store.insert(NewOrder(mediaId: p.mediaId, sourceVersion: p.sourceVersion, bucketId: p.bucket, contentHash: p.hash, state: state, pairingId: "e1"))
     }
 
     func state(_ n: Int) throws -> OrderState? { try store.currentForMedia(mid(n))?.state }
@@ -461,7 +461,7 @@ final class Rig: @unchecked Sendable {
     func generation() throws -> Int64 { FakePosition.decode(try store.discoveryState()!.position).generation }
 
     func advanceG(_ generation: Int64) throws {
-        try store.advanceDiscovery(FakePosition(epoch: 1, generation: generation, id: nil).encoded)
+        try store.advanceDiscovery(FakePosition(pairingId: 1, generation: generation, id: nil).encoded)
     }
 
     func start() async { await engine.start() }

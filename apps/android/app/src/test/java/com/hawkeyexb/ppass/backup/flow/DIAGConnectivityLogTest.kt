@@ -48,11 +48,11 @@ class DIAGConnectivityLogTest {
 
     // ── 探测日志 ──
 
-    private val pairing = Pairing(daemonNodeId = "d", daemonAddrToken = "unused", storageDeviceName = "desk", pairingEpoch = "e1")
+    private val pairing = Pairing(daemonNodeId = "d", daemonAddrToken = "unused", storageDeviceName = "desk", pairingId = "e1")
 
     private fun client(probe: suspend ((CallTrace) -> Unit) -> String?) = object : FlowReceiptClient {
-        override suspend fun currentPairingEpoch(): String? = error("probe must use the traced entry point")
-        override suspend fun probeHello(trace: (CallTrace) -> Unit) = com.hawkeyexb.ppass.proto.Hello(pairingEpoch = probe(trace))
+        override suspend fun currentPairingId(): String? = error("probe must use the traced entry point")
+        override suspend fun probeHello(trace: (CallTrace) -> Unit) = com.hawkeyexb.ppass.proto.Hello(pairingId = probe(trace))
         override suspend fun offer(request: FlowFetchRequest) = FlowStatusReply(state = "active")
         override suspend fun status(tuple: FlowTupleRef) = FlowStatusReply(state = "active")
         override suspend fun suspendFetch(tuple: FlowTupleRef) = Unit

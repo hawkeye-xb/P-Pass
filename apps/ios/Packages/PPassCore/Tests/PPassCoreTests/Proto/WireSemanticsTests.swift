@@ -39,7 +39,7 @@ final class WireSemanticsTests: XCTestCase {
     func testHelloWithoutHealthIsNil() throws {
         let hello = try ProtoJSON.decode(Hello.self, from: Data(#"{"proto_ver":1,"capabilities":[],"device_name":"PC"}"#.utf8))
         XCTAssertNil(hello.health)
-        XCTAssertNil(hello.pairingEpoch)
+        XCTAssertNil(hello.pairingId)
     }
 
     func testUnknownKeysAreIgnored() throws {
@@ -82,7 +82,7 @@ final class WireSemanticsTests: XCTestCase {
     /// #1070：新建的请求带本端版本。
     func testBuiltRequestCarriesThisBuildsVersions() throws {
         let wire = try JSONValue.parse(ProtoJSON.encode(Req(id: "1", method: "hello")))
-        XCTAssertEqual(wire, try JSONValue.parse(Data(#"{"id":"1","method":"hello","params":null,"ver":2,"min_ver":2}"#.utf8)))
+        XCTAssertEqual(wire, try JSONValue.parse(Data(#"{"id":"1","method":"hello","params":null,"ver":3,"min_ver":3}"#.utf8)))
     }
 
     func testThumbSizeRejectsUnknownValues() {
@@ -104,7 +104,7 @@ final class WireSemanticsTests: XCTestCase {
     /// u64 的 queue_sequence 不能过 Double：取一个 Double 表示不了的值往返。
     func testSixtyFourBitIntegersSurvive() throws {
         let big: UInt64 = 9_007_199_254_740_993 // 2^53 + 1
-        let tuple = FlowTupleRef(queueSequence: big, pairingEpoch: "e", leaseToken: "lease-x")
+        let tuple = FlowTupleRef(queueSequence: big, pairingId: "e", leaseToken: "lease-x")
         let back = try ProtoJSON.decode(FlowTupleRef.self, from: ProtoJSON.encode(tuple))
         XCTAssertEqual(back.queueSequence, big)
         let max = FlowTupleRef(queueSequence: .max)

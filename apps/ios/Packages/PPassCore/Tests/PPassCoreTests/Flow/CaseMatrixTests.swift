@@ -229,7 +229,7 @@ final class CaseMatrixTests: XCTestCase {
         rig.photo(1, generation: 1)
         rig.delivery.script.update { s in
             for _ in 0..<2 {
-                s.append { r in .confirmed(CompletionReceipt(queueSequence: r.orderId, receiptId: "old", pairingEpoch: "e0", contentHash: r.contentHash, leaseToken: r.leaseToken)) }
+                s.append { r in .confirmed(CompletionReceipt(queueSequence: r.orderId, receiptId: "old", pairingId: "e0", contentHash: r.contentHash, leaseToken: r.leaseToken)) }
             }
         }
         await rig.start()

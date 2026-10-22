@@ -19,7 +19,7 @@ final class OrderStoreTests: XCTestCase {
 
     private func newOrder(_ mediaId: String, _ state: OrderState = .transferring, hash: String?? = .none, version: String = "v1", bucket: String = "B7") -> NewOrder {
         let h: String? = hash ?? "h\(mediaId)"
-        return NewOrder(mediaId: mediaId, sourceVersion: version, bucketId: bucket, contentHash: h, state: state, pairingEpoch: "e3")
+        return NewOrder(mediaId: mediaId, sourceVersion: version, bucketId: bucket, contentHash: h, state: state, pairingId: "e3")
     }
 
     private func pos(_ s: String) -> DiscoveryPosition { DiscoveryPosition(raw: Data(s.utf8)) }

@@ -18,10 +18,10 @@ import org.junit.Test
 import java.io.File
 
 class MOB117ProbePairingLostTest {
-    private val pairing = Pairing(daemonNodeId = "d", daemonAddrToken = "unused", storageDeviceName = "desk", pairingEpoch = "e1")
+    private val pairing = Pairing(daemonNodeId = "d", daemonAddrToken = "unused", storageDeviceName = "desk", pairingId = "e1")
 
     private fun rejecting(reason: String) = object : FlowReceiptClient {
-        override suspend fun currentPairingEpoch(): String? = error("probe must use the traced entry point")
+        override suspend fun currentPairingId(): String? = error("probe must use the traced entry point")
         override suspend fun probeHello(trace: (CallTrace) -> Unit): com.hawkeyexb.ppass.proto.Hello =
             throw DesktopRejectedException(reason, "hello")
         override suspend fun offer(request: FlowFetchRequest) = FlowStatusReply(state = "active")
@@ -30,25 +30,25 @@ class MOB117ProbePairingLostTest {
     }
 
     @Test
-    fun `a probe rejected as not authorized lights the pairing-lost card for the current epoch`() = runTest {
+    fun `a probe rejected as not authorized lights the pairing-lost card for the current pairing id`() = runTest {
         val loss = FlowDeliveryPairingLoss()
-        val probe = DaemonDesktopProbe(pairing = { pairing }, desktopFor = { rejecting("revoked") }, pairingLoss = loss)
+        val probe = DaemonDesktopProbe(pairing = { pairing }, desktopFor = { rejecting("not_paired") }, pairingLoss = loss)
 
         assertEquals(ProbeResult.PairingLost, probe.probe())
-        assertTrue("探测判出配对失效却不记，红卡永远不亮（#466）", loss.isLost(PairingEpoch("e1")))
+        assertTrue("探测判出配对失效却不记，红卡永远不亮（#466）", loss.isLost(PairingId("e1")))
 
         val card = HolderPairingLostState()
-        card.syncFrom(loss, PairingEpoch("e1"))
+        card.syncFrom(loss, PairingId("e1"))
         assertTrue(card.value.value)
     }
 
     @Test
-    fun `the loss belongs to the epoch that was rejected, not to a later re-pair`() = runTest {
+    fun `the loss belongs to the pid that was rejected, not to a later re-pair`() = runTest {
         val loss = FlowDeliveryPairingLoss()
         DaemonDesktopProbe(pairing = { pairing }, desktopFor = { rejecting("not_paired") }, pairingLoss = loss).probe()
 
-        assertTrue(loss.isLost(PairingEpoch("e1")))
-        assertFalse("重新配对换了 epoch 之后不能还亮着红卡", loss.isLost(PairingEpoch("e2")))
+        assertTrue(loss.isLost(PairingId("e1")))
+        assertFalse("重新配对换了 pid 之后不能还亮着红卡", loss.isLost(PairingId("e2")))
     }
 
     @Test
@@ -57,7 +57,7 @@ class MOB117ProbePairingLostTest {
         val probe = DaemonDesktopProbe(pairing = { pairing }, desktopFor = { rejecting("library_unavailable") }, pairingLoss = loss)
 
         assertEquals(ProbeResult.Unreachable, probe.probe())
-        assertFalse(loss.isLost(PairingEpoch("e1")))
+        assertFalse(loss.isLost(PairingId("e1")))
     }
 
     // 接线门禁：探测只改视图、不写 order（revision 不动），所以 holder 必须在视图订阅里同步红卡，否则记了也不亮。
@@ -76,13 +76,13 @@ class MOB117ProbePairingLostTest {
     fun `a heartbeat hello rejected as not authorized reports pairing lost and is not counted as reachable`() {
         var reachable = 0
         val lost = mutableListOf<Throwable>()
-        applyHeartbeatOutcome(null, rejectedHello("revoked"), onPairingLost = { lost += it }) { reachable++ }
+        applyHeartbeatOutcome(null, rejectedHello("not_paired"), onPairingLost = { lost += it }) { reachable++ }
 
         assertEquals("被移除不是「桌面回来了」，不能去叫醒引擎", 0, reachable)
         assertEquals(1, lost.size)
         val loss = FlowDeliveryPairingLoss()
-        loss.record(PairingEpoch("e1"), lost.single())
-        assertTrue("心跳给出的失败必须能点亮红卡", loss.isLost(PairingEpoch("e1")))
+        loss.record(PairingId("e1"), lost.single())
+        assertTrue("心跳给出的失败必须能点亮红卡", loss.isLost(PairingId("e1")))
     }
 
     @Test
@@ -99,8 +99,8 @@ class MOB117ProbePairingLostTest {
     fun `every recorded loss bumps the change signal the home card subscribes to`() {
         val loss = FlowDeliveryPairingLoss()
         val before = loss.changes.value
-        loss.record(PairingEpoch("e1"), DesktopRejectedException("revoked", "hello"))
-        loss.record(PairingEpoch("e1"), DesktopRejectedException("backup_failed", "flow.offer"))
+        loss.record(PairingId("e1"), DesktopRejectedException("not_paired", "hello"))
+        loss.record(PairingId("e1"), DesktopRejectedException("backup_failed", "flow.offer"))
         assertEquals(before + 1, loss.changes.value)
     }
 

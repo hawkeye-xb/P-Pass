@@ -9,7 +9,7 @@ import com.hawkeyexb.ppass.backup.flow.DeliveryOutcome
 import com.hawkeyexb.ppass.backup.flow.DesktopRejectedException
 import com.hawkeyexb.ppass.backup.flow.FlowDeliveryPairingLoss
 import com.hawkeyexb.ppass.backup.flow.FlowReceiptClient
-import com.hawkeyexb.ppass.backup.flow.PairingEpoch
+import com.hawkeyexb.ppass.backup.flow.PairingId
 import com.hawkeyexb.ppass.backup.flow.PeerFailureKind
 import com.hawkeyexb.ppass.backup.flow.ProbeResult
 import com.hawkeyexb.ppass.backup.flow.WaitReason
@@ -42,8 +42,7 @@ class ReasonPolicyTest {
     /** The table, written out once more by hand: a change to [reasonClassOf] must change this too. */
     private val pinned: Map<Reason, ReasonClass> = mapOf(
         Reason.NOT_PAIRED to ReasonClass.PAIRING_LOST,
-        Reason.REVOKED to ReasonClass.PAIRING_LOST,
-        Reason.EPOCH_MISMATCH to ReasonClass.PAIRING_LOST,
+        Reason.PAIRING_MISMATCH to ReasonClass.PAIRING_LOST,
         Reason.ROLE_FORBIDDEN to ReasonClass.PAIRING_LOST,
         Reason.PHONE_OUTDATED to ReasonClass.OUTDATED,
         Reason.DESKTOP_OUTDATED to ReasonClass.OUTDATED,
@@ -77,7 +76,7 @@ class ReasonPolicyTest {
     @Test
     fun `every registered reason has an explicit class, and the table is pinned`() {
         val wire = registry()
-        assertEquals(19, wire.size)
+        assertEquals(18, wire.size)
         for (r in wire) {
             val kind = Reason.fromWire(r)
             assertFalse("Rust reason $r is not mirrored", kind == Reason.UNKNOWN)
@@ -127,7 +126,7 @@ class ReasonPolicyTest {
 
     /** The conclusion for [reason] on a delivery channel; the same table for rejections and pushes. */
     private fun expected(reason: String, channel: String): DeliveryOutcome = when (reason) {
-        "not_paired", "revoked", "epoch_mismatch", "role_forbidden" -> DeliveryOutcome.PairingLost
+        "not_paired", "pairing_mismatch", "role_forbidden" -> DeliveryOutcome.PairingLost
         "phone_outdated" -> DeliveryOutcome.NeedsUpdate(OutdatedSide.PHONE)
         "desktop_outdated", "unsupported_method" -> DeliveryOutcome.NeedsUpdate(OutdatedSide.DESKTOP)
         "storage_full" -> DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_FULL, reason)
@@ -162,39 +161,38 @@ class ReasonPolicyTest {
     @Test
     fun `a lost pairing is recorded from a push as well as from a rejection`() {
         val loss = FlowDeliveryPairingLoss()
-        loss.record(PairingEpoch("e1"), com.hawkeyexb.ppass.backup.flow.FlowPushedFailureException("epoch_mismatch"))
-        assertTrue(loss.isLost(PairingEpoch("e1")))
+        loss.record(PairingId("e1"), com.hawkeyexb.ppass.backup.flow.FlowPushedFailureException("pairing_mismatch"))
+        assertTrue(loss.isLost(PairingId("e1")))
         val other = FlowDeliveryPairingLoss()
-        other.record(PairingEpoch("e1"), DesktopRejectedException("grant_conflict", "flow.offer"))
-        other.record(PairingEpoch("e1"), com.hawkeyexb.ppass.backup.flow.FlowPushedFailureException("grant_not_found"))
-        other.record(PairingEpoch("e1"), DesktopRejectedException("internal", "flow.offer"))
-        assertFalse(other.isLost(PairingEpoch("e1")))
+        other.record(PairingId("e1"), DesktopRejectedException("grant_conflict", "flow.offer"))
+        other.record(PairingId("e1"), com.hawkeyexb.ppass.backup.flow.FlowPushedFailureException("grant_not_found"))
+        other.record(PairingId("e1"), DesktopRejectedException("internal", "flow.offer"))
+        assertFalse(other.isLost(PairingId("e1")))
     }
 
     private fun rejectingHello(reason: String) = object : FlowReceiptClient {
-        override suspend fun currentPairingEpoch(): String? = error("unused")
+        override suspend fun currentPairingId(): String? = error("unused")
         override suspend fun probeHello(trace: (CallTrace) -> Unit): Hello = throw DesktopRejectedException(reason, "hello")
         override suspend fun offer(request: FlowFetchRequest) = FlowStatusReply(state = "active")
         override suspend fun status(tuple: FlowTupleRef) = FlowStatusReply(state = "active")
         override suspend fun suspendFetch(tuple: FlowTupleRef) = Unit
     }
 
-    private val pairing = Pairing(daemonNodeId = "d", daemonAddrToken = "unused", storageDeviceName = "desk", pairingEpoch = "e1")
+    private val pairing = Pairing(daemonNodeId = "d", daemonAddrToken = "unused", storageDeviceName = "desk", pairingId = "e1")
 
     private suspend fun probe(reason: String, loss: FlowDeliveryPairingLoss = FlowDeliveryPairingLoss()) =
         DaemonDesktopProbe(pairing = { pairing }, desktopFor = { rejectingHello(reason) }, pairingLoss = loss).probe()
 
     @Test
-    fun `hello probes - pairing lost for not_paired and revoked, unreachable otherwise`() = runTest {
+    fun `hello probes - pairing lost for not_paired, unreachable otherwise`() = runTest {
         assertEquals(ProbeResult.PairingLost, probe("not_paired"))
-        assertEquals(ProbeResult.PairingLost, probe("revoked"))
         for (r in listOf("internal", "bad_request", "from_the_future")) {
             assertEquals(r, ProbeResult.Unreachable, probe(r))
         }
     }
 
     @Test
-    fun `heartbeat - pairing lost for not_paired and revoked, reachable for other rejections`() {
+    fun `heartbeat - pairing lost for not_paired, reachable for other rejections`() {
         fun beat(reason: String): Pair<Int, Int> {
             var reachable = 0
             var lost = 0
@@ -202,7 +200,6 @@ class ReasonPolicyTest {
             return reachable to lost
         }
         assertEquals(0 to 1, beat("not_paired"))
-        assertEquals(0 to 1, beat("revoked"))
         assertEquals(1 to 0, beat("internal"))
         assertEquals(1 to 0, beat("from_the_future"))
     }
@@ -214,7 +211,7 @@ class ReasonPolicyTest {
         val loss = FlowDeliveryPairingLoss()
         assertEquals(ProbeResult.NeedsUpdate(OutdatedSide.PHONE), probe("phone_outdated", loss))
         assertEquals(ProbeResult.NeedsUpdate(OutdatedSide.DESKTOP), probe("desktop_outdated", loss))
-        assertFalse("版本不兼容不点亮配对失效红卡", loss.isLost(PairingEpoch("e1")))
+        assertFalse("版本不兼容不点亮配对失效红卡", loss.isLost(PairingId("e1")))
         assertEquals(DeliveryOutcome.NeedsUpdate(OutdatedSide.PHONE), rejected("phone_outdated"))
         assertEquals(DeliveryOutcome.NeedsUpdate(OutdatedSide.DESKTOP), rejected("desktop_outdated"))
         assertEquals(DeliveryOutcome.NeedsUpdate(OutdatedSide.DESKTOP), rejected("unsupported_method"))

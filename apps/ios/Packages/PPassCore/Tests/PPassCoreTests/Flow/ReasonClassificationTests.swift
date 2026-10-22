@@ -9,7 +9,6 @@ final class ReasonClassificationTests: XCTestCase {
     /// 应答（offer / status / hello 探测 / 前台心跳 / 配对失效红卡）与 `flow.failed` 推送共用这一张。
     static let table: [(reason: String, cls: String)] = [
         ("not_paired", "pairing_lost"),
-        ("revoked", "pairing_lost"),
         ("role_forbidden", "pairing_lost"),
         ("pair_token_invalid", "item_failure"),
         ("phone_outdated", "version_mismatch:phone"),
@@ -23,7 +22,7 @@ final class ReasonClassificationTests: XCTestCase {
         ("library_unavailable", "peer_failure:LIBRARY_UNAVAILABLE"),
         ("storage_failed", "peer_failure:STORAGE_ERROR"),
         ("fetch_failed", "path_failure"),
-        ("epoch_mismatch", "pairing_lost"),
+        ("pairing_mismatch", "pairing_lost"),
         ("grant_not_found", "item_failure"),
         ("grant_conflict", "item_failure"),
         ("cancelled", "item_failure"),
@@ -81,7 +80,6 @@ final class ReasonClassificationTests: XCTestCase {
     /// v1 桌面在同一情形下的应答 msg_key（`f1b70a58` 的 authz.rs / router.rs）。版本两项是 v2 新增，不在基线里。
     static let v1ReplyKey: [String: String] = [
         "not_paired": "err.not_paired",
-        "revoked": "err.not_authorized",
         "role_forbidden": "err.not_authorized",
         "pair_token_invalid": "err.not_authorized",
         "unsupported_method": "err.unsupported",
@@ -93,7 +91,7 @@ final class ReasonClassificationTests: XCTestCase {
         "library_unavailable": "library_unavailable",
         "storage_failed": "storage_failed",
         "fetch_failed": "fetch_failed",
-        "epoch_mismatch": "err.not_authorized",
+        "pairing_mismatch": "err.not_authorized",
         "grant_not_found": "err.not_authorized",
         "grant_conflict": "err.not_authorized",
         "cancelled": "err.not_authorized",
@@ -105,7 +103,7 @@ final class ReasonClassificationTests: XCTestCase {
         "library_unavailable": "library_unavailable",
         "storage_failed": "storage_failed",
         "fetch_failed": "fetch_failed",
-        "epoch_mismatch": "guard_mismatch",
+        "pairing_mismatch": "guard_mismatch",
         "grant_not_found": "guard_mismatch",
         "grant_conflict": "guard_mismatch",
         "cancelled": "cancelled",
@@ -120,7 +118,7 @@ final class ReasonClassificationTests: XCTestCase {
         "internal", // 单张失败 → 对端失败（电脑上的 P-Pass 出错了）
     ]
     static let approvedPushChanges: Set = [
-        "epoch_mismatch", // 单张失败 → 配对失效（推送与应答同一张表）
+        "pairing_mismatch", // 单张失败 → 配对失效（推送与应答同一张表）
         "internal", // 单张失败 → 对端失败
     ]
 
@@ -144,11 +142,11 @@ final class ReasonClassificationTests: XCTestCase {
 
     /// 端到端：应答拒绝 → 传输结局；配对失效红卡只认应答通道的配对失效。
     func testRejectionsDriveTheDeliveryOutcomeAndThePairingLossFact() {
-        XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(reason: .registered(.epochMismatch), method: "flow.offer")), .pairingLost)
+        XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(reason: .registered(.pairingMismatch), method: "flow.offer")), .pairingLost)
         XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(reason: .registered(.libraryUnavailable), method: "flow.offer")),
                        .peerFailure(.libraryUnavailable, code: "library_unavailable"))
         XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(reason: .registered(.fetchFailed), method: "flow.offer")), .pathFailure("fetch_failed"))
-        XCTAssertEqual(classifyPushedFailure(.registered(.epochMismatch)), .pairingLost)
+        XCTAssertEqual(classifyPushedFailure(.registered(.pairingMismatch)), .pairingLost)
         XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(reason: .registered(.internal), method: "flow.offer")),
                        .peerFailure(.desktopInternal, code: "internal"))
         XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(reason: .registered(.badRequest), method: "flow.offer")), .itemFailure("rejected:bad_request"))
@@ -156,16 +154,16 @@ final class ReasonClassificationTests: XCTestCase {
         XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(reason: .registered(.unsupportedMethod), method: "flow.offer")), .versionMismatch(.desktop))
 
         let loss = PairingLoss()
-        loss.record(epoch: "e1", failure: DesktopRejected(reason: .registered(.notFound), method: "flow.status"))
-        XCTAssertFalse(loss.isLost(epoch: "e1"))
-        loss.record(epoch: "e1", failure: DesktopRejected(reason: .registered(.revoked), method: "hello"))
-        XCTAssertTrue(loss.isLost(epoch: "e1"))
+        loss.record(pairingId: "e1", failure: DesktopRejected(reason: .registered(.notFound), method: "flow.status"))
+        XCTAssertFalse(loss.isLost(pairingId: "e1"))
+        loss.record(pairingId: "e1", failure: DesktopRejected(reason: .registered(.notPaired), method: "hello"))
+        XCTAssertTrue(loss.isLost(pairingId: "e1"))
     }
 
     /// `flow.failed` 推送载荷读 `reason`（#1070 改名）；缺键 → 不认识。
     func testPushedFailureReadsTheReasonField() {
-        let tuple = FlowTupleRef(queueSequence: 3, pairingEpoch: "e", leaseToken: "l")
-        let base: [String: JSONValue] = ["queue_sequence": .int(3), "pairing_epoch": .string("e"), "lease_token": .string("l")]
+        let tuple = FlowTupleRef(queueSequence: 3, pairingId: "e", leaseToken: "l")
+        let base: [String: JSONValue] = ["queue_sequence": .int(3), "pairing_id": .string("e"), "lease_token": .string("l")]
         var withReason = base
         withReason["reason"] = .string("library_unavailable")
         XCTAssertEqual(parseFlowPushOutcome(kind: "flow.failed", data: .object(withReason), tuple: tuple), .failed(.registered(.libraryUnavailable)))

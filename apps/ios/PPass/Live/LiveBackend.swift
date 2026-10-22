@@ -39,7 +39,7 @@ final class LiveBackend: @unchecked Sendable {
     let engineModel: LiveEngineModel
     /// 前台相册变化监听（#978，对位 Android BackupUiStateHolder 的 MediaStore ContentObserver）。
     let mediaWatcher: MediaChangeWatcher
-    let epochRepairer: EpochRepairer
+    let pairingIdRepairer: PairingIdRepairer
     #if DEBUG
     /// 真机验证用的私钥指纹（BLAKE3 前 8 位）；Release 没有这个字段。
     let identityFingerprint: String
@@ -104,12 +104,12 @@ final class LiveBackend: @unchecked Sendable {
         scheduler = PlannedWakeScheduler(directory: dir, submitter: BGTaskSubmitter(), logger: logger)
 
         let plane = self.plane
-        let epoch: @Sendable () -> String? = {
-            guard let r = pairingStore.load(), !r.lost, !r.pairingEpoch.isEmpty else { return nil }
-            return r.pairingEpoch
+        let pairingId: @Sendable () -> String? = {
+            guard let r = pairingStore.load(), !r.lost, !r.pairingId.isEmpty else { return nil }
+            return r.pairingId
         }
         let desktop = ControlPlaneDesktop(client: ProtoClient(transport: CurrentPeerTransport(plane: plane, store: pairingStore)))
-        let delivery = FlowDeliveryPort(provider: FfiBlobProvider(provider: provider), currentEpoch: epoch, desktop: desktop,
+        let delivery = FlowDeliveryPort(provider: FfiBlobProvider(provider: provider), currentPairingId: pairingId, desktop: desktop,
                                         push: ControlPlanePush(transport: CurrentPeerTransport(plane: plane, store: pairingStore)), logger: logger, pairingLoss: pairingLoss)
         let media = self.media
         // 读盘失败与「从未保存」都给引擎空范围（一张都不备份），但读失败要留日志，不能和从未保存混为一谈（#971）。
@@ -134,23 +134,23 @@ final class LiveBackend: @unchecked Sendable {
             importer: PhotoImporter(provider: provider, tempRoot: fm.temporaryDirectory.appendingPathComponent("ppass-originals")),
             delivery: delivery,
             probe: PrewarmingProbe(provider: provider,
-                                   inner: ControlPlaneProbe(currentEpoch: epoch, desktop: desktop, logger: logger, pairingLoss: pairingLoss),
+                                   inner: ControlPlaneProbe(currentPairingId: pairingId, desktop: desktop, logger: logger, pairingLoss: pairingLoss),
                                    logger: logger),
             presence: ControlPlanePresence(desktop: desktop), lease: window, scheduler: scheduler, control: control,
             conditions: {
-                Conditions(paired: epoch() != nil, autoBackupEnabled: autoPrefs.enabled(), wifiOnly: settings.wifiOnly(),
+                Conditions(paired: pairingId() != nil, autoBackupEnabled: autoPrefs.enabled(), wifiOnly: settings.wifiOnly(),
                            onUnmetered: !network.isExpensive, batteryLow: BatteryState.isLow)
             },
             inScope: { PhotoMediaSource.inScope(bucketId: $0, selected: scope()) },
             mediaAbsenceTrusted: { media.access() == .full },
-            pairingEpoch: epoch, logger: logger,
+            pairingId: pairingId, logger: logger,
             afterCycle: FlowWiring.afterCycle(dispatcher: audit),
-            onEpochAdvertised: FlowWiring.epochAdvertised(store: pairingStore, logger: logger),
+            onPairingIdAdvertised: FlowWiring.pairingIdAdvertised(store: pairingStore, logger: logger),
             onView: { view in Task { await model.engineChanged(view) } }
         )
         engineBox.engine = engine
-        // #970：空 epoch 的老配对（旧版本存下的）静默 hello 修一次，修不了才标失联；`start()` 里先于首页事实运行。
-        epochRepairer = EpochRepairer(store: pairingStore, hello: { [desktop] in try await desktop.hello().pairingEpoch }, logger: logger)
+        // #970：空 pairingId 的老配对（旧版本存下的）静默 hello 修一次，修不了才标失联；`start()` 里先于首页事实运行。
+        pairingIdRepairer = PairingIdRepairer(store: pairingStore, hello: { [desktop] in try await desktop.hello().pairingId }, logger: logger)
         catchup = ForegroundCatchup(engine: engine)
         // #977：前台心跳（对位 Android ForegroundHeartbeat）。结果映射在 PPassCore，这里只接线：
         // 可达 → 叫醒引擎（#439）；被拒为配对失效 → 记进 PairingLoss 并刷新首页事实（refreshFacts 据此标红卡，#466）。
@@ -160,14 +160,14 @@ final class LiveBackend: @unchecked Sendable {
                                         isPaired: { pairingStore.load() != nil }, logger: logger)
         timelineLive = liveFeed
         heartbeat = ForegroundHeartbeat(
-            desktop: desktop, currentEpoch: epoch, ledger: sentinel, now: { Int64(Date().timeIntervalSince1970 * 1000) },
+            desktop: desktop, currentPairingId: pairingId, ledger: sentinel, now: { Int64(Date().timeIntervalSince1970 * 1000) },
             onReachable: { [engine = self.engine] in
                 await engine.onDesktopReachable()
                 liveFeed.session.onDesktopReachable() // 实时更新退避耗尽后桌面回来了：自动恢复，不等用户点「重试」（Android #474）
                 await model.refresh?()
             },
-            onPairingLost: { epoch, failure in
-                loss.record(epoch: epoch, failure: failure)
+            onPairingLost: { pairingId, failure in
+                loss.record(pairingId: pairingId, failure: failure)
                 await model.refresh?()
             },
             logger: logger)
@@ -257,15 +257,15 @@ final class LiveBackend: @unchecked Sendable {
         let parker = providerParker
         window.observeLease { held in parker.setEngineBusy(held) } // #979：对位 Android engine.status → setEngineBusy
         Task {
-            await repairEpochIfNeeded()
+            await repairPairingIdIfNeeded()
             await engine.start()
             await refreshFacts()
         }
     }
 
-    /// 对位 Android `BackupUiStateHolder.repairEpochIfNeeded`：先修，再刷新首页事实；修好后叫醒引擎（它在 epoch 为空时判了未配对）。
-    private func repairEpochIfNeeded() async {
-        guard let result = await epochRepairer.repairIfNeeded() else { return }
+    /// 对位 Android `BackupUiStateHolder.repairPairingIdIfNeeded`：先修，再刷新首页事实；修好后叫醒引擎（它在 pairingId 为空时判了未配对）。
+    private func repairPairingIdIfNeeded() async {
+        guard let result = await pairingIdRepairer.repairIfNeeded() else { return }
         if case .repaired = result { _ = await engine.trigger(.pairingRepaired) }
     }
 
@@ -295,7 +295,7 @@ final class LiveBackend: @unchecked Sendable {
             inScopeTotal: media.inScopeTotal(),
             lastReachableAt: sentinel.load().lastReachableAt
         ).applying(counts: counts)
-        if pairingLoss.changeCount > 0, let e = pairingStore.load()?.pairingEpoch, pairingLoss.isLost(epoch: e) {
+        if pairingLoss.changeCount > 0, let e = pairingStore.load()?.pairingId, pairingLoss.isLost(pairingId: e) {
             do { try pairingStore.markLost() } catch { logger.log("pairing lost: cannot persist (\(error))") }
         }
         await engineModel.publish(facts, await Self.currentBackgroundRefresh())
@@ -318,9 +318,9 @@ final class LiveBackend: @unchecked Sendable {
     /// 只看确定事件（配对失效、相册权限变差、后台刷新被关），不看首页的 Trouble。
     func evaluateNotices() async {
         let record = pairingStore.load()
-        let epoch = record.map(\.pairingEpoch).flatMap { $0.isEmpty ? nil : $0 } // 空代号（待修复）当没有代号，不拿来去重
+        let pairingId = record.map(\.pairingId).flatMap { $0.isEmpty ? nil : $0 } // 空代号（待修复）当没有代号，不拿来去重
         let facts = DefinitiveFacts(
-            pairingEpoch: epoch,
+            pairingId: pairingId,
             pairingLost: record?.lost == true,
             mediaAccess: LiveMediaLibrary.tier(PhotoKitAuthorization().currentLevel()),
             backgroundRequested: autoPrefs.requested(),

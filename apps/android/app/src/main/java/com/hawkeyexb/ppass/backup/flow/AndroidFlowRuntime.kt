@@ -241,7 +241,7 @@ internal fun clearFlowRuntime(context: Context, daemonNodeId: String) {
 internal fun runtimeFor(context: Context): AndroidFlowRuntime? {
     val app = context.applicationContext
     val pairing = PairingStore(app.filesDir).load() ?: return null.also { PLog.i(TAG, "runtimeFor: not paired") }
-    if (pairing.pairingEpoch.isBlank()) return null.also { PLog.w(TAG, "runtimeFor: blank pairing epoch; refusing to build") }
+    if (pairing.pairingId.isBlank()) return null.also { PLog.w(TAG, "runtimeFor: blank pairing id; refusing to build") }
     val key = pairing.daemonNodeId
     val task = synchronized(runtimeLock) {
         runtime?.let { live ->
@@ -365,7 +365,7 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         },
         inScope = { bucket -> scopeStore.selectedBucketIds()?.contains(bucket) == true },
         mediaAbsenceTrusted = { mediaAbsenceTrustedNow(app) },
-        pairingEpoch = { pairing()?.pairingEpoch?.takeIf { it.isNotBlank() }?.let(::PairingEpoch) },
+        pairingId = { pairing()?.pairingId?.takeIf { it.isNotBlank() }?.let(::PairingId) },
         scope = scope,
         io = Dispatchers.IO,
         log = androidLog,
@@ -373,19 +373,19 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         appForegroundAt = { FlowForegroundHandoff.lastAppForegroundAt },
         // #851：有位置权限、桌面宣告 flow.supersede.v1 时，把当年抹过地点的已备份照片原地换成原图。
         locationReadable = { AndroidMediaImporter.canReadMediaLocation(app) },
-        supersede = SupersedeClient { epoch, oldHash, newHash, provider ->
+        supersede = SupersedeClient { pid, oldHash, newHash, provider ->
             val p = pairing() ?: error("not paired")
             client.bind(application.identity.secretKey())
             RemoteSupersede(client).supersede(
                 parsePeerAddrToken(p.daemonAddrToken),
-                FlowSupersedeRequest(epoch.value, oldHash, newHash, provider),
+                FlowSupersedeRequest(pid.value, oldHash, newHash, provider),
             )
         },
         afterCycle = { auditScope.launch { dispatcher.flush() } },
-        onEpochAdvertised = { advertised ->
-            // 同一台桌面换了配对代号：order 表保留（内容寻址，CONFIRMED 跨代号成立），只更新凭证。
+        onPairingIdAdvertised = { advertised ->
+            // 同一台桌面换了配对 id：order 表保留（内容寻址，CONFIRMED 跨代号成立），只更新凭证。
             val pairings = PairingStore(app.filesDir)
-            pairings.load()?.let { current -> if (current.pairingEpoch != advertised) pairings.save(current.copy(pairingEpoch = advertised)) }
+            pairings.load()?.let { current -> if (current.pairingId != advertised) pairings.save(current.copy(pairingId = advertised)) }
         },
     )
     FlowForegroundHandoff.control = control

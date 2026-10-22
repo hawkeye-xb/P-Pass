@@ -50,7 +50,7 @@ fi
 echo "── 熄屏前水位基线 ──"
 if [ -f "$DATA_DIR/.ppf/index.sqlite" ]; then
   sqlite3 "$DATA_DIR/.ppf/index.sqlite" \
-    "SELECT 'devices: '||COUNT(*) FROM device WHERE revoked=0;
+    "SELECT 'devices: '||COUNT(*) FROM pairing;
      SELECT 'watermark_updated_at: '||COALESCE(MAX(updated_at),0) FROM backup_watermark;
      SELECT 'assets: '||COUNT(*) FROM asset;" \
     | tee "$WORK/baseline.txt"

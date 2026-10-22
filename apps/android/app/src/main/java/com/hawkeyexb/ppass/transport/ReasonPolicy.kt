@@ -30,7 +30,7 @@ enum class ReasonClass {
 }
 
 fun reasonClassOf(reason: Reason): ReasonClass = when (reason) {
-    Reason.NOT_PAIRED, Reason.REVOKED, Reason.EPOCH_MISMATCH, Reason.ROLE_FORBIDDEN -> ReasonClass.PAIRING_LOST
+    Reason.NOT_PAIRED, Reason.PAIRING_MISMATCH, Reason.ROLE_FORBIDDEN -> ReasonClass.PAIRING_LOST
     // unsupported_method: the desktop does not know a method this phone relies on — it is too old.
     Reason.PHONE_OUTDATED, Reason.DESKTOP_OUTDATED, Reason.UNSUPPORTED_METHOD -> ReasonClass.OUTDATED
     Reason.STORAGE_FULL -> ReasonClass.STORAGE_FULL

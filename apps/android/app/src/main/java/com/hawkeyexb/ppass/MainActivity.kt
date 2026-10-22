@@ -440,9 +440,9 @@ fun PPassApp() {
                 timeline.onDesktopReachable()
             },
             // #466: 打开 App 就能发现「电脑端已移除这台手机」，不用等下一张新照片。
-            onPairingLost = { epoch, failure ->
+            onPairingLost = { pid, failure ->
                 com.hawkeyexb.ppass.backup.flow.flowDeliveryPairingLoss.record(
-                    com.hawkeyexb.ppass.backup.flow.PairingEpoch(epoch), failure,
+                    com.hawkeyexb.ppass.backup.flow.PairingId(pid), failure,
                 )
             },
         )
@@ -1401,7 +1401,7 @@ private suspend fun notifyUnpairOnce(client: DaemonClient, pairing: Pairing) {
         PLog.w("PPassDisconnect", "unpair: $tag address unreadable, not sent")
         return
     }
-    val reply = sendUnpairNoticeOnce { client.unpair(peer, pairing.pairingEpoch) }
+    val reply = sendUnpairNoticeOnce { client.unpair(peer, pairing.pairingId) }
     when {
         reply == null -> PLog.i("PPassDisconnect", "unpair: $tag unreachable, not retried")
         reply.ok -> PLog.i("PPassDisconnect", "unpair: $tag acknowledged")

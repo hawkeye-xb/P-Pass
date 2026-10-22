@@ -89,7 +89,7 @@ cmd_snap() {
     echo "-- data dir"; find "$APPDIR" -maxdepth 1 -mindepth 1 -printf '%f ' 2>/dev/null; echo
     if ipc_ready; then
       echo "-- ipc status"; ipc status | "$PY" -c "import json,sys;r=json.load(sys.stdin).get('result',{});print({k:r.get(k) for k in ('version','state','photo_count','pid','exe_path')})"
-      echo "-- devices"; ipc devices.list | "$PY" -c "import json,sys;[print(d['name'],d['node_id'][:8],'revoked=',d['revoked'],d.get('revoked_by'),'presence=',d['presence'],'conn=',d['connection']) for d in json.load(sys.stdin)['result']['devices']]"
+      echo "-- devices"; ipc devices.list | "$PY" -c "import json,sys;[print(d['name'],d['node_id'][:8],'paired=',d['paired'],d.get('departed_by'),'presence=',d['presence'],'conn=',d['connection']) for d in json.load(sys.stdin)['result']['devices']]"
       echo "-- reconcile"; cmd_reconcile
     else
       echo "-- daemon IPC not reachable (no config / token yet, or daemon down)"

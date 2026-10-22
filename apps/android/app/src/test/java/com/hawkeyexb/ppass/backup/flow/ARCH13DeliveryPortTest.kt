@@ -30,7 +30,7 @@ import org.junit.Test
 class ARCH13DeliveryPortTest {
     private val hash = "ab".repeat(32)
     private val orderId = 1_790_000_000_123L
-    private val pairing = Pairing(daemonNodeId = "d", daemonAddrToken = "unused", storageDeviceName = "desk", pairingEpoch = "e1")
+    private val pairing = Pairing(daemonNodeId = "d", daemonAddrToken = "unused", storageDeviceName = "desk", pairingId = "e1")
 
     private inner class Harness(val test: TestScope) {
         var status: () -> String = { """{"state":"in_progress","connected":false}""" }
@@ -73,7 +73,7 @@ class ARCH13DeliveryPortTest {
             awaitCancellation()
         }
         val desktop = object : FlowReceiptClient {
-            override suspend fun currentPairingEpoch(): String = "e1"
+            override suspend fun currentPairingId(): String = "e1"
             override suspend fun offer(request: FlowFetchRequest): FlowStatusReply {
                 offers += request
                 return offerReply
@@ -99,7 +99,7 @@ class ARCH13DeliveryPortTest {
         )
         val request = DeliveryRequest(
             orderId,
-            PairingEpoch("e1"),
+            PairingId("e1"),
             hash,
             MediaDetails(MediaSnapshot(9, "1:1", 7, 1, LEGACY_VOLUME), "content://media/external/file/9", "IMG_9.jpg", "image/jpeg", 1_000_000, 0),
         )
@@ -109,7 +109,7 @@ class ARCH13DeliveryPortTest {
         fun receipt() = FlowCompletionReceipt(
             queueSequence = orderId,
             receiptId = "r1",
-            pairingEpoch = "e1",
+            pairingId = "e1",
             leaseToken = leaseTokenFor(orderId),
             contentHash = hash,
         )
@@ -121,7 +121,7 @@ class ARCH13DeliveryPortTest {
                 kind,
                 buildJsonObject {
                     put("queue_sequence", JsonPrimitive(orderId))
-                    put("pairing_epoch", JsonPrimitive("e1"))
+                    put("pairing_id", JsonPrimitive("e1"))
                     put("lease_token", JsonPrimitive(leaseTokenFor(orderId)))
                     extra.forEach { (k, v) -> put(k, v) }
                 },

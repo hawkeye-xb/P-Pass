@@ -58,7 +58,7 @@ counterproof_hit=0
 while IFS='|' read -r name node_hex; do
   [ -z "$name" ] && continue
   assets=$(sqlite3 "$DB" "SELECT COUNT(*) FROM asset WHERE src_device = x'$node_hex'" 2>/dev/null || echo 0)
-  wm=$(sqlite3 "$DB" "SELECT COALESCE(MAX(updated_at),0) FROM backup_watermark WHERE node_id = x'$node_hex'" 2>/dev/null || echo 0)
+  wm=$(sqlite3 "$DB" "SELECT COALESCE(MAX(w.updated_at),0) FROM backup_watermark w JOIN pairing p ON p.id = w.pairing_id WHERE p.node_id = x'$node_hex'" 2>/dev/null || echo 0)
   wm=${wm:-0}
   # 完成率（MediaStore 分母存在才报）
   rate="—"
@@ -83,7 +83,7 @@ while IFS='|' read -r name node_hex; do
   row=$(printf '| %s | %s | %d | %s | %s %s %s |' "$name" "${node_hex:0:12}…" "$assets" "$rate" "$stall" "$exp" "$( [ "$wm" -gt 0 ] && date -r $((wm/1000)) '+%m-%d %H:%M' || echo '—')")
   report_rows="$report_rows
 $row"
-done < <(sqlite3 "$DB" "SELECT name || '|' || hex(node_id) FROM device WHERE revoked=0 ORDER BY paired_at")
+done < <(sqlite3 "$DB" "SELECT d.name || '|' || hex(d.node_id) FROM device_profile d JOIN pairing p ON p.node_id = d.node_id ORDER BY p.paired_at")
 
 # ── 3. 组装日报 ──
 REPORT="""# P-Pass 狗粮日报 $(date '+%Y-%m-%d')（DOG-03 morning-report）

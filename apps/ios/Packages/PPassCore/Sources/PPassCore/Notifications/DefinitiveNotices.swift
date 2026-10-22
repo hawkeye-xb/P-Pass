@@ -1,7 +1,7 @@
 // #981：失败通知的触发集合与去重，对位 Android `DefinitiveEventNotices.kt`（#130 第 1 层）。
 //
 // 只发「确定、不会自愈、用户能处理」的三类事件：
-// 1. 配对失效：桌面明确不认这台手机。去重键是配对代号（epoch）；只有「没配对了」或「换了代号（重新扫码）」才复位。
+// 1. 配对失效：桌面明确不认这台手机。去重键是配对代号（pairingId）；只有「没配对了」或「换了代号（重新扫码）」才复位。
 // 2. 相册权限变差（完整 → 部分 / 无，部分 → 无）：记上次看到的档位，变差才发，回到完整复位；没有基线只记不发。
 // 3. 后台被停：iOS 的对位物是「后台 App 刷新」从可用变成不可用（Android 的对位是电池优化被重新打开），
 //    且用户要后台备份（`AutoBackupPrefs.requested()`）时才发；没有基线只记不发。
@@ -58,7 +58,7 @@ public enum NoticeKind: Equatable, Sendable {
 /// 这一次运行看到的事实（App 层查出来，纯函数只读它）。
 public struct DefinitiveFacts: Equatable, Sendable {
     /// 当前配对的代号；nil = 没有配对。
-    public var pairingEpoch: String?
+    public var pairingId: String?
     /// 当前配对被桌面明确拒绝过。
     public var pairingLost: Bool
     public var mediaAccess: MediaAccessTier
@@ -66,8 +66,8 @@ public struct DefinitiveFacts: Equatable, Sendable {
     public var backgroundRequested: Bool
     public var backgroundRefresh: BackgroundRefreshAvailability
 
-    public init(pairingEpoch: String?, pairingLost: Bool, mediaAccess: MediaAccessTier, backgroundRequested: Bool, backgroundRefresh: BackgroundRefreshAvailability) {
-        self.pairingEpoch = pairingEpoch
+    public init(pairingId: String?, pairingLost: Bool, mediaAccess: MediaAccessTier, backgroundRequested: Bool, backgroundRefresh: BackgroundRefreshAvailability) {
+        self.pairingId = pairingId
         self.pairingLost = pairingLost
         self.mediaAccess = mediaAccess
         self.backgroundRequested = backgroundRequested
@@ -78,14 +78,14 @@ public struct DefinitiveFacts: Equatable, Sendable {
 /// 落盘的上一次状态（字段名同 Android；`lastBackgroundRefreshAvailable` 对位 `lastBatteryWhitelisted`）。
 public struct DefinitiveNoticeState: Codable, Equatable, Sendable {
     /// 已为哪个配对代号发过「配对失效」。
-    public var notifiedLostEpoch: String?
+    public var notifiedLostPairingId: String?
     /// 上次看到的相册权限档位（`MediaAccessTier.rawValue`）；nil = 从没记过。
     public var lastMediaAccess: String?
     /// 上次看到的「后台 App 刷新」是否可用；nil = 从没记过。
     public var lastBackgroundRefreshAvailable: Bool?
 
-    public init(notifiedLostEpoch: String? = nil, lastMediaAccess: String? = nil, lastBackgroundRefreshAvailable: Bool? = nil) {
-        self.notifiedLostEpoch = notifiedLostEpoch
+    public init(notifiedLostPairingId: String? = nil, lastMediaAccess: String? = nil, lastBackgroundRefreshAvailable: Bool? = nil) {
+        self.notifiedLostPairingId = notifiedLostPairingId
         self.lastMediaAccess = lastMediaAccess
         self.lastBackgroundRefreshAvailable = lastBackgroundRefreshAvailable
     }
@@ -104,17 +104,17 @@ public struct DefinitiveDecision: Equatable, Sendable {
 public func decideDefinitiveNotices(prev: DefinitiveNoticeState, facts: DefinitiveFacts, deliverable: Bool) -> DefinitiveDecision {
     var post: [NoticeKind] = []
     var cancel: Set<NoticeEvent> = []
-    let paired = facts.pairingEpoch != nil
+    let paired = facts.pairingId != nil
 
-    // 1. 配对失效：键是 epoch。没配对 / 换了代号才复位；lost 变 false（进程重启）不算恢复。
-    var notifiedLostEpoch = prev.notifiedLostEpoch
-    if let notified = notifiedLostEpoch, notified != facts.pairingEpoch {
-        notifiedLostEpoch = nil
+    // 1. 配对失效：键是 pairingId。没配对 / 换了代号才复位；lost 变 false（进程重启）不算恢复。
+    var notifiedLostPairingId = prev.notifiedLostPairingId
+    if let notified = notifiedLostPairingId, notified != facts.pairingId {
+        notifiedLostPairingId = nil
         cancel.insert(.pairingLost)
     }
-    if paired, facts.pairingLost, notifiedLostEpoch != facts.pairingEpoch {
+    if paired, facts.pairingLost, notifiedLostPairingId != facts.pairingId {
         post.append(.pairingLost)
-        notifiedLostEpoch = facts.pairingEpoch
+        notifiedLostPairingId = facts.pairingId
         cancel.remove(.pairingLost)
     }
 
@@ -136,7 +136,7 @@ public func decideDefinitiveNotices(prev: DefinitiveNoticeState, facts: Definiti
     let isStopped = !available && facts.backgroundRequested
     if wasStopped, !isStopped { cancel.insert(.backgroundStopped) }
 
-    let next = DefinitiveNoticeState(notifiedLostEpoch: notifiedLostEpoch, lastMediaAccess: facts.mediaAccess.rawValue,
+    let next = DefinitiveNoticeState(notifiedLostPairingId: notifiedLostPairingId, lastMediaAccess: facts.mediaAccess.rawValue,
                                      lastBackgroundRefreshAvailable: available)
 
     // 发不出去（开关关 / 系统未授权）：只是不发，状态照常推进，之后打开也不补发。

@@ -33,7 +33,7 @@ class MOB62RuntimeInitializationTest {
      * 整个 Flow 引擎瘫痪到进程重启为止。**这就是 MOB-87「必须杀掉 App
      * 重开」的真根因。**
      *
-     * 仓库里没有 token / pairing_epoch / 密钥对，它是资产不是会话，本就该
+     * 仓库里没有 token / pairing_id / 密钥对，它是资产不是会话，本就该
      * 跨配对活着。解除配对只停在飞的传输（revoke），不关仓库（close）。
      */
     @Test

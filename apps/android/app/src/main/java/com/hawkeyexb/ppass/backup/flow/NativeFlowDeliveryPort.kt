@@ -72,13 +72,13 @@ internal class DesktopRejectedException(val reason: String, method: String) :
 
 /** The only Desktop interaction accepted by the Android Flow delivery port. */
 internal interface FlowReceiptClient {
-    suspend fun currentPairingEpoch(): String?
+    suspend fun currentPairingId(): String?
 
     /**
      * DIAG-A：`hello` 探测，把这次往返的逐阶段记录交给 [trace]（只有真实客户端有）。
      * #413：顺带带回桌面健康（契约 §5 的 `health`；旧桌面没有 → null）。
      */
-    suspend fun probeHello(trace: (CallTrace) -> Unit): Hello = Hello(pairingEpoch = currentPairingEpoch())
+    suspend fun probeHello(trace: (CallTrace) -> Unit): Hello = Hello(pairingId = currentPairingId())
 
     /**
      * NET-24: returns the same [FlowStatusReply] a [status] call issued right now would return.
@@ -174,28 +174,28 @@ internal class AuditOutboxDispatcher(
     }
 }
 
-/** Keeps an in-flight delivery from crossing into a newly paired Desktop epoch. */
-internal class FlowDeliveryEpochGuard(private val pairing: () -> Pairing?) {
-    fun isCurrent(expectedEpoch: PairingEpoch): Boolean = pairing()?.pairingEpoch == expectedEpoch.value
+/** Keeps an in-flight delivery from crossing into a newly paired Desktop pairing id. */
+internal class FlowDeliveryPairingIdGuard(private val pairing: () -> Pairing?) {
+    fun isCurrent(expectedPairingId: PairingId): Boolean = pairing()?.pairingId == expectedPairingId.value
 }
 
 /** Process-local pairing-loss fact from an authenticated Flow delivery rejection. */
 internal class FlowDeliveryPairingLoss {
-    @Volatile private var lostEpoch: String? = null
+    @Volatile private var lostPairingId: String? = null
     private val _changes = kotlinx.coroutines.flow.MutableStateFlow(0L)
 
     /** #466: 每记一次加 1——红卡订阅它，任何写入方（投递 / 探测 / 前台心跳）记下的失效都立刻亮。 */
     val changes: kotlinx.coroutines.flow.StateFlow<Long> get() = _changes
 
-    fun record(epoch: PairingEpoch, failure: Throwable) {
+    fun record(pid: PairingId, failure: Throwable) {
         // 与分类同一个结论（含待拍板的 grant_* 被拒）——红卡和引擎出口不会说两样话。
         if (desktopReasonOf(failure) != null && classifyDeliveryFailure(failure) == DeliveryOutcome.PairingLost) {
-            lostEpoch = epoch.value
+            lostPairingId = pid.value
             _changes.value += 1
         }
     }
 
-    fun isLost(epoch: PairingEpoch): Boolean = lostEpoch == epoch.value
+    fun isLost(pid: PairingId): Boolean = lostPairingId == pid.value
 }
 
 internal val flowDeliveryPairingLoss = FlowDeliveryPairingLoss()
@@ -203,13 +203,13 @@ internal val flowDeliveryPairingLoss = FlowDeliveryPairingLoss()
 /** Validates a Desktop receipt against the exact request before it may confirm an order. */
 internal fun relayFlowCompletion(receipt: FlowCompletionReceipt, request: FlowFetchRequest): CompletionReceipt {
     require(receipt.queueSequence == request.queueSequence)
-    require(receipt.pairingEpoch == request.pairingEpoch)
+    require(receipt.pairingId == request.pairingId)
     require(receipt.leaseToken == request.leaseToken)
     require(receipt.contentHash == request.contentHash)
     return CompletionReceipt(
         queueSequence = receipt.queueSequence,
         receiptId = receipt.receiptId,
-        pairingEpoch = PairingEpoch(receipt.pairingEpoch),
+        pairingId = PairingId(receipt.pairingId),
         leaseToken = receipt.leaseToken,
         contentHash = receipt.contentHash,
     )
@@ -220,10 +220,10 @@ internal class DaemonFlowReceiptClient(
     private val client: DaemonClient,
     private val peer: PeerAddrParts,
 ) : FlowReceiptClient {
-    override suspend fun currentPairingEpoch(): String? {
+    override suspend fun currentPairingId(): String? {
         val response = client.call(peer, Methods.HELLO, buildJsonObject {})
         if (!response.ok) throw DesktopRejectedException(response.error?.reason.orEmpty(), "hello")
-        return ProtoJson.decodeFromJsonElement(Hello.serializer(), checkNotNull(response.result)).pairingEpoch
+        return ProtoJson.decodeFromJsonElement(Hello.serializer(), checkNotNull(response.result)).pairingId
     }
 
     override suspend fun probeHello(trace: (CallTrace) -> Unit): Hello {
@@ -361,7 +361,7 @@ internal class NativeFlowDeliveryPort(
     private val controlCallTimeoutMs: Long = CONTROL_CALL_TIMEOUT_MS,
     private val stallStatusTimeoutMs: Long = STALL_STATUS_TIMEOUT_MS,
 ) : ItemDelivery {
-    private val epochGuard = FlowDeliveryEpochGuard(pairing)
+    private val pairingIdGuard = FlowDeliveryPairingIdGuard(pairing)
 
     /** 一轮的推送订阅：缓冲无界（整轮共用，旧 tuple 的推送不许把要等的那条挤掉），按 tuple 过滤。 */
     private class Round(val pairing: Pairing) {
@@ -401,7 +401,7 @@ internal class NativeFlowDeliveryPort(
 
     private suspend fun deliverIn(r: Round, request: DeliveryRequest, onProgress: (Long) -> Unit): DeliveryOutcome {
         val currentPairing = pairing() ?: return DeliveryOutcome.PairingLost
-        if (currentPairing.pairingEpoch != request.pairingEpoch.value) return DeliveryOutcome.PathFailure("epoch_changed")
+        if (currentPairing.pairingId != request.pairingId.value) return DeliveryOutcome.PathFailure("pairing_changed")
         val lease = ProviderLease(request.orderId, request.leaseToken, request.contentHash)
         val ticket = try {
             serve(lease, request)
@@ -421,7 +421,7 @@ internal class NativeFlowDeliveryPort(
         }
         val fetch = FlowFetchRequest(
             queueSequence = request.orderId,
-            pairingEpoch = request.pairingEpoch.value,
+            pairingId = request.pairingId.value,
             leaseToken = request.leaseToken,
             contentHash = request.contentHash,
             fileName = request.details.fileName.ifBlank { request.details.uri.substringAfterLast('/') },
@@ -430,7 +430,7 @@ internal class NativeFlowDeliveryPort(
             captureAtMs = request.details.captureAtMs,
             sizeBytes = request.details.sizeBytes.coerceAtLeast(0L),
         )
-        val tuple = FlowTupleRef(queueSequence = fetch.queueSequence, pairingEpoch = fetch.pairingEpoch, leaseToken = fetch.leaseToken)
+        val tuple = FlowTupleRef(queueSequence = fetch.queueSequence, pairingId = fetch.pairingId, leaseToken = fetch.leaseToken)
         var desktop: FlowReceiptClient? = null
         return try {
             val client = desktopFor(currentPairing).also { desktop = it }
@@ -458,7 +458,7 @@ internal class NativeFlowDeliveryPort(
                 }
                 FlowStatusPollOutcome.KeepPolling -> Unit
             }
-            waitForCompletion(r, client, fetch, tuple, lease, request.pairingEpoch, onProgress)
+            waitForCompletion(r, client, fetch, tuple, lease, request.pairingId, onProgress)
         } catch (cancelled: CancellationException) {
             // 暂停 / FGS 被收走 / 断网：停掉原生传输，再同步、有界地告诉桌面「先停，别丢」（flow.suspend）。
             // 半截在桌面保持受保护，续传只补缺的。取消本身照样抛出去。
@@ -469,8 +469,8 @@ internal class NativeFlowDeliveryPort(
             throw cancelled
         } catch (failure: Throwable) {
             runCatching { bridge.pause(lease) }
-            if (!epochGuard.isCurrent(request.pairingEpoch)) return DeliveryOutcome.PathFailure("epoch_changed")
-            flowDeliveryPairingLoss.record(request.pairingEpoch, failure)
+            if (!pairingIdGuard.isCurrent(request.pairingId)) return DeliveryOutcome.PathFailure("pairing_changed")
+            flowDeliveryPairingLoss.record(request.pairingId, failure)
             classifyDeliveryFailure(failure).also {
                 log.log("order ${request.orderId}: delivery ended with $it (${failure.javaClass.simpleName}: ${failure.message})")
             }
@@ -508,7 +508,7 @@ internal class NativeFlowDeliveryPort(
         fetch: FlowFetchRequest,
         tuple: FlowTupleRef,
         lease: ProviderLease,
-        epoch: PairingEpoch,
+        pid: PairingId,
         onProgress: (Long) -> Unit,
     ): DeliveryOutcome {
         // NET-06/NET-14: priority order — push, then local iroh-blobs signal, then a bounded status() check.
@@ -520,9 +520,9 @@ internal class NativeFlowDeliveryPort(
         var localDoneAt: Long? = null
         var abortChecked = false
         while (true) {
-            if (!epochGuard.isCurrent(epoch)) {
+            if (!pairingIdGuard.isCurrent(pid)) {
                 bridge.pause(lease)
-                return DeliveryOutcome.PathFailure("epoch_changed")
+                return DeliveryOutcome.PathFailure("pairing_changed")
             }
             // 按 tuple 过滤：不是这一张的推送直接丢（整轮共用一条订阅）。
             var pushed: FlowPushOutcome? = null
@@ -598,7 +598,7 @@ internal class NativeFlowDeliveryPort(
                     }
                     FlowStatusPollOutcome.KeepPolling -> continue
                 }
-                // #1072：推送的失败与被拒走同一出口（外层 catch：停传输、核 epoch、记配对失效、分类）。
+                // #1072：推送的失败与被拒走同一出口（外层 catch：停传输、核 pairing id、记配对失效、分类）。
                 is FlowWaitStep.Failed -> throw FlowPushedFailureException(step.reason)
                 FlowWaitStep.Stalled -> {
                     // #410：连接还在、3 分钟没有新的文件字节 → 主动断开，路径失败。
@@ -694,14 +694,14 @@ internal class NativeFlowDeliveryPort(
         return DeliveryOutcome.Confirmed(completed)
     }
 
-    override suspend fun discardPartial(orderId: Long, pairingEpoch: PairingEpoch) {
+    override suspend fun discardPartial(orderId: Long, pairingId: PairingId) {
         val currentPairing = pairing() ?: return
-        val tuple = FlowTupleRef(queueSequence = orderId, pairingEpoch = pairingEpoch.value, leaseToken = leaseTokenFor(orderId))
+        val tuple = FlowTupleRef(queueSequence = orderId, pairingId = pairingId.value, leaseToken = leaseTokenFor(orderId))
         withContext(NonCancellable) { boundedControlCall("flow.cancel_tuple", orderId) { cancelTuple(currentPairing, tuple) } }
     }
 }
 
-/** `hello` 探测（有超时）：桌面可达吗、它现在的配对代号是什么、它健不健康（#413 契约 §5）。 */
+/** `hello` 探测（有超时）：桌面可达吗、它现在的配对 id是什么、它健不健康（#413 契约 §5）。 */
 internal class DaemonDesktopProbe(
     private val pairing: () -> Pairing?,
     private val desktopFor: suspend (Pairing) -> FlowReceiptClient,
@@ -729,12 +729,12 @@ internal class DaemonDesktopProbe(
                 val client = desktopFor(current)
                 bindMs = clock() - started
                 val hello = client.probeHello { trace = it }
-                ProbeResult.Reachable(hello.pairingEpoch, desktopHealthOf(hello.health), hello.capabilities.toSet())
+                ProbeResult.Reachable(hello.pairingId, desktopHealthOf(hello.health), hello.capabilities.toSet())
             }.also { report("reachable", null) }
         } catch (rejected: DesktopRejectedException) {
             report("rejected:${rejected.reason}", rejected)
             // #466：#424 之后每轮先探测，桌面移除这台手机时走不到投递——探测这里不记，红卡就永远不亮。
-            pairingLoss.record(PairingEpoch(current.pairingEpoch), rejected)
+            pairingLoss.record(PairingId(current.pairingId), rejected)
             // #1072：握手就判版本——不兼容就不发起任何传输。
             val outdated = outdatedSideOf(rejected.kind)
             when {
@@ -785,9 +785,9 @@ internal class FlowPushedFailureException(val reason: String) :
 
 internal fun parseFlowPushOutcome(kind: String, data: JsonObject, tuple: FlowTupleRef): FlowPushOutcome? {
     val queueSequence = (data["queue_sequence"] as? JsonPrimitive)?.content?.toLongOrNull() ?: return null
-    val pairingEpoch = (data["pairing_epoch"] as? JsonPrimitive)?.content ?: return null
+    val pairingId = (data["pairing_id"] as? JsonPrimitive)?.content ?: return null
     val leaseToken = (data["lease_token"] as? JsonPrimitive)?.content ?: return null
-    if (queueSequence != tuple.queueSequence || pairingEpoch != tuple.pairingEpoch || leaseToken != tuple.leaseToken) {
+    if (queueSequence != tuple.queueSequence || pairingId != tuple.pairingId || leaseToken != tuple.leaseToken) {
         return null
     }
     return when (kind) {

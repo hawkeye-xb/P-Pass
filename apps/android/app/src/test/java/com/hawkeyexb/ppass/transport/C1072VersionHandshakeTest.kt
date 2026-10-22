@@ -32,7 +32,7 @@ class C1072VersionHandshakeTest {
 
     @Test
     fun `a pre-v2 desktop's successful reply becomes desktop_outdated - nobody acts on it`() {
-        val old = ProtoJson.decodeFromString(Resp.serializer(), """{"id":"1","ok":true,"result":{"pairing_epoch":"e"}}""")
+        val old = ProtoJson.decodeFromString(Resp.serializer(), """{"id":"1","ok":true,"result":{"pairing_id":"e"}}""")
         val checked = old.versionChecked()
         assertEquals(false, checked.ok)
         assertNull("旧桌面的结果不许流到调用方", checked.result)
@@ -50,7 +50,7 @@ class C1072VersionHandshakeTest {
     fun `compatible replies and the desktop's own verdict pass through unchanged`() {
         val fine = v2()
         assertSame(fine, fine.versionChecked())
-        val denied = v2(ok = false, error = RespError("NOT_AUTHORIZED", "revoked"))
+        val denied = v2(ok = false, error = RespError("NOT_AUTHORIZED", "not_paired"))
         assertSame(denied, denied.versionChecked())
         val said = v2(ok = false, error = RespError("VERSION_MISMATCH", "phone_outdated"))
         assertSame(said, said.versionChecked())

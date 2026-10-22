@@ -24,11 +24,11 @@ public final class ForegroundHeartbeat: @unchecked Sendable {
     public static let intervalMs: Int64 = 30_000
 
     private let desktop: FlowDesktop
-    private let currentEpoch: @Sendable () -> String?
+    private let currentPairingId: @Sendable () -> String?
     private let ledger: ReachabilityLedger
     private let now: @Sendable () -> Int64
     private let onReachable: @Sendable () async -> Void
-    private let onPairingLost: @Sendable (_ epoch: String, _ failure: DesktopRejected) async -> Void
+    private let onPairingLost: @Sendable (_ pairingId: String, _ failure: DesktopRejected) async -> Void
     private let logger: CoreLogger
     private let intervalMs: Int64
     private let helloTimeoutMs: Int64
@@ -38,19 +38,19 @@ public final class ForegroundHeartbeat: @unchecked Sendable {
     /// 上一拍是否可达（nil = 这次前台还没拍过）。只用来让日志在状态变化时说一句，不每 30 秒刷一行。
     private var lastReachable: Bool?
 
-    /// [currentEpoch] 为 nil = 没有有效配对（未配对 / 已记失效），这一拍直接跳过。
+    /// [currentPairingId] 为 nil = 没有有效配对（未配对 / 已记失效），这一拍直接跳过。
     public init(desktop: FlowDesktop,
-                currentEpoch: @escaping @Sendable () -> String?,
+                currentPairingId: @escaping @Sendable () -> String?,
                 ledger: ReachabilityLedger,
                 now: @escaping @Sendable () -> Int64,
                 onReachable: @escaping @Sendable () async -> Void,
-                onPairingLost: @escaping @Sendable (_ epoch: String, _ failure: DesktopRejected) async -> Void,
+                onPairingLost: @escaping @Sendable (_ pairingId: String, _ failure: DesktopRejected) async -> Void,
                 logger: CoreLogger,
                 intervalMs: Int64 = ForegroundHeartbeat.intervalMs,
                 helloTimeoutMs: Int64 = 20_000,
                 sleep: (@Sendable (Int64) async throws -> Void)? = nil) {
         self.desktop = desktop
-        self.currentEpoch = currentEpoch
+        self.currentPairingId = currentPairingId
         self.ledger = ledger
         self.now = now
         self.onReachable = onReachable
@@ -85,7 +85,7 @@ public final class ForegroundHeartbeat: @unchecked Sendable {
     }
 
     private func beat() async {
-        guard let epoch = currentEpoch() else { return }
+        guard let pairingId = currentPairingId() else { return }
         let outcome = await boundedWait(helloTimeoutMs, sleep: sleep) { [desktop] in try await desktop.hello() }
         // 已退后台：这一拍的结果不再有意义（不叫醒引擎、不写账）。
         if Task.isCancelled { return }
@@ -98,7 +98,7 @@ public final class ForegroundHeartbeat: @unchecked Sendable {
                 logger.log("Heartbeat hello rejected: \(rejected.reason) → \(side.rawValue) outdated; not waking the engine")
             } else if rejected.isPairingLost {
                 logger.log("Heartbeat hello rejected: \(rejected.reason) → pairing lost")
-                await onPairingLost(epoch, rejected)
+                await onPairingLost(pairingId, rejected)
             } else {
                 // 对端在答话，只是拒了别的：算可达（与 Android 同）。
                 logger.log("Heartbeat hello rejected: \(rejected.reason) (desktop reachable)")

@@ -85,26 +85,26 @@ public struct ControlPlaneDesktop: FlowDesktop {
 /// 进程内的「配对已失效」事实（某个配对代号被桌面以归类为配对失效的 reason 拒绝过，见 `reasonClass`）。UI 的红卡读它。
 public final class PairingLoss: @unchecked Sendable {
     private let lock = NSLock()
-    private var lostEpoch: String?
+    private var lostPairingId: String?
     private var changes: Int64 = 0
 
     public init() {}
 
-    public func record(epoch: String, failure: Error) {
+    public func record(pairingId: String, failure: Error) {
         guard let rejected = failure as? DesktopRejected, rejected.isPairingLost else { return }
-        markLost(epoch: epoch)
+        markLost(pairingId: pairingId)
     }
 
     /// `flow.failed` 推送归类为配对失效（#1069：推送与应答同一张表）。
-    public func markLost(epoch: String) {
+    public func markLost(pairingId: String) {
         lock.lock(); defer { lock.unlock() }
-        lostEpoch = epoch
+        lostPairingId = pairingId
         changes += 1
     }
 
-    public func isLost(epoch: String) -> Bool {
+    public func isLost(pairingId: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        return lostEpoch == epoch
+        return lostPairingId == pairingId
     }
 
     public var changeCount: Int64 {
@@ -144,7 +144,7 @@ func boundedWait<T: Sendable>(_ timeoutMs: Int64, sleep: @escaping @Sendable (In
 /// 传输端口（对位 Android `NativeFlowDeliveryPort`）。
 public final class FlowDeliveryPort: ItemDelivery, @unchecked Sendable {
     private let provider: BlobProvider
-    private let currentEpoch: @Sendable () -> String?
+    private let currentPairingId: @Sendable () -> String?
     private let desktop: FlowDesktop
     private let push: FlowPushSource
     private let logger: CoreLogger
@@ -159,7 +159,7 @@ public final class FlowDeliveryPort: ItemDelivery, @unchecked Sendable {
 
     public init(
         provider: BlobProvider,
-        currentEpoch: @escaping @Sendable () -> String?,
+        currentPairingId: @escaping @Sendable () -> String?,
         desktop: FlowDesktop,
         push: FlowPushSource,
         logger: CoreLogger,
@@ -169,7 +169,7 @@ public final class FlowDeliveryPort: ItemDelivery, @unchecked Sendable {
         pairingLoss: PairingLoss = PairingLoss()
     ) {
         self.provider = provider
-        self.currentEpoch = currentEpoch
+        self.currentPairingId = currentPairingId
         self.desktop = desktop
         self.push = push
         self.logger = logger
@@ -266,7 +266,7 @@ public final class FlowDeliveryPort: ItemDelivery, @unchecked Sendable {
     }
 
     public func session<T>(_ body: () async throws -> T) async throws -> T {
-        guard currentEpoch() != nil else { return try await body() }
+        guard currentPairingId() != nil else { return try await body() }
         let r = Round()
         // 推送只是加速，不是唯一路径：订阅失败不致命，本地信号 + status() 兜底。断了按退避重建。
         let subscription = Task { await self.keepSubscribed(r) }
@@ -282,7 +282,7 @@ public final class FlowDeliveryPort: ItemDelivery, @unchecked Sendable {
     public func deliver(_ request: DeliveryRequest, onProgress: @escaping @Sendable (Int64) -> Void) async throws -> DeliveryOutcome {
         if let r = currentRound() { return try await deliverIn(r, request, onProgress) }
         // 没有外层会话（调用方没开轮）：这一张自己开一条订阅。未配对时没有会话可开。
-        guard currentEpoch() != nil else { return .pairingLost }
+        guard currentPairingId() != nil else { return .pairingLost }
         return try await session { [self] in
             guard let r = currentRound() else { return .pairingLost }
             return try await deliverIn(r, request, onProgress)
@@ -290,8 +290,8 @@ public final class FlowDeliveryPort: ItemDelivery, @unchecked Sendable {
     }
 
     private func deliverIn(_ r: Round, _ request: DeliveryRequest, _ onProgress: @escaping @Sendable (Int64) -> Void) async throws -> DeliveryOutcome {
-        guard let epoch = currentEpoch() else { return .pairingLost }
-        if epoch != request.pairingEpoch { return .pathFailure("epoch_changed") }
+        guard let pairingId = currentPairingId() else { return .pairingLost }
+        if pairingId != request.pairingId { return .pathFailure("pairing_changed") }
         let lease = ProviderLease(orderId: request.orderId, leaseToken: request.leaseToken, contentHash: request.contentHash)
         let ticket: String
         do {
@@ -311,11 +311,11 @@ public final class FlowDeliveryPort: ItemDelivery, @unchecked Sendable {
         }
         let details = request.details
         let fetch = FlowFetchRequest(
-            queueSequence: UInt64(request.orderId), pairingEpoch: request.pairingEpoch, leaseToken: request.leaseToken,
+            queueSequence: UInt64(request.orderId), pairingId: request.pairingId, leaseToken: request.leaseToken,
             contentHash: request.contentHash, fileName: details.fileName, mediaType: details.mimeType, provider: ticket,
             captureAtMs: details.captureAtMs, sizeBytes: max(0, details.sizeBytes)
         )
-        let tuple = FlowTupleRef(queueSequence: fetch.queueSequence, pairingEpoch: fetch.pairingEpoch, leaseToken: fetch.leaseToken)
+        let tuple = FlowTupleRef(queueSequence: fetch.queueSequence, pairingId: fetch.pairingId, leaseToken: fetch.leaseToken)
         do {
             if !r.readyAwaited {
                 // 推送可能早于订阅建立，桌面的 broadcast 不重放：首张 offer 之前限时等订阅就绪（超时照样继续，status 兜底）。
@@ -339,7 +339,7 @@ public final class FlowDeliveryPort: ItemDelivery, @unchecked Sendable {
             case .keepPolling:
                 break
             }
-            return try await waitForCompletion(r, fetch, tuple, lease, request.pairingEpoch, onProgress)
+            return try await waitForCompletion(r, fetch, tuple, lease, request.pairingId, onProgress)
         } catch {
             if error is CancellationError || Task.isCancelled {
                 // 暂停 / 执行时间被收回 / 断网：停掉原生传输，再同步、有界地告诉桌面「先停，别丢」（flow.suspend）。
@@ -348,8 +348,8 @@ public final class FlowDeliveryPort: ItemDelivery, @unchecked Sendable {
                 throw CancellationError()
             }
             provider.pause(lease)
-            if currentEpoch() != request.pairingEpoch { return .pathFailure("epoch_changed") }
-            pairingLoss.record(epoch: request.pairingEpoch, failure: error)
+            if currentPairingId() != request.pairingId { return .pathFailure("pairing_changed") }
+            pairingLoss.record(pairingId: request.pairingId, failure: error)
             let outcome = classifyDeliveryFailure(error)
             log("order \(request.orderId): delivery ended with \(outcome) (\(error))")
             return outcome
@@ -378,7 +378,7 @@ public final class FlowDeliveryPort: ItemDelivery, @unchecked Sendable {
         }
     }
 
-    private func waitForCompletion(_ r: Round, _ fetch: FlowFetchRequest, _ tuple: FlowTupleRef, _ lease: ProviderLease, _ epoch: String, _ onProgress: @escaping @Sendable (Int64) -> Void) async throws -> DeliveryOutcome {
+    private func waitForCompletion(_ r: Round, _ fetch: FlowFetchRequest, _ tuple: FlowTupleRef, _ lease: ProviderLease, _ pairingId: String, _ onProgress: @escaping @Sendable (Int64) -> Void) async throws -> DeliveryOutcome {
         // NET-06 / NET-14：优先级——推送，然后本地 iroh-blobs 信号，然后有界的 status() 兜底。
         let seq = fetch.queueSequence
         var pollIndex = 0
@@ -388,9 +388,9 @@ public final class FlowDeliveryPort: ItemDelivery, @unchecked Sendable {
         var abortChecked = false
         while true {
             try Task.checkCancellation()
-            if currentEpoch() != epoch {
+            if currentPairingId() != pairingId {
                 provider.pause(lease)
-                return .pathFailure("epoch_changed")
+                return .pathFailure("pairing_changed")
             }
             // 按 tuple 过滤：不是这一张的推送直接丢（整轮共用一条订阅）。
             var pushed: FlowPushOutcome?
@@ -455,7 +455,7 @@ public final class FlowDeliveryPort: ItemDelivery, @unchecked Sendable {
             case let .failed(reason):
                 provider.pause(lease)
                 let outcome = classifyPushedFailure(reason)
-                if outcome == .pairingLost { pairingLoss.markLost(epoch: epoch) }
+                if outcome == .pairingLost { pairingLoss.markLost(pairingId: pairingId) }
                 return outcome
             case .stalled:
                 // C-10：连接还在、很久没有新的文件字节 → 主动断开，路径失败。
@@ -537,9 +537,9 @@ public final class FlowDeliveryPort: ItemDelivery, @unchecked Sendable {
         }
     }
 
-    public func discardPartial(orderId: Int64, pairingEpoch: String) async {
-        guard currentEpoch() != nil else { return }
-        let tuple = FlowTupleRef(queueSequence: UInt64(orderId), pairingEpoch: pairingEpoch, leaseToken: leaseTokenFor(orderId))
+    public func discardPartial(orderId: Int64, pairingId: String) async {
+        guard currentPairingId() != nil else { return }
+        let tuple = FlowTupleRef(queueSequence: UInt64(orderId), pairingId: pairingId, leaseToken: leaseTokenFor(orderId))
         await boundedControlCall("flow.cancel_tuple", tuple.queueSequence) { [desktop] in try await desktop.cancelTuple(tuple) }
     }
 }
@@ -564,16 +564,16 @@ private final class LockedFlag: @unchecked Sendable {
 
 /// `hello` 探测（有超时）：桌面可达吗、它现在的配对代号是什么、它健不健康（#413 契约 §5）。
 public struct ControlPlaneProbe: DesktopProbe {
-    let currentEpoch: @Sendable () -> String?
+    let currentPairingId: @Sendable () -> String?
     let desktop: FlowDesktop
     let timeoutMs: Int64
     let logger: CoreLogger
     let pairingLoss: PairingLoss
     let sleep: @Sendable (Int64) async throws -> Void
 
-    public init(currentEpoch: @escaping @Sendable () -> String?, desktop: FlowDesktop, logger: CoreLogger, pairingLoss: PairingLoss, timeoutMs: Int64 = 20_000,
+    public init(currentPairingId: @escaping @Sendable () -> String?, desktop: FlowDesktop, logger: CoreLogger, pairingLoss: PairingLoss, timeoutMs: Int64 = 20_000,
                 sleep: (@Sendable (Int64) async throws -> Void)? = nil) {
-        self.currentEpoch = currentEpoch
+        self.currentPairingId = currentPairingId
         self.desktop = desktop
         self.timeoutMs = timeoutMs
         self.logger = logger
@@ -582,7 +582,7 @@ public struct ControlPlaneProbe: DesktopProbe {
     }
 
     public func probe() async -> ProbeResult {
-        guard let epoch = currentEpoch() else { return .pairingLost }
+        guard let pairingId = currentPairingId() else { return .pairingLost }
         let result = await boundedWait(timeoutMs, sleep: sleep) { [desktop] in try await desktop.hello() }
         switch result {
         case nil:
@@ -590,12 +590,12 @@ public struct ControlPlaneProbe: DesktopProbe {
             return .unreachable
         case let .success(hello)?:
             logger.log("Flow probe result=reachable")
-            return .reachable(advertisedEpoch: hello.pairingEpoch, health: hello.health.map(DesktopHealth.init(wire:)), capabilities: Set(hello.capabilities))
+            return .reachable(advertisedPairingId: hello.pairingId, health: hello.health.map(DesktopHealth.init(wire:)), capabilities: Set(hello.capabilities))
         case let .failure(error)?:
             if let rejected = error as? DesktopRejected {
                 logger.log("Flow probe result=rejected:\(rejected.reason)")
                 // #466：每轮先探测，桌面移除这台手机时走不到投递——探测这里也要记，红卡才会亮。
-                pairingLoss.record(epoch: epoch, failure: rejected)
+                pairingLoss.record(pairingId: pairingId, failure: rejected)
                 switch rejected.reasonClass {
                 case .pairingLost: return .pairingLost
                 case let .versionMismatch(side): return .versionMismatch(side)

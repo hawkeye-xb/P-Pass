@@ -13,7 +13,7 @@
 //
 // 每类事件「状态变化时只发一次，恢复后复位」。判定是纯函数 [decideDefinitiveNotices]，
 // 上一次的状态存在 `definitive_notices.json`：
-// - 配对失效的去重键是**配对代号（epoch）**。`flowDeliveryPairingLoss` 只在内存里，进程重启后
+// - 配对失效的去重键是**配对 id**。`flowDeliveryPairingLoss` 只在内存里，进程重启后
 //   `isLost` 会是 false——那不代表恢复。复位只有两种：本地没有配对了，或当前配对换了代号（重新扫码）。
 // - 相册权限记上次看到的档位：变差才发（FULL → PARTIAL / NONE，PARTIAL → NONE），回到 FULL 复位。
 //   从没记过（新装、升级上来）只记基线不发。
@@ -32,7 +32,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.content.ContextCompat
-import com.hawkeyexb.ppass.backup.flow.PairingEpoch
+import com.hawkeyexb.ppass.backup.flow.PairingId
 import com.hawkeyexb.ppass.backup.flow.flowDeliveryPairingLoss
 import com.hawkeyexb.ppass.battery.isIgnoringBatteryOptimizations
 import com.hawkeyexb.ppass.log.PLog
@@ -58,8 +58,8 @@ sealed class DefinitiveNotice(val event: DefinitiveEvent) {
 /** 这一次运行看到的事实（Android 侧查出来，纯函数只读它）。 */
 data class DefinitiveFacts(
     /** 当前配对的代号；null = 没有配对。 */
-    val pairingEpoch: String?,
-    /** 当前配对被桌面明确拒绝过（`flowDeliveryPairingLoss.isLost(当前 epoch)`）。 */
+    val pairingId: String?,
+    /** 当前配对被桌面明确拒绝过（`flowDeliveryPairingLoss.isLost(当前 pairing id)`）。 */
     val pairingLost: Boolean,
     val mediaAccess: MediaAccess,
     /** 用户要后台备份（意图，不是此刻排没排上）。 */
@@ -71,8 +71,8 @@ data class DefinitiveFacts(
 
 @Serializable
 data class DefinitiveNoticeState(
-    /** 已为哪个配对代号发过「配对失效」。 */
-    val notifiedLostEpoch: String? = null,
+    /** 已为哪个配对 id发过「配对失效」。 */
+    val notifiedLostPairingId: String? = null,
     /** 上次看到的相册权限档位（MediaAccess.name）；null = 从没记过。 */
     val lastMediaAccess: String? = null,
     /** 已为哪一次中断（detectedAt）发过「系统停止了后台备份」。 */
@@ -98,17 +98,17 @@ private fun rankOf(access: MediaAccess): Int = when (access) {
 fun decideDefinitiveNotices(prev: DefinitiveNoticeState, facts: DefinitiveFacts): DefinitiveDecision {
     val post = mutableListOf<DefinitiveNotice>()
     val cancel = mutableSetOf<DefinitiveEvent>()
-    val paired = facts.pairingEpoch != null
+    val paired = facts.pairingId != null
 
-    // 1. 配对失效：键是 epoch。没配对 / 换了代号才复位；isLost 变 false（进程重启）不算恢复。
-    var notifiedLostEpoch = prev.notifiedLostEpoch
-    if (notifiedLostEpoch != null && notifiedLostEpoch != facts.pairingEpoch) {
-        notifiedLostEpoch = null
+    // 1. 配对失效：键是 pairing id。没配对 / 换了代号才复位；isLost 变 false（进程重启）不算恢复。
+    var notifiedLostPairingId = prev.notifiedLostPairingId
+    if (notifiedLostPairingId != null && notifiedLostPairingId != facts.pairingId) {
+        notifiedLostPairingId = null
         cancel += DefinitiveEvent.PAIRING_LOST
     }
-    if (paired && facts.pairingLost && notifiedLostEpoch != facts.pairingEpoch) {
+    if (paired && facts.pairingLost && notifiedLostPairingId != facts.pairingId) {
         post += DefinitiveNotice.PairingLost
-        notifiedLostEpoch = facts.pairingEpoch
+        notifiedLostPairingId = facts.pairingId
         cancel -= DefinitiveEvent.PAIRING_LOST
     }
 
@@ -134,7 +134,7 @@ fun decideDefinitiveNotices(prev: DefinitiveNoticeState, facts: DefinitiveFacts)
 
     return DefinitiveDecision(
         next = DefinitiveNoticeState(
-            notifiedLostEpoch = notifiedLostEpoch,
+            notifiedLostPairingId = notifiedLostPairingId,
             lastMediaAccess = facts.mediaAccess.name,
             notifiedInterruptionAt = interruptionAt,
             lastBatteryWhitelisted = facts.batteryWhitelisted,
@@ -212,11 +212,11 @@ fun currentMediaAccess(context: Context): MediaAccess = mediaAccessOf(
 /** 这一次运行的事实。阻塞（读文件 + binder），调用方放到非主线程。 */
 internal fun definitiveFactsOf(context: Context): DefinitiveFacts {
     val dir = context.filesDir
-    val epoch = PairingStore(dir).load()?.pairingEpoch
+    val pid = PairingStore(dir).load()?.pairingId
     val health = BackupHealthPrefs(dir).load()
     return DefinitiveFacts(
-        pairingEpoch = epoch,
-        pairingLost = epoch != null && flowDeliveryPairingLoss.isLost(PairingEpoch(epoch)),
+        pairingId = pid,
+        pairingLost = pid != null && flowDeliveryPairingLoss.isLost(PairingId(pid)),
         mediaAccess = currentMediaAccess(context),
         backgroundRequested = AutoBackupPrefs(dir).requested(),
         interruptionDetectedAt = health.detectedAt.takeIf { health.interruptedUnacknowledged },

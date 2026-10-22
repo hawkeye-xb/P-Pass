@@ -52,7 +52,7 @@ class DEV07PairCancelTest {
             calls += Triple(method, scope.currentTime, params)
             return when (method) {
                 Methods.HELLO -> if (caps == null) {
-                    Resp(id = "h", ok = false, error = RespError("NOT_AUTHORIZED", "revoked"))
+                    Resp(id = "h", ok = false, error = RespError("NOT_AUTHORIZED", "not_paired"))
                 } else {
                     ok(ProtoJson.encodeToJsonElement(Hello.serializer(), Hello(capabilities = caps)))
                 }
@@ -171,7 +171,7 @@ class DEV07PairCancelTest {
     /** 正常收尾（允许 / 拒绝 / 过期）不发撤回——撤回只属于「人走了」。 */
     @Test
     fun aSettledVerdict_isNeverFollowedByAWithdrawal() = runTest {
-        val accepted = PairAccepted(storageDeviceName = "Home PC", pairingEpoch = "e".repeat(32))
+        val accepted = PairAccepted(storageDeviceName = "Home PC", pairingId = "e".repeat(32))
         for (terminal in listOf(
             PairStatusReply(state = "accepted", accepted = accepted),
             PairStatusReply(state = "denied"),

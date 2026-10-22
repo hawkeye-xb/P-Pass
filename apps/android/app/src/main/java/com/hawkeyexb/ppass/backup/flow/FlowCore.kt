@@ -9,11 +9,11 @@ import com.hawkeyexb.ppass.backup.order.MediaDetails
 import com.hawkeyexb.ppass.proto.OutdatedSide
 import kotlinx.serialization.Serializable
 
-/** 配对代号（授权凭证的版本号，不是身份）。 */
+/** 配对 id（授权凭证的版本号，不是身份）。 */
 @Serializable
-data class PairingEpoch(val value: String) {
+data class PairingId(val value: String) {
     companion object {
-        val INITIAL = PairingEpoch("")
+        val INITIAL = PairingId("")
     }
 }
 
@@ -27,7 +27,7 @@ internal fun sourceVersionOf(dateModified: Long, size: Long): String = "$dateMod
 data class CompletionReceipt(
     val queueSequence: Long,
     val receiptId: String,
-    val pairingEpoch: PairingEpoch = PairingEpoch.INITIAL,
+    val pairingId: PairingId = PairingId.INITIAL,
     val contentHash: String? = null,
     val leaseToken: String = "",
 )
@@ -186,7 +186,7 @@ fun waitReasonOf(conditions: Conditions, userPresent: Boolean): WaitReason? = wh
 /** 传一张的请求。queue_sequence = [orderId]，lease_token = [leaseTokenFor]。 */
 data class DeliveryRequest(
     val orderId: Long,
-    val pairingEpoch: PairingEpoch,
+    val pairingId: PairingId,
     val contentHash: String,
     val details: MediaDetails,
 ) {
@@ -230,14 +230,14 @@ interface ItemDelivery {
     suspend fun deliver(request: DeliveryRequest, onProgress: (bytesSent: Long) -> Unit): DeliveryOutcome
 
     /** 通知桌面丢掉这一张已传的部分（`flow.cancel_tuple`：用户取消剩余 / 旧版本作废 / 移出范围）。有界等待，不许抛。 */
-    suspend fun discardPartial(orderId: Long, pairingEpoch: PairingEpoch)
+    suspend fun discardPartial(orderId: Long, pairingId: PairingId)
 }
 
-/** 桌面可达探测（`hello`，有超时）。顺带拿到桌面现在的配对代号与健康状况。 */
+/** 桌面可达探测（`hello`，有超时）。顺带拿到桌面现在的配对 id与健康状况。 */
 sealed interface ProbeResult {
     /** [capabilities]：hello 里桌面宣告的能力（#851 用它判断能不能「用原图替换旧副本」）。 */
     data class Reachable(
-        val advertisedEpoch: String?,
+        val advertisedPairingId: String?,
         val health: DesktopHealth? = null,
         val capabilities: Set<String> = emptySet(),
     ) : ProbeResult
@@ -262,7 +262,7 @@ sealed interface SupersedeOutcome {
  * 不可达 / 超时时抛——那是暂时的，下一轮再试；[SupersedeOutcome.Refused] 是桌面的结论。
  */
 fun interface SupersedeClient {
-    suspend fun supersede(epoch: PairingEpoch, oldHash: String, newHash: String, provider: String): SupersedeOutcome
+    suspend fun supersede(pid: PairingId, oldHash: String, newHash: String, provider: String): SupersedeOutcome
 }
 
 /** 对账：分页问桌面「这些 hash 你还在吗」，返回缺的那些。不可达时抛。 */

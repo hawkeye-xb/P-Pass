@@ -33,7 +33,7 @@ import org.junit.Test
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class C413DeliveryPortTest {
     private val hash = "cd".repeat(32)
-    private val pairing = Pairing(daemonNodeId = "d", daemonAddrToken = "unused", storageDeviceName = "desk", pairingEpoch = "e1")
+    private val pairing = Pairing(daemonNodeId = "d", daemonAddrToken = "unused", storageDeviceName = "desk", pairingId = "e1")
 
     private inner class Harness(val test: TestScope) {
         val nativeEvents = mutableListOf<String>()
@@ -64,7 +64,7 @@ class C413DeliveryPortTest {
         var subscribeCalls = 0
         var connectDelayMs = 0L
         val desktop = object : FlowReceiptClient {
-            override suspend fun currentPairingEpoch(): String = "e1"
+            override suspend fun currentPairingId(): String = "e1"
             override suspend fun offer(request: FlowFetchRequest): FlowStatusReply {
                 offers += request
                 offerFailure?.let { throw it }
@@ -100,7 +100,7 @@ class C413DeliveryPortTest {
 
         fun request(orderId: Long) = DeliveryRequest(
             orderId,
-            PairingEpoch("e1"),
+            PairingId("e1"),
             hash,
             MediaDetails(MediaSnapshot(9, "1:1", 7, 1, LEGACY_VOLUME), "content://media/external/file/9", "IMG_9.jpg", "image/jpeg", 4_321, 0),
         )
@@ -112,7 +112,7 @@ class C413DeliveryPortTest {
                 "flow.delivered",
                 buildJsonObject {
                     put("queue_sequence", JsonPrimitive(orderId))
-                    put("pairing_epoch", JsonPrimitive("e1"))
+                    put("pairing_id", JsonPrimitive("e1"))
                     put("lease_token", JsonPrimitive(leaseTokenFor(orderId)))
                     put("receipt", ProtoJson.encodeToJsonElement(FlowCompletionReceipt.serializer(), receipt(orderId)))
                 },
@@ -242,7 +242,7 @@ class C413DeliveryPortTest {
     fun `hello health is parsed with the contract field names and absent means healthy`() {
         val hello = ProtoJson.decodeFromString(
             Hello.serializer(),
-            """{"proto_ver":1,"pairing_epoch":"e1","health":{"free_bytes":123,"library_writable":false,"index_ok":true}}""",
+            """{"proto_ver":1,"pairing_id":"e1","health":{"free_bytes":123,"library_writable":false,"index_ok":true}}""",
         )
         val health = desktopHealthOf(hello.health)!!
         assertEquals(DesktopHealth(123L, libraryWritable = false, indexOk = true), health)
@@ -252,7 +252,7 @@ class C413DeliveryPortTest {
         assertEquals(WaitReason.DESKTOP_STORAGE_FULL, waitReasonOf(health))
         assertEquals(WaitReason.DESKTOP_STORAGE_ERROR, waitReasonOf(DesktopHealth(null, indexOk = false)))
         assertNull(waitReasonOf(DesktopHealth(1L)))
-        val old = ProtoJson.decodeFromString(Hello.serializer(), """{"proto_ver":1,"pairing_epoch":"e1"}""")
+        val old = ProtoJson.decodeFromString(Hello.serializer(), """{"proto_ver":1,"pairing_id":"e1"}""")
         assertNull(desktopHealthOf(old.health))
         assertNull(waitReasonOf(desktopHealthOf(old.health)))
     }

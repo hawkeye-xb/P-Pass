@@ -206,10 +206,10 @@ class C459SourceMissingTest {
         rig.close()
     }
 
-    // 同一行、同一配对代号只记一次 UNRECOVERABLE：CONFIRMED 行留着，每个对账轮都会再遇到它。换了配对代号再记一次。
+    // 同一行、同一配对 id只记一次 UNRECOVERABLE：CONFIRMED 行留着，每个对账轮都会再遇到它。换了配对 id再记一次。
     // 反证：appendAuditOnce 换回 appendAudit → 第二轮又记一条（2 条），红。
     @Test
-    fun `the unrecoverable audit is recorded once per order and pairing epoch`() = runTest {
+    fun `the unrecoverable audit is recorded once per order and pairing id`() = runTest {
         val rig = backedUp()
         val lost = rig.media.photos.single { it.mediaId == 2L }
         rig.media.remove(2)
@@ -219,11 +219,11 @@ class C459SourceMissingTest {
         assertEquals(2, rig.presenceCalls)
         assertEquals(1, rig.unrecoverableAudits().size)
 
-        rig.epoch = PairingEpoch("e2")
+        rig.pid = PairingId("e2")
         rig.probeResult = ProbeResult.Reachable("e2")
         rig.trigger(TriggerReason.PERIODIC)
         assertEquals(3, rig.presenceCalls)
-        assertEquals("新配对代号下再记一次", 2, rig.unrecoverableAudits().size)
+        assertEquals("新配对 id下再记一次", 2, rig.unrecoverableAudits().size)
         assertEquals(0L, rig.store.countSourceMissingSkipped(afterMs = 0L))
         rig.close()
     }

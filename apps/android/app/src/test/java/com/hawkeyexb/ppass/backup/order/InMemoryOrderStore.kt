@@ -74,7 +74,7 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
 
     private fun Tx.insertRow(order: NewOrder, now: Long): Order {
         lastId += 1
-        val row = Order(lastId, order.mediaId, order.sourceVersion, order.bucketId, order.contentHash, order.state, 0, order.pairingEpoch, now, now, locationRedacted = order.locationRedacted)
+        val row = Order(lastId, order.mediaId, order.sourceVersion, order.bucketId, order.contentHash, order.state, 0, order.pairingId, now, now, locationRedacted = order.locationRedacted)
         rows[row.id] = row
         return row
     }

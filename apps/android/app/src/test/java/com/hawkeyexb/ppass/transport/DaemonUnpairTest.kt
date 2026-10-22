@@ -70,7 +70,7 @@ print('confirmed', resp['result'])
                 val peer = parsePeerAddrToken(p.daemonAddrToken)
 
                 // Unilateral stop: the device revokes itself.
-                val unpaired = client.unpair(peer, p.pairingEpoch)
+                val unpaired = client.unpair(peer, p.pairingId)
                 assertTrue("device.unpair must succeed: $unpaired", unpaired.ok)
 
                 // hello is now denied (revoked ⇒ not even hello).

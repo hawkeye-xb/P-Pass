@@ -2,7 +2,7 @@
 // 订阅是监听：发一次请求，之后桌面推一帧才处理一帧，不轮询。
 import Foundation
 
-/// 桌面拒绝了这次订阅（第一帧就是 `ok:false` 的应答），例如设备已被撤销时的 `NOT_AUTHORIZED`。
+/// 桌面拒绝了这次订阅（第一帧就是 `ok:false` 的应答），例如设备未配对时的 `NOT_AUTHORIZED`。
 public struct SubscribeRejected: Error, Equatable, Sendable {
     public let code: String
     public let reason: DesktopReason

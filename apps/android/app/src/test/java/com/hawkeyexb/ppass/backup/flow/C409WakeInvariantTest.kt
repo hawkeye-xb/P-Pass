@@ -102,7 +102,7 @@ class C409WakeInvariantTest {
         val rig = Rig(this)
         rig.photo(1, generation = 1)
         when (reason) {
-            WaitReason.NOT_PAIRED -> rig.epoch = null
+            WaitReason.NOT_PAIRED -> rig.pid = null
             WaitReason.DISABLED -> rig.conditions = Conditions(autoBackupEnabled = false)
             WaitReason.WIFI -> rig.conditions = Conditions(wifiOnly = true, onUnmetered = false)
             WaitReason.BATTERY -> rig.conditions = Conditions(batteryLow = true)

@@ -5,7 +5,7 @@ package com.hawkeyexb.ppass.backup.flow
  *
  * Flow owns the durable per-item facts and their transitions: discovery cursor,
  * strict upload cursor, consumer gate, fetch lease, completion receipt,
- * cancellation round, pairing epoch, and reconciliation facts.
+ * cancellation round, pairing id, and reconciliation facts.
  *
  * The old `backup` package remains a frozen batch implementation. In particular,
  * Flow must not call or import BackupWorker, BackupRunner, ConfirmedStore,

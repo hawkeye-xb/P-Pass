@@ -69,21 +69,21 @@ class NET14PushFirstDeliveryTest {
 
     // ── parseFlowPushOutcome ─────────────────────────────────────
 
-    private val tuple = FlowTupleRefFixture(queueSequence = 7L, pairingEpoch = "epoch-1", leaseToken = "lease-7")
+    private val tuple = FlowTupleRefFixture(queueSequence = 7L, pairingId = "pid-1", leaseToken = "lease-7")
 
     @Test
     fun delivered_push_matching_the_tuple_yields_delivered_with_receipt() {
         val receipt = FlowCompletionReceipt(
             queueSequence = 7L,
             receiptId = "desktop-1",
-            pairingEpoch = "epoch-1",
+            pairingId = "pid-1",
             leaseToken = "lease-7",
             contentHash = "c".repeat(64),
         )
         val data = buildJsonObject {
             put("node_id", JsonPrimitive("phone-node"))
             put("queue_sequence", JsonPrimitive(7L))
-            put("pairing_epoch", JsonPrimitive("epoch-1"))
+            put("pairing_id", JsonPrimitive("pid-1"))
             put("lease_token", JsonPrimitive("lease-7"))
             put(
                 "receipt",
@@ -102,7 +102,7 @@ class NET14PushFirstDeliveryTest {
         val data = buildJsonObject {
             put("node_id", JsonPrimitive("phone-node"))
             put("queue_sequence", JsonPrimitive(7L))
-            put("pairing_epoch", JsonPrimitive("epoch-1"))
+            put("pairing_id", JsonPrimitive("pid-1"))
             put("lease_token", JsonPrimitive("lease-7"))
             put("reason", JsonPrimitive("fetch_failed"))
         }
@@ -117,7 +117,7 @@ class NET14PushFirstDeliveryTest {
         // exact tuple identity is the only thing that may match.
         val data = buildJsonObject {
             put("queue_sequence", JsonPrimitive(7L))
-            put("pairing_epoch", JsonPrimitive("epoch-1"))
+            put("pairing_id", JsonPrimitive("pid-1"))
             put("lease_token", JsonPrimitive("lease-STALE"))
             put("reason", JsonPrimitive("fetch_failed"))
         }
@@ -128,7 +128,7 @@ class NET14PushFirstDeliveryTest {
     fun delivered_push_missing_a_receipt_is_ignored() {
         val data = buildJsonObject {
             put("queue_sequence", JsonPrimitive(7L))
-            put("pairing_epoch", JsonPrimitive("epoch-1"))
+            put("pairing_id", JsonPrimitive("pid-1"))
             put("lease_token", JsonPrimitive("lease-7"))
         }
         assertNull(parseFlowPushOutcome("flow.delivered", data, tuple.toRef()))
@@ -136,10 +136,10 @@ class NET14PushFirstDeliveryTest {
 
     // flowWaitStep 的判据（#410 新参数：15s / 3min 字节停滞）由 ARCH13DeliveryPortTest 覆盖。
 
-    private data class FlowTupleRefFixture(val queueSequence: Long, val pairingEpoch: String, val leaseToken: String) {
+    private data class FlowTupleRefFixture(val queueSequence: Long, val pairingId: String, val leaseToken: String) {
         fun toRef() = com.hawkeyexb.ppass.proto.FlowTupleRef(
             queueSequence = queueSequence,
-            pairingEpoch = pairingEpoch,
+            pairingId = pairingId,
             leaseToken = leaseToken,
         )
     }

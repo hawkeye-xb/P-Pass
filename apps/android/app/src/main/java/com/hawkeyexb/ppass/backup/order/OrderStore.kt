@@ -57,8 +57,8 @@ data class Order(
     val state: OrderState,
     /** 失败次数（每记一次 FAILED 加 1；当场重试那一次不单独算）。 */
     val attempts: Int,
-    /** 建这行时的配对代号（防护列，#415 裁决 6）。 */
-    val pairingEpoch: String,
+    /** 建这行时的配对 id（防护列，#415 裁决 6）。 */
+    val pairingId: String,
     val createdAtMs: Long,
     val updatedAtMs: Long,
     /**
@@ -111,7 +111,7 @@ data class NewOrder(
     val bucketId: Long,
     val contentHash: String?,
     val state: OrderState,
-    val pairingEpoch: String,
+    val pairingId: String,
     /** 见 [Order.locationRedacted]。 */
     val locationRedacted: Boolean = false,
 ) {
@@ -350,7 +350,7 @@ interface OrderStore {
      * 审计 outbox，并把新 id 的起点抬到 [idFloor] 之上。返回是否清了。
      * **跳过名单保留**：它是用户意图，与哪台桌面无关（#413 裁定 9，待用户最终确认）。清库后扫描置脏。
      *
-     * 为什么要抬 id 起点：桌面的 `flow_delivery` 按 `(node_id, pairing_epoch, queue_sequence)` 记账，
+     * 为什么要抬 id 起点：桌面的 `flow_delivery` 按 `(node_id, pairing_id, queue_sequence)` 记账，
      * 已完成的行不会被覆盖。order id 若从 1 开始，就会撞上旧账本早已 completed 的那些行（不同 hash），offer 被拒。
      */
     fun claimOwner(ownerKey: String, idFloor: Long): Boolean

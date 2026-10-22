@@ -79,7 +79,7 @@ final class TransportFFITests: XCTestCase {
     func testFlowFetchRequestEncodedThroughProtoDecodesFieldForField() throws {
         let request = ProtoFlowFetchRequest(
             queueSequence: 9_007_199_254_740_993,  // > 2^53：确认 u64 不经过浮点
-            pairingEpoch: "epoch-2026-10-12",
+            pairingId: "pairingId-2026-10-12",
             leaseToken: "lease-7f3a",
             contentHash: String(repeating: "ab", count: 32),
             fileName: "IMG_0001 照片.HEIC",
@@ -98,7 +98,7 @@ final class TransportFFITests: XCTestCase {
         // crates/proto 解码回来，逐字段相等。
         let decoded = try decodeFlowFetchRequest(frame: frame)
         XCTAssertEqual(decoded.queueSequence, request.queueSequence)
-        XCTAssertEqual(decoded.pairingEpoch, request.pairingEpoch)
+        XCTAssertEqual(decoded.pairingId, request.pairingId)
         XCTAssertEqual(decoded.leaseToken, request.leaseToken)
         XCTAssertEqual(decoded.contentHash, request.contentHash)
         XCTAssertEqual(decoded.fileName, request.fileName)
@@ -113,7 +113,7 @@ final class TransportFFITests: XCTestCase {
             with: Data(try decodeFrameJson(frame: frame).utf8)) as! [String: Any]
         XCTAssertEqual(
             Set(json.keys),
-            ["queue_sequence", "pairing_epoch", "lease_token", "content_hash", "file_name",
+            ["queue_sequence", "pairing_id", "lease_token", "content_hash", "file_name",
              "media_type", "provider", "capture_at_ms", "size_bytes"])
         XCTAssertEqual(json["file_name"] as? String, request.fileName)
         print("FlowFetchRequest frame \(frame.count) bytes, fields equal ✓")
@@ -124,7 +124,7 @@ final class TransportFFITests: XCTestCase {
     func testPPassCoreFlowFetchRequestJsonDecodesInCratesProto() throws {
         let request = PPassCore.FlowFetchRequest(
             queueSequence: 9_007_199_254_740_993,
-            pairingEpoch: "epoch-2026-10-12",
+            pairingId: "pairingId-2026-10-12",
             leaseToken: "lease-42",
             contentHash: String(repeating: "cd", count: 32),
             fileName: "IMG_0002 视频.MOV",
@@ -136,7 +136,7 @@ final class TransportFFITests: XCTestCase {
         let json = String(decoding: try JSONEncoder().encode(request), as: UTF8.self)
         let decoded = try decodeFlowFetchRequest(frame: try encodeFrameJson(json: json))
         XCTAssertEqual(decoded.queueSequence, request.queueSequence)
-        XCTAssertEqual(decoded.pairingEpoch, request.pairingEpoch)
+        XCTAssertEqual(decoded.pairingId, request.pairingId)
         XCTAssertEqual(decoded.leaseToken, request.leaseToken)
         XCTAssertEqual(decoded.contentHash, request.contentHash)
         XCTAssertEqual(decoded.fileName, request.fileName)
@@ -327,15 +327,15 @@ final class TransportFFITests: XCTestCase {
         let ack = try XCTUnwrap(submitted["result"] as? [String: Any], "\(submitted)")
         let requestId = try XCTUnwrap(ack["request_id"] as? String, "\(submitted)")
         let ttlMs = (ack["ttl_ms"] as? NSNumber)?.doubleValue ?? 60_000
-        var acceptedEpoch: String?
+        var acceptedPairingId: String?
         let pollDeadline = Date().addingTimeInterval(ttlMs / 1000 + 5)
-        while acceptedEpoch == nil {
+        while acceptedPairingId == nil {
             let st = try ctrl(client, peer, "pair.status", ["request_id": requestId], timeoutMs: 15_000)
             XCTAssertEqual(st["ok"] as? Bool, true, "\(st)")
             let reply = try XCTUnwrap(st["result"] as? [String: Any], "\(st)")
             switch reply["state"] as? String {
             case "accepted":
-                acceptedEpoch = try XCTUnwrap((reply["accepted"] as? [String: Any])?["pairing_epoch"] as? String, "\(st)")
+                acceptedPairingId = try XCTUnwrap((reply["accepted"] as? [String: Any])?["pairing_id"] as? String, "\(st)")
             case "pending":
                 guard Date() < pollDeadline else { return XCTFail("pair.status still pending after ttl: \(st)") }
                 Thread.sleep(forTimeInterval: 0.5)
@@ -343,8 +343,8 @@ final class TransportFFITests: XCTestCase {
                 return XCTFail("pairing not accepted: \(st)")
             }
         }
-        let epoch = try XCTUnwrap(acceptedEpoch)
-        print("G2 paired: epoch=\(epoch.prefix(8))… phone=\(try client.nodeId().prefix(8))…")
+        let pairingId = try XCTUnwrap(acceptedPairingId)
+        print("G2 paired: pairingId=\(pairingId.prefix(8))… phone=\(try client.nodeId().prefix(8))…")
 
         // ③ provider 的 FsStore 落在存储根下（模拟一个 App Group 容器；真 entitlement 是 App 线的事）。
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("g2-\(UUID().uuidString)")
@@ -394,13 +394,13 @@ final class TransportFFITests: XCTestCase {
 
         // ⑤ 交付：PPassCore 的 Codable FlowFetchRequest → flow.offer → 轮询 flow.status 到 completed。
         let request = PPassCore.FlowFetchRequest(
-            queueSequence: 1, pairingEpoch: epoch, leaseToken: "lease-1", contentHash: imported.hash,
+            queueSequence: 1, pairingId: pairingId, leaseToken: "lease-1", contentHash: imported.hash,
             fileName: "IMG_G2.HEIC", mediaType: "image/heic", provider: ticket,
             captureAtMs: Int64(Date().timeIntervalSince1970 * 1000), sizeBytes: Int64(imported.size))
         let offerParams = try JSONSerialization.jsonObject(with: try JSONEncoder().encode(request)) as! [String: Any]
         let offer = try ctrl(client, peer, "flow.offer", offerParams, timeoutMs: 30_000)
         XCTAssertEqual(offer["ok"] as? Bool, true, "\(offer)")
-        let tuple: [String: Any] = ["queue_sequence": 1, "pairing_epoch": epoch, "lease_token": "lease-1"]
+        let tuple: [String: Any] = ["queue_sequence": 1, "pairing_id": pairingId, "lease_token": "lease-1"]
         var receipt: [String: Any]?
         try waitFor(90, "flow.status completed") {
             let status = try ctrl(client, peer, "flow.status", tuple)
@@ -415,7 +415,7 @@ final class TransportFFITests: XCTestCase {
         let r = try XCTUnwrap(receipt)
         XCTAssertEqual(r["content_hash"] as? String, imported.hash)
         XCTAssertEqual(r["lease_token"] as? String, "lease-1")
-        XCTAssertEqual(r["pairing_epoch"] as? String, epoch)
+        XCTAssertEqual(r["pairing_id"] as? String, pairingId)
         XCTAssertFalse((r["receipt_id"] as? String ?? "").isEmpty)
         print("G2 receipt: \(r)")
 

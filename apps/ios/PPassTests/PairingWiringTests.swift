@@ -49,8 +49,8 @@ final class PairingWiringTests: XCTestCase {
 
     override func tearDown() { try? FileManager.default.removeItem(at: dir) }
 
-    private func record(epoch: String = "e1", lost: Bool = false) -> PairingRecord {
-        PairingRecord(daemonNodeId: "d", peerToken: "t", storageDeviceName: "Mac", pairedAt: 1, pairingEpoch: epoch, lost: lost)
+    private func record(pairingId: String = "e1", lost: Bool = false) -> PairingRecord {
+        PairingRecord(daemonNodeId: "d", peerToken: "t", storageDeviceName: "Mac", pairedAt: 1, pairingId: pairingId, lost: lost)
     }
 
     private func makePairing(_ transport: ScriptedTransport, store: PairingStore,
@@ -92,17 +92,17 @@ final class PairingWiringTests: XCTestCase {
 
     func test_update_modifies_in_place_and_skips_when_unpaired() throws {
         let store = PairingStore(root: dir)
-        XCTAssertFalse(try store.update { $0.pairingEpoch = "x" })
+        XCTAssertFalse(try store.update { $0.pairingId = "x" })
         try store.save(record())
-        XCTAssertTrue(try store.update { $0.pairingEpoch = "e2" })
-        XCTAssertEqual(store.load(), record(epoch: "e2"))
+        XCTAssertTrue(try store.update { $0.pairingId = "e2" })
+        XCTAssertEqual(store.load(), record(pairingId: "e2"))
     }
 
     func test_pairing_fails_visibly_and_does_not_report_paired_when_persisting_fails() async throws {
         let store = PairingStore(root: dir)
         try blockPairingFile()
         let transport = ScriptedTransport([
-            Methods.hello: try .ok(Hello(deviceName: "Mac", pairingEpoch: "e9")),
+            Methods.hello: try .ok(Hello(deviceName: "Mac", pairingId: "e9")),
         ])
         var paired = 0
         let outcome = await makePairing(transport, store: store) { _, _ in paired += 1; return false }.pair(code: link)
@@ -117,7 +117,7 @@ final class PairingWiringTests: XCTestCase {
         // 老桌面：pair.request 直接回 accepted（无 request_id），不走轮询。
         let transport = ScriptedTransport([
             Methods.hello: try .ok(Hello(capabilities: [PairVerdictLoop.statusCapability])),
-            Methods.pairRequest: try .ok(PairAccepted(storageDeviceName: "Mac", pairingEpoch: "e9")),
+            Methods.pairRequest: try .ok(PairAccepted(storageDeviceName: "Mac", pairingId: "e9")),
         ])
         var paired = 0
         let outcome = await makePairing(transport, store: store) { _, _ in paired += 1; return false }.pair(code: link)
@@ -133,7 +133,7 @@ final class PairingWiringTests: XCTestCase {
         var marked = Set<String>()
         var knownSeenByOnPaired: Bool?
         let transport = ScriptedTransport([
-            Methods.hello: try .ok(Hello(deviceName: "Mac", pairingEpoch: "e9")),
+            Methods.hello: try .ok(Hello(deviceName: "Mac", pairingId: "e9")),
         ])
         let pairing = makePairing(transport, store: store, onboarded: { marked.contains($0) }) { record, known in
             knownSeenByOnPaired = known
@@ -149,24 +149,24 @@ final class PairingWiringTests: XCTestCase {
         let store = PairingStore(root: dir)
         var knownSeenByOnPaired: Bool?
         let transport = ScriptedTransport([
-            Methods.hello: try .ok(Hello(deviceName: "Mac", pairingEpoch: "e9")),
+            Methods.hello: try .ok(Hello(deviceName: "Mac", pairingId: "e9")),
         ])
         let outcome = await makePairing(transport, store: store, onboarded: { _ in true }) { _, known in knownSeenByOnPaired = known; return false }.pair(code: link)
         XCTAssertEqual(outcome, .joined(firstTime: false))
         XCTAssertEqual(knownSeenByOnPaired, true)
     }
 
-    func test_member_fast_path_saves_name_and_epoch_when_hello_succeeds() async throws {
+    func test_member_fast_path_saves_name_and_pairing_id_when_hello_succeeds() async throws {
         let store = PairingStore(root: dir)
         let transport = ScriptedTransport([
-            Methods.hello: try .ok(Hello(deviceName: "Mac", pairingEpoch: "e9")),
+            Methods.hello: try .ok(Hello(deviceName: "Mac", pairingId: "e9")),
         ])
         var paired: PairingRecord?
         let outcome = await makePairing(transport, store: store) { r, _ in paired = r; return false }.pair(code: link)
         XCTAssertEqual(outcome, .joined(firstTime: true))
-        XCTAssertEqual(store.load()?.pairingEpoch, "e9")
+        XCTAssertEqual(store.load()?.pairingId, "e9")
         XCTAssertEqual(store.load()?.storageDeviceName, "Mac")
-        XCTAssertEqual(paired?.pairingEpoch, "e9")
+        XCTAssertEqual(paired?.pairingId, "e9")
     }
 
     // MARK: 换新电脑清旧的后台备份意图写失败（#1039，对位 Android）
@@ -190,13 +190,13 @@ final class PairingWiringTests: XCTestCase {
         let logs = LogSink()
         let store = PairingStore(root: dir)
         let transport = ScriptedTransport([
-            Methods.hello: try .ok(Hello(deviceName: "Mac", pairingEpoch: "e9")),
+            Methods.hello: try .ok(Hello(deviceName: "Mac", pairingId: "e9")),
         ])
         let outcome = await makePairing(transport, store: store, onboarded: { _ in false }) { _, known in
             applyAutoBackupOnPairing(prefs, knownDesktop: known, logger: logs)
         }.pair(code: link)
         XCTAssertEqual(outcome, .joined(firstTime: true, settingSaveFailed: true))
-        XCTAssertEqual(store.load()?.pairingEpoch, "e9", "配对照常落盘")
+        XCTAssertEqual(store.load()?.pairingId, "e9", "配对照常落盘")
         XCTAssertTrue(prefs.requested(), "没写下来：旧意图还在盘上——要靠完成页再写一次")
         let line = try XCTUnwrap(logs.lines.first)
         XCTAssertTrue(line.contains("apply on pairing failed"), line)
@@ -221,55 +221,62 @@ final class PairingWiringTests: XCTestCase {
 
     // MARK: 快路径 hello 失败（#970）
 
-    func test_member_fast_path_hello_failure_falls_back_to_pairing_without_saving_empty_epoch() async throws {
+    func test_member_fast_path_hello_failure_falls_back_to_pairing_without_saving_empty_pairing_id() async throws {
         let store = PairingStore(root: dir)
         // hello 连不上（超时 / 异常）：落回正常配对（它自己的 hello 同样连不上 → unreachable），不能存空记录。
         let transport = ScriptedTransport([Methods.hello: .fail])
         var paired = 0
         let outcome = await makePairing(transport, store: store) { _, _ in paired += 1; return false }.pair(code: link)
         guard case .failed = outcome else { return XCTFail("实际 \(outcome)") }
-        XCTAssertNil(store.load(), "hello 失败不许存空 epoch / 空电脑名")
+        XCTAssertNil(store.load(), "hello 失败不许存空 pairingId / 空电脑名")
         XCTAssertEqual(paired, 0)
         XCTAssertEqual(transport.calls, [Methods.hello, Methods.hello],
                        "第二次 hello 来自正常配对流程——证明确实落回了配对")
     }
 
-    /// #1052 E2 三种情况（成员见 test_member_fast_path_saves_name_and_epoch_when_hello_succeeds）。
-    /// 非成员：未配对的电脑 hello 只回能力握手，不带 pairing_epoch → 走正常配对，且绝不再调 backup.begin。
-    func test_non_member_hello_without_epoch_goes_through_normal_pairing() async throws {
+    /// #1052 E2 三种情况（成员见 test_member_fast_path_saves_name_and_pairing_id_when_hello_succeeds）。
+    /// 非成员：未配对的电脑 hello 只回能力握手，不带 pairing_id → 走正常配对，且绝不再调 backup.begin。
+    func test_non_member_hello_without_pairing_id_goes_through_normal_pairing() async throws {
         let store = PairingStore(root: dir)
         let transport = ScriptedTransport([
             Methods.hello: try .ok(Hello(capabilities: [PairVerdictLoop.statusCapability], deviceName: "Mac")),
-            Methods.pairRequest: try .ok(PairAccepted(storageDeviceName: "Mac", pairingEpoch: "e5")),
+            Methods.pairRequest: try .ok(PairAccepted(storageDeviceName: "Mac", pairingId: "e5")),
         ])
         let outcome = await makePairing(transport, store: store).pair(code: link)
         XCTAssertEqual(outcome, .joined(firstTime: true))
         XCTAssertEqual(transport.calls, [Methods.hello, Methods.hello, Methods.pairRequest], "第一次 hello 判成员未过，第二次来自正常配对")
         XCTAssertFalse(transport.calls.contains(Methods.backupBegin), "成员探针不得再用 backup.begin")
-        XCTAssertEqual(store.load()?.pairingEpoch, "e5")
+        XCTAssertEqual(store.load()?.pairingId, "e5")
     }
 
-    /// 空串 epoch 也不算成员。
-    func test_empty_epoch_is_not_member() async throws {
+    /// 空串 pairingId 也不算成员。
+    func test_empty_pairing_id_is_not_member() async throws {
         let store = PairingStore(root: dir)
-        let transport = ScriptedTransport([Methods.hello: try .ok(Hello(deviceName: "Mac", pairingEpoch: ""))])
+        let transport = ScriptedTransport([Methods.hello: try .ok(Hello(deviceName: "Mac", pairingId: ""))])
         _ = await makePairing(transport, store: store).pair(code: link)
-        XCTAssertNil(store.load(), "空 epoch 不许当成员存盘")
+        XCTAssertNil(store.load(), "空 pairingId 不许当成员存盘")
         XCTAssertEqual(transport.calls.first, Methods.hello)
         XCTAssertGreaterThan(transport.calls.count, 1, "必须落回正常配对")
     }
 
-    /// 已撤销：桌面对已撤销设备连 hello 都拒（authz `revoked_gets_nothing_not_even_hello`）→ 落回正常配对。
-    func test_revoked_hello_denied_falls_back_to_pairing_and_never_calls_backup_begin() async throws {
+    /// 未配对 / 配对记录已被电脑删除：桌面对这样的设备连 hello 都拒（not_paired）→ 落回正常配对。
+    func test_not_paired_hello_denied_falls_back_to_pairing_and_never_calls_backup_begin() async throws {
         let store = PairingStore(root: dir)
         let transport = ScriptedTransport([
-            Methods.hello: .resp(Resp(ok: false, error: RespError(code: Codes.notAuthorized, reason: "revoked"))),
+            Methods.hello: .resp(Resp(ok: false, error: RespError(code: Codes.notAuthorized, reason: "not_paired"))),
         ])
         let outcome = await makePairing(transport, store: store).pair(code: link)
         XCTAssertNil(store.load())
         guard case .failed = outcome else { return XCTFail("实际 \(outcome)") }
         XCTAssertFalse(transport.calls.contains(Methods.backupBegin))
         XCTAssertEqual(transport.calls.prefix(2), [Methods.hello, Methods.hello])
+    }
+
+    /// #1117：协议 v3 起旧配对作废；`pairing.json` 还是 `pairingEpoch` 旧键 → 按未配对处理（不迁移）。
+    func test_legacy_pairing_json_with_epoch_key_is_treated_as_not_paired() throws {
+        let legacy = #"{"daemonNodeId":"n","peerToken":"t","storageDeviceName":"Mac","pairedAt":1,"pairingEpoch":"e1","lost":false}"#
+        try legacy.write(to: dir.appendingPathComponent("pairing.json"), atomically: true, encoding: .utf8)
+        XCTAssertNil(PairingStore(root: dir, log: { _ in }).load())
     }
 
     func test_member_fast_path_rejected_hello_also_falls_back() async throws {
@@ -281,7 +288,7 @@ final class PairingWiringTests: XCTestCase {
         XCTAssertNil(store.load())
     }
 
-    // MARK: 空 epoch 修复（#970）
+    // MARK: 空 pairingId 修复（#970）
 
     // MARK: 主动断开（#956 关闭裁决：尽力通知一次，之后什么都不做）
 
@@ -291,7 +298,7 @@ final class PairingWiringTests: XCTestCase {
     func test_disconnect_with_an_unreachable_desktop_tries_once_and_leaves_no_credential_behind() async throws {
         let token = "PEER-TOKEN-SECRET"
         let store = PairingStore(root: dir)
-        try store.save(PairingRecord(daemonNodeId: "d", peerToken: token, storageDeviceName: "Mac", pairedAt: 1, pairingEpoch: "e1"))
+        try store.save(PairingRecord(daemonNodeId: "d", peerToken: token, storageDeviceName: "Mac", pairedAt: 1, pairingId: "e1"))
         let transport = ScriptedTransport([:]) // device.unpair → 连不上
         let root: URL = dir
         let pairing = makeDisconnecting(transport, store: store, onDisconnect: {
@@ -317,34 +324,34 @@ final class PairingWiringTests: XCTestCase {
     }
 
     func test_outcome_mapping_matches_android() {
-        XCTAssertEqual(applyEpochRepairOutcome(.success("e2")), .repaired("e2"))
-        XCTAssertEqual(applyEpochRepairOutcome(.success("")), .lost)
-        XCTAssertEqual(applyEpochRepairOutcome(.success("  ")), .lost)
-        XCTAssertEqual(applyEpochRepairOutcome(.success(nil)), .lost)
-        XCTAssertEqual(applyEpochRepairOutcome(.failure(ScriptedTransport.Unreachable())), .lost)
+        XCTAssertEqual(applyPairingIdRepairOutcome(.success("e2")), .repaired("e2"))
+        XCTAssertEqual(applyPairingIdRepairOutcome(.success("")), .lost)
+        XCTAssertEqual(applyPairingIdRepairOutcome(.success("  ")), .lost)
+        XCTAssertEqual(applyPairingIdRepairOutcome(.success(nil)), .lost)
+        XCTAssertEqual(applyPairingIdRepairOutcome(.failure(ScriptedTransport.Unreachable())), .lost)
         // #1072 / #1073：版本不兼容不是对配对的判决，更新后再修；配对失效的拒绝照旧标失联。
-        XCTAssertEqual(applyEpochRepairOutcome(.failure(DesktopRejected(reason: .registered(.desktopOutdated), method: "hello"))), .deferred)
-        XCTAssertEqual(applyEpochRepairOutcome(.failure(DesktopRejected(reason: .registered(.unsupportedMethod), method: "hello"))), .deferred)
-        XCTAssertEqual(applyEpochRepairOutcome(.failure(DesktopRejected(reason: .registered(.revoked), method: "hello"))), .lost)
-        XCTAssertTrue(needsEpochRepair(""))
-        XCTAssertFalse(needsEpochRepair("e1"))
+        XCTAssertEqual(applyPairingIdRepairOutcome(.failure(DesktopRejected(reason: .registered(.desktopOutdated), method: "hello"))), .deferred)
+        XCTAssertEqual(applyPairingIdRepairOutcome(.failure(DesktopRejected(reason: .registered(.unsupportedMethod), method: "hello"))), .deferred)
+        XCTAssertEqual(applyPairingIdRepairOutcome(.failure(DesktopRejected(reason: .registered(.pairingMismatch), method: "hello"))), .lost)
+        XCTAssertTrue(needsPairingIdRepair(""))
+        XCTAssertFalse(needsPairingIdRepair("e1"))
     }
 
-    func test_repair_writes_back_the_epoch_the_desktop_reports() async throws {
+    func test_repair_writes_back_the_pairing_id_the_desktop_reports() async throws {
         let store = PairingStore(root: dir)
-        try store.save(record(epoch: ""))
-        let repairer = EpochRepairer(store: store, hello: { "e7" }, logger: LogSink())
+        try store.save(record(pairingId: ""))
+        let repairer = PairingIdRepairer(store: store, hello: { "e7" }, logger: LogSink())
         let result = await repairer.repairIfNeeded()
         XCTAssertEqual(result, .repaired("e7"))
-        XCTAssertEqual(store.load()?.pairingEpoch, "e7")
+        XCTAssertEqual(store.load()?.pairingId, "e7")
         XCTAssertEqual(store.load()?.lost, false)
     }
 
-    func test_repair_marks_lost_when_hello_fails_or_has_no_epoch() async throws {
+    func test_repair_marks_lost_when_hello_fails_or_has_no_pairing_id() async throws {
         for hello: @Sendable () async throws -> String? in [{ throw ScriptedTransport.Unreachable() }, { nil }, { "" }] {
             let store = PairingStore(root: dir)
-            try store.save(record(epoch: ""))
-            let result = await EpochRepairer(store: store, hello: hello, logger: LogSink()).repairIfNeeded()
+            try store.save(record(pairingId: ""))
+            let result = await PairingIdRepairer(store: store, hello: hello, logger: LogSink()).repairIfNeeded()
             XCTAssertEqual(result, .lost)
             XCTAssertEqual(store.load()?.lost, true)
         }
@@ -353,42 +360,42 @@ final class PairingWiringTests: XCTestCase {
     func test_repair_is_skipped_when_not_needed_and_tried_once_per_process() async throws {
         let store = PairingStore(root: dir)
         let counter = Counter()
-        let repairer = EpochRepairer(store: store, hello: { counter.bump(); return "e7" }, logger: LogSink())
+        let repairer = PairingIdRepairer(store: store, hello: { counter.bump(); return "e7" }, logger: LogSink())
         let unpaired = await repairer.repairIfNeeded()
         XCTAssertNil(unpaired)
-        try store.save(record(epoch: "e1"))
+        try store.save(record(pairingId: "e1"))
         let healthy = await repairer.repairIfNeeded()
         XCTAssertNil(healthy)
         XCTAssertEqual(counter.value, 0)
 
-        try store.save(record(epoch: ""))
+        try store.save(record(pairingId: ""))
         _ = await repairer.repairIfNeeded()
-        try store.save(record(epoch: ""))
+        try store.save(record(pairingId: ""))
         let again = await repairer.repairIfNeeded()
-        XCTAssertNil(again, "本进程只试一次（对位 Android epochRepairAttempted）")
+        XCTAssertNil(again, "本进程只试一次（对位 Android pairingIdRepairAttempted）")
         XCTAssertEqual(counter.value, 1)
     }
 
     // MARK: 引擎接线（#967 / #966）
 
-    func test_advertised_epoch_is_persisted_and_the_rest_of_the_record_is_kept() throws {
+    func test_advertised_pairing_id_is_persisted_and_the_rest_of_the_record_is_kept() throws {
         let store = PairingStore(root: dir)
-        try store.save(record(epoch: "e1"))
-        FlowWiring.epochAdvertised(store: store, logger: LogSink())("e2")
-        XCTAssertEqual(store.load(), record(epoch: "e2"))
+        try store.save(record(pairingId: "e1"))
+        FlowWiring.pairingIdAdvertised(store: store, logger: LogSink())("e2")
+        XCTAssertEqual(store.load(), record(pairingId: "e2"))
     }
 
-    func test_advertised_epoch_persist_failure_is_logged() throws {
+    func test_advertised_pairing_id_persist_failure_is_logged() throws {
         let logs = LogSink()
         let store = PairingStore(root: dir)
-        try store.save(record(epoch: "e1"))
+        try store.save(record(pairingId: "e1"))
         // 目录只读：文件能读、临时文件建不出来 → 原子写失败。
         try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: dir.path)
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path) }
-        FlowWiring.epochAdvertised(store: store, logger: logs)("e2")
+        FlowWiring.pairingIdAdvertised(store: store, logger: logs)("e2")
         let line = try XCTUnwrap(logs.lines.first, "写盘失败必须留一行日志")
-        XCTAssertTrue(line.contains("cannot persist new pairing epoch"), line)
-        XCTAssertEqual(store.load()?.pairingEpoch, "e1", "旧记录原样")
+        XCTAssertTrue(line.contains("cannot persist new pairing pairingId"), line)
+        XCTAssertEqual(store.load()?.pairingId, "e1", "旧记录原样")
     }
 
     func test_audit_after_cycle_flushes_the_outbox_to_the_desktop_and_clears_acknowledged_events() async throws {

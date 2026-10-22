@@ -34,8 +34,8 @@ class ForegroundHeartbeat(
     private val sentinel: com.hawkeyexb.ppass.backup.SentinelStore? = null,
     // #439: 桌面可达（hello 成功）时通知备份引擎——引擎只在「等待中（桌面不可达 / #652 桌面不健康）」时才会据此叫醒循环。
     private val onReachable: (() -> Unit)? = null,
-    // #466: 桌面已移除这台手机（hello 被拒为 not_paired/not_authorized）——交给红卡，按这次配对的 epoch 记。
-    private val onPairingLost: ((epoch: String, failure: Throwable) -> Unit)? = null,
+    // #466: 桌面已移除这台手机（hello 被拒为 not_paired/not_authorized）——交给红卡，按这次配对的 pairing id 记。
+    private val onPairingLost: ((pid: String, failure: Throwable) -> Unit)? = null,
 ) {
     private var job: Job? = null
     private var active = false
@@ -72,7 +72,7 @@ class ForegroundHeartbeat(
         applyHeartbeatOutcome(
             sentinel,
             runCatching { client.call(peer, Methods.HELLO, buildJsonObject {}) },
-            onPairingLost = onPairingLost?.let { cb -> { failure: Throwable -> cb(pairing.pairingEpoch, failure) } },
+            onPairingLost = onPairingLost?.let { cb -> { failure: Throwable -> cb(pairing.pairingId, failure) } },
             onReachable = onReachable,
         )
     }

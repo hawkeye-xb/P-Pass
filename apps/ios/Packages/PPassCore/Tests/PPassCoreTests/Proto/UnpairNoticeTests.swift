@@ -7,12 +7,12 @@ final class UnpairNoticeTests: XCTestCase {
     private struct Unreachable: Error {}
 
     /// 反证：把 sendOnce 改回「失败就再试」或在里面循环 → 调用次数不是 1 → 红。
-    func testAnUnreachableDesktopIsTriedExactlyOnceWithTheEpochAndAShortTimeout() async {
+    func testAnUnreachableDesktopIsTriedExactlyOnceWithThePairingIdAndAShortTimeout() async {
         let transport = ScriptedTransport { _, _ in throw Unreachable() }
         let logger = RecordingLogger()
-        await UnpairNotice.sendOnce(transport, daemonNodeId: "desk-A", pairingEpoch: "e1", logger: logger)
+        await UnpairNotice.sendOnce(transport, daemonNodeId: "desk-A", pairingId: "e1", logger: logger)
         XCTAssertEqual(transport.calls.map(\.method), [Methods.deviceUnpair])
-        XCTAssertEqual(transport.calls.first?.params, .object(["pairing_epoch": .string("e1")]))
+        XCTAssertEqual(transport.calls.first?.params, .object(["pairing_id": .string("e1")]))
         XCTAssertEqual(transport.calls.first?.timeoutMs, 5_000, "对位 Android：5 秒")
         XCTAssertTrue(logger.contains("unreachable"))
         XCTAssertTrue(logger.contains("not retried"))
@@ -25,7 +25,7 @@ final class UnpairNoticeTests: XCTestCase {
         let logger = RecordingLogger()
         let returned = expectation(description: "sendOnce returns at the deadline")
         Task {
-            await UnpairNotice.sendOnce(GatedTransport(gate: gate), daemonNodeId: "d", pairingEpoch: "e1",
+            await UnpairNotice.sendOnce(GatedTransport(gate: gate), daemonNodeId: "d", pairingId: "e1",
                                         logger: logger, deadlineMs: 50)
             returned.fulfill()
         }
@@ -34,9 +34,9 @@ final class UnpairNoticeTests: XCTestCase {
         XCTAssertEqual(UnpairNotice.timeoutMs, 5_000, "生产截止对位 Android：5 秒")
     }
 
-    func testALegacyPairingWithoutAnEpochSendsNoEpoch() async {
+    func testALegacyPairingWithoutAnPairingIdSendsNoPairingId() async {
         let transport = ScriptedTransport { _, _ in Resp(id: "1", ok: true, result: .object([:])) }
-        await UnpairNotice.sendOnce(transport, daemonNodeId: "desk-A", pairingEpoch: "", logger: NoopLogger())
+        await UnpairNotice.sendOnce(transport, daemonNodeId: "desk-A", pairingId: "", logger: NoopLogger())
         XCTAssertEqual(transport.calls.first?.params, .object([:]))
     }
 
@@ -45,7 +45,7 @@ final class UnpairNoticeTests: XCTestCase {
         let transport = ScriptedTransport { _, _ in throw Unreachable() }
         let cleared = UnpairCounter()
         await UnpairNotice.disconnect(
-            notify: { await UnpairNotice.sendOnce(transport, daemonNodeId: "d", pairingEpoch: "e1", logger: NoopLogger()) },
+            notify: { await UnpairNotice.sendOnce(transport, daemonNodeId: "d", pairingId: "e1", logger: NoopLogger()) },
             clearLocal: { cleared.add() })
         XCTAssertEqual(transport.calls.count, 1)
         XCTAssertEqual(cleared.value, 1)
@@ -57,7 +57,7 @@ final class UnpairNoticeTests: XCTestCase {
         let cleared = UnpairCounter()
         let task = Task {
             await UnpairNotice.disconnect(
-                notify: { await UnpairNotice.sendOnce(GatedTransport(gate: gate), daemonNodeId: "d", pairingEpoch: "e1", logger: NoopLogger()) },
+                notify: { await UnpairNotice.sendOnce(GatedTransport(gate: gate), daemonNodeId: "d", pairingId: "e1", logger: NoopLogger()) },
                 clearLocal: { cleared.add() })
         }
         await gate.waitUntilEntered()

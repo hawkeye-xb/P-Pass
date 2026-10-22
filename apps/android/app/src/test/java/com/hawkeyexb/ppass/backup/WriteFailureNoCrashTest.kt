@@ -137,7 +137,7 @@ class WriteFailureNoCrashTest {
     @Test
     fun pairing_save_failure_is_a_pairing_failure_not_a_crash() {
         val store = PairingStore(dir)
-        val pairing = Pairing(nodeId, "token", "Mac", pairedAt = 1L, pairingEpoch = "e1")
+        val pairing = Pairing(nodeId, "token", "Mac", pairedAt = 1L, pairingId = "e1")
         breakWrites()
 
         val error = savePairingOrError { store.save(pairing) }
