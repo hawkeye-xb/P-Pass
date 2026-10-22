@@ -105,6 +105,17 @@ curl -sS -u review:<密码> -o /tmp/qr.png -w '%{http_code} %{size_download}\n' 
 
 手机侧：扫码 → 回页面点「允许」→ 手机开始备份 → 在页面上看到待确认列表清空。
 
+### 语言
+
+页面中英双语，**默认跟随浏览器语言**（`zh*` → 中文，其余 → English），右上角按钮手动切换
+（记在 localStorage）。给审核员写地址时可以带 `?lang=en` 强制英文，例如：
+
+```
+https://pair.example.com/?lang=en
+```
+
+审核员多数在海外，`?lang=en` 建议直接写进 App Store Connect 的审核备注——少一步「他看不懂中文」的风险。
+
 ## 运维
 
 - 日志：`journalctl -u ppass-review -u ppass-pairpage -u cloudflared`
