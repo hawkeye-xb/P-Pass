@@ -22,7 +22,7 @@ enum class DisconnectDisposition {
     /** 不碰，断开后原样留着。 */
     KEEP,
 
-    /** 删掉（只允许 [StateLocation.FILES]：shared_prefs / databases 在进程里有活的句柄，不能从文件层删）。 */
+    /** 删掉（只允许 [StateLocation.FILES] / [StateLocation.CACHE]：shared_prefs / databases 在进程里有活的句柄，不能从文件层删）。 */
     CLEAR,
 
     /** 文件留着，但改写其中一部分（逐项实现见 [applyDisconnectManifest]）。 */
@@ -40,6 +40,9 @@ enum class StateLocation(val dirName: String?) {
     FILES("files"),
     SHARED_PREFS("shared_prefs"),
     DATABASES("databases"),
+
+    /** `Context.cacheDir`（App 数据目录下的 `cache/`）。#1119：原图缓存在这里。 */
+    CACHE("cache"),
     RUNTIME(null),
 }
 
@@ -90,13 +93,36 @@ enum class DisconnectState(
         workNames = listOf(BACKUP_WORK_NAME, CATCHUP_WORK_NAME, PROCESS_CATCHUP_WORK_NAME, MANUAL_BACKUP_WORK_NAME),
     ),
     OTHER_WORKS(
-        StateLocation.RUNTIME, "work", DisconnectDisposition.KEEP,
-        "$UNDECIDED：断开从来没取消过这两条 unique work（约束唤醒、相册变更触发的单次备份）",
+        StateLocation.RUNTIME, "work", DisconnectDisposition.STOP,
+        "#1119：断开取消全部相关后台任务——约束唤醒、相册变更触发的单次备份（原先「待拍板」，断开从来没取消过）",
         workNames = listOf(CONSTRAINT_WAKE_WORK_NAME, MEDIA_WATCH_BACKUP_WORK_NAME),
+    ),
+    ENGINE_WAKE_WORKS(
+        StateLocation.RUNTIME, "work", DisconnectDisposition.STOP,
+        "#1119：引擎登记的唤醒——探测梯、额度复位唤醒、续传哨兵；没有配对就没有东西可传，不许留着空转",
+        workNames = listOf(UNREACHABLE_PROBE_LADDER_WORK_NAME, BUDGET_RESET_WAKE_WORK_NAME, RESUME_SENTINEL_WORK_NAME),
     ),
     MEDIA_WATCH_JOB(
         StateLocation.RUNTIME, "media-watch-job", DisconnectDisposition.STOP,
         "MOB-27/MOB-93：相册变更监听（JobScheduler）是生产者，断开停掉",
+    ),
+
+    // ── 缓存（cacheDir）：#1119 断开清掉这台电脑的原图 ──────────────
+    ORIGINAL_VIDEO_CACHE(
+        StateLocation.CACHE, "video-$ID", DisconnectDisposition.CLEAR,
+        "#1119：视频原片缓存 video-<hash>.mp4 及下载中的 .part——来自这台电脑的内容，断开后不许留在手机上",
+    ),
+    SHARE_CACHE(
+        StateLocation.CACHE, "share", DisconnectDisposition.CLEAR,
+        "#1119：「分享 / 用其他应用打开」的临时原图（cacheDir/share/）",
+    ),
+    PREVIEW_MEMORY_CACHE(
+        StateLocation.RUNTIME, "preview-memory-cache", DisconnectDisposition.STOP,
+        "#1119：内存里的小图缓存（全 App 唯一的 LruCache）；不落盘，但同样是这台电脑的内容，断开清空",
+    ),
+    UPDATE_ARTIFACTS(
+        StateLocation.CACHE, "update", DisconnectDisposition.KEEP,
+        "#719：App 自身的更新下载产物（cacheDir/update/），与配对无关，生命周期由更新线自己管",
     ),
 
     // ── 留：跨配对仍然成立的事实 ────────────────────────────────
@@ -243,16 +269,20 @@ interface DisconnectRuntime {
     fun stopFlowRuntime()
     fun cancelUniqueWork(name: String)
     fun cancelMediaWatch()
+
+    /** #1119：清空内存里的小图缓存。 */
+    fun clearPreviewCache()
 }
 
 /**
  * 断开（UX-06/UX-06b）与「配对已失效重新扫码」共用的清理：按 [DisconnectState]
  * 逐行执行，不依赖 daemon 是否可达 / 是否已撤销本设备。
  *
- * [filesDir] 的父目录即 App 数据目录（`shared_prefs/`、`databases/` 与它平级）。
+ * [filesDir] 的父目录即 App 数据目录（`shared_prefs/`、`databases/` 与它平级）；[cacheDir] 是 `Context.cacheDir`（#1119）。
  */
 fun applyDisconnectManifest(
     filesDir: File,
+    cacheDir: File,
     runtime: DisconnectRuntime,
     manifest: List<DisconnectState> = DisconnectState.entries,
 ) {
@@ -261,7 +291,7 @@ fun applyDisconnectManifest(
     var firstError: Exception? = null
     for (state in manifest) {
         try {
-            applyDisconnectRow(filesDir, runtime, state)
+            applyDisconnectRow(filesDir, cacheDir, runtime, state)
         } catch (e: Exception) {
             if (firstError == null) firstError = e else firstError.addSuppressed(e)
         }
@@ -269,12 +299,16 @@ fun applyDisconnectManifest(
     firstError?.let { throw it }
 }
 
-private fun applyDisconnectRow(filesDir: File, runtime: DisconnectRuntime, state: DisconnectState) {
+private fun applyDisconnectRow(filesDir: File, cacheDir: File, runtime: DisconnectRuntime, state: DisconnectState) {
     when (state.disposition) {
         DisconnectDisposition.KEEP, DisconnectDisposition.RETIRED -> Unit
         DisconnectDisposition.CLEAR -> {
-            check(state.location == StateLocation.FILES) { "$state: CLEAR only supported under files/" }
-            deleteMatching(filesDir, "", state)
+            val root = when (state.location) {
+                StateLocation.FILES -> filesDir
+                StateLocation.CACHE -> cacheDir
+                else -> error("$state: CLEAR only supported under files/ and cache/")
+            }
+            deleteMatching(root, "", state)
         }
         DisconnectDisposition.RESET -> when (state) {
             // MOB-93：停生产者，**留意图**（换新电脑时由 onboarding 入口清意图）。
@@ -286,6 +320,7 @@ private fun applyDisconnectRow(filesDir: File, runtime: DisconnectRuntime, state
             when (state) {
                 DisconnectState.FLOW_RUNTIME -> runtime.stopFlowRuntime()
                 DisconnectState.MEDIA_WATCH_JOB -> runtime.cancelMediaWatch()
+                DisconnectState.PREVIEW_MEMORY_CACHE -> runtime.clearPreviewCache()
                 else -> {
                     check(state.workNames.isNotEmpty()) { "$state: no STOP action defined" }
                     state.workNames.forEach(runtime::cancelUniqueWork)

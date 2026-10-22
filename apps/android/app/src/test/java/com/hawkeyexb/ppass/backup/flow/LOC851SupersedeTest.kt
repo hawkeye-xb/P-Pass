@@ -12,7 +12,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LOC851SupersedeTest {
-    private val capable = ProbeResult.Reachable("e1", capabilities = setOf(FLOW_SUPERSEDE_CAPABILITY))
+    private val capable = ProbeResult.Reachable(capabilities = setOf(FLOW_SUPERSEDE_CAPABILITY))
     private val original = "blake3:original-with-gps"
 
     /** 一张照片按 #843 之前的样子备份完（地点被抹），然后用户给了位置权限。 */
@@ -72,7 +72,7 @@ class LOC851SupersedeTest {
     @Test
     fun `an older desktop is never asked and costs no foreground service`() = runTest {
         val (rig, _) = backedUpRedacted()
-        rig.probeResult = ProbeResult.Reachable("e1")
+        rig.probeResult = ProbeResult.Reachable()
         val imports = rig.importer.imported.size
         val acquires = rig.foreground.acquires
 

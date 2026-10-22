@@ -62,6 +62,7 @@ import com.hawkeyexb.ppass.ui.IdentityGate
 import com.hawkeyexb.ppass.transport.PairOutcome
 import com.hawkeyexb.ppass.transport.ProtocolVersionGate
 import com.hawkeyexb.ppass.ui.offersAppUpdate
+import com.hawkeyexb.ppass.ui.evictPhotoPreviews
 import com.hawkeyexb.ppass.ui.outdatedTextRes
 import com.hawkeyexb.ppass.ui.pairRefusalDetailRes
 import com.hawkeyexb.ppass.transport.Pairing
@@ -165,6 +166,20 @@ internal fun repairScanTarget(cameraGranted: Boolean): Screen =
 internal fun cameraPermissionResultTarget(granted: Boolean): Screen =
     if (granted) Screen.Scan else Screen.ManualPair
 
+/**
+ * #1119 被拒即清理之后的落点：电脑不认这台手机、本地配对已经删掉——停在这条配对上的页面（首页 / 选相册 / 完成页）
+ * 回欢迎页。正在扫码 / 配对中的页面不动（那是用户在建立新配对）；清的不是这一条配对也不动。
+ */
+internal fun screenAfterPairingCleared(screen: Screen, clearedPairingId: String): Screen {
+    val shown = when (screen) {
+        is Screen.Home -> screen.pairing.pairingId
+        is Screen.Buckets -> screen.pairing.pairingId
+        is Screen.Started -> screen.pairing.pairingId
+        else -> return screen
+    }
+    return if (shown == clearedPairingId) Screen.Welcome else screen
+}
+
 /** System back for secondary app screens; null leaves the root gesture to Android. */
 internal fun systemBackTarget(screen: Screen): Screen? = when (screen) {
     Screen.Welcome, is Screen.Home -> null
@@ -209,6 +224,12 @@ fun PPassApp() {
 
     var screen by remember {
         mutableStateOf<Screen>(pairings.load()?.let { Screen.Home(it) } ?: Screen.Welcome)
+    }
+    // #1119：电脑不认这台手机（被拒即清理，在 Application 里执行）→ 界面回欢迎页。
+    LaunchedEffect(Unit) {
+        app.pairingRejectionCleanup.clearedPairingId.collect { cleared ->
+            if (cleared != null) screen = screenAfterPairingCleared(screen, cleared)
+        }
     }
     // #130：onboarding 只问一次通知权限。第一次运行这一版时定下是不是老用户（已有配对 / 走完过
     // onboarding）——老用户升级不问；靠落盘标记，不靠版本号。
@@ -1424,12 +1445,14 @@ private fun clearLocalPairing(
     val work = WorkManager.getInstance(context)
     applyDisconnectManifest(
         context.filesDir,
+        context.cacheDir,
         object : DisconnectRuntime {
             override fun stopFlowRuntime() = clearFlowRuntime(context, pairing.daemonNodeId)
             override fun cancelUniqueWork(name: String) {
                 work.cancelUniqueWork(name)
             }
             override fun cancelMediaWatch() = com.hawkeyexb.ppass.backup.cancelMediaWatch(context)
+            override fun clearPreviewCache() = evictPhotoPreviews()
         },
     )
     // 登记门禁的真机一半：断开后私有目录里出现清单之外的东西，留一行日志（不拦断开）。

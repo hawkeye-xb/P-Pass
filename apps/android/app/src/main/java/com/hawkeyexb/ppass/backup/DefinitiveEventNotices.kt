@@ -100,9 +100,11 @@ fun decideDefinitiveNotices(prev: DefinitiveNoticeState, facts: DefinitiveFacts)
     val cancel = mutableSetOf<DefinitiveEvent>()
     val paired = facts.pairingId != null
 
-    // 1. 配对失效：键是 pairing id。没配对 / 换了代号才复位；isLost 变 false（进程重启）不算恢复。
+    // 1. 配对失效：键是 pairing id。换了代号才复位；isLost 变 false（进程重启）不算恢复。
+    // #1119：没有配对（facts.pairingId == null）**不**复位——被拒即清理会把配对删掉，这条通知正是留给用户的提示，
+    // 不能在下一次评估时因为「没配对了」就被撤掉；重新配对出新的代号时再复位、撤掉。
     var notifiedLostPairingId = prev.notifiedLostPairingId
-    if (notifiedLostPairingId != null && notifiedLostPairingId != facts.pairingId) {
+    if (notifiedLostPairingId != null && facts.pairingId != null && notifiedLostPairingId != facts.pairingId) {
         notifiedLostPairingId = null
         cancel += DefinitiveEvent.PAIRING_LOST
     }

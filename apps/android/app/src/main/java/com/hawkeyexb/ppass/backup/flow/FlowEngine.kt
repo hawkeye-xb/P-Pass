@@ -78,8 +78,6 @@ internal class FlowEngine(
      * 连接走；没连桌面的一轮（没东西要传 / 桌面不可达）不为它单独建连接，积压的留到下一次连上。
      */
     private val afterCycle: () -> Unit = {},
-    /** 桌面宣布了新的配对 id（同一台桌面重新配对）：持久化它。 */
-    private val onPairingIdAdvertised: (String) -> Unit = {},
     /** 单调时钟（ms），只给刷新节流用；[clock] 是墙钟（审计时间戳）。 */
     private val monotonicClock: () -> Long = { System.nanoTime() / 1_000_000 },
     /** #522：系统额度时钟（开机序号 + elapsedRealtime）。null = 读不到 → 从不跳过申请。 */
@@ -657,7 +655,6 @@ internal class FlowEngine(
             is ProbeResult.Reachable -> {
                 reachedDesktop = true
                 // #652：探测梯在这里还不能撤——桌面可能可达但不健康，那时它正是唤醒；拿到 FGS 才撤（见下）。
-                reach.advertisedPairingId?.takeIf { it.isNotBlank() && it != pid.value }?.let(onPairingIdAdvertised)
                 facts.update { it.copy(desktopHealth = reach.health) }
                 desktopCanSupersede = FLOW_SUPERSEDE_CAPABILITY in reach.capabilities
                 if (!transferWork && !desktopCanSupersede) {

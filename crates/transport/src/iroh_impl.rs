@@ -256,6 +256,25 @@ fn spawn_connection_reaper(cache: Weak<Mutex<ConnectionCache>>) {
     });
 }
 
+/// #1119：登记一条入站连接，连接关闭时自动移除。
+fn track_inbound(inbound: &InboundConnections, peer: NodeId, conn: Connection) {
+    let id = conn.stable_id();
+    inbound
+        .lock()
+        .expect("inbound connections lock")
+        .insert(id, (peer, conn.clone()));
+    let weak = Arc::downgrade(inbound);
+    tokio::spawn(async move {
+        let _ = conn.closed().await;
+        if let Some(inbound) = weak.upgrade() {
+            inbound
+                .lock()
+                .expect("inbound connections lock")
+                .remove(&id);
+        }
+    });
+}
+
 fn watch_connection_close(
     cache: Weak<Mutex<ConnectionCache>>,
     key: ConnectionKey,
@@ -293,7 +312,14 @@ pub struct IrohTransport {
     /// here instead of the ctrl stream (one endpoint = one accept queue;
     /// a daemon serving both planes shares the loop, T-033).
     blobs_handler: Arc<Mutex<Option<crate::blobs::GatedBlobs>>>,
+    /// #1119：每一条仍活着的入站连接（按 QUIC stable id）。连接缓存按
+    /// (设备, ALPN) 只记一条，客户端每次请求新开连接时长连接（订阅）的登记会被
+    /// 覆盖；`close_peer` 要关掉一台设备的**全部**连接，靠的是这张表（三星真机
+    /// E3 抓到：订阅开着，`close_peer` 却一条都没找到）。
+    inbound: InboundConnections,
 }
+
+type InboundConnections = Arc<Mutex<HashMap<usize, (NodeId, Connection)>>>;
 
 /// DAE-02: derive the stable node id from the identity secret key
 /// WITHOUT binding an endpoint.
@@ -350,6 +376,7 @@ impl IrohTransport {
             connections,
             connect_gates: Arc::default(),
             blobs_handler: Arc::default(),
+            inbound: Arc::default(),
         })
     }
 
@@ -443,6 +470,14 @@ impl IrohTransport {
             .lock()
             .expect("connection cache lock")
             .take_peer(peer);
+        conns.extend(
+            self.inbound
+                .lock()
+                .expect("inbound connections lock")
+                .values()
+                .filter(|(p, _)| *p == peer)
+                .map(|(_, c)| c.clone()),
+        );
         if let Some(blobs) = self
             .blobs_handler
             .lock()
@@ -579,6 +614,7 @@ impl Transport for IrohTransport {
 
         let peers = Arc::clone(&self.peers);
         let blobs_handler = Arc::clone(&self.blobs_handler);
+        let inbound = Arc::clone(&self.inbound);
         tokio::spawn(async move {
             while let Some(incoming) = ep.accept().await {
                 let Ok(mut accepting) = incoming.accept() else {
@@ -588,6 +624,7 @@ impl Transport for IrohTransport {
                 let connections = Arc::clone(&connections);
                 let peers = Arc::clone(&peers);
                 let blobs_handler = Arc::clone(&blobs_handler);
+                let inbound = Arc::clone(&inbound);
                 // Finish each handshake off the accept loop so one slow
                 // client cannot stall the others.
                 tokio::spawn(async move {
@@ -606,6 +643,7 @@ impl Transport for IrohTransport {
                         conn.clone(),
                     );
                     watch_connection_close(Arc::downgrade(&connections), key, conn.clone());
+                    track_inbound(&inbound, peer, conn.clone());
                     // Register the dialer's observed addresses so this side
                     // can dial BACK (e.g. blobs pull during backup, T-032) —
                     // inbound peers are reachable without discovery services.

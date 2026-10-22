@@ -53,8 +53,15 @@ public protocol FlowDesktop: Sendable {
 /// [FlowDesktop] 的控制面实现：一切经 [ProtoClient]（FFI 的 `call(method, params_json)`）。
 public struct ControlPlaneDesktop: FlowDesktop {
     public let client: ProtoClient
+    /// 本地保存的配对代号（#1119）。给了就用它核对 `hello`：成功应答里没有 / 为空 / 不是这个代号，等同于业务请求被拒——
+    /// 抛 [DesktopRejected]（`not_paired` / `pairing_mismatch`），心跳、探测、引擎一律走同一条「被拒」路径。
+    /// 本地没有代号（nil）时不核对（没有可比的对象，也没有可清的配对）。
+    public let localPairingId: (@Sendable () -> String?)?
 
-    public init(client: ProtoClient) { self.client = client }
+    public init(client: ProtoClient, localPairingId: (@Sendable () -> String?)? = nil) {
+        self.client = client
+        self.localPairingId = localPairingId
+    }
 
     private func call<P: Encodable, R: Decodable>(_ method: String, _ params: P, as: R.Type) async throws -> R {
         do {
@@ -69,7 +76,12 @@ public struct ControlPlaneDesktop: FlowDesktop {
         guard resp.ok else { throw DesktopRejected(resp.error, method: method) }
     }
 
-    public func hello() async throws -> Hello { try await call(Methods.hello, JSONValue.object([:]), as: Hello.self) }
+    public func hello() async throws -> Hello {
+        let local = localPairingId?()
+        let hello = try await call(Methods.hello, JSONValue.object([:]), as: Hello.self)
+        if let local, let rejected = helloUnpairedRejection(advertised: hello.pairingId, local: local) { throw rejected }
+        return hello
+    }
     public func offer(_ request: FlowFetchRequest) async throws -> FlowStatusReply { try await call(Methods.flowOffer, request, as: FlowStatusReply.self) }
     public func status(_ tuple: FlowTupleRef) async throws -> FlowStatusReply { try await call(Methods.flowStatus, tuple, as: FlowStatusReply.self) }
     public func suspendFetch(_ tuple: FlowTupleRef) async throws { try await callOk(Methods.flowSuspend, tuple) }
@@ -82,13 +94,29 @@ public struct ControlPlaneDesktop: FlowDesktop {
     }
 }
 
-/// 进程内的「配对已失效」事实（某个配对代号被桌面以归类为配对失效的 reason 拒绝过，见 `reasonClass`）。UI 的红卡读它。
+/// #1119：`hello` 成功但电脑不认这台手机——应答里没有 `pairing_id`（缺失 / null / 空白）等同 `not_paired`，
+/// 带的代号与本地保存的不一致等同 `pairing_mismatch`。认得（代号一致）返回 nil。
+public func helloUnpairedRejection(advertised: String?, local: String) -> DesktopRejected? {
+    guard let advertised, !advertised.isBlank else { return DesktopRejected(reason: .registered(.notPaired), method: Methods.hello) }
+    guard advertised == local else { return DesktopRejected(reason: .registered(.pairingMismatch), method: Methods.hello) }
+    return nil
+}
+
+/// 进程内的「配对已失效」事实（某个配对代号被桌面以明确的「未配对」拒绝过：`not_paired` / `pairing_mismatch`，见 `reasonClass`）。
+/// #1119：这个事实一出现就触发 [onLost]（被拒即清理）；回调可能被多条路径重复触发，接收方必须幂等。
 public final class PairingLoss: @unchecked Sendable {
     private let lock = NSLock()
     private var lostPairingId: String?
     private var changes: Int64 = 0
+    private var onLost: (@Sendable (String) -> Void)?
 
     public init() {}
+
+    /// 设置「被拒即清理」的入口（参数 = 被拒的配对代号）。构造之后再接，因为清理要用到还在构造中的 App 对象。
+    public func setOnLost(_ handler: @escaping @Sendable (String) -> Void) {
+        lock.lock(); defer { lock.unlock() }
+        onLost = handler
+    }
 
     public func record(pairingId: String, failure: Error) {
         guard let rejected = failure as? DesktopRejected, rejected.isPairingLost else { return }
@@ -97,9 +125,12 @@ public final class PairingLoss: @unchecked Sendable {
 
     /// `flow.failed` 推送归类为配对失效（#1069：推送与应答同一张表）。
     public func markLost(pairingId: String) {
-        lock.lock(); defer { lock.unlock() }
+        lock.lock()
         lostPairingId = pairingId
         changes += 1
+        let handler = onLost
+        lock.unlock()
+        handler?(pairingId)
     }
 
     public func isLost(pairingId: String) -> Bool {

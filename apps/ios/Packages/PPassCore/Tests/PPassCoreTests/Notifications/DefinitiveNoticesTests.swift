@@ -48,12 +48,16 @@ final class DefinitiveNoticesTests: XCTestCase {
         XCTAssertEqual(decide(rescanned.next, facts(pairingId: "e2", lost: true)).post, [.pairingLost])
     }
 
-    func testNoPairingResetsAndNeverPosts() {
+    /// #1119：被拒即清理删掉配对记录之后，已发的「配对已失效」通知必须留着（用户要看到它），也不重发。
+    /// 反证：把「没有配对」改回复位 + 撤通知（旧行为），cancel 变成 [.pairingLost]、notified 被清空，这条红。
+    func testNoPairingKeepsTheLostNoticeAndNeverPostsAgain() {
         let posted = decide(DefinitiveNoticeState(), facts(lost: true)).next
-        let d = decide(posted, facts(pairingId: nil, lost: true))
-        XCTAssertEqual(d.post, [])
-        XCTAssertEqual(d.cancel, [.pairingLost])
-        XCTAssertNil(d.next.notifiedLostPairingId)
+        for lost in [true, false] {
+            let d = decide(posted, facts(pairingId: nil, lost: lost))
+            XCTAssertEqual(d.post, [])
+            XCTAssertEqual(d.cancel, [], "清理之后没有配对：不撤通知")
+            XCTAssertEqual(d.next.notifiedLostPairingId, "e1", "状态保留：之后重新评估也不重发")
+        }
     }
 
     // MARK: 相册权限（变差才发，回到完整复位，无基线只记）

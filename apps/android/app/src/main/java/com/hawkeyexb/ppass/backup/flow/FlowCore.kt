@@ -237,7 +237,6 @@ interface ItemDelivery {
 sealed interface ProbeResult {
     /** [capabilities]：hello 里桌面宣告的能力（#851 用它判断能不能「用原图替换旧副本」）。 */
     data class Reachable(
-        val advertisedPairingId: String?,
         val health: DesktopHealth? = null,
         val capabilities: Set<String> = emptySet(),
     ) : ProbeResult

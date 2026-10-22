@@ -273,7 +273,7 @@ internal class Rig(
     val control = FakeControl()
     val foreground = FakeForeground(control).also { it.clock = { test.testScheduler.currentTime } }
     val scheduler = FakeScheduler()
-    var probeResult: ProbeResult = ProbeResult.Reachable("e1")
+    var probeResult: ProbeResult = ProbeResult.Reachable()
     var probes = 0
 
     /** 探测开始时调用（可挂起：用来观察检查阶段）。 */

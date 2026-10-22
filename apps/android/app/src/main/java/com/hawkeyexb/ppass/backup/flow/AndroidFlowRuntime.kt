@@ -382,11 +382,6 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
             )
         },
         afterCycle = { auditScope.launch { dispatcher.flush() } },
-        onPairingIdAdvertised = { advertised ->
-            // 同一台桌面换了配对 id：order 表保留（内容寻址，CONFIRMED 跨代号成立），只更新凭证。
-            val pairings = PairingStore(app.filesDir)
-            pairings.load()?.let { current -> if (current.pairingId != advertised) pairings.save(current.copy(pairingId = advertised)) }
-        },
     )
     FlowForegroundHandoff.control = control
     FlowForegroundHandoff.onLost = { reason -> engine.onForegroundLost(reason) }

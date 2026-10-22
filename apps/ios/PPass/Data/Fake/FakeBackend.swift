@@ -100,6 +100,8 @@ final class FakePairing: PairingService {
         try? await Task.sleep(nanoseconds: 600_000_000)
         current = .notPaired
     }
+
+    func clearLocal() async { current = .notPaired }
 }
 
 enum FakeBackendError: Error { case demoHasNoLedger }

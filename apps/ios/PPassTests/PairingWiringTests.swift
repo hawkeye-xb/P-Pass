@@ -288,8 +288,6 @@ final class PairingWiringTests: XCTestCase {
         XCTAssertNil(store.load())
     }
 
-    // MARK: 空 pairingId 修复（#970）
-
     // MARK: 主动断开（#956 关闭裁决：尽力通知一次，之后什么都不做）
 
     /// 电脑不可达：只试一次，配对照样清；清完之后存储根里没有任何文件还带着这台电脑的 peerToken——
@@ -323,79 +321,20 @@ final class PairingWiringTests: XCTestCase {
         XCTAssertTrue(cleared)
     }
 
-    func test_outcome_mapping_matches_android() {
-        XCTAssertEqual(applyPairingIdRepairOutcome(.success("e2")), .repaired("e2"))
-        XCTAssertEqual(applyPairingIdRepairOutcome(.success("")), .lost)
-        XCTAssertEqual(applyPairingIdRepairOutcome(.success("  ")), .lost)
-        XCTAssertEqual(applyPairingIdRepairOutcome(.success(nil)), .lost)
-        XCTAssertEqual(applyPairingIdRepairOutcome(.failure(ScriptedTransport.Unreachable())), .lost)
-        // #1072 / #1073：版本不兼容不是对配对的判决，更新后再修；配对失效的拒绝照旧标失联。
-        XCTAssertEqual(applyPairingIdRepairOutcome(.failure(DesktopRejected(reason: .registered(.desktopOutdated), method: "hello"))), .deferred)
-        XCTAssertEqual(applyPairingIdRepairOutcome(.failure(DesktopRejected(reason: .registered(.unsupportedMethod), method: "hello"))), .deferred)
-        XCTAssertEqual(applyPairingIdRepairOutcome(.failure(DesktopRejected(reason: .registered(.pairingMismatch), method: "hello"))), .lost)
-        XCTAssertTrue(needsPairingIdRepair(""))
-        XCTAssertFalse(needsPairingIdRepair("e1"))
-    }
-
-    func test_repair_writes_back_the_pairing_id_the_desktop_reports() async throws {
-        let store = PairingStore(root: dir)
-        try store.save(record(pairingId: ""))
-        let repairer = PairingIdRepairer(store: store, hello: { "e7" }, logger: LogSink())
-        let result = await repairer.repairIfNeeded()
-        XCTAssertEqual(result, .repaired("e7"))
-        XCTAssertEqual(store.load()?.pairingId, "e7")
-        XCTAssertEqual(store.load()?.lost, false)
-    }
-
-    func test_repair_marks_lost_when_hello_fails_or_has_no_pairing_id() async throws {
-        for hello: @Sendable () async throws -> String? in [{ throw ScriptedTransport.Unreachable() }, { nil }, { "" }] {
-            let store = PairingStore(root: dir)
-            try store.save(record(pairingId: ""))
-            let result = await PairingIdRepairer(store: store, hello: hello, logger: LogSink()).repairIfNeeded()
-            XCTAssertEqual(result, .lost)
-            XCTAssertEqual(store.load()?.lost, true)
-        }
-    }
-
-    func test_repair_is_skipped_when_not_needed_and_tried_once_per_process() async throws {
-        let store = PairingStore(root: dir)
-        let counter = Counter()
-        let repairer = PairingIdRepairer(store: store, hello: { counter.bump(); return "e7" }, logger: LogSink())
-        let unpaired = await repairer.repairIfNeeded()
-        XCTAssertNil(unpaired)
-        try store.save(record(pairingId: "e1"))
-        let healthy = await repairer.repairIfNeeded()
-        XCTAssertNil(healthy)
-        XCTAssertEqual(counter.value, 0)
-
-        try store.save(record(pairingId: ""))
-        _ = await repairer.repairIfNeeded()
-        try store.save(record(pairingId: ""))
-        let again = await repairer.repairIfNeeded()
-        XCTAssertNil(again, "本进程只试一次（对位 Android pairingIdRepairAttempted）")
-        XCTAssertEqual(counter.value, 1)
-    }
-
     // MARK: 引擎接线（#967 / #966）
 
-    func test_advertised_pairing_id_is_persisted_and_the_rest_of_the_record_is_kept() throws {
+    /// 引擎一侧看到 hello 宣布的代号与本地不一致 = pairing_mismatch：按被拒处理（记 PairingLoss → 被拒即清理），不再把新代号写回记录。
+    /// 反证：改回「把宣布的代号写进 pairing.json」，记录被改写、PairingLoss 不触发，两条断言红。
+    func test_advertised_pairing_id_mismatch_is_treated_as_a_rejection_not_adopted() throws {
         let store = PairingStore(root: dir)
         try store.save(record(pairingId: "e1"))
-        FlowWiring.pairingIdAdvertised(store: store, logger: LogSink())("e2")
-        XCTAssertEqual(store.load(), record(pairingId: "e2"))
-    }
-
-    func test_advertised_pairing_id_persist_failure_is_logged() throws {
-        let logs = LogSink()
-        let store = PairingStore(root: dir)
-        try store.save(record(pairingId: "e1"))
-        // 目录只读：文件能读、临时文件建不出来 → 原子写失败。
-        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: dir.path)
-        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path) }
-        FlowWiring.pairingIdAdvertised(store: store, logger: logs)("e2")
-        let line = try XCTUnwrap(logs.lines.first, "写盘失败必须留一行日志")
-        XCTAssertTrue(line.contains("cannot persist new pairing pairingId"), line)
-        XCTAssertEqual(store.load()?.pairingId, "e1", "旧记录原样")
+        let loss = PairingLoss()
+        let fired = Counter()
+        loss.setOnLost { _ in fired.bump() }
+        FlowWiring.pairingIdAdvertised(loss: loss, currentPairingId: { store.load()?.pairingId })("e2")
+        XCTAssertEqual(fired.value, 1)
+        XCTAssertTrue(loss.isLost(pairingId: "e1"))
+        XCTAssertEqual(store.load(), record(pairingId: "e1"), "不采纳电脑宣布的新代号")
     }
 
     func test_audit_after_cycle_flushes_the_outbox_to_the_desktop_and_clears_acknowledged_events() async throws {
@@ -458,4 +397,5 @@ private struct NoopDisconnectRuntime: DisconnectRuntime {
     func stopFlowRuntime() {}
     func cancelScheduledWakes() {}
     func stopMediaChangeObserver() {}
+    func clearThumbnailMemoryCache() {}
 }

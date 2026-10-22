@@ -134,6 +134,8 @@ protocol PairingService: AnyObject {
     func cancel() async
     /// 本地断开（UX-06）：先尽力通知电脑撤销本机（5 秒、失败不阻塞），再按断开清单清本地。成功后状态变 `.notPaired`。
     func disconnect() async
+    /// 只清本地、不通知电脑（#1119）：配对失效卡的「重新连接」——电脑本就不认这台手机，没有可通知的。
+    func clearLocal() async
 }
 
 /// 备份引擎：首页的全部事实 + 唯一的那个按钮。

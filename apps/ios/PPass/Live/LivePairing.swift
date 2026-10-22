@@ -200,6 +200,9 @@ final class LivePairing: PairingService, @unchecked Sendable {
             clearLocal: onDisconnect)
     }
 
+    /// 不通知电脑，直接按断开清单清本地（与被拒即清理同一份）。
+    func clearLocal() async { await onDisconnect() }
+
     private enum MemberHello { case hello(Hello), outdated(OutdatedSide), none }
 
     private func memberHello(_ rpc: (String, Encodable) async throws -> Resp) async -> MemberHello {

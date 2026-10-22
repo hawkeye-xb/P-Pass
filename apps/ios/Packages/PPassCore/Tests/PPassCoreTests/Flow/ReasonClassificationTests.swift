@@ -9,7 +9,7 @@ final class ReasonClassificationTests: XCTestCase {
     /// 应答（offer / status / hello 探测 / 前台心跳 / 配对失效红卡）与 `flow.failed` 推送共用这一张。
     static let table: [(reason: String, cls: String)] = [
         ("not_paired", "pairing_lost"),
-        ("role_forbidden", "pairing_lost"),
+        ("role_forbidden", "item_failure"),
         ("pair_token_invalid", "item_failure"),
         ("phone_outdated", "version_mismatch:phone"),
         ("desktop_outdated", "version_mismatch:desktop"),
@@ -116,6 +116,7 @@ final class ReasonClassificationTests: XCTestCase {
         "pair_token_invalid", "cancelled", "grant_not_found", "grant_conflict", // 配对失效 → 单张失败（照片传不上不算配对问题）
         "unsupported_method", // 单张失败 → 需要更新（电脑太旧）
         "internal", // 单张失败 → 对端失败（电脑上的 P-Pass 出错了）
+        "role_forbidden", // 配对失效 → 单张失败（#1119：已配对只是角色不允许，不是「未配对」，不触发被拒即清理）
     ]
     static let approvedPushChanges: Set = [
         "pairing_mismatch", // 单张失败 → 配对失效（推送与应答同一张表）

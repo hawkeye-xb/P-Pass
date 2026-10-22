@@ -37,6 +37,7 @@ import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PeerAddrParts
 import com.hawkeyexb.ppass.transport.ReasonClass
+import com.hawkeyexb.ppass.transport.helloDeniesPairing
 import com.hawkeyexb.ppass.transport.isPairingLost
 import com.hawkeyexb.ppass.transport.reasonClassOf
 import java.util.concurrent.TimeoutException
@@ -190,9 +191,14 @@ internal class FlowDeliveryPairingLoss {
     fun record(pid: PairingId, failure: Throwable) {
         // 与分类同一个结论（含待拍板的 grant_* 被拒）——红卡和引擎出口不会说两样话。
         if (desktopReasonOf(failure) != null && classifyDeliveryFailure(failure) == DeliveryOutcome.PairingLost) {
-            lostPairingId = pid.value
-            _changes.value += 1
+            recordLost(pid)
         }
+    }
+
+    /** #1119: 桌面明确说不认这条配对（拒绝原因，或 hello 成功却不带本机的 pairing id）。 */
+    fun recordLost(pid: PairingId) {
+        lostPairingId = pid.value
+        _changes.value += 1
     }
 
     fun isLost(pid: PairingId): Boolean = lostPairingId == pid.value
@@ -725,12 +731,20 @@ internal class DaemonDesktopProbe(
             log.log("Flow probe result=$result totalMs=${clock() - started} bindMs=${bindMs ?: "-"} ${trace?.render() ?: "trace=-"}$cause")
         }
         return try {
-            withTimeout(timeoutMs) {
+            val hello = withTimeout(timeoutMs) {
                 val client = desktopFor(current)
                 bindMs = clock() - started
-                val hello = client.probeHello { trace = it }
-                ProbeResult.Reachable(hello.pairingId, desktopHealthOf(hello.health), hello.capabilities.toSet())
-            }.also { report("reachable", null) }
+                client.probeHello { trace = it }
+            }
+            if (helloDeniesPairing(hello.pairingId, current.pairingId)) {
+                // #1119：hello 成功但没有（或不是本机保存的）pairing id = 桌面不认这条配对，与业务请求回 not_paired 同一个事实。
+                report("rejected:not_paired(hello pairing_id=${hello.pairingId ?: "-"})", null)
+                pairingLoss.recordLost(PairingId(current.pairingId))
+                ProbeResult.PairingLost
+            } else {
+                report("reachable", null)
+                ProbeResult.Reachable(desktopHealthOf(hello.health), hello.capabilities.toSet())
+            }
         } catch (rejected: DesktopRejectedException) {
             report("rejected:${rejected.reason}", rejected)
             // #466：#424 之后每轮先探测，桌面移除这台手机时走不到投递——探测这里不记，红卡就永远不亮。

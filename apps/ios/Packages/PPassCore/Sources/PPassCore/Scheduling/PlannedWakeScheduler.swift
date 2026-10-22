@@ -6,6 +6,8 @@ import Foundation
 public protocol BackgroundTaskSubmitter: Sendable {
     /// 挂一条请求（同 identifier 的旧请求被替换）。系统拒绝时抛（模拟器 / 没开「后台 App 刷新」/ identifier 没登记）。
     func submit(_ spec: BackgroundTaskRequestSpec) throws
+    /// 短任务（BGAppRefreshTask，#958）：同 identifier 再提交即替换。
+    func submitShort(earliestBeginDate: Date) throws
     func cancelAll()
 }
 
@@ -15,13 +17,18 @@ public final class PlannedWakeScheduler: WakeScheduler, @unchecked Sendable {
     private let submitter: BackgroundTaskSubmitter
     private let logger: CoreLogger
     private let now: @Sendable () -> Date
+    private let isPaired: @Sendable () -> Bool
     private let lock = NSLock()
 
-    public init(directory: URL, submitter: BackgroundTaskSubmitter, logger: CoreLogger, now: @escaping @Sendable () -> Date = { Date() }) {
+    /// [isPaired]（#1119）：未配对时不向系统挂任何请求（长任务 / 短任务都一样）——没有配对就没有要备份的东西，
+    /// 重排只会让系统白白唤醒 App。唯一的挂请求入口是 `resubmit` / `ensureShortScheduled`，门禁就在这两处。
+    public init(directory: URL, submitter: BackgroundTaskSubmitter, logger: CoreLogger, now: @escaping @Sendable () -> Date = { Date() },
+                isPaired: @escaping @Sendable () -> Bool = { true }) {
         url = directory.appendingPathComponent(Self.fileName)
         self.submitter = submitter
         self.logger = logger
         self.now = now
+        self.isPaired = isPaired
     }
 
     public var plan: BackgroundWakePlan {
@@ -40,6 +47,10 @@ public final class PlannedWakeScheduler: WakeScheduler, @unchecked Sendable {
     }
 
     private func resubmit(_ p: BackgroundWakePlan) {
+        guard isPaired() else {
+            logger.log("background wakes: not paired; not submitting")
+            return
+        }
         let spec = BackgroundWakePlanner.next(p, now: now())
         do {
             try submitter.submit(spec)
@@ -52,6 +63,17 @@ public final class PlannedWakeScheduler: WakeScheduler, @unchecked Sendable {
     /// 进程启动 / 回前台 / 每轮后台任务结束时调：按当前计划把请求挂上（保证至少挂着周期兜底）。
     public func ensureScheduled() {
         resubmit(plan)
+    }
+
+    /// 确保挂着一条短任务请求（earliestBeginDate = `shortTaskEarliest` 之后）。启动、回前台、进后台、被叫醒时都调；未配对时不挂。
+    public func ensureShortScheduled() {
+        guard isPaired() else {
+            logger.log("short task: not paired; not submitting")
+            return
+        }
+        do { try submitter.submitShort(earliestBeginDate: now().addingTimeInterval(BackgroundWakePlanner.shortTaskEarliest)) } catch {
+            logger.log("short task: submit failed: \(error)")
+        }
     }
 
     /// 系统按 [reason] 叫醒、这一轮跑完之后调：计划往前走一步并重新挂。

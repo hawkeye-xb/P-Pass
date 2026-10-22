@@ -227,6 +227,8 @@ dependencies {
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test:rules:1.6.1")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    // #1119：断开后 unique work 的状态要查 WorkManager 自己的（在设备上跑，lane 只编译）。
+    androidTestImplementation("androidx.work:work-testing:2.10.0")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     // Desktop JNA for JVM unit tests — the @aar above only carries
     // Android natives; the iroh jar ships darwin/linux dylibs that JNA

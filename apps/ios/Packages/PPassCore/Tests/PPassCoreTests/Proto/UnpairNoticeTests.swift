@@ -118,6 +118,7 @@ private struct NoRuntime: DisconnectRuntime {
     func stopFlowRuntime() {}
     func cancelScheduledWakes() {}
     func stopMediaChangeObserver() {}
+    func clearThumbnailMemoryCache() {}
 }
 
 private final class UnpairCounter: @unchecked Sendable {

@@ -44,16 +44,10 @@ import com.hawkeyexb.ppass.backup.flow.advanceTransferMark
 import com.hawkeyexb.ppass.backup.flow.transferPermilleOf
 import com.hawkeyexb.ppass.backup.flow.transferRowOf
 import com.hawkeyexb.ppass.backup.flow.waitReasonTextRes
-import com.hawkeyexb.ppass.proto.Hello
-import com.hawkeyexb.ppass.proto.Methods
-import com.hawkeyexb.ppass.proto.ProtoJson
-import com.hawkeyexb.ppass.proto.ProtocolOutdatedException
-import com.hawkeyexb.ppass.proto.outdatedSide
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PairingStore
-import com.hawkeyexb.ppass.transport.parsePeerAddrToken
 import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.log.PLog
 import com.hawkeyexb.ppass.ui.BackupUiState
@@ -76,8 +70,6 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
-import kotlinx.serialization.json.buildJsonObject
 
 class BackupUiStateHolder(
     private val context: Context,
@@ -99,7 +91,6 @@ class BackupUiStateHolder(
     val acknowledgedMissingSourceCount: State<Int> get() = _acknowledgedMissingSourceCount
     private val pairingLostState = HolderPairingLostState()
     val pairingLost: State<Boolean> get() = pairingLostState.value
-    private var pairingIdRepairAttempted = false
 
     // 2026-09-07 真机反馈：命令处理中禁用按钮，同一命令处理完才能再点下一次。
     private val _commandPending = mutableStateOf(false)
@@ -176,7 +167,6 @@ class BackupUiStateHolder(
 
     init {
         scope.launch {
-            repairPairingIdIfNeeded()
             refresh(recount = true)
         }
         // 订阅取代轮询（MOB-88 的思路保留）：引擎视图变化只换视图；order 写入（revision）才重读账目。
@@ -327,30 +317,6 @@ class BackupUiStateHolder(
         cancelSnapshot = null
         _cancelConfirmCount.value = null
         command("cancel-remaining") { gateway?.cancelRemaining(snapshot) }
-    }
-
-    private suspend fun repairPairingIdIfNeeded() {
-        if (pairingIdRepairAttempted || !needsPairingIdRepair(pairing.pairingId)) return
-        pairingIdRepairAttempted = true
-        val outcome = runCatching {
-            withContext(Dispatchers.IO) {
-                withTimeout(5_000) {
-                    val response = client.call(parsePeerAddrToken(pairing.daemonAddrToken), Methods.HELLO, buildJsonObject {})
-                    response.outdatedSide()?.let { throw ProtocolOutdatedException(it) }
-                    check(response.ok) { "hello rejected: ${response.error?.reason}" }
-                    ProtoJson.decodeFromJsonElement(Hello.serializer(), checkNotNull(response.result)).pairingId
-                }
-            }
-        }
-        when (val result = applyPairingIdRepairOutcome(outcome)) {
-            is PairingIdRepairResult.Repaired -> {
-                val store = PairingStore(context.filesDir)
-                store.load()?.let { store.save(it.copy(pairingId = result.pid)) }
-            }
-            PairingIdRepairResult.Lost -> pairingLostState.markLost()
-            // #1072：版本不兼容不是配对失效（首页整屏提示更新）；更新之后再修一次。
-            PairingIdRepairResult.Deferred -> pairingIdRepairAttempted = false
-        }
     }
 
     /**
@@ -625,46 +591,4 @@ internal fun computeTripletSafe(
     }
 } catch (_: Throwable) {
     null
-}
-
-/**
- * UI-10 item 1: `AndroidFlowRuntime.runtimeFor()` returns null when a stored
- * pairing has a blank `pairingId` (legacy pairing.json from before
- * ARCH-06, or one written by a pre-pairing id app version). The home screen then
- * fell back to an empty Flow ledger snapshot — rendering plain `Idle` with a
- * fully clickable Pause/Continue/Cancel that silently did nothing, and no
- * explanation to the user (source-read finding, 2026-09-06: this is a
- * candidate root cause for "暂停/取消没有展示机会").
- *
- * The fix is a silent, one-shot repair attempt, not an immediate "重新扫码"
- * demand: a blank pairing id is recoverable (the Desktop still knows this device
- * and answers `hello` with its current pairing id) whenever the pairing itself
- * was never actually revoked — only escalate to the pairing-lost red card
- * when the repair attempt itself fails.
- */
-internal fun needsPairingIdRepair(pairingId: String): Boolean = pairingId.isBlank()
-
-/** The pure outcome mapping for a silent pairing id-repair `hello` attempt. */
-internal sealed class PairingIdRepairResult {
-    data class Repaired(val pid: String) : PairingIdRepairResult()
-    data object Lost : PairingIdRepairResult()
-    /** #1072: the desktop's version is incompatible — not a verdict on the pairing; try again later. */
-    data object Deferred : PairingIdRepairResult()
-}
-
-/**
- * `outcome` is the result of asking Desktop for its current pairing id (via the
- * same `hello` the Flow delivery preflight already uses — no new protocol).
- * A blank/null pairing id in a successful response is treated the same as a
- * failure: Desktop itself has nothing to offer, so there is nothing to
- * repair to.
- */
-internal fun applyPairingIdRepairOutcome(outcome: Result<String?>): PairingIdRepairResult {
-    if (outcome.exceptionOrNull() is ProtocolOutdatedException) return PairingIdRepairResult.Deferred
-    val pid = outcome.getOrNull()
-    return if (outcome.isSuccess && !pid.isNullOrBlank()) {
-        PairingIdRepairResult.Repaired(pid)
-    } else {
-        PairingIdRepairResult.Lost
-    }
 }

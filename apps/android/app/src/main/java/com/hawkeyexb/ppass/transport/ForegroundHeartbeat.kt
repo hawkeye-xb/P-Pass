@@ -11,7 +11,10 @@
 package com.hawkeyexb.ppass.transport
 
 import com.hawkeyexb.ppass.backup.flow.DesktopRejectedException
+import com.hawkeyexb.ppass.proto.Hello
 import com.hawkeyexb.ppass.proto.Methods
+import com.hawkeyexb.ppass.proto.ProtoJson
+import com.hawkeyexb.ppass.proto.Reason
 import com.hawkeyexb.ppass.proto.Resp
 import com.hawkeyexb.ppass.proto.outdatedSideOf
 import com.hawkeyexb.ppass.proto.reasonKind
@@ -73,6 +76,7 @@ class ForegroundHeartbeat(
             sentinel,
             runCatching { client.call(peer, Methods.HELLO, buildJsonObject {}) },
             onPairingLost = onPairingLost?.let { cb -> { failure: Throwable -> cb(pairing.pairingId, failure) } },
+            localPairingId = pairing.pairingId,
             onReachable = onReachable,
         )
     }
@@ -92,6 +96,8 @@ internal fun applyHeartbeatOutcome(
     outcome: Result<*>,
     // 放在 onReachable 前面：既有调用方用尾随 lambda 传 onReachable，不能被新参数截走。
     onPairingLost: ((Throwable) -> Unit)? = null,
+    // #1119：本机保存的 pairing id。hello 成功却没带它（缺失 / 空 / 不一致）= 桌面不认这条配对。null = 不判这一条。
+    localPairingId: String? = null,
     onReachable: (() -> Unit)? = null,
 ) {
     outcome
@@ -103,6 +109,16 @@ internal fun applyHeartbeatOutcome(
                 if (outdatedSideOf(rejected.reasonKind) != null) return
                 if (isPairingLost(rejected.reasonKind)) {
                     onPairingLost?.invoke(DesktopRejectedException(rejected.reason, "hello"))
+                    return
+                }
+            }
+            if (localPairingId != null && (value as? Resp)?.takeIf { it.ok } != null) {
+                // 解不出来的 hello 不是「未配对」信号，照旧按可达处理。
+                val hello = runCatching {
+                    ProtoJson.decodeFromJsonElement(Hello.serializer(), checkNotNull((value as Resp).result))
+                }.getOrNull()
+                if (hello != null && helloDeniesPairing(hello.pairingId, localPairingId)) {
+                    onPairingLost?.invoke(DesktopRejectedException(Reason.NOT_PAIRED.wire, "hello"))
                     return
                 }
             }

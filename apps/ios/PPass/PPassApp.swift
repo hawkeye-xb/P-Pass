@@ -213,7 +213,7 @@ final class LiveLifecycle {
         case .background:
             inForeground = false
             backend.setActive(false)
-            PPassBackgroundTasks.ensureShortScheduled(logger: backend.logger)
+            backend.scheduler.ensureShortScheduled()
             guard finishing == .invalid else { return }
             backend.window.setFinishingTime(true)
             // 系统在主线程上调 expiration handler，到期前必须结束后台任务，否则进程被杀（#1007）：

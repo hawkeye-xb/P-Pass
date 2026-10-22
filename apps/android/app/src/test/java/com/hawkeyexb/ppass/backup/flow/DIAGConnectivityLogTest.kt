@@ -107,7 +107,7 @@ class DIAGConnectivityLogTest {
             },
             log = FlowLogger { logs += it },
         )
-        assertEquals(ProbeResult.Reachable("e1"), probe.probe())
+        assertEquals(ProbeResult.Reachable(), probe.probe())
         val line = logs.single()
         for (part in listOf("result=reachable", "connectMs=900", "rpcMs=100", "online=yes", "path=relay", "rttMs=180")) {
             assertTrue("$part in $line", line.contains(part))

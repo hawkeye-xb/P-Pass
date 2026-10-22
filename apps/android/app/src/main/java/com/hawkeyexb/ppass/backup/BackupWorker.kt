@@ -18,6 +18,7 @@ import com.hawkeyexb.ppass.backup.flow.WaitReason
 import com.hawkeyexb.ppass.backup.flow.WakeScheduler
 import com.hawkeyexb.ppass.backup.flow.runFlowWake
 import com.hawkeyexb.ppass.log.PLog
+import com.hawkeyexb.ppass.transport.PairingStore
 import java.util.concurrent.TimeUnit
 
 const val BACKUP_WORK_NAME = "ppass-auto-backup"
@@ -91,7 +92,18 @@ internal fun backupWorkRequest(
  * - 条件不满足：一个带相应约束的一次性任务（Wi‑Fi → UNMETERED，电量 → batteryNotLow）。
  */
 class WorkManagerWakeScheduler(private val context: Context) : WakeScheduler {
+    /**
+     * #1119：没有配对就没有东西可传——任何登记唤醒的入口都先过这一道。断开 / 被拒即清理取消了这些任务之后，
+     * 一个还在途的引擎周期收尾时不能再把它们排回去。
+     */
+    private fun unpaired(what: String): Boolean {
+        if (PairingStore(context.filesDir).load() != null) return false
+        PLog.i("PPassFlowWake", "not paired: not scheduling $what")
+        return true
+    }
+
     override fun scheduleUnreachableProbes() {
+        if (unpaired("unreachable probes")) return
         val settings = BackupSettings(context.filesDir).load()
         val probes = UNREACHABLE_PROBE_DELAYS_MINUTES.map { delayMinutes ->
             backupWorkRequest(
@@ -114,6 +126,7 @@ class WorkManagerWakeScheduler(private val context: Context) : WakeScheduler {
     }
 
     override fun scheduleWhenConditionsMet(reason: WaitReason) {
+        if (unpaired("constraint wake")) return
         val spec = when (reason) {
             WaitReason.WIFI -> BackupConstraintsSpec(requiresBatteryNotLow = false, requiresUnmetered = true)
             WaitReason.BATTERY -> BackupConstraintsSpec(
@@ -131,6 +144,7 @@ class WorkManagerWakeScheduler(private val context: Context) : WakeScheduler {
 
     // #522：后台触发（automatic = true：后台备份关着就不跑），约束与其他后台生产者相同。REPLACE：见接口注释。
     override fun scheduleBudgetResetWake(delayMs: Long) {
+        if (unpaired("budget reset wake")) return
         val settings = BackupSettings(context.filesDir).load()
         WorkManager.getInstance(context).enqueueUniqueWork(
             BUDGET_RESET_WAKE_WORK_NAME,
@@ -150,6 +164,7 @@ class WorkManagerWakeScheduler(private val context: Context) : WakeScheduler {
 
     // #827：约束与探测梯相同（只要网络；后台开关、电量由引擎这一轮自己查）。REPLACE：再登记一次就是往后推。
     override fun armResumeSentinel(delayMs: Long) {
+        if (unpaired("resume sentinel")) return
         val settings = BackupSettings(context.filesDir).load()
         WorkManager.getInstance(context).enqueueUniqueWork(
             RESUME_SENTINEL_WORK_NAME,

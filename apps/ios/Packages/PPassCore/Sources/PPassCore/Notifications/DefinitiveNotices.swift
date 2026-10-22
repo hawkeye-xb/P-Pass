@@ -106,9 +106,10 @@ public func decideDefinitiveNotices(prev: DefinitiveNoticeState, facts: Definiti
     var cancel: Set<NoticeEvent> = []
     let paired = facts.pairingId != nil
 
-    // 1. 配对失效：键是 pairingId。没配对 / 换了代号才复位；lost 变 false（进程重启）不算恢复。
+    // 1. 配对失效：键是 pairingId。换了代号（重新扫码）才复位；lost 变 false（进程重启）不算恢复。
+    // #1119：被拒即清理会把配对记录删掉再提示用户，所以「没有配对」不能复位、也不能撤通知——否则通知刚发就被撤。
     var notifiedLostPairingId = prev.notifiedLostPairingId
-    if let notified = notifiedLostPairingId, notified != facts.pairingId {
+    if let notified = notifiedLostPairingId, let current = facts.pairingId, notified != current {
         notifiedLostPairingId = nil
         cancel.insert(.pairingLost)
     }

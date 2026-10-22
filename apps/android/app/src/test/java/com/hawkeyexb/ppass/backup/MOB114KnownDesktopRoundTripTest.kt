@@ -59,7 +59,7 @@ class MOB114KnownDesktopRoundTripTest {
         File(dir(), "backup-state/$nodeId").mkdirs()
         File(dir(), "flow-state/$nodeId").mkdirs()
         File(dir(), "flow-state/$nodeId/discovery-ledger.json").writeText("{}")
-        applyDisconnectManifest(dir(), NoRuntime)
+        applyDisconnectManifest(dir(), File(dir(), "cache-not-used"), NoRuntime)
         migrateLegacyFlowState(dir())
     }
 
@@ -67,6 +67,7 @@ class MOB114KnownDesktopRoundTripTest {
         override fun stopFlowRuntime() = Unit
         override fun cancelUniqueWork(name: String) = Unit
         override fun cancelMediaWatch() = Unit
+        override fun clearPreviewCache() = Unit
     }
 
     @Test

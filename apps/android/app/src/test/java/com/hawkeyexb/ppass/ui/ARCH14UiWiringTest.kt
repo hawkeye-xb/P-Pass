@@ -52,7 +52,7 @@ class ARCH14UiWiringTest {
         val request = holder.substringAfter("fun requestCancelRemaining()").substringBefore("fun restoreSkipped()")
         assertTrue(request.contains("cancelSnapshot = snapshot.takeIf { it.count > 0 }"))
         assertTrue(request.contains("_cancelConfirmCount.value = cancelSnapshot?.count"))
-        val confirm = holder.substringAfter("fun confirmCancelRemaining()").substringBefore("private suspend fun repairPairingIdIfNeeded")
+        val confirm = holder.substringAfter("fun confirmCancelRemaining()").substringBefore("private fun currentFacts")
         assertTrue(confirm.contains("val snapshot = cancelSnapshot ?: return"))
         assertTrue(confirm.contains("gateway?.cancelRemaining(snapshot)"))
         assertFalse("确认时不许重算", confirm.contains("remainingSnapshot()"))

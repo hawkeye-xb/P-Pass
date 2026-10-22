@@ -220,7 +220,7 @@ class C459SourceMissingTest {
         assertEquals(1, rig.unrecoverableAudits().size)
 
         rig.pid = PairingId("e2")
-        rig.probeResult = ProbeResult.Reachable("e2")
+        rig.probeResult = ProbeResult.Reachable()
         rig.trigger(TriggerReason.PERIODIC)
         assertEquals(3, rig.presenceCalls)
         assertEquals("新配对 id下再记一次", 2, rig.unrecoverableAudits().size)

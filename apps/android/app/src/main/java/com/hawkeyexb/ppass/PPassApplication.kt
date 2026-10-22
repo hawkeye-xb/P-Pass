@@ -34,6 +34,7 @@ import com.hawkeyexb.ppass.log.PLog
 import com.hawkeyexb.ppass.transport.AndroidKeystoreIdentityWrapper
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.IdentityStore
+import com.hawkeyexb.ppass.transport.PairingRejectionCleanup
 import com.hawkeyexb.ppass.transport.PairingStore
 import com.hawkeyexb.ppass.transport.NetworkIdleReaper
 import com.hawkeyexb.ppass.transport.cancelLegacyUnpairNotices
@@ -54,6 +55,15 @@ class PPassApplication : Application() {
             AndroidKeystoreIdentityWrapper(),
             beforeNewIdentity = { PairingStore(filesDir).load()?.let { clearLocalPairingLogged(this, it) } },
             log = { PLog.i("PPassIdentity", it) },
+        )
+    }
+
+    /** #1119：被拒即清理（探测 / 投递 / 前台心跳记下的「桌面不认这条配对」→ 删配对并清理，不发 unpair）。 */
+    internal val pairingRejectionCleanup by lazy {
+        PairingRejectionCleanup(
+            currentPairing = { PairingStore(filesDir).load() },
+            loss = flowDeliveryPairingLoss,
+            clear = { clearLocalPairingLogged(this, it) },
         )
     }
 
@@ -98,7 +108,13 @@ class PPassApplication : Application() {
         registerActivityLifecycleCallbacks(ForegroundWatcher())
         networkIdleReaper.setForeground(false)
         // #130 第 1 层：配对失效由投递 / 探测 / 前台心跳记下（#466），记下的那一刻就评估，不等下一次唤醒。
-        noticeScope.launch { flowDeliveryPairingLoss.changes.collect { evaluateDefinitiveEvents(this@PPassApplication) } }
+        // #1119：之后（评估之后——评估要在还有配对时才会发「配对已失效」通知）按被拒即清理删配对、清缓存、停任务。
+        noticeScope.launch {
+            flowDeliveryPairingLoss.changes.collect {
+                evaluateDefinitiveEvents(this@PPassApplication)
+                pairingRejectionCleanup.onLossRecorded()
+            }
+        }
     }
 
     /**

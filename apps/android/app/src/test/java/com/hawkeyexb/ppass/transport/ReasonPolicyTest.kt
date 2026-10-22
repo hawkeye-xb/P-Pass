@@ -43,7 +43,8 @@ class ReasonPolicyTest {
     private val pinned: Map<Reason, ReasonClass> = mapOf(
         Reason.NOT_PAIRED to ReasonClass.PAIRING_LOST,
         Reason.PAIRING_MISMATCH to ReasonClass.PAIRING_LOST,
-        Reason.ROLE_FORBIDDEN to ReasonClass.PAIRING_LOST,
+        // #1119: role_forbidden = paired, but this role may not call that method — never a reason to unpair.
+        Reason.ROLE_FORBIDDEN to ReasonClass.ITEM_FAILED,
         Reason.PHONE_OUTDATED to ReasonClass.OUTDATED,
         Reason.DESKTOP_OUTDATED to ReasonClass.OUTDATED,
         Reason.UNSUPPORTED_METHOD to ReasonClass.OUTDATED,
@@ -126,7 +127,7 @@ class ReasonPolicyTest {
 
     /** The conclusion for [reason] on a delivery channel; the same table for rejections and pushes. */
     private fun expected(reason: String, channel: String): DeliveryOutcome = when (reason) {
-        "not_paired", "pairing_mismatch", "role_forbidden" -> DeliveryOutcome.PairingLost
+        "not_paired", "pairing_mismatch" -> DeliveryOutcome.PairingLost
         "phone_outdated" -> DeliveryOutcome.NeedsUpdate(OutdatedSide.PHONE)
         "desktop_outdated", "unsupported_method" -> DeliveryOutcome.NeedsUpdate(OutdatedSide.DESKTOP)
         "storage_full" -> DeliveryOutcome.PeerFailure(PeerFailureKind.STORAGE_FULL, reason)
@@ -153,7 +154,7 @@ class ReasonPolicyTest {
             rejected(it) is DeliveryOutcome.ItemFailure && classifyPushedFailure(it) is DeliveryOutcome.ItemFailure
         }
         assertEquals(
-            listOf("pair_token_invalid", "bad_request", "not_found", "backup_failed", "grant_not_found", "grant_conflict", "cancelled", "from_the_future"),
+            listOf("role_forbidden", "pair_token_invalid", "bad_request", "not_found", "backup_failed", "grant_not_found", "grant_conflict", "cancelled", "from_the_future"),
             counted,
         )
     }
@@ -186,7 +187,7 @@ class ReasonPolicyTest {
     @Test
     fun `hello probes - pairing lost for not_paired, unreachable otherwise`() = runTest {
         assertEquals(ProbeResult.PairingLost, probe("not_paired"))
-        for (r in listOf("internal", "bad_request", "from_the_future")) {
+        for (r in listOf("internal", "bad_request", "role_forbidden", "from_the_future")) {
             assertEquals(r, ProbeResult.Unreachable, probe(r))
         }
     }
@@ -202,6 +203,8 @@ class ReasonPolicyTest {
         assertEquals(0 to 1, beat("not_paired"))
         assertEquals(1 to 0, beat("internal"))
         assertEquals(1 to 0, beat("from_the_future"))
+        assertEquals("#1119: role_forbidden is a paired phone calling a forbidden method, not an unpairing", 1 to 0, beat("role_forbidden"))
+        assertEquals(0 to 1, beat("pairing_mismatch"))
     }
 
     // ── version: decided at the handshake, before anything else ──

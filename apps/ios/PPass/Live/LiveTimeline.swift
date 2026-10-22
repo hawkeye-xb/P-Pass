@@ -86,10 +86,17 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
         return image
     }
 
+    /// 视频原图缓存目录（`Caches/ppass-videos/`）。断开清单里同名的那一行清的就是它（`OriginalCachePaths.videosDirName`）。
+    static var videoCacheDir: URL {
+        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent(OriginalCachePaths.videosDirName, isDirectory: true)
+    }
+
+    /// 清空缩略图的内存缓存（断开清单的 `thumbnailMemoryCache` 行，#1119）。
+    func clearMemoryCache() { cache.removeAllObjects() }
+
     func cachedOriginal(_ item: TimelineItem) -> URL? {
         guard item.isVideo else { return nil }
-        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("ppass-videos", isDirectory: true)
-        return Self.completeCached(item, in: dir)
+        return Self.completeCached(item, in: Self.videoCacheDir)
     }
 
     /// 取原图（RET-01：取回 = 使用动作）：问电脑要 `asset.blob_ticket`，再走 iroh-blobs 拉回来。
@@ -97,9 +104,7 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
     /// 滑过再滑回来不会重下（系统在空间紧张时会清 Caches，手机是减负端不是第二存储端）。
     func original(_ item: TimelineItem, progress: @escaping (Double) -> Void) async throws -> URL {
         let fm = FileManager.default
-        let dir = item.isVideo
-            ? fm.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("ppass-videos", isDirectory: true)
-            : Self.shareDir
+        let dir = item.isVideo ? Self.videoCacheDir : Self.shareDir
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         if item.isVideo, let hit = Self.completeCached(item, in: dir) { return hit }
 
@@ -125,7 +130,7 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
     }
 
     /// 照片原图的即用即清目录（`tmp/ppass-share/`）。
-    static var shareDir: URL { FileManager.default.temporaryDirectory.appendingPathComponent("ppass-share", isDirectory: true) }
+    static var shareDir: URL { FileManager.default.temporaryDirectory.appendingPathComponent(OriginalCachePaths.shareDirName, isDirectory: true) }
 
     /// 分享面板关闭 / 存相册完成后删掉那份原图。
     static func discardShared(_ url: URL) { try? FileManager.default.removeItem(at: url) }
