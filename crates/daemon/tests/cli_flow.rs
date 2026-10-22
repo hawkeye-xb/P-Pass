@@ -700,7 +700,8 @@ fn without_config_toml_the_resident_daemon_waits_for_the_library_then_restarts()
     let cfg = std::fs::read_to_string(platform_dir.join("config.toml")).expect("config.toml");
     assert!(cfg.contains("Lib A"), "{cfg}");
     assert!(
-        !platform_dir.join("index.sqlite").exists(),
+        // 库索引在 <库>/.ppf/index.sqlite（main.rs）。
+        !platform_dir.join(".ppf").exists(),
         "未配置状态不许在平台目录开库"
     );
 }
