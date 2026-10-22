@@ -1,0 +1,17 @@
+[Unit]
+Description=P-Pass review pairing page (daemon IPC -> HTTP, 本机 127.0.0.1)
+Documentation=https://github.com/hawkeye-xb/P-Pass/blob/main/infra/review-env/README.md
+After=ppass-review.service
+Wants=ppass-review.service
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/ppass-review/pairpage/server.py
+Environment=PPF_IPC_TOKEN_FILE=/var/lib/ppass-review/ipc.token
+Environment=PORT=8787
+Restart=always
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

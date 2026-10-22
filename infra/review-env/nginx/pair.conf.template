@@ -1,0 +1,46 @@
+# 审核配对页 —— nginx 站点（模板）
+#
+# 占位符由 scripts/install.sh 替换：
+#   __PUBLIC_HOST__        对外域名（Cloudflare 一级子域，例如 pair-test.example.com）
+#   __SELF_SIGNED_BASE__   自签证书路径前缀（如 /etc/nginx/selfsigned/pair-test.example.com）
+#
+# 为什么源站用自签：只有 Cloudflare Tunnel 从 127.0.0.1 访问它，浏览器看到的是 CF 边缘证书；
+# 隧道 ingress 里写 noTLSVerify=true。这样不依赖 Let's Encrypt 续期，也不会在审核窗口里过期。
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __PUBLIC_HOST__;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name __PUBLIC_HOST__;
+
+    ssl_certificate     __SELF_SIGNED_BASE__.crt;
+    ssl_certificate_key __SELF_SIGNED_BASE__.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    client_max_body_size 1m;
+
+    # 唯一的门：没有账号密码的人连二维码都拿不到。
+    # 文件必须让 worker 可读（root:www-data 640），否则每个请求都是 500。
+    auth_basic           "P-Pass review";
+    auth_basic_user_file /etc/nginx/.htpasswd-pair;
+
+    limit_req            zone=pairpage burst=40 nodelay;
+    limit_req_status     429;
+
+    add_header X-Robots-Tag "noindex, nofollow, noarchive" always;
+    add_header Referrer-Policy "no-referrer" always;
+
+    location / {
+        proxy_pass http://127.0.0.1:8787;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout 60s;
+    }
+}

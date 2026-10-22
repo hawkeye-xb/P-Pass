@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex, nofollow, noarchive">
+<title>P-Pass · Review</title>
+<style>
+  :root { color-scheme: light dark; --fg:#111; --bg:#fff; --muted:#666; --line:#e5e5e5; --accent:#0a7; --warn-bg:rgba(255,176,32,.14); --warn-line:rgba(190,120,0,.45); }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg:#eee; --bg:#111; --muted:#9a9a9a; --line:#2a2a2a; --accent:#3d9; --warn-bg:rgba(255,176,32,.12); --warn-line:rgba(255,196,84,.4); }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:20px 16px 48px; font:16px/1.55 -apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif;
+         color:var(--fg); background:var(--bg); max-width:520px; margin-inline:auto; }
+  header { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  p.sub { margin:0 0 16px; color:var(--muted); font-size:14px; }
+  #lang { font:13px/1 system-ui,sans-serif; padding:8px 12px; border-radius:8px; border:1px solid var(--line);
+          background:transparent; color:var(--muted); cursor:pointer; flex:none; }
+  .notice { border:1px solid var(--warn-line); background:var(--warn-bg); border-radius:12px; padding:12px 14px; margin:0 0 16px; font-size:14px; }
+  .notice strong { display:block; margin-bottom:4px; }
+  .notice ul { margin:6px 0 0; padding-left:18px; }
+  .card { border:1px solid var(--line); border-radius:14px; padding:16px; margin-bottom:16px; }
+  .qrwrap { text-align:center; }
+  #qr { width:280px; height:280px; max-width:80vw; height:auto; image-rendering:pixelated; background:#fff; border-radius:8px; }
+  .countdown { font-size:14px; color:var(--muted); margin-top:10px; }
+  button { font:inherit; padding:12px 18px; border-radius:10px; border:1px solid var(--line); background:transparent; color:var(--fg); cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+  button:disabled { opacity:.45; cursor:default; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:14px; }
+  .pairline { font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; word-break:break-all; color:var(--muted);
+              background:rgba(127,127,127,.09); padding:10px; border-radius:8px; margin-top:12px; }
+  .pending-item { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid var(--line); }
+  .pending-item:last-child { border-bottom:0; }
+  .dev { font-weight:600; }
+  .meta { font-size:12px; color:var(--muted); }
+  .empty { color:var(--muted); font-size:14px; }
+  .status { font-size:14px; min-height:20px; margin-top:10px; }
+  .ok { color:var(--accent); }
+  .err { color:#d33; }
+  ol.steps { padding-left:20px; margin:8px 0 0; font-size:14px; color:var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1 data-i18n="title">P-Pass · 审核验证环境</h1>
+    <p class="sub" data-i18n="sub">给 Apple 审核用的临时环境：在这台机器上启动一个存储端，让手机配对、备份、浏览。</p>
+  </div>
+  <button id="lang" type="button" aria-label="Language">EN</button>
+</header>
+
+<div class="notice">
+  <strong data-i18n="noticeTitle">⚠️ 仅用于审核验证，不是正式服务</strong>
+  <ul>
+    <li data-i18n="notice1">这里只验证「配对 + 备份 + 浏览」能不能走通，<b>不作为正式的数据传输或长期存储</b></li>
+    <li data-i18n="notice2"><b>请勿上传真实、私人或含敏感信息的照片</b>；如需演示，请用系统自带示例图或截图</li>
+    <li data-i18n="notice3">数据保存在这台临时服务器上，<b>审核结束后统一清空</b>；不要把它当备份目的地</li>
+    <li data-i18n="notice4">访问需要账号密码，请勿把本地址、账号转发给他人</li>
+  </ul>
+</div>
+
+<div class="card qrwrap">
+  <img id="qr" alt="QR" src="">
+  <div class="countdown" id="countdown" data-i18n="generating">正在生成…</div>
+  <div class="row" style="justify-content:center">
+    <button class="primary" id="refresh" data-i18n="refresh">换一张码</button>
+    <button id="copy" data-i18n="copy">复制配对串</button>
+  </div>
+  <div class="pairline" id="pairline">—</div>
+  <div class="status" id="status"></div>
+</div>
+
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:baseline">
+    <strong data-i18n="pendingTitle">待确认的设备</strong><span class="meta" id="pendingmeta"></span>
+  </div>
+  <div id="pending" class="empty" style="margin-top:10px" data-i18n="noPending">还没有请求。请先在手机上扫码。</div>
+</div>
+
+<div class="card">
+  <strong data-i18n="howTitle">怎么用</strong>
+  <ol class="steps">
+    <li data-i18n="how1">手机打开 P-Pass → 添加存储设备 → 扫码（或点「手动输入」粘贴上面的配对串）</li>
+    <li data-i18n="how2">回到这个页面，点待确认列表里的「允许」</li>
+    <li data-i18n="how3">手机开始备份；备份完成后可在手机上浏览这台机器上的照片</li>
+  </ol>
+</div>
+
+<script>
+const I18N = {
+  zh: {
+    title: "P-Pass · 审核验证环境",
+    sub: "给 Apple 审核用的临时环境：在这台机器上启动一个存储端，让手机配对、备份、浏览。",
+    noticeTitle: "⚠️ 仅用于审核验证，不是正式服务",
+    notice1: "这里只验证「配对 + 备份 + 浏览」能不能走通，<b>不作为正式的数据传输或长期存储</b>",
+    notice2: "<b>请勿上传真实、私人或含敏感信息的照片</b>；如需演示，请用系统自带示例图或截图",
+    notice3: "数据保存在这台临时服务器上，<b>审核结束后统一清空</b>；不要把它当备份目的地",
+    notice4: "访问需要账号密码，请勿把本地址、账号转发给他人",
+    refresh: "换一张码", copy: "复制配对串", generating: "正在生成…",
+    left: s => `二维码剩余 ${s}`, expired: "二维码已过期，点「换一张码」",
+    qrAlt: "配对二维码",
+    pendingTitle: "待确认的设备", noPending: "还没有请求。请先在手机上扫码。",
+    count: n => `${n} 个`, known: "已配对过", newDev: "新设备", unnamed: "(未命名设备)",
+    allow: "允许", deny: "拒绝",
+    okCopy: "配对串已复制", failCopy: "复制失败，长按上面的串手动复制",
+    failGen: m => `生成失败：${m}`, failRead: m => `读取失败：${m}`, failOp: m => `操作失败：${m}`,
+    allowed: n => `已允许「${n}」`, denied: n => `已拒绝「${n}」`, noEffect: "这次点击没有生效（请求可能已失效）",
+    howTitle: "怎么用",
+    how1: "手机打开 P-Pass → 添加存储设备 → 扫码（或点「手动输入」粘贴上面的配对串）",
+    how2: "回到这个页面，点待确认列表里的「允许」",
+    how3: "手机开始备份；备份完成后可在手机上浏览这台机器上的照片",
+    langBtn: "EN", html: "zh-CN",
+  },
+  en: {
+    title: "P-Pass · App Review Sandbox",
+    sub: "A temporary environment for App Review: a storage host on this machine so the app can pair, back up and browse.",
+    noticeTitle: "⚠️ Review verification only — not a production service",
+    notice1: "This page only verifies that pairing, backup and browsing work. It is <b>not a production data path or long-term storage</b>.",
+    notice2: "<b>Please do not upload real, private or sensitive photos.</b> Use built-in sample images or screenshots for the demo.",
+    notice3: "Data lives on this temporary server and <b>is wiped after the review</b>. Do not use it as a backup destination.",
+    notice4: "Access requires a username and password — please do not share this address or the credentials.",
+    refresh: "New code", copy: "Copy pairing string", generating: "Generating…",
+    left: s => `QR code expires in ${s}`, expired: "QR code expired — tap “New code”",
+    qrAlt: "Pairing QR code",
+    pendingTitle: "Devices awaiting approval", noPending: "No requests yet. Scan the QR code with the app first.",
+    count: n => `${n}`, known: "Previously paired", newDev: "New device", unnamed: "(unnamed device)",
+    allow: "Allow", deny: "Deny",
+    okCopy: "Pairing string copied", failCopy: "Copy failed — long-press the string above to copy manually",
+    failGen: m => `Failed to generate: ${m}`, failRead: m => `Failed to load: ${m}`, failOp: m => `Action failed: ${m}`,
+    allowed: n => `Approved “${n}”`, denied: n => `Denied “${n}”`, noEffect: "That tap had no effect — the request may have expired",
+    howTitle: "How to use",
+    how1: "Open P-Pass on the phone → add a storage device → scan the QR code (or tap “Manual input” and paste the pairing string)",
+    how2: "Come back to this page and tap “Allow” next to the pending device",
+    how3: "The phone starts backing up; once done, the photos on this machine are browsable in the app",
+    langBtn: "中文", html: "en",
+  },
+};
+
+const qsLang = new URLSearchParams(location.search).get("lang");
+const stored = localStorage.getItem("ppass-review-lang");
+let lang = (qsLang === "zh" || qsLang === "en") ? qsLang
+         : stored || ((navigator.language || "").toLowerCase().startsWith("zh") ? "zh" : "en");
+const t = k => I18N[lang][k];
+
+function applyLang() {
+  document.documentElement.lang = t("html");
+  document.title = I18N[lang].title.split(" · ")[0] + " · Review";
+  document.querySelectorAll("[data-i18n]").forEach(el => {
+    const v = t(el.dataset.i18n);
+    if (typeof v === "string") el.innerHTML = v;
+  });
+  document.getElementById("lang").textContent = t("langBtn");
+  document.getElementById("qr").alt = t("qrAlt");
+}
+
+const TTL = 600; // 秒，daemon 侧 10 分钟
+let qrString = "";
+let deadline = 0;
+let confirming = false;
+
+const fmt = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+function say(msg, cls) { const el = document.getElementById("status"); el.textContent = msg || ""; el.className = "status " + (cls || ""); }
+
+async function newQr() {
+  document.getElementById("countdown").textContent = t("generating");
+  try {
+    const r = await fetch("/api/qr", { cache: "no-store" });
+    const j = await r.json();
+    if (!j.ok) throw new Error(JSON.stringify(j.error).slice(0, 200));
+    qrString = j.qr;
+    document.getElementById("qr").src = "/api/qr.png?d=" + encodeURIComponent(qrString);
+    document.getElementById("pairline").textContent = qrString;
+    deadline = Date.now() + TTL * 1000;
+    say("");
+  } catch (e) { say(t("failGen")(e.message), "err"); }
+}
+
+async function copyQr() {
+  if (!qrString) return;
+  try { await navigator.clipboard.writeText(qrString); say(t("okCopy"), "ok"); }
+  catch { say(t("failCopy"), "err"); }
+}
+
+function tick() {
+  if (!deadline) return;
+  const left = Math.max(0, Math.round((deadline - Date.now()) / 1000));
+  const cd = document.getElementById("countdown");
+  cd.textContent = left > 0 ? t("left")(fmt(left)) : t("expired");
+  document.getElementById("qr").style.opacity = left === 0 ? .25 : 1;
+}
+
+async function poll() {
+  try {
+    const r = await fetch("/api/pending", { cache: "no-store" });
+    const j = await r.json();
+    const box = document.getElementById("pending");
+    if (!j.ok) { box.className = "empty"; box.textContent = t("failRead")(JSON.stringify(j.error).slice(0, 160)); return; }
+    const list = (j.pending || []).filter(p => !p.expired);
+    document.getElementById("pendingmeta").textContent = list.length ? t("count")(list.length) : "";
+    if (!list.length) { box.className = "empty"; box.textContent = t("noPending"); return; }
+    box.className = "";
+    box.innerHTML = "";
+    for (const p of list) {
+      const row = document.createElement("div");
+      row.className = "pending-item";
+      const info = document.createElement("div");
+      info.innerHTML = `<div class="dev"></div><div class="meta"></div>`;
+      info.querySelector(".dev").textContent = p.name || t("unnamed");
+      info.querySelector(".meta").textContent =
+        `${p.known ? t("known") : t("newDev")} · ${new Date(p.requested_at).toLocaleTimeString()}`;
+      const yes = document.createElement("button");
+      yes.className = "primary"; yes.textContent = t("allow"); yes.disabled = confirming;
+      yes.onclick = () => confirmPair(true, yes);
+      const no = document.createElement("button");
+      no.textContent = t("deny");
+      no.onclick = () => confirmPair(false, no);
+      const wrap = document.createElement("div"); wrap.className = "row"; wrap.style.marginTop = "0";
+      wrap.append(yes, no);
+      row.append(info, wrap);
+      box.append(row);
+    }
+  } catch (e) { /* 轮询失败不打扰 */ }
+}
+
+async function confirmPair(accept, btn) {
+  if (confirming) return;
+  confirming = true; btn.disabled = true;
+  try {
+    const r = await fetch("/api/confirm", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ accept }),
+    });
+    const j = await r.json();
+    if (!j.ok) throw new Error(JSON.stringify(j.error).slice(0, 200));
+    if (j.decided) say(accept ? t("allowed")(j.device) : t("denied")(j.device), "ok");
+    else say(t("noEffect"), "err");
+  } catch (e) { say(t("failOp")(e.message), "err"); }
+  confirming = false;
+  poll();
+}
+
+document.getElementById("lang").onclick = () => {
+  lang = lang === "zh" ? "en" : "zh";
+  localStorage.setItem("ppass-review-lang", lang);
+  applyLang();
+  tick();
+  poll();
+};
+document.getElementById("refresh").onclick = newQr;
+document.getElementById("copy").onclick = copyQr;
+
+applyLang();
+newQr();
+poll();
+setInterval(tick, 1000);
+setInterval(poll, 2000);
+</script>
+</body>
+</html>
