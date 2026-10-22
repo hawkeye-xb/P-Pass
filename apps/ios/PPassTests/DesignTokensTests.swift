@@ -60,6 +60,23 @@ final class DesignTokensTests: XCTestCase {
         }
     }
 
+    /// #943：iOS 对 mobile-ui 的偏离只能登记在 tokens.json platforms.ios，且每条都有理由。
+    /// 生成物里的覆盖清单与源文件逐键一致（漏生成 / 手改生成物都会红）。
+    func testIosOverridesMatchSourceAndCarryReasons() throws {
+        let url = RepoPaths.root.appendingPathComponent("assets/design/tokens.json")
+        let root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let ios = try XCTUnwrap((root["platforms"] as? [String: Any])?["ios"] as? [String: Any], "tokens.json 缺 platforms.ios")
+        let source = ios.filter { !$0.key.hasPrefix("$") }
+        XCTAssertEqual(Set(source.keys), Set(PPUI.iosOverrides.keys), "覆盖清单漂移——跑 just ios-tokens 重新生成")
+        for (key, raw) in source {
+            let entry = try XCTUnwrap(raw as? [String: Any], "\(key) 不是 {value, why}")
+            let got = try XCTUnwrap(PPUI.iosOverrides[key])
+            XCTAssertEqual(got.ios, entry["value"] as? String, key)
+            XCTAssertFalse(got.why.trimmingCharacters(in: .whitespaces).isEmpty, "\(key) 没写理由")
+            XCTAssertNotEqual(got.android, got.ios, "\(key) 与 Android 相同，不是偏离，删掉这条覆盖")
+        }
+    }
+
     /// 手机规则（tokens.json rules）：正文 ≥17、点击区 ≥56。生成值若被改小，这里先红。
     func testMobileFloorsHold() {
         XCTAssertGreaterThanOrEqual(PPSize.bodyMin, 17)

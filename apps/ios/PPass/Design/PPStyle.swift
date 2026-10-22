@@ -50,8 +50,13 @@ enum PPFont {
     static var title3: Font { serif(24, relativeTo: .title3) }
     static var title2: Font { serif(30, relativeTo: .title2) }
     static var largeTitle: Font { serif(36, relativeTo: .largeTitle) }
-    /// 首页英雄数字（Android HomeScreen 40sp Newsreader）。
-    static var heroNumber: Font { serif(40, relativeTo: .largeTitle) }
+    /// 首页英雄数字与「/ N 张」：Android 是 Newsreader **Regular**（不是 semibold），字号走 tokens.json mobile-ui。
+    static var heroNumber: Font { serif(PPUI.TextSize.heroNumber, .regular, relativeTo: .largeTitle) }
+    static var heroOfN: Font { serif(PPUI.TextSize.heroOfN, .regular, relativeTo: .headline) }
+    /// 首页卡片（引导 / 故障 / 失联 / 重新清点）：Android 标题是无衬线粗体、不是衬线大字；iOS 字号见 platforms.ios。
+    static var cardTitle: Font { sans(PPUI.TextSize.cardTitle, .bold, relativeTo: .headline) }
+    static var cardBody: Font { sans(PPUI.TextSize.cardBody) }
+    static var statusLine: Font { sans(PPUI.TextSize.statusLine, relativeTo: .footnote) }
     static func brand(_ size: CGFloat, relativeTo style: Font.TextStyle = .largeTitle) -> Font { serif(size, relativeTo: style) }
 }
 
@@ -151,15 +156,15 @@ struct PPButtonStyle: ButtonStyle {
     }
 }
 
-/// 行内的次级小按钮（暂停 / 继续、重试）：paper 底 + border-strong 描边 + ink-60 字，高度随字。
+/// 行内的次级小按钮（暂停 / 继续、重试）：paper 底 + border-strong 描边 + ink 字（Android HeroSecondaryButton），高度随字。
 struct PPChipButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(PPFont.sans(15, .bold, relativeTo: .subheadline))
-            .foregroundStyle(PPColor.ink60)
-            .padding(.horizontal, 16).frame(minHeight: 44)
+            .foregroundStyle(PPColor.ink)
+            .padding(.horizontal, PPUI.Layout.chipPaddingX).frame(minHeight: 44)
             .background(PPColor.paper, in: RoundedRectangle(cornerRadius: PPRadius.control, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: PPRadius.control, style: .continuous).stroke(PPColor.borderStrong, lineWidth: 1))
             .opacity(isEnabled ? (configuration.isPressed ? 0.7 : 1) : 0.5)
@@ -246,12 +251,13 @@ struct PPDivider: View {
 extension View {
     func ppToast(_ text: Binding<String?>) -> some View { modifier(PPToast(text: text)) }
 
-    /// 原生 `List` / `Form` 套品牌：paper 底、行底 linen、分隔线 hairline、文字 ink。
+    /// 原生 `List` / `Form` 套品牌：paper 底、分隔线 hairline、文字 ink。
+    /// 行底色**不在这里**：`listRowBackground` 挂在 List 上不会传给各行（iOS 26 实测，行仍是系统白 #FFFFFF），
+    /// 必须挂在 Section 或行上——用 `ppTinted(_:)`。
     func ppList() -> some View {
         self.font(PPFont.body)
             .scrollContentBackground(.hidden)
             .background(PPColor.paper.ignoresSafeArea())
-            .listRowBackground(PPColor.linen)
             .listRowSeparatorTint(PPColor.hairline)
             .foregroundStyle(PPColor.ink)
             .tint(PPColor.ink)
@@ -269,6 +275,19 @@ extension View {
             .background(fill.ignoresSafeArea())
     }
 
-    /// 列表行的含义色淡底（token 的 *-bg）。
+    /// 列表行的含义色淡底（token 的 *-bg）。挂在 Section 上对整组生效。
     func ppTinted(_ bg: Color?) -> some View { listRowBackground(bg ?? PPColor.linen) }
+
+    /// 首页卡片的间距对位 Android（tokens.json mobile-ui.layout：顶部 14、卡间 18）。
+    /// 原生 insetGrouped 默认是顶部 35、卡间 35——那是给分组标题留的位置，首页没有分组标题。
+    /// `listSectionSpacing` / `contentMargins` 是 iOS 17+；iOS 16 退回系统默认间距（只是松一些，不影响内容）。
+    @ViewBuilder func ppHomeSpacing() -> some View {
+        if #available(iOS 17, *) {
+            self.listSectionSpacing(PPUI.Layout.cardGap)
+                .contentMargins(.top, PPUI.Layout.pageTop, for: .scrollContent)
+                .environment(\.defaultMinListRowHeight, PPUI.Layout.rowMinHeight)
+        } else {
+            self.environment(\.defaultMinListRowHeight, PPUI.Layout.rowMinHeight)
+        }
+    }
 }

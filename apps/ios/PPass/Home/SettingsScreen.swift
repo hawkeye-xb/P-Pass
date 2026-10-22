@@ -37,12 +37,6 @@ struct SettingsScreen: View {
                         .accessibilityIdentifier("backgroundNotice")
                     }
                 }
-                if let free = app.facts.view?.desktopFreeBytes, free < DesktopHealth.lowSpaceBytes {
-                    Section {
-                        Text(L.s("desktop_low_space_hint"))
-                            .font(PPFont.body).foregroundStyle(PPColor.waiting)
-                    }
-                }
                 if app.facts.missingSourceUnacknowledged > 0 {
                     Section {
                         VStack(alignment: .leading, spacing: 10) {
@@ -60,9 +54,10 @@ struct SettingsScreen: View {
                     Section {
                         VStack(alignment: .leading, spacing: 10) {
                             Text(L.s("pairing_lost_title"))
-                                .font(PPFont.title3).foregroundStyle(PPColor.act)
-                            Text(L.s("pairing_lost_body")).font(PPFont.body).foregroundStyle(PPColor.ink60)
-                            PPButton(title: L.s("reconnect"), kind: .danger) { app.startOver() }
+                                .font(PPFont.cardTitle).foregroundStyle(PPColor.act)
+                            Text(L.s("pairing_lost_body")).font(PPFont.cardBody).foregroundStyle(PPColor.ink60)
+                            // 同 Android：出路按钮是 ink 主按钮；红色只在标题上表示「需要处理」。
+                            PPButton(title: L.s("reconnect")) { app.startOver() }
                         }
                         .padding(.vertical, 6)
                         .ppTinted(PPColor.actBg)
@@ -71,12 +66,13 @@ struct SettingsScreen: View {
                     Section {
                         VStack(alignment: .leading, spacing: 10) {
                             Text(L.s("state_trouble"))
-                                .font(PPFont.title3).foregroundStyle(PPColor.act)
-                            Text(L.s("run_failed")).font(PPFont.body).foregroundStyle(PPColor.ink60)
+                                .font(PPFont.cardTitle).foregroundStyle(PPColor.act)
+                            Text(L.s("run_failed")).font(PPFont.cardBody).foregroundStyle(PPColor.ink60)
                             Button(L.s(showDetails ? "trouble_details_hide" : "trouble_details_show")) { showDetails.toggle() }
-                                .font(PPFont.subheadline).buttonStyle(.borderless)
+                                .font(PPFont.sans(PPUI.TextSize.detailToggle, .bold, relativeTo: .footnote)).underline()
+                                .foregroundStyle(PPColor.ink40).buttonStyle(.borderless)
                             if showDetails { Text(detail).font(PPFont.monoSmall).foregroundStyle(PPColor.ink40).textSelection(.enabled) }
-                            PPButton(title: L.s("try_again"), kind: .danger) { app.retry() }
+                            PPButton(title: L.s("try_again")) { app.retry() }
                         }
                         .padding(.vertical, 6)
                         .ppTinted(PPColor.actBg)
@@ -86,6 +82,7 @@ struct SettingsScreen: View {
             }
             .listStyle(.insetGrouped)
             .ppList()
+            .ppHomeSpacing()
             .toolbar(.hidden, for: .navigationBar) // 同 Android：无页标题
             .confirmationDialog(cancelSnapshot.map { L.p("cancel_remaining_confirm_title", $0.count) } ?? "",
                                 isPresented: $asking, titleVisibility: .visible) {
@@ -132,46 +129,53 @@ struct SettingsScreen: View {
                         if let snap = await app.remainingSnapshot() { cancelSnapshot = snap; asking = true }
                     }
                 } label: {
-                    Text(L.p("cancel_remaining_label", Int(n))).font(PPFont.body).foregroundStyle(PPColor.ink)
+                    Text(L.p("cancel_remaining_label", Int(n))).font(Self.labelFont).foregroundStyle(PPColor.ink)
                 }
                 .disabled(app.commandInFlight)
             }
             if app.facts.skippedByUser > 0 {
                 Button { app.restoreSkipped() } label: {
                     HStack {
-                        Text(L.s("cancelled_round_cell_label")).font(PPFont.body).foregroundStyle(PPColor.ink)
+                        Text(L.s("cancelled_round_cell_label")).font(Self.labelFont).foregroundStyle(PPColor.ink)
                         Spacer(minLength: 8)
-                        Text(L.p("cancelled_round_cell_value", Int(app.facts.skippedByUser))).font(PPFont.subheadline).foregroundStyle(PPColor.ink40)
+                        Text(L.p("cancelled_round_cell_value", Int(app.facts.skippedByUser))).font(Self.valueFont).foregroundStyle(PPColor.ink40)
                     }
                 }
                 .disabled(app.commandInFlight)
             }
             if app.facts.missingSourceAcknowledged > 0 {
                 HStack {
-                    Text(L.s("missing_source_archive_label")).font(PPFont.body)
+                    Text(L.s("missing_source_archive_label")).font(Self.labelFont)
                     Spacer(minLength: 8)
-                    Text(L.p("missing_source_archive_value", Int(app.facts.missingSourceAcknowledged))).font(PPFont.subheadline).foregroundStyle(PPColor.ink40)
+                    Text(L.p("missing_source_archive_value", Int(app.facts.missingSourceAcknowledged))).font(Self.valueFont).foregroundStyle(PPColor.ink40)
                 }
             }
             Toggle(L.s("auto_backup_pause"), isOn: Binding(get: { app.autoBackup }, set: { app.setAutoBackup($0) }))
-                .font(PPFont.body).tint(PPColor.safe)
+                .font(Self.labelFont).tint(PPColor.safe)
             Toggle(L.s("setting_wifi_only"), isOn: Binding(get: { app.wifiOnly }, set: { app.setWifiOnly($0) }))
-                .font(PPFont.body).tint(PPColor.safe)
+                .font(Self.labelFont).tint(PPColor.safe)
             VStack(alignment: .leading, spacing: 2) {
                 Toggle(L.s("rule_notify"), isOn: Binding(get: { app.notifyToggleOn }, set: { app.setNotifyToggle($0) }))
-                    .font(PPFont.body).tint(PPColor.safe)
-                Text(L.s("rule_notify_hint")).font(PPFont.footnote).foregroundStyle(PPColor.ink40)
+                    .font(Self.labelFont).tint(PPColor.safe)
+                Text(L.s("rule_notify_hint")).font(Self.hintFont).foregroundStyle(PPColor.ink40)
                 if app.notificationAuthorization == .denied {
                     // iOS 系统框只弹一次，被拒之后只能去系统设置打开（06-ios-variants）。
-                    Text(L.s("rule_notify_denied_hint")).font(PPFont.footnote).foregroundStyle(PPColor.ink40)
+                    Text(L.s("rule_notify_denied_hint")).font(Self.hintFont).foregroundStyle(PPColor.ink40)
                 }
             }
         }
+        .ppTinted(PPUI.Surface.settingsCard)
         Section {
             row(L.s("storage_computer"), value: app.desktopName ?? L.s("storage_device_default"), route: .storage)
             row(L.s("setting_version"), value: AppVersion.current.displayLine, route: .diagnostics)
         }
+        .ppTinted(PPUI.Surface.settingsCard)
     }
+
+    // 设置行字号：tokens.json mobile-ui.type（iOS 覆盖为系统文字样式，见 platforms.ios）。
+    private static let labelFont = PPFont.sans(PPUI.TextSize.rowLabel)
+    private static let valueFont = PPFont.sans(PPUI.TextSize.rowValue, relativeTo: .subheadline)
+    private static let hintFont = PPFont.sans(PPUI.TextSize.rowHint, relativeTo: .footnote)
 
     /// 「备份哪些相册」：只数已选且现存的（Android #541 / #836 同口径），0 或从未保存 → 「未选相册」。
     private var scopeValue: String {
@@ -184,9 +188,9 @@ struct SettingsScreen: View {
     private func row(_ title: String, value: String, route: Route) -> some View {
         NavigationLink(value: route) {
             HStack(spacing: 12) {
-                Text(title).font(PPFont.body).foregroundStyle(PPColor.ink)
+                Text(title).font(Self.labelFont).foregroundStyle(PPColor.ink)
                 Spacer(minLength: 8)
-                Text(value).font(PPFont.subheadline).foregroundStyle(PPColor.ink40).lineLimit(2).multilineTextAlignment(.trailing)
+                Text(value).font(Self.valueFont).foregroundStyle(PPColor.ink40).lineLimit(2).multilineTextAlignment(.trailing)
             }
         }
     }

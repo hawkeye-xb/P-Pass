@@ -64,15 +64,21 @@ final class PhotoImporter: MediaImporter, @unchecked Sendable {
     }
 
     func importMedia(_ details: MediaDetails) async throws -> ImportResult {
+        let assetId = details.snapshot.mediaId
+        #if DEBUG
+        // 仅调试包（#337 E3）：取之前先用「不许走网络」探一次，记下原图此刻在不在本机——取完之后系统可能已把它留在本机。
+        let locality = " local=\(await OriginalLocalityProbe.isLocal(assetId: assetId).map { $0 ? "yes" : "no" } ?? "unknown")"
+        #else
+        let locality = ""
+        #endif
+        let progress = OriginalProgress()
+        let started = Date()
         let original: FetchedOriginal
         do {
-            original = try await fetcher.fetch(assetId: details.snapshot.mediaId)
+            original = try await fetcher.fetch(assetId: assetId, progress: { progress.record($0) })
         } catch let failure as OriginalFetchFailure {
-            switch failure {
-            case .sourceMissing: return .sourceMissing
-            case .network(let reason): return .originalUnavailable(reason: reason)
-            default: throw failure
-            }
+            guard let result = Self.result(for: failure) else { throw failure }
+            return result
         }
         try Task.checkCancellation()
         let path = original.fileURL.path
@@ -81,7 +87,23 @@ final class PhotoImporter: MediaImporter, @unchecked Sendable {
         held[imported.hash]?.discard()
         held[imported.hash] = original
         lock.unlock()
+        // 成功路径的判据行（#337）：资源类型（rawValue：photo=1 video=2，编辑过为 fullSizePhoto=5 / fullSizeVideo=6）、字节数、系统进度回调次数
+        // （真机实测本机原图也会回调，不能据此判断走了网络；在不在本机看调试包的 local=）、耗时、BLAKE3 前缀（与桌面库对账）。
+        let (callbacks, last) = progress.snapshot()
+        AppLog.log("original fetched \(LogRedact.id(assetId)) type=\(original.info.resourceType.rawValue) bytes=\(original.sizeBytes) "
+            + "progress_callbacks=\(callbacks) last_progress=\(String(format: "%.2f", last)) "
+            + "ms=\(Int(Date().timeIntervalSince(started) * 1000)) hash=\(imported.hash.prefix(16))\(locality)")
         return .imported(contentHash: imported.hash, sizeBytes: Int64(imported.size))
+    }
+
+    /// D4 分类 → 引擎的导入结果。nil = 资源确实不可得，抛错由引擎按单张失败计次；其余都不计失败预算。
+    static func result(for failure: OriginalFetchFailure) -> ImportResult? {
+        switch failure {
+        case .sourceMissing: return .sourceMissing
+        case .network(let reason): return .originalUnavailable(reason: reason)
+        case .localStorageFull(let reason): return .localStorageFull(reason: reason)
+        case .unavailable: return nil
+        }
     }
 
     func release(_ contentHash: String) {
@@ -89,6 +111,22 @@ final class PhotoImporter: MediaImporter, @unchecked Sendable {
         lock.lock()
         held.removeValue(forKey: contentHash)?.discard()
         lock.unlock()
+    }
+}
+
+/// 取原图时系统回调的进度（跨线程）。真机实测本机原图也会回调，只作参考。
+final class OriginalProgress: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    private var last = 0.0
+
+    func record(_ value: Double) {
+        lock.lock(); count += 1; last = value; lock.unlock()
+    }
+
+    func snapshot() -> (count: Int, last: Double) {
+        lock.lock(); defer { lock.unlock() }
+        return (count, last)
     }
 }
 

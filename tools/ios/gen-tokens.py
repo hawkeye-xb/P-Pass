@@ -16,6 +16,10 @@ What is generated:
   - every `size.mobile.*` single value   → PPSize.<camelCase>; ranges "30px–52px" → <name>Min/<name>Max
   - `font.*` first family in the stack   → PPFontFamily.<name>     (e.g. "Newsreader")
   - PPTokenSource: the raw strings as they appear in tokens.json (what the XCTest compares)
+  - `mobile-ui.*` resolved with `platforms.ios` → PPUI.TextSize / PPUI.Layout / PPUI.Surface (#943)
+    base values are Android's; an iOS override must name an existing base key and carry a `why`.
+    Value `system` = keep the native SwiftUI List default, so no constant is generated for it;
+    every override (system or not) is listed in PPUI.iosOverrides so deviations are greppable.
 Desktop-only sizes and the CSS-shorthand `size.overline` are not mobile tokens and are skipped.
 """
 from __future__ import annotations
@@ -78,6 +82,32 @@ def first_family(stack: str) -> str:
     return first
 
 
+MUI_SECTIONS = (("type", "TextSize", "字号（pt）"), ("layout", "Layout", "间距 / 尺寸（pt）"), ("surface", "Surface", "底色"))
+
+
+def resolve_mobile_ui(tokens: dict) -> tuple[dict, list]:
+    """mobile-ui 基础值叠上 platforms.ios。返回 {section: {key: value}} 与覆盖清单 [(全键, 基础值, iOS 值, why)]。"""
+    mui = tokens.get("mobile-ui", {})
+    resolved = {sec: {k: v["value"] for k, v in mui.get(sec, {}).items()} for sec, _, _ in MUI_SECTIONS}
+    overrides = []
+    for full, spec in tokens.get("platforms", {}).get("ios", {}).items():
+        if full.startswith("$"):
+            continue
+        parts = full.split(".")
+        if len(parts) != 3 or parts[0] != "mobile-ui" or parts[2] not in resolved.get(parts[1], {}):
+            sys.exit(f"gen-tokens: platforms.ios.{full} 覆盖的键在 mobile-ui 里不存在")
+        why = (spec.get("why") or "").strip()
+        if not why:
+            sys.exit(f"gen-tokens: platforms.ios.{full} 没写 why——偏离 Android 必须写理由")
+        sec, key = parts[1], parts[2]
+        overrides.append((full, resolved[sec][key], spec["value"], why))
+        resolved[sec][key] = spec["value"]
+    for key, val in resolved["surface"].items():
+        if val != "system" and val not in tokens["color"]:
+            sys.exit(f"gen-tokens: mobile-ui.surface.{key} = {val!r} 不是 color 的键名")
+    return resolved, overrides
+
+
 def render(tokens: dict) -> str:
     colors = tokens["color"]
     radii = tokens["radius"]
@@ -138,6 +168,37 @@ def render(tokens: dict) -> str:
             w(f"    static let {camel(k)}Max: CGFloat = {num(r.group(2))}")
         else:
             sys.exit(f"gen-tokens: size.mobile.{k} 既不是 px 单值也不是 px 区间：{val!r}")
+    w("}")
+    w("")
+    resolved, overrides = resolve_mobile_ui(tokens)
+    over = {o[0]: o for o in overrides}
+    w("/// 手机首页语义尺寸（tokens.json mobile-ui）。基础值 = Android；iOS 偏离登记在 platforms.ios（见 iosOverrides）。")
+    w("/// 值为 system 的项不生成常量：那一项用原生 List 的默认值，代码里不要再写数字。")
+    w("enum PPUI {")
+    for sec, name, title in MUI_SECTIONS:
+        w(f"    /// {title}")
+        w(f"    enum {name} {{")
+        for k, val in resolved[sec].items():
+            full = f"mobile-ui.{sec}.{k}"
+            if full in over:
+                w(f"        /// iOS 覆盖（Android {over[full][1]}）：见 iosOverrides[{swift_str(full)}]")
+            if val == "system":
+                w(f"        // {camel(k)}: system（原生默认，不生成常量）")
+                continue
+            if sec == "surface":
+                w(f"        static let {camel(k)} = PPColor.{camel(val)}")
+                continue
+            m = PX_RE.match(val)
+            if not m:
+                sys.exit(f"gen-tokens: {full} 不是 px 单值也不是 system：{val!r}")
+            w(f"        static let {camel(k)}: CGFloat = {num(m.group(1))}")
+        w("    }")
+        w("")
+    w("    /// platforms.ios 的全部覆盖：键 → (Android 基础值, iOS 值, 理由)。")
+    w("    static let iosOverrides: [String: (android: String, ios: String, why: String)] = [")
+    for full, base, val, why in overrides:
+        w(f"        {swift_str(full)}: ({swift_str(base)}, {swift_str(val)}, {swift_str(why)}),")
+    w("    ]")
     w("}")
     w("")
     w("/// 品牌字体族（字体栈里的第一个）。字体文件随 App 捆绑。")

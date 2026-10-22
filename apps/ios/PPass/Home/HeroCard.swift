@@ -16,26 +16,35 @@ struct HeroCard: View {
                     switch render {
                     case .accessBlocked: accessCard
                     case .countsUnreadable:
-                        Text(L.s("hero_counts_unreadable")).font(PPFont.body).foregroundStyle(PPColor.ink60)
+                        Text(L.s("hero_counts_unreadable")).font(PPFont.cardBody).foregroundStyle(PPColor.ink60)
                     case .noAlbums:
-                        Text(L.s("backup_scope_none")).font(PPFont.body).foregroundStyle(PPColor.ink60)
+                        Text(L.s("backup_scope_none")).font(PPFont.cardBody).foregroundStyle(PPColor.ink60)
                     case .unreadable:
-                        Text(L.s("triplet_unavailable")).font(PPFont.body).foregroundStyle(PPColor.ink60)
+                        Text(L.s("triplet_unavailable")).font(PPFont.cardBody).foregroundStyle(PPColor.ink60)
                     case .unreconciled:
-                        Text(L.s("hero_unreconciled_title")).font(PPFont.title2)
-                        Text(L.s("hero_unreconciled_body")).font(PPFont.body).foregroundStyle(PPColor.ink60)
+                        // Android：16 粗体 waiting 色——琥珀 = 「在等它自己算完」，不是结论，不用大号衬线。
+                        Text(L.s("hero_unreconciled_title")).font(PPFont.cardTitle).foregroundStyle(PPColor.waiting)
+                        Text(L.s("hero_unreconciled_body")).font(PPFont.cardBody).foregroundStyle(PPColor.ink60)
                     case .triplet:
                         if let triplet { tripletView(triplet) }
                     }
                 }
                 if render != .accessBlocked {
                     // 设计稿：hero 内分隔线 = safe 18%（绿系），与整卡 safe-bg 同色系，不再是系统行分隔线。
-                    Rectangle().fill(PPColor.safe.opacity(0.18)).frame(height: 1).padding(.vertical, 12)
+                    Rectangle().fill(PPColor.safe.opacity(0.18)).frame(height: 1)
+                        .padding(.top, PPUI.Layout.heroDividerAbove).padding(.bottom, PPUI.Layout.heroDividerBelow)
                     progressRow
                 }
             }
             .padding(.vertical, 6)
             .ppTinted(render == .accessBlocked ? PPColor.actBg : PPColor.safeBg)
+        } footer: {
+            // 桌面空间不足：Android 是英雄卡下方、卡外的一行琥珀小字（不加底、不成卡），iOS 对位分组脚注。
+            if let free = app.facts.view?.desktopFreeBytes, free < DesktopHealth.lowSpaceBytes {
+                Text(L.s("desktop_low_space_hint"))
+                    .font(PPFont.sans(PPUI.TextSize.statusLine, .medium, relativeTo: .footnote))
+                    .foregroundStyle(PPColor.waiting).textCase(nil)
+            }
         }
     }
 
@@ -44,10 +53,11 @@ struct HeroCard: View {
         let partial = app.access == .partial
         return VStack(alignment: .leading, spacing: 10) {
             Text(L.s(partial ? "partial_access_title" : "no_media_access_title"))
-                .font(PPFont.title3).foregroundStyle(PPColor.act)
-            Text(L.s(partial ? "partial_access_body" : "no_media_access_body")).font(PPFont.body)
+                .font(PPFont.cardTitle).foregroundStyle(PPColor.act)
+            Text(L.s(partial ? "partial_access_body" : "no_media_access_body")).font(PPFont.cardBody)
                 .foregroundStyle(PPColor.ink60)
-            PPButton(title: L.s("partial_access_action"), kind: .danger) {
+            // 「去设置」不是危险操作：同 Android 用 ink 主按钮，红色只留给标题说「需要处理」。
+            PPButton(title: L.s("partial_access_action")) {
                 if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
             }
         }
@@ -58,17 +68,17 @@ struct HeroCard: View {
         let color = safe ? PPColor.safe : PPColor.ink
         return VStack(alignment: .leading, spacing: 6) {
             ViewThatFits(in: .horizontal) {
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: PPUI.Layout.heroOfNGap) {
                     Text(t.m.formatted()).font(PPFont.heroNumber).lineLimit(1)
-                    Text(L.f("hero_of_n", t.n.formatted())).font(PPFont.headline).lineLimit(1)
+                    Text(L.f("hero_of_n", t.n.formatted())).font(PPFont.heroOfN).lineLimit(1)
                 }
                 VStack(alignment: .leading, spacing: 2) {
                     Text(t.m.formatted()).font(PPFont.heroNumber).lineLimit(1).minimumScaleFactor(0.5)
-                    Text(L.f("hero_of_n", t.n.formatted())).font(PPFont.headline)
+                    Text(L.f("hero_of_n", t.n.formatted())).font(PPFont.heroOfN)
                 }
             }
             .foregroundStyle(color)
-            Text(lastLine(t)).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
+            Text(lastLine(t)).font(PPFont.sans(PPUI.TextSize.heroMeta, relativeTo: .subheadline)).foregroundStyle(PPColor.ink60)
         }
     }
 
@@ -85,7 +95,7 @@ struct HeroCard: View {
         return HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 0) {
                 if state.isRunning { transferSlots(state) } else {
-                    Text(statusText(state)).font(PPFont.sans(13.5, .regular)).foregroundStyle(statusColor(state))
+                    Text(statusText(state)).font(PPFont.statusLine).foregroundStyle(statusColor(state))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

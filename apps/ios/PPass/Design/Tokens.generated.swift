@@ -131,6 +131,64 @@ enum PPSize {
     static let headlineMax: CGFloat = 52
 }
 
+/// 手机首页语义尺寸（tokens.json mobile-ui）。基础值 = Android；iOS 偏离登记在 platforms.ios（见 iosOverrides）。
+/// 值为 system 的项不生成常量：那一项用原生 List 的默认值，代码里不要再写数字。
+enum PPUI {
+    /// 字号（pt）
+    enum TextSize {
+        /// iOS 覆盖（Android 15px）：见 iosOverrides["mobile-ui.type.row-label"]
+        static let rowLabel: CGFloat = 17
+        /// iOS 覆盖（Android 14px）：见 iosOverrides["mobile-ui.type.row-value"]
+        static let rowValue: CGFloat = 15
+        /// iOS 覆盖（Android 12px）：见 iosOverrides["mobile-ui.type.row-hint"]
+        static let rowHint: CGFloat = 13
+        /// iOS 覆盖（Android 16px）：见 iosOverrides["mobile-ui.type.card-title"]
+        static let cardTitle: CGFloat = 17
+        /// iOS 覆盖（Android 14px）：见 iosOverrides["mobile-ui.type.card-body"]
+        static let cardBody: CGFloat = 17
+        static let heroNumber: CGFloat = 40
+        static let heroOfN: CGFloat = 18
+        /// iOS 覆盖（Android 14px）：见 iosOverrides["mobile-ui.type.hero-meta"]
+        static let heroMeta: CGFloat = 15
+        static let statusLine: CGFloat = 13.5
+        static let detailToggle: CGFloat = 13
+    }
+
+    /// 间距 / 尺寸（pt）
+    enum Layout {
+        /// iOS 覆盖（Android 20px）：见 iosOverrides["mobile-ui.layout.page-gutter"]
+        // pageGutter: system（原生默认，不生成常量）
+        static let pageTop: CGFloat = 14
+        static let cardGap: CGFloat = 18
+        /// iOS 覆盖（Android 20px）：见 iosOverrides["mobile-ui.layout.card-padding"]
+        // cardPadding: system（原生默认，不生成常量）
+        static let rowMinHeight: CGFloat = 52
+        static let heroOfNGap: CGFloat = 6
+        static let heroDividerAbove: CGFloat = 14
+        static let heroDividerBelow: CGFloat = 12
+        static let chipPaddingX: CGFloat = 18
+    }
+
+    /// 底色
+    enum Surface {
+        /// iOS 覆盖（Android paper）：见 iosOverrides["mobile-ui.surface.settings-card"]
+        static let settingsCard = PPColor.linen
+    }
+
+    /// platforms.ios 的全部覆盖：键 → (Android 基础值, iOS 值, 理由)。
+    static let iosOverrides: [String: (android: String, ios: String, why: String)] = [
+        "mobile-ui.type.row-label": ("15px", "17px", "iOS 字号以系统文字样式为基准、随动态字号缩放（body 17 / subheadline 15 / footnote 13），与系统「设置」App 一致；照搬 Android 的 15/14 在 iOS 上偏小，也不跟系统同步。"),
+        "mobile-ui.type.row-value": ("14px", "15px", "iOS 字号以系统文字样式为基准、随动态字号缩放（body 17 / subheadline 15 / footnote 13），与系统「设置」App 一致；照搬 Android 的 15/14 在 iOS 上偏小，也不跟系统同步。"),
+        "mobile-ui.type.row-hint": ("12px", "13px", "iOS 字号以系统文字样式为基准、随动态字号缩放（body 17 / subheadline 15 / footnote 13），与系统「设置」App 一致；照搬 Android 的 15/14 在 iOS 上偏小，也不跟系统同步。"),
+        "mobile-ui.type.card-title": ("16px", "17px", "iOS 字号以系统文字样式为基准、随动态字号缩放（body 17 / subheadline 15 / footnote 13），与系统「设置」App 一致；照搬 Android 的 15/14 在 iOS 上偏小，也不跟系统同步。标题取 headline 档（17 粗体）。"),
+        "mobile-ui.type.card-body": ("14px", "17px", "iOS 字号以系统文字样式为基准、随动态字号缩放（body 17 / subheadline 15 / footnote 13），与系统「设置」App 一致；照搬 Android 的 15/14 在 iOS 上偏小，也不跟系统同步。"),
+        "mobile-ui.type.hero-meta": ("14px", "15px", "iOS 字号以系统文字样式为基准、随动态字号缩放（body 17 / subheadline 15 / footnote 13），与系统「设置」App 一致；照搬 Android 的 15/14 在 iOS 上偏小，也不跟系统同步。"),
+        "mobile-ui.layout.page-gutter": ("20px", "system", "原生 insetGrouped 的分组边距（iPhone 16 / iOS 26 实测 16pt），与系统「设置」App 一致；改成 20 要覆盖系统布局，没有收益。"),
+        "mobile-ui.layout.card-padding": ("20px", "system", "英雄卡是 List 的一行，内边距由系统行距决定（实测左右 16、上下约 17–21，差 1–4pt）；硬设 20 要和系统最小行高较劲。"),
+        "mobile-ui.surface.settings-card": ("paper", "linen", "insetGrouped 的分组画不了 1px 描边，paper 底放在 paper 页面上看不出卡片边界，改用 linen（内嵌卡片色）。"),
+    ]
+}
+
 /// 品牌字体族（字体栈里的第一个）。字体文件随 App 捆绑。
 enum PPFontFamily {
     static let serif = "Newsreader"

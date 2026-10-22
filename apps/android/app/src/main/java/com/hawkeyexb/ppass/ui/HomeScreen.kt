@@ -30,6 +30,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -1174,7 +1175,17 @@ private fun RuleSwitchRow(
                 )
             }
         }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        // 开启色与 iOS 设置页 Toggle 同为 safe（SettingsScreen.swift .tint(PPColor.safe)）；
+        // 关闭态与禁用态走 PPTheme 的 colorScheme。
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            colors = SwitchDefaults.colors(
+                checkedTrackColor = PPColor.Safe,
+                checkedThumbColor = PPColor.Paper,
+                checkedBorderColor = PPColor.Safe,
+            ),
+        )
     }
 }
 

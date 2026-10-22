@@ -4,7 +4,7 @@
  *
  * Only 3 colours carry meaning: green=safe, amber=waiting, red=act. 只有三种含义色。
  * Green appears only for confirmed success or safely stored data; it never marks pending work. 绿色只表示已确认成功或数据已安全存好，绝不表示进行中。
- * Body text: >=17px on phone, >=16px on desktop. 正文下限。
+ * Body text: >=16px on desktop. Phone copy follows mobile-ui.type (Android values; iOS overrides them to system text styles in platforms.ios); size.mobile.body-min (17px) is the iOS body style. 正文：桌面 >=16；手机按 mobile-ui.type，iOS 在 platforms.ios 覆盖为系统文字样式。
  * Tap targets: >=56px on phone, >=44px on desktop. 点击区下限。
  * <=40 words per screen: one conclusion, one explanation. 每屏一个结论一句解释。
  * No jargon stands alone — every term gets a plain sentence. 术语必须带白话。
