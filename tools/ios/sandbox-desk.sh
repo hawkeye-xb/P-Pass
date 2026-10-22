@@ -11,7 +11,7 @@
 #   desk_qr <工作目录>                           取一次配对串 → 全局 PAIR_QR（每次取都是新的一次性令牌）
 #   desk_ipc <工作目录> <方法> [参数 JSON]       对这一台发 IPC（多台并存时每次都按目录选令牌）
 #   desk_photo_count <工作目录>                  这台桌面库里的照片数（status.photo_count）
-#   desk_auto_allow <工作目录>                   后台循环：pending 里的设备一律允许（脚本扮演桌面主人）
+#   desk_auto_allow <工作目录> [日志…]           后台循环：按客户端打出的 PAIR_CODE 行输码允许（脚本扮演桌面主人）
 #   desk_pause / desk_resume <工作目录>          SIGSTOP / SIGCONT：桌面不可达 / 恢复
 #   desk_stop <工作目录>                         关 stdin（daemon 3 秒内自退）→ 不退再杀；删掉它的临时库
 # 生命周期：daemon 的 stdin 接一个 FIFO，写端由一个 sleep 进程占着；desk_stop 杀掉它 = EOF，daemon 正常收尾。
@@ -70,16 +70,23 @@ desk_photo_count() {
   desk_ipc "$1" status | jq -r '.result.photo_count'
 }
 
-desk_auto_allow() { # 后台跑；pid 记在 <工作目录>/allow，desk_stop 收掉
+desk_auto_allow() { # $1 = 工作目录，其余 = 额外要扫的日志文件；后台跑，pid 记在 <工作目录>/allow，desk_stop 收掉
+  # #1118：允许 = 输入手机显示的验证码。客户端（testclient / androidTest / iOS e2e）把
+  # `PAIR_CODE=<6 位> node=<手机 NodeId>` 打到日志；这里从 <工作目录>/codes/* 与额外文件里按
+  # node 找码，用它确认那一行。没找到码的行不动（盲点允许已不可能）。
   local d="$1"
+  shift
+  mkdir -p "$d/codes"
   (
-    local resp n pid
+    local resp n pid code
     pid=$(cat "$d/pid")
     while kill -0 "$pid" 2>/dev/null; do
       if resp=$(desk_ipc "$d" pairing.pending 2>/dev/null); then
         for n in $(printf '%s' "$resp" | jq -r '.result.pending[]?.node_id // empty'); do
-          desk_ipc "$d" pairing.confirm "$(jq -cn --arg n "$n" '{accept: true, node_id: $n}')" >/dev/null 2>&1 \
-            && echo "  桌面 $(basename "$d")：已允许 ${n:0:8}…"
+          code=$(cat "$d"/codes/* "$@" 2>/dev/null | sed -n "s/.*PAIR_CODE=\([0-9]\{6\}\) node=$n.*/\1/p" | tail -1)
+          [ -n "$code" ] || continue
+          desk_ipc "$d" pairing.confirm "$(jq -cn --arg n "$n" --arg c "$code" '{accept: true, node_id: $n, code: $c}')" >/dev/null 2>&1 \
+            && echo "  桌面 $(basename "$d")：已用验证码允许 ${n:0:8}…"
         done
       fi
       sleep 0.3
