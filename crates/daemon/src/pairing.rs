@@ -423,7 +423,10 @@ impl Pairing {
     /// 刚复制出去）。另外，已经提交过配对申请的那台设备在申请结束（含结束后的
     /// 保留期）之前照常放行，否则业主关掉二维码后它就没法轮询自己的结果。
     pub fn admits(&self, peer: transport::NodeId, now_ms: i64) -> bool {
-        let inner = self.inner.lock().expect("pairing lock");
+        let mut inner = self.inner.lock().expect("pairing lock");
+        // Same retention rule as every other ledger read: a settled request past its retention no
+        // longer admits its peer (nothing else may have swept since — no periodic prune runs).
+        inner.sweep_tickets(now_ms);
         Self::open_in(&inner, now_ms) || inner.tickets.values().any(|t| t.peer == peer)
     }
 
@@ -1160,6 +1163,54 @@ mod tests {
         assert!(
             !pairing.admits(transport::NodeId([0x02; 32]), 2_001),
             "别的设备不放行"
+        );
+    }
+
+    /// 统一回归发现（#1122）：申请落定、过了保留期以后，这台设备不再过握手准入——被移除的手机
+    /// 重连要在握手层收到 401，不能因为一条没人清的旧申请记录一直放行。
+    #[tokio::test]
+    async fn a_settled_request_stops_admitting_after_its_retention() {
+        let db = Db::open_in_memory().await.unwrap();
+        let (pairing, mut rx) = Pairing::new(db, transport::NodeId([0xAB; 32]), None);
+        let phone = transport::NodeId([0x03; 32]);
+        pairing.start([0x33; 12], 2_000);
+        let (_start, msg_a) =
+            pair_pake::PhoneStart::start("246810", &[0x33; 12], phone.0, pairing.node_id().0)
+                .unwrap();
+        let req = proto::PairRequest {
+            token: "33".repeat(12),
+            device_name: "phone".into(),
+            pake_a: msg_a.iter().map(|b| format!("{b:02x}")).collect(),
+            ..Default::default()
+        };
+        let submitted = pairing.submit_request(phone, &req, 2_000).await.unwrap();
+        rx.recv()
+            .await
+            .unwrap()
+            .decide(PairDecision::Reject)
+            .unwrap();
+        // Wait for the decision task to settle the ticket.
+        for _ in 0..200 {
+            let settled = !matches!(
+                pairing
+                    .view(phone, &submitted.request_id, 2_000)
+                    .map(|v| v.state),
+                Some(PairState::Pending)
+            );
+            if settled {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        assert!(
+            pairing.admits(phone, 2_001),
+            "落定后保留期内照常放行（好轮询结果）"
+        );
+        // Far past any retention, whatever clock stamped the settlement.
+        let much_later = 4_000_000_000_000;
+        assert!(
+            !pairing.admits(phone, much_later),
+            "过了保留期，这条申请记录不再放行"
         );
     }
 
