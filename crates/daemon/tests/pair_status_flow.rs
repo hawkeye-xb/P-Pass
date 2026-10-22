@@ -11,12 +11,15 @@
 //! The owner side is the real `IpcServer` queue (the desktop's), driven
 //! through `confirm` exactly as the IPC `pairing.confirm` method does.
 
+mod common;
+
 use std::sync::Arc;
 use std::time::Duration;
 
 use daemon::{DiagAgg, IpcServer, Pairing, Router, PENDING_TTL_MS, TOKEN_TTL_MS};
 use proto::{
-    codes, methods, PairRequest, PairStatusReply, PairStatusRequest, PairSubmitted, Req, Resp,
+    codes, methods, PairConfirmRequest, PairRequest, PairStatusReply, PairStatusRequest,
+    PairSubmitted, Req, Resp,
 };
 use storage::Db;
 use transport::{IrohTransport, Transport, TransportConfig};
@@ -123,20 +126,74 @@ fn token_of(qr: &str) -> String {
     qr.rsplit("&t=").next().unwrap().to_string()
 }
 
+/// #1118: the phone's half of the code exchange, kept per request so the polling helpers can
+/// finish it once the owner typed the code (`pair.status` then carries `pake_b`).
+static STARTS: std::sync::Mutex<Vec<(String, pair_pake::PhoneStart)>> =
+    std::sync::Mutex::new(Vec::new());
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn unhex(s: &str) -> Vec<u8> {
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+        .collect()
+}
+
 async fn submit(ctp: &IrohTransport, d: &Desk, token: &str, name: &str) -> Resp {
-    rpc(
-        ctp,
-        d.tp.node_id(),
-        methods::PAIR_REQUEST,
-        serde_json::to_value(PairRequest {
+    let (req, start) = common::with_pake(
+        &PairRequest {
             token: token.into(),
             device_name: name.into(),
             ack_then_poll: true,
             ..Default::default()
+        },
+        ctp.node_id(),
+        d.tp.node_id(),
+    );
+    let resp = rpc(
+        ctp,
+        d.tp.node_id(),
+        methods::PAIR_REQUEST,
+        serde_json::to_value(req).unwrap(),
+    )
+    .await;
+    if resp.ok {
+        // A resubmit reuses the first request, whose ledger entry holds the first `pake_a`.
+        let id = serde_json::from_value::<PairSubmitted>(resp.result.clone().unwrap())
+            .unwrap()
+            .request_id;
+        let mut starts = STARTS.lock().unwrap();
+        if !starts.iter().any(|(rid, _)| *rid == id) {
+            starts.push((id, start));
+        }
+    }
+    resp
+}
+
+/// #1118: the phone sends `pair.confirm` with its key confirmation; returns the raw reply.
+async fn confirm_with(
+    ctp: &IrohTransport,
+    d: &Desk,
+    request_id: &str,
+    start: pair_pake::PhoneStart,
+    pake_b: &str,
+) -> (Resp, pair_pake::PhoneConfirm) {
+    let (check, confirm_a) = start.finish(&unhex(pake_b)).unwrap();
+    let resp = rpc(
+        ctp,
+        d.tp.node_id(),
+        methods::PAIR_CONFIRM,
+        serde_json::to_value(PairConfirmRequest {
+            request_id: request_id.into(),
+            confirm_a: hex(&confirm_a),
         })
         .unwrap(),
     )
-    .await
+    .await;
+    (resp, check)
 }
 
 fn submitted(resp: Resp) -> PairSubmitted {
@@ -163,6 +220,9 @@ async fn status(ctp: &IrohTransport, d: &Desk, request_id: &str) -> PairStatusRe
 }
 
 /// Poll until the state leaves `pending`; returns (final reply, pending polls seen).
+/// #1118: when the owner's code arrives (`pake_b` on a pending status) the phone finishes the
+/// exchange and sends `pair.confirm`; its accepted reply (carrying the desktop's proof) is the
+/// final reply. Polls never go faster than 250 ms (#1122 rate limit for unpaired peers).
 async fn poll_until_settled(
     ctp: &IrohTransport,
     d: &Desk,
@@ -170,12 +230,33 @@ async fn poll_until_settled(
     every: Duration,
     max: Duration,
 ) -> (PairStatusReply, usize) {
+    let every = every.max(Duration::from_millis(250));
     let started = std::time::Instant::now();
     let mut pending_seen = 0;
     loop {
         let r = status(ctp, d, request_id).await;
         if r.state != proto::PairStatusState::Pending {
             return (r, pending_seen);
+        }
+        if let Some(pake_b) = r.pake_b.as_deref() {
+            let start = {
+                let mut starts = STARTS.lock().unwrap();
+                starts
+                    .iter()
+                    .position(|(rid, _)| rid == request_id)
+                    .map(|i| starts.remove(i).1)
+            };
+            if let Some(start) = start {
+                let (resp, check) = confirm_with(ctp, d, request_id, start, pake_b).await;
+                assert!(resp.ok, "the right code must be confirmed: {resp:?}");
+                let done: PairStatusReply = serde_json::from_value(resp.result.unwrap()).unwrap();
+                check
+                    .verify(&unhex(
+                        done.confirm_b.as_deref().expect("accepted carries cB"),
+                    ))
+                    .expect("the desktop proves the same code");
+                return (done, pending_seen);
+            }
         }
         pending_seen += 1;
         assert!(started.elapsed() < max, "still pending after {max:?}");
@@ -227,7 +308,7 @@ async fn owner_clicks_allow_after_20s_and_phone_reaches_accepted_via_status() {
     let phone_id = ctp.node_id().0;
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(20)).await;
-        let _ = ipc.confirm(Some(&phone_id), None, true);
+        let _ = ipc.confirm(Some(&phone_id), None, common::allow());
     });
 
     let (r, pending_seen) = poll_until_settled(
@@ -297,7 +378,7 @@ async fn resubmitting_the_same_token_reuses_the_request_and_the_queue_stays_one_
     assert_eq!(d.ipc.pending_names().len(), 1);
 
     assert!(matches!(
-        d.ipc.confirm(Some(&ctp.node_id().0), None, true),
+        d.ipc.confirm(Some(&ctp.node_id().0), None, common::allow()),
         daemon::ConfirmOutcome::Decided(_)
     ));
     let (r, _) = poll_until_settled(
@@ -326,7 +407,7 @@ async fn status_is_visible_only_to_the_submitting_device() {
         proto::PairStatusState::NotFound
     );
     wait_queue(&d.ipc, 1).await;
-    d.ipc.confirm(Some(&ctp.node_id().0), None, true);
+    d.ipc.confirm(Some(&ctp.node_id().0), None, common::allow());
     let (mine, _) = poll_until_settled(
         &ctp,
         &d,
@@ -364,7 +445,8 @@ async fn owner_deny_surfaces_as_denied_with_a_reason_key() {
     let qr = d.pairing.start([0x13; 12], now());
     let s = submitted(submit(&ctp, &d, &token_of(&qr), "被拒的手机").await);
     wait_queue(&d.ipc, 1).await;
-    d.ipc.confirm(Some(&ctp.node_id().0), None, false);
+    d.ipc
+        .confirm(Some(&ctp.node_id().0), None, daemon::PairDecision::Reject);
     let (r, _) = poll_until_settled(
         &ctp,
         &d,
@@ -445,7 +527,7 @@ async fn revoked_device_can_poll_its_own_rejoin() {
     let qr = d.pairing.start([0x16; 12], now());
     let s = submitted(submit(&ctp, &d, &token_of(&qr), "回来的手机").await);
     wait_queue(&d.ipc, 1).await;
-    d.ipc.confirm(Some(&ctp.node_id().0), None, true);
+    d.ipc.confirm(Some(&ctp.node_id().0), None, common::allow());
     let (r, _) = poll_until_settled(
         &ctp,
         &d,
@@ -478,7 +560,7 @@ async fn revoked_device_can_poll_its_own_rejoin() {
         proto::PairStatusState::Pending
     );
     wait_queue(&d.ipc, 1).await;
-    d.ipc.confirm(Some(&ctp.node_id().0), None, true);
+    d.ipc.confirm(Some(&ctp.node_id().0), None, common::allow());
     let (r2, _) = poll_until_settled(
         &ctp,
         &d,
@@ -556,7 +638,7 @@ async fn phone_cancel_then_owner_allow_is_expired_and_writes_no_device() {
 
     // 主人在手机取消之后点「允许」（桌面上那一行已经消失，这一下只可能
     // 是和移除赛跑的点击）：点不到它——NotFound，与 IPC 口径 NOT_FOUND 同。
-    let outcome = d.ipc.confirm(Some(&ctp.node_id().0), None, true);
+    let outcome = d.ipc.confirm(Some(&ctp.node_id().0), None, common::allow());
     assert!(
         matches!(outcome, daemon::ConfirmOutcome::NotFound),
         "the owner's Allow landed on a withdrawn request: {outcome:?}"
@@ -629,7 +711,7 @@ async fn another_device_cannot_withdraw_someone_elses_request() {
         proto::PairStatusState::Pending
     );
 
-    let outcome = d.ipc.confirm(Some(&ctp.node_id().0), None, true);
+    let outcome = d.ipc.confirm(Some(&ctp.node_id().0), None, common::allow());
     assert!(
         matches!(outcome, daemon::ConfirmOutcome::Decided(_)),
         "{outcome:?}"
@@ -647,6 +729,8 @@ async fn another_device_cannot_withdraw_someone_elses_request() {
 
 /// 主人的「允许」先到、手机的取消后到：已落定的结论不被撤回改写——
 /// 桌面已经报了「已允许」，库里这一行是真的，撤回只读回 accepted。
+/// #1118：「落定」现在指手机的 `pair.confirm` 验过码、配对记录已写入（光有业主输码
+/// 还不算，见下一条竞态用例）；所以这里先让手机走完 confirm，再撤回。
 #[tokio::test(flavor = "multi_thread")]
 async fn cancel_after_the_owner_allowed_does_not_undo_the_join() {
     let d = desk(Db::open_in_memory().await.unwrap(), None).await;
@@ -654,11 +738,20 @@ async fn cancel_after_the_owner_allowed_does_not_undo_the_join() {
     let qr = d.pairing.start([0x72; 12], now());
     let s = submitted(submit(&ctp, &d, &token_of(&qr), "手慢的手机").await);
     wait_queue(&d.ipc, 1).await;
-    let outcome = d.ipc.confirm(Some(&ctp.node_id().0), None, true);
+    let outcome = d.ipc.confirm(Some(&ctp.node_id().0), None, common::allow());
     assert!(
         matches!(outcome, daemon::ConfirmOutcome::Decided(_)),
         "{outcome:?}"
     );
+    let (r, _) = poll_until_settled(
+        &ctp,
+        &d,
+        &s.request_id,
+        Duration::from_millis(250),
+        Duration::from_secs(5),
+    )
+    .await;
+    assert_eq!(r.state, proto::PairStatusState::Accepted, "{r:?}");
 
     let c = cancel(&ctp, &d, &s.request_id).await;
     assert_eq!(c.state, proto::PairStatusState::Accepted, "{c:?}");
@@ -708,38 +801,41 @@ async fn hello_advertises_the_pair_cancel_capability_to_unpaired_peers() {
 }
 
 /// 竞态口径：主人的「允许」与手机的撤回**同时**摆在决策任务面前时，
-/// 主人赢——`confirm` 已经对主人说了「已允许」，这句话必须兑现（DEV-05
-/// 的反面教训：桌面报成功、库里却没有）。current_thread 保证两件事都在
-/// 决策任务第一次被调度前就位。
+/// 不许出现「桌面说成了、库里却没有」（DEV-05 的反面教训）。#1118 之后「允许」
+/// 只是输码、开始验证，配对要等手机 `pair.confirm` 才落库——所以同时到的撤回
+/// 赢：状态读回 expired，不写设备行，业主那边从来没被告知「已加入」。
+/// （手机已经 confirm 过的反方向，见 `cancel_after_the_owner_allowed_does_not_undo_the_join`。）
+/// current_thread 保证两件事都在决策任务第一次被调度前就位。
 #[tokio::test(flavor = "current_thread")]
 async fn a_decision_already_delivered_beats_a_simultaneous_withdrawal() {
     let db = Db::open_in_memory().await.unwrap();
     let (pairing, mut pending_rx) = Pairing::new(db.clone(), transport::NodeId([0x01; 32]), None);
     let peer = transport::NodeId([0x74; 32]);
     let qr = pairing.start([0x74; 12], now());
-    let sub = pairing
-        .submit_request(
-            peer,
-            &PairRequest {
-                token: token_of(&qr),
-                device_name: "同时到的手机".into(),
-                ack_then_poll: true,
-                ..Default::default()
-            },
-            now(),
-        )
-        .await
-        .unwrap();
+    let (req, _start) = common::with_pake(
+        &PairRequest {
+            token: token_of(&qr),
+            device_name: "同时到的手机".into(),
+            ack_then_poll: true,
+            ..Default::default()
+        },
+        peer,
+        pairing.node_id(),
+    );
+    let sub = pairing.submit_request(peer, &req, now()).await.unwrap();
     let row = pending_rx.try_recv().expect("queued");
-    row.decide(daemon::PairDecision::Accept)
+    row.decide(common::allow())
         .expect("the owner's click is delivered while the task is still waiting");
 
     let settled = pairing.cancel(peer, &sub.request_id, now()).await;
     assert!(
-        matches!(settled, Some(daemon::PairState::Accepted { .. })),
+        matches!(settled, Some(daemon::PairState::Expired)),
         "{settled:?}"
     );
-    assert!(db.get_device(&peer.0).await.unwrap().is_some());
+    assert!(
+        db.get_device(&peer.0).await.unwrap().is_none(),
+        "no confirmation arrived, so nothing may be written"
+    );
 }
 
 /// #1050：阻塞式 `pair.request`（不带 `ack_then_poll`）已退役。低于最低支持版本
@@ -804,4 +900,46 @@ async fn retired_flow_fetch_and_cancel_are_not_routed() {
         assert_eq!(err.code(), codes::INVALID_REQUEST, "{method}");
         assert_eq!(err.reason(), &proto::Reason::UnsupportedMethod, "{method}");
     }
+}
+
+/// #1118：业主输的码和手机显示的不一致 → 手机的 `pair.confirm` 读到 `pair_code_wrong`，
+/// 账本落 failed，审计 `pair.code_failed`，不写设备行；码是一次一次的，同一请求不能再试。
+/// 反证靶子：把业主输入改回 `TEST_CODE`，本用例在第一个断言处变红（会配对成功）。
+#[tokio::test(flavor = "multi_thread")]
+async fn a_wrong_code_voids_the_request_with_pair_code_wrong() {
+    let d = desk(Db::open_in_memory().await.unwrap(), None).await;
+    let ctp = phone(&d).await;
+    let qr = d.pairing.start([0x92; 12], now());
+    let s = submitted(submit(&ctp, &d, &token_of(&qr), "码对不上的手机").await);
+    wait_queue(&d.ipc, 1).await;
+    d.ipc.confirm(
+        Some(&ctp.node_id().0),
+        None,
+        daemon::PairDecision::AcceptCode("135790".into()),
+    );
+
+    let pake_b = loop {
+        let r = status(&ctp, &d, &s.request_id).await;
+        if let Some(b) = r.pake_b {
+            break b;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    };
+    let start = {
+        let mut starts = STARTS.lock().unwrap();
+        let i = starts.iter().position(|(r, _)| *r == s.request_id).unwrap();
+        starts.remove(i).1
+    };
+    let (resp, _check) = confirm_with(&ctp, &d, &s.request_id, start, &pake_b).await;
+    assert!(!resp.ok, "{resp:?}");
+    let err = resp.error.unwrap();
+    assert_eq!(err.code(), codes::NOT_AUTHORIZED);
+    assert_eq!(err.reason(), &proto::Reason::PairCodeWrong);
+
+    assert_eq!(
+        status(&ctp, &d, &s.request_id).await.state,
+        proto::PairStatusState::Failed
+    );
+    assert!(d.db.get_device(&ctp.node_id().0).await.unwrap().is_none());
+    assert_eq!(pair_endings(&d).await, ["pair.code_failed"]);
 }

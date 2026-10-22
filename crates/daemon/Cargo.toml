@@ -7,6 +7,8 @@ publish = false
 
 [dependencies]
 proto = { path = "../proto" }
+# #1118：配对验证码（SPAKE2 + 密钥确认），与手机共用同一份内核。
+pair-pake = { path = "../pair-pake" }
 blake3 = "1"
 transport = { path = "../transport" }
 storage = { path = "../storage" }
@@ -46,6 +48,7 @@ lru = "0.18"
 
 [dev-dependencies]
 tempfile = "3"
+pair-pake = { path = "../pair-pake" }
 # #763：让目录拒绝新建文件（平台分叉只许在 platform crate，测试脚手架同理）。
 platform = { path = "../platform", features = ["test-support"] }
 blake3 = "1"

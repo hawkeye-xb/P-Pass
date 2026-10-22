@@ -14,7 +14,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use daemon::flow_delivery::FlowDelivery;
-use daemon::{PairDecision, Pairing, Router};
+use daemon::{Pairing, Router};
 use proto::FlowFetchRequest;
 use storage::{Db, DepartedBy};
 use transport::{AndroidBlobsProvider, Blobs, IrohTransport, NodeId, TransportConfig};
@@ -51,7 +51,7 @@ async fn start_daemon(root: &Path) -> Daemon {
     // The owner taps "allow" on the desktop.
     tokio::spawn(async move {
         while let Some(req) = pending.recv().await {
-            let _ = req.decide(PairDecision::Accept);
+            let _ = req.decide(common::allow());
         }
     });
     let blobs = Arc::new(Blobs::open(&tp, &root.join(".ppf/blobs")).await.unwrap());

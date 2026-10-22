@@ -47,11 +47,15 @@ pub const BLOBS_FETCH: &str = "blobs.fetch";
 /// DEV-07 (#463): `pair.cancel` is the same door with the same scoping —
 /// the withdrawing phone is exactly as unpaired as it was when it
 /// submitted, and `handle_pair_cancel` only touches the caller's own ids.
+///
+/// #1118: `pair.confirm` (the phone's key confirmation) is the same door with the same
+/// scoping — `handle_pair_confirm` only checks the caller's own request.
 const UNPAIRED_METHODS: &[&str] = &[
     methods::HELLO,
     methods::PAIR_REQUEST,
     methods::PAIR_STATUS,
     methods::PAIR_CANCEL,
+    methods::PAIR_CONFIRM,
 ];
 
 /// #1070: a method some door admits — the unpaired door or any role's
@@ -81,7 +85,10 @@ fn role_allows(role: Role, method: &str) -> bool {
     let self_unpair = method == methods::DEVICE_UNPAIR;
     let member_delivery = method.starts_with("backup.") || method.starts_with("flow.");
     // NET-10: see UNPAIRED_METHODS — own-request scoping lives in the handler.
-    if method == methods::PAIR_STATUS || method == methods::PAIR_CANCEL {
+    if method == methods::PAIR_STATUS
+        || method == methods::PAIR_CANCEL
+        || method == methods::PAIR_CONFIRM
+    {
         return true;
     }
     match role {

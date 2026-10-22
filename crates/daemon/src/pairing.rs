@@ -35,6 +35,14 @@
 //! queue**. The decision task marks the queued [`PendingPair`] withdrawn
 //! and emits `pairing.pending_changed`; the IPC queue drops marked rows on
 //! every read (`ipc.rs`), so the desktop's refresh no longer lists it.
+//!
+//! #1118: approving means **typing the phone's 6-digit code**. `pair.request` carries the
+//! phone's SPAKE2 message (`pake_a`, `crates/pair-pake`); the owner's "confirm" hands the typed
+//! code to the decision task ([`PairDecision::AcceptCode`]), which answers with `pake_b`
+//! (read by the phone through `pair.status`) and keeps the session in the ledger. The phone's
+//! `pair.confirm` then carries its key confirmation `cA`: only a matching `cA` writes the
+//! pairing record and releases the desktop's `cB`; a mismatch voids the request (its token was
+//! already used up) — one attempt per request. Refreshing the QR code drops every older token.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -77,6 +85,9 @@ pub enum PairState {
     /// Left the queue without an owner verdict: the pending TTL ran out,
     /// or the row was replaced/swept on the desktop.
     Expired,
+    /// #1118: the owner typed a code but the phone's confirmation did not match — the request
+    /// is void (scan again).
+    Failed,
 }
 
 /// `pair.request{ack_then_poll}` result: what the phone polls, and until when.
@@ -94,6 +105,8 @@ pub enum PairRejection {
     BadToken,
     /// The owner said no.
     OwnerDeclined,
+    /// #1118: `pake_a` is missing or not a well-formed SPAKE2 message.
+    BadPake,
 }
 
 /// Owner-side verdict for one pending pairing request.
@@ -103,8 +116,9 @@ pub enum PairRejection {
 /// 设备与身份 1:1，续旧账目就是两个身份共享一份账，当场破 1:1。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PairDecision {
-    /// Join as a device in its own right.
-    Accept,
+    /// #1118: the owner typed this code — join as a device in its own right **if** the phone's
+    /// key confirmation matches it.
+    AcceptCode(String),
     /// The owner said no.
     Reject,
 }
@@ -120,6 +134,9 @@ enum Ending {
     Cancelled,
     /// No verdict in time: TTL, or the owner's half dropped → `pair.expired`.
     Expired,
+    /// #1118: the owner typed a code and the phone's confirmation did not match →
+    /// `pair.code_failed`.
+    CodeWrong,
 }
 
 impl Ending {
@@ -130,6 +147,7 @@ impl Ending {
             Ending::Denied => Some("pair.denied"),
             Ending::Cancelled => Some("pair.cancelled"),
             Ending::Expired => Some("pair.expired"),
+            Ending::CodeWrong => Some("pair.code_failed"),
         }
     }
 }
@@ -188,6 +206,25 @@ impl PendingPair {
     }
 }
 
+/// #1118: everything the decision task needs to know about one request.
+struct Applicant {
+    request_id: String,
+    peer: transport::NodeId,
+    device_name: String,
+    role: Role,
+    token: [u8; 12],
+    pake_a: Vec<u8>,
+}
+
+/// #1118: how the code exchange after the owner's "confirm" ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodeOutcome {
+    Matched,
+    Wrong,
+    Withdrawn,
+    TimedOut,
+}
+
 /// DEV-07 (#463): the decision task's half of a phone withdrawal — the
 /// signal `Pairing::cancel` fires, and the marker the task sets on the
 /// queued [`PendingPair`] when that signal (not the owner) ended it.
@@ -216,6 +253,51 @@ struct Ticket {
     /// DEV-07 (#463): fires the phone's withdrawal into the decision task.
     /// Taken (and sent) at most once; `None` once used.
     withdraw: Option<oneshot::Sender<()>>,
+    /// #1118: the desktop's SPAKE2 answer, set once the owner typed the code.
+    pake_b: Option<Vec<u8>>,
+    /// #1118: the session waiting for the phone's `cA`, with the decision task's ear for the
+    /// result (`Some(cB)` = matched, `None` = wrong). Taken by [`Pairing::confirm_code`]: used once.
+    session: Option<(pair_pake::Desktop, oneshot::Sender<Option<[u8; 32]>>)>,
+    /// #1118: the `cA` that was checked, and the `cB` it released (`None` = it did not match).
+    /// Makes a resend of the same `cA` idempotent; any other `cA` is a wrong code.
+    checked: Option<(Vec<u8>, Option<[u8; 32]>)>,
+}
+
+/// #1118: one ledger entry as the submitting phone may see it (`pair.status` / `pair.confirm`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TicketView {
+    pub state: PairState,
+    /// The desktop's SPAKE2 answer once the owner typed the code (while pending).
+    pub pake_b: Option<Vec<u8>>,
+    /// The desktop's key confirmation, released only after the phone's `cA` matched.
+    pub confirm_b: Option<[u8; 32]>,
+}
+
+/// #1118: why a `pair.confirm` was not accepted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfirmError {
+    /// Unknown id, another device's id, or swept.
+    NotFound,
+    /// The owner has not typed the code yet (no `pake_b` was handed out).
+    NotReady,
+    /// The confirmation did not match: the request is void.
+    CodeWrong,
+}
+
+impl Ticket {
+    fn view(&self) -> TicketView {
+        let state = self.state.borrow().clone();
+        TicketView {
+            pake_b: (state == PairState::Pending)
+                .then(|| self.pake_b.clone())
+                .flatten(),
+            confirm_b: match state {
+                PairState::Accepted { .. } => self.checked.as_ref().and_then(|(_, cb)| *cb),
+                _ => None,
+            },
+            state,
+        }
+    }
 }
 
 struct Inner {
@@ -289,6 +371,11 @@ impl Pairing {
         )
     }
 
+    /// This desktop's NodeId (the `B` identity of the pairing code exchange, #1118).
+    pub fn node_id(&self) -> transport::NodeId {
+        self.node_id
+    }
+
     /// IPC-02: 注入事件总线——配对落定后发 device.changed。
     pub fn with_events(mut self, events: crate::events::EventBus) -> Self {
         self.events = Some(events);
@@ -305,6 +392,9 @@ impl Pairing {
     /// Issue a fresh one-time token and return the QR content string.
     pub fn start(&self, token: [u8; 12], now_ms: i64) -> String {
         let mut inner = self.inner.lock().expect("pairing lock");
+        // #1118: one QR code at a time — showing a fresh one (refresh) voids every older token,
+        // used or not; expired ones go with them. Submitted requests keep their ledger entries.
+        inner.tokens.clear();
         inner.tokens.insert(
             token,
             TokenState {
@@ -372,10 +462,12 @@ impl Pairing {
             _ => Role::Member,
         };
 
-        let (request_id, decision_rx, withdraw_rx, withdrawn) = {
+        let (request_id, decision_rx, withdraw_rx, withdrawn, token, pake_a) = {
             let mut inner = self.inner.lock().expect("pairing lock");
             inner.sweep_tickets(now_ms);
             let token = parse_token(&req.token).ok_or(PairRejection::BadToken)?;
+            // #1118: checked before the token is used up — a malformed request burns nothing.
+            let pake_a = parse_pake_msg(&req.pake_a).ok_or(PairRejection::BadPake)?;
             if let Some((id, t)) = inner
                 .tickets
                 .iter()
@@ -420,9 +512,12 @@ impl Pairing {
                     settled_at: None,
                     state: state_tx,
                     withdraw: Some(withdraw_tx),
+                    pake_b: None,
+                    session: None,
+                    checked: None,
                 },
             );
-            (request_id, rx, withdraw_rx, withdrawn)
+            (request_id, rx, withdraw_rx, withdrawn, token, pake_a)
         };
 
         // T5: 扫码请求到达即审计（含后续被拒/超时——审计要全，不只看成功）。
@@ -445,9 +540,14 @@ impl Pairing {
         tokio::spawn(async move {
             let (state, settled_at) = this
                 .await_owner(
-                    peer,
-                    device_name,
-                    role,
+                    Applicant {
+                        request_id: id.clone(),
+                        peer,
+                        device_name,
+                        role,
+                        token,
+                        pake_a,
+                    },
                     now_ms,
                     decision_rx,
                     Withdrawal {
@@ -534,13 +634,19 @@ impl Pairing {
     /// the verdict. Returns the ledger state and the settle timestamp.
     async fn await_owner(
         &self,
-        peer: transport::NodeId,
-        device_name: String,
-        role: Role,
+        applicant: Applicant,
         now_ms: i64,
         mut decision_rx: oneshot::Receiver<PairDecision>,
         withdrawal: Withdrawal,
     ) -> (PairState, i64) {
+        let Applicant {
+            request_id,
+            peer,
+            device_name,
+            role,
+            token,
+            pake_a,
+        } = applicant;
         let Withdrawal {
             signal: mut withdraw_rx,
             marker: withdrawn,
@@ -605,31 +711,202 @@ impl Pairing {
         // caller-injected `now_ms` (never wall-clock raw) so clock-jump
         // scenarios keep the trail monotonic (T-070's injected clock stays
         // the truth).
-        let decided_at = now_ms.saturating_add(wait_started.elapsed().as_millis() as i64);
         // #552: how the request ended decides its audit kind. The
         // "phone withdrew" test is exactly the one above that takes the row
         // off the owner's screen — an owner verdict that won the race is
         // recorded as the owner's, never as the phone's cancel.
+        // #1118: the owner's "confirm" carries the typed code; the request only joins if the
+        // phone's key confirmation then matches it (same pending deadline, phone may still
+        // withdraw meanwhile).
         let ending = match decision.as_ref() {
-            Some(PairDecision::Accept) => Ending::Accept,
+            Some(PairDecision::AcceptCode(code)) => match self
+                .exchange_code(
+                    &request_id,
+                    peer,
+                    &token,
+                    &pake_a,
+                    code,
+                    ttl.as_mut(),
+                    &mut withdraw_rx,
+                )
+                .await
+            {
+                CodeOutcome::Matched => Ending::Accept,
+                CodeOutcome::Wrong => Ending::CodeWrong,
+                CodeOutcome::Withdrawn => Ending::Cancelled,
+                CodeOutcome::TimedOut => Ending::Expired,
+            },
             Some(PairDecision::Reject) => Ending::Denied,
             None if phone_withdrew => Ending::Cancelled,
             // TTL, or the owner's half dropped (row replaced/swept, UI gone).
             None => Ending::Expired,
         };
+        let decided_at = now_ms.saturating_add(wait_started.elapsed().as_millis() as i64);
 
         let state = match self
             .apply_verdict(peer, &device_name, role, now_ms, ending, decided_at)
             .await
         {
             Ok(pairing_id) => PairState::Accepted { pairing_id },
-            // No verdict at all: the request aged out or left the queue.
-            Err(_) if decision.is_none() => PairState::Expired,
-            // The owner said no (or an accepted write failed — the phone
-            // must not proceed either way).
-            Err(_) => PairState::Denied,
+            Err(_) => match ending {
+                // #1118: wrong code — void, scan again.
+                Ending::CodeWrong => PairState::Failed,
+                // No verdict at all: the request aged out, left the queue, or was withdrawn.
+                Ending::Expired | Ending::Cancelled => PairState::Expired,
+                // The owner said no (or an accepted write failed — the phone
+                // must not proceed either way).
+                Ending::Denied | Ending::Accept => PairState::Denied,
+            },
         };
         (state, decided_at)
+    }
+
+    /// #1118: the owner typed `code`. Answer the phone's `pake_a` (the answer `pake_b` and the
+    /// session go into the ledger, where `pair.status` and `pair.confirm` find them), then wait —
+    /// within the same pending deadline — for [`Self::confirm_code`] to check the phone's `cA`.
+    #[allow(clippy::too_many_arguments)]
+    async fn exchange_code(
+        &self,
+        request_id: &str,
+        peer: transport::NodeId,
+        token: &[u8; 12],
+        pake_a: &[u8],
+        code: &str,
+        ttl: std::pin::Pin<&mut tokio::time::Sleep>,
+        withdraw_rx: &mut oneshot::Receiver<()>,
+    ) -> CodeOutcome {
+        let Ok((session, pake_b)) =
+            pair_pake::Desktop::respond(code, token, peer.0, self.node_id.0, pake_a)
+        else {
+            // Not six digits (the IPC checks first) — counts as the one wrong attempt.
+            return CodeOutcome::Wrong;
+        };
+        let (tx, rx) = oneshot::channel();
+        {
+            let mut inner = self.inner.lock().expect("pairing lock");
+            let Some(t) = inner.tickets.get_mut(request_id) else {
+                return CodeOutcome::TimedOut;
+            };
+            t.pake_b = Some(pake_b);
+            t.session = Some((session, tx));
+        }
+        let outcome = tokio::select! {
+            biased;
+            r = rx => match r {
+                Ok(Some(_)) => CodeOutcome::Matched,
+                Ok(None) => CodeOutcome::Wrong,
+                Err(_) => CodeOutcome::TimedOut,
+            },
+            Ok(()) = withdraw_rx => CodeOutcome::Withdrawn,
+            () = ttl => CodeOutcome::TimedOut,
+        };
+        if outcome != CodeOutcome::Matched && outcome != CodeOutcome::Wrong {
+            // No confirmation will be checked any more.
+            if let Some(t) = self
+                .inner
+                .lock()
+                .expect("pairing lock")
+                .tickets
+                .get_mut(request_id)
+            {
+                t.session = None;
+            }
+        }
+        outcome
+    }
+
+    /// #1118: `pair.confirm` — check the phone's key confirmation `cA` for its own request,
+    /// once. A match lets the decision task write the pairing record; the reply (after the
+    /// ledger settled) carries the desktop's `cB`. A mismatch voids the request. A resend of the
+    /// same `cA` replays the same answer; any other `cA` after the first check is wrong.
+    pub async fn confirm_code(
+        &self,
+        peer: transport::NodeId,
+        request_id: &str,
+        confirm_a: &[u8],
+        now_ms: i64,
+    ) -> Result<TicketView, ConfirmError> {
+        let mut rx = {
+            let mut inner = self.inner.lock().expect("pairing lock");
+            inner.sweep_tickets(now_ms);
+            let t = inner
+                .tickets
+                .get_mut(request_id)
+                .filter(|t| t.peer == peer)
+                .ok_or(ConfirmError::NotFound)?;
+            match &t.checked {
+                Some((seen, _)) if seen.as_slice() != confirm_a => {
+                    return Err(ConfirmError::CodeWrong)
+                }
+                Some(_) => {}
+                None => {
+                    if *t.state.borrow() == PairState::Failed {
+                        return Err(ConfirmError::CodeWrong);
+                    }
+                    let (session, verdict) = t.session.take().ok_or(ConfirmError::NotReady)?;
+                    let released = session.verify(confirm_a).ok();
+                    t.checked = Some((confirm_a.to_vec(), released));
+                    let _ = verdict.send(released);
+                }
+            }
+            t.state.subscribe()
+        };
+        // The decision task writes the pairing record (or the refusal) right after the check;
+        // the bound only keeps a stuck DB from holding a control-plane RPC open.
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            rx.wait_for(|s| *s != PairState::Pending),
+        )
+        .await;
+        let inner = self.inner.lock().expect("pairing lock");
+        let view = inner
+            .tickets
+            .get(request_id)
+            .map(Ticket::view)
+            .ok_or(ConfirmError::NotFound)?;
+        if view.state == PairState::Failed {
+            return Err(ConfirmError::CodeWrong);
+        }
+        Ok(view)
+    }
+
+    /// #1118: wait (bounded) for `peer`'s latest pending request to settle — the owner just
+    /// typed the code and wants to see the result. `None` = nothing pending for it, or still
+    /// pending at the deadline.
+    pub async fn await_verdict(
+        &self,
+        peer: transport::NodeId,
+        timeout: std::time::Duration,
+    ) -> Option<PairState> {
+        let mut rx = {
+            let inner = self.inner.lock().expect("pairing lock");
+            inner
+                .tickets
+                .values()
+                .filter(|t| t.peer == peer && t.settled_at.is_none())
+                .max_by_key(|t| t.submitted_at)?
+                .state
+                .subscribe()
+        };
+        let _ = tokio::time::timeout(timeout, rx.wait_for(|s| *s != PairState::Pending)).await;
+        let state = rx.borrow().clone();
+        Some(state)
+    }
+
+    /// #1118: [`Self::status`] plus the code-exchange fields the phone needs.
+    pub fn view(
+        &self,
+        peer: transport::NodeId,
+        request_id: &str,
+        now_ms: i64,
+    ) -> Option<TicketView> {
+        let mut inner = self.inner.lock().expect("pairing lock");
+        inner.sweep_tickets(now_ms);
+        inner
+            .tickets
+            .get(request_id)
+            .filter(|t| t.peer == peer)
+            .map(Ticket::view)
     }
 
     /// Apply the owner's verdict: audit + (on Allow) device profile and a
@@ -788,6 +1065,18 @@ fn fresh_pairing_id() -> Result<String, getrandom::Error> {
 // H-10b v2 (2026-08-08): 配对 token 32B → 12B。一次性配对 + 10 分钟
 // TTL，96-bit 熵绰绰有余；QR 里 token 从 64 hex 字符降到 24。
 // （IPC socket token 保持 32B——不同用途，见 main.rs/ipc.rs。）
+/// #1118: a SPAKE2 message on the wire (lowercase or uppercase hex, [`pair_pake::MSG_LEN`] bytes).
+fn parse_pake_msg(s: &str) -> Option<Vec<u8>> {
+    let s = s.trim();
+    if s.len() != pair_pake::MSG_LEN * 2 {
+        return None;
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
+        .collect()
+}
+
 fn parse_token(s: &str) -> Option<[u8; 12]> {
     let s = s.trim();
     if s.len() != 24 {
@@ -846,9 +1135,14 @@ mod tests {
 
         // 已提交申请的设备：业主关掉二维码后仍能轮询自己的结果。
         pairing.start([0x22; 12], 2_000);
+        // #1118: the request carries the phone's SPAKE2 message.
+        let (_start, msg_a) =
+            pair_pake::PhoneStart::start("246810", &[0x22; 12], phone.0, pairing.node_id().0)
+                .unwrap();
         let req = proto::PairRequest {
             token: "22".repeat(12),
             device_name: "phone".into(),
+            pake_a: msg_a.iter().map(|b| format!("{b:02x}")).collect(),
             ..Default::default()
         };
         pairing.submit_request(phone, &req, 2_000).await.unwrap();

@@ -522,7 +522,7 @@ async fn pairing_start_and_confirm_over_ipc() {
     let resp = c
         .call(
             "pairing.confirm",
-            serde_json::json!({ "device_name": "IPC 测试机", "accept": true }),
+            serde_json::json!({ "device_name": "IPC 测试机", "accept": true, "code": "246810" }),
         )
         .await;
     assert!(resp.ok, "{resp:?}");
@@ -544,19 +544,14 @@ async fn pairing_pending_lists_all_waiting_then_confirm_by_name() {
     let qr = resp.result.unwrap()["qr"].as_str().unwrap().to_string();
     assert!(qr.starts_with("ppf://pair?node="));
 
-    // 三台设备同时敲门——每台一枚独立一次性 token（Pairing::start 铸新
-    // token，多枚共存；同一 token 只能被一台用，共用会被引擎拒）。
+    // 三台设备先后敲门——每台一枚独立一次性 token。#1118：刷新二维码（`start`）会作废
+    // 之前所有令牌，所以每台都是「start → 提交」，等它入队后再放下一台；三行照样并存。
     let pairing = pairing.clone();
-    let tokens: Vec<String> = (0..3)
-        .map(|i| {
-            let qr = pairing.start([0x11 + i as u8; 12], now());
-            qr.rsplit("&t=").next().unwrap().to_string()
-        })
-        .collect();
     let names = ["设备A", "设备B", "设备C"];
     for (i, name) in names.iter().enumerate() {
+        let qr = pairing.start([0x11 + i as u8; 12], now());
+        let token = qr.rsplit("&t=").next().unwrap().to_string();
         let pairing = pairing.clone();
-        let token = tokens[i].clone();
         let name = name.to_string();
         tokio::spawn(async move {
             pairing
@@ -572,6 +567,13 @@ async fn pairing_pending_lists_all_waiting_then_confirm_by_name() {
                 )
                 .await
         });
+        for _ in 0..200 {
+            let resp = c.call("status", serde_json::Value::Null).await;
+            if resp.result.unwrap()["pending_pairs"] == i as u64 + 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
     }
 
     // 轮询直到三台都在 pending 列表里（一屏三行）。
@@ -600,11 +602,19 @@ async fn pairing_pending_lists_all_waiting_then_confirm_by_name() {
     let resp = c
         .call(
             "pairing.confirm",
-            serde_json::json!({ "device_name": "设备B", "accept": true }),
+            serde_json::json!({ "device_name": "设备B", "accept": true, "code": "246810" }),
         )
         .await;
     assert!(resp.ok, "{resp:?}");
-    assert_eq!(resp.result.unwrap()["device"], "设备B");
+    let decided = resp.result.unwrap();
+    assert_eq!(decided["device"], "设备B");
+    // #1118：按名定位也等那台手机的密钥确认（手机一侧在后台轮询、finish、`pair.confirm`），
+    // 业主当场看到「已加入」，不是「验证中」。
+    assert_eq!(decided["decided"], true, "{decided}");
+    assert!(
+        decided.get("verifying").is_none(),
+        "按名确认也要等到结果: {decided}"
+    );
     let resp = c.call("pairing.pending", serde_json::Value::Null).await;
     let mut list: Vec<String> = resp.result.unwrap()["pending"]
         .as_array()
@@ -639,7 +649,7 @@ async fn pairing_pending_lists_all_waiting_then_confirm_by_name() {
     );
     let resp = c.call("status", serde_json::Value::Null).await;
     assert_eq!(resp.result.unwrap()["pending_pairs"], 0);
-    // B 已被允许——设备表里有它。
+    // B 已被允许——设备表里有它（上面的确认已等到手机验证通过）。
     let device = db.get_device(&[0xE1; 32]).await.unwrap().expect("row");
     assert_eq!(device.profile.name, "设备B");
 }
@@ -961,7 +971,7 @@ async fn subscription_delivers_pending_change_under_100ms() {
     let resp = c2
         .call(
             "pairing.confirm",
-            serde_json::json!({ "accept": true, "device_name": "事件测试机" }),
+            serde_json::json!({ "accept": true, "code": "246810", "device_name": "事件测试机" }),
         )
         .await;
     assert!(resp.ok, "{resp:?}");
@@ -1011,7 +1021,7 @@ async fn subscription_filter_blocks_unwanted_event_types() {
     let resp = c2
         .call(
             "pairing.confirm",
-            serde_json::json!({ "accept": true, "device_name": "过滤测试机" }),
+            serde_json::json!({ "accept": true, "code": "246810", "device_name": "过滤测试机" }),
         )
         .await;
     assert!(resp.ok, "{resp:?}");
@@ -1055,7 +1065,7 @@ async fn unsubscribe_closes_subscription_connection() {
     let resp = c2
         .call(
             "pairing.confirm",
-            serde_json::json!({ "accept": true, "device_name": "退订测试机" }),
+            serde_json::json!({ "accept": true, "code": "246810", "device_name": "退订测试机" }),
         )
         .await;
     assert!(resp.ok, "{resp:?}");
@@ -1596,7 +1606,8 @@ async fn pairing_pending_knows_a_returning_device_by_node_id() {
 
     let mut c = IpcClient::connect(&socket, &token).await;
 
-    // 两台同时敲门，**自报同一个名字**：0xE0 从没连过，0xE1 是上面那台。
+    // 两台先后敲门（#1118：`start` 作废旧令牌，等上一台入队再刷新），**自报同一个名字**：
+    // 0xE0 从没连过，0xE1 是上面那台。
     let pairing = pairing.clone();
     for (i, node) in [0xE0u8, 0xE1].into_iter().enumerate() {
         let qr = pairing.start([0x31 + i as u8; 12], now());
@@ -1616,6 +1627,13 @@ async fn pairing_pending_knows_a_returning_device_by_node_id() {
                 )
                 .await
         });
+        for _ in 0..200 {
+            let resp = c.call("status", serde_json::Value::Null).await;
+            if resp.result.unwrap()["pending_pairs"] == i as u64 + 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
     }
 
     let mut pending = Vec::new();
@@ -1668,7 +1686,7 @@ async fn pairing_pending_knows_a_returning_device_by_node_id() {
     let resp = c
         .call(
             "pairing.confirm",
-            serde_json::json!({ "node_id": "e1".repeat(32), "accept": true }),
+            serde_json::json!({ "node_id": "e1".repeat(32), "accept": true, "code": "246810" }),
         )
         .await;
     assert!(resp.ok, "按 node_id 确认必须成功: {resp:?}");
@@ -1730,17 +1748,18 @@ async fn withdrawn_request_leaves_queue_and_pushes_pending_changed() {
     {
         let qr = pairing.start([0x31 + i as u8; 12], now());
         let t = qr.rsplit("&t=").next().unwrap().to_string();
+        let (req, _start) = common::with_pake(
+            &proto::PairRequest {
+                token: t,
+                device_name: name.into(),
+                role: "member".into(),
+                ..Default::default()
+            },
+            peer,
+            pairing.node_id(),
+        );
         let sub = pairing
-            .submit_request(
-                peer,
-                &proto::PairRequest {
-                    token: t,
-                    device_name: name.into(),
-                    role: "member".into(),
-                    ..Default::default()
-                },
-                now(),
-            )
+            .submit_request(peer, &req, now())
             .await
             .expect("submitted");
         request_ids.push(sub.request_id);
@@ -1789,7 +1808,7 @@ async fn withdrawn_request_leaves_queue_and_pushes_pending_changed() {
     let resp = c
         .call(
             "pairing.confirm",
-            serde_json::json!({ "node_id": hex_a, "accept": true }),
+            serde_json::json!({ "node_id": hex_a, "accept": true, "code": "246810" }),
         )
         .await;
     assert!(!resp.ok, "撤回的行不许被允许: {resp:?}");
@@ -1805,7 +1824,10 @@ async fn withdrawn_request_leaves_queue_and_pushes_pending_changed() {
         .unwrap()
         .is_empty());
     let resp = c
-        .call("pairing.confirm", serde_json::json!({ "accept": true }))
+        .call(
+            "pairing.confirm",
+            serde_json::json!({ "accept": true, "code": "246810" }),
+        )
         .await;
     assert!(!resp.ok, "队首语义也点不到撤回的行: {resp:?}");
 

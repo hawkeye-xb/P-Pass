@@ -47,6 +47,12 @@ use crate::pairing::{
 };
 use crate::subscriptions::SubscriptionRegistry;
 
+/// #1118: how long `pairing.confirm` waits for the phone's key confirmation before answering
+/// "verifying" (the phone polls every second while it shows the code). Must stay below the
+/// desktop shell's `IPC_READ_TIMEOUT` (10 s, apps/desktop/src-tauri/src/ipc.rs), or the owner
+/// would see a timeout for a pairing that went through.
+pub const CONFIRM_WAIT_MS: u64 = 8_000;
+
 /// Outcome of an owner decision on one pending pairing request
 /// (DEV-05 #276). The old return type (`Option<String>`) could not tell
 /// "no such row" apart from "row found, but the phone had already
@@ -1225,6 +1231,24 @@ impl IpcServer {
                     .get("accept")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
+                // #1118: allowing means typing the phone's 6-digit code; there is no allow
+                // without it.
+                let code = req
+                    .params
+                    .get("code")
+                    .and_then(|v| v.as_str())
+                    .map(str::trim)
+                    .map(str::to_owned);
+                let decision = match (accept, code) {
+                    (false, _) => PairDecision::Reject,
+                    (true, Some(c))
+                        if c.len() == pair_pake::CODE_DIGITS
+                            && c.bytes().all(|b| b.is_ascii_digit()) =>
+                    {
+                        PairDecision::AcceptCode(c)
+                    }
+                    (true, _) => return Resp::err(id, RespError::new(Reason::BadRequest)),
+                };
                 let device_name = req
                     .params
                     .get("device_name")
@@ -1237,9 +1261,40 @@ impl IpcServer {
                     .get("node_id")
                     .and_then(|v| v.as_str())
                     .and_then(parse_hex32);
-                match self.confirm(node_id.as_deref(), device_name.as_deref(), accept) {
+                let (outcome, peer) =
+                    self.confirm_located(node_id.as_deref(), device_name.as_deref(), decision);
+                match outcome {
+                    ConfirmOutcome::Decided(name) if !accept => {
+                        Resp::ok(id, serde_json::json!({ "decided": false, "device": name }))
+                    }
+                    // #1118: the code went to the request; the phone (polling every second)
+                    // answers with its key confirmation. Wait briefly so the owner sees the
+                    // result on the spot; past that, the device row / a refresh tells.
                     ConfirmOutcome::Decided(name) => {
-                        Resp::ok(id, serde_json::json!({ "decided": accept, "device": name }))
+                        let verdict = match peer {
+                            Some(p) => {
+                                self.pairing
+                                    .await_verdict(p, Duration::from_millis(CONFIRM_WAIT_MS))
+                                    .await
+                            }
+                            None => None,
+                        };
+                        match verdict {
+                            Some(crate::pairing::PairState::Accepted { .. }) => {
+                                Resp::ok(id, serde_json::json!({ "decided": true, "device": name }))
+                            }
+                            Some(crate::pairing::PairState::Failed) => {
+                                Resp::err(id, RespError::new(Reason::PairCodeWrong))
+                            }
+                            Some(
+                                crate::pairing::PairState::Expired
+                                | crate::pairing::PairState::Denied,
+                            ) => Resp::err(id, RespError::new(Reason::NotFound)),
+                            Some(crate::pairing::PairState::Pending) | None => Resp::ok(
+                                id,
+                                serde_json::json!({ "decided": true, "verifying": true, "device": name }),
+                            ),
+                        }
                     }
                     // DEV-05 (#276): the click landed on a dead request —
                     // report failure honestly (the old code answered ok
@@ -1786,8 +1841,20 @@ impl IpcServer {
         &self,
         node_id: Option<&[u8]>,
         device_name: Option<&str>,
-        accept: bool,
+        decision: PairDecision,
     ) -> ConfirmOutcome {
+        self.confirm_located(node_id, device_name, decision).0
+    }
+
+    /// [`Self::confirm`] plus the peer of the row it decided, however that
+    /// row was located (node id, name, or queue head) — #1118: the IPC
+    /// handler waits on that peer's verdict.
+    fn confirm_located(
+        &self,
+        node_id: Option<&[u8]>,
+        device_name: Option<&str>,
+        decision: PairDecision,
+    ) -> (ConfirmOutcome, Option<transport::NodeId>) {
         let mut queue = self.pending.lock().expect("pending lock");
         let now = now_ms();
         // DEV-07 follow-up (#463): a row the phone withdrew is gone before
@@ -1806,7 +1873,7 @@ impl IpcServer {
             if queue.is_empty() {
                 self.diag.apply(diag::DaemonEvent::PairingEnded);
             }
-            return ConfirmOutcome::NotFound;
+            return (ConfirmOutcome::NotFound, None);
         };
         let p = queue.remove(idx);
         // The located row itself may be past TTL: answer Expired, not a
@@ -1825,16 +1892,12 @@ impl IpcServer {
         );
         let name = p.device_name.clone();
         if stale {
-            return ConfirmOutcome::Expired(name);
+            return (ConfirmOutcome::Expired(name), None);
         }
-        let decision = if accept {
-            PairDecision::Accept
-        } else {
-            PairDecision::Reject
-        };
+        let peer = p.peer;
         match p.decide(decision) {
-            Ok(()) => ConfirmOutcome::Decided(name),
-            Err(_) => ConfirmOutcome::Expired(name),
+            Ok(()) => (ConfirmOutcome::Decided(name), Some(peer)),
+            Err(_) => (ConfirmOutcome::Expired(name), None),
         }
     }
 
@@ -1875,7 +1938,7 @@ impl IpcServer {
         // 而不是替业主静默丢弃。过期行留在列表里直到被 touch（confirm/
         // 新请求顶掉）时清除。
         let now = now_ms();
-        let queued: Vec<(transport::NodeId, String, i64, bool)> = self
+        let queued: Vec<(transport::NodeId, String, i64, bool, storage::Role)> = self
             .live_queue()
             .iter()
             .map(|p| {
@@ -1884,12 +1947,13 @@ impl IpcServer {
                     p.device_name.clone(),
                     p.requested_at,
                     p.is_abandoned(),
+                    p.role,
                 )
             })
             .collect();
 
         let mut out = Vec::with_capacity(queued.len());
-        for (peer, reported_name, requested_at, abandoned) in queued {
+        for (peer, reported_name, requested_at, abandoned, role) in queued {
             let existing = self.db.get_device(&peer.0).await.ok().flatten();
             let mut row = serde_json::json!({
                 "node_id": hex(&peer.0),
@@ -1899,6 +1963,8 @@ impl IpcServer {
                     .map(|d| d.profile.name.clone())
                     .unwrap_or(reported_name),
                 "requested_at": requested_at,
+                // #1118: the confirm box shows the role the phone asked for.
+                "role": role.as_str(),
                 // DEV-07 (#463): a row whose request side already ended
                 // (request-side TTL) is as unapprovable as one past the
                 // queue TTL. Withdrawn rows never get here (`live_queue`).
@@ -1984,6 +2050,9 @@ impl IpcServer {
             // photo folder" needs an answer to "传到哪儿了" (real
             // walkthrough question, 2026-07-31).
             "library_dir": self.data_dir.display().to_string(),
+            // #1118: this desktop's identity as people read it — shown under the pairing QR code
+            // and on the phone before it connects, so the two can be compared.
+            "desktop_fingerprint": pair_pake::node_fingerprint(&self.pairing.node_id().to_string()),
             // DAE-01: identity fields for newest-wins handshake + ops
             // visibility (验收①：status 报 PID/版本/路径/启动时间).
             "version": daemon_version(),

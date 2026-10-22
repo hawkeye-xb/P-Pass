@@ -543,6 +543,7 @@ impl Router {
             methods::PAIR_REQUEST => self.handle_pair(peer, req).await,
             methods::PAIR_STATUS => self.handle_pair_status(peer, req),
             methods::PAIR_CANCEL => self.handle_pair_cancel(peer, req).await,
+            methods::PAIR_CONFIRM => self.handle_pair_confirm(peer, req).await,
             methods::DEVICE_UNPAIR => self.handle_unpair(peer, req).await,
             methods::FLOW_OFFER => self.handle_flow_delivery(peer, req).await,
             methods::FLOW_STATUS | methods::FLOW_SUSPEND | methods::FLOW_CANCEL_TUPLE => {
@@ -933,6 +934,11 @@ impl Router {
         if !pair_req.ack_then_poll {
             return Resp::err(req.id.clone(), RespError::new(Reason::PhoneOutdated));
         }
+        // #1118: no pairing code exchange = a phone older than the code step; same rule, same
+        // place (before the token is used up).
+        if pair_req.pake_a.trim().is_empty() {
+            return Resp::err(req.id.clone(), RespError::new(Reason::PhoneOutdated));
+        }
         // NET-10 (#128): accept-then-poll — answer as soon as the request
         // is queued; the verdict is read through `pair.status`. A bad or
         // replayed token is still the same immediate NOT_AUTHORIZED.
@@ -945,6 +951,10 @@ impl Router {
                     ttl_ms: sub.ttl_ms,
                 },
             ),
+            // #1118: a malformed SPAKE2 message is a broken request, not a probe of the token.
+            Err(crate::pairing::PairRejection::BadPake) => {
+                Resp::err(req.id.clone(), RespError::new(Reason::BadRequest))
+            }
             Err(_) => {
                 self.record_denial(peer, methods::PAIR_REQUEST, &Reason::PairTokenInvalid)
                     .await;
@@ -966,8 +976,39 @@ impl Router {
         else {
             return Resp::err(req.id.clone(), RespError::new(Reason::BadRequest));
         };
-        let state = pairing.status(peer, &query.request_id, (self.now)());
-        ok_json(&req.id, &self.pair_status_reply(state))
+        let view = pairing.view(peer, &query.request_id, (self.now)());
+        ok_json(&req.id, &self.pair_status_reply(view))
+    }
+
+    /// `pair.confirm` (#1118): the phone's key confirmation for its own request. Same scoping
+    /// as `pair.status`. A match writes the pairing record and the reply carries `accepted` +
+    /// `confirm_b`; a mismatch voids the request (`pair_code_wrong`, audited as
+    /// `pair.code_failed`); before the owner typed the code there is nothing to confirm.
+    async fn handle_pair_confirm(&self, peer: transport::NodeId, req: &Req) -> Resp {
+        use crate::pairing::ConfirmError;
+        let Some(pairing) = &self.pairing else {
+            return Resp::err(req.id.clone(), RespError::new(Reason::UnsupportedMethod));
+        };
+        let Ok(query) = serde_json::from_value::<proto::PairConfirmRequest>(req.params.clone())
+        else {
+            return Resp::err(req.id.clone(), RespError::new(Reason::BadRequest));
+        };
+        let Some(confirm_a) = parse_hex_exact(&query.confirm_a, pair_pake::CONFIRM_LEN) else {
+            return Resp::err(req.id.clone(), RespError::new(Reason::BadRequest));
+        };
+        match pairing
+            .confirm_code(peer, &query.request_id, &confirm_a, (self.now)())
+            .await
+        {
+            Ok(view) => ok_json(&req.id, &self.pair_status_reply(Some(view))),
+            Err(ConfirmError::NotFound) => ok_json(&req.id, &self.pair_status_reply(None)),
+            Err(ConfirmError::NotReady) => {
+                Resp::err(req.id.clone(), RespError::new(Reason::BadRequest))
+            }
+            Err(ConfirmError::CodeWrong) => {
+                Resp::err(req.id.clone(), RespError::new(Reason::PairCodeWrong))
+            }
+        }
     }
 
     /// `pair.cancel` (DEV-07 #463): the submitting phone withdraws its own
@@ -985,33 +1026,48 @@ impl Router {
             return Resp::err(req.id.clone(), RespError::new(Reason::BadRequest));
         };
         let state = pairing.cancel(peer, &query.request_id, (self.now)()).await;
-        ok_json(&req.id, &self.pair_status_reply(state))
+        let view = state.map(|state| crate::pairing::TicketView {
+            state,
+            pake_b: None,
+            confirm_b: None,
+        });
+        ok_json(&req.id, &self.pair_status_reply(view))
     }
 
     /// Ledger state → wire reply, shared by `pair.status` and `pair.cancel`.
     fn pair_status_reply(
         &self,
-        state: Option<crate::pairing::PairState>,
+        view: Option<crate::pairing::TicketView>,
     ) -> proto::PairStatusReply {
         use crate::pairing::PairState;
         use proto::PairStatusState as S;
         let only = |state| proto::PairStatusReply {
             state,
-            accepted: None,
+            ..Default::default()
         };
-        match state {
-            Some(PairState::Pending) => only(S::Pending),
-            // Idempotent replay: the same payload the legacy reply carries.
-            Some(PairState::Accepted { pairing_id }) => proto::PairStatusReply {
+        let Some(view) = view else {
+            return only(S::NotFound);
+        };
+        match view.state {
+            // #1118: once the owner typed the code, the phone reads the desktop's answer here.
+            PairState::Pending => proto::PairStatusReply {
+                state: S::Pending,
+                pake_b: view.pake_b.as_deref().map(hex_lower),
+                ..Default::default()
+            },
+            // Idempotent replay: the same payload, plus the desktop's key confirmation.
+            PairState::Accepted { pairing_id } => proto::PairStatusReply {
                 state: S::Accepted,
                 accepted: Some(proto::PairAccepted {
                     storage_device_name: self.device_name.clone(),
                     pairing_id,
                 }),
+                confirm_b: view.confirm_b.as_ref().map(|c| hex_lower(c)),
+                ..Default::default()
             },
-            Some(PairState::Denied) => only(S::Denied),
-            Some(PairState::Expired) => only(S::Expired),
-            None => only(S::NotFound),
+            PairState::Denied => only(S::Denied),
+            PairState::Expired => only(S::Expired),
+            PairState::Failed => only(S::Failed),
         }
     }
 
@@ -1122,6 +1178,23 @@ fn unix_ms_now() -> i64 {
 /// Await one item from a pinned stream (futures-core only, no StreamExt).
 async fn next_item<S: Stream>(mut stream: std::pin::Pin<&mut S>) -> Option<S::Item> {
     std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await
+}
+
+/// #1118: lowercase hex for the code-exchange fields.
+fn hex_lower(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// #1118: exactly `len` bytes of hex, or nothing.
+fn parse_hex_exact(s: &str, len: usize) -> Option<Vec<u8>> {
+    let s = s.trim();
+    if s.len() != len * 2 {
+        return None;
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
+        .collect()
 }
 
 #[cfg(test)]

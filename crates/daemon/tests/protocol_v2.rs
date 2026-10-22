@@ -454,6 +454,7 @@ fn every_reason_has_a_send_point_test() {
         ("protocol_v2.rs", include_str!("protocol_v2.rs")),
         ("authz_flow.rs", include_str!("authz_flow.rs")),
         ("pairing_flow.rs", include_str!("pairing_flow.rs")),
+        ("pair_status_flow.rs", include_str!("pair_status_flow.rs")),
         ("backup_flow.rs", include_str!("backup_flow.rs")),
         ("flow_health.rs", include_str!("flow_health.rs")),
         ("flow_delivery.rs", include_str!("flow_delivery.rs")),
@@ -486,6 +487,12 @@ fn every_reason_has_a_send_point_test() {
             "pairing_flow.rs",
             "token_replay_is_rejected",
             "Reason::PairTokenInvalid",
+        ),
+        (
+            Reason::PairCodeWrong,
+            "pair_status_flow.rs",
+            "a_wrong_code_voids_the_request_with_pair_code_wrong",
+            "Reason::PairCodeWrong",
         ),
         (
             Reason::PhoneOutdated,

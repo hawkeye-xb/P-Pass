@@ -30,7 +30,7 @@ async fn start_daemon_with_clock(
     tokio::spawn(async move {
         while let Some(req) = pending.recv().await {
             let _ = req.decide(if accept {
-                PairDecision::Accept
+                common::allow()
             } else {
                 PairDecision::Reject
             });
@@ -606,7 +606,7 @@ async fn start_daemon_slow_owner(
     tokio::spawn(async move {
         while let Some(req) = pending.recv().await {
             tokio::time::sleep(std::time::Duration::from_millis(owner_delay_ms)).await;
-            let _ = req.decide(PairDecision::Accept);
+            let _ = req.decide(common::allow());
         }
     });
     let router = Router::new(db, "客厅的电脑").with_pairing(pairing.clone());
