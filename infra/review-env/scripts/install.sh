@@ -8,19 +8,18 @@
 #        [--user review] [--port 8787] [--ipc-token /var/lib/ppass-review/ipc.token]
 #
 # 不做的事（刻意留给人）：
-#   - 签证书：需要 DNS-01 hook，见 README「证书」一节
+#   - 签证书：源站用自签（本脚本生成），不需要 Let's Encrypt
 #   - 建 Cloudflare Tunnel：见 scripts/cf-tunnel.py
 #   - 装 daemon 二进制：从 dogfood 产物或 CI 取，见 README「daemon」
 set -euo pipefail
 
-HOST=""; ORIGIN_SNI=""; USER_NAME="review"; PORT="8787"
+HOST=""; USER_NAME="review"; PORT="8787"
 IPC_TOKEN="/var/lib/ppass-review/ipc.token"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --host) HOST="$2"; shift 2 ;;
-    --origin-sni) ORIGIN_SNI="$2"; shift 2 ;;
     --user) USER_NAME="$2"; shift 2 ;;
     --port) PORT="$2"; shift 2 ;;
     --ipc-token) IPC_TOKEN="$2"; shift 2 ;;
@@ -31,7 +30,6 @@ done
 
 [ "$(id -u)" = "0" ] || { echo "要 root" >&2; exit 1; }
 [ -n "$HOST" ] || { echo "缺 --host" >&2; exit 2; }
-[ -n "$ORIGIN_SNI" ] || ORIGIN_SNI="$HOST"
 
 # 1. 依赖
 for b in python3 qrencode htpasswd nginx curl; do
@@ -72,8 +70,16 @@ htpasswd -cb /etc/nginx/.htpasswd-pair "$USER_NAME" "$PW" >/dev/null
 chown root:www-data /etc/nginx/.htpasswd-pair
 chmod 640 /etc/nginx/.htpasswd-pair
 
-# 6. nginx：站点 + 限流 + CF 真实 IP
-sed -e "s/__PUBLIC_HOST__/$HOST/g" -e "s/__ORIGIN_SNI_HOST__/$ORIGIN_SNI/g" \
+# 6. nginx：自签证书 + 站点 + 限流 + CF 真实 IP
+install -d -m 700 /etc/nginx/selfsigned
+CERT_BASE="/etc/nginx/selfsigned/$HOST"
+if [ ! -f "$CERT_BASE.crt" ]; then
+  openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
+    -keyout "$CERT_BASE.key" -out "$CERT_BASE.crt" \
+    -subj "/CN=$HOST" -addext "subjectAltName=DNS:$HOST" 2>/dev/null
+  chmod 600 "$CERT_BASE.key"
+fi
+sed -e "s/__PUBLIC_HOST__/$HOST/g" -e "s#__SELF_SIGNED_BASE__#$CERT_BASE#g" \
   "$HERE/nginx/pair.conf.template" > /etc/nginx/sites-available/pair
 ln -sf /etc/nginx/sites-available/pair /etc/nginx/sites-enabled/pair
 install -m 644 "$HERE/nginx/ppass-limit.conf" /etc/nginx/conf.d/ppass-limit.conf
@@ -94,8 +100,8 @@ systemctl reload nginx
 # 7. 收尾自检（本机，不经过公网域名：这台机器上没有 hairpin NAT）
 echo "--- 自检 ---"
 curl -fsS --max-time 5 "http://127.0.0.1:${PORT}/healthz" && echo
-curl -s --max-time 5 --resolve "$ORIGIN_SNI:443:127.0.0.1" -o /dev/null \
-     -w "无凭据 %{http_code}（期望 401）\n" "https://$ORIGIN_SNI/"
-curl -s --max-time 5 --resolve "$ORIGIN_SNI:443:127.0.0.1" -u "$USER_NAME:$PW" -o /dev/null \
-     -w "带凭据 %{http_code}（期望 200）\n" "https://$ORIGIN_SNI/"
+curl -sk --max-time 5 --resolve "$HOST:443:127.0.0.1" -o /dev/null \
+     -w "无凭据 %{http_code}（期望 401）\n" "https://$HOST/"
+curl -sk --max-time 5 --resolve "$HOST:443:127.0.0.1" -u "$USER_NAME:$PW" -o /dev/null \
+     -w "带凭据 %{http_code}（期望 200）\n" "https://$HOST/"
 echo "装完了。对外的 Cloudflare Tunnel 与 DNS 见 scripts/cf-tunnel.py。"

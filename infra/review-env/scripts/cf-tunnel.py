@@ -14,8 +14,8 @@
 
 做的事：
   1. 找同名 tunnel（没有就建），类型 config_src=cloudflare（远端配置）
-  2. 写 ingress：<host> → https://127.0.0.1:443，originServerName=<origin-sni>
-     （源站用 LE 证书，SNI 必须对得上；对不上就 502）
+  2. 写 ingress：<host> → https://127.0.0.1:443，originServerName=<host>、noTLSVerify=true
+     （源站用自签证书，见 README「证书」；证书对不上也无所谓，因为不校验）
   3. DNS：删同名的旧记录，建 proxied CNAME → <tunnel-id>.cfargotunnel.com
   4. 打印 `cloudflared service install` 要用的 token 文件路径
 
@@ -53,7 +53,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", required=True, help="对外域名（CF 一级子域）")
     ap.add_argument("--tunnel", default="ppass-review", help="tunnel 名")
-    ap.add_argument("--origin-sni", default=None, help="源站证书域名，默认同 --host")
+    ap.add_argument("--origin-sni", default=None, help="源站 SNI，默认同 --host")
     ap.add_argument("--local-port", default="443", help="源站端口（默认 443，nginx TLS）")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
@@ -80,7 +80,7 @@ def main():
     ingress = {"config": {"ingress": [
         {"hostname": a.host,
          "service": f"https://127.0.0.1:{a.local_port}",
-         "originRequest": {"originServerName": a.origin_sni or a.host}},
+         "originRequest": {"originServerName": a.origin_sni or a.host, "noTLSVerify": True}},
         {"service": "http_status:404"}]}}
     if a.dry_run:
         print("[dry-run] ingress:", json.dumps(ingress, ensure_ascii=False))

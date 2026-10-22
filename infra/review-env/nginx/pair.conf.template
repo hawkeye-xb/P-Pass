@@ -1,26 +1,26 @@
 # 审核配对页 —— nginx 站点（模板）
 #
 # 占位符由 scripts/install.sh 替换：
-#   __PUBLIC_HOST__      对外域名（必须是 Cloudflare 免费版能签发边缘证书的**一级**子域）
-#   __ORIGIN_SNI_HOST__  源站证书对应的域名（可以和对外域名不同；Tunnel 用它连 127.0.0.1:443）
+#   __PUBLIC_HOST__        对外域名（Cloudflare 一级子域，例如 pair-test.example.com）
+#   __SELF_SIGNED_BASE__   自签证书路径前缀（如 /etc/nginx/selfsigned/pair-test.example.com）
 #
-# 为什么对外是 HTTPS 而不是「源站裸 80」：页面会签发配对令牌，明文链路等于把令牌
-# 送给链路上的任何人；账号密码也不该明文过网。
+# 为什么源站用自签：只有 Cloudflare Tunnel 从 127.0.0.1 访问它，浏览器看到的是 CF 边缘证书；
+# 隧道 ingress 里写 noTLSVerify=true。这样不依赖 Let's Encrypt 续期，也不会在审核窗口里过期。
 
 server {
     listen 80;
     listen [::]:80;
-    server_name __PUBLIC_HOST__ __ORIGIN_SNI_HOST__;
+    server_name __PUBLIC_HOST__;
     return 301 https://$host$request_uri;
 }
 
 server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
-    server_name __PUBLIC_HOST__ __ORIGIN_SNI_HOST__;
+    server_name __PUBLIC_HOST__;
 
-    ssl_certificate     /etc/letsencrypt/live/__ORIGIN_SNI_HOST__/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/__ORIGIN_SNI_HOST__/privkey.pem;
+    ssl_certificate     __SELF_SIGNED_BASE__.crt;
+    ssl_certificate_key __SELF_SIGNED_BASE__.key;
     ssl_protocols TLSv1.2 TLSv1.3;
 
     client_max_body_size 1m;

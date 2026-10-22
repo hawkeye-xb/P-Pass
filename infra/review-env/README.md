@@ -22,11 +22,21 @@
 
 | 场景 | 用哪个地址 | 说明 |
 |---|---|---|
-| **海外（审核员）** | `https://<REVIEW_HOST>` | 审核员专用那台（计划放 SG）。地址与账号密码写进 App Store Connect 的「审核信息」，只给审核员 |
-| **国内（我们自测）** | `https://<SELFTEST_HOST>` | 国内那台，只给我们自己用；不写进任何审核材料 |
+| **海外（审核员）** | `https://review.<域>` | 审核员专用那台（放 SG）。地址与账号密码写进 App Store Connect 的「审核信息」，只给审核员 |
+| **国内（我们自测）** | `https://pair-test.<域>` | 国内那台，只给我们自己用；不写进任何审核材料 |
+
+**命名约定**：一个环境一个子域，名字里带语义，**不留裸 `pair`**——
+
+- `pair-test` = 自测机（国内）
+- `review` = 审核机（SG，给审核员）
+- 以后加第三套（比如压测/回归）就继续 `xxx-test` / `xxx-staging`，不复用已有名字
+
+理由：审核地址会被写进 Apple 的审核材料然后长期沉寂，一旦被别的环境复用，下次出事时「到底哪个环境」就说不清；
+而自测机在仓库文档里出现频率高得多，名字里带 `test` 能挡住「把自测地址写进审核备注」这类错。
 
 > 当前状态（2026-10-22）：只有国内这台（阿里云华北）已经跑通，审核员那台还没建（#1088 的服务器部分）。
-> 在两台齐备之前，如果先提审，审核员用的就是国内这台的地址——但务必记得它本来是自测机。
+> 如果先提审、SG 还没就绪：**在这台机器上再加一个 `review.` 子域指过来**（机器不换、名字换），
+> 不要把 `pair-test` 的地址写进审核备注——名字是给未来的人看的，混用早晚要出事。
 
 为什么不能「国内直连、海外走别的」：国内云上**未备案域名**会被拦截（见下方「坑」），
 两个地区实际都只能经 Cloudflare 边缘访问；能区分的是**机器**，不是链路。
@@ -64,18 +74,20 @@ sudo PPASS_REVIEW_PASSWORD='<想好的密码>' \
 生成 nginx 站点（Basic Auth + 限流 + noindex）、把 Cloudflare 段写进 `set_real_ip_from`、
 最后本机自检（无凭据 401 / 带凭据 200）。
 
-### 3. 证书（源站）
+### 3. 证书（源站，自签就够）
 
-Tunnel 里我们把源站当 `https://127.0.0.1:443` 用，所以本机要有一张对得上的证书。
-国内机器上未备案域名的 80/443 被拦 → **HTTP-01 不可用**，必须 DNS-01：
+源站只被 Cloudflare Tunnel 从 `127.0.0.1` 访问，浏览器看到的是 CF 边缘证书。所以源站用**自签证书**即可，
+隧道的 ingress 里写 `noTLSVerify: true`：
 
 ```bash
-certbot certonly --manual --preferred-challenges dns \
-  --manual-auth-hook /root/cf-auth-hook.sh --manual-cleanup-hook /root/cf-cleanup-hook.sh \
-  -d origin.example.com --key-type ecdsa --non-interactive --agree-tos -m <email>
+install -d -m 700 /etc/nginx/selfsigned && cd /etc/nginx/selfsigned
+openssl req -x509 -newkey rsa:2048 -sha256 -days 3650 -nodes \
+  -keyout pair-test.key -out pair-test.crt \
+  -subj "/CN=pair-test.example.com" -addext "subjectAltName=DNS:pair-test.example.com"
 ```
 
-（hook 用 `$CERTBOT_DOMAIN` 走 CF API 写 TXT，见 `cn-service-deploy` skill；没有 hook 就先手工签一张。）
+好处：不依赖 Let's Encrypt、不会在审核窗口里过期、也不需要为了 80/443 被拦的机器折腾 DNS-01。
+（如果哪天不走 Tunnel 而是直连公网，就得换回 LE —— 那时 80/443 的备案问题会一起回来。）
 
 ### 4. Tunnel + DNS
 
