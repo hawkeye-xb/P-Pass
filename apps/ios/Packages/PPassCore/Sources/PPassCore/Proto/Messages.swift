@@ -102,6 +102,8 @@ public enum ProtoReason: String, CaseIterable, Sendable {
     case notPaired = "not_paired"
     case roleForbidden = "role_forbidden"
     case pairTokenInvalid = "pair_token_invalid"
+    /// #1118：`pair.confirm` 的密钥确认对不上（验证码输错）——这次申请作废，要重新扫码。
+    case pairCodeWrong = "pair_code_wrong"
     case phoneOutdated = "phone_outdated"
     case desktopOutdated = "desktop_outdated"
     case unsupportedMethod = "unsupported_method"
@@ -253,15 +255,19 @@ public struct PairRequest: Codable, Equatable, Sendable {
     public var role: String
     /// NET-10：true = 排队即答、之后轮询 `pair.status`。false 时省略（旧帧逐字节不变）。
     public var ackThenPoll: Bool
+    /// #1118：手机的 SPAKE2 消息（hex，66 个字符）。电脑据此在业主输入验证码后回 `pake_b`；空 = 旧手机，电脑回 `phone_outdated`。
+    /// 空串时省略（旧样本逐字节不变）。
+    public var pakeA: String
 
-    public init(token: String = "", deviceName: String = "", role: String = "member", ackThenPoll: Bool = false) {
+    public init(token: String = "", deviceName: String = "", role: String = "member", ackThenPoll: Bool = false, pakeA: String = "") {
         self.token = token
         self.deviceName = deviceName
         self.role = role
         self.ackThenPoll = ackThenPoll
+        self.pakeA = pakeA
     }
 
-    enum CodingKeys: String, CodingKey { case token, deviceName = "device_name", role, ackThenPoll = "ack_then_poll" }
+    enum CodingKeys: String, CodingKey { case token, deviceName = "device_name", role, ackThenPoll = "ack_then_poll", pakeA = "pake_a" }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -269,6 +275,7 @@ public struct PairRequest: Codable, Equatable, Sendable {
         deviceName = try c.value(.deviceName, default: "")
         role = try c.value(.role, default: "member")
         ackThenPoll = try c.value(.ackThenPoll, default: false)
+        pakeA = try c.value(.pakeA, default: "")
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -277,6 +284,7 @@ public struct PairRequest: Codable, Equatable, Sendable {
         try c.encode(deviceName, forKey: .deviceName)
         try c.encode(role, forKey: .role)
         if ackThenPoll { try c.encode(true, forKey: .ackThenPoll) }
+        if !pakeA.isEmpty { try c.encode(pakeA, forKey: .pakeA) }
     }
 }
 
@@ -314,24 +322,32 @@ public struct PairStatusRequest: Codable, Equatable, Sendable {
 }
 
 public struct PairStatusReply: Codable, Equatable, Sendable {
-    /// pending / accepted / denied / expired / not_found
+    /// pending / accepted / denied / expired / not_found / failed（#1118：验证码对不上，这次申请作废）
     public var state: String
     public var accepted: PairAccepted?
     public var msgKey: String?
+    /// #1118：电脑的 SPAKE2 回应（hex）。`pending` 且业主输完验证码后出现；手机据此算 `confirm_a` 发 `pair.confirm`。
+    public var pakeB: String?
+    /// #1118：电脑的密钥确认（hex）。`accepted` 时必带；手机 `verify` 通过才保存配对。
+    public var confirmB: String?
 
-    public init(state: String = "", accepted: PairAccepted? = nil, msgKey: String? = nil) {
+    public init(state: String = "", accepted: PairAccepted? = nil, msgKey: String? = nil, pakeB: String? = nil, confirmB: String? = nil) {
         self.state = state
         self.accepted = accepted
         self.msgKey = msgKey
+        self.pakeB = pakeB
+        self.confirmB = confirmB
     }
 
-    enum CodingKeys: String, CodingKey { case state, accepted, msgKey = "msg_key" }
+    enum CodingKeys: String, CodingKey { case state, accepted, msgKey = "msg_key", pakeB = "pake_b", confirmB = "confirm_b" }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         state = try c.value(.state, default: "")
         accepted = try c.decodeIfPresent(PairAccepted.self, forKey: .accepted)
         msgKey = try c.decodeIfPresent(String.self, forKey: .msgKey)
+        pakeB = try c.decodeIfPresent(String.self, forKey: .pakeB)
+        confirmB = try c.decodeIfPresent(String.self, forKey: .confirmB)
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -339,6 +355,27 @@ public struct PairStatusReply: Codable, Equatable, Sendable {
         try c.encode(state, forKey: .state)
         try c.encodeIfPresent(accepted, forKey: .accepted)
         try c.encodeIfPresent(msgKey, forKey: .msgKey)
+        try c.encodeIfPresent(pakeB, forKey: .pakeB)
+        try c.encodeIfPresent(confirmB, forKey: .confirmB)
+    }
+}
+
+/// #1118：`pair.confirm` 的参数——手机对这一次申请的密钥确认（`confirm_a`，hex）。同一个值重发是幂等的。
+public struct PairConfirmRequest: Codable, Equatable, Sendable {
+    public var requestId: String
+    public var confirmA: String
+
+    public init(requestId: String = "", confirmA: String = "") {
+        self.requestId = requestId
+        self.confirmA = confirmA
+    }
+
+    enum CodingKeys: String, CodingKey { case requestId = "request_id", confirmA = "confirm_a" }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        requestId = try c.value(.requestId, default: "")
+        confirmA = try c.value(.confirmA, default: "")
     }
 }
 
@@ -933,6 +970,8 @@ public enum Methods {
     public static let pairRequest = "pair.request"
     public static let pairStatus = "pair.status"
     public static let pairCancel = "pair.cancel"
+    /// #1118：手机的密钥确认（`PairConfirmRequest` → `PairStatusReply`）。
+    public static let pairConfirm = "pair.confirm"
     public static let timelinePage = "timeline.page"
     public static let assetMeta = "asset.meta"
     public static let thumbGet = "thumb.get"

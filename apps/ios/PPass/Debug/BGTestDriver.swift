@@ -66,7 +66,7 @@ enum BGTestDriver {
         do { try await media.saveScope([], known: all) } catch {
             status.write("failed", ["error": "clear scope: \(error)", "done": true]); return
         }
-        let outcome = await model.backend.pairing.pair(code: link)
+        let outcome = await E2EPairCode.pair(model.backend.pairing, link: link, dir: status.url.deletingLastPathComponent())
         guard case .joined(let firstTime, let settingSaveFailed) = outcome else {
             status.write("failed", ["error": "pairing: \(outcome)", "done": true]); return
         }
@@ -150,7 +150,7 @@ enum BGTestDriver {
         status.write("started")
         let access = await backend.media.requestAccess()
         guard access == .full else { status.write("failed", ["error": "photo access is \(access), need full", "done": true]); return }
-        let outcome = await backend.pairing.pair(code: link)
+        let outcome = await E2EPairCode.pair(backend.pairing, link: link, dir: dir)
         guard case .joined(let firstTime, let settingSaveFailed) = outcome else { status.write("failed", ["error": "pairing: \(outcome)", "done": true]); return }
         model.paired(firstTime: firstTime, settingSaveFailed: settingSaveFailed)
         status.write("paired")
@@ -223,7 +223,7 @@ private enum PhotoKitAlbums {
 /// `status.json`：每一步原子重写，字段累加。
 @MainActor
 private final class StatusFile {
-    private let url: URL
+    let url: URL
     private var fields: [String: Any]
 
     init(url: URL, run: String) {

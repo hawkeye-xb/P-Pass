@@ -57,13 +57,13 @@ final class PairingWiringTests: XCTestCase {
                              onboarded: @escaping (String) -> Bool = { _ in false },
                              onPaired: @escaping (PairingRecord, Bool) -> Bool = { _, _ in false }) -> LivePairing {
         LivePairing(transportFor: { _ in transport }, store: store, onboarded: onboarded, onPaired: onPaired,
-                    onDisconnect: {}, logger: LogSink())
+                    onDisconnect: {}, logger: LogSink(), localNodeId: { PairFixtures.phoneNode }, crypto: FakePairCrypto())
     }
 
     private func makeDisconnecting(_ transport: ScriptedTransport, store: PairingStore,
                                    onDisconnect: @escaping () async -> Void) -> LivePairing {
         LivePairing(transportFor: { _ in transport }, store: store, onboarded: { _ in false }, onPaired: { _, _ in false },
-                    onDisconnect: onDisconnect, logger: LogSink())
+                    onDisconnect: onDisconnect, logger: LogSink(), localNodeId: { PairFixtures.phoneNode }, crypto: FakePairCrypto())
     }
 
     /// 把 pairing.json 占成一个目录：原子写必然失败（不依赖权限、不依赖磁盘满）。
@@ -114,10 +114,13 @@ final class PairingWiringTests: XCTestCase {
     func test_accepted_path_also_fails_when_persisting_fails() async throws {
         let store = PairingStore(root: dir)
         try blockPairingFile()
-        // 老桌面：pair.request 直接回 accepted（无 request_id），不走轮询。
+        // 走完验证码交换的正常路径（#1118）：confirm_b 验过之后写盘失败 → 配对失败、不报已配对。
         let transport = ScriptedTransport([
-            Methods.hello: try .ok(Hello(capabilities: [PairVerdictLoop.statusCapability])),
-            Methods.pairRequest: try .ok(PairAccepted(storageDeviceName: "Mac", pairingId: "e9")),
+            Methods.hello: try .ok(Hello(capabilities: [PairVerdictLoop.statusCapability], deviceName: "Mac")),
+            Methods.pairRequest: try .ok(PairSubmitted(accepted: true, requestId: "r1", ttlMs: 60_000)),
+            Methods.pairStatus: try .ok(PairStatusReply(state: "pending", pakeB: PairFixtures.pakeB)),
+            Methods.pairConfirm: try .ok(PairStatusReply(state: "accepted", accepted: PairAccepted(storageDeviceName: "Mac", pairingId: "e9"),
+                                                         confirmB: PairFixtures.confirmB)),
         ])
         var paired = 0
         let outcome = await makePairing(transport, store: store) { _, _ in paired += 1; return false }.pair(code: link)
@@ -240,11 +243,15 @@ final class PairingWiringTests: XCTestCase {
         let store = PairingStore(root: dir)
         let transport = ScriptedTransport([
             Methods.hello: try .ok(Hello(capabilities: [PairVerdictLoop.statusCapability], deviceName: "Mac")),
-            Methods.pairRequest: try .ok(PairAccepted(storageDeviceName: "Mac", pairingId: "e5")),
+            Methods.pairRequest: try .ok(PairSubmitted(accepted: true, requestId: "r1", ttlMs: 60_000)),
+            Methods.pairStatus: try .ok(PairStatusReply(state: "pending", pakeB: PairFixtures.pakeB)),
+            Methods.pairConfirm: try .ok(PairStatusReply(state: "accepted", accepted: PairAccepted(storageDeviceName: "Mac", pairingId: "e5"),
+                                                         confirmB: PairFixtures.confirmB)),
         ])
         let outcome = await makePairing(transport, store: store).pair(code: link)
         XCTAssertEqual(outcome, .joined(firstTime: true))
-        XCTAssertEqual(transport.calls, [Methods.hello, Methods.hello, Methods.pairRequest], "第一次 hello 判成员未过，第二次来自正常配对")
+        XCTAssertEqual(transport.calls, [Methods.hello, Methods.hello, Methods.pairRequest, Methods.pairStatus, Methods.pairConfirm],
+                       "第一次 hello 判成员未过，第二次来自正常配对")
         XCTAssertFalse(transport.calls.contains(Methods.backupBegin), "成员探针不得再用 backup.begin")
         XCTAssertEqual(store.load()?.pairingId, "e5")
     }

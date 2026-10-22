@@ -69,14 +69,23 @@ source "$ROOT/tools/ipc-lib.sh"
 # #1115：--ephemeral 是测试沙盒，库目录由 daemon 自建（stdout 的 SANDBOX: 行），不收路径输入。
 ipc_sandbox_dir "$WORK/daemon.out"
 ipc_pair_qr "$SANDBOX_DIR/ipc.token"
+# 手机把验证码写在 App 容器里（Documents/e2e/pair_code.txt，每次启动先清旧的）：有待确认的请求时才拉一次，输出到 stdout。
+pull_codes() {
+  xcrun devicectl device copy from --device "$DEV" --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
+    --source Documents/e2e/pair_code.txt --destination "$OUT/pair_code.txt" >/dev/null 2>&1 && cat "$OUT/pair_code.txt"
+}
 owner_loop() {
-  local resp ids n body
+  local resp ids n body code
   while kill -0 "$DAEMON_PID" 2>/dev/null; do
     if resp=$(ipc pairing.pending 2>/dev/null); then
       ids=$(printf '%s' "$resp" | jq -r '.result.pending[]?.node_id // empty')
       for n in $ids; do
-        body=$(jq -cn --arg n "$n" '{accept: true, node_id: $n}')
-        if ipc pairing.confirm "$body" >/dev/null 2>&1; then echo "owner: 已允许 ${n:0:8}…"; fi
+        # #1118：允许 = 输入手机显示的验证码。手机（App 的 e2e 驱动 / XCTest）提交成功后打出
+        # `PAIR_CODE=<6 位> node=<手机 NodeId>`；这里按 node 取最后一行，没有码的请求不动。
+        code=$(pull_codes 2>/dev/null | sed -n "s/.*PAIR_CODE=\([0-9]\{6\}\) node=$n.*/\1/p" | tail -1)
+        [ -n "$code" ] || continue
+        body=$(jq -cn --arg n "$n" --arg c "$code" '{accept: true, node_id: $n, code: $c}')
+        if ipc pairing.confirm "$body" >/dev/null 2>&1; then echo "owner: 已用验证码允许 ${n:0:8}…"; fi
       done
     fi
     sleep 0.3

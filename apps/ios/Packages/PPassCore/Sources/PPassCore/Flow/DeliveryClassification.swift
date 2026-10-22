@@ -60,7 +60,7 @@ public func reasonClass(_ reason: DesktopReason) -> ReasonClass {
     case .internal: return .peerFailure(.desktopInternal)
     case .fetchFailed: return .pathFailure
     // role_forbidden（#1119）：已配对、只是角色不允许这个方法——不是「未配对」，不触发清理，按手机发错请求走单张失败。
-    case .badRequest, .notFound, .backupFailed, .cancelled, .pairTokenInvalid, .grantNotFound, .grantConflict, .roleForbidden, .unknown:
+    case .badRequest, .notFound, .backupFailed, .cancelled, .pairTokenInvalid, .pairCodeWrong, .grantNotFound, .grantConflict, .roleForbidden, .unknown:
         return .itemFailure
     }
 }

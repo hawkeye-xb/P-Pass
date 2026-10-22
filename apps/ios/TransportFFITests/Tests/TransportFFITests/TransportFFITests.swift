@@ -319,28 +319,45 @@ final class TransportFFITests: XCTestCase {
         let client = try CtrlClient.bind(
             config: CtrlConfig(secretKey: nil, relayUrls: [], offline: true, bindTimeoutMs: 0))
         defer { client.shutdown() }
+        // #1118：验证码交换走共享 Rust 内核（PairPhone）；验证码由手机生成，提交成功后写进 `$E2E/pair_code.txt`
+        // （`PAIR_CODE=<码> node=<本机 NodeId>`），宿主脚本的 owner_loop 按 node 取码调 pairing.confirm。
+        let phoneNode = try client.nodeId()
+        let code = try pairCodeGenerate()
+        let pake = try PairPhone.start(code: code, token: link.token, phoneNode: phoneNode, deskNode: link.nodeId)
         let submitted = try ctrl(client, peer, "pair.request",
                                  ["token": link.token, "device_name": "iOS 模拟器 G2", "role": "member",
-                                  "ack_then_poll": true],
+                                  "ack_then_poll": true, "pake_a": pake.pakeA()],
                                  timeoutMs: 15_000)
         XCTAssertEqual(submitted["ok"] as? Bool, true, "\(submitted)")
         let ack = try XCTUnwrap(submitted["result"] as? [String: Any], "\(submitted)")
         let requestId = try XCTUnwrap(ack["request_id"] as? String, "\(submitted)")
         let ttlMs = (ack["ttl_ms"] as? NSNumber)?.doubleValue ?? 60_000
+        try "PAIR_CODE=\(code) node=\(phoneNode)\n".write(to: e2e.appendingPathComponent("pair_code.txt"), atomically: true, encoding: .utf8)
         var acceptedPairingId: String?
+        var confirmA: String?
         let pollDeadline = Date().addingTimeInterval(ttlMs / 1000 + 5)
         while acceptedPairingId == nil {
             let st = try ctrl(client, peer, "pair.status", ["request_id": requestId], timeoutMs: 15_000)
             XCTAssertEqual(st["ok"] as? Bool, true, "\(st)")
-            let reply = try XCTUnwrap(st["result"] as? [String: Any], "\(st)")
+            var reply = try XCTUnwrap(st["result"] as? [String: Any], "\(st)")
+            if reply["state"] as? String == "pending" {
+                if confirmA == nil, let pakeB = reply["pake_b"] as? String { confirmA = try pake.finish(pakeB: pakeB) }
+                if let confirmA {
+                    let c = try ctrl(client, peer, "pair.confirm", ["request_id": requestId, "confirm_a": confirmA], timeoutMs: 15_000)
+                    XCTAssertEqual(c["ok"] as? Bool, true, "pair.confirm: \(c)")
+                    reply = try XCTUnwrap(c["result"] as? [String: Any], "\(c)")
+                }
+            }
             switch reply["state"] as? String {
             case "accepted":
-                acceptedPairingId = try XCTUnwrap((reply["accepted"] as? [String: Any])?["pairing_id"] as? String, "\(st)")
+                // 电脑也要证明它知道这个码，验过才算加入。
+                try pake.verify(confirmB: try XCTUnwrap(reply["confirm_b"] as? String, "\(reply)"))
+                acceptedPairingId = try XCTUnwrap((reply["accepted"] as? [String: Any])?["pairing_id"] as? String, "\(reply)")
             case "pending":
                 guard Date() < pollDeadline else { return XCTFail("pair.status still pending after ttl: \(st)") }
-                Thread.sleep(forTimeInterval: 0.5)
+                Thread.sleep(forTimeInterval: 1.0)
             default:
-                return XCTFail("pairing not accepted: \(st)")
+                return XCTFail("pairing not accepted: \(reply)")
             }
         }
         let pairingId = try XCTUnwrap(acceptedPairingId)

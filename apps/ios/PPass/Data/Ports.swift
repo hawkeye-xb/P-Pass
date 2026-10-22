@@ -99,11 +99,17 @@ enum PairOutcome: Equatable {
     /// #1069：版本不兼容，要先更新 [OutdatedSide] 那一端的 P-Pass（不是电脑主人拒绝的）。
     case needsUpdate(OutdatedSide)
     case failed(reason: String)
+    /// #1118：用户在「要连接这台电脑吗？」核对页点了取消——什么都没发出去，回扫码页。
+    case declined
 }
 
 /// 配对页的补充说明：本端按判决 / `reason` 挑，文字是本机文案（#1072 / #1073：线上不再带文案 key）。
 enum PairNote: Equatable, CaseIterable {
     case tokenInvalid, denied, expired, desktopRestarted, generic
+    /// #1118：验证码对不上（`pair_code_wrong` / `failed`），这次申请作废。
+    case codeWrong
+    /// #1118：电脑没能证明它用的是同一个验证码（`confirm_b` 验不过），没有保存配对。
+    case desktopProofFailed
 
     /// 与 Android 同一套 key（strings.xml → Localizable.strings）。
     var key: String {
@@ -113,6 +119,8 @@ enum PairNote: Equatable, CaseIterable {
         case .expired: return "pair_refused_detail_expired"
         case .desktopRestarted: return "pair_refused_detail_restarted"
         case .generic: return "error_generic"
+        case .codeWrong: return "pair_refused_detail_code_wrong"
+        case .desktopProofFailed: return "pair_desktop_proof_failed"
         }
     }
 
@@ -125,17 +133,40 @@ enum PairNote: Equatable, CaseIterable {
     }
 }
 
+/// #1118：「要连接这台电脑吗？」核对页要显示的内容（电脑名 + 二维码里 NodeId 的指纹）。
+struct PairDesktopInfo: Equatable, Sendable {
+    let name: String
+    let fingerprint: String
+}
+
+/// #1118：提交成功（收到 `PairSubmitted`）之后才有：手机要显示给用户的验证码，以及本机 NodeId（自动化客户端打 `PAIR_CODE=` 用）。
+struct PairCodeShown: Equatable, Sendable {
+    let code: String
+    let phoneNode: String
+}
+
+/// 核对电脑：返回 true = 连接，false = 取消（取消时不得发出任何 `pair.request`）。UI 注入真正的页面，自动化注入「总是连接」。
+typealias PairReview = @Sendable (PairDesktopInfo) async -> Bool
+/// 验证码要显示了。
+typealias PairCodeSink = @Sendable (PairCodeShown) async -> Void
+
 protocol PairingService: AnyObject {
     func status() -> PairingStatus
     /// 配对时间（毫秒）；未配对 / 未知 = nil。
     func pairedAtMs() -> Int64?
     /// code 是二维码内容或手动粘贴的配对串（同一个字符串，`ppf://pair?...`）。
-    func pair(code: String) async -> PairOutcome
+    /// `review`：「已是成员」探测之后、任何 `pair.request` 之前的核对步骤（#1118）；`onCode`：提交成功后才调，给验证码页。
+    func pair(code: String, review: @escaping PairReview, onCode: @escaping PairCodeSink) async -> PairOutcome
     func cancel() async
     /// 本地断开（UX-06）：先尽力通知电脑撤销本机（5 秒、失败不阻塞），再按断开清单清本地。成功后状态变 `.notPaired`。
     func disconnect() async
     /// 只清本地、不通知电脑（#1119）：配对失效卡的「重新连接」——电脑本就不认这台手机，没有可通知的。
     func clearLocal() async
+}
+
+extension PairingService {
+    /// 自动化 / 无界面调用：总是连接、不显示验证码。
+    func pair(code: String) async -> PairOutcome { await pair(code: code, review: { _ in true }, onCode: { _ in }) }
 }
 
 /// 备份引擎：首页的全部事实 + 唯一的那个按钮。

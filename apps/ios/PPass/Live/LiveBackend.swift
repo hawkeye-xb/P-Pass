@@ -240,7 +240,8 @@ final class LiveBackend: @unchecked Sendable {
     func ports() -> Backend {
         let pairing = LivePairing(transportFor: { [plane] in PeerCtrlTransport(plane: plane, peerToken: $0) }, store: pairingStore, onboarded: { [onboarded] in onboarded.wasOnboarded($0) },
                                   onPaired: { [weak self] record, known in self?.paired(record, knownDesktop: known) ?? false },
-                                  onDisconnect: { [weak self] in await self?.disconnect() }, logger: logger)
+                                  onDisconnect: { [weak self] in await self?.disconnect() }, logger: logger,
+                                  localNodeId: { [plane] in try plane.nodeId() })
         let timeline = LiveTimeline(client: { [pairingStore, plane] in
             guard let r = pairingStore.load() else { return nil }
             return ProtoClient(transport: PeerCtrlTransport(plane: plane, peerToken: r.peerToken))

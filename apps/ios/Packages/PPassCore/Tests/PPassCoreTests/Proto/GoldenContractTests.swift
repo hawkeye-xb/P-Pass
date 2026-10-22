@@ -22,6 +22,12 @@ final class GoldenContractTests: XCTestCase {
         "snapshots__pair_status_request": roundtrip(PairStatusRequest.self),
         "snapshots__pair_status_reply_accepted": roundtrip(PairStatusReply.self),
         "snapshots__pair_status_reply_denied": roundtrip(PairStatusReply.self),
+        // #1118 配对验证码（proto v3）
+        "snapshots__pair_request_pake": roundtrip(PairRequest.self),
+        "snapshots__pair_status_reply_pake_b": roundtrip(PairStatusReply.self),
+        "snapshots__pair_confirm_request": roundtrip(PairConfirmRequest.self),
+        "snapshots__pair_status_reply_confirmed": roundtrip(PairStatusReply.self),
+        "snapshots__pair_status_reply_failed": roundtrip(PairStatusReply.self),
         "snapshots__req_envelope": roundtrip(Req.self),
         "snapshots__req_envelope_json": roundtrip(Req.self),
         "snapshots__resp_ok_envelope": roundtrip(Resp.self),

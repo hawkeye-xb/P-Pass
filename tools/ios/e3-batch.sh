@@ -167,6 +167,21 @@ wait_done "$RUN" 60 "$OUT/scope-before.json"
 echo "  范围：$(jq -r '.selected | if type == "array" then "\(length) 个相册" else "从未保存" end' "$OUT/scope-before.json")"
 
 # 从这里起会动配对：退出时收掉两台沙盒，并告诉人怎么配回正式桌面。
+# #1118：手机提交成功后把 `PAIR_CODE=<码> node=<NodeId>` 追加进 App 容器的 Documents/e2e/pair_code.txt（App 每次启动先清掉旧的）。
+# 后台每秒拉一份到宿主；拉不到（文件还没有 / 已清）就删本地副本，免得拿旧码去确认。desk_auto_allow 按 node 取码。
+PAIR_CODES="$OUT/pair_code.txt"
+PULLER_PID=
+pair_code_puller() {
+  while :; do
+    if xcrun devicectl device copy from --device "$DEV" --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
+      --source Documents/e2e/pair_code.txt --destination "$PAIR_CODES.tmp" >/dev/null 2>&1; then
+      mv -f "$PAIR_CODES.tmp" "$PAIR_CODES"
+    else
+      rm -f "$PAIR_CODES" "$PAIR_CODES.tmp"
+    fi
+    sleep 1
+  done
+}
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/ppass-e3.XXXXXX")
 DESK_A="$WORK/A"
 DESK_B="$WORK/B"
@@ -174,6 +189,7 @@ TOUCHED=
 cleanup() {
   local rc=$?
   trap - EXIT INT TERM
+  if [ -n "$PULLER_PID" ]; then kill "$PULLER_PID" 2>/dev/null || true; wait "$PULLER_PID" 2>/dev/null || true; fi
   for d in "$DESK_A" "$DESK_B"; do
     [ -d "$d" ] || continue
     cp "$d/daemon.err" "$OUT/daemon-$(basename "$d").err" 2>/dev/null || true
@@ -191,8 +207,10 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 mkdir -p "$DESK_A" "$DESK_B" "$WORK/seed"
+pair_code_puller &
+PULLER_PID=$!
 desk_start "$DESK_A" "$DAEMON"
-desk_auto_allow "$DESK_A"
+desk_auto_allow "$DESK_A" "$PAIR_CODES"
 NODE_A=$(desk_node "$DESK_A")
 echo "  老电脑 A：${NODE_A:0:8}…"
 
@@ -260,7 +278,7 @@ fi
 # ---- new-desktop ----
 echo "==> new-desktop：配到新电脑 B（范围清空，不传照片）"
 desk_start "$DESK_B" "$DAEMON"
-desk_auto_allow "$DESK_B"
+desk_auto_allow "$DESK_B" "$PAIR_CODES"
 NODE_B=$(desk_node "$DESK_B")
 echo "  新电脑 B：${NODE_B:0:8}…"
 pair_only "$DESK_B" newdesk "" || { verdict new-desktop FAIL "配对失败"; exit 1; }

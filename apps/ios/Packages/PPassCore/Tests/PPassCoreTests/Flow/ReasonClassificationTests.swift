@@ -11,6 +11,7 @@ final class ReasonClassificationTests: XCTestCase {
         ("not_paired", "pairing_lost"),
         ("role_forbidden", "item_failure"),
         ("pair_token_invalid", "item_failure"),
+        ("pair_code_wrong", "item_failure"),
         ("phone_outdated", "version_mismatch:phone"),
         ("desktop_outdated", "version_mismatch:desktop"),
         ("unsupported_method", "version_mismatch:desktop"),

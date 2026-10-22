@@ -10,6 +10,7 @@ final class PairReasonTests: XCTestCase {
             return r
         })
         l.pollIntervalNs = 1_000_000
+        l.crypto = FakePairCrypto()
         return l
     }
 
@@ -35,6 +36,7 @@ final class PairReasonTests: XCTestCase {
                 return Resp(ok: false, error: RespError(code: Codes.versionMismatch, reason: reason))
             })
             l.pollIntervalNs = 1_000_000
+            l.crypto = FakePairCrypto()
             let v = try await l.run(token: "t", deviceName: "d")
             XCTAssertEqual(v, .versionMismatch(side), reason)
             XCTAssertEqual(v.outcome, .needsUpdate(side), reason)

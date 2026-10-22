@@ -123,13 +123,17 @@ SUSPEND_SECS="${PPASS_SUSPEND_SECS:-5}"
 
 # 业主：把队列里每一条待确认请求点「允许」（这台 daemon 只给本次测试用）。
 owner_loop() {
-  local resp ids n body
+  local resp ids n body code
   while kill -0 "$DAEMON_PID" 2>/dev/null; do
     if resp=$(ipc pairing.pending 2>/dev/null); then
       ids=$(printf '%s' "$resp" | jq -r '.result.pending[]?.node_id // empty')
       for n in $ids; do
-        body=$(jq -cn --arg n "$n" '{accept: true, node_id: $n}')
-        if ipc pairing.confirm "$body" >/dev/null 2>&1; then echo "owner: 已允许 $n"; fi
+        # #1118：允许 = 输入手机显示的验证码。测试进程提交成功后把 `PAIR_CODE=<6 位> node=<手机 NodeId>`
+        # 写进 $E2E/pair_code.txt；这里按 node 取最后一行，没有码的请求不动。
+        code=$(cat "$E2E/pair_code.txt" 2>/dev/null | sed -n "s/.*PAIR_CODE=\([0-9]\{6\}\) node=$n.*/\1/p" | tail -1)
+        [ -n "$code" ] || continue
+        body=$(jq -cn --arg n "$n" --arg c "$code" '{accept: true, node_id: $n, code: $c}')
+        if ipc pairing.confirm "$body" >/dev/null 2>&1; then echo "owner: 已用验证码允许 $n"; fi
       done
     fi
     sleep 0.3

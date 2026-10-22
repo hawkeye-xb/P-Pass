@@ -138,6 +138,21 @@ DAEMON="${CARGO_TARGET_DIR:-$ROOT/target}/release/daemon"
 # ---- 测试沙盒桌面 + 自动允许配对（tools/ios/sandbox-desk.sh，同 e3-batch.sh）----
 # shellcheck source=tools/ios/sandbox-desk.sh
 source "$ROOT/tools/ios/sandbox-desk.sh"
+# #1118：手机提交成功后把 `PAIR_CODE=<码> node=<NodeId>` 追加进 App 容器的 Documents/e2e/pair_code.txt（App 每次启动先清掉旧的）。
+# 后台每秒拉一份到宿主；拉不到（文件还没有 / 已清）就删本地副本，免得拿旧码去确认。desk_auto_allow 按 node 取码。
+PAIR_CODES="$OUT/pair_code.txt"
+PULLER_PID=
+pair_code_puller() {
+  while :; do
+    if xcrun devicectl device copy from --device "$DEV" --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
+      --source Documents/e2e/pair_code.txt --destination "$PAIR_CODES.tmp" >/dev/null 2>&1; then
+      mv -f "$PAIR_CODES.tmp" "$PAIR_CODES"
+    else
+      rm -f "$PAIR_CODES" "$PAIR_CODES.tmp"
+    fi
+    sleep 1
+  done
+}
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/ppass-bgsim.XXXXXX")
 DESK="$WORK/desk"
 DAEMON_PID=
@@ -145,6 +160,7 @@ TOUCHED_PAIRING= # App 带 PPASS_E2E_RESET 启动之后置 1：从这一刻起�
 cleanup() {
   local rc=$?
   trap - EXIT INT TERM
+  if [ -n "$PULLER_PID" ]; then kill "$PULLER_PID" 2>/dev/null || true; wait "$PULLER_PID" 2>/dev/null || true; fi
   cp "$DESK/daemon.err" "$OUT/daemon.err" 2>/dev/null || true
   desk_stop "$DESK"
   rm -rf "$WORK"
@@ -159,8 +175,10 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM
 mkdir -p "$DESK" "$WORK/seed"
+pair_code_puller &
+PULLER_PID=$!
 desk_start "$DESK" "$DAEMON"
-desk_auto_allow "$DESK"
+desk_auto_allow "$DESK" "$PAIR_CODES"
 DAEMON_PID=$(cat "$DESK/pid")
 NODE_ID=$(desk_node "$DESK")
 desk_qr "$DESK"

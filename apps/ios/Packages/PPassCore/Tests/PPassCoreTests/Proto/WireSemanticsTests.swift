@@ -79,6 +79,22 @@ final class WireSemanticsTests: XCTestCase {
         )
     }
 
+    /// #1118：`pair_code_wrong` 登记在两边的表里，线上字符串与方法名钉死；归类 = 不是丢配对 / 版本问题（走配对自己的判决）。
+    func testPairCodeWrongIsRegisteredAndNotAPairingLoss() throws {
+        XCTAssertEqual(ProtoReason.pairCodeWrong.rawValue, "pair_code_wrong")
+        XCTAssertEqual(DesktopReason(wire: "pair_code_wrong"), .registered(.pairCodeWrong))
+        XCTAssertEqual(Methods.pairConfirm, "pair.confirm")
+        XCTAssertEqual(reasonClass(.registered(.pairCodeWrong)), .itemFailure)
+    }
+
+    /// #1118：pake_a 空串时不上线（旧样本不变），非空时原样上线。
+    func testPairRequestOmitsEmptyPakeAndSendsNonEmpty() throws {
+        let plain = try JSONValue.parse(ProtoJSON.encode(PairRequest(token: "t", deviceName: "d", ackThenPoll: true)))
+        XCTAssertEqual(plain, try JSONValue.parse(Data(#"{"token":"t","device_name":"d","role":"member","ack_then_poll":true}"#.utf8)))
+        let pake = try JSONValue.parse(ProtoJSON.encode(PairRequest(token: "t", deviceName: "d", ackThenPoll: true, pakeA: "41ab")))
+        XCTAssertEqual(pake, try JSONValue.parse(Data(#"{"token":"t","device_name":"d","role":"member","ack_then_poll":true,"pake_a":"41ab"}"#.utf8)))
+    }
+
     /// #1070：新建的请求带本端版本。
     func testBuiltRequestCarriesThisBuildsVersions() throws {
         let wire = try JSONValue.parse(ProtoJSON.encode(Req(id: "1", method: "hello")))
