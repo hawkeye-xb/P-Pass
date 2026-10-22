@@ -61,6 +61,7 @@ on:
       - "tools/testclient/Cargo.toml"
       - "apps/desktop/src-tauri/Cargo.toml"
       - "tools/bundle-desktop-macos.sh"
+      - "tools/daemon-helper-macos.sh"
       - "tools/test-release-timeouts.sh"
   push:
     branches: [main]
@@ -102,6 +103,7 @@ on:
       - "tools/testclient/Cargo.toml"
       - "apps/desktop/src-tauri/Cargo.toml"
       - "tools/bundle-desktop-macos.sh"
+      - "tools/daemon-helper-macos.sh"
       - "tools/test-release-timeouts.sh"
   workflow_dispatch:
 

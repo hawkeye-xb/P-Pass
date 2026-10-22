@@ -23,7 +23,7 @@
 #       docs/ cards/ .claude/ *.md                                  不影响产物
 #       apps/android/、tools/build-android-iroh-blobs-bridge.sh      只算 Android
 #       apps/desktop/src-tauri/tauri.windows.conf.json              只算 Windows
-#       tools/bundle-macos.sh、tools/bundle-desktop-macos.sh、tools/fetch-ffmpeg.sh
+#       tools/bundle-macos.sh、tools/bundle-desktop-macos.sh、tools/daemon-helper-macos.sh、tools/fetch-ffmpeg.sh
 #                                                                   只算 macOS
 #       apps/desktop/（其余）                                       两个桌面端（macOS + Windows）
 #       apps/ios/、tools/ios/、tools/build-ios-*                    只算 iOS（#887；#348 起有发版 lane：TestFlight）
@@ -97,7 +97,8 @@ if [[ "$TAG" == *-test.* ]]; then
       apps/android/app/src/main/res/values/strings.xml | apps/android/app/src/main/res/values-zh/strings.xml) echo android ios ;;
       apps/android/* | tools/build-android-iroh-blobs-bridge.sh) echo android ;;
       apps/desktop/src-tauri/tauri.windows.conf.json) echo windows ;;
-      tools/bundle-macos.sh | tools/bundle-desktop-macos.sh | tools/fetch-ffmpeg.sh) echo macos ;;
+      apps/desktop/src-tauri/tauri.macos.conf.json | apps/desktop/src-tauri/macos/*) echo macos ;;
+      tools/bundle-macos.sh | tools/bundle-desktop-macos.sh | tools/daemon-helper-macos.sh | tools/fetch-ffmpeg.sh) echo macos ;;
       apps/desktop/*) echo desktop ;;
       # #887：iOS 工程与它专用的脚本不进 Android/macOS/Windows 的产物，只触发 iOS（#348 起有发版 lane）。
       apps/ios/* | tools/ios/* | tools/build-ios-*) echo ios ;;
@@ -227,7 +228,7 @@ warn_tooling() {
 # #894：安卓原生库（libtransport.so）的输入也算——与 tools/check-version-bump.sh 的 ANDROID_INPUTS 同口径。
 [ "$ANDROID" = reuse ] && warn_tooling android tools/build-android-iroh-blobs-bridge.sh \
   crates/transport Cargo.toml Cargo.lock rust-toolchain.toml
-[ "$MACOS" = reuse ] && warn_tooling macos tools/bundle-macos.sh tools/bundle-desktop-macos.sh tools/fetch-ffmpeg.sh
+[ "$MACOS" = reuse ] && warn_tooling macos tools/bundle-macos.sh tools/bundle-desktop-macos.sh tools/daemon-helper-macos.sh tools/fetch-ffmpeg.sh
 
 emit android "$ANDROID"
 emit macos "$MACOS"

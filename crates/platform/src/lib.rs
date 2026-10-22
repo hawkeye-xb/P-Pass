@@ -753,6 +753,15 @@ pub trait HostingAdapter: Send + Sync {
         DAEMON_EXECUTABLE_STEM
     }
 
+    /// 内置 daemon 可执行文件的位置，按桌面壳自己的可执行文件推出来。
+    ///
+    /// 默认是壳的同目录（Windows / Linux 的 sidecar）。macOS 的 daemon 是嵌套
+    /// helper App（#1110），见 macOS 实现。壳里所有「找内置 daemon」的地方都走
+    /// 这一个函数，布局只在平台层写一次。路径形状不对（没有父目录）= `None`。
+    fn bundled_daemon_path(&self, shell_exe: &std::path::Path) -> Option<std::path::PathBuf> {
+        Some(shell_exe.parent()?.join(self.daemon_executable_name()))
+    }
+
     /// 结束正在跑的内置 daemon 进程（B7，#1043：两平台同一套语义）。
     ///
     /// - `exe`：内置 daemon 可执行文件的路径（壳旁边那个 sidecar）。**只认这个
@@ -1269,7 +1278,7 @@ mod tests {
         // KeepAlive 会把它无限复活成 churn）。plist 必须是
         // SuccessfulExit=false 语义——成功退出不重拉、崩溃/被杀才复活。
         let plist = macos::agent_plist(
-            std::path::Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon"),
+            std::path::Path::new("/Applications/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon"),
             &macos::daemon_log_paths_in(std::path::Path::new("/var/ppf")),
         );
         assert!(
@@ -1291,10 +1300,12 @@ mod tests {
     #[test]
     fn reconcile_decision_covers_all_four_shapes() {
         use AutostartRegistration::{Absent, At, Unreadable};
-        let expected = std::path::Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon");
+        let expected = std::path::Path::new(
+            "/Applications/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon",
+        );
         // 真机实测值（#604 挂号现象）：登记被钉在备份目录里的旧 App 上。
         let stale = std::path::Path::new(
-            "/Users/lizhaowen/P-Pass-Backups/2026-09-30-before-0.6.2/old-app/P-Pass.app/Contents/MacOS/ppf-daemon",
+            "/Users/lizhaowen/P-Pass-Backups/2026-09-30-before-0.6.2/old-app/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon",
         );
 
         assert_eq!(
@@ -1365,7 +1376,9 @@ mod tests {
     /// 反证：去掉 `reconcile_autostart` 里的内容比对 → 第一条断言得到 Unchanged，红。
     #[test]
     fn reconcile_refreshes_a_registration_whose_content_is_stale() {
-        let exe = std::path::Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon");
+        let exe = std::path::Path::new(
+            "/Applications/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon",
+        );
         let stale = FakeHosting {
             registration: AutostartRegistration::At(exe.into()),
             current: false,
@@ -1405,14 +1418,16 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_plist_round_trips_its_program_argument() {
-        let exec = std::path::Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon");
+        let exec = std::path::Path::new(
+            "/Applications/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon",
+        );
         let text = macos::agent_plist(
             exec,
             &macos::daemon_log_paths_in(std::path::Path::new("/var/ppf")),
         );
         assert_eq!(
             macos::plist_program_argument(&text).as_deref(),
-            Some("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon"),
+            Some("/Applications/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon"),
             "生成的 plist 必须能被自己的解析器读回同一个路径"
         );
         // 反证：把 ProgramArguments 段换掉，必须读不出——否则「读到了」可能只是巧合。
@@ -1431,7 +1446,9 @@ mod tests {
     fn macos_unreadable_registration_is_not_mistaken_for_absent() {
         use macos::registration_from_read as classify;
         use AutostartRegistration::{Absent, At, Unreadable};
-        let exec = std::path::Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon");
+        let exec = std::path::Path::new(
+            "/Applications/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon",
+        );
         let good = macos::agent_plist(
             exec,
             &macos::daemon_log_paths_in(std::path::Path::new("/var/ppf")),
@@ -1473,7 +1490,11 @@ mod tests {
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(names, vec!["com.hawkeyexb.ppass.desktop.daemon.plist"], "临时文件不许残留");
+        assert_eq!(
+            names,
+            vec!["com.hawkeyexb.ppass.desktop.daemon.plist"],
+            "临时文件不许残留"
+        );
     }
 
     /// UPD-06 (#616)：壳是**登录项**，但**不是守卫**。
@@ -1588,31 +1609,31 @@ mod tests {
 
         // 稳定：系统级 / 用户级安装
         assert!(allowed(&p(
-            "/Applications/P-Pass.app/Contents/MacOS/ppf-daemon"
+            "/Applications/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon"
         )));
         assert!(allowed(&p(&format!(
-            "{}/Applications/P-Pass.app/Contents/MacOS/ppf-daemon",
+            "{}/Applications/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon",
             std::env::var("HOME").unwrap_or_default()
         ))));
 
         // 一次性 / 不稳定：一条都不许过（每行都是真机上真实存在的形态）
         assert!(
-            !allowed(&p("/Volumes/P-Pass/P-Pass.app/Contents/MacOS/ppf-daemon")),
+            !allowed(&p("/Volumes/P-Pass/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon")),
             "dmg 挂载点"
         );
         assert!(
             !allowed(&p(&format!(
-                "{}/Downloads/P-Pass.app/Contents/MacOS/ppf-daemon",
+                "{}/Downloads/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon",
                 std::env::var("HOME").unwrap_or_default()
             ))),
             "「下载」目录直接点开"
         );
         assert!(
-            !allowed(&p("/private/var/folders/xy/abc/T/AppTranslocation/1234-5678/d/P-Pass.app/Contents/MacOS/ppf-daemon")),
+            !allowed(&p("/private/var/folders/xy/abc/T/AppTranslocation/1234-5678/d/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon")),
             "App Translocation 随机路径"
         );
         assert!(
-            !allowed(&p("/Users/lizhaowen/P-Pass-Backups/2026-09-30-before-0.6.2/old-app/P-Pass.app/Contents/MacOS/ppf-daemon")),
+            !allowed(&p("/Users/lizhaowen/P-Pass-Backups/2026-09-30-before-0.6.2/old-app/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon")),
             "备份副本（本卡的原始现场）"
         );
         assert!(
@@ -1628,7 +1649,9 @@ mod tests {
     #[test]
     fn gate_precedes_registration_read_and_write() {
         let adapter = macos::MacosAdapter::new();
-        let dmg = std::path::Path::new("/Volumes/P-Pass/P-Pass.app/Contents/MacOS/ppf-daemon");
+        let dmg = std::path::Path::new(
+            "/Volumes/P-Pass/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon",
+        );
         assert_eq!(
             adapter.reconcile_autostart(dmg).expect("reconcile"),
             AutostartReconcile::SkippedUnstableLocation,

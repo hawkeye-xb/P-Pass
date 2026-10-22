@@ -54,8 +54,9 @@ pub(crate) fn reconcile_autostart_registration() {
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
-    let Some(dir) = exe.parent() else { return };
-    let sidecar = dir.join(platform::hosting().daemon_executable_name());
+    let Some(sidecar) = platform::hosting().bundled_daemon_path(&exe) else {
+        return;
+    };
     // 开发运行（target/ 里没有 sidecar）等情况：没有可对账的目标，直接跳过。
     if !sidecar.is_file() {
         return;

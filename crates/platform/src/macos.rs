@@ -241,6 +241,33 @@ pub(crate) fn bundle_root(exec: &Path) -> Option<PathBuf> {
     Some(bundle.to_path_buf())
 }
 
+/// #1110：内置 daemon 的 helper App 目录名，位于 `P-Pass.app/Contents/Helpers/`。
+///
+/// daemon 要读写 data protection 钥匙串，必须带 `keychain-access-groups` 权限并由
+/// 嵌入的 provisioning profile 授权；裸可执行文件没有地方放授权文件，所以组装成
+/// 独立的 `.app`（bundle id `com.hawkeyexb.ppass.desktop.daemon`）。组装与签名在
+/// `tools/bundle-desktop-macos.sh` / `tools/daemon-helper-macos.sh`。
+pub(crate) const DAEMON_HELPER_BUNDLE: &str = "ppf-daemon.app";
+
+/// 壳可执行文件 → 内置 daemon 可执行文件（纯函数、无 IO）。
+///
+/// `…/P-Pass.app/Contents/MacOS/p-pass-desktop`
+/// → `…/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon`。
+///
+/// 只有这一条相对规则，开发构建也一样：`tauri dev` 的壳在
+/// `src-tauri/target/debug/p-pass-desktop`，对应 `src-tauri/target/Helpers/…`，
+/// 本地开发签名脚本就把 helper 放在那里。
+pub(crate) fn bundled_daemon_path_from(shell_exe: &Path) -> Option<PathBuf> {
+    let contents = shell_exe.parent()?.parent()?;
+    Some(
+        contents
+            .join("Helpers")
+            .join(DAEMON_HELPER_BUNDLE)
+            .join("Contents/MacOS")
+            .join(crate::DAEMON_EXECUTABLE_STEM),
+    )
+}
+
 impl Default for MacosAdapter {
     fn default() -> Self {
         Self::new()
@@ -600,6 +627,11 @@ impl HostingAdapter for MacosAdapter {
         crate::unix::stop_processes_at(exe, pid_hint)
     }
 
+    /// #1110：daemon 是嵌套 helper App，见 [`bundled_daemon_path_from`]。
+    fn bundled_daemon_path(&self, shell_exe: &Path) -> Option<PathBuf> {
+        bundled_daemon_path_from(shell_exe)
+    }
+
     // ── UPD-06 (#616)：壳的"按需启动"登记 + kickstart ─────────────────
 
     fn shell_agent_label(&self) -> Option<&'static str> {
@@ -915,6 +947,25 @@ mod pause_resident_tests {
 mod diag_log_tests {
     use super::*;
 
+    /// #1110：壳找内置 daemon 只认嵌套 helper，正式安装与 `tauri dev` 同一条相对规则。
+    /// 反证：退回 `exe.parent().join("ppf-daemon")`（裸 sidecar）⇒ 两条都红。
+    #[test]
+    fn bundled_daemon_lives_in_the_nested_helper_app() {
+        assert_eq!(
+            MacosAdapter
+                .bundled_daemon_path(Path::new("/Applications/P-Pass.app/Contents/MacOS/p-pass-desktop")),
+            Some(PathBuf::from(
+                "/Applications/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon"
+            ))
+        );
+        assert_eq!(
+            bundled_daemon_path_from(Path::new("/w/src-tauri/target/debug/p-pass-desktop")),
+            Some(PathBuf::from(
+                "/w/src-tauri/target/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon"
+            ))
+        );
+    }
+
     // DIAG-B1：macOS daemon 日志落在固定位置、跟着 data dir 走（PPF_DATA_DIR 隔离不漏），且 tee stderr。
     // 反证：log_file 退回 None（DIAG-B1 之前）→ 一次性 spawn 的 daemon 没有任何日志，红。
     // #1046：launchd 接的 stdout/stderr 也在 `<data_dir>/logs/` 里，plist 与
@@ -934,7 +985,7 @@ mod diag_log_tests {
             "launchd 不能和 daemon 写同一个文件"
         );
         let plist = agent_plist(
-            Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon"),
+            Path::new("/Applications/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon"),
             &paths,
         );
         let (out, err) = (paths.stdout.clone().unwrap(), paths.stderr.clone().unwrap());
@@ -962,7 +1013,9 @@ mod diag_log_tests {
     /// 的登记」⇒ 对账会重写成新路径；本版本自己写出的那份判为是（幂等）。
     #[test]
     fn a_plist_with_the_old_log_paths_is_not_current() {
-        let exe = Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon");
+        let exe = Path::new(
+            "/Applications/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon",
+        );
         let logs = daemon_log_paths_in(Path::new("/Users/x/Library/Application Support/P-Pass"));
         let current = agent_plist(exe, &logs);
         assert!(plist_is_current(&current, exe, &logs));

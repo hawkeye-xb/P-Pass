@@ -550,17 +550,7 @@ fn verify_sidecar_runs(sidecar: &std::path::Path) -> Result<(), String> {
 /// the wizard never dead-ends. 基础服务不该手动启动、不该会停。
 #[tauri::command]
 fn start_daemon(app: tauri::AppHandle) -> Result<String, String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let sidecar = exe
-        .parent()
-        .ok_or("no parent dir")?
-        .join(platform::hosting().daemon_executable_name());
-    if !sidecar.is_file() {
-        return Err(ipc::ui_err(
-            "ui.err_sidecar_missing",
-            &[("path", &sidecar.display())],
-        ));
-    }
+    let sidecar = daemon_cli::bundled_sidecar()?;
     // DESK-29 (#268)：**先探活再注册**。顺序是这条修复的全部要害——
     // 探不过就在这里返回，`install_autostart` 根本不会被调到，所以用户
     // 原来那条好的开机自启键**不会被覆盖**。
@@ -896,13 +886,12 @@ fn stop_bundled_daemon() -> Result<platform::KillOutcome, String> {
         .map_err(|e| e.to_string())
 }
 
-/// 壳旁边那个内置 daemon 的路径（同目录、平台给文件名）。
+/// 内置 daemon 的路径。相对壳的布局由平台层给（macOS 是嵌套 helper App，#1110）。
 fn bundled_daemon_path() -> Result<std::path::PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    Ok(exe
-        .parent()
-        .ok_or("no parent dir")?
-        .join(platform::hosting().daemon_executable_name()))
+    platform::hosting()
+        .bundled_daemon_path(&exe)
+        .ok_or_else(|| "no parent dir".to_string())
 }
 
 /// daemon 经 IPC 自报的 pid（`status.pid`）；连不上 / 不答 = `None`。超时取短：
@@ -1013,21 +1002,11 @@ fn oneshot_stdio() -> (std::process::Stdio, std::process::Stdio) {
     (open(paths.0), open(paths.1))
 }
 
-/// 一次性 spawn 同目录下的内置 daemon（不注册 autostart）。#732 起只是
+/// 一次性 spawn 内置 daemon（不注册 autostart）。#732 起只是
 /// `bring_up_daemon` 的退路（服务管理器接不了手时）。
 ///
 fn spawn_bundled_daemon_oneshot() -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let sidecar = exe
-        .parent()
-        .ok_or("no parent dir")?
-        .join(platform::hosting().daemon_executable_name());
-    if !sidecar.is_file() {
-        return Err(ipc::ui_err(
-            "ui.err_sidecar_missing",
-            &[("path", &sidecar.display())],
-        ));
-    }
+    let sidecar = daemon_cli::bundled_sidecar()?;
     let mut cmd = platform::command(&sidecar);
     let (out, err) = oneshot_stdio();
     cmd.stdout(out)
@@ -1254,17 +1233,7 @@ fn restart_by_kill_and_respawn() -> Result<(), String> {
     //    超时报错（Linux 没有任何东西会复活它）。桌面壳在 Linux 上不是发布
     //    形态，但既然改了就写明，不混在"纯搬家"里带过去。
     if platform::hosting().service_mode() == platform::ServiceMode::UserAutostart {
-        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let sidecar = exe
-            .parent()
-            .ok_or("no parent dir")?
-            .join(platform::hosting().daemon_executable_name());
-        if !sidecar.is_file() {
-            return Err(ipc::ui_err(
-                "ui.err_sidecar_missing",
-                &[("path", &sidecar.display())],
-            ));
-        }
+        let sidecar = daemon_cli::bundled_sidecar()?;
         platform::command(&sidecar)
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -2459,6 +2428,7 @@ mod tests {
             "binaries/ppf-daemon-aarch64-apple-darwin",
             "target/debug/ppf-daemon.exe",
             "target/debug/ppf-daemon",
+            "target/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon",
         ]
         .iter()
         .map(|p| root.join(p))
