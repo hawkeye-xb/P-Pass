@@ -84,8 +84,10 @@ struct SettingsScreen: View {
             .ppList()
             .ppCardSpacing()
             .toolbar(.hidden, for: .navigationBar) // 同 Android：无页标题
-            .confirmationDialog(cancelSnapshot.map { L.p("cancel_remaining_confirm_title", $0.count) } ?? "",
-                                isPresented: $asking, titleVisibility: .visible) {
+            // 居中警告框（同「断开连接」：iOS 26 上 confirmationDialog 是贴着按钮的气泡）。关闭按钮叫「返回」不叫「取消」：
+            // 要确认的动作本身就叫取消（Android #418 同）。
+            .alert(cancelSnapshot.map { L.p("cancel_remaining_confirm_title", $0.count) } ?? "",
+                   isPresented: $asking) {
                 if let snap = cancelSnapshot {
                     Button(L.p("cancel_remaining_label", snap.count), role: .destructive) { app.cancelRemaining(snap) }
                 }

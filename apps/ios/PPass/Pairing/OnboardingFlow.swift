@@ -6,7 +6,9 @@ import SwiftUI
 /// 手动粘贴的配对串与二维码是**同一个字符串**，走同一条路（`AppModel` → PairingService.pair）。
 /// 没有相机（模拟器）或没给相机权限时，扫码页直接说明并给出「手动输入」入口。
 struct OnboardingFlow: View {
-    enum Step: Equatable { case welcome, scan, manual, status(PairStep) }
+    /// `manual(fromScan:)`：手动输入从哪儿进来就退回哪儿（Android ScanScreen `leaveManual`：扫码页点进来 → 回扫码页，
+    /// 欢迎页直接进来 → 回欢迎页）。
+    enum Step: Equatable { case welcome, scan, manual(fromScan: Bool), status(PairStep) }
     enum PairStep: Equatable { case waiting, refused(lapsed: Bool, note: String?), needsUpdate(OutdatedSide), failed(String) }
 
     @EnvironmentObject var app: AppModel
@@ -17,8 +19,8 @@ struct OnboardingFlow: View {
         Group {
             switch step {
             case .welcome: welcome
-            case .scan: ScanScreen(onCode: submit, onManual: { step = .manual }, onClose: { step = .welcome })
-            case .manual: ManualPairScreen(onSubmit: submit, onBack: { step = .welcome })
+            case .scan: ScanScreen(onCode: submit, onManual: { step = .manual(fromScan: true) }, onClose: { step = .welcome })
+            case .manual(let fromScan): ManualPairScreen(onSubmit: submit, onBack: { step = Self.manualBackTarget(fromScan: fromScan) })
             case .status(let s): PairStatusScreen(step: s, onCancel: cancel, onRetry: { step = .scan })
             }
         }
@@ -27,6 +29,9 @@ struct OnboardingFlow: View {
 
     /// 同 Android WelcomeScreen：顶部字标「P-PASS」，标题衬线 36 压在下半屏，三步是三行 ink-40 小字（不成卡），
     /// 主按钮 64 高 / 19 字，下面「手动输入」14 粗体 ink-60。无插图。
+    /// 手动输入页「返回」去哪（Android `leaveManual`）。
+    static func manualBackTarget(fromScan: Bool) -> Step { fromScan ? .scan : .welcome }
+
     private var welcome: some View {
         GeometryReader { geo in
             ScrollView {
@@ -44,7 +49,7 @@ struct OnboardingFlow: View {
                     }
                     .padding(.top, 20)
                     PPButton(title: L.s("welcome_scan"), height: 64, fontSize: 19) { step = .scan }.padding(.top, 40)
-                    Button(L.s("scan_manual_link")) { step = .manual }
+                    Button(L.s("scan_manual_link")) { step = .manual(fromScan: false) }
                         .font(PPFont.sans(14, .bold, relativeTo: .subheadline)).foregroundStyle(PPColor.ink60)
                         .frame(maxWidth: .infinity, minHeight: 44).padding(.top, 8)
                 }
@@ -79,7 +84,7 @@ struct OnboardingFlow: View {
     private func applyRoute() {
         switch LaunchRoute.current {
         case .scan: step = .scan
-        case .manual: step = .manual
+        case .manual: step = .manual(fromScan: false)
         case .pairWaiting: step = .status(.waiting)
         case .pairRefused: step = .status(.refused(lapsed: false, note: nil))
         case .pairLapsed: step = .status(.refused(lapsed: true, note: PairNote.expired.text))
