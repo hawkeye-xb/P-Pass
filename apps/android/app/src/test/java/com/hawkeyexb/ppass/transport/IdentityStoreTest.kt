@@ -34,6 +34,7 @@ class IdentityStoreTest {
 
     private val sealed get() = File(dir, IdentityStore.SEALED_FILE)
     private val pairing get() = File(dir, "pairing.json")
+    private val retired get() = File(dir, IdentityStore.RETIRED_PLAINTEXT_FILE)
 
     @Before
     fun setUp() {
@@ -99,6 +100,61 @@ class IdentityStoreTest {
         s.secretKey().fill(0)
         assertArrayEquals(key, s.secretKey())
     }
+
+    // ── 旧版明文：退役密钥，不读、只销毁 ──────────────────────
+
+    @Test
+    fun retired_plaintext_is_destroyed_after_the_new_identity_is_in_place() {
+        val old = ByteArray(32) { 7 }
+        retired.writeBytes(old)
+        File(dir, "identity.key.tmp").writeBytes(old)
+        seedPairing()
+        val key = store().secretKey()
+        assertFalse("不迁移：新身份不是旧明文", key.contentEquals(old))
+        assertFalse(retired.exists())
+        assertFalse(File(dir, "identity.key.tmp").exists())
+        assertFalse("配对属于旧身份，必须清", pairing.exists())
+        assertEquals(1, newIdentityCalls.size)
+        assertArrayEquals(key, store().secretKey())
+    }
+
+    @Test
+    fun retired_plaintext_next_to_a_sealed_identity_still_means_a_new_device() {
+        // 上一次换新身份写完密文、删明文之前被杀：明文还在，就再走一遍同一条路。
+        val first = store().secretKey()
+        retired.writeBytes(ByteArray(32) { 1 })
+        seedPairing()
+        newIdentityCalls.clear()
+        val key = store().secretKey()
+        assertFalse(key.contentEquals(first))
+        assertFalse(retired.exists())
+        assertFalse(pairing.exists())
+        assertEquals(1, newIdentityCalls.size)
+    }
+
+    private fun assertRetiredKeptWhen(inject: () -> Unit, beforeNewIdentity: () -> Unit = ::recordNewIdentity) {
+        val old = ByteArray(32) { 5 }
+        retired.writeBytes(old)
+        inject()
+        assertUnavailable { store(beforeNewIdentity).secretKey() }
+        assertArrayEquals("删之前任何一步失败都不删", old, retired.readBytes())
+    }
+
+    @Test
+    fun retired_plaintext_survives_a_failure_to_create_the_wrapping_key() =
+        assertRetiredKeptWhen({ wrapper.failRecreate = { ProviderException("keymint dead") } })
+
+    @Test
+    fun retired_plaintext_survives_a_failure_to_seal() =
+        assertRetiredKeptWhen({ wrapper.failSeal = { ProviderException("seal failed") } })
+
+    @Test
+    fun retired_plaintext_survives_a_failed_read_back() =
+        assertRetiredKeptWhen({ wrapper.corruptOpen = true })
+
+    @Test
+    fun retired_plaintext_survives_a_failure_to_clear_the_pairing() =
+        assertRetiredKeptWhen({}, beforeNewIdentity = { throw IllegalStateException("cannot clear pairing") })
 
     // ── 明确的丢失信号：新设备 ─────────────────────────────────
 

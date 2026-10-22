@@ -6,6 +6,8 @@
     <device-transfer>
         <exclude domain="file" path="identity.sealed" />
         <exclude domain="file" path="identity.sealed.tmp" />
+        <exclude domain="file" path="identity.key" />
+        <exclude domain="file" path="identity.key.tmp" />
         <exclude domain="file" path="pairing.json" />
         <exclude domain="file" path="pairing.json.tmp" />
     </device-transfer>

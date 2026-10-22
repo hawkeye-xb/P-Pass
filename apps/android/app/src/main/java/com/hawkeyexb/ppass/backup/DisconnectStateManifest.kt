@@ -105,6 +105,11 @@ enum class DisconnectState(
         "红线：密钥就是这台设备（#282 清单「身份」）；#1106 起只以 Keystore 加密形态落盘",
         owners = listOf("com.hawkeyexb.ppass.transport.IdentityStore"),
     ),
+    IDENTITY_RETIRED_PLAINTEXT(
+        StateLocation.FILES, "identity.key", DisconnectDisposition.CLEAR,
+        "#1106：旧版明文身份是退役密钥，不迁移、只销毁（IdentityStore 换新身份时最后一步删；断开也删，对位 iOS）",
+        owners = listOf("com.hawkeyexb.ppass.transport.IdentityStore"),
+    ),
     ONBOARDED_DESKTOPS(
         StateLocation.FILES, "onboarded_desktops.json", DisconnectDisposition.KEEP,
         "MOB-114（#455/#461）：「连过这台」必须活过断开、配对失效、换台再换回来；只增不减",

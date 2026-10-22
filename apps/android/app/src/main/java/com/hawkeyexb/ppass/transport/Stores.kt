@@ -44,8 +44,10 @@ class IdentityUnavailableException(cause: Throwable) : Exception("device identit
 /**
  * The device identity, one instance per process (owned by `PPassApplication`).
  *
- * #1106 states (decided 2026-10-22; no upgrade path from the old plaintext build — there are no
- * users to migrate, so an old `identity.key` is simply never read):
+ * #1106 states (decided 2026-10-22; no migration — an old plaintext `identity.key` is never read,
+ * only destroyed as a retired key, same as iOS `DeviceIdentity`):
+ * - old plaintext present → a new device (even next to a sealed file: that is a crash leftover
+ *   from the previous attempt, and the plaintext's presence is what makes it converge).
  * - sealed file opens → that is the identity.
  * - definitive loss (wrapping key absent, GCM tag mismatch, key permanently invalidated, wrong
  *   length) or no sealed file at all (first run, a new phone)
@@ -63,6 +65,7 @@ class IdentityStore(
     private val random: SecureRandom = SecureRandom(),
 ) {
     private val sealedFile = File(dir, SEALED_FILE)
+    private val retiredPlaintext = File(dir, RETIRED_PLAINTEXT_FILE)
     private val lock = Any()
 
     @Volatile private var cached: ByteArray? = null
@@ -107,6 +110,7 @@ class IdentityStore(
     }
 
     private fun resolve(): ByteArray {
+        if (retiredPlaintext.exists()) return mint("retired plaintext identity present")
         if (!sealedFile.isFile) {
             return mint("no identity yet")
         }
@@ -136,8 +140,10 @@ class IdentityStore(
     private fun mint(reason: String): ByteArray {
         log("identity: minting a new identity ($reason)")
         // Order matters for crash recovery: pairing first (a new key must never meet the old
-        // pairing), then the new sealed file. Every prefix converges to the same place on the
-        // next start.
+        // pairing — there is no install marker on Android, so a sealed file written before the
+        // pairing is cleared would open fine next start and keep the stale pairing), then the new
+        // sealed file and its read-back, and only last the retired plaintext. Any failure before
+        // that leaves the plaintext in place, and its presence re-runs this same path next start.
         beforeNewIdentity()
         sealedFile.delete()
         wrapper.recreate()
@@ -158,13 +164,22 @@ class IdentityStore(
             sealedFile.delete()
             error("sealed identity reads back different bytes")
         }
+        destroyRetiredPlaintext()
         return secret
+    }
+
+    /** Not migration: the old key is never read, only destroyed. A failed delete is retried next start. */
+    private fun destroyRetiredPlaintext() {
+        for (f in listOf(retiredPlaintext, File(dir, "$RETIRED_PLAINTEXT_FILE.tmp"))) {
+            if (f.exists() && !f.delete()) log("identity: could not delete ${f.name}; retrying next start")
+        }
     }
 
     private class DefinitiveLoss(message: String) : Exception(message)
 
     companion object {
         const val SEALED_FILE = "identity.sealed"
+        const val RETIRED_PLAINTEXT_FILE = "identity.key"
         const val SECRET_BYTES = 32
         private const val FORMAT_V1: Byte = 1
 
