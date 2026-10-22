@@ -33,7 +33,6 @@ class IdentityStoreTest {
     private val newIdentityCalls = mutableListOf<String>()
 
     private val sealed get() = File(dir, IdentityStore.SEALED_FILE)
-    private val legacy get() = File(dir, IdentityStore.LEGACY_FILE)
     private val pairing get() = File(dir, "pairing.json")
 
     @Before
@@ -46,7 +45,7 @@ class IdentityStoreTest {
         IdentityStore(dir, wrapper, beforeNewIdentity = beforeNewIdentity, sleep = { sleeps += it })
 
     private fun recordNewIdentity() {
-        newIdentityCalls += "sealed=${sealed.exists()} legacy=${legacy.exists()}"
+        newIdentityCalls += "sealed=${sealed.exists()} pairing=${pairing.exists()}"
         pairing.delete() // what the production callback (disconnect manifest) does to pairing.json
     }
 
@@ -68,9 +67,8 @@ class IdentityStoreTest {
         val key = store().secretKey()
         assertEquals(32, key.size)
         assertTrue(sealed.isFile)
-        assertFalse(legacy.exists())
         assertFalse("密钥原文不许出现在盘上", sealed.readBytes().containsRun(key))
-        assertEquals(listOf("sealed=false legacy=false"), newIdentityCalls)
+        assertEquals(listOf("sealed=false pairing=false"), newIdentityCalls)
     }
 
     @Test
@@ -100,34 +98,6 @@ class IdentityStoreTest {
         val key = s.secretKey()
         s.secretKey().fill(0)
         assertArrayEquals(key, s.secretKey())
-    }
-
-    // ── 老版本明文：不迁移，换新身份 ────────────────────────────
-
-    @Test
-    fun upgrade_from_plaintext_deletes_it_clears_pairing_first_and_mints_a_new_identity() {
-        val old = ByteArray(32) { 7 }
-        legacy.writeBytes(old)
-        File(dir, "identity.key.tmp").writeBytes(old)
-        seedPairing()
-        val key = store().secretKey()
-        assertFalse("不迁移：新身份不是旧明文", key.contentEquals(old))
-        assertFalse(legacy.exists())
-        assertFalse(File(dir, "identity.key.tmp").exists())
-        assertFalse("配对属于旧 NodeId，必须清", pairing.exists())
-        assertEquals("清配对发生在新密文落盘之前", listOf("sealed=false legacy=true"), newIdentityCalls)
-    }
-
-    @Test
-    fun a_plaintext_left_next_to_a_good_sealed_identity_is_deleted_without_touching_anything_else() {
-        val key = store().secretKey()
-        legacy.writeBytes(ByteArray(32) { 1 })
-        seedPairing()
-        newIdentityCalls.clear()
-        assertArrayEquals(key, store().secretKey())
-        assertFalse(legacy.exists())
-        assertTrue(pairing.exists())
-        assertEquals(emptyList<String>(), newIdentityCalls)
     }
 
     // ── 明确的丢失信号：新设备 ─────────────────────────────────
@@ -206,7 +176,7 @@ class IdentityStoreTest {
         assertUnavailable { store().secretKey() }
         assertArrayEquals("密文原样", sealedBefore, sealed.readBytes())
         assertTrue("配对原样", pairing.exists())
-        assertFalse("不回退明文", legacy.exists())
+        assertEquals("不回退明文：目录里只有密文和配对", setOf(IdentityStore.SEALED_FILE, "pairing.json"), dir.list()!!.toSet())
         assertEquals("不换密钥", recreatedBefore, wrapper.recreated)
         assertEquals(emptyList<String>(), newIdentityCalls)
         assertEquals("有界退避重试", listOf(300L, 1000L), sleeps)
@@ -258,7 +228,6 @@ class IdentityStoreTest {
         wrapper.failSeal = { ProviderException("seal failed") }
         assertUnavailable { store().secretKey() }
         assertFalse(sealed.exists())
-        assertFalse(legacy.exists())
         wrapper.failSeal = null
         assertEquals(32, store().secretKey().size)
     }
@@ -274,16 +243,25 @@ class IdentityStoreTest {
     }
 
     @Test
-    fun every_crash_point_of_the_upgrade_converges() {
-        // 清配对之后、写密文之前崩溃：盘上只剩旧明文（或连它也删了），下一次照常换新身份。
-        legacy.writeBytes(ByteArray(32) { 3 })
+    fun a_crash_after_clearing_pairing_and_before_writing_converges() {
+        // 已配对但没有密文（例如密钥库被清后新身份写到一半就崩）：清了配对、没写密文，下一次照常换新身份。
         seedPairing()
         val crashing = store(beforeNewIdentity = { recordNewIdentity(); throw IllegalStateException("crash") })
         assertUnavailable { crashing.secretKey() }
         assertFalse(pairing.exists())
+        assertFalse(sealed.exists())
         val key = store().secretKey()
-        assertFalse(legacy.exists())
         assertArrayEquals(key, store().secretKey())
+    }
+
+    @Test
+    fun pairing_is_cleared_before_the_new_sealed_file_is_written() {
+        store().secretKey()
+        sealed.delete()
+        seedPairing()
+        newIdentityCalls.clear()
+        store().secretKey()
+        assertEquals("清配对发生在新密文落盘之前", listOf("sealed=false pairing=true"), newIdentityCalls)
     }
 
     // ── 用户重置 ───────────────────────────────────────────────

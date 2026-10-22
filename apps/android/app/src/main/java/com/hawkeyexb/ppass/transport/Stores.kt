@@ -44,11 +44,12 @@ class IdentityUnavailableException(cause: Throwable) : Exception("device identit
 /**
  * The device identity, one instance per process (owned by `PPassApplication`).
  *
- * #1106 states (decided 2026-10-22, no migration of the old plaintext file):
- * - sealed file opens → that is the identity; a leftover plaintext file is deleted.
+ * #1106 states (decided 2026-10-22; no upgrade path from the old plaintext build — there are no
+ * users to migrate, so an old `identity.key` is simply never read):
+ * - sealed file opens → that is the identity.
  * - definitive loss (wrapping key absent, GCM tag mismatch, key permanently invalidated, wrong
- *   length) or no sealed file at all (first run, upgrade from the plaintext build, a new phone)
- *   → a new device: [beforeNewIdentity] clears the pairing first, the old plaintext is deleted,
+ *   length) or no sealed file at all (first run, a new phone)
+ *   → a new device: [beforeNewIdentity] clears the pairing first,
  *   then a fresh secret is minted, sealed, written and read back.
  * - anything else → [IdentityUnavailableException] after retrying; nothing is touched.
  */
@@ -62,7 +63,6 @@ class IdentityStore(
     private val random: SecureRandom = SecureRandom(),
 ) {
     private val sealedFile = File(dir, SEALED_FILE)
-    private val legacyFile = File(dir, LEGACY_FILE)
     private val lock = Any()
 
     @Volatile private var cached: ByteArray? = null
@@ -108,14 +108,13 @@ class IdentityStore(
 
     private fun resolve(): ByteArray {
         if (!sealedFile.isFile) {
-            return mint(if (legacyFile.exists()) "plaintext identity from an older build" else "no identity yet")
+            return mint("no identity yet")
         }
         val opened = try {
             open()
         } catch (lost: DefinitiveLoss) {
             return mint("identity lost: ${lost.message}")
         }
-        deleteLegacy()
         return opened
     }
 
@@ -137,10 +136,9 @@ class IdentityStore(
     private fun mint(reason: String): ByteArray {
         log("identity: minting a new identity ($reason)")
         // Order matters for crash recovery: pairing first (a new key must never meet the old
-        // pairing), then the abandoned plaintext, then the new sealed file. Every prefix of this
-        // sequence converges to the same place on the next start.
+        // pairing), then the new sealed file. Every prefix converges to the same place on the
+        // next start.
         beforeNewIdentity()
-        deleteLegacy()
         sealedFile.delete()
         wrapper.recreate()
         val secret = ByteArray(SECRET_BYTES).also(random::nextBytes)
@@ -163,18 +161,10 @@ class IdentityStore(
         return secret
     }
 
-    private fun deleteLegacy() {
-        for (name in listOf(LEGACY_FILE, "$LEGACY_FILE.tmp")) {
-            val f = File(dir, name)
-            if (f.exists() && !f.delete()) log("identity: could not delete $name")
-        }
-    }
-
     private class DefinitiveLoss(message: String) : Exception(message)
 
     companion object {
         const val SEALED_FILE = "identity.sealed"
-        const val LEGACY_FILE = "identity.key"
         const val SECRET_BYTES = 32
         private const val FORMAT_V1: Byte = 1
 

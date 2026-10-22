@@ -73,7 +73,6 @@ class DisconnectStateManifestTest {
                 setEnabled(true)
             }
             DisconnectState.IDENTITY -> IdentityStore(filesDir, FakeIdentityKeyWrapper()).secretKey()
-            DisconnectState.IDENTITY_LEGACY_PLAINTEXT -> fake("files/identity.key")
             DisconnectState.ONBOARDED_DESKTOPS -> OnboardedDesktopsStore(filesDir).markOnboarded(nodeId)
             DisconnectState.BACKUP_SCOPE -> fake("shared_prefs/backup_scope-$nodeId.xml")
             DisconnectState.BACKUP_SCOPE_LEGACY -> fake("shared_prefs/backup_scope.xml")
@@ -186,7 +185,7 @@ class DisconnectStateManifestTest {
         // #282 验收 4：账本、相册选择、Wi-Fi/充电仍保留；配对记录、租约、生产者仍清停。
         // #461：「连过这台」要留。红线：身份。
         val keep = listOf(
-            DisconnectState.IDENTITY, DisconnectState.IDENTITY_LEGACY_PLAINTEXT, DisconnectState.ONBOARDED_DESKTOPS, DisconnectState.BACKUP_SCOPE,
+            DisconnectState.IDENTITY, DisconnectState.ONBOARDED_DESKTOPS, DisconnectState.BACKUP_SCOPE,
             DisconnectState.BACKUP_SETTINGS, DisconnectState.ORDER_DB, DisconnectState.NATIVE_BLOB_STORE,
         )
         keep.forEach { assertEquals(it.name, DisconnectDisposition.KEEP, it.disposition) }
