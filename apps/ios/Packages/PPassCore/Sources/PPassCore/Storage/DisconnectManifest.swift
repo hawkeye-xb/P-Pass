@@ -5,8 +5,9 @@
 // - 新增持久状态不登记会被门禁挡下（`unregisteredStatePaths`：真跑完全部 store 的往返之后遍历目录）。
 //
 // 与 Android 的差异：iOS 只有一个存储根（App Group 容器里的 `PPass/`），没有 files / shared_prefs / databases 三处；
-// 唯一的旧文件是 #956 撤销的断开发件箱（`legacyUnpairOutbox`）：它存着旧电脑的 peerToken，不能套 Android RETIRED 的「无人读、留着无妨」，
-// 所以登记成 CLEAR，启动时也删一次（[UnpairNotice.removeLegacyOutbox]）。
+// 旧文件有两样，都存着凭据，不能套 Android RETIRED 的「无人读、留着无妨」，所以登记成 CLEAR、启动时也删：
+// #956 撤销的断开发件箱（`legacyUnpairOutbox`，旧电脑的 peerToken，[UnpairNotice.removeLegacyOutbox]）；
+// #1107 之前的明文私钥（`legacyPlaintextIdentity`，[DeviceIdentity] 见到就按新设备处理）。
 import Foundation
 
 public enum DisconnectDisposition: Equatable, Sendable {
@@ -35,6 +36,7 @@ public enum DisconnectState: CaseIterable, Sendable {
     case backgroundWakePlan
     case mediaChangeObserver
     case identity
+    case legacyPlaintextIdentity
     case onboardedDesktops
     case backupScope
     case backupScopeUnpaired
@@ -54,7 +56,8 @@ public enum DisconnectState: CaseIterable, Sendable {
         case .backgroundWakePlan: return PlannedWakeScheduler.fileName
         case .flowRuntime, .scheduledWakes, .mediaChangeObserver: return nil
         case .autoBackupPrefs: return AutoBackupPrefs.fileName
-        case .identity: return "identity.key"
+        case .identity: return DeviceIdentity.markerFileName
+        case .legacyPlaintextIdentity: return DeviceIdentity.legacyPlaintextFileName
         case .onboardedDesktops: return OnboardedDesktopsStore.fileName
         case .backupScope: return "\(BackupScopeStore.legacyName)-<id>.json"
         case .backupScopeUnpaired: return "\(BackupScopeStore.legacyName).json"
@@ -71,7 +74,7 @@ public enum DisconnectState: CaseIterable, Sendable {
 
     public var disposition: DisconnectDisposition {
         switch self {
-        case .pairing, .legacyUnpairOutbox, .backgroundWakePlan: return .clear
+        case .pairing, .legacyUnpairOutbox, .backgroundWakePlan, .legacyPlaintextIdentity: return .clear
         case .flowRuntime, .scheduledWakes, .mediaChangeObserver: return .stop
         case .autoBackupPrefs: return .reset
         default: return .keep
@@ -88,7 +91,8 @@ public enum DisconnectState: CaseIterable, Sendable {
         case .backgroundWakePlan: return "MOB-93 的 iOS 对位（#340）：后台唤醒计划是生产者的一部分，断开清掉；挂着的系统请求由 scheduledWakes 撤"
         case .scheduledWakes: return "MOB-93 的 iOS 对位：BGTaskScheduler 登记的唤醒是生产者，断开撤掉"
         case .mediaChangeObserver: return "MOB-27/MOB-93 的 iOS 对位：PHPhotoLibrary 变更监听是生产者，断开停掉"
-        case .identity: return "红线：密钥就是这台设备（#282）"
+        case .identity: return "红线：密钥就是这台设备（#282）。私钥在钥匙串（首次解锁后、仅本设备，不进备份），本行是存储根里「本次安装」的标记：没有标记的私钥是卸载重装留下的，按新设备处理（DeviceIdentity）"
+        case .legacyPlaintextIdentity: return "旧版本存在存储根的明文私钥：启动时见到就按新设备处理并删掉（DeviceIdentity）；断开也清，明文私钥不许留"
         case .onboardedDesktops: return "MOB-114（#455/#461）：「连过这台」必须活过断开；只增不减"
         case .backupScope: return "MOB-92（#266）：相册范围按桌面分，断开不清"
         case .backupScopeUnpaired: return "MOB-92（#266）：未配对时的全局范围，一次性认领的来源，断开不碰"

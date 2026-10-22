@@ -46,4 +46,17 @@ final class StorageRootTests: XCTestCase {
         XCTAssertTrue(root.isDegraded)
         XCTAssertTrue(logger.contains("不可写"), "\(logger.lines)")
     }
+
+    /// 存储根整个不进备份（两种根都是）：配对与本次安装的标记跟着这台设备走。
+    /// 反证：去掉 resolve 里的 excludeFromBackup，两条断言都红。
+    func testRootIsExcludedFromBackupInBothKinds() throws {
+        let tmp = TempDir()
+        let group = try StorageRoot.resolve(appGroupContainer: tmp.file("group"), groupIdentifier: "g",
+                                            appPrivateDirectory: tmp.file("private"), logger: RecordingLogger())
+        let fallback = try StorageRoot.resolve(appGroupContainer: nil, groupIdentifier: "g",
+                                               appPrivateDirectory: tmp.file("private2"), logger: RecordingLogger())
+        for root in [group, fallback] {
+            XCTAssertEqual(try root.url.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true, root.url.path)
+        }
+    }
 }

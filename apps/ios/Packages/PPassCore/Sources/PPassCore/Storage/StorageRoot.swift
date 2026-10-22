@@ -56,6 +56,7 @@ public struct StorageRoot: Equatable, Sendable {
             do {
                 try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
                 logger.log("storage: using App Group container \(groupIdentifier)")
+                excludeFromBackup(url, logger)
                 return StorageRoot(url: url, kind: .appGroup)
             } catch {
                 let reason = "App Group 容器 \(groupIdentifier) 存在但不可写：\(error.localizedDescription)"
@@ -70,6 +71,23 @@ public struct StorageRoot: Equatable, Sendable {
         let url = base.appendingPathComponent(sub, isDirectory: true)
         try fm.createDirectory(at: url, withIntermediateDirectories: true)
         logger.log("storage: DEGRADED — \(reason) (\(url.path))")
+        excludeFromBackup(url, logger)
         return StorageRoot(url: url, kind: .appPrivateFallback(reason: reason))
+    }
+
+    /// 整个存储根不进 iCloud / Finder 备份、不随换机迁移（对位 Android `allowBackup=false`）：配对与本次安装的标记
+    /// 属于这台设备，恢复到别的手机上就是一台新设备。设在目录上——里面的文件都是原子写（新文件 + rename），
+    /// 设在文件上每写一次就丢。每次启动都设一次（幂等）。系统只把它当建议，真正的兜底是 [DeviceIdentity] 的新设备判定。
+    static func excludeFromBackup(_ url: URL, _ logger: CoreLogger) {
+        var dir = url
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        do {
+            try dir.setResourceValues(values)
+            let readBack = try url.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup
+            logger.log("storage: \(url.lastPathComponent) excluded from backup = \(readBack.map(String.init(describing:)) ?? "unknown")")
+        } catch {
+            logger.log("storage: could not exclude \(url.lastPathComponent) from backup: \(error)")
+        }
     }
 }

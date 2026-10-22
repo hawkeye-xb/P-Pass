@@ -40,15 +40,46 @@ final class LiveBackend: @unchecked Sendable {
     /// 前台相册变化监听（#978，对位 Android BackupUiStateHolder 的 MediaStore ContentObserver）。
     let mediaWatcher: MediaChangeWatcher
     let epochRepairer: EpochRepairer
+    #if DEBUG
+    /// 真机验证用的私钥指纹（BLAKE3 前 8 位）；Release 没有这个字段。
+    let identityFingerprint: String
+    #endif
 
-    init() throws {
+    /// 存储根（App Group 容器里的 `PPass/`；取不到退回 App 私有目录）。
+    static func resolveRoot(logger: CoreLogger) throws -> StorageRoot {
         let fm = FileManager.default
         let appSupport = try fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        return try StorageRoot.resolve(appGroupContainer: fm.containerURL(forSecurityApplicationGroupIdentifier: appGroup),
+                                       groupIdentifier: appGroup, appPrivateDirectory: appSupport, logger: logger)
+    }
+
+    /// 身份换新时清掉旧配对：此刻引擎还没建，只有 BGTask 里挂着的唤醒要撤（唤醒计划文件由清单的 clear 行删）。
+    static func clearPairingBeforeStart(root: URL, logger: CoreLogger) throws {
+        try applyDisconnectManifest(root: root, runtime: DisconnectActions(stopFlow: {}, cancelWakes: { BGTaskSubmitter().cancelAll() }, stopMedia: {}),
+                                    logger: logger)
+    }
+
+    /// 拒绝启动页的「重置并重新配对」：换新私钥、清本地配对（DeviceIdentity.becomeNewDevice），之后重新起 App 即回到扫码。
+    static func resetIdentity(store: IdentitySecretStore = KeychainIdentityStore()) throws {
+        let logger = OSLogger()
+        let dir = try resolveRoot(logger: logger).url
+        _ = try DeviceIdentity.becomeNewDevice(root: dir, store: store, reason: .userReset,
+                                               clearPairing: { try clearPairingBeforeStart(root: dir, logger: logger) }, logger: logger)
+    }
+
+    /// 起 App 的第一件事是取身份：读不到钥匙串（开机后还没解锁过）抛 `IdentityStoreError.locked`，
+    /// 钥匙串故障抛 `IdentityStoreError` 其余几种——都在碰任何存储之前（AppBoot 据此分流）。
+    init(identityStore: IdentitySecretStore = KeychainIdentityStore()) throws {
+        let fm = FileManager.default
         let logger = self.logger
-        root = try StorageRoot.resolve(appGroupContainer: fm.containerURL(forSecurityApplicationGroupIdentifier: Self.appGroup),
-                                       groupIdentifier: Self.appGroup, appPrivateDirectory: appSupport, logger: logger)
+        root = try Self.resolveRoot(logger: logger)
         let dir = root.url
-        plane = ControlPlane(secretKey: try IdentityKey.loadOrCreate(in: dir))
+        let identity = try DeviceIdentity.load(root: dir, store: identityStore,
+                                               clearPairing: { try Self.clearPairingBeforeStart(root: dir, logger: logger) }, logger: logger)
+        plane = ControlPlane(secretKey: identity.key)
+        #if DEBUG
+        identityFingerprint = String(blake3Hex(data: identity.key).prefix(8))
+        #endif
         pairingStore = PairingStore(root: dir)
         onboarded = OnboardedDesktopsStore(directory: dir, logger: logger)
         let pairingStore = self.pairingStore
@@ -153,9 +184,6 @@ final class LiveBackend: @unchecked Sendable {
                 return PhotoLibraryChangeSource.unavailableReason(level: PhotoKitAuthorization().currentLevel())
             },
             onChange: { Task { await change.handle() } }, logger: logger)
-        // #981：后台任务跑完、交还系统之前评估一次通知（对位 Android BackupWorker 结束时的评估）。
-        PPassBackgroundTasks.register(engine: engine, window: window, scheduler: scheduler, logger: logger,
-                                      afterRun: { [weak self] in await self?.evaluateNotices() })
         scheduler.ensureScheduled()
         PPassBackgroundTasks.ensureShortScheduled(logger: logger)
         if root.isDegraded { logger.log("storage root degraded: \(root.kind)") }
@@ -171,6 +199,12 @@ final class LiveBackend: @unchecked Sendable {
                                       engineLost: { await engine.onNetworkLost() },
                                       engineChanged: { await engine.onNetworkChanged() })
         }
+    }
+
+    /// 后台任务被叫醒时用的那一套（注册在 AppBoot，不在这里：见 PPassBackgroundTasks.register）。
+    /// #981：后台任务跑完、交还系统之前评估一次通知（对位 Android BackupWorker 结束时的评估）。
+    func backgroundTarget() -> BackgroundTarget {
+        BackgroundTarget(engine: engine, window: window, scheduler: scheduler, afterRun: { [weak self] in await self?.evaluateNotices() })
     }
 
     /// 对外的端口集合（界面只认这几个 protocol）。
