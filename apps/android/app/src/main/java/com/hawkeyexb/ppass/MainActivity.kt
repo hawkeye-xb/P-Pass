@@ -58,7 +58,7 @@ import androidx.work.WorkManager
 import com.hawkeyexb.ppass.battery.AndroidBackgroundAuthorizationAdapter
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.ForegroundHeartbeat
-import com.hawkeyexb.ppass.transport.IdentityStore
+import com.hawkeyexb.ppass.ui.IdentityGate
 import com.hawkeyexb.ppass.transport.PairOutcome
 import com.hawkeyexb.ppass.transport.ProtocolVersionGate
 import com.hawkeyexb.ppass.ui.offersAppUpdate
@@ -181,7 +181,7 @@ class MainActivity : ComponentActivity() {
         // 开启后行为一致；各屏内容安全区由 PPScreen 一处处理。
         enableEdgeToEdge()
         // 根部主题：M3 组件的默认色全部从 PPColor 取，不落到 M3 基线紫（见 ui/Theme.kt）。
-        setContent { PPTheme { PPassApp() } }
+        setContent { PPTheme { IdentityGate((application as PPassApplication).identity) { PPassApp() } } }
     }
 }
 
@@ -202,9 +202,9 @@ fun PPassApp() {
     val settingsWriter = remember {
         SettingsWriter { res -> scope.launch { snackbarHostState.showSnackbar(context.getString(res)) } }
     }
-    val identity = remember { IdentityStore(context.filesDir) }
-    val pairings = remember { PairingStore(context.filesDir) }
     val app = context.applicationContext as PPassApplication
+    val identity = app.identity
+    val pairings = remember { PairingStore(context.filesDir) }
     val client = remember { app.daemonClient }
 
     var screen by remember {
@@ -1409,7 +1409,7 @@ private suspend fun notifyUnpairOnce(client: DaemonClient, pairing: Pairing) {
     }
 }
 
-private fun clearLocalPairingLogged(context: Context, pairing: Pairing) {
+internal fun clearLocalPairingLogged(context: Context, pairing: Pairing) {
     try {
         clearLocalPairing(context, pairing)
     } catch (e: Exception) {

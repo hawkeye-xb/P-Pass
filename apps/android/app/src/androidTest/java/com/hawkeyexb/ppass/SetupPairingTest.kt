@@ -6,6 +6,7 @@ package com.hawkeyexb.ppass
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.hawkeyexb.ppass.transport.DaemonClient
+import com.hawkeyexb.ppass.transport.AndroidKeystoreIdentityWrapper
 import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.PairOutcome
 import com.hawkeyexb.ppass.transport.PairingStore
@@ -25,7 +26,7 @@ class SetupPairingTest {
         val dir = InstrumentationRegistry.getInstrumentation().targetContext.filesDir
         runBlocking {
             val client = DaemonClient()
-            client.bind(IdentityStore(dir).secretKey())
+            client.bind(IdentityStore(dir, AndroidKeystoreIdentityWrapper()).secretKey())
             try {
                 val outcome = pairWithQr(client, qr!!.trim(), deviceName = "SM-S9210")
                 assertTrue("pair: $outcome", outcome is PairOutcome.Joined)

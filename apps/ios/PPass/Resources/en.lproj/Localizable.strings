@@ -236,3 +236,9 @@
 "already_in_gallery" = "Already in your gallery";
 "backup_interrupted_body" = "Automatic background backup was stopped. Photos sync while the app is open; tap to resume automatic backup. Your photos are safe — nothing was lost.";
 "backup_interrupted_action" = "Resume";
+"identity_unavailable_title" = "P-Pass can't start right now";
+"identity_unavailable_body" = "This phone's secure key storage isn't responding, so P-Pass can't connect to your computer. Your photos on this phone and the backups on your computer are not affected.\n\nTry again, or restart the phone and open P-Pass again.";
+"identity_reset_failed_body" = "The reset didn't complete. Restart the phone and try again. If it still fails, uninstall and reinstall P-Pass.";
+"identity_unavailable_retry" = "Try again";
+"identity_unavailable_reset" = "Reset and pair again";
+"identity_unavailable_reset_hint" = "After a reset this phone is a new device: scan the code on your computer again. Photos already backed up are not uploaded twice.";

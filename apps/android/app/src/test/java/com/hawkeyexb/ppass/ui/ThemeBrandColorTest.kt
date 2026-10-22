@@ -56,7 +56,11 @@ class ThemeBrandColorTest {
     @Test
     fun root_content_is_wrapped_in_pptheme() {
         val main = File("src/main/java/com/hawkeyexb/ppass/MainActivity.kt").readText()
-        assertTrue("setContent 必须包 PPTheme", main.contains("setContent { PPTheme { PPassApp() } }"))
+        // #1106：身份门（IdentityGate）在主题里面、App 外面——拒绝启动页也要走品牌主题。
+        assertTrue(
+            "setContent 必须包 PPTheme",
+            main.contains("setContent { PPTheme { IdentityGate((application as PPassApplication).identity) { PPassApp() } } }"),
+        )
     }
 
     @Test

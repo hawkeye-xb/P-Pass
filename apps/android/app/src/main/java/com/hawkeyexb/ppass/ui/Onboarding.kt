@@ -29,7 +29,7 @@ import com.hawkeyexb.ppass.R
 import androidx.compose.ui.unit.sp
 
 @Composable
-private fun PrimaryButton(text: String, onClick: () -> Unit) {
+internal fun PrimaryButton(text: String, onClick: () -> Unit) {
     Button(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth().height(64.dp),

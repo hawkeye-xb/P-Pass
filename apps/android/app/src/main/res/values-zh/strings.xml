@@ -359,4 +359,11 @@
     <!-- MOB-28: 后台备份被外力停过（force-stop / OEM 清理）的提示卡。 -->
     <string name="backup_interrupted_body">后台自动备份被停掉了。现在只有打开 App 时才会传，点一下就恢复自动。照片都还在，一张没丢。</string>
     <string name="backup_interrupted_action">恢复备份</string>
+    <!-- #1106: 设备身份读不出来时的拒绝启动页。 -->
+    <string name="identity_unavailable_title">P-Pass 暂时无法启动</string>
+    <string name="identity_unavailable_body">这台手机的系统密钥服务没有响应，P-Pass 无法连接你的电脑。手机里的照片和电脑上的备份都不受影响。\n\n可以点「重试」，或重启手机后再打开 P-Pass。</string>
+    <string name="identity_reset_failed_body">重置没有完成。请重启手机后再试；仍然不行，请卸载后重新安装 P-Pass。</string>
+    <string name="identity_unavailable_retry">重试</string>
+    <string name="identity_unavailable_reset">重置并重新配对</string>
+    <string name="identity_unavailable_reset_hint">重置后这台手机会作为新设备，需要在电脑上重新扫码配对。已备份过的照片不会重复上传。</string>
 </resources>

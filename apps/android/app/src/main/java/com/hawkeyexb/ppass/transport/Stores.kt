@@ -1,32 +1,202 @@
 // Device identity + pairing state, persisted in the app's sandboxed
 // files dir. The 32-byte secret IS the device: pairing authorization
-// binds to the NodeId derived from it. Android-Keystore encryption of
-// the key file is a hardening card (M3) — the app sandbox guards it
-// for the MVP, same trust level as the daemon's ipc.token.
+// binds to the NodeId derived from it.
+//
+// #1106: the secret is never on disk in the clear. It is sealed with a
+// non-exportable AES-256-GCM key in Android Keystore ([IdentityKeyWrapper])
+// and unsealed into memory once per process; a copied file is useless off
+// this phone. iroh needs the raw secret in memory, so this is
+// "Keystore-wrapped storage", not Keystore-held signing.
 package com.hawkeyexb.ppass.transport
 
 import java.io.File
 import java.security.SecureRandom
+import javax.crypto.AEADBadTagException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
-class IdentityStore(private val dir: File) {
-    private val keyFile = File(dir, "identity.key")
+/** One sealed blob: the IV Keystore chose (randomized encryption) + GCM ciphertext-with-tag. */
+class SealedSecret(val iv: ByteArray, val ciphertext: ByteArray)
 
-    /** Load the persistent secret, minting one on first run. */
+/** The Keystore half of [IdentityStore]; production is [AndroidKeystoreIdentityWrapper]. */
+interface IdentityKeyWrapper {
+    /** Whether the wrapping key exists. A Keystore failure throws — it is never reported as `false`. */
+    fun exists(): Boolean
+
+    /** Drop the wrapping key if present and generate a fresh one. */
+    fun recreate()
+
+    fun seal(plain: ByteArray): SealedSecret
+
+    /** Throws [IdentityKeyGoneException] when the key is missing or permanently invalidated. */
+    fun open(sealed: SealedSecret): ByteArray
+}
+
+/** Definitive: the wrapping key is not there (or Keystore says it is permanently invalid). */
+class IdentityKeyGoneException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
+/**
+ * Keystore failed in a way that is not a definitive loss, after retrying. Nothing was cleared: the
+ * sealed identity and the pairing are untouched, and there is no plaintext fallback.
+ */
+class IdentityUnavailableException(cause: Throwable) : Exception("device identity unavailable", cause)
+
+/**
+ * The device identity, one instance per process (owned by `PPassApplication`).
+ *
+ * #1106 states (decided 2026-10-22, no migration of the old plaintext file):
+ * - sealed file opens → that is the identity; a leftover plaintext file is deleted.
+ * - definitive loss (wrapping key absent, GCM tag mismatch, key permanently invalidated, wrong
+ *   length) or no sealed file at all (first run, upgrade from the plaintext build, a new phone)
+ *   → a new device: [beforeNewIdentity] clears the pairing first, the old plaintext is deleted,
+ *   then a fresh secret is minted, sealed, written and read back.
+ * - anything else → [IdentityUnavailableException] after retrying; nothing is touched.
+ */
+class IdentityStore(
+    private val dir: File,
+    private val wrapper: IdentityKeyWrapper,
+    /** Runs before a new identity is persisted: the old pairing belongs to the old NodeId. */
+    private val beforeNewIdentity: () -> Unit = {},
+    private val log: (String) -> Unit = {},
+    private val sleep: (Long) -> Unit = Thread::sleep,
+    private val random: SecureRandom = SecureRandom(),
+) {
+    private val sealedFile = File(dir, SEALED_FILE)
+    private val legacyFile = File(dir, LEGACY_FILE)
+    private val lock = Any()
+
+    @Volatile private var cached: ByteArray? = null
+
+    /** True once this process holds the secret (no Keystore call needed). */
+    val isReady: Boolean get() = cached != null
+
+    /** The persistent secret; resolves (and on a new device, mints) it on first use. */
     fun secretKey(): ByteArray {
-        if (keyFile.isFile) {
-            val k = keyFile.readBytes()
-            require(k.size == 32) { "corrupt identity.key (${k.size} bytes)" }
-            return k
+        cached?.let { return it.copyOf() }
+        synchronized(lock) {
+            cached?.let { return it.copyOf() }
+            var last: Exception? = null
+            for ((attempt, delay) in RETRY_DELAYS_MS.withIndex()) {
+                if (delay > 0) sleep(delay)
+                try {
+                    return resolve().also { cached = it }.copyOf()
+                } catch (e: Exception) {
+                    last = e
+                    log("identity: attempt ${attempt + 1}/${RETRY_DELAYS_MS.size} failed: ${e.javaClass.simpleName}: ${e.message}")
+                }
+            }
+            throw IdentityUnavailableException(checkNotNull(last))
         }
-        val k = ByteArray(32).also { SecureRandom().nextBytes(it) }
+    }
+
+    /**
+     * User-initiated way out of [IdentityUnavailableException] ("重置并重新配对"): abandon the
+     * identity, clear the pairing, mint a new one. One attempt; a failure throws
+     * [IdentityUnavailableException] again.
+     */
+    fun reset() {
+        synchronized(lock) {
+            cached = null
+            try {
+                cached = mint("user reset")
+            } catch (e: Exception) {
+                log("identity: reset failed: ${e.javaClass.simpleName}: ${e.message}")
+                throw IdentityUnavailableException(e)
+            }
+        }
+    }
+
+    private fun resolve(): ByteArray {
+        if (!sealedFile.isFile) {
+            return mint(if (legacyFile.exists()) "plaintext identity from an older build" else "no identity yet")
+        }
+        val opened = try {
+            open()
+        } catch (lost: DefinitiveLoss) {
+            return mint("identity lost: ${lost.message}")
+        }
+        deleteLegacy()
+        return opened
+    }
+
+    /** The sealed identity, or [DefinitiveLoss]; any other failure propagates (transient). */
+    private fun open(): ByteArray {
+        val sealed = decode(sealedFile.readBytes())
+        if (!wrapper.exists()) throw DefinitiveLoss("wrapping key absent")
+        val plain = try {
+            wrapper.open(sealed)
+        } catch (e: AEADBadTagException) {
+            throw DefinitiveLoss("tag mismatch")
+        } catch (e: IdentityKeyGoneException) {
+            throw DefinitiveLoss(e.message ?: "wrapping key gone")
+        }
+        if (plain.size != SECRET_BYTES) throw DefinitiveLoss("unsealed ${plain.size} bytes")
+        return plain
+    }
+
+    private fun mint(reason: String): ByteArray {
+        log("identity: minting a new identity ($reason)")
+        // Order matters for crash recovery: pairing first (a new key must never meet the old
+        // pairing), then the abandoned plaintext, then the new sealed file. Every prefix of this
+        // sequence converges to the same place on the next start.
+        beforeNewIdentity()
+        deleteLegacy()
+        sealedFile.delete()
+        wrapper.recreate()
+        val secret = ByteArray(SECRET_BYTES).also(random::nextBytes)
         dir.mkdirs()
-        // Write-then-rename so a crash never leaves a half-written key.
-        val tmp = File(dir, "identity.key.tmp")
-        tmp.writeBytes(k)
-        check(tmp.renameTo(keyFile)) { "cannot persist identity.key" }
-        return k
+        // Write-then-rename so a crash never leaves a half-written file.
+        val tmp = File(dir, "$SEALED_FILE.tmp")
+        tmp.writeBytes(encode(wrapper.seal(secret)))
+        check(tmp.renameTo(sealedFile)) { "cannot persist $SEALED_FILE" }
+        // Read back through Keystore before anyone gets the key: a seal we cannot open is not saved.
+        val back = try {
+            open()
+        } catch (e: DefinitiveLoss) {
+            sealedFile.delete()
+            error("sealed identity does not read back: ${e.message}")
+        }
+        if (!back.contentEquals(secret)) {
+            sealedFile.delete()
+            error("sealed identity reads back different bytes")
+        }
+        return secret
+    }
+
+    private fun deleteLegacy() {
+        for (name in listOf(LEGACY_FILE, "$LEGACY_FILE.tmp")) {
+            val f = File(dir, name)
+            if (f.exists() && !f.delete()) log("identity: could not delete $name")
+        }
+    }
+
+    private class DefinitiveLoss(message: String) : Exception(message)
+
+    companion object {
+        const val SEALED_FILE = "identity.sealed"
+        const val LEGACY_FILE = "identity.key"
+        const val SECRET_BYTES = 32
+        private const val FORMAT_V1: Byte = 1
+
+        /** Before each attempt. Bounded: ~1.3 s worst case before the refusal screen. */
+        internal val RETRY_DELAYS_MS = longArrayOf(0, 300, 1000)
+
+        /** `[version=1][ivLen][iv][ciphertext+tag]`. */
+        internal fun encode(s: SealedSecret): ByteArray {
+            require(s.iv.size in 1..255) { "iv length ${s.iv.size}" }
+            return byteArrayOf(FORMAT_V1, s.iv.size.toByte()) + s.iv + s.ciphertext
+        }
+
+        /**
+         * An unknown version is NOT a definitive loss (a newer build wrote it; downgrade) — it
+         * surfaces as unavailable, never as an automatic reset. A truncated v1 blob is.
+         */
+        private fun decode(bytes: ByteArray): SealedSecret {
+            check(bytes.isNotEmpty() && bytes[0] == FORMAT_V1) { "unknown sealed identity format" }
+            val ivLen = if (bytes.size > 1) bytes[1].toInt() and 0xff else 0
+            if (ivLen == 0 || bytes.size <= 2 + ivLen) throw DefinitiveLoss("truncated sealed identity")
+            return SealedSecret(bytes.copyOfRange(2, 2 + ivLen), bytes.copyOfRange(2 + ivLen, bytes.size))
+        }
     }
 }
 

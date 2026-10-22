@@ -101,8 +101,13 @@ enum class DisconnectState(
 
     // ── 留：跨配对仍然成立的事实 ────────────────────────────────
     IDENTITY(
+        StateLocation.FILES, "identity.sealed", DisconnectDisposition.KEEP,
+        "红线：密钥就是这台设备（#282 清单「身份」）；#1106 起只以 Keystore 加密形态落盘",
+        owners = listOf("com.hawkeyexb.ppass.transport.IdentityStore"),
+    ),
+    IDENTITY_LEGACY_PLAINTEXT(
         StateLocation.FILES, "identity.key", DisconnectDisposition.KEEP,
-        "红线：密钥就是这台设备（#282 清单「身份」）",
+        "#1106：老版本的明文身份，不迁移——IdentityStore 发现即删（先清配对、再换新身份），断开不碰",
         owners = listOf("com.hawkeyexb.ppass.transport.IdentityStore"),
     ),
     ONBOARDED_DESKTOPS(

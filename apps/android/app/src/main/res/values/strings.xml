@@ -370,4 +370,11 @@
     <!-- MOB-28: 后台备份被外力停过（force-stop / OEM 清理）的提示卡。 -->
     <string name="backup_interrupted_body">Automatic background backup was stopped. Photos sync while the app is open; tap to resume automatic backup. Your photos are safe — nothing was lost.</string>
     <string name="backup_interrupted_action">Resume</string>
+    <!-- #1106: 设备身份读不出来时的拒绝启动页。 -->
+    <string name="identity_unavailable_title">P-Pass can\'t start right now</string>
+    <string name="identity_unavailable_body">This phone\'s secure key storage isn\'t responding, so P-Pass can\'t connect to your computer. Your photos on this phone and the backups on your computer are not affected.\n\nTry again, or restart the phone and open P-Pass again.</string>
+    <string name="identity_reset_failed_body">The reset didn\'t complete. Restart the phone and try again. If it still fails, uninstall and reinstall P-Pass.</string>
+    <string name="identity_unavailable_retry">Try again</string>
+    <string name="identity_unavailable_reset">Reset and pair again</string>
+    <string name="identity_unavailable_reset_hint">After a reset this phone is a new device: scan the code on your computer again. Photos already backed up are not uploaded twice.</string>
 </resources>
