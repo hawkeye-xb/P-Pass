@@ -27,7 +27,7 @@ mkdir -p "$OUT/status"
 exec > >(tee "$OUT/e2e.log") 2>&1
 
 cargo build -q -p daemon --release
-DAEMON="$ROOT/target/release/daemon"
+DAEMON="${CARGO_TARGET_DIR:-$ROOT/target}/release/daemon"
 B3_TARGET="$IOS/build/b3sum-target"
 (cd "$ROOT/tools/ios/b3sum" && CARGO_TARGET_DIR="$B3_TARGET" cargo build -q --release)
 B3="$B3_TARGET/release/ppass-b3sum"

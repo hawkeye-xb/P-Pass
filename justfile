@@ -268,7 +268,8 @@ verify-m1:
     # #809：daemon 与外壳版本同源（bundle-desktop-macos.sh 第 5c 步核对）
     PPF_BUILD_VERSION="$(tools/release-version.sh desktop)" cargo build --release -p daemon -p testclient
     rm -rf /tmp/ppf-rel && mkdir -p /tmp/ppf-rel
-    tools/bundle-macos.sh /tmp/ppf-rel target/release/daemon target/release/testclient
+    TARGET="${CARGO_TARGET_DIR:-target}"
+    tools/bundle-macos.sh /tmp/ppf-rel "$TARGET/release/daemon" "$TARGET/release/testclient"
     tools/bundle-desktop-macos.sh /tmp/ppf-rel /tmp/ppf-rel
 
 # Android unit tests (proto golden drift check included)

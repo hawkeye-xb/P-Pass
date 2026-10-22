@@ -31,4 +31,4 @@ cargo build -p transport --features android-jni --release --target "$TARGET"
 
 OUT="$1/arm64-v8a"
 mkdir -p "$OUT"
-cp "target/$TARGET/release/libtransport.so" "$OUT/libtransport.so"
+cp "${CARGO_TARGET_DIR:-target}/$TARGET/release/libtransport.so" "$OUT/libtransport.so"

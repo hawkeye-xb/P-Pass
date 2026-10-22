@@ -6,7 +6,7 @@
 # 布局（REL-08 #510）：脚本只认「自己所在目录」——
 #   - helper：同目录的 ipc-lib.sh（仓库里两者都在 tools/，资产里两者平铺）；
 #   - 二进制：同目录有 daemon 就用它（release 资产布局），否则回落仓库的
-#     target/release/（`just verify-m1` 从仓库直接跑）。
+#     target/release/（`just verify-m1` 从仓库直接跑；设了 CARGO_TARGET_DIR 就用它）。
 # 资产清单的唯一来源是 tools/stage-dogfood-scripts.sh，门禁见
 # tools/test-dogfood-assets.sh。
 #
@@ -29,13 +29,13 @@ WORK="${1:-/tmp/ppf-dogfood}"
 if [ -x "$HERE/daemon" ]; then
   BIN="$HERE"                          # release 资产布局：与脚本平铺
 else
-  BIN="$HERE/../target/release"        # 仓库布局：tools/ 的上一级
+  BIN="${CARGO_TARGET_DIR:-$HERE/../target}/release"   # 仓库布局：tools/ 的上一级
 fi
 DAEMON="$BIN/daemon"
 TC="$BIN/testclient"
 
 if [ ! -x "$DAEMON" ] || [ ! -x "$TC" ]; then
-  echo "找不到 daemon/testclient（查过 $HERE/ 与 $HERE/../target/release/）"
+  echo "找不到 daemon/testclient（查过 $HERE/ 与 ${BIN}/）"
   echo "仓库里先构建: cargo build --release -p daemon -p testclient；release 资产记得 chmod +x"
   exit 1
 fi

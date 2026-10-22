@@ -11,7 +11,7 @@ trap 'rc=$?; exec 3>&- 2>/dev/null || true; kill "$DPID" 2>/dev/null || true; if
 # PPF_DATA_DIR）。stdin 接 FIFO 并保持写端打开：EOF 即退出（UX-07）。
 mkfifo "$D/ctl"
 PPF_RELAY_URLS="" PPF_BIND_ADDR="127.0.0.1:0" \
-  "$ROOT/target/release/daemon" --ephemeral < "$D/ctl" > "$D/d.log" 2>&1 &
+  "${CARGO_TARGET_DIR:-$ROOT/target}/release/daemon" --ephemeral < "$D/ctl" > "$D/d.log" 2>&1 &
 DPID=$!
 exec 3>"$D/ctl"
 for _ in $(seq 1 50); do grep -q 'NodeId:' "$D/d.log" 2>/dev/null && break; sleep 0.2; done

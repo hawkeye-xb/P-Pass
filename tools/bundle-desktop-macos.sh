@@ -78,7 +78,7 @@ echo "── 3. tauri bundle (.app)"
 #   因为本地没有私钥必然失败、只能容忍非零退出，现在没有这个理由了。
 pnpm tauri bundle --bundles app --config "$VERSION_CONFIG"
 
-APP="$DESKTOP/src-tauri/target/release/bundle/macos/P-Pass.app"
+APP="${CARGO_TARGET_DIR:-$DESKTOP/src-tauri/target}/release/bundle/macos/P-Pass.app"
 [ -d "$APP" ] || { echo "FATAL: $APP not produced" >&2; exit 1; }
 
 echo "── 4. 组装 daemon helper：Contents/Helpers/ppf-daemon.app（#1110）"

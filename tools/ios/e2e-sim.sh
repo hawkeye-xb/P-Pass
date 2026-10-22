@@ -53,7 +53,7 @@ APP="$DERIVED/Build/Products/Debug-iphonesimulator/PPass.app"
 
 echo "==> 工具：daemon（release）与 b3sum"
 cargo build -q -p daemon --release
-DAEMON="$ROOT/target/release/daemon"
+DAEMON="${CARGO_TARGET_DIR:-$ROOT/target}/release/daemon"
 B3_TARGET="$IOS/build/b3sum-target"
 (cd "$ROOT/tools/ios/b3sum" && CARGO_TARGET_DIR="$B3_TARGET" cargo build -q --release)
 B3="$B3_TARGET/release/ppass-b3sum"

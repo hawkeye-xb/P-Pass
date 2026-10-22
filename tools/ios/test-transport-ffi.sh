@@ -35,8 +35,8 @@ command -v jq >/dev/null || { echo "error: 缺 jq（brew install jq）" >&2; exi
 # PPASS_DAEMON_PROFILE=dev：CI 用 debug 构建省时间（这里只要一个能答 hello 的 daemon，
 # 与发行优化无关）；默认 release 与本机常用产物一致。
 case "${PPASS_DAEMON_PROFILE:-release}" in
-  release) RELEASE_FLAG=--release; DAEMON="$ROOT/target/release/daemon" ;;
-  dev) RELEASE_FLAG=; DAEMON="$ROOT/target/debug/daemon" ;;
+  release) RELEASE_FLAG=--release; DAEMON="${CARGO_TARGET_DIR:-$ROOT/target}/release/daemon" ;;
+  dev) RELEASE_FLAG=; DAEMON="${CARGO_TARGET_DIR:-$ROOT/target}/debug/daemon" ;;
   *) echo "error: PPASS_DAEMON_PROFILE 只能是 release / dev" >&2; exit 1 ;;
 esac
 echo "==> daemon（${PPASS_DAEMON_PROFILE:-release}，宿主机）"

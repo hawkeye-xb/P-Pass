@@ -21,8 +21,8 @@
 #       Developer ID 签名必须给授权文件，签前核对它、签后核对结果。
 #       PPF_SIGN_TIMESTAMP=none 跳过 Apple 时间戳服务（本地开发用；发布不许）。
 #   dev [daemon_bin]
-#       本地开发：把本地构建的 daemon（缺省 target/debug/daemon，先 cargo build）组装到
-#       apps/desktop/src-tauri/target/Helpers/ppf-daemon.app（`tauri dev` 的壳按
+#       本地开发：把本地构建的 daemon（缺省 ${CARGO_TARGET_DIR:-target}/debug/daemon，先 cargo build）组装到
+#       ${CARGO_TARGET_DIR:-apps/desktop/src-tauri/target}/Helpers/ppf-daemon.app（`tauri dev` 的壳按
 #       ../Helpers/ppf-daemon.app 找 daemon，crates/platform/src/macos.rs
 #       `bundled_daemon_path_from`），再用个人团队的 Developer ID 证书 + 授权文件签名。
 #       #1115：签名 helper 只接受签名的窗口程序，未签名的开发壳连不上它；开发壳连测试沙盒
@@ -169,7 +169,7 @@ dev() {
   [ -n "$profile" ] || die "设 PPF_DAEMON_PROVISIONPROFILE=<授权文件路径>（Developer ID 授权文件，不进仓库）"
   if [ -z "$daemon" ]; then
     (cd "$ROOT" && cargo build -p daemon)
-    daemon="$ROOT/target/debug/daemon"
+    daemon="${CARGO_TARGET_DIR:-$ROOT/target}/debug/daemon"
   fi
   [ -x "$daemon" ] || die "daemon 不存在：$daemon"
   # 只认个人团队的 Developer ID Application 证书，恰好一张；别的团队一律不用。
@@ -180,7 +180,9 @@ dev() {
   version="$("$ROOT/tools/release-version.sh" desktop)"
   stage="$(mktemp -d)"
   "$ROOT/tools/bundle-macos.sh" "$stage" "$daemon" >/dev/null
-  helper="$ROOT/apps/desktop/src-tauri/target/Helpers/ppf-daemon.app"
+  # 壳按「可执行文件上两级/Helpers」找 helper（platform::bundled_daemon_path）：`tauri dev` 的壳在
+  # <target>/debug/ 下，<target> 跟着 CARGO_TARGET_DIR 走。
+  helper="${CARGO_TARGET_DIR:-$ROOT/apps/desktop/src-tauri/target}/Helpers/ppf-daemon.app"
   assemble "$stage" "$helper" "$version"
   rm -rf "$stage"
   PPF_SIGN_TIMESTAMP=none sign "$helper" "$identity" "$profile"

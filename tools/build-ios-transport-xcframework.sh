@@ -45,8 +45,8 @@ for t in "$DEVICE" "$SIM"; do
   cargo rustc -p transport --lib --features ios-ffi --release --target "$t" --crate-type staticlib
 done
 
-DEVICE_LIB="target/$DEVICE/release/libtransport.a"
-SIM_LIB="target/$SIM/release/libtransport.a"
+DEVICE_LIB="${CARGO_TARGET_DIR:-$ROOT/target}/$DEVICE/release/libtransport.a"
+SIM_LIB="${CARGO_TARGET_DIR:-$ROOT/target}/$SIM/release/libtransport.a"
 
 echo "==> Swift 绑定（uniffi-bindgen，library 模式读 ${SIM_LIB} 里的元数据）"
 GEN="$OUT/gen"
