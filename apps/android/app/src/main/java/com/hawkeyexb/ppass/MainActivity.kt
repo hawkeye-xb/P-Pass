@@ -71,6 +71,7 @@ import com.hawkeyexb.ppass.transport.pairWithQr
 import com.hawkeyexb.ppass.backup.BackupScopeStore
 import com.hawkeyexb.ppass.backup.ScopeRead
 import com.hawkeyexb.ppass.backup.SettingsWriter
+import com.hawkeyexb.ppass.backup.savePairingOrError
 import com.hawkeyexb.ppass.backup.OnboardedDesktopsStore
 import com.hawkeyexb.ppass.backup.backfillOnboardedOnHome
 import com.hawkeyexb.ppass.backup.isKnownDesktop
@@ -212,9 +213,11 @@ fun PPassApp() {
     // onboarding）——老用户升级不问；靠落盘标记，不靠版本号。
     val notificationAsk = remember {
         com.hawkeyexb.ppass.backup.OnboardingNotificationAsk(context.filesDir).also {
-            it.initIfAbsent(
-                existingUser = pairings.load() != null || OnboardedDesktopsStore(context.filesDir).anyOnboarded(),
-            )
+            // #1039：组合期写盘，写不下来不许让 App 一启动就崩；文件没落下 = shouldAsk 按「不问」。
+            val existingUser = pairings.load() != null || OnboardedDesktopsStore(context.filesDir).anyOnboarded()
+            settingsWriter.quiet("notificationAsk", "init existingUser=$existingUser") {
+                it.initIfAbsent(existingUser = existingUser)
+            }
         }
     }
     // MOB-03: 相册选择页权限链——「等授权结果后去哪」的落点。设置后由
@@ -451,8 +454,11 @@ fun PPassApp() {
                     // #540：白名单是前提、意图是真相源。用户在系统设置里把白名单加回来，回到 App 时
                     // 没有任何开关动作会经过这里——前提重新满足就按意图把生产者排回去。必须同步跑、
                     // 排在 foregroundCatchup() 之前：它门控在 enabled() 上，晚一拍这次补捞就白跳过了。
+                    // #1039：主线程上的后台写者——写不下来只记日志（没有用户操作在等），下次回到前台再试。
                     if (batteryWhitelisted) {
-                        restoreAutoBackupAfterAuthorizationReturned(context, backgroundAuthorized = true, source = "resume")
+                        settingsWriter.quiet("autoBackup", "restore on resume") {
+                            restoreAutoBackupAfterAuthorizationReturned(context, backgroundAuthorized = true, source = "resume")
+                        }
                     }
 
                     daysUnreachable = computeDaysUnreachable()
@@ -607,7 +613,16 @@ fun PPassApp() {
                 if (screen != s) return@LaunchedEffect
                 when (outcome) {
                     is PairOutcome.Joined -> {
-                        pairings.save(outcome.pairing)
+                        // #1039（对位 iOS #969）：写盘成功才算配对成功——存不下来就进配对失败页让用户清出空间后重扫，
+                        // 不进重启即丢的「已配对」，也不崩。
+                        val saveError = savePairingOrError { pairings.save(outcome.pairing) }
+                        if (saveError != null) {
+                            screen = Screen.Trouble(
+                                R.string.pair_failed_title, R.string.pair_failed_body,
+                                "(${context.getString(R.string.pair_save_failed)} ${saveError.take(120)})",
+                            )
+                            return@LaunchedEffect
+                        }
                         // #565：重新配上这台电脑——之前断开时还没送到的旧通知不必再发
                         // （daemon 按纪元判，送到也不会吊销新配对；这里是不再白跑）。
                         UnpairNotice.cancel(context, outcome.pairing.daemonNodeId)
@@ -636,16 +651,23 @@ fun PPassApp() {
                             // 备份这件事没有别人会做——断开时留下的意图在
                             // 这里兑现。不做的话，重连之后手机上一个自动
                             // 生产者都没有，而且不吭声。
-                            restoreAutoBackupAfterRepair(
-                                context,
-                                backgroundAuthorization.isGranted(),
-                            )
+                            // #1039（对位 iOS applyOnPairing）：写不下来只记日志、照常回首页——意图还在盘上，
+                            // 回到前台的 #540 对账会按它再排一次。
+                            settingsWriter.quiet("autoBackup", "restore after repair") {
+                                restoreAutoBackupAfterRepair(
+                                    context,
+                                    backgroundAuthorization.isGranted(),
+                                )
+                            }
                             screen = Screen.Home(outcome.pairing)
                         } else {
                             // MOB-93: 换一台新电脑 = 新的信任关系，后台备份
                             // 要重新问一次。清意图放在这里（而不是断开时），
                             // 正是原注释所说的「the next onboarding」。
-                            AutoBackupPrefs(context.filesDir).setRequested(false)
+                            // #1039：清不掉不拦配对、照常进选相册，但要提示——完成页点按钮时会按用户的选择再写一次。
+                            settingsWriter.write("autoBackup", "new desktop, ask again") {
+                                AutoBackupPrefs(context.filesDir).setRequested(false)
+                            }
                             enterBucketPicker(outcome.pairing, firstTime = true)
                         }
                     }
@@ -703,8 +725,11 @@ fun PPassApp() {
             // MOB-114（#455）：存量补记——本修复前走完 onboarding 的桌面没有标记。
             LaunchedEffect(s.pairing.daemonNodeId) {
                 withContext(Dispatchers.IO) {
-                    backfillOnboardedOnHome(OnboardedDesktopsStore(context.filesDir), s.pairing.daemonNodeId) {
-                        BackupScopeStore(context, s.pairing.daemonNodeId).selectedBucketIds()?.isNotEmpty() == true
+                    // #1039：补记写不下来只记日志——下次进首页再补。
+                    settingsWriter.quiet("onboarded", "backfill") {
+                        backfillOnboardedOnHome(OnboardedDesktopsStore(context.filesDir), s.pairing.daemonNodeId) {
+                            BackupScopeStore(context, s.pairing.daemonNodeId).selectedBucketIds()?.isNotEmpty() == true
+                        }
                     }
                 }
             }
@@ -744,10 +769,10 @@ fun PPassApp() {
                 batteryRequestInFlight = false
                 batteryWhitelisted = backgroundAuthorization.isGranted()
                 if (batteryWhitelisted) {
+                    // #1039：「已确认中断」写成功才重挂、才收起中断卡；写不下来卡片留着，用户清出空间后再点。
                     val saved = if (backupInterrupted) {
-                        resumeAfterInterruption(context)
-                        backupInterrupted = false
-                        true
+                        settingsWriter.write("backupInterruption", "acknowledged") { resumeAfterInterruption(context) }
+                            .also { backupInterrupted = !it }
                     } else settingsWriter.write("autoBackup", true) { enableAutoBackup(context) }
                     // UI-12: 系统授权弹窗的结果——这个 launcher 被「去处理」
                     // 和「首次开启开关」两条路径共用，两者都是同一个系统
@@ -808,18 +833,24 @@ fun PPassApp() {
             // 那种「漏一处」的形状（AGENTS.md 提炼函数的理由同款）。
             val resolveBackgroundBackup = {
                 if (batteryWhitelisted) {
-                    resumeAfterInterruption(context)
-                    backupInterrupted = false
+                    // #1039：「已确认中断」与恢复生产者都写成功，才收起中断卡、才说「正在重新连接」；
+                    // 写不下来 SettingsWriter 已提示，卡片留着，用户清出空间后再点一次。
                     // #540：中断确认之后，挂起留下的 autoEnabled=false 也要回来——否则 Worker 与
                     // foregroundCatchup 的 enabled() 闸门仍关着，点了「恢复」等于没点。
-                    restoreAutoBackupAfterAuthorizationReturned(context, backgroundAuthorized = true, source = "resolve")
+                    val resumed = settingsWriter.write("backupInterruption", "acknowledged") {
+                        resumeAfterInterruption(context)
+                        restoreAutoBackupAfterAuthorizationReturned(context, backgroundAuthorized = true, source = "resolve")
+                    }
+                    backupInterrupted = BackupHealthPrefs(context.filesDir).load().interruptedUnacknowledged
                     // UI-12: 本地重挂 WorkManager 监听，没有会失败的路径——
                     // 真正传不传得出去要等这轮 Flow 跑完，那是 Trouble 状态/
                     // SystemFailureNotifier 的地盘，这里只诚实说"已发起"。
-                    scope.launch {
-                        snackbarHostState.showSnackbar(
-                            context.getString(R.string.background_backup_resuming),
-                        )
+                    if (resumed) {
+                        scope.launch {
+                            snackbarHostState.showSnackbar(
+                                context.getString(R.string.background_backup_resuming),
+                            )
+                        }
                     }
                 } else if (!batteryRequestInFlight) {
                     batteryRequestInFlight = true
@@ -866,7 +897,7 @@ fun PPassApp() {
             // 快速重连回 Screen.Home，`tab` 是 PPassApp 顶层状态，回到点击前的那个。
             val onRepairPairing = {
                 scope.launch {
-                    withContext(Dispatchers.IO) { clearLocalPairing(context, s.pairing) }
+                    withContext(Dispatchers.IO) { clearLocalPairingLogged(context, s.pairing) }
                     val cameraGranted = ContextCompat.checkSelfPermission(
                         context, Manifest.permission.CAMERA,
                     ) == PackageManager.PERMISSION_GRANTED
@@ -979,15 +1010,21 @@ fun PPassApp() {
                             if (!enabled) {
                                 batteryRequestInFlight = false
                                 if (settingsWriter.write("autoBackup", false) { disableAutoBackup(context) }) {
-                                    BackupHealthPrefs(context.filesDir).acknowledge()
-                                    backupInterrupted = false
+                                    // #1039：关已经存上了；「已确认中断」没存上就提示，中断状态按盘上的值显示。
+                                    settingsWriter.write("backupInterruption", "acknowledged") {
+                                        BackupHealthPrefs(context.filesDir).acknowledge()
+                                    }
+                                    backupInterrupted = BackupHealthPrefs(context.filesDir).load().interruptedUnacknowledged
                                 }
                                 userRequestedBackgroundBackup = prefs.requested()
                             } else if (batteryWhitelisted) {
                                 if (backupInterrupted) {
-                                    resumeAfterInterruption(context)
-                                    backupInterrupted = false
-                                    userRequestedBackgroundBackup = true
+                                    // #1039：写成功才重挂、才收起中断卡、开关才打开；写不下来开关与卡片都不动。
+                                    val resumed = settingsWriter.write("backupInterruption", "acknowledged") {
+                                        resumeAfterInterruption(context)
+                                    }
+                                    backupInterrupted = BackupHealthPrefs(context.filesDir).load().interruptedUnacknowledged
+                                    if (resumed) userRequestedBackgroundBackup = true
                                 } else {
                                     settingsWriter.write("autoBackup", true) { enableAutoBackup(context) }
                                     userRequestedBackgroundBackup = prefs.requested()
@@ -1016,7 +1053,7 @@ fun PPassApp() {
                         onDisconnect = {
                             scope.launch {
                                 UnpairNotice.enqueue(context, s.pairing)
-                                withContext(Dispatchers.IO) { clearLocalPairing(context, s.pairing) }
+                                withContext(Dispatchers.IO) { clearLocalPairingLogged(context, s.pairing) }
                                 screen = Screen.Welcome
                             }
                             Unit
@@ -1185,7 +1222,11 @@ fun PPassApp() {
             // 就再也不问，之后只能从设置里的「通知」开关申请；老用户升级、Android 12 及以下不问。
             val finishOnboarding = {
                 // MOB-114（#455）：「连过这台」的事实在这里落盘，快速重连只认它。
-                OnboardedDesktopsStore(context.filesDir).markOnboarded(s.pairing.daemonNodeId)
+                // #1039（对位 iOS settingWriteFailed("onboarded")）：记不下来不挡进首页，提示；后果只是下次连回这台
+                // 仍走一遍首次设置（偏安全的一侧）。
+                settingsWriter.write("onboarded", s.pairing.daemonNodeId.take(8)) {
+                    OnboardedDesktopsStore(context.filesDir).markOnboarded(s.pairing.daemonNodeId)
+                }
                 val settings = BackupSettings(context.filesDir).load()
                 val constraintsSatisfied = !settings.wifiOnly || isOnUnmetered(context)
                 requestFlowScopeBackfillAndWake(context, constraintsSatisfied)
@@ -1213,6 +1254,12 @@ fun PPassApp() {
                     finishOnboarding()
                 }
             }
+            // #1039：选「进入」= 不开后台备份，按用户的选择把意图再写一次。配对时清旧意图那一步若没写下来，
+            // 这里补上——否则旧电脑留下的意图会在回到前台时（#540 对账）把新电脑的后台备份悄悄打开。
+            val onEnterWithoutBackgroundBackup = {
+                settingsWriter.write("autoBackup", false) { disableAutoBackup(context) }
+                finishOnboarding()
+            }
             val askNotifications = remember {
                 notificationAsk.shouldAsk(Build.VERSION.SDK_INT, hasNotificationPermission(context))
             }
@@ -1229,9 +1276,14 @@ fun PPassApp() {
             // 用户点了按钮：该问就先问（先落盘「问过」再弹），弹窗结果回来后继续原动作。
             val thenContinue = { next: () -> Unit ->
                 if (askNotifications && notificationAsk.shouldAsk(Build.VERSION.SDK_INT, hasNotificationPermission(context))) {
-                    notificationAsk.markAsked()
-                    afterNotificationAsk = next
-                    onboardingNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    // #1039（对位 iOS askNotificationAtOnboarding）：「问过」落不了盘就不弹——宁可少问，
+                    // 不许因为没记住而下次又问；只记日志，直接继续原动作。
+                    if (settingsWriter.quiet("notificationAsk", "asked") { notificationAsk.markAsked() }) {
+                        afterNotificationAsk = next
+                        onboardingNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    } else {
+                        next()
+                    }
                 } else {
                     next()
                 }
@@ -1239,7 +1291,7 @@ fun PPassApp() {
             BackupStartedScreen(
                 photoCount = s.photoCount,
                 onEnableBackgroundBackup = { thenContinue(onEnableBackgroundBackup) },
-                onEnter = { thenContinue(finishOnboarding) },
+                onEnter = { thenContinue(onEnterWithoutBackgroundBackup) },
                 notificationAskNote = askNotifications,
             )
         }
@@ -1337,6 +1389,18 @@ private fun deviceName(): String {
  * MOB-95（#282）：留什么、清什么**只在** [DisconnectState] 里声明，这里只把
  * 清单里的运行时动作接到 Context 上，不另写任何处置。
  */
+/**
+ * #1039：断开 / 重新扫码的清理写失败不许让 App 崩——清单已经逐行跑完（停任务、停监听不受影响），这里只记日志，
+ * 调用方照常回欢迎页 / 扫码页（对位 iOS `LiveBackend.disconnect`）。
+ */
+private fun clearLocalPairingLogged(context: Context, pairing: Pairing) {
+    try {
+        clearLocalPairing(context, pairing)
+    } catch (e: Exception) {
+        PLog.w("PPassDisconnect", "disconnect manifest failed; leaving anyway", e)
+    }
+}
+
 private fun clearLocalPairing(
     context: Context,
     pairing: Pairing,

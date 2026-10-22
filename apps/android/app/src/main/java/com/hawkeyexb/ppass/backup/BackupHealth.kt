@@ -191,7 +191,17 @@ fun reconcileWatchOnProcessStart(context: Context, nowMs: Long, elapsedMs: Long)
 /** MOB-28: 用户在提示卡上点了「恢复备份」——**唯一**允许在 ASK_USER 之后
  *  重挂的入口。清标志 + 重挂 + 立刻补跑一次（人在操作，用户在场档）。 */
 fun resumeAfterInterruption(context: Context) {
-    BackupHealthPrefs(context.filesDir).acknowledge()
-    scheduleAutoBackup(context)
-    triggerUserPresentBackup(context)
+    acknowledgeInterruptionThenRearm(context.filesDir) {
+        scheduleAutoBackup(context)
+        triggerUserPresentBackup(context)
+    }
+}
+
+/**
+ * #1039：先把「已确认」落盘，写成功才重挂——写失败直接抛出（界面由 SettingsWriter 接住、提示），不重挂，
+ * 中断卡留着，用户清出空间后再点一次。反过来（先重挂再确认）会落成「卡片还在、任务已经在跑」。
+ */
+internal fun acknowledgeInterruptionThenRearm(dir: File, rearm: () -> Unit) {
+    BackupHealthPrefs(dir).acknowledge()
+    rearm()
 }

@@ -52,7 +52,8 @@ class RepairWakesFlowTest {
     fun a_successful_pairing_wakes_flow_without_an_app_restart() {
         // 本卡本体判据。锚点选 `pairings.save(` 而不是分支名——保存新配对
         // 就是「配对成功」这个事实落地的那一刻，唤醒必须紧跟着它。
-        val joined = sliceBetween(mainActivity(), "pairings.save(outcome.pairing)", "}")
+        // #1039：保存改为经 savePairingOrError（写失败进配对失败页），唤醒仍要在保存成功之后的同一分支里。
+        val joined = sliceBetween(mainActivity(), "savePairingOrError { pairings.save(outcome.pairing) }", "is PairOutcome.Refused")
         assertTrue(
             "配对成功必须当场叫醒 Flow——这是 MOB-87 的原症状：不接的话要杀 App 重开才动",
             joined.contains("requestFlowWakeAfterRepair("),

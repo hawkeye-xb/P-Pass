@@ -256,27 +256,39 @@ fun applyDisconnectManifest(
     runtime: DisconnectRuntime,
     manifest: List<DisconnectState> = DisconnectState.entries,
 ) {
+    // #1039（对位 iOS #974）：某一行失败（写盘 / 删文件出错）不短路后面的行——停任务、停监听、停 Flow 必须照常执行，
+    // 否则「偏好写不进去」会连带让旧配对的后台生产者继续跑。全部跑完后抛出第一个错误，不吞，由调用方记日志。
+    var firstError: Exception? = null
     for (state in manifest) {
-        when (state.disposition) {
-            DisconnectDisposition.KEEP, DisconnectDisposition.RETIRED -> Unit
-            DisconnectDisposition.CLEAR -> {
-                check(state.location == StateLocation.FILES) { "$state: CLEAR only supported under files/" }
-                deleteMatching(filesDir, "", state)
-            }
-            DisconnectDisposition.RESET -> when (state) {
-                // MOB-93：停生产者，**留意图**（换新电脑时由 onboarding 入口清意图）。
-                DisconnectState.AUTO_BACKUP_PREFS -> suspendAutoBackupForPairingChange(filesDir)
-                else -> error("$state: no RESET action defined")
-            }
-            DisconnectDisposition.STOP -> {
-                check(state.location == StateLocation.RUNTIME) { "$state: STOP only applies to runtime producers" }
-                when (state) {
-                    DisconnectState.FLOW_RUNTIME -> runtime.stopFlowRuntime()
-                    DisconnectState.MEDIA_WATCH_JOB -> runtime.cancelMediaWatch()
-                    else -> {
-                        check(state.workNames.isNotEmpty()) { "$state: no STOP action defined" }
-                        state.workNames.forEach(runtime::cancelUniqueWork)
-                    }
+        try {
+            applyDisconnectRow(filesDir, runtime, state)
+        } catch (e: Exception) {
+            if (firstError == null) firstError = e else firstError.addSuppressed(e)
+        }
+    }
+    firstError?.let { throw it }
+}
+
+private fun applyDisconnectRow(filesDir: File, runtime: DisconnectRuntime, state: DisconnectState) {
+    when (state.disposition) {
+        DisconnectDisposition.KEEP, DisconnectDisposition.RETIRED -> Unit
+        DisconnectDisposition.CLEAR -> {
+            check(state.location == StateLocation.FILES) { "$state: CLEAR only supported under files/" }
+            deleteMatching(filesDir, "", state)
+        }
+        DisconnectDisposition.RESET -> when (state) {
+            // MOB-93：停生产者，**留意图**（换新电脑时由 onboarding 入口清意图）。
+            DisconnectState.AUTO_BACKUP_PREFS -> suspendAutoBackupForPairingChange(filesDir)
+            else -> error("$state: no RESET action defined")
+        }
+        DisconnectDisposition.STOP -> {
+            check(state.location == StateLocation.RUNTIME) { "$state: STOP only applies to runtime producers" }
+            when (state) {
+                DisconnectState.FLOW_RUNTIME -> runtime.stopFlowRuntime()
+                DisconnectState.MEDIA_WATCH_JOB -> runtime.cancelMediaWatch()
+                else -> {
+                    check(state.workNames.isNotEmpty()) { "$state: no STOP action defined" }
+                    state.workNames.forEach(runtime::cancelUniqueWork)
                 }
             }
         }

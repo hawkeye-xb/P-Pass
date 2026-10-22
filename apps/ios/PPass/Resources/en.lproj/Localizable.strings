@@ -194,6 +194,7 @@
 "setting_save_failed" = "The setting could not be saved on this phone, so it was put back to its previous value. Check the free storage and try again.";
 "scope_save_failed" = "Your album selection could not be saved on this phone. Check the free storage and try again.";
 "command_failed" = "That didn’t go through. Please try again later.";
+"pair_save_failed" = "Could not save the pairing on this phone. Check the free storage, then scan again.";
 "background_backup_authorized" = "Background access granted";
 "background_backup_authorization_denied" = "Authorization not granted — background backup stays paused";
 "location_redacted_notice" = "Backups don't include where photos and videos were taken";
