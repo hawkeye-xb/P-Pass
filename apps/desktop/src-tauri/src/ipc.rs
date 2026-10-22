@@ -41,7 +41,6 @@ pub(crate) fn ui_err(key: &str, params: &[(&str, &dyn std::fmt::Display)]) -> St
 pub(crate) const UI_ERR_GENERIC: &str = "ui.err_generic";
 const REASON_UI_KEYS: &[(&str, &str)] = &[
     ("not_paired", "err.not_paired"),
-    ("revoked", "err.not_authorized"),
     ("role_forbidden", "err.not_authorized"),
     ("pair_token_invalid", "err.not_authorized"),
     ("phone_outdated", "ui.err_phone_outdated"),
@@ -56,7 +55,7 @@ const REASON_UI_KEYS: &[(&str, &str)] = &[
     ("library_unavailable", UI_ERR_GENERIC),
     ("storage_failed", UI_ERR_GENERIC),
     ("fetch_failed", UI_ERR_GENERIC),
-    ("epoch_mismatch", UI_ERR_GENERIC),
+    ("pairing_mismatch", UI_ERR_GENERIC),
     ("grant_not_found", UI_ERR_GENERIC),
     ("grant_conflict", UI_ERR_GENERIC),
     ("cancelled", UI_ERR_GENERIC),
@@ -599,7 +598,7 @@ mod tests {
     #[test]
     fn every_registry_reason_has_an_explicit_mapping() {
         let reasons = registry_reasons();
-        assert!(reasons.len() >= 19, "快照读空了？{reasons:?}");
+        assert!(reasons.len() >= 18, "快照读空了？{reasons:?}");
         for r in &reasons {
             assert!(
                 REASON_UI_KEYS.iter().any(|(k, _)| k == r),

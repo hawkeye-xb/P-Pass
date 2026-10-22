@@ -10,7 +10,7 @@ use daemon::{BackupEngine, Router};
 use proto::{
     BackupCommit, BackupItem, BackupManifest, BackupMissing, BackupPresenceQuery, Req, Resp,
 };
-use storage::{Db, Device, Role};
+use storage::{Db, Pairing, Role};
 use transport::{Blobs, IrohTransport, Transport, TransportConfig};
 
 const ALPNS: &[&str] = &["ppf/ctrl/1", "ppf/blobs/1"];
@@ -207,7 +207,11 @@ async fn backup_500_mixed_files_dedups_and_commits() {
     // Paired as member — backup.* requires it (T-030 checkpoint).
     storage
         .db
-        .upsert_device(&member(&client.tp.node_id()))
+        .accept_pairing(
+            &client.tp.node_id().0,
+            "phone",
+            &member(&client.tp.node_id()),
+        )
         .await
         .unwrap();
 
@@ -229,11 +233,7 @@ async fn backup_500_mixed_files_dedups_and_commits() {
     );
     // Watermark advanced to the committed generation.
     assert_eq!(
-        storage
-            .db
-            .get_watermark(&client.tp.node_id().0)
-            .await
-            .unwrap(),
+        storage.db.get_watermark(PAIRING_ID).await.unwrap(),
         Some(42)
     );
 
@@ -250,7 +250,11 @@ async fn presence_returns_only_missing_hashes_without_changing_committed_backup_
     let client = Client::new(dir.path(), &storage).await;
     storage
         .db
-        .upsert_device(&member(&client.tp.node_id()))
+        .accept_pairing(
+            &client.tp.node_id().0,
+            "phone",
+            &member(&client.tp.node_id()),
+        )
         .await
         .unwrap();
 
@@ -276,11 +280,7 @@ async fn presence_returns_only_missing_hashes_without_changing_committed_backup_
     assert_eq!(missing.hashes, vec![absent]);
     assert_eq!(asset_count(&storage.db).await, 1);
     assert_eq!(
-        storage
-            .db
-            .get_watermark(&client.tp.node_id().0)
-            .await
-            .unwrap(),
+        storage.db.get_watermark(PAIRING_ID).await.unwrap(),
         Some(42),
     );
     assert_eq!(
@@ -323,7 +323,11 @@ async fn commit_batch_emits_timeline_invalidated_exactly_once() {
     let client = Client::new(dir.path(), &storage).await;
     storage
         .db
-        .upsert_device(&member(&client.tp.node_id()))
+        .accept_pairing(
+            &client.tp.node_id().0,
+            "phone",
+            &member(&client.tp.node_id()),
+        )
         .await
         .unwrap();
 
@@ -351,7 +355,11 @@ async fn interrupted_commit_rerun_converges_and_survives_rebuild() {
     let client = Client::new(dir.path(), &storage).await;
     storage
         .db
-        .upsert_device(&member(&client.tp.node_id()))
+        .accept_pairing(
+            &client.tp.node_id().0,
+            "phone",
+            &member(&client.tp.node_id()),
+        )
         .await
         .unwrap();
 
@@ -440,15 +448,13 @@ async fn dump(db: &Db) -> Vec<(Vec<u8>, String, i64, Vec<u8>)> {
     rows
 }
 
-fn member(id: &transport::NodeId) -> Device {
-    Device {
+const PAIRING_ID: &str = "pairing-backup-1";
+
+fn member(id: &transport::NodeId) -> Pairing {
+    Pairing {
+        id: PAIRING_ID.into(),
         node_id: id.0.to_vec(),
-        name: "phone".into(),
         role: Role::Member,
         paired_at: 1,
-        last_seen: None,
-        revoked: false,
-        revoked_at: None,
-        revoked_by: None,
     }
 }

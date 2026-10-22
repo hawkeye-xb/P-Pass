@@ -21,7 +21,7 @@ pub use audit_repo::{
     DecisionRecord, ItemEvidenceEntry, ItemEvidenceRecord, TombstoneEntry, TombstoneRecord,
 };
 pub use db::Db;
-pub use device_repo::{Device, RevokedBy, Role};
+pub use device_repo::{DepartedBy, DeviceProfile, DeviceRow, DeviceWatermark, Pairing, Role};
 pub use diag_repo::DiagEvent;
 pub use flow_delivery_repo::{FlowGrant, FlowGrantState, FlowReceipt};
 pub use low_space_repo::LowSpaceNotice;

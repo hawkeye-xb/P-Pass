@@ -5,7 +5,7 @@
 
 use daemon::Router;
 use proto::{codes, Req, Resp};
-use storage::{Db, Device, Role};
+use storage::{Db, DepartedBy, Pairing, Role};
 use transport::{IrohTransport, Transport, TransportConfig};
 
 async fn start_daemon(db: Db) -> (IrohTransport, transport::PeerAddr) {
@@ -43,17 +43,19 @@ async fn call(tp: &IrohTransport, daemon: transport::NodeId, method: &str) -> Re
     proto::codec::decode::<Resp>(&frame).unwrap()
 }
 
-fn paired(node_id: &[u8; 32], role: Role) -> Device {
-    Device {
-        node_id: node_id.to_vec(),
-        name: "test-device".into(),
-        role,
-        paired_at: 1,
-        last_seen: None,
-        revoked: false,
-        revoked_at: None,
-        revoked_by: None,
-    }
+async fn pair(db: &Db, node: &[u8; 32], role: Role) {
+    db.accept_pairing(
+        node,
+        "test-device",
+        &Pairing {
+            id: "pairing-1".into(),
+            node_id: node.to_vec(),
+            role,
+            paired_at: 1_700_000_000_000,
+        },
+    )
+    .await
+    .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -133,9 +135,7 @@ async fn viewer_browses_but_backup_is_denied() {
     let (dtp, daddr) = start_daemon(db.clone()).await;
     let ctp = client().await;
     ctp.add_peer(daddr);
-    db.upsert_device(&paired(&ctp.node_id().0, Role::Viewer))
-        .await
-        .unwrap();
+    pair(&db, &ctp.node_id().0, Role::Viewer).await;
 
     // Browsing methods reach dispatch (no query engine in this harness →
     // unsupported_method, but crucially NOT an authorization denial).
@@ -157,25 +157,34 @@ async fn revoked_device_is_shut_out_at_once() {
     let (dtp, daddr) = start_daemon(db.clone()).await;
     let ctp = client().await;
     ctp.add_peer(daddr);
-    db.upsert_device(&paired(&ctp.node_id().0, Role::Member))
-        .await
-        .unwrap();
+    pair(&db, &ctp.node_id().0, Role::Member).await;
 
     // While paired: allowed through the checkpoint.
     let resp = call(&ctp, dtp.node_id(), "hello").await;
     assert!(resp.ok);
 
-    // Revoke → 吊销即拒连, even for hello.
+    let before = call(&ctp, dtp.node_id(), "timeline.page").await;
+    assert_ne!(
+        before.error.expect("no query engine").code(),
+        codes::NOT_AUTHORIZED
+    );
+
+    // 撤销 = 配对记录物理删除 → 数据方法立刻被拒。
     assert!(db
-        .revoke(
-            &ctp.node_id().0,
-            storage::RevokedBy::Owner,
-            1_700_000_000_000
-        )
+        .remove_pairing(&ctp.node_id().0, None, DepartedBy::Owner, 1_700_000_000_000)
         .await
-        .unwrap());
-    let resp = call(&ctp, dtp.node_id(), "hello").await;
+        .unwrap()
+        .is_some());
+    let resp = call(&ctp, dtp.node_id(), "timeline.page").await;
     let err = resp.error.expect("denied after revocation");
     assert_eq!(err.code(), codes::NOT_AUTHORIZED);
-    assert_eq!(err.reason(), &proto::Reason::Revoked);
+    // #1117: 没有配对记录 ⇒ 与从未配对同一结果（桌面不再发 Reason::Revoked）。
+    assert_eq!(err.reason(), &proto::Reason::NotPaired);
+
+    // #1117: hello 对无配对记录的节点只是能力握手（不再「连 hello 都拒」），
+    // 但不带 pairing_id、也不刷新 last_seen。
+    let resp = call(&ctp, dtp.node_id(), "hello").await;
+    assert!(resp.ok);
+    let hello: proto::Hello = serde_json::from_value(resp.result.unwrap()).unwrap();
+    assert_eq!(hello.pairing_id, None);
 }

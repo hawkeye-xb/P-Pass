@@ -14,7 +14,7 @@ use daemon::flow_delivery::{
 use daemon::low_space::LOW_SPACE_THRESHOLD_BYTES;
 use daemon::Router;
 use proto::{FlowFetchRequest, FlowTupleRef, Req, Resp};
-use storage::{Asset, Db, Device, Role};
+use storage::{Asset, Db, Pairing, Role};
 use tempfile::tempdir;
 use transport::{Blobs, IrohTransport, NodeId, Transport, TransportConfig, ALPN_BLOBS};
 
@@ -23,7 +23,7 @@ const GIB: u64 = 1024 * 1024 * 1024;
 fn request(lease: &str, hash: [u8; 32], provider: String, size_bytes: i64) -> FlowFetchRequest {
     FlowFetchRequest {
         queue_sequence: 7,
-        pairing_epoch: "epoch-current".into(),
+        pairing_id: "epoch-current".into(),
         lease_token: lease.into(),
         content_hash: hex::encode(hash),
         file_name: "IMG_0007.jpg".into(),
@@ -37,27 +37,24 @@ fn request(lease: &str, hash: [u8; 32], provider: String, size_bytes: i64) -> Fl
 fn tuple(lease: &str) -> FlowTupleRef {
     FlowTupleRef {
         queue_sequence: 7,
-        pairing_epoch: "epoch-current".into(),
+        pairing_id: "epoch-current".into(),
         lease_token: lease.into(),
     }
 }
 
 async fn pair(db: &Db, peer: NodeId) {
-    db.upsert_device(&Device {
-        node_id: peer.0.to_vec(),
-        name: "phone".into(),
-        role: Role::Member,
-        paired_at: 1,
-        last_seen: None,
-        revoked: false,
-        revoked_at: None,
-        revoked_by: None,
-    })
+    db.accept_pairing(
+        &peer.0,
+        "phone",
+        &Pairing {
+            id: "epoch-current".into(),
+            node_id: peer.0.to_vec(),
+            role: Role::Member,
+            paired_at: 1,
+        },
+    )
     .await
     .unwrap();
-    db.set_pairing_epoch(&peer.0, "epoch-current")
-        .await
-        .unwrap();
 }
 
 async fn paired_db(peer: NodeId) -> Db {

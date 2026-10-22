@@ -163,6 +163,7 @@
   "ui.disconnected_at": "已断开 · {time}",
   "ui.disconnected": "已断开",
   "ui.disconnected_hint": "重新扫码即可恢复",
+  "ui.disconnected_identity_hint": "电脑换了身份，需要重新扫码",
   "ui.startup_migration_guidance": "这个版本比你的照片库旧。请装回新版本。",
   "ui.audit_backed_up": "已备份 {n} 张照片",
   "ui.audit_needs_attention": "{n} 张需处理",

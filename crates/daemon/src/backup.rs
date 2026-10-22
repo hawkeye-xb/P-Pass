@@ -306,6 +306,20 @@ impl BackupEngine {
         dropped.len()
     }
 
+    /// #1117：这台设备的配对记录被删——丢掉它的备份会话与交付台账。之后它
+    /// 在 authz 处就被拒，留着只会占内存、并在 staging 回收时继续保护它声明
+    /// 过的文件。返回是否真有会话被丢掉。
+    pub fn end_session(&self, peer: transport::NodeId) -> bool {
+        let had = self
+            .sessions
+            .lock()
+            .expect("sessions lock")
+            .remove(&peer)
+            .is_some();
+        self.delivered.lock().expect("delivered lock").remove(&peer);
+        had
+    }
+
     /// MOB-32：回收 staging 里的孤儿（已校验、但没有任何活会话认领的裸
     /// 文件）。返回释放的字节数。
     ///
@@ -544,9 +558,11 @@ impl BackupEngine {
             return Err(BackupError::NothingIngested { delivered });
         }
 
-        if let Some(generation) = generation {
+        // #1117：水位挂在这次配对记录上（随它级联删除）。没有配对记录 = 配对
+        // 已在本轮途中被删，不推水位。
+        if let (Some(generation), Some(pairing)) = (generation, self.db.active_pairing(&peer.0)) {
             self.db
-                .set_watermark(&peer.0, generation, unix_ms_now())
+                .set_watermark(&pairing.id, generation, unix_ms_now())
                 .await?;
         }
         self.sessions.lock().expect("sessions lock").remove(&peer);

@@ -253,6 +253,7 @@ msg_keys! {
     UI_DISCONNECTED_AT => "ui.disconnected_at",
     UI_DISCONNECTED => "ui.disconnected",
     UI_DISCONNECTED_HINT => "ui.disconnected_hint",
+    UI_DISCONNECTED_IDENTITY_HINT => "ui.disconnected_identity_hint",
     UI_STARTUP_MIGRATION_GUIDANCE => "ui.startup_migration_guidance",
     UI_AUDIT_BACKED_UP => "ui.audit_backed_up",
     UI_AUDIT_NEEDS_ATTENTION => "ui.audit_needs_attention",
@@ -590,6 +591,7 @@ mod tests {
             UI_DISCONNECTED_AT,
             UI_DISCONNECTED,
             UI_DISCONNECTED_HINT,
+            UI_DISCONNECTED_IDENTITY_HINT,
             UI_STARTUP_MIGRATION_GUIDANCE,
             UI_AUDIT_BACKED_UP,
             UI_AUDIT_NEEDS_ATTENTION,
@@ -751,7 +753,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 318);
+        assert_eq!(ALL.len(), 319);
     }
 
     #[test]

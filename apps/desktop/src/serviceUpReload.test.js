@@ -114,7 +114,7 @@ function stoppedDesktop({ slowOfflineTimeline = 0 } = {}) {
             return { pending: [] };
           case "devices.list":
             return {
-              devices: [{ node_id: "ab", name: "妈妈的手机", revoked: false, presence: "online" }],
+              devices: [{ node_id: "ab", name: "妈妈的手机", paired: true, presence: "online" }],
             };
           case "device.watermarks":
             return { watermarks: [] };

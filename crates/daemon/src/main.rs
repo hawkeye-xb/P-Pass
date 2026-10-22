@@ -279,8 +279,8 @@ async fn main() -> anyhow::Result<()> {
     // ── Persistent daemon identity (真机 P0: 每次重启换 NodeId 会把
     // 所有已配对手机变成孤儿——配对绑的就是 NodeId). #1109：macOS 存
     // data protection 钥匙串，Windows / Linux 仍是数据目录里的 identity.key；
-    // 读不出来 / 内容不合法就拒绝启动，见 daemon::identity。
-    let secret = load_or_mint_identity(ephemeral, &data_dir);
+    // 读不出来 / 内容不合法就拒绝启动；新身份先删全部配对记录，见 daemon::identity。
+    let secret = load_or_mint_identity(ephemeral, &data_dir, &db).await;
 
     // ── DAE-02: 单实例 claim 先于 transport bind ──────────────────
     // 固定端口 config 下，在位实例占着端口会让新实例 bind 直接失败；
@@ -656,6 +656,7 @@ async fn main() -> anyhow::Result<()> {
     ipc.set_query(query.clone());
     // #563: device.revoke cancels the removed device's in-flight fetches.
     ipc.set_flow_delivery(flow_delivery.clone());
+    ipc.set_backup(backup.clone());
     let download = daemon::download::DownloadPlane::new(db.clone(), data_dir.clone());
 
     // ── SYNC-01 外部删除对账 ──────────────────────────────
@@ -873,7 +874,11 @@ async fn shutdown(transport: &transport::IrohTransport, req: Option<platform::St
 /// #1109：落定身份私钥；失败即拒绝启动——经 stderr 最后一行（keyed JSON，
 /// 桌面壳读它显示原因）说明，不回退明文、不静默换身份。
 /// `--ephemeral` 用只在内存里的临时身份（见 `daemon::identity::for_run`）。
-fn load_or_mint_identity(ephemeral: bool, data_dir: &std::path::Path) -> [u8; 32] {
+async fn load_or_mint_identity(
+    ephemeral: bool,
+    data_dir: &std::path::Path,
+    db: &storage::Db,
+) -> [u8; 32] {
     use platform::PlatformAdapter as _;
     let adapter = platform::adapter();
     match daemon::identity::for_run(
@@ -882,7 +887,16 @@ fn load_or_mint_identity(ephemeral: bool, data_dir: &std::path::Path) -> [u8; 32
         data_dir,
         |p| adapter.restrict_to_owner(p),
         rand_token,
-    ) {
+        // #1117：新身份 = 新设备，先删全部配对记录（档案与审计保留）。
+        || async {
+            Ok(db
+                .remove_all_pairings(storage::DepartedBy::Identity, unix_ms_now())
+                .await?
+                .len())
+        },
+    )
+    .await
+    {
         Ok(k) => k,
         Err(e) => {
             tracing::error!("启动失败：{e}");

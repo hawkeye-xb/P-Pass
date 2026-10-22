@@ -23,17 +23,10 @@ pub fn gate(db: Db) -> PeerGate {
     })
 }
 
-/// One decision. A failed device lookup is a denial (fail closed).
+/// One decision, from the in-memory pairing copy (#1117) — no database read.
 pub async fn allow(db: &Db, peer: NodeId) -> bool {
-    let device = match db.get_device(&peer.0).await {
-        Ok(device) => device,
-        Err(error) => {
-            tracing::error!("blobs gate: device lookup failed, denying: {error}");
-            record_denial(db, peer, &proto::Reason::Internal).await;
-            return false;
-        }
-    };
-    match authz::check(device.as_ref(), authz::BLOBS_FETCH) {
+    let pairing = db.active_pairing(&peer.0);
+    match authz::check(pairing.as_ref(), authz::BLOBS_FETCH) {
         Decision::Allow => true,
         Decision::Deny { reason } => {
             tracing::warn!("blobs gate: denied peer={} ({reason})", peer_prefix(peer));

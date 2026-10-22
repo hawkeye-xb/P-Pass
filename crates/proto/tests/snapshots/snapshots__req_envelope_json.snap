@@ -5,10 +5,10 @@ expression: pretty
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
   "method": "timeline.page",
-  "min_ver": 2,
+  "min_ver": 3,
   "params": {
     "cursor": null,
     "limit": 200
   },
-  "ver": 2
+  "ver": 3
 }

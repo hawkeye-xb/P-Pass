@@ -16,7 +16,7 @@ use std::sync::Arc;
 use daemon::flow_delivery::FlowDelivery;
 use daemon::{PairDecision, Pairing, Router};
 use proto::FlowFetchRequest;
-use storage::{Db, RevokedBy};
+use storage::{Db, DepartedBy};
 use transport::{AndroidBlobsProvider, Blobs, IrohTransport, NodeId, TransportConfig};
 
 fn now() -> i64 {
@@ -97,7 +97,7 @@ async fn seed_daemon_blob(root: &Path, d: &Daemon, name: &str, bytes: &[u8]) -> 
 fn flow_request(epoch: &str, hash: [u8; 32], ticket: String) -> FlowFetchRequest {
     FlowFetchRequest {
         queue_sequence: 1,
-        pairing_epoch: epoch.into(),
+        pairing_id: epoch.into(),
         lease_token: "lease-1".into(),
         content_hash: hex::encode(hash),
         file_name: "IMG_0001.jpg".into(),
@@ -144,7 +144,7 @@ async fn first_pairing_then_photo_delivery_over_gated_data_planes() {
     let qr = d.pairing.start([0x42; 12], now());
     let daemon_node_id = qr_param(&qr, "node").to_string();
     let accepted = pair(&phone, d.tp.node_id(), qr_param(&qr, "t")).await;
-    assert_eq!(accepted.pairing_epoch.len(), 32);
+    assert_eq!(accepted.pairing_id.len(), 32);
 
     // Paired: the same phone now reads the desktop's data plane.
     phone_blobs
@@ -187,7 +187,7 @@ async fn first_pairing_then_photo_delivery_over_gated_data_planes() {
         .is_err());
     assert_eq!(stranger_blobs.local_bytes(photo_hash).await.unwrap(), 0);
 
-    let offer = flow_request(&accepted.pairing_epoch, photo_hash, ticket);
+    let offer = flow_request(&accepted.pairing_id, photo_hash, ticket);
     d.delivery.offer(phone.node_id(), &offer).await.unwrap();
     let receipt = common::await_receipt(&d.delivery, phone.node_id(), &offer)
         .await
@@ -199,9 +199,10 @@ async fn first_pairing_then_photo_delivery_over_gated_data_planes() {
     let later = seed_daemon_blob(root.path(), &d, "later.jpg", b"added after revoke").await;
     assert!(d
         .db
-        .revoke(&phone.node_id().0, RevokedBy::Owner, now())
+        .remove_pairing(&phone.node_id().0, None, DepartedBy::Owner, now())
         .await
-        .unwrap());
+        .unwrap()
+        .is_some());
     assert!(
         phone_blobs.fetch_from(d.tp.node_id(), later).await.is_err(),
         "a revoked phone must not pull anything more"

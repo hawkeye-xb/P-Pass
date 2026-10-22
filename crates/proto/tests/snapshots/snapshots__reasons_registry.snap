@@ -9,10 +9,6 @@ expression: json
   },
   {
     "code": "NOT_AUTHORIZED",
-    "reason": "revoked"
-  },
-  {
-    "code": "NOT_AUTHORIZED",
     "reason": "role_forbidden"
   },
   {
@@ -65,7 +61,7 @@ expression: json
   },
   {
     "code": "FLOW_REJECTED",
-    "reason": "epoch_mismatch"
+    "reason": "pairing_mismatch"
   },
   {
     "code": "FLOW_REJECTED",

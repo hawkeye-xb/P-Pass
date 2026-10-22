@@ -97,7 +97,7 @@ async fn wait_pending(ipc: &Arc<IpcServer>, want: usize) {
 }
 
 /// 验收标准 1（队列侧）：超过 TTL 的行不能被批准——confirm 返回失败，
-/// 不写 device 行、不轮换 pairing_epoch。
+/// 不写 device 行、不轮换 pairing_id。
 /// 反证靶子：去掉 confirm 的过期判定（`let stale = …` 恒 false），
 /// 本用例在 matches!(NotFound) 处变红。
 #[tokio::test(flavor = "multi_thread")]
@@ -126,8 +126,8 @@ async fn confirm_after_queue_ttl_fails_and_writes_nothing() {
     assert!(verdict.is_err(), "对端请求必须落败: {verdict:?}");
     assert!(db.get_device(&[0xD5; 32]).await.unwrap().is_none());
     assert!(
-        db.pairing_epoch(&[0xD5; 32]).await.unwrap().is_none(),
-        "不轮换 pairing_epoch"
+        db.active_pairing(&[0xD5; 32]).is_none(),
+        "不轮换 pairing_id"
     );
 }
 
@@ -209,7 +209,7 @@ async fn second_scan_replaces_the_stale_row_of_the_same_phone() {
         .unwrap();
     assert!(v2.is_ok(), "眼前这次扫码正常批准成功: {v2:?}");
     let row = db.get_device(&[0xD7; 32]).await.unwrap().expect("row");
-    assert_eq!(row.name, "第二次扫码");
+    assert_eq!(row.profile.name, "第二次扫码");
 }
 
 /// 验收标准 2 的另一半：按 node_id 定位在多行队列里精确命中那一台

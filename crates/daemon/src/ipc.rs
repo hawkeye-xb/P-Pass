@@ -95,6 +95,9 @@ pub struct IpcServer {
     /// device. OnceLock for the same reason as `query`: main builds
     /// FlowDelivery after IpcServer is already shared. Unset = no-op.
     flow_delivery: std::sync::OnceLock<crate::flow_delivery::FlowDelivery>,
+    /// #1117: `device.revoke` drops the removed device's backup session.
+    /// OnceLock for the same reason as `flow_delivery`. Unset = no-op.
+    backup: std::sync::OnceLock<crate::backup::BackupEngine>,
     /// #1070: the router's version-mismatch registry — feeds the device
     /// list's `needs_update`. Unset = an empty registry (never flags anyone).
     outdated: crate::router::OutdatedPeers,
@@ -314,6 +317,7 @@ impl IpcServer {
             query: std::sync::OnceLock::new(),
             subscriptions: SubscriptionRegistry::new(),
             flow_delivery: std::sync::OnceLock::new(),
+            backup: std::sync::OnceLock::new(),
             outdated: crate::router::OutdatedPeers::new(),
         }
     }
@@ -341,6 +345,11 @@ impl IpcServer {
     /// #563: inject the Flow delivery port so `device.revoke` can cancel the
     /// removed device's in-flight fetches (main calls this once FlowDelivery
     /// exists; repeated sets are ignored).
+    /// #1117: see the `backup` field.
+    pub fn set_backup(&self, backup: crate::backup::BackupEngine) {
+        let _ = self.backup.set(backup);
+    }
+
     pub fn set_flow_delivery(&self, flow_delivery: crate::flow_delivery::FlowDelivery) {
         let _ = self.flow_delivery.set(flow_delivery);
     }
@@ -718,16 +727,21 @@ impl IpcServer {
                 Err(_) => internal(id),
             },
             "devices.list" => {
-                let include_revoked = req
+                // #1117：一行 = 一份设备档案（永不删除）+ 当前配对记录（可能没有）。
+                // 默认只给「家人与设备」主列表的行（在用 + 已断开）；
+                // `include_departed` 连业主移除的也给（「已移除」折叠区）。
+                let include_departed = req
                     .params
-                    .get("include_revoked")
+                    .get("include_departed")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
-                let listed = if include_revoked {
-                    self.db.list_devices(true).await
-                } else {
-                    self.db.list_devices_for_family_view().await
-                };
+                let listed = self.db.list_devices().await.map(|rows| {
+                    rows.into_iter()
+                        .filter(|d| {
+                            include_departed || crate::device_projection::Removal::of(d).is_listed()
+                        })
+                        .collect::<Vec<_>>()
+                });
                 // #1044 B4：「需要看看」与「最近活跃」要用最近备份时刻。
                 let last_backup: std::collections::HashMap<Vec<u8>, i64> = self
                     .db
@@ -747,46 +761,50 @@ impl IpcServer {
                                 // a pre-transition `connection` with a post-transition
                                 // `presence`. Flow state stays a distinct nullable field:
                                 // `null` means no active transfer, not offline.
-                                // DEV-03：已吊销的设备一律不报在线。
+                                // DEV-03：没有配对记录的设备一律不报在线。
                                 //
-                                // 泛连接判定看的是传输层还有没有活口，而吊销
+                                // 泛连接判定看的是传输层还有没有活口，而删配对
                                 // 是**授权**上的终止——一个刚断开、连接尚未
                                 // 断干净的设备如果还显示「在线」，等于告诉
                                 // 用户「它还在备份」，正好相反。授权没了就是
                                 // 离线，这里不做组合判断。
-                                let connection = if d.revoked {
+                                let node_id = &d.profile.node_id;
+                                let paired = d.pairing.is_some();
+                                let connection = if paired {
+                                    (self.conn_status)(node_id)
+                                } else {
                                     transport::ConnectionStatus::Offline
-                                } else {
-                                    (self.conn_status)(&d.node_id)
                                 };
-                                let flow_connection = if d.revoked {
+                                let flow_connection = if paired {
+                                    (self.flow_connection)(node_id)
+                                } else {
                                     None
-                                } else {
-                                    (self.flow_connection)(&d.node_id)
                                 };
-                                let presence = if d.revoked {
-                                    "offline"
+                                let last_seen = d.profile.last_seen_at;
+                                let presence = if paired {
+                                    crate::presence::presence(connection.as_str(), last_seen, now)
                                 } else {
-                                    crate::presence::presence(connection.as_str(), d.last_seen, now)
+                                    "offline"
                                 };
                                 // #1044 B4：分组、哨兵、行状态优先级、最近活跃由
                                 // daemon 给结论（device_projection.rs），桌面只渲染。
                                 let removal = crate::device_projection::Removal::of(d);
-                                let last_backup_at = last_backup.get(&d.node_id).copied();
+                                let last_backup_at = last_backup.get(node_id).copied();
                                 let needs_attention = crate::device_projection::needs_attention(
                                     removal,
                                     last_backup_at,
                                     now,
                                 );
                                 serde_json::json!({
-                                    "node_id": hex(&d.node_id),
-                                    "name": d.name,
-                                    "role": d.role.as_str(),
-                                    "revoked": d.revoked,
-                                    // DEV-03：谁让它离开的 + 什么时候。
-                                    "revoked_by": d.revoked_by.map(|b| b.as_str()),
-                                    "revoked_at": d.revoked_at,
-                                    "last_seen": d.last_seen,
+                                    "node_id": hex(node_id),
+                                    "name": d.profile.name,
+                                    "role": d.pairing.as_ref().map(|p| p.role.as_str()),
+                                    "paired": paired,
+                                    // DEV-03 / #1117：为什么、什么时候离开的（device /
+                                    // owner / identity）；重新配对后清空。
+                                    "departed_by": d.profile.departed_by.map(|b| b.as_str()),
+                                    "departed_at": d.profile.departed_at,
+                                    "last_seen": last_seen,
                                     // T-090: generic live transport verdict only; this
                                     // remains intentionally independent from the Flow plane.
                                     "connection": connection.as_str(),
@@ -805,13 +823,13 @@ impl IpcServer {
                                         presence,
                                     ),
                                     "last_activity_at": crate::device_projection::last_activity_at(
-                                        d.last_seen,
+                                        last_seen,
                                         last_backup_at,
                                     ),
                                     // #1070: `"phone"` / `"desktop"` = that side must
                                     // update before this device can talk to us; null =
                                     // no known protocol-version mismatch.
-                                    "needs_update": self.outdated.needs_update(&d.node_id),
+                                    "needs_update": self.outdated.needs_update(node_id),
                                 })
                             })
                             .collect();
@@ -932,27 +950,29 @@ impl IpcServer {
                     return Resp::err(id, RespError::new(Reason::BadRequest));
                 };
                 // DEV-03：业主主动移除——这正是业主的意图，之后它不再出现在
-                // 「家人与设备」里（行仍在库里，审计可查，`arch-check B.3`
-                // 禁止物理删除这一条不变）。
-                match self
-                    .db
-                    .revoke(&node_id, storage::RevokedBy::Owner, (self.now)())
-                    .await
+                // 「家人与设备」主列表里。#1117：删的是配对记录（唯一入口
+                // `crate::unpair`），设备档案与审计保留。
+                let Ok(peer) = <[u8; 32]>::try_from(node_id.as_slice()).map(transport::NodeId)
+                else {
+                    return Resp::err(id, RespError::new(Reason::BadRequest));
+                };
+                let holders = crate::unpair::Holders {
+                    flow: self.flow_delivery.get(),
+                    backup: self.backup.get(),
+                    subscriptions: Some(&self.subscriptions),
+                };
+                match crate::unpair::remove_pairing(
+                    &self.db,
+                    holders,
+                    peer,
+                    None,
+                    storage::DepartedBy::Owner,
+                    (self.now)(),
+                )
+                .await
+                .map(|removed| removed.is_some())
                 {
                     Ok(revoked) => {
-                        // #563: right after the durable revoke, stop pulling
-                        // from this device — its in-flight photo must not
-                        // reach the library.
-                        if let (Some(flow), Ok(bytes)) = (
-                            self.flow_delivery.get(),
-                            <[u8; 32]>::try_from(node_id.as_slice()),
-                        ) {
-                            if let Err(error) = flow.revoke_peer(transport::NodeId(bytes)).await {
-                                tracing::warn!(
-                                    "#563: cancelling flow grants on revoke failed: {error}"
-                                );
-                            }
-                        }
                         if revoked {
                             warn_if_audit_failed(
                                 "device.revoked",
@@ -996,11 +1016,6 @@ impl IpcServer {
                                 events::ACTIVITY_APPENDED,
                                 serde_json::json!({ "action": "device.revoked" }),
                             );
-                            // SYNC-03 §⑦：命中一个还挂着 timeline.subscribe
-                            // 长连接的设备就主动关掉，不等它自然掉线。
-                            if let Ok(bytes) = <[u8; 32]>::try_from(node_id.as_slice()) {
-                                self.subscriptions.close(transport::NodeId(bytes));
-                            }
                         }
                         Resp::ok(id, serde_json::json!({ "revoked": revoked }))
                     }
@@ -1334,7 +1349,7 @@ impl IpcServer {
                 "known": existing.is_some(),
                 "name": existing
                     .as_ref()
-                    .map(|d| d.name.clone())
+                    .map(|d| d.profile.name.clone())
                     .unwrap_or(reported_name),
                 "requested_at": requested_at,
                 // DEV-07 (#463): a row whose request side already ended
@@ -1343,11 +1358,13 @@ impl IpcServer {
                 "expired": abandoned || requested_at + self.pending_ttl() <= now,
             });
             if let Some(d) = existing {
-                row["paired_at"] = serde_json::json!(d.paired_at);
-                row["revoked"] = serde_json::json!(d.revoked);
+                // #1117：有档案 = 以前连过；`paired` = 现在还有配对记录。
+                // `paired_at` = 第一次配对成功的时间（档案上，永不随配对记录删除）。
+                row["paired_at"] = serde_json::json!(d.profile.first_seen_at);
+                row["paired"] = serde_json::json!(d.pairing.is_some());
                 row["photo_count"] = serde_json::json!(self
                     .db
-                    .count_assets_from_device(&d.node_id)
+                    .count_assets_from_device(&d.profile.node_id)
                     .await
                     .unwrap_or(0));
             }
@@ -1366,7 +1383,7 @@ impl IpcServer {
 
     /// `shell_version`：调用方（桌面壳）自报的版本；给了才算 `shell_relation`。
     async fn status(&self, shell_version: Option<&str>) -> anyhow::Result<serde_json::Value> {
-        let devices = self.db.list_devices(true).await?;
+        let devices = self.db.list_devices().await?;
         let state = self.diag.state();
         // DEV-07 follow-up (#463): the banner is gated on this count — a
         // withdrawn row counted here would re-open a clickable 「允许」.
@@ -1397,8 +1414,9 @@ impl IpcServer {
             "low_space_notice": low_space_notice.map(|free| serde_json::json!({ "free_bytes": free })),
             "state": state_name(&state),
             "msg_key": state.msg_key(),
+            // #1117：档案数（永不删除）与其中没有配对记录的数目。
             "devices": devices.len(),
-            "revoked": devices.iter().filter(|d| d.revoked).count(),
+            "unpaired": devices.iter().filter(|d| d.pairing.is_none()).count(),
             // #1044 B4：「已配对 N 台」= 设备页主列表行数（含自己断开的）；
             // 已移除的单独计。桌面不再自己做减法。
             "paired_devices": devices
@@ -1414,7 +1432,7 @@ impl IpcServer {
             // 与设备行「传输中」同一信号；壳（#667 内核对账推迟）只读这个结论。
             "transfer_active": devices
                 .iter()
-                .any(|d| !d.revoked && (self.flow_connection)(&d.node_id).is_some()),
+                .any(|d| d.pairing.is_some() && (self.flow_connection)(&d.profile.node_id).is_some()),
             // Where the photos physically live — the UI's "open the
             // photo folder" needs an answer to "传到哪儿了" (real
             // walkthrough question, 2026-07-31).
@@ -1440,7 +1458,7 @@ impl IpcServer {
     /// a shared log must never leak a username (契约).
     async fn export_logs(&self) -> anyhow::Result<PathBuf> {
         let events = self.db.list_diag(1000).await?;
-        let devices = self.db.list_devices(true).await?;
+        let devices = self.db.list_devices().await?;
         // #1043：家目录由平台适配器回答；读不到 = 空串（与改前同一口径）。
         let home = {
             use platform::PlatformAdapter as _;
@@ -1470,11 +1488,12 @@ impl IpcServer {
                     serde_json::json!({
                         // Only a prefix — the full NodeId is not needed to
                         // discuss a support case.
-                        "node_id_prefix": hex(&d.node_id[..4.min(d.node_id.len())]),
+                        "node_id_prefix": hex(&d.profile.node_id[..4.min(d.profile.node_id.len())]),
                         // #544：设备名是用户起的（「张三的手机」），属于
                         // 可识别信息，不进导出件；排障用前缀 + 角色足够。
-                        "role": d.role.as_str(),
-                        "revoked": d.revoked,
+                        "role": d.pairing.as_ref().map(|p| p.role.as_str()),
+                        "paired": d.pairing.is_some(),
+                        "departed_by": d.profile.departed_by.map(|b| b.as_str()),
                     })
                 })
                 .collect::<Vec<_>>(),

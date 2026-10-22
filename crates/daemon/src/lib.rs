@@ -30,6 +30,7 @@ pub mod router;
 pub mod stats;
 pub mod subscriptions;
 pub mod thumb_pregen;
+pub mod unpair;
 pub mod watcher;
 
 /// #1047：收到停止信号后的收尾总死线。短于 Docker 的 10s SIGKILL 宽限。

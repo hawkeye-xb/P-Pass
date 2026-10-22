@@ -47,7 +47,7 @@ fn snapshot_hello() {
         proto_ver: 1,
         capabilities: vec!["thumbnail.v1".into(), "video.range.v1".into()],
         device_name: "Salamira's Phone".into(),
-        pairing_epoch: None,
+        pairing_id: None,
         health: None,
     };
     assert_roundtrip(&hello);
@@ -109,7 +109,7 @@ fn snapshot_pair_status_reply_accepted() {
         state: PairStatusState::Accepted,
         accepted: Some(PairAccepted {
             storage_device_name: "Home PC".into(),
-            pairing_epoch: "epoch-1".into(),
+            pairing_id: "epoch-1".into(),
         }),
     };
     assert_roundtrip(&r);
@@ -131,7 +131,7 @@ fn snapshot_pair_status_reply_denied() {
 fn snapshot_pair_accepted() {
     let pa = PairAccepted {
         storage_device_name: "Home PC".into(),
-        pairing_epoch: "epoch-1".into(),
+        pairing_id: "epoch-1".into(),
     };
     assert_roundtrip(&pa);
     snapshot_message("pair_accepted", &pa);
@@ -307,7 +307,7 @@ fn snapshot_backup() {
 #[test]
 fn snapshot_flow_supersede() {
     let req = FlowSupersedeRequest {
-        pairing_epoch: "epoch-7".into(),
+        pairing_id: "epoch-7".into(),
         old_hash: "aaa1111111111111111111111111111111111111111111111111111111111111".into(),
         new_hash: "bbb2222222222222222222222222222222222222222222222222222222222222".into(),
         provider: "blobticket-example".into(),
@@ -338,12 +338,12 @@ fn snapshot_flow_supersede() {
 
 #[test]
 fn snapshot_hello_paired_with_health() {
-    // A paired Desktop's hello reply: pairing_epoch + health present.
+    // A paired Desktop's hello reply: pairing_id + health present.
     let hello = Hello {
         proto_ver: 1,
         capabilities: vec!["thumbnail.v1".into(), "flow.supersede.v1".into()],
         device_name: "Home PC".into(),
-        pairing_epoch: Some("epoch-7".into()),
+        pairing_id: Some("epoch-7".into()),
         health: Some(DesktopHealth {
             free_bytes: Some(123_456_789_000),
             library_writable: true,
@@ -371,7 +371,7 @@ fn snapshot_hello_paired_with_health() {
 fn snapshot_flow_delivery() {
     let fetch = FlowFetchRequest {
         queue_sequence: 1_790_574_682_018,
-        pairing_epoch: "epoch-7".into(),
+        pairing_id: "epoch-7".into(),
         lease_token: "lease-1790574682018".into(),
         content_hash: "e0635a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a398c".into(),
         file_name: "IMG_0042.HEIC".into(),
@@ -385,7 +385,7 @@ fn snapshot_flow_delivery() {
 
     let tuple = FlowTupleRef {
         queue_sequence: 1_790_574_682_018,
-        pairing_epoch: "epoch-7".into(),
+        pairing_id: "epoch-7".into(),
         lease_token: "lease-1790574682018".into(),
     };
     assert_roundtrip(&tuple);
@@ -394,7 +394,7 @@ fn snapshot_flow_delivery() {
     let receipt = FlowCompletionReceipt {
         queue_sequence: 1_790_574_682_018,
         receipt_id: "460400000000000000000000000000000000000000000000000000000000510f".into(),
-        pairing_epoch: "epoch-7".into(),
+        pairing_id: "epoch-7".into(),
         lease_token: "lease-1790574682018".into(),
         content_hash: "e0635a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a398c".into(),
     };
@@ -575,7 +575,7 @@ fn snapshot_flow_failed_push() {
     let push = FlowFailedPush {
         node_id: "ab".repeat(32),
         queue_sequence: 7,
-        pairing_epoch: "epoch-1".into(),
+        pairing_id: "epoch-1".into(),
         lease_token: "lease-7".into(),
         reason: proto::Reason::StorageFull,
     };

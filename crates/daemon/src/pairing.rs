@@ -40,7 +40,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use storage::{Db, Device, Role};
+use storage::{Db, Role};
 use tokio::sync::{oneshot, watch};
 
 pub const TOKEN_TTL_MS: i64 = 600_000;
@@ -71,7 +71,7 @@ pub enum PairState {
     /// Queued; the owner has not decided yet.
     Pending,
     /// The owner allowed it; the device row and this epoch are durable.
-    Accepted { pairing_epoch: String },
+    Accepted { pairing_id: String },
     /// The owner said no.
     Denied,
     /// Left the queue without an owner verdict: the pending TTL ran out,
@@ -599,7 +599,7 @@ impl Pairing {
             .apply_verdict(peer, &device_name, role, now_ms, ending, decided_at)
             .await
         {
-            Ok(pairing_epoch) => PairState::Accepted { pairing_epoch },
+            Ok(pairing_id) => PairState::Accepted { pairing_id },
             // No verdict at all: the request aged out or left the queue.
             Err(_) if decision.is_none() => PairState::Expired,
             // The owner said no (or an accepted write failed — the phone
@@ -609,8 +609,9 @@ impl Pairing {
         (state, decided_at)
     }
 
-    /// Apply the owner's verdict: audit + (on Allow) device row, epoch,
-    /// events. `Ok(pairing_epoch)` only when the pairing is durable.
+    /// Apply the owner's verdict: audit + (on Allow) device profile and a
+    /// fresh pairing record, events. `Ok(pairing_id)` only when the pairing
+    /// record is durable.
     async fn apply_verdict(
         &self,
         peer: transport::NodeId,
@@ -639,58 +640,40 @@ impl Pairing {
             return Err(PairRejection::OwnerDeclined);
         }
 
-        // DEV-04：库里已有这一行 = 这台以前连过。这一次查询同时回答三件
-        // 事——要不要 unrevoke、审批框该说「加入」还是「重新连接」、
-        // **以及叫什么名字**。
+        // DEV-04：已有档案 = 这台以前连过。这一次查询回答两件事——审批记录该说
+        // 「加入」还是「重新连接」，**以及叫什么名字**。
         let existing = self.db.get_device(&peer.0).await.ok().flatten();
-        let rejoining = existing.as_ref().is_some_and(|d| d.revoked);
-        // DEV-04（验收人 2026-09-20 实测）：桌面上改过的名字不能被重连
-        // 冲掉。`device.rename` 是业主对这台设备的称呼，手机自报名只在
-        // 库里还没有这一行时作数。
-        //
-        // 旧写法无条件 `safe_name(&req.device_name)`，配上 upsert 的
-        // `name = excluded.name`，业主 19:32:29 改的名 19:32:42 就被
-        // 重连覆盖回 "SM-S9210"——审计流水里两行挨着。
+        let rejoining = existing.as_ref().is_some_and(|d| d.pairing.is_none());
+        // DEV-04（验收人 2026-09-20 实测）：桌面上改过的名字不能被重连冲掉。
+        // `device.rename` 是业主对这台设备的称呼，手机自报名只在还没有档案时
+        // 作数（storage 的 accept_pairing 对已有档案保留原名）。
         let name = match &existing {
-            Some(d) => d.name.clone(),
+            Some(d) => d.profile.name.clone(),
             None => safe_name(device_name),
         };
-        let device = Device {
+        // #1117：一次配对 = 一条新配对记录，新 id。档案、旧记录替换（若有，连同
+        // 挂在它上面的传输状态）、新记录在 storage 里是**一个事务**，中途失败不留
+        // 中间态。回复手机之前落库，daemon 重启后照样认得这个 id。
+        let pairing_id = fresh_pairing_id().map_err(|_| PairRejection::OwnerDeclined)?;
+        let record = storage::Pairing {
+            id: pairing_id.clone(),
             node_id: peer.0.to_vec(),
-            name,
             role,
             paired_at: now_ms,
-            last_seen: Some(now_ms),
-            revoked: false,
-            // DEV-03：新配对/重新配对的设备不带吊销痕迹。已被吊销过的设备
-            // 由 `unrevoke` 清列——`upsert_device` 有意不碰这三列（防误触）。
-            revoked_at: None,
-            revoked_by: None,
         };
-        // REBUILD-02: a newly accepted pairing replaces every old Flow
-        // grant. Persist the epoch before replying so the phone never starts
-        // a fetch against an epoch the Desktop cannot verify after restart.
-        // #1055：设备行、复位吊销（重连时 owner 确认 = 重新授权）、新纪元
-        // 在 storage 里是**一个事务**，中途失败不留中间态。
-        let pairing_epoch = fresh_pairing_epoch().map_err(|_| PairRejection::OwnerDeclined)?;
-        if !self
-            .db
-            .accept_pairing(&device, &pairing_epoch)
+        self.db
+            .accept_pairing(&peer.0, &name, &record)
             .await
             .map_err(|e| {
-                tracing::warn!("#1055: accept_pairing failed, pairing rolled back: {e}");
+                tracing::warn!("#1117: accept_pairing failed, pairing rolled back: {e}");
                 PairRejection::OwnerDeclined
-            })?
-        {
-            return Err(PairRejection::OwnerDeclined);
-        }
+            })?;
 
-        // DEV-02: 配对流程只写自己这一行。它无权改写、更无权删除任何
-        // 其它设备的记录——DEV-01 的 merge 正是在这里删掉另一行的。
+        // DEV-02: 配对流程只写自己这一台。它无权改写任何其它设备的记录。
         let detail = if rejoining {
-            format!("{} (rejoined after revoke)", device.name)
+            format!("{name} (rejoined)")
         } else {
-            device.name.clone()
+            name.clone()
         };
 
         warn_if_audit_failed(
@@ -718,7 +701,7 @@ impl Pairing {
                 serde_json::json!({ "action": "pair.accepted" }),
             );
         }
-        Ok(pairing_epoch)
+        Ok(pairing_id)
     }
 
     /// Drop expired/used tokens (housekeeping; daemon calls periodically).
@@ -770,10 +753,10 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// 128 bits of OS entropy names an owner-approved pairing generation. It is
-/// persisted before `PairAccepted` is emitted, so Desktop and phone agree
-/// across daemon restart and a re-pair invalidates old delivery grants.
-fn fresh_pairing_epoch() -> Result<String, getrandom::Error> {
+/// 128 bits of OS entropy name one owner-approved pairing record (#1117). It
+/// is persisted before `PairAccepted` is emitted, so Desktop and phone agree
+/// across daemon restart; a re-pair is a new record with a new id.
+fn fresh_pairing_id() -> Result<String, getrandom::Error> {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes)?;
     Ok(hex(&bytes))

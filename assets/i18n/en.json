@@ -163,6 +163,7 @@
   "ui.disconnected_at": "Disconnected · {time}",
   "ui.disconnected": "Disconnected",
   "ui.disconnected_hint": "Scan the QR code again to restore",
+  "ui.disconnected_identity_hint": "This computer has a new identity. Scan the QR code again to reconnect",
   "ui.startup_migration_guidance": "This version is older than your photo library. Please reinstall the newer version.",
   "ui.audit_backed_up": "Backed up {n} photos",
   "ui.audit_needs_attention": "{n} need attention",

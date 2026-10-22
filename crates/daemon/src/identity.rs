@@ -13,6 +13,15 @@
 //! - 确定没有 → 生成、写入、**读回比对一致**才用。
 //! - 读失败、内容不合法、写失败、读回不一致 → `Err`，调用方拒绝启动。
 //!   绝不回退明文、绝不悄悄换身份（旧实现读失败就生成新私钥覆盖原文件）。
+//!
+//! 新身份 = 新设备（#1117）：生成新私钥时，先删掉这台电脑上的全部配对记录
+//! （备份水位、交付租约随之级联删除；设备档案与审计保留），**再**写存放处。
+//! 顺序按崩溃点定，与 Android #1111 同序（清配对 → 写 → 读回 → 删明文）：
+//! - 清完、写之前崩溃 → 下次存放处仍没有私钥 → 再清一次（幂等）再写，收敛。
+//! - 写完、读回之前崩溃 → 下次读到新私钥，配对此前已清，不会留下旧配对。
+//!
+//! 反过来先写后清，写完就崩溃的话，下次读到新私钥按「照常读取」走，旧配对
+//! 永远残留——新身份与旧配对并存。删旧明文仍是最后一步。
 
 use std::path::{Path, PathBuf};
 
@@ -39,6 +48,8 @@ pub enum IdentityError {
         #[source]
         source: PlatformError,
     },
+    #[error("清除旧身份的配对记录失败：{0}")]
+    ClearPairings(String),
     #[error("身份私钥写入后读回不一致（{location}）")]
     ReadBackMismatch { location: String },
     #[error("删除旧的明文身份私钥失败（{}）：{source}", path.display())]
@@ -56,10 +67,26 @@ pub enum Origin {
     Minted,
 }
 
-/// 落定身份：读到就用；确定没有才生成、写入、读回比对。其余一律 `Err`。
-pub fn settle(
+/// 新身份落定前要做的事：删掉依附于旧身份的全部配对记录，返回删了几条。
+pub trait ClearPairings {
+    fn clear(self) -> impl std::future::Future<Output = anyhow::Result<usize>>;
+}
+
+impl<F, Fut> ClearPairings for F
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<usize>>,
+{
+    fn clear(self) -> impl std::future::Future<Output = anyhow::Result<usize>> {
+        self()
+    }
+}
+
+/// 落定身份：读到就用；确定没有才生成 → 清配对 → 写入 → 读回比对。其余一律 `Err`。
+pub async fn settle(
     store: &dyn IdentityKeyStore,
     mint: impl FnOnce() -> anyhow::Result<[u8; 32]>,
+    clear_pairings: impl ClearPairings,
 ) -> Result<([u8; 32], Origin), IdentityError> {
     let location = store.location();
     let read = |location: &str| {
@@ -76,6 +103,11 @@ pub fn settle(
         return Ok((key, Origin::Loaded));
     }
     let key = mint().map_err(|e| IdentityError::Mint(e.to_string()))?;
+    let cleared = clear_pairings
+        .clear()
+        .await
+        .map_err(|e| IdentityError::ClearPairings(format!("{e:#}")))?;
+    tracing::info!("新身份：已删除旧身份的配对记录 {cleared} 条，已配对手机需重新扫码");
     store.write(&key).map_err(|source| IdentityError::Write {
         location: location.clone(),
         source,
@@ -89,12 +121,13 @@ pub fn settle(
 /// 系统安全存储：先落定身份，**之后**删数据目录里的旧明文私钥。落定失败时
 /// 不动旧文件（拒绝启动，什么都不改）。删除失败同样拒绝启动：不留明文——
 /// 已配对手机在重新配对前仍信任那把旧私钥。
-pub fn settle_in_secure_store(
+pub async fn settle_in_secure_store(
     store: &dyn IdentityKeyStore,
     data_dir: &Path,
     mint: impl FnOnce() -> anyhow::Result<[u8; 32]>,
+    clear_pairings: impl ClearPairings,
 ) -> Result<([u8; 32], Origin), IdentityError> {
-    let settled = settle(store, mint)?;
+    let settled = settle(store, mint, clear_pairings).await?;
     let legacy = data_dir.join(KEY_FILE);
     match std::fs::remove_file(&legacy) {
         Ok(()) => tracing::info!("已删除旧的明文身份私钥: {}", legacy.display()),
@@ -112,32 +145,35 @@ pub fn settle_in_secure_store(
 /// daemon 这次运行用的身份。`ephemeral`（`--ephemeral` 测试 / 脚本模式）=
 /// 只在内存里生成一把随机私钥：不读写存放处、不读写文件、不删旧明文。一次性
 /// daemon 不需要稳定身份，随机 NodeId 也不在任何手机的白名单里；常驻服务
-/// （LaunchAgent / 计划任务 / 壳的一次性拉起）都不带这个参数。
-pub fn for_run(
+/// （LaunchAgent / 计划任务 / 壳的一次性拉起）都不带这个参数。它也不清配对。
+pub async fn for_run(
     ephemeral: bool,
     home: IdentityKeyHome,
     data_dir: &Path,
     restrict: impl Fn(&Path) -> platform::Result<platform::Applied> + Send + Sync,
     mint: impl FnOnce() -> anyhow::Result<[u8; 32]>,
+    clear_pairings: impl ClearPairings,
 ) -> Result<[u8; 32], IdentityError> {
     if ephemeral {
         let key = mint().map_err(|e| IdentityError::Mint(e.to_string()))?;
         tracing::info!("--ephemeral：使用只在内存里的临时身份，不读写身份私钥存放处");
         return Ok(key);
     }
-    load_or_mint(home, data_dir, restrict, mint)
+    load_or_mint(home, data_dir, restrict, mint, clear_pairings).await
 }
 
 /// 按平台给的存放处落定身份。`restrict` 只用于数据目录文件（收紧到仅属主）。
-pub fn load_or_mint(
+pub async fn load_or_mint(
     home: IdentityKeyHome,
     data_dir: &Path,
     restrict: impl Fn(&Path) -> platform::Result<platform::Applied> + Send + Sync,
     mint: impl FnOnce() -> anyhow::Result<[u8; 32]>,
+    clear_pairings: impl ClearPairings,
 ) -> Result<[u8; 32], IdentityError> {
     let (key, origin, location) = match home {
         IdentityKeyHome::SecureStore(store) => {
-            let (k, o) = settle_in_secure_store(store.as_ref(), data_dir, mint)?;
+            let (k, o) =
+                settle_in_secure_store(store.as_ref(), data_dir, mint, clear_pairings).await?;
             (k, o, store.location())
         }
         IdentityKeyHome::DataDirFile => {
@@ -145,7 +181,7 @@ pub fn load_or_mint(
                 path: data_dir.join(KEY_FILE),
                 restrict,
             };
-            let (k, o) = settle(&file, mint)?;
+            let (k, o) = settle(&file, mint, clear_pairings).await?;
             (k, o, file.location())
         }
     };
@@ -287,14 +323,24 @@ mod tests {
         panic!("这条路径不许生成新私钥")
     }
 
+    async fn noop_clear() -> anyhow::Result<usize> {
+        Ok(0)
+    }
+
+    async fn clear_must_not_run() -> anyhow::Result<usize> {
+        panic!("这条路径不许清配对")
+    }
+
     // ── 判定（存放处无关）────────────────────────────────────────
 
     /// 照常读取：已有私钥原样用，不生成、不写。
     /// 反证：把 settle 的「读到就返回」去掉（总是生成），这里变红。
-    #[test]
-    fn existing_key_is_loaded_not_reminted() {
+    #[tokio::test]
+    async fn existing_key_is_loaded_not_reminted() {
         let store = MemStore::holding(&[3u8; 32]);
-        let (k, o) = settle(&store, mint_must_not_run).unwrap();
+        let (k, o) = settle(&store, mint_must_not_run, clear_must_not_run)
+            .await
+            .unwrap();
         assert_eq!(k, [3u8; 32]);
         assert_eq!(o, Origin::Loaded);
         assert_eq!(store.writes(), 0);
@@ -302,10 +348,10 @@ mod tests {
 
     /// 没有私钥：生成、写入、读回一致才用，存放处里留的就是返回的那把。
     /// 反证：把 settle 里的 `store.write` 去掉，读回为空 ⇒ 变红。
-    #[test]
-    fn missing_key_is_minted_written_and_read_back() {
+    #[tokio::test]
+    async fn missing_key_is_minted_written_and_read_back() {
         let store = MemStore::default();
-        let (k, o) = settle(&store, mint_7).unwrap();
+        let (k, o) = settle(&store, mint_7, noop_clear).await.unwrap();
         assert_eq!(k, [7u8; 32]);
         assert_eq!(o, Origin::Minted);
         assert_eq!(store.stored().as_deref(), Some(&[7u8; 32][..]));
@@ -314,13 +360,13 @@ mod tests {
 
     /// 读回不一致：拒绝（不把没真正落盘的身份拿去用）。
     /// 反证：把读回比对改成只要读到就放行，这里变红。
-    #[test]
-    fn read_back_mismatch_is_refused() {
+    #[tokio::test]
+    async fn read_back_mismatch_is_refused() {
         let store = MemStore {
             corrupt_on_write: true,
             ..MemStore::default()
         };
-        let err = settle(&store, mint_7).unwrap_err();
+        let err = settle(&store, mint_7, noop_clear).await.unwrap_err();
         assert!(
             matches!(err, IdentityError::ReadBackMismatch { .. }),
             "{err}"
@@ -331,13 +377,15 @@ mod tests {
     /// 新私钥覆盖原条目，身份被静默替换。
     /// 反证：把 settle 的读改回 `if let Ok(Some(..))`（读失败当没有），这里
     /// 会走到 mint_must_not_run 而 panic ⇒ 变红。
-    #[test]
-    fn read_failure_refuses_without_minting() {
+    #[tokio::test]
+    async fn read_failure_refuses_without_minting() {
         let store = MemStore {
             read_err: true,
             ..MemStore::holding(&[3u8; 32])
         };
-        let err = settle(&store, mint_must_not_run).unwrap_err();
+        let err = settle(&store, mint_must_not_run, clear_must_not_run)
+            .await
+            .unwrap_err();
         assert!(matches!(err, IdentityError::Read { .. }), "{err}");
         assert!(err.to_string().contains("-25308"), "原因要带出来：{err}");
         assert_eq!(store.writes(), 0);
@@ -345,10 +393,12 @@ mod tests {
 
     /// 内容不合法（长度不是 32）：拒绝启动，不覆盖。
     /// 反证：把长度不对改成走生成分支（旧实现），这里 panic ⇒ 变红。
-    #[test]
-    fn invalid_length_refuses_without_overwriting() {
+    #[tokio::test]
+    async fn invalid_length_refuses_without_overwriting() {
         let store = MemStore::holding(&[3u8; 31]);
-        let err = settle(&store, mint_must_not_run).unwrap_err();
+        let err = settle(&store, mint_must_not_run, clear_must_not_run)
+            .await
+            .unwrap_err();
         assert!(
             matches!(err, IdentityError::Invalid { len: 31, .. }),
             "{err}"
@@ -359,14 +409,104 @@ mod tests {
     /// 写失败：拒绝启动。
     /// 反证：把 `store.write(..)?` 的错误吞掉，读回为空 ⇒ 报的是读回不一致，
     /// 本条对 Write 变体的断言变红。
-    #[test]
-    fn write_failure_refuses() {
+    #[tokio::test]
+    async fn write_failure_refuses() {
         let store = MemStore {
             write_err: true,
             ..MemStore::default()
         };
-        let err = settle(&store, mint_7).unwrap_err();
+        let err = settle(&store, mint_7, noop_clear).await.unwrap_err();
         assert!(matches!(err, IdentityError::Write { .. }), "{err}");
+    }
+
+    // ── 新身份 = 新设备：先清配对，再写 ──────────────────────────
+
+    /// 生成新身份时清配对，并且发生在写存放处**之前**（清的那一刻存放处还是空的）。
+    /// 反证：去掉 settle 里的清配对，`cleared` 为 false ⇒ 变红；挪到 write 之后，
+    /// 闭包里的「还没写」断言 ⇒ 变红。
+    #[tokio::test]
+    async fn new_identity_clears_pairings_before_writing() {
+        let store = MemStore::default();
+        let cleared = std::sync::atomic::AtomicBool::new(false);
+        let (k, o) = settle(&store, mint_7, || async {
+            assert_eq!(store.writes(), 0, "清配对必须在写存放处之前");
+            assert!(store.stored().is_none());
+            cleared.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(3)
+        })
+        .await
+        .unwrap();
+        assert_eq!((k, o), ([7u8; 32], Origin::Minted));
+        assert!(
+            cleared.load(std::sync::atomic::Ordering::SeqCst),
+            "新身份必须清配对"
+        );
+    }
+
+    /// 清配对失败：拒绝启动，**不写**新私钥（否则下次读到新私钥按照常读取走，
+    /// 旧配对永远残留）。
+    /// 反证：把清配对的错误吞掉继续写，存放处里有了私钥 ⇒ 变红。
+    #[tokio::test]
+    async fn clear_failure_refuses_and_writes_nothing() {
+        let store = MemStore::default();
+        let err = settle(&store, mint_7, || async {
+            anyhow::bail!("database is locked")
+        })
+        .await
+        .unwrap_err();
+        assert!(matches!(err, IdentityError::ClearPairings(_)), "{err}");
+        assert!(err.to_string().contains("database is locked"), "{err}");
+        assert_eq!(store.writes(), 0);
+        assert!(store.stored().is_none());
+    }
+
+    /// 接真实索引库：存放处里已有私钥 → 配对记录原样保留；没有 → 配对记录全删，
+    /// 设备档案保留并标「电脑换了身份」。
+    /// 反证：settle 不调清配对（或 remove_all_pairings 不删），第二段断言变红。
+    #[tokio::test]
+    async fn real_db_pairings_are_removed_only_for_a_new_identity() {
+        let db = storage::Db::open_in_memory().await.unwrap();
+        let phone = storage::Pairing {
+            id: "p1".into(),
+            node_id: vec![1u8; 32],
+            role: storage::Role::Member,
+            paired_at: 1,
+        };
+        db.accept_pairing(&phone.node_id, "phone", &phone)
+            .await
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let clear = || async {
+            Ok(db
+                .remove_all_pairings(storage::DepartedBy::Identity, 9)
+                .await?
+                .len())
+        };
+
+        let home = IdentityKeyHome::SecureStore(Box::new(MemStore::holding(&[3u8; 32])));
+        load_or_mint(
+            home,
+            dir.path(),
+            |_| unreachable!(),
+            mint_must_not_run,
+            clear,
+        )
+        .await
+        .unwrap();
+        assert_eq!(db.list_pairings().await.unwrap().len(), 1);
+
+        let home = IdentityKeyHome::SecureStore(Box::new(MemStore::default()));
+        load_or_mint(home, dir.path(), |_| unreachable!(), mint_7, clear)
+            .await
+            .unwrap();
+        assert!(db.list_pairings().await.unwrap().is_empty());
+        assert!(db.active_pairing(&phone.node_id).is_none());
+        let rows = db.list_devices().await.unwrap();
+        assert_eq!(rows.len(), 1, "设备档案保留");
+        assert_eq!(
+            rows[0].profile.departed_by,
+            Some(storage::DepartedBy::Identity)
+        );
     }
 
     // ── 系统安全存储：旧明文删除 ────────────────────────────────
@@ -382,58 +522,71 @@ mod tests {
     /// 不是旧文件里那把）。
     /// 反证：去掉 settle_in_secure_store 的 remove_file，文件仍在 ⇒ 变红；
     /// 改成「钥匙串没有就读旧文件迁移」，k 会是 [9;32] ⇒ 变红。
-    #[test]
-    fn legacy_plaintext_is_removed_and_never_read() {
+    #[tokio::test]
+    async fn legacy_plaintext_is_removed_and_never_read() {
         let dir = tempfile::tempdir().unwrap();
         let f = legacy_file(dir.path());
         let store = MemStore::default();
-        let (k, _) = settle_in_secure_store(&store, dir.path(), mint_7).unwrap();
+        let (k, _) = settle_in_secure_store(&store, dir.path(), mint_7, noop_clear)
+            .await
+            .unwrap();
         assert_eq!(k, [7u8; 32], "不许迁移旧明文私钥");
         assert!(!f.exists(), "旧明文私钥必须删掉");
     }
 
     /// 钥匙串里已有私钥的每次启动也删（不只在生成那次）。
     /// 反证：只在 Origin::Minted 时删，这里变红。
-    #[test]
-    fn legacy_plaintext_is_removed_on_ordinary_load_too() {
+    #[tokio::test]
+    async fn legacy_plaintext_is_removed_on_ordinary_load_too() {
         let dir = tempfile::tempdir().unwrap();
         let f = legacy_file(dir.path());
         let store = MemStore::holding(&[3u8; 32]);
-        let (k, _) = settle_in_secure_store(&store, dir.path(), mint_must_not_run).unwrap();
+        let (k, _) =
+            settle_in_secure_store(&store, dir.path(), mint_must_not_run, clear_must_not_run)
+                .await
+                .unwrap();
         assert_eq!(k, [3u8; 32]);
         assert!(!f.exists());
     }
 
     /// 身份没落定（拒绝启动）时不动旧文件：删除排在落定之后。
     /// 反证：把 remove_file 挪到 settle 之前，这里变红。
-    #[test]
-    fn legacy_plaintext_is_kept_when_identity_fails() {
+    #[tokio::test]
+    async fn legacy_plaintext_is_kept_when_identity_fails() {
         let dir = tempfile::tempdir().unwrap();
         let f = legacy_file(dir.path());
         let store = MemStore {
             read_err: true,
             ..MemStore::default()
         };
-        settle_in_secure_store(&store, dir.path(), mint_must_not_run).unwrap_err();
+        settle_in_secure_store(&store, dir.path(), mint_must_not_run, clear_must_not_run)
+            .await
+            .unwrap_err();
         assert!(f.exists());
     }
 
     /// 没有旧文件是常态，不是错误。
-    #[test]
-    fn no_legacy_plaintext_is_fine() {
+    #[tokio::test]
+    async fn no_legacy_plaintext_is_fine() {
         let dir = tempfile::tempdir().unwrap();
         let store = MemStore::holding(&[3u8; 32]);
-        assert!(settle_in_secure_store(&store, dir.path(), mint_must_not_run).is_ok());
+        assert!(
+            settle_in_secure_store(&store, dir.path(), mint_must_not_run, clear_must_not_run)
+                .await
+                .is_ok()
+        );
     }
 
     /// 旧明文删不掉（这里用同名目录造出非 NotFound 的错误）：拒绝启动。
     /// 反证：把删除错误降级成 WARN 继续，这里变红。
-    #[test]
-    fn legacy_plaintext_removal_failure_refuses() {
+    #[tokio::test]
+    async fn legacy_plaintext_removal_failure_refuses() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(KEY_FILE)).unwrap();
         let store = MemStore::holding(&[3u8; 32]);
-        let err = settle_in_secure_store(&store, dir.path(), mint_must_not_run).unwrap_err();
+        let err = settle_in_secure_store(&store, dir.path(), mint_must_not_run, clear_must_not_run)
+            .await
+            .unwrap_err();
         assert!(
             matches!(err, IdentityError::RetirePlaintext { .. }),
             "{err}"
@@ -461,11 +614,11 @@ mod tests {
     }
 
     /// `--ephemeral`：钥匙串端口一次都不被调用，用的是现生成的随机私钥，
-    /// 旧明文文件原样不动。
+    /// 旧明文文件原样不动，也不清配对。
     /// 反证：把 for_run 的 `if ephemeral` 分支去掉（照常走存放处），计数变成
     /// 非 0、返回 [3;32]、旧文件被删 ⇒ 变红。
-    #[test]
-    fn ephemeral_never_touches_the_key_store() {
+    #[tokio::test]
+    async fn ephemeral_never_touches_the_key_store() {
         let dir = tempfile::tempdir().unwrap();
         let f = legacy_file(dir.path());
         let calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
@@ -475,7 +628,9 @@ mod tests {
             dir.path(),
             |_| panic!("--ephemeral 不该碰文件权限"),
             mint_7,
+            clear_must_not_run,
         )
+        .await
         .unwrap();
         assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
         assert_eq!(k, [7u8; 32]);
@@ -483,8 +638,8 @@ mod tests {
     }
 
     /// 非 ephemeral 照常走存放处（计数实现本身有判别力）。
-    #[test]
-    fn non_ephemeral_uses_the_key_store() {
+    #[tokio::test]
+    async fn non_ephemeral_uses_the_key_store() {
         let dir = tempfile::tempdir().unwrap();
         let calls = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
         let k = for_run(
@@ -493,7 +648,9 @@ mod tests {
             dir.path(),
             |_| Ok(platform::Applied::Done),
             mint_must_not_run,
+            clear_must_not_run,
         )
+        .await
         .unwrap();
         assert!(calls.load(std::sync::atomic::Ordering::SeqCst) > 0);
         assert_eq!(k, [3u8; 32]);
@@ -511,8 +668,8 @@ mod tests {
     }
 
     // SEC-10 (#445)：已有的私钥读取时也要收紧，且不重新生成。
-    #[test]
-    fn sec10_existing_identity_is_tightened_and_kept() {
+    #[tokio::test]
+    async fn sec10_existing_identity_is_tightened_and_kept() {
         let dir = tempfile::tempdir().unwrap();
         let key_file = legacy_file(dir.path());
         let calls = Mutex::new(Vec::new());
@@ -521,7 +678,9 @@ mod tests {
             dir.path(),
             recording(&calls),
             mint_must_not_run,
+            clear_must_not_run,
         )
+        .await
         .unwrap();
         assert_eq!(
             k, [9u8; 32],
@@ -530,8 +689,8 @@ mod tests {
         assert_eq!(*calls.lock().unwrap(), vec![key_file]);
     }
 
-    #[test]
-    fn sec10_minted_identity_is_tightened() {
+    #[tokio::test]
+    async fn sec10_minted_identity_is_tightened() {
         let dir = tempfile::tempdir().unwrap();
         let calls = Mutex::new(Vec::new());
         let k = load_or_mint(
@@ -539,7 +698,9 @@ mod tests {
             dir.path(),
             recording(&calls),
             mint_7,
+            noop_clear,
         )
+        .await
         .unwrap();
         let key_file = dir.path().join(KEY_FILE);
         assert_eq!(std::fs::read(&key_file).unwrap(), k);
@@ -547,8 +708,8 @@ mod tests {
         assert_eq!(*calls.lock().unwrap(), vec![key_file.clone(), key_file]);
     }
 
-    #[test]
-    fn sec10_tighten_failure_does_not_block_startup() {
+    #[tokio::test]
+    async fn sec10_tighten_failure_does_not_block_startup() {
         let dir = tempfile::tempdir().unwrap();
         legacy_file(dir.path());
         let k = load_or_mint(
@@ -561,7 +722,9 @@ mod tests {
                 })
             },
             mint_must_not_run,
+            clear_must_not_run,
         )
+        .await
         .unwrap();
         assert_eq!(k, [9u8; 32]);
     }
@@ -569,8 +732,8 @@ mod tests {
     /// 数据目录文件读失败（这里用同名目录造出非 NotFound 的错误）：拒绝启动，
     /// 不覆盖——旧实现 `if let Ok(..) = read` 会生成新私钥并试图写过去。
     /// 反证：DataDirKeyFile::read 把所有错误都当 `Ok(None)`，这里 panic ⇒ 变红。
-    #[test]
-    fn data_dir_file_read_failure_refuses() {
+    #[tokio::test]
+    async fn data_dir_file_read_failure_refuses() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join(KEY_FILE)).unwrap();
         let err = load_or_mint(
@@ -578,14 +741,16 @@ mod tests {
             dir.path(),
             |_| Ok(platform::Applied::Done),
             mint_must_not_run,
+            clear_must_not_run,
         )
+        .await
         .unwrap_err();
         assert!(matches!(err, IdentityError::Read { .. }), "{err}");
     }
 
     /// 数据目录文件长度不对：拒绝启动，原文件不动。
-    #[test]
-    fn data_dir_file_invalid_length_refuses_and_keeps_file() {
+    #[tokio::test]
+    async fn data_dir_file_invalid_length_refuses_and_keeps_file() {
         let dir = tempfile::tempdir().unwrap();
         let f = dir.path().join(KEY_FILE);
         std::fs::create_dir_all(f.parent().unwrap()).unwrap();
@@ -595,7 +760,9 @@ mod tests {
             dir.path(),
             |_| Ok(platform::Applied::Done),
             mint_must_not_run,
+            clear_must_not_run,
         )
+        .await
         .unwrap_err();
         assert!(
             matches!(err, IdentityError::Invalid { len: 16, .. }),
@@ -605,8 +772,8 @@ mod tests {
     }
 
     /// 系统安全存储分支经 load_or_mint 也删旧明文（接线没漏）。
-    #[test]
-    fn secure_store_home_removes_legacy_plaintext() {
+    #[tokio::test]
+    async fn secure_store_home_removes_legacy_plaintext() {
         let dir = tempfile::tempdir().unwrap();
         let f = legacy_file(dir.path());
         let k = load_or_mint(
@@ -614,7 +781,9 @@ mod tests {
             dir.path(),
             |_| panic!("系统安全存储不该碰文件权限"),
             mint_7,
+            noop_clear,
         )
+        .await
         .unwrap();
         assert_eq!(k, [7u8; 32]);
         assert!(!f.exists());

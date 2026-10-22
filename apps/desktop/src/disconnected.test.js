@@ -27,3 +27,11 @@ test("不把「已断开」换个说法再讲一遍——只给状态和时刻",
 test("没有断开时刻时仍有可读文案", () => {
   eq(disconnectedRow(null).sub, "已断开");
 });
+
+// #1117 / #1109 D2：电脑换了身份的设备同样留在「已断开」，提示语说明为什么要
+// 重新扫码。反证：disconnectedRow 不看 departedBy，这条变红。
+test("电脑换了身份时提示语说明原因", () => {
+  eq(disconnectedRow("今天 14:20", "identity").right, "电脑换了身份，需要重新扫码");
+  eq(disconnectedRow("今天 14:20", "device").right, "重新扫码即可恢复");
+  eq(disconnectedRow(null, "identity").sub, "已断开");
+});

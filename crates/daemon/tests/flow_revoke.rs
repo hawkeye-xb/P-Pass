@@ -4,10 +4,12 @@
 //!
 //! Two independent defenses, each with its own test so neither can hide
 //! the other:
-//! - the revoke sweep (IPC `device.revoke` → `FlowDelivery::revoke_peer`)
-//!   cancels the grant *at revoke time*, before the transfer could finish;
-//! - the pre-ingest re-check drops the item when the device was revoked
-//!   behind the sweep's back (plain `db.revoke`, no sweep).
+//! - the revoke sweep (IPC `device.revoke` → `unpair::remove_pairing` →
+//!   `FlowDelivery::release_peer`) interrupts the fetch task *at revoke
+//!   time*, before the transfer could finish; the grant row itself goes away
+//!   with the pairing record (#1117);
+//! - the pre-ingest re-check drops the item when the pairing record was
+//!   removed behind the sweep's back (plain `db.remove_pairing`, no release).
 
 mod common;
 
@@ -19,7 +21,7 @@ use daemon::{DiagAgg, IpcServer, Pairing};
 use interprocess::local_socket::tokio::prelude::*;
 use interprocess::local_socket::GenericNamespaced;
 use proto::FlowFetchRequest;
-use storage::{Db, Device, FlowGrantState, Role};
+use storage::{Db, FlowGrantState, Role};
 use tempfile::tempdir;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use transport::{Blobs, IrohTransport, NodeId, TransportConfig, ALPN_BLOBS};
@@ -43,7 +45,7 @@ fn noise(seed: u64) -> Vec<u8> {
 fn request(epoch: &str, lease: &str, hash: [u8; 32], provider: String) -> FlowFetchRequest {
     FlowFetchRequest {
         queue_sequence: 7,
-        pairing_epoch: epoch.into(),
+        pairing_id: epoch.into(),
         lease_token: lease.into(),
         content_hash: hex::encode(hash),
         file_name: "IMG_0007.jpg".into(),
@@ -55,19 +57,18 @@ fn request(epoch: &str, lease: &str, hash: [u8; 32], provider: String) -> FlowFe
 }
 
 async fn pair(db: &Db, peer: NodeId, name: &str, epoch: &str) {
-    db.upsert_device(&Device {
-        node_id: peer.0.to_vec(),
-        name: name.into(),
-        role: Role::Member,
-        paired_at: 1,
-        last_seen: None,
-        revoked: false,
-        revoked_at: None,
-        revoked_by: None,
-    })
+    db.accept_pairing(
+        &peer.0,
+        name,
+        &storage::Pairing {
+            id: epoch.into(),
+            node_id: peer.0.to_vec(),
+            role: Role::Member,
+            paired_at: 1,
+        },
+    )
     .await
     .unwrap();
-    db.set_pairing_epoch(&peer.0, epoch).await.unwrap();
 }
 
 fn dir_bytes(dir: &Path) -> u64 {
@@ -162,12 +163,12 @@ async fn ipc_for(db: &Db, delivery: &FlowDelivery, dir: &Path, tag: &str) -> Ipc
 
 /// Test A — the revoke sweep. `device.revoke` over real IPC while phone A's
 /// 24 MB transfer is mid-flight: by the time the IPC call returns, A's grant
-/// is already `cancelled` and out of the GC protection set (the transfer
-/// provably had not finished), A's fetch settles as `Cancelled`, nothing is
-/// ingested. Phone B, transferring at the same time from the same daemon,
-/// is untouched and completes. Then A re-pairs under a new epoch (#564):
-/// the same item completes there, and the old-epoch row stays `cancelled`
-/// instead of lingering `active`.
+/// row is gone (deleted with the pairing record, #1117) and out of the GC
+/// protection set (the transfer provably had not finished), A's fetch task is
+/// interrupted and settles as an error, nothing is ingested. Phone B,
+/// transferring at the same time from the same daemon, is untouched and
+/// completes. Then A re-pairs under a new pairing id (#564): the same item
+/// completes there, and the old id leaves no row behind.
 #[tokio::test(flavor = "multi_thread")]
 async fn device_revoke_cancels_the_in_flight_fetch_before_it_can_finish() {
     let root = tempdir().unwrap();
@@ -254,22 +255,27 @@ async fn device_revoke_cancels_the_in_flight_fetch_before_it_can_finish() {
         }
         assert_eq!(resp.result.unwrap()["revoked"], true);
         assert_eq!(
-            state_at_revoke,
-            Some(FlowGrantState::Cancelled),
-            "device.revoke must cancel the removed device's grant itself, at revoke time"
+            state_at_revoke, None,
+            "#1117: device.revoke deletes the removed device's grant with its pairing record"
         );
         assert!(
             !protected_at_revoke.contains(&hash_a),
-            "the cancelled partial must leave the GC protection set at revoke time"
+            "the removed partial must leave the GC protection set at revoke time"
         );
 
         let outcome_a = tokio::time::timeout(std::time::Duration::from_secs(2), fetch_a)
             .await
             .expect("the revoked fetch must settle within 2s")
             .expect("fetch task must not panic");
+        // #1117: the grant row is deleted with the pairing record, so the
+        // status poll reports `not_found` (GrantNotFound) rather than a
+        // `cancelled` row; either way the fetch ends without a receipt.
         assert!(
-            matches!(outcome_a, Err(DeliveryError::Cancelled)),
-            "revoked fetch must end as Cancelled, got {outcome_a:?}"
+            matches!(
+                outcome_a,
+                Err(DeliveryError::Cancelled | DeliveryError::GrantNotFound)
+            ),
+            "revoked fetch must end without a receipt, got {outcome_a:?}"
         );
 
         // Phone B was never revoked: its transfer completes normally.
@@ -311,10 +317,9 @@ async fn device_revoke_cancels_the_in_flight_fetch_before_it_can_finish() {
             .unwrap()
             .is_none());
 
-        // #564: re-pair A under a new epoch; the same item completes there
-        // and the old-epoch row stays cancelled, not active.
-        db.unrevoke(&phone_a.0).await.unwrap();
-        db.set_pairing_epoch(&phone_a.0, "epoch-new").await.unwrap();
+        // #564: re-pair A under a new pairing id; the same item completes
+        // there and the old id has no row at all (#1117), let alone an active one.
+        pair(&db, phone_a, "phone-a", "epoch-new").await;
         let offer_a_new = request("epoch-new", "lease-a2", hash_a, ticket_a.clone());
         delivery.offer(phone_a, &offer_a_new).await.unwrap();
         common::await_receipt(&delivery, phone_a, &offer_a_new)
@@ -326,8 +331,8 @@ async fn device_revoke_cancels_the_in_flight_fetch_before_it_can_finish() {
         );
         assert_eq!(
             grant_state(&db, phone_a, "epoch-old").await,
-            Some(FlowGrantState::Cancelled),
-            "#564: the pre-revoke epoch's row must not linger active"
+            None,
+            "#564/#1117: the pre-revoke pairing id's row must not linger"
         );
         assert_eq!(db.count_assets_from_device(&phone_a.0).await.unwrap(), 1);
 
@@ -396,18 +401,23 @@ async fn revoked_device_is_rechecked_before_ingest_even_without_the_sweep() {
             eprintln!("attempt {attempt}: transfer outran the kill threshold, retrying");
             continue;
         }
-        // Revoke behind FlowDelivery's back: no sweep, the transfer runs on.
+        // Remove the pairing record behind FlowDelivery's back: no release,
+        // the transfer runs on.
         assert!(db
-            .revoke(&phone.0, storage::RevokedBy::Owner, 1)
+            .remove_pairing(&phone.0, None, storage::DepartedBy::Owner, 1)
             .await
-            .unwrap());
+            .unwrap()
+            .is_some());
 
         let outcome = tokio::time::timeout(std::time::Duration::from_secs(60), fetch)
             .await
             .expect("fetch must settle")
             .expect("fetch task must not panic");
         assert!(
-            matches!(outcome, Err(DeliveryError::Cancelled)),
+            matches!(
+                outcome,
+                Err(DeliveryError::Cancelled | DeliveryError::GrantNotFound)
+            ),
             "an item from a revoked device must be dropped before ingest, got {outcome:?}"
         );
         assert_eq!(
@@ -422,7 +432,8 @@ async fn revoked_device_is_rechecked_before_ingest_even_without_the_sweep() {
             .is_none());
         assert_eq!(
             grant_state(&db, phone, "epoch-current").await,
-            Some(FlowGrantState::Cancelled)
+            None,
+            "#1117: the grant went away with the pairing record"
         );
         assert!(!db
             .active_flow_content_hashes()

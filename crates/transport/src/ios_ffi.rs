@@ -172,7 +172,7 @@ pub fn decode_frame_json(frame: Vec<u8>) -> Result<String, FfiError> {
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct ProtoFlowFetchRequest {
     pub queue_sequence: u64,
-    pub pairing_epoch: String,
+    pub pairing_id: String,
     pub lease_token: String,
     pub content_hash: String,
     pub file_name: String,
@@ -186,7 +186,7 @@ impl From<ProtoFlowFetchRequest> for proto::FlowFetchRequest {
     fn from(value: ProtoFlowFetchRequest) -> Self {
         let ProtoFlowFetchRequest {
             queue_sequence,
-            pairing_epoch,
+            pairing_id,
             lease_token,
             content_hash,
             file_name,
@@ -197,7 +197,7 @@ impl From<ProtoFlowFetchRequest> for proto::FlowFetchRequest {
         } = value;
         proto::FlowFetchRequest {
             queue_sequence,
-            pairing_epoch,
+            pairing_id,
             lease_token,
             content_hash,
             file_name,
@@ -213,7 +213,7 @@ impl From<proto::FlowFetchRequest> for ProtoFlowFetchRequest {
     fn from(value: proto::FlowFetchRequest) -> Self {
         let proto::FlowFetchRequest {
             queue_sequence,
-            pairing_epoch,
+            pairing_id,
             lease_token,
             content_hash,
             file_name,
@@ -224,7 +224,7 @@ impl From<proto::FlowFetchRequest> for ProtoFlowFetchRequest {
         } = value;
         ProtoFlowFetchRequest {
             queue_sequence,
-            pairing_epoch,
+            pairing_id,
             lease_token,
             content_hash,
             file_name,
@@ -884,7 +884,7 @@ mod tests {
     fn sample() -> ProtoFlowFetchRequest {
         ProtoFlowFetchRequest {
             queue_sequence: 42,
-            pairing_epoch: "epoch-7".into(),
+            pairing_id: "epoch-7".into(),
             lease_token: "lease-abc".into(),
             content_hash: "ab".repeat(32),
             file_name: "IMG_0001.HEIC".into(),

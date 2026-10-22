@@ -65,12 +65,9 @@ impl DownloadPlane {
             return false;
         }
 
-        let device = match self.db.get_device(&peer.0).await {
-            Ok(d) => d,
-            Err(_) => return false,
-        };
+        let pairing = self.db.active_pairing(&peer.0);
         if let authz::Decision::Deny { reason } =
-            authz::check(device.as_ref(), methods::ASSET_DOWNLOAD)
+            authz::check(pairing.as_ref(), methods::ASSET_DOWNLOAD)
         {
             return self.reject(stream, reason).await;
         }

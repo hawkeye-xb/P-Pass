@@ -10,8 +10,34 @@ use std::sync::Arc;
 use daemon::{DiagAgg, IpcServer, Pairing};
 use interprocess::local_socket::tokio::prelude::*;
 use interprocess::local_socket::GenericNamespaced;
-use storage::{Db, Device, Role};
+use storage::{Db, Role};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+/// 造一台已配对设备：档案 + 配对记录（#1117：配对记录 id 即线上 pairing_id）。
+async fn pair_dev(
+    db: &Db,
+    node: &[u8; 32],
+    name: &str,
+    role: Role,
+    paired_at: i64,
+    last_seen: Option<i64>,
+) {
+    db.accept_pairing(
+        node,
+        name,
+        &storage::Pairing {
+            id: format!("pairing-{:02x}", node[0]),
+            node_id: node.to_vec(),
+            role,
+            paired_at,
+        },
+    )
+    .await
+    .unwrap();
+    if let Some(t) = last_seen {
+        db.touch_last_seen(node, t).await.unwrap();
+    }
+}
 
 struct IpcClient {
     lines: tokio::io::Lines<BufReader<interprocess::local_socket::tokio::RecvHalf>>,
@@ -147,18 +173,7 @@ async fn start_with_clock(
 async fn status_devices_and_revoke_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
     let (db, _pairing, socket, token) = start(dir.path(), "roundtrip").await;
-    db.upsert_device(&Device {
-        node_id: vec![0xAA; 32],
-        name: "妈妈的手机".into(),
-        role: Role::Member,
-        paired_at: 1,
-        last_seen: None,
-        revoked: false,
-        revoked_at: None,
-        revoked_by: None,
-    })
-    .await
-    .unwrap();
+    pair_dev(&db, &[0xAA; 32], "妈妈的手机", Role::Member, 1, None).await;
 
     let mut c = IpcClient::connect(&socket, &token).await;
 
@@ -179,7 +194,9 @@ async fn status_devices_and_revoke_roundtrip() {
         )
         .await;
     assert_eq!(resp.result.unwrap()["revoked"], true);
-    assert!(db.get_device(&[0xAA; 32]).await.unwrap().unwrap().revoked);
+    let gone = db.get_device(&[0xAA; 32]).await.unwrap().unwrap();
+    assert!(gone.pairing.is_none(), "配对记录必须已物理删除");
+    assert_eq!(gone.profile.departed_by, Some(storage::DepartedBy::Owner));
     // AUDIT-04 card decision #4: revoking authorization is a user decision
     // and must land in audit_decision, referencing the revoked device.
     let decisions = db.list_decisions(10).await.unwrap();
@@ -193,25 +210,14 @@ async fn status_devices_and_revoke_roundtrip() {
     );
 }
 
-/// #1055: 业主移除设备时 `revoked_at` 与审计时间取注入的时钟。
+/// #1055: 业主移除设备时 `departed_at` 与审计时间取注入的时钟。
 #[tokio::test(flavor = "multi_thread")]
 async fn device_revoke_stamps_time_from_the_injected_clock() {
     const FAKE_NOW: i64 = 1_999_000_000_000;
     let dir = tempfile::tempdir().unwrap();
     let (db, _pairing, socket, token) =
         start_with_clock(dir.path(), "revclock", Some(FAKE_NOW)).await;
-    db.upsert_device(&Device {
-        node_id: vec![0xAB; 32],
-        name: "手机".into(),
-        role: Role::Member,
-        paired_at: 1,
-        last_seen: None,
-        revoked: false,
-        revoked_at: None,
-        revoked_by: None,
-    })
-    .await
-    .unwrap();
+    pair_dev(&db, &[0xAB; 32], "手机", Role::Member, 1, None).await;
     let mut c = IpcClient::connect(&socket, &token).await;
     let resp = c
         .call(
@@ -221,7 +227,7 @@ async fn device_revoke_stamps_time_from_the_injected_clock() {
         .await;
     assert_eq!(resp.result.unwrap()["revoked"], true);
     let d = db.get_device(&[0xAB; 32]).await.unwrap().unwrap();
-    assert_eq!(d.revoked_at, Some(FAKE_NOW));
+    assert_eq!(d.profile.departed_at, Some(FAKE_NOW));
     let decisions = db.list_decisions(10).await.unwrap();
     let dec = decisions
         .iter()
@@ -236,18 +242,7 @@ async fn device_revoke_stamps_time_from_the_injected_clock() {
 async fn device_rename_updates_list_and_appends_audit() {
     let dir = tempfile::tempdir().unwrap();
     let (db, _pairing, socket, token) = start(dir.path(), "rename").await;
-    db.upsert_device(&Device {
-        node_id: vec![0xBB; 32],
-        name: "默认名字".into(),
-        role: Role::Member,
-        paired_at: 1,
-        last_seen: None,
-        revoked: false,
-        revoked_at: None,
-        revoked_by: None,
-    })
-    .await
-    .unwrap();
+    pair_dev(&db, &[0xBB; 32], "默认名字", Role::Member, 1, None).await;
 
     let mut c = IpcClient::connect(&socket, &token).await;
 
@@ -292,18 +287,7 @@ async fn device_rename_updates_list_and_appends_audit() {
 async fn device_rename_rejects_bad_input_and_unknown_device() {
     let dir = tempfile::tempdir().unwrap();
     let (db, _pairing, socket, token) = start(dir.path(), "rename-bad").await;
-    db.upsert_device(&Device {
-        node_id: vec![0xCC; 32],
-        name: "A".into(),
-        role: Role::Member,
-        paired_at: 1,
-        last_seen: None,
-        revoked: false,
-        revoked_at: None,
-        revoked_by: None,
-    })
-    .await
-    .unwrap();
+    pair_dev(&db, &[0xCC; 32], "A", Role::Member, 1, None).await;
 
     let mut c = IpcClient::connect(&socket, &token).await;
 
@@ -398,18 +382,7 @@ async fn status_reports_photo_count_and_disk_watermarks() {
 async fn activity_list_aggregates_backup_batches() {
     let dir = tempfile::tempdir().unwrap();
     let (db, _pairing, socket, token) = start(dir.path(), "t090activity").await;
-    db.upsert_device(&Device {
-        node_id: vec![0xA1; 32],
-        name: "妈妈的手机".into(),
-        role: Role::Member,
-        paired_at: 1,
-        last_seen: None,
-        revoked: false,
-        revoked_at: None,
-        revoked_by: None,
-    })
-    .await
-    .unwrap();
+    pair_dev(&db, &[0xA1; 32], "妈妈的手机", Role::Member, 1, None).await;
 
     let t0 = 1_700_000_000_000i64;
     let min = 60_000i64;
@@ -461,18 +434,15 @@ async fn activity_list_aggregates_backup_batches() {
 async fn devices_list_reports_connection_unknown_without_transport() {
     let dir = tempfile::tempdir().unwrap();
     let (db, _pairing, socket, token) = start(dir.path(), "t090conn").await;
-    db.upsert_device(&Device {
-        node_id: vec![0xAB; 32],
-        name: "test-device".into(),
-        role: Role::Member,
-        paired_at: 1,
-        last_seen: Some(now()), // 有 last_seen 也不许推断在线
-        revoked: false,
-        revoked_at: None,
-        revoked_by: None,
-    })
-    .await
-    .unwrap();
+    pair_dev(
+        &db,
+        &[0xAB; 32],
+        "test-device",
+        Role::Member,
+        1,
+        Some(now()),
+    )
+    .await;
 
     let mut c = IpcClient::connect(&socket, &token).await;
     let resp = c.call("devices.list", serde_json::Value::Null).await;
@@ -558,7 +528,7 @@ async fn pairing_start_and_confirm_over_ipc() {
     assert!(resp.ok, "{resp:?}");
     assert!(handle.await.unwrap().is_ok(), "device side sees acceptance");
     let device = db.get_device(&[0xDD; 32]).await.unwrap().expect("row");
-    assert_eq!(device.name, "IPC 测试机");
+    assert_eq!(device.profile.name, "IPC 测试机");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -671,7 +641,7 @@ async fn pairing_pending_lists_all_waiting_then_confirm_by_name() {
     assert_eq!(resp.result.unwrap()["pending_pairs"], 0);
     // B 已被允许——设备表里有它。
     let device = db.get_device(&[0xE1; 32]).await.unwrap().expect("row");
-    assert_eq!(device.name, "设备B");
+    assert_eq!(device.profile.name, "设备B");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -887,18 +857,15 @@ async fn logs_export_zip_carries_no_address_identifier_or_name() {
     })
     .await
     .unwrap();
-    db.upsert_device(&storage::Device {
-        node_id: vec![0xEA; 32],
-        name: "张三的手机".into(),
-        role: storage::Role::Member,
-        paired_at: 1,
-        last_seen: None,
-        revoked: false,
-        revoked_at: None,
-        revoked_by: None,
-    })
-    .await
-    .unwrap();
+    pair_dev(
+        &db,
+        &[0xEA; 32],
+        "张三的手机",
+        storage::Role::Member,
+        1,
+        None,
+    )
+    .await;
 
     let mut c = IpcClient::connect(&socket, &token).await;
     let resp = c.call("logs.export", serde_json::Value::Null).await;
@@ -1049,7 +1016,7 @@ async fn subscription_delivers_pending_change_under_100ms() {
     let ev3 = sub.next_event().await;
     assert_eq!(ev3["event"], "device.changed", "{ev3}");
     let device = db.get_device(&[0xBB; 32]).await.unwrap().expect("row");
-    assert_eq!(device.name, "事件测试机");
+    assert_eq!(device.profile.name, "事件测试机");
 }
 
 /// 反证①：类型过滤——只订阅 status.changed 的连接收不到 pending 事件。
@@ -1342,7 +1309,7 @@ async fn round_counts_are_classified_by_the_daemon() {
 /// 从桌面列表里凭空消失。验收人原话：「又不是我主动移除的」「不要主动让它
 /// 消失，因为它可能改过名称，回头审计时我得明确到底是哪个设备」。
 ///
-/// 反证：把 `list_devices_for_family_view` 换回 `list_devices(false)`，
+/// 反证：把主列表过滤（`Removal::is_listed`）换成只留有配对记录的行，
 /// 「自己断开的那台还在列表里」这条立刻变红。
 #[tokio::test(flavor = "multi_thread")]
 async fn devices_list_keeps_self_disconnected_and_hides_owner_removed() {
@@ -1353,23 +1320,25 @@ async fn devices_list_keeps_self_disconnected_and_hides_owner_removed() {
         (0xBB, "自己断开的"),
         (0xCC, "业主移除的"),
     ] {
-        db.upsert_device(&Device {
-            node_id: vec![n; 32],
-            name: name.into(),
-            role: Role::Member,
-            paired_at: i64::from(n),
-            last_seen: Some(1_700_000_000_000),
-            revoked: false,
-            revoked_at: None,
-            revoked_by: None,
-        })
-        .await
-        .unwrap();
+        pair_dev(
+            &db,
+            &[n; 32],
+            name,
+            Role::Member,
+            i64::from(n),
+            Some(1_700_000_000_000),
+        )
+        .await;
     }
     // 手机自己断开走 router 的 handle_unpair（这里直接落库，等价）。
-    db.revoke(&[0xBB; 32], storage::RevokedBy::Device, 1_700_000_001_000)
-        .await
-        .unwrap();
+    db.remove_pairing(
+        &[0xBB; 32],
+        None,
+        storage::DepartedBy::Device,
+        1_700_000_001_000,
+    )
+    .await
+    .unwrap();
 
     let mut c = IpcClient::connect(&socket, &token).await;
 
@@ -1386,8 +1355,9 @@ async fn devices_list_keeps_self_disconnected_and_hides_owner_removed() {
             .await
             .unwrap()
             .unwrap()
-            .revoked_by,
-        Some(storage::RevokedBy::Owner),
+            .profile
+            .departed_by,
+        Some(storage::DepartedBy::Owner),
         "业主经 IPC 移除必须记成 owner"
     );
 
@@ -1406,10 +1376,10 @@ async fn devices_list_keeps_self_disconnected_and_hides_owner_removed() {
     );
 
     let gone = &listed["devices"][1];
-    assert_eq!(gone["revoked"], true);
-    assert_eq!(gone["revoked_by"], "device");
+    assert_eq!(gone["paired"], false);
+    assert_eq!(gone["departed_by"], "device");
     assert_eq!(
-        gone["revoked_at"], 1_700_000_001_000i64,
+        gone["departed_at"], 1_700_000_001_000i64,
         "业主要能答「它什么时候断的」"
     );
     // 已吊销的设备一律不报在线：授权没了就是离线，不做组合判断——否则
@@ -1418,11 +1388,11 @@ async fn devices_list_keeps_self_disconnected_and_hides_owner_removed() {
     assert_eq!(gone["connection"], "offline");
     assert!(gone["flow_connection"].is_null());
 
-    // include_revoked=true 仍是全量（诊断/统计口径不变）。
+    // include_departed=true 仍是全量（诊断/统计口径不变）。
     let resp = c
         .call(
             "devices.list",
-            serde_json::json!({ "include_revoked": true }),
+            serde_json::json!({ "include_departed": true }),
         )
         .await;
     assert_eq!(resp.result.unwrap()["devices"].as_array().unwrap().len(), 3);
@@ -1445,26 +1415,24 @@ async fn device_rows_carry_daemon_conclusions_and_status_counts_match_the_list()
         (0xBB, "自己断开的"),
         (0xCC, "业主移除的"),
     ] {
-        db.upsert_device(&Device {
-            node_id: vec![n; 32],
-            name: name.into(),
-            role: Role::Member,
-            paired_at: i64::from(n),
-            last_seen: Some(now - 6 * DAY),
-            revoked: false,
-            revoked_at: None,
-            revoked_by: None,
-        })
-        .await
-        .unwrap();
+        pair_dev(
+            &db,
+            &[n; 32],
+            name,
+            Role::Member,
+            i64::from(n),
+            Some(now - 6 * DAY),
+        )
+        .await;
     }
-    db.set_watermark(&[0xAA; 32], 1, now - 6 * DAY - 5)
+    // 备份水位挂在配对记录上（#1117）：键是 pairing_id。
+    db.set_watermark("pairing-aa", 1, now - 6 * DAY - 5)
         .await
         .unwrap();
-    db.revoke(&[0xBB; 32], storage::RevokedBy::Device, now)
+    db.remove_pairing(&[0xBB; 32], None, storage::DepartedBy::Device, now)
         .await
         .unwrap();
-    db.revoke(&[0xCC; 32], storage::RevokedBy::Owner, now)
+    db.remove_pairing(&[0xCC; 32], None, storage::DepartedBy::Owner, now)
         .await
         .unwrap();
 
@@ -1480,7 +1448,7 @@ async fn device_rows_carry_daemon_conclusions_and_status_counts_match_the_list()
     let listed = c
         .call(
             "devices.list",
-            serde_json::json!({ "include_revoked": true }),
+            serde_json::json!({ "include_departed": true }),
         )
         .await
         .result
@@ -1646,21 +1614,23 @@ async fn pairing_pending_knows_a_returning_device_by_node_id() {
     // 老设备：首次配对在很久以前，业主在桌面上给它改过名，然后手机自己
     // 断开了（revoked = 1）——它依然算「以前连过」。
     const FIRST_PAIRED_AT: i64 = 1_700_000_000_000;
-    db.upsert_device(&Device {
-        node_id: vec![0xE1; 32],
-        name: "客厅的旧手机".into(),
-        role: Role::Member,
-        paired_at: FIRST_PAIRED_AT,
-        last_seen: Some(FIRST_PAIRED_AT),
-        revoked: false,
-        revoked_at: None,
-        revoked_by: None,
-    })
+    pair_dev(
+        &db,
+        &[0xE1; 32],
+        "客厅的旧手机",
+        Role::Member,
+        FIRST_PAIRED_AT,
+        Some(FIRST_PAIRED_AT),
+    )
+    .await;
+    db.remove_pairing(
+        &[0xE1; 32],
+        None,
+        storage::DepartedBy::Device,
+        FIRST_PAIRED_AT + 1,
+    )
     .await
     .unwrap();
-    db.revoke(&[0xE1; 32], storage::RevokedBy::Device, FIRST_PAIRED_AT + 1)
-        .await
-        .unwrap();
     for n in 0..3u8 {
         db.insert_asset(&seeded_asset(0xE1, n, FIRST_PAIRED_AT + i64::from(n)))
             .await
@@ -1715,7 +1685,7 @@ async fn pairing_pending_knows_a_returning_device_by_node_id() {
     assert_eq!(fresh["known"], false, "从没连过的必须判为未知: {fresh}");
     assert_eq!(fresh["name"], "SM-S9210", "未知设备只能用自报名: {fresh}");
 
-    // 老设备：已知（**尽管 revoked = 1**），名字用桌面上那个。
+    // 老设备：已知（**尽管配对记录已删**），名字用桌面上那个。
     let returning = by_node(&"e1".repeat(32));
     assert_eq!(
         returning["known"], true,
@@ -1725,9 +1695,12 @@ async fn pairing_pending_knows_a_returning_device_by_node_id() {
         returning["name"], "客厅的旧手机",
         "改过名的设备必须按桌面上的名字称呼，不是手机自报名: {returning}"
     );
+    // #1117：`paired: false` = 以前连过、现在没有配对记录；`paired_at` 是档案上
+    // 的首次配对时间（「首次配对 …」），不随配对记录删除。
+    assert_eq!(returning["paired"], false, "{returning}");
     assert_eq!(
         returning["paired_at"], FIRST_PAIRED_AT,
-        "首次配对时间要传上去（弹窗要显示）: {returning}"
+        "「首次配对」时间来自永不删除的档案: {returning}"
     );
     assert_eq!(
         returning["photo_count"], 3,
@@ -1755,20 +1728,22 @@ async fn pairing_pending_knows_a_returning_device_by_node_id() {
     // 恰恰是配对之后才被冲掉的）。
     let mut row = db.get_device(&[0xE1; 32]).await.unwrap().unwrap();
     for _ in 0..200 {
-        if !row.revoked {
+        if row.pairing.is_some() {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         row = db.get_device(&[0xE1; 32]).await.unwrap().unwrap();
     }
-    assert!(!row.revoked, "业主批准了，授权要恢复");
+    assert!(row.pairing.is_some(), "业主批准了，授权要恢复");
     assert_eq!(
-        row.name, "客厅的旧手机",
+        row.profile.name, "客厅的旧手机",
         "重新配对不许把桌面上改过的名字冲回手机自报名"
     );
+    // #1117：「首次」配对时间现在是档案上的 first_seen_at（配对记录每次重配都是
+    // 新记录，其 paired_at 是本次配对时间）；重连不重置档案的 first_seen_at。
     assert_eq!(
-        row.paired_at, FIRST_PAIRED_AT,
-        "paired_at 是「首次」配对时间，重连不重置"
+        row.profile.first_seen_at, FIRST_PAIRED_AT,
+        "first_seen_at 是「首次」配对时间，重连不重置"
     );
 }
 

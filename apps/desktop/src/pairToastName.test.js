@@ -26,7 +26,7 @@ const renamed = {
   known: true,
   name: "客厅的手机",
   paired_at: 1_700_000_000_000,
-  revoked: false,
+  paired: true,
   photo_count: 1,
 };
 const renamedResp = { decided: true, device: "SM-S9210" };

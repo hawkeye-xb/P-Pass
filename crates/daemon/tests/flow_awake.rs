@@ -12,14 +12,14 @@ use std::time::Duration;
 use daemon::awake::{AwakeHold, AwakeToken};
 use daemon::flow_delivery::FlowDelivery;
 use proto::FlowFetchRequest;
-use storage::{Db, Device, Role};
+use storage::{Db, Pairing, Role};
 use tempfile::{tempdir, TempDir};
 use transport::{Blobs, IrohTransport, NodeId, TransportConfig, ALPN_BLOBS};
 
 fn request(seq: u64, lease: &str, hash: [u8; 32], provider: String) -> FlowFetchRequest {
     FlowFetchRequest {
         queue_sequence: seq,
-        pairing_epoch: "epoch-current".into(),
+        pairing_id: "epoch-current".into(),
         lease_token: lease.into(),
         content_hash: hex::encode(hash),
         file_name: format!("IMG_{seq:04}.jpg"),
@@ -32,21 +32,18 @@ fn request(seq: u64, lease: &str, hash: [u8; 32], provider: String) -> FlowFetch
 
 async fn paired_db(peer: NodeId) -> Db {
     let db = Db::open_in_memory().await.unwrap();
-    db.upsert_device(&Device {
-        node_id: peer.0.to_vec(),
-        name: "phone".into(),
-        role: Role::Member,
-        paired_at: 1,
-        last_seen: None,
-        revoked: false,
-        revoked_at: None,
-        revoked_by: None,
-    })
+    db.accept_pairing(
+        &peer.0,
+        "phone",
+        &Pairing {
+            id: "epoch-current".into(),
+            node_id: peer.0.to_vec(),
+            role: Role::Member,
+            paired_at: 1,
+        },
+    )
     .await
     .unwrap();
-    db.set_pairing_epoch(&peer.0, "epoch-current")
-        .await
-        .unwrap();
     db
 }
 

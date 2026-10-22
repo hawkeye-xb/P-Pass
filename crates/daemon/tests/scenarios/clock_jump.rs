@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use daemon::Router;
 use proto::{codes, Req, Resp};
-use storage::{Db, Device, Role};
+use storage::{Db, Pairing, Role};
 use transport::{IrohTransport, Transport, TransportConfig};
 
 const T0: i64 = 1_800_000_000_000;
@@ -78,16 +78,16 @@ async fn clock_jump_expires_inflight_pairing_tokens() {
     ctp.add_peer(daddr.clone());
 
     // 健康基线：一个已配对设备 hello 正常。
-    db.upsert_device(&Device {
-        node_id: ctp.node_id().0.to_vec(),
-        name: "老设备".into(),
-        role: Role::Member,
-        paired_at: T0,
-        last_seen: None,
-        revoked: false,
-        revoked_at: None,
-        revoked_by: None,
-    })
+    db.accept_pairing(
+        &ctp.node_id().0,
+        "老设备",
+        &Pairing {
+            id: "pairing-old-device".into(),
+            node_id: ctp.node_id().0.to_vec(),
+            role: Role::Member,
+            paired_at: T0,
+        },
+    )
     .await
     .unwrap();
     let hello = call(&ctp, dtp.node_id(), "hello", serde_json::Value::Null).await;
@@ -140,7 +140,7 @@ async fn clock_jump_expires_inflight_pairing_tokens() {
         .await
         .unwrap()
         .expect("device row");
-    assert!(!d.revoked);
+    assert!(d.pairing.is_some(), "the new device holds a pairing record");
     let audit = db.list_audit(10).await.unwrap();
     assert!(
         audit.iter().any(|r| r.entry.kind == "pair.accepted"),

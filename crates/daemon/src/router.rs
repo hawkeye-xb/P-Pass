@@ -224,10 +224,8 @@ impl Router {
     /// 失败静默：心跳是尽力而为的加速器，不是承诺——写库失败不影响
     /// hello 应答。
     async fn record_presence(&self, peer: transport::NodeId) {
-        let Ok(Some(device)) = self.db.get_device(&peer.0).await else {
-            return; // 未配对节点：hello 只是能力握手，不产生副作用
-        };
-        if device.revoked {
+        // 只刷新有配对记录的设备（没有配对 = hello 只是能力握手，不产生副作用）。
+        if self.db.active_pairing(&peer.0).is_none() {
             return;
         }
         let now = (self.now)();
@@ -296,17 +294,10 @@ impl Router {
             return false;
         }
 
-        let device = match self.db.get_device(&peer.0).await {
-            Ok(d) => d,
-            Err(e) => {
-                tracing::error!("device lookup failed: {e}");
-                let resp = Resp::err(req.id.clone(), RespError::new(Reason::Internal));
-                let _ = self.send(stream, &resp).await;
-                return false;
-            }
-        };
+        // #1117：授权只读配对记录的内存副本，不查库。
+        let pairing = self.db.active_pairing(&peer.0);
 
-        match authz::check(device.as_ref(), &req.method) {
+        match authz::check(pairing.as_ref(), &req.method) {
             Decision::Deny { reason } => {
                 // QA-17：diag 必须先于拒答响应落库。曾经先发响应再记
                 // diag——客户端收到 NOT_AUTHORIZED 的瞬间即可读 diag，
@@ -504,10 +495,10 @@ impl Router {
                 // 不心跳（客户端侧把关）。未配对节点的 hello 只是能力握手，
                 // 无设备行可更新，静默跳过。
                 self.record_presence(peer).await;
-                let pairing_epoch = self.db.pairing_epoch(&peer.0).await.ok().flatten();
+                let pairing_id = self.db.active_pairing(&peer.0).map(|p| p.id);
                 // #413 §7: Desktop health rides on hello for a paired member
-                // only — same zero-data rule as `pairing_epoch`.
-                let health = match (&pairing_epoch, &self.flow_delivery) {
+                // only — same zero-data rule as `pairing_id`.
+                let health = match (&pairing_id, &self.flow_delivery) {
                     (Some(_), Some(delivery)) => Some(delivery.health(peer).await),
                     _ => None,
                 };
@@ -515,7 +506,7 @@ impl Router {
                     proto_ver: PROTO_VER,
                     capabilities: SERVER_CAPABILITIES.iter().map(|s| s.to_string()).collect(),
                     device_name: self.device_name.clone(),
-                    pairing_epoch,
+                    pairing_id,
                     health,
                 };
                 match serde_json::to_value(&ours) {
@@ -938,11 +929,11 @@ impl Router {
         match state {
             Some(PairState::Pending) => only(S::Pending),
             // Idempotent replay: the same payload the legacy reply carries.
-            Some(PairState::Accepted { pairing_epoch }) => proto::PairStatusReply {
+            Some(PairState::Accepted { pairing_id }) => proto::PairStatusReply {
                 state: S::Accepted,
                 accepted: Some(proto::PairAccepted {
                     storage_device_name: self.device_name.clone(),
-                    pairing_epoch,
+                    pairing_id,
                 }),
             },
             Some(PairState::Denied) => only(S::Denied),
@@ -951,51 +942,52 @@ impl Router {
         }
     }
 
-    /// `device.unpair` (UX-06): the caller revokes ITSELF. Unilateral
-    /// stop — no owner action needed (product file §二双端共通). The
-    /// device row is marked revoked; hello is denied from then on, and
-    /// a fresh owner-issued token can rejoin (T-041 rejoin door).
+    /// `device.unpair` (UX-06): the caller ends ITS OWN pairing. Unilateral
+    /// stop — no owner action needed. #1117: the pairing record is deleted
+    /// through the single entry [`crate::unpair`] (same path as an owner
+    /// revoke: in-flight fetches, backup session and subscriptions go with
+    /// it); the device profile stays and is listed as "disconnected".
     ///
-    /// #565：可选参数 `pairing_epoch` = 手机要结束的**那一次**配对。带了就做
-    /// 条件吊销（纪元不一致 = 那次配对已被新配对取代或早已结束，什么都不动，
-    /// 照样答 ok——手机要的「这次配对已结束」已经成立）；不带 = 旧手机，保持
-    /// 原来的无条件吊销。
+    /// #565：可选参数 `pairing_id` = 手机要结束的**那一次**配对。带了就只删 id
+    /// 一致的那条（不一致 = 那次配对已被新配对取代或早已结束，什么都不动，照样
+    /// 答 ok——手机要的「这次配对已结束」已经成立）；不带 = 删它当前的配对。
     async fn handle_unpair(&self, peer: transport::NodeId, req: &Req) -> Resp {
-        let epoch = req.params.get("pairing_epoch").and_then(|v| v.as_str());
-        // DEV-03：记下是**设备自己**断的。业主没做过这个决定，所以这台设备
-        // 要留在「家人与设备」里标「已断开」，而不是凭空消失。
-        let revoked = match epoch {
-            Some(epoch) => {
-                self.db
-                    .revoke_pairing(&peer.0, epoch, storage::RevokedBy::Device, (self.now)())
-                    .await
-            }
-            None => {
-                self.db
-                    .revoke(&peer.0, storage::RevokedBy::Device, (self.now)())
-                    .await
-            }
+        let expect_id = req.params.get("pairing_id").and_then(|v| v.as_str());
+        let holders = crate::unpair::Holders {
+            flow: self.flow_delivery.as_ref(),
+            backup: self.backup.as_ref(),
+            subscriptions: Some(&self.subscriptions),
         };
-        match revoked {
-            Ok(false) if epoch.is_some() => {
-                tracing::info!("#565: device.unpair for a pairing epoch that is no longer current; nothing revoked");
+        // DEV-03：记下是**设备自己**断的。业主没做过这个决定，所以这台设备
+        // 留在「家人与设备」里标「已断开」，而不是凭空消失。
+        let removed = crate::unpair::remove_pairing(
+            &self.db,
+            holders,
+            peer,
+            expect_id,
+            storage::DepartedBy::Device,
+            (self.now)(),
+        )
+        .await;
+        match removed {
+            Ok(None) => {
+                tracing::info!("#565: device.unpair named a pairing that is no longer current; nothing removed");
                 Resp::ok(req.id.clone(), serde_json::json!({ "unpaired": false }))
             }
-            Ok(_) => {
+            Ok(Some(_)) => {
                 crate::pairing::warn_if_audit_failed(
                     "device.unpaired",
                     self.db
                         .append_audit(&storage::AuditEntry::local(
                             (self.now)(),
-                            Some(peer.0.to_vec()), // 设备自我撤销（UX-06）
+                            Some(peer.0.to_vec()), // 设备自己断开（UX-06）
                             "device.unpaired",
                             None,
                             None,
                         ))
                         .await,
                 );
-                // IPC-02: 设备自我断开——桌面设备行即时刷新。
-                // DEV-03：刷新后它仍在列表里，状态变成「已断开」，不再消失。
+                // IPC-02: 设备自己断开——桌面设备行即时刷新，状态变成「已断开」。
                 if let Some(bus) = &self.events {
                     events::emit(
                         bus,
@@ -1008,9 +1000,6 @@ impl Router {
                         serde_json::json!({ "action": "device.unpaired" }),
                     );
                 }
-                // SYNC-03 §⑦：自我退出——顺手把自己的订阅登记摘掉（如果
-                // 同一连接上还有一条 timeline.subscribe 挂着）。
-                self.subscriptions.close(peer);
                 Resp::ok(req.id.clone(), serde_json::json!({ "unpaired": true }))
             }
             Err(_) => Resp::err(req.id.clone(), RespError::new(Reason::Internal)),

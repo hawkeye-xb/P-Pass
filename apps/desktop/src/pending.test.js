@@ -18,7 +18,7 @@ const known = {
   known: true,
   name: "三星测试及", // 桌面上改过的名字
   paired_at: 1_700_000_000_000,
-  revoked: true,
+  paired: false,
   photo_count: 95,
 };
 
@@ -26,7 +26,7 @@ test("判据是 known 这一位，不是名字", () => {
   expect(isKnownDevice(fresh)).toBe(false);
   expect(isKnownDevice(known)).toBe(true);
   // 被移除过的设备再回来，依然算「以前连过」。
-  expect(isKnownDevice({ known: true, revoked: true })).toBe(true);
+  expect(isKnownDevice({ known: true, paired: false })).toBe(true);
 });
 
 test("新设备维持原措辞", () => {

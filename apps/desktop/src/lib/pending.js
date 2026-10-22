@@ -16,10 +16,10 @@
 //
 // 契约（crates/daemon/src/ipc.rs pairing.pending）：
 //   node_id      hex string
-//   known        bool          ← device 表有没有这一行，不看 revoked
+//   known        bool          ← 有没有设备档案（档案永不删除，#1117）
 //   name         string        ← known 时是桌面上的名字，否则手机自报名
-//   paired_at    unix ms       ← 仅 known
-//   revoked      bool          ← 仅 known
+//   paired_at    unix ms       ← 仅 known：第一次配对成功的时间（设备档案）
+//   paired       bool          ← 仅 known：当前有没有配对记录
 //   photo_count  int           ← 仅 known
 
 import { t } from "./i18n.js";

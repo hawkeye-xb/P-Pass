@@ -61,41 +61,89 @@ expect_green "空仓库" "$(new_root)"
 
 # ── B.3 ────────────────────────────────────────────
 echo "== B.3 正样例（必须报红）"
-B3_PLAIN='let _ = "DELETE FROM device WHERE id = ?";'
+B3_PLAIN='let _ = "DELETE FROM device_profile WHERE id = ?";'
 B3_MULTILINE='let _ = "DELETE
-        FROM device WHERE id = ?";'
-B3_QUOTED='let _ = r#"DELETE FROM "device" WHERE id = ?"#;'
-B3_SCHEMA='let _ = "DELETE FROM main.device WHERE id = ?";'
-B3_WATERMARK_ML='let _ = "delete  from
-    backup_watermark";'
+        FROM device_profile WHERE id = ?";'
+B3_QUOTED='let _ = r#"DELETE FROM "device_profile" WHERE id = ?"#;'
+B3_SCHEMA='let _ = "DELETE FROM main.device_profile WHERE id = ?";'
+B3_AUDIT_ML='let _ = "delete  from
+    audit_operation";'
 B3_RUST_CONT='let _ = "DELETE \
-    FROM device";'
-B3_ESC_QUOTE='let _ = "DELETE FROM \"main\".\"device\"";'
+    FROM audit_decision";'
+B3_ESC_QUOTE='let _ = "DELETE FROM \"main\".\"device_profile\"";'
 B3_SQLFILE='DELETE
-  FROM [device];'
+  FROM [audit_event];'
 for pair in "plain:$B3_PLAIN" "multiline:$B3_MULTILINE" "quoted:$B3_QUOTED" \
-            "schema-prefix:$B3_SCHEMA" "backup_watermark+multiline:$B3_WATERMARK_ML" \
+            "schema-prefix:$B3_SCHEMA" "audit+multiline:$B3_AUDIT_ML" \
             "rust-line-continuation:$B3_RUST_CONT" "escaped-quotes+schema:$B3_ESC_QUOTE"; do
   expect_red "B.3 ${pair%%:*}" "$(sample crates/core/src/a.rs "${pair#*:}")" "B.3 VIOLATION"
 done
 expect_red "B.3 .sql 文件 + 方括号 + 跨行" "$(sample crates/core/migrations/1.sql "$B3_SQLFILE")" "B.3 VIOLATION"
 
+echo "== B.3 配对记录：只许在 crates/storage/src/device_repo.rs 里删除（#1117）"
+B3_PAIRING='let _ = "DELETE
+    FROM pairing WHERE node_id = ?";'
+expect_red "B.3 别处删配对记录" "$(sample crates/daemon/src/a.rs "$B3_PAIRING")" "配对记录只许在"
+expect_red "B.3 storage 里别的文件删配对记录" "$(sample crates/storage/src/other_repo.rs "$B3_PAIRING")" "配对记录只许在"
+expect_green "B.3 device_repo.rs 删配对记录" "$(sample crates/storage/src/device_repo.rs "$B3_PAIRING")"
+expect_green "B.3 删 pairing_x 不误报" "$(sample crates/daemon/src/a.rs 'let _ = "DELETE FROM pairing_requests";')"
+for pair in \
+  "INSERT:let _ = \"INSERT INTO pairing (id) VALUES (?)\";" \
+  "INSERT OR REPLACE:let _ = \"INSERT OR REPLACE INTO pairing (id) VALUES (?)\";" \
+  "REPLACE INTO:let _ = \"REPLACE INTO pairing (id) VALUES (?)\";" \
+  "UPDATE 跨行:let _ = \"UPDATE
+    pairing SET role = ?\";" \
+  "UPDATE OR IGNORE:let _ = \"UPDATE OR IGNORE main.pairing SET role = ?\";"; do
+  expect_red "B.3 别处写配对记录：${pair%%:*}" "$(sample crates/daemon/src/a.rs "${pair#*:}")" "配对记录只许在"
+done
+expect_green "B.3 device_repo.rs 写配对记录" "$(sample crates/storage/src/device_repo.rs 'let _ = "INSERT INTO pairing (id) VALUES (?)";')"
+expect_green "B.3 别处只读配对记录" "$(sample crates/daemon/src/a.rs 'let _ = "SELECT id FROM pairing";')"
+expect_green "B.3 UPDATE 档案、子查询读 pairing" "$(sample crates/daemon/src/a.rs 'let _ = "UPDATE device_profile SET x = 1 WHERE node_id IN (SELECT node_id FROM pairing)";')"
+
+# ── B.5 ────────────────────────────────────────────
+echo "== B.5 授权点只读内存副本（#1117）"
+expect_red "B.5 authz.rs 查库取设备" "$(sample crates/daemon/src/authz.rs 'let d = db.get_device(&peer).await;')" "B.5 VIOLATION"
+expect_red "B.5 router.rs 列配对记录（跨行）" "$(sample crates/daemon/src/router.rs 'let all = self.db
+    .list_pairings().await;')" "B.5 VIOLATION"
+expect_red "B.5 blobs_gate.rs 直接查 pairing 表" "$(sample crates/daemon/src/blobs_gate.rs 'let _ = "SELECT role FROM pairing WHERE node_id = ?";')" "B.5 VIOLATION"
+expect_red "B.5 download.rs 列设备" "$(sample crates/daemon/src/download.rs 'let d = db.list_devices().await;')" "B.5 VIOLATION"
+expect_green "B.5 授权点读内存副本" "$(sample crates/daemon/src/router.rs 'let p = self.db.active_pairing(&peer.0);')"
+expect_green "B.5 非授权点查库不管" "$(sample crates/daemon/src/ipc.rs 'let d = db.get_device(&peer).await;')"
+expect_green "B.5 测试模块里查库不管" "$(sample crates/daemon/src/router.rs 'fn x() {}
+#[cfg(test)]
+mod tests {
+    async fn t(db: Db) { db.get_device(&[0; 32]).await.unwrap(); }
+}')"
+
+# ── B.4 ────────────────────────────────────────────
+echo "== B.4 正样例（审计 / 照片来源挂了配对记录，必须报红）"
+expect_red "B.4 审计表加 pairing_id 列" "$(sample crates/storage/migrations/9.sql 'ALTER TABLE audit_operation ADD COLUMN pairing_id TEXT;')" "B.4 VIOLATION"
+expect_red "B.4 asset 表外键到 pairing（跨行）" "$(sample crates/storage/migrations/9.sql 'CREATE TABLE asset_x (
+  hash BLOB PRIMARY KEY,
+  src REFERENCES pairing(id)
+);')" "B.4 VIOLATION"
+expect_red "B.4 audit_repo.rs 用 pairing_id" "$(sample crates/storage/src/audit_repo.rs 'let _ = "INSERT INTO audit_operation (pairing_id) VALUES (?)";')" "B.4 VIOLATION"
+echo "== B.4 反样例（必须不报）"
+expect_green "B.4 传输表挂配对记录" "$(sample crates/storage/migrations/9.sql 'CREATE TABLE backup_watermark (pairing_id TEXT REFERENCES pairing(id) ON DELETE CASCADE);')"
+expect_green "B.4 审计表只挂 NodeId" "$(sample crates/storage/migrations/9.sql 'CREATE TABLE audit_x (actor BLOB);
+CREATE TABLE pairing (id TEXT PRIMARY KEY);')"
+
 echo "== B.3 反样例（必须不报）"
 for pair in \
   "device_token 表:let _ = \"DELETE FROM device_token WHERE id = ?\";" \
   "devices 复数表:let _ = \"DELETE FROM devices WHERE id = ?\";" \
-  "SELECT FROM device:let _ = \"SELECT id FROM device WHERE revoked = 0\";" \
-  "UPDATE 软删:let _ = \"UPDATE device SET revoked = 1 WHERE id = ?\";" \
-  "删别的表、子查询里读 device:let _ = \"DELETE FROM asset WHERE owner IN (SELECT id FROM device)\";" \
+  "SELECT FROM device_profile:let _ = \"SELECT id FROM device_profile WHERE departed_at IS NULL\";" \
+  "UPDATE 档案:let _ = \"UPDATE device_profile SET departed_at = 1 WHERE id = ?\";" \
+  "删别的表、子查询里读档案:let _ = \"DELETE FROM asset WHERE owner IN (SELECT id FROM device_profile)\";" \
   "跨行删别的表:let _ = \"DELETE
     FROM asset WHERE id = ?\";" \
-  "schema 前缀的别的表:let _ = \"DELETE FROM main.device_log\";"; do
+  "schema 前缀的别的表:let _ = \"DELETE FROM main.device_profile_log\";"; do
   expect_green "B.3 ${pair%%:*}" "$(sample crates/core/src/a.rs "${pair#*:}")"
 done
 
 echo "== B.3 反证：还原成逐行 grep，三个绕过样例必须全部漏报"
 legacy_hits() { # <内容> → 逐行 grep 的命中数（改前的规则原文）
-  printf '%s\n' "$1" | grep -ciE 'DELETE[[:space:]]+FROM[[:space:]]+(device|backup_watermark)\b' || true
+  printf '%s\n' "$1" | grep -ciE 'DELETE[[:space:]]+FROM[[:space:]]+(device_profile|audit_[a-z_]+)\b' || true
 }
 for pair in "跨行:$B3_MULTILINE" "引号:$B3_QUOTED" "schema 前缀:$B3_SCHEMA"; do
   n="$(legacy_hits "${pair#*:}")"

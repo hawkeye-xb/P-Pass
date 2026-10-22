@@ -141,9 +141,9 @@ pub struct Hello {
     /// Current Flow authorization generation for this authenticated member.
     /// Omitted for unpaired peers so hello remains a zero-data handshake there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pairing_epoch: Option<String>,
+    pub pairing_id: Option<String>,
     /// #413 §7: Desktop health, carried only on the Desktop's reply to a
-    /// paired member (same zero-data rule as `pairing_epoch`). Omitted
+    /// paired member (same zero-data rule as `pairing_id`). Omitted
     /// entirely otherwise; a phone that sees no `health` treats the Desktop
     /// as healthy (old Desktop builds never send it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -172,7 +172,7 @@ impl Default for Hello {
             proto_ver: super::PROTO_VER,
             capabilities: Vec::new(),
             device_name: String::new(),
-            pairing_epoch: None,
+            pairing_id: None,
             health: None,
         }
     }
@@ -275,7 +275,7 @@ pub struct PairAccepted {
     pub storage_device_name: String,
     /// Fresh owner-approved pairing generation. New Flow delivery rejects
     /// requests whose epoch is not this currently persisted value.
-    pub pairing_epoch: String,
+    pub pairing_id: String,
 }
 
 // ── Timeline ────────────────────────────────────────
@@ -433,7 +433,7 @@ pub struct BlobTicketResponse {
 #[serde(default)]
 pub struct FlowFetchRequest {
     pub queue_sequence: u64,
-    pub pairing_epoch: String,
+    pub pairing_id: String,
     pub lease_token: String,
     /// BLAKE3 content hash as 64 lowercase-or-uppercase hex characters.
     pub content_hash: String,
@@ -466,7 +466,7 @@ pub struct FlowFetchRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
 pub struct FlowSupersedeRequest {
-    pub pairing_epoch: String,
+    pub pairing_id: String,
     /// BLAKE3 hex of the copy the Desktop holds (location-redacted).
     pub old_hash: String,
     /// BLAKE3 hex of the original the phone holds now.
@@ -501,7 +501,7 @@ pub enum SupersedeRefusal {
     IncompleteRanges,
     NotARedaction,
     HashMismatch,
-    EpochMismatch,
+    PairingMismatch,
     BadRequest,
     FetchFailed,
 }
@@ -517,7 +517,7 @@ impl SupersedeRefusal {
         Self::IncompleteRanges,
         Self::NotARedaction,
         Self::HashMismatch,
-        Self::EpochMismatch,
+        Self::PairingMismatch,
         Self::BadRequest,
         Self::FetchFailed,
     ];
@@ -534,7 +534,7 @@ impl SupersedeRefusal {
             Self::IncompleteRanges => "incomplete_ranges",
             Self::NotARedaction => "not_a_redaction",
             Self::HashMismatch => "hash_mismatch",
-            Self::EpochMismatch => "epoch_mismatch",
+            Self::PairingMismatch => "pairing_mismatch",
             Self::BadRequest => "bad_request",
             Self::FetchFailed => "fetch_failed",
         }
@@ -552,7 +552,7 @@ impl SupersedeRefusal {
 pub struct FlowFailedPush {
     pub node_id: String,
     pub queue_sequence: i64,
-    pub pairing_epoch: String,
+    pub pairing_id: String,
     pub lease_token: String,
     pub reason: crate::Reason,
 }
@@ -563,7 +563,7 @@ pub struct FlowFailedPush {
 pub struct FlowCompletionReceipt {
     pub queue_sequence: u64,
     pub receipt_id: String,
-    pub pairing_epoch: String,
+    pub pairing_id: String,
     pub lease_token: String,
     pub content_hash: String,
 }
@@ -579,7 +579,7 @@ pub struct FlowCompletionReceipt {
 #[serde(default)]
 pub struct FlowTupleRef {
     pub queue_sequence: u64,
-    pub pairing_epoch: String,
+    pub pairing_id: String,
     pub lease_token: String,
 }
 
@@ -767,7 +767,7 @@ pub mod methods {
     /// `flow.offer` on the same tuple resumes instead of restarting.
     pub const FLOW_SUSPEND: &str = "flow.suspend";
     /// NET-06: cancel by tuple identity alone (queue_sequence +
-    /// pairing_epoch + lease_token). A phone that already gave up on an
+    /// pairing_id + lease_token). A phone that already gave up on an
     /// item after exhausting its local retry budget has discarded that
     /// item's one-shot provider ticket, so it cannot rebuild a full
     /// `FlowFetchRequest` (which additionally requires `content_hash` and
@@ -863,7 +863,7 @@ mod tests {
             proto_ver: 1,
             capabilities: vec!["thumbnail.v1".into()],
             device_name: "Salamira's Phone".into(),
-            pairing_epoch: None,
+            pairing_id: None,
             health: None,
         }
     );
@@ -911,7 +911,7 @@ mod tests {
     #[test]
     fn flow_fetch_request_size_bytes_defaults_to_unknown_for_old_phones() {
         let old: FlowFetchRequest =
-            serde_json::from_str(r#"{"queue_sequence":7,"pairing_epoch":"e"}"#).unwrap();
+            serde_json::from_str(r#"{"queue_sequence":7,"pairing_id":"e"}"#).unwrap();
         assert_eq!(old.size_bytes, 0);
         let value = serde_json::to_value(FlowFetchRequest {
             size_bytes: 42,
@@ -966,7 +966,7 @@ mod tests {
             state: PairStatusState::Accepted,
             accepted: Some(PairAccepted {
                 storage_device_name: "Home PC".into(),
-                pairing_epoch: "epoch-1".into(),
+                pairing_id: "epoch-1".into(),
             }),
         }
     );
@@ -1049,7 +1049,7 @@ mod tests {
         PairAccepted,
         PairAccepted {
             storage_device_name: "Home PC".into(),
-            pairing_epoch: "epoch-1".into(),
+            pairing_id: "epoch-1".into(),
         }
     );
 
@@ -1169,7 +1169,7 @@ mod tests {
         FlowFetchRequest,
         FlowFetchRequest {
             queue_sequence: 7,
-            pairing_epoch: "epoch-1".into(),
+            pairing_id: "epoch-1".into(),
             lease_token: "lease-7".into(),
             content_hash: "ab".repeat(32),
             file_name: "IMG_0007.jpg".into(),
@@ -1186,7 +1186,7 @@ mod tests {
         FlowCompletionReceipt {
             queue_sequence: 7,
             receipt_id: "receipt-7".into(),
-            pairing_epoch: "epoch-1".into(),
+            pairing_id: "epoch-1".into(),
             lease_token: "lease-7".into(),
             content_hash: "ab".repeat(32),
         }
@@ -1197,7 +1197,7 @@ mod tests {
         FlowTupleRef,
         FlowTupleRef {
             queue_sequence: 7,
-            pairing_epoch: "epoch-1".into(),
+            pairing_id: "epoch-1".into(),
             lease_token: "lease-7".into(),
         }
     );
@@ -1220,7 +1220,7 @@ mod tests {
             receipt: Some(FlowCompletionReceipt {
                 queue_sequence: 7,
                 receipt_id: "receipt-7".into(),
-                pairing_epoch: "epoch-1".into(),
+                pairing_id: "epoch-1".into(),
                 lease_token: "lease-7".into(),
                 content_hash: "ab".repeat(32),
             }),

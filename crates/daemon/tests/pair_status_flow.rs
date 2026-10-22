@@ -246,11 +246,10 @@ async fn owner_clicks_allow_after_20s_and_phone_reaches_accepted_via_status() {
     let accepted = r.accepted.clone().expect("accepted carries PairAccepted");
     assert_eq!(accepted.storage_device_name, "客厅的电脑");
     assert_eq!(
-        d.db.pairing_epoch(&ctp.node_id().0)
-            .await
-            .unwrap()
-            .as_deref(),
-        Some(accepted.pairing_epoch.as_str()),
+        d.db.active_pairing(&ctp.node_id().0)
+            .as_ref()
+            .map(|p| p.id.as_str()),
+        Some(accepted.pairing_id.as_str()),
         "the replayed epoch is the durable one"
     );
 
@@ -313,7 +312,7 @@ async fn resubmitting_the_same_token_reuses_the_request_and_the_queue_stays_one_
 }
 
 /// authz 口径：request_id 只对提交它的 NodeId 可见；别人查 = not_found，
-/// accepted 之后也不泄露 PairAccepted（带 pairing_epoch）。
+/// accepted 之后也不泄露 PairAccepted（带 pairing_id）。
 #[tokio::test(flavor = "multi_thread")]
 async fn status_is_visible_only_to_the_submitting_device() {
     let d = desk(Db::open_in_memory().await.unwrap(), None).await;
@@ -399,12 +398,7 @@ async fn owner_never_clicks_surfaces_as_expired() {
     .await;
     assert_eq!(r.state, proto::PairStatusState::Expired, "{r:?}");
     assert!(d.db.get_device(&ctp.node_id().0).await.unwrap().is_none());
-    assert!(d
-        .db
-        .pairing_epoch(&ctp.node_id().0)
-        .await
-        .unwrap()
-        .is_none());
+    assert!(d.db.active_pairing(&ctp.node_id().0).is_none());
     // #552: nobody decided in time — audited as expired, not as the
     // owner's No (改前这里是 `pair.denied`，桌面显示「被拒绝」)。
     assert_eq!(pair_endings(&d).await, ["pair.expired"]);
@@ -461,10 +455,22 @@ async fn revoked_device_can_poll_its_own_rejoin() {
     )
     .await;
     assert_eq!(r.state, proto::PairStatusState::Accepted);
+    let first_id = r.accepted.clone().expect("accepted payload").pairing_id;
+    let first_seen =
+        d.db.get_device(&ctp.node_id().0)
+            .await
+            .unwrap()
+            .unwrap()
+            .profile
+            .first_seen_at;
 
-    d.db.revoke(&ctp.node_id().0, storage::RevokedBy::Owner, now())
+    // #1117: 撤销 = 配对记录物理删除；档案仍在、标记 departed_by=owner。
+    d.db.remove_pairing(&ctp.node_id().0, None, storage::DepartedBy::Owner, now())
         .await
         .unwrap();
+    let gone = d.db.get_device(&ctp.node_id().0).await.unwrap().unwrap();
+    assert!(gone.pairing.is_none());
+    assert_eq!(gone.profile.departed_by, Some(storage::DepartedBy::Owner));
     let qr2 = d.pairing.start([0x17; 12], now());
     let s2 = submitted(submit(&ctp, &d, &token_of(&qr2), "回来的手机").await);
     assert_eq!(
@@ -482,14 +488,17 @@ async fn revoked_device_can_poll_its_own_rejoin() {
     )
     .await;
     assert_eq!(r2.state, proto::PairStatusState::Accepted);
-    assert!(
-        !d.db
-            .get_device(&ctp.node_id().0)
-            .await
-            .unwrap()
-            .unwrap()
-            .revoked
+    // 回来 = 复用同一份档案（首次出现时间不变、离开标记清掉），配对记录是新 id。
+    let back = d.db.get_device(&ctp.node_id().0).await.unwrap().unwrap();
+    let pairing = back.pairing.expect("paired again");
+    assert_ne!(pairing.id, first_id, "rejoin gets a fresh pairing id");
+    assert_eq!(
+        Some(pairing.id.as_str()),
+        r2.accepted.as_ref().map(|a| a.pairing_id.as_str())
     );
+    assert_eq!(back.profile.first_seen_at, first_seen, "profile is reused");
+    assert_eq!(back.profile.departed_by, None);
+    assert_eq!(back.profile.departed_at, None);
 }
 
 /// 新手机据 hello 能力判断桌面是否认识 pair.status（旧桌面没有这个能力 →
@@ -558,10 +567,7 @@ async fn phone_cancel_then_owner_allow_is_expired_and_writes_no_device() {
         "no device row for a phone that walked away"
     );
     assert!(
-        d.db.pairing_epoch(&ctp.node_id().0)
-            .await
-            .unwrap()
-            .is_none(),
+        d.db.active_pairing(&ctp.node_id().0).is_none(),
         "no pairing epoch either"
     );
     let audit = d.db.list_audit(20).await.unwrap();
@@ -779,16 +785,16 @@ async fn retired_flow_fetch_and_cancel_are_not_routed() {
     let db = Db::open_in_memory().await.unwrap();
     let d = desk(db.clone(), None).await;
     let ctp = phone(&d).await;
-    db.upsert_device(&storage::Device {
-        node_id: ctp.node_id().0.to_vec(),
-        name: "手机".into(),
-        role: storage::Role::Member,
-        paired_at: 1,
-        last_seen: None,
-        revoked: false,
-        revoked_at: None,
-        revoked_by: None,
-    })
+    db.accept_pairing(
+        &ctp.node_id().0,
+        "手机",
+        &storage::Pairing {
+            id: "pid-retired".into(),
+            node_id: ctp.node_id().0.to_vec(),
+            role: storage::Role::Member,
+            paired_at: 1,
+        },
+    )
     .await
     .unwrap();
     for method in ["flow.fetch", "flow.cancel"] {

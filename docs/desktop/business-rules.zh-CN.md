@@ -50,7 +50,9 @@ daemon 是 `config.toml` 与诊断包的唯一写者（壳经子命令调用，�
 |---|---|
 | B.1 | `iroh` 只许在 `crates/transport/` |
 | B.2 | 平台 cfg（`cfg` / `cfg_attr` / `cfg!`，各 OS 轴）只许在 `crates/platform/`；只豁免 `windows_subsystem` 属性 |
-| B.3 | `crates/` 内不得物理删除 `device` / `backup_watermark` 行（跨行、引号、schema 前缀都拦，DEV-02） |
+| B.3 | 设备档案与审计永不删除：`crates/` 内不得 `DELETE FROM device_profile` 或审计表；对 `pairing` 的任何写入（INSERT / REPLACE / UPDATE / DELETE）只许在 `crates/storage/src/device_repo.rs` 的三个写方法里（跨行、引号、schema 前缀都拦，DEV-02、#1117） |
+| B.4 | 审计与照片来源只挂设备 NodeId：建 / 改审计表与 asset 表的 SQL 不得引用 pairing，`audit_repo.rs` / `asset_repo.rs` 不得出现 `pairing_id`（#1117） |
+| B.5 | 授权点（daemon 的 `authz.rs` / `router.rs` / `blobs_gate.rs` / `download.rs`）只读 `Db::active_pairing` 内存副本，不调 `get_device` / `list_devices` / `list_pairings`、不在 SQL 里查 `pairing`（#1117） |
 | G1 | 壳（`apps/desktop/src/**` 的 js/ts/svelte、`src-tauri/src/**`）不判断平台、不读 HOME/USERPROFILE/LANG/LC_*、不拼 plist/LaunchAgents、不匹配 OS 报错原文 |
 | G2 | `crates/**`（除 platform）无托管代码：不调 `HostingAdapter` 方法、不用托管类型、不出现 launchctl/schtasks/kickstart |
 | G3 | `crates/**`（除 platform）不引用 `HostingAdapter` / `platform::hosting` |
@@ -71,7 +73,7 @@ daemon 是 `config.toml` 与诊断包的唯一写者（壳经子命令调用，�
 ### 2.2 提交与审批分离
 
 - `Router::handle_pair`：必须带 `ack_then_poll`，否则在校验令牌之前回 `err.unsupported`（不消耗令牌，#1050）。成功回 `PairSubmitted{request_id, ttl_ms}`；手机轮询 `pair.status`、撤回走 `pair.cancel`（能力位 `pair.status.v1` / `pair.cancel.v1`）。
-- `pair.status` 状态：`pending` / `accepted`（带 `pairing_epoch`）/ `denied` / `expired` / `not_found`。ledger 只在内存：daemon 重启后为 `not_found`。只能查自己的 `request_id`。
+- `pair.status` 状态：`pending` / `accepted`（带 `pairing_id`）/ `denied` / `expired` / `not_found`。ledger 只在内存：daemon 重启后为 `not_found`。只能查自己的 `request_id`。
 - 待审批 TTL = `PENDING_TTL_MS`（等于令牌 TTL），同时用于等待、桌面队列清扫、手机轮询截止。
 - 业主决定先于手机撤回（`await_owner` 的 `biased` select）。
 - 桌面审批：`pairing.confirm` 按 `node_id` > `device_name` > 队首查找；横幅与弹窗显式传 `node_id`（#1044）。查不到或已过期回 NOT_FOUND，不伪造成功。
@@ -79,21 +81,25 @@ daemon 是 `config.toml` 与诊断包的唯一写者（壳经子命令调用，�
 
 ### 2.3 审批落库
 
-- `Pairing::apply_verdict` → `storage::Db::accept_pairing`：upsert 设备行 + unrevoke + 写新 `pairing_epoch`（16 字节随机 hex）**在一个事务里**（#1055）；任一步失败整体回滚，结果为 denied。
-- 已有设备行沿用库里的名字（业主改过的名优先，DEV-04）；新设备用 `safe_name(自报名)`，截断到 `MAX_DEVICE_NAME_CHARS` 个字符。
+- `Pairing::apply_verdict` → `storage::Db::accept_pairing`：建档（已有档案则保留原名、清掉 `departed_*`）+ 删掉它此前的配对记录（若有，连同挂在上面的状态）+ 插入新配对记录（id 为 16 字节随机 hex，即线上 `pairing_id`）**在一个事务里**（#1055、#1117）；任一步失败整体回滚，结果为 denied。
+- 已有档案沿用库里的名字（业主改过的名优先，DEV-04）；新设备用 `safe_name(自报名)`，截断到 `MAX_DEVICE_NAME_CHARS` 个字符。
 - 审计写入失败不让配对 / 撤销失败，只打 warn（`warn_if_audit_failed`，#1055）。
-- 测试：`device_repo::{accept_pairing_commits_row_unrevoke_and_epoch_together, accept_pairing_rolls_back_everything_when_the_last_step_fails}`。
+- 测试：`device_repo::{accept_creates_profile_and_pairing, repairing_reuses_the_profile_with_a_fresh_pairing, accepting_while_paired_replaces_the_old_pairing}`。
 
-### 2.4 设备行不物理删除（DEV-02）
+### 2.4 设备档案与审计永不删除，配对记录可以物理删除（DEV-02，#1117）
 
-- 只软删：`revoked=1, revoked_at, revoked_by`。恢复信任只有配对能做（`accept_pairing` / `Db::unrevoke`）。门禁 B.3。
+- 对齐 HomeKit / 蓝牙 / Matter 的 pairing list：长期公钥（NodeId）即身份，配对记录只存「对方公钥 + 权限」，解除配对 = 删除这一条，设备历史另存。
+- 设备档案 `device_profile`（NodeId、名字、首次出现、最后在线、最近一次离开的时间与原因）永不删除；审计（actor）与照片来源（`asset.src_device`）只挂 NodeId。门禁 B.3、B.4。
+- 配对记录 `pairing`（id、NodeId、角色、配对时间）在断开、撤销、换身份时物理删除，只许经 `storage::Db::{remove_pairing, remove_all_pairings}` 删除。挂在它上面的备份水位 `backup_watermark` 与交付记录 `flow_delivery`（含回执）外键 `ON DELETE CASCADE`，随它一起删；级联依赖每个连接都打开 `foreign_keys`（`Db::open` 的连接选项，测试 `cascade_holds_on_a_freshly_opened_connection`）。
+- 授权只看有效配对记录，读内存副本 `Db::active_pairing`（所有 `Db` 克隆共享一份，只有上述写方法在事务提交后更新它），不查库。
+- 重新配对复用原档案、清掉 `departed_*`，配对记录新建一行、拿新 id；旧 id 上的状态不继承。
 
-### 2.5 撤销：业主移除与手机自己断开
+### 2.5 删除配对记录：唯一入口
 
-- `RevokedBy::{Owner, Device}`；历史行 `revoked_by = NULL` 按业主移除处理（`Db::backfill_revocation_provenance` 回填）。
-- 业主移除（IPC `device.revoke`）：先落库撤销，再 `FlowDelivery::revoke_peer`（先取消该设备全部 active grant，再中断在途拉取），再写审计、关订阅。
-- 手机自己断开（`device.unpair`，`Router::handle_unpair`）：带 `pairing_epoch` 时只撤销该 epoch（不匹配不改、仍回 ok，#565）；不带时无条件撤销。
-- 撤销后：`authz::check` 只放行 `pair.request` / `pair.status` / `pair.cancel`，hello 也拒；`record_presence` 不刷新 `last_seen`；入库前复检设备状态（`flow_revoke::revoked_device_is_rechecked_before_ingest_even_without_the_sweep`）。
+- 唯一入口 `daemon::unpair::remove_pairing`：先删库里的配对记录（级联 + 更新内存副本，从这一刻起该设备的请求在 authz 处被拒），再清它的内存态：`FlowDelivery::release_peer`（中断在途拉取并等其退出、清路径登记与拉取锁）、`BackupEngine::end_session`、关订阅。关闭网络连接见 #1119。
+- 离开原因记在档案 `departed_by`：`owner`（业主移除，IPC `device.revoke`）/ `device`（手机自己断开，`device.unpair`）/ `identity`（电脑换身份，#1109 启动时 `Db::remove_all_pairings`，此时组件尚未启动、没有内存态要清）。
+- 手机自己断开：带 `pairing_id` 时只删 id 一致的那条（不一致不改、仍回 ok，#565）；不带时删它当前的配对记录。
+- 删除后：`authz::check` 只放行 `hello` / `pair.request` / `pair.status` / `pair.cancel`（与从未配对相同，拒绝原因统一为 `not_paired`）；`record_presence` 不刷新 `last_seen`；入库前复检配对记录（`flow_revoke::revoked_device_is_rechecked_before_ingest_even_without_the_sweep`）。
 
 ### 2.6 角色
 
@@ -104,11 +110,11 @@ daemon 是 `config.toml` 与诊断包的唯一写者（壳经子命令调用，�
 
 - `daemon::presence::presence`（纯函数，只做展示）：有实时连接 → online；否则 `age = now - last_seen`：`≤ ONLINE_HEARTBEAT_MS` online，`≤ OFFLINE_SENTINEL_MS` recent，更大或从未见过 offline。`last_seen` 只由 hello 刷新，hello 不写审计。
 - `daemon::device_projection`（#1044，B4）给 `devices.list` 每行：
-  - `removal`：`none` / `disconnected`（手机自己断开，留在主列表）/ `removed`（业主移除，含 NULL 历史行，不进主列表）。
-  - `needs_attention`：未撤销且最近一次备份距今 `> BACKUP_ATTENTION_MS`；从未备份不算。与 `OFFLINE_SENTINEL_MS` 同值不同义，不互相替代。
+  - `removal`：`none`（有配对记录）/ `disconnected`（手机自己断开，或电脑换了身份需要重新扫码，留在主列表）/ `removed`（业主移除，不进主列表）。
+  - `needs_attention`：有配对记录且最近一次备份距今 `> BACKUP_ATTENTION_MS`；从未备份不算。与 `OFFLINE_SENTINEL_MS` 同值不同义，不互相替代。
   - `row_state` 优先级：`removed` > `disconnected` > `needs_attention` > `transferring`（`flow_connection` 有值）> presence（`online`/`recent`/`offline`）。
   - `last_activity_at`：`last_seen` 与 `last_backup_at` 取较大者。
-- `devices.list` 默认是家庭视图（`Db::list_devices_for_family_view`：未撤销或自己断开）；`include_revoked=true` 给全量（诊断用）。
+- `devices.list` 一行 = 档案 + 当前配对记录，字段 `paired` / `departed_by` / `departed_at`；默认只给主列表的行（`Removal::is_listed`），`include_departed=true` 连业主移除的也给。
 - 测试：`device_projection::row_state_priority`、`ipc_flow::device_rows_carry_daemon_conclusions_and_status_counts_match_the_list`。
 
 ## 3 Flow 收件（手机 → 桌面）
@@ -117,17 +123,17 @@ daemon 是 `config.toml` 与诊断包的唯一写者（壳经子命令调用，�
 
 ### 3.1 offer
 
-- 入口 `Router::handle_flow_delivery` → `FlowDelivery::offer`。校验（`checked_request`，失败不建 grant）：字段非空、`content_hash` 为 64 hex、`pairing_epoch` 等于该设备当前持久化 epoch（否则 `GuardMismatch` → `err.not_authorized`）；provider ticket 的 hash 必须等于 `content_hash`。
+- 入口 `Router::handle_flow_delivery` → `FlowDelivery::offer`。校验（`checked_request`，失败不建 grant）：字段非空、`content_hash` 为 64 hex、`pairing_id` 等于该设备当前配对记录的 id（否则 `GuardMismatch` → `err.not_authorized`）；provider ticket 的 hash 必须等于 `content_hash`。
 - 判重（`core_index::Ingestor::has_durable_copy`）：索引有这份内容（含 supersede 别名）**且文件在盘上** → `complete_without_fetch`，立即回 `completed` + receipt，不拉取、不预检（R-02、R-03）。
 - 空间预检（`FlowDelivery::admit`，在建 grant 之前）：需要 `(size − 已有残片) + size + SPACE_RESERVE_BYTES`，不够回 `storage_full`、不留 grant（H-03）。`size_bytes ≤ 0` 或剩余空间探测不到时放行；库目录不可用回 `library_unavailable`。
 - 否则 `upsert_flow_grant_at` 建 / 续 grant，`spawn_fetch_task` 后台拉取，立即回 `state:"active", task_running:true`（NET-06）。
 - 同一 tuple 已 `completed`：`Db::rebind_completed_flow_grant` 只改 lease 与 provider，回 `completed` + receipt，不重拉。
 
-### 3.2 grant 状态机（表 `flow_delivery`）
+### 3.2 grant 状态机（表 `flow_delivery`，挂在配对记录上，随它级联删除）
 
 - `Active` → `Completed`（`complete_flow_grant`，写 receipt；completed 不可变）/ `Cancelled`（`cancel_flow_grant`）。cancelled 的行可被新 offer 重新置为 active。
 - `flow.suspend`（`FlowDelivery::suspend`）：只中断后台任务，grant 保持 active，残片仍受 GC 保护；已终态时幂等（C-01、C-05）。
-- `flow.cancel_tuple`（`FlowDelivery::cancel_by_tuple`）：只凭 `queue_sequence + pairing_epoch + lease_token` 取消，残片失去保护；grant 已终态时回 ok 不改状态（#1027）；tuple 不存在或 lease 已被取代回 `GuardMismatch`。
+- `flow.cancel_tuple`（`FlowDelivery::cancel_by_tuple`）：只凭 `queue_sequence + pairing_id + lease_token` 取消，残片失去保护；grant 已终态时回 ok 不改状态（#1027）；tuple 不存在或 lease 已被取代回 `GuardMismatch`。
 - `flow.status`：只读；grant 为 active 而进程内没有任务时（daemon 重启后），由这次轮询重新拉起任务（`status_respawns_the_delivery_task_lost_to_a_daemon_restart`）。
 - 拉取路径：fetch → 导出到 `.ppf/flow-staging/{node_hex}-{queue_sequence}-{hash_hex}` → `Ingestor::ingest_flow` → `complete_flow_grant` → 推 `flow.delivered`（E-01）。
 
@@ -260,9 +266,9 @@ daemon 是 `config.toml` 与诊断包的唯一写者（壳经子命令调用，�
 |---|---|
 | `paired_devices` | 设备页主列表行数（含自己断开的），即「已配对 N 台」（B4） |
 | `removed_devices` | 业主移除的行数（「已移除」区） |
-| `devices` / `revoked` | 全部行数 / 已撤销行数（诊断口径） |
+| `devices` / `unpaired` | 设备档案数 / 其中没有配对记录的数目（诊断口径） |
 | `pending_pairs` | 待审批数（不含已撤回） |
-| `transfer_active` | 任一未撤销设备 `flow_connection` 有值（与设备行「传输中」同一信号） |
+| `transfer_active` | 任一有配对记录的设备 `flow_connection` 有值（与设备行「传输中」同一信号） |
 | `shell_relation` | 壳传 `shell_version` 时：`same` / `shell_older` / `shell_newer`；没传为 null（§6.5） |
 | `low_space_notice` | `{free_bytes}` 或 null（§7.3） |
 | `disk_free_bytes` / `disk_total_bytes` | 库所在卷容量，拿不到为 null |
@@ -306,8 +312,8 @@ daemon 是 `config.toml` 与诊断包的唯一写者（壳经子命令调用，�
 
 ### 7.1 `hello.health`
 
-- 只回给已配对未撤销成员（未配对者零数据握手）：`DesktopHealth{free_bytes, library_writable, index_ok}`（`FlowDelivery::health`）。`free_bytes = null` 表示平台答不出，不是 0；可写探针不建目录。缺字段的旧桌面按健康处理（H-02）。
-- 手机据此决定是否开始（H-01）。手机用 hello 的 `pairing_epoch` 判断自己是否仍是成员（Android #1051、iOS #1052），不再借 `backup.begin`。
+- 只回给有配对记录的成员（未配对者零数据握手）：`DesktopHealth{free_bytes, library_writable, index_ok}`（`FlowDelivery::health`）。`free_bytes = null` 表示平台答不出，不是 0；可写探针不建目录。缺字段的旧桌面按健康处理（H-02）。
+- 手机据此决定是否开始（H-01）。手机用 hello 的 `pairing_id` 判断自己是否仍是成员（Android #1051、iOS #1052），不再借 `backup.begin`。
 
 ### 7.2 offer 准入保留量
 
@@ -446,7 +452,7 @@ Windows 真机验证清单：#1056。
 | macOS 旧 plist 内容按需重写（Refreshed） | `HostingAdapter::reconcile_autostart` | 另定 |
 | 老 daemon 无 `events.subscribe` 时壳退回 30 s status 探针 | 壳 `start_event_stream` | 另定 |
 | 旧二维码 `&a=` 解析 | `transport::pair_link::parse_pair_link` | 另定 |
-| `device.unpair` 不带 epoch 时无条件撤销 | `Router::handle_unpair` | 随最低手机版本 |
+| `device.unpair` 不带 `pairing_id` 时删当前配对记录 | `Router::handle_unpair` | 随最低手机版本 |
 | `PairRequest.ack_then_poll` 字段与 viewer 角色 | `proto::PairRequest` / `storage::Role` | 另定 |
 | 旧批量管线 `backup.begin` / `manifest` / `commit`、`ingest_staged`、`note_delivered`、会话与 `.ppf/staging` | `daemon::backup::BackupEngine`、`Router` | #990（`backup.presence` 保留并迁出） |
 
@@ -496,8 +502,8 @@ Windows 真机验证清单：#1056。
 | `daemon::diag_bundle::DAEMON_LOG_TAIL` | daemon | 1048576 | B | 诊断包 daemon.log 尾部 1 MiB（§9.3） |
 | `daemon::diag_bundle::SMALL_LOG_TAIL` | daemon | 262144 | B | 诊断包其余日志尾部 256 KiB（§9.3） |
 | `daemon::diag_bundle::IPC_TIMEOUT` | daemon | 10000 | ms | 诊断包经 IPC 取数超时（§9.3） |
-| `proto::PROTO_VER` | daemon | 2 | 个 | 协议版本（§11.1） |
-| `proto::MIN_SUPPORTED_VER` | daemon | 2 | 个 | 最低协议版本（§11.1） |
+| `proto::PROTO_VER` | daemon | 3 | 个 | 协议版本（§11.1；3 = #1117 pairing_id） |
+| `proto::MIN_SUPPORTED_VER` | daemon | 3 | 个 | 最低协议版本（§11.1） |
 | `desktop::RESTART_GRACE` | desktop-shell | 90000 | ms | 重启 / 启动对账等应答宽限（§8.3、§8.4） |
 | `desktop::KERNEL_CONVERGE_POLL` | desktop-shell | 10000 | ms | 内核对账推迟后的复查间隔（§8.4） |
 | `desktop::ipc::IPC_READ_TIMEOUT` | desktop-shell | 10000 | ms | 壳 → daemon 每次 IPC 读超时（NET-11） |

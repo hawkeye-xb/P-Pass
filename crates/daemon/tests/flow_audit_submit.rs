@@ -17,7 +17,7 @@
 use daemon::Router;
 use proto::msgs::methods;
 use proto::{codes, FlowAuditAccepted, FlowAuditEvent, FlowAuditSubmit, Req, Resp};
-use storage::{Db, Device, Role};
+use storage::{Db, Pairing, Role};
 use transport::{IrohTransport, Transport, TransportConfig};
 
 async fn endpoint() -> IrohTransport {
@@ -63,16 +63,16 @@ async fn paired_client(db: &Db) -> (IrohTransport, IrohTransport, transport::Pee
     let daddr = daemon_tp.local_addr();
     let ctp = endpoint().await;
     ctp.add_peer(daddr.clone());
-    db.upsert_device(&Device {
-        node_id: ctp.node_id().0.to_vec(),
-        name: "手机".into(),
-        role: Role::Member,
-        paired_at: 1,
-        last_seen: None,
-        revoked: false,
-        revoked_at: None,
-        revoked_by: None,
-    })
+    db.accept_pairing(
+        &ctp.node_id().0,
+        "手机",
+        &Pairing {
+            id: "pairing-audit-1".into(),
+            node_id: ctp.node_id().0.to_vec(),
+            role: Role::Member,
+            paired_at: 1,
+        },
+    )
     .await
     .unwrap();
     (daemon_tp, ctp, daddr)

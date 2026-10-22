@@ -17,13 +17,13 @@ use transport::NodeId;
 /// How long [`await_receipt`] waits for a terminal state before giving up.
 const AWAIT_DEADLINE: Duration = Duration::from_secs(60);
 
-/// The tuple identity (`queue_sequence` + `pairing_epoch` + `lease_token`)
+/// The tuple identity (`queue_sequence` + `pairing_id` + `lease_token`)
 /// of an offer — what `flow.status` / `flow.suspend` / `flow.cancel_tuple`
 /// address.
 pub fn tuple_of(request: &FlowFetchRequest) -> FlowTupleRef {
     FlowTupleRef {
         queue_sequence: request.queue_sequence,
-        pairing_epoch: request.pairing_epoch.clone(),
+        pairing_id: request.pairing_id.clone(),
         lease_token: request.lease_token.clone(),
     }
 }
@@ -98,7 +98,7 @@ pub async fn wait_mid_flight(
         let done = db
             .flow_receipt(
                 peer.0.as_slice(),
-                &request.pairing_epoch,
+                &request.pairing_id,
                 request.queue_sequence as i64,
             )
             .await
@@ -236,7 +236,7 @@ impl PairingExt for Pairing {
         loop {
             match self.status(peer, &submission.request_id, now_ms) {
                 Some(PairState::Pending) => {}
-                Some(PairState::Accepted { pairing_epoch }) => return Ok(pairing_epoch),
+                Some(PairState::Accepted { pairing_id }) => return Ok(pairing_id),
                 _ => return Err(PairRejection::OwnerDeclined),
             }
             tokio::time::sleep(Duration::from_millis(10)).await;

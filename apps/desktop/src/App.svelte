@@ -344,11 +344,10 @@
         showConfirmModal = false;
       }
       // DEV-03: 这一屏要同时渲染「在用/已断开」和折叠的「已移除」，所以要
-      // 全量。此前不传参 ⇒ daemon 默认 `WHERE revoked = 0` ⇒ 下面那个
-      // 「已移除设备 N 台」折叠区**永远是空的、渲染不出来**（同一个默认
-      // 过滤，也让手机一断开设备就从列表里凭空消失——本卡要修的主症状）。
+      // 全量。不传参 ⇒ daemon 只给主列表的行 ⇒ 下面那个「已移除设备 N 台」
+      // 折叠区**永远是空的、渲染不出来**。
       try {
-        const d = await call("devices.list", { include_revoked: true });
+        const d = await call("devices.list", { include_departed: true });
         devices = d.devices ?? [];
         devicesError = "";
       } catch (e) {
@@ -442,7 +441,7 @@
     switch (d.row_state) {
       case "disconnected":
         // DEV-03: 不借用「离线」话术，也不参与「几天没备份」告警。
-        return disconnectedRow(humanTime(d.revoked_at, now));
+        return disconnectedRow(humanTime(d.departed_at, now), d.departed_by);
       case "needs_attention":
         return {
           alert: true,
@@ -1721,8 +1720,8 @@
                    不是业主的决定，那台设备必须留在主列表里标「已断开」——
                    业主有权知道它什么时候断的、到底是哪一台（可能被改过名）。
                    业主自己点「移除设备」才收进下面的折叠区。
-                   判据是 daemon 给的 revoked_by，不是 revoked 这个布尔位。
-                   来源未知的历史行（DEV-03 之前留下的）按「已移除」处理。 -->
+                   判据是 daemon 给的 removal（由档案上的 departed_by 推出）；
+                   电脑换了身份的也留在主列表、提示重新扫码（#1117）。 -->
               {@const activeDevices = devices
                 .filter((d) => d.removal !== "removed")
                 .sort(byActivity)}
@@ -2119,7 +2118,7 @@
       <!-- UX-08: 多台同时扫码 → 一屏全列，逐行允许/拒绝，处理完该行
            消失，全清后列表关闭——不挤牙膏式顺序弹窗。 -->
       <!-- DEV-04: 老设备重连 ≠ 陌生设备加入。判据是 node_id（daemon 查
-           device 表，不看 revoked），所以改过名的设备照样认得出来，
+           设备档案，档案永不删除），所以改过名的设备照样认得出来，
            且用桌面上那个名字称呼它。措辞逻辑在 lib/pending.js，有测试。 -->
       {@const dialogText = pendingDialogText(pendingList)}
       <h3>{dialogText.title}</h3>
