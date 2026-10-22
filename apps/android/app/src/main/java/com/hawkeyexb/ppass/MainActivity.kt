@@ -118,6 +118,7 @@ import com.hawkeyexb.ppass.ui.PairStatusScreen
 import com.hawkeyexb.ppass.ui.BucketScreen
 import com.hawkeyexb.ppass.ui.selectedExistingCount
 import com.hawkeyexb.ppass.ui.PPColor
+import com.hawkeyexb.ppass.ui.PPTheme
 import com.hawkeyexb.ppass.ui.PPSize
 import com.hawkeyexb.ppass.ui.ScanScreen
 import com.hawkeyexb.ppass.ui.WelcomeScreen
@@ -177,7 +178,8 @@ class MainActivity : ComponentActivity() {
         // MOB-01: 统一 edge-to-edge——API 35+ 默认强制，低版本主动
         // 开启后行为一致；各屏内容安全区由 PPScreen 一处处理。
         enableEdgeToEdge()
-        setContent { PPassApp() }
+        // 根部主题：M3 组件的默认色全部从 PPColor 取，不落到 M3 基线紫（见 ui/Theme.kt）。
+        setContent { PPTheme { PPassApp() } }
     }
 }
 
