@@ -29,6 +29,8 @@ use std::path::PathBuf;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod data_migration;
 
+// #1121：代码签名要求（安装更新前校验团队；#1115 的 IPC 对端校验共用要求串）。
+mod code_signature;
 // #1109：身份私钥存取端口（不在 cfg 里，daemon 的判定与单测三平台都跑）。
 mod identity_key;
 // #1109：macOS 的身份私钥存放处——data protection 钥匙串。
@@ -47,6 +49,11 @@ mod windows;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 
+#[cfg(target_os = "macos")]
+pub use code_signature::verify_app_bundle;
+pub use code_signature::{
+    code_requirement, verify_update_package, UpdatePackageCheck, DESKTOP_APP_ID, DEVELOPER_TEAM_ID,
+};
 pub use data_migration::DataDirMigration;
 pub use identity_key::{IdentityKeyHome, IdentityKeyStore};
 pub use signal::{stop_signal, StopRequest};

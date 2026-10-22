@@ -24,6 +24,7 @@
   import { revealItemInDir, openUrl } from "@tauri-apps/plugin-opener";
   import { openLibraryDir } from "./lib/openLibrary.js";
   import { runUpdate } from "./lib/updateFlow.js";
+  import { verifiedUpdate } from "./lib/updateCommands.js";
   import {
     RELEASES_URL,
     updateFailureBodyKey,
@@ -1094,7 +1095,8 @@
     // 暂停放在下载之后：下载期间备份不被打断；暂停由壳侧完成（不写用户停止标记）。
     try {
       await runUpdate({
-        update,
+        // #1121：下载与安装走壳的命令（安装前校验发布者），不直接调插件。
+        update: verifiedUpdate(update),
         pauseDaemon: () => invoke("pause_daemon_for_update"),
         // 失败恢复必须走 resume_after_failed_update：先关「为更新暂停」窗口再自愈。
         selfHeal: () => invoke("resume_after_failed_update"),

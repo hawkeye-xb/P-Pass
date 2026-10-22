@@ -26,6 +26,8 @@ libc = "0.2"
 # 要 OSX_10_15）。已在依赖树里（iroh 的 TLS 链），这里提为直接依赖。
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = { version = "3.7", features = ["OSX_10_15"] }
+# #1121：代码签名静态校验要 CFURL（security-framework 的 code_signing 接口收它）。已在依赖树里。
+core-foundation = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 # HKCU Run key: the shell's login item (DESK-72) and cleanup of the legacy

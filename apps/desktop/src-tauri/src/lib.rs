@@ -15,6 +15,7 @@ mod daemon_cli;
 mod distribution;
 mod ipc;
 mod service_state;
+mod update_install;
 
 // QA-09 迁移（#211）：桌面壳现在有 9 个地方要调 platform 的能力，
 // 每个函数各写一遍 `use ... as _` 已经不划算；提到文件级。
@@ -31,9 +32,8 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::Emitter;
 use tauri::Manager;
 
-// UPD-01: updater plugin（pubkey/endpoints 在 tauri.conf.json；
-// build 期 updater artifact 签名需 TAURI_SIGNING_PRIVATE_KEY——CI 由
-// UPDATE_SIGNING_KEY 提供，本地无 key 路径跳过 .sig 生成）。
+// UPD-01: updater plugin（pubkey/endpoints 在 tauri.conf.json）。#1121：构建期不生成
+// updater 产物（createUpdaterArtifacts 关），签名只在发布流水线的独立签名步骤做。
 // 注意：tauri-plugin-updater 2.10 的 build() 返回带 Config 的 TauriPlugin，
 // 需内联注册（独立函数标注单参数类型会类型不匹配）。
 
@@ -1577,13 +1577,16 @@ pub fn run() {
             library_dir,
             allow_media_scope,
             notify_system,
-            set_tray_locale
+            set_tray_locale,
+            update_install::update_download,
+            update_install::update_install
         ])
         .setup(|app| {
             // DESK-63 (#946): register the state owner BEFORE the event
             // stream starts. The stream's handshake and the stop/start
             // commands all write through this one object.
             let _ = app.manage(UpdatePause::default());
+            let _ = app.manage(update_install::PendingUpdate::default());
             let _ = app.manage(ServiceStateManager::new(
                 initial_service_state(),
                 service_state::desktop_log_path(&platform::adapter().data_dir()),
@@ -1809,6 +1812,21 @@ mod tests {
 
         let cap = include_str!("../capabilities/default.json");
         assert!(!cap.contains("\"remote\""), "不许任何远程域访问 IPC");
+        // #1121：网页对 updater 插件只剩查询；下载与安装走 update_download / update_install
+        // （安装前校验发布者）。反证：加回 `updater:default` 或 `updater:allow-install`，红。
+        let caps: serde_json::Value = serde_json::from_str(cap).expect("json");
+        let updater: Vec<&str> = caps["permissions"]
+            .as_array()
+            .expect("permissions")
+            .iter()
+            .filter_map(|p| p.as_str())
+            .filter(|p| p.starts_with("updater:"))
+            .collect();
+        assert_eq!(
+            updater,
+            ["updater:allow-check"],
+            "网页能碰的 updater 权限只许 allow-check"
+        );
 
         let html = include_str!("../../index.html");
         assert!(!html.contains("<script>"), "index.html 不许有内联脚本");

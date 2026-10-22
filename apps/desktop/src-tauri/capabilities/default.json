@@ -20,7 +20,7 @@
         }
       ]
     },
-    "updater:default",
+    "updater:allow-check",
     "allow-daemon-status",
     "allow-daemon-low-space-ack",
     "allow-daemon-pairing-start",
@@ -61,6 +61,8 @@
     "allow-library-dir",
     "allow-allow-media-scope",
     "allow-notify-system",
-    "allow-set-tray-locale"
+    "allow-set-tray-locale",
+    "allow-update-download",
+    "allow-update-install"
   ]
 }

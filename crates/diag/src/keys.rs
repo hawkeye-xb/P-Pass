@@ -397,6 +397,10 @@ msg_keys! {
     UI_ERR_SIDECAR_WAIT => "ui.err_sidecar_wait",
     UI_ERR_SIDECAR_READ => "ui.err_sidecar_read",
     UI_ERR_SIDECAR_MISSING => "ui.err_sidecar_missing",
+    UI_ERR_UPDATE_NONE => "ui.err_update_none",
+    UI_ERR_UPDATE_VERSION_CHANGED => "ui.err_update_version_changed",
+    UI_ERR_UPDATE_PUBLISHER_REJECTED => "ui.err_update_publisher_rejected",
+    UI_ERR_UPDATE_NOT_DOWNLOADED => "ui.err_update_not_downloaded",
     UI_ERR_REGISTER_AND_SPAWN => "ui.err_register_and_spawn",
     UI_ERR_STOP_MARK_WRITE => "ui.err_stop_mark_write",
     UI_ERR_STOP_MARK_CLEAR => "ui.err_stop_mark_clear",
@@ -750,10 +754,14 @@ mod tests {
             UI_ERR_DESKTOP_OUTDATED,
             UI_DEVICE_NEEDS_UPDATE_PHONE,
             UI_DEVICE_NEEDS_UPDATE_DESKTOP,
+            UI_ERR_UPDATE_NONE,
+            UI_ERR_UPDATE_VERSION_CHANGED,
+            UI_ERR_UPDATE_PUBLISHER_REJECTED,
+            UI_ERR_UPDATE_NOT_DOWNLOADED,
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 319);
+        assert_eq!(ALL.len(), 323);
     }
 
     #[test]

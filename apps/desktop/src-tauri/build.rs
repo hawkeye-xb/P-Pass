@@ -46,6 +46,8 @@ const APP_COMMANDS: &[&str] = &[
     "allow_media_scope",
     "notify_system",
     "set_tray_locale",
+    "update_download",
+    "update_install",
 ];
 
 fn main() {
