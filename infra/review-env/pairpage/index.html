@@ -31,8 +31,10 @@
   .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:14px; }
   .pairline { font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; word-break:break-all; color:var(--muted);
               background:rgba(127,127,127,.09); padding:10px; border-radius:8px; margin-top:12px; }
-  .pending-item { display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid var(--line); }
+  .pending-item { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; padding:12px 0; border-bottom:1px solid var(--line); }
   .pending-item:last-child { border-bottom:0; }
+  input.code { font:600 18px/1 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.25em; width:9em; text-align:center;
+               padding:11px 10px; border-radius:10px; border:1px solid var(--line); background:transparent; color:var(--fg); }
   .dev { font-weight:600; }
   .meta { font-size:12px; color:var(--muted); }
   .empty { color:var(--muted); font-size:14px; }
@@ -83,7 +85,7 @@
   <strong data-i18n="howTitle">怎么用</strong>
   <ol class="steps">
     <li data-i18n="how1">手机打开 P-Pass → 添加存储设备 → 扫码（或点「手动输入」粘贴上面的配对串）</li>
-    <li data-i18n="how2">回到这个页面，点待确认列表里的「允许」</li>
+    <li data-i18n="how2">手机上会显示 6 位验证码；回到这个页面，在待确认列表里输入它，再点「允许」</li>
     <li data-i18n="how3">手机开始备份；备份完成后可在手机上浏览这台机器上的照片</li>
   </ol>
 </div>
@@ -103,13 +105,14 @@ const I18N = {
     qrAlt: "配对二维码",
     pendingTitle: "待确认的设备", noPending: "还没有请求。请先在手机上扫码。",
     count: n => `${n} 个`, known: "已配对过", newDev: "新设备", unnamed: "(未命名设备)",
-    allow: "允许", deny: "拒绝",
+    allow: "允许", deny: "拒绝", codePlaceholder: "6 位验证码",
+    codeWrong: "验证码不对，这次申请已作废。请让手机重新扫码",
     okCopy: "配对串已复制", failCopy: "复制失败，长按上面的串手动复制",
     failGen: m => `生成失败：${m}`, failRead: m => `读取失败：${m}`, failOp: m => `操作失败：${m}`,
     allowed: n => `已允许「${n}」`, denied: n => `已拒绝「${n}」`, noEffect: "这次点击没有生效（请求可能已失效）",
     howTitle: "怎么用",
     how1: "手机打开 P-Pass → 添加存储设备 → 扫码（或点「手动输入」粘贴上面的配对串）",
-    how2: "回到这个页面，点待确认列表里的「允许」",
+    how2: "手机上会显示 6 位验证码；回到这个页面，在待确认列表里输入它，再点「允许」",
     how3: "手机开始备份；备份完成后可在手机上浏览这台机器上的照片",
     langBtn: "EN", html: "zh-CN",
   },
@@ -126,13 +129,14 @@ const I18N = {
     qrAlt: "Pairing QR code",
     pendingTitle: "Devices awaiting approval", noPending: "No requests yet. Scan the QR code with the app first.",
     count: n => `${n}`, known: "Previously paired", newDev: "New device", unnamed: "(unnamed device)",
-    allow: "Allow", deny: "Deny",
+    allow: "Allow", deny: "Deny", codePlaceholder: "6-digit code",
+    codeWrong: "Wrong code — this request has been voided. Scan the QR code again on the phone",
     okCopy: "Pairing string copied", failCopy: "Copy failed — long-press the string above to copy manually",
     failGen: m => `Failed to generate: ${m}`, failRead: m => `Failed to load: ${m}`, failOp: m => `Action failed: ${m}`,
     allowed: n => `Approved “${n}”`, denied: n => `Denied “${n}”`, noEffect: "That tap had no effect — the request may have expired",
     howTitle: "How to use",
     how1: "Open P-Pass on the phone → add a storage device → scan the QR code (or tap “Manual input” and paste the pairing string)",
-    how2: "Come back to this page and tap “Allow” next to the pending device",
+    how2: "The phone shows a 6-digit code. Come back to this page, enter it next to the pending device, then tap “Allow”",
     how3: "The phone starts backing up; once done, the photos on this machine are browsable in the app",
     langBtn: "中文", html: "en",
   },
@@ -159,6 +163,8 @@ const TTL = 600; // 秒，daemon 侧 10 分钟
 let qrString = "";
 let deadline = 0;
 let confirming = false;
+let pendingSig = null;   // 列表没变就不重画：重画会把正在输入的验证码清掉
+const codeDraft = {};    // node_id → 已输入的验证码（语言切换重画时保留）
 
 const fmt = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 function say(msg, cls) { const el = document.getElementById("status"); el.textContent = msg || ""; el.className = "status " + (cls || ""); }
@@ -199,6 +205,9 @@ async function poll() {
     if (!j.ok) { box.className = "empty"; box.textContent = t("failRead")(JSON.stringify(j.error).slice(0, 160)); return; }
     const list = (j.pending || []).filter(p => !p.expired);
     document.getElementById("pendingmeta").textContent = list.length ? t("count")(list.length) : "";
+    const sig = list.map(p => p.node_id).join(",");
+    if (sig === pendingSig && list.length) return;
+    pendingSig = sig;
     if (!list.length) { box.className = "empty"; box.textContent = t("noPending"); return; }
     box.className = "";
     box.innerHTML = "";
@@ -210,33 +219,47 @@ async function poll() {
       info.querySelector(".dev").textContent = p.name || t("unnamed");
       info.querySelector(".meta").textContent =
         `${p.known ? t("known") : t("newDev")} · ${new Date(p.requested_at).toLocaleTimeString()}`;
+      const code = document.createElement("input");
+      code.className = "code"; code.type = "text"; code.inputMode = "numeric"; code.maxLength = 6;
+      code.autocomplete = "off"; code.placeholder = t("codePlaceholder");
+      code.value = codeDraft[p.node_id] || "";
       const yes = document.createElement("button");
-      yes.className = "primary"; yes.textContent = t("allow"); yes.disabled = confirming;
-      yes.onclick = () => confirmPair(true, yes);
+      yes.className = "primary"; yes.textContent = t("allow");
+      const sync = () => { yes.disabled = confirming || !/^\d{6}$/.test(code.value); };
+      code.oninput = () => { code.value = code.value.replace(/\D/g, "").slice(0, 6); codeDraft[p.node_id] = code.value; sync(); };
+      sync();
+      yes.onclick = () => confirmPair(true, yes, p.node_id, code.value);
       const no = document.createElement("button");
       no.textContent = t("deny");
-      no.onclick = () => confirmPair(false, no);
+      no.onclick = () => confirmPair(false, no, p.node_id);
       const wrap = document.createElement("div"); wrap.className = "row"; wrap.style.marginTop = "0";
-      wrap.append(yes, no);
+      wrap.append(code, yes, no);
       row.append(info, wrap);
       box.append(row);
     }
   } catch (e) { /* 轮询失败不打扰 */ }
 }
 
-async function confirmPair(accept, btn) {
+async function confirmPair(accept, btn, nodeId, code) {
   if (confirming) return;
   confirming = true; btn.disabled = true;
   try {
     const r = await fetch("/api/confirm", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ accept }),
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ accept, node_id: nodeId, code }),
     });
     const j = await r.json();
-    if (!j.ok) throw new Error(JSON.stringify(j.error).slice(0, 200));
+    if (!j.ok) {
+      const detail = JSON.stringify(j.error);
+      // 码输错是终局：daemon 已作废这次申请，页面要明说，不能当成普通失败。
+      if (detail.includes("pair_code_wrong")) { delete codeDraft[nodeId]; pendingSig = null; say(t("codeWrong"), "err"); confirming = false; poll(); return; }
+      throw new Error(detail.slice(0, 200));
+    }
+    delete codeDraft[nodeId];
     if (j.decided) say(accept ? t("allowed")(j.device) : t("denied")(j.device), "ok");
     else say(t("noEffect"), "err");
   } catch (e) { say(t("failOp")(e.message), "err"); }
   confirming = false;
+  pendingSig = null;
   poll();
 }
 
@@ -244,6 +267,7 @@ document.getElementById("lang").onclick = () => {
   lang = lang === "zh" ? "en" : "zh";
   localStorage.setItem("ppass-review-lang", lang);
   applyLang();
+  pendingSig = null;
   tick();
   poll();
 };

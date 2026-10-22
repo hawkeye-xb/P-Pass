@@ -84,11 +84,34 @@ echo "daemon up: $NODE (ipc: $SOCK)"
 echo "── 1. 配对（QR + IPC owner 确认）"
 "$TC" pair --token "$QR" --name "冒烟agent" > pair.log 2>&1 &
 PAIR_PID=$!
-sleep 3
-ipc pairing.confirm '{"accept": true}'
-wait "$PAIR_PID"
+# #1118：「允许」= 业主输入手机显示的 6 位验证码。testclient 在申请被收下后打出
+# `PAIR_CODE=<6 位> node=<本机 NodeId>`，这里扮演业主：读到后带码确认，没有盲点允许。
+PAIR_LINE=""
+for _ in $(seq 1 100); do
+  PAIR_LINE=$(grep -m1 '^PAIR_CODE=' pair.log 2>/dev/null || true)
+  [ -n "$PAIR_LINE" ] && break
+  kill -0 "$PAIR_PID" 2>/dev/null || break
+  sleep 0.2
+done
+if [ -z "$PAIR_LINE" ]; then
+  echo "testclient 20 秒内没打出 PAIR_CODE 行，pair.log：" >&2
+  cat pair.log >&2 || true
+  exit 1
+fi
+PAIR_CODE=$(printf '%s' "$PAIR_LINE" | sed -n 's/^PAIR_CODE=\([0-9]\{6\}\) node=.*/\1/p')
+PAIR_NODE=$(printf '%s' "$PAIR_LINE" | sed -n 's/^PAIR_CODE=[0-9]\{6\} node=\([0-9a-f]\{64\}\).*/\1/p')
+if [ -z "$PAIR_CODE" ] || [ -z "$PAIR_NODE" ]; then
+  echo "PAIR_CODE 行格式不对：$PAIR_LINE" >&2
+  exit 1
+fi
+ipc pairing.confirm "{\"accept\": true, \"node_id\": \"$PAIR_NODE\", \"code\": \"$PAIR_CODE\"}"
+if ! wait "$PAIR_PID"; then
+  echo "testclient pair 失败，pair.log：" >&2
+  cat pair.log >&2 || true
+  exit 1
+fi
 grep -q '配对成功' pair.log
-cat pair.log | tail -1
+tail -1 pair.log
 
 echo "── 2. backup 50 个混合文件"
 "$TC" backup --files 50 --node "$NODE"
@@ -114,12 +137,15 @@ ipc device.revoke "{\"node_id\": \"$DEV\"}"
 "$TC" revoke-check --node "$NODE"
 
 echo "── 7. logs.export 脱敏抽查"
-ipc logs.export
-unzip -p "$LIB/ppf-logs.zip" devices.json | grep -q node_id_prefix
-# 隐私断言：诊断事件里不许出现本机 $HOME 路径。先单独解出来——解压失败 /
+# #1122：logs.export 不再落 ppf-logs.zip，各文件内容随 IPC 结果的 entries 内联返回。
+EXPORT=$(ipc logs.export)
+export_entry() { printf '%s' "$EXPORT" | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['entries'].get(sys.argv[1], ''))" "$1"; }
+DEVJSON=$(export_entry devices.json)
+case "$DEVJSON" in *node_id_prefix*) ;; *) echo "devices.json 缺 node_id_prefix" >&2; exit 1 ;; esac
+# 隐私断言：诊断事件里不许出现本机 $HOME 路径。先单独解出来——取不到 /
 # 内容为空必须红，不能让「没读到」冒充「没泄漏」。
-DIAG=$(unzip -p "$LIB/ppf-logs.zip" diag_events.json)
-if [ -z "$DIAG" ]; then echo "logs.export 里 diag_events.json 为空" >&2; exit 1; fi
+DIAG=$(export_entry diag_events.json)
+if [ -z "$DIAG" ]; then echo "logs.export 的 entries 里 diag_events.json 为空" >&2; exit 1; fi
 # 纯 shell 子串匹配：不经管道，判定只取决于内容，不受 pipefail / grep -q
 # 提前关管道之类时序影响（第 3 步注释里那类坑）。
 case "$DIAG" in

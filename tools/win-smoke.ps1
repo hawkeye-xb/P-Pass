@@ -168,8 +168,22 @@ try {
     $pairLog = Join-Path $Work "pair.log"
     $pair = Start-Process -FilePath $TC -ArgumentList @("pair", "--token", $qr, "--name", "win-agent") -RedirectStandardOutput $pairLog -RedirectStandardError (Join-Path $Work "pair.err") -PassThru -WindowStyle Hidden
     $null = $pair.Handle   # H-09b：缓存句柄，ExitCode 才可读（替代匹配中文日志）
-    Start-Sleep -Seconds 3
-    $resp = Invoke-Ipc "pairing.confirm" '{"accept": true}'
+    # #1118：「允许」= 业主输入手机显示的 6 位验证码。testclient 在申请被收下后打出
+    # `PAIR_CODE=<6 位> node=<本机 NodeId>`，这里扮演业主：读到后带码确认，没有盲点允许。
+    $pairCode = $null
+    $pairNode = $null
+    for ($i = 0; $i -lt 100 -and -not $pairCode; $i++) {
+        if (Test-Path $pairLog) {
+            $m = Select-String -Path $pairLog -Pattern '^PAIR_CODE=(\d{6}) node=([0-9a-f]{64})' | Select-Object -First 1
+            if ($m) { $pairCode = $m.Matches[0].Groups[1].Value; $pairNode = $m.Matches[0].Groups[2].Value; break }
+        }
+        if ($pair.HasExited) { break }
+        Start-Sleep -Milliseconds 200
+    }
+    if (-not $pairCode) {
+        Write-Error "testclient 20 秒内没打出 PAIR_CODE 行，日志: $(Get-Content $pairLog -ErrorAction SilentlyContinue | Select-Object -Last 3)"; exit 1
+    }
+    $resp = Invoke-Ipc "pairing.confirm" ("{`"accept`":true,`"node_id`":`"$pairNode`",`"code`":`"$pairCode`"}")
     $null = Assert-IpcOk "pairing.confirm" $resp   # H-09b：Resp 不许丢弃
     $null = $pair.WaitForExit(15000)
     $pairExit = $pair.ExitCode   # 缓存句柄后此值可靠（之前恒 null）
