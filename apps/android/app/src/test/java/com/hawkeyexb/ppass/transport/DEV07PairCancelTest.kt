@@ -83,7 +83,7 @@ class DEV07PairCancelTest {
     @Test
     fun leavingTheWaitingScreen_withdrawsTheRequestOnTheDesktop() = runTest {
         val desk = Desk(this)
-        val job = launch { awaitPairVerdict(desk, token = "t", deviceName = "SM-S9210") }
+        val job = launch { awaitPairVerdict(desk, token = "t", deviceName = "SM-S9210", ceremony = FakeCeremony()) }
         advanceTimeBy(22_000) // 22 s into the wait — the emulator repro's gap
         job.cancel()
         job.join()
@@ -103,7 +103,7 @@ class DEV07PairCancelTest {
             inFlight.complete(Unit)
             awaitCancellation()
         })
-        val job = launch { awaitPairVerdict(desk, "t", "d") }
+        val job = launch { awaitPairVerdict(desk, "t", "d", FakeCeremony()) }
         inFlight.await()
         job.cancel()
         job.join()
@@ -114,7 +114,7 @@ class DEV07PairCancelTest {
     @Test
     fun anUnansweredWithdrawal_isBoundedByItsBudget() = runTest {
         val desk = Desk(this, cancel = { awaitCancellation() })
-        val job = launch { awaitPairVerdict(desk, "t", "d") }
+        val job = launch { awaitPairVerdict(desk, "t", "d", FakeCeremony()) }
         advanceTimeBy(7_000)
         job.cancel()
         val cancelledAt = currentTime
@@ -127,7 +127,7 @@ class DEV07PairCancelTest {
     @Test
     fun aFailingWithdrawal_neverEscapes() = runTest {
         val desk = Desk(this, cancel = { throw DaemonUnreachableException("gone") })
-        val job = launch { awaitPairVerdict(desk, "t", "d") }
+        val job = launch { awaitPairVerdict(desk, "t", "d", FakeCeremony()) }
         advanceTimeBy(7_000)
         job.cancel()
         job.join()
@@ -139,7 +139,7 @@ class DEV07PairCancelTest {
     @Test
     fun desktopWithoutTheCapability_isNeverSentAWithdrawal() = runTest {
         val desk = Desk(this, caps = listOf("thumbnail.v1", PAIR_STATUS_CAPABILITY))
-        val job = launch { awaitPairVerdict(desk, "t", "d") }
+        val job = launch { awaitPairVerdict(desk, "t", "d", FakeCeremony()) }
         advanceTimeBy(12_000)
         job.cancel()
         job.join()
@@ -150,7 +150,7 @@ class DEV07PairCancelTest {
     @Test
     fun revokedPhone_whoseHelloIsDenied_stillWithdraws() = runTest {
         val desk = Desk(this, caps = null)
-        val job = launch { awaitPairVerdict(desk, "t", "d") }
+        val job = launch { awaitPairVerdict(desk, "t", "d", FakeCeremony()) }
         advanceTimeBy(12_000)
         job.cancel()
         job.join()
@@ -161,7 +161,7 @@ class DEV07PairCancelTest {
     @Test
     fun cancellingBeforeTheSubmitAnswers_sendsNothing() = runTest {
         val desk = Desk(this, submit = { awaitCancellation() })
-        val job = launch { awaitPairVerdict(desk, "t", "d") }
+        val job = launch { awaitPairVerdict(desk, "t", "d", FakeCeremony()) }
         runCurrent()
         job.cancel()
         job.join()
@@ -173,12 +173,13 @@ class DEV07PairCancelTest {
     fun aSettledVerdict_isNeverFollowedByAWithdrawal() = runTest {
         val accepted = PairAccepted(storageDeviceName = "Home PC", pairingId = "e".repeat(32))
         for (terminal in listOf(
-            PairStatusReply(state = "accepted", accepted = accepted),
+            PairStatusReply(state = "accepted", accepted = accepted, confirmB = "cb"),
+            PairStatusReply(state = "failed"),
             PairStatusReply(state = "denied"),
             PairStatusReply(state = "expired"),
         )) {
             val desk = Desk(this, status = { reply(terminal) })
-            awaitPairVerdict(desk, "t", "d")
+            awaitPairVerdict(desk, "t", "d", FakeCeremony())
             assertTrue("${terminal.state}: ${desk.calls.map { it.first }}", desk.cancels().isEmpty())
         }
     }

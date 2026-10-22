@@ -108,7 +108,7 @@ class C1072VersionHandshakeTest {
     fun `an incompatible hello ends pairing before any pairing request is sent`() = runTest {
         for ((reason, side) in listOf("phone_outdated" to OutdatedSide.PHONE, "desktop_outdated" to OutdatedSide.DESKTOP)) {
             val desk = Desk(hello = v2(ok = false, error = RespError("VERSION_MISMATCH", reason)))
-            assertEquals(PairVerdict.NeedsUpdate(side), awaitPairVerdict(desk, "t", "d"))
+            assertEquals(PairVerdict.NeedsUpdate(side), awaitPairVerdict(desk, "t", "d", FakeCeremony()))
             assertEquals("只握手，不发配对请求", listOf(Methods.HELLO), desk.methods)
         }
     }
@@ -119,7 +119,7 @@ class C1072VersionHandshakeTest {
             result = ProtoJson.encodeToJsonElement(Hello.serializer(), Hello(capabilities = listOf(PAIR_STATUS_CAPABILITY))),
         )
         val desk = Desk(hello = hello, submit = v2(ok = false, error = RespError("VERSION_MISMATCH", "phone_outdated")))
-        val verdict = awaitPairVerdict(desk, "t", "d")
+        val verdict = awaitPairVerdict(desk, "t", "d", FakeCeremony())
         assertEquals(PairVerdict.NeedsUpdate(OutdatedSide.PHONE), verdict)
         val outcome = verdict.toOutcome { error("no join") }
         assertEquals(PairOutcome.NeedsUpdate(OutdatedSide.PHONE), outcome)

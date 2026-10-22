@@ -44,7 +44,7 @@ fun reasonClassOf(reason: Reason): ReasonClass = when (reason) {
     Reason.INTERNAL -> ReasonClass.DESKTOP_INTERNAL
     Reason.FETCH_FAILED -> ReasonClass.PATH
     Reason.ROLE_FORBIDDEN, Reason.BAD_REQUEST, Reason.NOT_FOUND, Reason.BACKUP_FAILED, Reason.CANCELLED,
-    Reason.PAIR_TOKEN_INVALID, Reason.GRANT_NOT_FOUND, Reason.GRANT_CONFLICT, Reason.UNKNOWN,
+    Reason.PAIR_TOKEN_INVALID, Reason.PAIR_CODE_WRONG, Reason.GRANT_NOT_FOUND, Reason.GRANT_CONFLICT, Reason.UNKNOWN,
     -> ReasonClass.ITEM_FAILED
 }
 

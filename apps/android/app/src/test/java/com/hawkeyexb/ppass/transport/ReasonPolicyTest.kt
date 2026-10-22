@@ -60,6 +60,7 @@ class ReasonPolicyTest {
         Reason.BACKUP_FAILED to ReasonClass.ITEM_FAILED,
         Reason.CANCELLED to ReasonClass.ITEM_FAILED,
         Reason.PAIR_TOKEN_INVALID to ReasonClass.ITEM_FAILED,
+        Reason.PAIR_CODE_WRONG to ReasonClass.ITEM_FAILED,
         Reason.UNKNOWN to ReasonClass.ITEM_FAILED,
     )
 
@@ -77,7 +78,7 @@ class ReasonPolicyTest {
     @Test
     fun `every registered reason has an explicit class, and the table is pinned`() {
         val wire = registry()
-        assertEquals(18, wire.size)
+        assertEquals(19, wire.size)
         for (r in wire) {
             val kind = Reason.fromWire(r)
             assertFalse("Rust reason $r is not mirrored", kind == Reason.UNKNOWN)
@@ -154,7 +155,7 @@ class ReasonPolicyTest {
             rejected(it) is DeliveryOutcome.ItemFailure && classifyPushedFailure(it) is DeliveryOutcome.ItemFailure
         }
         assertEquals(
-            listOf("role_forbidden", "pair_token_invalid", "bad_request", "not_found", "backup_failed", "grant_not_found", "grant_conflict", "cancelled", "from_the_future"),
+            listOf("role_forbidden", "pair_token_invalid", "pair_code_wrong", "bad_request", "not_found", "backup_failed", "grant_not_found", "grant_conflict", "cancelled", "from_the_future"),
             counted,
         )
     }

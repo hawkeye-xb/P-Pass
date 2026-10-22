@@ -4,11 +4,19 @@
 //
 // NET-10 (#128): submitting is not waiting. pair.request (ack_then_poll)
 // answers as soon as the desktop has queued the request; the owner's
-// verdict is then read by polling pair.status every 5 s, until the
+// verdict is then read by polling pair.status every second (#1118), until the
 // deadline the desktop itself sent back. The old shape held ONE RPC open
 // until the owner clicked — but DaemonClient.call caps every round trip at
 // 15 s (CONNECT_TIMEOUT_MS), so any owner slower than ~15 s turned into
 // "could not reach the computer".
+//
+// #1118: pairing needs a code. After the user confirms "connect to this
+// computer?", the phone invents a 6-digit code, commits to it with a PAKE
+// message in pair.request (pake_a) and shows the code ONLY once the request
+// was queued; the owner types it on the computer, the computer answers with
+// pake_b, the phone proves it with pair.confirm and verifies the computer's
+// proof before saving anything. All cryptography is the shared Rust kernel
+// (PairPhone via uniffi); this file only drives the conversation.
 //
 // DEV-07 (#463): leaving the waiting screen (Cancel / back) cancels the
 // coroutine polling here. That alone only changed the phone's screen — the
@@ -17,12 +25,17 @@
 // out we tell the desktop: pair.cancel(request_id).
 package com.hawkeyexb.ppass.transport
 
+import com.hawkeyexb.ppass.ffi.PairPhone
+import com.hawkeyexb.ppass.ffi.nodeFingerprint
+import com.hawkeyexb.ppass.ffi.pairCodeGenerate
 import com.hawkeyexb.ppass.proto.Hello
 import com.hawkeyexb.ppass.proto.Methods
 import com.hawkeyexb.ppass.proto.PairAccepted
+import com.hawkeyexb.ppass.proto.PairConfirmRequest
 import com.hawkeyexb.ppass.proto.PairRequest
 import com.hawkeyexb.ppass.proto.PairStatusReply
 import com.hawkeyexb.ppass.proto.PairStatusRequest
+import com.hawkeyexb.ppass.proto.PairStatusState
 import com.hawkeyexb.ppass.proto.PairSubmitted
 import com.hawkeyexb.ppass.proto.ProtoJson
 import com.hawkeyexb.ppass.proto.OutdatedSide
@@ -52,6 +65,8 @@ sealed class PairOutcome {
     /** #1072: versions are incompatible — found at the hello, before any pairing request is sent. */
     data class NeedsUpdate(val side: OutdatedSide) : PairOutcome()
     data class Failed(val reason: String) : PairOutcome()
+    /** #1118: the user declined "connect to this computer?" — back to the scanner, nothing was sent. */
+    data object Cancelled : PairOutcome()
 }
 
 /** #1072: why a pairing ended without joining (one phone-side wording each). */
@@ -64,6 +79,10 @@ enum class PairRefusal {
     EXPIRED,
     /** `pair.status` = `not_found`: the desktop service restarted and lost the request. */
     DESKTOP_RESTARTED,
+    /** #1118: `pair.status` = `failed` / `pair.confirm` → `pair_code_wrong`: the code did not match. */
+    CODE_WRONG,
+    /** #1118: the computer's key confirmation did not verify — nothing was saved. */
+    PROOF_FAILED,
     /** Any other reason, including one this build does not know. */
     OTHER,
 }
@@ -71,6 +90,7 @@ enum class PairRefusal {
 /** #1072: a rejected pair.request → its cause; never looks at text. */
 internal fun pairRefusalOf(reason: Reason): PairRefusal = when (reason) {
     Reason.PAIR_TOKEN_INVALID -> PairRefusal.TOKEN_INVALID
+    Reason.PAIR_CODE_WRONG -> PairRefusal.CODE_WRONG
     else -> PairRefusal.OTHER
 }
 
@@ -82,8 +102,9 @@ const val PAIR_CANCEL_CAPABILITY = "pair.cancel.v1"
  *  Best effort — the user has already moved on; DaemonClient's own 15 s cap
  *  is too long to hold a cancelled job open for. */
 const val PAIR_CANCEL_BUDGET_MS = 5_000L
-/** NET-10: card-fixed polling interval. */
-const val PAIR_POLL_INTERVAL_MS = 5_000L
+/** #1118: while the code is on screen the owner may type it any second — poll every second
+ *  (owner decision; was 5 s). Used only for this step. */
+const val PAIR_POLL_INTERVAL_MS = 1_000L
 /** A single failed status RPC is not a dead pairing — the ledger entry
  *  lives on the desktop for minutes. Give up only after this many failures
  *  in a row (any answer resets the count). */
@@ -113,6 +134,37 @@ sealed class PairVerdict {
     data object DesktopTooOld : PairVerdict()
     /** The RPCs themselves kept failing (network / computer off). */
     data class Unreachable(val reason: String) : PairVerdict()
+    /** #1118: the code typed on the computer did not match (`failed` state or `pair_code_wrong`). */
+    data object CodeWrong : PairVerdict()
+    /** #1118: the computer's key confirmation was missing/invalid — never save such a pairing. */
+    data object ProofFailed : PairVerdict()
+    /** #1118: the user declined "connect to this computer?" — no pair.request was sent. */
+    data object Cancelled : PairVerdict()
+}
+
+/** #1118: the phone's half of the code exchange — implemented by the uniffi `PairPhone`
+ *  ([FfiPairPhone]) in production, by a fake in JVM tests. Throws on any protocol error. */
+interface PairPhoneCore {
+    /** The SPAKE2 message for `pair.request.pake_a` (hex). */
+    fun pakeA(): String
+    /** The desktop's `pake_b` → `confirm_a` (hex) for `pair.confirm`. Once only. */
+    fun finish(pakeB: String): String
+    /** The desktop's `confirm_b`; returns normally only if the desktop used the same code. */
+    fun verify(confirmB: String)
+}
+
+/** #1118: everything user-facing or random about a pairing, injectable: the "connect to this
+ *  computer?" step, the code, the PAKE session and showing the code. */
+interface PairCeremony {
+    /** The "connect to this computer?" step. [desktopName] = `hello.device_name`, or null when the
+     *  hello gave none. false = the user cancelled; nothing has been sent to the computer. */
+    suspend fun confirmDesktop(desktopName: String?): Boolean
+    /** A fresh 6-digit code (shared Rust generator). */
+    fun newCode(): String
+    /** Start the PAKE session for [code] (token / node ids are the ceremony's own context). */
+    fun start(code: String): PairPhoneCore
+    /** Called ONLY after the request was queued ([PairSubmitted] received): show [code]. */
+    fun showCode(code: String)
 }
 
 /** #1051: how long the membership probe may take before we give up and
@@ -147,19 +199,22 @@ suspend fun probeMembership(
 }
 
 /**
- * NET-10 state machine: capability check → submit → poll pair.status.
+ * NET-10 state machine: capability check → "connect to this computer?" (#1118) → submit with
+ * the PAKE commitment → show the code → poll pair.status / answer pair.confirm.
  *
  * New phone + old desktop: an old desktop has no [PAIR_STATUS_CAPABILITY]
  * in hello → [PairVerdict.DesktopTooOld] (explicit "update the computer"),
  * never a silent timeout. A revoked phone's hello is denied, so it cannot
  * check first; it submits and judges by the reply shape (request_id = new
- * desktop; a PairAccepted within the cap = old desktop answered the
- * blocking shape; no answer = [PairVerdict.Unreachable]).
+ * desktop; no answer = [PairVerdict.Unreachable]). #1118: a desktop that answers with the
+ * old blocking [PairAccepted] never checked the code — that is [PairVerdict.DesktopTooOld],
+ * not a join.
  */
 suspend fun awaitPairVerdict(
     rpc: PairRpc,
     token: String,
     deviceName: String,
+    ceremony: PairCeremony,
     pollIntervalMs: Long = PAIR_POLL_INTERVAL_MS,
     maxConsecutiveFailures: Int = PAIR_STATUS_MAX_CONSECUTIVE_FAILURES,
 ): PairVerdict {
@@ -174,22 +229,31 @@ suspend fun awaitPairVerdict(
     // older desktop denies the unknown method and logs a denial). A revoked
     // phone's hello is denied, so it cannot know — it tries anyway.
     var mayWithdraw = true
+    var desktopName: String? = null
     // #1072: version first — an incompatible desktop gets no pairing request at all.
     if (!hello.ok) hello.error?.let { outdatedSideOf(it.reasonKind) }?.let { return PairVerdict.NeedsUpdate(it) }
     if (hello.ok) {
-        val caps = hello.result?.let {
+        val parsed = hello.result?.let {
             runCatching { ProtoJson.decodeFromJsonElement(Hello.serializer(), it) }.getOrNull()
-        }?.capabilities.orEmpty()
+        }
+        val caps = parsed?.capabilities.orEmpty()
         if (PAIR_STATUS_CAPABILITY !in caps) return PairVerdict.DesktopTooOld
         mayWithdraw = PAIR_CANCEL_CAPABILITY in caps
+        desktopName = parsed?.deviceName?.takeIf { it.isNotBlank() }
     }
+
+    // #1118: the user checks WHICH computer this is before anything is sent — guards against
+    // scanning someone else's QR code. Cancel = nothing was sent.
+    if (!ceremony.confirmDesktop(desktopName)) return PairVerdict.Cancelled
+    val code = ceremony.newCode()
+    val phone = ceremony.start(code)
 
     val submit = try {
         rpc.call(
             Methods.PAIR_REQUEST,
             ProtoJson.encodeToJsonElement(
                 PairRequest.serializer(),
-                PairRequest(token = token, deviceName = deviceName, ackThenPoll = true),
+                PairRequest(token = token, deviceName = deviceName, ackThenPoll = true, pakeA = phone.pakeA()),
             ),
         )
     } catch (e: CancellationException) {
@@ -206,18 +270,12 @@ suspend fun awaitPairVerdict(
     val submitted = runCatching {
         ProtoJson.decodeFromJsonElement(PairSubmitted.serializer(), result)
     }.getOrNull()
-    if (submitted == null || submitted.requestId.isBlank()) {
-        // An old desktop ignored ack_then_poll and still answered inside
-        // the cap with the blocking shape: that is a real join.
-        val legacy = runCatching {
-            ProtoJson.decodeFromJsonElement(PairAccepted.serializer(), result)
-        }.getOrNull()
-        return if (legacy != null && legacy.pairingId.isNotBlank()) {
-            PairVerdict.Accepted(legacy)
-        } else {
-            PairVerdict.DesktopTooOld
-        }
-    }
+    // An old desktop ignored ack_then_poll / pake_a and answered with the blocking shape (or
+    // garbage): it never verified a code, so this is no join.
+    if (submitted == null || submitted.requestId.isBlank()) return PairVerdict.DesktopTooOld
+
+    // #1118: the request is queued on the desktop — only now may the code be shown.
+    ceremony.showCode(code)
 
     val ttlMs = submitted.ttlMs.takeIf { it > 0 } ?: PAIR_FALLBACK_TTL_MS
     // One poll past the deadline so the desktop's own "expired" is what
@@ -228,7 +286,7 @@ suspend fun awaitPairVerdict(
         PairStatusRequest(requestId = submitted.requestId),
     )
     try {
-        return pollPairStatus(rpc, query, pollIntervalMs, maxPolls, maxConsecutiveFailures)
+        return pollPairStatus(rpc, query, submitted.requestId, phone, pollIntervalMs, maxPolls, maxConsecutiveFailures)
     } catch (e: CancellationException) {
         // The user left the waiting screen. Tell the desktop before the job
         // dies, so the owner's queue row can no longer be approved. Runs
@@ -249,9 +307,18 @@ suspend fun awaitPairVerdict(
     }
 }
 
+/** One reply's meaning to the poll loop: done, or keep waiting, or a malformed reply. */
+private sealed class Step {
+    data class Done(val verdict: PairVerdict) : Step()
+    data object Continue : Step()
+    data class Malformed(val why: String) : Step()
+}
+
 private suspend fun pollPairStatus(
     rpc: PairRpc,
     query: JsonElement,
+    requestId: String,
+    phone: PairPhoneCore,
     pollIntervalMs: Long,
     maxPolls: Long,
     maxConsecutiveFailures: Int,
@@ -259,6 +326,42 @@ private suspend fun pollPairStatus(
     var failures = 0
     var lastFailure = ""
     var polls = 0L
+    // #1118: cA is computed once (PairPhone.finish is single-use) and re-sent verbatim until
+    // the desktop's accepted reply arrives — pair.confirm is idempotent for the same cA.
+    var confirmA: String? = null
+
+    /** The meaning of any reply that carries a [PairStatusReply] (pair.status or pair.confirm). */
+    fun judge(reply: PairStatusReply): Step = when (reply.state) {
+        PairStatusState.PENDING -> Step.Continue
+        PairStatusState.ACCEPTED -> {
+            val payload = reply.accepted
+            val confirmB = reply.confirmB
+            when {
+                payload == null || payload.pairingId.isBlank() ->
+                    Step.Malformed("pair.status: accepted without payload")
+                // accepted without the desktop's proof is a malformed reply — never a half-join.
+                confirmB.isNullOrBlank() -> Step.Malformed("pair.status: accepted without confirm_b")
+                // The desktop is accepted but we never sent cA: it skipped the code. No proof, no join.
+                confirmA == null -> Step.Done(PairVerdict.ProofFailed)
+                else -> Step.Done(
+                    try {
+                        phone.verify(confirmB)
+                        PairVerdict.Accepted(payload)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        PairVerdict.ProofFailed
+                    },
+                )
+            }
+        }
+        PairStatusState.DENIED -> Step.Done(PairVerdict.Denied(PairRefusal.DENIED))
+        PairStatusState.EXPIRED -> Step.Done(PairVerdict.Expired)
+        PairStatusState.NOT_FOUND -> Step.Done(PairVerdict.DesktopRestarted)
+        PairStatusState.FAILED -> Step.Done(PairVerdict.CodeWrong)
+        else -> Step.Continue
+    }
+
     while (polls < maxPolls) {
         polls += 1
         delay(pollIntervalMs)
@@ -282,23 +385,66 @@ private suspend fun pollPairStatus(
             if (failures >= maxConsecutiveFailures) return PairVerdict.Unreachable(lastFailure)
             continue
         }
-        failures = 0
-        when (reply.state) {
-            "pending" -> Unit
-            "accepted" -> {
-                val payload = reply.accepted
-                if (payload != null && payload.pairingId.isNotBlank()) {
-                    return PairVerdict.Accepted(payload)
-                }
-                // accepted without its payload is a malformed reply —
-                // counts toward the failure budget, never a half-join.
-                failures += 1
-                lastFailure = "pair.status: accepted without payload"
-                if (failures >= maxConsecutiveFailures) return PairVerdict.Unreachable(lastFailure)
+        var roundFailed = false
+        var step = judge(reply)
+
+        // #1118: the owner typed the code → the desktop's pake_b is here. Finish (once), then
+        // pair.confirm; resend the same cA on every later poll until it goes through.
+        val pakeB = reply.pakeB
+        if (step is Step.Continue && !pakeB.isNullOrBlank()) {
+            val cA = confirmA ?: try {
+                phone.finish(pakeB)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // A malformed pake_b spends the PAKE session; no second try is possible.
+                return PairVerdict.ProofFailed
             }
-            "denied" -> return PairVerdict.Denied(PairRefusal.DENIED)
-            "expired" -> return PairVerdict.Expired
-            "not_found" -> return PairVerdict.DesktopRestarted
+            confirmA = cA
+            val confirmReply: PairStatusReply? = try {
+                val r = rpc.call(
+                    Methods.PAIR_CONFIRM,
+                    ProtoJson.encodeToJsonElement(
+                        PairConfirmRequest.serializer(),
+                        PairConfirmRequest(requestId = requestId, confirmA = cA),
+                    ),
+                )
+                if (r.ok) {
+                    r.result?.let { ProtoJson.decodeFromJsonElement(PairStatusReply.serializer(), it) }
+                        .also { if (it == null) lastFailure = "pair.confirm: empty reply" }
+                } else {
+                    val reason = r.error?.reasonKind ?: Reason.UNKNOWN
+                    outdatedSideOf(reason)?.let { return PairVerdict.NeedsUpdate(it) }
+                    if (reason == Reason.PAIR_CODE_WRONG) return PairVerdict.CodeWrong
+                    lastFailure = "pair.confirm rejected: ${r.error?.reason}"
+                    null
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                lastFailure = e.toString()
+                null
+            }
+            if (confirmReply == null) {
+                roundFailed = true
+            } else {
+                step = judge(confirmReply)
+            }
+        }
+
+        when (step) {
+            is Step.Done -> return step.verdict
+            is Step.Malformed -> {
+                lastFailure = step.why
+                roundFailed = true
+            }
+            Step.Continue -> Unit
+        }
+        if (roundFailed) {
+            failures += 1
+            if (failures >= maxConsecutiveFailures) return PairVerdict.Unreachable(lastFailure)
+        } else {
+            failures = 0
         }
     }
     return PairVerdict.Expired
@@ -314,6 +460,9 @@ fun PairVerdict.toOutcome(join: (PairAccepted) -> Pairing): PairOutcome = when (
     PairVerdict.DesktopTooOld -> PairOutcome.NeedsUpdate(OutdatedSide.DESKTOP)
     is PairVerdict.NeedsUpdate -> PairOutcome.NeedsUpdate(side)
     is PairVerdict.Unreachable -> PairOutcome.Failed(reason)
+    PairVerdict.CodeWrong -> PairOutcome.Refused(PairRefusal.CODE_WRONG)
+    PairVerdict.ProofFailed -> PairOutcome.Refused(PairRefusal.PROOF_FAILED)
+    PairVerdict.Cancelled -> PairOutcome.Cancelled
 }
 
 /**
@@ -334,13 +483,54 @@ suspend fun bindThenPair(bind: suspend () -> Unit, pair: suspend () -> PairOutco
         PairOutcome.Failed(t.toString())
     }
 
+/** #1118: the "connect to this computer?" page's facts: the name the computer reports and the
+ *  human-readable identity (`AB12 CD34`) of the QR's NodeId — the same one the desktop shows
+ *  under its QR code. */
+data class PairDesktopIdentity(val name: String, val fingerprint: String)
+
+/** #1118: production [PairPhoneCore] — the shared Rust kernel through uniffi. */
+internal class FfiPairPhone(private val inner: PairPhone) : PairPhoneCore {
+    override fun pakeA(): String = inner.pakeA()
+    override fun finish(pakeB: String): String = inner.finish(pakeB)
+    override fun verify(confirmB: String) = inner.verify(confirmB)
+}
+
+/** #1118: production [PairCeremony] for one scan: code and PAKE from the shared Rust kernel. */
+internal class FfiPairCeremony(
+    private val token: String,
+    private val phoneNode: String,
+    private val deskNode: String,
+    private val fallbackName: String,
+    private val confirm: suspend (PairDesktopIdentity) -> Boolean,
+    private val onCode: (code: String, phoneNodeId: String) -> Unit,
+    /** Injectable only for tests; always applied to the QR's node (the NodeId actually dialled). */
+    private val fingerprintOf: (String) -> String = ::nodeFingerprint,
+) : PairCeremony {
+    // The identity shown is computed HERE, by this phone, from the QR's node — never taken from
+    // anything the computer says. The name is the computer's own claim: a label only (and it is
+    // never logged — it may hold a real name).
+    override suspend fun confirmDesktop(desktopName: String?): Boolean =
+        confirm(PairDesktopIdentity(desktopName ?: fallbackName, fingerprintOf(deskNode)))
+
+    override fun newCode(): String = pairCodeGenerate()
+
+    override fun start(code: String): PairPhoneCore =
+        FfiPairPhone(PairPhone.start(code, token, phoneNode, deskNode))
+
+    override fun showCode(code: String) = onCode(code, phoneNode)
+}
+
 /**
- * Scan result → submit → poll until the owner decides (NET-10).
+ * Scan result → "connect to this computer?" ([confirmDesktop]) → submit → show the code
+ * ([onCode], only after the request was queued) → poll until the owner decides (NET-10, #1118).
+ * Automation injects `confirmDesktop = { true }` and logs the code in [onCode].
  */
 suspend fun pairWithQr(
     client: DaemonClient,
     qr: String,
     deviceName: String,
+    confirmDesktop: suspend (PairDesktopIdentity) -> Boolean,
+    onCode: (code: String, phoneNodeId: String) -> Unit,
     invalidCodeMessage: String = "This is not a P-Pass pairing code.",
     unparseableCodeMessage: String =
         "The pairing code cannot be parsed. Update P-Pass on both the computer and phone to the latest version.",
@@ -389,10 +579,19 @@ suspend fun pairWithQr(
 
     // NET-10: each RPC is a short control-plane call (DaemonClient.call's
     // own 15 s cap); the wait for the owner lives in the polling loop.
+    val phoneNode = client.nodeIdHex() ?: error("the phone's endpoint has no NodeId")
     val verdict = awaitPairVerdict(
         rpc = { method, params -> client.call(addr, method, params) },
         token = parsed.token,
         deviceName = deviceName,
+        ceremony = FfiPairCeremony(
+            token = parsed.token,
+            phoneNode = phoneNode,
+            deskNode = parsed.nodeIdHex,
+            fallbackName = storageDeviceNameFallback,
+            confirm = confirmDesktop,
+            onCode = onCode,
+        ),
     )
     return verdict.toOutcome { accepted ->
         Pairing(

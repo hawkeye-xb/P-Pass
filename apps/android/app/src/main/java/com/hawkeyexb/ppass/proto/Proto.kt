@@ -72,6 +72,8 @@ enum class Reason(val wire: String) {
     NOT_PAIRED("not_paired"),
     ROLE_FORBIDDEN("role_forbidden"),
     PAIR_TOKEN_INVALID("pair_token_invalid"),
+    /** #1118: the code typed on the computer did not match the one this phone showed. */
+    PAIR_CODE_WRONG("pair_code_wrong"),
     PHONE_OUTDATED("phone_outdated"),
     DESKTOP_OUTDATED("desktop_outdated"),
     UNSUPPORTED_METHOD("unsupported_method"),
@@ -140,6 +142,8 @@ data class PairRequest(
      *  null (never false) so a legacy frame omits the key, byte-identical
      *  to the Rust side's skip_serializing_if. */
     @SerialName("ack_then_poll") val ackThenPoll: Boolean? = null,
+    /** #1118: the phone's SPAKE2 message (hex, 66 chars) — required by a v3 desktop. */
+    @SerialName("pake_a") val pakeA: String? = null,
 )
 
 @Serializable
@@ -163,11 +167,33 @@ data class PairStatusRequest(
     @SerialName("request_id") val requestId: String = "",
 )
 
-/** NET-10 (#128): pair.status reply — pending / accepted / denied / expired / not_found. */
+/** NET-10 (#128): pair.status reply — pending / accepted / denied / expired / not_found / failed (#1118). */
 @Serializable
 data class PairStatusReply(
     val state: String = "",
     val accepted: PairAccepted? = null,
+    /** #1118: the desktop's SPAKE2 message; appears (state still `pending`) once the owner typed the code. */
+    @SerialName("pake_b") val pakeB: String? = null,
+    /** #1118: the desktop's key confirmation; present with `accepted`. */
+    @SerialName("confirm_b") val confirmB: String? = null,
+)
+
+/** NET-10 / #1118: the `pair.status` `state` wire strings (mirror of `proto::PairStatusState`). */
+object PairStatusState {
+    const val PENDING = "pending"
+    const val ACCEPTED = "accepted"
+    const val DENIED = "denied"
+    const val EXPIRED = "expired"
+    /** #1118: the code confirmation did not match — the request and its token are void. */
+    const val FAILED = "failed"
+    const val NOT_FOUND = "not_found"
+}
+
+/** #1118: pair.confirm params — the phone's key confirmation for [requestId]. */
+@Serializable
+data class PairConfirmRequest(
+    @SerialName("request_id") val requestId: String = "",
+    @SerialName("confirm_a") val confirmA: String = "",
 )
 
 // ── Timeline ────────────────────────────────────────
@@ -435,6 +461,8 @@ object Methods {
     const val PAIR_STATUS = "pair.status"
     /** DEV-07 (#463): the submitting phone withdraws its own pending pair.request. */
     const val PAIR_CANCEL = "pair.cancel"
+    /** #1118: the phone's key confirmation after the desktop's pake_b appeared. */
+    const val PAIR_CONFIRM = "pair.confirm"
     const val TIMELINE_PAGE = "timeline.page"
     const val ASSET_META = "asset.meta"
     const val THUMB_GET = "thumb.get"

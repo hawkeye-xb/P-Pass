@@ -6,9 +6,9 @@
 package com.hawkeyexb.ppass.transport
 
 import java.io.File
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertTrue
@@ -17,7 +17,7 @@ import org.junit.Test
 
 class DaemonPairTest {
 
-    private fun ipcConfirm(ipcTokenFile: String) {
+    private fun ipcConfirm(ipcTokenFile: String, nodeId: String, code: String) {
         // android.jar hides JDK16's UnixDomainSocketAddress from the
         // unit-test compile classpath — shell out to python3 instead
         // (this test only runs on a dev machine, never on-device).
@@ -34,12 +34,12 @@ else:
     s.connect('/tmp/' + name)
 f = s.makefile('rw')
 f.write(lines[1].strip() + '\n'); f.flush()
-f.write(json.dumps({'id':'t','method':'pairing.confirm','params':{'accept':True}}) + '\n'); f.flush()
+f.write(json.dumps({'id':'t','method':'pairing.confirm','params':{'accept':True,'node_id':sys.argv[2],'code':sys.argv[3]}}) + '\n'); f.flush()
 resp = json.loads(f.readline())
 assert resp.get('ok'), resp
 print('confirmed', resp['result'])
 """
-        val proc = ProcessBuilder("python3", "-c", script, ipcTokenFile)
+        val proc = ProcessBuilder("python3", "-c", script, ipcTokenFile, nodeId, code)
             .redirectErrorStream(true).start()
         val out = proc.inputStream.bufferedReader().readText()
         check(proc.waitFor() == 0 && out.contains("confirmed")) { "IPC confirm failed: $out" }
@@ -60,12 +60,19 @@ print('confirmed', resp['result'])
             try {
                 // The phone side blocks inside pair.request until the
                 // owner allows — run the owner in parallel.
+                val shown = CompletableDeferred<Pair<String, String>>()
                 val phone = async(Dispatchers.IO) {
-                    pairWithQr(client, qr!!.trim(), deviceName = "JVM 测试手机")
+                    pairWithQr(
+                        client, qr!!.trim(), deviceName = "JVM 测试手机",
+                        // #1118: automation = always "connect"; the code shown goes to the owner side.
+                        confirmDesktop = { true },
+                        onCode = { code, node -> shown.complete(code to node) },
+                    )
                 }
                 launch(Dispatchers.IO) {
-                    delay(2_000) // let the request reach the pending queue
-                    ipcConfirm(ipc!!.trim())
+                    // #1118: the owner types the code the phone shows (only after the request was queued).
+                    val (code, node) = shown.await()
+                    ipcConfirm(ipc!!.trim(), node, code)
                 }
                 val outcome = phone.await()
                 assertTrue("expected Joined, got $outcome", outcome is PairOutcome.Joined)

@@ -41,7 +41,9 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 mkdir -p "$DESK"
 desk_start "$DESK" "$BIN/daemon"
-desk_auto_allow "$DESK"
+# #1118：允许 = 输入手机显示的验证码。码来自 testclient 的输出（seed-pair.log）和手机 androidTest 打到
+# logcat 的 `C1124 PAIR_CODE=… node=…`；两个文件现在还不存在也没关系，确认循环每轮重新读。
+desk_auto_allow "$DESK" "$OUT/seed-pair.log" "$OUT/logcat.txt"
 NODE=$(desk_node "$DESK")
 echo "==> 沙盒桌面 ${NODE:0:8}…"
 

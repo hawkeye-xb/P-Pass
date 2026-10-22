@@ -13,6 +13,8 @@ internal fun pairRefusalDetailRes(cause: PairRefusal): Int = when (cause) {
     PairRefusal.DENIED -> R.string.pair_refused_detail_denied
     PairRefusal.EXPIRED -> R.string.pair_refused_detail_expired
     PairRefusal.DESKTOP_RESTARTED -> R.string.pair_refused_detail_restarted
+    PairRefusal.CODE_WRONG -> R.string.pair_refused_detail_code_wrong
+    PairRefusal.PROOF_FAILED -> R.string.pair_desktop_proof_failed
     PairRefusal.OTHER -> R.string.error_generic
 }
 

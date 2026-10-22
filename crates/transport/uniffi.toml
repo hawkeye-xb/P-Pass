@@ -3,3 +3,6 @@
 [bindings.kotlin]
 package_name = "com.hawkeyexb.ppass.ffi"
 cdylib_name = "transport"
+# Android 专用生成：对象回收在 API 34+ 用系统 Cleaner，以下回退 JNA（minSdk 26）。默认的 JVM 写法
+# 直接用 java.lang.ref.Cleaner（API 33），`lintDebug` 报 NewApi。
+android = true
