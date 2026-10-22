@@ -3,19 +3,48 @@ import PPassCore
 import PPassTransport
 import Security
 
-/// 这台手机的 iroh 身份（32 字节）。配对绑的是 NodeId，所以必须持久化（对位 Android `IdentityStore`）。
-/// 存在存储根目录的 `identity.key`——断开清单里它是 keep：断开后再配对还是同一台手机。
-enum IdentityKey {
-    static func loadOrCreate(in root: URL) throws -> Data {
-        let url = root.appendingPathComponent("identity.key")
-        if let data = try? Data(contentsOf: url), data.count == 32 { return data }
-        var bytes = [UInt8](repeating: 0, count: 32)
-        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
-            throw CocoaError(.fileWriteUnknown)
+/// 这台手机的 iroh 身份私钥（32 字节）在钥匙串里的那一项（判定逻辑在 PPassCore `DeviceIdentity`）。
+/// 首次解锁后可读（后台任务常在锁屏时跑）、仅本设备（不进备份、不随换机迁移）、不随 iCloud 钥匙串同步。
+/// 用 App 的默认访问组：只有主 App 一个进程读它；将来加扩展要共享，再迁到共享组。
+struct KeychainIdentityStore: IdentitySecretStore {
+    var service = "com.hawkeyexb.ppass.identity"
+    var account = "device-ed25519"
+
+    private var base: [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account]
+    }
+
+    func read() throws -> Data? {
+        var query = base
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var out: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &out)
+        switch status {
+        case errSecSuccess: return out as? Data
+        case errSecItemNotFound: return nil
+        default: throw Self.error("read", status)
         }
-        let data = Data(bytes)
-        try data.write(to: url, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-        return data
+    }
+
+    func write(_ key: Data) throws {
+        var item = base
+        item[kSecValueData as String] = key
+        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        item[kSecAttrSynchronizable as String] = false
+        let status = SecItemAdd(item as CFDictionary, nil)
+        guard status == errSecSuccess else { throw Self.error("write", status) }
+    }
+
+    func delete() throws {
+        var query = base
+        query[kSecAttrSynchronizable as String] = kSecAttrSynchronizableAny
+        let status = SecItemDelete(query as CFDictionary)
+        guard status == errSecSuccess || status == errSecItemNotFound else { throw Self.error("delete", status) }
+    }
+
+    private static func error(_ op: String, _ status: OSStatus) -> IdentityStoreError {
+        status == errSecInteractionNotAllowed ? .locked : .failed(op: op, status: status)
     }
 }
 
