@@ -177,3 +177,99 @@ async fn a_slow_sender_times_out() {
     assert!(matches!(r, Err(TransportError::FrameTimeout(_))), "{r:?}");
     drop(bi);
 }
+
+/// #1122 方案 A：未准入的入站连接被拒时，拨号方拿到有类型的
+/// `PeerClosed { peer: 拨号对象, code: 401 }`——它是经 TLS 认证的对端发来的
+/// 明确「未配对」。手机据此清理，前提是 `peer` 就是它记录的那台电脑。
+/// 反证：dial / 流错误不看 close_reason（一律 Io），这里拿到 Io ⇒ 变红。
+#[tokio::test]
+async fn a_refused_dialer_learns_not_paired_from_the_close_code() {
+    let server = bind().await;
+    let _seen = echo_server(&server);
+    server.set_admission(Arc::new(|_: NodeId, _: &[u8]| false));
+    let phone = bind().await;
+    let server_id = phone.add_peer(server.local_addr());
+    let attempt = async {
+        let mut bi = phone.connect(server_id, ALPN_CTRL).await?;
+        bi.send_frame(&frame(b"hello")).await?;
+        bi.recv_frame().await
+    };
+    let err = tokio::time::timeout(Duration::from_secs(5), attempt)
+        .await
+        .expect("prompt")
+        .expect_err("refused");
+    match err {
+        TransportError::PeerClosed { peer, code } => {
+            assert_eq!(peer, server_id, "关闭帧来自拨号对象");
+            assert_eq!(code, u64::from(proto::close_codes::NOT_PAIRED));
+            assert!(proto::close_codes::means_not_paired(code));
+        }
+        other => panic!("expected PeerClosed 401, got {other:?}"),
+    }
+}
+
+/// #1119 + #1122：桌面删配对后 `close_peer`，手机在这条连接上拿到 `PeerClosed{410}`。
+#[tokio::test]
+async fn close_peer_tells_the_phone_unpaired() {
+    let server = bind().await;
+    let s = server.clone();
+    tokio::spawn(async move {
+        let mut incoming = s.listen().await;
+        while let Some(inc) = next(&mut incoming).await {
+            tokio::spawn(async move {
+                while let Ok(mut bi) = inc.accept_bi().await {
+                    tokio::spawn(async move { while let Ok(Some(_)) = bi.recv_frame().await {} });
+                }
+            });
+        }
+    });
+    let phone = bind().await;
+    let server_id = phone.add_peer(server.local_addr());
+    let mut bi = phone.connect(server_id, ALPN_CTRL).await.unwrap();
+    bi.send_frame(&frame(b"subscribe")).await.unwrap();
+    for _ in 0..50 {
+        if server.path_of(phone.node_id(), ALPN_CTRL).is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(server.close_peer(phone.node_id()) >= 1);
+    let err = tokio::time::timeout(Duration::from_secs(5), bi.recv_frame())
+        .await
+        .expect("prompt")
+        .expect_err("closed");
+    assert!(
+        matches!(err, TransportError::PeerClosed { peer, code } if peer == server_id && code == u64::from(proto::close_codes::UNPAIRED)),
+        "{err:?}"
+    );
+}
+
+/// 其它失败不是 PeerClosed：对端没回、读超时 ⇒ FrameTimeout / Io，绝不被当成「未配对」。
+#[tokio::test]
+async fn timeouts_and_local_closes_are_not_peer_closed() {
+    let server = bind().await;
+    let phone = bind().await;
+    let server_id = phone.add_peer(server.local_addr());
+    let s = server.clone();
+    tokio::spawn(async move {
+        let mut incoming = s.listen().await;
+        let inc = next(&mut incoming).await.unwrap();
+        let _bi = inc.accept_bi().await.unwrap();
+        tokio::time::sleep(Duration::from_secs(2)).await; // 不回
+    });
+    let mut bi = phone.connect(server_id, ALPN_CTRL).await.unwrap();
+    bi.send_frame(&frame(b"x")).await.unwrap();
+    // 声明了长度却不发完 ⇒ 超时，不是 PeerClosed。
+    let err = bi.recv_frame_within(1024, Duration::from_millis(300)).await;
+    assert!(
+        !matches!(err, Err(TransportError::PeerClosed { .. })),
+        "{err:?}"
+    );
+    // 本地主动关 ⇒ 也不是 PeerClosed。
+    phone.close_peer(server_id);
+    let err = bi.send_frame(&frame(b"y")).await;
+    assert!(
+        !matches!(err, Err(TransportError::PeerClosed { .. })),
+        "{err:?}"
+    );
+}

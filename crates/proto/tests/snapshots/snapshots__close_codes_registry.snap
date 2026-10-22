@@ -1,0 +1,14 @@
+---
+source: crates/proto/tests/snapshots.rs
+expression: json
+---
+[
+  {
+    "code": 401,
+    "reason": "not_paired"
+  },
+  {
+    "code": 410,
+    "reason": "unpaired"
+  }
+]

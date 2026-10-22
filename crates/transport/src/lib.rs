@@ -71,7 +71,7 @@ pub const ALPN_DOWNLOAD: &str = "ppf/download/1";
 /// #1119：桌面删掉一台设备的配对记录后主动关闭与它的连接时用的 QUIC 关闭码
 /// （`IrohTransport::close_peer`）。与 blobs 拒绝码 403 区分开：这一条的意思是
 /// 「你的配对已被删除」。
-pub const UNPAIRED_CLOSE_CODE: u32 = 410;
+pub const UNPAIRED_CLOSE_CODE: u32 = proto::close_codes::UNPAIRED;
 
 /// Device identity: the 32-byte ed25519 public key of an endpoint (ADR-004,
 /// no account system). Displayed as 64 lowercase hex characters.
@@ -140,6 +140,11 @@ pub enum TransportError {
     #[error("frame too large: {len} bytes (max {max})")]
     FrameTooLarge { len: u32, max: u32 },
 
+    /// #1122：对端用应用关闭码关掉了连接（关闭帧来自 `peer`，经 TLS 认证）。
+    /// 401 / 410 见 `proto::close_codes`；本地关闭、超时、网络断不会是这个错误。
+    #[error("connection closed by {peer:?} with code {code}")]
+    PeerClosed { peer: NodeId, code: u64 },
+
     /// #1122：一帧在 [`FRAME_READ_TIMEOUT`] 内没读完（慢速发送者）。
     #[error("frame not received within {0:?}")]
     FrameTimeout(std::time::Duration),
@@ -179,7 +184,7 @@ pub const PEER_BOOK_CAPACITY: usize = 1024;
 
 /// #1122：接受连接时因为「没有配对记录、也不在配对窗口内」被拒的 QUIC 关闭码。
 /// 关闭帧在 TLS 握手之后发出，是本机身份认证过的「未配对」。
-pub const NOT_PAIRED_CLOSE_CODE: u32 = 401;
+pub const NOT_PAIRED_CLOSE_CODE: u32 = proto::close_codes::NOT_PAIRED;
 
 /// 详细设计 §3.1 —— trait 签名逐字实施（对冲 iroh 风险的瘦抽象）。
 ///

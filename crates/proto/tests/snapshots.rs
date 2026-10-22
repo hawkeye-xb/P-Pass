@@ -582,3 +582,13 @@ fn snapshot_flow_failed_push() {
     assert_roundtrip(&push);
     snapshot_message("flow_failed_push", &push);
 }
+
+/// #1122：关闭码注册表（两端手机的契约测试读这个快照）。
+#[test]
+fn close_codes_registry() {
+    let json: Vec<_> = proto::close_codes::ALL
+        .iter()
+        .map(|(code, reason)| serde_json::json!({ "code": code, "reason": reason }))
+        .collect();
+    insta::assert_json_snapshot!(json);
+}

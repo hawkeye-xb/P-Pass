@@ -59,12 +59,29 @@ pub enum FfiError {
     /// Network / store / codec failure.
     #[error("transport: {msg}")]
     Transport { msg: String },
+    /// #1122：对端（经 TLS 认证）用应用关闭码关掉了连接。`node_id` 是关闭帧的
+    /// 来源（64 位 hex），Swift 侧只在它等于记录的那台电脑、且
+    /// `close_code_means_not_paired(code)` 时按「未配对」清理。
+    #[error("closed by {node_id} with code {code}")]
+    PeerClosed { node_id: String, code: u64 },
+}
+
+/// #1122：这个关闭码是不是「未配对」（401 / 410，唯一定义在 proto::close_codes）。
+#[uniffi::export]
+pub fn close_code_means_not_paired(code: u64) -> bool {
+    proto::close_codes::means_not_paired(code)
 }
 
 impl From<TransportError> for FfiError {
     fn from(error: TransportError) -> Self {
-        FfiError::Transport {
-            msg: error.to_string(),
+        match error {
+            TransportError::PeerClosed { peer, code } => FfiError::PeerClosed {
+                node_id: peer.to_string(),
+                code,
+            },
+            error => FfiError::Transport {
+                msg: error.to_string(),
+            },
         }
     }
 }

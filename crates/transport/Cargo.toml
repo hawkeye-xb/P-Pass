@@ -18,7 +18,7 @@ android-jni = ["dep:jni", "dep:libc"]
 # IOS-06 (#313): UniFFI binding #2 (iOS XCFramework). Same rule as android-jni:
 # a feature, never a target_os cfg (arch-check B.2), and enabled only by
 # tools/build-ios-transport-xcframework.sh.
-ios-ffi = ["dep:uniffi", "dep:proto", "dep:blake3"]
+ios-ffi = ["dep:uniffi", "dep:blake3"]
 # Swift binding generator (host-only tool, run by the same script).
 ios-bindgen = ["ios-ffi", "uniffi/cli"]
 
@@ -40,7 +40,8 @@ serde_json.workspace = true
 base64 = "0.22" 
 iroh-blobs = { version = "0.103", default-features = false, features = ["fs-store"] }
 uniffi = { version = "0.32", optional = true }
-proto = { path = "../proto", optional = true }
+# #1122：关闭码等跨端注册表的唯一定义处（纯 serde，无平台依赖）。
+proto = { path = "../proto" }
 blake3 = { version = "1", optional = true }
 
 [[bin]]

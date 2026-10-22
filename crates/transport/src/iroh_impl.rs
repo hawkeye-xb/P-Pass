@@ -635,9 +635,19 @@ impl IrohTransport {
         self.ep
             .connect(addr, alpn.as_bytes())
             .await
-            .map_err(|e| TransportError::Connect {
-                peer,
-                reason: e.to_string(),
+            .map_err(|e| match e {
+                // #1122：对端握手后用应用关闭码拒绝了这次连接（准入钩子的 401）。
+                iroh::endpoint::ConnectError::Connection {
+                    source: iroh::endpoint::ConnectionError::ApplicationClosed(close),
+                    ..
+                } => TransportError::PeerClosed {
+                    peer,
+                    code: close.error_code.into_inner(),
+                },
+                e => TransportError::Connect {
+                    peer,
+                    reason: e.to_string(),
+                },
             })
     }
 
@@ -657,11 +667,13 @@ impl IrohTransport {
         alpn: &str,
     ) -> Result<(Connection, BiStream)> {
         let conn = self.dial(peer, alpn).await?;
-        let (send, recv) = conn
-            .open_bi()
-            .await
-            .map_err(|e| TransportError::Io(e.to_string()))?;
-        Ok((conn, BiStream { send, recv }))
+        let (send, recv) = conn.open_bi().await.map_err(|e| conn_err(&conn, e))?;
+        let stream = BiStream {
+            send,
+            recv,
+            conn: conn.clone(),
+        };
+        Ok((conn, stream))
     }
 
     /// Crate-internal raw connection for the blobs fetch path.
@@ -756,21 +768,22 @@ impl Transport for IrohTransport {
 
     async fn connect(&self, peer: NodeId, alpn: &str) -> Result<BiStream> {
         let conn = self.get_or_connect(peer, alpn).await?;
-        let (send, recv) = match conn.open_bi().await {
-            Ok(streams) => streams,
+        match conn.open_bi().await {
+            Ok((send, recv)) => Ok(BiStream { send, recv, conn }),
             Err(_) => {
                 // A remote close can be in flight before `close_reason()` is
                 // observable locally. Drop this cache entry and retry once on
                 // a fresh connection rather than handing callers a dead stream.
                 self.discard_if_same(peer, alpn, &conn);
                 let fresh = self.get_or_connect(peer, alpn).await?;
-                fresh
-                    .open_bi()
-                    .await
-                    .map_err(|e| TransportError::Io(e.to_string()))?
+                let (send, recv) = fresh.open_bi().await.map_err(|e| conn_err(&fresh, e))?;
+                Ok(BiStream {
+                    send,
+                    recv,
+                    conn: fresh,
+                })
             }
-        };
-        Ok(BiStream { send, recv })
+        }
     }
 
     fn conn_info(&self, peer: NodeId) -> ConnInfo {
@@ -850,8 +863,12 @@ impl Incoming {
             .conn
             .accept_bi()
             .await
-            .map_err(|e| TransportError::Io(e.to_string()))?;
-        Ok(BiStream { send, recv })
+            .map_err(|e| conn_err(&self.conn, e))?;
+        Ok(BiStream {
+            send,
+            recv,
+            conn: self.conn.clone(),
+        })
     }
 }
 
@@ -861,6 +878,27 @@ impl Incoming {
 pub struct BiStream {
     send: SendStream,
     recv: RecvStream,
+    /// #1122：所属连接——流出错时看它是不是被对端用应用关闭码关掉的。
+    conn: Connection,
+}
+
+/// #1122：连接被对端用应用关闭码关掉（关闭帧来自经 TLS 认证的对端）？是就交出
+/// 带对端与关闭码的有类型错误。本地关闭、超时、网络断都不算。
+fn peer_closed(conn: &Connection) -> Option<TransportError> {
+    match conn.close_reason()? {
+        iroh::endpoint::ConnectionError::ApplicationClosed(close) => {
+            Some(TransportError::PeerClosed {
+                peer: NodeId(*conn.remote_id().as_bytes()),
+                code: close.error_code.into_inner(),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// 流 / 连接上的错误：对端应用关闭优先报成 [`TransportError::PeerClosed`]。
+fn conn_err(conn: &Connection, e: impl std::fmt::Display) -> TransportError {
+    peer_closed(conn).unwrap_or_else(|| TransportError::Io(e.to_string()))
 }
 
 /// #1122：读帧正文时每次最多读这么多（缓冲按实际收到的数据增长）。
@@ -879,7 +917,7 @@ impl BiStream {
         self.send
             .write_all(frame)
             .await
-            .map_err(|e| TransportError::Io(e.to_string()))
+            .map_err(|e| conn_err(&self.conn, e))
     }
 
     /// Receive one complete frame (header + payload), ready for
@@ -910,7 +948,7 @@ impl BiStream {
         match self.recv.read_exact(&mut header).await {
             Ok(()) => {}
             Err(ReadExactError::FinishedEarly(0)) => return Ok(None),
-            Err(e) => return Err(TransportError::Io(e.to_string())),
+            Err(e) => return Err(conn_err(&self.conn, e)),
         }
         let len = u32::from_le_bytes(header);
         let max = max.min(crate::MAX_FRAME);
@@ -918,6 +956,7 @@ impl BiStream {
             return Err(TransportError::FrameTooLarge { len, max });
         }
         let recv = &mut self.recv;
+        let conn = &self.conn;
         let body = async move {
             let _budget = frame_budget()
                 .acquire_many(len.max(1))
@@ -936,7 +975,7 @@ impl BiStream {
                             got: frame.len() - 4,
                         })
                     }
-                    Err(e) => return Err(TransportError::Io(e.to_string())),
+                    Err(e) => return Err(conn_err(conn, e)),
                 }
             }
             Ok(Some(frame))
@@ -957,16 +996,14 @@ impl BiStream {
                 Ok(Some(buf))
             }
             Ok(None) => Ok(None),
-            Err(e) => Err(TransportError::Io(e.to_string())),
+            Err(e) => Err(conn_err(&self.conn, e)),
         }
     }
 
     /// Finish the send side (graceful half-close). The peer's
     /// `recv_frame` then returns `Ok(None)`.
     pub fn finish(&mut self) -> Result<()> {
-        self.send
-            .finish()
-            .map_err(|e| TransportError::Io(e.to_string()))
+        self.send.finish().map_err(|e| conn_err(&self.conn, e))
     }
 
     /// #1119：等对端确认收齐这条流已发出的全部数据（QUIC 层确认，不代表对端
