@@ -188,3 +188,133 @@ async fn revoked_device_is_shut_out_at_once() {
     let hello: proto::Hello = serde_json::from_value(resp.result.unwrap()).unwrap();
     assert_eq!(hello.pairing_id, None);
 }
+
+/// #1119：手机断开（`device.unpair`）经统一入口删配对记录后，桌面主动关掉与它的
+/// 连接（iroh `Connection::close`），手机那一端很快看到连接已关；之后它重新连进来
+/// 只剩配对那扇门。
+/// 反证：统一入口不调 `connections`（或 Router 不注入 peer closer），手机端缓存的
+/// 连接一直活着 ⇒ 等待超时变红。
+#[tokio::test(flavor = "multi_thread")]
+async fn unpair_closes_the_phones_connections() {
+    let db = Db::open_in_memory().await.unwrap();
+    let dtp = IrohTransport::bind(TransportConfig::loopback(vec![transport::ALPN_CTRL.into()]))
+        .await
+        .unwrap();
+    let closer: daemon::unpair::PeerCloser = {
+        let t = dtp.clone();
+        std::sync::Arc::new(move |peer| t.close_peer(peer))
+    };
+    let router = Router::new(db.clone(), "test-daemon").with_peer_closer(closer);
+    let served = dtp.clone();
+    tokio::spawn(async move { router.serve(&served).await });
+
+    let ctp = client().await;
+    ctp.add_peer(dtp.local_addr());
+    let phone = ctp.node_id();
+    db.accept_pairing(
+        &phone.0,
+        "phone",
+        &Pairing {
+            id: "p-1119".into(),
+            node_id: phone.0.to_vec(),
+            role: Role::Member,
+            paired_at: 1,
+        },
+    )
+    .await
+    .unwrap();
+    let hello = call(&ctp, dtp.node_id(), "hello").await;
+    assert_eq!(hello.result.unwrap()["pairing_id"], "p-1119");
+    assert!(
+        ctp.path_of(dtp.node_id(), transport::ALPN_CTRL).is_some(),
+        "手机缓存着这条连接"
+    );
+
+    let mut stream = ctp
+        .connect(dtp.node_id(), transport::ALPN_CTRL)
+        .await
+        .unwrap();
+    let req = Req {
+        id: "unpair".into(),
+        method: proto::msgs::methods::DEVICE_UNPAIR.into(),
+        params: serde_json::json!({ "pairing_id": "p-1119" }),
+        ..Default::default()
+    };
+    stream
+        .send_frame(&proto::codec::encode(&req).unwrap())
+        .await
+        .unwrap();
+    stream.finish().unwrap();
+    let resp: Resp = proto::codec::decode(&stream.recv_frame().await.unwrap().unwrap()).unwrap();
+    assert_eq!(resp.result.unwrap()["unpaired"], true);
+
+    let mut closed = false;
+    for _ in 0..100 {
+        if ctp.path_of(dtp.node_id(), transport::ALPN_CTRL).is_none() {
+            closed = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(closed, "桌面删了配对记录后必须主动关掉与手机的连接");
+    assert!(dtp.path_of(phone, transport::ALPN_CTRL).is_none());
+
+    // 手机重新连进来：连得上，但业务方法一律 not_paired。
+    let again = call(&ctp, dtp.node_id(), "timeline.page").await;
+    assert_eq!(again.error.unwrap().reason(), &proto::Reason::NotPaired);
+}
+
+/// #1119：电脑撤销（IPC `device.revoke` 走的统一入口）删完配对记录立即关掉与
+/// 那台手机的连接，不依赖手机知道。
+/// 反证：`unpair::release` 不调 `connections`，手机端连接一直活着 ⇒ 变红。
+#[tokio::test(flavor = "multi_thread")]
+async fn owner_revoke_through_the_single_entry_closes_the_phones_connections() {
+    let db = Db::open_in_memory().await.unwrap();
+    let (dtp, daddr) = start_daemon(db.clone()).await;
+    let ctp = client().await;
+    ctp.add_peer(daddr);
+    let phone = ctp.node_id();
+    db.accept_pairing(
+        &phone.0,
+        "phone",
+        &Pairing {
+            id: "p-owner".into(),
+            node_id: phone.0.to_vec(),
+            role: Role::Member,
+            paired_at: 1,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(call(&ctp, dtp.node_id(), "hello").await.ok);
+    assert!(ctp.path_of(dtp.node_id(), transport::ALPN_CTRL).is_some());
+
+    let closer: daemon::unpair::PeerCloser = {
+        let t = dtp.clone();
+        std::sync::Arc::new(move |peer| t.close_peer(peer))
+    };
+    let removed = daemon::unpair::remove_pairing(
+        &db,
+        daemon::unpair::Holders {
+            connections: Some(&closer),
+            ..Default::default()
+        },
+        phone,
+        None,
+        DepartedBy::Owner,
+        2,
+    )
+    .await
+    .unwrap();
+    assert!(removed.is_some());
+
+    let mut closed = false;
+    for _ in 0..100 {
+        if ctp.path_of(dtp.node_id(), transport::ALPN_CTRL).is_none() {
+            closed = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(closed, "撤销后必须主动关掉与手机的连接");
+}

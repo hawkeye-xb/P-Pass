@@ -868,7 +868,14 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("WATCH-01: 目录监听启动失败，降级为每小时对账兜底: {e}");
     }
 
+    // #1119：删配对记录时关掉与那台设备的全部连接（电脑撤销走 IPC，手机断开走 Router）。
+    let peer_closer: daemon::unpair::PeerCloser = {
+        let t = transport.clone();
+        std::sync::Arc::new(move |peer| t.close_peer(peer))
+    };
+    ipc.set_peer_closer(peer_closer.clone());
     let router = Router::new(db, "P-Pass 存储端")
+        .with_peer_closer(peer_closer)
         .with_events(event_bus.clone())
         .with_subscriptions(subscriptions)
         .with_outdated_peers(outdated)

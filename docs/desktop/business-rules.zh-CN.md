@@ -96,7 +96,8 @@ daemon 是 `config.toml` 与诊断包的唯一写者：照片库位置只经 IPC
 
 ### 2.5 删除配对记录：唯一入口
 
-- 唯一入口 `daemon::unpair::remove_pairing`：先删库里的配对记录（级联 + 更新内存副本，从这一刻起该设备的请求在 authz 处被拒），再清它的内存态：`FlowDelivery::release_peer`（中断在途拉取并等其退出、清路径登记与拉取锁）、`BackupEngine::end_session`、关订阅。关闭网络连接见 #1119。
+- 唯一入口 `daemon::unpair::remove_pairing`：先删库里的配对记录（级联 + 更新内存副本，从这一刻起该设备的请求在 authz 处被拒），再清它的内存态：`FlowDelivery::release_peer`（中断在途拉取并等其退出、清路径登记与拉取锁）、`BackupEngine::end_session`、关订阅，最后用 iroh 的 `Connection::close` 关掉与这台设备的全部连接（`IrohTransport::close_peer`，关闭码 `UNPAIRED_CLOSE_CODE` = 410，#1119）。撤销的生效不依赖对端知道。
+- 手机自己断开（`device.unpair`）：先让「已断开」回应送达（`BiStream::delivered`，最多等 `UNPAIR_REPLY_GRACE` = 2 s；QUIC 关连接会丢弃未送达的数据），再关连接。
 - 离开原因记在档案 `departed_by`：`owner`（业主移除，IPC `device.revoke`）/ `device`（手机自己断开，`device.unpair`）/ `identity`（电脑换身份，#1109 启动时 `Db::remove_all_pairings`，此时组件尚未启动、没有内存态要清）。
 - 手机自己断开：带 `pairing_id` 时只删 id 一致的那条（不一致不改、仍回 ok，#565）；不带时删它当前的配对记录。
 - 删除后：`authz::check` 只放行 `hello` / `pair.request` / `pair.status` / `pair.cancel`（与从未配对相同，拒绝原因统一为 `not_paired`）；`record_presence` 不刷新 `last_seen`；入库前复检配对记录（`flow_revoke::revoked_device_is_rechecked_before_ingest_even_without_the_sweep`）。

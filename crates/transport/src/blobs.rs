@@ -83,6 +83,19 @@ impl GatedBlobs {
     }
 }
 
+impl GatedBlobs {
+    /// #1119：这台设备正在服务中的 blobs 连接（交给 `close_peer` 关闭）。
+    pub(crate) fn connections_of(&self, peer: NodeId) -> Vec<Connection> {
+        self.live
+            .lock()
+            .expect("blobs live connections lock")
+            .values()
+            .filter(|(p, _)| *p == peer)
+            .map(|(_, c)| c.clone())
+            .collect()
+    }
+}
+
 impl ProtocolHandler for GatedBlobs {
     async fn accept(&self, connection: Connection) -> std::result::Result<(), AcceptError> {
         let peer = NodeId(*connection.remote_id().as_bytes());

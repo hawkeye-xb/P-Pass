@@ -225,6 +225,9 @@ pub struct IpcServer {
     /// #1117: `device.revoke` drops the removed device's backup session.
     /// OnceLock for the same reason as `flow_delivery`. Unset = no-op.
     backup: std::sync::OnceLock<crate::backup::BackupEngine>,
+    /// #1119: `device.revoke` closes every connection of the removed device.
+    /// OnceLock: main sets it after the transport binds. Unset = no-op.
+    peer_closer: std::sync::OnceLock<crate::unpair::PeerCloser>,
     /// #1070: the router's version-mismatch registry — feeds the device
     /// list's `needs_update`. Unset = an empty registry (never flags anyone).
     outdated: crate::router::OutdatedPeers,
@@ -612,6 +615,7 @@ impl IpcServer {
             subscriptions: SubscriptionRegistry::new(),
             flow_delivery: std::sync::OnceLock::new(),
             backup: std::sync::OnceLock::new(),
+            peer_closer: std::sync::OnceLock::new(),
             outdated: crate::router::OutdatedPeers::new(),
             library_location: None,
         }
@@ -648,6 +652,11 @@ impl IpcServer {
     /// #563: inject the Flow delivery port so `device.revoke` can cancel the
     /// removed device's in-flight fetches (main calls this once FlowDelivery
     /// exists; repeated sets are ignored).
+    /// #1119: see the `peer_closer` field.
+    pub fn set_peer_closer(&self, closer: crate::unpair::PeerCloser) {
+        let _ = self.peer_closer.set(closer);
+    }
+
     /// #1117: see the `backup` field.
     pub fn set_backup(&self, backup: crate::backup::BackupEngine) {
         let _ = self.backup.set(backup);
@@ -1397,6 +1406,7 @@ impl IpcServer {
                 let holders = crate::unpair::Holders {
                     flow: self.flow_delivery.get(),
                     backup: self.backup.get(),
+                    connections: self.peer_closer.get(),
                     subscriptions: Some(&self.subscriptions),
                 };
                 match crate::unpair::remove_pairing(

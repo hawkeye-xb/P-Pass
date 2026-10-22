@@ -156,3 +156,74 @@ async fn connection_cache_reuses_a_key_but_keeps_alpns_separate() {
     client.close().await;
     server.close().await;
 }
+
+/// #1119：桌面删掉一台设备的配对记录后，`close_peer` 立即关掉与它的全部连接
+/// （不等空闲回收），对端看到 UNPAIRED_CLOSE_CODE；别的设备的连接不受影响。
+/// 反证：close_peer 不关连接（只从缓存里摘掉），对端读不到关闭 ⇒ 超时变红。
+#[tokio::test]
+async fn close_peer_closes_every_connection_of_that_peer_only() {
+    let alpns = vec![ALPN_CTRL.to_string()];
+    let server = IrohTransport::bind(TransportConfig::loopback(alpns.clone()))
+        .await
+        .expect("bind server");
+    let phone_a = IrohTransport::bind(TransportConfig::loopback(alpns.clone()))
+        .await
+        .expect("bind a");
+    let phone_b = IrohTransport::bind(TransportConfig::loopback(alpns))
+        .await
+        .expect("bind b");
+    let server_id = phone_a.add_peer(server.local_addr());
+    phone_b.add_peer(server.local_addr());
+
+    // 服务端只接受连接、在每条连接上收一个流，保持连接存活。
+    let server_for_task = server.clone();
+    tokio::spawn(async move {
+        let mut incoming = server_for_task.listen().await;
+        while let Some(inc) = next(&mut incoming).await {
+            tokio::spawn(async move {
+                if let Ok(mut bi) = inc.accept_bi().await {
+                    while let Ok(Some(_)) = bi.recv_frame().await {}
+                }
+            });
+        }
+    });
+
+    let mut a = phone_a
+        .connect(server_id, ALPN_CTRL)
+        .await
+        .expect("a connects");
+    let mut b = phone_b
+        .connect(server_id, ALPN_CTRL)
+        .await
+        .expect("b connects");
+    a.send_frame(b"hi").await.expect("a sends");
+    b.send_frame(b"hi").await.expect("b sends");
+    // 等服务端登记两条连接。
+    for _ in 0..50 {
+        if server.path_of(phone_a.node_id(), ALPN_CTRL).is_some()
+            && server.path_of(phone_b.node_id(), ALPN_CTRL).is_some()
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    assert_eq!(server.close_peer(phone_a.node_id()), 1);
+    assert!(server.path_of(phone_a.node_id(), ALPN_CTRL).is_none());
+
+    // A 那一端很快读到连接被关（不是挂着等超时）。
+    let closed = tokio::time::timeout(Duration::from_secs(5), a.recv_frame())
+        .await
+        .expect("phone A must observe the close promptly");
+    assert!(closed.is_err() || matches!(closed, Ok(None)), "{closed:?}");
+    // B 不受影响。
+    assert!(server.path_of(phone_b.node_id(), ALPN_CTRL).is_some());
+    b.send_frame(b"still here")
+        .await
+        .expect("b keeps its connection");
+    assert_eq!(
+        server.close_peer(NodeId([9; 32])),
+        0,
+        "未知设备：什么都不关"
+    );
+}

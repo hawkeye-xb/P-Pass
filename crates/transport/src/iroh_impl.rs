@@ -212,6 +212,20 @@ impl ConnectionCache {
         stale
     }
 
+    /// #1119：取出这台设备的全部缓存连接（任意 ALPN），交给调用方关闭。
+    fn take_peer(&mut self, peer: NodeId) -> Vec<Connection> {
+        let mut taken = Vec::new();
+        self.entries.retain(|key, entry| {
+            if key.peer == peer {
+                taken.push(entry.conn.clone());
+                false
+            } else {
+                true
+            }
+        });
+        taken
+    }
+
     fn remove_if_same(&mut self, key: &ConnectionKey, conn: &Connection) {
         if self
             .entries
@@ -416,6 +430,34 @@ impl IrohTransport {
         self.path_of(peer, alpn)
             .map(status_of_live)
             .unwrap_or(ConnectionStatus::Unknown)
+    }
+
+    /// #1119：这台设备的配对记录已删除——用 iroh 自带的 `Connection::close`
+    /// 关掉与它的全部连接（控制面、下载，以及 blobs 处理器里在服务的连接），
+    /// 不等空闲回收。对端看到关闭码 [`crate::UNPAIRED_CLOSE_CODE`]。之后它再连
+    /// 进来，每个请求照常过 authz（没有配对记录 ⇒ 只剩配对那扇门）。返回关掉了
+    /// 几条连接（同一连接只算一次）。
+    pub fn close_peer(&self, peer: NodeId) -> usize {
+        let mut conns = self
+            .connections
+            .lock()
+            .expect("connection cache lock")
+            .take_peer(peer);
+        if let Some(blobs) = self
+            .blobs_handler
+            .lock()
+            .expect("blobs handler lock")
+            .as_ref()
+        {
+            conns.extend(blobs.connections_of(peer));
+        }
+        let mut seen = std::collections::HashSet::new();
+        for conn in &conns {
+            if seen.insert(conn.stable_id()) {
+                conn.close(crate::UNPAIRED_CLOSE_CODE.into(), b"unpaired");
+            }
+        }
+        seen.len()
     }
 
     /// Crate-internal endpoint access (blobs.rs shares the endpoint).
@@ -776,6 +818,13 @@ impl BiStream {
         self.send
             .finish()
             .map_err(|e| TransportError::Io(e.to_string()))
+    }
+
+    /// #1119：等对端确认收齐这条流已发出的全部数据（QUIC 层确认，不代表对端
+    /// 已处理）。在 [`Self::finish`] 之后、主动关闭连接之前用——QUIC 的连接关闭
+    /// 会丢弃尚未送达的流数据。对端停止接收或连接已断也算结束。
+    pub async fn delivered(&self) {
+        let _ = self.send.stopped().await;
     }
 }
 

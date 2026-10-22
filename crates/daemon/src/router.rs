@@ -115,6 +115,20 @@ impl OutdatedPeers {
     }
 }
 
+/// #1119：手机断开后等「已断开」回应送达的上限，过了就直接关连接。
+const UNPAIR_REPLY_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// `device.unpair` 的回应是不是「这次配对已删除」。
+fn unpaired(resp: &Resp) -> bool {
+    resp.ok
+        && resp
+            .result
+            .as_ref()
+            .and_then(|r| r.get("unpaired"))
+            .and_then(|v| v.as_bool())
+            == Some(true)
+}
+
 /// The ctrl-plane router: one per daemon process.
 #[derive(Clone)]
 pub struct Router {
@@ -137,6 +151,8 @@ pub struct Router {
     /// Clock seam (T-070 时钟前跳剧本): production uses the wall clock;
     /// integration scenarios inject a controllable clock.
     now: std::sync::Arc<dyn Fn() -> i64 + Send + Sync>,
+    /// #1119：手机断开时关掉与它的全部连接。未注入 = 不关（测试 / 单组件构造）。
+    peer_closer: Option<crate::unpair::PeerCloser>,
 }
 
 impl Router {
@@ -153,7 +169,14 @@ impl Router {
             subscriptions: SubscriptionRegistry::new(),
             outdated: OutdatedPeers::new(),
             now: std::sync::Arc::new(unix_ms_now),
+            peer_closer: None,
         }
+    }
+
+    /// #1119：注入「关掉与某台设备的全部连接」（main 传 `IrohTransport::close_peer`）。
+    pub fn with_peer_closer(mut self, closer: crate::unpair::PeerCloser) -> Self {
+        self.peer_closer = Some(closer);
+        self
     }
 
     /// IPC-02: 注入事件总线——backup commit / unpair 等数据面变化
@@ -314,6 +337,19 @@ impl Router {
                 }
                 let resp = self.dispatch(peer, &req).await;
                 let _ = self.send(stream, &resp).await;
+                // #1119：手机自己断开、配对记录已删——先让「已断开」的回应送达
+                // （连接关闭会丢弃未送达的数据，最多等 2 秒），再关掉与它的全部
+                // 连接。电脑撤销走 IPC，不经过这里，删完立即关。
+                if req.method == methods::DEVICE_UNPAIR && unpaired(&resp) {
+                    if let Some(close) = &self.peer_closer {
+                        let _ = tokio::time::timeout(UNPAIR_REPLY_GRACE, stream.delivered()).await;
+                        let closed = close(peer);
+                        tracing::info!(
+                            "#1119: device unpaired, closed {closed} connection(s) peer={peer:?}"
+                        );
+                    }
+                    return false;
+                }
                 true
             }
         }
@@ -957,6 +993,8 @@ impl Router {
             flow: self.flow_delivery.as_ref(),
             backup: self.backup.as_ref(),
             subscriptions: Some(&self.subscriptions),
+            // 连接在回应送达之后再关（见 serve_stream）。
+            connections: None,
         };
         // DEV-03：记下是**设备自己**断的。业主没做过这个决定，所以这台设备
         // 留在「家人与设备」里标「已断开」，而不是凭空消失。

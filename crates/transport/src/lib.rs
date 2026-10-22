@@ -67,6 +67,11 @@ pub const ALPN_BLOBS: &str = "ppf/blobs/1";
 /// playback — one asset per stream, authz-gated like everything else.
 pub const ALPN_DOWNLOAD: &str = "ppf/download/1";
 
+/// #1119：桌面删掉一台设备的配对记录后主动关闭与它的连接时用的 QUIC 关闭码
+/// （`IrohTransport::close_peer`）。与 blobs 拒绝码 403 区分开：这一条的意思是
+/// 「你的配对已被删除」。
+pub const UNPAIRED_CLOSE_CODE: u32 = 410;
+
 /// Device identity: the 32-byte ed25519 public key of an endpoint (ADR-004,
 /// no account system). Displayed as 64 lowercase hex characters.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
