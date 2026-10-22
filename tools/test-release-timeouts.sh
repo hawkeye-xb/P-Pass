@@ -62,11 +62,11 @@ PY
 )"
 [ -z "$missing" ] && pass "全部 job 都有" || fail "缺 timeout-minutes：$missing"
 
-echo "==> 门禁：bundle-desktop-macos.sh 的 codesign / hdiutil / osascript 都经 with-timeout"
+echo "==> 门禁：bundle-desktop-macos.sh / daemon-helper-macos.sh 的 codesign / hdiutil / osascript 都经 with-timeout"
 # 续行（上一行以 \ 结尾）是同一条命令的后半截，不算裸调用。
 bare="$(awk '/^[[:space:]]*#/ {cont=0; next}
-  !cont && /^[[:space:]]*(codesign|hdiutil|osascript)([[:space:]]|$)/ {print NR": "$0}
-  {cont = /\\$/}' "$ROOT/tools/bundle-desktop-macos.sh")"
+  !cont && /^[[:space:]]*(codesign|hdiutil|osascript)([[:space:]]|$)/ {print FILENAME":"FNR": "$0}
+  {cont = /\\$/}' "$ROOT/tools/bundle-desktop-macos.sh" "$ROOT/tools/daemon-helper-macos.sh")"
 [ -z "$bare" ] && pass "没有裸调用" || fail "裸调用：$bare"
 
 if [ "$fails" -ne 0 ]; then

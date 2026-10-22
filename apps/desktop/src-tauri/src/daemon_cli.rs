@@ -353,6 +353,7 @@ mod tests {
             "binaries/ppf-daemon-aarch64-apple-darwin",
             "target/debug/ppf-daemon.exe",
             "target/debug/ppf-daemon",
+            "target/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon",
         ]
         .iter()
         .map(|p| root.join(p))

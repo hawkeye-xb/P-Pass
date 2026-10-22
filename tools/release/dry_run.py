@@ -324,7 +324,8 @@ if sub == "bundle":
     app = bundle_dir / "macos/P-Pass.app"
     (app / "Contents/MacOS").mkdir(parents=True, exist_ok=True)
     (app / "Contents/Info.plist").write_bytes(plistlib.dumps({"CFBundleShortVersionString": ver}))
-    shutil.copy2("src-tauri/binaries/ppf-daemon-aarch64-apple-darwin", app / "Contents/MacOS/ppf-daemon")
+    # #1110：macOS 不走 externalBin（tauri.macos.conf.json 置空），.app 里只有壳；
+    # daemon helper 由 bundle-desktop-macos.sh 第 4 步组装。
 elif sub == "build" and "--no-bundle" not in rest:
     (bundle_dir / "nsis").mkdir(parents=True, exist_ok=True)
     (bundle_dir / "nsis" / f"P-Pass_{ver}_x64-setup.exe").write_bytes(b"fake")

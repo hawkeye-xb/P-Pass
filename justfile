@@ -235,14 +235,21 @@ platform-smoke:
     cargo run -p platform --example smoke
 
 # T-041 桌面壳开发模式（Tauri dev = 前端热更 + 托盘）
+# #1110：macOS 上壳拉起的是 src-tauri/target/Helpers/ppf-daemon.app，先跑 dev-daemon-helper。
 dev-desktop:
     cd apps/desktop && npx tauri dev
+
+# #1110：把本地构建的 daemon 组装成签过名的 helper（个人团队 Developer ID + 授权文件），
+# 供 `just dev-desktop` 拉起。需 PPF_DAEMON_PROVISIONPROFILE=<授权文件路径>。
+dev-daemon-helper *daemon_bin:
+    tools/daemon-helper-macos.sh dev {{daemon_bin}}
 
 # M1 总验收（手册 E 表）：全仓测试 + 接口全剧本 + 桌面产物
 #
 # BUILD-09：这里以前直接 `npx tauri build --bundles app`，出来的 .app 缺
-# Contents/MacOS/lib —— daemon 的 rpath 是 @executable_path/lib，Tauri 的
+# daemon 旁边的 lib/ —— daemon 的 rpath 是 @executable_path/lib，Tauri 的
 # externalBin 只搬那一个二进制，不搬它旁边那包 dylib。构建全绿、装上才炸。
+# #1110 起 daemon 是嵌套 helper（Contents/Helpers/ppf-daemon.app），只有这条链路组装得出。
 # 正确链路只有一条（release.yml 一直走的那条），现在本地也走它，而且
 # bundle-desktop-macos.sh 第 5b 步会真的跑一遍 sidecar 才放行。
 # 本地 ad-hoc 身份默认不出 dmg（BUILD-05 定调），要 dmg 设 PPF_BUNDLE_DMG=1。

@@ -314,7 +314,7 @@ jobs:
           # find-identity -v 第 1 行是身份（"1) <hash> \"...\""），第 2 行是
           # "N valid identities found" 汇总——取 NR==1 才是证书哈希。
           # #772：--timestamp 要请求 Apple 时间戳服务，可能挂住——限时并重试一次。
-          # 签的是 sidecar 的来源 /tmp/rel/daemon（Bundle desktop 把它拷进 .app 再整体重签）；
+          # 签的是 sidecar 的来源 /tmp/rel/daemon（Bundle desktop 把它组装进 helper 后由内向外重签，#1110）；
           # 本步的 signed=yes 也是下面 Signing status tag 的输入，不能删。
           tools/release/with-timeout.sh "codesign daemon（Apple 时间戳服务）" 300 2 -- \
             /usr/bin/codesign --force --options runtime --timestamp \
@@ -330,9 +330,9 @@ jobs:
       # .app），staple 装订进 dmg。步骤移到 Bundle desktop 之后。
 
       # ── H-10c: 面向人类的 .app + dmg（复用 /tmp/rel 的自包含 daemon）──
-      # sidecar = bundle 后 daemon（rpath @executable_path/lib），lib/ 必须
-      # 一起进 .app/Contents/MacOS/lib。无凭据路径 ad-hoc 重签；凭据到位后
-      # 此步的 codesign identity 由门控环境提供。
+      # #1110：daemon + lib/ 组装成嵌套 helper .app/Contents/Helpers/ppf-daemon.app
+      # （rpath @executable_path/lib 不变），由内向外逐层签名。无凭据路径 ad-hoc；
+      # 凭据到位后此步的 codesign identity 由门控环境提供。
       - name: Install Node + pnpm (desktop build)
         run: |
           set -euo pipefail
@@ -341,6 +341,23 @@ jobs:
           # 字段不可用，直接 npm 全局装。
           npm install -g pnpm@11
           pnpm --version
+
+      # #1110：daemon helper 的 provisioning profile（授权 keychain-access-groups）。
+      # 缺失即失败——不出 daemon 读写不了钥匙串的包。secret 只进本 step env；
+      # 解出的文件路径经 GITHUB_ENV 交给下面的 bundle 步骤。
+      - name: Daemon provisioning profile (#1110)
+        env:
+          APPLE_DAEMON_PROVISIONPROFILE: ${{ secrets.APPLE_DAEMON_PROVISIONPROFILE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APPLE_DAEMON_PROVISIONPROFILE:-}" ]; then
+            echo "FATAL: secret APPLE_DAEMON_PROVISIONPROFILE 没设（base64 的 Developer ID 授权文件，App ID com.hawkeyexb.ppass.desktop.daemon）" >&2
+            exit 1
+          fi
+          PROFILE="$RUNNER_TEMP/ppf-daemon.provisionprofile"
+          echo "$APPLE_DAEMON_PROVISIONPROFILE" | base64 --decode > "$PROFILE"
+          [ -s "$PROFILE" ] || { echo "FATAL: APPLE_DAEMON_PROVISIONPROFILE 解码后为空" >&2; exit 1; }
+          echo "PPF_DAEMON_PROVISIONPROFILE=$PROFILE" >> "$GITHUB_ENV"
 
       - name: Bundle desktop .app + dmg (H-10c)
         # UPD-01: createUpdaterArtifacts 强制签名——tauri bundle 需要
@@ -404,7 +421,7 @@ jobs:
           tools/release/with-timeout.sh "stapler validate" 120 1 -- xcrun stapler validate "$DMG"
           echo "notarized=yes" >> "$GITHUB_OUTPUT"
 
-      # UPD-03: 桌面 updater 包——必须从「嵌 lib/ + 重签」之后的最终 .app
+      # UPD-03: 桌面 updater 包——必须从「组装 helper + 逐层签名」之后的最终 .app
       # 现打。不能用 `pnpm tauri bundle` 自己产的那份 tar.gz：它在塞 lib/
       # 之前就生成，内容缺 lib/，打出去就是 BUILD-09 的复发（用户一更新
       # 就 dyld 起不来）。签名不在本 job 做——统一收在 finalize-manifest，

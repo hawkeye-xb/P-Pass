@@ -10,12 +10,13 @@
 #                rel_dir itself so the dmg lands next to the other assets)
 #
 # Steps:
-#   1. sidecar = bundled daemon (Tauri externalBin wants the -<triple> name)
+#   1. (none) macOS 不走 Tauri externalBin（tauri.macos.conf.json 置空，#1110）
 #   2. pnpm tauri build --no-bundle  (compiles the p-pass-desktop shell)
-#   3. pnpm tauri bundle             (produces P-Pass.app)
-#   4. copy lib/ INTO the .app at Contents/MacOS/lib — the daemon's rpath is
-#      @executable_path/lib, so it must sit next to the sidecar binary
-#   5. re-sign the .app (mandatory after changing bundle contents on arm64)
+#   3. pnpm tauri bundle             (produces P-Pass.app, shell only)
+#   4. #1110：daemon + lib/ 组装成嵌套 helper App
+#      Contents/Helpers/ppf-daemon.app（tools/daemon-helper-macos.sh assemble）
+#   5. 由内向外逐层签名：lib/*.dylib → helper（带钥匙串权限声明 + 授权文件）
+#      → P-Pass.app。不用 --deep：它会用外层的参数重签内层，冲掉 helper 的权限声明。
 #   6. hdiutil → P-Pass_<版本>_macos-arm64.dmg（UPD-15 #685：名字由
 #      tools/artifact-names.sh 单源派生，不再硬编码）
 #
@@ -27,7 +28,9 @@
 # "version" 不再是产物版本的来源。第 5c 步实读产物核对三者一致，不一致不许出门。
 #
 # Signing: ad-hoc by default (no-credential path, matches release.yml gating).
-# Pass a second arg (codesign identity) for the signed path — caller gates it.
+# Pass a third arg (codesign identity) for the signed path — caller gates it.
+# 签名路径必须同时给 PPF_DAEMON_PROVISIONPROFILE=<daemon 授权文件路径>（#1110），
+# 缺了直接失败：不出 daemon 读写不了钥匙串的包。
 set -euo pipefail
 
 REL="$1"; DMG_OUT="$2"
@@ -55,9 +58,12 @@ echo "tauri --config: $VERSION_CONFIG"
 [ -d "$REL/lib" ] || { echo "FATAL: $REL/lib missing — run bundle-macos.sh first" >&2; exit 1; }
 [ -f "$REL/daemon" ] || { echo "FATAL: $REL/daemon missing" >&2; exit 1; }
 
-echo "── 1. sidecar = bundled daemon"
-mkdir -p "$DESKTOP/src-tauri/binaries"
-cp "$REL/daemon" "$DESKTOP/src-tauri/binaries/ppf-daemon-aarch64-apple-darwin"
+HELPER_TOOL="$(cd "$(dirname "$0")" && pwd)/daemon-helper-macos.sh"
+PROFILE="${PPF_DAEMON_PROVISIONPROFILE:-}"
+if [ "$IDENTITY" != "-" ] && [ -z "$PROFILE" ]; then
+  echo "FATAL: Developer ID 签名需要 daemon 授权文件：设 PPF_DAEMON_PROVISIONPROFILE（#1110）" >&2
+  exit 1
+fi
 
 echo "── 2. pnpm install + tauri build --no-bundle（版本 ${VERSION}）"
 cd "$DESKTOP"
@@ -92,21 +98,27 @@ fi
 APP="$DESKTOP/src-tauri/target/release/bundle/macos/P-Pass.app"
 [ -d "$APP" ] || { echo "FATAL: $APP not produced" >&2; exit 1; }
 
-echo "── 4. embed lib/ next to sidecar (rpath @executable_path/lib)"
-rm -rf "$APP/Contents/MacOS/lib"
-cp -R "$REL/lib" "$APP/Contents/MacOS/lib"
+echo "── 4. 组装 daemon helper：Contents/Helpers/ppf-daemon.app（#1110）"
+HELPER="$APP/Contents/Helpers/ppf-daemon.app"
+"$HELPER_TOOL" assemble "$REL" "$HELPER" "$VERSION"
+# 裸 sidecar 的老布局不许再出现：壳只认 helper（platform::bundled_daemon_path）。
+for stale in "$APP/Contents/MacOS/ppf-daemon" "$APP/Contents/MacOS/lib"; do
+  [ ! -e "$stale" ] || { echo "FATAL: .app 里出现了老布局 ${stale}（externalBin 没关掉？）" >&2; exit 1; }
+done
 
-echo "── 5. re-sign .app ($IDENTITY)"
+echo "── 5. 由内向外签名（${IDENTITY}）：helper → .app"
 # Hardened runtime enforces library validation. An ad-hoc signature has no
 # Team ID, so a daemon with `runtime` cannot map the bundled Homebrew dylibs.
 # Use runtime + timestamp only for a real Developer ID identity; release CI
 # supplies that identity before notarization. Local dogfood must stay ad-hoc
 # and must not claim to be notarization-ready.
 if [ "$IDENTITY" = "-" ]; then
-  "$WT" "codesign 重签 .app（ad-hoc）" 300 1 -- codesign --force --deep --sign - "$APP"
+  "$HELPER_TOOL" sign "$HELPER" -
+  "$WT" "codesign 外层 .app（ad-hoc）" 300 1 -- codesign --force --sign - "$APP"
 else
-  "$WT" "codesign 重签 .app（Developer ID + Apple 时间戳服务）" 300 2 -- \
-    codesign --force --deep --sign "$IDENTITY" --options runtime --timestamp "$APP"
+  "$HELPER_TOOL" sign "$HELPER" "$IDENTITY" "$PROFILE"
+  "$WT" "codesign 外层 .app（Developer ID + Apple 时间戳服务）" 300 2 -- \
+    codesign --force --sign "$IDENTITY" --options runtime --timestamp "$APP"
 fi
 "$WT" "codesign 校验 .app" 120 1 -- codesign --verify --deep --strict "$APP"
 
@@ -122,16 +134,18 @@ fi
 #              二进制，daemon 的 rpath（@executable_path/lib）落空。
 # 按成因逐个堵是堵不完的，所以这里只问结果：**跑得起来吗**。
 #
-# 反证锚点：`rm -rf "$APP/Contents/MacOS/lib"` 后本步必须失败。
-SIDECAR="$APP/Contents/MacOS/ppf-daemon"
+# 反证锚点：`rm -rf "$HELPER/Contents/MacOS/lib"` 后本步必须失败。
+# #1110：Developer ID 路径下这一步同时证明 helper 的权限声明被系统接受——
+# 授权文件不覆盖权限声明时，进程一启动就被杀（退出码 137）。
+SIDECAR="$HELPER/Contents/MacOS/ppf-daemon"
 echo "── 5b. 产物自检：$SIDECAR --version"
 [ -x "$SIDECAR" ] || { echo "FATAL: sidecar 不存在或不可执行：$SIDECAR" >&2; exit 1; }
 if ! SELFCHECK_OUT="$("$SIDECAR" --version 2>&1)"; then
   echo "FATAL: .app 里的 daemon 起不起来——构建产物是坏的，不许出门。" >&2
   echo "       $SIDECAR --version 退出码非 0，输出：" >&2
   echo "$SELFCHECK_OUT" | sed 's/^/       /' >&2
-  echo "       最常见成因：Contents/MacOS/lib 缺失或不完整（daemon 的 rpath" >&2
-  echo "       是 @executable_path/lib，库必须与 sidecar 并排）。" >&2
+  echo "       最常见成因：helper 的 Contents/MacOS/lib 缺失或不完整（daemon 的 rpath" >&2
+  echo "       是 @executable_path/lib，库必须与 daemon 并排）；或权限声明没被授权文件覆盖（137）。" >&2
   exit 1
 fi
 echo "   ✓ $SELFCHECK_OUT"
@@ -142,16 +156,43 @@ echo "   ✓ $SELFCHECK_OUT"
 # 0.9.12-test.1）。这里只问结果：产物里写的是不是同一个号。
 # 反证锚点：去掉第 2/3 步的 `--config` 后，test tag 构建必须在本步失败。
 # 用 python3 标准库 plistlib 读：dry-run 在 Linux runner 上跑，那里没有 PlistBuddy。
-PLIST_VERSION="$(python3 -c 'import plistlib,sys; print(plistlib.load(open(sys.argv[1],"rb")).get("CFBundleShortVersionString",""))' "$APP/Contents/Info.plist" 2>/dev/null || true)"
+plist_version() { python3 -c 'import plistlib,sys; print(plistlib.load(open(sys.argv[1],"rb")).get("CFBundleShortVersionString",""))' "$1" 2>/dev/null || true; }
+PLIST_VERSION="$(plist_version "$APP/Contents/Info.plist")"
+HELPER_VERSION="$(plist_version "$HELPER/Contents/Info.plist")"
 DAEMON_VERSION="${SELFCHECK_OUT#P-Pass daemon }"
-echo "── 5c. 版本同源：构建 $VERSION / 外壳 Info.plist $PLIST_VERSION / daemon $DAEMON_VERSION"
-if [ "$PLIST_VERSION" != "$VERSION" ] || [ "$DAEMON_VERSION" != "$VERSION" ]; then
+echo "── 5c. 版本同源：构建 $VERSION / 外壳 Info.plist $PLIST_VERSION / helper Info.plist $HELPER_VERSION / daemon $DAEMON_VERSION"
+if [ "$PLIST_VERSION" != "$VERSION" ] || [ "$HELPER_VERSION" != "$VERSION" ] || [ "$DAEMON_VERSION" != "$VERSION" ]; then
   echo "FATAL: 外壳与 daemon 的版本号不同源（#809）——" >&2
   echo "       tools/release-version.sh desktop = $VERSION" >&2
   echo "       Info.plist CFBundleShortVersionString = ${PLIST_VERSION:-<读不到>}" >&2
   echo "       ppf-daemon --version = $SELFCHECK_OUT" >&2
   echo "       daemon 须以 PPF_BUILD_VERSION=<上面这个号> 构建；外壳由本脚本 --config 注入。" >&2
   exit 1
+fi
+
+# ── 5d. #1110 签名形状自检（只在 Developer ID 路径）──────────────────────
+# helper 带访问组、外层不带；包里每个 Mach-O 都是同一团队、hardened runtime、带时间戳
+# （公证要求）。只在本地手查会漂，所以每次构建都查。
+if [ "$IDENTITY" != "-" ]; then
+  echo "── 5d. 签名形状自检"
+  if codesign -d --entitlements - --xml "$APP" 2>/dev/null | grep -q keychain-access-groups; then
+    echo "FATAL: 外层 P-Pass.app 带了 keychain-access-groups——只有 helper 该带" >&2
+    exit 1
+  fi
+  APP_INFO="$(codesign -dvv "$APP" 2>&1)"
+  grep -qx "Identifier=com.hawkeyexb.ppass.desktop" <<<"$APP_INFO" || {
+    echo "FATAL: 外层 Identifier 不是 com.hawkeyexb.ppass.desktop（#1112）" >&2; exit 1; }
+  cmp -s "$PROFILE" "$HELPER/Contents/embedded.provisionprofile" || {
+    echo "FATAL: helper 里的 embedded.provisionprofile 不是本次给的授权文件" >&2; exit 1; }
+  HELPER_TEAM="$(codesign -dvv "$HELPER" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
+  while IFS= read -r -d '' f; do
+    file -b "$f" | grep -q '^Mach-O' || continue
+    INFO="$(codesign -dvv "$f" 2>&1)" || { echo "FATAL: 没签名：$f" >&2; exit 1; }
+    grep -qx "TeamIdentifier=$HELPER_TEAM" <<<"$INFO" || { echo "FATAL: 团队不一致：$f" >&2; exit 1; }
+    grep -Eq '^CodeDirectory .*\(runtime\)' <<<"$INFO" || { echo "FATAL: 没开 hardened runtime：$f" >&2; exit 1; }
+    grep -q '^Timestamp=' <<<"$INFO" || { echo "FATAL: 没有安全时间戳：$f" >&2; exit 1; }
+  done < <(find "$APP" -type f -print0)
+  echo "   ✓ 每个 Mach-O：团队 $HELPER_TEAM / runtime / 时间戳；外层不带访问组；授权文件一致"
 fi
 
 # BUILD-05（验收人 2026-09-17 定调：本地先讲究快）：dmg 那套
