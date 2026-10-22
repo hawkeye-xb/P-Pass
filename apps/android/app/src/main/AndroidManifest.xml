@@ -50,6 +50,7 @@
     <application
         android:name=".PPassApplication"
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:label="P-Pass"
         android:localeConfig="@xml/locales_config"
         android:icon="@mipmap/ic_launcher"

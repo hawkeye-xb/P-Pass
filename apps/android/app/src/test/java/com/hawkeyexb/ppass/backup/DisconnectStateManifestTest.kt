@@ -12,6 +12,7 @@
 package com.hawkeyexb.ppass.backup
 
 import com.hawkeyexb.ppass.backup.flow.FlowControlStore
+import com.hawkeyexb.ppass.transport.FakeIdentityKeyWrapper
 import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PairingStore
@@ -71,7 +72,8 @@ class DisconnectStateManifestTest {
                 setRequested(true)
                 setEnabled(true)
             }
-            DisconnectState.IDENTITY -> IdentityStore(filesDir).secretKey()
+            DisconnectState.IDENTITY -> IdentityStore(filesDir, FakeIdentityKeyWrapper()).secretKey()
+            DisconnectState.IDENTITY_RETIRED_PLAINTEXT -> fake("files/identity.key")
             DisconnectState.ONBOARDED_DESKTOPS -> OnboardedDesktopsStore(filesDir).markOnboarded(nodeId)
             DisconnectState.BACKUP_SCOPE -> fake("shared_prefs/backup_scope-$nodeId.xml")
             DisconnectState.BACKUP_SCOPE_LEGACY -> fake("shared_prefs/backup_scope.xml")
@@ -189,6 +191,7 @@ class DisconnectStateManifestTest {
         )
         keep.forEach { assertEquals(it.name, DisconnectDisposition.KEEP, it.disposition) }
         assertEquals(DisconnectDisposition.CLEAR, DisconnectState.PAIRING.disposition)
+        assertEquals("#1106：退役明文断开也删", DisconnectDisposition.CLEAR, DisconnectState.IDENTITY_RETIRED_PLAINTEXT.disposition)
         assertEquals(DisconnectDisposition.RESET, DisconnectState.AUTO_BACKUP_PREFS.disposition)
         listOf(DisconnectState.FLOW_RUNTIME, DisconnectState.AUTO_BACKUP_WORKS, DisconnectState.MEDIA_WATCH_JOB)
             .forEach { assertEquals(it.name, DisconnectDisposition.STOP, it.disposition) }

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- #1106：设备身份与配对记录不随设备间直传（D2D）。Android 12 起 allowBackup="false" 在部分厂商
+     设备上挡不住 D2D，只有这里的 device-transfer 规则管得住。新手机 = 新设备：它自己生成身份、
+     重新扫码配对。云备份仍由 allowBackup="false" 整体关闭。 -->
+<data-extraction-rules>
+    <device-transfer>
+        <exclude domain="file" path="identity.sealed" />
+        <exclude domain="file" path="identity.sealed.tmp" />
+        <exclude domain="file" path="identity.key" />
+        <exclude domain="file" path="identity.key.tmp" />
+        <exclude domain="file" path="pairing.json" />
+        <exclude domain="file" path="pairing.json.tmp" />
+    </device-transfer>
+</data-extraction-rules>

@@ -23,7 +23,6 @@ import com.hawkeyexb.ppass.backup.order.OrderStore
 import com.hawkeyexb.ppass.backup.order.ContentResolverMediaSnapshotSource
 import com.hawkeyexb.ppass.backup.order.SqliteOrderStore
 import com.hawkeyexb.ppass.log.PLog
-import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PairingStore
 import com.hawkeyexb.ppass.transport.parsePeerAddrToken
@@ -292,7 +291,7 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
     val pairing: () -> Pairing? = { PairingStore(app.filesDir).load() }
     val client = application.daemonClient
     val desktopFor: suspend (Pairing) -> FlowReceiptClient = { p ->
-        client.bind(IdentityStore(app.filesDir).secretKey())
+        client.bind(application.identity.secretKey())
         DaemonFlowReceiptClient(client, parsePeerAddrToken(p.daemonAddrToken))
     }
     // #413 契约 §4：准备阶段 import（引用优先）拿 hash，建 order 后 serve(lease) 拿 ticket 再 offer。
@@ -304,7 +303,7 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         desktopFor = desktopFor,
         subscribe = { p, onConnected, onEvent ->
             // 每轮开头就订阅，不一定排在某次 desktopFor（会 bind）之后：自己 bind。
-            client.bind(IdentityStore(app.filesDir).secretKey())
+            client.bind(application.identity.secretKey())
             client.subscribeTimeline(
                 parsePeerAddrToken(p.daemonAddrToken),
                 onConnected = { onConnected() },
@@ -313,7 +312,7 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
             )
         },
         cancelTuple = { p, tuple ->
-            client.bind(IdentityStore(app.filesDir).secretKey())
+            client.bind(application.identity.secretKey())
             client.flowCancelTuple(parsePeerAddrToken(p.daemonAddrToken), tuple)
         },
         log = androidLog,
@@ -328,7 +327,7 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         store = store,
         pairing = pairing,
         transportFor = { p ->
-            client.bind(IdentityStore(app.filesDir).secretKey())
+            client.bind(application.identity.secretKey())
             DaemonFlowAuditTransport(client, parsePeerAddrToken(p.daemonAddrToken))
         },
         acknowledgeEvents = { ids -> engine.acknowledgeAudit(ids) },
@@ -348,7 +347,7 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         },
         presence = RemotePresence { hashes ->
             val p = pairing() ?: error("not paired")
-            client.bind(IdentityStore(app.filesDir).secretKey())
+            client.bind(application.identity.secretKey())
             RemotePresenceProbe(client).missing(parsePeerAddrToken(p.daemonAddrToken), hashes)
         },
         foreground = AndroidForegroundLease(app, control),
@@ -376,7 +375,7 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         locationReadable = { AndroidMediaImporter.canReadMediaLocation(app) },
         supersede = SupersedeClient { epoch, oldHash, newHash, provider ->
             val p = pairing() ?: error("not paired")
-            client.bind(IdentityStore(app.filesDir).secretKey())
+            client.bind(application.identity.secretKey())
             RemoteSupersede(client).supersede(
                 parsePeerAddrToken(p.daemonAddrToken),
                 FlowSupersedeRequest(epoch.value, oldHash, newHash, provider),

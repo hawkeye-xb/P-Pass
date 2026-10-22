@@ -31,8 +31,10 @@ import com.hawkeyexb.ppass.backup.flow.flowDeliveryPairingLoss
 import com.hawkeyexb.ppass.backup.reconcileWatchOnProcessStart
 import com.hawkeyexb.ppass.backup.flow.parkFlowNetwork
 import com.hawkeyexb.ppass.log.PLog
+import com.hawkeyexb.ppass.transport.AndroidKeystoreIdentityWrapper
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.IdentityStore
+import com.hawkeyexb.ppass.transport.PairingStore
 import com.hawkeyexb.ppass.transport.NetworkIdleReaper
 import com.hawkeyexb.ppass.transport.cancelLegacyUnpairNotices
 import kotlin.concurrent.thread
@@ -42,11 +44,24 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 class PPassApplication : Application() {
+    /**
+     * #1106：进程内唯一的设备身份（Keystore 加密存盘）。换成新身份之前先按断开清单清掉配对——
+     * 旧配对属于旧 NodeId，留着只会让后台拿新身份去连、被电脑当陌生设备拒掉。
+     */
+    val identity: IdentityStore by lazy {
+        IdentityStore(
+            filesDir,
+            AndroidKeystoreIdentityWrapper(),
+            beforeNewIdentity = { PairingStore(filesDir).load()?.let { clearLocalPairingLogged(this, it) } },
+            log = { PLog.i("PPassIdentity", it) },
+        )
+    }
+
     /** One iroh Endpoint for every foreground and Flow delivery connection in this process. */
     val daemonClient = DaemonClient(
         bindLog = { PLog.i("PPassBind", it) },
         // #434：带上持久身份，调用方不必先 bind；空闲关掉之后下次用到自己再绑。
-        secretKey = { IdentityStore(filesDir).secretKey() },
+        secretKey = { identity.secretKey() },
     )
 
     /** #434：后台空闲（不在前台、引擎这一轮已结束）30 s 后关掉两个 iroh endpoint。 */
@@ -62,6 +77,7 @@ class PPassApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        resolveIdentityFirst()
         thread(name = "ppass-boot-check") {
             requestFlowWake(this, TriggerReason.PROCESS_START)
             runCatching {
@@ -83,6 +99,21 @@ class PPassApplication : Application() {
         networkIdleReaper.setForeground(false)
         // #130 第 1 层：配对失效由投递 / 探测 / 前台心跳记下（#466），记下的那一刻就评估，不等下一次唤醒。
         noticeScope.launch { flowDeliveryPairingLoss.changes.collect { evaluateDefinitiveEvents(this@PPassApplication) } }
+    }
+
+    /**
+     * #1106：身份（以及换新身份时的清配对）必须在任何 Activity / Worker / Receiver 之前定下来，
+     * onCreate 是唯一排在它们全部之前的时机。放在独立线程里、onCreate 最多等 [IDENTITY_WAIT_MS]：
+     * 正常一次解密是毫秒级；万一 Keystore 卡住，不拖成启动 ANR——解析仍持锁继续跑，
+     * 后来的取用方在锁上等它，界面在 IdentityGate 里等结果。失败不抛：界面给拒绝页，后台只推迟。
+     */
+    private fun resolveIdentityFirst() {
+        val resolver = thread(name = "ppass-identity") {
+            runCatching { identity.secretKey() }
+                .onFailure { PLog.w("PPassIdentity", "identity unavailable at process start", it) }
+        }
+        resolver.join(IDENTITY_WAIT_MS)
+        if (resolver.isAlive) PLog.w("PPassIdentity", "identity still resolving after ${IDENTITY_WAIT_MS}ms; continuing start-up")
     }
 
     /** #130：确定事件评估用的进程级 scope（IO，阻塞读文件 + binder）。 */
@@ -152,3 +183,6 @@ class PPassApplication : Application() {
 @Volatile private var appVisible = false
 
 internal fun isAppVisible(): Boolean = appVisible
+
+/** #1106：onCreate 等身份解析的上限（见 resolveIdentityFirst）。 */
+private const val IDENTITY_WAIT_MS = 3_000L
