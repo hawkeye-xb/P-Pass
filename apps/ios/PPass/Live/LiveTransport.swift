@@ -148,8 +148,20 @@ final class ControlPlane: PeerCallPlane, @unchecked Sendable {
     }
 }
 
+/// #1124 / #1126：「记录里的那台电脑以未配对码关了一条连接 ⇒ 记成配对失效」的唯一处理。控制面（`CtrlClient`）
+/// 与上传 provider（`Provider`）的关闭监听都接到它，判据只有 `recordDesktopClose` 这一份；其余按「连不上」。
+func desktopCloseHandler(pairingStore: PairingStore, loss: PairingLoss, logger: CoreLogger) -> @Sendable (String, UInt64) -> Void {
+    { nodeId, code in
+        let record = pairingStore.load()
+        let lost = recordDesktopClose(PeerClosedConnection(nodeId: nodeId, code: code),
+                                      recordedDaemonNodeId: record?.daemonNodeId, pairingId: record?.pairingId, loss: loss)
+        logger.log(lost ? "connection closed by the recorded desktop code=\(code) — pairing rejected"
+                        : "connection closed by peer code=\(code) — treated as unreachable")
+    }
+}
+
 /// FFI `PeerCloseListener` → Swift 闭包（#1124）。
-private final class PeerCloseBridge: PeerCloseListener, @unchecked Sendable {
+final class PeerCloseBridge: PeerCloseListener, @unchecked Sendable {
     private let handler: @Sendable (String, UInt64) -> Void
     init(_ handler: @escaping @Sendable (String, UInt64) -> Void) { self.handler = handler }
     func onPeerClosed(nodeId: String, code: UInt64) { handler(nodeId, code) }

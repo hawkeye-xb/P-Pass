@@ -215,6 +215,32 @@ final class TransportFFITests: XCTestCase {
         provider.shutdown()
     }
 
+    /// #1126：provider 的关闭监听只报「已配对电脑用非 0 应用码关连接」；本地的 revoke / release / 停传输 / shutdown 都不报。
+    /// （410 的正向路径由 Rust 侧测试覆盖。）注册与清除（nil）都不抛。
+    func testProviderLocalCloseDoesNotFirePeerCloseListener() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("provider-listener-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let provider = try Provider(root: root.path)
+        let recorder = PeerCloseRecorder()
+        provider.setPeerCloseListener(listener: recorder)
+
+        let file = root.appendingPathExtension("src")
+        try xorshiftMiB(seed: 0x0DDB_A11).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let imported = try provider.importFile(path: file.path)
+        _ = try provider.serve(hash: imported.hash)
+        try provider.setAllowedPeer(nodeId: String(repeating: "cd", count: 32))
+        provider.stopActiveFetch()
+        provider.revoke()
+        try provider.setAllowedPeer(nodeId: nil)
+        provider.setPeerCloseListener(listener: nil)
+        provider.setPeerCloseListener(listener: recorder)
+        provider.shutdown()
+        Thread.sleep(forTimeInterval: 0.5)
+        XCTAssertEqual(recorder.calls, [], "本地关闭不触发监听")
+    }
+
     // MARK: - 控制面客户端 × 本机 daemon
 
     /// tools/ios/test-transport-ffi.sh 起一个 fake HOME、端口 0 的 daemon，把它的 PeerAddr
@@ -467,6 +493,13 @@ final class TransportFFITests: XCTestCase {
 }
 
 /// #963：记录流式调用收到的帧与结束原因（FFI 回调来自 Rust 的 runtime 线程）。
+private final class PeerCloseRecorder: PeerCloseListener, @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [String] = []
+    var calls: [String] { lock.lock(); defer { lock.unlock() }; return recorded }
+    func onPeerClosed(nodeId: String, code: UInt64) { lock.lock(); recorded.append("\(nodeId):\(code)"); lock.unlock() }
+}
+
 private final class StreamRecorder: StreamListener, @unchecked Sendable {
     private let lock = NSLock()
     private var _frames: [[String: Any]] = []

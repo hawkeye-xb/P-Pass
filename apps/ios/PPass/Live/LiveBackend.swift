@@ -88,17 +88,12 @@ final class LiveBackend: @unchecked Sendable {
         let pairingStore = self.pairingStore
         // #1124：任何一条连接（请求、探测、订阅流、取原图）被「记录里的那台电脑」以 401 / 410 关掉 ⇒ 立刻记成配对失效，
         // 走被拒即清理（setOnLost 在后面接上）；别的关闭方、别的码一律当连不上，不动配对。
-        let closeLoss = pairingLoss
-        plane.setOnPeerClosed { nodeId, code in
-            let record = pairingStore.load()
-            let lost = recordDesktopClose(PeerClosedConnection(nodeId: nodeId, code: code),
-                                          recordedDaemonNodeId: record?.daemonNodeId, pairingId: record?.pairingId, loss: closeLoss)
-            logger.log(lost ? "connection closed by the recorded desktop code=\(code) — pairing rejected"
-                            : "connection closed by peer code=\(code) — treated as unreachable")
-        }
+        // 控制面与上传 provider（#1126）的关闭监听共用同一个处理。
+        let onClosed = desktopCloseHandler(pairingStore: pairingStore, loss: pairingLoss, logger: logger)
+        plane.setOnPeerClosed(onClosed)
         UnpairNotice.removeLegacyOutbox(root: dir, logger: logger) // #956 撤销：老版本的断开发件箱（含旧电脑 peerToken）
         media = LiveMediaLibrary { BackupScopeStore(directory: dir, daemonNodeId: pairingStore.load()?.daemonNodeId, logger: logger) }
-        provider = try NativeProvider(root: dir)
+        provider = try NativeProvider(root: dir, onPeerClosed: onClosed)
         try? provider.ffi.setAllowedPeer(nodeId: pairingStore.load()?.daemonNodeId)
         let parker = ProviderIdleParker(provider: provider, logger: logger)
         providerParker = parker
