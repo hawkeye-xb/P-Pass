@@ -31,5 +31,5 @@ chmod 600 "$KEY"
 
 mkdir -p "$(dirname "$PUB_OUT")"
 cp "$KEY.pub" "$PUB_OUT"
-echo "✓ 私钥已存入 secret $SECRET；本地副本：$KEY（备份进密码管理器后删除）"
+echo "✓ 私钥已存入 secret ${SECRET}；本地副本：${KEY}（备份进密码管理器后删除）"
 echo "✓ 公钥已写到 release/update-keys/test.pub——提交它，test 构建才会内置这把公钥"

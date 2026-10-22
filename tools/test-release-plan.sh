@@ -188,6 +188,8 @@ commit_tag v0.1.0-test.10 apps/ios/project.yml tools/ios/test.sh tools/build-ios
 commit_tag v0.1.0-test.11 apps/ios/PPass/x.swift apps/android/a.kt
 # #348：iOS 界面文案由 Android strings.xml 生成 ⇒ 改它要同时发 Android 与 iOS。
 commit_tag v0.1.0-test.12 apps/android/app/src/main/res/values-zh/strings.xml
+# #1121：正式更新公钥在 tauri.conf.json，Android 构建期也从这里读 ⇒ 改它两端都要重建。
+commit_tag v0.1.0-test.13 apps/desktop/src-tauri/tauri.conf.json
 
 channel 0.1.0-test.1 0.1.0-test.1; tplan v0.1.0-test.2; expect_plan "只改 apps/android/ ⇒ Android 构建、桌面 skip" build skip
 expect_win "只改 apps/android/ ⇒ Windows 也不陪跑" skip
@@ -214,6 +216,8 @@ expect_ios "apps/ios/ 与 apps/android/ 混改 ⇒ iOS 也构建" build
 expect_win "apps/ios/ 与 apps/android/ 混改（#887）⇒ Windows 不陪跑" skip
 channel 0.1.0-test.11 0.1.0-test.11; tplan v0.1.0-test.12; expect_plan "只改 Android strings.xml（#348）⇒ Android 构建、macOS skip" build skip
 expect_ios "只改 Android strings.xml（iOS 文案由它生成）⇒ iOS 也构建" build
+channel 0.1.0-test.12 0.1.0-test.12; tplan v0.1.0-test.13; expect_plan "只改 tauri.conf.json（#1121：Android 也从这里读更新公钥）⇒ Android、macOS 都构建" build build
+expect_win "只改 tauri.conf.json ⇒ Windows 也构建" build
 channel 0.1.0-test.11 0.1.0-test.11 0.1.0-test.11 -; tplan v0.1.0-test.12; expect_ios "test-channel 没有 iOS 清单 ⇒ 拿不准 ⇒ iOS 构建" build
 channel 0.1.0-test.8 0.1.0-test.8 -; tplan v0.1.0-test.9; expect_win "test-channel 没有 Windows 清单 ⇒ 拿不准 ⇒ Windows 构建" build
 channel 0.1.0-test.2 0.1.0-test.1; tplan v0.1.0-test.2

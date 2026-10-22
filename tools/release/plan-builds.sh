@@ -97,6 +97,8 @@ if [[ "$TAG" == *-test.* ]]; then
       apps/android/app/src/main/res/values/strings.xml | apps/android/app/src/main/res/values-zh/strings.xml) echo android ios ;;
       apps/android/* | tools/build-android-iroh-blobs-bridge.sh) echo android ;;
       apps/desktop/src-tauri/tauri.windows.conf.json) echo windows ;;
+      # #1121：正式更新公钥在这里，Android 构建期也读它（build.gradle.kts）⇒ 两端都受影响。
+      apps/desktop/src-tauri/tauri.conf.json) echo desktop android ;;
       apps/desktop/src-tauri/tauri.macos.conf.json | apps/desktop/src-tauri/macos/*) echo macos ;;
       tools/bundle-macos.sh | tools/bundle-desktop-macos.sh | tools/daemon-helper-macos.sh | tools/fetch-ffmpeg.sh) echo macos ;;
       apps/desktop/*) echo desktop ;;

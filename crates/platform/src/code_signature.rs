@@ -108,6 +108,9 @@ mod imp {
     }
 
     /// 系统自带的 bsdtar 解包：拒绝绝对路径与 `..`（不带 `-P` 时的默认行为）。
+    ///
+    /// stdin 在单独线程里写：主线程等 tar 退出并收 stderr。同一线程先写完 stdin 再读
+    /// stderr，tar 的 stderr 一旦写满管道缓冲就会两边互等。
     fn unpack(bytes: &[u8], dir: &Path) -> Result<(), String> {
         let mut child = Command::new("/usr/bin/tar")
             .args(["-xzf", "-", "-C"])
@@ -117,17 +120,22 @@ mod imp {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| format!("启动 tar 失败：{e}"))?;
-        let write = child.stdin.take().ok_or("tar 没有 stdin")?.write_all(bytes);
+        let mut stdin = child.stdin.take().ok_or("tar 没有 stdin")?;
+        let data = bytes.to_vec();
+        let writer = std::thread::spawn(move || stdin.write_all(&data));
         let out = child
             .wait_with_output()
             .map_err(|e| format!("等待 tar 失败：{e}"))?;
-        write.map_err(|e| format!("写入 tar 失败：{e}"))?;
+        let write = writer
+            .join()
+            .map_err(|_| "写入 tar 的线程崩溃".to_string())?;
         if !out.status.success() {
             return Err(format!(
                 "解包失败：{}",
                 String::from_utf8_lossy(&out.stderr).trim()
             ));
         }
+        write.map_err(|e| format!("写入 tar 失败：{e}"))?;
         Ok(())
     }
 
