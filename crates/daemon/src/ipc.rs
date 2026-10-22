@@ -488,7 +488,8 @@ pub async fn serve_unconfigured_signed(
     }
 }
 
-/// 未配置状态能答的方法。纯函数式（除写库位置），单测直接调。
+/// 未配置状态能答的方法：`status`、`config.set_library`，以及单实例交接的
+/// `daemon.step_down` 与不推事件的 `events.subscribe`。纯函数式（除写库位置），单测直接调。
 pub async fn unconfigured_dispatch(
     req: &Req,
     client: IpcClient,
@@ -511,6 +512,10 @@ pub async fn unconfigured_dispatch(
             }),
         ),
         "daemon.step_down" => Resp::ok(id, serde_json::json!({ "stepping_down": true })),
+        // 服务确实在跑，只是还没有事件可推：订阅照常成立、连接保持，壳据此把服务判成
+        // 「运行中」（DESK-63 的就绪信号）而不是「不可达」，也就不会去自愈拉它。写好库位置后
+        // 进程退出、连接断开，壳照常重连带库重启的新实例。
+        "events.subscribe" => Resp::ok(id, serde_json::json!({ "subscribed": true })),
         "config.set_library" => set_library_resp(id, Arc::clone(location), &req.params).await,
         // 其余一律：还没有库。
         _ => Resp::err(id, RespError::new(Reason::LibraryUnavailable)),

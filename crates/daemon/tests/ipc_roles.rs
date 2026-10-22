@@ -52,7 +52,11 @@ async fn server(dir: &std::path::Path) -> (Arc<IpcServer>, String, String) {
         pending_rx,
         event_bus,
     ));
-    let socket = format!("ppf-test-{}-1115", std::process::id());
+    // 每次调用一个名字：同一进程里并行的测试共用一个名字时，后起的 serve 会把前一个的
+    // socket 当残留清掉（cargo test 同进程多线程跑，前一个的 connect 随之失败）。
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let socket = format!("ppf-test-{}-1115-{n}", std::process::id());
     let token = [0x15; 32];
     let token_hex: String = token.iter().map(|b| format!("{b:02x}")).collect();
     tokio::spawn({
@@ -152,7 +156,7 @@ fn req(method: &str, params: serde_json::Value) -> Req {
         .unwrap()
 }
 
-/// 未配置状态只答 `status`（报 unconfigured）与 `config.set_library`；其余一律「还没有库」。
+/// 未配置状态只答 `status`（报 unconfigured）、`config.set_library` 与不推事件的 `events.subscribe`；其余一律「还没有库」。
 /// 窗口程序写得进库位置；daemon 自身（被借用的代理）写不进。
 /// 反证：unconfigured_dispatch 去掉 may_call 检查 ⇒ daemon 那条变 ok，红；兜底分支放行别的方法 ⇒ 红。
 #[tokio::test]
@@ -173,6 +177,19 @@ async fn unconfigured_state_answers_only_status_and_set_library() {
     .await;
     assert!(s.ok);
     assert_eq!(s.result.unwrap()["unconfigured"], true);
+
+    // 订阅照常成立：壳把它判成「运行中」，不会当成服务挂了去自愈。
+    // 反证：去掉 unconfigured_dispatch 的 events.subscribe 分支 ⇒ 这里回 library_unavailable，红。
+    let sub = unconfigured_dispatch(
+        &req("events.subscribe", serde_json::json!({})),
+        IpcClient::Shell,
+        "1.0.0",
+        0,
+        &loc,
+    )
+    .await;
+    assert!(sub.ok, "{:?}", sub.error);
+    assert_eq!(sub.result.unwrap()["subscribed"], true);
 
     for m in [
         "pairing.start",
