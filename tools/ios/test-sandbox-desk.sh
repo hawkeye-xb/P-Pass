@@ -6,7 +6,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 DAEMON="${1:-${CARGO_TARGET_DIR:-$ROOT/target}/release/daemon}"
-[ -x "$DAEMON" ] || { echo "找不到 $DAEMON（先 cargo build --release -p daemon）" >&2; exit 1; }
+[ -x "$DAEMON" ] || { echo "找不到 ${DAEMON}（先 cargo build --release -p daemon）" >&2; exit 1; }
 # shellcheck source=tools/ios/sandbox-desk.sh
 source "$ROOT/tools/ios/sandbox-desk.sh"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/ppass-desk-test.XXXXXX")
