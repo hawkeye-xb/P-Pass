@@ -231,7 +231,8 @@ class WriteFailureNoCrashTest {
         assertTrue("偏好那一行（AUTO_BACKUP_PREFS）后面的停止行必须照常执行", "mediaWatch" in stopped)
         DisconnectState.AUTO_BACKUP_WORKS.workNames.forEach { assertTrue("work:$it" in stopped) }
         val prefs = AutoBackupPrefs(dir)
-        assertTrue("一次写盘：失败时盘上停在原值，不是半截", prefs.requested() && prefs.enabled())
+        // 只证明「写失败时盘上停在原值」；「意图 + 生产者一次落盘」由 AutoBackupPrefs.set 的写法保证（只读目录下两次写也是第一次就失败，测不出区别）。
+        assertTrue("写失败时盘上停在原值", prefs.requested() && prefs.enabled())
 
         spaceFreed()
         stopped.clear()
