@@ -115,6 +115,133 @@ fn hex32(bytes: &[u8; 32]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+// ── Pairing code (#1118) ────────────────────────────
+
+fn unhex(s: &str, what: &str) -> Result<Vec<u8>, FfiError> {
+    let s = s.trim();
+    if !s.len().is_multiple_of(2) {
+        return Err(invalid(format!("{what}: odd hex length")));
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| {
+            s.get(i..i + 2)
+                .and_then(|b| u8::from_str_radix(b, 16).ok())
+                .ok_or_else(|| invalid(format!("{what}: not hex")))
+        })
+        .collect()
+}
+
+fn node32(s: &str, what: &str) -> Result<[u8; 32], FfiError> {
+    <[u8; 32]>::try_from(unhex(s, what)?.as_slice())
+        .map_err(|_| invalid(format!("{what}: not 32 bytes")))
+}
+
+impl From<pair_pake::PakeError> for FfiError {
+    fn from(error: pair_pake::PakeError) -> Self {
+        match error {
+            pair_pake::PakeError::BadCode | pair_pake::PakeError::BadMessage => {
+                FfiError::InvalidArgument {
+                    msg: error.to_string(),
+                }
+            }
+            pair_pake::PakeError::ConfirmMismatch | pair_pake::PakeError::Random => {
+                FfiError::Transport {
+                    msg: error.to_string(),
+                }
+            }
+        }
+    }
+}
+
+/// #1118: a fresh, uniformly random 6-digit pairing code (the phone shows it; the owner types it
+/// on the desktop).
+#[uniffi::export]
+pub fn pair_code_generate() -> Result<String, FfiError> {
+    Ok(pair_pake::generate_code()?)
+}
+
+/// #1118: the human-readable identity of a NodeId (`AB12 CD34`) — what the phone shows for the
+/// computer it is about to pair with, and what the desktop shows for itself.
+#[uniffi::export]
+pub fn node_fingerprint(node_id: String) -> String {
+    pair_pake::node_fingerprint(&node_id)
+}
+
+enum PhoneStage {
+    Started(Box<pair_pake::PhoneStart>),
+    Confirming(pair_pake::PhoneConfirm),
+    Spent,
+}
+
+/// #1118: the phone's half of the pairing code exchange (SPAKE2 + key confirmation, the same
+/// kernel the desktop runs). Order is enforced: [`Self::finish`] once (with the desktop's
+/// `pake_b`) yields `cA`; [`Self::verify`] then checks the desktop's `cB`.
+#[derive(uniffi::Object)]
+pub struct PairPhone {
+    pake_a: String,
+    stage: Mutex<PhoneStage>,
+}
+
+#[uniffi::export]
+impl PairPhone {
+    /// `code` is the 6-digit code this phone shows, `token` the QR's one-time token (hex),
+    /// `phone_node` / `desk_node` the two NodeIds (64 hex).
+    #[uniffi::constructor]
+    pub fn start(
+        code: String,
+        token: String,
+        phone_node: String,
+        desk_node: String,
+    ) -> Result<Arc<Self>, FfiError> {
+        let (start, msg_a) = pair_pake::PhoneStart::start(
+            &code,
+            &unhex(&token, "token")?,
+            node32(&phone_node, "phone node id")?,
+            node32(&desk_node, "desktop node id")?,
+        )?;
+        Ok(Arc::new(Self {
+            pake_a: hex_lower(&msg_a),
+            stage: Mutex::new(PhoneStage::Started(Box::new(start))),
+        }))
+    }
+
+    /// The SPAKE2 message for `pair.request.pake_a` (hex).
+    pub fn pake_a(&self) -> String {
+        self.pake_a.clone()
+    }
+
+    /// The desktop answered (`pair.status.pake_b`): returns `cA` (hex) for `pair.confirm`.
+    pub fn finish(&self, pake_b: String) -> Result<String, FfiError> {
+        let msg_b = unhex(&pake_b, "pake_b")?;
+        let mut stage = self.stage.lock().expect("pair stage lock");
+        if !matches!(*stage, PhoneStage::Started(_)) {
+            return Err(invalid("finish called twice"));
+        }
+        let PhoneStage::Started(start) = std::mem::replace(&mut *stage, PhoneStage::Spent) else {
+            unreachable!("checked above");
+        };
+        // A malformed answer spends the session: the phone must not try a second `pake_b`.
+        let (check, confirm_a) = start.finish(&msg_b)?;
+        *stage = PhoneStage::Confirming(check);
+        Ok(hex_lower(&confirm_a))
+    }
+
+    /// The desktop's `cB` (hex, from the accepted reply): `Ok` only if the desktop used the same
+    /// code — then the pairing may be saved.
+    pub fn verify(&self, confirm_b: String) -> Result<(), FfiError> {
+        let stage = self.stage.lock().expect("pair stage lock");
+        let PhoneStage::Confirming(check) = &*stage else {
+            return Err(invalid("verify before finish"));
+        };
+        Ok(check.verify(&unhex(&confirm_b, "confirm_b")?)?)
+    }
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 // ── BLAKE3 ──────────────────────────────────────────
 
 /// BLAKE3 of [data] as 64 lowercase hex characters.
@@ -1761,6 +1888,51 @@ mod tests {
         assert_eq!(addr.relay_url().as_deref(), Some("https://relay.example/"));
         let back = addr.to_string();
         assert!(back.parse::<PeerAddr>().is_ok());
+    }
+
+    /// #1118：导出给手机的 PairPhone 与电脑侧内核走一遍：同码完成、错码电脑不交 cB、
+    /// 顺序被强制（finish 之前不能 verify、finish 只能一次）。
+    #[test]
+    fn pair_phone_runs_the_code_exchange_against_the_desktop_kernel() {
+        let token = "ab".repeat(12);
+        let phone = "a1".repeat(32);
+        let desk = "b2".repeat(32);
+        let unhex = |s: &str| super::unhex(s, "t").unwrap();
+        let code = pair_code_generate().unwrap();
+        assert_eq!(code.len(), 6);
+
+        let p = PairPhone::start(code.clone(), token.clone(), phone.clone(), desk.clone()).unwrap();
+        assert!(p.verify("00".repeat(32)).is_err(), "verify before finish");
+        let (d, msg_b) = pair_pake::Desktop::respond(
+            &code,
+            &unhex(&token),
+            node32(&phone, "p").unwrap(),
+            node32(&desk, "d").unwrap(),
+            &unhex(&p.pake_a()),
+        )
+        .unwrap();
+        let ca = p.finish(hex_lower(&msg_b)).unwrap();
+        assert!(p.finish(hex_lower(&msg_b)).is_err(), "finish only once");
+        let cb = d.verify(&unhex(&ca)).unwrap();
+        p.verify(hex_lower(&cb)).unwrap();
+        assert!(p.verify("00".repeat(32)).is_err());
+
+        // 电脑输错码：cA 对不上，电脑不交 cB。
+        let p =
+            PairPhone::start("111111".into(), token.clone(), phone.clone(), desk.clone()).unwrap();
+        let (d, msg_b) = pair_pake::Desktop::respond(
+            "111112",
+            &unhex(&token),
+            node32(&phone, "p").unwrap(),
+            node32(&desk, "d").unwrap(),
+            &unhex(&p.pake_a()),
+        )
+        .unwrap();
+        let ca = p.finish(hex_lower(&msg_b)).unwrap();
+        assert!(d.verify(&unhex(&ca)).is_err());
+
+        assert!(PairPhone::start("12345".into(), token, phone, desk).is_err());
+        assert_eq!(node_fingerprint("ab12cd34".repeat(8)), "AB12 CD34");
     }
 
     /// 测试用：指向 [server] 的 blobs 票据（内容不存在也无所谓——准入在握手时就拒了）。

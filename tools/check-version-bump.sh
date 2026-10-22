@@ -72,11 +72,11 @@ fi
 # 保守边界：src 文件里 `#[cfg(test)]` 块改动仍算产品改动——宁可多涨，不漏涨。
 PRODUCT=$(grep -Ev '(^|/)(tests?|benches)/' <<<"$CHANGED" || true)
 desk_hit=$(grep -Ec '^(crates/|apps/desktop/|assets/|Cargo\.(toml|lock)$|rust-toolchain\.toml)' <<<"$PRODUCT" || true)
-ANDROID_INPUTS='^(apps/android/|crates/(transport|proto)/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|tools/build-android-iroh-blobs-bridge\.sh$)'
+ANDROID_INPUTS='^(apps/android/|crates/(transport|proto|pair-pake)/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|tools/build-android-iroh-blobs-bridge\.sh$)'
 andr_hit=$(grep -Ec "$ANDROID_INPUTS" <<<"$PRODUCT" || true)
 # iOS 输入（#348）：与 ci-ios 的触发路径同口径，但 tools/ios/ 只算会进产物的盖章/生成/字体脚本，
 # 测试与 e2e 脚本不算（改它们不该逼着发一个内容相同的 TestFlight 构建）。
-IOS_INPUTS='^(apps/ios/|crates/(transport|proto)/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|tools/build-ios-|tools/ios/(stamp-version|gen-strings|gen-tokens|sync-i18n|prepare-fonts)|assets/i18n/|assets/design/tokens\.json$|apps/android/app/src/main/res/values(-zh)?/strings\.xml$)'
+IOS_INPUTS='^(apps/ios/|crates/(transport|proto|pair-pake)/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|tools/build-ios-|tools/ios/(stamp-version|gen-strings|gen-tokens|sync-i18n|prepare-fonts)|assets/i18n/|assets/design/tokens\.json$|apps/android/app/src/main/res/values(-zh)?/strings\.xml$)'
 ios_hit=$(grep -Ec "$IOS_INPUTS" <<<"$PRODUCT" || true)
 
 newer() { # <prev> <cur> → 0 表示 cur 严格更新

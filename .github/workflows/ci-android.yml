@@ -29,6 +29,7 @@ on:
       # #1124：Kotlin 直接编译 libtransport.so 的 uniffi 绑定（控制面与 iOS 共用），Rust 侧改了导出要在这里编一遍。
       - "crates/transport/**"
       - "crates/proto/**"
+      - "crates/pair-pake/**"
       - "tools/build-android-iroh-blobs-bridge.sh"
   push:
     branches: [main]
@@ -38,6 +39,7 @@ on:
       - ".github/workflows/ci-android.yml"
       - "crates/transport/**"
       - "crates/proto/**"
+      - "crates/pair-pake/**"
       - "tools/build-android-iroh-blobs-bridge.sh"
 
 permissions:

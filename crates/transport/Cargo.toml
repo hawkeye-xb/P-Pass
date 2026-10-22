@@ -20,7 +20,7 @@ android-jni = ["dep:jni", "dep:libc"]
 # objects. Same rule as android-jni: a feature, never a target_os cfg
 # (arch-check B.2); enabled only by tools/build-ios-transport-xcframework.sh
 # and tools/build-android-iroh-blobs-bridge.sh.
-mobile-ffi = ["dep:uniffi", "dep:blake3"]
+mobile-ffi = ["dep:uniffi", "dep:blake3", "dep:pair-pake"]
 # Swift / Kotlin binding generator (host-only tool, run by the same scripts).
 mobile-bindgen = ["mobile-ffi", "uniffi/cli"]
 
@@ -45,6 +45,8 @@ uniffi = { version = "0.32", optional = true }
 # #1122：关闭码等跨端注册表的唯一定义处（纯 serde，无平台依赖）。
 proto = { path = "../proto" }
 blake3 = { version = "1", optional = true }
+# #1118：配对验证码内核（与 daemon 同一份），只经 mobile-ffi 导出给手机。
+pair-pake = { path = "../pair-pake", optional = true }
 
 [[bin]]
 name = "uniffi-bindgen"

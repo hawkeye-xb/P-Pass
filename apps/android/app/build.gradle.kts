@@ -26,8 +26,8 @@ val buildIrohBlobsProviderBridge = tasks.register<Exec>("buildIrohBlobsProviderB
     environment("ANDROID_NDK_HOME", ndkHome)
     inputs.files(
         fileTree(repoRoot) {
-            // #1124：mobile-ffi 经 crates/proto 编解码帧、登记关闭码。
-            include("Cargo.toml", "Cargo.lock", "crates/transport/**", "crates/proto/**")
+            // #1124：mobile-ffi 经 crates/proto 编解码帧、登记关闭码；#1118：经 crates/pair-pake 做配对验证码。
+            include("Cargo.toml", "Cargo.lock", "crates/transport/**", "crates/proto/**", "crates/pair-pake/**")
         }
     )
     outputs.file(irohBlobsJniLibs.map { it.file("arm64-v8a/libtransport.so") })
