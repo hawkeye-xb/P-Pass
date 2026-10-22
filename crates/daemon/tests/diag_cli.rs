@@ -15,8 +15,7 @@
 
 use platform::PlatformAdapter as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::process::{Command, Output};
 
 fn daemon_in(home: &Path) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_daemon"));
@@ -34,17 +33,28 @@ fn text(b: &[u8]) -> String {
     String::from_utf8_lossy(b).to_string()
 }
 
-/// 用 `config init` 建好平台目录 + 库，返回 (平台目录, 库目录)。
-fn init_platform(home: &Path) -> (PathBuf, PathBuf) {
+/// [`daemon_in`] 的环境下，子进程的平台数据目录在三种平台上分别是这几个之一。
+/// #1115 之前靠 `config init` 的输出拿到它；那个 CLI 写入口删掉了，于是把三处都备好
+/// （测试里不写平台分支——arch-check B.2）。
+fn platform_dir_candidates(home: &Path) -> Vec<PathBuf> {
+    vec![
+        home.join("Library/Application Support/P-Pass"), // macOS
+        home.join("xdg").join("p-pass"),                 // Linux（XDG_DATA_HOME）
+        home.join("local").join("com.hawkeyexb.ppass.desktop"), // Windows（LOCALAPPDATA）
+    ]
+}
+
+/// 建好平台目录 + 库（写入经 daemon 的唯一写者 `LibraryLocation::set`），返回
+/// (平台目录候选, 库目录)。
+fn init_platform(home: &Path) -> (Vec<PathBuf>, PathBuf) {
     let library = home.join("Pictures").join("lib");
-    let o = daemon_in(home)
-        .args(["config", "init", "--library", library.to_str().unwrap()])
-        .output()
-        .unwrap();
-    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
-    let v: serde_json::Value = serde_json::from_str(text(&o.stdout).trim()).unwrap();
-    let cfg = PathBuf::from(v["config"].as_str().unwrap());
-    (cfg.parent().unwrap().to_path_buf(), library)
+    let dirs = platform_dir_candidates(home);
+    for dir in &dirs {
+        daemon::library_location::LibraryLocation::with(None, dir.clone())
+            .set(library.to_str().unwrap())
+            .unwrap();
+    }
+    (dirs, library)
 }
 
 fn read_zip(path: &Path) -> Vec<(String, String)> {
@@ -78,17 +88,20 @@ fn ok_json(o: &Output, out: &Path) -> bool {
 #[test]
 fn offline_export_bundles_own_logs_and_starts_nothing() {
     let home = tempfile::tempdir().unwrap();
-    let (platform_dir, library) = init_platform(home.path());
-    let logs = platform_dir.join("logs");
-    std::fs::create_dir_all(&logs).unwrap();
+    let (platform_dirs, library) = init_platform(home.path());
     let home_s = home.path().display().to_string();
-    std::fs::write(
-        logs.join("daemon.log"),
-        format!("INFO current run at {home_s}/x\n"),
-    )
-    .unwrap();
-    std::fs::write(logs.join("daemon.log.1"), "INFO previous run\n").unwrap();
-    std::fs::write(logs.join("desktop.log"), "event=state to=running\n").unwrap();
+    for platform_dir in &platform_dirs {
+        let logs = platform_dir.join("logs");
+        std::fs::create_dir_all(&logs).unwrap();
+        std::fs::write(
+            logs.join("daemon.log"),
+            format!("INFO current run at {home_s}/x\n"),
+        )
+        .unwrap();
+        std::fs::write(logs.join("daemon.log.1"), "INFO previous run\n").unwrap();
+        std::fs::write(logs.join("desktop.log"), "event=state to=running\n").unwrap();
+    }
+    let platform_dir = platform_dirs[0].clone();
     let out = home.path().join("exports").join("bundle.zip");
 
     let o = daemon_in(home.path())
@@ -152,7 +165,9 @@ fn offline_export_bundles_own_logs_and_starts_nothing() {
     // 不启动任何 daemon 机制。
     assert!(!library.join(".ppf").exists(), "不得开库");
     assert!(!library.join("ipc.token").exists());
-    assert!(!platform_dir.join("ipc.token").exists());
+    for platform_dir in &platform_dirs {
+        assert!(!platform_dir.join("ipc.token").exists());
+    }
 }
 
 #[test]
@@ -188,62 +203,5 @@ fn diag_usage_errors_exit_2() {
     assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0);
 }
 
-/// 常驻服务在线：经 IPC `logs.export` 要来三份 JSON 收进包；它写在库目录里的
-/// 中间产物 `ppf-logs.zip` 读完即删（导出位置只由 `--out` 决定）。
-#[test]
-fn online_export_includes_daemon_json_and_leaves_no_second_copy() {
-    struct KillOnDrop(std::process::Child);
-    impl Drop for KillOnDrop {
-        fn drop(&mut self) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
-        }
-    }
-    let home = tempfile::tempdir().unwrap();
-    let library = tempfile::tempdir().unwrap();
-    // 常驻服务用场景脚本同款隔离（与 cli_flow 的 SEC-11 用例一致）。
-    let mut child = KillOnDrop(
-        Command::new(env!("CARGO_BIN_EXE_daemon"))
-            .arg("--ephemeral")
-            .env("PPF_DATA_DIR", library.path())
-            .env("PPF_RELAY_URLS", "")
-            .env("PPF_BIND_ADDR", "127.0.0.1:0")
-            .env_remove("PPF_LOG_FILE")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap(),
-    );
-    let out = home.path().join("bundle.zip");
-    let deadline = Instant::now() + Duration::from_secs(40);
-    let reachable = loop {
-        if library.path().join("ipc.token").exists() {
-            let o = daemon_in(home.path())
-                .env("PPF_DATA_DIR", library.path())
-                .args(["diag", "export", "--out"])
-                .arg(&out)
-                .output()
-                .unwrap();
-            if ok_json(&o, &out) {
-                break true;
-            }
-        }
-        if Instant::now() > deadline {
-            break false;
-        }
-        std::thread::sleep(Duration::from_millis(300));
-    };
-    drop(child.0.stdin.take());
-    assert!(reachable, "40 秒内没连上测试用常驻服务");
-
-    let names: Vec<String> = read_zip(&out).into_iter().map(|(k, _)| k).collect();
-    for want in ["diag_events.json", "devices.json", "audit.json"] {
-        assert!(names.iter().any(|n| n == want), "缺 {want}：{names:?}");
-    }
-    assert!(!names.iter().any(|n| n == "daemon-unreachable.txt"));
-    assert!(
-        !library.path().join("ppf-logs.zip").exists(),
-        "库目录里不得留下第二份包"
-    );
-}
+// 「常驻服务在线」那条已挪到 tests/ipc_roles.rs（进程内）：#1115 之后测试沙盒不收
+// `PPF_DATA_DIR`、诊断导出也不认它，子进程版的指向方式不复存在。

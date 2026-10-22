@@ -481,6 +481,15 @@ impl PlatformAdapter for MacosAdapter {
     fn identity_key_home(&self) -> crate::IdentityKeyHome {
         crate::IdentityKeyHome::SecureStore(Box::new(crate::keychain::KeychainIdentityStore::new()))
     }
+    fn resident_ipc(&self) -> crate::ResidentIpc {
+        crate::ResidentIpc::SignedSocket(self.data_dir().join("run").join("daemon.sock"))
+    }
+    fn prepare_private_dir(&self, path: &Path) -> Result<()> {
+        crate::unix::prepare_private_dir(path)
+    }
+    fn library_store(&self) -> Option<Box<dyn crate::SecretBlobStore>> {
+        Some(Box::new(crate::keychain::KeychainBlobStore::library()))
+    }
     fn pairing_store(&self) -> Option<Box<dyn crate::SecretBlobStore>> {
         Some(Box::new(crate::keychain::KeychainBlobStore::pairings()))
     }

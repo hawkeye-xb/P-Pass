@@ -446,12 +446,10 @@ pub enum DaemonCollection {
     },
 }
 
-/// ipc.token 的候选位置，顺序与壳 `ipc::token_candidates_from` 一致。
+/// ipc.token 的候选位置（令牌模式：Windows / Linux），顺序与壳 `ipc::token_candidates_from` 一致。
+/// #1115：不再认 `PPF_DATA_DIR`——诊断导出连的是常驻 daemon，调用方的环境不许把它指向别处。
 pub fn token_candidates(platform_dir: &Path, home: &Path) -> Vec<PathBuf> {
     let mut v = Vec::new();
-    if let Ok(dir) = std::env::var("PPF_DATA_DIR") {
-        v.push(PathBuf::from(dir).join("ipc.token"));
-    }
     v.push(home.join("ppf-library/ipc.token"));
     v.push(platform_dir.join("ipc.token"));
     if let Some(val) = crate::config::read_config_data_dir(platform_dir) {
@@ -460,29 +458,49 @@ pub fn token_candidates(platform_dir: &Path, home: &Path) -> Vec<PathBuf> {
     v
 }
 
-struct DaemonHandle {
-    socket_name: String,
-    token: String,
+/// #1115：常驻 daemon 的候选端点。macOS：签名 socket（连上后反向校验服务端是签名
+/// daemon）；其余平台：令牌文件里记的端点。
+pub fn resident_endpoints(platform_dir: &Path, home: &Path) -> Vec<crate::ipc::PeerEndpoint> {
+    use platform::PlatformAdapter as _;
+    match platform::adapter().resident_ipc() {
+        platform::ResidentIpc::SignedSocket(path) => vec![crate::ipc::PeerEndpoint::Signed(path)],
+        platform::ResidentIpc::NamespacedWithToken => token_candidates(platform_dir, home)
+            .iter()
+            .filter_map(|path| {
+                let content = std::fs::read_to_string(path).ok()?;
+                let mut lines = content.lines();
+                let (name, token) = (lines.next()?, lines.next()?);
+                Some(crate::ipc::PeerEndpoint::Token {
+                    socket_name: name.trim().to_string(),
+                    token_hex: token.trim().to_string(),
+                })
+            })
+            .collect(),
+    }
+}
+
+pub(crate) struct DaemonHandle {
+    pub(crate) endpoint: crate::ipc::PeerEndpoint,
 }
 
 impl DaemonHandle {
     /// 一次请求 / 应答往返，整体有 [`IPC_TIMEOUT`] 上限。
     async fn call(&self, method: &str) -> Result<serde_json::Value, String> {
         use interprocess::local_socket::tokio::prelude::*;
-        use interprocess::local_socket::GenericNamespaced;
         use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
         let round_trip = async {
-            let name = self
-                .socket_name
-                .as_str()
-                .to_ns_name::<GenericNamespaced>()
-                .map_err(|e| ui_err("ui.err_socket_name", &[("err", &e)]))?;
-            let conn = interprocess::local_socket::tokio::Stream::connect(name)
+            let (conn, preamble) = self
+                .endpoint
+                .connect()
                 .await
                 .map_err(|e| ui_err("ui.err_connect", &[("err", &e)]))?;
             let (rx, mut tx) = conn.split();
             let req = serde_json::json!({ "id": method, "method": method, "params": {} });
-            tx.write_all(format!("{}\n{req}\n", self.token).as_bytes())
+            let wire = match preamble {
+                Some(token) => format!("{token}\n{req}\n"),
+                None => format!("{req}\n"),
+            };
+            tx.write_all(wire.as_bytes())
                 .await
                 .map_err(|e| ui_err("ui.err_send", &[("err", &e)]))?;
             let mut line = String::new();
@@ -511,26 +529,18 @@ impl DaemonHandle {
 
 /// 找**运行中的**常驻服务：每个候选都用一次 status 探活——死实例留下的
 /// 旧 token 文件不许劫持发现（与壳 `DaemonHandle::discover` 同规则）。
-async fn discover(candidates: &[PathBuf]) -> Result<DaemonHandle, String> {
+async fn discover(candidates: &[crate::ipc::PeerEndpoint]) -> Result<DaemonHandle, String> {
     let mut last_err = ui_err("ui.err_no_daemon", &[]);
-    for path in candidates {
-        let Ok(content) = std::fs::read_to_string(path) else {
-            continue;
-        };
-        let mut lines = content.lines();
-        let (Some(name), Some(token)) = (lines.next(), lines.next()) else {
-            continue;
-        };
+    for endpoint in candidates {
         let handle = DaemonHandle {
-            socket_name: name.trim().to_string(),
-            token: token.trim().to_string(),
+            endpoint: endpoint.clone(),
         };
         match handle.call("status").await {
             Ok(_) => return Ok(handle),
             Err(e) => {
                 last_err = ui_err(
                     "ui.err_daemon_unresponsive",
-                    &[("path", &path.display()), ("err", &e)],
+                    &[("path", &endpoint.label()), ("err", &e)],
                 );
             }
         }
@@ -541,7 +551,10 @@ async fn discover(candidates: &[PathBuf]) -> Result<DaemonHandle, String> {
 /// 向常驻服务要那三份。它把 zip 写在自己的库目录（`logs.export` 的现行
 /// 行为）；读进内存后，若那不是调用方要的输出位置，就把这份中间产物删掉
 /// ——导出位置只由 `--out` 决定，库目录里不留第二份包。
-async fn collect_from_daemon(candidates: &[PathBuf], out: &Path) -> DaemonCollection {
+pub async fn collect_from_daemon(
+    candidates: &[crate::ipc::PeerEndpoint],
+    out: &Path,
+) -> DaemonCollection {
     let handle = match discover(candidates).await {
         Ok(h) => h,
         Err(e) => return DaemonCollection::Unreachable(e),
@@ -688,7 +701,7 @@ pub fn gather(env: &ExportEnv, daemon: DaemonCollection) -> BundleInputs {
 /// 那行 JSON：`{"zip":"<out>","daemon_reachable":bool}`。常驻服务不在线
 /// **不是**失败；只有 zip 写不出来才是。
 pub async fn export(env: &ExportEnv) -> Result<serde_json::Value, String> {
-    let candidates = token_candidates(&env.platform_dir, &env.home);
+    let candidates = resident_endpoints(&env.platform_dir, &env.home);
     let daemon = collect_from_daemon(&candidates, &env.out).await;
     let inputs = gather(env, daemon);
     write_zip(&env.out, &build_bundle(&inputs))?;

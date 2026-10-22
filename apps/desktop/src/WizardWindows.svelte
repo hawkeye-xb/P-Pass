@@ -15,7 +15,7 @@
   // DESK-15：按钮视觉合同收进 Button 组件本身，见 Wizard.svelte 同条注释。
   const WIZARD_PRIMARY_WIDE = "px-[26px]";
 
-  let { defaultDir, configuredLibraryDir, onDone } = $props();
+  let { defaultDir, configuredLibraryDir, unconfigured = false, onDone } = $props();
 
   let view = $state({ step: 1, libraryDir: "", busy: false, error: "" });
   const flow = createWizardFlow({
@@ -43,6 +43,10 @@
   {#if view.step === 1}
     <div class="flex flex-col gap-4">
       <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_library_title")}</h2>
+      <!-- #1115：后台服务在跑、只是还没有照片库位置——说清楚，别让人以为服务挂了。 -->
+      {#if unconfigured}
+        <p class="m-0 rounded-xl bg-waiting-bg px-4 py-3 text-[14px] leading-[1.6] text-ink" data-testid="wizard-unconfigured">{t("ui.wizard_unconfigured_notice")}</p>
+      {/if}
       <p class="m-0 text-[15px] leading-[1.7] text-ink-60">{t("ui.wizard_library_body_win")}</p>
       <div class="flex items-center gap-[10px]">
         <code class="flex-1 rounded-xl bg-linen px-4 py-[13px] font-mono text-[14px] text-ink-60 break-all">{view.libraryDir}</code>

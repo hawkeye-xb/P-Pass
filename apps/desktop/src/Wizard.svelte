@@ -9,7 +9,7 @@
   // 主按钮更宽（px-[26px] vs 组件默认 18px），两个向导页一致，是有意的。
   const WIZARD_PRIMARY_WIDE = "px-[26px]";
 
-  let { defaultDir, configuredLibraryDir, onDone } = $props();
+  let { defaultDir, configuredLibraryDir, unconfigured = false, onDone } = $props();
 
   // 三步状态机（选库 / 睡眠 / 常驻服务）与 chooseFolder、finishSetup 都在
   // $lib/wizardFlow.js，两份向导共用（#1045）；本视图只保留 macOS 的文案和
@@ -73,6 +73,10 @@
   {#if view.step === 1}
     <div class="flex flex-col gap-4">
       <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_library_title")}</h2>
+      <!-- #1115：后台服务在跑、只是还没有照片库位置——说清楚，别让人以为服务挂了。 -->
+      {#if unconfigured}
+        <p class="m-0 rounded-xl bg-waiting-bg px-4 py-3 text-[14px] leading-[1.6] text-ink" data-testid="wizard-unconfigured">{t("ui.wizard_unconfigured_notice")}</p>
+      {/if}
       <p class="m-0 text-[15px] leading-[1.7] text-ink-60">{t("ui.wizard_library_body_mac")}</p>
       <!-- DESK-05: 路径始终有值（默认填充 defaultDir / 预填已配置库）——
            不再要求先点按钮才能继续。路径 ≠ 默认时旁挂「回到默认」链接，

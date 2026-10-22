@@ -1,10 +1,21 @@
 //! Local IPC for the tray UI (T-034, ADR-012): local socket / named pipe
-//! via `interprocess` (no platform #[cfg] here — rule B.2), guarded by a
-//! random per-launch token written into the data dir.
+//! via `interprocess` (no platform #[cfg] here — rule B.2).
 //!
-//! Wire format: newline-delimited JSON. First line from the client is the
-//! raw token; every following line is a `proto::Req`, answered by one
-//! `proto::Resp` line. Wrong token = connection dropped, one diag event.
+//! #1115：两种认证，由启动方式决定（`platform::ResidentIpc`）：
+//! - **按签名**（macOS 常驻 daemon）：socket 在仅本用户可访问的目录里，accept 后按对端
+//!   audit token 校验代码签名，认出是窗口程序还是 daemon 自身；没有令牌。客户端（壳、
+//!   单实例交接、诊断导出）连上后先反向校验服务端是签名 daemon，不是就断开、什么都不发。
+//! - **按令牌**（测试沙盒、Windows / Linux）：每次启动随机令牌写进令牌文件（仅属主可读写），
+//!   客户端第一行发令牌。
+//!
+//! 能调哪些方法按连接方身份定（[`IpcClient`]）：窗口程序全部；daemon 自身只有单实例交接
+//! 与诊断导出要用的 [`DAEMON_CLIENT_METHODS`]——签名的 daemon 谁都能带参数运行，不能让它
+//! 成为能调配对、授权类方法的代理。
+//!
+//! Wire format: newline-delimited JSON. Token mode: first line from the
+//! client is the raw token; every following line is a `proto::Req`, answered
+//! by one `proto::Resp` line. Wrong token / unsigned peer = connection
+//! dropped, one diag event.
 //!
 //! Methods (契约): `status` `pairing.start` `pairing.confirm`
 //! `devices.list` `device.revoke` `device.watermarks`
@@ -24,7 +35,7 @@ use std::time::Duration;
 
 use diag::state::DaemonState;
 use interprocess::local_socket::tokio::prelude::*;
-use interprocess::local_socket::{GenericNamespaced, ListenerOptions};
+use interprocess::local_socket::{GenericFilePath, GenericNamespaced, ListenerOptions};
 use proto::{Reason, Req, Resp, RespError};
 use storage::Db;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -50,6 +61,122 @@ pub enum ConfirmOutcome {
     Expired(String),
     /// Nothing in the queue matched the lookup.
     NotFound,
+}
+
+/// #1115：IPC 连接方是谁——决定能调哪些方法。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IpcClient {
+    /// 窗口程序（按签名认出），或持令牌的客户端（测试沙盒、Windows / Linux）：全部方法。
+    Shell,
+    /// daemon 自身（单实例交接、`diag export` 子命令）：只有 [`DAEMON_CLIENT_METHODS`]。
+    Daemon,
+}
+
+/// #1115：daemon 自身作为客户端时能调的方法——单实例交接（`status`、`daemon.step_down`）
+/// 与诊断导出（`status`、`logs.export`）。配对、授权、改名、撤销一律不行。
+pub const DAEMON_CLIENT_METHODS: &[&str] = &["status", "daemon.step_down", "logs.export"];
+
+impl IpcClient {
+    pub fn may_call(self, method: &str) -> bool {
+        match self {
+            IpcClient::Shell => true,
+            IpcClient::Daemon => DAEMON_CLIENT_METHODS.contains(&method),
+        }
+    }
+}
+
+/// #1115：作为客户端连常驻 daemon 时用哪种端点 + 认证。
+#[derive(Debug, Clone)]
+pub enum PeerEndpoint {
+    /// 签名 socket：连上后先反向校验服务端是签名 daemon，不发令牌。
+    Signed(PathBuf),
+    /// 命名空间端点 + 令牌。
+    Token {
+        socket_name: String,
+        token_hex: String,
+    },
+}
+
+impl PeerEndpoint {
+    /// 连上并完成认证前的准备：签名模式下反向校验服务端（不是签名 daemon 就报错、
+    /// 什么都没发）；令牌模式下返回要先发的那一行。
+    pub async fn connect(
+        &self,
+    ) -> Result<(interprocess::local_socket::tokio::Stream, Option<String>), String> {
+        match self {
+            PeerEndpoint::Signed(path) => {
+                let name = path
+                    .as_path()
+                    .to_fs_name::<GenericFilePath>()
+                    .map_err(|e| format!("socket 路径不合法：{e}"))?;
+                let conn = interprocess::local_socket::tokio::Stream::connect(name)
+                    .await
+                    .map_err(|e| format!("连不上 {}：{e}", path.display()))?;
+                let (conn, check) = tokio::task::spawn_blocking(move || {
+                    let check = platform::verify_local_peer(&conn, &[platform::PeerRole::Daemon]);
+                    (conn, check)
+                })
+                .await
+                .map_err(|e| format!("校验线程失败：{e}"))?;
+                match check {
+                    platform::PeerCheck::Verified(_) => Ok((conn, None)),
+                    platform::PeerCheck::Rejected(why) => Err(format!(
+                        "{} 上的服务端不是签名 daemon：{why}",
+                        path.display()
+                    )),
+                    platform::PeerCheck::NotSupported(why) => Err(why.to_string()),
+                }
+            }
+            PeerEndpoint::Token {
+                socket_name,
+                token_hex,
+            } => {
+                let name = socket_name
+                    .as_str()
+                    .to_ns_name::<GenericNamespaced>()
+                    .map_err(|e| format!("socket 名不合法：{e}"))?;
+                let conn = interprocess::local_socket::tokio::Stream::connect(name)
+                    .await
+                    .map_err(|e| format!("连不上 {socket_name}：{e}"))?;
+                Ok((conn, Some(token_hex.clone())))
+            }
+        }
+    }
+
+    /// 给人看的端点名（日志、错误说明），不含令牌。
+    pub fn label(&self) -> String {
+        self.describe()
+    }
+
+    fn describe(&self) -> String {
+        match self {
+            PeerEndpoint::Signed(path) => path.display().to_string(),
+            PeerEndpoint::Token { socket_name, .. } => socket_name.clone(),
+        }
+    }
+
+    /// 有没有东西在监听（只做一次连接，不认证）。见 [`socket_is_live`]。
+    async fn is_live(&self) -> bool {
+        match self {
+            PeerEndpoint::Signed(path) => {
+                let Ok(name) = path.as_path().to_fs_name::<GenericFilePath>() else {
+                    return false;
+                };
+                connect_is_live(name).await
+            }
+            PeerEndpoint::Token { socket_name, .. } => socket_is_live(socket_name).await,
+        }
+    }
+
+    fn clean_stale(&self) {
+        match self {
+            // 只在「没人监听」时调用：父目录仅本用户可访问，残留的就是被杀的前任留下的。
+            PeerEndpoint::Signed(path) => {
+                let _ = std::fs::remove_file(path);
+            }
+            PeerEndpoint::Token { socket_name, .. } => clean_stale_socket(socket_name),
+        }
+    }
 }
 
 /// One IPC server per daemon. Owns the pending-pair queue the UI drains.
@@ -101,6 +228,8 @@ pub struct IpcServer {
     /// #1070: the router's version-mismatch registry — feeds the device
     /// list's `needs_update`. Unset = an empty registry (never flags anyone).
     outdated: crate::router::OutdatedPeers,
+    /// #1115：`config.set_library` 的写入处。`None`（测试沙盒、测试）= 这个方法不开放。
+    library_location: Option<Arc<crate::library_location::LibraryLocation>>,
 }
 
 /// See [`IpcServer::set_conn_status_provider`].
@@ -129,15 +258,21 @@ pub enum Claim {
 // versions. All client-side (no server changes to the wire contract).
 
 /// Send one IPC request to the peer and read its response line.
-async fn peer_call(socket_name: &str, token_hex: &str, method: &str) -> Option<serde_json::Value> {
-    let name = socket_name.to_ns_name::<GenericNamespaced>().ok()?;
-    let conn = interprocess::local_socket::tokio::Stream::connect(name)
-        .await
-        .ok()?;
+/// #1115：签名模式下连上后先反向校验服务端，不是签名 daemon 就什么都不发。
+async fn peer_call(peer: &PeerEndpoint, method: &str) -> Option<serde_json::Value> {
+    let (conn, preamble) = match peer.connect().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::debug!("DAE-01: {e}");
+            return None;
+        }
+    };
     let (rx, mut tx) = conn.split();
     let mut lines = BufReader::new(rx).lines();
-    tx.write_all(token_hex.as_bytes()).await.ok()?;
-    tx.write_all(b"\n").await.ok()?;
+    if let Some(token_hex) = preamble {
+        tx.write_all(token_hex.as_bytes()).await.ok()?;
+        tx.write_all(b"\n").await.ok()?;
+    }
     let req = format!("{{\"id\":\"dae-01\",\"method\":\"{method}\",\"params\":{{}}}}\n");
     tx.write_all(req.as_bytes()).await.ok()?;
     let line = tokio::time::timeout(Duration::from_millis(800), lines.next_line())
@@ -148,13 +283,13 @@ async fn peer_call(socket_name: &str, token_hex: &str, method: &str) -> Option<s
 }
 
 /// Live peer (status answered) or None (dead socket / no instance).
-async fn probe_peer(socket_name: &str, token_hex: &str) -> Option<serde_json::Value> {
-    peer_call(socket_name, token_hex, "status").await
+async fn probe_peer(peer: &PeerEndpoint) -> Option<serde_json::Value> {
+    peer_call(peer, "status").await
 }
 
 /// Ask the live peer to exit (newest-wins takeover).
-async fn notify_step_down(socket_name: &str, token_hex: &str) -> Option<serde_json::Value> {
-    peer_call(socket_name, token_hex, "daemon.step_down").await
+async fn notify_step_down(peer: &PeerEndpoint) -> Option<serde_json::Value> {
+    peer_call(peer, "daemon.step_down").await
 }
 
 /// 存活探测的连接上限。`peer_call` 的应答超时是 800ms；这里只需要一次
@@ -181,6 +316,11 @@ async fn socket_is_live(socket_name: &str) -> bool {
     let Ok(name) = socket_name.to_ns_name::<GenericNamespaced>() else {
         return false;
     };
+    connect_is_live(name).await
+}
+
+/// [`socket_is_live`] 的判决本体（命名空间名与文件路径共用）。
+async fn connect_is_live(name: interprocess::local_socket::Name<'_>) -> bool {
     match tokio::time::timeout(
         LIVENESS_CONNECT_TIMEOUT,
         interprocess::local_socket::tokio::Stream::connect(name),
@@ -239,6 +379,157 @@ pub fn daemon_version() -> String {
         .map(str::to_string)
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
+}
+
+/// #1115：`config.set_library {library}` 的应答（常驻 daemon 与未配置状态共用）。
+/// 校验类错误原样放进 `params.ui_error`（keyed JSON），窗口程序据此显示具体原因。
+async fn set_library_resp(
+    id: String,
+    location: Arc<crate::library_location::LibraryLocation>,
+    params: &serde_json::Value,
+) -> Resp {
+    let Some(library) = params
+        .get("library")
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+    else {
+        return Resp::err(id, RespError::new(Reason::BadRequest));
+    };
+    match tokio::task::spawn_blocking(move || location.set(&library)).await {
+        Ok(Ok(cfg)) => Resp::ok(
+            id,
+            serde_json::json!({ "config": cfg.display().to_string(), "restart_required": true }),
+        ),
+        Ok(Err(e)) => Resp::err(
+            id,
+            RespError::new(Reason::BadRequest).with_param("ui_error", e),
+        ),
+        Err(_) => Resp::err(id, RespError::new(Reason::Internal)),
+    }
+}
+
+/// #1115：未配置状态写好库位置后的退出码——「请重启我」。LaunchAgent 的 KeepAlive
+/// 按非零退出把 daemon 拉起来，新实例带着库启动；壳一次性拉起的实例由壳自己收掉。
+pub const EXIT_CONFIGURED_RESTART: i32 = 75;
+
+/// #1115：未配置状态（正本里还没有库位置）的服务：只在签名 socket 上答 `status`（报
+/// `unconfigured`）与 `config.set_library`；单实例交接要的 `daemon.step_down` 照答。不开库、
+/// 不起传输、不发配对码。写好库位置后以 [`EXIT_CONFIGURED_RESTART`] 退出。
+pub async fn serve_unconfigured_signed(
+    path: &std::path::Path,
+    version: String,
+    location: Arc<crate::library_location::LibraryLocation>,
+) -> anyhow::Result<()> {
+    let _ = std::fs::remove_file(path);
+    let name = path.to_fs_name::<GenericFilePath>()?;
+    let listener = ListenerOptions::new().name(name).create_tokio()?;
+    let started_at = now_ms();
+    loop {
+        let conn = match listener.accept().await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("ipc accept: {e}");
+                continue;
+            }
+        };
+        let location = Arc::clone(&location);
+        let version = version.clone();
+        tokio::spawn(async move {
+            let checked = tokio::task::spawn_blocking(move || {
+                let check = platform::verify_local_peer(
+                    &conn,
+                    &[platform::PeerRole::Shell, platform::PeerRole::Daemon],
+                );
+                (conn, check)
+            })
+            .await;
+            let (conn, client) = match checked {
+                Ok((conn, platform::PeerCheck::Verified(platform::PeerRole::Shell))) => {
+                    (conn, IpcClient::Shell)
+                }
+                Ok((conn, platform::PeerCheck::Verified(platform::PeerRole::Daemon))) => {
+                    (conn, IpcClient::Daemon)
+                }
+                other => {
+                    tracing::warn!(
+                        "#1115: 拒绝 IPC 连接（未配置状态）：{:?}",
+                        other.map(|(_, c)| c)
+                    );
+                    return;
+                }
+            };
+            let (rx, mut tx) = conn.split();
+            let mut lines = BufReader::new(rx).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                let Ok(req) = serde_json::from_str::<Req>(&line) else {
+                    continue;
+                };
+                let resp =
+                    unconfigured_dispatch(&req, client, &version, started_at, &location).await;
+                let configured = req.method == "config.set_library" && resp.ok;
+                let step_down = req.method == "daemon.step_down" && resp.ok;
+                let Ok(mut out) = serde_json::to_string(&resp) else {
+                    return;
+                };
+                out.push('\n');
+                if tx.write_all(out.as_bytes()).await.is_err() {
+                    return;
+                }
+                if configured || step_down {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    if configured {
+                        tracing::info!("#1115: 库位置已写入，退出以带着库重新启动");
+                        std::process::exit(EXIT_CONFIGURED_RESTART);
+                    }
+                    std::process::exit(0);
+                }
+            }
+        });
+    }
+}
+
+/// 未配置状态能答的方法。纯函数式（除写库位置），单测直接调。
+pub async fn unconfigured_dispatch(
+    req: &Req,
+    client: IpcClient,
+    version: &str,
+    started_at: i64,
+    location: &Arc<crate::library_location::LibraryLocation>,
+) -> Resp {
+    let id = req.id.clone();
+    if !client.may_call(&req.method) {
+        return Resp::err(id, RespError::new(Reason::RoleForbidden));
+    }
+    match req.method.as_str() {
+        "status" => Resp::ok(
+            id,
+            serde_json::json!({
+                "unconfigured": true,
+                "version": version,
+                "pid": std::process::id(),
+                "started_at": started_at,
+            }),
+        ),
+        "daemon.step_down" => Resp::ok(id, serde_json::json!({ "stepping_down": true })),
+        "config.set_library" => set_library_resp(id, Arc::clone(location), &req.params).await,
+        // 其余一律：还没有库。
+        _ => Resp::err(id, RespError::new(Reason::LibraryUnavailable)),
+    }
+}
+
+/// #1115：Unix 域套接字路径的上限（`sockaddr_un.sun_path` 104 字节，含结尾 NUL）。
+pub const MAX_SOCKET_PATH_BYTES: usize = 103;
+
+/// 签名 socket 的路径能不能用。超长（用户名很长时）⇒ 拒绝启动并说明，不静默换位置。
+pub fn check_socket_path(path: &std::path::Path) -> Result<(), String> {
+    let len = path.as_os_str().len();
+    if len > MAX_SOCKET_PATH_BYTES {
+        return Err(format!(
+            "IPC socket 路径 {} 有 {len} 字节，超过系统上限 {MAX_SOCKET_PATH_BYTES}——后台服务无法启动（#1115）",
+            path.display()
+        ));
+    }
+    Ok(())
 }
 
 // DAE-01 newest-wins 与 #1044 B13 的 `status.shell_relation` 共用唯一的版本
@@ -317,6 +608,7 @@ impl IpcServer {
             flow_delivery: std::sync::OnceLock::new(),
             backup: std::sync::OnceLock::new(),
             outdated: crate::router::OutdatedPeers::new(),
+            library_location: None,
         }
     }
 
@@ -324,6 +616,14 @@ impl IpcServer {
     /// same instance into `Router::with_outdated_peers`).
     pub fn set_outdated_peers(&mut self, outdated: crate::router::OutdatedPeers) {
         self.outdated = outdated;
+    }
+
+    /// #1115：开放 `config.set_library`（常驻 daemon）。测试沙盒不调它 ⇒ 方法不开放。
+    pub fn set_library_location(
+        &mut self,
+        location: Arc<crate::library_location::LibraryLocation>,
+    ) {
+        self.library_location = Some(location);
     }
 
     /// SYNC-03: 与 Router 共用同一份订阅登记表——不注入时是一份独立空表
@@ -425,19 +725,56 @@ impl IpcServer {
             );
             return Claim::StandDown;
         };
-        let Some(peer) = probe_peer(socket_name, &token_hex).await else {
-            if socket_is_live(socket_name).await {
-                // Socket still live but rejects the recorded token (drift).
+        self.claim_with(
+            &PeerEndpoint::Token {
+                socket_name: socket_name.to_string(),
+                token_hex,
+            },
+            version,
+        )
+        .await
+    }
+
+    /// #1115：签名 socket 上的单实例交接。与令牌版同一套裁决（newest wins）；不同的是
+    /// 不需要前任的令牌——双方按代码签名互认：在位者答应 daemon 身份的 `status` /
+    /// `daemon.step_down`，我们连上后先反向校验在位者是签名 daemon。校验不过（别的程序
+    /// 占着这个 socket）⇒ 退位，绝不删掉一个活着的 socket。
+    pub async fn claim_single_instance_signed(
+        &self,
+        path: &std::path::Path,
+        version: &str,
+    ) -> Claim {
+        self.claim_with(&PeerEndpoint::Signed(path.to_path_buf()), version)
+            .await
+    }
+
+    async fn claim_with(&self, peer: &PeerEndpoint, version: &str) -> Claim {
+        claim_endpoint(peer, version).await
+    }
+}
+
+/// DAE-01 单实例裁决（newest wins）的本体：令牌与签名两种端点共用，未配置状态也用它。
+pub async fn claim_endpoint(peer: &PeerEndpoint, version: &str) -> Claim {
+    {
+        let where_ = peer.describe();
+        if !peer.is_live().await {
+            // Nothing listening: stale file or first start — clean, bind.
+            peer.clean_stale();
+            return Claim::Proceed;
+        }
+        let Some(probe) = probe_peer(peer).await else {
+            if peer.is_live().await {
+                // Socket still live but rejects us (token drift / not a signed daemon).
                 tracing::error!(
-                    "DAE-01b: live daemon on {socket_name} rejects the recorded token — standing down (do not unlink)"
+                    "DAE-01b: live daemon on {where_} rejects us or is not ours — standing down (do not unlink)"
                 );
                 return Claim::StandDown;
             }
             // Peer exited between the two checks — dead socket, bind.
-            clean_stale_socket(socket_name);
+            peer.clean_stale();
             return Claim::Proceed;
         };
-        let r = peer.get("result");
+        let r = probe.get("result");
         let peer_version = r
             .and_then(|v| v.get("version"))
             .and_then(|v| v.as_str())
@@ -447,7 +784,7 @@ impl IpcServer {
             .and_then(|v| v.get("pid"))
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
-        tracing::info!("DAE-01: live daemon v{peer_version} (pid {peer_pid}) on {socket_name}");
+        tracing::info!("DAE-01: live daemon v{peer_version} (pid {peer_pid}) on {where_}");
         match version_cmp(version, &peer_version) {
             Ordering::Less | Ordering::Equal => {
                 tracing::info!(
@@ -457,20 +794,22 @@ impl IpcServer {
             }
             Ordering::Greater => {
                 tracing::info!("DAE-01: ours v{version} > existing v{peer_version} — takeover");
-                let _ = notify_step_down(socket_name, &token_hex).await;
+                let _ = notify_step_down(peer).await;
                 // Wait for the peer to exit (bounded), then bind.
                 for _ in 0..50 {
                     tokio::time::sleep(Duration::from_millis(100)).await;
-                    if probe_peer(socket_name, &token_hex).await.is_none() {
+                    if probe_peer(peer).await.is_none() {
                         break;
                     }
                 }
-                clean_stale_socket(socket_name);
+                peer.clean_stale();
                 Claim::TookOver
             }
         }
     }
+}
 
+impl IpcServer {
     /// Bind the named local socket, write the token file, serve forever.
     /// The socket name is `ppf-<8 hex of a random id>` unless a fixed
     /// name is passed (tests pass one; production derives from data_dir).
@@ -478,10 +817,13 @@ impl IpcServer {
         let token_hex: String = token.iter().map(|b| format!("{b:02x}")).collect();
         std::fs::create_dir_all(&self.data_dir)?;
         // The token file is how the UI finds AND authenticates the daemon.
-        std::fs::write(
-            self.data_dir.join("ipc.token"),
-            format!("{socket_name}\n{token_hex}\n"),
-        )?;
+        // #1115：仅属主可读写（以前是 0644，同一台机器上谁都能读到令牌）。
+        let token_path = self.data_dir.join("ipc.token");
+        std::fs::write(&token_path, format!("{socket_name}\n{token_hex}\n"))?;
+        {
+            use platform::PlatformAdapter as _;
+            platform::adapter().restrict_to_owner(&token_path)?;
+        }
 
         // The socket name is stable now (derived from the persistent
         // NodeId) — clear a stale file left by a killed predecessor or
@@ -510,29 +852,97 @@ impl IpcServer {
         }
     }
 
+    /// #1115：在签名 socket 上服务（macOS 常驻 daemon）。父目录由调用方建成仅本用户可访问
+    /// （`PlatformAdapter::prepare_private_dir`）；不写令牌文件。每个连接 accept 后、读任何
+    /// 字节前按对端 audit token 校验代码签名：窗口程序 ⇒ [`IpcClient::Shell`]，daemon 自身
+    /// ⇒ [`IpcClient::Daemon`]，其余断开并记一条 `ipc.bad_peer`。
+    pub async fn serve_signed(self: Arc<Self>, path: &std::path::Path) -> anyhow::Result<()> {
+        // 残留的 socket 文件（被杀的前任）——claim 已确认没人在听。
+        let _ = std::fs::remove_file(path);
+        let name = path.to_fs_name::<GenericFilePath>()?;
+        let listener = ListenerOptions::new().name(name).create_tokio()?;
+        loop {
+            let conn = match listener.accept().await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("ipc accept: {e}");
+                    continue;
+                }
+            };
+            let server = Arc::clone(&self);
+            tokio::spawn(async move {
+                // 签名校验是同步 Security 调用（毫秒级，含读盘），不占 async 线程。
+                let checked = tokio::task::spawn_blocking(move || {
+                    let check = platform::verify_local_peer(
+                        &conn,
+                        &[platform::PeerRole::Shell, platform::PeerRole::Daemon],
+                    );
+                    (conn, check)
+                })
+                .await;
+                let (conn, client) = match checked {
+                    Ok((conn, platform::PeerCheck::Verified(platform::PeerRole::Shell))) => {
+                        (conn, IpcClient::Shell)
+                    }
+                    Ok((conn, platform::PeerCheck::Verified(platform::PeerRole::Daemon))) => {
+                        (conn, IpcClient::Daemon)
+                    }
+                    Ok((_, other)) => {
+                        tracing::warn!("#1115: 拒绝 IPC 连接——对端不是我们签名的程序：{other:?}");
+                        server.note_rejected("ipc.bad_peer").await;
+                        return;
+                    }
+                    Err(e) => {
+                        tracing::warn!("#1115: IPC 对端校验线程失败：{e}");
+                        return;
+                    }
+                };
+                let (rx, tx) = conn.split();
+                let lines = BufReader::new(rx).lines();
+                if let Err(e) = server.session(lines, tx, client).await {
+                    tracing::debug!("ipc conn ended: {e}");
+                }
+            });
+        }
+    }
+
+    async fn note_rejected(&self, kind: &str) {
+        let _ = self
+            .db
+            .append_diag(&storage::DiagEvent {
+                ts: now_ms(),
+                kind: kind.into(),
+                detail: None,
+            })
+            .await;
+    }
+
     async fn handle_conn(
         &self,
         conn: interprocess::local_socket::tokio::Stream,
         expected_token: &str,
     ) -> anyhow::Result<()> {
-        let (rx, mut tx) = conn.split();
+        let (rx, tx) = conn.split();
         let mut lines = BufReader::new(rx).lines();
 
         let Some(first) = lines.next_line().await? else {
             return Ok(());
         };
         if first.trim() != expected_token {
-            let _ = self
-                .db
-                .append_diag(&storage::DiagEvent {
-                    ts: now_ms(),
-                    kind: "ipc.bad_token".into(),
-                    detail: None,
-                })
-                .await;
+            self.note_rejected("ipc.bad_token").await;
             return Ok(()); // drop the connection, say nothing
         }
+        // 持令牌的客户端 = 窗口程序（测试沙盒、Windows / Linux 上的令牌模式）。
+        self.session(lines, tx, IpcClient::Shell).await
+    }
 
+    /// 认证之后的请求循环。`client` 决定能调哪些方法（#1115）。
+    async fn session(
+        &self,
+        mut lines: tokio::io::Lines<BufReader<interprocess::local_socket::tokio::RecvHalf>>,
+        mut tx: interprocess::local_socket::tokio::SendHalf,
+        client: IpcClient,
+    ) -> anyhow::Result<()> {
         while let Some(line) = lines.next_line().await? {
             if line.trim().is_empty() {
                 continue;
@@ -549,6 +959,13 @@ impl IpcServer {
             };
             // IPC-02: 事件订阅——握手应答后连接转为事件流（仍可应答
             // 其他请求），直到客户端断开或 events.unsubscribe。
+            if !client.may_call(&req.method) {
+                let resp = Resp::err(req.id.clone(), RespError::new(Reason::RoleForbidden));
+                let mut out = serde_json::to_string(&resp)?;
+                out.push('\n');
+                tx.write_all(out.as_bytes()).await?;
+                continue;
+            }
             if req.method == "events.subscribe" {
                 // 订阅语义：Resp 应答 = 订阅已生效。receiver 必须先于
                 // 应答创建——broadcast 无订阅者时 send 直接丢弃（events.rs
@@ -562,7 +979,9 @@ impl IpcServer {
                 let mut out = serde_json::to_string(&resp)?;
                 out.push('\n');
                 tx.write_all(out.as_bytes()).await?;
-                return self.serve_subscription(&mut lines, &mut tx, &req, rx).await;
+                return self
+                    .serve_subscription(&mut lines, &mut tx, &req, rx, client)
+                    .await;
             }
             let resp = self.dispatch(req).await;
             let mut out = serde_json::to_string(&resp)?;
@@ -583,6 +1002,7 @@ impl IpcServer {
         tx: &mut interprocess::local_socket::tokio::SendHalf,
         req: &Req,
         mut rx: tokio::sync::broadcast::Receiver<serde_json::Value>,
+        client: IpcClient,
     ) -> anyhow::Result<()> {
         let filter: Option<HashSet<String>> = req
             .params
@@ -610,6 +1030,13 @@ impl IpcServer {
                     };
                     if req.method == "events.unsubscribe" {
                         return Ok(()); // 明确退订——客户端转兜底轮询
+                    }
+                    if !client.may_call(&req.method) {
+                        let resp = Resp::err(req.id.clone(), RespError::new(Reason::RoleForbidden));
+                        let mut out = serde_json::to_string(&resp)?;
+                        out.push('\n');
+                        tx.write_all(out.as_bytes()).await?;
+                        continue;
                     }
                     // 订阅期间的其他请求照常应答（客户端可随时查状态）。
                     let resp = self.dispatch(req).await;
@@ -642,6 +1069,14 @@ impl IpcServer {
         let id = req.id.clone();
         let internal = |id: String| Resp::err(id, RespError::new(Reason::Internal));
         match req.method.as_str() {
+            // #1115：照片库位置的唯一写入口。只有窗口程序能调（IpcClient::may_call 已挡掉
+            // daemon 自身）；测试沙盒没有 library_location ⇒ 拒绝。
+            "config.set_library" => {
+                let Some(location) = self.library_location.clone() else {
+                    return Resp::err(id, RespError::new(Reason::RoleForbidden));
+                };
+                set_library_resp(id, location, &req.params).await
+            }
             "status" => match self
                 .status(req.params.get("shell_version").and_then(|v| v.as_str()))
                 .await

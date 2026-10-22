@@ -3,7 +3,7 @@ import Foundation
 import Photos
 import PPassCore
 
-/// 仅 DEBUG：tools/ios/sim-bg-task.sh（#958 后台短任务真机模拟）与 tools/ios/restore-desktop-pairing.sh 用的驱动。
+/// 仅 DEBUG：tools/ios/sim-bg-task.sh（#958 后台短任务真机模拟）与 tools/ios/delete-test-assets.sh 用的驱动。
 /// 经 E2EDriver 进来（PPASS_E2E_DIR=container），状态写 `<dir>/status.json`，脚本用 devicectl 拉回。一次启动只做一种：
 ///
 ///   PPASS_BGTEST_SCOPE_EXPORT=1  导出当前相册范围（selected / known）和测试相册里的资源数，不改任何东西。

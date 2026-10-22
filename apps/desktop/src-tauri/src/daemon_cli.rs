@@ -1,5 +1,5 @@
-//! #1045：壳调内置 daemon 的**一次性子命令**（`config init` / `config set-library`
-//! / `diag export` / `--version --json`）。
+//! #1045：壳调内置 daemon 的**一次性子命令**（`diag export` / `--version --json`），
+//! 以及 #1115 首启时一次性拉起内置 daemon 接 IPC `config.set_library`（[`with_oneshot_daemon`]）。
 //!
 //! 依赖倒置（里程碑 #9）：config.toml 与诊断包的写者只有 daemon（#1042），壳只做
 //! 「选好参数 → 起一个短进程 → 把结果原样交给前端」。壳里不再有 config 模板、换库
@@ -34,8 +34,9 @@ pub(crate) const DAEMON_PRODUCT: &str = "P-Pass daemon";
 /// 一起卡死。
 pub(crate) const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// config 子命令的上限：建目录 + 写一个小文件，慢盘 / 网络盘留足余量。
-pub(crate) const CONFIG_TIMEOUT: Duration = Duration::from_secs(30);
+/// #1115：首启时没有 daemon 在跑，壳一次性拉起内置 daemon 来接 `config.set_library`。
+/// 这是「起进程 + 答上 IPC」的上限；写库本身走 IPC 自己的读超时。
+pub(crate) const ONESHOT_START_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// 诊断包的上限：daemon 在线时它要等 IPC（单次 10s 保险丝）再打包。
 pub(crate) const DIAG_TIMEOUT: Duration = Duration::from_secs(60);
@@ -120,21 +121,6 @@ fn failure(reply: Option<&Reply>) -> String {
     }
 }
 
-/// `config init` / `config set-library` 的结局：成功 = exit 0 且 stdout 是
-/// `{"config":"<path>"}`。
-pub(crate) fn config_reply(reply: Option<&Reply>) -> Result<(), String> {
-    let r = match reply {
-        Some(r) if r.code == Some(0) => r,
-        other => return Err(failure(other)),
-    };
-    let v: Value = serde_json::from_str(r.stdout.trim())
-        .map_err(|e| unexpected(&format!("bad config reply ({e})"), &r.stdout))?;
-    match v["config"].as_str() {
-        Some(_) => Ok(()),
-        None => Err(unexpected("config reply has no path", &r.stdout)),
-    }
-}
-
 /// `diag export` 的结局：成功 = exit 0 且 stdout 是 `{"zip":…,"daemon_reachable":bool}`，
 /// 原样交给前端（形状与改调前壳自己返回的一致）。
 pub(crate) fn diag_reply(reply: Option<&Reply>) -> Result<Value, String> {
@@ -201,18 +187,59 @@ pub(crate) fn bundled_sidecar() -> Result<std::path::PathBuf, String> {
     Ok(sidecar)
 }
 
-/// `config init --library <dir>`：首启建库目录并写平台 config.toml。
-pub(crate) fn config_init(sidecar: &Path, library_dir: &str) -> Result<(), String> {
-    let mut cmd = platform::command(sidecar);
-    cmd.args(["config", "init", "--library", library_dir]);
-    config_reply(run(cmd, CONFIG_TIMEOUT)?.as_ref())
+/// #1115：一次性拉起内置 daemon（不经开机自启），等它在 IPC 上答话后把连接交给 `f`，
+/// 做完收掉。未配置状态的 daemon 写好库位置后自己以 75 退出；仍在跑（已配置的平台）就请它
+/// 交班（`daemon.step_down`），再不走才结束进程。
+pub(crate) fn with_oneshot_daemon<T>(
+    sidecar: &Path,
+    f: impl FnOnce(&crate::ipc::DaemonHandle) -> Result<T, String>,
+) -> Result<T, String> {
+    let program = sidecar.display().to_string();
+    let mut child = platform::command(sidecar)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| ui_err("ui.err_sidecar_spawn", &[("err", &e), ("path", &program)]))?;
+    let deadline = Instant::now() + ONESHOT_START_TIMEOUT;
+    let handle = loop {
+        if let Ok(h) = crate::ipc::DaemonHandle::discover() {
+            break Ok(h);
+        }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                break Err(unexpected(&format!("daemon exited early ({status})"), ""));
+            }
+            Ok(None) if Instant::now() >= deadline => {
+                break Err(unexpected("daemon did not answer on IPC in time", ""));
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(100)),
+            Err(e) => break Err(ui_err("ui.err_sidecar_wait", &[("err", &e)])),
+        }
+    };
+    let out = handle.and_then(|h| {
+        let out = f(&h);
+        if !exited_within(&mut child, Duration::from_secs(2)) {
+            let _ = h.call("daemon.step_down", serde_json::json!({}));
+        }
+        out
+    });
+    if !exited_within(&mut child, Duration::from_secs(3)) {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    out
 }
 
-/// `config set-library <dir>`：换库（重启后台服务后生效）。
-pub(crate) fn config_set_library(sidecar: &Path, library_dir: &str) -> Result<(), String> {
-    let mut cmd = platform::command(sidecar);
-    cmd.args(["config", "set-library", library_dir]);
-    config_reply(run(cmd, CONFIG_TIMEOUT)?.as_ref())
+fn exited_within(child: &mut std::process::Child, limit: Duration) -> bool {
+    let deadline = Instant::now() + limit;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => return true,
+            Ok(None) if Instant::now() >= deadline => return false,
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+        }
+    }
 }
 
 /// `diag export --out <zip> --app-version <v>`：组装并脱敏诊断包。
@@ -244,53 +271,6 @@ mod tests {
             stdout: stdout.into(),
             stderr: stderr.into(),
         })
-    }
-
-    #[test]
-    fn config_success_needs_exit_zero_and_a_path() {
-        assert_eq!(
-            config_reply(reply(Some(0), "{\"config\":\"/x/config.toml\"}\n", "").as_ref()),
-            Ok(())
-        );
-        for bad in [
-            reply(Some(0), "", ""),
-            reply(Some(0), "not json", ""),
-            reply(Some(0), "{\"zip\":\"/x\"}", ""),
-        ] {
-            assert!(config_reply(bad.as_ref()).is_err(), "{bad:?}");
-        }
-    }
-
-    /// exit 1 的 stderr 一行原样交出：keyed JSON 能被前端 errText 直接渲染。
-    #[test]
-    fn exit_one_hands_the_daemons_error_through_verbatim() {
-        let keyed = ui_err("ui.err_library_nested", &[]);
-        assert_eq!(
-            config_reply(reply(Some(1), "", &format!("{keyed}\n")).as_ref()),
-            Err(keyed)
-        );
-        assert_eq!(
-            config_reply(reply(Some(1), "", "/lib: Permission denied (os error 13)\n").as_ref()),
-            Err("/lib: Permission denied (os error 13)".to_string())
-        );
-    }
-
-    /// 用法错误 / 被信号杀 / 超时是壳的 bug 或环境问题，不能被当成用户的校验
-    /// 失败；它们统一落成 keyed 错误并带上现象。
-    #[test]
-    fn usage_errors_signals_and_timeouts_are_not_user_errors() {
-        for bad in [
-            reply(Some(2), "", "未知参数：--x\n"),
-            reply(None, "", ""),
-            reply(Some(1), "", ""),
-            None,
-        ] {
-            let e = config_reply(bad.as_ref()).unwrap_err();
-            let v: Value = serde_json::from_str(&e).expect("keyed JSON");
-            assert_eq!(v["key"], "ui.err_sidecar_wait", "{bad:?}");
-        }
-        let e = config_reply(reply(Some(2), "", "未知参数：--x\n").as_ref()).unwrap_err();
-        assert!(e.contains("exit 2") && e.contains("未知参数"), "{e}");
     }
 
     #[test]
@@ -395,70 +375,41 @@ mod tests {
         assert!(!v.is_empty());
     }
 
-    /// 首启 → 换库两条真链路，对着真 daemon 跑一遍：写出的 config 能被壳读回，
-    /// 校验失败的错误是 keyed JSON 且原样可渲染。
+    /// #1115 反证：daemon 的 config CLI 写入口已删——真 daemon 拒绝它，且什么都不写。
+    /// 库位置唯一的写法是 IPC `config.set_library`（只对签名窗口程序开放）。
     #[test]
-    fn real_daemon_writes_config_and_validates_the_library_switch() {
-        let Some(d) = real_or_skip("real_daemon_writes_config_and_validates_the_library_switch")
-        else {
+    fn real_daemon_rejects_the_removed_config_cli() {
+        let Some(d) = real_or_skip("real_daemon_rejects_the_removed_config_cli") else {
             return;
         };
         let home = tempfile::tempdir().unwrap();
         let lib = home.path().join("Lib A");
-        let run_cli = |args: &[&str]| {
+        for args in [
+            vec!["config", "init", "--library", lib.to_str().unwrap()],
+            vec!["config", "set-library", lib.to_str().unwrap()],
+        ] {
             let mut c = sandboxed(&d, home.path());
-            c.args(args);
-            run(c, CONFIG_TIMEOUT).unwrap().expect("不该超时")
-        };
+            c.args(&args);
+            let r = run(c, PROBE_TIMEOUT).unwrap().expect("不该超时");
+            assert_eq!(r.code, Some(2), "{args:?} → {r:?}");
+            assert!(r.stderr.contains("config 子命令已删除"), "{r:?}");
+        }
+        assert!(!lib.exists(), "被拒的命令不许建库目录");
+        let written: Vec<_> = walk(home.path());
+        assert!(written.is_empty(), "被拒的命令不许写任何文件：{written:?}");
+    }
 
-        let init = run_cli(&["config", "init", "--library", lib.to_str().unwrap()]);
-        assert_eq!(config_reply(Some(&init)), Ok(()), "{init:?}");
-        assert!(lib.is_dir(), "首启要把库目录建出来");
-        let cfg_path = serde_json::from_str::<Value>(init.stdout.trim()).unwrap()["config"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        let cfg_text = std::fs::read_to_string(&cfg_path).unwrap();
-        assert!(
-            cfg_text.contains("bind_addr = \"0.0.0.0:41145\""),
-            "{cfg_text}"
-        );
-        assert_eq!(
-            crate::ipc::read_config_data_dir(Path::new(&cfg_path).parent().unwrap()),
-            Some(lib.display().to_string()),
-            "壳读回的 data_dir 必须就是传进去的库目录"
-        );
-
-        // 换到不存在的目录 ⇒ keyed 校验错误（原样可渲染）。
-        let missing = home.path().join("nope");
-        let r = run_cli(&["config", "set-library", missing.to_str().unwrap()]);
-        let e = config_reply(Some(&r)).unwrap_err();
-        let v: Value = serde_json::from_str(&e).unwrap();
-        assert_eq!(v["key"], "ui.err_library_target_missing", "{e}");
-
-        // 换到嵌套目录 ⇒ nested。
-        let nested = lib.join("sub");
-        std::fs::create_dir_all(&nested).unwrap();
-        let r = run_cli(&["config", "set-library", nested.to_str().unwrap()]);
-        let e = config_reply(Some(&r)).unwrap_err();
-        assert!(e.contains("ui.err_library_nested"), "{e}");
-        assert_eq!(
-            std::fs::read_to_string(&cfg_path).unwrap(),
-            cfg_text,
-            "校验失败不许动 config"
-        );
-
-        // 合法换库：只改 data_dir。
-        let lib_b = home.path().join("Lib B");
-        std::fs::create_dir_all(&lib_b).unwrap();
-        let r = run_cli(&["config", "set-library", lib_b.to_str().unwrap()]);
-        assert_eq!(config_reply(Some(&r)), Ok(()), "{r:?}");
-        assert_eq!(
-            crate::ipc::read_config_data_dir(Path::new(&cfg_path).parent().unwrap()),
-            Some(lib_b.display().to_string())
-        );
-        let after = std::fs::read_to_string(&cfg_path).unwrap();
-        assert!(after.contains("bind_addr = \"0.0.0.0:41145\""), "{after}");
+    fn walk(dir: &Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                out.extend(walk(&p));
+            } else {
+                out.push(p);
+            }
+        }
+        out
     }
 
     /// 诊断包：daemon 不在线也出包，且结果形状就是前端读的那两个字段。

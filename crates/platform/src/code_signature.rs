@@ -275,6 +275,55 @@ mod tests {
             let _ = std::fs::remove_dir_all(&d);
         }
 
+        /// 反例（#1115 / #1121）：**同团队**的 Apple Development（开发证书）签名、标识也对——
+        /// 只写团队 ID 的要求串会放它过去（讨论稿 §2.4 实测），Developer ID 的两个 OID 挡住它。
+        /// 要一张本团队的 Apple Development 证书，所以只在 `PPASS_APPLE_DEV_IDENTITY=<证书 SHA-1>`
+        /// 时跑（签名会访问钥匙串里的私钥）；没给就打印跳过。
+        /// 反证：code_requirement 去掉两个 OID 子句 ⇒ 这里变 Verified，红。
+        #[test]
+        fn same_team_apple_development_signature_is_rejected() {
+            let Some(identity) = std::env::var_os("PPASS_APPLE_DEV_IDENTITY") else {
+                eprintln!(
+                    "跳过：没给 PPASS_APPLE_DEV_IDENTITY（本团队 Apple Development 证书的 SHA-1）"
+                );
+                return;
+            };
+            let d = tmp("appledev");
+            let app = adhoc_app(&d);
+            let st = Command::new("codesign")
+                .args([
+                    "--force",
+                    "--options",
+                    "runtime",
+                    "--timestamp=none",
+                    "--sign",
+                ])
+                .arg(&identity)
+                .arg(&app)
+                .status()
+                .unwrap();
+            assert!(st.success(), "用 Apple Development 证书签名失败");
+            let info = Command::new("codesign")
+                .args(["-dvv"])
+                .arg(&app)
+                .output()
+                .unwrap();
+            let info = String::from_utf8_lossy(&info.stderr);
+            assert!(
+                info.contains(&format!("TeamIdentifier={DEVELOPER_TEAM_ID}")),
+                "得是本团队的证书：{info}"
+            );
+            match verify_app_bundle(&app, DESKTOP_APP_ID) {
+                UpdatePackageCheck::Rejected(why) => assert!(why.contains("不满足要求"), "{why}"),
+                other => panic!("同团队 Apple Development 签名不该通过：{other:?}"),
+            }
+            assert!(matches!(
+                verify_update_package(&tar_gz(&app)),
+                UpdatePackageCheck::Rejected(_)
+            ));
+            let _ = std::fs::remove_dir_all(&d);
+        }
+
         /// 反例：Apple 自己签名的 App——证书链没问题，团队与标识都不是我们。
         #[test]
         fn apple_signed_app_of_another_identity_is_rejected() {

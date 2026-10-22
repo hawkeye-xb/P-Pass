@@ -60,8 +60,8 @@ fn registry() -> Vec<(&'static str, u128, &'static str)> {
             "ms",
         ),
         (
-            "desktop::daemon_cli::CONFIG_TIMEOUT",
-            ms(crate::daemon_cli::CONFIG_TIMEOUT),
+            "desktop::daemon_cli::ONESHOT_START_TIMEOUT",
+            ms(crate::daemon_cli::ONESHOT_START_TIMEOUT),
             "ms",
         ),
         (

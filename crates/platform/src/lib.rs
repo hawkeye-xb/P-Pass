@@ -60,6 +60,15 @@ pub use code_signature::{
 pub use data_migration::DataDirMigration;
 pub use identity_key::{IdentityKeyHome, IdentityKeyStore, SecretBlobStore};
 pub use local_peer::{verify_local_peer, LocalPeerSource, PeerCheck, PeerRole};
+
+/// #1115：常驻 daemon 的本机 IPC 形态（[`PlatformAdapter::resident_ipc`]）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResidentIpc {
+    /// 命名空间端点（`ppf-<NodeId 前 8 位>`）+ 令牌文件。
+    NamespacedWithToken,
+    /// 这个路径上的 Unix 域套接字（父目录 0700），按对端代码签名认证，没有令牌。
+    SignedSocket(std::path::PathBuf),
+}
 pub use signal::{stop_signal, StopRequest};
 
 #[cfg(target_os = "macos")]
@@ -511,9 +520,32 @@ pub trait PlatformAdapter: Send + Sync {
         IdentityKeyHome::DataDirFile
     }
 
+    /// #1115：常驻 daemon 的本机 IPC 端点与认证方式。默认（Windows / Linux）是命名空间
+    /// 端点 + 每次启动随机令牌（令牌文件在数据目录）；macOS 是仅本用户可访问目录里的
+    /// Unix 域套接字，按对端代码签名认人，没有令牌。
+    fn resident_ipc(&self) -> ResidentIpc {
+        ResidentIpc::NamespacedWithToken
+    }
+
+    /// #1115：建一个只有本用户能进的目录（放 socket / 令牌用）。已存在则核对属主并收紧
+    /// 权限，属主不是本用户就报错。默认实现：只建目录（Windows 的权限模型另议）。
+    fn prepare_private_dir(&self, path: &std::path::Path) -> Result<()> {
+        std::fs::create_dir_all(path).map_err(|source| PlatformError::Io {
+            action: "prepare_private_dir",
+            source,
+        })
+    }
+
     /// #1115：配对记录（设备白名单）正本放在哪。`None`（默认，Windows / Linux）
     /// = 库本身就是正本；macOS 返回钥匙串条目（与身份私钥同一访问组）。
     fn pairing_store(&self) -> Option<Box<dyn SecretBlobStore>> {
+        None
+    }
+
+    /// #1115：照片库位置的正本放在哪。`None`（默认，Windows / Linux）= 平台 config.toml
+    /// 就是正本；macOS 返回钥匙串条目——config.toml 谁都能改，库位置只认签名 daemon 写进
+    /// 钥匙串的值，config.toml 那份只给人看。
+    fn library_store(&self) -> Option<Box<dyn SecretBlobStore>> {
         None
     }
 
@@ -1082,6 +1114,21 @@ impl PlatformAdapter for HeadlessAdapter {
                     .join(".local/share")
             });
         base.join("p-pass")
+    }
+
+    // #1115：与 macOS 同一份 unix 实现（0700、属主必须是本用户）。
+    fn prepare_private_dir(&self, path: &std::path::Path) -> Result<()> {
+        #[cfg(unix)]
+        {
+            crate::unix::prepare_private_dir(path)
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::create_dir_all(path).map_err(|source| PlatformError::Io {
+                action: "prepare_private_dir",
+                source,
+            })
+        }
     }
 
     // QA-09 迁移（#211）：headless 平台实际上就是 Linux（unix），四个能力

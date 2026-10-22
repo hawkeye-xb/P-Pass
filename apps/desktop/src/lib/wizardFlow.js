@@ -94,7 +94,7 @@ export function createWizardFlow({
     set({ libraryDir: defaultDir });
   }
 
-  /** 第 1 → 2 步：让 daemon 写 config（`write_config` → `config init`）。 */
+  /** 第 1 → 2 步：让 daemon 写 config（`write_config` → IPC `config.set_library`）。 */
   async function toStep2() {
     set({ error: "", busy: true });
     try {

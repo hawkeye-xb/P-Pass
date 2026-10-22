@@ -115,7 +115,7 @@
 
   // null=检测中。`show_wizard` 是 Rust 给的结论（判据只在 Rust，#1045）；
   // 前端不拿 configured / installed / user_stopped 自己拼。
-  let wizard = $state(null); // {show_wizard, default_dir, configured_library_dir}
+  let wizard = $state(null); // {show_wizard, unconfigured, default_dir, configured_library_dir}
   // #1043：平台界面能力（platform_ux）。null = 还没问到；向导等它到了再选视图。
   let platformUx = $state(null);
   let starting = $state(false);
@@ -1433,12 +1433,14 @@
       <WizardWindows
         defaultDir={wizard.default_dir}
         configuredLibraryDir={wizard.configured_library_dir}
+        unconfigured={wizard.unconfigured === true}
         onDone={() => { checkWizard(); refresh(); }}
       />
     {:else}
       <Wizard
         defaultDir={wizard.default_dir}
         configuredLibraryDir={wizard.configured_library_dir}
+        unconfigured={wizard.unconfigured === true}
         onDone={() => { checkWizard(); refresh(); }}
       />
     {/if}

@@ -27,6 +27,9 @@ const ACCOUNT: &str = "node-secret-key";
 /// #1115：配对记录（设备白名单）正本的 service 名。与身份私钥同一访问组、同一组属性。
 pub const PAIRINGS_SERVICE: &str = "com.hawkeyexb.ppass.desktop.daemon.pairings";
 const PAIRINGS_ACCOUNT: &str = "pairings";
+/// #1115：照片库位置的正本（只有签名 daemon 写得了；config.toml 里那份只给人看）。
+pub const LIBRARY_SERVICE: &str = "com.hawkeyexb.ppass.desktop.daemon.library";
+const LIBRARY_ACCOUNT: &str = "library";
 
 /// `errSecItemNotFound`：确定没有这一条——唯一映射成 `Ok(None)` 的状态码。
 const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
@@ -112,6 +115,13 @@ impl KeychainBlobStore {
         Self {
             service: PAIRINGS_SERVICE,
             account: PAIRINGS_ACCOUNT,
+        }
+    }
+
+    pub fn library() -> Self {
+        Self {
+            service: LIBRARY_SERVICE,
+            account: LIBRARY_ACCOUNT,
         }
     }
 

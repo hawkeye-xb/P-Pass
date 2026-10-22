@@ -282,6 +282,7 @@ msg_keys! {
     UI_WIZARD_STEP_LIBRARY => "ui.wizard_step_library",
     UI_WIZARD_STEP_SLEEP => "ui.wizard_step_sleep",
     UI_WIZARD_STEP_SERVICE => "ui.wizard_step_service",
+    UI_WIZARD_UNCONFIGURED_NOTICE => "ui.wizard_unconfigured_notice",
     UI_WIZARD_LIBRARY_TITLE => "ui.wizard_library_title",
     UI_WIZARD_LIBRARY_BODY_MAC => "ui.wizard_library_body_mac",
     UI_WIZARD_LIBRARY_BODY_WIN => "ui.wizard_library_body_win",
@@ -401,6 +402,7 @@ msg_keys! {
     UI_ERR_UPDATE_VERSION_CHANGED => "ui.err_update_version_changed",
     UI_ERR_UPDATE_PUBLISHER_REJECTED => "ui.err_update_publisher_rejected",
     UI_ERR_UPDATE_NOT_DOWNLOADED => "ui.err_update_not_downloaded",
+    UI_ERR_DAEMON_NOT_OURS => "ui.err_daemon_not_ours",
     UI_ERR_REGISTER_AND_SPAWN => "ui.err_register_and_spawn",
     UI_ERR_STOP_MARK_WRITE => "ui.err_stop_mark_write",
     UI_ERR_STOP_MARK_CLEAR => "ui.err_stop_mark_clear",
@@ -758,10 +760,12 @@ mod tests {
             UI_ERR_UPDATE_VERSION_CHANGED,
             UI_ERR_UPDATE_PUBLISHER_REJECTED,
             UI_ERR_UPDATE_NOT_DOWNLOADED,
+            UI_ERR_DAEMON_NOT_OURS,
+            UI_WIZARD_UNCONFIGURED_NOTICE,
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 323);
+        assert_eq!(ALL.len(), 325);
     }
 
     #[test]

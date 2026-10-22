@@ -337,13 +337,17 @@ fn wizard_state(app: tauri::AppHandle) -> Value {
     let pictures = default_library_dir(platform::adapter().pictures_dir());
     let installed = platform::hosting().autostart_installed().unwrap_or(false);
     let online = app.state::<ServiceStateManager>().current() == ServiceState::Running;
+    // #1115：后台服务活着、但还没有照片库位置（只答 status / config.set_library）——
+    // 这不是服务挂了，是在等向导。直接进向导，并告诉前端为什么（向导顶部给出提示）。
+    let unconfigured = daemon_waits_for_library();
     json!({
-        "show_wizard": show_wizard(
+        "show_wizard": unconfigured || show_wizard(
             dir.join("config.toml").exists(),
             installed,
             is_user_stopped(&dir),
             online,
         ),
+        "unconfigured": unconfigured,
         "default_dir": pictures.to_string_lossy(),
         // Some of the library, if the config already points somewhere —
         // the wizard prefills this so re-running it never orphans the
@@ -490,21 +494,44 @@ fn disable_auto_sleep() -> Result<(), String> {
     }
 }
 
-/// 首启向导确认库位置：config.toml 的写者是 daemon（#1042 / #1045），壳只调
-/// 内置 daemon 的 `config init --library <dir>`——建库目录、写整份模板、归一
-/// 路径分隔符、用真 TOML 序列化都在 daemon 一侧（`crates/daemon/src/config.rs`）。
-/// 失败原样把 daemon 的错误交给前端（校验类本身就是 keyed JSON）。
-#[tauri::command]
-fn write_config(library_dir: String) -> Result<(), String> {
-    daemon_cli::config_init(&daemon_cli::bundled_sidecar()?, &library_dir)
+/// #1115：照片库位置的唯一写法——IPC `config.set_library`（daemon 只对验过签名的窗口程序
+/// 开放；以前的 CLI 子命令 `config init` / `config set-library` 已删）。建库目录、写模板、
+/// 校验（存在 / 可写 / 不嵌套）、写正本都在 daemon（`crates/daemon/src/library_location.rs`）。
+/// 有 daemon 在跑（含「未配置」状态）就直接问它；首启时没有，就一次性拉起内置 daemon
+/// 配好再收掉。校验失败原样交出 daemon 的 keyed 错误。生效时机：daemon 重启后。
+fn configure_library(library_dir: &str) -> Result<(), String> {
+    let set = |h: &ipc::DaemonHandle| {
+        h.call("config.set_library", json!({ "library": library_dir }))
+            .map(|_| ())
+    };
+    match ipc::DaemonHandle::discover() {
+        Ok(h) => set(&h),
+        Err(_) => daemon_cli::with_oneshot_daemon(&daemon_cli::bundled_sidecar()?, set),
+    }
 }
 
-/// 更改照片库位置：同上，壳只调 `config set-library <dir>`（存在 / 可写 / 不嵌套
-/// 的校验、只改 data_dir 一行、清旧库里的孤儿 config 都在 daemon）。生效时机
-/// 不变——daemon 只在启动时读一次 config，重启后台服务后生效。
+/// 后台服务在线但处于「未配置」状态（`status.unconfigured`）。连不上 / 不答 = `false`。
+/// 超时取短：`wizard_state` 随服务状态事件重读，不能被一次询问拖住。
+fn daemon_waits_for_library() -> bool {
+    ipc::DaemonHandle::discover()
+        .and_then(|h| h.call_with_timeout("status", json!({}), std::time::Duration::from_secs(1)))
+        .is_ok_and(|status| status_is_unconfigured(&status))
+}
+
+fn status_is_unconfigured(status: &Value) -> bool {
+    status["unconfigured"].as_bool() == Some(true)
+}
+
+/// 首启向导确认库位置。
+#[tauri::command]
+fn write_config(library_dir: String) -> Result<(), String> {
+    configure_library(&library_dir)
+}
+
+/// 更改照片库位置（重启后台服务后生效）。
 #[tauri::command]
 fn set_library_dir(library_dir: String) -> Result<(), String> {
-    daemon_cli::config_set_library(&daemon_cli::bundled_sidecar()?, &library_dir)
+    configure_library(&library_dir)
 }
 
 /// DESK-29 (#268)：注册开机自启**之前**，先确认这个 sidecar 真的能跑、真的是
@@ -1791,6 +1818,12 @@ mod tests {
             );
         }
         assert_eq!(sec["freezePrototype"], true);
+        // #1115：IPC 对端校验用的 LOCAL_PEERTOKEN 从 macOS 13 起才是公开支持的 API。
+        // 唯一来源在这里，helper 的 Info.plist 也读它（tools/daemon-helper-macos.sh）。
+        assert_eq!(
+            conf["bundle"]["macOS"]["minimumSystemVersion"], "13.0",
+            "最低系统版本（#1115）"
+        );
         assert_eq!(
             sec["assetProtocol"]["scope"],
             serde_json::json!([]),
@@ -2759,7 +2792,6 @@ mod tests {
     fn wizard_state_hands_the_verdict_not_the_ingredients() {
         let src = include_str!("lib.rs").replace("\r\n", "\n");
         let body = product_fn_body(&src, "wizard_state");
-        assert!(body.contains("\"show_wizard\": show_wizard("), "{body}");
         for ingredient in ["\"configured\":", "\"installed\":", "\"user_stopped\":"] {
             assert!(!body.contains(ingredient), "不许把 {ingredient} 交给前端");
         }
@@ -2767,6 +2799,27 @@ mod tests {
             body.contains("ServiceState::Running"),
             "在线要读 Rust 持有的服务状态"
         );
+        // #1115：daemon 在线但未配置 ⇒ 进向导并带上原因，不能落到「服务挂了」的主界面。
+        assert!(
+            body.contains("\"show_wizard\": unconfigured || show_wizard("),
+            "{body}"
+        );
+        assert!(body.contains("\"unconfigured\": unconfigured"), "{body}");
+    }
+
+    #[test]
+    fn only_an_explicit_unconfigured_status_counts() {
+        assert!(status_is_unconfigured(
+            &json!({"unconfigured": true, "version": "1"})
+        ));
+        for not in [
+            json!({"version": "1", "pid": 1}),
+            json!({"unconfigured": false}),
+            json!({"unconfigured": "true"}),
+            json!(null),
+        ] {
+            assert!(!status_is_unconfigured(&not), "{not}");
+        }
     }
 
     /// #1046（S-11）：更新后拉起 daemon 不再由旧壳的 `resume_daemon_after_update`
@@ -2951,11 +3004,12 @@ mod tests {
     }
 
     #[test]
-    fn config_and_diag_commands_only_call_the_daemon_subcommands() {
+    fn config_and_diag_commands_only_go_through_the_daemon() {
         let src = include_str!("lib.rs").replace("\r\n", "\n");
         for (cmd, call) in [
-            ("write_config", "daemon_cli::config_init("),
-            ("set_library_dir", "daemon_cli::config_set_library("),
+            ("write_config", "configure_library("),
+            ("set_library_dir", "configure_library("),
+            ("configure_library", "\"config.set_library\""),
             ("export_logs_bundle", "daemon_cli::diag_export("),
         ] {
             let body = product_fn_body(&src, cmd);

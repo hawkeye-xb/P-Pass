@@ -212,11 +212,11 @@ fn run_ephemeral_until_stdin_eof(
         }
     }
 
-    let dir = tempfile::tempdir().expect("tempdir");
+    // #1115：沙盒自建存储根，不接受 PPF_DATA_DIR。
     let child = daemon_bin()
         .arg("--ephemeral")
         .args(extra_args)
-        .env("PPF_DATA_DIR", dir.path())
+        .env_remove("PPF_DATA_DIR")
         .env("PPF_RELAY_URLS", "")
         .env("PPF_BIND_ADDR", "127.0.0.1:0")
         .env_remove("PPF_LOG_FILE")
@@ -279,6 +279,10 @@ fn run_ephemeral_until_stdin_eof(
         stdout.push('\n');
     }
     let stderr = stderr_reader.join().expect("stderr reader");
+    // #1115：沙盒目录由 daemon 自建在系统临时目录里，测试负责清掉。
+    if let Some(sb) = stdout.lines().find_map(|l| l.strip_prefix("SANDBOX: ")) {
+        let _ = std::fs::remove_dir_all(sb);
+    }
     (stdout, stderr, exited_after)
 }
 
@@ -350,10 +354,10 @@ fn pair_link_never_printed_when_stdout_is_not_a_terminal() {
         }
     }
 
-    let dir = tempfile::tempdir().expect("tempdir");
+    // #1115：沙盒自建存储根（stdout 的 SANDBOX: 行给出位置），不接受 PPF_DATA_DIR。
     let child = daemon_bin()
         .arg("--ephemeral")
-        .env("PPF_DATA_DIR", dir.path())
+        .env_remove("PPF_DATA_DIR")
         .env("PPF_RELAY_URLS", "")
         .env("PPF_BIND_ADDR", "127.0.0.1:0")
         .env_remove("PPF_LOG_FILE")
@@ -471,7 +475,13 @@ fn pair_link_never_printed_when_stdout_is_not_a_terminal() {
         }
     }
     let mut hits = Vec::new();
-    scan(dir.path(), &mut hits);
+    let sandbox = stdout
+        .lines()
+        .find_map(|l| l.strip_prefix("SANDBOX: "))
+        .map(std::path::PathBuf::from)
+        .expect("stdout 上应有 SANDBOX: 行");
+    scan(&sandbox, &mut hits);
+    let _ = std::fs::remove_dir_all(&sandbox);
     assert!(hits.is_empty(), "数据目录里的文件含配对链接: {hits:?}");
 }
 
@@ -500,11 +510,16 @@ fn daemon_captured_stderr(data_dir: &std::path::Path) -> Option<std::path::PathB
 fn desk58_early_error_lands_in_daemon_err_when_stderr_is_null() {
     use std::process::Stdio;
     let dir = tempfile::tempdir().expect("tempdir");
-    let Some(err_file) = daemon_captured_stderr(dir.path()) else {
+    // #1115：常驻 daemon 不认 PPF_DATA_DIR——平台数据目录经 LOCALAPPDATA 指进临时目录。
+    // 只有 Windows 会走到下面的断言（别的平台 stderr 由托管方接），那里的平台数据目录是
+    // %LOCALAPPDATA%\<identifier>（#1112）。
+    let platform_dir = dir.path().join("com.hawkeyexb.ppass.desktop");
+    let Some(err_file) = daemon_captured_stderr(&platform_dir) else {
         return; // 本平台 stderr 由托管方接，daemon 不负责。
     };
     let status = daemon_bin()
-        .env("PPF_DATA_DIR", dir.path())
+        .env("LOCALAPPDATA", dir.path())
+        .env("APPDATA", dir.path().join("roaming"))
         .env("PPF_LOG_FILE", dir.path())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -526,8 +541,12 @@ fn desk58_early_error_lands_in_daemon_err_when_stderr_is_null() {
 fn desk58_a_piped_stderr_is_left_alone() {
     use std::process::Stdio;
     let dir = tempfile::tempdir().expect("tempdir");
+    // #1115：平台数据目录经环境指进临时目录（常驻 daemon 不认 PPF_DATA_DIR），见上一条。
     let out = daemon_bin()
-        .env("PPF_DATA_DIR", dir.path())
+        .env("HOME", dir.path())
+        .env("LOCALAPPDATA", dir.path())
+        .env("APPDATA", dir.path().join("roaming"))
+        .env("XDG_DATA_HOME", dir.path().join("xdg"))
         .env("PPF_LOG_FILE", dir.path())
         .stdin(Stdio::null())
         .output()
@@ -535,7 +554,34 @@ fn desk58_a_piped_stderr_is_left_alone() {
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("PPF_LOG_FILE="), "stderr: {stderr}");
-    if let Some(f) = daemon_captured_stderr(dir.path()) {
+    if let Some(f) = daemon_captured_stderr(&dir.path().join("com.hawkeyexb.ppass.desktop")) {
         assert!(!f.exists(), "管道 stderr 被改接到了 {}", f.display());
+    }
+}
+
+/// #1115：测试沙盒不接受任何路径输入——同时给出 `PPF_DATA_DIR` / `PPF_LOG_FILE` 就拒绝启动，
+/// 什么都不建、不碰钥匙串。反证：main.rs 去掉 forbidden_inputs 检查 ⇒ 进程照常启动（被 kill），红。
+#[test]
+fn sandbox_refuses_path_inputs() {
+    for var in ["PPF_DATA_DIR", "PPF_LOG_FILE"] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = daemon_bin()
+            .arg("--ephemeral")
+            .env(var, dir.path())
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("spawn daemon");
+        assert_eq!(out.status.code(), Some(2), "{var}: {out:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains(var), "{var}: stderr 应点名它：{stderr}");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            !stdout.contains("SANDBOX: "),
+            "拒绝启动时不该建沙盒：{stdout}"
+        );
+        assert!(
+            std::fs::read_dir(dir.path()).unwrap().next().is_none(),
+            "{var} 指的目录不许被写"
+        );
     }
 }

@@ -14,25 +14,6 @@
 use daemon::{Config, Router, SHUTDOWN_DEADLINE};
 use std::io::IsTerminal;
 
-/// #1042：`config …` 子命令的统一收尾（契约见 `cli::USAGE` 与
-/// `tests/config_cli.rs`）。成功：stdout 一行 `{"config":"<config.toml 路径>"}`、
-/// exit 0；失败：stderr 一行错误原文、exit 1。
-fn config_command_exit(result: Result<std::path::PathBuf, String>) -> ! {
-    match result {
-        Ok(path) => {
-            println!(
-                "{}",
-                serde_json::json!({ "config": path.display().to_string() })
-            );
-            std::process::exit(0);
-        }
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-    }
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // DAE-03 ①：参数解析最先——--help/--version 在任何 daemon 机制
@@ -56,18 +37,6 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", daemon::cli::version_json(&daemon::daemon_version()));
             return Ok(());
         }
-        // #1042：config 的唯一写者。与 --help/--version 同一处短路——不搬
-        // 数据目录、不起日志、不读 config 做启动、不开库、不 claim、不 bind；
-        // 写完即退出。换库仍是重启后台服务后生效（daemon 只在启动时读一次）。
-        // 契约：成功 exit 0，stdout 一行 JSON；失败 exit 1，stderr 一行错误
-        // （keyed 的就是壳 ui_err 同款 JSON，原样可转交前端）。
-        Ok(daemon::cli::Cli::ConfigInit { library }) => {
-            let platform_dir = {
-                use platform::PlatformAdapter as _;
-                platform::adapter().data_dir()
-            };
-            config_command_exit(daemon::config::init_config(&platform_dir, &library));
-        }
         // #1042：诊断包的唯一写者。同样在一切 daemon 机制之前短路：不开库
         // （常驻服务在线时经 IPC logs.export 要那三份，不在线就不要）。契约：
         // 成功 exit 0，stdout 一行 {"zip","daemon_reachable"}；写不出 zip 时
@@ -85,13 +54,6 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        Ok(daemon::cli::Cli::ConfigSetLibrary { library }) => {
-            let platform_dir = {
-                use platform::PlatformAdapter as _;
-                platform::adapter().data_dir()
-            };
-            config_command_exit(daemon::config::set_library(&platform_dir, &library));
-        }
         Ok(daemon::cli::Cli::Run { ephemeral }) => ephemeral,
         Err(e) => {
             eprintln!("{e}");
@@ -104,17 +66,39 @@ async fn main() -> anyhow::Result<()> {
     let (eof_tx, eof_rx) = tokio::sync::oneshot::channel::<()>();
     let eof_tx = if ephemeral { Some(eof_tx) } else { None };
 
+    // #1115：--ephemeral = 测试沙盒，一整套配置在这里一次选定（见 daemon::sandbox）：
+    // 自建临时存储根、内存身份、令牌 IPC、不连常驻 daemon、不接受任何路径输入。
+    // 常驻 daemon 反过来**不认**这些运行时输入（`PPF_DATA_DIR` 不再生效）：库位置只来自
+    // 平台 config。两条路在这之后不会再交叉。
+    let sandbox = if ephemeral {
+        let env: std::collections::HashMap<String, String> = std::env::vars().collect();
+        let given = daemon::sandbox::forbidden_inputs(&env);
+        if !given.is_empty() {
+            eprintln!("{}", daemon::sandbox::rejection(&given));
+            std::process::exit(2);
+        }
+        match daemon::sandbox::Sandbox::create() {
+            Ok(sb) => {
+                // 机读契约：脚本从这一行拿到沙盒目录（令牌文件、库都在里面）。
+                println!("{}", sb.stdout_line());
+                Some(sb)
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
+
     // DESK-24 (#173)：数据目录搬家必须排在**所有**读 data dir 的动作之前，
     // 包括下面这段日志初始化——平台默认日志文件的路径就是从 data dir 算出
     // 来的。此刻 tracing 还没起来，所以这里只拿结果，等它起来再记
     // （见 `.init()` 之后那几行）。
     //
-    // `PPF_DATA_DIR` 设了就不搬：那是场景脚本 / `just dev-daemon` 用来隔离
-    // 一次性 daemon 的开关，一个临时实例顺手把用户真实的 Roaming 目录搬走
-    // 属于越权。真实 daemon 不设这个变量。
-    let pinned_data_dir = std::env::var_os("PPF_DATA_DIR")
-        .map(std::path::PathBuf::from)
-        .filter(|p| !p.as_os_str().is_empty());
+    // 沙盒不搬：一个临时实例顺手把用户真实的 Roaming 目录搬走属于越权。
+    let pinned_data_dir = sandbox.as_ref().map(|sb| sb.root().to_path_buf());
     let data_dir_migration = match pinned_data_dir {
         Some(_) => None,
         None => {
@@ -167,8 +151,7 @@ async fn main() -> anyhow::Result<()> {
             use platform::PlatformAdapter as _;
             // DEVLOG-02 ②：日志必须在读 config **之前**就位（config 自己出错
             // 也得记下来），所以这里只能用不需要解析 config 的两样东西：
-            // `PPF_DATA_DIR`（纯 env，测试脚本靠它隔离一次性 daemon——日志
-            // 不跟着走就会写进用户真实日志文件）与平台约定。
+            // 测试沙盒目录（#1115：沙盒的日志不许写进用户真实日志文件）与平台约定。
             // config.toml 里的 data_dir **无法**在这里被尊重，是鸡生蛋，
             // 属已知限制。
             let base = pinned_data_dir
@@ -242,18 +225,39 @@ async fn main() -> anyhow::Result<()> {
         platform::adapter().data_dir()
     };
     let default_config = platform_dir.join("config.toml");
-    let config = Config::load(Some(&default_config))?;
-    let data_dir = config.data_dir.clone().unwrap_or(platform_dir);
+    // #1115：沙盒不读平台 config（不接受配置文件里的路径），库就是沙盒目录；
+    // 常驻 daemon 读平台 config，且不认 PPF_DATA_DIR。
+    let config = match &sandbox {
+        Some(_) => Config::load(None)?,
+        None => Config::load_resident(&default_config)?,
+    };
+    // #1115：常驻 daemon 的库位置只认正本（macOS 钥匙串；没有安全存储的平台是 config），
+    // config.toml 里的 data_dir 有正本时只给人看。正本里还没有 ⇒ 未配置状态。
+    let library_location =
+        std::sync::Arc::new(daemon::library_location::LibraryLocation::for_platform());
+    let _ = &platform_dir;
+    let (data_dir, explicitly_configured) = match &sandbox {
+        Some(sb) => (sb.root().to_path_buf(), false),
+        None => match library_location.resident_library(&config) {
+            Ok(daemon::library_location::ResidentLibrary::At { dir, configured }) => {
+                (dir, configured)
+            }
+            Ok(daemon::library_location::ResidentLibrary::Unconfigured) => {
+                run_unconfigured(std::sync::Arc::clone(&library_location)).await
+            }
+            Err(e) => {
+                let msg = format!("读不出照片库位置（{e}）——后台服务无法启动（#1115）");
+                eprintln!("{msg}");
+                tracing::error!("启动失败：{msg}");
+                std::process::exit(1);
+            }
+        },
+    };
     // DESK-46 (#638)：config.toml 显式配置的库目录不存在 ⇒ 大声报错退出，
     // 绝不 create_dir_all 静默造——外置盘未挂载时会在 /Volumes 下造出同名
     // 真目录，照片写进内置盘（挂载点阴影）。默认平台目录（首启向导前）与
-    // PPF_DATA_DIR 指定的目录（场景脚本/tools 依赖自动建一次性临时库）
-    // 保持旧行为。
-    if let Err(msg) = library_root_check(
-        config.data_dir.is_some() && std::env::var_os("PPF_DATA_DIR").is_none(),
-        data_dir.is_dir(),
-        &data_dir,
-    ) {
+    // 测试沙盒目录保持旧行为。
+    if let Err(msg) = library_root_check(explicitly_configured, data_dir.is_dir(), &data_dir) {
         // 文件日志此刻还没初始化（init_file_logging 在更后面）——走 stderr：
         // launchd 的 StandardErrorPath 会接住，DESK-09 诊断链（壳读 plist
         // stderr 尾行）照样能看到这句话；Windows 上落 logs\daemon.err（DESK-58）。KeepAlive 节流重拉，盘插回即自愈。
@@ -319,13 +323,40 @@ async fn main() -> anyhow::Result<()> {
     let node_id = transport::node_id_from_secret_key(&secret);
     let socket_name = format!("ppf-{}", &node_id.to_string()[..8]);
     let daemon_version = daemon::daemon_version();
+    // #1115：常驻 daemon 的 IPC 形态由平台决定。macOS：仅本用户可访问目录里的 socket，
+    // 按对端代码签名认人，没有令牌；其余：命名空间端点 + 令牌文件。测试沙盒恒为令牌。
+    let resident_ipc = if ephemeral {
+        platform::ResidentIpc::NamespacedWithToken
+    } else {
+        use platform::PlatformAdapter as _;
+        platform::adapter().resident_ipc()
+    };
+    if let platform::ResidentIpc::SignedSocket(path) = &resident_ipc {
+        let prepared = daemon::ipc::check_socket_path(path).and_then(|()| {
+            use platform::PlatformAdapter as _;
+            let dir = path.parent().unwrap_or(path);
+            platform::adapter()
+                .prepare_private_dir(dir)
+                .map_err(|e| format!("IPC 目录 {} 不可用：{e}", dir.display()))
+        });
+        if let Err(msg) = prepared {
+            eprintln!("{msg}");
+            tracing::error!("启动失败：{msg}");
+            std::process::exit(1);
+        }
+    }
     // DEVLOG-03：改走 tracing，否则这行在 Windows release 上无处可去
     // （#163 之后不再分配控制台，stdout 没有去处）。只含 socket 名与令牌
     // **路径**，不含令牌内容，进日志是安全的。
-    tracing::info!(
-        "IPC: {socket_name}（令牌在 {}/ipc.token）",
-        data_dir.display()
-    );
+    match &resident_ipc {
+        platform::ResidentIpc::SignedSocket(path) => {
+            tracing::info!("IPC: {}（按代码签名认证）", path.display())
+        }
+        platform::ResidentIpc::NamespacedWithToken => tracing::info!(
+            "IPC: {socket_name}（令牌在 {}/ipc.token）",
+            data_dir.display()
+        ),
+    }
 
     // relay_provider 惰性填充：transport 在 claim 之后才 bind，配对二维码
     // 也在这之后生成。H-10b: QR 只带 relay（&r=），从 local_addr() 的 addrs
@@ -363,6 +394,10 @@ async fn main() -> anyhow::Result<()> {
         event_bus.clone(),
     );
     ipc.set_outdated_peers(outdated.clone());
+    // #1115：常驻 daemon 开放 config.set_library（只有签名窗口程序调得到）；测试沙盒不开放。
+    if sandbox.is_none() {
+        ipc.set_library_location(std::sync::Arc::clone(&library_location));
+    }
     // T-090: devices.list connection 字段的实况来源——同样走惰性 slot
     // （transport 在 claim 之后才 bind）。bind 之前如实报 unknown，
     // 绝不用 last_seen 推断在线（卡片契约）。
@@ -396,10 +431,19 @@ async fn main() -> anyhow::Result<()> {
     // DAE-01b blocker①：claim 内部用前任 token（data_dir/ipc.token）
     // 握手——绝不用本实例的新随机 token 探测（生产必 auth 失败，
     // 被误判死 socket 而抢绑，前任变幽灵占库锁）。
-    match ipc
-        .claim_single_instance(&socket_name, &daemon_version)
-        .await
-    {
+    let claim = match &resident_ipc {
+        // #1115：沙盒不连常驻 daemon——socket 名由随机身份派生，不会撞名，没有交接可做。
+        _ if sandbox.is_some() => daemon::Claim::Proceed,
+        platform::ResidentIpc::SignedSocket(path) => {
+            ipc.claim_single_instance_signed(path, &daemon_version)
+                .await
+        }
+        platform::ResidentIpc::NamespacedWithToken => {
+            ipc.claim_single_instance(&socket_name, &daemon_version)
+                .await
+        }
+    };
+    match claim {
         daemon::Claim::StandDown => {
             // DEVLOG-03：退位理由必须在日志里留痕——Windows 上这曾是唯一
             // 的线索，而它打在一个不再存在的控制台里。
@@ -462,10 +506,9 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("P-Pass daemon 已启动");
     // DEVLOG-03：`NodeId:` 这一行**必须留在 stdout**——它是机读契约：
-    // tools/dogfood-smoke.sh 与 tools/scenarios/{crash_recovery,disk_full,
-    // huge_file}.sh 都把两条流分开收（`> daemon.log 2> daemon.err`）然后
-    // `grep -o 'NodeId: .*' daemon.log`。搬到 tracing（stderr）会让那四个
-    // 脚本拿到空串。所以这里刻意打两遍：stdout 那条给脚本，日志那条给事后
+    // tools/dogfood-smoke.sh 把两条流分开收（`> daemon.log 2> daemon.err`）
+    // 然后 `grep -o 'NodeId: .*' daemon.log`。搬到 tracing（stderr）会让
+    // 脚本拿到空串（tools/scenarios/*.sh 已在 #1115 改写为进程内测试）。所以这里刻意打两遍：stdout 那条给脚本，日志那条给事后
     // 排障（Windows release 上 stdout 无处可去，见 #163）。
     println!("NodeId: {}", transport.node_id());
     // #544：日志里只记前缀——全长 NodeId 可被任何人拨号，建连即可换来本机
@@ -497,7 +540,11 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn({
         let ipc = std::sync::Arc::clone(&ipc);
         async move {
-            if let Err(e) = ipc.serve(&socket_name, token).await {
+            let served = match &resident_ipc {
+                platform::ResidentIpc::SignedSocket(path) => ipc.serve_signed(path).await,
+                platform::ResidentIpc::NamespacedWithToken => ipc.serve(&socket_name, token).await,
+            };
+            if let Err(e) = served {
                 tracing::error!("IPC 服务退出：{e}");
             }
         }
@@ -959,6 +1006,45 @@ fn library_root_check(
 
 /// 32 random bytes from the OS (via std's RandomState hashing entropy is
 /// NOT enough — use getrandom through the `rand`-free std path).
+/// #1115：未配置状态——正本里还没有库位置。只有平台给了签名 socket 时才会走到这里
+/// （有安全存储的平台才有「未配置」）。单实例交接照做，然后只答 `status` 与
+/// `config.set_library`，写好后以 `EXIT_CONFIGURED_RESTART` 退出、带着库重新启动。
+async fn run_unconfigured(
+    location: std::sync::Arc<daemon::library_location::LibraryLocation>,
+) -> ! {
+    use platform::PlatformAdapter as _;
+    let platform::ResidentIpc::SignedSocket(path) = platform::adapter().resident_ipc() else {
+        let msg = "照片库位置未配置，且本平台没有签名 socket 承接配置（#1115）";
+        eprintln!("{msg}");
+        std::process::exit(1);
+    };
+    let prepared = daemon::ipc::check_socket_path(&path).and_then(|()| {
+        let dir = path.parent().unwrap_or(&path);
+        platform::adapter()
+            .prepare_private_dir(dir)
+            .map_err(|e| format!("IPC 目录 {} 不可用：{e}", dir.display()))
+    });
+    if let Err(msg) = prepared {
+        eprintln!("{msg}");
+        std::process::exit(1);
+    }
+    let version = daemon::daemon_version();
+    tracing::info!("#1115: 照片库位置未配置——只开放配置方法，等窗口程序的首启向导");
+    match daemon::ipc::claim_endpoint(&daemon::ipc::PeerEndpoint::Signed(path.clone()), &version)
+        .await
+    {
+        daemon::Claim::StandDown => {
+            tracing::info!("已有同版本或更新版本的 daemon 在值班（v{version}），本实例退出。");
+            std::process::exit(0);
+        }
+        daemon::Claim::TookOver | daemon::Claim::Proceed => {}
+    }
+    if let Err(e) = daemon::ipc::serve_unconfigured_signed(&path, version, location).await {
+        tracing::error!("IPC 服务退出：{e}");
+    }
+    std::process::exit(1);
+}
+
 fn rand_token() -> anyhow::Result<[u8; 32]> {
     let mut token = [0u8; 32];
     getrandom::fill(&mut token).map_err(|e| anyhow::anyhow!("系统随机数不可用：{e}"))?;
