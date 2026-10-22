@@ -176,8 +176,8 @@ protocol BackupEngine: AnyObject {
     /// 「后台备份」：关 = 只在打开 App 时备份（Conditions.autoBackupEnabled）。
     func autoBackup() -> Bool
     func setAutoBackup(_ on: Bool) throws
-    /// #343「iOS 不承诺什么」：首页常驻告示（PPassCore BackupPromise），文案 key 走 DiagText。
-    func promise() -> [PromiseNotice]
+    /// 系统「后台 App 刷新」的当前状态（设置页的后台告示据此判定）。
+    func backgroundRefresh() -> BackgroundRefreshAvailability
 }
 
 /// 一次运行用的全部端口。

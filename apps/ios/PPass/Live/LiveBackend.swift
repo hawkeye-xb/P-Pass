@@ -286,12 +286,7 @@ final class LiveBackend: @unchecked Sendable {
         if pairingLoss.changeCount > 0, let e = pairingStore.load()?.pairingEpoch, pairingLoss.isLost(epoch: e) {
             do { try pairingStore.markLost() } catch { logger.log("pairing lost: cannot persist (\(error))") }
         }
-        let refresh = await Self.currentBackgroundRefresh()
-        let last = facts.lastSuccessAt > 0 ? Date(timeIntervalSince1970: Double(facts.lastSuccessAt) / 1000) : nil
-        let f = DateFormatter()
-        f.dateFormat = "MM-dd HH:mm"
-        let notices = BackupPromise.notices(view: view, backgroundRefresh: refresh, lastConfirmedAt: last, formatTime: { f.string(from: $0) })
-        await engineModel.publish(facts, notices)
+        await engineModel.publish(facts, await Self.currentBackgroundRefresh())
         await evaluateNotices()
     }
 
@@ -354,7 +349,7 @@ extension CurrentPeerTransport: CtrlStreamTransport {
 /// 引擎视图变化 → 主线程上的事实快照 + 回调。
 actor LiveEngineModel {
     private(set) var facts = FlowFacts()
-    private(set) var notices: [PromiseNotice] = []
+    private(set) var backgroundRefresh: BackgroundRefreshAvailability = .available
     private var listeners: [@Sendable () -> Void] = []
     var refresh: (@Sendable () async -> Void)?
 
@@ -362,9 +357,9 @@ actor LiveEngineModel {
     func add(_ l: @escaping @Sendable () -> Void) { listeners.append(l) }
     func engineChanged(_ view: EngineView) async { await refresh?() }
 
-    func publish(_ f: FlowFacts, _ n: [PromiseNotice]) {
+    func publish(_ f: FlowFacts, _ r: BackgroundRefreshAvailability) {
         facts = f
-        notices = n
+        backgroundRefresh = r
         for l in listeners { DispatchQueue.main.async { l() } }
     }
 }
@@ -374,7 +369,7 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
     private let backend: LiveBackend
     private let lock = NSLock()
     private var latest = FlowFacts()
-    private var latestNotices: [PromiseNotice] = []
+    private var latestRefresh: BackgroundRefreshAvailability = .available
 
     init(backend: LiveBackend) {
         self.backend = backend
@@ -387,8 +382,8 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
     private func pull() {
         Task {
             let f = await backend.engineModel.facts
-            let n = await backend.engineModel.notices
-            lock.lock(); latest = f; latestNotices = n; lock.unlock()
+            let r = await backend.engineModel.backgroundRefresh
+            lock.lock(); latest = f; latestRefresh = r; lock.unlock()
             await MainActor.run { self.listeners.forEach { $0() } }
         }
     }
@@ -396,7 +391,7 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
     @MainActor private var listeners: [() -> Void] = []
 
     func facts() -> FlowFacts { lock.lock(); defer { lock.unlock() }; return latest }
-    func promise() -> [PromiseNotice] { lock.lock(); defer { lock.unlock() }; return latestNotices }
+    func backgroundRefresh() -> BackgroundRefreshAvailability { lock.lock(); defer { lock.unlock() }; return latestRefresh }
 
     func observe(_ onChange: @escaping () -> Void) {
         Task { @MainActor in self.listeners.append(onChange) }

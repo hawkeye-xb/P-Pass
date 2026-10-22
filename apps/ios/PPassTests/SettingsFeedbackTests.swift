@@ -39,8 +39,8 @@ final class SettingsFeedbackTests: XCTestCase {
         func setWifiOnly(_ on: Bool) throws { calls.append("wifi=\(on)"); if failWrites { throw Boom() }; disk.wifi = on }
         func autoBackup() -> Bool { disk.auto }
         func setAutoBackup(_ on: Bool) throws { calls.append("auto=\(on)"); if failWrites { throw Boom() }; disk.auto = on }
-        var notices: [PromiseNotice] = []
-        func promise() -> [PromiseNotice] { notices }
+        var refresh: BackgroundRefreshAvailability = .available
+        func backgroundRefresh() -> BackgroundRefreshAvailability { refresh }
     }
 
     private final class StubMedia: MediaLibrary {
@@ -74,12 +74,12 @@ final class SettingsFeedbackTests: XCTestCase {
     func test_background_refresh_notice_follows_the_fact_and_the_users_choice() {
         let (app, engine, _) = make()
         engine.disk.auto = true
-        engine.notices = [PromiseNotice(BackupPromise.whileOpenTitle), PromiseNotice(BackupPromise.refreshOff)]
+        engine.refresh = .denied
         app.refresh()
         XCTAssertEqual(app.backgroundNotice?.canResolve, true)
         XCTAssertEqual(app.backgroundNotice?.body, L.s("background_refresh_off_notice"))
 
-        engine.notices = [PromiseNotice(BackupPromise.refreshRestricted)]
+        engine.refresh = .restricted
         app.refresh()
         XCTAssertEqual(app.backgroundNotice?.canResolve, false, "被限制时用户改不了，不给按钮")
         XCTAssertEqual(app.backgroundNotice?.body, L.s("background_refresh_restricted_notice"))
@@ -89,7 +89,7 @@ final class SettingsFeedbackTests: XCTestCase {
         XCTAssertNil(app.backgroundNotice, "用户没要后台备份：后台刷新关不关与他无关，不打扰")
 
         engine.disk.auto = true
-        engine.notices = [PromiseNotice(BackupPromise.whileOpenTitle)]
+        engine.refresh = .available
         app.refresh()
         XCTAssertNil(app.backgroundNotice, "后台刷新恢复 → 告示消失")
     }
