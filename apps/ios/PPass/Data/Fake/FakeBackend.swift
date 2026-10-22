@@ -8,6 +8,8 @@ enum FakeScenario: String, CaseIterable {
     case normal, sending, paused, waiting, allSafe, trouble
     case partialAccess, noAccess, noAlbums, lost, notPaired
     case timelineEmpty, timelineLoading, timelineError
+    /// 设置页告示区：后台 App 刷新关着 + 有未确认的源已删除（两条告示同时出现）。
+    case notices
 
     static var current: FakeScenario {
         let env = ProcessInfo.processInfo.environment["PPASS_SCENARIO"] ?? UserDefaults.standard.string(forKey: "PPASS_SCENARIO")
@@ -131,6 +133,8 @@ final class FakeEngine: BackupEngine {
             f.failed = 3
         case .normal:
             f.view = EngineSnapshot(state: .idle, pending: 37)
+        case .notices:
+            f.missingSourceUnacknowledged = 3
         default:
             break
         }
@@ -168,7 +172,7 @@ final class FakeEngine: BackupEngine {
     func askNotificationAtOnboarding() async {}
     func finishOnboarding() throws {}
 
-    func backgroundRefresh() -> BackgroundRefreshAvailability { .available }
+    func backgroundRefresh() -> BackgroundRefreshAvailability { scenario == .notices ? .denied : .available }
 }
 
 /// 演示数据没有电脑可订阅：不产生任何信号（页面行为 = 演示数据本身），状态恒为初始。
