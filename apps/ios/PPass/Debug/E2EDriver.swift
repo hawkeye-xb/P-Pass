@@ -56,8 +56,8 @@ enum E2EDriver {
 
         let outcome = await backend.pairing.pair(code: link)
         write("paired", ["pair_outcome": "\(outcome)"])
-        guard case .joined(let firstTime) = outcome else { write("failed", ["error": "pairing: \(outcome)", "done": true]); return }
-        model.paired(firstTime: firstTime)
+        guard case .joined(let firstTime, let settingSaveFailed) = outcome else { write("failed", ["error": "pairing: \(outcome)", "done": true]); return }
+        model.paired(firstTime: firstTime, settingSaveFailed: settingSaveFailed)
 
         let albums: [AlbumBucket]
         do { albums = try await backend.media.albums() } catch {

@@ -132,7 +132,9 @@ final class AppModel: ObservableObject {
         do { try backend.engine.finishOnboarding() } catch { settingWriteFailed("onboarded", error) }
         Task {
             await backend.engine.askNotificationAtOnboarding()
-            if enableBackgroundBackup { setAutoBackup(true) }
+            // 选「不开」也按用户的选择写一次（#1039，对位 Android `onEnterWithoutBackgroundBackup`）：配对时清旧意图
+            // 那一步若没写下来，这里补上，否则旧电脑留下的意图会被带到新电脑上。写失败同样提示，照常进首页。
+            setAutoBackup(enableBackgroundBackup)
             refresh()
             refreshNotificationAuthorization()
             phase = .main
@@ -273,7 +275,13 @@ final class AppModel: ObservableObject {
     func retry() { runCommand("retry-failed") { try await self.backend.engine.retryFailed() } }
 
     /// 配对成功后的去向：以前连过这台电脑 → 首页；否则去选相册（Android 同语义）。
-    func paired(firstTime: Bool) {
+    /// settingSaveFailed：换新电脑清旧的后台备份意图没写下来（#1039，对位 Android）——不拦配对，照常往下走，提示用户；
+    /// 完成页点按钮时按用户的选择再写一次。
+    func paired(firstTime: Bool, settingSaveFailed: Bool) {
+        if settingSaveFailed {
+            AppLog.log("settings: write failed (auto-backup new desktop, ask again)")
+            notice = UserNotice(message: L.s("setting_save_failed"))
+        }
         refresh()
         refreshNotificationAuthorization()
         phase = firstTime ? .chooseAlbums : .main

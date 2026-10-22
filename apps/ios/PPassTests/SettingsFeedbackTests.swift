@@ -37,8 +37,14 @@ final class SettingsFeedbackTests: XCTestCase {
         func finishOnboarding() throws { calls.append("onboarded"); if failOnboarded { throw Boom() } }
         func wifiOnly() -> Bool { disk.wifi }
         func setWifiOnly(_ on: Bool) throws { calls.append("wifi=\(on)"); if failWrites { throw Boom() }; disk.wifi = on }
-        func autoBackup() -> Bool { disk.auto }
-        func setAutoBackup(_ on: Bool) throws { calls.append("auto=\(on)"); if failWrites { throw Boom() }; disk.auto = on }
+        /// 设了就走真盘：与 `LiveEngineAdapter.setAutoBackup` 同一个写盘函数，写失败来自真实的只读目录（#1039）。
+        var prefs: AutoBackupPrefs?
+        func autoBackup() -> Bool { prefs?.enabled() ?? disk.auto }
+        func setAutoBackup(_ on: Bool) throws {
+            calls.append("auto=\(on)")
+            if let prefs { try prefs.setUserChoice(on); return }
+            if failWrites { throw Boom() }; disk.auto = on
+        }
         var refresh: BackgroundRefreshAvailability = .available
         func backgroundRefresh() -> BackgroundRefreshAvailability { refresh }
     }
@@ -116,6 +122,69 @@ final class SettingsFeedbackTests: XCTestCase {
         await settle()
         XCTAssertEqual(app.phase, .main)
         XCTAssertEqual(app.notice?.message, L.s("setting_save_failed"))
+    }
+
+    // MARK: #1039 换新电脑清旧的后台备份意图写失败（对位 Android）
+
+    /// 配对结局带着「清意图没写下来」：照常进选相册，并提示。反证：去掉 `paired` 里设 notice 那段，本条红。
+    func test_new_desktop_intent_clear_failure_still_goes_on_and_tells_the_user() {
+        let (app, _, _) = make()
+        app.paired(firstTime: true, settingSaveFailed: true)
+        XCTAssertEqual(app.phase, .chooseAlbums, "不拦配对")
+        XCTAssertEqual(app.notice?.message, L.s("setting_save_failed"))
+
+        let (ok, _, _) = make()
+        ok.paired(firstTime: true, settingSaveFailed: false)
+        XCTAssertNil(ok.notice, "写成了不打扰")
+    }
+
+    /// 偏好目录：盘上留着旧电脑的意图（requested=true，生产者已停）。
+    private func leftoverIntent() throws -> (AppModel, AutoBackupPrefs, URL) {
+        let prefsDir = FileManager.default.temporaryDirectory.appendingPathComponent("settings-feedback-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: prefsDir, withIntermediateDirectories: true)
+        addTeardownBlock {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: prefsDir.path)
+            try? FileManager.default.removeItem(at: prefsDir)
+        }
+        let prefs = AutoBackupPrefs(directory: prefsDir)
+        try prefs.set(requested: true, enabled: false)
+        let (app, engine, _) = make()
+        engine.prefs = prefs
+        return (app, prefs, prefsDir)
+    }
+
+    /// 完成页选「不开」：按用户的选择把意图写成「不开」，盘上 requested=false、enabled=false。
+    /// 反证：把 `finishOnboardingStarted` 改回只在选「开」时写，盘上仍是旧意图，本条红。
+    func test_finishing_without_background_backup_writes_not_requested_to_disk() async throws {
+        let (app, prefs, _) = try leftoverIntent()
+        app.finishOnboardingStarted(enableBackgroundBackup: false)
+        await settle()
+        XCTAssertFalse(prefs.requested(), "旧电脑的意图不能带到新电脑上")
+        XCTAssertFalse(prefs.enabled())
+        XCTAssertNil(app.notice)
+        XCTAssertEqual(app.phase, .main)
+    }
+
+    /// 完成页写「不开」也没写下来（目录只读 0o500：能读、建不出原子写的临时文件）：照常进首页、提示，盘上是真实值；
+    /// 空间恢复后同一条写盘路径能写成。反证：同上一条——不写就不会提示，`notice` 断言红。
+    func test_finishing_without_background_backup_write_failure_tells_the_user_and_recovers() async throws {
+        let (app, prefs, prefsDir) = try leftoverIntent()
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: prefsDir.path)
+        XCTAssertTrue(prefs.requested(), "前提：只读目录下读仍然有效")
+
+        app.finishOnboardingStarted(enableBackgroundBackup: false)
+        await settle()
+        XCTAssertEqual(app.phase, .main, "写不下来也照常进首页")
+        XCTAssertEqual(app.notice?.message, L.s("setting_save_failed"))
+        XCTAssertTrue(prefs.requested(), "没写下来：盘上仍是旧意图（不假装写成）")
+        XCTAssertFalse(app.autoBackup, "显示值是盘上的真实值")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: prefsDir.path)
+        app.notice = nil
+        app.setAutoBackup(false)
+        XCTAssertNil(app.notice)
+        XCTAssertFalse(prefs.requested(), "空间恢复后再写能写成")
+        XCTAssertFalse(prefs.enabled())
     }
 
     // MARK: #971

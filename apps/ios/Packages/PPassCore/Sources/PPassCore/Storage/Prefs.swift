@@ -67,6 +67,15 @@ public final class AutoBackupPrefs: @unchecked Sendable {
         try JSONFile.write(s, url)
     }
 
+    /// 意图与生产者一次落盘（对位 Android `AutoBackupPrefs.set`，#1039）：写失败时盘上不会停在半截。
+    public func set(requested: Bool, enabled: Bool) throws {
+        JSONFile.lock.lock(); defer { JSONFile.lock.unlock() }
+        try JSONFile.write(State(autoEnabled: enabled, userRequested: requested), url)
+    }
+
+    /// 用户在设置页 / 完成页的选择：意图与生产者同值，一次落盘（对位 Android `enableAutoBackup` / `disableAutoBackup` 的写盘部分）。
+    public func setUserChoice(_ on: Bool) throws { try set(requested: on, enabled: on) }
+
     /// MOB-93：断开 / 配对变化——**停生产者，留意图**（对位 `suspendAutoBackupForPairingChange`）。
     public func suspendForPairingChange() throws {
         JSONFile.lock.lock(); defer { JSONFile.lock.unlock() }

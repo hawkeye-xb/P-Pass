@@ -267,13 +267,14 @@ Android 的照片只在一个 bucket（文件夹）里；iOS 的一张照片可�
 - **已对齐（#1020）**：两端同一语义——写失败不崩溃、不静默；命令出错要提示，「状态不允许」不是错误。
 - **设置写盘**：store 写失败照旧抛出（后台写者靠它暴露问题），界面这一侧统一接住——成功才更新显示值 / 做后续副作用（重排任务、叫醒引擎、申请白名单），失败记日志（`settings: write failed (…)`）、显示值回到盘上的真实值、给一过性提示 `setting_save_failed`；成功也记一行（`settings: saved …`）。iOS 在 `AppModel`（`settingWriteFailed`），Android 在 `SettingsWriter`（`MainActivity` 的仅 Wi‑Fi、后台备份、通知开关、完成页、权限弹窗回调都经过它）。后台备份的「意图 + 生产者」两个字段 Android 改为一次落盘（`AutoBackupPrefs.set`），不会写成半截。
 - **其余写盘点（#1039，对位 iOS #969 / #974 / 完成页）**：完成页记「连过这台」写失败 → 提示、照常进首页；「问过通知」写失败 → 不弹系统框、只记日志；配对文件写失败 → 配对失败页（`pair_save_failed`，两端共用）；断开清单逐行执行，某一行失败不跳过后面的停止行，跑完抛出第一个错误、调用方记日志照常离开（Android 的 `suspendAutoBackupForPairingChange` 改为一次落盘）；快速重连按意图恢复、回到前台的授权对账、首页补记、启动时定老用户——没有用户在等结果，只记日志（`SettingsWriter.quiet`）。
-- **Android 独有的两处（iOS 无对应功能或尚未对齐）**：中断卡「恢复备份」——「已确认」写成功才重挂、才收起卡片，失败提示、卡片留着；换新电脑清旧的后台备份意图——失败不拦配对、提示，完成页点「进入」时按用户的选择再写一次「不开」，否则回到前台的对账会把旧意图带到新电脑上。iOS 的 `applyOnPairing` 失败目前只记日志，待另卡对齐。
+- **Android 独有的一处（iOS 无对应功能或尚未对齐）**：中断卡「恢复备份」——「已确认」写成功才重挂、才收起卡片，失败提示、卡片留着。
+- **换新电脑清旧的后台备份意图（两端一致）**：写失败不拦配对、提示 `setting_save_failed`，照常进选相册；完成页选「不开」时按用户的选择再写一次（requested=false、enabled=false），写失败同样提示、照常进首页。否则旧电脑留下的意图会被带到新电脑上（Android 在回到前台的对账时、iOS 在下次连回这台电脑按意图恢复时）。连回以前连过的电脑、按意图恢复失败只记日志。iOS：`applyAutoBackupOnPairing`（`LiveBackend`）的结果经 `PairOutcome.joined(settingSaveFailed:)` 交给 `AppModel.paired`；用户的选择经 `AutoBackupPrefs.setUserChoice` 一次落盘（对位 Android `AutoBackupPrefs.set`）。
 - **相册范围**：读失败与「从未保存」区分——iOS `MediaLibrary.savedScope` 抛出，Android `BackupScopeStore.readScope` 返回 `ScopeRead.Unreadable`（存下的串里有解析不出的段；此前 `mapNotNull` 静默丢掉）；设置行显示 `backup_scope_unreadable`，引擎侧记日志后按空范围，选相册时旧范围按「从未选过」算。写失败（Android 由 `apply` 改为 `commit` 并检查返回值）→ 提示 `scope_save_failed`，不进完成页、不叫醒引擎。
 - **用户命令**（再试一次 / 恢复已跳过 / 取消剩余 / 弹框前的快照）：执行出错 → 记日志（`command failed (…)`）+ 提示 `command_failed`；「状态不允许」（iOS `cancelRemaining` 返回 nil；Android 引擎返回 false / null、运行时未就绪）只刷新，那一行随状态收起。成功记 `command … ok`。iOS 在 `AppModel.runCommand`，Android 在 `BackupUiStateHolder.command` / `attemptUserCommand`；Android「再试一次」改为经 gateway 等引擎做完（此前另起线程，出错只进 logcat）。
 - **平台差异（客观，不是遗漏）**：
   1. 提示的载体：iOS 用 alert（标题 `notice_title`，iOS 独有），Android 用 UI-12 的 Snackbar（无标题）；提示正文两端共用（Android `strings.xml` 为源）。
   2. Android 的 SharedPreferences 文件损坏时由系统整份当空读出，App 分辨不出——这一种只能当「从未保存」；能分辨的（存下的值解析不出来、读取抛出）一律按读不到。
-- **测试**：iOS——`SettingsFeedbackTests`（写失败回滚 + 提示、命令出错提示、状态不允许不报错、范围读失败 ≠ 从未保存）。Android——`WriteFailureNoCrashTest`（#1039 各写盘点：写失败不抛、盘上停在真实值、该提示的提示，空间恢复后再写成功；接线门禁）、`SettingsWriteFeedbackTest`（偏好目录只读，真实制造写失败：显示值回到盘上的值、提示、日志；store 照旧抛出；范围三种读法）、`UserCommandAndHomeFactsTest`（命令出错 / 状态不允许 / 取消不算出错；接线门禁）。
+- **测试**：iOS——`SettingsFeedbackTests`（写失败回滚 + 提示、命令出错提示、状态不允许不报错、范围读失败 ≠ 从未保存；完成页选「不开」在只读目录上真实写失败：提示、盘上停在真实值，恢复可写后写成）、`PairingWiringTests`（新电脑清意图在只读目录上写失败：不拦配对、结局带提示；老电脑恢复失败只记日志）、`PrefsTests`（用户的选择一次落盘）。Android——`WriteFailureNoCrashTest`（#1039 各写盘点：写失败不抛、盘上停在真实值、该提示的提示，空间恢复后再写成功；接线门禁）、`SettingsWriteFeedbackTest`（偏好目录只读，真实制造写失败：显示值回到盘上的值、提示、日志；store 照旧抛出；范围三种读法）、`UserCommandAndHomeFactsTest`（命令出错 / 状态不允许 / 取消不算出错；接线门禁）。
 
 ### Android 专属、不移植
 

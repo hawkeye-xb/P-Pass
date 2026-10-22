@@ -120,14 +120,15 @@ final class LivePairing: PairingService, @unchecked Sendable {
     private let transportFor: (String) -> CtrlTransport
     private let store: PairingStore
     private let onboarded: (String) -> Bool
-    private let onPaired: (PairingRecord, _ knownDesktop: Bool) -> Void
+    /// 返回 true = 配对已落盘、但有设置没写下来要提示用户（#1039：换新电脑清旧的后台备份意图失败）。
+    private let onPaired: (PairingRecord, _ knownDesktop: Bool) -> Bool
     private let onDisconnect: () async -> Void
     private let pending: PendingUnpairStore
     private let flusher: PendingUnpairFlusher
     private var current: Task<PairVerdict, Error>?
 
     init(transportFor: @escaping (String) -> CtrlTransport, store: PairingStore, onboarded: @escaping (String) -> Bool,
-         onPaired: @escaping (PairingRecord, _ knownDesktop: Bool) -> Void, onDisconnect: @escaping () async -> Void,
+         onPaired: @escaping (PairingRecord, _ knownDesktop: Bool) -> Bool, onDisconnect: @escaping () async -> Void,
          pending: PendingUnpairStore, flusher: PendingUnpairFlusher) {
         self.transportFor = transportFor
         self.pending = pending
@@ -164,10 +165,12 @@ final class LivePairing: PairingService, @unchecked Sendable {
         if case let .hello(hello) = member, let epoch = hello.pairingEpoch, !epoch.isEmpty {
             // 「连没连过」必须在 save 之前定：save 里的 onPaired 会把这台标成连过（#982：之前顺序反了，firstTime 恒为 false）。
             let known = onboarded(code.nodeId)
-            do { try save(code, name: hello.deviceName, epoch: epoch, known: known) } catch {
+            do {
+                let settingSaveFailed = try save(code, name: hello.deviceName, epoch: epoch, known: known)
+                return .joined(firstTime: !known, settingSaveFailed: settingSaveFailed)
+            } catch {
                 return saveFailure(error)
             }
-            return .joined(firstTime: !known)
         }
         let task = Task { try await PairVerdictLoop(rpc: rpc).run(token: code.token, deviceName: UIDevice.current.name) }
         current = task
@@ -175,8 +178,10 @@ final class LivePairing: PairingService, @unchecked Sendable {
         do { verdict = try await task.value } catch { return .failed(reason: String(describing: error)) }
         if case .accepted(let a) = verdict {
             let known = onboarded(code.nodeId)
-            do { try save(code, name: a.storageDeviceName, epoch: a.pairingEpoch, known: known) } catch { return saveFailure(error) }
-            return .joined(firstTime: !known)
+            do {
+                let settingSaveFailed = try save(code, name: a.storageDeviceName, epoch: a.pairingEpoch, known: known)
+                return .joined(firstTime: !known, settingSaveFailed: settingSaveFailed)
+            } catch { return saveFailure(error) }
         }
         return verdict.outcome
     }
@@ -221,11 +226,12 @@ final class LivePairing: PairingService, @unchecked Sendable {
     }
 
     /// 写盘成功才算配对成功：失败不调 `onPaired`，让用户看到失败而不是进入重启即丢的「已配对」（#969）。
-    private func save(_ code: ParsedPairLink, name: String, epoch: String, known: Bool) throws {
+    /// 返回 `onPaired` 的结果：配对之后的设置有没有没写下来、要提示的（#1039）。
+    private func save(_ code: ParsedPairLink, name: String, epoch: String, known: Bool) throws -> Bool {
         let record = PairingRecord(daemonNodeId: code.nodeId, peerToken: code.peerToken, storageDeviceName: name,
                                    pairedAt: Int64(Date().timeIntervalSince1970 * 1000), pairingEpoch: epoch)
         try store.save(record)
-        onPaired(record, known)
+        return onPaired(record, known)
     }
 
     private func saveFailure(_ error: Error) -> PairOutcome {
