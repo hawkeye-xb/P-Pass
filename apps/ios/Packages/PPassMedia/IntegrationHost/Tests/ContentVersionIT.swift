@@ -3,12 +3,22 @@ import Photos
 import UIKit
 import PPassMedia
 
-/// #968 真 PhotoKit：收藏不换版本（旧口径 modificationDate 会变，反证），编辑换版本，再编辑再换。
+/// #968 / #1016 真 PhotoKit：收藏、加进相册不换版本（修改时间口径会变，反证），编辑换版本，再编辑再换，还原回到原值。
 final class ContentVersionIT: XCTestCase {
     private func asset(_ id: String) -> PHAsset { PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).firstObject! }
+    private let reader = OriginalContentReader()
+    /// 同步包一层：测试体里还有 `wait(for:)`（编辑提交），不能整体改成 async。
     private func content(_ id: String) -> OriginalContent {
         let a = asset(id)
-        return readOriginalContent(of: a, resources: PHAssetResource.assetResources(for: a))
+        let exp = expectation(description: "read version")
+        let box = ContentBox()
+        let reader = self.reader
+        Task.detached {
+            box.value = await reader.read(a, resources: PHAssetResource.assetResources(for: a))
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 30)
+        return box.value!
     }
 
     private func edit(_ id: String, tag: String) throws {
@@ -35,20 +45,37 @@ final class ContentVersionIT: XCTestCase {
         try IT.requireFullAccess()
         let id = try IT.createPhoto(label: "cv-\(IT.nonce)")
         let created = content(id)
-        XCTAssertFalse(created.degraded, "模拟器上 fileSize 必须读得到：\(created)")
+        XCTAssertFalse(created.degraded, "\(created)")
         let modBefore = try XCTUnwrap(asset(id).modificationDate)
 
         Thread.sleep(forTimeInterval: 1.2)
         try IT.perform { PHAssetChangeRequest(for: self.asset(id)).isFavorite = true }
         let modAfter = try XCTUnwrap(asset(id).modificationDate)
-        XCTAssertGreaterThan(modAfter, modBefore, "前提：收藏推进了 modificationDate（旧口径会因此判成新版本）")
-        XCTAssertEqual(content(id).version, created.version, "收藏不换内容版本")
+        XCTAssertGreaterThan(modAfter, modBefore, "前提：收藏推进了 modificationDate（修改时间口径会因此判成新版本）")
+        let afterFavorite = content(id)
+        XCTAssertEqual(afterFavorite.version, created.version, "收藏不换内容版本")
 
         try edit(id, tag: "a")
         let e1 = content(id)
+        XCTAssertFalse(e1.degraded, "编辑记录读得到：\(e1)")
         XCTAssertNotEqual(e1.version, created.version, "编辑换版本")
         XCTAssertEqual(PHAssetResource.assetResources(for: asset(id))[try XCTUnwrap(e1.resourceIndex)].type, .fullSizePhoto)
+
+        Thread.sleep(forTimeInterval: 1.2)
+        try IT.perform { PHAssetChangeRequest(for: self.asset(id)).isFavorite = false }
+        let e1Unfavorited = content(id)
+        XCTAssertEqual(e1Unfavorited.version, e1.version, "编辑过的照片：取消收藏不换版本（缓存键随修改时间变，重读编辑记录后摘要相同）")
+
         try edit(id, tag: "bb")
-        XCTAssertNotEqual(content(id).version, e1.version, "再次编辑再换版本")
+        let e2 = content(id)
+        XCTAssertNotEqual(e2.version, e1.version, "再次编辑再换版本")
+
+        try IT.perform { PHAssetChangeRequest(for: self.asset(id)).revertAssetContentToOriginal() }
+        let reverted = content(id)
+        XCTAssertEqual(reverted.version, created.version, "还原编辑：回到原值")
     }
+}
+
+private final class ContentBox: @unchecked Sendable {
+    var value: OriginalContent?
 }

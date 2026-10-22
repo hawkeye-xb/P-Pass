@@ -159,17 +159,19 @@
 
 这些不是矩阵的某一行，但同样属于「在 iOS 上不成立 / 不移植」，写在这里以免被当成遗漏。
 
-### 源版本（#968）
+### 源版本（#968、#1016）
 
 - **Android**：版本 = `dateModified:size`，两个量都只随文件内容变；版本变了 → 新建一行，旧行记 `SKIPPED_SOURCE_MISSING`。
-- **iOS 不能照搬 `modificationDate:size`**（模拟器实测，`ContentVersionIT`）：收藏 / 取消收藏会推进 `PHAsset.modificationDate`（加进相册不会），内容没动。把 size 补成真实值也不够——只要还带修改时间，收藏照样判成新版本、重新取原图（iCloud 优化存储下等于整张重下）。
-- **口径**：版本 = 实际备份的那份资源（`selectOriginalResource`：编辑过取 `.fullSizePhoto` / `.fullSizeVideo`）的「资源类型:大小」，大小取 `PHAssetResource` 的 `fileSize`（KVC，**非公开 API**，lookup 早已在用；读库里的元数据，不读文件）。编辑 → 多出渲染资源、大小变；再编辑 → 大小变；还原编辑 → 回到 `.photo`，版本回到原值（桌面按内容哈希判重）；收藏等元数据 → 不变。快照与 lookup 走同一个函数（`readOriginalContent`），引擎按版本相等判定不会错位。
-- **与 Android 的差异**：① 两次编辑渲染出的字节数恰好相同时会漏掉新版本（Android 靠修改时间不会漏）；② 取不到 `fileSize`（KVC 失效 / 无资源）时版本降级为「类型:unknown@修改时间」，保守地多取、不漏改，并写日志 `media: source version degraded`，不退回 0。
-- **发现时机**：收件箱只收新增、忽略 updated（避开系统分析噪声），所以被编辑的照片由对账轮扫描发现（每轮都扫，见 O-03），不像 Android 随 generation 当场发现。换成内容版本后 updated 事件已无副作用，是否让收件箱收 updated 以对齐 Android 的当场发现，待拍板（另开 issue）。
-- **成本**：扫描每张多读一次资源列表与大小，模拟器实测 2.8 ms/张（307 张 849 ms，原先只读 `modificationDate`）；万张级图库每个对账轮约 28 s 的纯元数据读取，待真机复核。
-- **待真机**：iCloud 优化存储（原图不在本机）下 `fileSize` 的取值未验证；读不到会走上面的降级并留日志。
-- **升级代价**：版本格式变了，旧账本里 `修改时间:0` 的行都对不上，会被当作新版本重取一遍；iOS 尚未对外发版（`release/notes/ios` 不存在），只影响测试机。
-- **测试**：`ContentVersionTests`（PPassMedia，纯逻辑）、`ContentVersionIT`（真 PhotoKit：收藏不换版本、编辑换、再编辑再换）。成本数字来自一次性探针（造 300 张后逐张读，未入库：它会把图库历史推长，破坏 `TokenExpiryIT` 对「第二轮变更数少于 40」的前提）。
+- **iOS 不能照搬 `modificationDate`**：收藏 / 取消收藏会推进 `PHAsset.modificationDate`（模拟器实测，`ContentVersionIT`）；在 Mac 上把照片加进相册、同步到手机后也会推进（真机实测，#1016），内容都没动。只要带修改时间，这些操作就会判成新版本、重新取原图，iCloud 优化存储下等于整张重下。
+- **口径**（只用公开 API，#1016 决定不用 `PHAssetResource` 的非公开 KVC `fileSize`）：版本描述实际备份的那份资源（`selectOriginalResource`）。
+  - 没编辑过（`.photo` / `.video`）：PhotoKit 的原始资源不可改写，版本 = `类型:original`，不变。
+  - 编辑过（`.fullSizePhoto` / `.fullSizeVideo`）：版本 = `类型:adj:<编辑记录摘要>`，摘要是 `.adjustmentData` 资源字节的 SHA-256 前 16 位。再编辑换编辑记录 → 版本变；还原编辑 → 渲染资源消失、回到 `类型:original`；收藏、挪相册 → 不变。
+  - 快照与 lookup 走同一个读取器（`OriginalContentReader`），引擎按版本相等判定不会错位。
+- **降级**：编辑过但编辑记录读不到（或没有可用资源）时，版本降级为「类型:unknown@修改时间」，保守地多取、不漏改，并写日志 `media: source version degraded`；`tools/ios/e3-judge.sh check degraded-stats` 统计。
+- **成本**：没编辑过的照片只读资源列表，不读文件。编辑过的照片每次修改时间变化后读一次编辑记录（几百字节到几 KB，可能走网络，只在备份轮内），按「id + 修改时间」缓存在进程内。
+- **字节数**：公开 API 在取原图之前给不出大小，lookup 给 0；引擎导入后改用实际字节数（`MediaDetails.withSize`），交付请求与首页总字节都用它。
+- **发现时机**：收件箱只收新增、忽略 updated（避开系统分析噪声），所以被编辑的照片由对账轮扫描发现（每轮都扫，见 O-03），不像 Android 随 generation 当场发现。是否让收件箱收 updated 以对齐 Android 的当场发现，待拍板（另开 issue）。
+- **测试**：`ContentVersionTests`（PPassMedia，纯逻辑）、`ContentVersionIT`（真 PhotoKit：收藏不换版本、编辑换、取消收藏不换、再编辑再换、还原回原值）、`FlowEngineIOSTests.testDeliveryUsesTheImportedSizeWhenLookupCannotTell`。
 
 ### 后台上传通道（F5，IOS-15 挂起）
 

@@ -59,7 +59,7 @@ public enum MediaOrder {
 public struct Order: Equatable, Sendable {
     public let id: Int64
     public let mediaId: String
-    /// 内容版本（只看内容变没变；Android：修改时间 + 大小，见 `sourceVersionOf`；iOS：备份那份资源的「类型:大小」，见 06-ios-variants 「源版本」一节）。
+    /// 内容版本（只看内容变没变；Android：修改时间 + 大小，见 `sourceVersionOf`；iOS：备份那份资源的类型 + 编辑记录摘要，见 06-ios-variants「源版本」一节）。
     public let sourceVersion: String
     public let bucketId: String
     /// BLAKE3 hex；导入之前为 nil。

@@ -58,6 +58,8 @@ struct FakePosition: Codable, Equatable {
 final class FakeMedia: MediaSource, @unchecked Sendable {
     private let state = Locked<(photos: [FakePhoto], scope: Set<String>?, epoch: Int, identity: String?, duplicate: Set<String>, existingUnreadable: Bool)>(([], ["B7"], 1, "lib-1", [], false))
     let metadataReads = Locked(0)
+    /// iOS（#1016）：lookup 给不出字节数（0），只有导入后才知道。
+    let sizeUnknownBeforeImport = Locked(false)
     /// 默认 true：大部分测试关心的是 G 本身的语义；#904 的测试显式置 false。
     let precise = Locked(true)
     var preciseDiscovery: Bool { precise.get() }
@@ -123,7 +125,7 @@ final class FakeMedia: MediaSource, @unchecked Sendable {
 
     func lookup(_ mediaId: String) async throws -> MediaDetails? {
         guard let p = state.get().photos.first(where: { MediaOrder.same($0.mediaId, mediaId) }) else { return nil }
-        return MediaDetails(snapshot: snapshot(p), fileName: "IMG_\(p.n).HEIC", mimeType: p.video ? "video/quicktime" : "image/heic", sizeBytes: p.size, captureAtMs: 0)
+        return MediaDetails(snapshot: snapshot(p), fileName: "IMG_\(p.n).HEIC", mimeType: p.video ? "video/quicktime" : "image/heic", sizeBytes: sizeUnknownBeforeImport.get() ? 0 : p.size, captureAtMs: 0)
     }
 
     func existingIds(_ mediaIds: [String]) async throws -> Set<String>? {
