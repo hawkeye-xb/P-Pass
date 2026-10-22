@@ -20,7 +20,7 @@ struct ScanScreen: View {
                         .background(PPColor.paper.opacity(0.15), in: Circle())
                 }
                 .accessibilityLabel(L.s("back"))
-                Text(L.s("scan_header_title")).font(PPFont.headline).foregroundStyle(PPColor.paper)
+                Text(L.s("scan_header_title")).font(PPFont.sans(15, .bold, relativeTo: .headline)).foregroundStyle(PPColor.paper)
                 Spacer()
             }
             Spacer()
@@ -35,12 +35,12 @@ struct ScanScreen: View {
                 }
             }
             .frame(width: 260, height: 260)
-            Text(L.s("scan_hint")).font(PPFont.body).multilineTextAlignment(.center).foregroundStyle(PPColor.paperDim)
+            Text(L.s("scan_hint")).font(PPFont.sans(15, relativeTo: .subheadline)).lineSpacing(5).multilineTextAlignment(.center).foregroundStyle(PPColor.paperDim)
             // #1013：扫码成功后系统会弹「本地网络」权限框；先在这里说清用途，不另起弹窗。
             Text(L.s("scan_local_network_note")).font(PPFont.subheadline).multilineTextAlignment(.center).foregroundStyle(PPColor.paperDim)
             Spacer()
             Button(L.s("scan_manual_link"), action: onManual)
-                .font(PPFont.bodyMedium).frame(minHeight: 48)
+                .font(PPFont.sans(14, .bold, relativeTo: .subheadline)).foregroundStyle(PPColor.paperDim).frame(minHeight: 48)
                 .accessibilityIdentifier("manualLink")
         }
         .padding(20)

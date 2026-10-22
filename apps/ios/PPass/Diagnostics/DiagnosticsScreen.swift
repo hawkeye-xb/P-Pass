@@ -120,7 +120,10 @@ struct StorageDetailScreen: View {
             }
             .ppTinted(PPUI.Surface.settingsCard)
         }
-        .confirmationDialog(L.s("disconnect_armed_title"), isPresented: $confirming, titleVisibility: .visible) {
+        // 居中警告框（iOS 确认不可撤销操作的惯例，如「忽略此网络」）；confirmationDialog 在 iOS 26 的 iPhone 上
+        // 变成贴着按钮的气泡，读起来像提示而不是确认。内容同 Android 的确认卡：标题 + 说明 + 取消 / 确认断开。
+        .alert(L.s("disconnect_armed_title"), isPresented: $confirming) {
+            Button(L.s("cancel"), role: .cancel) {}
             Button(L.s("disconnect_confirm"), role: .destructive) {
                 working = true
                 Task { await app.disconnect(); working = false }
