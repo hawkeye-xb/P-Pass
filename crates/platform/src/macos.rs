@@ -1005,7 +1005,7 @@ mod diag_log_tests {
         assert!(!plist.contains("--ephemeral"), "{plist}");
         assert_eq!(
             plist_program_argument(&plist).as_deref(),
-            Some("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon")
+            Some("/Applications/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon")
         );
     }
 
