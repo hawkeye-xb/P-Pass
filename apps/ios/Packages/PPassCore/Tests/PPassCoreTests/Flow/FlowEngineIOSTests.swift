@@ -6,6 +6,23 @@ import XCTest
 
 final class FlowEngineIOSTests: XCTestCase {
 
+    // MARK: #1016：字节数以导入为准
+
+    /// iOS 的 lookup 在取原图之前给不出字节数（0）：交付请求与首页的「当前这一张」都用导入时读到的实际字节数。
+    /// 反证：引擎沿用 lookup 的 details → 请求里 sizeBytes=0，桌面拿不到大小、首页总字节为 0，红。
+    func testDeliveryUsesTheImportedSizeWhenLookupCannotTell() async throws {
+        let rig = try Rig()
+        let p = rig.photo(1, generation: 1)
+        rig.media.sizeUnknownBeforeImport.set(true)
+        await rig.start()
+        await rig.trigger()
+
+        let requests = rig.delivery.requests.get()
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(requests.first?.details.sizeBytes, p.size)
+        XCTAssertGreaterThan(p.size, 0)
+    }
+
     // MARK: #311 D4：iCloud 原图
 
     /// 新照片的原图在 iCloud、因网络拉不下来：不建行、不推进 G、不计失败；等待中（ORIGINAL_UNAVAILABLE）+ 探测梯。

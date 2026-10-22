@@ -926,9 +926,11 @@ public actor FlowEngine {
             // #911：手机空间不足——同 D4 的处置：不建行、不推进游标、不计失败，整体等待。
             log("media \(LogRedact.id(snapshot.mediaId)): phone storage full (\(reason)); waiting, nothing counted")
             return .exit(.localStorageFull)
-        case let .imported(hash, _):
+        case let .imported(hash, size):
             // 导入算出 hash → 建 order（传输中，带 hash）→ 传输。G / S 在结局落库时一起推进（#415 裁决 8）。
             // #775：导入一拿到手就进作用域——建 order 本身也可能失败。
+            // 字节数以导入时读到的为准（iOS 的 lookup 给不出，#1016）。
+            let details = details.withSize(size)
             return try await releasingOnAbort(hash) {
                 let row = try self.store.insert(NewOrder(mediaId: snapshot.mediaId, sourceVersion: version, bucketId: bucket, contentHash: hash, state: .transferring, pairingEpoch: epoch))
                 self.bump()
@@ -975,7 +977,8 @@ public actor FlowEngine {
         case let .localStorageFull(reason):
             log("order \(order.id): phone storage full (\(reason)); leaving the row as it is, nothing counted")
             return .exit(.localStorageFull)
-        case let .imported(hash, _):
+        case let .imported(hash, size):
+            let details = details.withSize(size)
             return try await releasingOnAbort(hash) {
                 if let recorded = order.contentHash, recorded != hash {
                     // 同一版本读出了另一份字节（中断期间被原地改写、版本没跟上）：这一行的 lease 描述的那份内容已不存在——

@@ -93,6 +93,7 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
 final class PhotoMediaSource: MediaSource, @unchecked Sendable {
     private let selected: @Sendable () -> Set<String>
     private let library = PhotoKitLibrary()
+    private let contents = OriginalContentReader()
     private let inbox: Inbox
     private let log: @Sendable (String) -> Void
 
@@ -111,19 +112,21 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
     private var membership: AlbumMembership { AlbumMembership(library: library) }
 
     /// 照片库里还在的那些 id 的快照（按传入顺序；查不到的略过）。[positions] 给出每一项的发现位置（与 ids 一一对应）。
-    private func snapshots(_ ids: [String], members: [String: [String]], positions: [DiscoveryPosition?]? = nil) -> [MediaSnapshot] {
+    private func snapshots(_ ids: [String], members: [String: [String]], positions: [DiscoveryPosition?]? = nil) async -> [MediaSnapshot] {
         guard !ids.isEmpty else { return [] }
         let assets = PHAsset.fetchAssets(withLocalIdentifiers: ids, options: nil)
         var byId: [String: PHAsset] = [:]
         assets.enumerateObjects { a, _, _ in byId[a.localIdentifier] = a }
-        return ids.indices.compactMap { i in
+        var out: [MediaSnapshot] = []
+        for i in ids.indices {
             let id = ids[i]
-            guard let a = byId[id] else { return nil }
-            let content = readOriginalContent(of: a, resources: PHAssetResource.assetResources(for: a))
-            if content.degraded { log("media: source version degraded for \(LogRedact.id(id)) (original resource size unreadable); falls back to modification time") }
-            return MediaSnapshot(mediaId: id, sourceVersion: content.version,
-                                 bucketId: AlbumMembership.key(members[id]), position: positions?[i] ?? nil)
+            guard let a = byId[id] else { continue }
+            let content = await contents.read(a, resources: PHAssetResource.assetResources(for: a))
+            if content.degraded { log("media: source version degraded for \(LogRedact.id(id)) (edit record unreadable or no original resource); falls back to modification time") }
+            out.append(MediaSnapshot(mediaId: id, sourceVersion: content.version,
+                                     bucketId: AlbumMembership.key(members[id]), position: positions?[i] ?? nil))
         }
+        return out
     }
 
     func inScope(after: String?, limit: Int) async throws -> [MediaSnapshot] {
@@ -132,7 +135,7 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
         let ids = members.filter { !chosen.isDisjoint(with: $0.value) }.keys
             .filter { id in after.map { Array($0.utf8).lexicographicallyPrecedes(Array(id.utf8)) } ?? true }
             .sorted { Array($0.utf8).lexicographicallyPrecedes(Array($1.utf8)) }
-        return snapshots(Array(ids.prefix(limit)), members: members)
+        return await snapshots(Array(ids.prefix(limit)), members: members)
     }
 
     /// 发现：收件箱里 `seq > G` 的行，按 seq；只留照片库里还在、且在范围内的，每张带自己的位置（它的 seq）。
@@ -149,7 +152,7 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
             after = last.seq
             let m = membership.of(rows.map(\.assetId))
             let kept = rows.filter { !chosen.isDisjoint(with: m[$0.assetId] ?? []) }
-            out += snapshots(kept.map(\.assetId), members: m, positions: kept.map { DiscoveryPosition(raw: Inbox.position(of: $0.seq)) })
+            out += await snapshots(kept.map(\.assetId), members: m, positions: kept.map { DiscoveryPosition(raw: Inbox.position(of: $0.seq)) })
         }
         return Array(out.prefix(limit))
     }
@@ -163,11 +166,12 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
 
     func lookup(_ mediaId: String) async throws -> MediaDetails? {
         guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [mediaId], options: nil).firstObject else { return nil }
-        guard let snap = snapshots([mediaId], members: membership.of([mediaId])).first else { return nil }
+        guard let snap = await snapshots([mediaId], members: membership.of([mediaId])).first else { return nil }
         let resources = PHAssetResource.assetResources(for: asset)
-        let content = readOriginalContent(of: asset, resources: resources)
-        let res = (content.resourceIndex ?? 0) < resources.count ? resources[content.resourceIndex ?? 0] : nil
-        let size = content.size ?? 0
+        let index = selectOriginalResource(types: resources.map(\.type), mediaType: asset.mediaType)
+        let res = index.map { resources[$0] }
+        // 大小在取原图之前不可知（公开 API 不给，#1016）：0 = 未知，引擎以导入时的实际字节数为准。
+        let size: Int64 = 0
         let mime = res.flatMap { UTType($0.uniformTypeIdentifier)?.preferredMIMEType } ?? "application/octet-stream"
         let captured = Int64((asset.creationDate ?? .distantPast).timeIntervalSince1970 * 1000)
         return MediaDetails(snapshot: snap, fileName: res?.originalFilename ?? mediaId, mimeType: mime,

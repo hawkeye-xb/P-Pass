@@ -216,6 +216,7 @@ public struct MediaDetails: Equatable, Sendable {
     public let snapshot: MediaSnapshot
     public let fileName: String
     public let mimeType: String
+    /// 字节数。iOS 在取原图之前不可知（公开 API 不给，#1016），lookup 给 0；引擎导入后改用实际字节数（``withSize(_:)``）。
     public let sizeBytes: Int64
     /// 拍摄时刻（unix ms；0 = 不知道）。
     public let captureAtMs: Int64
@@ -226,6 +227,11 @@ public struct MediaDetails: Equatable, Sendable {
         self.mimeType = mimeType
         self.sizeBytes = sizeBytes
         self.captureAtMs = captureAtMs
+    }
+
+    /// 同一张照片，字节数换成导入时读到的实际值。
+    public func withSize(_ sizeBytes: Int64) -> MediaDetails {
+        MediaDetails(snapshot: snapshot, fileName: fileName, mimeType: mimeType, sizeBytes: sizeBytes, captureAtMs: captureAtMs)
     }
 }
 
