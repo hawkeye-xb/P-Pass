@@ -57,8 +57,13 @@ final class PairingWiringTests: XCTestCase {
                              onboarded: @escaping (String) -> Bool = { _ in false },
                              onPaired: @escaping (PairingRecord, Bool) -> Bool = { _, _ in false }) -> LivePairing {
         LivePairing(transportFor: { _ in transport }, store: store, onboarded: onboarded, onPaired: onPaired,
-                    onDisconnect: {}, pending: PendingUnpairStore(directory: dir, logger: LogSink()),
-                    flusher: PendingUnpairFlusher(store: PendingUnpairStore(directory: dir, logger: LogSink()), now: { 0 }, logger: LogSink()) { _ in ScriptedTransport([:]) })
+                    onDisconnect: {}, logger: LogSink())
+    }
+
+    private func makeDisconnecting(_ transport: ScriptedTransport, store: PairingStore,
+                                   onDisconnect: @escaping () async -> Void) -> LivePairing {
+        LivePairing(transportFor: { _ in transport }, store: store, onboarded: { _ in false }, onPaired: { _, _ in false },
+                    onDisconnect: onDisconnect, logger: LogSink())
     }
 
     /// 把 pairing.json 占成一个目录：原子写必然失败（不依赖权限、不依赖磁盘满）。
@@ -278,6 +283,39 @@ final class PairingWiringTests: XCTestCase {
 
     // MARK: 空 epoch 修复（#970）
 
+    // MARK: 主动断开（#956 关闭裁决：尽力通知一次，之后什么都不做）
+
+    /// 电脑不可达：只试一次，配对照样清；清完之后存储根里没有任何文件还带着这台电脑的 peerToken——
+    /// 回前台 / 网络恢复 / 重启时就没有任何东西能拿来再连它。
+    /// 反证：恢复旧的发件箱（断开时把 peerToken 落进 pending_unpair.json）→ 最后一条红；把清理挪进成功分支 → 第二条红。
+    func test_disconnect_with_an_unreachable_desktop_tries_once_and_leaves_no_credential_behind() async throws {
+        let token = "PEER-TOKEN-SECRET"
+        let store = PairingStore(root: dir)
+        try store.save(PairingRecord(daemonNodeId: "d", peerToken: token, storageDeviceName: "Mac", pairedAt: 1, pairingEpoch: "e1"))
+        let transport = ScriptedTransport([:]) // device.unpair → 连不上
+        let root: URL = dir
+        let pairing = makeDisconnecting(transport, store: store, onDisconnect: {
+            try? applyDisconnectManifest(root: root, runtime: NoopDisconnectRuntime())
+        })
+        await pairing.disconnect()
+        XCTAssertEqual(transport.calls, [Methods.deviceUnpair])
+        XCTAssertNil(store.load(), "电脑不可达也必须清掉配对")
+        let leftovers = (FileManager.default.enumerator(at: dir, includingPropertiesForKeys: nil)?.allObjects as? [URL] ?? [])
+            .filter { (try? String(contentsOf: $0, encoding: .utf8))?.contains(token) == true }
+        XCTAssertEqual(leftovers.map(\.lastPathComponent), [], "断开后盘上不许再有这台电脑的 peerToken")
+    }
+
+    /// 配对已失效（lost）：电脑本就不认这台手机，不发，直接清。
+    func test_disconnect_of_a_lost_pairing_sends_nothing_and_still_clears() async throws {
+        let store = PairingStore(root: dir)
+        try store.save(record(lost: true))
+        let transport = ScriptedTransport([:])
+        var cleared = false
+        await makeDisconnecting(transport, store: store, onDisconnect: { cleared = true }).disconnect()
+        XCTAssertEqual(transport.calls, [])
+        XCTAssertTrue(cleared)
+    }
+
     func test_outcome_mapping_matches_android() {
         XCTAssertEqual(applyEpochRepairOutcome(.success("e2")), .repaired("e2"))
         XCTAssertEqual(applyEpochRepairOutcome(.success("")), .lost)
@@ -407,4 +445,10 @@ private final class AuditDesktop: FlowDesktop, @unchecked Sendable {
     func suspendFetch(_ tuple: FlowTupleRef) async throws { fatalError("unused") }
     func cancelTuple(_ tuple: FlowTupleRef) async throws { fatalError("unused") }
     func presence(_ query: BackupPresenceQuery) async throws -> BackupMissing { fatalError("unused") }
+}
+
+private struct NoopDisconnectRuntime: DisconnectRuntime {
+    func stopFlowRuntime() {}
+    func cancelScheduledWakes() {}
+    func stopMediaChangeObserver() {}
 }

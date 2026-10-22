@@ -34,6 +34,7 @@ import com.hawkeyexb.ppass.log.PLog
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.NetworkIdleReaper
+import com.hawkeyexb.ppass.transport.cancelLegacyUnpairNotices
 import kotlin.concurrent.thread
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -73,6 +74,9 @@ class PPassApplication : Application() {
             // #130 第 1 层：进程因任何原因起来（含 Worker 唤醒）都查一次确定事件；排在 MOB-28 对账之后，
             // 这样刚记下的中断这一轮就能看到。
             evaluateDefinitiveEvents(this)
+            // #956 撤销 #565：老版本排下的断开通知任务一次撤光，断开之后不许再有任何后台发送。
+            runCatching { cancelLegacyUnpairNotices(this) }
+                .onFailure { PLog.w("PPassDisconnect", "legacy unpair notice cancel failed", it) }
         }
         registerNetworkCallback()
         registerActivityLifecycleCallbacks(ForegroundWatcher())

@@ -36,8 +36,6 @@ final class LiveBackend: @unchecked Sendable {
     /// 照片页实时更新（#963）：订阅跟前台心跳同一层，前台开、后台关。
     let timelineLive: LiveTimelineFeed
     let network = NetworkState()
-    let pendingUnpair: PendingUnpairStore
-    let unpairFlusher: PendingUnpairFlusher
     let engineModel: LiveEngineModel
     /// 前台相册变化监听（#978，对位 Android BackupUiStateHolder 的 MediaStore ContentObserver）。
     let mediaWatcher: MediaChangeWatcher
@@ -54,11 +52,7 @@ final class LiveBackend: @unchecked Sendable {
         pairingStore = PairingStore(root: dir)
         onboarded = OnboardedDesktopsStore(directory: dir, logger: logger)
         let pairingStore = self.pairingStore
-        pendingUnpair = PendingUnpairStore(directory: dir, logger: logger)
-        let planeForUnpair = plane
-        unpairFlusher = PendingUnpairFlusher(store: pendingUnpair, now: { Int64(Date().timeIntervalSince1970 * 1000) }, logger: logger) {
-            PeerCtrlTransport(plane: planeForUnpair, peerToken: $0)
-        }
+        UnpairNotice.removeLegacyOutbox(root: dir, logger: logger) // #956 撤销：老版本的断开发件箱（含旧电脑 peerToken）
         media = LiveMediaLibrary { BackupScopeStore(directory: dir, daemonNodeId: pairingStore.load()?.daemonNodeId, logger: logger) }
         provider = try NativeProvider(root: dir)
         try? provider.ffi.setAllowedPeer(nodeId: pairingStore.load()?.daemonNodeId)
@@ -170,9 +164,7 @@ final class LiveBackend: @unchecked Sendable {
 
     /// #976：路径更新 → 先让 iroh 重探路径，再交给引擎（对位 Android `onFlowNetworkChanged`）：
     /// 整条路径不可用 → 在飞的这张判路径失败；否则当作一次网络变化（跑中切到蜂窝且仅 Wi‑Fi → 停轮等 WIFI）。
-    /// 网络从断到通时顺带补发待撤销的 unpair（#956；回前台与启动的触发点在 LiveLifecycle / start）。
     func networkPathChanged(_ update: NetworkPathTracker.Update) {
-        if update.recovered { flushPendingUnpairs() }
         let provider = self.provider, engine = self.engine
         Task {
             await dispatchNetworkPath(update, providerNetworkChange: { provider.ffi.networkChange() },
@@ -181,18 +173,11 @@ final class LiveBackend: @unchecked Sendable {
         }
     }
 
-    /// 重试待撤销的 `device.unpair`（#956）。后台协程，失败只写日志，不碰 UI。
-    func flushPendingUnpairs() {
-        let flusher = unpairFlusher
-        Task { await flusher.flush() }
-    }
-
     /// 对外的端口集合（界面只认这几个 protocol）。
     func ports() -> Backend {
         let pairing = LivePairing(transportFor: { [plane] in PeerCtrlTransport(plane: plane, peerToken: $0) }, store: pairingStore, onboarded: { [onboarded] in onboarded.wasOnboarded($0) },
                                   onPaired: { [weak self] record, known in self?.paired(record, knownDesktop: known) ?? false },
-                                  onDisconnect: { [weak self] in await self?.disconnect() },
-                                  pending: pendingUnpair, flusher: unpairFlusher)
+                                  onDisconnect: { [weak self] in await self?.disconnect() }, logger: logger)
         let timeline = LiveTimeline(client: { [pairingStore, plane] in
             guard let r = pairingStore.load() else { return nil }
             return ProtoClient(transport: PeerCtrlTransport(plane: plane, peerToken: r.peerToken))
@@ -207,9 +192,6 @@ final class LiveBackend: @unchecked Sendable {
 
     /// 返回 true = 要提示用户「设置没存上」（见 `applyAutoBackupOnPairing`）。
     private func paired(_ record: PairingRecord, knownDesktop: Bool) -> Bool {
-        // #956：重新配对同一台电脑，先删它的待撤销条目，否则后台重试会把刚建立的新配对撤掉。
-        do { try pendingUnpair.remove(daemonNodeId: record.daemonNodeId) }
-        catch { logger.log("unpair-outbox: remove on re-pair failed: \(error)") }
         try? provider.ffi.setAllowedPeer(nodeId: record.daemonNodeId)
         // #935：换了一台电脑就清旧账（已确认计数不能算给新电脑）；同一台重新配对不动。失败要暴露，不静默沿用旧账。
         do { _ = try adoptDesktop(orders, daemonNodeId: record.daemonNodeId, nowMs: Int64(Date().timeIntervalSince1970 * 1000)) }
@@ -240,7 +222,6 @@ final class LiveBackend: @unchecked Sendable {
     func start() {
         let parker = providerParker
         window.observeLease { held in parker.setEngineBusy(held) } // #979：对位 Android engine.status → setEngineBusy
-        flushPendingUnpairs() // 启动
         Task {
             await repairEpochIfNeeded()
             await engine.start()

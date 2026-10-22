@@ -128,7 +128,8 @@ gh release download "$STABLE" -R "$REPO" -D "$WORK/stable" -p '*android.apk' -p 
 
 | ID | 执行 | 步骤 | 预期 | 证据 |
 |---|---|---|---|---|
-| R4.1 | agent | 同 R3.3 停服务，手机端「断开电脑」，再恢复服务 | 恢复后 2 分钟内桌面把该设备标为已断开（发件箱补发） | `device` 表 `revoked` |
+| R4.1 | agent | 服务在线，手机端「断开电脑」 | 手机回到欢迎页；桌面把该设备标为已断开 | `device` 表 `revoked` |
+| R4.1b | agent | 同 R3.3 停服务，手机端「断开电脑」，再恢复服务 | 手机 5 秒内完成断开；恢复服务后手机不补发，桌面该设备仍未撤销（主动断开只尽力通知一次，#956 / #565 撤销；残留设备行由桌面端最近活动与手动移除管理） | 手机日志只有一行断开通知；`device` 表 `revoked=0` |
 | R4.2 | agent | 查桌面 `device` 表该 `node_id` | `revoked=1`，`pairing_epoch` 与断开前一致（「旧身份 hello 被拒」由 `DaemonUnpairTest` 覆盖） | sqlite 输出 |
 | R4.3 | agent | 重新配对（同 R0.4） | 成功，备份可继续，旧照片不重传 | 对账 |
 
