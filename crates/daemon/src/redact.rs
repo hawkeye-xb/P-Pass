@@ -311,6 +311,25 @@ pub fn redact_export(s: &str) -> String {
     mask_paths(&redact(s))
 }
 
+/// #1122：日志写入器用：[`redact`] + 路径 / 文件名换成哈希前缀（对齐 Apple 统一
+/// 日志的 `mask.hash`：动态值默认私有、同一个值得到同一个掩码，排障时还能对上）。
+pub fn redact_log(s: &str) -> String {
+    mask_paths_with(&redact(s), PathMask::Hash)
+}
+
+/// 路径里不在白名单的名字换成什么。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PathMask {
+    /// 导出件：`<file>.ext` / `<dir>`。
+    Placeholder,
+    /// 日志：`<file_前8位>.ext` / `<dir_前8位>`（blake3；不用冒号——它在路径识别里是分隔符）。
+    Hash,
+}
+
+fn name_hash(name: &str) -> String {
+    blake3::hash(name.as_bytes()).to_hex()[..8].to_string()
+}
+
 const MEDIA_EXTS: &[&str] = &[
     "jpg", "jpeg", "png", "heic", "heif", "gif", "webp", "tif", "tiff", "bmp", "avif", "jxl",
     "raw", "dng", "cr2", "cr3", "nef", "arw", "orf", "rw2", "raf", "srw", "pef", "mp4", "mov",
@@ -440,7 +459,7 @@ fn safe_segment(seg: &str) -> bool {
         || SAFE_SEGMENTS.contains(&lower.as_str())
 }
 
-fn mask_segment(seg: &str, last: bool) -> String {
+fn mask_segment(seg: &str, last: bool, mode: PathMask) -> String {
     if safe_segment(seg) {
         return seg.to_string();
     }
@@ -452,10 +471,18 @@ fn mask_segment(seg: &str, last: bool) -> String {
             if safe_segment(name) && name.starts_with('<') {
                 return seg.to_string();
             }
-            return format!("<file>.{}", ext.to_ascii_lowercase());
+            return match mode {
+                PathMask::Placeholder => format!("<file>.{}", ext.to_ascii_lowercase()),
+                PathMask::Hash => {
+                    format!("<file_{}>.{}", name_hash(name), ext.to_ascii_lowercase())
+                }
+            };
         }
     }
-    "<dir>".to_string()
+    match mode {
+        PathMask::Placeholder => "<dir>".to_string(),
+        PathMask::Hash => format!("<dir_{}>", name_hash(seg)),
+    }
 }
 
 /// 从 `i` 起读一个路径段（到分隔符 / 终止符为止），按黏合规则跨空格：
@@ -503,6 +530,11 @@ fn read_segment(c: &[char], start: usize) -> usize {
 
 /// 规则 5：路径与文件名。
 pub fn mask_paths(s: &str) -> String {
+    mask_paths_with(s, PathMask::Placeholder)
+}
+
+/// 规则 5，可选掩码方式（见 [`PathMask`]）。
+pub fn mask_paths_with(s: &str, mode: PathMask) -> String {
     let c: Vec<char> = s.chars().collect();
     let mut out = String::with_capacity(s.len());
     let mut i = 0;
@@ -526,7 +558,7 @@ pub fn mask_paths(s: &str) -> String {
             i = k;
             continue;
         }
-        match parse_path(&c, i) {
+        match parse_path(&c, i, mode) {
             Some((end, text)) => {
                 out.push_str(&text);
                 i = end;
@@ -541,7 +573,7 @@ pub fn mask_paths(s: &str) -> String {
 }
 
 /// 在 `i` 处尝试读一条路径；是路径就返回 (结束位置, 打码后的文本)。
-fn parse_path(c: &[char], i: usize) -> Option<(usize, String)> {
+fn parse_path(c: &[char], i: usize, mode: PathMask) -> Option<(usize, String)> {
     let mut j = i;
     let mut prefix = String::new();
     let mut absolute = false;
@@ -596,7 +628,7 @@ fn parse_path(c: &[char], i: usize) -> Option<(usize, String)> {
         if let Some(sep) = sep {
             text.push(*sep);
         }
-        text.push_str(&mask_segment(seg, idx + 1 == n));
+        text.push_str(&mask_segment(seg, idx + 1 == n, mode));
     }
     Some((j, text))
 }
@@ -633,6 +665,27 @@ pub fn redact_export_json_or_text(s: &str, pre: &dyn Fn(&str) -> String) -> Stri
 
 #[cfg(test)]
 mod tests {
+    /// #1122：日志写入时路径与文件名只留哈希前缀——人名不落盘，同一个名字得到
+    /// 同一个掩码（排障能对上），对输出再跑一遍结果不变。
+    /// 反证：redact_log 不做路径打码（只调 redact），人名断言变红。
+    #[test]
+    fn log_lines_keep_only_hash_prefixes_of_paths() {
+        let line = "入库 /Users/zhangsan/Pictures/张三 婚礼/IMG 0001.jpg 完成";
+        let out = redact_log(line);
+        for leak in ["zhangsan", "张三", "IMG 0001"] {
+            assert!(!out.contains(leak), "{leak} 不许进日志: {out}");
+        }
+        assert!(
+            out.contains("<file_") && out.ends_with(".jpg 完成"),
+            "{out}"
+        );
+        assert!(out.contains("<dir_"), "{out}");
+        assert_eq!(redact_log(line), out, "同一个名字同一个掩码");
+        assert_eq!(redact_log(&out), out, "幂等");
+        let other = redact_log("入库 /Users/zhangsan/Pictures/李四/IMG 0001.jpg 完成");
+        assert_ne!(other, out, "不同目录名得到不同掩码");
+    }
+
     use super::*;
 
     /// 共用向量（transport 与 Android 的副本跑同一份文件）。

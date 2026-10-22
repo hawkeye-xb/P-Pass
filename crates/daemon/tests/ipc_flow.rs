@@ -680,18 +680,7 @@ async fn logs_export_zip_leaks_no_username() {
     let mut c = IpcClient::connect(&socket, &token).await;
     let resp = c.call("logs.export", serde_json::Value::Null).await;
     assert!(resp.ok, "{resp:?}");
-    let zip_path = resp.result.unwrap()["zip"].as_str().unwrap().to_string();
-
-    let file = std::fs::File::open(&zip_path).unwrap();
-    let mut zip = zip::ZipArchive::new(file).unwrap();
-    let mut all_text = String::new();
-    for i in 0..zip.len() {
-        use std::io::Read as _;
-        let mut f = zip.by_index(i).unwrap();
-        let mut s = String::new();
-        f.read_to_string(&mut s).unwrap();
-        all_text.push_str(&s);
-    }
+    let all_text = export_entries(&resp).into_values().collect::<String>();
     assert!(
         !all_text.contains(&home),
         "the export must not contain the real home path"
@@ -742,40 +731,18 @@ async fn logs_export_zip_carries_audit_events() {
     let mut c = IpcClient::connect(&socket, &token).await;
     let resp = c.call("logs.export", serde_json::Value::Null).await;
     assert!(resp.ok, "{resp:?}");
-    let zip_path = resp.result.unwrap()["zip"].as_str().unwrap().to_string();
-
-    let file = std::fs::File::open(&zip_path).unwrap();
-    let mut zip = zip::ZipArchive::new(file).unwrap();
-    let names: Vec<String> = (0..zip.len())
-        .map(|i| zip.by_index(i).unwrap().name().unwrap().to_string())
-        .collect();
-    assert!(
-        names.iter().any(|n| n == "audit.json"),
-        "audit.json must be in the export: {names:?}"
-    );
-    let mut audit = String::new();
-    {
-        use std::io::Read as _;
-        zip.by_name("audit.json")
-            .unwrap()
-            .read_to_string(&mut audit)
-            .unwrap();
-    }
+    let entries = export_entries(&resp);
+    let audit = entries
+        .get("audit.json")
+        .cloned()
+        .unwrap_or_else(|| panic!("audit.json must be in the export: {:?}", entries.keys()));
     assert!(audit.contains("device.revoked"), "{audit}");
     assert!(audit.contains("\"actor_prefix\": \"abababab\""), "{audit}");
     // 全量 NodeId（64 hex）绝不进包——actor 字段。
     assert!(!audit.contains(&"ab".repeat(32)), "{audit}");
     // …也不许从 detail 里的路径漏出去（这条就是真机验收抓到的漏）。
     // 判据加强：不看单个字段，而是扫整个包里有没有 ≥24 位连续 hex。
-    let mut all_text = String::new();
-    for i in 0..zip.len() {
-        use std::io::Read as _;
-        let mut f = zip.by_index(i).unwrap();
-        let mut s = String::new();
-        if f.read_to_string(&mut s).is_ok() {
-            all_text.push_str(&s);
-        }
-    }
+    let all_text = entries.values().cloned().collect::<String>();
     assert!(
         !all_text.contains(&"c4".repeat(32)),
         "detail 里的全长 NodeId 泄漏了: {all_text}"
@@ -870,17 +837,7 @@ async fn logs_export_zip_carries_no_address_identifier_or_name() {
     let mut c = IpcClient::connect(&socket, &token).await;
     let resp = c.call("logs.export", serde_json::Value::Null).await;
     assert!(resp.ok, "{resp:?}");
-    let zip_path = resp.result.unwrap()["zip"].as_str().unwrap().to_string();
-    let file = std::fs::File::open(&zip_path).unwrap();
-    let mut zip = zip::ZipArchive::new(file).unwrap();
-    let mut all_text = String::new();
-    for i in 0..zip.len() {
-        use std::io::Read as _;
-        let mut f = zip.by_index(i).unwrap();
-        let mut s = String::new();
-        f.read_to_string(&mut s).unwrap();
-        all_text.push_str(&s);
-    }
+    let all_text = export_entries(&resp).into_values().collect::<String>();
     for needle in [
         "张三",
         "Zhang San",
@@ -1854,4 +1811,75 @@ async fn withdrawn_request_leaves_queue_and_pushes_pending_changed() {
 
     assert!(db.get_device(&phone_a.0).await.unwrap().is_none());
     assert!(db.get_device(&phone_b.0).await.unwrap().is_none());
+}
+
+/// #1122：`logs.export` 直接在应答里给三份 JSON（不在库目录写文件）。
+fn export_entries(resp: &proto::Resp) -> std::collections::BTreeMap<String, String> {
+    resp.result.as_ref().expect("logs.export ok")["entries"]
+        .as_object()
+        .expect("entries object")
+        .iter()
+        .map(|(k, v)| (k.clone(), v.as_str().expect("text").to_string()))
+        .collect()
+}
+
+/// #1122：导出审计时去掉设备名（含改名前后的名字）；`pair.accepted` 只留「是否重新
+/// 加入」。导出不在库目录写任何文件。
+/// 反证：export_logs 不调 audit_payload_for_export，名字断言变红；`logs.export`
+/// 退回写 zip，库目录断言变红。
+#[tokio::test]
+async fn logs_export_strips_device_names_and_writes_nothing_to_the_library() {
+    let dir = tempfile::tempdir().unwrap();
+    let (db, _pairing, socket, token) = start(dir.path(), "logs-names").await;
+    for (kind, payload) in [
+        (
+            "pair.requested",
+            serde_json::json!({ "deviceName": "张三的手机" }),
+        ),
+        (
+            "pair.accepted",
+            serde_json::json!({ "detail": "张三的手机 (rejoined)" }),
+        ),
+        (
+            "device.renamed",
+            serde_json::json!({ "oldName": "张三的手机", "newName": "客厅 iPad" }),
+        ),
+    ] {
+        db.append_audit(&storage::AuditEntry::local(
+            7,
+            Some(vec![0xAB; 32]),
+            kind,
+            None,
+            Some(payload.to_string()),
+        ))
+        .await
+        .unwrap();
+    }
+    let before: std::collections::BTreeSet<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+
+    let mut c = IpcClient::connect(&socket, &token).await;
+    let resp = c.call("logs.export", serde_json::Value::Null).await;
+    assert!(resp.ok, "{resp:?}");
+    let audit = export_entries(&resp)["audit.json"].clone();
+    for name in ["张三", "客厅 iPad"] {
+        assert!(!audit.contains(name), "设备名不许进导出：{name} in {audit}");
+    }
+    let rows: Vec<serde_json::Value> = serde_json::from_str(&audit).unwrap();
+    let accepted = rows.iter().find(|r| r["kind"] == "pair.accepted").unwrap();
+    let payload: serde_json::Value =
+        serde_json::from_str(accepted["payload"].as_str().unwrap()).unwrap();
+    assert_eq!(payload["rejoined"], true, "{audit}");
+    assert!(
+        audit.contains("device.renamed"),
+        "事件本身照常导出：{audit}"
+    );
+
+    let after: std::collections::BTreeSet<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(before, after, "导出不在库目录留任何文件");
 }

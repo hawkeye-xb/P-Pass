@@ -235,6 +235,27 @@ pub struct IpcServer {
     library_location: Option<Arc<crate::library_location::LibraryLocation>>,
 }
 
+/// #1122：审计载荷导出时去掉设备名（含改名前后的名字）。设备名是用户起的
+/// （「张三的手机」），属于可识别信息；排障用 actor 前缀与事件种类就够。
+/// `pair.accepted` 的 `detail` 就是设备名，只留「是不是重新加入」这一位。
+/// 解析不了的载荷原样返回（随后照常过 `scrub`）。
+pub(crate) fn audit_payload_for_export(kind: &str, payload: &str) -> String {
+    let Ok(serde_json::Value::Object(mut obj)) = serde_json::from_str::<serde_json::Value>(payload)
+    else {
+        return payload.to_string();
+    };
+    for key in ["deviceName", "oldName", "newName", "name"] {
+        obj.remove(key);
+    }
+    if kind == "pair.accepted" {
+        if let Some(detail) = obj.remove("detail") {
+            let rejoined = detail.as_str().is_some_and(|d| d.ends_with("(rejoined)"));
+            obj.insert("rejoined".into(), serde_json::Value::Bool(rejoined));
+        }
+    }
+    serde_json::Value::Object(obj).to_string()
+}
+
 /// See [`IpcServer::set_conn_status_provider`].
 type ConnStatusFn = Arc<dyn Fn(&[u8]) -> transport::ConnectionStatus + Send + Sync>;
 /// See [`IpcServer::set_flow_connection_provider`].
@@ -1642,10 +1663,9 @@ impl IpcServer {
                     Err(_) => internal(id),
                 }
             }
+            // #1122：三份 JSON 直接在应答里返回，不在库目录写任何文件。
             "logs.export" => match self.export_logs().await {
-                Ok(zip_path) => {
-                    Resp::ok(id, serde_json::json!({ "zip": zip_path.to_string_lossy() }))
-                }
+                Ok(entries) => Resp::ok(id, serde_json::json!({ "entries": entries })),
                 Err(e) => {
                     tracing::warn!("logs.export failed: {e}");
                     internal(id)
@@ -1980,10 +2000,11 @@ impl IpcServer {
         }))
     }
 
-    /// Export diagnostics as a zip beside the data dir. Every path-like
+    /// Export diagnostics as three JSON texts returned inline (#1122: nothing
+    /// is written into the library; the shell saves them where the user picks). Every path-like
     /// string is sanitised: the user's home directory becomes `<DATA>` —
     /// a shared log must never leak a username (契约).
-    async fn export_logs(&self) -> anyhow::Result<PathBuf> {
+    async fn export_logs(&self) -> anyhow::Result<serde_json::Value> {
         let events = self.db.list_diag(1000).await?;
         let devices = self.db.list_devices().await?;
         // #1043：家目录由平台适配器回答；读不到 = 空串（与改前同一口径）。
@@ -2043,25 +2064,22 @@ impl IpcServer {
                         "kind": r.entry.kind,
                         "actor_prefix": r.entry.actor.as_ref().map(|a| hex(&a[..4.min(a.len())])),
                         "roundId": r.entry.round_id,
-                        "payload": r.entry.payload.as_deref().map(|p| scrub(p, &home, &library)),
+                        "payload": r
+                            .entry
+                            .payload
+                            .as_deref()
+                            .map(|p| audit_payload_for_export(&r.entry.kind, p))
+                            .map(|p| scrub(&p, &home, &library)),
                     })
                 })
                 .collect::<Vec<_>>(),
         )?;
 
-        let zip_path = self.data_dir.join("ppf-logs.zip");
-        let file = std::fs::File::create(&zip_path)?;
-        let mut zip = zip::ZipWriter::new(file);
-        let opts = zip::write::SimpleFileOptions::default();
-        use std::io::Write as _;
-        zip.start_file("diag_events.json", opts)?;
-        zip.write_all(diag_json.as_bytes())?;
-        zip.start_file("devices.json", opts)?;
-        zip.write_all(devices_json.as_bytes())?;
-        zip.start_file("audit.json", opts)?;
-        zip.write_all(audit_json.as_bytes())?;
-        zip.finish()?;
-        Ok(zip_path)
+        Ok(serde_json::json!({
+            "diag_events.json": diag_json,
+            "devices.json": devices_json,
+            "audit.json": audit_json,
+        }))
     }
 }
 

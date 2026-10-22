@@ -518,9 +518,14 @@ async fn main() -> anyhow::Result<()> {
     // 然后 `grep -o 'NodeId: .*' daemon.log`。搬到 tracing（stderr）会让
     // 脚本拿到空串（tools/scenarios/*.sh 已在 #1115 改写为进程内测试）。所以这里刻意打两遍：stdout 那条给脚本，日志那条给事后
     // 排障（Windows release 上 stdout 无处可去，见 #163）。
-    println!("NodeId: {}", transport.node_id());
+    // #1122：完整 NodeId 只给测试沙盒（--ephemeral）的脚本；正式模式下 stdout
+    // 由 launchd 接进 logs/daemon.out，同样只记前缀（全长可被任何人拨号）。
+    println!(
+        "NodeId: {}",
+        daemon::cli::node_id_stdout(&transport.node_id().to_string(), ephemeral)
+    );
     // #544：日志里只记前缀——全长 NodeId 可被任何人拨号，建连即可换来本机
-    // 当前的直连地址（含公网 IP）。stdout 那行是脚本的机读契约，保持不动。
+    // 当前的直连地址（含公网 IP）。
     tracing::info!("NodeId: {:?}", transport.node_id());
     tracing::info!("库目录: {}", data_dir.display());
 

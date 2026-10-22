@@ -9,6 +9,7 @@
     "core:default",
     "core:window:allow-start-dragging",
     "dialog:allow-open",
+    "dialog:allow-save",
     "dialog:allow-confirm",
     "dialog:allow-message",
     "opener:allow-reveal-item-in-dir",

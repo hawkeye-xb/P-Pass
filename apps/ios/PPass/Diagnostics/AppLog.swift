@@ -10,7 +10,12 @@ enum AppLog {
 
     private static let sink: RollingFileLog? = {
         guard let lib = try? FileManager.default.url(for: .libraryDirectory, in: .userDomainMask, appropriateFor: nil, create: true) else { return nil }
-        return RollingFileLog(url: lib.appendingPathComponent("Logs", isDirectory: true).appendingPathComponent(fileName))
+        let log = RollingFileLog(url: lib.appendingPathComponent("Logs", isDirectory: true).appendingPathComponent(fileName))
+        // #1122：日志目录（App 容器 Library/Logs；日志不在 App Group 里）不进系统备份，结果记一行。
+        let line = log.excludeDirectoryFromBackup()
+        NSLog("[PPass] %@", line)
+        log.write(line)
+        return log
     }()
 
     static func log(_ message: String) {

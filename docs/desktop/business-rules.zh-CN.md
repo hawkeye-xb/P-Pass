@@ -125,6 +125,7 @@ daemon 是 `config.toml` 与诊断包的唯一写者：照片库位置只经 IPC
 - 请求帧上限（`daemon::frame_limits`）：读帧前按配对状态定——未配对 `PAIRING_FRAME_MAX` = 8 KiB，viewer `METHOD_FRAME_DEFAULT` = 64 KiB，member `MANIFEST_FRAME_MAX` = 4 MiB；解码后按方法核对：默认 64 KiB，`backup.presence` 128 KiB、`flow.audit_submit` 1 MiB、`backup.manifest` 4 MiB。超限回 `bad_request`。下载面与订阅流上客户端发来的帧按 8 KiB。
 - 未配对请求按设备限速（`governor`，每秒 5 个、突发 10 个），超速的流不读不答；已配对设备不限速。
 - 读帧（`BiStream::recv_frame_max`）：声明长度超上限直接拒、不读正文；缓冲随实际收到的数据增长（每次至多 64 KiB），不按声明长度预分配；正文须在 `FRAME_READ_TIMEOUT` = 30 s 内读完；读正文期间占用全进程在途字节预算 `FRAME_BUDGET_BYTES` = 64 MiB。
+- 关闭码 401 / 410 的取值只定义在 `proto::close_codes`（注册表快照 `snapshots__close_codes_registry`，手机端契约测试读同一份）。iOS 经 FFI 拿到有类型的 `PeerClosed(nodeId, code)`，只在关闭方 NodeId 等于本地配对记录里的电脑时，才当作与应答 `not_paired` 同一个「未配对」信号、走 #1119 的被拒即清理；其它关闭码、其它关闭方、超时、断网一律按「连不上」处理。Android 的 iroh Kotlin 绑定只给字符串，尚未接入。
 - 每条连接对端可同时打开的双向流 `MAX_CONCURRENT_BIDI_STREAMS` = 16（iroh/quinn 传输参数）。
 - 按设备增长的表有上限、按最近使用淘汰（`lru`）：transport 对端地址簿 `PEER_BOOK_CAPACITY` = 1024，版本不符登记 `OUTDATED_PEERS_CAPACITY` = 1024；诊断记录除 30 天时间环外最多 `DIAG_MAX_ROWS` = 10000 条。
 
@@ -407,6 +408,7 @@ daemon 是 `config.toml` 与诊断包的唯一写者：照片库位置只经 IPC
 
 - 落点 `PlatformAdapter::daemon_log_paths`：`<data_dir>/logs/daemon.log`；macOS 另有 `daemon.out` / `daemon.err`（launchd 接管 stdio，且文件与 stderr 双写），Windows 另有 `daemon.err`（stderr 无人接时 daemon 自己接上，DESK-58）。`PPF_LOG_FILE` 覆盖，打不开 exit 2；平台默认打不开只警告退回 stderr；debug 构建不落盘。
 - `log_guard::DedupGuard`：`daemon.log` 超过 `SINK_CAP_BYTES` 轮转为 `daemon.log.1`（只留一代），计数跨运行从现有大小起算；macOS 的 `.err` 同样封顶、超限就地截断。重复行（去时间戳后相同）首条立即写，之后只计数，安静 `IDLE_GAP` 后写一行汇总。落盘前过脱敏。
+- 隐私（#1122）：写入器落盘前用 `redact::redact_log`，在通用脱敏之外把路径里不在白名单的目录名、文件名换成 blake3 前 8 位（`<dir_xxxxxxxx>`、`<file_xxxxxxxx>.jpg`；同名同码，排障能对上，结果幂等）。stdout 那行 `NodeId:` 只有测试沙盒（`--ephemeral`）给全长，正式模式只给前 8 位（`cli::node_id_stdout`）。
 - 壳自己的日志 `<data_dir>/logs/desktop.log`：超过 `MAX_LOG_BYTES` 轮转一代；同一失败 `FAILURE_LOG_INTERVAL_MS` 内只记一次。
 
 ### 9.2 diag 事件环
@@ -416,7 +418,7 @@ daemon 是 `config.toml` 与诊断包的唯一写者：照片库位置只经 IPC
 ### 9.3 脱敏与诊断包
 
 - 正本 `daemon::redact`（规则 0 字节数组、1 公网 IP、2 非白名单 URL 主机、3 长不透明串、4 长 hex；导出另有 `redact_export` / `mask_paths` / `scrub_full`）。副本：`transport::redact`（logcat 出口）、Android `Redact.kt`。三份都跑 `assets/privacy/redact-vectors.json`。壳没有副本。
-- 诊断包只由 `daemon diag export` 组装（`diag_bundle::build_bundle`，#1042/#1045）：始终有 README / versions / config-summary / log-sources；日志尾部（`daemon.log` 取 `DAEMON_LOG_TAIL`，其余取 `SMALL_LOG_TAIL`）；daemon 在线时经 IPC `logs.export`（超时 `daemon::diag_bundle::IPC_TIMEOUT`）取 diag_events / devices / audit，离线不算失败、不开数据库。`devices.json` 在包边界删名字（`strip_device_names`）。不读 launchd plist。
+- 诊断包只由 `daemon diag export` 组装（`diag_bundle::build_bundle`，#1042/#1045）：始终有 README / versions / config-summary / log-sources；日志尾部（`daemon.log` 取 `DAEMON_LOG_TAIL`，其余取 `SMALL_LOG_TAIL`）；daemon 在线时经 IPC `logs.export`（超时 `daemon::diag_bundle::IPC_TIMEOUT`）取 diag_events / devices / audit，离线不算失败、不开数据库。`devices.json` 在包边界删名字（`strip_device_names`）。IPC `logs.export` 把三份 JSON 直接放在应答的 `entries` 里返回，不在库目录写任何文件；审计载荷导出前去掉设备名（`deviceName` / `oldName` / `newName` / `name`；`pair.accepted` 只留 `rejoined` 一位，`ipc::audit_payload_for_export`）。壳的「导出日志」用系统保存对话框（`tauri-plugin-dialog`），存到用户选的位置。不读 launchd plist。
 
 ## 10 平台业务差异登记表
 

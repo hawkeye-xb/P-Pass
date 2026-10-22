@@ -390,7 +390,8 @@ impl Write for DedupWriter {
         // 的行不经过我们的日志点，只能在写入器这一层兜住：公网 IP、自建 relay
         // 域名、长 hex / base32 / base64url 标识与票据一律不进磁盘。
         let text = String::from_utf8_lossy(buf);
-        let redacted = crate::redact::redact(&text);
+        // #1122：路径与文件名在写入时就换成哈希前缀（不等到导出）。
+        let redacted = crate::redact::redact_log(&text);
         self.guard.on_line(redacted.as_bytes());
         Ok(buf.len())
     }
@@ -633,7 +634,7 @@ mod tests {
         let guard = DedupGuard::with_idle_gap_file(Duration::from_millis(10), &path);
         let node = "ea".repeat(32);
         let line = format!(
-            "2026-09-30T00:00:00.000000Z  WARN net_report: received IPv6 address from IPv4 QAD: [2001:db8::1]:7842 peer {node} via https://relay.family-example.org./ lan 192.168.1.20:41145\n"
+            "2026-09-30T00:00:00.000000Z  WARN net_report: received IPv6 address from IPv4 QAD: [2001:db8::1]:7842 peer {node} via https://relay.family-example.org./ lan 192.168.1.20:41145 file /Users/zhangsan/Pictures/IMG_0001.jpg\n"
         );
         let mut w = guard.make_writer();
         w.write_all(line.as_bytes()).unwrap();
@@ -642,6 +643,9 @@ mod tests {
         assert!(!written.contains(&node), "{written}");
         assert!(!written.contains("family-example"), "{written}");
         assert!(written.contains("[<ipv6:public>]:7842"), "{written}");
+        // #1122：路径与文件名落盘前换成哈希前缀（反证：写入器改回只调 redact，这两条变红）。
+        assert!(!written.contains("zhangsan"), "{written}");
+        assert!(!written.contains("IMG_0001"), "{written}");
         assert!(
             written.contains("192.168.1.20:41145"),
             "private LAN kept: {written}"

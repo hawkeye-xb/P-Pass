@@ -1312,16 +1312,21 @@ fn library_dir() -> Result<String, String> {
 /// `diag export` 是独立的短进程，不依赖常驻服务。脱敏规则只有 daemon 一份
 /// （`crates/daemon/src/redact.rs`），壳不再二次脱敏。
 ///
-/// 落盘位置与文件名沿用 `<库目录>/ppf-logs.zip`：库目录取 config 里的 `data_dir`，
-/// 没配置则退回平台数据目录。返回值就是 daemon 的 `{"zip","daemon_reachable"}`。
+/// #1122：落盘位置由用户在保存对话框里选（`out`），不再写进照片库目录。只收
+/// 绝对路径、`.zip` 结尾。返回值就是 daemon 的 `{"zip","daemon_reachable"}`。
 #[tauri::command]
-fn export_logs_bundle(app: tauri::AppHandle) -> Result<Value, String> {
-    let library = configured_library_dir(&platform::adapter().data_dir());
-    daemon_cli::diag_export(
-        &daemon_cli::bundled_sidecar()?,
-        &library.join("ppf-logs.zip"),
-        &shell_version(&app),
-    )
+fn export_logs_bundle(app: tauri::AppHandle, out: String) -> Result<Value, String> {
+    let out = diag_export_target(&out).ok_or_else(|| ipc::ui_err("ui.err_generic", &[]))?;
+    daemon_cli::diag_export(&daemon_cli::bundled_sidecar()?, &out, &shell_version(&app))
+}
+
+/// #1122：用户选的保存位置是否可用：绝对路径、文件名以 `.zip` 结尾。
+fn diag_export_target(out: &str) -> Option<std::path::PathBuf> {
+    let path = std::path::PathBuf::from(out);
+    let zip = path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("zip"));
+    (path.is_absolute() && zip).then_some(path)
 }
 
 /// 内置服务程序自报版本（`--version --json`；kernel 对账用）。取不到 → None，
@@ -1786,6 +1791,16 @@ mod business_rules_table;
 
 #[cfg(test)]
 mod tests {
+    /// #1122：诊断包只写到用户选的绝对路径、`.zip` 结尾。
+    #[test]
+    fn diag_export_target_takes_only_an_absolute_zip_path() {
+        let abs = std::env::temp_dir().join("ppf-logs.zip");
+        let abs = abs.to_str().unwrap();
+        assert!(diag_export_target(abs).is_some());
+        assert!(diag_export_target("ppf-logs.zip").is_none(), "相对路径不收");
+        assert!(diag_export_target(&abs.replace(".zip", ".txt")).is_none(), "必须是 zip");
+    }
+
     use super::*;
 
     /// #1120：网页层的安全配置按 Tauri 官方清单收口，配置漂移即红。

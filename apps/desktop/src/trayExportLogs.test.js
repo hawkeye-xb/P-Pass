@@ -24,7 +24,7 @@ describe("#550 托盘导出诊断包", () => {
 
   it("exportLogs 仍调 export_logs_bundle，成功与失败都有提示", () => {
     const body = app.match(/async function exportLogs\(\) \{[\s\S]*?\n  \}\n/)?.[0] ?? "";
-    expect(body).toContain('invoke("export_logs_bundle")');
+    expect(body).toContain('invoke("export_logs_bundle", { out })'); // #1122：带用户选的保存位置
     expect(body).toContain('t("ui.logs_exported"');
     expect(body).toContain('t("ui.export_failed"');
   });

@@ -575,9 +575,8 @@ async fn discover(candidates: &[crate::ipc::PeerEndpoint]) -> Result<DaemonHandl
     Err(last_err)
 }
 
-/// 向常驻服务要那三份。它把 zip 写在自己的库目录（`logs.export` 的现行
-/// 行为）；读进内存后，若那不是调用方要的输出位置，就把这份中间产物删掉
-/// ——导出位置只由 `--out` 决定，库目录里不留第二份包。
+/// 向常驻服务要那三份。#1122：`logs.export` 直接在应答里给三份 JSON，
+/// 常驻服务不在库目录写任何文件——导出位置只由 `--out` 决定。
 pub async fn collect_from_daemon(
     candidates: &[crate::ipc::PeerEndpoint],
     out: &Path,
@@ -592,8 +591,9 @@ pub async fn collect_from_daemon(
         .as_ref()
         .and_then(|v| v["version"].as_str().map(str::to_string));
     let status = status.as_ref().map(status_summary);
-    let zip = match handle.call("logs.export").await {
-        Ok(v) => v["zip"].as_str().unwrap_or_default().to_string(),
+    let _ = out;
+    let reply = match handle.call("logs.export").await {
+        Ok(v) => v,
         Err(e) => {
             return DaemonCollection::LogsUnavailable {
                 version,
@@ -602,26 +602,19 @@ pub async fn collect_from_daemon(
             }
         }
     };
-    let zip = PathBuf::from(zip);
-    match read_zip_entries(&zip) {
-        Ok(entries) => {
-            let same = match (zip.canonicalize(), out.canonicalize()) {
-                (Ok(a), Ok(b)) => a == b,
-                _ => zip == out,
-            };
-            if !same {
-                let _ = std::fs::remove_file(&zip);
-            }
-            DaemonCollection::Complete {
-                version,
-                status,
-                entries,
-            }
-        }
-        Err(e) => DaemonCollection::LogsUnavailable {
+    match reply["entries"].as_object() {
+        Some(map) => DaemonCollection::Complete {
             version,
             status,
-            reason: format!("后台服务的日志包读不出来：{e}"),
+            entries: map
+                .iter()
+                .filter_map(|(name, text)| Some((name.clone(), text.as_str()?.as_bytes().to_vec())))
+                .collect(),
+        },
+        None => DaemonCollection::LogsUnavailable {
+            version,
+            status,
+            reason: "后台服务的 logs.export 应答里没有日志条目（版本不一致？）".into(),
         },
     }
 }

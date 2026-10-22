@@ -19,6 +19,7 @@
     open as openDialog,
     confirm as confirmDialog,
     message as messageDialog,
+    save as saveDialog,
   } from "@tauri-apps/plugin-dialog";
   import { check as checkUpdate } from "@tauri-apps/plugin-updater";
   import { revealItemInDir, openUrl } from "@tauri-apps/plugin-opener";
@@ -681,7 +682,13 @@
   // `export-logs-requested`，这里收到后照旧导出、照旧 toast + 在 Finder 里展示。
   async function exportLogs() {
     try {
-      const r = await invoke("export_logs_bundle");
+      // #1122：诊断包由用户选择保存位置，不再写进照片库目录；取消就什么都不做。
+      const out = await saveDialog({
+        defaultPath: "ppf-logs.zip",
+        filters: [{ name: "zip", extensions: ["zip"] }],
+      });
+      if (!out) return;
+      const r = await invoke("export_logs_bundle", { out });
       flashMessage(t("ui.logs_exported", { path: r.zip }));
       try {
         await revealItemInDir(r.zip); // 在 Finder/资源管理器中直接展示

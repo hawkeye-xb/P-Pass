@@ -26,3 +26,15 @@ test("设备列表参数名三处一致：include_departed", () => {
   expect(api).toMatch(/fn daemon_devices_list\([\s\S]*?include_departed: bool[\s\S]*?"include_departed": include_departed/);
   expect(api).not.toContain("include_revoked");
 });
+
+// #1122：诊断包由用户选择保存位置——先弹保存对话框，把用户选的路径交给
+// export_logs_bundle；取消就不导出。反证：退回不带路径直接导出，这条变红。
+test("导出诊断包先让用户选保存位置", () => {
+  const body = app.slice(app.indexOf("async function exportLogs()"), app.indexOf("async function onHiddenToTray()"));
+  expect(body).toContain("saveDialog(");
+  expect(body).toContain('invoke("export_logs_bundle", { out })');
+  expect(body).toMatch(/if \(!out\) return;/);
+  const lib = readFileSync(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8");
+  expect(lib).toMatch(/fn export_logs_bundle\(app: tauri::AppHandle, out: String\)/);
+  expect(lib).not.toContain('library.join("ppf-logs.zip")');
+});

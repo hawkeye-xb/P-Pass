@@ -212,6 +212,16 @@ pub fn pair_link_stdout_line(qr: &str, stdout_is_terminal: bool) -> String {
     }
 }
 
+/// #1122：stdout 那行 `NodeId:` 的内容。测试沙盒（`--ephemeral`）给全长——
+/// 脚本按它配对、拨号；正式模式只给前 8 位，与日志口径一致。
+pub fn node_id_stdout(full_hex: &str, sandbox: bool) -> String {
+    if sandbox {
+        full_hex.to_string()
+    } else {
+        format!("{}…", &full_hex[..full_hex.len().min(8)])
+    }
+}
+
 /// #1044：daemon 起不来时写到 stderr 的**最后一行**——一行 JSON
 /// `{"error_key": <i18n key 或 null>, "detail": <原文>}`。桌面壳读这一行，
 /// 按 key 出人话指引、原文照常给出；不再拿正则去猜 sqlx 的英文报错。
@@ -231,6 +241,17 @@ mod tests {
     use super::*;
 
     const QR: &str = "ppf://pair?node=aa&t=0123456789abcdef01234567&r=https://relay.example";
+
+    /// #1122：正式模式 stdout 只给 NodeId 前缀；只有测试沙盒给全长。
+    /// 反证：不看 sandbox 一律给全长，第二条变红。
+    #[test]
+    fn full_node_id_only_in_the_test_sandbox() {
+        let full = "ab".repeat(32);
+        assert_eq!(node_id_stdout(&full, true), full);
+        let prod = node_id_stdout(&full, false);
+        assert_eq!(prod, "abababab…");
+        assert!(!prod.contains(&full[..24]));
+    }
 
     #[test]
     fn pair_link_printed_only_to_a_terminal() {
