@@ -47,6 +47,8 @@ const REASON_UI_KEYS: &[(&str, &str)] = &[
     ("not_paired", "err.not_paired"),
     ("role_forbidden", "err.not_authorized"),
     ("pair_token_invalid", "err.not_authorized"),
+    // #1118：验证码对不上，这次配对已作废。
+    ("pair_code_wrong", "ui.err_pair_code_wrong"),
     ("phone_outdated", "ui.err_phone_outdated"),
     ("desktop_outdated", "ui.err_desktop_outdated"),
     ("unsupported_method", "err.unsupported"),

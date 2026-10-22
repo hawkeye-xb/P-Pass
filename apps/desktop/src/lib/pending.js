@@ -113,3 +113,32 @@ export function pairResultName(item, resp) {
   if (fromTable) return fromTable;
   return typeof resp?.device === "string" ? resp.device.trim() : "";
 }
+
+/**
+ * #1118：确认 = 输入手机屏幕上的 6 位验证码。只有恰好 6 位数字才能提交（只能试一次，
+ * 不让手滑的半截码白白作废这次配对）。
+ */
+export function isPairCode(code) {
+  return /^[0-9]{6}$/.test(String(code ?? "").trim());
+}
+
+/** #1118：输入框里只留数字、最多 6 位（粘贴「123 456」也能用）。 */
+export function normalizePairCode(raw) {
+  return String(raw ?? "").replace(/[^0-9]/g, "").slice(0, 6);
+}
+
+/** #1118：确认框里「申请身份」那一行的文案键。 */
+export function pendingRoleKey(item) {
+  return item?.role === "viewer" ? "ui.pending_role_viewer" : "ui.pending_role_member";
+}
+
+/**
+ * #1118：`pairing.confirm` 的结果提示。允许后 daemon 最多等 8 秒手机的确认：
+ * 等到了 = 已加入；没等到（`verifying`）= 验证码已提交、还在等手机。
+ * 码不对走错误分支（`pair_code_wrong` → ui.err_pair_code_wrong），不在这里。
+ */
+export function pairConfirmToast(accept, reply, shownName) {
+  if (!accept) return { key: "ui.pair_denied", params: { name: shownName }, tone: "warning" };
+  if (reply?.verifying) return { key: "ui.pair_verifying", params: { name: shownName }, tone: "info" };
+  return { key: "ui.pair_allowed", params: { name: shownName }, tone: "success" };
+}

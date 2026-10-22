@@ -113,7 +113,8 @@ async function pushPendingChanged() {
   await settle();
 }
 
-const allowButtons = () => screen.queryAllByRole("button", { name: "允许加入" });
+// #1118：每一行的确认按钮（输入手机上的验证码后才可点；行在不在看按钮在不在）。
+const allowButtons = () => screen.queryAllByRole("button", { name: "确认加入" });
 
 /** 点「显示配对二维码」→ 手机扫码入队 → 事件到达，确认弹窗打开。 */
 async function scanned(d, rows) {

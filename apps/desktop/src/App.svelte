@@ -66,6 +66,10 @@
     pendingSubText,
     pendingAllowKey,
     pairResultName,
+    isPairCode,
+    normalizePairCode,
+    pendingRoleKey,
+    pairConfirmToast,
   } from "./lib/pending.js";
   import { formatBytes, diskUsedPercent } from "./lib/formatBytes.js";
   // MOB-29: 「刚从库里删掉照片」警告的判据（纯函数，externalDelete.test.js
@@ -560,7 +564,10 @@
     }
   }
 
-  async function confirmPair(accept, item) {
+  // #1118：每一行的验证码输入（按 node_id）。
+  let pairCodes = $state({});
+
+  async function confirmPair(accept, item, code = null) {
     try {
       // UX-08: 逐行处理——pairing.confirm 精确确认该台。#1044：横幅与弹窗
       // 都显式传要决定的那一行（node_id），不靠「不带参数 = daemon 队首」。
@@ -572,20 +579,24 @@
         accept,
         node_id: item?.node_id,
         device_name: item?.name,
+        // #1118：允许 = 输入手机显示的验证码；拒绝不带码。
+        code: accept ? code : null,
       });
       // DEV-06: 结果提示的名字以设备表为准。`r.device` 是队列里的自报名
       // （SM-S9210），弹窗标题用的却是 pending 行里 daemon 解析过的名字
       // （客厅的手机）——同一次操作两个名字。
       // `r.device` 留作最后兜底（列表取不到）。
       const shown = pairResultName(item, r);
-      flashMessage(
-        accept ? t("ui.pair_allowed", { name: shown }) : t("ui.pair_denied", { name: shown }),
-        accept ? "success" : "warning"
-      );
+      const toast = pairConfirmToast(accept, r, shown);
+      flashMessage(t(toast.key, toast.params), toast.tone);
       // T4: 处理完由下一轮 refresh 关模态（pending 清 0）——状态消失不残留。
       await refresh();
     } catch (e) {
       flashMessage(t("ui.confirm_failed", { err: errDetail(e) }), "error");
+      // #1118：码错了这次配对就作废——下一轮 refresh 会把这一行收掉。
+      await refresh();
+    } finally {
+      if (item?.node_id) pairCodes = { ...pairCodes, [item.node_id]: "" };
     }
   }
 
@@ -1570,7 +1581,8 @@
                   <!-- #1044：按钮显式带横幅上点名的那一台（node_id），列表还没
                        取到时不可点——不让 daemon 按「队首」替我们猜是哪台。 -->
                   <Button variant="secondary" disabled={pendingList.length === 0} onclick={() => confirmPair(false, pendingList[0])}>{t("ui.deny")}</Button>
-                  <Button disabled={pendingList.length === 0} onclick={() => confirmPair(true, pendingList[0])}>{t("ui.allow")}</Button>
+                  <!-- #1118：允许 = 输入手机上的验证码，在确认框里做。 -->
+                  <Button disabled={pendingList.length === 0} onclick={() => (showConfirmModal = true)}>{t("ui.pending_enter_code")}</Button>
                 </div>
               </div>
             {/if}
@@ -2124,6 +2136,10 @@
       {:else}
         <p class="hint modal-hint">{t("ui.pair_generating")}</p>
       {/if}
+      <!-- #1118：手机扫码后先显示这台电脑的标识，用户在这里核对（二维码生成前也显示）。 -->
+      {#if status?.desktop_fingerprint}
+        <p class="pair-identity" data-testid="desktop-fingerprint">{t("ui.pair_desktop_identity", { fingerprint: status.desktop_fingerprint })}</p>
+      {/if}
     </Dialog>
 
     <!-- UX-08: 待确认加入列表——不传 onClose，必须显式允许/拒绝，
@@ -2137,6 +2153,7 @@
       {@const dialogText = pendingDialogText(pendingList)}
       <h3>{dialogText.title}</h3>
       <p class="hint modal-hint">{dialogText.hint}</p>
+      <p class="hint modal-hint">{t("ui.pair_code_once")}</p>
       <div class="pending-list">
         {#each pendingList as item}
           <!-- DEV-02: 设备与身份 1:1——确认框只有「允许」/「拒绝」。
@@ -2144,13 +2161,30 @@
                提示是手机自报的指纹算出来的，桌面端无法验证，等于让确认框
                替对方声称「这台手机重装过」。 -->
           {@const sub = pendingSubText(item, humanTime(item.paired_at, nowMs))}
+          {@const code = pairCodes[item.node_id] ?? ""}
           <div class="pending-row">
             <span class="pending-name">{item.name}</span>
-            <div class="pending-actions">
-              <Button variant="secondary" class="min-w-[64px]" onclick={() => confirmPair(false, item)}>{t("ui.deny")}</Button>
-              <!-- DEV-04: 按钮跟标题走。标题说「请求重新连接」而按钮说
-                   「允许加入」，正是本卡要拦的串台。 -->
-              <Button class="min-w-[64px]" onclick={() => confirmPair(true, item)}>{t(pendingAllowKey(item))}</Button>
+            <!-- #1118：申请的角色 + 手机屏幕上的 6 位验证码。只能输一次，满 6 位才能确认。 -->
+            <span class="pending-role">{t(pendingRoleKey(item))}</span>
+            <div class="pending-code">
+              <input
+                class="pair-code-input"
+                data-testid="pair-code-input"
+                inputmode="numeric"
+                autocomplete="one-time-code"
+                maxlength="7"
+                placeholder={t("ui.pair_code_placeholder")}
+                aria-label={t("ui.pair_code_placeholder")}
+                value={code}
+                oninput={(e) => (pairCodes = { ...pairCodes, [item.node_id]: normalizePairCode(e.currentTarget.value) })}
+                onkeydown={(e) => { if (e.key === "Enter" && isPairCode(code)) confirmPair(true, item, code); }}
+              />
+              <div class="pending-actions">
+                <Button variant="secondary" class="min-w-[64px]" onclick={() => confirmPair(false, item)}>{t("ui.deny")}</Button>
+                <!-- DEV-04: 按钮跟标题走。标题说「请求重新连接」而按钮说
+                     「允许加入」，正是本卡要拦的串台。 -->
+                <Button class="min-w-[64px]" data-testid="pair-code-confirm" disabled={!isPairCode(code)} onclick={() => confirmPair(true, item, code)}>{t(pendingAllowKey(item))}</Button>
+              </div>
             </div>
             <!-- DEV-04: 实证副行占满整行。挤在名字那一列里会被按钮压到
                  「首次配对 今天 10:26 · 已...」——摆出来的事实被截掉了，
@@ -2496,10 +2530,42 @@
      新设备这一行不存在——没有可说的事实就不占位。 */
   .pending-sub {
     grid-column: 1 / -1;
+    grid-row: 4;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--pp-ink-60);
+  }
+  /* #1118：验证码输入 + 确认/拒绝，同一行。 */
+  .pending-role {
+    grid-column: 1 / -1;
     grid-row: 2;
     font-size: 12px;
     line-height: 1.5;
     color: var(--pp-ink-60);
+  }
+  .pending-code {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    grid-column: 1 / -1;
+    grid-row: 3;
+  }
+  .pair-code-input {
+    width: 9ch;
+    padding: 6px 10px;
+    border: 1px solid var(--pp-border);
+    border-radius: var(--pp-radius-control-sm);
+    font-size: 18px;
+    letter-spacing: 0.2em;
+    font-variant-numeric: tabular-nums;
+    background: var(--pp-paper);
+    color: var(--pp-ink);
+  }
+  .pair-identity {
+    margin: 0;
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.05em;
   }
   .pending-actions {
     grid-column: 2;

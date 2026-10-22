@@ -62,11 +62,13 @@ pub(crate) fn daemon_pairing_confirm(
     accept: bool,
     node_id: Option<String>,
     device_name: Option<String>,
+    // #1118：允许 = 输入手机显示的 6 位验证码。
+    code: Option<String>,
 ) -> Result<Value, String> {
     forward(
         &app,
         "pairing.confirm",
-        json!({ "accept": accept, "node_id": node_id, "device_name": device_name }),
+        json!({ "accept": accept, "node_id": node_id, "device_name": device_name, "code": code }),
     )
 }
 

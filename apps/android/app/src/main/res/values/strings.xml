@@ -28,7 +28,7 @@
 
     <!-- Pairing -->
     <string name="pair_waiting_title">Asking the computer…</string>
-    <string name="pair_waiting_body">On the computer, click Allow when it asks.</string>
+    <string name="pair_waiting_body">Sending the request to the computer…</string>
     <string name="pair_refused_title">The computer said no.</string>
     <string name="pair_refused_body">Ask the family owner to generate a fresh code and try again.</string>
     <string name="pair_lapsed_title">This pairing didn\'t go through.</string>
@@ -39,6 +39,16 @@
     <string name="pair_refused_detail_denied">The request was declined on the computer.</string>
     <string name="pair_refused_detail_expired">Nobody confirmed on the computer, so this pairing request expired. Generate a new code on the computer and scan again.</string>
     <string name="pair_refused_detail_restarted">The computer\'s service restarted, so this pairing request is no longer valid. Generate a new code on the computer and scan again.</string>
+    <!-- #1118：扫码后先核对电脑，再显示验证码 -->
+    <string name="pair_confirm_desktop_title">Connect to this computer?</string>
+    <string name="pair_confirm_desktop_body">Check that this identity matches the one shown under the QR code on the computer before connecting.</string>
+    <string name="pair_desktop_name_label">Computer</string>
+    <string name="pair_desktop_identity_label">Identity</string>
+    <string name="pair_connect">Connect</string>
+    <string name="pair_code_title">Enter this code on the computer</string>
+    <string name="pair_code_body">The code can be entered only once. This screen continues by itself once the computer confirms.</string>
+    <string name="pair_refused_detail_code_wrong">The code didn\'t match, so this pairing was cancelled. Show a new QR code on the computer and scan again.</string>
+    <string name="pair_desktop_proof_failed">The computer couldn\'t prove it used the same code, so nothing was saved. Scan again.</string>
     <string name="error_generic">Something went wrong. Please try again; if it keeps happening, update P-Pass on both the phone and the computer.</string>
     <string name="state_waiting_phone_outdated">P-Pass on this phone is out of date. Please update to the latest version</string>
     <string name="state_waiting_desktop_outdated">P-Pass on the computer is out of date. Please update it on the computer</string>
