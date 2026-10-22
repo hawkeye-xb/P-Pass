@@ -1,0 +1,20 @@
+[package]
+name = "pair-pake"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# #1118：配对验证码（SPAKE2 + RFC 9382 式密钥确认）。纯字节内核：不碰 iroh、不做 IO，
+# daemon 直接依赖，手机经 transport 的 mobile-ffi 导出调用（两端同一份实现）。
+[dependencies]
+# 版本钉死：没有经过独立审计的 Rust PAKE 实现（#1118 正文写明了接受理由），升级必须走评审——
+# 这里的 `=` 与 deny.toml 的 bans 一起锁住它。
+spake2 = "=0.4.0"
+hkdf = "0.12"
+hmac = "0.12"
+sha2 = "0.10"
+# 对端点先解压、拒绝低阶点再交给 spake2（spake2 0.4 不做子群检查）；与 spake2 用的是同一份 dalek 4。
+curve25519-dalek = { version = "4", default-features = false }
+getrandom = "0.2"
+thiserror.workspace = true

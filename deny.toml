@@ -52,4 +52,9 @@ private = { ignore = true }
 
 [bans]
 multiple-versions = "warn"
-deny = []
+# #1118：配对验证码用的 spake2 没有经过独立审计（接受理由见 #1118），版本钉在 0.4.0；
+# 换版本必须先评审，再同时改这里、crates/pair-pake/Cargo.toml 的 `=0.4.0` 和 Cargo.lock。
+deny = [
+  { name = "spake2", version = "<0.4.0", reason = "#1118: spake2 is pinned to 0.4.0 pending review" },
+  { name = "spake2", version = ">0.4.0", reason = "#1118: spake2 is pinned to 0.4.0 pending review" },
+]
