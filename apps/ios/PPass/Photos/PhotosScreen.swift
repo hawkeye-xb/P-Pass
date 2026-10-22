@@ -11,23 +11,16 @@ struct PhotosScreen: View {
 
     var body: some View {
         NavigationStack {
+            // 顺序同 Android：失联红卡 → 筛选胶囊 → 实时连接提示 → 网格。失联时胶囊和已加载的照片照常可看
+            // （Android PhotosScreen 只收起重连 / 连不上这类提示，见 TimelineLiveChrome）。
             VStack(spacing: 0) {
-                if app.pairingLost {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Label(L.s("photos_lost_title"), systemImage: "exclamationmark.triangle.fill")
-                            .font(PPFont.title3).foregroundStyle(PPColor.act)
-                        Text(app.daysSinceLastReachable.map { L.p("photos_lost_body_days", $0) } ?? L.s("photos_lost_body_unknown")).font(PPFont.body).foregroundStyle(PPColor.ink60)
-                        PPButton(title: L.s("photos_lost_action"), kind: .danger) { app.startOver() }
-                    }
-                    .padding(16)
-                    .background(PPColor.actBg, in: RoundedRectangle(cornerRadius: PPRadius.card, style: .continuous))
-                    .padding(16)
-                }
+                if app.pairingLost { lostCard }
+                chips
+                disconnected
                 content
             }
             .ppScreen()
             .toolbar(.hidden, for: .navigationBar) // Android 无页标题，底部 tab 已标明所在页
-            .safeAreaInset(edge: .top, spacing: 0) { if !app.pairingLost { VStack(spacing: 0) { chips; disconnected } } }
         }
         .task { model.bind(app.backend.timeline); model.attach(app.backend.live); await model.loadFirst() }
         .onDisappear { model.detach() }
@@ -39,6 +32,21 @@ struct PhotosScreen: View {
         .fullScreenCover(item: $viewer) { session in
             MediaViewer(session: session, timeline: app.backend.timeline)
         }
+    }
+
+    /// 配对失效红卡（Android PhotosScreen）：act-bg + act 30% 描边、内边距 18；标题无衬线粗体，出路是 ink 主按钮。
+    private var lostCard: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(L.s("photos_lost_title")).font(PPFont.cardTitle).foregroundStyle(PPColor.act)
+            Text(app.daysSinceLastReachable.map { L.p("photos_lost_body_days", $0) } ?? L.s("photos_lost_body_unknown"))
+                .font(PPFont.cardBody).foregroundStyle(PPColor.ink60)
+            PPButton(title: L.s("photos_lost_action")) { app.startOver() }.padding(.top, 6)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(PPColor.actBg, in: RoundedRectangle(cornerRadius: PPRadius.card, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: PPRadius.card, style: .continuous).stroke(PPColor.act.opacity(0.3), lineWidth: 1))
+        .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 12)
     }
 
     /// 全部 / 本机 / 家人：胶囊 chips（Android PhotoFilterChip）：高 36、linen 底 ink-60 字，选中 = ink 底 paper 字。
@@ -56,7 +64,7 @@ struct PhotosScreen: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 12)
+        .padding(.horizontal, 20).padding(.top, app.pairingLost ? 0 : 8).padding(.bottom, 12)
         .background(PPColor.paper)
     }
 
@@ -82,12 +90,13 @@ struct PhotosScreen: View {
     }
 
     @ViewBuilder private var content: some View {
-        if app.pairingLost {
-            Spacer()
-        } else if model.loading && model.items.isEmpty {
+        if model.loading && model.items.isEmpty {
             PPStateMessage(text: L.s("photos_loading"), loading: true)
+        } else if model.error != nil, model.items.isEmpty, app.pairingLost {
+            // 失联时出路只有红卡上的「重新扫码」，不再露「连不上」和原始错误（Android showTimelineError）。
+            Spacer()
         } else if let error = model.error, model.items.isEmpty {
-            PPStateMessage(text: L.s("photos_unreachable") + "\n" + String(error.prefix(100)),
+            PPStateMessage(text: L.s("photos_unreachable") + "\n(" + String(error.prefix(100)) + ")",
                            symbol: "wifi.exclamationmark",
                            actionTitle: L.s("photos_live_retry")) { Task { await model.loadFirst(reason: .retry) } }
         } else if model.items.isEmpty {
@@ -113,7 +122,7 @@ struct PhotosScreen: View {
                     } header: {
                         Text(section.title).font(PPFont.serif(18, .regular, relativeTo: .title3))
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.init(top: 16, leading: 8, bottom: 2, trailing: 8))
+                            .padding(.init(top: 16, leading: 8, bottom: 6, trailing: 8))
                     }
                 }
             }
@@ -165,13 +174,13 @@ struct Thumb: View {
                         .foregroundStyle(PPColor.paper)
                         .frame(width: 22, height: 22)
                         .background(PPColor.surfaceDark.opacity(0.62), in: Circle())
-                        .padding(5)
+                        .padding(6)
                         .accessibilityHidden(true)
                 }
             }
             .contentShape(Rectangle())
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(item.isVideo ? "Video" : "Photo")
+            .accessibilityLabel(L.s(item.isVideo ? "a11y_thumb_video" : "a11y_thumb_photo"))
             .accessibilityAddTraits(.isButton)
             .task(id: item.id) { image = try? await timeline.thumbnail(item, large: false) }
     }

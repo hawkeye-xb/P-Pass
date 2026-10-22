@@ -75,3 +75,7 @@
 /* 设置页后台刷新告示（对位 Android background_backup_system_stopped 的句式：事实 · 后果，配「去处理」）。iOS 的系统开关叫「后台 App 刷新」。 */
 "background_refresh_off_notice" = "后台 App 刷新已关闭 · 只在打开 P-Pass 时备份";
 "background_refresh_restricted_notice" = "后台刷新被系统限制 · 只在打开 P-Pass 时备份";
+
+/* 读屏（VoiceOver）：网格缩略图的标签。Android 用的是哈希前缀，读出来没有意义，iOS 单独给一句人话。 */
+"a11y_thumb_video" = "视频";
+"a11y_thumb_photo" = "照片";

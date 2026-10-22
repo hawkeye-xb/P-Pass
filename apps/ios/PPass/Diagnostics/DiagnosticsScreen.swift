@@ -98,15 +98,17 @@ struct StorageDetailScreen: View {
     var body: some View {
         List {
             Section {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        Circle().fill(app.pairingLost ? PPColor.act : PPColor.safe).frame(width: 10, height: 10)
+                // Android 信息卡：状态点 9、点与名称间距 10、名称与正文间距 10。
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 10) {
+                        Circle().fill(app.pairingLost ? PPColor.act : PPColor.safe).frame(width: 9, height: 9)
                         Text(app.desktopName ?? L.s("storage_device_default")).font(PPFont.bodyBold)
                     }
                     Text(detailBody).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
                 }
                 .padding(.vertical, 4)
             }
+            .ppTinted(PPUI.Surface.settingsCard)
             Section {
                 Button(role: .destructive) { confirming = true } label: {
                     HStack {
@@ -116,6 +118,7 @@ struct StorageDetailScreen: View {
                 }
                 .disabled(working)
             }
+            .ppTinted(PPUI.Surface.settingsCard)
         }
         .confirmationDialog(L.s("disconnect_armed_title"), isPresented: $confirming, titleVisibility: .visible) {
             Button(L.s("disconnect_confirm"), role: .destructive) {
@@ -127,6 +130,7 @@ struct StorageDetailScreen: View {
         }
         .listStyle(.insetGrouped)
         .ppList()
+        .ppCardSpacing()
         .navigationTitle(L.s("storage_computer"))
         .navigationBarTitleDisplayMode(.inline)
     }
