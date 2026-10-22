@@ -20,7 +20,7 @@ use crate::{
     Result, ServiceMode,
 };
 
-const AGENT_LABEL: &str = "com.p-pass.daemon";
+const AGENT_LABEL: &str = "com.hawkeyexb.ppass.desktop.daemon";
 
 pub struct MacosAdapter;
 
@@ -135,7 +135,7 @@ pub(crate) fn is_stable_install_location(exec: &Path) -> bool {
 /// 与 daemon 那条（`AGENT_LABEL`）刻意分开：壳的这一条**只管启动、不管守卫**，
 /// 存在的唯一目的是让 `kickstart -k` 有东西可控——由系统杀掉旧壳、按磁盘上
 /// 已是新版本的同一个文件重新拉起来。
-const SHELL_AGENT_LABEL: &str = "com.p-pass.shell";
+const SHELL_AGENT_LABEL: &str = "com.hawkeyexb.ppass.desktop.shell";
 
 fn shell_agent_plist_path() -> PathBuf {
     home().join(format!("Library/LaunchAgents/{SHELL_AGENT_LABEL}.plist"))
@@ -753,7 +753,7 @@ impl HostingAdapter for MacosAdapter {
         launchd_job_pid(&String::from_utf8_lossy(&out.stdout))
     }
 
-    /// `launchctl kickstart [-k]p gui/<uid>/com.p-pass.daemon`。
+    /// `launchctl kickstart [-k]p gui/<uid>/com.hawkeyexb.ppass.desktop.daemon`。
     ///
     /// 为什么不再"pkill 然后等 KeepAlive 拉回来"（DAE-04 原做法）：
     /// ① 被杀 = 非成功退出，launchd 的重拉吃节流（10s 量级，DESK-44 的假失败

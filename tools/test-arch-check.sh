@@ -124,13 +124,13 @@ g1_red "Rust 跨行读 LANG" apps/desktop/src-tauri/src/a.rs 'let l = std::env::
     "LANG",
 );'
 g1_red "Rust consts::OS" apps/desktop/src-tauri/src/a.rs 'let os = std::env::consts::OS;'
-g1_red "拼 plist 路径" apps/desktop/src-tauri/src/a.rs 'let p = home.join("com.p-pass.daemon.plist");'
+g1_red "拼 plist 路径" apps/desktop/src-tauri/src/a.rs 'let p = home.join("com.hawkeyexb.ppass.desktop.daemon.plist");'
 g1_red "LaunchAgents 目录" apps/desktop/src-tauri/src/a.rs 'let d = home.join("Library/LaunchAgents");'
 
 echo "== G1 反样例（必须不报）"
 g1_green() { expect_green "G1 $1" "$(sample "$2" "$3")"; }
 g1_green "注释里讲 HOME / plist" apps/desktop/src-tauri/src/a.rs '// 不要读 std::env::var("HOME")，日志路径从 plist 读
-/// LaunchAgents/com.p-pass.daemon.plist 才是真相
+/// LaunchAgents/com.hawkeyexb.ppass.desktop.daemon.plist 才是真相
 //! navigator.platform 也不能用'
 g1_green "块注释里讲 plugin-os" apps/desktop/src/a.js '/**
  * 以前用 @tauri-apps/plugin-os 判平台

@@ -363,7 +363,7 @@ const SAFE_FILES: &[&str] = &[
     "identity.key",
     "ipc.token",
     "ppf-logs.zip",
-    "com.p-pass.daemon.plist",
+    "com.hawkeyexb.ppass.desktop.daemon.plist",
     "blobs.db",
 ];
 

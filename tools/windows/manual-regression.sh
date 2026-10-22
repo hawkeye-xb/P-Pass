@@ -14,7 +14,7 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 WORK="${WORK:-$(cygpath -u "$USERPROFILE")/ppcheck/manual}"
 mkdir -p "$WORK/img"
 PY="${PY:-python}"
-APPDIR="$(cygpath -u "$LOCALAPPDATA")/com.p-pass.desktop"
+APPDIR="$(cygpath -u "$LOCALAPPDATA")/com.hawkeyexb.ppass.desktop"
 CONF="$APPDIR/config.toml"
 PKG=com.hawkeyexb.ppass
 

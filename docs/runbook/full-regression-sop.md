@@ -119,7 +119,7 @@ gh release download "$STABLE" -R "$REPO" -D "$WORK/stable" -p '*android.apk' -p 
 | ID | 执行 | 步骤 | 预期 | 证据 |
 |---|---|---|---|---|
 | R3.2 | agent | `kill -9` daemon | launchd 拉起；壳自动重连；手机下一轮备份成功 | `pgrep` + IPC + 对账 |
-| R3.3 | agent | 照桌面「停止服务」的做法：先写标记 `~/Library/Application Support/P-Pass/desktop-user-stopped`，再 `launchctl bootout gui/$(id -u)/com.p-pass.daemon`，45 秒后 `pgrep` 确认仍停着（只 bootout 不写标记，壳的自愈会在 30 秒内拉回），手机立即备份；恢复时删标记再 `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.p-pass.daemon.plist` | 手机给出明确提示；恢复后收敛 | logcat 摘录 + 对账 |
+| R3.3 | agent | 照桌面「停止服务」的做法：先写标记 `~/Library/Application Support/P-Pass/desktop-user-stopped`，再 `launchctl bootout gui/$(id -u)/com.hawkeyexb.ppass.desktop.daemon`，45 秒后 `pgrep` 确认仍停着（只 bootout 不写标记，壳的自愈会在 30 秒内拉回），手机立即备份；恢复时删标记再 `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.hawkeyexb.ppass.desktop.daemon.plist` | 手机给出明确提示；恢复后收敛 | logcat 摘录 + 对账 |
 | R3.4 | agent | `dumpsys deviceidle force-idle` 进 Doze，再 `unforce` | Doze 期间不跑且文案平静；退出后补跑 | logcat 摘录 |
 
 磁盘满（T-070 `tools/scenarios/disk_full.sh`）和崩溃恢复（`crash_recovery.sh`）由 CI 在 Linux 上覆盖，真机不重跑。
@@ -224,7 +224,7 @@ gh release download test-channel -R "$REPO" -D "$WORK/base" -p '*_x64-setup.exe'
 3. **daemon 发现**：
 
    ```bash
-   APPDIR="$LOCALAPPDATA/com.p-pass.desktop"            # 平台数据目录（DESK-24 #173 之后）
+   APPDIR="$LOCALAPPDATA/com.hawkeyexb.ppass.desktop"            # 平台数据目录（DESK-24 #173 之后）
    CONF="$APPDIR/config.toml"
    # data_dir 可能是 TOML 字面串 '…'（反斜杠原样），也可能是基本串 "…"（反斜杠成对转义）
    DATA_DIR=$(cygpath -u "$(sed -n "s/^data_dir *= *[\"']\(.*\)[\"']\$/\1/p" "$CONF" | sed 's/\\\\/\\/g')")
@@ -260,7 +260,7 @@ gh release download test-channel -R "$REPO" -D "$WORK/base" -p '*_x64-setup.exe'
 | W3 | agent | 安装时 daemon 正在跑：不先停服务，直接静默覆盖安装候选包 | 安装成功，没有「文件被占用」；装完打开 App 后 daemon 是新版本 | 退出码 + `ipc status` |
 | W4 | agent | 备份进行中，用 `powercfg /requests` 查唤醒声明（要在管理员终端里跑，由人执行，或者在人授权后提权跑一次） | 传输期间 `SYSTEM` 一栏间歇列出 `ppf-daemon.exe`（按传输持有、传完即撤，2 秒采样会看到断续命中）；备份完成后不再出现（NET-26 #419 传输期间持有唤醒）。#804 落地之后改成：插着电时一直列出 | 命令输出 |
 | W5 | agent | 收尾时执行 `"%LOCALAPPDATA%\P-Pass\uninstall.exe" /S`，然后重新安装候选版并打开 App（都经 §9.0 的沙盒外执行） | 卸载后计划任务被删、70 秒内没有 daemon 被拉起，照片库目录和 `config.toml` 都还在；重装并打开 App 后不用重新配对，照片不重传，任务恢复并在运行（#877、#957） | 目录列表 + `Get-ScheduledTask` + 对账 |
-| W6 | agent | 桌面系统通知目前只在磁盘可用空间跌破阈值时发（`App.svelte` 的 `checkLowSpace`；断开设备不发通知）。只有在磁盘接近写满的测试机上才能触发；触发后查 `%LOCALAPPDATA%\Microsoft\Windows\Notifications\wpndatabase.db` 里 `NotificationHandler.PrimaryId = 'com.p-pass.desktop'` 的记录 | 有一条通知，文案完整（DESK-17 #166）。条件不具备时标「未覆盖」 | sqlite 查询输出 |
+| W6 | agent | 桌面系统通知目前只在磁盘可用空间跌破阈值时发（`App.svelte` 的 `checkLowSpace`；断开设备不发通知）。只有在磁盘接近写满的测试机上才能触发；触发后查 `%LOCALAPPDATA%\Microsoft\Windows\Notifications\wpndatabase.db` 里 `NotificationHandler.PrimaryId = 'com.hawkeyexb.ppass.desktop'` 的记录 | 有一条通知，文案完整（DESK-17 #166）。条件不具备时标「未覆盖」 | sqlite 查询输出 |
 
 W3 和 W5 都会改动安装状态，放在 §4 全部跑完、§7 清理之前做。
 

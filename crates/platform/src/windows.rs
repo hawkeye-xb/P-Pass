@@ -309,7 +309,7 @@ fn delete_legacy_run_value() -> Result<()> {
 /// 用户数据不许用安装程序拥有的目录来定义——卸载的清理范围会和用户数据
 /// 焊死；而且 `nsis.installMode` 哪天从 currentUser 改成 perMachine，
 /// `$INSTDIR` 就变成 `C:\Program Files\P-Pass`，普通用户根本写不进去。
-const DATA_DIR_NAME: &str = "com.p-pass.desktop";
+const DATA_DIR_NAME: &str = "com.hawkeyexb.ppass.desktop";
 
 /// #1043：`SHGetKnownFolderPath`。读不到（极少见：漫游配置坏了、服务账户）
 /// 返回 `None`，调用方自己决定怎么兜底，这里不编路径。
@@ -336,7 +336,7 @@ fn legacy_data_dir() -> PathBuf {
     PathBuf::from(std::env::var("APPDATA").unwrap_or_else(|_| ".".into())).join("P-Pass")
 }
 
-/// 现行位置：`%LOCALAPPDATA%\com.p-pass.desktop`。
+/// 现行位置：`%LOCALAPPDATA%\com.hawkeyexb.ppass.desktop`。
 fn current_data_dir() -> PathBuf {
     PathBuf::from(std::env::var("LOCALAPPDATA").unwrap_or_else(|_| ".".into())).join(DATA_DIR_NAME)
 }
@@ -359,7 +359,7 @@ impl Default for WindowsAdapter {
 /// `tauri.conf.json` 的 `identifier`——NSIS 安装时把开始菜单快捷方式的
 /// AUMID 设成的就是它（见 `notify` 的注释）。与 [`DATA_DIR_NAME`] 恰好同值，
 /// 但语义不同，刻意分开写。
-const APP_USER_MODEL_ID: &str = "com.p-pass.desktop";
+const APP_USER_MODEL_ID: &str = "com.hawkeyexb.ppass.desktop";
 
 /// `notify` 的可注入版本：AUMID 由调用方给，契约测试用一个不存在的 ID 来
 /// 验「不可用时不 panic、不阻塞」。
@@ -544,7 +544,7 @@ impl PlatformAdapter for WindowsAdapter {
     /// 必须有一个开始菜单快捷方式认领它，否则 `Show()` 返回成功、通知却不显示。
     /// 本应用的快捷方式由 Tauri 的 NSIS 模板创建，模板会用 `SetLnkAppUserModelId`
     /// 把它设成 bundle identifier（真机实测已安装的 `P-Pass.lnk` 的
-    /// `System.AppUserModel.ID` = `com.p-pass.desktop`）。所以这里用同一个 ID，
+    /// `System.AppUserModel.ID` = `com.hawkeyexb.ppass.desktop`）。所以这里用同一个 ID，
     /// 不需要改安装脚本。
     ///
     /// 不阻塞调用方：WinRT 调用放进一个一次性线程。trait 的返回值是 `()`，
@@ -2170,7 +2170,7 @@ mod desk24_data_dir_tests {
     /// 时至少有一条测试会开口。
     #[test]
     fn the_directory_name_is_the_bundle_identifier() {
-        assert_eq!(DATA_DIR_NAME, "com.p-pass.desktop");
+        assert_eq!(DATA_DIR_NAME, "com.hawkeyexb.ppass.desktop");
         assert_eq!(current_data_dir().file_name().unwrap(), DATA_DIR_NAME);
     }
 
