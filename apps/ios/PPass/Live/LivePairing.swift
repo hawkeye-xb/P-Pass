@@ -123,16 +123,14 @@ final class LivePairing: PairingService, @unchecked Sendable {
     /// 返回 true = 配对已落盘、但有设置没写下来要提示用户（#1039：换新电脑清旧的后台备份意图失败）。
     private let onPaired: (PairingRecord, _ knownDesktop: Bool) -> Bool
     private let onDisconnect: () async -> Void
-    private let pending: PendingUnpairStore
-    private let flusher: PendingUnpairFlusher
+    private let logger: CoreLogger
     private var current: Task<PairVerdict, Error>?
 
     init(transportFor: @escaping (String) -> CtrlTransport, store: PairingStore, onboarded: @escaping (String) -> Bool,
          onPaired: @escaping (PairingRecord, _ knownDesktop: Bool) -> Bool, onDisconnect: @escaping () async -> Void,
-         pending: PendingUnpairStore, flusher: PendingUnpairFlusher) {
+         logger: CoreLogger) {
         self.transportFor = transportFor
-        self.pending = pending
-        self.flusher = flusher
+        self.logger = logger
         self.store = store
         self.onboarded = onboarded
         self.onPaired = onPaired
@@ -188,21 +186,18 @@ final class LivePairing: PairingService, @unchecked Sendable {
 
     func cancel() async { current?.cancel() }
 
-    /// unpair 只是尽力通知（电脑关机 / 已吊销都不能卡住本地断开），本地清理永远执行。
-    /// #956：先把「待撤销」条目落盘，再试发一次，最后才清配对——发不出去的由前台 / 网络恢复 / 启动时的重试接手。
+    /// 主动断开（对位 Android onDisconnect）：清配对前尽力通知电脑一次（5 秒），失败就算了，然后无条件清本地。
+    /// 不留任何东西待以后重发（#956 关闭裁决）。配对已失效（lost）的电脑本就不认这台手机，不发。
     func disconnect() async {
-        if let r = store.load(), !r.lost {
-            let entry = PendingUnpair(daemonNodeId: r.daemonNodeId, peerToken: r.peerToken, pairingEpoch: r.pairingEpoch,
-                                      createdAtMs: Int64(Date().timeIntervalSince1970 * 1000))
-            do {
-                try pending.enqueue(entry)
-                await flusher.flush()
-            } catch {
-                AppLog.log("unpair-outbox: enqueue failed (\(error)); sending once without persistence")
-                await flusher.attempt(entry)
-            }
-        }
-        await onDisconnect()
+        let record = store.load()
+        let transportFor = self.transportFor, logger = self.logger
+        await UnpairNotice.disconnect(
+            notify: {
+                guard let r = record, !r.lost else { return }
+                await UnpairNotice.sendOnce(transportFor(r.peerToken), daemonNodeId: r.daemonNodeId,
+                                            pairingEpoch: r.pairingEpoch, logger: logger)
+            },
+            clearLocal: onDisconnect)
     }
 
     private enum MemberHello { case hello(Hello), outdated(OutdatedSide), none }

@@ -470,8 +470,8 @@ class DaemonClient internal constructor(
      *  token can rejoin.
      *  #565: [pairingEpoch] names the pairing being ended (blank = legacy
      *  pairing without one); the daemon only revokes while that pairing is
-     *  still current. Returns the raw reply so the caller can classify it by
-     *  its structured error code ([unpairDeliveryOf]). */
+     *  still current. Sent once on disconnect ([sendUnpairNoticeOnce]); the
+     *  reply is only logged (#956). */
     suspend fun unpair(peer: PeerAddrParts, pairingEpoch: String): Resp = withContext(Dispatchers.IO) {
         call(peer, "device.unpair", unpairParams(pairingEpoch))
     }

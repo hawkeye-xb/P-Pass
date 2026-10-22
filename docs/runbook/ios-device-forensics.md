@@ -46,7 +46,7 @@
 ## 真机回归的日志判定（#939）
 
 - `tools/ios/e3-judge.sh mark` 记下起点；人在手机上操作后，`tools/ios/e3-judge.sh check <阶段>` 拉日志（只看起点之后）并判 PASS / FAIL，可重跑。
-- 阶段：`foreground-notice`、`onboarded-at-finish`、`prewarm-park`、`no-inactive-catchup`、`956-offline`、`956-delivered`（顺带读本机桌面库的 device 表）、`onboarding`、`wifi`、`autobackup-on`、`notify-media`、`notify-media-dedupe`、`notify-bgrefresh`。
+- 阶段：`foreground-notice`、`onboarded-at-finish`、`prewarm-park`、`no-inactive-catchup`、`unpair-once`（顺带读本机桌面库的 device 表）、`unpair-no-retry`（断开后 mark，再回前台 / 切网络 / 重启 App）、`onboarding`、`wifi`、`autobackup-on`、`notify-media`、`notify-media-dedupe`、`notify-bgrefresh`。
 - 判据都是日志里的成功行（#1026 起成功路径也落日志）；新卡在验收里写明「日志里出现哪一行算通过」，再把它加成一个阶段。
 
 ## 本机隔离 daemon 与端到端

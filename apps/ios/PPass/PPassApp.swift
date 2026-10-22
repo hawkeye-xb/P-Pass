@@ -98,7 +98,6 @@ final class LiveLifecycle {
             LaunchOriginRecorder.shared.foregroundReached(logger: backend.logger)
             endFinishing(expired: false)
             backend.setActive(true)
-            backend.flushPendingUnpairs()
         case .background:
             inForeground = false
             backend.setActive(false)

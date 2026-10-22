@@ -2,7 +2,7 @@
 # 真机回归的日志判定（#939）：拉手机落盘日志（只看起点之后的行）+ 本机桌面库，按阶段自动判 PASS / FAIL。
 # 需要人在手机上点的步骤由人做；本脚本只负责「从日志判定」，可在任意时刻重跑。
 #   tools/ios/e3-judge.sh mark                 记下起点（之后的判定只看起点之后的日志行）
-#   tools/ios/e3-judge.sh check <phase>        判定一个阶段：foreground-notice | onboarded-at-finish | prewarm-park | no-inactive-catchup | 956-offline | 956-delivered | onboarding | wifi | autobackup-on | notify-media | notify-media-dedupe | notify-bgrefresh | commands | retry-failed | photos-log | degraded-stats | icloud-original
+#   tools/ios/e3-judge.sh check <phase>        判定一个阶段：foreground-notice | onboarded-at-finish | prewarm-park | no-inactive-catchup | unpair-once | unpair-no-retry | onboarding | wifi | autobackup-on | notify-media | notify-media-dedupe | notify-bgrefresh | commands | retry-failed | photos-log | degraded-stats | icloud-original
 #   tools/ios/e3-judge.sh tail [n]             看起点之后的日志尾部
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -51,13 +51,13 @@ case "${1:-}" in
         expect "退后台且空闲 → 回收（#979）" 'provider: park ok' ;;
       no-inactive-catchup)
         expect "半前台回来不补捞" 'scene: active again without leaving the foreground' ;;
-      956-offline)
-        expect "断开时先落盘待撤销并试发，电脑不可达 → 保留" 'unpair-outbox: desktop=.* unreachable .*kept'
-        expect "本地断开照常完成（provider 撤销）" 'disconnect: provider revoked' ;;
-      956-delivered)
-        expect "电脑恢复后补发成功 → 删除条目" 'unpair-outbox: delivered desktop=.*removed|NOT_AUTHORIZED\), treated as done'
-        echo "桌面库 device 表（最近撤销的 iPhone）："
+      unpair-once)
+        count "主动断开：尽力通知电脑一次（#956 关闭裁决）" 'unpair: desktop=.* (acknowledged|rejected|unreachable)' 1
+        expect "本地断开照常完成（provider 撤销）" 'disconnect: provider revoked'
+        echo "桌面库 device 表（最近撤销的 iPhone；断开时电脑不可达则不会被撤销，属预期）："
         sqlite3 -readonly "$DB" "select substr(hex(node_id),1,10), name, revoked, revoked_by, datetime(revoked_at/1000,'unixepoch','localtime') from device where name='iPhone' order by coalesce(revoked_at,0) desc limit 3" | sed 's/^/        /' ;;
+      unpair-no-retry) # 断开后先 mark，再回前台 / 切网络 / 重启 App，然后判
+        absent "断开之后不再发起任何 unpair" 'unpair: desktop=' ;;
       onboarding)
         expect "新电脑配对：后台备份意图被清（requested=false）" 'auto-backup prefs: applied on pairing knownDesktop=false requested=false'
         expect "完成页选择了「暂不」" 'onboarding: finish tapped enableBackgroundBackup=false'

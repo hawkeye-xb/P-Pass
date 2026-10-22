@@ -202,6 +202,14 @@ Android 的照片只在一个 bucket（文件夹）里；iOS 的一张照片可�
 - **清单语义**：`applyDisconnectManifest` 某一行失败不再短路后面的行（所有行跑完后抛第一个错误）；`flowRuntime` 行承担 provider 撤销，不能被「配对文件清不掉」连带跳过。
 - **测试**：`DisconnectManifestTests.testARowThatFailsDoesNotSkipTheRuntimeStopsAfterIt`、`DisconnectManifestTests.testDisconnectAppliesEveryRow`；真实 provider 的断开与重新配对在 PPassTests 的 DisconnectProviderTests（模拟器上跑）。
 
+### 主动断开时通知电脑（#956 关闭裁决，撤销 #565 发件箱）
+
+- **两端同一行为**：用户主动断开时，清配对前尽力调一次 `device.unpair`（带 `pairing_epoch`，最多等 5 秒），结局只写日志；然后无条件按断开清单清本地。之后回前台、网络恢复、重启都不再发送——盘上已没有这台电脑的地址或 peerToken。主动断开是单向行为，电脑上残留的设备行归电脑端管理（最近活动、手动移除）；需要恢复机制的只有配对期间的被动断开（#976 / #977）。
+- **Android**：`transport/UnpairNotice.kt` 的 `sendUnpairNoticeOnce` + `disconnectAfterUnpairNotice`（清理在 `NonCancellable` 里，界面被关掉也照常执行）。老版本排下的 `ppass.unpair-notice.<daemonNodeId>` 任务在进程启动时按 Worker 类名 tag 一次撤光；`UnpairNoticeWorker` 只剩墓碑（不联网、直接结束），防 WorkManager 先于撤销拉起老任务。
+- **iOS**：PPassCore `UnpairNotice.sendOnce` / `UnpairNotice.disconnect`，`LivePairing.disconnect` 调用。FFI `call` 的超时只管连接 + 请求 + 应答，控制面端点首次调用才建（建端点另有 15 秒超时），所以 `sendOnce` 对整个调用再套 5 秒截止（`firstWithin`），与 Android 的 `withTimeoutOrNull` 同一语义。老版本的 `pending_unpair.json` 存着旧电脑的 peerToken，启动时删一次，断开清单登记为 CLEAR（`legacyUnpairOutbox`）。
+- **有意不同**：配对已失效（lost，电脑已拒绝这台手机）时 iOS 不发通知，Android 照发一次——电脑本就不认这台手机，发了只会被拒，两种做法结局相同；iOS 沿用 #956 之前就有的这条判断，不为对齐而多发一次注定被拒的请求。
+- **测试**：Android `UnpairNoticeTest`；iOS PPassCore 的 `UnpairNoticeTests`，App 层「电脑不可达只试一次、断开后存储根不留 peerToken」与「lost 配对不发」在 PPassTests 的 PairingWiringTests（模拟器上跑，不在本注册表的运行时枚举里）。两端都有结构门禁：生产代码里 `device.unpair` 只有一个发送点、一个调用点（主动断开）。
+
 ### 通知授权（#975）
 
 - **Android**：Android 13+ 在 onboarding 完成页点任一按钮时问**一次** `POST_NOTIFICATIONS`（`OnboardingNotificationAsk`，#130）：问之前先落盘「已问过」，结果同步回开关（授予 → 开，拒绝 → 关）；老用户升级不问；设置页开关显示 = 偏好 **且** 已授权，拨开时没权限就再弹一次申请框。Android 没有任何「去系统设置」的引导。

@@ -111,7 +111,6 @@ class DisconnectStateManifestTest {
             DisconnectState.FLOW_RUNTIME,
             DisconnectState.AUTO_BACKUP_WORKS,
             DisconnectState.OTHER_WORKS,
-            DisconnectState.UNPAIR_NOTICE_WORKS,
             DisconnectState.MEDIA_WATCH_JOB,
             -> Unit // 不落盘
         }
