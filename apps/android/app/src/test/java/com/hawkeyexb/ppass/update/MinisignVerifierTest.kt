@@ -102,6 +102,41 @@ class MinisignVerifierTest {
         )
     }
 
+    // ── #1121：按通道选公钥 ──
+
+    @Test
+    fun stableKeyComesFromTauriConfAtBuildTime() {
+        // gradle 从 tauri.conf.json 读出的就是两端共用的那把正式公钥。
+        // 反证：gradle 读错字段 / 写死别的值 ⇒ 内层公钥对不上，红。
+        val inner = MinisignVerifier.decodeBlob(com.hawkeyexb.ppass.BuildConfig.UPDATE_PUBKEY_STABLE, 42)
+        assertEquals(prodPub, Base64.getEncoder().encodeToString(inner))
+    }
+
+    @Test
+    fun eachChannelVerifiesOnlyWithItsOwnKey() {
+        val keys = mapOf(UpdateChannel.Stable to prodPub, UpdateChannel.Test to pub1)
+        // test 通道用 test 公钥验 test 签名：通过。
+        assertEquals(
+            MinisignVerifier.Result.Valid,
+            MinisignVerifier.verifyForChannel(writeApk(), sig1, UpdateChannel.Test) { keys.getValue(it) },
+        )
+        // 同一个 test 签名拿到 stable 通道：签名者对不上，拒收。
+        // 反证：verifyForChannel 不按通道取 key（比如恒用 test key）⇒ 这里变 Valid，红。
+        assertEquals(
+            MinisignVerifier.Result.UnknownSigner,
+            MinisignVerifier.verifyForChannel(writeApk(), sig1, UpdateChannel.Stable) { keys.getValue(it) },
+        )
+    }
+
+    @Test
+    fun channelWithoutKeyRefusesEverything() {
+        // 本构建没带 test 公钥（release/update-keys/test.pub 还没入库）：一律拒收，绝不退回正式公钥。
+        assertEquals(
+            MinisignVerifier.Result.NoKeyForChannel,
+            MinisignVerifier.verifyForChannel(writeApk(), sig1, UpdateChannel.Test) { "" },
+        )
+    }
+
     @Test
     fun productionKeynumMismatchIsUnknownSigner() {
         // 生产公钥的 keynum 与测试签名不同——签名者身份对不上必须如实区分，

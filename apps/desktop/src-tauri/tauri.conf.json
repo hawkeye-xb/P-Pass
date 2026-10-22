@@ -69,7 +69,7 @@
     "externalBin": [
       "binaries/ppf-daemon"
     ],
-    "createUpdaterArtifacts": true,
+    "createUpdaterArtifacts": false,
     "windows": {
       "nsis": {
         "languages": ["SimpChinese", "English"],

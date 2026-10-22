@@ -48,7 +48,7 @@ internal fun notesI18nMap(element: JsonElement?): Map<String, String> =
 data class PlatformEntry(
     val url: String,
     val signature: String = "",
-    /** UPD-02: APK 的 sha256（hex）。旧工具产出的 manifest 无此字段 → 空串过渡。 */
+    /** UPD-02: APK 的 sha256（hex）。#1121 起必填：缺了解析成空串，安装前由 [ApkVerifier] 拒绝。 */
     val sha256: String = "",
 )
 

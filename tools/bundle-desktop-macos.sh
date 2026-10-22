@@ -71,29 +71,12 @@ pnpm install --frozen-lockfile
 pnpm tauri build --no-bundle --config "$VERSION_CONFIG"
 
 echo "── 3. tauri bundle (.app)"
-# BUILD-05: tauri.conf.json 有 `createUpdaterArtifacts: true`，所以这一步
-# 末尾一定会去签 updater 包。本地没有 TAURI_SIGNING_PRIVATE_KEY 时它**必然**
-# 失败并让 `pnpm tauri bundle` 非零退出——而 `.app` 其实早已产出。以前
-# `set -e` 在这里当场中断，把下面的「嵌 lib」和「重签」一起跳掉，留下一个
-# 看起来存在、实际因为缺 lib/ 根本起不来的 .app（2026-09-17 真机验证踩到）。
-#
-# 无凭据路径下签名失败是 AGENTS.md 明写的预期行为，不是待修的 bug；问题
-# 只在于它不该连累后面三步。所以：本地容忍，**CI 照旧严格**——有签名密钥
-# 却失败，那是真失败。无论哪条路径，`.app` 不存在一律显式失败。
-set +e
-pnpm tauri bundle --config "$VERSION_CONFIG"
-BUNDLE_RC=$?
-set -e
-if [ "$BUNDLE_RC" -ne 0 ]; then
-  if [ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ] || [ "$IDENTITY" != "-" ]; then
-    echo "FATAL: tauri bundle 失败（退出码 ${BUNDLE_RC}），且本次是带凭据的" \
-         "构建——不容忍，这是真失败。" >&2
-    exit "$BUNDLE_RC"
-  fi
-  echo "warn: tauri bundle 退出码 $BUNDLE_RC —— 无 TAURI_SIGNING_PRIVATE_KEY，" \
-       "updater 签名注定失败，属无凭据路径的预期行为；.app 本体在该步之前" \
-       "已产出，继续。" >&2
-fi
+# #1121：只出 .app（`--bundles app`），严格失败。
+# - tauri 自己的 dmg 用不到（第 6 步按我们的布局自己出 dmg），本地无头时它还会失败；
+# - createUpdaterArtifacts 已关：updater 包由 release.yml 的 Pack updater 从最终 .app
+#   现打，签名在独立的签名步骤做，构建环境不拿更新签名私钥。以前（BUILD-05）这一步
+#   因为本地没有私钥必然失败、只能容忍非零退出，现在没有这个理由了。
+pnpm tauri bundle --bundles app --config "$VERSION_CONFIG"
 
 APP="$DESKTOP/src-tauri/target/release/bundle/macos/P-Pass.app"
 [ -d "$APP" ] || { echo "FATAL: $APP not produced" >&2; exit 1; }

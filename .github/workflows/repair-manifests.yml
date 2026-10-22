@@ -115,7 +115,8 @@ jobs:
             echo "::error::定位不到 APK 或 .app.tar.gz"; exit 1
           fi
           for f in "$APK_L" "$UPD_L"; do
-            npx -y @tauri-apps/cli@2.11.4 signer sign -f /tmp/key -p "" "$f"
+            # #1121：签名器只从 lockfile 安装（锁哈希、不跑安装脚本）
+            "$GITHUB_WORKSPACE/tools/release/signer.sh" sign -f /tmp/key -p "" "$f"
             cp "$f.sig" /tmp/sigs/
           done
 

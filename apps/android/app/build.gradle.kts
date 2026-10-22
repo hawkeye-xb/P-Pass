@@ -47,6 +47,13 @@ android {
                 ?.removePrefix("v")
                 ?: "0.10.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // #1121：更新验签公钥，按通道各一把，构建期从仓库里唯一的来源读：
+        //   stable = 桌面 tauri.conf.json 的 updater pubkey（两端同一把）；
+        //   test   = release/update-keys/test.pub，没有就留空——test 包拒收一切更新
+        //            （宁可装不上，也不拿正式密钥去验 test 包）。
+        // 值是 tauri 格式：base64("untrusted comment: …\n<minisign 公钥>")。
+        buildConfigField("String", "UPDATE_PUBKEY_STABLE", "\"${updatePubkeyStable()}\"")
+        buildConfigField("String", "UPDATE_PUBKEY_TEST", "\"${updatePubkeyTest()}\"")
     }
 
     sourceSets {
@@ -227,4 +234,19 @@ dependencies {
     testImplementation("net.java.dev.jna:jna:5.15.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+}
+
+// #1121：见 defaultConfig 里的 UPDATE_PUBKEY_* 注释。
+fun updatePubkeyStable(): String {
+    val conf = rootProject.file("../desktop/src-tauri/tauri.conf.json")
+    @Suppress("UNCHECKED_CAST")
+    val json = groovy.json.JsonSlurper().parse(conf) as Map<String, Any?>
+    val plugins = json["plugins"] as Map<String, Any?>
+    val updater = plugins["updater"] as Map<String, Any?>
+    return (updater["pubkey"] as String).trim()
+}
+
+fun updatePubkeyTest(): String {
+    val f = rootProject.file("../../release/update-keys/test.pub")
+    return if (f.isFile) f.readText().trim() else ""
 }
