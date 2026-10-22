@@ -35,7 +35,7 @@ done
 
 # 1. 依赖
 for b in python3 qrencode htpasswd nginx curl; do
-  command -v "$b" >/dev/null || { echo "缺依赖: $b（apt-get install -y qrencode apache2-utils nginx curl python3）" >&2; exit 1; }
+  command -v "$b" >/dev/null || { echo "缺依赖: ${b}（apt-get install -y qrencode apache2-utils nginx curl python3）" >&2; exit 1; }
 done
 
 # 2. 页面后端
@@ -51,7 +51,7 @@ systemctl enable --now ppass-review.service
 
 # 等 daemon 写出 ipc.token —— 页面后端要靠它找 socket
 for _ in $(seq 1 50); do [ -s "$IPC_TOKEN" ] && break; sleep 0.2; done
-[ -s "$IPC_TOKEN" ] || { echo "daemon 没写出 $IPC_TOKEN，先看 journalctl -u ppass-review" >&2; exit 1; }
+[ -s "$IPC_TOKEN" ] || { echo "daemon 没写出 ${IPC_TOKEN}，先看 journalctl -u ppass-review" >&2; exit 1; }
 
 # 4. 页面服务（端口写进 unit 之外的地方容易忘，这里直接生成 drop-in）
 install -d -m 755 /etc/systemd/system/ppass-pairpage.service.d
