@@ -26,8 +26,10 @@ ios-bindgen = ["ios-ffi", "uniffi/cli"]
 # ADR-001 / §B.1: iroh is allowed in this crate ONLY. Declared here (not in
 # workspace.dependencies) to keep the isolation visible at a glance.
 iroh = "1"
-tokio = { workspace = true, features = ["rt-multi-thread", "fs", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "fs", "time", "sync"] }
 tokio-util = { version = "0.7", features = ["io"] }
+# #1122：对端地址簿有上限、按最近使用淘汰（已在依赖树里）。
+lru = "0.18"
 jni = { version = "0.21", optional = true }
 libc = { version = "0.2", optional = true }
 futures-core.workspace = true

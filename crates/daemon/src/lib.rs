@@ -2,6 +2,7 @@
 //!
 //! No `unwrap`/`expect` allowed in production code (CI-enforced).
 
+pub mod admission;
 pub mod audit_projection;
 pub mod audit_route;
 pub mod authz;
@@ -16,6 +17,7 @@ pub mod diag_bundle;
 pub mod download;
 pub mod events;
 pub mod flow_delivery;
+pub mod frame_limits;
 pub mod identity;
 pub mod inbox;
 pub mod ipc;

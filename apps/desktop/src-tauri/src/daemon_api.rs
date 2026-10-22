@@ -45,6 +45,12 @@ pub(crate) fn daemon_pairing_start(app: tauri::AppHandle) -> Result<Value, Strin
     forward(&app, "pairing.start", json!({}))
 }
 
+/// #1122：二维码关闭——配对窗口立即关闭（收回未用的令牌）。
+#[tauri::command(rename_all = "snake_case")]
+pub(crate) fn daemon_pairing_stop(app: tauri::AppHandle) -> Result<Value, String> {
+    forward(&app, "pairing.stop", json!({}))
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub(crate) fn daemon_pairing_pending(app: tauri::AppHandle) -> Result<Value, String> {
     forward(&app, "pairing.pending", json!({}))
@@ -67,12 +73,12 @@ pub(crate) fn daemon_pairing_confirm(
 #[tauri::command(rename_all = "snake_case")]
 pub(crate) fn daemon_devices_list(
     app: tauri::AppHandle,
-    include_revoked: bool,
+    include_departed: bool,
 ) -> Result<Value, String> {
     forward(
         &app,
         "devices.list",
-        json!({ "include_revoked": include_revoked }),
+        json!({ "include_departed": include_departed }),
     )
 }
 

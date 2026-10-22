@@ -327,6 +327,29 @@ impl Pairing {
         qr
     }
 
+    /// #1122：配对窗口——二维码显示期间才对未配对的对端开放配对入口。
+    ///
+    /// 窗口开着 = 还有一个没用过、没过期、没被收回的令牌（二维码在显示，或配对串
+    /// 刚复制出去）。另外，已经提交过配对申请的那台设备在申请结束（含结束后的
+    /// 保留期）之前照常放行，否则业主关掉二维码后它就没法轮询自己的结果。
+    pub fn admits(&self, peer: transport::NodeId, now_ms: i64) -> bool {
+        let inner = self.inner.lock().expect("pairing lock");
+        let open = inner
+            .tokens
+            .values()
+            .any(|t| !t.used && now_ms <= t.expires_at);
+        open || inner.tickets.values().any(|t| t.peer == peer)
+    }
+
+    /// #1122：二维码关闭——收回所有还没用掉的令牌，配对窗口立即关闭。已提交的
+    /// 申请不受影响（它们的令牌已经用掉了）。返回收回了几个。
+    pub fn stop(&self) -> usize {
+        let mut inner = self.inner.lock().expect("pairing lock");
+        let before = inner.tokens.len();
+        inner.tokens.retain(|_, t| t.used);
+        before - inner.tokens.len()
+    }
+
     /// NET-10 (#128): accept-then-poll. Validates the token, parks the
     /// request in the owner's queue, records it in the ledger, spawns the
     /// task that waits for the owner — and returns at once.
@@ -798,6 +821,43 @@ mod tests {
                 format!("ppf://pair?node={}&t={}", "ab".repeat(32), "11".repeat(12))
             );
         });
+    }
+
+    /// #1122：配对窗口跟着二维码走——没有令牌时关着；`start` 后开着；令牌过期或
+    /// `stop`（二维码关闭）后立即关上。已提交申请的那台设备在申请结束前照常放行。
+    /// 反证：`admits` 恒 true，第一条与 stop 后那条变红；`stop` 不收回令牌，stop
+    /// 后那条变红；不看 tickets，最后一条变红。
+    #[tokio::test]
+    async fn pairing_window_follows_the_qr_code() {
+        let db = Db::open_in_memory().await.unwrap();
+        let (pairing, _rx) = Pairing::new(db, transport::NodeId([0xAB; 32]), None);
+        let phone = transport::NodeId([0x01; 32]);
+        assert!(!pairing.admits(phone, 1_000), "没有二维码 = 窗口关着");
+
+        pairing.start([0x11; 12], 1_000);
+        assert!(pairing.admits(phone, 1_000), "二维码显示期间开着");
+        assert!(
+            !pairing.admits(phone, 1_000 + TOKEN_TTL_MS + 1),
+            "令牌过期即关"
+        );
+
+        assert_eq!(pairing.stop(), 1);
+        assert!(!pairing.admits(phone, 1_001), "二维码关闭即关");
+
+        // 已提交申请的设备：业主关掉二维码后仍能轮询自己的结果。
+        pairing.start([0x22; 12], 2_000);
+        let req = proto::PairRequest {
+            token: "22".repeat(12),
+            device_name: "phone".into(),
+            ..Default::default()
+        };
+        pairing.submit_request(phone, &req, 2_000).await.unwrap();
+        pairing.stop();
+        assert!(pairing.admits(phone, 2_001), "申请人照常放行");
+        assert!(
+            !pairing.admits(transport::NodeId([0x02; 32]), 2_001),
+            "别的设备不放行"
+        );
     }
 
     #[test]

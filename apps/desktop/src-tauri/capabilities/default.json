@@ -24,6 +24,7 @@
     "allow-daemon-status",
     "allow-daemon-low-space-ack",
     "allow-daemon-pairing-start",
+    "allow-daemon-pairing-stop",
     "allow-daemon-pairing-pending",
     "allow-daemon-pairing-confirm",
     "allow-daemon-devices-list",

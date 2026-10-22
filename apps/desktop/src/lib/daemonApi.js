@@ -8,6 +8,7 @@ export const DAEMON_COMMANDS = Object.freeze({
   status: "daemon_status",
   "low_space.ack": "daemon_low_space_ack",
   "pairing.start": "daemon_pairing_start",
+  "pairing.stop": "daemon_pairing_stop",
   "pairing.pending": "daemon_pairing_pending",
   "pairing.confirm": "daemon_pairing_confirm",
   "devices.list": "daemon_devices_list",

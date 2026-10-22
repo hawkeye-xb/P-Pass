@@ -8,6 +8,7 @@ const APP_COMMANDS: &[&str] = &[
     "daemon_status",
     "daemon_low_space_ack",
     "daemon_pairing_start",
+    "daemon_pairing_stop",
     "daemon_pairing_pending",
     "daemon_pairing_confirm",
     "daemon_devices_list",

@@ -118,6 +118,16 @@ daemon 是 `config.toml` 与诊断包的唯一写者：照片库位置只经 IPC
 - `devices.list` 一行 = 档案 + 当前配对记录，字段 `paired` / `departed_by` / `departed_at`；默认只给主列表的行（`Removal::is_listed`），`include_departed=true` 连业主移除的也给。
 - 测试：`device_projection::row_state_priority`、`ipc_flow::device_rows_carry_daemon_conclusions_and_status_counts_match_the_list`。
 
+### 2.8 配对入口按需开放与资源上限（#1122）
+
+- 准入（`daemon::admission::predicate`，装在 transport 的 iroh `EndpointHooks::after_handshake` 上，读任何请求之前判定）：有配对记录的设备放行全部协议；没有的，只在配对窗口内放行控制面；其余握手完成即被拒，关闭码 `NOT_PAIRED_CLOSE_CODE` = 401（`not_paired`）。只管入站，桌面出站拉取不受影响。
+- 配对窗口（`Pairing::admits`）：有一个没用过、没过期的令牌（二维码显示中或配对串刚复制出去），或这台设备自己的配对申请尚未结束（含结束后的保留期）。壳关掉二维码弹窗时调 IPC `pairing.stop`（收回所有未用令牌），窗口立即关闭。
+- 请求帧上限（`daemon::frame_limits`）：读帧前按配对状态定——未配对 `PAIRING_FRAME_MAX` = 8 KiB，viewer `METHOD_FRAME_DEFAULT` = 64 KiB，member `MANIFEST_FRAME_MAX` = 4 MiB；解码后按方法核对：默认 64 KiB，`backup.presence` 128 KiB、`flow.audit_submit` 1 MiB、`backup.manifest` 4 MiB。超限回 `bad_request`。下载面与订阅流上客户端发来的帧按 8 KiB。
+- 未配对请求按设备限速（`governor`，每秒 5 个、突发 10 个），超速的流不读不答；已配对设备不限速。
+- 读帧（`BiStream::recv_frame_max`）：声明长度超上限直接拒、不读正文；缓冲随实际收到的数据增长（每次至多 64 KiB），不按声明长度预分配；正文须在 `FRAME_READ_TIMEOUT` = 30 s 内读完；读正文期间占用全进程在途字节预算 `FRAME_BUDGET_BYTES` = 64 MiB。
+- 每条连接对端可同时打开的双向流 `MAX_CONCURRENT_BIDI_STREAMS` = 16（iroh/quinn 传输参数）。
+- 按设备增长的表有上限、按最近使用淘汰（`lru`）：transport 对端地址簿 `PEER_BOOK_CAPACITY` = 1024，版本不符登记 `OUTDATED_PEERS_CAPACITY` = 1024；诊断记录除 30 天时间环外最多 `DIAG_MAX_ROWS` = 10000 条。
+
 ## 3 Flow 收件（手机 → 桌面）
 
 模块 `daemon::flow_delivery::FlowDelivery`，与旧批量管线 `daemon::backup` 独立（§11.3）。跨端语义见 ARCH-01 与 contract-413。

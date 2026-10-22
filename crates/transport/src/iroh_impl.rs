@@ -15,7 +15,7 @@ use iroh::endpoint::{presets, Connection, ReadExactError, RecvStream, SendStream
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey, TransportAddr};
 
 use crate::conninfo::{classify, status_of_live, ConnInfo, ConnectionStatus, PathFacts};
-use crate::{NodeId, Result, Transport, TransportError, MAX_FRAME};
+use crate::{NodeId, Result, Transport, TransportError};
 
 /// Construction inputs, mapped from the daemon `Config` (T-004): the daemon
 /// passes `Config.relay_urls` in here. Address lookup (发现) stays on n0
@@ -298,7 +298,7 @@ type ConnectGate = Arc<tokio::sync::Mutex<()>>;
 pub struct IrohTransport {
     ep: Endpoint,
     /// Peer address book, fed by [`Self::add_peer`] (pairing/tickets).
-    peers: Arc<Mutex<HashMap<NodeId, EndpointAddr>>>,
+    peers: Arc<Mutex<lru::LruCache<NodeId, EndpointAddr>>>,
     connections: Arc<Mutex<ConnectionCache>>,
     /// One gate per `(peer, ALPN)`: serializes cache misses for the SAME key
     /// so concurrent requests cannot perform duplicate handshakes before
@@ -317,6 +317,54 @@ pub struct IrohTransport {
     /// 覆盖；`close_peer` 要关掉一台设备的**全部**连接，靠的是这张表（三星真机
     /// E3 抓到：订阅开着，`close_peer` 却一条都没找到）。
     inbound: InboundConnections,
+    /// #1122：入站连接的准入判据（见 [`Self::set_admission`]）。
+    admission: AdmissionSlot,
+}
+
+/// #1122：入站连接准入判据：`(对端, ALPN) -> 放行？`。未设置 = 全部放行。
+pub type Admission = Arc<dyn Fn(NodeId, &[u8]) -> bool + Send + Sync>;
+
+#[derive(Clone, Default)]
+struct AdmissionSlot(Arc<std::sync::RwLock<Option<Admission>>>);
+
+impl AdmissionSlot {
+    fn admits(&self, peer: NodeId, alpn: &[u8]) -> bool {
+        match self.0.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            Some(admit) => admit(peer, alpn),
+            None => true,
+        }
+    }
+}
+
+/// 装在端点上的 iroh 钩子：只管入站（我方是服务端）的连接，出站一律放行。
+#[derive(Clone)]
+struct AdmissionHook(AdmissionSlot);
+
+impl std::fmt::Debug for AdmissionHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AdmissionHook")
+    }
+}
+
+impl iroh::endpoint::EndpointHooks for AdmissionHook {
+    fn after_handshake<'a>(
+        &'a self,
+        conn: &'a Connection,
+    ) -> impl std::future::Future<Output = iroh::endpoint::AfterHandshakeOutcome> + Send + 'a {
+        let outcome = if conn.side() == iroh::endpoint::Side::Server
+            && !self
+                .0
+                .admits(NodeId(*conn.remote_id().as_bytes()), conn.alpn())
+        {
+            iroh::endpoint::AfterHandshakeOutcome::Reject {
+                error_code: crate::NOT_PAIRED_CLOSE_CODE.into(),
+                reason: b"not_paired".to_vec(),
+            }
+        } else {
+            iroh::endpoint::AfterHandshakeOutcome::Accept
+        };
+        async move { outcome }
+    }
 }
 
 type InboundConnections = Arc<Mutex<HashMap<usize, (NodeId, Connection)>>>;
@@ -361,8 +409,17 @@ impl IrohTransport {
                 .map_err(|e| TransportError::Bind(e.to_string()))?;
         }
 
+        // #1122：每条连接上对端可同时打开的双向流数（iroh/quinn 自带的传输参数）。
+        let quic = iroh::endpoint::QuicTransportConfig::builder()
+            .max_concurrent_bidi_streams(crate::MAX_CONCURRENT_BIDI_STREAMS.into())
+            .build();
+        // #1122：入站连接握手完成（已知对端 NodeId 与 ALPN）即按准入判据放行或拒绝，
+        // 用 iroh 自带的 EndpointHooks::after_handshake——被拒的不读任何请求。
+        let admission = AdmissionSlot::default();
         let alpns = cfg.alpns.iter().map(|a| a.as_bytes().to_vec()).collect();
         let ep = builder
+            .transport_config(quic)
+            .hooks(AdmissionHook(admission.clone()))
             .alpns(alpns)
             .bind()
             .await
@@ -372,7 +429,10 @@ impl IrohTransport {
         spawn_connection_reaper(Arc::downgrade(&connections));
         Ok(Self {
             ep,
-            peers: Arc::default(),
+            peers: Arc::new(Mutex::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(crate::PEER_BOOK_CAPACITY).expect("nonzero"),
+            ))),
+            admission,
             connections,
             connect_gates: Arc::default(),
             blobs_handler: Arc::default(),
@@ -402,7 +462,7 @@ impl IrohTransport {
     /// with [`Transport::connect`].
     pub fn add_peer(&self, addr: PeerAddr) -> NodeId {
         let id = addr.node_id();
-        self.peers.lock().expect("peers lock").insert(id, addr.0);
+        self.peers.lock().expect("peers lock").put(id, addr.0);
         id
     }
 
@@ -493,6 +553,12 @@ impl IrohTransport {
             }
         }
         seen.len()
+    }
+
+    /// #1122：设置入站连接的准入判据。握手完成后、读任何请求之前判定；被拒的
+    /// 连接收到 [`crate::NOT_PAIRED_CLOSE_CODE`]，不登记地址、不进连接缓存。
+    pub fn set_admission(&self, admit: Admission) {
+        *self.admission.0.write().unwrap_or_else(|e| e.into_inner()) = Some(admit);
     }
 
     /// Crate-internal endpoint access (blobs.rs shares the endpoint).
@@ -668,7 +734,7 @@ impl Transport for IrohTransport {
                             id: conn.remote_id(),
                             addrs,
                         };
-                        peers.lock().expect("peers lock").insert(peer, ep_addr);
+                        peers.lock().expect("peers lock").put(peer, ep_addr);
                     }
                     // Data-plane connections go straight to the blobs
                     // handler; only ctrl-plane connections reach the app.
@@ -797,6 +863,15 @@ pub struct BiStream {
     recv: RecvStream,
 }
 
+/// #1122：读帧正文时每次最多读这么多（缓冲按实际收到的数据增长）。
+const READ_CHUNK: usize = 64 * 1024;
+
+/// #1122：全进程的在途帧字节预算（见 [`crate::FRAME_BUDGET_BYTES`]）。
+fn frame_budget() -> &'static tokio::sync::Semaphore {
+    static BUDGET: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    BUDGET.get_or_init(|| tokio::sync::Semaphore::new(crate::FRAME_BUDGET_BYTES as usize))
+}
+
 impl BiStream {
     /// Send one complete frame, as produced by `proto::codec::encode`
     /// (the buffer already starts with its 4-byte LE length header).
@@ -810,6 +885,27 @@ impl BiStream {
     /// Receive one complete frame (header + payload), ready for
     /// `proto::codec::decode`. `Ok(None)` = peer finished cleanly.
     pub async fn recv_frame(&mut self) -> Result<Option<Vec<u8>>> {
+        self.recv_frame_max(crate::MAX_FRAME).await
+    }
+
+    /// #1122：读一帧，正文不超过 `max` 字节。
+    ///
+    /// - 不按对端声明的长度预分配：缓冲随实际收到的数据增量增长（每次最多
+    ///   [`READ_CHUNK`]），声明了 16 MiB 却只发几个字节的对端只占几个字节。
+    /// - 声明长度超过 `max` 直接拒绝，一个字节的正文都不读。
+    /// - 正文必须在 [`crate::FRAME_READ_TIMEOUT`] 内读完（含等待在途字节预算），
+    ///   慢速发送者超时即放弃这条流。
+    /// - 读正文期间占用全进程在途字节预算 [`crate::FRAME_BUDGET_BYTES`]，读完归还。
+    pub async fn recv_frame_max(&mut self, max: u32) -> Result<Option<Vec<u8>>> {
+        self.recv_frame_within(max, crate::FRAME_READ_TIMEOUT).await
+    }
+
+    /// [`Self::recv_frame_max`] with an explicit body deadline (tests use a short one).
+    pub async fn recv_frame_within(
+        &mut self,
+        max: u32,
+        deadline: std::time::Duration,
+    ) -> Result<Option<Vec<u8>>> {
         let mut header = [0u8; 4];
         match self.recv.read_exact(&mut header).await {
             Ok(()) => {}
@@ -817,22 +913,37 @@ impl BiStream {
             Err(e) => return Err(TransportError::Io(e.to_string())),
         }
         let len = u32::from_le_bytes(header);
-        if len > MAX_FRAME {
-            return Err(TransportError::FrameTooLarge(len));
+        let max = max.min(crate::MAX_FRAME);
+        if len > max {
+            return Err(TransportError::FrameTooLarge { len, max });
         }
-        let mut frame = vec![0u8; 4 + len as usize];
-        frame[..4].copy_from_slice(&header);
-        self.recv
-            .read_exact(&mut frame[4..])
+        let recv = &mut self.recv;
+        let body = async move {
+            let _budget = frame_budget()
+                .acquire_many(len.max(1))
+                .await
+                .map_err(|e| TransportError::Io(e.to_string()))?;
+            let mut frame = Vec::with_capacity(4 + (len as usize).min(READ_CHUNK));
+            frame.extend_from_slice(&header);
+            let mut chunk = vec![0u8; READ_CHUNK.min(len as usize)];
+            while frame.len() < 4 + len as usize {
+                let want = (4 + len as usize - frame.len()).min(chunk.len());
+                match recv.read(&mut chunk[..want]).await {
+                    Ok(Some(n)) => frame.extend_from_slice(&chunk[..n]),
+                    Ok(None) => {
+                        return Err(TransportError::TruncatedFrame {
+                            expected: len as usize,
+                            got: frame.len() - 4,
+                        })
+                    }
+                    Err(e) => return Err(TransportError::Io(e.to_string())),
+                }
+            }
+            Ok(Some(frame))
+        };
+        tokio::time::timeout(deadline, body)
             .await
-            .map_err(|e| match e {
-                ReadExactError::FinishedEarly(got) => TransportError::TruncatedFrame {
-                    expected: len as usize,
-                    got,
-                },
-                e => TransportError::Io(e.to_string()),
-            })?;
-        Ok(Some(frame))
+            .map_err(|_| TransportError::FrameTimeout(deadline))?
     }
 
     /// Read the next chunk of raw (unframed) bytes — a raw-stream plane's

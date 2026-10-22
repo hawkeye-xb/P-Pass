@@ -27,7 +27,8 @@ pub mod redact;
 pub use blobs::{Blobs, PeerGate};
 pub use conninfo::{ConnInfo, ConnectionStatus, PathKind};
 pub use iroh_impl::{
-    node_id_from_secret_key, BiStream, Incoming, IrohTransport, PeerAddr, TransportConfig,
+    node_id_from_secret_key, Admission, BiStream, Incoming, IrohTransport, PeerAddr,
+    TransportConfig,
 };
 pub use pair_link::{parse_pair_link, PairLink};
 /// IOS-05 (#312)：内核改名为平台中立的 [`BlobsProvider`] 之前的名字。现有
@@ -136,8 +137,12 @@ pub enum TransportError {
     #[error("stream I/O: {0}")]
     Io(String),
 
-    #[error("frame too large: {0} bytes (max {MAX_FRAME})")]
-    FrameTooLarge(u32),
+    #[error("frame too large: {len} bytes (max {max})")]
+    FrameTooLarge { len: u32, max: u32 },
+
+    /// #1122：一帧在 [`FRAME_READ_TIMEOUT`] 内没读完（慢速发送者）。
+    #[error("frame not received within {0:?}")]
+    FrameTimeout(std::time::Duration),
 
     #[error("truncated frame: expected {expected} payload bytes, got {got}")]
     TruncatedFrame { expected: usize, got: usize },
@@ -155,6 +160,26 @@ pub type Result<T> = std::result::Result<T, TransportError>;
 /// MAX_PAYLOAD (16 MiB) — kept as a local constant because transport must
 /// not depend on proto (dependency direction: daemon wires them together).
 pub const MAX_FRAME: u32 = 16 * 1024 * 1024;
+
+/// #1122：一帧从读到长度头到读完正文的时限。慢速发送者超时即放弃这条流——
+/// 它占着的在途字节预算随之释放。等下一帧的长度头不计时（不分配任何缓冲）。
+pub const FRAME_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// #1122：全进程同时在读的帧正文合计上限（字节）。每读一帧先按它声明的长度
+/// 占预算、读完归还；预算用尽时后来的读取排队（受 [`FRAME_READ_TIMEOUT`] 约束）。
+/// 不小于 [`MAX_FRAME`]，保证单个最大帧总能读。
+pub const FRAME_BUDGET_BYTES: u32 = 64 * 1024 * 1024;
+
+/// #1122：每条连接上对端可同时打开的双向流上限（QUIC 传输参数，iroh/quinn
+/// 自带）。最坏内存 ≈ 流数 × 每流接收窗口，靠它与连接接收窗口一起封顶。
+pub const MAX_CONCURRENT_BIDI_STREAMS: u32 = 16;
+
+/// #1122：对端地址簿（入站拨号方登记的地址）的容量，超出按最近使用淘汰。
+pub const PEER_BOOK_CAPACITY: usize = 1024;
+
+/// #1122：接受连接时因为「没有配对记录、也不在配对窗口内」被拒的 QUIC 关闭码。
+/// 关闭帧在 TLS 握手之后发出，是本机身份认证过的「未配对」。
+pub const NOT_PAIRED_CLOSE_CODE: u32 = 401;
 
 /// 详细设计 §3.1 —— trait 签名逐字实施（对冲 iroh 风险的瘦抽象）。
 ///

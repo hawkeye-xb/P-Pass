@@ -1567,6 +1567,7 @@ pub fn run() {
             daemon_api::daemon_status,
             daemon_api::daemon_low_space_ack,
             daemon_api::daemon_pairing_start,
+            daemon_api::daemon_pairing_stop,
             daemon_api::daemon_pairing_pending,
             daemon_api::daemon_pairing_confirm,
             daemon_api::daemon_devices_list,

@@ -494,6 +494,14 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(1);
     }
     let _ = transport_slot.set(transport.clone());
+    // #1122：配对入口按需开放。握手完成即按 NodeId 判定（iroh after_handshake）：
+    // 有配对记录的设备放行；没有的，只在配对窗口内（二维码显示中，或它自己的申请
+    // 未结束）放行控制面。其余在读任何请求之前就被拒（关闭码 401 not_paired）。
+    transport.set_admission(daemon::admission::predicate(
+        db.clone(),
+        pairing.clone(),
+        unix_ms_now,
+    ));
     // Wait for the home relay before announcing anything: a QR issued
     // in the first seconds otherwise carries a bare LAN address and
     // cross-network phones can never reach us (真机教训 T-054).

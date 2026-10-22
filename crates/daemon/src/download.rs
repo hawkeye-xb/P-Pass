@@ -53,7 +53,11 @@ impl DownloadPlane {
         stream: &mut transport::BiStream,
         outdated: &OutdatedPeers,
     ) -> bool {
-        let req = match stream.recv_frame().await {
+        // #1122：下载请求只带一个 hash，几百字节足够。
+        let req = match stream
+            .recv_frame_max(crate::frame_limits::PAIRING_FRAME_MAX)
+            .await
+        {
             Ok(Some(frame)) => match proto::codec::decode::<Req>(&frame) {
                 Ok(req) => req,
                 Err(_) => return self.reject(stream, Reason::BadRequest).await,

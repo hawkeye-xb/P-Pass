@@ -90,10 +90,24 @@ async fn denial_diag_is_visible_immediately_every_time() {
     let (dtp, daddr) = start_daemon(db.clone()).await;
     let ctp = client().await;
     ctp.add_peer(daddr);
+    // #1122：未配对的对端按设备限速，连发 300 次会被限速丢流（不回应答）。
+    // 用已配对的 viewer 调它无权的方法——同样每次都写诊断、回拒绝，竞态检测不变。
+    db.accept_pairing(
+        &ctp.node_id().0,
+        "viewer",
+        &Pairing {
+            id: "v".into(),
+            node_id: ctp.node_id().0.to_vec(),
+            role: Role::Viewer,
+            paired_at: 1,
+        },
+    )
+    .await
+    .unwrap();
     let baseline = db.list_diag(1000).await.unwrap().len();
 
     for i in 0..300 {
-        let resp = call(&ctp, dtp.node_id(), "timeline.page").await;
+        let resp = call(&ctp, dtp.node_id(), "backup.begin").await;
         assert!(!resp.ok, "iter {i}: still denied");
         let events = db.list_diag(1000).await.unwrap();
         assert_eq!(
@@ -109,7 +123,7 @@ async fn denial_diag_is_visible_immediately_every_time() {
                     .detail
                     .as_deref()
                     .unwrap_or("")
-                    .contains("timeline.page"),
+                    .contains("backup.begin"),
             "iter {i}: newest event must be this denial: {newest:?}"
         );
     }
@@ -317,4 +331,150 @@ async fn owner_revoke_through_the_single_entry_closes_the_phones_connections() {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
     assert!(closed, "撤销后必须主动关掉与手机的连接");
+}
+
+/// #1122：配对入口按需开放（真实 iroh 端点 + 准入钩子）。
+/// - 平时：未配对的手机连 hello 都发不出去（握手后即被拒，服务端不读请求）。
+/// - 二维码显示（pairing.start）期间：放行，能 hello。
+/// - 二维码关闭（pairing.stop）：立即关上。
+/// - 已配对的设备任何时候都放行。
+/// 反证：main 不装判据（或判据恒放行），第一段「拿不到应答」变红；`stop` 不收回
+/// 令牌，最后一段变红。
+#[tokio::test(flavor = "multi_thread")]
+async fn the_pairing_door_opens_only_while_the_qr_code_is_shown() {
+    let db = Db::open_in_memory().await.unwrap();
+    let dtp = IrohTransport::bind(TransportConfig::loopback(vec![transport::ALPN_CTRL.into()]))
+        .await
+        .unwrap();
+    let (pairing, _rx) = daemon::Pairing::new(db.clone(), dtp.node_id(), None);
+    dtp.set_admission(daemon::admission::predicate(
+        db.clone(),
+        pairing.clone(),
+        || 1_000,
+    ));
+    let router = Router::new(db.clone(), "test-daemon").with_pairing(pairing.clone());
+    let served = dtp.clone();
+    tokio::spawn(async move { router.serve(&served).await });
+
+    let try_hello = |tp: IrohTransport, daemon: transport::NodeId| async move {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async move {
+            let mut s = tp.connect(daemon, transport::ALPN_CTRL).await.ok()?;
+            let req = Req {
+                id: "h".into(),
+                method: "hello".into(),
+                ..Default::default()
+            };
+            s.send_frame(&proto::codec::encode(&req).ok()?).await.ok()?;
+            s.finish().ok()?;
+            let frame = s.recv_frame().await.ok()??;
+            proto::codec::decode::<Resp>(&frame).ok()
+        })
+        .await
+        .expect("must not hang")
+    };
+
+    // 平时：拿不到任何应答。
+    let stranger = client().await;
+    stranger.add_peer(dtp.local_addr());
+    assert!(
+        try_hello(stranger.clone(), dtp.node_id()).await.is_none(),
+        "窗口外未配对：连 hello 都不行"
+    );
+
+    // 二维码显示期间：能 hello（新端点，避免复用刚被拒的连接）。
+    pairing.start([0x33; 12], 1_000);
+    let phone = client().await;
+    phone.add_peer(dtp.local_addr());
+    let r = try_hello(phone.clone(), dtp.node_id())
+        .await
+        .expect("窗口内放行");
+    assert!(r.ok);
+
+    // 二维码关闭：立即关上。
+    assert_eq!(pairing.stop(), 1);
+    let late = client().await;
+    late.add_peer(dtp.local_addr());
+    assert!(
+        try_hello(late, dtp.node_id()).await.is_none(),
+        "关闭后又拒绝"
+    );
+
+    // 已配对：任何时候都放行。
+    db.accept_pairing(
+        &phone.node_id().0,
+        "phone",
+        &Pairing {
+            id: "p".into(),
+            node_id: phone.node_id().0.to_vec(),
+            role: Role::Member,
+            paired_at: 1,
+        },
+    )
+    .await
+    .unwrap();
+    let again = client().await; // 同一身份需要新连接；用原 phone 端点重连
+    drop(again);
+    phone.close_peer(dtp.node_id());
+    let r = try_hello(phone, dtp.node_id()).await.expect("已配对放行");
+    assert_eq!(r.result.unwrap()["pairing_id"], "p");
+}
+
+/// #1122：配对窗口内，未配对的对端按设备限速——短时间连发远超配额的请求，
+/// 超出的流不读、不答；已配对设备不受这个限速。
+/// 反证：路由不调 unpaired_limiter（或限速恒放行），30 个全有应答 ⇒ 变红。
+#[tokio::test(flavor = "multi_thread")]
+async fn unpaired_requests_are_rate_limited_in_the_router() {
+    let db = Db::open_in_memory().await.unwrap();
+    let (dtp, daddr) = start_daemon(db.clone()).await;
+    let stranger = client().await;
+    stranger.add_peer(daddr.clone());
+    let mut answered = 0;
+    for _ in 0..30 {
+        let attempt = async {
+            let mut s = stranger
+                .connect(dtp.node_id(), transport::ALPN_CTRL)
+                .await
+                .ok()?;
+            let req = Req {
+                id: "h".into(),
+                method: "hello".into(),
+                ..Default::default()
+            };
+            s.send_frame(&proto::codec::encode(&req).ok()?).await.ok()?;
+            s.finish().ok()?;
+            s.recv_frame().await.ok()?
+        };
+        if tokio::time::timeout(std::time::Duration::from_secs(2), attempt)
+            .await
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            answered += 1;
+        }
+    }
+    assert!(
+        answered <= 15,
+        "超出配额的请求必须被丢：answered={answered}"
+    );
+    assert!(answered >= 5, "配额内的照常应答：answered={answered}");
+
+    // 已配对设备不受限速。
+    let member = client().await;
+    member.add_peer(daddr);
+    db.accept_pairing(
+        &member.node_id().0,
+        "m",
+        &Pairing {
+            id: "m".into(),
+            node_id: member.node_id().0.to_vec(),
+            role: Role::Member,
+            paired_at: 1,
+        },
+    )
+    .await
+    .unwrap();
+    for _ in 0..30 {
+        assert!(call(&member, dtp.node_id(), "hello").await.ok);
+    }
 }

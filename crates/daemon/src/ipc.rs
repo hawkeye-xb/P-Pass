@@ -1193,6 +1193,11 @@ impl IpcServer {
                 let qr = self.pairing.start(token, now_ms());
                 Resp::ok(id, serde_json::json!({ "qr": qr }))
             }
+            // #1122：二维码关闭 / 配对弹窗关掉——收回未用的令牌，配对窗口立即关闭。
+            "pairing.stop" => {
+                let revoked = self.pairing.stop();
+                Resp::ok(id, serde_json::json!({ "revoked_tokens": revoked }))
+            }
             "pairing.confirm" => {
                 let accept = req
                     .params

@@ -9,7 +9,6 @@
 //! ([`OutdatedPeers::check`]). An incompatible peer gets `VERSION_MISMATCH`
 //! and nothing else happens — no state is written.
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -57,14 +56,33 @@ pub const PAIR_CANCEL_CAPABILITY: &str = "pair.cancel.v1";
 /// Written by the ctrl plane and the download plane, read by the IPC device
 /// list (`needs_update`). Cleared for a peer the moment it sends a
 /// compatible request; a daemon restart forgets it until the next probe.
-#[derive(Clone, Default)]
+///
+/// #1122：容量 [`OUTDATED_PEERS_CAPACITY`]，按最近使用淘汰——按设备增长的表一律有上限。
+#[derive(Clone)]
 pub struct OutdatedPeers {
-    inner: Arc<Mutex<HashMap<[u8; 32], Reason>>>,
+    inner: Arc<Mutex<lru::LruCache<[u8; 32], Reason>>>,
+}
+
+/// #1122：版本不符登记表的容量。
+pub const OUTDATED_PEERS_CAPACITY: usize = 1024;
+
+impl Default for OutdatedPeers {
+    fn default() -> Self {
+        Self::with_capacity(OUTDATED_PEERS_CAPACITY)
+    }
 }
 
 impl OutdatedPeers {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn with_capacity(cap: usize) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(cap).expect("nonzero capacity"),
+            ))),
+        }
     }
 
     /// The version check for one request from `peer`. `Err` is the error to
@@ -77,7 +95,7 @@ impl OutdatedPeers {
         let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         match verdict {
             Ok(()) => {
-                map.remove(&peer.0);
+                map.pop(&peer.0);
                 Ok(())
             }
             Err(reason) => {
@@ -87,7 +105,7 @@ impl OutdatedPeers {
                 };
                 // One line per change, not per request: an old phone probes
                 // every ~30 s in the foreground.
-                if map.insert(peer.0, reason.clone()).as_ref() != Some(&reason) {
+                if map.put(peer.0, reason.clone()).as_ref() != Some(&reason) {
                     tracing::info!(
                         "#1070: version mismatch peer={peer:?} peer_ver={} peer_min={} → {reason}",
                         peer_versions.ver,
@@ -108,7 +126,7 @@ impl OutdatedPeers {
     pub fn needs_update(&self, node_id: &[u8]) -> Option<&'static str> {
         let map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let key: [u8; 32] = node_id.try_into().ok()?;
-        map.get(&key).map(|reason| match reason {
+        map.peek(&key).map(|reason| match reason {
             Reason::DesktopOutdated => "desktop",
             _ => "phone",
         })
@@ -153,6 +171,8 @@ pub struct Router {
     now: std::sync::Arc<dyn Fn() -> i64 + Send + Sync>,
     /// #1119：手机断开时关掉与它的全部连接。未注入 = 不关（测试 / 单组件构造）。
     peer_closer: Option<crate::unpair::PeerCloser>,
+    /// #1122：没有配对记录的对端（只可能在配对窗口内进来）按设备限速。
+    unpaired_limiter: crate::frame_limits::UnpairedLimiter,
 }
 
 impl Router {
@@ -170,6 +190,7 @@ impl Router {
             outdated: OutdatedPeers::new(),
             now: std::sync::Arc::new(unix_ms_now),
             peer_closer: None,
+            unpaired_limiter: crate::frame_limits::unpaired_limiter(),
         }
     }
 
@@ -297,17 +318,36 @@ impl Router {
     /// One request/response on one stream. A rejected stream does not carry
     /// on; the caller may accept another stream, which must pass authz again.
     async fn serve_stream(&self, peer: transport::NodeId, stream: &mut BiStream) -> bool {
-        let req = match stream.recv_frame().await {
+        // #1117：授权只读配对记录的内存副本，不查库。#1122：读帧之前就用它定上限、
+        // 给未配对的对端限速——超速的流一个字节都不读。
+        let pairing = self.db.active_pairing(&peer.0);
+        if pairing.is_none() && self.unpaired_limiter.check_key(&peer).is_err() {
+            return false;
+        }
+        let cap = crate::frame_limits::pre_read_cap(pairing.as_ref());
+        let (req, frame_len) = match stream.recv_frame_max(cap).await {
             Ok(Some(frame)) => match proto::codec::decode::<Req>(&frame) {
-                Ok(req) => req,
+                Ok(req) => (req, frame.len()),
                 Err(_) => {
                     let resp = Resp::err(String::new(), RespError::new(Reason::BadRequest));
                     let _ = self.send(stream, &resp).await;
                     return false;
                 }
             },
-            _ => return false, // clean finish or broken stream
+            Ok(None) => return false, // clean finish
+            Err(transport::TransportError::FrameTooLarge { .. }) => {
+                let resp = Resp::err(String::new(), RespError::new(Reason::BadRequest));
+                let _ = self.send(stream, &resp).await;
+                return false;
+            }
+            Err(_) => return false, // broken stream or slow sender (#1122)
         };
+        // #1122：按方法核对——只有确实需要大消息的方法才放宽。
+        if frame_len > crate::frame_limits::method_cap(&req.method) as usize + 4 {
+            let resp = Resp::err(req.id.clone(), RespError::new(Reason::BadRequest));
+            let _ = self.send(stream, &resp).await;
+            return false;
+        }
 
         // #1070: version first — an incompatible peer is told to update and
         // nothing else is looked at or written (not even a diag row: an old
@@ -316,9 +356,6 @@ impl Router {
             let _ = self.send(stream, &Resp::err(req.id.clone(), error)).await;
             return false;
         }
-
-        // #1117：授权只读配对记录的内存副本，不查库。
-        let pairing = self.db.active_pairing(&peer.0);
 
         match authz::check(pairing.as_ref(), &req.method) {
             Decision::Deny { reason } => {
@@ -410,7 +447,7 @@ impl Router {
         let end_reason: String = loop {
             tokio::select! {
                 _ = token.cancelled() => break "revoked".to_string(),
-                frame = stream.recv_frame(), if client_send_open => {
+                frame = stream.recv_frame_max(crate::frame_limits::PAIRING_FRAME_MAX), if client_send_open => {
                     match frame {
                         Ok(Some(_)) => continue, // 这条流上的多余数据——忽略
                         Ok(None) => { client_send_open = false; continue; }
@@ -1085,4 +1122,34 @@ fn unix_ms_now() -> i64 {
 /// Await one item from a pinned stream (futures-core only, no StreamExt).
 async fn next_item<S: Stream>(mut stream: std::pin::Pin<&mut S>) -> Option<S::Item> {
     std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn newer_peer_req() -> Req {
+        Req {
+            id: "h".into(),
+            method: "hello".into(),
+            ver: PROTO_VER + 1,
+            min_ver: PROTO_VER + 1,
+            ..Default::default()
+        }
+    }
+
+    /// #1122：版本不符登记表有上限，按最近使用淘汰，不会被大量不同 NodeId 撑大。
+    /// 反证：改回无上限的 HashMap，第三台登记后第一台仍在 ⇒ 变红。
+    #[test]
+    fn outdated_peers_are_bounded_lru() {
+        let peers = OutdatedPeers::with_capacity(2);
+        for n in 1..=3u8 {
+            assert!(peers
+                .check(transport::NodeId([n; 32]), &newer_peer_req())
+                .is_err());
+        }
+        assert_eq!(peers.needs_update(&[1u8; 32]), None, "最旧的被淘汰");
+        assert_eq!(peers.needs_update(&[3u8; 32]), Some("desktop"));
+        assert_eq!(peers.inner.lock().unwrap().len(), 2);
+    }
 }
