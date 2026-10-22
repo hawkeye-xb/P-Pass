@@ -327,6 +327,32 @@ mod tests {
         );
     }
 
+    /// 电脑一侧的 NodeId 错同样必败：手机以为自己在跟二维码那台电脑说话，实际对端换了身份。
+    #[test]
+    fn a_wrong_desktop_node_id_fails() {
+        let mut other = DESK;
+        other[31] ^= 1;
+        let (p, msg_a) = PhoneStart::start("123456", &TOKEN, PHONE, DESK).unwrap();
+        let (d, msg_b) = Desktop::respond("123456", &TOKEN, PHONE, other, &msg_a).unwrap();
+        let (_pc, ca) = p.finish(&msg_b).unwrap();
+        assert_eq!(d.verify(&ca), Err(PakeError::ConfirmMismatch));
+    }
+
+    /// 两条确认消息不能互换（反射）：手机自己的 cA 当 cB 递回来不被接受，电脑的 cB 当 cA 也不行。
+    #[test]
+    fn confirmations_cannot_be_reflected() {
+        let (p, msg_a) = PhoneStart::start("123456", &TOKEN, PHONE, DESK).unwrap();
+        let (d, msg_b) = Desktop::respond("123456", &TOKEN, PHONE, DESK, &msg_a).unwrap();
+        let (pc, ca) = p.finish(&msg_b).unwrap();
+        assert_eq!(pc.verify(&ca), Err(PakeError::ConfirmMismatch));
+        let cb = d.verify(&ca).unwrap();
+        let (p2, msg_a2) = PhoneStart::start("123456", &TOKEN, PHONE, DESK).unwrap();
+        let (d2, _msg_b2) = Desktop::respond("123456", &TOKEN, PHONE, DESK, &msg_a2).unwrap();
+        drop(p2);
+        assert_eq!(d2.verify(&cb), Err(PakeError::ConfirmMismatch));
+        assert_ne!(ca, cb);
+    }
+
     /// 令牌绑定：同一个码，拿到别的二维码令牌的会话里也对不上。令牌同时在口令和确认消息的 transcript
     /// 里，任一处都足以让它对不上。反证（已实测）：两处都去掉才变红，只去掉一处仍然对不上。
     #[test]
