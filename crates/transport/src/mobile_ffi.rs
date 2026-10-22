@@ -1,18 +1,22 @@
-//! UniFFI binding #2 (IOS-06 #313): what the iOS app links from Rust, as one
-//! static library inside one XCFramework. Built only with the `ios-ffi`
-//! feature by `tools/build-ios-transport-xcframework.sh`.
+//! UniFFI binding shared by both phones (IOS-06 #313, #1124): the iOS app links
+//! it as one static library inside one XCFramework (Swift bindings), Android
+//! loads the same exports from `libtransport.so` (Kotlin bindings). Built only
+//! with the `mobile-ffi` feature, by `tools/build-ios-transport-xcframework.sh`
+//! and `tools/build-android-iroh-blobs-bridge.sh`.
 //!
-//! Five surfaces, none of which iOS re-implements:
+//! Five surfaces, none of which either phone re-implements:
 //! - [`Provider`]: the same one-lease iroh-blobs provider kernel the Android
-//!   JNI binding wraps ([`crate::provider::BlobsProvider`]).
+//!   JNI binding wraps ([`crate::provider::BlobsProvider`]; Android still uses
+//!   the JNI wrapper until #1126).
 //! - BLAKE3: [`blake3_hex`], [`blake3_file_hex`], [`Blake3Hasher`].
 //! - `crates/proto` framing: [`encode_frame_json`] / [`decode_frame_json`]
 //!   (Swift only handles JSON), plus a typed `crates/proto` decode of `FlowFetchRequest`
 //!   ([`ProtoFlowFetchRequest`]) that tests use to check Swift's JSON field for field.
 //! - [`parse_pair_link`]: the `ppf://pair?...` link the desktop shows as a QR.
-//! - [`CtrlClient`]: a minimal control-plane client (`ppf/ctrl/1`), so the app
-//!   does not need iroh-ffi's own Swift XCFramework — two Rust static
-//!   libraries in one app means two copies of std and clashing symbols.
+//! - [`CtrlClient`]: the control-plane client (`ppf/ctrl/1`) plus the original
+//!   fetch, so neither app needs iroh-ffi's own bindings — two Rust libraries in
+//!   one app means two copies of std and clashing symbols, and two clients mean
+//!   two protocol behaviours (#1124).
 //!
 //! The control client and the provider deliberately do NOT share one
 //! endpoint: the control endpoint carries the paired identity key (pairing
@@ -490,8 +494,9 @@ impl Provider {
         Ok(self.inner.endpoint_node_id()?.to_string())
     }
 
-    /// Ends the current lease (same as the Android `nativeClose`).
-    pub fn close(&self) {
+    /// Ends the current lease (same as the Android `nativeClose`). Named `shutdown`, not
+    /// `close`: Kotlin's generated class already has `AutoCloseable.close()` (#1124).
+    pub fn shutdown(&self) {
         self.inner.revoke();
     }
 }
@@ -594,6 +599,54 @@ impl Drop for CloseOnce {
     }
 }
 
+/// #1124：这个客户端上任何一条连接（请求、订阅流、取原图、探测）被对端用应用关闭码关掉时
+/// 回调一次，`node_id` 是关闭帧的来源（64 位 hex，取自经 TLS 认证的连接对端）。两端各注册
+/// 一个监听：关闭方是配对记录里的那台电脑、且 [`close_code_means_not_paired`] ⇒ 被拒即清理；
+/// 其余一律当连不上。回调在 runtime 线程上，实现必须线程安全、不阻塞。
+#[uniffi::export(with_foreign)]
+pub trait PeerCloseListener: Send + Sync {
+    fn on_peer_closed(&self, node_id: String, code: u64);
+}
+
+type CloseListenerSlot = Arc<Mutex<Option<Arc<dyn PeerCloseListener>>>>;
+
+fn notify_peer_closed(slot: &CloseListenerSlot, error: &FfiError) {
+    if let FfiError::PeerClosed { node_id, code } = error {
+        let listener = slot.lock().expect("close listener lock").clone();
+        if let Some(listener) = listener {
+            listener.on_peer_closed(node_id.clone(), *code);
+        }
+    }
+}
+
+/// [`CtrlClient::call_traced`] 的逐阶段记录（DIAG-A 可达性探测，原 Android `callTraced`）。
+/// 时间都是从调用开始算的毫秒；没走到那一步就是 `None`。成功时 `reply_json` 是完整 `Resp`
+/// 信封；失败时 `error_kind` ∈ `timeout` / `peer_closed` / `connect` / `transport` /
+/// `codec`，`peer_closed` 另带关闭方与关闭码。
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct CallTrace {
+    pub reply_json: Option<String>,
+    pub error_kind: Option<String>,
+    pub error_message: Option<String>,
+    pub closed_by: Option<String>,
+    pub close_code: Option<u64>,
+    /// 开始时本端的 home relay（还没有 = `None`）。
+    pub home_relay_at_start: Option<String>,
+    /// 本端 `online()`（拿到 relay、能打洞）在这次调用期间何时返回。
+    pub online_after_ms: Option<u64>,
+    pub connect_ms: Option<u64>,
+    pub round_trip_ms: Option<u64>,
+    pub total_ms: u64,
+    /// 连上后选中的路径：`lan` / `direct` / `relay` / `none`（连接上没有路径）。
+    pub path_kind: Option<String>,
+    pub path_remote_ip: Option<String>,
+    pub path_rtt_ms: u64,
+    pub path_count: u32,
+    /// 失败时 iroh 手里这台对端的地址（relay 与直连），供判断「地址不对」还是「网不通」。
+    pub peer_known_relay: Option<String>,
+    pub peer_known_direct: Vec<String>,
+}
+
 /// Minimal `ppf/ctrl/1` client: one request frame, one reply frame per call,
 /// `crates/proto` framing, JSON in and out. Every call and every stream gets a
 /// connection of its own (like HTTP without keep-alive), so requests never
@@ -603,6 +656,7 @@ pub struct CtrlClient {
     runtime: tokio::runtime::Runtime,
     transport: Mutex<Option<Arc<IrohTransport>>>,
     next_id: AtomicU64,
+    close_listener: CloseListenerSlot,
 }
 
 fn ms_or(value: u64, default: u64) -> Duration {
@@ -643,7 +697,14 @@ impl CtrlClient {
             runtime,
             transport: Mutex::new(Some(Arc::new(transport))),
             next_id: AtomicU64::new(1),
+            close_listener: Arc::new(Mutex::new(None)),
         }))
+    }
+
+    /// #1124：注册（或用 `None` 撤掉）[`PeerCloseListener`]。之后这个客户端上每一次被对端用
+    /// 应用关闭码关掉的连接都会回调——请求、订阅流、取原图、探测，一条不漏。
+    pub fn set_peer_close_listener(&self, listener: Option<Arc<dyn PeerCloseListener>>) {
+        *self.close_listener.lock().expect("close listener lock") = listener;
     }
 
     /// This endpoint's NodeId (64 hex).
@@ -690,8 +751,9 @@ impl CtrlClient {
             pulled
         });
         let _ = std::fs::remove_dir_all(&store_dir);
-        if result.is_err() {
+        if let Err(error) = &result {
             let _ = std::fs::remove_file(&dest); // 失败 / 取消不留半截文件
+            notify_peer_closed(&self.close_listener, error);
         }
         Ok(hex32(&result?))
     }
@@ -708,21 +770,288 @@ impl CtrlClient {
         params_json: String,
         timeout_ms: u64,
     ) -> Result<String, FfiError> {
+        let result = self.call_inner(peer_token, method, params_json, timeout_ms);
+        if let Err(error) = &result {
+            notify_peer_closed(&self.close_listener, error);
+        }
+        result
+    }
+
+    /// DIAG-A：与 [`Self::call`] 同一次往返、同一个上限，但逐阶段记下发生了什么（见
+    /// [`CallTrace`]）。网络层的失败也装在记录里返回；只有参数不合法才是 `Err`。只给可达性
+    /// 探测用——状态轮询也走它会把日志刷爆。
+    pub fn call_traced(
+        &self,
+        peer_token: String,
+        method: String,
+        params_json: String,
+        timeout_ms: u64,
+    ) -> Result<CallTrace, FfiError> {
         let transport = self.live()?;
         let addr = PeerAddr::from_str(peer_token.trim())
             .map_err(|error| invalid(format!("peer token: {error}")))?;
-        let params: serde_json::Value = if params_json.trim().is_empty() {
-            serde_json::json!({})
-        } else {
-            serde_json::from_str(&params_json)
-                .map_err(|error| invalid(format!("params: {error}")))?
-        };
-        let request = proto::Req {
-            id: self.request_id(),
-            method,
-            params,
-            ..proto::Req::default()
-        };
+        let request = self.request(method, &params_json)?;
+        let frame = proto::codec::encode(&request)?;
+        let deadline = ms_or(timeout_ms, DEFAULT_CALL_TIMEOUT_MS);
+        let trace = self
+            .runtime
+            .block_on(traced_round_trip(transport, addr, request, frame, deadline));
+        if let (Some(node_id), Some(code)) = (&trace.closed_by, trace.close_code) {
+            notify_peer_closed(
+                &self.close_listener,
+                &FfiError::PeerClosed {
+                    node_id: node_id.clone(),
+                    code,
+                },
+            );
+        }
+        Ok(trace)
+    }
+
+    /// Streaming call (`timeline.subscribe`, #963): sends one `{id, method, params}`
+    /// frame to the daemon named by [peer_token], half-closes the send side, then
+    /// hands every frame the daemon pushes to [listener] as JSON text — the first
+    /// one is the daemon's `Resp` (ack or rejection), the rest are pushed events.
+    /// Same shape as Android's `DaemonClient.subscribeTimeline`: it waits on the
+    /// stream, it never polls.
+    ///
+    /// Returns at once; the read loop runs on this client's runtime. The returned
+    /// handle's `cancel()` stops it. [`StreamListener::on_closed`] is called
+    /// exactly once whatever happens: `None` = the daemon finished the stream,
+    /// otherwise the reason (connect failure / timeout, broken stream,
+    /// `"cancelled"`, client closed). [connect_timeout_ms] bounds connect + send
+    /// only (0 = [`DEFAULT_CALL_TIMEOUT_MS`]); an open stream has no deadline.
+    pub fn open_stream(
+        &self,
+        peer_token: String,
+        method: String,
+        params_json: String,
+        connect_timeout_ms: u64,
+        listener: Arc<dyn StreamListener>,
+    ) -> Result<Arc<StreamHandle>, FfiError> {
+        let transport = self.live()?;
+        let addr = PeerAddr::from_str(peer_token.trim())
+            .map_err(|error| invalid(format!("peer token: {error}")))?;
+        let request = self.request(method, &params_json)?;
+        let frame = proto::codec::encode(&request)?;
+        let deadline = ms_or(connect_timeout_ms, DEFAULT_CALL_TIMEOUT_MS);
+        let handle = Arc::new(StreamHandle {
+            token: tokio_util::sync::CancellationToken::new(),
+        });
+        let token = handle.token.clone();
+        let close = CloseOnce(Some(listener.clone()));
+        let closes = Arc::clone(&self.close_listener);
+        self.runtime.spawn(async move {
+            let mut close = close;
+            // #1124：连接或读流被对端用应用关闭码关掉 ⇒ 先报给关闭监听，再把原因交给 on_closed。
+            let failed = |error: TransportError| {
+                let error = FfiError::from(error);
+                notify_peer_closed(&closes, &error);
+                error.to_string()
+            };
+            let run = async {
+                // 独占一条连接（不进连接缓存）：daemon 同一条连接上的流是排队处理的，
+                // 订阅挂在共享连接上会把之后的 offer / status 全堵住。
+                let (conn, mut stream) = tokio::time::timeout(deadline, async {
+                    let peer = transport.add_peer(addr);
+                    let (conn, mut stream) = transport.connect_dedicated(peer, ALPN_CTRL).await?;
+                    stream.send_frame(&frame).await?;
+                    stream.finish()?;
+                    Ok::<_, TransportError>((conn, stream))
+                })
+                .await
+                .map_err(|_| {
+                    format!(
+                        "{} connect exceeded {} ms",
+                        request.method,
+                        deadline.as_millis()
+                    )
+                })?
+                .map_err(failed)?;
+                let _close = CloseConn(conn);
+                loop {
+                    match stream.recv_frame().await.map_err(failed)? {
+                        None => return Ok(()),
+                        Some(frame) => {
+                            let json: serde_json::Value =
+                                proto::codec::decode(&frame).map_err(|e| e.to_string())?;
+                            listener.on_frame(json.to_string());
+                        }
+                    }
+                }
+            };
+            let outcome: Result<(), String> = tokio::select! {
+                biased;
+                _ = token.cancelled() => Err("cancelled".to_owned()),
+                r = run => r,
+            };
+            close.fire(outcome.err());
+        });
+        Ok(handle)
+    }
+
+    /// Closes the endpoint. Later calls fail; idempotent. Named `shutdown`, not `close`:
+    /// Kotlin's generated class already has `AutoCloseable.close()` (#1124).
+    pub fn shutdown(&self) {
+        let transport = self.transport.lock().expect("ctrl transport lock").take();
+        if let Some(transport) = transport {
+            self.runtime.block_on(transport.close());
+        }
+    }
+}
+
+/// [`CtrlClient::call_traced`] 的本体：与 `call` 同一次独占连接的往返，边走边记。
+async fn traced_round_trip(
+    transport: Arc<IrohTransport>,
+    addr: PeerAddr,
+    request: proto::Req,
+    frame: Vec<u8>,
+    deadline: Duration,
+) -> CallTrace {
+    let started = std::time::Instant::now();
+    let since = move || u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    let mut trace = CallTrace {
+        reply_json: None,
+        error_kind: None,
+        error_message: None,
+        closed_by: None,
+        close_code: None,
+        home_relay_at_start: transport.local_addr().relay_url(),
+        online_after_ms: None,
+        connect_ms: None,
+        round_trip_ms: None,
+        total_ms: 0,
+        path_kind: None,
+        path_remote_ip: None,
+        path_rtt_ms: 0,
+        path_count: 0,
+        peer_known_relay: None,
+        peer_known_direct: Vec::new(),
+    };
+    let online_after = Arc::new(AtomicU64::new(u64::MAX));
+    let watch = {
+        let transport = Arc::clone(&transport);
+        let online_after = Arc::clone(&online_after);
+        tokio::spawn(async move {
+            if transport.wait_online(deadline).await {
+                online_after.store(since(), Ordering::Relaxed);
+            }
+        })
+    };
+    let peer_id = addr.node_id();
+    let outcome = tokio::time::timeout(deadline, async {
+        let peer = transport.add_peer(addr);
+        let (conn, mut stream) = transport.connect_dedicated(peer, ALPN_CTRL).await?;
+        trace.connect_ms = Some(since());
+        let facts = crate::iroh_impl::path_facts(&conn);
+        trace.path_count = u32::try_from(facts.len()).unwrap_or(u32::MAX);
+        let info = crate::conninfo::classify(&facts);
+        trace.path_kind = Some(info.path.map_or("none", |p| p.as_str()).to_owned());
+        trace.path_rtt_ms = info.rtt_ms;
+        trace.path_remote_ip = facts
+            .iter()
+            .find(|f| f.selected)
+            .or_else(|| facts.first())
+            .and_then(|f| f.remote_ip)
+            .map(|ip| ip.to_string());
+        let _close = CloseConn(conn);
+        stream.send_frame(&frame).await?;
+        stream.finish()?;
+        stream.recv_frame().await
+    })
+    .await;
+    watch.abort();
+    let online = online_after.load(Ordering::Relaxed);
+    trace.online_after_ms = (online != u64::MAX).then_some(online);
+    let fail = |trace: &mut CallTrace, kind: &str, message: String| {
+        trace.error_kind = Some(kind.to_owned());
+        trace.error_message = Some(message);
+    };
+    match outcome {
+        Err(_) => fail(
+            &mut trace,
+            "timeout",
+            format!("{} exceeded {} ms", request.method, deadline.as_millis()),
+        ),
+        Ok(Err(TransportError::PeerClosed { peer, code })) => {
+            trace.closed_by = Some(peer.to_string());
+            trace.close_code = Some(code);
+            fail(
+                &mut trace,
+                "peer_closed",
+                format!("closed by {peer} with code {code}"),
+            );
+        }
+        Ok(Err(error @ TransportError::Connect { .. })) => {
+            fail(&mut trace, "connect", error.to_string())
+        }
+        Ok(Err(error)) => fail(&mut trace, "transport", error.to_string()),
+        Ok(Ok(None)) => fail(
+            &mut trace,
+            "transport",
+            format!(
+                "{}: daemon closed the stream without a reply",
+                request.method
+            ),
+        ),
+        Ok(Ok(Some(reply))) => match proto::codec::decode::<proto::Resp>(&reply) {
+            Err(error) => fail(&mut trace, "codec", error.to_string()),
+            Ok(resp) if resp.id != request.id => fail(
+                &mut trace,
+                "transport",
+                format!(
+                    "reply id {:?} does not match request {:?}",
+                    resp.id, request.id
+                ),
+            ),
+            Ok(resp) => match serde_json::to_string(&resp) {
+                Ok(json) => {
+                    trace.round_trip_ms = Some(since());
+                    trace.reply_json = Some(json);
+                }
+                Err(error) => fail(&mut trace, "codec", error.to_string()),
+            },
+        },
+    }
+    if trace.error_kind.is_some() {
+        // 失败时 iroh 手里这台对端的地址：地址本身不对，还是地址对但不通。
+        if let Ok(id) = crate::iroh_impl::endpoint_id(peer_id) {
+            let known =
+                tokio::time::timeout(Duration::from_secs(1), transport.endpoint().remote_info(id))
+                    .await
+                    .ok()
+                    .flatten();
+            if let Some(info) = known {
+                for a in info.addrs() {
+                    match a.addr() {
+                        iroh::TransportAddr::Relay(url) => {
+                            trace
+                                .peer_known_relay
+                                .get_or_insert_with(|| url.to_string());
+                        }
+                        iroh::TransportAddr::Ip(sa) => trace.peer_known_direct.push(sa.to_string()),
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    trace.total_ms = since();
+    trace
+}
+
+impl CtrlClient {
+    fn call_inner(
+        &self,
+        peer_token: String,
+        method: String,
+        params_json: String,
+        timeout_ms: u64,
+    ) -> Result<String, FfiError> {
+        let transport = self.live()?;
+        let addr = PeerAddr::from_str(peer_token.trim())
+            .map_err(|error| invalid(format!("peer token: {error}")))?;
+        let request = self.request(method, &params_json)?;
         let frame = proto::codec::encode(&request)?;
         let deadline = ms_or(timeout_ms, DEFAULT_CALL_TIMEOUT_MS);
         let reply = self.runtime.block_on(async {
@@ -762,102 +1091,22 @@ impl CtrlClient {
         })
     }
 
-    /// Streaming call (`timeline.subscribe`, #963): sends one `{id, method, params}`
-    /// frame to the daemon named by [peer_token], half-closes the send side, then
-    /// hands every frame the daemon pushes to [listener] as JSON text — the first
-    /// one is the daemon's `Resp` (ack or rejection), the rest are pushed events.
-    /// Same shape as Android's `DaemonClient.subscribeTimeline`: it waits on the
-    /// stream, it never polls.
-    ///
-    /// Returns at once; the read loop runs on this client's runtime. The returned
-    /// handle's `cancel()` stops it. [`StreamListener::on_closed`] is called
-    /// exactly once whatever happens: `None` = the daemon finished the stream,
-    /// otherwise the reason (connect failure / timeout, broken stream,
-    /// `"cancelled"`, client closed). [connect_timeout_ms] bounds connect + send
-    /// only (0 = [`DEFAULT_CALL_TIMEOUT_MS`]); an open stream has no deadline.
-    pub fn open_stream(
-        &self,
-        peer_token: String,
-        method: String,
-        params_json: String,
-        connect_timeout_ms: u64,
-        listener: Arc<dyn StreamListener>,
-    ) -> Result<Arc<StreamHandle>, FfiError> {
-        let transport = self.live()?;
-        let addr = PeerAddr::from_str(peer_token.trim())
-            .map_err(|error| invalid(format!("peer token: {error}")))?;
+    /// `{id, method, params}`：空参数 = `{}`；参数不是合法 JSON ⇒ 参数错误。
+    fn request(&self, method: String, params_json: &str) -> Result<proto::Req, FfiError> {
         let params: serde_json::Value = if params_json.trim().is_empty() {
             serde_json::json!({})
         } else {
-            serde_json::from_str(&params_json)
+            serde_json::from_str(params_json)
                 .map_err(|error| invalid(format!("params: {error}")))?
         };
-        let request = proto::Req {
+        Ok(proto::Req {
             id: self.request_id(),
             method,
             params,
             ..proto::Req::default()
-        };
-        let frame = proto::codec::encode(&request)?;
-        let deadline = ms_or(connect_timeout_ms, DEFAULT_CALL_TIMEOUT_MS);
-        let handle = Arc::new(StreamHandle {
-            token: tokio_util::sync::CancellationToken::new(),
-        });
-        let token = handle.token.clone();
-        let close = CloseOnce(Some(listener.clone()));
-        self.runtime.spawn(async move {
-            let mut close = close;
-            let run = async {
-                // 独占一条连接（不进连接缓存）：daemon 同一条连接上的流是排队处理的，
-                // 订阅挂在共享连接上会把之后的 offer / status 全堵住。
-                let (conn, mut stream) = tokio::time::timeout(deadline, async {
-                    let peer = transport.add_peer(addr);
-                    let (conn, mut stream) = transport.connect_dedicated(peer, ALPN_CTRL).await?;
-                    stream.send_frame(&frame).await?;
-                    stream.finish()?;
-                    Ok::<_, TransportError>((conn, stream))
-                })
-                .await
-                .map_err(|_| {
-                    format!(
-                        "{} connect exceeded {} ms",
-                        request.method,
-                        deadline.as_millis()
-                    )
-                })?
-                .map_err(|error| error.to_string())?;
-                let _close = CloseConn(conn);
-                loop {
-                    match stream.recv_frame().await.map_err(|e| e.to_string())? {
-                        None => return Ok(()),
-                        Some(frame) => {
-                            let json: serde_json::Value =
-                                proto::codec::decode(&frame).map_err(|e| e.to_string())?;
-                            listener.on_frame(json.to_string());
-                        }
-                    }
-                }
-            };
-            let outcome: Result<(), String> = tokio::select! {
-                biased;
-                _ = token.cancelled() => Err("cancelled".to_owned()),
-                r = run => r,
-            };
-            close.fire(outcome.err());
-        });
-        Ok(handle)
+        })
     }
 
-    /// Closes the endpoint. Later calls fail; idempotent.
-    pub fn close(&self) {
-        let transport = self.transport.lock().expect("ctrl transport lock").take();
-        if let Some(transport) = transport {
-            self.runtime.block_on(transport.close());
-        }
-    }
-}
-
-impl CtrlClient {
     fn live(&self) -> Result<Arc<IrohTransport>, FfiError> {
         self.transport
             .lock()
@@ -876,13 +1125,13 @@ impl CtrlClient {
             .map(|d| d.as_nanos())
             .unwrap_or_default();
         let n = self.next_id.fetch_add(1, Ordering::Relaxed);
-        format!("ios-{nanos:x}-{n}")
+        format!("ffi-{nanos:x}-{n}")
     }
 }
 
 impl Drop for CtrlClient {
     fn drop(&mut self) {
-        self.close();
+        self.shutdown();
     }
 }
 
@@ -1015,7 +1264,7 @@ mod tests {
             client.call("not-a-token".into(), "hello".into(), String::new(), 1_000),
             Err(FfiError::InvalidArgument { .. })
         ));
-        client.close();
+        client.shutdown();
         assert!(client
             .call(token, "hello".into(), String::new(), 1_000)
             .is_err());
@@ -1086,7 +1335,7 @@ mod tests {
             );
             slow.join().unwrap();
         });
-        client.close();
+        client.shutdown();
     }
 
     /// Records what a stream delivered; `closed` carries the single on_closed.
@@ -1256,7 +1505,7 @@ mod tests {
             ),
             Err(FfiError::InvalidArgument { .. })
         ));
-        client.close();
+        client.shutdown();
     }
 
     /// #953：取消句柄先触发时 fetch_blob 以 cancelled 返回，并删掉 dest 上的半截文件。
@@ -1289,5 +1538,238 @@ mod tests {
             "{err:?}"
         );
         assert!(!dest.exists(), "partial file must be removed");
+    }
+
+    /// #1124：关闭监听收到的 (关闭方, 关闭码)。
+    #[derive(Default)]
+    struct Closes(Mutex<Vec<(String, u64)>>);
+
+    impl PeerCloseListener for Closes {
+        fn on_peer_closed(&self, node_id: String, code: u64) {
+            self.0.lock().unwrap().push((node_id, code));
+        }
+    }
+
+    fn offline_client() -> Arc<CtrlClient> {
+        CtrlClient::bind(CtrlConfig {
+            secret_key: None,
+            relay_urls: Vec::new(),
+            offline: true,
+            bind_timeout_ms: 0,
+        })
+        .unwrap()
+    }
+
+    /// #1124：电脑在握手后用 401 拒绝（准入钩子）——请求、探测、订阅流、取原图四条路径都以
+    /// 有类型的 PeerClosed 失败，并且每一次都回调关闭监听（关闭方 = 电脑的 NodeId）。
+    /// 反证：取消、超时、本地关闭不回调。
+    /// 反证（已实测）：去掉 `call` 里的 notify ⇒ 第一条计数断言红；去掉 blobs.rs `pull_observed`
+    /// 里「取回失败后按连接关闭原因改报 PeerClosed」那一层 ⇒ 取原图报 Transport，红（401 在握手
+    /// 完成后才发，拨号本身是成功的）。
+    #[test]
+    fn every_path_reports_a_peer_close_to_the_listener() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let server = Arc::new(
+            rt.block_on(IrohTransport::bind(TransportConfig::loopback(vec![
+                ALPN_CTRL.to_owned(),
+                crate::ALPN_BLOBS.to_owned(),
+            ])))
+            .unwrap(),
+        );
+        server.set_admission(Arc::new(|_: crate::NodeId, _: &[u8]| false));
+        let accept = server.clone();
+        rt.spawn(async move {
+            let mut incoming = Box::pin(accept.listen().await);
+            while next(&mut incoming).await.is_some() {}
+        });
+        let token = server.local_addr().to_string();
+        let desk = server.node_id().to_string();
+
+        let client = offline_client();
+        let closes = Arc::new(Closes::default());
+        client.set_peer_close_listener(Some(closes.clone()));
+        let count = || closes.0.lock().unwrap().len();
+
+        let err = client
+            .call(token.clone(), "hello".into(), String::new(), 5_000)
+            .unwrap_err();
+        assert!(
+            matches!(&err, FfiError::PeerClosed { node_id, code: 401 } if *node_id == desk),
+            "{err:?}"
+        );
+        assert_eq!(count(), 1);
+
+        let trace = client
+            .call_traced(token.clone(), "hello".into(), String::new(), 5_000)
+            .unwrap();
+        assert_eq!(
+            trace.error_kind.as_deref(),
+            Some("peer_closed"),
+            "{trace:?}"
+        );
+        assert_eq!(trace.close_code, Some(401));
+        assert_eq!(trace.closed_by.as_deref(), Some(desk.as_str()));
+        assert!(trace.reply_json.is_none());
+        assert_eq!(count(), 2);
+
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let rec = Arc::new(Recorder {
+            frames: Mutex::new(Vec::new()),
+            closed: tx,
+        });
+        let _h = client
+            .open_stream(
+                token.clone(),
+                "timeline.subscribe".into(),
+                String::new(),
+                5_000,
+                rec,
+            )
+            .unwrap();
+        let ended = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        assert!(ended.is_some_and(|m| m.contains("401")));
+        assert_eq!(count(), 3);
+
+        let dir = tempfile::tempdir().unwrap();
+        let ticket = blob_ticket_for_test(&server, [9; 32]);
+        let err = client
+            .fetch_blob(
+                ticket,
+                dir.path().to_string_lossy().into_owned(),
+                dir.path().join("x").to_string_lossy().into_owned(),
+                0,
+                None,
+                None,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(&err, FfiError::PeerClosed { code: 401, .. }),
+            "{err:?}"
+        );
+        assert_eq!(closes.0.lock().unwrap()[3], (desk.clone(), 401));
+        assert_eq!(count(), 4);
+
+        // 反证：取消、超时不算对端关闭。
+        let cancel = FetchCancel::new();
+        cancel.cancel();
+        let _ = client.fetch_blob(
+            "not-a-ticket".into(),
+            dir.path().to_string_lossy().into_owned(),
+            dir.path().join("y").to_string_lossy().into_owned(),
+            0,
+            None,
+            Some(cancel),
+        );
+        let dead = rt
+            .block_on(IrohTransport::bind(TransportConfig::loopback(vec![
+                ALPN_CTRL.to_owned(),
+            ])))
+            .unwrap();
+        let dead_token = dead.local_addr().to_string();
+        rt.block_on(dead.close());
+        let err = client
+            .call(dead_token, "hello".into(), String::new(), 1_500)
+            .unwrap_err();
+        assert!(!matches!(err, FfiError::PeerClosed { .. }), "{err:?}");
+        assert_eq!(count(), 4, "取消 / 超时 / 连不上不回调");
+
+        // 撤掉监听后不再回调。
+        client.set_peer_close_listener(None);
+        let _ = client.call(token, "hello".into(), String::new(), 5_000);
+        assert_eq!(count(), 4);
+        client.shutdown();
+    }
+
+    /// #1124：订阅流挂着时，电脑删了这台设备的配对记录（`close_peer` ⇒ 410）——读循环以对端
+    /// 关闭结束，关闭监听立刻收到 (电脑, 410)，不用等下一次请求。
+    /// 反证（已实测）：去掉 open_stream 里 `failed` 的 notify ⇒ 计数为 0，红。
+    #[test]
+    fn a_held_stream_closed_with_410_reports_at_once() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let server = Arc::new(
+            rt.block_on(IrohTransport::bind(TransportConfig::loopback(vec![
+                ALPN_CTRL.to_owned(),
+            ])))
+            .unwrap(),
+        );
+        let accept = server.clone();
+        rt.spawn(async move {
+            let mut incoming = Box::pin(accept.listen().await);
+            while let Some(conn) = next(&mut incoming).await {
+                tokio::spawn(async move {
+                    let Ok(mut stream) = conn.accept_bi().await else {
+                        return;
+                    };
+                    let Ok(Some(frame)) = stream.recv_frame().await else {
+                        return;
+                    };
+                    let req: proto::Req = proto::codec::decode(&frame).unwrap();
+                    let ack = proto::Resp::ok(req.id, serde_json::json!({ "subscribed": true }));
+                    let _ = stream
+                        .send_frame(&proto::codec::encode(&ack).unwrap())
+                        .await;
+                    // 客户端发完请求就半关发送端：挂在下一条流上，直到连接被关。
+                    let _ = conn.accept_bi().await;
+                });
+            }
+        });
+        let token = server.local_addr().to_string();
+        let client = offline_client();
+        let closes = Arc::new(Closes::default());
+        client.set_peer_close_listener(Some(closes.clone()));
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let rec = Arc::new(Recorder {
+            frames: Mutex::new(Vec::new()),
+            closed: tx,
+        });
+        let _h = client
+            .open_stream(
+                token,
+                "timeline.subscribe".into(),
+                String::new(),
+                5_000,
+                rec.clone(),
+            )
+            .unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while rec.frames.lock().unwrap().is_empty() {
+            assert!(std::time::Instant::now() < deadline, "没收到订阅确认");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let client_node: crate::NodeId = client.node_id().unwrap().parse().unwrap();
+        assert!(server.close_peer(client_node) >= 1);
+        assert!(rx.recv_timeout(Duration::from_secs(10)).unwrap().is_some());
+        assert_eq!(
+            closes.0.lock().unwrap().as_slice(),
+            [(server.node_id().to_string(), 410)]
+        );
+        client.shutdown();
+    }
+
+    /// #1124：Android 的 `PeerAddrParts.toToken()`（PeerAddrToken.kt）按这个形状拼 JSON 再 base64url；
+    /// Rust 这边按同一个 token 拨号，必须读得懂（relay、IPv4、带方括号的 IPv6 都在）。
+    #[test]
+    fn a_kotlin_built_peer_token_parses() {
+        use base64::Engine as _;
+        let node = crate::node_id_from_secret_key(&[3; 32]).to_string();
+        let json = format!(
+            r#"{{"id":"{node}","addrs":[{{"Relay":"https://relay.example/"}},{{"Ip":"192.168.1.2:41145"}},{{"Ip":"[fe80::1]:41145"}}]}}"#
+        );
+        let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json);
+        let addr: PeerAddr = token.parse().expect("Kotlin token must parse");
+        assert_eq!(addr.node_id().to_string(), node);
+        assert_eq!(addr.relay_url().as_deref(), Some("https://relay.example/"));
+        let back = addr.to_string();
+        assert!(back.parse::<PeerAddr>().is_ok());
+    }
+
+    /// 测试用：指向 [server] 的 blobs 票据（内容不存在也无所谓——准入在握手时就拒了）。
+    fn blob_ticket_for_test(server: &IrohTransport, hash: [u8; 32]) -> String {
+        iroh_blobs::ticket::BlobTicket::new(
+            server.endpoint().addr(),
+            iroh_blobs::Hash::from_bytes(hash),
+            iroh_blobs::BlobFormat::Raw,
+        )
+        .to_string()
     }
 }

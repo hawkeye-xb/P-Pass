@@ -15,12 +15,14 @@ crate-type = ["rlib", "cdylib"]
 # platform-neutral provider kernel (src/provider.rs) cannot name `jni::` —
 # the default build has no such crate to import.
 android-jni = ["dep:jni", "dep:libc"]
-# IOS-06 (#313): UniFFI binding #2 (iOS XCFramework). Same rule as android-jni:
-# a feature, never a target_os cfg (arch-check B.2), and enabled only by
-# tools/build-ios-transport-xcframework.sh.
-ios-ffi = ["dep:uniffi", "dep:blake3"]
-# Swift binding generator (host-only tool, run by the same script).
-ios-bindgen = ["ios-ffi", "uniffi/cli"]
+# IOS-06 (#313) / #1124: UniFFI binding shared by both phones — the iOS
+# XCFramework (Swift) and Android's libtransport.so (Kotlin) export the same
+# objects. Same rule as android-jni: a feature, never a target_os cfg
+# (arch-check B.2); enabled only by tools/build-ios-transport-xcframework.sh
+# and tools/build-android-iroh-blobs-bridge.sh.
+mobile-ffi = ["dep:uniffi", "dep:blake3"]
+# Swift / Kotlin binding generator (host-only tool, run by the same scripts).
+mobile-bindgen = ["mobile-ffi", "uniffi/cli"]
 
 [dependencies]
 # ADR-001 / §B.1: iroh is allowed in this crate ONLY. Declared here (not in
@@ -47,7 +49,7 @@ blake3 = { version = "1", optional = true }
 [[bin]]
 name = "uniffi-bindgen"
 path = "src/bin/uniffi-bindgen.rs"
-required-features = ["ios-bindgen"]
+required-features = ["mobile-bindgen"]
 
 [dev-dependencies]
 proto = { path = "../proto" }

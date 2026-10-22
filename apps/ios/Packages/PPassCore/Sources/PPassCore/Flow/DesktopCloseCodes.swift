@@ -39,3 +39,16 @@ public func desktopRejection(forClose closed: PeerClosedConnection, recordedDaem
           closed.nodeId.lowercased() == recorded.lowercased() else { return nil }
     return DesktopRejected(reason: .registered(.notPaired), method: method)
 }
+
+/// #1124：共享 Rust 核心的关闭监听（`CtrlClient.setPeerCloseListener`）回调到这里——这个客户端上任何一条连接
+/// （请求、探测、订阅流、取原图）被对端用应用关闭码关掉。关闭方是配对记录里的那台电脑、且码是「未配对」⇒
+/// 记进 [loss]（随后由被拒即清理删配对、清缓存、停任务，#1119）并返回 true；其余不动，按「连不上」处理。
+@discardableResult
+public func recordDesktopClose(_ closed: PeerClosedConnection, recordedDaemonNodeId: String?, pairingId: String?,
+                               loss: PairingLoss) -> Bool {
+    guard let pairingId,
+          let rejected = desktopRejection(forClose: closed, recordedDaemonNodeId: recordedDaemonNodeId, method: "connection")
+    else { return false }
+    loss.record(pairingId: pairingId, failure: rejected)
+    return true
+}

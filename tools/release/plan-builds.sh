@@ -31,7 +31,7 @@
 #       crates/、tools/testclient/、根 Cargo.toml / Cargo.lock       按 Cargo 依赖图归属到端（#1062，见下）
 #       其余（assets/、release/、tools/、.github/、rust-toolchain.toml …） 所有端
 #   - Rust 改动（#1062，tools/release/rust-impact.py）：cargo metadata（--no-deps，不联网）算出每端入口包
-#     （Android transport[android-jni]、iOS transport[ios-ffi]、macOS daemon + 桌面壳、Windows daemon +
+#     （Android transport[android-jni]、iOS transport[mobile-ffi]、macOS daemon + 桌面壳、Windows daemon +
 #     testclient + 桌面壳）传递依赖哪些 workspace crate，改动的 crate 只触发依赖它的端。根 Cargo.toml 只变
 #     workspace 版本号 ⇒ 桌面两端；Cargo.lock 按变动的外部包反查依赖它的 crate。拿不准（cargo / python3
 #     不可用、metadata 失败、crates/ 下的非成员路径、lock 对不上号）⇒ 所有端。

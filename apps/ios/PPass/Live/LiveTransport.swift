@@ -68,14 +68,28 @@ final class ControlPlane: PeerCallPlane, @unchecked Sendable {
     private let secretKey: Data
     private let lock = NSLock()
     private var client: CtrlClient?
+    private var peerClosed: (@Sendable (String, UInt64) -> Void)?
 
     init(secretKey: Data) { self.secretKey = secretKey }
+
+    /// #1124：这个客户端上任何一条连接（请求、探测、订阅流、取原图）被对端用应用关闭码关掉时回调
+    /// （关闭方 NodeId, 关闭码）。在 runtime 线程上调用，不阻塞。
+    func setOnPeerClosed(_ handler: @escaping @Sendable (String, UInt64) -> Void) {
+        lock.lock(); peerClosed = handler; lock.unlock()
+    }
 
     func bound() throws -> CtrlClient {
         lock.lock()
         defer { lock.unlock() }
         if let client { return client }
         let c = try CtrlClient.bind(config: CtrlConfig(secretKey: secretKey, relayUrls: [], offline: false, bindTimeoutMs: 0))
+        c.setPeerCloseListener(listener: PeerCloseBridge { [weak self] nodeId, code in
+            guard let self else { return }
+            self.lock.lock()
+            let handler = self.peerClosed
+            self.lock.unlock()
+            handler?(nodeId, code)
+        })
         client = c
         return c
     }
@@ -132,6 +146,13 @@ final class ControlPlane: PeerCallPlane, @unchecked Sendable {
             return Data(reply.utf8)
         }.value
     }
+}
+
+/// FFI `PeerCloseListener` → Swift 闭包（#1124）。
+private final class PeerCloseBridge: PeerCloseListener, @unchecked Sendable {
+    private let handler: @Sendable (String, UInt64) -> Void
+    init(_ handler: @escaping @Sendable (String, UInt64) -> Void) { self.handler = handler }
+    func onPeerClosed(nodeId: String, code: UInt64) { handler(nodeId, code) }
 }
 
 /// 流式调用被对端或网络结束（不是我们取消的）；[reason] 是 FFI 给的原因。

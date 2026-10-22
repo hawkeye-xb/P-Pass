@@ -65,3 +65,47 @@ final class DesktopCloseRejectionTests: XCTestCase {
         XCTAssertEqual(classifyDeliveryFailure(PeerClosedConnection(nodeId: daemon, code: 403)), .pathFailure("network:PeerClosedConnection"))
     }
 }
+
+/// #1124：共享 Rust 核心的关闭监听 → 配对失效入口。任何一条连接（订阅流、取原图也算）被记录的电脑以
+/// 401 / 410 关掉都立即记成配对失效（随后被拒即清理）；别的关闭方、别的码、没有配对一律不动。
+/// 反证（已实测）：去掉 recordDesktopClose 里的 desktopRejection 判定 ⇒「别的关闭方」「别的码」两条变红
+/// （「没有配对」一条由 pairingId 为空先挡住，不受影响）。
+final class DesktopCloseRecordingTests: XCTestCase {
+    private let daemon = String(repeating: "ab", count: 32)
+    private let stranger = String(repeating: "cd", count: 32)
+
+    func testRecordedDesktopNotPairedCloseMarksTheLoss() {
+        for code in DesktopCloseCodes.registry.map(\.code) {
+            let loss = PairingLoss()
+            var cleaned: [String] = []
+            let lock = NSLock()
+            loss.setOnLost { id in lock.lock(); cleaned.append(id); lock.unlock() }
+            XCTAssertTrue(recordDesktopClose(PeerClosedConnection(nodeId: daemon, code: code),
+                                             recordedDaemonNodeId: daemon, pairingId: "pid-1", loss: loss), "\(code)")
+            XCTAssertTrue(loss.isLost(pairingId: "pid-1"))
+            lock.lock(); XCTAssertEqual(cleaned, ["pid-1"]); lock.unlock()
+        }
+    }
+
+    func testAnotherCloserIsNotRecorded() {
+        let loss = PairingLoss()
+        XCTAssertFalse(recordDesktopClose(PeerClosedConnection(nodeId: stranger, code: 410),
+                                          recordedDaemonNodeId: daemon, pairingId: "pid-1", loss: loss))
+        XCTAssertFalse(loss.isLost(pairingId: "pid-1"))
+    }
+
+    func testOtherCodesAreNotRecorded() {
+        let loss = PairingLoss()
+        for code in [UInt64(0), 403, 409, 411] {
+            XCTAssertFalse(recordDesktopClose(PeerClosedConnection(nodeId: daemon, code: code),
+                                              recordedDaemonNodeId: daemon, pairingId: "pid-1", loss: loss), "\(code)")
+        }
+        XCTAssertFalse(loss.isLost(pairingId: "pid-1"))
+    }
+
+    func testNoPairingRecordsNothing() {
+        let loss = PairingLoss()
+        XCTAssertFalse(recordDesktopClose(PeerClosedConnection(nodeId: daemon, code: 401),
+                                          recordedDaemonNodeId: nil, pairingId: nil, loss: loss))
+    }
+}

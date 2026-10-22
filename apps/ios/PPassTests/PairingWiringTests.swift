@@ -43,7 +43,7 @@ final class PairingWiringTests: XCTestCase {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         // 合法 NodeId 必须是曲线上的点：借一个离线控制面端点的（同 TransportFFITests）。
         let client = try CtrlClient.bind(config: CtrlConfig(secretKey: nil, relayUrls: [], offline: true, bindTimeoutMs: 0))
-        defer { client.close() }
+        defer { client.shutdown() }
         link = "ppf://pair?node=\(try client.nodeId())&t=deadbeef"
     }
 

@@ -86,6 +86,16 @@ final class LiveBackend: @unchecked Sendable {
         pairingStore = PairingStore(root: dir)
         onboarded = OnboardedDesktopsStore(directory: dir, logger: logger)
         let pairingStore = self.pairingStore
+        // #1124：任何一条连接（请求、探测、订阅流、取原图）被「记录里的那台电脑」以 401 / 410 关掉 ⇒ 立刻记成配对失效，
+        // 走被拒即清理（setOnLost 在后面接上）；别的关闭方、别的码一律当连不上，不动配对。
+        let closeLoss = pairingLoss
+        plane.setOnPeerClosed { nodeId, code in
+            let record = pairingStore.load()
+            let lost = recordDesktopClose(PeerClosedConnection(nodeId: nodeId, code: code),
+                                          recordedDaemonNodeId: record?.daemonNodeId, pairingId: record?.pairingId, loss: closeLoss)
+            logger.log(lost ? "connection closed by the recorded desktop code=\(code) — pairing rejected"
+                            : "connection closed by peer code=\(code) — treated as unreachable")
+        }
         UnpairNotice.removeLegacyOutbox(root: dir, logger: logger) // #956 撤销：老版本的断开发件箱（含旧电脑 peerToken）
         media = LiveMediaLibrary { BackupScopeStore(directory: dir, daemonNodeId: pairingStore.load()?.daemonNodeId, logger: logger) }
         provider = try NativeProvider(root: dir)
@@ -357,7 +367,8 @@ final class EngineBox: @unchecked Sendable {
 
 /// 控制面传输：对端 = 当前配对记录里的 peer token（配对 / 重新配对后自动换）。
 /// #1122：调用因为连接被「记录里的那台电脑」以 401 / 410 关闭而失败 → 翻成与 `not_paired` 应答同一个 [DesktopRejected]，
-/// 汇入同一条被拒即清理路径；其它一切原样抛出（按「连不上」处理）。流式调用不翻译：流中途被关只有字符串原因，没有有类型信息。
+/// 汇入同一条被拒即清理路径；其它一切原样抛出（按「连不上」处理）。流式调用与取原图不在这里翻译：#1124 起共享 Rust 核心的
+/// 关闭监听（`ControlPlane.setOnPeerClosed`，LiveBackend 接线）对每一条连接都上报，立即触发清理。
 struct CurrentPeerTransport: CtrlTransport {
     let plane: PeerCallPlane
     let store: PairingStore

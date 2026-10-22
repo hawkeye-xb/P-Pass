@@ -163,7 +163,7 @@ final class TransportFFITests: XCTestCase {
         // 合法 NodeId 必须是曲线上的点：借一个 ephemeral 控制面端点的 NodeId。
         let client = try CtrlClient.bind(
             config: CtrlConfig(secretKey: nil, relayUrls: [], offline: true, bindTimeoutMs: 0))
-        defer { client.close() }
+        defer { client.shutdown() }
         let node = try client.nodeId()
 
         let link = try parsePairLink(
@@ -212,7 +212,7 @@ final class TransportFFITests: XCTestCase {
             }
         }
         try provider.release(hash: imported.hash)
-        provider.close()
+        provider.shutdown()
     }
 
     // MARK: - 控制面客户端 × 本机 daemon
@@ -230,7 +230,7 @@ final class TransportFFITests: XCTestCase {
         }
         let client = try CtrlClient.bind(
             config: CtrlConfig(secretKey: nil, relayUrls: [], offline: true, bindTimeoutMs: 0))
-        defer { client.close() }
+        defer { client.shutdown() }
         XCTAssertEqual(try client.nodeId().count, 64)
 
         let reply = try client.call(peerToken: token, method: "hello", paramsJson: "{}", timeoutMs: 0)
@@ -318,7 +318,7 @@ final class TransportFFITests: XCTestCase {
         //    （宿主脚本的 owner_loop 代点）。阻塞式 pair.request 已退役（#1050）。
         let client = try CtrlClient.bind(
             config: CtrlConfig(secretKey: nil, relayUrls: [], offline: true, bindTimeoutMs: 0))
-        defer { client.close() }
+        defer { client.shutdown() }
         let submitted = try ctrl(client, peer, "pair.request",
                                  ["token": link.token, "device_name": "iOS 模拟器 G2", "role": "member",
                                   "ack_then_poll": true],
@@ -356,7 +356,7 @@ final class TransportFFITests: XCTestCase {
         XCTAssertEqual(root.kind, .appGroup)
         let store = root.url.appendingPathComponent("blobs", isDirectory: true)
         let provider = try Provider.withGcInterval(root: store.path, gcIntervalMs: 1_000)
-        defer { provider.close() }
+        defer { provider.shutdown() }
         try provider.setAllowedPeer(nodeId: link.nodeId)
 
         let photo = tmp.appendingPathComponent("IMG_G2.HEIC")

@@ -1,0 +1,5 @@
+# #1124：uniffi 绑定生成配置。Swift 用默认（模块 transport）；Kotlin 绑定进 Android 包名空间，
+# 运行时按 cdylib 名加载同一个 libtransport.so（手写 JNI 的 provider 也在这个库里，#1126 前并存）。
+[bindings.kotlin]
+package_name = "com.hawkeyexb.ppass.ffi"
+cdylib_name = "transport"

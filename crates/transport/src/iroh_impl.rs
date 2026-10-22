@@ -635,20 +635,7 @@ impl IrohTransport {
         self.ep
             .connect(addr, alpn.as_bytes())
             .await
-            .map_err(|e| match e {
-                // #1122：对端握手后用应用关闭码拒绝了这次连接（准入钩子的 401）。
-                iroh::endpoint::ConnectError::Connection {
-                    source: iroh::endpoint::ConnectionError::ApplicationClosed(close),
-                    ..
-                } => TransportError::PeerClosed {
-                    peer,
-                    code: close.error_code.into_inner(),
-                },
-                e => TransportError::Connect {
-                    peer,
-                    reason: e.to_string(),
-                },
-            })
+            .map_err(|e| connect_err(peer, e))
     }
 
     /// A connection of its own, outside the per-peer cache, plus one stream
@@ -660,7 +647,7 @@ impl IrohTransport {
     /// same (`DaemonClient.call` dials per call). Path knowledge is still
     /// shared through the one Endpoint, so this costs a handshake, not a
     /// fresh hole-punch. The caller owns the connection and closes it.
-    #[cfg(feature = "ios-ffi")]
+    #[cfg(feature = "mobile-ffi")]
     pub(crate) async fn connect_dedicated(
         &self,
         peer: NodeId,
@@ -797,7 +784,7 @@ impl Transport for IrohTransport {
 
 /// iroh-independent snapshot of a connection's open paths (shared by
 /// `conn_info` and `connection_status`).
-fn path_facts(conn: &Connection) -> Vec<PathFacts> {
+pub(crate) fn path_facts(conn: &Connection) -> Vec<PathFacts> {
     conn.paths()
         .iter()
         .map(|p| PathFacts {
@@ -823,7 +810,7 @@ fn is_cgnat(ip: &std::net::IpAddr) -> bool {
     }
 }
 
-fn endpoint_id(id: NodeId) -> Result<EndpointId> {
+pub(crate) fn endpoint_id(id: NodeId) -> Result<EndpointId> {
     EndpointId::from_bytes(&id.0).map_err(|_| TransportError::InvalidNodeId)
 }
 
@@ -882,9 +869,27 @@ pub struct BiStream {
     conn: Connection,
 }
 
+/// #1122：拨号失败。对端握手后用应用关闭码拒绝了这次连接（准入钩子的 401）⇒
+/// [`TransportError::PeerClosed`]；其余 ⇒ [`TransportError::Connect`]。
+pub(crate) fn connect_err(peer: NodeId, e: iroh::endpoint::ConnectError) -> TransportError {
+    match e {
+        iroh::endpoint::ConnectError::Connection {
+            source: iroh::endpoint::ConnectionError::ApplicationClosed(close),
+            ..
+        } => TransportError::PeerClosed {
+            peer,
+            code: close.error_code.into_inner(),
+        },
+        e => TransportError::Connect {
+            peer,
+            reason: e.to_string(),
+        },
+    }
+}
+
 /// #1122：连接被对端用应用关闭码关掉（关闭帧来自经 TLS 认证的对端）？是就交出
 /// 带对端与关闭码的有类型错误。本地关闭、超时、网络断都不算。
-fn peer_closed(conn: &Connection) -> Option<TransportError> {
+pub(crate) fn peer_closed(conn: &Connection) -> Option<TransportError> {
     match conn.close_reason()? {
         iroh::endpoint::ConnectionError::ApplicationClosed(close) => {
             Some(TransportError::PeerClosed {
