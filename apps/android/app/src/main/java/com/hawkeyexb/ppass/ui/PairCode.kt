@@ -44,7 +44,7 @@ fun ConfirmDesktopScreen(name: String, fingerprint: String, onConnect: () -> Uni
                 verticalArrangement = Arrangement.Center,
             ) {
                 Text(
-                    stringResource(R.string.pair_confirm_desktop_title), fontSize = 30.sp,
+                    stringResource(R.string.pair_confirm_desktop_title), fontSize = 30.sp, lineHeight = 38.sp,
                     fontFamily = PPFont.Serif, color = PPColor.Ink, textAlign = TextAlign.Center,
                 )
                 Spacer(Modifier.height(24.dp))
@@ -97,7 +97,7 @@ fun PairCodeScreen(code: String, onCancel: () -> Unit) {
                 verticalArrangement = Arrangement.Center,
             ) {
                 Text(
-                    stringResource(R.string.pair_code_title), fontSize = 30.sp,
+                    stringResource(R.string.pair_code_title), fontSize = 30.sp, lineHeight = 38.sp,
                     fontFamily = PPFont.Serif, color = PPColor.Ink, textAlign = TextAlign.Center,
                 )
                 Spacer(Modifier.height(28.dp))
