@@ -80,6 +80,7 @@ function desktop() {
               pending_pairs: d.pending.length,
               photo_sources: 1,
               desktop_fingerprint: d.fingerprint,
+              desktop_name: d.desktopName,
             };
           case "pairing.pending":
             return { pending: d.pending };
@@ -206,13 +207,15 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
     expect(document.body.textContent).toContain("验证码已提交");
   });
 
-  it("二维码弹窗显示本机标识", async () => {
+  it("二维码弹窗显示本机名称与标识（与手机核对页上的同一对）", async () => {
     const d = desktop();
     d.fingerprint = "AB12 CD34";
+    d.desktopName = "客厅的 Mac";
     render(App);
     await settle();
     await fireEvent.click(screen.getByRole("button", { name: "显示配对二维码" }));
     await settle();
+    expect(screen.getByTestId("desktop-name").textContent).toContain("客厅的 Mac");
     expect(screen.getByTestId("desktop-fingerprint").textContent).toContain("AB12 CD34");
   });
 });

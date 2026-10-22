@@ -353,6 +353,31 @@ pub fn reconcile_decision(
 /// daemon 与其他核心 crate **只依赖这个 trait**（经 [`adapter`] 拿实现）。
 /// 托管类能力（开机自启、服务管理器、结束进程、安装位置）在 [`HostingAdapter`]，
 /// 只给桌面发行层用；门禁 G3 拦 `crates/` 引用它。两个 trait 的实现都留在本 crate。
+/// #1118：[`PlatformAdapter::computer_name`] 的 POSIX 默认实现。
+fn posix_hostname() -> Option<String> {
+    #[cfg(unix)]
+    {
+        let mut buf = [0u8; 256];
+        // SAFETY: 缓冲区在本栈上、长度如实传入；POSIX 允许截断时不带 NUL，所以末字节留作 NUL。
+        let rc = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len() - 1) };
+        if rc != 0 {
+            return None;
+        }
+        let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        clean_computer_name(&String::from_utf8_lossy(&buf[..end]))
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
+/// #1118：系统给的名字去掉首尾空白，空串算读不到。
+pub fn clean_computer_name(raw: &str) -> Option<String> {
+    let t = raw.trim();
+    (!t.is_empty()).then(|| t.to_owned())
+}
+
 pub trait PlatformAdapter: Send + Sync {
     // 电源（MVP 尽力而为）
     fn assert_awake(&self) -> Result<AwakeGuard>;
@@ -395,6 +420,15 @@ pub trait PlatformAdapter: Send + Sync {
     /// 有效。壳与 daemon 不许自己读这些环境变量（门禁 G1）。
     fn home_dir(&self) -> Option<PathBuf> {
         std::env::home_dir().filter(|p| !p.as_os_str().is_empty())
+    }
+
+    /// #1118：这台电脑在系统里的名字（用户在系统设置里起的那个），配对时给手机当作
+    /// 方便辨认的标签。`None` = 读不到。可能含用户真名：调用方不得写进日志。
+    ///
+    /// macOS 读「电脑名称」（`SCDynamicStoreCopyComputerName`），Windows 读计算机名
+    /// （`GetComputerNameExW`）。默认实现是 POSIX `gethostname`（无桌面的 Linux）。
+    fn computer_name(&self) -> Option<String> {
+        posix_hostname()
     }
 
     /// #1043（B10）：当前用户的「图片」目录——新建照片库默认放在它下面。
@@ -1721,5 +1755,40 @@ mod tests {
             AutostartReconcile::SkippedUnstableLocation,
             "从 dmg 挂载点启动时绝不许改写开机自启登记"
         );
+    }
+}
+
+#[cfg(test)]
+mod computer_name_tests {
+    use super::*;
+
+    #[test]
+    fn blank_names_count_as_unreadable() {
+        assert_eq!(clean_computer_name("  "), None);
+        assert_eq!(clean_computer_name(""), None);
+        assert_eq!(
+            clean_computer_name(" 客厅的 Mac \n").as_deref(),
+            Some("客厅的 Mac")
+        );
+    }
+
+    /// #1118：与系统自带工具读到的同一个名字（`scutil --get ComputerName` 是
+    /// 「关于本机」里那个名称的命令行出口）。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_reads_the_same_name_as_scutil() {
+        let out = std::process::Command::new("scutil")
+            .args(["--get", "ComputerName"])
+            .output()
+            .expect("scutil");
+        let expected = clean_computer_name(&String::from_utf8_lossy(&out.stdout));
+        assert!(expected.is_some(), "this Mac has no ComputerName");
+        assert_eq!(adapter().computer_name(), expected);
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn posix_reads_the_hostname() {
+        assert!(adapter().computer_name().is_some());
     }
 }

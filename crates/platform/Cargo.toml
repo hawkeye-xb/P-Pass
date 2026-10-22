@@ -58,6 +58,8 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_Console",
   # #1043 (B6): GetUserDefaultLocaleName——托盘与安装位置对话框的初始语言。
   "Win32_Globalization",
+  # #1118: GetComputerNameExW——配对时给手机看的电脑名。
+  "Win32_System_SystemInformation",
 ] }
 
 # DESK-16 (#165)：Windows 的系统缩略图走 COM（IShellItemImageFactory），

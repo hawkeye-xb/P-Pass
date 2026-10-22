@@ -2137,6 +2137,9 @@
         <p class="hint modal-hint">{t("ui.pair_generating")}</p>
       {/if}
       <!-- #1118：手机扫码后先显示这台电脑的标识，用户在这里核对（二维码生成前也显示）。 -->
+      {#if status?.desktop_name}
+        <p class="pair-identity" data-testid="desktop-name">{t("ui.pair_desktop_name", { name: status.desktop_name })}</p>
+      {/if}
       {#if status?.desktop_fingerprint}
         <p class="pair-identity" data-testid="desktop-fingerprint">{t("ui.pair_desktop_identity", { fingerprint: status.desktop_fingerprint })}</p>
       {/if}

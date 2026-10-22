@@ -424,11 +424,20 @@ impl Pairing {
     /// 保留期）之前照常放行，否则业主关掉二维码后它就没法轮询自己的结果。
     pub fn admits(&self, peer: transport::NodeId, now_ms: i64) -> bool {
         let inner = self.inner.lock().expect("pairing lock");
-        let open = inner
+        Self::open_in(&inner, now_ms) || inner.tickets.values().any(|t| t.peer == peer)
+    }
+
+    /// #1122 / #1118：配对窗口开着（二维码在显示）——见 [`Self::admits`]。电脑名只在这期间
+    /// 发给未配对的对端。
+    pub fn window_open(&self, now_ms: i64) -> bool {
+        Self::open_in(&self.inner.lock().expect("pairing lock"), now_ms)
+    }
+
+    fn open_in(inner: &Inner, now_ms: i64) -> bool {
+        inner
             .tokens
             .values()
-            .any(|t| !t.used && now_ms <= t.expires_at);
-        open || inner.tickets.values().any(|t| t.peer == peer)
+            .any(|t| !t.used && now_ms <= t.expires_at)
     }
 
     /// #1122：二维码关闭——收回所有还没用掉的令牌，配对窗口立即关闭。已提交的

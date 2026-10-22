@@ -394,6 +394,11 @@ async fn main() -> anyhow::Result<()> {
         event_bus.clone(),
     );
     ipc.set_outdated_peers(outdated.clone());
+    // #1118：配对时给手机看的电脑名（系统里的名字）。可能含用户真名：不写日志。
+    let desktop_name = platform::adapter()
+        .computer_name()
+        .unwrap_or_else(|| daemon::router::GENERIC_DEVICE_NAME.to_owned());
+    ipc.set_desktop_name(desktop_name.clone());
     // #1115：常驻 daemon 开放 config.set_library（只有签名窗口程序调得到）；测试沙盒不开放。
     if sandbox.is_none() {
         ipc.set_library_location(std::sync::Arc::clone(&library_location));
@@ -887,7 +892,7 @@ async fn main() -> anyhow::Result<()> {
         std::sync::Arc::new(move |peer| t.close_peer(peer))
     };
     ipc.set_peer_closer(peer_closer.clone());
-    let router = Router::new(db, "P-Pass 存储端")
+    let router = Router::new(db, desktop_name)
         .with_peer_closer(peer_closer)
         .with_events(event_bus.clone())
         .with_subscriptions(subscriptions)

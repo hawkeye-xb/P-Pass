@@ -607,6 +607,34 @@ impl PlatformAdapter for WindowsAdapter {
         crate::first_multi_sz_entry(&buf)
     }
 
+    /// #1118：计算机名（「设置 → 系统 → 关于 → 设备名称」，即 DNS 主机名的原样大小写）。
+    fn computer_name(&self) -> Option<String> {
+        use windows_sys::Win32::System::SystemInformation::{
+            ComputerNamePhysicalDnsHostname, GetComputerNameExW,
+        };
+        let mut len = 0u32;
+        // SAFETY: 第一次传空缓冲区只取所需长度（含 NUL）；失败返回 0 是预期。
+        unsafe {
+            GetComputerNameExW(
+                ComputerNamePhysicalDnsHostname,
+                std::ptr::null_mut(),
+                &mut len,
+            )
+        };
+        if len == 0 {
+            return None;
+        }
+        let mut buf = vec![0u16; len as usize];
+        // SAFETY: buf 长度与 len 一致；成功后 len = 不含 NUL 的字符数。
+        let ok = unsafe {
+            GetComputerNameExW(ComputerNamePhysicalDnsHostname, buf.as_mut_ptr(), &mut len)
+        };
+        if ok == 0 {
+            return None;
+        }
+        crate::clean_computer_name(&String::from_utf16_lossy(&buf[..len as usize]))
+    }
+
     /// #1043（B10）：Known Folder `FOLDERID_Pictures`——用户在资源管理器里把
     /// 「图片」搬到 D 盘的话，这里给的就是 D 盘那个，而不是 `%USERPROFILE%\Pictures`。
     fn pictures_dir(&self) -> Option<PathBuf> {

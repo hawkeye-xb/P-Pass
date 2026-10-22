@@ -614,3 +614,45 @@ async fn start_daemon_slow_owner(
     tokio::spawn(async move { router.serve(&tp2).await });
     (tp, addr, pairing)
 }
+
+async fn hello_name(ctp: &IrohTransport, daemon: transport::NodeId) -> String {
+    let resp = send_method(ctp, daemon, methods::HELLO, serde_json::json!({})).await;
+    assert!(resp.ok, "{resp:?}");
+    serde_json::from_value::<proto::Hello>(resp.result.unwrap())
+        .unwrap()
+        .device_name
+}
+
+/// #1118：电脑名（可能含用户真名）只在配对窗口里给来扫码的手机，窗口外的未配对对端只拿到
+/// 通用名；已配对的成员照常拿到真名。
+#[tokio::test(flavor = "multi_thread")]
+async fn computer_name_reaches_unpaired_peers_only_inside_the_pairing_window() {
+    // 业主拒绝：申请结束后这台手机仍在保留期内过准入（能 hello），但它不是成员。
+    let db = Db::open_in_memory().await.unwrap();
+    let (dtp, daddr, pairing) = start_daemon(db.clone(), false).await;
+    let stranger = endpoint().await;
+    stranger.add_peer(daddr);
+    let qr = pairing.start([0x51; 12], now());
+    assert_eq!(hello_name(&stranger, dtp.node_id()).await, "客厅的电脑");
+    let resp = send_pair(&stranger, dtp.node_id(), &token_of(&qr), "陌生手机").await;
+    assert!(!resp.ok, "owner said no: {resp:?}");
+    assert!(!pairing.window_open(now()), "the only token is spent");
+    assert_eq!(
+        hello_name(&stranger, dtp.node_id()).await,
+        daemon::router::GENERIC_DEVICE_NAME
+    );
+
+    // 成员：窗口关着也拿到真名。
+    let db = Db::open_in_memory().await.unwrap();
+    let (dtp, daddr, pairing) = start_daemon(db.clone(), true).await;
+    let member = endpoint().await;
+    member.add_peer(daddr);
+    let qr = pairing.start([0x52; 12], now());
+    assert!(
+        send_pair(&member, dtp.node_id(), &token_of(&qr), "妈妈的手机")
+            .await
+            .ok
+    );
+    assert!(!pairing.window_open(now()));
+    assert_eq!(hello_name(&member, dtp.node_id()).await, "客厅的电脑");
+}

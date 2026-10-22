@@ -237,6 +237,8 @@ pub struct IpcServer {
     /// #1070: the router's version-mismatch registry — feeds the device
     /// list's `needs_update`. Unset = an empty registry (never flags anyone).
     outdated: crate::router::OutdatedPeers,
+    /// #1118：见 [`Self::set_desktop_name`]。未注入（测试）= status 里没有这一项。
+    desktop_name: Option<String>,
     /// #1115：`config.set_library` 的写入处。`None`（测试沙盒、测试）= 这个方法不开放。
     library_location: Option<Arc<crate::library_location::LibraryLocation>>,
 }
@@ -718,6 +720,7 @@ impl IpcServer {
             backup: std::sync::OnceLock::new(),
             peer_closer: std::sync::OnceLock::new(),
             outdated: crate::router::OutdatedPeers::new(),
+            desktop_name: None,
             library_location: None,
         }
     }
@@ -726,6 +729,11 @@ impl IpcServer {
     /// same instance into `Router::with_outdated_peers`).
     pub fn set_outdated_peers(&mut self, outdated: crate::router::OutdatedPeers) {
         self.outdated = outdated;
+    }
+
+    /// #1118：本机电脑名，二维码弹窗下方与指纹一起显示（与 hello 里给手机的同一个）。
+    pub fn set_desktop_name(&mut self, name: String) {
+        self.desktop_name = Some(name);
     }
 
     /// #1115：开放 `config.set_library`（常驻 daemon）。测试沙盒不调它 ⇒ 方法不开放。
@@ -2053,6 +2061,7 @@ impl IpcServer {
             // #1118: this desktop's identity as people read it — shown under the pairing QR code
             // and on the phone before it connects, so the two can be compared.
             "desktop_fingerprint": pair_pake::node_fingerprint(&self.pairing.node_id().to_string()),
+            "desktop_name": self.desktop_name,
             // DAE-01: identity fields for newest-wins handshake + ops
             // visibility (验收①：status 报 PID/版本/路径/启动时间).
             "version": daemon_version(),

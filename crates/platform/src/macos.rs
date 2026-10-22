@@ -383,7 +383,60 @@ mod cf_locale {
     }
 }
 
+/// #1118：「系统设置 → 通用 → 关于本机 → 名称」——SystemConfiguration 的电脑名称。
+mod sc_name {
+    use std::ffi::{c_char, c_void};
+
+    type CFIndex = isize;
+    type CFTypeRef = *const c_void;
+    const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+
+    #[link(name = "SystemConfiguration", kind = "framework")]
+    extern "C" {
+        fn SCDynamicStoreCopyComputerName(store: CFTypeRef, encoding: *mut u32) -> CFTypeRef;
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFStringGetCString(
+            s: CFTypeRef,
+            buffer: *mut c_char,
+            size: CFIndex,
+            encoding: u32,
+        ) -> u8;
+        fn CFRelease(cf: CFTypeRef);
+    }
+
+    pub(super) fn computer_name() -> Option<String> {
+        // SAFETY: Copy 规则——返回的字符串归我们，读完 CFRelease 一次；store 传空 =
+        // 临时会话，encoding 传空 = 不要。缓冲区在本栈上，长度如实传入，
+        // CFStringGetCString 成功时保证 NUL 结尾（名字最长 63 个字符，UTF-8 不超过 256 字节）。
+        unsafe {
+            let name = SCDynamicStoreCopyComputerName(std::ptr::null(), std::ptr::null_mut());
+            if name.is_null() {
+                return None;
+            }
+            let mut buf = [0 as c_char; 512];
+            let ok = CFStringGetCString(
+                name,
+                buf.as_mut_ptr(),
+                buf.len() as CFIndex,
+                K_CF_STRING_ENCODING_UTF8,
+            ) != 0;
+            CFRelease(name);
+            if !ok {
+                return None;
+            }
+            let s = std::ffi::CStr::from_ptr(buf.as_ptr()).to_str().ok()?;
+            crate::clean_computer_name(s)
+        }
+    }
+}
+
 impl PlatformAdapter for MacosAdapter {
+    fn computer_name(&self) -> Option<String> {
+        sc_name::computer_name()
+    }
+
     fn assert_awake(&self) -> Result<AwakeGuard> {
         let child = Command::new("caffeinate")
             .arg("-i") // prevent idle sleep while we run

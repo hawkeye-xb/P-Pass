@@ -437,6 +437,7 @@ msg_keys! {
     UI_PENDING_ROLE_MEMBER => "ui.pending_role_member",
     UI_PENDING_ROLE_VIEWER => "ui.pending_role_viewer",
     UI_PAIR_DESKTOP_IDENTITY => "ui.pair_desktop_identity",
+    UI_PAIR_DESKTOP_NAME => "ui.pair_desktop_name",
     UI_AUDIT_PAIR_CODE_FAILED => "ui.audit_pair_code_failed",
 }
 
@@ -774,6 +775,7 @@ mod tests {
             UI_PENDING_ROLE_MEMBER,
             UI_PENDING_ROLE_VIEWER,
             UI_PAIR_DESKTOP_IDENTITY,
+            UI_PAIR_DESKTOP_NAME,
             UI_AUDIT_PAIR_CODE_FAILED,
             UI_ERR_UPDATE_NONE,
             UI_ERR_UPDATE_VERSION_CHANGED,
@@ -784,7 +786,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 334);
+        assert_eq!(ALL.len(), 335);
     }
 
     #[test]

@@ -160,6 +160,7 @@
   "ui.pair_verifying": "验证码已提交，正在等「{name}」确认。",
   "ui.pending_role_member": "申请身份：家庭成员（可以备份和浏览照片）",
   "ui.pending_role_viewer": "申请身份：只能浏览照片",
+  "ui.pair_desktop_name": "本机名称 {name}",
   "ui.pair_desktop_identity": "本机标识 {fingerprint}",
   "ui.pending_new_hint": "确认是家人的手机吗？输入它屏幕上显示的 6 位验证码，确认后它会出现在设备列表里。",
   "ui.pending_known_title": "「{name}」请求重新连接",

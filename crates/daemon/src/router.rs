@@ -147,6 +147,9 @@ fn unpaired(resp: &Resp) -> bool {
             == Some(true)
 }
 
+/// #1118：读不到系统电脑名时、以及配对窗口外对未配对的对端报的通用名。
+pub const GENERIC_DEVICE_NAME: &str = "P-Pass 存储端";
+
 /// The ctrl-plane router: one per daemon process.
 #[derive(Clone)]
 pub struct Router {
@@ -576,10 +579,22 @@ impl Router {
                     (Some(_), Some(delivery)) => Some(delivery.health(peer).await),
                     _ => None,
                 };
+                // #1118：电脑名（系统里的名字，可能含用户真名）只给已配对的成员，或在配对窗口
+                // （二维码显示期间）里给来扫码的手机；其余时候只报通用名。手机核对用的是它自己
+                // 从二维码 NodeId 算出的指纹，名字只是方便辨认的标签。
+                let shown_name = pairing_id.is_some()
+                    || self
+                        .pairing
+                        .as_ref()
+                        .is_some_and(|p| p.window_open((self.now)()));
                 let ours = Hello {
                     proto_ver: PROTO_VER,
                     capabilities: SERVER_CAPABILITIES.iter().map(|s| s.to_string()).collect(),
-                    device_name: self.device_name.clone(),
+                    device_name: if shown_name {
+                        self.device_name.clone()
+                    } else {
+                        GENERIC_DEVICE_NAME.to_owned()
+                    },
                     pairing_id,
                     health,
                 };
