@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - macOS 端：停止后台服务时只结束 P-Pass 自己的后台进程，不会误关命令行里恰好带同样字样的其他程序（#1043）。
 
 ### Fixed
+- Android 端：设置页的开关开启时显示 P-Pass 的绿色，不再是系统默认的紫色；对话框等其他控件的默认颜色也统一换成 P-Pass 的配色（#1093）。
 - 桌面端：手机对同一张照片重新发起传输时，电脑不再误报一次失败，正在进行的传输接着完成，照片只存一份（#1076）。
 
 ### Removed
