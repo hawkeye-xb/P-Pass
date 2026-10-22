@@ -606,6 +606,24 @@ impl Blobs {
         Ok(info.local_bytes())
     }
 
+    /// Bytes of `range` of this blob present locally. Unlike [`Self::local_bytes`], which
+    /// totals every range held, this says whether one specific stretch is still all there —
+    /// e.g. that a retained partial's prefix survived, however much was written after it.
+    pub async fn local_bytes_in(&self, hash: [u8; 32], range: std::ops::Range<u64>) -> Result<u64> {
+        use iroh_blobs::protocol::{ChunkRanges, ChunkRangesExt, GetRequest};
+
+        let request = GetRequest::builder()
+            .root(ChunkRanges::bytes(range))
+            .build(Hash::from_bytes(hash));
+        let info = self
+            .store
+            .remote()
+            .local_for_request(request)
+            .await
+            .map_err(|e| TransportError::Io(format!("local info: {e}")))?;
+        Ok(info.local_bytes())
+    }
+
     /// Where a store for `data_dir` lives (one fixed layout, so restarts
     /// find the same partial data).
     pub fn store_dir(data_dir: &Path) -> PathBuf {

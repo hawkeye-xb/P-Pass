@@ -898,6 +898,11 @@ async fn caught_mid_flight(seed: u64) -> Option<MidFlight> {
 /// #1084: `suspend` returns only after the interrupted fetch task has ended,
 /// so "it stopped" is a direct check, not a quiet-bytes sampling loop
 /// (QA-20 / #443 had to keep widening that loop's wall-clock budget).
+///
+/// "Stopped" means no more bytes are pulled off the network — not that the
+/// store has gone quiet: iroh-blobs' per-hash import task (`import_bao_impl`)
+/// still persists the items the fetch had already handed it (its channel holds
+/// up to 64), so `local_bytes` may still grow a little after `suspend`.
 async fn assert_stopped(m: &MidFlight) {
     assert!(
         !m.delivery
@@ -926,11 +931,19 @@ async fn suspended_partial_survives_gc_and_a_reoffer_of_the_same_tuple_resumes_i
         partial > 0 && partial < m.size,
         "expected a partial, got {partial}"
     );
+    // A fresh store fetched in order: what is there is the prefix.
+    assert_eq!(
+        m.blobs.local_bytes_in(m.hash, 0..partial).await.unwrap(),
+        partial
+    );
 
-    // Dozens of 20 ms GC cycles.
+    // Dozens of 20 ms GC cycles. GC deletes whole blobs (iroh-blobs
+    // `gc_sweep` → `blobs().delete`), so "untouched" means every byte held at
+    // suspend is still held. Not the total: the store may still be persisting
+    // what the fetch had already received (see `assert_stopped`).
     tokio::time::sleep(std::time::Duration::from_millis(600)).await;
     assert_eq!(
-        m.blobs.local_bytes(m.hash).await.unwrap(),
+        m.blobs.local_bytes_in(m.hash, 0..partial).await.unwrap(),
         partial,
         "GC must not touch a suspended grant's partial"
     );
