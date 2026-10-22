@@ -185,6 +185,7 @@
   "ui.audit_pair_denied": "Join request denied",
   "ui.audit_pair_cancelled": "Cancelled on phone",
   "ui.audit_pair_expired": "Pairing timed out",
+  "ui.audit_pair_code_failed": "Wrong pairing code; not joined",
   "ui.audit_removed_external": "Deleted outside the app ({name})",
   "ui.audit_renamed_from_to": "Renamed: {old} → {new}",
   "ui.audit_renamed": "Renamed",

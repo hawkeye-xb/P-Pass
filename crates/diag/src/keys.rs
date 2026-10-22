@@ -428,6 +428,16 @@ msg_keys! {
     UI_ERR_DESKTOP_OUTDATED => "ui.err_desktop_outdated",
     UI_DEVICE_NEEDS_UPDATE_PHONE => "ui.device_needs_update_phone",
     UI_DEVICE_NEEDS_UPDATE_DESKTOP => "ui.device_needs_update_desktop",
+    /// #1118：配对改为业主在电脑上输入手机显示的验证码；待确认行带角色，二维码下显示本机指纹。
+    UI_PAIR_CODE_ONCE => "ui.pair_code_once",
+    UI_PAIR_CODE_PLACEHOLDER => "ui.pair_code_placeholder",
+    UI_PENDING_ENTER_CODE => "ui.pending_enter_code",
+    UI_ERR_PAIR_CODE_WRONG => "ui.err_pair_code_wrong",
+    UI_PAIR_VERIFYING => "ui.pair_verifying",
+    UI_PENDING_ROLE_MEMBER => "ui.pending_role_member",
+    UI_PENDING_ROLE_VIEWER => "ui.pending_role_viewer",
+    UI_PAIR_DESKTOP_IDENTITY => "ui.pair_desktop_identity",
+    UI_AUDIT_PAIR_CODE_FAILED => "ui.audit_pair_code_failed",
 }
 
 #[cfg(test)]
@@ -756,6 +766,15 @@ mod tests {
             UI_ERR_DESKTOP_OUTDATED,
             UI_DEVICE_NEEDS_UPDATE_PHONE,
             UI_DEVICE_NEEDS_UPDATE_DESKTOP,
+            UI_PAIR_CODE_ONCE,
+            UI_PAIR_CODE_PLACEHOLDER,
+            UI_PENDING_ENTER_CODE,
+            UI_ERR_PAIR_CODE_WRONG,
+            UI_PAIR_VERIFYING,
+            UI_PENDING_ROLE_MEMBER,
+            UI_PENDING_ROLE_VIEWER,
+            UI_PAIR_DESKTOP_IDENTITY,
+            UI_AUDIT_PAIR_CODE_FAILED,
             UI_ERR_UPDATE_NONE,
             UI_ERR_UPDATE_VERSION_CHANGED,
             UI_ERR_UPDATE_PUBLISHER_REJECTED,
@@ -765,7 +784,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 325);
+        assert_eq!(ALL.len(), 334);
     }
 
     #[test]
