@@ -24,7 +24,8 @@ check() { # $1 = 说明，其余 = 命令
 mkdir -p "$A" "$B"
 desk_start "$A" "$DAEMON"
 desk_start "$B" "$DAEMON"
-desk_auto_allow "$A"
+# 额外日志文件此时还不存在（真实脚本里 logcat / 客户端日志常晚于自动允许出现）：缺文件不许让循环退出。
+desk_auto_allow "$A" "$A/not-yet-written.log"
 SA=$(cat "$A/sandbox"); SB=$(cat "$B/sandbox"); PA=$(cat "$A/pid"); PB=$(cat "$B/pid")
 check "两台 NodeId 不同" [ "$(desk_node "$A")" != "$(desk_node "$B")" ]
 check "两台各自的临时库" [ "$SA" != "$SB" ]

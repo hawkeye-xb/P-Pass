@@ -83,7 +83,9 @@ desk_auto_allow() { # $1 = 工作目录，其余 = 额外要扫的日志文件�
     while kill -0 "$pid" 2>/dev/null; do
       if resp=$(desk_ipc "$d" pairing.pending 2>/dev/null); then
         for n in $(printf '%s' "$resp" | jq -r '.result.pending[]?.node_id // empty'); do
-          code=$(cat "$d"/codes/* "$@" 2>/dev/null | sed -n "s/.*PAIR_CODE=\([0-9]\{6\}\) node=$n.*/\1/p" | tail -1)
+          # 日志文件可能还没出现（客户端还没起来）：缺文件不算错——调用方开着 set -e / pipefail，
+          # 这里一失败整个循环就退出了，再也没人输码。
+          code=$({ cat "$d"/codes/* "$@" 2>/dev/null || true; } | sed -n "s/.*PAIR_CODE=\([0-9]\{6\}\) node=$n.*/\1/p" | tail -1)
           [ -n "$code" ] || continue
           desk_ipc "$d" pairing.confirm "$(jq -cn --arg n "$n" --arg c "$code" '{accept: true, node_id: $n, code: $c}')" >/dev/null 2>&1 \
             && echo "  桌面 $(basename "$d")：已用验证码允许 ${n:0:8}…"
