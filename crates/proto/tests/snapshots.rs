@@ -64,6 +64,7 @@ fn snapshot_pair_request() {
         device_name: "Mom's Phone".into(),
         role: "member".into(),
         ack_then_poll: false,
+        pake_a: String::new(),
     };
     assert_roundtrip(&pr);
     snapshot_message("pair_request", &pr);
@@ -78,9 +79,74 @@ fn snapshot_pair_request_ack_then_poll() {
         device_name: "Mom's Phone".into(),
         role: "member".into(),
         ack_then_poll: true,
+        pake_a: String::new(),
     };
     assert_roundtrip(&pr);
     snapshot_message("pair_request_ack_then_poll", &pr);
+}
+
+// #1118: the request every current phone sends — with its SPAKE2 message.
+#[test]
+fn snapshot_pair_request_pake() {
+    let pr = PairRequest {
+        token: "abcd1234abcd1234abcd1234".into(),
+        device_name: "Mom's Phone".into(),
+        role: "member".into(),
+        ack_then_poll: true,
+        pake_a: format!("41{}", "5a".repeat(32)),
+    };
+    assert_roundtrip(&pr);
+    snapshot_message("pair_request_pake", &pr);
+}
+
+// #1118: the owner typed the code — the desktop's SPAKE2 answer rides on a pending status.
+#[test]
+fn snapshot_pair_status_reply_pake_b() {
+    let r = PairStatusReply {
+        state: PairStatusState::Pending,
+        pake_b: Some(format!("42{}", "6b".repeat(32))),
+        ..Default::default()
+    };
+    assert_roundtrip(&r);
+    snapshot_message("pair_status_reply_pake_b", &r);
+}
+
+// #1118: `pair.confirm` params.
+#[test]
+fn snapshot_pair_confirm_request() {
+    let q = PairConfirmRequest {
+        request_id: "0123456789abcdef0123456789abcdef".into(),
+        confirm_a: "c1".repeat(32),
+    };
+    assert_roundtrip(&q);
+    snapshot_message("pair_confirm_request", &q);
+}
+
+// #1118: `pair.confirm` / `pair.status` after the code matched — the desktop's confirmation.
+#[test]
+fn snapshot_pair_status_reply_confirmed() {
+    let r = PairStatusReply {
+        state: PairStatusState::Accepted,
+        accepted: Some(PairAccepted {
+            storage_device_name: "Home PC".into(),
+            pairing_id: "epoch-1".into(),
+        }),
+        confirm_b: Some("cb".repeat(32)),
+        ..Default::default()
+    };
+    assert_roundtrip(&r);
+    snapshot_message("pair_status_reply_confirmed", &r);
+}
+
+// #1118: the code confirmation did not match — the request is void.
+#[test]
+fn snapshot_pair_status_reply_failed() {
+    let r = PairStatusReply {
+        state: PairStatusState::Failed,
+        ..Default::default()
+    };
+    assert_roundtrip(&r);
+    snapshot_message("pair_status_reply_failed", &r);
 }
 
 #[test]
@@ -111,6 +177,7 @@ fn snapshot_pair_status_reply_accepted() {
             storage_device_name: "Home PC".into(),
             pairing_id: "epoch-1".into(),
         }),
+        ..Default::default()
     };
     assert_roundtrip(&r);
     snapshot_message("pair_status_reply_accepted", &r);
@@ -121,7 +188,7 @@ fn snapshot_pair_status_reply_denied() {
     // #1070: a denial is the state alone — no reason key on the wire.
     let r = PairStatusReply {
         state: PairStatusState::Denied,
-        accepted: None,
+        ..Default::default()
     };
     assert_roundtrip(&r);
     snapshot_message("pair_status_reply_denied", &r);

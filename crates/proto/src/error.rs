@@ -74,6 +74,9 @@ pub enum Reason {
     RoleForbidden,
     /// The pairing token is invalid or already used.
     PairTokenInvalid,
+    /// #1118: the pairing code confirmation did not match (wrong code entered on the desktop,
+    /// or a tampered exchange). The request and its token are void; scan again.
+    PairCodeWrong,
     // ── Version ──
     PhoneOutdated,
     DesktopOutdated,
@@ -110,6 +113,7 @@ impl Reason {
         Reason::NotPaired,
         Reason::RoleForbidden,
         Reason::PairTokenInvalid,
+        Reason::PairCodeWrong,
         Reason::PhoneOutdated,
         Reason::DesktopOutdated,
         Reason::UnsupportedMethod,
@@ -133,6 +137,7 @@ impl Reason {
             Reason::NotPaired => "not_paired",
             Reason::RoleForbidden => "role_forbidden",
             Reason::PairTokenInvalid => "pair_token_invalid",
+            Reason::PairCodeWrong => "pair_code_wrong",
             Reason::PhoneOutdated => "phone_outdated",
             Reason::DesktopOutdated => "desktop_outdated",
             Reason::UnsupportedMethod => "unsupported_method",
@@ -170,9 +175,10 @@ impl Reason {
     /// The coarse `code` this reason travels under.
     pub fn category(&self) -> &'static str {
         match self {
-            Reason::NotPaired | Reason::RoleForbidden | Reason::PairTokenInvalid => {
-                codes::NOT_AUTHORIZED
-            }
+            Reason::NotPaired
+            | Reason::RoleForbidden
+            | Reason::PairTokenInvalid
+            | Reason::PairCodeWrong => codes::NOT_AUTHORIZED,
             Reason::PhoneOutdated | Reason::DesktopOutdated => codes::VERSION_MISMATCH,
             Reason::UnsupportedMethod | Reason::BadRequest => codes::INVALID_REQUEST,
             Reason::NotFound => codes::NOT_FOUND,
@@ -345,6 +351,7 @@ mod tests {
             (NotPaired, codes::NOT_AUTHORIZED),
             (RoleForbidden, codes::NOT_AUTHORIZED),
             (PairTokenInvalid, codes::NOT_AUTHORIZED),
+            (PairCodeWrong, codes::NOT_AUTHORIZED),
             (PhoneOutdated, codes::VERSION_MISMATCH),
             (DesktopOutdated, codes::VERSION_MISMATCH),
             (UnsupportedMethod, codes::INVALID_REQUEST),

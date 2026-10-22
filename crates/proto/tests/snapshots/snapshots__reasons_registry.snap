@@ -16,6 +16,10 @@ expression: json
     "reason": "pair_token_invalid"
   },
   {
+    "code": "NOT_AUTHORIZED",
+    "reason": "pair_code_wrong"
+  },
+  {
     "code": "VERSION_MISMATCH",
     "reason": "phone_outdated"
   },
