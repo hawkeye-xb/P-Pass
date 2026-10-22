@@ -29,10 +29,14 @@ public final class OriginalFetcher: @unchecked Sendable {
 
     /// 取原图到临时文件。
     ///
+    /// - Parameter onLocality: 开始读之前判定一次原图在不在本机（true = 在本机；false = 要从 iCloud 下载）；判断不了不调用。
     /// - Throws: ``OriginalFetchFailure``（分类见其文档）；Task 被取消时抛 `CancellationError`。
-    public func fetch(assetId: String, progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> FetchedOriginal {
+    public func fetch(assetId: String, progress: @escaping @Sendable (Double) -> Void = { _ in },
+                      onLocality: @escaping @Sendable (Bool) -> Void = { _ in }) async throws -> FetchedOriginal {
         try Task.checkCancellation()
         let info = try source.resolveOriginal(assetId: assetId)
+        if let local = await source.isLocal(info) { onLocality(local) }
+        try Task.checkCancellation()
         let fm = FileManager.default
         let dir = tempRoot.appendingPathComponent(UUID().uuidString, isDirectory: true)
         let ext = (info.originalFilename as NSString).pathExtension

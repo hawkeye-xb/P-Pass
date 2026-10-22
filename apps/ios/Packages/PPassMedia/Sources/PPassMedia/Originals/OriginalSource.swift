@@ -54,6 +54,13 @@ public protocol OriginalResourceSource: Sendable {
         progress: @escaping @Sendable (Double) -> Void,
         chunk: @escaping (Data) throws -> Void
     ) async throws
+
+    /// 这份资源此刻在不在本机（不下载）。true = 本机可读；false = 要从 iCloud 下载；nil = 判断不了。
+    func isLocal(_ resource: OriginalResourceInfo) async -> Bool?
+}
+
+public extension OriginalResourceSource {
+    func isLocal(_ resource: OriginalResourceInfo) async -> Bool? { nil }
 }
 
 /// ``OriginalResourceSource`` 的 PhotoKit 实现：`PHAssetResourceManager.requestData`，并设 `isNetworkAccessAllowed = true`。
@@ -120,6 +127,58 @@ public struct PhotoKitOriginalSource: OriginalResourceSource {
             request.cancelled = true
             if let id = request.id { manager.cancelDataRequest(id) }
         }
+    }
+}
+
+extension PhotoKitOriginalSource {
+    /// 用「不许走网络」读一次：收到第一块数据 = 在本机（随即取消，不读完）；系统报「需要网络」（PHPhotosError 3164）
+    /// = 原图在 iCloud。只用公开 API，不触发下载（#337 真机验证过这条判据，#1092 用它决定首页文案）。
+    public func isLocal(_ resource: OriginalResourceInfo) async -> Bool? {
+        guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [resource.assetId], options: nil).firstObject,
+              let target = PHAssetResource.assetResources(for: asset).first(where: { r in
+                  r.type == resource.resourceType && r.originalFilename == resource.originalFilename
+              }) else { return nil }
+        return await Self.isLocal(target)
+    }
+
+    /// 同上，直接给 `PHAssetResource`。
+    public static func isLocal(_ resource: PHAssetResource) async -> Bool? {
+        let manager = PHAssetResourceManager.default()
+        let options = PHAssetResourceRequestOptions()
+        options.isNetworkAccessAllowed = false
+        let state = LocalityProbeState()
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool?, Never>) in
+            let id = manager.requestData(for: resource, options: options, dataReceivedHandler: { _ in
+                if state.markGotData(), let id = state.id { manager.cancelDataRequest(id) }
+            }, completionHandler: { error in
+                if state.gotData { continuation.resume(returning: true); return }
+                guard let error = error as NSError? else { continuation.resume(returning: true); return } // 空文件
+                let networkRequired = error.domain == PHPhotosErrorDomain && error.code == PHPhotosError.networkAccessRequired.rawValue
+                continuation.resume(returning: networkRequired ? false : nil)
+            })
+            state.id = id
+            if state.gotData { manager.cancelDataRequest(id) }
+        }
+    }
+}
+
+private final class LocalityProbeState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _id: PHAssetResourceDataRequestID?
+    private var _gotData = false
+
+    var id: PHAssetResourceDataRequestID? {
+        get { lock.lock(); defer { lock.unlock() }; return _id }
+        set { lock.lock(); _id = newValue; lock.unlock() }
+    }
+    var gotData: Bool { lock.lock(); defer { lock.unlock() }; return _gotData }
+
+    /// 第一次收到数据时返回 true（只取消一次）。
+    func markGotData() -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        guard !_gotData else { return false }
+        _gotData = true
+        return true
     }
 }
 

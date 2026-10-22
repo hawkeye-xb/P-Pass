@@ -25,6 +25,10 @@ struct EngineSnapshot: Equatable {
     var currentOrderId: Int64?
     var currentBytesSent: Int64 = 0
     var currentTotalBytes: Int64 = 0
+    /// 正在取原图的这一张（#1092）：文件名、是否从 iCloud 下载、下载进度。与 currentOrderId 不同时有值。
+    var fetchingFileName: String?
+    var fetchingFromICloud = false
+    var fetchingFraction: Double?
 
     init(state: GlobalState = .idle, waitReason: WaitReason? = nil, pending: Int = 0, doneThisRound: Int = 0,
          currentFileName: String? = nil, desktopFreeBytes: Int64? = nil,
@@ -46,6 +50,9 @@ struct EngineSnapshot: Equatable {
                   desktopFreeBytes: view.desktopHealth?.freeBytes,
                   currentOrderId: view.current?.orderId, currentBytesSent: view.current?.bytesSent ?? 0,
                   currentTotalBytes: view.current?.totalBytes ?? 0)
+        fetchingFileName = view.fetching?.fileName
+        fetchingFromICloud = view.fetching?.fromICloud ?? false
+        fetchingFraction = view.fetching?.fraction
     }
 }
 
@@ -83,13 +90,15 @@ struct FlowFacts: Equatable {
 enum BackupUiState: Equatable {
     case idle, preparing, paused, noAlbums
     case sending(done: Int, total: Int, currentFile: String)
+    /// #1092：这一张的原图正从 iCloud 下载（还没开始传给电脑）。fraction 为下载进度，未知为 nil。
+    case fetchingFromICloud(done: Int, total: Int, currentFile: String, fraction: Double?)
     case allSafe(ingested: Int)
     case waiting(WaitReason)
     case trouble(String)
 
     var isRunning: Bool {
         switch self {
-        case .preparing, .sending: return true
+        case .preparing, .sending, .fetchingFromICloud: return true
         default: return false
         }
     }
@@ -136,8 +145,11 @@ enum HomeProjection {
         switch f.state {
         case .paused: return .paused
         case .running:
-            guard let v = f.view, let file = v.currentFileName else { return .preparing }
+            guard let v = f.view, let file = v.currentFileName ?? v.fetchingFileName else { return .preparing }
             let (x, y) = roundOrdinal(doneThisRound: v.doneThisRound, pending: v.pending)
+            if v.currentFileName == nil, v.fetchingFromICloud {
+                return .fetchingFromICloud(done: x, total: y, currentFile: file, fraction: v.fetchingFraction)
+            }
             return .sending(done: x, total: y, currentFile: file)
         case .waiting:
             if let r = f.waitReason, r != .notPaired { return .waiting(r) }
@@ -173,7 +185,7 @@ enum HomeProjection {
     static func statusLine(_ s: BackupUiState, pendingK: Int64) -> StatusLine {
         switch s {
         case .trouble: return .trouble
-        case .preparing, .sending: return .working
+        case .preparing, .sending, .fetchingFromICloud: return .working
         case .noAlbums: return .noAlbums
         case .waiting: return .waiting
         case .paused: return .paused
@@ -262,6 +274,9 @@ enum TransferText {
 
     /// 字节这么久没动就算「慢」（Android TRANSFER_SLOW_AFTER_MS）。
     static let slowAfterSeconds = 15
+
+    /// 字节已全部发出、在等电脑确认（Android `TransferPace.FINISHING`）。
+    static func isFinishing(sent: Int64, total: Int64) -> Bool { total > 0 && sent >= total }
 }
 
 

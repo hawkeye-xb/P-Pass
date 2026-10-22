@@ -157,12 +157,21 @@ final class FakeImporter: MediaImporter, @unchecked Sendable {
 
     init(media: FakeMedia) { self.media = media }
 
-    func releaseHold() { hold.set(false); gate.open() }
+    func releaseHold() { hold.set(false); holdIds.set([]); gate.open() }
 
-    func importMedia(_ details: MediaDetails) async throws -> ImportResult {
+    /// 只挂起这几张的导入（其余照常），直到 releaseHold。
+    let holdIds = Locked<Set<String>>([])
+    /// 模拟 iCloud 下载：导入时按这些进度依次回报（`fromICloud = true`）。
+    let iCloudProgress = Locked<[String: [Double]]>([:])
+
+    func importMedia(_ details: MediaDetails, onFetch: @escaping @Sendable (OriginalFetchUpdate) -> Void) async throws -> ImportResult {
         let id = details.snapshot.mediaId
         imported.update { $0.append(id) }
-        if hold.get() { try await gate.wait() }
+        if let steps = iCloudProgress.get()[id] {
+            onFetch(OriginalFetchUpdate(fromICloud: true, fraction: nil))
+            for f in steps { onFetch(OriginalFetchUpdate(fromICloud: true, fraction: f)) }
+        }
+        if hold.get() || holdIds.get().contains(id) { try await gate.wait() }
         if let failure = failures.update({ $0.isEmpty ? nil : $0.removeFirst() }) { throw failure }
         if unreadable.get().contains(id) { return .sourceMissing }
         if iCloudOffline.get().contains(id) { return .originalUnavailable(reason: "NSURLErrorNotConnectedToInternet") }

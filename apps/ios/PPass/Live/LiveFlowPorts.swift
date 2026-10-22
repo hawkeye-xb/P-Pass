@@ -63,19 +63,20 @@ final class PhotoImporter: MediaImporter, @unchecked Sendable {
         fetcher.purgeLeftovers()
     }
 
-    func importMedia(_ details: MediaDetails) async throws -> ImportResult {
+    func importMedia(_ details: MediaDetails, onFetch: @escaping @Sendable (OriginalFetchUpdate) -> Void) async throws -> ImportResult {
         let assetId = details.snapshot.mediaId
-        #if DEBUG
-        // 仅调试包（#337 E3）：取之前先用「不许走网络」探一次，记下原图此刻在不在本机——取完之后系统可能已把它留在本机。
-        let locality = " local=\(await OriginalLocalityProbe.isLocal(assetId: assetId).map { $0 ? "yes" : "no" } ?? "unknown")"
-        #else
-        let locality = ""
-        #endif
         let progress = OriginalProgress()
         let started = Date()
         let original: FetchedOriginal
         do {
-            original = try await fetcher.fetch(assetId: assetId, progress: { progress.record($0) })
+            // #1092：读之前判定一次原图在不在本机（公开 API、不下载）；要从 iCloud 下载时把下载进度报给引擎，首页据此显示。
+            original = try await fetcher.fetch(assetId: assetId, progress: { p in
+                progress.record(p)
+                if progress.fromICloud == true { onFetch(OriginalFetchUpdate(fromICloud: true, fraction: p)) }
+            }, onLocality: { local in
+                progress.setFromICloud(!local)
+                if !local { onFetch(OriginalFetchUpdate(fromICloud: true, fraction: nil)) }
+            })
         } catch let failure as OriginalFetchFailure {
             guard let result = Self.result(for: failure) else { throw failure }
             return result
@@ -87,9 +88,10 @@ final class PhotoImporter: MediaImporter, @unchecked Sendable {
         held[imported.hash]?.discard()
         held[imported.hash] = original
         lock.unlock()
-        // 成功路径的判据行（#337）：资源类型（rawValue：photo=1 video=2，编辑过为 fullSizePhoto=5 / fullSizeVideo=6）、字节数、系统进度回调次数
+        // 成功路径的判据行（#337）：原图取之前在不在本机（local=）、资源类型（rawValue：photo=1 video=2，编辑过为 fullSizePhoto=5 / fullSizeVideo=6）、字节数、系统进度回调次数
         // （真机实测本机原图也会回调，不能据此判断走了网络；在不在本机看调试包的 local=）、耗时、BLAKE3 前缀（与桌面库对账）。
         let (callbacks, last) = progress.snapshot()
+        let locality = progress.fromICloud.map { $0 ? " local=no" : " local=yes" } ?? " local=unknown"
         AppLog.log("original fetched \(LogRedact.id(assetId)) type=\(original.info.resourceType.rawValue) bytes=\(original.sizeBytes) "
             + "progress_callbacks=\(callbacks) last_progress=\(String(format: "%.2f", last)) "
             + "ms=\(Int(Date().timeIntervalSince(started) * 1000)) hash=\(imported.hash.prefix(16))\(locality)")
@@ -119,6 +121,11 @@ final class OriginalProgress: @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0
     private var last = 0.0
+    private var _fromICloud: Bool?
+
+    /// 读之前判定的结果：true = 要从 iCloud 下载；nil = 没判定出来。
+    var fromICloud: Bool? { lock.lock(); defer { lock.unlock() }; return _fromICloud }
+    func setFromICloud(_ value: Bool) { lock.lock(); _fromICloud = value; lock.unlock() }
 
     func record(_ value: Double) {
         lock.lock(); count += 1; last = value; lock.unlock()
