@@ -3779,6 +3779,7 @@ version = "0.10.0"
 dependencies = [
  "libc",
  "notify",
+ "security-framework",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",

@@ -2620,6 +2620,7 @@ name = "platform"
 version = "0.10.0"
 dependencies = [
  "libc",
+ "security-framework",
  "thiserror 2.0.19",
  "tokio",
  "windows 0.62.2",

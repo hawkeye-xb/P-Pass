@@ -2776,6 +2776,9 @@ mod desk65_scheduled_task_tests {
             element(&xml, "Command"),
             [r"C:\Users\x\AppData\Local\P-Pass\ppf-daemon.exe"]
         );
+        // #1109：常驻 daemon 不带参数——`--ephemeral` 用内存里的随机身份。
+        assert!(element(&xml, "Arguments").is_empty(), "{xml}");
+        assert!(!xml.contains("--ephemeral"), "{xml}");
     }
 
     /// 用户名、路径里的 XML 特殊字符要转义，否则任务定义注册不上。

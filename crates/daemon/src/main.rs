@@ -277,16 +277,16 @@ async fn main() -> anyhow::Result<()> {
         }
     };
     // ── Persistent daemon identity (真机 P0: 每次重启换 NodeId 会把
-    // 所有已配对手机变成孤儿——配对绑的就是 NodeId). 身份密钥当前存在
-    // 数据目录里的 identity.key（unix 0600 / Windows 仅属主 DACL，与
-    // ipc.token 同一信任域），不进 Keychain/DPAPI，见 load_or_mint_identity。
-    let secret = load_or_mint_identity(&data_dir)?;
+    // 所有已配对手机变成孤儿——配对绑的就是 NodeId). #1109：macOS 存
+    // data protection 钥匙串，Windows / Linux 仍是数据目录里的 identity.key；
+    // 读不出来 / 内容不合法就拒绝启动，见 daemon::identity。
+    let secret = load_or_mint_identity(ephemeral, &data_dir);
 
     // ── DAE-02: 单实例 claim 先于 transport bind ──────────────────
     // 固定端口 config 下，在位实例占着端口会让新实例 bind 直接失败；
     // 版本握手（接管/退位裁决）必须先于 bind 发生，否则接管永不发生
     // （验收人实锤：0.2.1 新实例 vs 0.1.0 在位，bind 先炸）。socket_name
-    // 依赖 node_id——从 identity.key 直接派生，不必先 bind endpoint。
+    // 依赖 node_id——从身份私钥直接派生，不必先 bind endpoint。
     let node_id = transport::node_id_from_secret_key(&secret);
     let socket_name = format!("ppf-{}", &node_id.to_string()[..8]);
     let daemon_version = daemon::daemon_version();
@@ -412,7 +412,7 @@ async fn main() -> anyhow::Result<()> {
         }
     };
     // DAE-02 防漂移：bind 后的真实 node_id 必须与 claim 用的一致（同一
-    // identity.key）。不一致说明身份文件被换，绝不能继续服务。
+    // 身份私钥）。不一致说明身份被换，绝不能继续服务。
     if transport.node_id() != node_id {
         tracing::error!(
             "DAE-02: node id drift after bind (claim used {node_id}, bound {}) — aborting",
@@ -870,44 +870,26 @@ async fn shutdown(transport: &transport::IrohTransport, req: Option<platform::St
     }
 }
 
-/// The daemon's stable identity key, in `identity.key` beside the index
-/// (0600 on unix, owner-only DACL on Windows) — same trust domain as ipc.token.
-///
-/// 当初弃用钥匙串的原因：ad-hoc 签名的二进制每次重启都会重新弹出钥匙串授权
-/// 弹窗（真机实测；无人值守的常驻服务答不了弹窗）。这是现状，不是「以后迁回」
-/// 的占位：若要迁回 Keychain/DPAPI，必须先在**正式签名包**上实测是否还弹窗，
-/// 再设计旧 identity.key 的迁移（改身份存放位置 = 改行为，已配对手机绑的是 NodeId）。
-/// （#1041 已删掉从未被产品代码调用的 `KeyStore` 端口。）
-fn load_or_mint_identity(data_dir: &std::path::Path) -> anyhow::Result<[u8; 32]> {
+/// #1109：落定身份私钥；失败即拒绝启动——经 stderr 最后一行（keyed JSON，
+/// 桌面壳读它显示原因）说明，不回退明文、不静默换身份。
+/// `--ephemeral` 用只在内存里的临时身份（见 `daemon::identity::for_run`）。
+fn load_or_mint_identity(ephemeral: bool, data_dir: &std::path::Path) -> [u8; 32] {
     use platform::PlatformAdapter as _;
-    load_or_mint_identity_with(data_dir, |p| platform::adapter().restrict_to_owner(p))
-}
-
-/// SEC-10 (#445): `restrict` is injected so a test can see that BOTH
-/// branches tighten the file. Only minting used to call it, so a key
-/// minted before SEC-07 (or copied in by the DESK-24 data-dir move)
-/// kept its inherited ACL forever.
-fn load_or_mint_identity_with(
-    data_dir: &std::path::Path,
-    restrict: impl Fn(&std::path::Path) -> platform::Result<platform::Applied>,
-) -> anyhow::Result<[u8; 32]> {
-    let key_file = data_dir.join(".ppf/identity.key");
-    if let Ok(bytes) = std::fs::read(&key_file) {
-        if bytes.len() == 32 {
-            let mut k = [0u8; 32];
-            k.copy_from_slice(&bytes);
-            // Idempotent: tightening an already-tight file is a no-op.
-            tighten_identity_file(&key_file, &restrict);
-            return Ok(k);
+    let adapter = platform::adapter();
+    match daemon::identity::for_run(
+        ephemeral,
+        adapter.identity_key_home(),
+        data_dir,
+        |p| adapter.restrict_to_owner(p),
+        rand_token,
+    ) {
+        Ok(k) => k,
+        Err(e) => {
+            tracing::error!("启动失败：{e}");
+            eprintln!("{}", daemon::cli::startup_error_line(None, &e.to_string()));
+            std::process::exit(1);
         }
     }
-    let k = rand_token()?;
-    std::fs::create_dir_all(data_dir.join(".ppf"))?;
-    std::fs::write(&key_file, k)?;
-    tighten_identity_file(&key_file, &restrict);
-    // DEVLOG-03：只有路径、不含密钥内容，进日志是安全的。
-    tracing::info!("身份密钥已铸造: {}", key_file.display());
-    Ok(k)
 }
 
 /// DESK-46 (#638)：库目录的启动判据（纯函数——文件系统与 env 探测都在
@@ -930,18 +912,6 @@ fn library_root_check(
         ));
     }
     Ok(())
-}
-
-/// QA-09 迁移（#211）：原先是一处 unix 专属的 0o600。失败不阻止启动（与
-/// 迁移前的 `let _ =` 一致），但 `Err` 记一条 WARN——SEC-10：收紧失败不能
-/// 又是一件看不见的事。`Unsupported` 是契约写明的「本平台没收紧」，不算失败。
-fn tighten_identity_file(
-    key_file: &std::path::Path,
-    restrict: &impl Fn(&std::path::Path) -> platform::Result<platform::Applied>,
-) {
-    if let Err(e) = restrict(key_file) {
-        tracing::warn!("身份密钥权限收紧失败: {}: {e}", key_file.display());
-    }
 }
 
 /// 32 random bytes from the OS (via std's RandomState hashing entropy is
@@ -970,65 +940,7 @@ fn unix_ms_now() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
-    use std::path::{Path, PathBuf};
-
-    fn recording(
-        calls: &RefCell<Vec<PathBuf>>,
-    ) -> impl Fn(&Path) -> platform::Result<platform::Applied> + '_ {
-        move |p| {
-            calls.borrow_mut().push(p.to_path_buf());
-            Ok(platform::Applied::Done)
-        }
-    }
-
-    // SEC-10 (#445) RED: a key that already exists (minted before SEC-07,
-    // or carried over by the DESK-24 move) must be tightened on load too,
-    // and loading must not re-mint it.
-    #[test]
-    fn sec10_existing_identity_is_tightened_and_kept() {
-        let dir = tempfile::tempdir().unwrap();
-        let key_file = dir.path().join(".ppf/identity.key");
-        std::fs::create_dir_all(key_file.parent().unwrap()).unwrap();
-        std::fs::write(&key_file, [7u8; 32]).unwrap();
-
-        let calls = RefCell::new(Vec::new());
-        let k = load_or_mint_identity_with(dir.path(), recording(&calls)).unwrap();
-
-        assert_eq!(
-            k, [7u8; 32],
-            "an existing key must be loaded, not re-minted"
-        );
-        assert_eq!(*calls.borrow(), vec![key_file]);
-    }
-
-    #[test]
-    fn sec10_minted_identity_is_tightened() {
-        let dir = tempfile::tempdir().unwrap();
-        let calls = RefCell::new(Vec::new());
-        let k = load_or_mint_identity_with(dir.path(), recording(&calls)).unwrap();
-
-        let key_file = dir.path().join(".ppf/identity.key");
-        assert_eq!(std::fs::read(&key_file).unwrap(), k);
-        assert_eq!(*calls.borrow(), vec![key_file]);
-    }
-
-    #[test]
-    fn sec10_tighten_failure_does_not_block_startup() {
-        let dir = tempfile::tempdir().unwrap();
-        let key_file = dir.path().join(".ppf/identity.key");
-        std::fs::create_dir_all(key_file.parent().unwrap()).unwrap();
-        std::fs::write(&key_file, [9u8; 32]).unwrap();
-
-        let k = load_or_mint_identity_with(dir.path(), |_| {
-            Err(platform::PlatformError::Failed {
-                action: "restrict_to_owner",
-                detail: "denied".into(),
-            })
-        })
-        .unwrap();
-        assert_eq!(k, [9u8; 32]);
-    }
+    use std::path::Path;
 
     // DESK-46 (#638)：显式配置的库目录不存在 ⇒ 拒绝启动（人话消息），
     // 不再 create_dir_all 造假目录。反证：把 library_root_check 改成永远
