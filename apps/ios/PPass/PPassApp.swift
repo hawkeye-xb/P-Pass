@@ -42,6 +42,7 @@ enum AppBoot {
         if useDemo { return .ready(AppModel(backend: FakeBackend.make()), nil) }
         AppLog.logLaunch()
         #if DEBUG
+        OriginalLocalityProbe.logTestFilesAtLaunch() // #337 / #1016 真机取证：只读、不下载
         // 仅 DEBUG：PPASS_E2E_RESET=1 → 启动前清掉存储根（配对 / 账本 / provider 库 / 身份），等价于全新安装但保留系统授权。
         // 真机端到端每轮换一个新 daemon，旧账本会把「已确认」算给旧电脑，必须从空账本开始。
         if ProcessInfo.processInfo.environment["PPASS_E2E_RESET"] == "1",

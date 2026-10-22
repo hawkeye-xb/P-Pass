@@ -2,7 +2,7 @@
 # 真机回归的日志判定（#939）：拉手机落盘日志（只看起点之后的行）+ 本机桌面库，按阶段自动判 PASS / FAIL。
 # 需要人在手机上点的步骤由人做；本脚本只负责「从日志判定」，可在任意时刻重跑。
 #   tools/ios/e3-judge.sh mark                 记下起点（之后的判定只看起点之后的日志行）
-#   tools/ios/e3-judge.sh check <phase>        判定一个阶段：foreground-notice | onboarded-at-finish | prewarm-park | no-inactive-catchup | 956-offline | 956-delivered | onboarding | wifi | autobackup-on | notify-media | notify-media-dedupe | notify-bgrefresh | commands | retry-failed | photos-log | degraded-stats
+#   tools/ios/e3-judge.sh check <phase>        判定一个阶段：foreground-notice | onboarded-at-finish | prewarm-park | no-inactive-catchup | 956-offline | 956-delivered | onboarding | wifi | autobackup-on | notify-media | notify-media-dedupe | notify-bgrefresh | commands | retry-failed | photos-log | degraded-stats | icloud-original
 #   tools/ios/e3-judge.sh tail [n]             看起点之后的日志尾部
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -93,6 +93,20 @@ case "${1:-}" in
         # #1016：只统计不判对错——降级张数（按脱敏 id 去重）与总行数，交给人决定保留降级还是换判据。
         n=$(grep -E -o 'source version degraded for [0-9a-f]{8}' "$S/since.log" | sort -u | wc -l | tr -d ' ')
         echo "INFO  照片源版本降级：$n 张（按 id 去重；行数 $(grep -c 'source version degraded for' "$S/since.log")）" ;;
+      icloud-original)
+        # #337：测试文件（程序生成、经 Mac「照片」进 iCloud）在手机上原图不在本机，备份时从 iCloud 下载并算出 BLAKE3。
+        # 同一 id 的 probe 行（启动时、只读）给出 local=no；original fetched 行（取之前再探一次 local=no）给出字节数、耗时与哈希前缀。
+        # 进度回调次数不作判据：真机实测本机原图也会回调。
+        expect "启动探测找到测试文件" 'probe: test files found=[1-9]'
+        expect "至少一个测试文件原图在 iCloud（启动探测）" 'probe: test=[A-Z] [0-9a-f]{8} .* local=no '
+        expect "编辑过的测试文件取编辑后版本（fullSizePhoto=5 / fullSizeVideo=6）" 'probe: test=[A-Z] [0-9a-f]{8} .* selected=(5|6) '
+        ok=0
+        for id in $(grep -E -o 'probe: test=[A-Z] [0-9a-f]{8} .* local=no ' "$S/since.log" | awk '{print $3}' | sort -u); do
+          line=$(grep -E "original fetched $id .* local=no" "$S/since.log" | tail -1)
+          if [ -n "$line" ]; then ok=$((ok+1)); echo "PASS  iCloud 下载取原图 $id"; echo "        $line"
+          else echo "INFO  $id 还没有从 iCloud 下载成功的 original fetched 行"; fi
+        done
+        [ "$ok" -gt 0 ] || { echo "FAIL  没有任何测试文件经 iCloud 下载成功"; fails=$((fails+1)); } ;;
       *) echo "未知阶段"; exit 2 ;;
     esac
     [ "$fails" -eq 0 ] && echo "== 阶段 ${2} 通过" || echo "== 阶段 ${2} 失败 $fails 项（明细见 $S/since.log）"
