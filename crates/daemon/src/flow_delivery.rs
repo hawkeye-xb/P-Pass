@@ -1579,7 +1579,10 @@ impl FlowDelivery {
         if grant.state != FlowGrantState::Active {
             return Ok(());
         }
-        // #1084: answer only once the fetch has really stopped.
+        // #1084: answer only once the fetch has really stopped pulling. The
+        // store's own import task may still persist the few items already
+        // received (iroh-blobs offers no handle to await it) — verified data
+        // the resume keeps, never a new network read.
         self.tasks.interrupt(peer, &grant).exited().await;
         Ok(())
     }
