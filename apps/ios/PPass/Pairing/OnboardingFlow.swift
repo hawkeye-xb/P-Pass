@@ -66,7 +66,7 @@ struct OnboardingFlow: View {
             let outcome = await app.backend.pairing.pair(code: code)
             guard !Task.isCancelled else { return }
             switch outcome {
-            case .joined(let firstTime): app.paired(firstTime: firstTime)
+            case .joined(let firstTime, let settingSaveFailed): app.paired(firstTime: firstTime, settingSaveFailed: settingSaveFailed)
             case .refused(let note, let ownerSaidNo):
                 step = .status(.refused(lapsed: !ownerSaidNo, note: note?.text))
             case .needsUpdate(let side): step = .status(.needsUpdate(side))

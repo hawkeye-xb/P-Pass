@@ -55,7 +55,7 @@ final class PairingWiringTests: XCTestCase {
 
     private func makePairing(_ transport: ScriptedTransport, store: PairingStore,
                              onboarded: @escaping (String) -> Bool = { _ in false },
-                             onPaired: @escaping (PairingRecord, Bool) -> Void = { _, _ in }) -> LivePairing {
+                             onPaired: @escaping (PairingRecord, Bool) -> Bool = { _, _ in false }) -> LivePairing {
         LivePairing(transportFor: { _ in transport }, store: store, onboarded: onboarded, onPaired: onPaired,
                     onDisconnect: {}, pending: PendingUnpairStore(directory: dir, logger: LogSink()),
                     flusher: PendingUnpairFlusher(store: PendingUnpairStore(directory: dir, logger: LogSink()), now: { 0 }, logger: LogSink()) { _ in ScriptedTransport([:]) })
@@ -100,7 +100,7 @@ final class PairingWiringTests: XCTestCase {
             Methods.hello: try .ok(Hello(deviceName: "Mac", pairingEpoch: "e9")),
         ])
         var paired = 0
-        let outcome = await makePairing(transport, store: store) { _, _ in paired += 1 }.pair(code: link)
+        let outcome = await makePairing(transport, store: store) { _, _ in paired += 1; return false }.pair(code: link)
         guard case .failed(let reason) = outcome else { return XCTFail("写盘失败应当配对失败，实际 \(outcome)") }
         XCTAssertTrue(reason.contains(L.s("pair_save_failed")), reason)
         XCTAssertEqual(paired, 0, "没落盘就不能触发 onPaired")
@@ -115,7 +115,7 @@ final class PairingWiringTests: XCTestCase {
             Methods.pairRequest: try .ok(PairAccepted(storageDeviceName: "Mac", pairingEpoch: "e9")),
         ])
         var paired = 0
-        let outcome = await makePairing(transport, store: store) { _, _ in paired += 1 }.pair(code: link)
+        let outcome = await makePairing(transport, store: store) { _, _ in paired += 1; return false }.pair(code: link)
         guard case .failed = outcome else { return XCTFail("实际 \(outcome)") }
         XCTAssertEqual(paired, 0)
     }
@@ -133,6 +133,7 @@ final class PairingWiringTests: XCTestCase {
         let pairing = makePairing(transport, store: store, onboarded: { marked.contains($0) }) { record, known in
             knownSeenByOnPaired = known
             marked.insert(record.daemonNodeId) // 最坏情形：onPaired 里就标记（#1019 之前的写法），firstTime 也必须先定
+            return false
         }
         let outcome = await pairing.pair(code: link)
         XCTAssertEqual(outcome, .joined(firstTime: true), "新电脑：onPaired 标记之后也必须报 firstTime")
@@ -145,7 +146,7 @@ final class PairingWiringTests: XCTestCase {
         let transport = ScriptedTransport([
             Methods.hello: try .ok(Hello(deviceName: "Mac", pairingEpoch: "e9")),
         ])
-        let outcome = await makePairing(transport, store: store, onboarded: { _ in true }) { _, known in knownSeenByOnPaired = known }.pair(code: link)
+        let outcome = await makePairing(transport, store: store, onboarded: { _ in true }) { _, known in knownSeenByOnPaired = known; return false }.pair(code: link)
         XCTAssertEqual(outcome, .joined(firstTime: false))
         XCTAssertEqual(knownSeenByOnPaired, true)
     }
@@ -156,11 +157,61 @@ final class PairingWiringTests: XCTestCase {
             Methods.hello: try .ok(Hello(deviceName: "Mac", pairingEpoch: "e9")),
         ])
         var paired: PairingRecord?
-        let outcome = await makePairing(transport, store: store) { r, _ in paired = r }.pair(code: link)
+        let outcome = await makePairing(transport, store: store) { r, _ in paired = r; return false }.pair(code: link)
         XCTAssertEqual(outcome, .joined(firstTime: true))
         XCTAssertEqual(store.load()?.pairingEpoch, "e9")
         XCTAssertEqual(store.load()?.storageDeviceName, "Mac")
         XCTAssertEqual(paired?.pairingEpoch, "e9")
+    }
+
+    // MARK: 换新电脑清旧的后台备份意图写失败（#1039，对位 Android）
+
+    /// 偏好放在单独的目录里，改成只读（0o500：能读、建不出原子写的临时文件）——配对文件所在目录照常可写。
+    private func readOnlyPrefs(requested: Bool) throws -> (AutoBackupPrefs, URL) {
+        let prefsDir = dir.appendingPathComponent("prefs")
+        try FileManager.default.createDirectory(at: prefsDir, withIntermediateDirectories: true)
+        let prefs = AutoBackupPrefs(directory: prefsDir)
+        try prefs.set(requested: requested, enabled: false) // 断开旧电脑后：停生产者、留意图（MOB-93）
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: prefsDir.path)
+        addTeardownBlock { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: prefsDir.path) }
+        XCTAssertEqual(prefs.requested(), requested, "前提：只读目录下读仍然有效")
+        return (prefs, prefsDir)
+    }
+
+    /// 新电脑清意图没写下来：不抛、不拦配对（配对照常落盘、报首次），结局带上「要提示」；日志留一行；盘上仍是旧意图。
+    /// 反证：让 `applyAutoBackupOnPairing` 在失败时返回 false（回到只记日志），`settingSaveFailed` 断言红。
+    func test_new_desktop_intent_clear_failure_does_not_block_pairing_and_asks_for_a_notice() async throws {
+        let (prefs, _) = try readOnlyPrefs(requested: true)
+        let logs = LogSink()
+        let store = PairingStore(root: dir)
+        let transport = ScriptedTransport([
+            Methods.hello: try .ok(Hello(deviceName: "Mac", pairingEpoch: "e9")),
+        ])
+        let outcome = await makePairing(transport, store: store, onboarded: { _ in false }) { _, known in
+            applyAutoBackupOnPairing(prefs, knownDesktop: known, logger: logs)
+        }.pair(code: link)
+        XCTAssertEqual(outcome, .joined(firstTime: true, settingSaveFailed: true))
+        XCTAssertEqual(store.load()?.pairingEpoch, "e9", "配对照常落盘")
+        XCTAssertTrue(prefs.requested(), "没写下来：旧意图还在盘上——要靠完成页再写一次")
+        let line = try XCTUnwrap(logs.lines.first)
+        XCTAssertTrue(line.contains("apply on pairing failed"), line)
+    }
+
+    /// 连回以前连过的电脑、按意图恢复失败：只记日志，不提示（Android `settingsWriter.quiet`）——意图还在盘上。
+    /// 反证：把 `applyAutoBackupOnPairing` 的 `return !knownDesktop` 改成 `return true`，本条红。
+    func test_known_desktop_restore_failure_is_logged_only() throws {
+        let (prefs, _) = try readOnlyPrefs(requested: true)
+        let logs = LogSink()
+        XCTAssertFalse(applyAutoBackupOnPairing(prefs, knownDesktop: true, logger: logs))
+        XCTAssertFalse(prefs.enabled(), "没恢复成")
+        XCTAssertTrue(logs.lines.first?.contains("apply on pairing failed") == true, "\(logs.lines)")
+    }
+
+    func test_new_desktop_intent_clear_success_needs_no_notice() throws {
+        let prefs = AutoBackupPrefs(directory: dir)
+        try prefs.set(requested: true, enabled: false)
+        XCTAssertFalse(applyAutoBackupOnPairing(prefs, knownDesktop: false, logger: LogSink()))
+        XCTAssertFalse(prefs.requested())
     }
 
     // MARK: 快路径 hello 失败（#970）
@@ -170,7 +221,7 @@ final class PairingWiringTests: XCTestCase {
         // hello 连不上（超时 / 异常）：落回正常配对（它自己的 hello 同样连不上 → unreachable），不能存空记录。
         let transport = ScriptedTransport([Methods.hello: .fail])
         var paired = 0
-        let outcome = await makePairing(transport, store: store) { _, _ in paired += 1 }.pair(code: link)
+        let outcome = await makePairing(transport, store: store) { _, _ in paired += 1; return false }.pair(code: link)
         guard case .failed = outcome else { return XCTFail("实际 \(outcome)") }
         XCTAssertNil(store.load(), "hello 失败不许存空 epoch / 空电脑名")
         XCTAssertEqual(paired, 0)

@@ -190,7 +190,7 @@ final class LiveBackend: @unchecked Sendable {
     /// 对外的端口集合（界面只认这几个 protocol）。
     func ports() -> Backend {
         let pairing = LivePairing(transportFor: { [plane] in PeerCtrlTransport(plane: plane, peerToken: $0) }, store: pairingStore, onboarded: { [onboarded] in onboarded.wasOnboarded($0) },
-                                  onPaired: { [weak self] record, known in self?.paired(record, knownDesktop: known) },
+                                  onPaired: { [weak self] record, known in self?.paired(record, knownDesktop: known) ?? false },
                                   onDisconnect: { [weak self] in await self?.disconnect() },
                                   pending: pendingUnpair, flusher: unpairFlusher)
         let timeline = LiveTimeline(client: { [pairingStore, plane] in
@@ -205,7 +205,8 @@ final class LiveBackend: @unchecked Sendable {
                        engine: LiveEngineAdapter(backend: self))
     }
 
-    private func paired(_ record: PairingRecord, knownDesktop: Bool) {
+    /// 返回 true = 要提示用户「设置没存上」（见 `applyAutoBackupOnPairing`）。
+    private func paired(_ record: PairingRecord, knownDesktop: Bool) -> Bool {
         // #956：重新配对同一台电脑，先删它的待撤销条目，否则后台重试会把刚建立的新配对撤掉。
         do { try pendingUnpair.remove(daemonNodeId: record.daemonNodeId) }
         catch { logger.log("unpair-outbox: remove on re-pair failed: \(error)") }
@@ -214,15 +215,11 @@ final class LiveBackend: @unchecked Sendable {
         do { _ = try adoptDesktop(orders, daemonNodeId: record.daemonNodeId, nowMs: Int64(Date().timeIntervalSince1970 * 1000)) }
         catch { logger.log("adoptDesktop failed: \(error)") }
         // 「连过这台电脑」不在这里记：要等用户走完首次设置，在完成页落盘（#1019，对位 Android finishOnboarding）。
-        // 后台备份意图（#982，对位 Android）：断开时只停生产者、留意图（MOB-93）——连回以前连过的电脑按意图恢复；
-        // 换新电脑 = 新的信任关系，清意图，由完成页让用户重新选。写失败要暴露，不静默沿用旧意图。
-        do {
-            try autoPrefs.applyOnPairing(knownDesktop: knownDesktop)
-            logger.log("auto-backup prefs: applied on pairing knownDesktop=\(knownDesktop) requested=\(autoPrefs.requested()) enabled=\(autoPrefs.enabled())")
-        } catch { logger.log("auto-backup prefs: apply on pairing failed: \(error)") }
+        let settingSaveFailed = applyAutoBackupOnPairing(autoPrefs, knownDesktop: knownDesktop, logger: logger)
         mediaWatcher.start() // 断开时注销了；重新配对后恢复（#978）
         timelineLive.session.pairingChanged() // 新配对：按新对端重建实时订阅（#963）
         Task { _ = await engine.trigger(.pairingRepaired) }
+        return settingSaveFailed
     }
 
     /// 本地断开：先停引擎这一轮，再按断开清单清存储根（配对凭据、唤醒计划、自动备份生产者）。
@@ -365,6 +362,22 @@ actor LiveEngineModel {
 }
 
 /// `BackupEngine` 端口的真实现。
+/// 配对成功后的后台备份意图（#982，对位 Android 配对结局）：断开时只停生产者、留意图（MOB-93）——连回以前连过的电脑
+/// 按意图恢复；换新电脑 = 新的信任关系，清意图，由完成页让用户重新选。
+/// 返回 true = 要提示用户：换新电脑清意图没写下来（#1039）。不拦配对；完成页点按钮时按用户的选择再写一次，
+/// 否则旧电脑留下的意图会被带到新电脑上。老电脑按意图恢复失败只记日志（Android `settingsWriter.quiet`）：
+/// 意图还在盘上，也没有用户在等这一步的结果。
+func applyAutoBackupOnPairing(_ prefs: AutoBackupPrefs, knownDesktop: Bool, logger: CoreLogger) -> Bool {
+    do {
+        try prefs.applyOnPairing(knownDesktop: knownDesktop)
+        logger.log("auto-backup prefs: applied on pairing knownDesktop=\(knownDesktop) requested=\(prefs.requested()) enabled=\(prefs.enabled())")
+        return false
+    } catch {
+        logger.log("auto-backup prefs: apply on pairing failed (knownDesktop=\(knownDesktop)): \(error)")
+        return !knownDesktop
+    }
+}
+
 final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
     private let backend: LiveBackend
     private let lock = NSLock()
@@ -406,8 +419,7 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
     func autoBackup() -> Bool { backend.autoPrefs.enabled() }
     func setAutoBackup(_ on: Bool) throws {
         do {
-            try backend.autoPrefs.setEnabled(on)
-            try backend.autoPrefs.setRequested(on)
+            try backend.autoPrefs.setUserChoice(on)
             backend.logger.log("auto-backup prefs: saved on=\(on)")
         } catch {
             backend.logger.log("auto-backup prefs: write failed (on=\(on)): \(error)")

@@ -91,7 +91,9 @@ enum PairingStatus: Equatable {
 /// 配对结局（对位 Android `PairOutcome`）。
 enum PairOutcome: Equatable {
     /// firstTime = 这台电脑以前没连过（要去选相册）。
-    case joined(firstTime: Bool)
+    /// settingSaveFailed = 配对成功，但换新电脑时清旧的后台备份意图没写下来（#1039）：不拦配对，提示用户，
+    /// 完成页会按用户的选择再写一次。
+    case joined(firstTime: Bool, settingSaveFailed: Bool = false)
     /// 电脑那边说不（ownerSaidNo）或这次没完成（过期 / 电脑重启 / 版本太旧）。note 是本端挑的补充说明（nil = 只显示通用文案）。
     case refused(note: PairNote?, ownerSaidNo: Bool)
     /// #1069：版本不兼容，要先更新 [OutdatedSide] 那一端的 P-Pass（不是电脑主人拒绝的）。

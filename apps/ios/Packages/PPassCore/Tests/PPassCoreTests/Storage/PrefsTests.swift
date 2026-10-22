@@ -91,6 +91,28 @@ final class PrefsTests: XCTestCase {
         XCTAssertThrowsError(try AutoBackupPrefs(directory: tmp.url).applyOnPairing(knownDesktop: false), "写盘失败要抛给调用方，不吞")
     }
 
+    /// #1039：用户的选择（意图 + 生产者）一次落盘。目录只读（0o500：能读、建不出原子写的临时文件）→ 抛出、盘上原样；
+    /// 恢复可写后同一次调用写成。反证：让 `setUserChoice` 吞掉错误，第一条断言红；让它只写 `autoEnabled`，后两条红。
+    func testUserChoiceIsOneWriteAndRecoversAfterTheDirectoryIsWritableAgain() throws {
+        let tmp = TempDir()
+        let prefs = AutoBackupPrefs(directory: tmp.url)
+        try prefs.set(requested: true, enabled: false) // 断开旧电脑后：停生产者、留意图（MOB-93）
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: tmp.url.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tmp.url.path) }
+        XCTAssertTrue(prefs.requested(), "前提：只读目录下读仍然有效")
+
+        XCTAssertThrowsError(try prefs.setUserChoice(false), "写盘失败要抛给调用方，不吞")
+        XCTAssertTrue(prefs.requested(), "没写下来：盘上仍是旧意图")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: tmp.url.path)
+        try prefs.setUserChoice(false)
+        XCTAssertFalse(AutoBackupPrefs(directory: tmp.url).requested())
+        XCTAssertFalse(AutoBackupPrefs(directory: tmp.url).enabled())
+        let saved = try JSONSerialization.jsonObject(with: Data(contentsOf: tmp.file(AutoBackupPrefs.fileName))) as? [String: Any]
+        XCTAssertEqual(saved?["userRequested"] as? Bool, false)
+        XCTAssertEqual(saved?["autoEnabled"] as? Bool, false)
+    }
+
     func testAutoBackupResumeDecision() {
         XCTAssertEqual(AutoBackupResume.decide(userRequested: false, backgroundAuthorized: true), .leaveOff)
         XCTAssertEqual(AutoBackupResume.decide(userRequested: true, backgroundAuthorized: true), .enable)

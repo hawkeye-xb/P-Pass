@@ -61,10 +61,10 @@ enum BGTestDriver {
             status.write("failed", ["error": "clear scope: \(error)", "done": true]); return
         }
         let outcome = await model.backend.pairing.pair(code: link)
-        guard case .joined(let firstTime) = outcome else {
+        guard case .joined(let firstTime, let settingSaveFailed) = outcome else {
             status.write("failed", ["error": "pairing: \(outcome)", "done": true]); return
         }
-        model.paired(firstTime: firstTime)
+        model.paired(firstTime: firstTime, settingSaveFailed: settingSaveFailed)
         var extra: [String: Any] = ["pair_outcome": "\(outcome)", "done": true]
         if let restore, let data = restore.data(using: .utf8),
            let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
@@ -145,8 +145,8 @@ enum BGTestDriver {
         let access = await backend.media.requestAccess()
         guard access == .full else { status.write("failed", ["error": "photo access is \(access), need full", "done": true]); return }
         let outcome = await backend.pairing.pair(code: link)
-        guard case .joined(let firstTime) = outcome else { status.write("failed", ["error": "pairing: \(outcome)", "done": true]); return }
-        model.paired(firstTime: firstTime)
+        guard case .joined(let firstTime, let settingSaveFailed) = outcome else { status.write("failed", ["error": "pairing: \(outcome)", "done": true]); return }
+        model.paired(firstTime: firstTime, settingSaveFailed: settingSaveFailed)
         status.write("paired")
 
         var albumId: String?
