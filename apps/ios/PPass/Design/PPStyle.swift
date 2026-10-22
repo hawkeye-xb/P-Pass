@@ -188,7 +188,8 @@ struct PPStateMessage: View {
             } else if let symbol {
                 Image(systemName: symbol).font(.largeTitle).foregroundStyle(onDark ? PPColor.paperDim : PPColor.ink40)
             }
-            Text(text).font(PPFont.body).foregroundStyle(onDark ? PPColor.paperDim : PPColor.ink60).multilineTextAlignment(.center)
+            // 文字 ink40（Android PhotosScreen `Center`）。
+            Text(text).font(PPFont.body).foregroundStyle(onDark ? PPColor.paperDim : PPColor.ink40).multilineTextAlignment(.center)
             if let actionTitle, let action {
                 Button(actionTitle, action: action).buttonStyle(PPChipButtonStyle())
             }
@@ -278,10 +279,10 @@ extension View {
     /// 列表行的含义色淡底（token 的 *-bg）。挂在 Section 上对整组生效。
     func ppTinted(_ bg: Color?) -> some View { listRowBackground(bg ?? PPColor.linen) }
 
-    /// 首页卡片的间距对位 Android（tokens.json mobile-ui.layout：顶部 14、卡间 18）。
+    /// 首页 / 存储电脑页卡片的间距对位 Android（tokens.json mobile-ui.layout：顶部 14、卡间 18）。
     /// 原生 insetGrouped 默认是顶部 35、卡间 35——那是给分组标题留的位置，首页没有分组标题。
     /// `listSectionSpacing` / `contentMargins` 是 iOS 17+；iOS 16 退回系统默认间距（只是松一些，不影响内容）。
-    @ViewBuilder func ppHomeSpacing() -> some View {
+    @ViewBuilder func ppCardSpacing() -> some View {
         if #available(iOS 17, *) {
             self.listSectionSpacing(PPUI.Layout.cardGap)
                 .contentMargins(.top, PPUI.Layout.pageTop, for: .scrollContent)

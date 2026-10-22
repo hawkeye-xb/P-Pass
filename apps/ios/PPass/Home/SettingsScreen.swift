@@ -82,7 +82,7 @@ struct SettingsScreen: View {
             }
             .listStyle(.insetGrouped)
             .ppList()
-            .ppHomeSpacing()
+            .ppCardSpacing()
             .toolbar(.hidden, for: .navigationBar) // 同 Android：无页标题
             .confirmationDialog(cancelSnapshot.map { L.p("cancel_remaining_confirm_title", $0.count) } ?? "",
                                 isPresented: $asking, titleVisibility: .visible) {
