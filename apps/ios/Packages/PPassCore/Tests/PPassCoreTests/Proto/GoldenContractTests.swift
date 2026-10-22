@@ -60,6 +60,8 @@ final class GoldenContractTests: XCTestCase {
         "snapshots__resp_err_v1_shim_pair": roundtrip(Resp.self),
         "snapshots__flow_failed_push": roundtrip(FlowFailedPush.self),
         "snapshots__reasons_registry": roundtrip([RespError].self),
+        // #1122 / #1119：连接层关闭码注册表（取值核对见 DesktopCloseCodesContractTests）
+        "snapshots__close_codes_registry": roundtrip([CloseCodeEntry].self),
     ]
 
     /// decode → encode，并确认再 decode 一次与第一次相等（往返稳定）。
@@ -148,4 +150,10 @@ enum JSONDiff {
             if g != e { out.append("\(path): golden=\(g) swift=\(e)") }
         }
     }
+}
+
+/// `close_codes_registry` 金样的一行（只用于测试：核对 `DesktopCloseCodes`）。
+struct CloseCodeEntry: Codable, Equatable {
+    var code: UInt64
+    var reason: String
 }

@@ -48,8 +48,23 @@ struct KeychainIdentityStore: IdentitySecretStore {
     }
 }
 
+/// 控制面调用的底座（生产 = [ControlPlane]；测试里换成脚本化的假实现）。
+protocol PeerCallPlane: Sendable {
+    func call(peerToken: String, method: String, paramsJSON: Data, timeoutMs: UInt64?) async throws -> Data
+    func stream(peerToken: String, method: String, paramsJSON: Data, onFrame: @escaping @Sendable (Data) throws -> Void) async throws
+}
+
+/// #1122：FFI 的 `FfiError.PeerClosed`（连接被经认证的对端用应用关闭码关掉）→ 核心层的「未配对」判定。
+/// 只有关闭方 == 配对记录里的电脑、且关闭码是「未配对」（401 / 410）才翻成 [DesktopRejected]；
+/// 其它（别的关闭码、别的关闭方、超时、网络断、本地关闭等任何别的错误）原样返回，由调用方按「连不上」处理。
+func translateDesktopClose(_ error: Error, recordedDaemonNodeId: String?, method: String) -> Error {
+    guard case let FfiError.PeerClosed(nodeId, code) = error else { return error }
+    let closed = PeerClosedConnection(nodeId: nodeId, code: code)
+    return desktopRejection(forClose: closed, recordedDaemonNodeId: recordedDaemonNodeId, method: method) ?? error
+}
+
 /// 控制面客户端（FFI `CtrlClient`）：一个进程一个，懒绑定。FFI 调用是同步阻塞的，一律放到后台线程。
-final class ControlPlane: @unchecked Sendable {
+final class ControlPlane: PeerCallPlane, @unchecked Sendable {
     private let secretKey: Data
     private let lock = NSLock()
     private var client: CtrlClient?

@@ -356,14 +356,20 @@ final class EngineBox: @unchecked Sendable {
 }
 
 /// 控制面传输：对端 = 当前配对记录里的 peer token（配对 / 重新配对后自动换）。
+/// #1122：调用因为连接被「记录里的那台电脑」以 401 / 410 关闭而失败 → 翻成与 `not_paired` 应答同一个 [DesktopRejected]，
+/// 汇入同一条被拒即清理路径；其它一切原样抛出（按「连不上」处理）。流式调用不翻译：流中途被关只有字符串原因，没有有类型信息。
 struct CurrentPeerTransport: CtrlTransport {
-    let plane: ControlPlane
+    let plane: PeerCallPlane
     let store: PairingStore
     struct NotPaired: Error {}
 
     func call(method: String, paramsJSON: Data, timeoutMs: UInt64?) async throws -> Data {
         guard let r = store.load() else { throw NotPaired() }
-        return try await plane.call(peerToken: r.peerToken, method: method, paramsJSON: paramsJSON, timeoutMs: timeoutMs)
+        do {
+            return try await plane.call(peerToken: r.peerToken, method: method, paramsJSON: paramsJSON, timeoutMs: timeoutMs)
+        } catch {
+            throw translateDesktopClose(error, recordedDaemonNodeId: r.daemonNodeId, method: method)
+        }
     }
 }
 
