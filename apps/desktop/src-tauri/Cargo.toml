@@ -34,7 +34,8 @@ publish = false
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png", "devtools", "protocol-asset"] }
+# #1120：不开 `devtools` feature——正式包没有开发者工具；debug 构建 Tauri 默认自带。
+tauri = { version = "2", features = ["tray-icon", "image-png", "protocol-asset"] }
 tauri-plugin-dialog = "2"
 # UPD-01: desktop self-update via the official updater plugin (manifest
 # served as release asset; pubkey in tauri.conf.json, minisign format)

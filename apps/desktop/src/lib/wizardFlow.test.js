@@ -132,7 +132,7 @@ describe("第 3 步 finishSetup", () => {
     let statusCalls = 0;
     invokeMock.mockImplementation(async (cmd) => {
       if (cmd === "start_daemon") return "resident";
-      if (cmd === "daemon_call") {
+      if (cmd === "daemon_status") {
         statusCalls++;
         if (statusCalls < 3) throw new Error("not yet");
         return {};
@@ -160,7 +160,7 @@ describe("第 3 步 finishSetup", () => {
   it("10 秒都没就绪：不 onDone，红条带 daemon 的 stderr 原文", async () => {
     invokeMock.mockImplementation(async (cmd) => {
       if (cmd === "start_daemon") return "resident";
-      if (cmd === "daemon_call") throw new Error("no daemon");
+      if (cmd === "daemon_status") throw new Error("no daemon");
       // #1044：壳把 daemon 的 stderr 拆成 { key, detail }（没认出原因时 key 为空）。
       if (cmd === "daemon_startup_error") return { key: null, detail: "Error: address already in use" };
       throw new Error(`未预期：${cmd}`);
@@ -171,6 +171,6 @@ describe("第 3 步 finishSetup", () => {
     await p;
     expect(onDone).not.toHaveBeenCalled();
     expect(view.error).toContain("Error: address already in use");
-    expect(invokeMock.mock.calls.filter(([c]) => c === "daemon_call")).toHaveLength(20);
+    expect(invokeMock.mock.calls.filter(([c]) => c === "daemon_status")).toHaveLength(20);
   });
 });

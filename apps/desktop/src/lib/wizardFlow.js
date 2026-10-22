@@ -20,6 +20,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
+import { callDaemon } from "./daemonApi.js";
 import { startupFailureText } from "./daemonStartupError.js";
 import { errDetail, t } from "./i18n.js";
 
@@ -133,7 +134,7 @@ export function createWizardFlow({
       for (let i = 0; i < READY_POLLS; i++) {
         await new Promise((r) => setTimeout(r, READY_POLL_MS));
         try {
-          await invoke("daemon_call", { method: "status", params: {} });
+          await callDaemon("status");
           ready = true;
           break;
         } catch (_) {}

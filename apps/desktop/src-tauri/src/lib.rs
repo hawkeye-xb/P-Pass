@@ -10,6 +10,7 @@
 // 里的子进程（拉起测试二进制自身等）不面向用户，统一放行。
 #![cfg_attr(test, allow(clippy::disallowed_methods))]
 
+mod daemon_api;
 mod daemon_cli;
 mod distribution;
 mod ipc;
@@ -135,7 +136,6 @@ fn set_tray_locale(app: tauri::AppHandle, lang: String) {
     }
 }
 
-/// Forward one IPC method. The frontend does the rest.
 // MOB-47: 视频弹窗走 asset 协议从磁盘直接 streaming 播放，避免把整段
 // 视频 base64 拉进内存。安全契约（L2 审查修）：
 // - 渲染进程只传资产 hash，绝不传文件系统路径；
@@ -178,7 +178,6 @@ fn validate_asset_file(path: &std::path::Path) -> Result<std::path::PathBuf, Str
     Ok(canon)
 }
 
-/// Forward one IPC method. The frontend does the rest.
 /// #413 §7: desktop system notification (the low-space warning). The shell
 /// only relays already-localized text; the "when" rule lives in the
 /// daemon (`crates/daemon/src/low_space.rs`, #1044), the "how" in the platform adapter
@@ -186,22 +185,6 @@ fn validate_asset_file(path: &std::path::Path) -> Result<std::path::PathBuf, Str
 #[tauri::command]
 fn notify_system(title: String, body: String) {
     platform::adapter().notify(&title, &body);
-}
-
-#[tauri::command]
-fn daemon_call(app: tauri::AppHandle, method: String, params: Value) -> Result<Value, String> {
-    match ipc::DaemonHandle::discover().and_then(|d| d.call(&method, params)) {
-        Ok(value) => Ok(value),
-        Err(e) => {
-            // DESK-63 (#946): the shell used to send this straight to the
-            // webview console and keep nothing. A failed data call must not
-            // change the service state (see service_state), but it must be
-            // in the diagnostic bundle.
-            app.state::<ServiceStateManager>()
-                .log_call_failure(&method, &e);
-            Err(e)
-        }
-    }
 }
 
 /// Daemon reachable?（壳内部探测用；#1041 起不再注册成前端 command——前端从不 invoke）
@@ -1554,7 +1537,21 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
-            daemon_call,
+            daemon_api::daemon_status,
+            daemon_api::daemon_low_space_ack,
+            daemon_api::daemon_pairing_start,
+            daemon_api::daemon_pairing_pending,
+            daemon_api::daemon_pairing_confirm,
+            daemon_api::daemon_devices_list,
+            daemon_api::daemon_device_watermarks,
+            daemon_api::daemon_device_revoke,
+            daemon_api::daemon_device_rename,
+            daemon_api::daemon_device_folder,
+            daemon_api::daemon_audit_list,
+            daemon_api::daemon_timeline_page,
+            daemon_api::daemon_thumb_get,
+            daemon_api::daemon_asset_original,
+            daemon_api::daemon_asset_path,
             service_state,
             wizard_state,
             platform_ux,
@@ -1759,6 +1756,114 @@ mod business_rules_table;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1120：网页层的安全配置按 Tauri 官方清单收口，配置漂移即红。
+    /// 反证：CSP 放开 `'unsafe-eval'` / 内联脚本、`freezePrototype` 关掉、
+    /// tauri 依赖加回 `devtools` feature、capability 加 `remote`、
+    /// index.html 写回内联 `<script>`——任一条都会让对应断言红。
+    #[test]
+    fn webview_security_config_is_locked() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
+        let sec = &conf["app"]["security"];
+        for key in ["csp", "devCsp"] {
+            let csp = &sec[key];
+            assert_eq!(csp["default-src"], "'self'", "{key}");
+            assert_eq!(
+                csp["script-src"], "'self'",
+                "{key}：只允许本地打包的脚本文件"
+            );
+            assert_eq!(csp["object-src"], "'none'", "{key}");
+            assert!(
+                csp["connect-src"]
+                    .as_str()
+                    .is_some_and(|c| c.contains("ipc:")),
+                "{key}：IPC 走 ipc: 协议"
+            );
+            let text = csp.to_string();
+            assert!(!text.contains("unsafe-eval"), "{key}");
+            assert!(
+                !text.contains("https:") && !text.contains(" * "),
+                "{key}：不开远程来源"
+            );
+        }
+        assert_eq!(sec["freezePrototype"], true);
+        assert_eq!(
+            sec["assetProtocol"]["scope"],
+            serde_json::json!([]),
+            "asset 作用域按文件运行时放行"
+        );
+        assert!(conf["app"]
+            .get("withGlobalTauri")
+            .is_none_or(|v| v == false));
+
+        let cargo = include_str!("../Cargo.toml");
+        let tauri_dep = cargo
+            .lines()
+            .find(|l| l.starts_with("tauri = "))
+            .expect("tauri 依赖");
+        assert!(
+            !tauri_dep.contains("devtools"),
+            "正式包不许带开发者工具：{tauri_dep}"
+        );
+
+        let cap = include_str!("../capabilities/default.json");
+        assert!(!cap.contains("\"remote\""), "不许任何远程域访问 IPC");
+
+        let html = include_str!("../../index.html");
+        assert!(!html.contains("<script>"), "index.html 不许有内联脚本");
+    }
+
+    /// #1120：网页能调的命令只有一份名单——`generate_handler!` 注册的、`build.rs`
+    /// 的 `AppManifest` 声明的、`capabilities/default.json` 授权的三者完全一致，
+    /// 通用转发 `daemon_call` 不在其中。
+    /// 反证：handler 里加一个命令而 capability 不加（或反之），集合不等，红；
+    /// 把 `daemon_call` 加回任何一处，最后一条断言红。
+    #[test]
+    fn command_lists_agree() {
+        use std::collections::BTreeSet;
+        let lib = include_str!("lib.rs").replace("\r\n", "\n");
+        let start =
+            lib.find("generate_handler![").expect("generate_handler!") + "generate_handler![".len();
+        let body = &lib[start..start + lib[start..].find(']').expect("]")];
+        let handlers: BTreeSet<String> = body
+            .split(',')
+            .map(|s| s.trim().rsplit("::").next().unwrap_or("").to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        let build = include_str!("../build.rs");
+        let list = &build[build.find("APP_COMMANDS").expect("APP_COMMANDS")..];
+        let list = &list[list.find("= &[").expect("= &[") + 4..list.find("];").expect("];")];
+        let manifest: BTreeSet<String> = list
+            .split(',')
+            .map(|s| s.trim().trim_matches('"').to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+
+        let cap: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).expect("json");
+        let granted: BTreeSet<String> = cap["permissions"]
+            .as_array()
+            .expect("permissions")
+            .iter()
+            .filter_map(|p| p.as_str())
+            .filter(|p| !p.contains(':'))
+            .filter_map(|p| p.strip_prefix("allow-"))
+            .map(|p| p.replace('-', "_"))
+            .collect();
+
+        assert!(!handlers.is_empty());
+        assert_eq!(
+            handlers, manifest,
+            "generate_handler! 与 build.rs 的 APP_COMMANDS 不一致"
+        );
+        assert_eq!(
+            handlers, granted,
+            "generate_handler! 与 capabilities/default.json 不一致"
+        );
+        assert!(!handlers.contains("daemon_call"), "通用转发不许回来");
+    }
 
     /// #1060：暂停窗口只由本壳开关；默认不在窗口里（新壳启动对账照常拉起）。
     #[test]
@@ -2956,13 +3061,38 @@ mod tests {
         assert!(src.contains("            update_failure_state,\n"));
         assert!(src.contains("            clear_update_failure,\n"));
         // 横幅的「手动下载」走前端 openUrl，缺这条权限会被 Tauri 直接拒。
+        // #1120：作用域只放发布页这一个前缀，不再开放任意 http/https
+        // （`opener:allow-default-urls`）。
+        // 反证：把作用域改成别的地址，或把 RELEASES_URL 换到作用域之外，红。
+        let cap: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).expect("json");
+        let perms = cap["permissions"].as_array().expect("permissions");
         assert!(
-            include_str!("../capabilities/default.json").contains("opener:allow-open-url"),
-            "capabilities/default.json 缺 opener:allow-open-url"
+            !perms
+                .iter()
+                .any(|p| p.as_str() == Some("opener:allow-default-urls")),
+            "不许再开放任意 http/https"
         );
+        let scope: Vec<&str> = perms
+            .iter()
+            .find(|p| p["identifier"] == "opener:allow-open-url")
+            .expect("capabilities/default.json 缺 opener:allow-open-url")["allow"]
+            .as_array()
+            .expect("allow")
+            .iter()
+            .filter_map(|a| a["url"].as_str())
+            .collect();
+        let js = include_str!("../../src/lib/updateFailure.js");
+        let releases = js
+            .split("RELEASES_URL = \"")
+            .nth(1)
+            .and_then(|r| r.split('"').next())
+            .expect("RELEASES_URL");
         assert!(
-            include_str!("../capabilities/default.json").contains("opener:allow-default-urls"),
-            "capabilities/default.json 缺 opener:allow-default-urls（http/https 作用域）"
+            scope.iter().any(|pat| pat
+                .strip_suffix('*')
+                .is_some_and(|prefix| releases.starts_with(prefix))),
+            "opener 作用域 {scope:?} 不覆盖 {releases}"
         );
     }
 }

@@ -23,6 +23,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Wizard from "./Wizard.svelte";
 import WizardWindows from "./WizardWindows.svelte";
 import { setLocale } from "./lib/i18n.js";
+import { daemonMethodOf } from "./lib/daemonApi.js";
 
 // I18N-03 (#492)：文案搬进字典后按系统语言取词；这里断言的是中文原文——
 // 只搬字不改措辞，zh 下渲染结果必须和搬迁前逐字相同。
@@ -49,14 +50,14 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({ open: vi.fn() }));
  */
 function daemonNeverBecomesReady({ startupError }) {
   invokeMock.mockImplementation(async (cmd) => {
-    switch (cmd) {
+    switch (daemonMethodOf(cmd) ? "daemon" : cmd) {
       case "write_config":
         return null;
       case "power_hint":
         return { kind: "never" };
       case "start_daemon":
         return "resident";
-      case "daemon_call":
+      case "daemon":
         throw new Error("no daemon");
       case "daemon_startup_error":
         return startupError;

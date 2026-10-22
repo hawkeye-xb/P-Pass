@@ -54,6 +54,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 }));
 
 import App from "./App.svelte";
+import { daemonMethodOf } from "./lib/daemonApi.js";
 
 const row = (hexByte, name) => ({
   node_id: hexByte.repeat(64),
@@ -67,7 +68,7 @@ const row = (hexByte, name) => ({
 function desktop() {
   const d = { pending: [] };
   invokeMock.mockImplementation(async (cmd, args) => {
-    switch (cmd) {
+    switch (daemonMethodOf(cmd) ? "daemon" : cmd) {
       case "wizard_state":
         return { show_wizard: false };
       case "service_state":
@@ -75,8 +76,8 @@ function desktop() {
       case "self_heal_daemon":
       case "notify_system":
         return null;
-      case "daemon_call":
-        switch (args.method) {
+      case "daemon":
+        switch (daemonMethodOf(cmd)) {
           case "status":
             // daemon 口径：计数与 pairing.pending 读同一个过滤后的队列。
             return { version: "v0.6.0", pending_pairs: d.pending.length, photo_sources: 1 };

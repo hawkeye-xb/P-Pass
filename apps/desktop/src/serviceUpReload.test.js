@@ -12,7 +12,7 @@
 // 没有新照片就没有事件，于是墙永远停在空。
 //
 // 这里挂载的是真的 App.svelte，daemon 由 invoke mock 扮演：start_daemon 之前
-// 每个 daemon_call 都失败，之后正常应答。断言盯渲染出来的缩略图按钮。
+// 每个后台命令（#1120 起是 daemon_* 具名命令）都失败，之后正常应答。断言盯渲染出来的缩略图按钮。
 //
 // 反证：
 //   - 把 App.svelte refresh() 里「服务刚恢复 → onServiceBackOnline()」那一行
@@ -68,6 +68,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 }));
 
 import App from "./App.svelte";
+import { daemonMethodOf } from "./lib/daemonApi.js";
 
 const PHOTOS = [
   { hash: "h1", taken_at: 1787241443000, media_type: "photo", width: 10, height: 10 },
@@ -80,7 +81,7 @@ function stoppedDesktop({ slowOfflineTimeline = 0 } = {}) {
   // userStopped：用户在设置里点过「停止后台服务」（autostart 被卸、停止标记落盘）。
   const d = { up: false, userStopped: true };
   invokeMock.mockImplementation(async (cmd, args) => {
-    switch (cmd) {
+    switch (daemonMethodOf(cmd) ? "daemon" : cmd) {
       case "wizard_state":
         // 配过、用户主动停的 → 留在主界面（Rust 的 show_wizard = false）；
         // 正常常驻时 autostart 在，偶尔探活失败也不回向导。
@@ -98,15 +99,15 @@ function stoppedDesktop({ slowOfflineTimeline = 0 } = {}) {
         return null;
       case "notify_system":
         return null;
-      case "daemon_call": {
+      case "daemon": {
         if (!d.up) {
           // IPC 超时的形状：请求发出时服务不在，要过一阵才失败回来。
-          if (args.method === "timeline.page" && slowOfflineTimeline) {
+          if (daemonMethodOf(cmd) === "timeline.page" && slowOfflineTimeline) {
             await new Promise((r) => setTimeout(r, slowOfflineTimeline));
           }
           throw new Error("daemon unreachable");
         }
-        switch (args.method) {
+        switch (daemonMethodOf(cmd)) {
           case "status":
             return { version: "v0.6.0", pending_pairs: 0, photo_sources: 1 };
           case "pairing.pending":
@@ -124,7 +125,7 @@ function stoppedDesktop({ slowOfflineTimeline = 0 } = {}) {
           case "thumb.get":
             return { jpeg_base64: "" };
           default:
-            throw new Error(`未预期的 method：${args.method}`);
+            throw new Error(`未预期的 method：${daemonMethodOf(cmd)}`);
         }
       }
       default:
@@ -232,8 +233,8 @@ describe("DESK-38：服务恢复后照片墙自动重载", () => {
     await settle();
     await settle();
     const methods = invokeMock.mock.calls
-      .filter(([cmd]) => cmd === "daemon_call")
-      .map(([, args]) => args.method);
+      .filter(([cmd]) => daemonMethodOf(cmd))
+      .map(([cmd]) => daemonMethodOf(cmd));
     // 对照：refresh 确实跑过（拉了水位和审计），只是不再拉 activity.list。
     expect(methods).toContain("device.watermarks");
     expect(methods).toContain("audit.list");
@@ -286,7 +287,7 @@ describe("DESK-38：服务恢复后照片墙自动重载", () => {
     };
     const thumbCalls = (hash) =>
       invokeMock.mock.calls.filter(
-        ([cmd, a]) => cmd === "daemon_call" && a.method === "thumb.get" && a.params.hash === hash,
+        ([cmd, a]) => daemonMethodOf(cmd) === "thumb.get" && a.hash === hash,
       ).length;
 
     const d = stoppedDesktop();
@@ -333,7 +334,7 @@ describe("DESK-38：服务恢复后照片墙自动重载", () => {
     expect(thumbCalls("h3")).toBe(2);
     expect(thumbCalls("h1"), "真图是终态，不重拉（DESK-34）").toBe(1);
     const pages = invokeMock.mock.calls.filter(
-      ([cmd, a]) => cmd === "daemon_call" && a.method === "timeline.page",
+      ([cmd, a]) => daemonMethodOf(cmd) === "timeline.page",
     );
     // 首拉 1 次 + 恢复时增量对账 1 次；墙没被重置重拉。
     expect(pages.length).toBe(2);
@@ -360,7 +361,7 @@ describe("DESK-38：服务恢复后照片墙自动重载", () => {
     await settle();
     expect(wallCount()).toBe(PHOTOS.length);
     const pages = invokeMock.mock.calls.filter(
-      ([cmd, a]) => cmd === "daemon_call" && a.method === "timeline.page",
+      ([cmd, a]) => daemonMethodOf(cmd) === "timeline.page",
     );
     expect(pages.length).toBe(1);
   });

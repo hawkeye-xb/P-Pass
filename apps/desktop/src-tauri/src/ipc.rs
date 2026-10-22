@@ -260,7 +260,7 @@ impl DaemonHandle {
         // timeouts"），NET-11 的实现用 `?` 把它当硬失败，于是 Windows 上
         // 每次调用在请求发出**之前**就 Err —— 桌面壳一个 daemon 数据都拿
         // 不到（lib.rs 里 7 个调用点全废，含 status / asset.path /
-        // logs.export 与前端万能通道 daemon_call）。
+        // logs.export 与当时的前端万能通道 daemon_call，#1120 起拆成具名命令）。
         //
         // 改成在**通道**上掐表：整个往返跑在工作线程里，本函数用
         // `recv_timeout` 计时。保险丝于是与平台能力无关，而 NET-11 的语义

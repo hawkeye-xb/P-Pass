@@ -12,6 +12,7 @@
     serviceStateLabelKey,
   } from "./serviceState.js";
   import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+  import { callDaemon } from "./lib/daemonApi.js";
   import { getVersion } from "@tauri-apps/api/app";
   import { listen } from "@tauri-apps/api/event";
   import {
@@ -306,7 +307,7 @@
   let nowMs = $state(Date.now());
 
   async function call(method, params = {}) {
-    return await invoke("daemon_call", { method, params });
+    return await callDaemon(method, params);
   }
 
   // UI-04b：所有短反馈统一委托官方 Sonner；成功/等待/错误分别走三种含义色。

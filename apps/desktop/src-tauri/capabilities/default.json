@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Main window: core APIs + native dialogs (folder picker, confirm)",
+  "description": "Main window: core APIs, native dialogs, and the app commands it calls (#1120: each app command is granted by name; nothing else is reachable)",
   "windows": [
     "main"
   ],
@@ -12,8 +12,55 @@
     "dialog:allow-confirm",
     "dialog:allow-message",
     "opener:allow-reveal-item-in-dir",
-    "opener:allow-open-url",
-    "opener:allow-default-urls",
-    "updater:default"
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        {
+          "url": "https://github.com/hawkeye-xb/P-Pass/releases/*"
+        }
+      ]
+    },
+    "updater:default",
+    "allow-daemon-status",
+    "allow-daemon-low-space-ack",
+    "allow-daemon-pairing-start",
+    "allow-daemon-pairing-pending",
+    "allow-daemon-pairing-confirm",
+    "allow-daemon-devices-list",
+    "allow-daemon-device-watermarks",
+    "allow-daemon-device-revoke",
+    "allow-daemon-device-rename",
+    "allow-daemon-device-folder",
+    "allow-daemon-audit-list",
+    "allow-daemon-timeline-page",
+    "allow-daemon-thumb-get",
+    "allow-daemon-asset-original",
+    "allow-daemon-asset-path",
+    "allow-service-state",
+    "allow-wizard-state",
+    "allow-platform-ux",
+    "allow-update-failure-key",
+    "allow-power-hint",
+    "allow-open-power-settings",
+    "allow-disable-auto-sleep",
+    "allow-write-config",
+    "allow-set-library-dir",
+    "allow-start-daemon",
+    "allow-daemon-startup-error",
+    "allow-stop-daemon",
+    "allow-pause-daemon-for-update",
+    "allow-pending-shell-version",
+    "allow-relaunch-shell",
+    "allow-self-heal-daemon",
+    "allow-resume-after-failed-update",
+    "allow-update-failure-state",
+    "allow-clear-update-failure",
+    "allow-restart-daemon-process",
+    "allow-kernel-convergence-phase",
+    "allow-export-logs-bundle",
+    "allow-library-dir",
+    "allow-allow-media-scope",
+    "allow-notify-system",
+    "allow-set-tray-locale"
   ]
 }

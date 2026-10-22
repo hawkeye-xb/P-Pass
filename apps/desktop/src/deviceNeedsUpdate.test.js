@@ -47,6 +47,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 }));
 
 import App from "./App.svelte";
+import { daemonMethodOf } from "./lib/daemonApi.js";
 
 const NODE = "c".repeat(64);
 const device = (needs_update) => ({
@@ -61,13 +62,13 @@ const device = (needs_update) => ({
 
 function daemon(needsUpdate) {
   invokeMock.mockImplementation(async (cmd, args) => {
-    switch (cmd) {
+    switch (daemonMethodOf(cmd) ? "daemon" : cmd) {
       case "wizard_state":
         return { show_wizard: false };
       case "service_state":
         return { state: "running" };
-      case "daemon_call":
-        switch (args.method) {
+      case "daemon":
+        switch (daemonMethodOf(cmd)) {
           case "status":
             return { version: "v0.6.0", pending_pairs: 0, photo_sources: 1, paired_devices: 1 };
           case "devices.list":
