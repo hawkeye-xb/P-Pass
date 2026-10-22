@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # T-051 live acceptance: spin up a throwaway daemon, then run the JVM
-# hello test through the real iroh-ffi stack (desktop natives).
+# hello test through the shared Rust transport core (#1124: uniffi bindings + a host build
+# of libtransport, loaded via jna.library.path — see app/build.gradle.kts).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 D=$(mktemp -d /tmp/ppf-android-hello.XXXX)
@@ -21,6 +22,8 @@ source "$ROOT/tools/ipc-lib.sh"
 ipc_sandbox_dir "$D/d.log"
 ipc_pair_qr "$SANDBOX_DIR/ipc.token"
 QR="$PAIR_QR"
+# #1124：JVM 测试经 uniffi 绑定调宿主机版 libtransport。
+(cd "$ROOT" && cargo build -q -p transport --features mobile-ffi)
 cd "$ROOT/apps/android"
 source "$ROOT/scripts/java-home.sh"
 PPF_DAEMON_QR="$QR" ./gradlew :app:testDebugUnitTest --tests '*DaemonHelloTest' --rerun

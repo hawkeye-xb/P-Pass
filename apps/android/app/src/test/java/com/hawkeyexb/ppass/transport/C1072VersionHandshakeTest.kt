@@ -70,10 +70,13 @@ class C1072VersionHandshakeTest {
     @Test
     fun `DaemonClient routes every reply through the check`() {
         val src = java.io.File("src/main/java/com/hawkeyexb/ppass/transport/DaemonClient.kt").readText()
-        val decodes = Regex("""decodePayload\(\s*Resp\.serializer\(\)""").findAll(src).count()
-        val checked = Regex("""checkedReply\(\s*(com\.hawkeyexb\.ppass\.proto\.)?decodePayload\(\s*Resp\.serializer\(\)""").findAll(src).count()
-        assertTrue("found no reply decode at all", decodes >= 3)
-        assertEquals("every Resp decode must go through checkedReply", decodes, checked)
+        // #1124：回复由共享 Rust 核心交回 JSON；Resp 只在 decodeReply 一处解码，且必经 checkedReply。
+        val decodes = Regex("""Resp\.serializer\(\)""").findAll(src).count()
+        val checked = Regex("""checkedReply\(\s*ProtoJson\.decodeFromString\(\s*Resp\.serializer\(\)""").findAll(src).count()
+        assertEquals("exactly one Resp decode", 1, decodes)
+        assertEquals("the Resp decode must go through checkedReply", 1, checked)
+        val users = Regex("""decodeReply\(""").findAll(src).count() - 1 // minus the definition
+        assertTrue("call / callTraced must both decode through decodeReply ($users)", users >= 2)
     }
 
     @Test

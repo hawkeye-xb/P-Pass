@@ -20,6 +20,8 @@ source "$ROOT/tools/ipc-lib.sh"
 ipc_sandbox_dir "$D/d.log"
 ipc_pair_qr "$SANDBOX_DIR/ipc.token"
 QR="$PAIR_QR"
+# #1124：JVM 测试经 uniffi 绑定调宿主机版 libtransport。
+(cd "$ROOT" && cargo build -q -p transport --features mobile-ffi)
 cd "$ROOT/apps/android"
 source "$ROOT/scripts/java-home.sh"
 PPF_DAEMON_QR="$QR" PPF_DAEMON_IPC="$SANDBOX_DIR/ipc.token" \

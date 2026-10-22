@@ -100,7 +100,7 @@ crates/       Rust 核心（Cargo workspace，9 个 crate）
   diag/           诊断状态机 + msg_key 字典 + i18n
 apps/         各端应用（皮肤层，业务都在 crates）
   desktop/        Tauri 托盘壳（只经本地 IPC 调 daemon）
-  android/        Android App（iroh-ffi + 生成的 proto 类型）
+  android/        Android App（共享 Rust 传输核心经 uniffi + 生成的 proto 类型）
 infra/        云端与自建（全部可自托管）
   workers/        rendezvous / update（Cloudflare Workers）
   relay/          官方 relay 部署模板（只含占位符）

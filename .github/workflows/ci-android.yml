@@ -26,12 +26,19 @@ on:
       - ".github/workflows/**"
       - "apps/android/**"
       - "assets/i18n/**"
+      # #1124：Kotlin 直接编译 libtransport.so 的 uniffi 绑定（控制面与 iOS 共用），Rust 侧改了导出要在这里编一遍。
+      - "crates/transport/**"
+      - "crates/proto/**"
+      - "tools/build-android-iroh-blobs-bridge.sh"
   push:
     branches: [main]
     paths:
       - "apps/android/**"
       - "assets/i18n/**"
       - ".github/workflows/ci-android.yml"
+      - "crates/transport/**"
+      - "crates/proto/**"
+      - "tools/build-android-iroh-blobs-bridge.sh"
 
 permissions:
   contents: read
@@ -84,5 +91,6 @@ jobs:
           # UPD-15（#685）：产物名由构建系统派生（P-Pass_<版本>_android-debug.apk）
           APK=$(find app/build/outputs/apk/debug -name 'P-Pass_*.apk' | head -1)
           [ -n "$APK" ] || { echo "::error::debug APK 不在——产物名或构建异常"; exit 1; }
-          unzip -l "$APK" | grep -q "lib/arm64-v8a/libiroh_ffi.so"
+          # #1124：控制面改走 libtransport.so 的 uniffi 导出，iroh-ffi 的库不该再进包。
+          if unzip -l "$APK" | grep -q "libiroh_ffi.so"; then echo "::error::APK 里还有 libiroh_ffi.so（#1124 已移除）"; exit 1; fi
           unzip -l "$APK" | grep -q "lib/arm64-v8a/libtransport.so"

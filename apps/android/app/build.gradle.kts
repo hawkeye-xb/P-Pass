@@ -9,6 +9,9 @@ plugins {
 }
 
 val irohBlobsJniLibs = layout.buildDirectory.dir("generated/jniLibs")
+// #1124：同一个 libtransport.so 里还带着与 iOS 共用的 uniffi 导出（控制面、取原图、关闭码）；
+// 它们的 Kotlin 绑定由同一个任务生成（包名见 crates/transport/uniffi.toml），不入库。
+val transportKotlinBindings = layout.buildDirectory.dir("generated/source/uniffi/kotlin")
 val buildIrohBlobsProviderBridge = tasks.register<Exec>("buildIrohBlobsProviderBridge") {
     val repoRoot = rootProject.projectDir.resolve("../..").canonicalFile
     val ndkHome = providers.environmentVariable("ANDROID_NDK_HOME").orNull
@@ -18,14 +21,17 @@ val buildIrohBlobsProviderBridge = tasks.register<Exec>("buildIrohBlobsProviderB
         "bash",
         "tools/build-android-iroh-blobs-bridge.sh",
         irohBlobsJniLibs.get().asFile.absolutePath,
+        transportKotlinBindings.get().asFile.absolutePath,
     )
     environment("ANDROID_NDK_HOME", ndkHome)
     inputs.files(
         fileTree(repoRoot) {
-            include("Cargo.toml", "Cargo.lock", "crates/transport/**")
+            // #1124：mobile-ffi 经 crates/proto 编解码帧、登记关闭码。
+            include("Cargo.toml", "Cargo.lock", "crates/transport/**", "crates/proto/**")
         }
     )
     outputs.file(irohBlobsJniLibs.map { it.file("arm64-v8a/libtransport.so") })
+    outputs.dir(transportKotlinBindings)
 }
 
 android {
@@ -58,6 +64,7 @@ android {
 
     sourceSets {
         getByName("main").jniLibs.srcDir(irohBlobsJniLibs)
+        getByName("main").java.srcDir(transportKotlinBindings)
         // #420: JVM 单测与设备测试共用的测试辅助（例如 addrOf）。只放两边都要的，
         // 生产代码看不到这里。
         getByName("test").java.srcDir("src/sharedTest/java")
@@ -68,16 +75,6 @@ android {
         compose = true
         // UPD-01: 更新检查拿当前版本（BuildConfig.VERSION_NAME）
         buildConfig = true
-    }
-
-    packaging {
-        // The iroh Maven jar bundles DESKTOP natives (darwin/linux/win)
-        // for JVM use; Android gets libiroh_ffi.so from jniLibs. Strip
-        // the desktop copies — 50MB of dead weight, and their absence
-        // on-device was the T-052 real-phone crash (UnsatisfiedLinkError).
-        resources.excludes += listOf(
-            "darwin-aarch64/*", "linux-aarch64/*", "linux-x86-64/*", "win32-x86-64/*",
-        )
     }
 
     compileOptions {
@@ -210,11 +207,7 @@ dependencies {
     // 也是本仓手写 RFC 7693，见 Blake2b.kt 与其测试向量）。
     implementation("net.i2p.crypto:eddsa:0.3.0")
 
-    // iroh-ffi Kotlin bindings — same artifact the S-03 spike proved
-    // on-device (T-051 wires it up).
-    implementation("computer.iroh:iroh:1.1.0") {
-        exclude(group = "net.java.dev.jna", module = "jna")
-    }
+    // #1124：uniffi 生成的 Kotlin 绑定经 JNA 调 libtransport.so（控制面不再用 iroh-ffi）。
     implementation("net.java.dev.jna:jna:5.15.0@aar")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
@@ -230,9 +223,9 @@ dependencies {
     // #1119：断开后 unique work 的状态要查 WorkManager 自己的（在设备上跑，lane 只编译）。
     androidTestImplementation("androidx.work:work-testing:2.10.0")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
-    // Desktop JNA for JVM unit tests — the @aar above only carries
-    // Android natives; the iroh jar ships darwin/linux dylibs that JNA
-    // loads when tests run on the host (live-daemon hello test).
+    // Desktop JNA for JVM unit tests — the @aar above only carries Android natives. Tests that
+    // touch the generated bindings load a host build of libtransport (live-daemon tests only;
+    // `jna.library.path` below).
     testImplementation("net.java.dev.jna:jna:5.15.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
@@ -251,4 +244,11 @@ fun updatePubkeyStable(): String {
 fun updatePubkeyTest(): String {
     val f = rootProject.file("../../release/update-keys/test.pub")
     return if (f.isFile) f.readText().trim() else ""
+}
+
+// #1124：对着真 daemon 跑的 JVM 单测（PPF_DAEMON_QR 等，默认跳过）经 uniffi 绑定调宿主机版的
+// libtransport（`cargo build -p transport --features mobile-ffi`，见 `just android-pair`）。
+tasks.withType<Test>().configureEach {
+    val cargoTarget = System.getenv("CARGO_TARGET_DIR") ?: rootProject.projectDir.resolve("../../target").path
+    systemProperty("jna.library.path", "$cargoTarget/debug")
 }

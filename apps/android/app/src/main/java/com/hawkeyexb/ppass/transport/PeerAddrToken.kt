@@ -13,7 +13,7 @@ import kotlinx.serialization.json.jsonPrimitive
 data class PeerAddrParts(
     /** EndpointId as 64 hex chars. */
     val idHex: String,
-    /** First relay URL, if any (iroh-ffi EndpointAddr takes one). */
+    /** First relay URL, if any. */
     val relayUrl: String?,
     /** Direct socket addresses, "host:port" strings. */
     val directAddresses: List<String>,
@@ -29,6 +29,24 @@ private fun b64UrlDecode(s: String): ByteArray =
 
 private fun b64UrlEncode(bytes: ByteArray): String =
     java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+
+/**
+ * #1124: the inverse of [parsePeerAddrToken] — the PeerAddr token the shared Rust core
+ * (`CtrlClient`) dials. Same JSON shape as transport::PeerAddr's Display.
+ */
+fun PeerAddrParts.toToken(): String {
+    val json = kotlinx.serialization.json.buildJsonObject {
+        put("id", kotlinx.serialization.json.JsonPrimitive(idHex))
+        put(
+            "addrs",
+            kotlinx.serialization.json.buildJsonArray {
+                relayUrl?.let { add(kotlinx.serialization.json.buildJsonObject { put("Relay", kotlinx.serialization.json.JsonPrimitive(it)) }) }
+                for (a in directAddresses) add(kotlinx.serialization.json.buildJsonObject { put("Ip", kotlinx.serialization.json.JsonPrimitive(a)) })
+            },
+        )
+    }
+    return b64UrlEncode(json.toString().toByteArray(Charsets.UTF_8))
+}
 
 fun parsePeerAddrToken(token: String): PeerAddrParts {
     val json = Json.parseToJsonElement(String(b64UrlDecode(token.trim()), Charsets.UTF_8))

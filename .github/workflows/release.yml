@@ -745,7 +745,8 @@ jobs:
           set -euo pipefail
           # UPD-15：产物名 = P-Pass_<android 端版本>_android[-unsigned].apk
           APK=$(find app/build/outputs/apk/release -name 'P-Pass_*_android*.apk' | head -1)
-          unzip -l "$APK" | grep -q "lib/arm64-v8a/libiroh_ffi.so"
+          # #1124：控制面改走 libtransport.so 的 uniffi 导出，iroh-ffi 的库不该再进包。
+          if unzip -l "$APK" | grep -q "libiroh_ffi.so"; then echo "::error::APK 里还有 libiroh_ffi.so（#1124 已移除）"; exit 1; fi
           unzip -l "$APK" | grep -q "lib/arm64-v8a/libtransport.so"
 
       - name: Detect signing

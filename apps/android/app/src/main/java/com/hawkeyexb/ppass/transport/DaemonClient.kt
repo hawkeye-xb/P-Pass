@@ -1,54 +1,52 @@
-// T-051: the phone's ctrl-plane client — iroh-ffi endpoint + one
-// request/response per bidirectional stream, length-prefixed JSON
-// frames (crates/proto codec), talking to the storage daemon's router.
+// T-051 / #1124: the phone's ctrl-plane client. Since #1124 it is a thin Kotlin
+// wrapper around the shared Rust transport core (`crates/transport/src/mobile_ffi.rs`,
+// uniffi `CtrlClient`) — the same implementation iOS uses. One request/response per
+// connection, length-prefixed JSON frames (crates/proto codec) — all in Rust.
 //
-// Same shape as tools/testclient's `call`: open bi stream, send one
-// frame, finish the send side, read one response frame.
+// The wrapper keeps what is Android's own: lazy bind with the persistent identity and
+// the idle reaper (#434), the NET-28 bind deadline, coroutine cancellation, the #1072
+// version check on every reply, and turning FFI errors into the exceptions the rest of
+// the app already handles.
 package com.hawkeyexb.ppass.transport
 
+import com.hawkeyexb.ppass.ffi.CtrlClient
+import com.hawkeyexb.ppass.ffi.CtrlClientInterface
+import com.hawkeyexb.ppass.ffi.CtrlConfig
+import com.hawkeyexb.ppass.ffi.FetchCancel
+import com.hawkeyexb.ppass.ffi.FetchProgress
+import com.hawkeyexb.ppass.ffi.FfiException
+import com.hawkeyexb.ppass.ffi.PeerCloseListener
+import com.hawkeyexb.ppass.ffi.StreamListener
+import com.hawkeyexb.ppass.proto.BlobTicketRequest
+import com.hawkeyexb.ppass.proto.BlobTicketResponse
+import com.hawkeyexb.ppass.proto.FlowStatusReply
+import com.hawkeyexb.ppass.proto.FlowTupleRef
 import com.hawkeyexb.ppass.proto.Methods
-import com.hawkeyexb.ppass.proto.Req
+import com.hawkeyexb.ppass.proto.ProtoJson
 import com.hawkeyexb.ppass.proto.Resp
 import com.hawkeyexb.ppass.proto.versionChecked
-import com.hawkeyexb.ppass.proto.encodeFrame
-import com.hawkeyexb.ppass.proto.decodePayload
-import com.hawkeyexb.ppass.proto.frameLen
-import com.hawkeyexb.ppass.proto.FlowTupleRef
-import com.hawkeyexb.ppass.proto.FlowStatusReply
-import com.hawkeyexb.ppass.proto.ProtoJson
-import computer.iroh.Connection
-import computer.iroh.Endpoint
-import computer.iroh.EndpointAddr
-import computer.iroh.EndpointId
-import computer.iroh.EndpointOptions
-import computer.iroh.presetN0
 import java.io.IOException
-import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.TimeoutCancellationException
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.currentCoroutineContext
-import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 const val ALPN_CTRL = "ppf/ctrl/1"
 
-/** UX-11: iroh's `connect()` has no built-in timeout — against a truly
- *  dead peer (daemon stopped / computer off) it can hang forever. Real
- *  report: Photos tab stuck on "正在读取" indefinitely with zero error,
- *  because nothing ever threw. Every `call()` (and the raw connect used
- *  by uploads/downloads) is bounded so a dead peer always surfaces as a
- *  real failure instead of an infinite spinner. */
+/** UX-11: every control call (connect + request + reply) is bounded so a dead peer always
+ *  surfaces as a real failure instead of an infinite spinner. Enforced inside Rust. */
 private const val CONNECT_TIMEOUT_MS = 15_000L
+
+/** NET-09 (#116): fetching an original fails once no payload byte has arrived for this long;
+ *  a slow but moving transfer is never cut. Passed to the shared Rust `fetch_blob`. */
+internal const val ORIGINAL_BYTE_STALL_MS = 60_000L
 
 /** Deliberately NOT a CancellationException — it must flow through
  *  existing `catch (t: Throwable)` blocks as a genuine failure.
@@ -58,68 +56,49 @@ private const val CONNECT_TIMEOUT_MS = 15_000L
  *  of surfacing as the Trouble state. */
 class DaemonUnreachableException(message: String) : IOException(message)
 
-private suspend fun Endpoint.connectBounded(addr: EndpointAddr, alpn: ByteArray): Connection =
-    try {
-        withTimeout(CONNECT_TIMEOUT_MS) { connect(addr, alpn) }
-    } catch (_: TimeoutCancellationException) {
-        throw DaemonUnreachableException(
-            "could not reach the computer within ${CONNECT_TIMEOUT_MS}ms"
-        )
-    }
-
 /**
- * NET-28 (#454): upper bound on `Endpoint.bind`.
- *
- * Why it lives here and not in iroh or in the pairing UI: iroh has no bind
- * deadline of its own — `Builder::bind` (iroh 1.0.2, the version inside the
- * shipped libiroh_ffi.so; its socket.rs bind path is identical to 1.0.3) has
- * no timeout option and `BindError` has no timeout variant, and the one await
- * inside it (`netwatch::netmon::Monitor::new`, which enumerates interfaces and
- * on Android may spawn `ip route`) is unbounded. iroh-ffi 1.1.0 adds none
- * either. And bind is not a pairing step: every caller of this process-wide
- * endpoint (pairing, timeline, Flow delivery, audit) waits on it, so the
- * owner of the endpoint owns its deadline.
- *
- * Why 15 s: bind does no network round trip (relay/net-report run after it,
- * in the background), so the value does not have to cover network latency.
- * The slowest *legitimate* bind on Android is bounded by netdev's netlink
- * dumps — `collect_interfaces` + `collect_routes` = 4 dumps, each with a 2 s
- * `RECV_TIMEOUT` (netdev 0.45.0 os/android/netlink.rs) — about 8 s, plus the
- * `ip route` fork/exec. 15 s clears that with margin, and equals
- * [CONNECT_TIMEOUT_MS], so the pairing wait screen gives up no later than
- * one connect budget after the tap. A normal bind takes far less; the
- * `bindMs=` line from [DaemonClient]'s bindLog is how that is checked on a
- * real device.
+ * NET-28 (#454): upper bound on binding the endpoint. Bind does no network round trip
+ * (relay / net-report run after it, in the background); the slowest legitimate bind on
+ * Android is bounded by netdev's netlink dumps — about 8 s. 15 s clears that with margin and
+ * equals [CONNECT_TIMEOUT_MS], so the pairing wait screen gives up no later than one connect
+ * budget after the tap. The `bindMs=` line from [DaemonClient]'s bindLog is how that is
+ * checked on a real device.
  */
 internal const val BIND_TIMEOUT_MS = 15_000L
 
 /**
- * The phone's own iroh endpoint did not come up in time — a local problem on
- * the phone, deliberately NOT a [DaemonUnreachableException] ("the computer
- * cannot be reached"): the two point troubleshooting in opposite directions.
- * Not a CancellationException either, for the reason given on
- * [DaemonUnreachableException].
+ * The phone's own endpoint did not come up in time — a local problem on the phone,
+ * deliberately NOT a [DaemonUnreachableException] ("the computer cannot be reached"): the two
+ * point troubleshooting in opposite directions. Not a CancellationException either, for the
+ * reason given on [DaemonUnreachableException].
  */
 class EndpointBindTimeoutException(timeoutMs: Long) :
     IOException("phone network endpoint did not start within ${timeoutMs}ms (local, not the computer)")
 
-private suspend fun bindIrohEndpoint(secretKey: ByteArray?): Endpoint {
-    val opts = EndpointOptions(
-        preset = presetN0(),
-        alpns = listOf(ALPN_CTRL.toByteArray()),
-    )
-    if (secretKey != null) opts.secretKey = secretKey
-    return Endpoint.bind(opts)
+/** Any other failure the shared transport core reported (network, stream, codec). */
+class TransportFailureException(message: String) : IOException(message)
+
+/** The original that came back is not the one asked for (content hash mismatch). */
+class OriginalHashMismatchException(expected: String, actual: String) :
+    IOException("original $expected came back as $actual")
+
+private fun bindCtrlPlane(secretKey: ByteArray?): CtrlClientInterface =
+    CtrlClient.bind(CtrlConfig(secretKey, emptyList(), false, BIND_TIMEOUT_MS.toULong()))
+
+/** FFI error → the exception the app already understands. */
+internal fun mapFfi(e: FfiException, what: String): IOException = when (e) {
+    is FfiException.Timeout -> DaemonUnreachableException("$what: no response from the computer within ${CONNECT_TIMEOUT_MS}ms")
+    is FfiException.PeerClosed -> PeerClosedException(e.nodeId, e.code.toLong())
+    else -> TransportFailureException("$what: ${e.message}")
 }
 
 /**
- * One endpoint per app process. Bind once, then `call` against a peer
- * added via [addPeerFromToken]. All methods are IO-dispatched — safe to
- * call from any coroutine.
+ * One endpoint per app process. Bind once (or lazily with [secretKey]), then `call` against a
+ * peer. All methods are IO-dispatched — safe to call from any coroutine.
  */
 class DaemonClient internal constructor(
     private val bindTimeoutMs: Long,
-    private val openEndpoint: suspend (secretKey: ByteArray?) -> Endpoint,
+    private val openPlane: suspend (secretKey: ByteArray?) -> CtrlClientInterface,
     private val bindLog: (String) -> Unit,
     /** #434: the device's persistent identity. When set, every method binds on demand, so the
      *  endpoint can be closed while idle ([closeIfIdle]) and come back on the next use. */
@@ -128,49 +107,63 @@ class DaemonClient internal constructor(
     /** [bindLog] receives one line per bind attempt (duration, outcome) —
      *  NET-28 asks for real-device bind timings to be observable. */
     constructor(bindLog: (String) -> Unit = {}, secretKey: (() -> ByteArray)? = null) :
-        this(BIND_TIMEOUT_MS, ::bindIrohEndpoint, bindLog, secretKey)
+        this(BIND_TIMEOUT_MS, { key -> bindCtrlPlane(key) }, bindLog, secretKey)
 
     /** #434: called after every successful bind (the idle reaper re-arms on it). */
     @Volatile var onBound: () -> Unit = {}
 
+    /**
+     * #1124: a connection of this client — any call, probe, subscription or original fetch —
+     * was closed by the peer with an application close code. `nodeId` is the authenticated
+     * closer. The app decides (recorded desktop + 401 / 410 ⇒ rejected-cleanup, everything else
+     * ⇒ unreachable); see [desktopRejectionForClose].
+     */
+    @Volatile var onPeerClosed: (nodeId: String, code: Long) -> Unit = { _, _ -> }
+
+    private val closeListener = object : PeerCloseListener {
+        override fun onPeerClosed(nodeId: String, code: ULong) {
+            runCatching { this@DaemonClient.onPeerClosed(nodeId, code.toLong()) }
+        }
+    }
+
     /** #434: requests / streams / downloads currently using the endpoint. */
     private val inFlight = java.util.concurrent.atomic.AtomicInteger(0)
 
-    private suspend fun <T> using(block: suspend (Endpoint) -> T): T {
+    private suspend fun <T> using(block: suspend (CtrlClientInterface) -> T): T {
         inFlight.incrementAndGet()
         try {
-            return block(requireEndpoint())
+            return block(requirePlane())
         } finally {
             inFlight.decrementAndGet()
         }
     }
 
-    /** The bound endpoint; binds it first when [secretKey] is known (#434 lazy bind). */
-    private suspend fun requireEndpoint(): Endpoint {
-        endpoint?.let { return it }
+    /** The bound plane; binds it first when [secretKey] is known (#434 lazy bind). */
+    private suspend fun requirePlane(): CtrlClientInterface {
+        plane?.let { return it }
         val key = secretKey ?: error("bind() first")
         bind(key())
-        return endpoint ?: error("bind() first")
+        return plane ?: error("bind() first")
     }
 
     private val bindScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val bound = BoundedSingleFlight<Endpoint>(
+    private val bound = BoundedSingleFlight<CtrlClientInterface>(
         timeoutMs = bindTimeoutMs,
         scope = bindScope,
         // A bind that finishes after close(): nobody owns it, release it.
-        discard = { late -> runCatching { late.close() } },
+        discard = { late -> runCatching { late.shutdown() } },
     )
-    private val endpoint: Endpoint? get() = bound.current()
+    private val plane: CtrlClientInterface? get() = bound.current()
 
     /**
-     * Bind the endpoint. Pass the device's persistent 32-byte secret so
-     * the phone keeps ONE identity across restarts — pairing is bound to
-     * the NodeId, a fresh key would demote us to a stranger.
+     * Bind the endpoint. Pass the device's persistent 32-byte secret so the phone keeps ONE
+     * identity across restarts — pairing is bound to the NodeId, a fresh key would demote us to
+     * a stranger.
      *
-     * NET-28: bounded by [BIND_TIMEOUT_MS]; a hung bind throws
-     * [EndpointBindTimeoutException] instead of waiting forever. The hung
-     * attempt is not restarted by the next call — that call waits on the same
-     * attempt again, and adopts it if it ever finishes (see [BoundedSingleFlight]).
+     * NET-28: bounded by [BIND_TIMEOUT_MS]; a hung bind throws [EndpointBindTimeoutException]
+     * instead of waiting forever. The hung attempt is not restarted by the next call — that call
+     * waits on the same attempt again, and adopts it if it ever finishes (see
+     * [BoundedSingleFlight]).
      */
     suspend fun bind(secretKey: ByteArray? = null) {
         bound.get(
@@ -178,8 +171,10 @@ class DaemonClient internal constructor(
                 val started = System.nanoTime()
                 fun ms() = (System.nanoTime() - started) / 1_000_000
                 try {
-                    openEndpoint(secretKey).also {
+                    withContext(Dispatchers.IO) { openPlane(secretKey) }.also {
+                        it.setPeerCloseListener(closeListener)
                         bindLog("bind ok bindMs=${ms()}")
+                        runCatching { lastNodeIdHex = it.nodeId() }
                         runCatching { onBound() }
                     }
                 } catch (t: Throwable) {
@@ -195,185 +190,88 @@ class DaemonClient internal constructor(
     }
 
     /** #434: the id survives [closeIfIdle] — it comes from the persistent key, not the socket. */
-    fun nodeIdHex(): String? = endpoint?.addr()?.id()?.toString()?.also { lastNodeIdHex = it } ?: lastNodeIdHex
+    fun nodeIdHex(): String? = plane?.let { runCatching { it.nodeId() }.getOrNull() }?.also { lastNodeIdHex = it } ?: lastNodeIdHex
 
     @Volatile private var lastNodeIdHex: String? = null
 
     /**
-     * Register the storage daemon's address (from a pairing QR's `a=`
-     * token or a saved address) and return its EndpointId for `call`.
-     */
-    suspend fun addPeerFromToken(token: String): EndpointId = withContext(Dispatchers.IO) {
-        val parts = parsePeerAddrToken(token)
-        endpointIdOf(parts)
-    }
-
-    fun endpointIdOf(parts: PeerAddrParts): EndpointId =
-        EndpointId.fromString(parts.idHex)
-
-    /**
-     * One request/response round trip on a fresh bi stream.
-     * The peer address must carry enough to dial (relay and/or direct).
-     */
-    /** [timeoutMs]：整个往返的上限。默认 15 s；#851 `flow.supersede` 要等桌面拉块、拼接、算指纹，单独放宽。 */
-    /**
      * #1072: every reply goes through here. An incompatible desktop — one that refused us as
-     * outdated, or one too old to send `ver` at all — becomes a `VERSION_MISMATCH` rejection, so no
-     * caller ever acts on a pre-v2 reply; the verdict also feeds [ProtocolVersionGate].
+     * outdated, or one too old to send `ver` at all — becomes a `VERSION_MISMATCH` rejection, so
+     * no caller ever acts on a pre-v2 reply; the verdict also feeds [ProtocolVersionGate].
      */
     private fun checkedReply(reply: Resp): Resp =
         reply.versionChecked().also(ProtocolVersionGate::observe)
 
+    private fun decodeReply(json: String): Resp =
+        checkedReply(ProtoJson.decodeFromString(Resp.serializer(), json))
+
+    /**
+     * One request/response round trip on a connection of its own (the daemon serves one
+     * connection's streams one after another; a shared connection would queue requests).
+     * [timeoutMs]: the whole round trip; default 15 s. #851 `flow.supersede` waits for the
+     * desktop to pull, splice and fingerprint, so it is widened there.
+     */
     suspend fun call(peer: PeerAddrParts, method: String, params: JsonElement, timeoutMs: Long = CONNECT_TIMEOUT_MS): Resp =
-        withContext(Dispatchers.IO) { using { ep ->
-            // relayUrl is nullable in the ffi — an empty string fails
-            // URL parsing ("Failed to parse relay URL", found live).
-            val addr = EndpointAddr(
-                EndpointId.fromString(peer.idHex),
-                peer.relayUrl,
-                peer.directAddresses,
-            )
-            // UX-11: bound the whole round trip, not just connect — a
-            // peer that accepts the connection but never answers must
-            // also time out, not just one that's fully unreachable.
-            try {
-                withTimeout(timeoutMs) {
-                    val conn = ep.connect(addr, ALPN_CTRL.toByteArray())
-                    try {
-                        val bi = conn.openBi()
-                        val send = bi.send()
-                        val recv = bi.recv()
-
-                        val req = Req(
-                            id = UUID.randomUUID().toString(),
-                            method = method,
-                            params = params,
-                        )
-                        send.writeAll(encodeFrame(Req.serializer(), req))
-                        send.finish()
-
-                        val header = recv.readExact(4u)
-                        val len = frameLen(header)
-                        val payload = recv.readExact(len.toUInt())
-                        checkedReply(decodePayload(Resp.serializer(), payload))
-                    } finally {
-                        conn.close(0L, ByteArray(0))
-                    }
-                }
-            } catch (_: TimeoutCancellationException) {
-                throw DaemonUnreachableException(
-                    "$method: no response from the computer within ${CONNECT_TIMEOUT_MS}ms"
-                )
+        withContext(Dispatchers.IO) { using { p ->
+            val reply = try {
+                p.call(peer.toToken(), method, params.toString(), timeoutMs.toULong())
+            } catch (e: FfiException) {
+                throw mapFfi(e, method)
             }
+            decodeReply(reply)
         } }
 
     /**
      * DIAG-A：与 [call] 同一次往返、同一个 [CONNECT_TIMEOUT_MS] 上限，但逐阶段记下发生了什么，
-     * 成败都调一次 [report]。只给可达性探测用——状态轮询也走它会把日志刷爆。
-     *
-     * 记的东西（全部来自 iroh-ffi 公开 API，不猜）：开始时本端有没有 home relay（`addr().relayUrl()`）、
-     * 本端 `online()` 在这次调用期间何时返回、`connect()` 耗时、收到回复的耗时、连上后选中的路径
-     * （`Connection.paths()` → lan / direct / relay，口径同 conninfo.rs）；失败时的异常类型、
-     * `IrohException.kind()` / `debugMessage()` 原文，以及 iroh 此刻手里的对端地址（`remoteAddr`）。
+     * 成败都调一次 [report]。只给可达性探测用——状态轮询也走它会把日志刷爆。逐阶段记录由共享
+     * Rust 核心给出（`CtrlClient::call_traced`）：本端 home relay、`online()` 何时返回、连接与回复
+     * 耗时、连上后选中的路径、失败时的错误类别 / 关闭码与 iroh 手里的对端地址。
      */
     suspend fun callTraced(
         peer: PeerAddrParts,
         method: String,
         params: JsonElement,
         report: (CallTrace) -> Unit,
-    ): Resp = withContext(Dispatchers.IO) { using { ep ->
-        val started = System.nanoTime()
-        fun sinceStart() = (System.nanoTime() - started) / 1_000_000
-        val homeRelayAtStart = runCatching { ep.addr().relayUrl() }.getOrNull()?.takeIf { it.isNotBlank() }
-        val onlineAfter = java.util.concurrent.atomic.AtomicLong(-1)
-        var connectMs: Long? = null
-        var roundTripMs: Long? = null
-        var path: PathVerdict? = null
-        var pathCount = 0
-        var failure: Throwable? = null
-        val addr = EndpointAddr(EndpointId.fromString(peer.idHex), peer.relayUrl, peer.directAddresses)
-        try {
-            coroutineScope {
-                val onlineWatch = launch {
-                    runCatching { ep.online() }.onSuccess { onlineAfter.set(sinceStart()) }
-                }
-                try {
-                    withTimeout(CONNECT_TIMEOUT_MS) {
-                        val conn = ep.connect(addr, ALPN_CTRL.toByteArray())
-                        connectMs = sinceStart()
-                        try {
-                            runCatching {
-                                val snapshots = conn.paths()
-                                pathCount = snapshots.size
-                                path = classifyPaths(
-                                    snapshots.map { PathFacts(it.isSelected, it.isRelay, it.remoteAddr, it.rttMs.toLong()) },
-                                )
-                            }
-                            val bi = conn.openBi()
-                            val send = bi.send()
-                            val recv = bi.recv()
-                            val req = Req(id = UUID.randomUUID().toString(), method = method, params = params)
-                            send.writeAll(encodeFrame(Req.serializer(), req))
-                            send.finish()
-                            val header = recv.readExact(4u)
-                            val payload = recv.readExact(frameLen(header).toUInt())
-                            checkedReply(decodePayload(Resp.serializer(), payload)).also { roundTripMs = sinceStart() }
-                        } finally {
-                            conn.close(0L, ByteArray(0))
-                        }
-                    }
-                } finally {
-                    onlineWatch.cancel()
-                }
-            }
-        } catch (_: TimeoutCancellationException) {
-            DaemonUnreachableException("$method: no response from the computer within ${CONNECT_TIMEOUT_MS}ms")
-                .also { failure = it }
-                .let { throw it }
-        } catch (t: Throwable) {
-            failure = t
-            throw t
-        } finally {
-            val f = failure
-            val iroh = f as? computer.iroh.IrohException
-            val peerKnown = if (f == null) {
-                null
-            } else {
-                runCatching {
-                    withTimeoutOrNull(1_000) { ep.remoteAddr(EndpointId.fromString(peer.idHex)) }
-                        ?.let { known -> KnownAddr(known.relayUrl(), known.directAddresses().map { it.toString() }) }
-                }.getOrNull()
-            }
-            report(
-                CallTrace(
-                    method = method,
-                    tokenRelay = peer.relayUrl,
-                    tokenDirectAddrs = peer.directAddresses,
-                    homeRelayAtStart = homeRelayAtStart,
-                    onlineAfterMs = onlineAfter.get().takeIf { it >= 0 },
-                    connectMs = connectMs,
-                    roundTripMs = roundTripMs,
-                    totalMs = sinceStart(),
-                    path = path,
-                    pathCount = pathCount,
-                    errorClass = f?.javaClass?.simpleName,
-                    errorKind = iroh?.let { runCatching { it.kind().name }.getOrNull() },
-                    errorMessage = f?.let { e ->
-                        iroh?.let { runCatching { it.debugMessage() }.getOrNull() } ?: e.message
-                    },
-                    peerKnownAddr = peerKnown,
-                ),
-            )
+    ): Resp = withContext(Dispatchers.IO) { using { p ->
+        val t = try {
+            p.callTraced(peer.toToken(), method, params.toString(), CONNECT_TIMEOUT_MS.toULong())
+        } catch (e: FfiException) {
+            throw mapFfi(e, method)
         }
+        val failure: IOException? = when (t.errorKind) {
+            null -> null
+            "timeout" -> DaemonUnreachableException("$method: no response from the computer within ${CONNECT_TIMEOUT_MS}ms")
+            "peer_closed" -> PeerClosedException(t.closedBy.orEmpty(), (t.closeCode ?: 0uL).toLong())
+            else -> TransportFailureException("$method: ${t.errorMessage}")
+        }
+        report(
+            CallTrace(
+                method = method,
+                tokenRelay = peer.relayUrl,
+                tokenDirectAddrs = peer.directAddresses,
+                homeRelayAtStart = t.homeRelayAtStart,
+                onlineAfterMs = t.onlineAfterMs?.toLong(),
+                connectMs = t.connectMs?.toLong(),
+                roundTripMs = t.roundTripMs?.toLong(),
+                totalMs = t.totalMs.toLong(),
+                path = t.pathKind?.let { kind ->
+                    PathVerdict(PathKind.entries.first { it.wire == kind }, t.pathRemoteIp, t.pathRttMs.toLong())
+                },
+                pathCount = t.pathCount.toInt(),
+                errorClass = failure?.javaClass?.simpleName,
+                errorKind = t.errorKind?.let { k -> t.closeCode?.let { "$k:$it" } ?: k },
+                errorMessage = t.errorMessage,
+                peerKnownAddr = if (failure == null) null else KnownAddr(t.peerKnownRelay, t.peerKnownDirect),
+            ),
+        )
+        if (failure != null) throw failure
+        decodeReply(checkNotNull(t.replyJson) { "$method: trace without reply or error" })
     } }
 
     /**
-     * NET-06: read-only status query for one exact tuple — a short
-     * control-plane RPC that never blocks on the data plane and always
-     * answers within [CONNECT_TIMEOUT_MS], on any network condition. This
-     * is what NativeFlowDeliveryPort polls instead of inferring the
-     * transfer's outcome from whether a long `flow.fetch` round trip
-     * returned in time (NET-01's root cause).
+     * NET-06: read-only status query for one exact tuple — a short control-plane RPC that never
+     * blocks on the data plane and always answers within [CONNECT_TIMEOUT_MS], on any network
+     * condition.
      */
     suspend fun flowStatus(peer: PeerAddrParts, tuple: FlowTupleRef): FlowStatusReply {
         val resp = call(peer, Methods.FLOW_STATUS, ProtoJson.encodeToJsonElement(FlowTupleRef.serializer(), tuple))
@@ -382,12 +280,9 @@ class DaemonClient internal constructor(
     }
 
     /**
-     * NET-06: pause — interrupts the daemon's in-progress native fetch
-     * task for this exact tuple WITHOUT changing the durable grant state
-     * (stays active, so a later offer resumes instead of restarting).
-     * Best-effort per the card's principle 1 (意图先行，不等回声): a
-     * failure here must not block the phone's own local pause — callers
-     * swallow exceptions from this call.
+     * NET-06: pause — interrupts the daemon's in-progress native fetch task for this exact tuple
+     * WITHOUT changing the durable grant state. Best-effort per the card's principle 1
+     * (意图先行，不等回声): callers swallow exceptions from this call.
      */
     suspend fun flowSuspend(peer: PeerAddrParts, tuple: FlowTupleRef) {
         val resp = call(peer, Methods.FLOW_SUSPEND, ProtoJson.encodeToJsonElement(FlowTupleRef.serializer(), tuple))
@@ -395,14 +290,8 @@ class DaemonClient internal constructor(
     }
 
     /**
-     * NET-06: cancel by tuple identity alone — no content_hash/provider
-     * needed, unlike [call]-based `flow.cancel`. This is what
-     * CancellationRoundController must use for an item that already
-     * exhausted its retry budget and discarded its one-shot provider
-     * ticket, where a full `flow.cancel` request can no longer be built.
-     * Best-effort, same as [flowSuspend]: callers swallow exceptions —
-     * cancellation is a local state change first, the daemon notification
-     * is a courtesy (卡片原则 1).
+     * NET-06: cancel by tuple identity alone — no content_hash/provider needed. Best-effort,
+     * same as [flowSuspend]: callers swallow exceptions.
      */
     suspend fun flowCancelTuple(peer: PeerAddrParts, tuple: FlowTupleRef) {
         val resp = call(peer, Methods.FLOW_CANCEL_TUPLE, ProtoJson.encodeToJsonElement(FlowTupleRef.serializer(), tuple))
@@ -410,139 +299,99 @@ class DaemonClient internal constructor(
     }
 
     /**
-     * SYNC-04: 前台常驻订阅——发一次 `timeline.subscribe`，之后只管读
-     * 直到这条流结束（对端主动关闭 / 连接坏了 / 协程被取消）。收到第
-     * 一个帧（订阅确认本身）就调用一次 [onConnected]——调用方拿它区分
-     * "正在重连"和"已经连上，安静等事件"两种状态，不然重连期间界面
-     * 全程没有任何提示（真机验收发现的缺口：原设计只在退避耗尽之后
-     * 才亮提示，中间过程完全沉默）。每收到一次 `timeline.invalidated`
-     * 推送（包括订阅建立那一刻的"当前态"那一次，§③）就调用
-     * [onInvalidated]。
+     * SYNC-04: 前台常驻订阅——发一次 `timeline.subscribe`，之后只管读直到这条流结束（对端主动关闭 /
+     * 连接坏了 / 协程被取消）。收到第一个帧（订阅确认本身）就调用一次 [onConnected]；每收到一次
+     * `timeline.invalidated` 推送就调用 [onInvalidated]。
      *
-     * 正常返回（对端 `finish` 了发送方向）和抛异常（真正的连接错误）
-     * 对调用方是同一个意思：这次订阅结束了，按断线退避重连处理，不用
-     * 区分对待。发送方向在发完订阅请求后立即半关闭——取数据永远走
-     * 独立鉴权的普通 `call`，这条流从头到尾不传照片内容（决策档案
-     * §⑦）。
+     * 流由共享 Rust 核心读（`CtrlClient::open_stream`），帧经通道交回协程。对端结束 / 连接出错都以
+     * 异常结束本次订阅（调用方按断线退避重连处理，不用区分）；连接被对端用应用关闭码关掉时，
+     * 关闭监听（[onPeerClosed]）先于这里收到消息（#1124）。协程取消 ⇒ 取消这条流。
      */
     suspend fun subscribeTimeline(
         peer: PeerAddrParts,
         onConnected: suspend () -> Unit = {},
         onFlowEvent: suspend (String, JsonObject) -> Unit = { _, _ -> },
         onInvalidated: suspend () -> Unit,
-    ): Unit = withContext(Dispatchers.IO) { using { ep ->
-        val addr = EndpointAddr(
-            EndpointId.fromString(peer.idHex),
-            peer.relayUrl,
-            peer.directAddresses,
-        )
-        val conn = ep.connectBounded(addr, ALPN_CTRL.toByteArray())
+    ): Unit = withContext(Dispatchers.IO) { using { p ->
+        val frames = Channel<Result<JsonElement>>(Channel.UNLIMITED)
+        val listener = object : StreamListener {
+            override fun onFrame(json: String) {
+                frames.trySend(runCatching { ProtoJson.parseToJsonElement(json) })
+            }
+            override fun onClosed(error: String?) {
+                frames.trySend(Result.failure(TransportFailureException("${Methods.TIMELINE_SUBSCRIBE} ended: ${error ?: "finished by the computer"}")))
+                frames.close()
+            }
+        }
+        val handle = try {
+            p.openStream(peer.toToken(), Methods.TIMELINE_SUBSCRIBE, "{}", CONNECT_TIMEOUT_MS.toULong(), listener)
+        } catch (e: FfiException) {
+            throw mapFfi(e, Methods.TIMELINE_SUBSCRIBE)
+        }
         try {
-            val bi = conn.openBi()
-            val send = bi.send()
-            val recv = bi.recv()
-            val req = Req(
-                id = UUID.randomUUID().toString(),
-                method = Methods.TIMELINE_SUBSCRIBE,
-                params = buildJsonObject {},
-            )
-            send.writeAll(encodeFrame(Req.serializer(), req))
-            send.finish()
-
             readSubscriptionFrames(
-                nextFrame = {
-                    currentCoroutineContext().ensureActive()
-                    val header = recv.readExact(4u)
-                    val len = frameLen(header)
-                    decodePayload(JsonElement.serializer(), recv.readExact(len.toUInt()))
-                },
+                nextFrame = { frames.receive().getOrThrow() },
                 onConnected = onConnected,
                 onFlowEvent = onFlowEvent,
                 onInvalidated = onInvalidated,
             )
         } finally {
-            conn.close(0L, ByteArray(0))
+            handle.cancel()
         }
     } }
 
     /** UX-06: unilateral stop — ask the daemon to revoke THIS device.
-     *  Success means hello is denied from now on; a fresh owner-issued
-     *  token can rejoin.
-     *  #565: [pairingId] names the pairing being ended (blank = legacy
-     *  pairing without one); the daemon only revokes while that pairing is
-     *  still current. Sent once on disconnect ([sendUnpairNoticeOnce]); the
-     *  reply is only logged (#956). */
+     *  #565: [pairingId] names the pairing being ended (blank = legacy pairing without one); the
+     *  daemon only revokes while that pairing is still current. Sent once on disconnect
+     *  ([sendUnpairNoticeOnce]); the reply is only logged (#956). */
     suspend fun unpair(peer: PeerAddrParts, pairingId: String): Resp = withContext(Dispatchers.IO) {
         call(peer, "device.unpair", unpairParams(pairingId))
     }
 
-    /** Open a raw connection on any ALPN (upload plane reuses it for
-     *  many streams — one per file). Caller closes. */
-    suspend fun connectRaw(peer: PeerAddrParts, alpn: String): Connection =
-        withContext(Dispatchers.IO) { using { ep ->
-            val addr = EndpointAddr(
-                EndpointId.fromString(peer.idHex),
-                peer.relayUrl,
-                peer.directAddresses,
-            )
-            // UX-11: bound connection establishment only — the session
-            // itself (upload/download streams) legitimately runs long,
-            // only the "can we even reach it" step is time-boxed.
-            ep.connectBounded(addr, alpn.toByteArray())
-        } }
-
     /**
-     * Download an asset's original bytes to [dest] over ppf/download/1.
-     * Returns total bytes. [onProgress] gets (received, total).
-     * MOB-115: throws [AssetDownloadException] on a short/corrupt stream;
-     * [dest] only ever appears complete and BLAKE3-verified.
-     * NET-09 (#116): no total-duration limit; [DownloadStalled] once no new
-     * byte arrives for [DOWNLOAD_BYTE_STALL_MS] (response head included).
+     * Fetch an asset's original bytes to [dest] — the same path as iOS (#1124): ask the desktop
+     * for an `asset.blob_ticket`, then pull that blob with the shared Rust `fetch_blob`
+     * (iroh-blobs verifies every chunk against the content hash; nothing partial is left at
+     * [dest] on failure). The returned content hash must equal [hash].
+     * Returns the byte count. [onProgress] gets (received, [expectedBytes]).
+     * NET-09 (#116): no total-duration limit; fails once no payload byte arrives for
+     * [ORIGINAL_BYTE_STALL_MS]. Coroutine cancellation aborts the fetch.
      */
     suspend fun downloadAsset(
         peer: PeerAddrParts,
         hash: String,
         dest: java.io.File,
+        expectedBytes: Long = 0,
         onProgress: (Long, Long) -> Unit = { _, _ -> },
-    ): Long = withContext(Dispatchers.IO) { using {
-        val conn = connectRaw(peer, "ppf/download/1")
-        // NET-09（#116）：请求发出后等响应头、以及之后的每一块字节，都受字节停滞
-        // 看门狗约束；判停滞时同步关闭连接，让卡住的 readExact 报错返回。
-        val stall = ByteStallGuard(DOWNLOAD_BYTE_STALL_MS) { conn.close(0L, ByteArray(0)) }
-        try {
-            val bi = conn.openBi()
-            val send = bi.send()
-            val recv = bi.recv()
-            val req = Req(
-                id = java.util.UUID.randomUUID().toString(),
-                method = "asset.download",
-                params = kotlinx.serialization.json.buildJsonObject {
-                    put("hash", kotlinx.serialization.json.JsonPrimitive(hash))
-                },
-            )
-            send.writeAll(com.hawkeyexb.ppass.proto.encodeFrame(Req.serializer(), req))
-            send.finish()
-
-            val header = stall.read(0, null) { recv.readExact(4u) }
-            val len = com.hawkeyexb.ppass.proto.frameLen(header)
-            val resp = checkedReply(
-                com.hawkeyexb.ppass.proto.decodePayload(
-                    Resp.serializer(), stall.read(0, null) { recv.readExact(len.toUInt()) }
-                )
-            )
-            check(resp.ok) { "download $hash rejected: ${resp.error?.reason}" }
-            val total = (resp.result as? kotlinx.serialization.json.JsonObject)
-                ?.get("bytes")?.let {
-                    (it as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull()
-                }?.takeIf { it >= 0 } ?: throw DownloadLengthUnknown(hash)
-
-            // MOB-115: 断流/长度不足/内容不符都抛错，绝不返回截断文件；
-            // 先写 .part，校验通过才原子改名为 dest（见 VerifiedDownload.kt）。
-            receiveVerified(dest, total, hash, { n -> recv.readExact(n) }, stall, onProgress)
-        } finally {
-            // 看门狗可能已经关过一次；二次 close 抛的错不能盖掉真正的失败原因。
-            runCatching { conn.close(0L, ByteArray(0)) }
+    ): Long = withContext(Dispatchers.IO) { using { p ->
+        val resp = call(
+            peer, Methods.ASSET_BLOB_TICKET,
+            ProtoJson.encodeToJsonElement(BlobTicketRequest.serializer(), BlobTicketRequest(hash)),
+        )
+        check(resp.ok) { "asset.blob_ticket $hash rejected: ${resp.error?.reason}" }
+        val ticket = ProtoJson.decodeFromJsonElement(BlobTicketResponse.serializer(), checkNotNull(resp.result)).ticket
+        val scratch = java.io.File(dest.absoluteFile.parentFile, ".fetch").apply { mkdirs() }
+        val cancel = FetchCancel()
+        val progress = object : FetchProgress {
+            override fun onBytes(bytes: ULong) = onProgress(bytes.toLong(), expectedBytes)
         }
+        val got = try {
+            suspendCancellableCoroutine { cont ->
+                cont.invokeOnCancellation { cancel.cancel() }
+                try {
+                    cont.resume(p.fetchBlob(ticket, scratch.path, dest.path, ORIGINAL_BYTE_STALL_MS.toULong(), progress, cancel))
+                } catch (e: FfiException) {
+                    cont.resumeWithException(mapFfi(e, "fetch original $hash"))
+                }
+            }
+        } finally {
+            cancel.destroy()
+        }
+        if (!got.equals(hash, ignoreCase = true)) {
+            dest.delete()
+            throw OriginalHashMismatchException(hash, got)
+        }
+        dest.length()
     } }
 
     /**
@@ -552,16 +401,16 @@ class DaemonClient internal constructor(
      */
     suspend fun closeIfIdle(): Boolean = withContext(Dispatchers.IO) {
         if (inFlight.get() != 0) return@withContext false
-        if (endpoint == null) return@withContext true
-        bound.reset()?.let { ep ->
-            runCatching { lastNodeIdHex = ep.addr().id().toString() }
-            runCatching { ep.close() }
+        if (plane == null) return@withContext true
+        bound.reset()?.let { p ->
+            runCatching { lastNodeIdHex = p.nodeId() }
+            runCatching { p.shutdown() }
             bindLog("endpoint closed while idle")
         }
         true
     }
 
     suspend fun close(): Unit = withContext(Dispatchers.IO) {
-        bound.reset()?.close()
+        bound.reset()?.shutdown()
     }
 }

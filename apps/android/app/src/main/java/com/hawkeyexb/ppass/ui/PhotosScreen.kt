@@ -194,10 +194,11 @@ class TimelineLoader(
     suspend fun download(
         hash: String,
         dest: java.io.File,
+        expectedBytes: Long = 0,
         onProgress: (Long, Long) -> Unit,
     ): Long {
         ensureBound()
-        return client.downloadAsset(daemon, hash, dest, onProgress)
+        return client.downloadAsset(daemon, hash, dest, expectedBytes, onProgress)
     }
 
     suspend fun thumb(hash: String, size: ThumbSize): Bitmap? {

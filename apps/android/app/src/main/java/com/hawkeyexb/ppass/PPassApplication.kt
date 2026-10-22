@@ -33,6 +33,7 @@ import com.hawkeyexb.ppass.backup.flow.parkFlowNetwork
 import com.hawkeyexb.ppass.log.PLog
 import com.hawkeyexb.ppass.transport.AndroidKeystoreIdentityWrapper
 import com.hawkeyexb.ppass.transport.DaemonClient
+import com.hawkeyexb.ppass.transport.recordDesktopClose
 import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.PairingRejectionCleanup
 import com.hawkeyexb.ppass.transport.PairingStore
@@ -72,7 +73,19 @@ class PPassApplication : Application() {
         bindLog = { PLog.i("PPassBind", it) },
         // #434：带上持久身份，调用方不必先 bind；空闲关掉之后下次用到自己再绑。
         secretKey = { identity.secretKey() },
-    )
+    ).also { client ->
+        // #1124：这个客户端上任何一条连接（请求、探测、订阅流、取原图）被对端用应用关闭码关掉都会来到这里。
+        // 关闭方是配对记录里的那台电脑、且码是 401 / 410 ⇒ 记成配对失效，走被拒即清理；其余一律当连不上，不动配对。
+        client.onPeerClosed = { nodeId, code -> onDesktopClosedConnection(nodeId, code) }
+    }
+
+    private fun onDesktopClosedConnection(nodeId: String, code: Long) {
+        if (recordDesktopClose(nodeId, code, PairingStore(filesDir).load(), flowDeliveryPairingLoss)) {
+            PLog.i("PPassFlow", "connection closed by the recorded desktop code=$code — pairing rejected")
+        } else {
+            PLog.i("PPassFlow", "connection closed by peer code=$code — not the recorded desktop's not-paired close; treated as unreachable")
+        }
+    }
 
     /** #434：后台空闲（不在前台、引擎这一轮已结束）30 s 后关掉两个 iroh endpoint。 */
     internal val networkIdleReaper by lazy {

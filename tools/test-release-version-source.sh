@@ -193,6 +193,8 @@ commit_only t3 tools/build-android-iroh-blobs-bridge.sh
 expect_android "只改安卓原生库构建脚本 ⇒ 安卓线红" red HEAD~1 HEAD
 commit_only t4 rust-toolchain.toml
 expect_android "只改 rust-toolchain.toml ⇒ 安卓线红" red HEAD~1 HEAD
+commit_only t4b crates/proto/src/lib.rs
+expect_android "只改 crates/proto ⇒ 安卓线红（#1124：libtransport.so 开 mobile-ffi，依赖 proto）" red HEAD~1 HEAD
 commit_only t5 crates/daemon/src/main.rs
 expect_android "只改 crates/daemon ⇒ 安卓线不受影响" clean HEAD~1 HEAD
 expect_cv "只改 crates/daemon ⇒ 桌面线照常红" nonzero "desktop 版本没涨" HEAD~1 HEAD
