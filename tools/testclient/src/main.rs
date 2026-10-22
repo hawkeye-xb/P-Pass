@@ -231,6 +231,8 @@ async fn pair(qr: &str, name: &str, identity: &str) -> anyhow::Result<String> {
             })?,
             ..Default::default()
         };
+        // #1123：一条流一个请求（daemon ctrl 契约；roundtrip 发完即半关发送端）——每次轮询新开一条。
+        let mut stream = connect_ctrl(&tp, daemon).await?;
         let reply = roundtrip(&mut stream, &poll).await?;
         if let Some(err) = reply.error {
             anyhow::bail!("查询配对结果失败（{} / {}）", err.code(), err.reason());
