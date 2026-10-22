@@ -325,7 +325,7 @@ daemon 是 `config.toml` 与诊断包的唯一写者（壳经子命令调用，�
 ### 8.1 服务模型
 
 - `HostingAdapter::service_mode`：macOS `LaunchAgent`、Windows `ScheduledTask`，二者 `has_service_manager() = true`；`UserAutostart` 只是兜底实现（无服务管理器）。
-- macOS：LaunchAgent `com.p-pass.daemon`，`RunAtLoad` + `KeepAlive{SuccessfulExit=false}`：正常退出（退位 exit 0）不重拉，崩溃 / 被杀重拉；stdout / stderr 落 `<data_dir>/logs/daemon.{out,err}`（#1046）。
+- macOS：LaunchAgent `com.hawkeyexb.ppass.desktop.daemon`，`RunAtLoad` + `KeepAlive{SuccessfulExit=false}`：正常退出（退位 exit 0）不重拉，崩溃 / 被杀重拉；stdout / stderr 落 `<data_dir>/logs/daemon.{out,err}`（#1046）。
 - Windows：每用户计划任务 `P-Pass`：登录触发 + 每分钟看门狗（`PT1M`，已在跑就跳过，#957）；旧版 Run 值在登记时清掉。
 
 ### 8.2 用户停止标记
@@ -410,7 +410,7 @@ daemon 是 `config.toml` 与诊断包的唯一写者（壳经子命令调用，�
 | 首启向导第 2 步（睡眠） | 用户关闭自动睡眠（`disable_auto_sleep` 提权跑 pmset，`power_hint` 读现状）；改为电源事件订阅待 #999 | daemon 插电时保持唤醒（`ExternalPowerHold`），向导不问 | `sleep_owner`；DAE-11 |
 | 安装位置闸门 | 只对稳定安装位置做自启对账；只允许从「应用程序」运行待 #998 | 不在安装位置的副本拒绝运行（DESK-68） | `is_install_location` / `autostart_reconcile_allowed` |
 | 登记缺失时补登记 | 否 | 是（卸载会删登记，DESK-60） | `autostart_restore_when_missing` |
-| 数据目录 | `~/Library/Application Support/P-Pass` | `%LOCALAPPDATA%\com.p-pass.desktop`（老 Roaming 目录在时沿用，迁移见 §11） | `data_dir` |
+| 数据目录 | `~/Library/Application Support/P-Pass` | `%LOCALAPPDATA%\com.hawkeyexb.ppass.desktop`（老 Roaming 目录在时沿用，迁移见 §11） | `data_dir` |
 | 入库文件名 | 不改 | 去非法字符 / 保留名 / 结尾点与空格 | `ingest_file_name_sanitizer` |
 | 视频缩略图 | media-codec 用 qlmanage | 系统 `IShellItemImageFactory` | `system_video_thumbnail` |
 | 关窗与标题栏 | 不提示藏到托盘；overlay 标题栏 | 提示一次；系统标题栏 | `close_to_tray_hint` / `overlay_titlebar` |

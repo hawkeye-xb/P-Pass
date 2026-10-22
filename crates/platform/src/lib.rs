@@ -1450,7 +1450,7 @@ mod tests {
     #[test]
     fn macos_write_atomic_replaces_whole_file_and_leaves_no_temp() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("com.p-pass.daemon.plist");
+        let path = dir.path().join("com.hawkeyexb.ppass.desktop.daemon.plist");
         std::fs::write(&path, "half a plist <key>Progr").unwrap();
 
         macos::write_atomic(&path, "complete").unwrap();
@@ -1460,7 +1460,7 @@ mod tests {
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(names, vec!["com.p-pass.daemon.plist"], "临时文件不许残留");
+        assert_eq!(names, vec!["com.hawkeyexb.ppass.desktop.daemon.plist"], "临时文件不许残留");
     }
 
     /// UPD-06 (#616)：壳是**登录项**，但**不是守卫**。
@@ -1493,7 +1493,7 @@ mod tests {
         // 能力要真的暴露出来：调用方靠它决定走"系统重启"还是退化到自己重启。
         assert_eq!(
             HostingAdapter::shell_agent_label(&macos::MacosAdapter::new()),
-            Some("com.p-pass.shell")
+            Some("com.hawkeyexb.ppass.desktop.shell")
         );
     }
 

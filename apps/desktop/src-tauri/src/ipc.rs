@@ -170,7 +170,7 @@ fn data_dir_of(raw: &str) -> Option<String> {
 ///
 /// T-042b: the platform data dir comes from `platform::adapter().data_dir()`
 /// (macOS: ~/Library/Application Support/P-Pass; Windows:
-/// %LOCALAPPDATA%\com.p-pass.desktop — DESK-24 #173 moved it off roaming
+/// %LOCALAPPDATA%\com.hawkeyexb.ppass.desktop — DESK-24 #173 moved it off roaming
 /// %APPDATA%, and the adapter keeps returning the old location until the
 /// move actually succeeds) instead of a hardcoded macOS-only path — the
 /// token discovery fix must work on Windows too.

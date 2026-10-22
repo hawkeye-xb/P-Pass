@@ -356,7 +356,7 @@ mod tests {
     fn dirs(root: &Path) -> (PathBuf, PathBuf) {
         (
             root.join("Roaming").join("P-Pass"),
-            root.join("Local").join("com.p-pass.desktop"),
+            root.join("Local").join("com.hawkeyexb.ppass.desktop"),
         )
     }
 
@@ -503,7 +503,7 @@ mod tests {
         let staging = current
             .parent()
             .unwrap()
-            .join("com.p-pass.desktop.migrating-4242");
+            .join("com.hawkeyexb.ppass.desktop.migrating-4242");
         write(&staging.join("config.toml"), "半路上的配置");
         write(&staging.join("logs").join("daemon.log"), "半路上的日志");
         assert!(!legacy.exists());
@@ -536,7 +536,7 @@ mod tests {
         let staging = current
             .parent()
             .unwrap()
-            .join("com.p-pass.desktop.migrating-4242");
+            .join("com.hawkeyexb.ppass.desktop.migrating-4242");
         write(&staging.join("config.toml"), "中转里的");
         write(&legacy.join("config.toml"), "又冒出来的");
 
@@ -569,7 +569,7 @@ mod tests {
         // 新目录的位置上蹲着一个**普通文件**：第 ① 步改名进得去，第 ② 步
         // 建目录必炸。这就把 migrate 逼进 Partial —— 遗留目录已经没了、
         // 数据只在中转目录里、新目录是残缺的，最危险的那一格。
-        let current = tmp.path().join("Local").join("com.p-pass.desktop");
+        let current = tmp.path().join("Local").join("com.hawkeyexb.ppass.desktop");
         write(&current, "我是文件，不是目录");
 
         let outcome = migrate(&legacy, &current);
@@ -630,7 +630,7 @@ mod tests {
         // 那一类「第 ① 步就过不去」的失败。
         let blocker = tmp.path().join("blocked");
         write(&blocker, "我不是目录");
-        let current = blocker.join("com.p-pass.desktop");
+        let current = blocker.join("com.hawkeyexb.ppass.desktop");
 
         let outcome = migrate(&legacy, &current);
 
