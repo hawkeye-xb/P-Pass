@@ -345,6 +345,29 @@ SHELL_STEPS = {"macos-arm64": "Bundle desktop .app + dmg (H-10c)", "windows-x64"
 BUILD_VERSION_STEPS = ["Resolve desktop version (UPD-13)", "Build release binaries"]
 
 
+APPLE_CERT_GATE = "Require Apple signing certificate (#1121)"
+
+
+def apple_cert_gate(ck: Check, sc: "Scenario", wf: dict, tag: str):
+    """#1121：macOS 构建缺 Apple 证书时在最前面失败（ad-hoc 包会被客户端拒收）；有证书时放行。
+
+    反证：删掉 release.yml 里的这一步 ⇒ 找不到步骤，dry-run 报错；把它改成只告警 ⇒ 第一条红。
+    """
+    steps = wf["jobs"]["macos-arm64"]["steps"]
+    gate = [s for s in steps if s.get("name") == APPLE_CERT_GATE]
+    if len(gate) != 1:
+        raise SimError(f"macos-arm64 job 应恰有 1 个「{APPLE_CERT_GATE}」步骤，实际 {len(gate)}")
+    ck(steps[0].get("name") == APPLE_CERT_GATE, f"#1121 @ {tag}：证书门禁是 macOS job 的第一步（不白跑构建）",
+       json.dumps([s.get("name") or s.get("uses") for s in steps[:3]], ensure_ascii=False))
+    github = {"event_name": "push", "ref": f"refs/tags/{tag}", "ref_name": tag, "repository": REPO,
+              "token": "dry-run-token", "workflow_sha": sc.sha, "event": {}}
+    mini = {"env": wf.get("env") or {}, "jobs": {"macos-arm64": {"steps": gate}}}
+    for secret, want in (("", "failure"), ("ZHVtbXk=", "success")):
+        r = sc.runner.run_job(mini, "macos-arm64", github=github, inputs={},
+                              secrets={"APPLE_CERT_P12": secret}, needs={})
+        ck(r.result == want, f"#1121 @ {tag}：APPLE_CERT_P12 {'缺失' if not secret else '在位'} ⇒ {want}", r.log)
+
+
 def build_versions(ck: Check, sc: "Scenario", wf: dict, tag: str, want: str):
     """在 sc 的临时仓库上跑两个桌面构建 job 的版本相关步骤，断言外壳 == daemon == want。"""
     stub = sc.dir / "build-bin"
@@ -607,6 +630,7 @@ def formal(ck: Check, base: Path, key: str, pub: Path, rel: dict, mirror: dict):
         job_ok(ck, jobs, j)
     check_macos_assets(ck, sc, FORMAL_TAG, dv)
     build_versions(ck, sc, rel, FORMAL_TAG, dv)
+    apple_cert_gate(ck, sc, rel, FORMAL_TAG)
     job_ok(ck, jobs, "upload-windows", "skipped")
     job_ok(ck, jobs, "finalize-manifest-windows", "skipped")
     ck(not sc.asset(FORMAL_TAG, "manifest-windows.json").exists(), "#788② 正式 tag 不出 manifest-windows.json（Windows 未正式发布）")
@@ -665,6 +689,7 @@ def test_tag(ck: Check, base: Path, key: dict, pub: Path, rel: dict, mirror: dic
         job_ok(ck, jobs, j)
     check_macos_assets(ck, sc, TEST_TAG, v)
     build_versions(ck, sc, rel, TEST_TAG, v)
+    apple_cert_gate(ck, sc, rel, TEST_TAG)
     job_ok(ck, jobs, "upload-windows")
     job_ok(ck, jobs, "finalize-manifest-windows")
     exe = WINDOWS_INSTALLER.format(v=v)

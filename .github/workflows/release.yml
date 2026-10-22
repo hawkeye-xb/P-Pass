@@ -16,8 +16,9 @@
 #     原条件恒假）；notes 追加写工作区根（原 ../NOTES.md 落到工作区外）。
 #
 # 凭据策略（无凭据路径 = 卡面验收）：
-#   - macOS 签名/公证：APPLE_CERT_P12 / APPLE_CERT_PASSWORD /
-#     APPLE_NOTARY_KEY(_ID/_ISSUER) 任一缺失 → 跳过该步，notes 标注"未签名"。
+#   - macOS 签名：#1121 起 APPLE_CERT_P12 缺失 ⇒ macOS job 第一步直接失败（ad-hoc 签名的
+#     包会被客户端安装前的发布者校验拒收，不许发出去）。公证凭据
+#     APPLE_NOTARY_KEY(_ID/_ISSUER) 缺失 → 跳过公证，notes 标注"未签名"。
 #     secret 槽位由 gh secret set 预建，值来自 H-02（Apple 开发者证书 $99/年）。
 #   - Windows：当前不签名（Authenticode 证书 H-02 范畴），notes 标注。
 #   - 环境批准门：macos job 挂 environment: release-signing —— 在
@@ -215,6 +216,19 @@ jobs:
     outputs:
       signed: ${{ steps.signtag.outputs.signed }}
     steps:
+      # #1121：没有 Apple 证书就只能 ad-hoc 签名——这样的包会被所有 macOS 客户端安装前的
+      # 发布者校验拒收（platform::verify_update_package）。失败要发生在发布端，不是用户那边：
+      # 证书缺失直接失败，test 与正式 tag 都一样。放在最前面，不白跑构建。
+      # 本地开发的 ad-hoc 路径（just verify-m1、bundle-desktop-macos.sh 不带身份）不受影响。
+      - name: Require Apple signing certificate (#1121)
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+        run: |
+          if [ -z "${APPLE_CERT_P12:-}" ]; then
+            echo "::error::secret APPLE_CERT_P12 没设——macOS 包只能 ad-hoc 签名，客户端会拒收，拒绝发布"
+            exit 1
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.tag || github.ref }}

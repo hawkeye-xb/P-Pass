@@ -104,9 +104,11 @@ jobs:
             || { echo "::error::工作区 release/ 与 $TAG 不一致——说明文件与冻结件必须取自被修复的 tag"; exit 1; }
           BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
 
-          # 签名密钥还原（printf '%s' 逐字节，echo 的尾换行会让 signer 报 Invalid symbol）
-          printf '%s' "$UPDATE_SIGNING_KEY" > /tmp/key
-          chmod 600 /tmp/key
+          # #1121：与发布流水线同一套密钥选用与签完自验（tools/release/update-key-lib.sh）。
+          # 本工具只服务正式 tag（Resolve 步已拒绝 test tag）⇒ 用正式通道的私钥与公钥。
+          # shellcheck source=tools/release/update-key-lib.sh
+          . "$GITHUB_WORKSPACE/tools/release/update-key-lib.sh"
+          write_signing_key "$TAG" /tmp/key
           mkdir -p /tmp/sigs
           cd dl
           APK_L=$(find . -maxdepth 1 -name 'P-Pass_*_android*.apk' | head -1)
@@ -117,8 +119,11 @@ jobs:
           for f in "$APK_L" "$UPD_L"; do
             # #1121：签名器只从 lockfile 安装（锁哈希、不跑安装脚本）
             "$GITHUB_WORKSPACE/tools/release/signer.sh" sign -f /tmp/key -p "" "$f"
+            # #1121：签完立刻用客户端内置的正式公钥验——私钥配错当场失败。
+            verify_signed_files "$TAG" "$f"
             cp "$f.sig" /tmp/sigs/
           done
+          rm -f /tmp/key
 
           # （test tag 已在 Resolve 步拒绝。）
           # ① macOS 分端清单（桌面客户端的源）。说明：release/notes/macos/<D>.<zh|en>.txt，
@@ -144,6 +149,8 @@ jobs:
       - name: Upload manifests
         run: |
           set -euo pipefail
+          # #1121：上传前同一道门——每个条目都要有签名与 sha256。
+          tools/release/check-manifests-signed.sh dl/manifest-android.json dl/manifest-macos.json
           cd dl
           gh release upload "$TAG" manifest.json manifest-android.json manifest-macos.json --clobber
           echo "已重传：https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
@@ -158,3 +165,7 @@ jobs:
             [ "$want" = "$got" ] || { echo "::error::$f 上传后版本不一致：远端 $want / 本地 $got"; exit 1; }
             echo "$f OK version=$got"
           done
+
+      # #1121：取回线上的分端清单与安装包，用客户端内置公钥验签名与 sha256（与 release.yml 同一个脚本）。
+      - name: Verify published manifests (#1121)
+        run: tools/release/verify-published.sh "$TAG" manifest-android.json manifest-macos.json
