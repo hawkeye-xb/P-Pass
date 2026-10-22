@@ -224,22 +224,20 @@ fn clean_stale_socket(socket_name: &str) {
     let _ = platform::adapter().remove_stale_ipc_endpoint(socket_name);
 }
 
-/// Resolve the effective daemon version, in precedence order:
-/// 1. `PPF_DAEMON_VERSION` (runtime override — integration tests);
-/// 2. `PPF_BUILD_VERSION` (baked at compile time from the release tag,
+/// The daemon's version — **compile-time only**:
+/// 1. `PPF_BUILD_VERSION` (baked at compile time from the release tag,
 ///    DAE-01b blocker② — `CARGO_PKG_VERSION` carries no `-test.N` suffix,
 ///    so test.7 and test.8 would both report 0.2.0 and the newer test
 ///    package could never take over during dogfood week);
-/// 3. `CARGO_PKG_VERSION` (local / dev builds).
+/// 2. `CARGO_PKG_VERSION` (local / dev builds).
+///
+/// #1115：不再有运行时覆盖（以前的 `PPF_DAEMON_VERSION`）。版本决定单实例交接谁胜：
+/// 任何同用户程序带 `PPF_DAEMON_VERSION=999` 启动签名 daemon，就能让常驻实例退位、
+/// 由自己拉起（继承自己环境）的那个接管。现在只有真的更新的正版能接管。
 pub fn daemon_version() -> String {
-    std::env::var("PPF_DAEMON_VERSION")
-        .ok()
+    option_env!("PPF_BUILD_VERSION")
+        .map(str::to_string)
         .filter(|s| !s.is_empty())
-        .or_else(|| {
-            option_env!("PPF_BUILD_VERSION")
-                .map(str::to_string)
-                .filter(|s| !s.is_empty())
-        })
         .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
 }
 

@@ -22,6 +22,7 @@ pub mod ipc;
 pub mod log_guard;
 pub mod low_space;
 pub mod pairing;
+pub mod pairing_store;
 pub mod presence;
 pub mod query;
 pub mod reconcile;

@@ -7,12 +7,12 @@ use std::sync::{Arc, RwLock};
 
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
-use crate::{Pairing, Result};
+use crate::{Pairing, PairingVault, Result, StorageError, VaultAlignment};
 
 /// #1117：有效配对记录的内存副本，键为 NodeId。授权判定只读它，不查库。
-/// 所有 `Db` 克隆共享同一份；只有 `device_repo` 里的配对写方法会改它，
-/// 且都在事务提交之后改（库是正本，副本跟随）。#1115 把正本换到钥匙串时，
-/// 换的是这份副本的加载源与写入处，读方不变。
+/// 所有 `Db` 克隆共享同一份；只有 `device_repo` 里的配对写方法会改它。
+/// 正本：没有 [`PairingVault`] 时是库本身；有时是 vault（#1115，macOS 钥匙串），
+/// 库里的 `pairing` 表只是镜像，副本只从 vault 加载（见 `pairing_vault.rs`）。
 pub(crate) type PairingIndex = Arc<RwLock<HashMap<Vec<u8>, Pairing>>>;
 
 /// Embedded migrations — the schema ships inside the binary, so a daemon
@@ -27,6 +27,8 @@ pub struct Db {
     /// 配对记录的写入一次只走一个：事务提交和副本更新作为一个整体，
     /// 并发的配对 / 删除不会让副本与库的先后顺序不一致。
     pairing_writes: Arc<tokio::sync::Mutex<()>>,
+    /// #1115：配对记录正本。`None` = 库就是正本（Windows / Linux / 测试沙盒）。
+    vault: Option<Arc<dyn PairingVault>>,
 }
 
 impl Db {
@@ -54,22 +56,92 @@ impl Db {
         Self::ready(pool).await
     }
 
+    /// #1115：打开库，配对记录正本在 `vault`。先按正本对齐镜像，再从正本加载内存副本。
+    /// 读正本失败 ⇒ `Err`（调用方拒绝启动），不回退到镜像。
+    pub async fn open_with_vault(
+        path: &Path,
+        vault: Arc<dyn PairingVault>,
+    ) -> Result<(Db, VaultAlignment)> {
+        let opts = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new().connect_with(opts).await?;
+        Self::ready_with_vault(pool, vault).await
+    }
+
+    /// 测试用：内存库 + 指定的正本。
+    pub async fn open_in_memory_with_vault(
+        vault: Arc<dyn PairingVault>,
+    ) -> Result<(Db, VaultAlignment)> {
+        let opts = SqliteConnectOptions::from_str("sqlite::memory:")
+            .expect("static connection string")
+            .foreign_keys(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(opts)
+            .await?;
+        Self::ready_with_vault(pool, vault).await
+    }
+
     async fn with_options(opts: SqliteConnectOptions) -> Result<Db> {
         let pool = SqlitePoolOptions::new().connect_with(opts).await?;
         Self::ready(pool).await
     }
 
-    /// 迁移，然后从库加载配对记录的内存副本。
+    /// 迁移，然后从库加载配对记录的内存副本（库就是正本）。
     async fn ready(pool: SqlitePool) -> Result<Db> {
         MIGRATOR.run(&pool).await?;
         let db = Db {
             pool,
             pairings: Arc::default(),
             pairing_writes: Arc::default(),
+            vault: None,
         };
         let all = db.list_pairings().await?;
         db.replace_pairing_index(all);
         Ok(db)
+    }
+
+    async fn ready_with_vault(
+        pool: SqlitePool,
+        vault: Arc<dyn PairingVault>,
+    ) -> Result<(Db, VaultAlignment)> {
+        MIGRATOR.run(&pool).await?;
+        let db = Db {
+            pool,
+            pairings: Arc::default(),
+            pairing_writes: Arc::default(),
+            vault: Some(vault),
+        };
+        let authority = db.vault_call(|v| v.load_all()).await?;
+        let alignment = db.align_mirror(&authority).await?;
+        db.replace_pairing_index(authority);
+        Ok((db, alignment))
+    }
+
+    /// 正本的同步调用放进 blocking 线程（钥匙串读写是同步 Security 调用，毫秒级）。
+    /// 没有正本时不会被调到。
+    pub(crate) async fn vault_call<T, F>(&self, f: F) -> Result<T>
+    where
+        T: Send + 'static,
+        F: FnOnce(&dyn PairingVault) -> std::result::Result<T, String> + Send + 'static,
+    {
+        let vault = Arc::clone(self.vault.as_ref().expect("vault_call 只在有正本时调用"));
+        let location = vault.location();
+        match tokio::task::spawn_blocking(move || f(vault.as_ref())).await {
+            Ok(Ok(v)) => Ok(v),
+            Ok(Err(detail)) => Err(StorageError::Vault { location, detail }),
+            Err(e) => Err(StorageError::Vault {
+                location,
+                detail: format!("调用线程失败：{e}"),
+            }),
+        }
+    }
+
+    pub(crate) fn has_vault(&self) -> bool {
+        self.vault.is_some()
     }
 
     pub(crate) async fn pairing_write_guard(&self) -> tokio::sync::MutexGuard<'_, ()> {

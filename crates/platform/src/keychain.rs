@@ -14,7 +14,9 @@ use security_framework::passwords::{
     generic_password, set_generic_password_options, PasswordOptions,
 };
 
-use crate::{IdentityKeyStore, PlatformError, Result};
+use security_framework::passwords::delete_generic_password_options;
+
+use crate::{IdentityKeyStore, PlatformError, Result, SecretBlobStore};
 
 /// 钥匙串访问组 = 团队 ID + daemon 的 bundle id（#1110 的 helper .app）。
 pub const ACCESS_GROUP: &str = "2WJUWVUJBN.com.hawkeyexb.ppass.desktop.daemon";
@@ -22,6 +24,9 @@ pub const ACCESS_GROUP: &str = "2WJUWVUJBN.com.hawkeyexb.ppass.desktop.daemon";
 pub const SERVICE: &str = "com.hawkeyexb.ppass.desktop.daemon.identity";
 /// 条目的 account 名：每个用户只有一把 daemon 身份私钥。
 const ACCOUNT: &str = "node-secret-key";
+/// #1115：配对记录（设备白名单）正本的 service 名。与身份私钥同一访问组、同一组属性。
+pub const PAIRINGS_SERVICE: &str = "com.hawkeyexb.ppass.desktop.daemon.pairings";
+const PAIRINGS_ACCOUNT: &str = "pairings";
 
 /// `errSecItemNotFound`：确定没有这一条——唯一映射成 `Ok(None)` 的状态码。
 const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
@@ -95,6 +100,75 @@ impl IdentityKeyStore for KeychainIdentityStore {
     }
 }
 
+/// #1115：钥匙串里的一条整份读写的机密数据。属性与身份私钥一致：data protection
+/// 钥匙串、仅本机（`AfterFirstUnlockThisDeviceOnly`）、不同步、每次查询都带访问组。
+pub struct KeychainBlobStore {
+    service: &'static str,
+    account: &'static str,
+}
+
+impl KeychainBlobStore {
+    pub fn pairings() -> Self {
+        Self {
+            service: PAIRINGS_SERVICE,
+            account: PAIRINGS_ACCOUNT,
+        }
+    }
+
+    fn query(&self) -> PasswordOptions {
+        let mut q = PasswordOptions::new_generic_password(self.service, self.account);
+        q.use_protected_keychain();
+        q.set_access_group(ACCESS_GROUP);
+        q.set_access_synchronized(Some(false));
+        q
+    }
+}
+
+impl SecretBlobStore for KeychainBlobStore {
+    fn read(&self) -> Result<Option<Vec<u8>>> {
+        match generic_password(self.query()) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(None),
+            Err(e) => Err(PlatformError::Failed {
+                action: "读取钥匙串",
+                detail: describe(e),
+            }),
+        }
+    }
+
+    fn write(&self, bytes: &[u8]) -> Result<()> {
+        let access = SecAccessControl::create_with_protection(
+            Some(ProtectionMode::AccessibleAfterFirstUnlockThisDeviceOnly),
+            0,
+        )
+        .map_err(|e| PlatformError::Failed {
+            action: "写入钥匙串",
+            detail: describe(e),
+        })?;
+        let mut q = self.query();
+        q.set_access_control(access);
+        set_generic_password_options(bytes, q).map_err(|e| PlatformError::Failed {
+            action: "写入钥匙串",
+            detail: describe(e),
+        })
+    }
+
+    fn delete(&self) -> Result<()> {
+        match delete_generic_password_options(self.query()) {
+            Ok(()) => Ok(()),
+            Err(e) if e.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(()),
+            Err(e) => Err(PlatformError::Failed {
+                action: "删除钥匙串条目",
+                detail: describe(e),
+            }),
+        }
+    }
+
+    fn location(&self) -> String {
+        format!("钥匙串 {}（访问组 {ACCESS_GROUP}）", self.service)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,6 +179,13 @@ mod tests {
     /// 反证：去掉 `query()` 里的 `set_access_group`，系统回 -25300，这里变红。
     #[test]
     fn read_without_entitlement_is_an_error_not_absence() {
+        // #1115：配对记录正本同理——缺授权读不到是错误，不是「没有白名单」。
+        match KeychainBlobStore::pairings().read() {
+            Err(PlatformError::Failed { detail, .. }) => {
+                assert!(detail.contains("-34018"), "{detail}")
+            }
+            other => panic!("未授权读取配对正本必须报错，实际 {other:?}"),
+        }
         let store = KeychainIdentityStore {
             account: "unit-test-no-entitlement",
         };

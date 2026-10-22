@@ -266,7 +266,36 @@ async fn main() -> anyhow::Result<()> {
 
     // #1044：打不开索引库时输出 keyed 错误行（cli::startup_error_line），
     // 桌面按 key 出指引，不再用正则猜 stderr 原文。
-    let db = match storage::Db::open(&data_dir.join(".ppf/index.sqlite")).await {
+    // #1115：有平台安全存储（macOS 钥匙串）时，配对记录正本在那里，库里的 pairing
+    // 表只是镜像：打开时先以正本对齐镜像（库里被直接写进去的行不作数），读正本失败
+    // 就拒绝启动。--ephemeral 是一次性测试实例，不碰钥匙串（与 #1109 身份同口径）。
+    let pairing_store = if ephemeral {
+        None
+    } else {
+        use platform::PlatformAdapter as _;
+        platform::adapter().pairing_store()
+    };
+    let index_path = data_dir.join(".ppf/index.sqlite");
+    let opened = match pairing_store {
+        Some(store) => {
+            let vault = std::sync::Arc::new(daemon::pairing_store::SecretPairingVault::new(store));
+            storage::Db::open_with_vault(&index_path, vault)
+                .await
+                .map(|(db, aligned)| {
+                    if !aligned.is_noop() {
+                        // 镜像与正本不一致 = 崩溃残留或库被改过：按正本修正，并留痕。
+                        tracing::warn!(
+                            "#1115: 配对记录镜像已按正本对齐：删除 {} 条、补回 {} 条",
+                            aligned.removed_from_mirror.len(),
+                            aligned.restored_to_mirror.len()
+                        );
+                    }
+                    db
+                })
+        }
+        None => storage::Db::open(&index_path).await,
+    };
+    let db = match opened {
         Ok(db) => db,
         Err(e) => {
             eprintln!(

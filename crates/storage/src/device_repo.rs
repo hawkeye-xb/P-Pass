@@ -11,7 +11,7 @@
 
 use sqlx::Row;
 
-use crate::{Db, Result};
+use crate::{Db, Result, VaultAlignment};
 
 /// Device role. #1050: `Owner` is retired — no code path ever created an
 /// owner pairing (the owner acts through the desktop UI/IPC, not as a network
@@ -172,6 +172,18 @@ impl Db {
             .execute(&mut *tx)
             .await?;
         tx.commit().await?;
+        // #1115：镜像行先落库（外键要它），再写正本；正本写不进去就撤掉镜像行，
+        // 内存副本不动 ⇒ 没有授权。顺序与崩溃收敛见 pairing_vault.rs。
+        if self.has_vault() {
+            let p = pairing.clone();
+            if let Err(e) = self.vault_call(move |v| v.insert(&p)).await {
+                let _ = sqlx::query("DELETE FROM pairing WHERE id = ?")
+                    .bind(&pairing.id)
+                    .execute(self.pool())
+                    .await;
+                return Err(e);
+            }
+        }
         self.index_write().insert(node_id.to_vec(), pairing.clone());
         Ok(())
     }
@@ -187,6 +199,34 @@ impl Db {
         at_ms: i64,
     ) -> Result<Option<Pairing>> {
         let _serial = self.pairing_write_guard().await;
+        if self.has_vault() {
+            // #1115：正本说了算——先看内存副本（= 正本）里有没有这一条，先删正本、
+            // 立即撤掉授权，再收拾镜像。
+            let Some(current) = self.active_pairing(node_id) else {
+                return Ok(None);
+            };
+            if expect_id.is_some_and(|id| id != current.id) {
+                return Ok(None);
+            }
+            let key = node_id.to_vec();
+            self.vault_call(move |v| v.delete(&key)).await?;
+            self.index_write().remove(node_id);
+            let mut tx = self.pool().begin().await?;
+            sqlx::query("DELETE FROM pairing WHERE node_id = ?")
+                .bind(node_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query(
+                "UPDATE device_profile SET departed_at = ?, departed_by = ? WHERE node_id = ?",
+            )
+            .bind(at_ms)
+            .bind(by.as_str())
+            .bind(node_id)
+            .execute(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            return Ok(Some(current));
+        }
         let mut tx = self.pool().begin().await?;
         let removed = sqlx::query(
             "DELETE FROM pairing WHERE node_id = ?1 AND (?2 IS NULL OR id = ?2)
@@ -218,6 +258,21 @@ impl Db {
     /// 一个事务：要么全删，要么都不动。返回被删的记录。
     pub async fn remove_all_pairings(&self, by: DepartedBy, at_ms: i64) -> Result<Vec<Pairing>> {
         let _serial = self.pairing_write_guard().await;
+        // #1115：有正本时先清正本、立即撤掉全部授权，再收拾镜像。
+        let from_vault = if self.has_vault() {
+            let current: Vec<Pairing> = self
+                .pairing_index()
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .values()
+                .cloned()
+                .collect();
+            self.vault_call(|v| v.delete_all()).await?;
+            self.index_write().clear();
+            Some(current)
+        } else {
+            None
+        };
         let mut tx = self.pool().begin().await?;
         sqlx::query(
             "UPDATE device_profile SET departed_at = ?, departed_by = ?
@@ -232,7 +287,56 @@ impl Db {
             .await?;
         tx.commit().await?;
         self.index_write().clear();
-        Ok(removed.iter().map(row_to_pairing).collect())
+        Ok(from_vault.unwrap_or_else(|| removed.iter().map(row_to_pairing).collect()))
+    }
+
+    /// #1115：启动时以正本为准对齐镜像（单向）。见 `pairing_vault.rs`「启动对齐」。
+    pub(crate) async fn align_mirror(&self, authority: &[Pairing]) -> Result<VaultAlignment> {
+        let mirror = self.list_pairings().await?;
+        let mut out = VaultAlignment::default();
+        let mut tx = self.pool().begin().await?;
+        for m in &mirror {
+            let kept = authority
+                .iter()
+                .any(|a| a.node_id == m.node_id && a.id == m.id);
+            if !kept {
+                sqlx::query("DELETE FROM pairing WHERE id = ?")
+                    .bind(&m.id)
+                    .execute(&mut *tx)
+                    .await?;
+                out.removed_from_mirror
+                    .push((m.node_id.clone(), m.id.clone()));
+            }
+        }
+        for a in authority {
+            let present = mirror
+                .iter()
+                .any(|m| m.node_id == a.node_id && m.id == a.id);
+            if present {
+                continue;
+            }
+            // 没有档案就建占位档案（名字未知；手机下次 hello 时显示名照常更新）。
+            sqlx::query(
+                "INSERT INTO device_profile (node_id, name, first_seen_at) VALUES (?, ?, ?)
+                 ON CONFLICT(node_id) DO NOTHING",
+            )
+            .bind(&a.node_id)
+            .bind("")
+            .bind(a.paired_at)
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query("INSERT INTO pairing (id, node_id, role, paired_at) VALUES (?, ?, ?, ?)")
+                .bind(&a.id)
+                .bind(&a.node_id)
+                .bind(a.role.as_str())
+                .bind(a.paired_at)
+                .execute(&mut *tx)
+                .await?;
+            out.restored_to_mirror
+                .push((a.node_id.clone(), a.id.clone()));
+        }
+        tx.commit().await?;
+        Ok(out)
     }
 
     /// 授权判定用：这台设备当前的配对记录，读内存副本，不查库。
@@ -427,6 +531,43 @@ mod tests {
         .execute(db.pool())
         .await
         .unwrap();
+    }
+
+    /// #1115 防篡改：同一用户直接往库里插一行配对记录——当下不授权；重启后被对齐删掉。
+    /// 这正是本卡要堵的攻击（库同用户可写）。
+    /// 反证：授权读镜像、或启动从镜像加载 ⇒ 两处断言都红。
+    #[tokio::test]
+    async fn a_row_written_straight_into_the_library_never_authorizes() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = std::sync::Arc::new(crate::MemoryVault::default());
+        let (db, _) = Db::open_with_vault(&dir.path().join("index.sqlite"), vault.clone())
+            .await
+            .unwrap();
+        let evil = pairing(9, "evil", Role::Member, 0);
+        sqlx::query("INSERT INTO device_profile (node_id, name, first_seen_at) VALUES (?, 'x', 0)")
+            .bind(&evil.node_id)
+            .execute(db.pool())
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO pairing (id, node_id, role, paired_at) VALUES ('evil', ?, 'member', 0)",
+        )
+        .bind(&evil.node_id)
+        .execute(db.pool())
+        .await
+        .unwrap();
+        assert_eq!(db.active_pairing(&evil.node_id), None, "运行中不认库里的行");
+        drop(db);
+
+        let (db, aligned) = Db::open_with_vault(&dir.path().join("index.sqlite"), vault.clone())
+            .await
+            .unwrap();
+        assert_eq!(db.active_pairing(&evil.node_id), None, "重启后也不认");
+        assert_eq!(
+            aligned.removed_from_mirror,
+            vec![(evil.node_id.clone(), "evil".to_string())]
+        );
+        assert!(db.list_pairings().await.unwrap().is_empty());
     }
 
     #[tokio::test]

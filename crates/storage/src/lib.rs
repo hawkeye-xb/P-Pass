@@ -13,6 +13,7 @@ mod device_repo;
 mod diag_repo;
 mod flow_delivery_repo;
 mod low_space_repo;
+mod pairing_vault;
 mod supersede_repo;
 
 pub use asset_repo::{ActivityBatch, Asset, TimelinePage};
@@ -25,6 +26,7 @@ pub use device_repo::{DepartedBy, DeviceProfile, DeviceRow, DeviceWatermark, Pai
 pub use diag_repo::DiagEvent;
 pub use flow_delivery_repo::{FlowGrant, FlowGrantState, FlowReceipt};
 pub use low_space_repo::LowSpaceNotice;
+pub use pairing_vault::{MemoryVault, PairingVault, VaultAlignment};
 pub use supersede_repo::PendingSwap;
 
 /// Storage-layer errors.
@@ -38,6 +40,10 @@ pub enum StorageError {
 
     #[error("invalid timeline cursor")]
     InvalidCursor,
+
+    /// #1115：配对记录正本（钥匙串）读写失败。
+    #[error("pairing vault ({location}): {detail}")]
+    Vault { location: String, detail: String },
 }
 
 impl StorageError {

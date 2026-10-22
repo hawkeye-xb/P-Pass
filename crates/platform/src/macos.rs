@@ -481,6 +481,9 @@ impl PlatformAdapter for MacosAdapter {
     fn identity_key_home(&self) -> crate::IdentityKeyHome {
         crate::IdentityKeyHome::SecureStore(Box::new(crate::keychain::KeychainIdentityStore::new()))
     }
+    fn pairing_store(&self) -> Option<Box<dyn crate::SecretBlobStore>> {
+        Some(Box::new(crate::keychain::KeychainBlobStore::pairings()))
+    }
     fn truncate_own_stderr(&self) -> crate::Applied {
         crate::unix::truncate_own_stderr()
     }

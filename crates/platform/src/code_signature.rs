@@ -16,13 +16,25 @@ pub const DEVELOPER_TEAM_ID: &str = "2WJUWVUJBN";
 /// 桌面主 App 的 bundle id（#1112）。
 pub const DESKTOP_APP_ID: &str = "com.hawkeyexb.ppass.desktop";
 
-/// 「由 Apple 签发给本团队的证书签名、且标识为 `identifier`」的代码签名要求（csreq 语法）。
+/// 内置 daemon（嵌套 helper App，#1110）的 bundle id。
+pub const DAEMON_APP_ID: &str = "com.hawkeyexb.ppass.desktop.daemon";
+
+/// 「本团队的 **Developer ID Application** 证书签名、且标识为 `identifier`」的代码签名要求
+/// （csreq 语法，与 `codesign -d -r-` 给 Developer ID 签名程序生成的 designated requirement 同形）。
 ///
-/// `anchor apple generic` 要求证书链终于 Apple 根证书；`certificate leaf[subject.OU]` 是
-/// 签名证书的团队 ID——自签证书、ad-hoc 签名、别的团队都满足不了。
+/// - `anchor apple generic`：证书链终于 Apple 根证书（自签、ad-hoc 都过不了）；
+/// - `certificate 1[field.1.2.840.113635.100.6.2.6]`：中间证书是 Developer ID CA；
+/// - `certificate leaf[field.1.2.840.113635.100.6.1.13]`：叶证书是 Developer ID Application；
+/// - `certificate leaf[subject.OU]`：团队 ID。
+///
+/// #1115 实测：只写团队 ID 时，同团队的其他 Developer ID 程序与 **Apple Development** 签名
+/// （开发证书，同一个 OU）都能通过；两个 OID 与 identifier 缺一不可。
 pub fn code_requirement(identifier: &str) -> String {
     format!(
-        "identifier \"{identifier}\" and anchor apple generic and certificate leaf[subject.OU] = \"{DEVELOPER_TEAM_ID}\""
+        "identifier \"{identifier}\" and anchor apple generic \
+         and certificate 1[field.1.2.840.113635.100.6.2.6] \
+         and certificate leaf[field.1.2.840.113635.100.6.1.13] \
+         and certificate leaf[subject.OU] = \"{DEVELOPER_TEAM_ID}\""
     )
 }
 
@@ -183,9 +195,14 @@ mod tests {
     #[test]
     fn requirement_pins_identifier_apple_anchor_and_team() {
         let r = code_requirement(DESKTOP_APP_ID);
+        // 与 `codesign -d -r-` 对本机个人 Developer ID 签名的 P-Pass.app 输出的 designated
+        // requirement 逐项一致（去掉注释后）。反证：去掉任一个 OID 或 identifier，红。
         assert_eq!(
             r,
-            "identifier \"com.hawkeyexb.ppass.desktop\" and anchor apple generic and certificate leaf[subject.OU] = \"2WJUWVUJBN\""
+            "identifier \"com.hawkeyexb.ppass.desktop\" and anchor apple generic \
+             and certificate 1[field.1.2.840.113635.100.6.2.6] \
+             and certificate leaf[field.1.2.840.113635.100.6.1.13] \
+             and certificate leaf[subject.OU] = \"2WJUWVUJBN\""
         );
     }
 

@@ -33,6 +33,8 @@ mod data_migration;
 mod code_signature;
 // #1109：身份私钥存取端口（不在 cfg 里，daemon 的判定与单测三平台都跑）。
 mod identity_key;
+// #1115：本机 IPC 对端身份（macOS 按 audit token + 代码签名；其他平台明确「不支持」）。
+mod local_peer;
 // #1109：macOS 的身份私钥存放处——data protection 钥匙串。
 #[cfg(target_os = "macos")]
 mod keychain;
@@ -52,10 +54,12 @@ pub mod test_support;
 #[cfg(target_os = "macos")]
 pub use code_signature::verify_app_bundle;
 pub use code_signature::{
-    code_requirement, verify_update_package, UpdatePackageCheck, DESKTOP_APP_ID, DEVELOPER_TEAM_ID,
+    code_requirement, verify_update_package, UpdatePackageCheck, DAEMON_APP_ID, DESKTOP_APP_ID,
+    DEVELOPER_TEAM_ID,
 };
 pub use data_migration::DataDirMigration;
-pub use identity_key::{IdentityKeyHome, IdentityKeyStore};
+pub use identity_key::{IdentityKeyHome, IdentityKeyStore, SecretBlobStore};
+pub use local_peer::{verify_local_peer, LocalPeerSource, PeerCheck, PeerRole};
 pub use signal::{stop_signal, StopRequest};
 
 #[cfg(target_os = "macos")]
@@ -505,6 +509,12 @@ pub trait PlatformAdapter: Send + Sync {
     /// 返回 data protection 钥匙串。
     fn identity_key_home(&self) -> IdentityKeyHome {
         IdentityKeyHome::DataDirFile
+    }
+
+    /// #1115：配对记录（设备白名单）正本放在哪。`None`（默认，Windows / Linux）
+    /// = 库本身就是正本；macOS 返回钥匙串条目（与身份私钥同一访问组）。
+    fn pairing_store(&self) -> Option<Box<dyn SecretBlobStore>> {
+        None
     }
 
     /// QA-09 迁移（#211）：把文件权限收紧到「只有属主可读写」。

@@ -158,7 +158,7 @@ pub(crate) fn diag_reply(reply: Option<&Reply>) -> Result<Value, String> {
 ///
 /// 判据（DESK-29 #268 的探活判据，换成机读契约）：exit 0、stdout 是 JSON、
 /// `product` 是 [`DAEMON_PRODUCT`]、`version` 非空。只看退出码会把「别的程序」
-/// 当成 daemon；**不**比对版本号本身（版本还会被 `PPF_DAEMON_VERSION` 覆盖）。
+/// 当成 daemon；**不**比对版本号本身（它随编译期的 `PPF_BUILD_VERSION` 变）。
 pub(crate) fn version_reply(reply: Option<&Reply>) -> Result<String, String> {
     let Some(r) = reply else {
         return Err(ui_err("ui.err_sidecar_version_timeout", &[]));

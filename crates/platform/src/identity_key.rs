@@ -28,3 +28,16 @@ pub enum IdentityKeyHome {
     /// 数据目录里的 `.ppf/identity.key`（仅属主可读写）——Windows / Linux 现状。
     DataDirFile,
 }
+
+/// #1115：系统安全存储里的一条机密数据（整份读写）。配对记录（设备白名单）的正本
+/// 用它存：macOS 是与身份私钥同一访问组的钥匙串条目。
+pub trait SecretBlobStore: Send + Sync {
+    /// 读出整份内容。`Ok(None)` **只**表示「确定没有这一条」；读不出来一律 `Err`。
+    fn read(&self) -> crate::Result<Option<Vec<u8>>>;
+    /// 写入整份内容（没有就建，有就替换）。
+    fn write(&self, bytes: &[u8]) -> crate::Result<()>;
+    /// 删掉这一条；本来就没有不算错。
+    fn delete(&self) -> crate::Result<()>;
+    /// 给人看的存放位置，不含内容。
+    fn location(&self) -> String;
+}

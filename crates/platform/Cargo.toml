@@ -16,6 +16,8 @@ thiserror.workspace = true
 # #1047：停止信号（SIGTERM / Windows 控制台事件）。只开 signal + 运行时，
 # 不拉 net/io。
 tokio = { version = "1", features = ["signal", "rt"] }
+# #1115：IPC 对端身份——接 daemon / 桌面壳手里的 interprocess 连接（同一版本）。
+interprocess = { version = "2", features = ["tokio"] }
 
 # QA-09 迁移（#211）：statvfs（卷容量水位 / DAE-05）。原先这个调用长在
 # crates/daemon 里，libc 也声明在那边；迁进来之后 daemon 不再需要它。

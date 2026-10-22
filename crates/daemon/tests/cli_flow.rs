@@ -82,8 +82,8 @@ fn version_prints_crate_version_and_exits_zero() {
 ///
 /// 真要改文案，两边一起改，别只改一边。
 ///
-/// 为什么断言前缀而不是整行相等：版本号那半会被 `PPF_DAEMON_VERSION` /
-/// `PPF_BUILD_VERSION` 覆盖（这也正是桌面壳刻意不比对版本号的原因）。
+/// 为什么断言前缀而不是整行相等：版本号那半随 `PPF_BUILD_VERSION`（编译期）
+/// 变化（这也正是桌面壳刻意不比对版本号的原因）。
 /// 钉死整行会造出一个隔三差五自己红的判据；前缀才是真正的契约。
 #[test]
 fn version_prefix_is_the_desktop_probe_contract() {
@@ -101,6 +101,21 @@ fn version_prefix_is_the_desktop_probe_contract() {
          apps/desktop/src-tauri/src/lib.rs 的 DAEMON_VERSION_MARKER 依赖它。\
          实际输出:\n{stdout}"
     );
+}
+
+/// #1115：版本号只认编译期值——运行时环境变量覆盖不了。版本决定单实例交接谁胜，
+/// 能被环境变量抬高就等于任何同用户程序都能让常驻 daemon 退位。
+/// 反证：`daemon_version()` 恢复读 `PPF_DAEMON_VERSION` ⇒ 输出里出现 999，红。
+#[test]
+fn version_ignores_runtime_overrides() {
+    let out = daemon_bin()
+        .env("PPF_DAEMON_VERSION", "999.0.0")
+        .arg("--version")
+        .output()
+        .expect("spawn daemon --version");
+    assert!(out.status.success(), "status: {:?}", out.status);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!stdout.contains("999"), "版本号被环境变量改掉了：{stdout}");
 }
 
 /// #1042：`--version --json` 是给桌面壳（#1045）与免 GUI 控制面（#749）用的
