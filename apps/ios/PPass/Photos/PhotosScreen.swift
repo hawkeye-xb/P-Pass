@@ -96,9 +96,10 @@ struct PhotosScreen: View {
             // 失联时出路只有红卡上的「重新扫码」，不再露「连不上」和原始错误（Android showTimelineError）。
             Spacer()
         } else if let error = model.error, model.items.isEmpty {
+            // 同 Android：中间只说明，不放重试按钮。恢复靠桌面信号整页刷新 + 60 秒兜底，
+            // 重连退避用完后顶部那行给「重试」（disconnected）。
             PPStateMessage(text: L.s("photos_unreachable") + "\n(" + String(error.prefix(100)) + ")",
-                           symbol: "wifi.exclamationmark",
-                           actionTitle: L.s("photos_live_retry")) { Task { await model.loadFirst(reason: .retry) } }
+                           symbol: "wifi.exclamationmark")
         } else if model.items.isEmpty {
             PPStateMessage(text: L.s("photos_empty"), symbol: "photo.on.rectangle")
         } else if model.shown.isEmpty {
