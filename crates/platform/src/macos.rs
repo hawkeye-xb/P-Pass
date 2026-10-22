@@ -451,6 +451,9 @@ impl PlatformAdapter for MacosAdapter {
     fn restrict_to_owner(&self, path: &Path) -> Result<crate::Applied> {
         crate::unix::restrict_to_owner(path)
     }
+    fn identity_key_home(&self) -> crate::IdentityKeyHome {
+        crate::IdentityKeyHome::SecureStore(Box::new(crate::keychain::KeychainIdentityStore::new()))
+    }
     fn truncate_own_stderr(&self) -> crate::Applied {
         crate::unix::truncate_own_stderr()
     }
@@ -945,6 +948,14 @@ mod diag_log_tests {
         )));
         assert!(paths.stdio_by_service_manager);
         assert!(adapter.default_log_tees_stderr());
+        // #1109：常驻 daemon 只带可执行文件路径——`--ephemeral` 用内存里的
+        // 随机身份，带上它常驻服务每次启动都换 NodeId。
+        // 反证：ProgramArguments 里加一个 `--ephemeral`，第一条红。
+        assert!(!plist.contains("--ephemeral"), "{plist}");
+        assert_eq!(
+            plist_program_argument(&plist).as_deref(),
+            Some("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon")
+        );
     }
 
     /// #1046：老版本登记（exe 相同、日志落点在 `~/Library/Logs`）判为「不是本版本

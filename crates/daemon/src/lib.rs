@@ -16,6 +16,7 @@ pub mod diag_bundle;
 pub mod download;
 pub mod events;
 pub mod flow_delivery;
+pub mod identity;
 pub mod inbox;
 pub mod ipc;
 pub mod log_guard;

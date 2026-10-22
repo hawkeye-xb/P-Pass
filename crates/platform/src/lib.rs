@@ -29,6 +29,11 @@ use std::path::PathBuf;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod data_migration;
 
+// #1109：身份私钥存取端口（不在 cfg 里，daemon 的判定与单测三平台都跑）。
+mod identity_key;
+// #1109：macOS 的身份私钥存放处——data protection 钥匙串。
+#[cfg(target_os = "macos")]
+mod keychain;
 #[cfg(target_os = "macos")]
 mod macos;
 // QA-09 迁移（#211）：macOS 与 Linux 共享的 unix 实现。迁过来的分叉里有
@@ -43,6 +48,7 @@ mod windows;
 pub mod test_support;
 
 pub use data_migration::DataDirMigration;
+pub use identity_key::{IdentityKeyHome, IdentityKeyStore};
 pub use signal::{stop_signal, StopRequest};
 
 #[cfg(target_os = "macos")]
@@ -485,6 +491,13 @@ pub trait PlatformAdapter: Send + Sync {
     fn capture_unattached_stderr(&self, data_dir: &std::path::Path) -> Applied {
         let _ = data_dir;
         Applied::NotApplicable
+    }
+
+    /// #1109：daemon 身份私钥放在哪。默认 [`IdentityKeyHome::DataDirFile`]
+    /// （数据目录里的 `.ppf/identity.key`，Windows / Linux 维持现状）；macOS
+    /// 返回 data protection 钥匙串。
+    fn identity_key_home(&self) -> IdentityKeyHome {
+        IdentityKeyHome::DataDirFile
     }
 
     /// QA-09 迁移（#211）：把文件权限收紧到「只有属主可读写」。

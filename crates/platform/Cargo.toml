@@ -22,6 +22,11 @@ tokio = { version = "1", features = ["signal", "rt"] }
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# #1109：身份私钥存进 data protection 钥匙串（kSecUseDataProtectionKeychain
+# 要 OSX_10_15）。已在依赖树里（iroh 的 TLS 链），这里提为直接依赖。
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = { version = "3.7", features = ["OSX_10_15"] }
+
 [target.'cfg(windows)'.dependencies]
 # HKCU Run key: the shell's login item (DESK-72) and cleanup of the legacy
 # daemon Run value (daemon autostart is a scheduled task since #957).
