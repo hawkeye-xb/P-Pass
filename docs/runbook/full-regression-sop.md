@@ -62,14 +62,22 @@ gh release download "$STABLE" -R "$REPO" -D "$WORK/stable" -p '*android.apk' -p 
    - `apksigner verify --print-certs` 候选 APK 与上一个正式版 APK 的证书 SHA-256 **相同**（不同 = 覆盖安装会失败，直接阻塞）。
 4. **daemon 发现**（桌面装好后执行）。照片库目录以桌面配置文件为准；不要用 `lsof` 反推，它会把中文路径转义成 `\xe5…`：
 
+   macOS 常驻 daemon 只接受签名程序的 IPC 连接（#1115），脚本连不上它。状态与日志改由 App 内签名的 daemon 自己跑一次 `diag export` 取：这条子命令以 daemon 角色连常驻服务，只调 `status` 与 `logs.export`，包里的 `status.json` 是版本、状态、照片数、进程号、启动时间。
+
    ```bash
    CONF="$HOME/Library/Application Support/P-Pass/config.toml"
    DATA_DIR=$(sed -n 's/^data_dir *= *"\(.*\)"$/\1/p' "$CONF")
    DAEMON_LOG="$HOME/Library/Application Support/P-Pass/logs/daemon.log"
-   SOCK=$(sed -n 1p "$DATA_DIR/ipc.token"); TOKEN=$(sed -n 2p "$DATA_DIR/ipc.token")
-   source tools/ipc-lib.sh   # 之后用 ipc <method> [params]
-   ipc status | jq '.result | {version, state, photo_count}'
+   HELPER="/Applications/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon"
+   ppass_diag() {   # 导出一份诊断包，打印它的路径；daemon_reachable=false 即常驻服务不在线
+     local z="$WORK/diag-$(date +%s).zip"
+     "$HELPER" diag export --out "$z" | jq -e '.daemon_reachable' >/dev/null && echo "$z"
+   }
+   ppass_status() { unzip -p "$(ppass_diag)" status.json; }
+   ppass_status | jq '{version, state, photo_count}'
    ```
+
+   `config.toml` 的 `data_dir` 在 macOS 上是钥匙串里库位置的同步副本，只用来定位库目录；改它不改变 daemon 用的库。
 
 5. **桌面机属性**：问清这台 Mac 是「专用测试机」还是「日常机」，记入报告。日常机上的照片库是真实数据，**禁止**删除、重置或降级：
    - R0.2、R0.3 不做（桌面不装回正式版：旧 daemon 遇到更新过的库会拒绝启动，见 [upgrade-compat.md](upgrade-compat.md) §5）。
@@ -86,9 +94,9 @@ gh release download "$STABLE" -R "$REPO" -D "$WORK/stable" -p '*android.apk' -p 
 | ID | 执行 | 步骤 | 预期 | 证据 |
 |---|---|---|---|---|
 | R0.1 | agent | 手机：`adb uninstall com.hawkeyexb.ppass`（仅限测试机）→ `adb install` 正式版 APK | 安装成功；`dumpsys package` 的 versionName 等于正式版 | 命令输出 |
-| R0.2 | agent | 桌面：退出 P-Pass → 挂载正式版 dmg → `ditto` 覆盖 `/Applications/P-Pass.app` → 打开 | daemon 起来，`ipc status` 的 `result.version` 等于正式版桌面版本号 | IPC 输出 |
+| R0.2 | agent | 桌面：退出 P-Pass → 挂载正式版 dmg → `ditto` 覆盖 `/Applications/P-Pass.app` → 打开 | daemon 起来，`ppass_status` 的 `version` 等于正式版桌面版本号 | `status.json` 输出 |
 | R0.3 | user | 专用测试机首次安装时走一遍桌面向导（选库目录） | 三步走完，进入主界面 | 截图 |
-| R0.4 | agent+user | 生成 40 张带唯一内容的 JPEG push 到 `DCIM/PPassRegression/` 并触发媒体扫描；手机打开 App → 首页「无法扫码？手动输入配对串」，串由 `ipc_pair_qr` 现取，`adb shell input text` 填入；`ipc pairing.pending` 取到手机的 `node_id` 后 `ipc pairing.confirm {"accept":true,"node_id":"<它>"}` 批准（不带 `node_id` 返回 `NOT_FOUND`；`device_name` 不生效，设备名取手机型号）。授权弹窗在开局批次里由人点 | 配对成功；桌面设备列表出现该机型 | IPC 输出 + 设备行 |
+| R0.4 | user+agent | 生成 40 张带唯一内容的 JPEG push 到 `DCIM/PPassRegression/` 并触发媒体扫描；手机打开 App → 首页「无法扫码？手动输入配对串」，人在桌面 App「添加设备」里显示配对串（#1115 起脚本取不到正式桌面的配对串，也不能代为批准），`adb shell input text` 填入后由人在桌面点「允许」（设备名取手机型号）。授权弹窗在开局批次里由人点 | 配对成功；桌面设备列表出现该机型 | 诊断包 `devices.json`（NodeId 前缀）+ 设备行 |
 | R0.5 | agent | 范围只选 `PPassRegression`，立即备份，等完成 | 40/40；每张 `sha256` 在 `originals/` 里能找到同值文件 | 哈希对账表 |
 
 ### R1 升级（G2，对应 upgrade-compat A、B 格）
@@ -98,7 +106,7 @@ gh release download "$STABLE" -R "$REPO" -D "$WORK/stable" -p '*android.apk' -p 
 | R1.1 | agent | 升级前快照。手机：发布签名包不可 `run-as`，改记桌面 `device` 表里该机的 `node_id` 与 `pairing_epoch`（升级后不变即证明 `identity.key` 与配对保留）、设置页的相册范围。桌面 `identity.key` 哈希、`_sqlx_migrations` 最大版本、各表行数、`originals/` 全量哈希 | 快照落盘 | `pre-upgrade.json` |
 | R1.2 | agent | 桌面覆盖安装候选 dmg（同 R0.2 手法；日常机见 §3 第 5 条） | daemon 起来；迁移只前进；NodeId、原图哈希、行数不减 | 前后对比 |
 | R1.3 | agent | `adb install -r` 候选 APK 覆盖安装（更新通道由版本号推导，没有切换开关；正式版只认正式通道，收不到 test 包） | 装上候选版；不需要重新配对；范围保留；后续一轮零重复 | 前后对比 + 版本号 |
-| R1.4 | agent | 版本一致性：手机 `dumpsys package` 的 versionName、`ipc status` 的 `result.version`、`/Applications/P-Pass.app` 的 `CFBundleShortVersionString`（桌面壳界面上的版本号即读它） | 三者都等于候选版本号 | 三行输出 |
+| R1.4 | agent | 版本一致性：手机 `dumpsys package` 的 versionName、`ppass_status` 的 `version`、`/Applications/P-Pass.app` 的 `CFBundleShortVersionString`（桌面壳界面上的版本号即读它） | 三者都等于候选版本号 | 三行输出 |
 | R1.5 | agent | 升级后再 push 8 张 → 自动或立即备份 | 恰好 +8，无重复入库 | 对账表 |
 | R1.6 | agent+user | 应用内更新一跳：从候选版 App 内更新到下一个 test tag（对外动作，先问人；两个 tag 钉在同一个 SHA，不要取打 tag 那一刻的 `origin/main`）。抓 `adb logcat` 的 `PPassUpdate` 与 `PackageInstallerSession` | 点一次系统安装器的「更新」即装上；没有 `Session was abandoned`；配对与范围保留 | 日志摘录 + 版本号 |
 
@@ -137,8 +145,8 @@ gh release download "$STABLE" -R "$REPO" -D "$WORK/stable" -p '*android.apk' -p 
 
 | ID | 执行 | 步骤 | 预期 | 证据 |
 |---|---|---|---|---|
-| R5.1 | agent | 收集本轮 `adb logcat -d --uid=<App 的 uid>`（按 uid，跨进程重启也不漏）和 `$DAEMON_LOG` 里本轮时间窗的行（文件里可能留着脱敏上线前的历史行，不算本轮）。第一遍按本轮自己的秘密原文检索：电脑 NodeId 全长（配对串的 `node=`）、手机 NodeId 全长（`ipc devices.list`）、配对串里的 `t=` 令牌、`ipc.token` 第二行。第二遍按形状检索：任意 64 位十六进制串、公网 IPv4/IPv6（私网、链路本地、回环按 `redact-vectors.json` 的 `keep` 规则放行） | 两遍都零命中 | 检索命令与输出 |
-| R5.2 | agent+user | `ipc logs.export` 只导出 audit / diag_events / devices 三份 JSON；带 `daemon.log` 的完整诊断包由人在桌面界面导出（收尾批次）。两份都解开，同 R5.1 两遍检索，另查用户主目录名与本轮测试图片文件名 | 零命中 | 检索命令与输出 |
+| R5.1 | agent | 收集本轮 `adb logcat -d --uid=<App 的 uid>`（按 uid，跨进程重启也不漏）和 `$DAEMON_LOG` 里本轮时间窗的行（文件里可能留着脱敏上线前的历史行，不算本轮）。第一遍按本轮自己的秘密原文检索：电脑 NodeId 全长（配对串的 `node=`）、手机 NodeId 全长（macOS 桌面侧只给前缀：从手机自己的日志里按前缀取全长；Windows 用 `ipc devices.list`）、配对串里的 `t=` 令牌、`ipc.token` 第二行（只 Windows 有；macOS 常驻 daemon 不用令牌）。第二遍按形状检索：任意 64 位十六进制串、公网 IPv4/IPv6（私网、链路本地、回环按 `redact-vectors.json` 的 `keep` 规则放行） | 两遍都零命中 | 检索命令与输出 |
+| R5.2 | agent+user | `ppass_diag` 导出的包（经 `logs.export` 收 audit / diag_events / devices 三份 JSON，另含 daemon.log、status.json；Windows 仍可直接 `ipc logs.export`）；带 `daemon.log` 的完整诊断包由人在桌面界面导出（收尾批次）。两份都解开，同 R5.1 两遍检索，另查用户主目录名与本轮测试图片文件名 | 零命中 | 检索命令与输出 |
 
 ### R6 界面观感（`user`，收尾批次）
 

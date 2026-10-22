@@ -415,7 +415,7 @@ async fn set_library_resp(
 /// 按非零退出把 daemon 拉起来，新实例带着库启动；壳一次性拉起的实例由壳自己收掉。
 pub const EXIT_CONFIGURED_RESTART: i32 = 75;
 
-/// #1115：未配置状态（正本里还没有库位置）的服务：只在签名 socket 上答 `status`（报
+/// #1115：未配置状态（正本里还没有库位置）的服务（签名 socket 版，macOS）：只答 `status`（报
 /// `unconfigured`）与 `config.set_library`；单实例交接要的 `daemon.step_down` 照答。不开库、
 /// 不起传输、不发配对码。写好库位置后以 [`EXIT_CONFIGURED_RESTART`] 退出。
 pub async fn serve_unconfigured_signed(
@@ -461,33 +461,107 @@ pub async fn serve_unconfigured_signed(
                     return;
                 }
             };
-            let (rx, mut tx) = conn.split();
+            let (rx, tx) = conn.split();
+            unconfigured_session(
+                BufReader::new(rx).lines(),
+                tx,
+                client,
+                &version,
+                started_at,
+                &location,
+            )
+            .await;
+        });
+    }
+}
+
+/// #1115：令牌端点上的未配置状态（Windows / Linux：没有 config.toml）。口径与签名版一致——
+/// 只答 `status` / `config.set_library` / `daemon.step_down` / 不推事件的 `events.subscribe`。
+/// 令牌文件写在平台数据目录（壳在那里找），持令牌者即窗口程序（与令牌模式的常驻服务同一信任
+/// 模型）。socket 名固定为 [`UNCONFIGURED_SOCKET_NAME`]：两个未配置实例走同一套单实例交接。
+pub async fn serve_unconfigured_token(
+    platform_dir: &std::path::Path,
+    token: [u8; 32],
+    version: String,
+    location: Arc<crate::library_location::LibraryLocation>,
+) -> anyhow::Result<()> {
+    let token_hex: String = token.iter().map(|b| format!("{b:02x}")).collect();
+    std::fs::create_dir_all(platform_dir)?;
+    let token_path = platform_dir.join("ipc.token");
+    std::fs::write(
+        &token_path,
+        format!("{UNCONFIGURED_SOCKET_NAME}\n{token_hex}\n"),
+    )?;
+    {
+        use platform::PlatformAdapter as _;
+        platform::adapter().restrict_to_owner(&token_path)?;
+    }
+    clean_stale_socket(UNCONFIGURED_SOCKET_NAME);
+    let name = UNCONFIGURED_SOCKET_NAME.to_ns_name::<GenericNamespaced>()?;
+    let listener = ListenerOptions::new().name(name).create_tokio()?;
+    let started_at = now_ms();
+    loop {
+        let conn = match listener.accept().await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("ipc accept: {e}");
+                continue;
+            }
+        };
+        let location = Arc::clone(&location);
+        let version = version.clone();
+        let expected = token_hex.clone();
+        tokio::spawn(async move {
+            let (rx, tx) = conn.split();
             let mut lines = BufReader::new(rx).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let Ok(req) = serde_json::from_str::<Req>(&line) else {
-                    continue;
-                };
-                let resp =
-                    unconfigured_dispatch(&req, client, &version, started_at, &location).await;
-                let configured = req.method == "config.set_library" && resp.ok;
-                let step_down = req.method == "daemon.step_down" && resp.ok;
-                let Ok(mut out) = serde_json::to_string(&resp) else {
+            match lines.next_line().await {
+                Ok(Some(first)) if first.trim() == expected => {}
+                _ => {
+                    tracing::warn!("#1115: 拒绝 IPC 连接（未配置状态）：令牌不对");
                     return;
-                };
-                out.push('\n');
-                if tx.write_all(out.as_bytes()).await.is_err() {
-                    return;
-                }
-                if configured || step_down {
-                    tokio::time::sleep(Duration::from_millis(200)).await;
-                    if configured {
-                        tracing::info!("#1115: 库位置已写入，退出以带着库重新启动");
-                        std::process::exit(EXIT_CONFIGURED_RESTART);
-                    }
-                    std::process::exit(0);
                 }
             }
+            unconfigured_session(lines, tx, IpcClient::Shell, &version, started_at, &location)
+                .await;
         });
+    }
+}
+
+/// #1115：令牌模式下未配置状态的 socket 名（还没有身份，名字不能从 NodeId 派生）。
+pub const UNCONFIGURED_SOCKET_NAME: &str = "ppf-unconfigured";
+
+/// 未配置状态的请求循环（签名 socket 与令牌端点共用）。写好库位置 ⇒ 以
+/// [`EXIT_CONFIGURED_RESTART`] 退出；交班 ⇒ 0 退出。
+async fn unconfigured_session(
+    mut lines: tokio::io::Lines<BufReader<interprocess::local_socket::tokio::RecvHalf>>,
+    mut tx: interprocess::local_socket::tokio::SendHalf,
+    client: IpcClient,
+    version: &str,
+    started_at: i64,
+    location: &Arc<crate::library_location::LibraryLocation>,
+) {
+    while let Ok(Some(line)) = lines.next_line().await {
+        let Ok(req) = serde_json::from_str::<Req>(&line) else {
+            continue;
+        };
+        let resp = unconfigured_dispatch(&req, client, version, started_at, location).await;
+        let configured = req.method == "config.set_library" && resp.ok;
+        let step_down = req.method == "daemon.step_down" && resp.ok;
+        let Ok(mut out) = serde_json::to_string(&resp) else {
+            return;
+        };
+        out.push('\n');
+        if tx.write_all(out.as_bytes()).await.is_err() {
+            return;
+        }
+        if configured || step_down {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            if configured {
+                tracing::info!("#1115: 库位置已写入，退出以带着库重新启动");
+                std::process::exit(EXIT_CONFIGURED_RESTART);
+            }
+            std::process::exit(0);
+        }
     }
 }
 

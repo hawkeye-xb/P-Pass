@@ -585,3 +585,122 @@ fn sandbox_refuses_path_inputs() {
         );
     }
 }
+
+/// #1115 方案 A：没有安全存储的平台（Windows / Linux）上，平台目录里没有 config.toml ⇒ 常驻
+/// daemon 进未配置状态（不在平台目录开库、不占传输端口）；在令牌端点上写好库位置后以 75 退出，
+/// config.toml 由 daemon 写出。macOS 走签名 socket（只有签名的窗口程序能连），这里跳过。
+/// 反证：library_location 去掉「没有 config.toml ⇒ 未配置」⇒ 平台目录里不出现 ppf-unconfigured
+/// 令牌（daemon 直接开库），红。
+#[test]
+fn without_config_toml_the_resident_daemon_waits_for_the_library_then_restarts() {
+    use platform::PlatformAdapter as _;
+    use std::process::Stdio;
+    if !matches!(
+        platform::adapter().resident_ipc(),
+        platform::ResidentIpc::NamespacedWithToken
+    ) || platform::adapter().library_store().is_some()
+    {
+        eprintln!(
+            "跳过：本平台常驻 daemon 走签名 socket / 有安全存储（macOS），由 ipc_roles.rs 覆盖"
+        );
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    struct Kill(std::process::Child);
+    impl Drop for Kill {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut child = Kill(
+        daemon_bin()
+            .env("HOME", dir.path())
+            .env("LOCALAPPDATA", dir.path().join("local"))
+            .env("APPDATA", dir.path().join("roaming"))
+            .env("XDG_DATA_HOME", dir.path().join("xdg"))
+            .env_remove("PPF_DATA_DIR")
+            .env_remove("PPF_LOG_FILE")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn daemon"),
+    );
+    fn find(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+        for e in std::fs::read_dir(dir).ok()?.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                if let Some(hit) = find(&p, name) {
+                    return Some(hit);
+                }
+            } else if p.file_name().is_some_and(|n| n == name) {
+                return Some(p);
+            }
+        }
+        None
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let token_file = loop {
+        if let Some(t) = find(dir.path(), "ipc.token") {
+            if std::fs::read_to_string(&t).is_ok_and(|s| s.lines().count() >= 2) {
+                break t;
+            }
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "20 秒内没出现令牌文件"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    let raw = std::fs::read_to_string(&token_file).unwrap();
+    let mut lines = raw.lines();
+    assert_eq!(
+        lines.next(),
+        Some(daemon::ipc::UNCONFIGURED_SOCKET_NAME),
+        "没有 config.toml 时应进未配置状态"
+    );
+    let token_hex = lines.next().unwrap().trim().to_string();
+    let platform_dir = token_file.parent().unwrap().to_path_buf();
+    let lib = dir.path().join("Lib A");
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let resp = rt.block_on(async {
+        use interprocess::local_socket::tokio::prelude::*;
+        use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+        let endpoint = daemon::ipc::PeerEndpoint::Token {
+            socket_name: daemon::ipc::UNCONFIGURED_SOCKET_NAME.into(),
+            token_hex: token_hex.clone(),
+        };
+        let (conn, _) = endpoint.connect().await.expect("连未配置端点");
+        let (rx, mut tx) = conn.split();
+        let req = serde_json::json!({
+            "id": "x", "method": "config.set_library", "params": { "library": lib.to_str().unwrap() }
+        });
+        tx.write_all(format!("{token_hex}\n{req}\n").as_bytes())
+            .await
+            .unwrap();
+        let mut out = String::new();
+        BufReader::new(rx).read_line(&mut out).await.unwrap();
+        serde_json::from_str::<serde_json::Value>(out.trim()).unwrap()
+    });
+    assert_eq!(resp["ok"], true, "{resp}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let code = loop {
+        if let Some(status) = child.0.try_wait().unwrap() {
+            break status.code();
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "写好库位置后 10 秒内没退出"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    assert_eq!(code, Some(daemon::ipc::EXIT_CONFIGURED_RESTART));
+    assert!(lib.is_dir(), "首启要把库目录建出来");
+    let cfg = std::fs::read_to_string(platform_dir.join("config.toml")).expect("config.toml");
+    assert!(cfg.contains("Lib A"), "{cfg}");
+    assert!(
+        !platform_dir.join("index.sqlite").exists(),
+        "未配置状态不许在平台目录开库"
+    );
+}

@@ -8,7 +8,9 @@
 //!   只对验过签名的窗口程序开放（`ipc.rs`）。以前的 CLI 子命令 `config init` /
 //!   `config set-library` 已删除：签名的 daemon 谁都能带参数运行，CLI 写入口等于谁都能改。
 //! - **未配置**：正本里还没有库位置 ⇒ daemon 进入「未配置」状态（只答 `status` 与
-//!   `config.set_library`，不开库、不起传输），由窗口程序的首启向导完成配置。
+//!   `config.set_library`，不开库、不起传输），由窗口程序的首启向导完成配置。没有安全存储的
+//!   平台上「正本里没有」= 平台目录里没有 config.toml（两个平台同一口径：首启一次性拉起的
+//!   daemon 不会先在平台目录开库、占端口）。
 
 use std::path::{Path, PathBuf};
 
@@ -52,7 +54,8 @@ impl LibraryLocation {
     }
 
     /// 常驻 daemon 的库。有安全存储时只看正本（config.toml 的 `data_dir` 不作数）；读不出来
-    /// ⇒ `Err`，调用方拒绝启动（不回退到 config.toml）。没有安全存储时沿用 config 的语义。
+    /// ⇒ `Err`，调用方拒绝启动（不回退到 config.toml）。没有安全存储时 config.toml 就是正本：
+    /// 文件不存在 ⇒ 未配置；存在但没写 `data_dir` ⇒ 平台目录（老配置的语义）。
     pub fn resident_library(&self, config: &Config) -> Result<ResidentLibrary, String> {
         match &self.store {
             Some(store) => match store.read().map_err(|e| e.to_string())? {
@@ -81,6 +84,9 @@ impl LibraryLocation {
                     dir: dir.clone(),
                     configured: true,
                 },
+                None if !self.platform_dir.join(CONFIG_FILE_NAME).exists() => {
+                    ResidentLibrary::Unconfigured
+                }
                 None => ResidentLibrary::At {
                     dir: self.platform_dir.clone(),
                     configured: false,
@@ -206,17 +212,29 @@ mod tests {
     }
 
     /// 没有安全存储的平台：沿用 config 语义（没配置 ⇒ 平台目录、非显式）。
+    /// Windows / Linux：没有 config.toml ⇒ 未配置（与 macOS 正本为空同一口径，首启一次性拉起的
+    /// daemon 不先在平台目录开库）；有 config.toml 但没写 data_dir ⇒ 平台目录（老配置）。
+    /// 反证：去掉「没有 config.toml」那一支 ⇒ 第一条断言变回 At{platform}，红。
     #[test]
     fn without_a_secure_store_config_toml_is_the_authority() {
         let tmp = tempfile::tempdir().unwrap();
-        let loc = LibraryLocation::with(None, tmp.path().join("platform"));
+        let platform = tmp.path().join("platform");
+        let loc = LibraryLocation::with(None, platform.clone());
+        assert_eq!(resident(&loc), ResidentLibrary::Unconfigured);
+        std::fs::create_dir_all(&platform).unwrap();
+        std::fs::write(
+            platform.join(CONFIG_FILE_NAME),
+            "bind_addr = \"0.0.0.0:41145\"\n",
+        )
+        .unwrap();
         assert_eq!(
             resident(&loc),
             ResidentLibrary::At {
-                dir: tmp.path().join("platform"),
+                dir: platform.clone(),
                 configured: false
             }
         );
+        std::fs::remove_file(platform.join(CONFIG_FILE_NAME)).unwrap();
         let lib = tmp.path().join("lib");
         loc.set(lib.to_str().unwrap()).unwrap();
         assert_eq!(

@@ -204,6 +204,23 @@ pub struct BundleInputs {
     pub desktop_log: LogPart,
     /// 常驻服务在线时它给的那几份（diag_events.json / devices.json / audit.json）。
     pub daemon_entries: Vec<(String, Vec<u8>)>,
+    /// 常驻服务在线时 `status` 的 [`STATUS_FIELDS`] 那几项，写成包里的 `status.json`。
+    pub daemon_status: Option<serde_json::Value>,
+}
+
+/// #1115：诊断包里 `status.json` 只收这几项——回归要核对的版本、状态、照片数、进程号，
+/// 不收路径、设备名这类要脱敏的东西。macOS 常驻 daemon 只认签名程序，回归脚本经签名的
+/// daemon 自己跑 `diag export` 取这份（daemon 角色本来就能调 `status` 与 `logs.export`，
+/// 不新增权限）。
+pub const STATUS_FIELDS: &[&str] = &["version", "state", "photo_count", "pid", "started_at"];
+
+/// 从 `status` 应答里挑出 [`STATUS_FIELDS`]（应答里没有的项不补）。
+pub fn status_summary(status: &serde_json::Value) -> serde_json::Value {
+    let picked: serde_json::Map<String, serde_json::Value> = STATUS_FIELDS
+        .iter()
+        .filter_map(|k| status.get(*k).map(|v| ((*k).to_string(), v.clone())))
+        .collect();
+    serde_json::Value::Object(picked)
 }
 
 const README: &str = "\
@@ -214,7 +231,8 @@ P-Pass 诊断包（导出时间见各文件内容）
                           daemon.log.1 是轮转出来的上一段
   1. daemon-stderr.log  ← 后台服务的 stderr：启动早期的报错、崩溃信息
                           （daemon-stdout.log 是同一来源的 stdout，macOS 才有）
-  2. versions.txt       ← App 与后台服务的版本号（版本装反是常见原因）
+  2. versions.txt       ← App 与后台服务的版本号（版本装反是常见原因）；
+                          status.json 是服务在线时的版本 / 状态 / 照片数 / 进程号
   3. config-summary.txt ← 照片库目录 / 监听地址
   4. log-sources.txt    ← 每份日志从哪来、收没收进来
   5. diag_events.json   ← 后台服务自己记的诊断事件流
@@ -267,6 +285,12 @@ pub fn build_bundle(i: &BundleInputs) -> Vec<(String, Vec<u8>)> {
         i.platform,
     );
     entries.push(("versions.txt".into(), versions.into_bytes()));
+    if let Some(status) = &i.daemon_status {
+        entries.push((
+            "status.json".into(),
+            serde_json::to_vec_pretty(status).unwrap_or_default(),
+        ));
+    }
     entries.push((
         "config-summary.txt".into(),
         config_summary(i.config_toml.as_deref(), home).into_bytes(),
@@ -437,11 +461,14 @@ pub enum DaemonCollection {
     /// 在线（version 已拿到或为 None），但三份 JSON 没拿到。
     LogsUnavailable {
         version: Option<String>,
+        /// `status` 应答里 [`STATUS_FIELDS`] 那几项（拿不到 = None）。
+        status: Option<serde_json::Value>,
         reason: String,
     },
     /// 三份完整拿到。
     Complete {
         version: Option<String>,
+        status: Option<serde_json::Value>,
         entries: Vec<(String, Vec<u8>)>,
     },
 }
@@ -560,16 +587,17 @@ pub async fn collect_from_daemon(
         Err(e) => return DaemonCollection::Unreachable(e),
     };
     // DESK-31：版本号在 status 那一步就拿定，独立于三份日志要不要得到。
-    let version = handle
-        .call("status")
-        .await
-        .ok()
+    let status = handle.call("status").await.ok();
+    let version = status
+        .as_ref()
         .and_then(|v| v["version"].as_str().map(str::to_string));
+    let status = status.as_ref().map(status_summary);
     let zip = match handle.call("logs.export").await {
         Ok(v) => v["zip"].as_str().unwrap_or_default().to_string(),
         Err(e) => {
             return DaemonCollection::LogsUnavailable {
                 version,
+                status,
                 reason: format!("后台服务拒绝了 logs.export：{e}"),
             }
         }
@@ -584,10 +612,15 @@ pub async fn collect_from_daemon(
             if !same {
                 let _ = std::fs::remove_file(&zip);
             }
-            DaemonCollection::Complete { version, entries }
+            DaemonCollection::Complete {
+                version,
+                status,
+                entries,
+            }
         }
         Err(e) => DaemonCollection::LogsUnavailable {
             version,
+            status,
             reason: format!("后台服务的日志包读不出来：{e}"),
         },
     }
@@ -675,12 +708,22 @@ pub fn gather(env: &ExportEnv, daemon: DaemonCollection) -> BundleInputs {
         ..Default::default()
     };
     match daemon {
-        DaemonCollection::Complete { version, entries } => {
+        DaemonCollection::Complete {
+            version,
+            status,
+            entries,
+        } => {
             inputs.daemon_version = version;
+            inputs.daemon_status = status;
             inputs.daemon_entries = entries;
         }
-        DaemonCollection::LogsUnavailable { version, reason } => {
+        DaemonCollection::LogsUnavailable {
+            version,
+            status,
+            reason,
+        } => {
             inputs.daemon_version = version;
+            inputs.daemon_status = status;
             inputs.daemon_logs_unavailable = Some(reason);
         }
         DaemonCollection::Unreachable(reason) => {
@@ -1243,6 +1286,30 @@ mod tests {
 
     /// gather 读的是平台目录下 logs/ 里的那几份，不碰别处；常驻服务不可达
     /// 时版本号是本程序自己的整串。
+    /// #1115：status.json 只收白名单里的几项；不在线就没有这份。
+    /// 反证：status_summary 改成原样返回 ⇒ 路径那项进包，红。
+    #[test]
+    fn status_json_carries_only_the_whitelisted_fields() {
+        let full = serde_json::json!({
+            "version": "1.2.3", "state": "idle", "photo_count": 46, "pid": 42, "started_at": 7,
+            "library_dir": "/Users/someone/Pictures/Lib", "msg_key": "x",
+        });
+        let summary = status_summary(&full);
+        let keys: Vec<&String> = summary.as_object().unwrap().keys().collect();
+        assert_eq!(keys.len(), STATUS_FIELDS.len(), "{summary}");
+        assert!(summary.get("library_dir").is_none());
+        let inputs = BundleInputs {
+            daemon_status: Some(summary),
+            ..Default::default()
+        };
+        let entries = build_bundle(&inputs);
+        let status = entry(&entries, "status.json").expect("在线时要有 status.json");
+        assert!(status.contains("\"photo_count\": 46"), "{status}");
+        assert!(!status.contains("Pictures"), "{status}");
+        let offline = build_bundle(&BundleInputs::default());
+        assert!(entry(&offline, "status.json").is_none());
+    }
+
     #[test]
     fn gather_reads_own_logs_dir_and_reports_own_version_when_offline() {
         let tmp = tempfile::tempdir().unwrap();

@@ -83,9 +83,11 @@ async fn online_export_collects_three_files_and_leaves_no_second_copy() {
     let out = dir.path().join("out").join("bundle.zip");
     std::fs::create_dir_all(out.parent().unwrap()).unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
-    let entries = loop {
+    let (status, entries) = loop {
         match collect_from_daemon(std::slice::from_ref(&endpoint), &out).await {
-            DaemonCollection::Complete { entries, .. } => break entries,
+            DaemonCollection::Complete {
+                status, entries, ..
+            } => break (status, entries),
             other if Instant::now() > deadline => panic!("10 秒内没连上：{}", describe(&other)),
             _ => tokio::time::sleep(Duration::from_millis(100)).await,
         }
@@ -94,6 +96,15 @@ async fn online_export_collects_three_files_and_leaves_no_second_copy() {
     for want in ["diag_events.json", "devices.json", "audit.json"] {
         assert!(names.contains(&want), "缺 {want}：{names:?}");
     }
+    // #1115：回归经 `diag export` 取状态——status 那几项随包带回，只有白名单字段。
+    let status = status.expect("在线时要带回 status");
+    assert_eq!(status["photo_count"], 0, "{status}");
+    assert!(status["version"].is_string(), "{status}");
+    assert_eq!(
+        status.as_object().unwrap().len(),
+        daemon::diag_bundle::STATUS_FIELDS.len(),
+        "{status}"
+    );
     assert!(
         !dir.path().join("ppf-logs.zip").exists(),
         "库目录里不得留下第二份包"
@@ -330,4 +341,81 @@ async fn set_library_is_closed_in_the_sandbox_and_open_to_the_window_program() {
             .contains("ui.err_library_target_missing"),
         "{r}"
     );
+}
+
+/// #1115 方案 A：令牌端点上的未配置状态（Windows / Linux 没有 config.toml 时）。令牌文件写在
+/// 平台目录、socket 名是固定的 `ppf-unconfigured`；持令牌只答 status / events.subscribe，库相关
+/// 方法回 library_unavailable；令牌不对什么都不答。写库位置会让进程以 75 退出，不在进程内测
+/// （见 cli_flow.rs 的非 macOS 进程级测试）。
+/// 反证：serve_unconfigured_token 去掉首行令牌比对 ⇒「令牌不对」那条读到应答，红。
+#[tokio::test(flavor = "multi_thread")]
+async fn unconfigured_token_endpoint_answers_only_config_methods() {
+    use interprocess::local_socket::tokio::prelude::*;
+    use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let platform_dir = tmp.path().join("platform");
+    let loc = Arc::new(LibraryLocation::with(None, platform_dir.clone()));
+    tokio::spawn({
+        let platform_dir = platform_dir.clone();
+        async move {
+            let _ = daemon::ipc::serve_unconfigured_token(
+                &platform_dir,
+                [0x75; 32],
+                "9.9.9".into(),
+                loc,
+            )
+            .await;
+        }
+    });
+    let token_file = platform_dir.join("ipc.token");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !token_file.exists() {
+        assert!(Instant::now() < deadline, "5 秒内没写出令牌文件");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let raw = std::fs::read_to_string(&token_file).unwrap();
+    let mut lines = raw.lines();
+    assert_eq!(lines.next(), Some(daemon::ipc::UNCONFIGURED_SOCKET_NAME));
+    assert_eq!(lines.next(), Some("75".repeat(32).as_str()));
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    async fn call(token: &str, method: &str) -> Option<serde_json::Value> {
+        let endpoint = PeerEndpoint::Token {
+            socket_name: daemon::ipc::UNCONFIGURED_SOCKET_NAME.into(),
+            token_hex: token.into(),
+        };
+        let (conn, _) = endpoint.connect().await.unwrap();
+        let (rx, mut tx) = conn.split();
+        let line = serde_json::json!({ "id": "x", "method": method, "params": {} });
+        tx.write_all(format!("{token}\n{line}\n").as_bytes())
+            .await
+            .unwrap();
+        let mut out = String::new();
+        let read = tokio::time::timeout(
+            Duration::from_secs(1),
+            BufReader::new(rx).read_line(&mut out),
+        )
+        .await;
+        match read {
+            Ok(Ok(n)) if n > 0 => Some(serde_json::from_str(out.trim()).unwrap()),
+            _ => None,
+        }
+    }
+
+    let token = "75".repeat(32);
+    let s = call(&token, "status").await.expect("status 要答");
+    assert_eq!(s["result"]["unconfigured"], true, "{s}");
+    assert_eq!(s["result"]["version"], "9.9.9", "{s}");
+    let sub = call(&token, "events.subscribe").await.expect("订阅要成立");
+    assert_eq!(sub["ok"], true, "{sub}");
+    for m in ["pairing.start", "devices.list", "logs.export"] {
+        let r = call(&token, m).await.expect("要答");
+        assert_eq!(r["error"]["reason"], "library_unavailable", "{m}: {r}");
+    }
+    assert!(
+        call(&"00".repeat(32), "status").await.is_none(),
+        "令牌不对不许答"
+    );
+    assert!(!platform_dir.join("config.toml").exists());
 }

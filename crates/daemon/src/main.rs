@@ -1011,47 +1011,80 @@ fn library_root_check(
     Ok(())
 }
 
-/// 32 random bytes from the OS (via std's RandomState hashing entropy is
-/// NOT enough — use getrandom through the `rand`-free std path).
-/// #1115：未配置状态——正本里还没有库位置。只有平台给了签名 socket 时才会走到这里
-/// （有安全存储的平台才有「未配置」）。单实例交接照做，然后只答 `status` 与
-/// `config.set_library`，写好后以 `EXIT_CONFIGURED_RESTART` 退出、带着库重新启动。
+/// #1115：未配置状态——正本里还没有库位置（macOS 钥匙串里没有；Windows / Linux 平台目录里
+/// 没有 config.toml）。单实例交接照做，然后只答 `status` 与 `config.set_library`，写好后以
+/// `EXIT_CONFIGURED_RESTART` 退出、带着库重新启动。
 async fn run_unconfigured(
     location: std::sync::Arc<daemon::library_location::LibraryLocation>,
 ) -> ! {
     use platform::PlatformAdapter as _;
-    let platform::ResidentIpc::SignedSocket(path) = platform::adapter().resident_ipc() else {
-        let msg = "照片库位置未配置，且本平台没有签名 socket 承接配置（#1115）";
-        eprintln!("{msg}");
-        std::process::exit(1);
-    };
-    let prepared = daemon::ipc::check_socket_path(&path).and_then(|()| {
-        let dir = path.parent().unwrap_or(&path);
-        platform::adapter()
-            .prepare_private_dir(dir)
-            .map_err(|e| format!("IPC 目录 {} 不可用：{e}", dir.display()))
-    });
-    if let Err(msg) = prepared {
-        eprintln!("{msg}");
-        std::process::exit(1);
-    }
     let version = daemon::daemon_version();
     tracing::info!("#1115: 照片库位置未配置——只开放配置方法，等窗口程序的首启向导");
-    match daemon::ipc::claim_endpoint(&daemon::ipc::PeerEndpoint::Signed(path.clone()), &version)
-        .await
-    {
-        daemon::Claim::StandDown => {
-            tracing::info!("已有同版本或更新版本的 daemon 在值班（v{version}），本实例退出。");
-            std::process::exit(0);
+    let served = match platform::adapter().resident_ipc() {
+        platform::ResidentIpc::SignedSocket(path) => {
+            let prepared = daemon::ipc::check_socket_path(&path).and_then(|()| {
+                let dir = path.parent().unwrap_or(&path);
+                platform::adapter()
+                    .prepare_private_dir(dir)
+                    .map_err(|e| format!("IPC 目录 {} 不可用：{e}", dir.display()))
+            });
+            if let Err(msg) = prepared {
+                eprintln!("{msg}");
+                std::process::exit(1);
+            }
+            stand_down_unless_claimed(&daemon::ipc::PeerEndpoint::Signed(path.clone()), &version)
+                .await;
+            daemon::ipc::serve_unconfigured_signed(&path, version, location).await
         }
-        daemon::Claim::TookOver | daemon::Claim::Proceed => {}
-    }
-    if let Err(e) = daemon::ipc::serve_unconfigured_signed(&path, version, location).await {
+        platform::ResidentIpc::NamespacedWithToken => {
+            // 前任（另一个未配置实例）的令牌在平台目录里；没有就是第一个。
+            let platform_dir = location.platform_dir().to_path_buf();
+            if let Some(token_hex) = predecessor_token(&platform_dir) {
+                stand_down_unless_claimed(
+                    &daemon::ipc::PeerEndpoint::Token {
+                        socket_name: daemon::ipc::UNCONFIGURED_SOCKET_NAME.to_string(),
+                        token_hex,
+                    },
+                    &version,
+                )
+                .await;
+            }
+            let token = match rand_token() {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            };
+            daemon::ipc::serve_unconfigured_token(&platform_dir, token, version, location).await
+        }
+    };
+    if let Err(e) = served {
         tracing::error!("IPC 服务退出：{e}");
     }
     std::process::exit(1);
 }
 
+/// 单实例交接（newest wins）：在位者同版本或更新 ⇒ 本实例退出。
+async fn stand_down_unless_claimed(peer: &daemon::ipc::PeerEndpoint, version: &str) {
+    if let daemon::Claim::StandDown = daemon::ipc::claim_endpoint(peer, version).await {
+        tracing::info!("已有同版本或更新版本的 daemon 在值班（v{version}），本实例退出。");
+        std::process::exit(0);
+    }
+}
+
+/// 平台目录里 ipc.token 的令牌行，且 socket 名是未配置状态的那个（配置好的前任写在库里）。
+fn predecessor_token(platform_dir: &std::path::Path) -> Option<String> {
+    let raw = std::fs::read_to_string(platform_dir.join("ipc.token")).ok()?;
+    let mut lines = raw.lines();
+    (lines.next()?.trim() == daemon::ipc::UNCONFIGURED_SOCKET_NAME)
+        .then(|| lines.next().map(|t| t.trim().to_string()))
+        .flatten()
+        .filter(|t| !t.is_empty())
+}
+
+/// 32 random bytes from the OS (via std's RandomState hashing entropy is
+/// NOT enough — use getrandom through the `rand`-free std path).
 fn rand_token() -> anyhow::Result<[u8; 32]> {
     let mut token = [0u8; 32];
     getrandom::fill(&mut token).map_err(|e| anyhow::anyhow!("系统随机数不可用：{e}"))?;
