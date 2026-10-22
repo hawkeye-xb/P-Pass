@@ -109,6 +109,30 @@ final class HomeProjectionTests: XCTestCase {
         XCTAssertEqual(P.backupUiState(facts(EngineSnapshot(state: .idle, pending: 5)), noAlbums: false), .idle)
     }
 
+    /// #1092：取原图这一段。从 iCloud 下载 → 专门的状态（带进度、仍算进行中、可暂停）；本机读取 → 照常「传输中」。
+    /// 反证：下载期间沿用上一张的 current（字节不动）→ 15 秒后「没有新数据」。
+    func test_fetching_original_from_icloud_has_its_own_state() {
+        var v = EngineSnapshot(state: .running, pending: 4, doneThisRound: 2)
+        v.fetchingFileName = "IMG_8.HEIC"
+        v.fetchingFromICloud = true
+        v.fetchingFraction = 0.4
+        let s = P.backupUiState(facts(v), noAlbums: false)
+        XCTAssertEqual(s, .fetchingFromICloud(done: 3, total: 6, currentFile: "IMG_8.HEIC", fraction: 0.4))
+        XCTAssertEqual(P.statusLine(s, pendingK: 4), .working)
+        XCTAssertEqual(P.heroAction(s, pairingLost: false), .pause)
+
+        v.fetchingFromICloud = false
+        v.fetchingFraction = nil
+        XCTAssertEqual(P.backupUiState(facts(v), noAlbums: false), .sending(done: 3, total: 6, currentFile: "IMG_8.HEIC"))
+    }
+
+    /// 对齐 Android FINISHING：字节已全部发出、在等确认，不算「没有新数据」。
+    func test_all_bytes_sent_is_finishing_not_slow() {
+        XCTAssertTrue(TransferText.isFinishing(sent: 100, total: 100))
+        XCTAssertFalse(TransferText.isFinishing(sent: 99, total: 100))
+        XCTAssertFalse(TransferText.isFinishing(sent: 0, total: 0), "总数未知不算发完")
+    }
+
     func test_status_lines_for_new_states() {
         XCTAssertEqual(P.statusLine(.preparing, pendingK: 3), .working)
         XCTAssertEqual(P.statusLine(.paused, pendingK: 3), .paused)

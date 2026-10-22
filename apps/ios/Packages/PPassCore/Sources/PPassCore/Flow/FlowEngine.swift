@@ -143,6 +143,7 @@ public actor FlowEngine {
             pending: pending,
             doneThisRound: doneThisRound,
             current: state == .running && status.phase == .running ? status.current : nil,
+            fetching: state == .running && status.phase == .running ? status.fetching : nil,
             desktopHealth: desktopHealth
         )
     }
@@ -163,7 +164,9 @@ public actor FlowEngine {
         var a2 = a, b2 = b
         a2.current?.bytesSent = 0
         b2.current?.bytesSent = 0
-        return a2 == b2 && a.current?.bytesSent != b.current?.bytesSent
+        a2.fetching?.fraction = nil
+        b2.fetching?.fraction = nil
+        return a2 == b2 && (a.current?.bytesSent != b.current?.bytesSent || a.fetching?.fraction != b.fetching?.fraction)
     }
 
     private func setStatus(_ s: LoopStatus) {
@@ -858,10 +861,19 @@ public actor FlowEngine {
 
     /// 导入（准备这一步唯一读文件的地方），单张失败当场重试 1 次。结果 nil 表示两次都抛了，第二项是原因。
     private func importWithRetry(_ details: MediaDetails) async throws -> (ImportResult?, String) {
+        // #1092：取原图这一段单独显示（上一张的 current 不再挂着，首页不把下载时间算成「没有新数据」）；导入结束就收起。
+        let mediaId = details.snapshot.mediaId
+        var s = status
+        s.current = nil
+        s.fetching = FetchingItem(mediaId: mediaId, fileName: details.fileName, fromICloud: false, fraction: nil)
+        setStatus(s)
+        defer { fetchEnded(mediaId) }
         var reason = "import"
         for attempt in 0..<2 {
             do {
-                let result = try await importer.importMedia(details)
+                let result = try await importer.importMedia(details) { [weak self] update in
+                    Task { await self?.fetchUpdated(mediaId, update) }
+                }
                 if Task.isCancelled {
                     // 导入完成时这一轮已被取消：这份导入不会再被用到，当场放掉。
                     if case let .imported(hash, _) = result { importer.release(hash) }
@@ -1123,6 +1135,23 @@ public actor FlowEngine {
             // 端口没分类的异常：保守地当作这一张的问题（计次数、有上限），不当路径失败（那会无限续）。
             return .itemFailure("unclassified: \(type(of: error))")
         }
+    }
+
+    private func fetchUpdated(_ mediaId: String, _ update: OriginalFetchUpdate) {
+        guard var fetching = status.fetching, fetching.mediaId == mediaId else { return }
+        fetching.fromICloud = fetching.fromICloud || update.fromICloud
+        if let f = update.fraction { fetching.fraction = f }
+        guard fetching != status.fetching else { return }
+        var s = status
+        s.fetching = fetching
+        setStatus(s)
+    }
+
+    private func fetchEnded(_ mediaId: String) {
+        guard status.fetching?.mediaId == mediaId else { return }
+        var s = status
+        s.fetching = nil
+        setStatus(s)
     }
 
     private func progressed(_ orderId: Int64, _ bytes: Int64) {

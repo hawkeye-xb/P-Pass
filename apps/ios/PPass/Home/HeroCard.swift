@@ -115,7 +115,13 @@ struct HeroCard: View {
             let quiet = quietSeconds(now: ctx.date)
             let slow = quiet >= TransferText.slowAfterSeconds
             VStack(alignment: .leading, spacing: 0) {
-                if case .sending(let done, let total, let file) = state {
+                if case .fetchingFromICloud(let done, let total, let file, let fraction) = state {
+                    // #1092：原图正从 iCloud 下载，还没有字节流向电脑——不显示「没有新数据」。
+                    Text(file).font(PPFont.sans(13.5, .medium)).foregroundStyle(PPColor.ink60)
+                        .lineLimit(1).truncationMode(.middle)
+                    Text(L.f("state_fetching_icloud", Int(((fraction ?? 0) * 100).rounded()), done, total))
+                        .font(PPFont.sans(13)).foregroundStyle(PPColor.ink60).lineLimit(1)
+                } else if case .sending(let done, let total, let file) = state {
                     Text(file).font(PPFont.sans(13.5, .medium)).foregroundStyle(PPColor.ink60)
                         .lineLimit(1).truncationMode(.middle)
                     Text(slow ? L.f("state_sending_slow", quiet)
@@ -127,7 +133,9 @@ struct HeroCard: View {
                     Text(" ").font(PPFont.sans(13))
                 }
                 Spacer().frame(height: 8)
-                if let v, v.currentTotalBytes > 0, case .sending = state {
+                if case .fetchingFromICloud(_, _, _, let fraction?) = state {
+                    PPProgressBar(value: fraction, total: 1, tint: PPColor.safe, track: PPColor.safe.opacity(0.18))
+                } else if let v, v.currentTotalBytes > 0, case .sending = state {
                     let tint = slow ? PPColor.waiting : PPColor.safe
                     PPProgressBar(value: Double(v.currentBytesSent), total: Double(v.currentTotalBytes),
                                   tint: tint, track: tint.opacity(0.18))
@@ -141,6 +149,8 @@ struct HeroCard: View {
     private func quietSeconds(now: Date) -> Int {
         guard let m = app.transferMark, m.orderId == app.facts.view?.currentOrderId,
               m.bytes == app.facts.view?.currentBytesSent else { return 0 }
+        // 对齐 Android FINISHING：字节已全部发出、在等电脑确认收下，不动是正常的，不算「没有新数据」。
+        if let v = app.facts.view, TransferText.isFinishing(sent: v.currentBytesSent, total: v.currentTotalBytes) { return 0 }
         return max(Int(now.timeIntervalSince(m.at)), 0)
     }
 

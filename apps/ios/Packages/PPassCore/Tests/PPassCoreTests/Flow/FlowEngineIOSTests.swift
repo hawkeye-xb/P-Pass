@@ -23,6 +23,48 @@ final class FlowEngineIOSTests: XCTestCase {
         XCTAssertGreaterThan(p.size, 0)
     }
 
+    // MARK: #1092：取原图这一段单独显示
+
+    /// 从 iCloud 下载原图期间：视图给出「正在取原图」这一项（来自 iCloud、带进度），上一张已传完的不再挂在 current 上
+    /// ——首页的「没有新数据」计时只认 current 的字节，下载期间就不会误报。下载完开始交付后 fetching 收起。
+    /// 反证：不设 fetching、不清 current → 视图仍是上一张（字节不动），红。
+    func testWhileFetchingFromICloudTheViewShowsTheFetchNotThePreviousItem() async throws {
+        let rig = try Rig()
+        rig.photo(1, generation: 1)
+        rig.photo(2, generation: 2)
+        rig.importer.iCloudProgress.set([mid(2): [0.5]])
+        rig.importer.holdIds.set([mid(2)])
+        await rig.start()
+        await rig.engine.trigger(.mediaChange)
+        await eventually("fetching photo 2 from iCloud") { await rig.engine.view.fetching?.fraction == 0.5 }
+
+        let v = await rig.engine.view
+        XCTAssertEqual(rig.delivery.deliveredIds, [1], "第 1 张已传完")
+        XCTAssertNil(v.current, "上一张不再挂在 current 上")
+        XCTAssertEqual(v.fetching?.mediaId, mid(2))
+        XCTAssertEqual(v.fetching?.fromICloud, true)
+        XCTAssertEqual(v.state, .running)
+
+        rig.importer.releaseHold()
+        await eventually("photo 2 delivered") { rig.delivery.deliveredIds == [1, 2] }
+        let after = await rig.engine.view
+        XCTAssertNil(after.fetching)
+    }
+
+    /// 本机原图（导入端不回报 iCloud）：取原图这一段 fromICloud 保持 false，首页按普通「传输中」显示。
+    func testLocalFetchIsNotReportedAsICloud() async throws {
+        let rig = try Rig()
+        rig.photo(1, generation: 1)
+        rig.importer.holdIds.set([mid(1)])
+        await rig.start()
+        await rig.engine.trigger(.mediaChange)
+        await eventually("fetching photo 1") { await rig.engine.view.fetching?.mediaId == mid(1) }
+        let fromICloud = await rig.engine.view.fetching?.fromICloud
+        XCTAssertEqual(fromICloud, false)
+        rig.importer.releaseHold()
+        await eventually("delivered") { rig.delivery.deliveredIds == [1] }
+    }
+
     // MARK: #311 D4：iCloud 原图
 
     /// 新照片的原图在 iCloud、因网络拉不下来：不建行、不推进 G、不计失败；等待中（ORIGINAL_UNAVAILABLE）+ 探测梯。

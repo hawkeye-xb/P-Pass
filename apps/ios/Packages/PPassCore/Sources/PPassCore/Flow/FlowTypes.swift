@@ -299,7 +299,9 @@ public protocol MediaImporter: Sendable {
     /// 不响应的话，暂停 / 断网要等整段 iCloud 下载（大视频是 GB 级）结束才生效。
     /// **归因契约**：只有能判定是网络造成的拉取失败（如 NSURLErrorDomain 的断网 / 超时）才返回 `.originalUnavailable`；
     /// 归因错了会让队头这张一直卡住后面的照片（它既不计次也不推进 G）。资源确实不可得要抛错。
-    func importMedia(_ details: MediaDetails) async throws -> ImportResult
+    /// **进度契约**（#1092）：原图要从 iCloud 下载时，经 [onFetch] 回报（先报一次 `fromICloud = true`，之后带进度）；
+    /// 本机原图不必回报。可在任意线程调用。
+    func importMedia(_ details: MediaDetails, onFetch: @escaping @Sendable (OriginalFetchUpdate) -> Void) async throws -> ImportResult
 
     /// 这份内容不再需要（桌面已有、放弃这一张、这一轮走不完）。幂等、不许抛。
     func release(_ contentHash: String)
@@ -413,17 +415,41 @@ public struct CurrentItem: Equatable, Sendable {
     public let totalBytes: Int64
 }
 
+/// 取原图这一段（#1092）：导入在建 order 之前，还没有 [CurrentItem]。首页按这一项显示，不跑「没有新数据」计时
+/// ——从 iCloud 下载原图期间没有字节流向桌面是正常的。引擎的停滞判据从交付开始算，也不含这一段。
+public struct FetchingItem: Equatable, Sendable {
+    public let mediaId: String
+    public let fileName: String
+    /// 原图不在本机、正从 iCloud 下载（导入端判定后回报）。
+    public var fromICloud: Bool
+    /// iCloud 下载进度 0...1；还不知道时为 nil。
+    public var fraction: Double?
+}
+
+/// 导入端回报的取原图进度（iOS：PhotoKit）。
+public struct OriginalFetchUpdate: Equatable, Sendable {
+    public let fromICloud: Bool
+    public let fraction: Double?
+
+    public init(fromICloud: Bool, fraction: Double?) {
+        self.fromICloud = fromICloud
+        self.fraction = fraction
+    }
+}
+
 public enum LoopPhase: Sendable { case idle, checking, running }
 
 /// 循环的运行态（内存，不持久化）。
 public struct LoopStatus: Equatable, Sendable {
     public var phase: LoopPhase = .idle
     public var current: CurrentItem?
+    public var fetching: FetchingItem?
     public var waitReason: WaitReason?
 
-    public init(phase: LoopPhase = .idle, current: CurrentItem? = nil, waitReason: WaitReason? = nil) {
+    public init(phase: LoopPhase = .idle, current: CurrentItem? = nil, fetching: FetchingItem? = nil, waitReason: WaitReason? = nil) {
         self.phase = phase
         self.current = current
+        self.fetching = fetching
         self.waitReason = waitReason
     }
 }
@@ -436,6 +462,8 @@ public struct EngineView: Equatable, Sendable {
     public var pending: Int = 0
     public var doneThisRound: Int = 0
     public var current: CurrentItem?
+    /// 正在取原图的这一张（#1092）；与 [current] 不会同时有值。
+    public var fetching: FetchingItem?
     public var desktopHealth: DesktopHealth?
 }
 

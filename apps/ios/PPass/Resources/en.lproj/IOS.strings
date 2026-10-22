@@ -52,6 +52,9 @@
 "ok_got_it" = "OK";
 "bucket_summary" = "%1$@ photos will be backed up · automatically while P-Pass is open";
 
+/* #1092：原图正从 iCloud 下载（还没开始传给电脑）。参数：下载百分比、第几张、共几张。 */
+"state_fetching_icloud" = "Getting original from iCloud %1$ld%% · %2$ld of %3$ld";
+
 "state_waiting_local_storage_full" = "This phone is out of storage. Free up some space and the backup carries on.";
 
 /* #975：iOS 系统授权框只弹一次，被拒后只能去系统设置（Android 会再弹一次申请框）。 */

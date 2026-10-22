@@ -17,6 +17,10 @@ final class FakeOriginalSource: OriginalResourceSource, @unchecked Sendable {
 
     func resolveOriginal(assetId: String) throws -> OriginalResourceInfo { try resolveResult.get() }
 
+    /// nil = 不实现判定（走协议默认）。
+    var local: Bool?
+    func isLocal(_ resource: OriginalResourceInfo) async -> Bool? { local }
+
     func streamData(of resource: OriginalResourceInfo, progress: @escaping @Sendable (Double) -> Void, chunk: @escaping (Data) throws -> Void) async throws {
         for (i, step) in steps.enumerated() {
             switch step {
@@ -66,6 +70,22 @@ final class OriginalFetcherTests: XCTestCase {
         fetched.discard()
         fetched.discard()
         XCTAssertEqual(leftovers(), [], "discard 删掉这次的目录，重复调用无害")
+    }
+
+    /// #1092：读之前回报一次原图在不在本机（首页据此说「正在从 iCloud 获取原图」）；判断不了就不回报。
+    func testLocalityIsReportedOnceBeforeReadingAndOnlyWhenKnown() async throws {
+        let source = FakeOriginalSource(steps: [.chunk(Data("ab".utf8))])
+        let fetcher = OriginalFetcher(source: source, tempRoot: root)
+        let seen = LockedValues()
+
+        source.local = false
+        try await fetcher.fetch(assetId: "asset-1", onLocality: { seen.append($0) }).discard()
+        source.local = true
+        try await fetcher.fetch(assetId: "asset-1", onLocality: { seen.append($0) }).discard()
+        source.local = nil
+        try await fetcher.fetch(assetId: "asset-1", onLocality: { seen.append($0) }).discard()
+
+        XCTAssertEqual(seen.values, [false, true])
     }
 
     func testReleasingWithoutDiscardStillCleansUp() async throws {
@@ -234,4 +254,11 @@ final class OriginalFetcherTests: XCTestCase {
         XCTAssertNil(selectOriginalResource(types: [.photo], mediaType: .video), "类型不匹配：不可得")
         XCTAssertNil(selectOriginalResource(types: [.audio], mediaType: .audio))
     }
+}
+
+private final class LockedValues: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _values: [Bool] = []
+    func append(_ v: Bool) { lock.lock(); _values.append(v); lock.unlock() }
+    var values: [Bool] { lock.lock(); defer { lock.unlock() }; return _values }
 }
