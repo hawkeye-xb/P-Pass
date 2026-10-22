@@ -1,0 +1,46 @@
+# 审核配对页 —— nginx 站点（模板）
+#
+# 占位符由 scripts/install.sh 替换：
+#   __PUBLIC_HOST__      对外域名（必须是 Cloudflare 免费版能签发边缘证书的**一级**子域）
+#   __ORIGIN_SNI_HOST__  源站证书对应的域名（可以和对外域名不同；Tunnel 用它连 127.0.0.1:443）
+#
+# 为什么对外是 HTTPS 而不是「源站裸 80」：页面会签发配对令牌，明文链路等于把令牌
+# 送给链路上的任何人；账号密码也不该明文过网。
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __PUBLIC_HOST__ __ORIGIN_SNI_HOST__;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name __PUBLIC_HOST__ __ORIGIN_SNI_HOST__;
+
+    ssl_certificate     /etc/letsencrypt/live/__ORIGIN_SNI_HOST__/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/__ORIGIN_SNI_HOST__/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    client_max_body_size 1m;
+
+    # 唯一的门：没有账号密码的人连二维码都拿不到。
+    # 文件必须让 worker 可读（root:www-data 640），否则每个请求都是 500。
+    auth_basic           "P-Pass review";
+    auth_basic_user_file /etc/nginx/.htpasswd-pair;
+
+    limit_req            zone=pairpage burst=40 nodelay;
+    limit_req_status     429;
+
+    add_header X-Robots-Tag "noindex, nofollow, noarchive" always;
+    add_header Referrer-Policy "no-referrer" always;
+
+    location / {
+        proxy_pass http://127.0.0.1:8787;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_read_timeout 60s;
+    }
+}

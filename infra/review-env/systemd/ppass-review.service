@@ -1,0 +1,21 @@
+[Unit]
+Description=P-Pass review daemon (Linux headless, 审核验证环境)
+Documentation=https://github.com/hawkeye-xb/P-Pass/blob/main/infra/review-env/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/opt/ppass-review/bin/daemon
+Restart=on-failure
+RestartSec=5
+# 数据目录进 /var/lib，二进制进 /opt —— 归档和 reset 都只碰这两个位置。
+Environment=PPF_DATA_DIR=/var/lib/ppass-review
+Environment=PPF_BIND_ADDR=0.0.0.0:41146
+# 审核环境不回报遥测：这不是正式服务。
+Environment=PPF_TELEMETRY_ENABLED=false
+Environment=PPF_LOG_LEVEL=info
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
