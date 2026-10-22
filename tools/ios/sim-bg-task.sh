@@ -8,7 +8,7 @@
 #
 # 环境变量：
 #   PPASS_DEVICE           devicectl 设备标识（默认 iPhone 16 测试机）
-#   PPASS_NO_RESTORE=1     跑完不把手机配回正式桌面（默认会配回，并恢复开跑前导出的相册范围）
+#   （#1115 起跑完不再自动配回正式桌面：脚本只打印人工配回的步骤与范围备份位置。）
 #   PPASS_SKIP_BUILD=1     不重新构建 / 安装（App 已是当前代码的 Debug 包时用，省几分钟）
 #   PPASS_BGTEST_PHOTOS    测试照片张数（默认 A/B 6 张，C 12 张）；PPASS_BGTEST_SIZE 照片尺寸（默认 2000x1500 噪声图，约 2.5 MB，不可压缩）
 #   PPASS_BGTEST_MAX_WAKES C 最多叫醒几次短任务（默认 6）：一次传不完就回前台（daemon 暂停、前台只会「桌面不可达」）再切后台叫醒下一次
@@ -152,25 +152,19 @@ cleanup() {
   # 手机这时配着刚杀掉的临时 daemon：配回本机正式桌面，并恢复开跑前导出的相册范围
   # （所选相册里有测试资源就不恢复、保持空范围，测试照片不会进真实照片库）。
   # 正常结束、判 FAIL、中途出错、Ctrl-C 都走这里。
-  if [ -n "$TOUCHED_PAIRING" ] && [ "${PPASS_NO_RESTORE:-}" != 1 ]; then
-    echo "==> 把手机配回正式桌面（tools/ios/restore-desktop-pairing.sh，日志在 apps/ios/build/restore-pairing/）"
-    if "$ROOT/tools/ios/restore-desktop-pairing.sh" "$OUT/scope-before.json" "$DEV" >"$OUT/restore-pairing.log" 2>&1; then
-      grep -E '范围已恢复|桌面一侧' "$OUT/restore-pairing.log" || true
-      tail -1 "$OUT/restore-pairing.log"
-    else
-      tail -8 "$OUT/restore-pairing.log"
-      echo "WARN: 恢复失败！手机可能还配着已经不存在的临时 daemon / 范围为空。处理后手动跑："
-      echo "      tools/ios/restore-desktop-pairing.sh $OUT/scope-before.json"
-      [ "$rc" = 0 ] && rc=1
-    fi
+  # #1115：配回正式桌面只能由人在桌面 App 里操作（打开 P-Pass →「添加设备」→ 手机扫码 → 桌面点「允许」），
+  #        脚本不再能用正式桌面的 IPC 令牌自己发起并批准配对（那正是 #1115 要堵的攻击形状）。
+  if [ -n "$TOUCHED_PAIRING" ]; then
+    echo "==> 手机这时配着刚退出的临时 daemon。要配回正式桌面：打开 P-Pass 桌面 →「添加设备」→ 手机扫码 → 桌面点「允许」。"
+    echo "    范围备份在 $OUT/scope-before.json（另存于 apps/ios/build/sim-bg-task/scope-backup.json），在手机 App 里按它重新选相册。"
   fi
   exit "$rc"
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM
-mkdir -p "$WORK/home" "$WORK/data" "$WORK/seed"
+mkdir -p "$WORK/home" "$WORK/seed"
 mkfifo "$WORK/stdin"
-HOME="$WORK/home" PPF_DATA_DIR="$WORK/data" PPF_BIND_ADDR="0.0.0.0:0" PPF_RELAY_URLS="" PPF_TELEMETRY_ENABLED=false \
+HOME="$WORK/home" PPF_BIND_ADDR="0.0.0.0:0" PPF_RELAY_URLS="" PPF_TELEMETRY_ENABLED=false \
   RUST_LOG="${PPASS_E2E_RUST_LOG:-info}" "$DAEMON" --ephemeral <"$WORK/stdin" >"$WORK/daemon.out" 2>"$WORK/daemon.err" &
 DAEMON_PID=$!
 exec 4>"$WORK/stdin"
@@ -185,7 +179,9 @@ done
 sleep 1
 # shellcheck source=tools/ipc-lib.sh
 source "$ROOT/tools/ipc-lib.sh"
-ipc_pair_qr "$WORK/data/ipc.token"
+# #1115：--ephemeral 是测试沙盒，库目录由 daemon 自建（stdout 的 SANDBOX: 行），不收路径输入。
+ipc_sandbox_dir "$WORK/daemon.out"
+ipc_pair_qr "$SANDBOX_DIR/ipc.token"
 owner_loop() {
   local resp ids n body
   while kill -0 "$DAEMON_PID" 2>/dev/null; do
@@ -232,8 +228,8 @@ wait_step() { # $1 = 期望 step，$2 = 超时秒
   echo "FAIL: 等 App 到 step=$1 超时（当前 ${s:-无}；相册 / 本地网络权限弹窗没点？手机锁了？）"; exit 1
 }
 # ---- 先导出用户当前的相册范围（收尾时原样恢复）----
-# 备份同时存一份在 apps/ios/build/sim-bg-task/scope-backup.json：这一轮万一没恢复成，下次可以手动
-# tools/ios/restore-desktop-pairing.sh apps/ios/build/sim-bg-task/scope-backup.json。
+# 备份同时存一份在 apps/ios/build/sim-bg-task/scope-backup.json：收尾时按它在手机 App 里手动重选相册
+# （#1115 之后脚本不再自动配回正式桌面）。
 SCOPE_BACKUP="$IOS/build/sim-bg-task/scope-backup.json"
 REAL_RUN="$RUN"
 RUN="$REAL_RUN-scope"
@@ -246,8 +242,8 @@ cp "$STATUS" "$OUT/scope-before.json"
 jq -e '.selected | type == "array"' "$OUT/scope-before.json" >/dev/null \
   || { echo "FAIL: 手机从未保存过相册范围（selected=null），恢复不回这个状态；先在 App 里选好相册再跑"; exit 1; }
 if [ "$(jq -r .selected_test_albums "$OUT/scope-before.json")" != 0 ]; then
-  echo "FAIL: 当前范围里有测试相册（上一轮没恢复？）。不覆盖备份；先跑"
-  echo "      tools/ios/restore-desktop-pairing.sh $SCOPE_BACKUP"
+  echo "FAIL: 当前范围里有测试相册（上一轮没恢复？）。不覆盖备份；先跑 tools/ios/delete-test-assets.sh，"
+  echo "      再在手机 App 里按 $SCOPE_BACKUP 重新选相册"
   exit 1
 fi
 cp "$OUT/scope-before.json" "$SCOPE_BACKUP"

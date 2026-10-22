@@ -150,6 +150,8 @@ def make_origin(d: Path, name: str, commits: list, changelog: str = CHANGELOG) -
     conf = src / "apps/desktop/src-tauri/tauri.conf.json"
     conf.parent.mkdir(parents=True)
     conf.write_text(json.dumps({"productName": "P-Pass", "version": STALE_TAURI_CONF_VERSION,
+                                # #1115：helper 的 LSMinimumSystemVersion 从这里读（唯一来源）
+                                "bundle": {"macOS": {"minimumSystemVersion": "13.0"}},
                                 "plugins": {"updater": {"pubkey": DRYRUN_PUBS["stable"]}}}, indent=2) + "\n")
     # #1121：test 通道公钥的唯一来源（tools/release/update-key-lib.sh / tauri-config.mjs 读它）
     (src / "release/update-keys").mkdir(parents=True)

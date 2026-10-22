@@ -20,8 +20,9 @@
   `flowUiStateOf`、`backgroundBackupStateOf`、`lastSuccessOf`），卡内多处
   明写"换源到账本派生"。
 - 既有 instrumented 测试 3 个（`DeviceBackupTest`、`SetupPairingTest`、
-  `NetProbeTest`），`tools/device-backup.sh` 已实现「向常驻 daemon 取配对 QR
-  → adb 真机跑 instrumented → 并行 IPC 自动确认」。
+  `NetProbeTest`）。原先的 `tools/device-backup.sh`「向常驻 daemon 取配对 QR → adb 真机跑
+  instrumented → 并行 IPC 自动确认」已随 #1115 删除：常驻 daemon 只认签名窗口程序发来的配对
+  确认，脚本要改为对测试沙盒（`daemon --ephemeral`）配对。
 
 **所以 A 类的断言路径是：adb 拉账本 JSON → JVM 侧跑同一个纯函数 → 断言投影。
 不读像素，不新增生产代码，不给 app 加调试接口。**
@@ -83,8 +84,8 @@ MOB-68 首装授权流程（媒体/电池/通知弹窗顺序）介于 A/B 之间
 
 ## 下一步
 
-1. `tools/verify-device.sh` 骨架：复用 `device-backup.sh` 的 QR+IPC+instrumented
-   模式，加"拉账本 JSON → JVM 投影断言"这一层。
+1. `tools/verify-device.sh` 骨架：对测试沙盒（`daemon --ephemeral`，见 `tools/ipc-lib.sh` 的
+   `ipc_sandbox_dir`）走 QR+IPC+instrumented，加"拉账本 JSON → JVM 投影断言"这一层。
 2. A 类逐条落成剧本函数，输出「剧本名 → 通过/失败 + 证据路径」。
 3. C 类只抓图存 `docs/evidence/<日期>-verify-device/`，由验收人看红的那几张。
 4. B 类保留人工，但前后状态由脚本断言，人只负责"切网/开热点/等"这个动作。

@@ -5,7 +5,7 @@
 #   sudo PPASS_REVIEW_PASSWORD='<密码>' ./install.sh \
 #        --host pair.example.com \        # 对外域名（CF 一级子域）
 #        --origin-sni pair-origin.example.com \  # 源站证书域名（可 == --host）
-#        [--user review] [--port 8787] [--ipc-token /var/lib/ppass-review/ipc.token]
+#        [--user review] [--port 8787] [--ipc-token /var/lib/ppass-review/p-pass/ipc.token]
 #
 # 不做的事（刻意留给人）：
 #   - 签证书：源站用自签（本脚本生成），不需要 Let's Encrypt
@@ -14,7 +14,7 @@
 set -euo pipefail
 
 HOST=""; USER_NAME="review"; PORT="8787"
-IPC_TOKEN="/var/lib/ppass-review/ipc.token"
+IPC_TOKEN="/var/lib/ppass-review/p-pass/ipc.token"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 
 while [ $# -gt 0 ]; do

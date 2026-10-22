@@ -474,10 +474,10 @@ fi
 
 # ── G4：壳不写 config.toml（#1045）─────────────────
 
-echo "==> G4: desktop shell never writes config.toml (the daemon's \`config\` subcommands are the only writer)"
+echo "==> G4: desktop shell never writes config.toml (the daemon's IPC method config.set_library is the only writer)"
 
-# S-5（里程碑 #9）：config.toml 的写者只有 daemon（`config init` /
-# `config set-library`，#1042），壳只调子命令。壳里曾有第二份写入实现
+# S-5（里程碑 #9）：config.toml 的写者只有 daemon（#1042；#1115 起只经 IPC
+# `config.set_library`，CLI 子命令已删），壳只调它。壳里曾有第二份写入实现
 # （render_config / merge_library_dir …），与 daemon 两份拷贝漂移出过
 # DESK-27 / DESK-46 / DESK-49 三次事故。
 #
@@ -499,7 +499,7 @@ G4_HITS=$(list_files "$ROOT/apps/desktop/src-tauri/src" -- '*.rs' | scan_files "
 if [ -z "$G4_HITS" ]; then
   echo "   ✅ G4: clean"
 else
-  printf '%s\n' "$G4_HITS" | awk -F'\t' '{print "❌ G4 VIOLATION（壳不许写 config.toml，改调 daemon 的 config 子命令）：" $1 " 行 " $2}'
+  printf '%s\n' "$G4_HITS" | awk -F'\t' '{print "❌ G4 VIOLATION（壳不许写 config.toml，改调 daemon 的 IPC config.set_library）：" $1 " 行 " $2}'
   FAIL=1
 fi
 

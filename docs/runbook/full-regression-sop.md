@@ -122,7 +122,7 @@ gh release download "$STABLE" -R "$REPO" -D "$WORK/stable" -p '*android.apk' -p 
 | R3.3 | agent | 照桌面「停止服务」的做法：先写标记 `~/Library/Application Support/P-Pass/desktop-user-stopped`，再 `launchctl bootout gui/$(id -u)/com.hawkeyexb.ppass.desktop.daemon`，45 秒后 `pgrep` 确认仍停着（只 bootout 不写标记，壳的自愈会在 30 秒内拉回），手机立即备份；恢复时删标记再 `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.hawkeyexb.ppass.desktop.daemon.plist` | 手机给出明确提示；恢复后收敛 | logcat 摘录 + 对账 |
 | R3.4 | agent | `dumpsys deviceidle force-idle` 进 Doze，再 `unforce` | Doze 期间不跑且文案平静；退出后补跑 | logcat 摘录 |
 
-磁盘满（T-070 `tools/scenarios/disk_full.sh`）和崩溃恢复（`crash_recovery.sh`）由 CI 在 Linux 上覆盖，真机不重跑。
+磁盘满（T-070，`crates/daemon/tests/scenarios/process_failures.rs` 的 `disk_full_*`）和崩溃恢复（同文件 `crash_mid_transfer_*`）由 CI 在 Linux 上覆盖，真机不重跑。
 
 ### R4 配对与断开（G4）
 

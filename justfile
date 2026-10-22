@@ -127,12 +127,13 @@ test:
     cargo test; \
   fi
 
-# T-070 故障剧本（进程级三件套：4GB 大文件 / 崩溃恢复 / 磁盘满）
-# 需要 release 二进制: cargo build --release -p daemon -p testclient
+# T-070 故障剧本（进程内集成测试三件套：大文件 / 崩溃恢复 / 磁盘满）
+# 安全卡 #1115 后常驻 daemon 不再读 PPF_DATA_DIR，原 shell 剧本已改写为
+# crates/daemon/tests/scenarios/process_failures.rs。磁盘满剧本只在设了
+# PPF_SCENARIO_SMALL_FS（指向小文件系统上的目录，CI 挂 6MB tmpfs）时运行，
+# 否则打印 SKIP。
 scenarios:
-  bash tools/scenarios/huge_file.sh
-  bash tools/scenarios/crash_recovery.sh
-  bash tools/scenarios/disk_full.sh
+  cargo test --release -p daemon --test scenarios -- --ignored --test-threads=1
 
 # ── Code Generation ─────────────────────────────────
 
@@ -210,8 +211,10 @@ identity-check:
 # ── Development ─────────────────────────────────────
 
 # Start daemon in development mode
+# #1115：开发用测试沙盒（--ephemeral）：库在 stdout 的 SANDBOX: 那一行，IPC 用令牌。
+# 不带 --ephemeral 的未签名 daemon 读不了钥匙串，会拒绝启动。
 dev-daemon:
-  cargo run -p daemon
+  cargo run -p daemon -- --ephemeral
 
 # ── CI ──────────────────────────────────────────────
 
@@ -235,12 +238,15 @@ platform-smoke:
     cargo run -p platform --example smoke
 
 # T-041 桌面壳开发模式（Tauri dev = 前端热更 + 托盘）
-# #1110：macOS 上壳拉起的是 src-tauri/target/Helpers/ppf-daemon.app，先跑 dev-daemon-helper。
+# #1115：debug 构建的壳只能经令牌连测试沙盒——先 `just dev-daemon`，再
+#   PPF_SANDBOX_DIR=<它 stdout 上 SANDBOX: 后面那个目录> just dev-desktop
+# 常驻 daemon（签名 socket）只接受签名的窗口程序，未签名的开发壳连不上它。
 dev-desktop:
     cd apps/desktop && npx tauri dev
 
-# #1110：把本地构建的 daemon 组装成签过名的 helper（个人团队 Developer ID + 授权文件），
-# 供 `just dev-desktop` 拉起。需 PPF_DAEMON_PROVISIONPROFILE=<授权文件路径>。
+# #1110：把本地构建的 daemon 组装成签过名的 helper（个人团队 Developer ID + 授权文件）。
+# 需 PPF_DAEMON_PROVISIONPROFILE=<授权文件路径>。用途：本机验钥匙串读写、签名形状；
+# #1115 起开发壳不连它（见 dev-desktop），要连得用签名的窗口程序。
 dev-daemon-helper *daemon_bin:
     tools/daemon-helper-macos.sh dev {{daemon_bin}}
 

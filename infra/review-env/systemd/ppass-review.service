@@ -9,7 +9,9 @@ ExecStart=/opt/ppass-review/bin/daemon
 Restart=on-failure
 RestartSec=5
 # 数据目录进 /var/lib，二进制进 /opt —— 归档和 reset 都只碰这两个位置。
-Environment=PPF_DATA_DIR=/var/lib/ppass-review
+# #1115：常驻 daemon 不认 PPF_DATA_DIR（库位置只来自平台目录 / config）。Linux 的平台目录是
+# $XDG_DATA_HOME/p-pass，没有 config 时库就是它 ⇒ 实际库与令牌在 /var/lib/ppass-review/p-pass/。
+Environment=XDG_DATA_HOME=/var/lib/ppass-review
 Environment=PPF_BIND_ADDR=0.0.0.0:41146
 # 审核环境不回报遥测：这不是正式服务。
 Environment=PPF_TELEMETRY_ENABLED=false

@@ -15,7 +15,7 @@ IPC 走 daemon 的 ipc.token（两行：socket 名 + 令牌）。Linux 是抽象
 socket（\\0 前缀），macOS 是 /tmp 下的文件 —— 与仓库 tools/ipc-lib.sh 同款握手。
 
 环境变量：
-  PPF_IPC_TOKEN_FILE  daemon 写出的 ipc.token 路径（默认 /var/lib/ppass-review/ipc.token）
+  PPF_IPC_TOKEN_FILE  daemon 写出的 ipc.token 路径（默认 /var/lib/ppass-review/p-pass/ipc.token）
   PORT                监听端口（默认 8787，只绑 127.0.0.1，对外由 nginx 暴露）
 """
 import json
@@ -27,7 +27,7 @@ import sys
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-TOKEN_FILE = os.environ.get("PPF_IPC_TOKEN_FILE", "/var/lib/ppass-review/ipc.token")
+TOKEN_FILE = os.environ.get("PPF_IPC_TOKEN_FILE", "/var/lib/ppass-review/p-pass/ipc.token")
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 

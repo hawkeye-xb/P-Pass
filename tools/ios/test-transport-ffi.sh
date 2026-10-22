@@ -4,7 +4,7 @@
 #   tools/ios/test-transport-ffi.sh          # 本机与 CI（ci-ios.yml）同一条命令
 #
 # 1. tools/build-ios-transport-xcframework.sh → apps/ios/TransportFFITests/Generated/
-# 2. 起一个隔离的本机 daemon 给控制面测试连：fake HOME + 临时 PPF_DATA_DIR + 0.0.0.0:0
+# 2. 起一个隔离的本机 daemon 给控制面测试连：fake HOME + 测试沙盒（--ephemeral 自建临时库）+ 0.0.0.0:0
 #    （OS 分配端口，绝不用 41145）+ --ephemeral（本脚本退出 ⇒ stdin 关 ⇒ daemon 退出）。
 #    PPF_RELAY_URLS="" 等于不覆盖，daemon 仍用默认 n0 relay（日志里有 home relay）。
 #    IPv4 端口用 lsof 从 daemon 进程上读，PeerAddr token = base64url(JSON{id, addrs:[{Ip 127.0.0.1:端口}]})。
@@ -67,10 +67,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$WORK/home" "$WORK/data"
+mkdir -p "$WORK/home"
 mkfifo "$WORK/stdin"
 HOME="$WORK/home" \
-  PPF_DATA_DIR="$WORK/data" \
   PPF_BIND_ADDR="0.0.0.0:0" \
   PPF_RELAY_URLS="" \
   "$DAEMON" --ephemeral <"$WORK/stdin" >"$WORK/daemon.out" 2>"$WORK/daemon.err" &
@@ -112,7 +111,9 @@ echo "daemon pid=${DAEMON_PID} node=${NODE_ID:0:8}… udp=127.0.0.1:${PORT}"
 # 配对串经 IPC pairing.start 现取（SEC-11：不落盘），给测试进程解析与配对。
 # shellcheck source=tools/ipc-lib.sh
 source "$ROOT/tools/ipc-lib.sh"
-ipc_pair_qr "$WORK/data/ipc.token"
+# #1115：--ephemeral 是测试沙盒，库目录由 daemon 自建（stdout 的 SANDBOX: 行），不收路径输入。
+ipc_sandbox_dir "$WORK/daemon.out"
+ipc_pair_qr "$SANDBOX_DIR/ipc.token"
 E2E="$WORK/e2e"
 mkdir -p "$E2E"
 # 挂起时长默认 5s（远大于测试里 1s 的 GC 周期）。实测冻 12s 时 xcodebuild 把测试进程当成卡死，
@@ -169,7 +170,7 @@ if ! TEST_RUNNER_PPASS_DAEMON_TOKEN="$PEER_TOKEN" \
   TEST_RUNNER_PPASS_REQUIRE_DAEMON=1 \
   TEST_RUNNER_PPASS_PAIR_LINK="$PAIR_QR" \
   TEST_RUNNER_PPASS_E2E_DIR="$E2E" \
-  TEST_RUNNER_PPASS_DAEMON_LIBRARY="$WORK/data" \
+  TEST_RUNNER_PPASS_DAEMON_LIBRARY="$SANDBOX_DIR" \
   TEST_RUNNER_PPASS_SUSPEND_SECS="$SUSPEND_SECS" \
   xcodebuild test \
     -scheme TransportFFITests \

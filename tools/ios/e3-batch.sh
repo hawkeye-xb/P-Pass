@@ -18,6 +18,14 @@
 # 账本在 App Group（devicectl 拉不到）：用 DEBUG 驱动 PPASS_BGTEST_DUMP=1 拷进 App 容器再拉回（同 sim-bg-task.sh）。
 # 收尾（含中途失败 / Ctrl-C）：只要动过配对就配回正式桌面并恢复开跑前导出的范围（restore-desktop-pairing.sh）。
 set -euo pipefail
+
+# #1115：本批的 same-desktop / back-formal 两例要把手机自动配回正式桌面，靠的是用正式桌面的 IPC
+# 令牌自己发起并批准配对（restore-desktop-pairing.sh）——正是 #1115 要堵的攻击形状，脚本已删。
+# 正式 daemon 现在只认签名的窗口程序发来的配对确认。本批要改成「两台测试沙盒 daemon 互换」
+# 之类的形状才能重新自动化；改好之前先拒跑，不碰手机。
+echo "e3-batch：#1115 之后不能再自动配回正式桌面（same-desktop / back-formal 两例依赖它），本批待改造，暂不运行。" >&2
+echo "  需要的话：手机配对正式桌面请在桌面 App 里操作；测试相册清理用 tools/ios/delete-test-assets.sh。" >&2
+exit 2
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 IOS="$ROOT/apps/ios"
 BUNDLE_ID=$(sed -n 's/^PPASS_BUNDLE_ID *= *//p' "$IOS/Config/Base.xcconfig" | head -1)
@@ -181,9 +189,9 @@ fi
 
 # ---- new-desktop ----
 echo "==> new-desktop：配到本机临时 daemon（范围清空，不传照片）"
-mkdir -p "$WORK/home" "$WORK/data"
+mkdir -p "$WORK/home"
 mkfifo "$WORK/stdin"
-HOME="$WORK/home" PPF_DATA_DIR="$WORK/data" PPF_BIND_ADDR="0.0.0.0:0" PPF_RELAY_URLS="" PPF_TELEMETRY_ENABLED=false \
+HOME="$WORK/home" PPF_BIND_ADDR="0.0.0.0:0" PPF_RELAY_URLS="" PPF_TELEMETRY_ENABLED=false \
   RUST_LOG=info "$DAEMON" --ephemeral <"$WORK/stdin" >"$WORK/daemon.out" 2>"$WORK/daemon.err" &
 DAEMON_PID=$!
 exec 4>"$WORK/stdin"
@@ -198,7 +206,9 @@ done
 sleep 1
 # shellcheck source=tools/ipc-lib.sh
 source "$ROOT/tools/ipc-lib.sh"
-ipc_pair_qr "$WORK/data/ipc.token"
+# #1115：--ephemeral 是测试沙盒，库目录由 daemon 自建（stdout 的 SANDBOX: 行），不收路径输入。
+ipc_sandbox_dir "$WORK/daemon.out"
+ipc_pair_qr "$SANDBOX_DIR/ipc.token"
 owner_loop() {
   local resp n
   while kill -0 "$DAEMON_PID" 2>/dev/null; do

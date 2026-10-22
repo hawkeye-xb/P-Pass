@@ -21,10 +21,10 @@ ADR-012：**业务只在 `crates/`；平台差异只在 `crates/platform`；桌�
 
 对外接口三类：
 - 网络（`crates/proto`，ALPN `ctrl` / `blobs` / `download`，入口 `daemon::router::Router::dispatch`）。
-- 本机 IPC（行分隔 JSON，首行 token，入口 `daemon::ipc::IpcServer`）。只服务同机桌面壳与 testclient。
-- CLI（`daemon::cli::parse_cli`）：常驻启动；一次性子命令 `config init --library <dir>`、`config set-library <dir>`、`diag export --out <zip> [--app-version <v>]`；`--version [--json]`。子命令不启服务、不占端口、不开库。退出码：0 成功；1 操作失败（stderr 一行，校验类为带 key 的 JSON）；2 用法错误。
+- 本机 IPC（行分隔 JSON，入口 `daemon::ipc::IpcServer`）。macOS 常驻 daemon 在 `<平台数据目录>/run/daemon.sock`（目录 0700）上逐连接核验对端代码签名（audit token + Developer ID 指定要求，团队 2WJUWVUJBN）：窗口程序可调全部方法，另一个 daemon 实例只可调 `status` / `daemon.step_down` / `logs.export`，其余连接拒绝；其他平台与测试沙盒（`--ephemeral`）仍是首行 token。
+- CLI（`daemon::cli::parse_cli`）：常驻启动；`--ephemeral` 测试沙盒（daemon 自建临时目录，stdout 打一行 `SANDBOX: <dir>`，拒绝 `PPF_DATA_DIR` / `PPF_LOG_FILE` 等路径输入）；一次性子命令 `diag export --out <zip> [--app-version <v>]`；`--version [--json]`。子命令不启服务、不占端口、不开库。退出码：0 成功；1 操作失败（stderr 一行，校验类为带 key 的 JSON）；2 用法错误。`config init` / `config set-library` 已删除（#1115），传入即 exit 2、不写任何文件。
 
-daemon 是 `config.toml` 与诊断包的唯一写者（壳经子命令调用，§8.6、§9.3）。
+daemon 是 `config.toml` 与诊断包的唯一写者：照片库位置只经 IPC `config.set_library` 写（只对签名窗口程序开放，§8.6），诊断包经子命令 `diag export`（§9.3）。
 
 ### 1.2 `crates/platform` = 端口
 
@@ -367,9 +367,11 @@ daemon 是 `config.toml` 与诊断包的唯一写者（壳经子命令调用，�
 
 ### 8.6 首启向导与 config
 
-- 向导是否出现由 Rust 判（`distribution::show_wizard`）：daemon 在线永不显示；未配置显示；已配置时未登记自启且非用户停止才显示。前端只读 `wizard_state.show_wizard`。
+- 向导是否出现由 Rust 判（`distribution::show_wizard`）：daemon 在线永不显示；未配置显示；已配置时未登记自启且非用户停止才显示。例外：daemon 在线但处于「未配置」状态（`status.unconfigured = true`）时显示，且 `wizard_state.unconfigured = true`，向导第 1 步顶部提示「后台服务已在运行，正在等你选择照片库的位置」（`ui.wizard_unconfigured_notice`），不显示成服务异常。前端只读 `wizard_state.show_wizard` / `unconfigured`。
 - 两份视图 `Wizard.svelte`（macOS）/ `WizardWindows.svelte` 共用状态机 `lib/wizardFlow.js`；差异只在第 2 步睡眠由谁负责（`platform_ux.sleep_owner`：macOS `user` 引导关闭自动睡眠，Windows `daemon` 插电保持唤醒）。完成后等 daemon 就绪 `READY_POLLS` × `READY_POLL_MS`。
-- `config.toml` 由 `daemon config init` / `config set-library` 写；首启模板固定端口 `daemon::config::DESKTOP_BIND_ADDR`（`0.0.0.0:41145`），运行时 `Config.bind_addr` 缺省为系统分配。新建库默认目录名 `P-Pass Library`（不随语言变，B10），父目录由 `pictures_dir()` 回答。`deny_unknown_fields`；退役字段 `rendezvous_url` / `log_level` 接受并忽略。
+- 照片库位置的唯一写者是 IPC `config.set_library {library}`（`daemon::library_location::LibraryLocation::set`），只对验过签名的窗口程序开放；daemon 自身实例与测试沙盒调用一律 `role_forbidden`。首启（未配置）建库目录并写首启模板，改库校验存在 / 可写 / 不嵌套后只改 `data_dir`；校验失败的 keyed 文案放在错误的 `params.ui_error`，壳原样显示。成功回 `{config, restart_required: true}`，重启后台服务后生效。壳的 `write_config` / `set_library_dir` 先找在跑的 daemon，没有就一次性拉起内置 daemon（等它在 IPC 上答话，上限 `ONESHOT_START_TIMEOUT`），配好后收掉。
+- 库位置的正本：macOS 在钥匙串（访问组 `2WJUWVUJBN.com.hawkeyexb.ppass.desktop.daemon`，条目 `…daemon.library`），`config.toml` 的 `data_dir` 只给人看，改它不生效；钥匙串里没有库位置 ⇒ daemon 进「未配置」状态，只答 `status`（`unconfigured: true`）与 `config.set_library`（其余方法回 `library_unavailable`），写好后以退出码 75 退出、由自启重新带库拉起。Windows / Linux 没有安全存储，正本仍是 `config.toml`。常驻路径上 `PPF_DATA_DIR` 不生效。
+- `config.toml` 首启模板固定端口 `daemon::config::DESKTOP_BIND_ADDR`（`0.0.0.0:41145`），运行时 `Config.bind_addr` 缺省为系统分配。新建库默认目录名 `P-Pass Library`（不随语言变，B10），父目录由 `pictures_dir()` 回答。`deny_unknown_fields`；退役字段 `rendezvous_url` / `log_level` 接受并忽略。
 - 托盘与安装位置对话框初始语言取 `system_locale()`：系统语言明确为中文才用中文，否则英文（B6）。
 
 ### 8.7 应用内更新
@@ -508,7 +510,7 @@ Windows 真机验证清单：#1056。
 | `desktop::KERNEL_CONVERGE_POLL` | desktop-shell | 10000 | ms | 内核对账推迟后的复查间隔（§8.4） |
 | `desktop::ipc::IPC_READ_TIMEOUT` | desktop-shell | 10000 | ms | 壳 → daemon 每次 IPC 读超时（NET-11） |
 | `desktop::daemon_cli::PROBE_TIMEOUT` | desktop-shell | 5000 | ms | `--version --json` 探活上限（§8.6） |
-| `desktop::daemon_cli::CONFIG_TIMEOUT` | desktop-shell | 30000 | ms | `config` 子命令上限（§8.6） |
+| `desktop::daemon_cli::ONESHOT_START_TIMEOUT` | desktop-shell | 10000 | ms | 首启一次性拉起内置 daemon 接 `config.set_library` 的等待上限（§8.6） |
 | `desktop::daemon_cli::DIAG_TIMEOUT` | desktop-shell | 60000 | ms | `diag export` 子命令上限（§9.3） |
 | `desktop::service_state::MAX_LOG_BYTES` | desktop-shell | 2097152 | B | desktop.log 2 MiB 轮转（§9.1） |
 | `desktop::service_state::FAILURE_LOG_INTERVAL_MS` | desktop-shell | 30000 | ms | 同一失败 30 s 只记一次（§9.1） |

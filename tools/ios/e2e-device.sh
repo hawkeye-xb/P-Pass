@@ -45,9 +45,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$WORK/home" "$WORK/data"
+mkdir -p "$WORK/home"
 mkfifo "$WORK/stdin"
-HOME="$WORK/home" PPF_DATA_DIR="$WORK/data" PPF_BIND_ADDR="0.0.0.0:0" PPF_RELAY_URLS="" PPF_TELEMETRY_ENABLED=false \
+HOME="$WORK/home" PPF_BIND_ADDR="0.0.0.0:0" PPF_RELAY_URLS="" PPF_TELEMETRY_ENABLED=false \
   RUST_LOG="${PPASS_E2E_RUST_LOG:-info}" "$DAEMON" --ephemeral <"$WORK/stdin" >"$WORK/daemon.out" 2>"$WORK/daemon.err" &
 DAEMON_PID=$!
 exec 4>"$WORK/stdin"
@@ -66,7 +66,9 @@ case "$PORTS" in *:41145*) echo "error: 用了 41145" >&2; exit 1 ;; esac
 
 # shellcheck source=tools/ipc-lib.sh
 source "$ROOT/tools/ipc-lib.sh"
-ipc_pair_qr "$WORK/data/ipc.token"
+# #1115：--ephemeral 是测试沙盒，库目录由 daemon 自建（stdout 的 SANDBOX: 行），不收路径输入。
+ipc_sandbox_dir "$WORK/daemon.out"
+ipc_pair_qr "$SANDBOX_DIR/ipc.token"
 owner_loop() {
   local resp ids n body
   while kill -0 "$DAEMON_PID" 2>/dev/null; do
@@ -109,7 +111,7 @@ jq -c 'del(.timeline_ids)' "$OUT/status/status.json" 2>/dev/null || echo "(无 s
 
 FAIL=0
 [ "$(jq -r '.ok' "$OUT/status/status.json")" = true ] || { echo "FAIL: App 报告未成功：$(jq -r '.error // .timeline_error' "$OUT/status/status.json")"; FAIL=1; }
-find "$WORK/data/originals" -type f 2>/dev/null | sort > "$OUT/daemon-files.txt"
+find "$SANDBOX_DIR/originals" -type f 2>/dev/null | sort > "$OUT/daemon-files.txt"
 : > "$OUT/daemon.b3"
 while IFS= read -r f; do "$B3" "$f"; done < "$OUT/daemon-files.txt" | awk '{print $1}' | sort > "$OUT/daemon.b3" || true
 echo "--- 手机原始字节 BLAKE3（独立只读路径）↔ daemon 库文件 ↔ 时间线 ---"

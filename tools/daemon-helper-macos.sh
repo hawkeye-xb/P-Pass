@@ -22,9 +22,11 @@
 #       PPF_SIGN_TIMESTAMP=none 跳过 Apple 时间戳服务（本地开发用；发布不许）。
 #   dev [daemon_bin]
 #       本地开发：把本地构建的 daemon（缺省 target/debug/daemon，先 cargo build）组装到
-#       apps/desktop/src-tauri/target/Helpers/ppf-daemon.app——`tauri dev` 的壳按
-#       ../Helpers/ppf-daemon.app 找 daemon（crates/platform/src/macos.rs
-#       `bundled_daemon_path_from`）——再用个人团队的 Developer ID 证书 + 授权文件签名。
+#       apps/desktop/src-tauri/target/Helpers/ppf-daemon.app（`tauri dev` 的壳按
+#       ../Helpers/ppf-daemon.app 找 daemon，crates/platform/src/macos.rs
+#       `bundled_daemon_path_from`），再用个人团队的 Developer ID 证书 + 授权文件签名。
+#       #1115：签名 helper 只接受签名的窗口程序，未签名的开发壳连不上它；开发壳连测试沙盒
+#       （`just dev-daemon` + PPF_SANDBOX_DIR，见 justfile 的 dev-desktop）。
 #       授权文件路径由 PPF_DAEMON_PROVISIONPROFILE 给。不打 dmg、不公证，几秒。
 set -euo pipefail
 
@@ -50,9 +52,13 @@ assemble() {
   chmod +x "$helper/Contents/MacOS/$EXE_NAME"
   cp -R "$rel/lib" "$helper/Contents/MacOS/lib"
   # python3 标准库 plistlib：dry-run 在 Linux 上跑，那里没有 PlistBuddy / plutil。
-  python3 - "$helper/Contents/Info.plist" "$BUNDLE_ID" "$EXE_NAME" "$version" <<'PY'
-import plistlib, sys
-out, bundle_id, exe, version = sys.argv[1:]
+  # #1115：最低系统版本只有一个来源——tauri.conf.json 的 bundle.macOS.minimumSystemVersion
+  # （外层 App 的 LSMinimumSystemVersion 也来自它）。helper 与外层一致。
+  python3 - "$helper/Contents/Info.plist" "$BUNDLE_ID" "$EXE_NAME" "$version" \
+    "$ROOT/apps/desktop/src-tauri/tauri.conf.json" <<'PY'
+import json, plistlib, sys
+out, bundle_id, exe, version, conf = sys.argv[1:]
+min_os = json.load(open(conf))["bundle"]["macOS"]["minimumSystemVersion"]
 with open(out, "wb") as f:
     plistlib.dump({
         "CFBundleIdentifier": bundle_id,
@@ -64,6 +70,7 @@ with open(out, "wb") as f:
         "CFBundleVersion": version,
         # 后台进程：不进 Dock、不出菜单栏
         "LSUIElement": True,
+        "LSMinimumSystemVersion": min_os,
     }, f)
 PY
   echo "   helper 组装完成：${helper}（${version}）"

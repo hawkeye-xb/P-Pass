@@ -48,6 +48,23 @@ sys.exit(0 if resp.get("ok") else 1)
 PYEOF
 }
 
+# #1115：`daemon --ephemeral` 是测试沙盒——存储根由进程自己在系统临时目录里建，
+# 不接受任何路径输入（PPF_DATA_DIR / PPF_LOG_FILE 给了就拒绝启动）。它在 stdout 打
+# 一行 `SANDBOX: <目录>` 告诉脚本在哪：令牌文件是 <目录>/ipc.token，库也就是这个目录。
+#
+# 用法: ipc_sandbox_dir <daemon 的 stdout 文件> [最多重试次数，默认 50（×0.2s）]
+#       之后用 "$SANDBOX_DIR"（全局变量，理由同 ipc_pair_qr）
+ipc_sandbox_dir() {
+  local out="$1" tries="${2:-50}" dir
+  for _ in $(seq 1 "$tries"); do
+    dir=$(sed -n 's/^SANDBOX: //p' "$out" 2>/dev/null | head -1)
+    if [ -n "$dir" ] && [ -d "$dir" ]; then SANDBOX_DIR="$dir"; return 0; fi
+    sleep 0.2
+  done
+  echo "ipc_sandbox_dir: $out 里始终没有 SANDBOX: 行（daemon 没起来？）" >&2
+  return 1
+}
+
 # SEC-11 (#496)：配对串不再从 daemon 的 stdout 取——stdout 不是终端时 daemon
 # 刻意不打印它（含令牌，不能落盘；macOS launchd 下 stdout 就是日志文件）。
 # 改经 IPC `pairing.start` 现取，串只在内存/变量里，不经任何文件。
