@@ -111,21 +111,24 @@ enum Haptics {
     static func failure() { UINotificationFeedbackGenerator().notificationOccurred(.error) }
 }
 
-/// 主 / 次 / 危险按钮（Android `PPButton`）：高 56、圆角 20、Manrope Bold；主 = ink 底 paper 字，
-/// 次 = paper 底 + border-strong 描边 + ink-60 字，危险 = act 底。二选一的两个按钮同组件、同高、等宽（tokens.json）。
+/// 主 / 次 / 危险按钮（Android `PPButton`）：圆角 20、Manrope Bold；主 = ink 底 paper 字，
+/// 次 = paper 底 + 1.5 border-strong 描边 + ink-60 字，危险 = act 底。二选一的两个按钮同组件、同高、等宽（tokens.json）。
+/// 高度 / 字号默认 56 / 17；Android 在引导与选相册页用更大的（60/18、64/19），调用处按 Android 传。
 struct PPButton: View {
     enum Kind { case main, quiet, danger }
     let title: String
     var kind: Kind = .main
     var enabled = true
+    var height: CGFloat = PPSize.tapMin
+    var fontSize: CGFloat = PPSize.bodyMin
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(PPFont.bodyBold)
+                .font(PPFont.sans(fontSize, .bold))
                 .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity, minHeight: PPSize.tapMin)
+                .frame(maxWidth: .infinity, minHeight: height)
         }
         .buttonStyle(PPButtonStyle(kind: kind))
         .disabled(!enabled)
@@ -142,7 +145,7 @@ struct PPButtonStyle: ButtonStyle {
             .background(background(configuration.isPressed), in: RoundedRectangle(cornerRadius: PPRadius.controlMobile, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: PPRadius.controlMobile, style: .continuous)
-                    .stroke(kind == .quiet ? PPColor.borderStrong : Color.clear, lineWidth: 1)
+                    .stroke(kind == .quiet ? PPColor.borderStrong : Color.clear, lineWidth: 1.5) // Android OutlinedButton 1.5
             )
             .opacity(isEnabled ? 1 : 0.5)
     }

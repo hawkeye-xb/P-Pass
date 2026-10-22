@@ -184,10 +184,11 @@ private struct ViewerPage: View {
     @ViewBuilder private var photoBody: some View {
         if let image {
             ZoomableImage(image: image, onZoom: onZoom)
-        } else if let photoError {
+        } else if photoError != nil {
+            // 原始错误只进日志（load() 里已记），界面只说人话（tokens.json rules：报错不出现代码）。
             VStack(spacing: 10) {
                 Image(systemName: "photo").font(.largeTitle).foregroundStyle(PPColor.paperDim)
-                Text(photoError).font(PPFont.caption).foregroundStyle(PPColor.paperDim).padding(.horizontal, 24)
+                Text(L.s("photos_unreachable")).font(PPFont.body).foregroundStyle(PPColor.paperDim).padding(.horizontal, 24)
             }
         } else {
             ProgressView().tint(PPColor.paperDim)
