@@ -16,38 +16,24 @@ struct SettingsScreen: View {
         NavigationStack(path: $path) {
             List {
                 HeroCard()
-                // 后台刷新告示（对位 Android NoticeHost BACKUP_INTERRUPTED）。只放设置页、作为列表里的一行，不盖英雄卡；
-                // 照片页只靠设置 tab 的角标提醒（照片页是浏览用的，顶部不占）。不给「知道了」：事实还在就一直说。
+                // 告示区（对位 Android NoticeCard 的「一行正文 + 右侧动作」）：iOS 用系统列表行承载，
+                // 行高、内边距、圆角交给原生 insetGrouped，不再硬设 Android 的 16/13（硬设会被行高 52 撑开）。
+                // 后台刷新告示（对位 NoticeHost BACKUP_INTERRUPTED）只放设置页：照片页是浏览用的，顶部不占（用户 2026-10-19 拍板）。
+                // 不给「知道了」：事实还在就一直说。
                 if let n = app.backgroundNotice {
                     Section {
-                        // 布局对位 Android NoticeCard：一行正文 + 右侧加粗下划线的动作。
-                        HStack(alignment: .center, spacing: 12) {
-                            Text(n.body).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            if n.canResolve {
-                                Button(L.s("background_backup_notice_action")) { app.openAppSettings() }
-                                    .font(PPFont.subheadlineBold).underline().foregroundStyle(PPColor.ink)
-                                    .buttonStyle(.borderless)
-                                    .accessibilityIdentifier("backgroundNoticeAction")
-                            }
-                        }
-                        // 内边距照 Android NoticeCard 的 padding(16, 13)：直接设这一行的 insets，不在系统行距上再叠一层。
-                        .listRowInsets(EdgeInsets(top: 13, leading: 16, bottom: 13, trailing: 16))
-                        .ppTinted(PPColor.waitingBg)
-                        .accessibilityIdentifier("backgroundNotice")
+                        NoticeRow(text: n.body,
+                                  action: n.canResolve ? (L.s("background_backup_notice_action"), { app.openAppSettings() }) : nil)
+                            .accessibilityIdentifier("backgroundNotice")
                     }
                 }
+                // 源已删除（对位 Android HomeScreen 的 SOURCE_MISSING NoticeCard，不进 NoticeHost 优先级）：
+                // 出路是「知道了」，不是重传——源已经不在手机上，没有任何动作能把它变回来。
                 if app.facts.missingSourceUnacknowledged > 0 {
                     Section {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text(L.p("missing_source_notice_body", Int(app.facts.missingSourceUnacknowledged)))
-                                .font(PPFont.body).foregroundStyle(PPColor.ink60)
-                            // 出路是「知道了」，不是重传：源已经不在手机上，没有任何动作能把它变回来。
-                            Button(L.s("missing_source_notice_dismiss")) { app.acknowledgeMissingSource() }
-                                .font(PPFont.subheadlineBold).buttonStyle(.borderless)
-                        }
-                        .padding(.vertical, 4)
-                        .ppTinted(PPColor.waitingBg)
+                        NoticeRow(text: L.p("missing_source_notice_body", Int(app.facts.missingSourceUnacknowledged)),
+                                  dismiss: (L.s("missing_source_notice_dismiss"), { app.acknowledgeMissingSource() }))
+                            .accessibilityIdentifier("missingSourceNotice")
                     }
                 }
                 if app.pairingLost {
@@ -159,7 +145,7 @@ struct SettingsScreen: View {
             VStack(alignment: .leading, spacing: 2) {
                 Toggle(L.s("rule_notify"), isOn: Binding(get: { app.notifyToggleOn }, set: { app.setNotifyToggle($0) }))
                     .font(Self.labelFont).tint(PPColor.safe)
-                Text(L.s("rule_notify_hint")).font(Self.hintFont).foregroundStyle(PPColor.ink40)
+                // 不放「配对失效、权限收回…时提醒你」这句说明（Android 有）：iOS 带说明的行会被撑高，开关名本身已够清楚。
                 if app.notificationAuthorization == .denied {
                     // iOS 系统框只弹一次，被拒之后只能去系统设置打开（06-ios-variants）。
                     Text(L.s("rule_notify_denied_hint")).font(Self.hintFont).foregroundStyle(PPColor.ink40)
@@ -195,5 +181,33 @@ struct SettingsScreen: View {
                 Text(value).font(Self.valueFont).foregroundStyle(PPColor.ink40).lineLimit(2).multilineTextAlignment(.trailing)
             }
         }
+    }
+}
+
+/// 告示行：一行正文 + 右侧动作（对位 Android `NoticeCard`）。底色 waitingBg 是品牌语义色，按 tokens 走；
+/// 行高与内边距用系统列表行。「知道了」比「去处理」弱一档（无下划线、ink40），同 Android 的主次区分。
+private struct NoticeRow: View {
+    let text: String
+    var action: (String, () -> Void)? = nil
+    var dismiss: (String, () -> Void)? = nil
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Text(text).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if let d = dismiss {
+                Button(d.0, action: d.1)
+                    .font(PPFont.sans(15, .medium, relativeTo: .subheadline)).foregroundStyle(PPColor.ink40)
+                    .buttonStyle(.borderless)
+                    .accessibilityIdentifier("noticeDismiss")
+            }
+            if let a = action {
+                Button(a.0, action: a.1)
+                    .font(PPFont.subheadlineBold).underline().foregroundStyle(PPColor.ink)
+                    .buttonStyle(.borderless)
+                    .accessibilityIdentifier("noticeAction")
+            }
+        }
+        .ppTinted(PPColor.waitingBg)
     }
 }
