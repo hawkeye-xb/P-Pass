@@ -59,7 +59,8 @@ class UnpairNoticeTest {
         val main = File("src/main/java/com/hawkeyexb/ppass/MainActivity.kt").readText()
         val branch = main.substringAfter("onDisconnect = {").substringBefore("\n                        },")
         val enqueue = branch.indexOf("UnpairNotice.enqueue(context, s.pairing)")
-        val clear = branch.indexOf("clearLocalPairing(context, s.pairing)")
+        // #1039：断开经 clearLocalPairingLogged（清理写失败只记日志、照常离开）。
+        val clear = branch.indexOf("clearLocalPairingLogged(context, s.pairing)")
         assertTrue("断开必须登记通知: $branch", enqueue >= 0)
         assertTrue("先登记通知、再清本地配对（通知自带地址，不依赖之后被清的 pairing.json）", enqueue in 0 until clear)
         assertFalse("不再有「只发一次、失败吞掉」的直连", branch.contains("client.unpair("))

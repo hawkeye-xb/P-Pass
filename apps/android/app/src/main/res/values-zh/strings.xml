@@ -297,6 +297,7 @@
     <string name="setting_save_failed">设置没能保存到手机上，已恢复为原来的值。请检查存储空间后再试。</string>
     <string name="scope_save_failed">相册选择没能保存到手机上，请检查存储空间后再试。</string>
     <string name="command_failed">操作没能完成，请稍后再试。</string>
+    <string name="pair_save_failed">配对信息没能保存到手机上，请检查存储空间后重新扫码。</string>
     <string name="background_backup_authorized">已获得后台运行权限</string>
     <string name="background_backup_authorization_denied">未获得授权，后台备份暂时无法自动运行</string>
     <!-- UI-12: 琥珀通知条的"去处理"动作文案（与设置页 CellRow 共用同一

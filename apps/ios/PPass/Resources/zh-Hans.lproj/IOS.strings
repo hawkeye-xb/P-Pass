@@ -63,9 +63,6 @@
 /* #975：iOS 系统授权框只弹一次，被拒后只能去系统设置（Android 会再弹一次申请框）。 */
 "rule_notify_denied_hint" = "通知已在系统设置里关闭。点开关前往系统设置打开。";
 
-/* 配对成功但 pairing.json 写不进去（#969）：不能让用户进入「已配对」却重启即丢。 */
-"pair_save_failed" = "配对信息没能保存到手机上，请检查存储空间后重新扫码。";
-
 /* #971 / #972：一过性提示的弹框标题。Android 用无标题的 Snackbar；提示正文两端共用（#1020，由 Android strings.xml 生成）。 */
 "notice_title" = "没能完成";
 

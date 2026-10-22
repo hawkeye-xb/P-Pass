@@ -276,15 +276,12 @@ fun autoBackupResumeDecision(
  * 无回：5 小时周期（兜底对账的唯一载体）、前台补捞、相册变更监听三条
  * 链全部静默留在关闭态。
  *
- * `setRequested(requested())` 不是废话：老文件里 `userRequested` 可能是
- * null，取值回退到当时的 `autoEnabled`。先把它固化下来，再把 autoEnabled
- * 置 false，否则这一步自己就会把意图抹掉。
+ * 写下 `requested()` 不是废话：老文件里 `userRequested` 可能是 null，取值回退到当时的 `autoEnabled`。
+ * 先把它固化下来，再把 autoEnabled 置 false，否则这一步自己就会把意图抹掉。
+ * #1039：两个字段一次落盘（[AutoBackupPrefs.set]），写失败时盘上不会停在半截。
  */
 fun suspendAutoBackupForPairingChange(dir: java.io.File) {
-    AutoBackupPrefs(dir).apply {
-        setRequested(requested())
-        setEnabled(false)
-    }
+    AutoBackupPrefs(dir).apply { set(requested = requested(), enabled = false) }
 }
 
 /**
