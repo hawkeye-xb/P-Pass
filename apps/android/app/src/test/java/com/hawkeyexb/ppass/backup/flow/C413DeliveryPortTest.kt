@@ -38,7 +38,6 @@ class C413DeliveryPortTest {
     private inner class Harness(val test: TestScope) {
         val nativeEvents = mutableListOf<String>()
         val native = object : NativeIrohBlobsProvider {
-            override fun register(hash: String, source: Any): String = "ticket"
             override fun serve(hash: String): String = "ticket"
             override fun stopActiveFetch(queueSequence: Long) {
                 nativeEvents += "stop:$queueSequence"
@@ -49,9 +48,9 @@ class C413DeliveryPortTest {
             override fun revoke(hash: String) {
                 nativeEvents += "revoke"
             }
-            override fun transferStatus(): String = localStatus()
+            override fun transferStatus(): TransferStatus = localStatus()
         }
-        var localStatus: () -> String = { """{"state":"in_progress","connected":true,"idle_for_ms":0,"bytes_sent":1,"byte_idle_for_ms":0}""" }
+        var localStatus: () -> TransferStatus = { TransferStatus.InProgress(connected = true, idleForMs = 0, bytesSent = 1, byteIdleForMs = 0) }
         var statusImpl: suspend (FlowTupleRef) -> FlowStatusReply = { FlowStatusReply(state = "active") }
         val statusCalls = mutableListOf<Long>()
         var subscribeImpl: (suspend (Int, () -> Unit) -> Unit)? = null
@@ -77,7 +76,7 @@ class C413DeliveryPortTest {
             override suspend fun suspendFetch(tuple: FlowTupleRef) = suspendImpl(tuple)
         }
         val port = NativeFlowDeliveryPort(
-            bridge = IrohBlobsProviderBridge(native) { "fd" },
+            bridge = IrohBlobsProviderBridge(native),
             pairing = { pairing },
             desktopFor = { desktop },
             subscribe = { _, onConnected, onEvent ->
@@ -286,7 +285,7 @@ class C413DeliveryPortTest {
     @Test
     fun `a local abort with a silent desktop is a path failure within the short timeout`() = runTest {
         val h = Harness(this)
-        h.localStatus = { """{"state":"aborted","hash":"$hash"}""" }
+        h.localStatus = { TransferStatus.Aborted(hash) }
         h.statusImpl = { kotlinx.coroutines.awaitCancellation() }
         val job = async { h.port.deliver(h.request(1)) {} }
         advanceTimeBy(STALL_STATUS_TIMEOUT_MS + 100)
@@ -300,12 +299,12 @@ class C413DeliveryPortTest {
     @Test
     fun `a local abort with a live desktop keeps the existing outcomes`() = runTest {
         val h = Harness(this)
-        h.localStatus = { """{"state":"aborted","hash":"$hash"}""" }
+        h.localStatus = { TransferStatus.Aborted(hash) }
         h.statusImpl = { FlowStatusReply(state = "completed", receipt = h.receipt(1)) }
         assertTrue(h.port.deliver(h.request(1)) {} is DeliveryOutcome.Confirmed)
 
         val h2 = Harness(this)
-        h2.localStatus = { """{"state":"aborted","hash":"$hash"}""" }
+        h2.localStatus = { TransferStatus.Aborted(hash) }
         val job = async { h2.port.deliver(h2.request(2)) {} }
         advanceTimeBy(10_000)
         runCurrent()

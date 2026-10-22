@@ -8,7 +8,6 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import com.hawkeyexb.ppass.proto.FlowSupersedeRequest
-import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
 import android.os.SystemClock
@@ -27,7 +26,6 @@ import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PairingStore
 import com.hawkeyexb.ppass.transport.parsePeerAddrToken
 import java.io.File
-import java.io.FileNotFoundException
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
@@ -280,14 +278,7 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
     // #547：原生 provider 只给这台已配对桌面供数（运行时按桌面 NodeId 建，换桌面会重建再设一次）。
     native.setAllowedPeer(key)
     PLog.i(TAG, "buildRuntime: native blobs provider ready")
-    // 旧的 register 路径（打开原图、原生导入并出 ticket）仍保留在桥上；#413 的循环只走 importer → serve。
-    val bridge = IrohBlobsProviderBridge(native) { source ->
-        try {
-            app.contentResolver.openFileDescriptor(Uri.parse(source), "r") ?: throw SourceMissingException()
-        } catch (failure: FileNotFoundException) {
-            throw SourceMissingException(failure)
-        }
-    }
+    val bridge = IrohBlobsProviderBridge(native)
     val pairing: () -> Pairing? = { PairingStore(app.filesDir).load() }
     val client = application.daemonClient
     val desktopFor: suspend (Pairing) -> FlowReceiptClient = { p ->
@@ -421,7 +412,7 @@ internal fun migrateLegacyFlowState(filesDir: File) {
 }
 
 /**
- * MOB-91：原生内容仓库是**进程内单例，开一次，永不关**——同一进程内第二次 nativeOpen 会永久阻塞。
+ * MOB-91：原生内容仓库是**进程内单例，开一次，永不关**——同一进程内第二次打开（`Provider(root)`）会永久阻塞。
  * 断开只 revoke（停掉在飞的传输、放掉 temp tag），仓库本身不动。
  */
 private val nativeProviderLock = Any()
@@ -440,7 +431,10 @@ private fun sharedNativeProvider(context: Context): AndroidNativeIrohBlobsProvid
     sharedNativeProvider ?: synchronized(nativeProviderLock) {
         sharedNativeProvider ?: run {
             PLog.i(TAG, "native blobs provider: opening (once per process)")
-            AndroidNativeIrohBlobsProvider.open(context.filesDir).also { sharedNativeProvider = it }
+            AndroidNativeIrohBlobsProvider.open(
+                context.filesDir,
+                (context.applicationContext as PPassApplication).providerCloseListener,
+            ).also { sharedNativeProvider = it }
         }
     }
 

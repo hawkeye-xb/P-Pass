@@ -1,14 +1,12 @@
 // REBUILD-01 / ARCH-13 (#417): lease-gated adapter over the Android-native iroh-blobs provider.
 package com.hawkeyexb.ppass.backup.flow
 
-import com.hawkeyexb.ppass.proto.ProtoJson
+import com.hawkeyexb.ppass.ffi.PeerCloseListener
 import java.io.FileNotFoundException
-import kotlinx.serialization.SerialName
-import kotlinx.serialization.Serializable
 
 /**
- * NET-14: local ground truth for one lease's transfer, decoded from the JSON
- * [NativeIrohBlobsProvider.transferStatus] returns. This is the receiver-independent fact the phone
+ * NET-14: local ground truth for one lease's transfer, as
+ * [NativeIrohBlobsProvider.transferStatus] returns it (mapped from the uniffi record, #1126). This is the receiver-independent fact the phone
  * (as the iroh-blobs *sender* in Flow) can observe about its own connection/event state.
  */
 internal sealed interface TransferStatus {
@@ -38,36 +36,6 @@ internal sealed interface TransferStatus {
 /** #413：引用导入的原图在供数期间出了问题。每次查询状态时现场 stat 得出。 */
 internal enum class SourceFault { MISSING, CHANGED }
 
-@Serializable
-private data class WireTransferStatus(
-    val state: String = "",
-    val hash: String? = null,
-    val connected: Boolean? = null,
-    @SerialName("idle_for_ms") val idleForMs: Long? = null,
-    @SerialName("bytes_sent") val bytesSent: Long? = null,
-    @SerialName("byte_idle_for_ms") val byteIdleForMs: Long? = null,
-    val source: String? = null,
-)
-
-/**
- * Pure decode — JVM-testable without touching the native library. An unrecognized `state` degrades to
- * [TransferStatus.NoLease] rather than throwing: this is a local convenience signal, not a durable contract.
- */
-internal fun parseTransferStatus(json: String): TransferStatus {
-    val wire = ProtoJson.decodeFromString(WireTransferStatus.serializer(), json)
-    val source = when (wire.source) {
-        "missing" -> SourceFault.MISSING
-        "changed" -> SourceFault.CHANGED
-        else -> null
-    }
-    return when (wire.state) {
-        "completed" -> wire.hash?.let(TransferStatus::Completed) ?: TransferStatus.NoLease
-        "aborted" -> wire.hash?.let { TransferStatus.Aborted(it, source) } ?: TransferStatus.NoLease
-        "in_progress" -> TransferStatus.InProgress(wire.connected ?: false, wire.idleForMs, wire.bytesSent, wire.byteIdleForMs, source)
-        else -> TransferStatus.NoLease
-    }
-}
-
 /** #413：原生导入一张原图的结果。[fallback] 非空 = 没能引用、复制了一份（原因见 Rust `ImportFallback`）。 */
 internal data class NativeMediaImport(
     val contentHash: String,
@@ -77,42 +45,26 @@ internal data class NativeMediaImport(
     val detail: String? = null,
 )
 
-@Serializable
-private data class WireMediaImport(
-    val hash: String,
-    val size: Long,
-    @SerialName("by_reference") val byReference: Boolean,
-    val fallback: String? = null,
-    val detail: String? = null,
-)
-
-internal fun parseMediaImport(json: String): NativeMediaImport {
-    val wire = ProtoJson.decodeFromString(WireMediaImport.serializer(), json)
-    require(wire.hash.length == 64) { "native import returned a malformed hash" }
-    return NativeMediaImport(wire.hash, wire.size, wire.byReference, wire.fallback, wire.detail)
-}
-
 /**
- * The native provider imports the source under its declared BLAKE3 hash and serves it through
- * iroh-blobs. Implementations must complete [register] synchronously: the caller may close the source
+ * The native provider imports an original (by reference when it can, else by copy), then serves it through
+ * iroh-blobs. Implementations must complete [importMedia] synchronously: the caller closes the source
  * descriptor on return.
  */
 internal interface NativeIrohBlobsProvider {
-    fun register(hash: String, source: Any): String
     fun stopActiveFetch(queueSequence: Long)
     fun releaseRetention(hash: String)
     fun revoke(hash: String)
 
-    /** NET-14: raw JSON of the current lease's local transfer status (see [parseTransferStatus]). */
-    fun transferStatus(): String
+    /** NET-14: the current lease's local transfer status (with the #413 source fault merged in). */
+    fun transferStatus(): TransferStatus
 
     /** #417：Android 网络变化回调 → iroh `Endpoint::network_change()`（只作用于 provider 端点）。 */
     fun networkChange() = Unit
 
     // #413：导入与供数分两步。默认实现只为不破坏只实现旧接口的测试替身。
 
-    /** 引用优先导入 [source]（[dataPath] 可为 null → 复制），返回 [parseMediaImport] 的 JSON。返回后可关闭 [source]。 */
-    fun importMedia(dataPath: String?, source: Any): String = throw UnsupportedOperationException("importMedia")
+    /** 引用优先导入 [source]（[dataPath] 可为 null → 复制）。返回后可关闭 [source]。 */
+    fun importMedia(dataPath: String?, source: Any): NativeMediaImport = throw UnsupportedOperationException("importMedia")
 
     /** 让已导入的 [hash] 成为当前 lease 并返回 ticket；引用的原图已删 / 已变抛 [FileNotFoundException]。 */
     fun serve(hash: String): String = throw UnsupportedOperationException("serve")
@@ -125,6 +77,12 @@ internal interface NativeIrohBlobsProvider {
      * 原生侧默认就是谁都不许，所以漏调只会让传输失败，不会放行。
      */
     fun setAllowedPeer(daemonNodeId: String?) = Unit
+
+    /**
+     * #1126：登记（null = 撤销）provider 入站连接的关闭监听：已配对电脑用应用关闭码关掉连接时回调
+     * （电脑 NodeId, code）。与控制面 [DaemonClient] 是同一个监听接口、同一个「配对失效」判据。
+     */
+    fun setPeerCloseListener(listener: PeerCloseListener?) = Unit
 }
 
 /** 一次注册占用 provider 的凭据：queue_sequence = order 行 id，lease_token = [leaseTokenFor]。 */
@@ -136,25 +94,9 @@ internal data class ProviderLease(val orderId: Long, val leaseToken: String, val
  */
 internal class IrohBlobsProviderBridge(
     private val native: NativeIrohBlobsProvider,
-    private val openSource: (String) -> Any,
 ) {
     @Volatile
     private var active: ProviderLease? = null
-
-    fun register(lease: ProviderLease, sourceUri: String): String {
-        val hash = lease.contentHash
-        requireContentHash(hash)
-        // Keep the native endpoint and its ALPN handler alive: stopping it between ordinary items would
-        // close the daemon's cached `(NodeId, ALPN)` connection and force a new handshake per file.
-        val source = openSource(sourceUri)
-        val ticket = try {
-            native.register(hash, source)
-        } finally {
-            (source as? AutoCloseable)?.close()
-        }
-        active = lease
-        return ticket
-    }
 
     /**
      * Pause closes the native iroh-blobs connection before revoking the provider. It never deletes a
@@ -179,13 +121,13 @@ internal class IrohBlobsProviderBridge(
     /** NET-14: local ground truth for the current lease's transfer, or [TransferStatus.NoLease]. */
     fun transferStatus(): TransferStatus {
         if (active == null) return TransferStatus.NoLease
-        return parseTransferStatus(native.transferStatus())
+        return native.transferStatus()
     }
 
     fun networkChange() = native.networkChange()
 
     /** #413：导入一张原图（调用方负责打开与关闭 [source]）。 */
-    fun importMedia(dataPath: String?, source: Any): NativeMediaImport = parseMediaImport(native.importMedia(dataPath, source))
+    fun importMedia(dataPath: String?, source: Any): NativeMediaImport = native.importMedia(dataPath, source)
 
     /**
      * #413：以 [lease] 对外供数它已导入的内容。原图已删 / 已变 → [SourceMissingException]；

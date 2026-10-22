@@ -10,6 +10,7 @@ package com.hawkeyexb.ppass.transport
 import com.hawkeyexb.ppass.backup.flow.DesktopRejectedException
 import com.hawkeyexb.ppass.backup.flow.FlowDeliveryPairingLoss
 import com.hawkeyexb.ppass.backup.flow.PairingId
+import com.hawkeyexb.ppass.ffi.PeerCloseListener
 import java.io.IOException
 
 object DesktopCloseCodes {
@@ -65,3 +66,14 @@ internal fun recordDesktopClose(
     loss.record(PairingId(p.pairingId), rejected)
     return true
 }
+
+/**
+ * FFI 的 [PeerCloseListener] → Kotlin 回调。控制面（[DaemonClient]）与上传 provider（#1126）共用这一个：
+ * 回调在 Rust 自己的线程上，抛出的异常不能穿回 Rust，所以统一 `runCatching`。
+ */
+internal fun peerCloseListener(handler: (nodeId: String, code: Long) -> Unit): PeerCloseListener =
+    object : PeerCloseListener {
+        override fun onPeerClosed(nodeId: String, code: ULong) {
+            runCatching { handler(nodeId, code.toLong()) }
+        }
+    }

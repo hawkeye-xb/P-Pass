@@ -15,7 +15,6 @@ import com.hawkeyexb.ppass.ffi.CtrlConfig
 import com.hawkeyexb.ppass.ffi.FetchCancel
 import com.hawkeyexb.ppass.ffi.FetchProgress
 import com.hawkeyexb.ppass.ffi.FfiException
-import com.hawkeyexb.ppass.ffi.PeerCloseListener
 import com.hawkeyexb.ppass.ffi.StreamListener
 import com.hawkeyexb.ppass.proto.BlobTicketRequest
 import com.hawkeyexb.ppass.proto.BlobTicketResponse
@@ -120,11 +119,7 @@ class DaemonClient internal constructor(
      */
     @Volatile var onPeerClosed: (nodeId: String, code: Long) -> Unit = { _, _ -> }
 
-    private val closeListener = object : PeerCloseListener {
-        override fun onPeerClosed(nodeId: String, code: ULong) {
-            runCatching { this@DaemonClient.onPeerClosed(nodeId, code.toLong()) }
-        }
-    }
+    private val closeListener = peerCloseListener { nodeId, code -> this.onPeerClosed(nodeId, code) }
 
     /** #434: requests / streams / downloads currently using the endpoint. */
     private val inFlight = java.util.concurrent.atomic.AtomicInteger(0)

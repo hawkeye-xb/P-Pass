@@ -10,62 +10,13 @@ import org.junit.Test
 
 /**
  * NET-14: pure decision functions the phone's push-first wait loop is
- * built from — transfer_status() JSON decode, push-vs-tuple matching, and
+ * built from — push-vs-tuple matching, and
  * the priority order (push > local signal > bounded status() fallback).
  * These are the JVM-testable seam; the coroutine wiring itself
  * (NativeFlowDeliveryPort.start's launch block) is exercised on real
  * devices, same split as NET06StatusPollDeliveryTest.
  */
 class NET14PushFirstDeliveryTest {
-
-    // ── parseTransferStatus ──────────────────────────────────────
-
-    @Test
-    fun no_lease_json_decodes_to_no_lease() {
-        assertEquals(TransferStatus.NoLease, parseTransferStatus("""{"state":"no_lease"}"""))
-    }
-
-    @Test
-    fun completed_json_decodes_with_hash() {
-        val hash = "a".repeat(64)
-        assertEquals(
-            TransferStatus.Completed(hash),
-            parseTransferStatus("""{"state":"completed","hash":"$hash"}"""),
-        )
-    }
-
-    @Test
-    fun aborted_json_decodes_with_hash() {
-        val hash = "b".repeat(64)
-        assertEquals(
-            TransferStatus.Aborted(hash),
-            parseTransferStatus("""{"state":"aborted","hash":"$hash"}"""),
-        )
-    }
-
-    @Test
-    fun in_progress_json_decodes_connected_and_idle() {
-        assertEquals(
-            TransferStatus.InProgress(connected = true, idleForMs = 1500L, bytesSent = null, byteIdleForMs = null),
-            parseTransferStatus("""{"state":"in_progress","connected":true,"idle_for_ms":1500}"""),
-        )
-    }
-
-    @Test
-    fun in_progress_json_with_null_idle_decodes_null() {
-        assertEquals(
-            TransferStatus.InProgress(connected = false, idleForMs = null),
-            parseTransferStatus("""{"state":"in_progress","connected":false}"""),
-        )
-    }
-
-    @Test
-    fun unrecognized_state_degrades_to_no_lease_not_a_throw() {
-        // Counterexample: a future native build's new state must not crash
-        // an older phone build — this is a local convenience signal, not a
-        // durable wire contract the phone must reject unknown values from.
-        assertEquals(TransferStatus.NoLease, parseTransferStatus("""{"state":"something_new"}"""))
-    }
 
     // ── parseFlowPushOutcome ─────────────────────────────────────
 

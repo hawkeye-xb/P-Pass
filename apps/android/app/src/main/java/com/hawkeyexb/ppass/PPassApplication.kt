@@ -39,6 +39,7 @@ import com.hawkeyexb.ppass.transport.PairingRejectionCleanup
 import com.hawkeyexb.ppass.transport.PairingStore
 import com.hawkeyexb.ppass.transport.NetworkIdleReaper
 import com.hawkeyexb.ppass.transport.cancelLegacyUnpairNotices
+import com.hawkeyexb.ppass.transport.peerCloseListener
 import kotlin.concurrent.thread
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -77,6 +78,14 @@ class PPassApplication : Application() {
         // #1124：这个客户端上任何一条连接（请求、探测、订阅流、取原图）被对端用应用关闭码关掉都会来到这里。
         // 关闭方是配对记录里的那台电脑、且码是 401 / 410 ⇒ 记成配对失效，走被拒即清理；其余一律当连不上，不动配对。
         client.onPeerClosed = { nodeId, code -> onDesktopClosedConnection(nodeId, code) }
+    }
+
+    /**
+     * #1126：上传 provider 入站连接的关闭监听，与 [daemonClient] 走同一个处理（[onDesktopClosedConnection]），判据不另写。
+     * 由 `AndroidFlowRuntime` 在打开 provider 时登记。
+     */
+    internal val providerCloseListener by lazy {
+        peerCloseListener { nodeId, code -> onDesktopClosedConnection(nodeId, code) }
     }
 
     private fun onDesktopClosedConnection(nodeId: String, code: Long) {
