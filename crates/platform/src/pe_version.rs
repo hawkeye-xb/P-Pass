@@ -13,8 +13,6 @@
 //! 这个模块是纯字节解析、没有平台 API，所以三个平台都编译、都跑单测；只有 Windows 的
 //! 更新路径会调它。
 
-#![cfg_attr(not(windows), allow(dead_code))]
-
 const RT_VERSION: u32 = 16;
 const IMAGE_DIRECTORY_ENTRY_RESOURCE: usize = 2;
 
