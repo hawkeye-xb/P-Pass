@@ -290,7 +290,7 @@
   "ui.err_connect": "Couldn't connect to the background service: {err}",
   "ui.err_send": "Send failed: {err}",
   "ui.err_read_response": "Failed to read the response: {err}",
-  "ui.err_no_daemon": "No running P-Pass background service found (ipc.token is missing)",
+  "ui.err_no_daemon": "No running P-Pass background service found",
   "ui.err_daemon_unresponsive": "The service {path} points to isn't responding: {err}",
   "ui.err_ipc_thread_spawn": "Failed to start the IPC thread: {err}",
   "ui.err_ipc_thread_exit": "The IPC thread exited unexpectedly ({method})",

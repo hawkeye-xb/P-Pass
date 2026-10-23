@@ -290,7 +290,7 @@
   "ui.err_connect": "连接后台服务失败: {err}",
   "ui.err_send": "发送失败: {err}",
   "ui.err_read_response": "读取响应失败: {err}",
-  "ui.err_no_daemon": "找不到运行中的 P-Pass 后台服务（ipc.token 不存在）",
+  "ui.err_no_daemon": "找不到运行中的 P-Pass 后台服务",
   "ui.err_daemon_unresponsive": "{path} 指向的服务无响应：{err}",
   "ui.err_ipc_thread_spawn": "启动 IPC 线程失败: {err}",
   "ui.err_ipc_thread_exit": "IPC 线程意外退出（{method}）",

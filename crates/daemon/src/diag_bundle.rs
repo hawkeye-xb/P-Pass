@@ -820,7 +820,7 @@ mod tests {
             home: "/Users/someone".into(),
             app_version: Some("0.4.0-test.2".into()),
             daemon_version: Some("P-Pass daemon 0.3.0".into()),
-            daemon_unreachable: Some("找不到运行中的 P-Pass 后台服务（ipc.token 不存在）".into()),
+            daemon_unreachable: Some("找不到运行中的 P-Pass 后台服务".into()),
             config_toml: Some(
                 "data_dir = \"/Users/someone/Pictures/lib\"\nbind_addr = \"0.0.0.0:41145\"\n"
                     .into(),
