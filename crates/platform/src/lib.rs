@@ -108,6 +108,13 @@ pub enum ServiceMode {
     /// 跳过）。和 LaunchAgent 一样由系统托管：开机启动、崩溃拉起、按需
     /// 立即拉起、撤销登记后不再拉起。
     ScheduledTask,
+    /// D1 / #1161：Windows 系统服务（SCM）——per-machine 安装、以虚拟服务账户
+    /// `NT SERVICE\<服务名>` 运行、开机即起（不等登录）、失败自动重启。
+    ///
+    /// 与 [`ServiceMode::ScheduledTask`] 的区别不只是「谁拉起」：服务的身份是
+    /// 服务账户（不是用户），身份私钥、配对白名单、库位置才能放进
+    /// `%ProgramData%` 只给服务读。计划任务跑在用户会话里，做不到这一点。
+    WindowsService,
 }
 
 impl ServiceMode {
@@ -120,7 +127,9 @@ impl ServiceMode {
     pub fn has_service_manager(self) -> bool {
         match self {
             ServiceMode::UserAutostart => false,
-            ServiceMode::LaunchAgent | ServiceMode::ScheduledTask => true,
+            ServiceMode::LaunchAgent | ServiceMode::ScheduledTask | ServiceMode::WindowsService => {
+                true
+            }
         }
     }
 }
