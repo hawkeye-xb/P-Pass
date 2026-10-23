@@ -42,20 +42,36 @@ pub fn method_cap(method: &str) -> u32 {
     }
 }
 
-/// 未配对对端（配对窗口内）的请求限速：每台设备每秒 5 个、突发 10 个。配对
-/// 流程正常节奏是每几秒轮询一次 `pair.status`，远低于这个量。
+/// 未配对对端（配对窗口内）的请求限速：**所有未配对对端共用一个总额度**，每秒 20 个、
+/// 突发 40 个。配对流程正常节奏是每几秒轮询一次 `pair.status`，远低于这个量。
+///
+/// 不按设备身份分桶：身份就是一把密钥、换起来零成本——按身份限速换个身份就绕过，
+/// 而且每个新身份都在限速表里多占一条、永不清理（内存随攻击者无限增长）。总额度
+/// 的状态是固定大小，与对端数量无关（同 SSH `MaxStartups` 的思路）。代价：配对窗口
+/// 内攻击者可以占满额度、让家人暂时配不上——能进同一网络的攻击者本就能干扰，
+/// 换来的是内存有上限。
 pub type UnpairedLimiter = Arc<
     governor::RateLimiter<
-        transport::NodeId,
-        governor::state::keyed::DefaultKeyedStateStore<transport::NodeId>,
+        governor::state::NotKeyed,
+        governor::state::InMemoryState,
         governor::clock::DefaultClock,
     >,
 >;
 
 pub fn unpaired_limiter() -> UnpairedLimiter {
-    let quota = governor::Quota::per_second(NonZeroU32::new(5).expect("nonzero"))
-        .allow_burst(NonZeroU32::new(10).expect("nonzero"));
-    Arc::new(governor::RateLimiter::keyed(quota))
+    let quota = governor::Quota::per_second(NonZeroU32::new(20).expect("nonzero"))
+        .allow_burst(NonZeroU32::new(40).expect("nonzero"));
+    Arc::new(governor::RateLimiter::direct(quota))
+}
+
+/// 同时在线的未配对连接上限（全局）。配对时一次只有一两台手机在扫码。
+pub const UNPAIRED_CONN_MAX: usize = 8;
+
+/// 未配对连接的名额池：连接建立时取一个名额、连接结束时归还；没有名额就直接断开。
+pub type UnpairedConns = Arc<tokio::sync::Semaphore>;
+
+pub fn unpaired_conns() -> UnpairedConns {
+    Arc::new(tokio::sync::Semaphore::new(UNPAIRED_CONN_MAX))
 }
 
 #[cfg(test)]
@@ -107,13 +123,33 @@ mod tests {
         const { assert!(PAIRING_FRAME_MAX < METHOD_FRAME_DEFAULT) };
     }
 
+    /// 反证：改回按身份分桶（`RateLimiter::keyed` + `check_key`），换身份就能无限
+    /// 通过——这条必须红。
     #[test]
-    fn unpaired_requests_are_rate_limited_per_device() {
+    fn rotating_identities_does_not_bypass_the_unpaired_limit() {
         let limiter = unpaired_limiter();
-        let a = transport::NodeId([1; 32]);
-        let b = transport::NodeId([2; 32]);
-        let allowed = (0..50).filter(|_| limiter.check_key(&a).is_ok()).count();
-        assert!(allowed <= 11, "突发之后被限速：{allowed}");
-        assert!(limiter.check_key(&b).is_ok(), "限速按设备分开");
+        let allowed = (0..10_000u32).filter(|_| limiter.check().is_ok()).count();
+        assert!(
+            allowed <= 41,
+            "所有未配对对端共用一个额度，换身份不增加额度：{allowed}"
+        );
+    }
+
+    /// 名额用完后新的未配对连接拿不到名额；旧连接结束归还后又能进。
+    #[test]
+    fn unpaired_connection_slots_are_capped_and_returned() {
+        let pool = unpaired_conns();
+        let held: Vec<_> = (0..UNPAIRED_CONN_MAX)
+            .map(|_| Arc::clone(&pool).try_acquire_owned().expect("slot"))
+            .collect();
+        assert!(
+            Arc::clone(&pool).try_acquire_owned().is_err(),
+            "第 9 个必须被拒"
+        );
+        drop(held);
+        assert!(
+            Arc::clone(&pool).try_acquire_owned().is_ok(),
+            "归还后可再进"
+        );
     }
 }

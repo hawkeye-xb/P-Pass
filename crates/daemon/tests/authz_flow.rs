@@ -419,17 +419,21 @@ async fn the_pairing_door_opens_only_while_the_qr_code_is_shown() {
     assert_eq!(r.result.unwrap()["pairing_id"], "p");
 }
 
-/// #1122：配对窗口内，未配对的对端按设备限速——短时间连发远超配额的请求，
-/// 超出的流不读、不答；已配对设备不受这个限速。
-/// 反证：路由不调 unpaired_limiter（或限速恒放行），30 个全有应答 ⇒ 变红。
+/// #1122：配对窗口内，所有未配对的对端共用一个限速额度——两个不同身份交替连发
+/// 远超配额的请求，超出的流不读、不答；已配对设备不受这个限速。
+/// 反证：路由不调 unpaired_limiter、限速恒放行，或改回按身份分桶（两个身份各得一份
+/// 额度）⇒ 应答数超过总额度 ⇒ 变红。
 #[tokio::test(flavor = "multi_thread")]
 async fn unpaired_requests_are_rate_limited_in_the_router() {
     let db = Db::open_in_memory().await.unwrap();
     let (dtp, daddr) = start_daemon(db.clone()).await;
-    let stranger = client().await;
-    stranger.add_peer(daddr.clone());
+    let strangers = [client().await, client().await];
+    for s in &strangers {
+        s.add_peer(daddr.clone());
+    }
     let mut answered = 0;
-    for _ in 0..30 {
+    for i in 0..100 {
+        let stranger = &strangers[i % 2];
         let attempt = async {
             let mut s = stranger
                 .connect(dtp.node_id(), transport::ALPN_CTRL)
@@ -453,9 +457,10 @@ async fn unpaired_requests_are_rate_limited_in_the_router() {
             answered += 1;
         }
     }
+    // 总额度：突发 40 + 期间按每秒 20 回补；两个身份共用，超出即丢。
     assert!(
-        answered <= 15,
-        "超出配额的请求必须被丢：answered={answered}"
+        answered <= 70,
+        "超出总额度的请求必须被丢（换身份不增加额度）：answered={answered}"
     );
     assert!(answered >= 5, "配额内的照常应答：answered={answered}");
 

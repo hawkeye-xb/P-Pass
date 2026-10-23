@@ -176,6 +176,7 @@ pub struct Router {
     peer_closer: Option<crate::unpair::PeerCloser>,
     /// #1122：没有配对记录的对端（只可能在配对窗口内进来）按设备限速。
     unpaired_limiter: crate::frame_limits::UnpairedLimiter,
+    unpaired_conns: crate::frame_limits::UnpairedConns,
 }
 
 impl Router {
@@ -194,6 +195,7 @@ impl Router {
             now: std::sync::Arc::new(unix_ms_now),
             peer_closer: None,
             unpaired_limiter: crate::frame_limits::unpaired_limiter(),
+            unpaired_conns: crate::frame_limits::unpaired_conns(),
         }
     }
 
@@ -301,6 +303,16 @@ impl Router {
             return;
         }
         let peer = conn.peer();
+        // #1122：未配对的连接占一个全局名额，连接结束（离开本函数）时归还；名额满了
+        // 直接断开，不读任何流。已配对设备不占名额。
+        let _slot = if self.db.active_pairing(&peer.0).is_none() {
+            match Arc::clone(&self.unpaired_conns).try_acquire_owned() {
+                Ok(slot) => Some(slot),
+                Err(_) => return,
+            }
+        } else {
+            None
+        };
         loop {
             let Ok(mut stream) = conn.accept_bi().await else {
                 return; // peer went away — nothing to clean up
@@ -324,7 +336,7 @@ impl Router {
         // #1117：授权只读配对记录的内存副本，不查库。#1122：读帧之前就用它定上限、
         // 给未配对的对端限速——超速的流一个字节都不读。
         let pairing = self.db.active_pairing(&peer.0);
-        if pairing.is_none() && self.unpaired_limiter.check_key(&peer).is_err() {
+        if pairing.is_none() && self.unpaired_limiter.check().is_err() {
             return false;
         }
         let cap = crate::frame_limits::pre_read_cap(pairing.as_ref());
