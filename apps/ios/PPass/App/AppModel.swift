@@ -116,10 +116,16 @@ final class AppModel: ObservableObject {
         do { try backend.engine.setNotifyOnFailure(on); notifyOnFailure = on } catch { settingWriteFailed("notify-on-failure", error) }
     }
 
-    func setDeviceName(_ name: String) {
-        do { try backend.pairing.setDeviceName(name); deviceName = backend.pairing.deviceName(); AppLog.log("device-name: changed") } catch {
-            settingWriteFailed("device-name", error)
-        }
+    /// 设置页本机名输入框的每一次改动都立刻落盘：不靠回车、不靠离开输入框——App 被切走 / 杀掉时这两个时机都可能不来，
+    /// 真机上就这样丢过（输完没按回车就去电脑上操作，进程被系统回收，配对时发出去的仍是「iPhone」）。
+    /// 清空 = 回到系统名。`deviceName` 只在输入结束时刷新（`deviceNameEditingEnded`），输入中不回写输入框。
+    func deviceNameEdited(_ text: String) {
+        do { try backend.pairing.setDeviceName(text) } catch { settingWriteFailed("device-name", error) }
+    }
+
+    func deviceNameEditingEnded() {
+        deviceName = backend.pairing.deviceName()
+        AppLog.log("device-name: editing ended (\(deviceName.count) chars)")
     }
 
     private func settingWriteFailed(_ what: String, _ error: Error) {
