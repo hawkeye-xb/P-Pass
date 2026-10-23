@@ -54,8 +54,8 @@ pub mod test_support;
 #[cfg(target_os = "macos")]
 pub use code_signature::verify_app_bundle;
 pub use code_signature::{
-    code_requirement, verify_update_package, UpdatePackageCheck, DAEMON_APP_ID, DESKTOP_APP_ID,
-    DEVELOPER_TEAM_ID,
+    code_requirement, newer_than_current, verify_update_package, UpdatePackageCheck, DAEMON_APP_ID,
+    DESKTOP_APP_ID, DEVELOPER_TEAM_ID,
 };
 pub use data_migration::DataDirMigration;
 pub use identity_key::{IdentityKeyHome, IdentityKeyStore, SecretBlobStore};

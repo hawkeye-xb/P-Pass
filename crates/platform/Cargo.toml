@@ -12,6 +12,8 @@ publish = false
 test-support = []
 
 [dependencies]
+# #1116 P2-2 防降级：更新包版本按 semver 比当前版本（`newer_than_current`，各平台共用）。
+semver = "1"
 thiserror.workspace = true
 # #1047：停止信号（SIGTERM / Windows 控制台事件）。只开 signal + 运行时，
 # 不拉 net/io。
@@ -32,6 +34,8 @@ tempfile = "3"
 security-framework = { version = "3.7", features = ["OSX_10_15"] }
 # #1121：代码签名静态校验要 CFURL（security-framework 的 code_signing 接口收它）。已在依赖树里。
 core-foundation = "0.10"
+# #1116 P2-2 防降级：读已验签包里的 Info.plist 版本号（签名封装覆盖它）。
+plist = "1"
 
 [target.'cfg(windows)'.dependencies]
 # HKCU Run key: the shell's login item (DESK-72) and cleanup of the legacy

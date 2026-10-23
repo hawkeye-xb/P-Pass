@@ -5,7 +5,8 @@
 //! - 网页对 updater 插件只剩 `allow-check`（显示有没有新版、说明是什么）；
 //! - 下载、校验、安装是这里的两个命令，校验和安装用**同一份内存里的字节**，中间不重新下载；
 //! - 校验 = 插件自带的 minisign 验签（`Update::download` 内）+
-//!   `platform::verify_update_package`（macOS：新包必须是团队 2WJUWVUJBN 签名的桌面主 App）。
+//!   `platform::verify_update_package`（macOS：新包必须是团队 2WJUWVUJBN 签名的桌面主 App，
+//!   且包内版本严格高于当前版本——防降级，#1116 P2-2）。
 //!
 //! 顺序与 #1060 一致：前端先 `update_download`（daemon 照常跑），再暂停 daemon，再
 //! `update_install`。进度事件的形状与插件 JS 端的 `DownloadEvent` 相同，前端的进度逻辑不变。
@@ -84,7 +85,9 @@ pub(crate) async fn update_download(
         .await
         .map_err(|e| e.to_string())?;
 
-    match platform::verify_update_package(&bytes) {
+    // #1116 P2-2：包内（签名封装覆盖的）版本必须严格高于正在运行的版本——清单里的版本号不签名，不能信。
+    let current = app.package_info().version.to_string();
+    match platform::verify_update_package(&bytes, &current) {
         platform::UpdatePackageCheck::Verified => {}
         platform::UpdatePackageCheck::NotChecked(why) => {
             // 不是通过，是本平台还不能检查：记下来，照常走（只有 minisign 那一道）。
