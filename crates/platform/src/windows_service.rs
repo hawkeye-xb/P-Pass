@@ -193,10 +193,8 @@ fn parse_image_path(raw: &str) -> Option<std::path::PathBuf> {
         return None;
     }
     let exe = match raw.strip_prefix('"') {
-        Some(rest) => match rest.find('"') {
-            Some(end) => &rest[..end],
-            None => return None, // 引号没闭合：当作读不出，不猜
-        },
+        // 引号没闭合 ⇒ 读不出，不猜。
+        Some(rest) => &rest[..rest.find('"')?],
         None => raw.split_whitespace().next().unwrap_or(raw),
     };
     (!exe.is_empty()).then(|| std::path::PathBuf::from(exe))
