@@ -160,12 +160,6 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
       observe() {}
       disconnect() {}
     };
-    // bits-ui PinInput 用 ResizeObserver 量输入框，jsdom 没有。
-    globalThis.ResizeObserver = class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    };
     globalThis.matchMedia = () => ({
       matches: false,
       addEventListener() {},
@@ -220,9 +214,14 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
     const order = [...block.children].map((el) => el.className.split(" ")[0]);
     expect(order).toEqual(["pending-code", "pending-hint", "pending-actions"]);
     const actions = screen.getByTestId("pending-actions");
-    expect(actions.querySelector('[data-slot="input-otp-slot"]')).toBeNull();
+    expect(actions.querySelector("input")).toBeNull();
     expect([...actions.querySelectorAll("button")].map((b) => b.textContent.trim())).toEqual(["拒绝", "允许加入"]);
-    expect(block.querySelectorAll('[data-slot="input-otp-slot"]')).toHaveLength(6);
+    // 一个普通输入框（不是 6 格）：数字键盘、一次性验证码自动填充、最多 6 位。
+    const input = block.querySelector("input");
+    expect(block.querySelectorAll("input")).toHaveLength(1);
+    expect(input.getAttribute("inputmode")).toBe("numeric");
+    expect(input.getAttribute("autocomplete")).toBe("one-time-code");
+    expect(input.getAttribute("maxlength")).toBe("6");
   });
 
   it("多台：总标题报数量，每块以设备名开头", async () => {
@@ -275,13 +274,14 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
     const button = screen.getByRole("button", { name: "允许加入" });
     expect(button.disabled).toBe(true);
     const input = screen.getByTestId("pair-code-input");
-    await fireEvent.input(input, { target: { value: "12 34" } });
+    await fireEvent.input(input, { target: { value: "12a34" } });
+    expect(input.value).toBe("1234"); // 非数字直接过滤
     expect(screen.getByRole("button", { name: "允许加入" }).disabled).toBe(true);
-    // 从手机上抄来的「123 456」：粘贴时去掉空格一次填满 6 格。
-    await fireEvent.paste(input, { clipboardData: { getData: () => "123 456" } });
+    await fireEvent.input(input, { target: { value: "" } });
+    // 粘贴时也只保留数字：「12a3 45-6」→ 123456。
+    await fireEvent.paste(input, { clipboardData: { getData: () => "12a3 45-6" } });
     await settle();
     expect(input.value).toBe("123456");
-    expect(document.querySelectorAll('[data-slot="input-otp-slot"]')[5].textContent.trim()).toBe("6");
     expect(screen.getByRole("button", { name: "允许加入" }).disabled).toBe(false);
     await fireEvent.click(screen.getByRole("button", { name: "允许加入" }));
     await settle();
@@ -314,7 +314,8 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
 
   // 真机：输错点「允许」后弹窗直接关掉，看不到错误（daemon 先撤行推事件，前端按队列空关了弹窗）。
   // 反证：弹窗 open 条件改回看队列 / 码错不进 failed → 红。
-  it("输错：弹窗不关，块停在终态；点「知道了」后才关", async () => {
+  // 终态按钮「重新显示二维码」：关掉这一块、直接打开配对二维码（与首页同一入口）。
+  it("输错：弹窗不关，块停在终态；点「重新显示二维码」出二维码", async () => {
     const d = desktop();
     d.confirmError = JSON.stringify({ key: "ui.err_pair_code_wrong", params: {} });
     render(App);
@@ -330,9 +331,13 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
     expect(block.dataset.phase).toBe("failed");
     expect(block.textContent).toContain("验证码不对，这次配对已作废，请在手机上重新扫码");
     expect(screen.queryByRole("button", { name: "允许加入" })).toBeNull();
-    await fireEvent.click(screen.getByRole("button", { name: "知道了" }));
+    const starts = () => invokeMock.mock.calls.filter(([cmd]) => daemonMethodOf(cmd) === "pairing.start").length;
+    const before = starts();
+    await fireEvent.click(screen.getByRole("button", { name: "重新显示二维码" }));
     await settle();
     expect(dialogOpen()).toBe(false);
+    expect(starts()).toBe(before + 1);
+    expect(screen.getByRole("heading", { name: "配对二维码" })).toBeTruthy();
   });
 
   // 真机：重新扫码后，新申请还挂着上一次的错误、没有按钮。错误绑在申请上，新申请从干净状态开始。
@@ -348,7 +353,7 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
     await settle();
     await settle();
     expect(screen.getByTestId("pending-request").dataset.phase).toBe("failed");
-    // 不点「知道了」，手机直接重新扫码：同一台、新的一次申请。
+    // 不点「重新显示二维码」，手机直接重新扫码：同一台、新的一次申请。
     d.confirmError = null;
     d.pending = [{ ...row("a", "妈妈的手机"), requested_at: 1_790_000_100_000 }];
     await pushPendingChanged();

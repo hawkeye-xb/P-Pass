@@ -154,7 +154,7 @@
   "ui.time_days_ago": "{n} days ago",
   "ui.pending_many_title": "{n} devices want to join",
   "ui.pair_code_hint": "Enter the code shown on the phone",
-  "ui.got_it": "OK",
+  "ui.pair_show_qr_again": "Show QR code again",
   "ui.pair_code_placeholder": "6-digit code",
   "ui.pending_enter_code": "Enter code",
   "ui.err_pair_code_wrong": "The code didn't match, so this pairing was cancelled. Scan again on the phone.",

@@ -427,7 +427,7 @@ msg_keys! {
     UI_DEVICE_NEEDS_UPDATE_DESKTOP => "ui.device_needs_update_desktop",
     /// #1118：配对改为业主在电脑上输入手机显示的验证码；待确认行带角色，二维码下显示本机指纹。
     UI_PAIR_CODE_HINT => "ui.pair_code_hint",
-    UI_GOT_IT => "ui.got_it",
+    UI_PAIR_SHOW_QR_AGAIN => "ui.pair_show_qr_again",
     UI_PAIR_CODE_PLACEHOLDER => "ui.pair_code_placeholder",
     UI_PENDING_ENTER_CODE => "ui.pending_enter_code",
     UI_ERR_PAIR_CODE_WRONG => "ui.err_pair_code_wrong",
@@ -763,7 +763,7 @@ mod tests {
             UI_DEVICE_NEEDS_UPDATE_PHONE,
             UI_DEVICE_NEEDS_UPDATE_DESKTOP,
             UI_PAIR_CODE_HINT,
-            UI_GOT_IT,
+            UI_PAIR_SHOW_QR_AGAIN,
             UI_PAIR_CODE_PLACEHOLDER,
             UI_PENDING_ENTER_CODE,
             UI_ERR_PAIR_CODE_WRONG,

@@ -41,8 +41,8 @@
   import { Button } from "$lib/components/ui/button";
   import { Card } from "$lib/components/ui/card";
   import { Dialog } from "$lib/components/ui/dialog";
-  import * as InputOTP from "$lib/components/ui/input-otp";
-  import { REGEXP_ONLY_DIGITS } from "bits-ui";
+  import { Input } from "$lib/components/ui/input";
+  import { onDigitsInput, onDigitsPaste } from "./lib/digitsField.js";
   import Loader2Icon from "@lucide/svelte/icons/loader-2";
   import { Toaster } from "$lib/components/ui/sonner";
   import { NavItem } from "$lib/components/ui/nav-item";
@@ -576,9 +576,12 @@
     pairRequests = pairRequests.filter((r) => r.phase !== "failed");
   }
 
-  // 「知道了」：确认这块已作废，块消失；没有别的块弹窗随之关闭（open 条件）。
-  function acknowledgeRequest(id) {
+  // 作废块的「重新显示二维码」：关掉这一块，收起确认弹窗，走首页「显示配对二维码」同一个入口。
+  // 不想重来就点右上角 ✕（closeConfirmModal）。
+  function showQrAgain(id) {
     pairRequests = removeRequest(pairRequests, id);
+    showConfirmModal = false;
+    startPairing();
   }
 
   async function confirmPair(accept, item, code = null) {
@@ -2196,28 +2199,29 @@
             {#if req.phase === "failed"}
               <p class="pending-error" role="alert">{t("ui.err_pair_code_wrong")}</p>
               <div class="pending-actions" data-testid="pending-actions">
-                <Button onclick={() => acknowledgeRequest(req.id)}>{t("ui.got_it")}</Button>
+                <Button onclick={() => showQrAgain(req.id)}>{t("ui.pair_show_qr_again")}</Button>
               </div>
             {:else}
               <div class="pending-code">
-                <InputOTP.Root
+                <!-- 普通输入框：只收数字（输入、粘贴都过滤，光标留在原处，可在任意位置改）；
+                     等宽数字、适度字距、居中，宽度够放 6 位。 -->
+                <Input
                   data-testid="pair-code-input"
+                  class="h-11 w-[12ch] bg-paper text-center font-mono text-[20px] tracking-[0.3em] indent-[0.3em] tabular-nums md:text-[20px]"
                   aria-label={t("ui.pair_code_placeholder")}
+                  inputmode="numeric"
+                  autocomplete="one-time-code"
                   maxlength={6}
-                  pattern={REGEXP_ONLY_DIGITS}
-                  pasteTransformer={normalizePairCode}
+                  spellcheck={false}
                   disabled={req.phase === "busy"}
-                  bind:value={() => code, (v) => (pairCodes = { ...pairCodes, [req.id]: normalizePairCode(v) })}
+                  value={code}
+                  oninput={(e) => (pairCodes = { ...pairCodes, [req.id]: onDigitsInput(e.currentTarget) })}
+                  onpaste={(e) => {
+                    e.preventDefault();
+                    pairCodes = { ...pairCodes, [req.id]: onDigitsPaste(e.currentTarget, e.clipboardData?.getData("text") ?? "") };
+                  }}
                   onkeydown={(e) => { if (e.key === "Enter" && isPairCode(code)) confirmPair(true, item, code); }}
-                >
-                  {#snippet children({ cells })}
-                    <InputOTP.Group>
-                      {#each cells as cell}
-                        <InputOTP.Slot {cell} class="size-11 bg-paper text-[18px] font-semibold text-ink tabular-nums" />
-                      {/each}
-                    </InputOTP.Group>
-                  {/snippet}
-                </InputOTP.Root>
+                />
               </div>
               <p class="pending-hint">{t("ui.pair_code_hint")}</p>
               <div class="pending-actions" data-testid="pending-actions">
