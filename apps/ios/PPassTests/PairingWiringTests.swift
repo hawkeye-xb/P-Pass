@@ -33,7 +33,7 @@ private final class ScriptedTransport: CtrlTransport, @unchecked Sendable {
     }
 }
 
-/// #969 / #970：配对记录的写盘与「已是成员」快路径。
+/// #969 / #970：配对记录的写盘与「已是成员」快路径（#1116 N1 起只对本机配对完成过的电脑走快路径）。
 final class PairingWiringTests: XCTestCase {
     private var dir: URL!
     private var link = ""
@@ -64,6 +64,17 @@ final class PairingWiringTests: XCTestCase {
                                    onDisconnect: @escaping () async -> Void) -> LivePairing {
         LivePairing(transportFor: { _ in transport }, store: store, onboarded: { _ in false }, onPaired: { _, _ in false },
                     onDisconnect: onDisconnect, logger: LogSink(), localNodeId: { PairFixtures.phoneNode }, crypto: FakePairCrypto())
+    }
+
+    /// 走完验证码交换的正常配对（#1118）、电脑同意：新电脑（#1116 N1 起不走成员快路径）的必经之路。
+    private func acceptedPairing(pairingId: String) throws -> ScriptedTransport {
+        ScriptedTransport([
+            Methods.hello: try .ok(Hello(capabilities: [PairVerdictLoop.statusCapability], deviceName: "Mac")),
+            Methods.pairRequest: try .ok(PairSubmitted(accepted: true, requestId: "r1", ttlMs: 60_000)),
+            Methods.pairStatus: try .ok(PairStatusReply(state: "pending", pakeB: PairFixtures.pakeB)),
+            Methods.pairConfirm: try .ok(PairStatusReply(state: "accepted", accepted: PairAccepted(storageDeviceName: "Mac", pairingId: pairingId),
+                                                         confirmB: PairFixtures.confirmB)),
+        ])
     }
 
     /// 把 pairing.json 占成一个目录：原子写必然失败（不依赖权限、不依赖磁盘满）。
@@ -105,7 +116,8 @@ final class PairingWiringTests: XCTestCase {
             Methods.hello: try .ok(Hello(deviceName: "Mac", pairingId: "e9")),
         ])
         var paired = 0
-        let outcome = await makePairing(transport, store: store) { _, _ in paired += 1; return false }.pair(code: link)
+        let outcome = await makePairing(transport, store: store, onboarded: { _ in true }) { _, _ in paired += 1; return false }
+            .pair(code: link)
         guard case .failed(let reason) = outcome else { return XCTFail("写盘失败应当配对失败，实际 \(outcome)") }
         XCTAssertTrue(reason.contains(L.s("pair_save_failed")), reason)
         XCTAssertEqual(paired, 0, "没落盘就不能触发 onPaired")
@@ -135,9 +147,7 @@ final class PairingWiringTests: XCTestCase {
         let store = PairingStore(root: dir)
         var marked = Set<String>()
         var knownSeenByOnPaired: Bool?
-        let transport = ScriptedTransport([
-            Methods.hello: try .ok(Hello(deviceName: "Mac", pairingId: "e9")),
-        ])
+        let transport = try acceptedPairing(pairingId: "e9")
         let pairing = makePairing(transport, store: store, onboarded: { marked.contains($0) }) { record, known in
             knownSeenByOnPaired = known
             marked.insert(record.daemonNodeId) // 最坏情形：onPaired 里就标记（#1019 之前的写法），firstTime 也必须先定
@@ -165,11 +175,24 @@ final class PairingWiringTests: XCTestCase {
             Methods.hello: try .ok(Hello(deviceName: "Mac", pairingId: "e9")),
         ])
         var paired: PairingRecord?
-        let outcome = await makePairing(transport, store: store) { r, _ in paired = r; return false }.pair(code: link)
-        XCTAssertEqual(outcome, .joined(firstTime: true))
+        let outcome = await makePairing(transport, store: store, onboarded: { _ in true }) { r, _ in paired = r; return false }
+            .pair(code: link)
+        XCTAssertEqual(outcome, .joined(firstTime: false))
         XCTAssertEqual(store.load()?.pairingId, "e9")
         XCTAssertEqual(store.load()?.storageDeviceName, "Mac")
         XCTAssertEqual(paired?.pairingId, "e9")
+    }
+
+    /// #1116 N1：没配对过的电脑自称「你已是成员」——不采信、不落配对，转去走验证码（这里脚本没有 pair.request，
+    /// 所以停在失败）。反证：去掉 `known ?` 这道门，伪造的成员回复会被存成配对，`XCTAssertNil` 红。
+    func test_unknown_desktop_claiming_membership_is_not_trusted() async throws {
+        let store = PairingStore(root: dir)
+        let transport = ScriptedTransport([
+            Methods.hello: try .ok(Hello(deviceName: "Forged", pairingId: "f9")),
+        ])
+        let outcome = await makePairing(transport, store: store, onboarded: { _ in false }).pair(code: link)
+        if case .joined = outcome { XCTFail("an unknown computer's membership claim must not pair: \(outcome)") }
+        XCTAssertNil(store.load())
     }
 
     // MARK: 换新电脑清旧的后台备份意图写失败（#1039，对位 Android）
@@ -192,9 +215,7 @@ final class PairingWiringTests: XCTestCase {
         let (prefs, _) = try readOnlyPrefs(requested: true)
         let logs = LogSink()
         let store = PairingStore(root: dir)
-        let transport = ScriptedTransport([
-            Methods.hello: try .ok(Hello(deviceName: "Mac", pairingId: "e9")),
-        ])
+        let transport = try acceptedPairing(pairingId: "e9")
         let outcome = await makePairing(transport, store: store, onboarded: { _ in false }) { _, known in
             applyAutoBackupOnPairing(prefs, knownDesktop: known, logger: logs)
         }.pair(code: link)
@@ -229,7 +250,8 @@ final class PairingWiringTests: XCTestCase {
         // hello 连不上（超时 / 异常）：落回正常配对（它自己的 hello 同样连不上 → unreachable），不能存空记录。
         let transport = ScriptedTransport([Methods.hello: .fail])
         var paired = 0
-        let outcome = await makePairing(transport, store: store) { _, _ in paired += 1; return false }.pair(code: link)
+        let outcome = await makePairing(transport, store: store, onboarded: { _ in true }) { _, _ in paired += 1; return false }
+            .pair(code: link)
         guard case .failed = outcome else { return XCTFail("实际 \(outcome)") }
         XCTAssertNil(store.load(), "hello 失败不许存空 pairingId / 空电脑名")
         XCTAssertEqual(paired, 0)
@@ -248,8 +270,8 @@ final class PairingWiringTests: XCTestCase {
             Methods.pairConfirm: try .ok(PairStatusReply(state: "accepted", accepted: PairAccepted(storageDeviceName: "Mac", pairingId: "e5"),
                                                          confirmB: PairFixtures.confirmB)),
         ])
-        let outcome = await makePairing(transport, store: store).pair(code: link)
-        XCTAssertEqual(outcome, .joined(firstTime: true))
+        let outcome = await makePairing(transport, store: store, onboarded: { _ in true }).pair(code: link)
+        XCTAssertEqual(outcome, .joined(firstTime: false))
         XCTAssertEqual(transport.calls, [Methods.hello, Methods.hello, Methods.pairRequest, Methods.pairStatus, Methods.pairConfirm],
                        "第一次 hello 判成员未过，第二次来自正常配对")
         XCTAssertFalse(transport.calls.contains(Methods.backupBegin), "成员探针不得再用 backup.begin")
@@ -260,7 +282,7 @@ final class PairingWiringTests: XCTestCase {
     func test_empty_pairing_id_is_not_member() async throws {
         let store = PairingStore(root: dir)
         let transport = ScriptedTransport([Methods.hello: try .ok(Hello(deviceName: "Mac", pairingId: ""))])
-        _ = await makePairing(transport, store: store).pair(code: link)
+        _ = await makePairing(transport, store: store, onboarded: { _ in true }).pair(code: link)
         XCTAssertNil(store.load(), "空 pairingId 不许当成员存盘")
         XCTAssertEqual(transport.calls.first, Methods.hello)
         XCTAssertGreaterThan(transport.calls.count, 1, "必须落回正常配对")
@@ -272,7 +294,7 @@ final class PairingWiringTests: XCTestCase {
         let transport = ScriptedTransport([
             Methods.hello: .resp(Resp(ok: false, error: RespError(code: Codes.notAuthorized, reason: "not_paired"))),
         ])
-        let outcome = await makePairing(transport, store: store).pair(code: link)
+        let outcome = await makePairing(transport, store: store, onboarded: { _ in true }).pair(code: link)
         XCTAssertNil(store.load())
         guard case .failed = outcome else { return XCTFail("实际 \(outcome)") }
         XCTAssertFalse(transport.calls.contains(Methods.backupBegin))
@@ -291,7 +313,7 @@ final class PairingWiringTests: XCTestCase {
         let transport = ScriptedTransport([
             Methods.hello: .resp(Resp(ok: false, error: RespError(code: "x", reason: "from_the_future"))),
         ])
-        _ = await makePairing(transport, store: store).pair(code: link)
+        _ = await makePairing(transport, store: store, onboarded: { _ in true }).pair(code: link)
         XCTAssertNil(store.load())
     }
 

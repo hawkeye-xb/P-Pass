@@ -648,6 +648,7 @@ fun PPassApp() {
                             invalidCodeMessage = context.getString(R.string.not_a_code),
                             unparseableCodeMessage = context.getString(R.string.pair_unparseable_code),
                             storageDeviceNameFallback = context.getString(R.string.storage_device_default),
+                            knownDesktop = { OnboardedDesktopsStore(context.filesDir).wasOnboarded(it) },
                         )
                     },
                 )

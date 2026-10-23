@@ -534,23 +534,25 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("NodeId: {:?}", transport.node_id());
     tracing::info!("库目录: {}", data_dir.display());
 
-    // QR 在 transport bind 之后生成（&r= 需要 live endpoint 的中继）。
-    let qr = pairing.start(rand_pair_token()?, unix_ms_now());
     // DEVLOG-03 / SEC-11 (#496)：配对链接**绝不进任何持久文件**。它带着
-    // 10 分钟内有效的配对令牌（红线 4：凭据不落任何持久文件）。
-    // DEVLOG-03 当初的做法是「只进 stdout」，但 stdout 不等于屏幕：macOS
-    // launchd 的 StandardOutPath 就是 <数据目录>/logs/daemon.out（#1046 前是 ~/Library/Logs），
-    // systemd/nohup/脚本重定向同理。所以只在 stdout 是终端时才打印链接，
-    // 否则打一句不含链接的提示（见 cli::pair_link_stdout_line）。
-    // 机读契约随之改为 IPC `pairing.start`：tools/ipc-lib.sh 的
-    // `ipc_pair_qr`（dogfood-smoke / scenarios / android-*.sh）与
-    // tools/win-smoke.ps1 都走它，不再 grep stdout。
-    // 日志里只记「配对已开始」这件事实，不记内容。
-    println!(
-        "{}",
-        daemon::cli::pair_link_stdout_line(&qr, std::io::stdout().is_terminal())
+    // 10 分钟内有效的配对令牌（红线 4：凭据不落任何持久文件）。stdout 不等于
+    // 屏幕：macOS launchd 的 StandardOutPath 就是 <数据目录>/logs/daemon.out，
+    // systemd/nohup/脚本重定向同理。
+    // #1116 F1：所以只有 stdout 是终端（有人在屏幕前看链接）时才在启动时打开配对
+    // 入口；常驻服务 / 脚本启动一律不开，配对只在桌面端点「显示二维码」（IPC
+    // `pairing.start`）时打开（#1122 按需开放）。机读契约是 IPC `pairing.start`：
+    // tools/ipc-lib.sh 的 `ipc_pair_qr` 与 tools/win-smoke.ps1 都走它，不 grep stdout。
+    // QR 在 transport bind 之后生成（&r= 需要 live endpoint 的中继）。
+    let qr = pairing.start_at_launch(
+        std::io::stdout().is_terminal(),
+        rand_pair_token()?,
+        unix_ms_now(),
     );
-    tracing::info!("配对二维码已生成（10 分钟内有效；内容含令牌，刻意不入日志）");
+    if qr.is_some() {
+        // 日志里只记「配对已开始」这件事实，不记内容。
+        tracing::info!("配对二维码已生成（终端启动；10 分钟内有效；内容含令牌，刻意不入日志）");
+    }
+    println!("{}", daemon::cli::pair_link_stdout_line(qr.as_deref()));
 
     // DAE-01b blocker①：claim 成功后才生成/写入自己的 token（serve 写
     // 入 ipc.token）。claim 期间的探测用的是前任 token。
