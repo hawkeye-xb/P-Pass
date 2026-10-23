@@ -17,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -26,6 +27,19 @@ import com.hawkeyexb.ppass.R
 /** The 6-digit pairing code in two groups of three (`123456` → `123 456`); anything else is shown as is. */
 internal fun groupPairCode(code: String): String =
     if (code.length == 6) code.substring(0, 3) + " " + code.substring(3) else code
+
+/**
+ * Type levels of [ConfirmDesktopScreen], most to least prominent: title > computer name > explanation >
+ * fingerprint (small monospace; it is a string to compare, not the page's conclusion). tokens.json
+ * mobile-ui.type.pair-* records the same values.
+ */
+internal object ConfirmDesktopType {
+    val Title = 30.sp
+    val Name = 22.sp
+    val Body = PPSize.BodyMin
+    val Label = 14.sp
+    val Fingerprint = 14.sp
+}
 
 /**
  * "Connect to this computer?": the computer's name and its identity (the same `AB12 CD34` the
@@ -44,30 +58,30 @@ fun ConfirmDesktopScreen(name: String, fingerprint: String, onConnect: () -> Uni
                 verticalArrangement = Arrangement.Center,
             ) {
                 Text(
-                    stringResource(R.string.pair_confirm_desktop_title), fontSize = 30.sp, lineHeight = 38.sp,
+                    stringResource(R.string.pair_confirm_desktop_title), fontSize = ConfirmDesktopType.Title, lineHeight = 38.sp,
                     fontFamily = PPFont.Serif, color = PPColor.Ink, textAlign = TextAlign.Center,
                 )
                 Spacer(Modifier.height(24.dp))
                 Text(
-                    stringResource(R.string.pair_desktop_name_label), fontSize = 14.sp,
+                    stringResource(R.string.pair_desktop_name_label), fontSize = ConfirmDesktopType.Label,
                     fontWeight = FontWeight.Bold, color = PPColor.Ink40,
                 )
                 Text(
-                    name, fontSize = 22.sp, fontWeight = FontWeight.Bold,
+                    name, fontSize = ConfirmDesktopType.Name, fontWeight = FontWeight.Bold,
                     color = PPColor.Ink, textAlign = TextAlign.Center,
                 )
                 Spacer(Modifier.height(16.dp))
                 Text(
-                    stringResource(R.string.pair_desktop_identity_label), fontSize = 14.sp,
+                    stringResource(R.string.pair_desktop_identity_label), fontSize = ConfirmDesktopType.Label,
                     fontWeight = FontWeight.Bold, color = PPColor.Ink40,
                 )
                 Text(
-                    fingerprint, fontSize = 28.sp, fontWeight = FontWeight.Bold,
-                    letterSpacing = 2.sp, color = PPColor.Ink, textAlign = TextAlign.Center,
+                    fingerprint, fontSize = ConfirmDesktopType.Fingerprint, fontFamily = FontFamily.Monospace,
+                    letterSpacing = 1.sp, color = PPColor.Ink60, textAlign = TextAlign.Center,
                 )
                 Spacer(Modifier.height(20.dp))
                 Text(
-                    stringResource(R.string.pair_confirm_desktop_body), fontSize = PPSize.BodyMin,
+                    stringResource(R.string.pair_confirm_desktop_body), fontSize = ConfirmDesktopType.Body,
                     lineHeight = 26.sp, color = PPColor.Ink40, textAlign = TextAlign.Center,
                 )
                 Spacer(Modifier.height(32.dp))

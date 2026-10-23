@@ -28,25 +28,33 @@ final class PairReviewTypeTests: XCTestCase {
         }
     }
 
-    private func pt(_ level: PairReviewType.Level, _ c: UIContentSizeCategory) -> CGFloat {
+    /// 核对页用的 PPFont 语义样式（PPStyle.swift）：title2 = 衬线 30 随 title2、title3 = 衬线 24 随 title3、
+    /// body = 17 随 body、monoSmall = 系统等宽 footnote（13）。字号与 tokens.json 的 iOS 登记值核对，样式与 PPFont 一致。
+    private typealias Level = (size: CGFloat, style: Font.TextStyle)
+    private let titleLevel: Level = (PPUI.TextSize.pairTitle, .title2)
+    private let nameLevel: Level = (PPUI.TextSize.pairName, .title3)
+    private let bodyLevel: Level = (PPUI.TextSize.pairBody, .body)
+    private let fingerprintLevel: Level = (PPUI.TextSize.pairFingerprint, .footnote)
+
+    private func pt(_ level: Level, _ c: UIContentSizeCategory) -> CGFloat {
         UIFontMetrics(forTextStyle: uiStyle(level.style)).scaledValue(for: level.size, compatibleWith: UITraitCollection(preferredContentSizeCategory: c))
     }
 
     func testHierarchyHoldsAtEveryContentSize() {
         for c in categories {
-            let title = pt(PairReviewType.title, c), name = pt(PairReviewType.name, c)
-            let body = pt(PairReviewType.body, c), fp = pt(PairReviewType.fingerprint, c)
-            XCTAssertGreaterThan(title, name, "\(c.rawValue)：标题 \(title) 必须大于电脑名 \(name)")
-            XCTAssertGreaterThan(name, body, "\(c.rawValue)：电脑名 \(name) 必须大于说明 \(body)")
-            XCTAssertGreaterThan(body, fp, "\(c.rawValue)：说明 \(body) 必须大于指纹 \(fp)")
+            let t = pt(titleLevel, c), n = pt(nameLevel, c), b = pt(bodyLevel, c), f = pt(fingerprintLevel, c)
+            XCTAssertGreaterThan(t, n, "\(c.rawValue)：标题 \(t) 必须大于电脑名 \(n)")
+            XCTAssertGreaterThan(n, b, "\(c.rawValue)：电脑名 \(n) 必须大于说明 \(b)")
+            XCTAssertGreaterThan(b, f, "\(c.rawValue)：说明 \(b) 必须大于指纹 \(f)")
         }
     }
 
-    /// 默认字号下的值就是 tokens.json（Android 基础值叠 platforms.ios）。
-    func testDefaultSizesComeFromTokens() {
-        XCTAssertEqual(pt(PairReviewType.title, .large), 30)
-        XCTAssertEqual(pt(PairReviewType.name, .large), 22)
-        XCTAssertEqual(pt(PairReviewType.body, .large), 17)
-        XCTAssertEqual(pt(PairReviewType.fingerprint, .large), 15)
+    /// tokens.json 登记的 iOS 值就是 PPFont 语义样式的基准字号（monoSmall 是系统 footnote，默认 13）。
+    func testRegisteredSizesAreThePPFontStyles() {
+        XCTAssertEqual(PPUI.TextSize.pairTitle, 30, "PPFont.title2")
+        XCTAssertEqual(PPUI.TextSize.pairName, 24, "PPFont.title3")
+        XCTAssertEqual(PPUI.TextSize.pairBody, PPSize.bodyMin, "PPFont.body")
+        XCTAssertEqual(PPUI.TextSize.pairFingerprint, UIFont.preferredFont(forTextStyle: .footnote, compatibleWith: UITraitCollection(preferredContentSizeCategory: .large)).pointSize, "PPFont.monoSmall")
+        XCTAssertEqual(PPUI.TextSize.pairLabel, 12, "PPFont.captionBold")
     }
 }

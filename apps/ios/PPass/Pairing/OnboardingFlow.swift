@@ -275,42 +275,26 @@ struct PairCodeView: View {
     }
 }
 
-/// 核对页的字号层级：标题 > 电脑名 > 说明 > 指纹（小号等宽）。字号取 tokens.json mobile-ui.type.pair-*（Android ConfirmDesktopScreen 为基础值，
-/// iOS 偏离见 platforms.ios），每一级都跟一个系统文字样式随动态字号缩放——不许有固定字号，否则调大系统字号后层级会倒挂。
-enum PairReviewType {
-    typealias Level = (size: CGFloat, style: Font.TextStyle)
-    static let title: Level = (PPUI.TextSize.pairTitle, .title)
-    static let name: Level = (PPUI.TextSize.pairName, .title3)
-    static let body: Level = (PPUI.TextSize.pairBody, .body)
-    static let fingerprint: Level = (PPUI.TextSize.pairFingerprint, .subheadline)
-    static let label: Level = (PPUI.TextSize.pairLabel, .footnote)
-}
-
 /// 「要连接这台电脑吗？」核对页：电脑名 + 指纹 + 说明，[连接] [取消]。
 struct PairReviewScreen: View {
     let info: PairDesktopInfo
     let onConnect: () -> Void
     let onCancel: () -> Void
-    /// 等宽字体没有 `relativeTo`，用 ScaledMetric 让指纹和其余几级一样随动态字号缩放。
-    @ScaledMetric(relativeTo: PairReviewType.fingerprint.style) private var fingerprintSize = PairReviewType.fingerprint.size
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text(L.s("pair_confirm_desktop_title"))
-                    .font(PPFont.serif(PairReviewType.title.size, .regular, relativeTo: PairReviewType.title.style))
+                // 字号层级（主 → 次）：标题 title2 > 电脑名 title3 > 说明 body > 指纹 monoSmall，全是 PPFont 语义样式，随系统字号缩放。
+                Text(L.s("pair_confirm_desktop_title")).font(PPFont.title2)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 VStack(alignment: .leading, spacing: 16) {
                     field(L.s("pair_desktop_name_label"),
-                          Text(info.name).font(PPFont.sans(PairReviewType.name.size, .bold, relativeTo: PairReviewType.name.style)))
+                          Text(info.name).font(PPFont.title3))
                     field(L.s("pair_desktop_identity_label"),
-                          Text(info.fingerprint).font(.system(size: fingerprintSize, weight: .semibold, design: .monospaced))
-                              .minimumScaleFactor(0.6).lineLimit(1)
+                          Text(info.fingerprint).font(PPFont.monoSmall)
                               .accessibilityIdentifier("pairFingerprint"))
                 }
-                Text(L.s("pair_confirm_desktop_body"))
-                    .font(PPFont.sans(PairReviewType.body.size, relativeTo: PairReviewType.body.style))
-                    .foregroundStyle(PPColor.ink40).lineSpacing(5)
+                Text(L.s("pair_confirm_desktop_body")).font(PPFont.body).foregroundStyle(PPColor.ink40).lineSpacing(5)
             }
             .padding(34)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -327,7 +311,7 @@ struct PairReviewScreen: View {
 
     private func field(_ label: String, _ value: some View) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(label).font(PPFont.sans(PairReviewType.label.size, .bold, relativeTo: PairReviewType.label.style)).foregroundStyle(PPColor.ink40)
+            Text(label).font(PPFont.captionBold).foregroundStyle(PPColor.ink40)
             value.foregroundStyle(PPColor.ink)
         }
     }
