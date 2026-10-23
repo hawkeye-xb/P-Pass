@@ -1577,8 +1577,8 @@ pub fn run() {
     }
 
     // DESK-24 (#173)：数据目录搬家，排在**一切**读 data dir 的动作之前——
-    // 包括 setup 里的 start_event_stream（它会走 token_candidates() →
-    // data_dir()）。搬家是幂等的：daemon 那边多半已经在登录时搬过了，
+    // 包括 setup 里的 start_event_stream（它要按 data_dir() 找常驻 daemon 的
+    // 端点）。搬家是幂等的：daemon 那边多半已经在登录时搬过了，
     // 这里再调一次只会得到「无遗留位置需要搬迁」。
     //
     // 桌面壳为什么也要调：升级后用户先开 App、daemon 还没被拉起来的那条
