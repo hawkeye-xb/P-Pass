@@ -89,7 +89,7 @@ is_release_install() {
 refuse_release() {
   is_release_install || return 0
   if [ -n "$(running_pids "$SHELL_EXE")" ] || [ -n "$(daemon_pid)" ]; then
-    die "正式版正在运行（$APP）。先退出正式版：菜单栏「退出」并停止后台服务，再把正式包移走；
+    die "正式版正在运行（${APP}）。先退出正式版：菜单栏「退出」并停止后台服务，再把正式包移走；
        mac-dev 不会替换、备份或恢复正式包。"
   fi
   die "$APP 是正式包。mac-dev 不会替换、备份或恢复它——要进开发模式先自己把它移走。"
