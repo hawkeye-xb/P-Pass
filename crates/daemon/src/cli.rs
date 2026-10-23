@@ -198,17 +198,20 @@ pub fn humanize_bind_error(addr: Option<std::net::SocketAddr>, raw: &str) -> Str
 /// 配对链接带 10 分钟内有效的令牌，**只能给眼前的终端看**。stdout 不是终端
 /// 时它几乎一定落进了某个文件——macOS launchd 的 `StandardOutPath`
 /// （`<数据目录>/logs/daemon.out`）、systemd/journald、`nohup … >`、
-/// 脚本的 `> daemon.log`——这时只打一句不含链接的提示，告诉人/脚本改走
-/// IPC `pairing.start`（桌面端显示二维码走的也是它）。
+/// 脚本的 `> daemon.log`。
+///
+/// #1116 F1：所以只有终端启动（人就在屏幕前、看得到链接）才在启动时打开配对入口，
+/// `qr` 是 `Some`；其余启动方式根本不开（`None`），只打一句不含链接的提示，告诉人/
+/// 脚本改走 IPC `pairing.start`（桌面端显示二维码走的也是它）——没人看得到二维码时
+/// 开着 10 分钟的配对窗口，违背 #1122「配对入口按需开放」。
 ///
 /// 提示里**刻意不出现 `ppf://pair` 字面量**：验收口径就是日志里这个串计数为 0。
-pub fn pair_link_stdout_line(qr: &str, stdout_is_terminal: bool) -> String {
-    if stdout_is_terminal {
-        format!("配对二维码内容（10 分钟内有效）: {qr}")
-    } else {
-        "配对链接未打印：stdout 不是终端（多半被重定向进了日志文件），\
-         链接含令牌不能落盘。请用桌面端显示二维码，或经 IPC `pairing.start` 获取。"
-            .to_string()
+pub fn pair_link_stdout_line(qr: Option<&str>) -> String {
+    match qr {
+        Some(qr) => format!("配对二维码内容（10 分钟内有效）: {qr}"),
+        None => "配对入口未打开：stdout 不是终端（多半被重定向进了日志文件），\
+                 链接含令牌不能落盘。请用桌面端显示二维码，或经 IPC `pairing.start` 获取。"
+            .to_string(),
     }
 }
 
@@ -255,10 +258,10 @@ mod tests {
 
     #[test]
     fn pair_link_printed_only_to_a_terminal() {
-        let tty = pair_link_stdout_line(QR, true);
+        let tty = pair_link_stdout_line(Some(QR));
         assert!(tty.contains(QR), "终端下应打印完整链接:\n{tty}");
 
-        let redirected = pair_link_stdout_line(QR, false);
+        let redirected = pair_link_stdout_line(None);
         assert!(
             !redirected.contains("ppf://pair"),
             "非终端时不许出现配对链接字面量:\n{redirected}"

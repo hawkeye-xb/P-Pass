@@ -389,6 +389,18 @@ impl Pairing {
         self
     }
 
+    /// #1116 F1：daemon 启动时要不要打开配对入口。只有终端启动（人在屏幕前、看得到
+    /// stdout 上的链接）才开；常驻服务 / 脚本启动没人看得到二维码，一律不开，配对只在
+    /// 桌面端显示二维码（IPC `pairing.start`）时打开（#1122 按需开放）。
+    pub fn start_at_launch(
+        &self,
+        stdout_is_terminal: bool,
+        token: [u8; 12],
+        now_ms: i64,
+    ) -> Option<String> {
+        stdout_is_terminal.then(|| self.start(token, now_ms))
+    }
+
     /// Issue a fresh one-time token and return the QR content string.
     pub fn start(&self, token: [u8; 12], now_ms: i64) -> String {
         let mut inner = self.inner.lock().expect("pairing lock");
@@ -1122,6 +1134,19 @@ mod tests {
                 format!("ppf://pair?node={}&t={}", "ab".repeat(32), "11".repeat(12))
             );
         });
+    }
+
+    /// #1116 F1：常驻服务启动（stdout 不是终端）不开配对窗口，未配对对端进不来；终端启动才开。
+    /// 反证：`start_at_launch` 忽略 `stdout_is_terminal` 恒开，第一条变红。
+    #[tokio::test]
+    async fn launch_opens_pairing_only_for_a_terminal() {
+        let db = Db::open_in_memory().await.unwrap();
+        let (pairing, _rx) = Pairing::new(db, transport::NodeId([0xAB; 32]), None);
+        let phone = transport::NodeId([0x01; 32]);
+        assert!(pairing.start_at_launch(false, [0x11; 12], 1_000).is_none());
+        assert!(!pairing.admits(phone, 1_000), "后台启动：窗口关着");
+        assert!(pairing.start_at_launch(true, [0x12; 12], 1_000).is_some());
+        assert!(pairing.admits(phone, 1_000), "终端启动：窗口开着");
     }
 
     /// #1122：配对窗口跟着二维码走——没有令牌时关着；`start` 后开着；令牌过期或

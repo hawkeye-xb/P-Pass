@@ -51,6 +51,21 @@ class Card1051MemberProbeTest {
         assertEquals(listOf(Methods.HELLO), desk.methods)
     }
 
+    /**
+     * #1116 N1: a computer this phone never paired with claims "you're a member" — the claim is
+     * ignored and the computer is not even asked, so pairing goes through the #1118 code. Red if the
+     * gate is dropped (the forged member reply would be returned).
+     */
+    @Test
+    fun unknownComputerClaimingMembershipIsNotTrusted() = runTest {
+        val forged = Desk { helloOk("f".repeat(32), name = "Forged PC") }
+        assertNull(trustedMembership(knownDesktop = false, rpc = forged))
+        assertTrue("an unknown computer must not be probed", forged.methods.isEmpty())
+
+        val known = Desk { helloOk("e".repeat(32)) }
+        assertEquals("e".repeat(32), trustedMembership(knownDesktop = true, rpc = known)!!.pairingId)
+    }
+
     @Test
     fun unpairedHelloWithoutPairingIdIsNotAMember() = runTest {
         for (pid in listOf(null, "")) {

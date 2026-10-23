@@ -287,11 +287,14 @@ final class LivePairing: PairingService, @unchecked Sendable {
         // 已是这台电脑的成员（电脑换了地址 / 身份）：hello 对成员带回非空 pairing_id，未配对（含配对记录已被电脑删除）的设备拿不到
         // （这类 hello 直接被拒 not_paired），语义对位 Android（#1051）。hello 超时 / 被拒 / 没带 pairingId 都落回正常配对，
         // 不存空 pairingId / 空电脑名（#970）。
-        let member = await memberHello(rpc)
+        //
+        // #1116 N1：「你已是成员」是电脑自己说的——只信本机已经配对完成过的那台（同一 NodeId，同 SSH known_hosts）；
+        // 二维码指向别的节点一律走验证码，不然伪造的二维码自称成员就绕过了 #1118 的验证码。对位 Android `trustedMembership`。
+        // 「连没连过」必须在 save 之前定：save 里的 onPaired 会把这台标成连过（#982：之前顺序反了，firstTime 恒为 false）。
+        let known = onboarded(code.nodeId)
+        let member: MemberHello = known ? await memberHello(rpc) : .none
         if case let .outdated(side) = member { return PairVerdict.versionMismatch(side).outcome }
         if case let .hello(hello) = member, let pairingId = hello.pairingId, !pairingId.isEmpty {
-            // 「连没连过」必须在 save 之前定：save 里的 onPaired 会把这台标成连过（#982：之前顺序反了，firstTime 恒为 false）。
-            let known = onboarded(code.nodeId)
             do {
                 let settingSaveFailed = try save(code, name: hello.deviceName, pairingId: pairingId, known: known)
                 return .joined(firstTime: !known, settingSaveFailed: settingSaveFailed)

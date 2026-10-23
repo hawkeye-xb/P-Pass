@@ -195,6 +195,13 @@ suspend fun probeMembership(
 }
 
 /**
+ * #1116 N1: the member shortcut (#1051) only for a computer this phone already finished pairing
+ * with. Unknown computer ⇒ null without even asking it, so the caller goes through the code.
+ */
+suspend fun trustedMembership(knownDesktop: Boolean, rpc: PairRpc): Hello? =
+    if (knownDesktop) probeMembership(rpc) else null
+
+/**
  * NET-10 state machine: capability check → "connect to this computer?" (#1118) → submit with
  * the PAKE commitment → show the code → poll pair.status / answer pair.confirm.
  *
@@ -523,6 +530,7 @@ suspend fun pairWithQr(
     unparseableCodeMessage: String =
         "The pairing code cannot be parsed. Update P-Pass on both the computer and phone to the latest version.",
     storageDeviceNameFallback: String = "P-Pass storage",
+    knownDesktop: (nodeIdHex: String) -> Boolean = { false },
 ): PairOutcome {
     val parsed = try {
         parsePairingQr(qr)
@@ -545,11 +553,17 @@ suspend fun pairWithQr(
         ?: ""
 
     // Already a member on this storage (same phone, the computer's
-    // identity/address changed)? Then no pair.request is needed — and
-    // it would be REFUSED (members can't re-apply). #1051: hello is the
-    // probe; the desktop returns pairing_id only to a paired,
-    // non-revoked member. Unpaired / revoked / unreachable → pair normally.
-    val member = probeMembership(
+    // address changed)? Then no pair.request is needed — and it would be
+    // REFUSED (members can't re-apply). #1051: hello is the probe; the
+    // desktop returns pairing_id only to a paired, non-revoked member.
+    // Unpaired / revoked / unreachable → pair normally.
+    //
+    // #1116 N1: "you're a member" is the computer's own claim — only believe it from a computer this
+    // phone has already finished pairing with (same NodeId, like SSH known_hosts). A QR pointing at
+    // any other node goes through the code, otherwise a forged QR could claim membership and
+    // skip the #1118 code entirely.
+    val member = trustedMembership(
+        knownDesktop = knownDesktop(parsed.nodeIdHex),
         rpc = { method, params -> client.call(addr, method, params) },
     )
     if (member != null) {
