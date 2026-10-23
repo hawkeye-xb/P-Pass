@@ -17,7 +17,7 @@ function body(src, name) {
 test("关掉二维码弹窗就关闭配对窗口", () => {
   expect(body(app, "closePairModal")).toContain('call("pairing.stop")');
   expect(DAEMON_COMMANDS["pairing.stop"]).toBe("daemon_pairing_stop");
-  expect(api).toContain('forward(&app, "pairing.stop"');
+  expect(api).toContain('forward(app, "pairing.stop"');
 });
 
 // 反证：Rust 命令仍收 include_revoked，第二条变红（壳里设备列表会拿不到已离开的设备）。

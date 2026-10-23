@@ -15,7 +15,18 @@ use crate::{ipc, ServiceStateManager};
 use tauri::Manager;
 
 /// 所有具名命令的同一条出口：发出去，失败记进诊断（DESK-63 #946）。
-fn forward<R: tauri::Runtime>(
+///
+/// 等 IPC 是阻塞活（`pairing.confirm` 要等手机回执，最多 8s），放阻塞线程池：
+/// 同步命令跑在主线程上，等待期间整个窗口无响应（统一回归：点「确认加入」卡约 1s）。
+async fn forward<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    method: &'static str,
+    params: Value,
+) -> Result<Value, String> {
+    crate::off_main(move || forward_blocking(&app, method, params)).await?
+}
+
+fn forward_blocking<R: tauri::Runtime>(
     app: &tauri::AppHandle<R>,
     method: &str,
     params: Value,
@@ -32,44 +43,44 @@ fn forward<R: tauri::Runtime>(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_status<R: tauri::Runtime>(
+pub(crate) async fn daemon_status<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     shell_version: Option<String>,
 ) -> Result<Value, String> {
-    forward(&app, "status", json!({ "shell_version": shell_version }))
+    forward(app, "status", json!({ "shell_version": shell_version })).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_low_space_ack<R: tauri::Runtime>(
+pub(crate) async fn daemon_low_space_ack<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
 ) -> Result<Value, String> {
-    forward(&app, "low_space.ack", json!({}))
+    forward(app, "low_space.ack", json!({})).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_pairing_start<R: tauri::Runtime>(
+pub(crate) async fn daemon_pairing_start<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
 ) -> Result<Value, String> {
-    forward(&app, "pairing.start", json!({}))
+    forward(app, "pairing.start", json!({})).await
 }
 
 /// #1122：二维码关闭——配对窗口立即关闭（收回未用的令牌）。
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_pairing_stop<R: tauri::Runtime>(
+pub(crate) async fn daemon_pairing_stop<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
 ) -> Result<Value, String> {
-    forward(&app, "pairing.stop", json!({}))
+    forward(app, "pairing.stop", json!({})).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_pairing_pending<R: tauri::Runtime>(
+pub(crate) async fn daemon_pairing_pending<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
 ) -> Result<Value, String> {
-    forward(&app, "pairing.pending", json!({}))
+    forward(app, "pairing.pending", json!({})).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_pairing_confirm<R: tauri::Runtime>(
+pub(crate) async fn daemon_pairing_confirm<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     accept: bool,
     node_id: Option<String>,
@@ -78,110 +89,115 @@ pub(crate) fn daemon_pairing_confirm<R: tauri::Runtime>(
     code: Option<String>,
 ) -> Result<Value, String> {
     forward(
-        &app,
+        app,
         "pairing.confirm",
         json!({ "accept": accept, "node_id": node_id, "device_name": device_name, "code": code }),
     )
+    .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_devices_list<R: tauri::Runtime>(
+pub(crate) async fn daemon_devices_list<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     include_departed: bool,
 ) -> Result<Value, String> {
     forward(
-        &app,
+        app,
         "devices.list",
         json!({ "include_departed": include_departed }),
     )
+    .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_device_watermarks<R: tauri::Runtime>(
+pub(crate) async fn daemon_device_watermarks<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
 ) -> Result<Value, String> {
-    forward(&app, "device.watermarks", json!({}))
+    forward(app, "device.watermarks", json!({})).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_device_revoke<R: tauri::Runtime>(
+pub(crate) async fn daemon_device_revoke<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     node_id: String,
 ) -> Result<Value, String> {
-    forward(&app, "device.revoke", json!({ "node_id": node_id }))
+    forward(app, "device.revoke", json!({ "node_id": node_id })).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_device_rename<R: tauri::Runtime>(
+pub(crate) async fn daemon_device_rename<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     node_id: String,
     name: String,
 ) -> Result<Value, String> {
     forward(
-        &app,
+        app,
         "device.rename",
         json!({ "node_id": node_id, "name": name }),
     )
+    .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_device_folder<R: tauri::Runtime>(
+pub(crate) async fn daemon_device_folder<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     node_id: String,
 ) -> Result<Value, String> {
-    forward(&app, "device.folder", json!({ "node_id": node_id }))
+    forward(app, "device.folder", json!({ "node_id": node_id })).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_audit_list<R: tauri::Runtime>(
+pub(crate) async fn daemon_audit_list<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     limit: u32,
     visibility: String,
 ) -> Result<Value, String> {
     forward(
-        &app,
+        app,
         "audit.list",
         json!({ "limit": limit, "visibility": visibility }),
     )
+    .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_timeline_page<R: tauri::Runtime>(
+pub(crate) async fn daemon_timeline_page<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     cursor: Option<String>,
     limit: u32,
 ) -> Result<Value, String> {
     forward(
-        &app,
+        app,
         "timeline.page",
         json!({ "cursor": cursor, "limit": limit }),
     )
+    .await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_thumb_get<R: tauri::Runtime>(
+pub(crate) async fn daemon_thumb_get<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     hash: String,
     // 后台 `ThumbSize` 的线上格式是整数（256 / 1024），前端也传数字。
     size: u32,
 ) -> Result<Value, String> {
-    forward(&app, "thumb.get", json!({ "hash": hash, "size": size }))
+    forward(app, "thumb.get", json!({ "hash": hash, "size": size })).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_asset_original<R: tauri::Runtime>(
+pub(crate) async fn daemon_asset_original<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     hash: String,
 ) -> Result<Value, String> {
-    forward(&app, "asset.original", json!({ "hash": hash }))
+    forward(app, "asset.original", json!({ "hash": hash })).await
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_asset_path<R: tauri::Runtime>(
+pub(crate) async fn daemon_asset_path<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     hash: String,
 ) -> Result<Value, String> {
-    forward(&app, "asset.path", json!({ "hash": hash }))
+    forward(app, "asset.path", json!({ "hash": hash })).await
 }
 
 #[cfg(test)]
@@ -230,6 +246,62 @@ mod tests {
             ("daemon_asset_original", json!({ "hash": "00" })),
             ("daemon_asset_path", json!({ "hash": "00" })),
         ]
+    }
+
+    #[tauri::command]
+    fn probe_sync_wait() -> Result<(), String> {
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        Ok(())
+    }
+
+    #[tauri::command]
+    async fn probe_async_wait() -> Result<(), String> {
+        crate::off_main(|| std::thread::sleep(std::time::Duration::from_millis(400))).await
+    }
+
+    /// 根因证据（确认加入卡约 1s）：同步命令在**投递 IPC 消息的那个线程**上把活干完
+    /// 才返回——真实 App 里那就是主线程（WKWebView / WebView2 的消息回调），等 IPC
+    /// 期间窗口无响应。async + off_main 的命令，消息投递立刻返回。
+    #[test]
+    fn sync_command_holds_the_delivering_thread() {
+        let app = mock_builder()
+            .invoke_handler(tauri::generate_handler![probe_sync_wait, probe_async_wait])
+            .build(mock_context(noop_assets()))
+            .expect("mock app");
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview");
+        let deliver = |cmd: &str| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let started = std::time::Instant::now();
+            webview.as_ref().clone().on_message(
+                InvokeRequest {
+                    cmd: cmd.into(),
+                    callback: CallbackFn(0),
+                    error: CallbackFn(1),
+                    url: "tauri://localhost".parse().unwrap(),
+                    body: InvokeBody::Json(json!({})),
+                    headers: Default::default(),
+                    invoke_key: INVOKE_KEY.to_string(),
+                },
+                Box::new(move |_, _, _, _, _| {
+                    let _ = tx.send(());
+                }),
+            );
+            let held = started.elapsed();
+            rx.recv().expect("response");
+            held
+        };
+        let sync_held = deliver("probe_sync_wait");
+        let async_held = deliver("probe_async_wait");
+        assert!(
+            sync_held >= std::time::Duration::from_millis(350),
+            "sync 占住了 {sync_held:?}"
+        );
+        assert!(
+            async_held < std::time::Duration::from_millis(100),
+            "async 占住了 {async_held:?}"
+        );
     }
 
     #[test]

@@ -87,6 +87,7 @@ function desktop() {
           case "pairing.start":
             return { qr: "ppf://pair?node=aa&t=bb" };
           case "pairing.confirm":
+            if (d.confirmGate) await d.confirmGate;
             if (d.confirmError) throw d.confirmError;
             return d.confirmReply ?? { decided: true };
           case "devices.list":
@@ -196,6 +197,28 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
     const calls = confirmCalls();
     expect(calls).toHaveLength(1);
     expect(calls[0][1]).toMatchObject({ accept: true, node_id: "a".repeat(64), code: "123456" });
+  });
+
+  // 确认要等手机回执（daemon 最多 8s）：等待期间按钮置灰 + 转圈，不能重复提交。
+  // 反证：去掉 pairBusy → 第二次点击也发出 pairing.confirm，红。
+  it("提交中：确认键转圈、两个按钮置灰，重复点击不重发", async () => {
+    const d = desktop();
+    let release;
+    d.confirmGate = new Promise((r) => (release = r));
+    render(App);
+    await settle();
+    await openRow(d, [row("a", "妈妈的手机")]);
+    await fireEvent.input(screen.getByTestId("pair-code-input"), { target: { value: "123456" } });
+    const ok = screen.getByTestId("pair-code-confirm");
+    await fireEvent.click(ok);
+    await settle();
+    expect(ok.getAttribute("aria-busy")).toBe("true");
+    expect(ok.disabled).toBe(true);
+    expect(screen.getByRole("button", { name: "拒绝" }).disabled).toBe(true);
+    await fireEvent.click(ok);
+    expect(confirmCalls()).toHaveLength(1);
+    release();
+    await settle();
   });
 
   it("码错：提示这次配对已作废", async () => {

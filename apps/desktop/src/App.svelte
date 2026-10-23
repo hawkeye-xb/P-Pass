@@ -42,6 +42,7 @@
   import { Card } from "$lib/components/ui/card";
   import { Dialog } from "$lib/components/ui/dialog";
   import { InputOTP } from "$lib/components/ui/input-otp";
+  import Loader2Icon from "@lucide/svelte/icons/loader-2";
   import { Toaster } from "$lib/components/ui/sonner";
   import { NavItem } from "$lib/components/ui/nav-item";
   import { toast } from "svelte-sonner";
@@ -563,8 +564,14 @@
 
   // #1118：每一行的验证码输入（按 node_id）。
   let pairCodes = $state({});
+  // 正在提交的那一行（按 node_id）：daemon 要等手机回执（最多 8s），等待期间
+  // 这一行的按钮置灰、确认键转圈，防止重复提交。
+  let pairBusy = $state({});
 
   async function confirmPair(accept, item, code = null) {
+    const id = item?.node_id;
+    if (id && pairBusy[id]) return;
+    if (id) pairBusy = { ...pairBusy, [id]: accept ? "allow" : "deny" };
     try {
       // UX-08: 逐行处理——pairing.confirm 精确确认该台。#1044：横幅与弹窗
       // 都显式传要决定的那一行（node_id），不靠「不带参数 = daemon 队首」。
@@ -593,7 +600,11 @@
       // #1118：码错了这次配对就作废——下一轮 refresh 会把这一行收掉。
       await refresh();
     } finally {
-      if (item?.node_id) pairCodes = { ...pairCodes, [item.node_id]: "" };
+      if (id) {
+        pairCodes = { ...pairCodes, [id]: "" };
+        const { [id]: _, ...rest } = pairBusy;
+        pairBusy = rest;
+      }
     }
   }
 
@@ -2173,10 +2184,13 @@
                 onEnter={() => { if (isPairCode(code)) confirmPair(true, item, code); }}
               />
               <div class="pending-actions">
-                <Button variant="secondary" class="min-w-[64px]" onclick={() => confirmPair(false, item)}>{t("ui.deny")}</Button>
+                <Button variant="secondary" class="min-w-[64px]" disabled={!!pairBusy[item.node_id]} onclick={() => confirmPair(false, item)}>{t("ui.deny")}</Button>
                 <!-- DEV-04: 按钮跟标题走。标题说「请求重新连接」而按钮说
                      「允许加入」，正是本卡要拦的串台。 -->
-                <Button class="min-w-[64px]" data-testid="pair-code-confirm" disabled={!isPairCode(code)} onclick={() => confirmPair(true, item, code)}>{t(pendingAllowKey(item))}</Button>
+                <Button class="min-w-[64px]" data-testid="pair-code-confirm" aria-busy={pairBusy[item.node_id] === "allow"} disabled={!isPairCode(code) || !!pairBusy[item.node_id]} onclick={() => confirmPair(true, item, code)}>
+                  {#if pairBusy[item.node_id] === "allow"}<Loader2Icon class="size-4 animate-spin" aria-hidden="true" />{/if}
+                  {t(pendingAllowKey(item))}
+                </Button>
               </div>
             </div>
             <!-- DEV-04: 实证副行占满整行。挤在名字那一列里会被按钮压到

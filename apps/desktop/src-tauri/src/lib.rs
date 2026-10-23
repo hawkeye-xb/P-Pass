@@ -151,7 +151,11 @@ fn set_tray_locale(app: tauri::AppHandle, lang: String) {
 // "protocol-asset")]（不在 default），需在 src-tauri/Cargo.toml 显式
 // 声明该 feature（已在 MOB-47 加）。
 #[tauri::command]
-fn allow_media_scope(app: tauri::AppHandle, hash: String) -> Result<String, String> {
+async fn allow_media_scope(app: tauri::AppHandle, hash: String) -> Result<String, String> {
+    off_main(move || allow_media_scope_blocking(app, hash)).await?
+}
+
+fn allow_media_scope_blocking(app: tauri::AppHandle, hash: String) -> Result<String, String> {
     use tauri::Manager;
     // 路径只能来自 daemon 按 hash 的记录查找，杜绝渲染进程传入任意路径。
     let resp = ipc::DaemonHandle::discover()?
@@ -184,7 +188,11 @@ fn validate_asset_file(path: &std::path::Path) -> Result<std::path::PathBuf, Str
 /// daemon (`crates/daemon/src/low_space.rs`, #1044), the "how" in the platform adapter
 /// (macOS: osascript, best effort; Windows: toast, DESK-17).
 #[tauri::command]
-fn notify_system(title: String, body: String) {
+async fn notify_system(title: String, body: String) -> Result<(), String> {
+    off_main(move || notify_system_blocking(title, body)).await
+}
+
+fn notify_system_blocking(title: String, body: String) {
     platform::adapter().notify(&title, &body);
 }
 
@@ -306,6 +314,18 @@ fn start_event_stream(app: tauri::AppHandle) {
     });
 }
 
+/// 等 IPC 或子进程（launchctl / osascript / pmset / defaults / sidecar）的命令一律
+/// 放阻塞线程池，不许在主线程上等：Tauri 的同步命令跑在主线程，等待期间整个窗口
+/// 无响应、系统转圈（统一回归：确认加入卡约 1s、向导转圈）。界面上的等待由前端
+/// 自己给 loading。哪些命令可以保持同步见 `tests::sync_commands_never_wait`。
+pub(crate) async fn off_main<T: Send + 'static>(
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| ipc::ui_err("ui.err_worker_thread", &[("err", &e)]))
+}
+
 /// First-run wizard state (T-042)：直接回答「要不要显示向导」（`show_wizard`，
 /// 判据见 [`show_wizard`]），外加向导自己要用的预填值。
 /// T-042b: `configured_library_dir` prefills the wizard's folder step from
@@ -317,7 +337,11 @@ fn start_event_stream(app: tauri::AppHandle) {
 /// 服务状态变化时前端要重读这个命令（`service-state` 事件到了就读）——
 /// `show_wizard` 依赖「服务是否在线」，那是 Rust 一侧的状态。
 #[tauri::command]
-fn wizard_state(app: tauri::AppHandle) -> Value {
+async fn wizard_state(app: tauri::AppHandle) -> Result<Value, String> {
+    off_main(move || wizard_state_blocking(app)).await
+}
+
+fn wizard_state_blocking(app: tauri::AppHandle) -> Value {
     let dir = platform::adapter().data_dir();
     // Photos must land somewhere a person can FIND (real walkthrough:
     // "传到哪儿了" had no answer while the library hid in ~/Library).
@@ -404,7 +428,11 @@ fn os_error_code(message: &str) -> Option<i32> {
 
 /// Current sleep policy, humanized for the wizard.
 #[tauri::command]
-fn power_hint() -> Value {
+async fn power_hint() -> Result<Value, String> {
+    off_main(move || power_hint_blocking()).await
+}
+
+fn power_hint_blocking() -> Value {
     match platform::adapter().power_hint() {
         platform::PowerHint::NeverSleeps => json!({ "kind": "never" }),
         platform::PowerHint::SleepsWhenIdle { minutes } => {
@@ -466,7 +494,11 @@ fn open_power_settings() {
 /// 前端（Wizard/WizardWindows 的 `fixAutoSleep`）收到 Err 就原样显示，
 /// 并始终保留「去系统设置」这条手动退路。
 #[tauri::command]
-fn disable_auto_sleep() -> Result<(), String> {
+async fn disable_auto_sleep() -> Result<(), String> {
+    off_main(move || disable_auto_sleep_blocking()).await?
+}
+
+fn disable_auto_sleep_blocking() -> Result<(), String> {
     match platform::adapter().disable_auto_sleep() {
         Ok(platform::Applied::Done) => Ok(()),
         // Unsupported / NotApplicable 都走手动退路，文案与迁移前一致。
@@ -523,9 +555,7 @@ async fn set_library_dir(library_dir: String) -> Result<(), String> {
 }
 
 async fn configure_library_off_main(library_dir: String) -> Result<(), String> {
-    tauri::async_runtime::spawn_blocking(move || configure_library(&library_dir))
-        .await
-        .map_err(|e| ipc::ui_err("ui.err_worker_thread", &[("err", &e)]))?
+    off_main(move || configure_library(&library_dir)).await?
 }
 
 /// DESK-29 (#268)：注册开机自启**之前**，先确认这个 sidecar 真的能跑、真的是
@@ -556,9 +586,7 @@ fn verify_sidecar_runs(sidecar: &std::path::Path) -> Result<(), String> {
 /// 探活、写登记、launchctl 都是阻塞活：放阻塞线程池，不占主线程（窗口不转圈）。
 #[tauri::command]
 async fn start_daemon(app: tauri::AppHandle) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || start_daemon_now(app))
-        .await
-        .map_err(|e| ipc::ui_err("ui.err_worker_thread", &[("err", &e)]))?
+    off_main(move || start_daemon_now(app)).await?
 }
 
 fn start_daemon_now(app: tauri::AppHandle) -> Result<String, String> {
@@ -691,7 +719,11 @@ fn current_service_stdio_paths() -> (Option<std::path::PathBuf>, Option<std::pat
 /// 的标记——前端缓存的状态可能是旧的（比如刚在托盘里点了停止），只有这里读才没有
 /// 竞态。返回 true = 真的拉起了；false = 按判据跳过（不是错误）。
 #[tauri::command]
-fn self_heal_daemon(app: tauri::AppHandle) -> Result<bool, String> {
+async fn self_heal_daemon(app: tauri::AppHandle) -> Result<bool, String> {
+    off_main(move || self_heal_daemon_blocking(app)).await?
+}
+
+fn self_heal_daemon_blocking(app: tauri::AppHandle) -> Result<bool, String> {
     // #1060：为更新暂停期间断连是本壳自己造成的，不是服务崩了——不拉，
     // 否则旧二进制在安装器替换前被拉回来，一次更新停两次。
     if app.state::<UpdatePause>().active() {
@@ -722,7 +754,11 @@ impl UpdatePause {
 
 /// #1060：下载或安装失败——结束暂停窗口，再按常规判据自愈（用户停过的不拉）。
 #[tauri::command]
-fn resume_after_failed_update(app: tauri::AppHandle) -> Result<bool, String> {
+async fn resume_after_failed_update(app: tauri::AppHandle) -> Result<bool, String> {
+    off_main(move || resume_after_failed_update_blocking(app)).await?
+}
+
+fn resume_after_failed_update_blocking(app: tauri::AppHandle) -> Result<bool, String> {
     app.state::<UpdatePause>().end();
     self_heal_now(&app, "update failed")
 }
@@ -800,7 +836,11 @@ fn stop_daemon_now() -> Result<(), String> {
 /// 新壳启动对账（`resume_after_update`）；安装失败（旧壳还在）→ 前端走
 /// `self_heal_daemon`。Best-effort：失败只记日志，不挡更新本身。
 #[tauri::command]
-fn pause_daemon_for_update(app: tauri::AppHandle) -> Result<(), String> {
+async fn pause_daemon_for_update(app: tauri::AppHandle) -> Result<(), String> {
+    off_main(move || pause_daemon_for_update_blocking(app)).await?
+}
+
+fn pause_daemon_for_update_blocking(app: tauri::AppHandle) -> Result<(), String> {
     // #1060：用户停过服务 = 本来就停着，更新前后都保持停止——不动。
     if !should_pause_for_update(&platform::adapter().data_dir()) {
         return Ok(());
@@ -1071,7 +1111,11 @@ fn shell_version<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> String {
 /// = `None`（前端什么都不做）。#1044 B13：判「同不同」用共享的 `version_cmp`，
 /// 前端不再自己比版本。
 #[tauri::command]
-fn pending_shell_version(app: tauri::AppHandle) -> Option<String> {
+async fn pending_shell_version(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    off_main(move || pending_shell_version_blocking(app)).await
+}
+
+fn pending_shell_version_blocking(app: tauri::AppHandle) -> Option<String> {
     pending_shell_version_of(
         platform::hosting().installed_bundle_version(),
         &shell_version(&app),
@@ -1096,7 +1140,11 @@ fn pending_shell_version_of(installed: Option<String>, running: &str) -> Option<
 /// 正常路径**不返回**（本进程被替换/被杀）；只有两层都没走成才 Err，
 /// 前端据此给"手动完全退出再打开"的兜底提示。
 #[tauri::command]
-fn relaunch_shell(app: tauri::AppHandle) -> Result<(), String> {
+async fn relaunch_shell(app: tauri::AppHandle) -> Result<(), String> {
+    off_main(move || relaunch_shell_blocking(app)).await?
+}
+
+fn relaunch_shell_blocking(app: tauri::AppHandle) -> Result<(), String> {
     // ⚠️ 闸门一：只有**launchd 自己拉起来的**这一份壳才走系统路径。
     // `kickstart -k` 的 "kill the running instance" 只能杀服务管理器启动的进程；
     // 从访达/Dock 打开的壳，launchd 手里没有它的 pid ⇒ `-k` 无物可杀 ⇒ kickstart
@@ -1323,7 +1371,11 @@ fn library_dir() -> Result<String, String> {
 /// #1122：落盘位置由用户在保存对话框里选（`out`），不再写进照片库目录。只收
 /// 绝对路径、`.zip` 结尾。返回值就是 daemon 的 `{"zip","daemon_reachable"}`。
 #[tauri::command]
-fn export_logs_bundle(app: tauri::AppHandle, out: String) -> Result<Value, String> {
+async fn export_logs_bundle(app: tauri::AppHandle, out: String) -> Result<Value, String> {
+    off_main(move || export_logs_bundle_blocking(app, out)).await?
+}
+
+fn export_logs_bundle_blocking(app: tauri::AppHandle, out: String) -> Result<Value, String> {
     let out = diag_export_target(&out).ok_or_else(|| ipc::ui_err("ui.err_generic", &[]))?;
     daemon_cli::diag_export(&daemon_cli::bundled_sidecar()?, &out, &shell_version(&app))
 }
@@ -1898,6 +1950,72 @@ mod tests {
     /// 通用转发 `daemon_call` 不在其中。
     /// 反证：handler 里加一个命令而 capability 不加（或反之），集合不等，红；
     /// 把 `daemon_call` 加回任何一处，最后一条断言红。
+    /// 统一回归（确认加入卡约 1s、向导转圈）：Tauri 的同步命令跑在主线程，等 IPC 或
+    /// 子进程期间窗口无响应。规矩：命令默认 async（阻塞活经 `off_main` 进线程池），
+    /// 保持同步的只许是下面这份白名单——纯内存 / 读本地小文件 / 托盘菜单（必须在
+    /// 主线程）/ 不等结果的 detached 打开。白名单里的函数体也不许出现等待的迹象。
+    /// 反证：把任一 daemon_* 或 export_logs_bundle 改回同步 fn → 红。
+    #[test]
+    fn sync_commands_never_wait() {
+        const SYNC_ALLOWED: &[&str] = &[
+            "set_tray_locale",
+            "service_state",
+            "platform_ux",
+            "update_failure_key",
+            "open_power_settings",
+            "daemon_startup_error",
+            "update_failure_state",
+            "clear_update_failure",
+            "pair_qr_svg",
+            "library_dir",
+            "kernel_convergence_phase",
+        ];
+        const WAITS: &[&str] = &[
+            "discover(",
+            ".call(",
+            "call_with_timeout(",
+            "Command::",
+            "command(",
+            "hosting()",
+            "daemon_cli::",
+            "thread::sleep",
+            "power_hint()",
+            ".notify(",
+        ];
+        let mut sync_cmds = Vec::new();
+        for (file, src) in [
+            ("lib.rs", include_str!("lib.rs")),
+            ("daemon_api.rs", include_str!("daemon_api.rs")),
+        ] {
+            let src = src.replace("\r\n", "\n");
+            let product = src.split("#[cfg(test)]").next().unwrap();
+            for chunk in product.split("#[tauri::command").skip(1) {
+                let sig_start = chunk.find("fn ").expect("fn");
+                let head = &chunk[..sig_start];
+                let name: String = chunk[sig_start + 3..]
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                if head.contains("async ") {
+                    continue;
+                }
+                assert!(
+                    SYNC_ALLOWED.contains(&name.as_str()),
+                    "{file}: 同步命令 {name} 不在白名单里——等 IPC/子进程的命令必须 async + off_main"
+                );
+                let body = &chunk[..chunk.find("\n}\n").expect("函数结尾")];
+                for w in WAITS {
+                    assert!(
+                        !body.contains(w),
+                        "{file}: 同步命令 {name} 里有等待迹象 {w}"
+                    );
+                }
+                sync_cmds.push(name);
+            }
+        }
+        assert!(sync_cmds.len() >= 5, "扫描没扫到命令：{sync_cmds:?}");
+    }
+
     #[test]
     fn command_lists_agree() {
         use std::collections::BTreeSet;
@@ -1961,17 +2079,23 @@ mod tests {
     fn self_heal_respects_update_pause_window() {
         let src = include_str!("lib.rs").replace("\r\n", "\n");
         let product = src.split("#[cfg(test)]").next().unwrap();
-        let heal = product.split("fn self_heal_daemon(").nth(1).unwrap();
+        let heal = product
+            .split("fn self_heal_daemon_blocking(")
+            .nth(1)
+            .unwrap();
         let heal = &heal[..heal.find("\n}\n").unwrap()];
         assert!(heal.contains("UpdatePause>().active()"));
         let resume = product
-            .split("fn resume_after_failed_update(")
+            .split("fn resume_after_failed_update_blocking(")
             .nth(1)
             .unwrap();
         let resume = &resume[..resume.find("\n}\n").unwrap()];
         let end_at = resume.find("UpdatePause>().end()").expect("先结束暂停窗口");
         assert!(end_at < resume.find("self_heal_now").unwrap());
-        let pause = product.split("fn pause_daemon_for_update(").nth(1).unwrap();
+        let pause = product
+            .split("fn pause_daemon_for_update_blocking(")
+            .nth(1)
+            .unwrap();
         let begin_at = pause
             .find("UpdatePause>().begin()")
             .expect("暂停前进入窗口");
@@ -2819,7 +2943,7 @@ mod tests {
     #[test]
     fn wizard_state_hands_the_verdict_not_the_ingredients() {
         let src = include_str!("lib.rs").replace("\r\n", "\n");
-        let body = product_fn_body(&src, "wizard_state");
+        let body = product_fn_body(&src, "wizard_state_blocking");
         for ingredient in ["\"configured\":", "\"installed\":", "\"user_stopped\":"] {
             assert!(!body.contains(ingredient), "不许把 {ingredient} 交给前端");
         }
@@ -2875,7 +2999,7 @@ mod tests {
             .find("bring_up_daemon(false)")
             .expect("自愈不杀在跑的内核");
         assert!(gate < spawn, "判据必须在 spawn 之前");
-        assert!(body("self_heal_daemon").contains("self_heal_now(&app, "));
+        assert!(body("self_heal_daemon_blocking").contains("self_heal_now(&app, "));
         let converge = body("converge_kernel_on_startup");
         let state_gate = converge
             .find("if manager.current() != ServiceState::Unreachable {")
@@ -3042,7 +3166,7 @@ mod tests {
                 "configure_library(&library_dir)",
             ),
             ("configure_library", "\"config.set_library\""),
-            ("export_logs_bundle", "daemon_cli::diag_export("),
+            ("export_logs_bundle_blocking", "daemon_cli::diag_export("),
         ] {
             let body = product_fn_body(&src, cmd);
             assert!(body.contains(call), "{cmd} 必须调 {call}：{body}");
