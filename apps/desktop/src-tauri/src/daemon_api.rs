@@ -15,7 +15,11 @@ use crate::{ipc, ServiceStateManager};
 use tauri::Manager;
 
 /// 所有具名命令的同一条出口：发出去，失败记进诊断（DESK-63 #946）。
-fn forward(app: &tauri::AppHandle, method: &str, params: Value) -> Result<Value, String> {
+fn forward<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    method: &str,
+    params: Value,
+) -> Result<Value, String> {
     match ipc::DaemonHandle::discover().and_then(|d| d.call(method, params)) {
         Ok(value) => Ok(value),
         Err(e) => {
@@ -28,37 +32,45 @@ fn forward(app: &tauri::AppHandle, method: &str, params: Value) -> Result<Value,
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_status(
-    app: tauri::AppHandle,
+pub(crate) fn daemon_status<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     shell_version: Option<String>,
 ) -> Result<Value, String> {
     forward(&app, "status", json!({ "shell_version": shell_version }))
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_low_space_ack(app: tauri::AppHandle) -> Result<Value, String> {
+pub(crate) fn daemon_low_space_ack<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<Value, String> {
     forward(&app, "low_space.ack", json!({}))
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_pairing_start(app: tauri::AppHandle) -> Result<Value, String> {
+pub(crate) fn daemon_pairing_start<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<Value, String> {
     forward(&app, "pairing.start", json!({}))
 }
 
 /// #1122：二维码关闭——配对窗口立即关闭（收回未用的令牌）。
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_pairing_stop(app: tauri::AppHandle) -> Result<Value, String> {
+pub(crate) fn daemon_pairing_stop<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<Value, String> {
     forward(&app, "pairing.stop", json!({}))
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_pairing_pending(app: tauri::AppHandle) -> Result<Value, String> {
+pub(crate) fn daemon_pairing_pending<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<Value, String> {
     forward(&app, "pairing.pending", json!({}))
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_pairing_confirm(
-    app: tauri::AppHandle,
+pub(crate) fn daemon_pairing_confirm<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     accept: bool,
     node_id: Option<String>,
     device_name: Option<String>,
@@ -73,8 +85,8 @@ pub(crate) fn daemon_pairing_confirm(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_devices_list(
-    app: tauri::AppHandle,
+pub(crate) fn daemon_devices_list<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     include_departed: bool,
 ) -> Result<Value, String> {
     forward(
@@ -85,21 +97,23 @@ pub(crate) fn daemon_devices_list(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_device_watermarks(app: tauri::AppHandle) -> Result<Value, String> {
+pub(crate) fn daemon_device_watermarks<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<Value, String> {
     forward(&app, "device.watermarks", json!({}))
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_device_revoke(
-    app: tauri::AppHandle,
+pub(crate) fn daemon_device_revoke<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     node_id: String,
 ) -> Result<Value, String> {
     forward(&app, "device.revoke", json!({ "node_id": node_id }))
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_device_rename(
-    app: tauri::AppHandle,
+pub(crate) fn daemon_device_rename<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     node_id: String,
     name: String,
 ) -> Result<Value, String> {
@@ -111,16 +125,16 @@ pub(crate) fn daemon_device_rename(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_device_folder(
-    app: tauri::AppHandle,
+pub(crate) fn daemon_device_folder<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     node_id: String,
 ) -> Result<Value, String> {
     forward(&app, "device.folder", json!({ "node_id": node_id }))
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_audit_list(
-    app: tauri::AppHandle,
+pub(crate) fn daemon_audit_list<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     limit: u32,
     visibility: String,
 ) -> Result<Value, String> {
@@ -132,8 +146,8 @@ pub(crate) fn daemon_audit_list(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_timeline_page(
-    app: tauri::AppHandle,
+pub(crate) fn daemon_timeline_page<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     cursor: Option<String>,
     limit: u32,
 ) -> Result<Value, String> {
@@ -145,20 +159,130 @@ pub(crate) fn daemon_timeline_page(
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_thumb_get(
-    app: tauri::AppHandle,
+pub(crate) fn daemon_thumb_get<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     hash: String,
-    size: String,
+    // 后台 `ThumbSize` 的线上格式是整数（256 / 1024），前端也传数字。
+    size: u32,
 ) -> Result<Value, String> {
     forward(&app, "thumb.get", json!({ "hash": hash, "size": size }))
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_asset_original(app: tauri::AppHandle, hash: String) -> Result<Value, String> {
+pub(crate) fn daemon_asset_original<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    hash: String,
+) -> Result<Value, String> {
     forward(&app, "asset.original", json!({ "hash": hash }))
 }
 
 #[tauri::command(rename_all = "snake_case")]
-pub(crate) fn daemon_asset_path(app: tauri::AppHandle, hash: String) -> Result<Value, String> {
+pub(crate) fn daemon_asset_path<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    hash: String,
+) -> Result<Value, String> {
     forward(&app, "asset.path", json!({ "hash": hash }))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{json, Value};
+    use tauri::ipc::{CallbackFn, InvokeBody};
+    use tauri::test::{get_ipc_response, mock_builder, mock_context, noop_assets, INVOKE_KEY};
+    use tauri::webview::InvokeRequest;
+
+    use crate::service_state::{ServiceState, ServiceStateManager};
+
+    /// 前端实际发出的参数（键名、JSON 类型与 App.svelte / PhotoThumb / viewer*.js 一致）。
+    /// 走 Tauri 真实的命令参数反序列化：类型对不上时命令体根本不执行、
+    /// 前端直接拿到 `invalid args`——#1120 后照片墙全灰就是这样（size 是数字 256）。
+    fn frontend_calls() -> Vec<(&'static str, Value)> {
+        vec![
+            ("daemon_status", json!({ "shell_version": "0.10.0" })),
+            ("daemon_low_space_ack", json!({})),
+            ("daemon_pairing_pending", json!({})),
+            (
+                "daemon_pairing_confirm",
+                json!({ "accept": true, "node_id": "n", "device_name": "d", "code": "123456" }),
+            ),
+            ("daemon_devices_list", json!({ "include_departed": true })),
+            ("daemon_device_watermarks", json!({})),
+            ("daemon_device_revoke", json!({ "node_id": "n" })),
+            (
+                "daemon_device_rename",
+                json!({ "node_id": "n", "name": "x" }),
+            ),
+            ("daemon_device_folder", json!({ "node_id": "n" })),
+            (
+                "daemon_audit_list",
+                json!({ "limit": 500, "visibility": "user" }),
+            ),
+            (
+                "daemon_timeline_page",
+                json!({ "cursor": null, "limit": 60 }),
+            ),
+            (
+                "daemon_timeline_page",
+                json!({ "cursor": "c", "limit": 60 }),
+            ),
+            ("daemon_thumb_get", json!({ "hash": "00", "size": 256 })),
+            ("daemon_thumb_get", json!({ "hash": "00", "size": 1024 })),
+            ("daemon_asset_original", json!({ "hash": "00" })),
+            ("daemon_asset_path", json!({ "hash": "00" })),
+        ]
+    }
+
+    #[test]
+    fn frontend_params_deserialize_into_every_named_command() {
+        let tmp = tempfile::tempdir().unwrap();
+        let app = mock_builder()
+            .manage(ServiceStateManager::new(
+                ServiceState::Running,
+                tmp.path().join("service.log"),
+            ))
+            .invoke_handler(tauri::generate_handler![
+                super::daemon_status,
+                super::daemon_low_space_ack,
+                super::daemon_pairing_pending,
+                super::daemon_pairing_confirm,
+                super::daemon_devices_list,
+                super::daemon_device_watermarks,
+                super::daemon_device_revoke,
+                super::daemon_device_rename,
+                super::daemon_device_folder,
+                super::daemon_audit_list,
+                super::daemon_timeline_page,
+                super::daemon_thumb_get,
+                super::daemon_asset_original,
+                super::daemon_asset_path,
+            ])
+            .build(mock_context(noop_assets()))
+            .expect("mock app");
+        let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("mock webview");
+
+        for (cmd, params) in frontend_calls() {
+            let res = get_ipc_response(
+                &webview,
+                InvokeRequest {
+                    cmd: cmd.into(),
+                    callback: CallbackFn(0),
+                    error: CallbackFn(1),
+                    url: "tauri://localhost".parse().unwrap(),
+                    body: InvokeBody::Json(params.clone()),
+                    headers: Default::default(),
+                    invoke_key: INVOKE_KEY.to_string(),
+                },
+            );
+            // 命令体执行了就行：本机有没有后台服务、调用成不成功不是这里要验的。
+            if let Err(e) = res {
+                let e = e.to_string();
+                assert!(
+                    !e.contains("invalid args"),
+                    "{cmd} {params}: 参数没进到命令体：{e}"
+                );
+            }
+        }
+    }
 }

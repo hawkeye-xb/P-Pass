@@ -63,6 +63,8 @@ name = "p_pass_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dev-dependencies]
+# 命令参数契约测试（daemon_api.rs）用 Tauri 自带的 mock 运行时走真实 IPC 反序列化。
+tauri = { version = "2", features = ["test"] }
 tempfile = "3"
 # #287：测试里要造「指向目录的链接」来验 MOB-47 契约，各系统机制不同。
 # 这个能力在 platform crate 的 test-support feature 里（架构红线 B.2：
