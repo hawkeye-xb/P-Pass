@@ -19,10 +19,11 @@ core-index = { path = "../core-index" }
 # DESK-16 (#165)：Windows 的系统缩略图要走 COM，而平台 cfg 只许待在
 # crates/platform（红线 B.2）。本 crate 只向它要像素，自己不带任何 cfg。
 platform = { path = "../platform" }
-# JPEG/PNG/WebP/GIF decode + resize + JPEG encode (详细设计 §4.3).
+# JPEG/PNG/WebP/GIF/BMP/ICO decode + resize + JPEG encode (详细设计 §4.3).
+# ico（内部依赖 bmp + png，不引入新的 crate）：图标也要出缩略图，否则照片墙是灰块。
 # default features off: drops the AVIF encoder (rav1e) — unused, heavy,
 # and its libfuzzer-sys dep carries an NCSA license we'd rather not allow.
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "rayon"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "ico", "rayon"] }
 # HEIC via libheif (详细设计 §4.3 指名). System library for dev/CI
 # (brew libheif / apt libheif-dev); static bundling is a release-pipeline
 # concern (T-071) — the Rust API is identical either way. Feature pinned
