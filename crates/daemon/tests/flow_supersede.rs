@@ -8,7 +8,7 @@ use core_index::{IncomingFile, IngestOutcome, Ingestor};
 use daemon::backup::BackupEngine;
 use daemon::flow_delivery::FlowDelivery;
 use proto::FlowSupersedeRequest;
-use storage::{Db, Device, Role};
+use storage::{Db, Pairing, Role};
 use tempfile::tempdir;
 use transport::{Blobs, IrohTransport, TransportConfig, ALPN_BLOBS};
 
@@ -21,19 +21,18 @@ fn fixture(kind: &str) -> Vec<u8> {
 
 async fn paired_db(epoch: &str, peer: transport::NodeId) -> Db {
     let db = Db::open_in_memory().await.unwrap();
-    db.upsert_device(&Device {
-        node_id: peer.0.to_vec(),
-        name: "phone".into(),
-        role: Role::Member,
-        paired_at: 1,
-        last_seen: None,
-        revoked: false,
-        revoked_at: None,
-        revoked_by: None,
-    })
+    db.accept_pairing(
+        &peer.0,
+        "phone",
+        &Pairing {
+            id: epoch.into(),
+            node_id: peer.0.to_vec(),
+            role: Role::Member,
+            paired_at: 1,
+        },
+    )
     .await
     .unwrap();
-    db.set_pairing_epoch(&peer.0, epoch).await.unwrap();
     db
 }
 
@@ -90,7 +89,7 @@ async fn supersede_fetches_only_the_metadata_and_replaces_in_place() {
     };
     let delivery = FlowDelivery::new(db.clone(), desk_blobs.clone(), &library);
     let req = FlowSupersedeRequest {
-        pairing_epoch: "epoch-1".into(),
+        pairing_id: "epoch-1".into(),
         old_hash: hex::encode(a),
         new_hash: hex::encode(b),
         provider: ticket,
@@ -153,7 +152,7 @@ async fn supersede_refuses_a_stale_epoch_without_touching_the_library() {
         .supersede(
             control.node_id(),
             &FlowSupersedeRequest {
-                pairing_epoch: "epoch-1".into(),
+                pairing_id: "epoch-1".into(),
                 old_hash: hex::encode([1u8; 32]),
                 new_hash: hex::encode([2u8; 32]),
                 provider: String::new(),
@@ -166,6 +165,6 @@ async fn supersede_refuses_a_stale_epoch_without_touching_the_library() {
             reply.outcome.as_str(),
             reply.reason.map_or("", |r| r.as_str())
         ),
-        ("refused", "epoch_mismatch")
+        ("refused", "pairing_mismatch")
     );
 }

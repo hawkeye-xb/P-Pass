@@ -31,7 +31,7 @@ class SqliteOrderStoreDeviceTest {
     fun close() = opened.forEach { it.close() }
 
     private fun newOrder(mediaId: Long, state: OrderState = OrderState.TRANSFERRING, hash: String? = "h$mediaId", version: String = "v1") =
-        NewOrder(mediaId = mediaId, sourceVersion = version, bucketId = 7, contentHash = hash, state = state, pairingEpoch = "e3")
+        NewOrder(mediaId = mediaId, sourceVersion = version, bucketId = 7, contentHash = hash, state = state, pairingId = "e3")
 
     @Test
     fun insertAssignsStrictlyIncreasingIdsAndTheCurrentRowIsTheNewestOnePerPhoto() {

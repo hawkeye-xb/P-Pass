@@ -33,12 +33,11 @@ import org.junit.Test
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class C413DeliveryPortTest {
     private val hash = "cd".repeat(32)
-    private val pairing = Pairing(daemonNodeId = "d", daemonAddrToken = "unused", storageDeviceName = "desk", pairingEpoch = "e1")
+    private val pairing = Pairing(daemonNodeId = "d", daemonAddrToken = "unused", storageDeviceName = "desk", pairingId = "e1")
 
     private inner class Harness(val test: TestScope) {
         val nativeEvents = mutableListOf<String>()
         val native = object : NativeIrohBlobsProvider {
-            override fun register(hash: String, source: Any): String = "ticket"
             override fun serve(hash: String): String = "ticket"
             override fun stopActiveFetch(queueSequence: Long) {
                 nativeEvents += "stop:$queueSequence"
@@ -49,9 +48,9 @@ class C413DeliveryPortTest {
             override fun revoke(hash: String) {
                 nativeEvents += "revoke"
             }
-            override fun transferStatus(): String = localStatus()
+            override fun transferStatus(): TransferStatus = localStatus()
         }
-        var localStatus: () -> String = { """{"state":"in_progress","connected":true,"idle_for_ms":0,"bytes_sent":1,"byte_idle_for_ms":0}""" }
+        var localStatus: () -> TransferStatus = { TransferStatus.InProgress(connected = true, idleForMs = 0, bytesSent = 1, byteIdleForMs = 0) }
         var statusImpl: suspend (FlowTupleRef) -> FlowStatusReply = { FlowStatusReply(state = "active") }
         val statusCalls = mutableListOf<Long>()
         var subscribeImpl: (suspend (Int, () -> Unit) -> Unit)? = null
@@ -64,7 +63,7 @@ class C413DeliveryPortTest {
         var subscribeCalls = 0
         var connectDelayMs = 0L
         val desktop = object : FlowReceiptClient {
-            override suspend fun currentPairingEpoch(): String = "e1"
+            override suspend fun currentPairingId(): String = "e1"
             override suspend fun offer(request: FlowFetchRequest): FlowStatusReply {
                 offers += request
                 offerFailure?.let { throw it }
@@ -77,7 +76,7 @@ class C413DeliveryPortTest {
             override suspend fun suspendFetch(tuple: FlowTupleRef) = suspendImpl(tuple)
         }
         val port = NativeFlowDeliveryPort(
-            bridge = IrohBlobsProviderBridge(native) { "fd" },
+            bridge = IrohBlobsProviderBridge(native),
             pairing = { pairing },
             desktopFor = { desktop },
             subscribe = { _, onConnected, onEvent ->
@@ -100,7 +99,7 @@ class C413DeliveryPortTest {
 
         fun request(orderId: Long) = DeliveryRequest(
             orderId,
-            PairingEpoch("e1"),
+            PairingId("e1"),
             hash,
             MediaDetails(MediaSnapshot(9, "1:1", 7, 1, LEGACY_VOLUME), "content://media/external/file/9", "IMG_9.jpg", "image/jpeg", 4_321, 0),
         )
@@ -112,7 +111,7 @@ class C413DeliveryPortTest {
                 "flow.delivered",
                 buildJsonObject {
                     put("queue_sequence", JsonPrimitive(orderId))
-                    put("pairing_epoch", JsonPrimitive("e1"))
+                    put("pairing_id", JsonPrimitive("e1"))
                     put("lease_token", JsonPrimitive(leaseTokenFor(orderId)))
                     put("receipt", ProtoJson.encodeToJsonElement(FlowCompletionReceipt.serializer(), receipt(orderId)))
                 },
@@ -242,7 +241,7 @@ class C413DeliveryPortTest {
     fun `hello health is parsed with the contract field names and absent means healthy`() {
         val hello = ProtoJson.decodeFromString(
             Hello.serializer(),
-            """{"proto_ver":1,"pairing_epoch":"e1","health":{"free_bytes":123,"library_writable":false,"index_ok":true}}""",
+            """{"proto_ver":1,"pairing_id":"e1","health":{"free_bytes":123,"library_writable":false,"index_ok":true}}""",
         )
         val health = desktopHealthOf(hello.health)!!
         assertEquals(DesktopHealth(123L, libraryWritable = false, indexOk = true), health)
@@ -252,7 +251,7 @@ class C413DeliveryPortTest {
         assertEquals(WaitReason.DESKTOP_STORAGE_FULL, waitReasonOf(health))
         assertEquals(WaitReason.DESKTOP_STORAGE_ERROR, waitReasonOf(DesktopHealth(null, indexOk = false)))
         assertNull(waitReasonOf(DesktopHealth(1L)))
-        val old = ProtoJson.decodeFromString(Hello.serializer(), """{"proto_ver":1,"pairing_epoch":"e1"}""")
+        val old = ProtoJson.decodeFromString(Hello.serializer(), """{"proto_ver":1,"pairing_id":"e1"}""")
         assertNull(desktopHealthOf(old.health))
         assertNull(waitReasonOf(desktopHealthOf(old.health)))
     }
@@ -286,7 +285,7 @@ class C413DeliveryPortTest {
     @Test
     fun `a local abort with a silent desktop is a path failure within the short timeout`() = runTest {
         val h = Harness(this)
-        h.localStatus = { """{"state":"aborted","hash":"$hash"}""" }
+        h.localStatus = { TransferStatus.Aborted(hash) }
         h.statusImpl = { kotlinx.coroutines.awaitCancellation() }
         val job = async { h.port.deliver(h.request(1)) {} }
         advanceTimeBy(STALL_STATUS_TIMEOUT_MS + 100)
@@ -300,12 +299,12 @@ class C413DeliveryPortTest {
     @Test
     fun `a local abort with a live desktop keeps the existing outcomes`() = runTest {
         val h = Harness(this)
-        h.localStatus = { """{"state":"aborted","hash":"$hash"}""" }
+        h.localStatus = { TransferStatus.Aborted(hash) }
         h.statusImpl = { FlowStatusReply(state = "completed", receipt = h.receipt(1)) }
         assertTrue(h.port.deliver(h.request(1)) {} is DeliveryOutcome.Confirmed)
 
         val h2 = Harness(this)
-        h2.localStatus = { """{"state":"aborted","hash":"$hash"}""" }
+        h2.localStatus = { TransferStatus.Aborted(hash) }
         val job = async { h2.port.deliver(h2.request(2)) {} }
         advanceTimeBy(10_000)
         runCurrent()

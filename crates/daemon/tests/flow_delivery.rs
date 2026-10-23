@@ -5,14 +5,14 @@ use std::sync::Arc;
 use daemon::events;
 use daemon::flow_delivery::{DeliveryError, FlowDelivery, FlowPathRegistry};
 use proto::FlowFetchRequest;
-use storage::{Asset, Db, Device, Role};
+use storage::{Asset, Db, Pairing, Role};
 use tempfile::tempdir;
 use transport::{Blobs, ConnectionStatus, IrohTransport, TransportConfig, ALPN_BLOBS};
 
 fn request(epoch: &str, lease: &str, hash: [u8; 32], provider: String) -> FlowFetchRequest {
     FlowFetchRequest {
         queue_sequence: 7,
-        pairing_epoch: epoch.into(),
+        pairing_id: epoch.into(),
         lease_token: lease.into(),
         content_hash: hex::encode(hash),
         file_name: "IMG_0007.jpg".into(),
@@ -23,21 +23,35 @@ fn request(epoch: &str, lease: &str, hash: [u8; 32], provider: String) -> FlowFe
     }
 }
 
-async fn paired_db(epoch: &str, peer: transport::NodeId) -> Db {
-    let db = Db::open_in_memory().await.unwrap();
-    db.upsert_device(&Device {
-        node_id: peer.0.to_vec(),
-        name: "phone".into(),
-        role: Role::Member,
-        paired_at: 1,
-        last_seen: None,
-        revoked: false,
-        revoked_at: None,
-        revoked_by: None,
-    })
+async fn pair(db: &Db, node: &[u8; 32], id: &str) {
+    db.accept_pairing(
+        node,
+        "phone",
+        &Pairing {
+            id: id.into(),
+            node_id: node.to_vec(),
+            role: Role::Member,
+            paired_at: 1,
+        },
+    )
     .await
     .unwrap();
-    db.set_pairing_epoch(&peer.0, epoch).await.unwrap();
+}
+
+async fn paired_db(epoch: &str, peer: transport::NodeId) -> Db {
+    let db = Db::open_in_memory().await.unwrap();
+    db.accept_pairing(
+        &peer.0,
+        "phone",
+        &Pairing {
+            id: epoch.into(),
+            node_id: peer.0.to_vec(),
+            role: Role::Member,
+            paired_at: 1,
+        },
+    )
+    .await
+    .unwrap();
     db
 }
 
@@ -141,7 +155,7 @@ async fn verified_native_fetch_materializes_before_a_durable_receipt() {
         .await
         .unwrap();
     assert_eq!(receipt.queue_sequence, 7);
-    assert_eq!(receipt.pairing_epoch, "epoch-current");
+    assert_eq!(receipt.pairing_id, "epoch-current");
     assert_eq!(receipt.lease_token, "lease-current");
     assert_eq!(receipt.content_hash, hex::encode(hash));
     assert!(!receipt.receipt_id.is_empty());
@@ -236,11 +250,12 @@ async fn concurrent_retries_of_one_grant_share_the_durable_receipt() {
 }
 
 /// REBUILD-07 RED: a phone keeps its NodeId across a revoke/rejoin, but a
-/// rejoin rotates the pairing epoch and Android restarts its durable sequence
-/// at 1. Old completed receipts must remain history, never occupy the new
-/// epoch's sequence namespace.
+/// rejoin is a brand-new pairing record with a new id, and Android restarts its
+/// durable sequence at 1. #1117: the old id's receipts are deleted together with
+/// the old pairing record (no cancelled history is kept), and the new id's
+/// sequence namespace is independent of anything the old one used.
 #[tokio::test(flavor = "multi_thread")]
-async fn rejoined_device_reuses_a_sequence_in_its_new_pairing_epoch() {
+async fn rejoined_device_reuses_a_sequence_in_its_new_pairing_id() {
     let root = tempdir().unwrap();
     let provider_transport =
         IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
@@ -278,9 +293,19 @@ async fn rejoined_device_reuses_a_sequence_in_its_new_pairing_epoch() {
         .unwrap();
     assert!(db.get_asset(&old_hash).await.unwrap().is_some());
 
-    db.set_pairing_epoch(&provider_transport.node_id().0, "epoch-after-rejoin")
+    assert!(db
+        .flow_receipt(&provider_transport.node_id().0, "epoch-before-rejoin", 7)
         .await
-        .unwrap();
+        .unwrap()
+        .is_some());
+    pair(&db, &provider_transport.node_id().0, "epoch-after-rejoin").await;
+    assert!(
+        db.flow_receipt(&provider_transport.node_id().0, "epoch-before-rejoin", 7)
+            .await
+            .unwrap()
+            .is_none(),
+        "#1117: the old pairing id's receipt goes away with the old pairing record"
+    );
     let new_bytes = b"REBUILD-07 photo after rejoin";
     let new_source = root.path().join("new.jpg");
     std::fs::write(&new_source, new_bytes).unwrap();
@@ -975,7 +1000,7 @@ async fn network_fetch_failure_logs_conn_lines_at_the_fetch_stage_body(cap: &Log
 fn tuple_ref(epoch: &str, lease: &str, queue_sequence: u64) -> proto::FlowTupleRef {
     proto::FlowTupleRef {
         queue_sequence,
-        pairing_epoch: epoch.into(),
+        pairing_id: epoch.into(),
         lease_token: lease.into(),
     }
 }
@@ -1168,7 +1193,7 @@ async fn reoffering_an_already_completed_tuple_under_a_new_lease_still_pushes_fl
 
     // Second pass: the SAME queue_sequence re-offered under a new
     // lease_token/provider (the tuple key request() always uses is
-    // queue_sequence=1, pairing_epoch="epoch-current" — see request()).
+    // queue_sequence=1, pairing_id="epoch-current" — see request()).
     // This must hit rebind_completed_flow_grant, not complete_without_fetch.
     let reoffer = request("epoch-current", "lease-second", hash, ticket);
     let rebind_reply = delivery
@@ -1881,38 +1906,39 @@ async fn suspend_on_one_device_does_not_touch_another_devices_grant_for_the_same
     let device_a = transport::NodeId([0xAA; 32]);
     let device_b = transport::NodeId([0xBB; 32]);
     let db = Db::open_in_memory().await.unwrap();
-    for (peer, name) in [(device_a, "phone-a"), (device_b, "phone-b")] {
-        db.upsert_device(&Device {
-            node_id: peer.0.to_vec(),
-            name: name.into(),
-            role: Role::Member,
-            paired_at: 1,
-            last_seen: None,
-            revoked: false,
-            revoked_at: None,
-            revoked_by: None,
-        })
+    // #1117: a pairing id is globally unique, so each device gets its own.
+    for (peer, name, id) in [
+        (device_a, "phone-a", "epoch-a"),
+        (device_b, "phone-b", "epoch-b"),
+    ] {
+        db.accept_pairing(
+            &peer.0,
+            name,
+            &Pairing {
+                id: id.into(),
+                node_id: peer.0.to_vec(),
+                role: Role::Member,
+                paired_at: 1,
+            },
+        )
         .await
         .unwrap();
-        db.set_pairing_epoch(&peer.0, "epoch-current")
-            .await
-            .unwrap();
     }
     let delivery = FlowDelivery::new(db, receiver_blobs, root.path());
 
-    let offer_a = request("epoch-current", "lease-a", hash, ticket.clone());
-    let offer_b = request("epoch-current", "lease-b", hash, ticket);
+    let offer_a = request("epoch-a", "lease-a", hash, ticket.clone());
+    let offer_b = request("epoch-b", "lease-b", hash, ticket);
     delivery.offer(device_a, &offer_a).await.unwrap();
     delivery.offer(device_b, &offer_b).await.unwrap();
 
     // Suspending device A's tuple must be a no-op for device B's grant: B
     // is untouched (still active, no interruption reported as an error).
     delivery
-        .suspend(device_a, &tuple_ref("epoch-current", "lease-a", 7))
+        .suspend(device_a, &tuple_ref("epoch-a", "lease-a", 7))
         .await
         .unwrap();
     let status_b = delivery
-        .status(device_b, &tuple_ref("epoch-current", "lease-b", 7))
+        .status(device_b, &tuple_ref("epoch-b", "lease-b", 7))
         .await
         .unwrap();
     assert_eq!(

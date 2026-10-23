@@ -5,9 +5,9 @@ import XCTest
 @testable import PPassCore
 
 final class DefinitiveNoticesTests: XCTestCase {
-    private func facts(epoch: String? = "e1", lost: Bool = false, media: MediaAccessTier = .full,
+    private func facts(pairingId: String? = "e1", lost: Bool = false, media: MediaAccessTier = .full,
                        requested: Bool = true, refresh: BackgroundRefreshAvailability = .available) -> DefinitiveFacts {
-        DefinitiveFacts(pairingEpoch: epoch, pairingLost: lost, mediaAccess: media, backgroundRequested: requested, backgroundRefresh: refresh)
+        DefinitiveFacts(pairingId: pairingId, pairingLost: lost, mediaAccess: media, backgroundRequested: requested, backgroundRefresh: refresh)
     }
 
     private func decide(_ prev: DefinitiveNoticeState, _ f: DefinitiveFacts, deliverable: Bool = true) -> DefinitiveDecision {
@@ -21,12 +21,12 @@ final class DefinitiveNoticesTests: XCTestCase {
         XCTAssertEqual(Set(NoticeEvent.allCases), [.pairingLost, .mediaAccessRevoked, .backgroundStopped])
     }
 
-    // MARK: 配对失效（去重键 = epoch）
+    // MARK: 配对失效（去重键 = pairingId）
 
-    func testPairingLostPostsOnceForAnEpoch() {
+    func testPairingLostPostsOnceForAnPairingId() {
         let d1 = decide(DefinitiveNoticeState(), facts(lost: true))
         XCTAssertEqual(d1.post, [.pairingLost])
-        XCTAssertEqual(d1.next.notifiedLostEpoch, "e1")
+        XCTAssertEqual(d1.next.notifiedLostPairingId, "e1")
         let d2 = decide(d1.next, facts(lost: true))
         XCTAssertEqual(d2.post, [], "同一个配对代号只发一次")
     }
@@ -35,25 +35,29 @@ final class DefinitiveNoticesTests: XCTestCase {
         let posted = decide(DefinitiveNoticeState(), facts(lost: true)).next
         // 进程重启后 lost 标记还在盘上；就算读到 false 也不算恢复，更不复位。
         let d = decide(posted, facts(lost: false))
-        XCTAssertEqual(d.next.notifiedLostEpoch, "e1")
+        XCTAssertEqual(d.next.notifiedLostPairingId, "e1")
         XCTAssertTrue(d.cancel.isEmpty)
         XCTAssertEqual(decide(d.next, facts(lost: true)).post, [], "重启后又读到 lost 也不重发")
     }
 
-    func testNewEpochResetsAndNotifiesAgain() {
+    func testNewPairingIdResetsAndNotifiesAgain() {
         let posted = decide(DefinitiveNoticeState(), facts(lost: true)).next
-        let rescanned = decide(posted, facts(epoch: "e2", lost: false))
+        let rescanned = decide(posted, facts(pairingId: "e2", lost: false))
         XCTAssertEqual(rescanned.cancel, [.pairingLost], "重新扫码：撤掉还挂着的旧通知")
-        XCTAssertNil(rescanned.next.notifiedLostEpoch)
-        XCTAssertEqual(decide(rescanned.next, facts(epoch: "e2", lost: true)).post, [.pairingLost])
+        XCTAssertNil(rescanned.next.notifiedLostPairingId)
+        XCTAssertEqual(decide(rescanned.next, facts(pairingId: "e2", lost: true)).post, [.pairingLost])
     }
 
-    func testNoPairingResetsAndNeverPosts() {
+    /// #1119：被拒即清理删掉配对记录之后，已发的「配对已失效」通知必须留着（用户要看到它），也不重发。
+    /// 反证：把「没有配对」改回复位 + 撤通知（旧行为），cancel 变成 [.pairingLost]、notified 被清空，这条红。
+    func testNoPairingKeepsTheLostNoticeAndNeverPostsAgain() {
         let posted = decide(DefinitiveNoticeState(), facts(lost: true)).next
-        let d = decide(posted, facts(epoch: nil, lost: true))
-        XCTAssertEqual(d.post, [])
-        XCTAssertEqual(d.cancel, [.pairingLost])
-        XCTAssertNil(d.next.notifiedLostEpoch)
+        for lost in [true, false] {
+            let d = decide(posted, facts(pairingId: nil, lost: lost))
+            XCTAssertEqual(d.post, [])
+            XCTAssertEqual(d.cancel, [], "清理之后没有配对：不撤通知")
+            XCTAssertEqual(d.next.notifiedLostPairingId, "e1", "状态保留：之后重新评估也不重发")
+        }
     }
 
     // MARK: 相册权限（变差才发，回到完整复位，无基线只记）
@@ -82,7 +86,7 @@ final class DefinitiveNoticesTests: XCTestCase {
     }
 
     func testMediaAccessWorseWhileUnpairedOnlyRecords() {
-        let d = decide(DefinitiveNoticeState(lastMediaAccess: "full"), facts(epoch: nil, media: .none))
+        let d = decide(DefinitiveNoticeState(lastMediaAccess: "full"), facts(pairingId: nil, media: .none))
         XCTAssertEqual(d.post, [], "没配对：没有要备份的东西")
         XCTAssertEqual(d.next.lastMediaAccess, "none")
     }
@@ -117,7 +121,7 @@ final class DefinitiveNoticesTests: XCTestCase {
     }
 
     func testBackgroundRefreshOffWhileUnpairedOnlyRecords() {
-        let d = decide(DefinitiveNoticeState(lastBackgroundRefreshAvailable: true), facts(epoch: nil, refresh: .denied))
+        let d = decide(DefinitiveNoticeState(lastBackgroundRefreshAvailable: true), facts(pairingId: nil, refresh: .denied))
         XCTAssertEqual(d.post, [])
         XCTAssertEqual(d.next.lastBackgroundRefreshAvailable, false)
     }
@@ -130,7 +134,7 @@ final class DefinitiveNoticesTests: XCTestCase {
         let blocked = decide(prev, all, deliverable: false)
         XCTAssertEqual(blocked.post, [])
         XCTAssertEqual(Set(blocked.undeliverable), [.pairingLost, .mediaAccessRevoked, .backgroundStopped])
-        XCTAssertEqual(blocked.next, DefinitiveNoticeState(notifiedLostEpoch: "e1", lastMediaAccess: "none", lastBackgroundRefreshAvailable: false))
+        XCTAssertEqual(blocked.next, DefinitiveNoticeState(notifiedLostPairingId: "e1", lastMediaAccess: "none", lastBackgroundRefreshAvailable: false))
         // 打开开关 / 授权之后：同一状况不补发。
         let open = decide(blocked.next, all, deliverable: true)
         XCTAssertEqual(open.post, [])
@@ -138,9 +142,9 @@ final class DefinitiveNoticesTests: XCTestCase {
     }
 
     func testUndeliverableStillAdvancesRecoveryAndBaselines() {
-        let d = decide(DefinitiveNoticeState(notifiedLostEpoch: "e1", lastMediaAccess: "partial"), facts(epoch: "e2", media: .full), deliverable: false)
+        let d = decide(DefinitiveNoticeState(notifiedLostPairingId: "e1", lastMediaAccess: "partial"), facts(pairingId: "e2", media: .full), deliverable: false)
         XCTAssertEqual(d.cancel, [.pairingLost, .mediaAccessRevoked])
-        XCTAssertNil(d.next.notifiedLostEpoch)
+        XCTAssertNil(d.next.notifiedLostPairingId)
         XCTAssertEqual(d.next.lastMediaAccess, "full")
     }
 
@@ -160,10 +164,10 @@ final class DefinitiveNoticesTests: XCTestCase {
     func testStoreUsesAndroidFileNameAndFieldNames() throws {
         let tmp = TempDir()
         let store = DefinitiveNoticeStore(directory: tmp.url)
-        try store.save(DefinitiveNoticeState(notifiedLostEpoch: "e1", lastMediaAccess: "partial", lastBackgroundRefreshAvailable: false))
+        try store.save(DefinitiveNoticeState(notifiedLostPairingId: "e1", lastMediaAccess: "partial", lastBackgroundRefreshAvailable: false))
         XCTAssertEqual(DefinitiveNoticeStore.fileName, "definitive_notices.json")
         let json = try JSONSerialization.jsonObject(with: Data(contentsOf: tmp.url.appendingPathComponent("definitive_notices.json"))) as? [String: Any]
-        XCTAssertEqual(json?["notifiedLostEpoch"] as? String, "e1")
+        XCTAssertEqual(json?["notifiedLostPairingId"] as? String, "e1")
         XCTAssertEqual(json?["lastMediaAccess"] as? String, "partial")
         XCTAssertEqual(json?["lastBackgroundRefreshAvailable"] as? Bool, false)
     }

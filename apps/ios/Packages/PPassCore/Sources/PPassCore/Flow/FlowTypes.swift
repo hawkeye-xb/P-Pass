@@ -178,14 +178,14 @@ public func leaseTokenFor(_ orderId: Int64) -> String { "lease-\(orderId)" }
 public struct CompletionReceipt: Equatable, Sendable {
     public let queueSequence: Int64
     public let receiptId: String
-    public let pairingEpoch: String
+    public let pairingId: String
     public let contentHash: String?
     public let leaseToken: String
 
-    public init(queueSequence: Int64, receiptId: String, pairingEpoch: String, contentHash: String?, leaseToken: String) {
+    public init(queueSequence: Int64, receiptId: String, pairingId: String, contentHash: String?, leaseToken: String) {
         self.queueSequence = queueSequence
         self.receiptId = receiptId
-        self.pairingEpoch = pairingEpoch
+        self.pairingId = pairingId
         self.contentHash = contentHash
         self.leaseToken = leaseToken
     }
@@ -312,7 +312,7 @@ public protocol MediaImporter: Sendable {
 /// 传一张的请求。queue_sequence = [orderId]，lease_token = [leaseTokenFor]。
 public struct DeliveryRequest: Equatable, Sendable {
     public let orderId: Int64
-    public let pairingEpoch: String
+    public let pairingId: String
     public let contentHash: String
     public let details: MediaDetails
 
@@ -347,7 +347,7 @@ public protocol ItemDelivery: Sendable {
     func deliver(_ request: DeliveryRequest, onProgress: @escaping @Sendable (Int64) -> Void) async throws -> DeliveryOutcome
 
     /// 通知桌面丢掉这一张已传的部分（`flow.cancel_tuple`）。有界等待，不许抛。
-    func discardPartial(orderId: Int64, pairingEpoch: String) async
+    func discardPartial(orderId: Int64, pairingId: String) async
 }
 
 extension ItemDelivery {
@@ -356,7 +356,7 @@ extension ItemDelivery {
 
 /// 桌面可达探测（`hello`，有超时）。
 public enum ProbeResult: Equatable, Sendable {
-    case reachable(advertisedEpoch: String?, health: DesktopHealth?, capabilities: Set<String>)
+    case reachable(advertisedPairingId: String?, health: DesktopHealth?, capabilities: Set<String>)
     case unreachable
     case pairingLost
     /// #1069：握手（hello）发现版本不兼容——不申请租约、不发起传输。

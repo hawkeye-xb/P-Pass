@@ -212,7 +212,7 @@ final class InboxTests: XCTestCase {
             XCTAssertEqual(Inbox.seq(fromPosition: Inbox.position(of: seq)), seq)
         }
         XCTAssertEqual(Inbox.position(of: 1).count, 8)
-        XCTAssertEqual(Inbox.seq(fromPosition: Data("{\"epoch\":1}".utf8)), 0)
+        XCTAssertEqual(Inbox.seq(fromPosition: Data("{\"pairingId\":1}".utf8)), 0)
         XCTAssertEqual(Inbox.seq(fromPosition: Data()), 0)
     }
 

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use daemon::{QueryEngine, Router};
 use proto::{Req, Resp, ThumbData, ThumbGet, ThumbSize, TimelineQuery};
-use storage::{Db, Device, Role};
+use storage::{Db, Pairing, Role};
 use transport::{Blobs, IrohTransport, Transport, TransportConfig};
 
 const ALPNS: &[&str] = &["ppf/ctrl/1", "ppf/blobs/1"];
@@ -105,16 +105,17 @@ async fn harness(dir: &Path, db: Db) -> Harness {
     let client_blobs = Blobs::open(&client_tp, &dir.join("client-blobs"))
         .await
         .unwrap();
-    db.upsert_device(&Device {
-        node_id: client_tp.node_id().0.to_vec(),
-        name: "viewer".into(),
-        role: Role::Viewer, // browse is exactly the viewer's power
-        paired_at: 1,
-        last_seen: None,
-        revoked: false,
-        revoked_at: None,
-        revoked_by: None,
-    })
+    db.accept_pairing(
+        &client_tp.node_id().0,
+        "viewer",
+        &Pairing {
+            id: "browse-pairing".into(),
+            node_id: client_tp.node_id().0.to_vec(),
+            // browse is exactly the viewer's power
+            role: Role::Viewer,
+            paired_at: 1,
+        },
+    )
     .await
     .unwrap();
     Harness {

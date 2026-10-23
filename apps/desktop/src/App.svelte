@@ -12,24 +12,26 @@
     serviceStateLabelKey,
   } from "./serviceState.js";
   import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+  import { callDaemon } from "./lib/daemonApi.js";
   import { getVersion } from "@tauri-apps/api/app";
   import { listen } from "@tauri-apps/api/event";
   import {
     open as openDialog,
     confirm as confirmDialog,
     message as messageDialog,
+    save as saveDialog,
   } from "@tauri-apps/plugin-dialog";
   import { check as checkUpdate } from "@tauri-apps/plugin-updater";
   import { revealItemInDir, openUrl } from "@tauri-apps/plugin-opener";
   import { openLibraryDir } from "./lib/openLibrary.js";
   import { runUpdate } from "./lib/updateFlow.js";
+  import { verifiedUpdate } from "./lib/updateCommands.js";
   import {
     RELEASES_URL,
     updateFailureBodyKey,
     updateFailureBodyParams,
     updateFailureServiceKey,
   } from "./lib/updateFailure.js";
-  import QRCode from "qrcode";
   import { onMount, onDestroy } from "svelte";
   import Wizard from "./Wizard.svelte";
   import WizardWindows from "./WizardWindows.svelte";
@@ -39,6 +41,9 @@
   import { Button } from "$lib/components/ui/button";
   import { Card } from "$lib/components/ui/card";
   import { Dialog } from "$lib/components/ui/dialog";
+  import { Input } from "$lib/components/ui/input";
+  import { onDigitsInput, onDigitsPaste } from "./lib/digitsField.js";
+  import Loader2Icon from "@lucide/svelte/icons/loader-2";
   import { Toaster } from "$lib/components/ui/sonner";
   import { NavItem } from "$lib/components/ui/nav-item";
   import { toast } from "svelte-sonner";
@@ -63,7 +68,11 @@
     pendingSubText,
     pendingAllowKey,
     pairResultName,
+    isPairCode,
+    normalizePairCode,
+    pairConfirmToast,
   } from "./lib/pending.js";
+  import { requestId, syncRequests, setPhase, removeRequest } from "./lib/pairRequests.js";
   import { formatBytes, diskUsedPercent } from "./lib/formatBytes.js";
   // MOB-29: 「刚从库里删掉照片」警告的判据（纯函数，externalDelete.test.js
   // 钉边界）——删除会被手机传回来，这是对的，但得让用户知道。
@@ -78,7 +87,7 @@
   // I18N-03 (#492): t() 抽到 lib/i18n.js 共享（向导、lib/*.js 同源）；
   // T-081 暂写死在组件里的导航/页面文案已全部收编进字典。errText 负责
   // 把 Rust 壳回来的错误（key + 参数 / 裸已注册 key；不认识的一律通用错误，原串只进 console）渲染成人话。
-  import { t, errText, errDetail, getLocale, readLangPref, applyLangPref } from "./lib/i18n.js";
+  import { t, errText, errDetail, errKey, getLocale, readLangPref, applyLangPref } from "./lib/i18n.js";
 
   // ---- T-081 布局 v1：侧边栏四页（总览 / 家人与设备 / 活动记录 / 设置，
   // 照片库并入设置）。hash 同步只为可验证/可深链，不引入路由依赖。
@@ -113,7 +122,7 @@
 
   // null=检测中。`show_wizard` 是 Rust 给的结论（判据只在 Rust，#1045）；
   // 前端不拿 configured / installed / user_stopped 自己拼。
-  let wizard = $state(null); // {show_wizard, default_dir, configured_library_dir}
+  let wizard = $state(null); // {show_wizard, unconfigured, default_dir, configured_library_dir}
   // #1043：平台界面能力（platform_ux）。null = 还没问到；向导等它到了再选视图。
   let platformUx = $state(null);
   let starting = $state(false);
@@ -306,7 +315,7 @@
   let nowMs = $state(Date.now());
 
   async function call(method, params = {}) {
-    return await invoke("daemon_call", { method, params });
+    return await callDaemon(method, params);
   }
 
   // UI-04b：所有短反馈统一委托官方 Sonner；成功/等待/错误分别走三种含义色。
@@ -333,21 +342,20 @@
       } catch (_) {
         pendingList = [];
       }
-      // T4: pending 从无到有 = 有人扫了码——关二维码弹窗、打开允许/拒绝。
-      // UX-08: 一屏列全部 pending，逐行处理；全清后关闭，无残留。
-      if (pendingList.length > 0 && showPairModal) {
+      // 弹窗里的块按「申请」对齐（lib/pairRequests.js）。新申请到达就自动弹出、
+      // 内容立即可用——不管二维码弹窗开没开；首页横幅只是关掉弹窗后的再入口。
+      // 弹窗何时收起由块决定（open 条件），不看队列是否为空。
+      const synced = syncRequests(pairRequests, pendingList);
+      pairRequests = synced.rows;
+      if (synced.added.length > 0) {
         showPairModal = false;
         showConfirmModal = true;
-      } else if (pendingList.length === 0 && showConfirmModal) {
-        // 已处理完（confirmPair 清空 pending）——状态消失，不残留。
-        showConfirmModal = false;
       }
       // DEV-03: 这一屏要同时渲染「在用/已断开」和折叠的「已移除」，所以要
-      // 全量。此前不传参 ⇒ daemon 默认 `WHERE revoked = 0` ⇒ 下面那个
-      // 「已移除设备 N 台」折叠区**永远是空的、渲染不出来**（同一个默认
-      // 过滤，也让手机一断开设备就从列表里凭空消失——本卡要修的主症状）。
+      // 全量。不传参 ⇒ daemon 只给主列表的行 ⇒ 下面那个「已移除设备 N 台」
+      // 折叠区**永远是空的、渲染不出来**。
       try {
-        const d = await call("devices.list", { include_revoked: true });
+        const d = await call("devices.list", { include_departed: true });
         devices = d.devices ?? [];
         devicesError = "";
       } catch (e) {
@@ -441,7 +449,7 @@
     switch (d.row_state) {
       case "disconnected":
         // DEV-03: 不借用「离线」话术，也不参与「几天没备份」告警。
-        return disconnectedRow(humanTime(d.revoked_at, now));
+        return disconnectedRow(humanTime(d.departed_at, now), d.departed_by);
       case "needs_attention":
         return {
           alert: true,
@@ -509,13 +517,10 @@
     try {
       const r = await call("pairing.start");
       qrText = r.qr;
-      // T4: 弹窗内大尺寸——显示 360px，生成 2x（720）保高分屏清晰；
-      // 配对码已瘦身（H-10b T3），低纠错 L 在内容较长时更好扫。
-      qrDataUrl = await QRCode.toDataURL(r.qr, {
-        width: 720,
-        margin: 2,
-        errorCorrectionLevel: "L",
-      });
+      // 二维码由壳生成 SVG（src-tauri/src/pair_qr.rs）：npm qrcode 与
+      // freezePrototype 冲突会整页白屏。矢量图，弹窗内 360px 照样清晰。
+      const svg = await invoke("pair_qr_svg", { text: r.qr });
+      qrDataUrl = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
     } catch (e) {
       flashMessage(t("ui.pair_failed", { err: errDetail(e) }), "error");
     }
@@ -523,9 +528,12 @@
 
   function closePairModal() {
     showPairModal = false;
-    // 关弹窗即弃当前码（token 仍在 TTL 内有效，但下次打开重新生成更干净）。
     qrDataUrl = "";
     qrText = "";
+    // #1122：二维码关了，配对窗口随之关闭——收回未用的令牌，未配对的设备
+    // 从此连不进来（已提交申请的那台照常能等结果）。失败不打扰用户：令牌
+    // 最多 10 分钟后自然过期。
+    call("pairing.stop").catch(() => {});
   }
 
   /* 扫码有困难的退路：复制配对串本文，用户自己找办法传给手机（隔空
@@ -555,10 +563,35 @@
     }
   }
 
-  async function confirmPair(accept, item) {
+  // 弹窗里的块：一块 = 一次申请（id = node_id + requested_at），带自己的阶段
+  // input / busy / failed（见 lib/pairRequests.js）。验证码也按申请存——同一台手机
+  // 重新扫码是新申请，从干净状态开始。
+  let pairRequests = $state([]);
+  let pairCodes = $state({});
+
+  // Esc / 右上角关闭 / 点遮罩：只收起弹窗，不等于拒绝——请求留在首页「待处理」，可再打开。
+  // 已作废的块随之确认掉（主人已经看到了）。
+  function closeConfirmModal() {
+    showConfirmModal = false;
+    pairRequests = pairRequests.filter((r) => r.phase !== "failed");
+  }
+
+  // 作废块的「重新显示二维码」：关掉这一块，收起确认弹窗，走首页「显示配对二维码」同一个入口。
+  // 不想重来就点右上角 ✕（closeConfirmModal）。
+  function showQrAgain(id) {
+    pairRequests = removeRequest(pairRequests, id);
+    showConfirmModal = false;
+    startPairing();
+  }
+
+  async function confirmPair(accept, item, code = null) {
+    const id = requestId(item);
+    const row = pairRequests.find((r) => r.id === id);
+    if (row?.phase === "busy" || row?.phase === "failed") return;
+    pairRequests = setPhase(pairRequests, id, "busy");
     try {
-      // UX-08: 逐行处理——pairing.confirm 精确确认该台。#1044：横幅与弹窗
-      // 都显式传要决定的那一行（node_id），不靠「不带参数 = daemon 队首」。
+      // UX-08: 逐台处理——pairing.confirm 精确确认该台。#1044：横幅与弹窗
+      // 都显式传要决定的那一台（node_id），不靠「不带参数 = daemon 队首」。
       //
       // DEV-04: 定位必须按 node_id。老设备改过名之后，弹窗上显示的是
       // 桌面的名字，而队列里存的是手机自报名——继续按名字找就是
@@ -567,21 +600,30 @@
         accept,
         node_id: item?.node_id,
         device_name: item?.name,
+        // #1118：允许 = 输入手机显示的验证码；拒绝不带码。
+        code: accept ? code : null,
       });
       // DEV-06: 结果提示的名字以设备表为准。`r.device` 是队列里的自报名
       // （SM-S9210），弹窗标题用的却是 pending 行里 daemon 解析过的名字
       // （客厅的手机）——同一次操作两个名字。
       // `r.device` 留作最后兜底（列表取不到）。
       const shown = pairResultName(item, r);
-      flashMessage(
-        accept ? t("ui.pair_allowed", { name: shown }) : t("ui.pair_denied", { name: shown }),
-        accept ? "success" : "warning"
-      );
-      // T4: 处理完由下一轮 refresh 关模态（pending 清 0）——状态消失不残留。
-      await refresh();
+      const toast = pairConfirmToast(accept, r, shown);
+      flashMessage(t(toast.key, toast.params), toast.tone);
+      pairRequests = removeRequest(pairRequests, id);
     } catch (e) {
-      flashMessage(t("ui.confirm_failed", { err: errDetail(e) }), "error");
+      if (accept && errKey(e) === "ui.err_pair_code_wrong") {
+        // #1118：码错 = 这次申请作废（daemon 已撤）。块停在终态，主人点「知道了」才消失。
+        pairRequests = setPhase(pairRequests, id, "failed");
+      } else {
+        flashMessage(t("ui.confirm_failed", { err: errDetail(e) }), "error");
+        // 还在队列里就回到可输入；不在了下一轮对齐会收掉。
+        pairRequests = setPhase(pairRequests, id, "input");
+      }
+    } finally {
+      pairCodes = { ...pairCodes, [id]: "" };
     }
+    await refresh();
   }
 
   async function revoke(nodeId, name) {
@@ -675,15 +717,28 @@
   // 附进同一个包。
   // #550：入口在托盘菜单——Rust 先把窗口拉到前台，再发
   // `export-logs-requested`，这里收到后照旧导出、照旧 toast + 在 Finder 里展示。
+  // 导出要起 diag 子进程（壳侧已移出主线程），等待期间再次触发（托盘菜单连点）不重入：
+  // 两次导出会写同一个 zip。
+  let exportingLogs = false;
   async function exportLogs() {
+    if (exportingLogs) return;
+    exportingLogs = true;
     try {
-      const r = await invoke("export_logs_bundle");
+      // #1122：诊断包由用户选择保存位置，不再写进照片库目录；取消就什么都不做。
+      const out = await saveDialog({
+        defaultPath: "ppf-logs.zip",
+        filters: [{ name: "zip", extensions: ["zip"] }],
+      });
+      if (!out) return;
+      const r = await invoke("export_logs_bundle", { out });
       flashMessage(t("ui.logs_exported", { path: r.zip }));
       try {
         await revealItemInDir(r.zip); // 在 Finder/资源管理器中直接展示
       } catch (_) {}
     } catch (e) {
       flashMessage(t("ui.export_failed", { err: errDetail(e) }), "error");
+    } finally {
+      exportingLogs = false;
     }
   }
 
@@ -1013,9 +1068,10 @@
   // kickstart：杀 + 拉都不在壳里发生），不行退化到壳自己重启；都走不到才报错。
   async function relaunchShellNow() {
     updateError = "";
+    // 先进 relaunching：按钮随 updateBusy 置灰，等 launchctl 期间不能再点一次。
+    updatePhase = "relaunching";
     try {
       await invoke("relaunch_shell");
-      updatePhase = "relaunching";
     } catch (e) {
       updatePhase = "installed";
       flashMessage(t("ui.update_relaunch_failed"), "warning");
@@ -1094,7 +1150,8 @@
     // 暂停放在下载之后：下载期间备份不被打断；暂停由壳侧完成（不写用户停止标记）。
     try {
       await runUpdate({
-        update,
+        // #1121：下载与安装走壳的命令（安装前校验发布者），不直接调插件。
+        update: verifiedUpdate(update),
         pauseDaemon: () => invoke("pause_daemon_for_update"),
         // 失败恢复必须走 resume_after_failed_update：先关「为更新暂停」窗口再自愈。
         selfHeal: () => invoke("resume_after_failed_update"),
@@ -1431,12 +1488,14 @@
       <WizardWindows
         defaultDir={wizard.default_dir}
         configuredLibraryDir={wizard.configured_library_dir}
+        unconfigured={wizard.unconfigured === true}
         onDone={() => { checkWizard(); refresh(); }}
       />
     {:else}
       <Wizard
         defaultDir={wizard.default_dir}
         configuredLibraryDir={wizard.configured_library_dir}
+        unconfigured={wizard.unconfigured === true}
         onDone={() => { checkWizard(); refresh(); }}
       />
     {/if}
@@ -1556,7 +1615,8 @@
                   <!-- #1044：按钮显式带横幅上点名的那一台（node_id），列表还没
                        取到时不可点——不让 daemon 按「队首」替我们猜是哪台。 -->
                   <Button variant="secondary" disabled={pendingList.length === 0} onclick={() => confirmPair(false, pendingList[0])}>{t("ui.deny")}</Button>
-                  <Button disabled={pendingList.length === 0} onclick={() => confirmPair(true, pendingList[0])}>{t("ui.allow")}</Button>
+                  <!-- #1118：允许 = 输入手机上的验证码，在确认框里做。 -->
+                  <Button disabled={pendingList.length === 0} onclick={() => (showConfirmModal = true)}>{t("ui.pending_enter_code")}</Button>
                 </div>
               </div>
             {/if}
@@ -1720,8 +1780,8 @@
                    不是业主的决定，那台设备必须留在主列表里标「已断开」——
                    业主有权知道它什么时候断的、到底是哪一台（可能被改过名）。
                    业主自己点「移除设备」才收进下面的折叠区。
-                   判据是 daemon 给的 revoked_by，不是 revoked 这个布尔位。
-                   来源未知的历史行（DEV-03 之前留下的）按「已移除」处理。 -->
+                   判据是 daemon 给的 removal（由档案上的 departed_by 推出）；
+                   电脑换了身份的也留在主列表、提示重新扫码（#1117）。 -->
               {@const activeDevices = devices
                 .filter((d) => d.removal !== "removed")
                 .sort(byActivity)}
@@ -2110,39 +2170,70 @@
       {:else}
         <p class="hint modal-hint">{t("ui.pair_generating")}</p>
       {/if}
+      <!-- #1118：手机扫码后先显示这台电脑的标识，用户在这里核对（二维码生成前也显示）。 -->
+      {#if status?.desktop_name}
+        <p class="pair-identity" data-testid="desktop-name">{t("ui.pair_desktop_name", { name: status.desktop_name })}</p>
+      {/if}
+      {#if status?.desktop_fingerprint}
+        <p class="pair-identity" data-testid="desktop-fingerprint">{t("ui.pair_desktop_identity", { fingerprint: status.desktop_fingerprint })}</p>
+      {/if}
     </Dialog>
 
-    <!-- UX-08: 待确认加入列表——不传 onClose，必须显式允许/拒绝，
-         不能靠点背景遮罩误关。 -->
-    <Dialog open={showConfirmModal && pendingList.length > 0}>
-      <!-- UX-08: 多台同时扫码 → 一屏全列，逐行允许/拒绝，处理完该行
-           消失，全清后列表关闭——不挤牙膏式顺序弹窗。 -->
-      <!-- DEV-04: 老设备重连 ≠ 陌生设备加入。判据是 node_id（daemon 查
-           device 表，不看 revoked），所以改过名的设备照样认得出来，
-           且用桌面上那个名字称呼它。措辞逻辑在 lib/pending.js，有测试。 -->
-      {@const dialogText = pendingDialogText(pendingList)}
-      <h3>{dialogText.title}</h3>
-      <p class="hint modal-hint">{dialogText.hint}</p>
+    <!-- UX-08: 待确认加入列表。一块 = 一次申请（lib/pairRequests.js）。关掉（Esc / 右上角 /
+         点遮罩）只是收起，不等于拒绝：请求留在首页「待处理」，可以再打开。
+         样式参照 macOS 提示框：单台时内容直接放在弹窗里，不套卡片；多台用分隔线分开。 -->
+    <Dialog open={showConfirmModal && pairRequests.length > 0} onClose={closeConfirmModal} closeLabel={t("ui.close")}>
+      <!-- DEV-04: 老设备重连 ≠ 陌生设备加入。判据是 node_id（daemon 查设备档案，档案永不
+           删除），所以改过名的设备照样认得出来，且用桌面上那个名字称呼它。措辞在 lib/pending.js。 -->
+      {@const many = pairRequests.length > 1}
+      <h3 class="pending-title">{pendingDialogText(pairRequests.map((r) => r.item)).title}</h3>
       <div class="pending-list">
-        {#each pendingList as item}
-          <!-- DEV-02: 设备与身份 1:1——确认框只有「允许」/「拒绝」。
-               DEV-01 的「替换旧的」连同它依据的指纹匹配一起删掉了：那个
-               提示是手机自报的指纹算出来的，桌面端无法验证，等于让确认框
-               替对方声称「这台手机重装过」。 -->
+        {#each pairRequests as req (req.id)}
+          {@const item = req.item}
           {@const sub = pendingSubText(item, humanTime(item.paired_at, nowMs))}
-          <div class="pending-row">
-            <span class="pending-name">{item.name}</span>
-            <div class="pending-actions">
-              <Button variant="secondary" class="min-w-[64px]" onclick={() => confirmPair(false, item)}>{t("ui.deny")}</Button>
-              <!-- DEV-04: 按钮跟标题走。标题说「请求重新连接」而按钮说
-                   「允许加入」，正是本卡要拦的串台。 -->
-              <Button class="min-w-[64px]" onclick={() => confirmPair(true, item)}>{t(pendingAllowKey(item))}</Button>
-            </div>
-            <!-- DEV-04: 实证副行占满整行。挤在名字那一列里会被按钮压到
-                 「首次配对 今天 10:26 · 已...」——摆出来的事实被截掉了，
-                 等于没摆（2026-09-20 验收人截图）。 -->
-            {#if sub}<span class="pending-sub">{sub}</span>{/if}
-          </div>
+          {@const code = pairCodes[req.id] ?? ""}
+          <!-- 顺序：（多台时）设备名 →（重连）事实小字 → 6 格验证码 → 提示 → 按钮行右对齐。不显示角色。 -->
+          <section class="pending-request" data-testid="pending-request" data-phase={req.phase}>
+            {#if many}<p class="pending-name">{item.name}</p>{/if}
+            {#if sub}<p class="pending-meta">{sub}</p>{/if}
+            {#if req.phase === "failed"}
+              <p class="pending-error" role="alert">{t("ui.err_pair_code_wrong")}</p>
+              <div class="pending-actions" data-testid="pending-actions">
+                <Button onclick={() => showQrAgain(req.id)}>{t("ui.pair_show_qr_again")}</Button>
+              </div>
+            {:else}
+              <div class="pending-code">
+                <!-- 普通输入框：只收数字（输入、粘贴都过滤，光标留在原处，可在任意位置改）；
+                     等宽数字、适度字距、居中，宽度够放 6 位。 -->
+                <Input
+                  data-testid="pair-code-input"
+                  class="h-11 w-[12ch] bg-paper text-center font-mono text-[20px] tracking-[0.3em] indent-[0.3em] tabular-nums md:text-[20px]"
+                  aria-label={t("ui.pair_code_placeholder")}
+                  inputmode="numeric"
+                  autocomplete="one-time-code"
+                  maxlength={6}
+                  spellcheck={false}
+                  disabled={req.phase === "busy"}
+                  value={code}
+                  oninput={(e) => (pairCodes = { ...pairCodes, [req.id]: onDigitsInput(e.currentTarget) })}
+                  onpaste={(e) => {
+                    e.preventDefault();
+                    pairCodes = { ...pairCodes, [req.id]: onDigitsPaste(e.currentTarget, e.clipboardData?.getData("text") ?? "") };
+                  }}
+                  onkeydown={(e) => { if (e.key === "Enter" && isPairCode(code)) confirmPair(true, item, code); }}
+                />
+              </div>
+              <p class="pending-hint">{t("ui.pair_code_hint")}</p>
+              <div class="pending-actions" data-testid="pending-actions">
+                <Button variant="secondary" disabled={req.phase === "busy"} onclick={() => confirmPair(false, item)}>{t("ui.deny")}</Button>
+                <!-- DEV-04: 按钮跟标题走：重连是「允许重连」，不是「允许加入」。 -->
+                <Button data-testid="pair-code-confirm" aria-busy={req.phase === "busy"} disabled={!isPairCode(code) || req.phase === "busy"} onclick={() => confirmPair(true, item, code)}>
+                  {#if req.phase === "busy"}<Loader2Icon class="size-4 animate-spin" aria-hidden="true" />{/if}
+                  {t(pendingAllowKey(item))}
+                </Button>
+              </div>
+            {/if}
+          </section>
         {/each}
       </div>
     </Dialog>
@@ -2451,47 +2542,64 @@
   .pending-list {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    margin-top: 4px;
-    max-height: 300px;
+    max-height: min(60vh, 440px);
     overflow-y: auto;
   }
-  /* DEV-04: 两行网格——名字与按钮同行，实证副行独占整行。副行若跟名字
-     共用那一列，会被右侧按钮挤到只剩半句（验收截图里就是「已...」）。 */
-  .pending-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-    column-gap: 10px;
-    row-gap: 4px;
-    background: var(--pp-linen);
-    border-radius: var(--pp-radius-control-sm);
-    padding: 10px 12px;
+  /* 一块 = 一次申请，纵向排。参照 macOS 提示框：不套卡片，多台之间用分隔线。 */
+  .pending-title {
+    margin-bottom: 2px;
+  }
+  .pending-request {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px 0 0;
+  }
+  .pending-request + .pending-request {
+    margin-top: 12px;
+    border-top: 1px solid var(--pp-divider);
   }
   .pending-name {
-    grid-column: 1;
-    grid-row: 1;
-    min-width: 0;
+    margin: 0;
     font-weight: 600;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
   }
-
-  /* DEV-04: 老设备重连时的实证副行（首次配对时刻 · 已存 N 张）。
-     新设备这一行不存在——没有可说的事实就不占位。 */
-  .pending-sub {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    font-size: 12px;
+  /* 重连实证：小字次要色。 */
+  .pending-meta {
+    margin: -4px 0 0;
+    font-size: 13px;
     line-height: 1.5;
     color: var(--pp-ink-60);
   }
-  .pending-actions {
-    grid-column: 2;
-    grid-row: 1;
+  .pending-code {
     display: flex;
+    justify-content: center;
+    padding-top: 6px;
+  }
+  .pending-hint,
+  .pending-error {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .pending-hint {
+    color: var(--pp-ink-60);
+  }
+  .pending-error {
+    color: var(--pp-act);
+  }
+  .pending-actions {
+    display: flex;
+    justify-content: flex-end;
+    flex-wrap: wrap;
     gap: 8px;
+    padding-top: 4px;
+  }
+  .pair-identity {
+    margin: 0;
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.05em;
   }
   .hint {
     color: var(--pp-ink-40);

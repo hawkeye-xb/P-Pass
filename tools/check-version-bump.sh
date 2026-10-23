@@ -7,9 +7,9 @@
 #   - `apps/android/**`，以及安卓 APK 里那份 Rust 原生库（libtransport.so）的构建输入
 #     ⇒ 安卓端被改到 ⇒ `versions.json.android` 必须前进
 #     #894：原生库输入 = gradle 任务 `buildIrohBlobsProviderBridge` 的 inputs
-#     （`Cargo.toml`、`Cargo.lock`、`crates/transport/**`）+ 它实际调用的
+#     （`Cargo.toml`、`Cargo.lock`、`crates/transport/**`、`crates/proto/**`）+ 它实际调用的
 #     `tools/build-android-iroh-blobs-bridge.sh` + 钉工具链的 `rust-toolchain.toml`。
-#     transport 在 `android-jni` 下没有别的本仓 path 依赖（proto 只在 ios-ffi / dev 下）。
+#     #1124 起安卓的 libtransport.so 也开 `mobile-ffi`，transport 在它下依赖 `crates/proto`。
 #     这份清单与 gradle inputs 的一致性由 tools/test-release-version-source.sh 校验。
 #   - iOS（#348）：`apps/ios/**`、传输 XCFramework 的输入（`crates/transport/`、`crates/proto/`、
 #     `Cargo.*`、`rust-toolchain.toml`、`tools/build-ios-*`）、会进 App 的生成源（`assets/i18n/`、
@@ -72,11 +72,11 @@ fi
 # 保守边界：src 文件里 `#[cfg(test)]` 块改动仍算产品改动——宁可多涨，不漏涨。
 PRODUCT=$(grep -Ev '(^|/)(tests?|benches)/' <<<"$CHANGED" || true)
 desk_hit=$(grep -Ec '^(crates/|apps/desktop/|assets/|Cargo\.(toml|lock)$|rust-toolchain\.toml)' <<<"$PRODUCT" || true)
-ANDROID_INPUTS='^(apps/android/|crates/transport/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|tools/build-android-iroh-blobs-bridge\.sh$)'
+ANDROID_INPUTS='^(apps/android/|crates/(transport|proto|pair-pake)/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|tools/build-android-iroh-blobs-bridge\.sh$)'
 andr_hit=$(grep -Ec "$ANDROID_INPUTS" <<<"$PRODUCT" || true)
 # iOS 输入（#348）：与 ci-ios 的触发路径同口径，但 tools/ios/ 只算会进产物的盖章/生成/字体脚本，
 # 测试与 e2e 脚本不算（改它们不该逼着发一个内容相同的 TestFlight 构建）。
-IOS_INPUTS='^(apps/ios/|crates/(transport|proto)/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|tools/build-ios-|tools/ios/(stamp-version|gen-strings|gen-tokens|sync-i18n|prepare-fonts)|assets/i18n/|assets/design/tokens\.json$|apps/android/app/src/main/res/values(-zh)?/strings\.xml$)'
+IOS_INPUTS='^(apps/ios/|crates/(transport|proto|pair-pake)/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|tools/build-ios-|tools/ios/(stamp-version|gen-strings|gen-tokens|sync-i18n|prepare-fonts)|assets/i18n/|assets/design/tokens\.json$|apps/android/app/src/main/res/values(-zh)?/strings\.xml$)'
 ios_hit=$(grep -Ec "$IOS_INPUTS" <<<"$PRODUCT" || true)
 
 newer() { # <prev> <cur> → 0 表示 cur 严格更新

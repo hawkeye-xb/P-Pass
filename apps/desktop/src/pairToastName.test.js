@@ -26,7 +26,7 @@ const renamed = {
   known: true,
   name: "客厅的手机",
   paired_at: 1_700_000_000_000,
-  revoked: false,
+  paired: true,
   photo_count: 1,
 };
 const renamedResp = { decided: true, device: "SM-S9210" };
@@ -84,10 +84,18 @@ const app = readFileSync(new URL("./App.svelte", import.meta.url), "utf8").repla
 );
 
 describe("DEV-06 接线", () => {
-  it("#1044：横幅的允许/拒绝显式传 pendingList[0]，不再有不带行的 confirmPair 调用", () => {
-    expect(app).toContain("confirmPair(true, pendingList[0])");
+  it("#1044：横幅的拒绝显式传 pendingList[0]，不再有不带行的 confirmPair 调用", () => {
     expect(app).toContain("confirmPair(false, pendingList[0])");
     expect(app).not.toMatch(/confirmPair\((true|false)\)/);
+  });
+
+  // #1118：允许 = 输入手机上的验证码。横幅上没有不带码的「允许」，只能打开确认框去输码；
+  // 每一处 confirmPair(true, …) 都带着这一行的码。
+  it("#1118：没有不带验证码的允许", () => {
+    expect(app).not.toContain("confirmPair(true, pendingList[0])");
+    const allows = app.match(/confirmPair\(true,[^)]*\)/g) ?? [];
+    expect(allows.length).toBeGreaterThan(0);
+    for (const call of allows) expect(call).toMatch(/confirmPair\(true, item, code\)/);
   });
 
   it("confirmPair 的 toast 走 pairResultName（行 item 优先、回执兜底），不再直接用 r.device", () => {

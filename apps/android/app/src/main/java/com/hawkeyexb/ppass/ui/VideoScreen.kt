@@ -71,7 +71,7 @@ fun VideoScreen(
         val cache = File(context.cacheDir, "video-${asset.hash.take(16)}.mp4")
         value = try {
             fetchOriginalCached(cache, asset.bytes) { dest ->
-                loader.download(asset.hash, dest) { got, total ->
+                loader.download(asset.hash, dest, asset.bytes) { got, total ->
                     if (total > 0) {
                         value = VideoState.Fetching((got * 100 / total).toInt())
                     }

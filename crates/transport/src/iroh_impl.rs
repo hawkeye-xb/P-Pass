@@ -15,7 +15,7 @@ use iroh::endpoint::{presets, Connection, ReadExactError, RecvStream, SendStream
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey, TransportAddr};
 
 use crate::conninfo::{classify, status_of_live, ConnInfo, ConnectionStatus, PathFacts};
-use crate::{NodeId, Result, Transport, TransportError, MAX_FRAME};
+use crate::{NodeId, Result, Transport, TransportError};
 
 /// Construction inputs, mapped from the daemon `Config` (T-004): the daemon
 /// passes `Config.relay_urls` in here. Address lookup (发现) stays on n0
@@ -212,6 +212,20 @@ impl ConnectionCache {
         stale
     }
 
+    /// #1119：取出这台设备的全部缓存连接（任意 ALPN），交给调用方关闭。
+    fn take_peer(&mut self, peer: NodeId) -> Vec<Connection> {
+        let mut taken = Vec::new();
+        self.entries.retain(|key, entry| {
+            if key.peer == peer {
+                taken.push(entry.conn.clone());
+                false
+            } else {
+                true
+            }
+        });
+        taken
+    }
+
     fn remove_if_same(&mut self, key: &ConnectionKey, conn: &Connection) {
         if self
             .entries
@@ -242,6 +256,25 @@ fn spawn_connection_reaper(cache: Weak<Mutex<ConnectionCache>>) {
     });
 }
 
+/// #1119：登记一条入站连接，连接关闭时自动移除。
+fn track_inbound(inbound: &InboundConnections, peer: NodeId, conn: Connection) {
+    let id = conn.stable_id();
+    inbound
+        .lock()
+        .expect("inbound connections lock")
+        .insert(id, (peer, conn.clone()));
+    let weak = Arc::downgrade(inbound);
+    tokio::spawn(async move {
+        let _ = conn.closed().await;
+        if let Some(inbound) = weak.upgrade() {
+            inbound
+                .lock()
+                .expect("inbound connections lock")
+                .remove(&id);
+        }
+    });
+}
+
 fn watch_connection_close(
     cache: Weak<Mutex<ConnectionCache>>,
     key: ConnectionKey,
@@ -265,7 +298,7 @@ type ConnectGate = Arc<tokio::sync::Mutex<()>>;
 pub struct IrohTransport {
     ep: Endpoint,
     /// Peer address book, fed by [`Self::add_peer`] (pairing/tickets).
-    peers: Arc<Mutex<HashMap<NodeId, EndpointAddr>>>,
+    peers: Arc<Mutex<lru::LruCache<NodeId, EndpointAddr>>>,
     connections: Arc<Mutex<ConnectionCache>>,
     /// One gate per `(peer, ALPN)`: serializes cache misses for the SAME key
     /// so concurrent requests cannot perform duplicate handshakes before
@@ -279,7 +312,62 @@ pub struct IrohTransport {
     /// here instead of the ctrl stream (one endpoint = one accept queue;
     /// a daemon serving both planes shares the loop, T-033).
     blobs_handler: Arc<Mutex<Option<crate::blobs::GatedBlobs>>>,
+    /// #1119：每一条仍活着的入站连接（按 QUIC stable id）。连接缓存按
+    /// (设备, ALPN) 只记一条，客户端每次请求新开连接时长连接（订阅）的登记会被
+    /// 覆盖；`close_peer` 要关掉一台设备的**全部**连接，靠的是这张表（三星真机
+    /// E3 抓到：订阅开着，`close_peer` 却一条都没找到）。
+    inbound: InboundConnections,
+    /// #1122：入站连接的准入判据（见 [`Self::set_admission`]）。
+    admission: AdmissionSlot,
 }
+
+/// #1122：入站连接准入判据：`(对端, ALPN) -> 放行？`。未设置 = 全部放行。
+pub type Admission = Arc<dyn Fn(NodeId, &[u8]) -> bool + Send + Sync>;
+
+#[derive(Clone, Default)]
+struct AdmissionSlot(Arc<std::sync::RwLock<Option<Admission>>>);
+
+impl AdmissionSlot {
+    fn admits(&self, peer: NodeId, alpn: &[u8]) -> bool {
+        match self.0.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            Some(admit) => admit(peer, alpn),
+            None => true,
+        }
+    }
+}
+
+/// 装在端点上的 iroh 钩子：只管入站（我方是服务端）的连接，出站一律放行。
+#[derive(Clone)]
+struct AdmissionHook(AdmissionSlot);
+
+impl std::fmt::Debug for AdmissionHook {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("AdmissionHook")
+    }
+}
+
+impl iroh::endpoint::EndpointHooks for AdmissionHook {
+    fn after_handshake<'a>(
+        &'a self,
+        conn: &'a Connection,
+    ) -> impl std::future::Future<Output = iroh::endpoint::AfterHandshakeOutcome> + Send + 'a {
+        let outcome = if conn.side() == iroh::endpoint::Side::Server
+            && !self
+                .0
+                .admits(NodeId(*conn.remote_id().as_bytes()), conn.alpn())
+        {
+            iroh::endpoint::AfterHandshakeOutcome::Reject {
+                error_code: crate::NOT_PAIRED_CLOSE_CODE.into(),
+                reason: b"not_paired".to_vec(),
+            }
+        } else {
+            iroh::endpoint::AfterHandshakeOutcome::Accept
+        };
+        async move { outcome }
+    }
+}
+
+type InboundConnections = Arc<Mutex<HashMap<usize, (NodeId, Connection)>>>;
 
 /// DAE-02: derive the stable node id from the identity secret key
 /// WITHOUT binding an endpoint.
@@ -321,8 +409,17 @@ impl IrohTransport {
                 .map_err(|e| TransportError::Bind(e.to_string()))?;
         }
 
+        // #1122：每条连接上对端可同时打开的双向流数（iroh/quinn 自带的传输参数）。
+        let quic = iroh::endpoint::QuicTransportConfig::builder()
+            .max_concurrent_bidi_streams(crate::MAX_CONCURRENT_BIDI_STREAMS.into())
+            .build();
+        // #1122：入站连接握手完成（已知对端 NodeId 与 ALPN）即按准入判据放行或拒绝，
+        // 用 iroh 自带的 EndpointHooks::after_handshake——被拒的不读任何请求。
+        let admission = AdmissionSlot::default();
         let alpns = cfg.alpns.iter().map(|a| a.as_bytes().to_vec()).collect();
         let ep = builder
+            .transport_config(quic)
+            .hooks(AdmissionHook(admission.clone()))
             .alpns(alpns)
             .bind()
             .await
@@ -332,10 +429,14 @@ impl IrohTransport {
         spawn_connection_reaper(Arc::downgrade(&connections));
         Ok(Self {
             ep,
-            peers: Arc::default(),
+            peers: Arc::new(Mutex::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(crate::PEER_BOOK_CAPACITY).expect("nonzero"),
+            ))),
+            admission,
             connections,
             connect_gates: Arc::default(),
             blobs_handler: Arc::default(),
+            inbound: Arc::default(),
         })
     }
 
@@ -361,7 +462,7 @@ impl IrohTransport {
     /// with [`Transport::connect`].
     pub fn add_peer(&self, addr: PeerAddr) -> NodeId {
         let id = addr.node_id();
-        self.peers.lock().expect("peers lock").insert(id, addr.0);
+        self.peers.lock().expect("peers lock").put(id, addr.0);
         id
     }
 
@@ -416,6 +517,48 @@ impl IrohTransport {
         self.path_of(peer, alpn)
             .map(status_of_live)
             .unwrap_or(ConnectionStatus::Unknown)
+    }
+
+    /// #1119：这台设备的配对记录已删除——用 iroh 自带的 `Connection::close`
+    /// 关掉与它的全部连接（控制面、下载，以及 blobs 处理器里在服务的连接），
+    /// 不等空闲回收。对端看到关闭码 [`crate::UNPAIRED_CLOSE_CODE`]。之后它再连
+    /// 进来，每个请求照常过 authz（没有配对记录 ⇒ 只剩配对那扇门）。返回关掉了
+    /// 几条连接（同一连接只算一次）。
+    pub fn close_peer(&self, peer: NodeId) -> usize {
+        let mut conns = self
+            .connections
+            .lock()
+            .expect("connection cache lock")
+            .take_peer(peer);
+        conns.extend(
+            self.inbound
+                .lock()
+                .expect("inbound connections lock")
+                .values()
+                .filter(|(p, _)| *p == peer)
+                .map(|(_, c)| c.clone()),
+        );
+        if let Some(blobs) = self
+            .blobs_handler
+            .lock()
+            .expect("blobs handler lock")
+            .as_ref()
+        {
+            conns.extend(blobs.connections_of(peer));
+        }
+        let mut seen = std::collections::HashSet::new();
+        for conn in &conns {
+            if seen.insert(conn.stable_id()) {
+                conn.close(crate::UNPAIRED_CLOSE_CODE.into(), b"unpaired");
+            }
+        }
+        seen.len()
+    }
+
+    /// #1122：设置入站连接的准入判据。握手完成后、读任何请求之前判定；被拒的
+    /// 连接收到 [`crate::NOT_PAIRED_CLOSE_CODE`]，不登记地址、不进连接缓存。
+    pub fn set_admission(&self, admit: Admission) {
+        *self.admission.0.write().unwrap_or_else(|e| e.into_inner()) = Some(admit);
     }
 
     /// Crate-internal endpoint access (blobs.rs shares the endpoint).
@@ -492,10 +635,7 @@ impl IrohTransport {
         self.ep
             .connect(addr, alpn.as_bytes())
             .await
-            .map_err(|e| TransportError::Connect {
-                peer,
-                reason: e.to_string(),
-            })
+            .map_err(|e| connect_err(peer, e))
     }
 
     /// A connection of its own, outside the per-peer cache, plus one stream
@@ -507,18 +647,20 @@ impl IrohTransport {
     /// same (`DaemonClient.call` dials per call). Path knowledge is still
     /// shared through the one Endpoint, so this costs a handshake, not a
     /// fresh hole-punch. The caller owns the connection and closes it.
-    #[cfg(feature = "ios-ffi")]
+    #[cfg(feature = "mobile-ffi")]
     pub(crate) async fn connect_dedicated(
         &self,
         peer: NodeId,
         alpn: &str,
     ) -> Result<(Connection, BiStream)> {
         let conn = self.dial(peer, alpn).await?;
-        let (send, recv) = conn
-            .open_bi()
-            .await
-            .map_err(|e| TransportError::Io(e.to_string()))?;
-        Ok((conn, BiStream { send, recv }))
+        let (send, recv) = conn.open_bi().await.map_err(|e| conn_err(&conn, e))?;
+        let stream = BiStream {
+            send,
+            recv,
+            conn: conn.clone(),
+        };
+        Ok((conn, stream))
     }
 
     /// Crate-internal raw connection for the blobs fetch path.
@@ -537,6 +679,7 @@ impl Transport for IrohTransport {
 
         let peers = Arc::clone(&self.peers);
         let blobs_handler = Arc::clone(&self.blobs_handler);
+        let inbound = Arc::clone(&self.inbound);
         tokio::spawn(async move {
             while let Some(incoming) = ep.accept().await {
                 let Ok(mut accepting) = incoming.accept() else {
@@ -546,6 +689,7 @@ impl Transport for IrohTransport {
                 let connections = Arc::clone(&connections);
                 let peers = Arc::clone(&peers);
                 let blobs_handler = Arc::clone(&blobs_handler);
+                let inbound = Arc::clone(&inbound);
                 // Finish each handshake off the accept loop so one slow
                 // client cannot stall the others.
                 tokio::spawn(async move {
@@ -564,6 +708,7 @@ impl Transport for IrohTransport {
                         conn.clone(),
                     );
                     watch_connection_close(Arc::downgrade(&connections), key, conn.clone());
+                    track_inbound(&inbound, peer, conn.clone());
                     // Register the dialer's observed addresses so this side
                     // can dial BACK (e.g. blobs pull during backup, T-032) —
                     // inbound peers are reachable without discovery services.
@@ -588,7 +733,7 @@ impl Transport for IrohTransport {
                             id: conn.remote_id(),
                             addrs,
                         };
-                        peers.lock().expect("peers lock").insert(peer, ep_addr);
+                        peers.lock().expect("peers lock").put(peer, ep_addr);
                     }
                     // Data-plane connections go straight to the blobs
                     // handler; only ctrl-plane connections reach the app.
@@ -610,21 +755,22 @@ impl Transport for IrohTransport {
 
     async fn connect(&self, peer: NodeId, alpn: &str) -> Result<BiStream> {
         let conn = self.get_or_connect(peer, alpn).await?;
-        let (send, recv) = match conn.open_bi().await {
-            Ok(streams) => streams,
+        match conn.open_bi().await {
+            Ok((send, recv)) => Ok(BiStream { send, recv, conn }),
             Err(_) => {
                 // A remote close can be in flight before `close_reason()` is
                 // observable locally. Drop this cache entry and retry once on
                 // a fresh connection rather than handing callers a dead stream.
                 self.discard_if_same(peer, alpn, &conn);
                 let fresh = self.get_or_connect(peer, alpn).await?;
-                fresh
-                    .open_bi()
-                    .await
-                    .map_err(|e| TransportError::Io(e.to_string()))?
+                let (send, recv) = fresh.open_bi().await.map_err(|e| conn_err(&fresh, e))?;
+                Ok(BiStream {
+                    send,
+                    recv,
+                    conn: fresh,
+                })
             }
-        };
-        Ok(BiStream { send, recv })
+        }
     }
 
     fn conn_info(&self, peer: NodeId) -> ConnInfo {
@@ -638,7 +784,7 @@ impl Transport for IrohTransport {
 
 /// iroh-independent snapshot of a connection's open paths (shared by
 /// `conn_info` and `connection_status`).
-fn path_facts(conn: &Connection) -> Vec<PathFacts> {
+pub(crate) fn path_facts(conn: &Connection) -> Vec<PathFacts> {
     conn.paths()
         .iter()
         .map(|p| PathFacts {
@@ -664,7 +810,7 @@ fn is_cgnat(ip: &std::net::IpAddr) -> bool {
     }
 }
 
-fn endpoint_id(id: NodeId) -> Result<EndpointId> {
+pub(crate) fn endpoint_id(id: NodeId) -> Result<EndpointId> {
     EndpointId::from_bytes(&id.0).map_err(|_| TransportError::InvalidNodeId)
 }
 
@@ -704,8 +850,12 @@ impl Incoming {
             .conn
             .accept_bi()
             .await
-            .map_err(|e| TransportError::Io(e.to_string()))?;
-        Ok(BiStream { send, recv })
+            .map_err(|e| conn_err(&self.conn, e))?;
+        Ok(BiStream {
+            send,
+            recv,
+            conn: self.conn.clone(),
+        })
     }
 }
 
@@ -715,6 +865,54 @@ impl Incoming {
 pub struct BiStream {
     send: SendStream,
     recv: RecvStream,
+    /// #1122：所属连接——流出错时看它是不是被对端用应用关闭码关掉的。
+    conn: Connection,
+}
+
+/// #1122：拨号失败。对端握手后用应用关闭码拒绝了这次连接（准入钩子的 401）⇒
+/// [`TransportError::PeerClosed`]；其余 ⇒ [`TransportError::Connect`]。
+pub(crate) fn connect_err(peer: NodeId, e: iroh::endpoint::ConnectError) -> TransportError {
+    match e {
+        iroh::endpoint::ConnectError::Connection {
+            source: iroh::endpoint::ConnectionError::ApplicationClosed(close),
+            ..
+        } => TransportError::PeerClosed {
+            peer,
+            code: close.error_code.into_inner(),
+        },
+        e => TransportError::Connect {
+            peer,
+            reason: e.to_string(),
+        },
+    }
+}
+
+/// #1122：连接被对端用应用关闭码关掉（关闭帧来自经 TLS 认证的对端）？是就交出
+/// 带对端与关闭码的有类型错误。本地关闭、超时、网络断都不算。
+pub(crate) fn peer_closed(conn: &Connection) -> Option<TransportError> {
+    match conn.close_reason()? {
+        iroh::endpoint::ConnectionError::ApplicationClosed(close) => {
+            Some(TransportError::PeerClosed {
+                peer: NodeId(*conn.remote_id().as_bytes()),
+                code: close.error_code.into_inner(),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// 流 / 连接上的错误：对端应用关闭优先报成 [`TransportError::PeerClosed`]。
+fn conn_err(conn: &Connection, e: impl std::fmt::Display) -> TransportError {
+    peer_closed(conn).unwrap_or_else(|| TransportError::Io(e.to_string()))
+}
+
+/// #1122：读帧正文时每次最多读这么多（缓冲按实际收到的数据增长）。
+const READ_CHUNK: usize = 64 * 1024;
+
+/// #1122：全进程的在途帧字节预算（见 [`crate::FRAME_BUDGET_BYTES`]）。
+fn frame_budget() -> &'static tokio::sync::Semaphore {
+    static BUDGET: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    BUDGET.get_or_init(|| tokio::sync::Semaphore::new(crate::FRAME_BUDGET_BYTES as usize))
 }
 
 impl BiStream {
@@ -724,35 +922,72 @@ impl BiStream {
         self.send
             .write_all(frame)
             .await
-            .map_err(|e| TransportError::Io(e.to_string()))
+            .map_err(|e| conn_err(&self.conn, e))
     }
 
     /// Receive one complete frame (header + payload), ready for
     /// `proto::codec::decode`. `Ok(None)` = peer finished cleanly.
     pub async fn recv_frame(&mut self) -> Result<Option<Vec<u8>>> {
+        self.recv_frame_max(crate::MAX_FRAME).await
+    }
+
+    /// #1122：读一帧，正文不超过 `max` 字节。
+    ///
+    /// - 不按对端声明的长度预分配：缓冲随实际收到的数据增量增长（每次最多
+    ///   [`READ_CHUNK`]），声明了 16 MiB 却只发几个字节的对端只占几个字节。
+    /// - 声明长度超过 `max` 直接拒绝，一个字节的正文都不读。
+    /// - 正文必须在 [`crate::FRAME_READ_TIMEOUT`] 内读完（含等待在途字节预算），
+    ///   慢速发送者超时即放弃这条流。
+    /// - 读正文期间占用全进程在途字节预算 [`crate::FRAME_BUDGET_BYTES`]，读完归还。
+    pub async fn recv_frame_max(&mut self, max: u32) -> Result<Option<Vec<u8>>> {
+        self.recv_frame_within(max, crate::FRAME_READ_TIMEOUT).await
+    }
+
+    /// [`Self::recv_frame_max`] with an explicit body deadline (tests use a short one).
+    pub async fn recv_frame_within(
+        &mut self,
+        max: u32,
+        deadline: std::time::Duration,
+    ) -> Result<Option<Vec<u8>>> {
         let mut header = [0u8; 4];
         match self.recv.read_exact(&mut header).await {
             Ok(()) => {}
             Err(ReadExactError::FinishedEarly(0)) => return Ok(None),
-            Err(e) => return Err(TransportError::Io(e.to_string())),
+            Err(e) => return Err(conn_err(&self.conn, e)),
         }
         let len = u32::from_le_bytes(header);
-        if len > MAX_FRAME {
-            return Err(TransportError::FrameTooLarge(len));
+        let max = max.min(crate::MAX_FRAME);
+        if len > max {
+            return Err(TransportError::FrameTooLarge { len, max });
         }
-        let mut frame = vec![0u8; 4 + len as usize];
-        frame[..4].copy_from_slice(&header);
-        self.recv
-            .read_exact(&mut frame[4..])
+        let recv = &mut self.recv;
+        let conn = &self.conn;
+        let body = async move {
+            let _budget = frame_budget()
+                .acquire_many(len.max(1))
+                .await
+                .map_err(|e| TransportError::Io(e.to_string()))?;
+            let mut frame = Vec::with_capacity(4 + (len as usize).min(READ_CHUNK));
+            frame.extend_from_slice(&header);
+            let mut chunk = vec![0u8; READ_CHUNK.min(len as usize)];
+            while frame.len() < 4 + len as usize {
+                let want = (4 + len as usize - frame.len()).min(chunk.len());
+                match recv.read(&mut chunk[..want]).await {
+                    Ok(Some(n)) => frame.extend_from_slice(&chunk[..n]),
+                    Ok(None) => {
+                        return Err(TransportError::TruncatedFrame {
+                            expected: len as usize,
+                            got: frame.len() - 4,
+                        })
+                    }
+                    Err(e) => return Err(conn_err(conn, e)),
+                }
+            }
+            Ok(Some(frame))
+        };
+        tokio::time::timeout(deadline, body)
             .await
-            .map_err(|e| match e {
-                ReadExactError::FinishedEarly(got) => TransportError::TruncatedFrame {
-                    expected: len as usize,
-                    got,
-                },
-                e => TransportError::Io(e.to_string()),
-            })?;
-        Ok(Some(frame))
+            .map_err(|_| TransportError::FrameTimeout(deadline))?
     }
 
     /// Read the next chunk of raw (unframed) bytes — a raw-stream plane's
@@ -766,16 +1001,21 @@ impl BiStream {
                 Ok(Some(buf))
             }
             Ok(None) => Ok(None),
-            Err(e) => Err(TransportError::Io(e.to_string())),
+            Err(e) => Err(conn_err(&self.conn, e)),
         }
     }
 
     /// Finish the send side (graceful half-close). The peer's
     /// `recv_frame` then returns `Ok(None)`.
     pub fn finish(&mut self) -> Result<()> {
-        self.send
-            .finish()
-            .map_err(|e| TransportError::Io(e.to_string()))
+        self.send.finish().map_err(|e| conn_err(&self.conn, e))
+    }
+
+    /// #1119：等对端确认收齐这条流已发出的全部数据（QUIC 层确认，不代表对端
+    /// 已处理）。在 [`Self::finish`] 之后、主动关闭连接之前用——QUIC 的连接关闭
+    /// 会丢弃尚未送达的流数据。对端停止接收或连接已断也算结束。
+    pub async fn delivered(&self) {
+        let _ = self.send.stopped().await;
     }
 }
 

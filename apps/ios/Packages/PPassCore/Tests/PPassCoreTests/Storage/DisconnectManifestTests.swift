@@ -5,6 +5,7 @@ import XCTest
 
 private struct NullSubmitter: BackgroundTaskSubmitter {
     func submit(_ spec: BackgroundTaskRequestSpec) throws {}
+    func submitShort(earliestBeginDate: Date) throws {}
     func cancelAll() {}
 }
 
@@ -13,6 +14,7 @@ private final class RecordingRuntime: DisconnectRuntime {
     func stopFlowRuntime() { calls.append("flow") }
     func cancelScheduledWakes() { calls.append("wakes") }
     func stopMediaChangeObserver() { calls.append("media") }
+    func clearThumbnailMemoryCache() { calls.append("thumbs") }
 }
 
 final class DisconnectManifestTests: XCTestCase {
@@ -27,7 +29,7 @@ final class DisconnectManifestTests: XCTestCase {
         let ask = OnboardingNotificationAsk(directory: root)
         ask.initIfAbsent(existingUser: false)
         try ask.markAsked()
-        try DefinitiveNoticeStore(directory: root).save(DefinitiveNoticeState(notifiedLostEpoch: "e"))
+        try DefinitiveNoticeStore(directory: root).save(DefinitiveNoticeState(notifiedLostPairingId: "e"))
         try SentinelStore(directory: root).recordReachable(now: 1)
         try BackupScopeStore(directory: root, daemonNodeId: nil).saveScope(selected: ["x"], allCurrent: ["x"])
         try BackupScopeStore(directory: root, daemonNodeId: "node-a").saveScope(selected: ["a"], allCurrent: ["a"])
@@ -36,7 +38,7 @@ final class DisconnectManifestTests: XCTestCase {
         flow.setWaitReason(.wifi)
         let orders = try SQLiteOrderStore(directory: root)
         try orders.claimOwner("node-a", idFloor: 0)
-        try orders.insert(NewOrder(mediaId: "m1", sourceVersion: "v", bucketId: "a", contentHash: "h", state: .confirmed, pairingEpoch: "e"))
+        try orders.insert(NewOrder(mediaId: "m1", sourceVersion: "v", bucketId: "a", contentHash: "h", state: .confirmed, pairingId: "e"))
         try Data("{}".utf8).write(to: root.appendingPathComponent("pairing.json"))
         PlannedWakeScheduler(directory: root, submitter: NullSubmitter(), logger: NoopLogger()).scheduleUnreachableProbes()
         try Data([1, 2, 3]).write(to: root.appendingPathComponent(DeviceIdentity.legacyPlaintextFileName))
@@ -57,7 +59,7 @@ final class DisconnectManifestTests: XCTestCase {
         defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: stuck.path) }
         let runtime = RecordingRuntime()
         XCTAssertThrowsError(try applyDisconnectManifest(root: tmp.url, runtime: runtime))
-        XCTAssertEqual(Set(runtime.calls), ["flow", "wakes", "media"], "前面的行失败，三个运行时停止行照常执行")
+        XCTAssertEqual(Set(runtime.calls), ["flow", "wakes", "media", "thumbs"], "前面的行失败，运行时停止行照常执行")
     }
 
     /// 门禁：每一样落盘的状态都在清单里（含 SQLite 的 -wal / -shm 伴生文件）。
@@ -78,7 +80,7 @@ final class DisconnectManifestTests: XCTestCase {
         try applyDisconnectManifest(root: tmp.url, runtime: runtime)
         XCTAssertFalse(FileManager.default.fileExists(atPath: tmp.file("pairing.json").path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: tmp.file(PlannedWakeScheduler.fileName).path), "唤醒计划随断开清掉")
-        XCTAssertEqual(runtime.calls, ["flow", "wakes", "media"], "清单顺序就是执行顺序")
+        XCTAssertEqual(runtime.calls, ["flow", "wakes", "media", "thumbs"], "清单顺序就是执行顺序")
         XCTAssertFalse(AutoBackupPrefs(directory: tmp.url).enabled())
         XCTAssertTrue(AutoBackupPrefs(directory: tmp.url).requested())
         XCTAssertTrue(FileManager.default.fileExists(atPath: tmp.file(DeviceIdentity.markerFileName).path), "本次安装的标记留着：断开后再配对还是同一台手机")
@@ -89,6 +91,65 @@ final class DisconnectManifestTests: XCTestCase {
         XCTAssertTrue(FlowControlStore(directory: tmp.url).paused(), "待拍板行：现状保留")
         XCTAssertEqual(try SQLiteOrderStore(directory: tmp.url).currentOrders().collect().count, 1, "连回同一台桌面 CONFIRMED 仍有效")
         XCTAssertTrue(FileManager.default.fileExists(atPath: tmp.file("iroh-blobs-provider/data/blob").path))
+    }
+
+    // MARK: 原图缓存（#1119）：存储根之外的 Caches / tmp
+
+    private struct Roots {
+        let root = TempDir(), caches = TempDir(), tmp = TempDir()
+        var external: DisconnectExternalRoots { DisconnectExternalRoots(caches: caches.url, tmp: tmp.url) }
+        func exists(_ dir: TempDir, _ rel: String) -> Bool { FileManager.default.fileExists(atPath: dir.file(rel).path) }
+    }
+
+    private func populateOriginalCaches(_ r: Roots) throws {
+        let fm = FileManager.default
+        for rel in ["ppass-videos/abc.mov", "ppass-videos/def.mov.part"] {
+            try fm.createDirectory(at: r.caches.file(rel).deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data([1]).write(to: r.caches.file(rel))
+        }
+        for rel in ["ppass-share/p.jpg", "ppass-blobstore/data/blob", "ppass-originals/mine.heic"] {
+            try fm.createDirectory(at: r.tmp.file(rel).deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data([1]).write(to: r.tmp.file(rel))
+        }
+        try Data([1]).write(to: r.caches.file("system-owned.db"))
+        try Data([1]).write(to: r.tmp.file("system-owned.tmp"))
+    }
+
+    /// 断开清掉视频原图缓存（含 .part）、照片原图临时目录、取回临时仓库；不碰系统自己的文件，也不碰备份导入器的临时目录。
+    /// 反证：把 originalVideoCache / originalShareTemp / fetchScratch 任一行改成 .keep，对应断言红；
+    /// 把清除范围放大成整个 Caches / tmp，system-owned 两条红。
+    func testDisconnectClearsTheOriginalCachesOutsideTheStorageRoot() throws {
+        let r = Roots()
+        try populateOriginalCaches(r)
+        try applyDisconnectManifest(root: r.root.url, runtime: RecordingRuntime(), external: r.external)
+        XCTAssertFalse(r.exists(r.caches, "ppass-videos"), "视频原图缓存整目录清掉（含 .part）")
+        XCTAssertFalse(r.exists(r.tmp, "ppass-share"))
+        XCTAssertFalse(r.exists(r.tmp, "ppass-blobstore"))
+        XCTAssertTrue(r.exists(r.tmp, "ppass-originals/mine.heic"), "导入器临时目录是手机自己的照片，不碰")
+        XCTAssertTrue(r.exists(r.caches, "system-owned.db"))
+        XCTAssertTrue(r.exists(r.tmp, "system-owned.tmp"))
+    }
+
+    /// 不给外部根就不碰（包测试跑在开发机上，不许误删真缓存）。
+    func testWithoutExternalRootsTheCachesAreNotTouched() throws {
+        let r = Roots()
+        try populateOriginalCaches(r)
+        try applyDisconnectManifest(root: r.root.url, runtime: RecordingRuntime())
+        XCTAssertTrue(r.exists(r.caches, "ppass-videos/abc.mov"))
+        XCTAssertTrue(r.exists(r.tmp, "ppass-share/p.jpg"))
+    }
+
+    /// 门禁也盯 Caches / tmp 里 ppass- 开头的目录：新加的缓存目录不登记就过不了。
+    /// 反证：删掉 originalVideoCache 这一行，门禁把 caches:ppass-videos 列出来，红。
+    func testTheGateCoversTheOriginalCacheDirectories() throws {
+        let r = Roots()
+        try populateOriginalCaches(r)
+        XCTAssertEqual(unregisteredStatePaths(root: r.root.url, external: r.external), [])
+        try FileManager.default.createDirectory(at: r.caches.file("ppass-new-cache"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: r.tmp.file("ppass-new-temp"), withIntermediateDirectories: true)
+        XCTAssertEqual(unregisteredStatePaths(root: r.root.url, external: r.external), ["caches:ppass-new-cache", "tmp:ppass-new-temp"])
+        let without = DisconnectState.allCases.filter { $0 != .originalVideoCache }
+        XCTAssertTrue(unregisteredStatePaths(root: r.root.url, manifest: without, external: r.external).contains("caches:ppass-videos"))
     }
 
     func testRowMatchingCoversCompanionsButNotLookalikes() {

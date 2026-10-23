@@ -45,7 +45,11 @@ if (-not (Test-Path $DAEMON)) { Write-Error "daemon.exe 不在 $Bin —— 先 g
 if (-not (Test-Path $TC)) { Write-Error "testclient.exe 不在 $Bin"; exit 1 }
 
 New-Item -ItemType Directory -Force -Path $Work | Out-Null
-$env:PPF_DATA_DIR = Join-Path $Work "library"
+# #1115：daemon --ephemeral 是测试沙盒——库目录由它自己在系统临时目录里建（stdout 第一行
+# `SANDBOX: <目录>`），不接受 PPF_DATA_DIR / PPF_LOG_FILE；stdin EOF 即退出，所以 stdin 要接一根
+# 一直开着的管道（Start-Process 做不到，改用 .NET Process）。
+Remove-Item Env:PPF_DATA_DIR -ErrorAction SilentlyContinue
+Remove-Item Env:PPF_LOG_FILE -ErrorAction SilentlyContinue
 $env:PPF_RELAY_URLS = ""
 
 $script:DAEMON_PID = $null
@@ -53,6 +57,10 @@ $daemonLog = Join-Path $Work "daemon.log"
 $daemonErr = Join-Path $Work "daemon.err"
 
 function Stop-Daemon {
+    if ($script:DAEMON_PROC) {
+        try { $script:DAEMON_PROC.StandardInput.Close() } catch {}   # EOF → 沙盒 daemon 自己退出
+        $script:DAEMON_PROC = $null
+    }
     if ($script:DAEMON_PID) {
         Stop-Process -Id $script:DAEMON_PID -Force -ErrorAction SilentlyContinue
         $script:DAEMON_PID = $null
@@ -105,26 +113,37 @@ function Assert-IpcOk([string]$method, [string]$resp) {
 }
 
 try {
-    Write-Host "── 0. 启动 daemon（$env:PPF_DATA_DIR）"
-    $proc = Start-Process -FilePath $DAEMON -RedirectStandardOutput $daemonLog -RedirectStandardError $daemonErr -PassThru -WindowStyle Hidden
-    $null = $proc.Handle   # H-09b：缓存句柄，之后 $proc.ExitCode 才可读（PS 5.1 标准修法）
+    Write-Host "── 0. 启动 daemon（--ephemeral 测试沙盒）"
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $DAEMON
+    $psi.Arguments = "--ephemeral"
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardInput = $true    # 管道一直开着；Stop-Daemon 关掉它 = EOF
+    $psi.RedirectStandardOutput = $true   # 读 SANDBOX: / NodeId: 两行
+    $psi.RedirectStandardError = $false   # stderr 不接管道（日志量大，读不及会把 daemon 堵住）
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $script:DAEMON_PROC = $proc
     $script:DAEMON_PID = $proc.Id
 
-    # 等 NodeId 出现（SEC-11 #496：stdout 被重定向时 daemon 不再打印配对串）
+    # 等 SANDBOX: 与 NodeId: 两行（SEC-11 #496：stdout 不是终端时 daemon 不打印配对串）
     $node = $null
-    for ($i = 0; $i -lt 100; $i++) {
-        Start-Sleep -Milliseconds 200
-        if (Test-Path $daemonLog) {
-            $m = Select-String -Path $daemonLog -Pattern "NodeId: ([0-9a-fA-F]{64})" | Select-Object -First 1
-            if ($m) { $node = $m.Matches[0].Groups[1].Value; break }
-        }
-        if ($proc.HasExited) { Write-Error "daemon 提前退出，日志: $(Get-Content $daemonErr -ErrorAction SilentlyContinue | Select-Object -Last 5)"; exit 1 }
+    $sandbox = $null
+    $deadline = (Get-Date).AddSeconds(20)
+    while ((Get-Date) -lt $deadline -and -not $node) {
+        $line = $proc.StandardOutput.ReadLine()
+        if ($null -eq $line) { break }
+        Add-Content -Path $daemonLog -Value $line
+        if ($line -match '^SANDBOX: (.+)$') { $sandbox = $Matches[1].Trim() }
+        if ($line -match 'NodeId: ([0-9a-fA-F]{64})') { $node = $Matches[1] }
     }
-    if (-not $node) { Write-Error "20 秒内日志中未见 NodeId —— daemon 启动异常（看 $daemonErr）"; exit 1 }
+    if ($proc.HasExited) { Write-Error "daemon 提前退出（退出码 $($proc.ExitCode)），stdout: $(Get-Content $daemonLog -ErrorAction SilentlyContinue | Select-Object -Last 5)"; exit 1 }
+    if (-not $sandbox) { Write-Error "stdout 上没有 SANDBOX: 行 —— daemon 启动异常（看 $daemonLog）"; exit 1 }
+    if (-not $node) { Write-Error "20 秒内 stdout 未见 NodeId —— daemon 启动异常（看 $daemonLog）"; exit 1 }
 
     # SEC-11 (#496)：配对串经 IPC pairing.start 现取，只在内存里，不经任何文件。
     # ipc.token 由 ipc.serve 稍晚才写，所以重试并每次重读。
-    $ipcToken = Join-Path $env:PPF_DATA_DIR "ipc.token"
+    $ipcToken = Join-Path $sandbox "ipc.token"
     $qr = $null
     for ($i = 0; $i -lt 50; $i++) {
         if (Test-Path $ipcToken) {
@@ -149,8 +168,22 @@ try {
     $pairLog = Join-Path $Work "pair.log"
     $pair = Start-Process -FilePath $TC -ArgumentList @("pair", "--token", $qr, "--name", "win-agent") -RedirectStandardOutput $pairLog -RedirectStandardError (Join-Path $Work "pair.err") -PassThru -WindowStyle Hidden
     $null = $pair.Handle   # H-09b：缓存句柄，ExitCode 才可读（替代匹配中文日志）
-    Start-Sleep -Seconds 3
-    $resp = Invoke-Ipc "pairing.confirm" '{"accept": true}'
+    # #1118：「允许」= 业主输入手机显示的 6 位验证码。testclient 在申请被收下后打出
+    # `PAIR_CODE=<6 位> node=<本机 NodeId>`，这里扮演业主：读到后带码确认，没有盲点允许。
+    $pairCode = $null
+    $pairNode = $null
+    for ($i = 0; $i -lt 100 -and -not $pairCode; $i++) {
+        if (Test-Path $pairLog) {
+            $m = Select-String -Path $pairLog -Pattern '^PAIR_CODE=(\d{6}) node=([0-9a-f]{64})' | Select-Object -First 1
+            if ($m) { $pairCode = $m.Matches[0].Groups[1].Value; $pairNode = $m.Matches[0].Groups[2].Value; break }
+        }
+        if ($pair.HasExited) { break }
+        Start-Sleep -Milliseconds 200
+    }
+    if (-not $pairCode) {
+        Write-Error "testclient 20 秒内没打出 PAIR_CODE 行，日志: $(Get-Content $pairLog -ErrorAction SilentlyContinue | Select-Object -Last 3)"; exit 1
+    }
+    $resp = Invoke-Ipc "pairing.confirm" ("{`"accept`":true,`"node_id`":`"$pairNode`",`"code`":`"$pairCode`"}")
     $null = Assert-IpcOk "pairing.confirm" $resp   # H-09b：Resp 不许丢弃
     $null = $pair.WaitForExit(15000)
     $pairExit = $pair.ExitCode   # 缓存句柄后此值可靠（之前恒 null）

@@ -1,0 +1,3 @@
+# #1121：签名环境的依赖面——只有 @tauri-apps/cli 一个包（及它按平台选的原生二进制包）。
+# 与 apps/desktop 同口径：不许装发布不足 24 小时的包（见 apps/desktop/pnpm-workspace.yaml）。
+minimumReleaseAgeStrict: true

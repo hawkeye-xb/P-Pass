@@ -9,10 +9,10 @@ expression: json
     "code": "VERSION_MISMATCH",
     "reason": "phone_outdated",
     "params": {
-      "min_ver": 2
+      "min_ver": 3
     },
     "msg_key": "fetch_failed"
   },
-  "ver": 2,
-  "min_ver": 2
+  "ver": 3,
+  "min_ver": 3
 }

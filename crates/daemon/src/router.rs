@@ -9,7 +9,6 @@
 //! ([`OutdatedPeers::check`]). An incompatible peer gets `VERSION_MISMATCH`
 //! and nothing else happens — no state is written.
 
-use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -57,14 +56,33 @@ pub const PAIR_CANCEL_CAPABILITY: &str = "pair.cancel.v1";
 /// Written by the ctrl plane and the download plane, read by the IPC device
 /// list (`needs_update`). Cleared for a peer the moment it sends a
 /// compatible request; a daemon restart forgets it until the next probe.
-#[derive(Clone, Default)]
+///
+/// #1122：容量 [`OUTDATED_PEERS_CAPACITY`]，按最近使用淘汰——按设备增长的表一律有上限。
+#[derive(Clone)]
 pub struct OutdatedPeers {
-    inner: Arc<Mutex<HashMap<[u8; 32], Reason>>>,
+    inner: Arc<Mutex<lru::LruCache<[u8; 32], Reason>>>,
+}
+
+/// #1122：版本不符登记表的容量。
+pub const OUTDATED_PEERS_CAPACITY: usize = 1024;
+
+impl Default for OutdatedPeers {
+    fn default() -> Self {
+        Self::with_capacity(OUTDATED_PEERS_CAPACITY)
+    }
 }
 
 impl OutdatedPeers {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn with_capacity(cap: usize) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(cap).expect("nonzero capacity"),
+            ))),
+        }
     }
 
     /// The version check for one request from `peer`. `Err` is the error to
@@ -77,7 +95,7 @@ impl OutdatedPeers {
         let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         match verdict {
             Ok(()) => {
-                map.remove(&peer.0);
+                map.pop(&peer.0);
                 Ok(())
             }
             Err(reason) => {
@@ -87,7 +105,7 @@ impl OutdatedPeers {
                 };
                 // One line per change, not per request: an old phone probes
                 // every ~30 s in the foreground.
-                if map.insert(peer.0, reason.clone()).as_ref() != Some(&reason) {
+                if map.put(peer.0, reason.clone()).as_ref() != Some(&reason) {
                     tracing::info!(
                         "#1070: version mismatch peer={peer:?} peer_ver={} peer_min={} → {reason}",
                         peer_versions.ver,
@@ -108,12 +126,29 @@ impl OutdatedPeers {
     pub fn needs_update(&self, node_id: &[u8]) -> Option<&'static str> {
         let map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         let key: [u8; 32] = node_id.try_into().ok()?;
-        map.get(&key).map(|reason| match reason {
+        map.peek(&key).map(|reason| match reason {
             Reason::DesktopOutdated => "desktop",
             _ => "phone",
         })
     }
 }
+
+/// #1119：手机断开后等「已断开」回应送达的上限，过了就直接关连接。
+const UNPAIR_REPLY_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// `device.unpair` 的回应是不是「这次配对已删除」。
+fn unpaired(resp: &Resp) -> bool {
+    resp.ok
+        && resp
+            .result
+            .as_ref()
+            .and_then(|r| r.get("unpaired"))
+            .and_then(|v| v.as_bool())
+            == Some(true)
+}
+
+/// #1118：读不到系统电脑名时、以及配对窗口外对未配对的对端报的通用名。
+pub const GENERIC_DEVICE_NAME: &str = "P-Pass 存储端";
 
 /// The ctrl-plane router: one per daemon process.
 #[derive(Clone)]
@@ -137,6 +172,11 @@ pub struct Router {
     /// Clock seam (T-070 时钟前跳剧本): production uses the wall clock;
     /// integration scenarios inject a controllable clock.
     now: std::sync::Arc<dyn Fn() -> i64 + Send + Sync>,
+    /// #1119：手机断开时关掉与它的全部连接。未注入 = 不关（测试 / 单组件构造）。
+    peer_closer: Option<crate::unpair::PeerCloser>,
+    /// #1122：没有配对记录的对端（只可能在配对窗口内进来）按设备限速。
+    unpaired_limiter: crate::frame_limits::UnpairedLimiter,
+    unpaired_conns: crate::frame_limits::UnpairedConns,
 }
 
 impl Router {
@@ -153,7 +193,16 @@ impl Router {
             subscriptions: SubscriptionRegistry::new(),
             outdated: OutdatedPeers::new(),
             now: std::sync::Arc::new(unix_ms_now),
+            peer_closer: None,
+            unpaired_limiter: crate::frame_limits::unpaired_limiter(),
+            unpaired_conns: crate::frame_limits::unpaired_conns(),
         }
+    }
+
+    /// #1119：注入「关掉与某台设备的全部连接」（main 传 `IrohTransport::close_peer`）。
+    pub fn with_peer_closer(mut self, closer: crate::unpair::PeerCloser) -> Self {
+        self.peer_closer = Some(closer);
+        self
     }
 
     /// IPC-02: 注入事件总线——backup commit / unpair 等数据面变化
@@ -224,10 +273,8 @@ impl Router {
     /// 失败静默：心跳是尽力而为的加速器，不是承诺——写库失败不影响
     /// hello 应答。
     async fn record_presence(&self, peer: transport::NodeId) {
-        let Ok(Some(device)) = self.db.get_device(&peer.0).await else {
-            return; // 未配对节点：hello 只是能力握手，不产生副作用
-        };
-        if device.revoked {
+        // 只刷新有配对记录的设备（没有配对 = hello 只是能力握手，不产生副作用）。
+        if self.db.active_pairing(&peer.0).is_none() {
             return;
         }
         let now = (self.now)();
@@ -256,6 +303,16 @@ impl Router {
             return;
         }
         let peer = conn.peer();
+        // #1122：未配对的连接占一个全局名额，连接结束（离开本函数）时归还；名额满了
+        // 直接断开，不读任何流。已配对设备不占名额。
+        let _slot = if self.db.active_pairing(&peer.0).is_none() {
+            match Arc::clone(&self.unpaired_conns).try_acquire_owned() {
+                Ok(slot) => Some(slot),
+                Err(_) => return,
+            }
+        } else {
+            None
+        };
         loop {
             let Ok(mut stream) = conn.accept_bi().await else {
                 return; // peer went away — nothing to clean up
@@ -276,17 +333,36 @@ impl Router {
     /// One request/response on one stream. A rejected stream does not carry
     /// on; the caller may accept another stream, which must pass authz again.
     async fn serve_stream(&self, peer: transport::NodeId, stream: &mut BiStream) -> bool {
-        let req = match stream.recv_frame().await {
+        // #1117：授权只读配对记录的内存副本，不查库。#1122：读帧之前就用它定上限、
+        // 给未配对的对端限速——超速的流一个字节都不读。
+        let pairing = self.db.active_pairing(&peer.0);
+        if pairing.is_none() && self.unpaired_limiter.check().is_err() {
+            return false;
+        }
+        let cap = crate::frame_limits::pre_read_cap(pairing.as_ref());
+        let (req, frame_len) = match stream.recv_frame_max(cap).await {
             Ok(Some(frame)) => match proto::codec::decode::<Req>(&frame) {
-                Ok(req) => req,
+                Ok(req) => (req, frame.len()),
                 Err(_) => {
                     let resp = Resp::err(String::new(), RespError::new(Reason::BadRequest));
                     let _ = self.send(stream, &resp).await;
                     return false;
                 }
             },
-            _ => return false, // clean finish or broken stream
+            Ok(None) => return false, // clean finish
+            Err(transport::TransportError::FrameTooLarge { .. }) => {
+                let resp = Resp::err(String::new(), RespError::new(Reason::BadRequest));
+                let _ = self.send(stream, &resp).await;
+                return false;
+            }
+            Err(_) => return false, // broken stream or slow sender (#1122)
         };
+        // #1122：按方法核对——只有确实需要大消息的方法才放宽。
+        if frame_len > crate::frame_limits::method_cap(&req.method) as usize + 4 {
+            let resp = Resp::err(req.id.clone(), RespError::new(Reason::BadRequest));
+            let _ = self.send(stream, &resp).await;
+            return false;
+        }
 
         // #1070: version first — an incompatible peer is told to update and
         // nothing else is looked at or written (not even a diag row: an old
@@ -296,17 +372,7 @@ impl Router {
             return false;
         }
 
-        let device = match self.db.get_device(&peer.0).await {
-            Ok(d) => d,
-            Err(e) => {
-                tracing::error!("device lookup failed: {e}");
-                let resp = Resp::err(req.id.clone(), RespError::new(Reason::Internal));
-                let _ = self.send(stream, &resp).await;
-                return false;
-            }
-        };
-
-        match authz::check(device.as_ref(), &req.method) {
+        match authz::check(pairing.as_ref(), &req.method) {
             Decision::Deny { reason } => {
                 // QA-17：diag 必须先于拒答响应落库。曾经先发响应再记
                 // diag——客户端收到 NOT_AUTHORIZED 的瞬间即可读 diag，
@@ -323,6 +389,19 @@ impl Router {
                 }
                 let resp = self.dispatch(peer, &req).await;
                 let _ = self.send(stream, &resp).await;
+                // #1119：手机自己断开、配对记录已删——先让「已断开」的回应送达
+                // （连接关闭会丢弃未送达的数据，最多等 2 秒），再关掉与它的全部
+                // 连接。电脑撤销走 IPC，不经过这里，删完立即关。
+                if req.method == methods::DEVICE_UNPAIR && unpaired(&resp) {
+                    if let Some(close) = &self.peer_closer {
+                        let _ = tokio::time::timeout(UNPAIR_REPLY_GRACE, stream.delivered()).await;
+                        let closed = close(peer);
+                        tracing::info!(
+                            "#1119: device unpaired, closed {closed} connection(s) peer={peer:?}"
+                        );
+                    }
+                    return false;
+                }
                 true
             }
         }
@@ -383,7 +462,7 @@ impl Router {
         let end_reason: String = loop {
             tokio::select! {
                 _ = token.cancelled() => break "revoked".to_string(),
-                frame = stream.recv_frame(), if client_send_open => {
+                frame = stream.recv_frame_max(crate::frame_limits::PAIRING_FRAME_MAX), if client_send_open => {
                     match frame {
                         Ok(Some(_)) => continue, // 这条流上的多余数据——忽略
                         Ok(None) => { client_send_open = false; continue; }
@@ -479,6 +558,7 @@ impl Router {
             methods::PAIR_REQUEST => self.handle_pair(peer, req).await,
             methods::PAIR_STATUS => self.handle_pair_status(peer, req),
             methods::PAIR_CANCEL => self.handle_pair_cancel(peer, req).await,
+            methods::PAIR_CONFIRM => self.handle_pair_confirm(peer, req).await,
             methods::DEVICE_UNPAIR => self.handle_unpair(peer, req).await,
             methods::FLOW_OFFER => self.handle_flow_delivery(peer, req).await,
             methods::FLOW_STATUS | methods::FLOW_SUSPEND | methods::FLOW_CANCEL_TUPLE => {
@@ -504,18 +584,30 @@ impl Router {
                 // 不心跳（客户端侧把关）。未配对节点的 hello 只是能力握手，
                 // 无设备行可更新，静默跳过。
                 self.record_presence(peer).await;
-                let pairing_epoch = self.db.pairing_epoch(&peer.0).await.ok().flatten();
+                let pairing_id = self.db.active_pairing(&peer.0).map(|p| p.id);
                 // #413 §7: Desktop health rides on hello for a paired member
-                // only — same zero-data rule as `pairing_epoch`.
-                let health = match (&pairing_epoch, &self.flow_delivery) {
+                // only — same zero-data rule as `pairing_id`.
+                let health = match (&pairing_id, &self.flow_delivery) {
                     (Some(_), Some(delivery)) => Some(delivery.health(peer).await),
                     _ => None,
                 };
+                // #1118：电脑名（系统里的名字，可能含用户真名）只给已配对的成员，或在配对窗口
+                // （二维码显示期间）里给来扫码的手机；其余时候只报通用名。手机核对用的是它自己
+                // 从二维码 NodeId 算出的指纹，名字只是方便辨认的标签。
+                let shown_name = pairing_id.is_some()
+                    || self
+                        .pairing
+                        .as_ref()
+                        .is_some_and(|p| p.window_open((self.now)()));
                 let ours = Hello {
                     proto_ver: PROTO_VER,
                     capabilities: SERVER_CAPABILITIES.iter().map(|s| s.to_string()).collect(),
-                    device_name: self.device_name.clone(),
-                    pairing_epoch,
+                    device_name: if shown_name {
+                        self.device_name.clone()
+                    } else {
+                        GENERIC_DEVICE_NAME.to_owned()
+                    },
+                    pairing_id,
                     health,
                 };
                 match serde_json::to_value(&ours) {
@@ -869,6 +961,11 @@ impl Router {
         if !pair_req.ack_then_poll {
             return Resp::err(req.id.clone(), RespError::new(Reason::PhoneOutdated));
         }
+        // #1118: no pairing code exchange = a phone older than the code step; same rule, same
+        // place (before the token is used up).
+        if pair_req.pake_a.trim().is_empty() {
+            return Resp::err(req.id.clone(), RespError::new(Reason::PhoneOutdated));
+        }
         // NET-10 (#128): accept-then-poll — answer as soon as the request
         // is queued; the verdict is read through `pair.status`. A bad or
         // replayed token is still the same immediate NOT_AUTHORIZED.
@@ -881,6 +978,10 @@ impl Router {
                     ttl_ms: sub.ttl_ms,
                 },
             ),
+            // #1118: a malformed SPAKE2 message is a broken request, not a probe of the token.
+            Err(crate::pairing::PairRejection::BadPake) => {
+                Resp::err(req.id.clone(), RespError::new(Reason::BadRequest))
+            }
             Err(_) => {
                 self.record_denial(peer, methods::PAIR_REQUEST, &Reason::PairTokenInvalid)
                     .await;
@@ -902,8 +1003,39 @@ impl Router {
         else {
             return Resp::err(req.id.clone(), RespError::new(Reason::BadRequest));
         };
-        let state = pairing.status(peer, &query.request_id, (self.now)());
-        ok_json(&req.id, &self.pair_status_reply(state))
+        let view = pairing.view(peer, &query.request_id, (self.now)());
+        ok_json(&req.id, &self.pair_status_reply(view))
+    }
+
+    /// `pair.confirm` (#1118): the phone's key confirmation for its own request. Same scoping
+    /// as `pair.status`. A match writes the pairing record and the reply carries `accepted` +
+    /// `confirm_b`; a mismatch voids the request (`pair_code_wrong`, audited as
+    /// `pair.code_failed`); before the owner typed the code there is nothing to confirm.
+    async fn handle_pair_confirm(&self, peer: transport::NodeId, req: &Req) -> Resp {
+        use crate::pairing::ConfirmError;
+        let Some(pairing) = &self.pairing else {
+            return Resp::err(req.id.clone(), RespError::new(Reason::UnsupportedMethod));
+        };
+        let Ok(query) = serde_json::from_value::<proto::PairConfirmRequest>(req.params.clone())
+        else {
+            return Resp::err(req.id.clone(), RespError::new(Reason::BadRequest));
+        };
+        let Some(confirm_a) = parse_hex_exact(&query.confirm_a, pair_pake::CONFIRM_LEN) else {
+            return Resp::err(req.id.clone(), RespError::new(Reason::BadRequest));
+        };
+        match pairing
+            .confirm_code(peer, &query.request_id, &confirm_a, (self.now)())
+            .await
+        {
+            Ok(view) => ok_json(&req.id, &self.pair_status_reply(Some(view))),
+            Err(ConfirmError::NotFound) => ok_json(&req.id, &self.pair_status_reply(None)),
+            Err(ConfirmError::NotReady) => {
+                Resp::err(req.id.clone(), RespError::new(Reason::BadRequest))
+            }
+            Err(ConfirmError::CodeWrong) => {
+                Resp::err(req.id.clone(), RespError::new(Reason::PairCodeWrong))
+            }
+        }
     }
 
     /// `pair.cancel` (DEV-07 #463): the submitting phone withdraws its own
@@ -921,81 +1053,99 @@ impl Router {
             return Resp::err(req.id.clone(), RespError::new(Reason::BadRequest));
         };
         let state = pairing.cancel(peer, &query.request_id, (self.now)()).await;
-        ok_json(&req.id, &self.pair_status_reply(state))
+        let view = state.map(|state| crate::pairing::TicketView {
+            state,
+            pake_b: None,
+            confirm_b: None,
+        });
+        ok_json(&req.id, &self.pair_status_reply(view))
     }
 
     /// Ledger state → wire reply, shared by `pair.status` and `pair.cancel`.
     fn pair_status_reply(
         &self,
-        state: Option<crate::pairing::PairState>,
+        view: Option<crate::pairing::TicketView>,
     ) -> proto::PairStatusReply {
         use crate::pairing::PairState;
         use proto::PairStatusState as S;
         let only = |state| proto::PairStatusReply {
             state,
-            accepted: None,
+            ..Default::default()
         };
-        match state {
-            Some(PairState::Pending) => only(S::Pending),
-            // Idempotent replay: the same payload the legacy reply carries.
-            Some(PairState::Accepted { pairing_epoch }) => proto::PairStatusReply {
+        let Some(view) = view else {
+            return only(S::NotFound);
+        };
+        match view.state {
+            // #1118: once the owner typed the code, the phone reads the desktop's answer here.
+            PairState::Pending => proto::PairStatusReply {
+                state: S::Pending,
+                pake_b: view.pake_b.as_deref().map(hex_lower),
+                ..Default::default()
+            },
+            // Idempotent replay: the same payload, plus the desktop's key confirmation.
+            PairState::Accepted { pairing_id } => proto::PairStatusReply {
                 state: S::Accepted,
                 accepted: Some(proto::PairAccepted {
                     storage_device_name: self.device_name.clone(),
-                    pairing_epoch,
+                    pairing_id,
                 }),
+                confirm_b: view.confirm_b.as_ref().map(|c| hex_lower(c)),
+                ..Default::default()
             },
-            Some(PairState::Denied) => only(S::Denied),
-            Some(PairState::Expired) => only(S::Expired),
-            None => only(S::NotFound),
+            PairState::Denied => only(S::Denied),
+            PairState::Expired => only(S::Expired),
+            PairState::Failed => only(S::Failed),
         }
     }
 
-    /// `device.unpair` (UX-06): the caller revokes ITSELF. Unilateral
-    /// stop — no owner action needed (product file §二双端共通). The
-    /// device row is marked revoked; hello is denied from then on, and
-    /// a fresh owner-issued token can rejoin (T-041 rejoin door).
+    /// `device.unpair` (UX-06): the caller ends ITS OWN pairing. Unilateral
+    /// stop — no owner action needed. #1117: the pairing record is deleted
+    /// through the single entry [`crate::unpair`] (same path as an owner
+    /// revoke: in-flight fetches, backup session and subscriptions go with
+    /// it); the device profile stays and is listed as "disconnected".
     ///
-    /// #565：可选参数 `pairing_epoch` = 手机要结束的**那一次**配对。带了就做
-    /// 条件吊销（纪元不一致 = 那次配对已被新配对取代或早已结束，什么都不动，
-    /// 照样答 ok——手机要的「这次配对已结束」已经成立）；不带 = 旧手机，保持
-    /// 原来的无条件吊销。
+    /// #565：可选参数 `pairing_id` = 手机要结束的**那一次**配对。带了就只删 id
+    /// 一致的那条（不一致 = 那次配对已被新配对取代或早已结束，什么都不动，照样
+    /// 答 ok——手机要的「这次配对已结束」已经成立）；不带 = 删它当前的配对。
     async fn handle_unpair(&self, peer: transport::NodeId, req: &Req) -> Resp {
-        let epoch = req.params.get("pairing_epoch").and_then(|v| v.as_str());
-        // DEV-03：记下是**设备自己**断的。业主没做过这个决定，所以这台设备
-        // 要留在「家人与设备」里标「已断开」，而不是凭空消失。
-        let revoked = match epoch {
-            Some(epoch) => {
-                self.db
-                    .revoke_pairing(&peer.0, epoch, storage::RevokedBy::Device, (self.now)())
-                    .await
-            }
-            None => {
-                self.db
-                    .revoke(&peer.0, storage::RevokedBy::Device, (self.now)())
-                    .await
-            }
+        let expect_id = req.params.get("pairing_id").and_then(|v| v.as_str());
+        let holders = crate::unpair::Holders {
+            flow: self.flow_delivery.as_ref(),
+            backup: self.backup.as_ref(),
+            subscriptions: Some(&self.subscriptions),
+            // 连接在回应送达之后再关（见 serve_stream）。
+            connections: None,
         };
-        match revoked {
-            Ok(false) if epoch.is_some() => {
-                tracing::info!("#565: device.unpair for a pairing epoch that is no longer current; nothing revoked");
+        // DEV-03：记下是**设备自己**断的。业主没做过这个决定，所以这台设备
+        // 留在「家人与设备」里标「已断开」，而不是凭空消失。
+        let removed = crate::unpair::remove_pairing(
+            &self.db,
+            holders,
+            peer,
+            expect_id,
+            storage::DepartedBy::Device,
+            (self.now)(),
+        )
+        .await;
+        match removed {
+            Ok(None) => {
+                tracing::info!("#565: device.unpair named a pairing that is no longer current; nothing removed");
                 Resp::ok(req.id.clone(), serde_json::json!({ "unpaired": false }))
             }
-            Ok(_) => {
+            Ok(Some(_)) => {
                 crate::pairing::warn_if_audit_failed(
                     "device.unpaired",
                     self.db
                         .append_audit(&storage::AuditEntry::local(
                             (self.now)(),
-                            Some(peer.0.to_vec()), // 设备自我撤销（UX-06）
+                            Some(peer.0.to_vec()), // 设备自己断开（UX-06）
                             "device.unpaired",
                             None,
                             None,
                         ))
                         .await,
                 );
-                // IPC-02: 设备自我断开——桌面设备行即时刷新。
-                // DEV-03：刷新后它仍在列表里，状态变成「已断开」，不再消失。
+                // IPC-02: 设备自己断开——桌面设备行即时刷新，状态变成「已断开」。
                 if let Some(bus) = &self.events {
                     events::emit(
                         bus,
@@ -1008,9 +1158,6 @@ impl Router {
                         serde_json::json!({ "action": "device.unpaired" }),
                     );
                 }
-                // SYNC-03 §⑦：自我退出——顺手把自己的订阅登记摘掉（如果
-                // 同一连接上还有一条 timeline.subscribe 挂着）。
-                self.subscriptions.close(peer);
                 Resp::ok(req.id.clone(), serde_json::json!({ "unpaired": true }))
             }
             Err(_) => Resp::err(req.id.clone(), RespError::new(Reason::Internal)),
@@ -1058,4 +1205,51 @@ fn unix_ms_now() -> i64 {
 /// Await one item from a pinned stream (futures-core only, no StreamExt).
 async fn next_item<S: Stream>(mut stream: std::pin::Pin<&mut S>) -> Option<S::Item> {
     std::future::poll_fn(|cx| stream.as_mut().poll_next(cx)).await
+}
+
+/// #1118: lowercase hex for the code-exchange fields.
+fn hex_lower(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// #1118: exactly `len` bytes of hex, or nothing.
+fn parse_hex_exact(s: &str, len: usize) -> Option<Vec<u8>> {
+    let s = s.trim();
+    if s.len() != len * 2 {
+        return None;
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn newer_peer_req() -> Req {
+        Req {
+            id: "h".into(),
+            method: "hello".into(),
+            ver: PROTO_VER + 1,
+            min_ver: PROTO_VER + 1,
+            ..Default::default()
+        }
+    }
+
+    /// #1122：版本不符登记表有上限，按最近使用淘汰，不会被大量不同 NodeId 撑大。
+    /// 反证：改回无上限的 HashMap，第三台登记后第一台仍在 ⇒ 变红。
+    #[test]
+    fn outdated_peers_are_bounded_lru() {
+        let peers = OutdatedPeers::with_capacity(2);
+        for n in 1..=3u8 {
+            assert!(peers
+                .check(transport::NodeId([n; 32]), &newer_peer_req())
+                .is_err());
+        }
+        assert_eq!(peers.needs_update(&[1u8; 32]), None, "最旧的被淘汰");
+        assert_eq!(peers.needs_update(&[3u8; 32]), Some("desktop"));
+        assert_eq!(peers.inner.lock().unwrap().len(), 2);
+    }
 }

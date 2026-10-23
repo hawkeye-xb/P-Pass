@@ -51,9 +51,9 @@ final class ControlPlanePushTests: XCTestCase {
     }
 
     func testRejectedFirstFrameThrowsAndNeverConnects() async {
-        let r = await run([#"{"id":"x","ok":false,"error":{"code":"NOT_AUTHORIZED","reason":"revoked"}}"#])
+        let r = await run([#"{"id":"x","ok":false,"error":{"code":"NOT_AUTHORIZED","reason":"not_paired"}}"#])
         XCTAssertEqual(r.connected, 0)
-        XCTAssertEqual(r.error as? SubscribeRejected, SubscribeRejected(code: "NOT_AUTHORIZED", reason: .registered(.revoked)))
+        XCTAssertEqual(r.error as? SubscribeRejected, SubscribeRejected(code: "NOT_AUTHORIZED", reason: .registered(.notPaired)))
     }
 
     func testStreamErrorPropagatesAfterConnecting() async {

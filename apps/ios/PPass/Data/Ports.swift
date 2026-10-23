@@ -104,6 +104,10 @@ enum PairOutcome: Equatable {
 /// 配对页的补充说明：本端按判决 / `reason` 挑，文字是本机文案（#1072 / #1073：线上不再带文案 key）。
 enum PairNote: Equatable, CaseIterable {
     case tokenInvalid, denied, expired, desktopRestarted, generic
+    /// #1118：验证码对不上（`pair_code_wrong` / `failed`），这次申请作废。
+    case codeWrong
+    /// #1118：电脑没能证明它用的是同一个验证码（`confirm_b` 验不过），没有保存配对。
+    case desktopProofFailed
 
     /// 与 Android 同一套 key（strings.xml → Localizable.strings）。
     var key: String {
@@ -113,6 +117,8 @@ enum PairNote: Equatable, CaseIterable {
         case .expired: return "pair_refused_detail_expired"
         case .desktopRestarted: return "pair_refused_detail_restarted"
         case .generic: return "error_generic"
+        case .codeWrong: return "pair_refused_detail_code_wrong"
+        case .desktopProofFailed: return "pair_desktop_proof_failed"
         }
     }
 
@@ -125,15 +131,40 @@ enum PairNote: Equatable, CaseIterable {
     }
 }
 
+/// 验证码页上的电脑：名字是电脑在 hello 里自报的（只作标签），标识由手机从二维码里的 NodeId 算出（与电脑二维码下方显示的一致）。
+struct PairDesktopInfo: Equatable, Sendable {
+    let name: String
+    let fingerprint: String
+}
+
+/// #1118：提交成功（收到 `PairSubmitted`）之后才有：手机要显示给用户的验证码、要连的电脑，以及本机 NodeId（自动化客户端打 `PAIR_CODE=` 用）。
+/// 扫码后不再问「要连接这台电脑吗？」：扫码就是连接的意图；换码冒充由验证码挡住（码只在手机上，用户输进自己的电脑）。
+struct PairCodeShown: Equatable, Sendable {
+    let code: String
+    let desktop: PairDesktopInfo
+    let phoneNode: String
+}
+
+/// 验证码要显示了。
+typealias PairCodeSink = @Sendable (PairCodeShown) async -> Void
+
 protocol PairingService: AnyObject {
     func status() -> PairingStatus
     /// 配对时间（毫秒）；未配对 / 未知 = nil。
     func pairedAtMs() -> Int64?
     /// code 是二维码内容或手动粘贴的配对串（同一个字符串，`ppf://pair?...`）。
-    func pair(code: String) async -> PairOutcome
+    /// `onCode`：提交成功后才调，给验证码页（#1118）。扫码之后没有任何要用户点的步骤。
+    func pair(code: String, onCode: @escaping PairCodeSink) async -> PairOutcome
     func cancel() async
     /// 本地断开（UX-06）：先尽力通知电脑撤销本机（5 秒、失败不阻塞），再按断开清单清本地。成功后状态变 `.notPaired`。
     func disconnect() async
+    /// 只清本地、不通知电脑（#1119）：配对失效卡的「重新连接」——电脑本就不认这台手机，没有可通知的。
+    func clearLocal() async
+}
+
+extension PairingService {
+    /// 自动化 / 无界面调用：总是连接、不显示验证码。
+    func pair(code: String) async -> PairOutcome { await pair(code: code, onCode: { _ in }) }
 }
 
 /// 备份引擎：首页的全部事实 + 唯一的那个按钮。

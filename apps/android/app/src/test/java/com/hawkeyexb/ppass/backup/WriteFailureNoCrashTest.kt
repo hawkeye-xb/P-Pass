@@ -137,7 +137,7 @@ class WriteFailureNoCrashTest {
     @Test
     fun pairing_save_failure_is_a_pairing_failure_not_a_crash() {
         val store = PairingStore(dir)
-        val pairing = Pairing(nodeId, "token", "Mac", pairedAt = 1L, pairingEpoch = "e1")
+        val pairing = Pairing(nodeId, "token", "Mac", pairedAt = 1L, pairingId = "e1")
         breakWrites()
 
         val error = savePairingOrError { store.save(pairing) }
@@ -221,11 +221,12 @@ class WriteFailureNoCrashTest {
             override fun stopFlowRuntime() { stopped += "flow" }
             override fun cancelUniqueWork(name: String) { stopped += "work:$name" }
             override fun cancelMediaWatch() { stopped += "mediaWatch" }
+            override fun clearPreviewCache() { stopped += "thumbs" }
         }
         breakWrites()
 
         assertThrows("第一个错误照样抛出，不吞（调用方记日志）", Exception::class.java) {
-            applyDisconnectManifest(dir, runtime)
+            applyDisconnectManifest(dir, File(dir.parentFile, "cache"), runtime)
         }
 
         assertTrue("偏好那一行（AUTO_BACKUP_PREFS）后面的停止行必须照常执行", "mediaWatch" in stopped)
@@ -236,7 +237,7 @@ class WriteFailureNoCrashTest {
 
         spaceFreed()
         stopped.clear()
-        applyDisconnectManifest(dir, runtime)
+        applyDisconnectManifest(dir, File(dir.parentFile, "cache"), runtime)
         assertTrue("留意图", prefs.requested())
         assertFalse("停生产者", prefs.enabled())
     }

@@ -219,7 +219,7 @@ data class Pairing(
     val pairedAt: Long = 0L,
     /** Owner-approved pairing generation for Flow delivery. Empty means this
      * legacy pairing must be renewed before it can authorize a Flow item. */
-    val pairingEpoch: String = "",
+    val pairingId: String = "",
 )
 
 class PairingStore(private val dir: File) {
@@ -229,7 +229,7 @@ class PairingStore(private val dir: File) {
     fun load(): Pairing? =
         if (file.isFile) runCatching {
             json.decodeFromString(Pairing.serializer(), file.readText())
-        }.getOrNull() else null
+        }.getOrNull()?.takeIf { it.pairingId.isNotBlank() } else null // #1117: 旧格式（只有 pairing_id）= 未配对
 
     fun save(p: Pairing) {
         dir.mkdirs()

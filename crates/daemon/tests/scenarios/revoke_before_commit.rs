@@ -15,7 +15,7 @@ use std::path::Path;
 
 use daemon::{BackupEngine, Router};
 use proto::{codes, BackupCommit, BackupItem, BackupManifest, BackupMissing, Req, Resp};
-use storage::{Db, Device, Role};
+use storage::{Db, Pairing, Role};
 use transport::{Blobs, IrohTransport, Transport, TransportConfig};
 
 const ALPNS: &[&str] = &["ppf/ctrl/1", "ppf/blobs/1"];
@@ -115,17 +115,16 @@ async fn revoke_before_commit_cuts_session_at_the_gate() {
 
     // 预置设备为 member（正常配对后的状态）。
     let node = client.tp.node_id().0;
-    db.upsert_device(&Device {
-        node_id: node.to_vec(),
-
-        name: "手机".into(),
-        role: Role::Member,
-        paired_at: 1,
-        last_seen: None,
-        revoked: false,
-        revoked_at: None,
-        revoked_by: None,
-    })
+    db.accept_pairing(
+        &node,
+        "手机",
+        &Pairing {
+            id: "pairing-phone-1".into(),
+            node_id: node.to_vec(),
+            role: Role::Member,
+            paired_at: 1,
+        },
+    )
     .await
     .unwrap();
 
@@ -140,12 +139,20 @@ async fn revoke_before_commit_cuts_session_at_the_gate() {
     let missing: BackupMissing = serde_json::from_value(resp.result.unwrap()).unwrap();
     assert_eq!(missing.hashes.len(), 2);
 
-    // owner 吊销设备（IPC 路径的等价：直接走 db.revoke）。
+    // owner 撤销设备（IPC `device.revoke` 的等价：走同一个删配对记录入口，#1117）。
     assert!(
-        db.revoke(&node, storage::RevokedBy::Owner, 1_700_000_000_000)
-            .await
-            .unwrap(),
-        "revoke must affect a row"
+        daemon::unpair::remove_pairing(
+            &db,
+            daemon::unpair::Holders::default(),
+            transport::NodeId(node),
+            None,
+            storage::DepartedBy::Owner,
+            1_700_000_000_000,
+        )
+        .await
+        .unwrap()
+        .is_some(),
+        "revoke must remove the pairing record"
     );
 
     // commit 在门禁处被切断：NOT_AUTHORIZED，而不是 INTERNAL 或成功。
@@ -156,7 +163,7 @@ async fn revoke_before_commit_cuts_session_at_the_gate() {
 
     // 水位不推进、零入库——被切断的会话不留下任何半成品。
     assert_eq!(
-        db.get_watermark(&node).await.unwrap(),
+        db.get_watermark("pairing-phone-1").await.unwrap(),
         None,
         "watermark must not advance"
     );
@@ -176,16 +183,16 @@ async fn revoke_before_commit_cuts_session_at_the_gate() {
 
     // daemon 健康：另一个已配对设备 hello 照常。
     let other = Client::new(&dtp, dtp.node_id()).await;
-    db.upsert_device(&Device {
-        node_id: other.tp.node_id().0.to_vec(),
-        name: "客厅电脑".into(),
-        role: Role::Member,
-        paired_at: 1,
-        last_seen: None,
-        revoked: false,
-        revoked_at: None,
-        revoked_by: None,
-    })
+    db.accept_pairing(
+        &other.tp.node_id().0,
+        "客厅电脑",
+        &Pairing {
+            id: "pairing-other-1".into(),
+            node_id: other.tp.node_id().0.to_vec(),
+            role: Role::Member,
+            paired_at: 1,
+        },
+    )
     .await
     .unwrap();
     let hello = other.call("hello", serde_json::Value::Null).await;

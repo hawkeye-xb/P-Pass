@@ -156,3 +156,151 @@ async fn connection_cache_reuses_a_key_but_keeps_alpns_separate() {
     client.close().await;
     server.close().await;
 }
+
+/// #1119：桌面删掉一台设备的配对记录后，`close_peer` 立即关掉与它的全部连接
+/// （不等空闲回收），对端看到 UNPAIRED_CLOSE_CODE；别的设备的连接不受影响。
+/// 反证：close_peer 不关连接（只从缓存里摘掉），对端读不到关闭 ⇒ 超时变红。
+#[tokio::test]
+async fn close_peer_closes_every_connection_of_that_peer_only() {
+    let alpns = vec![ALPN_CTRL.to_string()];
+    let server = IrohTransport::bind(TransportConfig::loopback(alpns.clone()))
+        .await
+        .expect("bind server");
+    let phone_a = IrohTransport::bind(TransportConfig::loopback(alpns.clone()))
+        .await
+        .expect("bind a");
+    let phone_b = IrohTransport::bind(TransportConfig::loopback(alpns))
+        .await
+        .expect("bind b");
+    let server_id = phone_a.add_peer(server.local_addr());
+    phone_b.add_peer(server.local_addr());
+
+    // 服务端只接受连接、在每条连接上收一个流，保持连接存活。
+    let server_for_task = server.clone();
+    tokio::spawn(async move {
+        let mut incoming = server_for_task.listen().await;
+        while let Some(inc) = next(&mut incoming).await {
+            tokio::spawn(async move {
+                if let Ok(mut bi) = inc.accept_bi().await {
+                    while let Ok(Some(_)) = bi.recv_frame().await {}
+                }
+            });
+        }
+    });
+
+    let mut a = phone_a
+        .connect(server_id, ALPN_CTRL)
+        .await
+        .expect("a connects");
+    let mut b = phone_b
+        .connect(server_id, ALPN_CTRL)
+        .await
+        .expect("b connects");
+    a.send_frame(b"hi").await.expect("a sends");
+    b.send_frame(b"hi").await.expect("b sends");
+    // 等服务端登记两条连接。
+    for _ in 0..50 {
+        if server.path_of(phone_a.node_id(), ALPN_CTRL).is_some()
+            && server.path_of(phone_b.node_id(), ALPN_CTRL).is_some()
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    assert_eq!(server.close_peer(phone_a.node_id()), 1);
+    assert!(server.path_of(phone_a.node_id(), ALPN_CTRL).is_none());
+
+    // A 那一端很快读到连接被关（不是挂着等超时）。
+    let closed = tokio::time::timeout(Duration::from_secs(5), a.recv_frame())
+        .await
+        .expect("phone A must observe the close promptly");
+    assert!(closed.is_err() || matches!(closed, Ok(None)), "{closed:?}");
+    // B 不受影响。
+    assert!(server.path_of(phone_b.node_id(), ALPN_CTRL).is_some());
+    b.send_frame(b"still here")
+        .await
+        .expect("b keeps its connection");
+    assert_eq!(
+        server.close_peer(NodeId([9; 32])),
+        0,
+        "未知设备：什么都不关"
+    );
+}
+
+/// #1119 真机回归（三星 E3）：手机客户端每次请求新开一条连接。缓存按
+/// (设备, ALPN) 只记一条，长连接（订阅）的登记会被后来的短连接覆盖、又随短连接
+/// 关闭被摘掉——长连接还活着，却不在缓存里。`close_peer` 必须照样把它关掉。
+/// 反证：close_peer 只看连接缓存，长连接活下来 ⇒ 超时变红。
+#[tokio::test]
+async fn close_peer_closes_a_long_lived_connection_shadowed_by_a_later_short_one() {
+    let alpns = vec![ALPN_CTRL.to_string()];
+    let server = IrohTransport::bind(TransportConfig::loopback(alpns.clone()))
+        .await
+        .expect("bind server");
+    // 同一身份的两个端点 = 服务端眼里同一台设备的两条连接（模拟手机每次请求新开连接）。
+    let key = [7u8; 32];
+    let with_key = |alpns: Vec<String>| {
+        let mut cfg = TransportConfig::loopback(alpns);
+        cfg.secret_key = Some(key);
+        cfg
+    };
+    let phone = IrohTransport::bind(with_key(alpns.clone()))
+        .await
+        .expect("bind phone");
+    let phone_again = IrohTransport::bind(with_key(alpns.clone()))
+        .await
+        .expect("bind phone #2");
+    assert_eq!(phone.node_id(), phone_again.node_id());
+    let server_id = phone.add_peer(server.local_addr());
+    phone_again.add_peer(server.local_addr());
+
+    let server_for_task = server.clone();
+    tokio::spawn(async move {
+        let mut incoming = server_for_task.listen().await;
+        while let Some(inc) = next(&mut incoming).await {
+            tokio::spawn(async move {
+                while let Ok(mut bi) = inc.accept_bi().await {
+                    tokio::spawn(async move { while let Ok(Some(_)) = bi.recv_frame().await {} });
+                }
+            });
+        }
+    });
+
+    // 长连接：手机侧这条留在它自己的缓存里。
+    let mut long = phone
+        .connect(server_id, ALPN_CTRL)
+        .await
+        .expect("long-lived");
+    long.send_frame(b"subscribe").await.expect("send");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // 短连接：同一台设备的第二条连接，发一次就整体关掉。
+    let mut short = phone_again
+        .connect(server_id, ALPN_CTRL)
+        .await
+        .expect("short");
+    short.send_frame(b"hello").await.expect("send");
+    short.finish().expect("finish");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(short);
+    phone_again.close_peer(server_id);
+    for _ in 0..50 {
+        if server.path_of(phone.node_id(), ALPN_CTRL).is_none() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        server.path_of(phone.node_id(), ALPN_CTRL).is_none(),
+        "前提：长连接的缓存登记已被短连接覆盖并摘掉"
+    );
+
+    assert!(
+        server.close_peer(phone.node_id()) >= 1,
+        "长连接必须被找到并关闭"
+    );
+    let closed = tokio::time::timeout(Duration::from_secs(5), long.recv_frame())
+        .await
+        .expect("phone must observe the close of its long-lived connection");
+    assert!(closed.is_err() || matches!(closed, Ok(None)), "{closed:?}");
+}

@@ -43,9 +43,10 @@ class MOB93RepairRestoresAutoBackupTest {
         override fun cancelMediaWatch() {
             mediaWatchCancelled = true
         }
+        override fun clearPreviewCache() = Unit
     }
 
-    private fun disconnect() = applyDisconnectManifest(tmp.root, runtime)
+    private fun disconnect() = applyDisconnectManifest(tmp.root, File(tmp.root, "cache-not-used"), runtime)
 
     // ── 断开：停生产者，留意图 ──────────────────────────────────
     @Test

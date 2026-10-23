@@ -72,12 +72,11 @@ final class AppBoot: ObservableObject {
         AppLog.logLaunch()
         #if DEBUG
         OriginalLocalityProbe.logTestFilesAtLaunch() // #337 / #1016 真机取证：只读、不下载
-        // 仅 DEBUG：PPASS_E2E_RESET=1 → 启动前清掉存储根（配对 / 账本 / provider 库）和钥匙串里的身份，等价于全新安装但保留系统授权。
-        // 真机端到端每轮换一个新 daemon，旧账本会把「已确认」算给旧电脑，必须从空账本开始。
-        if ProcessInfo.processInfo.environment["PPASS_E2E_RESET"] == "1",
-           let support = try? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true) {
-            try? FileManager.default.removeItem(at: support.appendingPathComponent("PPass", isDirectory: true))
-            try? KeychainIdentityStore().delete()
+        // 仅 DEBUG：PPASS_E2E_RESET=1 → 清掉真实存储根和钥匙串身份（见 E2EReset）。
+        if ProcessInfo.processInfo.environment["PPASS_E2E_RESET"] == "1" {
+            do { E2EReset.wipe(root: try LiveBackend.resolveRoot(logger: logger), identity: KeychainIdentityStore(), logger: logger) } catch {
+                logger.log("boot: DEBUG E2E reset could not resolve the storage root: \(error)")
+            }
         }
         // 仅 DEBUG：PPASS_DEBUG_DROP_IDENTITY=1 → 只删钥匙串里的身份、存储根原样，等价于「备份恢复到新手机 / 钥匙串被清」：
         // 真机上验证「有配对、没私钥 → 新设备、清配对」，不用抹机恢复。
@@ -213,7 +212,7 @@ final class LiveLifecycle {
         case .background:
             inForeground = false
             backend.setActive(false)
-            PPassBackgroundTasks.ensureShortScheduled(logger: backend.logger)
+            backend.scheduler.ensureShortScheduled()
             guard finishing == .invalid else { return }
             backend.window.setFinishingTime(true)
             // 系统在主线程上调 expiration handler，到期前必须结束后台任务，否则进程被杀（#1007）：

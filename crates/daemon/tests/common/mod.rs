@@ -17,13 +17,13 @@ use transport::NodeId;
 /// How long [`await_receipt`] waits for a terminal state before giving up.
 const AWAIT_DEADLINE: Duration = Duration::from_secs(60);
 
-/// The tuple identity (`queue_sequence` + `pairing_epoch` + `lease_token`)
+/// The tuple identity (`queue_sequence` + `pairing_id` + `lease_token`)
 /// of an offer — what `flow.status` / `flow.suspend` / `flow.cancel_tuple`
 /// address.
 pub fn tuple_of(request: &FlowFetchRequest) -> FlowTupleRef {
     FlowTupleRef {
         queue_sequence: request.queue_sequence,
-        pairing_epoch: request.pairing_epoch.clone(),
+        pairing_id: request.pairing_id.clone(),
         lease_token: request.lease_token.clone(),
     }
 }
@@ -98,7 +98,7 @@ pub async fn wait_mid_flight(
         let done = db
             .flow_receipt(
                 peer.0.as_slice(),
-                &request.pairing_epoch,
+                &request.pairing_id,
                 request.queue_sequence as i64,
             )
             .await
@@ -121,8 +121,51 @@ pub async fn wait_mid_flight(
 // ── pairing ────────────────────────────────────────────────────────────
 
 use daemon::pairing::{PairRejection, PairState, Pairing};
-use proto::{methods, PairRequest, PairStatusReply, PairStatusRequest, PairSubmitted, Req, Resp};
+use proto::{
+    methods, PairConfirmRequest, PairRequest, PairStatusReply, PairStatusRequest, PairSubmitted,
+    Req, Resp,
+};
 use transport::{IrohTransport, Transport};
+
+/// #1118: the code every test phone shows and every test owner types.
+#[allow(dead_code)]
+pub const TEST_CODE: &str = "246810";
+
+/// #1118: the owner's "allow" in tests — typing [`TEST_CODE`].
+#[allow(dead_code)]
+pub fn allow() -> daemon::PairDecision {
+    daemon::PairDecision::AcceptCode(TEST_CODE.into())
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn unhex(s: &str) -> Vec<u8> {
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+fn token_bytes(token: &str) -> Vec<u8> {
+    unhex(token.trim())
+}
+
+/// #1118: `req` with the phone's SPAKE2 message for [`TEST_CODE`] filled in, plus the phone's
+/// half of the exchange (to finish once the desktop answered).
+#[allow(dead_code)]
+pub fn with_pake(
+    req: &PairRequest,
+    phone: NodeId,
+    desk: NodeId,
+) -> (PairRequest, pair_pake::PhoneStart) {
+    let (start, msg_a) =
+        pair_pake::PhoneStart::start(TEST_CODE, &token_bytes(&req.token), phone.0, desk.0).unwrap();
+    let mut req = req.clone();
+    req.pake_a = hex(&msg_a);
+    (req, start)
+}
 
 /// #1050: the blocking `pair.request` reply is retired. This is the active
 /// phone state machine over the real control channel — `pair.request`
@@ -136,17 +179,23 @@ pub async fn pair_settled(
     token: &str,
     device_name: &str,
 ) -> Resp {
-    let submit = ctrl_call(
-        phone,
-        daemon,
-        methods::PAIR_REQUEST,
-        serde_json::to_value(PairRequest {
+    let (req, start) = with_pake(
+        &PairRequest {
             token: token.into(),
             device_name: device_name.into(),
             role: "member".into(),
             ack_then_poll: true,
-        })
-        .unwrap(),
+            ..Default::default()
+        },
+        phone.node_id(),
+        daemon,
+    );
+    let mut start = Some(start);
+    let submit = ctrl_call(
+        phone,
+        daemon,
+        methods::PAIR_REQUEST,
+        serde_json::to_value(req).unwrap(),
     )
     .await;
     if !submit.ok {
@@ -167,6 +216,40 @@ pub async fn pair_settled(
         .await;
         assert!(reply.ok, "pair.status must answer ok: {reply:?}");
         let status: PairStatusReply = serde_json::from_value(reply.result.unwrap()).unwrap();
+        // #1118: the owner typed the code — finish the exchange and confirm.
+        if let (proto::PairStatusState::Pending, Some(pake_b)) = (status.state, &status.pake_b) {
+            if let Some(s) = start.take() {
+                let (check, confirm_a) = s.finish(&unhex(pake_b)).unwrap();
+                let reply = ctrl_call(
+                    phone,
+                    daemon,
+                    methods::PAIR_CONFIRM,
+                    serde_json::to_value(PairConfirmRequest {
+                        request_id: submitted.request_id.clone(),
+                        confirm_a: hex(&confirm_a),
+                    })
+                    .unwrap(),
+                )
+                .await;
+                if !reply.ok {
+                    return Resp::err(
+                        submit.id.clone(),
+                        proto::RespError::new(proto::Reason::PairTokenInvalid),
+                    );
+                }
+                let done: PairStatusReply = serde_json::from_value(reply.result.unwrap()).unwrap();
+                check
+                    .verify(&unhex(
+                        done.confirm_b.as_deref().expect("accepted carries cB"),
+                    ))
+                    .expect("the desktop proves the same code");
+                return Resp::ok(
+                    submit.id.clone(),
+                    serde_json::to_value(done.accepted.expect("accepted carries its payload"))
+                        .unwrap(),
+                );
+            }
+        }
         match status.state {
             proto::PairStatusState::Pending => {}
             proto::PairStatusState::Accepted => {
@@ -187,7 +270,8 @@ pub async fn pair_settled(
             started.elapsed() < Duration::from_secs(60),
             "pairing still pending after 60s"
         );
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        // #1122：未配对对端按设备限速（每秒 5 个）；真手机每几秒轮询一次（Android 5 s）。
+        tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
 
@@ -232,11 +316,32 @@ impl PairingExt for Pairing {
         req: &PairRequest,
         now_ms: i64,
     ) -> Result<String, PairRejection> {
-        let submission = self.submit_request(peer, req, now_ms).await?;
+        let (req, start) = with_pake(req, peer, self.node_id());
+        let mut start = Some(start);
+        let submission = self.submit_request(peer, &req, now_ms).await?;
         loop {
-            match self.status(peer, &submission.request_id, now_ms) {
-                Some(PairState::Pending) => {}
-                Some(PairState::Accepted { pairing_epoch }) => return Ok(pairing_epoch),
+            let view = self.view(peer, &submission.request_id, now_ms);
+            match view.as_ref().map(|v| &v.state) {
+                Some(PairState::Pending) => {
+                    // #1118: the owner typed the code — finish the exchange and confirm.
+                    let pake_b = view.as_ref().and_then(|v| v.pake_b.clone());
+                    // (Take the phone's half only once the answer is there: it must survive
+                    // the polls before the owner typed the code.)
+                    if let Some(pake_b) = pake_b {
+                        let s = start.take().expect("the phone finishes the exchange once");
+                        let (check, confirm_a) = s.finish(&pake_b).unwrap();
+                        let done = self
+                            .confirm_code(peer, &submission.request_id, &confirm_a, now_ms)
+                            .await
+                            .map_err(|_| PairRejection::OwnerDeclined)?;
+                        check.verify(&done.confirm_b.unwrap()).unwrap();
+                        if let PairState::Accepted { pairing_id } = done.state {
+                            return Ok(pairing_id);
+                        }
+                        return Err(PairRejection::OwnerDeclined);
+                    }
+                }
+                Some(PairState::Accepted { pairing_id }) => return Ok(pairing_id.clone()),
                 _ => return Err(PairRejection::OwnerDeclined),
             }
             tokio::time::sleep(Duration::from_millis(10)).await;

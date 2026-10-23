@@ -22,7 +22,7 @@ class NET06StatusPollDeliveryTest {
         val receipt = FlowCompletionReceipt(
             queueSequence = 7L,
             receiptId = "desktop-1",
-            pairingEpoch = "epoch-1",
+            pairingId = "pid-1",
             leaseToken = "lease-7",
             contentHash = "a".repeat(64),
         )

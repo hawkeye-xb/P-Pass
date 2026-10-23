@@ -7,7 +7,9 @@
   GET  /api/qr         → 现生成一张配对二维码串（pairing.start，10 分钟 TTL）
   GET  /api/qr.png?d=  → 把串画成 PNG（需要系统里装了 qrencode）
   GET  /api/pending    → 待确认列表（pairing.pending）
-  POST /api/confirm    → 允许/拒绝（pairing.confirm）
+  POST /api/confirm    → 允许/拒绝（pairing.confirm）。允许必须带 node_id + 手机上显示的
+                         6 位验证码 code（#1118）；拒绝不需要码。码错 → 502，error 里
+                         带 pair_code_wrong，该申请作废
   GET  /healthz        → 存活探针
   GET  /               → 页面
 
@@ -15,7 +17,7 @@ IPC 走 daemon 的 ipc.token（两行：socket 名 + 令牌）。Linux 是抽象
 socket（\\0 前缀），macOS 是 /tmp 下的文件 —— 与仓库 tools/ipc-lib.sh 同款握手。
 
 环境变量：
-  PPF_IPC_TOKEN_FILE  daemon 写出的 ipc.token 路径（默认 /var/lib/ppass-review/ipc.token）
+  PPF_IPC_TOKEN_FILE  daemon 写出的 ipc.token 路径（默认 /var/lib/ppass-review/p-pass/ipc.token）
   PORT                监听端口（默认 8787，只绑 127.0.0.1，对外由 nginx 暴露）
 """
 import json
@@ -27,7 +29,7 @@ import sys
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-TOKEN_FILE = os.environ.get("PPF_IPC_TOKEN_FILE", "/var/lib/ppass-review/ipc.token")
+TOKEN_FILE = os.environ.get("PPF_IPC_TOKEN_FILE", "/var/lib/ppass-review/p-pass/ipc.token")
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -116,7 +118,18 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/confirm":
                 n = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(n) or b"{}")
-                ok, resp = ipc("pairing.confirm", {"accept": bool(body.get("accept", True))})
+                accept = bool(body.get("accept", True))
+                params = {"accept": accept}
+                node_id = str(body.get("node_id") or "")
+                if node_id:
+                    params["node_id"] = node_id
+                if accept:
+                    # #1118：允许 = 输入手机上显示的 6 位验证码，缺一不可（daemon 也会拒，这里先给可读错误）。
+                    code = str(body.get("code") or "")
+                    if not node_id or not (len(code) == 6 and code.isdigit()):
+                        return self._send(400, {"ok": False, "error": {"code": "bad_request", "reason": "need_node_id_and_6_digit_code"}})
+                    params["code"] = code
+                ok, resp = ipc("pairing.confirm", params)
                 if not ok:
                     return self._send(502, {"ok": False, "error": resp})
                 return self._send(200, {"ok": True, **resp["result"]})

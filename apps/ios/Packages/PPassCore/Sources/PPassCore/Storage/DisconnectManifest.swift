@@ -10,6 +10,40 @@
 // #1107 之前的明文私钥（`legacyPlaintextIdentity`，[DeviceIdentity] 见到就按新设备处理）。
 import Foundation
 
+/// 路径相对哪个根（#1119）：原图缓存不在存储根里——视频在系统 Caches，照片原图与取回临时仓库在 tmp。
+public enum DisconnectBase: Equatable, Sendable {
+    case storageRoot
+    case caches
+    case tmp
+}
+
+/// 存储根之外的两个根。生产用 [system]；测试注入临时目录——**不传就不碰这两个根**（包测试跑在开发机上，不许误删真缓存）。
+public struct DisconnectExternalRoots: Sendable {
+    public var caches: URL
+    public var tmp: URL
+
+    public init(caches: URL, tmp: URL) {
+        self.caches = caches
+        self.tmp = tmp
+    }
+
+    public static var system: DisconnectExternalRoots {
+        DisconnectExternalRoots(caches: FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0], tmp: FileManager.default.temporaryDirectory)
+    }
+}
+
+/// 存储根之外、App 自己落盘的目录名（时间线与清单共用这一份，不各写各的字面量）。
+public enum OriginalCachePaths {
+    /// `Caches/ppass-videos/`：时间线视频原图（含 `.part`）。
+    public static let videosDirName = "ppass-videos"
+    /// `tmp/ppass-share/`：照片原图即用即清。
+    public static let shareDirName = "ppass-share"
+    /// `tmp/ppass-blobstore/`：取电脑原图时 iroh-blobs 的临时仓库。
+    public static let fetchScratchDirName = "ppass-blobstore"
+    /// `tmp/ppass-originals/`：备份导入器的临时目录（手机自己的照片，不是电脑的原图缓存）。
+    public static let importScratchDirName = "ppass-originals"
+}
+
 public enum DisconnectDisposition: Equatable, Sendable {
     /// 不碰。
     case keep
@@ -35,6 +69,11 @@ public enum DisconnectState: CaseIterable, Sendable {
     case scheduledWakes
     case backgroundWakePlan
     case mediaChangeObserver
+    case originalVideoCache
+    case originalShareTemp
+    case fetchScratch
+    case thumbnailMemoryCache
+    case importScratch
     case identity
     case legacyPlaintextIdentity
     case onboardedDesktops
@@ -49,12 +88,25 @@ public enum DisconnectState: CaseIterable, Sendable {
     case definitiveNotices
     case sentinel
 
+    /// 路径相对哪个根。运行时行没有路径，按存储根算。
+    public var base: DisconnectBase {
+        switch self {
+        case .originalVideoCache: return .caches
+        case .originalShareTemp, .fetchScratch, .importScratch: return .tmp
+        default: return .storageRoot
+        }
+    }
+
     public var path: String? {
         switch self {
         case .pairing: return "pairing.json"
         case .legacyUnpairOutbox: return "pending_unpair.json"
         case .backgroundWakePlan: return PlannedWakeScheduler.fileName
-        case .flowRuntime, .scheduledWakes, .mediaChangeObserver: return nil
+        case .flowRuntime, .scheduledWakes, .mediaChangeObserver, .thumbnailMemoryCache: return nil
+        case .originalVideoCache: return OriginalCachePaths.videosDirName
+        case .originalShareTemp: return OriginalCachePaths.shareDirName
+        case .fetchScratch: return OriginalCachePaths.fetchScratchDirName
+        case .importScratch: return OriginalCachePaths.importScratchDirName
         case .autoBackupPrefs: return AutoBackupPrefs.fileName
         case .identity: return DeviceIdentity.markerFileName
         case .legacyPlaintextIdentity: return DeviceIdentity.legacyPlaintextFileName
@@ -74,8 +126,9 @@ public enum DisconnectState: CaseIterable, Sendable {
 
     public var disposition: DisconnectDisposition {
         switch self {
-        case .pairing, .legacyUnpairOutbox, .backgroundWakePlan, .legacyPlaintextIdentity: return .clear
-        case .flowRuntime, .scheduledWakes, .mediaChangeObserver: return .stop
+        case .pairing, .legacyUnpairOutbox, .backgroundWakePlan, .legacyPlaintextIdentity,
+             .originalVideoCache, .originalShareTemp, .fetchScratch: return .clear
+        case .flowRuntime, .scheduledWakes, .mediaChangeObserver, .thumbnailMemoryCache: return .stop
         case .autoBackupPrefs: return .reset
         default: return .keep
         }
@@ -87,6 +140,11 @@ public enum DisconnectState: CaseIterable, Sendable {
         case .pairing: return "UX-06/UX-06b：本地单方断开，令牌作废（#282）"
         case .legacyUnpairOutbox: return "#956 撤销（2026-10-22 裁决：主动断开只尽力通知一次）：老版本的断开发件箱，存着旧电脑的 peerToken、已无读写者；断开清掉，启动也删一次"
         case .flowRuntime: return "#264/MOB-91：同一 NodeId 重连不许复活旧的运行时；#974：provider 撤销（掐在飞传输 + revoke + 清允许对端），对位 Android clearFlowRuntime"
+        case .originalVideoCache: return "#1119：断开后不许留这台电脑的原图；视频原图缓存（含 .part）整目录清掉，对位 Android cacheDir/video-*.mp4"
+        case .originalShareTemp: return "#1119：照片原图即用即清的目录，断开时清掉可能的残留，对位 Android cacheDir/share/"
+        case .fetchScratch: return "#1119：取电脑原图时的 iroh-blobs 临时仓库，里面是取回的原图字节，断开清掉（待确认是否算「原图缓存」，见汇报）"
+        case .thumbnailMemoryCache: return "#1119：时间线缩略图的内存缓存（NSCache），断开清空，对位 Android LruCache"
+        case .importScratch: return "\(undecidedBasis)：备份导入器的临时目录，装的是手机自己的照片而非电脑的原图；引擎停止时自己收拾，断开不碰"
         case .autoBackupPrefs: return "MOB-93：停生产者（autoEnabled=false），留意图（userRequested）"
         case .backgroundWakePlan: return "MOB-93 的 iOS 对位（#340）：后台唤醒计划是生产者的一部分，断开清掉；挂着的系统请求由 scheduledWakes 撤"
         case .scheduledWakes: return "MOB-93 的 iOS 对位：BGTaskScheduler 登记的唤醒是生产者，断开撤掉"
@@ -120,12 +178,17 @@ public protocol DisconnectRuntime {
     func stopFlowRuntime()
     func cancelScheduledWakes()
     func stopMediaChangeObserver()
+    /// 时间线缩略图的内存缓存清空。
+    func clearThumbnailMemoryCache()
 }
 
 /// 断开（UX-06）与「配对失效重新扫码」共用的清理：按 [DisconnectState] 逐行执行，不依赖桌面是否可达。
 /// 某一行失败（清文件出错）不短路后面的行：运行时停止行（provider 撤销、唤醒、相册监听）必须照常执行，
 /// 否则「配对文件删不掉」会连带让旧桌面还能拉原图（#974）。所有行跑完后抛出第一个错误，不吞。
-public func applyDisconnectManifest(root: URL, runtime: DisconnectRuntime, logger: CoreLogger = NoopLogger(), manifest: [DisconnectState] = DisconnectState.allCases) throws {
+///
+/// [external]：存储根之外的 Caches / tmp（原图缓存，#1119）。生产传 `.system`；不传则这几行跳过并记一行日志。
+public func applyDisconnectManifest(root: URL, runtime: DisconnectRuntime, logger: CoreLogger = NoopLogger(), manifest: [DisconnectState] = DisconnectState.allCases,
+                                    external: DisconnectExternalRoots? = nil) throws {
     var firstError: Error?
     for state in manifest {
         do {
@@ -133,7 +196,12 @@ public func applyDisconnectManifest(root: URL, runtime: DisconnectRuntime, logge
             case .keep:
                 continue
             case .clear:
-                try deleteMatching(root, state)
+                switch state.base {
+                case .storageRoot: try deleteMatching(root, state)
+                case .caches, .tmp:
+                    guard let external else { logger.log("disconnect: row \(state) skipped (no external roots given)"); continue }
+                    try deleteMatching(state.base == .caches ? external.caches : external.tmp, state)
+                }
             case .reset:
                 switch state {
                 case .autoBackupPrefs: try AutoBackupPrefs(directory: root, logger: logger).suspendForPairingChange()
@@ -144,6 +212,7 @@ public func applyDisconnectManifest(root: URL, runtime: DisconnectRuntime, logge
                 case .flowRuntime: runtime.stopFlowRuntime()
                 case .scheduledWakes: runtime.cancelScheduledWakes()
                 case .mediaChangeObserver: runtime.stopMediaChangeObserver()
+                case .thumbnailMemoryCache: runtime.clearThumbnailMemoryCache()
                 default: preconditionFailure("\(state): no STOP action defined")
                 }
             }
@@ -163,14 +232,17 @@ private func deleteMatching(_ root: URL, _ state: DisconnectState) throws {
 }
 
 /// 登记门禁的运行时一半：存储根下**不属于任何一行清单**的路径（已登记路径不再下钻；未登记的空目录也算）。
-public func unregisteredStatePaths(root: URL, manifest: [DisconnectState] = DisconnectState.allCases) -> [String] {
+/// [external] 给了就再查 Caches / tmp 根下**以 `ppass-` 开头**的条目（不碰系统自己的东西）：没有登记的也列出来，
+/// 以 `caches:` / `tmp:` 作前缀（#1119：新加的缓存目录不登记过不了门禁）。
+public func unregisteredStatePaths(root: URL, manifest: [DisconnectState] = DisconnectState.allCases, external: DisconnectExternalRoots? = nil) -> [String] {
     var out: [String] = []
+    let rootRows = manifest.filter { $0.base == .storageRoot }
     func walk(_ dir: URL, _ prefix: String) {
         let children = ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).sorted()
         if children.isEmpty, !prefix.isEmpty { out.append(String(prefix.dropLast())) }
         for name in children {
             let rel = prefix + name
-            if manifest.contains(where: { $0.matches(rel) }) { continue }
+            if rootRows.contains(where: { $0.matches(rel) }) { continue }
             var isDir: ObjCBool = false
             let url = dir.appendingPathComponent(name)
             if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
@@ -181,5 +253,14 @@ public func unregisteredStatePaths(root: URL, manifest: [DisconnectState] = Disc
         }
     }
     walk(root, "")
+    if let external {
+        for (base, label, dir) in [(DisconnectBase.caches, "caches:", external.caches), (.tmp, "tmp:", external.tmp)] {
+            let rows = manifest.filter { $0.base == base }
+            for name in ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).sorted()
+            where name.hasPrefix("ppass-") && !rows.contains(where: { $0.matches(name) }) {
+                out.append(label + name)
+            }
+        }
+    }
     return out
 }

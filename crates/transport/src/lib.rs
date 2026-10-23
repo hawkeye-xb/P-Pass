@@ -6,19 +6,15 @@
 //! (ADR-001); the Phase-2 WebRTC read-only subset hangs off the same
 //! interface, at which point these concrete types become enums.
 
-// IOS-05 (#312)：provider 内核与绑定分离。`provider` 平台中立、不含任何
-// `jni::` 符号；JNI 是绑定 #1，只在 `android-jni` feature 下编进来。
-#[cfg(feature = "android-jni")]
-mod android_jni;
-#[cfg(feature = "android-jni")]
+// IOS-05 (#312)：provider 内核与绑定分离。`provider` 平台中立；#1126 起两端手机都经
+// `mobile_ffi`（uniffi）这一份绑定调用它，Android 的手写 JNI 已删除。
+#[cfg(feature = "mobile-ffi")]
 mod android_logcat;
-#[cfg(any(feature = "android-jni", test))]
-mod android_wire;
 mod blobs;
 mod conninfo;
-#[cfg(feature = "ios-ffi")]
-mod ios_ffi;
 mod iroh_impl;
+#[cfg(feature = "mobile-ffi")]
+mod mobile_ffi;
 mod pair_link;
 mod provider;
 /// #548：Rust → logcat 出口的脱敏（daemon `redact()` 的日志口径拷贝，跑共用向量）。
@@ -27,7 +23,8 @@ pub mod redact;
 pub use blobs::{Blobs, PeerGate};
 pub use conninfo::{ConnInfo, ConnectionStatus, PathKind};
 pub use iroh_impl::{
-    node_id_from_secret_key, BiStream, Incoming, IrohTransport, PeerAddr, TransportConfig,
+    node_id_from_secret_key, Admission, BiStream, Incoming, IrohTransport, PeerAddr,
+    TransportConfig,
 };
 pub use pair_link::{parse_pair_link, PairLink};
 /// IOS-05 (#312)：内核改名为平台中立的 [`BlobsProvider`] 之前的名字。现有
@@ -39,9 +36,9 @@ pub use provider::{
 
 use std::fmt;
 
-// IOS-06 (#313): UniFFI scaffolding for binding #2. Feature-gated exactly like
+// IOS-06 (#313) / #1124: UniFFI scaffolding shared by iOS and Android. Feature-gated exactly like
 // the JNI binding — never a target_os cfg (arch-check B.2).
-#[cfg(feature = "ios-ffi")]
+#[cfg(feature = "mobile-ffi")]
 uniffi::setup_scaffolding!();
 
 use futures_core::Stream;
@@ -66,6 +63,11 @@ pub const ALPN_BLOBS: &str = "ppf/blobs/1";
 /// ALPN for the download plane (T-056): original-file bytes for video
 /// playback — one asset per stream, authz-gated like everything else.
 pub const ALPN_DOWNLOAD: &str = "ppf/download/1";
+
+/// #1119：桌面删掉一台设备的配对记录后主动关闭与它的连接时用的 QUIC 关闭码
+/// （`IrohTransport::close_peer`）。与 blobs 拒绝码 403 区分开：这一条的意思是
+/// 「你的配对已被删除」。
+pub const UNPAIRED_CLOSE_CODE: u32 = proto::close_codes::UNPAIRED;
 
 /// Device identity: the 32-byte ed25519 public key of an endpoint (ADR-004,
 /// no account system). Displayed as 64 lowercase hex characters.
@@ -131,8 +133,17 @@ pub enum TransportError {
     #[error("stream I/O: {0}")]
     Io(String),
 
-    #[error("frame too large: {0} bytes (max {MAX_FRAME})")]
-    FrameTooLarge(u32),
+    #[error("frame too large: {len} bytes (max {max})")]
+    FrameTooLarge { len: u32, max: u32 },
+
+    /// #1122：对端用应用关闭码关掉了连接（关闭帧来自 `peer`，经 TLS 认证）。
+    /// 401 / 410 见 `proto::close_codes`；本地关闭、超时、网络断不会是这个错误。
+    #[error("connection closed by {peer:?} with code {code}")]
+    PeerClosed { peer: NodeId, code: u64 },
+
+    /// #1122：一帧在 [`FRAME_READ_TIMEOUT`] 内没读完（慢速发送者）。
+    #[error("frame not received within {0:?}")]
+    FrameTimeout(std::time::Duration),
 
     #[error("truncated frame: expected {expected} payload bytes, got {got}")]
     TruncatedFrame { expected: usize, got: usize },
@@ -150,6 +161,26 @@ pub type Result<T> = std::result::Result<T, TransportError>;
 /// MAX_PAYLOAD (16 MiB) — kept as a local constant because transport must
 /// not depend on proto (dependency direction: daemon wires them together).
 pub const MAX_FRAME: u32 = 16 * 1024 * 1024;
+
+/// #1122：一帧从读到长度头到读完正文的时限。慢速发送者超时即放弃这条流——
+/// 它占着的在途字节预算随之释放。等下一帧的长度头不计时（不分配任何缓冲）。
+pub const FRAME_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// #1122：全进程同时在读的帧正文合计上限（字节）。每读一帧先按它声明的长度
+/// 占预算、读完归还；预算用尽时后来的读取排队（受 [`FRAME_READ_TIMEOUT`] 约束）。
+/// 不小于 [`MAX_FRAME`]，保证单个最大帧总能读。
+pub const FRAME_BUDGET_BYTES: u32 = 64 * 1024 * 1024;
+
+/// #1122：每条连接上对端可同时打开的双向流上限（QUIC 传输参数，iroh/quinn
+/// 自带）。最坏内存 ≈ 流数 × 每流接收窗口，靠它与连接接收窗口一起封顶。
+pub const MAX_CONCURRENT_BIDI_STREAMS: u32 = 16;
+
+/// #1122：对端地址簿（入站拨号方登记的地址）的容量，超出按最近使用淘汰。
+pub const PEER_BOOK_CAPACITY: usize = 1024;
+
+/// #1122：接受连接时因为「没有配对记录、也不在配对窗口内」被拒的 QUIC 关闭码。
+/// 关闭帧在 TLS 握手之后发出，是本机身份认证过的「未配对」。
+pub const NOT_PAIRED_CLOSE_CODE: u32 = proto::close_codes::NOT_PAIRED;
 
 /// 详细设计 §3.1 —— trait 签名逐字实施（对冲 iroh 风险的瘦抽象）。
 ///

@@ -61,6 +61,7 @@ on:
       - "tools/testclient/Cargo.toml"
       - "apps/desktop/src-tauri/Cargo.toml"
       - "tools/bundle-desktop-macos.sh"
+      - "tools/daemon-helper-macos.sh"
       - "tools/test-release-timeouts.sh"
   push:
     branches: [main]
@@ -102,6 +103,7 @@ on:
       - "tools/testclient/Cargo.toml"
       - "apps/desktop/src-tauri/Cargo.toml"
       - "tools/bundle-desktop-macos.sh"
+      - "tools/daemon-helper-macos.sh"
       - "tools/test-release-timeouts.sh"
   workflow_dispatch:
 
@@ -185,6 +187,9 @@ jobs:
       # 分端清单，正式版本只有 version（与此前的内联写法逐字节相同）。
       - name: tauri --config 生成脚本（#852）
         run: node --test tools/release/tauri-config.test.mjs
+      # #1121：test / 正式两把更新签名密钥的选用与自验（缺密钥、配错通道、缺 test 公钥都必须红）。
+      - name: 更新签名密钥划分（#1121）
+        run: bash tools/release/test-update-key-lib.sh
 
   release-dry-run:
     name: release-dry-run（REL-12：发布链正式 / test tag 两条路径预演）
@@ -194,8 +199,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: 依赖（PyYAML：执行器按 step 从 workflow 里抽 run 块）
         run: python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
-      # 假产物 + stub gh（不访问 GitHub）+ 运行时现生成的临时签名密钥（tauri signer 与
-      # release.yml 同版本，首次从 npm 拉取）；不碰任何 secret。
+      # 假产物 + stub gh（不访问 GitHub）+ 运行时现生成的两对临时签名密钥（#1121：与
+      # release.yml 同一个签名器 tools/release/signer.sh，按 lockfile 安装）；不碰任何 secret。
       - name: dry-run（release.yml / mirror-latest.yml 原样逐步执行）
         run: tools/release/dry-run.sh
 

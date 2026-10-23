@@ -31,7 +31,8 @@ public enum OutdatedSide: String, Equatable, Sendable {
 
 /// 一条 `reason` 的控制流归类（#1069 拍板：按「问题出在哪、谁能解决」，#1072 / #1073 两端逐条一致）。
 public enum ReasonClass: Equatable, Sendable {
-    /// 配对已失效：红卡、停备份，出路是重新扫码。
+    /// 明确的「未配对」（`not_paired` / `pairing_mismatch`）：电脑已不认这台手机。被拒即清理（#1119）：
+    /// 删本地配对记录、清缓存、取消后台任务，回到欢迎页。`role_forbidden` 不在这里（已配对，只是角色不允许这个方法）。
     case pairingLost
     /// 协议版本不兼容：停备份、不计失败、不动配对，提示更新 [OutdatedSide] 那一端。
     case versionMismatch(OutdatedSide)
@@ -49,7 +50,7 @@ public enum ReasonClass: Equatable, Sendable {
 public func reasonClass(_ reason: DesktopReason) -> ReasonClass {
     guard case let .registered(r) = reason else { return .itemFailure }
     switch r {
-    case .notPaired, .revoked, .epochMismatch, .roleForbidden: return .pairingLost
+    case .notPaired, .pairingMismatch: return .pairingLost
     case .phoneOutdated: return .versionMismatch(.phone)
     // 电脑不认识手机调用的方法：电脑那边的 P-Pass 太旧。
     case .desktopOutdated, .unsupportedMethod: return .versionMismatch(.desktop)
@@ -58,7 +59,8 @@ public func reasonClass(_ reason: DesktopReason) -> ReasonClass {
     case .storageFailed: return .peerFailure(.storageError)
     case .internal: return .peerFailure(.desktopInternal)
     case .fetchFailed: return .pathFailure
-    case .badRequest, .notFound, .backupFailed, .cancelled, .pairTokenInvalid, .grantNotFound, .grantConflict, .unknown:
+    // role_forbidden（#1119）：已配对、只是角色不允许这个方法——不是「未配对」，不触发清理，按手机发错请求走单张失败。
+    case .badRequest, .notFound, .backupFailed, .cancelled, .pairTokenInvalid, .pairCodeWrong, .grantNotFound, .grantConflict, .roleForbidden, .unknown:
         return .itemFailure
     }
 }
@@ -142,11 +144,11 @@ public func classifyProviderFailure(_ error: Error) -> DeliveryOutcome {
 /// 回执四字段核对通过之前，不许确认 order（REBUILD-03）。
 public func relayFlowCompletion(_ receipt: FlowCompletionReceipt, _ request: FlowFetchRequest) throws -> CompletionReceipt {
     guard receipt.queueSequence == request.queueSequence else { throw ReceiptMismatch(field: "queue_sequence") }
-    guard receipt.pairingEpoch == request.pairingEpoch else { throw ReceiptMismatch(field: "pairing_epoch") }
+    guard receipt.pairingId == request.pairingId else { throw ReceiptMismatch(field: "pairing_id") }
     guard receipt.leaseToken == request.leaseToken else { throw ReceiptMismatch(field: "lease_token") }
     guard receipt.contentHash == request.contentHash else { throw ReceiptMismatch(field: "content_hash") }
     return CompletionReceipt(
-        queueSequence: Int64(receipt.queueSequence), receiptId: receipt.receiptId, pairingEpoch: receipt.pairingEpoch,
+        queueSequence: Int64(receipt.queueSequence), receiptId: receipt.receiptId, pairingId: receipt.pairingId,
         contentHash: receipt.contentHash, leaseToken: receipt.leaseToken
     )
 }
@@ -184,8 +186,8 @@ public func parseFlowPushOutcome(kind: String, data: JSONValue, tuple: FlowTuple
     case let .string(s)?: seq = UInt64(s)
     default: seq = nil
     }
-    guard let seq, case let .string(epoch)? = fields["pairing_epoch"], case let .string(lease)? = fields["lease_token"] else { return nil }
-    guard seq == tuple.queueSequence, epoch == tuple.pairingEpoch, lease == tuple.leaseToken else { return nil }
+    guard let seq, case let .string(pairingId)? = fields["pairing_id"], case let .string(lease)? = fields["lease_token"] else { return nil }
+    guard seq == tuple.queueSequence, pairingId == tuple.pairingId, lease == tuple.leaseToken else { return nil }
     switch kind {
     case "flow.delivered":
         guard let element = fields["receipt"], let receipt = try? element.decode(FlowCompletionReceipt.self) else { return nil }

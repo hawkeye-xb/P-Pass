@@ -48,7 +48,7 @@ final class FakeDesktop: FlowDesktop, @unchecked Sendable {
     let statusCalls = Locked(0)
     let suspends = Locked<[FlowTupleRef]>([])
     let cancels = Locked<[FlowTupleRef]>([])
-    let helloResult = Locked<Result<Hello, Error>>(.success(Hello(capabilities: [], deviceName: "PC", pairingEpoch: "e1")))
+    let helloResult = Locked<Result<Hello, Error>>(.success(Hello(capabilities: [], deviceName: "PC", pairingId: "e1")))
     let submitted = Locked<[[String]]>([])
     let accept = Locked<(Set<String>) -> Set<String>>({ $0 })
     let submitFails = Locked(false)
@@ -124,14 +124,14 @@ final class PortHarness: @unchecked Sendable {
     let desktop = FakeDesktop()
     let push = FakePush()
     let logger = RecordingLogger()
-    let epoch = Locked<String?>("e1")
+    let pairingId = Locked<String?>("e1")
     let loss = PairingLoss()
     let progress = Locked<[Int64]>([])
     let hash = String(repeating: "ab", count: 32)
     let orderId: Int64 = 1_790_000_000_123
     var timings = DeliveryTimings()
     private(set) lazy var port = FlowDeliveryPort(
-        provider: provider, currentEpoch: { [epoch] in epoch.get() }, desktop: desktop, push: push, logger: logger,
+        provider: provider, currentPairingId: { [pairingId] in pairingId.get() }, desktop: desktop, push: push, logger: logger,
         timings: timings, pairingLoss: loss
     )
 
@@ -148,19 +148,19 @@ final class PortHarness: @unchecked Sendable {
 
     var request: DeliveryRequest {
         DeliveryRequest(
-            orderId: orderId, pairingEpoch: "e1", contentHash: hash,
+            orderId: orderId, pairingId: "e1", contentHash: hash,
             details: MediaDetails(snapshot: MediaSnapshot(mediaId: "A1/L0/001", sourceVersion: "1:1", bucketId: "B7"), fileName: "IMG_9.HEIC", mimeType: "image/heic", sizeBytes: 1_000_000, captureAtMs: 1_690_000_000_000)
         )
     }
 
-    var tuple: FlowTupleRef { FlowTupleRef(queueSequence: UInt64(orderId), pairingEpoch: "e1", leaseToken: leaseTokenFor(orderId)) }
+    var tuple: FlowTupleRef { FlowTupleRef(queueSequence: UInt64(orderId), pairingId: "e1", leaseToken: leaseTokenFor(orderId)) }
 
     func receipt(hash: String? = nil) -> FlowCompletionReceipt {
-        FlowCompletionReceipt(queueSequence: UInt64(orderId), receiptId: "r1", pairingEpoch: "e1", leaseToken: leaseTokenFor(orderId), contentHash: hash ?? self.hash)
+        FlowCompletionReceipt(queueSequence: UInt64(orderId), receiptId: "r1", pairingId: "e1", leaseToken: leaseTokenFor(orderId), contentHash: hash ?? self.hash)
     }
 
     func tupleFields() -> [String: JSONValue] {
-        ["queue_sequence": .int(orderId), "pairing_epoch": .string("e1"), "lease_token": .string(leaseTokenFor(orderId))]
+        ["queue_sequence": .int(orderId), "pairing_id": .string("e1"), "lease_token": .string(leaseTokenFor(orderId))]
     }
 
     func deliver() async throws -> DeliveryOutcome {
@@ -301,7 +301,7 @@ final class DeliveryPortTests: XCTestCase {
         let h = PortHarness()
         h.desktop.offerReply.set(FlowStatusReply(state: "completed", receipt: h.receipt()))
         let outcome = try await h.deliver()
-        XCTAssertEqual(outcome, .confirmed(CompletionReceipt(queueSequence: h.orderId, receiptId: "r1", pairingEpoch: "e1", contentHash: h.hash, leaseToken: leaseTokenFor(h.orderId))))
+        XCTAssertEqual(outcome, .confirmed(CompletionReceipt(queueSequence: h.orderId, receiptId: "r1", pairingId: "e1", contentHash: h.hash, leaseToken: leaseTokenFor(h.orderId))))
         let offer = try XCTUnwrap(h.desktop.offers.get().first)
         XCTAssertEqual(offer.queueSequence, UInt64(h.orderId))
         XCTAssertEqual(offer.leaseToken, "lease-\(h.orderId)")
@@ -342,12 +342,12 @@ final class DeliveryPortTests: XCTestCase {
     }
 
     /// 配对代号变了（换了一次配对）：这一张不跨进新代号，路径失败。
-    func testAnEpochChangeIsAPathFailure() async throws {
+    func testAnPairingIdChangeIsAPathFailure() async throws {
         let h = PortHarness()
-        h.epoch.set("e2")
+        h.pairingId.set("e2")
         let outcome = try await h.deliver()
-        XCTAssertEqual(outcome, .pathFailure("epoch_changed"))
-        h.epoch.set(nil)
+        XCTAssertEqual(outcome, .pathFailure("pairing_changed"))
+        h.pairingId.set(nil)
         let unpaired = try await h.deliver()
         XCTAssertEqual(unpaired, .pairingLost)
     }
@@ -464,7 +464,7 @@ final class DeliveryPortTests: XCTestCase {
 
     /// 桌面可达但拒绝不是路径问题；配对失效单独一类；网络错误是路径失败。
     func testExceptionsAreClassified() {
-        XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(reason: .registered(.revoked), method: "flow.offer")), .pairingLost)
+        XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(reason: .registered(.notPaired), method: "flow.offer")), .pairingLost)
         XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(reason: .registered(.badRequest), method: "flow.offer")), .itemFailure("rejected:bad_request"))
         XCTAssertEqual(classifyDeliveryFailure(DesktopRejected(reason: .registered(.storageFull), method: "flow.offer")), .peerFailure(.storageFull, code: "storage_full"))
         guard case let .pathFailure(reason) = classifyDeliveryFailure(URLError(.timedOut)) else { return XCTFail("network error must be a path failure") }
@@ -527,14 +527,14 @@ final class DeliveryPortTests: XCTestCase {
     /// hello 的 health 按契约字段名解析；没有 health = 健康（H-02）。
     func testHelloHealthIsParsedAndAbsentMeansHealthy() async throws {
         let h = PortHarness()
-        let probe = ControlPlaneProbe(currentEpoch: { "e1" }, desktop: h.desktop, logger: h.logger, pairingLoss: h.loss)
+        let probe = ControlPlaneProbe(currentPairingId: { "e1" }, desktop: h.desktop, logger: h.logger, pairingLoss: h.loss)
         let old = await probe.probe()
-        XCTAssertEqual(old, .reachable(advertisedEpoch: "e1", health: nil, capabilities: []))
+        XCTAssertEqual(old, .reachable(advertisedPairingId: "e1", health: nil, capabilities: []))
         XCTAssertNil(waitReasonOf(nil as DesktopHealth?))
-        let wire = try ProtoJSON.decode(Hello.self, from: Data(#"{"proto_ver":1,"capabilities":["flow.supersede.v1"],"device_name":"PC","pairing_epoch":"e1","health":{"free_bytes":1024,"library_writable":true,"index_ok":false}}"#.utf8))
+        let wire = try ProtoJSON.decode(Hello.self, from: Data(#"{"proto_ver":1,"capabilities":["flow.supersede.v1"],"device_name":"PC","pairing_id":"e1","health":{"free_bytes":1024,"library_writable":true,"index_ok":false}}"#.utf8))
         h.desktop.helloResult.set(.success(wire))
         let unhealthy = await probe.probe()
-        XCTAssertEqual(unhealthy, .reachable(advertisedEpoch: "e1", health: DesktopHealth(freeBytes: 1024, libraryWritable: true, indexOk: false), capabilities: ["flow.supersede.v1"]))
+        XCTAssertEqual(unhealthy, .reachable(advertisedPairingId: "e1", health: DesktopHealth(freeBytes: 1024, libraryWritable: true, indexOk: false), capabilities: ["flow.supersede.v1"]))
         XCTAssertEqual(waitReasonOf(DesktopHealth(freeBytes: 1024, libraryWritable: true, indexOk: false)), .desktopStorageError)
     }
 
@@ -560,24 +560,24 @@ final class DeliveryPortTests: XCTestCase {
 
     // MARK: 探测与配对失效（MOB-117 / #466）
 
-    func testAProbeRejectedAsNotAuthorizedReportsPairingLostForThatEpoch() async {
+    func testAProbeRejectedAsNotAuthorizedReportsPairingLostForThatPairingId() async {
         let h = PortHarness()
-        h.desktop.helloResult.set(.failure(DesktopRejected(reason: .registered(.revoked), method: "hello")))
-        let probe = ControlPlaneProbe(currentEpoch: { "e1" }, desktop: h.desktop, logger: h.logger, pairingLoss: h.loss)
+        h.desktop.helloResult.set(.failure(DesktopRejected(reason: .registered(.notPaired), method: "hello")))
+        let probe = ControlPlaneProbe(currentPairingId: { "e1" }, desktop: h.desktop, logger: h.logger, pairingLoss: h.loss)
         let result = await probe.probe()
         XCTAssertEqual(result, .pairingLost)
-        XCTAssertTrue(h.loss.isLost(epoch: "e1"))
-        XCTAssertFalse(h.loss.isLost(epoch: "e2"), "失效属于被拒的那一代，不属于之后重新配对的")
+        XCTAssertTrue(h.loss.isLost(pairingId: "e1"))
+        XCTAssertFalse(h.loss.isLost(pairingId: "e2"), "失效属于被拒的那一代，不属于之后重新配对的")
     }
 
     func testAnOrdinaryRejectionOrTimeoutIsUnreachableNotLost() async {
         let h = PortHarness()
         h.desktop.helloResult.set(.failure(DesktopRejected(reason: .registered(.badRequest), method: "hello")))
-        let probe = ControlPlaneProbe(currentEpoch: { "e1" }, desktop: h.desktop, logger: h.logger, pairingLoss: h.loss)
+        let probe = ControlPlaneProbe(currentPairingId: { "e1" }, desktop: h.desktop, logger: h.logger, pairingLoss: h.loss)
         let rejected = await probe.probe()
         XCTAssertEqual(rejected, .unreachable)
-        XCTAssertFalse(h.loss.isLost(epoch: "e1"))
-        let unpaired = await ControlPlaneProbe(currentEpoch: { nil }, desktop: h.desktop, logger: h.logger, pairingLoss: h.loss).probe()
+        XCTAssertFalse(h.loss.isLost(pairingId: "e1"))
+        let unpaired = await ControlPlaneProbe(currentPairingId: { nil }, desktop: h.desktop, logger: h.logger, pairingLoss: h.loss).probe()
         XCTAssertEqual(unpaired, .pairingLost)
     }
 
@@ -621,8 +621,8 @@ final class DeliveryPortTests: XCTestCase {
 
     func testDiscardingAPartialSendsCancelTupleBounded() async {
         let h = PortHarness()
-        await h.port.discardPartial(orderId: 42, pairingEpoch: "e1")
-        XCTAssertEqual(h.desktop.cancels.get(), [FlowTupleRef(queueSequence: 42, pairingEpoch: "e1", leaseToken: "lease-42")])
+        await h.port.discardPartial(orderId: 42, pairingId: "e1")
+        XCTAssertEqual(h.desktop.cancels.get(), [FlowTupleRef(queueSequence: 42, pairingId: "e1", leaseToken: "lease-42")])
         XCTAssertEqual(h.desktop.suspends.get(), [])
     }
 }
@@ -647,7 +647,7 @@ final class EngineWithPortTests: XCTestCase {
         XCTAssertEqual(try rig.state(1), .transferring)
 
         h.desktop.offerReply.set(FlowStatusReply(state: "completed", receipt: FlowCompletionReceipt(
-            queueSequence: UInt64(order.id), receiptId: "r", pairingEpoch: "e1", leaseToken: leaseTokenFor(order.id), contentHash: order.contentHash ?? ""
+            queueSequence: UInt64(order.id), receiptId: "r", pairingId: "e1", leaseToken: leaseTokenFor(order.id), contentHash: order.contentHash ?? ""
         )))
         await rig.engine.resume()
         await rig.engine.awaitIdle()

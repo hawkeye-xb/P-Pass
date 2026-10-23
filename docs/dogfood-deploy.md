@@ -58,8 +58,9 @@ cd ppf-bin && shasum -c SHA256SUMS-* && chmod +x daemon testclient dogfood-smoke
 ## 2. Start the daemon / 启动
 
 ```bash
-mkdir -p ~/ppf-library
-PPF_DATA_DIR=~/ppf-library \
+mkdir -p ~/ppf-library "${XDG_DATA_HOME:-$HOME/.local/share}/p-pass"
+# #1115：常驻 daemon 不再认 PPF_DATA_DIR；Linux 上库位置的正本是平台 config.toml。
+printf 'data_dir = "%s"\n' "$HOME/ppf-library" > "${XDG_DATA_HOME:-$HOME/.local/share}/p-pass/config.toml"
 PPF_RELAY_URLS="" \
   nohup ./daemon > ~/ppf-daemon.log 2> ~/ppf-daemon.err &
 sleep 3 && cat ~/ppf-daemon.log

@@ -46,15 +46,15 @@ final class ForegroundHeartbeatTests: XCTestCase {
         let desktop = FakeDesktop()
         let sleeper = ManualSleeper()
         let clock = ManualClock(5_000_000)
-        let epoch = Locked<String?>("e1")
+        let pairingId = Locked<String?>("e1")
         let wakes = Locked(0)
         let lost = Locked<[String]>([])
         let logger = RecordingLogger()
         lazy var sentinel = SentinelStore(directory: tmp.url, logger: logger)
         lazy var heartbeat = ForegroundHeartbeat(
-            desktop: desktop, currentEpoch: { [epoch] in epoch.get() }, ledger: sentinel, now: clock.function,
+            desktop: desktop, currentPairingId: { [pairingId] in pairingId.get() }, ledger: sentinel, now: clock.function,
             onReachable: { [wakes] in wakes.update { $0 += 1 } },
-            onPairingLost: { [lost] epoch, _ in lost.update { $0.append(epoch) } },
+            onPairingLost: { [lost] pairingId, _ in lost.update { $0.append(pairingId) } },
             logger: logger, sleep: { [sleeper] in try await sleeper.sleep($0) })
     }
 
@@ -111,8 +111,8 @@ final class ForegroundHeartbeatTests: XCTestCase {
         r.heartbeat.stop()
     }
 
-    func testRejectedAsNotPairedOrNotAuthorizedReportsPairingLostForThatEpoch() async throws {
-        for key in ["not_paired", "revoked"] {
+    func testRejectedAsNotPairedOrNotAuthorizedReportsPairingLostForThatPairingId() async throws {
+        for key in ["not_paired", "pairing_mismatch"] {
             let r = Rig()
             r.desktop.helloResult.set(.failure(DesktopRejected(reason: DesktopReason(wire: key), method: "hello")))
             r.heartbeat.start()
@@ -137,7 +137,7 @@ final class ForegroundHeartbeatTests: XCTestCase {
         XCTAssertTrue(r.logger.contains("Heartbeat desktop unreachable (was unknown)"))
 
         // 桌面恢复：下一拍接上并叫醒。
-        r.desktop.helloResult.set(.success(Hello(pairingEpoch: "e1")))
+        r.desktop.helloResult.set(.success(Hello(pairingId: "e1")))
         await eventually { r.sleeper.pending(ms: 30_000) == 1 }
         r.clock.now = 6_000_000
         r.sleeper.advance(30_000)
@@ -171,7 +171,7 @@ final class ForegroundHeartbeatTests: XCTestCase {
 
     func testNoValidPairingSkipsTheBeatWithoutTouchingTheNetwork() async {
         let r = Rig()
-        r.epoch.set(nil)
+        r.pairingId.set(nil)
         r.heartbeat.start()
         await eventually("进入等待") { r.sleeper.pending(ms: 30_000) == 1 }
         await settle()

@@ -1,4 +1,4 @@
-// NET-28 (#454): a hung Endpoint.bind must end the pairing wait with a
+// NET-28 (#454): a hung endpoint bind must end the pairing wait with a
 // distinguishable failure instead of spinning forever.
 //
 // The fake bind blocks its THREAD (CountDownLatch.await), not just its
@@ -47,7 +47,7 @@ class NET28BindTimeoutTest {
         val hung = gate()
         val client = DaemonClient(
             bindTimeoutMs = 300,
-            openEndpoint = { hung.await(); throw IllegalStateException("released") },
+            openPlane = { hung.await(); throw IllegalStateException("released") },
             bindLog = {},
         )
 
@@ -77,7 +77,7 @@ class NET28BindTimeoutTest {
         val lines = mutableListOf<String>()
         val client = DaemonClient(
             bindTimeoutMs = 300,
-            openEndpoint = { throw IllegalStateException("boom") },
+            openPlane = { throw IllegalStateException("boom") },
             bindLog = { lines += it },
         )
         runCatching { client.bind(null) }

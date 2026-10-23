@@ -1,7 +1,11 @@
-//! Blocking IPC client for the daemon's local socket (T-034 wire:
-//! first line = token, then one JSON request per line, one JSON
-//! response per line). One fresh connection per call — simple and
+//! Blocking IPC client for the daemon's local socket (T-034 wire: one JSON
+//! request per line, one JSON response per line; in token mode the first
+//! line is the token). One fresh connection per call — simple and
 //! stateless, plenty for the 60 s fallback poll plus event-driven refreshes.
+//!
+//! #1115：常驻 daemon 怎么连由平台决定（`platform::ResidentIpc`）。macOS：固定路径的签名
+//! socket，连上后**先反向校验服务端是签名 daemon**，不是就断开、什么都不发；没有令牌。
+//! 其余平台：令牌文件。连测试沙盒（令牌）只在 debug 构建里存在（[`sandbox_candidates`]）。
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -16,7 +20,7 @@ use std::time::Duration;
 pub const IPC_READ_TIMEOUT: Duration = Duration::from_secs(10);
 
 use interprocess::local_socket::traits::Stream as _;
-use interprocess::local_socket::{GenericNamespaced, Stream, ToNsName};
+use interprocess::local_socket::{GenericFilePath, GenericNamespaced, Stream, ToFsName, ToNsName};
 use serde_json::{json, Value};
 
 /// I18N-03 (#492)：会经 `invoke` 回到前端展示的错误，一律是「key + 参数」，
@@ -41,9 +45,10 @@ pub(crate) fn ui_err(key: &str, params: &[(&str, &dyn std::fmt::Display)]) -> St
 pub(crate) const UI_ERR_GENERIC: &str = "ui.err_generic";
 const REASON_UI_KEYS: &[(&str, &str)] = &[
     ("not_paired", "err.not_paired"),
-    ("revoked", "err.not_authorized"),
     ("role_forbidden", "err.not_authorized"),
     ("pair_token_invalid", "err.not_authorized"),
+    // #1118：验证码对不上，这次配对已作废。
+    ("pair_code_wrong", "ui.err_pair_code_wrong"),
     ("phone_outdated", "ui.err_phone_outdated"),
     ("desktop_outdated", "ui.err_desktop_outdated"),
     ("unsupported_method", "err.unsupported"),
@@ -56,7 +61,7 @@ const REASON_UI_KEYS: &[(&str, &str)] = &[
     ("library_unavailable", UI_ERR_GENERIC),
     ("storage_failed", UI_ERR_GENERIC),
     ("fetch_failed", UI_ERR_GENERIC),
-    ("epoch_mismatch", UI_ERR_GENERIC),
+    ("pairing_mismatch", UI_ERR_GENERIC),
     ("grant_not_found", UI_ERR_GENERIC),
     ("grant_conflict", UI_ERR_GENERIC),
     ("cancelled", UI_ERR_GENERIC),
@@ -73,7 +78,13 @@ pub(crate) fn reason_ui_key(reason: &str) -> &'static str {
 /// daemon 应答的 `error` 对象 → 壳的 keyed 错误串（与 [`ui_err`] 同形）。
 /// 原 `reason` 放进 `params.reason` 只供排查，通用文案不引用它，永不进界面；
 /// 表外的 reason 另写一行 stderr 日志。
+///
+/// #1115：daemon 已经给出 keyed 文案（`params.ui_error`，如 `config.set_library` 的
+/// 库目录校验失败）时原样交出——那是给用户看的具体原因，不能被通用错误盖掉。
 pub(crate) fn daemon_error(error: &Value) -> String {
+    if let Some(ui_error) = error["params"]["ui_error"].as_str() {
+        return ui_error.to_string();
+    }
     let reason = error["reason"].as_str().unwrap_or("");
     let key = reason_ui_key(reason);
     if key == UI_ERR_GENERIC && !REASON_UI_KEYS.iter().any(|(r, _)| *r == reason) {
@@ -116,15 +127,12 @@ fn ipc_timeout_msg(method: &str, timeout: Duration) -> String {
 /// 进程退出：**已知代价**，换来「保险丝一定生效」。每调用一个短命线程，与
 /// 本模块既有的「每调一新连接」同阶。
 fn one_round_trip(
-    socket_name: String,
+    endpoint: Endpoint,
     payload: String,
     method: String,
     read_timeout: Duration,
 ) -> Result<String, String> {
-    let name = socket_name
-        .to_ns_name::<GenericNamespaced>()
-        .map_err(|e| ui_err("ui.err_socket_name", &[("err", &e)]))?;
-    let conn = Stream::connect(name).map_err(|e| ui_err("ui.err_connect", &[("err", &e)]))?;
+    let conn = endpoint.connect()?;
     let _ = conn.set_recv_timeout(Some(read_timeout));
     let mut reader = BufReader::new(conn);
     reader
@@ -170,7 +178,7 @@ fn data_dir_of(raw: &str) -> Option<String> {
 ///
 /// T-042b: the platform data dir comes from `platform::adapter().data_dir()`
 /// (macOS: ~/Library/Application Support/P-Pass; Windows:
-/// %LOCALAPPDATA%\com.p-pass.desktop — DESK-24 #173 moved it off roaming
+/// %LOCALAPPDATA%\com.hawkeyexb.ppass.desktop — DESK-24 #173 moved it off roaming
 /// %APPDATA%, and the adapter keeps returning the old location until the
 /// move actually succeeds) instead of a hardcoded macOS-only path — the
 /// token discovery fix must work on Windows too.
@@ -183,11 +191,11 @@ pub fn token_candidates() -> Vec<PathBuf> {
 }
 
 /// Testable core: same order, but the platform data dir and home are injected.
+///
+/// #1115：不再认 `PPF_DATA_DIR`——release 壳只连常驻 daemon，调用方的环境不许把它指向
+/// 别处（连测试沙盒见 [`sandbox_candidates`]，只在 debug 构建里）。
 pub fn token_candidates_from(data_dir: &Path, home: &Path) -> Vec<PathBuf> {
     let mut v = Vec::new();
-    if let Ok(dir) = std::env::var("PPF_DATA_DIR") {
-        v.push(PathBuf::from(dir).join("ipc.token"));
-    }
     v.push(home.join("ppf-library/ipc.token"));
     v.push(data_dir.join("ipc.token"));
     // The wizard writes the user-picked library dir into config.toml's
@@ -201,9 +209,108 @@ pub fn token_candidates_from(data_dir: &Path, home: &Path) -> Vec<PathBuf> {
     v
 }
 
+/// #1115：一个候选 daemon 端点。
+#[derive(Debug, Clone)]
+enum Endpoint {
+    /// 签名 socket：连上后反向校验服务端是签名 daemon，不发令牌。
+    Signed(PathBuf),
+    /// 命名空间端点 + 令牌（Windows / Linux 常驻 daemon；debug 构建下的测试沙盒）。
+    Token { socket_name: String, token: String },
+}
+
+impl Endpoint {
+    /// 连上并完成认证前的准备。签名模式下服务端校验不过 ⇒ `Err`，此时一个字节都没发。
+    fn connect(&self) -> Result<Stream, String> {
+        match self {
+            Endpoint::Signed(path) => {
+                let name = path
+                    .as_path()
+                    .to_fs_name::<GenericFilePath>()
+                    .map_err(|e| ui_err("ui.err_socket_name", &[("err", &e)]))?;
+                let conn =
+                    Stream::connect(name).map_err(|e| ui_err("ui.err_connect", &[("err", &e)]))?;
+                match platform::verify_local_peer(&conn, &[platform::PeerRole::Daemon]) {
+                    platform::PeerCheck::Verified(_) => Ok(conn),
+                    platform::PeerCheck::Rejected(why) => Err(ui_err(
+                        "ui.err_daemon_not_ours",
+                        &[("path", &path.display()), ("reason", &why)],
+                    )),
+                    platform::PeerCheck::NotSupported(why) => {
+                        Err(ui_err("ui.err_connect", &[("err", &why)]))
+                    }
+                }
+            }
+            Endpoint::Token { socket_name, .. } => {
+                let name = socket_name
+                    .clone()
+                    .to_ns_name::<GenericNamespaced>()
+                    .map_err(|e| ui_err("ui.err_socket_name", &[("err", &e)]))?;
+                Stream::connect(name).map_err(|e| ui_err("ui.err_connect", &[("err", &e)]))
+            }
+        }
+    }
+
+    /// 线上第一段：令牌模式是令牌行，签名模式没有。
+    fn preamble(&self) -> String {
+        match self {
+            Endpoint::Signed(_) => String::new(),
+            Endpoint::Token { token, .. } => format!("{token}\n"),
+        }
+    }
+
+    fn label(&self) -> String {
+        match self {
+            Endpoint::Signed(path) => path.display().to_string(),
+            Endpoint::Token { socket_name, .. } => socket_name.clone(),
+        }
+    }
+}
+
+/// 令牌文件 → 端点（第一行 socket 名，第二行令牌）。
+fn token_endpoint(path: &Path) -> Option<Endpoint> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let mut lines = content.lines();
+    let (name, token) = (lines.next()?, lines.next()?);
+    Some(Endpoint::Token {
+        socket_name: name.trim().to_string(),
+        token: token.trim().to_string(),
+    })
+}
+
+/// #1115：测试沙盒（`daemon --ephemeral`，令牌认证）——**只在 debug 构建里存在**。
+/// 开发时 `PPF_SANDBOX_DIR=<daemon stdout 上 SANDBOX: 那一行>` 启动 `tauri dev`。
+/// release 构建里这条路径不存在（下面那个空实现），release 壳只认签名 daemon；
+/// `tests::sandbox_path_only_in_debug_builds` 守着这一点。
+#[cfg(debug_assertions)]
+fn sandbox_candidates() -> Vec<Endpoint> {
+    std::env::var_os("PPF_SANDBOX_DIR")
+        .map(PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+        .and_then(|dir| token_endpoint(&dir.join("ipc.token")))
+        .into_iter()
+        .collect()
+}
+
+#[cfg(not(debug_assertions))]
+fn sandbox_candidates() -> Vec<Endpoint> {
+    Vec::new()
+}
+
+/// 候选端点，按顺序：（debug 构建）测试沙盒 → 常驻 daemon。
+fn endpoint_candidates() -> Vec<Endpoint> {
+    use platform::PlatformAdapter as _;
+    let mut v = sandbox_candidates();
+    match platform::adapter().resident_ipc() {
+        platform::ResidentIpc::SignedSocket(path) => v.push(Endpoint::Signed(path)),
+        platform::ResidentIpc::NamespacedWithToken => {
+            v.extend(token_candidates().iter().filter_map(|p| token_endpoint(p)));
+        }
+    }
+    v
+}
+
 pub struct DaemonHandle {
-    socket_name: String,
-    token: String,
+    endpoint: Endpoint,
 }
 
 impl DaemonHandle {
@@ -212,25 +319,16 @@ impl DaemonHandle {
     /// discovery (real-world bug: leftover dogfood token).
     pub fn discover() -> Result<Self, String> {
         let mut last_err = ui_err("ui.err_no_daemon", &[]);
-        for path in token_candidates() {
-            let Ok(content) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            let mut lines = content.lines();
-            let (Some(name), Some(token)) = (lines.next(), lines.next()) else {
-                continue;
-            };
-            let handle = Self {
-                socket_name: name.trim().to_string(),
-                token: token.trim().to_string(),
-            };
+        for endpoint in endpoint_candidates() {
+            let label = endpoint.label();
+            let handle = Self { endpoint };
             match handle.call("status", serde_json::json!({})) {
                 Ok(_) => return Ok(handle),
                 Err(e) => {
-                    // Stale token (dead daemon) — try the next candidate.
+                    // Stale token (dead daemon) / not our daemon — try the next candidate.
                     last_err = ui_err(
                         "ui.err_daemon_unresponsive",
-                        &[("path", &path.display()), ("err", &e)],
+                        &[("path", &label), ("err", &e)],
                     );
                 }
             }
@@ -260,21 +358,21 @@ impl DaemonHandle {
         // timeouts"），NET-11 的实现用 `?` 把它当硬失败，于是 Windows 上
         // 每次调用在请求发出**之前**就 Err —— 桌面壳一个 daemon 数据都拿
         // 不到（lib.rs 里 7 个调用点全废，含 status / asset.path /
-        // logs.export 与前端万能通道 daemon_call）。
+        // logs.export 与当时的前端万能通道 daemon_call，#1120 起拆成具名命令）。
         //
         // 改成在**通道**上掐表：整个往返跑在工作线程里，本函数用
         // `recv_timeout` 计时。保险丝于是与平台能力无关，而 NET-11 的语义
         // （撞线即断臂、错误带方法名、单一固定阈值）一字未改。
         let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
-        let socket_name = self.socket_name.clone();
+        let endpoint = self.endpoint.clone();
         let req = json!({ "id": method, "method": method, "params": params });
-        let payload = format!("{token}\n{req}\n", token = self.token);
+        let payload = format!("{}{req}\n", self.endpoint.preamble());
         let method_owned = method.to_string();
         std::thread::Builder::new()
             .name(format!("ipc-{method}"))
             .spawn(move || {
                 let _ = tx.send(one_round_trip(
-                    socket_name,
+                    endpoint,
                     payload,
                     method_owned,
                     read_timeout,
@@ -323,16 +421,11 @@ impl DaemonHandle {
         mut on_open: impl FnMut(),
         mut on_event: impl FnMut(Value),
     ) -> Result<(), String> {
-        let name = self
-            .socket_name
-            .clone()
-            .to_ns_name::<GenericNamespaced>()
-            .map_err(|e| format!("socket 名不合法: {e}"))?;
-        let conn = Stream::connect(name).map_err(|e| format!("连接后台服务失败: {e}"))?;
+        let conn = self.endpoint.connect()?;
         let mut reader = BufReader::new(conn);
 
         let req = json!({ "id": "events.subscribe", "method": "events.subscribe", "params": {} });
-        let payload = format!("{token}\n{req}\n", token = self.token);
+        let payload = format!("{}{req}\n", self.endpoint.preamble());
         reader
             .get_mut()
             .write_all(payload.as_bytes())
@@ -405,6 +498,31 @@ mod tests {
         assert!(
             candidates.contains(&cfg_dir.join("ipc.token")),
             "candidates must include the platform data dir: {candidates:?}"
+        );
+    }
+
+    /// #1115：连测试沙盒（令牌、不校验服务端签名）的路径只在 debug 构建里存在；release
+    /// 构建里 `sandbox_candidates` 是空实现，`PPF_SANDBOX_DIR` 一个字都不出现在它的路径上。
+    /// 反证：去掉 `#[cfg(debug_assertions)]`、或在 release 实现里读这个变量 ⇒ 红。
+    #[test]
+    fn sandbox_path_only_in_debug_builds() {
+        let src = include_str!("ipc.rs").replace("\r\n", "\n");
+        let debug_fn = "#[cfg(debug_assertions)]\nfn sandbox_candidates() -> Vec<Endpoint> {";
+        let release_fn =
+            "#[cfg(not(debug_assertions))]\nfn sandbox_candidates() -> Vec<Endpoint> {\n    Vec::new()\n}";
+        let at = src
+            .find(debug_fn)
+            .expect("debug 实现必须挂 #[cfg(debug_assertions)]");
+        assert!(src.contains(release_fn), "release 实现必须是空的");
+        let body_end = at + src[at..].find("\n}\n").expect("函数体");
+        let uses: Vec<usize> = src
+            .match_indices("std::env::var_os(\"PPF_SANDBOX_DIR\")")
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(uses.len(), 1, "只许 debug 实现读这个变量");
+        assert!(
+            uses[0] > at && uses[0] < body_end,
+            "读变量的地方必须在 debug 实现里"
         );
     }
 
@@ -523,8 +641,10 @@ mod tests {
 
     fn stub_handle(socket_name: &str) -> DaemonHandle {
         DaemonHandle {
-            socket_name: socket_name.to_string(),
-            token: "deadbeef".to_string(),
+            endpoint: Endpoint::Token {
+                socket_name: socket_name.to_string(),
+                token: "deadbeef".to_string(),
+            },
         }
     }
 
@@ -599,7 +719,7 @@ mod tests {
     #[test]
     fn every_registry_reason_has_an_explicit_mapping() {
         let reasons = registry_reasons();
-        assert!(reasons.len() >= 19, "快照读空了？{reasons:?}");
+        assert!(reasons.len() >= 18, "快照读空了？{reasons:?}");
         for r in &reasons {
             assert!(
                 REASON_UI_KEYS.iter().any(|(k, _)| k == r),
@@ -641,6 +761,21 @@ mod tests {
             serde_json::from_str(&daemon_error(&json!({"reason": "storage_full"}))).unwrap();
         assert_eq!(v["key"], "err.disk_full");
         assert_eq!(v["params"]["reason"], "storage_full");
+    }
+
+    /// #1115：daemon 给了具体文案（`params.ui_error`）就原样交出；没给的照旧走 reason 映射。
+    #[test]
+    fn a_keyed_ui_error_from_the_daemon_is_handed_through() {
+        let keyed = ui_err("ui.err_library_nested", &[]);
+        let e = daemon_error(&json!({
+            "code": "INVALID_REQUEST",
+            "reason": "bad_request",
+            "params": { "ui_error": keyed },
+        }));
+        assert_eq!(e, keyed);
+        let plain = daemon_error(&json!({"code": "INVALID_REQUEST", "reason": "bad_request"}));
+        assert_ne!(plain, keyed);
+        assert!(serde_json::from_str::<Value>(&plain).is_ok());
     }
 
     /// 生产阈值唯一且为 10s（卡定值；改动必须先过对照表，防摆钟）。

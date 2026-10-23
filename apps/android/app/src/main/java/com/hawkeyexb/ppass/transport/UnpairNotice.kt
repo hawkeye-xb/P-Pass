@@ -5,7 +5,7 @@
 // 配对期间的被动断开（断网、电脑重启）才需要恢复机制，与这里无关。
 //
 // 撤掉的是 #565 的发件箱（WorkManager 一次性投递、指数退避、7 天期限）。保留的一半：通知带上要结束的那次
-// 配对的纪元，电脑只在纪元一致时吊销——迟到的通知不会误删新配对，对单次发送同样成立。
+// 配对 id，电脑只在配对 id 一致时吊销——迟到的通知不会误删新配对，对单次发送同样成立。
 package com.hawkeyexb.ppass.transport
 
 import android.content.Context
@@ -24,9 +24,9 @@ import kotlinx.serialization.json.put
 /** 断开通知的等待上限（iOS `UnpairNotice.timeoutMs` 同值）。 */
 internal const val UNPAIR_NOTICE_TIMEOUT_MS = 5_000L
 
-/** device.unpair 的参数：带上要结束的那次配对的纪元（旧配对没有纪元就不带，daemon 走旧语义）。 */
-internal fun unpairParams(pairingEpoch: String): JsonObject = buildJsonObject {
-    if (pairingEpoch.isNotBlank()) put("pairing_epoch", pairingEpoch)
+/** device.unpair 的参数：带上要结束的那次配对的配对 id（没有就不带）。 */
+internal fun unpairParams(pairingId: String): JsonObject = buildJsonObject {
+    if (pairingId.isNotBlank()) put("pairing_id", pairingId)
 }
 
 /**

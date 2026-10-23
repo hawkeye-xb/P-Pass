@@ -11,7 +11,7 @@ use interprocess::local_socket::tokio::prelude::*;
 use interprocess::local_socket::GenericNamespaced;
 use proto::msgs::methods;
 use proto::{Req, Resp};
-use storage::{Db, Device, Role};
+use storage::{Db, Role};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use transport::{Blobs, IrohTransport, Transport, TransportConfig};
 
@@ -25,17 +25,19 @@ async fn endpoint() -> IrohTransport {
     .unwrap()
 }
 
-fn member(id: &transport::NodeId) -> Device {
-    Device {
-        node_id: id.0.to_vec(),
-        name: "phone".into(),
-        role: Role::Member,
-        paired_at: 0,
-        last_seen: None,
-        revoked: false,
-        revoked_at: None,
-        revoked_by: None,
-    }
+async fn pair_member(db: &Db, id: &transport::NodeId) {
+    db.accept_pairing(
+        &id.0,
+        "phone",
+        &storage::Pairing {
+            id: format!("pairing-{}", hex32(&id.0)),
+            node_id: id.0.to_vec(),
+            role: Role::Member,
+            paired_at: 0,
+        },
+    )
+    .await
+    .unwrap();
 }
 
 struct Fixture {
@@ -77,9 +79,7 @@ async fn setup() -> Fixture {
 
     let client_tp = endpoint().await;
     client_tp.add_peer(storage_tp.local_addr());
-    db.upsert_device(&member(&client_tp.node_id()))
-        .await
-        .unwrap();
+    pair_member(&db, &client_tp.node_id()).await;
 
     Fixture {
         storage_tp,
@@ -150,9 +150,7 @@ async fn flow_delivered_reaches_only_the_named_phone() {
 
     let other_tp = endpoint().await;
     other_tp.add_peer(f.storage_tp.local_addr());
-    f.db.upsert_device(&member(&other_tp.node_id()))
-        .await
-        .unwrap();
+    pair_member(&f.db, &other_tp.node_id()).await;
     let other_fixture = Fixture {
         storage_tp: f.storage_tp.clone(),
         client_tp: other_tp,
@@ -202,9 +200,10 @@ async fn revoke_actively_closes_an_open_subscription() {
     // `device.revoke` 的两步：改数据库 + 查表主动断连（这里直接复用同
     // 一份 subscriptions handle，跳过 IPC 传输层——被测的是 router.rs
     // 的登记/断连机制本身，不是 IPC 的 JSON 解析）。
-    f.db.revoke(
+    f.db.remove_pairing(
         &f.client_tp.node_id().0,
-        storage::RevokedBy::Owner,
+        None,
+        storage::DepartedBy::Owner,
         1_700_000_000_000,
     )
     .await

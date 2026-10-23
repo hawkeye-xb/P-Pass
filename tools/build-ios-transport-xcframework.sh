@@ -16,7 +16,7 @@
 #
 # - 最低系统 iOS 16（与 apps/ios/Config/Base.xcconfig 一致），用 IPHONEOS_DEPLOYMENT_TARGET
 #   传给 rustc 与 cc，两个切片同一个值。
-# - 平台选择只靠 `--features ios-ffi`，crates/ 里不写 target_os（arch-check B.2）。
+# - 平台选择只靠 `--features mobile-ffi`，crates/ 里不写 target_os（arch-check B.2）。
 # - 静态库用 `cargo rustc --crate-type staticlib` 现产，不改 crate-type：桌面与 Android 构建
 #   不会因此多编一份静态库。
 set -euo pipefail
@@ -42,16 +42,16 @@ done
 
 for t in "$DEVICE" "$SIM"; do
   echo "==> staticlib ${t}（IPHONEOS_DEPLOYMENT_TARGET=${IPHONEOS_DEPLOYMENT_TARGET}）"
-  cargo rustc -p transport --lib --features ios-ffi --release --target "$t" --crate-type staticlib
+  cargo rustc -p transport --lib --features mobile-ffi --release --target "$t" --crate-type staticlib
 done
 
-DEVICE_LIB="target/$DEVICE/release/libtransport.a"
-SIM_LIB="target/$SIM/release/libtransport.a"
+DEVICE_LIB="${CARGO_TARGET_DIR:-$ROOT/target}/$DEVICE/release/libtransport.a"
+SIM_LIB="${CARGO_TARGET_DIR:-$ROOT/target}/$SIM/release/libtransport.a"
 
 echo "==> Swift 绑定（uniffi-bindgen，library 模式读 ${SIM_LIB} 里的元数据）"
 GEN="$OUT/gen"
 rm -rf "$GEN"
-cargo run -q -p transport --features ios-bindgen --bin uniffi-bindgen -- \
+cargo run -q -p transport --features mobile-bindgen --bin uniffi-bindgen -- \
   generate --library "$SIM_LIB" --language swift --out-dir "$GEN"
 
 HEADERS="$OUT/headers"

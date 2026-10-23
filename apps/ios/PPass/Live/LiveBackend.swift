@@ -39,7 +39,10 @@ final class LiveBackend: @unchecked Sendable {
     let engineModel: LiveEngineModel
     /// 前台相册变化监听（#978，对位 Android BackupUiStateHolder 的 MediaStore ContentObserver）。
     let mediaWatcher: MediaChangeWatcher
-    let epochRepairer: EpochRepairer
+    /// 被拒即清理（#1119）：所有路径发现「电脑已不认这台手机」都汇到这里，幂等。
+    private(set) var rejectedCleanup: RejectedPairingCleanup!
+    private let timelineLock = NSLock()
+    private var liveTimeline: LiveTimeline?
     #if DEBUG
     /// 真机验证用的私钥指纹（BLAKE3 前 8 位）；Release 没有这个字段。
     let identityFingerprint: String
@@ -55,8 +58,8 @@ final class LiveBackend: @unchecked Sendable {
 
     /// 身份换新时清掉旧配对：此刻引擎还没建，只有 BGTask 里挂着的唤醒要撤（唤醒计划文件由清单的 clear 行删）。
     static func clearPairingBeforeStart(root: URL, logger: CoreLogger) throws {
-        try applyDisconnectManifest(root: root, runtime: DisconnectActions(stopFlow: {}, cancelWakes: { BGTaskSubmitter().cancelAll() }, stopMedia: {}),
-                                    logger: logger)
+        try applyDisconnectManifest(root: root, runtime: DisconnectActions(stopFlow: {}, cancelWakes: { BGTaskSubmitter().cancelAll() }, stopMedia: {}, clearThumbs: {}),
+                                    logger: logger, external: .system)
     }
 
     /// 拒绝启动页的「重置并重新配对」：换新私钥、清本地配对（DeviceIdentity.becomeNewDevice），之后重新起 App 即回到扫码。
@@ -83,9 +86,14 @@ final class LiveBackend: @unchecked Sendable {
         pairingStore = PairingStore(root: dir)
         onboarded = OnboardedDesktopsStore(directory: dir, logger: logger)
         let pairingStore = self.pairingStore
+        // #1124：任何一条连接（请求、探测、订阅流、取原图）被「记录里的那台电脑」以 401 / 410 关掉 ⇒ 立刻记成配对失效，
+        // 走被拒即清理（setOnLost 在后面接上）；别的关闭方、别的码一律当连不上，不动配对。
+        // 控制面与上传 provider（#1126）的关闭监听共用同一个处理。
+        let onClosed = desktopCloseHandler(pairingStore: pairingStore, loss: pairingLoss, logger: logger)
+        plane.setOnPeerClosed(onClosed)
         UnpairNotice.removeLegacyOutbox(root: dir, logger: logger) // #956 撤销：老版本的断开发件箱（含旧电脑 peerToken）
         media = LiveMediaLibrary { BackupScopeStore(directory: dir, daemonNodeId: pairingStore.load()?.daemonNodeId, logger: logger) }
-        provider = try NativeProvider(root: dir)
+        provider = try NativeProvider(root: dir, onPeerClosed: onClosed)
         try? provider.ffi.setAllowedPeer(nodeId: pairingStore.load()?.daemonNodeId)
         let parker = ProviderIdleParker(provider: provider, logger: logger)
         providerParker = parker
@@ -101,15 +109,17 @@ final class LiveBackend: @unchecked Sendable {
         notificationAsk = OnboardingNotificationAsk(directory: dir, logger: logger)
         notificationAsk.initIfAbsent(existingUser: pairingStore.load() != nil || onboarded.anyOnboarded())
         // 全新安装后台备份默认关（对位 Android `AutoBackupPrefs.autoEnabled = false`，#982）：首次配对完成页由用户选开不开。
-        scheduler = PlannedWakeScheduler(directory: dir, submitter: BGTaskSubmitter(), logger: logger)
+        // #1119：未配对不向系统挂任何后台任务（启动 / 回前台 / 引擎登记唤醒 / 短任务续挂都过这道门）。
+        scheduler = PlannedWakeScheduler(directory: dir, submitter: BGTaskSubmitter(), logger: logger, isPaired: { pairingStore.load() != nil })
 
         let plane = self.plane
-        let epoch: @Sendable () -> String? = {
-            guard let r = pairingStore.load(), !r.lost, !r.pairingEpoch.isEmpty else { return nil }
-            return r.pairingEpoch
+        let pairingId: @Sendable () -> String? = {
+            guard let r = pairingStore.load(), !r.lost, !r.pairingId.isEmpty else { return nil }
+            return r.pairingId
         }
-        let desktop = ControlPlaneDesktop(client: ProtoClient(transport: CurrentPeerTransport(plane: plane, store: pairingStore)))
-        let delivery = FlowDeliveryPort(provider: FfiBlobProvider(provider: provider), currentEpoch: epoch, desktop: desktop,
+        // #1119：hello 成功但没有 / 不是本地的 pairing_id，等同被拒（not_paired / pairing_mismatch），一律走「被拒」路径。
+        let desktop = ControlPlaneDesktop(client: ProtoClient(transport: CurrentPeerTransport(plane: plane, store: pairingStore)), localPairingId: pairingId)
+        let delivery = FlowDeliveryPort(provider: FfiBlobProvider(provider: provider), currentPairingId: pairingId, desktop: desktop,
                                         push: ControlPlanePush(transport: CurrentPeerTransport(plane: plane, store: pairingStore)), logger: logger, pairingLoss: pairingLoss)
         let media = self.media
         // 读盘失败与「从未保存」都给引擎空范围（一张都不备份），但读失败要留日志，不能和从未保存混为一谈（#971）。
@@ -134,23 +144,21 @@ final class LiveBackend: @unchecked Sendable {
             importer: PhotoImporter(provider: provider, tempRoot: fm.temporaryDirectory.appendingPathComponent("ppass-originals")),
             delivery: delivery,
             probe: PrewarmingProbe(provider: provider,
-                                   inner: ControlPlaneProbe(currentEpoch: epoch, desktop: desktop, logger: logger, pairingLoss: pairingLoss),
+                                   inner: ControlPlaneProbe(currentPairingId: pairingId, desktop: desktop, logger: logger, pairingLoss: pairingLoss),
                                    logger: logger),
             presence: ControlPlanePresence(desktop: desktop), lease: window, scheduler: scheduler, control: control,
             conditions: {
-                Conditions(paired: epoch() != nil, autoBackupEnabled: autoPrefs.enabled(), wifiOnly: settings.wifiOnly(),
+                Conditions(paired: pairingId() != nil, autoBackupEnabled: autoPrefs.enabled(), wifiOnly: settings.wifiOnly(),
                            onUnmetered: !network.isExpensive, batteryLow: BatteryState.isLow)
             },
             inScope: { PhotoMediaSource.inScope(bucketId: $0, selected: scope()) },
             mediaAbsenceTrusted: { media.access() == .full },
-            pairingEpoch: epoch, logger: logger,
+            pairingId: pairingId, logger: logger,
             afterCycle: FlowWiring.afterCycle(dispatcher: audit),
-            onEpochAdvertised: FlowWiring.epochAdvertised(store: pairingStore, logger: logger),
+            onPairingIdAdvertised: FlowWiring.pairingIdAdvertised(loss: pairingLoss, currentPairingId: pairingId),
             onView: { view in Task { await model.engineChanged(view) } }
         )
         engineBox.engine = engine
-        // #970：空 epoch 的老配对（旧版本存下的）静默 hello 修一次，修不了才标失联；`start()` 里先于首页事实运行。
-        epochRepairer = EpochRepairer(store: pairingStore, hello: { [desktop] in try await desktop.hello().pairingEpoch }, logger: logger)
         catchup = ForegroundCatchup(engine: engine)
         // #977：前台心跳（对位 Android ForegroundHeartbeat）。结果映射在 PPassCore，这里只接线：
         // 可达 → 叫醒引擎（#439）；被拒为配对失效 → 记进 PairingLoss 并刷新首页事实（refreshFacts 据此标红卡，#466）。
@@ -160,14 +168,14 @@ final class LiveBackend: @unchecked Sendable {
                                         isPaired: { pairingStore.load() != nil }, logger: logger)
         timelineLive = liveFeed
         heartbeat = ForegroundHeartbeat(
-            desktop: desktop, currentEpoch: epoch, ledger: sentinel, now: { Int64(Date().timeIntervalSince1970 * 1000) },
+            desktop: desktop, currentPairingId: pairingId, ledger: sentinel, now: { Int64(Date().timeIntervalSince1970 * 1000) },
             onReachable: { [engine = self.engine] in
                 await engine.onDesktopReachable()
                 liveFeed.session.onDesktopReachable() // 实时更新退避耗尽后桌面回来了：自动恢复，不等用户点「重试」（Android #474）
                 await model.refresh?()
             },
-            onPairingLost: { epoch, failure in
-                loss.record(epoch: epoch, failure: failure)
+            onPairingLost: { pairingId, failure in
+                loss.record(pairingId: pairingId, failure: failure)
                 await model.refresh?()
             },
             logger: logger)
@@ -185,9 +193,25 @@ final class LiveBackend: @unchecked Sendable {
             },
             onChange: { Task { await change.handle() } }, logger: logger)
         scheduler.ensureScheduled()
-        PPassBackgroundTasks.ensureShortScheduled(logger: logger)
+        scheduler.ensureShortScheduled()
         if root.isDegraded { logger.log("storage root degraded: \(root.kind)") }
         network.onUpdate = { [weak self] update in self?.networkPathChanged(update) }
+        // #1119：被拒即清理。回调可能被多条路径重复触发、也可能在引擎一轮里同步触发，所以只派一个 Task 出去，清理本身幂等。
+        rejectedCleanup = RejectedPairingCleanup(
+            localPairingId: { pairingStore.load()?.pairingId },
+            announce: { [weak self] id in await self?.evaluateNotices(assumeLostPairingId: id) },
+            clear: { [weak self] in await self?.disconnect() },
+            logger: logger)
+        pairingLoss.setOnLost { [weak self] id in
+            guard let self else { return }
+            Task { await self.rejectedCleanup.handle(rejectedPairingId: id) }
+        }
+    }
+
+    /// 缩略图的内存缓存（`ports()` 造出的那个时间线持有它）；还没造出来就没有可清的。
+    private func clearThumbnailMemoryCache() {
+        timelineLock.lock(); let timeline = liveTimeline; timelineLock.unlock()
+        timeline?.clearMemoryCache()
     }
 
     /// #976：路径更新 → 先让 iroh 重探路径，再交给引擎（对位 Android `onFlowNetworkChanged`）：
@@ -211,15 +235,17 @@ final class LiveBackend: @unchecked Sendable {
     func ports() -> Backend {
         let pairing = LivePairing(transportFor: { [plane] in PeerCtrlTransport(plane: plane, peerToken: $0) }, store: pairingStore, onboarded: { [onboarded] in onboarded.wasOnboarded($0) },
                                   onPaired: { [weak self] record, known in self?.paired(record, knownDesktop: known) ?? false },
-                                  onDisconnect: { [weak self] in await self?.disconnect() }, logger: logger)
+                                  onDisconnect: { [weak self] in await self?.disconnect() }, logger: logger,
+                                  localNodeId: { [plane] in try plane.nodeId() })
         let timeline = LiveTimeline(client: { [pairingStore, plane] in
             guard let r = pairingStore.load() else { return nil }
             return ProtoClient(transport: PeerCtrlTransport(plane: plane, peerToken: r.peerToken))
         }, myNodeId: { [plane] in try? plane.nodeId() },
         fetchBlob: { [plane] ticket, dest, progress in
-            let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("ppass-blobstore")
+            let scratch = FileManager.default.temporaryDirectory.appendingPathComponent(OriginalCachePaths.fetchScratchDirName)
             return try await plane.fetchBlob(ticket: ticket, scratch: scratch, dest: dest, progress: progress)
         }, logger: logger)
+        timelineLock.lock(); liveTimeline = timeline; timelineLock.unlock()
         return Backend(isDemo: false, timeline: timeline, live: timelineLive, media: media, pairing: pairing,
                        engine: LiveEngineAdapter(backend: self))
     }
@@ -238,15 +264,17 @@ final class LiveBackend: @unchecked Sendable {
         return settingSaveFailed
     }
 
-    /// 本地断开：先停引擎这一轮，再按断开清单清存储根（配对凭据、唤醒计划、自动备份生产者）。
+    /// 本地断开：先停引擎这一轮，再按断开清单清存储根（配对凭据、唤醒计划、自动备份生产者）与原图缓存。
     /// 身份、相册范围、账本、「连过哪些电脑」都保留——重新扫码后不会重传已备份的。
+    /// 用户手动断开（`LivePairing.disconnect` 通知电脑之后）、被拒即清理、配对失效卡的「重新连接」共用这一份，本身不发任何通知。
     func disconnect() async {
         await engine.stopForDisconnect()
         // provider 撤销（#974）、唤醒取消、相册监听注销都在清单的运行时三行里，清文件失败也不会跳过它们。
         let provider = self.provider, scheduler = self.scheduler, watcher = mediaWatcher, logger = self.logger
         let actions = DisconnectActions(stopFlow: { provider.teardownForDisconnect(logger: logger) },
-                                        cancelWakes: { scheduler.stop() }, stopMedia: { watcher.stop() })
-        do { try applyDisconnectManifest(root: root.url, runtime: actions, logger: logger) } catch {
+                                        cancelWakes: { scheduler.stop() }, stopMedia: { watcher.stop() },
+                                        clearThumbs: { [weak self] in self?.clearThumbnailMemoryCache() })
+        do { try applyDisconnectManifest(root: root.url, runtime: actions, logger: logger, external: .system) } catch {
             logger.log("disconnect manifest failed: \(error)")
         }
         timelineLive.session.pairingChanged() // 配对已清：旧订阅关掉，空闲等下次配对（#963）
@@ -257,16 +285,9 @@ final class LiveBackend: @unchecked Sendable {
         let parker = providerParker
         window.observeLease { held in parker.setEngineBusy(held) } // #979：对位 Android engine.status → setEngineBusy
         Task {
-            await repairEpochIfNeeded()
             await engine.start()
             await refreshFacts()
         }
-    }
-
-    /// 对位 Android `BackupUiStateHolder.repairEpochIfNeeded`：先修，再刷新首页事实；修好后叫醒引擎（它在 epoch 为空时判了未配对）。
-    private func repairEpochIfNeeded() async {
-        guard let result = await epochRepairer.repairIfNeeded() else { return }
-        if case .repaired = result { _ = await engine.trigger(.pairingRepaired) }
     }
 
     func setActive(_ active: Bool) {
@@ -276,7 +297,7 @@ final class LiveBackend: @unchecked Sendable {
         if active { heartbeat.start(); timelineLive.session.start() } else { heartbeat.stop(); timelineLive.session.stop() }
         if active {
             scheduler.ensureScheduled()
-            PPassBackgroundTasks.ensureShortScheduled(logger: logger)
+            scheduler.ensureShortScheduled()
             Task { _ = await catchup.appDidBecomeActive(); await refreshFacts() }
         }
     }
@@ -295,7 +316,7 @@ final class LiveBackend: @unchecked Sendable {
             inScopeTotal: media.inScopeTotal(),
             lastReachableAt: sentinel.load().lastReachableAt
         ).applying(counts: counts)
-        if pairingLoss.changeCount > 0, let e = pairingStore.load()?.pairingEpoch, pairingLoss.isLost(epoch: e) {
+        if pairingLoss.changeCount > 0, let e = pairingStore.load()?.pairingId, pairingLoss.isLost(pairingId: e) {
             do { try pairingStore.markLost() } catch { logger.log("pairing lost: cannot persist (\(error))") }
         }
         await engineModel.publish(facts, await Self.currentBackgroundRefresh())
@@ -316,12 +337,13 @@ final class LiveBackend: @unchecked Sendable {
 
     /// 失败通知（#981，对位 Android `evaluateDefinitiveEvents`）：进程启动 / 回前台 / 刷新首页事实 / 后台任务结束都走这里。
     /// 只看确定事件（配对失效、相册权限变差、后台刷新被关），不看首页的 Trouble。
-    func evaluateNotices() async {
+    /// [assumeLostPairingId]：被拒即清理在删配对记录**之前**发提示用（此刻盘上还没有 lost 标记）。
+    func evaluateNotices(assumeLostPairingId: String? = nil) async {
         let record = pairingStore.load()
-        let epoch = record.map(\.pairingEpoch).flatMap { $0.isEmpty ? nil : $0 } // 空代号（待修复）当没有代号，不拿来去重
+        let pairingId = record.map(\.pairingId).flatMap { $0.isEmpty ? nil : $0 }
         let facts = DefinitiveFacts(
-            pairingEpoch: epoch,
-            pairingLost: record?.lost == true,
+            pairingId: pairingId,
+            pairingLost: record?.lost == true || (assumeLostPairingId != nil && assumeLostPairingId == pairingId),
             mediaAccess: LiveMediaLibrary.tier(PhotoKitAuthorization().currentLevel()),
             backgroundRequested: autoPrefs.requested(),
             backgroundRefresh: await Self.currentBackgroundRefresh())
@@ -340,14 +362,21 @@ final class EngineBox: @unchecked Sendable {
 }
 
 /// 控制面传输：对端 = 当前配对记录里的 peer token（配对 / 重新配对后自动换）。
+/// #1122：调用因为连接被「记录里的那台电脑」以 401 / 410 关闭而失败 → 翻成与 `not_paired` 应答同一个 [DesktopRejected]，
+/// 汇入同一条被拒即清理路径；其它一切原样抛出（按「连不上」处理）。流式调用与取原图不在这里翻译：#1124 起共享 Rust 核心的
+/// 关闭监听（`ControlPlane.setOnPeerClosed`，LiveBackend 接线）对每一条连接都上报，立即触发清理。
 struct CurrentPeerTransport: CtrlTransport {
-    let plane: ControlPlane
+    let plane: PeerCallPlane
     let store: PairingStore
     struct NotPaired: Error {}
 
     func call(method: String, paramsJSON: Data, timeoutMs: UInt64?) async throws -> Data {
         guard let r = store.load() else { throw NotPaired() }
-        return try await plane.call(peerToken: r.peerToken, method: method, paramsJSON: paramsJSON, timeoutMs: timeoutMs)
+        do {
+            return try await plane.call(peerToken: r.peerToken, method: method, paramsJSON: paramsJSON, timeoutMs: timeoutMs)
+        } catch {
+            throw translateDesktopClose(error, recordedDaemonNodeId: r.daemonNodeId, method: method)
+        }
     }
 }
 
@@ -615,12 +644,14 @@ final class BatteryState: @unchecked Sendable {
 }
 
 /// 断开清单里的运行时生产者（#974）。引擎这一轮由 `LiveBackend.disconnect` 在清单之前就停好；
-/// 三项各接真逻辑：provider 撤销、取消 BGTask 唤醒、注销相册监听。
+/// 四项各接真逻辑：provider 撤销、取消 BGTask 唤醒（长任务 + 短任务）、注销相册监听、清缩略图内存缓存（#1119）。
 struct DisconnectActions: DisconnectRuntime {
     let stopFlow: () -> Void
     let cancelWakes: () -> Void
     let stopMedia: () -> Void
+    let clearThumbs: () -> Void
     func stopFlowRuntime() { stopFlow() }
     func cancelScheduledWakes() { cancelWakes() }
     func stopMediaChangeObserver() { stopMedia() }
+    func clearThumbnailMemoryCache() { clearThumbs() }
 }

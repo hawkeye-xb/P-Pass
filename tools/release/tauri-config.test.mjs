@@ -10,26 +10,29 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tauriConfig } from "./tauri-config.mjs";
 
+const PUB = "dGVzdC1wdWJrZXk="; // 测试用假公钥：不依赖仓库里有没有 test.pub
+const pub = () => PUB;
+
 const SCRIPT = join(dirname(fileURLToPath(import.meta.url)), "tauri-config.mjs");
 const CH = "https://github.com/hawkeye-xb/P-Pass/releases/download/test-channel";
 
 test("test 版本：macOS endpoint = test-channel/manifest-macos.json", () => {
   assert.equal(
-    tauriConfig("macos", "0.9.12-test.12"),
-    `{"version":"0.9.12-test.12","plugins":{"updater":{"endpoints":["${CH}/manifest-macos.json"]}}}`,
+    tauriConfig("macos", "0.9.12-test.12", undefined, pub),
+    `{"version":"0.9.12-test.12","plugins":{"updater":{"endpoints":["${CH}/manifest-macos.json"],"pubkey":"${PUB}"}}}`,
   );
 });
 
 test("test 版本：Windows endpoint = test-channel/manifest-windows.json", () => {
   assert.equal(
-    tauriConfig("windows", "0.9.12-test.12"),
-    `{"version":"0.9.12-test.12","plugins":{"updater":{"endpoints":["${CH}/manifest-windows.json"]}}}`,
+    tauriConfig("windows", "0.9.12-test.12", undefined, pub),
+    `{"version":"0.9.12-test.12","plugins":{"updater":{"endpoints":["${CH}/manifest-windows.json"],"pubkey":"${PUB}"}}}`,
   );
 });
 
-test("正式版本：只有 version，不覆盖 endpoint（与 #852 之前的内联写法逐字节相同）", () => {
+test("正式版本：只有 version，不覆盖 endpoint 和公钥（与 #852 之前的内联写法逐字节相同）", () => {
   for (const p of ["macos", "windows"]) {
-    const got = tauriConfig(p, "0.9.13");
+    const got = tauriConfig(p, "0.9.13", undefined, () => assert.fail("正式版不许读 test 公钥"));
     assert.equal(got, '{"version":"0.9.13"}');
     // macOS 旧写法：VERSION_CONFIG="{\"version\":\"$VERSION\"}"
     assert.equal(got, `{"version":"${"0.9.13"}"}`);
@@ -39,7 +42,7 @@ test("正式版本：只有 version，不覆盖 endpoint（与 #852 之前的内
 });
 
 test("仓库名取调用方给的值（runner 的 GITHUB_REPOSITORY）", () => {
-  const c = JSON.parse(tauriConfig("macos", "1.0.0-test.1", "someone/fork"));
+  const c = JSON.parse(tauriConfig("macos", "1.0.0-test.1", "someone/fork", pub));
   assert.deepEqual(c.plugins.updater.endpoints, [
     "https://github.com/someone/fork/releases/download/test-channel/manifest-macos.json",
   ]);
@@ -53,12 +56,22 @@ test("未知平台 / 空版本号：报错，不产出半份配置", () => {
 test("CLI：打印一行 JSON；GITHUB_REPOSITORY 缺省时用 hawkeye-xb/P-Pass", () => {
   const env = { ...process.env };
   delete env.GITHUB_REPOSITORY;
-  const out = execFileSync("node", [SCRIPT, "macos", "2.0.0-test.3"], { env, encoding: "utf8" });
-  assert.equal(out, `{"version":"2.0.0-test.3","plugins":{"updater":{"endpoints":["${CH}/manifest-macos.json"]}}}\n`);
+  // test 版本的 CLI 输出依赖 release/update-keys/test.pub 是否入库，由下面两条单独覆盖。
   const formal = execFileSync("node", [SCRIPT, "windows", "2.0.0"], { env, encoding: "utf8" });
   assert.equal(formal, '{"version":"2.0.0"}\n');
 });
 
 test("CLI：参数不对 ⇒ 非零退出", () => {
   assert.throws(() => execFileSync("node", [SCRIPT, "macos"], { stdio: "pipe" }));
+});
+
+test("#1121：test 版本内置 test 公钥；读不到就报错，不退回正式公钥", () => {
+  const c = JSON.parse(tauriConfig("macos", "1.0.0-test.1", undefined, pub));
+  assert.equal(c.plugins.updater.pubkey, PUB);
+  assert.throws(
+    () => tauriConfig("windows", "1.0.0-test.1", undefined, () => {
+      throw new Error("test 通道公钥 release/update-keys/test.pub 不存在");
+    }),
+    /test\.pub 不存在/,
+  );
 });

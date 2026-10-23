@@ -55,7 +55,7 @@ case "${1:-}" in
         count "主动断开：尽力通知电脑一次（#956 关闭裁决）" 'unpair: desktop=.* (acknowledged|rejected|unreachable)' 1
         expect "本地断开照常完成（provider 撤销）" 'disconnect: provider revoked'
         echo "桌面库 device 表（最近撤销的 iPhone；断开时电脑不可达则不会被撤销，属预期）："
-        sqlite3 -readonly "$DB" "select substr(hex(node_id),1,10), name, revoked, revoked_by, datetime(revoked_at/1000,'unixepoch','localtime') from device where name='iPhone' order by coalesce(revoked_at,0) desc limit 3" | sed 's/^/        /' ;;
+        sqlite3 -readonly "$DB" "select substr(hex(d.node_id),1,10), d.name, p.id is null as unpaired, d.departed_by, datetime(d.departed_at/1000,'unixepoch','localtime') from device_profile d left join pairing p on p.node_id = d.node_id where d.name='iPhone' order by coalesce(d.departed_at,0) desc limit 3" | sed 's/^/        /' ;;
       unpair-no-retry) # 断开后先 mark，再回前台 / 切网络 / 重启 App，然后判
         absent "断开之后不再发起任何 unpair" 'unpair: desktop=' ;;
       onboarding)

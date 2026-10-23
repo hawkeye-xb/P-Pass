@@ -251,7 +251,7 @@ impl Db {
     ///   所以 `gap_ms = 0` 时相同时间戳仍同批、任何递增即断批。）
     /// - 批次时间 `at` = 段内最大 `added_at`；结果按 `at` 倒序，
     ///   同刻按 `src_device` 升序保证输出确定。
-    /// - 设备名 LEFT JOIN 自 `device` 表；不在名册的上传者名为 NULL。
+    /// - 设备名 LEFT JOIN 自 `device_profile`（档案永不删除）；没有档案的上传者名为 NULL。
     pub async fn list_activity(&self, gap_ms: i64, limit: u32) -> Result<Vec<ActivityBatch>> {
         let limit = i64::from(limit.clamp(1, 1000));
         let rows = sqlx::query(
@@ -274,7 +274,7 @@ impl Db {
              )
              SELECT b.src_device, d.name, MAX(b.added_at) AS at,
                     COUNT(*) AS asset_count
-             FROM batched b LEFT JOIN device d ON d.node_id = b.src_device
+             FROM batched b LEFT JOIN device_profile d ON d.node_id = b.src_device
              GROUP BY b.src_device, b.batch_no
              ORDER BY at DESC, b.src_device ASC
              LIMIT ?2",
@@ -425,8 +425,10 @@ mod tests {
         let db = Db::open_in_memory().await.expect("open + migrate");
         for table in [
             "asset",
-            "device",
+            "device_profile",
+            "pairing",
             "backup_watermark",
+            "flow_delivery",
             "diag_event",
             "audit_operation",
             "audit_item_evidence",
@@ -683,18 +685,19 @@ mod tests {
         assert_eq!(batches[0].asset_count, 2);
 
         // A rostered device contributes its display name.
-        db.upsert_device(&crate::Device {
+        let p = crate::Pairing {
+            id: "p3".into(),
             node_id: vec![3u8; 32],
-            name: "妈妈的手机".into(),
             role: crate::Role::Member,
             paired_at: 1,
-            last_seen: None,
-            revoked: false,
-            revoked_at: None,
-            revoked_by: None,
-        })
-        .await
-        .unwrap();
+        };
+        db.accept_pairing(&p.node_id, "妈妈的手机", &p)
+            .await
+            .unwrap();
+        // 配对记录删了，档案还在：名字照常带出。
+        db.remove_pairing(&p.node_id, None, crate::DepartedBy::Owner, 2)
+            .await
+            .unwrap();
         let batches = db.list_activity(0, 50).await.unwrap();
         assert_eq!(batches[0].name.as_deref(), Some("妈妈的手机"));
     }

@@ -9,7 +9,12 @@ struct OnboardingFlow: View {
     /// `manual(fromScan:)`：手动输入从哪儿进来就退回哪儿（Android ScanScreen `leaveManual`：扫码页点进来 → 回扫码页，
     /// 欢迎页直接进来 → 回欢迎页）。
     enum Step: Equatable { case welcome, scan, manual(fromScan: Bool), status(PairStep) }
-    enum PairStep: Equatable { case waiting, refused(lapsed: Bool, note: String?), needsUpdate(OutdatedSide), failed(String) }
+    enum PairStep: Equatable {
+        case waiting
+        /// #1118：提交成功之后才有的验证码页（电脑名 + 6 位数字 + 电脑标识）。扫码后不经任何询问直接到这里（中间只有发请求的等待）。
+        case code(PairCodeShown)
+        case refused(lapsed: Bool, note: String?), needsUpdate(OutdatedSide), failed(String)
+    }
 
     @EnvironmentObject var app: AppModel
     @State private var step: Step = .welcome
@@ -62,8 +67,14 @@ struct OnboardingFlow: View {
 
     private func submit(_ code: String) {
         step = .status(.waiting)
+        let onCode: PairCodeSink = { shown in
+            await MainActor.run { step = .status(.code(shown)) }
+            #if DEBUG
+            E2EPairCode.record(shown)
+            #endif
+        }
         pairTask = Task {
-            let outcome = await app.backend.pairing.pair(code: code)
+            let outcome = await app.backend.pairing.pair(code: code, onCode: onCode)
             guard !Task.isCancelled else { return }
             switch outcome {
             case .joined(let firstTime, let settingSaveFailed): app.paired(firstTime: firstTime, settingSaveFailed: settingSaveFailed)
@@ -168,6 +179,8 @@ struct PairStatusScreen: View {
                 case .waiting:
                     ProgressView().controlSize(.large).padding(.bottom, 6)
                     message(title: L.s("pair_waiting_title"), body: L.s("pair_waiting_body"))
+                case .code(let shown):
+                    PairCodeView(shown: shown)
                 case .refused(let lapsed, let note):
                     message(title: L.s(lapsed ? "pair_lapsed_title" : "pair_refused_title"), body: L.s("pair_refused_body"),
                             note: note)
@@ -187,7 +200,7 @@ struct PairStatusScreen: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             // 同 Android：两种状态都是描边次级按钮（58 高 / 18 字），这一屏没有主动作。
             Group {
-                if case .waiting = step {
+                if step.isWaiting {
                     PPButton(title: L.s("cancel"), kind: .quiet, height: 58, fontSize: 18, action: onCancel)
                 } else {
                     PPButton(title: L.s("scan_again"), kind: .quiet, height: 58, fontSize: 18, action: onRetry)
@@ -202,6 +215,43 @@ struct PairStatusScreen: View {
             Text(title).font(PPFont.serif(30, .regular, relativeTo: .title)).multilineTextAlignment(.center)
             Text(body).font(PPFont.body).foregroundStyle(PPColor.ink40).lineSpacing(5).multilineTextAlignment(.center)
             if let note { Text(note).font(PPFont.footnote).foregroundStyle(PPColor.ink40).multilineTextAlignment(.center) }
+        }
+    }
+}
+
+extension OnboardingFlow.PairStep {
+    /// 还在等的两种（发请求中 / 显示验证码中）：底部是「取消」，其余是「重新扫码」。
+    var isWaiting: Bool {
+        switch self {
+        case .waiting, .code: return true
+        default: return false
+        }
+    }
+}
+
+/// 验证码页（对位 Android PairCodeScreen），从上到下、主次由强到弱：「正在连接」小标签 → 电脑名 → 6 位验证码（3 + 3）→
+/// 说明 → 电脑标识。字号只用 PPFont 语义样式（随系统字号缩放）：验证码 pairCode > 电脑名 title3 > 说明 body > 标识 monoSmall，
+/// 电脑名封顶在 AX4（`nameCap`，系统 dynamicTypeSize 上限）：title3 涨得比 largeTitle 快，不封顶的话 AX5 会反超验证码。
+/// 与 Android 的主次一致；两端字号差异登记在 tokens.json platforms.ios。
+struct PairCodeView: View {
+    let shown: PairCodeShown
+    static let nameCap = DynamicTypeSize.accessibility4
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Text(L.s("pair_connecting_label")).font(PPFont.captionBold).foregroundStyle(PPColor.ink40)
+            Text(shown.desktop.name).font(PPFont.title3).dynamicTypeSize(...Self.nameCap).foregroundStyle(PPColor.ink).multilineTextAlignment(.center)
+                .accessibilityIdentifier("pairDesktopName")
+            Text(PairCodeFormat.grouped(shown.code))
+                .font(PPFont.pairCode).foregroundStyle(PPColor.ink)
+                .minimumScaleFactor(0.6).lineLimit(1)
+                .padding(.vertical, 12)
+                .accessibilityLabel(shown.code.map(String.init).joined(separator: " "))
+                .accessibilityIdentifier("pairCodeValue")
+            Text(L.s("pair_code_body")).font(PPFont.body).foregroundStyle(PPColor.ink60).lineSpacing(5).multilineTextAlignment(.center)
+            Text(L.f("pair_desktop_identity", shown.desktop.fingerprint)).font(PPFont.monoSmall).foregroundStyle(PPColor.ink40)
+                .padding(.top, 6)
+                .accessibilityIdentifier("pairFingerprint")
         }
     }
 }

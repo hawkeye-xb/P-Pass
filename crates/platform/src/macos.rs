@@ -20,7 +20,7 @@ use crate::{
     Result, ServiceMode,
 };
 
-const AGENT_LABEL: &str = "com.p-pass.daemon";
+const AGENT_LABEL: &str = "com.hawkeyexb.ppass.desktop.daemon";
 
 pub struct MacosAdapter;
 
@@ -135,7 +135,7 @@ pub(crate) fn is_stable_install_location(exec: &Path) -> bool {
 /// 与 daemon 那条（`AGENT_LABEL`）刻意分开：壳的这一条**只管启动、不管守卫**，
 /// 存在的唯一目的是让 `kickstart -k` 有东西可控——由系统杀掉旧壳、按磁盘上
 /// 已是新版本的同一个文件重新拉起来。
-const SHELL_AGENT_LABEL: &str = "com.p-pass.shell";
+const SHELL_AGENT_LABEL: &str = "com.hawkeyexb.ppass.desktop.shell";
 
 fn shell_agent_plist_path() -> PathBuf {
     home().join(format!("Library/LaunchAgents/{SHELL_AGENT_LABEL}.plist"))
@@ -239,6 +239,33 @@ pub(crate) fn bundle_root(exec: &Path) -> Option<PathBuf> {
         return None;
     }
     Some(bundle.to_path_buf())
+}
+
+/// #1110：内置 daemon 的 helper App 目录名，位于 `P-Pass.app/Contents/Helpers/`。
+///
+/// daemon 要读写 data protection 钥匙串，必须带 `keychain-access-groups` 权限并由
+/// 嵌入的 provisioning profile 授权；裸可执行文件没有地方放授权文件，所以组装成
+/// 独立的 `.app`（bundle id `com.hawkeyexb.ppass.desktop.daemon`）。组装与签名在
+/// `tools/bundle-desktop-macos.sh` / `tools/daemon-helper-macos.sh`。
+pub(crate) const DAEMON_HELPER_BUNDLE: &str = "ppf-daemon.app";
+
+/// 壳可执行文件 → 内置 daemon 可执行文件（纯函数、无 IO）。
+///
+/// `…/P-Pass.app/Contents/MacOS/p-pass-desktop`
+/// → `…/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon`。
+///
+/// 只有这一条相对规则，开发构建也一样：`tauri dev` 的壳在
+/// `src-tauri/target/debug/p-pass-desktop`，对应 `src-tauri/target/Helpers/…`，
+/// 本地开发签名脚本就把 helper 放在那里。
+pub(crate) fn bundled_daemon_path_from(shell_exe: &Path) -> Option<PathBuf> {
+    let contents = shell_exe.parent()?.parent()?;
+    Some(
+        contents
+            .join("Helpers")
+            .join(DAEMON_HELPER_BUNDLE)
+            .join("Contents/MacOS")
+            .join(crate::DAEMON_EXECUTABLE_STEM),
+    )
 }
 
 impl Default for MacosAdapter {
@@ -356,7 +383,60 @@ mod cf_locale {
     }
 }
 
+/// #1118：「系统设置 → 通用 → 关于本机 → 名称」——SystemConfiguration 的电脑名称。
+mod sc_name {
+    use std::ffi::{c_char, c_void};
+
+    type CFIndex = isize;
+    type CFTypeRef = *const c_void;
+    const K_CF_STRING_ENCODING_UTF8: u32 = 0x0800_0100;
+
+    #[link(name = "SystemConfiguration", kind = "framework")]
+    extern "C" {
+        fn SCDynamicStoreCopyComputerName(store: CFTypeRef, encoding: *mut u32) -> CFTypeRef;
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFStringGetCString(
+            s: CFTypeRef,
+            buffer: *mut c_char,
+            size: CFIndex,
+            encoding: u32,
+        ) -> u8;
+        fn CFRelease(cf: CFTypeRef);
+    }
+
+    pub(super) fn computer_name() -> Option<String> {
+        // SAFETY: Copy 规则——返回的字符串归我们，读完 CFRelease 一次；store 传空 =
+        // 临时会话，encoding 传空 = 不要。缓冲区在本栈上，长度如实传入，
+        // CFStringGetCString 成功时保证 NUL 结尾（名字最长 63 个字符，UTF-8 不超过 256 字节）。
+        unsafe {
+            let name = SCDynamicStoreCopyComputerName(std::ptr::null(), std::ptr::null_mut());
+            if name.is_null() {
+                return None;
+            }
+            let mut buf = [0 as c_char; 512];
+            let ok = CFStringGetCString(
+                name,
+                buf.as_mut_ptr(),
+                buf.len() as CFIndex,
+                K_CF_STRING_ENCODING_UTF8,
+            ) != 0;
+            CFRelease(name);
+            if !ok {
+                return None;
+            }
+            let s = std::ffi::CStr::from_ptr(buf.as_ptr()).to_str().ok()?;
+            crate::clean_computer_name(s)
+        }
+    }
+}
+
 impl PlatformAdapter for MacosAdapter {
+    fn computer_name(&self) -> Option<String> {
+        sc_name::computer_name()
+    }
+
     fn assert_awake(&self) -> Result<AwakeGuard> {
         let child = Command::new("caffeinate")
             .arg("-i") // prevent idle sleep while we run
@@ -450,6 +530,21 @@ impl PlatformAdapter for MacosAdapter {
     }
     fn restrict_to_owner(&self, path: &Path) -> Result<crate::Applied> {
         crate::unix::restrict_to_owner(path)
+    }
+    fn identity_key_home(&self) -> crate::IdentityKeyHome {
+        crate::IdentityKeyHome::SecureStore(Box::new(crate::keychain::KeychainIdentityStore::new()))
+    }
+    fn resident_ipc(&self) -> crate::ResidentIpc {
+        crate::ResidentIpc::SignedSocket(self.data_dir().join("run").join("daemon.sock"))
+    }
+    fn prepare_private_dir(&self, path: &Path) -> Result<()> {
+        crate::unix::prepare_private_dir(path)
+    }
+    fn library_store(&self) -> Option<Box<dyn crate::SecretBlobStore>> {
+        Some(Box::new(crate::keychain::KeychainBlobStore::library()))
+    }
+    fn pairing_store(&self) -> Option<Box<dyn crate::SecretBlobStore>> {
+        Some(Box::new(crate::keychain::KeychainBlobStore::pairings()))
     }
     fn truncate_own_stderr(&self) -> crate::Applied {
         crate::unix::truncate_own_stderr()
@@ -595,6 +690,11 @@ impl HostingAdapter for MacosAdapter {
 
     fn stop_daemon(&self, exe: &Path, pid_hint: Option<u32>) -> Result<crate::KillOutcome> {
         crate::unix::stop_processes_at(exe, pid_hint)
+    }
+
+    /// #1110：daemon 是嵌套 helper App，见 [`bundled_daemon_path_from`]。
+    fn bundled_daemon_path(&self, shell_exe: &Path) -> Option<PathBuf> {
+        bundled_daemon_path_from(shell_exe)
     }
 
     // ── UPD-06 (#616)：壳的"按需启动"登记 + kickstart ─────────────────
@@ -753,7 +853,7 @@ impl HostingAdapter for MacosAdapter {
         launchd_job_pid(&String::from_utf8_lossy(&out.stdout))
     }
 
-    /// `launchctl kickstart [-k]p gui/<uid>/com.p-pass.daemon`。
+    /// `launchctl kickstart [-k]p gui/<uid>/com.hawkeyexb.ppass.desktop.daemon`。
     ///
     /// 为什么不再"pkill 然后等 KeepAlive 拉回来"（DAE-04 原做法）：
     /// ① 被杀 = 非成功退出，launchd 的重拉吃节流（10s 量级，DESK-44 的假失败
@@ -912,6 +1012,25 @@ mod pause_resident_tests {
 mod diag_log_tests {
     use super::*;
 
+    /// #1110：壳找内置 daemon 只认嵌套 helper，正式安装与 `tauri dev` 同一条相对规则。
+    /// 反证：退回 `exe.parent().join("ppf-daemon")`（裸 sidecar）⇒ 两条都红。
+    #[test]
+    fn bundled_daemon_lives_in_the_nested_helper_app() {
+        assert_eq!(
+            MacosAdapter
+                .bundled_daemon_path(Path::new("/Applications/P-Pass.app/Contents/MacOS/p-pass-desktop")),
+            Some(PathBuf::from(
+                "/Applications/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon"
+            ))
+        );
+        assert_eq!(
+            bundled_daemon_path_from(Path::new("/w/src-tauri/target/debug/p-pass-desktop")),
+            Some(PathBuf::from(
+                "/w/src-tauri/target/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon"
+            ))
+        );
+    }
+
     // DIAG-B1：macOS daemon 日志落在固定位置、跟着 data dir 走（PPF_DATA_DIR 隔离不漏），且 tee stderr。
     // 反证：log_file 退回 None（DIAG-B1 之前）→ 一次性 spawn 的 daemon 没有任何日志，红。
     // #1046：launchd 接的 stdout/stderr 也在 `<data_dir>/logs/` 里，plist 与
@@ -931,7 +1050,7 @@ mod diag_log_tests {
             "launchd 不能和 daemon 写同一个文件"
         );
         let plist = agent_plist(
-            Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon"),
+            Path::new("/Applications/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon"),
             &paths,
         );
         let (out, err) = (paths.stdout.clone().unwrap(), paths.stderr.clone().unwrap());
@@ -945,13 +1064,23 @@ mod diag_log_tests {
         )));
         assert!(paths.stdio_by_service_manager);
         assert!(adapter.default_log_tees_stderr());
+        // #1109：常驻 daemon 只带可执行文件路径——`--ephemeral` 用内存里的
+        // 随机身份，带上它常驻服务每次启动都换 NodeId。
+        // 反证：ProgramArguments 里加一个 `--ephemeral`，第一条红。
+        assert!(!plist.contains("--ephemeral"), "{plist}");
+        assert_eq!(
+            plist_program_argument(&plist).as_deref(),
+            Some("/Applications/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon")
+        );
     }
 
     /// #1046：老版本登记（exe 相同、日志落点在 `~/Library/Logs`）判为「不是本版本
     /// 的登记」⇒ 对账会重写成新路径；本版本自己写出的那份判为是（幂等）。
     #[test]
     fn a_plist_with_the_old_log_paths_is_not_current() {
-        let exe = Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon");
+        let exe = Path::new(
+            "/Applications/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon",
+        );
         let logs = daemon_log_paths_in(Path::new("/Users/x/Library/Application Support/P-Pass"));
         let current = agent_plist(exe, &logs);
         assert!(plist_is_current(&current, exe, &logs));

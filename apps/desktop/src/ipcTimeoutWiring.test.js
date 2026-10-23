@@ -2,7 +2,7 @@
 // 服务状态通道，不新开提示渠道。
 //
 // DESK-63 (#946): 超时的呈现不再是 refresh() 自己写 `online=false`——那正是
-// 「一次数据失败把服务判死」的旧病。超时由 Rust 的 daemon_call 记进
+// 「一次数据失败把服务判死」的旧病。超时由 Rust 的具名后台命令（daemon_api.rs 的 forward）记进
 // desktop.log，服务状态由事件流（service-state）拥有。前端只渲染状态。
 //
 // 反证：给 refresh() 的 catch 加一个 timeout 专属分支（toast/新 banner），

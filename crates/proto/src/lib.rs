@@ -16,6 +16,7 @@
 //! assert_eq!(req, back);
 //! ```
 
+pub mod close_codes;
 pub mod codec;
 pub mod error;
 pub mod msgs;

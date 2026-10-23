@@ -2,6 +2,18 @@ import XCTest
 @testable import PPassCore
 
 final class RollingFileLogTests: XCTestCase {
+    /// #1122：日志目录不进备份（只它自己，上级目录不动），读回确认，结果行说明 true。
+    /// 反证：去掉 excludeFromBackup 的 setResourceValues（或不调用 excludeDirectoryFromBackup / open 里的重设），三条断言红。
+    func testLogDirectoryIsExcludedFromBackupAndOnlyThatDirectory() throws {
+        let dir = TempDir()
+        let log = RollingFileLog(url: dir.file("Parent/Logs/ppass.log"))
+        let line = log.excludeDirectoryFromBackup()
+        XCTAssertTrue(line.hasSuffix("excluded from backup = true"), line)
+        let logs = dir.file("Parent/Logs")
+        XCTAssertEqual(try logs.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
+        XCTAssertNotEqual(try dir.file("Parent").resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup, true)
+    }
+
     func testWritesTimestampedLines() {
         let dir = TempDir()
         let log = RollingFileLog(url: dir.file("Logs/ppass.log"))

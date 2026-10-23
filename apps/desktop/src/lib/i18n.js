@@ -113,6 +113,11 @@ export function errText(e) {
  * OS error, a JS `Error` — stays as the diagnostic detail the sentence is
  * meant to carry. A standalone error line must use `errText`.
  */
+/** keyed 错误的 key（`{"key": "ui.err_…"}` 或其 JSON 串）；不是就 null。 */
+export function errKey(e) {
+  return asKeyed(e)?.key ?? null;
+}
+
 export function errDetail(e) {
   return render(e, false);
 }

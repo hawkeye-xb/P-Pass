@@ -141,9 +141,9 @@ pub struct Hello {
     /// Current Flow authorization generation for this authenticated member.
     /// Omitted for unpaired peers so hello remains a zero-data handshake there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pairing_epoch: Option<String>,
+    pub pairing_id: Option<String>,
     /// #413 §7: Desktop health, carried only on the Desktop's reply to a
-    /// paired member (same zero-data rule as `pairing_epoch`). Omitted
+    /// paired member (same zero-data rule as `pairing_id`). Omitted
     /// entirely otherwise; a phone that sees no `health` treats the Desktop
     /// as healthy (old Desktop builds never send it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -172,7 +172,7 @@ impl Default for Hello {
             proto_ver: super::PROTO_VER,
             capabilities: Vec::new(),
             device_name: String::new(),
-            pairing_epoch: None,
+            pairing_id: None,
             health: None,
         }
     }
@@ -201,6 +201,13 @@ pub struct PairRequest {
     /// the `pair_request` snapshot stays identical.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ack_then_poll: bool,
+    /// #1118: the phone's first SPAKE2 message (`crates/pair-pake`, 33 bytes, lowercase hex).
+    /// The phone generated a 6-digit code (shown to the user only after [`PairSubmitted`]) and
+    /// committed to it here; the desktop answers once the owner has typed that code. Required:
+    /// a request without it is refused as `phone_outdated`. Skipped when empty so the legacy
+    /// `pair_request` samples stay identical.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub pake_a: String,
 }
 
 #[allow(clippy::derivable_impls)]
@@ -211,6 +218,7 @@ impl Default for PairRequest {
             device_name: String::new(),
             role: String::from("member"),
             ack_then_poll: false,
+            pake_a: String::new(),
         }
     }
 }
@@ -250,6 +258,25 @@ pub struct PairStatusReply {
     /// every query for as long as the ledger keeps the entry.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accepted: Option<PairAccepted>,
+    /// #1118: the desktop's SPAKE2 answer (33 bytes, hex). Present while `state == pending` once
+    /// the owner has typed the code; the phone then sends `pair.confirm`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pake_b: Option<String>,
+    /// #1118: the desktop's key confirmation `cB` (32 bytes, hex), sent only after the phone's
+    /// `cA` checked out. Present with `state == accepted`; the phone verifies it before saving
+    /// the pairing (mutual proof that both sides used the same code).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confirm_b: Option<String>,
+}
+
+/// #1118: `pair.confirm` params — the phone's key confirmation for one request.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct PairConfirmRequest {
+    pub request_id: String,
+    /// `cA` (32 bytes, hex). Checked once: a mismatch voids the request and its token
+    /// (`pair_code_wrong`), and the phone must scan again.
+    pub confirm_a: String,
 }
 
 /// #1070: the `pair.status` / `pair.cancel` verdict. A denial carries no
@@ -262,6 +289,8 @@ pub enum PairStatusState {
     Accepted,
     Denied,
     Expired,
+    /// #1118: the code confirmation did not match — the request and its token are void.
+    Failed,
     /// Unknown id, another device's id, or the daemon restarted and its
     /// in-memory ledger is gone.
     NotFound,
@@ -275,7 +304,7 @@ pub struct PairAccepted {
     pub storage_device_name: String,
     /// Fresh owner-approved pairing generation. New Flow delivery rejects
     /// requests whose epoch is not this currently persisted value.
-    pub pairing_epoch: String,
+    pub pairing_id: String,
 }
 
 // ── Timeline ────────────────────────────────────────
@@ -433,7 +462,7 @@ pub struct BlobTicketResponse {
 #[serde(default)]
 pub struct FlowFetchRequest {
     pub queue_sequence: u64,
-    pub pairing_epoch: String,
+    pub pairing_id: String,
     pub lease_token: String,
     /// BLAKE3 content hash as 64 lowercase-or-uppercase hex characters.
     pub content_hash: String,
@@ -466,7 +495,7 @@ pub struct FlowFetchRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default)]
 pub struct FlowSupersedeRequest {
-    pub pairing_epoch: String,
+    pub pairing_id: String,
     /// BLAKE3 hex of the copy the Desktop holds (location-redacted).
     pub old_hash: String,
     /// BLAKE3 hex of the original the phone holds now.
@@ -501,7 +530,7 @@ pub enum SupersedeRefusal {
     IncompleteRanges,
     NotARedaction,
     HashMismatch,
-    EpochMismatch,
+    PairingMismatch,
     BadRequest,
     FetchFailed,
 }
@@ -517,7 +546,7 @@ impl SupersedeRefusal {
         Self::IncompleteRanges,
         Self::NotARedaction,
         Self::HashMismatch,
-        Self::EpochMismatch,
+        Self::PairingMismatch,
         Self::BadRequest,
         Self::FetchFailed,
     ];
@@ -534,7 +563,7 @@ impl SupersedeRefusal {
             Self::IncompleteRanges => "incomplete_ranges",
             Self::NotARedaction => "not_a_redaction",
             Self::HashMismatch => "hash_mismatch",
-            Self::EpochMismatch => "epoch_mismatch",
+            Self::PairingMismatch => "pairing_mismatch",
             Self::BadRequest => "bad_request",
             Self::FetchFailed => "fetch_failed",
         }
@@ -552,7 +581,7 @@ impl SupersedeRefusal {
 pub struct FlowFailedPush {
     pub node_id: String,
     pub queue_sequence: i64,
-    pub pairing_epoch: String,
+    pub pairing_id: String,
     pub lease_token: String,
     pub reason: crate::Reason,
 }
@@ -563,7 +592,7 @@ pub struct FlowFailedPush {
 pub struct FlowCompletionReceipt {
     pub queue_sequence: u64,
     pub receipt_id: String,
-    pub pairing_epoch: String,
+    pub pairing_id: String,
     pub lease_token: String,
     pub content_hash: String,
 }
@@ -579,7 +608,7 @@ pub struct FlowCompletionReceipt {
 #[serde(default)]
 pub struct FlowTupleRef {
     pub queue_sequence: u64,
-    pub pairing_epoch: String,
+    pub pairing_id: String,
     pub lease_token: String,
 }
 
@@ -747,6 +776,10 @@ pub mod methods {
     /// it the owner's later "Allow" still wrote a device row the phone had
     /// already walked away from. Control-plane, answers at once.
     pub const PAIR_CANCEL: &str = "pair.cancel";
+    /// #1118: the phone's key confirmation (params [`PairConfirmRequest`], reply
+    /// [`PairStatusReply`]: `accepted` + `confirm_b` on success; error `pair_code_wrong` on a
+    /// mismatch, after which the request is void). Idempotent for the same `confirm_a`.
+    pub const PAIR_CONFIRM: &str = "pair.confirm";
     pub const TIMELINE_PAGE: &str = "timeline.page";
     pub const ASSET_META: &str = "asset.meta";
     pub const THUMB_GET: &str = "thumb.get";
@@ -767,7 +800,7 @@ pub mod methods {
     /// `flow.offer` on the same tuple resumes instead of restarting.
     pub const FLOW_SUSPEND: &str = "flow.suspend";
     /// NET-06: cancel by tuple identity alone (queue_sequence +
-    /// pairing_epoch + lease_token). A phone that already gave up on an
+    /// pairing_id + lease_token). A phone that already gave up on an
     /// item after exhausting its local retry budget has discarded that
     /// item's one-shot provider ticket, so it cannot rebuild a full
     /// `FlowFetchRequest` (which additionally requires `content_hash` and
@@ -863,7 +896,7 @@ mod tests {
             proto_ver: 1,
             capabilities: vec!["thumbnail.v1".into()],
             device_name: "Salamira's Phone".into(),
-            pairing_epoch: None,
+            pairing_id: None,
             health: None,
         }
     );
@@ -911,7 +944,7 @@ mod tests {
     #[test]
     fn flow_fetch_request_size_bytes_defaults_to_unknown_for_old_phones() {
         let old: FlowFetchRequest =
-            serde_json::from_str(r#"{"queue_sequence":7,"pairing_epoch":"e"}"#).unwrap();
+            serde_json::from_str(r#"{"queue_sequence":7,"pairing_id":"e"}"#).unwrap();
         assert_eq!(old.size_bytes, 0);
         let value = serde_json::to_value(FlowFetchRequest {
             size_bytes: 42,
@@ -929,6 +962,7 @@ mod tests {
             device_name: "Mom's Phone".into(),
             role: "member".into(),
             ack_then_poll: false,
+            pake_a: String::new(),
         }
     );
 
@@ -966,8 +1000,9 @@ mod tests {
             state: PairStatusState::Accepted,
             accepted: Some(PairAccepted {
                 storage_device_name: "Home PC".into(),
-                pairing_epoch: "epoch-1".into(),
+                pairing_id: "epoch-1".into(),
             }),
+            ..Default::default()
         }
     );
 
@@ -984,6 +1019,7 @@ mod tests {
             (PairStatusState::Accepted, "accepted"),
             (PairStatusState::Denied, "denied"),
             (PairStatusState::Expired, "expired"),
+            (PairStatusState::Failed, "failed"),
             (PairStatusState::NotFound, "not_found"),
         ] {
             assert_eq!(serde_json::to_value(state).unwrap(), wire);
@@ -1049,7 +1085,7 @@ mod tests {
         PairAccepted,
         PairAccepted {
             storage_device_name: "Home PC".into(),
-            pairing_epoch: "epoch-1".into(),
+            pairing_id: "epoch-1".into(),
         }
     );
 
@@ -1169,7 +1205,7 @@ mod tests {
         FlowFetchRequest,
         FlowFetchRequest {
             queue_sequence: 7,
-            pairing_epoch: "epoch-1".into(),
+            pairing_id: "epoch-1".into(),
             lease_token: "lease-7".into(),
             content_hash: "ab".repeat(32),
             file_name: "IMG_0007.jpg".into(),
@@ -1186,7 +1222,7 @@ mod tests {
         FlowCompletionReceipt {
             queue_sequence: 7,
             receipt_id: "receipt-7".into(),
-            pairing_epoch: "epoch-1".into(),
+            pairing_id: "epoch-1".into(),
             lease_token: "lease-7".into(),
             content_hash: "ab".repeat(32),
         }
@@ -1197,7 +1233,7 @@ mod tests {
         FlowTupleRef,
         FlowTupleRef {
             queue_sequence: 7,
-            pairing_epoch: "epoch-1".into(),
+            pairing_id: "epoch-1".into(),
             lease_token: "lease-7".into(),
         }
     );
@@ -1220,7 +1256,7 @@ mod tests {
             receipt: Some(FlowCompletionReceipt {
                 queue_sequence: 7,
                 receipt_id: "receipt-7".into(),
-                pairing_epoch: "epoch-1".into(),
+                pairing_id: "epoch-1".into(),
                 lease_token: "lease-7".into(),
                 content_hash: "ab".repeat(32),
             }),

@@ -8,7 +8,7 @@
 //! （鸿蒙同样支持 log.tag.*）。
 //!
 //! liblog 用 dlopen/dlsym 运行时解析，不做链接期 `#[link(name = "log")]`：
-//! `android-jni` feature 会被宿主侧 CI（`cargo nextest run --all-features`）
+//! `mobile-ffi` feature 会被宿主侧 CI（`cargo nextest run --all-features`）
 //! 在 Linux/Windows 上编译并链接测试二进制，链接期依赖会因为没有 liblog 而
 //! 直接失败；运行时解析在宿主上只是优雅退化为不写日志。
 //!
@@ -23,8 +23,6 @@ use std::fmt::Write as _;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 
-use jni::objects::{JClass, JString};
-use jni::JNIEnv;
 use tracing::field::{Field, Visit};
 use tracing::level_filters::LevelFilter;
 use tracing::span::{Attributes, Id, Record};
@@ -176,16 +174,10 @@ fn install(max: LevelFilter) -> Result<(), tracing::subscriber::SetGlobalDefault
 
 /// #584：每个进程装一次 logcat subscriber。`level` 由 Kotlin 读系统属性
 /// `log.tag.PPassRust` 传入；装过就保留第一个（iroh-android 若已装则不抢）。
-#[no_mangle]
-pub extern "system" fn Java_com_hawkeyexb_ppass_backup_flow_AndroidNativeIrohBlobsProvider_nativeInitLogging(
-    mut env: JNIEnv<'_>,
-    _class: JClass<'_>,
-    level: JString<'_>,
-) {
-    let level = env
-        .get_string(&level)
-        .map(String::from)
-        .unwrap_or_else(|_| "INFO".to_owned());
+/// #1126：经 uniffi 导出（原 JNI `nativeInitLogging`）。不在 Android 上时 liblog 解析不到，
+/// 只是不写日志。
+#[uniffi::export]
+pub fn init_logcat_logging(level: String) {
     let filter = parse_level(&level);
     match install(filter) {
         Ok(()) => {

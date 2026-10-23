@@ -24,8 +24,8 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 
-const val PROTO_VER: Int = 2
-const val MIN_SUPPORTED_VER: Int = 2
+const val PROTO_VER: Int = 3
+const val MIN_SUPPORTED_VER: Int = 3
 
 /** #1070: a frame without `ver` / `min_ver` comes from a pre-v2 sender. */
 const val V1: Int = 1
@@ -70,9 +70,10 @@ val RespError.reasonKind: Reason get() = Reason.fromWire(reason)
  */
 enum class Reason(val wire: String) {
     NOT_PAIRED("not_paired"),
-    REVOKED("revoked"),
     ROLE_FORBIDDEN("role_forbidden"),
     PAIR_TOKEN_INVALID("pair_token_invalid"),
+    /** #1118: the code typed on the computer did not match the one this phone showed. */
+    PAIR_CODE_WRONG("pair_code_wrong"),
     PHONE_OUTDATED("phone_outdated"),
     DESKTOP_OUTDATED("desktop_outdated"),
     UNSUPPORTED_METHOD("unsupported_method"),
@@ -84,7 +85,7 @@ enum class Reason(val wire: String) {
     LIBRARY_UNAVAILABLE("library_unavailable"),
     STORAGE_FAILED("storage_failed"),
     FETCH_FAILED("fetch_failed"),
-    EPOCH_MISMATCH("epoch_mismatch"),
+    PAIRING_MISMATCH("pairing_mismatch"),
     GRANT_NOT_FOUND("grant_not_found"),
     GRANT_CONFLICT("grant_conflict"),
     CANCELLED("cancelled"),
@@ -114,7 +115,7 @@ data class Hello(
     @SerialName("proto_ver") val protoVer: Int = PROTO_VER,
     val capabilities: List<String> = emptyList(),
     @SerialName("device_name") val deviceName: String = "",
-    @SerialName("pairing_epoch") val pairingEpoch: String? = null,
+    @SerialName("pairing_id") val pairingId: String? = null,
     /** #413 契约 §5：桌面健康。旧桌面没有这个字段 → null，手机视为健康。 */
     val health: HelloHealth? = null,
 )
@@ -141,12 +142,14 @@ data class PairRequest(
      *  null (never false) so a legacy frame omits the key, byte-identical
      *  to the Rust side's skip_serializing_if. */
     @SerialName("ack_then_poll") val ackThenPoll: Boolean? = null,
+    /** #1118: the phone's SPAKE2 message (hex, 66 chars) — required by a v3 desktop. */
+    @SerialName("pake_a") val pakeA: String? = null,
 )
 
 @Serializable
 data class PairAccepted(
     @SerialName("storage_device_name") val storageDeviceName: String = "",
-    @SerialName("pairing_epoch") val pairingEpoch: String = "",
+    @SerialName("pairing_id") val pairingId: String = "",
 )
 
 /** NET-10 (#128): pair.request reply for ackThenPoll — queued, poll [requestId]. */
@@ -164,11 +167,33 @@ data class PairStatusRequest(
     @SerialName("request_id") val requestId: String = "",
 )
 
-/** NET-10 (#128): pair.status reply — pending / accepted / denied / expired / not_found. */
+/** NET-10 (#128): pair.status reply — pending / accepted / denied / expired / not_found / failed (#1118). */
 @Serializable
 data class PairStatusReply(
     val state: String = "",
     val accepted: PairAccepted? = null,
+    /** #1118: the desktop's SPAKE2 message; appears (state still `pending`) once the owner typed the code. */
+    @SerialName("pake_b") val pakeB: String? = null,
+    /** #1118: the desktop's key confirmation; present with `accepted`. */
+    @SerialName("confirm_b") val confirmB: String? = null,
+)
+
+/** NET-10 / #1118: the `pair.status` `state` wire strings (mirror of `proto::PairStatusState`). */
+object PairStatusState {
+    const val PENDING = "pending"
+    const val ACCEPTED = "accepted"
+    const val DENIED = "denied"
+    const val EXPIRED = "expired"
+    /** #1118: the code confirmation did not match — the request and its token are void. */
+    const val FAILED = "failed"
+    const val NOT_FOUND = "not_found"
+}
+
+/** #1118: pair.confirm params — the phone's key confirmation for [requestId]. */
+@Serializable
+data class PairConfirmRequest(
+    @SerialName("request_id") val requestId: String = "",
+    @SerialName("confirm_a") val confirmA: String = "",
 )
 
 // ── Timeline ────────────────────────────────────────
@@ -251,7 +276,7 @@ data class BlobTicketResponse(val ticket: String = "")
 @Serializable
 data class FlowFetchRequest(
     @SerialName("queue_sequence") val queueSequence: Long = 0L,
-    @SerialName("pairing_epoch") val pairingEpoch: String = "",
+    @SerialName("pairing_id") val pairingId: String = "",
     @SerialName("lease_token") val leaseToken: String = "",
     @SerialName("content_hash") val contentHash: String = "",
     @SerialName("file_name") val fileName: String = "",
@@ -270,7 +295,7 @@ data class FlowFetchRequest(
 /** #851：Kotlin mirror of proto::FlowSupersedeRequest——用原图原地替换桌面上抹过地点的旧副本。 */
 @Serializable
 data class FlowSupersedeRequest(
-    @SerialName("pairing_epoch") val pairingEpoch: String = "",
+    @SerialName("pairing_id") val pairingId: String = "",
     @SerialName("old_hash") val oldHash: String = "",
     @SerialName("new_hash") val newHash: String = "",
     /** 原图（new_hash）的 iroh-blobs ticket。 */
@@ -282,7 +307,7 @@ data class FlowSupersedeRequest(
 data class FlowFailedPush(
     @SerialName("node_id") val nodeId: String = "",
     @SerialName("queue_sequence") val queueSequence: Long = 0L,
-    @SerialName("pairing_epoch") val pairingEpoch: String = "",
+    @SerialName("pairing_id") val pairingId: String = "",
     @SerialName("lease_token") val leaseToken: String = "",
     val reason: String = "",
 )
@@ -309,7 +334,7 @@ enum class SupersedeRefusal(val wire: String) {
     INCOMPLETE_RANGES("incomplete_ranges"),
     NOT_A_REDACTION("not_a_redaction"),
     HASH_MISMATCH("hash_mismatch"),
-    EPOCH_MISMATCH("epoch_mismatch"),
+    PAIRING_MISMATCH("pairing_mismatch"),
     BAD_REQUEST("bad_request"),
     FETCH_FAILED("fetch_failed"),
     UNKNOWN("");
@@ -325,7 +350,7 @@ enum class SupersedeRefusal(val wire: String) {
 data class FlowCompletionReceipt(
     @SerialName("queue_sequence") val queueSequence: Long = 0L,
     @SerialName("receipt_id") val receiptId: String = "",
-    @SerialName("pairing_epoch") val pairingEpoch: String = "",
+    @SerialName("pairing_id") val pairingId: String = "",
     @SerialName("lease_token") val leaseToken: String = "",
     @SerialName("content_hash") val contentHash: String = "",
 )
@@ -340,7 +365,7 @@ data class FlowCompletionReceipt(
 @Serializable
 data class FlowTupleRef(
     @SerialName("queue_sequence") val queueSequence: Long = 0L,
-    @SerialName("pairing_epoch") val pairingEpoch: String = "",
+    @SerialName("pairing_id") val pairingId: String = "",
     @SerialName("lease_token") val leaseToken: String = "",
 )
 
@@ -436,6 +461,8 @@ object Methods {
     const val PAIR_STATUS = "pair.status"
     /** DEV-07 (#463): the submitting phone withdraws its own pending pair.request. */
     const val PAIR_CANCEL = "pair.cancel"
+    /** #1118: the phone's key confirmation after the desktop's pake_b appeared. */
+    const val PAIR_CONFIRM = "pair.confirm"
     const val TIMELINE_PAGE = "timeline.page"
     const val ASSET_META = "asset.meta"
     const val THUMB_GET = "thumb.get"

@@ -81,6 +81,16 @@ class GoldenDriftTest {
         check("snapshots__pair_status_request", PairStatusRequest.serializer())
     @Test fun pairStatusReplyAccepted() =
         check("snapshots__pair_status_reply_accepted", PairStatusReply.serializer())
+    // #1118: code exchange — the new fields and the `failed` state.
+    @Test fun pairRequestPake() = check("snapshots__pair_request_pake", PairRequest.serializer())
+    @Test fun pairStatusReplyPakeB() =
+        check("snapshots__pair_status_reply_pake_b", PairStatusReply.serializer())
+    @Test fun pairConfirmRequest() =
+        check("snapshots__pair_confirm_request", PairConfirmRequest.serializer())
+    @Test fun pairStatusReplyConfirmed() =
+        check("snapshots__pair_status_reply_confirmed", PairStatusReply.serializer())
+    @Test fun pairStatusReplyFailed() =
+        check("snapshots__pair_status_reply_failed", PairStatusReply.serializer())
     @Test fun pairStatusReplyDenied() =
         check("snapshots__pair_status_reply_denied", PairStatusReply.serializer())
     @Test fun reqEnvelope() = check("snapshots__req_envelope", Req.serializer())
@@ -168,6 +178,17 @@ class GoldenDriftTest {
         )
     }
 
+    /** #1122 / #1124: the Kotlin close-code registry is the Rust one, row for row. */
+    @Test
+    fun closeCodesRegistryMatchesRust() {
+        val rust = (goldenJson("snapshots__close_codes_registry") as kotlinx.serialization.json.JsonArray).map {
+            val o = it as kotlinx.serialization.json.JsonObject
+            (o["code"] as kotlinx.serialization.json.JsonPrimitive).content.toLong() to
+                (o["reason"] as kotlinx.serialization.json.JsonPrimitive).content
+        }
+        assertEquals(rust, com.hawkeyexb.ppass.transport.DesktopCloseCodes.registry)
+    }
+
     /** #1072: the Kotlin SupersedeRefusal mirrors every `proto::SupersedeRefusal::as_str` wire string. */
     @Test
     fun supersedeRefusalsMatchRust() {
@@ -213,6 +234,9 @@ class GoldenDriftTest {
             "snapshots__pair_request_ack_then_poll", "snapshots__pair_submitted",
             "snapshots__pair_status_request", "snapshots__pair_status_reply_accepted",
             "snapshots__pair_status_reply_denied",
+            "snapshots__pair_request_pake", "snapshots__pair_status_reply_pake_b",
+            "snapshots__pair_confirm_request", "snapshots__pair_status_reply_confirmed",
+            "snapshots__pair_status_reply_failed",
             "snapshots__req_envelope", "snapshots__req_envelope_json",
             "snapshots__resp_ok_envelope", "snapshots__resp_ok_envelope_json",
             "snapshots__resp_err_envelope", "snapshots__resp_err_envelope_json",
@@ -235,6 +259,7 @@ class GoldenDriftTest {
             "snapshots__resp_err_with_params",
             "snapshots__resp_err_v1_shim_flow", "snapshots__resp_err_v1_shim_pair",
             "snapshots__flow_failed_push", "snapshots__reasons_registry",
+            "snapshots__close_codes_registry",
         )
         val onDisk = snapshotsDir.listFiles()!!
             .map { it.name.removeSuffix(".snap") }

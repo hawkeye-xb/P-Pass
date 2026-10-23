@@ -22,14 +22,15 @@ class SqliteOrderStore private constructor(
         const val DEFAULT_DB_NAME = "backup-orders.db"
 
         /**
-         * v2（#417）：加 QUEUED 状态、`source_missing` 列、审计 outbox 与 meta 表，`pairing_epoch` 改成 TEXT。
+         * v2（#417）：加 QUEUED 状态、`source_missing` 列、审计 outbox 与 meta 表，`pairing_id` 改成 TEXT。
          * v3（#413 三层模型）：状态集合改成 PENDING / TRANSFERRING / CONFIRMED / FAILED / SKIPPED_BY_USER /
          * SKIPPED_SOURCE_MISSING；加跳过名单表（意图）与扫描游标；卷游标列改名 generation。
          * 测试设备上都是测试数据（#413 契约 §0），升级 = 删表重建，不写数据迁移。
-         * v4（#843）：orders 加 `location_redacted`。**从 v3 起升级只加列、不删表**——已确认的行是「哪些照片传过、
+         * v4（#843）：orders 加 `location_redacted`。**v3→v4 曾只加列、不删表**——已确认的行是「哪些照片传过、
          * 传的是哪份字节」的唯一记录，删了会让全部照片重新导入；v3 的行一律记 1（那时 App 没有位置权限，读到的都是抹过的）。
+         * v5（#1117 协议 v3）：`pairing_id` 列改名 `pairing_id`。旧用户不考虑——旧库一律丢弃重建，不搬数据。
          */
-        private const val SCHEMA_VERSION = 4
+        private const val SCHEMA_VERSION = 5
         private const val PAGE_SIZE = 256
         private const val AUDIT_ONCE_PREFIX = "audit_once:"
 
@@ -38,9 +39,6 @@ class SqliteOrderStore private constructor(
             SqliteOrderStore(Helper(context, name), clock)
 
         private val ALL_STATES = OrderState.entries.joinToString(",") { "'${it.name}'" }
-
-        /** 见 [SCHEMA_VERSION] v4。 */
-        internal const val V3_TO_V4 = "ALTER TABLE orders ADD COLUMN location_redacted INTEGER NOT NULL DEFAULT 1"
 
         private val TABLES = listOf("orders", "volume_state", "audit_outbox", "meta", "skip_list")
 
@@ -54,7 +52,7 @@ class SqliteOrderStore private constructor(
                 content_hash    TEXT,
                 state           TEXT    NOT NULL CHECK (state IN ($ALL_STATES)),
                 attempts        INTEGER NOT NULL DEFAULT 0,
-                pairing_epoch   TEXT    NOT NULL,
+                pairing_id   TEXT    NOT NULL,
                 created_at_ms   INTEGER NOT NULL,
                 updated_at_ms   INTEGER NOT NULL,
                 source_missing  INTEGER NOT NULL DEFAULT 0,
@@ -96,7 +94,7 @@ class SqliteOrderStore private constructor(
         )
 
         private const val COLUMNS =
-            "id, media_id, source_version, bucket_id, content_hash, state, attempts, pairing_epoch, created_at_ms, updated_at_ms, source_missing, location_redacted"
+            "id, media_id, source_version, bucket_id, content_hash, state, attempts, pairing_id, created_at_ms, updated_at_ms, source_missing, location_redacted"
 
         /** 「o 是它那个 media_id 的当前行」。 */
         private const val IS_CURRENT = "o.id = (SELECT MAX(id) FROM orders WHERE media_id = o.media_id)"
@@ -119,10 +117,6 @@ class SqliteOrderStore private constructor(
         }
 
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-            if (oldVersion == 3 && newVersion == 4) {
-                db.execSQL(V3_TO_V4)
-                return
-            }
             TABLES.forEach { db.execSQL("DROP TABLE IF EXISTS $it") }
             onCreate(db)
         }
@@ -154,7 +148,7 @@ class SqliteOrderStore private constructor(
         contentHash = if (isNull(4)) null else getString(4),
         state = OrderState.valueOf(getString(5)),
         attempts = getInt(6),
-        pairingEpoch = getString(7),
+        pairingId = getString(7),
         createdAtMs = getLong(8),
         updatedAtMs = getLong(9),
         sourceMissing = getInt(10) != 0,
@@ -177,7 +171,7 @@ class SqliteOrderStore private constructor(
             put("content_hash", order.contentHash)
             put("state", order.state.name)
             put("attempts", 0)
-            put("pairing_epoch", order.pairingEpoch)
+            put("pairing_id", order.pairingId)
             put("created_at_ms", now)
             put("updated_at_ms", now)
             put("source_missing", 0)

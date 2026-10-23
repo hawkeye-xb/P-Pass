@@ -6,23 +6,23 @@
 //
 // - 最多等 5 秒（对位 Android `UNPAIR_NOTICE_TIMEOUT_MS` 的 withTimeoutOrNull）：FFI `call` 的 timeout_ms 只管连接 + 请求 + 应答，
 //   控制面端点是第一次调用时才建的（有自己的 15 秒建端点超时），所以这里对整个调用再套一层截止，到点就不等了。
-// - 带上要结束的那次配对的纪元，电脑只在纪元一致时吊销（#565），迟到的通知不会误删新配对。
+// - 带上要结束的那次配对记录的 id，电脑只在 id 一致时吊销（#565），迟到的通知不会误删新配对。
 // - 日志不写 peerToken，只写 [LogRedact.id] 的 hash 前缀。
 import Foundation
 
 public enum UnpairNotice {
     public static let timeoutMs: UInt64 = 5_000
 
-    /// `device.unpair` 的参数：旧配对没有纪元就不带，电脑走旧语义。
-    public static func params(pairingEpoch: String) -> [String: String] {
-        pairingEpoch.isEmpty ? [:] : ["pairing_epoch": pairingEpoch]
+    /// `device.unpair` 的参数：旧配对没有配对 id 就不带，电脑走旧语义。
+    public static func params(pairingId: String) -> [String: String] {
+        pairingId.isEmpty ? [:] : ["pairing_id": pairingId]
     }
 
     /// 发一次，结局只写日志；任何失败都不抛。
-    public static func sendOnce(_ transport: CtrlTransport, daemonNodeId: String, pairingEpoch: String,
+    public static func sendOnce(_ transport: CtrlTransport, daemonNodeId: String, pairingId: String,
                                 logger: CoreLogger, deadlineMs: UInt64 = timeoutMs) async {
         let tag = "desktop=\(LogRedact.id(daemonNodeId))"
-        let params = params(pairingEpoch: pairingEpoch)
+        let params = params(pairingId: pairingId)
         do {
             guard let resp = try await firstWithin(deadlineMs, {
                 try await ProtoClient(transport: transport).callRaw(Methods.deviceUnpair, params, timeoutMs: timeoutMs)

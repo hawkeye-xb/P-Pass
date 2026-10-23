@@ -37,10 +37,21 @@ final class NativeProvider: @unchecked Sendable {
         logger.log("disconnect: provider revoked, allowed peer cleared")
     }
 
-    init(root: URL) throws {
+    /// #1126：provider 的入站连接被已配对电脑用应用关闭码关掉（电脑删了这台设备 = 410）时的监听。
+    /// 回调在 Rust 自起的独立线程上，可直接调 provider 接口；本地 revoke / 关闭不会触发。
+    let peerCloseListener: PeerCloseListener?
+
+    init(root: URL, onPeerClosed: (@Sendable (String, UInt64) -> Void)? = nil) throws {
         let dir = root.appendingPathComponent("blobs", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         ffi = try Provider(root: dir.path)
+        if let onPeerClosed {
+            let listener = PeerCloseBridge(onPeerClosed)
+            ffi.setPeerCloseListener(listener: listener)
+            peerCloseListener = listener
+        } else {
+            peerCloseListener = nil
+        }
     }
 
     func run<T>(_ body: @escaping @Sendable (Provider) throws -> T) async throws -> T {

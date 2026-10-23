@@ -39,7 +39,7 @@ class UI21UnreconciledHeroTest {
         val rig = Rig(this)
         (1L..10L).forEach { rig.order(rig.photo(it, generation = it), OrderState.CONFIRMED) }
         listOf(2L, 5L, 8L).forEach(rig.media::remove)
-        rig.epoch = null
+        rig.pid = null
         rig.probeResult = ProbeResult.Unreachable
 
         assertFalse("还没算过待办", rig.engine.pendingKnown.value)

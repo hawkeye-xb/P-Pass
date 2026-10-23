@@ -80,6 +80,26 @@ impl Config {
         Self::resolve(file_toml.as_deref(), &env)
     }
 
+    /// #1115：常驻 daemon 的读法——平台 config + 环境变量，但**不认** `PPF_DATA_DIR`：
+    /// 签名 daemon 谁都能带环境变量运行，库位置不能由调用方的环境决定。
+    pub fn load_resident(config_path: &Path) -> anyhow::Result<Config> {
+        let file_toml = if config_path.exists() {
+            Some(
+                std::fs::read_to_string(config_path)
+                    .with_context(|| format!("reading {}", config_path.display()))?,
+            )
+        } else {
+            None
+        };
+        let mut env: HashMap<String, String> = std::env::vars().collect();
+        if env.remove("PPF_DATA_DIR").is_some() {
+            tracing::warn!(
+                "#1115: 常驻 daemon 不认 PPF_DATA_DIR，已忽略（库位置只来自平台 config）"
+            );
+        }
+        Self::resolve(file_toml.as_deref(), &env)
+    }
+
     /// Pure resolution — testable without touching process env or disk.
     pub fn resolve(
         config_toml: Option<&str>,

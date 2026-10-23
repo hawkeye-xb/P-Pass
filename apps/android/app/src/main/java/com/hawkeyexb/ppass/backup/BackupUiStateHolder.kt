@@ -22,7 +22,7 @@ import com.hawkeyexb.ppass.backup.flow.FlowDeliveryPairingLoss
 import com.hawkeyexb.ppass.backup.flow.FlowProjection
 import com.hawkeyexb.ppass.backup.flow.GlobalState
 import com.hawkeyexb.ppass.backup.flow.MissingSourceNotice
-import com.hawkeyexb.ppass.backup.flow.PairingEpoch
+import com.hawkeyexb.ppass.backup.flow.PairingId
 import com.hawkeyexb.ppass.backup.flow.TriggerReason
 import com.hawkeyexb.ppass.isAppVisible
 import com.hawkeyexb.ppass.backup.flow.RemainingSnapshot
@@ -44,16 +44,10 @@ import com.hawkeyexb.ppass.backup.flow.advanceTransferMark
 import com.hawkeyexb.ppass.backup.flow.transferPermilleOf
 import com.hawkeyexb.ppass.backup.flow.transferRowOf
 import com.hawkeyexb.ppass.backup.flow.waitReasonTextRes
-import com.hawkeyexb.ppass.proto.Hello
-import com.hawkeyexb.ppass.proto.Methods
-import com.hawkeyexb.ppass.proto.ProtoJson
-import com.hawkeyexb.ppass.proto.ProtocolOutdatedException
-import com.hawkeyexb.ppass.proto.outdatedSide
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.IdentityStore
 import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PairingStore
-import com.hawkeyexb.ppass.transport.parsePeerAddrToken
 import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.log.PLog
 import com.hawkeyexb.ppass.ui.BackupUiState
@@ -76,8 +70,6 @@ import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeout
-import kotlinx.serialization.json.buildJsonObject
 
 class BackupUiStateHolder(
     private val context: Context,
@@ -99,7 +91,6 @@ class BackupUiStateHolder(
     val acknowledgedMissingSourceCount: State<Int> get() = _acknowledgedMissingSourceCount
     private val pairingLostState = HolderPairingLostState()
     val pairingLost: State<Boolean> get() = pairingLostState.value
-    private var epochRepairAttempted = false
 
     // 2026-09-07 真机反馈：命令处理中禁用按钮，同一命令处理完才能再点下一次。
     private val _commandPending = mutableStateOf(false)
@@ -176,7 +167,6 @@ class BackupUiStateHolder(
 
     init {
         scope.launch {
-            repairEpochIfNeeded()
             refresh(recount = true)
         }
         // 订阅取代轮询（MOB-88 的思路保留）：引擎视图变化只换视图；order 写入（revision）才重读账目。
@@ -184,7 +174,7 @@ class BackupUiStateHolder(
         // #466: 失效可能由前台心跳记下（引擎视图、order 都不变）——直接订阅这个事实。
         scope.launch {
             flowDeliveryPairingLoss.changes.collect {
-                pairingLostState.syncFrom(flowDeliveryPairingLoss, PairingEpoch(pairing.pairingEpoch))
+                pairingLostState.syncFrom(flowDeliveryPairingLoss, PairingId(pairing.pairingId))
             }
         }
         mediaObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
@@ -210,7 +200,7 @@ class BackupUiStateHolder(
         scope.launch { g.revision.debounce(UI_DEBOUNCE_MS).collect { refresh(recount = false) } }
         g.view.collect { view ->
             // #466：探测判出配对失效只改视图（settle NOT_PAIRED），不写 order，revision 不动——这里也要同步红卡。
-            pairingLostState.syncFrom(flowDeliveryPairingLoss, PairingEpoch(pairing.pairingEpoch))
+            pairingLostState.syncFrom(flowDeliveryPairingLoss, PairingId(pairing.pairingId))
             accessGate.onEngineView()
             _projection.value?.let { publish(it.copy(view = view)) }
         }
@@ -329,30 +319,6 @@ class BackupUiStateHolder(
         command("cancel-remaining") { gateway?.cancelRemaining(snapshot) }
     }
 
-    private suspend fun repairEpochIfNeeded() {
-        if (epochRepairAttempted || !needsEpochRepair(pairing.pairingEpoch)) return
-        epochRepairAttempted = true
-        val outcome = runCatching {
-            withContext(Dispatchers.IO) {
-                withTimeout(5_000) {
-                    val response = client.call(parsePeerAddrToken(pairing.daemonAddrToken), Methods.HELLO, buildJsonObject {})
-                    response.outdatedSide()?.let { throw ProtocolOutdatedException(it) }
-                    check(response.ok) { "hello rejected: ${response.error?.reason}" }
-                    ProtoJson.decodeFromJsonElement(Hello.serializer(), checkNotNull(response.result)).pairingEpoch
-                }
-            }
-        }
-        when (val result = applyEpochRepairOutcome(outcome)) {
-            is EpochRepairResult.Repaired -> {
-                val store = PairingStore(context.filesDir)
-                store.load()?.let { store.save(it.copy(pairingEpoch = result.epoch)) }
-            }
-            EpochRepairResult.Lost -> pairingLostState.markLost()
-            // #1072：版本不兼容不是配对失效（首页整屏提示更新）；更新之后再修一次。
-            EpochRepairResult.Deferred -> epochRepairAttempted = false
-        }
-    }
-
     /**
      * 账目（读库）。引擎视图取最新值带上。null = 运行时还没就绪（不是读失败：不发布，等订阅接上再读）。
      * #1038：读库抛出 → [FlowProjection.unreadable]（记日志），不再沿用上一次投影、不再静默。
@@ -383,7 +349,7 @@ class BackupUiStateHolder(
     }
 
     private suspend fun refresh(recount: Boolean) {
-        pairingLostState.syncFrom(flowDeliveryPairingLoss, PairingEpoch(pairing.pairingEpoch))
+        pairingLostState.syncFrom(flowDeliveryPairingLoss, PairingId(pairing.pairingId))
         // #1020：读不到的范围与「从未保存」一样不给三元组（英雄区说「未选相册」，设置行另说「读不到」），同 iOS。
         val bucketIds = (withContext(Dispatchers.IO) { scopeStore.readScope() } as? ScopeRead.Saved)?.ids
         val p = withContext(Dispatchers.IO) { currentFacts(recount, bucketIds) } ?: return
@@ -609,8 +575,8 @@ internal class HolderPairingLostState {
         _value.value = true
     }
 
-    fun syncFrom(deliveryLoss: FlowDeliveryPairingLoss, epoch: PairingEpoch) {
-        if (deliveryLoss.isLost(epoch)) markLost()
+    fun syncFrom(deliveryLoss: FlowDeliveryPairingLoss, pid: PairingId) {
+        if (deliveryLoss.isLost(pid)) markLost()
     }
 }
 
@@ -625,46 +591,4 @@ internal fun computeTripletSafe(
     }
 } catch (_: Throwable) {
     null
-}
-
-/**
- * UI-10 item 1: `AndroidFlowRuntime.runtimeFor()` returns null when a stored
- * pairing has a blank `pairingEpoch` (legacy pairing.json from before
- * ARCH-06, or one written by a pre-epoch app version). The home screen then
- * fell back to an empty Flow ledger snapshot — rendering plain `Idle` with a
- * fully clickable Pause/Continue/Cancel that silently did nothing, and no
- * explanation to the user (source-read finding, 2026-09-06: this is a
- * candidate root cause for "暂停/取消没有展示机会").
- *
- * The fix is a silent, one-shot repair attempt, not an immediate "重新扫码"
- * demand: a blank epoch is recoverable (the Desktop still knows this device
- * and answers `hello` with its current epoch) whenever the pairing itself
- * was never actually revoked — only escalate to the pairing-lost red card
- * when the repair attempt itself fails.
- */
-internal fun needsEpochRepair(pairingEpoch: String): Boolean = pairingEpoch.isBlank()
-
-/** The pure outcome mapping for a silent epoch-repair `hello` attempt. */
-internal sealed class EpochRepairResult {
-    data class Repaired(val epoch: String) : EpochRepairResult()
-    data object Lost : EpochRepairResult()
-    /** #1072: the desktop's version is incompatible — not a verdict on the pairing; try again later. */
-    data object Deferred : EpochRepairResult()
-}
-
-/**
- * `outcome` is the result of asking Desktop for its current epoch (via the
- * same `hello` the Flow delivery preflight already uses — no new protocol).
- * A blank/null epoch in a successful response is treated the same as a
- * failure: Desktop itself has nothing to offer, so there is nothing to
- * repair to.
- */
-internal fun applyEpochRepairOutcome(outcome: Result<String?>): EpochRepairResult {
-    if (outcome.exceptionOrNull() is ProtocolOutdatedException) return EpochRepairResult.Deferred
-    val epoch = outcome.getOrNull()
-    return if (outcome.isSuccess && !epoch.isNullOrBlank()) {
-        EpochRepairResult.Repaired(epoch)
-    } else {
-        EpochRepairResult.Lost
-    }
 }

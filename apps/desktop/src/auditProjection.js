@@ -52,6 +52,8 @@ export function auditText(event) {
       return t("ui.audit_pair_cancelled");
     case "pair.expired":
       return t("ui.audit_pair_expired");
+    case "pair.code_failed":
+      return t("ui.audit_pair_code_failed");
     case "asset.removed_external":
       return t("ui.audit_removed_external", { name: shortName(payload.relPath) });
     case "device.renamed":

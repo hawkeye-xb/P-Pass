@@ -9,7 +9,7 @@ expression: json
     "flow.supersede.v1"
   ],
   "device_name": "Home PC",
-  "pairing_epoch": "epoch-7",
+  "pairing_id": "epoch-7",
   "health": {
     "free_bytes": null,
     "library_writable": false,

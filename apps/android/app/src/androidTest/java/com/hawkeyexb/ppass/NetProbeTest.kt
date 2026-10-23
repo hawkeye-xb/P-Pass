@@ -48,10 +48,6 @@ class NetProbeTest {
     fun irohHelloToDaemon() {
         val qr = InstrumentationRegistry.getArguments().getString("daemon_qr")
         assumeTrue("no -e daemon_qr", !qr.isNullOrBlank())
-        try {
-            computer.iroh.setLogLevel(computer.iroh.LogLevel.DEBUG)
-        } catch (_: Throwable) {}
-
         runBlocking {
             val client = DaemonClient()
             client.bind()

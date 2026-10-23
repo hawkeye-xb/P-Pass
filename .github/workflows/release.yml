@@ -16,8 +16,9 @@
 #     原条件恒假）；notes 追加写工作区根（原 ../NOTES.md 落到工作区外）。
 #
 # 凭据策略（无凭据路径 = 卡面验收）：
-#   - macOS 签名/公证：APPLE_CERT_P12 / APPLE_CERT_PASSWORD /
-#     APPLE_NOTARY_KEY(_ID/_ISSUER) 任一缺失 → 跳过该步，notes 标注"未签名"。
+#   - macOS 签名：#1121 起 APPLE_CERT_P12 缺失 ⇒ macOS job 第一步直接失败（ad-hoc 签名的
+#     包会被客户端安装前的发布者校验拒收，不许发出去）。公证凭据
+#     APPLE_NOTARY_KEY(_ID/_ISSUER) 缺失 → 跳过公证，notes 标注"未签名"。
 #     secret 槽位由 gh secret set 预建，值来自 H-02（Apple 开发者证书 $99/年）。
 #   - Windows：当前不签名（Authenticode 证书 H-02 范畴），notes 标注。
 #   - 环境批准门：macos job 挂 environment: release-signing —— 在
@@ -215,6 +216,19 @@ jobs:
     outputs:
       signed: ${{ steps.signtag.outputs.signed }}
     steps:
+      # #1121：没有 Apple 证书就只能 ad-hoc 签名——这样的包会被所有 macOS 客户端安装前的
+      # 发布者校验拒收（platform::verify_update_package）。失败要发生在发布端，不是用户那边：
+      # 证书缺失直接失败，test 与正式 tag 都一样。放在最前面，不白跑构建。
+      # 本地开发的 ad-hoc 路径（just verify-m1、bundle-desktop-macos.sh 不带身份）不受影响。
+      - name: Require Apple signing certificate (#1121)
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+        run: |
+          if [ -z "${APPLE_CERT_P12:-}" ]; then
+            echo "::error::secret APPLE_CERT_P12 没设——macOS 包只能 ad-hoc 签名，客户端会拒收，拒绝发布"
+            exit 1
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.tag || github.ref }}
@@ -314,7 +328,7 @@ jobs:
           # find-identity -v 第 1 行是身份（"1) <hash> \"...\""），第 2 行是
           # "N valid identities found" 汇总——取 NR==1 才是证书哈希。
           # #772：--timestamp 要请求 Apple 时间戳服务，可能挂住——限时并重试一次。
-          # 签的是 sidecar 的来源 /tmp/rel/daemon（Bundle desktop 把它拷进 .app 再整体重签）；
+          # 签的是 sidecar 的来源 /tmp/rel/daemon（Bundle desktop 把它组装进 helper 后由内向外重签，#1110）；
           # 本步的 signed=yes 也是下面 Signing status tag 的输入，不能删。
           tools/release/with-timeout.sh "codesign daemon（Apple 时间戳服务）" 300 2 -- \
             /usr/bin/codesign --force --options runtime --timestamp \
@@ -330,9 +344,9 @@ jobs:
       # .app），staple 装订进 dmg。步骤移到 Bundle desktop 之后。
 
       # ── H-10c: 面向人类的 .app + dmg（复用 /tmp/rel 的自包含 daemon）──
-      # sidecar = bundle 后 daemon（rpath @executable_path/lib），lib/ 必须
-      # 一起进 .app/Contents/MacOS/lib。无凭据路径 ad-hoc 重签；凭据到位后
-      # 此步的 codesign identity 由门控环境提供。
+      # #1110：daemon + lib/ 组装成嵌套 helper .app/Contents/Helpers/ppf-daemon.app
+      # （rpath @executable_path/lib 不变），由内向外逐层签名。无凭据路径 ad-hoc；
+      # 凭据到位后此步的 codesign identity 由门控环境提供。
       - name: Install Node + pnpm (desktop build)
         run: |
           set -euo pipefail
@@ -342,16 +356,31 @@ jobs:
           npm install -g pnpm@11
           pnpm --version
 
+      # #1110：daemon helper 的 provisioning profile（授权 keychain-access-groups）。
+      # 缺失即失败——不出 daemon 读写不了钥匙串的包。secret 只进本 step env；
+      # 解出的文件路径经 GITHUB_ENV 交给下面的 bundle 步骤。
+      - name: Daemon provisioning profile (#1110)
+        env:
+          APPLE_DAEMON_PROVISIONPROFILE: ${{ secrets.APPLE_DAEMON_PROVISIONPROFILE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${APPLE_DAEMON_PROVISIONPROFILE:-}" ]; then
+            echo "FATAL: secret APPLE_DAEMON_PROVISIONPROFILE 没设（base64 的 Developer ID 授权文件，App ID com.hawkeyexb.ppass.desktop.daemon）" >&2
+            exit 1
+          fi
+          PROFILE="$RUNNER_TEMP/ppf-daemon.provisionprofile"
+          echo "$APPLE_DAEMON_PROVISIONPROFILE" | base64 --decode > "$PROFILE"
+          [ -s "$PROFILE" ] || { echo "FATAL: APPLE_DAEMON_PROVISIONPROFILE 解码后为空" >&2; exit 1; }
+          echo "PPF_DAEMON_PROVISIONPROFILE=$PROFILE" >> "$GITHUB_ENV"
+
       - name: Bundle desktop .app + dmg (H-10c)
-        # UPD-01: createUpdaterArtifacts 强制签名——tauri bundle 需要
-        # TAURI_SIGNING_PRIVATE_KEY（UPDATE_SIGNING_KEY，rsign 格式，空密码）。
-        # secret 只进本 step env（T-071b 模式）。
+        # #1121：构建步骤不再拿更新签名私钥——`pnpm tauri build/bundle` 会执行整棵前端依赖树，
+        # 签名环境不许执行现拉代码。tauri 自己的 updater 产物从来没人用（macOS 由下面的
+        # Pack updater 现打，Windows 由 sign-desktop.sh 签 setup.exe），createUpdaterArtifacts 已关。
         # H-02: 凭据到位后，把 p12 导进临时钥匙串取 Developer ID identity
         # 传 bundle 脚本（.app 用真证书签名，供后续 dmg 公证/staple）；
         # 无凭据路径保持 ad-hoc（-）。
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
           APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
           APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
         run: |
@@ -404,7 +433,7 @@ jobs:
           tools/release/with-timeout.sh "stapler validate" 120 1 -- xcrun stapler validate "$DMG"
           echo "notarized=yes" >> "$GITHUB_OUTPUT"
 
-      # UPD-03: 桌面 updater 包——必须从「嵌 lib/ + 重签」之后的最终 .app
+      # UPD-03: 桌面 updater 包——必须从「组装 helper + 逐层签名」之后的最终 .app
       # 现打。不能用 `pnpm tauri bundle` 自己产的那份 tar.gz：它在塞 lib/
       # 之前就生成，内容缺 lib/，打出去就是 BUILD-09 的复发（用户一更新
       # 就 dyld 起不来）。签名不在本 job 做——统一收在 finalize-manifest，
@@ -415,7 +444,9 @@ jobs:
           APP=apps/desktop/src-tauri/target/release/bundle/macos/P-Pass.app
           [ -d "$APP" ] || { echo "FATAL: $APP 不存在——bundle 步骤必先行"; exit 1; }
           UPD="$(tools/artifact-names.sh macos-updater)"   # UPD-15
-          tar czf "/tmp/rel/$UPD" -C "$(dirname "$APP")" P-Pass.app
+          # #1121：COPYFILE_DISABLE=1 —— 不往包里塞 AppleDouble（._*）条目；它们解进
+          # bundle 会破坏代码签名的封装，客户端安装前的团队校验会拒收。
+          COPYFILE_DISABLE=1 tar czf "/tmp/rel/$UPD" -C "$(dirname "$APP")" P-Pass.app
           ls -la "/tmp/rel/$UPD"
 
       # #539：SUMS 与 SLSA 证明的对象 = 实际发布的 macOS 资产（dmg + updater 包），
@@ -570,14 +601,12 @@ jobs:
 
       # T7 (H-09): Windows 图形界面——桌面壳 NSIS 安装包（未签名，
       # Authenticode 证书 H-02 挂账；SmartScreen 会警告，如实告知用户）。
-      # daemon 以 sidecar（externalBin）打进安装包；createUpdaterArtifacts
-      # 要求 TAURI_SIGNING_PRIVATE_KEY（UPDATE_SIGNING_KEY，同 macos job）。
+      # daemon 以 sidecar（externalBin）打进安装包。#1121：不拿更新签名私钥
+      # （createUpdaterArtifacts 已关；setup.exe 的签名在 finalize-manifest-windows 单独做）。
       - name: Build desktop shell installer (NSIS, T7)
         shell: bash
         env:
           VCPKG_ROOT: "C:\\vcpkg"
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
           # #809：外壳版本与 daemon（上一步的 PPF_BUILD_VERSION）同源——同一个
           # steps.ppf_ver，经 tauri 官方 --config 合并注入；tauri.conf.json 的
           # "version" 不再是产物版本的来源。NSIS 的 VIProductVersion 只取数字三段。
@@ -716,7 +745,8 @@ jobs:
           set -euo pipefail
           # UPD-15：产物名 = P-Pass_<android 端版本>_android[-unsigned].apk
           APK=$(find app/build/outputs/apk/release -name 'P-Pass_*_android*.apk' | head -1)
-          unzip -l "$APK" | grep -q "lib/arm64-v8a/libiroh_ffi.so"
+          # #1124：控制面改走 libtransport.so 的 uniffi 导出，iroh-ffi 的库不该再进包。
+          if unzip -l "$APK" | grep -q "libiroh_ffi.so"; then echo "::error::APK 里还有 libiroh_ffi.so（#1124 已移除）"; exit 1; fi
           unzip -l "$APK" | grep -q "lib/arm64-v8a/libtransport.so"
 
       - name: Detect signing
@@ -1012,7 +1042,6 @@ jobs:
       contents: write
     env:
       TAG: ${{ needs.create-draft.outputs.tag }}
-      HAS_UPDATE_KEY: ${{ secrets.UPDATE_SIGNING_KEY != '' }}
     steps:
       # checkout 是为了 tools/make-update-manifest.mjs——三条 lane 里只有
       # 这条需要仓库文件。
@@ -1039,12 +1068,15 @@ jobs:
       - name: Compose update manifest (UPD-01)
         run: tools/release/compose-android.sh
 
-      - name: Sign update manifest (UPD-01, gated)
+      - name: Sign update manifest (UPD-01)
         # UPD-15 修正：正式 tag 下 upload-android **不再**产出 artifacts/manifest.json
         # （动态清单只给 test 通道），旧条件会让本步被跳过 ⇒ 分端清单带着空签名上传。
-        if: env.HAS_UPDATE_KEY == 'true' && (hashFiles('artifacts/manifest.json') != '' || hashFiles('artifacts/manifest-android.json') != '')
+        # #1121：不再按「密钥在不在」跳过——密钥缺失时本步失败，不发未签名的清单。
+        if: hashFiles('artifacts/manifest.json') != '' || hashFiles('artifacts/manifest-android.json') != ''
         env:
-          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          # #1121：test 与正式各用一把；本步只拿到本通道那一把（另一把是空串）。
+          UPDATE_SIGNING_KEY: ${{ !contains(env.TAG, '-test.') && secrets.UPDATE_SIGNING_KEY || '' }}
+          UPDATE_SIGNING_KEY_TEST: ${{ contains(env.TAG, '-test.') && secrets.UPDATE_SIGNING_KEY_TEST || '' }}
         # REL-12（#711）：逻辑在 tools/release/sign-android.sh（密钥与 .sig 落在 $RUNNER_TEMP）。
         run: tools/release/sign-android.sh
 
@@ -1053,8 +1085,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # UPD-15 门禁：UPDATE_SIGNING_KEY 在位时，清单的签名必须非空（REL-12 #711：
-          # 逻辑在 tools/release/check-manifests-signed.sh，上传前先过这道门）。
+          # UPD-15 / #1121 门禁：清单每个条目都要有签名与 sha256（逻辑在
+          # tools/release/check-manifests-signed.sh，上传前先过这道门）。
           tools/release/check-manifests-signed.sh artifacts/manifest.json artifacts/manifest-android.json
           cd artifacts
           ASSETS=""
@@ -1068,6 +1100,13 @@ jobs:
           # shellcheck disable=SC2086 # ASSETS 是刻意拆分
           gh release upload "$TAG" $ASSETS --clobber
           echo "android assets: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+
+      # #1121：发布后真实验签——取回线上的清单与 APK，用客户端内置公钥验签名与 sha256。
+      - name: Verify published android manifest (#1121)
+        if: hashFiles('artifacts/manifest-android.json') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: tools/release/verify-published.sh "$TAG" manifest-android.json
 
       # #872：test tag 的 release 保持 draft（只当构建记录）——客户端从滚动的 test-channel
       # 下载，安装包随清单一起进 test-channel（point-test-channel.sh：先传包、再写清单、后清旧包）。
@@ -1224,7 +1263,6 @@ jobs:
       contents: write
     env:
       TAG: ${{ needs.create-draft.outputs.tag }}
-      HAS_UPDATE_KEY: ${{ secrets.UPDATE_SIGNING_KEY != '' }}
     steps:
       # checkout 是为了 tools/make-update-manifest.mjs。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1252,10 +1290,13 @@ jobs:
           MACOS_PLAN: ${{ needs.plan-builds.outputs.macos }}
         run: tools/release/compose-desktop.sh
 
-      - name: Sign manifest entries (gated)
-        if: env.HAS_UPDATE_KEY == 'true' && hashFiles('artifacts/manifest.json') != ''
+      - name: Sign manifest entries
+        # #1121：不再按「密钥在不在」跳过——密钥缺失时本步失败。
+        if: hashFiles('artifacts/manifest.json') != ''
         env:
-          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          # #1121：test 与正式各用一把；本步只拿到本通道那一把（另一把是空串）。
+          UPDATE_SIGNING_KEY: ${{ !contains(env.TAG, '-test.') && secrets.UPDATE_SIGNING_KEY || '' }}
+          UPDATE_SIGNING_KEY_TEST: ${{ contains(env.TAG, '-test.') && secrets.UPDATE_SIGNING_KEY_TEST || '' }}
         # REL-12（#711）：逻辑在 tools/release/sign-desktop.sh（REL-10：要签的文件在本步内定位）。
         run: tools/release/sign-desktop.sh
 
@@ -1278,6 +1319,19 @@ jobs:
             gh release upload "$TAG" manifest-android.json --clobber
             echo "android manifest: https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/manifest-android.json"
           fi
+
+      # #1121：发布后真实验签（收口版分端清单覆盖上传之后再验一次线上字节）。
+      - name: Verify published desktop manifests (#1121)
+        if: hashFiles('artifacts/manifest.json') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          M=()
+          for f in manifest-macos.json manifest-android.json; do
+            [ -f "artifacts/$f" ] && M+=("$f")
+          done
+          [ "${#M[@]}" -eq 0 ] || tools/release/verify-published.sh "$TAG" "${M[@]}"
 
       # #852：test 通道镜像正式版——macOS test 包的插件 endpoint 是 test-channel/manifest-macos.json
       # （构建期由 tools/release/tauri-config.mjs 写进），与正式包同一条插件应用内更新。
@@ -1313,7 +1367,6 @@ jobs:
       contents: write
     env:
       TAG: ${{ needs.create-draft.outputs.tag }}
-      HAS_UPDATE_KEY: ${{ secrets.UPDATE_SIGNING_KEY != '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1328,10 +1381,11 @@ jobs:
       - name: Compose Windows manifest
         run: tools/release/compose-windows.sh
 
-      - name: Sign manifest entries (gated)
-        if: env.HAS_UPDATE_KEY == 'true'
+      - name: Sign manifest entries
         env:
-          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          # #1121：test 与正式各用一把；本步只拿到本通道那一把（另一把是空串）。
+          UPDATE_SIGNING_KEY: ${{ !contains(env.TAG, '-test.') && secrets.UPDATE_SIGNING_KEY || '' }}
+          UPDATE_SIGNING_KEY_TEST: ${{ contains(env.TAG, '-test.') && secrets.UPDATE_SIGNING_KEY_TEST || '' }}
         run: tools/release/sign-desktop.sh
 
       - name: Upload manifest-windows.json
@@ -1342,6 +1396,12 @@ jobs:
           tools/release/check-manifests-signed.sh artifacts/manifest-windows.json
           gh release upload "$TAG" artifacts/manifest-windows.json --clobber
           echo "Windows manifest: https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/manifest-windows.json"
+
+      # #1121：发布后真实验签。
+      - name: Verify published Windows manifest (#1121)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: tools/release/verify-published.sh "$TAG" manifest-windows.json
 
       - name: Point test-channel at the Windows manifest (#788②)
         if: contains(env.TAG, '-test.')
@@ -1444,7 +1504,7 @@ jobs:
           ${{ needs.ios.result == 'success' && needs.ios.outputs.uploaded == 'yes' && format('**iOS {0}（build {1}）已上传 TestFlight**（App Store Connect 签名，在 TestFlight 里装；不是本页的下载文件）', needs.ios.outputs.version, needs.ios.outputs.build) || '' }}
           ${{ needs.ios.result == 'success' && needs.ios.outputs.uploaded != 'yes' && format('**iOS {0} 未上传 TestFlight（未配置 App Store Connect 密钥）**', needs.ios.outputs.version) || '' }}
           ${{ needs.ios.result == 'failure' && '**iOS 上传 TestFlight 失败，见 iOS (TestFlight) job**' || '' }}
-          **更新 manifest**：${{ secrets.UPDATE_SIGNING_KEY != '' && 'UPDATE_SIGNING_KEY 在位 → manifest.json 已签名（tauri signer）' || 'UPDATE_SIGNING_KEY 未设置 → manifest.json 未签名（signature 空，客户端系统签名校验兜底——Android PackageInstaller 强制同签名）' }}
+          **更新清单**：每个安装包都用更新签名密钥签名（minisign，test 与正式各用一把）；客户端用内置公钥验签，验签不过不安装。缺签名密钥时发布流水线直接失败，不存在未签名的清单。
 
           ### 面向人类的资产（H-10c · UPD-15：文件名带该端版本号）
           - **P-Pass_\<macOS 版本\>_macos-arm64.dmg** — macOS 桌面 App（.app，内含自包含 daemon sidecar + lib/）

@@ -23,8 +23,8 @@ final class FfiBlobProviderPauseTests: XCTestCase {
     }
 
     override func tearDown() {
-        client?.close()
-        native?.ffi.close()
+        client?.shutdown()
+        native?.ffi.shutdown()
         try? FileManager.default.removeItem(at: dir)
     }
 

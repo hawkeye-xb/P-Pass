@@ -4,24 +4,26 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class IrohBlobsProviderBridgeTest {
+    // importMedia 只导入、不供数；serve 才让它成为当前 lease 并出 ticket。
     @Test
-    fun `register imports exactly the leased order's source under its declared hash`() {
+    fun `import then serve leases exactly the order's content hash`() {
         val native = RecordingNativeProvider()
-        val bridge = IrohBlobsProviderBridge(native) { uri -> "fd:$uri" }
+        val bridge = IrohBlobsProviderBridge(native)
 
-        val ticket = bridge.register(lease(7L), "content://media/7")
-
-        assertEquals("ticket:${hashFor(7L)}", ticket)
-        assertEquals(listOf("${hashFor(7L)}:fd:content://media/7"), native.registrations)
-        assertIllegalArgument { bridge.register(ProviderLease(8L, leaseTokenFor(8L), "not-a-hash"), "content://media/8") }
-        assertEquals(1, native.registrations.size)
+        val imported = bridge.importMedia("/storage/a.jpg", "fd:7")
+        assertEquals(hashFor(7L), imported.contentHash)
+        assertEquals(listOf("import:/storage/a.jpg:fd:7"), native.calls)
+        assertEquals("ticket:${hashFor(7L)}", bridge.serve(lease(7L)))
+        assertEquals(listOf("import:/storage/a.jpg:fd:7", "serve:${hashFor(7L)}"), native.calls)
+        assertIllegalArgument { bridge.serve(ProviderLease(8L, leaseTokenFor(8L), "not-a-hash")) }
+        assertEquals(2, native.calls.size)
     }
 
     @Test
     fun `pause stops the active native fetch then revokes, a stale lease is a no-op`() {
         val native = RecordingNativeProvider()
-        val bridge = IrohBlobsProviderBridge(native) { uri -> "fd:$uri" }
-        bridge.register(lease(7L), "content://media/7")
+        val bridge = IrohBlobsProviderBridge(native)
+        bridge.serve(lease(7L))
 
         bridge.pause(ProviderLease(7L, "stale-lease", hashFor(7L)))
         assertEquals(emptyList<String>(), native.events)
@@ -33,8 +35,8 @@ class IrohBlobsProviderBridgeTest {
     @Test
     fun `releaseRetention drops retention without revoking and verifies the lease`() {
         val native = RecordingNativeProvider()
-        val bridge = IrohBlobsProviderBridge(native) { uri -> "fd:$uri" }
-        bridge.register(lease(7L), "content://media/7")
+        val bridge = IrohBlobsProviderBridge(native)
+        bridge.serve(lease(7L))
 
         assertIllegalArgument { bridge.releaseRetention(ProviderLease(7L, "stale-lease", hashFor(7L))) }
         assertEquals(emptyList<String>(), native.events)
@@ -45,18 +47,18 @@ class IrohBlobsProviderBridgeTest {
     @Test
     fun `next order keeps the native endpoint alive`() {
         val native = RecordingNativeProvider()
-        val bridge = IrohBlobsProviderBridge(native) { uri -> "fd:$uri" }
-        bridge.register(lease(7L), "content://media/7")
-        bridge.register(lease(8L), "content://media/8")
+        val bridge = IrohBlobsProviderBridge(native)
+        bridge.serve(lease(7L))
+        bridge.serve(lease(8L))
 
         assertEquals(emptyList<String>(), native.events)
-        assertEquals(listOf("${hashFor(7L)}:fd:content://media/7", "${hashFor(8L)}:fd:content://media/8"), native.registrations)
+        assertEquals(listOf("serve:${hashFor(7L)}", "serve:${hashFor(8L)}"), native.calls)
     }
 
     @Test
     fun `network change is forwarded to the native endpoint`() {
         val native = RecordingNativeProvider()
-        IrohBlobsProviderBridge(native) { it }.networkChange()
+        IrohBlobsProviderBridge(native).networkChange()
         assertEquals(listOf("network_change"), native.events)
     }
 
@@ -69,16 +71,24 @@ class IrohBlobsProviderBridgeTest {
         throw AssertionError("expected IllegalArgumentException")
     }
 
-    private fun hashFor(orderId: Long) = orderId.toString(16).padStart(64, '0')
+    private companion object {
+        fun hashFor(orderId: Long) = orderId.toString(16).padStart(64, '0')
+    }
 
     private fun lease(orderId: Long) = ProviderLease(orderId, leaseTokenFor(orderId), hashFor(orderId))
 
     private class RecordingNativeProvider : NativeIrohBlobsProvider {
-        val registrations = mutableListOf<String>()
+        /** 导入 / 供数（准备 lease 的调用）；[events] 只记停止、放手、网络变化这类动作。 */
+        val calls = mutableListOf<String>()
         val events = mutableListOf<String>()
 
-        override fun register(hash: String, source: Any): String {
-            registrations += "$hash:$source"
+        override fun importMedia(dataPath: String?, source: Any): NativeMediaImport {
+            calls += "import:$dataPath:$source"
+            return NativeMediaImport(hashFor(7L), 1, byReference = true)
+        }
+
+        override fun serve(hash: String): String {
+            calls += "serve:$hash"
             return "ticket:$hash"
         }
 
@@ -94,7 +104,7 @@ class IrohBlobsProviderBridgeTest {
             events += "revoke:$hash"
         }
 
-        override fun transferStatus(): String = "{\"state\":\"no_lease\"}"
+        override fun transferStatus(): TransferStatus = TransferStatus.NoLease
 
         override fun networkChange() {
             events += "network_change"

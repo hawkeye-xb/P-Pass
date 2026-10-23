@@ -73,10 +73,11 @@ fmt:
 #
 # BUILD-06: 刻意**不用** `--all-features`。本仓只有两个 feature，两个都是特殊
 # 构建模式，不该被默认打开：
-#   - `transport/android-jni` —— 只给 Android 桥用（全仓唯一启用处是
-#     tools/build-android-iroh-blobs-bridge.sh）。它的代码用 `std::os::fd`，
-#     在 Windows 上直接编不过（E0432/E0599）⇒ `--all-features` 等于把这个
-#     刻意做出来的平台闸门又强行打开。Android 那条路径见下方 lint-android。
+#   - `transport/mobile-ffi` —— 只给两端手机的绑定用（启用处是
+#     tools/build-android-iroh-blobs-bridge.sh 与 tools/build-ios-transport-xcframework.sh）。
+#     它的代码用 `std::os::fd`（#1126 起 Android 的描述符导入在这里），在 Windows 上
+#     直接编不过（E0432/E0599）⇒ `--all-features` 等于把这个刻意做出来的平台闸门又强行
+#     打开。手机那条路径见下方 lint-mobile。
 #   - `media-codec/vendored` —— 从源码编 libheif。该 crate 自己的注释就写着
 #     「Default stays on the system library for fast dev/CI builds」。
 # 远端 ci-rust.yml 仍用 `--all-features`（Linux 上两者都编得过），所以覆盖没丢；
@@ -102,11 +103,11 @@ lint:
 lint-cross:
   for t in x86_64-pc-windows-msvc x86_64-unknown-linux-gnu x86_64-apple-darwin; do rustup target add "$t" >/dev/null 2>&1 && echo "==> clippy -p platform --target $t" && cargo clippy -p platform --all-targets --features test-support --target "$t" -- -D warnings || exit 1; done
 
-# BUILD-06: android-jni 的专项 lint。**只能在 unix 上跑**——该 feature 的代码
-# 用 `std::os::fd`，Windows 上必然 E0432。所以刻意没挂进 `ci`：挂进去等于让
-# Windows 的 `just ci` 永远红。
-lint-android:
-  cargo clippy -p transport --all-targets --features android-jni -- -D warnings
+# BUILD-06 / #1126: 手机绑定（mobile-ffi，原 android-jni 已并入）的专项 lint。**只能在 unix
+# 上跑**——该 feature 的代码用 `std::os::fd`，Windows 上必然 E0432。所以刻意没挂进 `ci`：
+# 挂进去等于让 Windows 的 `just ci` 永远红（Linux CI 的 `--all-features` clippy 覆盖它）。
+lint-mobile:
+  cargo clippy -p transport --all-targets --features mobile-ffi -- -D warnings
 
 # ── Test ────────────────────────────────────────────
 
@@ -127,12 +128,13 @@ test:
     cargo test; \
   fi
 
-# T-070 故障剧本（进程级三件套：4GB 大文件 / 崩溃恢复 / 磁盘满）
-# 需要 release 二进制: cargo build --release -p daemon -p testclient
+# T-070 故障剧本（进程内集成测试三件套：大文件 / 崩溃恢复 / 磁盘满）
+# 安全卡 #1115 后常驻 daemon 不再读 PPF_DATA_DIR，原 shell 剧本已改写为
+# crates/daemon/tests/scenarios/process_failures.rs。磁盘满剧本只在设了
+# PPF_SCENARIO_SMALL_FS（指向小文件系统上的目录，CI 挂 6MB tmpfs）时运行，
+# 否则打印 SKIP。
 scenarios:
-  bash tools/scenarios/huge_file.sh
-  bash tools/scenarios/crash_recovery.sh
-  bash tools/scenarios/disk_full.sh
+  cargo test --release -p daemon --test scenarios -- --ignored --test-threads=1
 
 # ── Code Generation ─────────────────────────────────
 
@@ -210,8 +212,10 @@ identity-check:
 # ── Development ─────────────────────────────────────
 
 # Start daemon in development mode
+# #1115：开发用测试沙盒（--ephemeral）：库在 stdout 的 SANDBOX: 那一行，IPC 用令牌。
+# 不带 --ephemeral 的未签名 daemon 读不了钥匙串，会拒绝启动。
 dev-daemon:
-  cargo run -p daemon
+  cargo run -p daemon -- --ephemeral
 
 # ── CI ──────────────────────────────────────────────
 
@@ -235,14 +239,38 @@ platform-smoke:
     cargo run -p platform --example smoke
 
 # T-041 桌面壳开发模式（Tauri dev = 前端热更 + 托盘）
+# #1115：debug 构建的壳只能经令牌连测试沙盒——先 `just dev-daemon`，再
+#   PPF_SANDBOX_DIR=<它 stdout 上 SANDBOX: 后面那个目录> just dev-desktop
+# 常驻 daemon（签名 socket）只接受签名的窗口程序，未签名的开发壳连不上它。
 dev-desktop:
     cd apps/desktop && npx tauri dev
+
+# macOS 日常开发循环（Xcode 式：每个 debug 构建都组装成 .app、用团队 Developer ID 签名）。
+# 窗口连本机真实的签名 daemon，签名校验与正式包一字不差。前端改动走 vite HMR；外壳 Rust
+# 改动由 tauri dev 自动重编、签名、拉起；daemon Rust 改动跑 `just mac-dev daemon`。
+# 开发版装在 ~/Applications/P-Pass.app（与正式包同 bundle id / LaunchAgent，互斥）：那里是正式包
+# （正在运行或只是装着）时一律拒绝，不替换、不备份——先自己退出并移走正式版。退出开发模式：
+# Ctrl+C，再装回正式 dmg。
+#   just mac-dev            启动 tauri dev（首次需 PPF_DAEMON_PROVISIONPROFILE）
+#   just mac-dev daemon     daemon 增量编译 + 签名 + kickstart + 重拉外壳（重拉这步尚未实测）
+#   just mac-dev status     只读：看现在装的是哪一版
+# 详见 tools/mac-dev.sh 文件头。
+# macOS 开发循环：HMR + 签名的 debug 构建，连本机真实 daemon（up|daemon|status）
+mac-dev *args:
+    tools/mac-dev.sh {{args}}
+
+# #1110：把本地构建的 daemon 组装成签过名的 helper（个人团队 Developer ID + 授权文件）。
+# 需 PPF_DAEMON_PROVISIONPROFILE=<授权文件路径>。用途：本机验钥匙串读写、签名形状；
+# #1115 起开发壳不连它（见 dev-desktop），要连得用签名的窗口程序。
+dev-daemon-helper *daemon_bin:
+    tools/daemon-helper-macos.sh dev {{daemon_bin}}
 
 # M1 总验收（手册 E 表）：全仓测试 + 接口全剧本 + 桌面产物
 #
 # BUILD-09：这里以前直接 `npx tauri build --bundles app`，出来的 .app 缺
-# Contents/MacOS/lib —— daemon 的 rpath 是 @executable_path/lib，Tauri 的
+# daemon 旁边的 lib/ —— daemon 的 rpath 是 @executable_path/lib，Tauri 的
 # externalBin 只搬那一个二进制，不搬它旁边那包 dylib。构建全绿、装上才炸。
+# #1110 起 daemon 是嵌套 helper（Contents/Helpers/ppf-daemon.app），只有这条链路组装得出。
 # 正确链路只有一条（release.yml 一直走的那条），现在本地也走它，而且
 # bundle-desktop-macos.sh 第 5b 步会真的跑一遍 sidecar 才放行。
 # 本地 ad-hoc 身份默认不出 dmg（BUILD-05 定调），要 dmg 设 PPF_BUNDLE_DMG=1。
@@ -255,7 +283,8 @@ verify-m1:
     # #809：daemon 与外壳版本同源（bundle-desktop-macos.sh 第 5c 步核对）
     PPF_BUILD_VERSION="$(tools/release-version.sh desktop)" cargo build --release -p daemon -p testclient
     rm -rf /tmp/ppf-rel && mkdir -p /tmp/ppf-rel
-    tools/bundle-macos.sh /tmp/ppf-rel target/release/daemon target/release/testclient
+    TARGET="${CARGO_TARGET_DIR:-target}"
+    tools/bundle-macos.sh /tmp/ppf-rel "$TARGET/release/daemon" "$TARGET/release/testclient"
     tools/bundle-desktop-macos.sh /tmp/ppf-rel /tmp/ppf-rel
 
 # Android unit tests (proto golden drift check included)

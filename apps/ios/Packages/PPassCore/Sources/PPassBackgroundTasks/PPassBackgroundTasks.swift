@@ -14,7 +14,7 @@
 //    同步 `endBackgroundTask`，再异步 `engine.onLeaseExpired()`——停不停由引擎按此刻的租约定，#1007）。
 // 5. 断开（DisconnectRuntime.cancelScheduledWakes）调 `scheduler.stop()`。
 // 短任务（#958）：identifier `BackgroundWakePlanner.shortTaskIdentifier`（com.hawkeyexb.ppass.refresh）也要进 Info.plist，
-//   `UIBackgroundModes` 再加 `fetch`；启动 / 回前台 / 进后台调 `ensureShortScheduled()`。
+//   `UIBackgroundModes` 再加 `fetch`；启动 / 回前台 / 进后台调 `scheduler.ensureShortScheduled()`。
 // 模拟器验证：在 launch 之后用 LLDB
 //   e -l objc -- (void)[[BGTaskScheduler sharedScheduler] _simulateLaunchForTaskWithIdentifier:@"com.hawkeyexb.ppass.backup"]
 // 触发一次（只在调试器里可用）。
@@ -32,6 +32,12 @@ public struct BGTaskSubmitter: BackgroundTaskSubmitter {
         request.earliestBeginDate = spec.earliestBeginDate
         request.requiresNetworkConnectivity = spec.requiresNetworkConnectivity
         request.requiresExternalPower = spec.requiresExternalPower
+        try BGTaskScheduler.shared.submit(request)
+    }
+
+    public func submitShort(earliestBeginDate: Date) throws {
+        let request = BGAppRefreshTaskRequest(identifier: BackgroundWakePlanner.shortTaskIdentifier)
+        request.earliestBeginDate = earliestBeginDate
         try BGTaskScheduler.shared.submit(request)
     }
 
@@ -71,12 +77,15 @@ public enum PPassBackgroundTasks {
     private static func registerShortTask(logger: CoreLogger, target: @escaping @Sendable () -> BackgroundTarget?) -> Bool {
         BGTaskScheduler.shared.register(forTaskWithIdentifier: BackgroundWakePlanner.shortTaskIdentifier, using: nil) { task in
             LaunchOriginRecorder.shared.backgroundTaskReached(identifier: BackgroundWakePlanner.shortTaskIdentifier, logger: logger)
-            ensureShortScheduled(logger: logger)
+            // #1119：未配对不再给自己续挂（门禁在 scheduler 里）。App 起不来（拿不到 scheduler）时无从判断，照旧续挂，
+            // 下一次起得来时由 scheduler 按配对状态收口。
             guard let t = target() else {
+                ensureShortScheduled(logger: logger)
                 logger.log("short task: app not ready (identity locked or unavailable); finishing without a run")
                 task.setTaskCompleted(success: false)
                 return
             }
+            t.scheduler.ensureShortScheduled()
             let engine = t.engine, window = t.window, afterRun = t.afterRun
             let completed = CompletionOnce(task)
             let work = Task {
@@ -95,11 +104,11 @@ public enum PPassBackgroundTasks {
         }
     }
 
-    /// 确保挂着一条短任务请求（earliestBeginDate = 5 分钟）。同 identifier 再提交即替换。启动、回前台、进后台、被叫醒时都调。
-    public static func ensureShortScheduled(logger: CoreLogger? = nil) {
-        let request = BGAppRefreshTaskRequest(identifier: BackgroundWakePlanner.shortTaskIdentifier)
-        request.earliestBeginDate = Date().addingTimeInterval(BackgroundWakePlanner.shortTaskEarliest)
-        do { try BGTaskScheduler.shared.submit(request) } catch { logger?.log("short task: submit failed: \(error)") }
+    /// 只给「App 起不来、拿不到 scheduler」的那一次唤醒用；其余地方一律走 `PlannedWakeScheduler.ensureShortScheduled()`（带未配对门禁）。
+    private static func ensureShortScheduled(logger: CoreLogger? = nil) {
+        do { try BGTaskSubmitter().submitShort(earliestBeginDate: Date().addingTimeInterval(BackgroundWakePlanner.shortTaskEarliest)) } catch {
+            logger?.log("short task: submit failed: \(error)")
+        }
     }
 
     private static func registerLongTask(logger: CoreLogger, target: @escaping @Sendable () -> BackgroundTarget?) -> Bool {

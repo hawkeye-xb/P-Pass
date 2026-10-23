@@ -142,7 +142,7 @@ class C522FgsBudgetSkipTest {
         assertNull(rig.control.budget.exhaustedRefusalAt)
         assertTrue(rig.logs.any { it.startsWith("foreground budget: app came to the foreground") })
 
-        rig.probeResult = ProbeResult.Reachable("e1")
+        rig.probeResult = ProbeResult.Reachable()
         rig.foreground.grant = true
         rig.trigger(TriggerReason.UNREACHABLE_PROBE)
         assertEquals("回过前台之后的后台触发必须真去申请", 3, rig.foreground.startForegroundServiceCalls)

@@ -5,7 +5,7 @@
 
 use daemon::Router;
 use proto::{codes, Req, Resp};
-use storage::{Db, Device, Role};
+use storage::{Db, DepartedBy, Pairing, Role};
 use transport::{IrohTransport, Transport, TransportConfig};
 
 async fn start_daemon(db: Db) -> (IrohTransport, transport::PeerAddr) {
@@ -43,17 +43,19 @@ async fn call(tp: &IrohTransport, daemon: transport::NodeId, method: &str) -> Re
     proto::codec::decode::<Resp>(&frame).unwrap()
 }
 
-fn paired(node_id: &[u8; 32], role: Role) -> Device {
-    Device {
-        node_id: node_id.to_vec(),
-        name: "test-device".into(),
-        role,
-        paired_at: 1,
-        last_seen: None,
-        revoked: false,
-        revoked_at: None,
-        revoked_by: None,
-    }
+async fn pair(db: &Db, node: &[u8; 32], role: Role) {
+    db.accept_pairing(
+        node,
+        "test-device",
+        &Pairing {
+            id: "pairing-1".into(),
+            node_id: node.to_vec(),
+            role,
+            paired_at: 1_700_000_000_000,
+        },
+    )
+    .await
+    .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -88,10 +90,24 @@ async fn denial_diag_is_visible_immediately_every_time() {
     let (dtp, daddr) = start_daemon(db.clone()).await;
     let ctp = client().await;
     ctp.add_peer(daddr);
+    // #1122：未配对的对端按设备限速，连发 300 次会被限速丢流（不回应答）。
+    // 用已配对的 viewer 调它无权的方法——同样每次都写诊断、回拒绝，竞态检测不变。
+    db.accept_pairing(
+        &ctp.node_id().0,
+        "viewer",
+        &Pairing {
+            id: "v".into(),
+            node_id: ctp.node_id().0.to_vec(),
+            role: Role::Viewer,
+            paired_at: 1,
+        },
+    )
+    .await
+    .unwrap();
     let baseline = db.list_diag(1000).await.unwrap().len();
 
     for i in 0..300 {
-        let resp = call(&ctp, dtp.node_id(), "timeline.page").await;
+        let resp = call(&ctp, dtp.node_id(), "backup.begin").await;
         assert!(!resp.ok, "iter {i}: still denied");
         let events = db.list_diag(1000).await.unwrap();
         assert_eq!(
@@ -107,7 +123,7 @@ async fn denial_diag_is_visible_immediately_every_time() {
                     .detail
                     .as_deref()
                     .unwrap_or("")
-                    .contains("timeline.page"),
+                    .contains("backup.begin"),
             "iter {i}: newest event must be this denial: {newest:?}"
         );
     }
@@ -133,9 +149,7 @@ async fn viewer_browses_but_backup_is_denied() {
     let (dtp, daddr) = start_daemon(db.clone()).await;
     let ctp = client().await;
     ctp.add_peer(daddr);
-    db.upsert_device(&paired(&ctp.node_id().0, Role::Viewer))
-        .await
-        .unwrap();
+    pair(&db, &ctp.node_id().0, Role::Viewer).await;
 
     // Browsing methods reach dispatch (no query engine in this harness →
     // unsupported_method, but crucially NOT an authorization denial).
@@ -157,25 +171,315 @@ async fn revoked_device_is_shut_out_at_once() {
     let (dtp, daddr) = start_daemon(db.clone()).await;
     let ctp = client().await;
     ctp.add_peer(daddr);
-    db.upsert_device(&paired(&ctp.node_id().0, Role::Member))
-        .await
-        .unwrap();
+    pair(&db, &ctp.node_id().0, Role::Member).await;
 
     // While paired: allowed through the checkpoint.
     let resp = call(&ctp, dtp.node_id(), "hello").await;
     assert!(resp.ok);
 
-    // Revoke → 吊销即拒连, even for hello.
+    let before = call(&ctp, dtp.node_id(), "timeline.page").await;
+    assert_ne!(
+        before.error.expect("no query engine").code(),
+        codes::NOT_AUTHORIZED
+    );
+
+    // 撤销 = 配对记录物理删除 → 数据方法立刻被拒。
     assert!(db
-        .revoke(
-            &ctp.node_id().0,
-            storage::RevokedBy::Owner,
-            1_700_000_000_000
-        )
+        .remove_pairing(&ctp.node_id().0, None, DepartedBy::Owner, 1_700_000_000_000)
         .await
-        .unwrap());
-    let resp = call(&ctp, dtp.node_id(), "hello").await;
+        .unwrap()
+        .is_some());
+    let resp = call(&ctp, dtp.node_id(), "timeline.page").await;
     let err = resp.error.expect("denied after revocation");
     assert_eq!(err.code(), codes::NOT_AUTHORIZED);
-    assert_eq!(err.reason(), &proto::Reason::Revoked);
+    // #1117: 没有配对记录 ⇒ 与从未配对同一结果（桌面不再发 Reason::Revoked）。
+    assert_eq!(err.reason(), &proto::Reason::NotPaired);
+
+    // #1117: hello 对无配对记录的节点只是能力握手（不再「连 hello 都拒」），
+    // 但不带 pairing_id、也不刷新 last_seen。
+    let resp = call(&ctp, dtp.node_id(), "hello").await;
+    assert!(resp.ok);
+    let hello: proto::Hello = serde_json::from_value(resp.result.unwrap()).unwrap();
+    assert_eq!(hello.pairing_id, None);
+}
+
+/// #1119：手机断开（`device.unpair`）经统一入口删配对记录后，桌面主动关掉与它的
+/// 连接（iroh `Connection::close`），手机那一端很快看到连接已关；之后它重新连进来
+/// 只剩配对那扇门。
+/// 反证：统一入口不调 `connections`（或 Router 不注入 peer closer），手机端缓存的
+/// 连接一直活着 ⇒ 等待超时变红。
+#[tokio::test(flavor = "multi_thread")]
+async fn unpair_closes_the_phones_connections() {
+    let db = Db::open_in_memory().await.unwrap();
+    let dtp = IrohTransport::bind(TransportConfig::loopback(vec![transport::ALPN_CTRL.into()]))
+        .await
+        .unwrap();
+    let closer: daemon::unpair::PeerCloser = {
+        let t = dtp.clone();
+        std::sync::Arc::new(move |peer| t.close_peer(peer))
+    };
+    let router = Router::new(db.clone(), "test-daemon").with_peer_closer(closer);
+    let served = dtp.clone();
+    tokio::spawn(async move { router.serve(&served).await });
+
+    let ctp = client().await;
+    ctp.add_peer(dtp.local_addr());
+    let phone = ctp.node_id();
+    db.accept_pairing(
+        &phone.0,
+        "phone",
+        &Pairing {
+            id: "p-1119".into(),
+            node_id: phone.0.to_vec(),
+            role: Role::Member,
+            paired_at: 1,
+        },
+    )
+    .await
+    .unwrap();
+    let hello = call(&ctp, dtp.node_id(), "hello").await;
+    assert_eq!(hello.result.unwrap()["pairing_id"], "p-1119");
+    assert!(
+        ctp.path_of(dtp.node_id(), transport::ALPN_CTRL).is_some(),
+        "手机缓存着这条连接"
+    );
+
+    let mut stream = ctp
+        .connect(dtp.node_id(), transport::ALPN_CTRL)
+        .await
+        .unwrap();
+    let req = Req {
+        id: "unpair".into(),
+        method: proto::msgs::methods::DEVICE_UNPAIR.into(),
+        params: serde_json::json!({ "pairing_id": "p-1119" }),
+        ..Default::default()
+    };
+    stream
+        .send_frame(&proto::codec::encode(&req).unwrap())
+        .await
+        .unwrap();
+    stream.finish().unwrap();
+    let resp: Resp = proto::codec::decode(&stream.recv_frame().await.unwrap().unwrap()).unwrap();
+    assert_eq!(resp.result.unwrap()["unpaired"], true);
+
+    let mut closed = false;
+    for _ in 0..100 {
+        if ctp.path_of(dtp.node_id(), transport::ALPN_CTRL).is_none() {
+            closed = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(closed, "桌面删了配对记录后必须主动关掉与手机的连接");
+    assert!(dtp.path_of(phone, transport::ALPN_CTRL).is_none());
+
+    // 手机重新连进来：连得上，但业务方法一律 not_paired。
+    let again = call(&ctp, dtp.node_id(), "timeline.page").await;
+    assert_eq!(again.error.unwrap().reason(), &proto::Reason::NotPaired);
+}
+
+/// #1119：电脑撤销（IPC `device.revoke` 走的统一入口）删完配对记录立即关掉与
+/// 那台手机的连接，不依赖手机知道。
+/// 反证：`unpair::release` 不调 `connections`，手机端连接一直活着 ⇒ 变红。
+#[tokio::test(flavor = "multi_thread")]
+async fn owner_revoke_through_the_single_entry_closes_the_phones_connections() {
+    let db = Db::open_in_memory().await.unwrap();
+    let (dtp, daddr) = start_daemon(db.clone()).await;
+    let ctp = client().await;
+    ctp.add_peer(daddr);
+    let phone = ctp.node_id();
+    db.accept_pairing(
+        &phone.0,
+        "phone",
+        &Pairing {
+            id: "p-owner".into(),
+            node_id: phone.0.to_vec(),
+            role: Role::Member,
+            paired_at: 1,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(call(&ctp, dtp.node_id(), "hello").await.ok);
+    assert!(ctp.path_of(dtp.node_id(), transport::ALPN_CTRL).is_some());
+
+    let closer: daemon::unpair::PeerCloser = {
+        let t = dtp.clone();
+        std::sync::Arc::new(move |peer| t.close_peer(peer))
+    };
+    let removed = daemon::unpair::remove_pairing(
+        &db,
+        daemon::unpair::Holders {
+            connections: Some(&closer),
+            ..Default::default()
+        },
+        phone,
+        None,
+        DepartedBy::Owner,
+        2,
+    )
+    .await
+    .unwrap();
+    assert!(removed.is_some());
+
+    let mut closed = false;
+    for _ in 0..100 {
+        if ctp.path_of(dtp.node_id(), transport::ALPN_CTRL).is_none() {
+            closed = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    assert!(closed, "撤销后必须主动关掉与手机的连接");
+}
+
+/// #1122：配对入口按需开放（真实 iroh 端点 + 准入钩子）。
+/// - 平时：未配对的手机连 hello 都发不出去（握手后即被拒，服务端不读请求）。
+/// - 二维码显示（pairing.start）期间：放行，能 hello。
+/// - 二维码关闭（pairing.stop）：立即关上。
+/// - 已配对的设备任何时候都放行。
+/// 反证：main 不装判据（或判据恒放行），第一段「拿不到应答」变红；`stop` 不收回
+/// 令牌，最后一段变红。
+#[tokio::test(flavor = "multi_thread")]
+async fn the_pairing_door_opens_only_while_the_qr_code_is_shown() {
+    let db = Db::open_in_memory().await.unwrap();
+    let dtp = IrohTransport::bind(TransportConfig::loopback(vec![transport::ALPN_CTRL.into()]))
+        .await
+        .unwrap();
+    let (pairing, _rx) = daemon::Pairing::new(db.clone(), dtp.node_id(), None);
+    dtp.set_admission(daemon::admission::predicate(
+        db.clone(),
+        pairing.clone(),
+        || 1_000,
+    ));
+    let router = Router::new(db.clone(), "test-daemon").with_pairing(pairing.clone());
+    let served = dtp.clone();
+    tokio::spawn(async move { router.serve(&served).await });
+
+    let try_hello = |tp: IrohTransport, daemon: transport::NodeId| async move {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async move {
+            let mut s = tp.connect(daemon, transport::ALPN_CTRL).await.ok()?;
+            let req = Req {
+                id: "h".into(),
+                method: "hello".into(),
+                ..Default::default()
+            };
+            s.send_frame(&proto::codec::encode(&req).ok()?).await.ok()?;
+            s.finish().ok()?;
+            let frame = s.recv_frame().await.ok()??;
+            proto::codec::decode::<Resp>(&frame).ok()
+        })
+        .await
+        .expect("must not hang")
+    };
+
+    // 平时：拿不到任何应答。
+    let stranger = client().await;
+    stranger.add_peer(dtp.local_addr());
+    assert!(
+        try_hello(stranger.clone(), dtp.node_id()).await.is_none(),
+        "窗口外未配对：连 hello 都不行"
+    );
+
+    // 二维码显示期间：能 hello（新端点，避免复用刚被拒的连接）。
+    pairing.start([0x33; 12], 1_000);
+    let phone = client().await;
+    phone.add_peer(dtp.local_addr());
+    let r = try_hello(phone.clone(), dtp.node_id())
+        .await
+        .expect("窗口内放行");
+    assert!(r.ok);
+
+    // 二维码关闭：立即关上。
+    assert_eq!(pairing.stop(), 1);
+    let late = client().await;
+    late.add_peer(dtp.local_addr());
+    assert!(
+        try_hello(late, dtp.node_id()).await.is_none(),
+        "关闭后又拒绝"
+    );
+
+    // 已配对：任何时候都放行。
+    db.accept_pairing(
+        &phone.node_id().0,
+        "phone",
+        &Pairing {
+            id: "p".into(),
+            node_id: phone.node_id().0.to_vec(),
+            role: Role::Member,
+            paired_at: 1,
+        },
+    )
+    .await
+    .unwrap();
+    let again = client().await; // 同一身份需要新连接；用原 phone 端点重连
+    drop(again);
+    phone.close_peer(dtp.node_id());
+    let r = try_hello(phone, dtp.node_id()).await.expect("已配对放行");
+    assert_eq!(r.result.unwrap()["pairing_id"], "p");
+}
+
+/// #1122：配对窗口内，所有未配对的对端共用一个限速额度——两个不同身份交替连发
+/// 远超配额的请求，超出的流不读、不答；已配对设备不受这个限速。
+/// 反证：路由不调 unpaired_limiter、限速恒放行，或改回按身份分桶（两个身份各得一份
+/// 额度）⇒ 应答数超过总额度 ⇒ 变红。
+#[tokio::test(flavor = "multi_thread")]
+async fn unpaired_requests_are_rate_limited_in_the_router() {
+    let db = Db::open_in_memory().await.unwrap();
+    let (dtp, daddr) = start_daemon(db.clone()).await;
+    let strangers = [client().await, client().await];
+    for s in &strangers {
+        s.add_peer(daddr.clone());
+    }
+    let mut answered = 0;
+    for i in 0..100 {
+        let stranger = &strangers[i % 2];
+        let attempt = async {
+            let mut s = stranger
+                .connect(dtp.node_id(), transport::ALPN_CTRL)
+                .await
+                .ok()?;
+            let req = Req {
+                id: "h".into(),
+                method: "hello".into(),
+                ..Default::default()
+            };
+            s.send_frame(&proto::codec::encode(&req).ok()?).await.ok()?;
+            s.finish().ok()?;
+            s.recv_frame().await.ok()?
+        };
+        if tokio::time::timeout(std::time::Duration::from_secs(2), attempt)
+            .await
+            .ok()
+            .flatten()
+            .is_some()
+        {
+            answered += 1;
+        }
+    }
+    // 总额度：突发 40 + 期间按每秒 20 回补；两个身份共用，超出即丢。
+    assert!(
+        answered <= 70,
+        "超出总额度的请求必须被丢（换身份不增加额度）：answered={answered}"
+    );
+    assert!(answered >= 5, "配额内的照常应答：answered={answered}");
+
+    // 已配对设备不受限速。
+    let member = client().await;
+    member.add_peer(daddr);
+    db.accept_pairing(
+        &member.node_id().0,
+        "m",
+        &Pairing {
+            id: "m".into(),
+            node_id: member.node_id().0.to_vec(),
+            role: Role::Member,
+            paired_at: 1,
+        },
+    )
+    .await
+    .unwrap();
+    for _ in 0..30 {
+        assert!(call(&member, dtp.node_id(), "hello").await.ok);
+    }
 }

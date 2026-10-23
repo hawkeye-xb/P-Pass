@@ -16,10 +16,10 @@
 //
 // 契约（crates/daemon/src/ipc.rs pairing.pending）：
 //   node_id      hex string
-//   known        bool          ← device 表有没有这一行，不看 revoked
+//   known        bool          ← 有没有设备档案（档案永不删除，#1117）
 //   name         string        ← known 时是桌面上的名字，否则手机自报名
-//   paired_at    unix ms       ← 仅 known
-//   revoked      bool          ← 仅 known
+//   paired_at    unix ms       ← 仅 known：第一次配对成功的时间（设备档案）
+//   paired       bool          ← 仅 known：当前有没有配对记录
 //   photo_count  int           ← 仅 known
 
 import { t } from "./i18n.js";
@@ -30,32 +30,21 @@ export function isKnownDevice(item) {
 }
 
 /**
- * 审批弹窗的标题 + 说明，两套措辞。
- *
- * 多台同时扫码时不点名——逐行各自带自己的副行（见 pendingSubText），
- * 标题只报数量，不能替其中一台说话。
+ * 审批弹窗的标题：单台直接写请求内容（「名字 请求加入 / 请求重新连接」）；
+ * 多台时不点名，只报数量——每块以设备名开头，各自带副行（见 pendingSubText）。
  *
  * @param {Array<object>} pendingList pairing.pending 的全量列表
  */
 export function pendingDialogText(pendingList) {
   const list = Array.isArray(pendingList) ? pendingList : [];
   if (list.length > 1) {
-    return {
-      title: t("ui.pending_many_title", { n: list.length }),
-      hint: t("ui.pending_new_hint"),
-    };
+    return { title: t("ui.pending_many_title", { n: list.length }) };
   }
   const only = list[0];
-  if (isKnownDevice(only)) {
-    return {
-      // 点名，且点的是桌面上的名字——业主改过名就叫改过的那个。
-      title: t("ui.pending_known_title", { name: only.name }),
-      hint: t("ui.pending_known_hint"),
-    };
-  }
+  if (!only) return { title: "" };
+  // 标题直接写请求内容，点名，且点的是桌面上的名字——业主改过名就叫改过的那个。
   return {
-    title: t("ui.pending_one_title"),
-    hint: t("ui.pending_new_hint"),
+    title: t(isKnownDevice(only) ? "ui.pending_known_title" : "ui.pending_one_title", { name: only.name }),
   };
 }
 
@@ -112,4 +101,33 @@ export function pairResultName(item, resp) {
   const fromTable = typeof item?.name === "string" ? item.name.trim() : "";
   if (fromTable) return fromTable;
   return typeof resp?.device === "string" ? resp.device.trim() : "";
+}
+
+/**
+ * #1118：确认 = 输入手机屏幕上的 6 位验证码。只有恰好 6 位数字才能提交（只能试一次，
+ * 不让手滑的半截码白白作废这次配对）。
+ */
+export function isPairCode(code) {
+  return /^[0-9]{6}$/.test(String(code ?? "").trim());
+}
+
+/** #1118：输入框里只留数字、最多 6 位（粘贴「123 456」也能用）。 */
+export function normalizePairCode(raw) {
+  return String(raw ?? "").replace(/[^0-9]/g, "").slice(0, 6);
+}
+
+/** #1118：确认框里「申请身份」那一行的文案键。 */
+export function pendingRoleKey(item) {
+  return item?.role === "viewer" ? "ui.pending_role_viewer" : "ui.pending_role_member";
+}
+
+/**
+ * #1118：`pairing.confirm` 的结果提示。允许后 daemon 最多等 8 秒手机的确认：
+ * 等到了 = 已加入；没等到（`verifying`）= 验证码已提交、还在等手机。
+ * 码不对走错误分支（`pair_code_wrong` → ui.err_pair_code_wrong），不在这里。
+ */
+export function pairConfirmToast(accept, reply, shownName) {
+  if (!accept) return { key: "ui.pair_denied", params: { name: shownName }, tone: "warning" };
+  if (reply?.verifying) return { key: "ui.pair_verifying", params: { name: shownName }, tone: "info" };
+  return { key: "ui.pair_allowed", params: { name: shownName }, tone: "success" };
 }

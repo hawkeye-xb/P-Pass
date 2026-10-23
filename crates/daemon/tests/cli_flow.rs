@@ -82,8 +82,8 @@ fn version_prints_crate_version_and_exits_zero() {
 ///
 /// 真要改文案，两边一起改，别只改一边。
 ///
-/// 为什么断言前缀而不是整行相等：版本号那半会被 `PPF_DAEMON_VERSION` /
-/// `PPF_BUILD_VERSION` 覆盖（这也正是桌面壳刻意不比对版本号的原因）。
+/// 为什么断言前缀而不是整行相等：版本号那半随 `PPF_BUILD_VERSION`（编译期）
+/// 变化（这也正是桌面壳刻意不比对版本号的原因）。
 /// 钉死整行会造出一个隔三差五自己红的判据；前缀才是真正的契约。
 #[test]
 fn version_prefix_is_the_desktop_probe_contract() {
@@ -101,6 +101,21 @@ fn version_prefix_is_the_desktop_probe_contract() {
          apps/desktop/src-tauri/src/lib.rs 的 DAEMON_VERSION_MARKER 依赖它。\
          实际输出:\n{stdout}"
     );
+}
+
+/// #1115：版本号只认编译期值——运行时环境变量覆盖不了。版本决定单实例交接谁胜，
+/// 能被环境变量抬高就等于任何同用户程序都能让常驻 daemon 退位。
+/// 反证：`daemon_version()` 恢复读 `PPF_DAEMON_VERSION` ⇒ 输出里出现 999，红。
+#[test]
+fn version_ignores_runtime_overrides() {
+    let out = daemon_bin()
+        .env("PPF_DAEMON_VERSION", "999.0.0")
+        .arg("--version")
+        .output()
+        .expect("spawn daemon --version");
+    assert!(out.status.success(), "status: {:?}", out.status);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(!stdout.contains("999"), "版本号被环境变量改掉了：{stdout}");
 }
 
 /// #1042：`--version --json` 是给桌面壳（#1045）与免 GUI 控制面（#749）用的
@@ -197,11 +212,11 @@ fn run_ephemeral_until_stdin_eof(
         }
     }
 
-    let dir = tempfile::tempdir().expect("tempdir");
+    // #1115：沙盒自建存储根，不接受 PPF_DATA_DIR。
     let child = daemon_bin()
         .arg("--ephemeral")
         .args(extra_args)
-        .env("PPF_DATA_DIR", dir.path())
+        .env_remove("PPF_DATA_DIR")
         .env("PPF_RELAY_URLS", "")
         .env("PPF_BIND_ADDR", "127.0.0.1:0")
         .env_remove("PPF_LOG_FILE")
@@ -264,6 +279,10 @@ fn run_ephemeral_until_stdin_eof(
         stdout.push('\n');
     }
     let stderr = stderr_reader.join().expect("stderr reader");
+    // #1115：沙盒目录由 daemon 自建在系统临时目录里，测试负责清掉。
+    if let Some(sb) = stdout.lines().find_map(|l| l.strip_prefix("SANDBOX: ")) {
+        let _ = std::fs::remove_dir_all(sb);
+    }
     (stdout, stderr, exited_after)
 }
 
@@ -335,10 +354,10 @@ fn pair_link_never_printed_when_stdout_is_not_a_terminal() {
         }
     }
 
-    let dir = tempfile::tempdir().expect("tempdir");
+    // #1115：沙盒自建存储根（stdout 的 SANDBOX: 行给出位置），不接受 PPF_DATA_DIR。
     let child = daemon_bin()
         .arg("--ephemeral")
-        .env("PPF_DATA_DIR", dir.path())
+        .env_remove("PPF_DATA_DIR")
         .env("PPF_RELAY_URLS", "")
         .env("PPF_BIND_ADDR", "127.0.0.1:0")
         .env_remove("PPF_LOG_FILE")
@@ -456,7 +475,13 @@ fn pair_link_never_printed_when_stdout_is_not_a_terminal() {
         }
     }
     let mut hits = Vec::new();
-    scan(dir.path(), &mut hits);
+    let sandbox = stdout
+        .lines()
+        .find_map(|l| l.strip_prefix("SANDBOX: "))
+        .map(std::path::PathBuf::from)
+        .expect("stdout 上应有 SANDBOX: 行");
+    scan(&sandbox, &mut hits);
+    let _ = std::fs::remove_dir_all(&sandbox);
     assert!(hits.is_empty(), "数据目录里的文件含配对链接: {hits:?}");
 }
 
@@ -485,11 +510,16 @@ fn daemon_captured_stderr(data_dir: &std::path::Path) -> Option<std::path::PathB
 fn desk58_early_error_lands_in_daemon_err_when_stderr_is_null() {
     use std::process::Stdio;
     let dir = tempfile::tempdir().expect("tempdir");
-    let Some(err_file) = daemon_captured_stderr(dir.path()) else {
+    // #1115：常驻 daemon 不认 PPF_DATA_DIR——平台数据目录经 LOCALAPPDATA 指进临时目录。
+    // 只有 Windows 会走到下面的断言（别的平台 stderr 由托管方接），那里的平台数据目录是
+    // %LOCALAPPDATA%\<identifier>（#1112）。
+    let platform_dir = dir.path().join("com.hawkeyexb.ppass.desktop");
+    let Some(err_file) = daemon_captured_stderr(&platform_dir) else {
         return; // 本平台 stderr 由托管方接，daemon 不负责。
     };
     let status = daemon_bin()
-        .env("PPF_DATA_DIR", dir.path())
+        .env("LOCALAPPDATA", dir.path())
+        .env("APPDATA", dir.path().join("roaming"))
         .env("PPF_LOG_FILE", dir.path())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -511,8 +541,12 @@ fn desk58_early_error_lands_in_daemon_err_when_stderr_is_null() {
 fn desk58_a_piped_stderr_is_left_alone() {
     use std::process::Stdio;
     let dir = tempfile::tempdir().expect("tempdir");
+    // #1115：平台数据目录经环境指进临时目录（常驻 daemon 不认 PPF_DATA_DIR），见上一条。
     let out = daemon_bin()
-        .env("PPF_DATA_DIR", dir.path())
+        .env("HOME", dir.path())
+        .env("LOCALAPPDATA", dir.path())
+        .env("APPDATA", dir.path().join("roaming"))
+        .env("XDG_DATA_HOME", dir.path().join("xdg"))
         .env("PPF_LOG_FILE", dir.path())
         .stdin(Stdio::null())
         .output()
@@ -520,7 +554,154 @@ fn desk58_a_piped_stderr_is_left_alone() {
     assert_eq!(out.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("PPF_LOG_FILE="), "stderr: {stderr}");
-    if let Some(f) = daemon_captured_stderr(dir.path()) {
+    if let Some(f) = daemon_captured_stderr(&dir.path().join("com.hawkeyexb.ppass.desktop")) {
         assert!(!f.exists(), "管道 stderr 被改接到了 {}", f.display());
     }
+}
+
+/// #1115：测试沙盒不接受任何路径输入——同时给出 `PPF_DATA_DIR` / `PPF_LOG_FILE` 就拒绝启动，
+/// 什么都不建、不碰钥匙串。反证：main.rs 去掉 forbidden_inputs 检查 ⇒ 进程照常启动（被 kill），红。
+#[test]
+fn sandbox_refuses_path_inputs() {
+    for var in ["PPF_DATA_DIR", "PPF_LOG_FILE"] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let out = daemon_bin()
+            .arg("--ephemeral")
+            .env(var, dir.path())
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("spawn daemon");
+        assert_eq!(out.status.code(), Some(2), "{var}: {out:?}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains(var), "{var}: stderr 应点名它：{stderr}");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            !stdout.contains("SANDBOX: "),
+            "拒绝启动时不该建沙盒：{stdout}"
+        );
+        assert!(
+            std::fs::read_dir(dir.path()).unwrap().next().is_none(),
+            "{var} 指的目录不许被写"
+        );
+    }
+}
+
+/// #1115 方案 A：没有安全存储的平台（Windows / Linux）上，平台目录里没有 config.toml ⇒ 常驻
+/// daemon 进未配置状态（不在平台目录开库、不占传输端口）；在令牌端点上写好库位置后以 75 退出，
+/// config.toml 由 daemon 写出。macOS 走签名 socket（只有签名的窗口程序能连），这里跳过。
+/// 反证：library_location 去掉「没有 config.toml ⇒ 未配置」⇒ 平台目录里不出现 ppf-unconfigured
+/// 令牌（daemon 直接开库），红。
+#[test]
+fn without_config_toml_the_resident_daemon_waits_for_the_library_then_restarts() {
+    use platform::PlatformAdapter as _;
+    use std::process::Stdio;
+    if !matches!(
+        platform::adapter().resident_ipc(),
+        platform::ResidentIpc::NamespacedWithToken
+    ) || platform::adapter().library_store().is_some()
+    {
+        eprintln!(
+            "跳过：本平台常驻 daemon 走签名 socket / 有安全存储（macOS），由 ipc_roles.rs 覆盖"
+        );
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    struct Kill(std::process::Child);
+    impl Drop for Kill {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut child = Kill(
+        daemon_bin()
+            .env("HOME", dir.path())
+            .env("LOCALAPPDATA", dir.path().join("local"))
+            .env("APPDATA", dir.path().join("roaming"))
+            .env("XDG_DATA_HOME", dir.path().join("xdg"))
+            .env_remove("PPF_DATA_DIR")
+            .env_remove("PPF_LOG_FILE")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn daemon"),
+    );
+    fn find(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+        for e in std::fs::read_dir(dir).ok()?.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                if let Some(hit) = find(&p, name) {
+                    return Some(hit);
+                }
+            } else if p.file_name().is_some_and(|n| n == name) {
+                return Some(p);
+            }
+        }
+        None
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let token_file = loop {
+        if let Some(t) = find(dir.path(), "ipc.token") {
+            if std::fs::read_to_string(&t).is_ok_and(|s| s.lines().count() >= 2) {
+                break t;
+            }
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "20 秒内没出现令牌文件"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    let raw = std::fs::read_to_string(&token_file).unwrap();
+    let mut lines = raw.lines();
+    assert_eq!(
+        lines.next(),
+        Some(daemon::ipc::UNCONFIGURED_SOCKET_NAME),
+        "没有 config.toml 时应进未配置状态"
+    );
+    let token_hex = lines.next().unwrap().trim().to_string();
+    let platform_dir = token_file.parent().unwrap().to_path_buf();
+    let lib = dir.path().join("Lib A");
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let resp = rt.block_on(async {
+        use interprocess::local_socket::tokio::prelude::*;
+        use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+        let endpoint = daemon::ipc::PeerEndpoint::Token {
+            socket_name: daemon::ipc::UNCONFIGURED_SOCKET_NAME.into(),
+            token_hex: token_hex.clone(),
+        };
+        let (conn, _) = endpoint.connect().await.expect("连未配置端点");
+        let (rx, mut tx) = conn.split();
+        let req = serde_json::json!({
+            "id": "x", "method": "config.set_library", "params": { "library": lib.to_str().unwrap() }
+        });
+        tx.write_all(format!("{token_hex}\n{req}\n").as_bytes())
+            .await
+            .unwrap();
+        let mut out = String::new();
+        BufReader::new(rx).read_line(&mut out).await.unwrap();
+        serde_json::from_str::<serde_json::Value>(out.trim()).unwrap()
+    });
+    assert_eq!(resp["ok"], true, "{resp}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let code = loop {
+        if let Some(status) = child.0.try_wait().unwrap() {
+            break status.code();
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "写好库位置后 10 秒内没退出"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    assert_eq!(code, Some(daemon::ipc::EXIT_CONFIGURED_RESTART));
+    assert!(lib.is_dir(), "首启要把库目录建出来");
+    let cfg = std::fs::read_to_string(platform_dir.join("config.toml")).expect("config.toml");
+    assert!(cfg.contains("Lib A"), "{cfg}");
+    assert!(
+        // 库索引在 <库>/.ppf/index.sqlite（main.rs）。
+        !platform_dir.join(".ppf").exists(),
+        "未配置状态不许在平台目录开库"
+    );
 }

@@ -32,7 +32,7 @@ public actor FlowEngine {
     /// #459：「照片库里查不到」此刻能不能当「原图被删了」。只有完整相册权限才是 true。**没有默认值**（失败关闭）。
     private let mediaAbsenceTrusted: @Sendable () -> Bool
     /// 当前配对代号；nil = 未配对。
-    private let pairingEpoch: @Sendable () -> String?
+    private let pairingId: @Sendable () -> String?
     private let logger: CoreLogger
     /// 墙钟（审计时间戳）。
     private let clock: @Sendable () -> Int64
@@ -41,7 +41,7 @@ public actor FlowEngine {
     /// 每轮结束后（审计 outbox 冲刷等）。
     private let afterCycle: @Sendable () async -> Void
     /// 桌面宣布了新的配对代号（同一台桌面重新配对）：持久化它。
-    private let onEpochAdvertised: @Sendable (String) -> Void
+    private let onPairingIdAdvertised: @Sendable (String) -> Void
     /// 视图变化的出口（UI 投影订阅它）。
     private let onView: @Sendable (EngineView) -> Void
 
@@ -90,12 +90,12 @@ public actor FlowEngine {
         conditions: @escaping @Sendable () -> Conditions,
         inScope: @escaping @Sendable (String) -> Bool,
         mediaAbsenceTrusted: @escaping @Sendable () -> Bool,
-        pairingEpoch: @escaping @Sendable () -> String?,
+        pairingId: @escaping @Sendable () -> String?,
         logger: CoreLogger,
         clock: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) },
         monotonic: @escaping @Sendable () -> Int64 = { Int64(ProcessInfo.processInfo.systemUptime * 1000) },
         afterCycle: @escaping @Sendable () async -> Void,
-        onEpochAdvertised: @escaping @Sendable (String) -> Void,
+        onPairingIdAdvertised: @escaping @Sendable (String) -> Void,
         onView: @escaping @Sendable (EngineView) -> Void = { _ in }
     ) {
         self.store = store
@@ -110,12 +110,12 @@ public actor FlowEngine {
         self.conditions = conditions
         self.inScope = inScope
         self.mediaAbsenceTrusted = mediaAbsenceTrusted
-        self.pairingEpoch = pairingEpoch
+        self.pairingId = pairingId
         self.logger = logger
         self.clock = clock
         self.monotonic = monotonic
         self.afterCycle = afterCycle
-        self.onEpochAdvertised = onEpochAdvertised
+        self.onPairingIdAdvertised = onPairingIdAdvertised
         self.onView = onView
         paused = control.paused()
         waitReason = control.waitReason()
@@ -357,7 +357,7 @@ public actor FlowEngine {
         let boundary = Set(snapshot.targets.map { MediaOrder.key($0.mediaId) })
         let inFlight = try store.currentInStates([.transferring]).filter { boundary.contains(MediaOrder.key($0.mediaId)) }
         let result = try store.cancelRemaining(snapshot.targets, audit: audit(AuditKinds.roundControlled, ["action": "cancel", "skipped": "\(snapshot.count)"]))
-        for order in inFlight { await delivery.discardPartial(orderId: order.id, pairingEpoch: order.pairingEpoch) }
+        for order in inFlight { await delivery.discardPartial(orderId: order.id, pairingId: order.pairingId) }
         log("cancel: \(result.written) photos skipped (\(result.ordersSkipped) orders, \(result.untouched) settled since the dialog)")
         setPausedFlag(false)
         setWait(nil)
@@ -542,7 +542,7 @@ public actor FlowEngine {
         let names = reasons.map(\.rawValue)
         setStatus(LoopStatus(phase: .checking))
         if control.paused() { return settle(nil) }
-        guard pairingEpoch() != nil else { return settle(.notPaired) }
+        guard pairingId() != nil else { return settle(.notPaired) }
 
         // ---- 入口：不持有执行租约，只读元数据 ----
         try await prepareCursors(reconcile: reconcile)
@@ -578,7 +578,7 @@ public actor FlowEngine {
             log("cycle \(names): protocol version mismatch (\(side.rawValue) outdated); no lease, no attempt counted")
             return settle(waitReasonOf(side))
         case let .reachable(advertised, health, _):
-            if let advertised, !advertised.isBlank, advertised != pairingEpoch() { onEpochAdvertised(advertised) }
+            if let advertised, !advertised.isBlank, advertised != pairingId() { onPairingIdAdvertised(advertised) }
             desktopHealth = health
             publish()
             // 契约 §7：桌面不健康 → 不申请租约，等待中（具体原因）。
@@ -702,13 +702,13 @@ public actor FlowEngine {
             if control.paused() { return nil }
             if let reason = waitReasonOf(conditions(), userPresent: round.userPresent) { return reason }
             if !lease.isHeld() { return .executionBlocked }
-            guard let epoch = pairingEpoch() else { return .notPaired }
+            guard let pairingId = pairingId() else { return .notPaired }
             guard let item = try await pickNext(round) else { return nil }
             if case let .existing(order, _) = item, !round.handled.insert(order.id).inserted {
                 log("order \(order.id) picked twice in one round; stopping to avoid a spin")
                 return nil
             }
-            switch try await process(item, epoch: epoch) {
+            switch try await process(item, pairingId: pairingId) {
             case .next: break
             case let .exit(reason): return reason
             }
@@ -852,10 +852,10 @@ public actor FlowEngine {
         if let s = p.scanTo { try store.advanceScan(s) }
     }
 
-    private func process(_ item: WorkItem, epoch: String) async throws -> StepResult {
+    private func process(_ item: WorkItem, pairingId: String) async throws -> StepResult {
         switch item {
-        case let .existing(order, _): return try await processExisting(order, epoch: epoch)
-        case let .fresh(snapshot, origin): return try await processFresh(snapshot, origin, epoch: epoch)
+        case let .existing(order, _): return try await processExisting(order, pairingId: pairingId)
+        case let .fresh(snapshot, origin): return try await processFresh(snapshot, origin, pairingId: pairingId)
         }
     }
 
@@ -891,7 +891,7 @@ public actor FlowEngine {
         return (nil, reason)
     }
 
-    private func processFresh(_ snapshot: MediaSnapshot, _ origin: Origin, epoch: String) async throws -> StepResult {
+    private func processFresh(_ snapshot: MediaSnapshot, _ origin: Origin, pairingId: String) async throws -> StepResult {
         let progress = progressOf(snapshot, origin)
         let details = try await media.lookup(snapshot.mediaId)
         try Task.checkCancellation()
@@ -905,7 +905,7 @@ public actor FlowEngine {
             // #958：只有短任务窗口：视频留给别的窗口。建一行待传输（不带 hash、不计次数）并推进游标——
             // 这样它不挡后面的照片，也不会被发现 / 扫描再取一遍；之后由「待传输」取件在有长窗口时处理。
             try store.insert(
-                NewOrder(mediaId: snapshot.mediaId, sourceVersion: version, bucketId: bucket, contentHash: nil, state: .pending, pairingEpoch: epoch),
+                NewOrder(mediaId: snapshot.mediaId, sourceVersion: version, bucketId: bucket, contentHash: nil, state: .pending, pairingId: pairingId),
                 advance: progress.advance, scanTo: progress.scanTo, audit: nil
             )
             roundVideosDeferred.insert(snapshot.mediaId)
@@ -916,14 +916,14 @@ public actor FlowEngine {
         switch imported {
         case nil:
             // 读不出来（两次）：记一次失败（有上限），游标照常推进，不在这张上打转。
-            let row = try store.insert(NewOrder(mediaId: snapshot.mediaId, sourceVersion: version, bucketId: bucket, contentHash: nil, state: .transferring, pairingEpoch: epoch))
+            let row = try store.insert(NewOrder(mediaId: snapshot.mediaId, sourceVersion: version, bucketId: bucket, contentHash: nil, state: .transferring, pairingId: pairingId))
             try fail(row, progress, failure)
             return .next
         case .sourceMissing:
             // 照片库还列着、文件读不到：记「源已删」（同版本即结局，不再算待办），游标推进。
             let record = itemAudit(AuditKinds.itemSourceMissing, snapshot.mediaId, ["mediaId": snapshot.mediaId])
             try store.insert(
-                NewOrder(mediaId: snapshot.mediaId, sourceVersion: version, bucketId: bucket, contentHash: nil, state: .skippedSourceMissing, pairingEpoch: epoch),
+                NewOrder(mediaId: snapshot.mediaId, sourceVersion: version, bucketId: bucket, contentHash: nil, state: .skippedSourceMissing, pairingId: pairingId),
                 advance: progress.advance, scanTo: progress.scanTo, audit: record
             )
             countOutcome(record)
@@ -944,16 +944,16 @@ public actor FlowEngine {
             // 字节数以导入时读到的为准（iOS 的 lookup 给不出，#1016）。
             let details = details.withSize(size)
             return try await releasingOnAbort(hash) {
-                let row = try self.store.insert(NewOrder(mediaId: snapshot.mediaId, sourceVersion: version, bucketId: bucket, contentHash: hash, state: .transferring, pairingEpoch: epoch))
+                let row = try self.store.insert(NewOrder(mediaId: snapshot.mediaId, sourceVersion: version, bucketId: bucket, contentHash: hash, state: .transferring, pairingId: pairingId))
                 self.bump()
-                return try await self.deliverAndCommit(row, hash: hash, details: details, progress: progress, epoch: epoch)
+                return try await self.deliverAndCommit(row, hash: hash, details: details, progress: progress, pairingId: pairingId)
             }
         }
     }
 
     /// 已有 order（遗留续传 / 对账补传）：开始前按原图、版本、范围重检；重新导入拿 hash 与行里记的比对，
     /// 通过后置为传输中。已有 order 提交时**不推进任何游标**。
-    private func processExisting(_ order: Order, epoch: String) async throws -> StepResult {
+    private func processExisting(_ order: Order, pairingId: String) async throws -> StepResult {
         let transferring = order.state == .transferring
         let details = try await media.lookup(order.mediaId)
         try Task.checkCancellation()
@@ -965,7 +965,7 @@ public actor FlowEngine {
         if !inScope(details.snapshot.bucketId) {
             // 在途的这张所在相册被移出范围：不续传，丢弃半截；它从待办里消失（范围是查询条件）。
             if transferring, try store.transition(order.id, expected: [.transferring], to: .pending) {
-                await delivery.discardPartial(orderId: order.id, pairingEpoch: epoch)
+                await delivery.discardPartial(orderId: order.id, pairingId: pairingId)
                 bump()
             }
             return .next
@@ -999,16 +999,16 @@ public actor FlowEngine {
                         self.importer.release(hash)
                         return .next
                     }
-                    let row = try self.store.insert(NewOrder(mediaId: order.mediaId, sourceVersion: order.sourceVersion, bucketId: order.bucketId, contentHash: hash, state: .transferring, pairingEpoch: epoch))
+                    let row = try self.store.insert(NewOrder(mediaId: order.mediaId, sourceVersion: order.sourceVersion, bucketId: order.bucketId, contentHash: hash, state: .transferring, pairingId: pairingId))
                     self.bump()
-                    return try await self.deliverAndCommit(row, hash: hash, details: details, progress: Progress(), epoch: epoch)
+                    return try await self.deliverAndCommit(row, hash: hash, details: details, progress: Progress(), pairingId: pairingId)
                 }
                 guard try self.store.transition(order.id, expected: OrderState.open, to: .transferring, contentHash: hash), var row = try self.store.get(order.id) else {
                     self.importer.release(hash)
                     return .next
                 }
                 row.contentHash = hash
-                return try await self.deliverAndCommit(row, hash: hash, details: details, progress: Progress(), epoch: epoch)
+                return try await self.deliverAndCommit(row, hash: hash, details: details, progress: Progress(), pairingId: pairingId)
             }
         }
     }
@@ -1030,7 +1030,7 @@ public actor FlowEngine {
         let settled = try store.transition(order.id, expected: OrderState.open, to: .skippedSourceMissing, countAttempt: false, contentHash: nil, advance: nil, scanTo: nil, audit: record)
         if settled {
             countOutcome(record)
-            if discard { await delivery.discardPartial(orderId: order.id, pairingEpoch: order.pairingEpoch) }
+            if discard { await delivery.discardPartial(orderId: order.id, pairingId: order.pairingId) }
             bump()
         }
         return settled
@@ -1039,12 +1039,12 @@ public actor FlowEngine {
     static func isVideo(_ details: MediaDetails) -> Bool { details.mimeType.lowercased().hasPrefix("video/") }
 
     /// #958：每张开始 / 结束各一行（hash 前缀、字节数、耗时），不写文件名。
-    private func deliverAndCommit(_ order: Order, hash: String, details: MediaDetails, progress: Progress, epoch: String) async throws -> StepResult {
+    private func deliverAndCommit(_ order: Order, hash: String, details: MediaDetails, progress: Progress, pairingId: String) async throws -> StepResult {
         let started = monotonic()
         let tag = "order \(order.id) hash=\(hash.prefix(8)) bytes=\(details.sizeBytes)"
         log("item start: \(tag)")
         do {
-            let result = try await deliverAndCommitBody(order, hash: hash, details: details, progress: progress, epoch: epoch)
+            let result = try await deliverAndCommitBody(order, hash: hash, details: details, progress: progress, pairingId: pairingId)
             let ended: String
             switch result {
             case .next: ended = "next"
@@ -1058,8 +1058,8 @@ public actor FlowEngine {
         }
     }
 
-    private func deliverAndCommitBody(_ order: Order, hash: String, details: MediaDetails, progress: Progress, epoch: String) async throws -> StepResult {
-        let request = DeliveryRequest(orderId: order.id, pairingEpoch: epoch, contentHash: hash, details: details)
+    private func deliverAndCommitBody(_ order: Order, hash: String, details: MediaDetails, progress: Progress, pairingId: String) async throws -> StepResult {
+        let request = DeliveryRequest(orderId: order.id, pairingId: pairingId, contentHash: hash, details: details)
         setStatus(LoopStatus(phase: .running, current: CurrentItem(orderId: order.id, fileName: details.fileName, bytesSent: 0, totalBytes: details.sizeBytes)))
         var outcome = try await deliverOnce(request)
         if case let .itemFailure(reason) = outcome {
@@ -1069,7 +1069,7 @@ public actor FlowEngine {
         }
         switch outcome {
         case let .confirmed(receipt):
-            let valid = receipt.queueSequence == order.id && receipt.pairingEpoch == epoch && (receipt.contentHash == nil || receipt.contentHash == hash)
+            let valid = receipt.queueSequence == order.id && receipt.pairingId == pairingId && (receipt.contentHash == nil || receipt.contentHash == hash)
             if !valid {
                 log("order \(order.id): receipt does not match the request; treating as item failure")
                 try fail(order, progress, "receipt_mismatch")
@@ -1093,7 +1093,7 @@ public actor FlowEngine {
             let record = itemAudit(AuditKinds.itemSourceMissing, order.mediaId, ["queueSequence": "\(order.id)"])
             if try store.transition(order.id, expected: [.transferring], to: .skippedSourceMissing, countAttempt: false, contentHash: nil, advance: progress.advance, scanTo: progress.scanTo, audit: record) {
                 countOutcome(record)
-                await delivery.discardPartial(orderId: order.id, pairingEpoch: epoch)
+                await delivery.discardPartial(orderId: order.id, pairingId: pairingId)
                 onSettled()
             }
             bump()
@@ -1201,12 +1201,12 @@ public actor FlowEngine {
             for order in page {
                 guard let hash = order.contentHash, missing.contains(hash), inScope(order.bucketId) else { continue }
                 if order.sourceMissing {
-                    let epochKey = pairingEpoch() ?? order.pairingEpoch
-                    try store.appendAuditOnce("unrecoverable:\(order.id):\(epochKey)", audit(AuditKinds.reconciliationResolved, ["disposition": "UNRECOVERABLE", "contentHash": hash]))
+                    let pairingIdKey = pairingId() ?? order.pairingId
+                    try store.appendAuditOnce("unrecoverable:\(order.id):\(pairingIdKey)", audit(AuditKinds.reconciliationResolved, ["disposition": "UNRECOVERABLE", "contentHash": hash]))
                     continue
                 }
                 let record = audit(AuditKinds.reconciliationResolved, ["disposition": "REUPLOAD", "contentHash": hash])
-                try store.insert(NewOrder(mediaId: order.mediaId, sourceVersion: order.sourceVersion, bucketId: order.bucketId, contentHash: hash, state: .pending, pairingEpoch: order.pairingEpoch), advance: nil, scanTo: nil, audit: record)
+                try store.insert(NewOrder(mediaId: order.mediaId, sourceVersion: order.sourceVersion, bucketId: order.bucketId, contentHash: hash, state: .pending, pairingId: order.pairingId), advance: nil, scanTo: nil, audit: record)
                 countOutcome(record)
                 requeued += 1
             }

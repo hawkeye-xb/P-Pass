@@ -81,6 +81,8 @@ fn generate(src_path: &Path, paths: &ThumbPaths) -> Result<()> {
     } else {
         decode::decode_image(src_path)?
     };
+    // 先合成白底再缩放：非预乘 alpha 直接缩放会把透明像素里的黑色带进边缘。
+    let img = flatten_on_white(img);
     write_thumb(&img, 256, &paths.t256)?;
     write_thumb(&img, 1024, &paths.t1024)?;
     Ok(())
@@ -128,6 +130,23 @@ fn first_frame(src: &Path) -> Result<DynamicImage> {
             Err(CodecError::FfmpegMissing)
         }
     }
+}
+
+/// JPEG 没有透明通道：带 alpha 的图（透明 PNG、ICO、贴纸）按行业做法合成到
+/// 白色背景上。直接丢掉 alpha 会露出透明像素里存的 RGB（多数是黑），照片墙
+/// 上就成了黑块。不透明的图原样返回。
+fn flatten_on_white(img: DynamicImage) -> DynamicImage {
+    if !img.color().has_alpha() {
+        return img;
+    }
+    let rgba = img.to_rgba8();
+    let flat = image::RgbImage::from_fn(rgba.width(), rgba.height(), |x, y| {
+        let [r, g, b, a] = rgba.get_pixel(x, y).0;
+        let a = u16::from(a);
+        let over = |c: u8| ((u16::from(c) * a + 255 * (255 - a) + 127) / 255) as u8;
+        image::Rgb([over(r), over(g), over(b)])
+    });
+    DynamicImage::ImageRgb8(flat)
 }
 
 /// Downscale to `size` longest edge (never upscale) and write atomically:

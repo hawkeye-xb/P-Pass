@@ -4,7 +4,7 @@
 #   tools/ios/test-transport-ffi.sh          # 本机与 CI（ci-ios.yml）同一条命令
 #
 # 1. tools/build-ios-transport-xcframework.sh → apps/ios/TransportFFITests/Generated/
-# 2. 起一个隔离的本机 daemon 给控制面测试连：fake HOME + 临时 PPF_DATA_DIR + 0.0.0.0:0
+# 2. 起一个隔离的本机 daemon 给控制面测试连：fake HOME + 测试沙盒（--ephemeral 自建临时库）+ 0.0.0.0:0
 #    （OS 分配端口，绝不用 41145）+ --ephemeral（本脚本退出 ⇒ stdin 关 ⇒ daemon 退出）。
 #    PPF_RELAY_URLS="" 等于不覆盖，daemon 仍用默认 n0 relay（日志里有 home relay）。
 #    IPv4 端口用 lsof 从 daemon 进程上读，PeerAddr token = base64url(JSON{id, addrs:[{Ip 127.0.0.1:端口}]})。
@@ -35,8 +35,8 @@ command -v jq >/dev/null || { echo "error: 缺 jq（brew install jq）" >&2; exi
 # PPASS_DAEMON_PROFILE=dev：CI 用 debug 构建省时间（这里只要一个能答 hello 的 daemon，
 # 与发行优化无关）；默认 release 与本机常用产物一致。
 case "${PPASS_DAEMON_PROFILE:-release}" in
-  release) RELEASE_FLAG=--release; DAEMON="$ROOT/target/release/daemon" ;;
-  dev) RELEASE_FLAG=; DAEMON="$ROOT/target/debug/daemon" ;;
+  release) RELEASE_FLAG=--release; DAEMON="${CARGO_TARGET_DIR:-$ROOT/target}/release/daemon" ;;
+  dev) RELEASE_FLAG=; DAEMON="${CARGO_TARGET_DIR:-$ROOT/target}/debug/daemon" ;;
   *) echo "error: PPASS_DAEMON_PROFILE 只能是 release / dev" >&2; exit 1 ;;
 esac
 echo "==> daemon（${PPASS_DAEMON_PROFILE:-release}，宿主机）"
@@ -67,10 +67,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$WORK/home" "$WORK/data"
+mkdir -p "$WORK/home"
 mkfifo "$WORK/stdin"
 HOME="$WORK/home" \
-  PPF_DATA_DIR="$WORK/data" \
   PPF_BIND_ADDR="0.0.0.0:0" \
   PPF_RELAY_URLS="" \
   "$DAEMON" --ephemeral <"$WORK/stdin" >"$WORK/daemon.out" 2>"$WORK/daemon.err" &
@@ -112,7 +111,9 @@ echo "daemon pid=${DAEMON_PID} node=${NODE_ID:0:8}… udp=127.0.0.1:${PORT}"
 # 配对串经 IPC pairing.start 现取（SEC-11：不落盘），给测试进程解析与配对。
 # shellcheck source=tools/ipc-lib.sh
 source "$ROOT/tools/ipc-lib.sh"
-ipc_pair_qr "$WORK/data/ipc.token"
+# #1115：--ephemeral 是测试沙盒，库目录由 daemon 自建（stdout 的 SANDBOX: 行），不收路径输入。
+ipc_sandbox_dir "$WORK/daemon.out"
+ipc_pair_qr "$SANDBOX_DIR/ipc.token"
 E2E="$WORK/e2e"
 mkdir -p "$E2E"
 # 挂起时长默认 5s（远大于测试里 1s 的 GC 周期）。实测冻 12s 时 xcodebuild 把测试进程当成卡死，
@@ -122,13 +123,17 @@ SUSPEND_SECS="${PPASS_SUSPEND_SECS:-5}"
 
 # 业主：把队列里每一条待确认请求点「允许」（这台 daemon 只给本次测试用）。
 owner_loop() {
-  local resp ids n body
+  local resp ids n body code
   while kill -0 "$DAEMON_PID" 2>/dev/null; do
     if resp=$(ipc pairing.pending 2>/dev/null); then
       ids=$(printf '%s' "$resp" | jq -r '.result.pending[]?.node_id // empty')
       for n in $ids; do
-        body=$(jq -cn --arg n "$n" '{accept: true, node_id: $n}')
-        if ipc pairing.confirm "$body" >/dev/null 2>&1; then echo "owner: 已允许 $n"; fi
+        # #1118：允许 = 输入手机显示的验证码。测试进程提交成功后把 `PAIR_CODE=<6 位> node=<手机 NodeId>`
+        # 写进 $E2E/pair_code.txt；这里按 node 取最后一行，没有码的请求不动。
+        code=$(cat "$E2E/pair_code.txt" 2>/dev/null | sed -n "s/.*PAIR_CODE=\([0-9]\{6\}\) node=$n.*/\1/p" | tail -1)
+        [ -n "$code" ] || continue
+        body=$(jq -cn --arg n "$n" --arg c "$code" '{accept: true, node_id: $n, code: $c}')
+        if ipc pairing.confirm "$body" >/dev/null 2>&1; then echo "owner: 已用验证码允许 $n"; fi
       done
     fi
     sleep 0.3
@@ -169,7 +174,7 @@ if ! TEST_RUNNER_PPASS_DAEMON_TOKEN="$PEER_TOKEN" \
   TEST_RUNNER_PPASS_REQUIRE_DAEMON=1 \
   TEST_RUNNER_PPASS_PAIR_LINK="$PAIR_QR" \
   TEST_RUNNER_PPASS_E2E_DIR="$E2E" \
-  TEST_RUNNER_PPASS_DAEMON_LIBRARY="$WORK/data" \
+  TEST_RUNNER_PPASS_DAEMON_LIBRARY="$SANDBOX_DIR" \
   TEST_RUNNER_PPASS_SUSPEND_SECS="$SUSPEND_SECS" \
   xcodebuild test \
     -scheme TransportFFITests \

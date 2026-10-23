@@ -30,18 +30,13 @@ import org.junit.Test
 class ARCH13DeliveryPortTest {
     private val hash = "ab".repeat(32)
     private val orderId = 1_790_000_000_123L
-    private val pairing = Pairing(daemonNodeId = "d", daemonAddrToken = "unused", storageDeviceName = "desk", pairingEpoch = "e1")
+    private val pairing = Pairing(daemonNodeId = "d", daemonAddrToken = "unused", storageDeviceName = "desk", pairingId = "e1")
 
     private inner class Harness(val test: TestScope) {
-        var status: () -> String = { """{"state":"in_progress","connected":false}""" }
+        var status: () -> TransferStatus = { TransferStatus.InProgress(connected = false, idleForMs = null) }
         val nativeEvents = mutableListOf<String>()
         var onRegister: () -> Unit = {}
         val native = object : NativeIrohBlobsProvider {
-            override fun register(hash: String, source: Any): String {
-                onRegister()
-                return "ticket"
-            }
-
             // #413：导入在准备阶段已做，端口只 serve（大文件的阻塞现在落在这一步之前的导入上）。
             override fun serve(hash: String): String {
                 onRegister()
@@ -56,7 +51,7 @@ class ARCH13DeliveryPortTest {
             override fun revoke(hash: String) {
                 nativeEvents += "revoke"
             }
-            override fun transferStatus(): String = status()
+            override fun transferStatus(): TransferStatus = status()
         }
         var offerReply = FlowStatusReply(state = "active")
         var statusReply: (Long) -> FlowStatusReply = { FlowStatusReply(state = "active") }
@@ -73,7 +68,7 @@ class ARCH13DeliveryPortTest {
             awaitCancellation()
         }
         val desktop = object : FlowReceiptClient {
-            override suspend fun currentPairingEpoch(): String = "e1"
+            override suspend fun currentPairingId(): String = "e1"
             override suspend fun offer(request: FlowFetchRequest): FlowStatusReply {
                 offers += request
                 return offerReply
@@ -87,7 +82,7 @@ class ARCH13DeliveryPortTest {
             }
         }
         val port = NativeFlowDeliveryPort(
-            bridge = IrohBlobsProviderBridge(native) { "fd" },
+            bridge = IrohBlobsProviderBridge(native),
             pairing = { pairing },
             desktopFor = { desktop },
             subscribe = { _, onConnected, onEvent -> subscribeImpl(subscribeCalls++, onConnected, onEvent) },
@@ -99,7 +94,7 @@ class ARCH13DeliveryPortTest {
         )
         val request = DeliveryRequest(
             orderId,
-            PairingEpoch("e1"),
+            PairingId("e1"),
             hash,
             MediaDetails(MediaSnapshot(9, "1:1", 7, 1, LEGACY_VOLUME), "content://media/external/file/9", "IMG_9.jpg", "image/jpeg", 1_000_000, 0),
         )
@@ -109,7 +104,7 @@ class ARCH13DeliveryPortTest {
         fun receipt() = FlowCompletionReceipt(
             queueSequence = orderId,
             receiptId = "r1",
-            pairingEpoch = "e1",
+            pairingId = "e1",
             leaseToken = leaseTokenFor(orderId),
             contentHash = hash,
         )
@@ -121,7 +116,7 @@ class ARCH13DeliveryPortTest {
                 kind,
                 buildJsonObject {
                     put("queue_sequence", JsonPrimitive(orderId))
-                    put("pairing_epoch", JsonPrimitive("e1"))
+                    put("pairing_id", JsonPrimitive("e1"))
                     put("lease_token", JsonPrimitive(leaseTokenFor(orderId)))
                     extra.forEach { (k, v) -> put(k, v) }
                 },
@@ -150,7 +145,7 @@ class ARCH13DeliveryPortTest {
         val h = Harness(this)
         h.status = {
             val t = testScheduler.currentTime
-            """{"state":"in_progress","connected":true,"idle_for_ms":0,"bytes_sent":${t / 100},"byte_idle_for_ms":0}"""
+            TransferStatus.InProgress(connected = true, idleForMs = 0, bytesSent = t / 100, byteIdleForMs = 0)
         }
         h.subscribeImpl = { n, onConnected, onEvent ->
             onConnected()
@@ -180,7 +175,7 @@ class ARCH13DeliveryPortTest {
     @Test
     fun `DIAG-B the subscription loop stops with the item and never reconnects in the background`() = runTest {
         val h = Harness(this)
-        h.status = { """{"state":"in_progress","connected":true,"idle_for_ms":0,"bytes_sent":1,"byte_idle_for_ms":0}""" }
+        h.status = { TransferStatus.InProgress(connected = true, idleForMs = 0, bytesSent = 1, byteIdleForMs = 0) }
         // 每条订阅只活 500ms 就被对端关掉——循环一直在重建。
         h.subscribeImpl = { _, onConnected, onEvent ->
             onConnected()
@@ -213,7 +208,7 @@ class ARCH13DeliveryPortTest {
         val startedAt = testScheduler.currentTime
         h.status = {
             val idle = testScheduler.currentTime - startedAt
-            """{"state":"in_progress","connected":true,"idle_for_ms":0,"bytes_sent":4096,"byte_idle_for_ms":$idle}"""
+            TransferStatus.InProgress(connected = true, idleForMs = 0, bytesSent = 4096, byteIdleForMs = idle)
         }
         val job = h.start()
         advanceTimeBy(179_000)
@@ -232,7 +227,7 @@ class ARCH13DeliveryPortTest {
         val h = Harness(this)
         h.status = {
             val t = testScheduler.currentTime
-            """{"state":"in_progress","connected":true,"idle_for_ms":0,"bytes_sent":${t / 1000},"byte_idle_for_ms":${t % 1000}}"""
+            TransferStatus.InProgress(connected = true, idleForMs = 0, bytesSent = t / 1000, byteIdleForMs = t % 1000)
         }
         val job = h.start()
         advanceTimeBy(10 * 60 * 1000L)
@@ -253,9 +248,9 @@ class ARCH13DeliveryPortTest {
         val h = Harness(this)
         h.status = {
             if (testScheduler.currentTime < 5_000) {
-                """{"state":"in_progress","connected":true,"idle_for_ms":0,"bytes_sent":700000,"byte_idle_for_ms":0}"""
+                TransferStatus.InProgress(connected = true, idleForMs = 0, bytesSent = 700000, byteIdleForMs = 0)
             } else {
-                """{"state":"completed","hash":"$hash"}"""
+                TransferStatus.Completed(hash)
             }
         }
         h.statusReply = { now -> if (now >= 30_000) FlowStatusReply(state = "completed", receipt = h.receipt()) else FlowStatusReply(state = "active") }
@@ -301,7 +296,7 @@ class ARCH13DeliveryPortTest {
             "something_new" to DeliveryOutcome.ItemFailure("pushed:something_new"),
         )) {
             val h = Harness(this)
-            h.status = { """{"state":"in_progress","connected":true,"idle_for_ms":0,"bytes_sent":1,"byte_idle_for_ms":0}""" }
+            h.status = { TransferStatus.InProgress(connected = true, idleForMs = 0, bytesSent = 1, byteIdleForMs = 0) }
             val job = h.start()
             runCurrent()
             h.pushEvent("flow.failed", mapOf("reason" to JsonPrimitive(code)))
@@ -333,10 +328,10 @@ class ARCH13DeliveryPortTest {
         assertEquals(1, h.suspends.size)
     }
 
-    // 暂停发生在大文件 register（阻塞导入）期间 → register 返回后不再 offer。
-    // 反证：删掉 register 之后的 ensureActive 检查 → offers = 1，红。
+    // 暂停发生在大文件 serve 期间 → serve 返回后不再 offer。
+    // 反证：删掉 serve 之后的 ensureActive 检查 → offers = 1，红。
     @Test
-    fun `a pause during a long register never reaches offer`() = runTest {
+    fun `a pause during a long serve never reaches offer`() = runTest {
         val h = Harness(this)
         lateinit var job: kotlinx.coroutines.Deferred<DeliveryOutcome>
         h.onRegister = { job.cancel() }
@@ -345,18 +340,6 @@ class ARCH13DeliveryPortTest {
         assertTrue(job.isCancelled)
         assertEquals(0, h.offers.size)
         assertTrue(h.nativeEvents.containsAll(listOf("stop:$orderId", "revoke")))
-    }
-
-    @Test
-    fun `transfer status decodes byte progress and tolerates older native builds`() {
-        assertEquals(
-            TransferStatus.InProgress(connected = true, idleForMs = 5, bytesSent = 4096, byteIdleForMs = 180_000),
-            parseTransferStatus("""{"state":"in_progress","connected":true,"idle_for_ms":5,"bytes_sent":4096,"byte_idle_for_ms":180000}"""),
-        )
-        assertEquals(
-            TransferStatus.InProgress(connected = false, idleForMs = null),
-            parseTransferStatus("""{"state":"in_progress","connected":false}"""),
-        )
     }
 
     @Test

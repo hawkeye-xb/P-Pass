@@ -5,8 +5,9 @@
 // 这里直接测状态机本身：步骤流转、config 写入失败不前进、钩子失败同样不前进、
 // 就绪轮询与 onDone。
 //
-// 反证：把 toStep2 里 `await afterLibrarySaved()` 挪到 catch 外面，「钩子抛错
-// 不得前进」必须红；把 finishSetup 的 onDone() 提到轮询前，「没就绪不 onDone」必须红。
+// 反证：把 toStep2 里 `await beforeStep2()` 挪到 catch 外面，「钩子抛错
+// 不得前进」必须红；把 finishSetup 的 onDone() 提到轮询前，「没就绪不 onDone」必须红；
+// toStep2 里调 write_config → 「前两步不写盘」红；finishSetup 先 start_daemon → 「先写后启」红。
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createWizardFlow, stepBar, WIZARD_STEP_COUNT } from "./wizardFlow.js";
@@ -72,40 +73,30 @@ describe("选库", () => {
 });
 
 describe("第 1 → 2 步", () => {
-  it("write_config 成功才前进，并带着当前库目录", async () => {
-    invokeMock.mockResolvedValue(null);
+  it("前两步不写盘：toStep2 / toStep3 / back 都不调任何命令", async () => {
     const { flow, view } = make();
     await flow.toStep2();
-    expect(invokeMock).toHaveBeenCalledWith("write_config", { libraryDir: "/Pictures/P-Pass Library" });
+    flow.toStep3();
+    flow.back();
+    flow.back();
+    await flow.toStep2();
+    expect(invokeMock).not.toHaveBeenCalled();
     expect(view).toMatchObject({ step: 2, busy: false, error: "" });
   });
 
-  it("write_config 失败：留在第 1 步，红条带 keyed 错误渲染出的人话", async () => {
-    invokeMock.mockRejectedValue(
-      JSON.stringify({ key: "ui.err_library_nested", params: {} }),
-    );
-    const { flow, view } = make();
-    await flow.toStep2();
-    expect(view.step).toBe(1);
-    expect(view.busy).toBe(false);
-    expect(view.error).toContain("新位置不能与当前照片库相同或互相包含");
-  });
-
-  it("钩子在 config 写成功之后、前进之前跑；钩子抛错同样不前进", async () => {
-    invokeMock.mockResolvedValue(null);
+  it("钩子在前进之前跑；钩子抛错不前进", async () => {
     const order = [];
-    invokeMock.mockImplementation(async (cmd) => void order.push(cmd));
     const { flow, view } = make({
-      afterLibrarySaved: async () => {
+      beforeStep2: async () => {
         order.push("hook");
       },
     });
     await flow.toStep2();
-    expect(order).toEqual(["write_config", "hook"]);
+    expect(order).toEqual(["hook"]);
     expect(view.step).toBe(2);
 
     const bad = make({
-      afterLibrarySaved: async () => {
+      beforeStep2: async () => {
         throw new Error("power_hint broke");
       },
     });
@@ -131,8 +122,9 @@ describe("第 3 步 finishSetup", () => {
   it("服务就绪 → onDone；轮询第一次答上 status 就停", async () => {
     let statusCalls = 0;
     invokeMock.mockImplementation(async (cmd) => {
+      if (cmd === "write_config") return null;
       if (cmd === "start_daemon") return "resident";
-      if (cmd === "daemon_call") {
+      if (cmd === "daemon_status") {
         statusCalls++;
         if (statusCalls < 3) throw new Error("not yet");
         return {};
@@ -148,8 +140,44 @@ describe("第 3 步 finishSetup", () => {
     expect(view).toMatchObject({ busy: false, error: "" });
   });
 
+  it("完成时先写库位置（带最终选择的目录）再启动服务", async () => {
+    const order = [];
+    invokeMock.mockImplementation(async (cmd, args) => {
+      order.push(cmd);
+      if (cmd === "write_config") {
+        expect(args).toEqual({ libraryDir: "/Users/me/PPassLib" });
+        return null;
+      }
+      if (cmd === "start_daemon") return "resident";
+      return {};
+    });
+    const { flow, onDone } = make();
+    flow.useDefault();
+    openMock.mockResolvedValue("/Users/me/PPassLib");
+    await flow.chooseFolder();
+    const p = flow.finishSetup();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await p;
+    expect(order.slice(0, 2)).toEqual(["write_config", "start_daemon"]);
+    expect(onDone).toHaveBeenCalledTimes(1);
+  });
+
+  it("写库位置被 daemon 拒绝：回第 1 步、红条带人话，常驻服务不启动", async () => {
+    invokeMock.mockRejectedValue(JSON.stringify({ key: "ui.err_library_nested", params: {} }));
+    const { flow, view, onDone } = make();
+    flow.toStep3();
+    await flow.finishSetup();
+    expect(invokeMock).not.toHaveBeenCalledWith("start_daemon");
+    expect(onDone).not.toHaveBeenCalled();
+    expect(view).toMatchObject({ step: 1, busy: false });
+    expect(view.error).toContain("新位置不能与当前照片库相同或互相包含");
+  });
+
   it("start_daemon 失败：不 onDone，红条带原因", async () => {
-    invokeMock.mockRejectedValue(new Error("register failed"));
+    invokeMock.mockImplementation(async (cmd) => {
+      if (cmd === "write_config") return null;
+      throw new Error("register failed");
+    });
     const { flow, view, onDone } = make();
     await flow.finishSetup();
     expect(onDone).not.toHaveBeenCalled();
@@ -159,8 +187,9 @@ describe("第 3 步 finishSetup", () => {
 
   it("10 秒都没就绪：不 onDone，红条带 daemon 的 stderr 原文", async () => {
     invokeMock.mockImplementation(async (cmd) => {
+      if (cmd === "write_config") return null;
       if (cmd === "start_daemon") return "resident";
-      if (cmd === "daemon_call") throw new Error("no daemon");
+      if (cmd === "daemon_status") throw new Error("no daemon");
       // #1044：壳把 daemon 的 stderr 拆成 { key, detail }（没认出原因时 key 为空）。
       if (cmd === "daemon_startup_error") return { key: null, detail: "Error: address already in use" };
       throw new Error(`未预期：${cmd}`);
@@ -171,6 +200,6 @@ describe("第 3 步 finishSetup", () => {
     await p;
     expect(onDone).not.toHaveBeenCalled();
     expect(view.error).toContain("Error: address already in use");
-    expect(invokeMock.mock.calls.filter(([c]) => c === "daemon_call")).toHaveLength(20);
+    expect(invokeMock.mock.calls.filter(([c]) => c === "daemon_status")).toHaveLength(20);
   });
 });

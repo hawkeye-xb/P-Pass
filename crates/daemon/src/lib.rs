@@ -2,6 +2,7 @@
 //!
 //! No `unwrap`/`expect` allowed in production code (CI-enforced).
 
+pub mod admission;
 pub mod audit_projection;
 pub mod audit_route;
 pub mod authz;
@@ -16,19 +17,25 @@ pub mod diag_bundle;
 pub mod download;
 pub mod events;
 pub mod flow_delivery;
+pub mod frame_limits;
+pub mod identity;
 pub mod inbox;
 pub mod ipc;
+pub mod library_location;
 pub mod log_guard;
 pub mod low_space;
 pub mod pairing;
+pub mod pairing_store;
 pub mod presence;
 pub mod query;
 pub mod reconcile;
 pub mod redact;
 pub mod router;
+pub mod sandbox;
 pub mod stats;
 pub mod subscriptions;
 pub mod thumb_pregen;
+pub mod unpair;
 pub mod watcher;
 
 /// #1047：收到停止信号后的收尾总死线。短于 Docker 的 10s SIGKILL 宽限。

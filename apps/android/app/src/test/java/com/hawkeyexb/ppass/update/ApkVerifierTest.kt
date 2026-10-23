@@ -67,15 +67,16 @@ class ApkVerifierTest {
     }
 
     @Test
-    fun blankShaSkipsTransportGateButSignatureStillApplies() {
-        // 旧工具产出的 manifest 没有 sha256 字段：传输门豁免，真实性门不豁免。
-        assertEquals(ApkVerifier.Result.Ok, verify(writeApk(), "", testSig))
+    fun blankShaIsHardFailure() {
+        // #1121：sha256 必填。反证：恢复「空 sha256 跳过传输门」——签名有效的包会返回 Ok，红。
+        assertEquals(ApkVerifier.Result.NoSha256, verify(writeApk(), "", testSig))
+        assertEquals(ApkVerifier.Result.NoSha256, verify(writeApk(), "  ", testSig))
     }
 
     @Test
     fun blankSignatureIsHardFailure() {
         assertEquals(ApkVerifier.Result.NoSignature, verify(writeApk(), apkSha256, ""))
-        assertEquals(ApkVerifier.Result.NoSignature, verify(writeApk(), "", "   "))
+        assertEquals(ApkVerifier.Result.NoSignature, verify(writeApk(), apkSha256, "   "))
     }
 
     @Test
@@ -86,10 +87,12 @@ class ApkVerifierTest {
     }
 
     @Test
-    fun tamperedBytesWithoutShaFieldFailAtSignature() {
-        // 没有 sha256 字段时，minisign 是唯一的门——必须拦得住（反证）。
+    fun tamperedBytesWithMatchingShaFailAtSignature() {
+        // 清单里的 sha256 也被换成篡改后字节的值（攻击者能改清单）：传输门过了，
+        // minisign 是最后一道门——必须拦得住（反证）。
         val tampered = apkBytes.copyOf().apply { this[0] = (this[0] + 1).toByte() }
-        val r = verify(writeApk(tampered), "", testSig)
+        val file = writeApk(tampered)
+        val r = verify(file, ApkVerifier.sha256Hex(file), testSig)
         assertTrue("$r", r is ApkVerifier.Result.SignatureInvalid)
         assertEquals(
             MinisignVerifier.Result.Invalid,

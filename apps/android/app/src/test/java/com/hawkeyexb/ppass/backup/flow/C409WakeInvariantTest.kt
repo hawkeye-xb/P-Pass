@@ -102,7 +102,7 @@ class C409WakeInvariantTest {
         val rig = Rig(this)
         rig.photo(1, generation = 1)
         when (reason) {
-            WaitReason.NOT_PAIRED -> rig.epoch = null
+            WaitReason.NOT_PAIRED -> rig.pid = null
             WaitReason.DISABLED -> rig.conditions = Conditions(autoBackupEnabled = false)
             WaitReason.WIFI -> rig.conditions = Conditions(wifiOnly = true, onUnmetered = false)
             WaitReason.BATTERY -> rig.conditions = Conditions(batteryLow = true)
@@ -111,9 +111,9 @@ class C409WakeInvariantTest {
                 rig.foreground.refusal = unexplainedRefusal
             }
             WaitReason.DESKTOP_UNREACHABLE -> rig.probeResult = ProbeResult.Unreachable
-            WaitReason.DESKTOP_STORAGE_FULL -> rig.probeResult = ProbeResult.Reachable("e1", DesktopHealth(freeBytes = 0L, libraryWritable = false))
-            WaitReason.DESKTOP_LIBRARY_UNAVAILABLE -> rig.probeResult = ProbeResult.Reachable("e1", DesktopHealth(freeBytes = null, libraryWritable = false))
-            WaitReason.DESKTOP_STORAGE_ERROR -> rig.probeResult = ProbeResult.Reachable("e1", DesktopHealth(freeBytes = null, indexOk = false))
+            WaitReason.DESKTOP_STORAGE_FULL -> rig.probeResult = ProbeResult.Reachable(DesktopHealth(freeBytes = 0L, libraryWritable = false))
+            WaitReason.DESKTOP_LIBRARY_UNAVAILABLE -> rig.probeResult = ProbeResult.Reachable(DesktopHealth(freeBytes = null, libraryWritable = false))
+            WaitReason.DESKTOP_STORAGE_ERROR -> rig.probeResult = ProbeResult.Reachable(DesktopHealth(freeBytes = null, indexOk = false))
             WaitReason.UNEXPECTED_ERROR -> rig.probeHook = { throw IllegalStateException("unclassified failure in the cycle") }
             WaitReason.DESKTOP_INTERNAL -> rig.delivery.script += { DeliveryOutcome.PeerFailure(PeerFailureKind.DESKTOP_INTERNAL, "internal") }
             WaitReason.PHONE_OUTDATED -> rig.probeResult = ProbeResult.NeedsUpdate(com.hawkeyexb.ppass.proto.OutdatedSide.PHONE)
@@ -254,7 +254,7 @@ class C409WakeInvariantTest {
     fun `an unhealthy desktop registers the probe ladder and the next probe resumes once it recovers`() = runTest {
         val rig = Rig(this)
         rig.photo(1, generation = 1)
-        rig.probeResult = ProbeResult.Reachable("e1", DesktopHealth(freeBytes = null, libraryWritable = false))
+        rig.probeResult = ProbeResult.Reachable(DesktopHealth(freeBytes = null, libraryWritable = false))
         rig.trigger()
         assertEquals(WaitReason.DESKTOP_LIBRARY_UNAVAILABLE, rig.control.wait)
         assertEquals(GlobalState.WAITING, rig.engine.view.value.state)
@@ -267,7 +267,7 @@ class C409WakeInvariantTest {
         assertEquals(WaitReason.DESKTOP_LIBRARY_UNAVAILABLE, rig.control.wait)
         assertEquals(0, rig.scheduler.probesCancelled)
 
-        rig.probeResult = ProbeResult.Reachable("e1", DesktopHealth(freeBytes = 100L * 1024 * 1024 * 1024))
+        rig.probeResult = ProbeResult.Reachable(DesktopHealth(freeBytes = 100L * 1024 * 1024 * 1024))
         rig.trigger(TriggerReason.UNREACHABLE_PROBE)
         assertEquals(OrderState.CONFIRMED, rig.state(1))
         assertNull("等待原因清掉 = 提示消失", rig.control.wait)
@@ -296,7 +296,7 @@ class C409WakeInvariantTest {
     fun `in the foreground the heartbeat re-probes an unhealthy desktop and resumes once it recovers`() = runTest {
         val rig = Rig(this)
         rig.photo(1, generation = 1)
-        rig.probeResult = ProbeResult.Reachable("e1", DesktopHealth(freeBytes = 0L, libraryWritable = false))
+        rig.probeResult = ProbeResult.Reachable(DesktopHealth(freeBytes = 0L, libraryWritable = false))
         rig.trigger()
         assertEquals(WaitReason.DESKTOP_STORAGE_FULL, rig.control.wait)
         val probesAtStart = rig.probes
@@ -310,7 +310,7 @@ class C409WakeInvariantTest {
         assertEquals(WaitReason.DESKTOP_STORAGE_FULL, rig.control.wait)
         assertEquals(0, rig.foreground.startForegroundServiceCalls)
 
-        rig.probeResult = ProbeResult.Reachable("e1", DesktopHealth(freeBytes = 100L * 1024 * 1024 * 1024))
+        rig.probeResult = ProbeResult.Reachable(DesktopHealth(freeBytes = 100L * 1024 * 1024 * 1024))
         advanceTimeBy(30_000L)
         rig.engine.onDesktopReachable()
         rig.settle()

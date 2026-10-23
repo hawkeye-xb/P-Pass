@@ -126,7 +126,7 @@ pub fn classify_peer_failure(
 pub enum DeliveryError {
     /// #1070: the request's pairing epoch is not the current one.
     #[error("request does not carry the current pairing epoch")]
-    EpochMismatch,
+    PairingMismatch,
     /// #1070: no grant matches this exact tuple and can still advance.
     #[error("no grant matches this exact tuple and can still advance")]
     GrantNotFound,
@@ -180,7 +180,7 @@ impl DeliveryError {
     /// (filesystem, blob store, index) with different fix-it implications.
     fn detail_code(&self) -> &'static str {
         match self {
-            DeliveryError::EpochMismatch => "epoch_mismatch",
+            DeliveryError::PairingMismatch => "pairing_mismatch",
             DeliveryError::GrantNotFound => "grant_not_found",
             DeliveryError::GrantConflict => "grant_conflict",
             DeliveryError::Inconsistent(_) => "inconsistent_state",
@@ -208,7 +208,7 @@ impl DeliveryError {
             DeliveryError::InsufficientSpace { .. } => Reason::StorageFull,
             DeliveryError::LibraryUnavailable(_) => Reason::LibraryUnavailable,
             DeliveryError::Storage(_) => Reason::StorageFailed,
-            DeliveryError::EpochMismatch => Reason::EpochMismatch,
+            DeliveryError::PairingMismatch => Reason::PairingMismatch,
             DeliveryError::GrantNotFound => Reason::GrantNotFound,
             DeliveryError::GrantConflict => Reason::GrantConflict,
             DeliveryError::Cancelled => Reason::Cancelled,
@@ -282,6 +282,15 @@ impl FlowPathRegistry {
         }
         current.status = status;
         true
+    }
+
+    /// #1117：配对记录被删——不论哪一项，这台设备的路径登记都清掉。
+    pub fn clear_peer(&self, peer: NodeId) -> bool {
+        self.entries
+            .lock()
+            .expect("flow path registry lock")
+            .remove(&peer.0)
+            .is_some()
     }
 
     /// A late old request cannot remove a newer item's route: both lease and
@@ -558,6 +567,13 @@ impl FlowTaskRegistry {
     }
 }
 
+/// #1126: see [`FlowDelivery::provider_endpoints`].
+type ProviderEndpoints = Arc<Mutex<HashMap<[u8; 32], Vec<NodeId>>>>;
+
+/// #1126: how many provider endpoints to remember per phone (it rebinds on network trouble and
+/// after parking; older ones are long closed).
+const PROVIDER_ENDPOINTS_PER_PEER: usize = 4;
+
 /// Adapter from a current flow item to the native iroh-blobs receiver.
 #[derive(Clone)]
 pub struct FlowDelivery {
@@ -579,6 +595,10 @@ pub struct FlowDelivery {
     /// still materializing that same fetch. One lock per paired phone prevents
     /// the retry from deleting or moving the first fetch's staging path.
     fetch_locks: FetchLocks,
+    /// #1126: the provider endpoints each paired phone's fetches dialled (a phone's upload
+    /// provider runs its own endpoint identity, not the phone's control-plane NodeId). Removing
+    /// the phone closes these too, so its provider hears the 410. A few most recent per phone.
+    provider_endpoints: ProviderEndpoints,
     /// NET-06: process-local registry of the background native-fetch task
     /// per exact tuple, so `suspend`/`cancel_by_tuple` can interrupt it and
     /// `status` can tell "still working" from "stopped".
@@ -645,6 +665,7 @@ impl FlowDelivery {
             paths: FlowPathRegistry::default(),
             events: None,
             fetch_locks: Arc::default(),
+            provider_endpoints: Arc::default(),
             tasks: FlowTaskRegistry::default(),
             subscriptions: None,
             awake: AwakeHold::noop(),
@@ -1134,7 +1155,7 @@ impl FlowDelivery {
             serde_json::json!({
                 "node_id": peer.to_string(),
                 "queue_sequence": grant.queue_sequence,
-                "pairing_epoch": grant.pairing_epoch,
+                "pairing_id": grant.pairing_id,
                 "lease_token": grant.lease_token,
                 "receipt": receipt,
             }),
@@ -1162,7 +1183,7 @@ impl FlowDelivery {
             serde_json::to_value(proto::FlowFailedPush {
                 node_id: peer.to_string(),
                 queue_sequence: grant.queue_sequence,
-                pairing_epoch: grant.pairing_epoch.clone(),
+                pairing_id: grant.pairing_id.clone(),
                 lease_token: grant.lease_token.clone(),
                 reason: error.wire_code(),
             })
@@ -1184,6 +1205,7 @@ impl FlowDelivery {
         let item_started = std::time::Instant::now();
         let hash = array32(&grant.content_hash).expect("validated by checked_request");
         let provider = self.provider_for(grant)?;
+        self.note_provider_endpoint(peer, provider);
 
         // The visible path is scoped to this exact strict item and cleared by
         // its guard on every terminal branch. Start as unknown before opening
@@ -1329,15 +1351,11 @@ impl FlowDelivery {
         else {
             return Ok(refused(SupersedeRefusal::BadRequest));
         };
-        let epoch = self
-            .db
-            .pairing_epoch(&peer.0)
-            .await
-            .map_err(storage_error)?;
-        if request.pairing_epoch.is_empty()
-            || epoch.as_deref() != Some(request.pairing_epoch.as_str())
+        // #1117：只认这台设备当前配对记录的 id（内存副本）。
+        let current = self.db.active_pairing(&peer.0).map(|p| p.id);
+        if request.pairing_id.is_empty() || current.as_deref() != Some(request.pairing_id.as_str())
         {
-            return Ok(refused(SupersedeRefusal::EpochMismatch));
+            return Ok(refused(SupersedeRefusal::PairingMismatch));
         }
         let Ok((provider, ticket_hash)) = self.blobs.register_blob_ticket(&request.provider) else {
             return Ok(refused(SupersedeRefusal::BadRequest));
@@ -1446,7 +1464,7 @@ impl FlowDelivery {
 
     /// NET-06: cancel by tuple identity alone — same lookup path as
     /// `status`/`suspend` (`tuple_grant`, which needs only queue_sequence +
-    /// pairing_epoch + lease_token). Reuses the daemon's own stored
+    /// pairing_id + lease_token). Reuses the daemon's own stored
     /// content_hash/provider instead of requiring the caller to supply
     /// them, so a phone that already discarded a failed item's one-shot
     /// provider ticket can still cancel the daemon's matching grant.
@@ -1602,7 +1620,7 @@ impl FlowDelivery {
     }
 
     /// Looks up the exact grant a [`FlowTupleRef`] names, or `None` if
-    /// no grant exists for this (peer, pairing_epoch, queue_sequence) or if
+    /// no grant exists for this (peer, pairing_id, queue_sequence) or if
     /// the stored lease_token no longer matches (a newer offer has already
     /// superseded this exact lease — from the caller's perspective, this
     /// tuple identity is gone).
@@ -1613,7 +1631,7 @@ impl FlowDelivery {
     ) -> Result<Option<FlowGrant>, DeliveryError> {
         let Some(stored) = self
             .db
-            .flow_grant(&peer.0, &tuple.pairing_epoch, tuple.queue_sequence as i64)
+            .flow_grant(&peer.0, &tuple.pairing_id, tuple.queue_sequence as i64)
             .await
             .map_err(storage_error)?
         else {
@@ -1631,7 +1649,7 @@ impl FlowDelivery {
         request: &FlowFetchRequest,
     ) -> Result<FlowGrant, DeliveryError> {
         if request.queue_sequence > i64::MAX as u64
-            || request.pairing_epoch.is_empty()
+            || request.pairing_id.is_empty()
             || request.lease_token.is_empty()
             || request.file_name.is_empty()
             || request.media_type.is_empty()
@@ -1644,18 +1662,14 @@ impl FlowDelivery {
         let hash = parse_hash(&request.content_hash).ok_or_else(|| {
             DeliveryError::InvalidRequest("content_hash must be 64 hex characters".into())
         })?;
-        let epoch = self
-            .db
-            .pairing_epoch(&peer.0)
-            .await
-            .map_err(storage_error)?;
-        if epoch.as_deref() != Some(request.pairing_epoch.as_str()) {
-            return Err(DeliveryError::EpochMismatch);
+        let current = self.db.active_pairing(&peer.0).map(|p| p.id);
+        if current.as_deref() != Some(request.pairing_id.as_str()) {
+            return Err(DeliveryError::PairingMismatch);
         }
         Ok(FlowGrant {
             node_id: peer.0.to_vec(),
             queue_sequence: request.queue_sequence as i64,
-            pairing_epoch: request.pairing_epoch.clone(),
+            pairing_id: request.pairing_id.clone(),
             lease_token: request.lease_token.clone(),
             content_hash: hash.to_vec(),
             file_name: request.file_name.clone(),
@@ -1669,7 +1683,7 @@ impl FlowDelivery {
     async fn matching_grant(&self, grant: &FlowGrant) -> Result<FlowGrant, DeliveryError> {
         let Some(stored) = self
             .db
-            .flow_grant(&grant.node_id, &grant.pairing_epoch, grant.queue_sequence)
+            .flow_grant(&grant.node_id, &grant.pairing_id, grant.queue_sequence)
             .await
             .map_err(storage_error)?
         else {
@@ -1678,7 +1692,7 @@ impl FlowDelivery {
         // #1076: identity is the tuple. `provider` only says where the bytes
         // come from — a re-offer may replace it while a fetch runs — so it is
         // never compared. The content itself is pinned by `content_hash`.
-        if stored.pairing_epoch != grant.pairing_epoch
+        if stored.pairing_id != grant.pairing_id
             || stored.lease_token != grant.lease_token
             || stored.content_hash != grant.content_hash
         {
@@ -1713,18 +1727,14 @@ impl FlowDelivery {
         Ok(provider)
     }
 
-    /// #563: [`Self::require_active`] plus "the device is still paired, not
-    /// revoked, and still on this grant's pairing epoch". A grant whose
-    /// device lost authorization is cancelled here, so it leaves the GC
-    /// protection set exactly as a `flow.cancel_tuple` would.
+    /// #563: [`Self::require_active`] plus "the device still holds this
+    /// grant's pairing record". #1117: a deleted pairing record already took
+    /// its grants with it (cascade), so `require_active` fails first; the
+    /// check below covers a record replaced in between.
     async fn require_authorized(&self, grant: &FlowGrant) -> Result<(), DeliveryError> {
         self.require_active(grant).await?;
-        let epoch = self
-            .db
-            .pairing_epoch(&grant.node_id)
-            .await
-            .map_err(storage_error)?;
-        if epoch.as_deref() == Some(grant.pairing_epoch.as_str()) {
+        let current = self.db.active_pairing(&grant.node_id).map(|p| p.id);
+        if current.as_deref() == Some(grant.pairing_id.as_str()) {
             return Ok(());
         }
         let _ = self
@@ -1739,34 +1749,49 @@ impl FlowDelivery {
         Err(DeliveryError::Cancelled)
     }
 
-    /// #563: the owner removed `peer` (`device.revoke`). Cancel every grant
-    /// still active for it (any pairing epoch) — durable state first, as in
-    /// [`Self::cancel`], so a racing `status` poll cannot respawn the fetch —
-    /// then interrupt every running fetch task for it. Returns how many
-    /// grants were cancelled and how many tasks were interrupted.
-    pub async fn revoke_peer(&self, peer: NodeId) -> Result<(usize, usize), DeliveryError> {
-        let cancelled = self
-            .db
-            .cancel_active_flow_grants_for_node(&peer.0)
-            .await
-            .map_err(storage_error)?;
+    /// #1117 / #563：`peer` 的配对记录已被删除（`crate::unpair` 唯一入口调用）。
+    /// 它的交付记录已随配对记录级联删除；这里收掉内存态：中断它的全部在途拉取
+    /// 并等其退出（在途的那张不会进照片库），清掉它的传输路径登记与拉取锁。
+    /// 返回中断了几个任务。
+    /// #1126: remember that [peer]'s fetch dials [provider].
+    fn note_provider_endpoint(&self, peer: NodeId, provider: NodeId) {
+        let mut map = self
+            .provider_endpoints
+            .lock()
+            .expect("flow provider endpoints lock");
+        let seen = map.entry(peer.0).or_default();
+        seen.retain(|p| *p != provider);
+        seen.push(provider);
+        if seen.len() > PROVIDER_ENDPOINTS_PER_PEER {
+            seen.remove(0);
+        }
+    }
+
+    /// #1126: the provider endpoints [peer]'s fetches dialled, forgotten as they are handed out
+    /// (the unpair path closes their connections).
+    pub fn take_provider_endpoints(&self, peer: NodeId) -> Vec<NodeId> {
+        self.provider_endpoints
+            .lock()
+            .expect("flow provider endpoints lock")
+            .remove(&peer.0)
+            .unwrap_or_default()
+    }
+
+    pub async fn release_peer(&self, peer: NodeId) -> usize {
         let tasks = self.tasks.interrupt_peer(peer);
         let interrupted = tasks.count();
         tasks.exited().await;
-        let mut path_cleared = false;
-        for grant in &cancelled {
-            path_cleared |=
-                self.paths
-                    .clear_if_current(peer, grant.queue_sequence, &grant.lease_token);
-        }
-        if path_cleared {
+        if self.paths.clear_peer(peer) {
             emit_device_changed(self.events.as_ref());
         }
+        self.fetch_locks
+            .lock()
+            .expect("flow fetch lock registry")
+            .remove(&peer.0);
         tracing::info!(
-            "#563: device revoked, cancelled {} flow grant(s), interrupted {interrupted} fetch task(s) peer={peer:?}",
-            cancelled.len()
+            "#1117: pairing removed, interrupted {interrupted} fetch task(s) peer={peer:?}"
         );
-        Ok((cancelled.len(), interrupted))
+        interrupted
     }
 
     async fn require_active(&self, grant: &FlowGrant) -> Result<(), DeliveryError> {
@@ -1783,7 +1808,7 @@ impl FlowDelivery {
     ) -> Result<FlowCompletionReceipt, DeliveryError> {
         let Some(receipt) = self
             .db
-            .flow_receipt(&grant.node_id, &grant.pairing_epoch, grant.queue_sequence)
+            .flow_receipt(&grant.node_id, &grant.pairing_id, grant.queue_sequence)
             .await
             .map_err(storage_error)?
         else {
@@ -1791,7 +1816,7 @@ impl FlowDelivery {
                 "completed grant has no receipt",
             ));
         };
-        if receipt.pairing_epoch != grant.pairing_epoch
+        if receipt.pairing_id != grant.pairing_id
             || receipt.lease_token != grant.lease_token
             || receipt.content_hash != grant.content_hash
         {
@@ -1853,7 +1878,7 @@ impl FlowDelivery {
 fn resume_request(grant: &FlowGrant) -> FlowFetchRequest {
     FlowFetchRequest {
         queue_sequence: grant.queue_sequence as u64,
-        pairing_epoch: grant.pairing_epoch.clone(),
+        pairing_id: grant.pairing_id.clone(),
         lease_token: grant.lease_token.clone(),
         content_hash: hex::encode(&grant.content_hash),
         file_name: grant.file_name.clone(),
@@ -1869,7 +1894,7 @@ fn receipt_from(grant: &FlowGrant, receipt_id: String) -> FlowCompletionReceipt 
     FlowCompletionReceipt {
         queue_sequence: grant.queue_sequence as u64,
         receipt_id,
-        pairing_epoch: grant.pairing_epoch.clone(),
+        pairing_id: grant.pairing_id.clone(),
         lease_token: grant.lease_token.clone(),
         content_hash: hex::encode(&grant.content_hash),
     }
@@ -2109,7 +2134,7 @@ mod tests {
     #[test]
     fn delivery_errors_map_to_registered_reasons() {
         let cases = [
-            (DeliveryError::EpochMismatch, Reason::EpochMismatch),
+            (DeliveryError::PairingMismatch, Reason::PairingMismatch),
             (DeliveryError::GrantNotFound, Reason::GrantNotFound),
             (DeliveryError::GrantConflict, Reason::GrantConflict),
             (DeliveryError::Cancelled, Reason::Cancelled),

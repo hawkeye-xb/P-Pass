@@ -24,14 +24,6 @@ pub enum Cli {
     Version,
     /// #1042：`--version --json`——机读版本（契约见 [`version_json`]）。
     VersionJson,
-    /// #1042：`config init --library <dir>`——首启写平台 config.toml。
-    ConfigInit {
-        library: String,
-    },
-    /// #1042：`config set-library <dir>`——换库（重启后台服务后生效）。
-    ConfigSetLibrary {
-        library: String,
-    },
     /// #1042：`diag export --out <zip> [--app-version <v>]`——组装并脱敏诊断包。
     DiagExport {
         out: String,
@@ -56,11 +48,6 @@ P-Pass 存储端 daemon
   --help       显示本帮助并退出（不启动任何 daemon 机制）
 
 子命令（一次性短进程：不启动服务、不占端口，执行完即退出）:
-  config init --library <dir>
-               首启：建库目录并写平台 config.toml（整份模板）
-  config set-library <dir>
-               换库：校验（存在/可写/不嵌套）后只改 data_dir 一行；
-               重启后台服务后生效
   diag export --out <zip> [--app-version <v>]
                组装并脱敏诊断包，写到 <zip>（后台服务不在线也能导出）
 
@@ -118,14 +105,12 @@ fn parse_subcommand(args: &[String]) -> Result<Cli, String> {
     }
     let rest: Vec<&str> = args.iter().map(String::as_str).collect();
     match rest.as_slice() {
-        ["config", "init", "--library", dir] => Ok(Cli::ConfigInit {
-            library: (*dir).to_string(),
-        }),
-        ["config", "init", ..] => Err("用法：config init --library <dir>".to_string()),
-        ["config", "set-library", dir] => Ok(Cli::ConfigSetLibrary {
-            library: (*dir).to_string(),
-        }),
-        ["config", "set-library", ..] => Err("用法：config set-library <dir>".to_string()),
+        // #1115：`config init` / `config set-library` 已删除——签名的 daemon 谁都能带参数运行，
+        // CLI 写入口等于谁都能改照片库位置。唯一写入口是 IPC `config.set_library`
+        // （只对签名窗口程序开放）。旧调用一律按用法错误拒绝，不静默接受。
+        ["config", ..] => Err(
+            "config 子命令已删除：照片库位置只能由 P-Pass 窗口程序经 IPC 设置（#1115）".to_string(),
+        ),
         ["diag", "export", flags @ ..] => parse_diag_export(flags),
         [cmd, sub, ..] => Err(format!("未知子命令：{cmd} {sub}")),
         [cmd] => Err(format!("缺少子命令：{cmd} <…>")),
@@ -227,6 +212,16 @@ pub fn pair_link_stdout_line(qr: &str, stdout_is_terminal: bool) -> String {
     }
 }
 
+/// #1122：stdout 那行 `NodeId:` 的内容。测试沙盒（`--ephemeral`）给全长——
+/// 脚本按它配对、拨号；正式模式只给前 8 位，与日志口径一致。
+pub fn node_id_stdout(full_hex: &str, sandbox: bool) -> String {
+    if sandbox {
+        full_hex.to_string()
+    } else {
+        format!("{}…", &full_hex[..full_hex.len().min(8)])
+    }
+}
+
 /// #1044：daemon 起不来时写到 stderr 的**最后一行**——一行 JSON
 /// `{"error_key": <i18n key 或 null>, "detail": <原文>}`。桌面壳读这一行，
 /// 按 key 出人话指引、原文照常给出；不再拿正则去猜 sqlx 的英文报错。
@@ -246,6 +241,17 @@ mod tests {
     use super::*;
 
     const QR: &str = "ppf://pair?node=aa&t=0123456789abcdef01234567&r=https://relay.example";
+
+    /// #1122：正式模式 stdout 只给 NodeId 前缀；只有测试沙盒给全长。
+    /// 反证：不看 sandbox 一律给全长，第二条变红。
+    #[test]
+    fn full_node_id_only_in_the_test_sandbox() {
+        let full = "ab".repeat(32);
+        assert_eq!(node_id_stdout(&full, true), full);
+        let prod = node_id_stdout(&full, false);
+        assert_eq!(prod, "abababab…");
+        assert!(!prod.contains(&full[..24]));
+    }
 
     #[test]
     fn pair_link_printed_only_to_a_terminal() {
@@ -349,36 +355,19 @@ mod tests {
         assert!(!version_json("1.2.3").contains('\n'));
     }
 
+    /// #1115：config 写入口不再在 CLI 上——任何 `config …` 都是用法错误（不写任何东西）。
+    /// 反证：把 `config init` 分支加回来 ⇒ 第一条红。
     #[test]
-    fn config_subcommands_parse_strictly() {
-        assert_eq!(
-            parse_cli(args(&["config", "init", "--library", "/a b/c"])),
-            Ok(Cli::ConfigInit {
-                library: "/a b/c".into()
-            })
-        );
-        assert_eq!(
-            parse_cli(args(&["config", "set-library", "C:\\Lib"])),
-            Ok(Cli::ConfigSetLibrary {
-                library: "C:\\Lib".into()
-            })
-        );
+    fn config_subcommands_are_gone() {
         for bad in [
-            &["config"][..],
-            &["config", "init"],
-            &["config", "init", "--library"],
-            &["config", "init", "/x"],
-            &["config", "init", "--library", "/x", "extra"],
-            &["config", "set-library"],
-            &["config", "set-library", "/a", "/b"],
+            &["config", "init", "--library", "/a b/c"][..],
+            &["config", "set-library", "C:\\Lib"],
+            &["config"],
             &["config", "bogus"],
         ] {
-            assert!(parse_cli(args(bad)).is_err(), "{bad:?} 应是用法错误");
+            let e = parse_cli(args(bad)).expect_err("config 子命令必须被拒");
+            assert!(e.contains("#1115"), "{bad:?}: {e}");
         }
-        assert_eq!(
-            parse_cli(args(&["config", "init", "--help"])),
-            Ok(Cli::Help)
-        );
     }
 
     #[test]

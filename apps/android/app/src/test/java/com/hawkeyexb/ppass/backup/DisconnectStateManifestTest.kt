@@ -35,16 +35,19 @@ class DisconnectStateManifestTest {
     private val nodeId = "a".repeat(64)
     private lateinit var dataDir: File
     private lateinit var filesDir: File
+    private lateinit var cacheDir: File
 
     @Before
     fun layout() {
         dataDir = tmp.newFolder("data")
         filesDir = File(dataDir, "files").apply { mkdirs() }
+        cacheDir = File(dataDir, "cache").apply { mkdirs() }
     }
 
     private class RecordingRuntime : DisconnectRuntime {
         var flowStopped = false
         var mediaWatchCancelled = false
+        var previewsCleared = false
         val cancelled = mutableListOf<String>()
         override fun stopFlowRuntime() {
             flowStopped = true
@@ -54,6 +57,9 @@ class DisconnectStateManifestTest {
         }
         override fun cancelMediaWatch() {
             mediaWatchCancelled = true
+        }
+        override fun clearPreviewCache() {
+            previewsCleared = true
         }
     }
 
@@ -93,7 +99,7 @@ class DisconnectStateManifestTest {
             DisconnectState.BACKUP_HEALTH -> BackupHealthPrefs(filesDir).recordInterrupted(now = 1L)
             DisconnectState.SENTINEL -> SentinelStore(filesDir).recordReachable(now = 1L)
             DisconnectState.DEFINITIVE_NOTICES ->
-                DefinitiveNoticeStore(filesDir).save(DefinitiveNoticeState(notifiedLostEpoch = "e1"))
+                DefinitiveNoticeStore(filesDir).save(DefinitiveNoticeState(notifiedLostPairingId = "e1"))
             DisconnectState.LEGACY_BACKUP_STATE -> {
                 ConfirmedStore(legacyDir).recordRun(confirmed = setOf("h1"), lastSuccessAt = 1L)
                 ReuploadQueue(legacyDir).add(setOf("k1"))
@@ -110,10 +116,19 @@ class DisconnectStateManifestTest {
             DisconnectState.LEGACY_WHITELIST_NUDGE -> WhitelistNudgeStore(filesDir).recordFailure(now = 1L)
             DisconnectState.LEGACY_FLOW_LEDGER -> fake("files/flow-state/$nodeId/discovery-ledger.json")
             DisconnectState.LEGACY_TRANSFER_PROTECTION -> fake("files/flow-transfer-protection.json")
+            DisconnectState.ORIGINAL_VIDEO_CACHE -> {
+                fake("cache/video-0123456789abcdef.mp4")
+                fake("cache/video-0123456789abcdef.mp4.part")
+                fake("cache/video-fedcba9876543210.mp4")
+            }
+            DisconnectState.SHARE_CACHE -> fake("cache/share/video-0123456789abcdef.mp4")
+            DisconnectState.UPDATE_ARTIFACTS -> fake("cache/update/k1/app.apk")
             DisconnectState.FLOW_RUNTIME,
             DisconnectState.AUTO_BACKUP_WORKS,
             DisconnectState.OTHER_WORKS,
+            DisconnectState.ENGINE_WAKE_WORKS,
             DisconnectState.MEDIA_WATCH_JOB,
+            DisconnectState.PREVIEW_MEMORY_CACHE,
             -> Unit // 不落盘
         }
     }
@@ -147,7 +162,7 @@ class DisconnectStateManifestTest {
         }
 
         val runtime = RecordingRuntime()
-        applyDisconnectManifest(filesDir, runtime)
+        applyDisconnectManifest(filesDir, cacheDir, runtime)
 
         for (state in DisconnectState.entries) {
             val after = snapshot(state)
@@ -172,6 +187,7 @@ class DisconnectStateManifestTest {
         fun stopped(s: DisconnectState) = s.disposition == DisconnectDisposition.STOP
         assertEquals(stopped(DisconnectState.FLOW_RUNTIME), runtime.flowStopped)
         assertEquals(stopped(DisconnectState.MEDIA_WATCH_JOB), runtime.mediaWatchCancelled)
+        assertEquals(stopped(DisconnectState.PREVIEW_MEMORY_CACHE), runtime.previewsCleared)
         assertEquals(
             "取消的 unique work 必须正好是清单里 STOP 的那几行",
             DisconnectState.entries.filter(::stopped).flatMap { it.workNames }.toSet(),
@@ -179,6 +195,49 @@ class DisconnectStateManifestTest {
         )
 
         assertEquals("断开之后也不许留下清单之外的东西", emptyList<String>(), unregisteredStatePaths(dataDir))
+    }
+
+    // #1119：原图缓存 / 分享目录断开后是空的；与配对无关的 cache/update 不碰；全部后台任务名都在取消名单里。
+    // 反证：把 ORIGINAL_VIDEO_CACHE / SHARE_CACHE 改回 KEEP、或 CLEAR 不再处理 cache/ → 红；
+    //       把 ENGINE_WAKE_WORKS / OTHER_WORKS 改回 KEEP 或删掉某个名字 → 红。
+    @Test
+    fun disconnect_empties_the_original_caches_and_cancels_every_background_work() {
+        seedAll()
+        assertTrue(File(cacheDir, "video-0123456789abcdef.mp4.part").isFile)
+        val runtime = RecordingRuntime()
+        applyDisconnectManifest(filesDir, cacheDir, runtime)
+
+        assertEquals(
+            "cache/ 里只剩与配对无关的更新产物",
+            listOf("update"),
+            cacheDir.list().orEmpty().sorted(),
+        )
+        assertTrue("内存缩略图缓存必须清空", runtime.previewsCleared)
+        assertEquals(
+            "九条后台任务一条不少（原 4 条 + 约束唤醒 / 相册变更 / 探测梯 / 额度复位 / 续传哨兵）",
+            setOf(
+                "ppass-auto-backup", "ppass-catchup-backup", "ppass-process-catchup", "ppass-manual-backup",
+                "ppass-constraint-wake", "ppass-media-watch-backup",
+                "ppass-unreachable-probe-ladder", "ppass-fgs-budget-reset-wake", "ppass-resume-sentinel",
+            ),
+            runtime.cancelled.toSet(),
+        )
+    }
+
+    // 反证：给 BackupWorker.kt / MediaWatchJob.kt 新增一个 *_WORK_NAME 常量却不登记进清单 → 红。
+    @Test
+    fun every_backup_work_name_constant_is_cancelled_by_the_manifest() {
+        val pattern = Regex("const val \\w+_WORK_NAME\\s*=\\s*\"([^\"]+)\"")
+        val declared = listOf("backup/BackupWorker.kt", "backup/MediaWatchJob.kt")
+            .map { File("src/main/java/com/hawkeyexb/ppass/$it").readText() }
+            .flatMap { src -> pattern.findAll(src).map { it.groupValues[1] }.toList() }
+            .toSet()
+        assertTrue("没扫到足够的任务名——门禁空转", declared.size >= 9)
+        val cancelled = DisconnectState.entries
+            .filter { it.disposition == DisconnectDisposition.STOP }
+            .flatMap { it.workNames }
+            .toSet()
+        assertEquals("这些后台任务名没有登记进断开清单（会在断开后空转）", emptySet<String>(), declared - cancelled)
     }
 
     @Test
@@ -199,6 +258,12 @@ class DisconnectStateManifestTest {
             listOf(BACKUP_WORK_NAME, CATCHUP_WORK_NAME, PROCESS_CATCHUP_WORK_NAME, MANUAL_BACKUP_WORK_NAME),
             DisconnectState.AUTO_BACKUP_WORKS.workNames,
         )
+        // #1119：原先「待拍板」的两条与引擎登记的三条唤醒，都改为断开取消。
+        listOf(DisconnectState.OTHER_WORKS, DisconnectState.ENGINE_WAKE_WORKS)
+            .forEach { assertEquals(it.name, DisconnectDisposition.STOP, it.disposition) }
+        listOf(DisconnectState.ORIGINAL_VIDEO_CACHE, DisconnectState.SHARE_CACHE)
+            .forEach { assertEquals(it.name, DisconnectDisposition.CLEAR, it.disposition) }
+        assertEquals(DisconnectDisposition.STOP, DisconnectState.PREVIEW_MEMORY_CACHE.disposition)
         assertEquals("配对凭据最先作废（原 clearLocalPairing 的次序）", DisconnectState.PAIRING, DisconnectState.entries.first())
     }
 
@@ -206,8 +271,11 @@ class DisconnectStateManifestTest {
     fun manifest_rows_are_well_formed() {
         for (s in DisconnectState.entries) {
             assertTrue("$s 缺依据", s.basis.isNotBlank())
-            if (s.disposition == DisconnectDisposition.CLEAR || s.disposition == DisconnectDisposition.RESET) {
+            if (s.disposition == DisconnectDisposition.RESET) {
                 assertEquals("$s：${s.disposition} 只能落在 files/", StateLocation.FILES, s.location)
+            }
+            if (s.disposition == DisconnectDisposition.CLEAR) {
+                assertTrue("$s：CLEAR 只能落在 files/ 或 cache/", s.location in setOf(StateLocation.FILES, StateLocation.CACHE))
             }
             if (s.location == StateLocation.RUNTIME) {
                 assertTrue("$s：运行时生产者只能 STOP / KEEP", s.disposition in setOf(DisconnectDisposition.STOP, DisconnectDisposition.KEEP))
@@ -230,8 +298,9 @@ class DisconnectStateManifestTest {
         fake("files/brand_new_store.json")
         fake("shared_prefs/brand_new_prefs.xml")
         File(filesDir, "empty-dir").mkdirs()
+        fake("cache/brand_new_cache.bin")
         assertEquals(
-            listOf("files/brand_new_store.json", "files/empty-dir", "shared_prefs/brand_new_prefs.xml"),
+            listOf("files/brand_new_store.json", "files/empty-dir", "shared_prefs/brand_new_prefs.xml", "cache/brand_new_cache.bin"),
             unregisteredStatePaths(dataDir),
         )
     }

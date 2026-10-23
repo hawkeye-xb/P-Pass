@@ -66,14 +66,17 @@ impl UnknownReason {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Reason {
     // ── Authorization ──
-    /// No device row for this NodeId.
+    /// No pairing record for this NodeId (never paired, or the record was
+    /// deleted: disconnected, removed, or the desktop changed identity —
+    /// #1117 removed the separate `revoked` reason).
     NotPaired,
-    /// The device row exists but was removed (owner or the device itself).
-    Revoked,
     /// The device's role does not allow this method.
     RoleForbidden,
     /// The pairing token is invalid or already used.
     PairTokenInvalid,
+    /// #1118: the pairing code confirmation did not match (wrong code entered on the desktop,
+    /// or a tampered exchange). The request and its token are void; scan again.
+    PairCodeWrong,
     // ── Version ──
     PhoneOutdated,
     DesktopOutdated,
@@ -92,8 +95,8 @@ pub enum Reason {
     // ── Path ──
     FetchFailed,
     // ── Flow ──
-    /// The request's pairing epoch is not the current one.
-    EpochMismatch,
+    /// The request names a pairing record that is not the current one.
+    PairingMismatch,
     /// No grant matches this exact tuple and can still advance.
     GrantNotFound,
     /// The same `queue_sequence` is already held by another completed item.
@@ -108,9 +111,9 @@ impl Reason {
     /// snapshot pins their wire strings).
     pub const ALL: &'static [Reason] = &[
         Reason::NotPaired,
-        Reason::Revoked,
         Reason::RoleForbidden,
         Reason::PairTokenInvalid,
+        Reason::PairCodeWrong,
         Reason::PhoneOutdated,
         Reason::DesktopOutdated,
         Reason::UnsupportedMethod,
@@ -122,7 +125,7 @@ impl Reason {
         Reason::LibraryUnavailable,
         Reason::StorageFailed,
         Reason::FetchFailed,
-        Reason::EpochMismatch,
+        Reason::PairingMismatch,
         Reason::GrantNotFound,
         Reason::GrantConflict,
         Reason::Cancelled,
@@ -132,9 +135,9 @@ impl Reason {
     pub fn as_str(&self) -> &str {
         match self {
             Reason::NotPaired => "not_paired",
-            Reason::Revoked => "revoked",
             Reason::RoleForbidden => "role_forbidden",
             Reason::PairTokenInvalid => "pair_token_invalid",
+            Reason::PairCodeWrong => "pair_code_wrong",
             Reason::PhoneOutdated => "phone_outdated",
             Reason::DesktopOutdated => "desktop_outdated",
             Reason::UnsupportedMethod => "unsupported_method",
@@ -146,7 +149,7 @@ impl Reason {
             Reason::LibraryUnavailable => "library_unavailable",
             Reason::StorageFailed => "storage_failed",
             Reason::FetchFailed => "fetch_failed",
-            Reason::EpochMismatch => "epoch_mismatch",
+            Reason::PairingMismatch => "pairing_mismatch",
             Reason::GrantNotFound => "grant_not_found",
             Reason::GrantConflict => "grant_conflict",
             Reason::Cancelled => "cancelled",
@@ -173,9 +176,9 @@ impl Reason {
     pub fn category(&self) -> &'static str {
         match self {
             Reason::NotPaired
-            | Reason::Revoked
             | Reason::RoleForbidden
-            | Reason::PairTokenInvalid => codes::NOT_AUTHORIZED,
+            | Reason::PairTokenInvalid
+            | Reason::PairCodeWrong => codes::NOT_AUTHORIZED,
             Reason::PhoneOutdated | Reason::DesktopOutdated => codes::VERSION_MISMATCH,
             Reason::UnsupportedMethod | Reason::BadRequest => codes::INVALID_REQUEST,
             Reason::NotFound => codes::NOT_FOUND,
@@ -184,7 +187,7 @@ impl Reason {
                 codes::DESKTOP_STORAGE
             }
             Reason::FetchFailed => codes::PATH_FAILED,
-            Reason::EpochMismatch
+            Reason::PairingMismatch
             | Reason::GrantNotFound
             | Reason::GrantConflict
             | Reason::Cancelled => codes::FLOW_REJECTED,
@@ -346,9 +349,9 @@ mod tests {
         use Reason::*;
         let expect = [
             (NotPaired, codes::NOT_AUTHORIZED),
-            (Revoked, codes::NOT_AUTHORIZED),
             (RoleForbidden, codes::NOT_AUTHORIZED),
             (PairTokenInvalid, codes::NOT_AUTHORIZED),
+            (PairCodeWrong, codes::NOT_AUTHORIZED),
             (PhoneOutdated, codes::VERSION_MISMATCH),
             (DesktopOutdated, codes::VERSION_MISMATCH),
             (UnsupportedMethod, codes::INVALID_REQUEST),
@@ -360,7 +363,7 @@ mod tests {
             (LibraryUnavailable, codes::DESKTOP_STORAGE),
             (StorageFailed, codes::DESKTOP_STORAGE),
             (FetchFailed, codes::PATH_FAILED),
-            (EpochMismatch, codes::FLOW_REJECTED),
+            (PairingMismatch, codes::FLOW_REJECTED),
             (GrantNotFound, codes::FLOW_REJECTED),
             (GrantConflict, codes::FLOW_REJECTED),
             (Cancelled, codes::FLOW_REJECTED),

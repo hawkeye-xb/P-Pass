@@ -83,6 +83,19 @@ impl GatedBlobs {
     }
 }
 
+impl GatedBlobs {
+    /// #1119：这台设备正在服务中的 blobs 连接（交给 `close_peer` 关闭）。
+    pub(crate) fn connections_of(&self, peer: NodeId) -> Vec<Connection> {
+        self.live
+            .lock()
+            .expect("blobs live connections lock")
+            .values()
+            .filter(|(p, _)| *p == peer)
+            .map(|(_, c)| c.clone())
+            .collect()
+    }
+}
+
 impl ProtocolHandler for GatedBlobs {
     async fn accept(&self, connection: Connection) -> std::result::Result<(), AcceptError> {
         let peer = NodeId(*connection.remote_id().as_bytes());
@@ -374,14 +387,18 @@ impl Blobs {
             .map_err(|e| TransportError::Io(format!("invalid blob ticket: {e}")))?;
         let (addr, hash, _format) = ticket.into_parts();
         let peer = crate::NodeId(*addr.id.as_bytes());
+        // #1124：拨号被对端用应用关闭码拒绝、或取回途中连接被对端关掉（401 / 410），
+        // 都以有类型的 PeerClosed 交出——手机据此走被拒即清理，而不是当成连不上。
         let conn = self
             .transport
             .endpoint()
             .connect(addr, crate::ALPN_BLOBS.as_bytes())
             .await
-            .map_err(|e| TransportError::Io(format!("connect for pull: {e}")))?;
+            .map_err(|e| crate::iroh_impl::connect_err(peer, e))?;
         let progress = self.store.remote().fetch(conn.clone(), hash);
-        drive_with_stall(progress, &conn, peer, byte_stall, on_bytes).await?;
+        drive_with_stall(progress, &conn, peer, byte_stall, on_bytes)
+            .await
+            .map_err(|e| crate::iroh_impl::peer_closed(&conn).unwrap_or(e))?;
         self.store
             .blobs()
             .export(hash, dest)

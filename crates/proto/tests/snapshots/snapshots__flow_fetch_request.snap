@@ -4,7 +4,7 @@ expression: json
 ---
 {
   "queue_sequence": 1790574682018,
-  "pairing_epoch": "epoch-7",
+  "pairing_id": "epoch-7",
   "lease_token": "lease-1790574682018",
   "content_hash": "e0635a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a398c",
   "file_name": "IMG_0042.HEIC",

@@ -8,7 +8,6 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import com.hawkeyexb.ppass.proto.FlowSupersedeRequest
-import android.net.Uri
 import android.os.BatteryManager
 import android.os.Build
 import android.os.SystemClock
@@ -27,7 +26,6 @@ import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PairingStore
 import com.hawkeyexb.ppass.transport.parsePeerAddrToken
 import java.io.File
-import java.io.FileNotFoundException
 import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
@@ -241,7 +239,7 @@ internal fun clearFlowRuntime(context: Context, daemonNodeId: String) {
 internal fun runtimeFor(context: Context): AndroidFlowRuntime? {
     val app = context.applicationContext
     val pairing = PairingStore(app.filesDir).load() ?: return null.also { PLog.i(TAG, "runtimeFor: not paired") }
-    if (pairing.pairingEpoch.isBlank()) return null.also { PLog.w(TAG, "runtimeFor: blank pairing epoch; refusing to build") }
+    if (pairing.pairingId.isBlank()) return null.also { PLog.w(TAG, "runtimeFor: blank pairing id; refusing to build") }
     val key = pairing.daemonNodeId
     val task = synchronized(runtimeLock) {
         runtime?.let { live ->
@@ -280,14 +278,7 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
     // #547：原生 provider 只给这台已配对桌面供数（运行时按桌面 NodeId 建，换桌面会重建再设一次）。
     native.setAllowedPeer(key)
     PLog.i(TAG, "buildRuntime: native blobs provider ready")
-    // 旧的 register 路径（打开原图、原生导入并出 ticket）仍保留在桥上；#413 的循环只走 importer → serve。
-    val bridge = IrohBlobsProviderBridge(native) { source ->
-        try {
-            app.contentResolver.openFileDescriptor(Uri.parse(source), "r") ?: throw SourceMissingException()
-        } catch (failure: FileNotFoundException) {
-            throw SourceMissingException(failure)
-        }
-    }
+    val bridge = IrohBlobsProviderBridge(native)
     val pairing: () -> Pairing? = { PairingStore(app.filesDir).load() }
     val client = application.daemonClient
     val desktopFor: suspend (Pairing) -> FlowReceiptClient = { p ->
@@ -365,7 +356,7 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         },
         inScope = { bucket -> scopeStore.selectedBucketIds()?.contains(bucket) == true },
         mediaAbsenceTrusted = { mediaAbsenceTrustedNow(app) },
-        pairingEpoch = { pairing()?.pairingEpoch?.takeIf { it.isNotBlank() }?.let(::PairingEpoch) },
+        pairingId = { pairing()?.pairingId?.takeIf { it.isNotBlank() }?.let(::PairingId) },
         scope = scope,
         io = Dispatchers.IO,
         log = androidLog,
@@ -373,20 +364,15 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         appForegroundAt = { FlowForegroundHandoff.lastAppForegroundAt },
         // #851：有位置权限、桌面宣告 flow.supersede.v1 时，把当年抹过地点的已备份照片原地换成原图。
         locationReadable = { AndroidMediaImporter.canReadMediaLocation(app) },
-        supersede = SupersedeClient { epoch, oldHash, newHash, provider ->
+        supersede = SupersedeClient { pid, oldHash, newHash, provider ->
             val p = pairing() ?: error("not paired")
             client.bind(application.identity.secretKey())
             RemoteSupersede(client).supersede(
                 parsePeerAddrToken(p.daemonAddrToken),
-                FlowSupersedeRequest(epoch.value, oldHash, newHash, provider),
+                FlowSupersedeRequest(pid.value, oldHash, newHash, provider),
             )
         },
         afterCycle = { auditScope.launch { dispatcher.flush() } },
-        onEpochAdvertised = { advertised ->
-            // 同一台桌面换了配对代号：order 表保留（内容寻址，CONFIRMED 跨代号成立），只更新凭证。
-            val pairings = PairingStore(app.filesDir)
-            pairings.load()?.let { current -> if (current.pairingEpoch != advertised) pairings.save(current.copy(pairingEpoch = advertised)) }
-        },
     )
     FlowForegroundHandoff.control = control
     FlowForegroundHandoff.onLost = { reason -> engine.onForegroundLost(reason) }
@@ -426,7 +412,7 @@ internal fun migrateLegacyFlowState(filesDir: File) {
 }
 
 /**
- * MOB-91：原生内容仓库是**进程内单例，开一次，永不关**——同一进程内第二次 nativeOpen 会永久阻塞。
+ * MOB-91：原生内容仓库是**进程内单例，开一次，永不关**——同一进程内第二次打开（`Provider(root)`）会永久阻塞。
  * 断开只 revoke（停掉在飞的传输、放掉 temp tag），仓库本身不动。
  */
 private val nativeProviderLock = Any()
@@ -445,7 +431,10 @@ private fun sharedNativeProvider(context: Context): AndroidNativeIrohBlobsProvid
     sharedNativeProvider ?: synchronized(nativeProviderLock) {
         sharedNativeProvider ?: run {
             PLog.i(TAG, "native blobs provider: opening (once per process)")
-            AndroidNativeIrohBlobsProvider.open(context.filesDir).also { sharedNativeProvider = it }
+            AndroidNativeIrohBlobsProvider.open(
+                context.filesDir,
+                (context.applicationContext as PPassApplication).providerCloseListener,
+            ).also { sharedNativeProvider = it }
         }
     }
 

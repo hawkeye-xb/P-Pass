@@ -158,28 +158,42 @@ jobs:
   # 它抓真 bug 但不该每推都烧 release 构建（旧 pr.yml 每 push 全跑
   # 四 job 是验收人点名的病灶①）。触发门禁与 e2e job 相同：
   # nightly/tag/labeled/dispatch，纯 docs/卡片提交零触发。
+  # #1115：剧本已改写为进程内集成测试（crates/daemon/tests/scenarios/
+  # process_failures.rs），自己 cargo test --release 编译，不再用 build job 的二进制。
   scenarios:
-    name: T-070 failure scenarios (process-level)
-    needs: build
+    name: T-070 failure scenarios (in-process)
     runs-on: ubuntu-latest
     timeout-minutes: 40
     if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set Rust toolchain from rust-toolchain.toml
+        shell: bash
+        run: tools/setup-rust-toolchain.sh
+
+      - name: Cache cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/
+            ~/.cargo/git/
+            target/
+          key: scenarios-${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+
       - name: System codecs
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libheif-dev libheif-plugin-libde265 ffmpeg libnuma-dev
-      - name: Download release binaries
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: release-bins
-      - name: Unpack release binaries (tar restores exec bit)
+
+      # 磁盘满剧本：存储端整个目录放进 6MB tmpfs（需要 root mount，runner 有
+      # passwordless sudo），500 x 16KB ≈ 8MB 必然放不下。
+      - name: Mount 6MB tmpfs for the disk-full scenario
         run: |
-          mkdir -p target/release
-          tar -xzf release-bins.tar.gz -C target/release
-          test -x target/release/daemon
-          test -x target/release/testclient
+          sudo mkdir -p /tmp/ppf-small-fs
+          sudo mount -t tmpfs -o size=6m tmpfs /tmp/ppf-small-fs
+          sudo chmod 777 /tmp/ppf-small-fs
+          df -h /tmp/ppf-small-fs
+
       - name: Run scenarios (huge file / crash recovery / disk full)
-        run: |
-          bash tools/scenarios/huge_file.sh
-          bash tools/scenarios/crash_recovery.sh
-          bash tools/scenarios/disk_full.sh
+        env:
+          PPF_SCENARIO_SMALL_FS: /tmp/ppf-small-fs
+        run: cargo test --release -p daemon --test scenarios -- --ignored --test-threads=1

@@ -30,7 +30,7 @@ final class VersionMismatchEngineTests: XCTestCase {
         rig.probe.result.set(.versionMismatch(.desktop))
         await rig.trigger()
         XCTAssertEqual(rig.lease.acquires.get(), 0)
-        rig.probe.result.set(.reachable(advertisedEpoch: "e1", health: nil, capabilities: []))
+        rig.probe.result.set(.reachable(advertisedPairingId: "e1", health: nil, capabilities: []))
         await rig.engine.onDesktopReachable()
         await eventually("lease requested after the wake") { rig.lease.acquires.get() == 1 }
     }
