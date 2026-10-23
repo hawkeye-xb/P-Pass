@@ -232,28 +232,20 @@ fn start_event_stream(app: tauri::AppHandle) {
         return;
     }
     std::thread::spawn(move || {
-        use std::sync::atomic::{AtomicBool, Ordering};
-        use std::sync::Arc;
-        use std::time::{Duration, Instant};
+        use std::time::Duration;
 
-        let started = Instant::now();
-        // Long enough for a cold daemon start; after this a failure is a
-        // fact, not "still booting". The event stream keeps reconnecting,
-        // so recovering later still flips the UI to running.
-        let startup_grace = Duration::from_secs(15);
-        let mut had_connection = manager.current() == ServiceState::Running;
-
+        // 启动宽限期由 manager 按「这一次启动」计（壳启动或之后每次显式启动
+        // `begin_start` 重新起算），见 service_state::StartWindow。事件流一直
+        // 重连，宽限期过后恢复也照样翻回 running。
         loop {
             match ipc::DaemonHandle::discover() {
                 Ok(handle) => {
-                    let opened = Arc::new(AtomicBool::new(false));
-                    let opened_for_open = Arc::clone(&opened);
                     let app_for_open = app.clone();
                     let manager_for_open = manager.clone();
                     let app_for_event = app.clone();
                     let result = handle.subscribe_events_with_open(
                         move || {
-                            opened_for_open.store(true, Ordering::SeqCst);
+                            manager_for_open.note_connected();
                             manager_for_open.set(
                                 &app_for_open,
                                 manager_for_open.current().after_connection(),
@@ -264,16 +256,12 @@ fn start_event_stream(app: tauri::AppHandle) {
                             let _ = app_for_event.emit("daemon-event", ev);
                         },
                     );
-                    if opened.load(Ordering::SeqCst) {
-                        had_connection = true;
-                    }
                     match result {
                         // subscribe_events_with_open only returns after the
                         // stream ends; treat it as a lost connection.
                         Ok(()) => {
                             manager.note_connection_failure("event stream ended");
-                            let within_grace = !had_connection && started.elapsed() < startup_grace;
-                            let next = manager.next_after_failure(had_connection, within_grace);
+                            let next = manager.state_after_failure();
                             manager.set(&app, next, Some("event stream ended"));
                         }
                         // Old daemon without events.subscribe: discover() just
@@ -281,7 +269,7 @@ fn start_event_stream(app: tauri::AppHandle) {
                         // no event source, so fall back to a slow probe; this
                         // is the only timed status probe that drives state.
                         Err(e) if ipc::is_unsupported_error(&e) => {
-                            had_connection = true;
+                            manager.note_connected();
                             manager.set(
                                 &app,
                                 manager.current().after_connection(),
@@ -302,16 +290,14 @@ fn start_event_stream(app: tauri::AppHandle) {
                         }
                         Err(e) => {
                             manager.note_connection_failure(&e);
-                            let within_grace = !had_connection && started.elapsed() < startup_grace;
-                            let next = manager.next_after_failure(had_connection, within_grace);
+                            let next = manager.state_after_failure();
                             manager.set(&app, next, Some(&e));
                         }
                     }
                 }
                 Err(e) => {
                     manager.note_connection_failure(&e);
-                    let within_grace = !had_connection && started.elapsed() < startup_grace;
-                    let next = manager.next_after_failure(had_connection, within_grace);
+                    let next = manager.state_after_failure();
                     manager.set(&app, next, Some(&e));
                 }
             }
@@ -588,7 +574,7 @@ fn start_daemon_now(app: tauri::AppHandle) -> Result<String, String> {
     // 自愈恢复正常。放在探活之后：文件跑不起来就什么都没启动，仍算「停着」。
     set_user_stopped(&platform::adapter().data_dir(), false)?;
     let manager = app.state::<ServiceStateManager>().inner().clone();
-    manager.set(&app, ServiceState::Starting, Some("user start"));
+    manager.begin_start(&app, "user start");
     match platform::hosting().install_autostart(&sidecar) {
         // LaunchAgent RunAtLoad+KeepAlive: starts immediately, survives
         // crashes and reboots.
@@ -748,7 +734,7 @@ fn self_heal_now(app: &tauri::AppHandle, reason: &str) -> Result<bool, String> {
         return Ok(false);
     }
     let manager = app.state::<ServiceStateManager>().inner().clone();
-    manager.set(app, ServiceState::Starting, Some(reason));
+    manager.begin_start(app, reason);
     // #732：有 LaunchAgent 时交给 launchd 拉（不杀在跑的——自愈只补"没在跑"）。
     match bring_up_daemon(false) {
         Ok(_) => Ok(true),
@@ -1172,7 +1158,7 @@ fn relaunch_shell(app: tauri::AppHandle) -> Result<(), String> {
 #[tauri::command]
 async fn restart_daemon_process(app: tauri::AppHandle) -> Result<Value, String> {
     let manager = app.state::<ServiceStateManager>().inner().clone();
-    manager.set(&app, ServiceState::Starting, Some("restart requested"));
+    manager.begin_start(&app, "restart requested");
     let outcome = tauri::async_runtime::spawn_blocking(restart_daemon_process_blocking)
         .await
         .map_err(|e| ipc::ui_err("ui.err_restart", &[("err", &e)]))?;
