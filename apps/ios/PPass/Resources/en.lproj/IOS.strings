@@ -79,6 +79,4 @@
 
 /* 本机名（iOS 独有，Android 直接读系统「设备名称」）：iOS 16 起没有 user-assigned-device-name 权限时系统名只给「iPhone」，电脑上认不出是谁的手机。 */
 "setting_device_name" = "This phone's name";
-"device_name_edit_title" = "Name this phone";
-"device_name_edit_body" = "The computer shows this name when you pair. For a computer you're already connected to, rename the phone on the computer.";
-"device_name_save" = "Save";
+"device_name_footer" = "The computer shows this phone's name when you pair. For a computer you're already connected to, rename the phone on the computer.";
