@@ -150,6 +150,58 @@ pub fn status(name: &str) -> Result<Option<ServiceStatus>> {
     Ok(Some(ServiceStatus { state, pid }))
 }
 
+/// 服务的 ImagePath（注册时写的可执行文件路径），读不到给 `None`。
+///
+/// 只看第一个 token：SCM 的 BinaryPathName 可能带参数、也可能带引号。
+pub fn image_path(name: &str) -> Result<Option<std::path::PathBuf>> {
+    use windows::Win32::System::Services::{QueryServiceConfigW, QUERY_SERVICE_CONFIGW};
+
+    let Some(service) =
+        Service::open(name, windows::Win32::System::Services::SERVICE_QUERY_CONFIG)?
+    else {
+        return Ok(None);
+    };
+    let mut needed = 0u32;
+    // SAFETY: 先问长度；这次调用失败是预期的（只取 needed）。
+    unsafe { QueryServiceConfigW(service.0, None, 0, &mut needed) }.ok();
+    let mut buf = vec![0u8; needed.max(1024) as usize];
+    // SAFETY: buf 按 SCM 报的 needed 分配，结构体写在 buf 开头。
+    unsafe {
+        QueryServiceConfigW(
+            service.0,
+            Some(buf.as_mut_ptr() as *mut QUERY_SERVICE_CONFIGW),
+            buf.len() as u32,
+            &mut needed,
+        )
+    }
+    .map_err(|e| PlatformError::Io {
+        action: "QueryServiceConfigW",
+        source: std::io::Error::from_raw_os_error(e.code().0),
+    })?;
+    let config = unsafe { &*(buf.as_ptr() as *const QUERY_SERVICE_CONFIGW) };
+    if config.lpBinaryPathName.0.is_null() {
+        return Ok(None);
+    }
+    let raw = unsafe { config.lpBinaryPathName.to_string() }.unwrap_or_default();
+    Ok(parse_image_path(&raw))
+}
+
+/// 从 `"C:\path\app.exe" --flag` 里取可执行文件路径（去掉引号、参数）。
+fn parse_image_path(raw: &str) -> Option<std::path::PathBuf> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let exe = match raw.strip_prefix('"') {
+        Some(rest) => match rest.find('"') {
+            Some(end) => &rest[..end],
+            None => return None, // 引号没闭合：当作读不出，不猜
+        },
+        None => raw.split_whitespace().next().unwrap_or(raw),
+    };
+    (!exe.is_empty()).then(|| std::path::PathBuf::from(exe))
+}
+
 /// 起服务（幂等：已经在跑就返回 `Ok`）。
 pub fn start(name: &str) -> Result<()> {
     let Some(service) = Service::open(name, SERVICE_START | SERVICE_QUERY_STATUS)? else {
@@ -490,5 +542,52 @@ mod dispatcher_tests {
     fn dispatcher_reports_not_a_service_outside_scm() {
         let ran = run_service_dispatcher(|| 0).expect("不是服务不是错误");
         assert!(!ran, "测试进程不是 SCM 启动的");
+    }
+}
+
+#[cfg(all(test, windows))]
+mod image_path_tests {
+    use super::*;
+
+    /// 读系统服务的 ImagePath：EventLog 的 BinaryPathName 是
+    /// `C:\Windows\system32\svchost.exe -k LocalServiceNetworkRestricted ...`，第一个 token 是 exe。
+    #[test]
+    fn reads_a_builtin_service_image_path() {
+        let path = image_path("EventLog")
+            .expect("image_path")
+            .expect("EventLog 存在");
+        assert!(path.is_absolute(), "{path:?}");
+        assert_eq!(
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .map(str::to_ascii_lowercase),
+            Some("svchost.exe".to_string()),
+            "{path:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_service_has_no_image_path() {
+        assert!(image_path("PPassDefinitelyNotInstalledService")
+            .expect("image_path")
+            .is_none());
+    }
+
+    #[test]
+    fn parses_quoted_and_bare_image_paths() {
+        assert_eq!(
+            parse_image_path("\"C:\\Program Files\\P-Pass\\ppf-daemon.exe\" --service"),
+            Some(std::path::PathBuf::from(
+                "C:\\Program Files\\P-Pass\\ppf-daemon.exe"
+            ))
+        );
+        assert_eq!(
+            parse_image_path("C:\\Windows\\system32\\svchost.exe -k LocalService"),
+            Some(std::path::PathBuf::from(
+                "C:\\Windows\\system32\\svchost.exe"
+            ))
+        );
+        assert_eq!(parse_image_path(""), None);
+        assert_eq!(parse_image_path("\"unterminated"), None);
     }
 }
