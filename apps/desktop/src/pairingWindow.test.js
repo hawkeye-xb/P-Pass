@@ -23,7 +23,7 @@ test("关掉二维码弹窗就关闭配对窗口", () => {
 // 反证：Rust 命令仍收 include_revoked，第二条变红（壳里设备列表会拿不到已离开的设备）。
 test("设备列表参数名三处一致：include_departed", () => {
   expect(app).toContain('call("devices.list", { include_departed: true })');
-  expect(api).toMatch(/fn daemon_devices_list\([\s\S]*?include_departed: bool[\s\S]*?"include_departed": include_departed/);
+  expect(api).toMatch(/fn daemon_devices_list(?:<[^>]*>)?\([\s\S]*?include_departed: bool[\s\S]*?"include_departed": include_departed/);
   expect(api).not.toContain("include_revoked");
 });
 
