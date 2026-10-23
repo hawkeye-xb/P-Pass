@@ -317,6 +317,7 @@
   "ui.err_stop_mark_write": "写不了停止标记（{err}）",
   "ui.err_stop_mark_clear": "清不掉停止标记（{err}）",
   "ui.err_stop_thread": "停止后台服务的线程异常退出：{err}",
+  "ui.err_worker_thread": "后台操作的线程异常退出：{err}",
   "ui.err_respawn": "重新启动后台服务失败：{err}",
   "ui.err_kill_old": "杀掉旧后台服务进程失败：{err}",
   "ui.err_restart": "重启后台服务失败：{err}",

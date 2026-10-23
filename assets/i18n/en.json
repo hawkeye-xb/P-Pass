@@ -317,6 +317,7 @@
   "ui.err_stop_mark_write": "Couldn't write the stop marker ({err})",
   "ui.err_stop_mark_clear": "Couldn't clear the stop marker ({err})",
   "ui.err_stop_thread": "The thread stopping the background service exited abnormally: {err}",
+  "ui.err_worker_thread": "A background operation thread exited abnormally: {err}",
   "ui.err_respawn": "Failed to start the background service again: {err}",
   "ui.err_kill_old": "Failed to kill the old background service process: {err}",
   "ui.err_restart": "Failed to restart the background service: {err}",

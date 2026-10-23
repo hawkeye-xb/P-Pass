@@ -407,6 +407,7 @@ msg_keys! {
     UI_ERR_STOP_MARK_WRITE => "ui.err_stop_mark_write",
     UI_ERR_STOP_MARK_CLEAR => "ui.err_stop_mark_clear",
     UI_ERR_STOP_THREAD => "ui.err_stop_thread",
+    UI_ERR_WORKER_THREAD => "ui.err_worker_thread",
     UI_ERR_RESPAWN => "ui.err_respawn",
     UI_ERR_KILL_OLD => "ui.err_kill_old",
     UI_ERR_RESTART => "ui.err_restart",
@@ -750,6 +751,7 @@ mod tests {
             UI_ERR_STOP_MARK_WRITE,
             UI_ERR_STOP_MARK_CLEAR,
             UI_ERR_STOP_THREAD,
+            UI_ERR_WORKER_THREAD,
             UI_ERR_RESPAWN,
             UI_ERR_KILL_OLD,
             UI_ERR_RESTART,
@@ -786,7 +788,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 335);
+        assert_eq!(ALL.len(), 336);
     }
 
     #[test]

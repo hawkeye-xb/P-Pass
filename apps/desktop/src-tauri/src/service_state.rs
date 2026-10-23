@@ -69,17 +69,28 @@ impl ServiceState {
         }
     }
 
-    /// Pure initial-state rule (unit-tested): configuration first, then the
-    /// user's explicit stop, then whether the resident service is registered.
+    /// Pure initial-state rule (unit-tested): the user's explicit stop first,
+    /// then whether onboarding finished. #1115 起向导第 1 步就会写 config.toml
+    /// （库位置由 daemon 写），所以「有 config」不再等于向导走完：走完 = 常驻服务
+    /// 已登记（向导第 3 步「完成」才登记）。没登记又不是用户停的 = 向导没走完。
     pub fn initial(configured: bool, installed: bool, user_stopped: bool) -> Self {
-        if !configured {
-            Self::NotConfigured
-        } else if user_stopped {
+        if configured && user_stopped {
             Self::Stopped
-        } else if installed {
+        } else if configured && installed {
             Self::Starting
         } else {
-            Self::Stopped
+            Self::NotConfigured
+        }
+    }
+
+    /// Pure connection rule (unit-tested). 向导没走完时连上的 daemon 只是向导
+    /// 为写库位置临时拉起的一次性进程，不是常驻服务：状态留在 NotConfigured，
+    /// 否则「服务在线」会把人踢出向导、它退出后又触发自愈（统一回归首启实测）。
+    /// NotConfigured 只经显式启动（`start_daemon` 先置 Starting）离开。
+    pub fn after_connection(self) -> Self {
+        match self {
+            Self::NotConfigured => Self::NotConfigured,
+            _ => Self::Running,
         }
     }
 }
@@ -327,7 +338,8 @@ mod tests {
         );
         assert_eq!(
             ServiceState::initial(true, false, false),
-            ServiceState::Stopped
+            ServiceState::NotConfigured,
+            "config written by wizard step 1 but autostart not registered = onboarding unfinished"
         );
         assert_eq!(
             ServiceState::initial(true, true, false),
@@ -407,6 +419,23 @@ mod tests {
             "the same failure every 2s must not flood the log: {text}"
         );
         assert!(text.contains("event=connect_failed"), "{text}");
+    }
+
+    /// 反证：after_connection 对 NotConfigured 返回 Running → 红（向导被踢出、自愈误拉）。
+    #[test]
+    fn connection_does_not_finish_onboarding() {
+        assert_eq!(
+            ServiceState::NotConfigured.after_connection(),
+            ServiceState::NotConfigured
+        );
+        for s in [
+            ServiceState::Stopped,
+            ServiceState::Starting,
+            ServiceState::Running,
+            ServiceState::Unreachable,
+        ] {
+            assert_eq!(s.after_connection(), ServiceState::Running);
+        }
     }
 
     #[test]

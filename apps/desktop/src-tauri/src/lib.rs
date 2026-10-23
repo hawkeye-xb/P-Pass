@@ -256,7 +256,7 @@ fn start_event_stream(app: tauri::AppHandle) {
                             opened_for_open.store(true, Ordering::SeqCst);
                             manager_for_open.set(
                                 &app_for_open,
-                                ServiceState::Running,
+                                manager_for_open.current().after_connection(),
                                 Some("event stream open"),
                             );
                         },
@@ -284,7 +284,7 @@ fn start_event_stream(app: tauri::AppHandle) {
                             had_connection = true;
                             manager.set(
                                 &app,
-                                ServiceState::Running,
+                                manager.current().after_connection(),
                                 Some("events.subscribe unsupported; status probe ok"),
                             );
                             loop {
@@ -523,16 +523,23 @@ fn status_is_unconfigured(status: &Value) -> bool {
     status["unconfigured"].as_bool() == Some(true)
 }
 
-/// 首启向导确认库位置。
+/// 首启向导确认库位置。首启时要一次性拉起 daemon 并等它答话（可能伴随本地网络
+/// 授权弹窗），放阻塞线程池——同步命令跑在主线程上，窗口会无响应（统一回归实测）。
 #[tauri::command]
-fn write_config(library_dir: String) -> Result<(), String> {
-    configure_library(&library_dir)
+async fn write_config(library_dir: String) -> Result<(), String> {
+    configure_library_off_main(library_dir).await
 }
 
 /// 更改照片库位置（重启后台服务后生效）。
 #[tauri::command]
-fn set_library_dir(library_dir: String) -> Result<(), String> {
-    configure_library(&library_dir)
+async fn set_library_dir(library_dir: String) -> Result<(), String> {
+    configure_library_off_main(library_dir).await
+}
+
+async fn configure_library_off_main(library_dir: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || configure_library(&library_dir))
+        .await
+        .map_err(|e| ipc::ui_err("ui.err_worker_thread", &[("err", &e)]))?
 }
 
 /// DESK-29 (#268)：注册开机自启**之前**，先确认这个 sidecar 真的能跑、真的是
@@ -559,8 +566,16 @@ fn verify_sidecar_runs(sidecar: &std::path::Path) -> Result<(), String> {
 /// launchd/registry — starts now, at every boot, and restarts on
 /// crash). Falls back to a one-shot spawn if registration fails, so
 /// the wizard never dead-ends. 基础服务不该手动启动、不该会停。
+///
+/// 探活、写登记、launchctl 都是阻塞活：放阻塞线程池，不占主线程（窗口不转圈）。
 #[tauri::command]
-fn start_daemon(app: tauri::AppHandle) -> Result<String, String> {
+async fn start_daemon(app: tauri::AppHandle) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || start_daemon_now(app))
+        .await
+        .map_err(|e| ipc::ui_err("ui.err_worker_thread", &[("err", &e)]))?
+}
+
+fn start_daemon_now(app: tauri::AppHandle) -> Result<String, String> {
     let sidecar = daemon_cli::bundled_sidecar()?;
     // DESK-29 (#268)：**先探活再注册**。顺序是这条修复的全部要害——
     // 探不过就在这里返回，`install_autostart` 根本不会被调到，所以用户
@@ -2714,7 +2729,7 @@ mod tests {
             !stop.contains("let _ = platform::hosting().uninstall_autostart()"),
             "撤销开机自启失败必须报给用户"
         );
-        assert!(body("start_daemon")
+        assert!(body("start_daemon_now")
             .contains("set_user_stopped(&platform::adapter().data_dir(), false)?;"));
         // 托盘停止与窗口按钮必须是同一个实现（同一份标记）。
         assert!(product.contains("let result = stop_daemon_now();"));
@@ -3034,8 +3049,12 @@ mod tests {
     fn config_and_diag_commands_only_go_through_the_daemon() {
         let src = include_str!("lib.rs").replace("\r\n", "\n");
         for (cmd, call) in [
-            ("write_config", "configure_library("),
-            ("set_library_dir", "configure_library("),
+            ("write_config", "configure_library_off_main("),
+            ("set_library_dir", "configure_library_off_main("),
+            (
+                "configure_library_off_main",
+                "configure_library(&library_dir)",
+            ),
             ("configure_library", "\"config.set_library\""),
             ("export_logs_bundle", "daemon_cli::diag_export("),
         ] {
