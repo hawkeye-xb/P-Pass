@@ -30,7 +30,8 @@ export function isKnownDevice(item) {
 }
 
 /**
- * 审批弹窗的标题 + 说明，两套措辞。
+ * 审批弹窗的标题，两套措辞。说明只剩一行「怎么输验证码」，新老设备同一句，
+ * 由弹窗直接取 ui.pair_code_hint（统一回归：弹窗文案精简）。
  *
  * 多台同时扫码时不点名——逐行各自带自己的副行（见 pendingSubText），
  * 标题只报数量，不能替其中一台说话。
@@ -42,7 +43,6 @@ export function pendingDialogText(pendingList) {
   if (list.length > 1) {
     return {
       title: t("ui.pending_many_title", { n: list.length }),
-      hint: t("ui.pending_new_hint"),
     };
   }
   const only = list[0];
@@ -50,12 +50,10 @@ export function pendingDialogText(pendingList) {
     return {
       // 点名，且点的是桌面上的名字——业主改过名就叫改过的那个。
       title: t("ui.pending_known_title", { name: only.name }),
-      hint: t("ui.pending_known_hint"),
     };
   }
   return {
     title: t("ui.pending_one_title"),
-    hint: t("ui.pending_new_hint"),
   };
 }
 

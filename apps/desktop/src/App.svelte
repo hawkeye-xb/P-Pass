@@ -41,6 +41,7 @@
   import { Button } from "$lib/components/ui/button";
   import { Card } from "$lib/components/ui/card";
   import { Dialog } from "$lib/components/ui/dialog";
+  import { InputOTP } from "$lib/components/ui/input-otp";
   import { Toaster } from "$lib/components/ui/sonner";
   import { NavItem } from "$lib/components/ui/nav-item";
   import { toast } from "svelte-sonner";
@@ -2151,8 +2152,7 @@
            且用桌面上那个名字称呼它。措辞逻辑在 lib/pending.js，有测试。 -->
       {@const dialogText = pendingDialogText(pendingList)}
       <h3>{dialogText.title}</h3>
-      <p class="hint modal-hint">{dialogText.hint}</p>
-      <p class="hint modal-hint">{t("ui.pair_code_once")}</p>
+      <p class="hint modal-hint">{t("ui.pair_code_hint")}</p>
       <div class="pending-list">
         {#each pendingList as item}
           <!-- DEV-02: 设备与身份 1:1——确认框只有「允许」/「拒绝」。
@@ -2166,17 +2166,11 @@
             <!-- #1118：申请的角色 + 手机屏幕上的 6 位验证码。只能输一次，满 6 位才能确认。 -->
             <span class="pending-role">{t(pendingRoleKey(item))}</span>
             <div class="pending-code">
-              <input
-                class="pair-code-input"
+              <InputOTP
                 data-testid="pair-code-input"
-                inputmode="numeric"
-                autocomplete="one-time-code"
-                maxlength="7"
-                placeholder={t("ui.pair_code_placeholder")}
                 aria-label={t("ui.pair_code_placeholder")}
-                value={code}
-                oninput={(e) => (pairCodes = { ...pairCodes, [item.node_id]: normalizePairCode(e.currentTarget.value) })}
-                onkeydown={(e) => { if (e.key === "Enter" && isPairCode(code)) confirmPair(true, item, code); }}
+                bind:value={() => code, (v) => (pairCodes = { ...pairCodes, [item.node_id]: normalizePairCode(v) })}
+                onEnter={() => { if (isPairCode(code)) confirmPair(true, item, code); }}
               />
               <div class="pending-actions">
                 <Button variant="secondary" class="min-w-[64px]" onclick={() => confirmPair(false, item)}>{t("ui.deny")}</Button>
@@ -2548,17 +2542,6 @@
     gap: 10px;
     grid-column: 1 / -1;
     grid-row: 3;
-  }
-  .pair-code-input {
-    width: 9ch;
-    padding: 6px 10px;
-    border: 1px solid var(--pp-border);
-    border-radius: var(--pp-radius-control-sm);
-    font-size: 18px;
-    letter-spacing: 0.2em;
-    font-variant-numeric: tabular-nums;
-    background: var(--pp-paper);
-    color: var(--pp-ink);
   }
   .pair-identity {
     margin: 0;

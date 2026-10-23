@@ -163,6 +163,21 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
     vi.useRealTimers();
   });
 
+  // 统一回归：弹窗只留设备名、申请身份和一行输入提示；输入框是 6 格。
+  // 反证：恢复「确认是家人的手机吗」「验证码只能输入一次」两段 → 红。
+  it("弹窗文案精简：一行提示 + 6 格验证码", async () => {
+    const d = desktop();
+    render(App);
+    await settle();
+    await openRow(d, [row("a", "妈妈的手机")]);
+    const text = document.body.textContent;
+    expect(text).toContain("妈妈的手机");
+    expect(text).toContain("输入手机上显示的 6 位验证码，输错需在手机上重新扫码。");
+    expect(text).not.toContain("确认是家人的手机吗");
+    expect(text).not.toContain("验证码只能输入一次");
+    expect(document.querySelectorAll('[data-slot="input-otp-slot"]')).toHaveLength(6);
+  });
+
   it("不满 6 位不可确认；满了提交时带上这一行的 node_id 与码", async () => {
     const d = desktop();
     d.confirmReply = { decided: true, device: "妈妈的手机" };

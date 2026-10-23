@@ -30,21 +30,17 @@ test("判据是 known 这一位，不是名字", () => {
 });
 
 test("新设备维持原措辞", () => {
-  const { title, hint } = pendingDialogText([fresh]);
+  const { title } = pendingDialogText([fresh]);
   expect(title).toBe("有设备请求加入");
-  expect(hint).toMatch(/会出现在设备列表里/);
   // 不许串到重连那套。
   expect(title).not.toMatch(/重新连接/);
-  expect(hint).not.toMatch(/以前连过/);
 });
 
 test("老设备重连点名，且点的是桌面上的名字", () => {
-  const { title, hint } = pendingDialogText([known]);
+  const { title } = pendingDialogText([known]);
   expect(title).toBe("「三星测试及」请求重新连接");
-  expect(hint).toBe("这台设备以前连过。输入它屏幕上显示的 6 位验证码，确认后会恢复备份。");
   // 不许串到首次配对那套。
   expect(title).not.toMatch(/请求加入/);
-  expect(hint).not.toMatch(/会出现在设备列表里/);
 });
 
 test("多台同时扫码只报数量，不替其中一台说话", () => {

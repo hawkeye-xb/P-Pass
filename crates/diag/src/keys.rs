@@ -243,9 +243,7 @@ msg_keys! {
     UI_TIME_HOURS_AGO => "ui.time_hours_ago",
     UI_TIME_DAYS_AGO => "ui.time_days_ago",
     UI_PENDING_MANY_TITLE => "ui.pending_many_title",
-    UI_PENDING_NEW_HINT => "ui.pending_new_hint",
     UI_PENDING_KNOWN_TITLE => "ui.pending_known_title",
-    UI_PENDING_KNOWN_HINT => "ui.pending_known_hint",
     UI_PENDING_ONE_TITLE => "ui.pending_one_title",
     UI_PENDING_SUB_PAIRED_AT => "ui.pending_sub_paired_at",
     UI_PENDING_SUB_PHOTOS => "ui.pending_sub_photos",
@@ -428,7 +426,7 @@ msg_keys! {
     UI_DEVICE_NEEDS_UPDATE_PHONE => "ui.device_needs_update_phone",
     UI_DEVICE_NEEDS_UPDATE_DESKTOP => "ui.device_needs_update_desktop",
     /// #1118：配对改为业主在电脑上输入手机显示的验证码；待确认行带角色，二维码下显示本机指纹。
-    UI_PAIR_CODE_ONCE => "ui.pair_code_once",
+    UI_PAIR_CODE_HINT => "ui.pair_code_hint",
     UI_PAIR_CODE_PLACEHOLDER => "ui.pair_code_placeholder",
     UI_PENDING_ENTER_CODE => "ui.pending_enter_code",
     UI_ERR_PAIR_CODE_WRONG => "ui.err_pair_code_wrong",
@@ -597,9 +595,7 @@ mod tests {
             UI_TIME_HOURS_AGO,
             UI_TIME_DAYS_AGO,
             UI_PENDING_MANY_TITLE,
-            UI_PENDING_NEW_HINT,
             UI_PENDING_KNOWN_TITLE,
-            UI_PENDING_KNOWN_HINT,
             UI_PENDING_ONE_TITLE,
             UI_PENDING_SUB_PAIRED_AT,
             UI_PENDING_SUB_PHOTOS,
@@ -765,7 +761,7 @@ mod tests {
             UI_ERR_DESKTOP_OUTDATED,
             UI_DEVICE_NEEDS_UPDATE_PHONE,
             UI_DEVICE_NEEDS_UPDATE_DESKTOP,
-            UI_PAIR_CODE_ONCE,
+            UI_PAIR_CODE_HINT,
             UI_PAIR_CODE_PLACEHOLDER,
             UI_PENDING_ENTER_CODE,
             UI_ERR_PAIR_CODE_WRONG,
@@ -784,7 +780,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 334);
+        assert_eq!(ALL.len(), 332);
     }
 
     #[test]
