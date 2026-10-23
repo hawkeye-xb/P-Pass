@@ -152,6 +152,13 @@ enum PPUI {
         static let heroMeta: CGFloat = 15
         static let statusLine: CGFloat = 13.5
         static let detailToggle: CGFloat = 13
+        static let pairTitle: CGFloat = 30
+        static let pairName: CGFloat = 22
+        /// iOS 覆盖（Android 14px）：见 iosOverrides["mobile-ui.type.pair-label"]
+        static let pairLabel: CGFloat = 13
+        /// iOS 覆盖（Android 28px）：见 iosOverrides["mobile-ui.type.pair-fingerprint"]
+        static let pairFingerprint: CGFloat = 15
+        static let pairBody: CGFloat = 17
     }
 
     /// 间距 / 尺寸（pt）
@@ -183,6 +190,8 @@ enum PPUI {
         "mobile-ui.type.card-title": ("16px", "17px", "iOS 字号以系统文字样式为基准、随动态字号缩放（body 17 / subheadline 15 / footnote 13），与系统「设置」App 一致；照搬 Android 的 15/14 在 iOS 上偏小，也不跟系统同步。标题取 headline 档（17 粗体）。"),
         "mobile-ui.type.card-body": ("14px", "17px", "iOS 字号以系统文字样式为基准、随动态字号缩放（body 17 / subheadline 15 / footnote 13），与系统「设置」App 一致；照搬 Android 的 15/14 在 iOS 上偏小，也不跟系统同步。"),
         "mobile-ui.type.hero-meta": ("14px", "15px", "iOS 字号以系统文字样式为基准、随动态字号缩放（body 17 / subheadline 15 / footnote 13），与系统「设置」App 一致；照搬 Android 的 15/14 在 iOS 上偏小，也不跟系统同步。"),
+        "mobile-ui.type.pair-label": ("14px", "13px", "iOS 小标签取系统 footnote 档（13），与本页其余字号一样随动态字号缩放；Android 是 14。"),
+        "mobile-ui.type.pair-fingerprint": ("28px", "15px", "核对页层级定为 标题 > 电脑名 > 说明 > 指纹：指纹是给人逐字比对的校验串，不是本页结论，用小号等宽（subheadline 档 15）。Android 仍是 28，比电脑名（22）还大，层级倒挂。"),
         "mobile-ui.layout.page-gutter": ("20px", "system", "原生 insetGrouped 的分组边距（iPhone 16 / iOS 26 实测 16pt），与系统「设置」App 一致；改成 20 要覆盖系统布局，没有收益。"),
         "mobile-ui.layout.card-padding": ("20px", "system", "英雄卡是 List 的一行，内边距由系统行距决定（实测左右 16、上下约 17–21，差 1–4pt）；硬设 20 要和系统最小行高较劲。"),
         "mobile-ui.surface.settings-card": ("paper", "linen", "insetGrouped 的分组画不了 1px 描边，paper 底放在 paper 页面上看不出卡片边界，改用 linen（内嵌卡片色）。"),
