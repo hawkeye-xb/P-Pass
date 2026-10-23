@@ -55,10 +55,29 @@ pub enum UpdatePackageCheck {
 /// 校验 updater 下载下来的更新包（已过 minisign 验签的字节）。
 ///
 /// - macOS：`.app.tar.gz`。解到临时目录，要求恰好一个顶层 `.app`，用 Security 框架
-///   按 [`code_requirement`] 做静态校验（含嵌套代码、严格模式、所有架构）。
+///   按 [`code_requirement`] 做静态校验（含嵌套代码、严格模式、所有架构）；通过后再读包里
+///   `Info.plist` 的 `CFBundleShortVersionString`，必须**严格高于** `current_version`（防降级）。
 /// - 其他平台：[`UpdatePackageCheck::NotChecked`]。
-pub fn verify_update_package(bytes: &[u8]) -> UpdatePackageCheck {
-    imp::verify_update_package(bytes)
+///
+/// #1116 P2-2：updater 判断「要不要更新」比的是清单里的版本号，而清单不签名——能写更新源的人
+/// 可以把任何一个正式私钥签过的旧包标成「新版」推下来。包里的版本号在代码签名的封装之内
+/// （改了即验签失败），所以在这里、对已验签的那份字节比版本，旧包装不上。
+pub fn verify_update_package(bytes: &[u8], current_version: &str) -> UpdatePackageCheck {
+    imp::verify_update_package(bytes, current_version)
+}
+
+/// 防降级判据：`new` 必须严格高于 `current`（semver，含预发布段：`0.10.0-test.8` <
+/// `0.10.0-test.9` < `0.10.0`）。不是合法 semver 也拒绝——不猜。
+pub fn newer_than_current(new: &str, current: &str) -> Result<(), String> {
+    let parse = |v: &str| {
+        semver::Version::parse(v.trim()).map_err(|e| format!("版本号「{v}」不是 semver：{e}"))
+    };
+    let (n, c) = (parse(new)?, parse(current)?);
+    if n > c {
+        Ok(())
+    } else {
+        Err(format!("新包版本 {n} 不高于当前 {c}（拒绝降级 / 重装）"))
+    }
 }
 
 /// 静态校验磁盘上一个 `.app`（macOS）。拆出来给测试和 [`verify_update_package`] 共用。
@@ -72,7 +91,7 @@ pub fn verify_app_bundle(app: &Path, identifier: &str) -> UpdatePackageCheck {
 #[cfg(target_os = "macos")]
 #[allow(clippy::disallowed_methods)]
 mod imp {
-    use super::{code_requirement, UpdatePackageCheck, DESKTOP_APP_ID};
+    use super::{code_requirement, newer_than_current, UpdatePackageCheck, DESKTOP_APP_ID};
     use core_foundation::url::CFURL;
     use security_framework::os::macos::code_signing::{Flags, SecRequirement, SecStaticCode};
     use std::io::Write;
@@ -80,7 +99,7 @@ mod imp {
     use std::process::{Command, Stdio};
     use std::str::FromStr;
 
-    pub(super) fn verify_update_package(bytes: &[u8]) -> UpdatePackageCheck {
+    pub(super) fn verify_update_package(bytes: &[u8], current_version: &str) -> UpdatePackageCheck {
         // tempfile：随机名、0700、离开作用域即删。手写的「pid + 纳秒」名字在同一进程
         // 并发校验时会撞名（CI 实测 File exists），且在共享 /tmp 里可被预测。
         let dir = match tempfile::Builder::new()
@@ -92,7 +111,16 @@ mod imp {
         };
         match unpack(bytes, dir.path()) {
             Ok(()) => match single_app(dir.path()) {
-                Ok(app) => verify_app_bundle(&app, DESKTOP_APP_ID),
+                Ok(app) => match verify_app_bundle(&app, DESKTOP_APP_ID) {
+                    // 版本号只在验签通过之后读：那时 Info.plist 已被签名封装担保。
+                    UpdatePackageCheck::Verified => match bundle_version(&app)
+                        .and_then(|v| newer_than_current(&v, current_version))
+                    {
+                        Ok(()) => UpdatePackageCheck::Verified,
+                        Err(e) => UpdatePackageCheck::Rejected(e),
+                    },
+                    other => other,
+                },
                 Err(e) => UpdatePackageCheck::Rejected(e),
             },
             Err(e) => UpdatePackageCheck::Rejected(e),
@@ -120,6 +148,17 @@ mod imp {
                 "代码签名不满足要求（{identifier} / 团队）：{e}"
             )),
         }
+    }
+
+    /// 包里 App 的 `CFBundleShortVersionString`。
+    fn bundle_version(app: &Path) -> Result<String, String> {
+        let info = plist::Value::from_file(app.join("Contents/Info.plist"))
+            .map_err(|e| format!("读不到包里的 Info.plist：{e}"))?;
+        info.as_dictionary()
+            .and_then(|d| d.get("CFBundleShortVersionString"))
+            .and_then(|v| v.as_string())
+            .map(str::to_string)
+            .ok_or_else(|| "包里的 Info.plist 没有 CFBundleShortVersionString".to_string())
     }
 
     /// 系统自带的 bsdtar 解包：拒绝绝对路径与 `..`（不带 `-P` 时的默认行为）。
@@ -171,7 +210,10 @@ mod imp {
 mod imp {
     use super::UpdatePackageCheck;
 
-    pub(super) fn verify_update_package(_bytes: &[u8]) -> UpdatePackageCheck {
+    pub(super) fn verify_update_package(
+        _bytes: &[u8],
+        _current_version: &str,
+    ) -> UpdatePackageCheck {
         UpdatePackageCheck::NotChecked(
             "本平台尚未取得代码签名证书，安装前不校验发布者（仅 minisign 验签）",
         )
@@ -193,6 +235,28 @@ mod tests {
              and certificate 1[field.1.2.840.113635.100.6.2.6] \
              and certificate leaf[field.1.2.840.113635.100.6.1.13] \
              and certificate leaf[subject.OU] = \"2WJUWVUJBN\""
+        );
+    }
+
+    /// #1116 P2-2：防降级判据。反证：把 `n > c` 改成 `n >= c`，「同版本」那条红；
+    /// 只比 major.minor.patch，test.8 → test.9 那条红。
+    #[test]
+    fn only_strictly_newer_versions_pass() {
+        assert!(newer_than_current("0.10.0-test.9", "0.10.0-test.8").is_ok());
+        assert!(newer_than_current("0.10.0", "0.10.0-test.9").is_ok());
+        assert!(newer_than_current("0.10.1", "0.10.0").is_ok());
+        assert!(
+            newer_than_current("0.10.0-test.8", "0.10.0-test.8").is_err(),
+            "同版本"
+        );
+        assert!(
+            newer_than_current("0.10.0-test.7", "0.10.0-test.8").is_err(),
+            "旧 test 包"
+        );
+        assert!(newer_than_current("0.9.12", "0.10.0").is_err(), "旧正式版");
+        assert!(
+            newer_than_current("garbage", "0.10.0").is_err(),
+            "不是 semver"
         );
     }
 
@@ -236,6 +300,18 @@ mod tests {
             app
         }
 
+        fn bundle_version_for_test(app: &Path) -> String {
+            plist::Value::from_file(app.join("Contents/Info.plist"))
+                .unwrap()
+                .as_dictionary()
+                .unwrap()
+                .get("CFBundleShortVersionString")
+                .unwrap()
+                .as_string()
+                .unwrap()
+                .to_string()
+        }
+
         fn tar_gz(app: &Path) -> Vec<u8> {
             let out = Command::new("/usr/bin/tar")
                 .env("COPYFILE_DISABLE", "1")
@@ -259,7 +335,7 @@ mod tests {
                 UpdatePackageCheck::Rejected(_)
             ));
             assert!(matches!(
-                verify_update_package(&tar_gz(&app)),
+                verify_update_package(&tar_gz(&app), "0.0.1"),
                 UpdatePackageCheck::Rejected(_)
             ));
             let _ = std::fs::remove_dir_all(&d);
@@ -308,7 +384,7 @@ mod tests {
                 other => panic!("同团队 Apple Development 签名不该通过：{other:?}"),
             }
             assert!(matches!(
-                verify_update_package(&tar_gz(&app)),
+                verify_update_package(&tar_gz(&app), "0.0.1"),
                 UpdatePackageCheck::Rejected(_)
             ));
             let _ = std::fs::remove_dir_all(&d);
@@ -329,7 +405,7 @@ mod tests {
         #[test]
         fn malformed_packages_are_rejected() {
             assert!(matches!(
-                verify_update_package(b"not a tarball"),
+                verify_update_package(b"not a tarball", "0.0.1"),
                 UpdatePackageCheck::Rejected(_)
             ));
             let d = tmp("two");
@@ -342,7 +418,7 @@ mod tests {
                 .args(["P-Pass.app", "Other.app"])
                 .output()
                 .unwrap();
-            match verify_update_package(&out.stdout) {
+            match verify_update_package(&out.stdout, "0.0.1") {
                 UpdatePackageCheck::Rejected(why) => {
                     assert!(why.contains("恰好含一个 .app"), "{why}")
                 }
@@ -366,7 +442,21 @@ mod tests {
                 return;
             }
             let bytes = tar_gz(&app);
-            assert_eq!(verify_update_package(&bytes), UpdatePackageCheck::Verified);
+            assert_eq!(
+                verify_update_package(&bytes, "0.0.1"),
+                UpdatePackageCheck::Verified
+            );
+            // #1116 P2-2：签名完好的同一个包，当前版本已不低于它 ⇒ 拒绝（防降级 / 重装）。
+            // 反证：去掉 verify_update_package 里的 newer_than_current，这两条变 Verified，红。
+            let version = bundle_version_for_test(&app);
+            for current in [version.clone(), "999.0.0".to_string()] {
+                match verify_update_package(&bytes, &current) {
+                    UpdatePackageCheck::Rejected(why) => {
+                        assert!(why.contains("不高于当前"), "{why}")
+                    }
+                    other => panic!("当前 {current}、包 {version}：不该通过：{other:?}"),
+                }
+            }
 
             // 解出来改一个资源文件再打包：封装被破坏，必须拒绝。
             let d = tmp("tamper");
@@ -385,7 +475,7 @@ mod tests {
             let copy = d.join(app.file_name().unwrap());
             std::fs::write(copy.join("Contents/Info.plist"), b"tampered").unwrap();
             assert!(matches!(
-                verify_update_package(&tar_gz(&copy)),
+                verify_update_package(&tar_gz(&copy), "0.0.1"),
                 UpdatePackageCheck::Rejected(_)
             ));
             let _ = std::fs::remove_dir_all(&d);
