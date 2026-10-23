@@ -154,6 +154,18 @@ pub fn status(name: &str) -> Result<Option<ServiceStatus>> {
 ///
 /// 只看第一个 token：SCM 的 BinaryPathName 可能带参数、也可能带引号。
 pub fn image_path(name: &str) -> Result<Option<std::path::PathBuf>> {
+    Ok(service_config(name)?.and_then(|c| c.image_path))
+}
+
+/// 一次 `QueryServiceConfigW` 读出来的、我们关心的两项。
+///
+/// 结构体里的指针指向临时缓冲，所以在函数内就转成拥有所有权的值，不把裸指针带出去。
+struct ServiceConfig {
+    start_type: ServiceStartType,
+    image_path: Option<std::path::PathBuf>,
+}
+
+fn service_config(name: &str) -> Result<Option<ServiceConfig>> {
     use windows::Win32::System::Services::{QueryServiceConfigW, QUERY_SERVICE_CONFIGW};
 
     let Some(service) =
@@ -179,11 +191,15 @@ pub fn image_path(name: &str) -> Result<Option<std::path::PathBuf>> {
         source: std::io::Error::from_raw_os_error(e.code().0),
     })?;
     let config = unsafe { &*(buf.as_ptr() as *const QUERY_SERVICE_CONFIGW) };
-    if config.lpBinaryPathName.0.is_null() {
-        return Ok(None);
-    }
-    let raw = unsafe { config.lpBinaryPathName.to_string() }.unwrap_or_default();
-    Ok(parse_image_path(&raw))
+    let raw = if config.lpBinaryPathName.0.is_null() {
+        String::new()
+    } else {
+        unsafe { config.lpBinaryPathName.to_string() }.unwrap_or_default()
+    };
+    Ok(Some(ServiceConfig {
+        start_type: ServiceStartType::from_raw(config.dwStartType.0),
+        image_path: parse_image_path(&raw),
+    }))
 }
 
 /// 从 `"C:\path\app.exe" --flag` 里取可执行文件路径（去掉引号、参数）。
@@ -198,6 +214,38 @@ fn parse_image_path(raw: &str) -> Option<std::path::PathBuf> {
         None => raw.split_whitespace().next().unwrap_or(raw),
     };
     (!exe.is_empty()).then(|| std::path::PathBuf::from(exe))
+}
+
+/// 服务的启动类型（只区分我们关心的三档）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServiceStartType {
+    Auto,
+    Manual,
+    Disabled,
+    Other(u32),
+}
+
+impl ServiceStartType {
+    fn from_raw(raw: u32) -> Self {
+        use windows::Win32::System::Services::{
+            SERVICE_AUTO_START, SERVICE_DEMAND_START, SERVICE_DISABLED,
+        };
+        if raw == SERVICE_AUTO_START.0 {
+            Self::Auto
+        } else if raw == SERVICE_DEMAND_START.0 {
+            Self::Manual
+        } else if raw == SERVICE_DISABLED.0 {
+            Self::Disabled
+        } else {
+            Self::Other(raw)
+        }
+    }
+}
+
+/// 服务的启动类型。§5.1「用户在 P-Pass 里停服务 = 设为禁用，绝不自动拉回」
+/// 要读它来判断当前是不是「用户主动停的」状态。
+pub fn start_type(name: &str) -> Result<Option<ServiceStartType>> {
+    Ok(service_config(name)?.map(|c| c.start_type))
 }
 
 /// 起服务（幂等：已经在跑就返回 `Ok`）。
@@ -587,5 +635,26 @@ mod image_path_tests {
         );
         assert_eq!(parse_image_path(""), None);
         assert_eq!(parse_image_path("\"unterminated"), None);
+    }
+}
+
+#[cfg(all(test, windows))]
+mod start_type_tests {
+    use super::*;
+
+    /// EventLog 是系统自带的自动启动服务：读真实 SCM 的启动类型。
+    #[test]
+    fn reads_a_builtin_service_start_type() {
+        assert_eq!(
+            start_type("EventLog").expect("start_type"),
+            Some(ServiceStartType::Auto)
+        );
+    }
+
+    #[test]
+    fn unknown_service_has_no_start_type() {
+        assert!(start_type("PPassDefinitelyNotInstalledService")
+            .expect("start_type")
+            .is_none());
     }
 }
