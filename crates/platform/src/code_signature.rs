@@ -50,6 +50,11 @@ pub enum UpdatePackageCheck {
     Rejected(String),
     /// 本平台还没有可校验的发布者签名（Windows 待取得代码签名证书）。
     NotChecked(&'static str),
+    /// 本平台没有发布者签名可校验，但已经对**同一份字节**做了包内版本判据：
+    /// 版本资源严格高于当前版本（防降级）。
+    ///
+    /// **不等于** [`Self::Verified`]：「包是谁做的」没有证据，只有「不是旧包」这一条。
+    VersionOnly,
 }
 
 /// 校验 updater 下载下来的更新包（已过 minisign 验签的字节）。
@@ -57,6 +62,8 @@ pub enum UpdatePackageCheck {
 /// - macOS：`.app.tar.gz`。解到临时目录，要求恰好一个顶层 `.app`，用 Security 框架
 ///   按 [`code_requirement`] 做静态校验（含嵌套代码、严格模式、所有架构）；通过后再读包里
 ///   `Info.plist` 的 `CFBundleShortVersionString`，必须**严格高于** `current_version`（防降级）。
+/// - Windows：`setup.exe` 的 PE 版本资源（`StringFileInfo\<lang>\FileVersion`）必须**严格高于**
+///   `current_version`，通过后返回 [`UpdatePackageCheck::VersionOnly`]（没有发布者签名，不谎报 Verified）。
 /// - 其他平台：[`UpdatePackageCheck::NotChecked`]。
 ///
 /// #1116 P2-2：updater 判断「要不要更新」比的是清单里的版本号，而清单不签名——能写更新源的人
@@ -206,7 +213,27 @@ mod imp {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
+mod imp {
+    use super::{newer_than_current, UpdatePackageCheck};
+
+    /// #1155：Windows 没有发布者签名可校验，只做防降级。
+    ///
+    /// 版本从**传进来的这份字节**里读（不落盘、不再读文件），所以「验签的那份」与
+    /// 「判版本的那份」是同一份，中间没有替换窗口。读不到版本资源就拒绝——不拿
+    /// `VS_FIXEDFILEINFO` 的 `major.minor.patch.0` 兜底，那会把 `-test.N` 后缀丢掉。
+    pub(super) fn verify_update_package(bytes: &[u8], current_version: &str) -> UpdatePackageCheck {
+        match crate::pe_version::file_version_from_bytes(bytes) {
+            Ok(package_version) => match newer_than_current(&package_version, current_version) {
+                Ok(()) => UpdatePackageCheck::VersionOnly,
+                Err(e) => UpdatePackageCheck::Rejected(e),
+            },
+            Err(e) => UpdatePackageCheck::Rejected(format!("读不到安装包的版本资源：{e}")),
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 mod imp {
     use super::UpdatePackageCheck;
 
@@ -479,6 +506,52 @@ mod tests {
                 UpdatePackageCheck::Rejected(_)
             ));
             let _ = std::fs::remove_dir_all(&d);
+        }
+    }
+    /// #1155：Windows 的结果必须是「仅防降级」，不能是 `Verified`；旧版本、同版本、
+    /// 非 semver 版本串与坏字节都要拒。构造的 PE 与 Tauri NSIS `setup.exe` 的版本串同形
+    /// （V8 实测：`StringFileInfo\FileVersion` 就是 `0.4.0-test.5` 这种）。
+    #[cfg(windows)]
+    #[test]
+    fn windows_update_check_is_version_only_and_rejects_downgrade() {
+        use crate::pe_version::test_pe::pe_with_version;
+        match verify_update_package(&pe_with_version("0.10.1"), "0.10.0") {
+            UpdatePackageCheck::VersionOnly => {}
+            other => panic!("应当是 VersionOnly（不是 Verified）：{other:?}"),
+        }
+        match verify_update_package(&pe_with_version("0.10.0-test.9"), "0.10.0-test.8") {
+            UpdatePackageCheck::VersionOnly => {}
+            other => panic!("预发布段也按 semver 比：{other:?}"),
+        }
+        for (pkg, cur) in [
+            ("0.10.0", "0.10.0"),
+            ("0.9.12", "0.10.0"),
+            ("0.10.0-test.8", "0.10.0-test.9"),
+            ("not-a-version", "0.10.0"),
+        ] {
+            match verify_update_package(&pe_with_version(pkg), cur) {
+                UpdatePackageCheck::Rejected(why) => {
+                    assert!(
+                        why.contains("不高于") || why.contains("不是 semver"),
+                        "{pkg} vs {cur}: {why}"
+                    );
+                }
+                other => panic!("{pkg} vs {cur} 必须拒绝：{other:?}"),
+            }
+        }
+        match verify_update_package(b"PK\x03\x04", "0.10.0") {
+            UpdatePackageCheck::Rejected(why) => assert!(why.contains("PE"), "{why}"),
+            other => panic!("非 PE 字节必须拒绝：{other:?}"),
+        }
+        // 真实系统 DLL 的版本串是 `10.0.26100.9711 (WinBuild.160101.0800)`，不是 semver：
+        // 解析得出来也必须拒绝——不猜、不截断。
+        let path = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".into())
+            + "\\System32\\kernel32.dll";
+        if let Ok(bytes) = std::fs::read(&path) {
+            match verify_update_package(&bytes, "0.10.0") {
+                UpdatePackageCheck::Rejected(why) => assert!(why.contains("不是 semver"), "{why}"),
+                other => panic!("非 semver 的系统版本串必须拒绝：{other:?}"),
+            }
         }
     }
 }

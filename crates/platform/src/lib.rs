@@ -29,6 +29,11 @@ use std::path::PathBuf;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod data_migration;
 
+// #1155：从已验签的同一份字节里读 PE 版本（Windows 更新防降级）。纯字节解析、无平台 API，
+// 三个平台都编译并跑单测；只有 Windows 的更新路径会调用它。
+#[cfg_attr(not(windows), allow(dead_code))]
+mod pe_version;
+
 // #1121：代码签名要求（安装更新前校验团队；#1115 的 IPC 对端校验共用要求串）。
 mod code_signature;
 // #1109：身份私钥存取端口（不在 cfg 里，daemon 的判定与单测三平台都跑）。

@@ -77,6 +77,9 @@ windows-sys = { version = "0.61", features = [
 #    直接依赖并多开几个 feature。
 windows = { version = "0.62", features = [
   "Win32_Foundation",
+  # #1155：GetFileVersionInfoW / VerQueryValueW —— 单测拿真实系统 PE 与内存解析结果对照。
+  "Win32_Storage",
+  "Win32_Storage_FileSystem",
   # CoInitializeEx / CoUninitialize —— COM 必须先初始化线程套间。
   "Win32_System_Com",
   # SHCreateItemFromParsingName + IShellItemImageFactory。
