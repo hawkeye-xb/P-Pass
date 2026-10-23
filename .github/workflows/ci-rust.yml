@@ -395,7 +395,7 @@ jobs:
       # key 里带 ImageVersion：runner 镜像一换，它自带的 vcpkg 提交（连带端口
       # 版本与编译工具链）就可能变，缓存必须跟着失效，否则会拿旧 ABI 的
       # heif.lib 去链新工具链，炸得莫名其妙。
-      # ⚠️ 改动下面那行 install 的端口或特性时，**把 -v1 改成 -v2**，否则会命中
+      # ⚠️ 改动下面那行 install 的端口或特性时，**把 -v2 往上加**，否则会命中
       # 旧特性的安装树 —— #235 实测过 vcpkg 换特性时 install 会拒绝执行（要
       # --recurse），而 libheif-sys 的 build script 缓存仍注入 x265-static，
       # 直接 LNK1181。缓存不失效会把那个一次性的坑变成常驻故障。
@@ -407,7 +407,7 @@ jobs:
         id: vkey
         shell: bash
         run: |
-          key="vcpkg-libheif-core-x64-windows-static-md-${ImageVersion:-unknown}-v1"
+          key="vcpkg-libheif-core-libde265-x64-windows-static-md-${ImageVersion:-unknown}-v2"
           echo "key=$key" >> "$GITHUB_OUTPUT"
           echo "vcpkg cache key = $key"
       - name: Cache vcpkg (static libheif)
@@ -417,8 +417,10 @@ jobs:
           path: C:\vcpkg\installed
           key: ${{ steps.vkey.outputs.key }}
 
-      # 与 artifacts.yml 逐字一致（BUILD-08 #235）：[core] = 不带默认特性，
-      # 摘掉 GPL 的 x265 编码器。HEIC **解码**靠 libde265，它是基础依赖不是特性。
+      # 与 artifacts.yml 逐字一致（BUILD-08 #235）：[core,libde265] = 不带
+      # 默认特性（摘掉 GPL 的 x265 编码器），再显式加回 libde265 解码器 ——
+      # 端口 1.23.x 起 libde265 是独立特性（default-features = hevc + libde265），
+      # 只写 [core] 会没有 HEVC 解码器，HEIC 解码失败。
       # --clean-after-build 会删掉 packages/ 与 buildtrees/，所以上面只缓存
       # installed/ —— 缓存别的目录是白占空间。
       # 自报耗时与缓存命中，用来验「缓存命中后从 ~20min 掉到 1 分钟量级」
@@ -428,8 +430,13 @@ jobs:
         run: |
           echo "cache-hit = ${{ steps.vcpkg-cache.outputs.cache-hit }}"
           start=$(date +%s)
-          /c/vcpkg/vcpkg.exe install "libheif[core]:x64-windows-static-md" --clean-after-build
+          /c/vcpkg/vcpkg.exe install "libheif[core,libde265]:x64-windows-static-md" --clean-after-build
           echo "VCPKG_INSTALL_SECONDS=$(( $(date +%s) - start ))"
+          # 装完必须能看到 HEVC 解码器：vcpkg libheif 端口 1.23.x 起 libde265 从
+          # 基础依赖改成了独立特性，漏写会装出「能开容器、解不了像素」的 libheif，
+          # 到测试阶段才以 PluginLoadingError 暴露。缓存命中时同样检查。
+          test -f /c/vcpkg/installed/x64-windows-static-md/lib/libde265.lib \
+            || { echo "::error::libde265.lib missing — libheif was installed without the libde265 feature (no HEVC decoder)"; exit 1; }
 
       # ⚠️ **刻意不缓存 `target/`**（Linux 那个 job 缓存了，这里不缓存）。
       # 这是量过账之后的决定，不是抄漏了。PR #249 上四轮实测的完整对照：
@@ -567,7 +574,7 @@ jobs:
         id: vkey
         shell: bash
         run: |
-          key="vcpkg-libheif-core-x64-windows-static-md-${ImageVersion:-unknown}-v1"
+          key="vcpkg-libheif-core-libde265-x64-windows-static-md-${ImageVersion:-unknown}-v2"
           echo "key=$key" >> "$GITHUB_OUTPUT"
           echo "vcpkg cache key = $key"
       - name: Cache vcpkg (static libheif)
@@ -583,8 +590,13 @@ jobs:
         run: |
           echo "cache-hit = ${{ steps.vcpkg-cache.outputs.cache-hit }}"
           start=$(date +%s)
-          /c/vcpkg/vcpkg.exe install "libheif[core]:x64-windows-static-md" --clean-after-build
+          /c/vcpkg/vcpkg.exe install "libheif[core,libde265]:x64-windows-static-md" --clean-after-build
           echo "VCPKG_INSTALL_SECONDS=$(( $(date +%s) - start ))"
+          # 装完必须能看到 HEVC 解码器：vcpkg libheif 端口 1.23.x 起 libde265 从
+          # 基础依赖改成了独立特性，漏写会装出「能开容器、解不了像素」的 libheif，
+          # 到测试阶段才以 PluginLoadingError 暴露。缓存命中时同样检查。
+          test -f /c/vcpkg/installed/x64-windows-static-md/lib/libde265.lib \
+            || { echo "::error::libde265.lib missing — libheif was installed without the libde265 feature (no HEVC decoder)"; exit 1; }
 
       - name: Cache cargo (依赖源码；key 与 test (windows) 共用)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
