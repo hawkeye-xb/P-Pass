@@ -195,9 +195,9 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
     expect(screen.getByRole("button", { name: "允许加入" })).toBeTruthy();
   });
 
-  // 样式参照 macOS 提示框：单台时内容直接在弹窗里，不套卡片。顺序：标题 → 角色小字 → 6 格 → 提示 → 按钮行。
+  // 样式参照 macOS 提示框：单台时内容直接在弹窗里，不套卡片。顺序：标题 → 6 格 → 提示 → 按钮行，不显示角色。
   // 反证：恢复 .pending-row 灰底卡片，或把按钮放回验证码那一行 → 红。
-  it("单台：标题即请求内容，角色小字，不套卡片，按钮单独一行", async () => {
+  it("单台：标题即请求内容，不显示角色，不套卡片，按钮单独一行", async () => {
     const d = desktop();
     render(App);
     await settle();
@@ -205,7 +205,8 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
     const block = screen.getByTestId("pending-request");
     expect(document.querySelector(".pending-title").textContent).toBe("Galaxy S24 Ultra 请求加入");
     expect(block.textContent).not.toContain("Galaxy S24 Ultra"); // 名字只在标题里出现一次
-    expect(block.querySelector(".pending-meta").textContent).toBe("家庭成员 · 可以备份和浏览照片");
+    // 弹窗里不显示角色。反证：恢复角色小字 → 红。
+    expect(block.textContent).not.toContain("家庭成员");
     expect(block.textContent).toContain("输入手机上显示的验证码");
     expect(document.body.textContent).not.toContain("确认是家人的手机吗");
     expect(document.body.textContent).not.toContain("验证码只能输入一次");
@@ -217,7 +218,7 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
     expect(css.slice(at, css.indexOf("}", at))).not.toMatch(/background/);
     // 顺序与按钮行。
     const order = [...block.children].map((el) => el.className.split(" ")[0]);
-    expect(order).toEqual(["pending-meta", "pending-code", "pending-hint", "pending-actions"]);
+    expect(order).toEqual(["pending-code", "pending-hint", "pending-actions"]);
     const actions = screen.getByTestId("pending-actions");
     expect(actions.querySelector('[data-slot="input-otp-slot"]')).toBeNull();
     expect([...actions.querySelectorAll("button")].map((b) => b.textContent.trim())).toEqual(["拒绝", "允许加入"]);

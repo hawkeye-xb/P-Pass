@@ -70,7 +70,6 @@
     pairResultName,
     isPairCode,
     normalizePairCode,
-    pendingRoleKey,
     pairConfirmToast,
   } from "./lib/pending.js";
   import { requestId, syncRequests, setPhase, removeRequest } from "./lib/pairRequests.js";
@@ -2190,10 +2189,9 @@
           {@const item = req.item}
           {@const sub = pendingSubText(item, humanTime(item.paired_at, nowMs))}
           {@const code = pairCodes[req.id] ?? ""}
-          <!-- 顺序：（多台时）设备名 → 角色小字 →（重连）事实小字 → 6 格验证码 → 提示 → 按钮行右对齐。 -->
+          <!-- 顺序：（多台时）设备名 →（重连）事实小字 → 6 格验证码 → 提示 → 按钮行右对齐。不显示角色。 -->
           <section class="pending-request" data-testid="pending-request" data-phase={req.phase}>
             {#if many}<p class="pending-name">{item.name}</p>{/if}
-            <p class="pending-meta">{t(pendingRoleKey(item))}</p>
             {#if sub}<p class="pending-meta">{sub}</p>{/if}
             {#if req.phase === "failed"}
               <p class="pending-error" role="alert">{t("ui.err_pair_code_wrong")}</p>
@@ -2562,7 +2560,7 @@
     font-weight: 600;
     overflow-wrap: anywhere;
   }
-  /* 角色、重连实证：小字次要色。 */
+  /* 重连实证：小字次要色。 */
   .pending-meta {
     margin: -4px 0 0;
     font-size: 13px;
