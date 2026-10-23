@@ -271,6 +271,9 @@ mod tests {
         let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
             .build()
             .expect("mock webview");
+        // 本地来源用 webview 自己的 URL：Windows 上 Tauri 的本地协议是 http://tauri.localhost，
+        // 写死 tauri://localhost 会被当成远端来源，app 命令在执行前就被拒（Windows CI 实测空过）。
+        let local_url = webview.url().expect("webview url");
         let deliver = |cmd: &str| {
             let (tx, rx) = std::sync::mpsc::channel();
             let started = std::time::Instant::now();
@@ -279,17 +282,18 @@ mod tests {
                     cmd: cmd.into(),
                     callback: CallbackFn(0),
                     error: CallbackFn(1),
-                    url: "tauri://localhost".parse().unwrap(),
+                    url: local_url.clone(),
                     body: InvokeBody::Json(json!({})),
                     headers: Default::default(),
                     invoke_key: INVOKE_KEY.to_string(),
                 },
-                Box::new(move |_, _, _, _, _| {
-                    let _ = tx.send(());
+                Box::new(move |_, _, response, _, _| {
+                    let _ = tx.send(matches!(response, tauri::ipc::InvokeResponse::Ok(_)));
                 }),
             );
             let held = started.elapsed();
-            rx.recv().expect("response");
+            // 命令必须真的执行了（被来源校验拒掉也会立刻返回，那就什么都没测）。
+            assert!(rx.recv().expect("response"), "{cmd} 没有执行");
             held
         };
         let sync_held = deliver("probe_sync_wait");
@@ -334,6 +338,7 @@ mod tests {
             .build()
             .expect("mock webview");
 
+        let local_url = webview.url().expect("webview url");
         for (cmd, params) in frontend_calls() {
             let res = get_ipc_response(
                 &webview,
@@ -341,7 +346,7 @@ mod tests {
                     cmd: cmd.into(),
                     callback: CallbackFn(0),
                     error: CallbackFn(1),
-                    url: "tauri://localhost".parse().unwrap(),
+                    url: local_url.clone(),
                     body: InvokeBody::Json(params.clone()),
                     headers: Default::default(),
                     invoke_key: INVOKE_KEY.to_string(),
@@ -353,6 +358,12 @@ mod tests {
                 assert!(
                     !e.contains("invalid args"),
                     "{cmd} {params}: 参数没进到命令体：{e}"
+                );
+                // 失败也必须是命令体里出来的（我们的 keyed 错误：连不上 / 后台拒绝），
+                // 不能是来源校验、ACL 在命令执行前就拒掉——那样这条测试等于空过。
+                assert!(
+                    e.contains("\\\"key\\\""),
+                    "{cmd} {params}: 命令没有执行：{e}"
                 );
             }
         }
