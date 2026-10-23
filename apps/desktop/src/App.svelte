@@ -41,7 +41,8 @@
   import { Button } from "$lib/components/ui/button";
   import { Card } from "$lib/components/ui/card";
   import { Dialog } from "$lib/components/ui/dialog";
-  import { InputOTP } from "$lib/components/ui/input-otp";
+  import * as InputOTP from "$lib/components/ui/input-otp";
+  import { REGEXP_ONLY_DIGITS } from "bits-ui";
   import Loader2Icon from "@lucide/svelte/icons/loader-2";
   import { Toaster } from "$lib/components/ui/sonner";
   import { NavItem } from "$lib/components/ui/nav-item";
@@ -2177,12 +2178,23 @@
             <!-- #1118：申请的角色 + 手机屏幕上的 6 位验证码。只能输一次，满 6 位才能确认。 -->
             <span class="pending-role">{t(pendingRoleKey(item))}</span>
             <div class="pending-code">
-              <InputOTP
+              <InputOTP.Root
                 data-testid="pair-code-input"
                 aria-label={t("ui.pair_code_placeholder")}
+                maxlength={6}
+                pattern={REGEXP_ONLY_DIGITS}
+                pasteTransformer={normalizePairCode}
                 bind:value={() => code, (v) => (pairCodes = { ...pairCodes, [item.node_id]: normalizePairCode(v) })}
-                onEnter={() => { if (isPairCode(code)) confirmPair(true, item, code); }}
-              />
+                onkeydown={(e) => { if (e.key === "Enter" && isPairCode(code)) confirmPair(true, item, code); }}
+              >
+                {#snippet children({ cells })}
+                  <InputOTP.Group>
+                    {#each cells as cell}
+                      <InputOTP.Slot {cell} class="size-11 bg-paper text-[18px] font-semibold text-ink tabular-nums" />
+                    {/each}
+                  </InputOTP.Group>
+                {/snippet}
+              </InputOTP.Root>
               <div class="pending-actions">
                 <Button variant="secondary" class="min-w-[64px]" disabled={!!pairBusy[item.node_id]} onclick={() => confirmPair(false, item)}>{t("ui.deny")}</Button>
                 <!-- DEV-04: 按钮跟标题走。标题说「请求重新连接」而按钮说

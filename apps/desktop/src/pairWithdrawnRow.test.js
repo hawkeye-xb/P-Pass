@@ -134,6 +134,12 @@ describe("DEV-07 后续：手机撤回的配对请求从桌面待确认列表消
       observe() {}
       disconnect() {}
     };
+    // bits-ui PinInput（验证码格子）用 ResizeObserver，jsdom 没有。
+    globalThis.ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
     window.matchMedia = () => ({
       matches: false,
       addEventListener() {},

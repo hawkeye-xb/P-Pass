@@ -151,6 +151,12 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
       observe() {}
       disconnect() {}
     };
+    // bits-ui PinInput 用 ResizeObserver 量输入框，jsdom 没有。
+    globalThis.ResizeObserver = class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
     globalThis.matchMedia = () => ({
       matches: false,
       addEventListener() {},
@@ -190,7 +196,11 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
     const input = screen.getByTestId("pair-code-input");
     await fireEvent.input(input, { target: { value: "12 34" } });
     expect(screen.getByRole("button", { name: "确认加入" }).disabled).toBe(true);
-    await fireEvent.input(input, { target: { value: "123 456" } });
+    // 从手机上抄来的「123 456」：粘贴时去掉空格一次填满 6 格。
+    await fireEvent.paste(input, { clipboardData: { getData: () => "123 456" } });
+    await settle();
+    expect(input.value).toBe("123456");
+    expect(document.querySelectorAll('[data-slot="input-otp-slot"]')[5].textContent.trim()).toBe("6");
     expect(screen.getByRole("button", { name: "确认加入" }).disabled).toBe(false);
     await fireEvent.click(screen.getByRole("button", { name: "确认加入" }));
     await settle();
