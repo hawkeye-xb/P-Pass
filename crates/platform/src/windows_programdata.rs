@@ -34,7 +34,7 @@ pub const ADMINISTRATORS_SID: &str = "S-1-5-32-544";
 
 const ALLOWED_ACE_TYPE: u8 = 0;
 
-fn wide(path: &Path) -> Vec<u16> {
+pub(crate) fn wide(path: &Path) -> Vec<u16> {
     use std::os::windows::ffi::OsStrExt as _;
     path.as_os_str()
         .encode_wide()
@@ -54,7 +54,7 @@ fn failed(action: &'static str, detail: impl Into<String>) -> PlatformError {
 }
 
 /// SID 字符串 → 系统分配的 SID（调用方用 [`free_sid`] 释放）。
-fn sid_from_string(sid: &str) -> Result<PSID> {
+pub(crate) fn sid_from_string(sid: &str) -> Result<PSID> {
     let wide_sid: Vec<u16> = sid.encode_utf16().chain(std::iter::once(0)).collect();
     let mut out: PSID = ptr::null_mut();
     // SAFETY: wide_sid 是 NUL 结尾的宽字符串；成功时 out 由 LocalAlloc 分配。
@@ -69,13 +69,13 @@ fn sid_from_string(sid: &str) -> Result<PSID> {
 }
 
 /// SAFETY: `sid` 必须来自 [`sid_from_string`] 或 `GetNamedSecurityInfoW` 的临时缓冲。
-unsafe fn free_sid(sid: PSID) {
+pub(crate) unsafe fn free_sid(sid: PSID) {
     if !sid.is_null() {
         LocalFree(sid.cast());
     }
 }
 
-unsafe fn sid_to_string(sid: PSID) -> String {
+pub(crate) unsafe fn sid_to_string(sid: PSID) -> String {
     let mut out: *mut u16 = ptr::null_mut();
     if ConvertSidToStringSidW(sid, &mut out) == 0 || out.is_null() {
         return "<unknown sid>".into();
