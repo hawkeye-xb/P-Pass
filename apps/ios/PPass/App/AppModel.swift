@@ -50,6 +50,8 @@ final class AppModel: ObservableObject {
     /// 范围文件读不出来（与「从未保存」不同，#971）；设置行据此显示「读不到」而不是「未选相册」。
     @Published private(set) var scopeUnreadable = false
     @Published private(set) var wifiOnly = true
+    /// 配对时发给电脑的本机名（设置页「这台手机的名字」）。
+    @Published private(set) var deviceName = ""
     /// 后台备份默认关（对位 Android `AutoBackupPrefs.autoEnabled = false`，#982）；真值由 `refresh()` 从盘上读。
     @Published private(set) var autoBackup = false
     @Published private(set) var notifyOnFailure = true
@@ -114,6 +116,12 @@ final class AppModel: ObservableObject {
         do { try backend.engine.setNotifyOnFailure(on); notifyOnFailure = on } catch { settingWriteFailed("notify-on-failure", error) }
     }
 
+    func setDeviceName(_ name: String) {
+        do { try backend.pairing.setDeviceName(name); deviceName = backend.pairing.deviceName(); AppLog.log("device-name: changed") } catch {
+            settingWriteFailed("device-name", error)
+        }
+    }
+
     private func settingWriteFailed(_ what: String, _ error: Error) {
         AppLog.log("settings: write failed (\(what)): \(error)")
         refresh() // 开关显示回到盘上的值
@@ -166,6 +174,7 @@ final class AppModel: ObservableObject {
             scopeUnreadable = true
         }
         wifiOnly = backend.engine.wifiOnly()
+        deviceName = backend.pairing.deviceName()
         autoBackup = backend.engine.autoBackup()
         notifyOnFailure = backend.engine.notifyOnFailure()
         backgroundNotice = Self.backgroundNotice(backend.engine.backgroundRefresh(), backgroundRequested: autoBackup)

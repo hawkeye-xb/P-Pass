@@ -10,6 +10,7 @@
 // | OnboardedDesktopsStore    | OnboardedDesktopsStore.kt   | onboarded_desktops.json       | 空集（失败关闭：按新电脑走） |
 // | SentinelStore             | SentinelStore.kt            | sentinel.json                 | 全 0                     |
 // | BackupScopeStore          | BackupScopeStore.kt         | backup_scope[-<nodeId>].json  | nil（= 一张都不在范围内）  |
+// | DeviceNamePrefs           | —（iOS 独有，Android 读系统设备名） | device_name.json       | nil（= 用系统名）          |
 //
 // 不移植（Android 已退役，见 DisconnectStateManifest 的 RETIRED 行）：PausePrefs、ConfirmedStore、HashCache、
 // ReuploadQueue、WatermarkStore、BackupAttemptStore、WhitelistNudgeStore。暂停标志在 [FlowControlStore]。
@@ -157,6 +158,46 @@ public final class NotifyOnFailurePrefs: @unchecked Sendable {
     public func setEnabled(_ enabled: Bool) throws {
         JSONFile.lock.lock(); defer { JSONFile.lock.unlock() }
         try JSONFile.write(State(enabled: enabled), url)
+    }
+}
+
+// MARK: - DeviceNamePrefs
+
+/// 配对时发给电脑的「这台手机叫什么」（iOS 独有，Android 直接读系统「设备名称」）。
+/// iOS 16 起没有 user-assigned-device-name 权限时 `UIDevice.current.name` 只给「iPhone」，所以在 App 里让用户自己起名；
+/// 没起过（或清空）就用调用方给的系统名。名字属于手机、不属于配对：断开不清。
+public final class DeviceNamePrefs: @unchecked Sendable {
+    public static let fileName = "device_name.json"
+    private let url: URL
+    private let logger: CoreLogger
+
+    public init(directory: URL, logger: CoreLogger = NoopLogger()) {
+        url = directory.appendingPathComponent(Self.fileName)
+        self.logger = logger
+    }
+
+    private struct State: Codable { var name: String }
+
+    /// 用户起过的名字；没有 / 空白 / 文件坏了都是 nil。
+    public func custom() -> String? {
+        JSONFile.lock.lock(); defer { JSONFile.lock.unlock() }
+        guard let raw = JSONFile.readObject(url, logger: logger)?["name"] as? String else { return nil }
+        let name = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? nil : name
+    }
+
+    /// 配对时实际发出去的名字。
+    public func effective(systemName: String) -> String { custom() ?? systemName }
+
+    /// 存用户起的名字；空白 = 不再自定义，回到系统名（删文件）。
+    public func set(_ name: String) throws {
+        JSONFile.lock.lock(); defer { JSONFile.lock.unlock() }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+            return
+        }
+        try JSONFile.write(State(name: trimmed), url)
     }
 }
 

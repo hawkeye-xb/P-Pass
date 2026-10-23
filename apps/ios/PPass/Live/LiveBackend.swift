@@ -236,7 +236,8 @@ final class LiveBackend: @unchecked Sendable {
         let pairing = LivePairing(transportFor: { [plane] in PeerCtrlTransport(plane: plane, peerToken: $0) }, store: pairingStore, onboarded: { [onboarded] in onboarded.wasOnboarded($0) },
                                   onPaired: { [weak self] record, known in self?.paired(record, knownDesktop: known) ?? false },
                                   onDisconnect: { [weak self] in await self?.disconnect() }, logger: logger,
-                                  localNodeId: { [plane] in try plane.nodeId() })
+                                  localNodeId: { [plane] in try plane.nodeId() },
+                                  names: DeviceNamePrefs(directory: root.url, logger: logger), systemName: { UIDevice.current.name })
         let timeline = LiveTimeline(client: { [pairingStore, plane] in
             guard let r = pairingStore.load() else { return nil }
             return ProtoClient(transport: PeerCtrlTransport(plane: plane, peerToken: r.peerToken))

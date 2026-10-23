@@ -79,3 +79,9 @@
 /* 读屏（VoiceOver）：网格缩略图的标签。Android 用的是哈希前缀，读出来没有意义，iOS 单独给一句人话。 */
 "a11y_thumb_video" = "视频";
 "a11y_thumb_photo" = "照片";
+
+/* 本机名（iOS 独有，Android 直接读系统「设备名称」）：iOS 16 起没有 user-assigned-device-name 权限时系统名只给「iPhone」，电脑上认不出是谁的手机。 */
+"setting_device_name" = "这台手机的名字";
+"device_name_edit_title" = "给这台手机起个名字";
+"device_name_edit_body" = "配对时电脑上显示这个名字。已经连上的电脑，请在电脑上改名。";
+"device_name_save" = "保存";

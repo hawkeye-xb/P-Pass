@@ -5,6 +5,27 @@ import XCTest
 
 final class PrefsTests: XCTestCase {
 
+    // MARK: DeviceNamePrefs
+
+    /// 没起过名 → 用系统名；起过 → 杀进程重启后还是它（前后空白去掉）；清空 → 回到系统名。
+    func testDeviceNameDefaultsToSystemNameAndSurvivesRestart() throws {
+        let tmp = TempDir()
+        XCTAssertNil(DeviceNamePrefs(directory: tmp.url).custom())
+        XCTAssertEqual(DeviceNamePrefs(directory: tmp.url).effective(systemName: "iPhone"), "iPhone")
+        try DeviceNamePrefs(directory: tmp.url).set("  妈妈的手机 \n")
+        XCTAssertEqual(DeviceNamePrefs(directory: tmp.url).effective(systemName: "iPhone"), "妈妈的手机")
+        try DeviceNamePrefs(directory: tmp.url).set("   ")
+        XCTAssertNil(DeviceNamePrefs(directory: tmp.url).custom())
+        XCTAssertEqual(DeviceNamePrefs(directory: tmp.url).effective(systemName: "iPhone"), "iPhone")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: tmp.file(DeviceNamePrefs.fileName).path), "清空就删文件，不留空名")
+    }
+
+    func testDeviceNameCorruptFileFallsBackToSystemName() {
+        let tmp = TempDir()
+        tmp.write(DeviceNamePrefs.fileName, "{not json")
+        XCTAssertEqual(DeviceNamePrefs(directory: tmp.url).effective(systemName: "iPhone"), "iPhone")
+    }
+
     // MARK: AutoBackupPrefs
 
     func testAutoBackupDefaultsOffAndSurvivesRestart() throws {

@@ -649,7 +649,7 @@ fun PPassApp() {
                         pairWithQr(
                             client,
                             s.qr,
-                            deviceName(),
+                            deviceName(context),
                             confirmDesktop = { identity ->
                                 val decision = CompletableDeferred<Boolean>()
                                 phase = PairPhase.Confirm(identity, decision)
@@ -1433,9 +1433,14 @@ private fun openAppDetailsSettings(context: Context) {
     context.startActivity(intent)
 }
 
-private fun deviceName(): String {
-    val m = Build.MODEL?.takeIf { it.isNotBlank() } ?: "Android"
-    return m
+/** 用户给手机起的名字（规则见 [pickDeviceName]）。读不到的设置项按没有处理，不让配对失败。 */
+private fun deviceName(context: Context): String {
+    val resolver = context.contentResolver
+    return pickDeviceName(
+        globalName = runCatching { Settings.Global.getString(resolver, Settings.Global.DEVICE_NAME) }.getOrNull(),
+        bluetoothName = runCatching { Settings.Secure.getString(resolver, "bluetooth_name") }.getOrNull(),
+        model = Build.MODEL,
+    )
 }
 
 /**
