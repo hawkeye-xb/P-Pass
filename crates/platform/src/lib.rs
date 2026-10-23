@@ -47,6 +47,9 @@ mod signal;
 mod unix;
 #[cfg(windows)]
 mod windows;
+// D1 / brief §5.1：SCM 服务托管（查询、起停、注册/删除、给主人授权）。
+#[cfg(windows)]
+pub mod windows_service;
 // #287：只给测试用的建链能力。默认不编译，见该模块顶部说明。
 #[cfg(feature = "test-support")]
 pub mod test_support;
