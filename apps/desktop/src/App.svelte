@@ -700,7 +700,12 @@
   // 附进同一个包。
   // #550：入口在托盘菜单——Rust 先把窗口拉到前台，再发
   // `export-logs-requested`，这里收到后照旧导出、照旧 toast + 在 Finder 里展示。
+  // 导出要起 diag 子进程（壳侧已移出主线程），等待期间再次触发（托盘菜单连点）不重入：
+  // 两次导出会写同一个 zip。
+  let exportingLogs = false;
   async function exportLogs() {
+    if (exportingLogs) return;
+    exportingLogs = true;
     try {
       // #1122：诊断包由用户选择保存位置，不再写进照片库目录；取消就什么都不做。
       const out = await saveDialog({
@@ -715,6 +720,8 @@
       } catch (_) {}
     } catch (e) {
       flashMessage(t("ui.export_failed", { err: errDetail(e) }), "error");
+    } finally {
+      exportingLogs = false;
     }
   }
 
@@ -1044,9 +1051,10 @@
   // kickstart：杀 + 拉都不在壳里发生），不行退化到壳自己重启；都走不到才报错。
   async function relaunchShellNow() {
     updateError = "";
+    // 先进 relaunching：按钮随 updateBusy 置灰，等 launchctl 期间不能再点一次。
+    updatePhase = "relaunching";
     try {
       await invoke("relaunch_shell");
-      updatePhase = "relaunching";
     } catch (e) {
       updatePhase = "installed";
       flashMessage(t("ui.update_relaunch_failed"), "warning");

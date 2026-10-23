@@ -38,3 +38,13 @@ test("导出诊断包先让用户选保存位置", () => {
   expect(lib).toMatch(/fn export_logs_bundle\(app: tauri::AppHandle, out: String\)/);
   expect(lib).not.toContain('library.join("ppf-logs.zip")');
 });
+
+// 导出、换壳重启在壳里已是 async（不卡窗口），等待期间必须防重入。
+// 反证：去掉 exportingLogs 守卫，或把 relaunching 挪回 invoke 之后 → 红。
+test("导出诊断包与重启 App 等待期间不重入", () => {
+  const exp = app.slice(app.indexOf("async function exportLogs()"), app.indexOf("async function onHiddenToTray()"));
+  expect(exp).toMatch(/if \(exportingLogs\) return;\s*exportingLogs = true;/);
+  expect(exp).toMatch(/finally \{\s*exportingLogs = false;/);
+  const rel = app.slice(app.indexOf("async function relaunchShellNow()"));
+  expect(rel.indexOf('updatePhase = "relaunching"')).toBeLessThan(rel.indexOf('invoke("relaunch_shell")'));
+});
