@@ -47,6 +47,16 @@ mod signal;
 mod unix;
 #[cfg(windows)]
 mod windows;
+// #1157：D4 / §5.2 的 ProgramData 正本存放与目录 ACL 基础件。
+#[cfg(windows)]
+pub mod windows_programdata;
+#[cfg(windows)]
+pub use windows_programdata::{ProgramDataDir, ProgramDataStore};
+// §5.3：照片库目录授权给服务账户（壳在主人身份下加 ACE）。
+#[cfg(windows)]
+pub mod windows_photo_dir;
+#[cfg(windows)]
+pub use windows_photo_dir::{grant_modify_for_sid, list_modify_sids, GrantOutcome};
 // #287：只给测试用的建链能力。默认不编译，见该模块顶部说明。
 #[cfg(feature = "test-support")]
 pub mod test_support;
