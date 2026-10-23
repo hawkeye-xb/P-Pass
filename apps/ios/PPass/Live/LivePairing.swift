@@ -16,8 +16,6 @@ enum PairVerdict: Equatable {
     case codeWrong
     /// #1118：电脑的密钥确认（`confirm_b`）验不过 / 畸形的 PAKE 消息：没有保存配对。
     case desktopProofFailed
-    /// #1118：用户在核对页点了取消（那时还没发 `pair.request`）。
-    case declined
 
     var outcome: PairOutcome {
         switch self {
@@ -31,7 +29,6 @@ enum PairVerdict: Equatable {
         // 不是电脑主人拒绝的：标题用「这次加入没有完成」，原因写在说明里。
         case .codeWrong: return .refused(note: .codeWrong, ownerSaidNo: false)
         case .desktopProofFailed: return .refused(note: .desktopProofFailed, ownerSaidNo: false)
-        case .declined: return .declined
         }
     }
 
@@ -96,8 +93,6 @@ struct PairVerdictLoop {
     /// 本机 NodeId（64 hex）与二维码里的电脑 NodeId：PAKE 的两端身份。
     var phoneNode = ""
     var deskNode = ""
-    /// 核对电脑（默认总是连接，自动化用）；返回 false = 取消，什么都不发。
-    var review: PairReview = { _ in true }
     /// 提交成功后才调。
     var onCode: PairCodeSink = { _ in }
     /// 电脑名拿不到时的兜底名。
@@ -122,10 +117,9 @@ struct PairVerdictLoop {
             mayWithdraw = caps.contains(Self.cancelCapability)
             desktopName = decoded?.deviceName ?? ""
         }
-        // 核对电脑：在任何 pair.request 之前，防止误扫别人的二维码。取消 = 什么都不发。
+        // 扫码之后不问「要连接吗」，直接发起：电脑名与标识放到验证码页上。标识由本机从二维码的 NodeId 算，不取电脑说的任何东西。
         let info = PairDesktopInfo(name: desktopName.isEmpty ? fallbackDesktopName : desktopName,
                                    fingerprint: crypto.fingerprint(nodeId: deskNode))
-        guard await review(info) else { return .declined }
         try Task.checkCancellation()
 
         let code: String
@@ -144,7 +138,7 @@ struct PairVerdictLoop {
             return .desktopTooOld
         }
         // 只有提交成功之后才显示验证码；被拒的提交（上面的 return）绝不会走到这里。
-        await onCode(PairCodeShown(code: code, phoneNode: phoneNode))
+        await onCode(PairCodeShown(code: code, desktop: info, phoneNode: phoneNode))
         let ttl = submitted.ttlMs > 0 ? UInt64(submitted.ttlMs) : 600_000
         let intervalMs = pollIntervalNs / 1_000_000
         let maxPolls = (ttl + intervalMs - 1) / max(intervalMs, 1) + 1
@@ -290,7 +284,7 @@ final class LivePairing: PairingService, @unchecked Sendable {
         return r.lost ? .lost(desktopName: name) : .paired(desktopName: name)
     }
 
-    func pair(code raw: String, review: @escaping PairReview, onCode: @escaping PairCodeSink) async -> PairOutcome {
+    func pair(code raw: String, onCode: @escaping PairCodeSink) async -> PairOutcome {
         let code: ParsedPairLink
         do { code = try parsePairLink(link: raw.trimmingCharacters(in: .whitespacesAndNewlines)) } catch {
             return .failed(reason: L.s("not_a_code") + " (\(error))")
@@ -321,7 +315,6 @@ final class LivePairing: PairingService, @unchecked Sendable {
         loop.crypto = crypto
         loop.phoneNode = phoneNode
         loop.deskNode = code.nodeId
-        loop.review = review
         loop.onCode = onCode
         let name = deviceName()
         let task = Task { [loop] in try await loop.run(token: code.token, deviceName: name) }

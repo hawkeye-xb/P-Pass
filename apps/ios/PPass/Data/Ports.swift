@@ -99,8 +99,6 @@ enum PairOutcome: Equatable {
     /// #1069：版本不兼容，要先更新 [OutdatedSide] 那一端的 P-Pass（不是电脑主人拒绝的）。
     case needsUpdate(OutdatedSide)
     case failed(reason: String)
-    /// #1118：用户在「要连接这台电脑吗？」核对页点了取消——什么都没发出去，回扫码页。
-    case declined
 }
 
 /// 配对页的补充说明：本端按判决 / `reason` 挑，文字是本机文案（#1072 / #1073：线上不再带文案 key）。
@@ -133,20 +131,20 @@ enum PairNote: Equatable, CaseIterable {
     }
 }
 
-/// #1118：「要连接这台电脑吗？」核对页要显示的内容（电脑名 + 二维码里 NodeId 的指纹）。
+/// 验证码页上的电脑：名字是电脑在 hello 里自报的（只作标签），标识由手机从二维码里的 NodeId 算出（与电脑二维码下方显示的一致）。
 struct PairDesktopInfo: Equatable, Sendable {
     let name: String
     let fingerprint: String
 }
 
-/// #1118：提交成功（收到 `PairSubmitted`）之后才有：手机要显示给用户的验证码，以及本机 NodeId（自动化客户端打 `PAIR_CODE=` 用）。
+/// #1118：提交成功（收到 `PairSubmitted`）之后才有：手机要显示给用户的验证码、要连的电脑，以及本机 NodeId（自动化客户端打 `PAIR_CODE=` 用）。
+/// 扫码后不再问「要连接这台电脑吗？」：扫码就是连接的意图；换码冒充由验证码挡住（码只在手机上，用户输进自己的电脑）。
 struct PairCodeShown: Equatable, Sendable {
     let code: String
+    let desktop: PairDesktopInfo
     let phoneNode: String
 }
 
-/// 核对电脑：返回 true = 连接，false = 取消（取消时不得发出任何 `pair.request`）。UI 注入真正的页面，自动化注入「总是连接」。
-typealias PairReview = @Sendable (PairDesktopInfo) async -> Bool
 /// 验证码要显示了。
 typealias PairCodeSink = @Sendable (PairCodeShown) async -> Void
 
@@ -155,8 +153,8 @@ protocol PairingService: AnyObject {
     /// 配对时间（毫秒）；未配对 / 未知 = nil。
     func pairedAtMs() -> Int64?
     /// code 是二维码内容或手动粘贴的配对串（同一个字符串，`ppf://pair?...`）。
-    /// `review`：「已是成员」探测之后、任何 `pair.request` 之前的核对步骤（#1118）；`onCode`：提交成功后才调，给验证码页。
-    func pair(code: String, review: @escaping PairReview, onCode: @escaping PairCodeSink) async -> PairOutcome
+    /// `onCode`：提交成功后才调，给验证码页（#1118）。扫码之后没有任何要用户点的步骤。
+    func pair(code: String, onCode: @escaping PairCodeSink) async -> PairOutcome
     func cancel() async
     /// 本地断开（UX-06）：先尽力通知电脑撤销本机（5 秒、失败不阻塞），再按断开清单清本地。成功后状态变 `.notPaired`。
     func disconnect() async
@@ -170,7 +168,7 @@ protocol PairingService: AnyObject {
 
 extension PairingService {
     /// 自动化 / 无界面调用：总是连接、不显示验证码。
-    func pair(code: String) async -> PairOutcome { await pair(code: code, review: { _ in true }, onCode: { _ in }) }
+    func pair(code: String) async -> PairOutcome { await pair(code: code, onCode: { _ in }) }
 }
 
 /// 备份引擎：首页的全部事实 + 唯一的那个按钮。

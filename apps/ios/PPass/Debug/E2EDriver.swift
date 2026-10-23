@@ -52,9 +52,9 @@ enum E2EPairCode {
         } catch { AppLog.log("e2e: cannot record pair code (\(error))") }
     }
 
-    /// e2e 的配对：核对电脑自动「连接」，验证码写进约定文件。
+    /// e2e 的配对：验证码写进约定文件。
     static func pair(_ pairing: PairingService, link: String, dir: URL? = directory()) async -> PairOutcome {
-        await pairing.pair(code: link, review: { _ in true }, onCode: { record($0, dir: dir) })
+        await pairing.pair(code: link, onCode: { record($0, dir: dir) })
     }
 }
 

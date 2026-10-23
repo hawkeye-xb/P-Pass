@@ -121,7 +121,7 @@ class PairCodeFlowTest {
         awaitPairVerdict(desk, "t", "d", ceremony)
         assertEquals(
             listOf(
-                "rpc:hello", "confirmDesktop", "newCode", "start:123456",
+                "rpc:hello", "newCode", "start:123456",
                 "rpc:pair.request", "showCode:123456", "rpc:pair.status",
             ),
             log,
@@ -319,25 +319,23 @@ class PairCodeFlowTest {
         assertEquals(PAIR_STATUS_MAX_CONSECUTIVE_FAILURES, desk.confirms.size)
     }
 
-    // ── the "connect to this computer?" step ──
+    // ── straight from the scan to the code page (no "connect to this computer?" step) ──
 
+    /** After the hello the very next thing is the request, then the code page — nothing in between
+     *  waits for the user. Counter-proof: put a user-facing step back before pair.request (the old
+     *  confirmDesktop) and it shows up in this list → red. */
     @Test
-    fun decliningTheComputer_sendsNoPairRequest_andIsNotAFailure() = runTest {
+    fun theScanGoesStraightToTheCodePage_withoutAsking() = runTest {
         val log = mutableListOf<String>()
-        val desk = desk(log)
-        val verdict = awaitPairVerdict(desk, "t", "d", FakeCeremony(connect = false, events = log))
-        assertEquals(PairVerdict.Cancelled, verdict)
-        assertEquals(PairOutcome.Cancelled, verdict.toOutcome { error("no join") })
-        assertEquals(listOf("rpc:hello", "confirmDesktop"), log)
+        val ceremony = FakeCeremony(events = log)
+        awaitPairVerdict(desk(log, status = { _, _ -> reply(PairStatusReply(state = PairStatusState.DENIED)) }), "t", "d", ceremony)
+        val userFacing = log.filterNot { it.startsWith("newCode") || it.startsWith("start:") }
+        assertEquals(listOf("rpc:hello", "rpc:pair.request", "showCode:123456"), userFacing.take(3))
+        assertEquals("the code page names the computer", "Studio Mac", ceremony.desktopNameSeen)
     }
 
     @Test
     fun theComputersNameComesFromTheHello_andFallsBackWhenAbsent() = runTest {
-        val log = mutableListOf<String>()
-        val named = FakeCeremony(events = log)
-        awaitPairVerdict(desk(log, status = { _, _ -> reply(PairStatusReply(state = PairStatusState.DENIED)) }), "t", "d", named)
-        assertEquals("Studio Mac", named.desktopNameSeen)
-
         val unnamed = FakeCeremony(events = mutableListOf())
         awaitPairVerdict(
             desk(mutableListOf(), helloName = "", status = { _, _ -> reply(PairStatusReply(state = PairStatusState.DENIED)) }),
@@ -347,23 +345,21 @@ class PairCodeFlowTest {
         assertFalse(unnamed.events.isEmpty())
     }
 
-    // ── the identity on the "connect?" page comes from the QR's node, never from the computer ──
+    // ── the identity on the code page comes from the QR's node, never from the computer ──
 
     @Test
-    fun theShownIdentity_isComputedFromTheQrNode_notFromAnythingTheComputerSays() = runTest {
+    fun theShownIdentity_isComputedFromTheQrNode_notFromAnythingTheComputerSays() {
         val qrNode = "ab".repeat(32)
         var shown: PairDesktopIdentity? = null
         val ceremony = FfiPairCeremony(
             token = "t", phoneNode = "cd".repeat(32), deskNode = qrNode, fallbackName = "fallback",
-            confirm = { shown = it; false },
-            onCode = { _, _ -> error("no code expected") },
+            onCode = { _, desktop, _ -> shown = desktop },
             fingerprintOf = { node -> "FP<$node>" },
         )
         // The computer claims a name that looks like a fingerprint.
-        val log = mutableListOf<String>()
-        val desk = desk(log, helloName = "AAAA BBBB")
-        assertEquals(PairVerdict.Cancelled, awaitPairVerdict(desk, "t", "d", ceremony))
+        ceremony.showCode("123456", "AAAA BBBB")
         assertEquals(PairDesktopIdentity(name = "AAAA BBBB", fingerprint = "FP<$qrNode>"), shown)
-        assertTrue(shown!!.fingerprint != "AAAA BBBB")
+        ceremony.showCode("123456", null)
+        assertEquals(PairDesktopIdentity(name = "fallback", fingerprint = "FP<$qrNode>"), shown)
     }
 }

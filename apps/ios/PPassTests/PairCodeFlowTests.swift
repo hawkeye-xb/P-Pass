@@ -30,7 +30,7 @@ final class PairCodeFlowTests: XCTestCase {
         let seen = Box<[(PairCodeShown, [String])]>([])
         _ = try await F.loop(desk, onCode: { s in seen.update { $0.append((s, desk.methods)) } }).run(token: "t", deviceName: "d")
         XCTAssertEqual(seen.value.count, 1)
-        XCTAssertEqual(seen.value.first?.0, PairCodeShown(code: "123456", phoneNode: F.phoneNode))
+        XCTAssertEqual(seen.value.first?.0, PairCodeShown(code: "123456", desktop: F.desktopInfo(), phoneNode: F.phoneNode))
         XCTAssertEqual(seen.value.first?.1, [Methods.hello, Methods.pairRequest], "显示验证码时已发出 pair.request、还没轮询")
     }
 
@@ -52,39 +52,32 @@ final class PairCodeFlowTests: XCTestCase {
         XCTAssertEqual(start.code, "123456")
     }
 
-    // MARK: 核对电脑
+    // MARK: 扫码后直接到验证码页（不再问「要连接这台电脑吗？」）
 
-    /// 取消 = 什么都不发（只有 hello），也不起 PAKE。反证：去掉 `guard await review(info)`，本条红。
-    func test_declining_the_review_sends_no_pair_request() async throws {
-        let crypto = FakePairCrypto()
-        let desk = FakeDesk([Methods.hello: [try F.hello()]])
-        let v = try await F.loop(desk, crypto: crypto, review: { _ in false }).run(token: "t", deviceName: "d")
-        XCTAssertEqual(v, .declined)
-        XCTAssertEqual(v.outcome, .declined)
-        XCTAssertEqual(desk.methods, [Methods.hello])
-        XCTAssertTrue(crypto.starts.isEmpty)
-    }
-
-    /// 核对页看到 hello 的电脑名 + 二维码里 NodeId 的指纹；这时还没有 pair.request。拿不到电脑名用兜底名。
-    func test_review_sees_name_and_fingerprint_before_any_pair_request() async throws {
+    /// 扫码后没有任何等用户点的步骤：没有任何外部输入，验证码页（onCode，带电脑名 + 标识）也会在 hello → pair.request 之后自己出现。
+    /// 反证：在 pair.request 之前塞回一个要等用户回答的步骤（如原来的 review 闸门），onCode 等不到，本条超时红。
+    func test_scan_goes_straight_to_the_code_page_without_asking() async throws {
         for (name, shownName) in [("Home Mac", "Home Mac"), ("", L.s("storage_device_default"))] {
             let desk = FakeDesk([Methods.hello: [try F.hello(name: name)], Methods.pairRequest: [try F.submitted()],
-                                 Methods.pairStatus: [try .ok(PairStatusReply(state: "expired"))]])
-            let seen = Box<[(PairDesktopInfo, [String])]>([])
-            _ = try await F.loop(desk, review: { info in seen.update { $0.append((info, desk.methods)) }; return true }).run(token: "t", deviceName: "d")
-            XCTAssertEqual(seen.value.first?.0, PairDesktopInfo(name: shownName, fingerprint: FakePairCrypto.expectedFingerprint(F.deskNode)))
-            XCTAssertEqual(seen.value.first?.1, [Methods.hello], "核对在 pair.request 之前")
+                                 Methods.pairStatus: [try .ok(PairStatusReply(state: "pending"))]])
+            let seen = Box<[(PairCodeShown, [String])]>([])
+            let shown = expectation(description: "验证码页")
+            let run = Task { _ = try? await F.loop(desk, onCode: { s in seen.update { $0.append((s, desk.methods)) }; shown.fulfill() }).run(token: "t", deviceName: "d") }
+            await fulfillment(of: [shown], timeout: 5)
+            run.cancel()
+            XCTAssertEqual(seen.value.first?.1, [Methods.hello, Methods.pairRequest], "hello 之后直接 pair.request")
+            XCTAssertEqual(seen.value.first?.0.desktop, PairDesktopInfo(name: shownName, fingerprint: FakePairCrypto.expectedFingerprint(F.deskNode)))
         }
     }
 
-    /// 指纹只能由二维码里的 node（实际拨号的那个）算出：电脑自报的名字里带「像指纹的串」、或与二维码不符的任何身份信息，
-    /// 都不影响核对页的指纹。反证：把 `fingerprint(nodeId: deskNode)` 临时改成取 hello 自报的名字，本条红。
+    /// 标识只能由二维码里的 node（实际拨号的那个）算出：电脑自报的名字里带「像指纹的串」、或与二维码不符的任何身份信息，
+    /// 都不影响验证码页的标识。反证：把 `fingerprint(nodeId: deskNode)` 临时改成取 hello 自报的名字，本条红。
     func test_fingerprint_comes_from_the_qr_node_never_from_the_desktops_self_report() async throws {
         for selfReported in ["AAAA BBBB", "FP-" + String(repeating: "c", count: 8), PairFixtures.phoneNode] {
             let desk = FakeDesk([Methods.hello: [try F.hello(name: selfReported)], Methods.pairRequest: [try F.submitted()],
                                  Methods.pairStatus: [try .ok(PairStatusReply(state: "expired"))]])
             let seen = Box<[PairDesktopInfo]>([])
-            _ = try await F.loop(desk, review: { info in seen.update { $0.append(info) }; return true }).run(token: "t", deviceName: "d")
+            _ = try await F.loop(desk, onCode: { s in seen.update { $0.append(s.desktop) } }).run(token: "t", deviceName: "d")
             let info = try XCTUnwrap(seen.value.first)
             XCTAssertEqual(info.fingerprint, FakePairCrypto.expectedFingerprint(F.deskNode), "自报「\(selfReported)」")
             XCTAssertEqual(info.name, selfReported, "名字只是辨认用的标签，原样显示")
@@ -183,11 +176,12 @@ final class PairCodeFlowTests: XCTestCase {
         let h = try LiveHarness(desk: [Methods.hello: [try F.hello()], Methods.pairRequest: [try F.submitted()],
                                        Methods.pairStatus: [try F.pending(pakeB: F.pakeB)], Methods.pairConfirm: [try F.confirmed(pairingId: "e9")]])
         let shown = Box<[PairCodeShown]>([])
-        let outcome = await h.pairing.pair(code: h.link, review: { _ in true }, onCode: { s in shown.update { $0.append(s) } })
+        let outcome = await h.pairing.pair(code: h.link, onCode: { s in shown.update { $0.append(s) } })
         XCTAssertEqual(outcome, .joined(firstTime: true))
         XCTAssertEqual(h.store.load()?.pairingId, "e9")
         XCTAssertEqual(h.store.load()?.storageDeviceName, "Home Mac")
-        XCTAssertEqual(shown.value, [PairCodeShown(code: "123456", phoneNode: h.nodeId)])
+        XCTAssertEqual(shown.value.map(\.code), ["123456"])
+        XCTAssertEqual(shown.value.map(\.phoneNode), [h.nodeId])
         XCTAssertEqual(h.crypto.starts.first?.desk, h.deskNodeInLink, "PAKE 的电脑身份来自二维码")
     }
 
@@ -323,34 +317,14 @@ final class PairCodeFlowTests: XCTestCase {
         XCTAssertEqual(PairCodeFormat.grouped("000012"), "000 012")
     }
 
-    /// 核对页的闸门：先点后等、点两次、任务取消都只认第一次，等待者一定被唤醒。
-    func test_review_gate_resolves_exactly_once() async {
-        let early = PairReviewGate()
-        early.resolve(true); early.resolve(false)
-        let a = await early.wait()
-        XCTAssertTrue(a)
-
-        let late = PairReviewGate()
-        Task { try? await Task.sleep(nanoseconds: 30_000_000); late.resolve(false) }
-        let b = await late.wait()
-        XCTAssertFalse(b)
-
-        let cancelled = PairReviewGate()
-        let t = Task { await cancelled.wait() }
-        try? await Task.sleep(nanoseconds: 30_000_000)
-        t.cancel()
-        let c = await t.value
-        XCTAssertFalse(c, "任务被取消 = 不连接")
-    }
-
     #if DEBUG
     /// e2e 取码约定：一行 `PAIR_CODE=<码> node=<本机NodeId>` 追加进 `<PPASS_E2E_DIR>/pair_code.txt`；没设目录什么都不写。
     func test_e2e_pair_code_file_convention() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("e2e-code-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: dir) }
-        let a = PairCodeShown(code: "123456", phoneNode: F.phoneNode)
-        let b = PairCodeShown(code: "654321", phoneNode: F.deskNode)
+        let a = PairCodeShown(code: "123456", desktop: F.desktopInfo(), phoneNode: F.phoneNode)
+        let b = PairCodeShown(code: "654321", desktop: F.desktopInfo(), phoneNode: F.deskNode)
         E2EPairCode.record(a, dir: dir); E2EPairCode.record(b, dir: dir)
         let text = try String(contentsOf: dir.appendingPathComponent("pair_code.txt"), encoding: .utf8)
         XCTAssertEqual(text, "PAIR_CODE=123456 node=\(F.phoneNode)\nPAIR_CODE=654321 node=\(F.deskNode)\n")

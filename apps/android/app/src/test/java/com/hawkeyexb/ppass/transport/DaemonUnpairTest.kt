@@ -62,8 +62,7 @@ print('confirmed', resp['result'])
                     pairWithQr(
                         client, qr!!.trim(), deviceName = "JVM 测试手机",
                         // #1118: automation = always "connect"; the code shown goes to the owner side.
-                        confirmDesktop = { true },
-                        onCode = { code, node -> shown.complete(code to node) },
+                        onCode = { code, _, node -> shown.complete(code to node) },
                     )
                 }
                 launch(Dispatchers.IO) {

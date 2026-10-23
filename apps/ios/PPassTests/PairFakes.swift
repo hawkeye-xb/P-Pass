@@ -99,15 +99,19 @@ enum PairFixtures {
         try .ok(PairStatusReply(state: "accepted", accepted: PairAccepted(storageDeviceName: "Home Mac", pairingId: pairingId), confirmB: confirmB))
     }
 
-    /// 测试用的验证码状态机：1ms 间隔、假 PAKE、核对步骤可注入。
+    /// hello 默认电脑名 + 二维码 NodeId 的假指纹：验证码页上应显示的电脑。
+    static func desktopInfo(name: String = "Home Mac") -> PairDesktopInfo {
+        PairDesktopInfo(name: name, fingerprint: FakePairCrypto.expectedFingerprint(deskNode))
+    }
+
+    /// 测试用的验证码状态机：1ms 间隔、假 PAKE。
     static func loop(_ desk: FakeDesk, crypto: FakePairCrypto = FakePairCrypto(),
-                     review: @escaping PairReview = { _ in true }, onCode: @escaping PairCodeSink = { _ in }) -> PairVerdictLoop {
+                     onCode: @escaping PairCodeSink = { _ in }) -> PairVerdictLoop {
         var l = PairVerdictLoop(rpc: { try await desk.rpc($0, $1) })
         l.pollIntervalNs = 1_000_000
         l.crypto = crypto
         l.phoneNode = phoneNode
         l.deskNode = deskNode
-        l.review = review
         l.onCode = onCode
         return l
     }

@@ -32,8 +32,7 @@ class SetupPairingTest {
                 val outcome = pairWithQr(
                     client, qr!!.trim(), deviceName = "SM-S9210",
                     // #1118：自动化 = 总是「连接」；码打到 logcat（只在测试路径），宿主脚本据此在电脑上输码。
-                    confirmDesktop = { true },
-                    onCode = { code, node -> Log.i("SetupPairing", "PAIR_CODE=$code node=$node") },
+                    onCode = { code, _, node -> Log.i("SetupPairing", "PAIR_CODE=$code node=$node") },
                 )
                 assertTrue("pair: $outcome", outcome is PairOutcome.Joined)
                 PairingStore(dir).save((outcome as PairOutcome.Joined).pairing)

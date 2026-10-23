@@ -225,6 +225,5 @@ class NET10PairPollTest {
             assertEquals(cause, o.cause)
             assertFalse(o.ownerSaidNo)
         }
-        assertEquals(PairOutcome.Cancelled, PairVerdict.Cancelled.toOutcome(join))
     }
 }

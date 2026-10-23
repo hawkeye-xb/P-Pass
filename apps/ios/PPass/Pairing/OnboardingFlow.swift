@@ -11,17 +11,14 @@ struct OnboardingFlow: View {
     enum Step: Equatable { case welcome, scan, manual(fromScan: Bool), status(PairStep) }
     enum PairStep: Equatable {
         case waiting
-        /// #1118：「要连接这台电脑吗？」核对页（电脑名 + 指纹），在任何 pair.request 之前。
-        case review(PairDesktopInfo)
-        /// #1118：提交成功之后才有的验证码页（6 位数字）。
-        case code(String)
+        /// #1118：提交成功之后才有的验证码页（电脑名 + 6 位数字 + 电脑标识）。扫码后不经任何询问直接到这里（中间只有发请求的等待）。
+        case code(PairCodeShown)
         case refused(lapsed: Bool, note: String?), needsUpdate(OutdatedSide), failed(String)
     }
 
     @EnvironmentObject var app: AppModel
     @State private var step: Step = .welcome
     @State private var pairTask: Task<Void, Never>?
-    @State private var reviewGate = PairReviewGate()
 
     var body: some View {
         Group {
@@ -29,7 +26,6 @@ struct OnboardingFlow: View {
             case .welcome: welcome
             case .scan: ScanScreen(onCode: submit, onManual: { step = .manual(fromScan: true) }, onClose: { step = .welcome })
             case .manual(let fromScan): ManualPairScreen(onSubmit: submit, onBack: { step = Self.manualBackTarget(fromScan: fromScan) })
-            case .status(.review(let info)): PairReviewScreen(info: info, onConnect: { reviewGate.resolve(true) }, onCancel: { reviewGate.resolve(false) })
             case .status(let s): PairStatusScreen(step: s, onCancel: cancel, onRetry: { step = .scan })
             }
         }
@@ -71,25 +67,14 @@ struct OnboardingFlow: View {
 
     private func submit(_ code: String) {
         step = .status(.waiting)
-        let gate = PairReviewGate()
-        reviewGate = gate
-        // 自动化（DEBUG）：环境变量给配对串的路径没有人点「连接」，核对步骤自动通过。
-        let autoConnect = Self.autoConnect
-        let review: PairReview = { info in
-            if autoConnect { return true }
-            await MainActor.run { step = .status(.review(info)) }
-            let go = await gate.wait()
-            if go { await MainActor.run { step = .status(.waiting) } }
-            return go
-        }
         let onCode: PairCodeSink = { shown in
-            await MainActor.run { step = .status(.code(shown.code)) }
+            await MainActor.run { step = .status(.code(shown)) }
             #if DEBUG
             E2EPairCode.record(shown)
             #endif
         }
         pairTask = Task {
-            let outcome = await app.backend.pairing.pair(code: code, review: review, onCode: onCode)
+            let outcome = await app.backend.pairing.pair(code: code, onCode: onCode)
             guard !Task.isCancelled else { return }
             switch outcome {
             case .joined(let firstTime, let settingSaveFailed): app.paired(firstTime: firstTime, settingSaveFailed: settingSaveFailed)
@@ -97,22 +82,11 @@ struct OnboardingFlow: View {
                 step = .status(.refused(lapsed: !ownerSaidNo, note: note?.text))
             case .needsUpdate(let side): step = .status(.needsUpdate(side))
             case .failed(let reason): step = .status(.failed(reason))
-            // 核对页点了取消：什么都没发，回扫码页。
-            case .declined: step = .scan
             }
         }
     }
 
-    private static var autoConnect: Bool {
-        #if DEBUG
-        return ProcessInfo.processInfo.environment["PPASS_PAIR_CODE"].map { !$0.isEmpty } ?? false
-        #else
-        return false
-        #endif
-    }
-
     private func cancel() {
-        reviewGate.resolve(false)
         pairTask?.cancel()
         Task { await app.backend.pairing.cancel() }
         step = .welcome
@@ -205,10 +179,8 @@ struct PairStatusScreen: View {
                 case .waiting:
                     ProgressView().controlSize(.large).padding(.bottom, 6)
                     message(title: L.s("pair_waiting_title"), body: L.s("pair_waiting_body"))
-                case .review:
-                    EmptyView() // 核对页是单独的 PairReviewScreen
-                case .code(let code):
-                    PairCodeView(code: code)
+                case .code(let shown):
+                    PairCodeView(shown: shown)
                 case .refused(let lapsed, let note):
                     message(title: L.s(lapsed ? "pair_lapsed_title" : "pair_refused_title"), body: L.s("pair_refused_body"),
                             note: note)
@@ -251,96 +223,35 @@ extension OnboardingFlow.PairStep {
     /// 还在等的两种（发请求中 / 显示验证码中）：底部是「取消」，其余是「重新扫码」。
     var isWaiting: Bool {
         switch self {
-        case .waiting, .code, .review: return true
+        case .waiting, .code: return true
         default: return false
         }
     }
 }
 
-/// 同 Android 配对页的版式：只有标题 + 大号验证码 + 说明，不加状态图标；等待由系统转圈之外的显示本身表达。
+/// 验证码页（对位 Android PairCodeScreen），从上到下、主次由强到弱：「正在连接」小标签 → 电脑名 → 6 位验证码（3 + 3）→
+/// 说明 → 电脑标识。字号只用 PPFont 语义样式（随系统字号缩放）：验证码 pairCode > 电脑名 title3 > 说明 body > 标识 monoSmall，
+/// 电脑名封顶在 AX4（`nameCap`，系统 dynamicTypeSize 上限）：title3 涨得比 largeTitle 快，不封顶的话 AX5 会反超验证码。
+/// 与 Android 的主次一致；两端字号差异登记在 tokens.json platforms.ios。
 struct PairCodeView: View {
-    let code: String
+    let shown: PairCodeShown
+    static let nameCap = DynamicTypeSize.accessibility4
 
     var body: some View {
-        VStack(spacing: 18) {
-            Text(L.s("pair_code_title")).font(PPFont.serif(30, .regular, relativeTo: .title)).multilineTextAlignment(.center)
-            Text(PairCodeFormat.grouped(code))
-                .font(PPFont.serif(64, .regular, relativeTo: .largeTitle)).monospacedDigit().kerning(4)
+        VStack(spacing: 10) {
+            Text(L.s("pair_connecting_label")).font(PPFont.captionBold).foregroundStyle(PPColor.ink40)
+            Text(shown.desktop.name).font(PPFont.title3).dynamicTypeSize(...Self.nameCap).foregroundStyle(PPColor.ink).multilineTextAlignment(.center)
+                .accessibilityIdentifier("pairDesktopName")
+            Text(PairCodeFormat.grouped(shown.code))
+                .font(PPFont.pairCode).foregroundStyle(PPColor.ink)
                 .minimumScaleFactor(0.6).lineLimit(1)
-                .padding(.vertical, 8)
-                .accessibilityLabel(code.map(String.init).joined(separator: " "))
+                .padding(.vertical, 12)
+                .accessibilityLabel(shown.code.map(String.init).joined(separator: " "))
                 .accessibilityIdentifier("pairCodeValue")
-            Text(L.s("pair_code_body")).font(PPFont.body).foregroundStyle(PPColor.ink40).lineSpacing(5).multilineTextAlignment(.center)
+            Text(L.s("pair_code_body")).font(PPFont.body).foregroundStyle(PPColor.ink60).lineSpacing(5).multilineTextAlignment(.center)
+            Text(L.f("pair_desktop_identity", shown.desktop.fingerprint)).font(PPFont.monoSmall).foregroundStyle(PPColor.ink40)
+                .padding(.top, 6)
+                .accessibilityIdentifier("pairFingerprint")
         }
-    }
-}
-
-/// 「要连接这台电脑吗？」核对页：电脑名 + 指纹 + 说明，[连接] [取消]。
-struct PairReviewScreen: View {
-    let info: PairDesktopInfo
-    let onConnect: () -> Void
-    let onCancel: () -> Void
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // 字号层级（主 → 次）：标题 title2 > 电脑名 title3 > 说明 body > 指纹 monoSmall，全是 PPFont 语义样式，随系统字号缩放。
-                Text(L.s("pair_confirm_desktop_title")).font(PPFont.title2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                VStack(alignment: .leading, spacing: 16) {
-                    field(L.s("pair_desktop_name_label"),
-                          Text(info.name).font(PPFont.title3))
-                    field(L.s("pair_desktop_identity_label"),
-                          Text(info.fingerprint).font(PPFont.monoSmall)
-                              .accessibilityIdentifier("pairFingerprint"))
-                }
-                Text(L.s("pair_confirm_desktop_body")).font(PPFont.body).foregroundStyle(PPColor.ink40).lineSpacing(5)
-            }
-            .padding(34)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .ppScreen()
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 12) {
-                PPButton(title: L.s("pair_connect"), height: 58, fontSize: 18, action: onConnect).accessibilityIdentifier("pairConnect")
-                PPButton(title: L.s("cancel"), kind: .quiet, height: 58, fontSize: 18, action: onCancel).accessibilityIdentifier("pairReviewCancel")
-            }
-            .padding(.horizontal, 34).padding(.bottom, 24)
-        }
-    }
-
-    private func field(_ label: String, _ value: some View) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label).font(PPFont.captionBold).foregroundStyle(PPColor.ink40)
-            value.foregroundStyle(PPColor.ink)
-        }
-    }
-}
-
-/// 核对页的「连接 / 取消」闸门：UI 点按钮 → `resolve`；状态机 `await wait()`。先点后等、点两次、任务被取消都安全，只认第一次。
-final class PairReviewGate: @unchecked Sendable {
-    private let lock = NSLock()
-    private var decision: Bool?
-    private var waiter: CheckedContinuation<Bool, Never>?
-
-    func resolve(_ connect: Bool) {
-        lock.lock()
-        guard decision == nil else { lock.unlock(); return }
-        decision = connect
-        let w = waiter
-        waiter = nil
-        lock.unlock()
-        w?.resume(returning: connect)
-    }
-
-    func wait() async -> Bool {
-        await withTaskCancellationHandler {
-            await withCheckedContinuation { (c: CheckedContinuation<Bool, Never>) in
-                lock.lock()
-                if let d = decision { lock.unlock(); c.resume(returning: d); return }
-                waiter = c
-                lock.unlock()
-            }
-        } onCancel: { resolve(false) }
     }
 }

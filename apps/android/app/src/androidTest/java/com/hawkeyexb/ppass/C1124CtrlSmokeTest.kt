@@ -61,8 +61,7 @@ class C1124CtrlSmokeTest {
                     client, qr!!.trim(), deviceName = "C1124-smoke",
                     // #1118：自动化 = 总是「连接」；码在提交成功后打出，宿主脚本（desk_auto_allow）
                     // 扫 logcat 里这一行，扮演业主在电脑上输码。只在测试路径打，正式 UI 不写日志。
-                    confirmDesktop = { true },
-                    onCode = { code, node -> say("PAIR_CODE=$code node=$node") },
+                    onCode = { code, _, node -> say("PAIR_CODE=$code node=$node") },
                 )
                 assertTrue("pair: $outcome", outcome is PairOutcome.Joined)
                 val pairing = (outcome as PairOutcome.Joined).pairing

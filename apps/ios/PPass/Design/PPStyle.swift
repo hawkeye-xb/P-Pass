@@ -46,6 +46,8 @@ enum PPFont {
     /// 等宽（诊断细节 / 配对串）：Manrope 没有等宽，退到系统等宽，只用于代码样的文本。
     static var mono: Font { .system(.body, design: .monospaced) }
     static var monoSmall: Font { .system(.footnote, design: .monospaced) }
+    /// 配对验证码（6 位数字，3 + 3）：配对页最大一级，系统等宽 largeTitle 档粗体，随系统字号缩放。
+    static var pairCode: Font { .system(.largeTitle, design: .monospaced).weight(.bold) }
     static var headline: Font { serif(18, relativeTo: .headline) }
     static var title3: Font { serif(24, relativeTo: .title3) }
     static var title2: Font { serif(30, relativeTo: .title2) }

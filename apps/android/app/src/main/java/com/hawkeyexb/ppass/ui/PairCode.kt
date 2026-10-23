@@ -1,5 +1,5 @@
-// #1118: the two pairing screens that carry the code exchange — "connect to this computer?"
-// (before anything is sent) and "enter this code on the computer" (after the request was queued).
+// #1118: the pairing screen that carries the code exchange — "enter this code on the computer",
+// shown right after the scan once the request was queued.
 // Same page shell and tokens as the other pairing screens ([PairStatusScreen]).
 package com.hawkeyexb.ppass.ui
 
@@ -11,12 +11,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.Typography
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -29,110 +32,61 @@ internal fun groupPairCode(code: String): String =
     if (code.length == 6) code.substring(0, 3) + " " + code.substring(3) else code
 
 /**
- * Type levels of [ConfirmDesktopScreen], most to least prominent: title > computer name > explanation >
- * fingerprint (small monospace; it is a string to compare, not the page's conclusion). tokens.json
- * mobile-ui.type.pair-* records the same values.
+ * Type levels of [PairCodeScreen], most to least prominent: code > computer name > explanation >
+ * computer identity; "Connecting to" is a small label above the name. Built from the Material type
+ * scale ([MaterialTheme.typography] in the app, the default [Typography] in tests) — no hand-written
+ * sizes except the explanation, raised to the phone body floor (tokens size.mobile.body-min).
+ * tokens.json mobile-ui.type.pair-* records the resulting sizes; iOS deviations live in platforms.ios.
  */
-internal object ConfirmDesktopType {
-    val Title = 30.sp
-    val Name = 22.sp
-    val Body = PPSize.BodyMin
-    val Label = 14.sp
-    val Fingerprint = 14.sp
-}
+internal data class PairCodeType(
+    val label: TextStyle,
+    val name: TextStyle,
+    val code: TextStyle,
+    val body: TextStyle,
+    val identity: TextStyle,
+)
+
+internal fun pairCodeType(t: Typography) = PairCodeType(
+    label = t.labelLarge.copy(fontFamily = PPFont.Sans, fontWeight = FontWeight.Bold),
+    name = t.titleLarge.copy(fontFamily = PPFont.Sans, fontWeight = FontWeight.Bold),
+    code = t.displayMedium.copy(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, letterSpacing = 2.sp),
+    body = t.bodyLarge.copy(fontFamily = PPFont.Sans, fontSize = PPSize.BodyMin, lineHeight = 26.sp),
+    identity = t.bodySmall.copy(fontFamily = FontFamily.Monospace),
+)
 
 /**
- * "Connect to this computer?": the computer's name and its identity (the same `AB12 CD34` the
- * computer prints under its QR code). Shown before any pair.request, so a wrongly scanned QR code
- * of somebody else's computer is caught here.
+ * The code page, straight after the scan (#1118; no "connect to this computer?" step): which
+ * computer this is, the code in 3 + 3 groups, what to do with it, and the computer's identity (the
+ * same `AB12 CD34` the computer prints under its QR code).
  */
 @Composable
-fun ConfirmDesktopScreen(name: String, fingerprint: String, onConnect: () -> Unit, onCancel: () -> Unit) {
+fun PairCodeScreen(code: String, desktopName: String, fingerprint: String, onCancel: () -> Unit) {
+    val type = pairCodeType(MaterialTheme.typography)
     PPScreen {
-        androidx.compose.material3.ProvideTextStyle(
-            androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
+        Column(
+            Modifier.fillMaxSize().padding(34.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
         ) {
-            Column(
-                Modifier.fillMaxSize().padding(34.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Text(
-                    stringResource(R.string.pair_confirm_desktop_title), fontSize = ConfirmDesktopType.Title, lineHeight = 38.sp,
-                    fontFamily = PPFont.Serif, color = PPColor.Ink, textAlign = TextAlign.Center,
-                )
-                Spacer(Modifier.height(24.dp))
-                Text(
-                    stringResource(R.string.pair_desktop_name_label), fontSize = ConfirmDesktopType.Label,
-                    fontWeight = FontWeight.Bold, color = PPColor.Ink40,
-                )
-                Text(
-                    name, fontSize = ConfirmDesktopType.Name, fontWeight = FontWeight.Bold,
-                    color = PPColor.Ink, textAlign = TextAlign.Center,
-                )
-                Spacer(Modifier.height(16.dp))
-                Text(
-                    stringResource(R.string.pair_desktop_identity_label), fontSize = ConfirmDesktopType.Label,
-                    fontWeight = FontWeight.Bold, color = PPColor.Ink40,
-                )
-                Text(
-                    fingerprint, fontSize = ConfirmDesktopType.Fingerprint, fontFamily = FontFamily.Monospace,
-                    letterSpacing = 1.sp, color = PPColor.Ink60, textAlign = TextAlign.Center,
-                )
-                Spacer(Modifier.height(20.dp))
-                Text(
-                    stringResource(R.string.pair_confirm_desktop_body), fontSize = ConfirmDesktopType.Body,
-                    lineHeight = 26.sp, color = PPColor.Ink40, textAlign = TextAlign.Center,
-                )
-                Spacer(Modifier.height(32.dp))
-                PrimaryButton(stringResource(R.string.pair_connect), onConnect)
-                Spacer(Modifier.height(12.dp))
-                OutlinedButton(
-                    onClick = onCancel,
-                    modifier = Modifier.fillMaxWidth().height(58.dp),
-                    shape = RoundedCornerShape(PPSize.RadiusControl),
-                    border = androidx.compose.foundation.BorderStroke(1.5.dp, PPColor.BorderStrong),
-                ) { Text(stringResource(R.string.cancel), fontSize = 18.sp, color = PPColor.Ink60) }
-            }
-        }
-    }
-}
-
-/** "Enter this code on the computer": the code, big, in 3 + 3 groups, plus the one-line explanation. */
-@Composable
-fun PairCodeScreen(code: String, onCancel: () -> Unit) {
-    PPScreen {
-        androidx.compose.material3.ProvideTextStyle(
-            androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
-        ) {
-            Column(
-                Modifier.fillMaxSize().padding(34.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-            ) {
-                Text(
-                    stringResource(R.string.pair_code_title), fontSize = 30.sp, lineHeight = 38.sp,
-                    fontFamily = PPFont.Serif, color = PPColor.Ink, textAlign = TextAlign.Center,
-                )
-                Spacer(Modifier.height(28.dp))
-                Text(
-                    groupPairCode(code), fontSize = 64.sp, fontWeight = FontWeight.Bold,
-                    letterSpacing = 4.sp, color = PPColor.Ink, textAlign = TextAlign.Center,
-                    maxLines = 1,
-                )
-                Spacer(Modifier.height(24.dp))
-                Text(
-                    stringResource(R.string.pair_code_body), fontSize = PPSize.BodyMin,
-                    lineHeight = 26.sp, color = PPColor.Ink40, textAlign = TextAlign.Center,
-                )
-                Spacer(Modifier.height(36.dp))
-                OutlinedButton(
-                    onClick = onCancel,
-                    modifier = Modifier.fillMaxWidth().height(58.dp),
-                    shape = RoundedCornerShape(PPSize.RadiusControl),
-                    border = androidx.compose.foundation.BorderStroke(1.5.dp, PPColor.BorderStrong),
-                ) { Text(stringResource(R.string.cancel), fontSize = 18.sp, color = PPColor.Ink60) }
-            }
+            Text(stringResource(R.string.pair_connecting_label), style = type.label, color = PPColor.Ink40)
+            Spacer(Modifier.height(6.dp))
+            Text(desktopName, style = type.name, color = PPColor.Ink, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(24.dp))
+            Text(groupPairCode(code), style = type.code, color = PPColor.Ink, textAlign = TextAlign.Center, maxLines = 1)
+            Spacer(Modifier.height(24.dp))
+            Text(stringResource(R.string.pair_code_body), style = type.body, color = PPColor.Ink60, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(12.dp))
+            Text(
+                stringResource(R.string.pair_desktop_identity, fingerprint),
+                style = type.identity, color = PPColor.Ink40, textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(36.dp))
+            OutlinedButton(
+                onClick = onCancel,
+                modifier = Modifier.fillMaxWidth().height(58.dp),
+                shape = RoundedCornerShape(PPSize.RadiusControl),
+                border = androidx.compose.foundation.BorderStroke(1.5.dp, PPColor.BorderStrong),
+            ) { Text(stringResource(R.string.cancel), fontSize = 18.sp, color = PPColor.Ink60) }
         }
     }
 }

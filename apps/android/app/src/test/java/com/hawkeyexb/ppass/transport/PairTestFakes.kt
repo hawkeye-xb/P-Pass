@@ -29,21 +29,14 @@ class FakePairPhone(
     }
 }
 
-/** A [PairCeremony] with a scripted user. [events] records the order of everything user-visible. */
+/** A [PairCeremony] fake. [events] records the order of everything user-visible. */
 class FakeCeremony(
-    private val connect: Boolean = true,
     val phone: FakePairPhone = FakePairPhone(),
     val code: String = "123456",
     /** Shared with the fake desktop so the order of RPCs and user-visible steps is one list. */
     val events: MutableList<String> = mutableListOf(),
 ) : PairCeremony {
     var desktopNameSeen: String? = "unset"
-
-    override suspend fun confirmDesktop(desktopName: String?): Boolean {
-        events += "confirmDesktop"
-        desktopNameSeen = desktopName
-        return connect
-    }
 
     override fun newCode(): String = code.also { events += "newCode" }
 
@@ -52,7 +45,8 @@ class FakeCeremony(
         return phone
     }
 
-    override fun showCode(code: String) {
+    override fun showCode(code: String, desktopName: String?) {
         events += "showCode:$code"
+        desktopNameSeen = desktopName
     }
 }

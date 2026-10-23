@@ -37,14 +37,10 @@
     <string name="pair_refused_detail_denied">电脑上拒绝了这次加入。</string>
     <string name="pair_refused_detail_expired">电脑上一直没人确认，这次配对请求已过期。请在电脑上重新生成配对码再扫。</string>
     <string name="pair_refused_detail_restarted">电脑端服务重启了，这次配对请求已失效。请在电脑上重新生成配对码再扫。</string>
-    <!-- #1118：扫码后先核对电脑，再显示验证码 -->
-    <string name="pair_confirm_desktop_title">要连接这台电脑吗？</string>
-    <string name="pair_confirm_desktop_body">请核对标识与电脑上二维码下方显示的一致，再连接。</string>
-    <string name="pair_desktop_name_label">电脑</string>
-    <string name="pair_desktop_identity_label">标识</string>
-    <string name="pair_connect">连接</string>
-    <string name="pair_code_title">在电脑上输入这个验证码</string>
-    <string name="pair_code_body">验证码只能输入一次。电脑上确认后，这里会自动继续。</string>
+    <!-- #1118：扫码后直接显示验证码页（不再先问「要连接这台电脑吗？」） -->
+    <string name="pair_connecting_label">正在连接</string>
+    <string name="pair_code_body">在电脑上输入这 6 位验证码</string>
+    <string name="pair_desktop_identity">电脑标识 %1$s</string>
     <string name="pair_refused_detail_code_wrong">验证码不对，这次配对已作废。请在电脑上重新生成配对码再扫。</string>
     <string name="pair_desktop_proof_failed">电脑没能证明它用的是同一个验证码，这次没有保存配对。请重新扫码。</string>
     <string name="error_generic">出了点问题，请重试；如果反复出现，请把手机和电脑上的 P-Pass 都更新到最新版。</string>

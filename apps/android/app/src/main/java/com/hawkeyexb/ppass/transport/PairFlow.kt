@@ -65,8 +65,6 @@ sealed class PairOutcome {
     /** #1072: versions are incompatible — found at the hello, before any pairing request is sent. */
     data class NeedsUpdate(val side: OutdatedSide) : PairOutcome()
     data class Failed(val reason: String) : PairOutcome()
-    /** #1118: the user declined "connect to this computer?" — back to the scanner, nothing was sent. */
-    data object Cancelled : PairOutcome()
 }
 
 /** #1072: why a pairing ended without joining (one phone-side wording each). */
@@ -138,8 +136,6 @@ sealed class PairVerdict {
     data object CodeWrong : PairVerdict()
     /** #1118: the computer's key confirmation was missing/invalid — never save such a pairing. */
     data object ProofFailed : PairVerdict()
-    /** #1118: the user declined "connect to this computer?" — no pair.request was sent. */
-    data object Cancelled : PairVerdict()
 }
 
 /** #1118: the phone's half of the code exchange — implemented by the uniffi `PairPhone`
@@ -153,18 +149,18 @@ interface PairPhoneCore {
     fun verify(confirmB: String)
 }
 
-/** #1118: everything user-facing or random about a pairing, injectable: the "connect to this
- *  computer?" step, the code, the PAKE session and showing the code. */
+/** #1118: everything user-facing or random about a pairing, injectable: the code, the PAKE session
+ *  and showing the code. There is no "connect to this computer?" step: scanning is the intent to
+ *  connect, and a swapped QR is caught by the code (it is only on this phone; the user types it
+ *  into their own computer). */
 interface PairCeremony {
-    /** The "connect to this computer?" step. [desktopName] = `hello.device_name`, or null when the
-     *  hello gave none. false = the user cancelled; nothing has been sent to the computer. */
-    suspend fun confirmDesktop(desktopName: String?): Boolean
     /** A fresh 6-digit code (shared Rust generator). */
     fun newCode(): String
     /** Start the PAKE session for [code] (token / node ids are the ceremony's own context). */
     fun start(code: String): PairPhoneCore
-    /** Called ONLY after the request was queued ([PairSubmitted] received): show [code]. */
-    fun showCode(code: String)
+    /** Called ONLY after the request was queued ([PairSubmitted] received): show [code] with the
+     *  computer it is for. [desktopName] = `hello.device_name`, or null when the hello gave none. */
+    fun showCode(code: String, desktopName: String?)
 }
 
 /** #1051: how long the membership probe may take before we give up and
@@ -242,9 +238,7 @@ suspend fun awaitPairVerdict(
         desktopName = parsed?.deviceName?.takeIf { it.isNotBlank() }
     }
 
-    // #1118: the user checks WHICH computer this is before anything is sent — guards against
-    // scanning someone else's QR code. Cancel = nothing was sent.
-    if (!ceremony.confirmDesktop(desktopName)) return PairVerdict.Cancelled
+    // #1118: no question after the scan — straight to the request; the code page names the computer.
     val code = ceremony.newCode()
     val phone = ceremony.start(code)
 
@@ -275,7 +269,7 @@ suspend fun awaitPairVerdict(
     if (submitted == null || submitted.requestId.isBlank()) return PairVerdict.DesktopTooOld
 
     // #1118: the request is queued on the desktop — only now may the code be shown.
-    ceremony.showCode(code)
+    ceremony.showCode(code, desktopName)
 
     val ttlMs = submitted.ttlMs.takeIf { it > 0 } ?: PAIR_FALLBACK_TTL_MS
     // One poll past the deadline so the desktop's own "expired" is what
@@ -462,7 +456,6 @@ fun PairVerdict.toOutcome(join: (PairAccepted) -> Pairing): PairOutcome = when (
     is PairVerdict.Unreachable -> PairOutcome.Failed(reason)
     PairVerdict.CodeWrong -> PairOutcome.Refused(PairRefusal.CODE_WRONG)
     PairVerdict.ProofFailed -> PairOutcome.Refused(PairRefusal.PROOF_FAILED)
-    PairVerdict.Cancelled -> PairOutcome.Cancelled
 }
 
 /**
@@ -483,9 +476,8 @@ suspend fun bindThenPair(bind: suspend () -> Unit, pair: suspend () -> PairOutco
         PairOutcome.Failed(t.toString())
     }
 
-/** #1118: the "connect to this computer?" page's facts: the name the computer reports and the
- *  human-readable identity (`AB12 CD34`) of the QR's NodeId — the same one the desktop shows
- *  under its QR code. */
+/** #1118: the computer on the code page: the name the computer reports and the human-readable
+ *  identity (`AB12 CD34`) of the QR's NodeId — the same one the desktop shows under its QR code. */
 data class PairDesktopIdentity(val name: String, val fingerprint: String)
 
 /** #1118: production [PairPhoneCore] — the shared Rust kernel through uniffi. */
@@ -501,36 +493,32 @@ internal class FfiPairCeremony(
     private val phoneNode: String,
     private val deskNode: String,
     private val fallbackName: String,
-    private val confirm: suspend (PairDesktopIdentity) -> Boolean,
-    private val onCode: (code: String, phoneNodeId: String) -> Unit,
+    private val onCode: (code: String, desktop: PairDesktopIdentity, phoneNodeId: String) -> Unit,
     /** Injectable only for tests; always applied to the QR's node (the NodeId actually dialled). */
     private val fingerprintOf: (String) -> String = ::nodeFingerprint,
 ) : PairCeremony {
     // The identity shown is computed HERE, by this phone, from the QR's node — never taken from
     // anything the computer says. The name is the computer's own claim: a label only (and it is
     // never logged — it may hold a real name).
-    override suspend fun confirmDesktop(desktopName: String?): Boolean =
-        confirm(PairDesktopIdentity(desktopName ?: fallbackName, fingerprintOf(deskNode)))
-
     override fun newCode(): String = pairCodeGenerate()
 
     override fun start(code: String): PairPhoneCore =
         FfiPairPhone(PairPhone.start(code, token, phoneNode, deskNode))
 
-    override fun showCode(code: String) = onCode(code, phoneNode)
+    override fun showCode(code: String, desktopName: String?) =
+        onCode(code, PairDesktopIdentity(desktopName ?: fallbackName, fingerprintOf(deskNode)), phoneNode)
 }
 
 /**
- * Scan result → "connect to this computer?" ([confirmDesktop]) → submit → show the code
- * ([onCode], only after the request was queued) → poll until the owner decides (NET-10, #1118).
- * Automation injects `confirmDesktop = { true }` and logs the code in [onCode].
+ * Scan result → submit → show the code with the computer's name and identity ([onCode], only
+ * after the request was queued) → poll until the owner decides (NET-10, #1118). No question in
+ * between. Automation logs the code in [onCode].
  */
 suspend fun pairWithQr(
     client: DaemonClient,
     qr: String,
     deviceName: String,
-    confirmDesktop: suspend (PairDesktopIdentity) -> Boolean,
-    onCode: (code: String, phoneNodeId: String) -> Unit,
+    onCode: (code: String, desktop: PairDesktopIdentity, phoneNodeId: String) -> Unit,
     invalidCodeMessage: String = "This is not a P-Pass pairing code.",
     unparseableCodeMessage: String =
         "The pairing code cannot be parsed. Update P-Pass on both the computer and phone to the latest version.",
@@ -589,7 +577,6 @@ suspend fun pairWithQr(
             phoneNode = phoneNode,
             deskNode = parsed.nodeIdHex,
             fallbackName = storageDeviceNameFallback,
-            confirm = confirmDesktop,
             onCode = onCode,
         ),
     )

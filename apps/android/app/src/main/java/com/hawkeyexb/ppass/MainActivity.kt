@@ -118,10 +118,8 @@ import com.hawkeyexb.ppass.transport.disconnectAfterUnpairNotice
 import com.hawkeyexb.ppass.transport.sendUnpairNoticeOnce
 import com.hawkeyexb.ppass.transport.parsePeerAddrToken
 import com.hawkeyexb.ppass.ui.PairStatusScreen
-import com.hawkeyexb.ppass.ui.ConfirmDesktopScreen
 import com.hawkeyexb.ppass.ui.PairCodeScreen
 import com.hawkeyexb.ppass.transport.PairDesktopIdentity
-import kotlinx.coroutines.CompletableDeferred
 import com.hawkeyexb.ppass.ui.BucketScreen
 import com.hawkeyexb.ppass.ui.selectedExistingCount
 import com.hawkeyexb.ppass.ui.PPColor
@@ -133,11 +131,11 @@ import com.hawkeyexb.ppass.ui.UpdateDialog
 import com.hawkeyexb.ppass.update.UpdateUiController
 import com.hawkeyexb.ppass.update.UpdateUiState
 
-/** #1118: what the pairing wait screen shows while [pairWithQr] runs. */
+/** #1118: what the pairing wait screen shows while [pairWithQr] runs: sending the request, then
+ *  the code page. Nothing in between asks the user anything. */
 internal sealed class PairPhase {
     data object Asking : PairPhase()
-    data class Confirm(val identity: PairDesktopIdentity, val decision: CompletableDeferred<Boolean>) : PairPhase()
-    data class Code(val code: String) : PairPhase()
+    data class Code(val code: String, val desktop: PairDesktopIdentity) : PairPhase()
 }
 
 internal sealed class Screen {
@@ -618,7 +616,7 @@ fun PPassApp() {
         )
 
         is Screen.Waiting -> {
-            // #1118: asking → (user checks the computer) → code on screen.
+            // #1118: sending the request → code page (with the computer's name and identity).
             var phase by remember(s.qr) { mutableStateOf<PairPhase>(PairPhase.Asking) }
             when (val ph = phase) {
                 PairPhase.Asking -> PairStatusScreen(
@@ -627,15 +625,10 @@ fun PPassApp() {
                     action = androidx.compose.ui.res.stringResource(R.string.cancel) to
                         { screen = Screen.Welcome },
                 )
-                is PairPhase.Confirm -> ConfirmDesktopScreen(
-                    name = ph.identity.name,
-                    fingerprint = ph.identity.fingerprint,
-                    onConnect = { ph.decision.complete(true) },
-                    // Cancel before connecting: nothing was sent; back to the scanner.
-                    onCancel = { ph.decision.complete(false) },
-                )
                 is PairPhase.Code -> PairCodeScreen(
                     code = ph.code,
+                    desktopName = ph.desktop.name,
+                    fingerprint = ph.desktop.fingerprint,
                     onCancel = { screen = Screen.Welcome },
                 )
             }
@@ -650,13 +643,8 @@ fun PPassApp() {
                             client,
                             s.qr,
                             deviceName(context),
-                            confirmDesktop = { identity ->
-                                val decision = CompletableDeferred<Boolean>()
-                                phase = PairPhase.Confirm(identity, decision)
-                                decision.await().also { if (it) phase = PairPhase.Asking }
-                            },
                             // Shown only after the request was queued (PairSubmitted); never logged here.
-                            onCode = { code, _ -> phase = PairPhase.Code(code) },
+                            onCode = { code, desktop, _ -> phase = PairPhase.Code(code, desktop) },
                             invalidCodeMessage = context.getString(R.string.not_a_code),
                             unparseableCodeMessage = context.getString(R.string.pair_unparseable_code),
                             storageDeviceNameFallback = context.getString(R.string.storage_device_default),
@@ -740,8 +728,6 @@ fun PPassApp() {
                         R.string.pair_failed_title, R.string.pair_failed_body,
                         "(${outcome.reason.take(160)})",
                     )
-                    // #1118: declined "connect to this computer?" — nothing was sent; back to the scanner.
-                    PairOutcome.Cancelled -> screen = Screen.Scan
                 }
             }
         }
