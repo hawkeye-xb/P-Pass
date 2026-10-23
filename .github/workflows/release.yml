@@ -323,6 +323,9 @@ jobs:
           security create-keychain -p pp "$KEYCHAIN"
           security default-keychain -s "$KEYCHAIN"
           security unlock-keychain -p pp "$KEYCHAIN"
+          # 新建钥匙串默认 5 分钟无操作自动上锁；锁上后 codesign 等人输密码，CI 上就挂到超时
+          # （test.9：解锁到签 dylib 隔了 5 分 07 秒，两次都挂；test.8 隔 4 分 02 秒没事）。关掉超时。
+          security set-keychain-settings "$KEYCHAIN"
           security import "$CERT_P12" -P "$APPLE_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
           security set-key-partition-list -S apple-tool:,apple: -s -k pp "$KEYCHAIN" >/dev/null
           # find-identity -v 第 1 行是身份（"1) <hash> \"...\""），第 2 行是
@@ -392,6 +395,8 @@ jobs:
             security create-keychain -p pp "$KEYCHAIN" 2>/dev/null || true
             security default-keychain -s "$KEYCHAIN"
             security unlock-keychain -p pp "$KEYCHAIN"
+            # 同上：默认 5 分钟自动上锁，打包期间签 dylib 时已锁 ⇒ codesign 挂住。关掉超时。
+            security set-keychain-settings "$KEYCHAIN"
             security import "$RUNNER_TEMP/cert.p12" -P "$APPLE_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
             security set-key-partition-list -S apple-tool:,apple: -s -k pp "$KEYCHAIN" >/dev/null
             IDENTITY="$(security find-identity -v -p codesigning "$KEYCHAIN" | awk 'NR==1{print $2}')"
