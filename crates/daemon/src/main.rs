@@ -14,8 +14,40 @@
 use daemon::{Config, Router, SHUTDOWN_DEADLINE};
 use std::io::IsTerminal;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    // D1 / #1161：被 SCM 拉起时，分发器必须在主线程、而且要在 SCM 的 30 秒超时前登记。
+    // 不是服务上下文（控制台、测试、桌面壳 shell-out）返回 false，照常跑下面的控制台路径。
+    //
+    // 服务线程上要另起一个 runtime：`run()` 是 async，而 SCM 的分发器是阻塞的。
+    let as_service = platform::run_as_service(|| {
+        let rt = match tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(e) => {
+                eprintln!("tokio runtime: {e}");
+                return 1;
+            }
+        };
+        match rt.block_on(run()) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("daemon exited: {e:?}");
+                1
+            }
+        }
+    })?;
+    if as_service {
+        return Ok(());
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run())
+}
+
+async fn run() -> anyhow::Result<()> {
     // DAE-03 ①：参数解析最先——--help/--version 在任何 daemon 机制
     // （日志/配置/数据库/身份/claim/bind）之前短路退出。8/6 事故：daemon
     // 无解析，--help 被当普通启动一路走到单实例 claim 触发误接管、常驻

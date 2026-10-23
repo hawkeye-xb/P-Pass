@@ -16,6 +16,25 @@
 //! 处理器都收不到——所以真正的数据安全不能依赖这里，由落盘侧（入库不留
 //! 占位、启动清残留）兜底。这里只负责「收得到信号时体面地走」。
 
+/// 托管方（Windows SCM）登记的「停止」通道。进程级：一个进程只有一个服务上下文。
+#[cfg(windows)]
+static SERVICE_STOP: std::sync::OnceLock<tokio::sync::Notify> = std::sync::OnceLock::new();
+#[cfg(windows)]
+static SERVICE_STOP_NAME: std::sync::Mutex<Option<&'static str>> = std::sync::Mutex::new(None);
+
+/// 由托管方（SCM）要求停止：唤醒 [`stop_signal`]，名字用 `name`。
+///
+/// 只给平台自己的服务托管用；daemon 不需要调用。不走信号，所以在服务（session 0、
+/// 没有控制台事件）里也能让 daemon 走正常收尾路径。
+#[cfg(windows)]
+pub fn request_stop(name: &'static str) {
+    *SERVICE_STOP_NAME.lock().expect("stop name lock") = Some(name);
+    // notify_one 会保留一个 permit：此刻没有等待者，下一次 stop_signal 也会立刻返回。
+    SERVICE_STOP
+        .get_or_init(tokio::sync::Notify::new)
+        .notify_one();
+}
+
 /// 一次收到的停止请求。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StopRequest {
@@ -94,7 +113,15 @@ pub async fn stop_signal() -> StopRequest {
 
 #[cfg(windows)]
 pub async fn stop_signal() -> StopRequest {
+    use std::future::Future;
+    use std::task::Poll;
     use tokio::signal::windows::{ctrl_break, ctrl_c, ctrl_close, ctrl_logoff, ctrl_shutdown};
+
+    // 先把「托管方要求停止」的等待者建出来，避免请求与注册之间的竞态。
+    let notified = SERVICE_STOP
+        .get_or_init(tokio::sync::Notify::new)
+        .notified();
+    tokio::pin!(notified);
     let (Ok(mut c), Ok(mut b), Ok(mut close), Ok(mut logoff), Ok(mut shutdown)) = (
         ctrl_c(),
         ctrl_break(),
@@ -105,6 +132,14 @@ pub async fn stop_signal() -> StopRequest {
         return std::future::pending().await;
     };
     std::future::poll_fn(|cx| {
+        if notified.as_mut().poll(cx).is_ready() {
+            let name = SERVICE_STOP_NAME
+                .lock()
+                .ok()
+                .and_then(|mut g| g.take())
+                .unwrap_or("SERVICE_STOP");
+            return Poll::Ready(StopRequest { name });
+        }
         let hit = if c.poll_recv(cx).is_ready() {
             "CTRL_C"
         } else if b.poll_recv(cx).is_ready() {
@@ -146,5 +181,23 @@ mod tests {
             .expect("5s 内必须收到")
             .unwrap();
         assert_eq!(got.name(), "SIGTERM");
+    }
+}
+
+#[cfg(all(test, windows))]
+mod service_stop_tests {
+    use super::*;
+
+    /// 托管方（SCM）请求停止时，`stop_signal` 必须返回，名字是登记的那个。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn requested_stop_wakes_stop_signal() {
+        let waiter = tokio::spawn(stop_signal());
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        request_stop("SERVICE_CONTROL_STOP");
+        let got = tokio::time::timeout(std::time::Duration::from_secs(5), waiter)
+            .await
+            .expect("5s 内必须收到")
+            .unwrap();
+        assert_eq!(got.name(), "SERVICE_CONTROL_STOP");
     }
 }
