@@ -32,7 +32,6 @@
     updateFailureBodyParams,
     updateFailureServiceKey,
   } from "./lib/updateFailure.js";
-  import QRCode from "qrcode";
   import { onMount, onDestroy } from "svelte";
   import Wizard from "./Wizard.svelte";
   import WizardWindows from "./WizardWindows.svelte";
@@ -515,13 +514,10 @@
     try {
       const r = await call("pairing.start");
       qrText = r.qr;
-      // T4: 弹窗内大尺寸——显示 360px，生成 2x（720）保高分屏清晰；
-      // 配对码已瘦身（H-10b T3），低纠错 L 在内容较长时更好扫。
-      qrDataUrl = await QRCode.toDataURL(r.qr, {
-        width: 720,
-        margin: 2,
-        errorCorrectionLevel: "L",
-      });
+      // 二维码由壳生成 SVG（src-tauri/src/pair_qr.rs）：npm qrcode 与
+      // freezePrototype 冲突会整页白屏。矢量图，弹窗内 360px 照样清晰。
+      const svg = await invoke("pair_qr_svg", { text: r.qr });
+      qrDataUrl = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
     } catch (e) {
       flashMessage(t("ui.pair_failed", { err: errDetail(e) }), "error");
     }

@@ -55,6 +55,8 @@ platform = { path = "../../../crates/platform" }
 # #1044 B13: 版本关系的唯一实现（与 daemon 共用）。
 version-cmp = { path = "../../../crates/version-cmp" }
 tauri-plugin-single-instance = "2"
+# 配对二维码在壳里生成（见 src/pair_qr.rs）：只要 SVG 渲染，不拉 image。
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 
 [lib]
 name = "p_pass_desktop_lib"

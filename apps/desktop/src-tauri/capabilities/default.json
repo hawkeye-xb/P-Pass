@@ -61,6 +61,7 @@
     "allow-kernel-convergence-phase",
     "allow-export-logs-bundle",
     "allow-library-dir",
+    "allow-pair-qr-svg",
     "allow-allow-media-scope",
     "allow-notify-system",
     "allow-set-tray-locale",

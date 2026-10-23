@@ -44,6 +44,7 @@ const APP_COMMANDS: &[&str] = &[
     "kernel_convergence_phase",
     "export_logs_bundle",
     "library_dir",
+    "pair_qr_svg",
     "allow_media_scope",
     "notify_system",
     "set_tray_locale",

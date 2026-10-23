@@ -14,6 +14,7 @@ mod daemon_api;
 mod daemon_cli;
 mod distribution;
 mod ipc;
+mod pair_qr;
 mod service_state;
 mod update_install;
 
@@ -1296,6 +1297,12 @@ fn existing_library_dir(platform_dir: &std::path::Path) -> Result<String, String
     }
 }
 
+/// 配对二维码 SVG（见 `pair_qr`）。
+#[tauri::command]
+fn pair_qr_svg(text: String) -> Result<String, String> {
+    pair_qr::svg(&text)
+}
+
 /// #1059：照片库只是磁盘上的目录，打开它不需要后台服务。壳从平台 config 只读
 /// 解析库目录（与服务在线时 `status.library_dir` 同源：daemon 也读这份 config），
 /// 服务停止时「打开照片库」照样可用。
@@ -1608,6 +1615,7 @@ pub fn run() {
             kernel_convergence_phase,
             export_logs_bundle,
             library_dir,
+            pair_qr_svg,
             allow_media_scope,
             notify_system,
             set_tray_locale,
@@ -1798,7 +1806,10 @@ mod tests {
         let abs = abs.to_str().unwrap();
         assert!(diag_export_target(abs).is_some());
         assert!(diag_export_target("ppf-logs.zip").is_none(), "相对路径不收");
-        assert!(diag_export_target(&abs.replace(".zip", ".txt")).is_none(), "必须是 zip");
+        assert!(
+            diag_export_target(&abs.replace(".zip", ".txt")).is_none(),
+            "必须是 zip"
+        );
     }
 
     use super::*;
