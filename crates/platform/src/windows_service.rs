@@ -329,6 +329,130 @@ pub fn grant_owner_control(name: &str, owner_sid: &str) -> Result<()> {
     })
 }
 
+// ── SCM 分发器：daemon 以服务身份运行 ───────────────────────────────────────
+
+/// 服务名。与 identifier `com.hawkeyexb.ppass.desktop` 对齐（#1112 统一过命名）。
+pub const SERVICE_NAME: &str = "P-Pass";
+
+/// daemon 的服务入口：`body` 在 SCM 的服务线程上跑，返回进程退出码。
+static SERVICE_BODY: std::sync::Mutex<Option<Box<dyn FnOnce() -> i32 + Send>>> =
+    std::sync::Mutex::new(None);
+static SERVICE_STATUS_HANDLE_RAW: std::sync::atomic::AtomicPtr<std::ffi::c_void> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+fn set_service_status(
+    state: windows::Win32::System::Services::SERVICE_STATUS_CURRENT_STATE,
+    accepted: u32,
+) {
+    use windows::Win32::System::Services::{
+        SetServiceStatus, SERVICE_STATUS, SERVICE_WIN32_OWN_PROCESS,
+    };
+    let handle = SERVICE_STATUS_HANDLE_RAW.load(std::sync::atomic::Ordering::SeqCst);
+    if handle.is_null() {
+        return;
+    }
+    let status = SERVICE_STATUS {
+        dwServiceType: SERVICE_WIN32_OWN_PROCESS,
+        dwCurrentState: state,
+        dwControlsAccepted: accepted,
+        dwWin32ExitCode: 0,
+        dwServiceSpecificExitCode: 0,
+        dwCheckPoint: 0,
+        dwWaitHint: 0,
+    };
+    // SAFETY: handle 来自 RegisterServiceCtrlHandlerExW，set 之后只读。
+    unsafe {
+        SetServiceStatus(
+            windows::Win32::System::Services::SERVICE_STATUS_HANDLE(handle),
+            &status,
+        )
+    }
+    .ok();
+}
+
+unsafe extern "system" fn service_control_handler(
+    control: u32,
+    _event_type: u32,
+    _event_data: *mut std::ffi::c_void,
+    _context: *mut std::ffi::c_void,
+) -> u32 {
+    use windows::Win32::System::Services::{
+        SERVICE_ACCEPT_STOP, SERVICE_CONTROL_STOP, SERVICE_STOP_PENDING,
+    };
+    if control == SERVICE_CONTROL_STOP || control == 5 {
+        // SHUTDOWN 也按停止处理：收尾后退出，由 SCM 记录。
+        set_service_status(SERVICE_STOP_PENDING, SERVICE_ACCEPT_STOP);
+        crate::signal::request_stop("SERVICE_CONTROL_STOP");
+        return 0;
+    }
+    0
+}
+
+unsafe extern "system" fn service_main(_argc: u32, _argv: *mut PWSTR) {
+    use windows::Win32::System::Services::{
+        RegisterServiceCtrlHandlerExW, SERVICE_ACCEPT_SHUTDOWN, SERVICE_ACCEPT_STOP,
+        SERVICE_RUNNING, SERVICE_START_PENDING, SERVICE_STOPPED,
+    };
+
+    let name_w = wide(SERVICE_NAME);
+    let Ok(handle) =
+        RegisterServiceCtrlHandlerExW(PCWSTR(name_w.as_ptr()), Some(service_control_handler), None)
+    else {
+        return;
+    };
+    SERVICE_STATUS_HANDLE_RAW.store(handle.0, std::sync::atomic::Ordering::SeqCst);
+    set_service_status(SERVICE_START_PENDING, 0);
+    set_service_status(
+        SERVICE_RUNNING,
+        SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN,
+    );
+
+    let body = SERVICE_BODY.lock().ok().and_then(|mut g| g.take());
+    if let Some(body) = body {
+        let _ = body();
+    }
+    set_service_status(SERVICE_STOPPED, 0);
+}
+
+/// 如果本进程是被 SCM 拉起的，就在**当前线程**跑 SCM 分发器，并在服务线程上执行
+/// `body`；返回 `Ok(true)`。
+///
+/// 不是服务上下文（控制台/桌面壳直接 spawn）时 `StartServiceCtrlDispatcherW` 以
+/// `ERROR_FAILED_SERVICE_CONTROLLER_CONNECT` 失败，返回 `Ok(false)`——这条路径必须在
+/// 30 秒内让 SCM 看到分发器，所以调用方要在任何重活之前调它。
+pub fn run_service_dispatcher(body: impl FnOnce() -> i32 + Send + 'static) -> Result<bool> {
+    use windows::Win32::Foundation::ERROR_FAILED_SERVICE_CONTROLLER_CONNECT;
+    use windows::Win32::System::Services::{StartServiceCtrlDispatcherW, SERVICE_TABLE_ENTRYW};
+
+    if let Ok(mut slot) = SERVICE_BODY.lock() {
+        *slot = Some(Box::new(body));
+    }
+    let mut name_w = wide(SERVICE_NAME);
+    let mut table = [
+        SERVICE_TABLE_ENTRYW {
+            lpServiceName: PWSTR(name_w.as_mut_ptr()),
+            lpServiceProc: Some(service_main),
+        },
+        SERVICE_TABLE_ENTRYW::default(),
+    ];
+    // SAFETY: name_w 在分发器返回前一直存活；表以零项结尾。
+    match unsafe { StartServiceCtrlDispatcherW(table.as_mut_ptr()) } {
+        Ok(()) => Ok(true),
+        Err(e)
+            if e.code()
+                == windows::core::HRESULT::from_win32(
+                    ERROR_FAILED_SERVICE_CONTROLLER_CONNECT.0,
+                ) =>
+        {
+            Ok(false)
+        }
+        Err(e) => Err(PlatformError::Io {
+            action: "StartServiceCtrlDispatcherW",
+            source: std::io::Error::from_raw_os_error(e.code().0),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,5 +478,17 @@ mod tests {
         let name = "PPassDefinitelyNotInstalledService";
         assert!(!is_installed(name).expect("is_installed"));
         assert!(status(name).expect("status").is_none());
+    }
+}
+
+#[cfg(all(test, windows))]
+mod dispatcher_tests {
+    use super::*;
+
+    /// 从普通进程（测试/控制台）调分发器：必须是 `Ok(false)`，不是错误、也不阻塞。
+    #[test]
+    fn dispatcher_reports_not_a_service_outside_scm() {
+        let ran = run_service_dispatcher(|| 0).expect("不是服务不是错误");
+        assert!(!ran, "测试进程不是 SCM 启动的");
     }
 }

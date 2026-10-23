@@ -50,6 +50,23 @@ mod windows;
 // D1 / brief §5.1：SCM 服务托管（查询、起停、注册/删除、给主人授权）。
 #[cfg(windows)]
 pub mod windows_service;
+
+/// 托管方（Windows SCM）要求本进程以「系统服务」方式运行。
+///
+/// `body` 在服务线程上执行并返回进程退出码。返回 `Ok(true)` = 走的是服务路径；
+/// `Ok(false)` = 不是服务上下文（控制台、桌面壳 shell-out），照常往下跑。
+/// 非 Windows 平台没有这个托管方，永远 `Ok(false)`。
+pub fn run_as_service(body: impl FnOnce() -> i32 + Send + 'static) -> Result<bool> {
+    #[cfg(windows)]
+    {
+        windows_service::run_service_dispatcher(body)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = body;
+        Ok(false)
+    }
+}
 // #287：只给测试用的建链能力。默认不编译，见该模块顶部说明。
 #[cfg(feature = "test-support")]
 pub mod test_support;
