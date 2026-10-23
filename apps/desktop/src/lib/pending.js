@@ -30,30 +30,21 @@ export function isKnownDevice(item) {
 }
 
 /**
- * 审批弹窗的标题，两套措辞。说明只剩一行「怎么输验证码」，新老设备同一句，
- * 由弹窗直接取 ui.pair_code_hint（统一回归：弹窗文案精简）。
- *
- * 多台同时扫码时不点名——逐行各自带自己的副行（见 pendingSubText），
- * 标题只报数量，不能替其中一台说话。
+ * 审批弹窗的标题：单台直接写请求内容（「名字 请求加入 / 请求重新连接」）；
+ * 多台时不点名，只报数量——每块以设备名开头，各自带副行（见 pendingSubText）。
  *
  * @param {Array<object>} pendingList pairing.pending 的全量列表
  */
 export function pendingDialogText(pendingList) {
   const list = Array.isArray(pendingList) ? pendingList : [];
   if (list.length > 1) {
-    return {
-      title: t("ui.pending_many_title", { n: list.length }),
-    };
+    return { title: t("ui.pending_many_title", { n: list.length }) };
   }
   const only = list[0];
-  if (isKnownDevice(only)) {
-    return {
-      // 点名，且点的是桌面上的名字——业主改过名就叫改过的那个。
-      title: t("ui.pending_known_title", { name: only.name }),
-    };
-  }
+  if (!only) return { title: "" };
+  // 标题直接写请求内容，点名，且点的是桌面上的名字——业主改过名就叫改过的那个。
   return {
-    title: t("ui.pending_one_title"),
+    title: t(isKnownDevice(only) ? "ui.pending_known_title" : "ui.pending_one_title", { name: only.name }),
   };
 }
 

@@ -9,7 +9,8 @@
 // - 还在等手机（verifying）给出「验证码已提交」；
 // - 二维码弹窗里显示本机标识（status.desktop_fingerprint），供手机核对。
 // 反证：去掉按钮的 disabled={!isPairCode(code)} ⇒ 第一条红；confirmPair 不带 code ⇒ 第一条红。
-import { cleanup, render, screen, fireEvent } from "@testing-library/svelte";
+import { cleanup, render, screen, fireEvent, within } from "@testing-library/svelte";
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { invokeMock, handlers } = vi.hoisted(() => {
@@ -91,8 +92,10 @@ function desktop() {
           case "pairing.confirm":
             if (d.confirmGate) await d.confirmGate;
             if (d.confirmError) {
-              // daemon：码错 = 这次申请作废，队列里撤掉这一行。
+              // 真实时序：daemon 先作废这次申请（撤行 + 推 pending_changed，前端随即 refresh），
+              // 然后才回复 confirm 的错误。854bb867 就是在这一步按「队列空了」把弹窗关掉的。
               d.pending = d.pending.filter((p) => p.node_id !== args?.node_id);
+              await pushPendingChanged();
               throw d.confirmError;
             }
             return d.confirmReply ?? { decided: true };
@@ -176,25 +179,59 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
     vi.useRealTimers();
   });
 
-  // 定稿：每台一块——名字 · 角色 / 6 格验证码 / 提示 / 按钮单独一行。
-  // 反证：恢复「确认是家人的手机吗」「验证码只能输入一次」两段，或把按钮放回验证码那一行 → 红。
-  it("每台一块：名字 · 角色、6 格、提示，按钮单独一行", async () => {
+  const dialogOpen = () => screen.queryAllByTestId("pending-request").length > 0;
+
+  // 真机：新申请要先关弹窗、点横幅「输入验证码」才看得到内容。现在到达即弹出、按钮可见，
+  // 不管二维码弹窗开没开。反证：只在二维码弹窗开着时才弹 → 红。
+  it("申请到达时自动弹出，按钮可见", async () => {
     const d = desktop();
     render(App);
     await settle();
-    await openRow(d, [row("a", "妈妈的手机")]);
-    const block = screen.getByTestId("pending-row");
-    expect(block.textContent).toContain("妈妈的手机 · 家庭成员");
+    d.pending = [row("a", "Galaxy S24 Ultra")];
+    await pushPendingChanged();
+    expect(dialogOpen()).toBe(true);
+    expect(screen.getByRole("heading", { name: "Galaxy S24 Ultra 请求加入" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "拒绝" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "允许加入" })).toBeTruthy();
+  });
+
+  // 样式参照 macOS 提示框：单台时内容直接在弹窗里，不套卡片。顺序：标题 → 角色小字 → 6 格 → 提示 → 按钮行。
+  // 反证：恢复 .pending-row 灰底卡片，或把按钮放回验证码那一行 → 红。
+  it("单台：标题即请求内容，角色小字，不套卡片，按钮单独一行", async () => {
+    const d = desktop();
+    render(App);
+    await settle();
+    await openRow(d, [row("a", "Galaxy S24 Ultra")]);
+    const block = screen.getByTestId("pending-request");
+    expect(document.querySelector(".pending-title").textContent).toBe("Galaxy S24 Ultra 请求加入");
+    expect(block.textContent).not.toContain("Galaxy S24 Ultra"); // 名字只在标题里出现一次
+    expect(block.querySelector(".pending-meta").textContent).toBe("家庭成员 · 可以备份和浏览照片");
     expect(block.textContent).toContain("输入手机上显示的验证码");
     expect(document.body.textContent).not.toContain("确认是家人的手机吗");
     expect(document.body.textContent).not.toContain("验证码只能输入一次");
-    expect(block.querySelectorAll('[data-slot="input-otp-slot"]')).toHaveLength(6);
-    // 按钮所在的行不含验证码格子，验证码那一行也不含按钮——两者不会挤在同一行被裁掉。
+    // 不套卡片：没有旧的灰底块，块不在卡片组件里，块的样式也不带底色。
+    expect(document.querySelector(".pending-row")).toBeNull();
+    expect(block.closest('[data-slot="card"]')).toBeNull();
+    const css = readFileSync(`${process.cwd()}/src/App.svelte`, "utf8");
+    const at = css.indexOf("  .pending-request {");
+    expect(css.slice(at, css.indexOf("}", at))).not.toMatch(/background/);
+    // 顺序与按钮行。
+    const order = [...block.children].map((el) => el.className.split(" ")[0]);
+    expect(order).toEqual(["pending-meta", "pending-code", "pending-hint", "pending-actions"]);
     const actions = screen.getByTestId("pending-actions");
     expect(actions.querySelector('[data-slot="input-otp-slot"]')).toBeNull();
-    expect(block.querySelector(".pending-code button")).toBeNull();
-    expect(actions.parentElement).toBe(block);
     expect([...actions.querySelectorAll("button")].map((b) => b.textContent.trim())).toEqual(["拒绝", "允许加入"]);
+    expect(block.querySelectorAll('[data-slot="input-otp-slot"]')).toHaveLength(6);
+  });
+
+  it("多台：总标题报数量，每块以设备名开头", async () => {
+    const d = desktop();
+    render(App);
+    await settle();
+    await openRow(d, [row("a", "Galaxy S24 Ultra"), row("b", "iPhone")]);
+    expect(document.querySelector(".pending-title").textContent).toBe("2 台设备请求加入");
+    const blocks = screen.getAllByTestId("pending-request");
+    expect(blocks.map((b) => b.firstElementChild.textContent)).toEqual(["Galaxy S24 Ultra", "iPhone"]);
   });
 
   // 反证：Dialog 不处理 Esc / 不传 onClose → 关不掉；把关闭接到 confirmPair(false) → 发出拒绝，红。
@@ -205,27 +242,27 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
     await openRow(d, [row("a", "妈妈的手机")]);
     await fireEvent.keyDown(window, { key: "Escape" });
     await settle();
-    expect(screen.queryByTestId("pending-row")).toBeNull();
+    expect(dialogOpen()).toBe(false);
     expect(confirmCalls()).toHaveLength(0);
-    // 首页「待处理」可以再打开。
+    expect(document.body.textContent).toContain("「妈妈的手机」请求加入");
     await fireEvent.click(screen.getByRole("button", { name: "输入验证码" }));
     await settle();
-    expect(screen.getByTestId("pending-row")).toBeTruthy();
+    expect(dialogOpen()).toBe(true);
     await fireEvent.click(screen.getByRole("button", { name: "关闭" }));
     await settle();
-    expect(screen.queryByTestId("pending-row")).toBeNull();
+    expect(dialogOpen()).toBe(false);
     expect(confirmCalls()).toHaveLength(0);
   });
 
-  it("重连：标题点名，按钮是「允许重连」", async () => {
+  it("重连：标题点名，按钮是「允许重连」，带事实小字", async () => {
     const d = desktop();
     render(App);
     await settle();
     await openRow(d, [{ ...row("b", "客厅的手机"), known: true, paired: true, photo_count: 12 }]);
-    expect(document.body.textContent).toContain("「客厅的手机」请求重新连接");
+    expect(document.querySelector(".pending-title").textContent).toBe("客厅的手机 请求重新连接");
     expect(screen.getByRole("button", { name: "允许重连" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "允许加入" })).toBeNull();
-    expect(screen.getByTestId("pending-row").textContent).toContain("已存 12 张");
+    expect(screen.getByTestId("pending-request").textContent).toContain("已存 12 张");
   });
 
   it("不满 6 位不可确认；满了提交时带上这一行的 node_id 与码", async () => {
@@ -274,8 +311,9 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
     await settle();
   });
 
-  // 反证：码错仍走 toast、不记 pairFailed → 该行随 refresh 消失、弹窗关闭，红。
-  it("码错：提示留在该设备那块里，这次申请作废", async () => {
+  // 真机：输错点「允许」后弹窗直接关掉，看不到错误（daemon 先撤行推事件，前端按队列空关了弹窗）。
+  // 反证：弹窗 open 条件改回看队列 / 码错不进 failed → 红。
+  it("输错：弹窗不关，块停在终态；点「知道了」后才关", async () => {
     const d = desktop();
     d.confirmError = JSON.stringify({ key: "ui.err_pair_code_wrong", params: {} });
     render(App);
@@ -284,9 +322,40 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
     await fireEvent.input(screen.getByTestId("pair-code-input"), { target: { value: "654321" } });
     await fireEvent.click(screen.getByRole("button", { name: "允许加入" }));
     await settle();
-    const block = screen.getByTestId("pending-row");
-    expect(block.textContent).toContain("验证码不对，请在手机上重新扫码");
+    await settle();
+    expect(d.pending).toHaveLength(0); // daemon 那边已经作废
+    expect(dialogOpen()).toBe(true);
+    const block = screen.getByTestId("pending-request");
+    expect(block.dataset.phase).toBe("failed");
+    expect(block.textContent).toContain("验证码不对，这次配对已作废，请在手机上重新扫码");
     expect(screen.queryByRole("button", { name: "允许加入" })).toBeNull();
+    await fireEvent.click(screen.getByRole("button", { name: "知道了" }));
+    await settle();
+    expect(dialogOpen()).toBe(false);
+  });
+
+  // 真机：重新扫码后，新申请还挂着上一次的错误、没有按钮。错误绑在申请上，新申请从干净状态开始。
+  // 反证：状态按 node_id 存 → 红。
+  it("同一台手机再次申请：没有旧错误，按钮可用", async () => {
+    const d = desktop();
+    d.confirmError = JSON.stringify({ key: "ui.err_pair_code_wrong", params: {} });
+    render(App);
+    await settle();
+    await openRow(d, [row("a", "妈妈的手机")]);
+    await fireEvent.input(screen.getByTestId("pair-code-input"), { target: { value: "654321" } });
+    await fireEvent.click(screen.getByRole("button", { name: "允许加入" }));
+    await settle();
+    await settle();
+    expect(screen.getByTestId("pending-request").dataset.phase).toBe("failed");
+    // 不点「知道了」，手机直接重新扫码：同一台、新的一次申请。
+    d.confirmError = null;
+    d.pending = [{ ...row("a", "妈妈的手机"), requested_at: 1_790_000_100_000 }];
+    await pushPendingChanged();
+    const fresh = screen.getAllByTestId("pending-request").find((b) => b.dataset.phase === "input");
+    expect(fresh).toBeTruthy();
+    expect(fresh.textContent).not.toContain("验证码不对");
+    expect(fresh.querySelector("input").value).toBe("");
+    expect(within(fresh).getByRole("button", { name: "拒绝" }).disabled).toBe(false);
   });
 
   it("手机还没确认：提示验证码已提交", async () => {

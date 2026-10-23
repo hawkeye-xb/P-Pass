@@ -114,6 +114,8 @@ async function pushPendingChanged() {
 }
 
 // #1118：每一行的确认按钮（输入手机上的验证码后才可点；行在不在看按钮在不在）。
+// 单台时名字在标题里（「名字 请求加入」），多台时在块首——按页面文字判在不在。
+const shows = (name) => document.body.textContent.includes(name);
 const allowButtons = () => screen.queryAllByRole("button", { name: "允许加入" });
 
 /** 点「显示配对二维码」→ 手机扫码入队 → 事件到达，确认弹窗打开。 */
@@ -158,14 +160,14 @@ describe("DEV-07 后续：手机撤回的配对请求从桌面待确认列表消
     render(App);
     await settle();
     await scanned(d, [row("a", "撤回的手机")]);
-    expect(screen.getByText("撤回的手机")).toBeTruthy();
+    expect(shows("撤回的手机")).toBe(true);
     expect(allowButtons()).toHaveLength(1);
 
     // 手机点「取消」：daemon 把这一行移出队列并推 pending_changed。
     d.pending = [];
     await pushPendingChanged();
 
-    expect(screen.queryByText("撤回的手机")).toBeNull();
+    expect(shows("撤回的手机")).toBe(false);
     // 弹窗关了，横幅（pending_pairs > 0 才显示）也不出现。
     expect(allowButtons()).toHaveLength(0);
   });
@@ -180,8 +182,8 @@ describe("DEV-07 后续：手机撤回的配对请求从桌面待确认列表消
     d.pending = [row("b", "还在等的手机")];
     await pushPendingChanged();
 
-    expect(screen.queryByText("撤回的手机")).toBeNull();
-    expect(screen.getByText("还在等的手机")).toBeTruthy();
+    expect(shows("撤回的手机")).toBe(false);
+    expect(shows("还在等的手机")).toBe(true);
     expect(allowButtons()).toHaveLength(1);
   });
 });

@@ -73,6 +73,7 @@
     pendingRoleKey,
     pairConfirmToast,
   } from "./lib/pending.js";
+  import { requestId, syncRequests, setPhase, removeRequest } from "./lib/pairRequests.js";
   import { formatBytes, diskUsedPercent } from "./lib/formatBytes.js";
   // MOB-29: 「刚从库里删掉照片」警告的判据（纯函数，externalDelete.test.js
   // 钉边界）——删除会被手机传回来，这是对的，但得让用户知道。
@@ -342,14 +343,14 @@
       } catch (_) {
         pendingList = [];
       }
-      // T4: pending 从无到有 = 有人扫了码——关二维码弹窗、打开允许/拒绝。
-      // UX-08: 一屏列全部 pending，逐行处理；全清后关闭，无残留。
-      if (pendingList.length > 0 && showPairModal) {
+      // 弹窗里的块按「申请」对齐（lib/pairRequests.js）。新申请到达就自动弹出、
+      // 内容立即可用——不管二维码弹窗开没开；首页横幅只是关掉弹窗后的再入口。
+      // 弹窗何时收起由块决定（open 条件），不看队列是否为空。
+      const synced = syncRequests(pairRequests, pendingList);
+      pairRequests = synced.rows;
+      if (synced.added.length > 0) {
         showPairModal = false;
         showConfirmModal = true;
-      } else if (pendingList.length === 0 && showConfirmModal && Object.keys(pairFailed).length === 0) {
-        // 已处理完（confirmPair 清空 pending）——状态消失，不残留。
-        showConfirmModal = false;
       }
       // DEV-03: 这一屏要同时渲染「在用/已断开」和折叠的「已移除」，所以要
       // 全量。不传参 ⇒ daemon 只给主列表的行 ⇒ 下面那个「已移除设备 N 台」
@@ -563,32 +564,32 @@
     }
   }
 
-  // #1118：每一行的验证码输入（按 node_id）。
+  // 弹窗里的块：一块 = 一次申请（id = node_id + requested_at），带自己的阶段
+  // input / busy / failed（见 lib/pairRequests.js）。验证码也按申请存——同一台手机
+  // 重新扫码是新申请，从干净状态开始。
+  let pairRequests = $state([]);
   let pairCodes = $state({});
-  // 正在提交的那一行（按 node_id）：daemon 要等手机回执（最多 8s），等待期间
-  // 这一行的按钮置灰、确认键转圈，防止重复提交。
-  let pairBusy = $state({});
-  // 输错验证码的那一行（node_id → 行快照）：daemon 已把这次申请作废、pending
-  // 里没有它了，但提示要留在该设备那块里，直到弹窗关掉。
-  let pairFailed = $state({});
-  const confirmRows = $derived([
-    ...pendingList,
-    ...Object.values(pairFailed).filter((f) => !pendingList.some((p) => p.node_id === f.node_id)),
-  ]);
 
-  // Esc / 关闭按钮 / 点遮罩：只收起弹窗，不等于拒绝——请求留在首页「待处理」，可再打开。
+  // Esc / 右上角关闭 / 点遮罩：只收起弹窗，不等于拒绝——请求留在首页「待处理」，可再打开。
+  // 已作废的块随之确认掉（主人已经看到了）。
   function closeConfirmModal() {
     showConfirmModal = false;
-    pairFailed = {};
+    pairRequests = pairRequests.filter((r) => r.phase !== "failed");
+  }
+
+  // 「知道了」：确认这块已作废，块消失；没有别的块弹窗随之关闭（open 条件）。
+  function acknowledgeRequest(id) {
+    pairRequests = removeRequest(pairRequests, id);
   }
 
   async function confirmPair(accept, item, code = null) {
-    const id = item?.node_id;
-    if (id && pairBusy[id]) return;
-    if (id) pairBusy = { ...pairBusy, [id]: accept ? "allow" : "deny" };
+    const id = requestId(item);
+    const row = pairRequests.find((r) => r.id === id);
+    if (row?.phase === "busy" || row?.phase === "failed") return;
+    pairRequests = setPhase(pairRequests, id, "busy");
     try {
-      // UX-08: 逐行处理——pairing.confirm 精确确认该台。#1044：横幅与弹窗
-      // 都显式传要决定的那一行（node_id），不靠「不带参数 = daemon 队首」。
+      // UX-08: 逐台处理——pairing.confirm 精确确认该台。#1044：横幅与弹窗
+      // 都显式传要决定的那一台（node_id），不靠「不带参数 = daemon 队首」。
       //
       // DEV-04: 定位必须按 node_id。老设备改过名之后，弹窗上显示的是
       // 桌面的名字，而队列里存的是手机自报名——继续按名字找就是
@@ -607,23 +608,20 @@
       const shown = pairResultName(item, r);
       const toast = pairConfirmToast(accept, r, shown);
       flashMessage(t(toast.key, toast.params), toast.tone);
-      // T4: 处理完由下一轮 refresh 关模态（pending 清 0）——状态消失不残留。
-      await refresh();
+      pairRequests = removeRequest(pairRequests, id);
     } catch (e) {
-      if (accept && id && errKey(e) === "ui.err_pair_code_wrong") {
-        // #1118：码错了这次申请就作废（daemon 已撤掉这一行）——提示留在该设备那块里。
-        pairFailed = { ...pairFailed, [id]: item };
+      if (accept && errKey(e) === "ui.err_pair_code_wrong") {
+        // #1118：码错 = 这次申请作废（daemon 已撤）。块停在终态，主人点「知道了」才消失。
+        pairRequests = setPhase(pairRequests, id, "failed");
       } else {
         flashMessage(t("ui.confirm_failed", { err: errDetail(e) }), "error");
+        // 还在队列里就回到可输入；不在了下一轮对齐会收掉。
+        pairRequests = setPhase(pairRequests, id, "input");
       }
-      await refresh();
     } finally {
-      if (id) {
-        pairCodes = { ...pairCodes, [id]: "" };
-        const { [id]: _, ...rest } = pairBusy;
-        pairBusy = rest;
-      }
+      pairCodes = { ...pairCodes, [id]: "" };
     }
+    await refresh();
   }
 
   async function revoke(nodeId, name) {
@@ -2179,62 +2177,61 @@
       {/if}
     </Dialog>
 
-    <!-- UX-08: 待确认加入列表。关掉（Esc / 右上角 / 点遮罩）只是收起，不等于拒绝：
-         请求留在首页「待处理」，可以再打开。 -->
-    <Dialog open={showConfirmModal && confirmRows.length > 0} onClose={closeConfirmModal} closeLabel={t("ui.close")}>
-      <!-- UX-08: 多台同时扫码 → 一屏全列，逐台允许/拒绝，处理完该台
-           消失，全清后列表关闭——不挤牙膏式顺序弹窗。 -->
-      <!-- DEV-04: 老设备重连 ≠ 陌生设备加入。判据是 node_id（daemon 查
-           设备档案，档案永不删除），所以改过名的设备照样认得出来，
-           且用桌面上那个名字称呼它。措辞逻辑在 lib/pending.js，有测试。 -->
-      {@const dialogText = pendingDialogText(confirmRows)}
-      <h3>{dialogText.title}</h3>
+    <!-- UX-08: 待确认加入列表。一块 = 一次申请（lib/pairRequests.js）。关掉（Esc / 右上角 /
+         点遮罩）只是收起，不等于拒绝：请求留在首页「待处理」，可以再打开。
+         样式参照 macOS 提示框：单台时内容直接放在弹窗里，不套卡片；多台用分隔线分开。 -->
+    <Dialog open={showConfirmModal && pairRequests.length > 0} onClose={closeConfirmModal} closeLabel={t("ui.close")}>
+      <!-- DEV-04: 老设备重连 ≠ 陌生设备加入。判据是 node_id（daemon 查设备档案，档案永不
+           删除），所以改过名的设备照样认得出来，且用桌面上那个名字称呼它。措辞在 lib/pending.js。 -->
+      {@const many = pairRequests.length > 1}
+      <h3 class="pending-title">{pendingDialogText(pairRequests.map((r) => r.item)).title}</h3>
       <div class="pending-list">
-        {#each confirmRows as item (item.node_id ?? item.name)}
-          <!-- DEV-02: 设备与身份 1:1——确认框只有「允许」/「拒绝」。 -->
-          <!-- 每台一块，从上到下：名字 · 角色 / 重连实证 / 6 格验证码 / 提示 / 按钮。
-               按钮单独一行：和 6 个格子挤一行会超出 420px 弹窗被裁掉（真机实测）。 -->
+        {#each pairRequests as req (req.id)}
+          {@const item = req.item}
           {@const sub = pendingSubText(item, humanTime(item.paired_at, nowMs))}
-          {@const code = pairCodes[item.node_id] ?? ""}
-          {@const failed = !!pairFailed[item.node_id]}
-          {@const busy = pairBusy[item.node_id]}
-          <div class="pending-row" data-testid="pending-row">
-            <p class="pending-name"><span>{item.name}</span> · {t(pendingRoleKey(item))}</p>
-            {#if sub}<p class="pending-sub">{sub}</p>{/if}
-            <div class="pending-code">
-              <InputOTP.Root
-                data-testid="pair-code-input"
-                aria-label={t("ui.pair_code_placeholder")}
-                maxlength={6}
-                pattern={REGEXP_ONLY_DIGITS}
-                pasteTransformer={normalizePairCode}
-                disabled={failed || !!busy}
-                bind:value={() => code, (v) => (pairCodes = { ...pairCodes, [item.node_id]: normalizePairCode(v) })}
-                onkeydown={(e) => { if (e.key === "Enter" && isPairCode(code) && !failed) confirmPair(true, item, code); }}
-              >
-                {#snippet children({ cells })}
-                  <InputOTP.Group>
-                    {#each cells as cell}
-                      <InputOTP.Slot {cell} class="size-11 bg-paper text-[18px] font-semibold text-ink tabular-nums" />
-                    {/each}
-                  </InputOTP.Group>
-                {/snippet}
-              </InputOTP.Root>
-            </div>
-            {#if failed}
+          {@const code = pairCodes[req.id] ?? ""}
+          <!-- 顺序：（多台时）设备名 → 角色小字 →（重连）事实小字 → 6 格验证码 → 提示 → 按钮行右对齐。 -->
+          <section class="pending-request" data-testid="pending-request" data-phase={req.phase}>
+            {#if many}<p class="pending-name">{item.name}</p>{/if}
+            <p class="pending-meta">{t(pendingRoleKey(item))}</p>
+            {#if sub}<p class="pending-meta">{sub}</p>{/if}
+            {#if req.phase === "failed"}
               <p class="pending-error" role="alert">{t("ui.err_pair_code_wrong")}</p>
+              <div class="pending-actions" data-testid="pending-actions">
+                <Button onclick={() => acknowledgeRequest(req.id)}>{t("ui.got_it")}</Button>
+              </div>
             {:else}
+              <div class="pending-code">
+                <InputOTP.Root
+                  data-testid="pair-code-input"
+                  aria-label={t("ui.pair_code_placeholder")}
+                  maxlength={6}
+                  pattern={REGEXP_ONLY_DIGITS}
+                  pasteTransformer={normalizePairCode}
+                  disabled={req.phase === "busy"}
+                  bind:value={() => code, (v) => (pairCodes = { ...pairCodes, [req.id]: normalizePairCode(v) })}
+                  onkeydown={(e) => { if (e.key === "Enter" && isPairCode(code)) confirmPair(true, item, code); }}
+                >
+                  {#snippet children({ cells })}
+                    <InputOTP.Group>
+                      {#each cells as cell}
+                        <InputOTP.Slot {cell} class="size-11 bg-paper text-[18px] font-semibold text-ink tabular-nums" />
+                      {/each}
+                    </InputOTP.Group>
+                  {/snippet}
+                </InputOTP.Root>
+              </div>
               <p class="pending-hint">{t("ui.pair_code_hint")}</p>
               <div class="pending-actions" data-testid="pending-actions">
-                <Button variant="secondary" disabled={!!busy} onclick={() => confirmPair(false, item)}>{t("ui.deny")}</Button>
+                <Button variant="secondary" disabled={req.phase === "busy"} onclick={() => confirmPair(false, item)}>{t("ui.deny")}</Button>
                 <!-- DEV-04: 按钮跟标题走：重连是「允许重连」，不是「允许加入」。 -->
-                <Button data-testid="pair-code-confirm" aria-busy={busy === "allow"} disabled={!isPairCode(code) || !!busy} onclick={() => confirmPair(true, item, code)}>
-                  {#if busy === "allow"}<Loader2Icon class="size-4 animate-spin" aria-hidden="true" />{/if}
+                <Button data-testid="pair-code-confirm" aria-busy={req.phase === "busy"} disabled={!isPairCode(code) || req.phase === "busy"} onclick={() => confirmPair(true, item, code)}>
+                  {#if req.phase === "busy"}<Loader2Icon class="size-4 animate-spin" aria-hidden="true" />{/if}
                   {t(pendingAllowKey(item))}
                 </Button>
               </div>
             {/if}
-          </div>
+          </section>
         {/each}
       </div>
     </Dialog>
@@ -2543,46 +2540,45 @@
   .pending-list {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    margin-top: 4px;
-    max-height: 300px;
+    max-height: min(60vh, 440px);
     overflow-y: auto;
   }
-  /* 每台一块、纵向排：名字 · 角色 / 实证小字 / 验证码（居中）/ 提示 / 按钮（右对齐）。
-     不再和按钮挤一行——6 格 + 两个按钮超出弹窗内宽，按钮被裁掉（真机实测）。 */
-  .pending-row {
+  /* 一块 = 一次申请，纵向排。参照 macOS 提示框：不套卡片，多台之间用分隔线。 */
+  .pending-title {
+    margin-bottom: 2px;
+  }
+  .pending-request {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    background: var(--pp-linen);
-    border-radius: var(--pp-radius-control-sm);
-    padding: 12px 14px;
-    text-align: left;
+    padding: 12px 0 0;
+  }
+  .pending-request + .pending-request {
+    margin-top: 12px;
+    border-top: 1px solid var(--pp-divider);
   }
   .pending-name {
     margin: 0;
-    min-width: 0;
     font-weight: 600;
     overflow-wrap: anywhere;
   }
-  /* DEV-04: 老设备重连时的实证小字（首次配对时刻 · 已存 N 张）；新设备没有这行。 */
-  .pending-sub {
+  /* 角色、重连实证：小字次要色。 */
+  .pending-meta {
     margin: -4px 0 0;
-    font-size: 12px;
+    font-size: 13px;
     line-height: 1.5;
     color: var(--pp-ink-60);
   }
   .pending-code {
     display: flex;
     justify-content: center;
-    padding-top: 4px;
+    padding-top: 6px;
   }
   .pending-hint,
   .pending-error {
     margin: 0;
     font-size: 13px;
     line-height: 1.5;
-    text-align: center;
   }
   .pending-hint {
     color: var(--pp-ink-60);
@@ -2595,6 +2591,7 @@
     justify-content: flex-end;
     flex-wrap: wrap;
     gap: 8px;
+    padding-top: 4px;
   }
   .pair-identity {
     margin: 0;
