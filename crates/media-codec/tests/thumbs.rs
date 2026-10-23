@@ -208,8 +208,14 @@ fn assert_white_left_red_right(path: &Path) {
     let left = img.get_pixel(w / 8, h / 2);
     let right = img.get_pixel(w - 1 - w / 8, h / 2);
     // JPEG 有损，留余量；改前透明区是黑块（≈0）。
-    assert!(left.0.iter().all(|&c| c >= 240), "透明区必须垫白底，实际 {left:?}");
-    assert!(right.0[0] >= 190 && right.0[1] <= 70, "不透明区保持原色，实际 {right:?}");
+    assert!(
+        left.0.iter().all(|&c| c >= 240),
+        "透明区必须垫白底，实际 {left:?}"
+    );
+    assert!(
+        right.0[0] >= 190 && right.0[1] <= 70,
+        "不透明区保持原色，实际 {right:?}"
+    );
 }
 
 /// 统一回归：三星传来的透明 PNG 在照片墙上是黑块。行业做法是垫白底再出 JPEG。
@@ -235,13 +241,9 @@ fn ico_gets_thumbnails_on_white() {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("favicon.ico");
     let img = transparent_rgba(64, 64);
-    let frame = image::codecs::ico::IcoFrame::as_png(
-        img.as_raw(),
-        64,
-        64,
-        image::ExtendedColorType::Rgba8,
-    )
-    .unwrap();
+    let frame =
+        image::codecs::ico::IcoFrame::as_png(img.as_raw(), 64, 64, image::ExtendedColorType::Rgba8)
+            .unwrap();
     image::codecs::ico::IcoEncoder::new(fs::File::create(&src).unwrap())
         .encode_images(&[frame])
         .unwrap();
