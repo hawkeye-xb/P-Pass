@@ -42,7 +42,7 @@ android {
         applicationId = "com.hawkeyexb.ppass"
         minSdk = 26
         targetSdk = 35
-        versionCode = 66
+        versionCode = 67
         // DESK-02①: 构建期注入完整版本串（release tag = "v0.3.2-test.2"，
         // 去前导 v）——Android 端靠它推导更新通道（含 -test. → test）并
         // 让连续 test tag 能自动升级（isNewer 预发布段比较）。本地/非 tag
@@ -51,7 +51,7 @@ android {
             System.getenv("PPF_BUILD_VERSION")
                 ?.takeIf { it.isNotBlank() }
                 ?.removePrefix("v")
-                ?: "0.10.0"
+                ?: "0.10.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // #1121：更新验签公钥，按通道各一把，构建期从仓库里唯一的来源读：
         //   stable = 桌面 tauri.conf.json 的 updater pubkey（两端同一把）；
