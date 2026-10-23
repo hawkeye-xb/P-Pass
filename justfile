@@ -245,6 +245,20 @@ platform-smoke:
 dev-desktop:
     cd apps/desktop && npx tauri dev
 
+# macOS 日常开发循环（Xcode 式：每个 debug 构建都组装成 .app、用团队 Developer ID 签名）。
+# 窗口连本机真实的签名 daemon，签名校验与正式包一字不差。前端改动走 vite HMR；外壳 Rust
+# 改动由 tauri dev 自动重编、签名、拉起；daemon Rust 改动跑 `just mac-dev daemon`。
+# 开发版装在 ~/Applications/P-Pass.app（与正式包同 bundle id / LaunchAgent，互斥）：那里是正式包
+# （正在运行或只是装着）时一律拒绝，不替换、不备份——先自己退出并移走正式版。退出开发模式：
+# Ctrl+C，再装回正式 dmg。
+#   just mac-dev            启动 tauri dev（首次需 PPF_DAEMON_PROVISIONPROFILE）
+#   just mac-dev daemon     daemon 增量编译 + 签名 + kickstart + 重拉外壳（重拉这步尚未实测）
+#   just mac-dev status     只读：看现在装的是哪一版
+# 详见 tools/mac-dev.sh 文件头。
+# macOS 开发循环：HMR + 签名的 debug 构建，连本机真实 daemon（up|daemon|status）
+mac-dev *args:
+    tools/mac-dev.sh {{args}}
+
 # #1110：把本地构建的 daemon 组装成签过名的 helper（个人团队 Developer ID + 授权文件）。
 # 需 PPF_DAEMON_PROVISIONPROFILE=<授权文件路径>。用途：本机验钥匙串读写、签名形状；
 # #1115 起开发壳不连它（见 dev-desktop），要连得用签名的窗口程序。

@@ -20,9 +20,12 @@
 #       也不放授权文件（ad-hoc 签名带受限权限，进程一启动就被系统杀掉）。
 #       Developer ID 签名必须给授权文件，签前核对它、签后核对结果。
 #       PPF_SIGN_TIMESTAMP=none 跳过 Apple 时间戳服务（本地开发用；发布不许）。
-#   dev [daemon_bin]
+#   identity
+#       打印个人团队 Developer ID Application 证书的 SHA-1（恰好一张，否则失败）。
+#       `tools/mac-dev.sh` 签外层开发 App 用同一张。
+#   dev [daemon_bin] [helper.app]
 #       本地开发：把本地构建的 daemon（缺省 ${CARGO_TARGET_DIR:-target}/debug/daemon，先 cargo build）组装到
-#       ${CARGO_TARGET_DIR:-apps/desktop/src-tauri/target}/Helpers/ppf-daemon.app（`tauri dev` 的壳按
+#       helper.app（缺省 ${CARGO_TARGET_DIR:-apps/desktop/src-tauri/target}/Helpers/ppf-daemon.app，`tauri dev` 的壳按
 #       ../Helpers/ppf-daemon.app 找 daemon，crates/platform/src/macos.rs
 #       `bundled_daemon_path_from`），再用个人团队的 Developer ID 证书 + 授权文件签名。
 #       #1115：签名 helper 只接受签名的窗口程序，未签名的开发壳连不上它；开发壳连测试沙盒
@@ -162,8 +165,18 @@ verify_signed() {
   echo "   ✓ helper 签名：$BUNDLE_ID / 团队 $TEAM_ID / runtime / 访问组 $ACCESS_GROUP"
 }
 
+# 只认个人团队的 Developer ID Application 证书，恰好一张；别的团队一律不用。
+identity() {
+  local id
+  id="$(security find-identity -v -p codesigning \
+    | awk -v team="($TEAM_ID)\"" '/"Developer ID Application: / && index($0, team) {print $2}' | sort -u)"
+  [ -n "$id" ] || die "钥匙串里没有团队 $TEAM_ID 的 Developer ID Application 证书"
+  [ "$(wc -l <<<"$id" | tr -d ' ')" = "1" ] || die "团队 $TEAM_ID 的 Developer ID Application 证书不止一张，拿不准用哪张"
+  echo "$id"
+}
+
 dev() {
-  local daemon="${1:-}" stage helper identity version
+  local daemon="${1:-}" helper="${2:-}" stage identity version
   [ "$(uname)" = "Darwin" ] || die "dev 只在 macOS 上用"
   local profile="${PPF_DAEMON_PROVISIONPROFILE:-}"
   [ -n "$profile" ] || die "设 PPF_DAEMON_PROVISIONPROFILE=<授权文件路径>（Developer ID 授权文件，不进仓库）"
@@ -172,17 +185,13 @@ dev() {
     daemon="${CARGO_TARGET_DIR:-$ROOT/target}/debug/daemon"
   fi
   [ -x "$daemon" ] || die "daemon 不存在：$daemon"
-  # 只认个人团队的 Developer ID Application 证书，恰好一张；别的团队一律不用。
-  identity="$(security find-identity -v -p codesigning \
-    | awk -v team="($TEAM_ID)\"" '/"Developer ID Application: / && index($0, team) {print $2}' | sort -u)"
-  [ -n "$identity" ] || die "钥匙串里没有团队 $TEAM_ID 的 Developer ID Application 证书"
-  [ "$(wc -l <<<"$identity" | tr -d ' ')" = "1" ] || die "团队 $TEAM_ID 的 Developer ID Application 证书不止一张，拿不准用哪张"
+  identity="$(identity)"
   version="$("$ROOT/tools/release-version.sh" desktop)"
   stage="$(mktemp -d)"
   "$ROOT/tools/bundle-macos.sh" "$stage" "$daemon" >/dev/null
   # 壳按「可执行文件上两级/Helpers」找 helper（platform::bundled_daemon_path）：`tauri dev` 的壳在
   # <target>/debug/ 下，<target> 跟着 CARGO_TARGET_DIR 走。
-  helper="${CARGO_TARGET_DIR:-$ROOT/apps/desktop/src-tauri/target}/Helpers/ppf-daemon.app"
+  [ -n "$helper" ] || helper="${CARGO_TARGET_DIR:-$ROOT/apps/desktop/src-tauri/target}/Helpers/ppf-daemon.app"
   assemble "$stage" "$helper" "$version"
   rm -rf "$stage"
   PPF_SIGN_TIMESTAMP=none sign "$helper" "$identity" "$profile"
@@ -194,6 +203,7 @@ cmd="${1:-}"; shift || true
 case "$cmd" in
   assemble) [ $# -eq 3 ] || die "用法：$0 assemble <rel_dir> <helper.app> <version>"; assemble "$@" ;;
   sign) [ $# -ge 2 ] || die "用法：$0 sign <helper.app> <identity> [profile]"; sign "$@" ;;
+  identity) identity ;;
   dev) dev "$@" ;;
-  *) die "用法：$0 assemble|sign|dev …（见文件头）" ;;
+  *) die "用法：$0 assemble|sign|identity|dev …（见文件头）" ;;
 esac

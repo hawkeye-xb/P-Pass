@@ -98,6 +98,19 @@ issue（为什么做）→ 分支 → PR（怎么做的）→ 验收人 review +
   写法规则见 `docs/release-notes-rules.md`，发版步骤见 `docs/RELEASING.md` §3 / §3.5。
 - 构建产物、日志不进 main。
 
+## macOS 本地开发
+
+- **日常改动用 `just mac-dev`**：前端走 vite HMR；外壳 Rust 改完由 tauri dev 自动重编、组装、
+  Developer ID 签名、拉起；daemon Rust 改完跑 `just mac-dev daemon`。窗口连本机真实的签名
+  daemon，#1115 的签名校验一字不改。实测：HMR 推送 <0.3s，外壳 Rust 改一行约 10s 重新连上。
+- ⚠️ 开发版与正式包共用 `~/Applications/P-Pass.app`、LaunchAgent、数据目录：**正式包在那里
+  （尤其正在运行）时 mac-dev 直接拒绝**，不替换、不备份。别人可能正拿正式包回归，先确认再
+  自己退出并移走正式版。退出开发模式 = Ctrl+C 后装回正式 dmg。
+- ⚠️ `just mac-dev daemon` 的「换 daemon 后自动重拉外壳」**尚未实测**（daemon 新代码生效约
+  21s 已测）。
+- **只有验打包/签名/公证链路本身时**（发版前、改了 bundle 脚本或签名形状）才打正式签名包
+  （`just verify-m1` / `tools/bundle-desktop-macos.sh`）。
+
 ## 机器兜底（`just ci` 会挡，不用背）
 
 - iroh 只在 `crates/transport/`。
