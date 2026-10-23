@@ -344,7 +344,8 @@ pub(crate) mod test_pe {
         block("VS_VERSION_INFO", &fixed, 52, 0, &sfi)
     }
 
-    /// 直接按版本号造一个带该版本字符串的 PE。
+    /// 直接按版本号造一个带该版本字符串的 PE（只有 Windows 的更新判据测试用）。
+    #[cfg(windows)]
     pub(crate) fn pe_with_version(v: &str) -> Vec<u8> {
         build_pe(&build_version_blob(v))
     }
