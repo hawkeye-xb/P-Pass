@@ -314,8 +314,6 @@ msg_keys! {
     UI_WIZARD_SERVICE_BODY => "ui.wizard_service_body",
     UI_WIZARD_ASKS_LABEL => "ui.wizard_asks_label",
     UI_WIZARD_ASKS_WIN => "ui.wizard_asks_win",
-    UI_WIZARD_WONT_LABEL => "ui.wizard_wont_label",
-    UI_WIZARD_WONT => "ui.wizard_wont",
     UI_WIZARD_BLOCKED_LABEL => "ui.wizard_blocked_label",
     UI_WIZARD_BLOCKED_MAC => "ui.wizard_blocked_mac",
     UI_WIZARD_BLOCKED_WIN => "ui.wizard_blocked_win",
@@ -667,8 +665,6 @@ mod tests {
             UI_WIZARD_SERVICE_BODY,
             UI_WIZARD_ASKS_LABEL,
             UI_WIZARD_ASKS_WIN,
-            UI_WIZARD_WONT_LABEL,
-            UI_WIZARD_WONT,
             UI_WIZARD_BLOCKED_LABEL,
             UI_WIZARD_BLOCKED_MAC,
             UI_WIZARD_BLOCKED_WIN,
@@ -788,7 +784,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 336);
+        assert_eq!(ALL.len(), 334);
     }
 
     #[test]

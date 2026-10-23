@@ -232,8 +232,6 @@
   "ui.wizard_service_body": "P-Pass 会注册为系统后台服务：开机自动运行，关掉这个窗口也在安静地收备份。随时可以在「设置」里停止它。",
   "ui.wizard_asks_label": "会申请什么",
   "ui.wizard_asks_win": "开机自启（在「任务计划程序」里登记一项登录任务，不需要管理员权限，也不会创建 Windows 服务）",
-  "ui.wizard_wont_label": "不会做什么",
-  "ui.wizard_wont": "不上传到任何云端、不建账号——照片只在你家的设备之间走",
   "ui.wizard_blocked_label": "如果被拦",
   "ui.wizard_blocked_mac": "首次打开被 macOS 拦截时：右键点 App → 打开（只需一次）",
   "ui.wizard_blocked_win": "安装时若出现 Windows SmartScreen 提示「Windows 已保护你的电脑」：点「更多信息」→「仍要运行」即可（未签名安装包目前会出现这条提示，属已知状态）",

@@ -90,10 +90,6 @@
           <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">{t("ui.wizard_asks_label")}</span>
           <span class="text-[14px] leading-[1.5] text-ink-60">{t("ui.wizard_asks_win")}</span>
         </div>
-        <div class="flex gap-3 border-b border-divider px-[18px] py-[13px]">
-          <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">{t("ui.wizard_wont_label")}</span>
-          <span class="text-[14px] leading-[1.5] text-ink-60">{t("ui.wizard_wont")}</span>
-        </div>
         <div class="flex gap-3 px-[18px] py-[13px]">
           <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">{t("ui.wizard_blocked_label")}</span>
           <span class="text-[14px] leading-[1.5] text-ink-60">{t("ui.wizard_blocked_win")}</span>
