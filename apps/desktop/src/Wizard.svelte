@@ -21,8 +21,8 @@
     configuredLibraryDir,
     onDone,
     onChange: (patch) => Object.assign(view, patch),
-    // config 写成功后问一次电源状态，第 2 步据此渲染。
-    afterLibrarySaved: async () => {
+    // 进第 2 步前问一次电源状态，第 2 步据此渲染。
+    beforeStep2: async () => {
       power = await invoke("power_hint");
     },
   });

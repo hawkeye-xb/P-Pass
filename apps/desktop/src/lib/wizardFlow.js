@@ -7,10 +7,14 @@
 //
 //   第 1 步 选库 ─ toStep2() ─▶ 第 2 步 睡眠 ─ toStep3() ─▶ 第 3 步 常驻服务 ─ finishSetup() ─▶ onDone()
 //
+// 前两步只收集选择，磁盘上什么都不写；第 3 步「完成」才一次性生效：写库位置
+// （`write_config` → daemon `config.set_library`）→ 启动常驻服务。这样中途改目录、
+// 中途退出都不留半套配置或空库目录，本地网络授权也只在第 3 步出现（统一回归首启
+// 实测：第 1 步就写库位置会一次性拉起 daemon，留下空的默认库、授权弹窗提前）。
+//
 // 两个视图只保留各自的文案，以及第 2 步的渲染（macOS 要用户处理睡眠、Windows
-// 由 daemon 保持唤醒只需说明）。第 2 步在逻辑上的差别只有一处：macOS 写完
-// config 后还要问一次电源状态——经 `afterLibrarySaved` 钩子注入，状态机本身
-// 不认识平台。
+// 由 daemon 保持唤醒只需说明）。第 2 步在逻辑上的差别只有一处：macOS 进第 2 步
+// 前要问一次电源状态——经 `beforeStep2` 钩子注入，状态机本身不认识平台。
 //
 // 为什么是工厂 + `onChange` 回调、不是 `.svelte.js` 里的 rune：状态机要能脱离
 // Svelte 单测；视图把 `onChange(patch)` 的结果并进自己的 `$state` 即可。
@@ -56,16 +60,15 @@ export function stepBar(step) {
  * @param {() => void} opts.onDone              第 3 步完成、服务就绪
  * @param {(patch: object) => void} opts.onChange  状态变化时给出变化的字段
  *        （`step` / `libraryDir` / `busy` / `error`）
- * @param {() => Promise<void>} [opts.afterLibrarySaved]
- *        config 写成功后、进第 2 步之前的钩子（macOS：读电源状态）。抛错 = 保存失败
- *        那条红条，与改前同一行为。
+ * @param {() => Promise<void>} [opts.beforeStep2]
+ *        进第 2 步之前的钩子（macOS：读电源状态）。抛错 = 留在第 1 步并显示红条。
  */
 export function createWizardFlow({
   defaultDir,
   configuredLibraryDir,
   onDone,
   onChange,
-  afterLibrarySaved,
+  beforeStep2,
 }) {
   // DESK-05：新装时默认填 defaultDir——不再要求先点「用默认位置」；
   // T-042b：config 已指向某库（oneshot 降级 / 中途退出回向导）就预填它。
@@ -94,12 +97,11 @@ export function createWizardFlow({
     set({ libraryDir: defaultDir });
   }
 
-  /** 第 1 → 2 步：让 daemon 写 config（`write_config` → IPC `config.set_library`）。 */
+  /** 第 1 → 2 步：只记住选择（目录在第 3 步「完成」时才写）。 */
   async function toStep2() {
     set({ error: "", busy: true });
     try {
-      await invoke("write_config", { libraryDir: state.libraryDir });
-      if (afterLibrarySaved) await afterLibrarySaved();
+      if (beforeStep2) await beforeStep2();
       set({ step: 2 });
     } catch (e) {
       set({ error: t("ui.wizard_save_failed", { err: errDetail(e) }) });
@@ -128,6 +130,13 @@ export function createWizardFlow({
    */
   async function finishSetup() {
     set({ error: "", busy: true });
+    // 先写库位置：daemon 校验（存在 / 可写 / 不嵌套）不过就回第 1 步重选，常驻服务不启动。
+    try {
+      await invoke("write_config", { libraryDir: state.libraryDir });
+    } catch (e) {
+      set({ step: 1, busy: false, error: t("ui.wizard_save_failed", { err: errDetail(e) }) });
+      return;
+    }
     try {
       await invoke("start_daemon");
       let ready = false;
