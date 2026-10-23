@@ -238,6 +238,17 @@ jobs:
       #   两种状态下 `cargo test -p media-codec --test thumbs` 都全绿，
       #   heic_decodes_via_libheif 都是真实像素 64x48、outcome=Generated
       #   ——解码确实与 hevc 特性无关，这是实证不是推断。
+      # 钉 vcpkg 端口快照：runner 池里有多个镜像，自带 vcpkg 端口不一致（旧的没有
+      # libheif 的 libde265 feature），见 ci-rust.yml 顶部 VCPKG_PIN_SHA 的说明。
+      - name: Pin vcpkg registry
+        shell: bash
+        env:
+          VCPKG_PIN_SHA: 40a678a192636131f04b3af79ba118d869effade
+        run: |
+          git -C /c/vcpkg fetch --depth=1 origin "$VCPKG_PIN_SHA"
+          git -C /c/vcpkg checkout --force "$VCPKG_PIN_SHA"
+          (cd /c/vcpkg && cmd //c bootstrap-vcpkg.bat -disableMetrics)
+
       - name: Install libheif (vcpkg, static, no HEVC encoder)
         shell: bash
         run: |
