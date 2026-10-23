@@ -87,7 +87,7 @@
   // I18N-03 (#492): t() 抽到 lib/i18n.js 共享（向导、lib/*.js 同源）；
   // T-081 暂写死在组件里的导航/页面文案已全部收编进字典。errText 负责
   // 把 Rust 壳回来的错误（key + 参数 / 裸已注册 key；不认识的一律通用错误，原串只进 console）渲染成人话。
-  import { t, errText, errDetail, getLocale, readLangPref, applyLangPref } from "./lib/i18n.js";
+  import { t, errText, errDetail, errKey, getLocale, readLangPref, applyLangPref } from "./lib/i18n.js";
 
   // ---- T-081 布局 v1：侧边栏四页（总览 / 家人与设备 / 活动记录 / 设置，
   // 照片库并入设置）。hash 同步只为可验证/可深链，不引入路由依赖。
@@ -347,7 +347,7 @@
       if (pendingList.length > 0 && showPairModal) {
         showPairModal = false;
         showConfirmModal = true;
-      } else if (pendingList.length === 0 && showConfirmModal) {
+      } else if (pendingList.length === 0 && showConfirmModal && Object.keys(pairFailed).length === 0) {
         // 已处理完（confirmPair 清空 pending）——状态消失，不残留。
         showConfirmModal = false;
       }
@@ -568,6 +568,19 @@
   // 正在提交的那一行（按 node_id）：daemon 要等手机回执（最多 8s），等待期间
   // 这一行的按钮置灰、确认键转圈，防止重复提交。
   let pairBusy = $state({});
+  // 输错验证码的那一行（node_id → 行快照）：daemon 已把这次申请作废、pending
+  // 里没有它了，但提示要留在该设备那块里，直到弹窗关掉。
+  let pairFailed = $state({});
+  const confirmRows = $derived([
+    ...pendingList,
+    ...Object.values(pairFailed).filter((f) => !pendingList.some((p) => p.node_id === f.node_id)),
+  ]);
+
+  // Esc / 关闭按钮 / 点遮罩：只收起弹窗，不等于拒绝——请求留在首页「待处理」，可再打开。
+  function closeConfirmModal() {
+    showConfirmModal = false;
+    pairFailed = {};
+  }
 
   async function confirmPair(accept, item, code = null) {
     const id = item?.node_id;
@@ -597,8 +610,12 @@
       // T4: 处理完由下一轮 refresh 关模态（pending 清 0）——状态消失不残留。
       await refresh();
     } catch (e) {
-      flashMessage(t("ui.confirm_failed", { err: errDetail(e) }), "error");
-      // #1118：码错了这次配对就作废——下一轮 refresh 会把这一行收掉。
+      if (accept && id && errKey(e) === "ui.err_pair_code_wrong") {
+        // #1118：码错了这次申请就作废（daemon 已撤掉这一行）——提示留在该设备那块里。
+        pairFailed = { ...pairFailed, [id]: item };
+      } else {
+        flashMessage(t("ui.confirm_failed", { err: errDetail(e) }), "error");
+      }
       await refresh();
     } finally {
       if (id) {
@@ -2162,29 +2179,28 @@
       {/if}
     </Dialog>
 
-    <!-- UX-08: 待确认加入列表——不传 onClose，必须显式允许/拒绝，
-         不能靠点背景遮罩误关。 -->
-    <Dialog open={showConfirmModal && pendingList.length > 0}>
-      <!-- UX-08: 多台同时扫码 → 一屏全列，逐行允许/拒绝，处理完该行
+    <!-- UX-08: 待确认加入列表。关掉（Esc / 右上角 / 点遮罩）只是收起，不等于拒绝：
+         请求留在首页「待处理」，可以再打开。 -->
+    <Dialog open={showConfirmModal && confirmRows.length > 0} onClose={closeConfirmModal} closeLabel={t("ui.close")}>
+      <!-- UX-08: 多台同时扫码 → 一屏全列，逐台允许/拒绝，处理完该台
            消失，全清后列表关闭——不挤牙膏式顺序弹窗。 -->
       <!-- DEV-04: 老设备重连 ≠ 陌生设备加入。判据是 node_id（daemon 查
            设备档案，档案永不删除），所以改过名的设备照样认得出来，
            且用桌面上那个名字称呼它。措辞逻辑在 lib/pending.js，有测试。 -->
-      {@const dialogText = pendingDialogText(pendingList)}
+      {@const dialogText = pendingDialogText(confirmRows)}
       <h3>{dialogText.title}</h3>
-      <p class="hint modal-hint">{t("ui.pair_code_hint")}</p>
       <div class="pending-list">
-        {#each pendingList as item}
-          <!-- DEV-02: 设备与身份 1:1——确认框只有「允许」/「拒绝」。
-               DEV-01 的「替换旧的」连同它依据的指纹匹配一起删掉了：那个
-               提示是手机自报的指纹算出来的，桌面端无法验证，等于让确认框
-               替对方声称「这台手机重装过」。 -->
+        {#each confirmRows as item (item.node_id ?? item.name)}
+          <!-- DEV-02: 设备与身份 1:1——确认框只有「允许」/「拒绝」。 -->
+          <!-- 每台一块，从上到下：名字 · 角色 / 重连实证 / 6 格验证码 / 提示 / 按钮。
+               按钮单独一行：和 6 个格子挤一行会超出 420px 弹窗被裁掉（真机实测）。 -->
           {@const sub = pendingSubText(item, humanTime(item.paired_at, nowMs))}
           {@const code = pairCodes[item.node_id] ?? ""}
-          <div class="pending-row">
-            <span class="pending-name">{item.name}</span>
-            <!-- #1118：申请的角色 + 手机屏幕上的 6 位验证码。只能输一次，满 6 位才能确认。 -->
-            <span class="pending-role">{t(pendingRoleKey(item))}</span>
+          {@const failed = !!pairFailed[item.node_id]}
+          {@const busy = pairBusy[item.node_id]}
+          <div class="pending-row" data-testid="pending-row">
+            <p class="pending-name"><span>{item.name}</span> · {t(pendingRoleKey(item))}</p>
+            {#if sub}<p class="pending-sub">{sub}</p>{/if}
             <div class="pending-code">
               <InputOTP.Root
                 data-testid="pair-code-input"
@@ -2192,8 +2208,9 @@
                 maxlength={6}
                 pattern={REGEXP_ONLY_DIGITS}
                 pasteTransformer={normalizePairCode}
+                disabled={failed || !!busy}
                 bind:value={() => code, (v) => (pairCodes = { ...pairCodes, [item.node_id]: normalizePairCode(v) })}
-                onkeydown={(e) => { if (e.key === "Enter" && isPairCode(code)) confirmPair(true, item, code); }}
+                onkeydown={(e) => { if (e.key === "Enter" && isPairCode(code) && !failed) confirmPair(true, item, code); }}
               >
                 {#snippet children({ cells })}
                   <InputOTP.Group>
@@ -2203,20 +2220,20 @@
                   </InputOTP.Group>
                 {/snippet}
               </InputOTP.Root>
-              <div class="pending-actions">
-                <Button variant="secondary" class="min-w-[64px]" disabled={!!pairBusy[item.node_id]} onclick={() => confirmPair(false, item)}>{t("ui.deny")}</Button>
-                <!-- DEV-04: 按钮跟标题走。标题说「请求重新连接」而按钮说
-                     「允许加入」，正是本卡要拦的串台。 -->
-                <Button class="min-w-[64px]" data-testid="pair-code-confirm" aria-busy={pairBusy[item.node_id] === "allow"} disabled={!isPairCode(code) || !!pairBusy[item.node_id]} onclick={() => confirmPair(true, item, code)}>
-                  {#if pairBusy[item.node_id] === "allow"}<Loader2Icon class="size-4 animate-spin" aria-hidden="true" />{/if}
+            </div>
+            {#if failed}
+              <p class="pending-error" role="alert">{t("ui.err_pair_code_wrong")}</p>
+            {:else}
+              <p class="pending-hint">{t("ui.pair_code_hint")}</p>
+              <div class="pending-actions" data-testid="pending-actions">
+                <Button variant="secondary" disabled={!!busy} onclick={() => confirmPair(false, item)}>{t("ui.deny")}</Button>
+                <!-- DEV-04: 按钮跟标题走：重连是「允许重连」，不是「允许加入」。 -->
+                <Button data-testid="pair-code-confirm" aria-busy={busy === "allow"} disabled={!isPairCode(code) || !!busy} onclick={() => confirmPair(true, item, code)}>
+                  {#if busy === "allow"}<Loader2Icon class="size-4 animate-spin" aria-hidden="true" />{/if}
                   {t(pendingAllowKey(item))}
                 </Button>
               </div>
-            </div>
-            <!-- DEV-04: 实证副行占满整行。挤在名字那一列里会被按钮压到
-                 「首次配对 今天 10:26 · 已...」——摆出来的事实被截掉了，
-                 等于没摆（2026-09-20 验收人截图）。 -->
-            {#if sub}<span class="pending-sub">{sub}</span>{/if}
+            {/if}
           </div>
         {/each}
       </div>
@@ -2531,63 +2548,59 @@
     max-height: 300px;
     overflow-y: auto;
   }
-  /* DEV-04: 两行网格——名字与按钮同行，实证副行独占整行。副行若跟名字
-     共用那一列，会被右侧按钮挤到只剩半句（验收截图里就是「已...」）。 */
+  /* 每台一块、纵向排：名字 · 角色 / 实证小字 / 验证码（居中）/ 提示 / 按钮（右对齐）。
+     不再和按钮挤一行——6 格 + 两个按钮超出弹窗内宽，按钮被裁掉（真机实测）。 */
   .pending-row {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-    column-gap: 10px;
-    row-gap: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
     background: var(--pp-linen);
     border-radius: var(--pp-radius-control-sm);
-    padding: 10px 12px;
+    padding: 12px 14px;
+    text-align: left;
   }
   .pending-name {
-    grid-column: 1;
-    grid-row: 1;
+    margin: 0;
     min-width: 0;
     font-weight: 600;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: anywhere;
   }
-
-  /* DEV-04: 老设备重连时的实证副行（首次配对时刻 · 已存 N 张）。
-     新设备这一行不存在——没有可说的事实就不占位。 */
+  /* DEV-04: 老设备重连时的实证小字（首次配对时刻 · 已存 N 张）；新设备没有这行。 */
   .pending-sub {
-    grid-column: 1 / -1;
-    grid-row: 4;
-    font-size: 12px;
-    line-height: 1.5;
-    color: var(--pp-ink-60);
-  }
-  /* #1118：验证码输入 + 确认/拒绝，同一行。 */
-  .pending-role {
-    grid-column: 1 / -1;
-    grid-row: 2;
+    margin: -4px 0 0;
     font-size: 12px;
     line-height: 1.5;
     color: var(--pp-ink-60);
   }
   .pending-code {
     display: flex;
-    align-items: center;
-    gap: 10px;
-    grid-column: 1 / -1;
-    grid-row: 3;
+    justify-content: center;
+    padding-top: 4px;
+  }
+  .pending-hint,
+  .pending-error {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.5;
+    text-align: center;
+  }
+  .pending-hint {
+    color: var(--pp-ink-60);
+  }
+  .pending-error {
+    color: var(--pp-act);
+  }
+  .pending-actions {
+    display: flex;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 8px;
   }
   .pair-identity {
     margin: 0;
     font-size: 14px;
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.05em;
-  }
-  .pending-actions {
-    grid-column: 2;
-    grid-row: 1;
-    display: flex;
-    gap: 8px;
   }
   .hint {
     color: var(--pp-ink-40);
