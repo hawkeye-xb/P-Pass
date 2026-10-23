@@ -87,7 +87,6 @@ public enum DisconnectState: CaseIterable, Sendable {
     case onboardingNotificationAsk
     case definitiveNotices
     case sentinel
-    case deviceName
 
     /// 路径相对哪个根。运行时行没有路径，按存储根算。
     public var base: DisconnectBase {
@@ -122,7 +121,6 @@ public enum DisconnectState: CaseIterable, Sendable {
         case .onboardingNotificationAsk: return OnboardingNotificationAsk.fileName
         case .definitiveNotices: return DefinitiveNoticeStore.fileName
         case .sentinel: return SentinelStore.fileName
-        case .deviceName: return DeviceNamePrefs.fileName
         }
     }
 
@@ -164,7 +162,6 @@ public enum DisconnectState: CaseIterable, Sendable {
         case .onboardingNotificationAsk: return "#130（#515 后续）、#975：通知权限只问一次，之后任何路径（含再走一次 onboarding）都不再问；对位 Android ONBOARDING_NOTIFICATION_ASK"
         case .definitiveNotices: return "#130/#981：失败通知的去重状态（已为哪个配对代号发过、上次相册档位 / 后台刷新状态）；对位 Android definitive_notices.json（KEEP）——清掉会让下次评估把现状当基线重发"
         case .sentinel: return "\(undecidedBasis)：「3 天没连上电脑」哨兵（SENT-01），Android 断开从来没碰过"
-        case .deviceName: return "iOS 独有：用户给这台手机起的名字（配对时发给电脑），属于手机不属于配对，断开不清；Android 读系统设备名，无对应文件"
         }
     }
 

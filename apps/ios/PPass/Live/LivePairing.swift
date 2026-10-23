@@ -251,18 +251,12 @@ final class LivePairing: PairingService, @unchecked Sendable {
     private let crypto: PairCrypto
     /// 本机 NodeId（64 hex）：PAKE 里手机一端的身份。
     private let localNodeId: () throws -> String
-    private let names: DeviceNamePrefs
-    /// 系统给的设备名（`UIDevice.current.name`；没有 user-assigned-device-name 权限时是「iPhone」）。
-    private let systemName: () -> String
     private var current: Task<PairVerdict, Error>?
 
     init(transportFor: @escaping (String) -> CtrlTransport, store: PairingStore, onboarded: @escaping (String) -> Bool,
          onPaired: @escaping (PairingRecord, _ knownDesktop: Bool) -> Bool, onDisconnect: @escaping () async -> Void,
-         logger: CoreLogger, localNodeId: @escaping () throws -> String, names: DeviceNamePrefs,
-         systemName: @escaping () -> String, crypto: PairCrypto = FfiPairCrypto()) {
+         logger: CoreLogger, localNodeId: @escaping () throws -> String, crypto: PairCrypto = FfiPairCrypto()) {
         self.localNodeId = localNodeId
-        self.names = names
-        self.systemName = systemName
         self.crypto = crypto
         self.transportFor = transportFor
         self.logger = logger
@@ -271,10 +265,6 @@ final class LivePairing: PairingService, @unchecked Sendable {
         self.onPaired = onPaired
         self.onDisconnect = onDisconnect
     }
-
-    func deviceName() -> String { names.effective(systemName: systemName()) }
-
-    func setDeviceName(_ name: String) throws { try names.set(name) }
 
     func pairedAtMs() -> Int64? { store.load().map(\.pairedAt).flatMap { $0 > 0 ? $0 : nil } }
 
@@ -316,8 +306,9 @@ final class LivePairing: PairingService, @unchecked Sendable {
         loop.phoneNode = phoneNode
         loop.deskNode = code.nodeId
         loop.onCode = onCode
-        let name = deviceName()
-        let task = Task { [loop] in try await loop.run(token: code.token, deviceName: name) }
+        // 发给电脑的本机名直接用系统名。iOS 16 起没有 com.apple.developer.device-information.user-assigned-device-name 权限时
+        // 这里只给「iPhone」；苹果批下这项权限后，在 PPass.entitlements 加上它即可读到用户在系统里起的名字，这里不用改代码。
+        let task = Task { [loop] in try await loop.run(token: code.token, deviceName: UIDevice.current.name) }
         current = task
         let verdict: PairVerdict
         do { verdict = try await task.value } catch { return .failed(reason: String(describing: error)) }

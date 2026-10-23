@@ -185,22 +185,6 @@ final class PairCodeFlowTests: XCTestCase {
         XCTAssertEqual(h.crypto.starts.first?.desk, h.deskNodeInLink, "PAKE 的电脑身份来自二维码")
     }
 
-    /// pair.request 带的是用户在设置里起的本机名；没起过（或清空）才用系统名（iOS 16 起没有权限时就是「iPhone」）。
-    func test_pair_request_carries_the_device_name_from_settings() async throws {
-        func sentName(_ configure: (LivePairing) throws -> Void) async throws -> String? {
-            let h = try LiveHarness(desk: [Methods.hello: [try F.hello()], Methods.pairRequest: [try F.submitted()],
-                                           Methods.pairStatus: [try .ok(PairStatusReply(state: "expired"))]])
-            try configure(h.pairing)
-            _ = await h.pairing.pair(code: h.link)
-            let raw = try XCTUnwrap(h.desk.params(Methods.pairRequest, as: RawParams.self).first, "pair.request 没发出去")
-            return (try JSONSerialization.jsonObject(with: raw.json) as? [String: Any])?["device_name"] as? String
-        }
-        let custom = try await sentName { try $0.setDeviceName(" 妈妈的手机 ") }
-        XCTAssertEqual(custom, "妈妈的手机")
-        let fallback = try await sentName { try $0.setDeviceName("妈妈的手机"); try $0.setDeviceName("") }
-        XCTAssertEqual(fallback, "iPhone")
-    }
-
     // MARK: pair_code_wrong / failed → 验证码不对
 
     /// 反证：把 `case "failed": return .codeWrong` 改成 `.denied`，或 confirm 的 pair_code_wrong 判成普通失败，对应断言红。
@@ -389,8 +373,7 @@ final class LiveHarness {
         let paired = self.paired
         pairing = LivePairing(transportFor: { _ in transport }, store: store, onboarded: { _ in onboarded },
                               onPaired: { _, _ in paired.update { $0 += 1 }; return false },
-                              onDisconnect: {}, logger: NullLogger(), localNodeId: { PairFixtures.phoneNode },
-                              names: DeviceNamePrefs(directory: dir), systemName: { "iPhone" }, crypto: crypto)
+                              onDisconnect: {}, logger: NullLogger(), localNodeId: { PairFixtures.phoneNode }, crypto: crypto)
     }
 
     deinit { try? FileManager.default.removeItem(at: dir) }

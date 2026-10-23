@@ -50,8 +50,6 @@ final class AppModel: ObservableObject {
     /// 范围文件读不出来（与「从未保存」不同，#971）；设置行据此显示「读不到」而不是「未选相册」。
     @Published private(set) var scopeUnreadable = false
     @Published private(set) var wifiOnly = true
-    /// 配对时发给电脑的本机名（设置页「这台手机的名字」）。
-    @Published private(set) var deviceName = ""
     /// 后台备份默认关（对位 Android `AutoBackupPrefs.autoEnabled = false`，#982）；真值由 `refresh()` 从盘上读。
     @Published private(set) var autoBackup = false
     @Published private(set) var notifyOnFailure = true
@@ -116,18 +114,6 @@ final class AppModel: ObservableObject {
         do { try backend.engine.setNotifyOnFailure(on); notifyOnFailure = on } catch { settingWriteFailed("notify-on-failure", error) }
     }
 
-    /// 设置页本机名输入框的每一次改动都立刻落盘：不靠回车、不靠离开输入框——App 被切走 / 杀掉时这两个时机都可能不来，
-    /// 真机上就这样丢过（输完没按回车就去电脑上操作，进程被系统回收，配对时发出去的仍是「iPhone」）。
-    /// 清空 = 回到系统名。`deviceName` 只在输入结束时刷新（`deviceNameEditingEnded`），输入中不回写输入框。
-    func deviceNameEdited(_ text: String) {
-        do { try backend.pairing.setDeviceName(text) } catch { settingWriteFailed("device-name", error) }
-    }
-
-    func deviceNameEditingEnded() {
-        deviceName = backend.pairing.deviceName()
-        AppLog.log("device-name: editing ended (\(deviceName.count) chars)")
-    }
-
     private func settingWriteFailed(_ what: String, _ error: Error) {
         AppLog.log("settings: write failed (\(what)): \(error)")
         refresh() // 开关显示回到盘上的值
@@ -180,7 +166,6 @@ final class AppModel: ObservableObject {
             scopeUnreadable = true
         }
         wifiOnly = backend.engine.wifiOnly()
-        deviceName = backend.pairing.deviceName()
         autoBackup = backend.engine.autoBackup()
         notifyOnFailure = backend.engine.notifyOnFailure()
         backgroundNotice = Self.backgroundNotice(backend.engine.backgroundRefresh(), backgroundRequested: autoBackup)

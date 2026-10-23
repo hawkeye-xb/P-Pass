@@ -103,13 +103,6 @@ final class FakePairing: PairingService {
     }
 
     func clearLocal() async { current = .notPaired }
-
-    private var name: String?
-    func deviceName() -> String { name ?? "iPhone" }
-    func setDeviceName(_ name: String) throws {
-        let t = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.name = t.isEmpty ? nil : t
-    }
 }
 
 enum FakeBackendError: Error { case demoHasNoLedger }

@@ -9,8 +9,6 @@ struct SettingsScreen: View {
     @State private var showDetails = false
     @State private var cancelSnapshot: RemainingSnapshot?
     @State private var asking = false
-    @State private var nameDraft = ""
-    @FocusState private var nameFocused: Bool
 
     enum Route: Hashable { case bucket, storage, diagnostics }
 
@@ -108,7 +106,7 @@ struct SettingsScreen: View {
         }
     }
 
-    /// 同 Android 两组：备份规则（范围 + 开关）｜关于（本机名 + 存储电脑 + 版本；本机名是 iOS 独有）。无图标、无组标签。
+    /// 同 Android 两组：备份规则（范围 + 开关）｜关于（存储电脑 + 版本）。无图标、无组标签。
     @ViewBuilder private var settingsSection: some View {
         Section {
             row(L.s("backup_scope"), value: scopeValue, route: .bucket)
@@ -156,28 +154,8 @@ struct SettingsScreen: View {
         }
         .ppTinted(PPUI.Surface.settingsCard)
         Section {
-            // iOS 独有（Android 没有这一行：Android 直接读系统「设备名称」）。iOS 16 起没有 user-assigned-device-name 权限时
-            // 系统名只给「iPhone」，电脑上分不清是谁的手机，所以让用户在这里起名；行的样式同下面两行（标签 + 次级值）。
-            // 标准写法：列表行里的 LabeledContent + TextField，同系统「设置 › 通用 › 关于 › 名称」。每改一个字就保存（AppModel.deviceNameEdited），
-            // 不依赖回车或离开输入框；清空 = 回到系统名。
-            LabeledContent {
-                TextField(L.s("setting_device_name"), text: Binding(get: { nameDraft }, set: { nameDraft = $0; app.deviceNameEdited($0) }))
-                    .multilineTextAlignment(.trailing).font(Self.valueFont).foregroundStyle(PPColor.ink40)
-                    .submitLabel(.done).autocorrectionDisabled()
-                    .focused($nameFocused)
-                    .onSubmit { nameFocused = false }
-                    .accessibilityIdentifier("deviceNameField")
-            } label: {
-                Text(L.s("setting_device_name")).font(Self.labelFont).foregroundStyle(PPColor.ink)
-            }
-            .onAppear { nameDraft = app.deviceName }
-            .onChange(of: nameFocused) { focused in
-                if !focused { app.deviceNameEditingEnded(); nameDraft = app.deviceName }
-            }
             row(L.s("storage_computer"), value: app.desktopName ?? L.s("storage_device_default"), route: .storage)
             row(L.s("setting_version"), value: AppVersion.current.displayLine, route: .diagnostics)
-        } footer: {
-            Text(L.s("device_name_footer")).font(Self.hintFont).foregroundStyle(PPColor.ink40)
         }
         .ppTinted(PPUI.Surface.settingsCard)
     }

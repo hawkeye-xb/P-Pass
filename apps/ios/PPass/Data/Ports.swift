@@ -160,10 +160,6 @@ protocol PairingService: AnyObject {
     func disconnect() async
     /// 只清本地、不通知电脑（#1119）：配对失效卡的「重新连接」——电脑本就不认这台手机，没有可通知的。
     func clearLocal() async
-    /// 配对时发给电脑的本机名（iOS 独有设置项：iOS 16 起系统名只给「iPhone」）。没起过名 = 系统名。
-    func deviceName() -> String
-    /// 改本机名；空白 = 回到系统名。只影响之后的配对，已连上的电脑在电脑上改名。
-    func setDeviceName(_ name: String) throws
 }
 
 extension PairingService {

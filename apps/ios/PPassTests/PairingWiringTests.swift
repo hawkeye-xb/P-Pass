@@ -57,15 +57,13 @@ final class PairingWiringTests: XCTestCase {
                              onboarded: @escaping (String) -> Bool = { _ in false },
                              onPaired: @escaping (PairingRecord, Bool) -> Bool = { _, _ in false }) -> LivePairing {
         LivePairing(transportFor: { _ in transport }, store: store, onboarded: onboarded, onPaired: onPaired,
-                    onDisconnect: {}, logger: LogSink(), localNodeId: { PairFixtures.phoneNode },
-                    names: DeviceNamePrefs(directory: dir), systemName: { "iPhone" }, crypto: FakePairCrypto())
+                    onDisconnect: {}, logger: LogSink(), localNodeId: { PairFixtures.phoneNode }, crypto: FakePairCrypto())
     }
 
     private func makeDisconnecting(_ transport: ScriptedTransport, store: PairingStore,
                                    onDisconnect: @escaping () async -> Void) -> LivePairing {
         LivePairing(transportFor: { _ in transport }, store: store, onboarded: { _ in false }, onPaired: { _, _ in false },
-                    onDisconnect: onDisconnect, logger: LogSink(), localNodeId: { PairFixtures.phoneNode },
-                    names: DeviceNamePrefs(directory: dir), systemName: { "iPhone" }, crypto: FakePairCrypto())
+                    onDisconnect: onDisconnect, logger: LogSink(), localNodeId: { PairFixtures.phoneNode }, crypto: FakePairCrypto())
     }
 
     /// 把 pairing.json 占成一个目录：原子写必然失败（不依赖权限、不依赖磁盘满）。
