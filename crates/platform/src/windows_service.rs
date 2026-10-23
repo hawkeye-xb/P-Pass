@@ -279,8 +279,7 @@ pub fn install(name: &str, display_name: &str, exe: &Path, args: &[&str]) -> Res
 /// 停止并删除服务；本来就没有不算错。
 pub fn uninstall(name: &str) -> Result<()> {
     stop(name)?;
-    let Some(service) = Service::open(name, windows::Win32::Storage::FileSystem::DELETE.0)?
-    else {
+    let Some(service) = Service::open(name, windows::Win32::Storage::FileSystem::DELETE.0)? else {
         return Ok(());
     };
     // SAFETY: 句柄有效。
