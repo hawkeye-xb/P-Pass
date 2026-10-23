@@ -81,19 +81,22 @@ mod imp {
     use std::str::FromStr;
 
     pub(super) fn verify_update_package(bytes: &[u8]) -> UpdatePackageCheck {
-        let dir = match tempdir() {
+        // tempfile：随机名、0700、离开作用域即删。手写的「pid + 纳秒」名字在同一进程
+        // 并发校验时会撞名（CI 实测 File exists），且在共享 /tmp 里可被预测。
+        let dir = match tempfile::Builder::new()
+            .prefix("ppass-update-check-")
+            .tempdir()
+        {
             Ok(d) => d,
             Err(e) => return UpdatePackageCheck::Rejected(format!("建临时目录失败：{e}")),
         };
-        let result = match unpack(bytes, &dir) {
-            Ok(()) => match single_app(&dir) {
+        match unpack(bytes, dir.path()) {
+            Ok(()) => match single_app(dir.path()) {
                 Ok(app) => verify_app_bundle(&app, DESKTOP_APP_ID),
                 Err(e) => UpdatePackageCheck::Rejected(e),
             },
             Err(e) => UpdatePackageCheck::Rejected(e),
-        };
-        let _ = std::fs::remove_dir_all(&dir);
-        result
+        }
     }
 
     pub(super) fn verify_app_bundle(app: &Path, identifier: &str) -> UpdatePackageCheck {
@@ -161,19 +164,6 @@ mod imp {
             [one] if one.extension().is_some_and(|x| x == "app") && one.is_dir() => Ok(one.clone()),
             _ => Err(format!("更新包应恰好含一个 .app，实际：{entries:?}")),
         }
-    }
-
-    fn tempdir() -> std::io::Result<PathBuf> {
-        let dir = std::env::temp_dir().join(format!(
-            "ppass-update-check-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        std::fs::create_dir(&dir)?;
-        Ok(dir)
     }
 }
 
