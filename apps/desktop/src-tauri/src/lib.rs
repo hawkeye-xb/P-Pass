@@ -429,7 +429,7 @@ fn os_error_code(message: &str) -> Option<i32> {
 /// Current sleep policy, humanized for the wizard.
 #[tauri::command]
 async fn power_hint() -> Result<Value, String> {
-    off_main(move || power_hint_blocking()).await
+    off_main(power_hint_blocking).await
 }
 
 fn power_hint_blocking() -> Value {
@@ -495,7 +495,7 @@ fn open_power_settings() {
 /// 并始终保留「去系统设置」这条手动退路。
 #[tauri::command]
 async fn disable_auto_sleep() -> Result<(), String> {
-    off_main(move || disable_auto_sleep_blocking()).await?
+    off_main(disable_auto_sleep_blocking).await?
 }
 
 fn disable_auto_sleep_blocking() -> Result<(), String> {
