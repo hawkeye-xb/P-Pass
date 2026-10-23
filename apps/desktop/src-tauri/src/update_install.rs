@@ -93,6 +93,11 @@ pub(crate) async fn update_download(
             // 不是通过，是本平台还不能检查：记下来，照常走（只有 minisign 那一道）。
             eprintln!("#1121: 更新包未做发布者校验：{why}");
         }
+        // #1155：Windows 没有发布者签名，只做了「包内版本严格高于当前」这一道。
+        // 单独记一条：这不是签名校验通过，别把日志读成 Verified。
+        platform::UpdatePackageCheck::VersionOnly => {
+            eprintln!("#1155: Windows 更新包只做了防降级校验（无发布者签名）");
+        }
         platform::UpdatePackageCheck::Rejected(why) => {
             return Err(ui_err(
                 "ui.err_update_publisher_rejected",
