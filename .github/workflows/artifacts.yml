@@ -53,8 +53,10 @@ on:
       - ".github/workflows/artifacts.yml"
   workflow_dispatch:
 
+# #1151：workflow 级只读，需要发布资产的 job 各自显式申请 contents: write。
+# checkout 一律不持久化凭据——本 workflow 没有任何 git push，上传全走 gh + GH_TOKEN。
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: artifacts-${{ github.ref }}
@@ -67,8 +69,12 @@ jobs:
     # 需要 macOS 包时 `gh workflow run artifacts.yml`（或 Actions 页 Run workflow）。
     if: github.event_name == 'workflow_dispatch'
     timeout-minutes: 30
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set Rust toolchain from rust-toolchain.toml
         shell: bash
@@ -124,8 +130,12 @@ jobs:
   linux-bin:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set Rust toolchain from rust-toolchain.toml
         shell: bash
@@ -180,8 +190,12 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 45
     if: github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set Rust toolchain from rust-toolchain.toml
         shell: bash
