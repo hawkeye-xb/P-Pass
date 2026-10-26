@@ -870,7 +870,7 @@ jobs:
   # 产物不进 GitHub Release（TestFlight 内测包由 App Store Connect 分发，不是下载文件），
   # 所以也不挂 create-draft / upload-* 链；成败只体现在 finalize-notes 的一行与 finalize-ios 的 test-channel 基线上。
   # 凭据：ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_P8（App Store Connect API 密钥，App Manager 角色；
-  # 云托管签名，不导出 p12）。任一缺失 ⇒ 干净跳过，notes 标注「iOS 未上传 TestFlight（无凭据）」。
+  # 云托管签名，不导出 p12；归档无签名、签名只在导出，runner 上绝不新建证书）。任一缺失 ⇒ 干净跳过，notes 标注「iOS 未上传 TestFlight（无凭据）」。
   # secret 值不进 job env（T-071b 模式）：只放布尔，值只在上传步骤的 env 里。
   # 手动单独验证 iOS 上传见 ci-ios.yml 的 testflight job（共用 .github/actions/ios-testflight）。
   ios:

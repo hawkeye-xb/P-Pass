@@ -47,6 +47,11 @@ on:
         description: "留空 = 跑测试；填 X.Y.Z-test.N / X.Y.Z-beta.N（如 v0.9.13-test.1）= 只归档并上传 TestFlight（#348）"
         required: false
         default: ""
+      list_certificates:
+        description: "勾上 = 只读列出团队全部签名证书（App Store Connect API，不吊销），测试与上传都不跑"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -65,7 +70,7 @@ env:
 jobs:
   changes:
     name: changes (要不要跑 iOS)
-    if: ${{ inputs.testflight_version == '' }}
+    if: ${{ inputs.testflight_version == '' && !inputs.list_certificates }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -102,7 +107,7 @@ jobs:
     name: ios (xcodegen + xcodebuild test)
     needs: changes
     # `!= 'false'` 而非 `== 'true'`：changes 挂了输出为空时照跑（fail-closed）。
-    if: ${{ !cancelled() && inputs.testflight_version == '' && needs.changes.outputs.run != 'false' }}
+    if: ${{ !cancelled() && inputs.testflight_version == '' && !inputs.list_certificates && needs.changes.outputs.run != 'false' }}
     runs-on: macos-26
     # #313 的传输 FFI 步骤冷缓存要编两个 iOS 切片（release）+ 一个 debug daemon，放宽到 70。
     timeout-minutes: 70
@@ -141,6 +146,13 @@ jobs:
       # #346：版本号换算规则（不需要模拟器）。产物里的值由 App 测试里的 VersionStampTests 核对。
       - name: Version stamp rule
         run: tools/ios/test-stamp-version.sh
+
+      # TestFlight 归档不签名、签名只在导出时走云签名：CI 运行时绝不新建证书（run 40298231858 撞了证书上限）。
+      # 文字级门禁 + 反证（--self-test 把几种回退写法丢进去，必须全红）。
+      - name: TestFlight signing shape (archive unsigned, cloud signing on export)
+        run: |
+          tools/ios/check-testflight-signing.sh --self-test
+          tools/ios/check-testflight-signing.sh
 
       # #315：iOS 界面文案由 Android strings.xml 生成（同 key、同一句话），逐字节比对。
       - name: UI strings in sync with Android strings.xml
@@ -199,7 +211,7 @@ jobs:
   # 版本必须是 test / beta 形式：App Store Connect 不接受重复的构建号，手动入口不许占正式版的号。
   testflight:
     name: ios testflight upload (manual)
-    if: ${{ inputs.testflight_version != '' }}
+    if: ${{ inputs.testflight_version != '' && !inputs.list_certificates }}
     runs-on: macos-26
     timeout-minutes: 70
     steps:
@@ -223,6 +235,32 @@ jobs:
             echo "- 版本：${{ inputs.testflight_version }}"
             echo "- build：${{ steps.up.outputs.build }}（short ${{ steps.up.outputs.short }}）"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # 只读列出团队签名证书（GET /v1/certificates），给人挑着吊销 CI 以前新建的开发证书；本 job 绝不吊销。
+  # 只在 dispatch 勾了 list_certificates 时跑；p8 只经步骤 env 进进程内存，不落盘、不回显。
+  certificates:
+    name: ios list signing certificates (manual, read-only)
+    if: ${{ inputs.list_certificates }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            tools/ios/asc-builds.py
+            tools/ios/asc-certificates.py
+          sparse-checkout-cone-mode: false
+      - name: List certificates
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/asc-venv"
+          "$RUNNER_TEMP/asc-venv/bin/pip" install --quiet cryptography
+          "$RUNNER_TEMP/asc-venv/bin/python" tools/ios/asc-certificates.py | tee "$RUNNER_TEMP/certs.md"
+          cat "$RUNNER_TEMP/certs.md" >> "$GITHUB_STEP_SUMMARY"
 
   # #1187：分支保护只要求这一条。`if: always()` 必不可少，见 ci-android.yml 同名 job。
   # 手动上传 TestFlight 那条路径不在这里汇总（它不是合入门）。
