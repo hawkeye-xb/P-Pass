@@ -9,6 +9,9 @@ plugins {
 }
 
 val irohBlobsJniLibs = layout.buildDirectory.dir("generated/jniLibs")
+// #1124：同一个 libtransport.so 里还带着与 iOS 共用的 uniffi 导出（控制面、取原图、关闭码）；
+// 它们的 Kotlin 绑定由同一个任务生成（包名见 crates/transport/uniffi.toml），不入库。
+val transportKotlinBindings = layout.buildDirectory.dir("generated/source/uniffi/kotlin")
 val buildIrohBlobsProviderBridge = tasks.register<Exec>("buildIrohBlobsProviderBridge") {
     val repoRoot = rootProject.projectDir.resolve("../..").canonicalFile
     val ndkHome = providers.environmentVariable("ANDROID_NDK_HOME").orNull
@@ -18,14 +21,17 @@ val buildIrohBlobsProviderBridge = tasks.register<Exec>("buildIrohBlobsProviderB
         "bash",
         "tools/build-android-iroh-blobs-bridge.sh",
         irohBlobsJniLibs.get().asFile.absolutePath,
+        transportKotlinBindings.get().asFile.absolutePath,
     )
     environment("ANDROID_NDK_HOME", ndkHome)
     inputs.files(
         fileTree(repoRoot) {
-            include("Cargo.toml", "Cargo.lock", "crates/transport/**")
+            // #1124：mobile-ffi 经 crates/proto 编解码帧、登记关闭码；#1118：经 crates/pair-pake 做配对验证码。
+            include("Cargo.toml", "Cargo.lock", "crates/transport/**", "crates/proto/**", "crates/pair-pake/**")
         }
     )
     outputs.file(irohBlobsJniLibs.map { it.file("arm64-v8a/libtransport.so") })
+    outputs.dir(transportKotlinBindings)
 }
 
 android {
@@ -36,7 +42,7 @@ android {
         applicationId = "com.hawkeyexb.ppass"
         minSdk = 26
         targetSdk = 35
-        versionCode = 66
+        versionCode = 67
         // DESK-02①: 构建期注入完整版本串（release tag = "v0.3.2-test.2"，
         // 去前导 v）——Android 端靠它推导更新通道（含 -test. → test）并
         // 让连续 test tag 能自动升级（isNewer 预发布段比较）。本地/非 tag
@@ -45,12 +51,20 @@ android {
             System.getenv("PPF_BUILD_VERSION")
                 ?.takeIf { it.isNotBlank() }
                 ?.removePrefix("v")
-                ?: "0.10.0"
+                ?: "0.10.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // #1121：更新验签公钥，按通道各一把，构建期从仓库里唯一的来源读：
+        //   stable = 桌面 tauri.conf.json 的 updater pubkey（两端同一把）；
+        //   test   = release/update-keys/test.pub，没有就留空——test 包拒收一切更新
+        //            （宁可装不上，也不拿正式密钥去验 test 包）。
+        // 值是 tauri 格式：base64("untrusted comment: …\n<minisign 公钥>")。
+        buildConfigField("String", "UPDATE_PUBKEY_STABLE", "\"${updatePubkeyStable()}\"")
+        buildConfigField("String", "UPDATE_PUBKEY_TEST", "\"${updatePubkeyTest()}\"")
     }
 
     sourceSets {
         getByName("main").jniLibs.srcDir(irohBlobsJniLibs)
+        getByName("main").java.srcDir(transportKotlinBindings)
         // #420: JVM 单测与设备测试共用的测试辅助（例如 addrOf）。只放两边都要的，
         // 生产代码看不到这里。
         getByName("test").java.srcDir("src/sharedTest/java")
@@ -61,16 +75,6 @@ android {
         compose = true
         // UPD-01: 更新检查拿当前版本（BuildConfig.VERSION_NAME）
         buildConfig = true
-    }
-
-    packaging {
-        // The iroh Maven jar bundles DESKTOP natives (darwin/linux/win)
-        // for JVM use; Android gets libiroh_ffi.so from jniLibs. Strip
-        // the desktop copies — 50MB of dead weight, and their absence
-        // on-device was the T-052 real-phone crash (UnsatisfiedLinkError).
-        resources.excludes += listOf(
-            "darwin-aarch64/*", "linux-aarch64/*", "linux-x86-64/*", "win32-x86-64/*",
-        )
     }
 
     compileOptions {
@@ -203,11 +207,7 @@ dependencies {
     // 也是本仓手写 RFC 7693，见 Blake2b.kt 与其测试向量）。
     implementation("net.i2p.crypto:eddsa:0.3.0")
 
-    // iroh-ffi Kotlin bindings — same artifact the S-03 spike proved
-    // on-device (T-051 wires it up).
-    implementation("computer.iroh:iroh:1.1.0") {
-        exclude(group = "net.java.dev.jna", module = "jna")
-    }
+    // #1124：uniffi 生成的 Kotlin 绑定经 JNA 调 libtransport.so（控制面不再用 iroh-ffi）。
     implementation("net.java.dev.jna:jna:5.15.0@aar")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
@@ -220,11 +220,35 @@ dependencies {
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test:rules:1.6.1")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    // #1119：断开后 unique work 的状态要查 WorkManager 自己的（在设备上跑，lane 只编译）。
+    androidTestImplementation("androidx.work:work-testing:2.10.0")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
-    // Desktop JNA for JVM unit tests — the @aar above only carries
-    // Android natives; the iroh jar ships darwin/linux dylibs that JNA
-    // loads when tests run on the host (live-daemon hello test).
+    // Desktop JNA for JVM unit tests — the @aar above only carries Android natives. Tests that
+    // touch the generated bindings load a host build of libtransport (live-daemon tests only;
+    // `jna.library.path` below).
     testImplementation("net.java.dev.jna:jna:5.15.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+}
+
+// #1121：见 defaultConfig 里的 UPDATE_PUBKEY_* 注释。
+fun updatePubkeyStable(): String {
+    val conf = rootProject.file("../desktop/src-tauri/tauri.conf.json")
+    @Suppress("UNCHECKED_CAST")
+    val json = groovy.json.JsonSlurper().parse(conf) as Map<String, Any?>
+    val plugins = json["plugins"] as Map<String, Any?>
+    val updater = plugins["updater"] as Map<String, Any?>
+    return (updater["pubkey"] as String).trim()
+}
+
+fun updatePubkeyTest(): String {
+    val f = rootProject.file("../../release/update-keys/test.pub")
+    return if (f.isFile) f.readText().trim() else ""
+}
+
+// #1124：对着真 daemon 跑的 JVM 单测（PPF_DAEMON_QR 等，默认跳过）经 uniffi 绑定调宿主机版的
+// libtransport（`cargo build -p transport --features mobile-ffi`，见 `just android-pair`）。
+tasks.withType<Test>().configureEach {
+    val cargoTarget = System.getenv("CARGO_TARGET_DIR") ?: rootProject.projectDir.resolve("../../target").path
+    systemProperty("jna.library.path", "$cargoTarget/debug")
 }

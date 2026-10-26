@@ -3,7 +3,7 @@ source: crates/proto/tests/snapshots.rs
 expression: json
 ---
 {
-  "pairing_epoch": "epoch-7",
+  "pairing_id": "epoch-7",
   "old_hash": "aaa1111111111111111111111111111111111111111111111111111111111111",
   "new_hash": "bbb2222222222222222222222222222222222222222222222222222222222222",
   "provider": "blobticket-example"

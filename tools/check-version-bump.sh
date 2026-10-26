@@ -7,9 +7,9 @@
 #   - `apps/android/**`，以及安卓 APK 里那份 Rust 原生库（libtransport.so）的构建输入
 #     ⇒ 安卓端被改到 ⇒ `versions.json.android` 必须前进
 #     #894：原生库输入 = gradle 任务 `buildIrohBlobsProviderBridge` 的 inputs
-#     （`Cargo.toml`、`Cargo.lock`、`crates/transport/**`）+ 它实际调用的
+#     （`Cargo.toml`、`Cargo.lock`、`crates/transport/**`、`crates/proto/**`）+ 它实际调用的
 #     `tools/build-android-iroh-blobs-bridge.sh` + 钉工具链的 `rust-toolchain.toml`。
-#     transport 在 `android-jni` 下没有别的本仓 path 依赖（proto 只在 ios-ffi / dev 下）。
+#     #1124 起安卓的 libtransport.so 也开 `mobile-ffi`，transport 在它下依赖 `crates/proto`。
 #     这份清单与 gradle inputs 的一致性由 tools/test-release-version-source.sh 校验。
 #   - iOS（#348）：`apps/ios/**`、传输 XCFramework 的输入（`crates/transport/`、`crates/proto/`、
 #     `Cargo.*`、`rust-toolchain.toml`、`tools/build-ios-*`）、会进 App 的生成源（`assets/i18n/`、
@@ -72,11 +72,11 @@ fi
 # 保守边界：src 文件里 `#[cfg(test)]` 块改动仍算产品改动——宁可多涨，不漏涨。
 PRODUCT=$(grep -Ev '(^|/)(tests?|benches)/' <<<"$CHANGED" || true)
 desk_hit=$(grep -Ec '^(crates/|apps/desktop/|assets/|Cargo\.(toml|lock)$|rust-toolchain\.toml)' <<<"$PRODUCT" || true)
-ANDROID_INPUTS='^(apps/android/|crates/transport/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|tools/build-android-iroh-blobs-bridge\.sh$)'
+ANDROID_INPUTS='^(apps/android/|crates/(transport|proto|pair-pake)/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|tools/build-android-iroh-blobs-bridge\.sh$)'
 andr_hit=$(grep -Ec "$ANDROID_INPUTS" <<<"$PRODUCT" || true)
 # iOS 输入（#348）：与 ci-ios 的触发路径同口径，但 tools/ios/ 只算会进产物的盖章/生成/字体脚本，
 # 测试与 e2e 脚本不算（改它们不该逼着发一个内容相同的 TestFlight 构建）。
-IOS_INPUTS='^(apps/ios/|crates/(transport|proto)/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|tools/build-ios-|tools/ios/(stamp-version|gen-strings|gen-tokens|sync-i18n|prepare-fonts)|assets/i18n/|assets/design/tokens\.json$|apps/android/app/src/main/res/values(-zh)?/strings\.xml$)'
+IOS_INPUTS='^(apps/ios/|crates/(transport|proto|pair-pake)/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|tools/build-ios-|tools/ios/(stamp-version|gen-strings|gen-tokens|sync-i18n|prepare-fonts)|assets/i18n/|assets/design/tokens\.json$|apps/android/app/src/main/res/values(-zh)?/strings\.xml$)'
 ios_hit=$(grep -Ec "$IOS_INPUTS" <<<"$PRODUCT" || true)
 
 newer() { # <prev> <cur> → 0 表示 cur 严格更新
@@ -103,6 +103,35 @@ if [ -n "$prev_i" ] && [ -n "$cur_i" ]; then
   fi
 else
   echo "::notice::${PREV} 里没有 ios 版本线（或本版缺 ios）——跳过 iOS 门禁"
+fi
+# #728：#1121 分通道之前，test tag 的更新清单是用**正式**更新私钥签的（tag 树里还没有
+# `release/update-keys/test.pub`）。这些旧 test 包至今能被正式客户端验签通过；Android 又允许
+# 同 versionCode 覆盖安装——正式版的 versionCode 若不大于它们，能写更新源的人就能把旧 test
+# 包推给正式用户。所以：要发安卓的正式 tag，versionCode 必须严格大于所有「正式私钥签过」的
+# test tag 的 versionCode。分通道之后的 test 包用 test 私钥签，正式客户端不认，不受此限。
+if newer "$prev_a" "$cur_a"; then
+  cur_vc=$(jq -r '.androidVersionCode // empty' release/versions.json)
+  max_vc=0
+  max_tag=""
+  while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    if git cat-file -e "$t:release/update-keys/test.pub" 2>/dev/null; then continue; fi
+    vc=$(git show "$t:apps/android/app/build.gradle.kts" 2>/dev/null \
+      | awk '/versionCode/{gsub(/.*= */,""); print; exit}')
+    if [[ "$vc" =~ ^[0-9]+$ ]] && [ "$vc" -gt "$max_vc" ]; then
+      max_vc=$vc
+      max_tag=$t
+    fi
+  done < <(git tag -l 'v*-test.*')
+  if [ "$max_vc" -eq 0 ]; then
+    : # 没有正式私钥签过的 test 包
+  elif ! [[ "$cur_vc" =~ ^[0-9]+$ ]]; then
+    echo "::error::release/versions.json 缺 androidVersionCode——无法核对 #728 的 versionCode 门禁"
+    fail=1
+  elif [ "$cur_vc" -le "$max_vc" ]; then
+    echo "::error::#728：android versionCode ${cur_vc} 不大于正式私钥签过的 test 包 ${max_tag}（versionCode ${max_vc}）——旧 test 包能覆盖安装到正式用户。用 tools/bump-version.sh --platform android 涨号。"
+    fail=1
+  fi
 fi
 if [ "$desk_hit" -eq 0 ] && newer "$prev_d" "$cur_d"; then
   echo "::warning::desktop 版本涨了（${prev_d} → ${cur_d}）但没有任何桌面/共享内核改动——确认是有意的吗？"

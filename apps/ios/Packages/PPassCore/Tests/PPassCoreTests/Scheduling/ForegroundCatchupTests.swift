@@ -5,6 +5,7 @@ import XCTest
 
 final class RecordingSubmitter: BackgroundTaskSubmitter, @unchecked Sendable {
     let submitted = Locked<[BackgroundTaskRequestSpec]>([])
+    let shorts = Locked<[Date]>([])
     let cancels = Locked(0)
     let refuse = Locked(false)
     struct Refused: Error {}
@@ -12,6 +13,11 @@ final class RecordingSubmitter: BackgroundTaskSubmitter, @unchecked Sendable {
     func submit(_ spec: BackgroundTaskRequestSpec) throws {
         if refuse.get() { throw Refused() }
         submitted.update { $0.append(spec) }
+    }
+
+    func submitShort(earliestBeginDate: Date) throws {
+        if refuse.get() { throw Refused() }
+        shorts.update { $0.append(earliestBeginDate) }
     }
 
     func cancelAll() { cancels.update { $0 += 1 } }

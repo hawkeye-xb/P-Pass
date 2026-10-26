@@ -7,7 +7,7 @@
   // #551: `serviceEpoch` 由 App 在服务恢复（onServiceBackOnline）时递增；
   // 变了就让失败态的格子在可见时重取一次（非失败态 no-op，DOM 不重建）。
   import { untrack } from "svelte";
-  import { invoke } from "@tauri-apps/api/core";
+  import { callDaemon } from "./daemonApi.js";
   import { createThumbLoader } from "./thumbLoader.js";
 
   let { hash, size = 256, serviceEpoch = 0 } = $props();
@@ -30,7 +30,7 @@
 
   const loader = createThumbLoader(
     {
-      call: (method, params) => invoke("daemon_call", { method, params }),
+      call: (method, params) => callDaemon(method, params),
       schedule: (ms, fn) => {
         const t = setTimeout(fn, ms);
         return () => clearTimeout(t);

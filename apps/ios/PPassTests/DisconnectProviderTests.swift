@@ -23,8 +23,8 @@ final class DisconnectProviderTests: XCTestCase {
     }
 
     override func tearDown() {
-        client?.close()
-        native?.ffi.close()
+        client?.shutdown()
+        native?.ffi.shutdown()
         try? FileManager.default.removeItem(at: dir)
     }
 
@@ -112,12 +112,13 @@ final class DisconnectProviderTests: XCTestCase {
         let actions = DisconnectActions(
             stopFlow: { [native] in native!.teardownForDisconnect(logger: logger); calls.append("flow") },
             cancelWakes: { calls.append("wakes") },
-            stopMedia: { calls.append("media") })
+            stopMedia: { calls.append("media") },
+            clearThumbs: { calls.append("thumbs") })
         let root = dir.appendingPathComponent("root")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         try applyDisconnectManifest(root: root, runtime: actions, logger: logger)
 
-        XCTAssertEqual(Set(calls), ["flow", "wakes", "media"])
+        XCTAssertEqual(Set(calls), ["flow", "wakes", "media", "thumbs"])
         do {
             _ = try await ports.serve(lease)
             XCTFail("断开清单执行后 provider 应已 revoke")

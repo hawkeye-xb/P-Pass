@@ -19,7 +19,7 @@ if [[ "$(uname)" != "Darwin" ]]; then
   exit 1
 fi
 
-AGENT_LABEL="com.p-pass.daemon"
+AGENT_LABEL="com.hawkeyexb.ppass.desktop.daemon"
 PLIST="$HOME/Library/LaunchAgents/${AGENT_LABEL}.plist"
 APP="/Applications/P-Pass.app"
 CONFIG_DIR="$HOME/Library/Application Support/P-Pass"

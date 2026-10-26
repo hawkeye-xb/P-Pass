@@ -14,25 +14,6 @@
 use daemon::{Config, Router, SHUTDOWN_DEADLINE};
 use std::io::IsTerminal;
 
-/// #1042：`config …` 子命令的统一收尾（契约见 `cli::USAGE` 与
-/// `tests/config_cli.rs`）。成功：stdout 一行 `{"config":"<config.toml 路径>"}`、
-/// exit 0；失败：stderr 一行错误原文、exit 1。
-fn config_command_exit(result: Result<std::path::PathBuf, String>) -> ! {
-    match result {
-        Ok(path) => {
-            println!(
-                "{}",
-                serde_json::json!({ "config": path.display().to_string() })
-            );
-            std::process::exit(0);
-        }
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
-        }
-    }
-}
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // DAE-03 ①：参数解析最先——--help/--version 在任何 daemon 机制
@@ -56,18 +37,6 @@ async fn main() -> anyhow::Result<()> {
             println!("{}", daemon::cli::version_json(&daemon::daemon_version()));
             return Ok(());
         }
-        // #1042：config 的唯一写者。与 --help/--version 同一处短路——不搬
-        // 数据目录、不起日志、不读 config 做启动、不开库、不 claim、不 bind；
-        // 写完即退出。换库仍是重启后台服务后生效（daemon 只在启动时读一次）。
-        // 契约：成功 exit 0，stdout 一行 JSON；失败 exit 1，stderr 一行错误
-        // （keyed 的就是壳 ui_err 同款 JSON，原样可转交前端）。
-        Ok(daemon::cli::Cli::ConfigInit { library }) => {
-            let platform_dir = {
-                use platform::PlatformAdapter as _;
-                platform::adapter().data_dir()
-            };
-            config_command_exit(daemon::config::init_config(&platform_dir, &library));
-        }
         // #1042：诊断包的唯一写者。同样在一切 daemon 机制之前短路：不开库
         // （常驻服务在线时经 IPC logs.export 要那三份，不在线就不要）。契约：
         // 成功 exit 0，stdout 一行 {"zip","daemon_reachable"}；写不出 zip 时
@@ -85,13 +54,6 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         }
-        Ok(daemon::cli::Cli::ConfigSetLibrary { library }) => {
-            let platform_dir = {
-                use platform::PlatformAdapter as _;
-                platform::adapter().data_dir()
-            };
-            config_command_exit(daemon::config::set_library(&platform_dir, &library));
-        }
         Ok(daemon::cli::Cli::Run { ephemeral }) => ephemeral,
         Err(e) => {
             eprintln!("{e}");
@@ -104,17 +66,39 @@ async fn main() -> anyhow::Result<()> {
     let (eof_tx, eof_rx) = tokio::sync::oneshot::channel::<()>();
     let eof_tx = if ephemeral { Some(eof_tx) } else { None };
 
+    // #1115：--ephemeral = 测试沙盒，一整套配置在这里一次选定（见 daemon::sandbox）：
+    // 自建临时存储根、内存身份、令牌 IPC、不连常驻 daemon、不接受任何路径输入。
+    // 常驻 daemon 反过来**不认**这些运行时输入（`PPF_DATA_DIR` 不再生效）：库位置只来自
+    // 平台 config。两条路在这之后不会再交叉。
+    let sandbox = if ephemeral {
+        let env: std::collections::HashMap<String, String> = std::env::vars().collect();
+        let given = daemon::sandbox::forbidden_inputs(&env);
+        if !given.is_empty() {
+            eprintln!("{}", daemon::sandbox::rejection(&given));
+            std::process::exit(2);
+        }
+        match daemon::sandbox::Sandbox::create() {
+            Ok(sb) => {
+                // 机读契约：脚本从这一行拿到沙盒目录（令牌文件、库都在里面）。
+                println!("{}", sb.stdout_line());
+                Some(sb)
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        None
+    };
+
     // DESK-24 (#173)：数据目录搬家必须排在**所有**读 data dir 的动作之前，
     // 包括下面这段日志初始化——平台默认日志文件的路径就是从 data dir 算出
     // 来的。此刻 tracing 还没起来，所以这里只拿结果，等它起来再记
     // （见 `.init()` 之后那几行）。
     //
-    // `PPF_DATA_DIR` 设了就不搬：那是场景脚本 / `just dev-daemon` 用来隔离
-    // 一次性 daemon 的开关，一个临时实例顺手把用户真实的 Roaming 目录搬走
-    // 属于越权。真实 daemon 不设这个变量。
-    let pinned_data_dir = std::env::var_os("PPF_DATA_DIR")
-        .map(std::path::PathBuf::from)
-        .filter(|p| !p.as_os_str().is_empty());
+    // 沙盒不搬：一个临时实例顺手把用户真实的 Roaming 目录搬走属于越权。
+    let pinned_data_dir = sandbox.as_ref().map(|sb| sb.root().to_path_buf());
     let data_dir_migration = match pinned_data_dir {
         Some(_) => None,
         None => {
@@ -167,8 +151,7 @@ async fn main() -> anyhow::Result<()> {
             use platform::PlatformAdapter as _;
             // DEVLOG-02 ②：日志必须在读 config **之前**就位（config 自己出错
             // 也得记下来），所以这里只能用不需要解析 config 的两样东西：
-            // `PPF_DATA_DIR`（纯 env，测试脚本靠它隔离一次性 daemon——日志
-            // 不跟着走就会写进用户真实日志文件）与平台约定。
+            // 测试沙盒目录（#1115：沙盒的日志不许写进用户真实日志文件）与平台约定。
             // config.toml 里的 data_dir **无法**在这里被尊重，是鸡生蛋，
             // 属已知限制。
             let base = pinned_data_dir
@@ -242,18 +225,39 @@ async fn main() -> anyhow::Result<()> {
         platform::adapter().data_dir()
     };
     let default_config = platform_dir.join("config.toml");
-    let config = Config::load(Some(&default_config))?;
-    let data_dir = config.data_dir.clone().unwrap_or(platform_dir);
+    // #1115：沙盒不读平台 config（不接受配置文件里的路径），库就是沙盒目录；
+    // 常驻 daemon 读平台 config，且不认 PPF_DATA_DIR。
+    let config = match &sandbox {
+        Some(_) => Config::load(None)?,
+        None => Config::load_resident(&default_config)?,
+    };
+    // #1115：常驻 daemon 的库位置只认正本（macOS 钥匙串；没有安全存储的平台是 config），
+    // config.toml 里的 data_dir 有正本时只给人看。正本里还没有 ⇒ 未配置状态。
+    let library_location =
+        std::sync::Arc::new(daemon::library_location::LibraryLocation::for_platform());
+    let _ = &platform_dir;
+    let (data_dir, explicitly_configured) = match &sandbox {
+        Some(sb) => (sb.root().to_path_buf(), false),
+        None => match library_location.resident_library(&config) {
+            Ok(daemon::library_location::ResidentLibrary::At { dir, configured }) => {
+                (dir, configured)
+            }
+            Ok(daemon::library_location::ResidentLibrary::Unconfigured) => {
+                run_unconfigured(std::sync::Arc::clone(&library_location)).await
+            }
+            Err(e) => {
+                let msg = format!("读不出照片库位置（{e}）——后台服务无法启动（#1115）");
+                eprintln!("{msg}");
+                tracing::error!("启动失败：{msg}");
+                std::process::exit(1);
+            }
+        },
+    };
     // DESK-46 (#638)：config.toml 显式配置的库目录不存在 ⇒ 大声报错退出，
     // 绝不 create_dir_all 静默造——外置盘未挂载时会在 /Volumes 下造出同名
     // 真目录，照片写进内置盘（挂载点阴影）。默认平台目录（首启向导前）与
-    // PPF_DATA_DIR 指定的目录（场景脚本/tools 依赖自动建一次性临时库）
-    // 保持旧行为。
-    if let Err(msg) = library_root_check(
-        config.data_dir.is_some() && std::env::var_os("PPF_DATA_DIR").is_none(),
-        data_dir.is_dir(),
-        &data_dir,
-    ) {
+    // 测试沙盒目录保持旧行为。
+    if let Err(msg) = library_root_check(explicitly_configured, data_dir.is_dir(), &data_dir) {
         // 文件日志此刻还没初始化（init_file_logging 在更后面）——走 stderr：
         // launchd 的 StandardErrorPath 会接住，DESK-09 诊断链（壳读 plist
         // stderr 尾行）照样能看到这句话；Windows 上落 logs\daemon.err（DESK-58）。KeepAlive 节流重拉，盘插回即自愈。
@@ -266,7 +270,36 @@ async fn main() -> anyhow::Result<()> {
 
     // #1044：打不开索引库时输出 keyed 错误行（cli::startup_error_line），
     // 桌面按 key 出指引，不再用正则猜 stderr 原文。
-    let db = match storage::Db::open(&data_dir.join(".ppf/index.sqlite")).await {
+    // #1115：有平台安全存储（macOS 钥匙串）时，配对记录正本在那里，库里的 pairing
+    // 表只是镜像：打开时先以正本对齐镜像（库里被直接写进去的行不作数），读正本失败
+    // 就拒绝启动。--ephemeral 是一次性测试实例，不碰钥匙串（与 #1109 身份同口径）。
+    let pairing_store = if ephemeral {
+        None
+    } else {
+        use platform::PlatformAdapter as _;
+        platform::adapter().pairing_store()
+    };
+    let index_path = data_dir.join(".ppf/index.sqlite");
+    let opened = match pairing_store {
+        Some(store) => {
+            let vault = std::sync::Arc::new(daemon::pairing_store::SecretPairingVault::new(store));
+            storage::Db::open_with_vault(&index_path, vault)
+                .await
+                .map(|(db, aligned)| {
+                    if !aligned.is_noop() {
+                        // 镜像与正本不一致 = 崩溃残留或库被改过：按正本修正，并留痕。
+                        tracing::warn!(
+                            "#1115: 配对记录镜像已按正本对齐：删除 {} 条、补回 {} 条",
+                            aligned.removed_from_mirror.len(),
+                            aligned.restored_to_mirror.len()
+                        );
+                    }
+                    db
+                })
+        }
+        None => storage::Db::open(&index_path).await,
+    };
+    let db = match opened {
         Ok(db) => db,
         Err(e) => {
             eprintln!(
@@ -277,26 +310,53 @@ async fn main() -> anyhow::Result<()> {
         }
     };
     // ── Persistent daemon identity (真机 P0: 每次重启换 NodeId 会把
-    // 所有已配对手机变成孤儿——配对绑的就是 NodeId). 身份密钥当前存在
-    // 数据目录里的 identity.key（unix 0600 / Windows 仅属主 DACL，与
-    // ipc.token 同一信任域），不进 Keychain/DPAPI，见 load_or_mint_identity。
-    let secret = load_or_mint_identity(&data_dir)?;
+    // 所有已配对手机变成孤儿——配对绑的就是 NodeId). #1109：macOS 存
+    // data protection 钥匙串，Windows / Linux 仍是数据目录里的 identity.key；
+    // 读不出来 / 内容不合法就拒绝启动；新身份先删全部配对记录，见 daemon::identity。
+    let secret = load_or_mint_identity(ephemeral, &data_dir, &db).await;
 
     // ── DAE-02: 单实例 claim 先于 transport bind ──────────────────
     // 固定端口 config 下，在位实例占着端口会让新实例 bind 直接失败；
     // 版本握手（接管/退位裁决）必须先于 bind 发生，否则接管永不发生
     // （验收人实锤：0.2.1 新实例 vs 0.1.0 在位，bind 先炸）。socket_name
-    // 依赖 node_id——从 identity.key 直接派生，不必先 bind endpoint。
+    // 依赖 node_id——从身份私钥直接派生，不必先 bind endpoint。
     let node_id = transport::node_id_from_secret_key(&secret);
     let socket_name = format!("ppf-{}", &node_id.to_string()[..8]);
     let daemon_version = daemon::daemon_version();
+    // #1115：常驻 daemon 的 IPC 形态由平台决定。macOS：仅本用户可访问目录里的 socket，
+    // 按对端代码签名认人，没有令牌；其余：命名空间端点 + 令牌文件。测试沙盒恒为令牌。
+    let resident_ipc = if ephemeral {
+        platform::ResidentIpc::NamespacedWithToken
+    } else {
+        use platform::PlatformAdapter as _;
+        platform::adapter().resident_ipc()
+    };
+    if let platform::ResidentIpc::SignedSocket(path) = &resident_ipc {
+        let prepared = daemon::ipc::check_socket_path(path).and_then(|()| {
+            use platform::PlatformAdapter as _;
+            let dir = path.parent().unwrap_or(path);
+            platform::adapter()
+                .prepare_private_dir(dir)
+                .map_err(|e| format!("IPC 目录 {} 不可用：{e}", dir.display()))
+        });
+        if let Err(msg) = prepared {
+            eprintln!("{msg}");
+            tracing::error!("启动失败：{msg}");
+            std::process::exit(1);
+        }
+    }
     // DEVLOG-03：改走 tracing，否则这行在 Windows release 上无处可去
     // （#163 之后不再分配控制台，stdout 没有去处）。只含 socket 名与令牌
     // **路径**，不含令牌内容，进日志是安全的。
-    tracing::info!(
-        "IPC: {socket_name}（令牌在 {}/ipc.token）",
-        data_dir.display()
-    );
+    match &resident_ipc {
+        platform::ResidentIpc::SignedSocket(path) => {
+            tracing::info!("IPC: {}（按代码签名认证）", path.display())
+        }
+        platform::ResidentIpc::NamespacedWithToken => tracing::info!(
+            "IPC: {socket_name}（令牌在 {}/ipc.token）",
+            data_dir.display()
+        ),
+    }
 
     // relay_provider 惰性填充：transport 在 claim 之后才 bind，配对二维码
     // 也在这之后生成。H-10b: QR 只带 relay（&r=），从 local_addr() 的 addrs
@@ -334,6 +394,15 @@ async fn main() -> anyhow::Result<()> {
         event_bus.clone(),
     );
     ipc.set_outdated_peers(outdated.clone());
+    // #1118：配对时给手机看的电脑名（系统里的名字）。可能含用户真名：不写日志。
+    let desktop_name = platform::adapter()
+        .computer_name()
+        .unwrap_or_else(|| daemon::router::GENERIC_DEVICE_NAME.to_owned());
+    ipc.set_desktop_name(desktop_name.clone());
+    // #1115：常驻 daemon 开放 config.set_library（只有签名窗口程序调得到）；测试沙盒不开放。
+    if sandbox.is_none() {
+        ipc.set_library_location(std::sync::Arc::clone(&library_location));
+    }
     // T-090: devices.list connection 字段的实况来源——同样走惰性 slot
     // （transport 在 claim 之后才 bind）。bind 之前如实报 unknown，
     // 绝不用 last_seen 推断在线（卡片契约）。
@@ -367,10 +436,19 @@ async fn main() -> anyhow::Result<()> {
     // DAE-01b blocker①：claim 内部用前任 token（data_dir/ipc.token）
     // 握手——绝不用本实例的新随机 token 探测（生产必 auth 失败，
     // 被误判死 socket 而抢绑，前任变幽灵占库锁）。
-    match ipc
-        .claim_single_instance(&socket_name, &daemon_version)
-        .await
-    {
+    let claim = match &resident_ipc {
+        // #1115：沙盒不连常驻 daemon——socket 名由随机身份派生，不会撞名，没有交接可做。
+        _ if sandbox.is_some() => daemon::Claim::Proceed,
+        platform::ResidentIpc::SignedSocket(path) => {
+            ipc.claim_single_instance_signed(path, &daemon_version)
+                .await
+        }
+        platform::ResidentIpc::NamespacedWithToken => {
+            ipc.claim_single_instance(&socket_name, &daemon_version)
+                .await
+        }
+    };
+    match claim {
         daemon::Claim::StandDown => {
             // DEVLOG-03：退位理由必须在日志里留痕——Windows 上这曾是唯一
             // 的线索，而它打在一个不再存在的控制台里。
@@ -412,7 +490,7 @@ async fn main() -> anyhow::Result<()> {
         }
     };
     // DAE-02 防漂移：bind 后的真实 node_id 必须与 claim 用的一致（同一
-    // identity.key）。不一致说明身份文件被换，绝不能继续服务。
+    // 身份私钥）。不一致说明身份被换，绝不能继续服务。
     if transport.node_id() != node_id {
         tracing::error!(
             "DAE-02: node id drift after bind (claim used {node_id}, bound {}) — aborting",
@@ -421,6 +499,14 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(1);
     }
     let _ = transport_slot.set(transport.clone());
+    // #1122：配对入口按需开放。握手完成即按 NodeId 判定（iroh after_handshake）：
+    // 有配对记录的设备放行；没有的，只在配对窗口内（二维码显示中，或它自己的申请
+    // 未结束）放行控制面。其余在读任何请求之前就被拒（关闭码 401 not_paired）。
+    transport.set_admission(daemon::admission::predicate(
+        db.clone(),
+        pairing.clone(),
+        unix_ms_now,
+    ));
     // Wait for the home relay before announcing anything: a QR issued
     // in the first seconds otherwise carries a bare LAN address and
     // cross-network phones can never reach us (真机教训 T-054).
@@ -433,34 +519,40 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("P-Pass daemon 已启动");
     // DEVLOG-03：`NodeId:` 这一行**必须留在 stdout**——它是机读契约：
-    // tools/dogfood-smoke.sh 与 tools/scenarios/{crash_recovery,disk_full,
-    // huge_file}.sh 都把两条流分开收（`> daemon.log 2> daemon.err`）然后
-    // `grep -o 'NodeId: .*' daemon.log`。搬到 tracing（stderr）会让那四个
-    // 脚本拿到空串。所以这里刻意打两遍：stdout 那条给脚本，日志那条给事后
+    // tools/dogfood-smoke.sh 把两条流分开收（`> daemon.log 2> daemon.err`）
+    // 然后 `grep -o 'NodeId: .*' daemon.log`。搬到 tracing（stderr）会让
+    // 脚本拿到空串（tools/scenarios/*.sh 已在 #1115 改写为进程内测试）。所以这里刻意打两遍：stdout 那条给脚本，日志那条给事后
     // 排障（Windows release 上 stdout 无处可去，见 #163）。
-    println!("NodeId: {}", transport.node_id());
+    // #1122：完整 NodeId 只给测试沙盒（--ephemeral）的脚本；正式模式下 stdout
+    // 由 launchd 接进 logs/daemon.out，同样只记前缀（全长可被任何人拨号）。
+    println!(
+        "NodeId: {}",
+        daemon::cli::node_id_stdout(&transport.node_id().to_string(), ephemeral)
+    );
     // #544：日志里只记前缀——全长 NodeId 可被任何人拨号，建连即可换来本机
-    // 当前的直连地址（含公网 IP）。stdout 那行是脚本的机读契约，保持不动。
+    // 当前的直连地址（含公网 IP）。
     tracing::info!("NodeId: {:?}", transport.node_id());
     tracing::info!("库目录: {}", data_dir.display());
 
-    // QR 在 transport bind 之后生成（&r= 需要 live endpoint 的中继）。
-    let qr = pairing.start(rand_pair_token()?, unix_ms_now());
     // DEVLOG-03 / SEC-11 (#496)：配对链接**绝不进任何持久文件**。它带着
-    // 10 分钟内有效的配对令牌（红线 4：凭据不落任何持久文件）。
-    // DEVLOG-03 当初的做法是「只进 stdout」，但 stdout 不等于屏幕：macOS
-    // launchd 的 StandardOutPath 就是 <数据目录>/logs/daemon.out（#1046 前是 ~/Library/Logs），
-    // systemd/nohup/脚本重定向同理。所以只在 stdout 是终端时才打印链接，
-    // 否则打一句不含链接的提示（见 cli::pair_link_stdout_line）。
-    // 机读契约随之改为 IPC `pairing.start`：tools/ipc-lib.sh 的
-    // `ipc_pair_qr`（dogfood-smoke / scenarios / android-*.sh）与
-    // tools/win-smoke.ps1 都走它，不再 grep stdout。
-    // 日志里只记「配对已开始」这件事实，不记内容。
-    println!(
-        "{}",
-        daemon::cli::pair_link_stdout_line(&qr, std::io::stdout().is_terminal())
+    // 10 分钟内有效的配对令牌（红线 4：凭据不落任何持久文件）。stdout 不等于
+    // 屏幕：macOS launchd 的 StandardOutPath 就是 <数据目录>/logs/daemon.out，
+    // systemd/nohup/脚本重定向同理。
+    // #1116 F1：所以只有 stdout 是终端（有人在屏幕前看链接）时才在启动时打开配对
+    // 入口；常驻服务 / 脚本启动一律不开，配对只在桌面端点「显示二维码」（IPC
+    // `pairing.start`）时打开（#1122 按需开放）。机读契约是 IPC `pairing.start`：
+    // tools/ipc-lib.sh 的 `ipc_pair_qr` 与 tools/win-smoke.ps1 都走它，不 grep stdout。
+    // QR 在 transport bind 之后生成（&r= 需要 live endpoint 的中继）。
+    let qr = pairing.start_at_launch(
+        std::io::stdout().is_terminal(),
+        rand_pair_token()?,
+        unix_ms_now(),
     );
-    tracing::info!("配对二维码已生成（10 分钟内有效；内容含令牌，刻意不入日志）");
+    if qr.is_some() {
+        // 日志里只记「配对已开始」这件事实，不记内容。
+        tracing::info!("配对二维码已生成（终端启动；10 分钟内有效；内容含令牌，刻意不入日志）");
+    }
+    println!("{}", daemon::cli::pair_link_stdout_line(qr.as_deref()));
 
     // DAE-01b blocker①：claim 成功后才生成/写入自己的 token（serve 写
     // 入 ipc.token）。claim 期间的探测用的是前任 token。
@@ -468,7 +560,11 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn({
         let ipc = std::sync::Arc::clone(&ipc);
         async move {
-            if let Err(e) = ipc.serve(&socket_name, token).await {
+            let served = match &resident_ipc {
+                platform::ResidentIpc::SignedSocket(path) => ipc.serve_signed(path).await,
+                platform::ResidentIpc::NamespacedWithToken => ipc.serve(&socket_name, token).await,
+            };
+            if let Err(e) = served {
                 tracing::error!("IPC 服务退出：{e}");
             }
         }
@@ -656,6 +752,7 @@ async fn main() -> anyhow::Result<()> {
     ipc.set_query(query.clone());
     // #563: device.revoke cancels the removed device's in-flight fetches.
     ipc.set_flow_delivery(flow_delivery.clone());
+    ipc.set_backup(backup.clone());
     let download = daemon::download::DownloadPlane::new(db.clone(), data_dir.clone());
 
     // ── SYNC-01 外部删除对账 ──────────────────────────────
@@ -791,7 +888,14 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("WATCH-01: 目录监听启动失败，降级为每小时对账兜底: {e}");
     }
 
-    let router = Router::new(db, "P-Pass 存储端")
+    // #1119：删配对记录时关掉与那台设备的全部连接（电脑撤销走 IPC，手机断开走 Router）。
+    let peer_closer: daemon::unpair::PeerCloser = {
+        let t = transport.clone();
+        std::sync::Arc::new(move |peer| t.close_peer(peer))
+    };
+    ipc.set_peer_closer(peer_closer.clone());
+    let router = Router::new(db, desktop_name)
+        .with_peer_closer(peer_closer)
         .with_events(event_bus.clone())
         .with_subscriptions(subscriptions)
         .with_outdated_peers(outdated)
@@ -870,44 +974,39 @@ async fn shutdown(transport: &transport::IrohTransport, req: Option<platform::St
     }
 }
 
-/// The daemon's stable identity key, in `identity.key` beside the index
-/// (0600 on unix, owner-only DACL on Windows) — same trust domain as ipc.token.
-///
-/// 当初弃用钥匙串的原因：ad-hoc 签名的二进制每次重启都会重新弹出钥匙串授权
-/// 弹窗（真机实测；无人值守的常驻服务答不了弹窗）。这是现状，不是「以后迁回」
-/// 的占位：若要迁回 Keychain/DPAPI，必须先在**正式签名包**上实测是否还弹窗，
-/// 再设计旧 identity.key 的迁移（改身份存放位置 = 改行为，已配对手机绑的是 NodeId）。
-/// （#1041 已删掉从未被产品代码调用的 `KeyStore` 端口。）
-fn load_or_mint_identity(data_dir: &std::path::Path) -> anyhow::Result<[u8; 32]> {
-    use platform::PlatformAdapter as _;
-    load_or_mint_identity_with(data_dir, |p| platform::adapter().restrict_to_owner(p))
-}
-
-/// SEC-10 (#445): `restrict` is injected so a test can see that BOTH
-/// branches tighten the file. Only minting used to call it, so a key
-/// minted before SEC-07 (or copied in by the DESK-24 data-dir move)
-/// kept its inherited ACL forever.
-fn load_or_mint_identity_with(
+/// #1109：落定身份私钥；失败即拒绝启动——经 stderr 最后一行（keyed JSON，
+/// 桌面壳读它显示原因）说明，不回退明文、不静默换身份。
+/// `--ephemeral` 用只在内存里的临时身份（见 `daemon::identity::for_run`）。
+async fn load_or_mint_identity(
+    ephemeral: bool,
     data_dir: &std::path::Path,
-    restrict: impl Fn(&std::path::Path) -> platform::Result<platform::Applied>,
-) -> anyhow::Result<[u8; 32]> {
-    let key_file = data_dir.join(".ppf/identity.key");
-    if let Ok(bytes) = std::fs::read(&key_file) {
-        if bytes.len() == 32 {
-            let mut k = [0u8; 32];
-            k.copy_from_slice(&bytes);
-            // Idempotent: tightening an already-tight file is a no-op.
-            tighten_identity_file(&key_file, &restrict);
-            return Ok(k);
+    db: &storage::Db,
+) -> [u8; 32] {
+    use platform::PlatformAdapter as _;
+    let adapter = platform::adapter();
+    match daemon::identity::for_run(
+        ephemeral,
+        adapter.identity_key_home(),
+        data_dir,
+        |p| adapter.restrict_to_owner(p),
+        rand_token,
+        // #1117：新身份 = 新设备，先删全部配对记录（档案与审计保留）。
+        || async {
+            Ok(db
+                .remove_all_pairings(storage::DepartedBy::Identity, unix_ms_now())
+                .await?
+                .len())
+        },
+    )
+    .await
+    {
+        Ok(k) => k,
+        Err(e) => {
+            tracing::error!("启动失败：{e}");
+            eprintln!("{}", daemon::cli::startup_error_line(None, &e.to_string()));
+            std::process::exit(1);
         }
     }
-    let k = rand_token()?;
-    std::fs::create_dir_all(data_dir.join(".ppf"))?;
-    std::fs::write(&key_file, k)?;
-    tighten_identity_file(&key_file, &restrict);
-    // DEVLOG-03：只有路径、不含密钥内容，进日志是安全的。
-    tracing::info!("身份密钥已铸造: {}", key_file.display());
-    Ok(k)
 }
 
 /// DESK-46 (#638)：库目录的启动判据（纯函数——文件系统与 env 探测都在
@@ -932,16 +1031,76 @@ fn library_root_check(
     Ok(())
 }
 
-/// QA-09 迁移（#211）：原先是一处 unix 专属的 0o600。失败不阻止启动（与
-/// 迁移前的 `let _ =` 一致），但 `Err` 记一条 WARN——SEC-10：收紧失败不能
-/// 又是一件看不见的事。`Unsupported` 是契约写明的「本平台没收紧」，不算失败。
-fn tighten_identity_file(
-    key_file: &std::path::Path,
-    restrict: &impl Fn(&std::path::Path) -> platform::Result<platform::Applied>,
-) {
-    if let Err(e) = restrict(key_file) {
-        tracing::warn!("身份密钥权限收紧失败: {}: {e}", key_file.display());
+/// #1115：未配置状态——正本里还没有库位置（macOS 钥匙串里没有；Windows / Linux 平台目录里
+/// 没有 config.toml）。单实例交接照做，然后只答 `status` 与 `config.set_library`，写好后以
+/// `EXIT_CONFIGURED_RESTART` 退出、带着库重新启动。
+async fn run_unconfigured(
+    location: std::sync::Arc<daemon::library_location::LibraryLocation>,
+) -> ! {
+    use platform::PlatformAdapter as _;
+    let version = daemon::daemon_version();
+    tracing::info!("#1115: 照片库位置未配置——只开放配置方法，等窗口程序的首启向导");
+    let served = match platform::adapter().resident_ipc() {
+        platform::ResidentIpc::SignedSocket(path) => {
+            let prepared = daemon::ipc::check_socket_path(&path).and_then(|()| {
+                let dir = path.parent().unwrap_or(&path);
+                platform::adapter()
+                    .prepare_private_dir(dir)
+                    .map_err(|e| format!("IPC 目录 {} 不可用：{e}", dir.display()))
+            });
+            if let Err(msg) = prepared {
+                eprintln!("{msg}");
+                std::process::exit(1);
+            }
+            stand_down_unless_claimed(&daemon::ipc::PeerEndpoint::Signed(path.clone()), &version)
+                .await;
+            daemon::ipc::serve_unconfigured_signed(&path, version, location).await
+        }
+        platform::ResidentIpc::NamespacedWithToken => {
+            // 前任（另一个未配置实例）的令牌在平台目录里；没有就是第一个。
+            let platform_dir = location.platform_dir().to_path_buf();
+            if let Some(token_hex) = predecessor_token(&platform_dir) {
+                stand_down_unless_claimed(
+                    &daemon::ipc::PeerEndpoint::Token {
+                        socket_name: daemon::ipc::UNCONFIGURED_SOCKET_NAME.to_string(),
+                        token_hex,
+                    },
+                    &version,
+                )
+                .await;
+            }
+            let token = match rand_token() {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            };
+            daemon::ipc::serve_unconfigured_token(&platform_dir, token, version, location).await
+        }
+    };
+    if let Err(e) = served {
+        tracing::error!("IPC 服务退出：{e}");
     }
+    std::process::exit(1);
+}
+
+/// 单实例交接（newest wins）：在位者同版本或更新 ⇒ 本实例退出。
+async fn stand_down_unless_claimed(peer: &daemon::ipc::PeerEndpoint, version: &str) {
+    if let daemon::Claim::StandDown = daemon::ipc::claim_endpoint(peer, version).await {
+        tracing::info!("已有同版本或更新版本的 daemon 在值班（v{version}），本实例退出。");
+        std::process::exit(0);
+    }
+}
+
+/// 平台目录里 ipc.token 的令牌行，且 socket 名是未配置状态的那个（配置好的前任写在库里）。
+fn predecessor_token(platform_dir: &std::path::Path) -> Option<String> {
+    let raw = std::fs::read_to_string(platform_dir.join("ipc.token")).ok()?;
+    let mut lines = raw.lines();
+    (lines.next()?.trim() == daemon::ipc::UNCONFIGURED_SOCKET_NAME)
+        .then(|| lines.next().map(|t| t.trim().to_string()))
+        .flatten()
+        .filter(|t| !t.is_empty())
 }
 
 /// 32 random bytes from the OS (via std's RandomState hashing entropy is
@@ -970,65 +1129,7 @@ fn unix_ms_now() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::RefCell;
-    use std::path::{Path, PathBuf};
-
-    fn recording(
-        calls: &RefCell<Vec<PathBuf>>,
-    ) -> impl Fn(&Path) -> platform::Result<platform::Applied> + '_ {
-        move |p| {
-            calls.borrow_mut().push(p.to_path_buf());
-            Ok(platform::Applied::Done)
-        }
-    }
-
-    // SEC-10 (#445) RED: a key that already exists (minted before SEC-07,
-    // or carried over by the DESK-24 move) must be tightened on load too,
-    // and loading must not re-mint it.
-    #[test]
-    fn sec10_existing_identity_is_tightened_and_kept() {
-        let dir = tempfile::tempdir().unwrap();
-        let key_file = dir.path().join(".ppf/identity.key");
-        std::fs::create_dir_all(key_file.parent().unwrap()).unwrap();
-        std::fs::write(&key_file, [7u8; 32]).unwrap();
-
-        let calls = RefCell::new(Vec::new());
-        let k = load_or_mint_identity_with(dir.path(), recording(&calls)).unwrap();
-
-        assert_eq!(
-            k, [7u8; 32],
-            "an existing key must be loaded, not re-minted"
-        );
-        assert_eq!(*calls.borrow(), vec![key_file]);
-    }
-
-    #[test]
-    fn sec10_minted_identity_is_tightened() {
-        let dir = tempfile::tempdir().unwrap();
-        let calls = RefCell::new(Vec::new());
-        let k = load_or_mint_identity_with(dir.path(), recording(&calls)).unwrap();
-
-        let key_file = dir.path().join(".ppf/identity.key");
-        assert_eq!(std::fs::read(&key_file).unwrap(), k);
-        assert_eq!(*calls.borrow(), vec![key_file]);
-    }
-
-    #[test]
-    fn sec10_tighten_failure_does_not_block_startup() {
-        let dir = tempfile::tempdir().unwrap();
-        let key_file = dir.path().join(".ppf/identity.key");
-        std::fs::create_dir_all(key_file.parent().unwrap()).unwrap();
-        std::fs::write(&key_file, [9u8; 32]).unwrap();
-
-        let k = load_or_mint_identity_with(dir.path(), |_| {
-            Err(platform::PlatformError::Failed {
-                action: "restrict_to_owner",
-                detail: "denied".into(),
-            })
-        })
-        .unwrap();
-        assert_eq!(k, [9u8; 32]);
-    }
+    use std::path::Path;
 
     // DESK-46 (#638)：显式配置的库目录不存在 ⇒ 拒绝启动（人话消息），
     // 不再 create_dir_all 造假目录。反证：把 library_root_check 改成永远

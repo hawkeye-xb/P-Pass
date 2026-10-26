@@ -7,9 +7,18 @@
 #         #[cfg_attr(...)], and cfg!(...) forms, on every platform axis:
 #         unix, windows, linux, macos, target_os, target_family, target_env.
 #         Err on the side of false positives; the platform crate is exempt.
-#   B.3 — 设备记录不得物理删除（DEV-02）：crates/ 内不允许出现
-#         `DELETE FROM device` / `DELETE FROM backup_watermark`。跨行、引号、
+#   B.3 — 设备档案与审计永不删除，配对记录可以物理删除（DEV-02，#1117 改写）：
+#         crates/ 内不允许 `DELETE FROM device_profile` 或任何审计表；
+#         对 pairing 表的任何写入（INSERT / REPLACE / UPDATE / DELETE）只许出现在
+#         crates/storage/src/device_repo.rs（三个写方法：accept_pairing /
+#         remove_pairing / remove_all_pairings，写后同步内存副本）。跨行、引号、
 #         schema 前缀写法同样拦（#1040）。
+#   B.4 — 审计与照片来源只挂设备 NodeId（档案），不挂配对记录 id（#1117）：
+#         建 / 改审计表与 asset 表的 SQL 不得引用 pairing，audit_repo.rs /
+#         asset_repo.rs 不得出现 pairing_id——配对记录一删，挂在它上面的就悬空。
+#   B.5 — 授权点只读配对记录的内存副本（#1117）：daemon 的 authz.rs / router.rs /
+#         blobs_gate.rs / download.rs 不得查库取设备或配对（get_device /
+#         list_devices / list_pairings / SQL 里的 pairing 表）。
 #   G1  — 桌面壳（apps/desktop）不判断平台、不读 HOME/USERPROFILE/LANG、
 #         不拼 plist 路径。平台信息只许经 adapter 或 daemon 返回的字段（#1040）。
 #   G5  — 平台实现只在 crates/platform（#1040，细则见下方 G1/G5 段）。
@@ -187,39 +196,94 @@ list_files() {
     -type f \( "${expr[@]}" \) -print0
 }
 
-# ── B.3: device rows are never hard-deleted ─────────
+# ── B.3: device profiles and audit are never deleted ─────────
 
-echo "==> B.3: no physical delete of device / backup_watermark rows (DEV-02)"
+echo "==> B.3: device profiles / audit never deleted; pairing records only via device_repo.rs (DEV-02, #1117)"
 
 # DEV-02 (验收人 2026-09-17/09-18 拍板)：「本地不应该把这个设备的记录删除
-# 掉」，以及「任何设备都不应该对其它设备的记录有影响，尤其是删除」。设备
-# 记录只允许软删——`UPDATE device SET revoked = 1`，恢复信任只有配对流程
-# 有权做（`unrevoke`）。
+# 掉」，以及「任何设备都不应该对其它设备的记录有影响，尤其是删除」。
 #
-# 被删掉的那条路径是 DEV-01 的 `merge_device()`：它把资产改挂到新身份后
-# `DELETE FROM device` + `DELETE FROM backup_watermark`，于是「这台设备
-# 存在过」这个事实在设备表里蒸发。设备与身份 1:1 定下之后这条路径整个
-# 不该存在（续旧账目 = 两个身份共享一份账，当场破 1:1）。
+# #1117 把「它是谁」和「它现在凭什么能连」拆成两张表（对齐 HomeKit / 蓝牙 /
+# Matter 的 pairing list）：设备档案 `device_profile` 与审计表永不删除；配对
+# 记录 `pairing` 断开 / 撤销 / 换身份时物理删除，且只许经 storage 里那一处
+# 实现删除（daemon 的唯一入口 `crate::unpair` 调它），挂在它上面的水位与租约
+# 由外键级联删除。
 #
 # 为什么是门禁而不是测试：语义靠人记会再漏——同形状的前例是
 # `flowTriggerLock`（MOB-88 #204：7 个入口记住 5 个）。行为测试证明
 # 「这次没删」，门禁证明「以后删不进来」。
 #
-# #1040：原先是逐行 grep，三种写法能绕过——`DELETE\n FROM device`（跨行）、
-# `FROM "device"`（引号）、`FROM main.device`（schema 前缀）。现改为整文件
-# 多行匹配：关键字之间允许任意空白/换行/Rust 字符串的行尾反斜杠续行，表名
-# 允许引号（"" `` []、Rust 字符串里的 \"）与 schema 前缀。`device_token`、
-# `devices` 这类前缀相同的表不误报（表名后不得再接字符）。
+# #1040：整文件多行匹配——关键字之间允许任意空白/换行/Rust 字符串的行尾反斜杠
+# 续行，表名允许引号（"" `` []、Rust 字符串里的 \"）与 schema 前缀。表名后
+# 不得再接字符（`device_profile_x` 这类不误报）。
 # 自测：tools/test-arch-check.sh（含「还原成逐行 grep 则三个样例全漏」的反证）。
-B3_RE='DELETE(?:\s|\\)+FROM(?:\s|\\)+(?:(?:\\?["`\[])?\w+(?:\\?["`\]])?\s*\.\s*)?(?:\\?["`\[])?(?:device|backup_watermark)(?:\\?["`\]])?(?!\w)'
+b3_re() { # <表名正则> → 多行 DELETE 正则
+  printf '%s' 'DELETE(?:\s|\\)+FROM(?:\s|\\)+(?:(?:\\?["`\[])?\w+(?:\\?["`\]])?\s*\.\s*)?(?:\\?["`\[])?(?:'"$1"')(?:\\?["`\]])?(?!\w)'
+}
+B3_RE="$(b3_re 'device_profile|audit_event|audit_operation|audit_item_evidence|audit_tombstone|audit_decision')"
+# 对 pairing 表的任何写入：DELETE FROM / INSERT [OR …] INTO / REPLACE INTO / UPDATE [OR …]。
+B3_PAIRING_RE='(?:DELETE(?:\s|\\)+FROM|INSERT(?:(?:\s|\\)+OR(?:\s|\\)+\w+)?(?:\s|\\)+INTO|REPLACE(?:\s|\\)+INTO|UPDATE(?:(?:\s|\\)+OR(?:\s|\\)+\w+)?)(?:\s|\\)+(?:(?:\\?["`\[])?\w+(?:\\?["`\]])?\s*\.\s*)?(?:\\?["`\[])?pairing(?:\\?["`\]])?(?!\w)'
+B3_PAIRING_HOME="crates/storage/src/device_repo.rs"
 VIOLATIONS_B3=$(list_files "$ROOT/crates" -- '*.rs' '*.sql' | scan_files "$B3_RE" 0 i | sort || true)
+VIOLATIONS_B3_PAIRING=$(list_files "$ROOT/crates" -- '*.rs' '*.sql' | scan_files "$B3_PAIRING_RE" 0 i \
+  | awk -F'\t' -v home="$B3_PAIRING_HOME" '$1 != home' | sort || true)
 
 if [ -n "$VIOLATIONS_B3" ]; then
-  echo "❌ B.3 VIOLATION: 设备记录只能软删（UPDATE device SET revoked = 1）:"
+  echo "❌ B.3 VIOLATION: 设备档案与审计永不删除:"
   echo "$VIOLATIONS_B3" | awk -F'\t' '{print "   " $1 ":" $2}'
   FAIL=1
-else
+fi
+if [ -n "$VIOLATIONS_B3_PAIRING" ]; then
+  echo "❌ B.3 VIOLATION: 配对记录只许在 $B3_PAIRING_HOME 里写入或删除（三个写方法；daemon 删配对经 crate::unpair 唯一入口）:"
+  echo "$VIOLATIONS_B3_PAIRING" | awk -F'\t' '{print "   " $1 ":" $2}'
+  FAIL=1
+fi
+if [ -z "$VIOLATIONS_B3" ] && [ -z "$VIOLATIONS_B3_PAIRING" ]; then
   echo "   ✅ B.3: clean"
+fi
+
+# ── B.4: audit and photo provenance hang on the NodeId, never on a pairing ──
+
+echo "==> B.4: audit / asset tables reference the device NodeId, not the pairing record (#1117)"
+
+# 配对记录会被物理删除；审计（actor）与照片来源（asset.src_device）要永久可查，
+# 所以只能挂设备档案的 NodeId。挂到 pairing_id 上，配对一删就悬空。
+B4_SQL_RE='(?:CREATE|ALTER)\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["`\[]?(?:audit_\w+|asset\w*)\b[^;]*\bpairing'
+B4_RS_RE='\bpairing_id\b|\bREFERENCES\s+pairing\b'
+VIOLATIONS_B4=$( {
+  list_files "$ROOT/crates" -- '*.sql' | scan_files "$B4_SQL_RE" 1 i
+  for f in crates/storage/src/audit_repo.rs crates/storage/src/asset_repo.rs; do
+    [ -f "$ROOT/$f" ] && printf '%s\0' "$ROOT/$f"
+  done | scan_files "$B4_RS_RE" 1 i
+} | sort || true)
+
+if [ -n "$VIOLATIONS_B4" ]; then
+  echo "❌ B.4 VIOLATION: 审计与照片来源只挂设备 NodeId，不挂配对记录:"
+  echo "$VIOLATIONS_B4" | awk -F'\t' '{print "   " $1 ":" $2}'
+  FAIL=1
+else
+  echo "   ✅ B.4: clean"
+fi
+
+# ── B.5: authorization reads only the in-memory pairing copy ──
+
+echo "==> B.5: authz points read the in-memory pairing copy, never the database (#1117)"
+
+# 授权判定走 `Db::active_pairing`（内存副本，所有 Db 克隆共享一份，只由三个写
+# 方法在事务提交后更新）。授权点直接查库会绕开副本——#1115 把正本换到钥匙串后，
+# 库里只剩镜像，查库得到的就不是授权的依据。
+B5_FILES="crates/daemon/src/authz.rs crates/daemon/src/router.rs crates/daemon/src/blobs_gate.rs crates/daemon/src/download.rs"
+B5_RE='\.(?:get_device|list_devices|list_pairings)\s*\(|\bFROM(?:\s|\\)+(?:\\?["`\[])?pairing(?:\\?["`\]])?(?!\w)'
+VIOLATIONS_B5=$(for f in $B5_FILES; do
+  [ -f "$ROOT/$f" ] && printf '%s\0' "$ROOT/$f"
+done | scan_files "$B5_RE" 2 i | sort || true)
+
+if [ -n "$VIOLATIONS_B5" ]; then
+  echo "❌ B.5 VIOLATION: 授权点只读 Db::active_pairing（内存副本），不查库:"
+  echo "$VIOLATIONS_B5" | awk -F'\t' '{print "   " $1 ":" $2}'
+  FAIL=1
+else
+  echo "   ✅ B.5: clean"
 fi
 
 # ── G1 / G5：平台边界（存量不增）──────────────────
@@ -410,10 +474,10 @@ fi
 
 # ── G4：壳不写 config.toml（#1045）─────────────────
 
-echo "==> G4: desktop shell never writes config.toml (the daemon's \`config\` subcommands are the only writer)"
+echo "==> G4: desktop shell never writes config.toml (the daemon's IPC method config.set_library is the only writer)"
 
-# S-5（里程碑 #9）：config.toml 的写者只有 daemon（`config init` /
-# `config set-library`，#1042），壳只调子命令。壳里曾有第二份写入实现
+# S-5（里程碑 #9）：config.toml 的写者只有 daemon（#1042；#1115 起只经 IPC
+# `config.set_library`，CLI 子命令已删），壳只调它。壳里曾有第二份写入实现
 # （render_config / merge_library_dir …），与 daemon 两份拷贝漂移出过
 # DESK-27 / DESK-46 / DESK-49 三次事故。
 #
@@ -435,7 +499,7 @@ G4_HITS=$(list_files "$ROOT/apps/desktop/src-tauri/src" -- '*.rs' | scan_files "
 if [ -z "$G4_HITS" ]; then
   echo "   ✅ G4: clean"
 else
-  printf '%s\n' "$G4_HITS" | awk -F'\t' '{print "❌ G4 VIOLATION（壳不许写 config.toml，改调 daemon 的 config 子命令）：" $1 " 行 " $2}'
+  printf '%s\n' "$G4_HITS" | awk -F'\t' '{print "❌ G4 VIOLATION（壳不许写 config.toml，改调 daemon 的 IPC config.set_library）：" $1 " 行 " $2}'
   FAIL=1
 fi
 
@@ -457,7 +521,7 @@ fi
 #   ③ 托管机制的名字：LaunchAgents、launchctl、schtasks、kickstart。
 # 扫 crates/**（除 crates/platform）的 Rust，去掉注释（讲「为什么不在这里做」
 # 的注释不算）。无白名单：现存命中为零。
-G2_METHODS='autostart_installed|autostart_reconcile_allowed|autostart_registration|autostart_registration_current|autostart_restore_when_missing|daemon_executable_name|install_autostart|install_location_hint_key|installed_bundle_version|is_install_location|kickstart_shell_agent|pause_resident_daemon|reconcile_autostart|register_shell_agent|register_shell_login_item|resident_daemon_pid|restart_resident_daemon|service_mode|shell_agent_label|shell_agent_registered_exec|shell_agent_started_us|stop_daemon|uninstall_autostart'
+G2_METHODS='autostart_installed|autostart_reconcile_allowed|autostart_registration|autostart_registration_current|autostart_restore_when_missing|bundled_daemon_path|daemon_executable_name|install_autostart|install_location_hint_key|installed_bundle_version|is_install_location|kickstart_shell_agent|pause_resident_daemon|reconcile_autostart|register_shell_agent|register_shell_login_item|resident_daemon_pid|restart_resident_daemon|service_mode|shell_agent_label|shell_agent_registered_exec|shell_agent_started_us|stop_daemon|uninstall_autostart'
 G2_RE="\\.(?:${G2_METHODS})\\s*\\(|\\b(?:AutostartRegistration|AutostartReconcile|ResidentRestart|ServiceMode|KillOutcome)\\b|\\b(?:LaunchAgents|launchctl|schtasks|kickstart)\\b"
 echo "==> G2: no hosting code in the core (hosting belongs to the distribution layer)"
 G2_HITS=$(list_files "$ROOT/crates" -- '*.rs' \

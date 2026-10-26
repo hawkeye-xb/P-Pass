@@ -79,7 +79,7 @@ final class TransportFFITests: XCTestCase {
     func testFlowFetchRequestEncodedThroughProtoDecodesFieldForField() throws {
         let request = ProtoFlowFetchRequest(
             queueSequence: 9_007_199_254_740_993,  // > 2^53：确认 u64 不经过浮点
-            pairingEpoch: "epoch-2026-10-12",
+            pairingId: "pairingId-2026-10-12",
             leaseToken: "lease-7f3a",
             contentHash: String(repeating: "ab", count: 32),
             fileName: "IMG_0001 照片.HEIC",
@@ -98,7 +98,7 @@ final class TransportFFITests: XCTestCase {
         // crates/proto 解码回来，逐字段相等。
         let decoded = try decodeFlowFetchRequest(frame: frame)
         XCTAssertEqual(decoded.queueSequence, request.queueSequence)
-        XCTAssertEqual(decoded.pairingEpoch, request.pairingEpoch)
+        XCTAssertEqual(decoded.pairingId, request.pairingId)
         XCTAssertEqual(decoded.leaseToken, request.leaseToken)
         XCTAssertEqual(decoded.contentHash, request.contentHash)
         XCTAssertEqual(decoded.fileName, request.fileName)
@@ -113,7 +113,7 @@ final class TransportFFITests: XCTestCase {
             with: Data(try decodeFrameJson(frame: frame).utf8)) as! [String: Any]
         XCTAssertEqual(
             Set(json.keys),
-            ["queue_sequence", "pairing_epoch", "lease_token", "content_hash", "file_name",
+            ["queue_sequence", "pairing_id", "lease_token", "content_hash", "file_name",
              "media_type", "provider", "capture_at_ms", "size_bytes"])
         XCTAssertEqual(json["file_name"] as? String, request.fileName)
         print("FlowFetchRequest frame \(frame.count) bytes, fields equal ✓")
@@ -124,7 +124,7 @@ final class TransportFFITests: XCTestCase {
     func testPPassCoreFlowFetchRequestJsonDecodesInCratesProto() throws {
         let request = PPassCore.FlowFetchRequest(
             queueSequence: 9_007_199_254_740_993,
-            pairingEpoch: "epoch-2026-10-12",
+            pairingId: "pairingId-2026-10-12",
             leaseToken: "lease-42",
             contentHash: String(repeating: "cd", count: 32),
             fileName: "IMG_0002 视频.MOV",
@@ -136,7 +136,7 @@ final class TransportFFITests: XCTestCase {
         let json = String(decoding: try JSONEncoder().encode(request), as: UTF8.self)
         let decoded = try decodeFlowFetchRequest(frame: try encodeFrameJson(json: json))
         XCTAssertEqual(decoded.queueSequence, request.queueSequence)
-        XCTAssertEqual(decoded.pairingEpoch, request.pairingEpoch)
+        XCTAssertEqual(decoded.pairingId, request.pairingId)
         XCTAssertEqual(decoded.leaseToken, request.leaseToken)
         XCTAssertEqual(decoded.contentHash, request.contentHash)
         XCTAssertEqual(decoded.fileName, request.fileName)
@@ -163,7 +163,7 @@ final class TransportFFITests: XCTestCase {
         // 合法 NodeId 必须是曲线上的点：借一个 ephemeral 控制面端点的 NodeId。
         let client = try CtrlClient.bind(
             config: CtrlConfig(secretKey: nil, relayUrls: [], offline: true, bindTimeoutMs: 0))
-        defer { client.close() }
+        defer { client.shutdown() }
         let node = try client.nodeId()
 
         let link = try parsePairLink(
@@ -212,7 +212,33 @@ final class TransportFFITests: XCTestCase {
             }
         }
         try provider.release(hash: imported.hash)
-        provider.close()
+        provider.shutdown()
+    }
+
+    /// #1126：provider 的关闭监听只报「已配对电脑用非 0 应用码关连接」；本地的 revoke / release / 停传输 / shutdown 都不报。
+    /// （410 的正向路径由 Rust 侧测试覆盖。）注册与清除（nil）都不抛。
+    func testProviderLocalCloseDoesNotFirePeerCloseListener() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("provider-listener-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let provider = try Provider(root: root.path)
+        let recorder = PeerCloseRecorder()
+        provider.setPeerCloseListener(listener: recorder)
+
+        let file = root.appendingPathExtension("src")
+        try xorshiftMiB(seed: 0x0DDB_A11).write(to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let imported = try provider.importFile(path: file.path)
+        _ = try provider.serve(hash: imported.hash)
+        try provider.setAllowedPeer(nodeId: String(repeating: "cd", count: 32))
+        provider.stopActiveFetch()
+        provider.revoke()
+        try provider.setAllowedPeer(nodeId: nil)
+        provider.setPeerCloseListener(listener: nil)
+        provider.setPeerCloseListener(listener: recorder)
+        provider.shutdown()
+        Thread.sleep(forTimeInterval: 0.5)
+        XCTAssertEqual(recorder.calls, [], "本地关闭不触发监听")
     }
 
     // MARK: - 控制面客户端 × 本机 daemon
@@ -230,7 +256,7 @@ final class TransportFFITests: XCTestCase {
         }
         let client = try CtrlClient.bind(
             config: CtrlConfig(secretKey: nil, relayUrls: [], offline: true, bindTimeoutMs: 0))
-        defer { client.close() }
+        defer { client.shutdown() }
         XCTAssertEqual(try client.nodeId().count, 64)
 
         let reply = try client.call(peerToken: token, method: "hello", paramsJson: "{}", timeoutMs: 0)
@@ -318,33 +344,50 @@ final class TransportFFITests: XCTestCase {
         //    （宿主脚本的 owner_loop 代点）。阻塞式 pair.request 已退役（#1050）。
         let client = try CtrlClient.bind(
             config: CtrlConfig(secretKey: nil, relayUrls: [], offline: true, bindTimeoutMs: 0))
-        defer { client.close() }
+        defer { client.shutdown() }
+        // #1118：验证码交换走共享 Rust 内核（PairPhone）；验证码由手机生成，提交成功后写进 `$E2E/pair_code.txt`
+        // （`PAIR_CODE=<码> node=<本机 NodeId>`），宿主脚本的 owner_loop 按 node 取码调 pairing.confirm。
+        let phoneNode = try client.nodeId()
+        let code = try pairCodeGenerate()
+        let pake = try PairPhone.start(code: code, token: link.token, phoneNode: phoneNode, deskNode: link.nodeId)
         let submitted = try ctrl(client, peer, "pair.request",
                                  ["token": link.token, "device_name": "iOS 模拟器 G2", "role": "member",
-                                  "ack_then_poll": true],
+                                  "ack_then_poll": true, "pake_a": pake.pakeA()],
                                  timeoutMs: 15_000)
         XCTAssertEqual(submitted["ok"] as? Bool, true, "\(submitted)")
         let ack = try XCTUnwrap(submitted["result"] as? [String: Any], "\(submitted)")
         let requestId = try XCTUnwrap(ack["request_id"] as? String, "\(submitted)")
         let ttlMs = (ack["ttl_ms"] as? NSNumber)?.doubleValue ?? 60_000
-        var acceptedEpoch: String?
+        try "PAIR_CODE=\(code) node=\(phoneNode)\n".write(to: e2e.appendingPathComponent("pair_code.txt"), atomically: true, encoding: .utf8)
+        var acceptedPairingId: String?
+        var confirmA: String?
         let pollDeadline = Date().addingTimeInterval(ttlMs / 1000 + 5)
-        while acceptedEpoch == nil {
+        while acceptedPairingId == nil {
             let st = try ctrl(client, peer, "pair.status", ["request_id": requestId], timeoutMs: 15_000)
             XCTAssertEqual(st["ok"] as? Bool, true, "\(st)")
-            let reply = try XCTUnwrap(st["result"] as? [String: Any], "\(st)")
+            var reply = try XCTUnwrap(st["result"] as? [String: Any], "\(st)")
+            if reply["state"] as? String == "pending" {
+                if confirmA == nil, let pakeB = reply["pake_b"] as? String { confirmA = try pake.finish(pakeB: pakeB) }
+                if let confirmA {
+                    let c = try ctrl(client, peer, "pair.confirm", ["request_id": requestId, "confirm_a": confirmA], timeoutMs: 15_000)
+                    XCTAssertEqual(c["ok"] as? Bool, true, "pair.confirm: \(c)")
+                    reply = try XCTUnwrap(c["result"] as? [String: Any], "\(c)")
+                }
+            }
             switch reply["state"] as? String {
             case "accepted":
-                acceptedEpoch = try XCTUnwrap((reply["accepted"] as? [String: Any])?["pairing_epoch"] as? String, "\(st)")
+                // 电脑也要证明它知道这个码，验过才算加入。
+                try pake.verify(confirmB: try XCTUnwrap(reply["confirm_b"] as? String, "\(reply)"))
+                acceptedPairingId = try XCTUnwrap((reply["accepted"] as? [String: Any])?["pairing_id"] as? String, "\(reply)")
             case "pending":
                 guard Date() < pollDeadline else { return XCTFail("pair.status still pending after ttl: \(st)") }
-                Thread.sleep(forTimeInterval: 0.5)
+                Thread.sleep(forTimeInterval: 1.0)
             default:
-                return XCTFail("pairing not accepted: \(st)")
+                return XCTFail("pairing not accepted: \(reply)")
             }
         }
-        let epoch = try XCTUnwrap(acceptedEpoch)
-        print("G2 paired: epoch=\(epoch.prefix(8))… phone=\(try client.nodeId().prefix(8))…")
+        let pairingId = try XCTUnwrap(acceptedPairingId)
+        print("G2 paired: pairingId=\(pairingId.prefix(8))… phone=\(try client.nodeId().prefix(8))…")
 
         // ③ provider 的 FsStore 落在存储根下（模拟一个 App Group 容器；真 entitlement 是 App 线的事）。
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("g2-\(UUID().uuidString)")
@@ -356,7 +399,7 @@ final class TransportFFITests: XCTestCase {
         XCTAssertEqual(root.kind, .appGroup)
         let store = root.url.appendingPathComponent("blobs", isDirectory: true)
         let provider = try Provider.withGcInterval(root: store.path, gcIntervalMs: 1_000)
-        defer { provider.close() }
+        defer { provider.shutdown() }
         try provider.setAllowedPeer(nodeId: link.nodeId)
 
         let photo = tmp.appendingPathComponent("IMG_G2.HEIC")
@@ -394,13 +437,13 @@ final class TransportFFITests: XCTestCase {
 
         // ⑤ 交付：PPassCore 的 Codable FlowFetchRequest → flow.offer → 轮询 flow.status 到 completed。
         let request = PPassCore.FlowFetchRequest(
-            queueSequence: 1, pairingEpoch: epoch, leaseToken: "lease-1", contentHash: imported.hash,
+            queueSequence: 1, pairingId: pairingId, leaseToken: "lease-1", contentHash: imported.hash,
             fileName: "IMG_G2.HEIC", mediaType: "image/heic", provider: ticket,
             captureAtMs: Int64(Date().timeIntervalSince1970 * 1000), sizeBytes: Int64(imported.size))
         let offerParams = try JSONSerialization.jsonObject(with: try JSONEncoder().encode(request)) as! [String: Any]
         let offer = try ctrl(client, peer, "flow.offer", offerParams, timeoutMs: 30_000)
         XCTAssertEqual(offer["ok"] as? Bool, true, "\(offer)")
-        let tuple: [String: Any] = ["queue_sequence": 1, "pairing_epoch": epoch, "lease_token": "lease-1"]
+        let tuple: [String: Any] = ["queue_sequence": 1, "pairing_id": pairingId, "lease_token": "lease-1"]
         var receipt: [String: Any]?
         try waitFor(90, "flow.status completed") {
             let status = try ctrl(client, peer, "flow.status", tuple)
@@ -415,7 +458,7 @@ final class TransportFFITests: XCTestCase {
         let r = try XCTUnwrap(receipt)
         XCTAssertEqual(r["content_hash"] as? String, imported.hash)
         XCTAssertEqual(r["lease_token"] as? String, "lease-1")
-        XCTAssertEqual(r["pairing_epoch"] as? String, epoch)
+        XCTAssertEqual(r["pairing_id"] as? String, pairingId)
         XCTAssertFalse((r["receipt_id"] as? String ?? "").isEmpty)
         print("G2 receipt: \(r)")
 
@@ -450,6 +493,13 @@ final class TransportFFITests: XCTestCase {
 }
 
 /// #963：记录流式调用收到的帧与结束原因（FFI 回调来自 Rust 的 runtime 线程）。
+private final class PeerCloseRecorder: PeerCloseListener, @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [String] = []
+    var calls: [String] { lock.lock(); defer { lock.unlock() }; return recorded }
+    func onPeerClosed(nodeId: String, code: UInt64) { lock.lock(); recorded.append("\(nodeId):\(code)"); lock.unlock() }
+}
+
 private final class StreamRecorder: StreamListener, @unchecked Sendable {
     private let lock = NSLock()
     private var _frames: [[String: Any]] = []

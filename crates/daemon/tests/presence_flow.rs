@@ -15,7 +15,7 @@ use daemon::{presence, DiagAgg, IpcServer, Pairing, Router};
 use interprocess::local_socket::tokio::prelude::*;
 
 use proto::{Req, Resp};
-use storage::{Db, Device, Role};
+use storage::{Db, DepartedBy, Role};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use transport::{IrohTransport, Transport, TransportConfig};
 
@@ -68,6 +68,25 @@ impl RouterHarnessInner {
     }
 }
 
+/// 造一台已配对设备（配对记录 + 档案），并写入 last_seen。
+async fn pair(db: &Db, node: &[u8], name: &str, last_seen: Option<i64>) {
+    db.accept_pairing(
+        node,
+        name,
+        &storage::Pairing {
+            id: format!("pid-{}", node[0]),
+            node_id: node.to_vec(),
+            role: Role::Member,
+            paired_at: 1,
+        },
+    )
+    .await
+    .unwrap();
+    if let Some(ts) = last_seen {
+        db.touch_last_seen(node, ts).await.unwrap();
+    }
+}
+
 /// 搭 Router（带时钟 seam）——客户端已作为 Member 配对入库。
 async fn router_harness(_dir: &std::path::Path, db: Db, now: i64) -> RouterHarnessInner {
     let daemon_tp = endpoint().await;
@@ -80,18 +99,7 @@ async fn router_harness(_dir: &std::path::Path, db: Db, now: i64) -> RouterHarne
 
     let client_tp = endpoint().await;
     client_tp.add_peer(daemon_tp.local_addr());
-    db.upsert_device(&Device {
-        node_id: client_tp.node_id().0.to_vec(),
-        name: "小红".into(),
-        role: Role::Member,
-        paired_at: 1,
-        last_seen: Some(now - 60_000),
-        revoked: false,
-        revoked_at: None,
-        revoked_by: None,
-    })
-    .await
-    .unwrap();
+    pair(&db, &client_tp.node_id().0, "小红", Some(now - 60_000)).await;
     RouterHarnessInner {
         daemon_tp,
         client_tp,
@@ -121,7 +129,11 @@ async fn hello_refreshes_last_seen_and_never_writes_any_audit_row() {
     let resp = h.call("hello", serde_json::json!({})).await;
     assert!(resp.ok, "hello must succeed: {resp:?}");
     let dev = db.get_device(&node).await.unwrap().unwrap();
-    assert_eq!(dev.last_seen, Some(now), "hello must refresh last_seen");
+    assert_eq!(
+        dev.profile.last_seen_at,
+        Some(now),
+        "hello must refresh last_seen"
+    );
     assert_eq!(
         connected_audits(&db, &node).await.len(),
         0,
@@ -134,7 +146,7 @@ async fn hello_refreshes_last_seen_and_never_writes_any_audit_row() {
     assert!(resp.ok);
     let dev = db.get_device(&node).await.unwrap().unwrap();
     assert_eq!(
-        dev.last_seen,
+        dev.profile.last_seen_at,
         Some(now + 5 * 60 * 1000),
         "last_seen keeps refreshing"
     );
@@ -184,17 +196,21 @@ async fn unpaired_hello_stays_side_effect_free() {
     );
 }
 
-// ── revoked 设备：authz 拒绝（连 hello 都不给），零副作用 ─────────────
+// ── 配对记录已删除的设备：hello 只是能力握手，零副作用 ───────────────
+// #1117：撤销 = 删配对记录；无配对记录的 hello 不再被拒（与从未配对一致，
+// 见 authz_flow::unpaired_node_may_still_say_hello），但不刷新 last_seen、
+// 不写审计、不带 pairing_id。
 
 #[tokio::test(flavor = "multi_thread")]
-async fn revoked_hello_is_denied_and_touches_nothing() {
+async fn unpaired_hello_is_handshake_only_and_touches_nothing() {
     let dir = tempfile::tempdir().unwrap();
     let db = Db::open_in_memory().await.unwrap();
     let now = 1_800_000_000_000;
     let h = router_harness(dir.path(), db.clone(), now).await;
-    db.revoke(
+    db.remove_pairing(
         &h.client_tp.node_id().0,
-        storage::RevokedBy::Owner,
+        None,
+        DepartedBy::Owner,
         1_700_000_000_000,
     )
     .await
@@ -204,17 +220,23 @@ async fn revoked_hello_is_denied_and_touches_nothing() {
         .await
         .unwrap()
         .unwrap()
-        .last_seen;
+        .profile
+        .last_seen_at;
 
     let resp = h.call("hello", serde_json::json!({})).await;
-    assert!(!resp.ok, "revoked device must be denied even hello");
-    let after = db
+    assert!(resp.ok, "hello is a capability handshake: {resp:?}");
+    let hello: proto::Hello = serde_json::from_value(resp.result.unwrap()).unwrap();
+    assert_eq!(hello.pairing_id, None, "no pairing record ⇒ no pairing_id");
+    let row = db
         .get_device(&h.client_tp.node_id().0)
         .await
         .unwrap()
-        .unwrap()
-        .last_seen;
-    assert_eq!(after, before, "denied hello must not refresh last_seen");
+        .unwrap();
+    assert!(row.pairing.is_none());
+    assert_eq!(
+        row.profile.last_seen_at, before,
+        "hello without a pairing must not refresh last_seen"
+    );
     assert_eq!(
         connected_audits(&db, &h.client_tp.node_id().0).await.len(),
         0
@@ -299,18 +321,7 @@ async fn devices_list_presence_three_tiers() {
         ), // >5 天
         (vec![0xEE; 32], "从未上报".to_string(), None),
     ] {
-        db.upsert_device(&Device {
-            node_id: node,
-            name,
-            role: Role::Member,
-            paired_at: 1,
-            last_seen,
-            revoked: false,
-            revoked_at: None,
-            revoked_by: None,
-        })
-        .await
-        .unwrap();
+        pair(&db, &node, &name, last_seen).await;
     }
 
     let mut c = IpcClient::connect(&socket, &token_hex).await;
@@ -367,7 +378,7 @@ async fn devices_list_presence_three_tiers() {
         "从未上报 = 离线"
     );
 
-    db.revoke(&[0xAA; 32], storage::RevokedBy::Owner, now)
+    db.remove_pairing(&[0xAA; 32], None, DepartedBy::Owner, now)
         .await
         .unwrap();
     let status = c

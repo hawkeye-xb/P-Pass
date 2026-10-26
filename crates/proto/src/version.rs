@@ -10,11 +10,15 @@
 use crate::error::Reason;
 
 /// Current wire protocol version.
-pub const PROTO_VER: u16 = 2;
+///
+/// 3 (#1117): `pairing_epoch` → `pairing_id`, reason `epoch_mismatch` →
+/// `pairing_mismatch`, reason `revoked` removed (a deleted pairing record is
+/// `not_paired`).
+pub const PROTO_VER: u16 = 3;
 
 /// Oldest peer version this build still serves. Always equal to
 /// [`PROTO_VER`]: no dual-version window is kept.
-pub const MIN_SUPPORTED_VER: u16 = 2;
+pub const MIN_SUPPORTED_VER: u16 = 3;
 
 // No dual-version window: checked at compile time.
 const _: () = assert!(PROTO_VER == MIN_SUPPORTED_VER);

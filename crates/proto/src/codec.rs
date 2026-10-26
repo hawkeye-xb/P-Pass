@@ -85,7 +85,7 @@ mod tests {
             proto_ver: 1,
             capabilities: vec!["thumbnail.v1".into()],
             device_name: "test-device".into(),
-            pairing_epoch: None,
+            pairing_id: None,
             health: None,
         };
 

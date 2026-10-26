@@ -204,6 +204,23 @@ pub struct BundleInputs {
     pub desktop_log: LogPart,
     /// 常驻服务在线时它给的那几份（diag_events.json / devices.json / audit.json）。
     pub daemon_entries: Vec<(String, Vec<u8>)>,
+    /// 常驻服务在线时 `status` 的 [`STATUS_FIELDS`] 那几项，写成包里的 `status.json`。
+    pub daemon_status: Option<serde_json::Value>,
+}
+
+/// #1115：诊断包里 `status.json` 只收这几项——回归要核对的版本、状态、照片数、进程号，
+/// 不收路径、设备名这类要脱敏的东西。macOS 常驻 daemon 只认签名程序，回归脚本经签名的
+/// daemon 自己跑 `diag export` 取这份（daemon 角色本来就能调 `status` 与 `logs.export`，
+/// 不新增权限）。
+pub const STATUS_FIELDS: &[&str] = &["version", "state", "photo_count", "pid", "started_at"];
+
+/// 从 `status` 应答里挑出 [`STATUS_FIELDS`]（应答里没有的项不补）。
+pub fn status_summary(status: &serde_json::Value) -> serde_json::Value {
+    let picked: serde_json::Map<String, serde_json::Value> = STATUS_FIELDS
+        .iter()
+        .filter_map(|k| status.get(*k).map(|v| ((*k).to_string(), v.clone())))
+        .collect();
+    serde_json::Value::Object(picked)
 }
 
 const README: &str = "\
@@ -214,7 +231,8 @@ P-Pass 诊断包（导出时间见各文件内容）
                           daemon.log.1 是轮转出来的上一段
   1. daemon-stderr.log  ← 后台服务的 stderr：启动早期的报错、崩溃信息
                           （daemon-stdout.log 是同一来源的 stdout，macOS 才有）
-  2. versions.txt       ← App 与后台服务的版本号（版本装反是常见原因）
+  2. versions.txt       ← App 与后台服务的版本号（版本装反是常见原因）；
+                          status.json 是服务在线时的版本 / 状态 / 照片数 / 进程号
   3. config-summary.txt ← 照片库目录 / 监听地址
   4. log-sources.txt    ← 每份日志从哪来、收没收进来
   5. diag_events.json   ← 后台服务自己记的诊断事件流
@@ -267,6 +285,12 @@ pub fn build_bundle(i: &BundleInputs) -> Vec<(String, Vec<u8>)> {
         i.platform,
     );
     entries.push(("versions.txt".into(), versions.into_bytes()));
+    if let Some(status) = &i.daemon_status {
+        entries.push((
+            "status.json".into(),
+            serde_json::to_vec_pretty(status).unwrap_or_default(),
+        ));
+    }
     entries.push((
         "config-summary.txt".into(),
         config_summary(i.config_toml.as_deref(), home).into_bytes(),
@@ -437,21 +461,22 @@ pub enum DaemonCollection {
     /// 在线（version 已拿到或为 None），但三份 JSON 没拿到。
     LogsUnavailable {
         version: Option<String>,
+        /// `status` 应答里 [`STATUS_FIELDS`] 那几项（拿不到 = None）。
+        status: Option<serde_json::Value>,
         reason: String,
     },
     /// 三份完整拿到。
     Complete {
         version: Option<String>,
+        status: Option<serde_json::Value>,
         entries: Vec<(String, Vec<u8>)>,
     },
 }
 
-/// ipc.token 的候选位置，顺序与壳 `ipc::token_candidates_from` 一致。
+/// ipc.token 的候选位置（令牌模式：Windows / Linux），顺序与壳 `ipc::token_candidates_from` 一致。
+/// #1115：不再认 `PPF_DATA_DIR`——诊断导出连的是常驻 daemon，调用方的环境不许把它指向别处。
 pub fn token_candidates(platform_dir: &Path, home: &Path) -> Vec<PathBuf> {
     let mut v = Vec::new();
-    if let Ok(dir) = std::env::var("PPF_DATA_DIR") {
-        v.push(PathBuf::from(dir).join("ipc.token"));
-    }
     v.push(home.join("ppf-library/ipc.token"));
     v.push(platform_dir.join("ipc.token"));
     if let Some(val) = crate::config::read_config_data_dir(platform_dir) {
@@ -460,29 +485,49 @@ pub fn token_candidates(platform_dir: &Path, home: &Path) -> Vec<PathBuf> {
     v
 }
 
-struct DaemonHandle {
-    socket_name: String,
-    token: String,
+/// #1115：常驻 daemon 的候选端点。macOS：签名 socket（连上后反向校验服务端是签名
+/// daemon）；其余平台：令牌文件里记的端点。
+pub fn resident_endpoints(platform_dir: &Path, home: &Path) -> Vec<crate::ipc::PeerEndpoint> {
+    use platform::PlatformAdapter as _;
+    match platform::adapter().resident_ipc() {
+        platform::ResidentIpc::SignedSocket(path) => vec![crate::ipc::PeerEndpoint::Signed(path)],
+        platform::ResidentIpc::NamespacedWithToken => token_candidates(platform_dir, home)
+            .iter()
+            .filter_map(|path| {
+                let content = std::fs::read_to_string(path).ok()?;
+                let mut lines = content.lines();
+                let (name, token) = (lines.next()?, lines.next()?);
+                Some(crate::ipc::PeerEndpoint::Token {
+                    socket_name: name.trim().to_string(),
+                    token_hex: token.trim().to_string(),
+                })
+            })
+            .collect(),
+    }
+}
+
+pub(crate) struct DaemonHandle {
+    pub(crate) endpoint: crate::ipc::PeerEndpoint,
 }
 
 impl DaemonHandle {
     /// 一次请求 / 应答往返，整体有 [`IPC_TIMEOUT`] 上限。
     async fn call(&self, method: &str) -> Result<serde_json::Value, String> {
         use interprocess::local_socket::tokio::prelude::*;
-        use interprocess::local_socket::GenericNamespaced;
         use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
         let round_trip = async {
-            let name = self
-                .socket_name
-                .as_str()
-                .to_ns_name::<GenericNamespaced>()
-                .map_err(|e| ui_err("ui.err_socket_name", &[("err", &e)]))?;
-            let conn = interprocess::local_socket::tokio::Stream::connect(name)
+            let (conn, preamble) = self
+                .endpoint
+                .connect()
                 .await
                 .map_err(|e| ui_err("ui.err_connect", &[("err", &e)]))?;
             let (rx, mut tx) = conn.split();
             let req = serde_json::json!({ "id": method, "method": method, "params": {} });
-            tx.write_all(format!("{}\n{req}\n", self.token).as_bytes())
+            let wire = match preamble {
+                Some(token) => format!("{token}\n{req}\n"),
+                None => format!("{req}\n"),
+            };
+            tx.write_all(wire.as_bytes())
                 .await
                 .map_err(|e| ui_err("ui.err_send", &[("err", &e)]))?;
             let mut line = String::new();
@@ -511,26 +556,18 @@ impl DaemonHandle {
 
 /// 找**运行中的**常驻服务：每个候选都用一次 status 探活——死实例留下的
 /// 旧 token 文件不许劫持发现（与壳 `DaemonHandle::discover` 同规则）。
-async fn discover(candidates: &[PathBuf]) -> Result<DaemonHandle, String> {
+async fn discover(candidates: &[crate::ipc::PeerEndpoint]) -> Result<DaemonHandle, String> {
     let mut last_err = ui_err("ui.err_no_daemon", &[]);
-    for path in candidates {
-        let Ok(content) = std::fs::read_to_string(path) else {
-            continue;
-        };
-        let mut lines = content.lines();
-        let (Some(name), Some(token)) = (lines.next(), lines.next()) else {
-            continue;
-        };
+    for endpoint in candidates {
         let handle = DaemonHandle {
-            socket_name: name.trim().to_string(),
-            token: token.trim().to_string(),
+            endpoint: endpoint.clone(),
         };
         match handle.call("status").await {
             Ok(_) => return Ok(handle),
             Err(e) => {
                 last_err = ui_err(
                     "ui.err_daemon_unresponsive",
-                    &[("path", &path.display()), ("err", &e)],
+                    &[("path", &endpoint.label()), ("err", &e)],
                 );
             }
         }
@@ -538,44 +575,46 @@ async fn discover(candidates: &[PathBuf]) -> Result<DaemonHandle, String> {
     Err(last_err)
 }
 
-/// 向常驻服务要那三份。它把 zip 写在自己的库目录（`logs.export` 的现行
-/// 行为）；读进内存后，若那不是调用方要的输出位置，就把这份中间产物删掉
-/// ——导出位置只由 `--out` 决定，库目录里不留第二份包。
-async fn collect_from_daemon(candidates: &[PathBuf], out: &Path) -> DaemonCollection {
+/// 向常驻服务要那三份。#1122：`logs.export` 直接在应答里给三份 JSON，
+/// 常驻服务不在库目录写任何文件——导出位置只由 `--out` 决定。
+pub async fn collect_from_daemon(
+    candidates: &[crate::ipc::PeerEndpoint],
+    out: &Path,
+) -> DaemonCollection {
     let handle = match discover(candidates).await {
         Ok(h) => h,
         Err(e) => return DaemonCollection::Unreachable(e),
     };
     // DESK-31：版本号在 status 那一步就拿定，独立于三份日志要不要得到。
-    let version = handle
-        .call("status")
-        .await
-        .ok()
+    let status = handle.call("status").await.ok();
+    let version = status
+        .as_ref()
         .and_then(|v| v["version"].as_str().map(str::to_string));
-    let zip = match handle.call("logs.export").await {
-        Ok(v) => v["zip"].as_str().unwrap_or_default().to_string(),
+    let status = status.as_ref().map(status_summary);
+    let _ = out;
+    let reply = match handle.call("logs.export").await {
+        Ok(v) => v,
         Err(e) => {
             return DaemonCollection::LogsUnavailable {
                 version,
+                status,
                 reason: format!("后台服务拒绝了 logs.export：{e}"),
             }
         }
     };
-    let zip = PathBuf::from(zip);
-    match read_zip_entries(&zip) {
-        Ok(entries) => {
-            let same = match (zip.canonicalize(), out.canonicalize()) {
-                (Ok(a), Ok(b)) => a == b,
-                _ => zip == out,
-            };
-            if !same {
-                let _ = std::fs::remove_file(&zip);
-            }
-            DaemonCollection::Complete { version, entries }
-        }
-        Err(e) => DaemonCollection::LogsUnavailable {
+    match reply["entries"].as_object() {
+        Some(map) => DaemonCollection::Complete {
             version,
-            reason: format!("后台服务的日志包读不出来：{e}"),
+            status,
+            entries: map
+                .iter()
+                .filter_map(|(name, text)| Some((name.clone(), text.as_str()?.as_bytes().to_vec())))
+                .collect(),
+        },
+        None => DaemonCollection::LogsUnavailable {
+            version,
+            status,
+            reason: "后台服务的 logs.export 应答里没有日志条目（版本不一致？）".into(),
         },
     }
 }
@@ -662,12 +701,22 @@ pub fn gather(env: &ExportEnv, daemon: DaemonCollection) -> BundleInputs {
         ..Default::default()
     };
     match daemon {
-        DaemonCollection::Complete { version, entries } => {
+        DaemonCollection::Complete {
+            version,
+            status,
+            entries,
+        } => {
             inputs.daemon_version = version;
+            inputs.daemon_status = status;
             inputs.daemon_entries = entries;
         }
-        DaemonCollection::LogsUnavailable { version, reason } => {
+        DaemonCollection::LogsUnavailable {
+            version,
+            status,
+            reason,
+        } => {
             inputs.daemon_version = version;
+            inputs.daemon_status = status;
             inputs.daemon_logs_unavailable = Some(reason);
         }
         DaemonCollection::Unreachable(reason) => {
@@ -688,7 +737,7 @@ pub fn gather(env: &ExportEnv, daemon: DaemonCollection) -> BundleInputs {
 /// 那行 JSON：`{"zip":"<out>","daemon_reachable":bool}`。常驻服务不在线
 /// **不是**失败；只有 zip 写不出来才是。
 pub async fn export(env: &ExportEnv) -> Result<serde_json::Value, String> {
-    let candidates = token_candidates(&env.platform_dir, &env.home);
+    let candidates = resident_endpoints(&env.platform_dir, &env.home);
     let daemon = collect_from_daemon(&candidates, &env.out).await;
     let inputs = gather(env, daemon);
     write_zip(&env.out, &build_bundle(&inputs))?;
@@ -771,7 +820,7 @@ mod tests {
             home: "/Users/someone".into(),
             app_version: Some("0.4.0-test.2".into()),
             daemon_version: Some("P-Pass daemon 0.3.0".into()),
-            daemon_unreachable: Some("找不到运行中的 P-Pass 后台服务（ipc.token 不存在）".into()),
+            daemon_unreachable: Some("找不到运行中的 P-Pass 后台服务".into()),
             config_toml: Some(
                 "data_dir = \"/Users/someone/Pictures/lib\"\nbind_addr = \"0.0.0.0:41145\"\n"
                     .into(),
@@ -1230,6 +1279,30 @@ mod tests {
 
     /// gather 读的是平台目录下 logs/ 里的那几份，不碰别处；常驻服务不可达
     /// 时版本号是本程序自己的整串。
+    /// #1115：status.json 只收白名单里的几项；不在线就没有这份。
+    /// 反证：status_summary 改成原样返回 ⇒ 路径那项进包，红。
+    #[test]
+    fn status_json_carries_only_the_whitelisted_fields() {
+        let full = serde_json::json!({
+            "version": "1.2.3", "state": "idle", "photo_count": 46, "pid": 42, "started_at": 7,
+            "library_dir": "/Users/someone/Pictures/Lib", "msg_key": "x",
+        });
+        let summary = status_summary(&full);
+        let keys: Vec<&String> = summary.as_object().unwrap().keys().collect();
+        assert_eq!(keys.len(), STATUS_FIELDS.len(), "{summary}");
+        assert!(summary.get("library_dir").is_none());
+        let inputs = BundleInputs {
+            daemon_status: Some(summary),
+            ..Default::default()
+        };
+        let entries = build_bundle(&inputs);
+        let status = entry(&entries, "status.json").expect("在线时要有 status.json");
+        assert!(status.contains("\"photo_count\": 46"), "{status}");
+        assert!(!status.contains("Pictures"), "{status}");
+        let offline = build_bundle(&BundleInputs::default());
+        assert!(entry(&offline, "status.json").is_none());
+    }
+
     #[test]
     fn gather_reads_own_logs_dir_and_reports_own_version_when_offline() {
         let tmp = tempfile::tempdir().unwrap();

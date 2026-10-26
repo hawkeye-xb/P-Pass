@@ -69,6 +69,7 @@ public final class RollingFileLog: @unchecked Sendable {
         let dir = url.deletingLastPathComponent()
         let protection: [FileAttributeKey: Any] = [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication]
         try fm.createDirectory(at: dir, withIntermediateDirectories: true, attributes: protection)
+        _ = Self.excludeFromBackup(dir) // 目录被删后重建也要重设（只在新建目录时才会丢，幂等）
         if !fm.fileExists(atPath: url.path) {
             guard fm.createFile(atPath: url.path, contents: nil, attributes: protection) else {
                 throw CocoaError(.fileWriteUnknown)
@@ -79,6 +80,28 @@ public final class RollingFileLog: @unchecked Sendable {
         size = Int(end)
         handle = h
         return h
+    }
+
+    /// #1122：日志目录（只这一个目录，不碰它的上级）不进 iCloud / Finder 备份——日志是这台设备的诊断，不该随备份流到别处。
+    /// 建好目录、设 isExcludedFromBackup、读回确认，返回要记的一行（调用方写进日志）。
+    public func excludeDirectoryFromBackup() -> String {
+        let dir = url.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true,
+                                                 attributes: [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication])
+        return Self.excludeFromBackup(dir)
+    }
+
+    private static func excludeFromBackup(_ url: URL) -> String {
+        var dir = url
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        do {
+            try dir.setResourceValues(values)
+            let readBack = try dir.resourceValues(forKeys: [.isExcludedFromBackupKey]).isExcludedFromBackup
+            return "logs: \(dir.lastPathComponent) excluded from backup = \(readBack.map(String.init(describing:)) ?? "unknown")"
+        } catch {
+            return "logs: could not exclude \(dir.lastPathComponent) from backup: \(error)"
+        }
     }
 
     private func roll() throws {

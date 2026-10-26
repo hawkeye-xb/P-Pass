@@ -97,7 +97,7 @@ async fn wait_pending(ipc: &Arc<IpcServer>, want: usize) {
 }
 
 /// 验收标准 1（队列侧）：超过 TTL 的行不能被批准——confirm 返回失败，
-/// 不写 device 行、不轮换 pairing_epoch。
+/// 不写 device 行、不轮换 pairing_id。
 /// 反证靶子：去掉 confirm 的过期判定（`let stale = …` 恒 false），
 /// 本用例在 matches!(NotFound) 处变红。
 #[tokio::test(flavor = "multi_thread")]
@@ -110,7 +110,7 @@ async fn confirm_after_queue_ttl_fails_and_writes_nothing() {
     wait_pending(&ipc, 1).await;
 
     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-    let outcome = ipc.confirm(None, Some("超时未点的手机"), true);
+    let outcome = ipc.confirm(None, Some("超时未点的手机"), common::allow());
     assert!(
         matches!(outcome, ConfirmOutcome::Expired(_)),
         "过期行不得还能被批准（应报 Expired=点了个死请求）: {outcome:?}"
@@ -126,8 +126,8 @@ async fn confirm_after_queue_ttl_fails_and_writes_nothing() {
     assert!(verdict.is_err(), "对端请求必须落败: {verdict:?}");
     assert!(db.get_device(&[0xD5; 32]).await.unwrap().is_none());
     assert!(
-        db.pairing_epoch(&[0xD5; 32]).await.unwrap().is_none(),
-        "不轮换 pairing_epoch"
+        db.active_pairing(&[0xD5; 32]).is_none(),
+        "不轮换 pairing_id"
     );
 }
 
@@ -155,7 +155,7 @@ async fn click_on_dead_request_reports_expired_not_success() {
 
     // 队列侧那行还在 TTL 内、还"看得见"——但点它必须失败。
     assert_eq!(ipc.pending_names(), vec!["先放弃的手机".to_string()]);
-    let outcome = ipc.confirm(None, Some("先放弃的手机"), true);
+    let outcome = ipc.confirm(None, Some("先放弃的手机"), common::allow());
     assert!(
         matches!(outcome, ConfirmOutcome::Expired(_)),
         "send 的 Err 必须暴露成失败，不许假成功: {outcome:?}"
@@ -201,7 +201,7 @@ async fn second_scan_replaces_the_stale_row_of_the_same_phone() {
     assert!(v1.is_err(), "被顶掉的旧请求必须落败: {v1:?}");
 
     // 批准命中第二次。
-    let outcome = ipc.confirm(None, Some("第二次扫码"), true);
+    let outcome = ipc.confirm(None, Some("第二次扫码"), common::allow());
     assert!(matches!(outcome, ConfirmOutcome::Decided(_)), "{outcome:?}");
     let v2 = tokio::time::timeout(std::time::Duration::from_secs(5), second)
         .await
@@ -209,7 +209,7 @@ async fn second_scan_replaces_the_stale_row_of_the_same_phone() {
         .unwrap();
     assert!(v2.is_ok(), "眼前这次扫码正常批准成功: {v2:?}");
     let row = db.get_device(&[0xD7; 32]).await.unwrap().expect("row");
-    assert_eq!(row.name, "第二次扫码");
+    assert_eq!(row.profile.name, "第二次扫码");
 }
 
 /// 验收标准 2 的另一半：按 node_id 定位在多行队列里精确命中那一台
@@ -220,10 +220,12 @@ async fn confirm_by_node_id_hits_the_right_row_among_two_phones() {
     let (db, pairing, ipc) = start_pairing_harness(dir.path(), "dev05-two", 600_000, 30_000).await;
 
     let a = knock(&pairing, [0xA5; 12], 0xE5, "爸爸的手机");
+    // #1118：刷新二维码会作废之前所有令牌——A 的请求入队后再放 B，免得 B 的 start 抢在 A 提交前清掉它。
+    wait_pending(&ipc, 1).await;
     let b = knock(&pairing, [0xA6; 12], 0xE6, "妈妈的手机");
     wait_pending(&ipc, 2).await;
 
-    let outcome = ipc.confirm(Some(&[0xE6; 32]), None, true);
+    let outcome = ipc.confirm(Some(&[0xE6; 32]), None, common::allow());
     assert!(
         matches!(&outcome, ConfirmOutcome::Decided(n) if n == "妈妈的手机"),
         "{outcome:?}"
@@ -240,7 +242,7 @@ async fn confirm_by_node_id_hits_the_right_row_among_two_phones() {
     );
 
     // 收尾：第一条拒绝掉，任务不悬空。
-    let outcome = ipc.confirm(Some(&[0xE5; 32]), None, false);
+    let outcome = ipc.confirm(Some(&[0xE5; 32]), None, daemon::PairDecision::Reject);
     assert!(matches!(outcome, ConfirmOutcome::Decided(_)), "{outcome:?}");
     let va = tokio::time::timeout(std::time::Duration::from_secs(5), a)
         .await
@@ -267,7 +269,7 @@ async fn pending_summary_carries_request_time_and_expired_flag() {
     assert_eq!(row["expired"], false, "新鲜行不得标失效");
 
     // 收尾：拒绝掉，任务不悬空。
-    let outcome = ipc.confirm(Some(&[0xE7; 32]), None, false);
+    let outcome = ipc.confirm(Some(&[0xE7; 32]), None, daemon::PairDecision::Reject);
     assert!(matches!(outcome, ConfirmOutcome::Decided(_)), "{outcome:?}");
     let v = tokio::time::timeout(std::time::Duration::from_secs(5), handle)
         .await
@@ -292,7 +294,7 @@ async fn queue_head_fallback_respects_sweep_and_replacement() {
     wait_pending(&ipc, 2).await;
 
     // 无参 confirm → 队首（A）——既有语义。
-    let outcome = ipc.confirm(None, None, false);
+    let outcome = ipc.confirm(None, None, daemon::PairDecision::Reject);
     assert!(
         matches!(&outcome, ConfirmOutcome::Decided(n) if n == "队首手机A"),
         "{outcome:?}"
@@ -319,7 +321,7 @@ async fn queue_head_fallback_respects_sweep_and_replacement() {
         "顶替后队首分支面对的应是新行: {:?}",
         ipc.pending_names()
     );
-    let outcome = ipc.confirm(None, None, true);
+    let outcome = ipc.confirm(None, None, common::allow());
     assert!(
         matches!(&outcome, ConfirmOutcome::Decided(n) if n == "第二次扫码的B"),
         "{outcome:?}"

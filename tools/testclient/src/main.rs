@@ -197,20 +197,29 @@ async fn pair(qr: &str, name: &str, identity: &str) -> anyhow::Result<String> {
     let tp = bind_endpoint(identity).await?;
     // QR 自带地址：扫码即连，不依赖任何发现服务。
     tp.add_peer(link.peer_addr.clone());
+    // #1118：与手机同一套口令与编码——令牌按 hex 解成字节，A = 本机 NodeId，B = 二维码里的电脑。
+    let token = token.trim().to_string();
+    let token_bytes = unhex(&token).ok_or_else(|| anyhow::anyhow!("配对令牌不是 hex：{token}"))?;
+    let code = pair_pake::generate_code().map_err(|e| anyhow::anyhow!("生成验证码失败：{e}"))?;
+    let (phone, msg_a) =
+        pair_pake::PhoneStart::start(&code, &token_bytes, tp.node_id().0, daemon.0)
+            .map_err(|e| anyhow::anyhow!("PAKE 起步失败：{e}"))?;
+    let mut phone = Some(phone);
+    let mut check: Option<(pair_pake::PhoneConfirm, String)> = None;
     let mut stream = connect_ctrl(&tp, daemon).await?;
     let req = proto::Req {
         id: "pair".into(),
         method: "pair.request".into(),
         params: serde_json::to_value(proto::PairRequest {
-            token: token.trim().into(),
+            token,
             device_name: name.into(),
             role: "member".into(),
             // #1050：daemon 只认「先回执、再轮询 pair.status」这一种配对形状。
             ack_then_poll: true,
+            pake_a: hex(&msg_a),
         })?,
         ..Default::default()
     };
-    println!("已发送配对请求，等待存储端上的确认……");
     let resp = roundtrip(&mut stream, &req).await?;
     if let Some(err) = resp.error {
         anyhow::bail!(
@@ -220,6 +229,11 @@ async fn pair(qr: &str, name: &str, identity: &str) -> anyhow::Result<String> {
         );
     }
     let submitted: proto::PairSubmitted = serde_json::from_value(resp.result.unwrap_or_default())?;
+    // 只在申请被收下后才给出验证码（与手机一致）；宿主脚本从这一行读码去电脑上确认。
+    println!("PAIR_CODE={code} node={}", tp.node_id());
+    println!("已发送配对请求：在存储端输入验证码 {code}……");
+    use std::io::Write as _;
+    let _ = std::io::stdout().flush();
     let deadline = std::time::Instant::now()
         + std::time::Duration::from_millis(submitted.ttl_ms.max(0) as u64 + 5_000);
     let accepted = loop {
@@ -231,17 +245,59 @@ async fn pair(qr: &str, name: &str, identity: &str) -> anyhow::Result<String> {
             })?,
             ..Default::default()
         };
+        // #1123：一条流一个请求（daemon ctrl 契约；roundtrip 发完即半关发送端）——每次轮询新开一条。
+        let mut stream = connect_ctrl(&tp, daemon).await?;
         let reply = roundtrip(&mut stream, &poll).await?;
         if let Some(err) = reply.error {
             anyhow::bail!("查询配对结果失败（{} / {}）", err.code(), err.reason());
         }
         let status: proto::PairStatusReply =
             serde_json::from_value(reply.result.unwrap_or_default())?;
-        match status.state {
-            proto::PairStatusState::Accepted => break status.accepted.unwrap_or_default(),
-            proto::PairStatusState::Pending if std::time::Instant::now() < deadline => {
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // 业主输完码：电脑回 pake_b → 本机 finish 出 cA，发 pair.confirm（回复丢了就下一轮重发同一个 cA）。
+        let status = match (&status.pake_b, phone.take()) {
+            (Some(pake_b), Some(start)) => {
+                let msg_b = unhex(pake_b).ok_or_else(|| anyhow::anyhow!("pake_b 不是 hex"))?;
+                let (c, confirm_a) = start
+                    .finish(&msg_b)
+                    .map_err(|e| anyhow::anyhow!("电脑的 PAKE 消息无效：{e}"))?;
+                check = Some((c, hex(&confirm_a)));
+                pair_confirm(
+                    &tp,
+                    daemon,
+                    &submitted.request_id,
+                    &check.as_ref().unwrap().1,
+                )
+                .await?
             }
+            (_, start) => {
+                phone = start;
+                match (&check, status.state) {
+                    (Some((_, confirm_a)), proto::PairStatusState::Pending) => {
+                        pair_confirm(&tp, daemon, &submitted.request_id, confirm_a).await?
+                    }
+                    _ => status,
+                }
+            }
+        };
+        match status.state {
+            proto::PairStatusState::Accepted => {
+                // 电脑也得证明它知道这个码，否则不认这次加入。
+                let (c, _) = check
+                    .take()
+                    .ok_or_else(|| anyhow::anyhow!("未交换验证码就被接受"))?;
+                let confirm_b = status
+                    .confirm_b
+                    .as_deref()
+                    .and_then(unhex)
+                    .ok_or_else(|| anyhow::anyhow!("电脑没有给出密钥确认"))?;
+                c.verify(&confirm_b)
+                    .map_err(|e| anyhow::anyhow!("电脑的密钥确认不对：{e}"))?;
+                break status.accepted.unwrap_or_default();
+            }
+            proto::PairStatusState::Pending if std::time::Instant::now() < deadline => {
+                tokio::time::sleep(std::time::Duration::from_millis(1_000)).await;
+            }
+            proto::PairStatusState::Failed => anyhow::bail!("验证码不对，这次申请已作废。"),
             other => anyhow::bail!("配对被拒绝（{other:?}）——令牌过期、已用过，或 owner 拒绝了。"),
         }
     };
@@ -255,6 +311,47 @@ async fn pair(qr: &str, name: &str, identity: &str) -> anyhow::Result<String> {
         accepted.storage_device_name,
         tp.node_id()
     ))
+}
+
+/// #1118：把本机的密钥确认交给电脑；码错是终局（`pair_code_wrong`）。
+async fn pair_confirm(
+    tp: &transport::IrohTransport,
+    daemon: transport::NodeId,
+    request_id: &str,
+    confirm_a: &str,
+) -> anyhow::Result<proto::PairStatusReply> {
+    let req = proto::Req {
+        id: "pair-confirm".into(),
+        method: "pair.confirm".into(),
+        params: serde_json::to_value(proto::PairConfirmRequest {
+            request_id: request_id.into(),
+            confirm_a: confirm_a.into(),
+        })?,
+        ..Default::default()
+    };
+    let mut stream = connect_ctrl(tp, daemon).await?;
+    let reply = roundtrip(&mut stream, &req).await?;
+    if let Some(err) = reply.error {
+        if *err.reason() == proto::Reason::PairCodeWrong {
+            anyhow::bail!("验证码不对，这次申请已作废。");
+        }
+        anyhow::bail!("提交验证结果失败（{} / {}）", err.code(), err.reason());
+    }
+    Ok(serde_json::from_value(reply.result.unwrap_or_default())?)
+}
+
+fn hex(b: &[u8]) -> String {
+    b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+fn unhex(s: &str) -> Option<Vec<u8>> {
+    if !s.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
+        .collect()
 }
 
 /// T-032 剧本：生成 N 个混合文件（每 10 个 1 个重复内容），本机作为

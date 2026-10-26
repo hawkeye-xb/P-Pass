@@ -29,6 +29,20 @@ use std::path::PathBuf;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod data_migration;
 
+// #1155：从已验签的同一份字节里读 PE 版本（Windows 更新防降级）。纯字节解析、无平台 API，
+// 三个平台都编译并跑单测；只有 Windows 的更新路径会调用它。
+#[cfg_attr(not(windows), allow(dead_code))]
+mod pe_version;
+
+// #1121：代码签名要求（安装更新前校验团队；#1115 的 IPC 对端校验共用要求串）。
+mod code_signature;
+// #1109：身份私钥存取端口（不在 cfg 里，daemon 的判定与单测三平台都跑）。
+mod identity_key;
+// #1115：本机 IPC 对端身份（macOS 按 audit token + 代码签名；其他平台明确「不支持」）。
+mod local_peer;
+// #1109：macOS 的身份私钥存放处——data protection 钥匙串。
+#[cfg(target_os = "macos")]
+mod keychain;
 #[cfg(target_os = "macos")]
 mod macos;
 // QA-09 迁移（#211）：macOS 与 Linux 共享的 unix 实现。迁过来的分叉里有
@@ -38,11 +52,33 @@ mod signal;
 mod unix;
 #[cfg(windows)]
 mod windows;
+// #1157：D4 / §5.2 的 ProgramData 正本存放与目录 ACL 基础件。
+#[cfg(windows)]
+pub mod windows_programdata;
+#[cfg(windows)]
+pub use windows_programdata::{ProgramDataDir, ProgramDataStore};
 // #287：只给测试用的建链能力。默认不编译，见该模块顶部说明。
 #[cfg(feature = "test-support")]
 pub mod test_support;
 
+#[cfg(target_os = "macos")]
+pub use code_signature::verify_app_bundle;
+pub use code_signature::{
+    code_requirement, newer_than_current, verify_update_package, UpdatePackageCheck, DAEMON_APP_ID,
+    DESKTOP_APP_ID, DEVELOPER_TEAM_ID,
+};
 pub use data_migration::DataDirMigration;
+pub use identity_key::{IdentityKeyHome, IdentityKeyStore, SecretBlobStore};
+pub use local_peer::{verify_local_peer, LocalPeerSource, PeerCheck, PeerRole};
+
+/// #1115：常驻 daemon 的本机 IPC 形态（[`PlatformAdapter::resident_ipc`]）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResidentIpc {
+    /// 命名空间端点（`ppf-<NodeId 前 8 位>`）+ 令牌文件。
+    NamespacedWithToken,
+    /// 这个路径上的 Unix 域套接字（父目录 0700），按对端代码签名认证，没有令牌。
+    SignedSocket(std::path::PathBuf),
+}
 pub use signal::{stop_signal, StopRequest};
 
 #[cfg(target_os = "macos")]
@@ -327,6 +363,31 @@ pub fn reconcile_decision(
 /// daemon 与其他核心 crate **只依赖这个 trait**（经 [`adapter`] 拿实现）。
 /// 托管类能力（开机自启、服务管理器、结束进程、安装位置）在 [`HostingAdapter`]，
 /// 只给桌面发行层用；门禁 G3 拦 `crates/` 引用它。两个 trait 的实现都留在本 crate。
+/// #1118：[`PlatformAdapter::computer_name`] 的 POSIX 默认实现。
+fn posix_hostname() -> Option<String> {
+    #[cfg(unix)]
+    {
+        let mut buf = [0u8; 256];
+        // SAFETY: 缓冲区在本栈上、长度如实传入；POSIX 允许截断时不带 NUL，所以末字节留作 NUL。
+        let rc = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len() - 1) };
+        if rc != 0 {
+            return None;
+        }
+        let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        clean_computer_name(&String::from_utf8_lossy(&buf[..end]))
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
+/// #1118：系统给的名字去掉首尾空白，空串算读不到。
+pub fn clean_computer_name(raw: &str) -> Option<String> {
+    let t = raw.trim();
+    (!t.is_empty()).then(|| t.to_owned())
+}
+
 pub trait PlatformAdapter: Send + Sync {
     // 电源（MVP 尽力而为）
     fn assert_awake(&self) -> Result<AwakeGuard>;
@@ -369,6 +430,15 @@ pub trait PlatformAdapter: Send + Sync {
     /// 有效。壳与 daemon 不许自己读这些环境变量（门禁 G1）。
     fn home_dir(&self) -> Option<PathBuf> {
         std::env::home_dir().filter(|p| !p.as_os_str().is_empty())
+    }
+
+    /// #1118：这台电脑在系统里的名字（用户在系统设置里起的那个），配对时给手机当作
+    /// 方便辨认的标签。`None` = 读不到。可能含用户真名：调用方不得写进日志。
+    ///
+    /// macOS 读「电脑名称」（`SCDynamicStoreCopyComputerName`），Windows 读计算机名
+    /// （`GetComputerNameExW`）。默认实现是 POSIX `gethostname`（无桌面的 Linux）。
+    fn computer_name(&self) -> Option<String> {
+        posix_hostname()
     }
 
     /// #1043（B10）：当前用户的「图片」目录——新建照片库默认放在它下面。
@@ -485,6 +555,42 @@ pub trait PlatformAdapter: Send + Sync {
     fn capture_unattached_stderr(&self, data_dir: &std::path::Path) -> Applied {
         let _ = data_dir;
         Applied::NotApplicable
+    }
+
+    /// #1109：daemon 身份私钥放在哪。默认 [`IdentityKeyHome::DataDirFile`]
+    /// （数据目录里的 `.ppf/identity.key`，Windows / Linux 维持现状）；macOS
+    /// 返回 data protection 钥匙串。
+    fn identity_key_home(&self) -> IdentityKeyHome {
+        IdentityKeyHome::DataDirFile
+    }
+
+    /// #1115：常驻 daemon 的本机 IPC 端点与认证方式。默认（Windows / Linux）是命名空间
+    /// 端点 + 每次启动随机令牌（令牌文件在数据目录）；macOS 是仅本用户可访问目录里的
+    /// Unix 域套接字，按对端代码签名认人，没有令牌。
+    fn resident_ipc(&self) -> ResidentIpc {
+        ResidentIpc::NamespacedWithToken
+    }
+
+    /// #1115：建一个只有本用户能进的目录（放 socket / 令牌用）。已存在则核对属主并收紧
+    /// 权限，属主不是本用户就报错。默认实现：只建目录（Windows 的权限模型另议）。
+    fn prepare_private_dir(&self, path: &std::path::Path) -> Result<()> {
+        std::fs::create_dir_all(path).map_err(|source| PlatformError::Io {
+            action: "prepare_private_dir",
+            source,
+        })
+    }
+
+    /// #1115：配对记录（设备白名单）正本放在哪。`None`（默认，Windows / Linux）
+    /// = 库本身就是正本；macOS 返回钥匙串条目（与身份私钥同一访问组）。
+    fn pairing_store(&self) -> Option<Box<dyn SecretBlobStore>> {
+        None
+    }
+
+    /// #1115：照片库位置的正本放在哪。`None`（默认，Windows / Linux）= 平台 config.toml
+    /// 就是正本；macOS 返回钥匙串条目——config.toml 谁都能改，库位置只认签名 daemon 写进
+    /// 钥匙串的值，config.toml 那份只给人看。
+    fn library_store(&self) -> Option<Box<dyn SecretBlobStore>> {
+        None
     }
 
     /// QA-09 迁移（#211）：把文件权限收紧到「只有属主可读写」。
@@ -738,6 +844,15 @@ pub trait HostingAdapter: Send + Sync {
     /// 每个系统都成立，所以它是个诚实的默认值，不是猜的。
     fn daemon_executable_name(&self) -> &'static str {
         DAEMON_EXECUTABLE_STEM
+    }
+
+    /// 内置 daemon 可执行文件的位置，按桌面壳自己的可执行文件推出来。
+    ///
+    /// 默认是壳的同目录（Windows / Linux 的 sidecar）。macOS 的 daemon 是嵌套
+    /// helper App（#1110），见 macOS 实现。壳里所有「找内置 daemon」的地方都走
+    /// 这一个函数，布局只在平台层写一次。路径形状不对（没有父目录）= `None`。
+    fn bundled_daemon_path(&self, shell_exe: &std::path::Path) -> Option<std::path::PathBuf> {
+        Some(shell_exe.parent()?.join(self.daemon_executable_name()))
     }
 
     /// 结束正在跑的内置 daemon 进程（B7，#1043：两平台同一套语义）。
@@ -1045,6 +1160,21 @@ impl PlatformAdapter for HeadlessAdapter {
         base.join("p-pass")
     }
 
+    // #1115：与 macOS 同一份 unix 实现（0700、属主必须是本用户）。
+    fn prepare_private_dir(&self, path: &std::path::Path) -> Result<()> {
+        #[cfg(unix)]
+        {
+            crate::unix::prepare_private_dir(path)
+        }
+        #[cfg(not(unix))]
+        {
+            std::fs::create_dir_all(path).map_err(|source| PlatformError::Io {
+                action: "prepare_private_dir",
+                source,
+            })
+        }
+    }
+
     // QA-09 迁移（#211）：headless 平台实际上就是 Linux（unix），四个能力
     // 直接走共享的 unix 实现。这里的 cfg 在 platform crate 内部，是 B.2
     // 规则的自留地。`not(unix)` 那半保持诚实的「没实现」，不编数字。
@@ -1256,7 +1386,7 @@ mod tests {
         // KeepAlive 会把它无限复活成 churn）。plist 必须是
         // SuccessfulExit=false 语义——成功退出不重拉、崩溃/被杀才复活。
         let plist = macos::agent_plist(
-            std::path::Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon"),
+            std::path::Path::new("/Applications/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon"),
             &macos::daemon_log_paths_in(std::path::Path::new("/var/ppf")),
         );
         assert!(
@@ -1278,10 +1408,12 @@ mod tests {
     #[test]
     fn reconcile_decision_covers_all_four_shapes() {
         use AutostartRegistration::{Absent, At, Unreadable};
-        let expected = std::path::Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon");
+        let expected = std::path::Path::new(
+            "/Applications/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon",
+        );
         // 真机实测值（#604 挂号现象）：登记被钉在备份目录里的旧 App 上。
         let stale = std::path::Path::new(
-            "/Users/lizhaowen/P-Pass-Backups/2026-09-30-before-0.6.2/old-app/P-Pass.app/Contents/MacOS/ppf-daemon",
+            "/Users/lizhaowen/P-Pass-Backups/2026-09-30-before-0.6.2/old-app/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon",
         );
 
         assert_eq!(
@@ -1352,7 +1484,9 @@ mod tests {
     /// 反证：去掉 `reconcile_autostart` 里的内容比对 → 第一条断言得到 Unchanged，红。
     #[test]
     fn reconcile_refreshes_a_registration_whose_content_is_stale() {
-        let exe = std::path::Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon");
+        let exe = std::path::Path::new(
+            "/Applications/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon",
+        );
         let stale = FakeHosting {
             registration: AutostartRegistration::At(exe.into()),
             current: false,
@@ -1392,14 +1526,16 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_plist_round_trips_its_program_argument() {
-        let exec = std::path::Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon");
+        let exec = std::path::Path::new(
+            "/Applications/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon",
+        );
         let text = macos::agent_plist(
             exec,
             &macos::daemon_log_paths_in(std::path::Path::new("/var/ppf")),
         );
         assert_eq!(
             macos::plist_program_argument(&text).as_deref(),
-            Some("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon"),
+            Some("/Applications/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon"),
             "生成的 plist 必须能被自己的解析器读回同一个路径"
         );
         // 反证：把 ProgramArguments 段换掉，必须读不出——否则「读到了」可能只是巧合。
@@ -1418,7 +1554,9 @@ mod tests {
     fn macos_unreadable_registration_is_not_mistaken_for_absent() {
         use macos::registration_from_read as classify;
         use AutostartRegistration::{Absent, At, Unreadable};
-        let exec = std::path::Path::new("/Applications/P-Pass.app/Contents/MacOS/ppf-daemon");
+        let exec = std::path::Path::new(
+            "/Applications/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon",
+        );
         let good = macos::agent_plist(
             exec,
             &macos::daemon_log_paths_in(std::path::Path::new("/var/ppf")),
@@ -1450,7 +1588,7 @@ mod tests {
     #[test]
     fn macos_write_atomic_replaces_whole_file_and_leaves_no_temp() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("com.p-pass.daemon.plist");
+        let path = dir.path().join("com.hawkeyexb.ppass.desktop.daemon.plist");
         std::fs::write(&path, "half a plist <key>Progr").unwrap();
 
         macos::write_atomic(&path, "complete").unwrap();
@@ -1460,7 +1598,11 @@ mod tests {
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .collect();
-        assert_eq!(names, vec!["com.p-pass.daemon.plist"], "临时文件不许残留");
+        assert_eq!(
+            names,
+            vec!["com.hawkeyexb.ppass.desktop.daemon.plist"],
+            "临时文件不许残留"
+        );
     }
 
     /// UPD-06 (#616)：壳是**登录项**，但**不是守卫**。
@@ -1493,7 +1635,7 @@ mod tests {
         // 能力要真的暴露出来：调用方靠它决定走"系统重启"还是退化到自己重启。
         assert_eq!(
             HostingAdapter::shell_agent_label(&macos::MacosAdapter::new()),
-            Some("com.p-pass.shell")
+            Some("com.hawkeyexb.ppass.desktop.shell")
         );
     }
 
@@ -1575,31 +1717,31 @@ mod tests {
 
         // 稳定：系统级 / 用户级安装
         assert!(allowed(&p(
-            "/Applications/P-Pass.app/Contents/MacOS/ppf-daemon"
+            "/Applications/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon"
         )));
         assert!(allowed(&p(&format!(
-            "{}/Applications/P-Pass.app/Contents/MacOS/ppf-daemon",
+            "{}/Applications/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon",
             std::env::var("HOME").unwrap_or_default()
         ))));
 
         // 一次性 / 不稳定：一条都不许过（每行都是真机上真实存在的形态）
         assert!(
-            !allowed(&p("/Volumes/P-Pass/P-Pass.app/Contents/MacOS/ppf-daemon")),
+            !allowed(&p("/Volumes/P-Pass/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon")),
             "dmg 挂载点"
         );
         assert!(
             !allowed(&p(&format!(
-                "{}/Downloads/P-Pass.app/Contents/MacOS/ppf-daemon",
+                "{}/Downloads/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon",
                 std::env::var("HOME").unwrap_or_default()
             ))),
             "「下载」目录直接点开"
         );
         assert!(
-            !allowed(&p("/private/var/folders/xy/abc/T/AppTranslocation/1234-5678/d/P-Pass.app/Contents/MacOS/ppf-daemon")),
+            !allowed(&p("/private/var/folders/xy/abc/T/AppTranslocation/1234-5678/d/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon")),
             "App Translocation 随机路径"
         );
         assert!(
-            !allowed(&p("/Users/lizhaowen/P-Pass-Backups/2026-09-30-before-0.6.2/old-app/P-Pass.app/Contents/MacOS/ppf-daemon")),
+            !allowed(&p("/Users/lizhaowen/P-Pass-Backups/2026-09-30-before-0.6.2/old-app/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon")),
             "备份副本（本卡的原始现场）"
         );
         assert!(
@@ -1615,11 +1757,48 @@ mod tests {
     #[test]
     fn gate_precedes_registration_read_and_write() {
         let adapter = macos::MacosAdapter::new();
-        let dmg = std::path::Path::new("/Volumes/P-Pass/P-Pass.app/Contents/MacOS/ppf-daemon");
+        let dmg = std::path::Path::new(
+            "/Volumes/P-Pass/P-Pass.app/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon",
+        );
         assert_eq!(
             adapter.reconcile_autostart(dmg).expect("reconcile"),
             AutostartReconcile::SkippedUnstableLocation,
             "从 dmg 挂载点启动时绝不许改写开机自启登记"
         );
+    }
+}
+
+#[cfg(test)]
+mod computer_name_tests {
+    use super::*;
+
+    #[test]
+    fn blank_names_count_as_unreadable() {
+        assert_eq!(clean_computer_name("  "), None);
+        assert_eq!(clean_computer_name(""), None);
+        assert_eq!(
+            clean_computer_name(" 客厅的 Mac \n").as_deref(),
+            Some("客厅的 Mac")
+        );
+    }
+
+    /// #1118：与系统自带工具读到的同一个名字（`scutil --get ComputerName` 是
+    /// 「关于本机」里那个名称的命令行出口）。
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_reads_the_same_name_as_scutil() {
+        let out = std::process::Command::new("scutil")
+            .args(["--get", "ComputerName"])
+            .output()
+            .expect("scutil");
+        let expected = clean_computer_name(&String::from_utf8_lossy(&out.stdout));
+        assert!(expected.is_some(), "this Mac has no ComputerName");
+        assert_eq!(adapter().computer_name(), expected);
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn posix_reads_the_hostname() {
+        assert!(adapter().computer_name().is_some());
     }
 }

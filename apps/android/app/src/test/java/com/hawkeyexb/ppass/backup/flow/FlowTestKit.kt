@@ -54,7 +54,7 @@ class FakeDelivery : ItemDelivery {
         return next(request)
     }
 
-    override suspend fun discardPartial(orderId: Long, pairingEpoch: PairingEpoch) {
+    override suspend fun discardPartial(orderId: Long, pairingId: PairingId) {
         discarded += orderId
     }
 
@@ -66,7 +66,7 @@ class FakeDelivery : ItemDelivery {
 
     companion object {
         fun confirmed(r: DeliveryRequest): DeliveryOutcome = DeliveryOutcome.Confirmed(
-            CompletionReceipt(r.orderId, "receipt-${r.orderId}", r.pairingEpoch, r.contentHash, r.leaseToken),
+            CompletionReceipt(r.orderId, "receipt-${r.orderId}", r.pairingId, r.contentHash, r.leaseToken),
         )
     }
 }
@@ -273,7 +273,7 @@ internal class Rig(
     val control = FakeControl()
     val foreground = FakeForeground(control).also { it.clock = { test.testScheduler.currentTime } }
     val scheduler = FakeScheduler()
-    var probeResult: ProbeResult = ProbeResult.Reachable("e1")
+    var probeResult: ProbeResult = ProbeResult.Reachable()
     var probes = 0
 
     /** 探测开始时调用（可挂起：用来观察检查阶段）。 */
@@ -287,7 +287,7 @@ internal class Rig(
 
     /** #762：非 null 时由它给条件（可以在第 N 次读取时抛异常，模拟一轮跑到一半的意外错误）。 */
     var conditionsHook: (() -> Conditions)? = null
-    var epoch: PairingEpoch? = PairingEpoch("e1")
+    var pid: PairingId? = PairingId("e1")
 
     /** #459：完整相册权限（false = 部分授权 / 没授权：「查不到」不能当「被删了」）。 */
     var fullMediaAccess = true
@@ -330,7 +330,7 @@ internal class Rig(
         conditions = { conditionsHook?.invoke() ?: conditions },
         inScope = media::inScope,
         mediaAbsenceTrusted = { fullMediaAccess },
-        pairingEpoch = { epoch },
+        pairingId = { pid },
         scope = scope,
         io = io,
         log = FlowLogger { logs += it },

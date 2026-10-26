@@ -22,6 +22,12 @@ final class GoldenContractTests: XCTestCase {
         "snapshots__pair_status_request": roundtrip(PairStatusRequest.self),
         "snapshots__pair_status_reply_accepted": roundtrip(PairStatusReply.self),
         "snapshots__pair_status_reply_denied": roundtrip(PairStatusReply.self),
+        // #1118 配对验证码（proto v3）
+        "snapshots__pair_request_pake": roundtrip(PairRequest.self),
+        "snapshots__pair_status_reply_pake_b": roundtrip(PairStatusReply.self),
+        "snapshots__pair_confirm_request": roundtrip(PairConfirmRequest.self),
+        "snapshots__pair_status_reply_confirmed": roundtrip(PairStatusReply.self),
+        "snapshots__pair_status_reply_failed": roundtrip(PairStatusReply.self),
         "snapshots__req_envelope": roundtrip(Req.self),
         "snapshots__req_envelope_json": roundtrip(Req.self),
         "snapshots__resp_ok_envelope": roundtrip(Resp.self),
@@ -60,6 +66,8 @@ final class GoldenContractTests: XCTestCase {
         "snapshots__resp_err_v1_shim_pair": roundtrip(Resp.self),
         "snapshots__flow_failed_push": roundtrip(FlowFailedPush.self),
         "snapshots__reasons_registry": roundtrip([RespError].self),
+        // #1122 / #1119：连接层关闭码注册表（取值核对见 DesktopCloseCodesContractTests）
+        "snapshots__close_codes_registry": roundtrip([CloseCodeEntry].self),
     ]
 
     /// decode → encode，并确认再 decode 一次与第一次相等（往返稳定）。
@@ -148,4 +156,10 @@ enum JSONDiff {
             if g != e { out.append("\(path): golden=\(g) swift=\(e)") }
         }
     }
+}
+
+/// `close_codes_registry` 金样的一行（只用于测试：核对 `DesktopCloseCodes`）。
+struct CloseCodeEntry: Codable, Equatable {
+    var code: UInt64
+    var reason: String
 }

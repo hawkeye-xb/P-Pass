@@ -48,19 +48,48 @@ struct KeychainIdentityStore: IdentitySecretStore {
     }
 }
 
+/// 控制面调用的底座（生产 = [ControlPlane]；测试里换成脚本化的假实现）。
+protocol PeerCallPlane: Sendable {
+    func call(peerToken: String, method: String, paramsJSON: Data, timeoutMs: UInt64?) async throws -> Data
+    func stream(peerToken: String, method: String, paramsJSON: Data, onFrame: @escaping @Sendable (Data) throws -> Void) async throws
+}
+
+/// #1122：FFI 的 `FfiError.PeerClosed`（连接被经认证的对端用应用关闭码关掉）→ 核心层的「未配对」判定。
+/// 只有关闭方 == 配对记录里的电脑、且关闭码是「未配对」（401 / 410）才翻成 [DesktopRejected]；
+/// 其它（别的关闭码、别的关闭方、超时、网络断、本地关闭等任何别的错误）原样返回，由调用方按「连不上」处理。
+func translateDesktopClose(_ error: Error, recordedDaemonNodeId: String?, method: String) -> Error {
+    guard case let FfiError.PeerClosed(nodeId, code) = error else { return error }
+    let closed = PeerClosedConnection(nodeId: nodeId, code: code)
+    return desktopRejection(forClose: closed, recordedDaemonNodeId: recordedDaemonNodeId, method: method) ?? error
+}
+
 /// 控制面客户端（FFI `CtrlClient`）：一个进程一个，懒绑定。FFI 调用是同步阻塞的，一律放到后台线程。
-final class ControlPlane: @unchecked Sendable {
+final class ControlPlane: PeerCallPlane, @unchecked Sendable {
     private let secretKey: Data
     private let lock = NSLock()
     private var client: CtrlClient?
+    private var peerClosed: (@Sendable (String, UInt64) -> Void)?
 
     init(secretKey: Data) { self.secretKey = secretKey }
+
+    /// #1124：这个客户端上任何一条连接（请求、探测、订阅流、取原图）被对端用应用关闭码关掉时回调
+    /// （关闭方 NodeId, 关闭码）。在 runtime 线程上调用，不阻塞。
+    func setOnPeerClosed(_ handler: @escaping @Sendable (String, UInt64) -> Void) {
+        lock.lock(); peerClosed = handler; lock.unlock()
+    }
 
     func bound() throws -> CtrlClient {
         lock.lock()
         defer { lock.unlock() }
         if let client { return client }
         let c = try CtrlClient.bind(config: CtrlConfig(secretKey: secretKey, relayUrls: [], offline: false, bindTimeoutMs: 0))
+        c.setPeerCloseListener(listener: PeerCloseBridge { [weak self] nodeId, code in
+            guard let self else { return }
+            self.lock.lock()
+            let handler = self.peerClosed
+            self.lock.unlock()
+            handler?(nodeId, code)
+        })
         client = c
         return c
     }
@@ -117,6 +146,25 @@ final class ControlPlane: @unchecked Sendable {
             return Data(reply.utf8)
         }.value
     }
+}
+
+/// #1124 / #1126：「记录里的那台电脑以未配对码关了一条连接 ⇒ 记成配对失效」的唯一处理。控制面（`CtrlClient`）
+/// 与上传 provider（`Provider`）的关闭监听都接到它，判据只有 `recordDesktopClose` 这一份；其余按「连不上」。
+func desktopCloseHandler(pairingStore: PairingStore, loss: PairingLoss, logger: CoreLogger) -> @Sendable (String, UInt64) -> Void {
+    { nodeId, code in
+        let record = pairingStore.load()
+        let lost = recordDesktopClose(PeerClosedConnection(nodeId: nodeId, code: code),
+                                      recordedDaemonNodeId: record?.daemonNodeId, pairingId: record?.pairingId, loss: loss)
+        logger.log(lost ? "connection closed by the recorded desktop code=\(code) — pairing rejected"
+                        : "connection closed by peer code=\(code) — treated as unreachable")
+    }
+}
+
+/// FFI `PeerCloseListener` → Swift 闭包（#1124）。
+final class PeerCloseBridge: PeerCloseListener, @unchecked Sendable {
+    private let handler: @Sendable (String, UInt64) -> Void
+    init(_ handler: @escaping @Sendable (String, UInt64) -> Void) { self.handler = handler }
+    func onPeerClosed(nodeId: String, code: UInt64) { handler(nodeId, code) }
 }
 
 /// 流式调用被对端或网络结束（不是我们取消的）；[reason] 是 FFI 给的原因。

@@ -6,7 +6,7 @@ Wants=ppass-review.service
 
 [Service]
 ExecStart=/usr/bin/python3 /opt/ppass-review/pairpage/server.py
-Environment=PPF_IPC_TOKEN_FILE=/var/lib/ppass-review/ipc.token
+Environment=PPF_IPC_TOKEN_FILE=/var/lib/ppass-review/p-pass/ipc.token
 Environment=PORT=8787
 Restart=always
 RestartSec=3

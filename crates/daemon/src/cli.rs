@@ -24,14 +24,6 @@ pub enum Cli {
     Version,
     /// #1042：`--version --json`——机读版本（契约见 [`version_json`]）。
     VersionJson,
-    /// #1042：`config init --library <dir>`——首启写平台 config.toml。
-    ConfigInit {
-        library: String,
-    },
-    /// #1042：`config set-library <dir>`——换库（重启后台服务后生效）。
-    ConfigSetLibrary {
-        library: String,
-    },
     /// #1042：`diag export --out <zip> [--app-version <v>]`——组装并脱敏诊断包。
     DiagExport {
         out: String,
@@ -56,11 +48,6 @@ P-Pass 存储端 daemon
   --help       显示本帮助并退出（不启动任何 daemon 机制）
 
 子命令（一次性短进程：不启动服务、不占端口，执行完即退出）:
-  config init --library <dir>
-               首启：建库目录并写平台 config.toml（整份模板）
-  config set-library <dir>
-               换库：校验（存在/可写/不嵌套）后只改 data_dir 一行；
-               重启后台服务后生效
   diag export --out <zip> [--app-version <v>]
                组装并脱敏诊断包，写到 <zip>（后台服务不在线也能导出）
 
@@ -118,14 +105,12 @@ fn parse_subcommand(args: &[String]) -> Result<Cli, String> {
     }
     let rest: Vec<&str> = args.iter().map(String::as_str).collect();
     match rest.as_slice() {
-        ["config", "init", "--library", dir] => Ok(Cli::ConfigInit {
-            library: (*dir).to_string(),
-        }),
-        ["config", "init", ..] => Err("用法：config init --library <dir>".to_string()),
-        ["config", "set-library", dir] => Ok(Cli::ConfigSetLibrary {
-            library: (*dir).to_string(),
-        }),
-        ["config", "set-library", ..] => Err("用法：config set-library <dir>".to_string()),
+        // #1115：`config init` / `config set-library` 已删除——签名的 daemon 谁都能带参数运行，
+        // CLI 写入口等于谁都能改照片库位置。唯一写入口是 IPC `config.set_library`
+        // （只对签名窗口程序开放）。旧调用一律按用法错误拒绝，不静默接受。
+        ["config", ..] => Err(
+            "config 子命令已删除：照片库位置只能由 P-Pass 窗口程序经 IPC 设置（#1115）".to_string(),
+        ),
         ["diag", "export", flags @ ..] => parse_diag_export(flags),
         [cmd, sub, ..] => Err(format!("未知子命令：{cmd} {sub}")),
         [cmd] => Err(format!("缺少子命令：{cmd} <…>")),
@@ -213,17 +198,30 @@ pub fn humanize_bind_error(addr: Option<std::net::SocketAddr>, raw: &str) -> Str
 /// 配对链接带 10 分钟内有效的令牌，**只能给眼前的终端看**。stdout 不是终端
 /// 时它几乎一定落进了某个文件——macOS launchd 的 `StandardOutPath`
 /// （`<数据目录>/logs/daemon.out`）、systemd/journald、`nohup … >`、
-/// 脚本的 `> daemon.log`——这时只打一句不含链接的提示，告诉人/脚本改走
-/// IPC `pairing.start`（桌面端显示二维码走的也是它）。
+/// 脚本的 `> daemon.log`。
+///
+/// #1116 F1：所以只有终端启动（人就在屏幕前、看得到链接）才在启动时打开配对入口，
+/// `qr` 是 `Some`；其余启动方式根本不开（`None`），只打一句不含链接的提示，告诉人/
+/// 脚本改走 IPC `pairing.start`（桌面端显示二维码走的也是它）——没人看得到二维码时
+/// 开着 10 分钟的配对窗口，违背 #1122「配对入口按需开放」。
 ///
 /// 提示里**刻意不出现 `ppf://pair` 字面量**：验收口径就是日志里这个串计数为 0。
-pub fn pair_link_stdout_line(qr: &str, stdout_is_terminal: bool) -> String {
-    if stdout_is_terminal {
-        format!("配对二维码内容（10 分钟内有效）: {qr}")
+pub fn pair_link_stdout_line(qr: Option<&str>) -> String {
+    match qr {
+        Some(qr) => format!("配对二维码内容（10 分钟内有效）: {qr}"),
+        None => "配对入口未打开：stdout 不是终端（多半被重定向进了日志文件），\
+                 链接含令牌不能落盘。请用桌面端显示二维码，或经 IPC `pairing.start` 获取。"
+            .to_string(),
+    }
+}
+
+/// #1122：stdout 那行 `NodeId:` 的内容。测试沙盒（`--ephemeral`）给全长——
+/// 脚本按它配对、拨号；正式模式只给前 8 位，与日志口径一致。
+pub fn node_id_stdout(full_hex: &str, sandbox: bool) -> String {
+    if sandbox {
+        full_hex.to_string()
     } else {
-        "配对链接未打印：stdout 不是终端（多半被重定向进了日志文件），\
-         链接含令牌不能落盘。请用桌面端显示二维码，或经 IPC `pairing.start` 获取。"
-            .to_string()
+        format!("{}…", &full_hex[..full_hex.len().min(8)])
     }
 }
 
@@ -247,12 +245,23 @@ mod tests {
 
     const QR: &str = "ppf://pair?node=aa&t=0123456789abcdef01234567&r=https://relay.example";
 
+    /// #1122：正式模式 stdout 只给 NodeId 前缀；只有测试沙盒给全长。
+    /// 反证：不看 sandbox 一律给全长，第二条变红。
+    #[test]
+    fn full_node_id_only_in_the_test_sandbox() {
+        let full = "ab".repeat(32);
+        assert_eq!(node_id_stdout(&full, true), full);
+        let prod = node_id_stdout(&full, false);
+        assert_eq!(prod, "abababab…");
+        assert!(!prod.contains(&full[..24]));
+    }
+
     #[test]
     fn pair_link_printed_only_to_a_terminal() {
-        let tty = pair_link_stdout_line(QR, true);
+        let tty = pair_link_stdout_line(Some(QR));
         assert!(tty.contains(QR), "终端下应打印完整链接:\n{tty}");
 
-        let redirected = pair_link_stdout_line(QR, false);
+        let redirected = pair_link_stdout_line(None);
         assert!(
             !redirected.contains("ppf://pair"),
             "非终端时不许出现配对链接字面量:\n{redirected}"
@@ -349,36 +358,19 @@ mod tests {
         assert!(!version_json("1.2.3").contains('\n'));
     }
 
+    /// #1115：config 写入口不再在 CLI 上——任何 `config …` 都是用法错误（不写任何东西）。
+    /// 反证：把 `config init` 分支加回来 ⇒ 第一条红。
     #[test]
-    fn config_subcommands_parse_strictly() {
-        assert_eq!(
-            parse_cli(args(&["config", "init", "--library", "/a b/c"])),
-            Ok(Cli::ConfigInit {
-                library: "/a b/c".into()
-            })
-        );
-        assert_eq!(
-            parse_cli(args(&["config", "set-library", "C:\\Lib"])),
-            Ok(Cli::ConfigSetLibrary {
-                library: "C:\\Lib".into()
-            })
-        );
+    fn config_subcommands_are_gone() {
         for bad in [
-            &["config"][..],
-            &["config", "init"],
-            &["config", "init", "--library"],
-            &["config", "init", "/x"],
-            &["config", "init", "--library", "/x", "extra"],
-            &["config", "set-library"],
-            &["config", "set-library", "/a", "/b"],
+            &["config", "init", "--library", "/a b/c"][..],
+            &["config", "set-library", "C:\\Lib"],
+            &["config"],
             &["config", "bogus"],
         ] {
-            assert!(parse_cli(args(bad)).is_err(), "{bad:?} 应是用法错误");
+            let e = parse_cli(args(bad)).expect_err("config 子命令必须被拒");
+            assert!(e.contains("#1115"), "{bad:?}: {e}");
         }
-        assert_eq!(
-            parse_cli(args(&["config", "init", "--help"])),
-            Ok(Cli::Help)
-        );
     }
 
     #[test]

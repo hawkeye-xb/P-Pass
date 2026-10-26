@@ -9,26 +9,24 @@ publish = false
 crate-type = ["rlib", "cdylib"]
 
 [features]
-# Enabled only by the Android bridge build. This keeps JNI descriptor APIs out
-# of non-Android release targets without platform cfg outside crates/platform/.
-# IOS-05 (#312): jni/libc are only reachable through this feature, so the
-# platform-neutral provider kernel (src/provider.rs) cannot name `jni::` —
-# the default build has no such crate to import.
-android-jni = ["dep:jni", "dep:libc"]
-# IOS-06 (#313): UniFFI binding #2 (iOS XCFramework). Same rule as android-jni:
-# a feature, never a target_os cfg (arch-check B.2), and enabled only by
-# tools/build-ios-transport-xcframework.sh.
-ios-ffi = ["dep:uniffi", "dep:proto", "dep:blake3"]
-# Swift binding generator (host-only tool, run by the same script).
-ios-bindgen = ["ios-ffi", "uniffi/cli"]
+# IOS-06 (#313) / #1124 / #1126: UniFFI binding shared by both phones — the iOS
+# XCFramework (Swift) and Android's libtransport.so (Kotlin) export the same
+# objects, the upload provider included (Android's hand-written JNI is gone).
+# A feature, never a target_os cfg (arch-check B.2); enabled only by
+# tools/build-ios-transport-xcframework.sh and tools/build-android-iroh-blobs-bridge.sh.
+# libc: descriptor dup for Android's ContentResolver imports and the logcat bridge's dlopen.
+mobile-ffi = ["dep:uniffi", "dep:blake3", "dep:pair-pake", "dep:libc"]
+# Swift / Kotlin binding generator (host-only tool, run by the same scripts).
+mobile-bindgen = ["mobile-ffi", "uniffi/cli"]
 
 [dependencies]
 # ADR-001 / §B.1: iroh is allowed in this crate ONLY. Declared here (not in
 # workspace.dependencies) to keep the isolation visible at a glance.
 iroh = "1"
-tokio = { workspace = true, features = ["rt-multi-thread", "fs", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "fs", "time", "sync"] }
 tokio-util = { version = "0.7", features = ["io"] }
-jni = { version = "0.21", optional = true }
+# #1122：对端地址簿有上限、按最近使用淘汰（已在依赖树里）。
+lru = "0.18"
 libc = { version = "0.2", optional = true }
 futures-core.workspace = true
 thiserror.workspace = true
@@ -38,13 +36,16 @@ serde_json.workspace = true
 base64 = "0.22" 
 iroh-blobs = { version = "0.103", default-features = false, features = ["fs-store"] }
 uniffi = { version = "0.32", optional = true }
-proto = { path = "../proto", optional = true }
+# #1122：关闭码等跨端注册表的唯一定义处（纯 serde，无平台依赖）。
+proto = { path = "../proto" }
 blake3 = { version = "1", optional = true }
+# #1118：配对验证码内核（与 daemon 同一份），只经 mobile-ffi 导出给手机。
+pair-pake = { path = "../pair-pake", optional = true }
 
 [[bin]]
 name = "uniffi-bindgen"
 path = "src/bin/uniffi-bindgen.rs"
-required-features = ["ios-bindgen"]
+required-features = ["mobile-bindgen"]
 
 [dev-dependencies]
 proto = { path = "../proto" }

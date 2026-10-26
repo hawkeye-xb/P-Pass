@@ -45,19 +45,20 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 
 import App from "./App.svelte";
 import { t } from "./lib/i18n.js";
+import { daemonMethodOf } from "./lib/daemonApi.js";
 
 /** 常驻服务正常的桌面；`relation` 是 daemon 下发的 status.shell_relation。 */
 function desktop({ relation = "same", serviceVersion = "0.9.5", auditFails = false, events = [] } = {}) {
   const d = { auditFails, events };
   invokeMock.mockImplementation(async (cmd, args) => {
-    switch (cmd) {
+    switch (daemonMethodOf(cmd) ? "daemon" : cmd) {
       case "wizard_state":
         return { show_wizard: false };
       case "self_heal_daemon":
       case "notify_system":
         return null;
-      case "daemon_call":
-        switch (args.method) {
+      case "daemon":
+        switch (daemonMethodOf(cmd)) {
           case "status":
             return { version: serviceVersion, shell_relation: relation, pending_pairs: 0, photo_sources: 1 };
           case "pairing.pending":
@@ -126,9 +127,9 @@ describe("#1044 设置页「关于」", () => {
     expect(screen.getByTestId("about-service-version").textContent).toContain("v0.9.5");
     // 壳把自己的版本报给 daemon，shell_relation 才有意义。
     const statusCalls = invokeMock.mock.calls.filter(
-      ([cmd, a]) => cmd === "daemon_call" && a.method === "status",
+      ([cmd, a]) => daemonMethodOf(cmd) === "status",
     );
-    expect(statusCalls.map(([, a]) => a.params)).toContainEqual({ shell_version: "0.9.5" });
+    expect(statusCalls.map(([, a]) => a)).toContainEqual({ shell_version: "0.9.5" });
     expect(screen.queryByTestId("about-versions-differ")).toBeNull();
   });
 

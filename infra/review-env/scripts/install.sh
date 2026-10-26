@@ -5,7 +5,7 @@
 #   sudo PPASS_REVIEW_PASSWORD='<密码>' ./install.sh \
 #        --host pair.example.com \        # 对外域名（CF 一级子域）
 #        --origin-sni pair-origin.example.com \  # 源站证书域名（可 == --host）
-#        [--user review] [--port 8787] [--ipc-token /var/lib/ppass-review/ipc.token]
+#        [--user review] [--port 8787] [--ipc-token /var/lib/ppass-review/p-pass/ipc.token]
 #
 # 不做的事（刻意留给人）：
 #   - 签证书：源站用自签（本脚本生成），不需要 Let's Encrypt
@@ -14,7 +14,7 @@
 set -euo pipefail
 
 HOST=""; USER_NAME="review"; PORT="8787"
-IPC_TOKEN="/var/lib/ppass-review/ipc.token"
+IPC_TOKEN="/var/lib/ppass-review/p-pass/ipc.token"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 
 while [ $# -gt 0 ]; do
@@ -40,6 +40,12 @@ done
 install -d -m 755 /opt/ppass-review/pairpage
 install -m 644 "$HERE/pairpage/server.py" "$HERE/pairpage/index.html" /opt/ppass-review/pairpage/
 install -d -m 755 /var/lib/ppass-review
+# #1115：Linux 上库位置的正本是平台 config.toml；没有它 daemon 进「未配置」状态、等窗口程序
+# 配置（无界面机器上没人配）。库仍放平台目录本身（与以前同一位置，ipc.token 路径不变）；
+# 已有就不动。
+mkdir -p /var/lib/ppass-review/p-pass
+[ -e /var/lib/ppass-review/p-pass/config.toml ] \
+  || printf 'data_dir = "%s"\n' /var/lib/ppass-review/p-pass > /var/lib/ppass-review/p-pass/config.toml
 
 # 3. systemd
 install -m 644 "$HERE/systemd/ppass-review.service" /etc/systemd/system/

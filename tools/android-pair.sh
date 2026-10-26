@@ -5,20 +5,25 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 D=$(mktemp -d /tmp/ppf-android-pair.XXXX)
 # 失败时保留 daemon 日志尾部；kill $DPID 精确杀（pkill -f 匹配不到环境变量）
-trap 'rc=$?; kill "$DPID" 2>/dev/null || true; if [ "$rc" -ne 0 ] && [ -f "$D/d.log" ]; then echo "=== daemon log (exit $rc) ==="; tail -30 "$D/d.log" || true; fi; rm -rf "$D"' EXIT
-mkdir -p "$D/library"
-PPF_DATA_DIR="$D/library" PPF_RELAY_URLS="" \
-  PPF_BIND_ADDR="127.0.0.1:0" \
-  "$ROOT/target/release/daemon" > "$D/d.log" 2>&1 &
+trap 'rc=$?; exec 3>&- 2>/dev/null || true; kill "$DPID" 2>/dev/null || true; if [ "$rc" -ne 0 ] && [ -f "$D/d.log" ]; then echo "=== daemon log (exit $rc) ==="; tail -30 "$D/d.log" || true; fi; [ -n "${SANDBOX_DIR:-}" ] && rm -rf "$SANDBOX_DIR"; rm -rf "$D"' EXIT
+# #1115：--ephemeral 测试沙盒（库目录由 daemon 自建、stdout 的 SANDBOX: 行给出；不接受
+# PPF_DATA_DIR）。stdin 接 FIFO 并保持写端打开：EOF 即退出（UX-07）。
+mkfifo "$D/ctl"
+PPF_RELAY_URLS="" PPF_BIND_ADDR="127.0.0.1:0" \
+  "${CARGO_TARGET_DIR:-$ROOT/target}/release/daemon" --ephemeral < "$D/ctl" > "$D/d.log" 2>&1 &
 DPID=$!
+exec 3>"$D/ctl"
 for _ in $(seq 1 50); do grep -q 'NodeId:' "$D/d.log" 2>/dev/null && break; sleep 0.2; done
 # shellcheck source=./ipc-lib.sh
 source "$ROOT/tools/ipc-lib.sh"
 # SEC-11 (#496)：配对串经 IPC pairing.start 现取（daemon 不再把它打进被重定向的 stdout）
-ipc_pair_qr "$D/library/ipc.token"
+ipc_sandbox_dir "$D/d.log"
+ipc_pair_qr "$SANDBOX_DIR/ipc.token"
 QR="$PAIR_QR"
+# #1124：JVM 测试经 uniffi 绑定调宿主机版 libtransport。
+(cd "$ROOT" && cargo build -q -p transport --features mobile-ffi)
 cd "$ROOT/apps/android"
 source "$ROOT/scripts/java-home.sh"
-PPF_DAEMON_QR="$QR" PPF_DAEMON_IPC="$D/library/ipc.token" \
+PPF_DAEMON_QR="$QR" PPF_DAEMON_IPC="$SANDBOX_DIR/ipc.token" \
   ./gradlew :app:testDebugUnitTest --tests '*DaemonPairTest' --rerun
 grep -o "PAIR OK[^<]*" app/build/test-results/testDebugUnitTest/TEST-*DaemonPairTest.xml

@@ -12,15 +12,30 @@ publish = false
 test-support = []
 
 [dependencies]
+# #1116 P2-2 防降级：更新包版本按 semver 比当前版本（`newer_than_current`，各平台共用）。
+semver = "1"
 thiserror.workspace = true
 # #1047：停止信号（SIGTERM / Windows 控制台事件）。只开 signal + 运行时，
 # 不拉 net/io。
 tokio = { version = "1", features = ["signal", "rt"] }
+# #1115：IPC 对端身份——接 daemon / 桌面壳手里的 interprocess 连接（同一版本）。
+interprocess = { version = "2", features = ["tokio"] }
 
 # QA-09 迁移（#211）：statvfs（卷容量水位 / DAE-05）。原先这个调用长在
 # crates/daemon 里，libc 也声明在那边；迁进来之后 daemon 不再需要它。
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# #1109：身份私钥存进 data protection 钥匙串（kSecUseDataProtectionKeychain
+# 要 OSX_10_15）。已在依赖树里（iroh 的 TLS 链），这里提为直接依赖。
+[target.'cfg(target_os = "macos")'.dependencies]
+# 更新包校验的解包目录（code_signature.rs）：随机名 + 0700 + 自动清理。
+tempfile = "3"
+security-framework = { version = "3.7", features = ["OSX_10_15"] }
+# #1121：代码签名静态校验要 CFURL（security-framework 的 code_signing 接口收它）。已在依赖树里。
+core-foundation = "0.10"
+# #1116 P2-2 防降级：读已验签包里的 Info.plist 版本号（签名封装覆盖它）。
+plist = "1"
 
 [target.'cfg(windows)'.dependencies]
 # HKCU Run key: the shell's login item (DESK-72) and cleanup of the legacy
@@ -49,6 +64,8 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_Console",
   # #1043 (B6): GetUserDefaultLocaleName——托盘与安装位置对话框的初始语言。
   "Win32_Globalization",
+  # #1118: GetComputerNameExW——配对时给手机看的电脑名。
+  "Win32_System_SystemInformation",
 ] }
 
 # DESK-16 (#165)：Windows 的系统缩略图走 COM（IShellItemImageFactory），
@@ -60,6 +77,9 @@ windows-sys = { version = "0.61", features = [
 #    直接依赖并多开几个 feature。
 windows = { version = "0.62", features = [
   "Win32_Foundation",
+  # #1155：GetFileVersionInfoW / VerQueryValueW —— 单测拿真实系统 PE 与内存解析结果对照。
+  "Win32_Storage",
+  "Win32_Storage_FileSystem",
   # CoInitializeEx / CoUninitialize —— COM 必须先初始化线程套间。
   "Win32_System_Com",
   # SHCreateItemFromParsingName + IShellItemImageFactory。

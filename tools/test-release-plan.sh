@@ -188,6 +188,8 @@ commit_tag v0.1.0-test.10 apps/ios/project.yml tools/ios/test.sh tools/build-ios
 commit_tag v0.1.0-test.11 apps/ios/PPass/x.swift apps/android/a.kt
 # #348：iOS 界面文案由 Android strings.xml 生成 ⇒ 改它要同时发 Android 与 iOS。
 commit_tag v0.1.0-test.12 apps/android/app/src/main/res/values-zh/strings.xml
+# #1121：正式更新公钥在 tauri.conf.json，Android 构建期也从这里读 ⇒ 改它两端都要重建。
+commit_tag v0.1.0-test.13 apps/desktop/src-tauri/tauri.conf.json
 
 channel 0.1.0-test.1 0.1.0-test.1; tplan v0.1.0-test.2; expect_plan "只改 apps/android/ ⇒ Android 构建、桌面 skip" build skip
 expect_win "只改 apps/android/ ⇒ Windows 也不陪跑" skip
@@ -214,6 +216,8 @@ expect_ios "apps/ios/ 与 apps/android/ 混改 ⇒ iOS 也构建" build
 expect_win "apps/ios/ 与 apps/android/ 混改（#887）⇒ Windows 不陪跑" skip
 channel 0.1.0-test.11 0.1.0-test.11; tplan v0.1.0-test.12; expect_plan "只改 Android strings.xml（#348）⇒ Android 构建、macOS skip" build skip
 expect_ios "只改 Android strings.xml（iOS 文案由它生成）⇒ iOS 也构建" build
+channel 0.1.0-test.12 0.1.0-test.12; tplan v0.1.0-test.13; expect_plan "只改 tauri.conf.json（#1121：Android 也从这里读更新公钥）⇒ Android、macOS 都构建" build build
+expect_win "只改 tauri.conf.json ⇒ Windows 也构建" build
 channel 0.1.0-test.11 0.1.0-test.11 0.1.0-test.11 -; tplan v0.1.0-test.12; expect_ios "test-channel 没有 iOS 清单 ⇒ 拿不准 ⇒ iOS 构建" build
 channel 0.1.0-test.8 0.1.0-test.8 -; tplan v0.1.0-test.9; expect_win "test-channel 没有 Windows 清单 ⇒ 拿不准 ⇒ Windows 构建" build
 channel 0.1.0-test.2 0.1.0-test.1; tplan v0.1.0-test.2
@@ -230,8 +234,8 @@ channel 0.1.0-test.90 0.1.0-test.90; tplan v0.1.0-test.5; expect_plan "基线不
 "${G[@]}" checkout -q v0.1.0-test.12
 
 echo "plan-builds（#1062 test tag：Rust 改动按 Cargo 依赖图归属到端）"
-# 最小 Cargo workspace：transport 的 proto 依赖只在 ios-ffi 下生效（另有一条 dev 依赖）——同真实仓库。
-# 入口（rust-impact.py ENTRIES）：Android transport[android-jni]、iOS transport[ios-ffi]、
+# 最小 Cargo workspace：transport 的 proto 依赖只在 mobile-ffi 下生效（另有一条 dev 依赖）——同真实仓库。
+# 入口（rust-impact.py ENTRIES）：Android transport[mobile-ffi]、iOS transport[mobile-ffi]、
 # macOS daemon、Windows daemon + testclient（夹具里没有桌面壳）。
 expect4() { # <说明> <android> <macos> <windows> <ios>
   if [ "$RC" = 0 ] && [ "$(get android)" = "$2" ] && [ "$(get macos)" = "$3" ] && [ "$(get windows)" = "$4" ] && [ "$(get ios)" = "$5" ]; then ok "$1"
@@ -265,8 +269,7 @@ crate crates/proto proto ''
 echo '// extra' > "$REPO/crates/proto/src/extra.rs"
 crate crates/platform platform ''
 crate crates/transport transport '[features]
-android-jni = []
-ios-ffi = ["dep:proto"]
+mobile-ffi = ["dep:proto"]
 
 [dependencies]
 proto = { path = "../proto", optional = true }
@@ -303,7 +306,7 @@ rchk() { # <tag> <说明> <android> <macos> <windows> <ios>：test-channel 四�
 }
 rchk v0.2.0-test.2  "只改 crates/daemon ⇒ 只构建桌面两端，Android / iOS 不陪跑" skip build build skip
 rchk v0.2.0-test.3  "改 crates/transport ⇒ 依赖它的四端都构建" build build build build
-rchk v0.2.0-test.4  "改 crates/proto ⇒ Android 不构建（transport 只在 ios-ffi 下依赖它，dev 依赖不进产物）" skip build build build
+rchk v0.2.0-test.4  "改 crates/proto ⇒ 四端都构建（#1124：Android 也开 mobile-ffi，transport 在它下依赖 proto）" build build build build
 rchk v0.2.0-test.5  "改 tools/testclient ⇒ 只有 Windows（只有它打包 testclient）" skip skip build skip
 rchk v0.2.0-test.6  "改 crates/daemon/tests/ ⇒ 按 daemon 算桌面两端（保守：测试目录不另行排除）" skip build build skip
 rchk v0.2.0-test.7  "桌面涨号的 Cargo 那一半（根 Cargo.toml 只变 workspace 版本、Cargo.lock 只变成员版本）⇒ 只构建桌面两端（同一提交里的 release/ 仍算所有端）" skip build build skip
@@ -316,7 +319,7 @@ rchk v0.2.0-test.12 "Cargo.lock 解析不了 ⇒ 拿不准 ⇒ 四端都构建" 
 "${G[@]}" checkout -q v0.2.0-test.4 && mkdir -p "$REPO/docs" && "${G[@]}" mv crates/proto/src/extra.rs docs/moved.md \
   && "${G[@]}" commit -q -m mv && "${G[@]}" tag v0.2.0-test.20
 channel 0.2.0-test.4 0.2.0-test.4 0.2.0-test.4 0.2.0-test.4; tplan v0.2.0-test.20
-expect4 "proto 的文件被挪进 docs/（rename）⇒ 仍按 proto 归属：iOS 与桌面构建、Android 不陪跑" skip build build build
+expect4 "proto 的文件被挪进 docs/（rename）⇒ 仍按 proto 归属：四端都构建" build build build build
 # cargo 不可用 / metadata 失败 ⇒ 拿不准 ⇒ 所有端（假 cargo 恒失败；不靠删 PATH）。
 mkdir -p "$TMP/badcargo"; printf '#!/bin/sh\necho "boom" >&2\nexit 1\n' > "$TMP/badcargo/cargo"; chmod +x "$TMP/badcargo/cargo"
 channel 0.2.0-test.1 0.2.0-test.1 0.2.0-test.1 0.2.0-test.1; "${G[@]}" checkout -q v0.2.0-test.2
@@ -328,9 +331,10 @@ REPO="$REPO_MAIN"
 echo "plan-builds（#1062 入口包与真实构建命令、真实依赖图一致）"
 ROOT="$(cd "$HERE/.." && pwd)"
 has() { grep -qF -- "$2" "$ROOT/$1" && ok "$1 含「$2」" || bad "$1 应含「$2」（入口包 / feature 变了要同步 rust-impact.py 的 ENTRIES）"; }
-has tools/build-android-iroh-blobs-bridge.sh "cargo build -p transport --features android-jni"
-has tools/build-ios-transport-xcframework.sh "-p transport --lib --features ios-ffi"
-has tools/build-ios-transport-xcframework.sh "-p transport --features ios-bindgen"
+has tools/build-android-iroh-blobs-bridge.sh "cargo build -p transport --features mobile-ffi --release"
+has tools/build-android-iroh-blobs-bridge.sh "-p transport --features mobile-bindgen"
+has tools/build-ios-transport-xcframework.sh "-p transport --lib --features mobile-ffi"
+has tools/build-ios-transport-xcframework.sh "-p transport --features mobile-bindgen"
 grep -qE '^ +run: cargo build --release -p daemon$' "$ROOT/.github/workflows/release.yml" && ok "release.yml macOS 只编 daemon" || bad "release.yml macOS 应为 cargo build --release -p daemon（同步 ENTRIES.macos）"
 has .github/workflows/release.yml "run: cargo build --release -p daemon -p testclient"
 SHELL_PKG=$(sed -n 's/^name = "\(.*\)"/\1/p' "$ROOT/apps/desktop/src-tauri/Cargo.toml" | head -1)
@@ -342,8 +346,8 @@ if (cd "$ROOT" && RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-stable}" cargo metadata 
     --manifest-path apps/desktop/src-tauri/Cargo.toml >"$RM/shell.json"); then
   REAL=$(cd "$ROOT" && printf '%s\n' crates/daemon/src/x.rs crates/transport/src/x.rs crates/proto/src/x.rs crates/platform/src/x.rs tools/testclient/src/x.rs \
     | python3 -I tools/release/rust-impact.py --base HEAD --meta "$RM/ws.json" --meta "$RM/shell.json" 2>&1)
-  WANT=$(printf 'macos windows\tcrates/daemon/src/x.rs\nandroid ios macos windows\tcrates/transport/src/x.rs\nios macos windows\tcrates/proto/src/x.rs\nmacos windows\tcrates/platform/src/x.rs\nwindows\ttools/testclient/src/x.rs')
-  [ "$REAL" = "$WANT" ] && ok "真实依赖图：daemon/platform ⇒ 桌面两端，transport ⇒ 四端，proto ⇒ iOS + 桌面，testclient ⇒ Windows" \
+  WANT=$(printf 'macos windows\tcrates/daemon/src/x.rs\nandroid ios macos windows\tcrates/transport/src/x.rs\nandroid ios macos windows\tcrates/proto/src/x.rs\nmacos windows\tcrates/platform/src/x.rs\nwindows\ttools/testclient/src/x.rs')
+  [ "$REAL" = "$WANT" ] && ok "真实依赖图：daemon/platform ⇒ 桌面两端，transport / proto ⇒ 四端，testclient ⇒ Windows" \
     || bad "真实依赖图的归属变了（确认是有意的再改这里）" "$REAL"
 else
   bad "真实仓库 cargo metadata 失败（本测试需要 cargo）"

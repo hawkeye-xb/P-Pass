@@ -17,6 +17,47 @@ import UIKit
 ///   同时用独立的 PhotoKit 读取路径（PHAssetResourceManager，只读）算「手机原始字节」的 BLAKE3，写进 `originals`。
 /// 驱动走的是真实端口（Backend / AppModel）：配对 → 选全部相册 → 前台备份 → 时间线取页，与用户点界面走同一条代码路径；
 /// 只是把「点」换成了函数调用（不用 XCUITest：授权弹窗、扫码、选相册的坐标点击在本机模拟器上很脆，见 e2e-sim.sh 头注释）。
+/// #1118：自动化客户端在**提交成功后**打出一行 `PAIR_CODE=<6 位> node=<本机 NodeId>`，宿主机（扮演桌面业主）读到后
+/// 调 `pairing.confirm {accept:true,node_id,code}`。约定：追加写进 `<PPASS_E2E_DIR>/pair_code.txt`（`container` 时是 App 容器的
+/// `Documents/e2e/pair_code.txt`，经 devicectl 拉回），脚本把这个文件路径作为额外参数传给 `desk_auto_allow`。
+/// 只在 e2e 路径调（`PPASS_E2E_DIR` 没设就什么都不写）；正式 UI 路径绝不往日志 / 文件写验证码。
+enum E2EPairCode {
+    static let fileName = "pair_code.txt"
+
+    static func line(_ shown: PairCodeShown) -> String { "PAIR_CODE=\(shown.code) node=\(shown.phoneNode)" }
+
+    static func directory(env: [String: String] = ProcessInfo.processInfo.environment) -> URL? {
+        guard let dir = env["PPASS_E2E_DIR"], !dir.isEmpty else { return nil }
+        if dir == "container" {
+            let url = URL(fileURLWithPath: NSHomeDirectory() + "/Documents/e2e")
+            try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            return url
+        }
+        return URL(fileURLWithPath: dir)
+    }
+
+    /// 追加一行（宿主按 node 取最后一行）。写失败只记 AppLog：e2e 会因为没人输码而超时，原因在日志里看得到。
+    static func record(_ shown: PairCodeShown, dir: URL? = directory()) {
+        guard let dir else { return }
+        let url = dir.appendingPathComponent(fileName)
+        let data = Data((line(shown) + "\n").utf8)
+        do {
+            if let handle = try? FileHandle(forWritingTo: url) {
+                defer { try? handle.close() }
+                try handle.seekToEnd()
+                try handle.write(contentsOf: data)
+            } else {
+                try data.write(to: url, options: .atomic)
+            }
+        } catch { AppLog.log("e2e: cannot record pair code (\(error))") }
+    }
+
+    /// e2e 的配对：验证码写进约定文件。
+    static func pair(_ pairing: PairingService, link: String, dir: URL? = directory()) async -> PairOutcome {
+        await pairing.pair(code: link, onCode: { record($0, dir: dir) })
+    }
+}
+
 @MainActor
 enum E2EDriver {
     static var requested: Bool { ProcessInfo.processInfo.environment["PPASS_E2E_DIR"] != nil }
@@ -32,6 +73,8 @@ enum E2EDriver {
         let timeoutSecs = Double(env["PPASS_E2E_TIMEOUT"] ?? "") ?? 120
         let pick = env["PPASS_E2E_ALBUM"] ?? ""
         let maxAssets = Int(env["PPASS_E2E_MAX_ASSETS"] ?? "") ?? 12
+        // #1118：每次启动先清掉上一次留下的验证码文件，宿主脚本不会拿旧码去确认新的配对请求。
+        try? FileManager.default.removeItem(at: URL(fileURLWithPath: dir).appendingPathComponent(E2EPairCode.fileName))
         // 后台任务模拟（tools/ios/sim-bg-task.sh）的几种模式见 BGTestDriver。
         if BGTestDriver.run(model: model, dir: URL(fileURLWithPath: dir), env: env) { return }
         Task { await drive(model: model, dir: URL(fileURLWithPath: dir), link: link, timeoutSecs: timeoutSecs, pick: pick, maxAssets: maxAssets) }
@@ -54,7 +97,7 @@ enum E2EDriver {
         write("access", ["access": "\(access)"])
         guard access == .full else { write("failed", ["error": "photo access is \(access), need full", "done": true]); return }
 
-        let outcome = await backend.pairing.pair(code: link)
+        let outcome = await E2EPairCode.pair(backend.pairing, link: link, dir: dir)
         write("paired", ["pair_outcome": "\(outcome)"])
         guard case .joined(let firstTime, let settingSaveFailed) = outcome else { write("failed", ["error": "pairing: \(outcome)", "done": true]); return }
         model.paired(firstTime: firstTime, settingSaveFailed: settingSaveFailed)

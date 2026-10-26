@@ -193,6 +193,8 @@ commit_only t3 tools/build-android-iroh-blobs-bridge.sh
 expect_android "只改安卓原生库构建脚本 ⇒ 安卓线红" red HEAD~1 HEAD
 commit_only t4 rust-toolchain.toml
 expect_android "只改 rust-toolchain.toml ⇒ 安卓线红" red HEAD~1 HEAD
+commit_only t4b crates/proto/src/lib.rs
+expect_android "只改 crates/proto ⇒ 安卓线红（#1124：libtransport.so 开 mobile-ffi，依赖 proto）" red HEAD~1 HEAD
 commit_only t5 crates/daemon/src/main.rs
 expect_android "只改 crates/daemon ⇒ 安卓线不受影响" clean HEAD~1 HEAD
 expect_cv "只改 crates/daemon ⇒ 桌面线照常红" nonzero "desktop 版本没涨" HEAD~1 HEAD
@@ -202,6 +204,33 @@ commit_only t7 crates/transport/src/provider.rs
 printf '{"desktop":"2.0.1","android":"2.1.1"}\n' > "$SRC/release/versions.json"
 g -C "$SRC" add -A && g -C "$SRC" commit -qm t7-bump
 expect_cv "改 crates/transport 且两端都涨号 ⇒ 0" 0 "^ok:" HEAD~2 HEAD
+
+# #728：正式私钥签过的 test 包（tag 树里没有 release/update-keys/test.pub）——要发安卓的正式 tag，
+# versionCode 必须严格大于它们；分通道之后（有 test.pub）的 test tag 不计。
+# 反证：删掉门禁，第一条（等于 / 小于旧 test 包）不再红。
+mkdir -p "$SRC/apps/android/app"
+printf 'android {\n    defaultConfig {\n        versionCode = 66\n    }\n}\n' > "$SRC/apps/android/app/build.gradle.kts"
+g -C "$SRC" add -A && g -C "$SRC" commit -qm v728-old && g -C "$SRC" tag v2.1.1-test.1
+mkdir -p "$SRC/release/update-keys"
+echo pub > "$SRC/release/update-keys/test.pub"
+sed -i.bak 's/versionCode = 66/versionCode = 90/' "$SRC/apps/android/app/build.gradle.kts" && rm "$SRC/apps/android/app/build.gradle.kts.bak"
+g -C "$SRC" add -A && g -C "$SRC" commit -qm v728-split && g -C "$SRC" tag v2.1.1-test.2
+g -C "$SRC" tag v728-base
+expect_vc() { # <desc> <vcode> <want: red|clean>
+  local desc="$1" vc="$2" want="$3" out
+  commit_only "vc$vc" apps/android/src.kt
+  printf '{"desktop":"2.0.1","android":"2.1.%s","androidVersionCode":%s}\n' "$vc" "$vc" > "$SRC/release/versions.json"
+  g -C "$SRC" add -A && g -C "$SRC" commit -qm "vc$vc-bump"
+  out=$("$CV" v728-base HEAD 2>&1) || true
+  if [ "$want" = red ] && grep -q "#728" <<<"$out"; then pass "③ ${desc}"; return; fi
+  if [ "$want" = clean ] && ! grep -q "#728" <<<"$out"; then pass "③ ${desc}"; return; fi
+  fail "③ ${desc}：期望 #728 门禁 ${want}，实际：$out"
+}
+expect_vc "versionCode 66 = 正式私钥签过的 test 包 ⇒ 红（同号可覆盖安装）" 66 red
+expect_vc "versionCode 67 > 66 ⇒ 过；分通道后的 test 包（90）不计" 67 clean
+g -C "$SRC" tag -d v2.1.1-test.1 v2.1.1-test.2 v728-base >/dev/null
+printf '{"desktop":"2.0.1","android":"2.1.1"}\n' > "$SRC/release/versions.json"
+g -C "$SRC" add -A && g -C "$SRC" commit -qm v728-reset
 
 # #348：iOS 线。上一个 tag 里没有 ios 号时跳过门禁（上面所有用例都在这种情形下，照常通过）；
 # 有了 ios 号之后：改 iOS 输入不涨 ios 号 ⇒ 红；只改测试/e2e 脚本不算；涨了号 ⇒ 过。

@@ -5,27 +5,30 @@
 //! 的 `deviceRow`/`lastActivityAt`/`status.devices - status.revoked`），页头
 //! 「已配对 N 台」不含自己断开的设备，列表里却显示它们——口径打架。
 
-use storage::{Device, RevokedBy};
+use storage::{DepartedBy, DeviceRow};
 
-/// 这台设备是否、以及因何离开（DEV-03）。
+/// 这台设备是否、以及因何离开（DEV-03；#1117 起由档案上的 `departed_by` 决定）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Removal {
-    /// 在用。
+    /// 有配对记录，在用。
     None,
-    /// 手机自己断开：留在主列表标「已断开」——不是业主的意图。
+    /// 没有配对记录，但不是业主的意图：手机自己断开，或电脑换了身份（需要
+    /// 重新扫码）。留在主列表标「已断开」。
     Disconnected,
-    /// 业主移除（含来源不可考的历史行，保守按业主移除）：单独列出。
+    /// 业主移除：单独列出。
     Removed,
 }
 
 impl Removal {
-    pub fn of(d: &Device) -> Self {
-        if !d.revoked {
-            Removal::None
-        } else if d.revoked_by == Some(RevokedBy::Device) {
-            Removal::Disconnected
-        } else {
-            Removal::Removed
+    pub fn of(d: &DeviceRow) -> Self {
+        if d.pairing.is_some() {
+            return Removal::None;
+        }
+        match d.profile.departed_by {
+            Some(DepartedBy::Device | DepartedBy::Identity) => Removal::Disconnected,
+            // 业主移除；没有离开原因的档案（理论上不存在：档案只在配对时建）
+            // 保守按业主移除处理，不凭空冒出一台。
+            Some(DepartedBy::Owner) | None => Removal::Removed,
         }
     }
 
@@ -91,31 +94,43 @@ mod tests {
     const NOW: i64 = 1_800_000_000_000;
     const DAY: i64 = 24 * 3600 * 1000;
 
-    fn dev(revoked: bool, by: Option<RevokedBy>) -> Device {
-        Device {
-            node_id: vec![1; 32],
-            name: "x".into(),
-            role: storage::Role::Member,
-            paired_at: 0,
-            last_seen: None,
-            revoked,
-            revoked_at: None,
-            revoked_by: by,
+    fn dev(paired: bool, by: Option<DepartedBy>) -> DeviceRow {
+        DeviceRow {
+            profile: storage::DeviceProfile {
+                node_id: vec![1; 32],
+                name: "x".into(),
+                first_seen_at: 0,
+                last_seen_at: None,
+                departed_at: by.map(|_| 1),
+                departed_by: by,
+            },
+            pairing: paired.then(|| storage::Pairing {
+                id: "p".into(),
+                node_id: vec![1; 32],
+                role: storage::Role::Member,
+                paired_at: 0,
+            }),
         }
     }
 
+    /// #1109 D2：电脑换身份后，手机归到「已断开」（提示重新扫码），不归「已移除」。
+    /// 反证：把 Identity 归到 Removed，第三条断言变红。
     #[test]
-    fn removal_groups_rows_and_legacy_rows_count_as_owner_removed() {
-        assert_eq!(Removal::of(&dev(false, None)), Removal::None);
+    fn removal_groups_rows_by_why_the_pairing_was_deleted() {
+        assert_eq!(Removal::of(&dev(true, None)), Removal::None);
         assert_eq!(
-            Removal::of(&dev(true, Some(RevokedBy::Device))),
+            Removal::of(&dev(false, Some(DepartedBy::Device))),
             Removal::Disconnected
         );
         assert_eq!(
-            Removal::of(&dev(true, Some(RevokedBy::Owner))),
+            Removal::of(&dev(false, Some(DepartedBy::Identity))),
+            Removal::Disconnected
+        );
+        assert_eq!(
+            Removal::of(&dev(false, Some(DepartedBy::Owner))),
             Removal::Removed
         );
-        assert_eq!(Removal::of(&dev(true, None)), Removal::Removed);
+        assert_eq!(Removal::of(&dev(false, None)), Removal::Removed);
         assert!(
             Removal::Disconnected.is_listed(),
             "自己断开的留在主列表、计入已配对"

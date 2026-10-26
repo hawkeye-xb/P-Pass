@@ -584,3 +584,102 @@ fn clearing_the_paired_desktop_cuts_it_off() {
         assert_eq!(desktop.local_bytes(blake3_of(&second)).await.unwrap(), 0);
     });
 }
+
+/// #1126：电脑删掉这台设备时用 410 关掉它正在拉图的连接——provider 的关闭钩子收到
+/// (电脑 NodeId, 410)。本地关闭（revoke）不算；钩子里直接回调 provider 的阻塞接口不死锁。
+#[test]
+fn the_paired_desktop_closing_with_410_reaches_the_close_hook() {
+    let dir = tempdir().unwrap();
+    let source = dir.path().join("source.jpg");
+    let contents = b"close-hook-1126";
+    fs::write(&source, contents).unwrap();
+    let hash = blake3_of(contents);
+    let provider = Arc::new(AndroidBlobsProvider::new_loopback(dir.path()).unwrap());
+    let (tx, rx) = std::sync::mpsc::channel::<(transport::NodeId, u64)>();
+    {
+        let tx = Mutex::new(tx);
+        let me = Arc::clone(&provider);
+        provider.set_peer_close_hook(Some(Arc::new(move |peer, code| {
+            // The app's reaction: forget the pairing → stop serving and drop the endpoint
+            // (`prewarm` / `park` are the provider's blocking `block_on` API).
+            me.revoke();
+            let _ = me.prewarm();
+            let _ = tx.lock().unwrap().send((peer, code));
+        })));
+    }
+    let ticket = provider.register_path(hash, &source).unwrap();
+    let (provider_addr, _, _) = ticket.parse::<BlobTicket>().unwrap().into_parts();
+    let provider_node = transport::NodeId(*provider_addr.id.as_bytes());
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let desktop = runtime.block_on(async {
+        let (desktop, blobs) = receiver_at(dir.path(), "desk").await;
+        provider.set_allowed_peer(Some(desktop.node_id()));
+        // The daemon's way (flow delivery): learn the provider from the ticket, then fetch over
+        // the cached connection.
+        let (node, ticket_hash) = blobs.register_blob_ticket(&ticket).unwrap();
+        assert_eq!(node, provider_node);
+        blobs.fetch_from(node, ticket_hash).await.unwrap();
+        (desktop, blobs)
+    });
+    assert!(
+        rx.recv_timeout(Duration::from_millis(500)).is_err(),
+        "an open connection is no close"
+    );
+    // The desktop removes this phone: every connection to its provider closes with 410.
+    let closed = desktop.0.close_peer(provider_node);
+    assert!(
+        closed >= 1,
+        "the pull's connection is cached on the desktop"
+    );
+    let (peer, code) = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the close hook fires");
+    assert_eq!(peer, desktop.0.node_id());
+    assert_eq!(code, 410);
+    assert!(!provider.is_active(), "the hook's revoke ran (no deadlock)");
+    provider.set_peer_close_hook(None);
+    runtime.block_on(async {
+        desktop.1.close().await;
+        desktop.0.close().await;
+    });
+}
+
+/// #1126 反面：provider 自己关掉的连接（revoke / 换端点）不是电脑的结论，钩子不响。
+#[test]
+fn a_locally_closed_connection_does_not_fire_the_close_hook() {
+    let dir = tempdir().unwrap();
+    let source = dir.path().join("source.jpg");
+    let contents = b"local-close-1126";
+    fs::write(&source, contents).unwrap();
+    let hash = blake3_of(contents);
+    let provider = AndroidBlobsProvider::new_loopback(dir.path()).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel::<u64>();
+    let tx = Mutex::new(tx);
+    provider.set_peer_close_hook(Some(Arc::new(move |_, code| {
+        let _ = tx.lock().unwrap().send(code);
+    })));
+    let ticket = provider.register_path(hash, &source).unwrap();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let desktop = runtime.block_on(async {
+        let (desktop, blobs) = receiver_at(dir.path(), "desk").await;
+        provider.set_allowed_peer(Some(desktop.node_id()));
+        let destination = dir.path().join("received.jpg");
+        assert_eq!(blobs.pull(&ticket, &destination).await.unwrap(), hash);
+        (desktop, blobs)
+    });
+    provider.stop_active_fetch();
+    provider.revoke();
+    let got = rx.recv_timeout(Duration::from_secs(2));
+    assert!(got.is_err(), "a local close must not fire: {got:?}");
+    runtime.block_on(async {
+        desktop.1.close().await;
+        desktop.0.close().await;
+    });
+}

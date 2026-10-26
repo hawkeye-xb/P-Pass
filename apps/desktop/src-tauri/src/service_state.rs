@@ -25,7 +25,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -69,18 +69,57 @@ impl ServiceState {
         }
     }
 
-    /// Pure initial-state rule (unit-tested): configuration first, then the
-    /// user's explicit stop, then whether the resident service is registered.
+    /// Pure initial-state rule (unit-tested): the user's explicit stop first,
+    /// then whether onboarding finished. #1115 起向导第 1 步就会写 config.toml
+    /// （库位置由 daemon 写），所以「有 config」不再等于向导走完：走完 = 常驻服务
+    /// 已登记（向导第 3 步「完成」才登记）。没登记又不是用户停的 = 向导没走完。
     pub fn initial(configured: bool, installed: bool, user_stopped: bool) -> Self {
-        if !configured {
-            Self::NotConfigured
-        } else if user_stopped {
+        if configured && user_stopped {
             Self::Stopped
-        } else if installed {
+        } else if configured && installed {
             Self::Starting
         } else {
-            Self::Stopped
+            Self::NotConfigured
         }
+    }
+
+    /// Pure connection rule (unit-tested). 向导没走完时连上的 daemon 只是向导
+    /// 为写库位置临时拉起的一次性进程，不是常驻服务：状态留在 NotConfigured，
+    /// 否则「服务在线」会把人踢出向导、它退出后又触发自愈（统一回归首启实测）。
+    /// NotConfigured 只经显式启动（`start_daemon` 先置 Starting）离开。
+    pub fn after_connection(self) -> Self {
+        match self {
+            Self::NotConfigured => Self::NotConfigured,
+            _ => Self::Running,
+        }
+    }
+}
+
+/// 冷启动 daemon 的宽限期：从「这一次启动」开始算，过了还连不上才是事实上的失败。
+pub const STARTUP_GRACE: Duration = Duration::from_secs(15);
+
+/// 「这一次启动」：壳启动时，或之后每次显式启动（向导「完成」、启动服务、
+/// 重启、自愈）。宽限期和「连上过没有」都只算这一次启动之内的——向导期间
+/// 连过的一次性 daemon、上一轮的连接都不算（统一回归：点「完成」后先闪
+/// 「不可达」并触发一次自愈，就是宽限期从壳启动算起、且沿用了旧连接）。
+#[derive(Debug, Clone, Copy)]
+struct StartWindow {
+    since: Instant,
+    connected: bool,
+}
+
+impl StartWindow {
+    fn new(now: Instant) -> Self {
+        Self {
+            since: now,
+            connected: false,
+        }
+    }
+
+    /// `(had_connection, within_grace)`，喂给 [`failure_state`]。
+    fn at(self, now: Instant) -> (bool, bool) {
+        let within = !self.connected && now.saturating_duration_since(self.since) < STARTUP_GRACE;
+        (self.connected, within)
     }
 }
 
@@ -111,6 +150,7 @@ struct StateData {
     since_ms: i64,
     last_failure_ms: Option<i64>,
     last_failure_reason: String,
+    start: StartWindow,
 }
 
 struct ManagerInner {
@@ -136,6 +176,7 @@ impl ServiceStateManager {
                     since_ms: now_ms(),
                     last_failure_ms: None,
                     last_failure_reason: String::new(),
+                    start: StartWindow::new(Instant::now()),
                 }),
                 log_lock: Mutex::new(()),
                 started: AtomicBool::new(false),
@@ -172,6 +213,35 @@ impl ServiceStateManager {
             ServiceState::NotConfigured | ServiceState::Stopped => self.current(),
             _ => failure_state(self.user_stopped(), had_connection, within_grace),
         }
+    }
+
+    /// 显式启动（向导「完成」、启动服务、重启、自愈）：置 Starting，并从此刻
+    /// 重新给启动宽限期。凡是要进 Starting 的启动动作都走这里，不直接 `set`。
+    pub fn begin_start(&self, app: &AppHandle, reason: &str) {
+        self.restart_window(Instant::now());
+        self.set(app, ServiceState::Starting, Some(reason));
+    }
+
+    fn restart_window(&self, now: Instant) {
+        let mut guard = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
+        guard.start = StartWindow::new(now);
+    }
+
+    /// 事件流握手成功（含向导期间的一次性 daemon）。
+    pub fn note_connected(&self) {
+        let mut guard = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
+        guard.start.connected = true;
+    }
+
+    /// 连接失败/断开后该进哪个状态：按「这一次启动」判宽限期。
+    pub fn state_after_failure(&self) -> ServiceState {
+        let (had_connection, within_grace) = self.start_window_at(Instant::now());
+        self.next_after_failure(had_connection, within_grace)
+    }
+
+    fn start_window_at(&self, now: Instant) -> (bool, bool) {
+        let guard = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
+        guard.start.at(now)
     }
 
     /// Record a transition and emit it. No-op when the state is unchanged,
@@ -327,7 +397,8 @@ mod tests {
         );
         assert_eq!(
             ServiceState::initial(true, false, false),
-            ServiceState::Stopped
+            ServiceState::NotConfigured,
+            "config written by wizard step 1 but autostart not registered = onboarding unfinished"
         );
         assert_eq!(
             ServiceState::initial(true, true, false),
@@ -407,6 +478,65 @@ mod tests {
             "the same failure every 2s must not flood the log: {text}"
         );
         assert!(text.contains("event=connect_failed"), "{text}");
+    }
+
+    /// 反证：after_connection 对 NotConfigured 返回 Running → 红（向导被踢出、自愈误拉）。
+    #[test]
+    fn connection_does_not_finish_onboarding() {
+        assert_eq!(
+            ServiceState::NotConfigured.after_connection(),
+            ServiceState::NotConfigured
+        );
+        for s in [
+            ServiceState::Stopped,
+            ServiceState::Starting,
+            ServiceState::Running,
+            ServiceState::Unreachable,
+        ] {
+            assert_eq!(s.after_connection(), ServiceState::Running);
+        }
+    }
+
+    /// 统一回归：向导期间一次性 daemon 连上过 → 点「完成」显式启动 → 一次性
+    /// daemon 退出、常驻服务还在冷启动。宽限期内的失败必须仍是 Starting（不触发
+    /// 自愈），宽限期过了才是 Unreachable。
+    /// 反证：`restart_window` 不重置（沿用壳启动时的窗口和旧连接）→ 第一条断言红。
+    #[test]
+    fn explicit_start_restarts_the_grace_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manager =
+            ServiceStateManager::new(ServiceState::NotConfigured, tmp.path().join("a.log"));
+        manager.note_connected(); // 向导里的一次性 daemon
+        let t0 = Instant::now() + Duration::from_secs(60); // 壳早就启动了
+        manager.restart_window(t0);
+        let (had, within) = manager.start_window_at(t0 + Duration::from_secs(2));
+        assert_eq!(
+            failure_state(false, had, within),
+            ServiceState::Starting,
+            "显式启动后宽限期内的失败是「正在启动」，不是不可达"
+        );
+        let (had, within) = manager.start_window_at(t0 + STARTUP_GRACE + Duration::from_secs(1));
+        assert_eq!(failure_state(false, had, within), ServiceState::Unreachable);
+
+        // 这一次启动之内连上过、又断了 = 立刻不可达（原语义不变）。
+        manager.note_connected();
+        let (had, within) = manager.start_window_at(t0 + Duration::from_secs(3));
+        assert_eq!(failure_state(false, had, within), ServiceState::Unreachable);
+    }
+
+    /// 所有进 Starting 的启动动作都必须走 `begin_start`（重新计宽限期）。
+    /// 反证：把任一处改回 `manager.set(.., ServiceState::Starting, ..)` → 红。
+    #[test]
+    fn every_start_goes_through_begin_start() {
+        let lib = include_str!("lib.rs");
+        assert!(
+            !lib.contains("ServiceState::Starting, Some("),
+            "lib.rs 里有绕过 begin_start 直接置 Starting 的地方"
+        );
+        assert!(
+            lib.matches(".begin_start(").count() >= 3,
+            "user start / self-heal / restart"
+        );
     }
 
     #[test]

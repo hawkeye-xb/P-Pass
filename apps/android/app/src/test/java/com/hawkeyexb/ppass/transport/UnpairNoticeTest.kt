@@ -1,5 +1,5 @@
 // #956 关闭裁决（2026-10-22）：主动断开时尽力通知电脑一次，收到就收到，没收到就算了；然后无条件清本地，
-// 之后不再有任何动作（撤掉 #565 的发件箱）。通知仍带要结束的那次配对的纪元。
+// 之后不再有任何动作（撤掉 #565 的发件箱）。通知仍带要结束的那次配对 id。
 package com.hawkeyexb.ppass.transport
 
 import androidx.work.OneTimeWorkRequestBuilder
@@ -78,11 +78,11 @@ class UnpairNoticeTest {
         assertEquals(1, cleared)
     }
 
-    /** 反证：去掉纪元参数 → daemon 走无条件吊销，迟到的旧通知会吊销新配对——第一条红。 */
+    /** 反证：去掉配对 id 参数 → daemon 走无条件吊销，迟到的旧通知会吊销新配对——第一条红。 */
     @Test
     fun theNoticeNamesThePairingItEnds() {
-        assertEquals(JsonPrimitive("epoch-1"), unpairParams("epoch-1")["pairing_epoch"])
-        assertFalse("旧配对没有纪元：不带参数，daemon 走旧语义", unpairParams("").containsKey("pairing_epoch"))
+        assertEquals(JsonPrimitive("pid-1"), unpairParams("pid-1")["pairing_id"])
+        assertFalse("旧配对没有配对 id：不带参数，daemon 走旧语义", unpairParams("").containsKey("pairing_id"))
     }
 
     /** 老版本排下的任务按 Worker 类名 tag 撤：WorkManager 默认给每个请求加上 Worker 的全限定类名作 tag。 */

@@ -19,6 +19,17 @@ pub enum PathKind {
     Relay,
 }
 
+impl PathKind {
+    /// Wire form, same words as the phones' path verdict (`lan` / `direct` / `relay`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PathKind::Lan => "lan",
+            PathKind::Direct => "direct",
+            PathKind::Relay => "relay",
+        }
+    }
+}
+
 /// Connection facts for the self-diagnosis UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ConnInfo {

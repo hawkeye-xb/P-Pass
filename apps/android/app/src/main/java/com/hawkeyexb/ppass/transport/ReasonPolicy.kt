@@ -11,7 +11,10 @@ package com.hawkeyexb.ppass.transport
 import com.hawkeyexb.ppass.proto.Reason
 
 enum class ReasonClass {
-    /** The desktop no longer accepts this pairing: red card + notice, wait for the user to re-pair. */
+    /**
+     * The desktop no longer recognises this pairing (#1119): the phone deletes its side of the pairing and clears up
+     * (see PairingRejectionCleanup), shows the notice, and waits for the user to scan again.
+     */
     PAIRING_LOST,
     /** P-Pass on one side is too old for the other: stop, count nothing, keep the pairing, say which. */
     OUTDATED,
@@ -30,7 +33,9 @@ enum class ReasonClass {
 }
 
 fun reasonClassOf(reason: Reason): ReasonClass = when (reason) {
-    Reason.NOT_PAIRED, Reason.REVOKED, Reason.EPOCH_MISMATCH, Reason.ROLE_FORBIDDEN -> ReasonClass.PAIRING_LOST
+    // #1119: only the two explicit "not paired" answers. role_forbidden means the pairing is fine and this role
+    // may not call that method — a request the phone should not have made (ITEM_FAILED below), never a reason to unpair.
+    Reason.NOT_PAIRED, Reason.PAIRING_MISMATCH -> ReasonClass.PAIRING_LOST
     // unsupported_method: the desktop does not know a method this phone relies on — it is too old.
     Reason.PHONE_OUTDATED, Reason.DESKTOP_OUTDATED, Reason.UNSUPPORTED_METHOD -> ReasonClass.OUTDATED
     Reason.STORAGE_FULL -> ReasonClass.STORAGE_FULL
@@ -38,9 +43,17 @@ fun reasonClassOf(reason: Reason): ReasonClass = when (reason) {
     Reason.STORAGE_FAILED -> ReasonClass.STORAGE_FAILED
     Reason.INTERNAL -> ReasonClass.DESKTOP_INTERNAL
     Reason.FETCH_FAILED -> ReasonClass.PATH
-    Reason.BAD_REQUEST, Reason.NOT_FOUND, Reason.BACKUP_FAILED, Reason.CANCELLED,
-    Reason.PAIR_TOKEN_INVALID, Reason.GRANT_NOT_FOUND, Reason.GRANT_CONFLICT, Reason.UNKNOWN,
+    Reason.ROLE_FORBIDDEN, Reason.BAD_REQUEST, Reason.NOT_FOUND, Reason.BACKUP_FAILED, Reason.CANCELLED,
+    Reason.PAIR_TOKEN_INVALID, Reason.PAIR_CODE_WRONG, Reason.GRANT_NOT_FOUND, Reason.GRANT_CONFLICT, Reason.UNKNOWN,
     -> ReasonClass.ITEM_FAILED
 }
 
 fun isPairingLost(reason: Reason): Boolean = reasonClassOf(reason) == ReasonClass.PAIRING_LOST
+
+/**
+ * #1119: a successful `hello` that does not carry *this phone's* pairing id is the same fact as a `not_paired`
+ * business reply — the desktop has no pairing record for us (or a different one). A missing / blank id or a
+ * different one both count; a hello that could not be decoded at all is not a signal (callers never get here).
+ */
+fun helloDeniesPairing(advertisedPairingId: String?, localPairingId: String): Boolean =
+    advertisedPairingId.isNullOrBlank() || advertisedPairingId != localPairingId

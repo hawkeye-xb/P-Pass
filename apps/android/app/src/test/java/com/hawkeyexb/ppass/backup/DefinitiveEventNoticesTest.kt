@@ -18,7 +18,7 @@ class DefinitiveEventNoticesTest {
     }
 
     private val healthy = DefinitiveFacts(
-        pairingEpoch = "e1",
+        pairingId = "e1",
         pairingLost = false,
         mediaAccess = MediaAccess.FULL,
         backgroundRequested = true,
@@ -35,35 +35,40 @@ class DefinitiveEventNoticesTest {
     // ---- 配对失效 ----
 
     @Test
-    fun pairing_lost_is_posted_once_per_epoch_even_across_process_restarts() {
+    fun pairing_lost_is_posted_once_per_pairing_id_even_across_process_restarts() {
         val n = FakeNotifier()
         run(healthy, n)
         run(healthy.copy(pairingLost = true), n)
         run(healthy.copy(pairingLost = true), n)
-        // 进程重启：内存里的 lostEpoch 没了（isLost = false），epoch 还是同一个——不算恢复。
+        // 进程重启：内存里的 lostPairingId 没了（isLost = false），pairing id 还是同一个——不算恢复。
         run(healthy.copy(pairingLost = false), n)
         run(healthy.copy(pairingLost = true), n)
         assertEquals(listOf<DefinitiveNotice>(DefinitiveNotice.PairingLost), n.posted)
         assertTrue("isLost 变 false 不是恢复，不许撤通知", DefinitiveEvent.PAIRING_LOST !in n.cancelled)
     }
 
+    // #1119：被拒即清理会把配对删掉，这条通知是留给用户的唯一提示——「没有配对了」不许把它撤掉，
+    // 重新配对出新的代号才复位、撤旧通知。反证：把 decideDefinitiveNotices 改回「pairingId == null 就复位 / 撤」→ 红。
     @Test
-    fun pairing_lost_resets_after_repair_and_fires_again_for_the_new_pairing() {
+    fun pairing_lost_notice_survives_the_automatic_cleanup_and_resets_on_the_new_pairing() {
         val n = FakeNotifier()
         run(healthy.copy(pairingLost = true), n)
-        // 用户点「重新扫码」：本地配对清掉 → 复位并撤掉旧通知。
-        run(healthy.copy(pairingEpoch = null), n)
+        // 被拒即清理：本地配对清掉。通知还在，之后的评估（进程启动 / 回前台）也不撤。
+        run(healthy.copy(pairingId = null), n)
+        run(healthy.copy(pairingId = null), n)
+        assertEquals(emptyList<DefinitiveEvent>(), n.cancelled)
+        // 用户重新配对 → 新代号：复位并撤掉旧通知；新配对再被拒还能再发。
+        run(healthy.copy(pairingId = "e2"), n)
         assertEquals(listOf(DefinitiveEvent.PAIRING_LOST), n.cancelled)
-        run(healthy.copy(pairingEpoch = "e2"), n)
-        run(healthy.copy(pairingEpoch = "e2", pairingLost = true), n)
+        run(healthy.copy(pairingId = "e2", pairingLost = true), n)
         assertEquals(2, n.posted.count { it == DefinitiveNotice.PairingLost })
     }
 
     @Test
-    fun a_new_epoch_alone_resets_the_pairing_latch() {
+    fun a_new_pairing_id_alone_resets_the_pairing_latch() {
         val n = FakeNotifier()
         run(healthy.copy(pairingLost = true), n)
-        run(healthy.copy(pairingEpoch = "e2", pairingLost = true), n)
+        run(healthy.copy(pairingId = "e2", pairingLost = true), n)
         assertEquals(2, n.posted.size)
     }
 
@@ -109,8 +114,8 @@ class DefinitiveEventNoticesTest {
     @Test
     fun media_downgrade_while_unpaired_is_recorded_but_not_posted() {
         val n = FakeNotifier()
-        run(healthy.copy(pairingEpoch = null), n)
-        run(healthy.copy(pairingEpoch = null, mediaAccess = MediaAccess.NONE), n)
+        run(healthy.copy(pairingId = null), n)
+        run(healthy.copy(pairingId = null, mediaAccess = MediaAccess.NONE), n)
         assertEquals(emptyList<DefinitiveNotice>(), n.posted)
     }
 
@@ -184,7 +189,7 @@ class DefinitiveEventNoticesTest {
             override fun cancel(event: DefinitiveEvent) = error("boom")
         }
         DefinitiveEventMonitor(DefinitiveNoticeStore(dir), boom).evaluate(healthy.copy(pairingLost = true))
-        assertEquals("e1", DefinitiveNoticeStore(dir).load().notifiedLostEpoch)
+        assertEquals("e1", DefinitiveNoticeStore(dir).load().notifiedLostPairingId)
     }
 
     // ---- 接线点（源文本）：四个评估入口都在，且都不在 #162 的文件里 ----
@@ -207,7 +212,7 @@ class DefinitiveEventNoticesTest {
         val app = src("PPassApplication.kt")
         val boot = app.substringAfter("thread(name = \"ppass-boot-check\") {").substringBefore("registerNetworkCallback()")
         assertTrue("进程启动在 MOB-28 对账之后评估", boot.indexOf("evaluateDefinitiveEvents(") > boot.indexOf("reconcileWatchOnProcessStart("))
-        assertTrue("配对失效记下时评估", app.contains("flowDeliveryPairingLoss.changes.collect { evaluateDefinitiveEvents("))
+        assertTrue("配对失效记下时评估", app.substringAfter("flowDeliveryPairingLoss.changes.collect {").contains("evaluateDefinitiveEvents(this@PPassApplication)"))
         val foreground = app.substringAfter("override fun onActivityStarted").substringBefore("override fun onActivityStopped")
         assertTrue("进前台评估", foreground.contains("evaluateDefinitiveEvents("))
         val work = src("backup/BackupWorker.kt").substringAfter("override suspend fun doWork()").substringBefore("Result.success()")

@@ -39,7 +39,7 @@ pub(crate) fn show_wizard(
 
 /// 【DESK-42 #604】开机自启登记对账（App 启动时跑一次，独立线程）。
 ///
-/// 缺陷现场：`~/Library/LaunchAgents/com.p-pass.daemon.plist` 被钉在
+/// 缺陷现场：`~/Library/LaunchAgents/com.hawkeyexb.ppass.desktop.daemon.plist` 被钉在
 /// `~/P-Pass-Backups/<日期>/old-app/P-Pass.app/...` 里的旧 App 上，而实际安装
 /// 在 `/Applications`——开机/登录/KeepAlive 拉起的是那份旧服务。成因是登记
 /// 路径只在「用户主动启动服务」或「daemon 接管」两个时机写入，此后换目录、
@@ -54,8 +54,9 @@ pub(crate) fn reconcile_autostart_registration() {
     let Ok(exe) = std::env::current_exe() else {
         return;
     };
-    let Some(dir) = exe.parent() else { return };
-    let sidecar = dir.join(platform::hosting().daemon_executable_name());
+    let Some(sidecar) = platform::hosting().bundled_daemon_path(&exe) else {
+        return;
+    };
     // 开发运行（target/ 里没有 sidecar）等情况：没有可对账的目标，直接跳过。
     if !sidecar.is_file() {
         return;

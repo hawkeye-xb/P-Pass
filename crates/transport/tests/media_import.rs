@@ -1,6 +1,6 @@
 //! #413 §3: reference-first media import, then serve / release as separate
 //! steps. The copy fallback works in every build; referencing an original
-//! needs the file identity only the Android bridge build (`android-jni`)
+//! needs the file identity only the phone binding build (`mobile-ffi`)
 //! reads, so those cases live in the gated module below.
 
 use std::fs::{self, File};
@@ -83,7 +83,7 @@ fn wait_until_gone(provider: &AndroidBlobsProvider, hash: [u8; 32]) {
 /// #703: `has_blob` going false is the store's bookkeeping; the payload files are
 /// removed only when the batch holding the GC delete commits. Sync the store so
 /// the disk assertion that follows measures the committed state, not a race.
-#[cfg(feature = "android-jni")]
+#[cfg(feature = "mobile-ffi")]
 fn wait_until_gone_on_disk(provider: &AndroidBlobsProvider, hash: [u8; 32]) {
     wait_until_gone(provider, hash);
     provider.sync_store().expect("sync provider store");
@@ -344,7 +344,7 @@ fn a_persistently_offline_provider_replaces_its_endpoint_on_each_failed_serve() 
     assert!(provider.is_held(import.hash));
 }
 
-#[cfg(feature = "android-jni")]
+#[cfg(feature = "mobile-ffi")]
 mod reference {
     use super::*;
     use std::io::{Seek, SeekFrom, Write};

@@ -5,7 +5,7 @@
 #   tools/ios/e2e-sim.sh            # 输出与截图在 apps/ios/build/e2e/
 #
 # 隔离（与 tools/ios/test-transport-ffi.sh 同一套）：
-#   - daemon：fake HOME + 临时 PPF_DATA_DIR + 0.0.0.0:0（OS 分配端口，绝不用 41145；不能绑 127.0.0.1——实测绑回环时首次拉取固定卡约 30 秒后失败，绑 0.0.0.0 则 0.07 秒，见 docs/runbook/ios-device-forensics.md）+ 无 relay +
+#   - daemon：fake HOME + 测试沙盒（--ephemeral 自建临时库）+ 0.0.0.0:0（OS 分配端口，绝不用 41145；不能绑 127.0.0.1——实测绑回环时首次拉取固定卡约 30 秒后失败，绑 0.0.0.0 则 0.07 秒，见 docs/runbook/ios-device-forensics.md）+ 无 relay +
 #     --ephemeral（脚本退出 ⇒ stdin 关 ⇒ daemon 退出）。不碰本机已装的 P-Pass。
 #   - 模拟器：专用设备 PPassE2E（不存在就建，每轮先 erase），不碰别的模拟器；结束时关掉（本脚本启动的才关）。
 #   - 照片：ffmpeg / sips 现造（jpg / heic / mp4），simctl addmedia 灌进图库；相册授权用
@@ -53,7 +53,7 @@ APP="$DERIVED/Build/Products/Debug-iphonesimulator/PPass.app"
 
 echo "==> 工具：daemon（release）与 b3sum"
 cargo build -q -p daemon --release
-DAEMON="$ROOT/target/release/daemon"
+DAEMON="${CARGO_TARGET_DIR:-$ROOT/target}/release/daemon"
 B3_TARGET="$IOS/build/b3sum-target"
 (cd "$ROOT/tools/ios/b3sum" && CARGO_TARGET_DIR="$B3_TARGET" cargo build -q --release)
 B3="$B3_TARGET/release/ppass-b3sum"
@@ -85,9 +85,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "$WORK/home" "$WORK/data"
+mkdir -p "$WORK/home"
 mkfifo "$WORK/stdin"
-HOME="$WORK/home" PPF_DATA_DIR="$WORK/data" PPF_BIND_ADDR="${PPASS_E2E_BIND:-0.0.0.0:0}" PPF_RELAY_URLS="" PPF_TELEMETRY_ENABLED=false \
+HOME="$WORK/home" PPF_BIND_ADDR="${PPASS_E2E_BIND:-0.0.0.0:0}" PPF_RELAY_URLS="" PPF_TELEMETRY_ENABLED=false \
   RUST_LOG="${PPASS_E2E_RUST_LOG:-info}" "$DAEMON" --ephemeral <"$WORK/stdin" >"$WORK/daemon.out" 2>"$WORK/daemon.err" &
 DAEMON_PID=$!
 exec 4>"$WORK/stdin"
@@ -111,17 +111,23 @@ echo "daemon pid=${DAEMON_PID} node=${NODE_ID:0:8}… udp=127.0.0.1:${PORT}（�
 
 # shellcheck source=tools/ipc-lib.sh
 source "$ROOT/tools/ipc-lib.sh"
-ipc_pair_qr "$WORK/data/ipc.token"
+# #1115：--ephemeral 是测试沙盒，库目录由 daemon 自建（stdout 的 SANDBOX: 行），不收路径输入。
+ipc_sandbox_dir "$WORK/daemon.out"
+ipc_pair_qr "$SANDBOX_DIR/ipc.token"
 
 # 业主：把队列里每一条待确认的配对请求点「允许」（这台 daemon 只给本次测试用）。
 owner_loop() {
-  local resp ids n body
+  local resp ids n body code
   while kill -0 "$DAEMON_PID" 2>/dev/null; do
     if resp=$(ipc pairing.pending 2>/dev/null); then
       ids=$(printf '%s' "$resp" | jq -r '.result.pending[]?.node_id // empty')
       for n in $ids; do
-        body=$(jq -cn --arg n "$n" '{accept: true, node_id: $n}')
-        if ipc pairing.confirm "$body" >/dev/null 2>&1; then echo "owner: 已允许 ${n:0:8}…"; fi
+        # #1118：允许 = 输入手机显示的验证码。手机（App 的 e2e 驱动 / XCTest）提交成功后打出
+        # `PAIR_CODE=<6 位> node=<手机 NodeId>`；这里按 node 取最后一行，没有码的请求不动。
+        code=$(cat "$OUT/status/pair_code.txt" 2>/dev/null | sed -n "s/.*PAIR_CODE=\([0-9]\{6\}\) node=$n.*/\1/p" | tail -1)
+        [ -n "$code" ] || continue
+        body=$(jq -cn --arg n "$n" --arg c "$code" '{accept: true, node_id: $n, code: $c}')
+        if ipc pairing.confirm "$body" >/dev/null 2>&1; then echo "owner: 已用验证码允许 ${n:0:8}…"; fi
       done
     fi
     sleep 0.3
@@ -175,7 +181,7 @@ FAIL=0
 [ "$(jq -r '.ok' "$OUT/status/status.json")" = true ] || { echo "FAIL: App 报告未成功：$(jq -r '.error // .timeline_error' "$OUT/status/status.json")"; FAIL=1; }
 
 # daemon 库里落地的全部媒体文件（HOME 与数据目录之下，排除 daemon 自己的索引 / 缩略图 / 临时目录）。
-find "$WORK/home" "$WORK/data" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.heic' -o -iname '*.mp4' -o -iname '*.mov' \) \
+find "$WORK/home" "$SANDBOX_DIR" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.heic' -o -iname '*.mp4' -o -iname '*.mov' \) \
   ! -path '*/thumbs/*' ! -path '*/.thumbs/*' ! -path '*/tmp/*' 2>/dev/null | sort > "$OUT/daemon-files.txt"
 echo "--- daemon 库里的媒体文件 ---"; cat "$OUT/daemon-files.txt"
 : > "$OUT/daemon.b3"

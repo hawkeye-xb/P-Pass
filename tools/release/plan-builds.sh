@@ -23,7 +23,7 @@
 #       docs/ cards/ .claude/ *.md                                  不影响产物
 #       apps/android/、tools/build-android-iroh-blobs-bridge.sh      只算 Android
 #       apps/desktop/src-tauri/tauri.windows.conf.json              只算 Windows
-#       tools/bundle-macos.sh、tools/bundle-desktop-macos.sh、tools/fetch-ffmpeg.sh
+#       tools/bundle-macos.sh、tools/bundle-desktop-macos.sh、tools/daemon-helper-macos.sh、tools/fetch-ffmpeg.sh
 #                                                                   只算 macOS
 #       apps/desktop/（其余）                                       两个桌面端（macOS + Windows）
 #       apps/ios/、tools/ios/、tools/build-ios-*                    只算 iOS（#887；#348 起有发版 lane：TestFlight）
@@ -31,7 +31,7 @@
 #       crates/、tools/testclient/、根 Cargo.toml / Cargo.lock       按 Cargo 依赖图归属到端（#1062，见下）
 #       其余（assets/、release/、tools/、.github/、rust-toolchain.toml …） 所有端
 #   - Rust 改动（#1062，tools/release/rust-impact.py）：cargo metadata（--no-deps，不联网）算出每端入口包
-#     （Android transport[android-jni]、iOS transport[ios-ffi]、macOS daemon + 桌面壳、Windows daemon +
+#     （Android transport[mobile-ffi]、iOS transport[mobile-ffi]、macOS daemon + 桌面壳、Windows daemon +
 #     testclient + 桌面壳）传递依赖哪些 workspace crate，改动的 crate 只触发依赖它的端。根 Cargo.toml 只变
 #     workspace 版本号 ⇒ 桌面两端；Cargo.lock 按变动的外部包反查依赖它的 crate。拿不准（cargo / python3
 #     不可用、metadata 失败、crates/ 下的非成员路径、lock 对不上号）⇒ 所有端。
@@ -97,7 +97,10 @@ if [[ "$TAG" == *-test.* ]]; then
       apps/android/app/src/main/res/values/strings.xml | apps/android/app/src/main/res/values-zh/strings.xml) echo android ios ;;
       apps/android/* | tools/build-android-iroh-blobs-bridge.sh) echo android ;;
       apps/desktop/src-tauri/tauri.windows.conf.json) echo windows ;;
-      tools/bundle-macos.sh | tools/bundle-desktop-macos.sh | tools/fetch-ffmpeg.sh) echo macos ;;
+      # #1121：正式更新公钥在这里，Android 构建期也读它（build.gradle.kts）⇒ 两端都受影响。
+      apps/desktop/src-tauri/tauri.conf.json) echo desktop android ;;
+      apps/desktop/src-tauri/tauri.macos.conf.json | apps/desktop/src-tauri/macos/*) echo macos ;;
+      tools/bundle-macos.sh | tools/bundle-desktop-macos.sh | tools/daemon-helper-macos.sh | tools/fetch-ffmpeg.sh) echo macos ;;
       apps/desktop/*) echo desktop ;;
       # #887：iOS 工程与它专用的脚本不进 Android/macOS/Windows 的产物，只触发 iOS（#348 起有发版 lane）。
       apps/ios/* | tools/ios/* | tools/build-ios-*) echo ios ;;
@@ -227,7 +230,7 @@ warn_tooling() {
 # #894：安卓原生库（libtransport.so）的输入也算——与 tools/check-version-bump.sh 的 ANDROID_INPUTS 同口径。
 [ "$ANDROID" = reuse ] && warn_tooling android tools/build-android-iroh-blobs-bridge.sh \
   crates/transport Cargo.toml Cargo.lock rust-toolchain.toml
-[ "$MACOS" = reuse ] && warn_tooling macos tools/bundle-macos.sh tools/bundle-desktop-macos.sh tools/fetch-ffmpeg.sh
+[ "$MACOS" = reuse ] && warn_tooling macos tools/bundle-macos.sh tools/bundle-desktop-macos.sh tools/daemon-helper-macos.sh tools/fetch-ffmpeg.sh
 
 emit android "$ANDROID"
 emit macos "$MACOS"

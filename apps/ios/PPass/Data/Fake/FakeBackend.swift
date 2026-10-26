@@ -85,7 +85,8 @@ final class FakePairing: PairingService {
     func pairedAtMs() -> Int64? { Int64(Date().addingTimeInterval(-86_400 * 12).timeIntervalSince1970 * 1000) }
 
     /// 演示规则：串里带 `t=deny` → 电脑拒绝；`t=expired` → 过期；`t=fail` → 连不上；其余 → 加入成功。
-    func pair(code: String) async -> PairOutcome {
+    func pair(code: String, onCode: @escaping PairCodeSink) async -> PairOutcome {
+        await onCode(PairCodeShown(code: "123456", desktop: PairDesktopInfo(name: "Home-Mac", fingerprint: "AB12 CD34"), phoneNode: ""))
         try? await Task.sleep(nanoseconds: 1_200_000_000)
         if code.contains("t=deny") { return .refused(note: nil, ownerSaidNo: true) }
         if code.contains("t=expired") { return .refused(note: .expired, ownerSaidNo: false) }
@@ -100,6 +101,8 @@ final class FakePairing: PairingService {
         try? await Task.sleep(nanoseconds: 600_000_000)
         current = .notPaired
     }
+
+    func clearLocal() async { current = .notPaired }
 }
 
 enum FakeBackendError: Error { case demoHasNoLedger }

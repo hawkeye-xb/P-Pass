@@ -11,6 +11,8 @@ object ApkVerifier {
 
     sealed interface Result {
         data object Ok : Result
+        /** #1121: manifest carries no sha256; installing is refused (the field is mandatory). */
+        data object NoSha256 : Result
         /** Manifest declared a sha256 that does not match the downloaded bytes. */
         data class Sha256Mismatch(val expected: String, val actual: String) : Result
         /** Manifest carries no minisign signature; installing is refused. */
@@ -33,8 +35,8 @@ object ApkVerifier {
     }
 
     /**
-     * @param sha256HexExpected manifest `sha256`; blank = field absent (transitional
-     *   tolerance for manifests produced by older tooling, minisign still applies).
+     * @param sha256HexExpected manifest `sha256`. Blank = hard failure (#1121: the release
+     *   pipeline always writes it; the old "absent = skip" transition is closed).
      * @param signatureB64 manifest `signature` (minisign). Blank = hard failure.
      */
     fun verifyDownloadedApk(file: File, sha256HexExpected: String, signatureB64: String): Result =
@@ -50,11 +52,12 @@ object ApkVerifier {
         if (!file.isFile || file.length() == 0L) {
             return Result.Error(IllegalStateException("downloaded apk missing or empty"))
         }
-        if (sha256HexExpected.isNotBlank()) {
-            val actual = sha256Hex(file)
-            if (!actual.equals(sha256HexExpected.trim(), ignoreCase = true)) {
-                return Result.Sha256Mismatch(expected = sha256HexExpected.trim(), actual = actual)
-            }
+        if (sha256HexExpected.isBlank()) {
+            return Result.NoSha256
+        }
+        val actual = sha256Hex(file)
+        if (!actual.equals(sha256HexExpected.trim(), ignoreCase = true)) {
+            return Result.Sha256Mismatch(expected = sha256HexExpected.trim(), actual = actual)
         }
         if (signatureB64.isBlank()) {
             return Result.NoSignature

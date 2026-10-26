@@ -13,7 +13,7 @@ class AndroidMediaImporterTest {
     @Test
     fun `unopenable source is SourceMissing and never reaches native`() {
         val native = FakeNative()
-        val bridge = IrohBlobsProviderBridge(native) { error("legacy path unused") }
+        val bridge = IrohBlobsProviderBridge(native)
         for (open in listOf<(String) -> AutoCloseable?>(
             { null },
             { throw FileNotFoundException("gone") },
@@ -26,9 +26,9 @@ class AndroidMediaImporterTest {
 
     @Test
     fun `import passes path and descriptor, closes it on return, and reports the result`() {
-        val native = FakeNative(importJson = """{"hash":"$hash","size":42,"by_reference":true,"fallback":null,"detail":null}""")
+        val native = FakeNative(import = NativeMediaImport(hash, 42, byReference = true))
         val source = Source()
-        val importer = AndroidMediaImporter(IrohBlobsProviderBridge(native) { error("unused") }, { source })
+        val importer = AndroidMediaImporter(IrohBlobsProviderBridge(native), { source })
 
         val result = importer.import(7L, "content://media/7", "/storage/emulated/0/DCIM/a.jpg")
 
@@ -39,9 +39,9 @@ class AndroidMediaImporterTest {
 
     @Test
     fun `copy fallback is logged, not silent`() {
-        val native = FakeNative(importJson = """{"hash":"$hash","size":9,"by_reference":false,"fallback":"no_path","detail":null}""")
+        val native = FakeNative(import = NativeMediaImport(hash, 9, byReference = false, fallback = "no_path"))
         val logs = mutableListOf<String>()
-        val importer = AndroidMediaImporter(IrohBlobsProviderBridge(native) { error("unused") }, { Source() }, FlowLogger { logs += it })
+        val importer = AndroidMediaImporter(IrohBlobsProviderBridge(native), { Source() }, FlowLogger { logs += it })
 
         assertEquals(ImportResult.Imported(hash, 9L, byReference = false), importer.import(3L, "content://media/3", null))
         assertEquals("import:null", native.calls.single().substringBeforeLast(':'))
@@ -52,7 +52,7 @@ class AndroidMediaImporterTest {
     fun `descriptor is closed when native import fails`() {
         val native = FakeNative(importFailure = IllegalStateException("store broken"))
         val source = Source()
-        val importer = AndroidMediaImporter(IrohBlobsProviderBridge(native) { error("unused") }, { source })
+        val importer = AndroidMediaImporter(IrohBlobsProviderBridge(native), { source })
         try {
             importer.import(1L, "content://media/1", "/p")
             fail("expected the native failure to propagate")
@@ -64,7 +64,7 @@ class AndroidMediaImporterTest {
     @Test
     fun `serve makes the lease active and maps a gone original to SourceMissingException`() {
         val native = FakeNative()
-        val bridge = IrohBlobsProviderBridge(native) { error("unused") }
+        val bridge = IrohBlobsProviderBridge(native)
         val importer = AndroidMediaImporter(bridge, { Source() })
         val lease = ProviderLease(5L, leaseTokenFor(5L), hash)
 
@@ -83,24 +83,18 @@ class AndroidMediaImporterTest {
     fun `release never throws`() {
         val native = FakeNative(releaseFailure = IllegalStateException("unknown handle"))
         val logs = mutableListOf<String>()
-        AndroidMediaImporter(IrohBlobsProviderBridge(native) { error("unused") }, { Source() }, FlowLogger { logs += it }).release(hash)
+        AndroidMediaImporter(IrohBlobsProviderBridge(native), { Source() }, FlowLogger { logs += it }).release(hash)
         assertEquals(listOf("release:$hash"), native.calls)
         assertEquals(1, logs.size)
     }
 
-    @Test
-    fun `transfer status carries the source fault`() {
-        assertEquals(TransferStatus.Aborted(hash, SourceFault.MISSING), parseTransferStatus("""{"state":"aborted","hash":"$hash","source":"missing"}"""))
-        assertEquals(TransferStatus.Aborted(hash), parseTransferStatus("""{"state":"aborted","hash":"$hash"}"""))
-    }
-
     // ---------------------------------------------------------------- #843 原样字节
 
-    private val importJson843 = """{"hash":"$hash","size":42,"by_reference":true,"fallback":null,"detail":null}"""
+    private val import843 = NativeMediaImport(hash, 42, byReference = true)
 
     private fun importer(readable: Boolean, opened: MutableList<String>, original: (String) -> AutoCloseable? = { opened += "original"; Source() }) =
         AndroidMediaImporter(
-            IrohBlobsProviderBridge(FakeNative(importJson = importJson843)) { error("unused") },
+            IrohBlobsProviderBridge(FakeNative(import = import843)),
             open = { opened += "plain"; Source() },
             openOriginal = original,
             locationReadable = { readable },
@@ -144,17 +138,17 @@ class AndroidMediaImporterTest {
     }
 
     private class FakeNative(
-        private val importJson: String = "{}",
+        private val import: NativeMediaImport = NativeMediaImport("00".repeat(32), 0, byReference = false),
         private val importFailure: Exception? = null,
         private val releaseFailure: Exception? = null,
     ) : NativeIrohBlobsProvider {
         val calls = mutableListOf<String>()
         var serveFailure: Exception? = null
 
-        override fun importMedia(dataPath: String?, source: Any): String {
+        override fun importMedia(dataPath: String?, source: Any): NativeMediaImport {
             calls += "import:$dataPath:$source"
             importFailure?.let { throw it }
-            return importJson
+            return import
         }
 
         override fun serve(hash: String): String {
@@ -167,10 +161,9 @@ class AndroidMediaImporterTest {
             releaseFailure?.let { throw it }
         }
 
-        override fun register(hash: String, source: Any): String = error("legacy register unused")
         override fun stopActiveFetch(queueSequence: Long) = Unit
         override fun releaseRetention(hash: String) = Unit
         override fun revoke(hash: String) = Unit
-        override fun transferStatus(): String = """{"state":"in_progress","connected":false,"source":"changed"}"""
+        override fun transferStatus(): TransferStatus = TransferStatus.InProgress(connected = false, idleForMs = null, source = SourceFault.CHANGED)
     }
 }

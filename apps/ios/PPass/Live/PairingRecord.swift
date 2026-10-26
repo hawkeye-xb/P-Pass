@@ -8,7 +8,7 @@ struct PairingRecord: Codable, Equatable {
     var peerToken: String
     var storageDeviceName: String
     var pairedAt: Int64
-    var pairingEpoch: String
+    var pairingId: String
     /// 电脑那边已经不认这台手机（探测到 pairing lost）。
     var lost: Bool = false
 }

@@ -190,3 +190,65 @@ fn s05_fixture_sweep_failed_is_zero() {
     );
     eprintln!("S-05 sweep: {total} files, 0 failed");
 }
+
+/// 透明图：左半全透明（RGB 是黑的——PNG 导出器常见写法），右半不透明红。
+fn transparent_rgba(w: u32, h: u32) -> image::RgbaImage {
+    image::RgbaImage::from_fn(w, h, |x, _| {
+        if x < w / 2 {
+            image::Rgba([0, 0, 0, 0])
+        } else {
+            image::Rgba([220, 30, 30, 255])
+        }
+    })
+}
+
+fn assert_white_left_red_right(path: &Path) {
+    let img = image::open(path).unwrap().to_rgb8();
+    let (w, h) = img.dimensions();
+    let left = img.get_pixel(w / 8, h / 2);
+    let right = img.get_pixel(w - 1 - w / 8, h / 2);
+    // JPEG 有损，留余量；改前透明区是黑块（≈0）。
+    assert!(
+        left.0.iter().all(|&c| c >= 240),
+        "透明区必须垫白底，实际 {left:?}"
+    );
+    assert!(
+        right.0[0] >= 190 && right.0[1] <= 70,
+        "不透明区保持原色，实际 {right:?}"
+    );
+}
+
+/// 统一回归：三星传来的透明 PNG 在照片墙上是黑块。行业做法是垫白底再出 JPEG。
+/// 反证：去掉合成白底 → 左半是黑的，红。
+#[test]
+fn transparent_png_is_flattened_onto_white() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("sticker.png");
+    transparent_rgba(600, 300)
+        .save_with_format(&src, image::ImageFormat::Png)
+        .unwrap();
+
+    let r = make_thumbs(&[0x77; 32], &src, &dir.path().join("thumbs"));
+    assert_eq!(r.outcome, ThumbOutcome::Generated);
+    assert_white_left_red_right(&r.paths.t256);
+    assert_white_left_red_right(&r.paths.t1024);
+}
+
+/// ICO 能出缩略图（程序现场生成样本），透明部分同样垫白底。
+/// 反证：image 不开 `ico` feature → Placeholder，红。
+#[test]
+fn ico_gets_thumbnails_on_white() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("favicon.ico");
+    let img = transparent_rgba(64, 64);
+    let frame =
+        image::codecs::ico::IcoFrame::as_png(img.as_raw(), 64, 64, image::ExtendedColorType::Rgba8)
+            .unwrap();
+    image::codecs::ico::IcoEncoder::new(fs::File::create(&src).unwrap())
+        .encode_images(&[frame])
+        .unwrap();
+
+    let r = make_thumbs(&[0x78; 32], &src, &dir.path().join("thumbs"));
+    assert_eq!(r.outcome, ThumbOutcome::Generated, "ICO 必须能解码");
+    assert_white_left_red_right(&r.paths.t256);
+}

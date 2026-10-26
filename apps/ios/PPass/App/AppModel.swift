@@ -154,6 +154,9 @@ final class AppModel: ObservableObject {
         } else { transferMark = nil }
         access = backend.media.access()
         pairing = backend.pairing.status()
+        // #1119：配对被清掉（被拒即清理）→ 回欢迎页。界面不在欢迎页（含选相册 / 首次备份）而配对没了，就是这一种。
+        let next = Self.phase(phase, whenPairing: pairing)
+        if next != phase { AppLog.log("pairing cleared while in \(phase); back to onboarding"); tab = .photos; phase = next }
         do {
             scope = try backend.media.savedScope()
             scopeUnreadable = false
@@ -324,8 +327,19 @@ final class AppModel: ObservableObject {
         phase = .onboarding
     }
 
+    /// 配对没了（`.notPaired`）而界面还在配对之后的页面 → 回欢迎页；其余原样。
+    nonisolated static func phase(_ phase: Phase, whenPairing pairing: PairingStatus) -> Phase {
+        guard pairing == .notPaired, phase != .onboarding else { return phase }
+        return .onboarding
+    }
+
+    /// 配对失效卡的「重新连接」：先按断开清单清本地（不通知电脑，它本就不认这台手机），再回欢迎页重新扫码（#1119）。
     func startOver() {
-        refresh()
-        phase = .onboarding
+        Task {
+            await backend.pairing.clearLocal()
+            refresh()
+            tab = .photos
+            phase = .onboarding
+        }
     }
 }

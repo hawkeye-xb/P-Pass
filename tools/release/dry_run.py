@@ -15,8 +15,10 @@
     文件清单取自 release.yml 里 macOS job 的 upload-artifact `path:`（#539：资产集合有断言）；
   - 仓库：临时 git 仓库（当前工作区的 tools/ + 临时 versions.json / 说明文件），tag 现打；
   - gh：PATH 前置的 stub（tools/release/gha_sim.py 里的 GH_STUB），记录调用、本地存 release，不访问网络；
-  - 签名密钥：运行时用 tauri signer 现生成的临时密钥（不碰 UPDATE_SIGNING_KEY），
-    签名由独立校验器 tools/release/verify-update-sig.mjs 验。
+  - 签名密钥：运行时用 tauri signer 现生成的两对临时密钥（#1121：正式 / test 各一对，
+    不碰 UPDATE_SIGNING_KEY*）；临时仓库里的公钥来源（tauri.conf.json 的 updater pubkey、
+    release/update-keys/test.pub）换成这两把临时公钥。签名由独立校验器
+    tools/release/verify-update-sig.mjs 验。
 
 用法：
   tools/release/dry-run.sh [--keep]          # 或 just release-dry-run
@@ -47,7 +49,10 @@ from gha_sim import Runner, SimError, gh_calls, load_workflow, write_gh_stub  # 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
 REPO = "hawkeye-xb/P-Pass"
-SIGNER = ["npx", "-y", "@tauri-apps/cli@2.11.4", "signer"]
+# #1121：与发布流水线同一个签名器（tools/release/signer/ 的 lockfile 安装）。
+SIGNER = [str(Path(__file__).resolve().parent / "signer.sh")]
+# #1121：两对临时密钥的公钥（tauri 格式文本），main() 里生成后填进来，make_origin 写进临时仓库。
+DRYRUN_PUBS: dict[str, str] = {}
 
 PREV_TAG, FORMAL_TAG, TEST_TAG, BAD_TAG = "v2099.1.0", "v2099.1.1", "v0.0.1-test.1", "v2099.1.2"
 PREV_VERSIONS = {"desktop": "9.8.0", "android": "9.8.1", "androidVersionCode": 1}
@@ -108,8 +113,8 @@ def sha256(p: Path) -> str:
 # ── 准备：临时密钥、临时仓库、假产物 ─────────────────────────────────────
 
 
-def make_key(d: Path) -> tuple[str, Path]:
-    key = d / "dry-run.key"
+def make_key(d: Path, name: str = "dry-run") -> tuple[str, Path]:
+    key = d / f"{name}.key"
     p = sh(SIGNER + ["generate", "-w", str(key), "-p", "", "--ci"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
            text=True, check=False, env={**os.environ, "CI": "true"})
     if p.returncode != 0 or not key.exists():
@@ -144,7 +149,13 @@ def make_origin(d: Path, name: str, commits: list, changelog: str = CHANGELOG) -
     # #809：桌面外壳的 tauri 配置——version 故意是个过期号，构建版本若还从这里来，断言立刻红。
     conf = src / "apps/desktop/src-tauri/tauri.conf.json"
     conf.parent.mkdir(parents=True)
-    conf.write_text(json.dumps({"productName": "P-Pass", "version": STALE_TAURI_CONF_VERSION}, indent=2) + "\n")
+    conf.write_text(json.dumps({"productName": "P-Pass", "version": STALE_TAURI_CONF_VERSION,
+                                # #1115：helper 的 LSMinimumSystemVersion 从这里读（唯一来源）
+                                "bundle": {"macOS": {"minimumSystemVersion": "13.0"}},
+                                "plugins": {"updater": {"pubkey": DRYRUN_PUBS["stable"]}}}, indent=2) + "\n")
+    # #1121：test 通道公钥的唯一来源（tools/release/update-key-lib.sh / tauri-config.mjs 读它）
+    (src / "release/update-keys").mkdir(parents=True)
+    (src / "release/update-keys/test.pub").write_text(DRYRUN_PUBS["test"] + "\n")
     (src / "CHANGELOG.md").write_text(changelog)
 
     def commit(versions: dict, notes: dict[str, str], files: dict[str, str], msg: str, *tags: str):
@@ -324,7 +335,8 @@ if sub == "bundle":
     app = bundle_dir / "macos/P-Pass.app"
     (app / "Contents/MacOS").mkdir(parents=True, exist_ok=True)
     (app / "Contents/Info.plist").write_bytes(plistlib.dumps({"CFBundleShortVersionString": ver}))
-    shutil.copy2("src-tauri/binaries/ppf-daemon-aarch64-apple-darwin", app / "Contents/MacOS/ppf-daemon")
+    # #1110：macOS 不走 externalBin（tauri.macos.conf.json 置空），.app 里只有壳；
+    # daemon helper 由 bundle-desktop-macos.sh 第 4 步组装。
 elif sub == "build" and "--no-bundle" not in rest:
     (bundle_dir / "nsis").mkdir(parents=True, exist_ok=True)
     (bundle_dir / "nsis" / f"P-Pass_{ver}_x64-setup.exe").write_bytes(b"fake")
@@ -333,6 +345,29 @@ elif sub == "build" and "--no-bundle" not in rest:
 # job → 外壳那一步（release.yml 里的 step 名）。改名时这里跟着改，否则 dry-run 直接报错。
 SHELL_STEPS = {"macos-arm64": "Bundle desktop .app + dmg (H-10c)", "windows-x64": "Build desktop shell installer (NSIS, T7)"}
 BUILD_VERSION_STEPS = ["Resolve desktop version (UPD-13)", "Build release binaries"]
+
+
+APPLE_CERT_GATE = "Require Apple signing certificate (#1121)"
+
+
+def apple_cert_gate(ck: Check, sc: "Scenario", wf: dict, tag: str):
+    """#1121：macOS 构建缺 Apple 证书时在最前面失败（ad-hoc 包会被客户端拒收）；有证书时放行。
+
+    反证：删掉 release.yml 里的这一步 ⇒ 找不到步骤，dry-run 报错；把它改成只告警 ⇒ 第一条红。
+    """
+    steps = wf["jobs"]["macos-arm64"]["steps"]
+    gate = [s for s in steps if s.get("name") == APPLE_CERT_GATE]
+    if len(gate) != 1:
+        raise SimError(f"macos-arm64 job 应恰有 1 个「{APPLE_CERT_GATE}」步骤，实际 {len(gate)}")
+    ck(steps[0].get("name") == APPLE_CERT_GATE, f"#1121 @ {tag}：证书门禁是 macOS job 的第一步（不白跑构建）",
+       json.dumps([s.get("name") or s.get("uses") for s in steps[:3]], ensure_ascii=False))
+    github = {"event_name": "push", "ref": f"refs/tags/{tag}", "ref_name": tag, "repository": REPO,
+              "token": "dry-run-token", "workflow_sha": sc.sha, "event": {}}
+    mini = {"env": wf.get("env") or {}, "jobs": {"macos-arm64": {"steps": gate}}}
+    for secret, want in (("", "failure"), ("ZHVtbXk=", "success")):
+        r = sc.runner.run_job(mini, "macos-arm64", github=github, inputs={},
+                              secrets={"APPLE_CERT_P12": secret}, needs={})
+        ck(r.result == want, f"#1121 @ {tag}：APPLE_CERT_P12 {'缺失' if not secret else '在位'} ⇒ {want}", r.log)
 
 
 def build_versions(ck: Check, sc: "Scenario", wf: dict, tag: str, want: str):
@@ -454,7 +489,9 @@ class Scenario:
                     raise SimError(f"{job_id} needs {n}，dry-run 没有它的结果")
             # 没配置的 secret 在 GitHub 上是空串（VT_API_KEY 未配置 ⇒ VirusTotal 步跳过）
             self.jobs[job_id] = self.runner.run_job(wf, job_id, github=github, inputs={},
-                                                    secrets={"UPDATE_SIGNING_KEY": self.key, "VT_API_KEY": ""},
+                                                    secrets={"UPDATE_SIGNING_KEY": self.key["stable"][0],
+                                                             "UPDATE_SIGNING_KEY_TEST": self.key["test"][0],
+                                                             "VT_API_KEY": ""},
                                                     needs=needs)
         return self.jobs
 
@@ -595,6 +632,7 @@ def formal(ck: Check, base: Path, key: str, pub: Path, rel: dict, mirror: dict):
         job_ok(ck, jobs, j)
     check_macos_assets(ck, sc, FORMAL_TAG, dv)
     build_versions(ck, sc, rel, FORMAL_TAG, dv)
+    apple_cert_gate(ck, sc, rel, FORMAL_TAG)
     job_ok(ck, jobs, "upload-windows", "skipped")
     job_ok(ck, jobs, "finalize-manifest-windows", "skipped")
     ck(not sc.asset(FORMAL_TAG, "manifest-windows.json").exists(), "#788② 正式 tag 不出 manifest-windows.json（Windows 未正式发布）")
@@ -607,11 +645,13 @@ def formal(ck: Check, base: Path, key: str, pub: Path, rel: dict, mirror: dict):
     ck((sc.meta(FORMAL_TAG) or {}).get("draft") is True, "正式 tag 停在 draft（等人工 publish），未自动发布",
        json.dumps(sc.meta(FORMAL_TAG)))
     step_is(ck, jobs, "upload-android", "Compose update manifest (UPD-01)", "success")
-    step_is(ck, jobs, "upload-android", "Sign update manifest (UPD-01, gated)", "success")
+    step_is(ck, jobs, "upload-android", "Sign update manifest (UPD-01)", "success")
+    step_is(ck, jobs, "upload-android", "Verify published android manifest (#1121)", "success")
     step_is(ck, jobs, "upload-android", "Point test-channel at this manifest (REL-07)", "skipped")
     ws = jobs["upload-android"].workspace
     ck(not (ws / "artifacts/manifest.json").exists(), "upload-android 不产出动态 manifest.json（只给 test 通道）")
-    step_is(ck, jobs, "finalize-manifest", "Sign manifest entries (gated)", "success")
+    step_is(ck, jobs, "finalize-manifest", "Sign manifest entries", "success")
+    step_is(ck, jobs, "finalize-manifest", "Verify published desktop manifests (#1121)", "success")
     legacy = (ROOT / "release/legacy-manifest.json").read_bytes()
     ck(sc.asset(FORMAL_TAG, "manifest.json").exists() and sc.asset(FORMAL_TAG, "manifest.json").read_bytes() == legacy,
        "manifest.json = 冻结件原样（不重签、不改字节）")
@@ -641,7 +681,7 @@ def formal(ck: Check, base: Path, key: str, pub: Path, rel: dict, mirror: dict):
     SUMMARY["formal"] = sc.summary()
 
 
-def test_tag(ck: Check, base: Path, key: str, pub: Path, rel: dict, mirror: dict):
+def test_tag(ck: Check, base: Path, key: dict, pub: Path, rel: dict, mirror: dict):
     v = TEST_TAG[1:]
     print(f"\n== test tag {TEST_TAG}（各端版本号 = tag 名，天然没有说明文件）")
     origin, sha = make_origin(base, "test", [(PREV_VERSIONS, {}, [PREV_TAG]), (CUR_VERSIONS, good_notes(), [TEST_TAG])])
@@ -651,6 +691,7 @@ def test_tag(ck: Check, base: Path, key: str, pub: Path, rel: dict, mirror: dict
         job_ok(ck, jobs, j)
     check_macos_assets(ck, sc, TEST_TAG, v)
     build_versions(ck, sc, rel, TEST_TAG, v)
+    apple_cert_gate(ck, sc, rel, TEST_TAG)
     job_ok(ck, jobs, "upload-windows")
     job_ok(ck, jobs, "finalize-manifest-windows")
     exe = WINDOWS_INSTALLER.format(v=v)
@@ -682,6 +723,9 @@ def test_tag(ck: Check, base: Path, key: str, pub: Path, rel: dict, mirror: dict
            json.dumps(m)[:400])
         ok, why = verify_sig(pub, sc.asset(TEST_TAG, apk), m["platforms"]["android-arm64"].get("signature", ""))
         ck(ok, "test-channel 指针里的签名校验通过", why)
+        # #1121：test 与正式各用一把——test 包的签名拿正式公钥验必须失败（正式客户端拒收 test 包）。
+        ok, why = verify_sig(key["stable"][1], sc.asset(TEST_TAG, apk), m["platforms"]["android-arm64"].get("signature", ""))
+        ck(not ok and "key id mismatch" in why, "#1121：test 包的签名用正式公钥验不过（两把密钥互不通用）", why)
     # #852：test-channel 里与正式版一一对应的分端清单（Android / macOS 都已签名、version = tag）
     for name, target, asset_name in (("manifest-android.json", "android-arm64", apk),
                                      ("manifest-macos.json", "darwin-aarch64", mac)):
@@ -958,11 +1002,14 @@ def main() -> int:
     try:
         print(f"release workflow: {rel_yml}\nmirror workflow:  {mirror_yml}\nsandbox: {base}")
         rel, mirror = load_workflow(rel_yml), load_workflow(mirror_yml)
-        key, pub = make_key(base)
+        # #1121：正式与 test 各一对密钥；每个场景按它的 tag 用对应通道的公钥验。
+        key = {"stable": make_key(base, "stable"), "test": make_key(base, "test")}
+        DRYRUN_PUBS.update({k: v[1].read_text().strip() for k, v in key.items()})
+        pub, test_pub = key["stable"][1], key["test"][1]
         formal(ck, base, key, pub, rel, mirror)
-        test_tag(ck, base, key, pub, rel, mirror)
+        test_tag(ck, base, key, test_pub, rel, mirror)
         bad_notes(ck, base, key, pub, rel)
-        test_per_end(ck, base, key, pub, rel)
+        test_per_end(ck, base, key, test_pub, rel)
         # #838：只涨 android ⇒ macOS 复用；只涨桌面 ⇒ android 复用；都不涨 ⇒ 红。
         reuse(ck, base, key, pub, rel, "android-only",
               {**PREV_VERSIONS, "android": CUR_VERSIONS["android"], "androidVersionCode": 2}, good_notes(),

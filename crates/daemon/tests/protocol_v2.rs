@@ -3,7 +3,7 @@
 //!
 //! - A v1 envelope (no `ver`) is refused as `phone_outdated` on the control
 //!   plane and the download plane, carries the frozen v1 shim, and changes
-//!   no state: device row, pairing epoch, Flow grant and diag log are
+//!   no state: device row, pairing id, Flow grant and diag log are
 //!   byte-for-byte what they were.
 //! - The local IPC is exempt (the shell never sends `ver`).
 //! - Every registered `Reason` has at least one send-point test
@@ -16,7 +16,7 @@ use daemon::router::OutdatedPeers;
 use daemon::{DiagAgg, IpcServer, Pairing, QueryEngine, Router};
 use interprocess::local_socket::tokio::prelude::*;
 use proto::{codes, Reason, Req, Resp};
-use storage::{Db, Device, FlowGrant, FlowGrantState, Role};
+use storage::{Db, DeviceRow, FlowGrant, FlowGrantState, Role};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use transport::{Blobs, IrohTransport, NodeId, Transport, TransportConfig};
 
@@ -94,10 +94,8 @@ async fn desk(tag: &str) -> Desk {
 
     let phone = bind(vec![transport::ALPN_CTRL.into()]).await;
     phone.add_peer(tp.local_addr());
-    db.upsert_device(&member(phone.node_id(), Role::Member))
-        .await
-        .unwrap();
-    db.set_pairing_epoch(&phone.node_id().0, EPOCH)
+    pair(&db, phone.node_id(), Role::Member).await;
+    db.touch_last_seen(&phone.node_id().0, 1_700_000_000_000)
         .await
         .unwrap();
 
@@ -125,17 +123,20 @@ async fn desk(tag: &str) -> Desk {
     }
 }
 
-fn member(node: NodeId, role: Role) -> Device {
-    Device {
-        node_id: node.0.to_vec(),
-        name: "phone".into(),
-        role,
-        paired_at: 1,
-        last_seen: Some(1_700_000_000_000),
-        revoked: false,
-        revoked_at: None,
-        revoked_by: None,
-    }
+/// 以 `role` 配对（pairing id 固定为 [`EPOCH`]）；再调一次 = 换角色的新记录。
+async fn pair(db: &Db, node: NodeId, role: Role) {
+    db.accept_pairing(
+        &node.0,
+        "phone",
+        &storage::Pairing {
+            id: EPOCH.into(),
+            node_id: node.0.to_vec(),
+            role,
+            paired_at: 1,
+        },
+    )
+    .await
+    .unwrap();
 }
 
 /// One raw frame on one stream of `alpn`; the first frame back as JSON.
@@ -198,7 +199,7 @@ async fn ipc_raw(d: &Desk, line: &str) -> serde_json::Value {
 async fn needs_update(d: &Desk) -> serde_json::Value {
     let resp = ipc_raw(
         d,
-        r#"{"id":"l","method":"devices.list","params":{"include_revoked":true}}"#,
+        r#"{"id":"l","method":"devices.list","params":{"include_departed":true}}"#,
     )
     .await;
     assert_eq!(resp["ok"], true, "{resp}");
@@ -220,7 +221,7 @@ fn grant(d: &Desk) -> FlowGrant {
     FlowGrant {
         node_id: d.phone.node_id().0.to_vec(),
         queue_sequence: 7,
-        pairing_epoch: EPOCH.into(),
+        pairing_id: EPOCH.into(),
         lease_token: "lease-7".into(),
         content_hash: vec![0xAB; 32],
         file_name: "IMG_7.jpg".into(),
@@ -234,7 +235,7 @@ fn grant(d: &Desk) -> FlowGrant {
 fn offer_params(epoch: &str) -> serde_json::Value {
     serde_json::to_value(proto::FlowFetchRequest {
         queue_sequence: 7,
-        pairing_epoch: epoch.into(),
+        pairing_id: epoch.into(),
         lease_token: "lease-7".into(),
         content_hash: "ab".repeat(32),
         file_name: "IMG_7.jpg".into(),
@@ -247,11 +248,11 @@ fn offer_params(epoch: &str) -> serde_json::Value {
 }
 
 /// Everything a version rejection must leave alone.
-async fn state_of(d: &Desk) -> (Option<Device>, Option<String>, Option<FlowGrant>, usize) {
+async fn state_of(d: &Desk) -> (Option<DeviceRow>, Option<String>, Option<FlowGrant>, usize) {
     let me = d.phone.node_id().0;
     (
         d.db.get_device(&me).await.unwrap(),
-        d.db.pairing_epoch(&me).await.unwrap(),
+        d.db.active_pairing(&me).map(|p| p.id),
         d.db.flow_grant(&me, EPOCH, 7).await.unwrap(),
         d.db.list_diag(10_000).await.unwrap().len(),
     )
@@ -286,12 +287,12 @@ async fn v1_envelopes_are_refused_as_phone_outdated_and_change_nothing() {
         ("flow.offer", offer_params(EPOCH), "fetch_failed"),
         (
             "flow.status",
-            serde_json::json!({"queue_sequence":7,"pairing_epoch":EPOCH,"lease_token":"lease-7"}),
+            serde_json::json!({"queue_sequence":7,"pairing_id":EPOCH,"lease_token":"lease-7"}),
             "fetch_failed",
         ),
         (
             "device.unpair",
-            serde_json::json!({"pairing_epoch": EPOCH}),
+            serde_json::json!({"pairing_id": EPOCH}),
             "fetch_failed",
         ),
         ("timeline.page", serde_json::json!({}), "fetch_failed"),
@@ -345,7 +346,7 @@ async fn v1_envelopes_are_refused_as_phone_outdated_and_change_nothing() {
         state_of(&d).await,
         before,
         "a version rejection must not touch the device row (incl. last_seen), \
-         the pairing epoch, the grant, or the diag log"
+         the pairing id, the grant, or the diag log"
     );
     // The device list flags it; a compatible request clears the flag.
     assert_eq!(needs_update(&d).await, "phone");
@@ -359,16 +360,18 @@ async fn v1_envelopes_are_refused_as_phone_outdated_and_change_nothing() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_peer_requiring_a_newer_desktop_gets_desktop_outdated() {
     let d = desk("newer").await;
+    // 相对当前版本构造「更新的对端」，不写死字面量（#1117 升到 v3 时踩过）。
+    let newer = proto::PROTO_VER + 1;
     let resp = raw(
         &d.phone,
         d.tp.node_id(),
         transport::ALPN_CTRL,
-        serde_json::json!({"id":"h","method":"hello","params":{},"ver":3,"min_ver":3}),
+        serde_json::json!({"id":"h","method":"hello","params":{},"ver":newer,"min_ver":newer}),
     )
     .await;
     assert_eq!(resp["error"]["code"], codes::VERSION_MISMATCH, "{resp}");
     assert_eq!(resp["error"]["reason"], "desktop_outdated", "{resp}");
-    assert_eq!(resp["error"]["params"]["min_ver"], 3, "{resp}");
+    assert_eq!(resp["error"]["params"]["min_ver"], newer, "{resp}");
     assert!(resp["error"].get("msg_key").is_none(), "{resp}");
     assert_eq!(needs_update(&d).await, "desktop");
     // A newer peer that still accepts us is served.
@@ -376,7 +379,7 @@ async fn a_peer_requiring_a_newer_desktop_gets_desktop_outdated() {
         &d.phone,
         d.tp.node_id(),
         transport::ALPN_CTRL,
-        serde_json::json!({"id":"h","method":"hello","params":{},"ver":3,"min_ver":2}),
+        serde_json::json!({"id":"h","method":"hello","params":{},"ver":newer,"min_ver":proto::PROTO_VER}),
     )
     .await;
     assert_eq!(resp["ok"], true, "{resp}");
@@ -414,15 +417,15 @@ async fn v2_errors_name_their_reason_on_the_wire() {
     )
     .await;
     assert_eq!(reason_of(&r), Some(Reason::NotFound), "{r:?}");
-    // epoch_mismatch: an offer under a stale pairing epoch.
+    // pairing_mismatch: an offer under a stale pairing epoch.
     let r = call(&d, "flow.offer", offer_params("epoch-stale")).await;
-    assert_eq!(reason_of(&r), Some(Reason::EpochMismatch), "{r:?}");
+    assert_eq!(reason_of(&r), Some(Reason::PairingMismatch), "{r:?}");
     assert_eq!(r.error.as_ref().unwrap().code(), codes::FLOW_REJECTED);
     // grant_not_found: suspend a tuple that was never offered.
     let r = call(
         &d,
         "flow.suspend",
-        serde_json::json!({"queue_sequence": 99, "pairing_epoch": EPOCH, "lease_token": "never"}),
+        serde_json::json!({"queue_sequence": 99, "pairing_id": EPOCH, "lease_token": "never"}),
     )
     .await;
     assert_eq!(reason_of(&r), Some(Reason::GrantNotFound), "{r:?}");
@@ -438,9 +441,7 @@ async fn v2_errors_name_their_reason_on_the_wire() {
     assert_eq!(reason_of(&r), Some(Reason::GrantConflict), "{r:?}");
 
     // role_forbidden: a viewer offering a photo.
-    d.db.upsert_device(&member(d.phone.node_id(), Role::Viewer))
-        .await
-        .unwrap();
+    pair(&d.db, d.phone.node_id(), Role::Viewer).await;
     let r = call(&d, "flow.offer", offer_params(EPOCH)).await;
     assert_eq!(reason_of(&r), Some(Reason::RoleForbidden), "{r:?}");
 }
@@ -453,10 +454,15 @@ fn every_reason_has_a_send_point_test() {
         ("protocol_v2.rs", include_str!("protocol_v2.rs")),
         ("authz_flow.rs", include_str!("authz_flow.rs")),
         ("pairing_flow.rs", include_str!("pairing_flow.rs")),
+        ("pair_status_flow.rs", include_str!("pair_status_flow.rs")),
         ("backup_flow.rs", include_str!("backup_flow.rs")),
         ("flow_health.rs", include_str!("flow_health.rs")),
         ("flow_delivery.rs", include_str!("flow_delivery.rs")),
         ("flow_revoke.rs", include_str!("flow_revoke.rs")),
+        (
+            "../../proto/src/error.rs",
+            include_str!("../../proto/src/error.rs"),
+        ),
         (
             "../src/flow_delivery.rs",
             include_str!("../src/flow_delivery.rs"),
@@ -471,12 +477,6 @@ fn every_reason_has_a_send_point_test() {
             "Reason::NotPaired",
         ),
         (
-            Reason::Revoked,
-            "authz_flow.rs",
-            "revoked_device_is_shut_out_at_once",
-            "Reason::Revoked",
-        ),
-        (
             Reason::RoleForbidden,
             "authz_flow.rs",
             "viewer_browses_but_backup_is_denied",
@@ -487,6 +487,12 @@ fn every_reason_has_a_send_point_test() {
             "pairing_flow.rs",
             "token_replay_is_rejected",
             "Reason::PairTokenInvalid",
+        ),
+        (
+            Reason::PairCodeWrong,
+            "pair_status_flow.rs",
+            "a_wrong_code_voids_the_request_with_pair_code_wrong",
+            "Reason::PairCodeWrong",
         ),
         (
             Reason::PhoneOutdated,
@@ -557,10 +563,10 @@ fn every_reason_has_a_send_point_test() {
             "\"fetch_failed\"",
         ),
         (
-            Reason::EpochMismatch,
+            Reason::PairingMismatch,
             "protocol_v2.rs",
             "v2_errors_name_their_reason_on_the_wire",
-            "Reason::EpochMismatch",
+            "Reason::PairingMismatch",
         ),
         (
             Reason::GrantNotFound,

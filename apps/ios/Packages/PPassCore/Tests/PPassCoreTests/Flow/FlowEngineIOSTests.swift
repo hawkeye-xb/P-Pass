@@ -134,7 +134,7 @@ final class FlowEngineIOSTests: XCTestCase {
         rig.conditions.set(Conditions())
         rig.probe.result.set(.unreachable)
         await rig.trigger(.foregroundMediaChange)
-        rig.probe.result.set(.reachable(advertisedEpoch: "e1", health: nil, capabilities: []))
+        rig.probe.result.set(.reachable(advertisedPairingId: "e1", health: nil, capabilities: []))
         rig.lease.grant.set(false)
         await rig.trigger(.foregroundMediaChange)
         XCTAssertEqual(rig.importer.imported.get(), [])
@@ -220,7 +220,7 @@ final class FlowEngineIOSTests: XCTestCase {
         XCTAssertEqual(rig.delivery.deliveredIds, [3], "只传真正没备份的那张")
         XCTAssertEqual(try rig.state(3), .confirmed)
         XCTAssertFalse(try rig.store.scanState().dirty, "扫描收敛")
-        XCTAssertEqual(FakePosition.decode(try rig.store.discoveryState()!.position).epoch, 2, "G 换成新 token 代")
+        XCTAssertEqual(FakePosition.decode(try rig.store.discoveryState()!.position).pairingId, 2, "G 换成新 token 代")
         XCTAssertTrue(rig.logger.contains("discovery cursor expired (3105)"))
         // 之后照常按新 G 发现新照片。
         rig.photo(4, generation: 4)
@@ -241,11 +241,11 @@ final class FlowEngineIOSTests: XCTestCase {
         let pending = await rig.pending()
         XCTAssertEqual(pending, 2)
         XCTAssertFalse(try rig.store.scanState().dirty)
-        XCTAssertEqual(FakePosition.decode(try rig.store.discoveryState()!.position).epoch, 1)
+        XCTAssertEqual(FakePosition.decode(try rig.store.discoveryState()!.position).pairingId, 1)
         rig.fakeControl!.pausedFlag = false
         await rig.trigger()
         XCTAssertEqual(rig.delivery.deliveredIds, [1, 2], "这一轮自己发现失效、重置、扫描")
-        XCTAssertEqual(FakePosition.decode(try rig.store.discoveryState()!.position).epoch, 2)
+        XCTAssertEqual(FakePosition.decode(try rig.store.discoveryState()!.position).pairingId, 2)
     }
 
     /// 一轮收尾（审计冲刷，走网络）期间到达的触发不丢：收尾完再跑一轮。
@@ -448,7 +448,7 @@ final class FlowEngineIOSTests: XCTestCase {
         await rig.trigger(.unreachableProbe)
         await rig.trigger(.unreachableProbe)
         XCTAssertEqual(rig.scheduler.unreachableProbes.get(), 1)
-        rig.probe.result.set(.reachable(advertisedEpoch: "e1", health: nil, capabilities: []))
+        rig.probe.result.set(.reachable(advertisedPairingId: "e1", health: nil, capabilities: []))
         await rig.trigger(.unreachableProbe)
         XCTAssertEqual(try rig.state(1), .confirmed)
         XCTAssertEqual(rig.scheduler.probesCancelled.get(), 1)
@@ -553,7 +553,7 @@ final class FlowEngineIOSTests: XCTestCase {
         rig.probe.result.set(.unreachable)
         await rig.start()
         await rig.trigger()
-        rig.probe.result.set(.reachable(advertisedEpoch: "e1", health: nil, capabilities: []))
+        rig.probe.result.set(.reachable(advertisedPairingId: "e1", health: nil, capabilities: []))
         await rig.engine.onDesktopReachable()
         await rig.engine.awaitIdle()
         XCTAssertEqual(try rig.state(1), .confirmed)
@@ -656,10 +656,10 @@ final class FlowEngineIOSTests: XCTestCase {
     }
 
     /// 桌面宣布了新的配对代号（同一台桌面重新配对）：交给上层持久化。
-    func testAnAdvertisedEpochIsHandedUp() async throws {
+    func testAnAdvertisedPairingIdIsHandedUp() async throws {
         let rig = try Rig()
         rig.photo(1, generation: 1)
-        rig.probe.result.set(.reachable(advertisedEpoch: "e2", health: nil, capabilities: []))
+        rig.probe.result.set(.reachable(advertisedPairingId: "e2", health: nil, capabilities: []))
         await rig.start()
         await rig.trigger()
         XCTAssertEqual(rig.advertised.get(), ["e2"])

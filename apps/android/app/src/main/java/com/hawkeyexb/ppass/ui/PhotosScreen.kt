@@ -86,6 +86,9 @@ import me.saket.telephoto.zoomable.zoomable
  */
 internal val thumbCache = LruCache<String, Bitmap>(32 * 1024 * 1024 / 40_000)
 
+/** #1119：断开 / 被拒即清理时清空内存里的小图（那是这台电脑的内容）。 */
+internal fun evictPhotoPreviews() = thumbCache.evictAll()
+
 /** SYNC-04: 前台订阅断线重连的退避序列——有限次数，不是无限重试
  *  （UX-11 同款哲学）。用完最后一档还是连不上就停下来交给用户。 */
 internal val SUBSCRIBE_RETRY_DELAYS_MS = longArrayOf(1_000, 2_000, 4_000, 8_000, 15_000, 30_000)
@@ -191,10 +194,11 @@ class TimelineLoader(
     suspend fun download(
         hash: String,
         dest: java.io.File,
+        expectedBytes: Long = 0,
         onProgress: (Long, Long) -> Unit,
     ): Long {
         ensureBound()
-        return client.downloadAsset(daemon, hash, dest, onProgress)
+        return client.downloadAsset(daemon, hash, dest, expectedBytes, onProgress)
     }
 
     suspend fun thumb(hash: String, size: ThumbSize): Bitmap? {

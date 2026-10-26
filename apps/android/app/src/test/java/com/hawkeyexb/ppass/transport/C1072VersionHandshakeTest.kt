@@ -32,7 +32,7 @@ class C1072VersionHandshakeTest {
 
     @Test
     fun `a pre-v2 desktop's successful reply becomes desktop_outdated - nobody acts on it`() {
-        val old = ProtoJson.decodeFromString(Resp.serializer(), """{"id":"1","ok":true,"result":{"pairing_epoch":"e"}}""")
+        val old = ProtoJson.decodeFromString(Resp.serializer(), """{"id":"1","ok":true,"result":{"pairing_id":"e"}}""")
         val checked = old.versionChecked()
         assertEquals(false, checked.ok)
         assertNull("旧桌面的结果不许流到调用方", checked.result)
@@ -50,7 +50,7 @@ class C1072VersionHandshakeTest {
     fun `compatible replies and the desktop's own verdict pass through unchanged`() {
         val fine = v2()
         assertSame(fine, fine.versionChecked())
-        val denied = v2(ok = false, error = RespError("NOT_AUTHORIZED", "revoked"))
+        val denied = v2(ok = false, error = RespError("NOT_AUTHORIZED", "not_paired"))
         assertSame(denied, denied.versionChecked())
         val said = v2(ok = false, error = RespError("VERSION_MISMATCH", "phone_outdated"))
         assertSame(said, said.versionChecked())
@@ -70,10 +70,13 @@ class C1072VersionHandshakeTest {
     @Test
     fun `DaemonClient routes every reply through the check`() {
         val src = java.io.File("src/main/java/com/hawkeyexb/ppass/transport/DaemonClient.kt").readText()
-        val decodes = Regex("""decodePayload\(\s*Resp\.serializer\(\)""").findAll(src).count()
-        val checked = Regex("""checkedReply\(\s*(com\.hawkeyexb\.ppass\.proto\.)?decodePayload\(\s*Resp\.serializer\(\)""").findAll(src).count()
-        assertTrue("found no reply decode at all", decodes >= 3)
-        assertEquals("every Resp decode must go through checkedReply", decodes, checked)
+        // #1124：回复由共享 Rust 核心交回 JSON；Resp 只在 decodeReply 一处解码，且必经 checkedReply。
+        val decodes = Regex("""Resp\.serializer\(\)""").findAll(src).count()
+        val checked = Regex("""checkedReply\(\s*ProtoJson\.decodeFromString\(\s*Resp\.serializer\(\)""").findAll(src).count()
+        assertEquals("exactly one Resp decode", 1, decodes)
+        assertEquals("the Resp decode must go through checkedReply", 1, checked)
+        val users = Regex("""decodeReply\(""").findAll(src).count() - 1 // minus the definition
+        assertTrue("call / callTraced must both decode through decodeReply ($users)", users >= 2)
     }
 
     @Test
@@ -105,7 +108,7 @@ class C1072VersionHandshakeTest {
     fun `an incompatible hello ends pairing before any pairing request is sent`() = runTest {
         for ((reason, side) in listOf("phone_outdated" to OutdatedSide.PHONE, "desktop_outdated" to OutdatedSide.DESKTOP)) {
             val desk = Desk(hello = v2(ok = false, error = RespError("VERSION_MISMATCH", reason)))
-            assertEquals(PairVerdict.NeedsUpdate(side), awaitPairVerdict(desk, "t", "d"))
+            assertEquals(PairVerdict.NeedsUpdate(side), awaitPairVerdict(desk, "t", "d", FakeCeremony()))
             assertEquals("只握手，不发配对请求", listOf(Methods.HELLO), desk.methods)
         }
     }
@@ -116,7 +119,7 @@ class C1072VersionHandshakeTest {
             result = ProtoJson.encodeToJsonElement(Hello.serializer(), Hello(capabilities = listOf(PAIR_STATUS_CAPABILITY))),
         )
         val desk = Desk(hello = hello, submit = v2(ok = false, error = RespError("VERSION_MISMATCH", "phone_outdated")))
-        val verdict = awaitPairVerdict(desk, "t", "d")
+        val verdict = awaitPairVerdict(desk, "t", "d", FakeCeremony())
         assertEquals(PairVerdict.NeedsUpdate(OutdatedSide.PHONE), verdict)
         val outcome = verdict.toOutcome { error("no join") }
         assertEquals(PairOutcome.NeedsUpdate(OutdatedSide.PHONE), outcome)

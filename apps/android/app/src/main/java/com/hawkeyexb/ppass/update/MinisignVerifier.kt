@@ -1,5 +1,6 @@
 package com.hawkeyexb.ppass.update
 
+import com.hawkeyexb.ppass.BuildConfig
 import java.io.File
 import java.security.Signature
 import java.util.Base64
@@ -24,13 +25,12 @@ import net.i2p.crypto.eddsa.spec.EdDSAPublicKeySpec
  *   signed with *plain* Ed25519 (minisign/rsign2 behavior — "ED" is NOT
  *   RFC 8032 Ed25519ph; net.i2p eddsa 0.3.0 has no Ed25519ph anyway).
  *
- * The embedded key MUST stay in sync with `tauri.conf.json` (updater pubkey).
+ * #1121: the keys are not hand-copied any more. Gradle reads them from the single
+ * source at build time (BuildConfig.UPDATE_PUBKEY_*): stable = desktop
+ * `tauri.conf.json` updater pubkey, test = `release/update-keys/test.pub`.
+ * A build only ever verifies with the key of its own channel.
  */
 object MinisignVerifier {
-
-    /** Production public key (matches tauri.conf.json updater pubkey). */
-    private const val PROD_PUBLIC_KEY_B64 =
-        "RWTIvGSfYDcdJRoFUZpc2fMvV0lKHio6B8UXCKhN8DJ4vzCe4495zPrp"
 
     private const val ALG_PLAIN = "Ed"
     private const val ALG_PREHASHED = "ED"
@@ -45,13 +45,33 @@ object MinisignVerifier {
         data object Invalid : Result
         /** Local failure while reading the file or running crypto. */
         data class Error(val cause: Throwable) : Result
+        /** #1121: this build carries no public key for its channel; every update is refused. */
+        data object NoKeyForChannel : Result
     }
 
     internal data class ParsedKey(val algorithm: String, val keynum: ByteArray, val key: ByteArray)
     internal data class ParsedSig(val algorithm: String, val keynum: ByteArray, val sig: ByteArray)
 
+    /** #1121: the public key of [channel] as built into this APK (tauri text-box form); blank = none. */
+    fun publicKeyFor(channel: UpdateChannel): String = when (channel) {
+        UpdateChannel.Stable -> BuildConfig.UPDATE_PUBKEY_STABLE
+        UpdateChannel.Test -> BuildConfig.UPDATE_PUBKEY_TEST
+    }
+
+    /** Verify with the key of the channel this build belongs to (derived from its version). */
     fun verify(file: File, signatureBase64: String): Result =
-        verify(file, signatureBase64, PROD_PUBLIC_KEY_B64)
+        verifyForChannel(file, signatureBase64, channelFromVersion(BuildConfig.VERSION_NAME), ::publicKeyFor)
+
+    internal fun verifyForChannel(
+        file: File,
+        signatureBase64: String,
+        channel: UpdateChannel,
+        keyOf: (UpdateChannel) -> String,
+    ): Result {
+        val key = keyOf(channel)
+        if (key.isBlank()) return Result.NoKeyForChannel
+        return verify(file, signatureBase64, key)
+    }
 
     /** 测试可注入公钥（JVM 测试用独立测试密钥对，不动生产常量）。 */
     internal fun verify(file: File, signatureBase64: String, publicKeyB64: String): Result = try {

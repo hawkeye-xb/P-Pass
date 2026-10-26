@@ -18,7 +18,7 @@ abstract class OrderStoreContract {
     abstract fun newStore(clock: () -> Long): OrderStore
 
     private fun newOrder(mediaId: Long, state: OrderState = OrderState.TRANSFERRING, hash: String? = "h$mediaId", version: String = "v1") =
-        NewOrder(mediaId = mediaId, sourceVersion = version, bucketId = 7, contentHash = hash, state = state, pairingEpoch = "e3")
+        NewOrder(mediaId = mediaId, sourceVersion = version, bucketId = 7, contentHash = hash, state = state, pairingId = "e3")
 
     // #851：「用原图替换旧副本」的待办只取当前行、已确认、抹过地点、原图还在、还没有结论的。
     @Test

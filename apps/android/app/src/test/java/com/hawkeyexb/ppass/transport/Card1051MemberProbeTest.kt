@@ -1,5 +1,5 @@
 // #1051: the "am I already a member of this computer?" probe is hello, not
-// backup.begin. Member = hello comes back with a non-empty pairing_epoch.
+// backup.begin. Member = hello comes back with a non-empty pairing_id.
 // Unpaired / revoked / unreachable all mean "go through normal pairing".
 package com.hawkeyexb.ppass.transport
 
@@ -31,30 +31,45 @@ class Card1051MemberProbeTest {
         }
     }
 
-    private fun helloOk(epoch: String?, name: String = "Home PC") = Resp(
+    private fun helloOk(pid: String?, name: String = "Home PC") = Resp(
         id = "h",
         ok = true,
         result = ProtoJson.encodeToJsonElement(
             Hello.serializer(),
-            Hello(capabilities = listOf("thumbnail.v1"), deviceName = name, pairingEpoch = epoch),
+            Hello(capabilities = listOf("thumbnail.v1"), deviceName = name, pairingId = pid),
         ),
     )
 
     @Test
-    fun memberHelloWithEpochIsRecognised() = runTest {
+    fun memberHelloWithPairingIdIsRecognised() = runTest {
         val desk = Desk { helloOk("e".repeat(32)) }
         val hello = probeMembership(desk)
         assertNotNull(hello)
-        assertEquals("e".repeat(32), hello!!.pairingEpoch)
+        assertEquals("e".repeat(32), hello!!.pairingId)
         assertEquals("Home PC", hello.deviceName)
         // Only hello — never backup.begin (that is the whole point of #1051).
         assertEquals(listOf(Methods.HELLO), desk.methods)
     }
 
+    /**
+     * #1116 N1: a computer this phone never paired with claims "you're a member" — the claim is
+     * ignored and the computer is not even asked, so pairing goes through the #1118 code. Red if the
+     * gate is dropped (the forged member reply would be returned).
+     */
     @Test
-    fun unpairedHelloWithoutEpochIsNotAMember() = runTest {
-        for (epoch in listOf(null, "")) {
-            assertNull(probeMembership(Desk { helloOk(epoch) }))
+    fun unknownComputerClaimingMembershipIsNotTrusted() = runTest {
+        val forged = Desk { helloOk("f".repeat(32), name = "Forged PC") }
+        assertNull(trustedMembership(knownDesktop = false, rpc = forged))
+        assertTrue("an unknown computer must not be probed", forged.methods.isEmpty())
+
+        val known = Desk { helloOk("e".repeat(32)) }
+        assertEquals("e".repeat(32), trustedMembership(knownDesktop = true, rpc = known)!!.pairingId)
+    }
+
+    @Test
+    fun unpairedHelloWithoutPairingIdIsNotAMember() = runTest {
+        for (pid in listOf(null, "")) {
+            assertNull(probeMembership(Desk { helloOk(pid) }))
         }
     }
 

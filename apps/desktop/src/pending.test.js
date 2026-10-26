@@ -18,7 +18,7 @@ const known = {
   known: true,
   name: "三星测试及", // 桌面上改过的名字
   paired_at: 1_700_000_000_000,
-  revoked: true,
+  paired: false,
   photo_count: 95,
 };
 
@@ -26,30 +26,26 @@ test("判据是 known 这一位，不是名字", () => {
   expect(isKnownDevice(fresh)).toBe(false);
   expect(isKnownDevice(known)).toBe(true);
   // 被移除过的设备再回来，依然算「以前连过」。
-  expect(isKnownDevice({ known: true, revoked: true })).toBe(true);
+  expect(isKnownDevice({ known: true, paired: false })).toBe(true);
 });
 
 test("新设备维持原措辞", () => {
-  const { title, hint } = pendingDialogText([fresh]);
-  expect(title).toBe("有设备请求加入");
-  expect(hint).toMatch(/会出现在设备列表里/);
+  const { title } = pendingDialogText([fresh]);
+  expect(title).toBe("SM-S9210 请求加入");
   // 不许串到重连那套。
   expect(title).not.toMatch(/重新连接/);
-  expect(hint).not.toMatch(/以前连过/);
 });
 
 test("老设备重连点名，且点的是桌面上的名字", () => {
-  const { title, hint } = pendingDialogText([known]);
-  expect(title).toBe("「三星测试及」请求重新连接");
-  expect(hint).toBe("这台设备以前连过，允许后会恢复备份。");
+  const { title } = pendingDialogText([known]);
+  expect(title).toBe("三星测试及 请求重新连接");
   // 不许串到首次配对那套。
   expect(title).not.toMatch(/请求加入/);
-  expect(hint).not.toMatch(/会出现在设备列表里/);
 });
 
 test("多台同时扫码只报数量，不替其中一台说话", () => {
   const { title } = pendingDialogText([known, fresh]);
-  expect(title).toBe("有 2 台设备请求加入");
+  expect(title).toBe("2 台设备请求加入");
   expect(title).not.toMatch(/重新连接/);
   expect(title).not.toMatch(/三星测试及/);
 });
@@ -66,8 +62,8 @@ test("副行退化：缺时刻/零张也说得出一句话", () => {
 });
 
 test("空列表/脏输入不炸", () => {
-  expect(pendingDialogText([]).title).toBe("有设备请求加入");
-  expect(pendingDialogText(null).title).toBe("有设备请求加入");
+  expect(pendingDialogText([]).title).toBe("");
+  expect(pendingDialogText(null).title).toBe("");
   expect(pendingSubText(null)).toBe(null);
   expect(pendingSubText(undefined)).toBe(null);
 });

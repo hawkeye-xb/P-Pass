@@ -6,7 +6,7 @@
 # 布局（REL-08 #510）：脚本只认「自己所在目录」——
 #   - helper：同目录的 ipc-lib.sh（仓库里两者都在 tools/，资产里两者平铺）；
 #   - 二进制：同目录有 daemon 就用它（release 资产布局），否则回落仓库的
-#     target/release/（`just verify-m1` 从仓库直接跑）。
+#     target/release/（`just verify-m1` 从仓库直接跑；设了 CARGO_TARGET_DIR 就用它）。
 # 资产清单的唯一来源是 tools/stage-dogfood-scripts.sh，门禁见
 # tools/test-dogfood-assets.sh。
 #
@@ -29,13 +29,13 @@ WORK="${1:-/tmp/ppf-dogfood}"
 if [ -x "$HERE/daemon" ]; then
   BIN="$HERE"                          # release 资产布局：与脚本平铺
 else
-  BIN="$HERE/../target/release"        # 仓库布局：tools/ 的上一级
+  BIN="${CARGO_TARGET_DIR:-$HERE/../target}/release"   # 仓库布局：tools/ 的上一级
 fi
 DAEMON="$BIN/daemon"
 TC="$BIN/testclient"
 
 if [ ! -x "$DAEMON" ] || [ ! -x "$TC" ]; then
-  echo "找不到 daemon/testclient（查过 $HERE/ 与 $HERE/../target/release/）"
+  echo "找不到 daemon/testclient（查过 $HERE/ 与 ${BIN}/）"
   echo "仓库里先构建: cargo build --release -p daemon -p testclient；release 资产记得 chmod +x"
   exit 1
 fi
@@ -45,7 +45,7 @@ fi
 # 或 `if …; then echo 原因 >&2; exit 1; fi` 显式失败。门禁
 # tools/test-dogfood-assets.sh 用 shellcheck SC2251 兜底。
 rm -rf "$WORK"
-mkdir -p "$WORK/library"
+mkdir -p "$WORK"
 cd "$WORK"
 # UX-07: --ephemeral + FIFO 控制 stdin——脚本收尾时关闭 FIFO 写端（EOF）
 # daemon 自己 3 秒内退出，不再需要 kill（杜绝 A 类孤儿）。
@@ -53,10 +53,14 @@ mkfifo "$WORK/daemon-ctl"
 cleanup() {
   exec 3>&- 2>/dev/null || true   # 关 FIFO 写端 → daemon EOF 自退
   wait "$DAEMON_PID" 2>/dev/null || true
+  # #1115：沙盒目录是 daemon 在系统临时目录里自建的，收尾一并清掉。
+  [ -n "${LIB:-}" ] && rm -rf "$LIB"
 }
 trap cleanup EXIT
 
-PPF_DATA_DIR="$WORK/library" PPF_RELAY_URLS="${PPF_RELAY_URLS:-}" \
+# #1115：--ephemeral 是测试沙盒，库目录由 daemon 自己建（stdout 的 SANDBOX: 行），
+# 不接受 PPF_DATA_DIR。
+PPF_RELAY_URLS="${PPF_RELAY_URLS:-}" \
   "$DAEMON" --ephemeral < "$WORK/daemon-ctl" > daemon.log 2> daemon.err &
 DAEMON_PID=$!
 exec 3>"$WORK/daemon-ctl"   # 保持写端打开——daemon 不会立即 EOF
@@ -71,18 +75,43 @@ if [ -z "$NODE" ]; then
   exit 1
 fi
 # SEC-11 (#496)：配对串经 IPC pairing.start 现取（daemon 不再把它打进被重定向的 stdout）
-ipc_pair_qr library/ipc.token
+ipc_sandbox_dir daemon.log
+LIB="$SANDBOX_DIR"
+ipc_pair_qr "$LIB/ipc.token"
 QR="$PAIR_QR"
 echo "daemon up: $NODE (ipc: $SOCK)"
 
 echo "── 1. 配对（QR + IPC owner 确认）"
 "$TC" pair --token "$QR" --name "冒烟agent" > pair.log 2>&1 &
 PAIR_PID=$!
-sleep 3
-ipc pairing.confirm '{"accept": true}'
-wait "$PAIR_PID"
+# #1118：「允许」= 业主输入手机显示的 6 位验证码。testclient 在申请被收下后打出
+# `PAIR_CODE=<6 位> node=<本机 NodeId>`，这里扮演业主：读到后带码确认，没有盲点允许。
+PAIR_LINE=""
+for _ in $(seq 1 100); do
+  PAIR_LINE=$(grep -m1 '^PAIR_CODE=' pair.log 2>/dev/null || true)
+  [ -n "$PAIR_LINE" ] && break
+  kill -0 "$PAIR_PID" 2>/dev/null || break
+  sleep 0.2
+done
+if [ -z "$PAIR_LINE" ]; then
+  echo "testclient 20 秒内没打出 PAIR_CODE 行，pair.log：" >&2
+  cat pair.log >&2 || true
+  exit 1
+fi
+PAIR_CODE=$(printf '%s' "$PAIR_LINE" | sed -n 's/^PAIR_CODE=\([0-9]\{6\}\) node=.*/\1/p')
+PAIR_NODE=$(printf '%s' "$PAIR_LINE" | sed -n 's/^PAIR_CODE=[0-9]\{6\} node=\([0-9a-f]\{64\}\).*/\1/p')
+if [ -z "$PAIR_CODE" ] || [ -z "$PAIR_NODE" ]; then
+  echo "PAIR_CODE 行格式不对：$PAIR_LINE" >&2
+  exit 1
+fi
+ipc pairing.confirm "{\"accept\": true, \"node_id\": \"$PAIR_NODE\", \"code\": \"$PAIR_CODE\"}"
+if ! wait "$PAIR_PID"; then
+  echo "testclient pair 失败，pair.log：" >&2
+  cat pair.log >&2 || true
+  exit 1
+fi
 grep -q '配对成功' pair.log
-cat pair.log | tail -1
+tail -1 pair.log
 
 echo "── 2. backup 50 个混合文件"
 "$TC" backup --files 50 --node "$NODE"
@@ -98,7 +127,7 @@ echo "── 4. browse（分页无重复 + 缩略图）"
 "$TC" browse --limit 7 --node "$NODE"
 
 echo "── 5. 索引与磁盘一致"
-DISK=$(find library/originals -type f | wc -l | tr -d ' ')
+DISK=$(find "$LIB/originals" -type f | wc -l | tr -d ' ')
 echo "磁盘文件数: ${DISK}（46 = 50 去重后）"
 if [ "$DISK" != "46" ]; then echo "磁盘文件数 $DISK ≠ 46" >&2; exit 1; fi
 
@@ -108,12 +137,15 @@ ipc device.revoke "{\"node_id\": \"$DEV\"}"
 "$TC" revoke-check --node "$NODE"
 
 echo "── 7. logs.export 脱敏抽查"
-ipc logs.export
-unzip -p library/ppf-logs.zip devices.json | grep -q node_id_prefix
-# 隐私断言：诊断事件里不许出现本机 $HOME 路径。先单独解出来——解压失败 /
+# #1122：logs.export 不再落 ppf-logs.zip，各文件内容随 IPC 结果的 entries 内联返回。
+EXPORT=$(ipc logs.export)
+export_entry() { printf '%s' "$EXPORT" | python3 -c "import json,sys; print(json.load(sys.stdin)['result']['entries'].get(sys.argv[1], ''))" "$1"; }
+DEVJSON=$(export_entry devices.json)
+case "$DEVJSON" in *node_id_prefix*) ;; *) echo "devices.json 缺 node_id_prefix" >&2; exit 1 ;; esac
+# 隐私断言：诊断事件里不许出现本机 $HOME 路径。先单独解出来——取不到 /
 # 内容为空必须红，不能让「没读到」冒充「没泄漏」。
-DIAG=$(unzip -p library/ppf-logs.zip diag_events.json)
-if [ -z "$DIAG" ]; then echo "logs.export 里 diag_events.json 为空" >&2; exit 1; fi
+DIAG=$(export_entry diag_events.json)
+if [ -z "$DIAG" ]; then echo "logs.export 的 entries 里 diag_events.json 为空" >&2; exit 1; fi
 # 纯 shell 子串匹配：不经管道，判定只取决于内容，不受 pipefail / grep -q
 # 提前关管道之类时序影响（第 3 步注释里那类坑）。
 case "$DIAG" in

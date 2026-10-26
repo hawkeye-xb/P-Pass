@@ -1,7 +1,7 @@
 //! Pairing link (`ppf://pair?...`) parsing — the one Rust implementation.
 //!
 //! The daemon (`crates/daemon/src/pairing.rs`) writes the link; the dev
-//! `testclient` and the iOS app (through the `ios-ffi` binding) read it here.
+//! `testclient` and the iOS app (through the `mobile-ffi` binding) read it here.
 //! Android keeps its Kotlin twin (`PeerAddrToken.kt`) until it moves to a
 //! shared binding.
 //!

@@ -9,6 +9,6 @@ expression: json
     "code": "NOT_FOUND",
     "reason": "not_found"
   },
-  "ver": 2,
-  "min_ver": 2
+  "ver": 3,
+  "min_ver": 3
 }

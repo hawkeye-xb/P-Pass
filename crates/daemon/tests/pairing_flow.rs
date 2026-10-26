@@ -30,7 +30,7 @@ async fn start_daemon_with_clock(
     tokio::spawn(async move {
         while let Some(req) = pending.recv().await {
             let _ = req.decide(if accept {
-                PairDecision::Accept
+                common::allow()
             } else {
                 PairDecision::Reject
             });
@@ -44,9 +44,9 @@ async fn start_daemon_with_clock(
     (tp, addr, pairing)
 }
 
-/// #1055: 设备自断开的 `revoked_at` 与审计时间都取注入的时钟。
+/// #1055: 设备自断开的 `departed_at` 与审计时间都取注入的时钟。
 #[tokio::test]
-async fn unpair_stamps_revoked_at_from_the_injected_clock() {
+async fn unpair_stamps_departed_at_from_the_injected_clock() {
     const FAKE_NOW: i64 = 1_999_000_000_000;
     let db = Db::open_in_memory().await.unwrap();
     let (dtp, daddr, pairing) = start_daemon_with_clock(db.clone(), true, || FAKE_NOW).await;
@@ -68,7 +68,9 @@ async fn unpair_stamps_revoked_at_from_the_injected_clock() {
     .await;
     assert!(resp.ok, "{resp:?}");
     let d = db.get_device(&ctp.node_id().0).await.unwrap().unwrap();
-    assert_eq!(d.revoked_at, Some(FAKE_NOW));
+    assert_eq!(d.profile.departed_at, Some(FAKE_NOW));
+    assert_eq!(d.profile.departed_by, Some(storage::DepartedBy::Device));
+    assert!(d.pairing.is_none());
     let audit = db.list_audit(20).await.unwrap();
     let unpaired = audit
         .iter()
@@ -111,13 +113,15 @@ async fn full_flow_pairs_the_device() {
     let accepted: proto::PairAccepted = serde_json::from_value(resp.result.unwrap()).unwrap();
     assert_eq!(accepted.storage_device_name, "客厅的电脑");
     assert_eq!(
-        accepted.pairing_epoch.len(),
+        accepted.pairing_id.len(),
         32,
         "accepted pairing must carry a fresh epoch"
     );
     assert_eq!(
-        db.pairing_epoch(&ctp.node_id().0).await.unwrap().as_deref(),
-        Some(accepted.pairing_epoch.as_str()),
+        db.active_pairing(&ctp.node_id().0)
+            .as_ref()
+            .map(|p| p.id.as_str()),
+        Some(accepted.pairing_id.as_str()),
         "the returned epoch must already be durable before Flow can use it"
     );
 
@@ -127,9 +131,8 @@ async fn full_flow_pairs_the_device() {
         .await
         .unwrap()
         .expect("device row written");
-    assert_eq!(device.name, "妈妈的手机");
-    assert_eq!(device.role, Role::Member);
-    assert!(!device.revoked);
+    assert_eq!(device.profile.name, "妈妈的手机");
+    assert_eq!(device.pairing.expect("paired").role, Role::Member);
 
     // And the audit trail names the pairing (审计裁决).
     let audit = db.list_audit(10).await.unwrap();
@@ -151,8 +154,8 @@ async fn paired_member_hello_returns_its_current_flow_epoch() {
     assert!(hello.ok, "paired member hello must succeed: {hello:?}");
     let response: proto::Hello = serde_json::from_value(hello.result.unwrap()).unwrap();
     assert_eq!(
-        response.pairing_epoch.as_deref(),
-        Some(accepted.pairing_epoch.as_str())
+        response.pairing_id.as_deref(),
+        Some(accepted.pairing_id.as_str())
     );
 }
 
@@ -223,20 +226,36 @@ async fn revoked_device_rejoins_with_fresh_token() {
             .await
             .ok
     );
+    let old_id = db.active_pairing(&ctp.node_id().0).expect("paired").id;
+    // DEV-02: 水位挂在配对记录上。#1117：撤销 = 配对记录物理删除，旧 id 下的
+    // 水位随之级联删除（不再是「同一身份回来接着用旧水位」）；回来的是新配对，
+    // 拿新 id，从零开始记账——档案（名字、首次出现）才是跨配对保留的东西。
+    db.set_watermark(&old_id, 300, now()).await.unwrap();
+    let first_seen = db
+        .get_device(&ctp.node_id().0)
+        .await
+        .unwrap()
+        .unwrap()
+        .profile
+        .first_seen_at;
     assert!(db
-        .revoke(
+        .remove_pairing(
             &ctp.node_id().0,
-            storage::RevokedBy::Owner,
+            None,
+            storage::DepartedBy::Owner,
             1_700_000_000_000
         )
         .await
-        .unwrap());
-    // DEV-02: 水位是"已经备份到哪儿"的记账。同一个身份回来必须接着用它，
-    // 否则照片会重传——这正是 DEV-01 的 merge 想解决、而 1:1 下本来就
-    // 成立的那件事。
-    db.set_watermark(&ctp.node_id().0, 300, now())
-        .await
-        .unwrap();
+        .unwrap()
+        .is_some());
+    let gone = db.get_device(&ctp.node_id().0).await.unwrap().unwrap();
+    assert!(gone.pairing.is_none());
+    assert_eq!(gone.profile.departed_by, Some(storage::DepartedBy::Owner));
+    assert_eq!(
+        db.get_watermark(&old_id).await.unwrap(),
+        None,
+        "旧配对记录的水位随记录级联删除"
+    );
 
     // A fresh owner-issued token lets the SAME identity rejoin…
     let qr2 = pairing.start([0x51; 12], now());
@@ -246,16 +265,19 @@ async fn revoked_device_rejoins_with_fresh_token() {
         "mistakenly removed devices must be able to rejoin: {resp:?}"
     );
     let d = db.get_device(&ctp.node_id().0).await.unwrap().unwrap();
-    assert!(!d.revoked, "owner confirmation reinstates the device");
+    let new_pairing = d.pairing.expect("owner confirmation reinstates the device");
+    assert_ne!(new_pairing.id, old_id, "重新配对拿新 id");
+    assert_eq!(d.profile.departed_by, None);
 
     // DEV-02 的正面证据：一对密钥 = 一台设备。同一个 NodeId 重新配对
-    // **不得**生出第二行，水位留在原处。
-    let all = db.list_devices(true).await.unwrap();
+    // **不得**生出第二份档案，且复用原档案。
+    let all = db.list_devices().await.unwrap();
     assert_eq!(all.len(), 1, "同一个 NodeId 不得生出第二行：{all:?}");
+    assert_eq!(d.profile.first_seen_at, first_seen, "复用同一份档案");
     assert_eq!(
-        db.get_watermark(&ctp.node_id().0).await.unwrap(),
-        Some(300),
-        "水位留在原处 = 照片不重传",
+        db.get_watermark(&new_pairing.id).await.unwrap(),
+        None,
+        "新配对从零记账，旧 id 的水位不被继承",
     );
 
     // …and the audit trail says it was a rejoin.
@@ -293,7 +315,7 @@ async fn send_method(
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn unpair_revokes_self_and_hello_is_denied_then_fresh_token_rejoins() {
+async fn unpair_removes_pairing_and_data_is_denied_then_fresh_token_rejoins() {
     let db = Db::open_in_memory().await.unwrap();
     let (dtp, daddr, pairing) = start_daemon(db.clone(), true).await;
     let ctp = endpoint().await;
@@ -306,13 +328,7 @@ async fn unpair_revokes_self_and_hello_is_denied_then_fresh_token_rejoins() {
             .await
             .ok
     );
-    assert!(
-        !db.get_device(&ctp.node_id().0)
-            .await
-            .unwrap()
-            .unwrap()
-            .revoked
-    );
+    let first_id = db.active_pairing(&ctp.node_id().0).expect("paired").id;
 
     // Unilateral stop: the device revokes itself — no owner action.
     let resp = send_method(
@@ -324,12 +340,28 @@ async fn unpair_revokes_self_and_hello_is_denied_then_fresh_token_rejoins() {
     .await;
     assert!(resp.ok, "self-unpair must succeed: {resp:?}");
     let d = db.get_device(&ctp.node_id().0).await.unwrap().unwrap();
-    assert!(d.revoked, "device row must be revoked after unpair");
+    assert!(
+        d.pairing.is_none(),
+        "pairing record must be gone after unpair"
+    );
+    assert_eq!(d.profile.departed_by, Some(storage::DepartedBy::Device));
 
-    // hello is now denied (revoked ⇒ not even hello).
+    // #1117: 没有配对记录 ⇒ 数据方法被拒（NotPaired；桌面不再发 Revoked）。
+    // hello 只剩能力握手：不带 pairing_id。
+    let denied = send_method(
+        &ctp,
+        dtp.node_id(),
+        methods::TIMELINE_PAGE,
+        serde_json::json!({}),
+    )
+    .await;
+    let err = denied.error.expect("unpaired device must be denied");
+    assert_eq!(err.code(), codes::NOT_AUTHORIZED);
+    assert_eq!(err.reason(), &proto::Reason::NotPaired);
     let hello = send_method(&ctp, dtp.node_id(), methods::HELLO, serde_json::json!({})).await;
-    assert!(!hello.ok, "revoked device must not reach hello");
-    assert_eq!(hello.error.unwrap().code(), codes::NOT_AUTHORIZED);
+    assert!(hello.ok, "{hello:?}");
+    let hello: proto::Hello = serde_json::from_value(hello.result.unwrap()).unwrap();
+    assert_eq!(hello.pairing_id, None);
 
     // …but a fresh owner-issued token lets the SAME identity rejoin.
     let qr2 = pairing.start([0x61; 12], now());
@@ -339,7 +371,9 @@ async fn unpair_revokes_self_and_hello_is_denied_then_fresh_token_rejoins() {
         "unpaired device must rejoin with fresh token: {resp:?}"
     );
     let d = db.get_device(&ctp.node_id().0).await.unwrap().unwrap();
-    assert!(!d.revoked);
+    let second = d.pairing.expect("paired again");
+    assert_ne!(second.id, first_id, "rejoin gets a fresh pairing id");
+    assert_eq!(d.profile.departed_by, None);
 
     // Audit names the self-revocation.
     let audit = db.list_audit(20).await.unwrap();
@@ -348,9 +382,9 @@ async fn unpair_revokes_self_and_hello_is_denied_then_fresh_token_rejoins() {
 
 /// #565：断开通知带着它要结束的配对纪元。同一台手机重新配对后，迟到的旧通知
 /// 不许把新配对吊销（条件更新）；带当前纪元的通知照常吊销。
-/// 反证：handler 忽略 `pairing_epoch`、总是无条件吊销 ⇒ 第一段的 `!revoked` 红。
+/// 反证：handler 忽略 `pairing_id`、总是无条件删除配对记录 ⇒ 第一段的「当前配对仍在」红。
 #[tokio::test(flavor = "multi_thread")]
-async fn unpair_only_ends_the_pairing_epoch_it_names() {
+async fn unpair_only_ends_the_pairing_id_it_names() {
     let db = Db::open_in_memory().await.unwrap();
     let (dtp, daddr, pairing) = start_daemon(db.clone(), true).await;
     let ctp = endpoint().await;
@@ -363,17 +397,16 @@ async fn unpair_only_ends_the_pairing_epoch_it_names() {
             .ok
     );
     let current = db
-        .pairing_epoch(&ctp.node_id().0)
-        .await
-        .unwrap()
-        .expect("an approved pairing has an epoch");
+        .active_pairing(&ctp.node_id().0)
+        .expect("an approved pairing has an id")
+        .id;
 
     // 迟到的旧通知（上一次配对的纪元）：答 ok，但什么都不吊销。
     let stale = send_method(
         &ctp,
         dtp.node_id(),
         methods::DEVICE_UNPAIR,
-        serde_json::json!({ "pairing_epoch": "an-earlier-pairing" }),
+        serde_json::json!({ "pairing_id": "an-earlier-pairing" }),
     )
     .await;
     assert!(
@@ -381,32 +414,27 @@ async fn unpair_only_ends_the_pairing_epoch_it_names() {
         "a stale notice is answered (that pairing is already over): {stale:?}"
     );
     assert_eq!(stale.result.unwrap()["unpaired"], false);
-    assert!(
-        !db.get_device(&ctp.node_id().0)
-            .await
-            .unwrap()
-            .unwrap()
-            .revoked,
-        "a stale unpair notice must not revoke the current pairing"
+    let still = db.get_device(&ctp.node_id().0).await.unwrap().unwrap();
+    assert_eq!(
+        still.pairing.as_ref().map(|p| p.id.as_str()),
+        Some(current.as_str()),
+        "a stale unpair notice must not remove the current pairing"
     );
+    assert_eq!(still.profile.departed_by, None);
 
     // 带当前纪元：照常吊销。
     let resp = send_method(
         &ctp,
         dtp.node_id(),
         methods::DEVICE_UNPAIR,
-        serde_json::json!({ "pairing_epoch": current }),
+        serde_json::json!({ "pairing_id": current }),
     )
     .await;
     assert!(resp.ok, "{resp:?}");
     assert_eq!(resp.result.unwrap()["unpaired"], true);
-    assert!(
-        db.get_device(&ctp.node_id().0)
-            .await
-            .unwrap()
-            .unwrap()
-            .revoked
-    );
+    let ended = db.get_device(&ctp.node_id().0).await.unwrap().unwrap();
+    assert!(ended.pairing.is_none());
+    assert_eq!(ended.profile.departed_by, Some(storage::DepartedBy::Device));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -500,7 +528,7 @@ async fn stale_pending_times_out_denied_with_no_writes() {
         "no device row"
     );
     assert!(
-        db.pairing_epoch(&ctp.node_id().0).await.unwrap().is_none(),
+        db.active_pairing(&ctp.node_id().0).is_none(),
         "no epoch rotation for a request nobody approved"
     );
 
@@ -578,11 +606,53 @@ async fn start_daemon_slow_owner(
     tokio::spawn(async move {
         while let Some(req) = pending.recv().await {
             tokio::time::sleep(std::time::Duration::from_millis(owner_delay_ms)).await;
-            let _ = req.decide(PairDecision::Accept);
+            let _ = req.decide(common::allow());
         }
     });
     let router = Router::new(db, "客厅的电脑").with_pairing(pairing.clone());
     let tp2 = tp.clone();
     tokio::spawn(async move { router.serve(&tp2).await });
     (tp, addr, pairing)
+}
+
+async fn hello_name(ctp: &IrohTransport, daemon: transport::NodeId) -> String {
+    let resp = send_method(ctp, daemon, methods::HELLO, serde_json::json!({})).await;
+    assert!(resp.ok, "{resp:?}");
+    serde_json::from_value::<proto::Hello>(resp.result.unwrap())
+        .unwrap()
+        .device_name
+}
+
+/// #1118：电脑名（可能含用户真名）只在配对窗口里给来扫码的手机，窗口外的未配对对端只拿到
+/// 通用名；已配对的成员照常拿到真名。
+#[tokio::test(flavor = "multi_thread")]
+async fn computer_name_reaches_unpaired_peers_only_inside_the_pairing_window() {
+    // 业主拒绝：申请结束后这台手机仍在保留期内过准入（能 hello），但它不是成员。
+    let db = Db::open_in_memory().await.unwrap();
+    let (dtp, daddr, pairing) = start_daemon(db.clone(), false).await;
+    let stranger = endpoint().await;
+    stranger.add_peer(daddr);
+    let qr = pairing.start([0x51; 12], now());
+    assert_eq!(hello_name(&stranger, dtp.node_id()).await, "客厅的电脑");
+    let resp = send_pair(&stranger, dtp.node_id(), &token_of(&qr), "陌生手机").await;
+    assert!(!resp.ok, "owner said no: {resp:?}");
+    assert!(!pairing.window_open(now()), "the only token is spent");
+    assert_eq!(
+        hello_name(&stranger, dtp.node_id()).await,
+        daemon::router::GENERIC_DEVICE_NAME
+    );
+
+    // 成员：窗口关着也拿到真名。
+    let db = Db::open_in_memory().await.unwrap();
+    let (dtp, daddr, pairing) = start_daemon(db.clone(), true).await;
+    let member = endpoint().await;
+    member.add_peer(daddr);
+    let qr = pairing.start([0x52; 12], now());
+    assert!(
+        send_pair(&member, dtp.node_id(), &token_of(&qr), "妈妈的手机")
+            .await
+            .ok
+    );
+    assert!(!pairing.window_open(now()));
+    assert_eq!(hello_name(&member, dtp.node_id()).await, "客厅的电脑");
 }

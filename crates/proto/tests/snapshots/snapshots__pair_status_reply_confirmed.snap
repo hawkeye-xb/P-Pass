@@ -1,0 +1,12 @@
+---
+source: crates/proto/tests/snapshots.rs
+expression: json
+---
+{
+  "state": "accepted",
+  "accepted": {
+    "storage_device_name": "Home PC",
+    "pairing_id": "epoch-1"
+  },
+  "confirm_b": "cbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbcb"
+}

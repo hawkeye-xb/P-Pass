@@ -46,13 +46,16 @@ describe("活动记录的用户投影", () => {
     const denied = auditText({ kind: "pair.denied" });
     const cancelled = auditText({ kind: "pair.cancelled" });
     const expired = auditText({ kind: "pair.expired" });
+    // #1118：业主输错验证码，这次申请作废。
+    const codeFailed = auditText({ kind: "pair.code_failed" });
     expect(denied).toBe("加入被拒绝");
     expect(cancelled).toBe("手机已取消");
     expect(expired).toBe("配对已超时");
+    expect(codeFailed).toBe("验证码不对，未加入");
     const unknown = auditText({ kind: "future.internal.event" });
-    for (const text of [denied, cancelled, expired]) expect(text).not.toBe(unknown);
-    expect(new Set([denied, cancelled, expired]).size).toBe(3);
-    for (const kind of ["pair.denied", "pair.cancelled", "pair.expired"]) {
+    for (const text of [denied, cancelled, expired, codeFailed]) expect(text).not.toBe(unknown);
+    expect(new Set([denied, cancelled, expired, codeFailed]).size).toBe(4);
+    for (const kind of ["pair.denied", "pair.cancelled", "pair.expired", "pair.code_failed"]) {
       expect(auditWho({ kind, payload: { deviceName: "客厅的手机" } }, [])).toBe("客厅的手机");
     }
   });

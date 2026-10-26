@@ -82,7 +82,7 @@ ${Using:StrFunc} StrStr
     nsExec::ExecToLog '"$SYSDIR\schtasks.exe" /Run /TN "P-Pass"'
     Pop $0
     ; 成功装完，清掉上一次失败留下的横幅标记（下次启动不再提示旧失败）。
-    Delete "$LOCALAPPDATA\com.p-pass.desktop\update-failed"
+    Delete "$LOCALAPPDATA\com.hawkeyexb.ppass.desktop\update-failed"
   ${EndIf}
 !macroend
 
@@ -133,7 +133,7 @@ ${Using:StrFunc} StrStr
 ;      （用户双击安装包）才弹错误对话框，这是经典安装器的做法。
 Function UpdateFailureRecover
   StrCpy $R9 0
-  IfFileExists "$LOCALAPPDATA\com.p-pass.desktop\desktop-user-stopped" failed_marker
+  IfFileExists "$LOCALAPPDATA\com.hawkeyexb.ppass.desktop\desktop-user-stopped" failed_marker
     nsExec::ExecToStack '"$SYSDIR\schtasks.exe" /Query /TN "P-Pass"'
     Pop $0
     Pop $1
@@ -147,7 +147,7 @@ Function UpdateFailureRecover
 
   failed_marker:
   ClearErrors
-  FileOpen $0 "$LOCALAPPDATA\com.p-pass.desktop\update-failed" w
+  FileOpen $0 "$LOCALAPPDATA\com.hawkeyexb.ppass.desktop\update-failed" w
   IfErrors failed_dialog
   FileWrite $0 "install-failed$\r$\n"
   FileWrite $0 "service=$R9$\r$\n"

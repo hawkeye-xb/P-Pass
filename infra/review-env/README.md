@@ -63,6 +63,16 @@ cp /tmp/ppf/SHA256SUMS-linux-x64 /tmp/ppf/BUILD_INFO-linux-x64 /opt/ppass-review
 
 `BUILD_INFO-linux-x64` 里记着这条产物来自哪个 commit —— 出问题时要能说出「审核期间跑的是哪一份」。
 
+已经部署过、只换二进制（不重跑第 2 步）时，先确认库位置文件在：#1115 起 Linux 上没有
+`config.toml` 的 daemon 进「未配置」状态、不开库，审核页配不上对。第 2 步的 install.sh 会写它；
+早于 #1115 部署的机器没有，补一次（库还在原来的位置）：
+
+```bash
+[ -e /var/lib/ppass-review/p-pass/config.toml ] \
+  || printf 'data_dir = "%s"\n' /var/lib/ppass-review/p-pass | sudo tee /var/lib/ppass-review/p-pass/config.toml
+sudo systemctl restart ppass-review.service
+```
+
 ### 2. 页面 + 服务 + 账号 + nginx
 
 ```bash

@@ -9,15 +9,15 @@ expression: json
   },
   {
     "code": "NOT_AUTHORIZED",
-    "reason": "revoked"
-  },
-  {
-    "code": "NOT_AUTHORIZED",
     "reason": "role_forbidden"
   },
   {
     "code": "NOT_AUTHORIZED",
     "reason": "pair_token_invalid"
+  },
+  {
+    "code": "NOT_AUTHORIZED",
+    "reason": "pair_code_wrong"
   },
   {
     "code": "VERSION_MISMATCH",
@@ -65,7 +65,7 @@ expression: json
   },
   {
     "code": "FLOW_REJECTED",
-    "reason": "epoch_mismatch"
+    "reason": "pairing_mismatch"
   },
   {
     "code": "FLOW_REJECTED",

@@ -32,15 +32,16 @@ ALL_ENDS = ("android", "ios", "macos", "windows")
 
 # 各端的入口包与它们构建时开的 feature（默认 feature 一律算开）。与构建命令的一致性由
 # tools/test-release-plan.sh 看守：
-#   Android  tools/build-android-iroh-blobs-bridge.sh   cargo build -p transport --features android-jni
-#   iOS      tools/build-ios-transport-xcframework.sh   cargo rustc -p transport --features ios-ffi
-#                                                       （绑定生成器 --features ios-bindgen）
+#   Android  tools/build-android-iroh-blobs-bridge.sh   cargo build -p transport --features mobile-ffi
+#                                                       （#1124 / #1126 起与 iOS 同一份 uniffi 导出；绑定生成器 --features mobile-bindgen）
+#   iOS      tools/build-ios-transport-xcframework.sh   cargo rustc -p transport --features mobile-ffi
+#                                                       （绑定生成器 --features mobile-bindgen）
 #   macOS    release.yml macos-arm64                    cargo build --release -p daemon + 桌面壳
 #   Windows  release.yml windows-x64                    cargo build --release -p daemon -p testclient + 桌面壳
 DESKTOP_SHELL = "p-pass-desktop"
 ENTRIES = {
-    "android": [("transport", ["android-jni"])],
-    "ios": [("transport", ["ios-ffi", "ios-bindgen"])],
+    "android": [("transport", ["mobile-ffi", "mobile-bindgen"])],
+    "ios": [("transport", ["mobile-ffi", "mobile-bindgen"])],
     "macos": [("daemon", []), (DESKTOP_SHELL, [])],
     "windows": [("daemon", []), ("testclient", []), (DESKTOP_SHELL, [])],
 }

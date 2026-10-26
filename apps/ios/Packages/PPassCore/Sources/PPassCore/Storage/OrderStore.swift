@@ -129,8 +129,8 @@ public final class PagedCursor<Element> {
 public final class SQLiteOrderStore: OrderStore, @unchecked Sendable {
     public static let fileName = "backup-orders.db"
     static let pageSize = 256
-    /// v1：iOS 首版 schema（字段与 Android v4 对齐，去掉 location_redacted；媒体 / 相册 id 为 TEXT；单库发现游标）。
-    static let schemaVersion: Int64 = 1
+    /// v2（#1117）：订单列 `pairing_epoch` 改名 `pairing_id`，旧库按「不认识的版本」删表重建，不搬旧数据。v1：iOS 首版 schema（字段与 Android v4 对齐，去掉 location_redacted；媒体 / 相册 id 为 TEXT；单库发现游标）。
+    static let schemaVersion: Int64 = 2
 
     private let db: SQLiteDatabase
     private let lock = NSRecursiveLock()
@@ -145,7 +145,7 @@ public final class SQLiteOrderStore: OrderStore, @unchecked Sendable {
     private static let openRoundKey = "open_round_id"
     private static let auditOncePrefix = "audit_once:"
 
-    private static let columns = "id, media_id, source_version, bucket_id, content_hash, state, attempts, pairing_epoch, created_at_ms, updated_at_ms, source_missing"
+    private static let columns = "id, media_id, source_version, bucket_id, content_hash, state, attempts, pairing_id, created_at_ms, updated_at_ms, source_missing"
     private static let isCurrent = "o.id = (SELECT MAX(id) FROM orders WHERE media_id = o.media_id)"
     private static let allStates = OrderState.allCases.map { "'\($0.rawValue)'" }.joined(separator: ",")
 
@@ -159,7 +159,7 @@ public final class SQLiteOrderStore: OrderStore, @unchecked Sendable {
             content_hash    TEXT,
             state           TEXT    NOT NULL CHECK (state IN (\(allStates))),
             attempts        INTEGER NOT NULL DEFAULT 0,
-            pairing_epoch   TEXT    NOT NULL,
+            pairing_id   TEXT    NOT NULL,
             created_at_ms   INTEGER NOT NULL,
             updated_at_ms   INTEGER NOT NULL,
             source_missing  INTEGER NOT NULL DEFAULT 0
@@ -267,7 +267,7 @@ public final class SQLiteOrderStore: OrderStore, @unchecked Sendable {
     private func readOrder(_ r: SQLiteRow) -> Order {
         Order(
             id: r.int(0), mediaId: r.text(1), sourceVersion: r.text(2), bucketId: r.text(3), contentHash: r.optText(4),
-            state: OrderState(rawValue: r.text(5)) ?? .failed, attempts: Int(r.int(6)), pairingEpoch: r.text(7),
+            state: OrderState(rawValue: r.text(5)) ?? .failed, attempts: Int(r.int(6)), pairingId: r.text(7),
             createdAtMs: r.int(8), updatedAtMs: r.int(9), sourceMissing: r.int(10) != 0
         )
     }
@@ -342,8 +342,8 @@ public final class SQLiteOrderStore: OrderStore, @unchecked Sendable {
             }
             let now = clock()
             try db.run(
-                "INSERT INTO orders (media_id, source_version, bucket_id, content_hash, state, attempts, pairing_epoch, created_at_ms, updated_at_ms, source_missing) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, 0)",
-                [.text(order.mediaId), .text(order.sourceVersion), .text(order.bucketId), .optText(order.contentHash), .text(order.state.rawValue), .text(order.pairingEpoch), .int(now), .int(now)]
+                "INSERT INTO orders (media_id, source_version, bucket_id, content_hash, state, attempts, pairing_id, created_at_ms, updated_at_ms, source_missing) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, 0)",
+                [.text(order.mediaId), .text(order.sourceVersion), .text(order.bucketId), .optText(order.contentHash), .text(order.state.rawValue), .text(order.pairingId), .int(now), .int(now)]
             )
             let id = db.lastInsertRowId()
             try writeAdvance(advance)
@@ -642,7 +642,7 @@ public final class SQLiteOrderStore: OrderStore, @unchecked Sendable {
                 try metaDelete(Self.openRoundKey)
                 try writeScan(ScanState(dirty: true, cursor: nil))
             }
-            // 桌面按 (node_id, pairing_epoch, queue_sequence) 记账：id 从 1 开始会撞上旧账本已完成的行。
+            // 桌面按 (node_id, pairing_id, queue_sequence) 记账：id 从 1 开始会撞上旧账本已完成的行。
             try db.run("DELETE FROM sqlite_sequence WHERE name = 'orders'")
             var maxId: Int64 = 0
             try db.query("SELECT IFNULL(MAX(id), 0) FROM orders") { maxId = $0.int(0) }

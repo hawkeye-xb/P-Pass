@@ -121,7 +121,7 @@ class C409WakeBoundedTest {
         val model = UniqueWorkModel()
         val rig = rigOn(model)
         rig.photo(1, generation = 1)
-        rig.probeResult = ProbeResult.Reachable("e1", DesktopHealth(freeBytes = 0L, libraryWritable = false))
+        rig.probeResult = ProbeResult.Reachable(DesktopHealth(freeBytes = 0L, libraryWritable = false))
         rig.trigger(TriggerReason.MEDIA_CHANGE)
         assertEquals(WaitReason.DESKTOP_STORAGE_FULL, rig.control.wait)
 
@@ -268,7 +268,7 @@ class C409WakeBoundedTest {
         assertTrue(rig.control.ladderSpent)
 
         // 第一拍（10 分钟）时桌面回来了：传成，标记清掉，后 3 拍撤掉。
-        rig.probeResult = ProbeResult.Reachable("e1")
+        rig.probeResult = ProbeResult.Reachable()
         model.advanceTo(15 * MINUTE) { rig.runWake(it) }
         assertEquals(OrderState.CONFIRMED, rig.state(1))
         assertEquals(false, rig.control.ladderSpent)

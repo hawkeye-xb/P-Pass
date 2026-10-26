@@ -52,6 +52,47 @@ pub fn restrict_to_owner(path: &Path) -> crate::Result<Applied> {
     Ok(Applied::Done)
 }
 
+/// #1115：建一个只有本用户能进的目录（0700）。已存在就核对属主是本用户、并把权限收回 0700；
+/// 属主不是本用户（别人抢先建的）⇒ 报错，调用方拒绝启动——不在别人控制的目录里放 socket。
+pub fn prepare_private_dir(path: &Path) -> crate::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    let io = |source| PlatformError::Io {
+        action: "prepare_private_dir",
+        source,
+    };
+    match std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)
+    {
+        Ok(()) => {}
+        Err(e) => return Err(io(e)),
+    }
+    let meta = std::fs::symlink_metadata(path).map_err(io)?;
+    if !meta.is_dir() {
+        return Err(PlatformError::Failed {
+            action: "prepare_private_dir",
+            detail: format!("{} 不是目录（软链或文件）", path.display()),
+        });
+    }
+    // SAFETY: getuid 无参数、不失败。
+    let me = unsafe { libc::getuid() };
+    if meta.uid() != me {
+        return Err(PlatformError::Failed {
+            action: "prepare_private_dir",
+            detail: format!(
+                "{} 的属主不是本用户（uid {} ≠ {me}）",
+                path.display(),
+                meta.uid()
+            ),
+        });
+    }
+    if meta.permissions().mode() & 0o777 != 0o700 {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).map_err(io)?;
+    }
+    Ok(())
+}
+
 /// fd 2 就是本进程自己的 stderr——launchd / systemd 这类托管方把真正的
 /// `.err` 文件 `open()` 之后 `dup2` 到 fd 2 才 exec 我们，所以对 fd 2
 /// `set_len(0)` + `seek(0)` 动的就是那个文件本身。
@@ -118,6 +159,25 @@ mod tests {
     }
 
     /// 路径不存在时必须报错，不能静默说自己做过了。
+    /// #1115：私有目录建成 0700；已存在但权限放宽了 ⇒ 收回 0700；是文件 ⇒ 报错。
+    #[test]
+    fn private_dir_is_0700_and_owned_by_us() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let base = std::env::temp_dir().join(format!("ppf-1115-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("run");
+        prepare_private_dir(&dir).unwrap();
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&dir), 0o700);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        prepare_private_dir(&dir).unwrap();
+        assert_eq!(mode(&dir), 0o700, "放宽过的权限要收回");
+        let file = base.join("not-a-dir");
+        std::fs::write(&file, b"x").unwrap();
+        assert!(prepare_private_dir(&file).is_err());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn restrict_to_owner_fails_loudly_on_missing_file() {
         assert!(restrict_to_owner(std::path::Path::new("/definitely/not/here/ppf-qa09")).is_err());

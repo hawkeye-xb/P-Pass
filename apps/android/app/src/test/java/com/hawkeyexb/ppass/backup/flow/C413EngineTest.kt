@@ -415,7 +415,7 @@ class C413EngineTest {
     fun `an unhealthy desktop keeps the loop waiting without the foreground service`() = runTest {
         val rig = Rig(this)
         rig.photo(1, generation = 1)
-        rig.probeResult = ProbeResult.Reachable("e1", DesktopHealth(freeBytes = 100L * 1024 * 1024 * 1024, libraryWritable = false))
+        rig.probeResult = ProbeResult.Reachable(DesktopHealth(freeBytes = 100L * 1024 * 1024 * 1024, libraryWritable = false))
         rig.trigger()
         assertEquals(0, rig.foreground.acquires)
         assertEquals(WaitReason.DESKTOP_LIBRARY_UNAVAILABLE, rig.engine.view.value.waitReason)

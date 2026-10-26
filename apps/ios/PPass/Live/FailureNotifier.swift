@@ -92,7 +92,7 @@ enum FailureNotifier {
         // 判定输入变了才记一行（真机上据此对账「为什么发 / 没发」，#939）；配对代号不落日志。
         if loggedFacts != facts {
             loggedFacts = facts
-            logger.log("notify: facts mediaAccess=\(facts.mediaAccess) backgroundRequested=\(facts.backgroundRequested) backgroundRefresh=\(facts.backgroundRefresh) paired=\(facts.pairingEpoch != nil) pairingLost=\(facts.pairingLost)")
+            logger.log("notify: facts mediaAccess=\(facts.mediaAccess) backgroundRequested=\(facts.backgroundRequested) backgroundRefresh=\(facts.backgroundRefresh) paired=\(facts.pairingId != nil) pairingLost=\(facts.pairingLost)")
         }
         for event in decision.undeliverable where loggedUndeliverable.insert(event).inserted {
             logger.log("notify: \(event.rawValue) not delivered, enabled=\(notifyEnabled) system authorization=\(auth)")

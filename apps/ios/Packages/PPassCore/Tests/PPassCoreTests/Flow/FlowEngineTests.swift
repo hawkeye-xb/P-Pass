@@ -420,7 +420,7 @@ final class FlowEngineTests: XCTestCase {
         let rig = try Rig()
         rig.photo(1, generation: 1)
         let health = DesktopHealth(freeBytes: 100 * 1024 * 1024 * 1024, libraryWritable: false)
-        rig.probe.result.set(.reachable(advertisedEpoch: "e1", health: health, capabilities: []))
+        rig.probe.result.set(.reachable(advertisedPairingId: "e1", health: health, capabilities: []))
         await rig.start()
         await rig.trigger()
         XCTAssertEqual(rig.lease.acquires.get(), 0)

@@ -50,19 +50,20 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 
 import App from "./App.svelte";
 import { t } from "./lib/i18n.js";
+import { daemonMethodOf } from "./lib/daemonApi.js";
 
 /** 常驻服务正常的桌面；`auditFails` 让 audit.list 这一步失败。 */
 function desktop({ auditFails = false, events = [] } = {}) {
   const d = { auditFails, events };
   invokeMock.mockImplementation(async (cmd, args) => {
-    switch (cmd) {
+    switch (daemonMethodOf(cmd) ? "daemon" : cmd) {
       case "wizard_state":
         return { show_wizard: false };
       case "self_heal_daemon":
       case "notify_system":
         return null;
-      case "daemon_call":
-        switch (args.method) {
+      case "daemon":
+        switch (daemonMethodOf(cmd)) {
           case "status":
             return { version: "v0.9.5", pending_pairs: 0, photo_sources: 1 };
           case "pairing.pending":

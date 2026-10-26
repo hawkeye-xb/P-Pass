@@ -17,6 +17,10 @@ getrandom = "0.3"
 thiserror.workspace = true
 tracing.workspace = true
 
+# #1117：配对记录写入串行化（事务提交与内存副本更新之间不许被另一次写插队）。
+# #1115：正本（钥匙串）是同步调用，放进 spawn_blocking（rt）。
+tokio = { version = "1", features = ["sync", "rt"] }
+
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 tempfile = "3"

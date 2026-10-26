@@ -62,8 +62,8 @@ describe("#481 向导第 3 步：如实告知本地网络弹窗", () => {
     expect(step3).toContain("「后台项目已添加」");
   });
 
-  it("其它两行保留", () => {
-    expect(step3).toContain("不会做什么");
+  it("「如果被拦」保留，「不会做什么」一行已删", () => {
+    expect(step3).not.toContain("不会做什么");
     expect(step3).toContain("如果被拦");
   });
 });

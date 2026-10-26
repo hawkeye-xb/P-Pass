@@ -3,6 +3,7 @@
 // then opens already-connected. Owner side auto-allows via IPC.
 package com.hawkeyexb.ppass
 
+import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.hawkeyexb.ppass.transport.DaemonClient
@@ -28,7 +29,11 @@ class SetupPairingTest {
             val client = DaemonClient()
             client.bind(IdentityStore(dir, AndroidKeystoreIdentityWrapper()).secretKey())
             try {
-                val outcome = pairWithQr(client, qr!!.trim(), deviceName = "SM-S9210")
+                val outcome = pairWithQr(
+                    client, qr!!.trim(), deviceName = "SM-S9210",
+                    // #1118：自动化 = 总是「连接」；码打到 logcat（只在测试路径），宿主脚本据此在电脑上输码。
+                    onCode = { code, _, node -> Log.i("SetupPairing", "PAIR_CODE=$code node=$node") },
+                )
                 assertTrue("pair: $outcome", outcome is PairOutcome.Joined)
                 PairingStore(dir).save((outcome as PairOutcome.Joined).pairing)
                 println("PAIRING PERSISTED: ${outcome.pairing.storageDeviceName}")

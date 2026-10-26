@@ -40,6 +40,9 @@ on:
       - "tools/ios/**"
       - "tools/build-ios-*"
       - "crates/transport/**"
+      # #1124 / #1118：XCFramework 经 mobile-ffi 还编进 crates/proto 与 crates/pair-pake。
+      - "crates/proto/**"
+      - "crates/pair-pake/**"
       - "assets/i18n/**"
       - "assets/design/tokens.json"
       - "apps/android/app/src/main/res/values/strings.xml"
@@ -54,6 +57,8 @@ on:
       - "tools/ios/**"
       - "tools/build-ios-*"
       - "crates/transport/**"
+      - "crates/proto/**"
+      - "crates/pair-pake/**"
       - "assets/i18n/**"
       - "assets/design/tokens.json"
       - "apps/android/app/src/main/res/values/strings.xml"
