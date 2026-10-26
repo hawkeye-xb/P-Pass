@@ -1,4 +1,4 @@
-﻿//! Windows adapter (§4 对照表左列).
+//! Windows adapter (§4 对照表左列).
 //!
 //! - Autostart: a per-user Task Scheduler task (DESK-65 #957) — logon
 //!   trigger + a once-a-minute watchdog trigger, the Windows counterpart
@@ -993,8 +993,13 @@ impl HostingAdapter for WindowsAdapter {
     /// `IgnoreNew` 让这次运行什么都不多拉。顺手删掉老版本的 Run 值（迁移）。
     fn install_autostart(&self, exec: &Path) -> Result<()> {
         // D1：服务已由安装器建好，壳不再登记计划任务（否则会多一套自启，互相打架）。
+        // 但「把开机自启恢复回来」这件事仍归壳管：用户停过服务时 §5.1 会把启动类型
+        // 置成 Disabled，这里改回 Auto（不改就点「启动后台服务」也起不来）。
         if crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)? {
-            return Ok(());
+            return crate::windows_service::set_start_type(
+                crate::windows_service::SERVICE_NAME,
+                crate::windows_service::ServiceStartType::Auto,
+            );
         }
         use windows::core::BSTR;
         use windows::Win32::System::TaskScheduler::{
@@ -1024,9 +1029,15 @@ impl HostingAdapter for WindowsAdapter {
     }
 
     /// 计划任务在，或者老版本的 Run 值还在（还没迁移）。
+    ///
+    /// 服务模式问的是「开机自启还在不在」：`Disabled`（= 用户在 App 里停过服务，
+    /// §5.1）就不算，`Auto` 才算。
     fn autostart_installed(&self) -> Result<bool> {
         if crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)? {
-            return Ok(true);
+            return Ok(matches!(
+                crate::windows_service::start_type(crate::windows_service::SERVICE_NAME)?,
+                Some(crate::windows_service::ServiceStartType::Auto)
+            ));
         }
         let task = with_task_folder("query scheduled task", |folder| {
             Ok(get_task(folder)?.is_some())
@@ -1120,9 +1131,18 @@ impl HostingAdapter for WindowsAdapter {
 
     /// DESK-65 (#957)：结束任务正在跑的实例，再删任务（= `launchctl bootout`），
     /// 老版本的 Run 值一并删掉。之后登录不再拉起、看门狗也不再拉。
+    ///
+    /// D1/§5.1：服务模式下**不删服务**——那是 per-machine 安装的一部分，删掉要管理员
+    /// 才能重建。对应的动作是 §5.1 的「停止 = 设为禁用」：`Disabled` + `sc stop`，
+    /// 之后开机也不起来；用户在 App 里再启动时 `install_autostart` 把类型改回 `Auto`。
     fn uninstall_autostart(&self) -> Result<()> {
         if crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)? {
-            crate::windows_service::uninstall(crate::windows_service::SERVICE_NAME)?;
+            use crate::windows_service::{self, ServiceStartType};
+            windows_service::set_start_type(
+                windows_service::SERVICE_NAME,
+                ServiceStartType::Disabled,
+            )?;
+            windows_service::stop(windows_service::SERVICE_NAME)?;
             return delete_legacy_run_value();
         }
         use windows::core::BSTR;

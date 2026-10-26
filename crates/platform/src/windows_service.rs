@@ -248,6 +248,49 @@ pub fn start_type(name: &str) -> Result<Option<ServiceStartType>> {
     Ok(service_config(name)?.map(|c| c.start_type))
 }
 
+/// 改启动类型。§5.1 的「尊重用户停服务」靠它：用户停止 → [`ServiceStartType::Disabled`]
+/// （重启电脑也不会被拉回来），用户在 App 里重新启动 → 改回 [`ServiceStartType::Auto`]。
+///
+/// 只改这一项，其余字段用 `SERVICE_NO_CHANGE` 原样保留——不会顺手改掉 binPath、
+/// 服务账户或失败动作。要求 `SERVICE_CHANGE_CONFIG`：安装器的 `sc sdset` 已把
+/// `DC` 授给交互用户，所以停/开服务不弹 UAC。
+pub fn set_start_type(name: &str, start: ServiceStartType) -> Result<()> {
+    use windows::Win32::System::Services::{
+        ChangeServiceConfigW, ENUM_SERVICE_TYPE, SERVICE_DEMAND_START, SERVICE_DISABLED,
+        SERVICE_ERROR, SERVICE_NO_CHANGE, SERVICE_START_TYPE,
+    };
+
+    let Some(service) = Service::open(name, SERVICE_CHANGE_CONFIG)? else {
+        return Err(failed("set_start_type", format!("服务未安装：{name}")));
+    };
+    let raw = match start {
+        ServiceStartType::Auto => SERVICE_AUTO_START,
+        ServiceStartType::Manual => SERVICE_DEMAND_START,
+        ServiceStartType::Disabled => SERVICE_DISABLED,
+        ServiceStartType::Other(raw) => SERVICE_START_TYPE(raw),
+    };
+    // SAFETY: 服务句柄有效；除启动类型外全部 `SERVICE_NO_CHANGE` + 空指针。
+    unsafe {
+        ChangeServiceConfigW(
+            service.0,
+            ENUM_SERVICE_TYPE(SERVICE_NO_CHANGE),
+            raw,
+            SERVICE_ERROR(SERVICE_NO_CHANGE),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            None,
+            PCWSTR::null(),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            PCWSTR::null(),
+        )
+    }
+    .map_err(|e| PlatformError::Io {
+        action: "ChangeServiceConfigW",
+        source: std::io::Error::from_raw_os_error(e.code().0),
+    })
+}
+
 /// 起服务（幂等：已经在跑就返回 `Ok`）。
 pub fn start(name: &str) -> Result<()> {
     let Some(service) = Service::open(name, SERVICE_START | SERVICE_QUERY_STATUS)? else {
@@ -725,5 +768,17 @@ mod start_type_tests {
         assert!(start_type("PPassDefinitelyNotInstalledService")
             .expect("start_type")
             .is_none());
+    }
+
+    /// 反证：对不存在的服务改启动类型必须报错，不能静默成功。
+    /// （真机上的「改成 Disabled 后重启不再起来」是 A15，需要已安装的服务 + 管理员，见 #1161。）
+    #[test]
+    fn changing_the_start_type_of_a_missing_service_is_an_error() {
+        let err = set_start_type(
+            "PPassDefinitelyNotInstalledService",
+            ServiceStartType::Disabled,
+        )
+        .expect_err("不存在的服务不能改");
+        assert!(format!("{err}").contains("服务未安装"), "{err}");
     }
 }
