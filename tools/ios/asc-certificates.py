@@ -8,8 +8,8 @@ Apple Development 证书，直到账号上限（run 40298231858）。本脚本�
 （吊销不可逆，由人在 developer.apple.com 上挑着删）。
 
 每行：类型 / 名称 / displayName / platform / 生效时间（证书 DER 的 notBefore）/ 过期时间 / 序列号 / 疑似 CI。
-「疑似 CI」判据：DEVELOPMENT 类（含 IOS_DEVELOPMENT）且 displayName / name 里带 runner 主机名特征
-（Mac-xxxx / runner / GitHub Actions / ip- / 虚拟机）。判据只是提示，删之前人看一眼名称与时间。
+「疑似 CI」判据：DEVELOPMENT 类（含 IOS_DEVELOPMENT）且 name / displayName 是「Created via API」
+（API 密钥驱动 Xcode 新建的证书就叫这个，实测）或带 runner 主机名特征（Mac-xxxx / runner / GitHub Actions / ip-）。判据只是提示，删之前人看一眼名称与时间。
 不打印证书内容本身。依赖：python3 + cryptography；JWT 复用 asc-builds.py 的 make_jwt。
 """
 import importlib.util
@@ -26,7 +26,8 @@ _spec = importlib.util.spec_from_file_location("asc_builds", HERE / "asc-builds.
 _asc = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_asc)
 
-CI_HOST = re.compile(r"(Mac-\d+|runner|GitHub|Actions|\bip-\d|\bVM\b|virtual)", re.I)
+# 实测（run 40306934975）：API 密钥驱动 Xcode 新建的证书名为「Apple Development: Created via API」。
+CI_HOST = re.compile(r"(Created via API|Mac-\d+|runner|GitHub|Actions|\bip-\d|\bVM\b|virtual)", re.I)
 
 
 def fetch(token: str, url: str) -> dict:
