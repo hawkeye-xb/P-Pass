@@ -305,6 +305,10 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
   Android `strings.xml`, ...) changed without an `ios` bump => `check-version-bump.sh` fails the formal tag.
 - Manual run without a tag (any branch): `gh workflow run ci-ios.yml --ref <branch> -f testflight_version=vX.Y.Z-test.N`
   (must be a test/beta version; bump N on every retry). Local: `PPF_BUILD_VERSION=... tools/ios/testflight-upload.sh --archive-only`.
+- Signing happens only at export: the archive is built with `CODE_SIGNING_ALLOWED=NO` (no certificate, no Apple calls),
+  then ad-hoc signed to carry the entitlements; `-exportArchive` uses cloud signing with the API key. CI never creates
+  certificates (gate: `tools/ios/check-testflight-signing.sh`). Read-only certificate list:
+  `gh workflow run ci-ios.yml --ref <branch> -f list_certificates=true`.
 - `ITSAppUsesNonExemptEncryption=NO` in Info.plist: the app only uses standard transport encryption (TLS/QUIC), which is exempt.
 - Environment setup for a new machine: [ios-dev-setup.md](ios-dev-setup.md).
 
@@ -535,6 +539,11 @@ Android 靠 `channelFromVersion()` 读注入的版本串（含 `-test.` 即 test
 - iOS 只走 TestFlight（没有侧载 / 自更新）。`release.yml` 的 `ios` job 归档、用 App Store Connect **云托管签名**签名并上传
   （GitHub Secrets 里的 API 密钥 `ASC_KEY_ID` / `ASC_ISSUER_ID` / `ASC_KEY_P8`，App Manager 角色；全程没有 p12）。
   缺任一 secret ⇒ 该 job 干净跳过，Release 正文标注「未上传 TestFlight」。
+- 签名只发生在导出：归档 `CODE_SIGNING_ALLOWED=NO`（无证书、不连 Apple），再给 .app 补 ad-hoc 签名把
+  entitlements 带进归档；`-exportArchive`（app-store-connect）带 `-allowProvisioningUpdates` + API 密钥走云签名。
+  **CI 运行时绝不新建证书**——以前归档也带签名更新参数，全新 runner 每跑一次新建一张开发证书，撞满上限
+  （run 40298231858）。门禁 `tools/ios/check-testflight-signing.sh`（ci-ios 里跑，带反证自测）。
+  只读列证书清单：`gh workflow run ci-ios.yml --ref <分支> -f list_certificates=true`（不吊销，吊销由人做）。
 - 版本线：`release/versions.json` 有 `ios` 项（正式 tag 用它）；test tag 与其它端一样用 tag 名。涨号用
   `tools/bump-version.sh --platform ios <版本>`（同时改 `PPASS_FALLBACK_VERSION`）。构建号（`CFBundleVersion`）由
   `tools/ios/stamp-version.sh` 换算：同一个完整版本串永远得到同一个号；App Store Connect 拒收重复构建号，

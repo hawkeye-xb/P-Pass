@@ -5,7 +5,8 @@ description: >-
   调用方必须先 checkout（本地 action 要读仓库）、用 macOS runner。
 
 # 做法（苹果标准：App Store Connect API 密钥 + 云托管签名，不导出、不保管 p12）：
-#   - 签名与上传全在 tools/ios/testflight-upload.sh 里（archive → 校验归档内版本号 → exportArchive 直传）。
+#   - 签名与上传全在 tools/ios/testflight-upload.sh 里（无签名 archive → 校验归档内版本号 → exportArchive 云签名直传）。
+#     归档不签名、签名只在导出：CI 运行时绝不新建证书（门禁 tools/ios/check-testflight-signing.sh）。
 #   - p8 只经 input → 步骤 env → 脚本里 umask 077 的临时文件，脚本退出即删；不回显。
 #   - 同一构建号 App Store Connect 不接受重传：脚本在归档前先查 ASC，已在则幂等跳过（补跑 / 重跑安全）。
 #
