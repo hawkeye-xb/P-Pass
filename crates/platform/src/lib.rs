@@ -47,6 +47,8 @@ mod local_peer;
 #[cfg(target_os = "macos")]
 mod keychain;
 #[cfg(target_os = "macos")]
+mod sealed_version;
+#[cfg(target_os = "macos")]
 mod macos;
 // QA-09 迁移（#211）：macOS 与 Linux 共享的 unix 实现。迁过来的分叉里有
 // 3 处是 `#[cfg(unix)]`（同时覆盖两者），没有共享模块就得抄两遍。
@@ -77,7 +79,9 @@ pub use code_signature::{
 };
 pub use data_migration::DataDirMigration;
 pub use identity_key::{IdentityKeyHome, IdentityKeyStore, SecretBlobStore};
-pub use local_peer::{verify_local_peer, LocalPeerSource, PeerCheck, PeerRole};
+pub use local_peer::{
+    verify_local_peer, verify_local_peer_min_version, LocalPeerSource, PeerCheck, PeerRole,
+};
 
 /// #1115：常驻 daemon 的本机 IPC 形态（[`PlatformAdapter::resident_ipc`]）。
 #[derive(Debug, Clone, PartialEq, Eq)]
