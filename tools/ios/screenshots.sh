@@ -51,6 +51,7 @@ shot() { # <文件名> <场景> <路由> [等待秒数]
 echo "截图 → ${OUT}（语言 ${LANG_CODE}）"
 # 两个 tab 与时间线
 shot 01-photos-grid normal photos
+shot 08-photos-family normal family
 shot 02-photos-loading timelineLoading photos 2
 shot 03-photos-empty timelineEmpty photos
 shot 04-photos-error timelineError photos

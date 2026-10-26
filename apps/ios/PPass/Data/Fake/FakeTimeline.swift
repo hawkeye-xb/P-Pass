@@ -55,7 +55,9 @@ final class FakeTimeline: TimelineSource {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         if item.isVideo {
             let url = dir.appendingPathComponent("\(item.id.suffix(8)).mp4")
-            if !FileManager.default.fileExists(atPath: url.path) { try await FakeImages.writeVideo(to: url) }
+            if !FileManager.default.fileExists(atPath: url.path) {
+                try await FakeImages.writeVideo(to: url, seed: FakeImages.stableSeed(item.id))
+            }
             return url
         }
         let url = dir.appendingPathComponent("\(item.id.suffix(8)).jpg")
@@ -141,8 +143,10 @@ enum FakeImages {
     }
 
     /// 两秒的演示视频（逐帧画色块），给视频页一个真能播的文件。
-    static func writeVideo(to url: URL) async throws {
-        let size = CGSize(width: 640, height: 480)
+    /// 设了演示照片目录（见上）时改用对应照片做一段缓慢推近的画面，商店截图里视频页才像真视频。
+    static func writeVideo(to url: URL, seed: Int) async throws {
+        let photo = demoPhoto(seed: seed, longSide: 1280)?.cgImage
+        let size = photo == nil ? CGSize(width: 640, height: 480) : CGSize(width: 1280, height: 960)
         let writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
         let input = AVAssetWriterInput(mediaType: .video, outputSettings: [
             AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: size.width, AVVideoHeightKey: size.height,
@@ -159,12 +163,17 @@ enum FakeImages {
             guard let pool = adaptor.pixelBufferPool else { break }
             var buffer: CVPixelBuffer?
             CVPixelBufferPoolCreatePixelBuffer(nil, pool, &buffer)
-            guard let buffer, let cg = tile(seed: frame / 12, size: size).cgImage else { continue }
+            guard let buffer, let cg = photo ?? tile(seed: frame / 12, size: size).cgImage else { continue }
             CVPixelBufferLockBaseAddress(buffer, [])
             let ctx = CGContext(data: CVPixelBufferGetBaseAddress(buffer), width: Int(size.width), height: Int(size.height),
                                 bitsPerComponent: 8, bytesPerRow: CVPixelBufferGetBytesPerRow(buffer),
                                 space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue)
-            ctx?.draw(cg, in: CGRect(origin: .zero, size: size))
+            // 照片：按 4:3 铺满（居中裁切），再从 1.0 缓慢推近到 1.06；色块：整幅画。
+            let fill = max(size.width / CGFloat(cg.width), size.height / CGFloat(cg.height))
+            let zoom = photo == nil ? 1 : fill * (1 + 0.06 * CGFloat(frame) / 47)
+            let drawn = photo == nil ? size : CGSize(width: CGFloat(cg.width) * zoom, height: CGFloat(cg.height) * zoom)
+            ctx?.draw(cg, in: CGRect(x: (size.width - drawn.width) / 2, y: (size.height - drawn.height) / 2,
+                                     width: drawn.width, height: drawn.height))
             CVPixelBufferUnlockBaseAddress(buffer, [])
             adaptor.append(buffer, withPresentationTime: CMTime(value: CMTimeValue(frame), timescale: 24))
         }
