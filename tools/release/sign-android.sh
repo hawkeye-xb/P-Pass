@@ -18,19 +18,25 @@ cd "$(dirname "$0")/../.."
 KEY="$RUNNER_TEMP/ppass-update.key"
 SIGS="$RUNNER_TEMP/sigs"
 APK=$(find artifacts/android -maxdepth 1 -name 'P-Pass_*_android*.apk' -exec basename {} \; | head -1)
-# rsign 私钥（base64 文本，tauri signer 格式）还原成文件；CI 非交互 → 空密码。
-# 签名走 tauri 官方 signer（minisign 格式，与 tauri-plugin-updater 验证端同源）。
-# #1121：按 TAG 选通道密钥（update-key-lib.sh；printf 逐字节还原的坑也在那里）。
 # shellcheck source=tools/release/update-key-lib.sh
 . tools/release/update-key-lib.sh
-write_signing_key "$TAG" "$KEY"
-# #1121：签名器只从 tools/release/signer/ 的 lockfile 安装（锁哈希、不跑安装脚本），
-# 签名环境不执行现拉代码。版本仍是 2.11.4（signer 格式漂移会静默产出坏签名，UPD-01）。
-tools/release/signer.sh sign -f "$KEY" -p "" \
-  "artifacts/android/$APK"
-rm -f "$KEY"
-# #1121：签完立刻用本通道公钥验——私钥与通道对不上当场失败。
-verify_signed_files "$TAG" "artifacts/android/$APK"
+if [ -f "artifacts/android/$APK.sig" ]; then
+  # #1151：复用的产物（reuse-artifact.sh）自带从 Latest 沿用的原签名——只验、不签，
+  # 也就不需要私钥。已发布的字节没有第二次被签名的机会。
+  verify_signed_files "$TAG" "artifacts/android/$APK"
+else
+  # rsign 私钥（base64 文本，tauri signer 格式）还原成文件；CI 非交互 → 空密码。
+  # 签名走 tauri 官方 signer（minisign 格式，与 tauri-plugin-updater 验证端同源）。
+  # #1121：按 TAG 选通道密钥（update-key-lib.sh；printf 逐字节还原的坑也在那里）。
+  write_signing_key "$TAG" "$KEY"
+  # #1121：签名器只从 tools/release/signer/ 的 lockfile 安装（锁哈希、不跑安装脚本），
+  # 签名环境不执行现拉代码。版本仍是 2.11.4（signer 格式漂移会静默产出坏签名，UPD-01）。
+  tools/release/signer.sh sign -f "$KEY" -p "" \
+    "artifacts/android/$APK"
+  rm -f "$KEY"
+  # #1121：签完立刻用本通道公钥验——私钥与通道对不上当场失败。
+  verify_signed_files "$TAG" "artifacts/android/$APK"
+fi
 mkdir -p "$SIGS"
 cp artifacts/android/*.sig "$SIGS/"
 # UPD-15：正式 tag 下本 job **不产出** artifacts/manifest.json（动态清单只给

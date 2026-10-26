@@ -343,7 +343,7 @@ elif sub == "build" and "--no-bundle" not in rest:
 '''
 
 # job → 外壳那一步（release.yml 里的 step 名）。改名时这里跟着改，否则 dry-run 直接报错。
-SHELL_STEPS = {"macos-arm64": "Bundle desktop .app + dmg (H-10c)", "windows-x64": "Build desktop shell installer (NSIS, T7)"}
+SHELL_STEPS = {"macos-arm64": "Build desktop shell (no signing credentials, #1151)", "windows-x64": "Build desktop shell installer (NSIS, T7)"}
 BUILD_VERSION_STEPS = ["Resolve desktop version (UPD-13)", "Build release binaries"]
 
 
@@ -486,6 +486,10 @@ class Scenario:
                     needs[n] = {"result": self.jobs[n].result, "outputs": self.jobs[n].outputs}
                 elif n in BUILD_RESULTS:
                     needs[n] = {"result": self.build_result(n), "outputs": {}}
+                elif n == "attest":
+                    # #1151：来源证明 job 不在 dry-run 里跑；有任一端构建成功它就成功，否则跳过。
+                    built = any(self.build_result(b) == "success" for b in ("android", "macos-arm64", "windows-x64"))
+                    needs[n] = {"result": "success" if built else "skipped", "outputs": {}}
                 elif "uses" in wf["jobs"].get(n, {}):
                     needs[n] = {"result": self.verify_result(n), "outputs": {}}
                 else:

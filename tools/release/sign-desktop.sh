@@ -22,7 +22,6 @@ SIGS="$RUNNER_TEMP/sigs"
 # Invalid symbol——v0.2.1-test.1 实测踩坑，见 sign-android.sh）。
 # shellcheck source=tools/release/update-key-lib.sh
 . tools/release/update-key-lib.sh
-write_signing_key "$TAG" "$KEY"
 mkdir -p "$SIGS"
 # REL-10（#707）：要签的文件在**本步内**定位。每个 step 是独立 shell，
 # 上一步（compose-desktop.sh）里的 APK_PATH / MAC_UPD 到这里是未定义——
@@ -34,6 +33,14 @@ MAC_UPD=$(find artifacts/macos-arm64 -maxdepth 1 -name 'P-Pass_*_macos-arm64.app
 WIN_EXE=$(find artifacts/windows-x64-installer -maxdepth 1 -name 'P-Pass_*_x64-setup.exe' 2>/dev/null | head -1 || true)
 for f in "$APK_PATH" "$MAC_UPD" "$WIN_EXE"; do
   [ -f "$f" ] || continue
+  if [ -f "$f.sig" ]; then
+    # #1151：复用的产物自带从 Latest 沿用的原签名（reuse-artifact.sh）——只验、不签，
+    # 已发布的字节没有第二次被签名的机会。
+    verify_signed_files "$TAG" "$f"
+    cp "$f.sig" "$SIGS/"
+    continue
+  fi
+  [ -f "$KEY" ] || write_signing_key "$TAG" "$KEY"
   # #1121：签名器只从 tools/release/signer/ 的 lockfile 安装（锁哈希、不跑安装脚本）
   tools/release/signer.sh sign -f "$KEY" -p "" "$f"
   # #1121：签完立刻用本通道公钥验——私钥与通道对不上（比如 test 包签成了正式密钥）当场失败。
