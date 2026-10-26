@@ -109,7 +109,7 @@ fi
 if python3 - "$WF" <<'PY'
 import re, sys, yaml
 steps = yaml.safe_load(open(sys.argv[1]))["jobs"]["repair"]["steps"]
-run = next(s["run"] for s in steps if s.get("name") == "Compose + sign manifests")
+run = next(s["run"] for s in steps if s.get("name") == "Compose manifests (carry existing signatures)")
 # 命中「jq ... release/versions.json」（工作区相对路径，前面不是 / 或 . 或 :）即判红
 sys.exit(1 if re.search(r"jq\b[^\n]*(?<![./:])release/versions\.json", run) else 0)
 PY

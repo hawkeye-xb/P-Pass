@@ -61,6 +61,15 @@ export PATH="$TMP/bin:$PATH"
 REPO="$TMP/repo"
 mkdir -p "$REPO/tools/release" "$REPO/release"
 cp "$HERE/release/plan-builds.sh" "$HERE/release/rust-impact.py" "$HERE/release/reuse-artifact.sh" "$REPO/tools/release/"
+# #1151：复用沿用 Latest 清单里的原签名（carry-signature.sh）——夹具里要有真的密钥对与签名。
+cp "$HERE/release/carry-signature.sh" "$HERE/release/update-key-lib.sh" "$HERE/release/verify-update-sig.mjs" "$REPO/tools/release/"
+mkdir -p "$REPO/apps/desktop/src-tauri"
+CI=true "$HERE/release/signer.sh" generate -w "$TMP/stable.key" -p "" --ci >/dev/null
+CI=true "$HERE/release/signer.sh" generate -w "$TMP/other.key" -p "" --ci >/dev/null
+jq -n --arg p "$(cat "$TMP/stable.key.pub")" '{plugins:{updater:{pubkey:$p}}}' > "$REPO/apps/desktop/src-tauri/tauri.conf.json"
+export RELEASE_TAG=v2026.1.2
+# sign_with <密钥> <文件>：用 tauri signer 签，打印 .sig 内容（清单里 signature 字段的值）
+sign_with() { "$HERE/release/signer.sh" sign -f "$1" -p "" "$2" >/dev/null 2>&1; cat "$2.sig"; rm -f "$2.sig"; }
 git -C "$REPO" init -q && git -C "$REPO" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
 
 sha() { python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
@@ -81,11 +90,13 @@ latest() {
   local tag="$1" av="$2" mv="$3" d="$TMP/state/$1"
   rm -rf "$TMP/state"; mkdir -p "$d"; echo "$tag" > "$TMP/state/LATEST"
   mk_apk "$d/P-Pass_${av}_android.apk" "$av"
-  printf '{"version":"%s","platforms":{"android-arm64":{"sha256":"%s"}}}\n' "$av" "$(sha "$d/P-Pass_${av}_android.apk")" > "$d/manifest-android.json"
+  jq -n --arg v "$av" --arg h "$(sha "$d/P-Pass_${av}_android.apk")" --arg s "$(sign_with "$TMP/stable.key" "$d/P-Pass_${av}_android.apk")" \
+    '{version:$v,platforms:{"android-arm64":{sha256:$h,signature:$s}}}' > "$d/manifest-android.json"
   printf 'dmg-bytes' > "$d/P-Pass_${mv}_macos-arm64.dmg"
   mk_tar "$d/P-Pass_${mv}_macos-arm64.app.tar.gz" "$mv"
   (cd "$d" && for f in "P-Pass_${mv}_macos-arm64.dmg" "P-Pass_${mv}_macos-arm64.app.tar.gz"; do echo "$(sha "$f")  $f"; done > SHA256SUMS-macos-arm64)
-  printf '{"version":"%s","platforms":{"darwin-aarch64":{}}}\n' "$mv" > "$d/manifest-macos.json"
+  jq -n --arg v "$mv" --arg s "$(sign_with "$TMP/stable.key" "$d/P-Pass_${mv}_macos-arm64.app.tar.gz")" \
+    '{version:$v,platforms:{"darwin-aarch64":{signature:$s}}}' > "$d/manifest-macos.json"
 }
 export STUB_STATE="$TMP/state"
 
@@ -357,9 +368,9 @@ echo "reuse-artifact"
 reuse() { OUT=$(cd "$REPO" && tools/release/reuse-artifact.sh "$1" v2026.1.1 "$2" "$TMP/out-$3" 2>&1); RC=$?; }
 latest v2026.1.1 1.0.0 2.0.0
 reuse android 1.0.0 a1
-[ "$RC" = 0 ] && [ -f "$TMP/out-a1/P-Pass_1.0.0_android.apk" ] && ok "android：字节与版本号都对 ⇒ 取回" || bad "android：字节与版本号都对 ⇒ 取回" "$OUT"
+[ "$RC" = 0 ] && [ -f "$TMP/out-a1/P-Pass_1.0.0_android.apk" ] && [ -s "$TMP/out-a1/P-Pass_1.0.0_android.apk.sig" ] && ok "android：字节与版本号都对 ⇒ 取回（连同沿用的原签名）" || bad "android：字节与版本号都对 ⇒ 取回（连同沿用的原签名）" "$OUT"
 reuse macos 2.0.0 m1
-[ "$RC" = 0 ] && [ "$(ls "$TMP/out-m1" | wc -l | tr -d ' ')" = 3 ] && ok "macOS：字节与版本号都对 ⇒ 取回三件" || bad "macOS：字节与版本号都对 ⇒ 取回三件" "$OUT"
+[ "$RC" = 0 ] && [ "$(ls "$TMP/out-m1" | wc -l | tr -d ' ')" = 4 ] && [ -s "$TMP/out-m1/P-Pass_2.0.0_macos-arm64.app.tar.gz.sig" ] && ok "macOS：字节与版本号都对 ⇒ 取回三件 + 沿用的原签名" || bad "macOS：字节与版本号都对 ⇒ 取回三件 + 沿用的原签名" "$OUT"
 printf 'tampered' >> "$TMP/state/v2026.1.1/P-Pass_1.0.0_android.apk"
 reuse android 1.0.0 a2
 [ "$RC" != 0 ] && printf '%s' "$OUT" | grep -q "sha256 与 v2026.1.1 的清单不符" && ok "android：字节与清单不符 ⇒ 红" || bad "android：字节与清单不符 ⇒ 红" "$OUT"
@@ -377,6 +388,17 @@ D="$TMP/state/v2026.1.1"; mk_tar "$D/P-Pass_2.0.0_macos-arm64.app.tar.gz" 1.9.9
 (cd "$D" && for f in P-Pass_2.0.0_macos-arm64.dmg P-Pass_2.0.0_macos-arm64.app.tar.gz; do echo "$(sha "$f")  $f"; done > SHA256SUMS-macos-arm64)
 reuse macos 2.0.0 m3
 [ "$RC" != 0 ] && printf '%s' "$OUT" | grep -q "CFBundleShortVersionString=1.9.9" && ok "macOS：Info.plist 版本与本次不符 ⇒ 红（#809 教训）" || bad "macOS：Info.plist 版本与本次不符 ⇒ 红" "$OUT"
+# #1151：字节与 sha256 都对，但清单里的签名验不过（被换成别的密钥的签名）⇒ 红，且不会拿私钥重签
+latest v2026.1.1 1.0.0 2.0.0
+D="$TMP/state/v2026.1.1"
+jq --arg s "$(sign_with "$TMP/other.key" "$D/P-Pass_1.0.0_android.apk")" '.platforms["android-arm64"].signature=$s' "$D/manifest-android.json" > "$D/m.tmp" && mv "$D/m.tmp" "$D/manifest-android.json"
+reuse android 1.0.0 a4
+[ "$RC" != 0 ] && printf '%s' "$OUT" | grep -q "找不到能验过" && [ ! -e "$TMP/out-a4/P-Pass_1.0.0_android.apk.sig" ] && ok "android：清单里的签名验不过 ⇒ 红（不重签）" || bad "android：清单里的签名验不过 ⇒ 红（不重签）" "$OUT"
+latest v2026.1.1 1.0.0 2.0.0
+D="$TMP/state/v2026.1.1"
+jq '.platforms["darwin-aarch64"].signature=""' "$D/manifest-macos.json" > "$D/m.tmp" && mv "$D/m.tmp" "$D/manifest-macos.json"
+reuse macos 2.0.0 m4
+[ "$RC" != 0 ] && printf '%s' "$OUT" | grep -q "找不到能验过" && ok "macOS：清单里没有签名 ⇒ 红（不重签）" || bad "macOS：清单里没有签名 ⇒ 红（不重签）" "$OUT"
 
 echo
 echo "通过 ${PASS} / 失败 ${FAIL}"

@@ -308,6 +308,20 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
 - `ITSAppUsesNonExemptEncryption=NO` in Info.plist: the app only uses standard transport encryption (TLS/QUIC), which is exempt.
 - Environment setup for a new machine: [ios-dev-setup.md](ios-dev-setup.md).
 
+## 4.3 Supply-chain guarantees (#1151)
+
+- Provenance: a dedicated `attest` job generates SLSA build provenance for every asset the run built
+  (macOS dmg / `.app.tar.gz`, Windows installer + `daemon.exe` / `testclient.exe`, Android APK). Build jobs hold no
+  `id-token` / `attestations` permission. Verify: `gh attestation verify <file> -R hawkeye-xb/P-Pass`.
+  Reused assets (`android-reuse` / `macos-reuse`) are not re-attested; their provenance is that of the release they came from.
+- Signing credentials (Apple p12, Android keystore) exist only in their signing step. macOS: `tools/bundle-desktop-macos.sh`
+  runs in two phases (`PPF_BUNDLE_PHASE=build` installs dependencies with no credentials; `sign` runs after the keychain exists).
+  Android: gradle produces the unsigned APK, a separate step runs `zipalign -c` + `apksigner`.
+  Gate: `python3 tools/release/test-secret-isolation.py --self-test` (ci-docs lane).
+- Reuse and `repair-manifests.yml` never re-sign published bytes: they carry the original update signature from the
+  published manifest and verify it against the channel public key (`tools/release/carry-signature.sh`). No valid signature
+  found => the job fails; cut a new tag instead.
+
 ## 5. Version-overwrite guards (remember)
 
 - `git tag -l "v<ver>"` exists → that version number is **taken**.
@@ -533,6 +547,18 @@ Android 靠 `channelFromVersion()` 读注入的版本串（含 `-test.` 即 test
   （必须是 test / beta 版本；每次重试 N 加一）。本机：`PPF_BUILD_VERSION=… tools/ios/testflight-upload.sh --archive-only`。
 - Info.plist 声明 `ITSAppUsesNonExemptEncryption=NO`：只用系统标准传输加密（TLS / QUIC），属出口合规豁免。
 - 新机器环境搭建：[ios-dev-setup.md](ios-dev-setup.md)。
+
+## 4.3 供应链保证（#1151）
+
+- 来源证明：独立的 `attest` job 对本次**构建出来的**每个资产生成 SLSA provenance（macOS dmg / `.app.tar.gz`、
+  Windows 安装包与 `daemon.exe` / `testclient.exe`、Android APK）。构建 job 不拿 `id-token` / `attestations`。
+  验证：`gh attestation verify <文件> -R hawkeye-xb/P-Pass`。复用的产物（`android-reuse` / `macos-reuse`）不重新证明，
+  以其原发布版本为准。
+- 签名凭据（Apple p12、Android keystore）只在各自的签名步骤出现。macOS：`tools/bundle-desktop-macos.sh` 分两个阶段
+  （`PPF_BUNDLE_PHASE=build` 无凭据装依赖；`sign` 在钥匙串建好之后才跑）；Android：gradle 只出 unsigned，
+  单独一步 `zipalign -c` + `apksigner`。门禁：`python3 tools/release/test-secret-isolation.py --self-test`（ci-docs lane）。
+- 复用与 `repair-manifests.yml` **不重新签名**已发布字节：沿用已发布清单里的原更新签名并用本通道公钥验过
+  （`tools/release/carry-signature.sh`）；找不到验得过的签名 ⇒ 红，改走新 tag 发版。
 
 ## 5. 版本覆盖禁令（记住）
 
