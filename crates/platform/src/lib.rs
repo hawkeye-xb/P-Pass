@@ -59,6 +59,9 @@ mod unix;
 mod windows;
 // #1157：D4 / §5.2 的 ProgramData 正本存放与目录 ACL 基础件。
 #[cfg(windows)]
+// #1151：应用内更新的大小 / 总时长上限（纯逻辑，三平台都跑单测）。
+pub mod update_limits;
+
 pub mod windows_programdata;
 #[cfg(windows)]
 pub use windows_programdata::{ProgramDataDir, ProgramDataStore};

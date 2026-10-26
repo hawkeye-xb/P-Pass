@@ -5,6 +5,12 @@
 // 返回的对象与插件 Update 的 download / install 同形，runUpdate（updateFlow.js）不用改。
 import { Channel, invoke } from "@tauri-apps/api/core";
 
+/**
+ * #1151：检查更新（清单请求）的总时长上限，毫秒。与壳里 update_download 的检查
+ * （crates/platform 的 update_limits::MANIFEST_TIMEOUT）同一个量级；更新源无响应时中止而不是挂着。
+ */
+export const UPDATE_CHECK_TIMEOUT_MS = 30_000;
+
 /** @param {{version: string}} update  插件 check() 返回的、界面上展示给用户的那个更新 */
 export function verifiedUpdate(update) {
   return {
