@@ -472,6 +472,7 @@ class Scenario:
                              repository=REPO, base_path=os.environ["PATH"])
         self.sha, self.key = sha, key
         self.jobs: dict = {}
+        self.verify_fail: set = set()  # #1187：模拟哪些发版前验证 job 红了
 
     def release(self, wf: dict, tag: str, jobs=RELEASE_JOBS):
         self.tag = tag
@@ -485,6 +486,8 @@ class Scenario:
                     needs[n] = {"result": self.jobs[n].result, "outputs": self.jobs[n].outputs}
                 elif n in BUILD_RESULTS:
                     needs[n] = {"result": self.build_result(n), "outputs": {}}
+                elif "uses" in wf["jobs"].get(n, {}):
+                    needs[n] = {"result": self.verify_result(n), "outputs": {}}
                 else:
                     raise SimError(f"{job_id} needs {n}，dry-run 没有它的结果")
             # 没配置的 secret 在 GitHub 上是空串（VT_API_KEY 未配置 ⇒ VirusTotal 步跳过）
@@ -505,6 +508,16 @@ class Scenario:
             needs = {"plan-builds": {"result": plan.result, "outputs": plan.outputs}}
             return self.runner.run_job(stub, job, github=self.github, inputs={}, secrets={}, needs=needs).result
         return BUILD_RESULTS[job]
+
+    def verify_result(self, job: str) -> str:
+        """#1187：发版前验证 job 调用外部 workflow，dry-run 不跑它。跑不跑由它自己的 if: 按
+        plan-builds 的真实结果求值（同 build_result）；跑了就按 self.verify_fail 给结论。"""
+        plan = self.jobs["plan-builds"]
+        stub = {**self.wf, "jobs": {job: {**{k: v for k, v in self.wf["jobs"][job].items() if k != "uses"},
+                                          "runs-on": "ubuntu-latest", "steps": []}}}
+        needs = {"plan-builds": {"result": plan.result, "outputs": plan.outputs}}
+        r = self.runner.run_job(stub, job, github=self.github, inputs={}, secrets={}, needs=needs).result
+        return "failure" if r == "success" and job in self.verify_fail else r
 
     def rebuild_artifacts(self, wf: dict, android_ver: str, desktop_ver: str):
         """下一次发布的假构建产物（换版本号）；判定为复用的一端，artifact 由复用 job 产出，这里先删掉。"""
@@ -749,6 +762,21 @@ def test_tag(ck: Check, base: Path, key: dict, pub: Path, rel: dict, mirror: dic
         ck(r["rc"] == 0 and r["outputs"].get("skip") == "true" and "tag" not in r["outputs"],
            f"mirror-resolve（{ev}）→ test tag 不镜像（skip=true）", f"{r['outputs']}\n{r['log']}")
     SUMMARY["test"] = sc.summary()
+
+
+def verify_gate(ck: Check, base: Path, key: dict, rel: dict):
+    """#1187：发版前验证任一条红 ⇒ 不建草稿，下游上传与清单定稿都不跑，什么都发不出去。"""
+    print(f"\n== #1187 发版前验证挡发布（正式 tag {FORMAL_TAG}）")
+    av, dv = CUR_VERSIONS["android"], CUR_VERSIONS["desktop"]
+    for failing in ("verify-e2e", "verify-android", "verify-rust"):
+        origin, sha = make_origin(base, f"verify-{failing}",
+                                  [(PREV_VERSIONS, {}, [PREV_TAG]), (CUR_VERSIONS, good_notes(), [FORMAL_TAG])])
+        sc = Scenario(base, f"verify-{failing}", origin, sha, key, av, dv, rel)
+        sc.verify_fail = {failing}
+        jobs = sc.release(rel, FORMAL_TAG)
+        for j in ("create-draft", "upload-android", "upload-macos", "finalize-manifest"):
+            job_ok(ck, jobs, j, "skipped")
+        ck(sc.meta(FORMAL_TAG) is None, f"{failing} 红 ⇒ 没有建出 Release（连草稿都没有）")
 
 
 def bad_notes(ck: Check, base: Path, key: str, pub: Path, rel: dict):
@@ -1009,6 +1037,7 @@ def main() -> int:
         formal(ck, base, key, pub, rel, mirror)
         test_tag(ck, base, key, test_pub, rel, mirror)
         bad_notes(ck, base, key, pub, rel)
+        verify_gate(ck, base, key, rel)
         test_per_end(ck, base, key, test_pub, rel)
         # #838：只涨 android ⇒ macOS 复用；只涨桌面 ⇒ android 复用；都不涨 ⇒ 红。
         reuse(ck, base, key, pub, rel, "android-only",

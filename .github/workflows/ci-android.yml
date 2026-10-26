@@ -14,33 +14,15 @@
 name: CI Android
 
 on:
-  # CI-07（2026-09-20）：paths 与下面的 push **逐条对齐**，业务代码 PR
-  # 从此能在 PR 上跑本 lane（原先只有 gradle 依赖清单触发，改
-  # apps/android/** 的 PR 一条 Android 检查都没有）。
-  # 本 lane **不设 paths=全跑**（与 ci-rust / ci-desktop 不同），因为它
-  # 实测 5-6min 是四条里最贵的，且**不进必需检查**——不进必需检查就不会
-  # 踩「被跳过的必需检查永久 Pending」那个坑，可以安全地保留 paths。
+  # #1187：路径判定从触发层挪到 job 层（.github/actions/changes），本 lane 进必过项。
+  # 被 workflow 级 paths 过滤掉的 workflow 不汇报状态，设成必过就永久 Pending；job 级跳过
+  # 汇报 skipped，对必过项算通过。没改到安卓相关路径的 PR 只跑十几秒的 changes 与 gate。
   pull_request:
     branches: [main]
-    paths:
-      - ".github/workflows/**"
-      - "apps/android/**"
-      - "assets/i18n/**"
-      # #1124：Kotlin 直接编译 libtransport.so 的 uniffi 绑定（控制面与 iOS 共用），Rust 侧改了导出要在这里编一遍。
-      - "crates/transport/**"
-      - "crates/proto/**"
-      - "crates/pair-pake/**"
-      - "tools/build-android-iroh-blobs-bridge.sh"
   push:
     branches: [main]
-    paths:
-      - "apps/android/**"
-      - "assets/i18n/**"
-      - ".github/workflows/ci-android.yml"
-      - "crates/transport/**"
-      - "crates/proto/**"
-      - "crates/pair-pake/**"
-      - "tools/build-android-iroh-blobs-bridge.sh"
+  # #1187：发版前由 release.yml 以全量模式调用（changes 对 workflow_call 恒定判要跑）。
+  workflow_call:
 
 permissions:
   contents: read
@@ -50,8 +32,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: changes (要不要跑 Android)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.c.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - id: c
+        uses: ./.github/actions/changes
+        with:
+          # 原 workflow 级 paths 原样搬来（PR 与 push 两份合并取并集）。
+          paths: |
+            .github/workflows/**
+            .github/actions/changes/**
+            apps/android/**
+            assets/i18n/**
+            # #1124：Kotlin 直接编译 libtransport.so 的 uniffi 绑定（控制面与 iOS 共用），Rust 侧改了导出要在这里编一遍。
+            crates/transport/**
+            crates/proto/**
+            crates/pair-pake/**
+            tools/build-android-iroh-blobs-bridge.sh
+            tools/ci-paths.sh
+
   android:
     name: android (proto drift + assemble)
+    needs: changes
+    # `!= 'false'` 而非 `== 'true'`：changes 挂了输出为空时照跑（fail-closed）。
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -96,3 +107,21 @@ jobs:
           # #1124：控制面改走 libtransport.so 的 uniffi 导出，iroh-ffi 的库不该再进包。
           if unzip -l "$APK" | grep -q "libiroh_ffi.so"; then echo "::error::APK 里还有 libiroh_ffi.so（#1124 已移除）"; exit 1; fi
           unzip -l "$APK" | grep -q "lib/arm64-v8a/libtransport.so"
+
+  # #1187：分支保护只要求这一条。`if: always()` 必不可少——没有它，上游一红本 job 就被跳过，
+  # 而 skipped 对必过项算通过，等于没设门。判定见 tools/ci-gate.sh。
+  gate:
+    name: CI Android gate
+    if: always()
+    needs: [changes, android]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: tools/ci-gate.sh
+          sparse-checkout-cone-mode: false
+      - name: 汇总上游结论
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: tools/ci-gate.sh

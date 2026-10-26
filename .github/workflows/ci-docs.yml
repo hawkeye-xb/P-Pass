@@ -21,102 +21,14 @@
 name: CI Docs
 
 on:
+  # #1187：路径判定挪到 job 层（.github/actions/changes），本 lane 进必过项。
+  # 下面每个 job 都是秒级、无编译；路径没碰到时只跑 changes 与 gate。
   pull_request:
     branches: [main]
-    paths:
-      - "tools/test-release-plan.sh"
-      - "**.sh"
-      - ".github/workflows/**"
-      - "justfile"
-      - "tools/check-shell-vars.py"
-      - "docs/**"
-      - "cards/**"
-      - "assets/design/tokens.json"
-      - "tools/check-markdown-tables.py"
-      - "tools/check-token-drift.py"
-      - "tools/dogfood-smoke.sh"
-      - "tools/ipc-lib.sh"
-      - "tools/stage-dogfood-scripts.sh"
-      - "tools/test-dogfood-assets.sh"
-      - ".github/workflows/artifacts.yml"
-      - ".github/workflows/release.yml"
-      - ".github/workflows/ci-docs.yml"
-      - ".github/workflows/mirror-latest.yml"
-      - "tools/mirror-resolve-tag.sh"
-      - "tools/test-mirror-resolve-tag.sh"
-      - ".github/workflows/repair-manifests.yml"
-      - "tools/release-version.sh"
-      - "tools/check-version-bump.sh"
-      - "tools/test-release-version-source.sh"
-      # #894：上面的测试校验 gradle 原生库 inputs 与版本门禁安卓口径一致——gradle 改了也要跑。
-      - "apps/android/app/build.gradle.kts"
-      - "tools/make-update-manifest.mjs"
-      - "tools/release-notes.mjs"
-      - "tools/release-notes.test.mjs"
-      - "release/**"
-      - "tools/release/**"
-      # #1062：release-plan 钉住真实依赖图（各端入口包传递依赖哪些 crate）——Cargo 清单变了也要跑。
-      - "Cargo.toml"
-      - "crates/*/Cargo.toml"
-      - "tools/testclient/Cargo.toml"
-      - "apps/desktop/src-tauri/Cargo.toml"
-      - "tools/bundle-desktop-macos.sh"
-      - "tools/daemon-helper-macos.sh"
-      - "tools/test-release-timeouts.sh"
-      # SEC-09 (#371)：pnpm 供应链豁免门禁——这些文件任何一个变了都要过 supply-chain。
-      - "**/pnpm-workspace.yaml"
-      - "**/package.json"
-      - "**/.npmrc"
-      - "tools/check-release-age-exclude.py"
-      - "tools/release-age-exclude-allowlist.txt"
   push:
     branches: [main]
-    paths:
-      - "tools/test-release-plan.sh"
-      - "**.sh"
-      - ".github/workflows/**"
-      - "justfile"
-      - "tools/check-shell-vars.py"
-      - "docs/**"
-      - "cards/**"
-      - "assets/design/tokens.json"
-      - "tools/check-markdown-tables.py"
-      - "tools/check-token-drift.py"
-      - "tools/dogfood-smoke.sh"
-      - "tools/ipc-lib.sh"
-      - "tools/stage-dogfood-scripts.sh"
-      - "tools/test-dogfood-assets.sh"
-      - ".github/workflows/artifacts.yml"
-      - ".github/workflows/release.yml"
-      - ".github/workflows/ci-docs.yml"
-      - ".github/workflows/mirror-latest.yml"
-      - "tools/mirror-resolve-tag.sh"
-      - "tools/test-mirror-resolve-tag.sh"
-      - ".github/workflows/repair-manifests.yml"
-      - "tools/release-version.sh"
-      - "tools/check-version-bump.sh"
-      - "tools/test-release-version-source.sh"
-      # #894：上面的测试校验 gradle 原生库 inputs 与版本门禁安卓口径一致——gradle 改了也要跑。
-      - "apps/android/app/build.gradle.kts"
-      - "tools/make-update-manifest.mjs"
-      - "tools/release-notes.mjs"
-      - "tools/release-notes.test.mjs"
-      - "release/**"
-      - "tools/release/**"
-      # #1062：release-plan 钉住真实依赖图（各端入口包传递依赖哪些 crate）——Cargo 清单变了也要跑。
-      - "Cargo.toml"
-      - "crates/*/Cargo.toml"
-      - "tools/testclient/Cargo.toml"
-      - "apps/desktop/src-tauri/Cargo.toml"
-      - "tools/bundle-desktop-macos.sh"
-      - "tools/daemon-helper-macos.sh"
-      - "tools/test-release-timeouts.sh"
-      # SEC-09 (#371)：pnpm 供应链豁免门禁——这些文件任何一个变了都要过 supply-chain。
-      - "**/pnpm-workspace.yaml"
-      - "**/package.json"
-      - "**/.npmrc"
-      - "tools/check-release-age-exclude.py"
-      - "tools/release-age-exclude-allowlist.txt"
+  # #1187：发版前由 release.yml 以全量模式调用。
+  workflow_call:
   workflow_dispatch:
 
 permissions:
@@ -127,8 +39,73 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: changes (要不要跑 Docs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.c.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - id: c
+        uses: ./.github/actions/changes
+        with:
+          # 原 workflow 级 paths 原样搬来。
+          paths: |
+            tools/test-release-plan.sh
+            **.sh
+            .github/workflows/**
+            justfile
+            tools/check-shell-vars.py
+            docs/**
+            cards/**
+            assets/design/tokens.json
+            tools/check-markdown-tables.py
+            tools/check-token-drift.py
+            tools/dogfood-smoke.sh
+            tools/ipc-lib.sh
+            tools/stage-dogfood-scripts.sh
+            tools/test-dogfood-assets.sh
+            .github/workflows/artifacts.yml
+            .github/workflows/release.yml
+            .github/workflows/ci-docs.yml
+            .github/workflows/mirror-latest.yml
+            tools/mirror-resolve-tag.sh
+            tools/test-mirror-resolve-tag.sh
+            .github/workflows/repair-manifests.yml
+            tools/release-version.sh
+            tools/check-version-bump.sh
+            tools/test-release-version-source.sh
+            # #894：上面的测试校验 gradle 原生库 inputs 与版本门禁安卓口径一致——gradle 改了也要跑。
+            apps/android/app/build.gradle.kts
+            tools/make-update-manifest.mjs
+            tools/release-notes.mjs
+            tools/release-notes.test.mjs
+            release/**
+            tools/release/**
+            # #1062：release-plan 钉住真实依赖图（各端入口包传递依赖哪些 crate）——Cargo 清单变了也要跑。
+            Cargo.toml
+            crates/*/Cargo.toml
+            tools/testclient/Cargo.toml
+            apps/desktop/src-tauri/Cargo.toml
+            tools/bundle-desktop-macos.sh
+            tools/daemon-helper-macos.sh
+            tools/test-release-timeouts.sh
+            # SEC-09 (#371)：pnpm 供应链豁免门禁——这些文件任何一个变了都要过 supply-chain。
+            **/pnpm-workspace.yaml
+            **/package.json
+            **/.npmrc
+            tools/check-release-age-exclude.py
+            tools/release-age-exclude-allowlist.txt
+            .github/actions/changes/**
+            tools/ci-paths.sh
+
   docs:
     name: md-check + token-check
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -144,6 +121,8 @@ jobs:
 
   dogfood-assets:
     name: dogfood-assets（REL-08：资产里的 .sh 在干净目录自足）
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -157,6 +136,8 @@ jobs:
 
   supply-chain:
     name: supply-chain（SEC-09/#371：minimumReleaseAgeExclude 不许新增）
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -169,6 +150,8 @@ jobs:
 
   mirror-resolve:
     name: mirror-resolve（UPD-18：test tag 不许镜像到 R2）
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -178,6 +161,8 @@ jobs:
 
   release-version-source:
     name: release-version-source（REL-11/13：补跑路径的代码与版本号取自被补跑的 tag）
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -189,6 +174,8 @@ jobs:
 
   release-notes:
     name: release-notes（#741：手写更新说明 lint + 清单工具）
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -201,6 +188,8 @@ jobs:
 
   release-plan:
     name: release-plan（#838：各端构建还是复用 + 复用时的字节 / 版本号校验）
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -217,6 +206,8 @@ jobs:
 
   release-dry-run:
     name: release-dry-run（REL-12：发布链正式 / test tag 两条路径预演）
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -230,6 +221,8 @@ jobs:
 
   release-timeouts:
     name: release-timeouts（#772：发布链外部命令限时 + 每个 job 有 timeout-minutes）
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -238,3 +231,20 @@ jobs:
         run: python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
       - name: with-timeout.sh 行为 + 门禁
         run: bash tools/test-release-timeouts.sh
+
+  # #1187：分支保护只要求这一条。`if: always()` 必不可少，见 ci-android.yml 同名 job。
+  gate:
+    name: CI Docs gate
+    if: always()
+    needs: [changes, docs, dogfood-assets, supply-chain, mirror-resolve, release-version-source, release-notes, release-plan, release-dry-run, release-timeouts]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: tools/ci-gate.sh
+          sparse-checkout-cone-mode: false
+      - name: 汇总上游结论
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: tools/ci-gate.sh

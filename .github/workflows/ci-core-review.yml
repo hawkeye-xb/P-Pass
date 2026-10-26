@@ -1,0 +1,107 @@
+# #1187：核心代码改动必须由仓库负责人在 Actions 里批准才能合入。
+#
+# 核心是什么：.github/core-paths.txt（数据与安全最高优先级；判定见 tools/ci-paths.sh core）。
+# 没碰核心的 PR：approve 被跳过，「core review」秒级通过。碰了核心：approve 挂在 core-review
+# 环境上等人批，批了才绿；拒了就红。
+#
+# 为什么不用 CODEOWNERS + 必需 review：本仓的 PR 都由同一个账号开、同一个账号合，GitHub
+# 不允许作者批准自己的 PR，开了就永远合不进。环境审批允许本人批（core-review 环境不开
+# 「Prevent self-review」），是单人维护时的标准替代。
+#
+# ⚠️ 为什么是 pull_request_target 而不是 pull_request：pull_request 跑的是 **PR 分支里**的
+# 这份文件，改 workflow 的人能在同一个 PR 里把审批删掉。pull_request_target 跑的是 main 上的
+# 定义、读 main 上的 core-paths.txt 与判定脚本。改动文件列表从 GitHub API 取，**全程不检出、
+# 不执行 PR 里的任何代码**——这是 pull_request_target 唯一安全的用法，别往这里加 PR 代码的 checkout。
+# 代价：改核心名单 / 判定脚本 / 本文件的 PR，按 main 上的旧规则审（它们本身就在旧规则的核心里，
+# 照样要批）。
+#
+# ⚠️ core-review 环境必须先在仓库设置里建好、配好 reviewer，再合入本文件：引用不存在的环境时
+# GitHub 会自动建一个没有保护规则的空环境，审批就形同虚设。
+name: CI Core review
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ci-core-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: changes (碰没碰核心)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      core: ${{ steps.decide.outputs.core }}
+    steps:
+      # 默认检出 base 分支（main），不是 PR 代码。
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            tools/ci-paths.sh
+            tools/ci-gate.sh
+            tools/test-ci-paths.sh
+            .github/core-paths.txt
+          sparse-checkout-cone-mode: false
+      - name: 判据自检（含变异反证）
+        run: tools/test-ci-paths.sh
+      - id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          CHANGED: ${{ github.event.pull_request.changed_files }}
+        run: |
+          set -uo pipefail
+          # 改名的文件新旧两个路径都算：把核心文件挪出核心目录也要审。
+          if ! files="$(gh api --paginate "repos/${REPO}/pulls/${PR}/files" \
+                --jq '.[] | .filename, (.previous_filename // empty)')"; then
+            echo "::warning::取不到 PR 改动列表 → 按碰了核心处理"
+            echo "core=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # 文件接口最多返回 3000 个；条数对不上说明列表不全，按碰了核心处理。
+          n="$(printf '%s\n' "$files" | sort -u | grep -c . || true)"
+          if [ "$n" -lt "${CHANGED:-0}" ]; then
+            echo "::warning::改动列表不全（取到 ${n}，PR 报 ${CHANGED}）→ 按碰了核心处理"
+            echo "core=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          core="$(printf '%s\n' "$files" | tools/ci-paths.sh core - .github/core-paths.txt)"
+          echo "判定结果: core=${core}"
+          echo "core=${core}" >>"$GITHUB_OUTPUT"
+
+  approve:
+    name: core review (owner approval)
+    needs: changes
+    # `!= 'false'`：changes 挂了输出为空时也要人批（fail-closed）。
+    if: ${{ !cancelled() && needs.changes.outputs.core != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: core-review
+    steps:
+      - run: echo "核心改动已由 ${{ github.triggering_actor }} 发起、环境 reviewer 批准。"
+
+  # 分支保护只要求这一条。`if: always()` 必不可少：没有它，approve 一红本 job 就被跳过，
+  # 而 skipped 对必过项算通过。
+  gate:
+    name: core review
+    if: always()
+    needs: [changes, approve]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: tools/ci-gate.sh
+          sparse-checkout-cone-mode: false
+      - name: 汇总上游结论
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: tools/ci-gate.sh

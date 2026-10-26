@@ -54,10 +54,21 @@ EOF
 [ "$out" = "from heredoc" ] && pass "stdin（heredoc）照常喂给命令" || fail "stdin：out=$out"
 
 echo "==> 门禁：release.yml 每个 job 都有 timeout-minutes"
-missing="$(python3 - "$ROOT/.github/workflows/release.yml" <<'PY'
-import sys, yaml
+# #1187：调用外部 workflow 的 job（uses: ./.github/workflows/x.yml）GitHub 不许写 timeout-minutes，
+# 改为要求被调用 workflow 里的每个 job 都有——超时由它们各自兜住。
+missing="$(python3 - "$ROOT/.github/workflows/release.yml" "$ROOT" <<'PY'
+import os, sys, yaml
+root = sys.argv[2]
 jobs = yaml.safe_load(open(sys.argv[1]))["jobs"]
-print(" ".join(k for k, v in jobs.items() if "timeout-minutes" not in v))
+miss = []
+for k, v in jobs.items():
+    uses = v.get("uses")
+    if uses:
+        called = yaml.safe_load(open(os.path.join(root, uses.removeprefix("./"))))["jobs"]
+        miss += [f"{k}→{c}" for c, cv in called.items() if "timeout-minutes" not in cv]
+    elif "timeout-minutes" not in v:
+        miss.append(k)
+print(" ".join(miss))
 PY
 )"
 [ -z "$missing" ] && pass "全部 job 都有" || fail "缺 timeout-minutes：$missing"
