@@ -1,12 +1,14 @@
-// UPD-02: 手写 RFC 7693 BLAKE2b 的正确性锁——minisign「ED」验签链路的
-// 第一段。向量全部来自 JDK/Python hashlib（权威实现），含：
+// UPD-02 / #1151: BLAKE2b 的正确性锁——minisign「ED」验签链路的第一段。
+// #1151 起摘要实现是 BouncyCastle 的 Blake2bDigest（不再手写），这些向量证明它与
+// 权威实现一致。向量全部来自 JDK/Python hashlib（权威实现），含：
 //  - RFC 7693 经典向量（空串 / "abc" / fox）；
 //  - 跨块长输入（128B 整数倍、129B 越界、1000B 多块）；
 //  - 分片喂入与整喂等价（流式 API 的正确性）；
 //  - digestSize 参数（32 字节摘要）。
-// 反证：改动压缩函数 / IV / SIGMA / 计数器的任何一处，必有向量红。
+// 反证：摘要位数 / 终块处理 / 流式喂入错了，必有向量红。
 package com.hawkeyexb.ppass.update
 
+import org.bouncycastle.crypto.digests.Blake2bDigest
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -14,8 +16,10 @@ class Blake2bTest {
 
     private fun ByteArray.hex(): String = joinToString("") { "%02x".format(it) }
 
+    private fun digestOf(h: Blake2bDigest): ByteArray = ByteArray(h.digestSize).also { h.doFinal(it, 0) }
+
     private fun hashOf(data: ByteArray, digestSize: Int = 64): String =
-        Blake2b(digestSize).apply { update(data) }.digest().hex()
+        digestOf(Blake2bDigest(digestSize * 8).apply { update(data, 0, data.size) }).hex()
 
     @Test
     fun rfc7693ClassicVectors() {
@@ -62,14 +66,14 @@ class Blake2bTest {
         val data = ByteArray(1000) { (it * 7 % 251).toByte() }
         val whole = hashOf(data)
         for (chunk in listOf(1, 7, 63, 127, 128, 129, 384)) {
-            val h = Blake2b()
+            val h = Blake2bDigest(512)
             var off = 0
             while (off < data.size) {
                 val n = minOf(chunk, data.size - off)
                 h.update(data, off, n)
                 off += n
             }
-            assertEquals("chunk=$chunk", whole, h.digest().hex())
+            assertEquals("chunk=$chunk", whole, digestOf(h).hex())
         }
     }
 
