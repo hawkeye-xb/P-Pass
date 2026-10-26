@@ -987,7 +987,6 @@ public enum Methods {
     public static let backupPresence = "backup.presence"
     public static let backupCommit = "backup.commit"
     public static let diagStatus = "diag.status"
-    public static let assetDownload = "asset.download"
     public static let deviceUnpair = "device.unpair"
     public static let timelineSubscribe = "timeline.subscribe"
 }

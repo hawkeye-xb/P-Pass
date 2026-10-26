@@ -468,11 +468,7 @@ async fn main() -> anyhow::Result<()> {
     // ── transport bind（claim 之后：固定端口此刻已被前任释放或确认无人占用）──
     let mut transport_cfg = transport::TransportConfig::from_endpoints(
         config.relay_urls.clone(),
-        vec![
-            transport::ALPN_CTRL.into(),
-            transport::ALPN_BLOBS.into(),
-            transport::ALPN_DOWNLOAD.into(),
-        ],
+        vec![transport::ALPN_CTRL.into(), transport::ALPN_BLOBS.into()],
     );
     transport_cfg.bind_addr = config.bind_addr;
     transport_cfg.secret_key = Some(secret);
@@ -753,7 +749,6 @@ async fn main() -> anyhow::Result<()> {
     // #563: device.revoke cancels the removed device's in-flight fetches.
     ipc.set_flow_delivery(flow_delivery.clone());
     ipc.set_backup(backup.clone());
-    let download = daemon::download::DownloadPlane::new(db.clone(), data_dir.clone());
 
     // ── SYNC-01 外部删除对账 ──────────────────────────────
     // 磁盘（originals）↔ 索引（asset 表）diff：磁盘上没了的条目 = 外部
@@ -902,8 +897,7 @@ async fn main() -> anyhow::Result<()> {
         .with_pairing(pairing)
         .with_backup(backup)
         .with_flow_delivery(flow_delivery)
-        .with_query(query)
-        .with_download(download);
+        .with_query(query);
     // IPC-02: 启动就绪——订阅者（桌面壳）收到后即时刷新一次状态。
     daemon::events::emit(
         &event_bus,

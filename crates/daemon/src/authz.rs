@@ -75,7 +75,6 @@ fn role_allows(role: Role, method: &str) -> bool {
             | methods::ASSET_META
             | methods::THUMB_GET
             | methods::ASSET_BLOB_TICKET
-            | methods::ASSET_DOWNLOAD
             | methods::DIAG_STATUS
             | methods::TIMELINE_SUBSCRIBE
             | BLOBS_FETCH

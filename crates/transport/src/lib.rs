@@ -60,10 +60,6 @@ pub const QUIET_LOG_DIRECTIVES: &str = "iroh::net_report=error";
 /// ALPN for the data plane: photo/video content via iroh-blobs (T-021).
 pub const ALPN_BLOBS: &str = "ppf/blobs/1";
 
-/// ALPN for the download plane (T-056): original-file bytes for video
-/// playback — one asset per stream, authz-gated like everything else.
-pub const ALPN_DOWNLOAD: &str = "ppf/download/1";
-
 /// #1119：桌面删掉一台设备的配对记录后主动关闭与它的连接时用的 QUIC 关闭码
 /// （`IrohTransport::close_peer`）。与 blobs 拒绝码 403 区分开：这一条的意思是
 /// 「你的配对已被删除」。

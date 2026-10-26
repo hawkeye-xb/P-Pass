@@ -1,8 +1,8 @@
 //! #1070 protocol v2: in-band version negotiation and the reason registry,
-//! end to end against a real Router (+ download plane + IPC device list).
+//! end to end against a real Router (+ IPC device list).
 //!
 //! - A v1 envelope (no `ver`) is refused as `phone_outdated` on the control
-//!   plane and the download plane, carries the frozen v1 shim, and changes
+//!   plane, carries the frozen v1 shim, and changes
 //!   no state: device row, pairing id, Flow grant and diag log are
 //!   byte-for-byte what they were.
 //! - The local IPC is exempt (the shell never sends `ver`).
@@ -37,7 +37,7 @@ struct Desk {
     _lib: tempfile::TempDir,
 }
 
-/// Router + download plane + IpcServer sharing one `OutdatedPeers`, the way
+/// Router + IpcServer sharing one `OutdatedPeers`, the way
 /// `main.rs` wires them. The phone is a paired member on [`EPOCH`].
 async fn desk(tag: &str) -> Desk {
     let lib = tempfile::tempdir().unwrap();
@@ -45,7 +45,6 @@ async fn desk(tag: &str) -> Desk {
     let tp = bind(vec![
         transport::ALPN_CTRL.into(),
         transport::ALPN_BLOBS.into(),
-        transport::ALPN_DOWNLOAD.into(),
     ])
     .await;
     let blobs = Arc::new(
@@ -84,11 +83,7 @@ async fn desk(tag: &str) -> Desk {
         .with_outdated_peers(outdated)
         .with_pairing(pairing)
         .with_flow_delivery(delivery)
-        .with_query(QueryEngine::new(db.clone(), blobs, lib.path()))
-        .with_download(daemon::download::DownloadPlane::new(
-            db.clone(),
-            lib.path().to_path_buf(),
-        ));
+        .with_query(QueryEngine::new(db.clone(), blobs, lib.path()));
     let tp2 = tp.clone();
     tokio::spawn(async move { router.serve(&tp2).await });
 
@@ -331,16 +326,6 @@ async fn v1_envelopes_are_refused_as_phone_outdated_and_change_nothing() {
     )
     .await;
     assert_phone_outdated(&resp, "fetch_failed", "bare hello");
-
-    // Download plane: same answer before a single byte.
-    let resp = raw(
-        &d.phone,
-        d.tp.node_id(),
-        transport::ALPN_DOWNLOAD,
-        serde_json::json!({"id":"","method":"asset.download","params":{"hash":"ab".repeat(32)},"min_ver":1}),
-    )
-    .await;
-    assert_phone_outdated(&resp, "fetch_failed", "asset.download");
 
     assert_eq!(
         state_of(&d).await,

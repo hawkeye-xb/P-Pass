@@ -314,7 +314,7 @@ impl Blobs {
     /// transport dispatches `ALPN_BLOBS` connections to this store.
     ///
     /// #546: every inbound blobs connection AND every request on it passes
-    /// `gate` first — the same whitelist the ctrl / upload / download planes
+    /// `gate` first — the same whitelist the ctrl / upload planes
     /// enforce. There is deliberately no ungated variant: a daemon cannot
     /// attach its store to the network without saying who may read it.
     pub fn attach_to_listener(&self, gate: PeerGate) {

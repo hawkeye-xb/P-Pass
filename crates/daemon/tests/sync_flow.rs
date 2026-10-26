@@ -86,7 +86,6 @@ async fn fixture() -> Fixture {
     let daemon_tp = bind(vec![
         transport::ALPN_CTRL.into(),
         transport::ALPN_BLOBS.into(),
-        transport::ALPN_DOWNLOAD.into(),
     ])
     .await;
     let blobs = std::sync::Arc::new(
@@ -97,11 +96,9 @@ async fn fixture() -> Fixture {
     blobs.attach_to_listener(daemon::blobs_gate::gate(db.clone()));
     let backup = BackupEngine::new(db.clone(), blobs.clone(), library.path());
     let query = QueryEngine::new(db.clone(), blobs.clone(), library.path());
-    let download = daemon::download::DownloadPlane::new(db.clone(), library.path().to_path_buf());
     let router = Router::new(db.clone(), "test-daemon")
         .with_backup(backup)
-        .with_query(query)
-        .with_download(download);
+        .with_query(query);
     let tp2 = daemon_tp.clone();
     tokio::spawn(async move { router.serve(&tp2).await });
 

@@ -53,7 +53,7 @@ pub const PAIR_CANCEL_CAPABILITY: &str = "pair.cancel.v1";
 /// #1070: which paired-or-not peers last failed the protocol-version check,
 /// and which side must update. Process-local on purpose: the check never
 /// writes durable state (no revoke, no grant change, no device-row write).
-/// Written by the ctrl plane and the download plane, read by the IPC device
+/// Written by the ctrl plane, read by the IPC device
 /// list (`needs_update`). Cleared for a peer the moment it sends a
 /// compatible request; a daemon restart forgets it until the next probe.
 ///
@@ -159,7 +159,6 @@ pub struct Router {
     backup: Option<crate::backup::BackupEngine>,
     flow_delivery: Option<crate::flow_delivery::FlowDelivery>,
     query: Option<crate::query::QueryEngine>,
-    download: Option<crate::download::DownloadPlane>,
     /// IPC-02: 事件总线（可选——未注入时事件静默不发，测试/单组件
     /// 构造不受影响）。
     events: Option<EventBus>,
@@ -188,7 +187,6 @@ impl Router {
             backup: None,
             flow_delivery: None,
             query: None,
-            download: None,
             events: None,
             subscriptions: SubscriptionRegistry::new(),
             outdated: OutdatedPeers::new(),
@@ -230,12 +228,6 @@ impl Router {
     /// wall-clock jump without touching the system clock.
     pub fn with_clock(mut self, now: impl Fn() -> i64 + Send + Sync + 'static) -> Self {
         self.now = std::sync::Arc::new(now);
-        self
-    }
-
-    /// Attach the download plane (T-056).
-    pub fn with_download(mut self, download: crate::download::DownloadPlane) -> Self {
-        self.download = Some(download);
         self
     }
 
@@ -295,13 +287,6 @@ impl Router {
     /// Serve one connection: streams arrive sequentially; each stream is
     /// one request/response exchange (MVP framing).
     pub async fn serve_conn(&self, conn: Incoming) {
-        // Data-plane dispatch: download connections never speak ctrl.
-        if conn.alpn() == transport::ALPN_DOWNLOAD {
-            if let Some(download) = &self.download {
-                download.serve_conn(conn, &self.outdated).await;
-            }
-            return;
-        }
         let peer = conn.peer();
         // #1122：未配对的连接占一个全局名额，连接结束（离开本函数）时归还；名额满了
         // 直接断开，不读任何流。已配对设备不占名额。
