@@ -50,3 +50,6 @@ overrides:
   "@exodus/bytes": 1.15.1
   tldts: 7.4.13
   tldts-core: 7.4.13
+
+minimumReleaseAgeExclude:
+  - 'typescript@7.1.0-dev.20261025.1'
