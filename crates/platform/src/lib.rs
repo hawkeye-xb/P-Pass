@@ -57,6 +57,11 @@ mod windows;
 pub mod windows_programdata;
 #[cfg(windows)]
 pub use windows_programdata::{ProgramDataDir, ProgramDataStore};
+// §5.3：照片库目录授权给服务账户（壳在主人身份下加 ACE）。
+#[cfg(windows)]
+pub mod windows_photo_dir;
+#[cfg(windows)]
+pub use windows_photo_dir::{grant_modify_for_sid, list_modify_sids, GrantOutcome};
 // #287：只给测试用的建链能力。默认不编译，见该模块顶部说明。
 #[cfg(feature = "test-support")]
 pub mod test_support;
