@@ -124,4 +124,15 @@ final class DisconnectProviderTests: XCTestCase {
             XCTFail("断开清单执行后 provider 应已 revoke")
         } catch {}
     }
+
+    /// #1015：setAllowedPeer 失败（node id 非法）必须留日志并返回 false；合法 id 返回 true 且不写日志。
+    /// 反证：把 applyAllowedPeer 里的 logger.log 去掉 → 日志断言红；改回 `try?` 同样红。
+    func testApplyAllowedPeerLogsFailure() throws {
+        let log = LogLines()
+        XCTAssertTrue(native.applyAllowedPeer(try client.nodeId(), context: "paired", logger: log))
+        XCTAssertTrue(log.all.isEmpty)
+        XCTAssertFalse(native.applyAllowedPeer("not-a-node-id", context: "paired", logger: log))
+        XCTAssertEqual(log.all.count, 1)
+        XCTAssertTrue(log.all[0].hasPrefix("paired: setAllowedPeer failed"), log.all.joined())
+    }
 }
