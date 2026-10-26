@@ -325,6 +325,10 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
 - Reuse and `repair-manifests.yml` never re-sign published bytes: they carry the original update signature from the
   published manifest and verify it against the channel public key (`tools/release/carry-signature.sh`). No valid signature
   found => the job fails; cut a new tag instead.
+- Download limits: the desktop shell (`crates/platform/src/update_limits.rs`, used by `update_install.rs`) and Android
+  (`UpdateChecker.kt`) cap the update manifest (30 s) and the installer (256 MiB, 60 min total; Android also caps the
+  manifest at 1 MiB). Going over aborts the download. The desktop manifest is read inside the updater plugin, so it is
+  bounded by time only.
 
 ## 5. Version-overwrite guards (remember)
 
@@ -568,6 +572,9 @@ Android 靠 `channelFromVersion()` 读注入的版本串（含 `-test.` 即 test
   单独一步 `zipalign -c` + `apksigner`。门禁：`python3 tools/release/test-secret-isolation.py --self-test`（ci-docs lane）。
 - 复用与 `repair-manifests.yml` **不重新签名**已发布字节：沿用已发布清单里的原更新签名并用本通道公钥验过
   （`tools/release/carry-signature.sh`）；找不到验得过的签名 ⇒ 红，改走新 tag 发版。
+- 下载上限：桌面壳（`crates/platform/src/update_limits.rs`，由 `update_install.rs` 使用）与 Android（`UpdateChecker.kt`）
+  给更新清单（30 秒）和安装包（256 MiB、总时长 60 分钟；Android 清单另有 1 MiB 上限）设上限，超了就中止下载。
+  桌面端的清单在 updater 插件内部读取，只能靠时长兜底。
 
 ## 5. 版本覆盖禁令（记住）
 
