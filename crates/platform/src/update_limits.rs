@@ -39,9 +39,17 @@ impl<E: fmt::Display> fmt::Display for LimitError<E> {
         match self {
             Self::Inner(e) => write!(f, "{e}"),
             Self::TooLarge { max_bytes } => {
-                write!(f, "update package exceeds the {} MiB size limit; download aborted", max_bytes / (1024 * 1024))
+                write!(
+                    f,
+                    "update package exceeds the {} MiB size limit; download aborted",
+                    max_bytes / (1024 * 1024)
+                )
             }
-            Self::TimedOut(d) => write!(f, "update did not complete within {} s; aborted", d.as_secs()),
+            Self::TimedOut(d) => write!(
+                f,
+                "update did not complete within {} s; aborted",
+                d.as_secs()
+            ),
         }
     }
 }
@@ -56,7 +64,11 @@ pub struct ByteBudget {
 
 impl ByteBudget {
     pub fn new(max_bytes: u64) -> Arc<Self> {
-        Arc::new(Self { max_bytes, seen: AtomicU64::new(0), tripped: AtomicBool::new(false) })
+        Arc::new(Self {
+            max_bytes,
+            seen: AtomicU64::new(0),
+            tripped: AtomicBool::new(false),
+        })
     }
 
     /// 与 `tauri_plugin_updater::Update::download` 的块回调同形：本块长度、服务端声明的总长度。
@@ -94,7 +106,11 @@ where
 }
 
 /// 总时长 + 大小（下载用）：`op` 里的字节回调必须喂给同一个 [`ByteBudget`]。
-pub async fn with_limits<T, E, F>(timeout: Duration, budget: Arc<ByteBudget>, op: F) -> Result<T, LimitError<E>>
+pub async fn with_limits<T, E, F>(
+    timeout: Duration,
+    budget: Arc<ByteBudget>,
+    op: F,
+) -> Result<T, LimitError<E>>
 where
     F: Future<Output = Result<T, E>>,
 {
@@ -146,7 +162,12 @@ mod tests {
         }
     }
 
-    fn fake(budget: &Arc<ByteBudget>, declared: Option<u64>, chunk: usize, chunks: Option<u32>) -> FakeDownload {
+    fn fake(
+        budget: &Arc<ByteBudget>,
+        declared: Option<u64>,
+        chunk: usize,
+        chunks: Option<u32>,
+    ) -> FakeDownload {
         FakeDownload {
             budget: budget.clone(),
             declared_total: declared,
@@ -179,7 +200,11 @@ mod tests {
         let r = with_limits(LONG, b.clone(), fake(&b, None, 1_000, None)).await;
         assert_eq!(r, Err(LimitError::TooLarge { max_bytes: 10_000 }));
         // 超限后立即丢弃，不会继续累计到无穷。
-        assert!(b.seen.load(Ordering::SeqCst) <= 12_000, "seen={}", b.seen.load(Ordering::SeqCst));
+        assert!(
+            b.seen.load(Ordering::SeqCst) <= 12_000,
+            "seen={}",
+            b.seen.load(Ordering::SeqCst)
+        );
     }
 
     #[tokio::test]
@@ -229,7 +254,11 @@ mod tests {
 
     #[tokio::test]
     async fn with_timeout_cuts_a_hung_manifest_fetch_and_passes_results_through() {
-        let hung = with_timeout(Duration::from_millis(50), std::future::pending::<Result<(), String>>()).await;
+        let hung = with_timeout(
+            Duration::from_millis(50),
+            std::future::pending::<Result<(), String>>(),
+        )
+        .await;
         assert_eq!(hung, Err(LimitError::TimedOut(Duration::from_millis(50))));
         let ok = with_timeout(LONG, async { Ok::<_, String>(7) }).await;
         assert_eq!(ok, Ok(7));
@@ -239,14 +268,21 @@ mod tests {
 
     #[test]
     fn production_limits_are_sane() {
-        assert!(PACKAGE_MAX_BYTES >= 100 * 1024 * 1024 && PACKAGE_MAX_BYTES <= 1024 * 1024 * 1024);
-        assert!(PACKAGE_TIMEOUT >= Duration::from_secs(30 * 60));
-        assert!(MANIFEST_TIMEOUT >= Duration::from_secs(5) && MANIFEST_TIMEOUT <= Duration::from_secs(120));
+        // 编译期断言：上限被改成离谱的值时直接编译不过。
+        const {
+            assert!(
+                PACKAGE_MAX_BYTES >= 100 * 1024 * 1024 && PACKAGE_MAX_BYTES <= 1024 * 1024 * 1024
+            );
+            assert!(PACKAGE_TIMEOUT.as_secs() >= 30 * 60);
+            assert!(MANIFEST_TIMEOUT.as_secs() >= 5 && MANIFEST_TIMEOUT.as_secs() <= 120);
+        }
     }
 
     #[test]
     fn messages_say_what_happened() {
-        let big: LimitError<String> = LimitError::TooLarge { max_bytes: 256 * 1024 * 1024 };
+        let big: LimitError<String> = LimitError::TooLarge {
+            max_bytes: 256 * 1024 * 1024,
+        };
         assert!(big.to_string().contains("256 MiB"));
         let slow: LimitError<String> = LimitError::TimedOut(Duration::from_secs(30));
         assert!(slow.to_string().contains("30 s"));
