@@ -656,3 +656,51 @@ async fn computer_name_reaches_unpaired_peers_only_inside_the_pairing_window() {
     assert!(!pairing.window_open(now()));
     assert_eq!(hello_name(&member, dtp.node_id()).await, "客厅的电脑");
 }
+
+/// #1149：自报设备名里的 Unicode 格式字符（双向控制符、零宽字符）在入队时清掉——
+/// 审批弹窗看到的、审计里的、落到设备档案里的都是清洗后的名字。
+/// 反证：入队不清洗（只在落档案时清洗）⇒ 弹窗名与 `pair.requested` 审计仍带控制符 ⇒ 变红。
+#[tokio::test(flavor = "multi_thread")]
+async fn format_characters_in_the_claimed_name_never_reach_prompt_audit_or_profile() {
+    let db = Db::open_in_memory().await.unwrap();
+    let tp = endpoint().await;
+    let addr = tp.local_addr();
+    let (pairing, mut pending) = Pairing::new(db.clone(), tp.node_id(), None);
+    let (name_tx, name_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        if let Some(req) = pending.recv().await {
+            let _ = name_tx.send(req.device_name.clone());
+            let _ = req.decide(common::allow());
+        }
+    });
+    let router = Router::new(db.clone(), "客厅的电脑")
+        .with_pairing(pairing.clone())
+        .with_clock(now);
+    let tp2 = tp.clone();
+    tokio::spawn(async move { router.serve(&tp2).await });
+    let ctp = endpoint().await;
+    ctp.add_peer(addr);
+
+    let qr = pairing.start([0x46; 12], now());
+    let hostile = "妈妈\u{202E}的\u{200B}手机\u{2066}\u{FEFF}";
+    assert!(
+        send_pair(&ctp, tp.node_id(), &token_of(&qr), hostile)
+            .await
+            .ok
+    );
+
+    assert_eq!(name_rx.await.unwrap(), "妈妈的手机", "审批弹窗");
+    let audit = db.list_audit(20).await.unwrap();
+    let requested = audit
+        .iter()
+        .find(|r| r.entry.kind == "pair.requested")
+        .expect("pair.requested audit row");
+    let payload = requested.entry.payload.clone().unwrap_or_default();
+    assert!(payload.contains("妈妈的手机"), "{payload}");
+    assert!(
+        !payload.contains('\u{202E}') && !payload.contains("202e"),
+        "{payload}"
+    );
+    let d = db.get_device(&ctp.node_id().0).await.unwrap().unwrap();
+    assert_eq!(d.profile.name, "妈妈的手机", "设备档案");
+}

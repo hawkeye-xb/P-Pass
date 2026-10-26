@@ -352,7 +352,11 @@ async fn the_pairing_door_opens_only_while_the_qr_code_is_shown() {
         pairing.clone(),
         || 1_000,
     ));
-    let router = Router::new(db.clone(), "test-daemon").with_pairing(pairing.clone());
+    // 路由与准入判据用同一个时钟（#1149：路由会复核窗口是否还开着）。
+    let router = Router::new(db.clone(), "test-daemon")
+        .with_pairing(pairing.clone())
+        .with_window_enforced()
+        .with_clock(|| 1_000);
     let served = dtp.clone();
     tokio::spawn(async move { router.serve(&served).await });
 
@@ -482,4 +486,66 @@ async fn unpaired_requests_are_rate_limited_in_the_router() {
     for _ in 0..30 {
         assert!(call(&member, dtp.node_id(), "hello").await.ok);
     }
+}
+
+/// #1149：配对窗口关闭（二维码关闭）时，在场的未配对连接 1 秒内被收回，名额还给新来的设备。
+/// 8 台设备在窗口内连上并占满未配对名额，二维码关闭后它们的连接被关掉；重新出码后
+/// 第 9 台设备能拿到名额。
+/// 反证：不复核窗口（连接一直占着名额）⇒ 第 9 台连上即被断开、拿不到应答 ⇒ 变红。
+#[tokio::test(flavor = "multi_thread")]
+async fn closing_the_pairing_window_frees_the_unpaired_slots() {
+    let db = Db::open_in_memory().await.unwrap();
+    let dtp = IrohTransport::bind(TransportConfig::loopback(vec![transport::ALPN_CTRL.into()]))
+        .await
+        .unwrap();
+    let (pairing, _rx) = daemon::Pairing::new(db.clone(), dtp.node_id(), None);
+    dtp.set_admission(daemon::admission::predicate(
+        db.clone(),
+        pairing.clone(),
+        || 1_000,
+    ));
+    let router = Router::new(db.clone(), "test-daemon")
+        .with_pairing(pairing.clone())
+        .with_window_enforced()
+        .with_clock(|| 1_000);
+    let served = dtp.clone();
+    tokio::spawn(async move { router.serve(&served).await });
+
+    let try_hello = |tp: IrohTransport, daemon: transport::NodeId| async move {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async move {
+            let mut s = tp.connect(daemon, transport::ALPN_CTRL).await.ok()?;
+            let req = Req {
+                id: "h".into(),
+                method: "hello".into(),
+                ..Default::default()
+            };
+            s.send_frame(&proto::codec::encode(&req).ok()?).await.ok()?;
+            s.finish().ok()?;
+            let frame = s.recv_frame().await.ok()??;
+            proto::codec::decode::<Resp>(&frame).ok()
+        })
+        .await
+        .expect("must not hang")
+    };
+
+    pairing.start([0x44; 12], 1_000);
+    let mut holders = Vec::new();
+    for _ in 0..daemon::frame_limits::UNPAIRED_CONN_MAX {
+        let c = client().await;
+        c.add_peer(dtp.local_addr());
+        assert!(try_hello(c.clone(), dtp.node_id()).await.is_some());
+        holders.push(c); // 端点与缓存的连接都留着：名额一直被占
+    }
+
+    assert_eq!(pairing.stop(), 1);
+    tokio::time::sleep(std::time::Duration::from_millis(1_000)).await;
+
+    pairing.start([0x45; 12], 1_000);
+    let newcomer = client().await;
+    newcomer.add_peer(dtp.local_addr());
+    assert!(
+        try_hello(newcomer, dtp.node_id()).await.is_some(),
+        "窗口关闭后在场连接被收回，新设备拿得到名额"
+    );
+    drop(holders);
 }

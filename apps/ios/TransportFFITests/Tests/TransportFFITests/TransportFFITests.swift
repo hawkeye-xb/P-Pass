@@ -173,9 +173,30 @@ final class TransportFFITests: XCTestCase {
         XCTAssertEqual(link.relayUrl.map { $0.hasPrefix("https://relay.example") }, true)
         XCTAssertFalse(link.peerToken.isEmpty)
 
-        let bare = try parsePairLink(link: "ppf://pair?node=\(node)&t=deadbeef")
+        let bare = try parsePairLink(link: "ppf://pair?node=\(node)&t=deadbeefdeadbeefdeadbeef")
         XCTAssertNil(bare.relayUrl)
-        XCTAssertEqual(bare.token, "deadbeef")
+        XCTAssertEqual(bare.token, "deadbeefdeadbeefdeadbeef")
+
+        // #1149：严格校验——node 必须 64 位 hex、t 必须 24 位 hex、relay 必须 https + 合法主机名。
+        let tok = "0123456789abcdef01234567"
+        for malformed in [
+            "ppf://pair?node=\(node.dropLast(2))&t=\(tok)",                    // node 太短
+            "ppf://pair?node=\(node)00&t=\(tok)",                               // node 太长
+            "ppf://pair?node=\(String(repeating: "g", count: 64))&t=\(tok)",    // node 非 hex
+            "ppf://pair?node=\(node)&t=\(tok.dropLast(1))",                    // t 太短
+            "ppf://pair?node=\(node)&t=\(tok)0",                                // t 太长
+            "ppf://pair?node=\(node)&t=\(String(repeating: "z", count: 24))",   // t 非 hex
+            "ppf://pair?node=\(node)&t=\(tok)&r=http://relay.example.com",      // relay 非 https
+            "ppf://pair?node=\(node)&t=\(tok)&r=https://re\"lay.example.com",   // 引号
+            "ppf://pair?node=\(node)&t=\(tok)&r=https://re\\lay.example.com",  // 反斜杠
+            "ppf://pair?node=\(node)&t=\(tok)&r=https://user@relay.example.com", // userinfo
+        ] {
+            XCTAssertThrowsError(try parsePairLink(link: malformed), malformed) { error in
+                guard case FfiError.InvalidArgument = error else {
+                    return XCTFail("expected InvalidArgument, got \(error)")
+                }
+            }
+        }
 
         XCTAssertThrowsError(try parsePairLink(link: "https://example.com/?node=x")) { error in
             guard case FfiError.InvalidArgument = error else {
