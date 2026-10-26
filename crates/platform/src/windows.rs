@@ -1,4 +1,4 @@
-//! Windows adapter (§4 对照表左列).
+﻿//! Windows adapter (§4 对照表左列).
 //!
 //! - Autostart: a per-user Task Scheduler task (DESK-65 #957) — logon
 //!   trigger + a once-a-minute watchdog trigger, the Windows counterpart
@@ -43,8 +43,12 @@ fn write_run_value(key: &str, name: &str, command: &str) -> Result<()> {
         .map_err(io_err("write Run value"))
 }
 
-/// DESK-60 (#877)：NSIS（Tauri 模板，currentUser 模式）的卸载登记。
+/// DESK-60 (#877)：NSIS（Tauri 模板）的卸载登记。
 /// `InstallLocation` 是带引号的安装目录。
+///
+/// 登记在哪个 hive 取决于安装形态：每用户安装（老版本）写 `HKCU`；per-machine 安装
+/// （D1/#1161，装在 `C:\Program Files`、装一次全机器可用）由 NSIS 的 `SetShellVarContext
+/// all` 写进 `HKLM`。两个都要认，否则「这台机器装了没装」会答错。
 const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass";
 
 /// 带引号或不带引号的命令行 → 可执行路径（Run 值、`InstallLocation` 都是这种
@@ -59,11 +63,29 @@ fn exec_from_run_value(value: &str) -> Option<PathBuf> {
 }
 
 fn installed_location() -> Option<PathBuf> {
-    let key = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
-        .open_subkey(UNINSTALL_KEY)
-        .ok()?;
-    let raw: String = key.get_value("InstallLocation").ok()?;
-    exec_from_run_value(&raw)
+    installed_location_in(&[
+        winreg::enums::HKEY_LOCAL_MACHINE,
+        winreg::enums::HKEY_CURRENT_USER,
+    ])
+}
+
+/// 按给定 hive 顺序找卸载登记：先命中者为准。
+///
+/// 先 `HKLM` 再 `HKCU`：同一台机器上若既有 per-machine 安装、又留着老的每用户登记，
+/// 正在跑的一定是较新的 per-machine 那份（安装器会清掉旧登记，但顺序决定了兜底行为）。
+fn installed_location_in(hives: &[winreg::HKEY]) -> Option<PathBuf> {
+    for hive in hives {
+        let Ok(key) = winreg::RegKey::predef(*hive).open_subkey(UNINSTALL_KEY) else {
+            continue;
+        };
+        let Ok(raw) = key.get_value::<String, _>("InstallLocation") else {
+            continue;
+        };
+        if let Some(dir) = exec_from_run_value(&raw) {
+            return Some(dir);
+        }
+    }
+    None
 }
 
 /// `exec` 是否就在 `install_dir` 里（直接子文件）。Windows 路径不分大小写，
@@ -2380,6 +2402,21 @@ mod desk68_install_location_tests {
             !WindowsAdapter.autostart_reconcile_allowed(&exe),
             "两处同一判据"
         );
+    }
+
+    /// D1/#1161：per-machine 安装把卸载登记写在 `HKLM`，老版本写在 `HKCU`。两处都要
+    /// 认——只认 HKCU 时，「这台机器装的是 per-machine 版」会被答成「没装过」。
+    ///
+    /// 判据读真实注册表：默认顺序的结果必须与「先 HKLM 再 HKCU」逐个一致。
+    #[test]
+    fn the_uninstall_entry_is_read_from_both_hives() {
+        let both = installed_location_in(&[
+            winreg::enums::HKEY_LOCAL_MACHINE,
+            winreg::enums::HKEY_CURRENT_USER,
+        ]);
+        assert_eq!(installed_location(), both, "默认顺序就是 HKLM → HKCU");
+        // 反证：不给 hive 就什么都找不到（不是靠某个全局状态蒙对）。
+        assert!(installed_location_in(&[]).is_none());
     }
 
     /// 本机实证（E3）：装过 P-Pass 的机器上，安装目录里的那份就是正式位置。
