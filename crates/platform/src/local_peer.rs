@@ -235,13 +235,25 @@ mod floor_tests {
     /// `0.10.0-test.10 vs 0.10.0` 那条红（csreq 的 `>=` 正是这么错的）。
     #[test]
     fn floor_decisions() {
-        assert!(meets_min_version(Some("0.10.0"), "0.10.1").is_err(), "低版本被拒");
-        assert!(meets_min_version(Some("0.10.1"), "0.10.1").is_ok(), "同版本通过");
-        assert!(meets_min_version(Some("0.10.2"), "0.10.1").is_ok(), "高版本通过");
+        assert!(
+            meets_min_version(Some("0.10.0"), "0.10.1").is_err(),
+            "低版本被拒"
+        );
+        assert!(
+            meets_min_version(Some("0.10.1"), "0.10.1").is_ok(),
+            "同版本通过"
+        );
+        assert!(
+            meets_min_version(Some("0.10.2"), "0.10.1").is_ok(),
+            "高版本通过"
+        );
         assert!(meets_min_version(None, "0.10.1").is_err(), "版本缺失被拒");
         assert!(meets_min_version(Some(""), "0.10.1").is_err(), "空串被拒");
         assert!(meets_min_version(Some("  "), "0.10.1").is_err(), "空白被拒");
-        assert!(meets_min_version(Some("garbage"), "0.10.1").is_err(), "垃圾被拒");
+        assert!(
+            meets_min_version(Some("garbage"), "0.10.1").is_err(),
+            "垃圾被拒"
+        );
         // 不是字典序：
         assert!(meets_min_version(Some("2026.10.10"), "2026.10.9").is_ok());
         assert!(meets_min_version(Some("2026.10.9"), "2026.10.10").is_err());

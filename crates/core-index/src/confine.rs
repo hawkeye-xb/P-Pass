@@ -89,7 +89,10 @@ mod tests {
             Err(ConfineError::NotRelative),
             "绝对路径会让 join 替换库根"
         );
-        assert_eq!(resolve_in_library(&root, ""), Err(ConfineError::NotRelative));
+        assert_eq!(
+            resolve_in_library(&root, ""),
+            Err(ConfineError::NotRelative)
+        );
     }
 
     /// 反证：去掉 canonicalize 后的 starts_with，库内符号链接指到库外就能读，这条红。

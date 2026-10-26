@@ -575,8 +575,7 @@ async fn pick_library_dir(
             dialog = dialog.set_title(title);
         }
         if from_default {
-            dialog =
-                dialog.set_directory(default_library_dir(platform::adapter().pictures_dir()));
+            dialog = dialog.set_directory(default_library_dir(platform::adapter().pictures_dir()));
         }
         let dir = dialog.blocking_pick_folder()?.into_path().ok()?;
         let shown = dir.to_string_lossy().into_owned();
@@ -1486,10 +1485,7 @@ fn reveal_in_file_manager(path: &str) -> Result<(), String> {
 ///
 /// #1150：保存对话框由壳弹（网页不能自己给路径）；导出成功后壳顺手在文件管理器里揭示这个包。
 #[tauri::command]
-async fn export_logs_bundle(
-    app: tauri::AppHandle,
-    title: Option<String>,
-) -> Result<Value, String> {
+async fn export_logs_bundle(app: tauri::AppHandle, title: Option<String>) -> Result<Value, String> {
     off_main(move || export_logs_bundle_blocking(app, title)).await?
 }
 
@@ -1514,7 +1510,8 @@ fn export_logs_bundle_blocking(
         .ok()
         .and_then(|p| diag_export_target(&p.to_string_lossy()))
         .ok_or_else(|| ipc::ui_err("ui.err_generic", &[]))?;
-    let result = daemon_cli::diag_export(&daemon_cli::bundled_sidecar()?, &out, &shell_version(&app))?;
+    let result =
+        daemon_cli::diag_export(&daemon_cli::bundled_sidecar()?, &out, &shell_version(&app))?;
     if let Some(zip) = result.get("zip").and_then(|v| v.as_str()) {
         let _ = reveal_in_file_manager(zip); // 展示失败不影响导出结果
     }
