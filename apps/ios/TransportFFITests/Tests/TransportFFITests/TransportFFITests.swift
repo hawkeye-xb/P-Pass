@@ -389,14 +389,10 @@ final class TransportFFITests: XCTestCase {
         let pairingId = try XCTUnwrap(acceptedPairingId)
         print("G2 paired: pairingId=\(pairingId.prefix(8))… phone=\(try client.nodeId().prefix(8))…")
 
-        // ③ provider 的 FsStore 落在存储根下（模拟一个 App Group 容器；真 entitlement 是 App 线的事）。
+        // ③ provider 的 FsStore 落在存储根下（模拟 App 容器的 Application Support）。
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("g2-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: tmp) }
-        let root = try StorageRoot.resolve(
-            appGroupContainer: tmp.appendingPathComponent("group-container"),
-            groupIdentifier: "group.test.ppass", appPrivateDirectory: tmp.appendingPathComponent("private"),
-            logger: PrintLogger())
-        XCTAssertEqual(root.kind, .appGroup)
+        let root = try StorageRoot.resolve(appPrivateDirectory: tmp.appendingPathComponent("private"), logger: PrintLogger())
         let store = root.url.appendingPathComponent("blobs", isDirectory: true)
         let provider = try Provider.withGcInterval(root: store.path, gcIntervalMs: 1_000)
         defer { provider.shutdown() }

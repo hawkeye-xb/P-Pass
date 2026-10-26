@@ -289,7 +289,7 @@ echo "--- 本次短任务日志（$OUT/run.log）---"
 cat "$OUT/run.log"
 echo "---"
 
-# expire：账本在 App Group 容器里（devicectl 拉不到）：先停掉 daemon（下一次启动连不上桌面，不会接着传这张），
+# expire：先停掉 daemon（下一次启动连不上桌面，不会接着传这张），
 # 再用 DEBUG 驱动（PPASS_BGTEST_DUMP=1）把账本拷进 App 容器，拉回 $OUT/db 给判定查。
 if [ "$MODE" = expire ]; then
   desk_stop "$DESK"

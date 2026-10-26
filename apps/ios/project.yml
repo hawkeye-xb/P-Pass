@@ -35,8 +35,8 @@ targets:
       - path: PPass/Resources/i18n
         type: folder
         buildPhase: resources
-    # App Group：LiveBackend 的存储根（账本 / provider 库 / 身份）放在 group.com.hawkeyexb.ppass 容器里，
-    # 后台扩展才读得到；不声明就退回 App 私有目录（降级）。自动签名会在团队下登记显式 App ID 与该 App Group。
+    # App Group：#1172 起存储根不再用它（改在 App 私有容器，避免挂起时持锁被 0xdead10cc 终止）；
+    # entitlement 暂留，签名与描述文件不动，去留另议。
     entitlements:
       path: PPass/PPass.entitlements
       properties:

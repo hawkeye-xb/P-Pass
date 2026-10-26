@@ -4,7 +4,7 @@
 // - 断开只做一件事：[applyDisconnectManifest] 按清单逐行执行。不存在清单之外的断开动作。
 // - 新增持久状态不登记会被门禁挡下（`unregisteredStatePaths`：真跑完全部 store 的往返之后遍历目录）。
 //
-// 与 Android 的差异：iOS 只有一个存储根（App Group 容器里的 `PPass/`），没有 files / shared_prefs / databases 三处；
+// 与 Android 的差异：iOS 只有一个存储根（App 容器 Application Support 下的 `PPass/`），没有 files / shared_prefs / databases 三处；
 // 旧文件有两样，都存着凭据，不能套 Android RETIRED 的「无人读、留着无妨」，所以登记成 CLEAR、启动时也删：
 // #956 撤销的断开发件箱（`legacyUnpairOutbox`，旧电脑的 peerToken，[UnpairNotice.removeLegacyOutbox]）；
 // #1107 之前的明文私钥（`legacyPlaintextIdentity`，[DeviceIdentity] 见到就按新设备处理）。
