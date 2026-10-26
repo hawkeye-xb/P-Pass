@@ -300,6 +300,37 @@ async fn device_rename_rejects_bad_input_and_unknown_device() {
         .await;
     assert!(!resp.ok, "blank name must be rejected");
 
+    // 名称上限 `MAX_DEVICE_NAME_CHARS` = 64 个**字符**（不是字节）：64 个汉字（192 字节）
+    // 通过，65 个被拒，被拒后名字不变。首尾空白先 trim 再数。
+    // 反证：把判据改成数字节 → 64 个汉字那条红；`>` 改 `>=` → 恰好 64 那条红；去掉上限 → 65 那条红。
+    let too_long = "长".repeat(65);
+    let resp = c
+        .call(
+            "device.rename",
+            serde_json::json!({ "node_id": "cc".repeat(32), "name": too_long }),
+        )
+        .await;
+    assert!(!resp.ok, "65 个字符必须被拒");
+    assert_eq!(
+        resp.error.as_ref().unwrap().reason(),
+        &proto::Reason::BadRequest
+    );
+    let resp = c.call("devices.list", serde_json::Value::Null).await;
+    assert_eq!(
+        resp.result.unwrap()["devices"][0]["name"],
+        "A",
+        "被拒的改名不许改动现有名字"
+    );
+    let at_limit = format!("  {}  ", "长".repeat(64));
+    let resp = c
+        .call(
+            "device.rename",
+            serde_json::json!({ "node_id": "cc".repeat(32), "name": at_limit }),
+        )
+        .await;
+    assert!(resp.ok, "恰好 64 个字符（trim 后）应通过: {resp:?}");
+    assert_eq!(resp.result.unwrap()["name"], "长".repeat(64));
+
     // 缺 node_id / 缺 name = 非法请求。
     let resp = c
         .call("device.rename", serde_json::json!({ "name": "X" }))

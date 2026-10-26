@@ -157,7 +157,7 @@ daemon 是 `config.toml` 与诊断包的唯一写者：照片库位置只经 IPC
 ### 3.4 回收
 
 - 3 天回收（H-05）：`FlowDelivery::expire_stale_grants`，`last_resumed_ms` 早于 `now − GRANT_RESUME_TTL_MS` 且进程内没有在跑的 active grant 被取消。`last_resumed_ms` 由 offer 与 status 重驱刷新。启动扫一轮，之后每小时（§5.4）。
-- flow-blobs GC：`.ppf/flow-blobs` 每 60 s 一轮（`main` 里 `Blobs::open_with_periodic_gc` 的字面量），只保护 `Db::active_flow_content_hashes`；保护集查询失败则跳过本轮。
+- flow-blobs GC：`.ppf/flow-blobs` 每 `FLOW_BLOBS_GC_INTERVAL`（60 s）一轮（`main` 里 `Blobs::open_with_periodic_gc`），只保护 `Db::active_flow_content_hashes`；保护集查询失败则跳过本轮。
 - flow-staging 孤儿：`daemon::sweep_flow_staging_orphans`，宽限 `STAGING_ORPHAN_GRACE`；hash 在 active 保护集、未过宽限、mtime 读不出、文件名不合契约的都不删。启动一次 + 每小时。ingest 成功（含 Duplicate）即删对应 staging 文件。
 
 ### 3.5 对端失败三分类（C-12）
@@ -243,11 +243,11 @@ daemon 是 `config.toml` 与诊断包的唯一写者：照片库位置只经 IPC
 | IPC 服务 | 常驻 | `IpcServer::serve` |
 | Router（QUIC） | 常驻 | `Router::serve` |
 | 目录监听 | 事件驱动 | `LibraryWatcher::spawn` |
-| 每小时巡检 | 3600 s（字面量） | 对账、`backup.sweep_sessions`、`backup.reclaim_staging`、`expire_stale_grants`、`sweep_flow_staging_orphans` |
-| flow-blobs GC | 60 s（字面量） | `Blobs::open_with_periodic_gc` |
-| diag 环清理 | 6 h（字面量） | `DiagAgg::prune_ring` |
-| 运行统计 daemon_alive | 24 h（字面量），只写本地日志 | `stats::Event::DaemonAlive` |
-| 缩略图预生成 | `PREGEN_WORKERS` 个线程；启动 10 s 后回填一次 | `QueryEngine::start_thumb_pregen` |
+| 每小时巡检 | `PATROL_INTERVAL`（3600 s） | 对账、`backup.sweep_sessions`、`backup.reclaim_staging`、`expire_stale_grants`、`sweep_flow_staging_orphans` |
+| flow-blobs GC | `FLOW_BLOBS_GC_INTERVAL`（60 s） | `Blobs::open_with_periodic_gc` |
+| diag 环清理 | `DIAG_PRUNE_INTERVAL`（6 h） | `DiagAgg::prune_ring` |
+| 运行统计 daemon_alive | `DAEMON_ALIVE_INTERVAL`（24 h），只写本地日志 | `stats::Event::DaemonAlive` |
+| 缩略图预生成 | `PREGEN_WORKERS` 个线程；启动 `THUMB_BACKFILL_DELAY`（10 s）后回填一次 | `QueryEngine::start_thumb_pregen` |
 | 插电保持唤醒 | 事件驱动 | `awake::ExternalPowerHold` + `watch_external_power` |
 | 日志折叠 sweeper | 每 `IDLE_GAP` | `log_guard::DedupGuard::spawn_sweeper`（std 线程） |
 | stdin EOF | 常驻读；只在 `--ephemeral` 时 EOF 触发退出 | `main` 内 `eof_tx` |
@@ -483,7 +483,6 @@ Windows 真机验证清单：#1056。
 
 - 校验测试：`归属 = daemon` 的行由 `crates/daemon/src/business_rules_table.rs` 校验；`desktop-shell` 由 `apps/desktop/src-tauri/src/business_rules_table.rs`；`desktop-ui` 由 `apps/desktop/src/businessRulesTable.test.js`。每个测试双向比对：表里本归属的每一行都必须在代码里存在且值相等，代码登记的每个常量都必须在表里有一行。daemon 的测试另核对「归属」只用这三个值。
 - 「值」是基本单位下的整数（ms、B、个、字符、px）；列表用逗号分隔。
-- `main` 里的周期字面量（每小时巡检、flow-blobs GC 60 s、diag 清理 6 h、daemon_alive 24 h、预生成回填延迟 10 s）没有具名常量，不在表内，见 §5.4。
 
 | 符号 | 归属 | 值 | 单位 | 规则 |
 |---|---|---|---|---|
@@ -510,6 +509,11 @@ Windows 真机验证清单：#1056。
 | `daemon::query::ORIGINAL_CAP` | daemon | 12582912 | B | 原图 12 MiB 上限（§6.3） |
 | `daemon::low_space::LOW_SPACE_THRESHOLD_BYTES` | daemon | 5368709120 | B | 低空间通知 5 GiB（§7.3） |
 | `daemon::low_space::LOW_SPACE_REARM_BYTES` | daemon | 6442450944 | B | 回到 6 GiB 重新布防（§7.3） |
+| `daemon::PATROL_INTERVAL` | daemon | 3600000 | ms | 每小时巡检周期（§5.4） |
+| `daemon::FLOW_BLOBS_GC_INTERVAL` | daemon | 60000 | ms | flow-blobs 周期 GC（§5.4） |
+| `daemon::DIAG_PRUNE_INTERVAL` | daemon | 21600000 | ms | diag 环清理周期 6 h（§5.4） |
+| `daemon::DAEMON_ALIVE_INTERVAL` | daemon | 86400000 | ms | 运行统计 daemon_alive 周期 24 h（§5.4） |
+| `daemon::THUMB_BACKFILL_DELAY` | daemon | 10000 | ms | 启动后延迟 10 s 再开缩略图回填（§5.4） |
 | `daemon::SHUTDOWN_DEADLINE` | daemon | 8000 | ms | 收到停止信号后收尾上限（§8.5） |
 | `daemon::log_guard::SINK_CAP_BYTES` | daemon | 8388608 | B | daemon 日志 8 MiB 轮转（§9.1） |
 | `daemon::log_guard::IDLE_GAP` | daemon | 2000 | ms | 重复行安静 2 s 出汇总（§9.1） |

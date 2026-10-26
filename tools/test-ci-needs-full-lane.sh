@@ -68,6 +68,14 @@ expect "$SUT" true  "文档 + 代码混合（一个不无害就要跑）" docs/a
 expect "$SUT" true  "#1049：桌面业务规则文档有常量表测试读它" docs/desktop/business-rules.zh-CN.md
 expect_lane "$SUT" rust-workspace true "#1049：桌面业务规则文档（宽 lane 也要跑）" docs/desktop/business-rules.zh-CN.md
 
+# #1066：flow_health.rs 读这两个手机端源码对账低空间线，宽 lane 也必须跑。
+ANDROID_LOW="apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/flow/FlowContract.kt"
+IOS_LOW="apps/ios/Packages/PPassCore/Sources/PPassCore/Flow/FlowTypes.swift"
+expect_lane "$SUT" rust-workspace true "#1066：Android 低空间常量文件（宽 lane 也要跑）" "$ANDROID_LOW"
+expect_lane "$SUT" rust-workspace true "#1066：iOS 低空间常量文件（宽 lane 也要跑）" "$IOS_LOW"
+expect "$SUT" true "#1066：Android 低空间常量文件（默认 lane）" "$ANDROID_LOW"
+expect_lane "$SUT" rust-workspace false "#1066：同目录其他手机文件仍可跳" apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/flow/Other.kt
+
 echo
 echo "==> 2. fail-closed 的命门：不认识的东西一律要跑"
 expect "$SUT" true  "**未知新目录**（清单里没有）"      newthing/x.rs
@@ -173,6 +181,28 @@ else
     PASS=$((PASS + 1))
   else
     echo "  ❌ 变异后只有 $gained/3 条变红 ⇒ 断言判别力不足，必须修"
+    FAIL=$((before + 1))
+  fi
+fi
+
+echo
+echo "==> 7b. 变异反证丙（#1066）：去掉两个手机端常量文件的登记，宽 lane 的断言必须变红"
+MUT3="$TMP/mutated3.sh"
+grep -v 'FlowContract.kt) return 1\|FlowTypes.swift) return 1' "$SUT" >"$MUT3"
+if cmp -s "$SUT" "$MUT3"; then
+  echo "  ❌ 变异没生效（锚点没匹配上）—— 这一节等于没跑，判失败"
+  FAIL=$((FAIL + 1))
+else
+  before=$FAIL
+  expect_lane "$MUT3" rust-workspace true "【变异后应失败】Android 低空间常量文件" "$ANDROID_LOW"
+  expect_lane "$MUT3" rust-workspace true "【变异后应失败】iOS 低空间常量文件" "$IOS_LOW"
+  gained=$((FAIL - before))
+  if [ "$gained" -eq 2 ]; then
+    echo "  ✅ 两条断言在变异后全部变红 ⇒ 登记真的在起作用"
+    FAIL=$((FAIL - 2))
+    PASS=$((PASS + 1))
+  else
+    echo "  ❌ 变异后只有 $gained/2 条变红 ⇒ 断言判别力不足，必须修"
     FAIL=$((before + 1))
   fi
 fi

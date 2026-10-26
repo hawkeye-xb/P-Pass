@@ -81,6 +81,13 @@ is_inert() {
     # cargo 测试 include_str!、前端 vitest readFileSync），只改它也必须跑
     # 两条 lane，否则「改表不改代码」不会变红。必须排在 docs/* 之前。
     docs/desktop/business-rules.zh-CN.md) return 1 ;;
+    # #1066：低空间线「三端同值」对账（crates/daemon/tests/flow_health.rs
+    # `low_space_threshold_matches_both_phone_sources`）用 read_to_string 读这两个手机
+    # 端源码文件。宽 lane 把 apps/** 当惰性，只改手机端常量时那条测试不会跑，三端
+    # 不一致就能静默合入。必须排在 apps/* 之前；默认 lane 本来就会跑，这里对两个 lane
+    # 都判「要跑」。新增「Rust 测试读取 apps/ 下某文件」时，同样要把该文件登记在这里。
+    apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/flow/FlowContract.kt) return 1 ;;
+    apps/ios/Packages/PPassCore/Sources/PPassCore/Flow/FlowTypes.swift) return 1 ;;
     docs/* | cards/* | .claude/*) return 0 ;;
     *.md) return 0 ;;
   esac

@@ -46,4 +46,8 @@
 - workflow 里 `notarytool --key` 需要的是 .p8 **文件路径**，而 secret 存的是
   内容——首次真跑若在 Notarize 步报错，需要在 workflow 里加一行先把内容写到
   `$RUNNER_TEMP/notary.p8`（review 已记录，报错即修）。
-- 签名跑通后可顺手做 T-071 挂账：daemon 身份从明文文件迁 Keychain。
+- ~~daemon 身份从明文文件迁 Keychain（T-071 挂账）~~：**已完成，不用再做**。macOS 的
+  `PlatformAdapter::identity_key_home` 返回 `IdentityKeyHome::SecureStore`（data
+  protection 钥匙串，`crates/platform/src/keychain.rs`），#1109 / #1135 落地；这项依赖的是
+  签名后的 `keychain-access-groups` 权限，不是本单的证书步骤。Windows 的身份私钥目前
+  仍是数据目录文件（trait 默认 `DataDirFile`），属另一件事，不在本单范围。

@@ -602,7 +602,7 @@ async fn main() -> anyhow::Result<()> {
         async move {
             loop {
                 let _ = diag_agg.prune_ring(unix_ms_now()).await;
-                tokio::time::sleep(std::time::Duration::from_secs(6 * 3600)).await;
+                tokio::time::sleep(daemon::DIAG_PRUNE_INTERVAL).await;
             }
         }
     });
@@ -621,7 +621,7 @@ async fn main() -> anyhow::Result<()> {
                     },
                     ver: daemon::daemon_version(),
                 });
-                tokio::time::sleep(std::time::Duration::from_secs(24 * 3600)).await;
+                tokio::time::sleep(daemon::DAEMON_ALIVE_INTERVAL).await;
             }
         });
     }
@@ -702,7 +702,7 @@ async fn main() -> anyhow::Result<()> {
         transport::Blobs::open_with_periodic_gc(
             &transport,
             &data_dir.join(".ppf/flow-blobs"),
-            std::time::Duration::from_secs(60),
+            daemon::FLOW_BLOBS_GC_INTERVAL,
             flow_gc_protected,
         )
         .await?,
@@ -801,7 +801,7 @@ async fn main() -> anyhow::Result<()> {
     {
         let thumb_pregen = thumb_pregen.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            tokio::time::sleep(daemon::THUMB_BACKFILL_DELAY).await;
             thumb_pregen.backfill(true);
         });
     }
@@ -825,7 +825,7 @@ async fn main() -> anyhow::Result<()> {
         let flow_staging_dir = data_dir.join(".ppf/flow-staging");
         tokio::spawn(async move {
             loop {
-                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                tokio::time::sleep(daemon::PATROL_INTERVAL).await;
                 let r = reconcile.run_once().await;
                 if r.removed > 0 {
                     tracing::info!("SYNC-01: 每小时对账移除幽灵资产 {} 条", r.removed);

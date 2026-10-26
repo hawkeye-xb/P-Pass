@@ -290,6 +290,59 @@ async fn presence_returns_only_missing_hashes_without_changing_committed_backup_
     );
 }
 
+/// 业务规则 §4.4：`backup.presence` 每页 1–500 个 hash（字面量）；空页、501、含非法
+/// hash 一律 BadRequest，500 个恰好通过。
+/// 反证：`> 500` 改 `>= 500` → 500 那条红；去掉 `is_empty` 判断 → 空页那条红；
+/// 去掉上限 → 501 那条红。
+#[tokio::test(flavor = "multi_thread")]
+async fn presence_accepts_one_to_five_hundred_valid_hashes_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = start_daemon(dir.path()).await;
+    let client = Client::new(dir.path(), &storage).await;
+    storage
+        .db
+        .accept_pairing(
+            &client.tp.node_id().0,
+            "phone",
+            &member(&client.tp.node_id()),
+        )
+        .await
+        .unwrap();
+
+    let page = |n: usize| -> serde_json::Value {
+        let hashes: Vec<String> = (0..n).map(|i| format!("{i:064x}")).collect();
+        serde_json::to_value(BackupPresenceQuery { hashes }).unwrap()
+    };
+
+    let resp = client.call("backup.presence", page(500)).await;
+    assert!(resp.ok, "恰好 500 个应通过: {resp:?}");
+    let missing: BackupMissing = serde_json::from_value(resp.result.unwrap()).unwrap();
+    assert_eq!(missing.hashes.len(), 500, "库里都没有 ⇒ 全部缺");
+
+    let resp = client.call("backup.presence", page(1)).await;
+    assert!(resp.ok, "1 个应通过: {resp:?}");
+
+    for (what, params) in [
+        ("空页", page(0)),
+        ("501 个", page(501)),
+        (
+            "含非法 hash",
+            serde_json::to_value(BackupPresenceQuery {
+                hashes: vec!["f".repeat(64), "zz".into()],
+            })
+            .unwrap(),
+        ),
+    ] {
+        let resp = client.call("backup.presence", params).await;
+        assert!(!resp.ok, "{what}必须被拒");
+        assert_eq!(
+            resp.error.as_ref().unwrap().reason(),
+            &proto::Reason::BadRequest,
+            "{what}"
+        );
+    }
+}
+
 /// SYNC-02：一次 commit 里 5 个文件逐条 ingest，节流合并 + 收尾强制
 /// flush 应该让订阅者恰好收到 1 次 `timeline.invalidated`（不是 5 次，
 /// 也不必等节流窗口——commit 收尾就该立即发出）。

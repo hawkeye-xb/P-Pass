@@ -28,6 +28,12 @@ pub fn version_cmp(a: &str, b: &str) -> Ordering {
     }
 }
 
+/// 这个版本串是不是 test 通道的构建（版本号里带 `-test.`，如 `0.10.0-test.3`）。
+/// 桌面页脚的「测试版」徽标由壳据此给结论，前端不再自己查子串（#1066）。
+pub fn is_test_build(version: &str) -> bool {
+    version.contains("-test.")
+}
+
 /// 运行中的桌面壳相对后台服务（内核）的版本关系。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ShellRelation {
@@ -132,5 +138,13 @@ mod tests {
             ShellRelation::of("0.9.12", "0.9.12-test.17").as_str(),
             "shell_newer"
         );
+    }
+
+    #[test]
+    fn test_channel_is_recognised_by_the_test_suffix() {
+        assert!(is_test_build("0.10.0-test.3"));
+        assert!(!is_test_build("0.10.0"));
+        assert!(!is_test_build("2026.10.5"));
+        assert!(!is_test_build("0.10.0-beta.1"));
     }
 }

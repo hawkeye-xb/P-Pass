@@ -41,6 +41,21 @@ pub mod watcher;
 /// #1047：收到停止信号后的收尾总死线。短于 Docker 的 10s SIGKILL 宽限。
 pub const SHUTDOWN_DEADLINE: std::time::Duration = std::time::Duration::from_secs(8);
 
+/// #1066：每小时巡检的周期（对账、会话回收、staging 孤儿、超期 grant；业务规则 §5.4）。
+pub const PATROL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// #1066：flow-blobs 的 iroh 周期 GC（业务规则 §5.4）。
+pub const FLOW_BLOBS_GC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// #1066：diag 环（30 天）清理周期（业务规则 §5.4、§9.2）。
+pub const DIAG_PRUNE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(6 * 3600);
+
+/// #1066：运行统计 `daemon_alive` 的写入周期，只写本地日志（业务规则 §5.4）。
+pub const DAEMON_ALIVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+
+/// #1066：启动后延迟多久再开缩略图回填，不与桌面壳拉第一屏抢（业务规则 §5.4）。
+pub const THUMB_BACKFILL_DELAY: std::time::Duration = std::time::Duration::from_secs(10);
+
 pub use authz::Decision;
 pub use backup::{BackupEngine, CommitOutcome, SESSION_IDLE_TTL, STAGING_ORPHAN_GRACE};
 pub use config::Config;
