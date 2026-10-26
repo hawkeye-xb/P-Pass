@@ -77,6 +77,14 @@ android {
         buildConfig = true
     }
 
+    // #1151：BouncyCastle 与 jspecify 各带一份只含清单的 META-INF/versions/9/OSGI-INF/MANIFEST.MF，
+    // mergeJavaResource 遇到重名直接失败。OSGi 清单在 Android 上没有用处，排除即可。
+    packaging {
+        resources {
+            excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
