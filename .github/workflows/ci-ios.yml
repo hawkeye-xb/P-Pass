@@ -177,6 +177,17 @@ jobs:
       - name: App unit tests (iOS simulator)
         run: tools/ios/test.sh
 
+      # #937：隐私清单不许漏报 required-reason API。要在上一步之后：XCFramework 由 test.sh 生成，
+      # Rust 侧（std::fs::metadata 底层的 stat 等）只能从静态库符号看出来。
+      # Xcode 自带的 nm 读不了新版 rustc 的目标文件，用同版本工具链的 llvm-nm。
+      - name: Privacy manifest covers required-reason APIs
+        run: |
+          python3 tools/ios/check-privacy-manifest.py --self-test
+          rustup component add llvm-tools
+          NM="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | sed -n 's/^host: //p')/bin/llvm-nm"
+          python3 tools/ios/check-privacy-manifest.py --nm "$NM" \
+            --lib apps/ios/TransportFFITests/Generated/TransportFFI.xcframework/ios-arm64/libtransport.a
+
       - name: Local SwiftPM packages (iOS simulator)
         run: tools/ios/test-packages.sh
 
