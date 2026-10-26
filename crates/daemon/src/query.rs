@@ -396,7 +396,9 @@ impl QueryEngine {
 
         // #1150: the source must resolve inside the library root; a recorded
         // path that escapes (`..`, absolute, outward symlink) is never opened.
-        let Ok(src) = core_index::resolve_in_library(&self.library_root, &asset.rel_path) else {
+        let Ok(src) =
+            core_index::resolve_in_library_or_missing(&self.library_root, &asset.rel_path)
+        else {
             tracing::warn!(hash = %hash_prefix(&hash), "thumb source is outside the library; placeholder served");
             self.record_first_byte(started, "thumb");
             return Ok(placeholder(self.retry_after));

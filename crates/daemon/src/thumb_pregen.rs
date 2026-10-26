@@ -205,7 +205,9 @@ impl Worker {
             return;
         }
         // #1150: same confinement as `thumb.get`.
-        let Ok(src) = core_index::resolve_in_library(&engine.library_root, &asset.rel_path) else {
+        let Ok(src) =
+            core_index::resolve_in_library_or_missing(&engine.library_root, &asset.rel_path)
+        else {
             return;
         };
 

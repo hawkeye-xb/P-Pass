@@ -49,6 +49,35 @@ pub fn resolve_in_library(library_root: &Path, rel: &str) -> Result<PathBuf, Con
     }
 }
 
+/// 同 [`resolve_in_library`]，但「文件根本不存在」不算违规：返回库根下的字面路径，
+/// 让调用方照常走自己的「文件缺失」失败路径（缩略图生成失败要记账、进负缓存）。
+/// 路径上有任何东西存在却解析不出来（指向库外或悬空的符号链接、无权限）仍然拒绝。
+pub fn resolve_in_library_or_missing(
+    library_root: &Path,
+    rel: &str,
+) -> Result<PathBuf, ConfineError> {
+    match resolve_in_library(library_root, rel) {
+        Err(ConfineError::Unresolvable(why)) => {
+            // 库根自己不存在：同样没有任何东西可读，走调用方的「缺失」路径。
+            let root = match library_root.canonicalize() {
+                Ok(r) => r,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => library_root.to_path_buf(),
+                Err(e) => return Err(ConfineError::Unresolvable(format!("library root: {e}"))),
+            };
+            let lexical = root.join(rel);
+            match std::fs::symlink_metadata(&lexical) {
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    // 中间目录若是库外符号链接，canonicalize 会成功而非走到这里；
+                    // 走到这里说明最终那一段不存在，且路径上没有解析不了的链接。
+                    Ok(lexical)
+                }
+                _ => Err(ConfineError::Unresolvable(why)),
+            }
+        }
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,6 +152,30 @@ mod tests {
         let link = g.path().join("root-link");
         std::os::unix::fs::symlink(&root, &link).unwrap();
         assert!(resolve_in_library(&link, "originals/d/a.jpg").is_ok());
+    }
+
+    #[test]
+    fn a_missing_file_is_tolerated_only_by_the_missing_variant() {
+        let (_g, root) = lib();
+        let p = resolve_in_library_or_missing(&root, "originals/d/none.jpg").unwrap();
+        assert!(p.starts_with(root.canonicalize().unwrap()) && !p.exists());
+        assert_eq!(
+            resolve_in_library_or_missing(&root, "../x.jpg"),
+            Err(ConfineError::NotRelative)
+        );
+    }
+
+    /// 悬空符号链接（指向库外不存在的目标）不算「不存在」。
+    #[cfg(unix)]
+    #[test]
+    fn a_dangling_symlink_is_refused_even_by_the_missing_variant() {
+        let (g, root) = lib();
+        std::os::unix::fs::symlink(
+            g.path().join("not-yet"),
+            root.join("originals/d/dangle.jpg"),
+        )
+        .unwrap();
+        assert!(resolve_in_library_or_missing(&root, "originals/d/dangle.jpg").is_err());
     }
 
     #[test]
