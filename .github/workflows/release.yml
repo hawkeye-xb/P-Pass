@@ -1,6 +1,16 @@
 # Release pipeline (T-071 + T-071b supply-chain hardening) — tag v* →
-# 三平台构建 → SHA256 → 签名门控 → SLSA attestation → Release 草稿
-# → 分平台上传（CI-04②，各 lane 独立，Android 最快到手）。
+# 三平台构建 → SHA256 → 签名门控 → Release 草稿
+# → 分平台上传（CI-04②，各 lane 独立，Android 最快到手）；
+# 构建来源证明（SLSA provenance）由独立的 `attest` job 对所有构建产物统一生成（#1151）。
+#
+# #1151 供应链对齐：
+#   - 构建 job（macos-arm64 / windows-x64 / android）不再拿 id-token / attestations 权限——
+#     跑第三方构建依赖的 job 铸不出来源证明；证明只由 `attest` job 对下载回来的最终字节生成，
+#     覆盖 macOS dmg / .app.tar.gz、Windows 安装包与 daemon.exe / testclient.exe、Android APK。
+#   - 签名凭据（Apple p12、Android keystore）只在各自的「签名」步骤出现，与 pnpm / gradle 装依赖、
+#     tauri / gradle 构建分在不同步骤；macOS 的钥匙串在依赖代码全部跑完之后才建。
+#   - 复用（android-reuse / macos-reuse）与 repair-manifests 不再对已发布字节重新签名：
+#     沿用 Latest 清单里的原签名并验过（tools/release/carry-signature.sh）。
 #
 # T-071b 加固点（2026-08-03）：
 #   - Apple 签名 secret 只出现在 codesign / notarize 两个 step 的 env，
@@ -137,7 +147,10 @@ jobs:
         with:
           name: android
           if-no-files-found: error
-          path: reused/android/P-Pass_*.apk
+          # #1151：.apk.sig 是从 Latest 沿用的原更新签名（复用不重签）。
+          path: |
+            reused/android/P-Pass_*.apk
+            reused/android/P-Pass_*.apk.sig
 
   macos-reuse:
     name: "macOS arm64（复用 Latest 产物，#838）"
@@ -173,6 +186,7 @@ jobs:
             reused/macos-arm64/SHA256SUMS-macos-arm64
             reused/macos-arm64/P-Pass_*_macos-arm64.dmg
             reused/macos-arm64/P-Pass_*_macos-arm64.app.tar.gz
+            reused/macos-arm64/P-Pass_*_macos-arm64.app.tar.gz.sig
 
   macos-arm64:
     name: "macOS arm64 (签名门控)"
@@ -204,10 +218,9 @@ jobs:
     # #838：版本号没变的一端不构建（复用 Latest 的产物，见 macos-reuse）。
     needs: [plan-builds]
     if: (github.event_name != 'workflow_dispatch' || contains(format('{0},', inputs.platforms || 'all'), 'macos') || (inputs.platforms == '' || inputs.platforms == 'all')) && needs.plan-builds.outputs.macos == 'build'
+    # #1151：不拿 id-token / attestations——来源证明由 attest job 生成。
     permissions:
       contents: read
-      id-token: write
-      attestations: write
     env:
       # 非 secret 门控布尔（job env 可引用 secrets，但值本身不落 job env；
       # signing secret 只在 codesign / notarize 两个 step env 出现）
@@ -308,6 +321,23 @@ jobs:
           rm -rf /tmp/rel && mkdir -p /tmp/rel
           tools/bundle-macos.sh /tmp/rel target/release/daemon
 
+      - name: Install Node + pnpm (desktop build)
+        run: |
+          set -euo pipefail
+          # macos-14 runner 自带 node；pnpm 11（allowBuilds 机制所在版本，
+          # 见 apps/desktop/pnpm-workspace.yaml）。corepack 无 packageManager
+          # 字段不可用，直接 npm 全局装。
+          npm install -g pnpm@11
+          pnpm --version
+
+      # #1151：构建阶段——pnpm 装依赖、tauri 构建与 bundle。依赖树里的代码（pnpm 安装脚本、
+      # build.rs）只在这里执行；这一步没有任何签名凭据，钥匙串里也还没有证书。
+      # 签名在下面「Sign desktop」步骤（PPF_BUNDLE_PHASE=sign）才开始。
+      - name: "Build desktop shell (no signing credentials, #1151)"
+        env:
+          PPF_BUNDLE_PHASE: build
+        run: tools/bundle-desktop-macos.sh /tmp/rel /tmp/rel "-"
+
       # ── 签名门控：无凭据 → 跳过（卡面验收路径）。secret 只在此 step env ──
       - name: Codesign (gated)
         id: codesign
@@ -339,26 +369,10 @@ jobs:
             /tmp/rel/daemon
           echo "signed=yes" >> "$GITHUB_OUTPUT"
 
-      # ── 公证/装订（H-02 凭据路径，对象 = dmg）──
-      # v0.3.0-test.3 实锤：对裸 Mach-O（daemon/testclient）notarytool
-      # submit 可 Accepted，但 stapler staple 必 Error 73——Apple 的
-      # staple 只支持 UDIF dmg / code-signed .app bundle / 扁平 pkg。
-      # 公证对象改为 bundle 步骤产出的 dmg（含 Developer ID 签名的
-      # .app），staple 装订进 dmg。步骤移到 Bundle desktop 之后。
-
       # ── H-10c: 面向人类的 .app + dmg（复用 /tmp/rel 的自包含 daemon）──
       # #1110：daemon + lib/ 组装成嵌套 helper .app/Contents/Helpers/ppf-daemon.app
       # （rpath @executable_path/lib 不变），由内向外逐层签名。无凭据路径 ad-hoc；
       # 凭据到位后此步的 codesign identity 由门控环境提供。
-      - name: Install Node + pnpm (desktop build)
-        run: |
-          set -euo pipefail
-          # macos-14 runner 自带 node；pnpm 11（allowBuilds 机制所在版本，
-          # 见 apps/desktop/pnpm-workspace.yaml）。corepack 无 packageManager
-          # 字段不可用，直接 npm 全局装。
-          npm install -g pnpm@11
-          pnpm --version
-
       # #1110：daemon helper 的 provisioning profile（授权 keychain-access-groups）。
       # 缺失即失败——不出 daemon 读写不了钥匙串的包。secret 只进本 step env；
       # 解出的文件路径经 GITHUB_ENV 交给下面的 bundle 步骤。
@@ -376,7 +390,7 @@ jobs:
           [ -s "$PROFILE" ] || { echo "FATAL: APPLE_DAEMON_PROVISIONPROFILE 解码后为空" >&2; exit 1; }
           echo "PPF_DAEMON_PROVISIONPROFILE=$PROFILE" >> "$GITHUB_ENV"
 
-      - name: Bundle desktop .app + dmg (H-10c)
+      - name: Sign desktop .app + dmg (H-10c)
         # #1121：构建步骤不再拿更新签名私钥——`pnpm tauri build/bundle` 会执行整棵前端依赖树，
         # 签名环境不许执行现拉代码。tauri 自己的 updater 产物从来没人用（macOS 由下面的
         # Pack updater 现打，Windows 由 sign-desktop.sh 签 setup.exe），createUpdaterArtifacts 已关。
@@ -384,6 +398,8 @@ jobs:
         # 传 bundle 脚本（.app 用真证书签名，供后续 dmg 公证/staple）；
         # 无凭据路径保持 ad-hoc（-）。
         env:
+          # #1151：只做组装 + 签名 + 出 dmg，不装依赖、不跑 pnpm（build 阶段已完成）。
+          PPF_BUNDLE_PHASE: sign
           APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
           APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
         run: |
@@ -407,6 +423,13 @@ jobs:
           # dmg/ 前缀（T-071 只传 /tmp/rel 时是根级平铺），release job 的
           # artifacts/macos-arm64/<file> 引用会全挂。
           tools/bundle-desktop-macos.sh /tmp/rel /tmp/rel "$IDENTITY"
+
+      # ── 公证/装订（H-02 凭据路径，对象 = dmg）──
+      # v0.3.0-test.3 实锤：对裸 Mach-O（daemon/testclient）notarytool
+      # submit 可 Accepted，但 stapler staple 必 Error 73——Apple 的
+      # staple 只支持 UDIF dmg / code-signed .app bundle / 扁平 pkg。
+      # 公证对象改为 bundle 步骤产出的 dmg（含 Developer ID 签名的
+      # .app），staple 装订进 dmg。步骤移到 Bundle desktop 之后。
 
       - name: Notarize + staple dmg (gated, H-02)
         id: notarize
@@ -470,11 +493,6 @@ jobs:
           shasum -a 256 "${FILES[@]}" > SHA256SUMS-macos-arm64
           cat SHA256SUMS-macos-arm64
 
-      - name: SLSA attestation
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: /tmp/rel/P-Pass_*_macos-arm64.dmg, /tmp/rel/P-Pass_*_macos-arm64.app.tar.gz
-
       - name: Signing status tag
         id: signtag
         run: |
@@ -524,10 +542,9 @@ jobs:
         (github.event_name == 'workflow_dispatch' && (inputs.platforms == '' || inputs.platforms == 'all' || contains(format('{0},', inputs.platforms || 'all'), 'windows')))
         || (github.event_name == 'push' && contains(github.ref_name, '-test.') && needs.plan-builds.outputs.windows == 'build')
       )
+    # #1151：不拿 id-token / attestations——来源证明由 attest job 生成。
     permissions:
       contents: read
-      id-token: write
-      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -652,11 +669,6 @@ jobs:
           (cd apps/desktop/src-tauri/target/release/bundle/nsis && sha256sum -- *.exe) >> target/release/SHA256SUMS-windows-x64
           cat target/release/SHA256SUMS-windows-x64
 
-      - name: SLSA attestation
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: target/release/daemon.exe, target/release/testclient.exe
-
       - name: Upload artifact (binaries)
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -712,16 +724,6 @@ jobs:
           rustup target add aarch64-linux-android
           echo "ANDROID_NDK_HOME=${ANDROID_NDK_LATEST_HOME}" >> "$GITHUB_ENV"
 
-      - name: Decode release keystore (gated)
-        if: env.HAS_ANDROID_KEYSTORE == 'true'
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-        run: |
-          set -euo pipefail
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
-          # 不打印 keystore 内容；只确认解码后是有效 PKCS12（非空 + 头部魔数）
-          head -c 4 "$RUNNER_TEMP/release.keystore" | od -c | head -1
-
       # UPD-13（#660）：versionName 不再等于 tag —— 正式 tag 用**安卓线自己的
       # 版本号**（release/versions.json），test tag 仍用 tag 名（`-test.` 是
       # test 通道判据 + 连续 test tag 必须能互相升级）。
@@ -729,17 +731,51 @@ jobs:
         id: ppf_ver
         run: echo "name=$(tools/release-version.sh android)" >> "$GITHUB_OUTPUT"
 
-      - name: Assemble release APK
+      # #1151：构建只出 unsigned APK——这一步（gradle 装依赖、编译、跑插件）没有任何 keystore
+      # 凭据。签名在下面独立的「Sign APK」步骤做。产物名由构建系统派生：没有
+      # ANDROID_KEYSTORE_BASE64 ⇒ P-Pass_<版本>_android-unsigned.apk。
+      - name: Assemble release APK (unsigned, no signing credentials)
         working-directory: apps/android
         env:
-          # 有凭据时注入签名参数；无凭据时留空 → gradle 走 unsigned
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_FILE: ${{ runner.temp }}/release.keystore
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
           # DESK-02① 语义不变：注入的串由它推导更新通道；非 tag 运行回退文件版本。
           PPF_BUILD_VERSION: ${{ steps.ppf_ver.outputs.name }}
         run: ./gradlew :app:assembleRelease
+
+      # #1151：keystore 只在本步出现——解码、对齐核对、apksigner 签名、删 keystore 都在这一步里，
+      # 其余步骤（含 setup-gradle 的收尾）看不到它。apksigner / zipalign 来自 runner 自带的
+      # Android SDK build-tools（不是现拉的依赖）。签完产物改名为 P-Pass_<版本>_android.apk
+      # （下游的 signed / unsigned 命名约定不变），并删掉 unsigned 那份，免得两份同时进 artifact。
+      # 无 keystore secret ⇒ 本步跳过，留下 unsigned 产物（signed=no，同以前）。
+      - name: Sign APK (keystore only here)
+        if: env.HAS_ANDROID_KEYSTORE == 'true'
+        working-directory: apps/android
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEYSTORE_ALIAS: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
+        run: |
+          set -euo pipefail
+          UNSIGNED=$(find app/build/outputs/apk/release -name 'P-Pass_*_android-unsigned.apk' | head -1)
+          [ -n "$UNSIGNED" ] || { echo "::error::找不到 unsigned APK——构建产物名变了？"; exit 1; }
+          SIGNED="${UNSIGNED%-unsigned.apk}.apk"
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          BT="$(find "$SDK/build-tools" -maxdepth 1 -mindepth 1 -type d | sort -V | tail -1)"
+          if [ ! -x "$BT/apksigner" ] || [ ! -x "$BT/zipalign" ]; then
+            echo "::error::SDK build-tools 里没有 apksigner / zipalign（${BT}）"; exit 1
+          fi
+          KS="$RUNNER_TEMP/release.keystore"
+          trap 'rm -f "$KS"' EXIT
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KS"
+          # 不打印 keystore 内容；只确认解码后非空
+          [ -s "$KS" ] || { echo "::error::keystore 解码后为空"; exit 1; }
+          # zipalign 必须在签名之前（签名之后再对齐会破坏签名）。AGP 的 unsigned 产物已对齐，这里只核对。
+          "$BT/zipalign" -c 4 "$UNSIGNED" || { echo "::error::unsigned APK 没有 4 字节对齐"; exit 1; }
+          # minSdk 26 ⇒ v2 方案必需；与 AGP 以前的默认一致（不启 v1）。keystore 与 key 同一个密码。
+          "$BT/apksigner" sign --min-sdk-version 26 \
+            --ks "$KS" --ks-key-alias "$ANDROID_KEYSTORE_ALIAS" \
+            --ks-pass env:ANDROID_KEYSTORE_PASSWORD --key-pass env:ANDROID_KEYSTORE_PASSWORD \
+            --out "$SIGNED" "$UNSIGNED"
+          rm -f "$UNSIGNED" "$SIGNED.idsig"
 
       # Packaging-completeness guard (same as pr.yml): a release APK without
       # the native lib installs fine and crashes at first pairing — assert
@@ -795,6 +831,74 @@ jobs:
           # UPD-15：名字为 P-Pass_<版本>_android[-unsigned].apk；缺失文件忽略。
           if-no-files-found: ignore
           path: apps/android/app/build/outputs/apk/release/P-Pass_*.apk
+
+  # ── #1151：构建来源证明（SLSA provenance）──────────────────────────────
+  # 所有**本次构建**的发布资产统一在这里生成证明：macOS dmg / .app.tar.gz、Windows 安装包与
+  # daemon.exe / testclient.exe、Android APK。证明的是下面下载回来的、与 upload-* lane 传上
+  # release 的**同一份字节**（artifact 是同一个）。
+  # 为什么单拎一个 job：构建 job 要跑第三方依赖（pnpm / gradle / cargo 构建脚本），不该拿
+  # id-token / attestations 权限；本 job 只做 download-artifact + attest，没有任何构建步骤。
+  # 复用的产物（android-reuse / macos-reuse）不在这里重新证明——它们是 Latest 里已经发布的字节，
+  # provenance 以原发布版本为准。
+  attest:
+    name: "生成构建来源证明（SLSA provenance，#1151）"
+    needs: [macos-arm64, windows-x64, android]
+    if: ${{ !cancelled() && (needs.macos-arm64.result == 'success' || needs.windows-x64.result == 'success' || needs.android.result == 'success') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download macos artifact
+        if: needs.macos-arm64.result == 'success'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-arm64
+          path: artifacts/macos-arm64
+      - name: Download windows binaries
+        if: needs.windows-x64.result == 'success'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-x64
+          path: artifacts/windows-x64
+      - name: Download windows installer
+        if: needs.windows-x64.result == 'success'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: windows-x64-installer
+          path: artifacts/windows-x64-installer
+      - name: Download android artifact
+        if: needs.android.result == 'success'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: android
+          path: artifacts/android
+
+      - name: SLSA attestation (macOS)
+        if: needs.macos-arm64.result == 'success'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            artifacts/macos-arm64/P-Pass_*_macos-arm64.dmg
+            artifacts/macos-arm64/P-Pass_*_macos-arm64.app.tar.gz
+
+      - name: SLSA attestation (Windows)
+        if: needs.windows-x64.result == 'success'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            artifacts/windows-x64/daemon.exe
+            artifacts/windows-x64/testclient.exe
+            artifacts/windows-x64-installer/P-Pass_*-setup.exe
+
+      # unsigned 产物（无 keystore 凭据的路径）也证明——证明的是构建来源，与签名无关。
+      - name: SLSA attestation (Android)
+        if: needs.android.result == 'success'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: artifacts/android/P-Pass_*.apk
 
   # ══════════════════════════════════════════════════════════════════
   # CI-04②（2026-08-26 验收人拍板「全拆」）：发布解耦
@@ -1008,7 +1112,8 @@ jobs:
           ### 验证（被拦截/不信任时先做这三步）
           - 下载每平台的 SHA256SUMS-\<platform\> 资产（certutil/shasum 对照）
           - \`gh attestation verify <下载的文件> -R ${GITHUB_REPOSITORY}\`
-            （SLSA provenance，macOS 对 dmg / .app.tar.gz 执行）
+            （SLSA provenance，覆盖本次构建的 macOS dmg / .app.tar.gz、Windows 安装包与 daemon.exe / testclient.exe、Android APK；
+            复用自旧版本的产物不重新证明，以其原发布版本为准）
           - 源码可查：构建流程 .github/workflows/release.yml
 
           被杀软拦截了？见 docs/troubleshooting/blocked-by-av.md
@@ -1445,7 +1550,7 @@ jobs:
   # ── 收口：补签名状态 + 资产 sha256（晚到不拖任何资产） ──
   finalize-notes:
     name: "补齐 Release 正文"
-    needs: [create-draft, plan-builds, macos-arm64, macos-reuse, windows-x64, android, android-reuse, upload-windows, ios]
+    needs: [create-draft, plan-builds, macos-arm64, macos-reuse, windows-x64, android, android-reuse, upload-windows, ios, attest]
     # DESK-05 同款容错：dispatch 单平台时其余 job skipped，`needs` 里有
     # skipped 且无 !cancelled() → 本 job 连带跳过，正文永远补不齐。
     if: ${{ !cancelled() && needs.create-draft.result == 'success' }}
@@ -1509,6 +1614,7 @@ jobs:
           ${{ needs.ios.result == 'success' && needs.ios.outputs.uploaded == 'yes' && format('**iOS {0}（build {1}）已上传 TestFlight**（App Store Connect 签名，在 TestFlight 里装；不是本页的下载文件）', needs.ios.outputs.version, needs.ios.outputs.build) || '' }}
           ${{ needs.ios.result == 'success' && needs.ios.outputs.uploaded != 'yes' && format('**iOS {0} 未上传 TestFlight（未配置 App Store Connect 密钥）**', needs.ios.outputs.version) || '' }}
           ${{ needs.ios.result == 'failure' && '**iOS 上传 TestFlight 失败，见 iOS (TestFlight) job**' || '' }}
+          **构建来源证明**：${{ needs.attest.result == 'success' && '已生成（attest job）' || (needs.attest.result == 'skipped' && '本次没有新构建的产物' || '未生成，见 attest job') }}
           **更新清单**：每个安装包都用更新签名密钥签名（minisign，test 与正式各用一把）；客户端用内置公钥验签，验签不过不安装。缺签名密钥时发布流水线直接失败，不存在未签名的清单。
 
           ### 面向人类的资产（H-10c · UPD-15：文件名带该端版本号）
@@ -1519,7 +1625,8 @@ jobs:
           ### 验证（被拦截/不信任时先做这三步）
           - 下载每平台的 SHA256SUMS-\<platform\> 资产（certutil/shasum 对照）
           - \`gh attestation verify <下载的文件> -R ${GITHUB_REPOSITORY}\`
-            （SLSA provenance，macOS 对 dmg / .app.tar.gz 执行）
+            （SLSA provenance，覆盖本次构建的 macOS dmg / .app.tar.gz、Windows 安装包与 daemon.exe / testclient.exe、Android APK；
+            复用自旧版本的产物不重新证明，以其原发布版本为准）
           - 源码可查：构建流程 .github/workflows/release.yml
 
           被杀软拦截了？见 docs/troubleshooting/blocked-by-av.md

@@ -214,6 +214,14 @@ jobs:
       # #1121：test / 正式两把更新签名密钥的选用与自验（缺密钥、配错通道、缺 test 公钥都必须红）。
       - name: 更新签名密钥划分（#1121）
         run: bash tools/release/test-update-key-lib.sh
+      # #1151：复用 / 修复沿用已发布字节的原签名，不重签（字节被改动 / 签名对不上 ⇒ 红）。
+      - name: 沿用原签名（#1151）
+        run: bash tools/release/test-carry-signature.sh
+      # #1151：release.yml 的凭据隔离（只有 attest 拿证明权限、签名凭据只在白名单步骤、依赖代码在凭据之前）。
+      - name: 凭据隔离门禁（#1151）
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+          python3 tools/release/test-secret-isolation.py --self-test
 
   release-dry-run:
     name: release-dry-run（REL-12：发布链正式 / test tag 两条路径预演）

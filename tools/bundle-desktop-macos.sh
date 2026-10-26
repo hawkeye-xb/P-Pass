@@ -27,6 +27,13 @@
 # getVersion()、Info.plist、updater 的当前版本都取它）。tauri.conf.json 里的
 # "version" 不再是产物版本的来源。第 5c 步实读产物核对三者一致，不一致不许出门。
 #
+# 阶段（#1151，环境变量 PPF_BUNDLE_PHASE）：
+#   all（默认）  第 2–6 步一口气跑完（本地开发、`just verify-m1` 走这条）
+#   build        只跑第 2–3 步（pnpm 装依赖 + tauri 构建）。**发布流水线在这一步没有任何签名凭据，
+#                钥匙串里也没有证书**——依赖树里的代码（pnpm 安装脚本、build.rs）就是在这里执行的
+#   sign         只跑第 4–6 步（组装 helper、签名、自检、出 dmg），要求 build 阶段的 .app 已在
+#                原位。不装依赖、不跑 pnpm，签名凭据只在这一步出现
+#
 # Signing: ad-hoc by default (no-credential path, matches release.yml gating).
 # Pass a third arg (codesign identity) for the signed path — caller gates it.
 # 签名路径必须同时给 PPF_DAEMON_PROVISIONPROFILE=<daemon 授权文件路径>（#1110），
@@ -35,6 +42,11 @@ set -euo pipefail
 
 REL="$1"; DMG_OUT="$2"
 IDENTITY="${3:--}"
+PHASE="${PPF_BUNDLE_PHASE:-all}"
+case "$PHASE" in all|build|sign) ;; *) echo "FATAL: PPF_BUNDLE_PHASE 只认 all|build|sign，收到「${PHASE}」" >&2; exit 2 ;; esac
+if [ "$PHASE" = build ] && [ "$IDENTITY" != "-" ]; then
+  echo "FATAL: build 阶段不许带签名身份（本阶段会执行依赖树里的代码）" >&2; exit 2
+fi
 DESKTOP="$(cd "$(dirname "$0")/../apps/desktop" && pwd)"
 # #772：codesign / hdiutil / osascript 都可能挂住（v2026.10.3 实发：codesign --timestamp
 # 卡 14 分钟），一律经墙钟上限执行，超时打印是哪一步。只有依赖外部网络服务的那一步
@@ -65,21 +77,27 @@ if [ "$IDENTITY" != "-" ] && [ -z "$PROFILE" ]; then
   exit 1
 fi
 
-echo "── 2. pnpm install + tauri build --no-bundle（版本 ${VERSION}）"
-cd "$DESKTOP"
-pnpm install --frozen-lockfile
-pnpm tauri build --no-bundle --config "$VERSION_CONFIG"
+if [ "$PHASE" != sign ]; then
+  echo "── 2. pnpm install + tauri build --no-bundle（版本 ${VERSION}）"
+  cd "$DESKTOP"
+  pnpm install --frozen-lockfile
+  pnpm tauri build --no-bundle --config "$VERSION_CONFIG"
 
-echo "── 3. tauri bundle (.app)"
-# #1121：只出 .app（`--bundles app`），严格失败。
-# - tauri 自己的 dmg 用不到（第 6 步按我们的布局自己出 dmg），本地无头时它还会失败；
-# - createUpdaterArtifacts 已关：updater 包由 release.yml 的 Pack updater 从最终 .app
-#   现打，签名在独立的签名步骤做，构建环境不拿更新签名私钥。以前（BUILD-05）这一步
-#   因为本地没有私钥必然失败、只能容忍非零退出，现在没有这个理由了。
-pnpm tauri bundle --bundles app --config "$VERSION_CONFIG"
+  echo "── 3. tauri bundle (.app)"
+  # #1121：只出 .app（`--bundles app`），严格失败。
+  # - tauri 自己的 dmg 用不到（第 6 步按我们的布局自己出 dmg），本地无头时它还会失败；
+  # - createUpdaterArtifacts 已关：updater 包由 release.yml 的 Pack updater 从最终 .app
+  #   现打，签名在独立的签名步骤做，构建环境不拿更新签名私钥。以前（BUILD-05）这一步
+  #   因为本地没有私钥必然失败、只能容忍非零退出，现在没有这个理由了。
+  pnpm tauri bundle --bundles app --config "$VERSION_CONFIG"
+fi
 
 APP="${CARGO_TARGET_DIR:-$DESKTOP/src-tauri/target}/release/bundle/macos/P-Pass.app"
 [ -d "$APP" ] || { echo "FATAL: $APP not produced" >&2; exit 1; }
+if [ "$PHASE" = build ]; then
+  echo "── build 阶段完成：${APP}（签名与 dmg 留给 PPF_BUNDLE_PHASE=sign）"
+  exit 0
+fi
 
 echo "── 4. 组装 daemon helper：Contents/Helpers/ppf-daemon.app（#1110）"
 HELPER="$APP/Contents/Helpers/ppf-daemon.app"
