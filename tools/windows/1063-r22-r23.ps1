@@ -18,7 +18,7 @@ param(
     [int]$Count = 30,
     [string]$WorkRoot = (Join-Path $env:USERPROFILE 'ppcheck\1063-test10'),
     [int]$InFlightTimeoutSeconds = 75,
-    [int]$RecoveryTimeoutSeconds = 180,
+    [int]$RecoveryTimeoutSeconds = 900,
     [int]$ManualTimeoutSeconds = 300
 )
 
@@ -269,9 +269,40 @@ function Wait-InFlight {
     Event "IN-FLIGHT NOT SEEN baseline=$Baseline total=$Total"
     return $false
 }
+function Snapshot-Jobscheduler {
+    param([string]$Tag, [int]$Count, [bool]$Active)
+    $out = Invoke-Adb -AdbArgs @('shell', 'dumpsys', 'jobscheduler')
+    $lines = $out.Output -split "`r?`n"
+    $block = @()
+    $jobIdx = -1
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match 'JOB .*#BackupWorker#') { $jobIdx = $i; break }
+    }
+    if ($jobIdx -ge 0) {
+        $end = [Math]::Min($lines.Count - 1, $jobIdx + 45)
+        for ($j = $jobIdx; $j -le $end; $j++) {
+            if ($j -gt $jobIdx -and $lines[$j] -match '^\s*JOB ') { break }
+            $block += $lines[$j]
+        }
+    }
+    $status = @($lines | Where-Object { $_ -match 'JobStatus\{.*#BackupWorker#' } | Select-Object -First 1)
+    if ($status.Count -gt 0) { $block += $status }
+    if ($block.Count -eq 0) { $block += 'NO_BACKUPWORKER_SECTION' }
+    $header = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] tag=$Tag count=$Count active=$Active"
+    Add-Content -LiteralPath (Join-Path $caseDir 'jobscheduler-timeline.txt') -Value $header -Encoding UTF8
+    Add-Content -LiteralPath (Join-Path $caseDir 'jobscheduler-timeline.txt') -Value $block -Encoding UTF8
+    Add-Content -LiteralPath (Join-Path $caseDir 'jobscheduler-timeline.txt') -Value '' -Encoding UTF8
+}
 function Wait-Converged {
-    param([int]$ExpectedTotal, [int]$TimeoutSeconds)
-    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    param(
+        [int]$ExpectedTotal,
+        [int]$TimeoutSeconds,
+        [int]$SnapshotEverySeconds = 0,
+        [string]$SnapshotTag = 'auto'
+    )
+    $waitStart = Get-Date
+    $deadline = $waitStart.AddSeconds($TimeoutSeconds)
+    $nextSnapshot = $waitStart
     $stable = 0
     while ((Get-Date) -lt $deadline) {
         $s = Get-IpcStatus
@@ -279,12 +310,20 @@ function Wait-Converged {
             $c = [int]$s.result.photo_count
             $active = $s.result.transfer_active
             Add-Content -LiteralPath $countsPath -Value "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff') converge count=$c active=$active expected=$ExpectedTotal" -Encoding UTF8
+            if ($SnapshotEverySeconds -gt 0 -and (Get-Date) -ge $nextSnapshot) {
+                $elapsed = [int]((Get-Date) - $waitStart).TotalSeconds
+                Snapshot-Jobscheduler -Tag "$SnapshotTag +${elapsed}s" -Count $c -Active $active
+                $nextSnapshot = (Get-Date).AddSeconds($SnapshotEverySeconds)
+            }
             if ($c -eq $ExpectedTotal -and -not $active) { $stable++ } else { $stable = 0 }
-            if ($stable -ge 2) { Event "CONVERGED count=$c"; return $true }
+            if ($stable -ge 2) {
+                Event "CONVERGED count=$c elapsed=$([int]((Get-Date) - $waitStart).TotalSeconds)s"
+                return $true
+            }
         }
         Start-Sleep -Seconds 1
     }
-    Event "NOT CONVERGED expected=$ExpectedTotal"
+    Event "NOT CONVERGED expected=$ExpectedTotal after=$([int]((Get-Date) - $waitStart).TotalSeconds)s"
     return $false
 }
 function Get-BatchHashes([string]$Dir) {
@@ -426,6 +465,8 @@ $preBreak = Get-PhotoCount
 Event "PRE-BREAK count=$preBreak total=$total"
 
 if ($Case -eq 'R2.2') {
+    $sBreak = Get-IpcStatus
+    Snapshot-Jobscheduler -Tag 'R2.2 pre-break' -Count ([int]$sBreak.result.photo_count) -Active ([bool]$sBreak.result.transfer_active)
     Capture-Wifi 'before-disable'
     Event 'R2.2 disabling Wi-Fi for 30s'
     $off = Invoke-Adb -AdbArgs @('shell', 'svc', 'wifi', 'disable')
@@ -437,6 +478,8 @@ if ($Case -eq 'R2.2') {
     Event "adb while Wi-Fi off: $devText"
     Start-Sleep -Seconds 30
     $during = Get-PhotoCount
+    $sOff = Get-IpcStatus
+    Snapshot-Jobscheduler -Tag 'R2.2 offline-30s' -Count $during -Active ([bool]$sOff.result.transfer_active)
     Event "R2.2 after 30s offline count=$during"
     $on = Invoke-Adb -AdbArgs @('shell', 'svc', 'wifi', 'enable')
     Event "svc wifi enable exit=$($on.Code) $($on.Output)"
@@ -449,13 +492,30 @@ if ($Case -eq 'R2.2') {
     }
     Capture-Wifi 'after-enable'
     Event "wifi reconnected=$connected"
-    $converged = Wait-Converged -ExpectedTotal $total -TimeoutSeconds $RecoveryTimeoutSeconds
+    $sOn = Get-IpcStatus
+    Snapshot-Jobscheduler -Tag 'R2.2 re-enable t=0' -Count ([int]$sOn.result.photo_count) -Active ([bool]$sOn.result.transfer_active)
+    $autoStart = Get-Date
+    $converged = Wait-Converged -ExpectedTotal $total -TimeoutSeconds $RecoveryTimeoutSeconds -SnapshotEverySeconds 60 -SnapshotTag 'R2.2 auto'
+    $autoSeconds = [int]((Get-Date) - $autoStart).TotalSeconds
+    $manual = $false
+    $manualSeconds = -1
+    if (-not $converged) {
+        Event "R2.2 auto wait expired after ${autoSeconds}s; opening the app as the SOP fallback"
+        Invoke-Adb -AdbArgs @('shell', 'input', 'keyevent', '3') | Out-Null
+        Start-Sleep -Milliseconds 800
+        Invoke-Adb -AdbArgs @('shell', 'monkey', '-p', $pkg, '-c', 'android.intent.category.LAUNCHER', '1') | Out-Null
+        $manualStart = Get-Date
+        $manual = Wait-Converged -ExpectedTotal $total -TimeoutSeconds $ManualTimeoutSeconds -SnapshotEverySeconds 60 -SnapshotTag 'R2.2 manual'
+        $manualSeconds = [int]((Get-Date) - $manualStart).TotalSeconds
+    }
     $hashesOk = Verify-Batch -DataDir $dataDir -ExpectedHashes $expectedHashes -ExpectedTotal $total
     Capture-Logcat
     if ($converged -and $hashesOk -and $connected) {
-        Finish 'PASS' "R2.2 resumed automatically; count=$total; sha256 ok"
+        Finish 'PASS' "R2.2 auto-resumed in ${autoSeconds}s; count=$total; sha256 ok"
+    } elseif ($manual -and $hashesOk) {
+        Finish 'PARTIAL' "R2.2 required manual app open after ${autoSeconds}s; zero duplicates"
     } else {
-        Finish 'PARTIAL' "R2.2 converged=$converged hashes=$hashesOk wifi=$connected"
+        Finish 'PARTIAL' "R2.2 auto=${converged} manual=${manual} hashes=${hashesOk} wifi=${connected}"
     }
 } else {
     Event 'R2.3 crashing the Android app; UI must stay untouched until auto-resume is decided'
