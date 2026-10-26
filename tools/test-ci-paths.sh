@@ -35,7 +35,7 @@ hit_is() {
   local script="$1" want="$2" label="$3" files="$4" got
   shift 4
   got="$(printf '%s' "$files" | bash "$script" hit - "$@" 2>/dev/null)"
-  [ "$got" = "$want" ] && ok "$label → $got" || bad "$label → 期望 $want，实得 $got"
+  [ "$got" = "$want" ] && ok "$label → $got" || bad "$label → 期望 ${want}，实得 $got"
 }
 
 # core_is <脚本> <规则文件> <期望> <说明> <文件>...
@@ -43,7 +43,7 @@ core_is() {
   local script="$1" rules="$2" want="$3" label="$4" got
   shift 4
   got="$(printf '%s\n' "$@" | bash "$script" core - "$rules" 2>/dev/null)"
-  [ "$got" = "$want" ] && ok "$label → $got" || bad "$label → 期望 $want，实得 $got"
+  [ "$got" = "$want" ] && ok "$label → $got" || bad "$label → 期望 ${want}，实得 $got"
 }
 
 # gate_is <脚本> <期望退出码> <说明> <NEEDS json>
@@ -51,7 +51,7 @@ gate_is() {
   local script="$1" want="$2" label="$3" got
   NEEDS="$4" bash "$script" >/dev/null 2>&1
   got=$?
-  [ "$got" = "$want" ] && ok "$label → exit $got" || bad "$label → 期望 exit $want，实得 $got"
+  [ "$got" = "$want" ] && ok "$label → exit $got" || bad "$label → 期望 exit ${want}，实得 $got"
 }
 
 echo "==> 1. hit：glob 语义与 GitHub paths 一致"
@@ -179,5 +179,5 @@ if M="$(mutant "$GATE" empty-passes 's/jq -er /jq -r /; s/if length == 0 then er
 else bad "变异体生成失败：empty-passes"; fi
 
 echo
-echo "通过 $PASS，失败 $FAIL"
+echo "通过 ${PASS}，失败 $FAIL"
 [ "$FAIL" -eq 0 ]
