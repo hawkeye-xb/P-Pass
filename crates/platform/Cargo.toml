@@ -16,8 +16,8 @@ test-support = []
 semver = "1"
 thiserror.workspace = true
 # #1047：停止信号（SIGTERM / Windows 控制台事件）。只开 signal + 运行时，
-# 不拉 net/io。
-tokio = { version = "1", features = ["signal", "rt"] }
+# 不拉 net/io。#1151 起加 time：更新下载的总时长上限（update_limits）。
+tokio = { version = "1", features = ["signal", "rt", "time"] }
 # #1115：IPC 对端身份——接 daemon / 桌面壳手里的 interprocess 连接（同一版本）。
 interprocess = { version = "2", features = ["tokio"] }
 

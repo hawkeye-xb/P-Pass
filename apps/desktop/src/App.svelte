@@ -25,7 +25,7 @@
   import { revealItemInDir, openUrl } from "@tauri-apps/plugin-opener";
   import { openLibraryDir } from "./lib/openLibrary.js";
   import { runUpdate } from "./lib/updateFlow.js";
-  import { verifiedUpdate } from "./lib/updateCommands.js";
+  import { UPDATE_CHECK_TIMEOUT_MS, verifiedUpdate } from "./lib/updateCommands.js";
   import {
     RELEASES_URL,
     updateFailureBodyKey,
@@ -1122,7 +1122,8 @@
     updatePhase = "checking";
     let update;
     try {
-      update = await checkUpdate();
+      // #1151：清单请求有总时长上限（插件的 timeout 选项，毫秒），更新源不回应时不会一直挂着。
+      update = await checkUpdate({ timeout: UPDATE_CHECK_TIMEOUT_MS });
     } catch (e) {
       // ⚠️ #616：**检查失败 ≠ 没有新版本**。旧实现把两者都显示成
       // 「没有发现新版本」，于是网络/代理问题会伪装成"已是最新"
