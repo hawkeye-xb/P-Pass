@@ -1,0 +1,2 @@
+# 白名单与扫描规则只有仓库所有者能改（#182）
+/.gitleaks.toml @hawkeye-xb

@@ -1,0 +1,60 @@
+# gitleaks 配置（#182）。本地 pre-commit 与 CI（.github/workflows/ci-secrets.yml）用同一份。
+#
+# 白名单纪律（改本文件需仓库所有者 review，见 .github/CODEOWNERS）：
+# 1. 不许为了让 CI 变绿就加白名单。红了先当真泄露处理。
+# 2. 误报：确认确实不是凭据（例如公钥、测试夹具里的明显伪值）后，才在本文件的
+#    [allowlist] 里加一条；每条必须带注释，写明原因和对应卡号。范围尽量窄（精确路径或精确值），
+#    禁止整目录、整类规则放行。
+# 3. 真泄露：立刻轮换/吊销该凭据（docs/runbook/update-signing-keys.md），再决定是否清理历史。
+#    把值从仓库删掉不等于安全，加白名单更不是处理。
+# 4. 禁止行内 `gitleaks:allow`：CI 与本地 hook 都带 `--ignore-gitleaks-allow`，行内豁免不生效。
+title = "P-Pass gitleaks"
+
+[extend]
+useDefault = true
+
+# 路径类规则（无 regex）：这些扩展名本身就是签名凭据，出现在仓库里就拦。
+[[rules]]
+id = "ppass-binary-credential-file"
+description = "签名凭据二进制文件（Android keystore / Apple 证书与 .p8 密钥）"
+path = '''(?i)\.(jks|keystore|p12|pfx|p8)$'''
+
+# 设备身份私钥：crates/daemon/src/identity.rs 的 KEY_FILE = ".ppf/identity.key"（32 字节原始私钥）。
+[[rules]]
+id = "ppass-device-identity-key-file"
+description = "设备身份私钥文件 identity.key"
+path = '''(?i)(^|/)identity\.key$'''
+
+# 更新签名私钥（tauri signer / minisign）。公钥（"... public key"）不在此列。
+[[rules]]
+id = "ppass-update-signing-secret-key"
+description = "minisign / rsign（tauri signer）加密私钥，原文或 base64 包装形式"
+regex = '''untrusted comment: (?:minisign|rsign) encrypted secret key|dW50cnVzdGVkIGNvbW1lbnQ6IHJzaWduIGVuY3J5cHRlZCBzZWNyZXQga2V5|dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIGVuY3J5cHRlZCBzZWNyZXQga2V5'''
+keywords = ["untrusted comment", "dw50cnvzdgvkigntbwvudd"]
+
+# ---- 白名单：每条都是对 generic-api-key 的精确值放行，原因与卡号写在条目上 ----
+# 新增条目的格式同下：description 写原因 + 卡号，范围用精确路径或精确值。
+
+[[allowlists]]
+description = "IndexNow 站点验证 key：协议要求它以 <key>.txt 公开放在站点根，本来就是公开值（#182，首次全史扫描判定误报）"
+targetRules = ["generic-api-key"]
+regexes = ['''fc70b5bd491b298ae9e8d06a4d7f43e8''']
+
+[[allowlists]]
+description = "配对链接测试夹具：明显的递增伪值 0123456789abcdef01234567（#182，首次全史扫描判定误报）"
+targetRules = ["generic-api-key"]
+regexes = ['''0123456789abcdef01234567''']
+
+[[allowlists]]
+description = "协议快照测试夹具里的 lease-<毫秒时间戳> 伪令牌，仅限 crates/proto/tests（#182，首次全史扫描判定误报）"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^crates/proto/tests/''']
+regexes = ['''lease-\d+''']
+
+[[allowlists]]
+description = "Tauri updater 内置 minisign 公钥的 key ID：gitleaks 会解开 pubkey 的 base64，把解出的 'public key: <ID>' 当成 key=value 命中；公钥与 ID 本来就公开。仅限 tauri.conf.json（#182，首次全史扫描判定误报）"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^apps/desktop/src-tauri/tauri\.conf\.json$''']
+regexes = ['''251D37609F64BCC8''']
