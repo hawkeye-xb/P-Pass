@@ -183,6 +183,10 @@ if [ "$IDENTITY" != "-" ]; then
   APP_INFO="$(codesign -dvv "$APP" 2>&1)"
   grep -qx "Identifier=com.hawkeyexb.ppass.desktop" <<<"$APP_INFO" || {
     echo "FATAL: 外层 Identifier 不是 com.hawkeyexb.ppass.desktop（#1112）" >&2; exit 1; }
+  # #1150：外层 App 本身（不只是包里的 Mach-O）必须开 hardened runtime——没有它，
+  # 同用户进程可以往窗口程序里注入库，签名认人就认到了被注入的进程。
+  grep -Eq '^CodeDirectory .*flags=0x[0-9a-f]+\(runtime\)' <<<"$APP_INFO" || {
+    echo "FATAL: 外层 P-Pass.app 没开 hardened runtime（#1150）" >&2; exit 1; }
   cmp -s "$PROFILE" "$HELPER/Contents/embedded.provisionprofile" || {
     echo "FATAL: helper 里的 embedded.provisionprofile 不是本次给的授权文件" >&2; exit 1; }
   HELPER_TEAM="$(codesign -dvv "$HELPER" 2>&1 | sed -n 's/^TeamIdentifier=//p')"
