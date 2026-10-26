@@ -544,6 +544,10 @@ async fn files_in_the_legacy_dir_that_are_not_ours_are_kept() {
     let mut reasons: Vec<_> = report.kept.iter().map(|(_, r)| *r).collect();
     reasons.sort();
     assert_eq!(reasons, vec!["not_a_file", "unrecognized_name"]);
+    assert!(
+        report.kept.iter().all(|(tag, _)| tag == "-"),
+        "用户自己的文件名不进日志: {report:?}"
+    );
     assert!(dir.join("notes.txt").exists());
     assert!(dir.join("sub").is_dir());
     assert!(!report.dir_removed);

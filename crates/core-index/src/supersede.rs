@@ -225,7 +225,7 @@ impl Ingestor {
 }
 
 /// [`sweep_legacy_superseded`] 的结果：删了几个，以及没删的（指纹前 8 位 + 原因，给日志用；
-/// 不带路径、不带完整指纹，按日志脱敏约定）。
+/// 不带路径、不带完整指纹，按日志脱敏约定；文件名认不出是指纹的记 `-`）。
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct LegacySupersededSweep {
     pub removed: u64,
@@ -272,15 +272,17 @@ pub async fn sweep_legacy_superseded(
     }
     for (path, name, is_file) in entries {
         let name = name.to_string_lossy();
-        let tag: String = name.chars().take(8).collect();
+        // 只有认得出的指纹名才给前 8 位；别的名字可能是用户自己的文件名，一个字也不进日志。
+        let parsed = legacy_name_hash(&name);
         if !is_file {
-            out.kept.push((tag, "not_a_file"));
+            out.kept.push(("-".into(), "not_a_file"));
             continue;
         }
-        let Some(old) = legacy_name_hash(&name) else {
-            out.kept.push((tag, "unrecognized_name"));
+        let Some(old) = parsed else {
+            out.kept.push(("-".into(), "unrecognized_name"));
             continue;
         };
+        let tag = hex32(&old[..4]);
         let Some(target) = db.alias_target(&old).await? else {
             out.kept.push((tag, "no_alias"));
             continue;
