@@ -1,7 +1,13 @@
 ﻿#Requires -Version 5.1
-# 1063-baseline.ps1 - Select only DCIM/PPassRegression on the phone, start the
-# first backup, and wait until the desktop originals match the 40 generated
-# images by sha256. Evidence: %USERPROFILE%\ppcheck\1063-test10\R0.5\.
+# 1063-baseline.ps1 - Select only DCIM/PPassRegression on the phone, enable
+# background backup, start the first backup, and wait until the desktop
+# originals match the 40 generated images by sha256.
+#
+# Background backup must end ON: a fresh install + pairing clears the old intent
+# and the completion page asks once (default OFF). With the switch off,
+# FlowCore.kt reports WaitReason.DISABLED for background wakes - by design - so
+# R2.2/R2.3 would only measure a disabled switch, not the product.
+# Evidence: %USERPROFILE%\ppcheck\1063-test10\R0.5\.
 #
 # The images themselves are produced/pushed by the existing
 # tools/windows/manual-regression.sh push command (programmatic PIL drawings,
@@ -79,6 +85,26 @@ function Get-Center {
         Y = [int](([int]$m.Groups[2].Value + [int]$m.Groups[4].Value) / 2)
     }
 }
+# Settings rows are a label TextView plus a separate checkable View on the right.
+# Match by vertical centre so a small layout shift does not break the check.
+function Find-RowSwitch {
+    param([string]$Raw, [string]$RowText)
+    [xml]$doc = $Raw
+    $row = $null
+    foreach ($n in $doc.SelectNodes('//node')) {
+        if ([string]$n.text -eq $RowText) { $row = $n; break }
+    }
+    if (-not $row) { return $null }
+    $rc = Get-Center $row
+    if (-not $rc) { return $null }
+    $m = [regex]::Match([string]$row.bounds, '\[(\d+),(\d+)\]\[(\d+),(\d+)\]')
+    $rowRight = if ($m.Success) { [int]$m.Groups[3].Value } else { 0 }
+    foreach ($n in $doc.SelectNodes('//node[@checkable="true"]')) {
+        $c = Get-Center $n
+        if ($c -and [math]::Abs($c.Y - $rc.Y) -le 45 -and $c.X -gt $rowRight) { return $n }
+    }
+    return $null
+}
 function Tap-Text {
     param([string]$Text)
     $raw = Get-PhoneUi
@@ -144,9 +170,42 @@ if (-not (Tap-Text -Text '开始备份')) {
 Start-Sleep -Seconds 2
 Get-PhoneUi -EvidenceName 'phone-backup-started.xml' | Out-Null
 
-# The completion screen has a "don't enable background backup" button; tapping
-# it only returns to Home. The first backup was already started by Start.
-Tap-Text -Text '不开启后台备份' | Out-Null
+# The completion screen offers "开启后台备份" (primary) and "不开启后台备份".
+# Tapping the latter would leave AutoBackupPrefs disabled, which is exactly the
+# precondition that made R2.2/R2.3 report FlowCore DISABLED. Arm it here, then
+# verify on the Settings page instead of trusting the button alone.
+if (-not (Tap-Text -Text '开启后台备份')) {
+    Log 'enable button not found (screen may already be Home); verifying the Settings switch'
+}
+Start-Sleep -Seconds 2
+# Only appears when 1063-install-phone.ps1 did not whitelist battery optimisation.
+Tap-Text -Text '允许' | Out-Null
+Start-Sleep -Milliseconds 500
+if (-not (Tap-Text -Text '设置')) {
+    Get-PhoneUi -EvidenceName 'phone-no-settings.xml' | Out-Null
+    Finish $false "could not open Settings to verify background backup"
+}
+Start-Sleep -Seconds 1
+$bg = Get-PhoneUi -EvidenceName 'phone-background-before.xml'
+$sw = Find-RowSwitch -Raw $bg -RowText '后台备份'
+if (-not $sw) { Finish $false "background backup switch not found in Settings" }
+if ([string]$sw.checked -ne 'true') {
+    $c = Get-Center $sw
+    if (-not $c) { Finish $false "could not compute the background backup switch centre" }
+    Invoke-Adb -AdbArgs @('shell', 'input', 'tap', $c.X, $c.Y) | Out-Null
+    Log "tapped background backup switch at $($c.X),$($c.Y)"
+    Start-Sleep -Milliseconds 800
+    Tap-Text -Text '允许' | Out-Null
+    Start-Sleep -Milliseconds 500
+}
+$bg = Get-PhoneUi -EvidenceName 'phone-background-on.xml'
+$sw = Find-RowSwitch -Raw $bg -RowText '后台备份'
+if (-not $sw -or [string]$sw.checked -ne 'true') {
+    Finish $false "background backup is still OFF; R2.x would see FlowCore DISABLED"
+}
+Log 'BackgroundBackup=ON (verified in Settings)'
+# Leave the app backgrounded; R2.x owns every later foreground decision.
+Invoke-Adb -AdbArgs @('shell', 'input', 'keyevent', '3') | Out-Null
 
 Log ''
 Log 'Waiting for 40/40 sha256 reconciliation...'
