@@ -11,7 +11,7 @@ P-Pass 采用 [Contributor Covenant 2.1](https://www.contributor-covenant.org/zh
 
 ## 举报
 
-如果你遭遇或看到不可接受的行为，请私下发邮件给项目维护者：**CONTACT_EMAIL_TBD**。
+如果你遭遇或看到不可接受的行为，请私下发邮件给项目维护者：[ppass@hawkeye-xb.com](mailto:ppass@hawkeye-xb.com)。
 所有举报都会被保密审阅和处理。
 
 维护者按 Contributor Covenant 2.1 的执行指南决定处理方式：视严重程度，
