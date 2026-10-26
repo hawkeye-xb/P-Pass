@@ -122,6 +122,15 @@ issue（为什么做）→ 分支 → PR（怎么做的）→ 验收人 review +
   登记例外：`windows_subsystem` 链接器指令按**属性名**豁免。#211 已关闭，
   B.2 不再有存量豁免；桌面壳不豁免。
 - 工具链版本唯一真相：`rust-toolchain.toml`（Rust）、CI `java-version`（JDK）。
+- 供应链门禁（SEC-09 #371）：pnpm 11 不许发布不足 24 小时的包进 lockfile。pnpm 版本由
+  `apps/desktop/package.json` 与 `tools/release/signer/package.json` 的 `packageManager` 锁定
+  （Corepack / pnpm 会按它切版本），两处 `pnpm-workspace.yaml` 的 `minimumReleaseAgeStrict: true`
+  让违规直接报错、不自动写豁免。⚠️ 报错提示里的 `pnpm clean --lockfile && pnpm install`
+  **会自己往 `minimumReleaseAgeExclude` 写白名单**（默认 `pnpm install` 也会，缺 strict 时），
+  那是在绕过门禁——别用；正确做法是把该依赖 pin 到发布已久的版本（`overrides` 或写死版本，
+  cutoff 是跑 CI 那一刻往前推 24 小时，留足余量）。任何 `minimumReleaseAgeExclude` 条目都会被
+  `just supply-chain-check` / CI 拦下；确需豁免须在 `tools/release-age-exclude-allowlist.txt`
+  登记并写理由。`site/` 与 `infra/workers/rendezvous/` 用 npm（package-lock.json），不在此门禁内。
 
 ## 索引（需要时才打开）
 
