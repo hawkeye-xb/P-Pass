@@ -1,0 +1,63 @@
+name: system-codecs
+description: >-
+  装 libheif（含 HEVC 解码插件）、ffmpeg 等系统编解码库；.deb 走 actions/cache，命中时不再从 apt 镜像下载。
+  ci-rust / e2e / artifacts 里凡是要这些库的 job 都引用这里。
+
+# 为什么要缓存（2026-10-26）：Azure 的 Ubuntu apt 镜像间歇性慢到每个小包 10–60 秒，
+# ffmpeg 连带 96 个包、约 67 MB，`test (nextest + windows cross-check)` 两次在这一步耗满 30 分钟
+# job 超时被取消，测试一条没跑——同一天挡住了 PR 门禁和 v0.10.0-test.12 的发版。
+#
+# 缓存键 = 本次实际要下载的 .deb URI 清单的哈希：镜像上版本一变，清单就变，自动换新缓存，
+# 不会把旧版本的包装进新镜像。命中时 apt 在 Dir::Cache::archives 里找到同名包，不再下载。
+# 未命中时照常下载，并给下载加超时与重试；job 结束时 actions/cache 自动保存。
+#
+# ⚠️ composite action 的每个 run 步骤都必须写 shell:；actionlint 不扫本文件。
+
+inputs:
+  packages:
+    description: 要装的 apt 包，空格分隔
+    required: false
+    default: libheif-dev libheif-plugin-libde265 ffmpeg libnuma-dev
+
+runs:
+  using: composite
+  steps:
+    - name: apt update + 算缓存键
+      id: plan
+      shell: bash
+      env:
+        PKGS: ${{ inputs.packages }}
+      run: |
+        set -euo pipefail
+        sudo apt-get update -o Acquire::Retries=3
+        dir="$RUNNER_TEMP/system-codecs-debs"
+        mkdir -p "$dir/partial"
+        # shellcheck disable=SC2086 # PKGS 是空格分隔的包名列表，需要分词
+        sudo apt-get install -y --no-install-recommends --print-uris $PKGS \
+          | awk -F"'" '/^.http/ {print $2}' | sort > "$RUNNER_TEMP/system-codecs-uris.txt"
+        echo "要下载的包：$(wc -l < "$RUNNER_TEMP/system-codecs-uris.txt") 个"
+        {
+          echo "dir=$dir"
+          echo "key=system-codecs-${{ runner.os }}-${{ runner.arch }}-${ImageOS:-unknown}-$(sha256sum "$RUNNER_TEMP/system-codecs-uris.txt" | cut -c1-16)"
+        } >> "$GITHUB_OUTPUT"
+
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.plan.outputs.dir }}/*.deb
+        key: ${{ steps.plan.outputs.key }}
+
+    - name: 安装
+      shell: bash
+      env:
+        PKGS: ${{ inputs.packages }}
+        DEBS: ${{ steps.plan.outputs.dir }}
+      run: |
+        set -euo pipefail
+        echo "缓存里已有 $(find "$DEBS" -maxdepth 1 -name '*.deb' | wc -l) 个 .deb"
+        # 下载限时 15 分钟（job 自身 30 分钟），超时直接失败，别把整个 job 耗死在下载上。
+        # shellcheck disable=SC2086
+        sudo timeout 900 apt-get install -y --no-install-recommends \
+          -o Acquire::Retries=3 -o Acquire::http::Timeout=30 \
+          -o Dir::Cache::archives="$DEBS" $PKGS
+        # 包落在 $DEBS 里归 root；改回 runner 用户，actions/cache 保存时才读得到。
+        sudo chown -R "$(id -u):$(id -g)" "$DEBS"

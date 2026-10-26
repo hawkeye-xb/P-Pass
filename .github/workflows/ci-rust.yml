@@ -265,7 +265,7 @@ jobs:
 
       # --all-targets 会编译测试二进制（链接 libheif），dev headers 必需。
       - name: System codecs (libheif + HEVC plugin for HEIC, ffmpeg for video thumbs)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libheif-dev libheif-plugin-libde265 ffmpeg libnuma-dev
+        uses: ./.github/actions/system-codecs
 
       - name: Clippy (deny warnings)
         run: cargo clippy --all-targets --all-features -- -D warnings
@@ -330,7 +330,7 @@ jobs:
         # libheif-plugin-libde265 is the HEVC decode plugin — without it
         # libheif opens HEIC containers but cannot decode the pixels
         # ("Unsupported codec"), verified in a clean noble container.
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libheif-dev libheif-plugin-libde265 ffmpeg libnuma-dev
+        uses: ./.github/actions/system-codecs
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31

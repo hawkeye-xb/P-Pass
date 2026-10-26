@@ -152,7 +152,9 @@ jobs:
           key: linux-artifacts-${{ hashFiles('Cargo.lock') }}
 
       - name: System codecs (libheif + HEVC plugin, ffmpeg)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libheif-dev libheif-plugin-libde265 ffmpeg
+        uses: ./.github/actions/system-codecs
+        with:
+          packages: libheif-dev libheif-plugin-libde265 ffmpeg
 
       - name: Build release binaries
         run: cargo build --release -p daemon -p testclient
