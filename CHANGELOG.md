@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026.10.6] - 2026-10-26
+
 ### Added
 - macOS 端：设置里的「关于」分两行显示桌面应用和后台服务的版本，两者不一致时会标出来（#1044）。
 
