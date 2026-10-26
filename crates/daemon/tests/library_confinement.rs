@@ -78,9 +78,8 @@ async fn assert_all_refused(f: &Fixture, why: &str) {
         matches!(f.q.blob_ticket(&h).await, Err(QueryError::NotFound)),
         "blob_ticket：{why}"
     );
-    let t = f
-        .q
-        .thumb_reply(&ThumbGet {
+    let t =
+        f.q.thumb_reply(&ThumbGet {
             hash: h,
             size: ThumbSize::S256,
         })
@@ -95,7 +94,12 @@ async fn a_recorded_path_inside_the_library_still_works() {
     let f = fixture(base.path()).await;
     let h = hex::encode(f.hash);
     assert!(f.q.original(&h).await.is_ok());
-    assert!(f.q.asset_path(&h).await.unwrap().starts_with(f.root.canonicalize().unwrap()));
+    assert!(f
+        .q
+        .asset_path(&h)
+        .await
+        .unwrap()
+        .starts_with(f.root.canonicalize().unwrap()));
     assert!(f.q.blob_ticket(&h).await.is_ok());
 }
 
