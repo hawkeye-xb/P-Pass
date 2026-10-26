@@ -35,7 +35,7 @@ test("导出诊断包的保存位置由壳的系统对话框给，网页不传�
   expect(body).toContain('invoke("export_logs_bundle")');
   expect(body).toMatch(/if \(!r\) return;/);
   const lib = readFileSync(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8");
-  expect(lib).toMatch(/async fn export_logs_bundle\(\s*app: tauri::AppHandle,\s*title: Option<String>,\s*\)/);
+  expect(lib).toMatch(/async fn export_logs_bundle\(\s*app: tauri::AppHandle,\s*title: Option<String>,?\s*\)/);
   expect(lib).toContain("blocking_save_file()");
   expect(lib).not.toContain('library.join("ppf-logs.zip")');
 });
