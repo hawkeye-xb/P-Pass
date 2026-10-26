@@ -52,6 +52,11 @@ mod signal;
 mod unix;
 #[cfg(windows)]
 mod windows;
+// #1157：D4 / §5.2 的 ProgramData 正本存放与目录 ACL 基础件。
+#[cfg(windows)]
+pub mod windows_programdata;
+#[cfg(windows)]
+pub use windows_programdata::{ProgramDataDir, ProgramDataStore};
 // #287：只给测试用的建链能力。默认不编译，见该模块顶部说明。
 #[cfg(feature = "test-support")]
 pub mod test_support;
