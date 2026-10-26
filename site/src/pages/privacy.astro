@@ -5,9 +5,9 @@ import { GITHUB_URL } from '../consts';
 ---
 
 <Base lang="en" title="Privacy Policy — P-Pass" mirror="/zh/privacy/">
-  <Legal title="Privacy Policy" updated="2026-10-13" updatedLabel="Last updated: ">
+  <Legal title="Privacy Policy" updated="2026-10-26" updatedLabel="Last updated: ">
     <p>
-      This policy covers the P-Pass website (p-pass.hawkeye-xb.com), the P-Pass desktop app, and the P-Pass Android app. It explains what data we can see and what we can't.
+      This policy covers the P-Pass website (p-pass.hawkeye-xb.com), the P-Pass desktop app, and the P-Pass apps for Android and iPhone (iOS). It explains what data we can see and what we can't.
     </p>
 
     <h2>Your photos and videos</h2>
@@ -22,7 +22,7 @@ import { GITHUB_URL } from '../consts';
 
     <h2>Data collected by the apps</h2>
     <ul>
-      <li>The desktop and Android apps currently send no usage data or analytics, and there is no automatic crash reporting.</li>
+      <li>The desktop, Android and iOS apps currently send no usage data or analytics, and there is no automatic crash reporting.</li>
       <li>The code contains no telemetry or usage-statistics reporting of any kind. Diagnostic information is written only to logs on your own device, and you decide whether to export it and send it to us.</li>
       <li>If we ever need a crash log from you, we'll ask first.</li>
     </ul>
@@ -30,6 +30,9 @@ import { GITHUB_URL } from '../consts';
     <h2>Diagnostic bundles</h2>
     <p>
       A diagnostic bundle is created only when you click "Export diagnostic bundle", and it's saved on your computer. Exported bundles are scrubbed automatically: home-folder paths are replaced, and device identifiers and pairing tokens are cut to their first 8 characters. We only see a bundle if you send it to us yourself.
+    </p>
+    <p>
+      The iOS app keeps its logs on your phone. Its diagnostics screen only lets you copy the app version and connection status, for example to paste into a bug report.
     </p>
 
     <h2>Android permissions</h2>
@@ -39,6 +42,19 @@ import { GITHUB_URL } from '../consts';
       <li>Notifications: to show backup progress and tell you when a backup fails.</li>
       <li>Network, background activity, start on boot, and battery-optimization exemption: to finish backups automatically in the background.</li>
     </ul>
+
+    <h2>iOS permissions</h2>
+    <ul>
+      <li>Photos (full or limited access): to back up the photos and videos you allow.</li>
+      <li>Add to Photos: to save a photo from your computer back to your iPhone when you ask for it.</li>
+      <li>Camera: to scan the pairing QR code on your computer.</li>
+      <li>Local network: to find your computer on the same Wi-Fi and transfer photos to it directly.</li>
+      <li>Notifications: to tell you when a backup fails.</li>
+      <li>Background tasks: to continue backups in the background when iOS allows it.</li>
+    </ul>
+    <p>
+      The iOS app's pairing key is stored in the iPhone keychain and is not synced to iCloud. Pairing and backup records are excluded from iCloud backups.
+    </p>
 
     <h2>This website</h2>
     <p>
@@ -51,6 +67,6 @@ import { GITHUB_URL } from '../consts';
     <p>When this policy changes, we update the "Last updated" date on this page. Any change to how data is collected will also be called out in the release notes.</p>
 
     <h2>Contact</h2>
-    <p>Questions about this policy? Open an issue on <a href={`${GITHUB_URL}/issues`} rel="external">GitHub Issues</a>.</p>
+    <p>Questions about this policy? Email <a href="mailto:ppass@hawkeye-xb.com">ppass@hawkeye-xb.com</a> or open an issue on <a href={`${GITHUB_URL}/issues`} rel="external">GitHub Issues</a>.</p>
   </Legal>
 </Base>

@@ -5,9 +5,9 @@ import { GITHUB_URL } from '../../consts';
 ---
 
 <Base lang="zh" title="隐私政策 — P-Pass" mirror="/privacy/">
-  <Legal title="隐私政策" updated="2026-10-13" updatedLabel="最后更新：">
+  <Legal title="隐私政策" updated="2026-10-26" updatedLabel="最后更新：">
     <p>
-      本政策适用于 P-Pass 官网（p-pass.hawkeye-xb.com）、P-Pass 桌面端和 P-Pass Android App，说明我们会接触哪些数据、不会接触哪些数据。
+      本政策适用于 P-Pass 官网（p-pass.hawkeye-xb.com）、P-Pass 桌面端，以及 P-Pass 的 Android 和 iPhone（iOS）App，说明我们会接触哪些数据、不会接触哪些数据。
     </p>
 
     <h2>你的照片和视频</h2>
@@ -22,7 +22,7 @@ import { GITHUB_URL } from '../../consts';
 
     <h2>App 收集的数据</h2>
     <ul>
-      <li>桌面端和 Android App 目前不上报任何使用数据或统计信息，也没有自动崩溃上报。</li>
+      <li>桌面端、Android 和 iOS App 目前不上报任何使用数据或统计信息，也没有自动崩溃上报。</li>
       <li>代码中不包含任何遥测或使用统计上报功能。诊断信息只写入本机日志，是否导出并发送给我们，由你决定。</li>
       <li>以后如果需要你提供崩溃日志，会先征得你的同意。</li>
     </ul>
@@ -30,6 +30,9 @@ import { GITHUB_URL } from '../../consts';
     <h2>诊断包</h2>
     <p>
       诊断包只在你主动点击「导出诊断包」时生成，保存在你的电脑上。导出时会自动脱敏：用户目录路径统一替换，设备标识和配对令牌只保留前 8 位。只有你自己把诊断包发给我们，我们才会看到其中的内容。
+    </p>
+    <p>
+      iOS App 的日志只保存在手机上。诊断页只能复制 App 版本和连接状态，方便你粘贴到问题反馈里。
     </p>
 
     <h2>Android 权限说明</h2>
@@ -39,6 +42,19 @@ import { GITHUB_URL } from '../../consts';
       <li>通知：用于备份进度提示和备份失败提醒。</li>
       <li>网络、后台运行、开机启动、忽略电池优化：用于在后台自动完成备份。</li>
     </ul>
+
+    <h2>iOS 权限说明</h2>
+    <ul>
+      <li>照片（完全访问或有限访问）：用于备份你允许访问的照片和视频。</li>
+      <li>添加到照片：在你需要时，把电脑上的照片存回 iPhone。</li>
+      <li>相机：用于扫描电脑上的配对二维码。</li>
+      <li>本地网络：用于在同一 Wi-Fi 下找到你的电脑，直接传输照片。</li>
+      <li>通知：用于备份失败提醒。</li>
+      <li>后台任务：在 iOS 允许时，于后台继续备份。</li>
+    </ul>
+    <p>
+      iOS App 的配对密钥保存在 iPhone 钥匙串里，不会同步到 iCloud。配对记录和备份记录不进 iCloud 备份。
+    </p>
 
     <h2>官网</h2>
     <p>
@@ -51,6 +67,6 @@ import { GITHUB_URL } from '../../consts';
     <p>本政策更新时，会修改本页的「最后更新」日期。涉及数据收集方式的变化，会同时在版本更新说明中说明。</p>
 
     <h2>联系我们</h2>
-    <p>对本政策有疑问，请在 <a href={`${GITHUB_URL}/issues`} rel="external">GitHub Issues</a> 提出。</p>
+    <p>对本政策有疑问，请发邮件到 <a href="mailto:ppass@hawkeye-xb.com">ppass@hawkeye-xb.com</a>，或在 <a href={`${GITHUB_URL}/issues`} rel="external">GitHub Issues</a> 提出。</p>
   </Legal>
 </Base>
