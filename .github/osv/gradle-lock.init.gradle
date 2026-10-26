@@ -1,0 +1,8 @@
+// #1151：给 Gradle 依赖扫描用——不改仓库的构建脚本，只在 CI 里临时开启依赖锁定，
+// 让 `dependencies --write-locks` 把解析后的完整依赖（含传递依赖）写成 gradle.lockfile，
+// 供 osv-scanner 读取。产物只在 CI 工作区里，不入库。
+allprojects {
+    dependencyLocking {
+        lockAllConfigurations()
+    }
+}

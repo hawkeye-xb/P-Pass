@@ -1,0 +1,95 @@
+# #1151：依赖漏洞扫描补齐——Gradle 依赖 + GitHub Advisory（GHSA）里 cargo-deny 看不到的 Rust 公告。
+#
+# 为什么用 osv-scanner：OSV 数据库同时汇总 RustSec 与 GHSA（以及 Maven 的公告），
+# 一份工具、一份数据源覆盖两类依赖。cargo-deny（audit-advisories.yml / ci-rust）只读
+# RustSec，GHSA 独有的 Rust 公告它看不到；Gradle 以前一条扫描都没有。
+#
+# Gradle 没有入库的 lockfile，osv-scanner 看不到传递依赖。这里不改构建脚本：用 init script
+# 在 CI 里临时开启依赖锁定，`dependencies --write-locks` 把解析后的完整依赖写成
+# gradle.lockfile（只在 CI 工作区，不入库），再交给 osv-scanner。
+#
+# 与 audit-advisories.yml 同一套取舍：公告库随时间变化，代码一行没改也会变红，
+# 所以**不是必需检查，也不该加进必需检查**（#1003 的教训）；定时跑，红了开 issue。
+# 处理方式：能升就升；升不了就在 .github/osv/osv-scanner.toml 里精确到包与公告号豁免，
+# 写明原因和删除条件。
+#
+# osv-scanner 二进制按 sha256 固定（v2.6.0 linux_amd64），升级时同时换版本号与哈希。
+
+name: Audit dependencies
+
+on:
+  schedule:
+    # 每天 UTC 01:47（北京 09:47），与 audit-advisories 错开。
+    - cron: "47 1 * * *"
+  workflow_dispatch:
+  # 只在改到本 workflow 自己时跑一次，用来在 PR 上验证它能跑通；业务依赖变动不触发。
+  pull_request:
+    paths:
+      - ".github/workflows/audit-deps.yml"
+      - ".github/osv/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-deps-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  OSV_SCANNER_VERSION: v2.6.0
+  OSV_SCANNER_SHA256: ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108
+
+jobs:
+  osv:
+    name: osv-scanner (Cargo + Gradle)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version-file: .java-version
+
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+
+      - name: Resolve Gradle dependencies into a lockfile
+        working-directory: apps/android
+        run: ./gradlew :app:dependencies --write-locks --init-script ../../.github/osv/gradle-lock.init.gradle >/dev/null
+
+      - name: Install osv-scanner (sha256 pinned)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/osv-scanner" \
+            "https://github.com/google/osv-scanner/releases/download/${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          echo "${OSV_SCANNER_SHA256}  $RUNNER_TEMP/osv-scanner" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/osv-scanner"
+
+      - name: Scan Cargo.lock (main workspace + src-tauri) and Gradle release classpath
+        run: .github/osv/scan.sh "$RUNNER_TEMP/osv-scanner"
+
+      - name: Open or update tracking issue
+        if: ${{ failure() && github.event_name == 'schedule' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="[audit-deps] 依赖漏洞扫描（OSV）失败"
+          body="$(date -u +%F) 的定时扫描红了：${RUN_URL}
+
+          看日志里列出的包与公告号。能升就升；升不了就在 .github/osv/osv-scanner.toml 里精确到包与公告号豁免，写明原因和删除条件。"
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "\"$title\" in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --label SEC --body "$body"
+          fi
