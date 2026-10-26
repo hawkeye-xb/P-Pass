@@ -45,24 +45,51 @@ pub enum PeerCheck {
 /// 能取出对端身份的本机连接（interprocess 的同步与 tokio 两种 Stream）。
 pub trait LocalPeerSource {
     #[doc(hidden)]
-    fn check_peer(&self, allowed: &[PeerRole]) -> PeerCheck;
+    fn check_peer(&self, allowed: &[PeerRole], min_version: Option<&str>) -> PeerCheck;
 }
 
 impl LocalPeerSource for interprocess::local_socket::Stream {
-    fn check_peer(&self, allowed: &[PeerRole]) -> PeerCheck {
-        imp::check_sync(self, allowed)
+    fn check_peer(&self, allowed: &[PeerRole], min_version: Option<&str>) -> PeerCheck {
+        imp::check_sync(self, allowed, min_version)
     }
 }
 
 impl LocalPeerSource for interprocess::local_socket::tokio::Stream {
-    fn check_peer(&self, allowed: &[PeerRole]) -> PeerCheck {
-        imp::check_tokio(self, allowed)
+    fn check_peer(&self, allowed: &[PeerRole], min_version: Option<&str>) -> PeerCheck {
+        imp::check_tokio(self, allowed, min_version)
     }
 }
 
 /// 校验本机连接的对端是 `allowed` 里的哪一个签名程序（按顺序试，第一个满足的胜出）。
 pub fn verify_local_peer<S: LocalPeerSource>(stream: &S, allowed: &[PeerRole]) -> PeerCheck {
-    stream.check_peer(allowed)
+    stream.check_peer(allowed, None)
+}
+
+/// 同 [`verify_local_peer`]，另要求对端**被签名封住的版本号不低于** `min_version`（#1150）。
+///
+/// 只给**服务端接入**用（daemon 认窗口程序 / 另一个 daemon）：旧的已签名版本不能一直
+/// 被认作合法对端。客户端方向（壳连 daemon、新 daemon 连旧 daemon 交接）不加下限——升级窗口里
+/// 新壳必须能连上旧 daemon 让它退位。版本读不出来 ⇒ 拒绝，不猜。
+pub fn verify_local_peer_min_version<S: LocalPeerSource>(
+    stream: &S,
+    allowed: &[PeerRole],
+    min_version: &str,
+) -> PeerCheck {
+    stream.check_peer(allowed, Some(min_version))
+}
+
+/// 版本下限判据（纯函数，各平台一致）：对端版本缺失或为空 ⇒ 拒绝；低于下限 ⇒ 拒绝；
+/// 等于或更高 ⇒ 通过。比较用项目统一的 `version_cmp`（它把垃圾输入当 0，所以缺失
+/// 必须在这里先显式拒绝，不能指望比较结果兜底）。
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub(crate) fn meets_min_version(peer: Option<&str>, min_version: &str) -> Result<(), String> {
+    let Some(peer) = peer.map(str::trim).filter(|v| !v.is_empty()) else {
+        return Err("对端没有可读的版本号".into());
+    };
+    if version_cmp::version_cmp(peer, min_version) == std::cmp::Ordering::Less {
+        return Err(format!("对端版本 {peer} 低于下限 {min_version}"));
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -83,11 +110,12 @@ mod imp {
     pub(super) fn check_sync(
         s: &interprocess::local_socket::Stream,
         allowed: &[PeerRole],
+        min_version: Option<&str>,
     ) -> PeerCheck {
         #[allow(unreachable_patterns)]
         match s {
             interprocess::local_socket::Stream::UdSocket(u) => {
-                check_fd(u.as_fd().as_raw_fd(), allowed)
+                check_fd(u.as_fd().as_raw_fd(), allowed, min_version)
             }
             _ => PeerCheck::Rejected("不是 Unix 域套接字".into()),
         }
@@ -96,11 +124,12 @@ mod imp {
     pub(super) fn check_tokio(
         s: &interprocess::local_socket::tokio::Stream,
         allowed: &[PeerRole],
+        min_version: Option<&str>,
     ) -> PeerCheck {
         #[allow(unreachable_patterns)]
         match s {
             interprocess::local_socket::tokio::Stream::UdSocket(u) => {
-                check_fd(u.as_fd().as_raw_fd(), allowed)
+                check_fd(u.as_fd().as_raw_fd(), allowed, min_version)
             }
             _ => PeerCheck::Rejected("不是 Unix 域套接字".into()),
         }
@@ -129,7 +158,7 @@ mod imp {
         Ok(tok)
     }
 
-    fn check_fd(fd: RawFd, allowed: &[PeerRole]) -> PeerCheck {
+    fn check_fd(fd: RawFd, allowed: &[PeerRole], min_version: Option<&str>) -> PeerCheck {
         let tok = match peer_audit_token(fd) {
             Ok(t) => t,
             Err(e) => return PeerCheck::Rejected(format!("取不到对端 audit token：{e}")),
@@ -150,7 +179,23 @@ mod imp {
                 Err(e) => return PeerCheck::Rejected(format!("签名要求无效：{e}")),
             };
             match code.check_validity(Flags::NONE, &req) {
-                Ok(()) => return PeerCheck::Verified(role),
+                Ok(()) => {
+                    // #1150：签名通过之后再核版本下限（版本读自签名封住的 Info.plist）。
+                    if let Some(floor) = min_version {
+                        let peer = crate::sealed_version::of_guest(&code);
+                        if let Err(why) = super::meets_min_version(peer.as_deref().ok(), floor) {
+                            let seen = match &peer {
+                                Ok(v) => v.clone(),
+                                Err(e) => format!("读不到（{e}）"),
+                            };
+                            return PeerCheck::Rejected(format!(
+                                "{}：{why}（对端 {seen}，下限 {floor}）",
+                                role.identifier()
+                            ));
+                        }
+                    }
+                    return PeerCheck::Verified(role);
+                }
                 Err(e) => last = format!("不满足 {}：{e}", role.identifier()),
             }
         }
@@ -167,6 +212,7 @@ mod imp {
     pub(super) fn check_sync(
         _s: &interprocess::local_socket::Stream,
         _allowed: &[PeerRole],
+        _min_version: Option<&str>,
     ) -> PeerCheck {
         PeerCheck::NotSupported(WHY)
     }
@@ -174,8 +220,38 @@ mod imp {
     pub(super) fn check_tokio(
         _s: &interprocess::local_socket::tokio::Stream,
         _allowed: &[PeerRole],
+        _min_version: Option<&str>,
     ) -> PeerCheck {
         PeerCheck::NotSupported(WHY)
+    }
+}
+
+#[cfg(test)]
+mod floor_tests {
+    use super::meets_min_version;
+
+    /// 卡面四种情况 + 项目版本语义的两个陷阱。
+    /// 反证：把比较换成字符串字典序，`2026.10.10` 那条红；把预发布当「不低于正式版」，
+    /// `0.10.0-test.10 vs 0.10.0` 那条红（csreq 的 `>=` 正是这么错的）。
+    #[test]
+    fn floor_decisions() {
+        assert!(meets_min_version(Some("0.10.0"), "0.10.1").is_err(), "低版本被拒");
+        assert!(meets_min_version(Some("0.10.1"), "0.10.1").is_ok(), "同版本通过");
+        assert!(meets_min_version(Some("0.10.2"), "0.10.1").is_ok(), "高版本通过");
+        assert!(meets_min_version(None, "0.10.1").is_err(), "版本缺失被拒");
+        assert!(meets_min_version(Some(""), "0.10.1").is_err(), "空串被拒");
+        assert!(meets_min_version(Some("  "), "0.10.1").is_err(), "空白被拒");
+        assert!(meets_min_version(Some("garbage"), "0.10.1").is_err(), "垃圾被拒");
+        // 不是字典序：
+        assert!(meets_min_version(Some("2026.10.10"), "2026.10.9").is_ok());
+        assert!(meets_min_version(Some("2026.10.9"), "2026.10.10").is_err());
+        assert!(meets_min_version(Some("0.10.0-test.10"), "0.10.0-test.9").is_ok());
+        assert!(meets_min_version(Some("0.10.0-test.9"), "0.10.0-test.10").is_err());
+        // 预发布 < 正式版（csreq 的 `>=` 判反）：
+        assert!(meets_min_version(Some("0.10.0-test.10"), "0.10.0").is_err());
+        assert!(meets_min_version(Some("0.10.0"), "0.10.0-test.10").is_ok());
+        // 版本串两端的空白不影响：
+        assert!(meets_min_version(Some(" 0.10.1 "), "0.10.1").is_ok());
     }
 }
 
