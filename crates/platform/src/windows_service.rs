@@ -512,6 +512,29 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut PWSTR) {
     set_service_status(SERVICE_STOPPED, 0);
 }
 
+/// D1：服务没有控制台，stderr 也看不到。启动阶段的致命错误（含 panic）写这里，
+/// 早于读取任何配置/身份。目录由安装器建好；写不进去也不影响启动。
+pub fn boot_log(msg: &str) {
+    use std::io::Write as _;
+    let dir = std::path::Path::new(r"C:\ProgramData\P-Pass\logs");
+    let _ = std::fs::create_dir_all(dir);
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("daemon-boot.log"))
+    {
+        let _ = writeln!(
+            f,
+            "[{:?}] {}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0),
+            msg
+        );
+    }
+}
+
 /// 如果本进程是被 SCM 拉起的，就在**当前线程**跑 SCM 分发器，并在服务线程上执行
 /// `body`；返回 `Ok(true)`。
 ///
@@ -522,6 +545,11 @@ pub fn run_service_dispatcher(body: impl FnOnce() -> i32 + Send + 'static) -> Re
     use windows::Win32::Foundation::ERROR_FAILED_SERVICE_CONTROLLER_CONNECT;
     use windows::Win32::System::Services::{StartServiceCtrlDispatcherW, SERVICE_TABLE_ENTRYW};
 
+    boot_log("service dispatcher: entered");
+    // 服务里的 panic 没有控制台可看：先落盘。反证：不装这个钩子，1067 什么线索都没有。
+    std::panic::set_hook(Box::new(|info| {
+        boot_log(&format!("PANIC: {info}"));
+    }));
     if let Ok(mut slot) = SERVICE_BODY.lock() {
         *slot = Some(Box::new(body));
     }

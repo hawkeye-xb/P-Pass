@@ -74,6 +74,15 @@ pub use windows_photo_dir::{grant_modify_for_sid, list_modify_sids, GrantOutcome
 /// `body` 在服务线程上执行并返回进程退出码。返回 `Ok(true)` = 走的是服务路径；
 /// `Ok(false)` = 不是服务上下文（控制台、桌面壳 shell-out），照常往下跑。
 /// 非 Windows 平台没有这个托管方，永远 `Ok(false)`。
+/// 服务模式下的启动日志（Windows 写到 `%ProgramData%\P-Pass\logs\daemon-boot.log`）。
+/// 别的平台是 no-op。
+pub fn service_boot_log(msg: &str) {
+    #[cfg(windows)]
+    windows_service::boot_log(msg);
+    #[cfg(not(windows))]
+    let _ = msg;
+}
+
 pub fn run_as_service(body: impl FnOnce() -> i32 + Send + 'static) -> Result<bool> {
     #[cfg(windows)]
     {

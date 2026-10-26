@@ -20,6 +20,7 @@ fn main() -> anyhow::Result<()> {
     //
     // 服务线程上要另起一个 runtime：`run()` 是 async，而 SCM 的分发器是阻塞的。
     let as_service = platform::run_as_service(|| {
+        platform::service_boot_log("service body: enter");
         let rt = match tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
@@ -31,8 +32,12 @@ fn main() -> anyhow::Result<()> {
             }
         };
         match rt.block_on(run()) {
-            Ok(()) => 0,
+            Ok(()) => {
+                platform::service_boot_log("service body: run() returned Ok");
+                0
+            }
             Err(e) => {
+                platform::service_boot_log(&format!("service body: run() failed: {e:?}"));
                 eprintln!("daemon exited: {e:?}");
                 1
             }
