@@ -19,10 +19,12 @@
 # 记录 mode bit，无需额外 chmod）。
 # 详见 cards/CI-02-e2e-compiles-release-binaries-twice.md（已归档 done/）。
 #
-# 运行时机（2026-08-04 用户裁决：自动化测试不前置）：
+# 运行时机：
 #   - nightly 定时（schedule）
-#   - release tag 时并行跑（不阻塞 release 构建——tag 触发与 release.yml
-#     并行，产物照出，e2e 结果供发布前人工核对）
+#   - 发版：#1187 起由 release.yml 以 workflow_call 调用，与构建并行跑，**红了挡发布**
+#     （create-draft 等它通过）。这推翻了 2026-08-04「自动化测试不前置」的裁决：那条
+#     裁决的本意是不拖每个 commit，发版这一跳不在其列——不挡发布时，红的 E2E 只是一条
+#     供人工核对的提示，实际没人核对就发出去了。原来的 tag 触发随之删除，免得一个 tag 跑两遍。
 #   - 选择性：PR 打 e2e label，或手动 dispatch
 #   - 每 commit 不跑（PR 常规 push 不触发本 workflow）
 
@@ -31,8 +33,7 @@ name: E2E live scenarios
 on:
   schedule:
     - cron: "30 3 * * *"
-  push:
-    tags: ["v*"]
+  workflow_call:
   pull_request:
     branches: [main]
     types: [labeled, unlabeled]

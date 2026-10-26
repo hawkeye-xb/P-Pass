@@ -1,0 +1,112 @@
+# 核心代码名单（#1187）：改到这里的 PR 要仓库负责人在 Actions 里批准「core review」才能合入。
+# 语法与判定见 tools/ci-paths.sh 头注释：
+#   +    命中即核心
+#   zone 必审区，区内默认是核心……
+#   -    ……除非命中这里（只对 zone 生效，压不过 +）
+# 口径：数据与安全最高优先级。改坏了会被冒充、泄露、丢照片、各端互不兼容、推送错包的，都算核心；
+# 改坏了界面上看得见、修得快的，不算。拿不准就算核心。本文件自身也是核心。
+
+# ── 门禁本身：不许顺手把门关掉 ──────────────────────────────
++ .github/workflows/**
++ .github/actions/**
++ .github/core-paths.txt
++ .github/allowed-identities.txt
++ .github/CODEOWNERS
++ .github/dependabot.yml
++ .github/actionlint.yaml
++ .gitleaks.toml
++ tools/ci-*
++ tools/test-ci-*
++ tools/check-commit-identity.sh
++ tools/arch-check.sh
++ tools/arch-allowlist.txt
+
+# ── 安全：配对、身份、加密、协议 ────────────────────────────
++ crates/pair-pake/**
++ crates/proto/**
++ crates/transport/**
+
+# ── 数据：索引、数据库与迁移、入库去重 ──────────────────────
++ crates/storage/**
++ crates/core-index/**
+
+# ── 更新链：签名、清单、验签 ─────────────────────────────────
++ tools/release/**
++ tools/make-update-manifest.mjs
++ tools/release-version.sh
++ tools/bundle-desktop-macos.sh
++ tools/daemon-helper-macos.sh
+
+# ── 依赖（供应链）────────────────────────────────────────────
++ Cargo.toml
++ Cargo.lock
++ crates/*/Cargo.toml
++ rust-toolchain.toml
++ deny.toml
++ apps/desktop/package.json
++ apps/desktop/package-lock.json
++ apps/desktop/pnpm-lock.yaml
++ apps/desktop/src-tauri/Cargo.toml
++ apps/desktop/src-tauri/Cargo.lock
++ apps/android/build.gradle.kts
++ apps/android/settings.gradle.kts
++ apps/android/gradle/**
++ apps/android/app/build.gradle.kts
++ apps/ios/project.yml
++ apps/ios/Config/**
+
+# ── 常驻服务：默认全审，只放行与安全、数据无关的 ──────────────
+zone crates/daemon/**
+- crates/daemon/src/thumb_pregen.rs
+- crates/daemon/src/stats.rs
+- crates/daemon/src/awake.rs
+- crates/daemon/src/diag_agg.rs
+- crates/daemon/src/business_rules_table.rs
+
+# ── 平台层（钥匙串、代码签名、身份密钥、数据迁移）─────────────
+zone crates/platform/**
+- crates/platform/src/pe_version.rs
+- crates/platform/src/signal.rs
+- crates/platform/examples/**
+
+# ── 桌面壳（IPC、更新安装、服务托管、权限声明、CSP）──────────
+zone apps/desktop/src-tauri/**
+- apps/desktop/src-tauri/icons/**
+- apps/desktop/src-tauri/src/business_rules_table.rs
+
+# ── 安卓（Keystore、配对、传输、更新验签、备份账本、清单与 xml）──
+zone apps/android/app/src/main/**
+- apps/android/app/src/main/assets/**
+- apps/android/app/src/main/res/**
++ apps/android/app/src/main/res/xml/**
+- apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/**
+- apps/android/app/src/main/java/com/hawkeyexb/ppass/i18n/**
+- apps/android/app/src/main/java/com/hawkeyexb/ppass/battery/**
+- apps/android/app/src/main/java/com/hawkeyexb/ppass/log/PLog.kt
+- apps/android/app/src/main/java/com/hawkeyexb/ppass/DeviceName.kt
+- apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/*Prefs.kt
+- apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/*Notifier.kt
+- apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/*Notice*.kt
+- apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupUiStateHolder.kt
+- apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupHealth.kt
+- apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/OnboardingNotificationAsk.kt
+- apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/WhitelistNudgeStore.kt
+- apps/android/app/src/main/java/com/hawkeyexb/ppass/update/UpdateUiController.kt
+- apps/android/app/src/main/java/com/hawkeyexb/ppass/update/UpdateNotes.kt
+- apps/android/app/src/main/java/com/hawkeyexb/ppass/update/UpdateFailureText.kt
+
+# ── iOS（钥匙串、配对、传输、备份流程、原图读取、权限声明）──────
+zone apps/ios/PPass/**
+zone apps/ios/Packages/**
+- apps/ios/PPass/Design/**
+- apps/ios/PPass/Home/**
+- apps/ios/PPass/Photos/**
+- apps/ios/PPass/I18n/**
+- apps/ios/PPass/Resources/**
+- apps/ios/PPass/App/RootView.swift
+- apps/ios/PPass/Diagnostics/DiagnosticsScreen.swift
+- apps/ios/PPass/Pairing/ScanScreen.swift
+- apps/ios/Packages/PPassCore/Sources/PPassCore/Presentation/**
+- apps/ios/Packages/PPassCore/Sources/PPassCore/Notifications/**
+- apps/ios/Packages/PPassCore/Tests/**
+- apps/ios/Packages/PPassMedia/Tests/**

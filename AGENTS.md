@@ -62,8 +62,19 @@ issue（为什么做）→ 分支 → PR（怎么做的）→ 验收人 review +
     `test (windows)` / `license+deny` / `fmt` 用（`src-tauri` 是独立 workspace，
     主 workspace 编不到它；`apps/` 的 Rust 由 `ci-desktop` 自己检查）。
     ⚠️ 不带 lane 参数 = 默认 lane，这是**向后兼容契约**；未知 lane 一律判要跑。
-  - `ci-android` / `site` / `ci-docs` 仍按 paths 只在改到自己域时跑，
-    它们不进必需列表，被跳过无害。
+  - #1187 起 `ci-android` / `ci-ios` / `ci-docs` 也改成同一套：workflow 层不设
+    paths，`changes` job（`.github/actions/changes` → `tools/ci-paths.sh hit`）按路径判定，
+    没碰到就只跑判定与汇总。**每条 lane 末尾有一个 `if: always()` 的汇总 job**
+    （`CI Rust gate` / `CI Desktop gate` / `CI Android gate` / `CI iOS gate` /
+    `CI Docs gate`，判定 `tools/ci-gate.sh`），main 的必需列表只要求这些汇总、
+    `identity`、`gitleaks` 与 `core review`。`site` 仍按 paths，不进必需列表。
+  - **核心改动要人批**（#1187）：改到 `.github/core-paths.txt` 圈住的文件（安全、数据、
+    协议、更新链、依赖、门禁本身），`CI Core review` 的 `approve` job 挂在 `core-review`
+    环境上等验收人在 Actions 里批准。它用 `pull_request_target` 跑 main 上的定义、
+    不检出 PR 代码——**别给它加 PR 代码的 checkout**。agent 不许调
+    `pending_deployments` 接口替验收人批。
+  - **发版前全量验证**（#1187）：`release.yml` 以 `workflow_call` 调用各条 CI 与 E2E，
+    `create-draft` 等它们全绿；按 `plan-builds` 只验本次要构建的端。
   - ⚠️ **任何 job 的 `name:` 都不许随手改**：`main` 的必需检查列表绑在名字上，
     改名 = 全部 PR 永久 Pending。改名和改分支保护必须在同一次操作里成对完成。
   - ⚠️ **进必需列表的 job，名字必须是写死的常量，不许用 `matrix` 现算。**

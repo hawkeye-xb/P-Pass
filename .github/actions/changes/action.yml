@@ -1,0 +1,61 @@
+name: changes
+description: >-
+  按改动路径判定本条 lane 要不要跑（#1187）。ci-android / ci-ios / ci-docs 的 changes job 各引用一次。
+  调用方必须先 checkout 且 fetch-depth: 0。
+
+# 为什么从触发层挪到 job 层：被 workflow 级 `paths` 过滤掉的 workflow 根本不汇报状态，
+# 设成必过项就永久 Pending（CI-07 #189）。job 级 `if:` 跳过会汇报 skipped，对必过项算通过，
+# 所以既按需又挡得住。真正挡人的是每条 lane 末尾 `if: always()` 的汇总 job（tools/ci-gate.sh）。
+#
+# 口径（tools/ci-paths.sh hit）：
+#   pull_request → 与 PR base 比；push → 与 push 前的提交比（新分支的全零 base 判要跑）；
+#   其余事件（workflow_call 被发版调用、dispatch、schedule）→ 恒定要跑。
+#   任何异常都判要跑（fail-closed）。下游 job 必须写 `needs.changes.outputs.run != 'false'`，
+#   不能写 `== 'true'`：判定 job 挂了输出为空，`== 'true'` 会把下游跳过 = 放行。
+#
+# ⚠️ composite action 的每个 run 步骤都必须写 shell:；actionlint 不扫本文件。
+
+inputs:
+  paths:
+    description: 与 GitHub paths 语法一致的 glob，一行一条；`#` 起头的行是注释
+    required: true
+outputs:
+  run:
+    description: "'true' 要跑 / 'false' 可跳过"
+    value: ${{ steps.decide.outputs.run }}
+
+runs:
+  using: composite
+  steps:
+    # 判据脚本先过一遍自己的变异测试再用（约 2 秒）。这一步红 ⇒ job 红 ⇒ 输出为空 ⇒
+    # 下游按 `!= 'false'` 照跑，汇总 job 因本 job failure 判红。
+    - name: 判据自检（含变异反证）
+      shell: bash
+      run: tools/test-ci-paths.sh
+    - id: decide
+      shell: bash
+      env:
+        EVENT: ${{ github.event_name }}
+        PR_BASE: ${{ github.event.pull_request.base.sha }}
+        PUSH_BEFORE: ${{ github.event.before }}
+        GLOBS: ${{ inputs.paths }}
+      run: |
+        set -uo pipefail
+        case "$EVENT" in
+          pull_request) base="$PR_BASE" ;;
+          push) base="$PUSH_BEFORE" ;;
+          *)
+            echo "事件 ${EVENT} → 恒定要跑"
+            echo "run=true" >>"$GITHUB_OUTPUT"
+            exit 0
+            ;;
+        esac
+        globs=()
+        while IFS= read -r g; do
+          g="${g#"${g%%[![:space:]]*}"}"
+          case "$g" in '' | '#'*) continue ;; esac
+          globs+=("$g")
+        done <<<"$GLOBS"
+        run="$(tools/ci-paths.sh hit "$base" "${globs[@]}")"
+        echo "判定结果: run=${run}"
+        echo "run=${run}" >>"$GITHUB_OUTPUT"

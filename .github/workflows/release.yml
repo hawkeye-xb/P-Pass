@@ -875,8 +875,10 @@ jobs:
   # 手动单独验证 iOS 上传见 ci-ios.yml 的 testflight job（共用 .github/actions/ios-testflight）。
   ios:
     name: "iOS (TestFlight)"
-    needs: [plan-builds]
-    if: (github.event_name != 'workflow_dispatch' || contains(format('{0},', inputs.platforms || 'all'), 'ios') || (inputs.platforms == '' || inputs.platforms == 'all')) && needs.plan-builds.outputs.ios == 'build'
+    # #1187：本 job 自己上传 TestFlight，不经过 create-draft，所以发版前验证必须挡在它前面
+    # （其余端构建与验证并行，挡在 create-draft；只有 iOS 要先等验证）。
+    needs: [plan-builds, verify-rust, verify-docs, verify-e2e, verify-desktop, verify-android, verify-ios]
+    if: ${{ !cancelled() && needs.plan-builds.result == 'success' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && (github.event_name != 'workflow_dispatch' || contains(format('{0},', inputs.platforms || 'all'), 'ios') || (inputs.platforms == '' || inputs.platforms == 'all')) && needs.plan-builds.outputs.ios == 'build' }}
     runs-on: macos-26
     # 冷缓存要编两个 iOS 切片（release）+ 归档 + 上传 + 等 ASC 出现，同 ci-ios 放宽到 70。
     timeout-minutes: 70
@@ -918,11 +920,61 @@ jobs:
             echo "::warning::ASC_KEY_ID / ASC_ISSUER_ID / ASC_KEY_P8 未全部设置——iOS 未上传 TestFlight（无凭据路径）"
           fi
 
+  # ══ #1187：发版前全量验证 ══════════════════════════════════════════
+  # 以全量模式调用各条 CI 与 E2E（被调用时 changes 恒定判要跑），与构建并行；create-draft 等它们
+  # 全部通过才执行，下游上传、清单定稿（会移动 test-channel 指针）都挂在 create-draft 之后，
+  # 所以任何一条红都发不出去。按 plan-builds 按需：某端复用或跳过 ⇒ 产物与上一版逐字节相同，
+  # 不重复验证；Rust / 文档 / E2E 每次都跑。
+  # 只在 tag push 上验证：workflow_dispatch 补跑检出的是 inputs.tag，而被调用的 CI 只会检出
+  # github.ref（dispatch 时是 main），验的不是同一份代码；补跑的 tag 在原 push 时已验过。
+  # 调用外部 workflow 的 job 不能写 timeout-minutes：超时由被调用 workflow 里每个 job 各自的
+  # timeout-minutes 兜（tools/test-release-timeouts.sh 连同被调用的 workflow 一起检查）。
+  verify-rust:
+    name: "发版前验证 · Rust"
+    needs: [plan-builds]
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/ci-rust.yml
+
+  verify-docs:
+    name: "发版前验证 · 发布链与文档"
+    needs: [plan-builds]
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/ci-docs.yml
+
+  verify-e2e:
+    name: "发版前验证 · E2E"
+    needs: [plan-builds]
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/e2e.yml
+
+  verify-desktop:
+    name: "发版前验证 · 桌面壳"
+    needs: [plan-builds]
+    if: github.event_name == 'push' && (needs.plan-builds.outputs.macos == 'build' || needs.plan-builds.outputs.windows == 'build')
+    uses: ./.github/workflows/ci-desktop.yml
+
+  verify-android:
+    name: "发版前验证 · Android"
+    needs: [plan-builds]
+    if: github.event_name == 'push' && needs.plan-builds.outputs.android == 'build'
+    uses: ./.github/workflows/ci-android.yml
+
+  verify-ios:
+    name: "发版前验证 · iOS"
+    needs: [plan-builds]
+    if: github.event_name == 'push' && needs.plan-builds.outputs.ios == 'build'
+    uses: ./.github/workflows/ci-ios.yml
+
   create-draft:
     name: "建 Release 草稿（骨架）"
-    # 不 needs 任何构建 job（见上 ①）——秒级跑完，三条 lane 之后只管上传。
+    # 不 needs 任何构建 job（见上 ①）——三条 lane 之后只管上传。
     # #838：等 plan-builds 判完（秒级）：两端都没有新版本时判定失败，不建空草稿。
-    needs: [plan-builds]
+    # #1187：等发版前验证全部通过（跳过 = 该端不需要验证，算通过；failure / cancelled 一律不发）。
+    needs: [plan-builds, verify-rust, verify-docs, verify-e2e, verify-desktop, verify-android, verify-ios]
+    if: ${{ !cancelled() && needs.plan-builds.result == 'success' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     runs-on: ubuntu-latest
     # #772：以往每次都在 1 分钟内结束（只上传/改清单/改正文），10 分钟足够且挂住时不会拖 6 小时。
     timeout-minutes: 10
@@ -1039,7 +1091,8 @@ jobs:
   upload-android:
     name: "上传 Android + 更新 manifest"
     needs: [create-draft, android, android-reuse]
-    if: ${{ !cancelled() && (needs.android.result == 'success' || needs.android-reuse.result == 'success') }}
+    # #1187：显式要求草稿建成——create-draft 被发版前验证挡下时，上传不许照跑。
+    if: ${{ !cancelled() && needs.create-draft.result == 'success' && (needs.android.result == 'success' || needs.android-reuse.result == 'success') }}
     runs-on: ubuntu-latest
     # #772：以往每次都在 1 分钟内结束（只上传/改清单/改正文），10 分钟足够且挂住时不会拖 6 小时。
     timeout-minutes: 10
@@ -1139,7 +1192,8 @@ jobs:
   upload-macos:
     name: "上传 macOS"
     needs: [create-draft, macos-arm64, macos-reuse]
-    if: ${{ !cancelled() && (needs.macos-arm64.result == 'success' || needs.macos-reuse.result == 'success') }}
+    # #1187：显式要求草稿建成——create-draft 被发版前验证挡下时，上传不许照跑。
+    if: ${{ !cancelled() && needs.create-draft.result == 'success' && (needs.macos-arm64.result == 'success' || needs.macos-reuse.result == 'success') }}
     runs-on: ubuntu-latest
     # #772：以往每次都在 1 分钟内结束（只上传/改清单/改正文），10 分钟足够且挂住时不会拖 6 小时。
     timeout-minutes: 10
@@ -1175,7 +1229,8 @@ jobs:
   upload-windows:
     name: "上传 Windows"
     needs: [create-draft, windows-x64]
-    if: ${{ !cancelled() && needs.windows-x64.result == 'success' }}
+    # #1187：显式要求草稿建成——create-draft 被发版前验证挡下时，上传不许照跑。
+    if: ${{ !cancelled() && needs.create-draft.result == 'success' && needs.windows-x64.result == 'success' }}
     runs-on: ubuntu-latest
     # #772：以往每次都在 1 分钟内结束（只上传/改清单/改正文），10 分钟足够且挂住时不会拖 6 小时。
     timeout-minutes: 10

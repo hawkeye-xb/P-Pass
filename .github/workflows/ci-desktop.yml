@@ -35,6 +35,9 @@ on:
       - "tools/setup-rust-toolchain.sh"
       - ".github/workflows/ci-desktop.yml"
 
+  # #1187：发版前由 release.yml 以全量模式调用（changes 对非 pull_request 事件恒定全跑）。
+  workflow_call:
+
 permissions:
   contents: read
 
@@ -169,3 +172,21 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/desktop-checks
+
+  # #1187：分支保护只要求这一条（原来逐个 job 列为必过项）。`if: always()` 必不可少：
+  # 没有它，上游一红本 job 就被跳过，而 skipped 对必过项算通过，等于没设门。
+  gate:
+    name: CI Desktop gate
+    if: always()
+    needs: [changes, desktop-linux, desktop-windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: tools/ci-gate.sh
+          sparse-checkout-cone-mode: false
+      - name: 汇总上游结论
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: tools/ci-gate.sh

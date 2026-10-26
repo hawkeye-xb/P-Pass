@@ -193,7 +193,13 @@ class Ctx:
             raise SimError(f"不认识的上下文 {head!r}（{dotted}）——dry-run 需要跟着 workflow 更新")
         cur = roots[head]
         for k in rest:
-            cur = cur.get(k) if isinstance(cur, dict) else None
+            # #1187：对象过滤（`needs.*.result`）——`*` 把对象展开成值的列表，之后的字段逐项取。
+            if k == "*":
+                cur = list(cur.values()) if isinstance(cur, dict) else (cur if isinstance(cur, list) else [])
+            elif isinstance(cur, list):
+                cur = [x.get(k) if isinstance(x, dict) else None for x in cur]
+            else:
+                cur = cur.get(k) if isinstance(cur, dict) else None
         return cur
 
     def call(self, name: str, args):
