@@ -9,12 +9,18 @@ final class FakeTimeline: TimelineSource {
     private lazy var items: [TimelineItem] = {
         let now = Date()
         var out: [TimelineItem] = []
+        // 商店截图：PPASS_DEMO_FLIP_MINE=1 时「本机 / 家人」对调，同一张照片可以分别截成「来自你的手机」和「来自家人的手机」。
+        #if DEBUG
+        let flipMine = ProcessInfo.processInfo.environment["PPASS_DEMO_FLIP_MINE"] == "1"
+        #else
+        let flipMine = false
+        #endif
         for i in 0..<45 {
             let age: TimeInterval = Double(i) * 86_400 * 2.1
             let id = String(format: "%064x", i + 1)
             let size = FakeImages.demoPhotoSize(seed: i + 1) ?? CGSize(width: 4032, height: 3024)
             out.append(TimelineItem(id: id, takenAt: now.addingTimeInterval(-age), isVideo: i % 7 == 3,
-                                    width: Int(size.width), height: Int(size.height), bytes: 2_400_000, isMine: i % 2 == 0))
+                                    width: Int(size.width), height: Int(size.height), bytes: 2_400_000, isMine: (i % 2 == 0) != flipMine))
         }
         return out
     }()

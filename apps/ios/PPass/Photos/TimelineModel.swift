@@ -108,6 +108,12 @@ final class TimelineModel: ObservableObject {
         if let route = openOnLoad {
             openOnLoad = nil
             autoOpen = items.first { $0.isVideo == (route == .video) }
+            #if DEBUG
+            // 商店截图：PPASS_VIEWER_ITEM=<序号> 指定打开第几条（从 0 数），换一张照片截看图页。
+            if let raw = ProcessInfo.processInfo.environment["PPASS_VIEWER_ITEM"], let i = Int(raw), items.indices.contains(i) {
+                autoOpen = items[i]
+            }
+            #endif
         }
     }
 

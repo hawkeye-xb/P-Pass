@@ -9,7 +9,10 @@
 #   IOS_SHOT_SIZE=默认 large，可取 extra-extra-extra-large / accessibility-extra-extra-extra-large 等
 #   （xcrun simctl ui <udid> content_size 的取值）。要全矩阵：tools/ios/screenshots.sh 跑四次，输出分目录。
 # 商店截图：IOS_SHOT_PHOTOS=<装 JPG 的目录> 让演示数据改用真实照片（见 FakeTimeline.swift 的 FakeImages），
-#   IOS_SIM_NAME="iPhone 17 Pro Max" 出 6.9 英寸的商店尺寸（1320×2868）。照片在 P-Pass-promo/assets/store-photos/。
+#   IOS_SIM_NAME="iPhone 17 Pro Max" 出 6.9 英寸的商店尺寸（1320×2868）。
+#   IOS_SHOT_NETWORK=5g 状态栏显示蜂窝 5G（默认 Wi-Fi）；IOS_SHOT_ONLY="07-viewer-video ..." 只截列出的几张。
+#   IOS_SHOT_VIEWER_ITEM=<序号> 看图页打开第几条（从 0 数，默认第一张照片）。
+#   IOS_SHOT_FLIP_MINE=1 演示数据里「本机 / 家人」对调（同一张照片截成「来自你的手机」）。状态栏一律满电、不显示充电。照片在 P-Pass-promo/assets/store-photos/。
 # 本脚本启动的模拟器结束时关掉。
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -32,15 +35,28 @@ xcodebuild build -project "$IOS/PPass.xcodeproj" -scheme PPass -destination "id=
   -derivedDataPath "$DERIVED" -quiet
 APP="$DERIVED/Build/Products/Debug-iphonesimulator/PPass.app"
 xcrun simctl install "$UDID" "$APP"
-xcrun simctl status_bar "$UDID" override --time 9:41 --batteryState charged --batteryLevel 100 --wifiBars 3 || true
+xcrun simctl status_bar "$UDID" clear || true
+if [ "${IOS_SHOT_NETWORK:-wifi}" = 5g ]; then
+  # 「在外用 5G」那张商店图：状态栏显示蜂窝 5G。只能给 --dataNetwork，再加任何 --wifi* 参数
+  # 状态栏就会改画灰色 Wi-Fi 图标、不显示「5G」（iOS 26.4 模拟器实测）。
+  xcrun simctl status_bar "$UDID" override --time 9:41 --batteryState discharging --batteryLevel 100 \
+    --dataNetwork 5g --cellularBars 4 || true
+else
+  # 正常状态：Wi-Fi 满格 + 蜂窝 4 格（不给蜂窝参数时状态栏是「无 SIM」的四个点）。
+  xcrun simctl status_bar "$UDID" override --time 9:41 --batteryState discharging --batteryLevel 100 \
+    --dataNetwork wifi --wifiMode active --wifiBars 3 --cellularMode active --cellularBars 4 --operatorName '' || true
+fi
 xcrun simctl ui "$UDID" appearance "${IOS_SHOT_APPEARANCE:-light}"
 xcrun simctl ui "$UDID" content_size "${IOS_SHOT_SIZE:-large}"
 mkdir -p "$OUT"
 
 shot() { # <文件名> <场景> <路由> [等待秒数]
   local name="$1" scenario="$2" route="$3" wait="${4:-3}"
+  if [ -n "${IOS_SHOT_ONLY:-}" ] && [[ " $IOS_SHOT_ONLY " != *" $name "* ]]; then return 0; fi
   SIMCTL_CHILD_PPASS_SCENARIO="$scenario" SIMCTL_CHILD_PPASS_ROUTE="$route" \
     SIMCTL_CHILD_PPASS_DEMO_PHOTOS="${IOS_SHOT_PHOTOS:-}" \
+    SIMCTL_CHILD_PPASS_VIEWER_ITEM="${IOS_SHOT_VIEWER_ITEM:-}" \
+    SIMCTL_CHILD_PPASS_DEMO_FLIP_MINE="${IOS_SHOT_FLIP_MINE:-}" \
     xcrun simctl launch --terminate-running-process "$UDID" "$BUNDLE_ID" \
     -AppleLanguages "($LANG_CODE)" -AppleLocale "${LANG_CODE/-/_}" >/dev/null
   sleep "$wait"
@@ -78,6 +94,7 @@ shot 30-welcome notPaired welcome
 shot 31-scan-no-camera notPaired scan
 shot 32-manual notPaired manual
 shot 33-pair-waiting notPaired pairWaiting
+shot 38-pair-code notPaired pairCode
 shot 34-pair-refused notPaired pairRefused
 shot 35-pair-lapsed notPaired pairLapsed
 shot 36-pair-failed notPaired pairFailed

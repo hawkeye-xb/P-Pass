@@ -78,8 +78,8 @@ final class FakePairing: PairingService {
     init(scenario: FakeScenario) {
         switch scenario {
         case .notPaired: current = .notPaired
-        case .lost: current = .lost(desktopName: "Home-Mac")
-        default: current = .paired(desktopName: "Home-Mac")
+        case .lost: current = .lost(desktopName: "Home-Computer")
+        default: current = .paired(desktopName: "Home-Computer")
         }
     }
 
@@ -88,12 +88,12 @@ final class FakePairing: PairingService {
 
     /// 演示规则：串里带 `t=deny` → 电脑拒绝；`t=expired` → 过期；`t=fail` → 连不上；其余 → 加入成功。
     func pair(code: String, onCode: @escaping PairCodeSink) async -> PairOutcome {
-        await onCode(PairCodeShown(code: "123456", desktop: PairDesktopInfo(name: "Home-Mac", fingerprint: "AB12 CD34"), phoneNode: ""))
+        await onCode(PairCodeShown(code: "482916", desktop: PairDesktopInfo(name: "Home-Computer", fingerprint: "AB12 CD34"), phoneNode: ""))
         try? await Task.sleep(nanoseconds: 1_200_000_000)
         if code.contains("t=deny") { return .refused(note: nil, ownerSaidNo: true) }
         if code.contains("t=expired") { return .refused(note: .expired, ownerSaidNo: false) }
         if code.contains("t=fail") { return .failed(reason: "demo: unreachable") }
-        current = .paired(desktopName: "Home-Mac")
+        current = .paired(desktopName: "Home-Computer")
         return .joined(firstTime: true)
     }
 
