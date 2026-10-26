@@ -16,7 +16,7 @@ information without their permission are not acceptable.
 ## Reporting
 
 If you experience or witness unacceptable behavior, report it privately
-to the project maintainers at **CONTACT_EMAIL_TBD**. All reports are
+to the project maintainers at [ppass@hawkeye-xb.com](mailto:ppass@hawkeye-xb.com). All reports are
 reviewed and handled in confidence.
 
 The maintainers decide on consequences following the Enforcement
