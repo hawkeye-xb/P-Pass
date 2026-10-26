@@ -126,6 +126,7 @@ final class AppBoot: ObservableObject {
             logger.log("identity: debug fingerprint \(live.identityFingerprint)")
             #endif
             LiveTimeline.clearShareDir() // 上次被杀 / 崩溃留下的原图残留
+            SavedToGalleryStore.removeLegacyDefaults() // #1152：旧版本放在 UserDefaults 里的「保存到相册」记录
             BatteryState.shared.start()
             let model = AppModel(backend: live.ports())
             live.start()

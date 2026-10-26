@@ -31,6 +31,7 @@ final class DisconnectManifestTests: XCTestCase {
         try ask.markAsked()
         try DefinitiveNoticeStore(directory: root).save(DefinitiveNoticeState(notifiedLostPairingId: "e"))
         try SentinelStore(directory: root).recordReachable(now: 1)
+        try SavedToGalleryStore(directory: root).remember(hash: "h", localIdentifier: "L")
         try BackupScopeStore(directory: root, daemonNodeId: nil).saveScope(selected: ["x"], allCurrent: ["x"])
         try BackupScopeStore(directory: root, daemonNodeId: "node-a").saveScope(selected: ["a"], allCurrent: ["a"])
         let flow = FlowControlStore(directory: root)
@@ -85,6 +86,8 @@ final class DisconnectManifestTests: XCTestCase {
         XCTAssertTrue(AutoBackupPrefs(directory: tmp.url).requested())
         XCTAssertTrue(FileManager.default.fileExists(atPath: tmp.file(DeviceIdentity.markerFileName).path), "本次安装的标记留着：断开后再配对还是同一台手机")
         XCTAssertFalse(FileManager.default.fileExists(atPath: tmp.file(DeviceIdentity.legacyPlaintextFileName).path), "旧明文私钥随断开清掉")
+        // #1152：「保存到相册」去重记录随断开清掉。反证：savedToGallery 行改成 .keep ⇒ 红。
+        XCTAssertNil(SavedToGalleryStore(directory: tmp.url).localIdentifier(for: "h"), "保存到相册的记录随断开清掉")
         XCTAssertTrue(OnboardedDesktopsStore(directory: tmp.url).wasOnboarded("node-a"))
         XCTAssertEqual(try BackupScopeStore(directory: tmp.url, daemonNodeId: "node-a").selectedBucketIds(), ["a"])
         XCTAssertFalse(BackupSettings(directory: tmp.url).wifiOnly())

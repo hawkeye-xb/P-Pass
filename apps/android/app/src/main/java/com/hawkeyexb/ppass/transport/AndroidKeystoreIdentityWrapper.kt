@@ -8,13 +8,16 @@
 // before the first unlock.
 package com.hawkeyexb.ppass.transport
 
+import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyInfo
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
+import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 
 class AndroidKeystoreIdentityWrapper(private val alias: String = ALIAS) : IdentityKeyWrapper {
@@ -56,6 +59,19 @@ class AndroidKeystoreIdentityWrapper(private val alias: String = ALIAS) : Identi
         return cipher.doFinal(sealed.ciphertext)
     }
 
+    /** #1152：包裹密钥所在的安全级别（诊断日志用）。读不出来就如实说读不出来，不抛。 */
+    override fun securityLevel(): String = try {
+        val key = key()
+        val info = SecretKeyFactory.getInstance(key.algorithm, PROVIDER).getKeySpec(key, KeyInfo::class.java) as KeyInfo
+        describeKeySecurityLevel(
+            Build.VERSION.SDK_INT,
+            if (Build.VERSION.SDK_INT >= 31) info.securityLevel else null,
+            @Suppress("DEPRECATION") info.isInsideSecureHardware,
+        )
+    } catch (e: Exception) {
+        "unreadable(${e.javaClass.simpleName})"
+    }
+
     private fun key(): SecretKey =
         keyStore().getKey(alias, null) as? SecretKey ?: throw IdentityKeyGoneException("wrapping key absent")
 
@@ -67,3 +83,22 @@ class AndroidKeystoreIdentityWrapper(private val alias: String = ALIAS) : Identi
         val AAD = "ppass.identity.v1".toByteArray()
     }
 }
+
+/**
+ * KeyInfo → 人能读的级别（纯函数，JVM 单测直接测）。API 31+ 用 `KeyInfo.getSecurityLevel()`
+ * （`KeyProperties.SECURITY_LEVEL_*`），更低的版本只有 `isInsideSecureHardware` 一个布尔。
+ */
+internal fun describeKeySecurityLevel(sdkInt: Int, securityLevel: Int?, insideSecureHardware: Boolean): String =
+    if (sdkInt >= 31 && securityLevel != null) {
+        when (securityLevel) {
+            2 -> "strongbox" // SECURITY_LEVEL_STRONGBOX
+            1 -> "tee" // SECURITY_LEVEL_TRUSTED_ENVIRONMENT
+            0 -> "software" // SECURITY_LEVEL_SOFTWARE
+            -1 -> "unknown_secure" // SECURITY_LEVEL_UNKNOWN_SECURE
+            else -> "unknown" // SECURITY_LEVEL_UNKNOWN
+        }
+    } else if (insideSecureHardware) {
+        "secure_hardware"
+    } else {
+        "software"
+    }
