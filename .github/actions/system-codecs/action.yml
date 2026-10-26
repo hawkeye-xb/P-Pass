@@ -34,8 +34,15 @@ runs:
         mkdir -p "$dir/partial"
         # shellcheck disable=SC2086 # PKGS 是空格分隔的包名列表，需要分词
         sudo apt-get install -y --no-install-recommends --print-uris $PKGS \
-          | awk -F"'" '/^.http/ {print $2}' | sort > "$RUNNER_TEMP/system-codecs-uris.txt"
-        echo "要下载的包：$(wc -l < "$RUNNER_TEMP/system-codecs-uris.txt") 个"
+          | { grep "^'" || true; } | awk '{print $2}' | sort > "$RUNNER_TEMP/system-codecs-uris.txt"
+        # 每行形如 `'<uri>' <包名_版本_架构>.deb <大小> <校验和>`；取文件名（含版本）。
+        # 不按 http 前缀匹配：GitHub 的 Ubuntu runner 用 mirror+file: 源，URI 不以 http 开头。
+        n=$(wc -l < "$RUNNER_TEMP/system-codecs-uris.txt")
+        echo "要下载的包：$n 个"
+        # 清单为空说明解析失效（包已预装时除外），缓存键会退化成常量——直接判红，别悄悄失效。
+        if [ "$n" -eq 0 ] && ! dpkg -s $PKGS >/dev/null 2>&1; then
+          echo "::error::apt --print-uris 没解析出任何包，缓存键无效"; exit 1
+        fi
         {
           echo "dir=$dir"
           echo "key=system-codecs-${{ runner.os }}-${{ runner.arch }}-${ImageOS:-unknown}-$(sha256sum "$RUNNER_TEMP/system-codecs-uris.txt" | cut -c1-16)"
