@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Android 端、iOS 端：欢迎页的介绍文字与官网首页统一为「手机照片自动备份到家中的电脑，无需注册账号，不上传任何云端」（#874）。
+
 ### Security
 - 桌面端：依赖库 tokio 升级到 1.53.3，修复安全公告 RUSTSEC-2026-0386（#1079）。
 
