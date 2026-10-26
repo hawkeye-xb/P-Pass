@@ -372,6 +372,21 @@ pub enum Applied {
     NotApplicable,
 }
 
+/// §5.3 / #1159：[`PlatformAdapter::grant_library_dir`] 的结果口径。
+///
+/// 与 [`Applied`] 同一个道理：`Ok(())` 会把「这台机器的卷根本没有 ACL、
+/// 我们什么都没做」说成授权完成，而备份到那时才发现服务读不了目录。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LibraryDirGrant {
+    /// 本平台 / 本安装形态不需要授权：macOS / Linux 的 daemon 与用户同一主体，
+    /// 旧的每用户计划任务也跑在用户会话里。
+    NotApplicable,
+    /// 服务账户对该目录有修改权——刚加上的，或本来就有（已回读确认）。
+    Granted,
+    /// 卷没有 ACL（FAT / FAT32 / exFAT），改不了权限，跳过。
+    SkippedNoAcl { file_system: String },
+}
+
 /// 【DESK-42 #604】开机自启登记的对账结果。
 ///
 /// 为什么不能只用 `bool`：`false` 会把「本来就没登记」和「登记正确、不用动」
@@ -669,6 +684,20 @@ pub trait PlatformAdapter: Send + Sync {
     /// 钥匙串的值，config.toml 那份只给人看。
     fn library_store(&self) -> Option<Box<dyn SecretBlobStore>> {
         None
+    }
+
+    /// §5.3 / #1159：把主人选的照片库目录授权给**常驻服务账户**。
+    ///
+    /// 服务模式（D1）下 daemon 以 `NT SERVICE\P-Pass` 运行，和选目录的用户不是
+    /// 同一个安全主体，默认对这个目录连读都没有。加 ACE 这件事只能在主人身份下做
+    /// （服务自己没有该目录的 `WRITE_DAC`），所以入口在窗口程序这边，在把库位置交给
+    /// daemon **之前**调。
+    ///
+    /// 幂等：已经有这条 ACE 就什么都不改。非服务形态（macOS / Linux / 老的每用户
+    /// 计划任务）没有「服务账户 ≠ 用户」这个问题，返回 `NotApplicable`。
+    fn grant_library_dir(&self, dir: &std::path::Path) -> Result<LibraryDirGrant> {
+        let _ = dir;
+        Ok(LibraryDirGrant::NotApplicable)
     }
 
     /// QA-09 迁移（#211）：把文件权限收紧到「只有属主可读写」。

@@ -519,6 +519,11 @@ fn disable_auto_sleep_blocking() -> Result<(), String> {
 /// 有 daemon 在跑（含「未配置」状态）就直接问它；首启时没有，就一次性拉起内置 daemon
 /// 配好再收掉。校验失败原样交出 daemon 的 keyed 错误。生效时机：daemon 重启后。
 fn configure_library(library_dir: &str) -> Result<(), String> {
+    // §5.3 / #1159：服务模式下 daemon 是 `NT SERVICE\P-Pass`，与选目录的用户不是
+    // 同一个安全主体，它默认连读这个目录都不行。加 ACE 只能在主人身份下做，所以
+    // **先授权、再交给 daemon**（daemon 会以服务的身份复查目录）。授权失败不在这里
+    // 拦：daemon 的复查报的错更准确，用户看到的仍是同一句「这个文件夹不可用」。
+    let _ = platform::adapter().grant_library_dir(std::path::Path::new(library_dir));
     let set = |h: &ipc::DaemonHandle| {
         h.call("config.set_library", json!({ "library": library_dir }))
             .map(|_| ())

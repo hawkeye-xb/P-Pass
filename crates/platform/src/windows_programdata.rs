@@ -136,8 +136,10 @@ pub fn service_root() -> PathBuf {
 
 /// 账户名（如 `NT SERVICE\P-Pass`）→ SID 字符串。
 ///
-/// 虚拟服务账户的 SID 由服务名派生，**不需要服务真的装着**；所以安装器可以在
-/// `sc create` 之后立刻用它核对目录 ACL，daemon 也能在启动时自己算出来核对。
+/// `NT SERVICE\<名字>` 是**虚拟账户**：名字本身不需要存在，但只有**已注册的服务名**
+/// 才解析得出来（未注册的名字 `LookupAccountNameW` 答不出来，实测如此）。所以这个
+/// 调用在服务装好之后才可靠——daemon 能跑就说明服务注册过，安装器也是先 `sc create`
+/// 再核对目录 ACL。
 pub fn account_sid_string(account: &str) -> Result<String> {
     use windows_sys::Win32::Security::{LookupAccountNameW, SID_NAME_USE};
 
@@ -529,10 +531,20 @@ mod tests {
         current_user_sid_string().expect("current sid")
     }
 
-    /// D4：虚拟服务账户的 SID 由服务名派生，不用服务真的装着也能算出来；
-    /// 且必须与当前用户 SID 不同——正是这个「不同」才让 ProgramData 的 ACL 有意义。
+    /// D4：虚拟服务账户的 SID 由服务名派生，且必须与当前用户 SID 不同——正是这个
+    /// 「不同」才让 ProgramData 的 ACL 有意义。
+    ///
+    /// 前提是这台机器**注册了 P-Pass 服务**：`NT SERVICE\<名字>` 只对已注册的服务名
+    /// 解析得出来（未注册的名字查不到，见下一个反证）。CI 的干净机器上没有这个服务，
+    /// 所以这里按安装态分档，而不是无条件断言。
     #[test]
     fn service_account_resolves_to_its_own_sid() {
+        if !crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)
+            .expect("is_installed")
+        {
+            eprintln!("跳过：本机没注册 P-Pass 服务，NT SERVICE 虚拟账户解析不出来");
+            return;
+        }
         let sid = account_sid_string(r"NT SERVICE\P-Pass").expect("lookup");
         assert!(sid.starts_with("S-1-5-80-"), "{sid}");
         assert_ne!(sid, test_sid());

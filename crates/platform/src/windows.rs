@@ -609,6 +609,28 @@ impl PlatformAdapter for WindowsAdapter {
         )))
     }
 
+    /// §5.3 / #1159：把照片库目录授权给服务账户。
+    ///
+    /// 只有 per-machine 安装（服务已注册）才需要：老的每用户计划任务跑在用户会话
+    /// 里，权限本就一致。服务账户的 SID 由服务名派生，`grant_modify_for_sid` 幂等
+    /// 且自己回读确认，所以这里不再重复核一遍。
+    fn grant_library_dir(&self, dir: &Path) -> Result<crate::LibraryDirGrant> {
+        use crate::windows_service;
+        if !windows_service::is_installed(windows_service::SERVICE_NAME).unwrap_or(false) {
+            return Ok(crate::LibraryDirGrant::NotApplicable);
+        }
+        let account = format!(r"NT SERVICE\{}", windows_service::SERVICE_NAME);
+        let sid = crate::windows_programdata::account_sid_string(&account)?;
+        Ok(
+            match crate::windows_photo_dir::grant_modify_for_sid(dir, &sid)? {
+                crate::windows_photo_dir::GrantOutcome::Done => crate::LibraryDirGrant::Granted,
+                crate::windows_photo_dir::GrantOutcome::SkippedNoAcl { file_system } => {
+                    crate::LibraryDirGrant::SkippedNoAcl { file_system }
+                }
+            },
+        )
+    }
+
     /// #1043：`ERROR_SHARING_VIOLATION`（32，文件正被另一进程使用）与
     /// `ERROR_ACCESS_DENIED`（5，覆盖正在运行的 exe 时常见）——与改前前端正则
     /// 匹配的两句系统原文一一对应，只是改成按错误码判，与系统语言无关。
@@ -2970,6 +2992,36 @@ mod desk65_scheduled_task_tests {
         ));
         assert!(adapter.pairing_store().is_none());
         assert!(adapter.library_store().is_none());
+    }
+
+    /// §5.3 / #1159：授权只该发生在「服务已注册」的机器上，而且判据读**真实的
+    /// 目录 DACL**——不读返回值。
+    #[test]
+    fn library_dir_grant_targets_the_service_account() {
+        let d = tempfile::Builder::new()
+            .prefix("ppass-lib-grant-")
+            .tempdir()
+            .expect("tempdir");
+        let installed = crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)
+            .expect("is_installed");
+        match WindowsAdapter::new()
+            .grant_library_dir(d.path())
+            .expect("grant")
+        {
+            crate::LibraryDirGrant::NotApplicable => {
+                assert!(!installed, "服务装着就必须授权，不能报 NotApplicable");
+            }
+            crate::LibraryDirGrant::Granted => {
+                assert!(installed, "没装服务时不该给任何 SID 加 ACE");
+                let sid =
+                    crate::windows_programdata::account_sid_string(r"NT SERVICE\P-Pass").unwrap();
+                let sids = crate::windows_photo_dir::list_modify_sids(d.path()).unwrap();
+                assert!(sids.contains(&sid), "{sids:?} 里没有服务 SID {sid}");
+            }
+            crate::LibraryDirGrant::SkippedNoAcl { file_system } => {
+                panic!("工作目录应在 NTFS/ReFS 上：{file_system}")
+            }
+        }
     }
 }
 
