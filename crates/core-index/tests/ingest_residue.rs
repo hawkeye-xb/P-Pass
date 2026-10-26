@@ -36,7 +36,7 @@ async fn ingest_temp_files_are_swept_and_never_adopted() {
     );
     let empty = write(root, "originals/x/.ppf-ingest-7-9.part", b"");
 
-    assert_eq!(sweep_ingest_residue(&db, root).await.unwrap(), 2);
+    assert_eq!(sweep_ingest_residue(&db, root).await.unwrap().removed, 2);
     assert!(!half.exists() && !empty.exists());
 
     let r = adopt_orphans(&db, root, &[0xcc; 32]).await.unwrap();
@@ -65,7 +65,7 @@ async fn user_files_and_lookalikes_survive() {
     ];
     std::fs::create_dir_all(root.join("originals/.ppf-ingest-9-9.part.d")).unwrap();
 
-    assert_eq!(sweep_ingest_residue(&db, root).await.unwrap(), 0);
+    assert_eq!(sweep_ingest_residue(&db, root).await.unwrap().removed, 0);
     for p in &keep {
         assert!(p.exists(), "不该被删：{}", p.display());
     }
@@ -93,12 +93,68 @@ async fn a_path_with_an_index_row_is_never_swept() {
     .await
     .unwrap();
 
-    assert_eq!(sweep_ingest_residue(&db, root).await.unwrap(), 0);
+    assert_eq!(sweep_ingest_residue(&db, root).await.unwrap().removed, 0);
     assert!(p.exists());
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn missing_originals_dir_is_fine() {
     let (dir, db) = setup().await;
-    assert_eq!(sweep_ingest_residue(&db, dir.path()).await.unwrap(), 0);
+    assert_eq!(
+        sweep_ingest_residue(&db, dir.path()).await.unwrap().removed,
+        0
+    );
+}
+
+/// #1183：清扫改到后台跑之后，本进程正在写的临时文件（名字里的 pid = 本进程）不许删——
+/// 它属于「正在进行的入库」。别的进程（上一次运行）留下的照删。
+/// 反证：去掉 `ingest_temp_pid(..) == Some(me)` 那条 → 本进程那份被删，红。
+#[tokio::test(flavor = "multi_thread")]
+async fn this_process_in_flight_temp_is_kept_while_older_runs_residue_goes() {
+    let (dir, db) = setup().await;
+    let root = dir.path();
+    let me = std::process::id();
+    let mine = write(
+        root,
+        &format!("originals/x/.ppf-ingest-{me}-123.part"),
+        b"being copied",
+    );
+    let theirs = write(
+        root,
+        &format!("originals/x/.ppf-ingest-{}-123.part", me.wrapping_add(1)),
+        b"crashed run",
+    );
+    let r = sweep_ingest_residue(&db, root).await.unwrap();
+    assert_eq!(r.removed, 1, "{r:?}");
+    assert_eq!(r.freed_bytes, b"crashed run".len() as u64);
+    assert_eq!(r.kept, vec![("-".to_string(), "in_flight")]);
+    assert!(mine.exists());
+    assert!(!theirs.exists());
+}
+
+/// 名字匹配的符号链接 / 目录不删，也不跟进去删链接指向的东西。
+/// 反证：把递归判定 `kind.is_dir()` 换成 `entry.path().is_dir()`（跟随链接）→ 链接指向的文件被删，红。
+#[tokio::test(flavor = "multi_thread")]
+async fn a_link_named_like_a_temp_is_never_touched_or_followed() {
+    let (dir, db) = setup().await;
+    let root = dir.path();
+    let outside = dir.path().join("outside");
+    let victim = write(&outside, ".ppf-ingest-1-1.part", b"not in the library");
+    std::fs::create_dir_all(root.join("originals")).unwrap();
+    for kind in platform::test_support::dir_link_kinds() {
+        let link = root.join(format!("originals/.ppf-ingest-2-{}.part", kind.name));
+        if let Err(e) = kind.make(&outside, &link) {
+            assert!(kind.may_need_privilege, "{}: {e}", kind.name);
+            eprintln!("跳过 {}: {e}", kind.name);
+            continue;
+        }
+        let r = sweep_ingest_residue(&db, root).await.unwrap();
+        assert_eq!(r.removed, 0, "{}: {r:?}", kind.name);
+        assert!(
+            std::fs::symlink_metadata(&link).is_ok(),
+            "{}: 链接还在",
+            kind.name
+        );
+        assert!(victim.exists(), "{}: 链接指向的东西没动", kind.name);
+    }
 }

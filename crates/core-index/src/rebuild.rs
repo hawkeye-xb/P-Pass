@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 
 use storage::{Asset, AuditEntry, Db};
 
-use crate::{ingest, IndexError, Result};
+use crate::{ingest, IndexError, ResidueSweep, Result};
 
 /// What a rebuild did. `duplicates` counts extra on-disk copies of content
 /// already indexed this run — the first path (lexicographic) wins the row.
@@ -247,44 +247,66 @@ async fn index_missing_files(
     })
 }
 
-/// #1047: 清掉入库被打断留下的临时文件，返回删除个数。
+/// #1047 / #1183: 清掉入库被打断留下的临时文件。运行期随时可跑（#1183 起在后台跑）。
 ///
-/// **判据（只此一条，全部满足才删）**：
-/// 1. 位于 `<library_root>/originals/` 之下的普通文件（符号链接不跟、不删）；
+/// **判据（全部满足才删）**：
+/// 1. 位于 `<library_root>/originals/` 之下的普通文件（符号链接不跟、不删；目录不删）；
 /// 2. 文件名严格匹配入库临时名 `.ppf-ingest-<随机>.part`（前缀与后缀同时匹配）；
-/// 3. 索引里没有任何一行指向这个路径。
+/// 3. 名字里的 pid（`.ppf-ingest-<pid>-<纳秒>.part`）不是本进程——本进程的临时文件可能
+///    正在写，属于「正在进行的操作」（#1183；之前靠「只在启动、任何入库开始之前跑」保证）；
+/// 4. 索引里没有任何一行指向这个路径。
 ///
 /// 不按「0 字节」「内容残缺」「mtime」等内容特征判断——用户自己放进库里的
 /// 文件（含空文件、残缺文件）在内容上与残留无法区分，误删就是删用户数据。
 /// 临时文件永远是**复制出来的副本**（源文件在入库完成前一直留在 staging），
 /// 所以删掉它不会丢任何数据。
-///
-/// ⚠️ 只能在启动时、任何入库路径（watcher / router / IPC）开始工作**之前**
-/// 调用：运行期正在写的临时文件与残留在磁盘上长得一模一样，每小时的对账
-/// （[`adopt_orphans`]）因此不调用它。
-pub async fn sweep_ingest_residue(db: &Db, library_root: &Path) -> Result<u64> {
+pub async fn sweep_ingest_residue(db: &Db, library_root: &Path) -> Result<ResidueSweep> {
     let originals = library_root.join("originals");
-    if !originals.is_dir() {
-        return Ok(0);
-    }
-    let mut candidates = Vec::new();
-    collect_ingest_temps(&originals, &mut candidates)?;
-    let mut removed = 0u64;
-    for path in candidates {
-        let rel = rel_path_of(library_root, &path)?;
-        if db.hash_at_rel_path(&rel).await?.is_some() {
+    let candidates = tokio::task::spawn_blocking(move || -> Result<Vec<(PathBuf, u64)>> {
+        // `originals` 本身是符号链接（库外）或不存在：不进去。
+        match fs::symlink_metadata(&originals) {
+            Ok(m) if m.is_dir() => {}
+            _ => return Ok(Vec::new()),
+        }
+        let mut candidates = Vec::new();
+        collect_ingest_temps(&originals, &mut candidates)?;
+        Ok(candidates)
+    })
+    .await
+    .map_err(|e| IndexError::Io {
+        path: library_root.join("originals"),
+        source: std::io::Error::other(e.to_string()),
+    })??;
+    let me = std::process::id();
+    let mut out = ResidueSweep::default();
+    for (path, len) in candidates {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if ingest::ingest_temp_pid(&name) == Some(me) {
+            out.kept.push(("-".into(), "in_flight"));
             continue;
         }
-        if fs::remove_file(&path).is_ok() {
-            removed += 1;
+        let rel = rel_path_of(library_root, &path)?;
+        if db.hash_at_rel_path(&rel).await?.is_some() {
+            out.kept.push(("-".into(), "indexed"));
+            continue;
+        }
+        match fs::remove_file(&path) {
+            Ok(()) => {
+                out.removed += 1;
+                out.freed_bytes += len;
+            }
+            Err(_) => out.kept.push(("-".into(), "remove_failed")),
         }
     }
-    Ok(removed)
+    Ok(out)
 }
 
 /// Like [`collect_files`] but matches only temp names, and does descend into
 /// nothing it cannot prove is a plain directory (no symlink following).
-fn collect_ingest_temps(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
+fn collect_ingest_temps(dir: &Path, out: &mut Vec<(PathBuf, u64)>) -> Result<()> {
     let io_err = |source| IndexError::Io {
         path: dir.to_path_buf(),
         source,
@@ -300,7 +322,8 @@ fn collect_ingest_temps(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
                 .to_str()
                 .is_some_and(ingest::is_ingest_temp_name)
         {
-            out.push(entry.path());
+            let len = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            out.push((entry.path(), len));
         }
     }
     Ok(())

@@ -41,6 +41,9 @@
 //! 代价：回退路径若被打断，拉到一半的部分数据不能跨重启续传。可接受——
 //! 那条路按 commit 批次重试，最多重拉一个文件。
 //!
+//! #1183 起「清空」分两步：启动时 [`retire_blob_store`] 只把整个目录 rename 进回收目录
+//! （O(1)，不拖慢启动），删除由库残留清扫（`residue`，类别 `blobs-retired`）后台做。
+//!
 //! ## staging 的清理规则（2026-08-21 裁决反转，见 MOB-32）
 //!
 //! 两类东西：
@@ -73,9 +76,10 @@
 //! 2. 落地已经超过 `grace`（覆盖「刚 rename 完还没轮到 ingest」以及
 //!    「manifest 比上传晚到」这两个窄窗口）。
 //!
-//! 启动时传**空保护集**：会话是内存态，重启后一个都不剩，此刻任何裸文件
-//! 都无人认领。代价是崩溃重启后可能多传一次——**正确性优先于带宽**，这正是
-//! 旧裁决权衡错的地方。
+//! #1183 起启动时也不再传空保护集：staging 回收并入库残留统一清扫
+//! （`residue::ResidueSweeper`），在 daemon 开始服务之后后台跑，那时可能已有
+//! 会话，所以启动那一轮与每小时那一轮一样带上活会话的保护集
+//! （`BackupEngine::staging_claims`）。重启后会话表为空，结果与原先相同。
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -156,23 +160,119 @@ fn flow_staged_file_hash_hex(name: &str) -> Option<&str> {
     (hash_hex.len() == 64 && hash_hex.bytes().all(|b| b.is_ascii_hexdigit())).then_some(hash_hex)
 }
 
-/// 清空 blob store 目录、扫掉 staging 里的半成品与孤儿。返回释放的字节数。
+/// 回收目录的名字前缀：`.ppf/blobs-retired-<pid>-<纳秒>`（#1183）。
+pub const RETIRED_BLOBS_PREFIX: &str = "blobs-retired-";
+
+/// [`retire_blob_store`] 做了什么（给日志用，不带路径）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlobStoreRetire {
+    /// 没有 `.ppf/blobs`（首次启动 / 上次已收走）。
+    Absent,
+    /// 已整个 rename 进回收目录，等后台删。
+    Retired,
+    /// `.ppf/blobs` 不是真目录（符号链接 / 文件）：不碰。
+    NotADir,
+    /// rename 失败：原样留着，store 照常打开（只是旧内容没收走）。
+    RenameFailed,
+}
+
+/// 启动时把回退路径的 blob store（`.ppf/blobs`）整个 rename 到同一 `.ppf/` 下的回收目录
+/// `blobs-retired-<pid>-<纳秒>`，O(1)、与里面有多少东西无关；真正的删除由库残留清扫
+/// （`residue`，类别 `blobs-retired`）在启动就绪之后后台做。
 ///
-/// 启动专用：`protected` 恒为空集，因为会话是内存态，重启后没有任何裸文件
-/// 还有主（理由见模块文档）。运行期的定期回收走
-/// `BackupEngine::reclaim_staging`，那边会带上活会话的保护集。
+/// 必须在 `Blobs::open` **之前**：store 一旦打开，目录就归 iroh 管（单个 blob 的 delete
+/// 不对外，见模块文档），只能趁它关着时整个挪走。**启动这一刻不可能有传输在飞**，所以
+/// 里面剩的一定是上个会话的垃圾。
 ///
-/// 失败一律吞掉并返回已释放的量：**回收是维护动作，不是业务逻辑**——
-/// 磁盘权限、文件被占用之类的问题绝不能让 daemon 起不来。
-pub fn reclaim_inbox(blobs_dir: &Path, staging_dir: &Path, grace: Duration) -> u64 {
-    let mut freed = dir_size(blobs_dir);
-    if freed > 0 || blobs_dir.exists() {
-        // 整个删掉；store 会在 open 时自己重建目录结构。
-        if std::fs::remove_dir_all(blobs_dir).is_err() {
-            freed = 0; // 没删成，别虚报
+/// 失败一律只回报、不报错：**回收是维护动作，不是业务逻辑**——磁盘权限、文件被占用之类的
+/// 问题绝不能让 daemon 起不来。
+pub fn retire_blob_store(blobs_dir: &Path) -> BlobStoreRetire {
+    let meta = match std::fs::symlink_metadata(blobs_dir) {
+        Ok(m) => m,
+        Err(_) => return BlobStoreRetire::Absent,
+    };
+    if !meta.is_dir() {
+        return BlobStoreRetire::NotADir;
+    }
+    let Some(parent) = blobs_dir.parent() else {
+        return BlobStoreRetire::RenameFailed;
+    };
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let target = parent.join(format!(
+        "{RETIRED_BLOBS_PREFIX}{}-{nanos}",
+        std::process::id()
+    ));
+    match std::fs::rename(blobs_dir, &target) {
+        Ok(()) => BlobStoreRetire::Retired,
+        Err(_) => BlobStoreRetire::RenameFailed,
+    }
+}
+
+/// `blobs-retired-<十进制>-<十进制>` 才是我们的回收目录名。
+pub fn is_retired_blobs_name(name: &str) -> bool {
+    name.strip_prefix(RETIRED_BLOBS_PREFIX)
+        .and_then(|rest| rest.split_once('-'))
+        .is_some_and(|(pid, ns)| {
+            !pid.is_empty()
+                && !ns.is_empty()
+                && pid.bytes().all(|b| b.is_ascii_digit())
+                && ns.bytes().all(|b| b.is_ascii_digit())
+        })
+}
+
+/// #1183：删掉 `ppf_dir` 下所有回收目录（[`retire_blob_store`] 挪过去的旧 blob store）。
+/// 返回 (删掉几个, 释放字节, 保留的原因)。
+///
+/// 判据：`ppf_dir` 的直接子项、名字严格是 `blobs-retired-<数字>-<数字>`、是真目录（不是
+/// 符号链接）。满足就整个删——这是清单里**唯一**整目录删除的一类（owner 2026-10-26 定：
+/// 目录内容是 iroh store 的内部文件，整份都是我们的；改名之后再没有任何人打开它）。
+/// `remove_dir_all` 不跟随里面的符号链接（std 自 1.58 起），只删链接本身。
+pub fn sweep_retired_blob_stores(ppf_dir: &Path) -> (u64, u64, Vec<&'static str>) {
+    let (mut removed, mut freed, mut kept) = (0u64, 0u64, Vec::new());
+    let Ok(entries) = std::fs::read_dir(ppf_dir) else {
+        return (0, 0, kept);
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with(RETIRED_BLOBS_PREFIX) {
+            continue; // `.ppf` 里别的东西不归这一类
+        }
+        if !is_retired_blobs_name(&name) {
+            kept.push("unrecognized_name");
+            continue;
+        }
+        if !entry.file_type().is_ok_and(|t| t.is_dir()) {
+            kept.push("not_a_dir");
+            continue;
+        }
+        let size = tree_size_no_follow(&entry.path());
+        match std::fs::remove_dir_all(entry.path()) {
+            Ok(()) => {
+                removed += 1;
+                freed += size;
+            }
+            Err(_) => kept.push("remove_failed"),
         }
     }
-    freed + sweep_partial_uploads(staging_dir) + sweep_orphans(staging_dir, &HashSet::new(), grace)
+    (removed, freed, kept)
+}
+
+/// 目录树里普通文件的总字节（不跟随符号链接）。
+fn tree_size_no_follow(dir: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|e| match e.file_type() {
+            Ok(t) if t.is_dir() => tree_size_no_follow(&e.path()),
+            Ok(t) if t.is_file() => e.metadata().map(|m| m.len()).unwrap_or(0),
+            _ => 0,
+        })
+        .sum()
 }
 
 /// MOB-32：扫掉 staging 里的**孤儿**——已校验落地（裸文件名 = hash）但
@@ -237,7 +337,14 @@ pub fn sweep_partial_uploads(staging_dir: &Path) -> u64 {
         if !is_partial_upload(&path) {
             continue;
         }
-        let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+        // #1183：只删普通文件——同名的符号链接、目录不碰（metadata 不跟随链接）。
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let size = meta.len();
         if std::fs::remove_file(&path).is_ok() {
             freed += size;
         }
@@ -252,23 +359,6 @@ pub fn sweep_partial_uploads(staging_dir: &Path) -> u64 {
 /// 那边改了后缀这边必须跟着改，否则半成品会被当成可 ingest 的完整文件。
 pub fn is_partial_upload(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()) == Some("upload")
-}
-
-fn dir_size(dir: &Path) -> u64 {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return 0;
-    };
-    entries
-        .flatten()
-        .map(|e| {
-            let p = e.path();
-            if p.is_dir() {
-                dir_size(&p)
-            } else {
-                e.metadata().map(|m| m.len()).unwrap_or(0)
-            }
-        })
-        .sum()
 }
 
 #[cfg(test)]
@@ -306,43 +396,132 @@ mod tests {
         std::fs::remove_dir_all(&d).ok();
     }
 
+    /// #1183：启动时只 rename（O(1)），不删；删由后台清扫做，并如实报字节。
     #[test]
-    fn reclaim_empties_the_blob_store_and_reports_the_bytes() {
-        let root = tmp("reclaim");
-        let blobs = root.join("blobs");
-        let staging = root.join("staging");
+    fn the_blob_store_is_retired_by_rename_and_swept_later() {
+        let ppf = tmp("retire");
+        let blobs = ppf.join("blobs");
         std::fs::create_dir_all(blobs.join("nested")).unwrap();
-        std::fs::create_dir_all(&staging).unwrap();
         std::fs::write(blobs.join("a"), b"0123456789").unwrap(); // 10
         std::fs::write(blobs.join("nested/b"), b"01234").unwrap(); // 5
-        std::fs::write(staging.join("x.upload"), b"012").unwrap(); // 3
-        std::fs::write(staging.join("keep"), b"keepme").unwrap();
 
-        // 宽限期给足：刚落地的成品不许被当成孤儿。
-        let freed = reclaim_inbox(&blobs, &staging, Duration::from_secs(3600));
-        assert_eq!(freed, 18, "blob store 全部 + staging 半成品");
-        assert!(!blobs.exists(), "收件箱必须整个清掉");
-        assert!(
-            staging.join("keep").exists(),
-            "落地不足宽限期的成品不许被回收"
-        );
-        std::fs::remove_dir_all(&root).ok();
+        assert_eq!(retire_blob_store(&blobs), BlobStoreRetire::Retired);
+        assert!(!blobs.exists(), "原位置空出来，store 打开时重建");
+        let retired: Vec<_> = std::fs::read_dir(&ppf)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(retired.len(), 1);
+        assert!(is_retired_blobs_name(&retired[0]), "{retired:?}");
+
+        let (removed, freed, kept) = sweep_retired_blob_stores(&ppf);
+        assert_eq!((removed, freed), (1, 15), "{kept:?}");
+        assert!(std::fs::read_dir(&ppf).unwrap().next().is_none());
+        assert_eq!(retire_blob_store(&blobs), BlobStoreRetire::Absent);
+        std::fs::remove_dir_all(&ppf).ok();
     }
 
-    /// MOB-32：启动回收要把**存量孤儿**清掉——真机上那 547MB 就是这批。
+    /// `.ppf/blobs` 是符号链接：不挪、不删、不跟进去。
+    /// 反证：把 `symlink_metadata` 换成 `metadata`（跟随链接）→ 链接被挪走，红。
     #[test]
-    fn reclaim_sweeps_orphans_past_the_grace_window() {
-        let root = tmp("orphan-startup");
-        let blobs = root.join("blobs");
-        let staging = root.join("staging");
-        std::fs::create_dir_all(&staging).unwrap();
-        std::fs::write(staging.join("orphan"), b"0123456789").unwrap(); // 10
+    fn a_linked_blob_store_is_left_alone() {
+        let ppf = tmp("retire-link");
+        let outside = tmp("retire-link-outside");
+        std::fs::write(outside.join("keep"), b"x").unwrap();
+        for kind in platform::test_support::dir_link_kinds() {
+            let link = ppf.join("blobs");
+            if let Err(e) = kind.make(&outside, &link) {
+                assert!(kind.may_need_privilege, "{}: {e}", kind.name);
+                continue;
+            }
+            assert_eq!(retire_blob_store(&link), BlobStoreRetire::NotADir);
+            assert!(std::fs::symlink_metadata(&link).is_ok());
+            assert!(outside.join("keep").exists());
+            break;
+        }
+        std::fs::remove_dir_all(&ppf).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
 
-        // grace = 0 → 落地即过期。启动时保护集恒为空（会话是内存态）。
-        let freed = reclaim_inbox(&blobs, &staging, Duration::ZERO);
-        assert_eq!(freed, 10, "存量孤儿必须被回收并如实报数");
-        assert!(!staging.join("orphan").exists());
-        std::fs::remove_dir_all(&root).ok();
+    /// 回收目录的判据：名字严格匹配、是真目录；`.ppf` 里别的东西（含名字相近的、链接）一律不碰，
+    /// 链接指向的东西也不碰。
+    /// 反证：把 `is_retired_blobs_name` 放宽成只看前缀 → `blobs-retired-x` 被删，红；
+    /// 去掉 `is_dir` 判断（链接也删）→ 链接被删，红。
+    #[test]
+    fn retired_sweep_only_takes_our_directories() {
+        let ppf = tmp("retired-guards");
+        let outside = tmp("retired-guards-outside");
+        std::fs::write(outside.join("keep"), b"x").unwrap();
+        let keep = [
+            ppf.join("blobs"),
+            ppf.join("flow-blobs"),
+            ppf.join("blobs-retired-x"),
+            ppf.join("blobs-retired-1"),
+            ppf.join("blobs-retired--1"),
+        ];
+        for d in &keep {
+            std::fs::create_dir_all(d.join("inner")).unwrap();
+        }
+        std::fs::write(ppf.join("blobs-retired-2-3"), b"a file, not a dir").unwrap();
+        let mut links = Vec::new();
+        for kind in platform::test_support::dir_link_kinds() {
+            let link = ppf.join("blobs-retired-4-5");
+            if let Err(e) = kind.make(&outside, &link) {
+                assert!(kind.may_need_privilege, "{}: {e}", kind.name);
+                continue;
+            }
+            links.push(link);
+            break;
+        }
+        let (removed, _, mut kept) = sweep_retired_blob_stores(&ppf);
+        assert_eq!(removed, 0, "{kept:?}");
+        kept.sort();
+        let mut want = vec![
+            "not_a_dir",
+            "unrecognized_name",
+            "unrecognized_name",
+            "unrecognized_name",
+        ];
+        if !links.is_empty() {
+            want.push("not_a_dir");
+        }
+        want.sort();
+        assert_eq!(kept, want);
+        for d in &keep {
+            assert!(d.join("inner").is_dir(), "{}", d.display());
+        }
+        assert!(ppf.join("blobs-retired-2-3").is_file());
+        for l in &links {
+            assert!(std::fs::symlink_metadata(l).is_ok());
+        }
+        assert!(outside.join("keep").exists(), "链接指向的东西不碰");
+        std::fs::remove_dir_all(&ppf).ok();
+        std::fs::remove_dir_all(&outside).ok();
+    }
+
+    /// #1183：同名的符号链接 / 目录不是半成品，不碰。
+    /// 反证：去掉 `meta.is_file()` 判断 → 链接被删，红。
+    #[test]
+    fn partial_upload_sweep_leaves_links_and_dirs_alone() {
+        let d = tmp("partial-links");
+        let outside = tmp("partial-links-outside");
+        std::fs::create_dir_all(d.join("dir.upload")).unwrap();
+        let mut links = Vec::new();
+        for kind in platform::test_support::dir_link_kinds() {
+            let link = d.join(format!("{}.upload", kind.name));
+            if let Err(e) = kind.make(&outside, &link) {
+                assert!(kind.may_need_privilege, "{}: {e}", kind.name);
+                continue;
+            }
+            links.push(link);
+        }
+        assert_eq!(sweep_partial_uploads(&d), 0);
+        assert!(d.join("dir.upload").is_dir());
+        for l in &links {
+            assert!(std::fs::symlink_metadata(l).is_ok(), "{}", l.display());
+        }
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::remove_dir_all(&outside).ok();
     }
 
     /// 三道保护逐条：有主的不碰、没过宽限期的不碰、带后缀的不碰。
@@ -373,14 +552,6 @@ mod tests {
         );
         assert!(d.join("just-landed").exists());
         std::fs::remove_dir_all(&d).ok();
-    }
-
-    #[test]
-    fn reclaim_on_a_clean_slate_is_a_noop() {
-        let root = tmp("clean");
-        let freed = reclaim_inbox(&root.join("nope"), &root.join("also-nope"), Duration::ZERO);
-        assert_eq!(0, freed, "首次启动/目录不存在时不许虚报");
-        std::fs::remove_dir_all(&root).ok();
     }
 
     // ── NET-20: flow-staging 孤儿回收 ──────────────────────────────

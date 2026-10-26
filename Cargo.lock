@@ -812,6 +812,7 @@ dependencies = [
  "core-media",
  "image",
  "mime_guess",
+ "platform",
  "proptest",
  "serde_json",
  "storage",
