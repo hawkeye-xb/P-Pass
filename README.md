@@ -166,17 +166,11 @@ $env:PATH = "C:\Program Files\Git\bin;$env:PATH"   # this session only
 `powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\env-check.ps1`
 reports whether this machine is set up (look for the `just.shell` line).
 
-## Contribution rules
+## Contributing
 
-- **Bilingual docs**: user- and contributor-facing documents ship in
-  English with a Chinese sibling (`*.zh.md`), or as clearly-sectioned
-  bilingual files for short READMEs. Internal engineering logs may be
-  Chinese-first; commit messages are English.
-- **Agent-first interfaces**: every feature must be drivable and
-  verifiable through the testclient CLI / daemon IPC without a human —
-  GUIs are skins over those interfaces.
-- **Architecture gates**: `iroh` imports only in `transport`; platform
-  `#[cfg]` only in `platform`; enforced by `tools/arch-check.sh` in CI.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution rules,
+including the DCO sign-off every commit needs. Report security
+vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
 ## License
 
@@ -184,3 +178,7 @@ P-Pass is licensed under the **GNU Affero General Public License v3**
 (AGPL-3.0) — see [LICENSE](LICENSE) for the full text. All crates,
 the Android app, the desktop shell and the website (`site/`) are covered.
 Copyright (C) 2026 Hawkeye XB.
+
+Distribution through app stores such as Apple's App Store is covered by
+an additional statement from the copyright holders: see
+[APP_STORE_EXCEPTION.md](APP_STORE_EXCEPTION.md).
