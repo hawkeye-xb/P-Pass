@@ -47,9 +47,9 @@ mod local_peer;
 #[cfg(target_os = "macos")]
 mod keychain;
 #[cfg(target_os = "macos")]
-mod sealed_version;
-#[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+mod sealed_version;
 // QA-09 迁移（#211）：macOS 与 Linux 共享的 unix 实现。迁过来的分叉里有
 // 3 处是 `#[cfg(unix)]`（同时覆盖两者），没有共享模块就得抄两遍。
 mod signal;
