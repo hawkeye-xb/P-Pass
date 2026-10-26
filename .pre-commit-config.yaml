@@ -2,12 +2,14 @@
 # pre-commit 在加载配置阶段就 InvalidConfigError 退出 —— 于是 gitleaks 根本
 # 走不到，而装了 hook 的人每次提交都被硬挡。本仓的 hook 全是本机可执行文件
 # （language: system），所以 repo 应为 `local`。
+# #182: 显式 `--config .gitleaks.toml`（不靠隐式发现）：与 CI 同一份规则一目了然，
+# 且 hook 从别的工作目录触发时也不会静默退回默认规则；`--ignore-gitleaks-allow` 让行内豁免失效。
 repos:
   - repo: local
     hooks:
       - id: gitleaks
         name: gitleaks
-        entry: gitleaks protect --staged --verbose
+        entry: gitleaks protect --staged --verbose --config .gitleaks.toml --ignore-gitleaks-allow
         language: system
         pass_filenames: false
         always_run: true
