@@ -27,7 +27,7 @@ rc=0
   --lockfile apps/desktop/src-tauri/Cargo.lock \
   --lockfile "$TMP/gradle-release/gradle.lockfile" > "$TMP/osv.json" || rc=$?
 # osv-scanner：0 = 没有漏洞，1 = 有漏洞；其余（127 出错 / 128 没找到任何包）都是扫描本身坏了。
-[ "$rc" -le 1 ] || { echo "::error::osv-scanner 退出码 $rc（不是「有 / 没有漏洞」）" >&2; exit 1; }
+[ "$rc" -le 1 ] || { echo "::error::osv-scanner 退出码 ${rc}（不是「有 / 没有漏洞」）" >&2; exit 1; }
 
 jq -r '
   .results[]? | .packages[]? | .package as $k | .vulnerabilities[]?
