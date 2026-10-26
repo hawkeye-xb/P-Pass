@@ -334,8 +334,11 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
         {
           id: 'contact',
           q: 'Where do I ask about anything else?',
-          a: ['Open an issue on GitHub and we will follow up.'],
-          more: [{ label: 'GitHub Issues', href: 'https://github.com/hawkeye-xb/P-Pass/issues' }],
+          a: ['Email ppass@hawkeye-xb.com, or open an issue on GitHub. Either way we will follow up.'],
+          more: [
+            { label: 'ppass@hawkeye-xb.com', href: 'mailto:ppass@hawkeye-xb.com' },
+            { label: 'GitHub Issues', href: 'https://github.com/hawkeye-xb/P-Pass/issues' },
+          ],
         },
       ],
     },
@@ -586,8 +589,11 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
         {
           id: 'contact',
           q: '其他问题在哪里提问？',
-          a: ['到 GitHub 提 issue，我们会跟进。'],
-          more: [{ label: 'GitHub Issues', href: 'https://github.com/hawkeye-xb/P-Pass/issues' }],
+          a: ['发邮件到 ppass@hawkeye-xb.com，或到 GitHub 提 issue，我们都会跟进。'],
+          more: [
+            { label: 'ppass@hawkeye-xb.com', href: 'mailto:ppass@hawkeye-xb.com' },
+            { label: 'GitHub Issues', href: 'https://github.com/hawkeye-xb/P-Pass/issues' },
+          ],
         },
       ],
     },
