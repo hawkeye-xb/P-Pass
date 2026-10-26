@@ -170,7 +170,9 @@ daemon 是 `config.toml` 与诊断包的唯一写者：照片库位置只经 IPC
 ### 3.6 supersede（原地替换元数据，#851）
 
 - `FlowDelivery::supersede` → `core_index::supersede`：只拉元数据区间，区间总长 ≤ `MAX_REGION_BYTES`（否则 `region_too_large`）；校验长度相同、差异位置旧副本为 0、整份 hash 等于新 hash；只替换上传者自己的副本。
-- 旧副本移进 `.ppf/superseded/`（`QUARANTINE_DIR`），不硬删；**目前没有回收隔离区的任务**。崩溃由启动时 `Ingestor::finish_pending_swaps` 补完。成功写审计 `asset.superseded`（隐藏，§6.4）。
+- 不留旧副本（#1182）：B 在 `.ppf/supersede-staging/` 拼好、核对通过后，一个事务里改索引（删 A 行、插 B 行、记别名 A→B、记待换），再 rename 覆盖 `rel_path`，A 随之消失，库占盘仍是 1x。不需要保留 A：替换前已核对 B 包含 A 的全部信息，崩溃补完只用 staged 文件与待换记录。`rel_path` 上任何时刻都有文件（rename 之前是 A，之后是 B）。
+- 崩溃由启动时 `Ingestor::finish_pending_swaps` 补完。成功写审计 `asset.superseded`（隐藏，§6.4），内容为 `old_hash` / `rel_path` / `fetched_bytes` / `size`。
+- 旧版遗留：v2026.10.4 起到 #1182 之前，旧副本会留在 `<库>/.ppf/superseded/<旧指纹 hex>.<扩展名>`（`core_index::LEGACY_SUPERSEDED_DIR`），现在没有写入方。启动时 `core_index::sweep_legacy_superseded` 逐个判：文件名严格匹配、别名 old→new 在、new 的 asset 行在且其 `rel_path` 在盘上、new 没有待换记录——全部满足才删；否则不删，日志记指纹前 8 位与原因（不打路径）。目录删空后 `remove_dir`（不递归删除）。
 
 ### 3.7 `backup.presence` 与 offer 判重是两个判据（B5）
 
@@ -234,7 +236,7 @@ daemon 是 `config.toml` 与诊断包的唯一写者：照片库位置只经 IPC
 
 ### 5.4 启动与周期任务
 
-- 启动顺序（`daemon` 的 `main`）：子命令短路 → 数据目录迁移 → stderr 接管 → 日志 → `Config::load` → 库目录检查 → `purge_legacy_anon_id` → 开库 → 身份 → `claim_single_instance`（同版本退位 exit 0）→ transport bind → 启动回收（`reclaim_inbox`、flow-staging 孤儿）→ 启动对账（`finish_pending_swaps`、`core_index::sweep_ingest_residue`、`reconcile.run_once`）→ 常驻任务。
+- 启动顺序（`daemon` 的 `main`）：子命令短路 → 数据目录迁移 → stderr 接管 → 日志 → `Config::load` → 库目录检查 → `purge_legacy_anon_id` → 开库 → 身份 → `claim_single_instance`（同版本退位 exit 0）→ transport bind → 启动回收（`reclaim_inbox`、flow-staging 孤儿）→ 启动对账（`finish_pending_swaps`、`core_index::sweep_legacy_superseded`、`core_index::sweep_ingest_residue`、`reconcile.run_once`）→ 常驻任务。
 - `sweep_ingest_residue`（#1047）只在启动跑：删除 `originals/` 下文件名严格匹配 `.ppf-ingest-*.part`、不是符号链接、且没有索引行指向的文件。
 - 常驻任务清单：
 

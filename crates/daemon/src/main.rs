@@ -770,6 +770,25 @@ async fn main() -> anyhow::Result<()> {
         Ok(n) => tracing::info!("#851: 补完 {n} 条未换完的原图替换"),
         Err(e) => tracing::warn!("#851: 补完原图替换失败，下次启动再试: {e}"),
     }
+    // #1182：旧版把被替换掉的旧副本留在库里 `.ppf/superseded/`、永不回收（占盘翻倍）。必须在
+    // `finish_pending_swaps` 之后：判据要求原图已在 rel_path 上、没有未换完的替换。
+    // 日志只给计数与指纹前 8 位，不打路径。
+    match core_index::sweep_legacy_superseded(&db, &data_dir).await {
+        Ok(r) => {
+            if r.removed > 0 || !r.kept.is_empty() {
+                tracing::info!(
+                    "#1182: 清理旧版遗留的已替换旧副本 {} 个，保留 {} 个（目录已删: {}）",
+                    r.removed,
+                    r.kept.len(),
+                    r.dir_removed
+                );
+            }
+            for (tag, reason) in &r.kept {
+                tracing::warn!("#1182: 保留遗留旧副本 {tag}…: {reason}");
+            }
+        }
+        Err(e) => tracing::warn!("#1182: 清理遗留旧副本失败，下次启动再试: {e}"),
+    }
     // #1047：清掉上次入库被打断（kill -9 / 断电）留下的临时文件。必须在启动
     // 对账之前、且在 watcher / router / IPC 能触发入库之前——运行期正在写的
     // 临时文件与残留长得一模一样，只有此刻能确定没有入库在进行。判据见
