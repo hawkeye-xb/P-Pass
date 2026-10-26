@@ -366,7 +366,7 @@ final class LiveHarness {
         let client = try CtrlClient.bind(config: CtrlConfig(secretKey: nil, relayUrls: [], offline: true, bindTimeoutMs: 0))
         defer { client.shutdown() }
         deskNodeInLink = try client.nodeId()
-        link = "ppf://pair?node=\(deskNodeInLink)&t=deadbeef"
+        link = "ppf://pair?node=\(deskNodeInLink)&t=deadbeefdeadbeefdeadbeef"
         store = PairingStore(root: dir)
         desk = FakeDesk(steps)
         let transport = DeskTransport(desk)

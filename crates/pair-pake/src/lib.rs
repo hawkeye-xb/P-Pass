@@ -71,7 +71,7 @@ fn password(code: &str, token: &[u8]) -> Result<Password, PakeError> {
     Ok(Password::new(w))
 }
 
-/// 对端消息：长度、角色字节、点可解压且不是低阶点。
+/// 对端消息：长度、角色字节、点可解压、不是低阶点、且在素数阶子群里（RFC 9382 §7；#1149）。
 fn check_peer_msg(msg: &[u8], side: u8) -> Result<(), PakeError> {
     if msg.len() != MSG_LEN || msg[0] != side {
         return Err(PakeError::BadMessage);
@@ -81,7 +81,10 @@ fn check_peer_msg(msg: &[u8], side: u8) -> Result<(), PakeError> {
     let point = curve25519_dalek::edwards::CompressedEdwardsY(bytes)
         .decompress()
         .ok_or(PakeError::BadMessage)?;
-    if point.is_small_order() {
+    // 低阶点（含单位元）与「素数阶点 + 低阶分量」的混合点都不是合法的 SPAKE2 消息。
+    // `is_torsion_free` 是 dalek 现成的素数阶子群判定（点乘 ℓ 得单位元），低阶点
+    // 单独列出只为保留原来的明确语义。
+    if point.is_small_order() || !point.is_torsion_free() {
         return Err(PakeError::BadMessage);
     }
     Ok(())
@@ -408,6 +411,37 @@ mod tests {
                 "phone must reject small-order Y"
             );
         }
+    }
+
+    /// #1149：混合阶点（素数阶点 + 低阶分量：不是低阶点，但不在素数阶子群里）两侧都拒绝；
+    /// 同一个素数阶点本身仍然正常通过（防止把校验写成恒拒绝）。
+    /// 反证：把 `!point.is_torsion_free()` 去掉 ⇒ 混合点被放行 ⇒ 变红。
+    #[test]
+    fn points_outside_the_prime_order_subgroup_are_rejected() {
+        use curve25519_dalek::constants::{ED25519_BASEPOINT_POINT, EIGHT_TORSION};
+        use curve25519_dalek::scalar::Scalar;
+        let prime_order = ED25519_BASEPOINT_POINT * Scalar::from(0x1234_5678u64);
+        assert!(prime_order.is_torsion_free());
+        // EIGHT_TORSION[0] 是单位元，[1..] 是非平凡低阶点。
+        for t in &EIGHT_TORSION[1..] {
+            let mixed = prime_order + t;
+            assert!(!mixed.is_small_order() && !mixed.is_torsion_free());
+            let compressed = mixed.compress().to_bytes();
+            let mut as_a = vec![SIDE_A];
+            as_a.extend_from_slice(&compressed);
+            assert!(matches!(
+                Desktop::respond("123456", &TOKEN, PHONE, DESK, &as_a),
+                Err(PakeError::BadMessage)
+            ));
+            let (p, _) = PhoneStart::start("123456", &TOKEN, PHONE, DESK).unwrap();
+            let mut as_b = vec![SIDE_B];
+            as_b.extend_from_slice(&compressed);
+            assert!(matches!(p.finish(&as_b), Err(PakeError::BadMessage)));
+        }
+        // 对照：素数阶点本身通过校验。
+        let mut ok = vec![SIDE_A];
+        ok.extend_from_slice(&prime_order.compress().to_bytes());
+        assert_eq!(check_peer_msg(&ok, SIDE_A), Ok(()));
     }
 
     /// 消息格式：长度不对、角色字节不对、不是合法点，都拒绝。

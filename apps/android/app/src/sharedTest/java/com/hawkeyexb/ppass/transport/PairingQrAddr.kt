@@ -12,12 +12,8 @@
 // 下次协议再变只改这里。
 package com.hawkeyexb.ppass.transport
 
-/** 与 `PairFlow.pairWithQr` 同源的地址重建：新码走 node+relay，旧码的
- *  `a=` 仍兼容。两者都没有 = 配对码无法解析，明确失败而不是 NPE。 */
-fun addrOf(qr: PairingQr): PeerAddrParts =
-    qr.addr
-        ?: qr.relayUrl?.let { PeerAddrParts(qr.nodeIdHex, it, emptyList()) }
-        ?: error(
-            "pairing code carries neither a= nor r= — " +
-                "daemon and app versions disagree (see H-10b)"
-        )
+import com.hawkeyexb.ppass.ffi.parsePairLink
+
+/** 与 `PairFlow.pairWithQr` 同源：配对串交给 Rust 核心的唯一解析器（#1149），再从它给出的
+ *  PeerAddr token 取可连接地址。畸形串直接抛出，不再有手写解析。 */
+fun addrOf(qr: String): PeerAddrParts = parsePeerAddrToken(parsePairLink(qr.trim()).peerToken)

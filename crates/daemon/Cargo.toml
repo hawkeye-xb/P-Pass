@@ -10,6 +10,8 @@ proto = { path = "../proto" }
 # #1118：配对验证码（SPAKE2 + 密钥确认），与手机共用同一份内核。
 pair-pake = { path = "../pair-pake" }
 blake3 = "1"
+# #1149：自报设备名清洗 Unicode 格式字符（Cf）——标准库没有通用类别查询；这个 crate 已在依赖树里。
+unicode-properties = { version = "0.1", default-features = false, features = ["general-category"] }
 transport = { path = "../transport" }
 storage = { path = "../storage" }
 core-index = { path = "../core-index" }
