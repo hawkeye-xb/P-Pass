@@ -190,6 +190,8 @@ jobs:
 
   macos-arm64:
     name: "macOS arm64 (签名门控)"
+    # #1151：签名 secret 放在 environment 级（不设人工审批，只限 v* tag 与 main 读取）。
+    environment: release-apple
     runs-on: macos-14
     # #772：22 次成功发版里本 job 平均 11.4 分钟、最长 13 分钟（含缓存）；冷缓存的整套
     # release 构建 + notarytool 自身的 15 分钟上限都要装得下，取 45。没有这一行时挂住要等
@@ -693,6 +695,8 @@ jobs:
   # 本机实测 IllegalArgumentException）。
   android:
     name: "Android (signed APK)"
+    # #1151：签名 secret 放在 environment 级（不设人工审批，只限 v* tag 与 main 读取）。
+    environment: release-android
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # CI-01②: 平台门控（同 macos job 语义）。
@@ -1195,6 +1199,8 @@ jobs:
   # ── lane 1: Android（最快，且带着自动更新链路） ──
   upload-android:
     name: "上传 Android + 更新 manifest"
+    # #1151：签名 secret 放在 environment 级（不设人工审批，只限 v* tag 与 main 读取）。
+    environment: release-update-signing
     needs: [create-draft, android, android-reuse]
     # #1187：显式要求草稿建成——create-draft 被发版前验证挡下时，上传不许照跑。
     if: ${{ !cancelled() && needs.create-draft.result == 'success' && (needs.android.result == 'success' || needs.android-reuse.result == 'success') }}
@@ -1415,6 +1421,8 @@ jobs:
   # signer、同一个 key、同一个 --sig-dir 约定），重写不引入新口径。
   finalize-manifest:
     name: "组装桌面更新 manifest（android + darwin）"
+    # #1151：签名 secret 放在 environment 级（不设人工审批，只限 v* tag 与 main 读取）。
+    environment: release-update-signing
     # #852：needs plan-builds——test tag 上没改动的桌面端判 skip，compose 据此不要求 mac 产物。
     needs: [plan-builds, create-draft, upload-android, upload-macos]
     # DESK-05 同款容错：dispatch 单平台时其余 lane skipped，`needs` 里有
@@ -1523,6 +1531,8 @@ jobs:
   # 现在本 job 不碰任何别的端的清单。
   finalize-manifest-windows:
     name: "组装 Windows 更新清单（#788②）"
+    # #1151：签名 secret 放在 environment 级（不设人工审批，只限 v* tag 与 main 读取）。
+    environment: release-update-signing
     needs: [create-draft, upload-windows]
     if: ${{ !cancelled() && needs.upload-windows.result == 'success' && needs.create-draft.result == 'success' }}
     runs-on: ubuntu-latest

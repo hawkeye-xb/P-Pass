@@ -5,6 +5,7 @@
   ① 只有 `attest` job 拿 id-token / attestations 权限——跑第三方构建依赖的 job 铸不出来源证明；
   ② 签名凭据（Apple p12 与密码、Android keystore 与密码 / 别名）只允许出现在白名单步骤里；
      job 级 env 只许以 `secrets.X != ''` 的布尔形式引用；
+  ④ 引用签名 secret / 更新私钥的 job 必须绑定约定的 environment（#1151，不设审批、限 v* tag 与 main）；
   ③ 执行依赖代码的步骤（pnpm / npm / gradlew / cargo / brew）一律排在引入签名凭据的步骤之前，
      且持有凭据的步骤本身不执行依赖代码。
 
@@ -38,6 +39,15 @@ DEP_CODE = re.compile(r"\b(pnpm|npm|npx|yarn|gradlew|cargo|brew|vcpkg)\b|tools/b
 # 持有凭据的步骤里，下面这些是允许出现的（签名本身用的脚本）。
 SIGN_PHASE_OK = re.compile(r"tools/bundle-desktop-macos\.sh")
 ATTEST_ONLY = ("id-token", "attestations")
+# #1151：签名 secret 按 environment 隔离（不设审批，限 v* tag 与 main）；job → environment。
+ENV_BINDING = {
+    "macos-arm64": "release-apple",
+    "android": "release-android",
+    "upload-android": "release-update-signing",
+    "finalize-manifest": "release-update-signing",
+    "finalize-manifest-windows": "release-update-signing",
+}
+UPDATE_KEYS = ("UPDATE_SIGNING_KEY", "UPDATE_SIGNING_KEY_TEST")
 
 
 def secret_refs(obj) -> set[str]:
@@ -84,6 +94,17 @@ def check(wf: dict) -> list[str]:
                 run = st.get("run", "") or ""
                 if i > first and DEP_CODE.search(SIGN_PHASE_OK.sub("", run)):
                     bad.append(f"{jid} /「{st.get('name')}」：依赖代码步骤排在了签名凭据步骤之后")
+    # ④ 签名 secret 只在绑定了 environment 的 job 里出现
+    for jid, job in wf["jobs"].items():
+        used = secret_refs(job) & (set(SIGNING) | set(UPDATE_KEYS))
+        if used and jid not in ENV_BINDING:
+            bad.append(f"{jid}：引用了签名 secret {sorted(used)} 但不在 environment 绑定表里")
+    for jid, env in ENV_BINDING.items():
+        job = wf["jobs"].get(jid)
+        if job is None:
+            bad.append(f"{jid}：绑定表里的 job 不存在")
+        elif job.get("environment") != env:
+            bad.append(f"{jid}：environment 应为 {env}，实际 {job.get('environment')!r}")
     return bad
 
 
@@ -120,6 +141,11 @@ def self_test(wf: dict) -> int:
         steps.append({"name": "late", "run": "pnpm install"})
 
     expect("依赖安装排在签名步骤之后", late_pnpm, "排在了签名凭据步骤之后")
+    expect("签名 job 丢了 environment",
+           lambda w: w["jobs"]["android"].pop("environment", None), "environment 应为 release-android")
+    expect("别的 job 偷用更新私钥",
+           lambda w: w["jobs"]["create-draft"]["steps"][0].setdefault("env", {}).update(
+               K="${{ secrets.UPDATE_SIGNING_KEY }}"), "不在 environment 绑定表里")
 
     def sign_runs_gradle(w):
         step(w, "android", "Sign APK (keystore only here)")["run"] += "\n./gradlew build"
