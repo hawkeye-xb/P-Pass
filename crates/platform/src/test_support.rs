@@ -120,8 +120,10 @@ fn windows_junction(target: &Path, link: &Path) -> io::Result<()> {
             "/C",
             "mklink",
             "/J",
-            &link.to_string_lossy(),
-            &target.to_string_lossy(),
+            // cmd 把参数里的 `/` 当开关（`Path::join("a/b")` 在 Windows 上会留下 `/`），
+            // 传给 mklink 前统一换成 `\`。
+            &link.to_string_lossy().replace('/', "\\"),
+            &target.to_string_lossy().replace('/', "\\"),
         ])
         .output()?;
     if out.status.success() && link.exists() {

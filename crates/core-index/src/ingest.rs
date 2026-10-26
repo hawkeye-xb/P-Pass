@@ -458,6 +458,20 @@ pub(crate) fn is_ingest_temp_name(name: &str) -> bool {
         && name.ends_with(INGEST_TEMP_SUFFIX)
 }
 
+/// #1183：入库临时名里写入进程的 pid（`.ppf-ingest-<pid>-<纳秒>.part`，见
+/// [`publish_no_clobber`]）。不是这个形态（旧版或别的写法）回 `None`。
+pub(crate) fn ingest_temp_pid(name: &str) -> Option<u32> {
+    if !is_ingest_temp_name(name) {
+        return None;
+    }
+    let middle = &name[INGEST_TEMP_PREFIX.len()..name.len() - INGEST_TEMP_SUFFIX.len()];
+    let (pid, _) = middle.split_once('-')?;
+    if pid.is_empty() || !pid.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    pid.parse().ok()
+}
+
 /// 把 `src` 的内容以 `dest` 为名**不覆盖地**放进目录（#1047）。
 ///
 /// 目标是「`dest` 这个名字一出现，里面就是完整内容」——没有「先占位 0 字节、

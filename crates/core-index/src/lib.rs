@@ -22,8 +22,8 @@ pub use ingest::{device_dir, IncomingFile, IngestOutcome, Ingestor};
 pub use media::{media_kind, media_type_for, MediaKind, NON_MEDIA_IMAGE_TYPES};
 pub use rebuild::{adopt_orphans, rebuild, sweep_ingest_residue, AdoptReport, RebuildReport};
 pub use supersede::{
-    sweep_legacy_superseded, LegacySupersededSweep, SupersedeApplied, SupersedeCheck,
-    SupersedePlan, LEGACY_SUPERSEDED_DIR, MAX_REGION_BYTES,
+    sweep_supersede_staging, sweep_superseded_residue, ResidueSweep, SupersedeApplied,
+    SupersedeCheck, SupersedePlan, MAX_REGION_BYTES, SUPERSEDED_RESIDUE_DIR, SUPERSEDE_STAGING_DIR,
 };
 pub use timeline::timeline_page;
 

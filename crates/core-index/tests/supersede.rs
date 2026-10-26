@@ -5,8 +5,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use core_index::{
-    sweep_legacy_superseded, IncomingFile, IngestOutcome, Ingestor, SupersedeApplied,
-    SupersedeCheck, LEGACY_SUPERSEDED_DIR,
+    sweep_supersede_staging, sweep_superseded_residue, IncomingFile, IngestOutcome, Ingestor,
+    SupersedeApplied, SupersedeCheck, SUPERSEDED_RESIDUE_DIR, SUPERSEDE_STAGING_DIR,
 };
 use storage::Db;
 
@@ -147,7 +147,7 @@ async fn replaces(name: &str) {
     // #1182：不留旧副本，库占盘仍是 1x（B 与 A 等长）。
     // 反证：恢复把 A 硬链接 / 复制进 `.ppf/superseded/` 的那段 → 两条断言都红。
     assert!(
-        !l.root.join(LEGACY_SUPERSEDED_DIR).exists(),
+        !l.root.join(SUPERSEDED_RESIDUE_DIR).exists(),
         "{name}: 不再产生 .ppf/superseded/"
     );
     assert_eq!(
@@ -441,9 +441,9 @@ async fn a_metadata_region_over_eight_mib_is_refused_as_too_large() {
     }
 }
 
-// ── #1182：旧版遗留在 `.ppf/superseded/` 的旧副本，启动时按判据清掉 ──────────────
+// ── #1182 / #1183：旧版留在 `.ppf/superseded/` 的旧副本，残留清扫按判据清掉 ──────────
 
-/// 走一遍真实替换，再按旧版的样子把 A 放进遗留目录。返回 (库, A 的指纹, B 的 rel_path, 遗留文件)。
+/// 走一遍真实替换，再按旧版的样子把 A 放进残留目录。返回 (库, A 的指纹, B 的 rel_path, 残留文件)。
 async fn library_with_legacy_copy() -> (Lib, [u8; 32], String, PathBuf) {
     let l = lib().await;
     let (original, redacted) = (
@@ -471,7 +471,7 @@ async fn library_with_legacy_copy() -> (Lib, [u8; 32], String, PathBuf) {
     };
     let legacy = l
         .root
-        .join(LEGACY_SUPERSEDED_DIR)
+        .join(SUPERSEDED_RESIDUE_DIR)
         .join(format!("{}.jpg", hex(&a)));
     fs::create_dir_all(legacy.parent().unwrap()).unwrap();
     fs::write(&legacy, &redacted).unwrap();
@@ -486,19 +486,19 @@ fn hex(h: &[u8]) -> String {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_legacy_superseded_copy_is_removed_when_its_original_is_in_the_library() {
     let (l, _a, rel, legacy) = library_with_legacy_copy().await;
-    let report = sweep_legacy_superseded(&l.db, &l.root).await.unwrap();
+    let report = sweep_superseded_residue(&l.db, &l.root).await.unwrap();
     assert_eq!(report.removed, 1, "{report:?}");
     assert!(report.kept.is_empty(), "{report:?}");
     assert!(!legacy.exists());
     assert!(report.dir_removed);
-    assert!(!l.root.join(LEGACY_SUPERSEDED_DIR).exists());
+    assert!(!l.root.join(SUPERSEDED_RESIDUE_DIR).exists());
     assert_eq!(
         fs::read(l.root.join(&rel)).unwrap(),
         fixture("jpeg.jpg", "original"),
         "原图不动"
     );
     // 再跑一次：目录已不在，什么都不做。
-    let again = sweep_legacy_superseded(&l.db, &l.root).await.unwrap();
+    let again = sweep_superseded_residue(&l.db, &l.root).await.unwrap();
     assert_eq!(again.removed, 0);
 }
 
@@ -508,12 +508,12 @@ async fn a_legacy_copy_without_an_alias_is_kept() {
     let (l, _a, _rel, legacy) = library_with_legacy_copy().await;
     let stray = legacy.with_file_name(format!("{}.jpg", hex(&[7u8; 32])));
     fs::rename(&legacy, &stray).unwrap();
-    let report = sweep_legacy_superseded(&l.db, &l.root).await.unwrap();
+    let report = sweep_superseded_residue(&l.db, &l.root).await.unwrap();
     assert_eq!(report.removed, 0);
     assert_eq!(report.kept, vec![("07070707".to_string(), "no_alias")]);
     assert!(stray.exists());
     assert!(!report.dir_removed);
-    assert!(l.root.join(LEGACY_SUPERSEDED_DIR).is_dir());
+    assert!(l.root.join(SUPERSEDED_RESIDUE_DIR).is_dir());
 }
 
 // 别名在、但 B 的文件不在盘上（外部删除、对账还没跑）：A 可能是这张照片仅剩的一份，不删。
@@ -522,7 +522,7 @@ async fn a_legacy_copy_without_an_alias_is_kept() {
 async fn a_legacy_copy_whose_original_file_is_gone_is_kept() {
     let (l, a, rel, legacy) = library_with_legacy_copy().await;
     fs::remove_file(l.root.join(&rel)).unwrap();
-    let report = sweep_legacy_superseded(&l.db, &l.root).await.unwrap();
+    let report = sweep_superseded_residue(&l.db, &l.root).await.unwrap();
     assert_eq!(report.removed, 0);
     assert_eq!(
         report.kept,
@@ -539,7 +539,7 @@ async fn files_in_the_legacy_dir_that_are_not_ours_are_kept() {
     let dir = legacy.parent().unwrap().to_path_buf();
     fs::write(dir.join("notes.txt"), b"x").unwrap();
     fs::create_dir(dir.join("sub")).unwrap();
-    let report = sweep_legacy_superseded(&l.db, &l.root).await.unwrap();
+    let report = sweep_superseded_residue(&l.db, &l.root).await.unwrap();
     assert_eq!(report.removed, 1, "{report:?}");
     let mut reasons: Vec<_> = report.kept.iter().map(|(_, r)| *r).collect();
     reasons.sort();
@@ -551,4 +551,206 @@ async fn files_in_the_legacy_dir_that_are_not_ours_are_kept() {
     assert!(dir.join("notes.txt").exists());
     assert!(dir.join("sub").is_dir());
     assert!(!report.dir_removed);
+}
+
+/// 名字匹配的符号链接 / 目录链接不删（也不跟进去）。
+/// 反证：把「不是普通文件就跳过」那条去掉 → 名字是指纹、别名在，链接被 `remove_file` 删掉，红。
+#[tokio::test(flavor = "multi_thread")]
+async fn a_link_in_the_superseded_dir_is_kept() {
+    let (l, _a, _rel, legacy) = library_with_legacy_copy().await;
+    let outside = l._dir.path().join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    fs::remove_file(&legacy).unwrap();
+    for kind in platform::test_support::dir_link_kinds() {
+        if let Err(e) = kind.make(&outside, &legacy) {
+            assert!(kind.may_need_privilege, "{}: {e}", kind.name);
+            continue;
+        }
+        let report = sweep_superseded_residue(&l.db, &l.root).await.unwrap();
+        assert_eq!(report.removed, 0, "{}: {report:?}", kind.name);
+        assert_eq!(report.kept, vec![("-".to_string(), "not_a_file")]);
+        assert!(fs::symlink_metadata(&legacy).is_ok());
+        assert!(outside.is_dir());
+        // 下一种链接形态用同一个名字：先把这一个拆掉。
+        let _ = fs::remove_dir(&legacy).or_else(|_| fs::remove_file(&legacy));
+    }
+}
+
+// ── #1183：apply_supersede 出错路径当场删自己的 staged ─────────────────────────────
+
+fn staging_files(root: &Path) -> Vec<String> {
+    let dir = root.join(SUPERSEDE_STAGING_DIR);
+    let Ok(rd) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    rd.map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect()
+}
+
+/// 索引事务报错（这里用「B 的指纹已被另一行占着」触发主键冲突）：整体回滚、没有待换记录，
+/// staged 当场删掉，库里一切照旧。
+/// 反证：去掉 `supersede_asset` 出错分支里的 `remove_file` → staged 留下，红。
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_index_transaction_removes_its_staged_file() {
+    let l = lib().await;
+    let (original, redacted) = (
+        fixture("jpeg.jpg", "original"),
+        fixture("jpeg.jpg", "redacted"),
+    );
+    let rel = ingest_redacted(&l, "jpeg.jpg", &redacted).await;
+    let (a, b) = (h(&redacted), h(&original));
+    let SupersedeCheck::Ready(plan) = l.ing.plan_supersede(&a, &b, &DEV_A).await.unwrap() else {
+        panic!("expected Ready")
+    };
+    // 故障注入：另一行已经用了 B 的指纹 ⇒ 事务里 INSERT 撞主键。
+    let blocker = storage::Asset {
+        hash: b.to_vec(),
+        rel_path: "originals/elsewhere.jpg".into(),
+        ..l.db.get_asset(&a).await.unwrap().unwrap()
+    };
+    l.db.insert_asset(&blocker).await.unwrap();
+
+    let out = l
+        .ing
+        .apply_supersede(
+            &plan,
+            &b,
+            original.len() as u64,
+            &pieces_for(&plan.ranges, &original),
+            1,
+        )
+        .await;
+    assert!(out.is_err(), "事务应当失败: {out:?}");
+    assert_eq!(
+        staging_files(&l.root),
+        Vec::<String>::new(),
+        "staged 当场删掉"
+    );
+    assert!(l.db.pending_swaps().await.unwrap().is_empty());
+    assert_eq!(fs::read(l.root.join(&rel)).unwrap(), redacted, "A 不动");
+    assert!(
+        l.db.get_asset(&a).await.unwrap().is_some(),
+        "旧行还在（回滚）"
+    );
+}
+
+// ── #1183：supersede-staging 里没人要的 staged 由残留清扫删 ─────────────────────────
+
+fn staged(root: &Path, name: &str, bytes: &[u8]) -> PathBuf {
+    let p = root.join(SUPERSEDE_STAGING_DIR).join(name);
+    fs::create_dir_all(p.parent().unwrap()).unwrap();
+    fs::write(&p, bytes).unwrap();
+    p
+}
+
+/// 事务提交前崩溃留下的（旧版命名 `<hex>.part` 与别的进程的 `<hex>-<pid>.part`）：删。
+/// 反证：清扫函数什么都不删 → 本条红。
+#[tokio::test(flavor = "multi_thread")]
+async fn orphan_staged_files_from_an_earlier_run_are_removed() {
+    let l = lib().await;
+    let other = std::process::id().wrapping_add(1);
+    let old_style = staged(&l.root, &format!("{}.part", hex(&[1; 32])), b"12345");
+    let other_pid = staged(&l.root, &format!("{}-{other}.part", hex(&[2; 32])), b"678");
+    let report = sweep_supersede_staging(&l.db, &l.root).await.unwrap();
+    assert_eq!(report.removed, 2, "{report:?}");
+    assert_eq!(report.freed_bytes, 8);
+    assert!(report.kept.is_empty(), "{report:?}");
+    assert!(!old_style.exists() && !other_pid.exists());
+    assert!(l.root.join(SUPERSEDE_STAGING_DIR).is_dir(), "目录本身不删");
+}
+
+/// 有待换记录的（按 staged_path 或按新指纹认）留给 finish_pending_swaps，不删。
+/// 反证：去掉 `swap_pending` 判据 → 两份都被删，补完就没东西可换了，红。
+#[tokio::test(flavor = "multi_thread")]
+async fn staged_files_with_a_pending_swap_are_kept() {
+    let l = lib().await;
+    let (original, redacted) = (
+        fixture("jpeg.jpg", "original"),
+        fixture("jpeg.jpg", "redacted"),
+    );
+    ingest_redacted(&l, "jpeg.jpg", &redacted).await;
+    let (a, b) = (h(&redacted), h(&original));
+    let other = std::process::id().wrapping_add(1);
+    let name = format!("{}-{other}.part", hex(&b));
+    let by_path = staged(&l.root, &name, &original);
+    // 同一个新指纹、别的名字（例如旧版命名）：按新指纹也认作有主。
+    let by_hash = staged(&l.root, &format!("{}.part", hex(&b)), &original);
+    let asset = l.db.get_asset(&a).await.unwrap().unwrap();
+    l.db.supersede_asset(
+        &a,
+        &storage::Asset {
+            hash: b.to_vec(),
+            ..asset
+        },
+        &format!("{SUPERSEDE_STAGING_DIR}/{name}"),
+        1,
+    )
+    .await
+    .unwrap();
+    let report = sweep_supersede_staging(&l.db, &l.root).await.unwrap();
+    assert_eq!(report.removed, 0, "{report:?}");
+    let tag = hex(&b)[..8].to_string();
+    assert_eq!(
+        report.kept,
+        vec![(tag.clone(), "swap_pending"), (tag, "swap_pending")]
+    );
+    assert!(by_path.exists() && by_hash.exists());
+}
+
+/// 本进程写的（pid = 自己）可能正在拼接、事务还没提交：不删。
+/// 反证：去掉 `in_flight` 判据 → 被删，红。
+#[tokio::test(flavor = "multi_thread")]
+async fn a_staged_file_of_this_process_is_in_flight_and_kept() {
+    let l = lib().await;
+    let me = std::process::id();
+    let mine = staged(&l.root, &format!("{}-{me}.part", hex(&[3; 32])), b"x");
+    let report = sweep_supersede_staging(&l.db, &l.root).await.unwrap();
+    assert_eq!(report.removed, 0);
+    assert_eq!(report.kept, vec![("03030303".to_string(), "in_flight")]);
+    assert!(mine.exists());
+}
+
+/// 名字不是我们的命名、或不是普通文件（子目录、链接）：一律不碰，日志不带名字。
+/// 反证：把名字判据放宽成「以 .part 结尾」→ 前几个被删，红；去掉「不是普通文件就跳过」→ 链接被删，红。
+#[tokio::test(flavor = "multi_thread")]
+async fn unrecognized_names_dirs_and_links_in_staging_are_kept() {
+    let l = lib().await;
+    let h64 = hex(&[0xab; 32]);
+    let keep = [
+        staged(&l.root, "notes.part", b"x"),
+        staged(&l.root, &format!("{h64}.part.bak"), b"x"),
+        staged(&l.root, &format!("{}.part", h64.to_uppercase()), b"x"),
+        staged(&l.root, &format!("{h64}-abc.part"), b"x"),
+        staged(&l.root, &format!("{h64}-.part"), b"x"),
+        staged(&l.root, &format!("{}.part", &h64[..62]), b"x"),
+        staged(&l.root, &h64, b"x"),
+    ];
+    let sub = l
+        .root
+        .join(SUPERSEDE_STAGING_DIR)
+        .join(format!("{}.part", hex(&[5; 32])));
+    fs::create_dir_all(&sub).unwrap();
+    fs::write(sub.join("inner"), b"x").unwrap();
+    let outside = l._dir.path().join("outside");
+    fs::create_dir_all(&outside).unwrap();
+    let mut links = Vec::new();
+    for kind in platform::test_support::dir_link_kinds() {
+        let link = l
+            .root
+            .join(SUPERSEDE_STAGING_DIR)
+            .join(format!("{}-1.part", hex(&[6; 32])));
+        if let Err(e) = kind.make(&outside, &link) {
+            assert!(kind.may_need_privilege, "{}: {e}", kind.name);
+            continue;
+        }
+        links.push(link);
+        break;
+    }
+    let report = sweep_supersede_staging(&l.db, &l.root).await.unwrap();
+    assert_eq!(report.removed, 0, "{report:?}");
+    assert!(report.kept.iter().all(|(tag, _)| tag == "-"), "{report:?}");
+    for p in keep.iter().chain(links.iter()) {
+        assert!(fs::symlink_metadata(p).is_ok(), "不该被删：{}", p.display());
+    }
+    assert!(sub.join("inner").exists(), "不递归删目录");
 }

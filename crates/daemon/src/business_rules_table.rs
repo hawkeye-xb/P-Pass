@@ -128,6 +128,11 @@ fn registry() -> Vec<(&'static str, Vec<u128>, &'static str)> {
             "ms",
         ),
         (
+            "daemon::residue::RESIDUE_GRACE",
+            vec![ms(crate::residue::RESIDUE_GRACE)],
+            "ms",
+        ),
+        (
             "daemon::backup::SESSION_IDLE_TTL",
             vec![ms(backup::SESSION_IDLE_TTL)],
             "ms",
