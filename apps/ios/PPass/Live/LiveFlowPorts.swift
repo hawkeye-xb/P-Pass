@@ -24,6 +24,17 @@ final class NativeProvider: @unchecked Sendable {
         return current
     }
 
+    /// 设置允许拉原图的对端（#547；#1015）。Android 在建运行时时直接调、失败抛出并记 error；这里启动与配对两处共用：
+    /// 原生侧在 node id 格式非法时已「拒绝所有人」（fail-closed），所以这里只把失败写进日志、不中断启动或配对。
+    /// 返回 false = 没设上（此时没有任何电脑能拉原图）。
+    @discardableResult
+    func applyAllowedPeer(_ nodeId: String?, context: String, logger: CoreLogger) -> Bool {
+        do { try ffi.setAllowedPeer(nodeId: nodeId); return true } catch {
+            logger.log("\(context): setAllowedPeer failed, no desktop can pull originals: \(error)")
+            return false
+        }
+    }
+
     /// 断开（#974，对位 Android `clearFlowRuntime`）：旧桌面不许再拉——清允许的对端（在飞的连接在原生侧关掉）、
     /// 掐掉在飞传输并 revoke（拿掉当前 handler 与全部导入，同 `FfiBlobProvider.pause` 的 #958 语义：只 stop 不 revoke
     /// 会让同进程里重新配对后所有取原图都被拒）。清不掉的只记日志、不中断后面的步骤。

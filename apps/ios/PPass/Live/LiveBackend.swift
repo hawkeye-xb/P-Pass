@@ -94,7 +94,7 @@ final class LiveBackend: @unchecked Sendable {
         UnpairNotice.removeLegacyOutbox(root: dir, logger: logger) // #956 撤销：老版本的断开发件箱（含旧电脑 peerToken）
         media = LiveMediaLibrary { BackupScopeStore(directory: dir, daemonNodeId: pairingStore.load()?.daemonNodeId, logger: logger) }
         provider = try NativeProvider(root: dir, onPeerClosed: onClosed)
-        try? provider.ffi.setAllowedPeer(nodeId: pairingStore.load()?.daemonNodeId)
+        provider.applyAllowedPeer(pairingStore.load()?.daemonNodeId, context: "startup", logger: logger)
         let parker = ProviderIdleParker(provider: provider, logger: logger)
         providerParker = parker
         orders = try SQLiteOrderStore(directory: dir, logger: logger)
@@ -252,7 +252,7 @@ final class LiveBackend: @unchecked Sendable {
 
     /// 返回 true = 要提示用户「设置没存上」（见 `applyAutoBackupOnPairing`）。
     private func paired(_ record: PairingRecord, knownDesktop: Bool) -> Bool {
-        try? provider.ffi.setAllowedPeer(nodeId: record.daemonNodeId)
+        provider.applyAllowedPeer(record.daemonNodeId, context: "paired", logger: logger)
         // #935：换了一台电脑就清旧账（已确认计数不能算给新电脑）；同一台重新配对不动。失败要暴露，不静默沿用旧账。
         do { _ = try adoptDesktop(orders, daemonNodeId: record.daemonNodeId, nowMs: Int64(Date().timeIntervalSince1970 * 1000)) }
         catch { logger.log("adoptDesktop failed: \(error)") }
