@@ -88,4 +88,24 @@ final class RollingFileLogTests: XCTestCase {
         XCTAssertTrue(s.contains("<file>"))
         XCTAssertEqual(LogRedact.scrub("cycle [launch] round 12 open"), "cycle [launch] round 12 open")
     }
+
+    // MARK: #1152 日志脱敏补 IP 与设备名
+
+    func testPublicIpsAreMaskedButTimestampsVersionsAndHashesSurvive() {
+        let line = LogRedact.scrub("connecting remote=203.0.113.7:4433 lan=192.168.1.20:4433 v6=[2001:db8::1]:7842")
+        XCTAssertEqual(line, "connecting remote=<ipv4:public>:4433 lan=192.168.1.20:4433 v6=[<ipv6:public>]:7842")
+        // 不该被抹掉的：时间戳（IPv6 规则最容易误吃）、版本号、hash 前缀、NodeId 之外的普通数字。
+        for keep in ["16:54:02.631 cycle done", "version 0.10.0 build 42", "hash=1a2b3c4d round 12", "T01:49:50.5Z elapsed 0.58s"] {
+            XCTAssertEqual(LogRedact.scrub(keep), keep, keep)
+        }
+    }
+
+    func testRegisteredDeviceNamesAreMaskedEverywhereInALine() {
+        LogRedact.resetDeviceNames()
+        defer { LogRedact.resetDeviceNames() }
+        XCTAssertEqual(LogRedact.scrub("hello from 妈妈的 iPhone"), "hello from 妈妈的 iPhone", "没登记的不动")
+        LogRedact.registerDeviceNames(["妈妈的 iPhone", "客厅的电脑", "a"])
+        XCTAssertEqual(LogRedact.scrub("hello from 妈妈的 iPhone via 客厅的电脑; 客厅的电脑 again"), "hello from <device> via <device>; <device> again")
+        XCTAssertEqual(LogRedact.scrub("a b c"), "a b c", "单字符名字不登记")
+    }
 }

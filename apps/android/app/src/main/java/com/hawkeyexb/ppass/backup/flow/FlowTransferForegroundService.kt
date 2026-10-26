@@ -190,6 +190,32 @@ class AndroidForegroundLease(
 internal const val NOTIFICATION_ID = 2026
 private const val CHANNEL_ID = "ppass.backup.transfer"
 
+/**
+ * 传输通知上写什么（#1152，MASWE-0037）。锁屏上别人看得到的那一版（[publicText]）只有标题，不含文件名；
+ * 解锁后看到的完整版（[privateText]）照常显示当前这一张的文件名。进度条两版相同。
+ * 拆成纯函数是因为 JVM 单测里没有 Notification 运行时，测试断言的是这里定下的内容。
+ */
+internal data class TransferNotificationParts(
+    val title: String,
+    val privateText: String,
+    val publicText: String,
+    /** null + [indeterminate] = 有在传的这一张但没有字节进度；null + 非 indeterminate = 没有进度条。 */
+    val permille: Int?,
+    val indeterminate: Boolean,
+)
+
+internal fun transferNotificationParts(title: String, status: LoopStatus): TransferNotificationParts {
+    val current = status.current
+    val permille = transferPermilleOf(current)
+    return TransferNotificationParts(
+        title = title,
+        privateText = current?.fileName?.takeIf { it.isNotBlank() } ?: title,
+        publicText = title,
+        permille = permille,
+        indeterminate = permille == null && current != null,
+    )
+}
+
 internal fun buildTransferNotification(context: Context, status: LoopStatus): Notification {
     val nm = context.getSystemService(NotificationManager::class.java)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -201,26 +227,35 @@ internal fun buildTransferNotification(context: Context, status: LoopStatus): No
         flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
     }
     val pi = PendingIntent.getActivity(context, 0, open, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-    val current = status.current
-    val builder = NotificationCompat.Builder(context, CHANNEL_ID)
-        .setContentTitle(context.getString(R.string.notif_transfer_title))
-        .setContentText(current?.fileName?.takeIf { it.isNotBlank() } ?: context.getString(R.string.notif_transfer_title))
-        .setSmallIcon(R.drawable.ic_notification)
-        .setOngoing(true)
-        .setOnlyAlertOnce(true)
-        .setContentIntent(pi)
+    val parts = transferNotificationParts(context.getString(R.string.notif_transfer_title), status)
     // #418「FGS 常驻通知：显示传输进度条」——用当前这一张的字节进度，不用「已确认 / 总数」：
     //  - 通知与循环同生共死，它要回答的是「现在有没有在传、传到哪了」；大库里一张照片只占总数的
     //    万分之几，「已确认 / 总数」的进度条几分钟都不动，看起来像卡死；
     //  - 首页进度条也是这一张的字节进度（同一个函数 [transferPermilleOf]），两处说的是同一件事；
     //  - 「已确认 / 总数」要读 order 表 + MediaStore 计数，这条路径每个进度回调都会走，不该碰数据库。
-    val permille = transferPermilleOf(current)
-    if (permille != null) {
-        builder.setProgress(1000, permille, false)
-    } else if (current != null) {
-        builder.setProgress(0, 0, true)
+    fun NotificationCompat.Builder.withProgress(): NotificationCompat.Builder = apply {
+        if (parts.permille != null) setProgress(1000, parts.permille, false)
+        else if (parts.indeterminate) setProgress(0, 0, true)
     }
-    return builder.build()
+    // 锁屏版：只有标题和进度，不含文件名。
+    val lockScreenVersion = NotificationCompat.Builder(context, CHANNEL_ID)
+        .setContentTitle(parts.title)
+        .setContentText(parts.publicText)
+        .setSmallIcon(R.drawable.ic_notification)
+        .withProgress()
+        .build()
+    // #1152：锁屏上显示 [lockScreenVersion]（用户自己的「锁屏通知」隐私设置同样生效），解锁后是带文件名的完整版。
+    return NotificationCompat.Builder(context, CHANNEL_ID)
+        .setContentTitle(parts.title)
+        .setContentText(parts.privateText)
+        .setSmallIcon(R.drawable.ic_notification)
+        .setOngoing(true)
+        .setOnlyAlertOnce(true)
+        .setContentIntent(pi)
+        .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+        .setPublicVersion(lockScreenVersion)
+        .withProgress()
+        .build()
 }
 
 /**

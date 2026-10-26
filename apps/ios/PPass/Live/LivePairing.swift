@@ -116,6 +116,7 @@ struct PairVerdictLoop {
             if !caps.contains(Self.statusCapability) { return .desktopTooOld }
             mayWithdraw = caps.contains(Self.cancelCapability)
             desktopName = decoded?.deviceName ?? ""
+            LogRedact.registerDeviceNames([desktopName]) // #1152：电脑名不进日志
         }
         // 扫码之后不问「要连接吗」，直接发起：电脑名与标识放到验证码页上。标识由本机从二维码的 NodeId 算，不取电脑说的任何东西。
         let info = PairDesktopInfo(name: desktopName.isEmpty ? fallbackDesktopName : desktopName,

@@ -126,15 +126,37 @@ public enum LogRedact {
 
     private static let mediaFileName = try! NSRegularExpression(
         pattern: #"[^\s/\\"'()]+\.(heic|heif|jpe?g|png|gif|webp|dng|raw|tiff?|mov|mp4|m4v|avi)\b"#, options: [.caseInsensitive])
-    private static let longToken = try! NSRegularExpression(pattern: #"[A-Za-z0-9+/_=-]{32,}"#)
 
-    /// 落盘前的兜底：错误描述（`\(error)`）里可能夹带媒体文件名、blob ticket / token（≥32 字符的连续串）。
-    /// 文件名换成 `<file>`，长串只留 6 位前缀。
+    // 设备名没有形状可认（用户随便起），所以按「已知的名字」登记：本机名、配对的电脑名。登记在内存里、不落盘。
+    private final class NameRegistry: @unchecked Sendable {
+        private let lock = NSLock()
+        private var names: Set<String> = []
+        func add(_ new: [String]) {
+            lock.lock(); defer { lock.unlock() }
+            for n in new {
+                let t = n.trimmingCharacters(in: .whitespacesAndNewlines)
+                if t.count >= 2 { names.insert(t) } // 太短的不登记——会误伤普通文字
+            }
+        }
+        func clear() { lock.lock(); defer { lock.unlock() }; names = [] }
+        /// 长的先换，避免短名字是长名字的一部分。
+        func sorted() -> [String] { lock.lock(); defer { lock.unlock() }; return names.sorted { $0.count > $1.count } }
+    }
+    private static let registry = NameRegistry()
+
+    /// 登记要从日志里抹掉的设备名（本机名、配对的电脑名）。
+    public static func registerDeviceNames(_ names: [String]) { registry.add(names) }
+
+    /// 仅测试：清空登记。
+    static func resetDeviceNames() { registry.clear() }
+
+    /// 落盘前的兜底：错误描述（`\(error)`）里可能夹带媒体文件名、IP 地址、URL 主机名、blob ticket / token、设备名。
+    /// 文件名换成 `<file>`；登记过的设备名换成 `<device>`；其余规则同 daemon / Android（[SharedRedact]，同一份测试向量）。
     public static func scrub(_ line: String) -> String {
         var s = line
         s = replace(mediaFileName, in: s) { _ in "<file>" }
-        s = replace(longToken, in: s) { "\($0.prefix(6))…(\($0.count))" }
-        return s
+        for n in registry.sorted() { s = s.replacingOccurrences(of: n, with: "<device>") }
+        return SharedRedact.redact(s)
     }
 
     private static func replace(_ re: NSRegularExpression, in s: String, _ f: (String) -> String) -> String {

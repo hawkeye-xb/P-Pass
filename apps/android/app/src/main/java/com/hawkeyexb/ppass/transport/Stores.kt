@@ -30,6 +30,12 @@ interface IdentityKeyWrapper {
 
     /** Throws [IdentityKeyGoneException] when the key is missing or permanently invalidated. */
     fun open(sealed: SealedSecret): ByteArray
+
+    /**
+     * #1152 (MASWE-0042 family): where the wrapping key lives — `strongbox`, `tee`, `software`, … — for the
+     * diagnostics log line only. Never throws and never changes behaviour; unknown when the platform can't say.
+     */
+    fun securityLevel(): String = "unknown"
 }
 
 /** Definitive: the wrapping key is not there (or Keystore says it is permanently invalid). */
@@ -82,7 +88,11 @@ class IdentityStore(
             for ((attempt, delay) in RETRY_DELAYS_MS.withIndex()) {
                 if (delay > 0) sleep(delay)
                 try {
-                    return resolve().also { cached = it }.copyOf()
+                    return resolve().also {
+                        cached = it
+                        // #1152：只记录，不据此拒绝启动（不在安全硬件里怎么处理另行评估，口径见 #1106）。
+                        log("identity: wrapping key security level=${runCatching { wrapper.securityLevel() }.getOrDefault("unknown")}")
+                    }.copyOf()
                 } catch (e: Exception) {
                     last = e
                     log("identity: attempt ${attempt + 1}/${RETRY_DELAYS_MS.size} failed: ${e.javaClass.simpleName}: ${e.message}")

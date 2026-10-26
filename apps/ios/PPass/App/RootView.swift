@@ -1,14 +1,14 @@
 import SwiftUI
 
 /// 截图 / 调试用的起始路由：环境变量 `PPASS_ROUTE`（simctl launch 时用 SIMCTL_CHILD_PPASS_ROUTE 传入）。
-/// 只决定「一打开停在哪一屏」，不改任何业务数据。
+/// 只决定「一打开停在哪一屏」，不改任何业务数据。仅 DEBUG 构建生效。
 enum LaunchRoute: String {
     case photos, family, settings, viewer, video, bucket, storage, diagnostics
     case welcome, scan, manual, pairWaiting, pairCode, pairRefused, pairLapsed, pairFailed, backupStarted
 
     static let current: LaunchRoute? = {
-        let raw = ProcessInfo.processInfo.environment["PPASS_ROUTE"] ?? UserDefaults.standard.string(forKey: "PPASS_ROUTE")
-        return raw.flatMap(LaunchRoute.init(rawValue:))
+        // #1152：只在 DEBUG 构建里读（`DebugLaunchInput`）。
+        DebugLaunchInput.route.flatMap(LaunchRoute.init(rawValue:))
     }()
 }
 

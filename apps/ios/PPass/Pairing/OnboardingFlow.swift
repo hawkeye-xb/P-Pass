@@ -160,8 +160,8 @@ struct ManualPairScreen: View {
             }
         }
         .onAppear {
-            // 自动化（模拟器端到端）：环境变量直接给配对串，等同于用户粘贴后点「连接」。
-            if let code = ProcessInfo.processInfo.environment["PPASS_PAIR_CODE"], !code.isEmpty {
+            // 自动化（模拟器端到端，仅 DEBUG 构建，#1152）：环境变量直接给配对串，等同于用户粘贴后点「连接」。
+            if let code = DebugLaunchInput.pairCode {
                 text = code
                 if let c = PairCode.normalized(code) { onSubmit(c) }
             }

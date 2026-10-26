@@ -12,7 +12,7 @@ struct DiagnosticsScreen: View {
             section(L.s("diag_section_state"), rows: stateRows)
             Section {
                 Button {
-                    UIPasteboard.general.string = (buildRows + stateRows).map { "\($0.0): \($0.1)" }.joined(separator: "\n")
+                    DiagnosticsClipboard.copy((buildRows + stateRows).map { "\($0.0): \($0.1)" }.joined(separator: "\n")) // 仅本机 + 过期（#1152）
                     copied = true
                     Haptics.success()
                 } label: {
