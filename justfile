@@ -209,6 +209,12 @@ identity-check:
   @./tools/test-commit-identity-gate.sh
   @./tools/check-commit-identity.sh
 
+# SEC-09 (#371): pnpm 的 minimumReleaseAgeExclude 不许自己长出来。
+# 任何条目都要在 tools/release-age-exclude-allowlist.txt 显式登记；先跑变异反证再扫全仓。
+supply-chain-check:
+  @bash tools/test-release-age-exclude.sh
+  @python3 tools/check-release-age-exclude.py
+
 # ── Development ─────────────────────────────────────
 
 # Start daemon in development mode
@@ -220,7 +226,7 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt lint lint-cross test arch-check md-check token-check shell-vars-check identity-check
+ci: fmt lint lint-cross test arch-check md-check token-check shell-vars-check identity-check supply-chain-check
   @echo "==> CI pipeline: all green ✅"
 
 # QA-03 文档快车道：只跑文档域的门禁，不编 Rust。
@@ -231,7 +237,7 @@ ci: fmt lint lint-cross test arch-check md-check token-check shell-vars-check id
 #
 # ⚠️ 只在这次改动**一行 Rust/Kotlin/前端都没动**时用它。碰了代码就跑 `just ci`，
 # 别拿这条快车道当省事的借口——`ci` 的依赖列表一个都没减。
-ci-docs: md-check token-check shell-vars-check identity-check
+ci-docs: md-check token-check shell-vars-check identity-check supply-chain-check
   @echo "==> docs lane: green ✅（注意：本条不含 fmt/lint/test，动了代码必须跑 just ci）"
 
 # T-040 人工验收：自启/防睡眠/密钥仓 真机冒烟（H-09 双平台各跑一次）

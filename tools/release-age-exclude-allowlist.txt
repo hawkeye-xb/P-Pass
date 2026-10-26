@@ -1,0 +1,6 @@
+# SEC-09 (#371)：minimumReleaseAgeExclude 的显式批准名单。目前为空，应当一直为空。
+#
+# 格式：`包@版本 | 理由`。配置里出现的豁免条目必须在这里有一行，否则
+# tools/check-release-age-exclude.py 变红；这里有而配置里没有的条目同样变红。
+# 不要为了让 CI 变绿往里加——正确做法是把依赖 pin 到发布已久的版本。
+# 确需豁免时，这一行就是 reviewer 要明确放行的 diff，理由里写 issue 号与到期条件。

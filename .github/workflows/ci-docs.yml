@@ -63,6 +63,12 @@ on:
       - "tools/bundle-desktop-macos.sh"
       - "tools/daemon-helper-macos.sh"
       - "tools/test-release-timeouts.sh"
+      # SEC-09 (#371)：pnpm 供应链豁免门禁——这些文件任何一个变了都要过 supply-chain。
+      - "**/pnpm-workspace.yaml"
+      - "**/package.json"
+      - "**/.npmrc"
+      - "tools/check-release-age-exclude.py"
+      - "tools/release-age-exclude-allowlist.txt"
   push:
     branches: [main]
     paths:
@@ -105,6 +111,12 @@ on:
       - "tools/bundle-desktop-macos.sh"
       - "tools/daemon-helper-macos.sh"
       - "tools/test-release-timeouts.sh"
+      # SEC-09 (#371)：pnpm 供应链豁免门禁——这些文件任何一个变了都要过 supply-chain。
+      - "**/pnpm-workspace.yaml"
+      - "**/package.json"
+      - "**/.npmrc"
+      - "tools/check-release-age-exclude.py"
+      - "tools/release-age-exclude-allowlist.txt"
   workflow_dispatch:
 
 permissions:
@@ -142,6 +154,18 @@ jobs:
         run: bash tools/test-dogfood-assets.sh --self-test
       - name: 门禁
         run: bash tools/test-dogfood-assets.sh
+
+  supply-chain:
+    name: supply-chain（SEC-09 #371：minimumReleaseAgeExclude 不许新增）
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # 门禁自己的反证：变异（块/行内 exclude、.npmrc、strict 缺失 …）必须全红。
+      - name: 反证（变异必须全部按期望）
+        run: bash tools/test-release-age-exclude.sh
+      - name: 门禁
+        run: python3 tools/check-release-age-exclude.py
 
   mirror-resolve:
     name: mirror-resolve（UPD-18：test tag 不许镜像到 R2）
