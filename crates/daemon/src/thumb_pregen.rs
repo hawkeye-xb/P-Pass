@@ -204,7 +204,10 @@ impl Worker {
             }
             return;
         }
-        let src = engine.library_root.join(&asset.rel_path);
+        // #1150: same confinement as `thumb.get`.
+        let Ok(src) = core_index::resolve_in_library(&engine.library_root, &asset.rel_path) else {
+            return;
+        };
 
         // Same gate as `thumb.get`. Nothing below may `.await` before the
         // job is submitted: a waiter's budget runs from the slot's start.
