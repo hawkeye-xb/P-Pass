@@ -16,13 +16,11 @@
   import { getVersion } from "@tauri-apps/api/app";
   import { listen } from "@tauri-apps/api/event";
   import {
-    open as openDialog,
     confirm as confirmDialog,
     message as messageDialog,
-    save as saveDialog,
   } from "@tauri-apps/plugin-dialog";
   import { check as checkUpdate } from "@tauri-apps/plugin-updater";
-  import { revealItemInDir, openUrl } from "@tauri-apps/plugin-opener";
+  import { openUrl } from "@tauri-apps/plugin-opener";
   import { openLibraryDir } from "./lib/openLibrary.js";
   import { runUpdate } from "./lib/updateFlow.js";
   import { verifiedUpdate } from "./lib/updateCommands.js";
@@ -670,10 +668,8 @@
 
   async function openLibrary() {
     try {
-      await openLibraryDir({
-        getPath: () => invoke("library_reveal_path"),
-        reveal: revealItemInDir,
-      });
+      // #1150：揭示由壳完成，网页不碰路径。
+      await openLibraryDir({ reveal: () => invoke("reveal_library") });
     } catch (e) {
       flashMessage(t("ui.open_failed", { err: errDetail(e) }), "error");
     }
@@ -684,15 +680,19 @@
   // daemon 退回 originals/），桌面不再自己拼路径。
   async function openDeviceFolder(nodeId) {
     try {
-      const r = await call("device.folder", { node_id: nodeId });
-      await revealItemInDir(r.path);
+      // #1150：路径由壳向 daemon 取并揭示，网页不经手。
+      await invoke("reveal_device_folder", { node_id: nodeId });
     } catch (e) {
       flashMessage(t("ui.device_open_folder_failed", { err: errDetail(e) }), "error");
     }
   }
 
   async function chooseFolder() {
-    const dir = await openDialog({ directory: true, title: t("ui.change_title") });
+    // #1150：系统对话框由壳弹，选定的目录留在壳里，这里只拿到展示用的字符串。
+    const dir = await invoke("pick_library_dir", {
+      title: t("ui.change_title"),
+      fromDefault: false,
+    });
     if (!dir) return;
     const yes = await confirmDialog(t("ui.change_body", { dir }), {
       title: t("ui.change_title"),
@@ -703,7 +703,7 @@
       // DESK-46 (#638)：改库位置由壳侧 set_library_dir 一手包办（校验 +
       // 平台 config read-modify-write + 孤儿清理）——daemon 的 folder.set
       // 写的是当前库目录的孤儿 config.toml（零读者），已删除。
-      await invoke("set_library_dir", { libraryDir: dir });
+      await invoke("set_library_dir");
       flashMessage(t("ui.change_saved", { dir }));
     } catch (e) {
       flashMessage(t("ui.save_failed", { err: errDetail(e) }), "error");
@@ -724,16 +724,10 @@
     exportingLogs = true;
     try {
       // #1122：诊断包由用户选择保存位置，不再写进照片库目录；取消就什么都不做。
-      const out = await saveDialog({
-        defaultPath: "ppf-logs.zip",
-        filters: [{ name: "zip", extensions: ["zip"] }],
-      });
-      if (!out) return;
-      const r = await invoke("export_logs_bundle", { out });
+      // #1150：保存对话框由壳弹，导出后壳也负责在 Finder/资源管理器中展示。
+      const r = await invoke("export_logs_bundle");
+      if (!r) return;
       flashMessage(t("ui.logs_exported", { path: r.zip }));
-      try {
-        await revealItemInDir(r.zip); // 在 Finder/资源管理器中直接展示
-      } catch (_) {}
     } catch (e) {
       flashMessage(t("ui.export_failed", { err: errDetail(e) }), "error");
     } finally {
@@ -1402,9 +1396,9 @@
   });
 
   async function revealPhotoInFinder() {
-    if (!viewerPath) return;
+    if (!viewerPath || !photoViewer) return;
     try {
-      await revealItemInDir(viewerPath);
+      await invoke("reveal_asset", { hash: photoViewer.hash });
     } catch (e) {
       flashMessage(t("ui.reveal_failed", { err: errDetail(e) }), "error");
     }

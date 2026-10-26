@@ -3890,6 +3890,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
+ "version-cmp",
  "windows",
  "windows-sys 0.61.2",
  "winreg",
