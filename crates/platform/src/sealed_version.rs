@@ -142,9 +142,8 @@ mod tests {
         let plist = app.join("Contents/Info.plist");
         let text = std::fs::read_to_string(&plist).unwrap();
         std::fs::write(&plist, text.replace("0.1.0", "9.9.9")).unwrap();
-        match read(&app) {
-            Ok(v) => assert_ne!(v, "9.9.9", "读到了磁盘上被篡改的版本"),
-            Err(_) => {}
+        if let Ok(v) = read(&app) {
+            assert_ne!(v, "9.9.9", "读到了磁盘上被篡改的版本");
         }
     }
 }
