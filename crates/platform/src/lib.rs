@@ -86,7 +86,23 @@ pub fn service_boot_log(msg: &str) {
 pub fn run_as_service(body: impl FnOnce() -> i32 + Send + 'static) -> Result<bool> {
     #[cfg(windows)]
     {
-        windows_service::run_service_dispatcher(body)
+        // D4 / brief §5.2：服务启动的第一件事是核对 %ProgramData%\P-Pass 的 ACL。
+        // 不通过就拒绝启动（SCM 记 7000），绝不回退到用户目录、也不重建目录——
+        // 目录只有提权的安装器能建，daemon 擅自重建就等于把 ACL 决定权交给
+        // 一个可能已被篡改的环境。
+        windows_service::run_service_dispatcher(move || {
+            match windows_programdata::verify_service_root() {
+                Ok(root) => {
+                    service_boot_log(&format!("ProgramData 目录核对通过：{}", root.display()));
+                    body()
+                }
+                Err(e) => {
+                    service_boot_log(&format!("启动失败：ProgramData 目录核对不通过：{e}"));
+                    eprintln!("启动失败：ProgramData 目录核对不通过：{e}");
+                    1
+                }
+            }
+        })
     }
     #[cfg(not(windows))]
     {
@@ -95,6 +111,21 @@ pub fn run_as_service(body: impl FnOnce() -> i32 + Send + 'static) -> Result<boo
     }
 }
 
+/// D4：本进程是否正被系统服务管理器当作服务托管（Windows SCM）。
+///
+/// 唯一的用途是让适配器把数据根从用户的 `%LOCALAPPDATA%` 切到
+/// `%ProgramData%\P-Pass`——服务账户读不到交互用户的任何用户级路径。
+/// 别的平台永远 `false`（它们没有这个「服务账户 ≠ 用户」的形态）。
+pub fn service_mode_active() -> bool {
+    #[cfg(windows)]
+    {
+        windows_service::is_running_as_service()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
 // #287：只给测试用的建链能力。默认不编译，见该模块顶部说明。
 #[cfg(feature = "test-support")]
 pub mod test_support;

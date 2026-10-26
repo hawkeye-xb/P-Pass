@@ -347,6 +347,15 @@ impl WindowsAdapter {
     pub fn new() -> Self {
         Self
     }
+
+    /// D4：服务模式下的数据根（`%ProgramData%\P-Pass`）；不是服务 → `None`。
+    ///
+    /// 服务账户 `NT SERVICE\P-Pass` 的 `%LOCALAPPDATA%` / `%APPDATA%` 在
+    /// `C:\Windows\ServiceProfiles\` 下，读不到交互用户的任何东西。所以服务模式下
+    /// 身份私钥、配对白名单、库位置、配置、日志一律换成 ProgramData 的正本。
+    fn service_root() -> Option<PathBuf> {
+        crate::service_mode_active().then(crate::windows_programdata::service_root)
+    }
 }
 
 impl Default for WindowsAdapter {
@@ -559,7 +568,45 @@ impl PlatformAdapter for WindowsAdapter {
     /// 不写死返回新位置，是为了让「搬迁失败」退化成「保持原样」，而不是
     /// 指着一个空目录让 daemon 建一个崭新的空索引。
     fn data_dir(&self) -> PathBuf {
+        // D1/D4：服务模式的数据根是 %ProgramData%\P-Pass（服务账户读不到用户的
+        // %LOCALAPPDATA%）。不做老目录搬迁：服务此前从没在用户目录里跑过。
+        if let Some(root) = Self::service_root() {
+            // #1043：日志跟着数据根走（`<data_dir>\logs\daemon.log`）。
+            return root;
+        }
         crate::data_migration::resolve(&legacy_data_dir(), &current_data_dir())
+    }
+
+    /// #1109 / D4：身份私钥。服务模式下放进 `%ProgramData%\P-Pass\identity.key`
+    /// ——目录与文件的 DACL 只给服务账户与 Administrators，交互用户（含恶意程序）
+    /// 读不到也改不了。非服务模式维持数据目录里的 `.ppf/identity.key`。
+    fn identity_key_home(&self) -> crate::IdentityKeyHome {
+        match Self::service_root() {
+            Some(root) => crate::IdentityKeyHome::SecureStore(Box::new(
+                crate::ProgramDataStore::new(root.join("identity.key"), "身份私钥"),
+            )),
+            None => crate::IdentityKeyHome::DataDirFile,
+        }
+    }
+
+    /// #1115 / D4：配对白名单的正本。服务模式下是 ProgramData 里的一份整份 JSON；
+    /// 非服务模式是 `None`（库本身即正本，维持现状）。
+    fn pairing_store(&self) -> Option<Box<dyn crate::SecretBlobStore>> {
+        let root = Self::service_root()?;
+        Some(Box::new(crate::ProgramDataStore::new(
+            root.join("pairings.json"),
+            "配对白名单",
+        )))
+    }
+
+    /// #1115 / D4：照片库位置的正本。config.toml 谁都能改，服务模式下库位置只认
+    /// 签名 daemon 写进 ProgramData 的这份；config.toml 那份只给人看。
+    fn library_store(&self) -> Option<Box<dyn crate::SecretBlobStore>> {
+        let root = Self::service_root()?;
+        Some(Box::new(crate::ProgramDataStore::new(
+            root.join("library.json"),
+            "照片库位置",
+        )))
     }
 
     /// #1043：`ERROR_SHARING_VIOLATION`（32，文件正被另一进程使用）与
@@ -2898,9 +2945,31 @@ mod desk65_scheduled_task_tests {
 
     #[test]
     fn windows_has_a_service_manager() {
+        // 具体机制由安装形态决定：老装机是每用户计划任务，per-machine 安装后是
+        // SCM 服务（本机会随安装态翻转，所以不钉死是哪一种）。
         let mode = WindowsAdapter::new().service_mode();
-        assert_eq!(mode, ServiceMode::ScheduledTask);
+        assert!(
+            matches!(
+                mode,
+                ServiceMode::ScheduledTask | ServiceMode::WindowsService
+            ),
+            "{mode:?}"
+        );
         assert!(mode.has_service_manager());
+    }
+
+    /// 反证：没在 SCM 服务里跑时，存放处必须还是用户数据目录（不能被 D4 的接线
+    /// 顺手改掉）——身份是 `.ppf/identity.key`，配对 / 库都没有独立正本。
+    #[test]
+    fn user_context_keeps_the_data_dir_stores() {
+        let adapter = WindowsAdapter::new();
+        assert!(!crate::service_mode_active());
+        assert!(matches!(
+            adapter.identity_key_home(),
+            crate::IdentityKeyHome::DataDirFile
+        ));
+        assert!(adapter.pairing_store().is_none());
+        assert!(adapter.library_store().is_none());
     }
 }
 

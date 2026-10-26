@@ -435,6 +435,19 @@ pub const SERVICE_NAME: &str = "P-Pass";
 /// daemon 的服务入口：`body` 在 SCM 的服务线程上跑，返回进程退出码。
 static SERVICE_BODY: std::sync::Mutex<Option<Box<dyn FnOnce() -> i32 + Send>>> =
     std::sync::Mutex::new(None);
+
+/// D4：本进程此刻是不是由 SCM 拉起的服务（`service_main` 已进入）。
+///
+/// 适配器据此把数据根从用户的 `%LOCALAPPDATA%` 切到 `%ProgramData%\P-Pass`：
+/// 服务账户 `NT SERVICE\P-Pass` 的配置文件在 `C:\Windows\ServiceProfiles\` 下，
+/// 它读不到交互用户的任何用户级路径。默认 `false`＝控制台 / 桌面壳 spawn。
+static RUNNING_AS_SERVICE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// 本进程是否运行在 SCM 的服务分发器里。见 [`RUNNING_AS_SERVICE`]。
+pub fn is_running_as_service() -> bool {
+    RUNNING_AS_SERVICE.load(std::sync::atomic::Ordering::SeqCst)
+}
 static SERVICE_STATUS_HANDLE_RAW: std::sync::atomic::AtomicPtr<std::ffi::c_void> =
     std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
 
@@ -498,6 +511,9 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut PWSTR) {
     else {
         return;
     };
+    // D4：从这一刻起，凡问「数据根在哪」都必须是 %ProgramData%\P-Pass。
+    // 在跑 body 之前设，早于任何配置 / 身份读写。
+    RUNNING_AS_SERVICE.store(true, std::sync::atomic::Ordering::SeqCst);
     SERVICE_STATUS_HANDLE_RAW.store(handle.0, std::sync::atomic::Ordering::SeqCst);
     set_service_status(SERVICE_START_PENDING, 0);
     set_service_status(

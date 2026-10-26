@@ -32,11 +32,14 @@ ${Using:StrFunc} StrStr
   Pop $0
 !macroend
 
-; ---- ProgramData 目录：受保护 DACL，只给 Administrators / SYSTEM / 服务 SID ----
+; ---- ProgramData 目录：受保护 DACL，只给 Administrators + 服务 SID ----
+; 口径的正本是 `windows_programdata::ProgramDataDir::verify`（brief §5.2）：白名单只有
+; 服务 SID 与 Administrators。**不要**给 SYSTEM / Users / Authenticated Users 加 ACE——
+; 多一条 daemon 启动核对就不通过，服务直接被 SCM 记成 7000（拒绝启动）。
 ; 先少给、后给服务 SID：icacls 解析 "NT SERVICE\..." 要求服务已经存在。
 !macro PPassPrepareDataDir
   CreateDirectory "${PPASS_DATA}"
-  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "${PPASS_DATA}" /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F"'
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "${PPASS_DATA}" /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F"'
   Pop $0
   nsExec::ExecToLog '"$SYSDIR\icacls.exe" "${PPASS_DATA}" /grant "NT SERVICE\${PPASS_SERVICE}:(OI)(CI)F"'
   Pop $0

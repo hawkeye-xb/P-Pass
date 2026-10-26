@@ -122,6 +122,83 @@ pub fn current_user_sid_string() -> Result<String> {
     }
 }
 
+/// `%ProgramData%\P-Pass`：服务模式（D1）下 daemon 唯一的数据根。
+///
+/// 服务账户 `NT SERVICE\<服务名>` 没有属于用户的配置文件，`%LOCALAPPDATA%` /
+/// `%APPDATA%` 指向 `C:\Windows\ServiceProfiles\` 下它读不到的地方——身份私钥、
+/// 配对白名单、库位置、配置、日志、索引全部落在本函数给的目录里。
+pub fn service_root() -> PathBuf {
+    std::env::var_os("ProgramData")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"))
+        .join("P-Pass")
+}
+
+/// 账户名（如 `NT SERVICE\P-Pass`）→ SID 字符串。
+///
+/// 虚拟服务账户的 SID 由服务名派生，**不需要服务真的装着**；所以安装器可以在
+/// `sc create` 之后立刻用它核对目录 ACL，daemon 也能在启动时自己算出来核对。
+pub fn account_sid_string(account: &str) -> Result<String> {
+    use windows_sys::Win32::Security::{LookupAccountNameW, SID_NAME_USE};
+
+    let name: Vec<u16> = account.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut sid_len = 0u32;
+    let mut domain_len = 0u32;
+    let mut use_: SID_NAME_USE = 0;
+    // SAFETY: name 是 NUL 结尾的宽字符串；第一次只取所需长度。
+    unsafe {
+        LookupAccountNameW(
+            ptr::null(),
+            name.as_ptr(),
+            ptr::null_mut(),
+            &mut sid_len,
+            ptr::null_mut(),
+            &mut domain_len,
+            &mut use_,
+        );
+    }
+    if sid_len == 0 {
+        return Err(failed(
+            "LookupAccountNameW",
+            format!("查不到账户 {account}（SID 长度 0）"),
+        ));
+    }
+    let mut sid = vec![0u8; sid_len as usize];
+    let mut domain = vec![0u16; domain_len.max(1) as usize];
+    // SAFETY: 两个缓冲都按上面回报的长度分配。
+    let ok = unsafe {
+        LookupAccountNameW(
+            ptr::null(),
+            name.as_ptr(),
+            sid.as_mut_ptr().cast(),
+            &mut sid_len,
+            domain.as_mut_ptr(),
+            &mut domain_len,
+            &mut use_,
+        )
+    };
+    if ok == 0 {
+        return Err(io_err(
+            "LookupAccountNameW",
+            std::io::Error::last_os_error(),
+        ));
+    }
+    // SAFETY: sid 是上面填充的合法 SID，长度足够。
+    Ok(unsafe { sid_to_string(sid.as_mut_ptr().cast()) })
+}
+
+/// 服务模式下 daemon 启动前的硬核对（brief §5.2）。
+///
+/// 核对 [`service_root`] 的 ACL：属主是 Administrators / 服务账户、DACL 受保护、
+/// ACE 白名单只有这两个 SID。**不通过就拒绝启动**——不回退用户目录、不重建目录。
+pub fn verify_service_root() -> Result<PathBuf> {
+    let root = service_root();
+    let account = format!(r"NT SERVICE\{}", crate::windows_service::SERVICE_NAME);
+    let sid = account_sid_string(&account)?;
+    ProgramDataDir::verify(&root, &sid)?;
+    Ok(root)
+}
+
 /// `%ProgramData%\<name>` 目录本身：建、核对。
 pub struct ProgramDataDir;
 
@@ -450,6 +527,31 @@ mod tests {
     /// 测试里把「当前用户」当成服务账户：这台机器上没有服务 SID 时也能验证同一套 ACL 逻辑。
     fn test_sid() -> String {
         current_user_sid_string().expect("current sid")
+    }
+
+    /// D4：虚拟服务账户的 SID 由服务名派生，不用服务真的装着也能算出来；
+    /// 且必须与当前用户 SID 不同——正是这个「不同」才让 ProgramData 的 ACL 有意义。
+    #[test]
+    fn service_account_resolves_to_its_own_sid() {
+        let sid = account_sid_string(r"NT SERVICE\P-Pass").expect("lookup");
+        assert!(sid.starts_with("S-1-5-80-"), "{sid}");
+        assert_ne!(sid, test_sid());
+    }
+
+    /// 反证：不存在的账户名必须报错，不能编一个 SID 出来。
+    #[test]
+    fn unknown_account_is_an_error() {
+        assert!(account_sid_string(r"NT SERVICE\PPassNoSuchService").is_err());
+    }
+
+    /// 数据根就是安装器用的那一处（`%ProgramData%\P-Pass`）。
+    #[test]
+    fn service_root_is_under_programdata() {
+        assert_eq!(service_root().file_name().unwrap(), "P-Pass");
+        assert_eq!(
+            service_root().parent().unwrap().file_name().unwrap(),
+            "ProgramData"
+        );
     }
 
     #[test]
