@@ -535,6 +535,28 @@ pub fn boot_log(msg: &str) {
     }
 }
 
+/// 把本进程的 STD_ERROR_HANDLE 指向启动日志（追加）。失败就算了，不影响启动。
+fn redirect_stderr_to_boot_log() {
+    use std::os::windows::io::AsRawHandle as _;
+    use windows_sys::Win32::System::Console::{SetStdHandle, STD_ERROR_HANDLE};
+
+    let dir = std::path::Path::new(r"C:\ProgramData\P-Pass\logs");
+    let _ = std::fs::create_dir_all(dir);
+    let Ok(file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("daemon-boot.log"))
+    else {
+        return;
+    };
+    let handle = file.as_raw_handle();
+    // SAFETY: 句柄属于 file；进程生命周期内不能让 file 被 drop 关闭。
+    let ok = unsafe { SetStdHandle(STD_ERROR_HANDLE, handle) } != 0;
+    if ok {
+        std::mem::forget(file);
+    }
+}
+
 /// 如果本进程是被 SCM 拉起的，就在**当前线程**跑 SCM 分发器，并在服务线程上执行
 /// `body`；返回 `Ok(true)`。
 ///
@@ -546,6 +568,9 @@ pub fn run_service_dispatcher(body: impl FnOnce() -> i32 + Send + 'static) -> Re
     use windows::Win32::System::Services::{StartServiceCtrlDispatcherW, SERVICE_TABLE_ENTRYW};
 
     boot_log("service dispatcher: entered");
+    // 服务没有控制台：把 stderr 接到启动日志，daemon 的 eprintln 才看得见
+    // （1067 的真实原因往往就写在那些早期错误里）。
+    redirect_stderr_to_boot_log();
     // 服务里的 panic 没有控制台可看：先落盘。反证：不装这个钩子，1067 什么线索都没有。
     std::panic::set_hook(Box::new(|info| {
         boot_log(&format!("PANIC: {info}"));

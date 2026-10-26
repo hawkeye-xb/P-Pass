@@ -40,6 +40,7 @@ P-Pass 存储端 daemon
 选项:
   --ephemeral  测试/脚本模式：stdin 关闭（写入端 EOF）即整体退出，3 秒内
                （UX-07，杜绝 A 类孤儿）。生产/launchd 不带此 flag。
+  --service     由 Windows 服务管理器（SCM）拉起时带的标记；接受并忽略。
   --post-update
                已退役（#1041：UPD-07 换壳链路下线），接受并忽略；下一个版本删除。
                仅为兼容旧版桌面壳——旧壳更新后拉起新 daemon 时仍会带它。
@@ -76,6 +77,10 @@ pub fn parse_cli(args: impl IntoIterator<Item = String>) -> Result<Cli, String> 
         match a.as_str() {
             "--ephemeral" => ephemeral = true,
             // 退役参数：接受并忽略，下一个版本删除（见函数注释）。
+            // D1 / #1161：SCM 用 `--service` 拉起我们。服务入口（platform::run_as_service）
+            // 在主线程读完它之后照常 parse_cli，所以这里必须接受并忽略，否则会当成未知
+            // 参数打印用法并 exit 2——SCM 只会看到「服务意外停止 (1067)」。
+            "--service" => {}
             "--post-update" => {}
             "--json" => json = true,
             "--help" | "-h" => return Ok(Cli::Help),
