@@ -1,0 +1,3 @@
+Pairing now asks for the 6-digit code shown on your phone.
+Pair again once after updating. Photos already backed up won't upload again.
+Security protections were strengthened. Please update soon.
