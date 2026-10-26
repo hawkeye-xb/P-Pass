@@ -15,9 +15,9 @@ import { setLocale } from "./i18n.js";
 
 setLocale("zh");
 
-const { invokeMock, openMock } = vi.hoisted(() => ({ invokeMock: vi.fn(), openMock: vi.fn() }));
+const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: openMock }));
+// #1150：选目录的系统对话框由壳弹（pick_library_dir），网页侧不再 import dialog 的 open。
 
 function make(over = {}) {
   const view = { step: 1, libraryDir: "", busy: false, error: "" };
@@ -36,7 +36,6 @@ function make(over = {}) {
 beforeEach(() => {
   vi.useFakeTimers();
   invokeMock.mockReset();
-  openMock.mockReset();
 });
 afterEach(() => vi.useRealTimers());
 
@@ -61,13 +60,16 @@ describe("初始状态", () => {
 describe("选库", () => {
   it("选了文件夹就换；取消选择不变；回到默认", async () => {
     const { flow, view } = make();
-    openMock.mockResolvedValueOnce("/Volumes/X/Lib");
+    invokeMock.mockResolvedValueOnce("/Volumes/X/Lib");
     await flow.chooseFolder();
     expect(view.libraryDir).toBe("/Volumes/X/Lib");
-    openMock.mockResolvedValueOnce(null);
+    expect(invokeMock).toHaveBeenLastCalledWith("pick_library_dir", expect.objectContaining({ fromDefault: true }));
+    invokeMock.mockResolvedValueOnce(null);
     await flow.chooseFolder();
     expect(view.libraryDir).toBe("/Volumes/X/Lib");
-    flow.useDefault();
+    invokeMock.mockResolvedValueOnce(undefined);
+    await flow.useDefault();
+    expect(invokeMock).toHaveBeenLastCalledWith("use_default_library_dir");
     expect(view.libraryDir).toBe("/Pictures/P-Pass Library");
   });
 });
@@ -140,25 +142,27 @@ describe("第 3 步 finishSetup", () => {
     expect(view).toMatchObject({ busy: false, error: "" });
   });
 
-  it("完成时先写库位置（带最终选择的目录）再启动服务", async () => {
+  it("完成时先写库位置（壳用对话框里选定的目录，网页不传路径）再启动服务", async () => {
     const order = [];
     invokeMock.mockImplementation(async (cmd, args) => {
       order.push(cmd);
       if (cmd === "write_config") {
-        expect(args).toEqual({ libraryDir: "/Users/me/PPassLib" });
+        // #1150：网页不再把路径交给壳。
+        expect(args).toBeUndefined();
         return null;
       }
+      if (cmd === "pick_library_dir") return "/Users/me/PPassLib";
       if (cmd === "start_daemon") return "resident";
       return {};
     });
     const { flow, onDone } = make();
-    flow.useDefault();
-    openMock.mockResolvedValue("/Users/me/PPassLib");
+    await flow.useDefault();
     await flow.chooseFolder();
     const p = flow.finishSetup();
     await vi.advanceTimersByTimeAsync(1_000);
     await p;
-    expect(order.slice(0, 2)).toEqual(["write_config", "start_daemon"]);
+    expect(order.indexOf("write_config")).toBeGreaterThan(order.indexOf("pick_library_dir"));
+    expect(order.indexOf("start_daemon")).toBe(order.indexOf("write_config") + 1);
     expect(onDone).toHaveBeenCalledTimes(1);
   });
 
