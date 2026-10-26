@@ -382,9 +382,22 @@ const SAFE_FILES: &[&str] = &[
     "identity.key",
     "ipc.token",
     "ppf-logs.zip",
-    "com.hawkeyexb.ppass.desktop.daemon.plist",
     "blobs.db",
 ];
+
+/// 平台特有、脱敏时原样保留的文件名（小写）；由平台层声明，见
+/// `PlatformAdapter::redaction_safe_file_names`。
+fn platform_safe_files() -> &'static [String] {
+    use platform::PlatformAdapter as _;
+    static NAMES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    NAMES.get_or_init(|| {
+        platform::adapter()
+            .redaction_safe_file_names()
+            .into_iter()
+            .map(|n| n.to_ascii_lowercase())
+            .collect()
+    })
+}
 
 fn is_path_term(c: char) -> bool {
     matches!(
@@ -464,7 +477,8 @@ fn mask_segment(seg: &str, last: bool, mode: PathMask) -> String {
         return seg.to_string();
     }
     if last {
-        if SAFE_FILES.contains(&seg.to_ascii_lowercase().as_str()) {
+        let lower = seg.to_ascii_lowercase();
+        if SAFE_FILES.contains(&lower.as_str()) || platform_safe_files().contains(&lower) {
             return seg.to_string();
         }
         if let Some((name, ext)) = split_ext(seg) {
@@ -665,6 +679,20 @@ pub fn redact_export_json_or_text(s: &str, pre: &dyn Fn(&str) -> String) -> Stri
 
 #[cfg(test)]
 mod tests {
+    /// #1011：平台托管文件名由平台层声明（macOS 有，见 platform），
+    /// 脱敏器不写死；不在声明里的 plist 照旧打码。
+    #[test]
+    fn platform_declared_file_name_is_kept_and_others_masked() {
+        use platform::PlatformAdapter as _;
+        let declared = platform::adapter().redaction_safe_file_names();
+        for name in &declared {
+            let out = redact_export(&format!("/Users/x/Library/Logs/{name} 已加载"));
+            assert!(out.contains(name.as_str()), "声明的文件名要保留: {out}");
+        }
+        let out = redact_export("/Users/x/Library/Logs/other.stranger.plist 已加载");
+        assert!(!out.contains("stranger"), "未声明的 plist 要打码: {out}");
+    }
+
     /// #1122：日志写入时路径与文件名只留哈希前缀——人名不落盘，同一个名字得到
     /// 同一个掩码（排障能对上），对输出再跑一遍结果不变。
     /// 反证：redact_log 不做路径打码（只调 redact），人名断言变红。

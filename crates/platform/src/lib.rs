@@ -547,6 +547,15 @@ pub trait PlatformAdapter: Send + Sync {
         }
     }
 
+    /// 诊断导出脱敏时要原样保留的平台特有文件名（小写比较）。
+    ///
+    /// 脱敏器默认把未知文件名打码成 `<file>.ext`；平台自己的托管文件
+    /// （如 macOS 的 LaunchAgent plist）名字固定、不含用户信息，排障要看，
+    /// 由平台层声明，脱敏器不写死平台知识（#1011）。默认无。
+    fn redaction_safe_file_names(&self) -> Vec<String> {
+        Vec::new()
+    }
+
     /// DIAG-B1：写 [`DaemonLogPaths::log_file`] 时是否**同时**照旧写
     /// stderr。macOS 为 true：launchd 托管时 stderr 是 `.err`，桌面向导读它的最后
     /// 一行报启动失败（DESK-09）。默认 false（Windows release 没有控制台可写）。

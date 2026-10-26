@@ -433,6 +433,10 @@ mod sc_name {
 }
 
 impl PlatformAdapter for MacosAdapter {
+    fn redaction_safe_file_names(&self) -> Vec<String> {
+        vec![format!("{AGENT_LABEL}.plist")]
+    }
+
     fn computer_name(&self) -> Option<String> {
         sc_name::computer_name()
     }
@@ -973,6 +977,15 @@ mod pause_resident_tests {
             Ok((code, "boom".into()))
         });
         (calls, r)
+    }
+
+    /// #1011：脱敏要保留的平台文件名 = daemon LaunchAgent 的 plist（与改前写死值一致）。
+    #[test]
+    fn redaction_keeps_the_daemon_launch_agent_plist_name() {
+        assert_eq!(
+            MacosAdapter.redaction_safe_file_names(),
+            ["com.hawkeyexb.ppass.desktop.daemon.plist"]
+        );
     }
 
     /// #1060：暂停 = bootout 该 job（卸载、KeepAlive 随之消失），不是 kill。
