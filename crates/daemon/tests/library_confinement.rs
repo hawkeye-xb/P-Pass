@@ -161,10 +161,22 @@ fn resolver_handles_directory_dangling_and_root_links() {
     std::fs::create_dir_all(&outside).unwrap();
     std::fs::write(outside.join("secret.jpg"), b"s").unwrap();
 
-    // 库根自己是链接：仍可用。
-    let root_link = base.path().join("root-link");
-    if link_or_skip(&root, &root_link) {
-        assert!(core_index::resolve_in_library(&root_link, "originals/d/a.jpg").is_ok());
+    // 库根自己是链接：仍可用。库根是目录，要用目录链接（Windows 上文件符号链接指向目录无法穿越）。
+    for kind in platform::test_support::dir_link_kinds() {
+        let root_link = base.path().join(format!("root-link-{}", kind.name));
+        match kind.make(&root, &root_link) {
+            Ok(()) => assert!(
+                core_index::resolve_in_library(&root_link, "originals/d/a.jpg").is_ok(),
+                "库根是 {} 时应可解析",
+                kind.name
+            ),
+            Err(e)
+                if kind.may_need_privilege && e.kind() == std::io::ErrorKind::PermissionDenied =>
+            {
+                eprintln!("跳过 {}：没有建链接的权限（{e}）", kind.name);
+            }
+            Err(e) => panic!("建 {} 失败：{e}", kind.name),
+        }
     }
     // 悬空链接：连「缺失宽容」版本也拒绝。
     let dangle = root.join("originals/d/dangle.jpg");
