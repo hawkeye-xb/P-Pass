@@ -653,13 +653,13 @@ impl PlatformAdapter for WindowsAdapter {
         )
     }
 
-    /// §5.1 / #1161：读「用户希望服务运行吗」的开关。没装服务就没有这个形态。
+    /// §5.1 / #1161：读「用户希望服务运行吗」的开关。
+    ///
+    /// **不**先查 `is_installed`：服务账户 `NT SERVICE\P-Pass` 不在服务对象自己的
+    /// DACL 里（那里只有 SY/BA/IU），它查不了自己，查失败会被当成「不适用」而放行。
+    /// 这个开关就是一个文件，直接读最稳；读不到/坏内容都按「要运行」处理。
     fn service_wanted_state(&self) -> Option<bool> {
-        use crate::windows_service;
-        if !windows_service::is_installed(windows_service::SERVICE_NAME).ok()? {
-            return None;
-        }
-        windows_service::read_wanted_state_at(&windows_service::wanted_state_path())
+        crate::windows_service::read_wanted_state_at(&crate::windows_service::wanted_state_path())
     }
 
     /// §5.1 / #1161：写开关。给交互用户 `RP`/`WP`、不给 `DC`，所以「开机别启动」只能
