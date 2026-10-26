@@ -275,7 +275,12 @@ if ($pairedDevAtStart -and $phoneUi -notmatch '无法扫码|扫码连接家里�
     Finish $true "already paired with $($pairedDevAtStart.name)"
 }
 
-$alreadyOnInput = Wait-PhoneText -Text '输入配对串' -TimeoutSeconds 2
+if ($phoneUi -match '重新扫码') {
+    Tap-PhoneText -Text '重新扫码' | Out-Null
+    Start-Sleep -Milliseconds 800
+    $phoneUi = Get-PhoneUi
+}
+$alreadyOnInput = ($phoneUi -match 'text="输入配对串"' -or $phoneUi -match 'ppf://pair\?node')
 if (-not $alreadyOnInput) {
     if (-not (Wait-PhoneText -Text '无法扫码？手动输入配对串' -TimeoutSeconds 15)) {
         # Some builds land on the scan screen first; the manual link is there too.
@@ -288,7 +293,7 @@ if (-not $alreadyOnInput) {
         Get-PhoneUi -EvidenceName 'phone-no-manual-link.xml' | Out-Null
         Finish $false "could not find the manual pairing link"
     }
-    if (-not (Wait-PhoneText -Text '输入配对串' -TimeoutSeconds 15)) {
+    if (-not (Wait-PhoneText -Text 'ppf://pair?node' -TimeoutSeconds 15)) {
         Get-PhoneUi -EvidenceName 'phone-no-input-screen.xml' | Out-Null
         Finish $false "manual pairing input screen did not appear"
     }
