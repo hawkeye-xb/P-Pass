@@ -43,6 +43,11 @@ ${Using:StrFunc} StrStr
   Pop $0
   nsExec::ExecToLog '"$SYSDIR\icacls.exe" "${PPASS_DATA}" /grant "NT SERVICE\${PPASS_SERVICE}:(OI)(CI)F"'
   Pop $0
+  ; 已经存在的子项（老的 logs\、升级前建的目录）不会自动跟着新 DACL 走：把它们的
+  ; ACL 重置成「继承父目录」，否则服务账户照样写不进去（真机踩过：boot 日志整段
+  ; 丢失、daemon.log 建不出来）。
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "${PPASS_DATA}\*" /reset /T'
+  Pop $0
 !macroend
 
 ; PREINSTALL：停服务、清掉旧计划任务、关壳、再停 daemon。

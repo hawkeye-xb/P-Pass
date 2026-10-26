@@ -1077,49 +1077,70 @@ async fn run_unconfigured(
     use platform::PlatformAdapter as _;
     let version = daemon::daemon_version();
     tracing::info!("#1115: 照片库位置未配置——只开放配置方法，等窗口程序的首启向导");
-    let served = match platform::adapter().resident_ipc() {
-        platform::ResidentIpc::SignedSocket(path) => {
-            let prepared = daemon::ipc::check_socket_path(&path).and_then(|()| {
-                let dir = path.parent().unwrap_or(&path);
-                platform::adapter()
-                    .prepare_private_dir(dir)
-                    .map_err(|e| format!("IPC 目录 {} 不可用：{e}", dir.display()))
-            });
-            if let Err(msg) = prepared {
-                eprintln!("{msg}");
-                std::process::exit(1);
-            }
-            stand_down_unless_claimed(&daemon::ipc::PeerEndpoint::Signed(path.clone()), &version)
-                .await;
-            daemon::ipc::serve_unconfigured_signed(&path, version, location).await
-        }
-        platform::ResidentIpc::NamespacedWithToken => {
-            // 前任（另一个未配置实例）的令牌在平台目录里；没有就是第一个。
-            let platform_dir = location.platform_dir().to_path_buf();
-            if let Some(token_hex) = predecessor_token(&platform_dir) {
+    let served: std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>> =
+        match platform::adapter().resident_ipc() {
+            platform::ResidentIpc::SignedSocket(path) => {
+                let prepared = daemon::ipc::check_socket_path(&path).and_then(|()| {
+                    let dir = path.parent().unwrap_or(&path);
+                    platform::adapter()
+                        .prepare_private_dir(dir)
+                        .map_err(|e| format!("IPC 目录 {} 不可用：{e}", dir.display()))
+                });
+                if let Err(msg) = prepared {
+                    eprintln!("{msg}");
+                    std::process::exit(1);
+                }
                 stand_down_unless_claimed(
-                    &daemon::ipc::PeerEndpoint::Token {
-                        socket_name: daemon::ipc::UNCONFIGURED_SOCKET_NAME.to_string(),
-                        token_hex,
-                    },
+                    &daemon::ipc::PeerEndpoint::Signed(path.clone()),
                     &version,
                 )
                 .await;
+                Box::pin(async move {
+                    daemon::ipc::serve_unconfigured_signed(&path, version, location).await
+                })
             }
-            let token = match rand_token() {
-                Ok(t) => t,
-                Err(e) => {
-                    eprintln!("{e}");
-                    std::process::exit(1);
+            platform::ResidentIpc::NamespacedWithToken => {
+                // 前任（另一个未配置实例）的令牌在平台目录里；没有就是第一个。
+                let platform_dir = location.platform_dir().to_path_buf();
+                if let Some(token_hex) = predecessor_token(&platform_dir) {
+                    stand_down_unless_claimed(
+                        &daemon::ipc::PeerEndpoint::Token {
+                            socket_name: daemon::ipc::UNCONFIGURED_SOCKET_NAME.to_string(),
+                            token_hex,
+                        },
+                        &version,
+                    )
+                    .await;
                 }
-            };
-            daemon::ipc::serve_unconfigured_token(&platform_dir, token, version, location).await
+                let token = match rand_token() {
+                    Ok(t) => t,
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                };
+                Box::pin(async move {
+                    daemon::ipc::serve_unconfigured_token(&platform_dir, token, version, location)
+                        .await
+                })
+            }
+        };
+    // #1047 / #1161：**未配置模式也要接停止信号**。这里以前是直接 await 到底，
+    // 于是在 SCM 眼里 `sc stop` 永远停在 STOP_PENDING——而服务模式首启必然处于
+    // 未配置状态，等于服务根本停不下来（真机实测）。未配置模式没有要收尾的状态：
+    // 让出端点、按信号退出即可。
+    tokio::select! {
+        r = served => {
+            if let Err(e) = r {
+                tracing::error!("IPC 服务退出：{e}");
+            }
+            std::process::exit(1);
         }
-    };
-    if let Err(e) = served {
-        tracing::error!("IPC 服务退出：{e}");
+        req = platform::stop_signal() => {
+            tracing::info!("#1047: 收到 {}，开始收尾退出", req.name());
+            req.finish();
+        }
     }
-    std::process::exit(1);
 }
 
 /// 单实例交接（newest wins）：在位者同版本或更新 ⇒ 本实例退出。

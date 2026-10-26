@@ -992,14 +992,11 @@ impl HostingAdapter for WindowsAdapter {
     /// `RunAtLoad`）。向导紧接着就要连上 daemon，所以登记完就跑；已经在跑时
     /// `IgnoreNew` 让这次运行什么都不多拉。顺手删掉老版本的 Run 值（迁移）。
     fn install_autostart(&self, exec: &Path) -> Result<()> {
-        // D1：服务已由安装器建好，壳不再登记计划任务（否则会多一套自启，互相打架）。
-        // 但「把开机自启恢复回来」这件事仍归壳管：用户停过服务时 §5.1 会把启动类型
-        // 置成 Disabled，这里改回 Auto（不改就点「启动后台服务」也起不来）。
+        // D1：服务已由安装器建好（`start= auto`），壳不再登记计划任务（否则会多一套
+        // 自启，互相打架）。**不在这里改启动类型**：那要 `SERVICE_CHANGE_CONFIG`，
+        // 而把 `DC` 授给普通用户会破坏 ProgramData 的 D4 保护（见 uninstall_autostart）。
         if crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)? {
-            return crate::windows_service::set_start_type(
-                crate::windows_service::SERVICE_NAME,
-                crate::windows_service::ServiceStartType::Auto,
-            );
+            return Ok(());
         }
         use windows::core::BSTR;
         use windows::Win32::System::TaskScheduler::{
@@ -1030,14 +1027,11 @@ impl HostingAdapter for WindowsAdapter {
 
     /// 计划任务在，或者老版本的 Run 值还在（还没迁移）。
     ///
-    /// 服务模式问的是「开机自启还在不在」：`Disabled`（= 用户在 App 里停过服务，
-    /// §5.1）就不算，`Auto` 才算。
+    /// 服务模式：登记就是「服务存在」，由安装器建；壳不改启动类型（见
+    /// [`Self::uninstall_autostart`] 里关于 D4 的说明）。
     fn autostart_installed(&self) -> Result<bool> {
         if crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)? {
-            return Ok(matches!(
-                crate::windows_service::start_type(crate::windows_service::SERVICE_NAME)?,
-                Some(crate::windows_service::ServiceStartType::Auto)
-            ));
+            return Ok(true);
         }
         let task = with_task_folder("query scheduled task", |folder| {
             Ok(get_task(folder)?.is_some())
@@ -1133,16 +1127,14 @@ impl HostingAdapter for WindowsAdapter {
     /// 老版本的 Run 值一并删掉。之后登录不再拉起、看门狗也不再拉。
     ///
     /// D1/§5.1：服务模式下**不删服务**——那是 per-machine 安装的一部分，删掉要管理员
-    /// 才能重建。对应的动作是 §5.1 的「停止 = 设为禁用」：`Disabled` + `sc stop`，
-    /// 之后开机也不起来；用户在 App 里再启动时 `install_autostart` 把类型改回 `Auto`。
+    /// 才能重建。这里只停（`SERVICE_STOP`；服务 DACL 已把 `RP`/`WP` 授给交互用户）。
+    ///
+    /// ⚠️ §5.1 的字面要求是「停止 = 设为禁用」，那需要 `SERVICE_CHANGE_CONFIG`。把
+    /// `DC` 授给普通用户等于让他改 binPath、以服务账户跑任意代码，ProgramData 的保护
+    /// 就没了（D4）。这个取舍挂在 #1161，定案前不在这里改启动类型。
     fn uninstall_autostart(&self) -> Result<()> {
         if crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)? {
-            use crate::windows_service::{self, ServiceStartType};
-            windows_service::set_start_type(
-                windows_service::SERVICE_NAME,
-                ServiceStartType::Disabled,
-            )?;
-            windows_service::stop(windows_service::SERVICE_NAME)?;
+            crate::windows_service::stop(crate::windows_service::SERVICE_NAME)?;
             return delete_legacy_run_value();
         }
         use windows::core::BSTR;

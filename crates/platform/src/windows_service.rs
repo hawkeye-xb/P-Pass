@@ -535,6 +535,7 @@ unsafe extern "system" fn service_control_handler(
     };
     if control == SERVICE_CONTROL_STOP || control == 5 {
         // SHUTDOWN 也按停止处理：收尾后退出，由 SCM 记录。
+        boot_log("service control: STOP");
         set_service_status(SERVICE_STOP_PENDING, SERVICE_ACCEPT_STOP);
         crate::signal::request_stop("SERVICE_CONTROL_STOP");
         return 0;
@@ -568,6 +569,7 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut PWSTR) {
     if let Some(body) = body {
         let _ = body();
     }
+    boot_log("service body: exited");
     set_service_status(SERVICE_STOPPED, 0);
 }
 
@@ -592,6 +594,16 @@ pub fn boot_log(msg: &str) {
             msg
         );
     }
+}
+
+/// 让 SCM 看到「服务已正常停止」。
+///
+/// 进程在服务主体里自己 `exit`（例如收到停止信号后走 `StopRequest::finish`）之前
+/// 必须调它：不调，SCM 会把「进程没了但状态还停在 STOP_PENDING」记成 1067
+/// （进程意外终止），哪怕退出码是 0（真机实测）。非服务上下文是 no-op。
+pub fn mark_stopped() {
+    boot_log("service: stopped");
+    set_service_status(SERVICE_STOPPED, 0);
 }
 
 /// 把本进程的 STD_ERROR_HANDLE 指向启动日志（追加）。失败就算了，不影响启动。
@@ -646,21 +658,29 @@ pub fn run_service_dispatcher(body: impl FnOnce() -> i32 + Send + 'static) -> Re
         SERVICE_TABLE_ENTRYW::default(),
     ];
     // SAFETY: name_w 在分发器返回前一直存活；表以零项结尾。
-    match unsafe { StartServiceCtrlDispatcherW(table.as_mut_ptr()) } {
-        Ok(()) => Ok(true),
+    let result = match unsafe { StartServiceCtrlDispatcherW(table.as_mut_ptr()) } {
+        Ok(()) => {
+            boot_log("dispatcher: returned Ok");
+            Ok(true)
+        }
         Err(e)
             if e.code()
                 == windows::core::HRESULT::from_win32(
                     ERROR_FAILED_SERVICE_CONTROLLER_CONNECT.0,
                 ) =>
         {
+            boot_log("dispatcher: not a service context (console path)");
             Ok(false)
         }
-        Err(e) => Err(PlatformError::Io {
-            action: "StartServiceCtrlDispatcherW",
-            source: std::io::Error::from_raw_os_error(e.code().0),
-        }),
-    }
+        Err(e) => {
+            boot_log(&format!("dispatcher: failed {e:?}"));
+            Err(PlatformError::Io {
+                action: "StartServiceCtrlDispatcherW",
+                source: std::io::Error::from_raw_os_error(e.code().0),
+            })
+        }
+    };
+    result
 }
 
 #[cfg(test)]

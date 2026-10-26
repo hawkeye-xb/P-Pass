@@ -71,6 +71,10 @@ impl StopRequest {
             }
             // 信号被屏蔽等极端情况下 raise 可能不终止进程，兜底退出。
         }
+        // #1161：服务模式下进程自己 exit 之前必须让 SCM 看到 STOPPED，否则它记
+        // 1067「进程意外终止」——即便退出码是 0。非服务上下文是 no-op。
+        #[cfg(windows)]
+        crate::windows_service::mark_stopped();
         std::process::exit(if cfg!(unix) { 143 } else { 0 })
     }
 }
@@ -122,6 +126,10 @@ pub async fn stop_signal() -> StopRequest {
         .get_or_init(tokio::sync::Notify::new)
         .notified();
     tokio::pin!(notified);
+    // 控制台事件（Ctrl+C 等）**不是**服务里的停止来源：SCM 拉起的是 session 0、
+    // 没有控制台的进程，这五个注册会失败。失败只说明「这条来源不存在」，绝不能
+    // 因此把整个 future 变成 `pending()`——那会让 `sc stop` 永远卡在 STOP_PENDING
+    // （实测：服务 RUNNING，`sc stop` 30 秒没有任何变化）。托管方那条通知必须照常。
     let (Ok(mut c), Ok(mut b), Ok(mut close), Ok(mut logoff), Ok(mut shutdown)) = (
         ctrl_c(),
         ctrl_break(),
@@ -129,16 +137,13 @@ pub async fn stop_signal() -> StopRequest {
         ctrl_logoff(),
         ctrl_shutdown(),
     ) else {
-        return std::future::pending().await;
+        return wait_for_service_stop().await;
     };
     std::future::poll_fn(|cx| {
         if notified.as_mut().poll(cx).is_ready() {
-            let name = SERVICE_STOP_NAME
-                .lock()
-                .ok()
-                .and_then(|mut g| g.take())
-                .unwrap_or("SERVICE_STOP");
-            return Poll::Ready(StopRequest { name });
+            return Poll::Ready(StopRequest {
+                name: take_service_stop_name(),
+            });
         }
         let hit = if c.poll_recv(cx).is_ready() {
             "CTRL_C"
@@ -156,6 +161,28 @@ pub async fn stop_signal() -> StopRequest {
         std::task::Poll::Ready(StopRequest { name: hit })
     })
     .await
+}
+
+/// 取走托管方给的名字；没有就退化成 `SERVICE_STOP`。
+#[cfg(windows)]
+fn take_service_stop_name() -> &'static str {
+    SERVICE_STOP_NAME
+        .lock()
+        .ok()
+        .and_then(|mut g| g.take())
+        .unwrap_or("SERVICE_STOP")
+}
+
+/// 只等托管方那条通知（控制台事件注册不上时的唯一来源）。
+#[cfg(windows)]
+async fn wait_for_service_stop() -> StopRequest {
+    SERVICE_STOP
+        .get_or_init(tokio::sync::Notify::new)
+        .notified()
+        .await;
+    StopRequest {
+        name: take_service_stop_name(),
+    }
 }
 
 /// 其它平台（Linux 开发机）：与 unix 同一套——`cfg(unix)` 已覆盖。
@@ -188,15 +215,35 @@ mod tests {
 mod service_stop_tests {
     use super::*;
 
+    /// 两条用例都要 `request_stop`，而名字只有一个——串行，别互相抢。
+    static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     /// 托管方（SCM）请求停止时，`stop_signal` 必须返回，名字是登记的那个。
     #[tokio::test(flavor = "multi_thread")]
     async fn requested_stop_wakes_stop_signal() {
+        let _g = LOCK.lock().await;
         let waiter = tokio::spawn(stop_signal());
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         request_stop("SERVICE_CONTROL_STOP");
         let got = tokio::time::timeout(std::time::Duration::from_secs(5), waiter)
             .await
             .expect("5s 内必须收到")
+            .unwrap();
+        assert_eq!(got.name(), "SERVICE_CONTROL_STOP");
+    }
+
+    /// 服务是 session 0、没有控制台：`ctrl_c()` 这类注册会失败。那**只**说明这条
+    /// 来源不存在，托管方那条必须照常唤醒——否则 `sc stop` 永远停在 STOP_PENDING
+    /// （真机实测过，见 #1161）。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn service_stop_wakes_without_console_events() {
+        let _g = LOCK.lock().await;
+        let waiter = tokio::spawn(wait_for_service_stop());
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        request_stop("SERVICE_CONTROL_STOP");
+        let got = tokio::time::timeout(std::time::Duration::from_secs(5), waiter)
+            .await
+            .expect("没有控制台也必须收到")
             .unwrap();
         assert_eq!(got.name(), "SERVICE_CONTROL_STOP");
     }
