@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import ImageIO
 import UIKit
 
 /// 演示时间线：三个月、45 张，其中每 7 张一个视频；一半是本机拍的、一半是家人的。
@@ -11,8 +12,9 @@ final class FakeTimeline: TimelineSource {
         for i in 0..<45 {
             let age: TimeInterval = Double(i) * 86_400 * 2.1
             let id = String(format: "%064x", i + 1)
+            let size = FakeImages.demoPhotoSize(seed: i + 1) ?? CGSize(width: 4032, height: 3024)
             out.append(TimelineItem(id: id, takenAt: now.addingTimeInterval(-age), isVideo: i % 7 == 3,
-                                    width: 4032, height: 3024, bytes: 2_400_000, isMine: i % 2 == 0))
+                                    width: Int(size.width), height: Int(size.height), bytes: 2_400_000, isMine: i % 2 == 0))
         }
         return out
     }()
@@ -38,7 +40,9 @@ final class FakeTimeline: TimelineSource {
 
     func thumbnail(_ item: TimelineItem, large: Bool) async throws -> UIImage {
         let side: CGFloat = large ? 900 : 240
-        return FakeImages.tile(seed: item.id.hashValue, size: CGSize(width: side, height: side * 0.75))
+        let seed = FakeImages.stableSeed(item.id)
+        return FakeImages.demoPhoto(seed: seed, longSide: side)
+            ?? FakeImages.tile(seed: seed, size: CGSize(width: side, height: side * 0.75))
     }
 
     func cachedOriginal(_ item: TimelineItem) -> URL? { nil }
@@ -55,7 +59,9 @@ final class FakeTimeline: TimelineSource {
             return url
         }
         let url = dir.appendingPathComponent("\(item.id.suffix(8)).jpg")
-        let image = FakeImages.tile(seed: item.id.hashValue, size: CGSize(width: 1600, height: 1200))
+        let seed = FakeImages.stableSeed(item.id)
+        let image = FakeImages.demoPhoto(seed: seed, longSide: 2400)
+            ?? FakeImages.tile(seed: seed, size: CGSize(width: 1600, height: 1200))
         try image.jpegData(compressionQuality: 0.85)?.write(to: url)
         return url
     }
@@ -64,7 +70,51 @@ final class FakeTimeline: TimelineSource {
 enum FakeError: Error { case unreachable }
 
 /// 演示用图：用 token 色画的纯色块 + 斜纹（不是真照片，截图里一眼能认出是演示数据）。
+/// 商店截图例外：DEBUG 构建设了 `PPASS_DEMO_PHOTOS`（一个装 JPG 的目录，simctl launch 时用
+/// SIMCTL_CHILD_PPASS_DEMO_PHOTOS 传入）就改用目录里的照片，按文件名排序、按 seed 轮流取。
+/// 照片来源与许可见 P-Pass-promo/assets/store-photos/SOURCES.md。
 enum FakeImages {
+    private static let demoPhotos: [URL] = {
+        #if DEBUG
+        guard let dir = ProcessInfo.processInfo.environment["PPASS_DEMO_PHOTOS"] else { return [] }
+        let files = (try? FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: dir), includingPropertiesForKeys: nil)) ?? []
+        return files.filter { ["jpg", "jpeg"].contains($0.pathExtension.lowercased()) }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        #else
+        return []
+        #endif
+    }()
+
+    /// 与进程无关的 seed：`hashValue` 每次启动都会变，截图要可复现。
+    static func stableSeed(_ id: String) -> Int {
+        Int(id.suffix(8), radix: 16) ?? id.unicodeScalars.reduce(0) { $0 &* 31 &+ Int($1.value) }
+    }
+
+    private static func demoPhotoURL(seed: Int) -> URL? {
+        demoPhotos.isEmpty ? nil : demoPhotos[(abs(seed) + demoPhotos.count - 1) % demoPhotos.count]
+    }
+
+    static func demoPhotoSize(seed: Int) -> CGSize? {
+        guard let url = demoPhotoURL(seed: seed),
+              let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+              let w = props[kCGImagePropertyPixelWidth] as? Int, let h = props[kCGImagePropertyPixelHeight] as? Int
+        else { return nil }
+        return CGSize(width: w, height: h)
+    }
+
+    /// 目录里的照片，按原比例缩到长边 `longSide`。没设目录时返回 nil，调用方退回色块。
+    static func demoPhoto(seed: Int, longSide: CGFloat) -> UIImage? {
+        guard let url = demoPhotoURL(seed: seed), let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, [
+                  kCGImageSourceCreateThumbnailFromImageAlways: true,
+                  kCGImageSourceThumbnailMaxPixelSize: longSide,
+                  kCGImageSourceCreateThumbnailWithTransform: true,
+              ] as CFDictionary)
+        else { return nil }
+        return UIImage(cgImage: cg)
+    }
+
     private static let palette: [UIColor] = [
         UIColor(PPColor.canvas), UIColor(PPColor.safeBg), UIColor(PPColor.waitingBg),
         UIColor(PPColor.idleBg), UIColor(PPColor.hairline), UIColor(PPColor.linen),

@@ -64,7 +64,9 @@ final class FakeMediaLibrary: MediaLibrary {
     }
 
     func cover(_ album: AlbumBucket, side: CGFloat) async -> UIImage? {
-        FakeImages.tile(seed: album.id.hashValue, size: CGSize(width: side * 1.6, height: side))
+        let seed = FakeImages.stableSeed(album.id)
+        return FakeImages.demoPhoto(seed: seed, longSide: side * 1.6)
+            ?? FakeImages.tile(seed: seed, size: CGSize(width: side * 1.6, height: side))
     }
 
     var inScopeTotal: Int64 { Int64(all.filter { scope?.contains($0.id) == true }.reduce(0) { $0 + $1.count }) }
