@@ -16,10 +16,10 @@
 ## 取证
 
 - 列 App 容器文件：`xcrun devicectl device info files --device <id> --domain-type appDataContainer --domain-identifier com.hawkeyexb.ppass`。
-  App 容器里能看到 `Library/Logs/ppass.log`、`Documents/e2e/…`（DEBUG 驱动写的）、`tmp/…`；**存储根不在这里**。
-- **存储根在 App Group 容器**（`group.com.hawkeyexb.ppass`，每次启动日志有 `storage: using App Group container …`）：`backup-orders.db(-wal/-shm)`、`backup_scope*.json`、
-  各类偏好 / 去重 json、`blobs/` 都在里面。`devicectl` 只能取 App 容器，**拉不到 App Group**。
-  要看账本：用 DEBUG 驱动 `PPASS_BGTEST_DUMP=1` 启动 App（`devicectl device process launch --environment-variables '{"PPASS_E2E_DIR":"container","PPASS_BGTEST_DUMP":"1"}' …`），
+  App 容器里能看到 `Library/Logs/ppass.log`、`Documents/e2e/…`（DEBUG 驱动写的）、`tmp/…`，以及存储根。
+- **存储根在 App 容器的 `Library/Application Support/PPass/`**（#1172 起；每次启动日志有 `storage: using app container …`）：`backup-orders.db(-wal/-shm)`、`backup_scope*.json`、
+  各类偏好 / 去重 json、`blobs/` 都在里面，可以按下一条直接拉。
+  脚本取账本仍走 DEBUG 驱动：`PPASS_BGTEST_DUMP=1` 启动 App（`devicectl device process launch --environment-variables '{"PPASS_E2E_DIR":"container","PPASS_BGTEST_DUMP":"1"}' …`），
   它把 `backup-orders.db / -wal / -shm` 拷进 App 容器的 `Documents/e2e/db`，再按下一条拉回（`tools/ios/sim-bg-task.sh`、`tools/ios/e3-batch.sh` 都这么做）。
   偏好 / 去重 json 目前没有导出入口，状态以日志为准（#1026 起成功路径也有日志）。
 - 拉文件：`xcrun devicectl device copy from --device <id> --domain-type appDataContainer --domain-identifier com.hawkeyexb.ppass --source <设备内相对路径> --destination <本机路径>`。

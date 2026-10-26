@@ -10,7 +10,7 @@ import PPassCore
 ///   PPASS_BGTEST=1               清存储根（PPASS_E2E_RESET）后：配对临时 daemon → 新建空相册「PPass BGTest <run>」并只选它 → `ready`；
 ///                                等脚本把 *.jpg / *.mov 和信号文件 `go` 拷进 `<dir>/seed/`，写进这个相册 → `seeded`。
 ///                                每轮一个新相册：旧相册里的照片不会混进这一轮的待传。
-///   PPASS_BGTEST_DUMP=1          把 App Group 里的账本（backup-orders.db / -wal / -shm）拷到 `<dir>/db`（devicectl 拉不到 App Group）。
+///   PPASS_BGTEST_DUMP=1          把存储根里的账本（backup-orders.db / -wal / -shm）拷到 `<dir>/db`（脚本统一从这里拉）。
 ///   PPASS_BGTEST_PAIR_ONLY=1     配回正式桌面：先把范围清空 → 配对（PPASS_E2E_PAIR_LINK）→ 若给了
 ///                                PPASS_BGTEST_SCOPE_RESTORE（导出时的 JSON {selected, known}），且所选相册里**没有任何测试资源**，
 ///                                恢复成那组范围；有交集就保持空范围并报 `scope_conflict`（不让测试照片进用户真实的照片库）。
@@ -201,9 +201,9 @@ enum BGTestDriver {
         try? FileManager.default.removeItem(at: target)
         try? FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
         var copied: [String] = []
-        if let group = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: LiveBackend.appGroup) {
+        if let root = try? LiveBackend.resolveRoot(logger: NoopLogger()).url {
             for name in ["backup-orders.db", "backup-orders.db-wal", "backup-orders.db-shm"] {
-                let src = group.appendingPathComponent("PPass", isDirectory: true).appendingPathComponent(name)
+                let src = root.appendingPathComponent(name)
                 if (try? FileManager.default.copyItem(at: src, to: target.appendingPathComponent(name))) != nil { copied.append(name) }
             }
         }

@@ -9,8 +9,6 @@ import UIKit
 /// 真实现的总装（#925）：存储根 → 身份 → 控制面 → 配对 → 相册 → Flow 引擎（+ 前台追赶 / 后台尽力而为 #340）。
 /// 端口的实现都在 Live/ 里，引擎与账本在 PPassCore，PhotoKit 在 PPassMedia，字节与 BLAKE3 在传输 FFI。
 final class LiveBackend: @unchecked Sendable {
-    static let appGroup = "group.com.hawkeyexb.ppass"
-
     let root: StorageRoot
     let logger: CoreLogger = OSLogger()
     let plane: ControlPlane
@@ -48,12 +46,10 @@ final class LiveBackend: @unchecked Sendable {
     let identityFingerprint: String
     #endif
 
-    /// 存储根（App Group 容器里的 `PPass/`；取不到退回 App 私有目录）。
+    /// 存储根：App 私有容器 Application Support 下的 `PPass/`（#1172：不放 App Group，见 [StorageRoot]）。
     static func resolveRoot(logger: CoreLogger) throws -> StorageRoot {
-        let fm = FileManager.default
-        let appSupport = try fm.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        return try StorageRoot.resolve(appGroupContainer: fm.containerURL(forSecurityApplicationGroupIdentifier: appGroup),
-                                       groupIdentifier: appGroup, appPrivateDirectory: appSupport, logger: logger)
+        let appSupport = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        return try StorageRoot.resolve(appPrivateDirectory: appSupport, logger: logger)
     }
 
     /// 身份换新时清掉旧配对：此刻引擎还没建，只有 BGTask 里挂着的唤醒要撤（唤醒计划文件由清单的 clear 行删）。
@@ -194,7 +190,6 @@ final class LiveBackend: @unchecked Sendable {
             onChange: { Task { await change.handle() } }, logger: logger)
         scheduler.ensureScheduled()
         scheduler.ensureShortScheduled()
-        if root.isDegraded { logger.log("storage root degraded: \(root.kind)") }
         network.onUpdate = { [weak self] update in self?.networkPathChanged(update) }
         // #1119：被拒即清理。回调可能被多条路径重复触发、也可能在引擎一轮里同步触发，所以只派一个 Task 出去，清理本身幂等。
         rejectedCleanup = RejectedPairingCleanup(

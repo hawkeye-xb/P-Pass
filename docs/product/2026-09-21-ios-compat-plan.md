@@ -213,7 +213,7 @@ PHAssetResourceUploadJob.h:39   @property NSURLRequest *destination;   // 我们
 
 - `IOS-05` 把 `android_blobs.rs` 的 provider 内核抽成平台中立模块，JNI 退化为其一层绑定；**Android 侧行为零变化**是本卡的硬验收（Android JVM 单测数与断言不得下降）。
 - `IOS-06` 新增 UniFFI/C 绑定 + `tools/build-ios-transport-xcframework.sh`，产出 device + simulator 双切片 XCFramework；哈希（BLAKE3）与 `crates/proto` 的编解码一并从这里导出，iOS 侧不自己实现。
-- `IOS-07` iOS 上的 `FsStore` 路径落在 App Group 容器；60s GC 定时器在 App 挂起期间的行为实测并登记。
+- `IOS-07` iOS 上的 `FsStore` 路径落在 App Group 容器（**已作废**：#1172 改到 App 私有容器——挂起时持有共享容器里的 redb 文件锁会被系统以 0xdead10cc 终止；需要共享的背景上传扩展已不做，#341）；60s GC 定时器在 App 挂起期间的行为实测并登记。
 
 **Gate G2**：真机跑通「手机起 provider → Desktop 拉走一张 → 凭据回来」；`cargo test -p transport` 与 Android 侧全部单测仍绿；XCFramework 在模拟器与真机两个切片上都能链接。
 
@@ -228,7 +228,7 @@ PHAssetResourceUploadJob.h:39   @property NSURLRequest *destination;   // 我们
 
 ### I4｜账本与状态（依赖 I3，不依赖 G1）
 
-- `IOS-12` `DiscoveryLedger` / `backup_scope` / `AutoBackupPrefs` / `PausePrefs` 的 iOS 实现，**从第一天就落在 App Group 容器**（`UserDefaults(suiteName:)` + 容器内 JSON）。后补迁移的代价远高于一开始就放对。若 D1-a 判定免费团队签不了 App Group，本卡仍按 App Group 写，但路径解析留一条「容器不可用则退回 App 私有目录」的分支，并在日志里说实话——不许静默降级成看起来正常。
+- `IOS-12` `DiscoveryLedger` / `backup_scope` / `AutoBackupPrefs` / `PausePrefs` 的 iOS 实现，**从第一天就落在 App Group 容器**（`UserDefaults(suiteName:)` + 容器内 JSON；**已作废**，存储根改在 App 私有容器，见 IOS-07 与 #1172）。后补迁移的代价远高于一开始就放对。若 D1-a 判定免费团队签不了 App Group，本卡仍按 App Group 写，但路径解析留一条「容器不可用则退回 App 私有目录」的分支，并在日志里说实话——不许静默降级成看起来正常。
 - `IOS-13` ARCH-01 的 04-case-matrix 逐条映射为 XCTest；矩阵里任何一条在 iOS 上不成立的，必须在本卡产出「iOS 变体不变量」的书面登记，不允许静默豁免。
 
 **Gate G4**：case matrix 覆盖率与 Android 侧对齐；换 Desktop、取消本轮、Pause 跨重启三条重启类用例在真机上各跑一遍。

@@ -15,14 +15,14 @@
 #   不碰用户的真实相册；手机存储根开跑时清空（PPASS_E2E_RESET，测试机）。
 #
 # 场景（顺序固定，每个场景 PASS / FAIL 写进 summary.txt）：
-#   forensics     设备信息、App 容器目录树、落盘日志能拉回且本进程写了 App Group 存储根行（#347 / #334 验收 1）。
+#   forensics     设备信息、App 容器目录树、落盘日志能拉回且本进程写了存储根行（#347 / #334 验收 1）。
 #   seed          配到 A、只选测试相册并写入 N 张照片，等 A 收齐 N 张——后面几例的「开跑前账本」。
 #   same-desktop  再配一次 A：账本 owner 不变、orders 一行不少、本进程不重传、A 的照片数不变（同一台电脑重配不重传，#935）。
 #   new-desktop   配到 B（范围清空、不传任何照片）：owner 换成 B、orders 清空（换电脑后旧电脑的「已确认」不算给新电脑，
 #                 #935 / #339 P-01 / #338 验收 5）；跳过名单保留；B 一张没收到。
 #   back-formal   配回 A 并恢复测试相册范围：又一次换电脑 → orders 清空后按现算差集重新确认；等这一轮收场，
 #                 CONFIRMED 不少于开跑前，N 张全由 A 答「已有」（offer_reply），没有重新上传（push = 0），A 的照片数仍是 N。
-# 账本在 App Group（devicectl 拉不到）：用 DEBUG 驱动 PPASS_BGTEST_DUMP=1 拷进 App 容器再拉回（同 sim-bg-task.sh）。
+# 账本：用 DEBUG 驱动 PPASS_BGTEST_DUMP=1 拷到 Documents/e2e/db 再拉回（同 sim-bg-task.sh）。
 # 收尾（含中途失败 / Ctrl-C）：两台沙盒都收掉。手机这时配着已退出的沙盒，配回正式桌面要人在桌面 App 里操作
 # （打开 P-Pass →「添加设备」→ 手机扫码 → 桌面点「允许」）；开跑前的相册范围导出在 scope-before.json，测试相册用
 # tools/ios/delete-test-assets.sh 删。
