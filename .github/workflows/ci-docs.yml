@@ -156,7 +156,7 @@ jobs:
         run: bash tools/test-dogfood-assets.sh
 
   supply-chain:
-    name: supply-chain（SEC-09 #371：minimumReleaseAgeExclude 不许新增）
+    name: supply-chain（SEC-09/#371：minimumReleaseAgeExclude 不许新增）
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
