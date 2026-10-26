@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- 桌面端：依赖库 tokio 升级到 1.53.3，修复安全公告 RUSTSEC-2026-0386（#1079）。
+
 ## [2026.10.6] - 2026-10-26
 
 ### Added
