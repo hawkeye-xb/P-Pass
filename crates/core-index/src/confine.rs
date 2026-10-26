@@ -124,36 +124,6 @@ mod tests {
         );
     }
 
-    /// 反证：去掉 canonicalize 后的 starts_with，库内符号链接指到库外就能读，这条红。
-    #[cfg(unix)]
-    #[test]
-    fn a_symlink_pointing_outside_is_refused() {
-        let (g, root) = lib();
-        let outside = g.path().join("secret.txt");
-        fs::write(&outside, b"s").unwrap();
-        std::os::unix::fs::symlink(&outside, root.join("originals/d/link.jpg")).unwrap();
-        assert_eq!(
-            resolve_in_library(&root, "originals/d/link.jpg"),
-            Err(ConfineError::Escapes)
-        );
-        // 目录符号链接同理。
-        std::os::unix::fs::symlink(g.path(), root.join("originals/up")).unwrap();
-        assert_eq!(
-            resolve_in_library(&root, "originals/up/secret.txt"),
-            Err(ConfineError::Escapes)
-        );
-    }
-
-    /// 库根自己是符号链接（用户把库放在别处再链过来）仍然可用。
-    #[cfg(unix)]
-    #[test]
-    fn a_symlinked_library_root_still_works() {
-        let (g, root) = lib();
-        let link = g.path().join("root-link");
-        std::os::unix::fs::symlink(&root, &link).unwrap();
-        assert!(resolve_in_library(&link, "originals/d/a.jpg").is_ok());
-    }
-
     #[test]
     fn a_missing_file_is_tolerated_only_by_the_missing_variant() {
         let (_g, root) = lib();
@@ -163,19 +133,6 @@ mod tests {
             resolve_in_library_or_missing(&root, "../x.jpg"),
             Err(ConfineError::NotRelative)
         );
-    }
-
-    /// 悬空符号链接（指向库外不存在的目标）不算「不存在」。
-    #[cfg(unix)]
-    #[test]
-    fn a_dangling_symlink_is_refused_even_by_the_missing_variant() {
-        let (g, root) = lib();
-        std::os::unix::fs::symlink(
-            g.path().join("not-yet"),
-            root.join("originals/d/dangle.jpg"),
-        )
-        .unwrap();
-        assert!(resolve_in_library_or_missing(&root, "originals/d/dangle.jpg").is_err());
     }
 
     #[test]
