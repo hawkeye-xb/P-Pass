@@ -1419,10 +1419,7 @@ impl FlowDelivery {
                 );
                 Ok(refused(supersede_refusal(reason)))
             }
-            SupersedeApplied::Replaced {
-                rel_path,
-                quarantined,
-            } => {
+            SupersedeApplied::Replaced { rel_path } => {
                 // 旧指纹的缩略图没人再引用：删掉（不留孤儿）；新指纹的照常预生成。
                 let thumbs_root = self.library_root.join(".ppf/thumbs");
                 let stale = media_codec::thumb_paths(&thumbs_root, &old);
@@ -1445,7 +1442,6 @@ impl FlowDelivery {
                             serde_json::json!({
                                 "old_hash": request.old_hash,
                                 "rel_path": rel_path,
-                                "quarantined": quarantined,
                                 "fetched_bytes": fetched,
                                 "size": size,
                             })

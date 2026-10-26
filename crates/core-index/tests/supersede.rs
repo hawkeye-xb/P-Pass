@@ -5,7 +5,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use core_index::{
-    IncomingFile, IngestOutcome, Ingestor, SupersedeApplied, SupersedeCheck, QUARANTINE_DIR,
+    sweep_legacy_superseded, IncomingFile, IngestOutcome, Ingestor, SupersedeApplied,
+    SupersedeCheck, LEGACY_SUPERSEDED_DIR,
 };
 use storage::Db;
 
@@ -64,6 +65,22 @@ async fn ingest_redacted(l: &Lib, name: &str, redacted: &[u8]) -> String {
     rel
 }
 
+/// 库目录下所有普通文件的字节数之和（按路径逐个加：同一 inode 的硬链接会被算两次，
+/// 所以「把 A 硬链接留一份」也会让总量变多）。
+fn tree_bytes(dir: &Path) -> u64 {
+    let Ok(rd) = fs::read_dir(dir) else { return 0 };
+    rd.map(|e| e.unwrap())
+        .map(|e| {
+            let t = e.file_type().unwrap();
+            if t.is_dir() {
+                tree_bytes(&e.path())
+            } else {
+                e.metadata().unwrap().len()
+            }
+        })
+        .sum()
+}
+
 /// 手机给的 B 的字节：规划出的每段区间原样切出来（真实链路里是 iroh-blobs 校验过的块）。
 fn pieces_for(ranges: &[std::ops::Range<u64>], original: &[u8]) -> Vec<(u64, Vec<u8>)> {
     ranges
@@ -77,6 +94,7 @@ async fn replaces(name: &str) {
     let (original, redacted) = (fixture(name, "original"), fixture(name, "redacted"));
     let (a, b) = (h(&redacted), h(&original));
     let rel = ingest_redacted(&l, name, &redacted).await;
+    let bytes_before = tree_bytes(&l.root);
 
     let SupersedeCheck::Ready(plan) = l.ing.plan_supersede(&a, &b, &DEV_A).await.unwrap() else {
         panic!("{name}: expected Ready")
@@ -98,11 +116,7 @@ async fn replaces(name: &str) {
         )
         .await
         .unwrap();
-    let SupersedeApplied::Replaced {
-        rel_path,
-        quarantined,
-    } = out
-    else {
+    let SupersedeApplied::Replaced { rel_path } = out else {
         panic!("{name}: {out:?}")
     };
 
@@ -130,11 +144,16 @@ async fn replaces(name: &str) {
         l.ing.has_durable_copy(&a).await.unwrap(),
         "{name}: 再报旧指纹算「已有」，不会重传"
     );
-    assert!(quarantined.starts_with(QUARANTINE_DIR));
+    // #1182：不留旧副本，库占盘仍是 1x（B 与 A 等长）。
+    // 反证：恢复把 A 硬链接 / 复制进 `.ppf/superseded/` 的那段 → 两条断言都红。
+    assert!(
+        !l.root.join(LEGACY_SUPERSEDED_DIR).exists(),
+        "{name}: 不再产生 .ppf/superseded/"
+    );
     assert_eq!(
-        fs::read(l.root.join(&quarantined)).unwrap(),
-        redacted,
-        "{name}: 旧副本隔离、没硬删"
+        tree_bytes(&l.root),
+        bytes_before,
+        "{name}: 库目录总字节 = 替换前（没有多出一份旧副本）"
     );
     assert!(l.db.pending_swaps().await.unwrap().is_empty());
     assert_eq!(
@@ -420,4 +439,112 @@ async fn a_metadata_region_over_eight_mib_is_refused_as_too_large() {
             assert_eq!(check, SupersedeCheck::Refused("region_too_large"));
         }
     }
+}
+
+// ── #1182：旧版遗留在 `.ppf/superseded/` 的旧副本，启动时按判据清掉 ──────────────
+
+/// 走一遍真实替换，再按旧版的样子把 A 放进遗留目录。返回 (库, A 的指纹, B 的 rel_path, 遗留文件)。
+async fn library_with_legacy_copy() -> (Lib, [u8; 32], String, PathBuf) {
+    let l = lib().await;
+    let (original, redacted) = (
+        fixture("jpeg.jpg", "original"),
+        fixture("jpeg.jpg", "redacted"),
+    );
+    let (a, b) = (h(&redacted), h(&original));
+    ingest_redacted(&l, "jpeg.jpg", &redacted).await;
+    let SupersedeCheck::Ready(plan) = l.ing.plan_supersede(&a, &b, &DEV_A).await.unwrap() else {
+        panic!("expected Ready")
+    };
+    let SupersedeApplied::Replaced { rel_path } = l
+        .ing
+        .apply_supersede(
+            &plan,
+            &b,
+            original.len() as u64,
+            &pieces_for(&plan.ranges, &original),
+            1,
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("expected Replaced")
+    };
+    let legacy = l
+        .root
+        .join(LEGACY_SUPERSEDED_DIR)
+        .join(format!("{}.jpg", hex(&a)));
+    fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    fs::write(&legacy, &redacted).unwrap();
+    (l, a, rel_path, legacy)
+}
+
+fn hex(h: &[u8]) -> String {
+    h.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+// 别名 A→B 在、B 的文件在：遗留的 A 被删，目录删空后也删掉；库里那份原图不受影响。
+#[tokio::test(flavor = "multi_thread")]
+async fn a_legacy_superseded_copy_is_removed_when_its_original_is_in_the_library() {
+    let (l, _a, rel, legacy) = library_with_legacy_copy().await;
+    let report = sweep_legacy_superseded(&l.db, &l.root).await.unwrap();
+    assert_eq!(report.removed, 1, "{report:?}");
+    assert!(report.kept.is_empty(), "{report:?}");
+    assert!(!legacy.exists());
+    assert!(report.dir_removed);
+    assert!(!l.root.join(LEGACY_SUPERSEDED_DIR).exists());
+    assert_eq!(
+        fs::read(l.root.join(&rel)).unwrap(),
+        fixture("jpeg.jpg", "original"),
+        "原图不动"
+    );
+    // 再跑一次：目录已不在，什么都不做。
+    let again = sweep_legacy_superseded(&l.db, &l.root).await.unwrap();
+    assert_eq!(again.removed, 0);
+}
+
+// 别名缺失：不知道它被谁替换了，不删；目录也留着。
+#[tokio::test(flavor = "multi_thread")]
+async fn a_legacy_copy_without_an_alias_is_kept() {
+    let (l, _a, _rel, legacy) = library_with_legacy_copy().await;
+    let stray = legacy.with_file_name(format!("{}.jpg", hex(&[7u8; 32])));
+    fs::rename(&legacy, &stray).unwrap();
+    let report = sweep_legacy_superseded(&l.db, &l.root).await.unwrap();
+    assert_eq!(report.removed, 0);
+    assert_eq!(report.kept, vec![("07070707".to_string(), "no_alias")]);
+    assert!(stray.exists());
+    assert!(!report.dir_removed);
+    assert!(l.root.join(LEGACY_SUPERSEDED_DIR).is_dir());
+}
+
+// 别名在、但 B 的文件不在盘上（外部删除、对账还没跑）：A 可能是这张照片仅剩的一份，不删。
+// 反证：去掉「rel_path 在盘上」这条判据 → 本条红。
+#[tokio::test(flavor = "multi_thread")]
+async fn a_legacy_copy_whose_original_file_is_gone_is_kept() {
+    let (l, a, rel, legacy) = library_with_legacy_copy().await;
+    fs::remove_file(l.root.join(&rel)).unwrap();
+    let report = sweep_legacy_superseded(&l.db, &l.root).await.unwrap();
+    assert_eq!(report.removed, 0);
+    assert_eq!(
+        report.kept,
+        vec![(hex(&a)[..8].to_string(), "target_file_missing")]
+    );
+    assert!(legacy.exists(), "B 不在，A 必须留着");
+    assert!(!report.dir_removed);
+}
+
+// 名字不是 `<64 位 hex>.<扩展名>` 的（用户或别的程序放进来的）一律不碰。
+#[tokio::test(flavor = "multi_thread")]
+async fn files_in_the_legacy_dir_that_are_not_ours_are_kept() {
+    let (l, _a, _rel, legacy) = library_with_legacy_copy().await;
+    let dir = legacy.parent().unwrap().to_path_buf();
+    fs::write(dir.join("notes.txt"), b"x").unwrap();
+    fs::create_dir(dir.join("sub")).unwrap();
+    let report = sweep_legacy_superseded(&l.db, &l.root).await.unwrap();
+    assert_eq!(report.removed, 1, "{report:?}");
+    let mut reasons: Vec<_> = report.kept.iter().map(|(_, r)| *r).collect();
+    reasons.sort();
+    assert_eq!(reasons, vec!["not_a_file", "unrecognized_name"]);
+    assert!(dir.join("notes.txt").exists());
+    assert!(dir.join("sub").is_dir());
+    assert!(!report.dir_removed);
 }
