@@ -9,6 +9,7 @@
 #   uia-drive.ps1 -Action type -Name <label> -Value <text>  # focus an Edit and type (SendKeys)
 #   uia-drive.ps1 -Action settext -Name <label> -Value <text>  # Edit.ValuePattern.SetValue
 #   uia-drive.ps1 -Action getvalue -Name <label>  # print an Edit's ValuePattern value
+#   uia-drive.ps1 -Action dumpfull -Out <file>    # TSV: ControlType<TAB>Name<TAB>L,T,R,B
 # Exit codes for click/type/settext: 0 ok, 2 not found (page may still be rendering; retry), 3 no pattern.
 # Pass Chinese labels from PowerShell, not Git Bash (MSYS mangles the argument encoding).
 param(
@@ -26,6 +27,7 @@ $p = Get-Process $Proc -ErrorAction Stop | Select-Object -First 1
 $pc = New-Object Windows.Automation.PropertyCondition($A::ProcessIdProperty, $p.Id)
 $wins = $root.FindAll([Windows.Automation.TreeScope]::Children, $pc)
 $lines = New-Object System.Collections.Generic.List[string]
+$fullLines = New-Object System.Collections.Generic.List[string]
 $target = $null
 foreach ($w in $wins) {
     $lines.Add("WIN: " + $w.Current.Name + " | " + $w.Current.ClassName)
@@ -34,6 +36,10 @@ foreach ($w in $wins) {
         $n = $e.Current.Name
         $t = $e.Current.ControlType.ProgrammaticName
         if ($n) { $lines.Add($t + " | " + $n) }
+        if ($Action -eq 'dumpfull' -and $n) {
+            $r = $e.Current.BoundingRectangle
+            $fullLines.Add(("{0}`t{1}`t{2},{3},{4},{5}" -f $t, $n, [int]$r.Left, [int]$r.Top, [int]$r.Right, [int]$r.Bottom))
+        }
         if ($Action -eq 'click' -and -not $target -and $n -eq $Name) {
             if ($t -eq 'ControlType.Button' -or $t -eq 'ControlType.Hyperlink' -or $t -eq 'ControlType.MenuItem' -or $t -eq 'ControlType.CheckBox' -or $t -eq 'ControlType.RadioButton' -or $t -eq 'ControlType.ListItem') { $target = $e }
         }
@@ -76,6 +82,11 @@ if ($Action -eq 'getvalue') {
         exit 0
     }
     "NO VALUE PATTERN: $Name"; exit 3
+}
+if ($Action -eq 'dumpfull') {
+    [IO.File]::WriteAllLines($Out, $fullLines, (New-Object Text.UTF8Encoding($false)))
+    "lines=" + $fullLines.Count
+    exit 0
 }
 [IO.File]::WriteAllLines($Out, $lines, (New-Object Text.UTF8Encoding($false)))
 "lines=" + $lines.Count
