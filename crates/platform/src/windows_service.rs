@@ -430,6 +430,58 @@ pub fn uninstall(name: &str) -> Result<()> {
     })
 }
 
+/// 「用户希望这个服务运行吗」的开关文件：`%ProgramData%\P-Pass\wanted-state`。
+///
+/// §5.1 的「尊重用户停服务」在 Windows 上没有免提权的实现：改启动类型要
+/// `SERVICE_CHANGE_CONFIG`，把它给普通用户等于允许改 binPath、以服务账户跑任意
+/// 代码（D4 作废）。所以改成**服务自检**：用户点停止 → 壳写 `stopped`；开机时
+/// SCM 拉起服务，daemon 第一件事读这个文件，看到 `stopped` 就 `exit 0`（成功退出，
+/// SCM 不会重启）——表现就是「停着」。点启动 → 壳写回 `running` 再 `sc start`。
+///
+/// 文件只是**一个开关**，不含任何数据；给交互用户读写不扩大他的权限（他本来就有
+/// `RP`/`WP`）。父目录仍然是私有的，用户只能按全路径打开这一个文件（列目录仍被拒）。
+pub fn wanted_state_path() -> std::path::PathBuf {
+    std::path::Path::new(r"C:\ProgramData\P-Pass").join("wanted-state")
+}
+
+/// 读开关。`Ok(None)` = 文件不存在 / 读不出 / 内容不认识 —— 一律按「要运行」处理：
+/// 宁可多起一次，也不要因为一个坏文件让服务永远起不来。
+pub fn read_wanted_state_at(path: &Path) -> Option<bool> {
+    let text = std::fs::read_to_string(path).ok()?;
+    match text.trim() {
+        "running" => Some(true),
+        "stopped" => Some(false),
+        _ => None,
+    }
+}
+
+/// 写开关（整份替换，原子换名）。给壳用。
+pub fn write_wanted_state_at(path: &Path, running: bool) -> Result<()> {
+    use std::io::Write as _;
+    let dir = path.parent().unwrap_or(path);
+    std::fs::create_dir_all(dir).map_err(|e| PlatformError::Io {
+        action: "create_wanted_state_dir",
+        source: e,
+    })?;
+    let tmp = path.with_extension("tmp");
+    let written = (|| -> std::io::Result<()> {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(if running { b"running" } else { b"stopped" })?;
+        f.sync_all()
+    })();
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(PlatformError::Io {
+            action: "write_wanted_state",
+            source: e,
+        });
+    }
+    std::fs::rename(&tmp, path).map_err(|e| PlatformError::Io {
+        action: "replace_wanted_state",
+        source: e,
+    })
+}
+
 /// 把启动 / 停止 / 查询的权限授给 `owner_sid`（§5.1：普通用户控制服务不弹 UAC）。
 ///
 /// 服务 SD 用 SDDL 表达：`CC`=查询配置、`LC`=查询状态、`RP`=启动、`WP`=停止。
@@ -800,5 +852,22 @@ mod start_type_tests {
         )
         .expect_err("不存在的服务不能改");
         assert!(format!("{err}").contains("服务未安装"), "{err}");
+    }
+
+    /// §5.1 / #1161：`wanted-state` 往返 + 坏内容一律按「要运行」处理（宁可多起一次，
+    /// 不能让一个坏文件把服务永远关掉）。
+    #[test]
+    fn wanted_state_roundtrips_and_junk_means_running() {
+        let d = tempfile::tempdir().expect("tempdir");
+        let p = d.path().join("wanted-state");
+        assert_eq!(read_wanted_state_at(&p), None, "不存在 = 不知道");
+        write_wanted_state_at(&p, false).expect("write");
+        assert_eq!(read_wanted_state_at(&p), Some(false));
+        write_wanted_state_at(&p, true).expect("write");
+        assert_eq!(read_wanted_state_at(&p), Some(true));
+        std::fs::write(&p, "banana").expect("write junk");
+        assert_eq!(read_wanted_state_at(&p), None, "坏内容 = 按运行");
+        std::fs::write(&p, "  stopped\n").expect("write padded");
+        assert_eq!(read_wanted_state_at(&p), Some(false), "容忍空白");
     }
 }

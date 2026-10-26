@@ -48,6 +48,19 @@ ${Using:StrFunc} StrStr
   ; 丢失、daemon.log 建不出来）。
   nsExec::ExecToLog '"$SYSDIR\icacls.exe" "${PPASS_DATA}\*" /reset /T'
   Pop $0
+  ; §5.1 / #1161：「用户希望服务运行吗」的开关。开机时 SCM 拉起服务，daemon 读到
+  ; stopped 就成功退出（= 保持停止）。这个文件**单独**给交互用户读写——目录本身
+  ; 仍然私有，用户只能按全路径打开它（SeChangeNotifyPrivilege），列目录依旧被拒。
+  ; 已存在就不动：升级不能把用户「我停过」的选择悄悄改回 running。
+  IfFileExists "${PPASS_DATA}\wanted-state" ppass_wanted_state_exists
+    FileOpen $0 "${PPASS_DATA}\wanted-state" w
+    ${If} $0 != ""
+      FileWrite $0 "running"
+      FileClose $0
+    ${EndIf}
+  ppass_wanted_state_exists:
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "${PPASS_DATA}\wanted-state" /grant "*S-1-5-32-545:(R,W)"'
+  Pop $0
 !macroend
 
 ; PREINSTALL：停服务、清掉旧计划任务、关壳、再停 daemon。

@@ -98,6 +98,19 @@ async fn run() -> anyhow::Result<()> {
             std::process::exit(2);
         }
     };
+    // §5.1 / #1161：「开机别启动」不靠改服务启动类型（那要 `SERVICE_CHANGE_CONFIG`，
+    // 给了普通用户就等于允许他改 binPath 并以服务账户跑代码，D4 作废），改成服务自检：
+    // 用户在 App 里停过服务，壳把 `wanted-state` 写成 `stopped`；开机 SCM 拉起本进程，
+    // 这里第一件事读它，是 `stopped` 就成功退出（SCM 看到正常停止，不会重启）。
+    if platform::service_mode_active() {
+        use platform::PlatformAdapter as _;
+        if platform::adapter().service_wanted_state() == Some(false) {
+            platform::service_boot_log(
+                "wanted-state=stopped：用户在 App 里停过服务，本次启动直接退出",
+            );
+            return Ok(());
+        }
+    }
     // EOF 信号：stdin 循环在 EOF 时发；ephemeral 模式下 main 用 select
     // 竞争它，收到即优雅退出（oneshot 只消费一次）。
     let (eof_tx, eof_rx) = tokio::sync::oneshot::channel::<()>();

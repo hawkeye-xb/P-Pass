@@ -606,6 +606,9 @@ fn start_daemon_now(app: tauri::AppHandle) -> Result<String, String> {
     // DESK-36 (#456)：用户点「启动服务」（或走完向导）= 撤销之前的主动停止，
     // 自愈恢复正常。放在探活之后：文件跑不起来就什么都没启动，仍算「停着」。
     set_user_stopped(&platform::adapter().data_dir(), false)?;
+    // §5.1 / #1161：服务模式下「开机别启动」是服务自检的开关——先写回 running，否则
+    // 刚 `sc start` 起来的 daemon 读到 stopped 会立刻退出（看起来像启动失败）。
+    let _ = platform::adapter().set_service_wanted_state(true);
     let manager = app.state::<ServiceStateManager>().inner().clone();
     manager.begin_start(&app, "user start");
     match platform::hosting().install_autostart(&sidecar) {
@@ -810,6 +813,10 @@ fn stop_daemon_now() -> Result<(), String> {
     //    恰好来一次自愈 tick，它也得看见标记。落不下就不停：停了也会被
     //    自愈拉回来，不如直接告诉用户停止失败。
     set_user_stopped(&platform::adapter().data_dir(), true)?;
+    // §5.1 / #1161：服务模式下「开机别启动」靠服务自检——先把开关写成 stopped，
+    // 再停服务；否则下次开机 SCM 拉起来它又会跑（Windows 不给普通用户改启动类型的
+    // 权限，给了就破坏 ProgramData 的保护）。
+    let _ = platform::adapter().set_service_wanted_state(false);
     // 1) Unregister first — otherwise the service manager revives it
     //    (launchd KeepAlive / the Task Scheduler watchdog).
     //    DESK-65 (#957)：结果不许丢——撤不掉登记，下次开机服务照样起来，

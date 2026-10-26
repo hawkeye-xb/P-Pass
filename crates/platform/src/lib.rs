@@ -700,6 +700,21 @@ pub trait PlatformAdapter: Send + Sync {
         Ok(LibraryDirGrant::NotApplicable)
     }
 
+    /// §5.1 / #1161：「用户希望这个服务运行吗」。
+    ///
+    /// `Some(false)` = 用户在 App 里停过服务：daemon 启动后应当**直接成功退出**
+    /// （服务管理器看到「正常停止」，不会重启）。`Some(true)` / `None` = 正常运行。
+    /// 其他平台没有这个形态（macOS 的 stop 会把 launchd 作业 disable 掉）。
+    fn service_wanted_state(&self) -> Option<bool> {
+        None
+    }
+
+    /// 写上面的开关（窗口程序用）。`Unsupported` = 本平台没有这个机制。
+    fn set_service_wanted_state(&self, running: bool) -> Result<Applied> {
+        let _ = running;
+        Ok(Applied::Unsupported)
+    }
+
     /// QA-09 迁移（#211）：把文件权限收紧到「只有属主可读写」。
     ///
     /// 用在身份密钥这类文件上。默认实现返回 [`Applied::Unsupported`] 而

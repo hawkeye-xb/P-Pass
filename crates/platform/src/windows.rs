@@ -653,6 +653,26 @@ impl PlatformAdapter for WindowsAdapter {
         )
     }
 
+    /// §5.1 / #1161：读「用户希望服务运行吗」的开关。没装服务就没有这个形态。
+    fn service_wanted_state(&self) -> Option<bool> {
+        use crate::windows_service;
+        if !windows_service::is_installed(windows_service::SERVICE_NAME).ok()? {
+            return None;
+        }
+        windows_service::read_wanted_state_at(&windows_service::wanted_state_path())
+    }
+
+    /// §5.1 / #1161：写开关。给交互用户 `RP`/`WP`、不给 `DC`，所以「开机别启动」只能
+    /// 由服务自检实现（详见 `windows_service::wanted_state_path` 的说明）。
+    fn set_service_wanted_state(&self, running: bool) -> Result<crate::Applied> {
+        use crate::windows_service;
+        if !windows_service::is_installed(windows_service::SERVICE_NAME)? {
+            return Ok(crate::Applied::NotApplicable);
+        }
+        windows_service::write_wanted_state_at(&windows_service::wanted_state_path(), running)?;
+        Ok(crate::Applied::Done)
+    }
+
     /// #1043：`ERROR_SHARING_VIOLATION`（32，文件正被另一进程使用）与
     /// `ERROR_ACCESS_DENIED`（5，覆盖正在运行的 exe 时常见）——与改前前端正则
     /// 匹配的两句系统原文一一对应，只是改成按错误码判，与系统语言无关。
