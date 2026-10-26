@@ -67,6 +67,10 @@ pub fn unpaired_limiter() -> UnpairedLimiter {
 /// 同时在线的未配对连接上限（全局）。配对时一次只有一两台手机在扫码。
 pub const UNPAIRED_CONN_MAX: usize = 8;
 
+/// #1149：在场的未配对连接多久复核一次「配对窗口还开着吗」。窗口关闭（二维码关闭或
+/// 令牌过期）到连接被收回，最长就是这个间隔，要求在 1 秒内。
+pub const WINDOW_RECHECK: std::time::Duration = std::time::Duration::from_millis(250);
+
 /// 未配对连接的名额池：连接建立时取一个名额、连接结束时归还；没有名额就直接断开。
 pub type UnpairedConns = Arc<tokio::sync::Semaphore>;
 

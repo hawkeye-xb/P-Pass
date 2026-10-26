@@ -891,6 +891,7 @@ async fn main() -> anyhow::Result<()> {
     ipc.set_peer_closer(peer_closer.clone());
     let router = Router::new(db, desktop_name)
         .with_peer_closer(peer_closer)
+        .with_window_enforced()
         .with_events(event_bus.clone())
         .with_subscriptions(subscriptions)
         .with_outdated_peers(outdated)

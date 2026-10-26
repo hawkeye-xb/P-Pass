@@ -8,7 +8,6 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.hawkeyexb.ppass.proto.Methods
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.addrOf
-import com.hawkeyexb.ppass.transport.parsePairingQr
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -52,8 +51,8 @@ class NetProbeTest {
             val client = DaemonClient()
             client.bind()
             try {
-                // E2E-02: 见 DaemonHelloTest——新码只带 r=。
-                val addr = addrOf(parsePairingQr(qr!!.trim()))
+                // 见 DaemonHelloTest：配对串经 Rust 核心解析。
+                val addr = addrOf(qr!!)
                 val resp = withTimeout(30_000) {
                     client.call(addr, Methods.HELLO, buildJsonObject {})
                 }

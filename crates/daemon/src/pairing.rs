@@ -479,6 +479,7 @@ impl Pairing {
         req: &proto::PairRequest,
         now_ms: i64,
     ) -> Result<PairSubmission, PairRejection> {
+        let device_name = safe_name(&req.device_name);
         let role = match req.role.as_str() {
             "viewer" => Role::Viewer,
             // §2.2: joining devices are members unless explicitly viewer;
@@ -516,7 +517,7 @@ impl Pairing {
             let withdrawn = Arc::new(AtomicBool::new(false));
             let pending = PendingPair {
                 peer,
-                device_name: req.device_name.clone(),
+                device_name: device_name.clone(),
                 role,
                 requested_at: now_ms,
                 decision: tx,
@@ -553,13 +554,12 @@ impl Pairing {
                     Some(peer.0.to_vec()),
                     "pair.requested",
                     None,
-                    Some(serde_json::json!({ "deviceName": req.device_name.clone() }).to_string()),
+                    Some(serde_json::json!({ "deviceName": device_name }).to_string()),
                 ))
                 .await,
         );
 
         let this = self.clone();
-        let device_name = req.device_name.clone();
         let id = request_id.clone();
         tokio::spawn(async move {
             let (state, settled_at) = this
@@ -1059,11 +1059,15 @@ pub(crate) fn warn_if_audit_failed<T, E: std::fmt::Display>(action: &str, result
     }
 }
 
-/// Device names come from the network — cap length, strip control chars.
+/// Device names come from the network — cap length, strip control chars and Unicode format
+/// characters (Cf: bidi overrides/isolates, zero-width joiners, BOM … — #1149), which can
+/// reorder or hide text in the approval dialog. Applied once when the request is queued; every
+/// later consumer (approval prompt, audit, device profile) sees the cleaned name.
 fn safe_name(name: &str) -> String {
+    use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
     let cleaned: String = name
         .chars()
-        .filter(|c| !c.is_control())
+        .filter(|c| !c.is_control() && c.general_category() != GeneralCategory::Format)
         .take(MAX_DEVICE_NAME_CHARS)
         .collect();
     if cleaned.trim().is_empty() {
@@ -1251,6 +1255,10 @@ mod tests {
         assert_eq!(safe_name("妈妈的手机"), "妈妈的手机");
         assert_eq!(safe_name("a\x00b\x1fc"), "abc");
         assert_eq!(safe_name("   "), "未命名设备");
+        // #1149：Cf 格式字符（双向控制符、零宽字符、BOM）被清掉，正常文字与 emoji 保留。
+        assert_eq!(safe_name("a\u{202E}b\u{200B}c\u{2066}d\u{FEFF}e"), "abcde");
+        assert_eq!(safe_name("\u{202E}\u{200B}"), "未命名设备");
+        assert_eq!(safe_name("小明的 iPhone 📱"), "小明的 iPhone 📱");
         assert_eq!(
             safe_name(&"x".repeat(200)).chars().count(),
             MAX_DEVICE_NAME_CHARS

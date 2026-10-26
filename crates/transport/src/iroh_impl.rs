@@ -843,6 +843,13 @@ impl Incoming {
         &self.alpn
     }
 
+    /// #1149：用应用关闭码 [`crate::NOT_PAIRED_CLOSE_CODE`] 关掉这条连接
+    /// （配对窗口关闭后，收回在场的未配对连接）。
+    pub fn close_not_paired(&self) {
+        self.conn
+            .close(crate::NOT_PAIRED_CLOSE_CODE.into(), b"not_paired");
+    }
+
     /// Accept the next bidirectional stream the dialer opens.
     /// QUIC streams are lazy: this resolves once the dialer sends data.
     pub async fn accept_bi(&self) -> Result<BiStream> {
