@@ -41,6 +41,8 @@ issue（为什么做）→ 分支 → PR（怎么做的）→ 验收人 review +
 - **一 issue 一分支，走 PR 合入，不直推 main。**
   `git fetch origin && git switch -c <type>/<issue号>-<slug> origin/main`
   （type ∈ feat/fix/docs/test/ci）。
+- **每个提交都用 `git commit -s` 签名（DCO）**：PR 上的 `CI DCO` 检查逐个提交核对
+  `Signed-off-by` 与 author 一致，缺了就红。漏签用 `git rebase --signoff origin/main` 补。
 - **分支上快验，PR 上全验。** 推分支不触发 CI（四条 lane 的 `push` 限定
   `branches: [main]`）：纯文档 `just ci-docs`，动了代码 `just ci`。
   开 PR 才跑 lane，分两档：
