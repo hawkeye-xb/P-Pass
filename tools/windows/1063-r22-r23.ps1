@@ -412,6 +412,15 @@ $dataDir = Get-DataDir
 Log "DataDir=$dataDir"
 Capture-Wifi 'before'
 
+# A secure keyguard prevents bringing the App to the foreground; without that
+# the transfer cannot be started, so do not queue 30 large images pointlessly.
+$win = Invoke-Adb -AdbArgs @('shell', 'dumpsys', 'window')
+$preUi = ''
+try { $preUi = Get-PhoneUi -EvidenceName 'phone-preflight.xml' } catch { }
+if ($win.Output -match 'mDreamingLockscreen=true' -or $preUi -match '画出解锁图案|紧急呼叫|PIN|password') {
+    Finish 'UNCOVERED' 'phone is on the secure keyguard; unlock it and rerun (no pattern bypass attempted)'
+}
+
 $attempt = 0
 $inflight = $false
 $before = 0
@@ -525,8 +534,10 @@ if ($Case -eq 'R2.2') {
     $proc = Invoke-Adb -AdbArgs @('shell', 'pidof', $pkg)
     Event "pid after crash='$($proc.Output)'"
     Capture-Jobscheduler
+    $sCrash = Get-IpcStatus
+    Snapshot-Jobscheduler -Tag 'R2.3 pre-crash' -Count ([int]$sCrash.result.photo_count) -Active ([bool]$sCrash.result.transfer_active)
     Capture-Wifi 'after-crash'
-    $auto = Wait-Converged -ExpectedTotal $total -TimeoutSeconds $RecoveryTimeoutSeconds
+    $auto = Wait-Converged -ExpectedTotal $total -TimeoutSeconds $RecoveryTimeoutSeconds -SnapshotEverySeconds 60 -SnapshotTag 'R2.3 auto'
     Capture-Logcat
     if ($auto) {
         $hashesOk = Verify-Batch -DataDir $dataDir -ExpectedHashes $expectedHashes -ExpectedTotal $total
@@ -544,7 +555,7 @@ if ($Case -eq 'R2.2') {
     Start-Sleep -Milliseconds 800
     Invoke-Adb -AdbArgs @('shell', 'monkey', '-p', $pkg, '-c', 'android.intent.category.LAUNCHER', '1') | Out-Null
     Event 'R2.3 opened app manually; waiting for fill'
-    $manual = Wait-Converged -ExpectedTotal $total -TimeoutSeconds $ManualTimeoutSeconds
+    $manual = Wait-Converged -ExpectedTotal $total -TimeoutSeconds $ManualTimeoutSeconds -SnapshotEverySeconds 60 -SnapshotTag 'R2.3 manual'
     $hashesOk = Verify-Batch -DataDir $dataDir -ExpectedHashes $expectedHashes -ExpectedTotal $total
     Capture-Logcat
     if ($manual -and $hashesOk) {
