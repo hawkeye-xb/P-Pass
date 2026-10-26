@@ -3245,8 +3245,8 @@ mod tests {
             "${StrStr}",
             "update-failed",
             "desktop-user-stopped",
-            "\"$SYSDIR\\schtasks.exe\" /Change /TN \"P-Pass\" /ENABLE",
-            "\"$SYSDIR\\schtasks.exe\" /Run /TN \"P-Pass\"",
+            "\"$SYSDIR\\sc.exe\" start \"${PPASS_SERVICE}\"",
+            "\"$SYSDIR\\sc.exe\" create \"${PPASS_SERVICE}\"",
             "${IfNot} ${Silent}",
         ] {
             assert!(hooks.contains(needle), "installer-hooks.nsh 缺 {needle}");

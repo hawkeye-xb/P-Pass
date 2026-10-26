@@ -77,8 +77,12 @@ windows-sys = { version = "0.61", features = [
 #    直接依赖并多开几个 feature。
 windows = { version = "0.62", features = [
   "Win32_Foundation",
-  # #1155：GetFileVersionInfoW / VerQueryValueW —— 单测拿真实系统 PE 与内存解析结果对照。
+  # #1155：GetFileVersionInfoW / VerQueryValueW（单测对照真实 PE）。
   "Win32_Storage",
+  # #1161：SCM 的 SDDL 解析与服务对象安全描述符。
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  # #1161：DELETE 访问位（删服务用）。
   "Win32_Storage_FileSystem",
   # CoInitializeEx / CoUninitialize —— COM 必须先初始化线程套间。
   "Win32_System_Com",
@@ -93,6 +97,7 @@ windows = { version = "0.62", features = [
   "Win32_System_WinRT",
   # DESK-65 (#957)：常驻服务交给任务计划程序——ITaskService / IRegisteredTask，
   # 参数里的 VARIANT / BSTR 在后两个 feature 下。
+  "Win32_System_Services",
   "Win32_System_TaskScheduler",
   "Win32_System_Ole",
   "Win32_System_Variant",

@@ -901,6 +901,10 @@ impl HostingAdapter for WindowsAdapter {
     /// `RunAtLoad`）。向导紧接着就要连上 daemon，所以登记完就跑；已经在跑时
     /// `IgnoreNew` 让这次运行什么都不多拉。顺手删掉老版本的 Run 值（迁移）。
     fn install_autostart(&self, exec: &Path) -> Result<()> {
+        // D1：服务已由安装器建好，壳不再登记计划任务（否则会多一套自启，互相打架）。
+        if crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)? {
+            return Ok(());
+        }
         use windows::core::BSTR;
         use windows::Win32::System::TaskScheduler::{
             TASK_CREATE_OR_UPDATE, TASK_LOGON_INTERACTIVE_TOKEN,
@@ -930,6 +934,9 @@ impl HostingAdapter for WindowsAdapter {
 
     /// 计划任务在，或者老版本的 Run 值还在（还没迁移）。
     fn autostart_installed(&self) -> Result<bool> {
+        if crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)? {
+            return Ok(true);
+        }
         let task = with_task_folder("query scheduled task", |folder| {
             Ok(get_task(folder)?.is_some())
         })?;
@@ -940,6 +947,14 @@ impl HostingAdapter for WindowsAdapter {
     /// `Repaired` ⇒ `install_autostart` 换成计划任务并删掉 Run 值（迁移只发生
     /// 在壳的对账里，那里先判了用户有没有停过服务）。
     fn autostart_registration(&self) -> Result<crate::AutostartRegistration> {
+        if crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)? {
+            return Ok(
+                match crate::windows_service::image_path(crate::windows_service::SERVICE_NAME)? {
+                    Some(path) => crate::AutostartRegistration::At(path),
+                    None => crate::AutostartRegistration::Unreadable,
+                },
+            );
+        }
         use windows::core::{Interface as _, BSTR};
         use windows::Win32::System::TaskScheduler::IExecAction;
 
@@ -1015,6 +1030,10 @@ impl HostingAdapter for WindowsAdapter {
     /// DESK-65 (#957)：结束任务正在跑的实例，再删任务（= `launchctl bootout`），
     /// 老版本的 Run 值一并删掉。之后登录不再拉起、看门狗也不再拉。
     fn uninstall_autostart(&self) -> Result<()> {
+        if crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)? {
+            crate::windows_service::uninstall(crate::windows_service::SERVICE_NAME)?;
+            return delete_legacy_run_value();
+        }
         use windows::core::BSTR;
         with_task_folder("delete scheduled task", |folder| {
             let Some(task) = get_task(folder)? else {
@@ -1028,11 +1047,27 @@ impl HostingAdapter for WindowsAdapter {
     }
 
     fn service_mode(&self) -> ServiceMode {
-        ServiceMode::ScheduledTask
+        // D1 / #1161 迁移期：安装器还没建服务（同一张卡的 B/C 部分）。先按「服务在不在」
+        // 选：装过服务的机器自动走 SCM，没装的继续用计划任务。安装器落地后，这个分支
+        // 和计划任务那一整套一起删。
+        if crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)
+            .unwrap_or(false)
+        {
+            ServiceMode::WindowsService
+        } else {
+            ServiceMode::ScheduledTask
+        }
     }
 
     /// 任务正在跑的实例的进程号。
     fn resident_daemon_pid(&self) -> Option<u32> {
+        if let Ok(true) = crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)
+        {
+            return crate::windows_service::status(crate::windows_service::SERVICE_NAME)
+                .ok()
+                .flatten()
+                .and_then(|s| s.pid);
+        }
         with_task_folder("query scheduled task", |folder| match get_task(folder)? {
             Some(task) => task_running_pid(&task),
             None => Ok(None),
@@ -1052,6 +1087,33 @@ impl HostingAdapter for WindowsAdapter {
     /// DESK-65 (#957)：= `launchctl kickstart [-k]`。`kill_running` 时先结束在跑
     /// 的实例再运行任务（换版本）；否则在跑就不动（自愈）。
     fn restart_resident_daemon(&self, kill_running: bool) -> Result<crate::ResidentRestart> {
+        if crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)? {
+            use crate::windows_service;
+            if !kill_running {
+                if let Some(pid) =
+                    windows_service::status(windows_service::SERVICE_NAME)?.and_then(|s| s.pid)
+                {
+                    return Ok(crate::ResidentRestart::AlreadyRunning { pid });
+                }
+            }
+            windows_service::stop(windows_service::SERVICE_NAME)?;
+            windows_service::start(windows_service::SERVICE_NAME)?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                if let Some(pid) =
+                    windows_service::status(windows_service::SERVICE_NAME)?.and_then(|s| s.pid)
+                {
+                    return Ok(crate::ResidentRestart::Started { pid });
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err(PlatformError::Failed {
+                        action: "restart_service",
+                        detail: "服务 10 秒内没有进入 Running".into(),
+                    });
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
         use windows::Win32::Foundation::{E_FAIL, VARIANT_TRUE};
         use windows::Win32::System::Variant::VARIANT;
 
@@ -1097,6 +1159,20 @@ impl HostingAdapter for WindowsAdapter {
     /// B7（#1043）：判据从「映像名」收紧到「映像的完整路径」，见
     /// [`stop_processes_at`]。
     fn stop_daemon(&self, exe: &Path, pid_hint: Option<u32>) -> Result<crate::KillOutcome> {
+        if crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)
+            .unwrap_or(false)
+        {
+            let was_running = crate::windows_service::status(crate::windows_service::SERVICE_NAME)
+                .ok()
+                .flatten()
+                .is_some_and(|s| s.pid.is_some());
+            crate::windows_service::stop(crate::windows_service::SERVICE_NAME)?;
+            return Ok(if was_running {
+                crate::KillOutcome::Killed
+            } else {
+                crate::KillOutcome::NotRunning
+            });
+        }
         stop_processes_at(exe, pid_hint)
     }
 }

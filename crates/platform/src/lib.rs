@@ -29,7 +29,6 @@ use std::path::PathBuf;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod data_migration;
 
-// #1155：从已验签的同一份字节里读 PE 版本（Windows 更新防降级）。纯字节解析、无平台 API，
 // 三个平台都编译并跑单测；只有 Windows 的更新路径会调用它。
 #[cfg_attr(not(windows), allow(dead_code))]
 mod pe_version;
@@ -55,6 +54,10 @@ mod signal;
 mod unix;
 #[cfg(windows)]
 mod windows;
+// D1 / brief §5.1：SCM 服务托管（查询、起停、注册/删除、给主人授权）。
+#[cfg(windows)]
+pub mod windows_service;
+
 // #1157：D4 / §5.2 的 ProgramData 正本存放与目录 ACL 基础件。
 #[cfg(windows)]
 pub mod windows_programdata;
@@ -65,6 +68,24 @@ pub use windows_programdata::{ProgramDataDir, ProgramDataStore};
 pub mod windows_photo_dir;
 #[cfg(windows)]
 pub use windows_photo_dir::{grant_modify_for_sid, list_modify_sids, GrantOutcome};
+
+/// 托管方（Windows SCM）要求本进程以「系统服务」方式运行。
+///
+/// `body` 在服务线程上执行并返回进程退出码。返回 `Ok(true)` = 走的是服务路径；
+/// `Ok(false)` = 不是服务上下文（控制台、桌面壳 shell-out），照常往下跑。
+/// 非 Windows 平台没有这个托管方，永远 `Ok(false)`。
+pub fn run_as_service(body: impl FnOnce() -> i32 + Send + 'static) -> Result<bool> {
+    #[cfg(windows)]
+    {
+        windows_service::run_service_dispatcher(body)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = body;
+        Ok(false)
+    }
+}
+
 // #287：只给测试用的建链能力。默认不编译，见该模块顶部说明。
 #[cfg(feature = "test-support")]
 pub mod test_support;
@@ -106,6 +127,13 @@ pub enum ServiceMode {
     /// 跳过）。和 LaunchAgent 一样由系统托管：开机启动、崩溃拉起、按需
     /// 立即拉起、撤销登记后不再拉起。
     ScheduledTask,
+    /// D1 / #1161：Windows 系统服务（SCM）——per-machine 安装、以虚拟服务账户
+    /// `NT SERVICE\<服务名>` 运行、开机即起（不等登录）、失败自动重启。
+    ///
+    /// 与 [`ServiceMode::ScheduledTask`] 的区别不只是「谁拉起」：服务的身份是
+    /// 服务账户（不是用户），身份私钥、配对白名单、库位置才能放进
+    /// `%ProgramData%` 只给服务读。计划任务跑在用户会话里，做不到这一点。
+    WindowsService,
 }
 
 impl ServiceMode {
@@ -118,7 +146,9 @@ impl ServiceMode {
     pub fn has_service_manager(self) -> bool {
         match self {
             ServiceMode::UserAutostart => false,
-            ServiceMode::LaunchAgent | ServiceMode::ScheduledTask => true,
+            ServiceMode::LaunchAgent | ServiceMode::ScheduledTask | ServiceMode::WindowsService => {
+                true
+            }
         }
     }
 }
