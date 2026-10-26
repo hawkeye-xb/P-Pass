@@ -18,3 +18,5 @@ pub const ALL: &[(u32, &str)] = &[(NOT_PAIRED, "not_paired"), (UNPAIRED, "unpair
 pub fn means_not_paired(code: u64) -> bool {
     code == u64::from(NOT_PAIRED) || code == u64::from(UNPAIRED)
 }
+
+// probe: core-review gate check (#1187), do not merge
