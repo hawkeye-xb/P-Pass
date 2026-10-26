@@ -23,7 +23,7 @@ jobs:
   identity:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # 必须取全史：PR 要算 base..head，push 要算 before..sha，
           # 浅克隆会让区间解析失败（且失败方向是「查不到=放行」，最危险）。
