@@ -6,15 +6,20 @@
 # Usage:
 #   uia-drive.ps1 -Action dump                 # list "ControlType | Name" lines to -Out (UTF-8)
 #   uia-drive.ps1 -Action click -Name <label>  # invoke the first button/listitem with that exact name
-# Exit codes for click: 0 ok, 2 not found (page may still be rendering; retry), 3 no pattern.
+#   uia-drive.ps1 -Action type -Name <label> -Value <text>  # focus an Edit and type (SendKeys)
+#   uia-drive.ps1 -Action settext -Name <label> -Value <text>  # Edit.ValuePattern.SetValue
+#   uia-drive.ps1 -Action getvalue -Name <label>  # print an Edit's ValuePattern value
+# Exit codes for click/type/settext: 0 ok, 2 not found (page may still be rendering; retry), 3 no pattern.
 # Pass Chinese labels from PowerShell, not Git Bash (MSYS mangles the argument encoding).
 param(
-    [string]$Action = 'dump',      # dump | click
-    [string]$Name = '',            # element name (exact match) for click
+    [string]$Action = 'dump',      # dump | click | type
+    [string]$Name = '',            # element name (exact match) for click/type
+    [string]$Value = '',           # text for -Action type (digits only are enough for the pair code)
     [string]$Out = "$env:TEMP\uia.txt",
     [string]$Proc = 'p-pass-desktop'
 )
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+Add-Type -AssemblyName System.Windows.Forms
 $A = [Windows.Automation.AutomationElement]
 $root = $A::RootElement
 $p = Get-Process $Proc -ErrorAction Stop | Select-Object -First 1
@@ -32,6 +37,7 @@ foreach ($w in $wins) {
         if ($Action -eq 'click' -and -not $target -and $n -eq $Name) {
             if ($t -eq 'ControlType.Button' -or $t -eq 'ControlType.Hyperlink' -or $t -eq 'ControlType.MenuItem' -or $t -eq 'ControlType.CheckBox' -or $t -eq 'ControlType.RadioButton' -or $t -eq 'ControlType.ListItem') { $target = $e }
         }
+        if (($Action -eq 'type' -or $Action -eq 'settext' -or $Action -eq 'getvalue') -and -not $target -and $n -eq $Name -and $t -eq 'ControlType.Edit') { $target = $e }
     }
 }
 if ($Action -eq 'click') {
@@ -43,6 +49,33 @@ if ($Action -eq 'click') {
     $sp = $null
     if ($target.TryGetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern, [ref]$sp)) { $sp.Select(); "selected: $Name"; exit 0 }
     "NO PATTERN: $Name"; exit 3
+}
+if ($Action -eq 'type') {
+    if (-not $target) { "NOT FOUND: $Name"; exit 2 }
+    $target.SetFocus()
+    Start-Sleep -Milliseconds 150
+    [Windows.Forms.SendKeys]::SendWait($Value)
+    "typed: $Name"
+    exit 0
+}
+if ($Action -eq 'settext') {
+    if (-not $target) { "NOT FOUND: $Name"; exit 2 }
+    $vp = $null
+    if ($target.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern, [ref]$vp)) {
+        $vp.SetValue($Value)
+        "set value: $Name"
+        exit 0
+    }
+    "NO VALUE PATTERN: $Name"; exit 3
+}
+if ($Action -eq 'getvalue') {
+    if (-not $target) { "NOT FOUND: $Name"; exit 2 }
+    $vp = $null
+    if ($target.TryGetCurrentPattern([Windows.Automation.ValuePattern]::Pattern, [ref]$vp)) {
+        "value: " + $vp.Current.Value
+        exit 0
+    }
+    "NO VALUE PATTERN: $Name"; exit 3
 }
 [IO.File]::WriteAllLines($Out, $lines, (New-Object Text.UTF8Encoding($false)))
 "lines=" + $lines.Count
