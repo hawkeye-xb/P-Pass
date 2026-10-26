@@ -124,15 +124,62 @@ async fn an_absolute_recorded_path_is_refused() {
     assert_all_refused(&f, "绝对路径").await;
 }
 
-#[cfg(unix)]
+/// 造文件符号链接；没特权（Windows 无开发者模式）就跳过并说明，其他失败判红。
+fn link_or_skip(target: &Path, link: &Path) -> bool {
+    match platform::test_support::file_symlink(target, link) {
+        Ok(()) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!("跳过：没有建符号链接的权限（{e}）");
+            false
+        }
+        Err(e) => panic!("建符号链接失败：{e}"),
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_symlink_leaving_the_library_is_refused() {
     let base = tempfile::tempdir().unwrap();
     let f = fixture(base.path()).await;
     let link = f.root.join("originals/evil.jpg");
-    std::os::unix::fs::symlink(&f.outside, &link).unwrap();
+    if !link_or_skip(&f.outside, &link) {
+        return;
+    }
     f.db.update_asset_rel_path(&f.hash, "originals/evil.jpg")
         .await
         .unwrap();
     assert_all_refused(&f, "符号链接").await;
+}
+
+/// 解析函数本身：目录符号链接、悬空链接、库根是链接。
+#[test]
+fn resolver_handles_directory_dangling_and_root_links() {
+    let base = tempfile::tempdir().unwrap();
+    let root = base.path().join("lib");
+    std::fs::create_dir_all(root.join("originals/d")).unwrap();
+    std::fs::write(root.join("originals/d/a.jpg"), b"x").unwrap();
+    let outside = base.path().join("out");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("secret.jpg"), b"s").unwrap();
+
+    // 库根自己是链接：仍可用。
+    let root_link = base.path().join("root-link");
+    if link_or_skip(&root, &root_link) {
+        assert!(core_index::resolve_in_library(&root_link, "originals/d/a.jpg").is_ok());
+    }
+    // 悬空链接：连「缺失宽容」版本也拒绝。
+    let dangle = root.join("originals/d/dangle.jpg");
+    if link_or_skip(&base.path().join("not-yet.jpg"), &dangle) {
+        assert!(core_index::resolve_in_library(&root, "originals/d/dangle.jpg").is_err());
+        assert!(
+            core_index::resolve_in_library_or_missing(&root, "originals/d/dangle.jpg").is_err()
+        );
+    }
+    // 链到库外文件。
+    let link = root.join("originals/d/out.jpg");
+    if link_or_skip(&outside.join("secret.jpg"), &link) {
+        assert_eq!(
+            core_index::resolve_in_library(&root, "originals/d/out.jpg"),
+            Err(core_index::ConfineError::Escapes)
+        );
+    }
 }

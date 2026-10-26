@@ -86,6 +86,21 @@ pub fn dir_link_kinds() -> &'static [DirLinkKind] {
     }
 }
 
+/// 在 `link` 处造一个指向文件 `target` 的符号链接（#1150：库内链接指到库外的测试要用）。
+///
+/// Windows 上建文件符号链接要特权：失败时返回 `Err`（`PermissionDenied`），调用方
+/// 应跳过并打印原因，绝不静默算通过。
+pub fn file_symlink(target: &Path, link: &Path) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_file(target, link)
+    }
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+}
+
 /// 建一个 junction。
 ///
 /// std 没有 junction API，`mklink` 是 cmd 的内建命令——所以只能起 cmd。
