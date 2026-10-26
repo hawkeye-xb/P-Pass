@@ -8,6 +8,8 @@
 # #943：外观与字号可选——IOS_SHOT_APPEARANCE=light|dark（默认 light）、
 #   IOS_SHOT_SIZE=默认 large，可取 extra-extra-extra-large / accessibility-extra-extra-extra-large 等
 #   （xcrun simctl ui <udid> content_size 的取值）。要全矩阵：tools/ios/screenshots.sh 跑四次，输出分目录。
+# 商店截图：IOS_SHOT_PHOTOS=<装 JPG 的目录> 让演示数据改用真实照片（见 FakeTimeline.swift 的 FakeImages），
+#   IOS_SIM_NAME="iPhone 17 Pro Max" 出 6.9 英寸的商店尺寸（1320×2868）。照片在 P-Pass-promo/assets/store-photos/。
 # 本脚本启动的模拟器结束时关掉。
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -38,6 +40,7 @@ mkdir -p "$OUT"
 shot() { # <文件名> <场景> <路由> [等待秒数]
   local name="$1" scenario="$2" route="$3" wait="${4:-3}"
   SIMCTL_CHILD_PPASS_SCENARIO="$scenario" SIMCTL_CHILD_PPASS_ROUTE="$route" \
+    SIMCTL_CHILD_PPASS_DEMO_PHOTOS="${IOS_SHOT_PHOTOS:-}" \
     xcrun simctl launch --terminate-running-process "$UDID" "$BUNDLE_ID" \
     -AppleLanguages "($LANG_CODE)" -AppleLocale "${LANG_CODE/-/_}" >/dev/null
   sleep "$wait"
