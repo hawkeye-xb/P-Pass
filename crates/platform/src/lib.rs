@@ -38,6 +38,9 @@ mod pe_version;
 mod code_signature;
 // #1109：身份私钥存取端口（不在 cfg 里，daemon 的判定与单测三平台都跑）。
 mod identity_key;
+// D6 / brief 5.6：Windows Hello 挑战的一次性/过期/绑定校验（纯逻辑）。
+mod hello_challenge;
+pub use hello_challenge::{ChallengeStore, HelloError};
 // #1115：本机 IPC 对端身份（macOS 按 audit token + 代码签名；其他平台明确「不支持」）。
 mod local_peer;
 // #1109：macOS 的身份私钥存放处——data protection 钥匙串。
