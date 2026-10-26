@@ -394,6 +394,14 @@ impl QueryEngine {
             return Ok(placeholder(Duration::ZERO));
         };
 
+        // #1150: the source must resolve inside the library root; a recorded
+        // path that escapes (`..`, absolute, outward symlink) is never opened.
+        let Ok(src) = core_index::resolve_in_library(&self.library_root, &asset.rel_path) else {
+            tracing::warn!(hash = %hash_prefix(&hash), "thumb source is outside the library; placeholder served");
+            self.record_first_byte(started, "thumb");
+            return Ok(placeholder(self.retry_after));
+        };
+
         // DESK-34 (#428): consult the gate before spawning anything — a
         // recent failure answers at once, a running generation is joined
         // instead of duplicated. No `.await` may sit between reserving a
@@ -411,7 +419,7 @@ impl QueryEngine {
                 tx,
                 done,
             } => {
-                self.spawn_generation(hash, self.library_root.join(&asset.rel_path), tx);
+                self.spawn_generation(hash, src, tx);
                 (gen_started, done)
             }
         };
@@ -483,6 +491,15 @@ impl QueryEngine {
         });
     }
 
+    /// #1150: resolve an indexed `rel_path` to a real path inside the library
+    /// root, or `NotFound` (never say why to the peer; the reason is logged).
+    fn confined(&self, rel_path: &str) -> Result<PathBuf, QueryError> {
+        core_index::resolve_in_library(&self.library_root, rel_path).map_err(|e| {
+            tracing::warn!("#1150: refusing to read outside the library: {e}");
+            QueryError::NotFound
+        })
+    }
+
     /// `asset.blob_ticket`: make the original fetchable and hand out a
     /// ticket. Import is idempotent (content-addressed store).
     pub async fn blob_ticket(&self, hash_hex: &str) -> Result<BlobTicketResponse, QueryError> {
@@ -492,7 +509,7 @@ impl QueryEngine {
             .get_asset(&hash)
             .await?
             .ok_or(QueryError::NotFound)?;
-        let abs = self.library_root.join(&asset.rel_path);
+        let abs = self.confined(&asset.rel_path)?;
         let ticket = self
             .blobs
             .push(hash, &abs)
@@ -511,7 +528,7 @@ impl QueryEngine {
             .get_asset(&hash)
             .await?
             .ok_or(QueryError::NotFound)?;
-        Ok(self.library_root.join(&asset.rel_path))
+        self.confined(&asset.rel_path)
     }
 
     /// DESK-03: `asset.original` — 原图字节（大图查看用，不落盘）。
@@ -539,7 +556,7 @@ impl QueryEngine {
         if asset.bytes > ORIGINAL_CAP {
             return Err(QueryError::NotFound);
         }
-        let abs = self.library_root.join(&asset.rel_path);
+        let abs = self.confined(&asset.rel_path)?;
         let bytes = tokio::fs::read(&abs)
             .await
             .map_err(|_| QueryError::NotFound)?;
