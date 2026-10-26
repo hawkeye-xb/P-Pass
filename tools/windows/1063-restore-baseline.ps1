@@ -198,7 +198,16 @@ $phoneFiles = @(Get-PhoneFiles)
 $drop = @($phoneFiles | Where-Object { $_ -notmatch '^REG_\d+\.jpg$' })
 $keep = @($phoneFiles | Where-Object { $_ -match '^REG_\d+\.jpg$' })
 $batchHashes = New-Object 'System.Collections.Generic.HashSet[string]'
-$batchFiles = @(Get-ChildItem -LiteralPath $WorkRoot -Recurse -Filter 'expected-*.sha256' -File -ErrorAction SilentlyContinue)
+# Only the live case dirs. Do NOT recurse: other cases keep their own
+# expected-*.sha256 (V4's expected-BASE.sha256 is the 40-photo baseline set),
+# and sweeping those in would delete the baseline itself.
+$batchFiles = @()
+foreach ($batchCase in @('R2.2', 'R2.3')) {
+    $bd = Join-Path $WorkRoot $batchCase
+    if (Test-Path -LiteralPath $bd) {
+        $batchFiles += @(Get-ChildItem -LiteralPath $bd -Filter 'expected-*.sha256' -File -ErrorAction SilentlyContinue)
+    }
+}
 foreach ($bf in $batchFiles) {
     foreach ($h in (Read-HashFile -Path $bf.FullName)) { [void]$batchHashes.Add($h) }
 }
@@ -223,6 +232,10 @@ $toDelete = @($originals | Where-Object {
     $batchHashes.Contains($h)
 })
 if ($originals.Count -eq $ExpectedCount) { $toDelete = @() }
+$maxDelete = $originals.Count - $ExpectedCount
+if ($toDelete.Count -gt $maxDelete) {
+    Finish 'FAIL' "refusing to delete $($toDelete.Count) originals when only $maxDelete are above the baseline"
+}
 $needRestart = $false
 if ($toDelete.Count -gt 0) {
     if (-not (Stop-Desktop)) { Finish 'FAIL' 'could not stop p-pass-desktop/ppf-daemon before deleting originals' }
@@ -244,8 +257,10 @@ $missing = @($baselineHashes | Where-Object { $afterHashes -notcontains $_ })
 Log "After: photo_count=$afterCount originals=$($afterOriginals.Count) baseline_missing=$($missing.Count) phone_ok=$phoneOk"
 
 # Surgical path failed? Fall back to the frozen 40-photo library snapshot.
+$usedSnapshot = $false
 if ((-not $ok -or $afterCount -ne $ExpectedCount -or $afterOriginals.Count -ne $ExpectedCount -or $missing.Count -ne 0) -and (Test-Path -LiteralPath $snapshotDir)) {
     Log 'Surgical restore did not reach 40; falling back to the library snapshot'
+    $usedSnapshot = $true
     if (-not (Stop-Desktop)) { Finish 'FAIL' 'could not stop the desktop before snapshot fallback' }
     if (-not (Copy-Tree -From $snapshotDir -To $dataDir)) { Finish 'FAIL' 'snapshot fallback copy failed' }
     if (-not (Start-Desktop)) { Finish 'FAIL' 'could not restart p-pass-desktop after snapshot fallback' }
@@ -271,7 +286,7 @@ $summary = @(
     "photo_count_before=$beforeCount",
     "photo_count_after=$afterCount",
     "baseline_missing=$($missing.Count)",
-    "snapshot_fallback=$((Test-Path -LiteralPath $snapshotDir))",
+    "snapshot_fallback=$usedSnapshot",
     "result=$(if ($pass) { 'PASS' } else { 'FAIL' })"
 )
 [IO.File]::WriteAllLines((Join-Path $caseDir 'summary.txt'), $summary, (New-Object Text.UTF8Encoding($false)))
