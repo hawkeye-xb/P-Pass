@@ -466,11 +466,14 @@ pub async fn serve_unconfigured_signed(
         };
         let location = Arc::clone(&location);
         let version = version.clone();
+        let floor = version.clone();
         tokio::spawn(async move {
             let checked = tokio::task::spawn_blocking(move || {
-                let check = platform::verify_local_peer(
+                // #1150：服务端接入加版本下限——对端不得低于本 daemon 自身版本。
+                let check = platform::verify_local_peer_min_version(
                     &conn,
                     &[platform::PeerRole::Shell, platform::PeerRole::Daemon],
+                    &floor,
                 );
                 (conn, check)
             })
@@ -484,7 +487,7 @@ pub async fn serve_unconfigured_signed(
                 }
                 other => {
                     tracing::warn!(
-                        "#1115: 拒绝 IPC 连接（未配置状态）：{:?}",
+                        "#1115/#1150: 拒绝 IPC 连接（未配置状态，签名或版本不符）：{:?}",
                         other.map(|(_, c)| c)
                     );
                     return;
@@ -993,12 +996,15 @@ impl IpcServer {
                 }
             };
             let server = Arc::clone(&self);
+            let floor = daemon_version();
             tokio::spawn(async move {
                 // 签名校验是同步 Security 调用（毫秒级，含读盘），不占 async 线程。
                 let checked = tokio::task::spawn_blocking(move || {
-                    let check = platform::verify_local_peer(
+                    // #1150：同上。
+                    let check = platform::verify_local_peer_min_version(
                         &conn,
                         &[platform::PeerRole::Shell, platform::PeerRole::Daemon],
+                        &floor,
                     );
                     (conn, check)
                 })
@@ -1011,7 +1017,7 @@ impl IpcServer {
                         (conn, IpcClient::Daemon)
                     }
                     Ok((_, other)) => {
-                        tracing::warn!("#1115: 拒绝 IPC 连接——对端不是我们签名的程序：{other:?}");
+                        tracing::warn!("#1115/#1150: 拒绝 IPC 连接——对端不是我们签名的程序，或版本低于本 daemon：{other:?}");
                         server.note_rejected("ipc.bad_peer").await;
                         return;
                     }

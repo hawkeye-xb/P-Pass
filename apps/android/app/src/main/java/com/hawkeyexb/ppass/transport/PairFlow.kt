@@ -26,8 +26,10 @@
 package com.hawkeyexb.ppass.transport
 
 import com.hawkeyexb.ppass.ffi.PairPhone
+import com.hawkeyexb.ppass.ffi.ParsedPairLink
 import com.hawkeyexb.ppass.ffi.nodeFingerprint
 import com.hawkeyexb.ppass.ffi.pairCodeGenerate
+import com.hawkeyexb.ppass.ffi.parsePairLink
 import com.hawkeyexb.ppass.proto.Hello
 import com.hawkeyexb.ppass.proto.Methods
 import com.hawkeyexb.ppass.proto.PairAccepted
@@ -531,26 +533,31 @@ suspend fun pairWithQr(
         "The pairing code cannot be parsed. Update P-Pass on both the computer and phone to the latest version.",
     storageDeviceNameFallback: String = "P-Pass storage",
     knownDesktop: (nodeIdHex: String) -> Boolean = { false },
+    /** Injectable only for tests; production is the shared Rust parser. */
+    parseLink: (String) -> ParsedPairLink = ::parsePairLink,
 ): PairOutcome {
+    // #1149: the one strict parser lives in the Rust core (`transport::parse_pair_link`, shared with
+    // iOS and the dev testclient): node = 64 hex, t = the daemon's 24-hex token, relay = https://
+    // plus a valid host name. A malformed code is "not a P-Pass pairing code" and nothing below
+    // runs — no dial, no local write.
     val parsed = try {
-        parsePairingQr(qr)
+        parseLink(qr)
     } catch (e: Exception) {
         return PairOutcome.Failed(invalidCodeMessage)
     }
-    // H-10b: 新 QR 只有 r=（relay URL）——从 node+relay 重建可连接地址；
-    // 旧 QR 的 a= 完整解析仍兼容。
-    val addr: PeerAddrParts = parsed.addr ?: parsed.relayUrl?.let {
-        PeerAddrParts(parsed.nodeIdHex, it, emptyList())
-    } ?: return PairOutcome.Failed(
-        // FIX-T3: 升级顺序地雷——旧 APK（≤0.3.0-test.2）只认 a=，新码
-        // 只带 r=；a=/r= 都缺 = 配对码无法解析。明确引导升级而非静默失败。
-        unparseableCodeMessage
-    )
-    // 存储 token：旧码存原 a= 串；新码从 node+relay 重建（backup 的
-    // parsePeerAddrToken 兼容）。
-    val addrToken: String = parsed.addr?.let { qr.substringAfter("&a=", "") }
-        ?: parsed.relayUrl?.let { buildAddrToken(parsed.nodeIdHex, it) }
-        ?: ""
+    // The core rebuilds the dialable address from node + relay (or the legacy full `a=` address);
+    // the stored token has the same JSON shape backup's `parsePeerAddrToken` reads.
+    val addrToken: String = parsed.peerToken
+    val addr: PeerAddrParts = try {
+        parsePeerAddrToken(addrToken)
+    } catch (e: Exception) {
+        return PairOutcome.Failed(invalidCodeMessage)
+    }
+    // FIX-T3: a code with neither relay nor direct address (node + token only) cannot be dialled
+    // from this phone — point at upgrading instead of failing silently.
+    if (addr.relayUrl == null && addr.directAddresses.isEmpty()) {
+        return PairOutcome.Failed(unparseableCodeMessage)
+    }
 
     // Already a member on this storage (same phone, the computer's
     // address changed)? Then no pair.request is needed — and it would be
@@ -563,14 +570,14 @@ suspend fun pairWithQr(
     // any other node goes through the code, otherwise a forged QR could claim membership and
     // skip the #1118 code entirely.
     val member = trustedMembership(
-        knownDesktop = knownDesktop(parsed.nodeIdHex),
+        knownDesktop = knownDesktop(parsed.nodeId),
         rpc = { method, params -> client.call(addr, method, params) },
     )
     if (member != null) {
         val name = member.deviceName.takeIf { it.isNotBlank() } ?: storageDeviceNameFallback
         return PairOutcome.Joined(
             Pairing(
-                daemonNodeId = parsed.nodeIdHex,
+                daemonNodeId = parsed.nodeId,
                 daemonAddrToken = addrToken,
                 storageDeviceName = name,
                 pairedAt = System.currentTimeMillis(),
@@ -589,14 +596,14 @@ suspend fun pairWithQr(
         ceremony = FfiPairCeremony(
             token = parsed.token,
             phoneNode = phoneNode,
-            deskNode = parsed.nodeIdHex,
+            deskNode = parsed.nodeId,
             fallbackName = storageDeviceNameFallback,
             onCode = onCode,
         ),
     )
     return verdict.toOutcome { accepted ->
         Pairing(
-            daemonNodeId = parsed.nodeIdHex,
+            daemonNodeId = parsed.nodeId,
             daemonAddrToken = addrToken,
             storageDeviceName = accepted.storageDeviceName,
             pairedAt = System.currentTimeMillis(),

@@ -97,6 +97,9 @@ struct OnboardingFlow: View {
         case .scan: step = .scan
         case .manual: step = .manual(fromScan: false)
         case .pairWaiting: step = .status(.waiting)
+        case .pairCode:
+            step = .status(.code(PairCodeShown(code: "482916", desktop: PairDesktopInfo(name: "Home-Computer", fingerprint: "AB12 CD34"),
+                                               phoneNode: "")))
         case .pairRefused: step = .status(.refused(lapsed: false, note: nil))
         case .pairLapsed: step = .status(.refused(lapsed: true, note: PairNote.expired.text))
         case .pairFailed: step = .status(.failed("demo: unreachable"))

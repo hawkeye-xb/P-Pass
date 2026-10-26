@@ -8,6 +8,7 @@
 
 use std::path::PathBuf;
 
+mod confine;
 mod dedup;
 mod ingest;
 mod media;
@@ -15,6 +16,7 @@ mod rebuild;
 mod supersede;
 mod timeline;
 
+pub use confine::{resolve_in_library, resolve_in_library_or_missing, ConfineError};
 pub use dedup::hash_file;
 pub use ingest::{device_dir, IncomingFile, IngestOutcome, Ingestor};
 pub use media::{media_kind, media_type_for, MediaKind, NON_MEDIA_IMAGE_TYPES};

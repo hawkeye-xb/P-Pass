@@ -36,12 +36,8 @@ class DaemonHelloTest {
         assumeTrue("PPF_DAEMON_QR not set — skipping live-daemon test", !qr.isNullOrBlank())
 
         runBlocking {
-            val parsed = parsePairingQr(qr!!.trim())
-            // H-10b 之后的正路：新码只有 r=，从 node+relay 重建；旧码的
-            // a= 仍兼容。与 PairFlow.pairWithQr 同一套判断，不许两边漂移。
-            // E2E-02: 重建逻辑抽进 addrOf（PairingQrAddr.kt）——四个 e2e
-            // 测试共用一份，下次协议变只改那里。
-            val addr: PeerAddrParts = addrOf(parsed)
+            // 与 PairFlow.pairWithQr 同一个解析器（Rust 核心，#1149），见 PairingQrAddr.kt。
+            val addr: PeerAddrParts = addrOf(qr!!)
 
             val client = DaemonClient()
             client.bind()

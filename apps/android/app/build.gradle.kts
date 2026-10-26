@@ -77,6 +77,14 @@ android {
         buildConfig = true
     }
 
+    // #1151：BouncyCastle 与 jspecify 各带一份只含清单的 META-INF/versions/9/OSGI-INF/MANIFEST.MF，
+    // mergeJavaResource 遇到重名直接失败。OSGi 清单在 Android 上没有用处，排除即可。
+    packaging {
+        resources {
+            excludes += "META-INF/versions/9/OSGI-INF/MANIFEST.MF"
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -202,10 +210,11 @@ dependencies {
     implementation("io.github.rctcwyvrn:blake3:1.3")
 
 
-    // UPD-02: 更新包 minisign 验签的 Ed25519/Ed25519ph——纯 Java、CC0、
-    // 几十 KB（APK 体积纪律：BouncyCastle 整个塞进来太大，BLAKE2b 因此
-    // 也是本仓手写 RFC 7693，见 Blake2b.kt 与其测试向量）。
-    implementation("net.i2p.crypto:eddsa:0.3.0")
+    // UPD-02 / #1151: 更新包 minisign 验签——Ed25519 与 BLAKE2b-512 都用在维护的
+    // BouncyCastle（轻量 API，不经 JCA、不注册 provider）。原先的 net.i2p eddsa 0.3.0
+    // 已停更且有无修复版的公告，BLAKE2b 也不再手写。代价：release 未开 R8，整个 jar
+    // 进 APK（约 +3MB，APK 58MB 量级）。
+    implementation("org.bouncycastle:bcprov-jdk18on:1.86")
 
     // #1124：uniffi 生成的 Kotlin 绑定经 JNA 调 libtransport.so（控制面不再用 iroh-ffi）。
     implementation("net.java.dev.jna:jna:5.15.0@aar")

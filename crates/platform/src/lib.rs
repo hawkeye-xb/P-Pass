@@ -48,6 +48,8 @@ mod local_peer;
 mod keychain;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+mod sealed_version;
 // QA-09 迁移（#211）：macOS 与 Linux 共享的 unix 实现。迁过来的分叉里有
 // 3 处是 `#[cfg(unix)]`（同时覆盖两者），没有共享模块就得抄两遍。
 mod signal;
@@ -55,6 +57,9 @@ mod signal;
 mod unix;
 #[cfg(windows)]
 mod windows;
+// #1151：应用内更新的大小 / 总时长上限（纯逻辑，三平台都跑单测）。
+pub mod update_limits;
+
 // #1157：D4 / §5.2 的 ProgramData 正本存放与目录 ACL 基础件。
 #[cfg(windows)]
 pub mod windows_programdata;
@@ -77,7 +82,9 @@ pub use code_signature::{
 };
 pub use data_migration::DataDirMigration;
 pub use identity_key::{IdentityKeyHome, IdentityKeyStore, SecretBlobStore};
-pub use local_peer::{verify_local_peer, LocalPeerSource, PeerCheck, PeerRole};
+pub use local_peer::{
+    verify_local_peer, verify_local_peer_min_version, LocalPeerSource, PeerCheck, PeerRole,
+};
 
 /// #1115：常驻 daemon 的本机 IPC 形态（[`PlatformAdapter::resident_ipc`]）。
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -22,7 +22,6 @@
 // 「向导要不要出现」不在这里——那是 Rust `wizard_state.show_wizard` 的事。
 
 import { invoke } from "@tauri-apps/api/core";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
 
 import { callDaemon } from "./daemonApi.js";
 import { startupFailureText } from "./daemonStartupError.js";
@@ -85,15 +84,16 @@ export function createWizardFlow({
   }
 
   async function chooseFolder() {
-    const dir = await openDialog({
-      directory: true,
+    // #1150：系统对话框由壳弹，选定的目录留在壳里；这里只拿到展示用的字符串。
+    const dir = await invoke("pick_library_dir", {
       title: t("ui.wizard_choose_folder_title"),
-      defaultPath: defaultDir,
+      fromDefault: true,
     });
     if (dir) set({ libraryDir: dir });
   }
 
-  function useDefault() {
+  async function useDefault() {
+    await invoke("use_default_library_dir");
     set({ libraryDir: defaultDir });
   }
 
@@ -132,7 +132,7 @@ export function createWizardFlow({
     set({ error: "", busy: true });
     // 先写库位置：daemon 校验（存在 / 可写 / 不嵌套）不过就回第 1 步重选，常驻服务不启动。
     try {
-      await invoke("write_config", { libraryDir: state.libraryDir });
+      await invoke("write_config");
     } catch (e) {
       set({ step: 1, busy: false, error: t("ui.wizard_save_failed", { err: errDetail(e) }) });
       return;

@@ -2,12 +2,11 @@ package com.hawkeyexb.ppass.update
 
 import com.hawkeyexb.ppass.BuildConfig
 import java.io.File
-import java.security.Signature
+import java.io.FileInputStream
 import java.util.Base64
-import net.i2p.crypto.eddsa.EdDSAPublicKey
-import net.i2p.crypto.eddsa.EdDSASecurityProvider
-import net.i2p.crypto.eddsa.spec.EdDSANamedCurveTable
-import net.i2p.crypto.eddsa.spec.EdDSAPublicKeySpec
+import org.bouncycastle.crypto.digests.Blake2bDigest
+import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
+import org.bouncycastle.crypto.signers.Ed25519Signer
 
 /**
  * Verifies a downloaded APK against a minisign detached signature.
@@ -23,7 +22,9 @@ import net.i2p.crypto.eddsa.spec.EdDSAPublicKeySpec
  * - sig "Ed": plain Ed25519 over the raw file bytes (legacy algorithm).
  * - sig "ED": the file is first hashed with BLAKE2b-512 and the digest is
  *   signed with *plain* Ed25519 (minisign/rsign2 behavior — "ED" is NOT
- *   RFC 8032 Ed25519ph; net.i2p eddsa 0.3.0 has no Ed25519ph anyway).
+ *   RFC 8032 Ed25519ph, so BouncyCastle's plain [Ed25519Signer] is the right one).
+ *
+ * #1151: crypto comes from BouncyCastle (maintained) — Ed25519 verify + Blake2bDigest.
  *
  * #1121: the keys are not hand-copied any more. Gradle reads them from the single
  * source at build time (BuildConfig.UPDATE_PUBKEY_*): stable = desktop
@@ -130,38 +131,35 @@ object MinisignVerifier {
     }
 
     private fun verifyParsed(file: File, pub: ParsedKey, sig: ParsedSig): Boolean {
-        val publicKey = EdDSAPublicKey(
-            EdDSAPublicKeySpec(pub.key, EdDSANamedCurveTable.ED_25519_CURVE_SPEC)
-        )
         // 分发只看签名的算法标签（公钥恒为 "Ed"，见类注释）——生产组合就是
         // 公钥 "Ed" + 签名 "ED"，要求两者相等会把每个真实签名拒之门外。
-        return when (sig.algorithm) {
-            ALG_PLAIN ->
-                newSigner("NONEwithEdDSA").verifyWith(publicKey, sig.sig) {
-                    it.update(file.readBytes())
-                }
-
-            ALG_PREHASHED -> {
-                val digest = Blake2b(digestSize = 64).apply { update(file.readBytes()) }.digest()
-                newSigner("NONEwithEdDSA").verifyWith(publicKey, sig.sig) { it.update(digest) }
+        val message = when (sig.algorithm) {
+            ALG_PLAIN -> file.readBytes()
+            ALG_PREHASHED -> blake2b512(file)
+            else -> return false // unknown signature algorithm tag
+        }
+        return try {
+            Ed25519Signer().run {
+                init(false, Ed25519PublicKeyParameters(pub.key, 0))
+                update(message, 0, message.size)
+                verifySignature(sig.sig)
             }
-
-            else -> false // unknown signature algorithm tag
+        } catch (_: Exception) {
+            false
         }
     }
 
-    private fun newSigner(algorithm: String): Signature =
-        Signature.getInstance(algorithm, EdDSASecurityProvider())
-
-    private fun Signature.verifyWith(
-        publicKey: EdDSAPublicKey,
-        signature: ByteArray,
-        feed: (Signature) -> Unit,
-    ): Boolean = try {
-        initVerify(publicKey)
-        feed(this)
-        verify(signature)
-    } catch (_: Exception) {
-        false
+    /** BLAKE2b-512 of the file, streamed (the APK can be tens of MB). */
+    private fun blake2b512(file: File): ByteArray {
+        val digest = Blake2bDigest(512)
+        val buf = ByteArray(64 * 1024)
+        FileInputStream(file).use { input ->
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                digest.update(buf, 0, n)
+            }
+        }
+        return ByteArray(digest.digestSize).also { digest.doFinal(it, 0) }
     }
 }

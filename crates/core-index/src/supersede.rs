@@ -85,7 +85,10 @@ impl Ingestor {
         if asset.src_device != uploader {
             return Ok(SupersedeCheck::Refused("not_uploader"));
         }
-        let path = self.library_root.join(&asset.rel_path);
+        // #1150: the file to read must resolve inside the library.
+        let Ok(path) = crate::resolve_in_library(&self.library_root, &asset.rel_path) else {
+            return Ok(SupersedeCheck::Refused("old_missing"));
+        };
         let plan = tokio::task::block_in_place(
             || -> Result<std::result::Result<SupersedePlan, &'static str>> {
                 if !path.exists() {

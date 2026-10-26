@@ -176,6 +176,9 @@ pub struct Router {
     /// #1122：没有配对记录的对端（只可能在配对窗口内进来）按设备限速。
     unpaired_limiter: crate::frame_limits::UnpairedLimiter,
     unpaired_conns: crate::frame_limits::UnpairedConns,
+    /// #1149：配对窗口关闭时收回在场的未配对连接。只在装了准入判据的 daemon 里有意义
+    /// （没有判据 = 没有「窗口」这回事，测试 / 单组件构造不开）。
+    enforce_window: bool,
 }
 
 impl Router {
@@ -194,7 +197,15 @@ impl Router {
             peer_closer: None,
             unpaired_limiter: crate::frame_limits::unpaired_limiter(),
             unpaired_conns: crate::frame_limits::unpaired_conns(),
+            enforce_window: false,
         }
+    }
+
+    /// #1149：窗口关闭（二维码关闭或令牌过期）后，主动关闭在场的未配对连接。
+    /// 与 `transport.set_admission(admission::predicate(..))` 配套启用。
+    pub fn with_window_enforced(mut self) -> Self {
+        self.enforce_window = true;
+        self
     }
 
     /// #1119：注入「关掉与某台设备的全部连接」（main 传 `IrohTransport::close_peer`）。
@@ -298,8 +309,34 @@ impl Router {
         } else {
             None
         };
+        // #1149：未配对的连接只在配对窗口内有意义。窗口关闭（二维码关闭或令牌过期）后，
+        // 这条连接既占名额又没有用处，复核到就主动关掉；它自己的配对申请还没结束时
+        // （`admits` 仍为真）、或这期间已经配上对（有了配对记录）则不动。
+        let mut watching = _slot.is_some() && self.enforce_window;
+        let mut tick = tokio::time::interval(crate::frame_limits::WINDOW_RECHECK);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
-            let Ok(mut stream) = conn.accept_bi().await else {
+            let accepted = loop {
+                if !watching {
+                    break conn.accept_bi().await;
+                }
+                tokio::select! {
+                    r = conn.accept_bi() => break r,
+                    _ = tick.tick() => {
+                        if self.db.active_pairing(&peer.0).is_some() {
+                            watching = false;
+                        } else if self
+                            .pairing
+                            .as_ref()
+                            .is_some_and(|p| !p.admits(peer, (self.now)()))
+                        {
+                            conn.close_not_paired();
+                            return;
+                        }
+                    }
+                }
+            };
+            let Ok(mut stream) = accepted else {
                 return; // peer went away — nothing to clean up
             };
             let router = self.clone();

@@ -255,10 +255,16 @@ private fun ManualPairScreen(
                     // 真实可编辑输入框——之前误用 Text 纯展示，既打不了字也
                     // 长按不出系统粘贴菜单（用户实机反馈的真 bug）；
                     // BasicTextField 自带长按选择/粘贴工具条，不用自己接。
+                    // #1149：配对串不进输入法词库——关闭联想（textNoSuggestions）与个性化学习
+                    // （IME_FLAG_NO_PERSONALIZED_LEARNING）。
+                    NoPersonalizedLearning {
                     androidx.compose.foundation.text.BasicTextField(
                         value = input,
                         onValueChange = onInputChange,
                         singleLine = true,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            autoCorrectEnabled = false,
+                        ),
                         textStyle = androidx.compose.ui.text.TextStyle(
                             fontSize = 15.sp, fontFamily = FontFamily.Monospace, color = PPColor.Ink,
                         ),
@@ -277,6 +283,7 @@ private fun ManualPairScreen(
                             }
                         },
                     )
+                    }
                     Spacer(Modifier.height(10.dp))
                     OutlinedButton(
                         onClick = {
@@ -320,4 +327,33 @@ private fun ManualPairScreen(
         }
         }
     }
+}
+
+/** #1149：给 [EditorInfo] 打上「不联想、不做个性化学习」的标记（手输配对串用）。 */
+internal fun markNoSuggestionsNoLearning(outAttrs: android.view.inputmethod.EditorInfo) {
+    outAttrs.inputType = outAttrs.inputType or android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+    outAttrs.imeOptions =
+        outAttrs.imeOptions or android.view.inputmethod.EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
+}
+
+/** 包住的输入框向输入法声明 [markNoSuggestionsNoLearning]；Compose 的 KeyboardOptions 没有这个标记。 */
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+@Composable
+private fun NoPersonalizedLearning(content: @Composable () -> Unit) {
+    androidx.compose.ui.platform.InterceptPlatformTextInput(
+        interceptor = { request, nextHandler ->
+            nextHandler.startInputMethod(
+                object : androidx.compose.ui.platform.PlatformTextInputMethodRequest {
+                    override fun createInputConnection(
+                        outAttrs: android.view.inputmethod.EditorInfo,
+                    ): android.view.inputmethod.InputConnection {
+                        val connection = request.createInputConnection(outAttrs)
+                        markNoSuggestionsNoLearning(outAttrs)
+                        return connection
+                    }
+                },
+            )
+        },
+        content = content,
+    )
 }

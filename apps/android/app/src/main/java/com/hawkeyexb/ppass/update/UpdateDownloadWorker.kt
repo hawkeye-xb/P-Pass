@@ -338,6 +338,9 @@ internal fun failureKindOf(result: ApkDownloadResult): UpdateFailureKind = when 
     is ApkDownloadResult.HttpStatus -> UpdateFailureKind.Server
     is ApkDownloadResult.ConnectionFailed -> UpdateFailureKind.Network
     is ApkDownloadResult.LocalWriteFailed -> UpdateFailureKind.Write
+    // #1151：超大小上限 = 服务端给了不该给的东西（归 Server）；超总时长 = 太慢（归 Stalled）。
+    is ApkDownloadResult.LimitExceeded ->
+        if (result.limit == ApkDownloadResult.Limit.Size) UpdateFailureKind.Server else UpdateFailureKind.Stalled
     is ApkDownloadResult.Unexpected, is ApkDownloadResult.Ok,
     is ApkDownloadResult.Stopped -> UpdateFailureKind.Unexpected
 }

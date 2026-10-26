@@ -1,0 +1,36 @@
+# #1134: DCO 签名门禁——PR 里每个提交都要带与 author 一致的 Signed-off-by。
+#
+# 只在 pull_request 上跑：DCO 是贡献者对自己提交的声明，检查点在合入前。
+# 合进 main 的 squash 提交由 GitHub 生成，不在检查范围内。
+#
+# 与 ci-identity.yml 同样不加 paths 过滤：签名与改了哪些文件无关。
+# 成本只有 bash + git，秒级。
+name: CI DCO
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  dco:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # 要算 base..head，浅克隆会让区间解析失败。
+          fetch-depth: 0
+
+      # 门禁自己的反证：判据在该红的时候必须红。
+      - name: 反证（九个变异必须全部符合期望）
+        run: bash tools/test-dco-gate.sh
+
+      - name: 检查本 PR 引入的提交是否签名
+        env:
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git fetch -q origin "$GITHUB_BASE_REF"
+          bash tools/check-dco.sh "origin/$GITHUB_BASE_REF..$SHA"
