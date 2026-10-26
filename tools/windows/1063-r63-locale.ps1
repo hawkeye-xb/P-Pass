@@ -1,8 +1,9 @@
 ﻿#Requires -Version 5.1
-# 1063-r63-locale.ps1 - R6.3 per-app English locale.
-# Sets ONLY com.hawkeyexb.ppass to en-US, captures Overview/Photos/Settings with
-# UIA bounds, checks for Chinese leftovers, raw i18n keys, and truncated text,
-# then clears the per-app locale and verifies the App is Chinese again.
+# 1063-r63-locale.ps1 - R6.3 per-app English locale on the PHONE.
+# Sets only com.hawkeyexb.ppass to en-US, dumps the phone's Overview, Photos
+# and Settings pages with uiautomator, checks Chinese leftovers / raw i18n keys
+# / clipped text, then clears the per-app locale and verifies Chinese again.
+# Never sends a sleep/power key; the caller must have USB stay-on.
 param(
     [string]$WorkRoot = (Join-Path $env:USERPROFILE 'ppcheck\1063-test10')
 )
@@ -13,9 +14,9 @@ New-Item -ItemType Directory -Force $caseDir | Out-Null
 $resultPath = Join-Path $caseDir 'result.txt'
 $script:lines = New-Object System.Collections.Generic.List[string]
 $adb = (Get-Command adb -ErrorAction Stop).Source
-$uia = Join-Path $PSScriptRoot 'uia-drive.ps1'
 $pkg = 'com.hawkeyexb.ppass'
-Add-Type -AssemblyName System.Windows.Forms
+$screenW = 1080
+$screenH = 2400
 
 function Log([string]$m) { [Console]::WriteLine($m); $script:lines.Add($m) }
 function Finish([string]$result, [string]$detail) {
@@ -30,100 +31,126 @@ function Invoke-Adb {
     try { $out = & $adb @AdbArgs 2>&1; $code = $LASTEXITCODE } finally { $ErrorActionPreference = $old }
     return [pscustomobject]@{ Code = $code; Output = (($out | Out-String).Trim()) }
 }
-function Dump-Full([string]$Name) {
-    $out = Join-Path $caseDir $Name
-    $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-    try { $o = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $uia -Action dumpfull -Out $out 2>&1; $code = $LASTEXITCODE } finally { $ErrorActionPreference = $old }
-    if ($code -ne 0) { return $null }
+function Get-PhoneUi {
+    param([string]$Name = '')
+    $dump = Invoke-Adb -AdbArgs @('shell', 'uiautomator', 'dump', '/sdcard/1063-r63.xml')
+    $cat = Invoke-Adb -AdbArgs @('exec-out', 'cat', '/sdcard/1063-r63.xml')
+    $raw = [string]$cat.Output
+    if ($raw -notmatch '<hierarchy') { throw "uiautomator dump failed: $($dump.Output)" }
+    if ($Name -ne '') { [IO.File]::WriteAllText((Join-Path $caseDir $Name), $raw, (New-Object Text.UTF8Encoding($false))) }
+    return $raw
+}
+function Get-AppTexts {
+    param([string]$Raw)
+    [xml]$doc = $Raw
+    $out = @()
+    foreach ($n in $doc.SelectNodes('//node')) {
+        if ([string]$n.package -ne $pkg) { continue }
+        $t = [string]$n.text
+        if (-not $t) { continue }
+        $b = [regex]::Match([string]$n.bounds, '\[(\d+),(\d+)\]\[(\d+),(\d+)\]')
+        $l = 0; $top = 0; $r = 0; $bot = 0
+        if ($b.Success) { $l = [int]$b.Groups[1].Value; $top = [int]$b.Groups[2].Value; $r = [int]$b.Groups[3].Value; $bot = [int]$b.Groups[4].Value }
+        $out += [pscustomobject]@{ Text = $t; L = $l; T = $top; R = $r; B = $bot }
+    }
     return $out
 }
-function Click-Ui([string]$Name) {
-    $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
-    try { $o = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $uia -Action click -Name $Name -Out (Join-Path $caseDir 'click.txt') 2>&1; $code = $LASTEXITCODE } finally { $ErrorActionPreference = $old }
-    return $code
-}
-function Analyze-Page([string]$Path, [string]$Label, [int]$ScreenW, [int]$ScreenH) {
-    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) {
-        Log "$Label : MISSING dump"
-        return [pscustomobject]@{ Label=$Label; Chinese=0; Keys=0; Trunc=0; ChineseSamples=@(); KeySamples=@(); TruncSamples=@() }
-    }
-    $chinese = @(); $keys = @(); $trunc = @()
-    foreach ($line in (Get-Content -LiteralPath $Path -Encoding UTF8)) {
-        $parts = $line -split "`t"
-        if ($parts.Count -lt 3) { continue }
-        $name = $parts[1]
-        if (-not $name) { continue }
-        if ($name -match '[\u4e00-\u9fff]') { $chinese += "$($parts[0]) | $name" }
-        if ($name -match '(?i)\b(ui|error|wizard|diag|update|pair|backup|devices|photos|nav|settings)\.[a-z0-9_]+\b' -or
-            $name -match '\b[A-Z][A-Z0-9]*(_[A-Z0-9]+){1,}\b') { $keys += $name }
-        $m = [regex]::Match($parts[2], '^\s*(-?\d+),(-?\d+),(-?\d+),(-?\d+)\s*$')
-        if ($m.Success) {
-            $l = [int]$m.Groups[1].Value; $t = [int]$m.Groups[2].Value
-            $r = [int]$m.Groups[3].Value; $b = [int]$m.Groups[4].Value
-            if ($r -gt $ScreenW + 2 -or $b -gt $ScreenH + 2 -or $l -lt -2 -or $t -lt -2) {
-                $trunc += "$name [$l,$t,$r,$b]"
+function Find-TextBounds {
+    param([string]$Text)
+    $raw = Get-PhoneUi
+    [xml]$doc = $raw
+    foreach ($n in $doc.SelectNodes('//node')) {
+        if ([string]$n.package -ne $pkg) { continue }
+        if ([string]$n.text -eq $Text) {
+            $m = [regex]::Match([string]$n.bounds, '\[(\d+),(\d+)\]\[(\d+),(\d+)\]')
+            if ($m.Success) {
+                return @{ X = [int](([int]$m.Groups[1].Value + [int]$m.Groups[3].Value) / 2); Y = [int](([int]$m.Groups[2].Value + [int]$m.Groups[4].Value) / 2) }
             }
         }
-        if ($name.EndsWith('…') -or $name.EndsWith('...')) { $trunc += "$name (ellipsis)" }
     }
-    Log "$Label : lines=$((Get-Content -LiteralPath $Path).Count) chinese=$($chinese.Count) keys=$($keys.Count) trunc=$($trunc.Count)"
-    if ($chinese.Count) { $chinese | Select-Object -First 5 | ForEach-Object { Log "  CN: $_" } }
-    if ($keys.Count) { $keys | Select-Object -First 5 | ForEach-Object { Log "  KEY: $_" } }
-    if ($trunc.Count) { $trunc | Select-Object -First 5 | ForEach-Object { Log "  TRUNC: $_" } }
-    return [pscustomobject]@{ Label=$Label; Chinese=$chinese.Count; Keys=$keys.Count; Trunc=$trunc.Count; ChineseSamples=$chinese; KeySamples=$keys; TruncSamples=$trunc }
+    return $null
+}
+function Tap-Text {
+    param([string]$Text, [int]$TimeoutSeconds = 20)
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $c = Find-TextBounds -Text $Text
+            if ($c) {
+                Invoke-Adb -AdbArgs @('shell', 'input', 'tap', $c.X, $c.Y) | Out-Null
+                Log "tap '$Text' at $($c.X),$($c.Y)"
+                Start-Sleep -Milliseconds 700
+                return $true
+            }
+        } catch { }
+        Start-Sleep -Milliseconds 500
+    }
+    return $false
+}
+function Analyze-Page {
+    param([string]$Name, [string]$Label)
+    $raw = Get-PhoneUi -Name ($Name + '.xml')
+    $texts = @(Get-AppTexts -Raw $raw)
+    $chinese = @($texts | Where-Object { $_.Text -match '[\u4e00-\u9fff]' })
+    $keys = @($texts | Where-Object { $_.Text -match '(?i)\b(ui|error|wizard|diag|update|pair|backup|devices|photos|nav|settings)\.[a-z0-9_]+\b' -or $_.Text -match '\b[A-Z][A-Z0-9]*(_[A-Z0-9]+){1,}\b' })
+    $trunc = @($texts | Where-Object { $_.R -gt $screenW + 2 -or $_.B -gt $screenH + 2 -or $_.L -lt -2 -or $_.T -lt -2 -or $_.Text.EndsWith('…') -or $_.Text.EndsWith('...') })
+    $texts | ForEach-Object { "$($_.Text)`t[$($_.L),$($_.T),$($_.R),$($_.B)]" } | Set-Content -LiteralPath (Join-Path $caseDir ($Name + '-text.txt')) -Encoding UTF8
+    Log "$Label : appTexts=$($texts.Count) chinese=$($chinese.Count) keys=$($keys.Count) trunc=$($trunc.Count)"
+    $chinese | Select-Object -First 8 | ForEach-Object { Log "  CN: $($_.Text) [$($_.L),$($_.T),$($_.R),$($_.B)]" }
+    $keys | Select-Object -First 8 | ForEach-Object { Log "  KEY: $($_.Text)" }
+    $trunc | Select-Object -First 8 | ForEach-Object { Log "  TRUNC: $($_.Text) [$($_.L),$($_.T),$($_.R),$($_.B)]" }
+    return [pscustomobject]@{ Label = $Label; Texts = $texts.Count; Chinese = $chinese.Count; Keys = $keys.Count; Trunc = $trunc.Count; ChineseSamples = @($chinese | ForEach-Object { $_.Text }); KeySamples = @($keys | ForEach-Object { $_.Text }); TruncSamples = @($trunc | ForEach-Object { $_.Text }) }
 }
 
-Log "=== #1063 R6.3 per-app locale $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ==="
-if (-not (Get-Process -Name 'p-pass-desktop' -ErrorAction SilentlyContinue)) {
-    Invoke-Adb -AdbArgs @('shell', 'monkey', '-p', $pkg, '-c', 'android.intent.category.LAUNCHER', '1') | Out-Null
-    Start-Sleep -Seconds 3
+Log "=== #1063 R6.3 per-app phone locale $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ==="
+$win = Invoke-Adb -AdbArgs @('shell', 'dumpsys', 'window')
+$pre = ''
+try { $pre = Get-PhoneUi -Name 'phone-preflight.xml' } catch { }
+if ($win.Output -match 'mDreamingLockscreen=true' -or $pre -match '画出解锁图案|紧急呼叫') {
+    Finish 'UNCOVERED' 'phone is locked; unlock it and rerun (no bypass attempted)'
 }
+$power = Invoke-Adb -AdbArgs @('shell', 'dumpsys', 'power')
+if ($power.Output -notmatch 'mStayOn=true') { Log 'WARN: mStayOn is not true' }
+
 $set = Invoke-Adb -AdbArgs @('shell', 'cmd', 'locale', 'set-app-locales', $pkg, '--locales', 'en-US')
-Log "set-app-locales en-US exit=$($set.Code) $($set.Output)"
-$get = Invoke-Adb -AdbArgs @('shell', 'cmd', 'locale', 'get-app-locales', $pkg)
-Log "get-app-locales: $($get.Output)"
+Log "set-app-locales en-US exit=$($set.Code)"
 Invoke-Adb -AdbArgs @('shell', 'am', 'force-stop', $pkg) | Out-Null
 Invoke-Adb -AdbArgs @('shell', 'monkey', '-p', $pkg, '-c', 'android.intent.category.LAUNCHER', '1') | Out-Null
 Start-Sleep -Seconds 4
+$get = Invoke-Adb -AdbArgs @('shell', 'cmd', 'locale', 'get-app-locales', $pkg)
+Log "get-app-locales: $($get.Output)"
 
-$screen = [System.Windows.Forms.SystemInformation]::VirtualScreen
+# Android has only two tabs: Photos and Settings. The second tab is the
+# backup-status page and the settings page in one; there is no third distinct
+# screen to dump.
 $pages = @()
-$home = Dump-Full 'home-en.tsv'
-$pages += Analyze-Page -Path $home -Label 'Overview(首页/备份状态)' -ScreenW $screen.Width -ScreenH $screen.Height
+if (-not (Tap-Text -Text 'Photos' -TimeoutSeconds 5)) { Log 'WARN: Photos tab not found' }
+$pages += Analyze-Page -Name 'photos-en' -Label '首页/Photos(照片页)'
+if (-not (Tap-Text -Text 'Settings' -TimeoutSeconds 15)) { Log 'WARN: Settings tab not found' }
+$pages += Analyze-Page -Name 'settings-en' -Label '备份+设置页(Settings)'
 
-# The Overview is the home/backup-status page; Photos is the backup/photo page.
-if ((Click-Ui -Name 'Photos') -eq 0) { Start-Sleep -Seconds 1 }
-$photos = Dump-Full 'photos-en.tsv'
-$pages += Analyze-Page -Path $photos -Label 'Photos(备份/照片页)' -ScreenW $screen.Width -ScreenH $screen.Height
-
-if ((Click-Ui -Name 'Settings') -eq 0) { Start-Sleep -Seconds 1 }
-$settings = Dump-Full 'settings-en.tsv'
-$pages += Analyze-Page -Path $settings -Label 'Settings(设置页)' -ScreenW $screen.Width -ScreenH $screen.Height
-
-# Restore the per-app locale to the system default (empty list).
 $clear = Invoke-Adb -AdbArgs @('shell', 'cmd', 'locale', 'set-app-locales', $pkg, '--locales', '')
-Log "set-app-locales empty exit=$($clear.Code) $($clear.Output)"
+Log "set-app-locales empty exit=$($clear.Code)"
 $getAfter = Invoke-Adb -AdbArgs @('shell', 'cmd', 'locale', 'get-app-locales', $pkg)
 Log "get-app-locales after restore: $($getAfter.Output)"
 Invoke-Adb -AdbArgs @('shell', 'am', 'force-stop', $pkg) | Out-Null
 Invoke-Adb -AdbArgs @('shell', 'monkey', '-p', $pkg, '-c', 'android.intent.category.LAUNCHER', '1') | Out-Null
 Start-Sleep -Seconds 4
-$zh = Dump-Full 'home-zh-restored.tsv'
-$zhText = if ($zh) { Get-Content -LiteralPath $zh -Raw -Encoding UTF8 } else { '' }
-$zhChinese = ([regex]::Matches($zhText, '[\u4e00-\u9fff]')).Count
-Log "restored Chinese chars=$zhChinese"
+$zhRaw = Get-PhoneUi -Name 'home-zh-restored.xml'
+$zhTexts = @(Get-AppTexts -Raw $zhRaw)
+$zhChinese = @($zhTexts | Where-Object { $_.Text -match '[\u4e00-\u9fff]' }).Count
+Log "restored Chinese text nodes=$zhChinese"
 
 $totalChinese = ($pages | Measure-Object -Property Chinese -Sum).Sum
 $totalKeys = ($pages | Measure-Object -Property Keys -Sum).Sum
 $totalTrunc = ($pages | Measure-Object -Property Trunc -Sum).Sum
-$pageSummary = ($pages | ForEach-Object { "$($_.Label):cn=$($_.Chinese),keys=$($_.Keys),trunc=$($_.Trunc)" }) -join '; '
-Log "summary: $pageSummary"
-if ($zhChinese -eq 0) { Log 'WARN: restored UI has no Chinese characters' }
+$summary = ($pages | ForEach-Object { "$($_.Label):texts=$($_.Texts),cn=$($_.Chinese),keys=$($_.Keys),trunc=$($_.Trunc)" }) -join '; '
+Log "summary: $summary"
 
-if ($totalChinese -eq 0 -and $totalKeys -eq 0 -and $totalTrunc -eq 0 -and $zhChinese -gt 0) {
-    Finish 'PASS' "English pages clean; Chinese restored"
-} elseif ($totalChinese -gt 0 -or $zhChinese -eq 0) {
-    Finish 'PARTIAL' "English pages have Chinese leftovers or restore failed; $pageSummary; restoredChars=$zhChinese"
+if ($totalChinese -eq 0 -and $totalKeys -eq 0 -and $totalTrunc -eq 0 -and $zhChinese -gt 0 -and $getAfter.Output -match '\[\]') {
+    Finish 'PASS' "English phone pages clean; Chinese restored"
+} elseif ($totalChinese -gt 0) {
+    Finish 'PARTIAL' "Chinese leftovers in English pages; $summary"
 } else {
-    Finish 'PARTIAL' "suspected key/truncation; $pageSummary; restoredChars=$zhChinese"
+    Finish 'PARTIAL' "key/truncation or restore issue; $summary; restoredChinese=$zhChinese"
 }
