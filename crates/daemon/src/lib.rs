@@ -14,7 +14,6 @@ pub mod config;
 pub mod device_projection;
 pub mod diag_agg;
 pub mod diag_bundle;
-pub mod download;
 pub mod events;
 pub mod flow_delivery;
 pub mod frame_limits;

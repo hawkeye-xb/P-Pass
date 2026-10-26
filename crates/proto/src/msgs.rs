@@ -826,8 +826,6 @@ pub mod methods {
     pub const BACKUP_PRESENCE: &str = "backup.presence";
     pub const BACKUP_COMMIT: &str = "backup.commit";
     pub const DIAG_STATUS: &str = "diag.status";
-    /// Download plane (T-056): original bytes for playback/export.
-    pub const ASSET_DOWNLOAD: &str = "asset.download";
     /// UX-06: a paired device revokes ITSELF (unilateral stop, product
     /// file §二双端共通「任一端可单方停止」). The daemon marks the
     /// caller revoked; hello is then denied, and a fresh owner-issued

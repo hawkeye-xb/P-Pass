@@ -1,4 +1,4 @@
-// T-056: video playback — fetch the original over the download plane
+// T-056: video playback — fetch the original via asset.blob_ticket + the shared fetch_blob
 // into the cache dir, then play it in-app. MOB-47 upgraded the MVP:
 // the system `VideoView` is replaced by the official Media3 ExoPlayer /
 // PlayerView, which ships real playback controls (play/pause, progress

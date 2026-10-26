@@ -580,7 +580,7 @@ backup.begin 试探，已被认识则直接更新本地配对（重连≠重配�
 ## 2026-07-31 — T-056 + T-055 打磨 + 常驻稳定性三连修
 
 - **T-056**：download plane（ppf/download/1，viewer 即可下载=浏览语
-  义）；Rust 测试比特级往返+陌生人拒绝；手机端下载进缓存+VideoView
+  义；已于 #1125 退役，取原图改走 asset.blob_ticket）；Rust 测试比特级往返+陌生人拒绝；手机端下载进缓存+VideoView
   播放，时间线按 media_type 分流。流式 DataSource 归 M3。
 - **T-055 打磨**：全 UI 单语化（用户裁决；strings.xml en/zh，双语行
   全部退役）；时间线月份分组（GridItemSpan 行头）；重连入口按钮化；

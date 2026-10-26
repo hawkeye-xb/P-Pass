@@ -991,7 +991,7 @@ impl BiStream {
     }
 
     /// Read the next chunk of raw (unframed) bytes — a raw-stream plane's
-    /// payload after its header frame (the download plane, T-056).
+    /// payload after its header frame.
     /// `Ok(None)` = sender finished.
     pub async fn recv_chunk(&mut self, max: usize) -> Result<Option<Vec<u8>>> {
         let mut buf = vec![0u8; max];

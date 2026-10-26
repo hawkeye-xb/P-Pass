@@ -184,7 +184,8 @@ P4 desktop shell / 桌面壳
       items). Polish pass pending: single-language UI (user ruling),
       month sections, width/height in ingest, entry styling
 - [x] T-056 video playback: download plane (ppf/download/1, viewer+,
-      bit-identical round-trip tested) → cache → VideoView; timeline
+      bit-identical round-trip tested; retired in #1125, originals now
+      fetched via asset.blob_ticket) → cache → VideoView; timeline
       routes video taps to the player. Streaming DataSource → M3.
       **Real-device PASS 2026-08-03**: the tap-to-play last mile caught
       a real routing bug (wire media_type is normalized "video"/"photo",
