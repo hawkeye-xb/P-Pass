@@ -1,4 +1,4 @@
-# uia-drive.ps1 - Drive the P-Pass desktop window through UI Automation, so the
+﻿# uia-drive.ps1 - Drive the P-Pass desktop window through UI Automation, so the
 # Windows full regression (full-regression-sop.md section 9) does not need a
 # human for wizard / settings / photo-wall clicks. WebView2 exposes the page's
 # accessibility tree to UIA, so buttons are found by their visible label.
@@ -6,6 +6,7 @@
 # Usage:
 #   uia-drive.ps1 -Action dump                 # list "ControlType | Name" lines to -Out (UTF-8)
 #   uia-drive.ps1 -Action click -Name <label>  # invoke the first button/listitem with that exact name
+#   uia-drive.ps1 -Action click -Name <part> -Like  # ... whose name contains <part>
 #   uia-drive.ps1 -Action type -Name <label> -Value <text>  # focus an Edit and type (SendKeys)
 #   uia-drive.ps1 -Action settext -Name <label> -Value <text>  # Edit.ValuePattern.SetValue
 #   uia-drive.ps1 -Action getvalue -Name <label>  # print an Edit's ValuePattern value
@@ -17,7 +18,8 @@ param(
     [string]$Name = '',            # element name (exact match) for click/type
     [string]$Value = '',           # text for -Action type (digits only are enough for the pair code)
     [string]$Out = "$env:TEMP\uia.txt",
-    [string]$Proc = 'p-pass-desktop'
+    [string]$Proc = 'p-pass-desktop',
+    [switch]$Like          # click the first control whose name contains -Name
 )
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 Add-Type -AssemblyName System.Windows.Forms
@@ -40,7 +42,8 @@ foreach ($w in $wins) {
             $r = $e.Current.BoundingRectangle
             $fullLines.Add(("{0}`t{1}`t{2},{3},{4},{5}" -f $t, $n, [int]$r.Left, [int]$r.Top, [int]$r.Right, [int]$r.Bottom))
         }
-        if ($Action -eq 'click' -and -not $target -and $n -eq $Name) {
+        $nameHit = ($n -eq $Name) -or ($Like.IsPresent -and $n -like "*$Name*")
+        if ($Action -eq 'click' -and -not $target -and $nameHit) {
             if ($t -eq 'ControlType.Button' -or $t -eq 'ControlType.Hyperlink' -or $t -eq 'ControlType.MenuItem' -or $t -eq 'ControlType.CheckBox' -or $t -eq 'ControlType.RadioButton' -or $t -eq 'ControlType.ListItem') { $target = $e }
         }
         if (($Action -eq 'type' -or $Action -eq 'settext' -or $Action -eq 'getvalue') -and -not $target -and $n -eq $Name -and $t -eq 'ControlType.Edit') { $target = $e }
