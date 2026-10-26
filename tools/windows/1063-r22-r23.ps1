@@ -414,10 +414,12 @@ Capture-Wifi 'before'
 
 # A secure keyguard prevents bringing the App to the foreground; without that
 # the transfer cannot be started, so do not queue 30 large images pointlessly.
+# Do not match a bare "password": every uiautomator node carries
+# password="false", which made this guard fire on an unlocked phone.
 $win = Invoke-Adb -AdbArgs @('shell', 'dumpsys', 'window')
 $preUi = ''
 try { $preUi = Get-PhoneUi -EvidenceName 'phone-preflight.xml' } catch { }
-if ($win.Output -match 'mDreamingLockscreen=true' -or $preUi -match '画出解锁图案|紧急呼叫|PIN|password') {
+if ($win.Output -match 'mDreamingLockscreen=true' -or $preUi -match '画出解锁图案|紧急呼叫|输入 PIN|输入密码|Enter PIN|Enter your password') {
     Finish 'UNCOVERED' 'phone is on the secure keyguard; unlock it and rerun (no pattern bypass attempted)'
 }
 
