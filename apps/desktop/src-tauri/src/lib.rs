@@ -1103,6 +1103,13 @@ fn shell_version<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> String {
     app.package_info().version.to_string()
 }
 
+/// #1066：这只壳是不是 test 通道构建（页脚「测试版」徽标）。通道判据只在
+/// `version_cmp::is_test_build`，前端不再自己查版本串。
+#[tauri::command]
+fn is_test_build(app: tauri::AppHandle) -> bool {
+    version_cmp::is_test_build(&shell_version(&app))
+}
+
 /// UPD-06 (#616)：磁盘上**安装包**的版本（`Contents/Info.plist`）与运行中
 /// 这只壳的版本不同 ⇒ 返回磁盘上那个版本（"更新装完了、但运行中的壳还是旧的"）。
 ///
@@ -1346,6 +1353,16 @@ fn existing_library_dir(platform_dir: &std::path::Path) -> Result<String, String
     }
 }
 
+/// #1066：「打开照片库」要揭示的完整路径。照片在 `<库>/originals`——存在就揭示它；
+/// 库刚建、还没有照片时揭示库根目录。路径拼接与存在判断都在 Rust（`Path::join`，
+/// Windows 上分隔符正确），前端不再拿 `/` 拼路径。
+fn library_reveal_target(platform_dir: &std::path::Path) -> Result<String, String> {
+    let dir = std::path::PathBuf::from(existing_library_dir(platform_dir)?);
+    let originals = dir.join("originals");
+    let target = if originals.is_dir() { originals } else { dir };
+    Ok(target.to_string_lossy().into_owned())
+}
+
 /// 配对二维码 SVG（见 `pair_qr`）。
 #[tauri::command]
 fn pair_qr_svg(text: String) -> Result<String, String> {
@@ -1356,8 +1373,8 @@ fn pair_qr_svg(text: String) -> Result<String, String> {
 /// 解析库目录（与服务在线时 `status.library_dir` 同源：daemon 也读这份 config），
 /// 服务停止时「打开照片库」照样可用。
 #[tauri::command]
-fn library_dir() -> Result<String, String> {
-    existing_library_dir(&platform::adapter().data_dir())
+fn library_reveal_path() -> Result<String, String> {
+    library_reveal_target(&platform::adapter().data_dir())
 }
 
 /// 诊断包由 daemon 组装并脱敏（#1042 / #1045）：壳只调内置 daemon 的
@@ -1659,6 +1676,7 @@ pub fn run() {
             stop_daemon,
             pause_daemon_for_update,
             pending_shell_version,
+            is_test_build,
             relaunch_shell,
             self_heal_daemon,
             resume_after_failed_update,
@@ -1667,7 +1685,7 @@ pub fn run() {
             restart_daemon_process,
             kernel_convergence_phase,
             export_logs_bundle,
-            library_dir,
+            library_reveal_path,
             pair_qr_svg,
             allow_media_scope,
             notify_system,
@@ -1967,7 +1985,8 @@ mod tests {
             "update_failure_state",
             "clear_update_failure",
             "pair_qr_svg",
-            "library_dir",
+            "library_reveal_path",
+            "is_test_build",
             "kernel_convergence_phase",
         ];
         const WAITS: &[&str] = &[
@@ -2896,9 +2915,40 @@ mod tests {
         assert!(!err.contains("ppass-1059"), "不许透出路径: {err}");
         let src = include_str!("lib.rs").replace("\r\n", "\n");
         assert!(
-            src.contains("            library_dir,\n"),
-            "library_dir 未注册进 invoke_handler"
+            src.contains("            library_reveal_path,\n"),
+            "library_reveal_path 未注册进 invoke_handler"
         );
+    }
+
+    /// #1066：揭示路径由壳用 `Path::join` 拼；`originals` 存在揭示它，没有退回库根。
+    /// 反证：改回恒返回库根 → 第一条红；恒返回 `originals`（不判存在）→ 第二条红。
+    #[test]
+    fn library_reveal_target_prefers_existing_originals() {
+        let platform = tempfile::tempdir().unwrap();
+        let lib = tempfile::tempdir().unwrap();
+        std::fs::write(
+            platform.path().join("config.toml"),
+            format!("data_dir = '{}'\n", lib.path().display()),
+        )
+        .unwrap();
+        assert_eq!(
+            library_reveal_target(platform.path()).unwrap(),
+            lib.path().to_string_lossy(),
+            "originals 还没建：库根"
+        );
+        std::fs::create_dir(lib.path().join("originals")).unwrap();
+        assert_eq!(
+            library_reveal_target(platform.path()).unwrap(),
+            lib.path().join("originals").to_string_lossy()
+        );
+        std::fs::write(
+            platform.path().join("config.toml"),
+            "data_dir = '/definitely/not/here/ppass-1066'\n",
+        )
+        .unwrap();
+        let err = library_reveal_target(platform.path()).unwrap_err();
+        let v: Value = serde_json::from_str(&err).unwrap();
+        assert_eq!(v["key"], "ui.library_dir_unknown");
     }
 
     /// #1043：更新失败的「文件被占用」由 Rust 侧按系统错误码判。输入就是前端

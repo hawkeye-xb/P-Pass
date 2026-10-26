@@ -196,6 +196,31 @@ fn registry() -> Vec<(&'static str, Vec<u128>, &'static str)> {
             "B",
         ),
         (
+            "daemon::PATROL_INTERVAL",
+            vec![ms(crate::PATROL_INTERVAL)],
+            "ms",
+        ),
+        (
+            "daemon::FLOW_BLOBS_GC_INTERVAL",
+            vec![ms(crate::FLOW_BLOBS_GC_INTERVAL)],
+            "ms",
+        ),
+        (
+            "daemon::DIAG_PRUNE_INTERVAL",
+            vec![ms(crate::DIAG_PRUNE_INTERVAL)],
+            "ms",
+        ),
+        (
+            "daemon::DAEMON_ALIVE_INTERVAL",
+            vec![ms(crate::DAEMON_ALIVE_INTERVAL)],
+            "ms",
+        ),
+        (
+            "daemon::THUMB_BACKFILL_DELAY",
+            vec![ms(crate::THUMB_BACKFILL_DELAY)],
+            "ms",
+        ),
+        (
             "daemon::SHUTDOWN_DEADLINE",
             vec![ms(crate::SHUTDOWN_DEADLINE)],
             "ms",

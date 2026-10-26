@@ -268,6 +268,8 @@
   let showConfirmModal = $state(false);
   // T-091: node_id -> {last_backup_at, asset_count}（device.watermarks，毫秒）
   let watermarks = $state({});
+  // #1066：devices.list 给的「最近一次备份」{at, name}。
+  let lastBackupOverallWire = $state(null);
   // AUDIT-01: 审计事件流 v2（{ts, kind, actor, roundId, payload}）——
   // 配对请求/允许/拒绝、吊销、外部删除、Flow 用户操作/终态，活动页的
   // 主数据源。v1 的 action/detail 自由文本已随 audit_log 一并移除。
@@ -306,7 +308,11 @@
   const shellRelation = $derived(status?.shell_relation ?? null);
   const versionsDiffer = $derived(!!shellRelation && shellRelation !== "same");
   const shellIsStale = $derived(!!installedVersion);
-  const isTestBuild = $derived(displayVersion.includes("-test."));
+  // #1066：发行通道由壳按版本规则判（version_cmp::is_test_build），前端不查版本串。
+  let isTestBuild = $state(false);
+  invoke("is_test_build")
+    .then((v) => (isTestBuild = !!v))
+    .catch(() => {});
   // DAE-04 + UPD-06 (#616)：**分向**。服务旧（且壳不旧）才是「重启后台服务」的
   // 场合；旧实现只判"不一致"、不判方向，于是在"壳旧/服务新"方向按了永不收敛
   // ——杀 daemon 拉起来的还是同版本，按钮永远不消失（0.7.5 真机现场）。
@@ -357,6 +363,7 @@
       try {
         const d = await call("devices.list", { include_departed: true });
         devices = d.devices ?? [];
+        lastBackupOverallWire = d.last_backup_overall ?? null;
         devicesError = "";
       } catch (e) {
         // DESK-63 (#946): a data error stays in the data area. It must not
@@ -477,16 +484,8 @@
   // <时间> · 来自 <设备>"，不是"已配对设备 N 台 · 照片库 M 张"——
   // 取所有设备水位里 last_backup_at 最大的那条，真实数据，没有就
   // 优雅退回旧文案（没备份过/watermarks 还没加载完时不假装有数据）。
-  const lastBackupOverall = $derived.by(() => {
-    let best = null;
-    for (const d of devices) {
-      if (d.removal !== "none") continue;
-      const wm = watermarks[d.node_id];
-      if (!wm?.last_backup_at) continue;
-      if (!best || wm.last_backup_at > best.at) best = { at: wm.last_backup_at, name: d.name };
-    }
-    return best;
-  });
+  // #1066：由 daemon 在 devices.list 里给结论（{at, name} | null），前端不再拿水位推导。
+  const lastBackupOverall = $derived(lastBackupOverallWire);
   // 设计稿离线版：总览水位卡只放"需要留意的 + 最近动过的"，不是全量
   // 平铺——告警设备（alert）永远全show，正常设备只show 前 OK_CAP 个，
   // 剩下的收进"一切正常的还有 N 台"链接（点进「家人与设备」看全部，
@@ -672,7 +671,7 @@
   async function openLibrary() {
     try {
       await openLibraryDir({
-        getDir: () => invoke("library_dir"),
+        getPath: () => invoke("library_reveal_path"),
         reveal: revealItemInDir,
       });
     } catch (e) {

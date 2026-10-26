@@ -367,3 +367,57 @@ async fn a_crash_between_the_index_change_and_the_file_swap_is_finished_on_start
         "补完一次就清掉"
     );
 }
+
+/// 业务规则 §6.5 / `MAX_REGION_BYTES`：要抓的元数据区间合计超过 8 MiB 就拒绝
+/// （`region_too_large`），不去抓几乎整个文件。构造一个只有 `ftyp` + 一个 `moov` 盒子的
+/// MP4：`moov` 整块都算元数据区间，大小可控。恰好 8 MiB 仍可替换。
+/// 反证：`>` 改 `>=` → 恰好 8 MiB 那条红；去掉上限判断 → 8 MiB+1 那条红。
+fn mp4_with_moov(moov_total: usize) -> Vec<u8> {
+    let mut f = Vec::new();
+    f.extend_from_slice(&[0, 0, 0, 16]);
+    f.extend_from_slice(b"ftypisom");
+    f.extend_from_slice(&[0, 0, 0, 0]);
+    f.extend_from_slice(&(moov_total as u32).to_be_bytes());
+    f.extend_from_slice(b"moov");
+    f.resize(16 + moov_total, 0);
+    f
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_metadata_region_over_eight_mib_is_refused_as_too_large() {
+    let cap = core_index::MAX_REGION_BYTES as usize;
+    assert_eq!(cap, 8 * 1024 * 1024);
+    for (moov, expect_ready) in [(cap, true), (cap + 1, false)] {
+        let l = lib().await;
+        let a_bytes = mp4_with_moov(moov);
+        let mut b_bytes = a_bytes.clone();
+        *b_bytes.last_mut().unwrap() = 1; // 另一个文件，长度相同
+        let src = l._dir.path().join("staging-big.mp4");
+        fs::write(&src, &a_bytes).unwrap();
+        let out = l
+            .ing
+            .ingest(&IncomingFile {
+                src_path: src,
+                file_name: "big.mp4".into(),
+                media_type: "video/mp4".into(),
+                src_device: DEV_A.to_vec(),
+                capture_at_ms_hint: None,
+            })
+            .await
+            .unwrap();
+        assert!(matches!(out, IngestOutcome::New(_)), "{out:?}");
+        let check = l
+            .ing
+            .plan_supersede(&h(&a_bytes), &h(&b_bytes), &DEV_A)
+            .await
+            .unwrap();
+        if expect_ready {
+            assert!(
+                matches!(check, SupersedeCheck::Ready(_)),
+                "恰好 8 MiB 应可替换: {check:?}"
+            );
+        } else {
+            assert_eq!(check, SupersedeCheck::Refused("region_too_large"));
+        }
+    }
+}

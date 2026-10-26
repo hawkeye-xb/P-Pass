@@ -87,6 +87,27 @@ pub fn last_activity_at(last_seen: Option<i64>, last_backup_at: Option<i64>) -> 
     }
 }
 
+/// 总览副标题「最近一次备份：<时间> · 来自 <设备>」：在用设备（`Removal::None`）里
+/// 最近备份时刻最大的那台。过去由桌面 JS 从 `device.watermarks` 自己推导（#1066）。
+/// 时刻相同取先出现的；没有任何设备备份过 → `None`（桌面退回旧文案）。
+pub fn last_backup_overall<'a>(
+    rows: impl IntoIterator<Item = (Removal, &'a str, Option<i64>)>,
+) -> Option<(i64, &'a str)> {
+    let mut best: Option<(i64, &str)> = None;
+    for (removal, name, at) in rows {
+        if removal != Removal::None {
+            continue;
+        }
+        let Some(at) = at.filter(|t| *t > 0) else {
+            continue;
+        };
+        if best.is_none_or(|(b, _)| at > b) {
+            best = Some((at, name));
+        }
+    }
+    best
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,5 +198,34 @@ mod tests {
         assert_eq!(last_activity_at(Some(5), Some(9)), Some(9));
         assert_eq!(last_activity_at(Some(9), None), Some(9));
         assert_eq!(last_activity_at(None, Some(0)), None);
+    }
+
+    /// #1066：最近一次备份 = 在用设备里水位最大者；断开/移除的不算；0/None 不算；同刻先到先得。
+    /// 反证：去掉 removal 过滤 → 第三条红；`>` 改 `>=` → 第五条红。
+    #[test]
+    fn last_backup_overall_picks_newest_active_device() {
+        use Removal as R;
+        assert_eq!(last_backup_overall([]), None);
+        assert_eq!(
+            last_backup_overall([(R::None, "a", None), (R::None, "b", Some(0))]),
+            None
+        );
+        assert_eq!(
+            last_backup_overall([
+                (R::None, "a", Some(10)),
+                (R::Disconnected, "gone", Some(99)),
+                (R::Removed, "rm", Some(98)),
+                (R::None, "b", Some(20)),
+            ]),
+            Some((20, "b"))
+        );
+        assert_eq!(
+            last_backup_overall([(R::None, "a", Some(10)), (R::None, "b", Some(5))]),
+            Some((10, "a"))
+        );
+        assert_eq!(
+            last_backup_overall([(R::None, "a", Some(10)), (R::None, "b", Some(10))]),
+            Some((10, "a"))
+        );
     }
 }

@@ -1364,6 +1364,16 @@ impl IpcServer {
                 let now = now_ms();
                 match listed {
                     Ok(devices) => {
+                        // #1066：总览「最近一次备份」由 daemon 给结论，桌面不再拿水位自己推。
+                        let last_backup_overall = crate::device_projection::last_backup_overall(
+                            devices.iter().map(|d| {
+                                (
+                                    crate::device_projection::Removal::of(d),
+                                    d.profile.name.as_str(),
+                                    last_backup.get(&d.profile.node_id).copied(),
+                                )
+                            }),
+                        );
                         let list: Vec<_> = devices
                             .iter()
                             .map(|d| {
@@ -1443,7 +1453,14 @@ impl IpcServer {
                                 })
                             })
                             .collect();
-                        Resp::ok(id, serde_json::json!({ "devices": list }))
+                        Resp::ok(
+                            id,
+                            serde_json::json!({
+                                "devices": list,
+                                "last_backup_overall": last_backup_overall
+                                    .map(|(at, name)| serde_json::json!({ "at": at, "name": name })),
+                            }),
+                        )
                     }
                     Err(_) => internal(id),
                 }
