@@ -621,6 +621,14 @@ unsafe extern "system" fn service_main(_argc: u32, _argv: *mut PWSTR) {
         SERVICE_RUNNING, SERVICE_START_PENDING, SERVICE_STOPPED,
     };
 
+    boot_log("service main: entered");
+    // 服务没有控制台：把 stderr 接到启动日志，daemon 的 eprintln 才看得见
+    // （1067 的真实原因往往就写在那些早期错误里）。
+    redirect_stderr_to_boot_log();
+    // 服务里的 panic 没有控制台可看：先落盘。反证：不装这个钩子，1067 什么线索都没有。
+    std::panic::set_hook(Box::new(|info| {
+        boot_log(&format!("PANIC: {info}"));
+    }));
     let name_w = wide(SERVICE_NAME);
     let Ok(handle) =
         RegisterServiceCtrlHandlerExW(PCWSTR(name_w.as_ptr()), Some(service_control_handler), None)
@@ -710,14 +718,11 @@ pub fn run_service_dispatcher(body: impl FnOnce() -> i32 + Send + 'static) -> Re
     use windows::Win32::Foundation::ERROR_FAILED_SERVICE_CONTROLLER_CONNECT;
     use windows::Win32::System::Services::{StartServiceCtrlDispatcherW, SERVICE_TABLE_ENTRYW};
 
-    boot_log("service dispatcher: entered");
-    // 服务没有控制台：把 stderr 接到启动日志，daemon 的 eprintln 才看得见
-    // （1067 的真实原因往往就写在那些早期错误里）。
-    redirect_stderr_to_boot_log();
-    // 服务里的 panic 没有控制台可看：先落盘。反证：不装这个钩子，1067 什么线索都没有。
-    std::panic::set_hook(Box::new(|info| {
-        boot_log(&format!("PANIC: {info}"));
-    }));
+    // 这里**还不知道**是不是被 SCM 拉起：控制台、测试、安装器的 `--version`、壳的 shell-out
+    // 也都走到这儿。所以这里不写启动日志、不改 stderr、不装 panic 钩子——那些只在
+    // `service_main`（SCM 确认是服务之后）里做。以前放在这里，所有控制台调用的 stderr 都被
+    // 吞进 ProgramData 的启动日志（CI 上 cli_flow 等用例读不到「用法」），还会以调用者身份
+    // 建出默认 ACL 的 `%ProgramData%\P-Pass\logs`（#1167）。
     if let Ok(mut slot) = SERVICE_BODY.lock() {
         *slot = Some(Box::new(body));
     }
@@ -730,7 +735,7 @@ pub fn run_service_dispatcher(body: impl FnOnce() -> i32 + Send + 'static) -> Re
         SERVICE_TABLE_ENTRYW::default(),
     ];
     // SAFETY: name_w 在分发器返回前一直存活；表以零项结尾。
-    let result = match unsafe { StartServiceCtrlDispatcherW(table.as_mut_ptr()) } {
+    match unsafe { StartServiceCtrlDispatcherW(table.as_mut_ptr()) } {
         Ok(()) => {
             boot_log("dispatcher: returned Ok");
             Ok(true)
@@ -741,18 +746,13 @@ pub fn run_service_dispatcher(body: impl FnOnce() -> i32 + Send + 'static) -> Re
                     ERROR_FAILED_SERVICE_CONTROLLER_CONNECT.0,
                 ) =>
         {
-            boot_log("dispatcher: not a service context (console path)");
             Ok(false)
         }
-        Err(e) => {
-            boot_log(&format!("dispatcher: failed {e:?}"));
-            Err(PlatformError::Io {
-                action: "StartServiceCtrlDispatcherW",
-                source: std::io::Error::from_raw_os_error(e.code().0),
-            })
-        }
-    };
-    result
+        Err(e) => Err(PlatformError::Io {
+            action: "StartServiceCtrlDispatcherW",
+            source: std::io::Error::from_raw_os_error(e.code().0),
+        }),
+    }
 }
 
 #[cfg(test)]

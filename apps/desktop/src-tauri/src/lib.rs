@@ -3536,7 +3536,8 @@ mod tests {
     /// 反证：换回 `!define PPASS_DATA "$PROGRAMDATA\P-Pass"`，本测试红。
     #[test]
     fn programdata_dir_is_resolved_from_the_environment() {
-        let hooks = include_str!("../windows/installer-hooks.nsh");
+        // Windows 上 git 检出是 CRLF：按行首尾比对之前先统一换行。
+        let hooks = include_str!("../windows/installer-hooks.nsh").replace("\r\n", "\n");
         let define = hooks
             .lines()
             .find(|l| l.starts_with("!define PPASS_DATA"))
