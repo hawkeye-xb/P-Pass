@@ -11,13 +11,19 @@ description: >-
 # 不会把旧版本的包装进新镜像。命中时 apt 在 Dir::Cache::archives 里找到同名包，不再下载。
 # 未命中时照常下载，并给下载加超时与重试；job 结束时 actions/cache 自动保存。
 #
+# 为什么要显式装 libde265-dev（#1230）：`--all-features` 会打开 `media-codec/vendored`，
+# libheif-sys 从源码编 libheif，插件加载关掉、HEVC 解码器靠 cmake 找 libde265 头文件直接
+# 编进去。24.04 的 libheif-dev（1.17）顺带依赖 libde265-dev，26.04 的（1.21）不再带，
+# 找不到就静默编出一个不能解 HEIC 的 libheif（"Support for this compression format has
+# not been built in"）。libheif-plugin-libde265 管系统库那条路，libde265-dev 管 vendored 这条路。
+#
 # ⚠️ composite action 的每个 run 步骤都必须写 shell:；actionlint 不扫本文件。
 
 inputs:
   packages:
     description: 要装的 apt 包，空格分隔
     required: false
-    default: libheif-dev libheif-plugin-libde265 ffmpeg libnuma-dev
+    default: libheif-dev libheif-plugin-libde265 libde265-dev ffmpeg libnuma-dev
 
 runs:
   using: composite
