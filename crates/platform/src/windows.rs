@@ -43,8 +43,12 @@ fn write_run_value(key: &str, name: &str, command: &str) -> Result<()> {
         .map_err(io_err("write Run value"))
 }
 
-/// DESK-60 (#877)：NSIS（Tauri 模板，currentUser 模式）的卸载登记。
+/// DESK-60 (#877)：NSIS（Tauri 模板）的卸载登记。
 /// `InstallLocation` 是带引号的安装目录。
+///
+/// 登记在哪个 hive 取决于安装形态：每用户安装（老版本）写 `HKCU`；per-machine 安装
+/// （D1/#1161，装在 `C:\Program Files`、装一次全机器可用）由 NSIS 的 `SetShellVarContext
+/// all` 写进 `HKLM`。两个都要认，否则「这台机器装了没装」会答错。
 const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass";
 
 /// 带引号或不带引号的命令行 → 可执行路径（Run 值、`InstallLocation` 都是这种
@@ -59,11 +63,29 @@ fn exec_from_run_value(value: &str) -> Option<PathBuf> {
 }
 
 fn installed_location() -> Option<PathBuf> {
-    let key = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
-        .open_subkey(UNINSTALL_KEY)
-        .ok()?;
-    let raw: String = key.get_value("InstallLocation").ok()?;
-    exec_from_run_value(&raw)
+    installed_location_in(&[
+        winreg::enums::HKEY_LOCAL_MACHINE,
+        winreg::enums::HKEY_CURRENT_USER,
+    ])
+}
+
+/// 按给定 hive 顺序找卸载登记：先命中者为准。
+///
+/// 先 `HKLM` 再 `HKCU`：同一台机器上若既有 per-machine 安装、又留着老的每用户登记，
+/// 正在跑的一定是较新的 per-machine 那份（安装器会清掉旧登记，但顺序决定了兜底行为）。
+fn installed_location_in(hives: &[winreg::HKEY]) -> Option<PathBuf> {
+    for hive in hives {
+        let Ok(key) = winreg::RegKey::predef(*hive).open_subkey(UNINSTALL_KEY) else {
+            continue;
+        };
+        let Ok(raw) = key.get_value::<String, _>("InstallLocation") else {
+            continue;
+        };
+        if let Some(dir) = exec_from_run_value(&raw) {
+            return Some(dir);
+        }
+    }
+    None
 }
 
 /// `exec` 是否就在 `install_dir` 里（直接子文件）。Windows 路径不分大小写，
@@ -347,6 +369,15 @@ impl WindowsAdapter {
     pub fn new() -> Self {
         Self
     }
+
+    /// D4：服务模式下的数据根（`%ProgramData%\P-Pass`）；不是服务 → `None`。
+    ///
+    /// 服务账户 `NT SERVICE\P-Pass` 的 `%LOCALAPPDATA%` / `%APPDATA%` 在
+    /// `C:\Windows\ServiceProfiles\` 下，读不到交互用户的任何东西。所以服务模式下
+    /// 身份私钥、配对白名单、库位置、配置、日志一律换成 ProgramData 的正本。
+    fn service_root() -> Option<PathBuf> {
+        crate::service_mode_active().then(crate::windows_programdata::service_root)
+    }
 }
 
 impl Default for WindowsAdapter {
@@ -559,7 +590,147 @@ impl PlatformAdapter for WindowsAdapter {
     /// 不写死返回新位置，是为了让「搬迁失败」退化成「保持原样」，而不是
     /// 指着一个空目录让 daemon 建一个崭新的空索引。
     fn data_dir(&self) -> PathBuf {
+        // D1/D4：服务模式的数据根是 %ProgramData%\P-Pass（服务账户读不到用户的
+        // %LOCALAPPDATA%）。不做老目录搬迁：服务此前从没在用户目录里跑过。
+        if let Some(root) = Self::service_root() {
+            // #1043：日志跟着数据根走（`<data_dir>\logs\daemon.log`）。
+            return root;
+        }
         crate::data_migration::resolve(&legacy_data_dir(), &current_data_dir())
+    }
+
+    /// #1109 / D4：身份私钥。服务模式下放进 `%ProgramData%\P-Pass\identity.key`
+    /// ——目录与文件的 DACL 只给服务账户与 Administrators，交互用户（含恶意程序）
+    /// 读不到也改不了。非服务模式维持数据目录里的 `.ppf/identity.key`。
+    fn identity_key_home(&self) -> crate::IdentityKeyHome {
+        match Self::service_root() {
+            Some(root) => crate::IdentityKeyHome::SecureStore(Box::new(
+                crate::ProgramDataStore::new(root.join("identity.key"), "身份私钥"),
+            )),
+            None => crate::IdentityKeyHome::DataDirFile,
+        }
+    }
+
+    /// #1115 / D4：配对白名单的正本。服务模式下是 ProgramData 里的一份整份 JSON；
+    /// 非服务模式是 `None`（库本身即正本，维持现状）。
+    fn pairing_store(&self) -> Option<Box<dyn crate::SecretBlobStore>> {
+        let root = Self::service_root()?;
+        Some(Box::new(crate::ProgramDataStore::new(
+            root.join("pairings.json"),
+            "配对白名单",
+        )))
+    }
+
+    /// #1115 / D4：照片库位置的正本。config.toml 谁都能改，服务模式下库位置只认
+    /// 签名 daemon 写进 ProgramData 的这份；config.toml 那份只给人看。
+    fn library_store(&self) -> Option<Box<dyn crate::SecretBlobStore>> {
+        let root = Self::service_root()?;
+        Some(Box::new(crate::ProgramDataStore::new(
+            root.join("library.json"),
+            "照片库位置",
+        )))
+    }
+
+    /// §5.3 / #1159：把照片库目录授权给服务账户。
+    ///
+    /// 只有 per-machine 安装（服务已注册）才需要：老的每用户计划任务跑在用户会话
+    /// 里，权限本就一致。服务账户的 SID 由服务名派生，`grant_modify_for_sid` 幂等
+    /// 且自己回读确认，所以这里不再重复核一遍。
+    fn grant_library_dir(&self, dir: &Path) -> Result<crate::LibraryDirGrant> {
+        use crate::windows_service;
+        if !windows_service::is_installed(windows_service::SERVICE_NAME).unwrap_or(false) {
+            return Ok(crate::LibraryDirGrant::NotApplicable);
+        }
+        // #1167：首启默认位置（`图片\P-Pass Library`）这时往往还不存在。ACE 只能加在已有的
+        // 目录上，服务账户又建不了主人用户目录里的文件夹（真机：向导报「拒绝访问 (os error 5)」）
+        // ——所以由主人先建好，再授权。
+        if !dir.exists() {
+            std::fs::create_dir_all(dir).map_err(|e| crate::PlatformError::Io {
+                action: "create_library_dir",
+                source: e,
+            })?;
+        }
+        let account = format!(r"NT SERVICE\{}", windows_service::SERVICE_NAME);
+        let sid = crate::windows_programdata::account_sid_string(&account)?;
+        Ok(
+            match crate::windows_photo_dir::grant_modify_for_sid(dir, &sid)? {
+                crate::windows_photo_dir::GrantOutcome::Done => crate::LibraryDirGrant::Granted,
+                crate::windows_photo_dir::GrantOutcome::SkippedNoAcl { file_system } => {
+                    crate::LibraryDirGrant::SkippedNoAcl { file_system }
+                }
+            },
+        )
+    }
+
+    /// #1167：命名管道，按 Windows 用户 SID 认人（见 `windows_pipe`）。管道名两边各自算：
+    /// 服务形态 `ppf-svc`，计划任务形态 `ppf-<用户 SID>`。算不出来（取不到本用户 SID）
+    /// 时退回服务名——连接随后会在身份核对上失败并如实报错，不会连到别处。
+    fn resident_ipc(&self) -> crate::ResidentIpc {
+        crate::ResidentIpc::UserPipe(
+            crate::windows_pipe::resident_pipe_name()
+                .unwrap_or_else(|_| crate::windows_pipe::SERVICE_PIPE_NAME.to_string()),
+        )
+    }
+
+    /// #1167 / D3：服务形态的主人记录（`%ProgramData%\P-Pass\owner`）。
+    fn resident_owner(&self) -> Result<crate::ResidentOwner> {
+        if !crate::service_mode_active() {
+            return Ok(crate::ResidentOwner::NotApplicable);
+        }
+        Ok(
+            match crate::windows_pipe::read_owner_at(&crate::windows_pipe::owner_path())? {
+                Some(sid) => crate::ResidentOwner::Claimed(sid),
+                None => crate::ResidentOwner::Unclaimed,
+            },
+        )
+    }
+
+    /// #1167 / D3：第一个完成首启向导的用户成为主人。已有别的主人 ⇒ `Err`（换主人 =
+    /// 管理员删掉 `%ProgramData%\P-Pass`）。
+    fn claim_resident_owner(&self, peer: Option<&crate::PeerUser>) -> Result<crate::Applied> {
+        if !crate::service_mode_active() {
+            return Ok(crate::Applied::NotApplicable);
+        }
+        let Some(peer) = peer else {
+            return Err(PlatformError::Failed {
+                action: "claim_resident_owner",
+                detail: "拿不到连接方身份，不能记主人".into(),
+            });
+        };
+        crate::windows_pipe::write_owner_at(&crate::windows_pipe::owner_path(), peer.id())?;
+        Ok(crate::Applied::Done)
+    }
+
+    /// #1167：服务形态下「家目录」= 主人的家目录（日志脱敏的基准）。服务账户自己的
+    /// profile 在 `C:\Windows\ServiceProfiles\` 下，拿它脱敏等于什么都没脱。主人还没有 /
+    /// 查不到 ⇒ `None`（不编一个出来）。
+    fn home_dir(&self) -> Option<PathBuf> {
+        if crate::service_mode_active() {
+            let owner =
+                crate::windows_pipe::read_owner_at(&crate::windows_pipe::owner_path()).ok()??;
+            return profile_dir_of(&owner);
+        }
+        std::env::home_dir().filter(|p| !p.as_os_str().is_empty())
+    }
+
+    /// §5.1 / #1161：读「用户希望服务运行吗」的开关。
+    ///
+    /// **不**先查 `is_installed`：服务账户 `NT SERVICE\P-Pass` 不在服务对象自己的
+    /// DACL 里（那里只有 SY/BA/IU），它查不了自己，查失败会被当成「不适用」而放行。
+    /// 这个开关就是一个文件，直接读最稳；读不到/坏内容都按「要运行」处理。
+    fn service_wanted_state(&self) -> Option<bool> {
+        crate::windows_service::read_wanted_state_at(&crate::windows_service::wanted_state_path())
+    }
+
+    /// §5.1 / #1161：写开关。给交互用户 `RP`/`WP`、不给 `DC`，所以「开机别启动」只能
+    /// 由服务自检实现（详见 `windows_service::wanted_state_path` 的说明）。
+    fn set_service_wanted_state(&self, running: bool) -> Result<crate::Applied> {
+        use crate::windows_service;
+        if !windows_service::is_installed(windows_service::SERVICE_NAME)? {
+            return Ok(crate::Applied::NotApplicable);
+        }
+        windows_service::write_wanted_state_at(&windows_service::wanted_state_path(), running)?;
+        Ok(crate::Applied::Done)
     }
 
     /// #1043：`ERROR_SHARING_VIOLATION`（32，文件正被另一进程使用）与
@@ -824,8 +995,16 @@ impl PlatformAdapter for WindowsAdapter {
     /// `PROTECTED_DACL_SECURITY_INFORMATION` 是关键：不带它，父目录继承下来
     /// 的 ACE 照样生效，等于没收紧。路径不存在时 `SetNamedSecurityInfoW`
     /// 返回 `ERROR_FILE_NOT_FOUND`，这里如实报 `Err`，不静默回 `Done`。
+    ///
+    /// #1167：服务形态下额外保留 Administrators 的完全控制——否则只剩服务 SID 的文件
+    /// 管理员读不了、改不了权限，`%ProgramData%\P-Pass` 删不干净（真机踩过）。
     fn restrict_to_owner(&self, path: &Path) -> Result<crate::Applied> {
-        restrict_to_current_user(path)?;
+        let extra: &[&str] = if crate::service_mode_active() {
+            &[crate::windows_programdata::ADMINISTRATORS_SID]
+        } else {
+            &[]
+        };
+        restrict_to_current_user(path, extra)?;
         Ok(crate::Applied::Done)
     }
 
@@ -897,10 +1076,28 @@ impl PlatformAdapter for WindowsAdapter {
 }
 
 impl HostingAdapter for WindowsAdapter {
+    /// #1167：per-machine 安装（服务已注册）时，安装器的标记在 `%ProgramData%\P-Pass\`
+    /// （提权安装器写在那里，并给这个文件单独授本机用户读/删）；否则仍是数据目录。
+    fn installer_marker_dir(&self) -> PathBuf {
+        if crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)
+            .unwrap_or(false)
+        {
+            crate::windows_programdata::service_root()
+        } else {
+            self.data_dir()
+        }
+    }
+
     /// DESK-65 (#957)：登记计划任务并立刻运行它（= `launchctl bootstrap` +
     /// `RunAtLoad`）。向导紧接着就要连上 daemon，所以登记完就跑；已经在跑时
     /// `IgnoreNew` 让这次运行什么都不多拉。顺手删掉老版本的 Run 值（迁移）。
     fn install_autostart(&self, exec: &Path) -> Result<()> {
+        // D1：服务已由安装器建好（`start= auto`），壳不再登记计划任务（否则会多一套
+        // 自启，互相打架）。**不在这里改启动类型**：那要 `SERVICE_CHANGE_CONFIG`，
+        // 而把 `DC` 授给普通用户会破坏 ProgramData 的 D4 保护（见 uninstall_autostart）。
+        if crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)? {
+            return Ok(());
+        }
         use windows::core::BSTR;
         use windows::Win32::System::TaskScheduler::{
             TASK_CREATE_OR_UPDATE, TASK_LOGON_INTERACTIVE_TOKEN,
@@ -929,7 +1126,13 @@ impl HostingAdapter for WindowsAdapter {
     }
 
     /// 计划任务在，或者老版本的 Run 值还在（还没迁移）。
+    ///
+    /// 服务模式：登记就是「服务存在」，由安装器建；壳不改启动类型（见
+    /// [`Self::uninstall_autostart`] 里关于 D4 的说明）。
     fn autostart_installed(&self) -> Result<bool> {
+        if crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)? {
+            return Ok(true);
+        }
         let task = with_task_folder("query scheduled task", |folder| {
             Ok(get_task(folder)?.is_some())
         })?;
@@ -940,6 +1143,14 @@ impl HostingAdapter for WindowsAdapter {
     /// `Repaired` ⇒ `install_autostart` 换成计划任务并删掉 Run 值（迁移只发生
     /// 在壳的对账里，那里先判了用户有没有停过服务）。
     fn autostart_registration(&self) -> Result<crate::AutostartRegistration> {
+        if crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)? {
+            return Ok(
+                match crate::windows_service::image_path(crate::windows_service::SERVICE_NAME)? {
+                    Some(path) => crate::AutostartRegistration::At(path),
+                    None => crate::AutostartRegistration::Unreadable,
+                },
+            );
+        }
         use windows::core::{Interface as _, BSTR};
         use windows::Win32::System::TaskScheduler::IExecAction;
 
@@ -1014,7 +1225,18 @@ impl HostingAdapter for WindowsAdapter {
 
     /// DESK-65 (#957)：结束任务正在跑的实例，再删任务（= `launchctl bootout`），
     /// 老版本的 Run 值一并删掉。之后登录不再拉起、看门狗也不再拉。
+    ///
+    /// D1/§5.1：服务模式下**不删服务**——那是 per-machine 安装的一部分，删掉要管理员
+    /// 才能重建。这里只停（`SERVICE_STOP`；服务 DACL 已把 `RP`/`WP` 授给交互用户）。
+    ///
+    /// ⚠️ §5.1 的字面要求是「停止 = 设为禁用」，那需要 `SERVICE_CHANGE_CONFIG`。把
+    /// `DC` 授给普通用户等于让他改 binPath、以服务账户跑任意代码，ProgramData 的保护
+    /// 就没了（D4）。这个取舍挂在 #1161，定案前不在这里改启动类型。
     fn uninstall_autostart(&self) -> Result<()> {
+        if crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)? {
+            crate::windows_service::stop(crate::windows_service::SERVICE_NAME)?;
+            return delete_legacy_run_value();
+        }
         use windows::core::BSTR;
         with_task_folder("delete scheduled task", |folder| {
             let Some(task) = get_task(folder)? else {
@@ -1028,11 +1250,27 @@ impl HostingAdapter for WindowsAdapter {
     }
 
     fn service_mode(&self) -> ServiceMode {
-        ServiceMode::ScheduledTask
+        // D1 / #1161 迁移期：安装器还没建服务（同一张卡的 B/C 部分）。先按「服务在不在」
+        // 选：装过服务的机器自动走 SCM，没装的继续用计划任务。安装器落地后，这个分支
+        // 和计划任务那一整套一起删。
+        if crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)
+            .unwrap_or(false)
+        {
+            ServiceMode::WindowsService
+        } else {
+            ServiceMode::ScheduledTask
+        }
     }
 
     /// 任务正在跑的实例的进程号。
     fn resident_daemon_pid(&self) -> Option<u32> {
+        if let Ok(true) = crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)
+        {
+            return crate::windows_service::status(crate::windows_service::SERVICE_NAME)
+                .ok()
+                .flatten()
+                .and_then(|s| s.pid);
+        }
         with_task_folder("query scheduled task", |folder| match get_task(folder)? {
             Some(task) => task_running_pid(&task),
             None => Ok(None),
@@ -1052,6 +1290,33 @@ impl HostingAdapter for WindowsAdapter {
     /// DESK-65 (#957)：= `launchctl kickstart [-k]`。`kill_running` 时先结束在跑
     /// 的实例再运行任务（换版本）；否则在跑就不动（自愈）。
     fn restart_resident_daemon(&self, kill_running: bool) -> Result<crate::ResidentRestart> {
+        if crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)? {
+            use crate::windows_service;
+            if !kill_running {
+                if let Some(pid) =
+                    windows_service::status(windows_service::SERVICE_NAME)?.and_then(|s| s.pid)
+                {
+                    return Ok(crate::ResidentRestart::AlreadyRunning { pid });
+                }
+            }
+            windows_service::stop(windows_service::SERVICE_NAME)?;
+            windows_service::start(windows_service::SERVICE_NAME)?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                if let Some(pid) =
+                    windows_service::status(windows_service::SERVICE_NAME)?.and_then(|s| s.pid)
+                {
+                    return Ok(crate::ResidentRestart::Started { pid });
+                }
+                if std::time::Instant::now() >= deadline {
+                    return Err(PlatformError::Failed {
+                        action: "restart_service",
+                        detail: "服务 10 秒内没有进入 Running".into(),
+                    });
+                }
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+        }
         use windows::Win32::Foundation::{E_FAIL, VARIANT_TRUE};
         use windows::Win32::System::Variant::VARIANT;
 
@@ -1097,6 +1362,20 @@ impl HostingAdapter for WindowsAdapter {
     /// B7（#1043）：判据从「映像名」收紧到「映像的完整路径」，见
     /// [`stop_processes_at`]。
     fn stop_daemon(&self, exe: &Path, pid_hint: Option<u32>) -> Result<crate::KillOutcome> {
+        if crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)
+            .unwrap_or(false)
+        {
+            let was_running = crate::windows_service::status(crate::windows_service::SERVICE_NAME)
+                .ok()
+                .flatten()
+                .is_some_and(|s| s.pid.is_some());
+            crate::windows_service::stop(crate::windows_service::SERVICE_NAME)?;
+            return Ok(if was_running {
+                crate::KillOutcome::Killed
+            } else {
+                crate::KillOutcome::NotRunning
+            });
+        }
         stop_processes_at(exe, pid_hint)
     }
 }
@@ -1309,8 +1588,51 @@ fn current_user_sid() -> Result<Vec<u8>> {
     result
 }
 
-/// SEC-07 (#289)：见 `restrict_to_owner`。
-fn restrict_to_current_user(path: &Path) -> Result<()> {
+/// #1167：`HKLM\...\ProfileList\<SID>\ProfileImagePath`（`REG_EXPAND_SZ`，展开 `%VAR%`）。
+fn profile_dir_of(sid: &str) -> Option<PathBuf> {
+    let key = winreg::RegKey::predef(winreg::enums::HKEY_LOCAL_MACHINE)
+        .open_subkey(format!(
+            r"SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\{sid}"
+        ))
+        .ok()?;
+    let raw: String = key.get_value("ProfileImagePath").ok()?;
+    let expanded = expand_env(&raw);
+    (!expanded.is_empty()).then(|| PathBuf::from(expanded))
+}
+
+/// `%NAME%` → 环境变量值（不认识的原样保留）。ProfileImagePath 实际只用 `%SystemDrive%`。
+fn expand_env(raw: &str) -> String {
+    let mut out = String::new();
+    let mut rest = raw;
+    while let Some(start) = rest.find('%') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        match after.find('%') {
+            Some(end) => {
+                let name = &after[..end];
+                match std::env::var(name) {
+                    Ok(v) if !name.is_empty() => out.push_str(&v),
+                    _ => {
+                        out.push('%');
+                        out.push_str(name);
+                        out.push('%');
+                    }
+                }
+                rest = &after[end + 1..];
+            }
+            None => {
+                out.push_str(&rest[start..]);
+                rest = "";
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// SEC-07 (#289)：见 `restrict_to_owner`。`extra_sids` 是在本用户之外**也**给完全控制的
+/// SID（#1167：服务形态下的 Administrators）。
+fn restrict_to_current_user(path: &Path, extra_sids: &[&str]) -> Result<()> {
     use std::os::windows::ffi::OsStrExt as _;
     use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS};
     use windows_sys::Win32::Security::Authorization::{
@@ -1323,7 +1645,23 @@ fn restrict_to_current_user(path: &Path) -> Result<()> {
     use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
 
     let mut sid = current_user_sid()?;
-    let access = EXPLICIT_ACCESS_W {
+    // 额外的 SID 由系统分配，函数结束时统一释放。
+    let mut extra: Vec<windows_sys::Win32::Security::PSID> = Vec::with_capacity(extra_sids.len());
+    for text in extra_sids {
+        match crate::windows_programdata::sid_from_string(text) {
+            Ok(p) => extra.push(p),
+            Err(e) => {
+                // SAFETY: 都来自 sid_from_string。
+                unsafe {
+                    extra
+                        .iter()
+                        .for_each(|p| crate::windows_programdata::free_sid(*p))
+                };
+                return Err(e);
+            }
+        }
+    }
+    let entry = |sid_ptr: *mut u16| EXPLICIT_ACCESS_W {
         grfAccessPermissions: FILE_ALL_ACCESS,
         grfAccessMode: SET_ACCESS,
         grfInheritance: NO_INHERITANCE,
@@ -1333,13 +1671,28 @@ fn restrict_to_current_user(path: &Path) -> Result<()> {
             TrusteeForm: TRUSTEE_IS_SID,
             TrusteeType: TRUSTEE_IS_USER,
             // TRUSTEE_IS_SID 时这个字段装的是 SID 指针（Win32 的惯用法）。
-            ptstrName: sid.as_mut_ptr().cast(),
+            ptstrName: sid_ptr,
         },
     };
+    let mut entries = vec![entry(sid.as_mut_ptr().cast())];
+    entries.extend(extra.iter().map(|p| entry(p.cast())));
     let mut acl: *mut ACL = std::ptr::null_mut();
-    // SAFETY: access 与它指向的 sid 在调用期间存活；oldacl 传 null = 从空
+    // SAFETY: entries 与它们指向的 sid 在调用期间存活；oldacl 传 null = 从空
     // ACL 起建（不保留任何旧 ACE）；成功时 acl 是 LocalAlloc 的，下面释放。
-    let rc = unsafe { SetEntriesInAclW(1, &access, std::ptr::null(), &mut acl) };
+    let rc = unsafe {
+        SetEntriesInAclW(
+            entries.len() as u32,
+            entries.as_ptr(),
+            std::ptr::null(),
+            &mut acl,
+        )
+    };
+    // SAFETY: extra 里都来自 sid_from_string，SetEntriesInAclW 已把 SID 拷进 acl。
+    unsafe {
+        extra
+            .iter()
+            .for_each(|p| crate::windows_programdata::free_sid(*p))
+    };
     if rc != ERROR_SUCCESS {
         return Err(io_err("SetEntriesInAclW")(
             std::io::Error::from_raw_os_error(rc as i32),
@@ -1579,6 +1932,35 @@ mod qa09_migrated_capability_tests {
         // 属主自己仍然能读写——收紧不能把自己也锁在外面。
         std::fs::write(&f, b"y").unwrap();
         assert_eq!(std::fs::read(&f).unwrap(), b"y");
+    }
+
+    /// #1167：服务形态下收紧时额外保留 Administrators（否则管理员删不掉 ProgramData）。
+    /// 反证：不带额外 SID（非服务形态的老口径）⇒ 只有一条 ACE，上一个测试守着。
+    #[test]
+    fn restrict_with_administrators_keeps_an_admin_ace() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("owner");
+        std::fs::write(&f, b"x").unwrap();
+        restrict_to_current_user(&f, &[crate::windows_programdata::ADMINISTRATORS_SID]).unwrap();
+        let after = dacl_facts(&f);
+        assert!(after.protected, "{after:?}");
+        assert_eq!(after.ace_count, 2, "{after:?}");
+        let admins = crate::windows_programdata::sid_from_string(
+            crate::windows_programdata::ADMINISTRATORS_SID,
+        )
+        .unwrap();
+        // SAFETY: admins 来自 sid_from_string。
+        let admin_bytes = unsafe {
+            let len = windows_sys::Win32::Security::GetLengthSid(admins) as usize;
+            let v = std::slice::from_raw_parts(admins.cast::<u8>(), len).to_vec();
+            crate::windows_programdata::free_sid(admins);
+            v
+        };
+        assert!(
+            after.sids.contains(&current_user_sid().unwrap()),
+            "{after:?}"
+        );
+        assert!(after.sids.contains(&admin_bytes), "{after:?}");
     }
 
     /// 与 unix 侧 `restrict_to_owner_fails_loudly_on_missing_file` 对齐：
@@ -2237,6 +2619,21 @@ mod desk68_install_location_tests {
         );
     }
 
+    /// D1/#1161：per-machine 安装把卸载登记写在 `HKLM`，老版本写在 `HKCU`。两处都要
+    /// 认——只认 HKCU 时，「这台机器装的是 per-machine 版」会被答成「没装过」。
+    ///
+    /// 判据读真实注册表：默认顺序的结果必须与「先 HKLM 再 HKCU」逐个一致。
+    #[test]
+    fn the_uninstall_entry_is_read_from_both_hives() {
+        let both = installed_location_in(&[
+            winreg::enums::HKEY_LOCAL_MACHINE,
+            winreg::enums::HKEY_CURRENT_USER,
+        ]);
+        assert_eq!(installed_location(), both, "默认顺序就是 HKLM → HKCU");
+        // 反证：不给 hive 就什么都找不到（不是靠某个全局状态蒙对）。
+        assert!(installed_location_in(&[]).is_none());
+    }
+
     /// 本机实证（E3）：装过 P-Pass 的机器上，安装目录里的那份就是正式位置。
     /// CI 上没装过，所以默认忽略；本机 `cargo test -- --ignored` 跑。
     #[test]
@@ -2822,9 +3219,91 @@ mod desk65_scheduled_task_tests {
 
     #[test]
     fn windows_has_a_service_manager() {
+        // 具体机制由安装形态决定：老装机是每用户计划任务，per-machine 安装后是
+        // SCM 服务（本机会随安装态翻转，所以不钉死是哪一种）。
         let mode = WindowsAdapter::new().service_mode();
-        assert_eq!(mode, ServiceMode::ScheduledTask);
+        assert!(
+            matches!(
+                mode,
+                ServiceMode::ScheduledTask | ServiceMode::WindowsService
+            ),
+            "{mode:?}"
+        );
         assert!(mode.has_service_manager());
+    }
+
+    /// 反证：没在 SCM 服务里跑时，存放处必须还是用户数据目录（不能被 D4 的接线
+    /// 顺手改掉）——身份是 `.ppf/identity.key`，配对 / 库都没有独立正本。
+    #[test]
+    fn user_context_keeps_the_data_dir_stores() {
+        let adapter = WindowsAdapter::new();
+        assert!(!crate::service_mode_active());
+        assert!(matches!(
+            adapter.identity_key_home(),
+            crate::IdentityKeyHome::DataDirFile
+        ));
+        assert!(adapter.pairing_store().is_none());
+        assert!(adapter.library_store().is_none());
+    }
+
+    /// §5.3 / #1159：授权只该发生在「服务已注册」的机器上，而且判据读**真实的
+    /// 目录 DACL**——不读返回值。
+    #[test]
+    fn library_dir_grant_targets_the_service_account() {
+        let d = tempfile::Builder::new()
+            .prefix("ppass-lib-grant-")
+            .tempdir()
+            .expect("tempdir");
+        let installed = crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)
+            .expect("is_installed");
+        match WindowsAdapter::new()
+            .grant_library_dir(d.path())
+            .expect("grant")
+        {
+            crate::LibraryDirGrant::NotApplicable => {
+                assert!(!installed, "服务装着就必须授权，不能报 NotApplicable");
+            }
+            crate::LibraryDirGrant::Granted => {
+                assert!(installed, "没装服务时不该给任何 SID 加 ACE");
+                let sid =
+                    crate::windows_programdata::account_sid_string(r"NT SERVICE\P-Pass").unwrap();
+                let sids = crate::windows_photo_dir::list_modify_sids(d.path()).unwrap();
+                assert!(sids.contains(&sid), "{sids:?} 里没有服务 SID {sid}");
+            }
+            crate::LibraryDirGrant::SkippedNoAcl { file_system } => {
+                panic!("工作目录应在 NTFS/ReFS 上：{file_system}")
+            }
+        }
+    }
+
+    /// #1167：库目录还不存在时（首启默认位置），服务形态下由主人先建再授权；没装服务时
+    /// 不动它（建目录归 daemon）。反证：去掉 `create_dir_all`，服务装着的机器上授权报
+    /// stat 失败、本测试红。
+    #[test]
+    fn library_dir_grant_creates_a_missing_dir_only_for_the_service() {
+        let d = tempfile::Builder::new()
+            .prefix("ppass-lib-missing-")
+            .tempdir()
+            .expect("tempdir");
+        let lib = d.path().join("P-Pass Library");
+        let installed = crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)
+            .expect("is_installed");
+        let got = WindowsAdapter::new().grant_library_dir(&lib);
+        if installed {
+            assert!(
+                matches!(got, Ok(crate::LibraryDirGrant::Granted)),
+                "服务装着：缺失的库目录应被建好并授权，得到 {got:?}"
+            );
+            let sid = crate::windows_programdata::account_sid_string(r"NT SERVICE\P-Pass").unwrap();
+            let sids = crate::windows_photo_dir::list_modify_sids(&lib).unwrap();
+            assert!(sids.contains(&sid), "{sids:?} 里没有服务 SID {sid}");
+        } else {
+            assert!(
+                matches!(got, Ok(crate::LibraryDirGrant::NotApplicable)),
+                "{got:?}"
+            );
+            assert!(!lib.exists(), "没装服务时不该替 daemon 建库目录");
+        }
     }
 }
 

@@ -29,6 +29,20 @@ fn daemon_in(home: &Path) -> Command {
     c
 }
 
+/// #1167：服务形态的常驻管道整台机器只有一份（`ppf-svc`），改 HOME 的沙箱隔离不掉它。开发 /
+/// 测试机上真装着、真在跑 P-Pass 服务时，导出会如实连上它——那是产品该有的行为，不是「离线」
+/// 场景，测试跳过、不去打扰它（同 cli_flow 的做法）。
+fn a_real_resident_daemon_answers() -> bool {
+    let platform::ResidentIpc::UserPipe(pipe) = platform::adapter().resident_ipc() else {
+        return false;
+    };
+    let endpoint = daemon::ipc::PeerEndpoint::Pipe(pipe);
+    tokio::runtime::Runtime::new()
+        .expect("tokio runtime")
+        .block_on(endpoint.connect())
+        .is_ok()
+}
+
 fn text(b: &[u8]) -> String {
     String::from_utf8_lossy(b).to_string()
 }
@@ -87,6 +101,12 @@ fn ok_json(o: &Output, out: &Path) -> bool {
 
 #[test]
 fn offline_export_bundles_own_logs_and_starts_nothing() {
+    if a_real_resident_daemon_answers() {
+        eprintln!(
+            "跳过：这台机器上真有常驻 P-Pass 服务在线，导出会如实连上它，不是本测试的离线场景"
+        );
+        return;
+    }
     let home = tempfile::tempdir().unwrap();
     let (platform_dirs, library) = init_platform(home.path());
     let home_s = home.path().display().to_string();

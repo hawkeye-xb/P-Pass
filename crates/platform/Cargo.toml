@@ -68,7 +68,12 @@ windows-sys = { version = "0.61", features = [
   "Win32_Globalization",
   # #1118: GetComputerNameExW——配对时给手机看的电脑名。
   "Win32_System_SystemInformation",
+  # #1167: ImpersonateNamedPipeClient——管道服务端按连接取客户端 SID。
+  "Win32_System_Pipes",
 ] }
+# #1167：管道安全描述符 SDDL 要宽字符串（interprocess 的 SecurityDescriptor::deserialize
+# 收 `&U16CStr`）。已在依赖树里（interprocess 的 Windows 依赖），这里提为直接依赖。
+widestring = "1"
 
 # DESK-16 (#165)：Windows 的系统缩略图走 COM（IShellItemImageFactory），
 # 而 windows-sys 是裸 FFI —— 没有 IUnknown/Interface 那套，做 COM 要手搓
@@ -79,8 +84,12 @@ windows-sys = { version = "0.61", features = [
 #    直接依赖并多开几个 feature。
 windows = { version = "0.62", features = [
   "Win32_Foundation",
-  # #1155：GetFileVersionInfoW / VerQueryValueW —— 单测拿真实系统 PE 与内存解析结果对照。
+  # #1155：GetFileVersionInfoW / VerQueryValueW（单测对照真实 PE）。
   "Win32_Storage",
+  # #1161：SCM 的 SDDL 解析与服务对象安全描述符。
+  "Win32_Security",
+  "Win32_Security_Authorization",
+  # #1161：DELETE 访问位（删服务用）。
   "Win32_Storage_FileSystem",
   # CoInitializeEx / CoUninitialize —— COM 必须先初始化线程套间。
   "Win32_System_Com",
@@ -95,13 +104,14 @@ windows = { version = "0.62", features = [
   "Win32_System_WinRT",
   # DESK-65 (#957)：常驻服务交给任务计划程序——ITaskService / IRegisteredTask，
   # 参数里的 VARIANT / BSTR 在后两个 feature 下。
+  "Win32_System_Services",
   "Win32_System_TaskScheduler",
   "Win32_System_Ole",
   "Win32_System_Variant",
 ] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "io-util"] }
 # fsevents_shapes 集成测试（macOS 目录监听平台行为实测）：直接驱动 notify。
 notify = "7"
 tempfile = "3"

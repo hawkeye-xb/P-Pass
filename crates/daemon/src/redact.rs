@@ -380,7 +380,6 @@ const SAFE_FILES: &[&str] = &[
     "p-pass-daemon.err",
     "config.toml",
     "identity.key",
-    "ipc.token",
     "ppf-logs.zip",
     "blobs.db",
 ];

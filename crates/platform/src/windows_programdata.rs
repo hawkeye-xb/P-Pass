@@ -20,8 +20,9 @@ use windows_sys::Win32::Security::Authorization::{
     TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
 };
 use windows_sys::Win32::Security::{
-    EqualSid, GetAce, GetSecurityDescriptorControl, ACL, DACL_SECURITY_INFORMATION,
-    OWNER_SECURITY_INFORMATION, PROTECTED_DACL_SECURITY_INFORMATION, PSID, SE_DACL_PROTECTED,
+    EqualSid, GetAce, GetSecurityDescriptorControl, ACL, CONTAINER_INHERIT_ACE,
+    DACL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION,
+    PROTECTED_DACL_SECURITY_INFORMATION, PSID, SE_DACL_PROTECTED,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     MoveFileExW, FILE_ALL_ACCESS, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
@@ -91,7 +92,7 @@ pub(crate) unsafe fn sid_to_string(sid: PSID) -> String {
 
 /// 当前进程用户的 SID 字符串（安装器不一定在跑；这个给日志与默认值用）。
 pub fn current_user_sid_string() -> Result<String> {
-    use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_QUERY, TOKEN_USER};
+    use windows_sys::Win32::Security::TOKEN_QUERY;
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
     let mut token = std::ptr::null_mut();
@@ -100,17 +101,29 @@ pub fn current_user_sid_string() -> Result<String> {
         if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
             return Err(io_err("OpenProcessToken", std::io::Error::last_os_error()));
         }
+        let out = token_user_sid_string(token);
+        let _ = windows_sys::Win32::Foundation::CloseHandle(token);
+        out
+    }
+}
+
+/// 令牌（进程或线程令牌，需 `TOKEN_QUERY`）的 `TokenUser` SID 字符串。句柄由调用方关闭。
+pub(crate) fn token_user_sid_string(
+    token: windows_sys::Win32::Foundation::HANDLE,
+) -> Result<String> {
+    use windows_sys::Win32::Security::{GetTokenInformation, TokenUser, TOKEN_USER};
+    // SAFETY: token 由调用方保证有效；缓冲按回报长度分配并 8 字节对齐。
+    unsafe {
         let mut needed = 0u32;
         GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut needed);
-        let mut buf = vec![0u8; needed.max(128) as usize];
+        let mut buf = vec![0u64; (needed.max(128) as usize).div_ceil(8)];
         let ok = GetTokenInformation(
             token,
             TokenUser,
             buf.as_mut_ptr().cast::<c_void>(),
-            buf.len() as u32,
+            (buf.len() * 8) as u32,
             &mut needed,
         );
-        let _ = windows_sys::Win32::Foundation::CloseHandle(token);
         if ok == 0 {
             return Err(io_err(
                 "GetTokenInformation",
@@ -120,6 +133,85 @@ pub fn current_user_sid_string() -> Result<String> {
         let tu = &*(buf.as_ptr() as *const TOKEN_USER);
         Ok(sid_to_string(tu.User.Sid))
     }
+}
+
+/// `%ProgramData%\P-Pass`：服务模式（D1）下 daemon 唯一的数据根。
+///
+/// 服务账户 `NT SERVICE\<服务名>` 没有属于用户的配置文件，`%LOCALAPPDATA%` /
+/// `%APPDATA%` 指向 `C:\Windows\ServiceProfiles\` 下它读不到的地方——身份私钥、
+/// 配对白名单、库位置、配置、日志、索引全部落在本函数给的目录里。
+pub fn service_root() -> PathBuf {
+    std::env::var_os("ProgramData")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\ProgramData"))
+        .join("P-Pass")
+}
+
+/// 账户名（如 `NT SERVICE\P-Pass`）→ SID 字符串。
+///
+/// `NT SERVICE\<名字>` 是**虚拟账户**：名字本身不需要存在，但只有**已注册的服务名**
+/// 才解析得出来（未注册的名字 `LookupAccountNameW` 答不出来，实测如此）。所以这个
+/// 调用在服务装好之后才可靠——daemon 能跑就说明服务注册过，安装器也是先 `sc create`
+/// 再核对目录 ACL。
+pub fn account_sid_string(account: &str) -> Result<String> {
+    use windows_sys::Win32::Security::{LookupAccountNameW, SID_NAME_USE};
+
+    let name: Vec<u16> = account.encode_utf16().chain(std::iter::once(0)).collect();
+    let mut sid_len = 0u32;
+    let mut domain_len = 0u32;
+    let mut use_: SID_NAME_USE = 0;
+    // SAFETY: name 是 NUL 结尾的宽字符串；第一次只取所需长度。
+    unsafe {
+        LookupAccountNameW(
+            ptr::null(),
+            name.as_ptr(),
+            ptr::null_mut(),
+            &mut sid_len,
+            ptr::null_mut(),
+            &mut domain_len,
+            &mut use_,
+        );
+    }
+    if sid_len == 0 {
+        return Err(failed(
+            "LookupAccountNameW",
+            format!("查不到账户 {account}（SID 长度 0）"),
+        ));
+    }
+    let mut sid = vec![0u8; sid_len as usize];
+    let mut domain = vec![0u16; domain_len.max(1) as usize];
+    // SAFETY: 两个缓冲都按上面回报的长度分配。
+    let ok = unsafe {
+        LookupAccountNameW(
+            ptr::null(),
+            name.as_ptr(),
+            sid.as_mut_ptr().cast(),
+            &mut sid_len,
+            domain.as_mut_ptr(),
+            &mut domain_len,
+            &mut use_,
+        )
+    };
+    if ok == 0 {
+        return Err(io_err(
+            "LookupAccountNameW",
+            std::io::Error::last_os_error(),
+        ));
+    }
+    // SAFETY: sid 是上面填充的合法 SID，长度足够。
+    Ok(unsafe { sid_to_string(sid.as_mut_ptr().cast()) })
+}
+
+/// 服务模式下 daemon 启动前的硬核对（brief §5.2）。
+///
+/// 核对 [`service_root`] 的 ACL：属主是 Administrators / 服务账户、DACL 受保护、
+/// ACE 白名单只有这两个 SID。**不通过就拒绝启动**——不回退用户目录、不重建目录。
+pub fn verify_service_root() -> Result<PathBuf> {
+    let root = service_root();
+    let account = format!(r"NT SERVICE\{}", crate::windows_service::SERVICE_NAME);
+    let sid = account_sid_string(&account)?;
+    ProgramDataDir::verify(&root, &sid)?;
+    Ok(root)
 }
 
 /// `%ProgramData%\<name>` 目录本身：建、核对。
@@ -134,7 +226,8 @@ impl ProgramDataDir {
         set_private_dacl(dir, &[service_sid, ADMINISTRATORS_SID])
     }
 
-    /// 启动时核对：属主 ∈ {Administrators, SYSTEM}、受保护 DACL、ACE 只指向白名单 SID。
+    /// 启动时核对：属主 ∈ {Administrators, 服务账户}、受保护 DACL、ACE 只指向白名单 SID，
+    /// 且 Administrators 有可继承的完全控制（#1167：子项都继承它，管理员才删得干净）。
     ///
     /// 任何一条不满足都 `Err`——daemon 据此拒绝启动（brief §5.2）。这里**不**试图修，
     /// 修是安装器 / 显式管理操作的事。
@@ -203,6 +296,9 @@ impl ProgramDataDir {
                 }
                 // SAFETY: dacl 指向 sd 内部的合法 ACL。
                 let ace_count = unsafe { (*dacl).AceCount } as u32;
+                // #1167：Administrators 必须有**可继承**的完全控制——daemon 在里面建的每个
+                // 子项都带上它，管理员才删得掉整个目录（「删目录 = 身份重置」）。
+                let mut admins_inherit_full = false;
                 for i in 0..ace_count {
                     let mut ace: *mut c_void = ptr::null_mut();
                     // SAFETY: dacl 合法、i < AceCount。
@@ -228,6 +324,22 @@ impl ProgramDataDir {
                             format!("DACL 里有白名单之外的 ACE：{who}"),
                         ));
                     }
+                    // ACCESS_ALLOWED_ACE 的 Mask 紧跟在 4 字节头后面。
+                    let mask = unsafe { *((ace as *const u8).add(4) as *const u32) };
+                    let both = (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE) as u8;
+                    let inherit = header.AceFlags & both;
+                    if unsafe { EqualSid(sid, allowed[1]) } != 0
+                        && mask & FILE_ALL_ACCESS == FILE_ALL_ACCESS
+                        && inherit == both
+                    {
+                        admins_inherit_full = true;
+                    }
+                }
+                if !admins_inherit_full {
+                    return Err(failed(
+                        "verify_programdata_dir",
+                        "Administrators 没有可继承的完全控制 (OI)(CI)F——管理员会删不掉这个目录",
+                    ));
                 }
                 Ok(())
             })();
@@ -452,6 +564,41 @@ mod tests {
         current_user_sid_string().expect("current sid")
     }
 
+    /// D4：虚拟服务账户的 SID 由服务名派生，且必须与当前用户 SID 不同——正是这个
+    /// 「不同」才让 ProgramData 的 ACL 有意义。
+    ///
+    /// 前提是这台机器**注册了 P-Pass 服务**：`NT SERVICE\<名字>` 只对已注册的服务名
+    /// 解析得出来（未注册的名字查不到，见下一个反证）。CI 的干净机器上没有这个服务，
+    /// 所以这里按安装态分档，而不是无条件断言。
+    #[test]
+    fn service_account_resolves_to_its_own_sid() {
+        if !crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)
+            .expect("is_installed")
+        {
+            eprintln!("跳过：本机没注册 P-Pass 服务，NT SERVICE 虚拟账户解析不出来");
+            return;
+        }
+        let sid = account_sid_string(r"NT SERVICE\P-Pass").expect("lookup");
+        assert!(sid.starts_with("S-1-5-80-"), "{sid}");
+        assert_ne!(sid, test_sid());
+    }
+
+    /// 反证：不存在的账户名必须报错，不能编一个 SID 出来。
+    #[test]
+    fn unknown_account_is_an_error() {
+        assert!(account_sid_string(r"NT SERVICE\PPassNoSuchService").is_err());
+    }
+
+    /// 数据根就是安装器用的那一处（`%ProgramData%\P-Pass`）。
+    #[test]
+    fn service_root_is_under_programdata() {
+        assert_eq!(service_root().file_name().unwrap(), "P-Pass");
+        assert_eq!(
+            service_root().parent().unwrap().file_name().unwrap(),
+            "ProgramData"
+        );
+    }
+
     #[test]
     fn create_and_verify_roundtrip() {
         let d = tempdir();
@@ -526,6 +673,100 @@ mod tests {
         let err = ProgramDataDir::verify(d.path(), &test_sid()).unwrap_err();
         let text = format!("{err}");
         assert!(text.contains("白名单"), "{text}");
+    }
+
+    /// #1167 反证：Administrators 的 ACE 不可继承（daemon 建的子项就没有管理员权限，
+    /// 整个目录删不掉）⇒ 核对失败。正向由 `create_and_verify_roundtrip` 守着。
+    #[test]
+    fn verify_rejects_a_non_inheritable_admin_ace() {
+        let d = tempdir();
+        let me = sid_from_string(&test_sid()).unwrap();
+        let admins = sid_from_string(ADMINISTRATORS_SID).unwrap();
+        let entry = |sid: PSID, inherit| EXPLICIT_ACCESS_W {
+            grfAccessPermissions: FILE_ALL_ACCESS,
+            grfAccessMode: SET_ACCESS,
+            grfInheritance: inherit,
+            Trustee: TRUSTEE_W {
+                pMultipleTrustee: ptr::null_mut(),
+                MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+                TrusteeForm: TRUSTEE_IS_SID,
+                TrusteeType: TRUSTEE_IS_USER,
+                ptstrName: sid.cast(),
+            },
+        };
+        let entries = [
+            entry(
+                me,
+                windows_sys::Win32::Security::SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+            ),
+            entry(admins, 0),
+        ];
+        let w = wide(d.path());
+        unsafe {
+            let mut acl: *mut ACL = ptr::null_mut();
+            assert_eq!(
+                SetEntriesInAclW(2, entries.as_ptr(), ptr::null(), &mut acl),
+                ERROR_SUCCESS
+            );
+            assert_eq!(
+                SetNamedSecurityInfoW(
+                    w.as_ptr(),
+                    SE_FILE_OBJECT,
+                    DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                    ptr::null_mut(),
+                    ptr::null_mut(),
+                    acl,
+                    ptr::null(),
+                ),
+                ERROR_SUCCESS
+            );
+            LocalFree(acl.cast());
+            free_sid(me);
+            free_sid(admins);
+        }
+        let err = ProgramDataDir::verify(d.path(), &test_sid()).unwrap_err();
+        assert!(format!("{err}").contains("可继承"), "{err}");
+    }
+
+    /// #1167：daemon 在 ProgramData 里写的文件（正本、主人记录）都继承到 Administrators
+    /// 的完全控制——管理员删得掉。反证：上面那条不可继承的 ACL 直接被 verify 拒绝。
+    #[test]
+    fn files_written_under_the_root_inherit_the_admin_ace() {
+        let d = tempdir();
+        ProgramDataDir::create(d.path(), &test_sid()).expect("create");
+        std::fs::create_dir(d.path().join("logs")).unwrap();
+        let store = ProgramDataStore::new(d.path().join("logs").join("x.json"), "x");
+        store.write(b"{}").unwrap();
+        let path = wide(&d.path().join("logs").join("x.json"));
+        let admins = sid_from_string(ADMINISTRATORS_SID).unwrap();
+        let mut found = false;
+        unsafe {
+            let mut dacl: *mut ACL = ptr::null_mut();
+            let mut sd: PSID = ptr::null_mut();
+            let rc = GetNamedSecurityInfoW(
+                path.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                &mut dacl,
+                ptr::null_mut(),
+                &mut sd,
+            );
+            assert_eq!(rc, ERROR_SUCCESS);
+            for i in 0..(*dacl).AceCount as u32 {
+                let mut ace: *mut c_void = ptr::null_mut();
+                assert_ne!(GetAce(dacl, i, &mut ace), 0);
+                let sid = (ace as *const u8).add(8) as PSID;
+                let mask = *((ace as *const u8).add(4) as *const u32);
+                if EqualSid(sid, admins) != 0 && mask & FILE_ALL_ACCESS == FILE_ALL_ACCESS {
+                    found = true;
+                }
+            }
+            LocalFree(sd.cast());
+            free_sid(admins);
+        }
+        assert!(found, "子项必须继承 Administrators 的完全控制");
     }
 
     #[test]

@@ -519,6 +519,11 @@ fn disable_auto_sleep_blocking() -> Result<(), String> {
 /// 有 daemon 在跑（含「未配置」状态）就直接问它；首启时没有，就一次性拉起内置 daemon
 /// 配好再收掉。校验失败原样交出 daemon 的 keyed 错误。生效时机：daemon 重启后。
 fn configure_library(library_dir: &str) -> Result<(), String> {
+    // §5.3 / #1159：服务模式下 daemon 是 `NT SERVICE\P-Pass`，与选目录的用户不是
+    // 同一个安全主体，它默认连读这个目录都不行。加 ACE 只能在主人身份下做，所以
+    // **先授权、再交给 daemon**（daemon 会以服务的身份复查目录）。授权失败不在这里
+    // 拦：daemon 的复查报的错更准确，用户看到的仍是同一句「这个文件夹不可用」。
+    let _ = platform::adapter().grant_library_dir(std::path::Path::new(library_dir));
     let set = |h: &ipc::DaemonHandle| {
         h.call("config.set_library", json!({ "library": library_dir }))
             .map(|_| ())
@@ -668,6 +673,9 @@ fn start_daemon_now(app: tauri::AppHandle) -> Result<String, String> {
     // DESK-36 (#456)：用户点「启动服务」（或走完向导）= 撤销之前的主动停止，
     // 自愈恢复正常。放在探活之后：文件跑不起来就什么都没启动，仍算「停着」。
     set_user_stopped(&platform::adapter().data_dir(), false)?;
+    // §5.1 / #1161：服务模式下「开机别启动」是服务自检的开关——先写回 running，否则
+    // 刚 `sc start` 起来的 daemon 读到 stopped 会立刻退出（看起来像启动失败）。
+    let _ = platform::adapter().set_service_wanted_state(true);
     let manager = app.state::<ServiceStateManager>().inner().clone();
     manager.begin_start(&app, "user start");
     match platform::hosting().install_autostart(&sidecar) {
@@ -872,6 +880,10 @@ fn stop_daemon_now() -> Result<(), String> {
     //    恰好来一次自愈 tick，它也得看见标记。落不下就不停：停了也会被
     //    自愈拉回来，不如直接告诉用户停止失败。
     set_user_stopped(&platform::adapter().data_dir(), true)?;
+    // §5.1 / #1161：服务模式下「开机别启动」靠服务自检——先把开关写成 stopped，
+    // 再停服务；否则下次开机 SCM 拉起来它又会跑（Windows 不给普通用户改启动类型的
+    // 权限，给了就破坏 ProgramData 的保护）。
+    let _ = platform::adapter().set_service_wanted_state(false);
     // 1) Unregister first — otherwise the service manager revives it
     //    (launchd KeepAlive / the Task Scheduler watchdog).
     //    DESK-65 (#957)：结果不许丢——撤不掉登记，下次开机服务照样起来，
@@ -937,7 +949,9 @@ fn pause_daemon_for_update_blocking(app: tauri::AppHandle) -> Result<(), String>
 ///   install-failed
 ///   version=<目标版本>
 ///   service=1|0（安装器是否把服务恢复运行）
-/// 文件放在平台数据目录，与 `windows/installer-hooks.nsh` 是同一份契约。
+/// 文件放在 `HostingAdapter::installer_marker_dir`（per-machine 安装时是
+/// `%ProgramData%\P-Pass\`——提权安装器写在自己的 `%LOCALAPPDATA%` 里，换个管理员来装
+/// 主人就读不到，#1167），与 `windows/installer-hooks.nsh` 是同一份契约。
 const UPDATE_FAILED_MARKER: &str = "update-failed";
 
 #[derive(Debug, Default, PartialEq, Eq, serde::Serialize)]
@@ -983,15 +997,40 @@ fn clear_update_failure_at(dir: &std::path::Path) -> std::io::Result<()> {
 }
 
 /// 前端启动时读一次：有没有「上次更新失败」的横幅要显示。
+/// #1167：标记目录要问服务管理器（服务装没装），所以放到工作线程上。
 #[tauri::command]
-fn update_failure_state() -> Value {
-    json!(read_update_failure_at(&platform::adapter().data_dir()))
+async fn update_failure_state() -> Result<Value, String> {
+    off_main(|| {
+        json!(read_update_failure_at(
+            &platform::hosting().installer_marker_dir()
+        ))
+    })
+    .await
+}
+
+/// #1167：常驻 daemon 由谁托管。Windows 首启向导第 3 步据此说清楚「会申请什么」——
+/// per-machine 安装是系统服务，不是计划任务。要问服务管理器（服务装没装），放到工作线程上。
+#[tauri::command]
+async fn resident_hosting() -> Result<Value, String> {
+    off_main(|| {
+        json!(match platform::hosting().service_mode() {
+            platform::ServiceMode::WindowsService => "windows_service",
+            platform::ServiceMode::ScheduledTask => "scheduled_task",
+            platform::ServiceMode::LaunchAgent => "launch_agent",
+            platform::ServiceMode::UserAutostart => "user_autostart",
+        })
+    })
+    .await
 }
 
 /// 用户点了「重试更新」/「关闭」后清掉标记；没有标记也返回成功（幂等）。
 #[tauri::command]
-fn clear_update_failure() -> Result<(), String> {
-    clear_update_failure_at(&platform::adapter().data_dir()).map_err(|e| e.to_string())
+async fn clear_update_failure() -> Result<(), String> {
+    off_main(|| {
+        clear_update_failure_at(&platform::hosting().installer_marker_dir())
+            .map_err(|e| e.to_string())
+    })
+    .await?
 }
 
 /// B7（#1043）：结束内置 daemon——两平台同一套语义，由平台端口实现
@@ -1802,6 +1841,7 @@ pub fn run() {
             self_heal_daemon,
             resume_after_failed_update,
             update_failure_state,
+            resident_hosting,
             clear_update_failure,
             restart_daemon_process,
             kernel_convergence_phase,
@@ -2108,8 +2148,6 @@ mod tests {
             "update_failure_key",
             "open_power_settings",
             "daemon_startup_error",
-            "update_failure_state",
-            "clear_update_failure",
             "pair_qr_svg",
             "use_default_library_dir",
             "is_test_build",
@@ -3453,12 +3491,101 @@ mod tests {
             "--version --json",
             "${StrStr}",
             "update-failed",
-            "desktop-user-stopped",
-            "\"$SYSDIR\\schtasks.exe\" /Change /TN \"P-Pass\" /ENABLE",
-            "\"$SYSDIR\\schtasks.exe\" /Run /TN \"P-Pass\"",
+            // #1167：「用户停过」读 ProgramData 的 wanted-state；失败标记写进 ProgramData
+            // 并单独授 Users 读 + 删。
+            "FileOpen $2 \"${PPASS_DATA}\\wanted-state\" r",
+            "StrCpy $R5 \"${PPASS_DATA}\\update-failed\"",
+            "\"*S-1-5-32-545:(R,D)\"",
+            "\"$SYSDIR\\sc.exe\" start \"${PPASS_SERVICE}\"",
+            "\"$SYSDIR\\sc.exe\" create \"${PPASS_SERVICE}\"",
             "${IfNot} ${Silent}",
         ] {
             assert!(hooks.contains(needle), "installer-hooks.nsh 缺 {needle}");
+        }
+        // #1167 反证：提权安装器不许再读写 $LOCALAPPDATA 里的停止标记（那是提权管理员的
+        // profile，不是主人的）。
+        assert!(
+            !hooks.contains("$LOCALAPPDATA\\com.hawkeyexb.ppass.desktop\\desktop-user-stopped"),
+            "安装器又去读提权账户自己的 desktop-user-stopped 了"
+        );
+    }
+
+    /// `sc create` 的 binPath 内层引号必须转义成 `\"`：nsExec 原样交给 CreateProcess，
+    /// 裸引号会让 `C:\Program Files\...` 在空格处被拆开，sc 返回 1639、服务没建出来（#1167
+    /// 真机复现）。反证：换回 `binPath= "$\"$INSTDIR\ppf-daemon.exe$\" --service"`，本测试红。
+    #[test]
+    fn service_create_escapes_the_quoted_binary_path() {
+        let hooks = include_str!("../windows/installer-hooks.nsh");
+        let line = hooks
+            .lines()
+            .find(|l| l.contains("sc.exe\" create \"${PPASS_SERVICE}\""))
+            .expect("installer-hooks.nsh 缺服务 create");
+        assert!(
+            line.contains(r#"binPath= "\"$INSTDIR\ppf-daemon.exe\" --service""#),
+            "binPath 的内层引号没转义：{line}"
+        );
+        assert!(
+            !line.contains("$\\\""),
+            "binPath 又用了裸引号 $\\\"：{line}"
+        );
+    }
+
+    /// ProgramData 位置必须运行时读 %ProgramData%：NSIS 没有 `$PROGRAMDATA` 常量，写了只得到
+    /// warning 6000 和一串字面文字，安装器的 icacls 全部「路径不存在」（#1167 真机复现）。
+    /// 用到 `${PPASS_DATA}` 的两个入口（POSTINSTALL、UpdateFailureRecover）都必须先解析它。
+    /// 反证：换回 `!define PPASS_DATA "$PROGRAMDATA\P-Pass"`，本测试红。
+    #[test]
+    fn programdata_dir_is_resolved_from_the_environment() {
+        let hooks = include_str!("../windows/installer-hooks.nsh");
+        let define = hooks
+            .lines()
+            .find(|l| l.starts_with("!define PPASS_DATA"))
+            .expect("installer-hooks.nsh 缺 PPASS_DATA");
+        assert_eq!(define, r#"!define PPASS_DATA "$PPassDataDir""#);
+        assert!(hooks.contains(r#"ReadEnvStr $PPassDataDir "ProgramData""#));
+        for entry in [
+            "!macro NSIS_HOOK_POSTINSTALL\n",
+            "Function UpdateFailureRecover\n",
+        ] {
+            let at = hooks
+                .find(entry)
+                .unwrap_or_else(|| panic!("缺入口 {entry}"));
+            assert!(
+                hooks[at + entry.len()..].starts_with("  !insertmacro PPassResolveDataDir\n"),
+                "{entry} 没有先解析 ProgramData 位置"
+            );
+        }
+    }
+
+    /// 服务 DACL：交互用户只能查询/启停；Administrators 必须保留删除（SD）与改权限
+    /// （WD/WO），否则卸载器以管理员跑的 `sc delete` 被拒、服务永久残留（#1063）。
+    /// 反证：把 BA 换回 `CCLCSWRPWPDTLOCRRC`，本测试红。
+    #[test]
+    fn service_dacl_keeps_admin_delete_and_limits_interactive_users() {
+        let hooks = include_str!("../windows/installer-hooks.nsh");
+        let line = hooks
+            .lines()
+            .find(|l| l.contains("sc.exe\" sdset \"${PPASS_SERVICE}\""))
+            .expect("installer-hooks.nsh 缺服务 sdset");
+        let rights = |sid: &str| -> String {
+            let tail = format!(";;;{sid})");
+            let end = line
+                .find(&tail)
+                .unwrap_or_else(|| panic!("sdset 缺 {sid} 的 ACE"));
+            let start = line[..end].rfind("(A;;").expect("ACE 形状不对") + 4;
+            line[start..end].to_string()
+        };
+        let has = |r: &str, right: &str| r.as_bytes().chunks(2).any(|c| c == right.as_bytes());
+        let ba = rights("BA");
+        for right in ["SD", "WD", "WO", "RP", "WP"] {
+            assert!(has(&ba, right), "Administrators 缺 {right}：{ba}");
+        }
+        let iu = rights("IU");
+        for right in ["RP", "WP", "LC"] {
+            assert!(has(&iu, right), "交互用户缺 {right}：{iu}");
+        }
+        for right in ["SD", "WD", "WO", "DC"] {
+            assert!(!has(&iu, right), "交互用户不该有 {right}：{iu}");
         }
     }
 

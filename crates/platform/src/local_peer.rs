@@ -10,6 +10,10 @@
 //!
 //! 校验是同步 Security 调用（实测 0.2–7ms，含读盘校验静态签名），async 调用方放进
 //! `spawn_blocking`。
+//!
+//! #1167：Windows 按**用户 SID** 认人（D5：按用户认，不按程序认），实现在
+//! `windows_pipe.rs`：服务端模拟客户端取令牌用户，客户端看管道属主 + 服务端会话。
+//! 同样是同步系统调用，同样放进 `spawn_blocking`（服务端的模拟会临时换掉调用线程的身份）。
 
 use crate::code_signature::{DAEMON_APP_ID, DESKTOP_APP_ID};
 
@@ -38,19 +42,36 @@ pub enum PeerCheck {
     Verified(PeerRole),
     /// 不是我们签名的程序（或拿不到对端身份）——断开，什么都不发。
     Rejected(String),
-    /// 本平台没有按签名认人的实现（Windows / Linux：仍用令牌，另卡讨论）。
+    /// 本平台没有本机对端认证的实现（Linux：仍用令牌）。
     NotSupported(&'static str),
+}
+
+/// #1167：连接方的系统用户（Windows：SID 字符串）。只有 Windows 管道的**服务端**取得到；
+/// 用途只有一个——首启向导写好库位置时把它记成主人（`PlatformAdapter::claim_resident_owner`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerUser(pub(crate) String);
+
+impl PeerUser {
+    /// 给日志与错误说明用的标识（Windows：SID）。
+    pub fn id(&self) -> &str {
+        &self.0
+    }
 }
 
 /// 能取出对端身份的本机连接（interprocess 的同步与 tokio 两种 Stream）。
 pub trait LocalPeerSource {
     #[doc(hidden)]
     fn check_peer(&self, allowed: &[PeerRole], min_version: Option<&str>) -> PeerCheck;
+    #[doc(hidden)]
+    fn peer_user(&self) -> Option<PeerUser>;
 }
 
 impl LocalPeerSource for interprocess::local_socket::Stream {
     fn check_peer(&self, allowed: &[PeerRole], min_version: Option<&str>) -> PeerCheck {
         imp::check_sync(self, allowed, min_version)
+    }
+    fn peer_user(&self) -> Option<PeerUser> {
+        imp::peer_user_sync(self)
     }
 }
 
@@ -58,9 +79,13 @@ impl LocalPeerSource for interprocess::local_socket::tokio::Stream {
     fn check_peer(&self, allowed: &[PeerRole], min_version: Option<&str>) -> PeerCheck {
         imp::check_tokio(self, allowed, min_version)
     }
+    fn peer_user(&self) -> Option<PeerUser> {
+        imp::peer_user_tokio(self)
+    }
 }
 
-/// 校验本机连接的对端是 `allowed` 里的哪一个签名程序（按顺序试，第一个满足的胜出）。
+/// 校验本机连接的对端是 `allowed` 里的哪一个（macOS 按签名、Windows 按用户 SID；
+/// 按顺序试，第一个满足的胜出）。
 pub fn verify_local_peer<S: LocalPeerSource>(stream: &S, allowed: &[PeerRole]) -> PeerCheck {
     stream.check_peer(allowed, None)
 }
@@ -92,9 +117,34 @@ pub(crate) fn meets_min_version(peer: Option<&str>, min_version: &str) -> Result
     Ok(())
 }
 
+/// #1167：服务端要不要**先读到客户端发来的数据**才能核对它。
+///
+/// Windows：`ImpersonateNamedPipeClient` 在服务端还没从管道读到数据时答
+/// `ERROR_CANNOT_IMPERSONATE`（1368，Win11 26200 实测）。所以 Windows 的服务端先读出第一行
+/// （不解析、不应答），再认人；认不过就断开，读到的那一行丢掉。macOS 按 audit token 认，
+/// 连接建立即可，读任何字节之前就校验。
+pub fn peer_check_needs_first_message() -> bool {
+    cfg!(windows)
+}
+
+/// #1167：服务端连接上的客户端用户（见 [`PeerUser`]）。别的平台 / 客户端一侧 = `None`。
+/// 同步系统调用（Windows 上要模拟客户端），async 调用方放进 `spawn_blocking`。
+pub fn local_peer_user<S: LocalPeerSource>(stream: &S) -> Option<PeerUser> {
+    stream.peer_user()
+}
+
+/// #1167：建常驻 daemon 的命名管道监听（[`crate::ResidentIpc::UserPipe`]）：DACL 只放白名单
+/// SID（按主人模型现算）、拒绝网络登录与远程客户端、首实例独占。只有 Windows 有这种形态，
+/// 别的平台答 `Unsupported`。
+pub fn bind_resident_pipe(
+    name: &str,
+) -> std::io::Result<interprocess::local_socket::tokio::Listener> {
+    imp::bind_resident_pipe(name)
+}
+
 #[cfg(target_os = "macos")]
 mod imp {
-    use super::{PeerCheck, PeerRole};
+    use super::{PeerCheck, PeerRole, PeerUser};
     use crate::code_signature::code_requirement;
     use core_foundation::base::TCFType;
     use core_foundation::data::CFData;
@@ -133,6 +183,25 @@ mod imp {
             }
             _ => PeerCheck::Rejected("不是 Unix 域套接字".into()),
         }
+    }
+
+    pub(super) fn peer_user_sync(_s: &interprocess::local_socket::Stream) -> Option<PeerUser> {
+        None
+    }
+
+    pub(super) fn peer_user_tokio(
+        _s: &interprocess::local_socket::tokio::Stream,
+    ) -> Option<PeerUser> {
+        None
+    }
+
+    pub(super) fn bind_resident_pipe(
+        _name: &str,
+    ) -> std::io::Result<interprocess::local_socket::tokio::Listener> {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "macOS 的常驻 IPC 是签名 socket，没有命名管道",
+        ))
     }
 
     /// audit_token_t = 8 × u32（xnu bsm/audit.h）。连接建立那一刻由内核记下。
@@ -203,11 +272,38 @@ mod imp {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
 mod imp {
     use super::{PeerCheck, PeerRole};
+    pub(super) use crate::windows_pipe::{
+        bind_resident as bind_resident_pipe, peer_user_sync, peer_user_tokio,
+    };
 
-    const WHY: &str = "本平台不按代码签名校验 IPC 对端（Windows / Linux 另行讨论）";
+    // #1150 的版本下限读的是**签名封住的**版本号（macOS Info.plist），只有 macOS 有。Windows
+    // 按用户 SID 认人（D5：按用户认，不按程序认），对端没有可信的版本可读，下限不适用——
+    // 与 Linux 一样忽略这个参数。
+    pub(super) fn check_sync(
+        s: &interprocess::local_socket::Stream,
+        allowed: &[PeerRole],
+        _min_version: Option<&str>,
+    ) -> PeerCheck {
+        crate::windows_pipe::check_sync(s, allowed)
+    }
+
+    pub(super) fn check_tokio(
+        s: &interprocess::local_socket::tokio::Stream,
+        allowed: &[PeerRole],
+        _min_version: Option<&str>,
+    ) -> PeerCheck {
+        crate::windows_pipe::check_tokio(s, allowed)
+    }
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+mod imp {
+    use super::{PeerCheck, PeerRole, PeerUser};
+
+    const WHY: &str = "本平台不校验 IPC 对端身份（Linux 仍用令牌）";
 
     pub(super) fn check_sync(
         _s: &interprocess::local_socket::Stream,
@@ -223,6 +319,22 @@ mod imp {
         _min_version: Option<&str>,
     ) -> PeerCheck {
         PeerCheck::NotSupported(WHY)
+    }
+
+    pub(super) fn peer_user_sync(_s: &interprocess::local_socket::Stream) -> Option<PeerUser> {
+        None
+    }
+
+    pub(super) fn peer_user_tokio(
+        _s: &interprocess::local_socket::tokio::Stream,
+    ) -> Option<PeerUser> {
+        None
+    }
+
+    pub(super) fn bind_resident_pipe(
+        _name: &str,
+    ) -> std::io::Result<interprocess::local_socket::tokio::Listener> {
+        Err(std::io::Error::new(std::io::ErrorKind::Unsupported, WHY))
     }
 }
 

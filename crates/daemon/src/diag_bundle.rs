@@ -473,36 +473,15 @@ pub enum DaemonCollection {
     },
 }
 
-/// ipc.token 的候选位置（令牌模式：Windows / Linux），顺序与壳 `ipc::token_candidates_from` 一致。
-/// #1115：不再认 `PPF_DATA_DIR`——诊断导出连的是常驻 daemon，调用方的环境不许把它指向别处。
-pub fn token_candidates(platform_dir: &Path, home: &Path) -> Vec<PathBuf> {
-    let mut v = Vec::new();
-    v.push(home.join("ppf-library/ipc.token"));
-    v.push(platform_dir.join("ipc.token"));
-    if let Some(val) = crate::config::read_config_data_dir(platform_dir) {
-        v.push(PathBuf::from(val).join("ipc.token"));
-    }
-    v
-}
-
-/// #1115：常驻 daemon 的候选端点。macOS：签名 socket（连上后反向校验服务端是签名
-/// daemon）；其余平台：令牌文件里记的端点。
-pub fn resident_endpoints(platform_dir: &Path, home: &Path) -> Vec<crate::ipc::PeerEndpoint> {
+/// #1115 / #1167：常驻 daemon 的候选端点。macOS：签名 socket（连上后反向校验服务端是签名
+/// daemon）；Windows：命名管道（连上后反向核对管道是 P-Pass 后台服务建的）。都不读令牌文件。
+/// 无桌面的 headless 平台（令牌模式）没有窗口程序、也就没有「导出诊断包」这个入口：不连。
+pub fn resident_endpoints() -> Vec<crate::ipc::PeerEndpoint> {
     use platform::PlatformAdapter as _;
     match platform::adapter().resident_ipc() {
         platform::ResidentIpc::SignedSocket(path) => vec![crate::ipc::PeerEndpoint::Signed(path)],
-        platform::ResidentIpc::NamespacedWithToken => token_candidates(platform_dir, home)
-            .iter()
-            .filter_map(|path| {
-                let content = std::fs::read_to_string(path).ok()?;
-                let mut lines = content.lines();
-                let (name, token) = (lines.next()?, lines.next()?);
-                Some(crate::ipc::PeerEndpoint::Token {
-                    socket_name: name.trim().to_string(),
-                    token_hex: token.trim().to_string(),
-                })
-            })
-            .collect(),
+        platform::ResidentIpc::UserPipe(pipe) => vec![crate::ipc::PeerEndpoint::Pipe(pipe)],
+        platform::ResidentIpc::NamespacedWithToken => Vec::new(),
     }
 }
 
@@ -737,7 +716,7 @@ pub fn gather(env: &ExportEnv, daemon: DaemonCollection) -> BundleInputs {
 /// 那行 JSON：`{"zip":"<out>","daemon_reachable":bool}`。常驻服务不在线
 /// **不是**失败；只有 zip 写不出来才是。
 pub async fn export(env: &ExportEnv) -> Result<serde_json::Value, String> {
-    let candidates = resident_endpoints(&env.platform_dir, &env.home);
+    let candidates = resident_endpoints();
     let daemon = collect_from_daemon(&candidates, &env.out).await;
     let inputs = gather(env, daemon);
     write_zip(&env.out, &build_bundle(&inputs))?;

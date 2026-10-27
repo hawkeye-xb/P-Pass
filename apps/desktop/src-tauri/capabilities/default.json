@@ -55,6 +55,7 @@
     "allow-self-heal-daemon",
     "allow-resume-after-failed-update",
     "allow-update-failure-state",
+    "allow-resident-hosting",
     "allow-clear-update-failure",
     "allow-restart-daemon-process",
     "allow-kernel-convergence-phase",

@@ -312,6 +312,8 @@ msg_keys! {
     UI_WIZARD_SERVICE_BODY => "ui.wizard_service_body",
     UI_WIZARD_ASKS_LABEL => "ui.wizard_asks_label",
     UI_WIZARD_ASKS_WIN => "ui.wizard_asks_win",
+    // #1167：服务形态（per-machine 安装）的「会申请什么」——不是计划任务。
+    UI_WIZARD_ASKS_WIN_SERVICE => "ui.wizard_asks_win_service",
     UI_WIZARD_BLOCKED_LABEL => "ui.wizard_blocked_label",
     UI_WIZARD_BLOCKED_MAC => "ui.wizard_blocked_mac",
     UI_WIZARD_BLOCKED_WIN => "ui.wizard_blocked_win",
@@ -399,6 +401,8 @@ msg_keys! {
     UI_ERR_UPDATE_PUBLISHER_REJECTED => "ui.err_update_publisher_rejected",
     UI_ERR_UPDATE_NOT_DOWNLOADED => "ui.err_update_not_downloaded",
     UI_ERR_DAEMON_NOT_OURS => "ui.err_daemon_not_ours",
+    // #1167：Windows 服务形态的主人模型——管道只对主人开放。
+    UI_ERR_DAEMON_OTHER_ACCOUNT => "ui.err_daemon_other_account",
     UI_ERR_REGISTER_AND_SPAWN => "ui.err_register_and_spawn",
     UI_ERR_STOP_MARK_WRITE => "ui.err_stop_mark_write",
     UI_ERR_STOP_MARK_CLEAR => "ui.err_stop_mark_clear",
@@ -662,6 +666,7 @@ mod tests {
             UI_WIZARD_SERVICE_BODY,
             UI_WIZARD_ASKS_LABEL,
             UI_WIZARD_ASKS_WIN,
+            UI_WIZARD_ASKS_WIN_SERVICE,
             UI_WIZARD_BLOCKED_LABEL,
             UI_WIZARD_BLOCKED_MAC,
             UI_WIZARD_BLOCKED_WIN,
@@ -778,11 +783,12 @@ mod tests {
             UI_ERR_UPDATE_PUBLISHER_REJECTED,
             UI_ERR_UPDATE_NOT_DOWNLOADED,
             UI_ERR_DAEMON_NOT_OURS,
+            UI_ERR_DAEMON_OTHER_ACCOUNT,
             UI_WIZARD_UNCONFIGURED_NOTICE,
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 333);
+        assert_eq!(ALL.len(), 335);
     }
 
     #[test]

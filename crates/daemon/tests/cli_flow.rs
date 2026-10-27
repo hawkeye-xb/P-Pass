@@ -705,3 +705,115 @@ fn without_config_toml_the_resident_daemon_waits_for_the_library_then_restarts()
         "未配置状态不许在平台目录开库"
     );
 }
+
+/// #1167：Windows 常驻 daemon（非服务的计划任务形态，测试进程就是这种）不再写令牌文件：
+/// 没有 config.toml ⇒ 在**本用户的命名管道**上进未配置状态，按 Windows 用户 SID 认人；
+/// 在管道上写好库位置后以 75 退出。整个过程里数据目录与库目录都不出现 `ipc.token`。
+/// 别的平台（签名 socket / 令牌）跳过。
+/// 反证：daemon 退回令牌模式 ⇒ 管道上没人答 / 目录里出现 ipc.token，红。
+#[test]
+fn windows_resident_daemon_serves_on_the_user_pipe_without_any_token_file() {
+    use platform::PlatformAdapter as _;
+    use std::process::Stdio;
+    let platform::ResidentIpc::UserPipe(pipe) = platform::adapter().resident_ipc() else {
+        eprintln!("跳过：本平台常驻 daemon 不走命名管道");
+        return;
+    };
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let endpoint = daemon::ipc::PeerEndpoint::Pipe(pipe.clone());
+    async fn call(
+        endpoint: &daemon::ipc::PeerEndpoint,
+        req: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        use interprocess::local_socket::tokio::prelude::*;
+        use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+        let (conn, preamble) = endpoint.connect().await?;
+        assert!(preamble.is_none(), "管道上不许有令牌行");
+        let (rx, mut tx) = conn.split();
+        tx.write_all(format!("{req}\n").as_bytes())
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut out = String::new();
+        BufReader::new(rx)
+            .read_line(&mut out)
+            .await
+            .map_err(|e| e.to_string())?;
+        serde_json::from_str(out.trim()).map_err(|e| e.to_string())
+    }
+    let status = serde_json::json!({ "id": "s", "method": "status", "params": {} });
+    if rt.block_on(call(&endpoint, status.clone())).is_ok() {
+        eprintln!("跳过：本用户的管道 {pipe} 上已有在跑的 daemon，不去打扰它");
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    struct Kill(std::process::Child);
+    impl Drop for Kill {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let mut child = Kill(
+        daemon_bin()
+            .env("HOME", dir.path())
+            .env("USERPROFILE", dir.path())
+            .env("LOCALAPPDATA", dir.path().join("local"))
+            .env("APPDATA", dir.path().join("roaming"))
+            .env_remove("PPF_DATA_DIR")
+            .env_remove("PPF_LOG_FILE")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn daemon"),
+    );
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let answered = loop {
+        if let Ok(v) = rt.block_on(call(&endpoint, status.clone())) {
+            break v;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "20 秒内管道 {pipe} 上没有 daemon 应答"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    };
+    assert_eq!(answered["result"]["unconfigured"], true, "{answered}");
+    let lib = dir.path().join("Lib Pipe");
+    let resp = rt
+        .block_on(call(
+            &endpoint,
+            serde_json::json!({
+                "id": "x", "method": "config.set_library",
+                "params": { "library": lib.to_str().unwrap() }
+            }),
+        ))
+        .expect("set_library");
+    assert_eq!(resp["ok"], true, "{resp}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let code = loop {
+        if let Some(status) = child.0.try_wait().unwrap() {
+            break status.code();
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "写好库位置后 10 秒内没退出"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    assert_eq!(code, Some(daemon::ipc::EXIT_CONFIGURED_RESTART));
+    fn find(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+        for e in std::fs::read_dir(dir).ok()?.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                if let Some(hit) = find(&p, name) {
+                    return Some(hit);
+                }
+            } else if p.file_name().is_some_and(|n| n == name) {
+                return Some(p);
+            }
+        }
+        None
+    }
+    assert_eq!(find(dir.path(), "ipc.token"), None, "不许再出现令牌文件");
+}
