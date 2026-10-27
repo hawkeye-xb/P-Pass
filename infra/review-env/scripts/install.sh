@@ -42,7 +42,9 @@ done
 
 # 2. 页面后端
 install -d -m 755 /opt/ppass-review/pairpage
-install -m 644 "$HERE/pairpage/server.py" "$HERE/pairpage/index.html" /opt/ppass-review/pairpage/
+install -m 644 "$HERE/pairpage/server.py" "$HERE/pairpage/index.html" "$HERE/pairpage/samples.html" /opt/ppass-review/pairpage/
+install -d -m 755 /opt/ppass-review/pairpage/samples
+install -m 644 "$HERE"/pairpage/samples/*.jpg /opt/ppass-review/pairpage/samples/
 install -d -m 755 /var/lib/ppass-review
 # #1115：Linux 上库位置的正本是平台 config.toml；没有它 daemon 进「未配置」状态、等窗口程序
 # 配置（无界面机器上没人配）。库仍放平台目录本身（与以前同一位置，ipc.token 路径不变）；
