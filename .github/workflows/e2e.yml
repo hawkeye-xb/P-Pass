@@ -46,7 +46,7 @@ jobs:
   # CI-02: 两个测试 job 共用的 release 二进制，只编一次。
   build:
     name: Build release binaries (daemon + testclient)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # libheif HEIC 插件在 ubuntu-latest(26.04, libheif 1.21) 上加载失败，见 #1230
     timeout-minutes: 30
     if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
     steps:
@@ -89,7 +89,7 @@ jobs:
   e2e:
     name: android live (hello/pair/backup)
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # libheif HEIC 插件在 ubuntu-latest(26.04, libheif 1.21) 上加载失败，见 #1230
     timeout-minutes: 50
     # PR 只有打了 e2e label 才跑（labeled 事件但 label 不在 = 移除，跳过）
     if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
@@ -163,7 +163,7 @@ jobs:
   # process_failures.rs），自己 cargo test --release 编译，不再用 build job 的二进制。
   scenarios:
     name: T-070 failure scenarios (in-process)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04  # libheif HEIC 插件在 ubuntu-latest(26.04, libheif 1.21) 上加载失败，见 #1230
     timeout-minutes: 40
     if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
     steps:
