@@ -12,8 +12,7 @@ enum FakeScenario: String, CaseIterable {
     case notices
 
     static var current: FakeScenario {
-        let env = ProcessInfo.processInfo.environment["PPASS_SCENARIO"] ?? UserDefaults.standard.string(forKey: "PPASS_SCENARIO")
-        return env.flatMap(FakeScenario.init(rawValue:)) ?? .normal
+        DebugLaunchInput.scenario.flatMap(FakeScenario.init(rawValue:)) ?? .normal
     }
 }
 
