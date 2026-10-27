@@ -394,6 +394,16 @@ impl QueryEngine {
             return Ok(placeholder(Duration::ZERO));
         };
 
+        // #1150: the source must resolve inside the library root; a recorded
+        // path that escapes (`..`, absolute, outward symlink) is never opened.
+        let Ok(src) =
+            core_index::resolve_in_library_or_missing(&self.library_root, &asset.rel_path)
+        else {
+            tracing::warn!(hash = %hash_prefix(&hash), "thumb source is outside the library; placeholder served");
+            self.record_first_byte(started, "thumb");
+            return Ok(placeholder(self.retry_after));
+        };
+
         // DESK-34 (#428): consult the gate before spawning anything — a
         // recent failure answers at once, a running generation is joined
         // instead of duplicated. No `.await` may sit between reserving a
@@ -411,7 +421,7 @@ impl QueryEngine {
                 tx,
                 done,
             } => {
-                self.spawn_generation(hash, self.library_root.join(&asset.rel_path), tx);
+                self.spawn_generation(hash, src, tx);
                 (gen_started, done)
             }
         };
@@ -483,6 +493,15 @@ impl QueryEngine {
         });
     }
 
+    /// #1150: resolve an indexed `rel_path` to a real path inside the library
+    /// root, or `NotFound` (never say why to the peer; the reason is logged).
+    fn confined(&self, rel_path: &str) -> Result<PathBuf, QueryError> {
+        core_index::resolve_in_library(&self.library_root, rel_path).map_err(|e| {
+            tracing::warn!("#1150: refusing to read outside the library: {e}");
+            QueryError::NotFound
+        })
+    }
+
     /// `asset.blob_ticket`: make the original fetchable and hand out a
     /// ticket. Import is idempotent (content-addressed store).
     pub async fn blob_ticket(&self, hash_hex: &str) -> Result<BlobTicketResponse, QueryError> {
@@ -492,7 +511,7 @@ impl QueryEngine {
             .get_asset(&hash)
             .await?
             .ok_or(QueryError::NotFound)?;
-        let abs = self.library_root.join(&asset.rel_path);
+        let abs = self.confined(&asset.rel_path)?;
         let ticket = self
             .blobs
             .push(hash, &abs)
@@ -511,7 +530,7 @@ impl QueryEngine {
             .get_asset(&hash)
             .await?
             .ok_or(QueryError::NotFound)?;
-        Ok(self.library_root.join(&asset.rel_path))
+        self.confined(&asset.rel_path)
     }
 
     /// DESK-03: `asset.original` — 原图字节（大图查看用，不落盘）。
@@ -539,7 +558,7 @@ impl QueryEngine {
         if asset.bytes > ORIGINAL_CAP {
             return Err(QueryError::NotFound);
         }
-        let abs = self.library_root.join(&asset.rel_path);
+        let abs = self.confined(&asset.rel_path)?;
         let bytes = tokio::fs::read(&abs)
             .await
             .map_err(|_| QueryError::NotFound)?;
@@ -702,6 +721,32 @@ mod tests {
         })
     }
 
+    /// #1221: fails like `failing_gen`, but every call past the first
+    /// `free` ones blocks on `release` first. A held generation is over
+    /// budget for exactly as long as the test says, so "does not wait on
+    /// the generation" is checked against an event instead of a wall-clock
+    /// millisecond threshold that a loaded machine blows. Dropping the
+    /// sender (also on panic) lets a held call proceed, so a red run can
+    /// never hang runtime shutdown on the blocking pool.
+    fn held_failing_gen(
+        calls: Arc<AtomicUsize>,
+        release: std::sync::mpsc::Receiver<()>,
+        free: usize,
+    ) -> ThumbGen {
+        let release = std::sync::Mutex::new(release);
+        Arc::new(move |hash: &[u8; 32], _src: &Path, root: &Path| {
+            if calls.fetch_add(1, Ordering::SeqCst) >= free {
+                let _ = release.lock().unwrap().recv();
+            }
+            media_codec::ThumbResult {
+                paths: media_codec::thumb_paths(root, hash),
+                outcome: media_codec::ThumbOutcome::Placeholder {
+                    reason: "quicklook on clip.mp4: qlmanage exited with exit status: 1".into(),
+                },
+            }
+        })
+    }
+
     async fn thumb_state(f: &Fixture, hash: &[u8; 32]) -> i64 {
         f.engine
             .db
@@ -714,10 +759,15 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn failed_generation_is_negative_cached_and_not_respawned() {
+        // #1221: only the first generation fails at once; any later one is
+        // held, and the budget is an hour. A negative-cache miss would
+        // either respawn (held → waits out the budget) or wait on its own,
+        // so "answers at once" is a 10 s smoke bound against a 1 h stall.
         let calls = Arc::new(AtomicUsize::new(0));
+        let (_release, release_rx) = std::sync::mpsc::channel::<()>();
         let f = fixture(
-            failing_gen(Arc::clone(&calls), Duration::ZERO),
-            Duration::from_secs(2),
+            held_failing_gen(Arc::clone(&calls), release_rx, 1),
+            Duration::from_secs(3600),
             Duration::from_secs(3600),
             &[VIDEO_A],
         )
@@ -733,12 +783,11 @@ mod tests {
         );
 
         for _ in 0..5 {
-            let t = Instant::now();
-            assert_eq!(f.engine.thumb(&get(&VIDEO_A)).await.unwrap(), placeholder);
-            assert!(
-                t.elapsed() < Duration::from_millis(200),
-                "must answer at once"
-            );
+            let answer =
+                tokio::time::timeout(Duration::from_secs(10), f.engine.thumb(&get(&VIDEO_A)))
+                    .await
+                    .expect("must answer at once, not wait on a generation");
+            assert_eq!(answer.unwrap(), placeholder);
         }
         assert_eq!(
             calls.load(Ordering::SeqCst),
@@ -752,34 +801,51 @@ mod tests {
         // qlmanage stuck on a permission prompt: the generation outlives
         // the budget. Followers must not pay the budget again, must not
         // start a second generation, and the state must land when it ends.
+        //
+        // #1221: the generation is held until released, so it is over
+        // budget by construction rather than by an 800 ms sleep racing the
+        // scheduler. Only lower bounds and "< one budget" remain: a timer
+        // never fires early, and a follower that paid the budget again
+        // would take at least one budget however idle the machine is.
         let calls = Arc::new(AtomicUsize::new(0));
+        let (release, release_rx) = std::sync::mpsc::channel::<()>();
+        let budget = Duration::from_secs(2);
         let f = fixture(
-            failing_gen(Arc::clone(&calls), Duration::from_millis(800)),
-            Duration::from_millis(200),
+            held_failing_gen(Arc::clone(&calls), release_rx, 0),
+            budget,
             Duration::from_secs(3600),
             &[VIDEO_A],
         )
         .await;
 
         let t = Instant::now();
-        f.engine.thumb(&get(&VIDEO_A)).await.unwrap();
-        let first = t.elapsed();
+        let first = tokio::time::timeout(
+            Duration::from_secs(30),
+            f.engine.thumb_reply(&get(&VIDEO_A)),
+        )
+        .await
+        .expect("first request is bounded by the budget, not by the generation")
+        .unwrap();
+        let took = t.elapsed();
         assert!(
-            first >= Duration::from_millis(150) && first < Duration::from_millis(600),
-            "first request is bounded by the budget, took {first:?}"
+            took >= budget,
+            "answered before the budget ran out: {took:?}"
         );
+        assert!(first.placeholder);
+        assert_eq!(first.retry_after, budget, "the budget-timeout reply");
 
         let t = Instant::now();
         f.engine.thumb(&get(&VIDEO_A)).await.unwrap();
+        let took = t.elapsed();
         assert!(
-            t.elapsed() < Duration::from_millis(100),
-            "follower must not wait out a blown budget again, took {:?}",
-            t.elapsed()
+            took < budget,
+            "follower must not wait out a blown budget again, took {took:?}"
         );
         assert_eq!(calls.load(Ordering::SeqCst), 1, "no second generation");
 
         // The detached owner task records thumb_state once it finishes —
         // the old timeout branch never wrote any state.
+        release.send(()).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         while thumb_state(&f, &VIDEO_A).await != 2 {
             assert!(Instant::now() < deadline, "thumb_state never recorded");
@@ -796,14 +862,16 @@ mod tests {
         let f = fixture(
             failing_gen(Arc::clone(&calls), Duration::ZERO),
             Duration::from_secs(2),
-            Duration::from_millis(150),
+            // #1221: wide enough that the back-to-back second request lands
+            // inside it on a loaded machine; 150 ms did not always.
+            Duration::from_secs(1),
             &[VIDEO_A],
         )
         .await;
         f.engine.thumb(&get(&VIDEO_A)).await.unwrap();
         f.engine.thumb(&get(&VIDEO_A)).await.unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 1, "inside the window: cached");
-        tokio::time::sleep(Duration::from_millis(250)).await;
+        tokio::time::sleep(Duration::from_millis(1200)).await;
         f.engine.thumb(&get(&VIDEO_A)).await.unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 2, "after the window: retried");
     }
@@ -1119,10 +1187,14 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn an_over_budget_reply_asks_to_retry_after_one_budget() {
+        // #1221: held, not slept — the short-circuit check needs the
+        // generation still in flight, which an 800 ms sleep only promised
+        // on an idle machine.
         let calls = Arc::new(AtomicUsize::new(0));
+        let (_release, release_rx) = std::sync::mpsc::channel::<()>();
         let budget = Duration::from_millis(200);
         let f = fixture(
-            failing_gen(Arc::clone(&calls), Duration::from_millis(800)),
+            held_failing_gen(Arc::clone(&calls), release_rx, 0),
             budget,
             Duration::from_secs(3600),
             &[VIDEO_A],

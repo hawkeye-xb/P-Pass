@@ -80,6 +80,7 @@ final class LiveBackend: @unchecked Sendable {
         identityFingerprint = String(blake3Hex(data: identity.key).prefix(8))
         #endif
         pairingStore = PairingStore(root: dir)
+        if let record = pairingStore.load() { LogRedact.registerDeviceNames([record.storageDeviceName]) } // #1152：电脑名不进日志
         onboarded = OnboardedDesktopsStore(directory: dir, logger: logger)
         let pairingStore = self.pairingStore
         // #1124：任何一条连接（请求、探测、订阅流、取原图）被「记录里的那台电脑」以 401 / 410 关掉 ⇒ 立刻记成配对失效，

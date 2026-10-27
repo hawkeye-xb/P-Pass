@@ -43,13 +43,14 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
     }
 
     enum Failure: Error, CustomStringConvertible {
-        case notPaired, placeholder, originalUnsupported, hashMismatch
+        case notPaired, placeholder, originalUnsupported, hashMismatch, invalidContentHash
         var description: String {
             switch self {
             case .notPaired: return "not paired"
             case .placeholder: return "thumbnail not ready"
             case .originalUnsupported: return "original download is not available on iOS yet"
             case .hashMismatch: return "fetched content does not match its BLAKE3 id"
+            case .invalidContentHash: return "content id is not a 64-hex BLAKE3 hash"
             }
         }
     }
@@ -94,8 +95,14 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
     /// 清空缩略图的内存缓存（断开清单的 `thumbnailMemoryCache` 行，#1119）。
     func clearMemoryCache() { cache.removeAllObjects() }
 
+    /// #1149：桌面给的内容 hash 先验格式再拼本地路径——必须正好 64 位 hex（BLAKE3）。空串、`../`、
+    /// 路径分隔符、别的长度都不是 hash；拼进路径之前挡掉，缓存目录一个字节都不碰。
+    static func isContentHash(_ s: String) -> Bool {
+        s.utf8.count == 64 && s.utf8.allSatisfy { ($0 >= 0x30 && $0 <= 0x39) || ($0 >= 0x61 && $0 <= 0x66) || ($0 >= 0x41 && $0 <= 0x46) }
+    }
+
     func cachedOriginal(_ item: TimelineItem) -> URL? {
-        guard item.isVideo else { return nil }
+        guard item.isVideo, Self.isContentHash(item.id) else { return nil }
         return Self.completeCached(item, in: Self.videoCacheDir)
     }
 
@@ -103,6 +110,7 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
     /// 照片即用即清（`tmp/ppass-share/`，不建长期原图缓存）；视频与 Android 一样进缓存目录，按字节数校验后复用——
     /// 滑过再滑回来不会重下（系统在空间紧张时会清 Caches，手机是减负端不是第二存储端）。
     func original(_ item: TimelineItem, progress: @escaping (Double) -> Void) async throws -> URL {
+        guard Self.isContentHash(item.id) else { throw Failure.invalidContentHash }
         let fm = FileManager.default
         let dir = item.isVideo ? Self.videoCacheDir : Self.shareDir
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -140,6 +148,7 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
 
     /// 缓存命中判据同 Android MOB-115：文件长度必须等于元数据里的字节数；不符或无从校验就删掉重下。
     private static func completeCached(_ item: TimelineItem, in dir: URL) -> URL? {
+        guard isContentHash(item.id) else { return nil } // 空串 hasPrefix 恒真——会把整个缓存目录当成这条的残留删掉
         let fm = FileManager.default
         let files = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.fileSizeKey])) ?? []
         for f in files where f.lastPathComponent.hasPrefix(item.id) {

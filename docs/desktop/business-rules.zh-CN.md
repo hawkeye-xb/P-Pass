@@ -158,7 +158,7 @@ daemon 是 `config.toml` 与诊断包的唯一写者：照片库位置只经 IPC
 
 - 3 天回收（H-05）：`FlowDelivery::expire_stale_grants`，`last_resumed_ms` 早于 `now − GRANT_RESUME_TTL_MS` 且进程内没有在跑的 active grant 被取消。`last_resumed_ms` 由 offer 与 status 重驱刷新。启动扫一轮，之后每小时（§5.4）。
 - flow-blobs GC：`.ppf/flow-blobs` 每 `FLOW_BLOBS_GC_INTERVAL`（60 s）一轮（`main` 里 `Blobs::open_with_periodic_gc`），只保护 `Db::active_flow_content_hashes`；保护集查询失败则跳过本轮。
-- flow-staging 孤儿：`daemon::sweep_flow_staging_orphans`，宽限 `STAGING_ORPHAN_GRACE`；hash 在 active 保护集、未过宽限、mtime 读不出、文件名不合契约的都不删。启动一次 + 每小时。ingest 成功（含 Duplicate）即删对应 staging 文件。
+- flow-staging：ingest 成功（含 Duplicate）即删对应 staging 文件；其余由库残留清扫回收（§5.7 `flow-staging`）。
 
 ### 3.5 对端失败三分类（C-12）
 
@@ -172,7 +172,8 @@ daemon 是 `config.toml` 与诊断包的唯一写者：照片库位置只经 IPC
 - `FlowDelivery::supersede` → `core_index::supersede`：只拉元数据区间，区间总长 ≤ `MAX_REGION_BYTES`（否则 `region_too_large`）；校验长度相同、差异位置旧副本为 0、整份 hash 等于新 hash；只替换上传者自己的副本。
 - 不留旧副本（#1182）：B 在 `.ppf/supersede-staging/` 拼好、核对通过后，一个事务里改索引（删 A 行、插 B 行、记别名 A→B、记待换），再 rename 覆盖 `rel_path`，A 随之消失，库占盘仍是 1x。不需要保留 A：替换前已核对 B 包含 A 的全部信息，崩溃补完只用 staged 文件与待换记录。`rel_path` 上任何时刻都有文件（rename 之前是 A，之后是 B）。
 - 崩溃由启动时 `Ingestor::finish_pending_swaps` 补完。成功写审计 `asset.superseded`（隐藏，§6.4），内容为 `old_hash` / `rel_path` / `fetched_bytes` / `size`。
-- 旧版遗留：v2026.10.4 起到 #1182 之前，旧副本会留在 `<库>/.ppf/superseded/<旧指纹 hex>.<扩展名>`（`core_index::LEGACY_SUPERSEDED_DIR`），现在没有写入方。启动时 `core_index::sweep_legacy_superseded` 逐个判：文件名严格匹配、别名 old→new 在、new 的 asset 行在且其 `rel_path` 在盘上、new 没有待换记录——全部满足才删；否则不删，日志记指纹前 8 位与原因（不打路径）。目录删空后 `remove_dir`（不递归删除）。
+- staged 文件 `.ppf/supersede-staging/<新指纹>-<pid>.part`：出错路径当场删（拼接 / 核对的 io 错误、核对不通过、索引事务报错且没有该新指纹的待换记录）；有待换记录的留给 `finish_pending_swaps`；事务提交前崩溃留下的由库残留清扫回收（§5.7 `supersede-staging`）。
+- v2026.10.4 起到 #1182 之前留在 `.ppf/superseded/` 的旧副本由库残留清扫回收（§5.7 `superseded`）。
 
 ### 3.7 `backup.presence` 与 offer 判重是两个判据（B5）
 
@@ -200,7 +201,7 @@ daemon 是 `config.toml` 与诊断包的唯一写者：照片库位置只经 IPC
 
 - 已在 `originals/` 树里的文件原地采纳（`rel_inside_originals`），失败不删用户文件；库外文件按布局落位。
 - 落位不留 0 字节占位（#1047）：同卷 `hard_link` 原子发布；跨卷先复制成同目录 `.ppf-ingest-<随机>.part` 再 hard_link（`publish_no_clobber`）。
-- 同 hash 已有行而文件不在原处：改指新位置，审计 `asset.relocated`。一个路径一行：新行占用的路径被别的 hash 占着时先删老行，审计 `asset.replaced_in_place`（老行缩略图成孤儿，已知欠账）。
+- 同 hash 已有行而文件不在原处：改指新位置，审计 `asset.relocated`。一个路径一行：新行占用的路径被别的 hash 占着时先删老行，审计 `asset.replaced_in_place`（老行缩略图成孤儿，由库残留清扫回收，§5.7 `thumb-orphan`）。
 
 ### 4.5 什么算照片：`media_kind`（B3）
 
@@ -236,8 +237,8 @@ daemon 是 `config.toml` 与诊断包的唯一写者：照片库位置只经 IPC
 
 ### 5.4 启动与周期任务
 
-- 启动顺序（`daemon` 的 `main`）：子命令短路 → 数据目录迁移 → stderr 接管 → 日志 → `Config::load` → 库目录检查 → `purge_legacy_anon_id` → 开库 → 身份 → `claim_single_instance`（同版本退位 exit 0）→ transport bind → 启动回收（`reclaim_inbox`、flow-staging 孤儿）→ 启动对账（`finish_pending_swaps`、`core_index::sweep_legacy_superseded`、`core_index::sweep_ingest_residue`、`reconcile.run_once`）→ 常驻任务。
-- `sweep_ingest_residue`（#1047）只在启动跑：删除 `originals/` 下文件名严格匹配 `.ppf-ingest-*.part`、不是符号链接、且没有索引行指向的文件。
+- 启动顺序（`daemon` 的 `main`）：子命令短路 → 数据目录迁移 → stderr 接管 → 日志 → `Config::load` → 库目录检查 → `purge_legacy_anon_id` → 开库 → 身份 → `claim_single_instance`（同版本退位 exit 0）→ transport bind → IPC 服务 → `retire_blob_store`（store 打开前 O(1) rename，§5.7）→ 打开 blob store、注入查询平面（IPC 可查询）→ `finish_pending_swaps` → `reconcile.run_once` → 常驻任务 → 发 `STATUS_CHANGED`、日志「#1183: 启动就绪」→ 后台残留清扫第一轮（§5.7）。
+- 启动关键路径上的库维护只有 `retire_blob_store`（store 打开前的一次 rename）与 `finish_pending_swaps`（正确性必需）；残留清扫一律在启动就绪之后后台跑（#1183）。
 - 常驻任务清单：
 
 | 任务 | 周期 | 符号 |
@@ -245,7 +246,8 @@ daemon 是 `config.toml` 与诊断包的唯一写者：照片库位置只经 IPC
 | IPC 服务 | 常驻 | `IpcServer::serve` |
 | Router（QUIC） | 常驻 | `Router::serve` |
 | 目录监听 | 事件驱动 | `LibraryWatcher::spawn` |
-| 每小时巡检 | `PATROL_INTERVAL`（3600 s） | 对账、`backup.sweep_sessions`、`backup.reclaim_staging`、`expire_stale_grants`、`sweep_flow_staging_orphans` |
+| 每小时巡检 | `PATROL_INTERVAL`（3600 s） | 对账、`backup.sweep_sessions`、`expire_stale_grants`、库残留清扫 `ResidueSweeper::run_once`（§5.7） |
+| 库残留清扫启动轮 | 启动就绪后一次 | `ResidueSweeper::run_after`（§5.7） |
 | flow-blobs GC | `FLOW_BLOBS_GC_INTERVAL`（60 s） | `Blobs::open_with_periodic_gc` |
 | diag 环清理 | `DIAG_PRUNE_INTERVAL`（6 h） | `DiagAgg::prune_ring` |
 | 运行统计 daemon_alive | `DAEMON_ALIVE_INTERVAL`（24 h），只写本地日志 | `stats::Event::DaemonAlive` |
@@ -269,6 +271,29 @@ daemon 是 `config.toml` 与诊断包的唯一写者：照片库位置只经 IPC
 - 等待必须带死线，错误串带方法名：daemon 探活对端 800 ms（`ipc.rs` `peer_call`）；壳每次 IPC 读 `IPC_READ_TIMEOUT`（NET-11，事件订阅长连接豁免）；壳等重启 `RESTART_GRACE`；收尾 `SHUTDOWN_DEADLINE`。
 - SQLite WAL，读不挡写。
 - 新增后台任务时：会等盘 / CPU → `spawn_blocking`；没有并发上限 → 加 `Semaphore` 或有界 channel；有等待 → 死线 + 错误串带标识；事件会爆发 → 走 `Throttle`；常驻任务 → 更新 §5.4 的表；新增业务数字 → 具名常量 + §12 一行 + 测试登记。
+
+### 5.7 库残留清扫（#1183）
+
+- 不变式：库目录里只该有被索引 / 有效记录引用的文件，和正在进行的操作持有的文件；其余都是残留（崩溃、断电、出错路径、旧版本），每次启动后与每小时都清，与版本无关。库占盘 ≈ 照片本身（1x）。
+- 一个入口：`daemon::residue::ResidueSweeper`，按清单 `ResidueKind::ALL` 逐类执行，一类出错只跳过它自己。启动那一轮等「启动就绪」（§5.4）后在后台跑，之后随每小时巡检（会话回收、超期 grant 之后）；两轮之间串行。扫盘在阻塞线程池（§5.6）。
+- 共同判据：只认我们自己的命名（文件名严格匹配）；只删普通文件，符号链接 / 目录不删也不跟进去，不递归删目录（唯一例外 `blobs-retired`，见表）；正在进行的操作必须认得出来，认不出、查询失败就不删并写日志；日志只有计数、字节数、原因与指纹前 8 位，不含路径与文件名（§9.1）。
+- 清单（「执行方」列为 `ResidueSweeper` 的行由 `residue::tests::residue_kinds_are_registered_in_business_rules` 与代码双向核对）：
+
+| id | 位置 / 命名 | 谁写 | 什么算引用（正在进行 / 有主） | 宽限 | 删除判据 | 执行方 |
+|---|---|---|---|---|---|---|
+| `blobs-retired` | `.ppf/blobs-retired-<pid>-<纳秒>/` | `retire_blob_store`（启动时挪走的旧 blob store） | 无（改名之后再没有人打开它） | 无 | `.ppf/` 的直接子项、名字严格匹配、是真目录（不是链接）；**清单里唯一整目录删除的一类**（内容整份是 iroh store 内部文件，owner 2026-10-26 定），`remove_dir_all` 不跟随里面的链接 | `ResidueSweeper` |
+| `staging-partial` | `.ppf/staging/*.upload` | 旧上传通道（#988 已移除，现无写入方） | 无 | 无 | 普通文件、后缀 `.upload` | `ResidueSweeper` |
+| `staging-orphan` | `.ppf/staging/<hash>`（无后缀） | 旧管线回退拉取 `export_to` | 活会话声明过的 hash（`BackupEngine::staging_claims`）；没接会话来源整类跳过 | `STAGING_ORPHAN_GRACE` | 普通文件、无后缀、不在保护集、mtime 过宽限 | `ResidueSweeper` |
+| `flow-staging` | `.ppf/flow-staging/{node_hex}-{seq}-{hash_hex}` | Flow 拉取导出（§3.2） | `Db::active_flow_content_hashes`；查询失败整类跳过 | `STAGING_ORPHAN_GRACE` | 普通文件、末段 64 hex、不在保护集、mtime 过宽限 | `ResidueSweeper` |
+| `supersede-staging` | `.ppf/supersede-staging/<新指纹>-<pid>.part`（旧版 `<新指纹>.part`） | `apply_supersede`（§3.6） | 名字里的 pid = 本进程（可能正在拼接）；待换表里 `staged_path` 或 `new_hash` 指向它；待换表查询失败整类跳过 | 无（不靠 mtime：复制出来的文件 mtime 可能是源文件的） | 普通文件、名字严格匹配、pid 不是本进程、没有待换记录 | `ResidueSweeper` |
+| `superseded` | `.ppf/superseded/<旧指纹>.<扩展名>` | #1182 之前的 supersede（现无写入方） | 别名 old→new 在、new 的行在且 `rel_path` 在盘上、new 没有待换记录——**全部满足才算可删**，否则留 | 无 | 同左；目录删空后 `remove_dir` | `ResidueSweeper` |
+| `ingest-temp` | `originals/**/.ppf-ingest-<pid>-<纳秒>.part` | 跨卷入库 `publish_no_clobber`（§4.4） | 名字里的 pid = 本进程（可能正在复制）；有索引行指向这个路径 | 无（同 `supersede-staging`） | 普通文件、前后缀严格匹配、pid 不是本进程、没有索引行 | `ResidueSweeper` |
+| `thumb-temp` | `.ppf/thumbs/<xx>/.thumb-XXXXXX`（6 位字母数字） | 缩略图原子写入（`media_codec`） | 未过宽限的视为正在写 | `RESIDUE_GRACE` | 普通文件、名字严格匹配、mtime 过宽限 | `ResidueSweeper` |
+| `thumb-orphan` | `.ppf/thumbs/<xx>/<hash>.{256,1024}.jpg` | 缩略图生成（§5.5） | 索引里有这个 hash（快照 + 删除前逐个现查）；索引为空整类跳过（分不清没照片与索引丢失） | `RESIDUE_GRACE` | 普通文件、名字严格匹配且 `<xx>` = hash 前两位、索引里没有、mtime 过宽限 | `ResidueSweeper` |
+| — | `.ppf/blobs/` | 旧管线回退拉取（iroh store） | 启动这一刻没有传输在飞 | 无 | 必须在 `Blobs::open` 之前处理：启动时整个 rename 成 `.ppf/blobs-retired-<pid>-<纳秒>`（O(1)，与内容多少无关）；是真目录才挪，符号链接 / 文件不碰 | `retire_blob_store`（启动同步） |
+| — | `.ppf/flow-blobs/` | Flow 拉取（iroh store） | `Db::active_flow_content_hashes` | — | iroh 周期 GC（§3.4） | iroh GC |
+
+- 不在清单里的库内文件：`originals/` 里被索引的照片、`.ppf/index.sqlite*`（SQLite 自管）、`.ppf/identity.key`、`ipc.token`、`logs/`（§9.1 轮转）、有索引行的缩略图。
 
 ## 6 对 UI 暴露的事实
 
@@ -377,7 +402,7 @@ daemon 是 `config.toml` 与诊断包的唯一写者：照片库位置只经 IPC
 
 - `platform::stop_signal`：unix 收 SIGTERM / SIGINT / SIGHUP；Windows 收 CTRL_C / CTRL_BREAK / CTRL_CLOSE / CTRL_LOGOFF / CTRL_SHUTDOWN。
 - 收到后停接新连接，`transport.close()` 限时 `SHUTDOWN_DEADLINE`；收尾中再收到一次信号立即退出。unix 退出时恢复默认处理并对自己重发同一信号（退出状态是「被信号终止」，launchd 仍会按 KeepAlive 重拉）。
-- 被强杀（SIGKILL / TerminateProcess）不经收尾：SQLite WAL + `synchronous=FULL`，落位不留占位文件，残留由启动 `sweep_ingest_residue` 清。
+- 被强杀（SIGKILL / TerminateProcess）不经收尾：SQLite WAL + `synchronous=FULL`，落位不留占位文件，残留由库残留清扫回收（§5.7）。
 
 ### 8.6 首启向导与 config
 
@@ -497,7 +522,8 @@ Windows 真机验证清单：#1056。
 | `daemon::flow_delivery::SPACE_RESERVE_BYTES` | daemon | 268435456 | B | offer 空间预检保留 256 MiB（§3.1） |
 | `daemon::flow_delivery::FETCH_BYTE_STALL_LIMIT` | daemon | 60000 | ms | 拉取 60 s 无字节判失败（§3.3） |
 | `daemon::flow_delivery::GRANT_RESUME_TTL_MS` | daemon | 259200000 | ms | active grant 3 天无人续传即取消（§3.4） |
-| `daemon::backup::STAGING_ORPHAN_GRACE` | daemon | 3600000 | ms | staging 孤儿宽限 1 h（§3.4） |
+| `daemon::backup::STAGING_ORPHAN_GRACE` | daemon | 3600000 | ms | staging / flow-staging 孤儿宽限 1 h（§5.7） |
+| `daemon::residue::RESIDUE_GRACE` | daemon | 3600000 | ms | 缩略图临时文件与孤儿宽限 1 h（§5.7） |
 | `daemon::backup::SESSION_IDLE_TTL` | daemon | 3600000 | ms | 旧管线会话空闲 1 h 回收（§11.2） |
 | `core_index::MAX_REGION_BYTES` | daemon | 8388608 | B | supersede 元数据区间上限 8 MiB（§3.6） |
 | `daemon::watcher::DEFAULT_DEBOUNCE` | daemon | 500 | ms | 监听防抖（§5.1） |

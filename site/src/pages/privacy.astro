@@ -19,6 +19,14 @@ import { GITHUB_URL } from '../consts';
     <p>
       Connections between your devices are encrypted end to end. When your phone and computer can't reach each other directly, the encrypted data is forwarded through a relay server. The relay and device-discovery services currently in use are operated by number 0, the maintainers of the open-source networking library iroh. These services can see your devices' IP addresses and device identifiers (public keys). They can't see the content of your photos, and they don't store the data they forward.
     </p>
+    <p>
+      To let your devices find each other, each device's public key and its current network addresses are published to that public device-discovery service, so anyone who knows a device's public key can look up where it is reachable. The public key is not your name or account, and it says nothing about your photos.
+    </p>
+
+    <h2>Pairing and device names</h2>
+    <p>
+      When you pair a phone with your computer, the phone sends the name you gave it (for example "Mom's phone") to your computer. The name is shown on your computer so you can approve the pairing, and it's kept in your computer's device list and activity log. It is sent only to your own computer, never to us.
+    </p>
 
     <h2>Data collected by the apps</h2>
     <ul>
@@ -26,6 +34,11 @@ import { GITHUB_URL } from '../consts';
       <li>The code contains no telemetry or usage-statistics reporting of any kind. Diagnostic information is written only to logs on your own device, and you decide whether to export it and send it to us.</li>
       <li>If we ever need a crash log from you, we'll ask first.</li>
     </ul>
+
+    <h2>Update checks</h2>
+    <p>
+      The Android app checks for new versions by downloading a small, signed manifest file (a static file hosted on GitHub Releases and on our Cloudflare download mirror). It's an ordinary HTTPS request: the host sees your IP address and the app's fixed name, "P-Pass-UpdateChecker", and the app sends no account, device identifier, or usage data with it.
+    </p>
 
     <h2>Diagnostic bundles</h2>
     <p>
@@ -38,6 +51,7 @@ import { GITHUB_URL } from '../consts';
     <h2>Android permissions</h2>
     <ul>
       <li>Photos and videos: to back up the albums you choose.</li>
+      <li>Photo location metadata (Android's "access media location"): to read the shooting location stored inside your photos, so the backed-up original is byte-for-byte the same file. The app doesn't read your device's location.</li>
       <li>Camera: to scan the pairing QR code on your computer.</li>
       <li>Notifications: to show backup progress and tell you when a backup fails.</li>
       <li>Network, background activity, start on boot, and battery-optimization exemption: to finish backups automatically in the background.</li>

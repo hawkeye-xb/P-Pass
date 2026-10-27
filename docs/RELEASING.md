@@ -305,8 +305,30 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
   Android `strings.xml`, ...) changed without an `ios` bump => `check-version-bump.sh` fails the formal tag.
 - Manual run without a tag (any branch): `gh workflow run ci-ios.yml --ref <branch> -f testflight_version=vX.Y.Z-test.N`
   (must be a test/beta version; bump N on every retry). Local: `PPF_BUILD_VERSION=... tools/ios/testflight-upload.sh --archive-only`.
+- Signing happens only at export: the archive is built with `CODE_SIGNING_ALLOWED=NO` (no certificate, no Apple calls),
+  then ad-hoc signed to carry the entitlements; `-exportArchive` uses cloud signing with the API key. CI never creates
+  certificates (gate: `tools/ios/check-testflight-signing.sh`). Read-only certificate list:
+  `gh workflow run ci-ios.yml --ref <branch> -f list_certificates=true`.
 - `ITSAppUsesNonExemptEncryption=NO` in Info.plist: the app only uses standard transport encryption (TLS/QUIC), which is exempt.
 - Environment setup for a new machine: [ios-dev-setup.md](ios-dev-setup.md).
+
+## 4.3 Supply-chain guarantees (#1151)
+
+- Provenance: a dedicated `attest` job generates SLSA build provenance for every asset the run built
+  (macOS dmg / `.app.tar.gz`, Windows installer + `daemon.exe` / `testclient.exe`, Android APK). Build jobs hold no
+  `id-token` / `attestations` permission. Verify: `gh attestation verify <file> -R hawkeye-xb/P-Pass`.
+  Reused assets (`android-reuse` / `macos-reuse`) are not re-attested; their provenance is that of the release they came from.
+- Signing credentials (Apple p12, Android keystore) exist only in their signing step. macOS: `tools/bundle-desktop-macos.sh`
+  runs in two phases (`PPF_BUNDLE_PHASE=build` installs dependencies with no credentials; `sign` runs after the keychain exists).
+  Android: gradle produces the unsigned APK, a separate step runs `zipalign -c` + `apksigner`.
+  Gate: `python3 tools/release/test-secret-isolation.py --self-test` (ci-docs lane).
+- Reuse and `repair-manifests.yml` never re-sign published bytes: they carry the original update signature from the
+  published manifest and verify it against the channel public key (`tools/release/carry-signature.sh`). No valid signature
+  found => the job fails; cut a new tag instead.
+- Download limits: the desktop shell (`crates/platform/src/update_limits.rs`, used by `update_install.rs`) and Android
+  (`UpdateChecker.kt`) cap the update manifest (30 s) and the installer (256 MiB, 60 min total; Android also caps the
+  manifest at 1 MiB). Going over aborts the download. The desktop manifest is read inside the updater plugin, so it is
+  bounded by time only.
 
 ## 5. Version-overwrite guards (remember)
 
@@ -521,6 +543,11 @@ Android 靠 `channelFromVersion()` 读注入的版本串（含 `-test.` 即 test
 - iOS 只走 TestFlight（没有侧载 / 自更新）。`release.yml` 的 `ios` job 归档、用 App Store Connect **云托管签名**签名并上传
   （GitHub Secrets 里的 API 密钥 `ASC_KEY_ID` / `ASC_ISSUER_ID` / `ASC_KEY_P8`，App Manager 角色；全程没有 p12）。
   缺任一 secret ⇒ 该 job 干净跳过，Release 正文标注「未上传 TestFlight」。
+- 签名只发生在导出：归档 `CODE_SIGNING_ALLOWED=NO`（无证书、不连 Apple），再给 .app 补 ad-hoc 签名把
+  entitlements 带进归档；`-exportArchive`（app-store-connect）带 `-allowProvisioningUpdates` + API 密钥走云签名。
+  **CI 运行时绝不新建证书**——以前归档也带签名更新参数，全新 runner 每跑一次新建一张开发证书，撞满上限
+  （run 40298231858）。门禁 `tools/ios/check-testflight-signing.sh`（ci-ios 里跑，带反证自测）。
+  只读列证书清单：`gh workflow run ci-ios.yml --ref <分支> -f list_certificates=true`（不吊销，吊销由人做）。
 - 版本线：`release/versions.json` 有 `ios` 项（正式 tag 用它）；test tag 与其它端一样用 tag 名。涨号用
   `tools/bump-version.sh --platform ios <版本>`（同时改 `PPASS_FALLBACK_VERSION`）。构建号（`CFBundleVersion`）由
   `tools/ios/stamp-version.sh` 换算：同一个完整版本串永远得到同一个号；App Store Connect 拒收重复构建号，
@@ -533,6 +560,21 @@ Android 靠 `channelFromVersion()` 读注入的版本串（含 `-test.` 即 test
   （必须是 test / beta 版本；每次重试 N 加一）。本机：`PPF_BUILD_VERSION=… tools/ios/testflight-upload.sh --archive-only`。
 - Info.plist 声明 `ITSAppUsesNonExemptEncryption=NO`：只用系统标准传输加密（TLS / QUIC），属出口合规豁免。
 - 新机器环境搭建：[ios-dev-setup.md](ios-dev-setup.md)。
+
+## 4.3 供应链保证（#1151）
+
+- 来源证明：独立的 `attest` job 对本次**构建出来的**每个资产生成 SLSA provenance（macOS dmg / `.app.tar.gz`、
+  Windows 安装包与 `daemon.exe` / `testclient.exe`、Android APK）。构建 job 不拿 `id-token` / `attestations`。
+  验证：`gh attestation verify <文件> -R hawkeye-xb/P-Pass`。复用的产物（`android-reuse` / `macos-reuse`）不重新证明，
+  以其原发布版本为准。
+- 签名凭据（Apple p12、Android keystore）只在各自的签名步骤出现。macOS：`tools/bundle-desktop-macos.sh` 分两个阶段
+  （`PPF_BUNDLE_PHASE=build` 无凭据装依赖；`sign` 在钥匙串建好之后才跑）；Android：gradle 只出 unsigned，
+  单独一步 `zipalign -c` + `apksigner`。门禁：`python3 tools/release/test-secret-isolation.py --self-test`（ci-docs lane）。
+- 复用与 `repair-manifests.yml` **不重新签名**已发布字节：沿用已发布清单里的原更新签名并用本通道公钥验过
+  （`tools/release/carry-signature.sh`）；找不到验得过的签名 ⇒ 红，改走新 tag 发版。
+- 下载上限：桌面壳（`crates/platform/src/update_limits.rs`，由 `update_install.rs` 使用）与 Android（`UpdateChecker.kt`）
+  给更新清单（30 秒）和安装包（256 MiB、总时长 60 分钟；Android 清单另有 1 MiB 上限）设上限，超了就中止下载。
+  桌面端的清单在 updater 插件内部读取，只能靠时长兜底。
 
 ## 5. 版本覆盖禁令（记住）
 

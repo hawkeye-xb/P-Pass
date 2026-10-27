@@ -27,6 +27,7 @@ struct PhotosScreen: View {
         .onAppear { model.attach(app.backend.live) }
         .onAppear {
             if LaunchRoute.current == .viewer || LaunchRoute.current == .video { model.openOnLoad = LaunchRoute.current }
+            if LaunchRoute.current == .family { model.filter = .family }
         }
         .onChange(of: model.autoOpen) { item in if let item { open(item) } }
         .fullScreenCover(item: $viewer) { session in

@@ -20,8 +20,10 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
-	<!-- 只用系统标准加密（TLS / QUIC 传输加密；BLAKE3 只做哈希、不属加密），无自研或非标准加密：
-	     属出口合规豁免，声明 NO 后 TestFlight / App Store Connect 不再对每个构建追问加密问卷。 -->
+	<!-- 只用标准算法（TLS 1.3 / QUIC、AES-GCM、Ed25519；BLAKE3 只做哈希、不属加密），无自研或非标准加密。
+	     这些加密由 App 自带的 Rust 库（rustls / ring）实现，不是 Apple 系统提供的：按 App Store Connect 的
+	     「Export compliance documentation for encryption」，这一档只有在法国分发时才要上传法国加密声明，
+	     所以销售范围排除法国（#937），其他地区不需要文件，声明 NO。以后要进法国，先办声明再改这里。 -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>LSRequiresIPhoneOS</key>

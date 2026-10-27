@@ -13,6 +13,9 @@
 
 use std::sync::Mutex;
 
+use platform::update_limits::{
+    with_limits, with_timeout, ByteBudget, MANIFEST_TIMEOUT, PACKAGE_MAX_BYTES, PACKAGE_TIMEOUT,
+};
 use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::Manager;
@@ -50,10 +53,9 @@ pub(crate) async fn update_download(
     let pending = app.state::<PendingUpdate>();
     *pending.0.lock().map_err(|e| e.to_string())? = None;
 
-    let update = app
-        .updater()
-        .map_err(|e| e.to_string())?
-        .check()
+    // #1151：清单有总时长上限（插件内部读清单没有字节回调，大小只能靠超时兜）。
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    let update = with_timeout(MANIFEST_TIMEOUT, updater.check())
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| ui_err("ui.err_update_none", &[]))?;
@@ -64,10 +66,16 @@ pub(crate) async fn update_download(
         ));
     }
 
+    // #1151：安装包有大小上限与总时长上限。字节回调同时喂进 ByteBudget；超限即丢弃下载
+    // （连接随之关闭），不留下可安装的东西。
+    let budget = ByteBudget::new(PACKAGE_MAX_BYTES);
     let mut started = false;
-    let bytes = update
-        .download(
+    let bytes = with_limits(
+        PACKAGE_TIMEOUT,
+        budget.clone(),
+        update.download(
             |chunk, total| {
+                budget.on_chunk(chunk, total);
                 if !started {
                     started = true;
                     let _ = on_event.send(DownloadEvent::Started {
@@ -81,9 +89,10 @@ pub(crate) async fn update_download(
             || {
                 let _ = on_event.send(DownloadEvent::Finished);
             },
-        )
-        .await
-        .map_err(|e| e.to_string())?;
+        ),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
     // #1116 P2-2：包内（签名封装覆盖的）版本必须严格高于正在运行的版本——清单里的版本号不签名，不能信。
     let current = app.package_info().version.to_string();

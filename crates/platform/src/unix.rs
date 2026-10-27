@@ -360,6 +360,34 @@ mod stop_tests {
             .unwrap()
     }
 
+    /// 设了它，[`sleeper`] 才真睡（值是秒数）。
+    const SLEEPER_SECS_ENV: &str = "PPF_TEST_SLEEPER_SECS";
+
+    /// 真进程测试里的「daemon」：把**本测试二进制**复制到目标路径，再只跑这一条。
+    /// 平时（没设 [`SLEEPER_SECS_ENV`]）直接返回。
+    ///
+    /// 为什么不复制 `/bin/sleep`（#1230）：Ubuntu 26.04 的 `/bin/sleep` 是 uutils
+    /// coreutils 的多合一程序，按 argv[0] 分派，改名成 `ppf-daemon` 后报
+    /// `unknown program` 立刻退出。测试二进制一定是独立可执行文件，不看自己叫什么。
+    #[test]
+    fn sleeper() {
+        if let Ok(secs) = std::env::var(SLEEPER_SECS_ENV) {
+            std::thread::sleep(std::time::Duration::from_secs(secs.parse().unwrap()));
+        }
+    }
+
+    /// 在 `exe`（本测试二进制的副本）上只跑 [`sleeper`]，睡 `secs` 秒。
+    fn sleeper_at(exe: &Path, secs: u64) -> std::process::Command {
+        // libtest 里的用例名不带 crate 前缀：`unix::stop_tests::sleeper`。
+        let name = concat!(module_path!(), "::sleeper")
+            .strip_prefix(concat!(env!("CARGO_CRATE_NAME"), "::"))
+            .unwrap();
+        let mut cmd = std::process::Command::new(exe);
+        cmd.args([name, "--exact", "--test-threads=1"])
+            .env(SLEEPER_SECS_ENV, secs.to_string());
+        cmd
+    }
+
     fn wait_until_exe(pid: u32, exe: &Path) {
         let want = std::fs::canonicalize(exe).unwrap();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -377,7 +405,7 @@ mod stop_tests {
     #[test]
     fn stops_only_the_process_running_from_that_exact_path() {
         let tmp = tempfile::tempdir().unwrap();
-        let sleep = Path::new("/bin/sleep");
+        let me = std::env::current_exe().unwrap();
         let target = tmp
             .path()
             .join("bundle")
@@ -385,9 +413,9 @@ mod stop_tests {
         let elsewhere = tmp.path().join("dev").join(crate::DAEMON_EXECUTABLE_STEM);
         for p in [&target, &elsewhere] {
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-            std::fs::copy(sleep, p).unwrap();
+            std::fs::copy(&me, p).unwrap();
         }
-        let mut daemon = spawn(std::process::Command::new(&target).arg("30"));
+        let mut daemon = spawn(&mut sleeper_at(&target, 30));
         // 诱饵 1：命令行里恰好含 `ppf-daemon`（pkill -f 会命中）。脚本写两条
         // 命令，免得 sh 直接 exec 成 sleep、命令行里没了这几个字。
         let mut decoy_cmdline = spawn(std::process::Command::new("/bin/sh").args([
@@ -396,7 +424,7 @@ mod stop_tests {
             crate::DAEMON_EXECUTABLE_STEM,
         ]));
         // 诱饵 2：同名可执行文件，但在另一个目录（开发构建）。
-        let mut decoy_copy = spawn(std::process::Command::new(&elsewhere).arg("30"));
+        let mut decoy_copy = spawn(&mut sleeper_at(&elsewhere, 30));
         wait_until_exe(daemon.id(), &target);
         wait_until_exe(decoy_copy.id(), &elsewhere);
         // 诱饵确实是改前判据会命中的形状（否则这条测试证明不了什么）。

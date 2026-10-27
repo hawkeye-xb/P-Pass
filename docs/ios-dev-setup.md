@@ -45,7 +45,7 @@ tools/ios/e2e-sim.sh           # 模拟器端到端：配对 → 选相册 → �
 
 正式流程见 [RELEASING.md](RELEASING.md)「iOS / TestFlight」：打 tag，`release.yml` 的 `ios` job 自动归档并上传。
 手动验证（不打 tag）：`gh workflow run ci-ios.yml --ref <分支> -f testflight_version=v0.9.13-test.1`，版本必须是 `-test.N` / `-beta.N`；同一个号只能上传一次，失败重试把 N 加一。
-本机不需要、也没有 API 密钥；本地只能 `PPF_BUILD_VERSION=… tools/ios/testflight-upload.sh --archive-only` 验证归档与版本号（用你 Xcode 登录的账号签名，不上传）。
+本机不需要、也没有 API 密钥；本地只能 `PPF_BUILD_VERSION=… tools/ios/testflight-upload.sh --archive-only` 验证归档与版本号（无签名归档 + ad-hoc 补 entitlements，不需要证书、不上传）。
 
 ## 5. 常见坑
 

@@ -258,6 +258,7 @@ internal const val UPDATE_LOG_TAG = LOG_TAG
 
 /** GET 文本，按 classifyManifestStatus 分类返回（日志分级同 REL-07）。 */
 private fun httpGet(url: String): ManifestReply = try {
+    val startedAt = now()
     val conn = java.net.URL(url).openConnection() as java.net.HttpURLConnection
     conn.connectTimeout = 8_000
     conn.readTimeout = 8_000
@@ -267,7 +268,21 @@ private fun httpGet(url: String): ManifestReply = try {
     val code = conn.responseCode
     when (classifyManifestStatus(code)) {
         ManifestFetchOutcome.Ok ->
-            ManifestReply.Body(conn.inputStream.bufferedReader().use { it.readText() })
+            // #1151：清单有大小上限与总时长上限——更新源返回无限长 / 极慢的数据时中止（TUF 的
+            // endless data / slow retrieval），而不是把内存读爆或一直挂着。
+            when (val body = conn.inputStream.use {
+                readTextBounded(it, MANIFEST_MAX_BYTES, MANIFEST_TOTAL_TIMEOUT_MS - (now() - startedAt))
+            }) {
+                is BoundedRead.Text -> ManifestReply.Body(body.text)
+                is BoundedRead.TooLarge -> {
+                    PLog.w(LOG_TAG, "update check FAILED at $url: manifest larger than ${body.limit} bytes")
+                    ManifestReply.Failed
+                }
+                BoundedRead.TimedOut -> {
+                    PLog.w(LOG_TAG, "update check FAILED at $url: manifest not complete within ${MANIFEST_TOTAL_TIMEOUT_MS}ms")
+                    ManifestReply.Failed
+                }
+            }
         ManifestFetchOutcome.NoRelease -> {
             PLog.i(LOG_TAG, "no release at $url (HTTP 404) — no update")
             ManifestReply.NoRelease
@@ -287,6 +302,45 @@ private fun httpGet(url: String): ManifestReply = try {
 } catch (e: Exception) {
     PLog.w(LOG_TAG, "update check FAILED at $url: $e")
     ManifestReply.Failed
+}
+
+/** #1151：更新清单 / 安装包的大小与总时长上限（取值依据见 docs/RELEASING.md §4.3）。 */
+internal const val MANIFEST_MAX_BYTES = 1L * 1024 * 1024 // 实际只有几 KB
+internal const val MANIFEST_TOTAL_TIMEOUT_MS = 30_000L
+internal const val APK_MAX_BYTES = 256L * 1024 * 1024 // 当前 APK 约 42–58MB，留 4 倍以上余量
+// 面向慢网络（国内下 GitHub 资产）：整次下载一小时；停滞另有 readTimeout（30s 无字节）兜底。
+internal const val APK_TOTAL_TIMEOUT_MS = 60L * 60 * 1000
+
+private fun now(): Long = System.nanoTime() / 1_000_000
+
+/** #1151：[readTextBounded] 的结果。 */
+internal sealed interface BoundedRead {
+    data class Text(val text: String) : BoundedRead
+    data class TooLarge(val limit: Long) : BoundedRead
+    data object TimedOut : BoundedRead
+}
+
+/**
+ * #1151：读文本，超过 [maxBytes] 或 [timeoutMs] 就中止。单次 read 的阻塞由连接的 readTimeout 兜，
+ * 这里在每块之间核对总时长。纯函数（时钟可注入），JVM 可测。
+ */
+internal fun readTextBounded(
+    input: java.io.InputStream,
+    maxBytes: Long,
+    timeoutMs: Long,
+    nowMs: () -> Long = ::now,
+): BoundedRead {
+    val deadline = nowMs() + timeoutMs
+    val out = java.io.ByteArrayOutputStream()
+    val buf = ByteArray(8 * 1024)
+    while (true) {
+        if (nowMs() > deadline) return BoundedRead.TimedOut
+        val n = input.read(buf)
+        if (n < 0) break
+        if (out.size() + n.toLong() > maxBytes) return BoundedRead.TooLarge(maxBytes)
+        out.write(buf, 0, n)
+    }
+    return BoundedRead.Text(out.toString(Charsets.UTF_8.name()))
 }
 
 /**
@@ -331,6 +385,12 @@ sealed interface ApkDownloadResult {
     data class Unexpected(val phase: Phase, val cause: String) : ApkDownloadResult
 
     /**
+     * #1151：超过大小上限（[Limit.Size]，含 Content-Length 一开始就超）或整次下载总时长上限
+     * （[Limit.Time]）。中止下载；大小超限不是瞬时故障，时间超限是（残包留给下一跑续传）。
+     */
+    data class LimitExceeded(val limit: Limit, val receivedBytes: Long) : ApkDownloadResult
+
+    /**
      * #719: Worker 已被停止（取消 / 被新的下载顶替）——按 WorkManager 的约定停手。
      * 不是失败：不重试、不清理、不写标记，产物原样留给它的主人处置。
      * [receivedBytes] = 本跑 body 已收字节（不含断点基数，只用于日志）。
@@ -338,6 +398,8 @@ sealed interface ApkDownloadResult {
     data class Stopped(val receivedBytes: Long) : ApkDownloadResult
 
     enum class Phase { Connect, Headers, Body }
+
+    enum class Limit { Size, Time }
 }
 
 /** 日志用的一行描述（纯函数，JVM 可测）：类别名 + 关键数字，不带 URL 以外的隐私。 */
@@ -354,6 +416,8 @@ fun ApkDownloadResult.logLine(url: String): String = when (this) {
         "apk download LOCAL WRITE FAILED for $url (received $receivedBytes bytes): $cause"
     is ApkDownloadResult.Unexpected ->
         "apk download UNEXPECTED ERROR at $url during ${phase.name.lowercase()}: $cause"
+    is ApkDownloadResult.LimitExceeded ->
+        "apk download ABORTED at $url: ${limit.name.lowercase()} limit exceeded (received $receivedBytes bytes)"
     is ApkDownloadResult.Stopped ->
         "apk download STOPPED at $url: work was stopped (received $receivedBytes bytes this run)"
 }
@@ -400,6 +464,7 @@ internal fun contentRangeStartOf(header: String?): Long? {
  */
 internal fun isTransientDownloadFailure(result: ApkDownloadResult): Boolean = when (result) {
     is ApkDownloadResult.Stalled, is ApkDownloadResult.ConnectionFailed -> true
+    is ApkDownloadResult.LimitExceeded -> result.limit == ApkDownloadResult.Limit.Time
     is ApkDownloadResult.HttpStatus -> result.code >= 500 || result.code == 429
     else -> false
 }
@@ -426,11 +491,16 @@ fun downloadApk(
     resumeFromBytes: Long = 0L,
     isStopped: () -> Boolean = { false },
     onProgress: (received: Long, total: Long) -> Unit = { _, _ -> },
+    maxBytes: Long = APK_MAX_BYTES,
+    totalTimeoutMs: Long = APK_TOTAL_TIMEOUT_MS,
+    nowMs: () -> Long = ::now,
 ): ApkDownloadResult {
+    // #1151：总时长从第一次尝试起算（含 416 重试、重定向）；大小上限含断点已有的字节。
+    val limits = DownloadLimits(maxBytes, nowMs() + totalTimeoutMs, nowMs)
     var resume = resumePlanFor(resumeFromBytes)
     var rangeRetried = false
     while (true) {
-        val result = downloadOnce(url, dest, open, readTimeoutMs, resume, isStopped, onProgress)
+        val result = downloadOnce(url, dest, open, readTimeoutMs, resume, isStopped, onProgress, limits)
         // 416 = 本地残包与远端对不上（含 206 起点错位，见 downloadOnce）：
         // 删残包、摘掉 Range 头，完整重试一次。
         if (result is ApkDownloadResult.HttpStatus && result.code == 416 &&
@@ -458,6 +528,7 @@ private fun downloadOnce(
     resume: ResumePlan,
     isStopped: () -> Boolean,
     onProgress: (received: Long, total: Long) -> Unit,
+    limits: DownloadLimits,
 ): ApkDownloadResult {
     var current = url
     var redirects = 0
@@ -473,6 +544,10 @@ private fun downloadOnce(
         while (result == null) {
             if (isStopped()) {
                 result = ApkDownloadResult.Stopped(0)
+                break
+            }
+            if (limits.timedOut()) {
+                result = ApkDownloadResult.LimitExceeded(ApkDownloadResult.Limit.Time, received)
                 break
             }
             phase = ApkDownloadResult.Phase.Connect
@@ -515,18 +590,23 @@ private fun downloadOnce(
                 val base = if (appending) resume.existingBytes else 0L
                 val expected = c.contentLengthLong.let { if (it >= 0) it + base else -1L }
                 var bodyReceived = 0L
-                result = copyBody(
-                    c.inputStream, dest, appending, isStopped,
-                    { n -> bodyReceived = n; received = base + n },
-                ) { done ->
-                    onProgress(base + done, expected)
-                } ?: if (expected >= 0 && base + bodyReceived != expected) {
-                    ApkDownloadResult.ConnectionFailed(
-                        phase, base + bodyReceived,
-                        "body ended early: ${base + bodyReceived} of $expected bytes",
-                    )
+                result = if (expected > limits.maxBytes) {
+                    // 服务端一开始就声明了超限的长度：连 body 都不读。
+                    ApkDownloadResult.LimitExceeded(ApkDownloadResult.Limit.Size, base)
                 } else {
-                    ApkDownloadResult.Ok(base + bodyReceived)
+                    copyBody(
+                        c.inputStream, dest, appending, isStopped, limits, base,
+                        { n -> bodyReceived = n; received = base + n },
+                    ) { done ->
+                        onProgress(base + done, expected)
+                    } ?: if (expected >= 0 && base + bodyReceived != expected) {
+                        ApkDownloadResult.ConnectionFailed(
+                            phase, base + bodyReceived,
+                            "body ended early: ${base + bodyReceived} of $expected bytes",
+                        )
+                    } else {
+                        ApkDownloadResult.Ok(base + bodyReceived)
+                    }
                 }
             }
         }
@@ -557,6 +637,8 @@ private fun copyBody(
     dest: File,
     append: Boolean,
     isStopped: () -> Boolean,
+    limits: DownloadLimits,
+    base: Long,
     onBodyBytes: (Long) -> Unit,
     onProgress: (Long) -> Unit,
 ): ApkDownloadResult? {
@@ -574,6 +656,13 @@ private fun copyBody(
                 val n = input.read(buf) // 网络：异常交给调用方分类
                 if (n < 0) break
                 if (isStopped()) return ApkDownloadResult.Stopped(received)
+                // #1151：声明的长度可以撒谎 / 不声明（chunked），所以按实际收到的字节卡上限；总时长每块核对。
+                if (base + received + n > limits.maxBytes) {
+                    return ApkDownloadResult.LimitExceeded(ApkDownloadResult.Limit.Size, base + received)
+                }
+                if (limits.timedOut()) {
+                    return ApkDownloadResult.LimitExceeded(ApkDownloadResult.Limit.Time, base + received)
+                }
                 try {
                     out.write(buf, 0, n)
                 } catch (e: java.io.IOException) {
@@ -589,4 +678,7 @@ private fun copyBody(
     return null
 }
 
-
+/** #1151：一次下载（含重定向 / 416 重试）共用的上限：大小含断点已有字节，截止时刻是单调时钟。 */
+internal class DownloadLimits(val maxBytes: Long, private val deadlineMs: Long, private val nowMs: () -> Long) {
+    fun timedOut(): Boolean = nowMs() > deadlineMs
+}

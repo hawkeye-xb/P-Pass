@@ -4,8 +4,10 @@
 # 或 Windows 收口把冻结件冲掉）。典型场景：2026-10-05 v2026.10.1 的 macOS lane 被
 # 取消 → release 里没有 manifest-macos.json → R2 保留旧版 → 桌面端检测不到更新。
 #
-# 它只做「搬运 + 组装 + 签名」：产物字节取自 release 现有资产，签名用 UPDATE_SIGNING_KEY，
-# 所以不需要重跑 10~90 分钟的平台构建。
+# 它只做「搬运 + 组装」：产物字节取自 release 现有资产，**沿用**该字节原来的更新签名
+# （取自 release 上现有的分端清单，用正式通道公钥验过才收，tools/release/carry-signature.sh），
+# 所以不需要重跑 10~90 分钟的平台构建，也**不碰更新签名私钥**——已发布的字节没有第二次被签名的
+# 机会（#1151）。清单里找不到验得过的原签名（或字节被改动）⇒ 直接红，改走新 tag 发版。
 #
 # 输入只有 tag：各端版本号与更新说明都取自被修复的那个 tag（与 release.yml 在该 tag 上
 # 跑出来的一致），不另设平台 / 版本号输入（#740）。清单的 notes / notes_i18n 来自
@@ -87,13 +89,15 @@ jobs:
             -p 'P-Pass_*_android*.apk' -p 'P-Pass_*_macos-arm64.app.tar.gz' --clobber \
             || { echo "::error::release $TAG 缺少 APK / .app.tar.gz —— 先重跑对应 lane 再修清单"; exit 1; }
           ls -l
+          # #1151：现有的分端清单——沿用签名的唯一来源。取不到也不在这里红，下一步找不到签名时再红。
+          mkdir -p ../old
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p 'manifest-android.json' -p 'manifest-macos.json' \
+            -D ../old --clobber || true
+          ls -l ../old
 
-      - name: Compose + sign manifests
-        env:
-          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+      - name: Compose manifests (carry existing signatures)
         run: |
           set -euo pipefail
-          : "${UPDATE_SIGNING_KEY:?UPDATE_SIGNING_KEY 缺失——无法签名，拒绝产出无签名清单}"
           # 顶层版本号与发布时同源：被修复 tag 里的 release/versions.json（上一步写入 env）。
           D="${DESKTOP_VERSION:?}"
           A="${ANDROID_VERSION:?}"
@@ -104,11 +108,8 @@ jobs:
             || { echo "::error::工作区 release/ 与 $TAG 不一致——说明文件与冻结件必须取自被修复的 tag"; exit 1; }
           BASE="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}"
 
-          # #1121：与发布流水线同一套密钥选用与签完自验（tools/release/update-key-lib.sh）。
-          # 本工具只服务正式 tag（Resolve 步已拒绝 test tag）⇒ 用正式通道的私钥与公钥。
-          # shellcheck source=tools/release/update-key-lib.sh
-          . "$GITHUB_WORKSPACE/tools/release/update-key-lib.sh"
-          write_signing_key "$TAG" /tmp/key
+          # #1151：沿用已发布字节的原签名，不用私钥重签（tools/release/carry-signature.sh）。
+          # 本工具只服务正式 tag（Resolve 步已拒绝 test tag）⇒ 用正式通道的公钥验。
           mkdir -p /tmp/sigs
           cd dl
           APK_L=$(find . -maxdepth 1 -name 'P-Pass_*_android*.apk' | head -1)
@@ -117,13 +118,10 @@ jobs:
             echo "::error::定位不到 APK 或 .app.tar.gz"; exit 1
           fi
           for f in "$APK_L" "$UPD_L"; do
-            # #1121：签名器只从 lockfile 安装（锁哈希、不跑安装脚本）
-            "$GITHUB_WORKSPACE/tools/release/signer.sh" sign -f /tmp/key -p "" "$f"
-            # #1121：签完立刻用客户端内置的正式公钥验——私钥配错当场失败。
-            verify_signed_files "$TAG" "$f"
+            "$GITHUB_WORKSPACE/tools/release/carry-signature.sh" "$TAG" "$f" "$f.sig" \
+              ../old/manifest-android.json ../old/manifest-macos.json
             cp "$f.sig" /tmp/sigs/
           done
-          rm -f /tmp/key
 
           # （test tag 已在 Resolve 步拒绝。）
           # ① macOS 分端清单（桌面客户端的源）。说明：release/notes/macos/<D>.<zh|en>.txt，

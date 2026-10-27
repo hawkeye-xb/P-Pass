@@ -77,4 +77,58 @@ final class LiveTimelineOriginalTests: XCTestCase {
         LiveTimeline.clearShareDir()
         XCTAssertEqual(leftovers(), [])
     }
+
+    // MARK: #1149 桌面给的 hash 先验格式再拼路径
+
+    private func item(id: String, isVideo: Bool = false) -> TimelineItem {
+        TimelineItem(id: id, takenAt: Date(), isVideo: isVideo, width: nil, height: nil, bytes: 4, isMine: nil)
+    }
+
+    func test_content_hash_format() {
+        XCTAssertTrue(LiveTimeline.isContentHash(id))
+        XCTAssertTrue(LiveTimeline.isContentHash(id.uppercased()))
+        for bad in ["", "ab", String(repeating: "ab", count: 31), String(repeating: "ab", count: 33),
+                    String(repeating: "zz", count: 32), "../" + String(repeating: "a", count: 61),
+                    String(repeating: "a", count: 63) + "/", String(repeating: "a", count: 63) + "\u{0}",
+                    String(repeating: "é", count: 32)] {
+            XCTAssertFalse(LiveTimeline.isContentHash(bad), "\(bad.debugDescription) must not pass")
+        }
+    }
+
+    /// 反证：去掉 `original` 开头的校验 ⇒ 抓取回调被调用 / 目录被建出来 ⇒ 变红。
+    func test_malformed_hash_is_refused_without_touching_the_cache_dirs() async throws {
+        let fetched = Mutex()
+        let tl = timeline { _, _, _ in fetched.hit(); return "" }
+        for bad in ["", "../evil", String(repeating: "x", count: 64), "ab"] {
+            for video in [false, true] {
+                do {
+                    _ = try await tl.original(item(id: bad, isVideo: video), progress: { _ in })
+                    XCTFail("\(bad.debugDescription) must be refused")
+                } catch let error as LiveTimeline.Failure {
+                    guard case .invalidContentHash = error else { return XCTFail("wrong failure \(error)") }
+                }
+            }
+        }
+        XCTAssertEqual(fetched.count, 0, "nothing is fetched for an invalid id")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: LiveTimeline.shareDir.path), "share dir untouched")
+    }
+
+    /// 空串 hash 的 `hasPrefix("")` 恒真：没有校验时会把视频缓存目录里所有文件当残留删掉。
+    func test_empty_hash_does_not_wipe_the_video_cache() throws {
+        let dir = LiveTimeline.videoCacheDir
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let keep = dir.appendingPathComponent(String(repeating: "cd", count: 32) + ".mov")
+        try Data([1, 2, 3, 4]).write(to: keep)
+        defer { try? FileManager.default.removeItem(at: keep) }
+        let tl = timeline { _, _, _ in "" }
+        XCTAssertNil(tl.cachedOriginal(item(id: "", isVideo: true)))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: keep.path), "another video's cache survives")
+    }
+
+    private final class Mutex: @unchecked Sendable {
+        private let lock = NSLock()
+        private var n = 0
+        func hit() { lock.lock(); n += 1; lock.unlock() }
+        var count: Int { lock.lock(); defer { lock.unlock() }; return n }
+    }
 }

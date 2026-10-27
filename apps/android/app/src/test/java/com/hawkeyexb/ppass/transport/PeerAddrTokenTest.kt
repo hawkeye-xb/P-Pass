@@ -34,78 +34,10 @@ class PeerAddrTokenTest {
     }
 
     @Test
-    fun pairingQrRoundTrip() {
-        val addrToken = token("""{"id":"$idHex","addrs":[{"Ip":"10.0.0.2:41145"}]}""")
-        val nodeHex = "cd".repeat(32)
-        val tokenHex = "11".repeat(32)
-        val qr = parsePairingQr("ppf://pair?node=$nodeHex&t=$tokenHex&a=$addrToken")
-        assertEquals(nodeHex, qr.nodeIdHex)
-        assertEquals(tokenHex, qr.token)
-        assertEquals(listOf("10.0.0.2:41145"), qr.addr!!.directAddresses)
-    }
-
-    @Test
-    fun legacyQrWithoutAddressStillParses() {
-        val qr = parsePairingQr("ppf://pair?node=${"ee".repeat(32)}&t=${"22".repeat(32)}")
-        assertNull(qr.addr)
-    }
-
-    @Test
     fun garbageIsRejected() {
-        assertThrows(Exception::class.java) { parsePairingQr("https://example.com") }
         assertThrows(Exception::class.java) {
             parsePeerAddrToken(token("""{"id":"tooshort","addrs":[]}"""))
         }
     }
 
-    // ── H-10b: 新 QR 格式（r= relay URL 明文）──
-
-    @Test
-    fun newQrWithRelayParses() {
-        val nodeHex = "ab".repeat(32)
-        val qr = parsePairingQr(
-            "ppf://pair?node=$nodeHex&t=${"11".repeat(32)}&r=https://relay.example.com:8443"
-        )
-        assertEquals(nodeHex, qr.nodeIdHex)
-        assertEquals("https://relay.example.com:8443", qr.relayUrl)
-        assertNull(qr.addr) // 新格式没有 a=
-    }
-
-    @Test
-    fun oldQrWithAddrStillParses() {
-        // 旧 daemon 的码（a= 完整 PeerAddr）——新 app 必须兼容
-        val addrToken = token(
-            """{"id":"$idHex","addrs":[{"Relay":"https://relay.example.com:8443"},{"Ip":"10.0.0.2:41145"}]}"""
-        )
-        val qr = parsePairingQr("ppf://pair?node=$idHex&t=${"11".repeat(32)}&a=$addrToken")
-        assertNull(qr.relayUrl)
-        assertEquals("https://relay.example.com:8443", qr.addr!!.relayUrl)
-    }
-
-    @Test
-    fun buildAddrTokenRoundTrips() {
-        // 新码 → 重建 token → backup 的 parsePeerAddrToken 必须能解
-        val nodeHex = "ab".repeat(32)
-        val rebuilt = buildAddrToken(nodeHex, "https://relay.example.com:8443")
-        val p = parsePeerAddrToken(rebuilt)
-        assertEquals(nodeHex, p.idHex)
-        assertEquals("https://relay.example.com:8443", p.relayUrl)
-        assertEquals(emptyList<String>(), p.directAddresses)
-    }
-
-    // ── FIX-T3: 升级顺序地雷——缺地址参数的 QR 不能静默失败 ──
-
-    @Test
-    fun qrWithoutAnyAddressIsDetectable() {
-        // 旧 APK（≤0.3.0-test.2）只认 a=；新码只带 r=。一个既无 a=
-        // 也无 r= 的码（例如被截断/手抄丢段）必须能被上层识别为
-        // 「无法解析」——parsePairingQr 返回 addr=null 且 relayUrl=null，
-        // PairFlow 据此给「配对码无法解析」人话错误（非崩溃非静默）。
-        val nodeHex = "fe".repeat(32)
-        val qr = parsePairingQr("ppf://pair?node=$nodeHex&t=${"33".repeat(32)}")
-        assertEquals(nodeHex, qr.nodeIdHex)
-        assertEquals("33".repeat(32), qr.token)
-        assertNull("无 a= 无 r= → addr 必须为 null", qr.addr)
-        assertNull("无 a= 无 r= → relayUrl 必须为 null", qr.relayUrl)
-    }
 }

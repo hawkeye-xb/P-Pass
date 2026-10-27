@@ -147,18 +147,16 @@ $env:PATH = "C:\Program Files\Git\bin;$env:PATH"   # 只影响当前会话
 跑 `powershell -NoProfile -ExecutionPolicy Bypass -File tools\windows\env-check.ps1`
 可以看本机配好没有（找 `just.shell` 那一行）。
 
-## 贡献规则
+## 参与贡献
 
-- **文档双语**：面向用户与贡献者的文档以英文为主、配中文姊妹篇
-  （`*.zh.md`）；短 README 可单文件双语分节。内部工程记录可中文优先；
-  提交信息用英文。
-- **接口 agent 优先**：所有功能必须可经 testclient CLI / daemon IPC
-  无人化驱动与验证——GUI 只是这些接口上的皮肤。
-- **架构门禁**：`iroh` 只准出现在 `transport`；平台 `#[cfg]` 只准出现在
-  `platform`；由 `tools/arch-check.sh` 在 CI 强制。
+贡献规则（包括每个提交都要的 DCO 签名）见 [CONTRIBUTING.zh.md](CONTRIBUTING.zh.md)。
+安全漏洞请按 [SECURITY.zh.md](SECURITY.zh.md) 私下报告。
 
 ## License
 
 P-Pass 采用 **GNU Affero 通用公共许可证 v3**（AGPL-3.0）——许可证全文见
 [LICENSE](LICENSE)。全部 crate、Android App、桌面壳与官网（`site/`）
 均在其覆盖范围内。Copyright (C) 2026 Hawkeye XB。
+
+经 Apple App Store 等应用商店分发的情形，另有版权人的补充声明，见
+[APP_STORE_EXCEPTION.zh.md](APP_STORE_EXCEPTION.zh.md)。

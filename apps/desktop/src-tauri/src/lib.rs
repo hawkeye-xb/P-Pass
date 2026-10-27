@@ -541,17 +541,84 @@ fn status_is_unconfigured(status: &Value) -> bool {
     status["unconfigured"].as_bool() == Some(true)
 }
 
-/// 首启向导确认库位置。首启时要一次性拉起 daemon 并等它答话（可能伴随本地网络
-/// 授权弹窗），放阻塞线程池——同步命令跑在主线程上，窗口会无响应（统一回归实测）。
-#[tauri::command]
-async fn write_config(library_dir: String) -> Result<(), String> {
-    configure_library_off_main(library_dir).await
+/// #1150：用户在**系统对话框**里选的库位置，由壳暂存。网页只拿到展示用的字符串，
+/// 落库时（`write_config` / `set_library_dir`）壳用这里存的值——网页不能自己递一个路径进来。
+/// 落库成功才清空：向导里校验失败回第 1 步重试时，选择不丢。
+#[derive(Default)]
+struct LibraryPick(std::sync::Mutex<Option<std::path::PathBuf>>);
+
+impl LibraryPick {
+    fn set(&self, dir: std::path::PathBuf) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(dir);
+    }
+    fn get(&self) -> Option<std::path::PathBuf> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+    fn clear(&self) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
 }
 
-/// 更改照片库位置（重启后台服务后生效）。
+/// #1150：弹系统「选择文件夹」对话框（库位置）。选定的目录存进壳里，返回给网页的只用于显示；
+/// 取消 ⇒ `null`。`from_default`：向导里从默认库位置开始选。命令是 async 并在阻塞线程池里等对话框，
+/// 不占主线程。
 #[tauri::command]
-async fn set_library_dir(library_dir: String) -> Result<(), String> {
-    configure_library_off_main(library_dir).await
+async fn pick_library_dir(
+    app: tauri::AppHandle,
+    title: Option<String>,
+    from_default: bool,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    off_main(move || {
+        let mut dialog = app.dialog().file();
+        if let Some(title) = title {
+            dialog = dialog.set_title(title);
+        }
+        if from_default {
+            dialog = dialog.set_directory(default_library_dir(platform::adapter().pictures_dir()));
+        }
+        let dir = dialog.blocking_pick_folder()?.into_path().ok()?;
+        let shown = dir.to_string_lossy().into_owned();
+        app.state::<LibraryPick>().set(dir);
+        Some(shown)
+    })
+    .await
+}
+
+/// #1150：向导「用默认位置」——选择改回默认库位置（由壳算，不由网页传）。
+#[tauri::command]
+fn use_default_library_dir(app: tauri::AppHandle) {
+    app.state::<LibraryPick>()
+        .set(default_library_dir(platform::adapter().pictures_dir()));
+}
+
+/// 首启向导确认库位置。首启时要一次性拉起 daemon 并等它答话（可能伴随本地网络
+/// 授权弹窗），放阻塞线程池——同步命令跑在主线程上，窗口会无响应（统一回归实测）。
+///
+/// #1150：不收路径。用对话框选过的（[`pick_library_dir`]）；没选过就是向导预填的那个
+/// （config 已指向的库，否则默认库位置）。
+#[tauri::command]
+async fn write_config(app: tauri::AppHandle) -> Result<(), String> {
+    let dir = app.state::<LibraryPick>().get().unwrap_or_else(|| {
+        ipc::read_config_data_dir(&platform::adapter().data_dir())
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| default_library_dir(platform::adapter().pictures_dir()))
+    });
+    configure_library_off_main(dir.to_string_lossy().into_owned()).await?;
+    app.state::<LibraryPick>().clear();
+    Ok(())
+}
+
+/// 更改照片库位置（重启后台服务后生效）。#1150：不收路径，只用刚在系统对话框里选的那个。
+#[tauri::command]
+async fn set_library_dir(app: tauri::AppHandle) -> Result<(), String> {
+    let dir = app
+        .state::<LibraryPick>()
+        .get()
+        .ok_or_else(|| ipc::ui_err("ui.err_generic", &[]))?;
+    configure_library_off_main(dir.to_string_lossy().into_owned()).await?;
+    app.state::<LibraryPick>().clear();
+    Ok(())
 }
 
 async fn configure_library_off_main(library_dir: String) -> Result<(), String> {
@@ -1372,9 +1439,37 @@ fn pair_qr_svg(text: String) -> Result<String, String> {
 /// #1059：照片库只是磁盘上的目录，打开它不需要后台服务。壳从平台 config 只读
 /// 解析库目录（与服务在线时 `status.library_dir` 同源：daemon 也读这份 config），
 /// 服务停止时「打开照片库」照样可用。
+///
+/// #1150：路径不再交给网页——壳自己在文件管理器里揭示（网页没有 reveal 权限）。
 #[tauri::command]
-fn library_reveal_path() -> Result<String, String> {
-    library_reveal_target(&platform::adapter().data_dir())
+async fn reveal_library() -> Result<(), String> {
+    off_main(|| reveal_in_file_manager(&library_reveal_target(&platform::adapter().data_dir())?))
+        .await?
+}
+
+/// #1150：在文件管理器里揭示一个原文件（按 hash，路径由 daemon 的记录给出）。
+#[tauri::command]
+async fn reveal_asset(hash: String) -> Result<(), String> {
+    off_main(move || reveal_daemon_path("asset.path", json!({ "hash": hash }))).await?
+}
+
+/// #1150：在文件管理器里揭示某台设备自己的存储目录（路径由 daemon 的 `device.folder` 给出）。
+#[tauri::command(rename_all = "snake_case")]
+async fn reveal_device_folder(node_id: String) -> Result<(), String> {
+    off_main(move || reveal_daemon_path("device.folder", json!({ "node_id": node_id }))).await?
+}
+
+fn reveal_daemon_path(method: &str, params: Value) -> Result<(), String> {
+    let resp = ipc::DaemonHandle::discover()?.call(method, params)?;
+    let path = resp
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ipc::ui_err("ui.err_generic", &[]))?;
+    reveal_in_file_manager(path)
+}
+
+fn reveal_in_file_manager(path: &str) -> Result<(), String> {
+    tauri_plugin_opener::reveal_item_in_dir(path).map_err(|e| e.to_string())
 }
 
 /// 诊断包由 daemon 组装并脱敏（#1042 / #1045）：壳只调内置 daemon 的
@@ -1385,16 +1480,42 @@ fn library_reveal_path() -> Result<String, String> {
 /// `diag export` 是独立的短进程，不依赖常驻服务。脱敏规则只有 daemon 一份
 /// （`crates/daemon/src/redact.rs`），壳不再二次脱敏。
 ///
-/// #1122：落盘位置由用户在保存对话框里选（`out`），不再写进照片库目录。只收
-/// 绝对路径、`.zip` 结尾。返回值就是 daemon 的 `{"zip","daemon_reachable"}`。
+/// #1122：落盘位置由用户在保存对话框里选，不再写进照片库目录。只收
+/// 绝对路径、`.zip` 结尾。返回值就是 daemon 的 `{"zip","daemon_reachable"}`；取消 ⇒ `null`。
+///
+/// #1150：保存对话框由壳弹（网页不能自己给路径）；导出成功后壳顺手在文件管理器里揭示这个包。
 #[tauri::command]
-async fn export_logs_bundle(app: tauri::AppHandle, out: String) -> Result<Value, String> {
-    off_main(move || export_logs_bundle_blocking(app, out)).await?
+async fn export_logs_bundle(app: tauri::AppHandle, title: Option<String>) -> Result<Value, String> {
+    off_main(move || export_logs_bundle_blocking(app, title)).await?
 }
 
-fn export_logs_bundle_blocking(app: tauri::AppHandle, out: String) -> Result<Value, String> {
-    let out = diag_export_target(&out).ok_or_else(|| ipc::ui_err("ui.err_generic", &[]))?;
-    daemon_cli::diag_export(&daemon_cli::bundled_sidecar()?, &out, &shell_version(&app))
+fn export_logs_bundle_blocking(
+    app: tauri::AppHandle,
+    title: Option<String>,
+) -> Result<Value, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let mut dialog = app
+        .dialog()
+        .file()
+        .set_file_name("ppf-logs.zip")
+        .add_filter("zip", &["zip"]);
+    if let Some(title) = title {
+        dialog = dialog.set_title(title);
+    }
+    let Some(picked) = dialog.blocking_save_file() else {
+        return Ok(Value::Null);
+    };
+    let out = picked
+        .into_path()
+        .ok()
+        .and_then(|p| diag_export_target(&p.to_string_lossy()))
+        .ok_or_else(|| ipc::ui_err("ui.err_generic", &[]))?;
+    let result =
+        daemon_cli::diag_export(&daemon_cli::bundled_sidecar()?, &out, &shell_version(&app))?;
+    if let Some(zip) = result.get("zip").and_then(|v| v.as_str()) {
+        let _ = reveal_in_file_manager(zip); // 展示失败不影响导出结果
+    }
+    Ok(result)
 }
 
 /// #1122：用户选的保存位置是否可用：绝对路径、文件名以 `.zip` 结尾。
@@ -1685,7 +1806,11 @@ pub fn run() {
             restart_daemon_process,
             kernel_convergence_phase,
             export_logs_bundle,
-            library_reveal_path,
+            reveal_library,
+            reveal_asset,
+            reveal_device_folder,
+            pick_library_dir,
+            use_default_library_dir,
             pair_qr_svg,
             allow_media_scope,
             notify_system,
@@ -1698,6 +1823,7 @@ pub fn run() {
             // stream starts. The stream's handshake and the stop/start
             // commands all write through this one object.
             let _ = app.manage(UpdatePause::default());
+            let _ = app.manage(LibraryPick::default());
             let _ = app.manage(update_install::PendingUpdate::default());
             let _ = app.manage(ServiceStateManager::new(
                 initial_service_state(),
@@ -1985,7 +2111,7 @@ mod tests {
             "update_failure_state",
             "clear_update_failure",
             "pair_qr_svg",
-            "library_reveal_path",
+            "use_default_library_dir",
             "is_test_build",
             "kernel_convergence_phase",
         ];
@@ -2033,6 +2159,39 @@ mod tests {
             }
         }
         assert!(sync_cmds.len() >= 5, "扫描没扫到命令：{sync_cmds:?}");
+    }
+
+    /// #1150：网页层最小权限。`core:default` 一整包不给，只留前端实际用到的核心 API；
+    /// 网页不能自己弹对话框拿路径（open/save），也不能让系统「揭示」任意路径。
+    /// 反证：加回 `core:default` / `dialog:allow-open|save` / `opener:allow-reveal-item-in-dir` → 红。
+    #[test]
+    fn webview_capabilities_are_least_privilege() {
+        let cap: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/default.json")).expect("json");
+        let granted: Vec<&str> = cap["permissions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| p.as_str())
+            .collect();
+        for forbidden in [
+            "core:default",
+            "dialog:allow-open",
+            "dialog:allow-save",
+            "opener:allow-reveal-item-in-dir",
+            "opener:default",
+            "dialog:default",
+        ] {
+            assert!(!granted.contains(&forbidden), "不该授予 {forbidden}");
+        }
+        for needed in [
+            "core:app:allow-version",
+            "core:event:allow-listen",
+            "core:event:allow-unlisten",
+            "core:window:allow-start-dragging",
+        ] {
+            assert!(granted.contains(&needed), "缺 {needed}");
+        }
     }
 
     #[test]
@@ -2915,8 +3074,8 @@ mod tests {
         assert!(!err.contains("ppass-1059"), "不许透出路径: {err}");
         let src = include_str!("lib.rs").replace("\r\n", "\n");
         assert!(
-            src.contains("            library_reveal_path,\n"),
-            "library_reveal_path 未注册进 invoke_handler"
+            src.contains("            reveal_library,\n"),
+            "reveal_library 未注册进 invoke_handler"
         );
     }
 

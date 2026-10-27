@@ -33,3 +33,5 @@ tokio = { version = "1", features = ["rt-multi-thread"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 proptest = "1"
 tempfile = "3"
+# #1183：残留清扫的「符号链接不跟、不删」用例要在本机造链接——怎么造归 platform 管（B.2）。
+platform = { path = "../platform", features = ["test-support"] }

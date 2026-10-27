@@ -632,36 +632,13 @@ async fn main() -> anyhow::Result<()> {
     //
     // 代价：回退路径若被打断，已拉到一半的部分数据不能跨重启续传。可以接受
     // ——那条路是按 commit 批次重试的，最多重拉一个文件。
+    //
+    // #1183：启动关键路径上只做 O(1) 的 rename（挪进 `.ppf/blobs-retired-<pid>-<ns>`），
+    // 与里面有多少东西无关；真正的删除归库残留清扫（类别 `blobs-retired`），启动就绪后后台跑。
     let blobs_dir = transport::Blobs::store_dir(&data_dir.join(".ppf"));
-    // MOB-32：同一趟顺手收走 staging 里的孤儿——已校验落地但没人认领的
-    // 裸文件。启动这一刻会话表必空（内存态），所以保护集为空；宽限期仍然
-    // 给足，崩溃重启后刚落地那几个不至于白传。真机上这里要清的存量是 547MB。
-    let reclaimed = daemon::reclaim_inbox(
-        &blobs_dir,
-        &data_dir.join(".ppf/staging"),
-        daemon::STAGING_ORPHAN_GRACE,
-    );
-    if reclaimed > 0 {
-        tracing::info!("BLOB-01: 收件箱回收 {} 字节", reclaimed);
-    }
-    // NET-20: `.ppf/flow-staging` 同样该在启动时收一遍存量孤儿——与旧
-    // 收件箱不同，Flow 的保护集（`active_flow_content_hashes`）是持久表
-    // 而非内存态会话，启动这一刻查到的就是真值，不必像旧路径那样在
-    // 启动时把保护集当成空集。
-    match db.active_flow_content_hashes().await {
-        Ok(protected) => {
-            let freed = daemon::sweep_flow_staging_orphans(
-                &data_dir.join(".ppf/flow-staging"),
-                &protected,
-                daemon::STAGING_ORPHAN_GRACE,
-            );
-            if freed > 0 {
-                tracing::info!("NET-20: 启动时回收 flow-staging 孤儿 {} 字节", freed);
-            }
-        }
-        Err(error) => {
-            tracing::warn!("NET-20: 查询活跃 Flow 哈希失败，跳过启动时 flow-staging 回收: {error}");
-        }
+    match daemon::retire_blob_store(&blobs_dir) {
+        daemon::BlobStoreRetire::Absent | daemon::BlobStoreRetire::Retired => {}
+        other => tracing::warn!("BLOB-01: 回退 blob store 没挪走（{other:?}），照常打开"),
     }
 
     // One blob store handle, shared by backup (pulls) and query
@@ -750,6 +727,16 @@ async fn main() -> anyhow::Result<()> {
     ipc.set_flow_delivery(flow_delivery.clone());
     ipc.set_backup(backup.clone());
 
+    // #1183：库残留统一清扫（清单与判据见 `daemon::residue`、业务规则 §5.7）。启动那一轮等
+    // 「启动就绪」信号（下面 `STATUS_CHANGED` 处）再跑，不在启动关键路径上；之后随每小时巡检。
+    let residue =
+        daemon::residue::ResidueSweeper::new(db.clone(), &data_dir).with_staging_claims({
+            let backup = backup.clone();
+            std::sync::Arc::new(move || backup.staging_claims())
+        });
+    let (startup_ready, startup_ready_rx) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(residue.clone().run_after(startup_ready_rx));
+
     // ── SYNC-01 外部删除对账 ──────────────────────────────
     // 磁盘（originals）↔ 索引（asset 表）diff：磁盘上没了的条目 = 外部
     // 删除（Finder/终端手动删），清 asset 行 + thumb 文件 + 审计
@@ -760,6 +747,8 @@ async fn main() -> anyhow::Result<()> {
     // SYNC-01 的删幽灵那一半，索引一丢照片就永远回不来。
     // #851: 补完上次崩溃时停在「索引已改指原图、文件还没换过去」的替换——必须在启动对账之前，
     // 否则对账会拿磁盘上的旧副本去比索引里的新指纹。
+    // #1183：这是启动关键路径上唯一保留的库维护步骤（正确性必需）；残留清扫全部挪到
+    // 启动就绪之后后台跑（见下面的 `residue`）。
     use platform::PlatformAdapter as _;
     match core_index::Ingestor::new(db.clone(), &data_dir)
         .with_file_name_sanitizer(platform::adapter().ingest_file_name_sanitizer())
@@ -769,35 +758,6 @@ async fn main() -> anyhow::Result<()> {
         Ok(0) => {}
         Ok(n) => tracing::info!("#851: 补完 {n} 条未换完的原图替换"),
         Err(e) => tracing::warn!("#851: 补完原图替换失败，下次启动再试: {e}"),
-    }
-    // #1182：旧版把被替换掉的旧副本留在库里 `.ppf/superseded/`、永不回收（占盘翻倍）。必须在
-    // `finish_pending_swaps` 之后：判据要求原图已在 rel_path 上、没有未换完的替换。
-    // 日志只给计数与指纹前 8 位，不打路径。
-    match core_index::sweep_legacy_superseded(&db, &data_dir).await {
-        Ok(r) => {
-            if r.removed > 0 || !r.kept.is_empty() {
-                tracing::info!(
-                    "#1182: 清理旧版遗留的已替换旧副本 {} 个，保留 {} 个（目录已删: {}）",
-                    r.removed,
-                    r.kept.len(),
-                    r.dir_removed
-                );
-            }
-            for (tag, reason) in &r.kept {
-                tracing::warn!("#1182: 保留遗留旧副本 {tag}…: {reason}");
-            }
-        }
-        Err(e) => tracing::warn!("#1182: 清理遗留旧副本失败，下次启动再试: {e}"),
-    }
-    // #1047：清掉上次入库被打断（kill -9 / 断电）留下的临时文件。必须在启动
-    // 对账之前、且在 watcher / router / IPC 能触发入库之前——运行期正在写的
-    // 临时文件与残留长得一模一样，只有此刻能确定没有入库在进行。判据见
-    // `core_index::sweep_ingest_residue`（文件名严格匹配 + 没有索引行；
-    // 绝不按内容特征猜，免得误删用户自己放进库里的文件）。
-    match core_index::sweep_ingest_residue(&db, &data_dir).await {
-        Ok(0) => {}
-        Ok(n) => tracing::info!("#1047: 清理入库中断残留的临时文件 {n} 个"),
-        Err(e) => tracing::warn!("#1047: 清理入库残留失败，下次启动再试: {e}"),
     }
     let reconcile = daemon::Reconcile::new(db.clone(), &data_dir)
         .with_events(event_bus.clone())
@@ -831,12 +791,7 @@ async fn main() -> anyhow::Result<()> {
         let backup = backup.clone();
         let flow_expiry = flow_delivery.clone();
         let thumb_pregen = thumb_pregen.clone();
-        // NET-20: flow-staging 孤儿回收复用同一份 db/data_dir——
-        // 保护集判据与 flow-blobs 的 iroh GC 回调（上面的
-        // `flow_gc_protected`）同一张表（`active_flow_content_hashes`），
-        // 两个装卸台该有的巡检不能只给旧管线接上。
-        let flow_staging_db = db.clone();
-        let flow_staging_dir = data_dir.join(".ppf/flow-staging");
+        let residue = residue.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(daemon::PATROL_INTERVAL).await;
@@ -859,35 +814,14 @@ async fn main() -> anyhow::Result<()> {
                 if dropped > 0 {
                     tracing::info!("MOB-32: 清理空闲备份会话 {dropped} 个");
                 }
-                let freed = backup.reclaim_staging(daemon::STAGING_ORPHAN_GRACE);
-                if freed > 0 {
-                    tracing::info!("MOB-32: 回收 staging 孤儿 {freed} 字节");
-                }
-                // NET-20: `.ppf/flow-staging` 是 Flow 单通道自己的装卸台，
-                // 不在 `backup.reclaim_staging` 的职责范围内——查询失败就
-                // 跳过本轮（宁可漏收，不可在保护集不可信时误删）。
                 match flow_expiry.expire_stale_grants().await {
                     Ok(0) => {}
                     Ok(n) => tracing::info!("#413: 取消超期未续传的 Flow grant {n} 个"),
                     Err(error) => tracing::warn!("#413: 超期 grant 巡检失败，下一轮再试: {error}"),
                 }
-                match flow_staging_db.active_flow_content_hashes().await {
-                    Ok(protected) => {
-                        let freed = daemon::sweep_flow_staging_orphans(
-                            &flow_staging_dir,
-                            &protected,
-                            daemon::STAGING_ORPHAN_GRACE,
-                        );
-                        if freed > 0 {
-                            tracing::info!("NET-20: 回收 flow-staging 孤儿 {freed} 字节");
-                        }
-                    }
-                    Err(error) => {
-                        tracing::warn!(
-                            "NET-20: 查询活跃 Flow 哈希失败，跳过本轮 flow-staging 回收: {error}"
-                        );
-                    }
-                }
+                // #1183：库残留统一清扫（含 MOB-32 staging 孤儿、NET-20 flow-staging）。
+                // 排在会话回收与超期 grant 之后：它们放掉的保护，本轮就能收。
+                residue.run_once().await;
             }
         });
     }
@@ -910,6 +844,7 @@ async fn main() -> anyhow::Result<()> {
     ipc.set_peer_closer(peer_closer.clone());
     let router = Router::new(db, desktop_name)
         .with_peer_closer(peer_closer)
+        .with_window_enforced()
         .with_events(event_bus.clone())
         .with_subscriptions(subscriptions)
         .with_outdated_peers(outdated)
@@ -923,14 +858,18 @@ async fn main() -> anyhow::Result<()> {
         daemon::events::STATUS_CHANGED,
         serde_json::json!({}),
     );
+    // #1183：启动就绪——IPC 能查询、启动对账已完成。后台残留清扫从这里才开始（第一轮在
+    // 启动对账之后跑，缩略图孤儿的判据依赖对账收编回来的索引行）。
+    tracing::info!("#1183: 启动就绪");
+    let _ = startup_ready.send(());
     // #1047：停止信号（SIGTERM / Windows 控制台事件）与 --ephemeral 的 stdin
     // EOF 走同一条收尾路径。离开 `router.serve` 即停止接新连接；之后只剩
     // 收尾 + 退出，整体死线 SHUTDOWN_DEADLINE（Docker 默认 10s 后 SIGKILL，
     // launchd 20s）。
     //
     // 这里只能保证「收得到信号时体面地走」；SIGKILL / 断电 / TerminateProcess
-    // 谁也收不到，那一类的安全由落盘侧兜底（入库不留占位文件 + 启动清残留，
-    // 见 core_index::sweep_ingest_residue）。
+    // 谁也收不到，那一类的安全由落盘侧兜底（入库不留占位文件 + 残留清扫，
+    // 见 daemon::residue）。
     let stop = if ephemeral {
         // UX-07: --ephemeral — stdin EOF 即优雅退出（3 秒内），测试脚本
         // 用它杜绝 A 类孤儿。

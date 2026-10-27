@@ -4,7 +4,7 @@ import UIKit
 
 /// 全 App 唯一的日志出口（#955）：同一行既进 NSLog（前台 `--console` 能看），也进容器内的滚动文件
 /// `Library/Logs/ppass.log`（后台拉起时也能用 `tools/ios/pull-logs.sh` 取回）。
-/// 隐私：落盘前过 `LogRedact.scrub`（媒体文件名、≥32 字符的 ticket / token 串）；调用方仍应只写 hash 前缀与计数。
+/// 隐私：落盘前过 `LogRedact.scrub`（媒体文件名、IP 地址、设备名、URL 主机名、长 ticket / token 串）；调用方仍应只写 hash 前缀与计数。
 enum AppLog {
     static let fileName = "ppass.log"
 
@@ -18,7 +18,11 @@ enum AppLog {
         return log
     }()
 
+    /// 本机设备名：登记一次，之后任何日志行里出现都抹成 `<device>`（#1152）。
+    private static let registeredOwnName: Void = LogRedact.registerDeviceNames([UIDevice.current.name])
+
     static func log(_ message: String) {
+        _ = registeredOwnName
         let line = LogRedact.scrub(message)
         NSLog("[PPass] %@", line)
         sink?.write(line)

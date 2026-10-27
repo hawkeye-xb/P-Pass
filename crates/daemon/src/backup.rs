@@ -320,20 +320,15 @@ impl BackupEngine {
         had
     }
 
-    /// MOB-32：回收 staging 里的孤儿（已校验、但没有任何活会话认领的裸
-    /// 文件）。返回释放的字节数。
-    ///
-    /// 保护集 = **所有活会话声明过的 hash**。它们可能正在 ingest，也可能
-    /// 在等 commit 兜底，一个都不能碰。
-    pub fn reclaim_staging(&self, grace: Duration) -> u64 {
-        let protected: HashSet<String> = {
-            let sessions = self.sessions.lock().expect("sessions lock");
-            sessions
-                .values()
-                .flat_map(|s| s.items.keys().cloned())
-                .collect()
-        };
-        crate::inbox::sweep_orphans(&self.staging, &protected, grace)
+    /// MOB-32 / #1183：staging 孤儿回收的保护集——**所有活会话声明过的 hash**。
+    /// 它们可能正在 ingest，也可能在等 commit 兜底，一个都不能碰。回收本身由
+    /// `residue::ResidueSweeper`（库残留统一清扫）按这份保护集执行。
+    pub fn staging_claims(&self) -> HashSet<String> {
+        let sessions = self.sessions.lock().expect("sessions lock");
+        sessions
+            .values()
+            .flat_map(|s| s.items.keys().cloned())
+            .collect()
     }
 
     /// MOB-30：把 `staging/<hash>` 那一份入库。**上传平面收完一张就调它**，

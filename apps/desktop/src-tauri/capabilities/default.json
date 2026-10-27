@@ -6,13 +6,12 @@
     "main"
   ],
   "permissions": [
-    "core:default",
+    "core:app:allow-version",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
     "core:window:allow-start-dragging",
-    "dialog:allow-open",
-    "dialog:allow-save",
     "dialog:allow-confirm",
     "dialog:allow-message",
-    "opener:allow-reveal-item-in-dir",
     {
       "identifier": "opener:allow-open-url",
       "allow": [
@@ -60,7 +59,11 @@
     "allow-restart-daemon-process",
     "allow-kernel-convergence-phase",
     "allow-export-logs-bundle",
-    "allow-library-reveal-path",
+    "allow-reveal-library",
+    "allow-reveal-asset",
+    "allow-reveal-device-folder",
+    "allow-pick-library-dir",
+    "allow-use-default-library-dir",
     "allow-is-test-build",
     "allow-pair-qr-svg",
     "allow-allow-media-scope",

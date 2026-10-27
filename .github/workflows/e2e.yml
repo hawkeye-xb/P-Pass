@@ -69,7 +69,7 @@ jobs:
       # daemon/testclient release 构建需要 libheif-dev（vendored 编译）+
       # HEVC 解码插件；ffmpeg 供视频首帧测试（下游 job 运行时也要，各自装）。
       - name: System codecs (libheif + HEVC plugin, ffmpeg)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libheif-dev libheif-plugin-libde265 ffmpeg libnuma-dev
+        uses: ./.github/actions/system-codecs
 
       - name: Build release binaries (daemon + testclient)
         run: cargo build --release -p daemon -p testclient
@@ -114,7 +114,7 @@ jobs:
       # 插件；ffmpeg 供视频首帧测试。ubuntu-latest runner 自带 Android
       # SDK，JVM 测试无需额外安装。
       - name: System codecs (libheif + HEVC plugin, ffmpeg)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libheif-dev libheif-plugin-libde265 ffmpeg libnuma-dev
+        uses: ./.github/actions/system-codecs
 
       # BUILD-01（2026-09-18）：全仓 JDK 统一 21——iroh 1.1.0 的 uniffi 绑定
       # class 按 JDK 21 编译（major 65），17 加载报 UnsupportedClassVersionError；
@@ -183,7 +183,7 @@ jobs:
           key: scenarios-${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
 
       - name: System codecs
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libheif-dev libheif-plugin-libde265 ffmpeg libnuma-dev
+        uses: ./.github/actions/system-codecs
 
       # 磁盘满剧本：存储端整个目录放进 6MB tmpfs（需要 root mount，runner 有
       # passwordless sudo），500 x 16KB ≈ 8MB 必然放不下。

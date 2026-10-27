@@ -97,6 +97,9 @@ struct OnboardingFlow: View {
         case .scan: step = .scan
         case .manual: step = .manual(fromScan: false)
         case .pairWaiting: step = .status(.waiting)
+        case .pairCode:
+            step = .status(.code(PairCodeShown(code: "482916", desktop: PairDesktopInfo(name: "Home-Computer", fingerprint: "AB12 CD34"),
+                                               phoneNode: "")))
         case .pairRefused: step = .status(.refused(lapsed: false, note: nil))
         case .pairLapsed: step = .status(.refused(lapsed: true, note: PairNote.expired.text))
         case .pairFailed: step = .status(.failed("demo: unreachable"))
@@ -157,8 +160,8 @@ struct ManualPairScreen: View {
             }
         }
         .onAppear {
-            // 自动化（模拟器端到端）：环境变量直接给配对串，等同于用户粘贴后点「连接」。
-            if let code = ProcessInfo.processInfo.environment["PPASS_PAIR_CODE"], !code.isEmpty {
+            // 自动化（模拟器端到端，仅 DEBUG 构建，#1152）：环境变量直接给配对串，等同于用户粘贴后点「连接」。
+            if let code = DebugLaunchInput.pairCode {
                 text = code
                 if let c = PairCode.normalized(code) { onSubmit(c) }
             }

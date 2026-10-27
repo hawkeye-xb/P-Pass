@@ -27,15 +27,16 @@ test("设备列表参数名三处一致：include_departed", () => {
   expect(api).not.toContain("include_revoked");
 });
 
-// #1122：诊断包由用户选择保存位置——先弹保存对话框，把用户选的路径交给
-// export_logs_bundle；取消就不导出。反证：退回不带路径直接导出，这条变红。
-test("导出诊断包先让用户选保存位置", () => {
+// #1122 / #1150：诊断包由用户选择保存位置——保存对话框由壳弹，网页不再能给路径；
+// 取消得到 null、什么都不做。反证：退回网页弹框并传 `out`，这条变红。
+test("导出诊断包的保存位置由壳的系统对话框给，网页不传路径", () => {
   const body = app.slice(app.indexOf("async function exportLogs()"), app.indexOf("async function onHiddenToTray()"));
-  expect(body).toContain("saveDialog(");
-  expect(body).toContain('invoke("export_logs_bundle", { out })');
-  expect(body).toMatch(/if \(!out\) return;/);
+  expect(body).not.toContain("saveDialog");
+  expect(body).toContain('invoke("export_logs_bundle")');
+  expect(body).toMatch(/if \(!r\) return;/);
   const lib = readFileSync(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8");
-  expect(lib).toMatch(/fn export_logs_bundle\(app: tauri::AppHandle, out: String\)/);
+  expect(lib).toMatch(/async fn export_logs_bundle\(\s*app: tauri::AppHandle,\s*title: Option<String>,?\s*\)/);
+  expect(lib).toContain("blocking_save_file()");
   expect(lib).not.toContain('library.join("ppf-logs.zip")');
 });
 

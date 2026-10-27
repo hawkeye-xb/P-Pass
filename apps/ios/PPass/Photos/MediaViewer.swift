@@ -1,5 +1,6 @@
 import AVKit
 import Photos
+import PPassCore
 import SwiftUI
 
 /// 查看器（对位 Android MediaViewer / VideoScreen；iOS 形态对齐「照片」App）：系统背景色，左右滑翻页
@@ -414,17 +415,19 @@ private struct PageViewer: UIViewControllerRepresentable {
 }
 
 /// 「保存到相册」去重：记下 内容哈希 → 相册里那张的 localIdentifier；再点保存时若那张还在就不再存。
+/// 记录在存储根里的文件（`SavedToGalleryStore`，#1152）：不进备份，断开配对时由断开清单清掉。
 enum SavedToGallery {
-    private static let key = "ppass.saved_to_gallery"
+    private static let store: SavedToGalleryStore? = {
+        guard let root = try? LiveBackend.resolveRoot(logger: NoopLogger()) else { return nil }
+        return SavedToGalleryStore(directory: root.url)
+    }()
 
     static func remember(hash: String, localIdentifier: String) {
-        var map = UserDefaults.standard.dictionary(forKey: key) as? [String: String] ?? [:]
-        map[hash] = localIdentifier
-        UserDefaults.standard.set(map, forKey: key)
+        try? store?.remember(hash: hash, localIdentifier: localIdentifier)
     }
 
     static func stillExists(hash: String) -> Bool {
-        guard let id = (UserDefaults.standard.dictionary(forKey: key) as? [String: String])?[hash] else { return false }
+        guard let id = store?.localIdentifier(for: hash) else { return false }
         return PHAsset.fetchAssets(withLocalIdentifiers: [id], options: nil).count > 0
     }
 }
