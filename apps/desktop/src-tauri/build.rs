@@ -39,6 +39,7 @@ const APP_COMMANDS: &[&str] = &[
     "self_heal_daemon",
     "resume_after_failed_update",
     "update_failure_state",
+    "resident_hosting",
     "clear_update_failure",
     "restart_daemon_process",
     "kernel_convergence_phase",

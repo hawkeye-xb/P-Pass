@@ -5,7 +5,10 @@
 //! - **按签名**（macOS 常驻 daemon）：socket 在仅本用户可访问的目录里，accept 后按对端
 //!   audit token 校验代码签名，认出是窗口程序还是 daemon 自身；没有令牌。客户端（壳、
 //!   单实例交接、诊断导出）连上后先反向校验服务端是签名 daemon，不是就断开、什么都不发。
-//! - **按令牌**（测试沙盒、Windows / Linux）：每次启动随机令牌写进令牌文件（仅属主可读写），
+//! - **按用户**（#1167，Windows 常驻 daemon）：命名管道的 DACL 只放白名单 SID，accept 后
+//!   服务端按连接取客户端的 Windows 用户 SID（服务账户 ⇒ daemon 自身，主人 ⇒ 窗口程序）；
+//!   客户端连上后先反向核对管道是 P-Pass 后台服务建的。同样没有令牌文件。
+//! - **按令牌**（测试沙盒、无桌面的 Linux）：每次启动随机令牌写进令牌文件（仅属主可读写），
 //!   客户端第一行发令牌。
 //!
 //! 能调哪些方法按连接方身份定（[`IpcClient`]）：窗口程序全部；daemon 自身只有单实例交接
@@ -96,6 +99,8 @@ impl IpcClient {
 pub enum PeerEndpoint {
     /// 签名 socket：连上后先反向校验服务端是签名 daemon，不发令牌。
     Signed(PathBuf),
+    /// #1167：Windows 命名管道：连上后先反向核对服务端（管道属主 / 会话），不发令牌。
+    Pipe(String),
     /// 命名空间端点 + 令牌。
     Token {
         socket_name: String,
@@ -133,6 +138,28 @@ impl PeerEndpoint {
                     platform::PeerCheck::NotSupported(why) => Err(why.to_string()),
                 }
             }
+            PeerEndpoint::Pipe(pipe) => {
+                let name = pipe
+                    .as_str()
+                    .to_ns_name::<GenericNamespaced>()
+                    .map_err(|e| format!("管道名不合法：{e}"))?;
+                let conn = interprocess::local_socket::tokio::Stream::connect(name)
+                    .await
+                    .map_err(|e| format!("连不上 {pipe}：{e}"))?;
+                let (conn, check) = tokio::task::spawn_blocking(move || {
+                    let check = platform::verify_local_peer(&conn, &[platform::PeerRole::Daemon]);
+                    (conn, check)
+                })
+                .await
+                .map_err(|e| format!("校验线程失败：{e}"))?;
+                match check {
+                    platform::PeerCheck::Verified(_) => Ok((conn, None)),
+                    platform::PeerCheck::Rejected(why) => {
+                        Err(format!("{pipe} 上的服务端不是 P-Pass 后台服务：{why}"))
+                    }
+                    platform::PeerCheck::NotSupported(why) => Err(why.to_string()),
+                }
+            }
             PeerEndpoint::Token {
                 socket_name,
                 token_hex,
@@ -157,6 +184,7 @@ impl PeerEndpoint {
     fn describe(&self) -> String {
         match self {
             PeerEndpoint::Signed(path) => path.display().to_string(),
+            PeerEndpoint::Pipe(name) => name.clone(),
             PeerEndpoint::Token { socket_name, .. } => socket_name.clone(),
         }
     }
@@ -170,6 +198,7 @@ impl PeerEndpoint {
                 };
                 connect_is_live(name).await
             }
+            PeerEndpoint::Pipe(name) => socket_is_live(name).await,
             PeerEndpoint::Token { socket_name, .. } => socket_is_live(socket_name).await,
         }
     }
@@ -180,9 +209,66 @@ impl PeerEndpoint {
             PeerEndpoint::Signed(path) => {
                 let _ = std::fs::remove_file(path);
             }
-            PeerEndpoint::Token { socket_name, .. } => clean_stale_socket(socket_name),
+            // 命名管道是内核对象，没有残留可清（适配器答 NotApplicable）。
+            PeerEndpoint::Pipe(name)
+            | PeerEndpoint::Token {
+                socket_name: name, ..
+            } => clean_stale_socket(name),
         }
     }
+}
+
+/// 一条连接上的请求行。前缀是认证前已经读掉的第一行（#1167：Windows 的服务端要先读到
+/// 客户端的数据才能模拟它取身份），读掉的字节原样接回请求流，会话看不出区别。
+pub(crate) type ReqLines = tokio::io::Lines<
+    BufReader<
+        tokio::io::Chain<std::io::Cursor<Vec<u8>>, interprocess::local_socket::tokio::RecvHalf>,
+    >,
+>;
+
+fn req_lines(prefix: Vec<u8>, rx: interprocess::local_socket::tokio::RecvHalf) -> ReqLines {
+    use tokio::io::AsyncReadExt as _;
+    BufReader::new(std::io::Cursor::new(prefix).chain(rx)).lines()
+}
+
+/// 认证前最多读这么多字节的第一行（请求行远小于它）；超了 / 超时 / 断开 ⇒ 丢掉连接。
+const FIRST_LINE_MAX: usize = 1 << 20;
+const FIRST_LINE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// #1167：平台要求「先读到客户端数据再认人」时（Windows 的 `ImpersonateNamedPipeClient`
+/// 在读到数据前答 ERROR_CANNOT_IMPERSONATE，真机实测），在认证前读出第一行（含换行）。
+/// 逐字节读，绝不多读——多读的字节会落进一个即将丢弃的缓冲。别的平台不读，返回空前缀。
+/// 读到的内容在认证通过前**不解析、不应答**。
+async fn read_first_line_if_needed(
+    conn: &interprocess::local_socket::tokio::Stream,
+) -> Option<Vec<u8>> {
+    use tokio::io::AsyncReadExt as _;
+    if !platform::peer_check_needs_first_message() {
+        return Some(Vec::new());
+    }
+    let read = async {
+        let mut reader = conn;
+        let mut line = Vec::new();
+        let mut byte = [0u8; 1];
+        loop {
+            match reader.read(&mut byte).await {
+                Ok(1) => {
+                    line.push(byte[0]);
+                    if byte[0] == b'\n' {
+                        return Some(line);
+                    }
+                    if line.len() >= FIRST_LINE_MAX {
+                        return None;
+                    }
+                }
+                _ => return None,
+            }
+        }
+    };
+    tokio::time::timeout(FIRST_LINE_TIMEOUT, read)
+        .await
+        .ok()
+        .flatten()
 }
 
 /// One IPC server per daemon. Owns the pending-pair queue the UI drains.
@@ -455,6 +541,26 @@ pub async fn serve_unconfigured_signed(
     let _ = std::fs::remove_file(path);
     let name = path.to_fs_name::<GenericFilePath>()?;
     let listener = ListenerOptions::new().name(name).create_tokio()?;
+    serve_unconfigured_verified(listener, version, location).await
+}
+
+/// #1167：Windows 命名管道上的未配置状态。口径与签名版一致；多一件事：写好库位置的那一刻
+/// 把调用方记成主人（D3：第一个完成首启向导的用户成为主人），之后管道只对主人开放。
+pub async fn serve_unconfigured_pipe(
+    pipe: &str,
+    version: String,
+    location: Arc<crate::library_location::LibraryLocation>,
+) -> anyhow::Result<()> {
+    let listener = platform::bind_resident_pipe(pipe)?;
+    serve_unconfigured_verified(listener, version, location).await
+}
+
+/// 未配置状态的按身份认证服务（签名 socket 与命名管道共用）。
+async fn serve_unconfigured_verified(
+    listener: interprocess::local_socket::tokio::Listener,
+    version: String,
+    location: Arc<crate::library_location::LibraryLocation>,
+) -> anyhow::Result<()> {
     let started_at = now_ms();
     loop {
         let conn = match listener.accept().await {
@@ -468,6 +574,9 @@ pub async fn serve_unconfigured_signed(
         let version = version.clone();
         let floor = version.clone();
         tokio::spawn(async move {
+            let Some(prefix) = read_first_line_if_needed(&conn).await else {
+                return;
+            };
             let checked = tokio::task::spawn_blocking(move || {
                 // #1150：服务端接入加版本下限——对端不得低于本 daemon 自身版本。
                 let check = platform::verify_local_peer_min_version(
@@ -475,29 +584,32 @@ pub async fn serve_unconfigured_signed(
                     &[platform::PeerRole::Shell, platform::PeerRole::Daemon],
                     &floor,
                 );
-                (conn, check)
+                // #1167：首启向导写好库位置时要把这个人记成主人（只有 Windows 取得到）。
+                let user = platform::local_peer_user(&conn);
+                (conn, check, user)
             })
             .await;
-            let (conn, client) = match checked {
-                Ok((conn, platform::PeerCheck::Verified(platform::PeerRole::Shell))) => {
-                    (conn, IpcClient::Shell)
+            let (conn, client, user) = match checked {
+                Ok((conn, platform::PeerCheck::Verified(platform::PeerRole::Shell), user)) => {
+                    (conn, IpcClient::Shell, user)
                 }
-                Ok((conn, platform::PeerCheck::Verified(platform::PeerRole::Daemon))) => {
-                    (conn, IpcClient::Daemon)
+                Ok((conn, platform::PeerCheck::Verified(platform::PeerRole::Daemon), user)) => {
+                    (conn, IpcClient::Daemon, user)
                 }
                 other => {
                     tracing::warn!(
-                        "#1115/#1150: 拒绝 IPC 连接（未配置状态，签名或版本不符）：{:?}",
-                        other.map(|(_, c)| c)
+                        "#1115/#1150: 拒绝 IPC 连接（未配置状态，身份或版本不符）：{:?}",
+                        other.map(|(_, c, _)| c)
                     );
                     return;
                 }
             };
             let (rx, tx) = conn.split();
             unconfigured_session(
-                BufReader::new(rx).lines(),
+                req_lines(prefix, rx),
                 tx,
                 client,
+                user,
                 &version,
                 started_at,
                 &location,
@@ -545,7 +657,7 @@ pub async fn serve_unconfigured_token(
         let expected = token_hex.clone();
         tokio::spawn(async move {
             let (rx, tx) = conn.split();
-            let mut lines = BufReader::new(rx).lines();
+            let mut lines = req_lines(Vec::new(), rx);
             match lines.next_line().await {
                 Ok(Some(first)) if first.trim() == expected => {}
                 _ => {
@@ -553,8 +665,16 @@ pub async fn serve_unconfigured_token(
                     return;
                 }
             }
-            unconfigured_session(lines, tx, IpcClient::Shell, &version, started_at, &location)
-                .await;
+            unconfigured_session(
+                lines,
+                tx,
+                IpcClient::Shell,
+                None,
+                &version,
+                started_at,
+                &location,
+            )
+            .await;
         });
     }
 }
@@ -562,12 +682,17 @@ pub async fn serve_unconfigured_token(
 /// #1115：令牌模式下未配置状态的 socket 名（还没有身份，名字不能从 NodeId 派生）。
 pub const UNCONFIGURED_SOCKET_NAME: &str = "ppf-unconfigured";
 
-/// 未配置状态的请求循环（签名 socket 与令牌端点共用）。写好库位置 ⇒ 以
+/// 未配置状态的请求循环（签名 socket、命名管道与令牌端点共用）。写好库位置 ⇒ 以
 /// [`EXIT_CONFIGURED_RESTART`] 退出；交班 ⇒ 0 退出。
+///
+/// #1167：`user` 是连接方的系统用户（只有 Windows 管道有）。写好库位置后立刻把他记成
+/// 主人；记不下来就如实回错误——下次启动仍是未配置状态（服务形态下「有主人」才算配置
+/// 完成），绝不在没有主人的情况下带着库开放管道。
 async fn unconfigured_session(
-    mut lines: tokio::io::Lines<BufReader<interprocess::local_socket::tokio::RecvHalf>>,
+    mut lines: ReqLines,
     mut tx: interprocess::local_socket::tokio::SendHalf,
     client: IpcClient,
+    user: Option<platform::PeerUser>,
     version: &str,
     started_at: i64,
     location: &Arc<crate::library_location::LibraryLocation>,
@@ -576,7 +701,10 @@ async fn unconfigured_session(
         let Ok(req) = serde_json::from_str::<Req>(&line) else {
             continue;
         };
-        let resp = unconfigured_dispatch(&req, client, version, started_at, location).await;
+        let mut resp = unconfigured_dispatch(&req, client, version, started_at, location).await;
+        if req.method == "config.set_library" && resp.ok {
+            resp = claim_owner_after_set(resp, user.as_ref()).await;
+        }
         let configured = req.method == "config.set_library" && resp.ok;
         let step_down = req.method == "daemon.step_down" && resp.ok;
         let Ok(mut out) = serde_json::to_string(&resp) else {
@@ -594,6 +722,32 @@ async fn unconfigured_session(
             }
             std::process::exit(0);
         }
+    }
+}
+
+/// #1167：库位置写好后把连接方记成主人；失败就把成功应答换成错误（带原因）。
+async fn claim_owner_after_set(resp: Resp, user: Option<&platform::PeerUser>) -> Resp {
+    let user = user.cloned();
+    let claimed = tokio::task::spawn_blocking(move || {
+        use platform::PlatformAdapter as _;
+        platform::adapter().claim_resident_owner(user.as_ref())
+    })
+    .await;
+    match claimed {
+        Ok(Ok(applied)) => {
+            if applied == platform::Applied::Done {
+                tracing::info!("#1167: 首启向导完成，已记下这台电脑 P-Pass 的主人");
+            }
+            resp
+        }
+        Ok(Err(e)) => {
+            tracing::error!("#1167: 库位置已写入，但记不下主人：{e}");
+            Resp::err(
+                resp.id,
+                RespError::new(Reason::Internal).with_param("owner_error", e.to_string()),
+            )
+        }
+        Err(_) => Resp::err(resp.id, RespError::new(Reason::Internal)),
     }
 }
 
@@ -874,6 +1028,13 @@ impl IpcServer {
             .await
     }
 
+    /// #1167：命名管道上的单实例交接。与签名版同理——双方按 Windows 用户 SID 互认，不需要
+    /// 前任的令牌；核对不过（别的程序占着这个管道名）⇒ 退位。
+    pub async fn claim_single_instance_pipe(&self, pipe: &str, version: &str) -> Claim {
+        self.claim_with(&PeerEndpoint::Pipe(pipe.to_string()), version)
+            .await
+    }
+
     async fn claim_with(&self, peer: &PeerEndpoint, version: &str) -> Claim {
         claim_endpoint(peer, version).await
     }
@@ -987,6 +1148,24 @@ impl IpcServer {
         let _ = std::fs::remove_file(path);
         let name = path.to_fs_name::<GenericFilePath>()?;
         let listener = ListenerOptions::new().name(name).create_tokio()?;
+        self.serve_verified(listener).await
+    }
+
+    /// #1167：在 Windows 命名管道上服务（常驻 daemon）。管道 DACL 由平台按主人模型建
+    /// （`platform::bind_resident_pipe`），不写令牌文件；每个连接在**应答任何东西之前**按客户端的
+    /// Windows 用户 SID 认人（系统要求先读到客户端数据才能模拟它，所以先读出第一行、认过了才
+    /// 解析）：服务账户 ⇒ [`IpcClient::Daemon`]，主人 ⇒ [`IpcClient::Shell`]，
+    /// 其余断开并记一条 `ipc.bad_peer`。
+    pub async fn serve_pipe(self: Arc<Self>, pipe: &str) -> anyhow::Result<()> {
+        let listener = platform::bind_resident_pipe(pipe)?;
+        self.serve_verified(listener).await
+    }
+
+    /// 按身份认证的服务循环（签名 socket 与命名管道共用）。
+    async fn serve_verified(
+        self: Arc<Self>,
+        listener: interprocess::local_socket::tokio::Listener,
+    ) -> anyhow::Result<()> {
         loop {
             let conn = match listener.accept().await {
                 Ok(c) => c,
@@ -998,7 +1177,10 @@ impl IpcServer {
             let server = Arc::clone(&self);
             let floor = daemon_version();
             tokio::spawn(async move {
-                // 签名校验是同步 Security 调用（毫秒级，含读盘），不占 async 线程。
+                let Some(prefix) = read_first_line_if_needed(&conn).await else {
+                    return;
+                };
+                // 签名 / SID 校验是同步系统调用（毫秒级），不占 async 线程。
                 let checked = tokio::task::spawn_blocking(move || {
                     // #1150：同上。
                     let check = platform::verify_local_peer_min_version(
@@ -1017,7 +1199,7 @@ impl IpcServer {
                         (conn, IpcClient::Daemon)
                     }
                     Ok((_, other)) => {
-                        tracing::warn!("#1115/#1150: 拒绝 IPC 连接——对端不是我们签名的程序，或版本低于本 daemon：{other:?}");
+                        tracing::warn!("#1115/#1150: 拒绝 IPC 连接——对端身份不在白名单，或版本低于本 daemon：{other:?}");
                         server.note_rejected("ipc.bad_peer").await;
                         return;
                     }
@@ -1027,7 +1209,7 @@ impl IpcServer {
                     }
                 };
                 let (rx, tx) = conn.split();
-                let lines = BufReader::new(rx).lines();
+                let lines = req_lines(prefix, rx);
                 if let Err(e) = server.session(lines, tx, client).await {
                     tracing::debug!("ipc conn ended: {e}");
                 }
@@ -1052,7 +1234,7 @@ impl IpcServer {
         expected_token: &str,
     ) -> anyhow::Result<()> {
         let (rx, tx) = conn.split();
-        let mut lines = BufReader::new(rx).lines();
+        let mut lines = req_lines(Vec::new(), rx);
 
         let Some(first) = lines.next_line().await? else {
             return Ok(());
@@ -1068,7 +1250,7 @@ impl IpcServer {
     /// 认证之后的请求循环。`client` 决定能调哪些方法（#1115）。
     async fn session(
         &self,
-        mut lines: tokio::io::Lines<BufReader<interprocess::local_socket::tokio::RecvHalf>>,
+        mut lines: ReqLines,
         mut tx: interprocess::local_socket::tokio::SendHalf,
         client: IpcClient,
     ) -> anyhow::Result<()> {
@@ -1127,7 +1309,7 @@ impl IpcServer {
     /// 时只推匹配事件；不带 = 全部。
     async fn serve_subscription(
         &self,
-        lines: &mut tokio::io::Lines<BufReader<interprocess::local_socket::tokio::RecvHalf>>,
+        lines: &mut ReqLines,
         tx: &mut interprocess::local_socket::tokio::SendHalf,
         req: &Req,
         mut rx: tokio::sync::broadcast::Receiver<serde_json::Value>,

@@ -29,7 +29,6 @@ use std::path::PathBuf;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod data_migration;
 
-// #1155：从已验签的同一份字节里读 PE 版本（Windows 更新防降级）。纯字节解析、无平台 API，
 // 三个平台都编译并跑单测；只有 Windows 的更新路径会调用它。
 #[cfg_attr(not(windows), allow(dead_code))]
 mod pe_version;
@@ -59,17 +58,81 @@ mod unix;
 mod windows;
 // #1151：应用内更新的大小 / 总时长上限（纯逻辑，三平台都跑单测）。
 pub mod update_limits;
+// D1 / brief §5.1：SCM 服务托管（查询、起停、注册/删除、给主人授权）。
+#[cfg(windows)]
+pub mod windows_service;
 
 // #1157：D4 / §5.2 的 ProgramData 正本存放与目录 ACL 基础件。
 #[cfg(windows)]
 pub mod windows_programdata;
 #[cfg(windows)]
 pub use windows_programdata::{ProgramDataDir, ProgramDataStore};
+// #1167：常驻 daemon 的命名管道（按用户 SID 认人）与主人记录。
+#[cfg(windows)]
+pub mod windows_pipe;
 // §5.3：照片库目录授权给服务账户（壳在主人身份下加 ACE）。
 #[cfg(windows)]
 pub mod windows_photo_dir;
 #[cfg(windows)]
 pub use windows_photo_dir::{grant_modify_for_sid, list_modify_sids, GrantOutcome};
+
+/// 托管方（Windows SCM）要求本进程以「系统服务」方式运行。
+///
+/// `body` 在服务线程上执行并返回进程退出码。返回 `Ok(true)` = 走的是服务路径；
+/// `Ok(false)` = 不是服务上下文（控制台、桌面壳 shell-out），照常往下跑。
+/// 非 Windows 平台没有这个托管方，永远 `Ok(false)`。
+/// 服务模式下的启动日志（Windows 写到 `%ProgramData%\P-Pass\logs\daemon-boot.log`）。
+/// 别的平台是 no-op。
+pub fn service_boot_log(msg: &str) {
+    #[cfg(windows)]
+    windows_service::boot_log(msg);
+    #[cfg(not(windows))]
+    let _ = msg;
+}
+
+pub fn run_as_service(body: impl FnOnce() -> i32 + Send + 'static) -> Result<bool> {
+    #[cfg(windows)]
+    {
+        // D4 / brief §5.2：服务启动的第一件事是核对 %ProgramData%\P-Pass 的 ACL。
+        // 不通过就拒绝启动（SCM 记 7000），绝不回退到用户目录、也不重建目录——
+        // 目录只有提权的安装器能建，daemon 擅自重建就等于把 ACL 决定权交给
+        // 一个可能已被篡改的环境。
+        windows_service::run_service_dispatcher(move || {
+            match windows_programdata::verify_service_root() {
+                Ok(root) => {
+                    service_boot_log(&format!("ProgramData 目录核对通过：{}", root.display()));
+                    body()
+                }
+                Err(e) => {
+                    service_boot_log(&format!("启动失败：ProgramData 目录核对不通过：{e}"));
+                    eprintln!("启动失败：ProgramData 目录核对不通过：{e}");
+                    1
+                }
+            }
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = body;
+        Ok(false)
+    }
+}
+
+/// D4：本进程是否正被系统服务管理器当作服务托管（Windows SCM）。
+///
+/// 唯一的用途是让适配器把数据根从用户的 `%LOCALAPPDATA%` 切到
+/// `%ProgramData%\P-Pass`——服务账户读不到交互用户的任何用户级路径。
+/// 别的平台永远 `false`（它们没有这个「服务账户 ≠ 用户」的形态）。
+pub fn service_mode_active() -> bool {
+    #[cfg(windows)]
+    {
+        windows_service::is_running_as_service()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
 // #287：只给测试用的建链能力。默认不编译，见该模块顶部说明。
 #[cfg(feature = "test-support")]
 pub mod test_support;
@@ -83,16 +146,38 @@ pub use code_signature::{
 pub use data_migration::DataDirMigration;
 pub use identity_key::{IdentityKeyHome, IdentityKeyStore, SecretBlobStore};
 pub use local_peer::{
-    verify_local_peer, verify_local_peer_min_version, LocalPeerSource, PeerCheck, PeerRole,
+    bind_resident_pipe, local_peer_user, peer_check_needs_first_message, verify_local_peer,
+    verify_local_peer_min_version, LocalPeerSource, PeerCheck, PeerRole, PeerUser,
 };
 
 /// #1115：常驻 daemon 的本机 IPC 形态（[`PlatformAdapter::resident_ipc`]）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResidentIpc {
-    /// 命名空间端点（`ppf-<NodeId 前 8 位>`）+ 令牌文件。
+    /// 命名空间端点（`ppf-<NodeId 前 8 位>`）+ 令牌文件。只剩测试沙盒与无桌面的
+    /// headless 平台（Linux 服务器）在用；桌面平台的常驻 daemon 都不再写令牌文件。
     NamespacedWithToken,
     /// 这个路径上的 Unix 域套接字（父目录 0700），按对端代码签名认证，没有令牌。
     SignedSocket(std::path::PathBuf),
+    /// #1167：Windows 命名管道（名字不带 `\\.\pipe\` 前缀），按 **Windows 用户 SID**
+    /// 认人（D5：按用户认，不按程序认），没有令牌。管道由 [`bind_resident_pipe`] 建：
+    /// DACL 只放白名单 SID、拒绝远程、首实例独占；连上后双方再按 SID 核对一次
+    /// （[`verify_local_peer`]）。
+    UserPipe(String),
+}
+
+/// #1167：常驻 daemon「服务谁」（主人模型，D3）。
+///
+/// 只有 Windows 服务形态有这回事：服务是整台机器一份，第一个完成首启向导的用户成为
+/// 主人，之后管道只对主人开放。别的形态（macOS / 计划任务 / headless）daemon 本来就
+/// 跑在用户自己名下，答 [`ResidentOwner::NotApplicable`]。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResidentOwner {
+    /// 本形态没有主人模型。
+    NotApplicable,
+    /// 还没有主人：daemon 只能停在未配置状态，管道对本机交互用户开放、只答配置方法。
+    Unclaimed,
+    /// 已有主人（SID 字符串）。管道只对主人 + 服务自己开放。
+    Claimed(String),
 }
 pub use signal::{stop_signal, StopRequest};
 
@@ -113,6 +198,13 @@ pub enum ServiceMode {
     /// 跳过）。和 LaunchAgent 一样由系统托管：开机启动、崩溃拉起、按需
     /// 立即拉起、撤销登记后不再拉起。
     ScheduledTask,
+    /// D1 / #1161：Windows 系统服务（SCM）——per-machine 安装、以虚拟服务账户
+    /// `NT SERVICE\<服务名>` 运行、开机即起（不等登录）、失败自动重启。
+    ///
+    /// 与 [`ServiceMode::ScheduledTask`] 的区别不只是「谁拉起」：服务的身份是
+    /// 服务账户（不是用户），身份私钥、配对白名单、库位置才能放进
+    /// `%ProgramData%` 只给服务读。计划任务跑在用户会话里，做不到这一点。
+    WindowsService,
 }
 
 impl ServiceMode {
@@ -125,7 +217,9 @@ impl ServiceMode {
     pub fn has_service_manager(self) -> bool {
         match self {
             ServiceMode::UserAutostart => false,
-            ServiceMode::LaunchAgent | ServiceMode::ScheduledTask => true,
+            ServiceMode::LaunchAgent | ServiceMode::ScheduledTask | ServiceMode::WindowsService => {
+                true
+            }
         }
     }
 }
@@ -307,6 +401,21 @@ pub enum Applied {
     /// 本平台**机制上不需要**做这件事，不是缺口。
     /// 例：Windows 的命名管道不在文件系统留端点，没有残留要清。
     NotApplicable,
+}
+
+/// §5.3 / #1159：[`PlatformAdapter::grant_library_dir`] 的结果口径。
+///
+/// 与 [`Applied`] 同一个道理：`Ok(())` 会把「这台机器的卷根本没有 ACL、
+/// 我们什么都没做」说成授权完成，而备份到那时才发现服务读不了目录。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LibraryDirGrant {
+    /// 本平台 / 本安装形态不需要授权：macOS / Linux 的 daemon 与用户同一主体，
+    /// 旧的每用户计划任务也跑在用户会话里。
+    NotApplicable,
+    /// 服务账户对该目录有修改权——刚加上的，或本来就有（已回读确认）。
+    Granted,
+    /// 卷没有 ACL（FAT / FAT32 / exFAT），改不了权限，跳过。
+    SkippedNoAcl { file_system: String },
 }
 
 /// 【DESK-42 #604】开机自启登记的对账结果。
@@ -617,6 +726,50 @@ pub trait PlatformAdapter: Send + Sync {
         None
     }
 
+    /// §5.3 / #1159：把主人选的照片库目录授权给**常驻服务账户**。
+    ///
+    /// 服务模式（D1）下 daemon 以 `NT SERVICE\P-Pass` 运行，和选目录的用户不是
+    /// 同一个安全主体，默认对这个目录连读都没有。加 ACE 这件事只能在主人身份下做
+    /// （服务自己没有该目录的 `WRITE_DAC`），所以入口在窗口程序这边，在把库位置交给
+    /// daemon **之前**调。
+    ///
+    /// 幂等：已经有这条 ACE 就什么都不改。非服务形态（macOS / Linux / 老的每用户
+    /// 计划任务）没有「服务账户 ≠ 用户」这个问题，返回 `NotApplicable`。
+    fn grant_library_dir(&self, dir: &std::path::Path) -> Result<LibraryDirGrant> {
+        let _ = dir;
+        Ok(LibraryDirGrant::NotApplicable)
+    }
+
+    /// §5.1 / #1161：「用户希望这个服务运行吗」。
+    ///
+    /// `Some(false)` = 用户在 App 里停过服务：daemon 启动后应当**直接成功退出**
+    /// （服务管理器看到「正常停止」，不会重启）。`Some(true)` / `None` = 正常运行。
+    /// 其他平台没有这个形态（macOS 的 stop 会把 launchd 作业 disable 掉）。
+    fn service_wanted_state(&self) -> Option<bool> {
+        None
+    }
+
+    /// 写上面的开关（窗口程序用）。`Unsupported` = 本平台没有这个机制。
+    fn set_service_wanted_state(&self, running: bool) -> Result<Applied> {
+        let _ = running;
+        Ok(Applied::Unsupported)
+    }
+
+    /// #1167：常驻 daemon 的主人（见 [`ResidentOwner`]）。读不出来（文件在但读失败、
+    /// 内容不是 SID）一律 `Err`——daemon 据此拒绝启动，不把「读不到」当成「没有主人」
+    /// 而重新开放认领。
+    fn resident_owner(&self) -> Result<ResidentOwner> {
+        Ok(ResidentOwner::NotApplicable)
+    }
+
+    /// #1167：把这个连接方记成主人（首启向导写好库位置的那一刻调）。只有服务形态写盘
+    /// （`%ProgramData%\P-Pass\owner`）；别的形态 `NotApplicable`。`peer` 为 `None`
+    /// （拿不到连接方身份）在服务形态下是错误，绝不写一个空主人。
+    fn claim_resident_owner(&self, peer: Option<&PeerUser>) -> Result<Applied> {
+        let _ = peer;
+        Ok(Applied::NotApplicable)
+    }
+
     /// QA-09 迁移（#211）：把文件权限收紧到「只有属主可读写」。
     ///
     /// 用在身份密钥这类文件上。默认实现返回 [`Applied::Unsupported`] 而
@@ -767,6 +920,15 @@ pub trait PlatformAdapter: Send + Sync {
 /// 系统重启。只给桌面发行层（`apps/desktop`）用，经 [`hosting`] 拿实现；
 /// 核心 crate 不许依赖（门禁 G3，见 `tools/arch-check.sh`）。
 pub trait HostingAdapter: Send + Sync {
+    /// #1167：安装器写、窗口程序读的标记文件（`update-failed`）放在哪个目录。
+    ///
+    /// 默认 = 数据目录（安装器与窗口程序是同一个用户）。Windows 服务形态的安装器是
+    /// **提权进程**，换一个管理员来装，它的 `%LOCALAPPDATA%` 就是那个管理员的——所以那里
+    /// 改放 `%ProgramData%\P-Pass\`（安装器给这个文件单独授交互用户读/删）。
+    fn installer_marker_dir(&self) -> PathBuf {
+        crate::adapter().data_dir()
+    }
+
     // 生命周期
     fn install_autostart(&self, exec: &std::path::Path) -> Result<()>;
     fn autostart_installed(&self) -> Result<bool>;

@@ -419,6 +419,11 @@ mod tests {
         else {
             return;
         };
+        // #1167：服务形态的管道整台机器一份，沙箱隔离不掉；机器上真有服务在线就不是离线场景。
+        if crate::ipc::DaemonHandle::discover().is_ok() {
+            eprintln!("跳过：这台机器上真有常驻 P-Pass 服务在线，不是本测试的离线场景");
+            return;
+        }
         let home = tempfile::tempdir().unwrap();
         let zip = home.path().join("out").join("ppf-logs.zip");
         let mut c = sandboxed(&d, home.path());

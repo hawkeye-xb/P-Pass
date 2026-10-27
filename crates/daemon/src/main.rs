@@ -14,8 +14,45 @@
 use daemon::{Config, Router, SHUTDOWN_DEADLINE};
 use std::io::IsTerminal;
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
+    // D1 / #1161：被 SCM 拉起时，分发器必须在主线程、而且要在 SCM 的 30 秒超时前登记。
+    // 不是服务上下文（控制台、测试、桌面壳 shell-out）返回 false，照常跑下面的控制台路径。
+    //
+    // 服务线程上要另起一个 runtime：`run()` 是 async，而 SCM 的分发器是阻塞的。
+    let as_service = platform::run_as_service(|| {
+        platform::service_boot_log("service body: enter");
+        let rt = match tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(e) => {
+                eprintln!("tokio runtime: {e}");
+                return 1;
+            }
+        };
+        match rt.block_on(run()) {
+            Ok(()) => {
+                platform::service_boot_log("service body: run() returned Ok");
+                0
+            }
+            Err(e) => {
+                platform::service_boot_log(&format!("service body: run() failed: {e:?}"));
+                eprintln!("daemon exited: {e:?}");
+                1
+            }
+        }
+    })?;
+    if as_service {
+        return Ok(());
+    }
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run())
+}
+
+async fn run() -> anyhow::Result<()> {
     // DAE-03 ①：参数解析最先——--help/--version 在任何 daemon 机制
     // （日志/配置/数据库/身份/claim/bind）之前短路退出。8/6 事故：daemon
     // 无解析，--help 被当普通启动一路走到单实例 claim 触发误接管、常驻
@@ -61,6 +98,19 @@ async fn main() -> anyhow::Result<()> {
             std::process::exit(2);
         }
     };
+    // §5.1 / #1161：「开机别启动」不靠改服务启动类型（那要 `SERVICE_CHANGE_CONFIG`，
+    // 给了普通用户就等于允许他改 binPath 并以服务账户跑代码，D4 作废），改成服务自检：
+    // 用户在 App 里停过服务，壳把 `wanted-state` 写成 `stopped`；开机 SCM 拉起本进程，
+    // 这里第一件事读它，是 `stopped` 就成功退出（SCM 看到正常停止，不会重启）。
+    if platform::service_mode_active() {
+        use platform::PlatformAdapter as _;
+        if platform::adapter().service_wanted_state() == Some(false) {
+            platform::service_boot_log(
+                "wanted-state=stopped：用户在 App 里停过服务，本次启动直接退出",
+            );
+            return Ok(());
+        }
+    }
     // EOF 信号：stdin 循环在 EOF 时发；ephemeral 模式下 main 用 select
     // 竞争它，收到即优雅退出（oneshot 只消费一次）。
     let (eof_tx, eof_rx) = tokio::sync::oneshot::channel::<()>();
@@ -239,8 +289,26 @@ async fn main() -> anyhow::Result<()> {
     let (data_dir, explicitly_configured) = match &sandbox {
         Some(sb) => (sb.root().to_path_buf(), false),
         None => match library_location.resident_library(&config) {
+            // #1167 / D3：服务形态下「配置好」= 有库位置**且**有主人。没有主人就停在未配置
+            // 状态（管道只答配置方法），由首启向导写库时把调用方记成主人——绝不带着库对
+            // 本机所有交互用户开放管道。读不出主人记录 ⇒ 拒绝启动（不当成「没有主人」）。
             Ok(daemon::library_location::ResidentLibrary::At { dir, configured }) => {
-                (dir, configured)
+                use platform::PlatformAdapter as _;
+                match platform::adapter().resident_owner() {
+                    Ok(platform::ResidentOwner::Unclaimed) => {
+                        tracing::warn!(
+                            "#1167: 库位置在，但这台电脑的 P-Pass 还没有主人——等首启向导"
+                        );
+                        run_unconfigured(std::sync::Arc::clone(&library_location)).await
+                    }
+                    Ok(_) => (dir, configured),
+                    Err(e) => {
+                        let msg = format!("读不出主人记录（{e}）——后台服务无法启动（#1167）");
+                        eprintln!("{msg}");
+                        tracing::error!("启动失败：{msg}");
+                        std::process::exit(1);
+                    }
+                }
             }
             Ok(daemon::library_location::ResidentLibrary::Unconfigured) => {
                 run_unconfigured(std::sync::Arc::clone(&library_location)).await
@@ -352,6 +420,9 @@ async fn main() -> anyhow::Result<()> {
         platform::ResidentIpc::SignedSocket(path) => {
             tracing::info!("IPC: {}（按代码签名认证）", path.display())
         }
+        platform::ResidentIpc::UserPipe(pipe) => {
+            tracing::info!("IPC: \\\\.\\pipe\\{pipe}（按 Windows 用户认证）")
+        }
         platform::ResidentIpc::NamespacedWithToken => tracing::info!(
             "IPC: {socket_name}（令牌在 {}/ipc.token）",
             data_dir.display()
@@ -442,6 +513,9 @@ async fn main() -> anyhow::Result<()> {
         platform::ResidentIpc::SignedSocket(path) => {
             ipc.claim_single_instance_signed(path, &daemon_version)
                 .await
+        }
+        platform::ResidentIpc::UserPipe(pipe) => {
+            ipc.claim_single_instance_pipe(pipe, &daemon_version).await
         }
         platform::ResidentIpc::NamespacedWithToken => {
             ipc.claim_single_instance(&socket_name, &daemon_version)
@@ -558,6 +632,7 @@ async fn main() -> anyhow::Result<()> {
         async move {
             let served = match &resident_ipc {
                 platform::ResidentIpc::SignedSocket(path) => ipc.serve_signed(path).await,
+                platform::ResidentIpc::UserPipe(pipe) => ipc.serve_pipe(pipe).await,
                 platform::ResidentIpc::NamespacedWithToken => ipc.serve(&socket_name, token).await,
             };
             if let Err(e) = served {
@@ -992,49 +1067,77 @@ async fn run_unconfigured(
     use platform::PlatformAdapter as _;
     let version = daemon::daemon_version();
     tracing::info!("#1115: 照片库位置未配置——只开放配置方法，等窗口程序的首启向导");
-    let served = match platform::adapter().resident_ipc() {
-        platform::ResidentIpc::SignedSocket(path) => {
-            let prepared = daemon::ipc::check_socket_path(&path).and_then(|()| {
-                let dir = path.parent().unwrap_or(&path);
-                platform::adapter()
-                    .prepare_private_dir(dir)
-                    .map_err(|e| format!("IPC 目录 {} 不可用：{e}", dir.display()))
-            });
-            if let Err(msg) = prepared {
-                eprintln!("{msg}");
-                std::process::exit(1);
-            }
-            stand_down_unless_claimed(&daemon::ipc::PeerEndpoint::Signed(path.clone()), &version)
-                .await;
-            daemon::ipc::serve_unconfigured_signed(&path, version, location).await
-        }
-        platform::ResidentIpc::NamespacedWithToken => {
-            // 前任（另一个未配置实例）的令牌在平台目录里；没有就是第一个。
-            let platform_dir = location.platform_dir().to_path_buf();
-            if let Some(token_hex) = predecessor_token(&platform_dir) {
+    let served: std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>> =
+        match platform::adapter().resident_ipc() {
+            platform::ResidentIpc::SignedSocket(path) => {
+                let prepared = daemon::ipc::check_socket_path(&path).and_then(|()| {
+                    let dir = path.parent().unwrap_or(&path);
+                    platform::adapter()
+                        .prepare_private_dir(dir)
+                        .map_err(|e| format!("IPC 目录 {} 不可用：{e}", dir.display()))
+                });
+                if let Err(msg) = prepared {
+                    eprintln!("{msg}");
+                    std::process::exit(1);
+                }
                 stand_down_unless_claimed(
-                    &daemon::ipc::PeerEndpoint::Token {
-                        socket_name: daemon::ipc::UNCONFIGURED_SOCKET_NAME.to_string(),
-                        token_hex,
-                    },
+                    &daemon::ipc::PeerEndpoint::Signed(path.clone()),
                     &version,
                 )
                 .await;
+                Box::pin(async move {
+                    daemon::ipc::serve_unconfigured_signed(&path, version, location).await
+                })
             }
-            let token = match rand_token() {
-                Ok(t) => t,
-                Err(e) => {
-                    eprintln!("{e}");
-                    std::process::exit(1);
+            platform::ResidentIpc::UserPipe(pipe) => {
+                stand_down_unless_claimed(&daemon::ipc::PeerEndpoint::Pipe(pipe.clone()), &version)
+                    .await;
+                Box::pin(async move {
+                    daemon::ipc::serve_unconfigured_pipe(&pipe, version, location).await
+                })
+            }
+            platform::ResidentIpc::NamespacedWithToken => {
+                // 前任（另一个未配置实例）的令牌在平台目录里；没有就是第一个。
+                let platform_dir = location.platform_dir().to_path_buf();
+                if let Some(token_hex) = predecessor_token(&platform_dir) {
+                    stand_down_unless_claimed(
+                        &daemon::ipc::PeerEndpoint::Token {
+                            socket_name: daemon::ipc::UNCONFIGURED_SOCKET_NAME.to_string(),
+                            token_hex,
+                        },
+                        &version,
+                    )
+                    .await;
                 }
-            };
-            daemon::ipc::serve_unconfigured_token(&platform_dir, token, version, location).await
+                let token = match rand_token() {
+                    Ok(t) => t,
+                    Err(e) => {
+                        eprintln!("{e}");
+                        std::process::exit(1);
+                    }
+                };
+                Box::pin(async move {
+                    daemon::ipc::serve_unconfigured_token(&platform_dir, token, version, location)
+                        .await
+                })
+            }
+        };
+    // #1047 / #1161：**未配置模式也要接停止信号**。这里以前是直接 await 到底，
+    // 于是在 SCM 眼里 `sc stop` 永远停在 STOP_PENDING——而服务模式首启必然处于
+    // 未配置状态，等于服务根本停不下来（真机实测）。未配置模式没有要收尾的状态：
+    // 让出端点、按信号退出即可。
+    tokio::select! {
+        r = served => {
+            if let Err(e) = r {
+                tracing::error!("IPC 服务退出：{e}");
+            }
+            std::process::exit(1);
         }
-    };
-    if let Err(e) = served {
-        tracing::error!("IPC 服务退出：{e}");
+        req = platform::stop_signal() => {
+            tracing::info!("#1047: 收到 {}，开始收尾退出", req.name());
+            req.finish();
+        }
     }
-    std::process::exit(1);
 }
 
 /// 单实例交接（newest wins）：在位者同版本或更新 ⇒ 本实例退出。

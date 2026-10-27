@@ -1,4 +1,5 @@
 <script>
+  import { invoke } from "@tauri-apps/api/core";
   import { Button } from "$lib/components/ui/button";
   import { createWizardFlow, stepBar } from "$lib/wizardFlow.js";
   import { t } from "$lib/i18n.js";
@@ -25,6 +26,13 @@
     onChange: (patch) => Object.assign(view, patch),
   });
   Object.assign(view, flow.snapshot());
+
+  // #1167：第 3 步「会申请什么」按常驻形态如实说——per-machine 安装是 Windows 系统服务，
+  // 老的每用户安装是计划任务登录项。形态没问到（读失败）就不显示这一行：宁可不说，不说错。
+  let hosting = $state(null);
+  invoke("resident_hosting")
+    .then((h) => (hosting = h))
+    .catch(() => {});
 </script>
 
 <div class="mt-4 flex flex-col gap-[22px] rounded-xl border border-border bg-paper px-8 py-7">
@@ -86,10 +94,14 @@
       <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_service_title")}</h2>
       <p class="m-0 text-[15px] leading-[1.7] text-ink-60">{t("ui.wizard_service_body")}</p>
       <div class="rounded-xl border border-border">
-        <div class="flex gap-3 border-b border-divider px-[18px] py-[13px]">
-          <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">{t("ui.wizard_asks_label")}</span>
-          <span class="text-[14px] leading-[1.5] text-ink-60">{t("ui.wizard_asks_win")}</span>
-        </div>
+        {#if hosting}
+          <div class="flex gap-3 border-b border-divider px-[18px] py-[13px]">
+            <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">{t("ui.wizard_asks_label")}</span>
+            <span class="text-[14px] leading-[1.5] text-ink-60">
+              {t(hosting === "windows_service" ? "ui.wizard_asks_win_service" : "ui.wizard_asks_win")}
+            </span>
+          </div>
+        {/if}
         <div class="flex gap-3 px-[18px] py-[13px]">
           <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">{t("ui.wizard_blocked_label")}</span>
           <span class="text-[14px] leading-[1.5] text-ink-60">{t("ui.wizard_blocked_win")}</span>

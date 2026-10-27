@@ -5,7 +5,8 @@
 //!
 //! #1115：常驻 daemon 怎么连由平台决定（`platform::ResidentIpc`）。macOS：固定路径的签名
 //! socket，连上后**先反向校验服务端是签名 daemon**，不是就断开、什么都不发；没有令牌。
-//! 其余平台：令牌文件。连测试沙盒（令牌）只在 debug 构建里存在（[`sandbox_candidates`]）。
+//! Windows（#1167）：命名管道，按 Windows 用户 SID 认人，连上后先核对管道是 P-Pass 后台服务
+//! 建的；同样没有令牌文件。连测试沙盒（令牌）只在 debug 构建里存在（[`sandbox_candidates`]）。
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -174,47 +175,15 @@ fn data_dir_of(raw: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Where to look for a daemon's ipc.token, in order.
-///
-/// T-042b: the platform data dir comes from `platform::adapter().data_dir()`
-/// (macOS: ~/Library/Application Support/P-Pass; Windows:
-/// %LOCALAPPDATA%\com.hawkeyexb.ppass.desktop — DESK-24 #173 moved it off roaming
-/// %APPDATA%, and the adapter keeps returning the old location until the
-/// move actually succeeds) instead of a hardcoded macOS-only path — the
-/// token discovery fix must work on Windows too.
-pub fn token_candidates() -> Vec<PathBuf> {
-    use platform::PlatformAdapter as _;
-    let adapter = platform::adapter();
-    // #1043：家目录由平台适配器回答，壳不读 HOME；读不到退回 `.`（同改前）。
-    let home = adapter.home_dir().unwrap_or_else(|| PathBuf::from("."));
-    token_candidates_from(&adapter.data_dir(), &home)
-}
-
-/// Testable core: same order, but the platform data dir and home are injected.
-///
-/// #1115：不再认 `PPF_DATA_DIR`——release 壳只连常驻 daemon，调用方的环境不许把它指向
-/// 别处（连测试沙盒见 [`sandbox_candidates`]，只在 debug 构建里）。
-pub fn token_candidates_from(data_dir: &Path, home: &Path) -> Vec<PathBuf> {
-    let mut v = Vec::new();
-    v.push(home.join("ppf-library/ipc.token"));
-    v.push(data_dir.join("ipc.token"));
-    // The wizard writes the user-picked library dir into config.toml's
-    // data_dir, and the daemon puts ipc.token *there* — the fixed
-    // candidates above miss it. Parse the live config so a daemon
-    // launched via the wizard is actually discoverable (T-042 实测:
-    // "点了没反应" = daemon 起来了但 token 找不到).
-    if let Some(val) = read_config_data_dir(data_dir) {
-        v.push(PathBuf::from(val).join("ipc.token"));
-    }
-    v
-}
-
 /// #1115：一个候选 daemon 端点。
 #[derive(Debug, Clone)]
 enum Endpoint {
     /// 签名 socket：连上后反向校验服务端是签名 daemon，不发令牌。
     Signed(PathBuf),
-    /// 命名空间端点 + 令牌（Windows / Linux 常驻 daemon；debug 构建下的测试沙盒）。
+    /// #1167：Windows 命名管道：连上后反向核对服务端，不发令牌。
+    Pipe(String),
+    /// 命名空间端点 + 令牌（只剩 debug 构建下的测试沙盒；release 里构造不出来）。
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
     Token { socket_name: String, token: String },
 }
 
@@ -240,6 +209,23 @@ impl Endpoint {
                     }
                 }
             }
+            Endpoint::Pipe(pipe) => {
+                let name = pipe
+                    .clone()
+                    .to_ns_name::<GenericNamespaced>()
+                    .map_err(|e| ui_err("ui.err_socket_name", &[("err", &e)]))?;
+                let conn = Stream::connect(name).map_err(|e| pipe_connect_error(&e))?;
+                match platform::verify_local_peer(&conn, &[platform::PeerRole::Daemon]) {
+                    platform::PeerCheck::Verified(_) => Ok(conn),
+                    platform::PeerCheck::Rejected(why) => Err(ui_err(
+                        "ui.err_daemon_not_ours",
+                        &[("path", pipe), ("reason", &why)],
+                    )),
+                    platform::PeerCheck::NotSupported(why) => {
+                        Err(ui_err("ui.err_connect", &[("err", &why)]))
+                    }
+                }
+            }
             Endpoint::Token { socket_name, .. } => {
                 let name = socket_name
                     .clone()
@@ -253,7 +239,7 @@ impl Endpoint {
     /// 线上第一段：令牌模式是令牌行，签名模式没有。
     fn preamble(&self) -> String {
         match self {
-            Endpoint::Signed(_) => String::new(),
+            Endpoint::Signed(_) | Endpoint::Pipe(_) => String::new(),
             Endpoint::Token { token, .. } => format!("{token}\n"),
         }
     }
@@ -261,12 +247,25 @@ impl Endpoint {
     fn label(&self) -> String {
         match self {
             Endpoint::Signed(path) => path.display().to_string(),
+            Endpoint::Pipe(pipe) => pipe.clone(),
             Endpoint::Token { socket_name, .. } => socket_name.clone(),
         }
     }
 }
 
-/// 令牌文件 → 端点（第一行 socket 名，第二行令牌）。
+/// #1167 / D3：管道连接失败的说法。被拒绝访问 = 管道 DACL 里没有你——这台电脑的 P-Pass
+/// 已经由另一个 Windows 账户使用（主人模型）。这句话必须和「服务没在跑」分开说，否则用户
+/// 会去反复重启一个其实好好的服务。
+fn pipe_connect_error(e: &std::io::Error) -> String {
+    if e.kind() == std::io::ErrorKind::PermissionDenied {
+        ui_err("ui.err_daemon_other_account", &[])
+    } else {
+        ui_err("ui.err_connect", &[("err", e)])
+    }
+}
+
+/// 令牌文件 → 端点（第一行 socket 名，第二行令牌）。只有 debug 构建的测试沙盒还用令牌。
+#[cfg(debug_assertions)]
 fn token_endpoint(path: &Path) -> Option<Endpoint> {
     let content = std::fs::read_to_string(path).ok()?;
     let mut lines = content.lines();
@@ -302,9 +301,10 @@ fn endpoint_candidates() -> Vec<Endpoint> {
     let mut v = sandbox_candidates();
     match platform::adapter().resident_ipc() {
         platform::ResidentIpc::SignedSocket(path) => v.push(Endpoint::Signed(path)),
-        platform::ResidentIpc::NamespacedWithToken => {
-            v.extend(token_candidates().iter().filter_map(|p| token_endpoint(p)));
-        }
+        platform::ResidentIpc::UserPipe(pipe) => v.push(Endpoint::Pipe(pipe)),
+        // 令牌模式只剩 headless 平台（没有窗口程序）与测试沙盒（上面 debug 那条）：
+        // 常驻 daemon 不再按令牌文件找（#1167）。
+        platform::ResidentIpc::NamespacedWithToken => {}
     }
     v
 }
@@ -465,40 +465,25 @@ impl DaemonHandle {
 mod tests {
     use super::*;
 
-    /// The wizard writes the user-picked library dir into config.toml's
-    /// data_dir, and the daemon puts ipc.token there. token_candidates
-    /// must include that path or a wizard-launched daemon is invisible
-    /// (T-042 实测: "点了没反应" = daemon 起来了但 token 找不到).
-    /// T-042b: rewritten against a TEMP dir — the old test wrote the
-    /// developer's REAL ~/Library/Application Support/P-Pass/config.toml
-    /// and a panic skipped the restore (never touch a real config).
+    /// #1167：管道被拒绝访问必须说成「被另一个 Windows 账户使用」，其余连接错误照旧。
+    /// 反证：把 PermissionDenied 也归成 ui.err_connect ⇒ 红。
     #[test]
-    fn candidates_include_config_data_dir() {
-        let tmp = tempfile::tempdir().unwrap();
-        let cfg_dir = tmp.path().join("cfg");
-        std::fs::create_dir_all(&cfg_dir).unwrap();
-        std::fs::write(
-            cfg_dir.join("config.toml"),
-            "data_dir = \"/tmp/ppf-wizard-lib\"\n",
-        )
-        .unwrap();
+    fn a_denied_pipe_means_another_account_owns_this_pc() {
+        let denied =
+            pipe_connect_error(&std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+        assert!(denied.contains("ui.err_daemon_other_account"), "{denied}");
+        let missing = pipe_connect_error(&std::io::Error::from(std::io::ErrorKind::NotFound));
+        assert!(missing.contains("ui.err_connect"), "{missing}");
+    }
 
-        let home = tmp.path().join("home");
-        let candidates = token_candidates_from(&cfg_dir, &home);
-        // 家目录由调用方注入（#1043：壳不读 HOME），dev 库候选跟着它走。
-        assert!(
-            candidates.contains(&home.join("ppf-library/ipc.token")),
-            "candidates must include the injected home's dev library: {candidates:?}"
-        );
-        assert!(
-            candidates.contains(&PathBuf::from("/tmp/ppf-wizard-lib/ipc.token")),
-            "candidates must include the config data_dir: {candidates:?}"
-        );
-        // The platform data dir itself is a candidate (bundled installs).
-        assert!(
-            candidates.contains(&cfg_dir.join("ipc.token")),
-            "candidates must include the platform data dir: {candidates:?}"
-        );
+    /// #1167：窗口程序不再按令牌文件找常驻 daemon——源码里不许再出现令牌候选。
+    /// 反证：把 `token_candidates` 加回来 ⇒ 红。
+    #[test]
+    fn the_shell_no_longer_looks_for_ipc_token_files() {
+        let src = include_str!("ipc.rs").replace("\r\n", "\n");
+        let body = &src[..src.find("#[cfg(test)]").expect("tests")];
+        assert!(!body.contains("fn token_candidates"), "令牌候选又回来了");
+        assert!(!body.contains("ppf-library/ipc.token"), "令牌候选又回来了");
     }
 
     /// #1115：连测试沙盒（令牌、不校验服务端签名）的路径只在 debug 构建里存在；release
