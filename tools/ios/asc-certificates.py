@@ -4,12 +4,8 @@
     ASC_KEY_ID=… ASC_ISSUER_ID=… ASC_KEY_P8="$(cat AuthKey.p8)" tools/ios/asc-certificates.py
 
 背景：#348 的 TestFlight 归档曾带 -allowProvisioningUpdates，全新 runner 每跑一次就新建一张
-Apple Development 证书，直到账号上限（run 40298231858）。默认只列清单。
-
-吊销（不可逆）只在设了 REVOKE_SERIALS（逗号分隔的序列号，由人对照清单逐张确认后给出）时进行，
-且**每一张**都必须同时满足：序列号在清单里、类型含 DEVELOPMENT、name 与 displayName 都正是
-「Created via API」。任何一张不满足就整体中止、一张都不吊销（全有或全无，防手滑删到个人证书 /
-Developer ID）。
+Apple Development 证书，直到账号上限（run 40298231858）。本脚本只列清单，**绝不吊销**
+（吊销不可逆，由人在 developer.apple.com 上挑着删）。
 
 每行：类型 / 名称 / displayName / platform / 生效时间（证书 DER 的 notBefore）/ 过期时间 / 序列号 / 疑似 CI。
 「疑似 CI」判据：DEVELOPMENT 类（含 IOS_DEVELOPMENT）且 name / displayName 是「Created via API」
@@ -56,39 +52,6 @@ def not_before_after(content_b64: str):
     return nb.strftime("%Y-%m-%dT%H:%M:%SZ"), na.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-CI_NAME = "Created via API"
-
-
-def revoke_plan(rows: list, serials: list) -> list:
-    """按序列号挑出要吊销的证书；任何一张不合规就 sys.exit，不返回部分结果。"""
-    by_serial = {(r["serial"] or "").upper(): r for r in rows}
-    plan, bad = [], []
-    for s in serials:
-        r = by_serial.get(s.upper())
-        if r is None:
-            bad.append(f"{s}: 清单里没有这张证书")
-        elif "DEVELOPMENT" not in (r["type"] or ""):
-            bad.append(f"{s}: 类型 {r['type']} 不是开发证书")
-        elif r["name"] != CI_NAME or r["displayName"] != CI_NAME:
-            bad.append(f"{s}: 名称 {r['name']!r} / {r['displayName']!r} 不是 {CI_NAME!r}")
-        else:
-            plan.append(r)
-    if bad:
-        sys.exit("asc-certificates: 吊销中止，一张都没删：\n  " + "\n  ".join(bad))
-    return plan
-
-
-def revoke(token: str, plan: list) -> None:
-    for r in plan:
-        req = urllib.request.Request(f"{_asc.API}/v1/certificates/{r['id']}", method="DELETE",
-                                     headers={"Authorization": f"Bearer {token}"})
-        try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                print(f"已吊销 {r['serial']}（{r['notBefore']}）HTTP {resp.status}")
-        except urllib.error.HTTPError as e:
-            sys.exit(f"asc-certificates: 吊销 {r['serial']} 失败 HTTP {e.code}: {e.read().decode()[:300]}")
-
-
 def main() -> None:
     key_id, issuer = os.environ.get("ASC_KEY_ID", ""), os.environ.get("ASC_ISSUER_ID", "")
     p8 = os.environ.get("ASC_KEY_P8", "")
@@ -115,12 +78,6 @@ def main() -> None:
         url = (res.get("links") or {}).get("next")
 
     rows.sort(key=lambda r: (r["type"], r["notBefore"]))
-    serials = [x.strip() for x in os.environ.get("REVOKE_SERIALS", "").split(",") if x.strip()]
-    if serials:
-        plan = revoke_plan(rows, serials)
-        print(f"按确认清单吊销 {len(plan)} 张（名称均为 {CI_NAME!r} 的开发证书）")
-        revoke(token, plan)
-        return
     print(f"证书共 {len(rows)} 张（只读，未吊销任何证书）")
     print("| 类型 | name | displayName | platform | 生效(notBefore) | 过期 | 序列号 | 疑似 CI |")
     print("|---|---|---|---|---|---|---|---|")

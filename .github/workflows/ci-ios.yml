@@ -48,15 +48,10 @@ on:
         required: false
         default: ""
       list_certificates:
-        description: "勾上 = 列出团队全部签名证书（App Store Connect API；不填 revoke_serials 则只读），测试与上传都不跑"
+        description: "勾上 = 只读列出团队全部签名证书（App Store Connect API，不吊销），测试与上传都不跑"
         required: false
         type: boolean
         default: false
-      revoke_serials:
-        description: "仅与 list_certificates 同用：逗号分隔的序列号，吊销这些「Created via API」开发证书（不可逆；任何一张不合规则整体中止）"
-        required: false
-        type: string
-        default: ""
 
 permissions:
   contents: read
@@ -252,7 +247,7 @@ jobs:
             echo "- build：${{ steps.up.outputs.build }}（short ${{ steps.up.outputs.short }}）"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  # 列出团队签名证书（GET /v1/certificates）；只有 dispatch 给了人工确认的 revoke_serials 才吊销那几张「Created via API」开发证书。
+  # 只读列出团队签名证书（GET /v1/certificates），给人挑着吊销 CI 以前新建的开发证书；本 job 绝不吊销。
   # 只在 dispatch 勾了 list_certificates 时跑；p8 只经步骤 env 进进程内存，不落盘、不回显。
   certificates:
     name: ios list signing certificates (manual, read-only)
@@ -265,7 +260,6 @@ jobs:
           sparse-checkout: |
             tools/ios/asc-builds.py
             tools/ios/asc-certificates.py
-            tools/ios/test-asc-certificates.py
           sparse-checkout-cone-mode: false
       - name: List certificates
         env:
@@ -278,19 +272,6 @@ jobs:
           "$RUNNER_TEMP/asc-venv/bin/pip" install --quiet cryptography
           "$RUNNER_TEMP/asc-venv/bin/python" tools/ios/asc-certificates.py | tee "$RUNNER_TEMP/certs.md"
           cat "$RUNNER_TEMP/certs.md" >> "$GITHUB_STEP_SUMMARY"
-      # 吊销判据自测通过后才吊销；吊销后再列一次清单留证。
-      - name: Revoke confirmed CI certificates
-        if: ${{ inputs.revoke_serials != '' }}
-        env:
-          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
-          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
-          ASC_KEY_P8: ${{ secrets.ASC_KEY_P8 }}
-          REVOKE_SERIALS: ${{ inputs.revoke_serials }}
-        run: |
-          set -euo pipefail
-          "$RUNNER_TEMP/asc-venv/bin/python" tools/ios/test-asc-certificates.py
-          "$RUNNER_TEMP/asc-venv/bin/python" tools/ios/asc-certificates.py
-          REVOKE_SERIALS='' "$RUNNER_TEMP/asc-venv/bin/python" tools/ios/asc-certificates.py | tee -a "$GITHUB_STEP_SUMMARY"
 
   # #1187：分支保护只要求这一条。`if: always()` 必不可少，见 ci-android.yml 同名 job。
   # 手动上传 TestFlight 那条路径不在这里汇总（它不是合入门）。
