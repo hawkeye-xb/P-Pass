@@ -285,6 +285,10 @@ async fn run() -> anyhow::Result<()> {
     // config.toml 里的 data_dir 有正本时只给人看。正本里还没有 ⇒ 未配置状态。
     let library_location =
         std::sync::Arc::new(daemon::library_location::LibraryLocation::for_platform());
+    // #1246：窗口程序读 config.toml 的授权会被安装器升级冲掉，启动时补授（未配置 / 沙盒不碰）。
+    if sandbox.is_none() {
+        library_location.reshare_config();
+    }
     let _ = &platform_dir;
     let (data_dir, explicitly_configured) = match &sandbox {
         Some(sb) => (sb.root().to_path_buf(), false),
