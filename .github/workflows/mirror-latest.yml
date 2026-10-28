@@ -19,9 +19,10 @@
 # - workflow_run：Release **结束**后（不论成败）。workflow_run 要等整条 Release 跑完
 #   （含最慢的 Windows lane，约 30 分钟）才触发——发布后到镜像更新之间
 #   这段空窗是预期的，不是没触发。
-#   不看 conclusion：镜像只要 dmg + apk，Windows / 正文补齐这类与镜像无关
-#   的 job 红了不该连带镜像不更新（v0.5.0-test.1/2/3 就是 Windows 红、
-#   dmg/apk 都在）。真缺资产由下面的「两个都要有」检查报红。
+#   不看 conclusion：正文补齐这类与镜像无关的 job 红了不该连带镜像不更新
+#   （v0.5.0-test.1/2/3 就是 Windows 红、dmg/apk 都在）。真缺资产由下面的缺件检查报红。
+#   #788 起稳定版的 Windows 安装包与 manifest-windows.json 也是镜像对象：缺了就红，
+#   dmg / apk 也一起不镜像（宁可整条红，不让 R2 上的 Windows 清单停在旧版）。
 #   仍是 draft 的（如 -beta.N / 正式版）跳过。
 #   正式版 tag 在 Release 跑完时 release 还没建（人工发布在那之后），
 #   同样跳过、等 release published 兜底——不跳过就是 #21~#29 那种必红。
