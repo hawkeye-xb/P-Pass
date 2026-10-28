@@ -6,7 +6,8 @@
   create-draft（版本门禁、说明缺失告警、建草稿）→ upload-android（组装清单 → 签名 → 校验 → 上传、
   test 自动发布、test-channel 指针）→ upload-macos → finalize-manifest（桌面收口：冻结件 / 动态清单、
   分端清单、签名、上传）→ upload-windows → finalize-manifest-windows（#788②：test tag 出 Windows
-  分端清单并写进 test-channel；正式 tag 跳过）→ mirror-latest 的镜像判定。
+  分端清单并写进 test-channel；#788：正式 tag 同样出 manifest-windows.json，版本号不变时复用 Latest 的
+  Windows 产物）→ mirror-latest 的镜像判定。
   #852：test tag 按端发布——同一个场景里连发几个 test tag（只改 Android / 只改桌面 / 改共享代码 /
   只改文档），断言没改动的一端零构建、它在 test-channel 里的清单逐字节不动。
 
@@ -45,6 +46,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from gha_sim import Runner, SimError, gh_calls, load_workflow, write_gh_stub  # noqa: E402
+from pe_version import file_version, make_pe  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 HERE = Path(__file__).resolve().parent
@@ -60,13 +62,13 @@ CUR_VERSIONS = {"desktop": "9.8.1", "android": "9.8.2", "androidVersionCode": 2}
 BAD_VERSIONS = {"desktop": "9.8.1", "android": "9.8.3", "androidVersionCode": 3}  # android 说明不合规（含网址）
 STALE_TAURI_CONF_VERSION = "9.7.0"  # #809：apps/desktop/src-tauri/tauri.conf.json 里那个不随发布改的号
 
-# 构建 job 不在 dry-run 里跑：结果按 tag push 的真实情形给。Windows 只跟 test tag（#788②），
-# 由 Scenario.build_result 按 tag 判定；这里的值只是正式 tag 的情形。
+# 构建 job 不在 dry-run 里跑：plan-builds 跑过之后，跑不跑由 Scenario.build_result 按该 job 自己的 if:
+# 求值；这里的值只在 plan-builds 之前（没有判定可看）兜底。
 BUILD_RESULTS = {"android": "success", "macos-arm64": "success", "windows-x64": "skipped", "ios": "skipped"}
 WINDOWS_INSTALLER = "P-Pass_{v}_x64-setup.exe"
 TEST_CHANNEL_WINDOWS_MANIFEST = f"https://github.com/{REPO}/releases/download/test-channel/manifest-windows.json"
 TEST_CHANNEL_MACOS_MANIFEST = f"https://github.com/{REPO}/releases/download/test-channel/manifest-macos.json"  # #852
-RELEASE_JOBS = ["plan-builds", "android-reuse", "macos-reuse", "create-draft", "upload-android", "upload-macos", "upload-windows", "finalize-manifest", "finalize-manifest-windows",
+RELEASE_JOBS = ["plan-builds", "android-reuse", "macos-reuse", "windows-reuse", "create-draft", "upload-android", "upload-macos", "upload-windows", "finalize-manifest", "finalize-manifest-windows",
                 "finalize-notes"]
 
 # #773：假 CHANGELOG——正式场景只该取 [2099.1.1] 那一节（不带 Unreleased、不带上一版）。
@@ -257,10 +259,15 @@ def make_artifacts(d: Path, wf: dict, android_ver: str, desktop_ver: str) -> Pat
     w.mkdir()
     for name in ("daemon.exe", "testclient.exe", "BUILD_INFO-windows-x64"):
         (w / name).write_bytes(fake_bytes(f"win {name} {desktop_ver}", 1024))
-    (w / "SHA256SUMS-windows-x64").write_text("".join(f"{sha256(p)}  {p.name}\n" for p in sorted(w.iterdir())))
     wi = a / "windows-x64-installer"
     wi.mkdir()
-    (wi / WINDOWS_INSTALLER.format(v=desktop_ver)).write_bytes(fake_bytes(f"nsis {desktop_ver}", 4096))
+    # #788：复用时要从安装包的 PE 版本资源读 FileVersion——假安装包得是带版本资源的最小 PE。
+    exe = wi / WINDOWS_INSTALLER.format(v=desktop_ver)
+    exe.write_bytes(make_pe(desktop_ver, fake_bytes(f"nsis {desktop_ver}", 4096)))
+    # 与 windows-x64 job 的「SHA256 + notes」同形：daemon.exe / testclient.exe 两行，再追加安装包一行
+    # （BUILD_INFO 不在里面）。#788 的复用逐个核对这三行。
+    (w / "SHA256SUMS-windows-x64").write_text(
+        "".join(f"{sha256(p)}  {p.name}\n" for p in (w / "daemon.exe", w / "testclient.exe", exe)))
     return a
 
 
@@ -650,9 +657,16 @@ def formal(ck: Check, base: Path, key: str, pub: Path, rel: dict, mirror: dict):
     check_macos_assets(ck, sc, FORMAL_TAG, dv)
     build_versions(ck, sc, rel, FORMAL_TAG, dv)
     apple_cert_gate(ck, sc, rel, FORMAL_TAG)
-    job_ok(ck, jobs, "upload-windows", "skipped")
-    job_ok(ck, jobs, "finalize-manifest-windows", "skipped")
-    ck(not sc.asset(FORMAL_TAG, "manifest-windows.json").exists(), "#788② 正式 tag 不出 manifest-windows.json（Windows 未正式发布）")
+    # #788（2026-10-26 验收人：四端都正式发布）：没有 Latest ⇒ Windows 也构建，正式 tag 出 manifest-windows.json。
+    ck(jobs["plan-builds"].outputs.get("windows") == "build", "#788 正式 tag（没有 Latest）：plan-builds 判 Windows 构建",
+       json.dumps(jobs["plan-builds"].outputs))
+    job_ok(ck, jobs, "windows-reuse", "skipped")
+    job_ok(ck, jobs, "upload-windows")
+    job_ok(ck, jobs, "finalize-manifest-windows")
+    step_is(ck, jobs, "finalize-manifest-windows", "Verify published Windows manifest (#1121)", "success")
+    step_is(ck, jobs, "finalize-manifest-windows", "Point test-channel at the Windows manifest (#788②)", "skipped")
+    check_manifest(ck, sc, pub, FORMAL_TAG, "manifest-windows.json", version=dv,
+                   targets={"windows-x86_64": WINDOWS_INSTALLER.format(v=dv)}, notes="", notes_i18n={})
     step_is(ck, jobs, "create-draft", "Version bump gate (UPD-13)", "success")
     s = step_is(ck, jobs, "create-draft", "Release notes presence (#741, warn only)", "success")
     if s:
@@ -967,25 +981,28 @@ REUSE_TAG = "v2099.1.3"
 
 
 def reuse(ck: Check, base: Path, key: str, pub: Path, rel: dict, name: str, cur: dict, notes: dict, want: dict):
-    """先发布并 publish 上一个正式版（两端构建），再发本 tag：want = {"android": build|reuse, "macos": ...}；
-    两端都 reuse ⇒ plan-builds 必须红、不建草稿。"""
+    """先发布并 publish 上一个正式版（各端构建），再发本 tag：want = {"android": build|reuse, "macos": ..., "windows": ...}；
+    各端都 reuse ⇒ plan-builds 必须红、不建草稿。"""
     pa, pd = PREV_VERSIONS["android"], PREV_VERSIONS["desktop"]
     ca, cd = cur["android"], cur["desktop"]
     print(f"\n== #838 {name}：上一版 android {pa} / macOS {pd} → 本版 android {ca} / macOS {cd}（期望 {want}）")
     origin, sha = make_origin(base, f"reuse-{name}", [(PREV_VERSIONS, {}, [PREV_TAG]), (cur, notes, [REUSE_TAG])])
     sc = Scenario(base, f"reuse-{name}", origin, sha, key, pa, pd, rel)
     first = sc.release(rel, PREV_TAG)
-    ck(first["plan-builds"].outputs.get("android") == "build" and first["plan-builds"].outputs.get("macos") == "build",
-       f"{name}：没有 Latest 时两端都构建", json.dumps(first["plan-builds"].outputs))
+    ck(all(first["plan-builds"].outputs.get(e) == "build" for e in ("android", "macos", "windows")),
+       f"{name}：没有 Latest 时三端都构建", json.dumps(first["plan-builds"].outputs))
+    ck(sc.asset(PREV_TAG, "manifest-windows.json").exists(), f"{name}：上一个正式版带 manifest-windows.json（#788）")
     sc.publish(PREV_TAG)
     sc.jobs = {}
     sc.rebuild_artifacts(rel, ca, cd)
-    for end, art in (("android", "android"), ("macos", "macos-arm64")):
+    for end, arts in (("android", ["android"]), ("macos", ["macos-arm64"]),
+                      ("windows", ["windows-x64", "windows-x64-installer"])):
         if want[end] == "reuse":
-            shutil.rmtree(sc.artifacts / art)  # 构建 job 不跑，artifact 只能来自复用 job
+            for art in arts:
+                shutil.rmtree(sc.artifacts / art)  # 构建 job 不跑，artifact 只能来自复用 job
     jobs = sc.release(rel, REUSE_TAG)
     plan = jobs["plan-builds"]
-    if want["android"] == want["macos"] == "reuse":
+    if want["android"] == want["macos"] == want["windows"] == "reuse":
         job_ok(ck, jobs, "plan-builds", "failure")
         ck("::error::各端版本号都与 Latest" in plan.log, f"{name}：各端都没涨号 ⇒ 明确报错", plan.log)
         job_ok(ck, jobs, "create-draft", "skipped")
@@ -993,27 +1010,38 @@ def reuse(ck: Check, base: Path, key: str, pub: Path, rel: dict, name: str, cur:
         SUMMARY[f"reuse-{name}"] = sc.summary()
         return
     job_ok(ck, jobs, "plan-builds")
-    for end in ("android", "macos"):
+    for end in ("android", "macos", "windows"):
         ck(plan.outputs.get(end) == want[end], f"{name}：plan-builds 判 {end} = {want[end]}", json.dumps(plan.outputs))
         job_ok(ck, jobs, f"{end}-reuse", "success" if want[end] == "reuse" else "skipped")
-    for j in ("create-draft", "upload-android", "upload-macos", "finalize-manifest", "finalize-notes"):
+    ck(sc.build_result("windows-x64") == ("success" if want["windows"] == "build" else "skipped"),
+       f"{name}：windows-x64 构建 job 按 if: 求值 = {want['windows']}（与 windows-reuse 互斥）")
+    for j in ("create-draft", "upload-android", "upload-macos", "finalize-manifest", "upload-windows",
+              "finalize-manifest-windows", "finalize-notes"):
         job_ok(ck, jobs, j)
     check_macos_assets(ck, sc, REUSE_TAG, cd)
+    win_exe = WINDOWS_INSTALLER.format(v=cd)
     pairs = {"android": [f"P-Pass_{ca}_android.apk"],
-             "macos": [f"P-Pass_{cd}_macos-arm64.dmg", f"P-Pass_{cd}_macos-arm64.app.tar.gz", MACOS_SUMS]}
+             "macos": [f"P-Pass_{cd}_macos-arm64.dmg", f"P-Pass_{cd}_macos-arm64.app.tar.gz", MACOS_SUMS],
+             "windows": [win_exe, "daemon.exe", "testclient.exe", "SHA256SUMS-windows-x64", "BUILD_INFO-windows-x64"]}
     for end, files in pairs.items():
         if want[end] != "reuse":
             continue
         for f in files:
             a, b = sc.asset(PREV_TAG, f), sc.asset(REUSE_TAG, f)
             ck(a.exists() and b.exists() and a.read_bytes() == b.read_bytes(), f"{name}：{f} 与 {PREV_TAG} 的那份逐字节相同")
-    mver = {"android": ("manifest-android.json", ca), "macos": ("manifest-macos.json", cd)}
+    mver = {"android": ("manifest-android.json", ca), "macos": ("manifest-macos.json", cd),
+            "windows": ("manifest-windows.json", cd)}
     for end, (mf, v) in mver.items():
         p = sc.asset(REUSE_TAG, mf)
         m = json.loads(p.read_text()) if p.exists() else {}
         ck(m.get("version") == v, f"{name}：{mf} 的 version = {v}", json.dumps(m)[:300])
+    # #788：清单指向本 tag 上传的安装包，签名（复用时沿用旧签名）可用正式公钥验过；安装包 PE 自报本次版本号。
+    check_manifest(ck, sc, pub, REUSE_TAG, "manifest-windows.json", version=cd,
+                   targets={"windows-x86_64": win_exe}, notes="", notes_i18n={})
+    exe = sc.asset(REUSE_TAG, win_exe)
+    ck(exe.exists() and file_version(exe.read_bytes()) == cd, f"{name}：{win_exe} 的 PE FileVersion = {cd}")
     body = (sc.meta(REUSE_TAG) or {}).get("body", "")
-    for end, label, v in (("android", "Android", ca), ("macos", "macOS", cd)):
+    for end, label, v in (("android", "Android", ca), ("macos", "macOS", cd), ("windows", "Windows", cd)):
         line = f"**{label} {v} 产物复用自 {PREV_TAG}**"
         if want[end] == "reuse":
             ck(line in body, f"{name}：正文写明 {label} 产物复用自 {PREV_TAG}", body[:800])
@@ -1043,13 +1071,14 @@ def main() -> int:
         bad_notes(ck, base, key, pub, rel)
         verify_gate(ck, base, key, rel)
         test_per_end(ck, base, key, test_pub, rel)
-        # #838：只涨 android ⇒ macOS 复用；只涨桌面 ⇒ android 复用；都不涨 ⇒ 红。
+        # #838：只涨 android ⇒ 桌面两端（macOS / Windows，#788）复用；只涨桌面 ⇒ android 复用；都不涨 ⇒ 红。
         reuse(ck, base, key, pub, rel, "android-only",
               {**PREV_VERSIONS, "android": CUR_VERSIONS["android"], "androidVersionCode": 2}, good_notes(),
-              {"android": "build", "macos": "reuse"})
+              {"android": "build", "macos": "reuse", "windows": "reuse"})
         reuse(ck, base, key, pub, rel, "desktop-only", {**PREV_VERSIONS, "desktop": CUR_VERSIONS["desktop"]}, {},
-              {"android": "reuse", "macos": "build"})
-        reuse(ck, base, key, pub, rel, "none", dict(PREV_VERSIONS), {}, {"android": "reuse", "macos": "reuse"})
+              {"android": "reuse", "macos": "build", "windows": "build"})
+        reuse(ck, base, key, pub, rel, "none", dict(PREV_VERSIONS), {},
+              {"android": "reuse", "macos": "reuse", "windows": "reuse"})
         if args.summary:
             args.summary.write_text(json.dumps(SUMMARY, ensure_ascii=False, indent=1, sort_keys=True) + "\n")
     except (SimError, subprocess.CalledProcessError) as e:

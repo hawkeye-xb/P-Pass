@@ -9,7 +9,11 @@
 #   正式 tag：
 #   - 没有 Latest、Latest 就是本 tag（补跑）、Latest 缺该端清单或安装包：构建。
 #   - 该端版本号 == Latest 该端清单的 version：复用。
-#   - 两端都判「复用」且 iOS 也不构建：报错退出——没有新版本，这次正式 tag 没有可发布的东西。
+#   - Windows（#788，2026-10-26 验收人：四端都正式发布，Windows 先以未签名形式发布）与 macOS 同一套：
+#     版本号 = release/versions.json.desktop（两个桌面端共用；tools/release-version.sh desktop →
+#     PPF_BUILD_VERSION → tauri --config 的 version，安装包名 P-Pass_<号>_x64-setup.exe）。
+#     比的是 Latest 的 manifest-windows.json；Latest 还没有 Windows（第一次正式发 Windows）⇒ 构建。
+#   - Android / macOS / Windows 都判「复用」且 iOS 也不构建：报错退出——没有新版本，这次正式 tag 没有可发布的东西。
 #   - iOS（#348）：TestFlight 没有可复用的安装包，也不能重复上传同一构建号 ⇒ 只有 build / skip。
 #     判据 = release/versions.json 的 ios 号与「上一个正式发布（Latest）那个 tag 里的 versions.json.ios」比：
 #     相同 ⇒ skip；不同 / 上一版里没有 ios / 没有 Latest / Latest 就是本 tag ⇒ build。
@@ -39,7 +43,7 @@
 #     iOS（sync-i18n）三方各自打进产物，按需裁剪另行设计，在那之前不拆。
 #   - 没改动的一端判 skip：不构建、也不复用（不复制任何产物），test-channel 里它的清单不动。
 #   - Windows（2026-10-12 验收人：只改别的端时不陪跑 Windows）按同一规则判，基线是
-#     test-channel/manifest-windows.json。正式 tag 不构建 Windows（windows=skip），手动 dispatch 不看这里。
+#     test-channel/manifest-windows.json。手动 dispatch 点名 Windows 时照建，不看这里。
 #   - iOS（#348）同一套规则，基线是 test-channel/manifest-ios.json（上传 TestFlight 成功后由 finalize-ios 写入，
 #     只有 version）。TestFlight 不能重复上传同一个构建号，所以 iOS 只有 build / skip，没有 reuse。
 #   - 所有端都是 skip：报错退出——这次 test tag 没有可发布的东西。
@@ -47,8 +51,8 @@
 # 输入：TAG；当前目录 = 检出的仓库（读 release/versions.json；test tag 要完整历史与 tag）；
 #   gh 已登录（GH_TOKEN）。
 # 输出（追加到 $GITHUB_OUTPUT，未设置时打印到 stdout）：
-#   android=build|reuse|skip  macos=build|reuse|skip  windows=build|skip  ios=build|skip  reuse_from=<Latest tag 或空>
-#   android_version=<号>  macos_version=<号>  ios_version=<号，versions.json 里没有 ios 时为空>
+#   android=build|reuse|skip  macos=build|reuse|skip  windows=build|reuse|skip  ios=build|skip  reuse_from=<Latest tag 或空>
+#   android_version=<号>  macos_version=<号>  windows_version=<号，= macos_version>  ios_version=<号，versions.json 里没有 ios 时为空>
 #   （reuse 只出现在正式 tag，skip 只出现在 test tag。）
 # 被复用的一端若在 Latest 之后改过会影响产物的构建脚本，打 ::warning::（不阻断：
 # 改动要等该端下次涨号才会生效）。
@@ -64,6 +68,8 @@ MACOS_VER=$(jq -r .desktop release/versions.json)
 IOS_VER=$(jq -r '.ios // empty' release/versions.json)
 emit android_version "$ANDROID_VER"
 emit macos_version "$MACOS_VER"
+# #788：两个桌面端共用 versions.json.desktop（Windows 构建 job 同样取 tools/release-version.sh desktop）。
+emit windows_version "$MACOS_VER"
 emit ios_version "$IOS_VER"
 
 if [[ "$TAG" == *-test.* ]]; then
@@ -157,9 +163,6 @@ if [[ "$TAG" == *-test.* ]]; then
   exit 0
 fi
 
-# 正式 tag 不构建 Windows（是否正式发布 Windows 由验收人决定，#788）。
-emit windows skip
-
 # iOS（#348）：只有 build / skip。基线 = Latest 那个 tag 里的 release/versions.json.ios。
 # 拿不到基线（没有 Latest / 就是本 tag / tag 不在仓库 / 那一版没有 ios 线）一律构建；本次没有 ios 号则不构建。
 decide_ios() {
@@ -180,7 +183,7 @@ decide_ios() {
 LATEST=$(gh release view --json tagName -q .tagName 2>/dev/null || true)
 if [ -z "$LATEST" ] || [ "$LATEST" = "$TAG" ]; then
   echo "没有可复用的 Latest（Latest=${LATEST:-无}）：各端都构建"
-  emit android build; emit macos build; emit ios "$(decide_ios "$LATEST")"; emit reuse_from ""
+  emit android build; emit macos build; emit windows build; emit ios "$(decide_ios "$LATEST")"; emit reuse_from ""
   exit 0
 fi
 ASSETS=$(gh release view "$LATEST" --json assets -q '.assets[].name' 2>/dev/null || true)
@@ -210,10 +213,13 @@ decide() {
 ANDROID=$(decide android "$ANDROID_VER" manifest-android.json "P-Pass_${ANDROID_VER}_android.apk")
 MACOS=$(decide macos "$MACOS_VER" manifest-macos.json \
   "P-Pass_${MACOS_VER}_macos-arm64.dmg" "P-Pass_${MACOS_VER}_macos-arm64.app.tar.gz" "SHA256SUMS-macos-arm64")
+# #788：资产清单 = reuse-artifact.sh windows 取回的全部文件（缺一个就构建，不让复用 job 半路红）。
+WINDOWS=$(decide windows "$MACOS_VER" manifest-windows.json \
+  "P-Pass_${MACOS_VER}_x64-setup.exe" daemon.exe testclient.exe SHA256SUMS-windows-x64 BUILD_INFO-windows-x64)
 
 IOS=$(decide_ios "$LATEST")
 
-if [ "$ANDROID" = reuse ] && [ "$MACOS" = reuse ] && [ "$IOS" = skip ]; then
+if [ "$ANDROID" = reuse ] && [ "$MACOS" = reuse ] && [ "$WINDOWS" = reuse ] && [ "$IOS" = skip ]; then
   echo "::error::各端版本号都与 Latest（${LATEST}）相同——这次正式 tag 没有可发布的新版本。要发布哪一端，先在 release/versions.json 里涨它的号。"
   exit 1
 fi
@@ -234,5 +240,6 @@ warn_tooling() {
 
 emit android "$ANDROID"
 emit macos "$MACOS"
+emit windows "$WINDOWS"
 emit ios "$IOS"
 emit reuse_from "$LATEST"

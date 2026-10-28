@@ -208,8 +208,8 @@ export function readNotes(dir, platform, version) {
   return out;
 }
 
-/** versions.json 的键 → 该版本号对应的说明端。desktop 号只对应 macOS（正式 tag 不发 Windows）。 */
-export const VERSION_KEY_PLATFORMS = Object.freeze({ android: ["android"], desktop: ["macos"] });
+/** versions.json 的键 → 该版本号对应的说明端。desktop 号两个桌面端共用（#788：正式 tag 也发 Windows）。 */
+export const VERSION_KEY_PLATFORMS = Object.freeze({ android: ["android"], desktop: ["macos", "windows"] });
 
 /**
  * 正式 tag：版本号涨了却没有说明文件的端。

@@ -4,14 +4,20 @@
 #
 # 复用必须证明两件事，任一不成立就红（绝不发一份说不清来历的产物）：
 #   1. 字节就是 Latest 记录的那份：android 对 manifest-android.json 的 sha256；
-#      macOS 对 SHA256SUMS-macos-arm64（dmg 与 .app.tar.gz）。
+#      macOS 对 SHA256SUMS-macos-arm64（dmg 与 .app.tar.gz）；
+#      windows 对 SHA256SUMS-windows-x64（安装包、daemon.exe、testclient.exe），安装包再对 manifest-windows.json 的 sha256。
 #   2. 产物自己报的版本号 = 本次该端的版本号（#809 的教训：清单写的号不等于包里的号）：
 #      android 读 APK 的 versionName（aapt2 dump badging）；macOS 读 .app.tar.gz 里
-#      Info.plist 的 CFBundleShortVersionString。
+#      Info.plist 的 CFBundleShortVersionString；windows 读安装包 PE 版本资源里的 FileVersion 字符串
+#      （tools/release/pe_version.py，与客户端防降级判据 crates/platform/src/pe_version.rs 同一项）。
 #
-# 用法：tools/release/reuse-artifact.sh <android|macos> <from-tag> <版本号> <输出目录>
+# 用法：tools/release/reuse-artifact.sh <android|macos|windows> <from-tag> <版本号> <输出目录>
 #   android ⇒ <输出目录>/P-Pass_<号>_android.apk
 #   macos   ⇒ <输出目录>/{P-Pass_<号>_macos-arm64.dmg, P-Pass_<号>_macos-arm64.app.tar.gz, SHA256SUMS-macos-arm64}
+#   windows ⇒ 与 windows-x64 构建 job 的两个 artifact 同布局：
+#             <输出目录>/windows-x64/{daemon.exe, testclient.exe, SHA256SUMS-windows-x64, BUILD_INFO-windows-x64}
+#             <输出目录>/windows-x64-installer/P-Pass_<号>_x64-setup.exe（+ .sig）
+#             BUILD_INFO 不在 SHA256SUMS 里（构建时间与提交号的文本），原样带回、不做字节校验。
 # #1151：复用**不重新签名**——把 Latest 清单里这份字节的原更新签名取回来，用本通道公钥验过后放在
 #   产物旁（<产物>.sig），下游签名步骤见到现成的 .sig 只验不签（tools/release/carry-signature.sh）。
 #   需要环境变量 RELEASE_TAG（决定用哪个通道的公钥）。
@@ -65,6 +71,30 @@ PY
     gh release download "$FROM" -p manifest-macos.json -O "$CLEAN/manifest-macos.json"
     "$HERE/carry-signature.sh" "$RELEASE_TAG" "$UPD" "$UPD.sig" "$CLEAN/manifest-macos.json"
     echo "macOS：复用 ${FROM} 的 ${DMG} / ${UPD}（sha256 与 ${SUMS} 一致，Info.plist ${NAME}）"
+    ;;
+  windows)
+    EXE="P-Pass_${VER}_x64-setup.exe"; SUMS="SHA256SUMS-windows-x64"
+    mkdir -p windows-x64 windows-x64-installer
+    for f in daemon.exe testclient.exe "$SUMS" BUILD_INFO-windows-x64; do
+      gh release download "$FROM" -p "$f" -O "windows-x64/$f"
+    done
+    gh release download "$FROM" -p "$EXE" -O "windows-x64-installer/$EXE"
+    for f in "windows-x64-installer/$EXE" windows-x64/daemon.exe windows-x64/testclient.exe; do
+      n=$(basename "$f")
+      WANT_SHA=$(awk -v n="$n" '$2 == n || $2 == "*"n {print $1}' "windows-x64/$SUMS" | head -1)
+      [ -n "$WANT_SHA" ] || { echo "::error::${FROM} 的 ${SUMS} 里没有 ${n}"; exit 1; }
+      GOT_SHA=$(sha_of "$f")
+      [ "$GOT_SHA" = "$WANT_SHA" ] || { echo "::error::${n} 的 sha256 与 ${FROM} 的 ${SUMS} 不符（记录 ${WANT_SHA}，实际 ${GOT_SHA}）"; exit 1; }
+    done
+    gh release download "$FROM" -p manifest-windows.json -O "$CLEAN/manifest-windows.json"
+    WANT_SHA=$(jq -r '.platforms["windows-x86_64"].sha256 // empty' "$CLEAN/manifest-windows.json")
+    [ -n "$WANT_SHA" ] || { echo "::error::${FROM} 的 manifest-windows.json 没有 windows-x86_64 的 sha256"; exit 1; }
+    GOT_SHA=$(sha_of "windows-x64-installer/$EXE")
+    [ "$GOT_SHA" = "$WANT_SHA" ] || { echo "::error::${EXE} 的 sha256 与 ${FROM} 的 manifest-windows.json 不符（清单 ${WANT_SHA}，实际 ${GOT_SHA}）"; exit 1; }
+    NAME=$(python3 -I "$HERE/pe_version.py" "windows-x64-installer/$EXE" || true)
+    [ "$NAME" = "$VER" ] || { echo "::error::${EXE} 的 PE 版本资源 FileVersion=${NAME:-读不到}，本次 Windows 版本号是 ${VER}"; exit 1; }
+    "$HERE/carry-signature.sh" "$RELEASE_TAG" "windows-x64-installer/$EXE" "windows-x64-installer/$EXE.sig" "$CLEAN/manifest-windows.json"
+    echo "Windows：复用 ${FROM} 的 ${EXE} / daemon.exe / testclient.exe（sha256 与 ${SUMS}、清单一致，FileVersion ${NAME}）"
     ;;
   *) echo "未知端 ${END}" >&2; exit 2 ;;
 esac

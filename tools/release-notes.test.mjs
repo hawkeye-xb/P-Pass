@@ -251,11 +251,15 @@ test("missingNotes：涨了号且无文件 ⇒ 告警；涨了号有文件 / 没
   const d = notesDir(PAIR);
   assert.deepEqual(missingNotes({ android: "0.9.9", desktop: "0.9.5" }, { android: "0.9.10", desktop: "0.9.5" }, d), []);
   const w = missingNotes({ android: "0.9.9", desktop: "0.9.5" }, { android: "0.9.11", desktop: "0.9.6" }, d);
-  assert.equal(w.length, 2);
+  // desktop 号两个桌面端共用（#788）：macOS 与 Windows 都要有说明。
+  assert.equal(w.length, 3);
   assert.match(w[0], /android 版本涨到 0\.9\.11/);
   assert.match(w[1], /macos 版本涨到 0\.9\.6/);
-  // 上一版没有 versions.json（{}）⇒ 视为涨了
-  assert.equal(missingNotes({}, { android: "0.9.10", desktop: "0.9.5" }, d).length, 1);
+  assert.match(w[2], /windows 版本涨到 0\.9\.6/);
+  // 上一版没有 versions.json（{}）⇒ 视为涨了；夹具里只有 macOS 0.9.5 的说明，Windows 缺 ⇒ 2 条
+  const fresh = missingNotes({}, { android: "0.9.10", desktop: "0.9.5" }, d);
+  assert.equal(fresh.length, 2);
+  assert.match(fresh[1], /windows 版本涨到 0\.9\.5/);
 });
 
 test("CLI warn-missing：set -euo pipefail 下恒退出 0（缺文件 / 参数坏都只告警）", () => {

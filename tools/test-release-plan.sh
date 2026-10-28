@@ -2,11 +2,15 @@
 # #838：tools/release/plan-builds.sh（构建还是复用）与 tools/release/reuse-artifact.sh（复用时的两道校验）的判定测试。
 #
 # 用 stub gh 喂一个假的 Latest 正式版（资产放在临时目录），逐条验：
-#   plan-builds：test tag / 没有 Latest / Latest 就是本 tag / 版本号相同 / 缺清单 / 缺安装包 / 两端都相同。
+#   plan-builds：test tag / 没有 Latest / Latest 就是本 tag / 版本号相同 / 缺清单 / 缺安装包 / 各端都相同。
+#   plan-builds（#788 正式 tag 的 Windows）：版本号 = desktop；Latest 没有 Windows（第一次正式发）⇒ 构建且不报
+#   「没东西可发」；版本相同且资产齐 ⇒ 复用；缺安装包 / SHA256SUMS-windows-x64 / 清单版本不同 ⇒ 构建。
 #   plan-builds（#852 test tag 按端发布）：基线 = test-channel 里该端清单的版本；只改 Android / 只改桌面 /
 #   改共享代码 / 只改文档 / 基线拿不到（无清单、坏清单、tag 不存在、不是祖先、就是本 tag）。
 #   plan-builds（#1062）：Rust 改动按 Cargo 依赖图归属到端；入口包与真实构建命令、真实依赖图一致。
 #   reuse-artifact：字节与 Latest 记录不符 ⇒ 红；包内版本号与本次不符 ⇒ 红；都对 ⇒ 取回。
+#   reuse-artifact windows（#788）：安装包 / daemon.exe 与 SHA256SUMS-windows-x64 不符、安装包与清单 sha256 不符、
+#   PE FileVersion 与本次不符 / 读不到、清单签名验不过 ⇒ 红；都对 ⇒ 按两个 artifact 的布局取回。
 # 核心断言一句话：**拿不准一律构建；复用必须字节与版本号都对得上**。
 #
 # 用法: tools/test-release-plan.sh
@@ -60,7 +64,7 @@ export PATH="$TMP/bin:$PATH"
 # ── 夹具：一个假仓库（plan-builds 从仓库根读 release/versions.json）+ Latest 的资产 ──
 REPO="$TMP/repo"
 mkdir -p "$REPO/tools/release" "$REPO/release"
-cp "$HERE/release/plan-builds.sh" "$HERE/release/rust-impact.py" "$HERE/release/reuse-artifact.sh" "$REPO/tools/release/"
+cp "$HERE/release/plan-builds.sh" "$HERE/release/rust-impact.py" "$HERE/release/reuse-artifact.sh" "$HERE/release/pe_version.py" "$REPO/tools/release/"
 # #1151：复用沿用 Latest 清单里的原签名（carry-signature.sh）——夹具里要有真的密钥对与签名。
 cp "$HERE/release/carry-signature.sh" "$HERE/release/update-key-lib.sh" "$HERE/release/verify-update-sig.mjs" "$REPO/tools/release/"
 mkdir -p "$REPO/apps/desktop/src-tauri"
@@ -85,9 +89,21 @@ with tarfile.open(sys.argv[1], "w:gz") as t:
     i = tarfile.TarInfo("P-Pass.app/Contents/Info.plist"); i.size = len(p); t.addfile(i, io.BytesIO(p))
 PY
 }
-# latest <tag> <android 版本> <macOS 版本>：造一个完整的 Latest
+# mk_exe <路径> <版本>：带 PE 版本资源（FileVersion = 版本）的假 NSIS 安装包
+mk_exe() { python3 -I "$HERE/release/pe_version.py" --make "$2" "$1"; }
+# win_assets <目录> <Windows 版本>：Latest 里 Windows 的全部资产（与 upload-windows + finalize-manifest-windows 传的一致）
+win_assets() {
+  local d="$1" wv="$2" exe="P-Pass_${2}_x64-setup.exe"
+  mk_exe "$d/$exe" "$wv"
+  printf 'daemon %s' "$wv" > "$d/daemon.exe"; printf 'testclient %s' "$wv" > "$d/testclient.exe"
+  echo "built from deadbeef" > "$d/BUILD_INFO-windows-x64"
+  (cd "$d" && for f in daemon.exe testclient.exe "$exe"; do echo "$(sha "$f")  $f"; done > SHA256SUMS-windows-x64)
+  jq -n --arg v "$wv" --arg h "$(sha "$d/$exe")" --arg s "$(sign_with "$TMP/stable.key" "$d/$exe")" \
+    '{version:$v,platforms:{"windows-x86_64":{sha256:$h,signature:$s}}}' > "$d/manifest-windows.json"
+}
+# latest <tag> <android 版本> <macOS 版本> [Windows 版本]：造一个完整的 Latest（不给 Windows 版本 = 还没正式发过 Windows）
 latest() {
-  local tag="$1" av="$2" mv="$3" d="$TMP/state/$1"
+  local tag="$1" av="$2" mv="$3" wv="${4:-}" d="$TMP/state/$1"
   rm -rf "$TMP/state"; mkdir -p "$d"; echo "$tag" > "$TMP/state/LATEST"
   mk_apk "$d/P-Pass_${av}_android.apk" "$av"
   jq -n --arg v "$av" --arg h "$(sha "$d/P-Pass_${av}_android.apk")" --arg s "$(sign_with "$TMP/stable.key" "$d/P-Pass_${av}_android.apk")" \
@@ -97,6 +113,7 @@ latest() {
   (cd "$d" && for f in "P-Pass_${mv}_macos-arm64.dmg" "P-Pass_${mv}_macos-arm64.app.tar.gz"; do echo "$(sha "$f")  $f"; done > SHA256SUMS-macos-arm64)
   jq -n --arg v "$mv" --arg s "$(sign_with "$TMP/stable.key" "$d/P-Pass_${mv}_macos-arm64.app.tar.gz")" \
     '{version:$v,platforms:{"darwin-aarch64":{signature:$s}}}' > "$d/manifest-macos.json"
+  if [ -n "$wv" ]; then win_assets "$d" "$wv"; fi
 }
 export STUB_STATE="$TMP/state"
 
@@ -113,25 +130,42 @@ get() { printf '%s\n' "$OUT" | sed -n "s/^$1=//p" | tail -1; }
 expect_plan() { # 说明 android macos
   if [ "$RC" = 0 ] && [ "$(get android)" = "$2" ] && [ "$(get macos)" = "$3" ]; then ok "$1"; else bad "$1（期望 android=$2 macos=$3）" "$OUT"; fi
 }
+expect_plan3() { # 说明 android macos windows
+  if [ "$RC" = 0 ] && [ "$(get android)" = "$2" ] && [ "$(get macos)" = "$3" ] && [ "$(get windows)" = "$4" ]; then ok "$1"
+  else bad "$1（期望 android=$2 macos=$3 windows=$4）" "$OUT"; fi
+}
 
 echo "plan-builds"
-latest v2026.1.1 1.0.0 2.0.0
+latest v2026.1.1 1.0.0 2.0.0 2.0.0
 # #852：原断言「test tag 恒两端构建」的意图是 test tag 绝不走 reuse。现在 test tag 按改动路径判定；
 # test-channel 里还没有分端清单时拿不准 ⇒ 两端都构建（细则见下方 #852 一节）。
 plan v1.2.3-test.4 1.0.0 2.0.0;  expect_plan "test tag：test-channel 无清单 ⇒ 两端都构建（即使版本号与 Latest 相同，也绝不 reuse）" build build
-plan v2026.1.1 1.0.0 2.0.0;      expect_plan "Latest 就是本 tag（补跑）：两端都构建" build build
-plan v2026.1.2 1.0.1 2.0.0;      expect_plan "只涨 android：android 构建、macOS 复用" build reuse
-[ "$(get windows)" = skip ] && ok "正式 tag 不构建 Windows（windows=skip，#788 未定）" || bad "正式 tag 不构建 Windows" "$OUT"
+plan v2026.1.1 1.0.0 2.0.0;      expect_plan3 "Latest 就是本 tag（补跑）：三端都构建" build build build
+plan v2026.1.2 1.0.1 2.0.0;      expect_plan3 "只涨 android：android 构建、macOS / Windows 复用" build reuse reuse
+[ "$(get windows_version)" = 2.0.0 ] && ok "windows_version = versions.json.desktop（两个桌面端共用）" || bad "windows_version = desktop" "$OUT"
 [ "$(get reuse_from)" = v2026.1.1 ] && ok "复用来源 = Latest" || bad "复用来源 = Latest" "$OUT"
-plan v2026.1.2 1.0.0 2.0.1;      expect_plan "只涨桌面：android 复用、macOS 构建" reuse build
+plan v2026.1.2 1.0.0 2.0.1;      expect_plan3 "只涨桌面：android 复用、macOS / Windows 构建" reuse build build
 plan v2026.1.2 1.0.0 2.0.0
 if [ "$RC" != 0 ] && printf '%s' "$OUT" | grep -q "::error::各端版本号都与 Latest"; then ok "各端都没涨号：明确报错"; else bad "各端都没涨号：明确报错" "$OUT"; fi
 rm "$TMP/state/v2026.1.1/manifest-macos.json"
 plan v2026.1.2 1.0.1 2.0.0;      expect_plan "Latest 缺 macOS 清单：macOS 构建（不猜）" build build
-latest v2026.1.1 1.0.0 2.0.0; rm "$TMP/state/v2026.1.1/P-Pass_2.0.0_macos-arm64.dmg"
+latest v2026.1.1 1.0.0 2.0.0 2.0.0; rm "$TMP/state/v2026.1.1/P-Pass_2.0.0_macos-arm64.dmg"
 plan v2026.1.2 1.0.1 2.0.0;      expect_plan "Latest 缺 dmg：macOS 构建（不猜）" build build
 rm -rf "$TMP/state"; mkdir -p "$TMP/state"
-plan v2026.1.2 1.0.1 2.0.0;      expect_plan "没有 Latest：两端都构建" build build
+plan v2026.1.2 1.0.1 2.0.0;      expect_plan3 "没有 Latest：三端都构建" build build build
+
+echo "plan-builds（#788 正式 tag 的 Windows：与 macOS 同一套 build / reuse）"
+latest v2026.1.1 1.0.0 2.0.0
+plan v2026.1.2 1.0.0 2.0.0;      expect_plan3 "Latest 还没有 Windows（第一次正式发）：Windows 构建，另两端复用、不报「没东西可发」" reuse reuse build
+for f in P-Pass_2.0.0_x64-setup.exe SHA256SUMS-windows-x64 daemon.exe testclient.exe BUILD_INFO-windows-x64; do
+  latest v2026.1.1 1.0.0 2.0.0 2.0.0; rm "$TMP/state/v2026.1.1/$f"
+  plan v2026.1.2 1.0.1 2.0.0;    expect_plan3 "版本号未变但 Latest 缺 ${f}：Windows 构建（不让复用 job 半路红）" build reuse build
+done
+latest v2026.1.1 1.0.0 2.0.0 1.9.9
+plan v2026.1.2 1.0.1 2.0.0;      expect_plan3 "Latest 的 manifest-windows.json 是别的版本：Windows 构建（macOS 照常复用）" build reuse build
+latest v2026.1.1 1.0.0 2.0.0 2.0.0
+plan v2026.1.2 1.0.0 2.0.0
+if [ "$RC" != 0 ] && printf '%s' "$OUT" | grep -q "::error::各端版本号都与 Latest"; then ok "Android / macOS / Windows 都复用、iOS 不构建：明确报错"; else bad "三端都复用：明确报错" "$OUT"; fi
 
 echo "plan-builds（#348 正式 tag 的 iOS：只有 build / skip）"
 expect_ios() { # <说明> <ios 判定>
@@ -145,7 +179,7 @@ git -C "$REPO" init -q
 GI=(git -C "$REPO" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t -c commit.gpgsign=false -c tag.gpgsign=false)
 printf '{"desktop":"2.0.0","android":"1.0.0","ios":"0.1.0"}\n' > "$REPO/release/versions.json"
 "${GI[@]}" add -A && "${GI[@]}" commit -q -m latest && "${GI[@]}" tag v2026.1.1
-latest v2026.1.1 1.0.0 2.0.0
+latest v2026.1.1 1.0.0 2.0.0 2.0.0
 plan v2026.1.2 1.0.0 2.0.0 0.1.0
 if [ "$RC" != 0 ] && printf '%s' "$OUT" | grep -q "::error::各端版本号都与 Latest"; then ok "iOS 号与 Latest 里的相同且另两端也复用 ⇒ 没东西可发 ⇒ 报错"; else bad "iOS 号相同且另两端也复用 ⇒ 报错" "$OUT"; fi
 plan v2026.1.2 1.0.1 2.0.0 0.1.0;  expect_ios "iOS 号未涨 ⇒ skip（TestFlight 不能重复上传同一构建号）" skip
@@ -399,6 +433,49 @@ D="$TMP/state/v2026.1.1"
 jq '.platforms["darwin-aarch64"].signature=""' "$D/manifest-macos.json" > "$D/m.tmp" && mv "$D/m.tmp" "$D/manifest-macos.json"
 reuse macos 2.0.0 m4
 [ "$RC" != 0 ] && printf '%s' "$OUT" | grep -q "找不到能验过" && ok "macOS：清单里没有签名 ⇒ 红（不重签）" || bad "macOS：清单里没有签名 ⇒ 红（不重签）" "$OUT"
+
+echo "reuse-artifact windows（#788）"
+W="P-Pass_2.0.0_x64-setup.exe"
+# resum <目录>：按当前字节重写 SHA256SUMS-windows-x64 与清单 sha256（模拟「记录与字节自洽，但字节本身不对」）
+resum() {
+  (cd "$1" && for f in daemon.exe testclient.exe "$W"; do echo "$(sha "$f")  $f"; done > SHA256SUMS-windows-x64)
+  jq --arg h "$(sha "$1/$W")" '.platforms["windows-x86_64"].sha256=$h' "$1/manifest-windows.json" > "$1/m.tmp" && mv "$1/m.tmp" "$1/manifest-windows.json"
+}
+latest v2026.1.1 1.0.0 2.0.0 2.0.0
+reuse windows 2.0.0 w1
+O="$TMP/out-w1"
+if [ "$RC" = 0 ] && [ "$(ls "$O/windows-x64" | tr '\n' ' ')" = "BUILD_INFO-windows-x64 SHA256SUMS-windows-x64 daemon.exe testclient.exe " ] \
+  && [ "$(ls "$O/windows-x64-installer" | tr '\n' ' ')" = "$W $W.sig " ] && cmp -s "$O/windows-x64-installer/$W" "$TMP/state/v2026.1.1/$W"; then
+  ok "Windows：字节与版本号都对 ⇒ 按 windows-x64 / windows-x64-installer 两个 artifact 的布局取回 + 沿用的原签名"
+else bad "Windows：字节与版本号都对 ⇒ 取回" "$OUT$(ls -R "$O" 2>&1)"; fi
+D="$TMP/state/v2026.1.1"
+printf 'tampered' >> "$D/$W"
+reuse windows 2.0.0 w2
+[ "$RC" != 0 ] && printf '%s' "$OUT" | grep -q "$W 的 sha256 与 v2026.1.1 的 SHA256SUMS-windows-x64 不符" && ok "Windows：安装包与 SHA256SUMS 不符 ⇒ 红" || bad "Windows：安装包与 SHA256SUMS 不符 ⇒ 红" "$OUT"
+latest v2026.1.1 1.0.0 2.0.0 2.0.0
+printf 'x' >> "$D/daemon.exe"
+reuse windows 2.0.0 w3
+[ "$RC" != 0 ] && printf '%s' "$OUT" | grep -q "daemon.exe 的 sha256 与" && ok "Windows：daemon.exe 与 SHA256SUMS 不符 ⇒ 红" || bad "Windows：daemon.exe 与 SHA256SUMS 不符 ⇒ 红" "$OUT"
+latest v2026.1.1 1.0.0 2.0.0 2.0.0
+printf 'tampered' >> "$D/$W"
+(cd "$D" && for f in daemon.exe testclient.exe "$W"; do echo "$(sha "$f")  $f"; done > SHA256SUMS-windows-x64)
+reuse windows 2.0.0 w4
+[ "$RC" != 0 ] && printf '%s' "$OUT" | grep -q "与 v2026.1.1 的 manifest-windows.json 不符" && ok "Windows：SHA256SUMS 被改得自洽、但安装包与清单 sha256 不符 ⇒ 红" || bad "Windows：安装包与清单 sha256 不符 ⇒ 红" "$OUT"
+latest v2026.1.1 1.0.0 2.0.0 2.0.0
+mk_exe "$D/$W" 1.9.9; resum "$D"
+reuse windows 2.0.0 w5
+[ "$RC" != 0 ] && printf '%s' "$OUT" | grep -q "FileVersion=1.9.9" && ok "Windows：安装包 PE FileVersion 与本次不符 ⇒ 红（#809 教训：清单的号不等于包里的号）" || bad "Windows：PE FileVersion 不符 ⇒ 红" "$OUT"
+latest v2026.1.1 1.0.0 2.0.0 2.0.0
+printf 'not a pe at all' > "$D/$W"; resum "$D"
+reuse windows 2.0.0 w6
+[ "$RC" != 0 ] && printf '%s' "$OUT" | grep -q "FileVersion=读不到" && ok "Windows：安装包读不出 PE 版本 ⇒ 红（不拿清单的号兜底）" || bad "Windows：读不出 PE 版本 ⇒ 红" "$OUT"
+latest v2026.1.1 1.0.0 2.0.0 2.0.0
+jq --arg s "$(sign_with "$TMP/other.key" "$D/$W")" '.platforms["windows-x86_64"].signature=$s' "$D/manifest-windows.json" > "$D/m.tmp" && mv "$D/m.tmp" "$D/manifest-windows.json"
+reuse windows 2.0.0 w7
+[ "$RC" != 0 ] && printf '%s' "$OUT" | grep -q "找不到能验过" && [ ! -e "$TMP/out-w7/windows-x64-installer/$W.sig" ] && ok "Windows：清单里的签名验不过 ⇒ 红（不重签）" || bad "Windows：清单里的签名验不过 ⇒ 红（不重签）" "$OUT"
+
+echo "pe_version.py 自测（#788：复用时读安装包 FileVersion 的解析器）"
+if PEO=$(python3 -I "$HERE/release/pe_version.py" --self-test 2>&1); then ok "pe_version.py --self-test"; else bad "pe_version.py --self-test" "$PEO"; fi
 
 echo
 echo "通过 ${PASS} / 失败 ${FAIL}"
