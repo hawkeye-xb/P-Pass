@@ -10,11 +10,7 @@ final class FakeTimeline: TimelineSource {
         let now = Date()
         var out: [TimelineItem] = []
         // 商店截图：PPASS_DEMO_FLIP_MINE=1 时「本机 / 家人」对调，同一张照片可以分别截成「来自你的手机」和「来自家人的手机」。
-        #if DEBUG
-        let flipMine = ProcessInfo.processInfo.environment["PPASS_DEMO_FLIP_MINE"] == "1"
-        #else
-        let flipMine = false
-        #endif
+        let flipMine = DebugLaunchInput.demoFlipMine
         for i in 0..<45 {
             let age: TimeInterval = Double(i) * 86_400 * 2.1
             let id = String(format: "%064x", i + 1)
@@ -83,14 +79,10 @@ enum FakeError: Error { case unreachable }
 /// 照片来源与许可见 P-Pass-promo/assets/store-photos/SOURCES.md。
 enum FakeImages {
     private static let demoPhotos: [URL] = {
-        #if DEBUG
-        guard let dir = ProcessInfo.processInfo.environment["PPASS_DEMO_PHOTOS"] else { return [] }
+        guard let dir = DebugLaunchInput.demoPhotosDir else { return [] }
         let files = (try? FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: dir), includingPropertiesForKeys: nil)) ?? []
         return files.filter { ["jpg", "jpeg"].contains($0.pathExtension.lowercased()) }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
-        #else
-        return []
-        #endif
     }()
 
     /// 与进程无关的 seed：`hashValue` 每次启动都会变，截图要可复现。

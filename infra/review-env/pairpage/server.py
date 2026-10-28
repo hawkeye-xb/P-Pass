@@ -12,6 +12,8 @@
                          带 pair_code_wrong，该申请作废
   GET  /healthz        → 存活探针
   GET  /               → 页面
+  GET  /samples        → 示例图页（审核员相册为空时长按保存到相册，#1088）
+  GET  /samples/<名>   → 示例图本身，只认 SAMPLES 白名单里的文件名
 
 IPC 走 daemon 的 ipc.token（两行：socket 名 + 令牌）。Linux 是抽象命名空间
 socket（\\0 前缀），macOS 是 /tmp 下的文件 —— 与仓库 tools/ipc-lib.sh 同款握手。
@@ -31,6 +33,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 TOKEN_FILE = os.environ.get("PPF_IPC_TOKEN_FILE", "/var/lib/ppass-review/p-pass/ipc.token")
 HERE = os.path.dirname(os.path.abspath(__file__))
+# 程序生成的风景插画，无版权、无人像；只按名字精确匹配，杜绝拼路径读到别的文件。
+SAMPLES = ("sample-1.jpg", "sample-2.jpg", "sample-3.jpg")
 
 
 def ipc(method, params=None):
@@ -108,6 +112,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"ok": True, **resp["result"]})
             if u.path == "/healthz":
                 return self._send(200, {"ok": True})
+            if u.path == "/samples":
+                with open(os.path.join(HERE, "samples.html"), "rb") as f:
+                    return self._send(200, f.read(), "text/html; charset=utf-8")
+            name = u.path[len("/samples/"):] if u.path.startswith("/samples/") else None
+            if name in SAMPLES:
+                with open(os.path.join(HERE, "samples", name), "rb") as f:
+                    return self._send(200, f.read(), "image/jpeg")
             return self._send(404, {"ok": False, "error": "not found"})
         except Exception as e:  # noqa: BLE001 —— 后端任何异常都要变成可读的 500
             return self._send(500, {"ok": False, "error": f"{type(e).__name__}: {e}"})

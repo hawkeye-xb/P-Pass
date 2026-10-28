@@ -3,20 +3,19 @@
 # 占位符由 scripts/install.sh 替换：
 #   __PUBLIC_HOST__        对外域名（Cloudflare 一级子域，例如 pair-test.example.com）
 #   __SELF_SIGNED_BASE__   自签证书路径前缀（如 /etc/nginx/selfsigned/pair-test.example.com）
+#   HTTP/HTTPS 两处 listen 占位   由 install.sh 按 --http-listen / --https-listen 生成（只给端口=IPv4+IPv6）
 #
 # 为什么源站用自签：只有 Cloudflare Tunnel 从 127.0.0.1 访问它，浏览器看到的是 CF 边缘证书；
 # 隧道 ingress 里写 noTLSVerify=true。这样不依赖 Let's Encrypt 续期，也不会在审核窗口里过期。
 
 server {
-    listen 80;
-    listen [::]:80;
+    __HTTP_LISTEN__
     server_name __PUBLIC_HOST__;
     return 301 https://$host$request_uri;
 }
 
 server {
-    listen 443 ssl http2;
-    listen [::]:443 ssl http2;
+    __HTTPS_LISTEN__
     server_name __PUBLIC_HOST__;
 
     ssl_certificate     __SELF_SIGNED_BASE__.crt;

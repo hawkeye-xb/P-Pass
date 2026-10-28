@@ -6,6 +6,7 @@
 #        --host pair.example.com \        # 对外域名（CF 一级子域）
 #        --origin-sni pair-origin.example.com \  # 源站证书域名（可 == --host）
 #        [--user review] [--port 8787] [--ipc-token /var/lib/ppass-review/p-pass/ipc.token]
+#        [--http-listen 80] [--https-listen 443]   # 443 已被别的服务占用时改成如 127.0.0.1:9443
 #
 # 不做的事（刻意留给人）：
 #   - 签证书：源站用自签（本脚本生成），不需要 Let's Encrypt
@@ -15,6 +16,7 @@ set -euo pipefail
 
 HOST=""; USER_NAME="review"; PORT="8787"
 IPC_TOKEN="/var/lib/ppass-review/p-pass/ipc.token"
+HTTP_LISTEN="80"; HTTPS_LISTEN="443"
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 
 while [ $# -gt 0 ]; do
@@ -23,6 +25,8 @@ while [ $# -gt 0 ]; do
     --user) USER_NAME="$2"; shift 2 ;;
     --port) PORT="$2"; shift 2 ;;
     --ipc-token) IPC_TOKEN="$2"; shift 2 ;;
+    --http-listen) HTTP_LISTEN="$2"; shift 2 ;;
+    --https-listen) HTTPS_LISTEN="$2"; shift 2 ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) echo "未知参数: $1" >&2; exit 2 ;;
   esac
@@ -38,7 +42,9 @@ done
 
 # 2. 页面后端
 install -d -m 755 /opt/ppass-review/pairpage
-install -m 644 "$HERE/pairpage/server.py" "$HERE/pairpage/index.html" /opt/ppass-review/pairpage/
+install -m 644 "$HERE/pairpage/server.py" "$HERE/pairpage/index.html" "$HERE/pairpage/samples.html" /opt/ppass-review/pairpage/
+install -d -m 755 /opt/ppass-review/pairpage/samples
+install -m 644 "$HERE"/pairpage/samples/*.jpg /opt/ppass-review/pairpage/samples/
 install -d -m 755 /var/lib/ppass-review
 # #1115：Linux 上库位置的正本是平台 config.toml；没有它 daemon 进「未配置」状态、等窗口程序
 # 配置（无界面机器上没人配）。库仍放平台目录本身（与以前同一位置，ipc.token 路径不变）；
@@ -85,7 +91,16 @@ if [ ! -f "$CERT_BASE.crt" ]; then
     -subj "/CN=$HOST" -addext "subjectAltName=DNS:$HOST" 2>/dev/null
   chmod 600 "$CERT_BASE.key"
 fi
+# 只给端口 ⇒ IPv4 + IPv6 都听（原默认行为）；给了 地址:端口 ⇒ 只听那一个（例：443 被占时只给隧道用的 127.0.0.1:9443）
+listen_lines() {  # $1=值 $2=额外参数
+  case "$1" in
+    *[!0-9]*) printf 'listen %s%s;' "$1" "$2" ;;
+    *) printf 'listen %s%s;\\n    listen [::]:%s%s;' "$1" "$2" "$1" "$2" ;;
+  esac
+}
 sed -e "s/__PUBLIC_HOST__/$HOST/g" -e "s#__SELF_SIGNED_BASE__#$CERT_BASE#g" \
+    -e "s#__HTTP_LISTEN__#$(listen_lines "$HTTP_LISTEN" "")#" \
+    -e "s#__HTTPS_LISTEN__#$(listen_lines "$HTTPS_LISTEN" " ssl http2")#" \
   "$HERE/nginx/pair.conf.template" > /etc/nginx/sites-available/pair
 ln -sf /etc/nginx/sites-available/pair /etc/nginx/sites-enabled/pair
 install -m 644 "$HERE/nginx/ppass-limit.conf" /etc/nginx/conf.d/ppass-limit.conf
@@ -104,10 +119,11 @@ nginx -t
 systemctl reload nginx
 
 # 7. 收尾自检（本机，不经过公网域名：这台机器上没有 hairpin NAT）
+HTTPS_PORT="${HTTPS_LISTEN##*:}"
 echo "--- 自检 ---"
 curl -fsS --max-time 5 "http://127.0.0.1:${PORT}/healthz" && echo
-curl -sk --max-time 5 --resolve "$HOST:443:127.0.0.1" -o /dev/null \
-     -w "无凭据 %{http_code}（期望 401）\n" "https://$HOST/"
-curl -sk --max-time 5 --resolve "$HOST:443:127.0.0.1" -u "$USER_NAME:$PW" -o /dev/null \
-     -w "带凭据 %{http_code}（期望 200）\n" "https://$HOST/"
+curl -sk --max-time 5 --resolve "$HOST:$HTTPS_PORT:127.0.0.1" -o /dev/null \
+     -w "无凭据 %{http_code}（期望 401）\n" "https://$HOST:$HTTPS_PORT/"
+curl -sk --max-time 5 --resolve "$HOST:$HTTPS_PORT:127.0.0.1" -u "$USER_NAME:$PW" -o /dev/null \
+     -w "带凭据 %{http_code}（期望 200）\n" "https://$HOST:$HTTPS_PORT/"
 echo "装完了。对外的 Cloudflare Tunnel 与 DNS 见 scripts/cf-tunnel.py。"

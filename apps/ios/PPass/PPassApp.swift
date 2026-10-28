@@ -73,14 +73,14 @@ final class AppBoot: ObservableObject {
         #if DEBUG
         OriginalLocalityProbe.logTestFilesAtLaunch() // #337 / #1016 真机取证：只读、不下载
         // 仅 DEBUG：PPASS_E2E_RESET=1 → 清掉真实存储根和钥匙串身份（见 E2EReset）。
-        if ProcessInfo.processInfo.environment["PPASS_E2E_RESET"] == "1" {
+        if DebugLaunchInput.e2eReset {
             do { E2EReset.wipe(root: try LiveBackend.resolveRoot(logger: logger), identity: KeychainIdentityStore(), logger: logger) } catch {
                 logger.log("boot: DEBUG E2E reset could not resolve the storage root: \(error)")
             }
         }
         // 仅 DEBUG：PPASS_DEBUG_DROP_IDENTITY=1 → 只删钥匙串里的身份、存储根原样，等价于「备份恢复到新手机 / 钥匙串被清」：
         // 真机上验证「有配对、没私钥 → 新设备、清配对」，不用抹机恢复。
-        if ProcessInfo.processInfo.environment["PPASS_DEBUG_DROP_IDENTITY"] == "1" {
+        if DebugLaunchInput.dropIdentity {
             do { try KeychainIdentityStore().delete(); logger.log("boot: DEBUG dropped the identity key") } catch {
                 logger.log("boot: DEBUG drop identity failed: \(error)")
             }
@@ -149,7 +149,7 @@ final class AppBoot: ObservableObject {
     /// 仅 DEBUG：PPASS_DEBUG_IDENTITY_FAIL=1 → 钥匙串读失败（看拒绝启动页用）。
     private static var identityStore: IdentitySecretStore {
         #if DEBUG
-        if ProcessInfo.processInfo.environment["PPASS_DEBUG_IDENTITY_FAIL"] == "1" { return FailingIdentityStore() }
+        if DebugLaunchInput.identityFail { return FailingIdentityStore() }
         #endif
         return KeychainIdentityStore()
     }
@@ -157,9 +157,7 @@ final class AppBoot: ObservableObject {
     static var useDemo: Bool {
         let env = ProcessInfo.processInfo.environment
         if env["XCTestConfigurationFilePath"] != nil { return true }
-        #if DEBUG
-        if env["PPASS_SCENARIO"] != nil || UserDefaults.standard.string(forKey: "PPASS_SCENARIO") != nil { return true }
-        #endif
+        if DebugLaunchInput.scenario != nil { return true }
         return false
     }
 }
