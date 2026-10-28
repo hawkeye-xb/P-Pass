@@ -129,6 +129,35 @@ impl LibraryLocation {
         }
         Ok(cfg)
     }
+
+    /// #1246：常驻 daemon 每次启动时重新给 config.toml 授窗口程序只读（[`Self::set`] 同一授权）。
+    ///
+    /// 这条 ACE 只有 daemon 授，但外部操作会把它冲掉：安装器升级时 `icacls /reset` 把
+    /// ProgramData 的子项重置成只继承父目录，窗口程序读不到 config.toml，就把已配置的机器
+    /// 当成全新安装（退回首启向导）。启动时幂等补授一次，正本仍只在 daemon，任何冲刷下次
+    /// 启动都自愈。config.toml 不存在（未配置）时什么都不做。授不上只告警、不阻断启动——
+    /// 照片和配对比向导显示更要紧。
+    pub fn reshare_config(&self) {
+        use platform::PlatformAdapter as _;
+        match self.reshare_config_with(|cfg| platform::adapter().share_config_read(cfg)) {
+            Some(Ok(platform::Applied::Done)) => {
+                tracing::info!("#1246: config.toml 已对本机用户只读共享")
+            }
+            Some(Ok(_)) | None => {}
+            Some(Err(e)) => {
+                tracing::warn!("#1246: config.toml 授本机用户只读失败（窗口程序可能退回向导）：{e}")
+            }
+        }
+    }
+
+    /// [`Self::reshare_config`] 的可测部分：config.toml 存在才调 `share`。
+    fn reshare_config_with(
+        &self,
+        share: impl FnOnce(&Path) -> platform::Result<platform::Applied>,
+    ) -> Option<Result<platform::Applied, String>> {
+        let cfg = self.platform_dir.join(CONFIG_FILE_NAME);
+        cfg.exists().then(|| share(&cfg).map_err(|e| e.to_string()))
+    }
 }
 
 #[cfg(test)]
@@ -253,5 +282,31 @@ mod tests {
                 configured: true
             }
         );
+    }
+
+    /// #1246：config.toml 在就补授（升级冲掉的 ACE 靠这里自愈），不在（未配置）就不碰。
+    /// 反证：`reshare_config_with` 不看文件是否存在、或不调 `share` → 红。
+    #[test]
+    fn startup_reshares_config_only_when_it_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let platform = tmp.path().join("platform");
+        let loc = LibraryLocation::with(None, platform.clone());
+        let mut calls = Vec::new();
+        assert!(loc
+            .reshare_config_with(|p| {
+                calls.push(p.to_path_buf());
+                Ok(platform::Applied::Done)
+            })
+            .is_none());
+        assert!(calls.is_empty(), "未配置时不该授权");
+
+        std::fs::create_dir_all(&platform).unwrap();
+        std::fs::write(platform.join(CONFIG_FILE_NAME), "").unwrap();
+        let out = loc.reshare_config_with(|p| {
+            calls.push(p.to_path_buf());
+            Ok(platform::Applied::Done)
+        });
+        assert_eq!(out, Some(Ok(platform::Applied::Done)));
+        assert_eq!(calls, vec![platform.join(CONFIG_FILE_NAME)]);
     }
 }
