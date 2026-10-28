@@ -84,13 +84,16 @@
    > (`tools/release/plan-builds.sh`) compares each platform's version in
    > `release/versions.json` with that platform's manifest in the Latest formal
    > release. Same version ⇒ that platform is **not rebuilt**: `android-reuse` /
-   > `macos-reuse` copy Latest's installers into this release after checking the
-   > bytes against Latest's own record (manifest sha256 / `SHA256SUMS-macos-arm64`)
-   > and the version the installer reports (APK `versionName`, `Info.plist`
-   > `CFBundleShortVersionString`); either check failing turns the run red. The
+   > `macos-reuse` / `windows-reuse` copy Latest's installers into this release after checking the
+   > bytes against Latest's own record (manifest sha256 / `SHA256SUMS-macos-arm64` /
+   > `SHA256SUMS-windows-x64` + `manifest-windows.json`) and the version the installer reports (APK
+   > `versionName`, `Info.plist` `CFBundleShortVersionString`, the setup.exe PE `FileVersion`);
+   > either check failing turns the run red. Windows uses the desktop version
+   > (`versions.json.desktop`, shared with macOS); a Latest without Windows assets
+   > (the first formal Windows release) ⇒ Windows builds (#788). The
    > release body says which platform was reused and from which tag. Anything
    > uncertain (no Latest, missing manifest or installer, re-run of the Latest
-   > tag itself) ⇒ build. Neither version bumped ⇒ `plan-builds` fails and no
+   > tag itself) ⇒ build. Every platform reused and iOS skipped ⇒ `plan-builds` fails and no
    > draft is created. Test tags never reuse; they build per platform by changed
    > paths (see §3.6). If artifact-shaping build
    > scripts changed for a reused platform, `plan-builds` warns: the change ships
@@ -161,12 +164,12 @@
   Android reads `manifest-android.json`; the desktop shell updates in-app
   through tauri-plugin-updater — macOS from `manifest-macos.json` (the
   `.app.tar.gz` with `lib/` embedded), Windows from `manifest-windows.json`
-  (NSIS, written by `finalize-manifest-windows`). Formal tags do not build
-  Windows yet (`plan-builds.sh`: `windows=skip`), so Windows updates exist on
-  the test channel only. Test and stable use the same mechanism; only the
+  (NSIS, written by `finalize-manifest-windows`). Since #788 (2026-10-26)
+  formal tags build or reuse Windows too (unsigned, see #788), so Windows
+  updates exist on both channels. Test and stable use the same mechanism; only the
   manifest URL differs, written into the plugin config at build time
   (`tools/release/tauri-config.mjs`, #852). The R2 mirror carries the
-  Android and macOS stable manifests. The legacy `manifest.json` carries no
+  Android, macOS and (since #788) Windows stable manifests. The legacy `manifest.json` carries no
   desktop entry.
 - Signing: `UPDATE_SIGNING_KEY` (tauri signer, minisign hashed format).
   Without it the manifest ships with empty signatures and the release
@@ -283,7 +286,7 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
 - Every workflow has `concurrency: cancel-in-progress`.
 - `release.yml` gained a `platforms` dispatch input (`android`/`macos`/
   `windows` comma list; empty = all). Tag pushes build per platform:
-  formal tags by version bump (#838; Windows not built until it ships),
+  formal tags by version bump (#838; Windows included since #788),
   test tags by changed paths (#852).
 - R2 mirror: **removed 2026-08-25**. Assets are served from GitHub
   release downloads only; the update manifest always points there.
@@ -317,7 +320,7 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
 - Provenance: a dedicated `attest` job generates SLSA build provenance for every asset the run built
   (macOS dmg / `.app.tar.gz`, Windows installer + `daemon.exe` / `testclient.exe`, Android APK). Build jobs hold no
   `id-token` / `attestations` permission. Verify: `gh attestation verify <file> -R hawkeye-xb/P-Pass`.
-  Reused assets (`android-reuse` / `macos-reuse`) are not re-attested; their provenance is that of the release they came from.
+  Reused assets (`android-reuse` / `macos-reuse` / `windows-reuse`) are not re-attested; their provenance is that of the release they came from.
 - Signing credentials (Apple p12, Android keystore) exist only in their signing step. macOS: `tools/bundle-desktop-macos.sh`
   runs in two phases (`PPF_BUNDLE_PHASE=build` installs dependencies with no credentials; `sign` runs after the keychain exists).
   Android: gradle produces the unsigned APK, a separate step runs `zipalign -c` + `apksigner`.
@@ -392,11 +395,13 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
    > **构建一次、到处复用（#838）**：正式 tag 上，`plan-builds`
    > （`tools/release/plan-builds.sh`）拿每一端在 `release/versions.json` 的版本号，
    > 和 Latest 正式版该端清单的 version 比。号没变 ⇒ 该端**不重新构建**，
-   > `android-reuse` / `macos-reuse` 把 Latest 的安装包复制进本次 release，复制前核对两件事：
-   > 字节与 Latest 的记录一致（清单 sha256 / `SHA256SUMS-macos-arm64`），包内版本号
-   > （APK `versionName`、`Info.plist` `CFBundleShortVersionString`）等于本次该端版本号；
-   > 任一不符即红。正文写明哪一端复用自哪个 tag。拿不准（没有 Latest、缺清单或安装包、
-   > 补跑的就是 Latest 本身）一律构建；两端都没涨号 ⇒ `plan-builds` 报错、不建草稿；
+   > `android-reuse` / `macos-reuse` / `windows-reuse` 把 Latest 的安装包复制进本次 release，复制前核对两件事：
+   > 字节与 Latest 的记录一致（清单 sha256 / `SHA256SUMS-macos-arm64` / `SHA256SUMS-windows-x64` +
+   > `manifest-windows.json`），包内版本号（APK `versionName`、`Info.plist` `CFBundleShortVersionString`、
+   > setup.exe 的 PE `FileVersion`）等于本次该端版本号；任一不符即红。Windows 的版本号就是
+   > `versions.json.desktop`（与 macOS 共用）；Latest 里还没有 Windows（第一次正式发 Windows）⇒ 构建（#788）。
+   > 正文写明哪一端复用自哪个 tag。拿不准（没有 Latest、缺清单或安装包、
+   > 补跑的就是 Latest 本身）一律构建；各端都复用且 iOS 不构建 ⇒ `plan-builds` 报错、不建草稿；
    > test tag 从不复用，按改动路径逐端判定是否构建（见 §3.6）。被复用的一端若改过会影响产物的构建脚本，`plan-builds` 告警：
    > 这些改动要等该端下次涨号才进安装包。
 5. **人工 publish**：核对 draft，然后在 GitHub 网页上发布（Releases → 该 draft →
@@ -426,11 +431,11 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
   只服务旧 Android 客户端（已冻结，见 §1），不含桌面条目。
 - 桌面壳经 tauri-plugin-updater 应用内更新：macOS 产物是内嵌 `lib/` 的
   `.app.tar.gz`，Windows 是 NSIS（清单由 `finalize-manifest-windows` 出）。
-  正式 tag 目前不构建 Windows（`plan-builds.sh` 里 `windows=skip`），Windows
-  只在 test 通道有更新。test 与 stable 同一套机制，只有清单地址不同，地址在
+  #788（2026-10-26）起正式 tag 同样构建 / 复用 Windows（未签名发布），两个通道
+  都有 Windows 更新。test 与 stable 同一套机制，只有清单地址不同，地址在
   构建期写进插件配置（`tools/release/tauri-config.mjs`，#852），桌面设置页不
   区分通道。
-- Android 与 macOS 的正式版清单有 R2 镜像（UPD-12 #650 有序候选列表：R2 优先、
+- Android、macOS 与 Windows（#788）的正式版清单有 R2 镜像（UPD-12 #650 有序候选列表：R2 优先、
   GitHub 兜底；R2 只镜像正式版，UPD-18 #706）。某个来源回 404 或失败才跳过；
   最新版仍是 draft 时 404，一律静默当作「没有更新」。
 - `notes` / `notes_i18n` 取自手写说明 `release/notes/<端>/<版本>.<zh|en>.txt`
@@ -531,8 +536,8 @@ Android 靠 `channelFromVersion()` 读注入的版本串（含 `-test.` 即 test
 - `ci-desktop.yml`（apps/desktop/** assets/**）→ src-tauri lib tests + vite build。
 - 每个 workflow 带 `concurrency: cancel-in-progress`（连续 push 取消旧 run）。
 - release.yml 加 `platforms` dispatch 输入（android/macos/windows 逗号
-  组合，留空=all）；tag push 按端构建：正式 tag 看版本号（#838；Windows 未上正式版、
-  不构建），test tag 看改动路径（#852）。
+  组合，留空=all）；tag push 按端构建：正式 tag 看版本号（#838；#788 起含 Windows），
+  test tag 看改动路径（#852）。
 - R2 镜像：**2026-08-25 已撤除**。资产只从 GitHub release 下载提供，
   update manifest 恒指 GitHub 直链。撤除原因是耦合方向错（manifest 在
   镜像之前就写死镜像地址，镜像失败则带着坏 manifest 出门且签名无法手改），
@@ -565,7 +570,7 @@ Android 靠 `channelFromVersion()` 读注入的版本串（含 `-test.` 即 test
 
 - 来源证明：独立的 `attest` job 对本次**构建出来的**每个资产生成 SLSA provenance（macOS dmg / `.app.tar.gz`、
   Windows 安装包与 `daemon.exe` / `testclient.exe`、Android APK）。构建 job 不拿 `id-token` / `attestations`。
-  验证：`gh attestation verify <文件> -R hawkeye-xb/P-Pass`。复用的产物（`android-reuse` / `macos-reuse`）不重新证明，
+  验证：`gh attestation verify <文件> -R hawkeye-xb/P-Pass`。复用的产物（`android-reuse` / `macos-reuse` / `windows-reuse`）不重新证明，
   以其原发布版本为准。
 - 签名凭据（Apple p12、Android keystore）只在各自的签名步骤出现。macOS：`tools/bundle-desktop-macos.sh` 分两个阶段
   （`PPF_BUNDLE_PHASE=build` 无凭据装依赖；`sign` 在钥匙串建好之后才跑）；Android：gradle 只出 unsigned，

@@ -9,7 +9,7 @@
 #     覆盖 macOS dmg / .app.tar.gz、Windows 安装包与 daemon.exe / testclient.exe、Android APK。
 #   - 签名凭据（Apple p12、Android keystore）只在各自的「签名」步骤出现，与 pnpm / gradle 装依赖、
 #     tauri / gradle 构建分在不同步骤；macOS 的钥匙串在依赖代码全部跑完之后才建。
-#   - 复用（android-reuse / macos-reuse）与 repair-manifests 不再对已发布字节重新签名：
+#   - 复用（android-reuse / macos-reuse / windows-reuse）与 repair-manifests 不再对已发布字节重新签名：
 #     沿用 Latest 清单里的原签名并验过（tools/release/carry-signature.sh）。
 #
 # T-071b 加固点（2026-08-03）：
@@ -30,7 +30,8 @@
 #     包会被客户端安装前的发布者校验拒收，不许发出去）。公证凭据
 #     APPLE_NOTARY_KEY(_ID/_ISSUER) 缺失 → 跳过公证，notes 标注"未签名"。
 #     secret 槽位由 gh secret set 预建，值来自 H-02（Apple 开发者证书 $99/年）。
-#   - Windows：当前不签名（Authenticode 证书 H-02 范畴），notes 标注。
+#   - Windows：当前不签名（Authenticode 证书 H-02 范畴），notes 标注。#788（2026-10-26 验收人）：
+#     签名不阻塞正式发布——正式 tag 同样构建 / 复用并发布 Windows（未签名）。
 #   - 环境批准门：macos job 挂 environment: release-signing —— 在
 #     Settings → Environments 把 owner 加为 required reviewer 后生效；
 #     未配置保护规则时自动通过，不阻塞无凭据路径。
@@ -83,7 +84,7 @@ jobs:
   # ══ #838：构建一次、到处复用 ══════════════════════════════════════════
   # 正式 tag 上，某端版本号（release/versions.json）与 Latest 正式版该端清单的 version 相同
   # ⇒ 该端不构建，复用 Latest 的产物（同一个版本号只能对应同一份产物）。判定在
-  # tools/release/plan-builds.sh（拿不准一律构建；两端都复用 ⇒ 红）。
+  # tools/release/plan-builds.sh（拿不准一律构建；Android / macOS / Windows 都复用且 iOS 不构建 ⇒ 红）。
   # 复用 job 产出与构建 job 同名、同布局的 artifact，下游 upload / finalize 不区分来源。
   # #852：test tag 按端发布——某端自上一次 test 发布（test-channel 里该端清单的版本）以来没有
   # 影响产物的改动 ⇒ 判 skip：不构建也不复用，下游该端 lane 跳过，test-channel 里它的清单不动。
@@ -101,6 +102,7 @@ jobs:
       ios: ${{ steps.plan.outputs.ios }}
       android_version: ${{ steps.plan.outputs.android_version }}
       macos_version: ${{ steps.plan.outputs.macos_version }}
+      windows_version: ${{ steps.plan.outputs.windows_version }}
       ios_version: ${{ steps.plan.outputs.ios_version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -187,6 +189,50 @@ jobs:
             reused/macos-arm64/P-Pass_*_macos-arm64.dmg
             reused/macos-arm64/P-Pass_*_macos-arm64.app.tar.gz
             reused/macos-arm64/P-Pass_*_macos-arm64.app.tar.gz.sig
+
+  # #788：正式 tag 上 Windows 版本号（versions.json.desktop）与 Latest 的 manifest-windows.json 相同 ⇒
+  # 复用 Latest 的产物。产出与 windows-x64 同名、同布局的两个 artifact（windows-x64 / windows-x64-installer），
+  # 下游 upload-windows / finalize-manifest-windows / finalize-notes 不区分来源。
+  # 只在 tag push 上跑：手动 dispatch 点名 Windows 时 windows-x64 不看 plan、照建，
+  # 两者同时跑会撞同名 artifact。
+  windows-reuse:
+    name: "Windows x64（复用 Latest 产物，#838）"
+    needs: [plan-builds]
+    if: github.event_name == 'push' && needs.plan-builds.outputs.windows == 'reuse'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Reuse windows artifact from Latest (#838)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FROM: ${{ needs.plan-builds.outputs.reuse_from }}
+          VER: ${{ needs.plan-builds.outputs.windows_version }}
+        run: tools/release/reuse-artifact.sh windows "$FROM" "$VER" "$PWD/reused/windows"
+      - name: Upload artifact (binaries)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-x64
+          if-no-files-found: error
+          path: |
+            reused/windows/windows-x64/daemon.exe
+            reused/windows/windows-x64/testclient.exe
+            reused/windows/windows-x64/SHA256SUMS-windows-x64
+            reused/windows/windows-x64/BUILD_INFO-windows-x64
+      - name: Upload artifact (NSIS installer)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-x64-installer
+          if-no-files-found: error
+          # #1151：.exe.sig 是从 Latest 沿用的原更新签名（复用不重签）。
+          path: |
+            reused/windows/windows-x64-installer/P-Pass_*_x64-setup.exe
+            reused/windows/windows-x64-installer/P-Pass_*_x64-setup.exe.sig
 
   macos-arm64:
     name: "macOS arm64 (签名门控)"
@@ -526,21 +572,23 @@ jobs:
     # 理由：验收人不发布 Windows 资产，但每次发版都要陪它等 ~30 分钟的
     # vcpkg/system 长杆（实测 v0.7.2：macOS 13 分钟 vs Windows 30 分钟），
     # 而桌面端 manifest 的收口此前挂在三 lane 齐后，于是「不发布的平台」
-    # 反过来卡住了「要发布的平台」。现在 tag push 恒跳过本 job；要 Windows
+    # 反过来卡住了「要发布的平台」。当时起 tag push 恒跳过本 job；要 Windows
     # 产物的场合走 Actions → Release → Run workflow，platforms 留空或含
     # windows（dispatch 语义一字未变）。
     # #788②（2026-10-12）：**test tag 也构建 Windows**——test 通道要与正式版一一对应，
     # 按需打出来的每个 test 包都要能在应用内更新到下一个。上面「拖住要发布的平台」的
     # 理由已不成立：桌面收口不等 Windows（finalize-manifest 的 needs），Windows 的清单
     # 由它自己的 finalize-manifest-windows 出，晚到只影响 Windows 自己。
-    # 正式 tag 仍不构建：是否正式发布 Windows 由验收人决定（届时还要接 #838 的复用判定）。
     # 2026-10-12 验收人：test tag 也按端判（plan-builds 的 windows 输出），只改别的端时不陪跑 Windows。
+    # #788（2026-10-26 验收人：四端都正式发布，Windows 先以未签名形式发布）：正式 tag 也构建，
+    # 接 #838 的判定——plan-builds 判 build 才构建，判 reuse 由 windows-reuse 取回 Latest 的产物。
+    # 所以 tag push（test / 正式）一律只看 plan-builds 的 windows 输出。
     # 手动 dispatch 明确点名 Windows 时照建，不看 plan；!cancelled()：plan 判错退出也不吞掉这个点名。
     needs: [plan-builds]
     if: >-
       !cancelled() && (
         (github.event_name == 'workflow_dispatch' && (inputs.platforms == '' || inputs.platforms == 'all' || contains(format('{0},', inputs.platforms || 'all'), 'windows')))
-        || (github.event_name == 'push' && contains(github.ref_name, '-test.') && needs.plan-builds.outputs.windows == 'build')
+        || (github.event_name == 'push' && needs.plan-builds.outputs.windows == 'build')
       )
     # #1151：不拿 id-token / attestations——来源证明由 attest job 生成。
     permissions:
@@ -838,7 +886,7 @@ jobs:
   # release 的**同一份字节**（artifact 是同一个）。
   # 为什么单拎一个 job：构建 job 要跑第三方依赖（pnpm / gradle / cargo 构建脚本），不该拿
   # id-token / attestations 权限；本 job 只做 download-artifact + attest，没有任何构建步骤。
-  # 复用的产物（android-reuse / macos-reuse）不在这里重新证明——它们是 Latest 里已经发布的字节，
+  # 复用的产物（android-reuse / macos-reuse / windows-reuse）不在这里重新证明——它们是 Latest 里已经发布的字节，
   # provenance 以原发布版本为准。
   attest:
     name: "生成构建来源证明（SLSA provenance，#1151）"
@@ -1333,9 +1381,10 @@ jobs:
   # ── lane 3: Windows（最慢的一条，现在只拖自己） ──
   upload-windows:
     name: "上传 Windows"
-    needs: [create-draft, windows-x64]
+    needs: [create-draft, windows-x64, windows-reuse]
     # #1187：显式要求草稿建成——create-draft 被发版前验证挡下时，上传不许照跑。
-    if: ${{ !cancelled() && needs.create-draft.result == 'success' && needs.windows-x64.result == 'success' }}
+    # #788：产物来自构建（windows-x64）或复用（windows-reuse，同名同布局的 artifact）。
+    if: ${{ !cancelled() && needs.create-draft.result == 'success' && (needs.windows-x64.result == 'success' || needs.windows-reuse.result == 'success') }}
     runs-on: ubuntu-latest
     # #772：以往每次都在 1 分钟内结束（只上传/改清单/改正文），10 分钟足够且挂住时不会拖 6 小时。
     timeout-minutes: 10
@@ -1605,7 +1654,7 @@ jobs:
   # ── 收口：补签名状态 + 资产 sha256（晚到不拖任何资产） ──
   finalize-notes:
     name: "补齐 Release 正文"
-    needs: [create-draft, plan-builds, macos-arm64, macos-reuse, windows-x64, android, android-reuse, upload-windows, ios, attest]
+    needs: [create-draft, plan-builds, macos-arm64, macos-reuse, windows-x64, windows-reuse, android, android-reuse, upload-windows, ios, attest]
     # DESK-05 同款容错：dispatch 单平台时其余 job skipped，`needs` 里有
     # skipped 且无 !cancelled() → 本 job 连带跳过，正文永远补不齐。
     if: ${{ !cancelled() && needs.create-draft.result == 'success' }}
@@ -1637,13 +1686,13 @@ jobs:
           name: macos-arm64
           path: artifacts/macos-arm64
       - name: Download windows binaries
-        if: needs.windows-x64.result == 'success'
+        if: needs.windows-x64.result == 'success' || needs.windows-reuse.result == 'success'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: windows-x64
           path: artifacts/windows-x64
       - name: Download windows installer
-        if: needs.windows-x64.result == 'success'
+        if: needs.windows-x64.result == 'success' || needs.windows-reuse.result == 'success'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: windows-x64-installer
@@ -1666,6 +1715,7 @@ jobs:
           **签名状态**：macOS=${{ needs.macos-arm64.outputs.signed || needs.macos-reuse.outputs.signed || 'n/a' }}（${{ (needs.macos-arm64.outputs.signed || needs.macos-reuse.outputs.signed) == 'yes' && 'Developer ID 签名 + 公证 + staple' || '无凭据路径跳过' }})/ Windows=no（Authenticode 证书 H-02 范畴）/ Android=${{ needs.android.outputs.signed || needs.android-reuse.outputs.signed || 'n/a' }}（keystore 签名）
           ${{ needs.android-reuse.result == 'success' && format('**Android {0} 产物复用自 {1}**（版本号未变，字节与该版一致，#838）', needs.plan-builds.outputs.android_version, needs.plan-builds.outputs.reuse_from) || '' }}
           ${{ needs.macos-reuse.result == 'success' && format('**macOS {0} 产物复用自 {1}**（版本号未变，字节与该版一致，#838）', needs.plan-builds.outputs.macos_version, needs.plan-builds.outputs.reuse_from) || '' }}
+          ${{ needs.windows-reuse.result == 'success' && format('**Windows {0} 产物复用自 {1}**（版本号未变，字节与该版一致，#838）', needs.plan-builds.outputs.windows_version, needs.plan-builds.outputs.reuse_from) || '' }}
           ${{ needs.ios.result == 'success' && needs.ios.outputs.uploaded == 'yes' && format('**iOS {0}（build {1}）已上传 TestFlight**（App Store Connect 签名，在 TestFlight 里装；不是本页的下载文件）', needs.ios.outputs.version, needs.ios.outputs.build) || '' }}
           ${{ needs.ios.result == 'success' && needs.ios.outputs.uploaded != 'yes' && format('**iOS {0} 未上传 TestFlight（未配置 App Store Connect 密钥）**', needs.ios.outputs.version) || '' }}
           ${{ needs.ios.result == 'failure' && '**iOS 上传 TestFlight 失败，见 iOS (TestFlight) job**' || '' }}
