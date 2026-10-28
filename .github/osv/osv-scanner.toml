@@ -5,16 +5,7 @@
 #   id = "GHSA-xxxx-xxxx-xxxx"
 #   reason = "原因 + 删除条件"
 
-# 以下四条在引入本扫描时就存在，各自有跟进项；处理完删掉对应条目。
-[[IgnoredVulns]]
-id = "GHSA-5j98-2g5x-46v6"
-reason = "hickory-resolver 0.26.1，修复在 0.26.2；经 iroh 引入，跟进 #1193。升级后删除。"
-[[IgnoredVulns]]
-id = "GHSA-6f2x-v7q7-m7m5"
-reason = "同上（hickory-resolver 0.26.2）。"
-[[IgnoredVulns]]
-id = "GHSA-6w6g-hm98-mhgm"
-reason = "同上（hickory-resolver 0.26.2）。"
+# 以下几条在引入本扫描时就存在，各自有跟进项；处理完删掉对应条目。
 [[IgnoredVulns]]
 id = "GHSA-3vqj-43w4-2q58"
 reason = "org.json 20190722，由 io.github.rctcwyvrn:blake3 1.3 传递引入，应用代码不直接使用；是否可 exclude 待核实，跟进 #1194。"
