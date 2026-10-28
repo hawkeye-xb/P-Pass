@@ -188,6 +188,14 @@ dependencies {
     // （AGP 8.7.3 上限 35）——升 compileSdk 是独立卡的范围，不在本卡动。
     implementation("androidx.media3:media3-exoplayer:1.9.4")
     implementation("androidx.media3:media3-ui:1.9.4")
+    // media3-common 1.9.4 传递引入 guava 33.3.1-android，有公告 GHSA-xxph-c9ww-hj94
+    // （反序列化无上限分配，修复于 33.7.2）。约束抬到修复版；media3 升级后若自带
+    // ≥33.7.2 即可删掉（#1233）。
+    constraints {
+        implementation("com.google.guava:guava:33.7.2-android") {
+            because("GHSA-xxph-c9ww-hj94：33.7.2 之前反序列化可触发无上限内存分配（#1233）")
+        }
+    }
 
     // MOB-26: Telephoto handles image pan/zoom and cooperates with nested scrolling.
     // Only the gesture module is used: current thumbnails stay in the single in-memory

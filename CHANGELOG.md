@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 桌面端：依赖库 tokio 升级到 1.53.3，修复安全公告 RUSTSEC-2026-0386（#1079）。
 - 桌面端、Android 端、iOS 端：依赖库 hickory-resolver 升级到 0.26.3，修复 3 条安全公告（#1193）。
 - Android 端：发布包不再带入旧版 org.json 库，消除 2 条安全公告（#1194）。
+- Android 端：播放器依赖带入的 guava 升级到 33.7.2，修复安全公告 GHSA-xxph-c9ww-hj94（#1233）。
 - iOS 端：调试用的启动参数在正式构建中一律不生效（#1227）。
 
 ## [2026.10.6] - 2026-10-26
