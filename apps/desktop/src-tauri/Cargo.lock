@@ -2463,7 +2463,7 @@ dependencies = [
 
 [[package]]
 name = "p-pass-desktop"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "interprocess",
  "platform",
@@ -2620,7 +2620,7 @@ checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "platform"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "core-foundation",
  "interprocess",
@@ -4539,7 +4539,7 @@ dependencies = [
 
 [[package]]
 name = "version-cmp"
-version = "0.10.0"
+version = "0.10.1"
 
 [[package]]
 name = "version-compare"

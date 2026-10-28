@@ -806,7 +806,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "core-index"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "blake3",
  "core-media",
@@ -824,7 +824,7 @@ dependencies = [
 
 [[package]]
 name = "core-media"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "kamadak-exif",
  "tempfile",
@@ -1012,7 +1012,7 @@ dependencies = [
 
 [[package]]
 name = "daemon"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -1140,7 +1140,7 @@ dependencies = [
 
 [[package]]
 name = "diag"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "serde_json",
 ]
@@ -3033,7 +3033,7 @@ dependencies = [
 
 [[package]]
 name = "media-codec"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "core-index",
  "core-media",
@@ -3713,7 +3713,7 @@ checksum = "7c87def4c32ab89d880effc9e097653c8da5d6ef28e6b539d313baaacfbafcbe"
 
 [[package]]
 name = "pair-pake"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "curve25519-dalek 4.1.3",
  "getrandom 0.2.17",
@@ -3880,7 +3880,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
 name = "platform"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "core-foundation 0.10.1",
  "interprocess",
@@ -4135,7 +4135,7 @@ dependencies = [
 
 [[package]]
 name = "proto"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "insta",
  "serde",
@@ -5349,7 +5349,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "storage"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "base64",
  "getrandom 0.3.4",
@@ -5529,7 +5529,7 @@ dependencies = [
 
 [[package]]
 name = "testclient"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "anyhow",
  "blake3",
@@ -5962,7 +5962,7 @@ dependencies = [
 
 [[package]]
 name = "transport"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "bao-tree",
  "base64",
@@ -6256,7 +6256,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
 name = "version-cmp"
-version = "0.10.0"
+version = "0.10.1"
 
 [[package]]
 name = "version-compare"
