@@ -207,7 +207,11 @@ dependencies {
 
     // T-053 content hashing — pure-Java BLAKE3, cross-checked against
     // Rust-generated vectors (tests/blake3-vectors.json) in unit tests.
-    implementation("io.github.rctcwyvrn:blake3:1.3")
+    // org.json:json:20190722 是它的传递依赖（公告 GHSA-3vqj-43w4-2q58 / GHSA-4jq9-2xhw-jpx7）；
+    // Android 系统自带 org.json，blake3 本身也不用它，exclude 掉避免进 APK（#1194）。
+    implementation("io.github.rctcwyvrn:blake3:1.3") {
+        exclude(group = "org.json", module = "json")
+    }
 
 
     // UPD-02 / #1151: 更新包 minisign 验签——Ed25519 与 BLAKE2b-512 都用在维护的
@@ -226,6 +230,8 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.10.0")
 
     testImplementation("junit:junit:4.13.2")
+    // 本地 JVM 单测里 android.jar 的 org.json 只是 stub，要真实现；只进测试类路径，不进 APK。
+    testImplementation("org.json:json:20250517")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("androidx.test:rules:1.6.1")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
