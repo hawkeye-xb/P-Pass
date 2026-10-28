@@ -1,0 +1,4 @@
+# #1237：数据库迁移脚本的校验值按文件原始字节算（sqlx 记进 _sqlx_migrations）。
+# 换行随检出环境变（Windows 上 core.autocrlf=true 会转成 CRLF），同一个脚本就会在
+# 不同机器上编出不同的校验值，互相拒绝对方建的库。固定为 LF，任何检出都一样。
+*.sql text eol=lf

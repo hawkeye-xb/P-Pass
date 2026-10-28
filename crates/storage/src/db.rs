@@ -166,6 +166,21 @@ impl Db {
 mod tests {
     use super::*;
 
+    /// #1237：编进程序的迁移脚本一律是 LF。校验值按原始字节算，CRLF 检出（Windows 的
+    /// core.autocrlf）编出的程序会拒绝 LF 检出编出的程序建的库，反之亦然。
+    /// 反证：把任一 `.sql` 转成 CRLF 再编译 → 红。
+    #[test]
+    fn embedded_migrations_have_lf_line_endings() {
+        for m in MIGRATOR.iter() {
+            assert!(
+                !m.sql.contains('\r'),
+                "迁移 {} ({}) 含 CR：检查 .gitattributes 的 *.sql eol=lf",
+                m.version,
+                m.description
+            );
+        }
+    }
+
     /// #1044：新版本建过的库被旧版本打开 = 库里有本二进制不认识的
     /// migration。这一种失败要能被认出来（daemon 输出 keyed 错误）。
     #[tokio::test]
