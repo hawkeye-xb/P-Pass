@@ -118,6 +118,15 @@ impl LibraryLocation {
                 .write(library.as_bytes())
                 .map_err(|e| config::ui_err("ui.err_set_library", &[("err", &e)]))?;
         }
+        // #1238：窗口程序要读得到这份 config（判断「配过没有」、找照片库）。Windows 服务形态
+        // 下目录私有，给这一个文件授本机用户只读；授不上就报错——否则服务一停，窗口程序
+        // 又会把已配置的机器当成全新安装。
+        {
+            use platform::PlatformAdapter as _;
+            platform::adapter()
+                .share_config_read(&cfg)
+                .map_err(|e| config::ui_err("ui.err_set_library", &[("err", &e)]))?;
+        }
         Ok(cfg)
     }
 }

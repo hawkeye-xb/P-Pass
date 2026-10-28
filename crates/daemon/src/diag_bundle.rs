@@ -38,6 +38,11 @@ pub(crate) const DAEMON_LOG_TAIL: u64 = 1024 * 1024;
 /// 启动早期 stderr、壳日志收进包的尾部上限（与壳现行一致）。
 pub(crate) const SMALL_LOG_TAIL: u64 = 256 * 1024;
 
+/// #1236：系统服务形态、导出时服务不在线——daemon.log 缺失的如实原因。
+pub(crate) const SERVICE_LOG_OFFLINE: &str =
+    "后台服务以系统服务运行，daemon.log 在服务的私有目录里，\
+     只能由在线的服务自己交出来；导出时服务不在线";
+
 // ── 读文件 ───────────────────────────────────────────────────────────
 
 /// 文件尾部最多 `max_bytes` 字节（日志一路累积，取尾部就够）。
@@ -79,6 +84,43 @@ fn rotated(path: &Path) -> PathBuf {
     let mut s = path.as_os_str().to_owned();
     s.push(".1");
     PathBuf::from(s)
+}
+
+/// #1236：daemon 交出自己的日志尾部，给 `logs.export` 随应答带回。
+///
+/// 日志归 daemon：Windows 服务形态写在私有的 `%ProgramData%\P-Pass\logs`，导出方（主人
+/// 身份）读不到，只能由在线的服务自己读出来交出去。原样交出——脱敏在导出方打包时统一做
+/// （[`build_bundle`]，与它本地读到的日志同一道），基准是导出方主人的家目录。
+/// 形状：`{"daemon.log": {"path", "tail"}, "daemon.log.1": {...}}`，读不到的不出现。
+pub(crate) fn own_log_tails() -> serde_json::Value {
+    use platform::PlatformAdapter as _;
+    let adapter = platform::adapter();
+    let mut out = serde_json::Map::new();
+    if let Some(log) = adapter.daemon_log_paths(&adapter.data_dir()).log_file {
+        for (name, path) in [("daemon.log", log.clone()), ("daemon.log.1", rotated(&log))] {
+            if let Some(t) = tail(&path, DAEMON_LOG_TAIL) {
+                out.insert(
+                    name.into(),
+                    serde_json::json!({ "path": path.display().to_string(), "tail": t }),
+                );
+            }
+        }
+    }
+    serde_json::Value::Object(out)
+}
+
+/// #1236：从 `logs.export` 应答里取服务交出的 `(daemon.log, daemon.log.1)`。老版本服务
+/// 没有 `logs` 字段 = 两个都没有，导出方退回自己读。
+fn served_logs(reply: &serde_json::Value) -> (Option<LogPart>, Option<LogPart>) {
+    let part = |name: &str| {
+        let v = &reply["logs"][name];
+        Some(LogPart {
+            path: v["path"].as_str().map(str::to_string),
+            tail: Some(v["tail"].as_str()?.to_string()),
+            missing: None,
+        })
+    };
+    (part("daemon.log"), part("daemon.log.1"))
 }
 
 // ── 脱敏 ─────────────────────────────────────────────────────────────
@@ -470,6 +512,9 @@ pub enum DaemonCollection {
         version: Option<String>,
         status: Option<serde_json::Value>,
         entries: Vec<(String, Vec<u8>)>,
+        /// #1236：服务自己交出的 daemon.log / daemon.log.1（老版本服务不给 = None）。
+        served_log: Option<LogPart>,
+        served_log_rotated: Option<LogPart>,
     },
 }
 
@@ -581,10 +626,13 @@ pub async fn collect_from_daemon(
             }
         }
     };
+    let (served_log, served_log_rotated) = served_logs(&reply);
     match reply["entries"].as_object() {
         Some(map) => DaemonCollection::Complete {
             version,
             status,
+            served_log,
+            served_log_rotated,
             entries: map
                 .iter()
                 .filter_map(|(name, text)| Some((name.clone(), text.as_str()?.as_bytes().to_vec())))
@@ -645,12 +693,31 @@ pub fn gather(env: &ExportEnv, daemon: DaemonCollection) -> BundleInputs {
     // startup_stderr_file）。
     let paths = adapter.daemon_log_paths(&env.platform_dir);
     let log_path = paths.log_file.clone();
-    let daemon_log = log_part(log_path.clone(), DAEMON_LOG_TAIL);
+    // #1236：日志归 daemon——在线时用它交出的那份；不在线（或老版本服务没给）才自己读。
+    let (served_log, served_log_rotated) = match &daemon {
+        DaemonCollection::Complete {
+            served_log,
+            served_log_rotated,
+            ..
+        } => (served_log.clone(), served_log_rotated.clone()),
+        _ => (None, None),
+    };
+    let mut daemon_log = served_log.unwrap_or_else(|| log_part(log_path.clone(), DAEMON_LOG_TAIL));
+    // 系统服务形态（Windows 命名管道）：日志在服务的私有目录，导出方本地读不到是常态，
+    // 不能写成「文件不存在」误导排障。
+    if daemon_log.tail.is_none()
+        && matches!(daemon, DaemonCollection::Unreachable(_))
+        && matches!(adapter.resident_ipc(), platform::ResidentIpc::UserPipe(_))
+    {
+        daemon_log.missing = Some(SERVICE_LOG_OFFLINE.into());
+    }
     // 上一代只在存在时收（还没轮转过不是缺失）。
-    let daemon_log_rotated = log_path
-        .map(|p| rotated(&p))
-        .filter(|p| p.exists())
-        .map(|p| log_part(Some(p), DAEMON_LOG_TAIL));
+    let daemon_log_rotated = served_log_rotated.or_else(|| {
+        log_path
+            .map(|p| rotated(&p))
+            .filter(|p| p.exists())
+            .map(|p| log_part(Some(p), DAEMON_LOG_TAIL))
+    });
     // #1046：stderr / stdout 不论谁接（Windows daemon 自己、macOS launchd），都在
     // daemon 自己的 `<logs>/` 里——只读这个目录，不读 plist 反推。
     let startup_stderr = paths.stderr.map(|p| log_part(Some(p), SMALL_LOG_TAIL));
@@ -684,6 +751,7 @@ pub fn gather(env: &ExportEnv, daemon: DaemonCollection) -> BundleInputs {
             version,
             status,
             entries,
+            ..
         } => {
             inputs.daemon_version = version;
             inputs.daemon_status = status;
@@ -1107,6 +1175,52 @@ mod tests {
     }
 
     /// 拍板口径 2：轮转出来的上一段同样收进包、同样脱敏。
+    /// #1236：服务交出的 daemon.log 进包（脱敏），即使导出方本地那个位置没有日志——
+    /// Windows 服务形态的现场。反证：gather 不看 served_log → 包里只有 daemon-log-missing.txt。
+    #[test]
+    fn the_daemon_log_served_over_ipc_lands_in_the_bundle() {
+        let reply = serde_json::json!({
+            "entries": {},
+            "logs": {
+                "daemon.log": {
+                    "path": "C:\\ProgramData\\P-Pass\\logs\\daemon.log",
+                    "tail": "INFO started for /Users/someone/x\n",
+                },
+            },
+        });
+        let (log, rotated) = served_logs(&reply);
+        assert!(rotated.is_none(), "没轮转过不算缺失");
+        let platform_dir = tempfile::tempdir().unwrap();
+        let env = ExportEnv {
+            platform_dir: platform_dir.path().to_path_buf(),
+            home: PathBuf::from("/Users/someone"),
+            app_version: None,
+            out: platform_dir.path().join("out.zip"),
+        };
+        let inputs = gather(
+            &env,
+            DaemonCollection::Complete {
+                version: None,
+                status: None,
+                entries: Vec::new(),
+                served_log: log,
+                served_log_rotated: rotated,
+            },
+        );
+        let bundle = build_bundle(&inputs);
+        let got = entry(&bundle, "daemon.log").expect("包里要有 daemon.log");
+        assert!(got.contains("INFO started"), "{got}");
+        assert!(!got.contains("/Users/someone"), "要脱敏：{got}");
+        assert!(entry(&bundle, "daemon-log-missing.txt").is_none());
+    }
+
+    /// 老版本服务的应答没有 `logs`：两个都没有，导出方退回自己读（行为不变）。
+    #[test]
+    fn an_old_daemon_without_served_logs_falls_back_to_the_local_file() {
+        let (log, rotated) = served_logs(&serde_json::json!({ "entries": {} }));
+        assert!(log.is_none() && rotated.is_none());
+    }
+
     #[test]
     fn rotated_daemon_log_is_included_and_scrubbed() {
         let i = BundleInputs {

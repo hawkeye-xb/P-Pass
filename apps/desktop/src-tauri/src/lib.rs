@@ -21,9 +21,9 @@ mod update_install;
 // QA-09 迁移（#211）：桌面壳现在有 9 个地方要调 platform 的能力，
 // 每个函数各写一遍 `use ... as _` 已经不划算；提到文件级。
 use distribution::{
-    daemon_is_unmanaged, is_user_stopped, kernel_convergence_verdict,
-    reconcile_autostart_registration, self_heal_allowed, set_user_stopped, should_pause_for_update,
-    show_wizard, update_resume_needed, KernelFacts, KernelVerdict,
+    daemon_is_unmanaged, kernel_convergence_verdict, reconcile_autostart_registration,
+    self_heal_allowed, should_pause_for_update, show_wizard, update_resume_needed, KernelFacts,
+    KernelVerdict, ShellHome,
 };
 use platform::{HostingAdapter as _, PlatformAdapter as _};
 use serde_json::{json, Value};
@@ -208,10 +208,9 @@ fn daemon_online() -> bool {
 /// means "user stopped" cannot mean one thing to the wizard and another to
 /// the state machine.
 fn initial_service_state() -> ServiceState {
-    let dir = platform::adapter().data_dir();
-    let configured = dir.join("config.toml").exists();
+    let home = ShellHome::current();
     let installed = platform::hosting().autostart_installed().unwrap_or(false);
-    ServiceState::initial(configured, installed, is_user_stopped(&dir))
+    ServiceState::initial(home.configured(), installed, home.user_stopped())
 }
 
 /// DESK-63 (#946): snapshot for the frontend's first paint. The event stream
@@ -342,7 +341,8 @@ async fn wizard_state(app: tauri::AppHandle) -> Result<Value, String> {
 }
 
 fn wizard_state_blocking(app: tauri::AppHandle) -> Value {
-    let dir = platform::adapter().data_dir();
+    // #1238：配置与停止记录只经 ShellHome 读——Windows 服务形态它们不在壳的数据目录。
+    let home = ShellHome::current();
     // Photos must land somewhere a person can FIND (real walkthrough:
     // "传到哪儿了" had no answer while the library hid in ~/Library).
     let pictures = default_library_dir(platform::adapter().pictures_dir());
@@ -353,9 +353,9 @@ fn wizard_state_blocking(app: tauri::AppHandle) -> Value {
     let unconfigured = daemon_waits_for_library();
     json!({
         "show_wizard": unconfigured || show_wizard(
-            dir.join("config.toml").exists(),
+            home.configured(),
             installed,
-            is_user_stopped(&dir),
+            home.user_stopped(),
             online,
         ),
         "unconfigured": unconfigured,
@@ -363,7 +363,7 @@ fn wizard_state_blocking(app: tauri::AppHandle) -> Value {
         // Some of the library, if the config already points somewhere —
         // the wizard prefills this so re-running it never orphans the
         // existing library (T-042b).
-        "configured_library_dir": ipc::read_config_data_dir(&dir),
+        "configured_library_dir": home.configured_library_dir(),
         // #1043：平台相关的界面决定由 `platform_ux` 命令给（适配器回答），
         // 这里不给平台名。
     })
@@ -605,7 +605,8 @@ fn use_default_library_dir(app: tauri::AppHandle) {
 #[tauri::command]
 async fn write_config(app: tauri::AppHandle) -> Result<(), String> {
     let dir = app.state::<LibraryPick>().get().unwrap_or_else(|| {
-        ipc::read_config_data_dir(&platform::adapter().data_dir())
+        ShellHome::current()
+            .configured_library_dir()
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| default_library_dir(platform::adapter().pictures_dir()))
     });
@@ -672,10 +673,9 @@ fn start_daemon_now(app: tauri::AppHandle) -> Result<String, String> {
     verify_sidecar_runs(&sidecar)?;
     // DESK-36 (#456)：用户点「启动服务」（或走完向导）= 撤销之前的主动停止，
     // 自愈恢复正常。放在探活之后：文件跑不起来就什么都没启动，仍算「停着」。
-    set_user_stopped(&platform::adapter().data_dir(), false)?;
-    // §5.1 / #1161：服务模式下「开机别启动」是服务自检的开关——先写回 running，否则
-    // 刚 `sc start` 起来的 daemon 读到 stopped 会立刻退出（看起来像启动失败）。
-    let _ = platform::adapter().set_service_wanted_state(true);
+    // §5.1 / #1161 / #1238：服务形态下这就是写回开关文件的 running——必须在 `sc start` 之前，
+    // 否则刚起来的 daemon 读到 stopped 会立刻退出（看起来像启动失败）。
+    ShellHome::current().set_user_stopped(false)?;
     let manager = app.state::<ServiceStateManager>().inner().clone();
     manager.begin_start(&app, "user start");
     match platform::hosting().install_autostart(&sidecar) {
@@ -841,7 +841,7 @@ fn resume_after_failed_update_blocking(app: tauri::AppHandle) -> Result<bool, St
 /// 自愈本体（前端触发的 `self_heal_daemon` 与壳启动对账共用，#1046）：配置过、且
 /// 不是用户主动停的（`self_heal_allowed`，调用这一刻读盘）才拉。
 fn self_heal_now(app: &tauri::AppHandle, reason: &str) -> Result<bool, String> {
-    if !self_heal_allowed(&platform::adapter().data_dir()) {
+    if !self_heal_allowed(&ShellHome::current()) {
         return Ok(false);
     }
     let manager = app.state::<ServiceStateManager>().inner().clone();
@@ -879,11 +879,10 @@ fn stop_daemon_now() -> Result<(), String> {
     // 0) DESK-36 (#456)：先落「用户主动停止」标记，再动进程——停到一半时
     //    恰好来一次自愈 tick，它也得看见标记。落不下就不停：停了也会被
     //    自愈拉回来，不如直接告诉用户停止失败。
-    set_user_stopped(&platform::adapter().data_dir(), true)?;
-    // §5.1 / #1161：服务模式下「开机别启动」靠服务自检——先把开关写成 stopped，
-    // 再停服务；否则下次开机 SCM 拉起来它又会跑（Windows 不给普通用户改启动类型的
-    // 权限，给了就破坏 ProgramData 的保护）。
-    let _ = platform::adapter().set_service_wanted_state(false);
+    //    §5.1 / #1161 / #1238：服务形态下这就是开关文件写 stopped——下次开机 SCM 拉起来
+    //    daemon 自检读到它就退出（Windows 不给普通用户改启动类型的权限，给了就破坏
+    //    ProgramData 的保护）。写不进去同样报错、不停。
+    ShellHome::current().set_user_stopped(true)?;
     // 1) Unregister first — otherwise the service manager revives it
     //    (launchd KeepAlive / the Task Scheduler watchdog).
     //    DESK-65 (#957)：结果不许丢——撤不掉登记，下次开机服务照样起来，
@@ -921,7 +920,7 @@ async fn pause_daemon_for_update(app: tauri::AppHandle) -> Result<(), String> {
 
 fn pause_daemon_for_update_blocking(app: tauri::AppHandle) -> Result<(), String> {
     // #1060：用户停过服务 = 本来就停着，更新前后都保持停止——不动。
-    if !should_pause_for_update(&platform::adapter().data_dir()) {
+    if !should_pause_for_update(&ShellHome::current()) {
         return Ok(());
     }
     // 先进入暂停窗口、再停：停掉那一刻前端就会收到断连并请求自愈。
@@ -1482,7 +1481,7 @@ fn pair_qr_svg(text: String) -> Result<String, String> {
 /// #1150：路径不再交给网页——壳自己在文件管理器里揭示（网页没有 reveal 权限）。
 #[tauri::command]
 async fn reveal_library() -> Result<(), String> {
-    off_main(|| reveal_in_file_manager(&library_reveal_target(&platform::adapter().data_dir())?))
+    off_main(|| reveal_in_file_manager(&library_reveal_target(&ShellHome::current().config_dir)?))
         .await?
 }
 
@@ -1622,7 +1621,7 @@ fn gather_kernel_facts() -> KernelFacts {
         on_disk_version: sidecar_daemon_version(),
         resident_registered: resident_service_available(),
         resident_pid: platform::hosting().resident_daemon_pid(),
-        user_stopped: is_user_stopped(&platform::adapter().data_dir()),
+        user_stopped: ShellHome::current().user_stopped(),
         // #1044：是否正在传输由 daemon 给结论（status.transfer_active）。读不到
         // （旧内核没有这个字段）按「没在传」——换内核是幂等对账，Flow 可续传。
         transfer_active: status
@@ -1654,7 +1653,7 @@ fn startup_reconcile(app: tauri::AppHandle) {
 /// 被重写时那一下 bootstrap 已经起了服务，这里看到在线就不动，避免并发重启。
 fn resume_after_update(app: &tauri::AppHandle) {
     if !update_resume_needed(
-        &platform::adapter().data_dir(),
+        &ShellHome::current(),
         resident_service_available(),
         daemon_online(),
     ) {
@@ -3045,7 +3044,7 @@ mod tests {
         };
         let stop = body("stop_daemon_now");
         let mark = stop
-            .find("set_user_stopped(&platform::adapter().data_dir(), true)?;")
+            .find("ShellHome::current().set_user_stopped(true)?;")
             .expect("stop_daemon_now 必须落「用户主动停止」标记，且失败要返回错误");
         let unregister = stop.find("uninstall_autostart()").expect("卸 autostart");
         let kill = stop.find("stop_bundled_daemon()").expect("杀进程");
@@ -3055,8 +3054,7 @@ mod tests {
             !stop.contains("let _ = platform::hosting().uninstall_autostart()"),
             "撤销开机自启失败必须报给用户"
         );
-        assert!(body("start_daemon_now")
-            .contains("set_user_stopped(&platform::adapter().data_dir(), false)?;"));
+        assert!(body("start_daemon_now").contains("ShellHome::current().set_user_stopped(false)?;"));
         // 托盘停止与窗口按钮必须是同一个实现（同一份标记）。
         assert!(product.contains("let result = stop_daemon_now();"));
     }
@@ -3240,7 +3238,7 @@ mod tests {
         assert!(!include_str!("../../src/App.svelte").contains("resume_daemon_after_update"));
         let heal = body("self_heal_now");
         let gate = heal
-            .find("if !self_heal_allowed(&platform::adapter().data_dir()) {")
+            .find("if !self_heal_allowed(&ShellHome::current()) {")
             .expect("先读盘上的「用户主动停止」标记与配置");
         let spawn = heal
             .find("bring_up_daemon(false)")

@@ -114,7 +114,7 @@ import com.hawkeyexb.ppass.ui.PhotosScreen
 import com.hawkeyexb.ppass.ui.TimelineLoader
 import com.hawkeyexb.ppass.ui.TimelineSubscriptionHolder
 import com.hawkeyexb.ppass.ui.TwoTabs
-import com.hawkeyexb.ppass.transport.disconnectAfterUnpairNotice
+import com.hawkeyexb.ppass.transport.disconnectAndNotifyInBackground
 import com.hawkeyexb.ppass.transport.sendUnpairNoticeOnce
 import com.hawkeyexb.ppass.transport.parsePeerAddrToken
 import com.hawkeyexb.ppass.ui.PairStatusScreen
@@ -1089,12 +1089,14 @@ fun PPassApp() {
                         // 不可达同理。unpair 失败不再阻塞断开，否则本地
                         // pairing 永远清不掉，重新扫码入口（Welcome）永久
                         // 消失（存储端移除设备后的死锁）。
-                        // #956 关闭裁决：清配对前尽力通知电脑一次（5 秒），收到就收到、没收到就算了；
-                        // 不留任何待以后重发的东西（撤掉 #565 的发件箱）。清理不受通知结局与取消影响。
+                        // #956 关闭裁决：通知电脑只尽力一次，收到就收到、没收到就算了；不留任何待以后重发的东西
+                        // （撤掉 #565 的发件箱）。#1239：不等通知——立刻清本地回欢迎页，通知在应用级作用域后台发
+                        // （地址 / 配对 id 清理前已拷进闭包）。清理不受通知结局、超时与取消影响。
                         onDisconnect = {
                             scope.launch {
-                                disconnectAfterUnpairNotice(
-                                    notify = { notifyUnpairOnce(client, s.pairing) },
+                                disconnectAndNotifyInBackground(
+                                    notify = notifyUnpairOnce(client, s.pairing),
+                                    background = app.noticeScope,
                                     clearLocal = { withContext(Dispatchers.IO) { clearLocalPairingLogged(context, s.pairing) } },
                                 )
                                 screen = Screen.Welcome
@@ -1441,19 +1443,25 @@ private fun deviceName(context: Context): String {
  * #1039：断开 / 重新扫码的清理写失败不许让 App 崩——清单已经逐行跑完（停任务、停监听不受影响），这里只记日志，
  * 调用方照常回欢迎页 / 扫码页（对位 iOS `LiveBackend.disconnect`）。
  */
-/** 主动断开时的那一次通知；结局只写日志。 */
-private suspend fun notifyUnpairOnce(client: DaemonClient, pairing: Pairing) {
+/**
+ * 主动断开时的那一次通知；结局只写日志。地址、配对 id 在这里（清理前）取出并拷进返回的闭包，
+ * 闭包在后台跑时不再读配对存储——清理之后照样能发。
+ */
+private fun notifyUnpairOnce(client: DaemonClient, pairing: Pairing): suspend () -> Unit {
     val tag = "desktop=${pairing.daemonNodeId.take(8)}"
+    val pairingId = pairing.pairingId
     val peer = runCatching { parsePeerAddrToken(pairing.daemonAddrToken) }.getOrNull()
-    if (peer == null) {
-        PLog.w("PPassDisconnect", "unpair: $tag address unreadable, not sent")
-        return
-    }
-    val reply = sendUnpairNoticeOnce { client.unpair(peer, pairing.pairingId) }
-    when {
-        reply == null -> PLog.i("PPassDisconnect", "unpair: $tag unreachable, not retried")
-        reply.ok -> PLog.i("PPassDisconnect", "unpair: $tag acknowledged")
-        else -> PLog.i("PPassDisconnect", "unpair: $tag rejected code=${reply.error?.code}, not retried")
+    return {
+        if (peer == null) {
+            PLog.w("PPassDisconnect", "unpair: $tag address unreadable, not sent")
+        } else {
+            val reply = sendUnpairNoticeOnce { client.unpair(peer, pairingId) }
+            when {
+                reply == null -> PLog.i("PPassDisconnect", "unpair: $tag unreachable, not retried")
+                reply.ok -> PLog.i("PPassDisconnect", "unpair: $tag acknowledged")
+                else -> PLog.i("PPassDisconnect", "unpair: $tag rejected code=${reply.error?.code}, not retried")
+            }
+        }
     }
 }
 

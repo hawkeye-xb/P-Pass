@@ -1,4 +1,4 @@
-// #956 关闭裁决（2026-10-22）：主动断开时尽力通知电脑一次，收到就收到，没收到就算了；然后无条件清本地，之后不再有任何动作。
+// #956 关闭裁决（2026-10-22）：主动断开时尽力通知电脑一次，收到就收到，没收到就算了；之后不再有任何动作。#1239：不等通知——立刻清本地，通知在后台发。
 import Foundation
 import XCTest
 @testable import PPassCore
@@ -40,31 +40,49 @@ final class UnpairNoticeTests: XCTestCase {
         XCTAssertEqual(transport.calls.first?.params, .object([:]))
     }
 
-    /// 反证：把 clearLocal 挪进「通知成功」分支 → 电脑不可达时本地不清 → 红。
-    func testLocalStateIsClearedEvenWhenTheNoticeFails() async {
-        let transport = ScriptedTransport { _, _ in throw Unreachable() }
-        let cleared = UnpairCounter()
+    /// 反证：把实现改回「先 await 通知再清本地」→ 通知挂住时清理永远不发生，expectation 超时 → 红。
+    func testLocalStateIsClearedWhileTheNoticeIsStillHanging() async {
+        let gate = UnpairTestGate() // 永不放行
+        let events = UnpairEvents()
         await UnpairNotice.disconnect(
-            notify: { await UnpairNotice.sendOnce(transport, daemonNodeId: "d", pairingId: "e1", logger: NoopLogger()) },
-            clearLocal: { cleared.add() })
-        XCTAssertEqual(transport.calls.count, 1)
-        XCTAssertEqual(cleared.value, 1)
+            notify: { events.add("notify-start"); await gate.state.enter(); events.add("notify-end") },
+            clearLocal: { events.add("clear") })
+        // disconnect 已经返回：清理发生在通知完成之前
+        XCTAssertTrue(events.snapshot.contains("clear"))
+        XCTAssertFalse(events.snapshot.contains("notify-end"))
+        await gate.waitUntilEntered() // 通知确实已在后台开始（并挂在门上）
+        gate.open() // 放行后后台通知才结束，不泄漏
     }
 
-    /// 断开所在的任务被取消（界面被关掉）：通知可能半途而废，清理照样执行。
-    func testLocalStateIsClearedEvenWhenTheDisconnectTaskIsCancelled() async {
-        let gate = UnpairTestGate()
+    /// 通知只发一次；不可达（抛错）不影响清理。反证：把 clearLocal 挪进「通知成功」分支 → 红。
+    func testAnUnreachableNoticeIsSentOnceAndLocalStateIsStillCleared() async {
+        let transport = ScriptedTransport { _, _ in throw Unreachable() }
         let cleared = UnpairCounter()
+        let sent = expectation(description: "notice attempted")
+        await UnpairNotice.disconnect(
+            notify: {
+                await UnpairNotice.sendOnce(transport, daemonNodeId: "d", pairingId: "e1", logger: NoopLogger())
+                sent.fulfill()
+            },
+            clearLocal: { cleared.add() })
+        XCTAssertEqual(cleared.value, 1)
+        await fulfillment(of: [sent], timeout: 5)
+        XCTAssertEqual(transport.calls.count, 1)
+    }
+
+    /// 断开所在的任务被取消（界面被关掉）：清理照样执行，后台通知不受影响（不是子任务）。
+    func testCleanupAndNoticeSurviveTheDisconnectTaskBeingCancelled() async {
+        let cleared = UnpairCounter()
+        let noticed = expectation(description: "notice ran despite cancellation")
         let task = Task {
             await UnpairNotice.disconnect(
-                notify: { await UnpairNotice.sendOnce(GatedTransport(gate: gate), daemonNodeId: "d", pairingId: "e1", logger: NoopLogger()) },
+                notify: { XCTAssertFalse(Task.isCancelled); noticed.fulfill() },
                 clearLocal: { cleared.add() })
         }
-        await gate.waitUntilEntered()
         task.cancel()
-        gate.open()
         await task.value
         XCTAssertEqual(cleared.value, 1)
+        await fulfillment(of: [noticed], timeout: 5)
     }
 
     /// 老版本的发件箱存着旧电脑的 peerToken：启动删掉，伴生临时文件一起；别的文件不碰。
@@ -119,6 +137,12 @@ private struct NoRuntime: DisconnectRuntime {
     func cancelScheduledWakes() {}
     func stopMediaChangeObserver() {}
     func clearThumbnailMemoryCache() {}
+}
+
+private final class UnpairEvents: @unchecked Sendable {
+    private let lock = NSLock(); private var e: [String] = []
+    func add(_ s: String) { lock.lock(); e.append(s); lock.unlock() }
+    var snapshot: [String] { lock.lock(); defer { lock.unlock() }; return e }
 }
 
 private final class UnpairCounter: @unchecked Sendable {

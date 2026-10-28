@@ -1932,8 +1932,14 @@ impl IpcServer {
                 }
             }
             // #1122：三份 JSON 直接在应答里返回，不在库目录写任何文件。
+            // #1236：daemon 自己的日志尾部一并带回（服务形态下只有它读得到）。
             "logs.export" => match self.export_logs().await {
-                Ok(entries) => Resp::ok(id, serde_json::json!({ "entries": entries })),
+                Ok(entries) => {
+                    let logs = tokio::task::spawn_blocking(crate::diag_bundle::own_log_tails)
+                        .await
+                        .unwrap_or_else(|_| serde_json::json!({}));
+                    Resp::ok(id, serde_json::json!({ "entries": entries, "logs": logs }))
+                }
                 Err(e) => {
                     tracing::warn!("logs.export failed: {e}");
                     internal(id)
