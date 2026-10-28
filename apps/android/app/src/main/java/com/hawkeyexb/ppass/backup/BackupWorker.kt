@@ -2,6 +2,8 @@
 package com.hawkeyexb.ppass.backup
 
 import android.content.Context
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
@@ -64,11 +66,29 @@ internal fun autoBackupWorkNames(): List<String> = listOf(
     MEDIA_WATCH_BACKUP_WORK_NAME,
 )
 
-private fun constraintsOf(spec: BackupConstraintsSpec): Constraints =
-    Constraints.Builder()
-        .setRequiredNetworkType(if (spec.requiresUnmetered) NetworkType.UNMETERED else NetworkType.CONNECTED)
+/**
+ * #1220：唤醒只要求「连着网络」（Wi‑Fi 限制时再要求不计流量），**不要求系统验证过外网**。
+ * `NetworkType.CONNECTED / UNMETERED` 在 API 28+ 会被 JobScheduler 落成带 `VALIDATED` 的请求；
+ * 代理失效、只通局域网、待网页登录的 Wi‑Fi 永远拿不到 `VALIDATED`，进程死后续传哨兵与周期兜底就一直不跑。
+ * 备份走局域网直连或中继，用不着外网验证。能不能传仍由引擎在这一轮里判（`AndroidFlowRuntime` 看当前网络是否
+ * 不计流量，连不上桌面走探测梯退避），这里只是唤醒的闸门。API 26–27 没有网络请求约束，退回 [NetworkType]。
+ */
+internal fun requiredNetworkCapabilities(spec: BackupConstraintsSpec): List<Int> =
+    buildList {
+        add(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        if (spec.requiresUnmetered) add(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
+    }
+
+private fun constraintsOf(spec: BackupConstraintsSpec): Constraints {
+    val request = NetworkRequest.Builder()
+        .apply { requiredNetworkCapabilities(spec).forEach { addCapability(it) } }
+        .removeCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        .build()
+    return Constraints.Builder()
+        .setRequiredNetworkRequest(request, if (spec.requiresUnmetered) NetworkType.UNMETERED else NetworkType.CONNECTED)
         .setRequiresBatteryNotLow(spec.requiresBatteryNotLow)
         .build()
+}
 
 internal fun backupWorkRequest(
     spec: BackupConstraintsSpec,

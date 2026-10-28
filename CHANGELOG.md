@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Android 端：连着只通局域网、或代理失效而被系统判为「不能上网」的 Wi‑Fi 时，备份中途 App 被系统结束后，后台仍会按时自动续传；以前要等下次打开 App 才接着传（#1220）。
+
 ## [2026.10.7] - 2026-10-28
 
 ### Added
