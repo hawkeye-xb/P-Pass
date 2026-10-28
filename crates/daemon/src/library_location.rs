@@ -113,6 +113,10 @@ impl LibraryLocation {
         } else {
             config::set_library(&self.platform_dir, &library)?
         };
+        // #1253：库标记（`.ppf/`）在写位置时就建出——启动时「库在不在」只认它，新选的空目录
+        // 不能在第一次开库前被判成「库找不到」。
+        std::fs::create_dir_all(Path::new(&library).join(".ppf"))
+            .map_err(|e| config::ui_err("ui.err_set_library", &[("err", &e)]))?;
         if let Some(store) = &self.store {
             store
                 .write(library.as_bytes())

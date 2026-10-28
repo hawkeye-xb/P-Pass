@@ -72,9 +72,16 @@ fn location(home: &Path) -> LibraryLocation {
     LibraryLocation::with(None, home.join("platform"))
 }
 
-/// 写入不得触发任何 daemon 机制：库目录里没有 `.ppf` / ipc.token，平台目录只有 config.toml。
+/// 写入不得触发任何 daemon 机制：不开库（`.ppf/` 只许是 #1253 的空库标记，里面没有索引）、
+/// 没有 ipc.token，平台目录只有 config.toml。
 fn assert_no_daemon_side_effects(platform_dir: &Path, library: &Path) {
-    assert!(!library.join(".ppf").exists(), "不得开库");
+    let marker = library.join(".ppf");
+    assert!(marker.is_dir(), "#1253：写位置时要建出库标记");
+    assert_eq!(
+        std::fs::read_dir(&marker).unwrap().count(),
+        0,
+        "不得开库：库标记必须是空目录"
+    );
     assert!(!library.join("ipc.token").exists(), "不得起 IPC");
     let entries: Vec<_> = std::fs::read_dir(platform_dir)
         .unwrap()

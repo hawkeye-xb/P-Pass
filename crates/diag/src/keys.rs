@@ -281,6 +281,8 @@ msg_keys! {
     UI_WIZARD_STEP_SLEEP => "ui.wizard_step_sleep",
     UI_WIZARD_STEP_SERVICE => "ui.wizard_step_service",
     UI_WIZARD_UNCONFIGURED_NOTICE => "ui.wizard_unconfigured_notice",
+    UI_LIBRARY_MISSING_TITLE => "ui.library_missing_title",
+    UI_LIBRARY_MISSING_BODY => "ui.library_missing_body",
     UI_WIZARD_LIBRARY_TITLE => "ui.wizard_library_title",
     UI_WIZARD_LIBRARY_BODY_MAC => "ui.wizard_library_body_mac",
     UI_WIZARD_LIBRARY_BODY_WIN => "ui.wizard_library_body_win",
@@ -785,10 +787,12 @@ mod tests {
             UI_ERR_DAEMON_NOT_OURS,
             UI_ERR_DAEMON_OTHER_ACCOUNT,
             UI_WIZARD_UNCONFIGURED_NOTICE,
+            UI_LIBRARY_MISSING_TITLE,
+            UI_LIBRARY_MISSING_BODY,
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 335);
+        assert_eq!(ALL.len(), 337);
     }
 
     #[test]

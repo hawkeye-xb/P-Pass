@@ -329,12 +329,18 @@ async fn run() -> anyhow::Result<()> {
     // 绝不 create_dir_all 静默造——外置盘未挂载时会在 /Volumes 下造出同名
     // 真目录，照片写进内置盘（挂载点阴影）。默认平台目录（首启向导前）与
     // 测试沙盒目录保持旧行为。
-    if let Err(msg) = library_root_check(explicitly_configured, data_dir.is_dir(), &data_dir) {
-        // 文件日志此刻还没初始化（init_file_logging 在更后面）——走 stderr：
-        // launchd 的 StandardErrorPath 会接住，DESK-09 诊断链（壳读 plist
-        // stderr 尾行）照样能看到这句话；Windows 上落 logs\daemon.err（DESK-58）。KeepAlive 节流重拉，盘插回即自愈。
+    // #1253：找不到库不再退出（以前每次启动都报错退出，窗口只能说「服务没运行」，文件夹被移走
+    // 时用户在 App 里没有出路）。照 Syncthing 文件夹丢失的做法：服务照常在，只把「库找不到 +
+    // 路径」交给窗口，巡检到库回来就带着库重启。
+    if !library_present(explicitly_configured, &data_dir) {
+        let msg = library_missing_message(&data_dir);
         eprintln!("{msg}");
-        std::process::exit(1);
+        tracing::warn!("{msg}");
+        run_waiting(
+            std::sync::Arc::clone(&library_location),
+            daemon::ipc::Waiting::LibraryMissing(data_dir.clone()),
+        )
+        .await
     }
     std::fs::create_dir_all(data_dir.join(".ppf"))?;
     // #949：清掉旧版遥测遗留的 anon_id（尽力而为，失败只 warn）。
@@ -1040,27 +1046,32 @@ async fn load_or_mint_identity(
     }
 }
 
-/// DESK-46 (#638)：库目录的启动判据（纯函数——文件系统与 env 探测都在
-/// 调用点完成，判据只由传入的事实决定，好做单测与反证）。
+/// DESK-46 (#638) / #1253：库在不在的唯一判据（启动时与库找不到状态的巡检共用）。
 ///
-/// `configured_in_file` = data_dir 来自 config.toml 显式配置（PPF_DATA_DIR
-/// 环境变量指定的不算——场景脚本/tools 依赖自动建一次性临时库）。
-/// 显式配置的库目录不存在 ⇒ Err（人话，给 stderr / launchd 诊断链）；
-/// 默认平台目录或目录已存在 ⇒ Ok。
-fn library_root_check(
-    configured_in_file: bool,
-    exists: bool,
-    data_dir: &std::path::Path,
-) -> Result<(), String> {
-    if configured_in_file && !exists {
-        return Err(format!(
-            "库目录不存在：{}——外置盘未挂载，或文件夹被移动/删除了。\
-             请挂载/恢复后重试，或修正 config.toml 里的 data_dir。",
-            data_dir.display()
-        ));
-    }
-    Ok(())
+/// 只对显式配置的库判（`PPF_DATA_DIR` 测试库、默认平台目录、沙盒照旧自动建）。判据是库标记
+/// `.ppf/` 目录（Syncthing 的 `.stfolder` 同理）：光有同名目录不算——外置盘没挂时原位置可能
+/// 冒出一个空目录，把它当成空库接管，桌面索引是空的、手机水位还在，就会永不补传（#639）。
+/// 库标记由写库位置时建出（[`daemon::library_location::LibraryLocation::set`]），开过一次的库本来就有。
+fn library_present(configured_in_file: bool, data_dir: &std::path::Path) -> bool {
+    library_root_ok(configured_in_file, data_dir.join(".ppf").is_dir())
 }
+
+/// [`library_present`] 的纯判据，好做单测与反证。
+fn library_root_ok(configured_in_file: bool, has_marker: bool) -> bool {
+    !configured_in_file || has_marker
+}
+
+/// 库找不到时的人话（日志与 stderr；窗口另按 `status.library_missing` 出文案）。
+fn library_missing_message(data_dir: &std::path::Path) -> String {
+    format!(
+        "找不到照片库：{}——外置盘没有接上，或文件夹被移动、改名、删除了。\
+         后台服务保持运行，照片库回到这个位置后自动恢复。",
+        data_dir.display()
+    )
+}
+
+/// #1253：库找不到状态下多久看一次库回来没有。插回外置盘后几秒内恢复即可，巡检本身只是一次 stat。
+const LIBRARY_RECHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// #1115：未配置状态——正本里还没有库位置（macOS 钥匙串里没有；Windows / Linux 平台目录里
 /// 没有 config.toml）。单实例交接照做，然后只答 `status` 与 `config.set_library`，写好后以
@@ -1068,9 +1079,32 @@ fn library_root_check(
 async fn run_unconfigured(
     location: std::sync::Arc<daemon::library_location::LibraryLocation>,
 ) -> ! {
+    tracing::info!("#1115: 照片库位置未配置——只开放配置方法，等窗口程序的首启向导");
+    let waiting = daemon::ipc::Waiting::Unconfigured(std::sync::Arc::clone(&location));
+    run_waiting(location, waiting).await
+}
+
+/// 还不能开库时的服务（[`daemon::ipc::Waiting`]：未配置 / 库找不到）：单实例交接照做，只答
+/// 少数方法，按停止信号退出。库找不到时另起巡检，库回来就以 `EXIT_CONFIGURED_RESTART` 退出、
+/// 由服务管理器带着库重新拉起（与首启写好库位置同一条路）。
+async fn run_waiting(
+    location: std::sync::Arc<daemon::library_location::LibraryLocation>,
+    waiting: daemon::ipc::Waiting,
+) -> ! {
     use platform::PlatformAdapter as _;
     let version = daemon::daemon_version();
-    tracing::info!("#1115: 照片库位置未配置——只开放配置方法，等窗口程序的首启向导");
+    if let daemon::ipc::Waiting::LibraryMissing(dir) = &waiting {
+        let dir = dir.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(LIBRARY_RECHECK_INTERVAL).await;
+                if library_present(true, &dir) {
+                    tracing::info!("#1253: 照片库回来了（{}），带着库重新启动", dir.display());
+                    std::process::exit(daemon::ipc::EXIT_CONFIGURED_RESTART);
+                }
+            }
+        });
+    }
     let served: std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>> =
         match platform::adapter().resident_ipc() {
             platform::ResidentIpc::SignedSocket(path) => {
@@ -1089,16 +1123,16 @@ async fn run_unconfigured(
                     &version,
                 )
                 .await;
-                Box::pin(async move {
-                    daemon::ipc::serve_unconfigured_signed(&path, version, location).await
-                })
+                Box::pin(
+                    async move { daemon::ipc::serve_waiting_signed(&path, version, waiting).await },
+                )
             }
             platform::ResidentIpc::UserPipe(pipe) => {
                 stand_down_unless_claimed(&daemon::ipc::PeerEndpoint::Pipe(pipe.clone()), &version)
                     .await;
-                Box::pin(async move {
-                    daemon::ipc::serve_unconfigured_pipe(&pipe, version, location).await
-                })
+                Box::pin(
+                    async move { daemon::ipc::serve_waiting_pipe(&pipe, version, waiting).await },
+                )
             }
             platform::ResidentIpc::NamespacedWithToken => {
                 // 前任（另一个未配置实例）的令牌在平台目录里；没有就是第一个。
@@ -1121,8 +1155,7 @@ async fn run_unconfigured(
                     }
                 };
                 Box::pin(async move {
-                    daemon::ipc::serve_unconfigured_token(&platform_dir, token, version, location)
-                        .await
+                    daemon::ipc::serve_waiting_token(&platform_dir, token, version, waiting).await
                 })
             }
         };
@@ -1190,30 +1223,43 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    // DESK-46 (#638)：显式配置的库目录不存在 ⇒ 拒绝启动（人话消息），
-    // 不再 create_dir_all 造假目录。反证：把 library_root_check 改成永远
-    // Ok，本测试必须变红。
+    // DESK-46 (#638) / #1253：显式配置的库没有库标记 ⇒ 判「库找不到」（不开库、不造目录）。
+    // 反证：把 library_root_ok 改成永远 true，本测试变红。
     #[test]
-    fn desk46_configured_library_missing_is_refused() {
-        let err = library_root_check(true, false, Path::new("/Volumes/My Passport"))
-            .expect_err("显式配置的库目录不存在时必须拒绝启动");
-        assert!(err.contains("库目录不存在"), "消息要有人话：{err}");
-        assert!(
-            err.contains("/Volumes/My Passport"),
-            "消息要带具体路径，用户才知道挂哪块盘：{err}"
-        );
+    fn desk46_configured_library_without_marker_is_missing() {
+        assert!(!library_root_ok(true, false));
     }
 
-    // DESK-46 (#638)：默认平台目录（首启向导前）与 PPF_DATA_DIR 场景目录
-    // 不在守卫范围内——configured_in_file=false 时即使目录不存在也放行，
-    // 由后面的 create_dir_all 自动建（tools/ 脚本契约）。
+    // 默认平台目录（首启向导前）与 PPF_DATA_DIR 场景目录不在守卫范围内——
+    // configured_in_file=false 时即使目录不存在也放行，由后面的 create_dir_all 自动建（tools/ 脚本契约）。
     #[test]
     fn desk46_default_or_env_library_may_be_created() {
-        assert!(library_root_check(false, false, Path::new("/tmp/ppf-scene/library")).is_ok());
+        assert!(library_root_ok(false, false));
     }
 
     #[test]
     fn desk46_existing_configured_library_passes() {
-        assert!(library_root_check(true, true, Path::new("/anywhere")).is_ok());
+        assert!(library_root_ok(true, true));
+    }
+
+    // #1253：判据看库标记，不看同名目录——外置盘没挂时原位置冒出的空目录不算库。
+    // 反证：library_present 改回 data_dir.is_dir()，「只有空目录」那条变红。
+    #[test]
+    fn i1253_presence_is_the_marker_not_the_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("P-Pass Library");
+        assert!(!library_present(true, &lib), "目录不存在");
+        std::fs::create_dir_all(&lib).unwrap();
+        assert!(!library_present(true, &lib), "只有空目录不算库");
+        std::fs::create_dir_all(lib.join(".ppf")).unwrap();
+        assert!(library_present(true, &lib));
+    }
+
+    // #1253：报错不再让人去改 config.toml（#1115 起库位置正本在钥匙串，改了也不作数），且带路径。
+    #[test]
+    fn i1253_message_names_the_path_and_not_config_toml() {
+        let msg = library_missing_message(Path::new("/Volumes/My Passport/P-Pass Library"));
+        assert!(msg.contains("/Volumes/My Passport/P-Pass Library"), "{msg}");
+        assert!(!msg.contains("config.toml"), "{msg}");
     }
 }

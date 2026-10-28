@@ -419,3 +419,55 @@ async fn unconfigured_token_endpoint_answers_only_config_methods() {
     );
     assert!(!platform_dir.join("config.toml").exists());
 }
+
+/// #1253：库找不到状态。`status` 报 `library_missing` 与路径，**不**报 `unconfigured`（那会把人
+/// 送进首启向导，向导预填的正是这个找不到的路径）；订阅照常成立（壳判「运行中」，不去自愈拉起）；
+/// 这一状态不改库位置，其余方法一律「库不可用」。
+/// 反证：status 改回报 unconfigured ⇒ 第一组断言红；放行 config.set_library ⇒ 末组红。
+#[test]
+fn library_missing_state_reports_the_path_and_opens_nothing() {
+    use daemon::ipc::library_missing_dispatch;
+    let dir = std::path::Path::new("/Volumes/My Passport/P-Pass Library");
+    let s = library_missing_dispatch(
+        &req("status", serde_json::json!({})),
+        IpcClient::Shell,
+        "1.0.0",
+        0,
+        dir,
+    );
+    assert!(s.ok);
+    let r = s.result.unwrap();
+    assert_eq!(r["library_missing"], true);
+    assert_eq!(r["library_dir"], "/Volumes/My Passport/P-Pass Library");
+    assert!(r.get("unconfigured").is_none(), "{r}");
+
+    let sub = library_missing_dispatch(
+        &req("events.subscribe", serde_json::json!({})),
+        IpcClient::Shell,
+        "1.0.0",
+        0,
+        dir,
+    );
+    assert!(sub.ok, "{:?}", sub.error);
+
+    for m in [
+        "config.set_library",
+        "pairing.start",
+        "devices.list",
+        "timeline.page",
+    ] {
+        let r = library_missing_dispatch(
+            &req(m, serde_json::json!({ "library": "/tmp/x" })),
+            IpcClient::Shell,
+            "1.0.0",
+            0,
+            dir,
+        );
+        assert!(!r.ok, "{m} 不该在库找不到时被答");
+        assert_eq!(
+            r.error.unwrap().reason().to_string(),
+            "library_unavailable",
+            "{m}"
+        );
+    }
+}

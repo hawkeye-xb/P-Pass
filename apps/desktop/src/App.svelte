@@ -1592,6 +1592,12 @@
               {/if}
               <p class="text-[13px] leading-[1.6] text-ink-40">{t("ui.refresh_hint")}</p>
             </Card>
+          {:else if status?.library_missing}
+            <!-- #1253：服务在，但照片库找不到——说明原因与路径；库回来后 daemon 自己带着库重启。 -->
+            <Card class="text-[16px]" data-testid="library-missing">
+              <strong>{t("ui.library_missing_title")}</strong>
+              <p class="m-0 whitespace-pre-line text-[13px] leading-[1.6] text-ink-60">{t("ui.library_missing_body", { dir: status.library_dir })}</p>
+            </Card>
           {:else}
             {#if pendingCount > 0 && !showConfirmModal}
               <div class="flex items-center gap-[16px] rounded-xl border border-border bg-waiting-bg px-[22px] py-[18px]">

@@ -202,6 +202,8 @@
   "ui.wizard_step_sleep": "Will it sleep",
   "ui.wizard_step_service": "Run in background",
   "ui.wizard_unconfigured_notice": "The P-Pass background service is running and waiting for you to choose where the photo library lives. It starts working as soon as you confirm below.",
+  "ui.library_missing_title": "Photo library not found",
+  "ui.library_missing_body": "The folder that holds your photo library can't be found: {dir}\n\nIf it is on an external drive, reconnect the drive to this computer. If the folder was moved or renamed, put it back where it was, under its original name. P-Pass picks it up again automatically; your photos and paired phones are not affected.",
   "ui.wizard_library_title": "Where should the family's photos live?",
   "ui.wizard_library_body_mac": "Pick a folder to be the \"photo library\". Photos are saved as original files, and you can browse them in Finder anytime.",
   "ui.wizard_library_body_win": "Pick a folder to be the \"photo library\". Photos are saved as original files, and you can browse them in File Explorer anytime.",
