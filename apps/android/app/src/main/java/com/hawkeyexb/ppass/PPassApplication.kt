@@ -155,7 +155,7 @@ class PPassApplication : Application() {
     }
 
     /** #130：确定事件评估用的进程级 scope（IO，阻塞读文件 + binder）。 */
-    private val noticeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    internal val noticeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private fun registerNetworkCallback() {
         val cm = getSystemService(ConnectivityManager::class.java) ?: return

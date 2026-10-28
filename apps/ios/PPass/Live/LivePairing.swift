@@ -328,18 +328,17 @@ final class LivePairing: PairingService, @unchecked Sendable {
 
     func cancel() async { current?.cancel() }
 
-    /// 主动断开（对位 Android onDisconnect）：清配对前尽力通知电脑一次（5 秒），失败就算了，然后无条件清本地。
-    /// 不留任何东西待以后重发（#956 关闭裁决）。配对已失效（lost）的电脑本就不认这台手机，不发。
+    /// 主动断开（对位 Android onDisconnect）：立刻按断开清单清本地，不等电脑；通知电脑一次在后台尽力发（5 秒截止），
+    /// 失败就算了、不重试、不留任何东西待以后重发（#956 关闭裁决、#1239）。配对已失效（lost）的电脑本就不认这台手机，不发。
+    /// 传输 / 地址 / 配对 id 在清理前取出并捕获进通知闭包，清理之后照样能发。
     func disconnect() async {
-        let record = store.load()
-        let transportFor = self.transportFor, logger = self.logger
-        await UnpairNotice.disconnect(
-            notify: {
-                guard let r = record, !r.lost else { return }
-                await UnpairNotice.sendOnce(transportFor(r.peerToken), daemonNodeId: r.daemonNodeId,
-                                            pairingId: r.pairingId, logger: logger)
-            },
-            clearLocal: onDisconnect)
+        let notice = store.load().flatMap { r -> (@Sendable () async -> Void)? in
+            guard !r.lost else { return nil }
+            let transport = transportFor(r.peerToken), logger = self.logger
+            let daemonNodeId = r.daemonNodeId, pairingId = r.pairingId
+            return { await UnpairNotice.sendOnce(transport, daemonNodeId: daemonNodeId, pairingId: pairingId, logger: logger) }
+        }
+        await UnpairNotice.disconnect(notify: notice ?? {}, clearLocal: onDisconnect)
     }
 
     /// 不通知电脑，直接按断开清单清本地（与被拒即清理同一份）。

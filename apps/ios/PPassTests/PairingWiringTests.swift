@@ -317,7 +317,7 @@ final class PairingWiringTests: XCTestCase {
         XCTAssertNil(store.load())
     }
 
-    // MARK: 主动断开（#956 关闭裁决：尽力通知一次，之后什么都不做）
+    // MARK: 主动断开（#956 关闭裁决：尽力通知一次，之后什么都不做；#1239：通知在后台发，断开不等它）
 
     /// 电脑不可达：只试一次，配对照样清；清完之后存储根里没有任何文件还带着这台电脑的 peerToken——
     /// 回前台 / 网络恢复 / 重启时就没有任何东西能拿来再连它。
@@ -332,8 +332,10 @@ final class PairingWiringTests: XCTestCase {
             try? applyDisconnectManifest(root: root, runtime: NoopDisconnectRuntime())
         })
         await pairing.disconnect()
+        XCTAssertNil(store.load(), "电脑不可达也必须清掉配对（断开返回时已清，不等通知）")
+        // 通知在后台发：等它发出（清理后照样能发——地址 / 配对 id 清理前已取出）
+        for _ in 0..<500 where transport.calls.isEmpty { try await Task.sleep(nanoseconds: 10_000_000) }
         XCTAssertEqual(transport.calls, [Methods.deviceUnpair])
-        XCTAssertNil(store.load(), "电脑不可达也必须清掉配对")
         let leftovers = (FileManager.default.enumerator(at: dir, includingPropertiesForKeys: nil)?.allObjects as? [URL] ?? [])
             .filter { (try? String(contentsOf: $0, encoding: .utf8))?.contains(token) == true }
         XCTAssertEqual(leftovers.map(\.lastPathComponent), [], "断开后盘上不许再有这台电脑的 peerToken")

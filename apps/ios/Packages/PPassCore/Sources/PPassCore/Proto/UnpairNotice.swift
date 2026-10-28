@@ -1,7 +1,9 @@
-// 用户主动断开（UX-06）时告诉电脑「这次配对我结束了」：清配对前尽力发一次，收到就收到，没收到就算了。
+// 用户主动断开（UX-06）时告诉电脑「这次配对我结束了」：断开立即完成，通知在后台尽力发一次，收到就收到，没收到就算了。
 //
 // 主动断开是单向行为（#956 关闭裁决，2026-10-22）：本地配对凭据清掉的那一刻断开就完成了，不留发件箱、
 // 不在之后的任何时机（回前台 / 网络恢复 / 启动）重发。电脑上残留的设备行归电脑端管理（最近活动、手动移除）。
+// 次序（#1239）：点确认后立刻清本地、回欢迎页，不等通知；通知所需的传输 / 地址 / 配对 id 在清理前取出、捕获进通知闭包，
+// 用非结构化 Task 后台 fire-and-forget（不随界面或调用方取消），结果只写日志、不重试、不持久化。
 // 配对期间的被动断开（断网、电脑重启）才需要恢复机制，那是 #976 / #977，与这里无关。
 //
 // - 最多等 5 秒（对位 Android `UNPAIR_NOTICE_TIMEOUT_MS` 的 withTimeoutOrNull）：FFI `call` 的 timeout_ms 只管连接 + 请求 + 应答，
@@ -51,9 +53,11 @@ public enum UnpairNotice {
         }
     }
 
-    /// 断开的固定次序：先尽力通知一次，再无条件清本地。通知失败、超时、所在任务被取消都不跳过清理。
-    public static func disconnect(notify: () async -> Void, clearLocal: () async -> Void) async {
-        await notify()
+    /// 断开的固定次序：通知丢进非结构化 `Task` 后台发（不 await），本地清理立刻执行、不等通知。
+    /// [notify] 必须只依赖调用前已取出的值（清理之后原配对已不在）。通知失败、挂住、超时，
+    /// 或调用方任务被取消（界面被关掉）都不影响清理，也不会取消通知。
+    public static func disconnect(notify: @escaping @Sendable () async -> Void, clearLocal: () async -> Void) async {
+        Task.detached { await notify() }
         await clearLocal()
     }
 
