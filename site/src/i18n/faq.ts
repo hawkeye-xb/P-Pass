@@ -134,8 +134,8 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
           id: 'supported-devices',
           q: 'Will it run on my phone and computer?',
           a: [
-            'The computer needs a Mac with an M-series chip. The phone needs Android 8.0 or newer, any brand.',
-            'The iPhone app and the Windows app are not published.',
+            'The computer can be a Mac with an M-series chip or a PC running 64-bit Windows. The phone needs Android 8.0 or newer, any brand.',
+            'The iPhone app is not published.',
           ],
         },
         {
@@ -143,7 +143,7 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
           q: 'How long does setup take?',
           a: [
             'Two installs and one scan, and no technical knowledge.',
-            'Install the app on the computer. The wizard asks which folder should hold your photos, then shows a QR code. Install the app on the phone, scan the code, tap Allow on the computer. That is the whole thing.',
+            'Install the app on the computer. The wizard asks which folder should hold your photos, then shows a QR code. Install the app on the phone, scan the code, and the phone shows a 6-digit code. Enter it on the computer and click Allow. That is the whole thing.',
           ],
           more: [
             {
@@ -174,8 +174,9 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
           id: 'install-blocked',
           q: 'The system blocked the installer. Now what?',
           a: [
-            'That is normal for an app downloaded outside the app stores: Gatekeeper on macOS, the "unknown source" prompt on Android.',
-            'The steps to allow it are in the repository docs.',
+            'That is normal for an app downloaded outside the app stores: Gatekeeper on macOS, SmartScreen on Windows, the "unknown source" prompt on Android.',
+            'The Windows installer is not code-signed, so SmartScreen shows "Windows protected your PC". Choose More info, then Run anyway.',
+            'The steps for the other prompts, and how to check that the file is genuine, are in the repository docs.',
           ],
           more: [
             {
@@ -232,7 +233,7 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
                 'Phone home screen: one standing line, "Phone 1,234 · backed up 1,180 · waiting 54", plus the time of the last success.',
                 "Photos on the phone: everything already on the computer is browsable there.",
                 "Photos page in the computer app: the same library as a thumbnail wall.",
-                'The folder on the computer: the original files are in it, and they open from Finder.',
+                'The folder on the computer: the original files are in it, and they open with a double-click.',
                 'Activity in the computer app: who backed up what, and when.',
               ],
             },
@@ -377,8 +378,8 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
           id: 'supported-devices',
           q: '我的手机和电脑能装吗？',
           a: [
-            '电脑要 M1 及以后的 Mac，手机要 Android 8.0 以上，不分牌子。',
-            'iPhone 版和 Windows 版没有发布，下载不到。',
+            '电脑可以是 M1 及以后的 Mac，也可以是 64 位 Windows 电脑，手机要 Android 8.0 以上，不分牌子。',
+            'iPhone 版没有发布，下载不到。',
           ],
         },
         {
@@ -386,7 +387,7 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
           q: '安装麻烦吗？',
           a: [
             '装两个 App、扫一次码，不需要懂技术。',
-            '先在电脑上装好 App，向导会让你选一个存照片的文件夹，然后屏幕上出现二维码。手机上装好 App 扫一下，电脑上点「允许」，就完成了。',
+            '先在电脑上装好 App，向导会让你选一个存照片的文件夹，然后屏幕上出现二维码。手机上装好 App 扫一下，手机会显示 6 位验证码，在电脑上输入后点「允许加入」，就完成了。',
           ],
           more: [
             {
@@ -417,8 +418,9 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
           id: 'install-blocked',
           q: '安装时被系统拦截怎么办？',
           a: [
-            '这是正常现象，不在应用商店里下载的 App 都会遇到：macOS 上是 Gatekeeper 拦截，Android 上是「未知来源」提示。',
-            '两边的放行步骤都写在仓库文档里。',
+            '这是正常现象，不在应用商店里下载的 App 都会遇到：macOS 上是 Gatekeeper 拦截，Windows 上是 SmartScreen 提示，Android 上是「未知来源」提示。',
+            'Windows 安装包未做代码签名，SmartScreen 会显示「Windows 已保护你的电脑」，点「更多信息」，再点「仍要运行」即可安装。',
+            '其他提示的放行步骤，以及如何核对安装包是否为官方发布，都写在仓库文档里。',
           ],
           more: [
             {
@@ -481,7 +483,7 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
                 '手机首页：常驻一行「手机 1,234 张 · 已备份 1,180 · 待备份 54」，以及最后一次成功的时间。',
                 '手机上的「照片」页：已经备份到电脑的照片都在这里，能翻能看。',
                 '电脑端 App 的「照片」页：同一个照片库的缩略图墙。',
-                '电脑上那个文件夹：原文件就在里面，Finder 里双击就能打开。',
+                '电脑上那个文件夹：原文件就在里面，双击就能打开。',
                 '电脑端的「活动记录」：谁在什么时候备份了什么。',
               ],
             },

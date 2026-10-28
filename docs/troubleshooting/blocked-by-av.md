@@ -12,13 +12,15 @@
 
 P-Pass is open source: source on GitHub, reproducible builds, and every
 release artifact ships with **SHA-256 + SLSA attestation** (linked from the
-release page). Being blocked by AV does not mean the software is bad — it
-means the **signature has no reputation yet**, a stage every new software
-goes through.
+release page). Being blocked by AV does not mean the software is bad. The
+Windows installer is **not code-signed**, so Windows has no publisher to
+recognize and warns about it; the three steps below are how you check the
+file instead of relying on a signature.
 
 P-Pass 是开源软件：源码在 GitHub，构建可复现，每个发布产物都带
-**SHA-256 + SLSA attestation**（下载页链接）。被杀软拦下 ≠ 软件有问题，
-而是**新签名没有信誉**——所有新软件都会经历这个阶段。
+**SHA-256 + SLSA attestation**（下载页链接）。被杀软拦下 ≠ 软件有问题：
+Windows 安装包**未做代码签名**，系统认不出发行者，因此会提示风险。
+下面三步就是不依赖签名、自己核对文件的方法。
 
 ### Verify in three steps — trust no one's word / 验证三步走（不用信任何人的话）
 
@@ -61,13 +63,20 @@ P-Pass 是开源软件：源码在 GitHub，构建可复现，每个发布产物
 
 [截图: SmartScreen 蓝屏提示]
 
-- **What happened**: the new software's signature reputation is not built
-  yet (common early in a release; SmartScreen does this to every new
-  publisher, even with a valid signature).
-  发生了什么：新软件的签名信誉还没建立（发布初期常见，SmartScreen 对
-  所有新发行商都这样，哪怕签名有效）。
-- **What to do**: click 「More info / 更多信息」→ 「Run anyway / 仍要运行」.
-  怎么办：点「更多信息」→「仍要运行」。
+- **What happened**: the P-Pass Windows installer is not code-signed, so
+  SmartScreen shows "Windows protected your PC" with the publisher listed as
+  unknown. This is expected for every P-Pass Windows release.
+  发生了什么：P-Pass 的 Windows 安装包未做代码签名，SmartScreen 会显示
+  「Windows 已保护你的电脑」，发行者显示为未知。每个 Windows 版本都会这样。
+- **What to do**:
+  1. On the blue prompt, click **More info**.
+  2. Check that the app name is the installer you downloaded, then click
+     **Run anyway**.
+  3. Continue with the installer as usual.
+  怎么办：
+  1. 在蓝色提示框上点「更多信息」。
+  2. 确认显示的应用名是你下载的安装包，再点「仍要运行」。
+  3. 照常完成安装向导。
 - **Why it's safe**: see the three-step verification above — once it passes,
   run with confidence.
   为什么安全：见上方"官方态度"三步验证——验证通过即可放心运行。
@@ -127,11 +136,11 @@ P-Pass 是开源软件：源码在 GitHub，构建可复现，每个发布产物
 ## FAQ / 常见问题
 
 **Q: "Publisher unknown" / 提示"发布者未知"？**
-A: The executable's signature isn't recognized yet (early release). Trust it
-once the SHA-256 matches; the prompt disappears once the formal signing
-certificate lands (H-02 credentials).
-说明可执行文件的签名信息还没被系统识别（发布早期）。验证 SHA-256
-一致后即可信任；正式签名证书落地（H-02 凭据）后此提示消失。
+A: The Windows installer is not code-signed, so Windows cannot show a
+publisher name. Trust it once the SHA-256 matches. The prompt will stay
+until the installer is signed.
+Windows 安装包未做代码签名，所以系统显示不出发布者。验证 SHA-256
+一致后即可信任。安装包签名之前，这个提示会一直出现。
 
 **Q: Should I uninstall? / 我该卸载吗？**
 A: Do the three-step verification first. If it passes, keep it; if the hash

@@ -15,6 +15,7 @@ export const YOUTUBE_URL = 'https://www.youtube.com/@p-pass-photos';
 export const MIRROR_BASE = 'https://p-pass-dl.hawkeye-xb.com';
 export const MIRROR_MAC = `${MIRROR_BASE}/P-Pass-latest.dmg`;
 export const MIRROR_ANDROID = `${MIRROR_BASE}/P-Pass-latest.apk`;
+export const MIRROR_WINDOWS = `${MIRROR_BASE}/P-Pass-latest.exe`;
 
 // Canon copy (Brief §3) — one entry per language, same level.
 export const SITE_TITLE: Record<Lang, string> = {
