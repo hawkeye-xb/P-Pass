@@ -66,6 +66,11 @@ class PPassApplication : Application() {
             currentPairing = { PairingStore(filesDir).load() },
             loss = flowDeliveryPairingLoss,
             clear = { clearLocalPairingLogged(this, it) },
+            recordNotice = {
+                // 写不下来只少一次说明，不能挡住回欢迎页；留日志。
+                runCatching { com.hawkeyexb.ppass.backup.PairingRemovedNoticeStore(filesDir).record(it.pairingId) }
+                    .onFailure { e -> PLog.w("PPassDisconnect", "pairing-removed notice not persisted", e) }
+            },
         )
     }
 

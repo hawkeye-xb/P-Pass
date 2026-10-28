@@ -175,6 +175,11 @@ enum class DisconnectState(
         "#130（#515 后续）：通知权限只问一次，之后任何路径（含再走一次 onboarding）都不再问",
         owners = listOf("com.hawkeyexb.ppass.backup.OnboardingNotificationAsk"),
     ),
+    PAIRING_REMOVED_NOTICE(
+        StateLocation.FILES, PairingRemovedNoticeStore.FILE_NAME, DisconnectDisposition.KEEP,
+        "#1219 V4：被拒即清理之后才写入的一次性说明，必须活过这次清理；用户看过或重新配对后由界面清掉",
+        owners = listOf("com.hawkeyexb.ppass.backup.PairingRemovedNoticeStore"),
+    ),
     WORK_MANAGER_DB(
         StateLocation.DATABASES, "androidx.work.workdb", DisconnectDisposition.KEEP,
         "WorkManager 库自有；断开只经由 AUTO_BACKUP_WORKS 取消 unique work，不动库文件",

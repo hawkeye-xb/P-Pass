@@ -234,10 +234,25 @@ fun PPassApp() {
     var screen by remember {
         mutableStateOf<Screen>(pairings.load()?.let { Screen.Home(it) } ?: Screen.Welcome)
     }
-    // #1119：电脑不认这台手机（被拒即清理，在 Application 里执行）→ 界面回欢迎页。
+    // #1219 V4：被拒即清理多半发生在后台，没有界面；落盘的「待说明」在用户下次看到 App 时弹一次。
+    // 已经重新配对的不再说明（顺手清掉）。
+    val removedNotice = remember { com.hawkeyexb.ppass.backup.PairingRemovedNoticeStore(context.filesDir) }
+    fun removedNoticeDue(): Boolean {
+        if (!removedNotice.pending()) return false
+        if (pairings.load() != null) {
+            removedNotice.clear()
+            return false
+        }
+        return true
+    }
+    var showRemovedNotice by remember { mutableStateOf(removedNoticeDue()) }
+    // #1119：电脑不认这台手机（被拒即清理，在 Application 里执行）→ 界面回欢迎页，并说明一次（#1219 V4）。
     LaunchedEffect(Unit) {
         app.pairingRejectionCleanup.clearedPairingId.collect { cleared ->
-            if (cleared != null) screen = screenAfterPairingCleared(screen, cleared)
+            if (cleared != null) {
+                screen = screenAfterPairingCleared(screen, cleared)
+                showRemovedNotice = removedNoticeDue()
+            }
         }
     }
     // #130：onboarding 只问一次通知权限。第一次运行这一版时定下是不是老用户（已有配对 / 走完过
@@ -401,6 +416,22 @@ fun PPassApp() {
             onInstall = updateController::onUserInstall,
             onReopenInstall = updateController::onReopenInstall,
             onGiveUpInstall = updateController::onGiveUpInstall,
+        )
+    }
+
+    // #1219 V4：电脑不再认这台手机——说明一次：照片都还在手机上，重新扫码就会继续备份。
+    if (showRemovedNotice) {
+        val acknowledge = {
+            removedNotice.clear()
+            showRemovedNotice = false
+        }
+        AlertDialog(
+            onDismissRequest = acknowledge,
+            title = { Text(stringResource(R.string.pairing_lost_title)) },
+            text = { Text(stringResource(R.string.pairing_lost_body)) },
+            confirmButton = {
+                TextButton(onClick = acknowledge) { Text(stringResource(R.string.notice_dismiss_label)) }
+            },
         )
     }
 
