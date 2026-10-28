@@ -24,7 +24,7 @@ export const GUIDE = {
   zh: {
     title: '不用 NAS、不用 Docker：把手机照片备份回自己家的电脑 — P-Pass',
     metaDescription:
-      '用家里那台电脑当相册：手机照片在同一个 Wi-Fi 下自动备份到电脑，存原图不压缩，不用注册账号、不上传云端，开源。电脑支持 Apple 芯片 Mac 与 64 位 Windows，手机支持 Android 8.0 以上，iPhone 版通过 TestFlight 安装。',
+      '用家里那台电脑当相册：手机照片在同一个 Wi-Fi 下自动备份到电脑，存原图不压缩，不用注册账号、不上传云端，开源。电脑支持 Apple 芯片 Mac 与 64 位 Windows，手机支持 Android 8.0 以上。',
     h1: '把手机照片备份回自己家的电脑',
     lead: [
       '家里有一台电脑，就能把手机照片备份回去：手机上的照片，回到家连上同一个 Wi-Fi，就自己备份进电脑里。手机要 Android 8.0 以上，不分牌子。',
@@ -47,7 +47,7 @@ export const GUIDE = {
       paras: [
         '电脑可以是 Apple 芯片的 Mac（M1 及以后），也可以是 64 位 Windows 电脑。备份进行的时候电脑得开着，其余时间它自己待着就行；电脑关着时照片留在手机里，开机连上会接着传，传过的不会重传。',
         '硬盘剩下不到约 5 GB 的时候，手机会提前提示你。',
-        '手机可以是 Android 8.0 以上的任意牌子，也可以是 iOS 16 及以上的 iPhone；iPhone 版通过 TestFlight 安装，备份在打开 P-Pass 时进行，离开 App 后能否在后台接着传由 iOS 决定。',
+        'iPhone 版还没有发布。',
       ],
     },
     money: {
@@ -63,7 +63,6 @@ export const GUIDE = {
         { label: '相册权限为什么要选全部', href: '/zh/faq/#photo-permission-all' },
         { label: '第一次备份要多久', href: '/zh/faq/#first-backup' },
         { label: '电脑空间满了会怎样', href: '/zh/faq/#disk-full' },
-        { label: 'iPhone 怎么安装', href: '/zh/faq/#iphone-testflight' },
       ] satisfies GuideLink[],
     },
     /**

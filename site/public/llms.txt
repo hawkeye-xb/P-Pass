@@ -10,9 +10,8 @@
 
 - You install an app on the computer and an app on the phone, and scan a code
   once to pair them.
-- On Android, while both are on the same Wi-Fi, new photos from the phone are
-  backed up automatically. No manual step, no cable. On iPhone, backups run
-  while the app is open; background continuation is up to iOS.
+- While both are on the same Wi-Fi, new photos from the phone are backed up
+  automatically. No manual step, no cable.
 - Photos travel directly between the phone and the computer, end-to-end
   encrypted. They do not pass through a server of ours. When a direct
   connection is not possible, already-encrypted data is handed over by a relay
@@ -26,10 +25,10 @@
 
 ## Boundaries
 
-- Computers: macOS (Apple silicon) and 64-bit Windows. The Windows installer
-  is not code-signed, so SmartScreen shows a warning on first install.
-- Phones: Android 8.0+ and iPhone on iOS 16+. The iPhone app is distributed
-  through a TestFlight public link, not the App Store.
+- Published platforms: macOS (Apple silicon), 64-bit Windows and Android
+  8.0+. The iPhone app is not released, and no release date is promised. The
+  Windows installer is not code-signed, so SmartScreen shows a warning on
+  first install.
 - Backups run on Wi-Fi by default; the mobile-data switch is off by default.
 - The computer has to be awake while a backup is running. With the computer
   off, photos stay on the phone and the transfer resumes where it stopped.
@@ -55,7 +54,6 @@
 
 - macOS, Windows and Android, latest release:
   https://github.com/hawkeye-xb/P-Pass/releases/latest
-- iPhone (TestFlight): TESTFLIGHT_PUBLIC_LINK
 
 ## Languages
 
