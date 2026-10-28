@@ -27,7 +27,8 @@ export const ui = {
     'hero.cta.android': 'Download for Android',
     'hero.cta.android.sub': 'Android 8.0+',
     'hero.cta.alt': 'All downloads and checksums on GitHub Releases',
-    'hero.cta.ios': 'iPhone is coming through TestFlight soon. Install P-Pass on your home computer first.',
+    'hero.cta.ios': 'Install on iPhone',
+    'hero.cta.ios.sub': 'Through TestFlight · iOS 16+',
     'hero.cta.win.note':
       'The Windows installer is not code-signed. If SmartScreen says "Windows protected your PC", choose More info, then Run anyway.',
     'hero.cta.iphone': 'iPhone (iOS 16 or later): install through TestFlight',
@@ -74,7 +75,8 @@ export const ui = {
     'hero.cta.android': '下载 Android 版',
     'hero.cta.android.sub': 'Android 8.0+',
     'hero.cta.alt': '也可以从 GitHub Releases 下载',
-    'hero.cta.ios': 'iPhone 版即将通过 TestFlight 提供。可以先在家里的电脑上装好 P-Pass。',
+    'hero.cta.ios': '安装 iPhone 版',
+    'hero.cta.ios.sub': '通过 TestFlight · iOS 16+',
     'hero.cta.win.note':
       'Windows 安装包未做代码签名。安装时如果出现「Windows 已保护你的电脑」，点「更多信息」，再点「仍要运行」。',
     'hero.cta.iphone': 'iPhone（iOS 16 及以上）通过 TestFlight 安装',
