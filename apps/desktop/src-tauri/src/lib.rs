@@ -22,8 +22,8 @@ mod update_install;
 // 每个函数各写一遍 `use ... as _` 已经不划算；提到文件级。
 use distribution::{
     daemon_is_unmanaged, kernel_convergence_verdict, reconcile_autostart_registration,
-    self_heal_allowed, should_pause_for_update, show_wizard, update_resume_needed, Configured,
-    DaemonAnswer, KernelFacts, KernelVerdict, ShellHome,
+    self_heal_allowed, should_pause_for_update, show_wizard, update_resume_needed,
+    user_daemon_fallback_allowed, Configured, DaemonAnswer, KernelFacts, KernelVerdict, ShellHome,
 };
 use platform::{HostingAdapter as _, PlatformAdapter as _};
 use serde_json::{json, Value};
@@ -535,6 +535,8 @@ fn configure_library(library_dir: &str) -> Result<(), String> {
     };
     match ipc::DaemonHandle::discover() {
         Ok(h) => set(&h),
+        // #1246：服务形态的库位置只能由服务写；服务连不上就如实报错，不以用户身份临时拉一份。
+        Err(e) if !user_daemon_fallback_allowed(platform::hosting().service_mode()) => Err(e),
         Err(_) => daemon_cli::with_oneshot_daemon(&daemon_cli::bundled_sidecar()?, set),
     }
 }
@@ -696,6 +698,11 @@ fn start_daemon_now(app: tauri::AppHandle) -> Result<String, String> {
         // LaunchAgent RunAtLoad+KeepAlive: starts immediately, survives
         // crashes and reboots.
         Ok(()) => Ok("resident".into()),
+        Err(e) if !user_daemon_fallback_allowed(platform::hosting().service_mode()) => {
+            // #1246：服务形态不以用户身份兜底（见 `user_daemon_fallback_allowed`）。
+            manager.set(&app, ServiceState::Unreachable, Some("start failed"));
+            Err(ipc::ui_err("ui.err_respawn", &[("err", &e)]))
+        }
         Err(e) => {
             // Fall back to a one-shot spawn — still usable this session.
             match platform::command(&sidecar)
@@ -1108,8 +1115,10 @@ fn resident_service_available() -> bool {
 /// `kill_running = false`（自愈）：launchd 在跑就不动，没在跑才拉。
 ///
 /// 服务管理器那条走不通（未登记 / 本平台没有 / 命令失败）⇒ 退回一次性 spawn，
-/// 与改前一致。
+/// 与改前一致——daemon 以服务账户运行的形态除外（[`user_daemon_fallback_allowed`]）：
+/// 只请服务管理器启动，起不来就报错，壳停在「连不上」。
 fn bring_up_daemon(kill_running: bool) -> Result<BroughtUp, String> {
+    let mut manager_err = None;
     if resident_service_available() {
         if kill_running {
             retire_unmanaged_daemon(platform::hosting().resident_daemon_pid());
@@ -1120,9 +1129,17 @@ fn bring_up_daemon(kill_running: bool) -> Result<BroughtUp, String> {
                 eprintln!("#732: 内核交由服务管理器拉起 pid={pid}");
                 return Ok(BroughtUp::Resident { pid });
             }
-            Ok(other) => eprintln!("#732: 服务管理器没接手（{other:?}），退回一次性 spawn"),
-            Err(e) => eprintln!("#732: 服务管理器拉起失败，退回一次性 spawn：{e}"),
+            Ok(other) => manager_err = Some(format!("{other:?}")),
+            Err(e) => manager_err = Some(e.to_string()),
         }
+    }
+    if !user_daemon_fallback_allowed(platform::hosting().service_mode()) {
+        let err = manager_err.unwrap_or_else(|| "service not installed".into());
+        eprintln!("#1246: 服务管理器拉不起服务（{err}），服务形态不以用户身份兜底");
+        return Err(ipc::ui_err("ui.err_respawn", &[("err", &err)]));
+    }
+    if let Some(e) = manager_err {
+        eprintln!("#732: 服务管理器没接手（{e}），退回一次性 spawn");
     }
     spawn_bundled_daemon_oneshot().map(|()| BroughtUp::OneShot)
 }
@@ -3403,6 +3420,28 @@ mod tests {
     // 命令各自走对子命令，且壳里没有第二条写 config / 打包诊断的路径。
     // G4（tools/arch-check.sh）是同一条约束的门禁版，这条是编译进 cargo test
     // 的快速版。
+
+    /// #1246 接线：壳里三条「以用户身份拉 daemon」的退路，都先过
+    /// `user_daemon_fallback_allowed` 这道门，门在 spawn 之前。
+    /// 反证：任一处去掉这道门（或挪到 spawn 之后）→ 对应断言红。
+    #[test]
+    fn service_account_daemons_are_never_spawned_as_the_user() {
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        for (func, spawn) in [
+            ("bring_up_daemon", "spawn_bundled_daemon_oneshot()"),
+            ("start_daemon_now", "// Fall back to a one-shot spawn"),
+            ("configure_library", "daemon_cli::with_oneshot_daemon("),
+        ] {
+            let body = product_fn_body(&src, func);
+            let gate = body
+                .find("user_daemon_fallback_allowed(platform::hosting().service_mode())")
+                .unwrap_or_else(|| panic!("{func}：没有服务形态的门"));
+            let at = body
+                .find(spawn)
+                .unwrap_or_else(|| panic!("{func}：找不到退路 {spawn}"));
+            assert!(gate < at, "{func}：门必须在以用户身份拉 daemon 之前");
+        }
+    }
 
     fn product_fn_body<'a>(src: &'a str, name: &str) -> &'a str {
         let product = src.split("#[cfg(test)]").next().unwrap();

@@ -224,6 +224,16 @@ impl ServiceMode {
             }
         }
     }
+
+    /// 常驻 daemon 的身份是不是**服务账户**（不是登录用户）。
+    ///
+    /// 为 `true` 时身份私钥、配对白名单、库位置只给服务账户读，daemon 只能由服务管理器
+    /// 以服务账户拉起；桌面壳**绝不能**以用户身份另起一份 daemon 兜底——那份读不到服务的
+    /// 状态，还会抢注服务的 IPC 端点（#1161 / #1167）。其余形态 daemon 与用户同一身份，
+    /// 服务管理器接不了手时一次性拉起仍是可用的退路。
+    pub fn daemon_runs_as_service_account(self) -> bool {
+        matches!(self, ServiceMode::WindowsService)
+    }
 }
 
 /// Current sleep policy, for the first-run wizard's diagnosis (T-042).
