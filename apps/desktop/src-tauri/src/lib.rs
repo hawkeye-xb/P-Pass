@@ -22,8 +22,8 @@ mod update_install;
 // 每个函数各写一遍 `use ... as _` 已经不划算；提到文件级。
 use distribution::{
     daemon_is_unmanaged, kernel_convergence_verdict, reconcile_autostart_registration,
-    self_heal_allowed, should_pause_for_update, show_wizard, update_resume_needed, KernelFacts,
-    KernelVerdict, ShellHome,
+    self_heal_allowed, should_pause_for_update, show_wizard, update_resume_needed, Configured,
+    DaemonAnswer, KernelFacts, KernelVerdict, ShellHome,
 };
 use platform::{HostingAdapter as _, PlatformAdapter as _};
 use serde_json::{json, Value};
@@ -210,7 +210,12 @@ fn daemon_online() -> bool {
 fn initial_service_state() -> ServiceState {
     let home = ShellHome::current();
     let installed = platform::hosting().autostart_installed().unwrap_or(false);
-    ServiceState::initial(home.configured(), installed, home.user_stopped())
+    // #1246：「不知道」（服务登记着但还没连上）按配过起步——Starting 等它、超时走错误页。
+    ServiceState::initial(
+        home.configured() != Configured::No,
+        installed,
+        home.user_stopped(),
+    )
 }
 
 /// DESK-63 (#946): snapshot for the frontend's first paint. The event stream
@@ -535,11 +540,20 @@ fn configure_library(library_dir: &str) -> Result<(), String> {
 }
 
 /// 后台服务在线但处于「未配置」状态（`status.unconfigured`）。连不上 / 不答 = `false`。
-/// 超时取短：`wizard_state` 随服务状态事件重读，不能被一次询问拖住。
 fn daemon_waits_for_library() -> bool {
-    ipc::DaemonHandle::discover()
+    ask_daemon() == DaemonAnswer::Unconfigured
+}
+
+/// #1246：问常驻 daemon「配过没有」——[`ShellHome::configured`] 的事实来源。
+/// 超时取短：`wizard_state` 随服务状态事件重读，不能被一次询问拖住。
+pub(crate) fn ask_daemon() -> DaemonAnswer {
+    match ipc::DaemonHandle::discover()
         .and_then(|h| h.call_with_timeout("status", json!({}), std::time::Duration::from_secs(1)))
-        .is_ok_and(|status| status_is_unconfigured(&status))
+    {
+        Ok(status) if status_is_unconfigured(&status) => DaemonAnswer::Unconfigured,
+        Ok(_) => DaemonAnswer::Configured,
+        Err(_) => DaemonAnswer::Unreachable,
+    }
 }
 
 fn status_is_unconfigured(status: &Value) -> bool {
