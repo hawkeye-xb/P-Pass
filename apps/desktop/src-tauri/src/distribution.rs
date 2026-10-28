@@ -15,15 +15,16 @@ use version_cmp::version_cmp;
 /// 拼（那份拷贝在 `serviceGate.js`，与这里的 `self_heal_allowed` 各写一遍）。
 ///
 /// - `online`：服务在线（Rust 持有的服务状态 = running）。在线永不显示向导。
-/// - `configured`：平台数据目录里有 config.toml。从没配置过 = 完整向导。
+/// - `configured`：[`configured_verdict`] 的结论。没配置过 = 完整向导；**不知道**（常驻
+///   服务登记着但还没连上）不进向导——等服务、连不上走错误页（#1246）。
 /// - 配过、服务没注册（`!installed`）= 向导中途退出，回向导继续走（xixi 实测反馈 3）；
 ///   但用户自己点了停止（`user_stopped`，DESK-36 #456）不算中途退出——停服会卸
 ///   autostart，把它当中途退出会让重开 App 被打回完整 onboard，所以留在主界面给
 ///   「启动服务」。
 ///
-/// 纯函数：文件系统与服务状态由调用点探测后传入，判据本身单测（含反证）。
+/// 纯函数：daemon 与服务状态由调用点探测后传入，判据本身单测（含反证）。
 pub(crate) fn show_wizard(
-    configured: bool,
+    configured: Configured,
     installed: bool,
     user_stopped: bool,
     online: bool,
@@ -31,10 +32,57 @@ pub(crate) fn show_wizard(
     if online {
         return false;
     }
-    if !configured {
-        return true;
+    match configured {
+        Configured::No => true,
+        Configured::Unknown => false,
+        Configured::Yes => !installed && !user_stopped,
     }
-    !installed && !user_stopped
+}
+
+/// #1246：常驻 daemon 对「配过没有」的回答。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DaemonAnswer {
+    /// 答了 `status`，没说未配置。
+    Configured,
+    /// 答了 `status.unconfigured = true`：在等首启向导（#1115 / #1167）。
+    Unconfigured,
+    /// 连不上 / 不答。
+    Unreachable,
+}
+
+/// #1246：壳对「配过没有」的结论。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Configured {
+    Yes,
+    No,
+    /// 常驻服务登记着、但此刻问不到 daemon：等它（显示「正在连接服务」，连不上走错误页），
+    /// 绝不当成没配置——那会把已配置的机器打回向导，而向导对已配置的 daemon 是死路
+    /// （「新位置不能与当前照片库相同」）。
+    Unknown,
+}
+
+/// #1246：「配过没有」的真相在 daemon——它是 config 的唯一写者（#1115）。壳不再看
+/// config.toml 在不在：服务形态下那个文件对壳是否可读，取决于 ACL 有没有被外部操作冲掉
+/// （安装器升级时的 `icacls /reset`），读不到就把已配置的机器当成全新安装。
+///
+/// daemon 答了就听它的。问不到时：
+/// - 用户停过服务 ⇒ 配过（停止只在主界面里能点）；
+/// - 常驻服务登记着（Windows 服务由安装器预装，被禁用也算登记）⇒ 不知道，等它；
+/// - 都不是 ⇒ 没配置（macOS 首启：向导第 3 步才登记 LaunchAgent，此前没有常驻 daemon 可问）。
+///
+/// 纯函数，单测覆盖每条分支（含反证）。
+pub(crate) fn configured_verdict(
+    answer: DaemonAnswer,
+    installed: bool,
+    user_stopped: bool,
+) -> Configured {
+    match answer {
+        DaemonAnswer::Configured => Configured::Yes,
+        DaemonAnswer::Unconfigured => Configured::No,
+        DaemonAnswer::Unreachable if user_stopped => Configured::Yes,
+        DaemonAnswer::Unreachable if installed => Configured::Unknown,
+        DaemonAnswer::Unreachable => Configured::No,
+    }
 }
 
 /// 【DESK-42 #604】开机自启登记对账（App 启动时跑一次，独立线程）。
@@ -135,15 +183,19 @@ pub(crate) fn user_stopped_marker(data_dir: &std::path::Path) -> std::path::Path
 /// 读的位置必须和写的位置是同一处，否则就是 #1238：Windows 服务形态的配置在
 /// `%ProgramData%\P-Pass`，壳却去读用户目录，服务一停就把已配置的机器打回首启向导。
 ///
-/// - `config_dir`：daemon 的 config.toml 所在目录（[`platform::HostingAdapter::daemon_config_dir`]）。
+/// - `config_dir`：daemon 的 config.toml 所在目录（[`platform::HostingAdapter::daemon_config_dir`]），
+///   只用来**显示**库位置；「配过没有」问 daemon（#1246）。
 /// - `stop_switch`：服务形态「要不要运行」的开关文件（daemon 开机自检、安装器都读它）；
 ///   有它就只认它，壳不再另记一份。
 /// - `state_dir`：壳自己的数据目录，没有开关文件的形态（macOS 等）在这里落停止标记。
+/// - `ask_daemon` / `installed`：「配过没有」的两样事实（[`configured_verdict`]），测试注入。
 #[derive(Debug, Clone)]
 pub(crate) struct ShellHome {
     pub config_dir: std::path::PathBuf,
     pub stop_switch: Option<std::path::PathBuf>,
     pub state_dir: std::path::PathBuf,
+    pub ask_daemon: fn() -> DaemonAnswer,
+    pub installed: fn() -> bool,
 }
 
 impl ShellHome {
@@ -154,22 +206,26 @@ impl ShellHome {
             config_dir: hosting.daemon_config_dir(),
             stop_switch: hosting.service_stop_switch(),
             state_dir: platform::adapter().data_dir(),
+            ask_daemon: crate::ask_daemon,
+            installed: || platform::hosting().autostart_installed().unwrap_or(false),
         }
     }
 
-    /// 壳与 daemon 同一用户、同一目录（macOS、测试）。
+    /// 壳与 daemon 同一用户、同一目录（macOS、测试）。daemon 不在线、没有常驻登记 = 首启。
     #[cfg(test)]
     pub(crate) fn shared(dir: &std::path::Path) -> Self {
         Self {
             config_dir: dir.to_path_buf(),
             stop_switch: None,
             state_dir: dir.to_path_buf(),
+            ask_daemon: || DaemonAnswer::Unreachable,
+            installed: || false,
         }
     }
 
-    /// 向导走完了（daemon 的 config.toml 在）。
-    pub(crate) fn configured(&self) -> bool {
-        self.config_dir.join("config.toml").exists()
+    /// 配过没有（#1246：问 daemon，见 [`configured_verdict`]）。
+    pub(crate) fn configured(&self) -> Configured {
+        configured_verdict((self.ask_daemon)(), (self.installed)(), self.user_stopped())
     }
 
     /// config.toml 里给人看的库位置（`data_dir`）。
@@ -214,10 +270,22 @@ impl ShellHome {
     }
 }
 
-/// 自愈判据（纯函数，单测覆盖）：配置过、且不是用户主动停的，才允许自愈。
-/// 「没配置过」是首启向导的事；「用户停的」要等用户自己点「启动服务」。
+/// 自愈判据（纯函数，单测覆盖）：不是「没配置过」、且不是用户主动停的，才允许自愈。
+/// 「没配置过」是首启向导的事；「用户停的」要等用户自己点「启动服务」。**不知道**
+/// （服务登记着但连不上，#1246）要拉：常驻服务自己决定进不进未配置状态。
 pub(crate) fn self_heal_allowed(home: &ShellHome) -> bool {
-    home.configured() && !home.user_stopped()
+    home.configured() != Configured::No && !home.user_stopped()
+}
+
+/// 服务管理器拉不起常驻 daemon 时，壳能不能以**用户身份**一次性拉起 sidecar 兜底
+/// （#732 的退路、`start_daemon` 登记失败的退路、向导写库位置时的临时 daemon）。
+///
+/// daemon 以服务账户运行的形态（Windows 服务）不能：用户身份的 daemon 读不到服务的
+/// 身份与配置，还会抢注服务的 IPC 端点，壳按属主核对又拒绝连它，于是「连不上 → 自愈 →
+/// 再拉一份」每 15 秒循环一次（服务被禁用时实测）。这时只请服务管理器启动服务，
+/// 起不来就停在「连不上」的错误页。纯函数，单测覆盖。
+pub(crate) fn user_daemon_fallback_allowed(mode: platform::ServiceMode) -> bool {
+    !mode.daemon_runs_as_service_account()
 }
 
 /// #1060：更新前要不要「为更新暂停」常驻服务。用户自己停过就**不动**：
@@ -320,19 +388,16 @@ mod tests {
     #[test]
     fn user_stopped_service_is_neither_paused_nor_resumed() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("config.toml"), "").unwrap();
-        assert!(should_pause_for_update(&ShellHome::shared(dir.path())));
+        assert!(should_pause_for_update(&configured_home(dir.path())));
         assert!(update_resume_needed(
-            &ShellHome::shared(dir.path()),
+            &configured_home(dir.path()),
             true,
             false
         ));
-        ShellHome::shared(dir.path())
-            .set_user_stopped(true)
-            .unwrap();
-        assert!(!should_pause_for_update(&ShellHome::shared(dir.path())));
+        configured_home(dir.path()).set_user_stopped(true).unwrap();
+        assert!(!should_pause_for_update(&configured_home(dir.path())));
         assert!(!update_resume_needed(
-            &ShellHome::shared(dir.path()),
+            &configured_home(dir.path()),
             true,
             false
         ));
@@ -346,18 +411,17 @@ mod tests {
             !update_resume_needed(&ShellHome::shared(dir.path()), true, false),
             "没配置过（首启向导的事）"
         );
-        std::fs::write(dir.path().join("config.toml"), "").unwrap();
         assert!(update_resume_needed(
-            &ShellHome::shared(dir.path()),
+            &configured_home(dir.path()),
             true,
             false
         ));
         assert!(
-            !update_resume_needed(&ShellHome::shared(dir.path()), true, true),
+            !update_resume_needed(&configured_home(dir.path()), true, true),
             "已在线"
         );
         assert!(
-            !update_resume_needed(&ShellHome::shared(dir.path()), false, false),
+            !update_resume_needed(&configured_home(dir.path()), false, false),
             "没登记"
         );
     }
@@ -488,29 +552,28 @@ mod tests {
     // 全部用 tempdir 注入 data dir——绝不调 stop_daemon / start_daemon 本体，
     // 它们会走真实 adapter（pkill ppf-daemon、launchctl bootout 真 agent）。
 
-    /// 一个「向导走完了」的 data dir：config.toml 在。
-    fn configured_data_dir() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("config.toml"), "library_dir = \"x\"\n").unwrap();
-        dir
+    /// 一个「向导走完了」的家：daemon 答「配过」（#1246：真相在 daemon，不看 config.toml）。
+    fn configured_home(dir: &std::path::Path) -> ShellHome {
+        ShellHome {
+            ask_daemon: || DaemonAnswer::Configured,
+            ..ShellHome::shared(dir)
+        }
     }
 
     #[test]
     fn self_heal_revives_a_configured_daemon_that_was_not_stopped_by_the_user() {
         // 崩了 / 被更新流程停了又没拉回来（W1 那个 NSIS 场景）——自愈的本职。
-        let dir = configured_data_dir();
-        assert!(self_heal_allowed(&ShellHome::shared(dir.path())));
+        let dir = tempfile::tempdir().unwrap();
+        assert!(self_heal_allowed(&configured_home(dir.path())));
     }
 
     #[test]
     fn self_heal_never_revives_a_daemon_the_user_stopped() {
         // #456 本体：用户点了停止 → 自愈不许在冷却窗口过后把它拉回来。
-        let dir = configured_data_dir();
-        ShellHome::shared(dir.path())
-            .set_user_stopped(true)
-            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        configured_home(dir.path()).set_user_stopped(true).unwrap();
         assert!(
-            !self_heal_allowed(&ShellHome::shared(dir.path())),
+            !self_heal_allowed(&configured_home(dir.path())),
             "用户主动停止了服务，自愈却仍然判定要拉起它（#456）"
         );
     }
@@ -519,20 +582,18 @@ mod tests {
     /// 反证：判据去掉停止标记那条 → 第二条断言红；去掉配置那条 → 第三条红。
     #[test]
     fn a_missing_autostart_is_restored_only_for_a_configured_unstopped_install() {
-        let dir = configured_data_dir();
+        let dir = tempfile::tempdir().unwrap();
         assert!(
-            restore_missing_autostart_allowed(true, &ShellHome::shared(dir.path())),
+            restore_missing_autostart_allowed(true, &configured_home(dir.path())),
             "配置在、没停过、登记丢了：应补登记（#877 现场）"
         );
         assert!(
-            !restore_missing_autostart_allowed(false, &ShellHome::shared(dir.path())),
+            !restore_missing_autostart_allowed(false, &configured_home(dir.path())),
             "平台没声明会被系统删登记：保持「未登记 → 不动」"
         );
-        ShellHome::shared(dir.path())
-            .set_user_stopped(true)
-            .unwrap();
+        configured_home(dir.path()).set_user_stopped(true).unwrap();
         assert!(
-            !restore_missing_autostart_allowed(true, &ShellHome::shared(dir.path())),
+            !restore_missing_autostart_allowed(true, &configured_home(dir.path())),
             "用户主动停过服务：重装后也不许补（尊重停止）"
         );
         let fresh = tempfile::tempdir().unwrap();
@@ -544,27 +605,21 @@ mod tests {
     #[test]
     fn user_stop_survives_an_app_restart() {
         // 持久化语义：标记在盘上，换一个「进程」（重新读同一目录）仍然在。
-        let dir = configured_data_dir();
-        ShellHome::shared(dir.path())
-            .set_user_stopped(true)
-            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        configured_home(dir.path()).set_user_stopped(true).unwrap();
         let reopened = dir.path().to_path_buf();
-        assert!(ShellHome::shared(&reopened).user_stopped());
-        assert!(!self_heal_allowed(&ShellHome::shared(&reopened)));
+        assert!(configured_home(&reopened).user_stopped());
+        assert!(!self_heal_allowed(&configured_home(&reopened)));
     }
 
     #[test]
     fn starting_the_service_clears_the_user_stop() {
-        let dir = configured_data_dir();
-        ShellHome::shared(dir.path())
-            .set_user_stopped(true)
-            .unwrap();
-        ShellHome::shared(dir.path())
-            .set_user_stopped(false)
-            .unwrap();
-        assert!(!ShellHome::shared(dir.path()).user_stopped());
+        let dir = tempfile::tempdir().unwrap();
+        configured_home(dir.path()).set_user_stopped(true).unwrap();
+        configured_home(dir.path()).set_user_stopped(false).unwrap();
+        assert!(!configured_home(dir.path()).user_stopped());
         assert!(
-            self_heal_allowed(&ShellHome::shared(dir.path())),
+            self_heal_allowed(&configured_home(dir.path())),
             "点了启动之后自愈应当恢复"
         );
         // 没停过也能清（首启向导调 start_daemon 时就是这种情况）。
@@ -583,8 +638,10 @@ mod tests {
     // ── #1238：Windows 服务形态——配置在 ProgramData、停止只认开关文件 ──────────
 
     /// 服务形态的家：config.toml 在「ProgramData」（与壳的数据目录不是同一处），
-    /// 停止记录是安装器建好的开关文件。
-    fn service_home() -> (tempfile::TempDir, tempfile::TempDir, ShellHome) {
+    /// 停止记录是安装器建好的开关文件，服务由安装器预装（登记着）。
+    fn service_home(
+        ask_daemon: fn() -> DaemonAnswer,
+    ) -> (tempfile::TempDir, tempfile::TempDir, ShellHome) {
         let programdata = tempfile::tempdir().unwrap();
         let user = tempfile::tempdir().unwrap();
         let switch = programdata.path().join("wanted-state");
@@ -593,19 +650,24 @@ mod tests {
             config_dir: programdata.path().to_path_buf(),
             stop_switch: Some(switch),
             state_dir: user.path().to_path_buf(),
+            ask_daemon,
+            installed: || true,
         };
         (programdata, user, home)
     }
 
-    /// #1238 回归现场：向导走完（ProgramData 里有 config.toml、用户目录里没有）、用户在设置里
-    /// 停了服务 → 不回向导、不自愈、更新不拉起；点启动后恢复。
-    /// 反证：configured() 改回读壳的数据目录 → 「不回向导」那条红；user_stopped() 改回只看
-    /// 用户目录的标记 → 「不自愈」那条红。
+    /// #1238 回归现场：向导走完、用户在设置里停了服务（daemon 不在线）→ 不回向导、不自愈、
+    /// 更新不拉起；点启动后恢复。
+    /// 反证：`configured_verdict` 去掉「停过 ⇒ 配过」→ 「不回向导」那条红；user_stopped() 改回
+    /// 只看用户目录的标记 → 「不自愈」那条红。
     #[test]
     fn a_configured_service_stopped_by_the_user_stays_on_the_main_screen() {
-        let (programdata, user, home) = service_home();
-        std::fs::write(programdata.path().join("config.toml"), "data_dir = 'x'\n").unwrap();
-        assert!(home.configured(), "配置在 ProgramData：算配置过");
+        let (_programdata, user, home) = service_home(|| DaemonAnswer::Unreachable);
+        assert_eq!(
+            home.configured(),
+            Configured::Unknown,
+            "没停过、连不上：等它"
+        );
         assert!(self_heal_allowed(&home), "没停过：崩了要自愈");
 
         home.set_user_stopped(true).unwrap();
@@ -619,6 +681,11 @@ mod tests {
             "服务形态不另记一份停止标记"
         );
         assert!(home.user_stopped());
+        assert_eq!(
+            home.configured(),
+            Configured::Yes,
+            "停止只在主界面能点：停过 ⇒ 配过"
+        );
         assert!(
             !show_wizard(home.configured(), true, home.user_stopped(), false),
             "停了服务不许回首启向导（#1238）"
@@ -632,13 +699,13 @@ mod tests {
         assert!(self_heal_allowed(&home), "点了启动之后自愈恢复");
     }
 
-    /// 服务形态、向导还没走完（ProgramData 里没有 config.toml）→ 照旧进向导；用户目录里残留的
+    /// 服务形态、向导还没走完（daemon 答「未配置」）→ 照旧进向导；用户目录里残留的
     /// 老停止标记不算数（只认开关文件）。
     #[test]
     fn an_unconfigured_service_still_gets_the_wizard() {
-        let (_programdata, user, home) = service_home();
+        let (_programdata, user, home) = service_home(|| DaemonAnswer::Unconfigured);
         std::fs::write(user_stopped_marker(user.path()), "x").unwrap();
-        assert!(!home.configured());
+        assert_eq!(home.configured(), Configured::No);
         assert!(
             !home.user_stopped(),
             "开关是 running：残留的用户目录标记不算"
@@ -655,7 +722,7 @@ mod tests {
     /// 开关文件读不出 / 坏内容 = 按「要运行」，与 daemon 开机自检同一口径。
     #[test]
     fn a_junk_stop_switch_means_running() {
-        let (_programdata, _user, home) = service_home();
+        let (_programdata, _user, home) = service_home(|| DaemonAnswer::Unreachable);
         std::fs::write(home.stop_switch.as_ref().unwrap(), "banana").unwrap();
         assert!(!home.user_stopped());
         std::fs::remove_file(home.stop_switch.as_ref().unwrap()).unwrap();
@@ -665,7 +732,7 @@ mod tests {
     /// 库位置从 daemon 的 config 目录读（Windows 服务形态 = ProgramData），不从壳的数据目录读。
     #[test]
     fn the_library_is_read_from_the_daemon_config_dir() {
-        let (programdata, user, home) = service_home();
+        let (programdata, user, home) = service_home(|| DaemonAnswer::Configured);
         std::fs::write(
             programdata.path().join("config.toml"),
             "data_dir = 'C:/Users/me/Pictures/P-Pass Library'\n",
@@ -683,26 +750,103 @@ mod tests {
     /// 开头的 `online` 判断，「在线永不显示」那条必须红。
     #[test]
     fn the_wizard_gate_separates_user_stop_from_an_abandoned_wizard() {
+        use Configured::{No, Unknown, Yes};
         // 从没配置过 → 完整向导；残留的停止标记也不能让新机器跳过向导。
-        assert!(show_wizard(false, false, false, false));
-        assert!(show_wizard(false, false, true, false));
+        assert!(show_wizard(No, false, false, false));
+        assert!(show_wizard(No, false, true, false));
         // 配过、服务没注册、不是用户停的 → 向导中途退出，回向导。
-        assert!(show_wizard(true, false, false, false));
+        assert!(show_wizard(Yes, false, false, false));
         // 用户停了服务（autostart 被卸）→ 不回向导。
-        assert!(!show_wizard(true, false, true, false));
+        assert!(!show_wizard(Yes, false, true, false));
         // 正常常驻、只是暂时离线 → 不显示（走自愈 / 启动按钮）。
-        assert!(!show_wizard(true, true, false, false));
+        assert!(!show_wizard(Yes, true, false, false));
+        // #1246：不知道（服务登记着、还没连上）→ 不显示，等服务 / 走错误页。
+        // 反证：`Unknown => true` → 红。
+        assert!(!show_wizard(Unknown, true, false, false));
         // 服务在线 → 任何配置状态都不显示。
-        for configured in [false, true] {
+        for configured in [No, Unknown, Yes] {
             for installed in [false, true] {
                 for user_stopped in [false, true] {
                     assert!(
                         !show_wizard(configured, installed, user_stopped, true),
-                        "online 时不许显示向导：{configured} {installed} {user_stopped}"
+                        "online 时不许显示向导：{configured:?} {installed} {user_stopped}"
                     );
                 }
             }
         }
+    }
+
+    /// #1246：「配过没有」的判据矩阵。daemon 答了就听它的；问不到时停过 ⇒ 配过、
+    /// 登记着 ⇒ 不知道、都不是 ⇒ 没配置（macOS 首启）。
+    /// 反证：「登记着 ⇒ 不知道」改成 `No` → `Unknown` 那条红；去掉「停过 ⇒ 配过」→
+    /// 两条 `Yes` 里至少一条红；问不到一律当 `No` → 两条都红。
+    #[test]
+    fn configured_comes_from_the_daemon_not_from_a_file() {
+        use DaemonAnswer::{Configured as Said, Unconfigured, Unreachable};
+        for installed in [false, true] {
+            for stopped in [false, true] {
+                assert_eq!(
+                    configured_verdict(Said, installed, stopped),
+                    Configured::Yes
+                );
+                assert_eq!(
+                    configured_verdict(Unconfigured, installed, stopped),
+                    Configured::No
+                );
+            }
+        }
+        assert_eq!(configured_verdict(Unreachable, true, true), Configured::Yes);
+        assert_eq!(
+            configured_verdict(Unreachable, false, true),
+            Configured::Yes
+        );
+        assert_eq!(
+            configured_verdict(Unreachable, true, false),
+            Configured::Unknown
+        );
+        assert_eq!(
+            configured_verdict(Unreachable, false, false),
+            Configured::No,
+            "macOS 首启：没有常驻登记、也没有 daemon 可问 → 向导"
+        );
+    }
+
+    /// #1246：daemon 以服务账户运行的形态不以用户身份兜底拉 daemon；其余形态照旧可以。
+    /// 反证：`user_daemon_fallback_allowed` 恒 true → 第一条红。
+    #[test]
+    fn a_service_account_daemon_is_never_spawned_as_the_user() {
+        use platform::ServiceMode;
+        assert!(!user_daemon_fallback_allowed(ServiceMode::WindowsService));
+        for mode in [
+            ServiceMode::UserAutostart,
+            ServiceMode::LaunchAgent,
+            ServiceMode::ScheduledTask,
+        ] {
+            assert!(user_daemon_fallback_allowed(mode), "{mode:?}");
+        }
+    }
+
+    /// #1246 回归现场：服务版覆盖安装后 config.toml 对壳不可读、App 抢在服务就绪前启动。
+    /// 以前壳看文件判「没配置」→ 向导（对已配置的 daemon 是死路）。现在：服务登记着、
+    /// 问不到 daemon ⇒ 不知道 ⇒ 不进向导、允许自愈拉起服务；daemon 一答「配过」就是主界面。
+    /// 反证：`configured()` 改回看 config.toml 是否存在 → 第一条红。
+    #[test]
+    fn an_unreadable_config_before_the_service_answers_never_shows_the_wizard() {
+        let (programdata, _user, home) = service_home(|| DaemonAnswer::Unreachable);
+        assert!(!programdata.path().join("config.toml").exists());
+        assert!(!show_wizard(
+            home.configured(),
+            true,
+            home.user_stopped(),
+            false
+        ));
+        assert!(self_heal_allowed(&home), "等不来就把服务拉起来");
+        let answered = ShellHome {
+            ask_daemon: || DaemonAnswer::Configured,
+            ..home
+        };
+        assert_eq!(answered.configured(), Configured::Yes);
+        assert!(!show_wizard(answered.configured(), true, false, false));
     }
 
     /// DESK-65 (#957)：启动对账先看停止标记，停过就只撤不写。
