@@ -6,12 +6,19 @@
  * where those URLs are defined, so the landing page and any other page that
  * offers a download can never drift apart.
  *
- * zh gets the Cloudflare mirror buttons plus the GitHub link (GitHub release
- * assets are often unreachable from mainland China); en gets the single GitHub
- * button. Markup and classes moved here verbatim from Landing.astro — the
- * landing page must look exactly as it did before.
+ * Both languages download from the stable `P-Pass-latest.*` names on the
+ * Cloudflare mirror (GitHub asset names carry the version, so they cannot be
+ * linked per platform); GitHub Releases stays as the secondary link for anyone
+ * who wants to verify checksums or browse older builds.
+ *
+ * Layout follows the usual "detected platform first" pattern: the server
+ * renders all three buttons at equal weight (that is also the no-JS view); a
+ * small script reads the visitor's OS and promotes the matching button to the
+ * big primary one, the others drop to a quiet secondary row. Phones and
+ * unknown systems keep the equal row. iPhone is not offered yet: it ships
+ * through a TestFlight public link once Apple's beta review passes.
  */
-import { MIRROR_ANDROID, MIRROR_MAC, RELEASES_URL } from '../consts';
+import { MIRROR_ANDROID, MIRROR_MAC, MIRROR_WINDOWS, RELEASES_URL } from '../consts';
 import { t, type Lang } from '../i18n/ui';
 
 interface Props {
@@ -19,41 +26,56 @@ interface Props {
 }
 
 const { lang } = Astro.props;
+const platforms = [
+  { os: 'mac', href: MIRROR_MAC, label: 'hero.cta.mac', sub: 'hero.cta.mac.sub' },
+  { os: 'win', href: MIRROR_WINDOWS, label: 'hero.cta.win', sub: 'hero.cta.win.sub' },
+  { os: 'android', href: MIRROR_ANDROID, label: 'hero.cta.android', sub: 'hero.cta.android.sub' },
+] as const;
 ---
 
-{
-  lang === 'zh' ? (
-    <>
-      <div class="cta-row">
-        <a class="cta" href={MIRROR_MAC} rel="external">
+<div class="dl" data-detected="">
+  <div class="cta-row">
+    {
+      platforms.map((p) => (
+        <a class="cta" data-os={p.os} href={p.href} rel="external">
           <span class="cta-main">
-            {t(lang, 'hero.cta.mac')}
+            {t(lang, p.label)}
             <span class="cta-badge">{t(lang, 'hero.cta.badge')}</span>
           </span>
-          <span class="cta-sub">{t(lang, 'hero.cta.mac.sub')}</span>
+          <span class="cta-sub">{t(lang, p.sub)}</span>
         </a>
-        <a class="cta" href={MIRROR_ANDROID} rel="external">
-          <span class="cta-main">
-            {t(lang, 'hero.cta.android')}
-            <span class="cta-badge">{t(lang, 'hero.cta.badge')}</span>
-          </span>
-          <span class="cta-sub">{t(lang, 'hero.cta.android.sub')}</span>
-        </a>
-      </div>
-      <p class="cta-alt">
-        <a href={RELEASES_URL} rel="external">{t(lang, 'hero.cta.alt')}</a>
-      </p>
-    </>
-  ) : (
-    <a class="cta" href={RELEASES_URL} rel="external">
-      <span class="cta-main">
-        {t(lang, 'hero.cta')}
-        <span class="cta-badge">{t(lang, 'hero.cta.badge')}</span>
-      </span>
-      <span class="cta-sub">{t(lang, 'hero.cta.sub')}</span>
-    </a>
-  )
-}
+      ))
+    }
+  </div>
+  <p class="cta-ios">{t(lang, 'hero.cta.ios')}</p>
+  <p class="cta-note">{t(lang, 'hero.cta.win.note')}</p>
+  <p class="cta-alt">
+    <a href={RELEASES_URL} rel="external">{t(lang, 'hero.cta.alt')}</a>
+  </p>
+</div>
+
+<script>
+  // Desktop browsers report their OS reliably; iPadOS pretends to be a Mac,
+  // so a Mac UA with touch points is treated as iOS (nothing to download yet).
+  function detect(): string {
+    const ua = navigator.userAgent;
+    if (/Android/i.test(ua)) return 'android';
+    if (/iPhone|iPad|iPod/i.test(ua) || (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1)) return 'ios';
+    if (/Windows/i.test(ua)) return 'win';
+    if (/Macintosh|Mac OS X/i.test(ua)) return 'mac';
+    return '';
+  }
+  const os = detect();
+  for (const el of document.querySelectorAll<HTMLElement>('.dl')) {
+    el.dataset.detected = os;
+    const primary = el.querySelector<HTMLElement>(`.cta[data-os="${os}"]`);
+    if (primary) {
+      primary.classList.add('is-primary');
+      // Primary first, the rest keep their order in the secondary row.
+      primary.parentElement?.prepend(primary);
+    }
+  }
+</script>
 
 <style>
   .cta {
@@ -77,13 +99,55 @@ const { lang } = Astro.props;
     display: flex;
     flex-wrap: wrap;
     justify-content: center;
+    align-items: center;
     gap: 0.75rem;
   }
+
+  /* A platform was detected: its button stays the big filled one on its own
+     line, the others become quiet outlined links below it. */
+  .dl:is([data-detected='mac'], [data-detected='win'], [data-detected='android']) .cta-row .cta:not(.is-primary) {
+    min-height: 44px;
+    padding: 0.5rem 1.1rem;
+    background: transparent;
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    font-weight: 500;
+    font-size: 0.9rem;
+  }
+  .dl:is([data-detected='mac'], [data-detected='win'], [data-detected='android']) .cta-row .cta:not(.is-primary):hover {
+    border-color: var(--border-strong);
+    color: var(--text);
+  }
+  .dl:is([data-detected='mac'], [data-detected='win'], [data-detected='android']) .cta-row .cta:not(.is-primary) .cta-badge,
+  .dl:is([data-detected='mac'], [data-detected='win'], [data-detected='android']) .cta-row .cta:not(.is-primary) .cta-sub {
+    display: none;
+  }
+  .cta.is-primary {
+    flex-basis: 100%;
+    max-width: 22rem;
+    margin: 0 auto 0.25rem;
+    padding: 1.1rem 2.6rem;
+    font-size: 1.1rem;
+  }
+
+  /* The Windows note only matters when Windows is offered as the main choice
+     or nothing was detected; the iOS note only for iPhone / iPad visitors. */
+  .cta-ios { display: none; }
+  .dl[data-detected='ios'] .cta-ios { display: block; }
+  .dl:is([data-detected='mac'], [data-detected='android'], [data-detected='ios']) .cta-note { display: none; }
+
   .cta-alt {
     margin: 0.9rem 0 0;
     font-size: 0.85rem;
   }
   .cta-alt a { color: var(--text-meta); }
+  .cta-note,
+  .cta-ios {
+    margin: 0.6rem auto 0;
+    max-width: 36rem;
+    font-size: 0.85rem;
+    color: var(--text-meta);
+  }
   .cta-main {
     display: inline-flex;
     align-items: center;
