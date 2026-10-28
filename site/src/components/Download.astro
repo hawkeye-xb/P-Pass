@@ -122,10 +122,15 @@ const platforms = [
   .dl:is([data-detected='mac'], [data-detected='win'], [data-detected='android']) .cta-row .cta:not(.is-primary) .cta-sub {
     display: none;
   }
+  .dl:is([data-detected='mac'], [data-detected='win'], [data-detected='android']) .cta-row {
+    display: grid;
+    grid-template-columns: auto auto;
+    justify-content: center;
+  }
   .cta.is-primary {
-    flex-basis: 100%;
-    max-width: 22rem;
-    margin: 0 auto 0.25rem;
+    grid-column: 1 / -1;
+    justify-self: center;
+    margin-bottom: 0.25rem;
     padding: 1.1rem 2.6rem;
     font-size: 1.1rem;
   }
