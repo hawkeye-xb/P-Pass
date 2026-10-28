@@ -16,8 +16,8 @@ use std::ptr;
 use windows_sys::Win32::Foundation::{LocalFree, ERROR_SUCCESS};
 use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSidToSidW, GetNamedSecurityInfoW, SetEntriesInAclW,
-    SetNamedSecurityInfoW, EXPLICIT_ACCESS_W, NO_MULTIPLE_TRUSTEE, SET_ACCESS, SE_FILE_OBJECT,
-    TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
+    SetNamedSecurityInfoW, EXPLICIT_ACCESS_W, GRANT_ACCESS, NO_MULTIPLE_TRUSTEE, SET_ACCESS,
+    SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
 };
 use windows_sys::Win32::Security::{
     EqualSid, GetAce, GetSecurityDescriptorControl, ACL, CONTAINER_INHERIT_ACE,
@@ -25,13 +25,17 @@ use windows_sys::Win32::Security::{
     PROTECTED_DACL_SECURITY_INFORMATION, PSID, SE_DACL_PROTECTED,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    MoveFileExW, FILE_ALL_ACCESS, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    MoveFileExW, FILE_ALL_ACCESS, FILE_GENERIC_READ, MOVEFILE_REPLACE_EXISTING,
+    MOVEFILE_WRITE_THROUGH,
 };
 
 use crate::{IdentityKeyStore, PlatformError, Result, SecretBlobStore};
 
 /// 服务账户 SID 之外，唯一允许完全控制的 SID。
 pub const ADMINISTRATORS_SID: &str = "S-1-5-32-544";
+
+/// BUILTIN\Users：本机交互用户。只用于 [`grant_users_read`] 给单个文件授只读。
+pub const USERS_SID: &str = "S-1-5-32-545";
 
 const ALLOWED_ACE_TYPE: u8 = 0;
 
@@ -423,6 +427,85 @@ fn set_private_dacl(path: &Path, sids: &[&str]) -> Result<()> {
     result
 }
 
+/// #1238：给目录里的**一个文件**加一条「本机用户只读」的 ACE（合并进现有 DACL，不继承）。
+///
+/// 和安装器给 `wanted-state` 授权是同一个做法：目录 DACL 不动（[`ProgramDataDir::verify`]
+/// 照样通过），用户列不了目录，只能按全路径打开这一个文件。只读——`FILE_GENERIC_READ`，
+/// 不含写、删、改权限。幂等：同一受托人的 GRANT 由系统合并。
+///
+/// 只给不含秘密的文件用（config.toml）；身份私钥、配对白名单、库位置正本绝不经过这里。
+pub fn grant_users_read(file: &Path) -> Result<()> {
+    let users = sid_from_string(USERS_SID)?;
+    let result = (|| -> Result<()> {
+        let w = wide(file);
+        let mut dacl: *mut ACL = ptr::null_mut();
+        let mut sd: PSID = ptr::null_mut();
+        // SAFETY: w 是 NUL 结尾；成功时 sd 由 LocalAlloc，dacl 指向 sd 内部。
+        let rc = unsafe {
+            GetNamedSecurityInfoW(
+                w.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                &mut dacl,
+                ptr::null_mut(),
+                &mut sd,
+            )
+        };
+        if rc != ERROR_SUCCESS || sd.is_null() {
+            return Err(io_err(
+                "GetNamedSecurityInfoW",
+                std::io::Error::from_raw_os_error(rc as i32),
+            ));
+        }
+        let access = EXPLICIT_ACCESS_W {
+            grfAccessPermissions: FILE_GENERIC_READ,
+            grfAccessMode: GRANT_ACCESS,
+            grfInheritance: 0,
+            Trustee: TRUSTEE_W {
+                pMultipleTrustee: ptr::null_mut(),
+                MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
+                TrusteeForm: TRUSTEE_IS_SID,
+                TrusteeType: TRUSTEE_IS_USER,
+                ptstrName: users.cast(),
+            },
+        };
+        let mut new_acl: *mut ACL = ptr::null_mut();
+        // SAFETY: access 与其 SID 在调用期间存活；dacl 是上面拿到的现有 DACL。
+        let rc = unsafe { SetEntriesInAclW(1, &access, dacl, &mut new_acl) };
+        unsafe { LocalFree(sd.cast()) };
+        if rc != ERROR_SUCCESS {
+            return Err(io_err(
+                "SetEntriesInAclW",
+                std::io::Error::from_raw_os_error(rc as i32),
+            ));
+        }
+        // SAFETY: new_acl 是合法 ACL；只改 DACL，不动受保护位（文件照旧继承目录的两条 ACE）。
+        let rc = unsafe {
+            SetNamedSecurityInfoW(
+                w.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                new_acl,
+                ptr::null(),
+            )
+        };
+        unsafe { LocalFree(new_acl.cast()) };
+        if rc != ERROR_SUCCESS {
+            return Err(io_err(
+                "SetNamedSecurityInfoW",
+                std::io::Error::from_raw_os_error(rc as i32),
+            ));
+        }
+        Ok(())
+    })();
+    unsafe { free_sid(users) };
+    result
+}
+
 /// 一条整份读写的正本文件（`identity.key` / `pairings.json` / `library.json`）。
 pub struct ProgramDataStore {
     path: PathBuf,
@@ -615,6 +698,60 @@ mod tests {
         assert!(
             text.contains("受保护") || text.contains("白名单") || text.contains("属主"),
             "{text}"
+        );
+    }
+
+    /// #1238：给目录里的 config.toml 授本机用户只读后，目录本身照样通过启动核对，
+    /// 文件上多出一条只读（不含写）的 Users ACE；重复授权不出错。
+    /// 反证：grant_users_read 改成改目录（或授 FILE_ALL_ACCESS）→ verify / 掩码断言红。
+    #[test]
+    fn granting_users_read_on_one_file_keeps_the_directory_private() {
+        let d = tempdir();
+        ProgramDataDir::create(d.path(), &test_sid()).expect("create");
+        let cfg = d.path().join("config.toml");
+        std::fs::write(&cfg, "data_dir = 'x'\n").expect("write");
+        grant_users_read(&cfg).expect("grant");
+        grant_users_read(&cfg).expect("grant twice");
+        ProgramDataDir::verify(d.path(), &test_sid()).expect("目录核对仍须通过");
+
+        let users = sid_from_string(USERS_SID).unwrap();
+        let w = wide(&cfg);
+        let mut dacl: *mut ACL = ptr::null_mut();
+        let mut sd: PSID = ptr::null_mut();
+        let rc = unsafe {
+            GetNamedSecurityInfoW(
+                w.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                &mut dacl,
+                ptr::null_mut(),
+                &mut sd,
+            )
+        };
+        assert_eq!(rc, ERROR_SUCCESS);
+        let mut users_masks = Vec::new();
+        for i in 0..unsafe { (*dacl).AceCount } as u32 {
+            let mut ace: *mut c_void = ptr::null_mut();
+            assert_ne!(unsafe { GetAce(dacl, i, &mut ace) }, 0);
+            let sid = unsafe { (ace as *const u8).add(8) as PSID };
+            if unsafe { EqualSid(sid, users) } != 0 {
+                users_masks.push(unsafe { *((ace as *const u8).add(4) as *const u32) });
+            }
+        }
+        unsafe {
+            LocalFree(sd.cast());
+            free_sid(users);
+        }
+        assert_eq!(users_masks.len(), 1, "恰好一条 Users ACE：{users_masks:?}");
+        let mask = users_masks[0];
+        assert_eq!(mask & FILE_GENERIC_READ, FILE_GENERIC_READ, "可读");
+        use windows_sys::Win32::Storage::FileSystem::{DELETE, FILE_WRITE_DATA, WRITE_DAC};
+        assert_eq!(
+            mask & (FILE_WRITE_DATA | DELETE | WRITE_DAC),
+            0,
+            "不许写/删/改权限"
         );
     }
 

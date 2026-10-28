@@ -64,7 +64,8 @@ pub(crate) fn reconcile_autostart_registration() {
     // DESK-65 (#957)：用户主动停过服务 ⇒ 唯一正确的状态是「没有登记」。对账
     // 只往这个方向收敛：残留的登记（上次停止时没撤掉、或老版本留下的）撤掉，
     // 绝不改写、更不拉起——改写登记在 Windows 上会顺带把服务跑起来。
-    if is_user_stopped(&platform::adapter().data_dir()) {
+    let home = ShellHome::current();
+    if home.user_stopped() {
         if platform::hosting().autostart_installed().unwrap_or(false) {
             if let Err(e) = platform::hosting().uninstall_autostart() {
                 eprintln!("#957: 用户停过服务，但撤销残留的开机自启登记失败: {e}");
@@ -97,7 +98,7 @@ pub(crate) fn reconcile_autostart_registration() {
         Ok(platform::AutostartReconcile::NotRegistered)
             if restore_missing_autostart_allowed(
                 platform::hosting().autostart_restore_when_missing(),
-                &platform::adapter().data_dir(),
+                &home,
             ) =>
         {
             // DESK-60 (#877)：卸载删了登记、配置还在、用户没停过 ⇒ 补回来，
@@ -130,38 +131,99 @@ pub(crate) fn user_stopped_marker(data_dir: &std::path::Path) -> std::path::Path
     data_dir.join(USER_STOPPED_MARKER)
 }
 
-pub(crate) fn is_user_stopped(data_dir: &std::path::Path) -> bool {
-    user_stopped_marker(data_dir).exists()
+/// #1238：壳判断「配过没有」「用户停过没有」时读的东西各在哪。只有这一个入口——
+/// 读的位置必须和写的位置是同一处，否则就是 #1238：Windows 服务形态的配置在
+/// `%ProgramData%\P-Pass`，壳却去读用户目录，服务一停就把已配置的机器打回首启向导。
+///
+/// - `config_dir`：daemon 的 config.toml 所在目录（[`platform::HostingAdapter::daemon_config_dir`]）。
+/// - `stop_switch`：服务形态「要不要运行」的开关文件（daemon 开机自检、安装器都读它）；
+///   有它就只认它，壳不再另记一份。
+/// - `state_dir`：壳自己的数据目录，没有开关文件的形态（macOS 等）在这里落停止标记。
+#[derive(Debug, Clone)]
+pub(crate) struct ShellHome {
+    pub config_dir: std::path::PathBuf,
+    pub stop_switch: Option<std::path::PathBuf>,
+    pub state_dir: std::path::PathBuf,
 }
 
-/// 落标记 / 清标记。失败要报出来：标记没落下 = 自愈照样会把服务拉回来，
-/// 用户意图被静默撤销，这正是 #456 本身。
-pub(crate) fn set_user_stopped(data_dir: &std::path::Path, stopped: bool) -> Result<(), String> {
-    let marker = user_stopped_marker(data_dir);
-    if stopped {
-        std::fs::create_dir_all(data_dir)
-            .map_err(|e| crate::ipc::ui_err("ui.err_stop_mark_write", &[("err", &e)]))?;
-        std::fs::write(&marker, b"user stopped the background service\n")
-            .map_err(|e| crate::ipc::ui_err("ui.err_stop_mark_write", &[("err", &e)]))
-    } else {
-        match std::fs::remove_file(&marker) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(crate::ipc::ui_err("ui.err_stop_mark_clear", &[("err", &e)])),
+impl ShellHome {
+    /// 本机当前形态。
+    pub(crate) fn current() -> Self {
+        let hosting = platform::hosting();
+        Self {
+            config_dir: hosting.daemon_config_dir(),
+            stop_switch: hosting.service_stop_switch(),
+            state_dir: platform::adapter().data_dir(),
+        }
+    }
+
+    /// 壳与 daemon 同一用户、同一目录（macOS、测试）。
+    #[cfg(test)]
+    pub(crate) fn shared(dir: &std::path::Path) -> Self {
+        Self {
+            config_dir: dir.to_path_buf(),
+            stop_switch: None,
+            state_dir: dir.to_path_buf(),
+        }
+    }
+
+    /// 向导走完了（daemon 的 config.toml 在）。
+    pub(crate) fn configured(&self) -> bool {
+        self.config_dir.join("config.toml").exists()
+    }
+
+    /// config.toml 里给人看的库位置（`data_dir`）。
+    pub(crate) fn configured_library_dir(&self) -> Option<String> {
+        crate::ipc::read_config_data_dir(&self.config_dir)
+    }
+
+    /// 用户主动停过服务。开关文件读到 `stopped` 才算；读不出 / 坏内容按「要运行」，
+    /// 与 daemon 开机自检同一口径（[`platform::stop_switch::read_at`]）。
+    pub(crate) fn user_stopped(&self) -> bool {
+        match &self.stop_switch {
+            Some(switch) => platform::stop_switch::read_at(switch) == Some(false),
+            None => user_stopped_marker(&self.state_dir).exists(),
+        }
+    }
+
+    /// 落 / 清「用户主动停止」。失败要报出来：没落下 = 自愈照样会把服务拉回来，
+    /// 用户意图被静默撤销，这正是 #456 本身。
+    pub(crate) fn set_user_stopped(&self, stopped: bool) -> Result<(), String> {
+        let key = if stopped {
+            "ui.err_stop_mark_write"
+        } else {
+            "ui.err_stop_mark_clear"
+        };
+        if let Some(switch) = &self.stop_switch {
+            return platform::stop_switch::write_at(switch, !stopped)
+                .map_err(|e| crate::ipc::ui_err(key, &[("err", &e)]));
+        }
+        let marker = user_stopped_marker(&self.state_dir);
+        if stopped {
+            std::fs::create_dir_all(&self.state_dir)
+                .map_err(|e| crate::ipc::ui_err(key, &[("err", &e)]))?;
+            std::fs::write(&marker, b"user stopped the background service\n")
+                .map_err(|e| crate::ipc::ui_err(key, &[("err", &e)]))
+        } else {
+            match std::fs::remove_file(&marker) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(e) => Err(crate::ipc::ui_err(key, &[("err", &e)])),
+            }
         }
     }
 }
 
 /// 自愈判据（纯函数，单测覆盖）：配置过、且不是用户主动停的，才允许自愈。
 /// 「没配置过」是首启向导的事；「用户停的」要等用户自己点「启动服务」。
-pub(crate) fn self_heal_allowed(data_dir: &std::path::Path) -> bool {
-    data_dir.join("config.toml").exists() && !is_user_stopped(data_dir)
+pub(crate) fn self_heal_allowed(home: &ShellHome) -> bool {
+    home.configured() && !home.user_stopped()
 }
 
-/// #1060：更新前要不要「为更新暂停」常驻服务。用户自己停过（停止标记在）就**不动**：
-/// 它本来就停着，更新前后都保持停止（暂停本身不碰标记，所以也不会改写这份意图）。
-pub(crate) fn should_pause_for_update(data_dir: &std::path::Path) -> bool {
-    !is_user_stopped(data_dir)
+/// #1060：更新前要不要「为更新暂停」常驻服务。用户自己停过就**不动**：
+/// 它本来就停着，更新前后都保持停止（暂停本身不碰停止记录，所以也不会改写这份意图）。
+pub(crate) fn should_pause_for_update(home: &ShellHome) -> bool {
+    !home.user_stopped()
 }
 
 /// #1060：新壳启动时要不要把服务拉回来（「更新后恢复」）。三个条件缺一不可：
@@ -169,22 +231,15 @@ pub(crate) fn should_pause_for_update(data_dir: &std::path::Path) -> bool {
 /// 有登记（`resident_service_available`）、此刻内核不在线（在线 = 无事可做；
 /// 登录时 launchd 并发拉起的那份也落在这条，随后 `restart_resident_daemon(false)`
 /// 会报 AlreadyRunning，不会二次重启）。
-pub(crate) fn update_resume_needed(
-    data_dir: &std::path::Path,
-    registered: bool,
-    online: bool,
-) -> bool {
-    registered && !online && self_heal_allowed(data_dir)
+pub(crate) fn update_resume_needed(home: &ShellHome, registered: bool, online: bool) -> bool {
+    registered && !online && self_heal_allowed(home)
 }
 
 /// DESK-60 (#877)：登记缺失时要不要补。与自愈同一条判据——配置过（不是首启，
-/// DAE-03 ②）、且不是用户主动停的（DESK-36 的停止标记）——再加上平台声明
+/// DAE-03 ②）、且不是用户主动停的（DESK-36）——再加上平台声明
 /// 「登记会被系统流程删掉」。
-pub(crate) fn restore_missing_autostart_allowed(
-    platform_restores: bool,
-    data_dir: &std::path::Path,
-) -> bool {
-    platform_restores && self_heal_allowed(data_dir)
+pub(crate) fn restore_missing_autostart_allowed(platform_restores: bool, home: &ShellHome) -> bool {
+    platform_restores && self_heal_allowed(home)
 }
 
 /// 纯函数：在跑的内核（自报 pid）是不是"野生"的——服务管理器手里的 job pid
@@ -266,11 +321,21 @@ mod tests {
     fn user_stopped_service_is_neither_paused_nor_resumed() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("config.toml"), "").unwrap();
-        assert!(should_pause_for_update(dir.path()));
-        assert!(update_resume_needed(dir.path(), true, false));
-        set_user_stopped(dir.path(), true).unwrap();
-        assert!(!should_pause_for_update(dir.path()));
-        assert!(!update_resume_needed(dir.path(), true, false));
+        assert!(should_pause_for_update(&ShellHome::shared(dir.path())));
+        assert!(update_resume_needed(
+            &ShellHome::shared(dir.path()),
+            true,
+            false
+        ));
+        ShellHome::shared(dir.path())
+            .set_user_stopped(true)
+            .unwrap();
+        assert!(!should_pause_for_update(&ShellHome::shared(dir.path())));
+        assert!(!update_resume_needed(
+            &ShellHome::shared(dir.path()),
+            true,
+            false
+        ));
     }
 
     /// 已登记、没停过、内核不在线 ⇒ 拉；在线 / 没登记 / 没配置过 ⇒ 不拉。
@@ -278,13 +343,23 @@ mod tests {
     fn resume_only_when_registered_configured_and_offline() {
         let dir = tempfile::tempdir().unwrap();
         assert!(
-            !update_resume_needed(dir.path(), true, false),
+            !update_resume_needed(&ShellHome::shared(dir.path()), true, false),
             "没配置过（首启向导的事）"
         );
         std::fs::write(dir.path().join("config.toml"), "").unwrap();
-        assert!(update_resume_needed(dir.path(), true, false));
-        assert!(!update_resume_needed(dir.path(), true, true), "已在线");
-        assert!(!update_resume_needed(dir.path(), false, false), "没登记");
+        assert!(update_resume_needed(
+            &ShellHome::shared(dir.path()),
+            true,
+            false
+        ));
+        assert!(
+            !update_resume_needed(&ShellHome::shared(dir.path()), true, true),
+            "已在线"
+        );
+        assert!(
+            !update_resume_needed(&ShellHome::shared(dir.path()), false, false),
+            "没登记"
+        );
     }
 
     // ── #667 / #732：自动换内核判据 ───────────────────────────────────
@@ -424,16 +499,18 @@ mod tests {
     fn self_heal_revives_a_configured_daemon_that_was_not_stopped_by_the_user() {
         // 崩了 / 被更新流程停了又没拉回来（W1 那个 NSIS 场景）——自愈的本职。
         let dir = configured_data_dir();
-        assert!(self_heal_allowed(dir.path()));
+        assert!(self_heal_allowed(&ShellHome::shared(dir.path())));
     }
 
     #[test]
     fn self_heal_never_revives_a_daemon_the_user_stopped() {
         // #456 本体：用户点了停止 → 自愈不许在冷却窗口过后把它拉回来。
         let dir = configured_data_dir();
-        set_user_stopped(dir.path(), true).unwrap();
+        ShellHome::shared(dir.path())
+            .set_user_stopped(true)
+            .unwrap();
         assert!(
-            !self_heal_allowed(dir.path()),
+            !self_heal_allowed(&ShellHome::shared(dir.path())),
             "用户主动停止了服务，自愈却仍然判定要拉起它（#456）"
         );
     }
@@ -444,21 +521,23 @@ mod tests {
     fn a_missing_autostart_is_restored_only_for_a_configured_unstopped_install() {
         let dir = configured_data_dir();
         assert!(
-            restore_missing_autostart_allowed(true, dir.path()),
+            restore_missing_autostart_allowed(true, &ShellHome::shared(dir.path())),
             "配置在、没停过、登记丢了：应补登记（#877 现场）"
         );
         assert!(
-            !restore_missing_autostart_allowed(false, dir.path()),
+            !restore_missing_autostart_allowed(false, &ShellHome::shared(dir.path())),
             "平台没声明会被系统删登记：保持「未登记 → 不动」"
         );
-        set_user_stopped(dir.path(), true).unwrap();
+        ShellHome::shared(dir.path())
+            .set_user_stopped(true)
+            .unwrap();
         assert!(
-            !restore_missing_autostart_allowed(true, dir.path()),
+            !restore_missing_autostart_allowed(true, &ShellHome::shared(dir.path())),
             "用户主动停过服务：重装后也不许补（尊重停止）"
         );
         let fresh = tempfile::tempdir().unwrap();
         assert!(
-            !restore_missing_autostart_allowed(true, fresh.path()),
+            !restore_missing_autostart_allowed(true, &ShellHome::shared(fresh.path())),
             "没配置过（首启）：不许顺手登记（DAE-03 ②）"
         );
     }
@@ -466,28 +545,137 @@ mod tests {
     fn user_stop_survives_an_app_restart() {
         // 持久化语义：标记在盘上，换一个「进程」（重新读同一目录）仍然在。
         let dir = configured_data_dir();
-        set_user_stopped(dir.path(), true).unwrap();
+        ShellHome::shared(dir.path())
+            .set_user_stopped(true)
+            .unwrap();
         let reopened = dir.path().to_path_buf();
-        assert!(is_user_stopped(&reopened));
-        assert!(!self_heal_allowed(&reopened));
+        assert!(ShellHome::shared(&reopened).user_stopped());
+        assert!(!self_heal_allowed(&ShellHome::shared(&reopened)));
     }
 
     #[test]
     fn starting_the_service_clears_the_user_stop() {
         let dir = configured_data_dir();
-        set_user_stopped(dir.path(), true).unwrap();
-        set_user_stopped(dir.path(), false).unwrap();
-        assert!(!is_user_stopped(dir.path()));
-        assert!(self_heal_allowed(dir.path()), "点了启动之后自愈应当恢复");
+        ShellHome::shared(dir.path())
+            .set_user_stopped(true)
+            .unwrap();
+        ShellHome::shared(dir.path())
+            .set_user_stopped(false)
+            .unwrap();
+        assert!(!ShellHome::shared(dir.path()).user_stopped());
+        assert!(
+            self_heal_allowed(&ShellHome::shared(dir.path())),
+            "点了启动之后自愈应当恢复"
+        );
         // 没停过也能清（首启向导调 start_daemon 时就是这种情况）。
-        set_user_stopped(dir.path(), false).unwrap();
+        ShellHome::shared(dir.path())
+            .set_user_stopped(false)
+            .unwrap();
     }
 
     #[test]
     fn self_heal_stays_out_of_an_unconfigured_machine() {
         // 向导没走完不自愈——这条是原有语义，本卡不许改掉。
         let dir = tempfile::tempdir().unwrap();
-        assert!(!self_heal_allowed(dir.path()));
+        assert!(!self_heal_allowed(&ShellHome::shared(dir.path())));
+    }
+
+    // ── #1238：Windows 服务形态——配置在 ProgramData、停止只认开关文件 ──────────
+
+    /// 服务形态的家：config.toml 在「ProgramData」（与壳的数据目录不是同一处），
+    /// 停止记录是安装器建好的开关文件。
+    fn service_home() -> (tempfile::TempDir, tempfile::TempDir, ShellHome) {
+        let programdata = tempfile::tempdir().unwrap();
+        let user = tempfile::tempdir().unwrap();
+        let switch = programdata.path().join("wanted-state");
+        std::fs::write(&switch, "running").unwrap();
+        let home = ShellHome {
+            config_dir: programdata.path().to_path_buf(),
+            stop_switch: Some(switch),
+            state_dir: user.path().to_path_buf(),
+        };
+        (programdata, user, home)
+    }
+
+    /// #1238 回归现场：向导走完（ProgramData 里有 config.toml、用户目录里没有）、用户在设置里
+    /// 停了服务 → 不回向导、不自愈、更新不拉起；点启动后恢复。
+    /// 反证：configured() 改回读壳的数据目录 → 「不回向导」那条红；user_stopped() 改回只看
+    /// 用户目录的标记 → 「不自愈」那条红。
+    #[test]
+    fn a_configured_service_stopped_by_the_user_stays_on_the_main_screen() {
+        let (programdata, user, home) = service_home();
+        std::fs::write(programdata.path().join("config.toml"), "data_dir = 'x'\n").unwrap();
+        assert!(home.configured(), "配置在 ProgramData：算配置过");
+        assert!(self_heal_allowed(&home), "没停过：崩了要自愈");
+
+        home.set_user_stopped(true).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(home.stop_switch.as_ref().unwrap()).unwrap(),
+            "stopped",
+            "停止写进 daemon 与安装器读的同一个开关文件"
+        );
+        assert!(
+            !user_stopped_marker(user.path()).exists(),
+            "服务形态不另记一份停止标记"
+        );
+        assert!(home.user_stopped());
+        assert!(
+            !show_wizard(home.configured(), true, home.user_stopped(), false),
+            "停了服务不许回首启向导（#1238）"
+        );
+        assert!(!self_heal_allowed(&home), "用户停的不许自愈拉回（#456）");
+        assert!(!should_pause_for_update(&home));
+        assert!(!update_resume_needed(&home, true, false));
+
+        home.set_user_stopped(false).unwrap();
+        assert!(!home.user_stopped());
+        assert!(self_heal_allowed(&home), "点了启动之后自愈恢复");
+    }
+
+    /// 服务形态、向导还没走完（ProgramData 里没有 config.toml）→ 照旧进向导；用户目录里残留的
+    /// 老停止标记不算数（只认开关文件）。
+    #[test]
+    fn an_unconfigured_service_still_gets_the_wizard() {
+        let (_programdata, user, home) = service_home();
+        std::fs::write(user_stopped_marker(user.path()), "x").unwrap();
+        assert!(!home.configured());
+        assert!(
+            !home.user_stopped(),
+            "开关是 running：残留的用户目录标记不算"
+        );
+        assert!(show_wizard(
+            home.configured(),
+            true,
+            home.user_stopped(),
+            false
+        ));
+        assert!(!self_heal_allowed(&home));
+    }
+
+    /// 开关文件读不出 / 坏内容 = 按「要运行」，与 daemon 开机自检同一口径。
+    #[test]
+    fn a_junk_stop_switch_means_running() {
+        let (_programdata, _user, home) = service_home();
+        std::fs::write(home.stop_switch.as_ref().unwrap(), "banana").unwrap();
+        assert!(!home.user_stopped());
+        std::fs::remove_file(home.stop_switch.as_ref().unwrap()).unwrap();
+        assert!(!home.user_stopped());
+    }
+
+    /// 库位置从 daemon 的 config 目录读（Windows 服务形态 = ProgramData），不从壳的数据目录读。
+    #[test]
+    fn the_library_is_read_from_the_daemon_config_dir() {
+        let (programdata, user, home) = service_home();
+        std::fs::write(
+            programdata.path().join("config.toml"),
+            "data_dir = 'C:/Users/me/Pictures/P-Pass Library'\n",
+        )
+        .unwrap();
+        std::fs::write(user.path().join("config.toml"), "data_dir = 'stale'\n").unwrap();
+        assert_eq!(
+            home.configured_library_dir().as_deref(),
+            Some("C:/Users/me/Pictures/P-Pass Library")
+        );
     }
 
     /// 向导门的判据（DESK-36 #456 的矩阵，#1045 起在 Rust）。反证：去掉
@@ -529,8 +717,8 @@ mod tests {
         let rest = &product[start..];
         let reconcile = &rest[..rest.find("\n}\n").expect("函数结尾")];
         let guard = reconcile
-            .find("is_user_stopped(")
-            .expect("对账必须先看停止标记");
+            .find("home.user_stopped()")
+            .expect("对账必须先看停止记录");
         let rewrite = reconcile
             .find("reconcile_autostart(&sidecar)")
             .expect("对账");

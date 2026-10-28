@@ -631,6 +631,15 @@ impl PlatformAdapter for WindowsAdapter {
         )))
     }
 
+    /// #1238：服务形态下给 config.toml 单独授交互用户只读（目录仍私有）。
+    fn share_config_read(&self, config_file: &Path) -> Result<crate::Applied> {
+        if Self::service_root().is_none() {
+            return Ok(crate::Applied::NotApplicable);
+        }
+        crate::windows_programdata::grant_users_read(config_file)?;
+        Ok(crate::Applied::Done)
+    }
+
     /// §5.3 / #1159：把照片库目录授权给服务账户。
     ///
     /// 只有 per-machine 安装（服务已注册）才需要：老的每用户计划任务跑在用户会话
@@ -720,17 +729,6 @@ impl PlatformAdapter for WindowsAdapter {
     /// 这个开关就是一个文件，直接读最稳；读不到/坏内容都按「要运行」处理。
     fn service_wanted_state(&self) -> Option<bool> {
         crate::windows_service::read_wanted_state_at(&crate::windows_service::wanted_state_path())
-    }
-
-    /// §5.1 / #1161：写开关。给交互用户 `RP`/`WP`、不给 `DC`，所以「开机别启动」只能
-    /// 由服务自检实现（详见 `windows_service::wanted_state_path` 的说明）。
-    fn set_service_wanted_state(&self, running: bool) -> Result<crate::Applied> {
-        use crate::windows_service;
-        if !windows_service::is_installed(windows_service::SERVICE_NAME)? {
-            return Ok(crate::Applied::NotApplicable);
-        }
-        windows_service::write_wanted_state_at(&windows_service::wanted_state_path(), running)?;
-        Ok(crate::Applied::Done)
     }
 
     /// #1043：`ERROR_SHARING_VIOLATION`（32，文件正被另一进程使用）与
@@ -1075,17 +1073,36 @@ impl PlatformAdapter for WindowsAdapter {
     }
 }
 
+/// 服务 `P-Pass` 已注册（per-machine 安装）。查询失败按「没注册」——与改前
+/// `installer_marker_dir` 的口径一致。
+fn service_registered() -> bool {
+    crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME).unwrap_or(false)
+}
+
 impl HostingAdapter for WindowsAdapter {
     /// #1167：per-machine 安装（服务已注册）时，安装器的标记在 `%ProgramData%\P-Pass\`
     /// （提权安装器写在那里，并给这个文件单独授本机用户读/删）；否则仍是数据目录。
     fn installer_marker_dir(&self) -> PathBuf {
-        if crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)
-            .unwrap_or(false)
-        {
+        if service_registered() {
             crate::windows_programdata::service_root()
         } else {
             self.data_dir()
         }
+    }
+
+    /// #1238：服务已注册 ⇒ daemon 的配置在 `%ProgramData%\P-Pass`；否则（老的每用户形态）
+    /// 与窗口程序同一个数据目录。
+    fn daemon_config_dir(&self) -> PathBuf {
+        if service_registered() {
+            crate::windows_programdata::service_root()
+        } else {
+            self.data_dir()
+        }
+    }
+
+    /// #1238：服务已注册 ⇒ 「用户停过」只认 `wanted-state`（daemon、安装器读的同一份）。
+    fn service_stop_switch(&self) -> Option<PathBuf> {
+        service_registered().then(crate::windows_service::wanted_state_path)
     }
 
     /// DESK-65 (#957)：登记计划任务并立刻运行它（= `launchctl bootstrap` +

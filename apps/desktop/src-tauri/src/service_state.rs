@@ -200,8 +200,7 @@ impl ServiceStateManager {
     /// The user's explicit stop is the only thing that must never be
     /// overridden by a connection failure.
     pub fn user_stopped(&self) -> bool {
-        use platform::PlatformAdapter as _;
-        crate::distribution::is_user_stopped(&platform::adapter().data_dir())
+        crate::distribution::ShellHome::current().user_stopped()
     }
 
     pub fn next_after_failure(&self, had_connection: bool, within_grace: bool) -> ServiceState {

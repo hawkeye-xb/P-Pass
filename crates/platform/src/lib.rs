@@ -58,6 +58,8 @@ mod unix;
 mod windows;
 // #1151：应用内更新的大小 / 总时长上限（纯逻辑，三平台都跑单测）。
 pub mod update_limits;
+// §5.1 / #1238：服务形态「要不要运行」的开关文件（纯文件读写，三平台都跑单测）。
+pub mod stop_switch;
 // D1 / brief §5.1：SCM 服务托管（查询、起停、注册/删除、给主人授权）。
 #[cfg(windows)]
 pub mod windows_service;
@@ -726,6 +728,17 @@ pub trait PlatformAdapter: Send + Sync {
         None
     }
 
+    /// #1238：daemon 写好 config.toml 之后，让窗口程序（交互用户）能**只读**它。
+    ///
+    /// 服务形态下 config.toml 在 `%ProgramData%\P-Pass`，目录私有，窗口程序读不到——判断不出
+    /// 「配过没有」、找不到照片库，服务一停就被打回首启向导。文件里只有库位置（给人看的
+    /// 副本，正本在 `library_store`）、监听地址、中继地址，没有秘密；写仍只有服务与管理员。
+    /// 别的形态窗口程序与 daemon 是同一用户，`NotApplicable`。
+    fn share_config_read(&self, config_file: &std::path::Path) -> Result<Applied> {
+        let _ = config_file;
+        Ok(Applied::NotApplicable)
+    }
+
     /// §5.3 / #1159：把主人选的照片库目录授权给**常驻服务账户**。
     ///
     /// 服务模式（D1）下 daemon 以 `NT SERVICE\P-Pass` 运行，和选目录的用户不是
@@ -747,12 +760,6 @@ pub trait PlatformAdapter: Send + Sync {
     /// 其他平台没有这个形态（macOS 的 stop 会把 launchd 作业 disable 掉）。
     fn service_wanted_state(&self) -> Option<bool> {
         None
-    }
-
-    /// 写上面的开关（窗口程序用）。`Unsupported` = 本平台没有这个机制。
-    fn set_service_wanted_state(&self, running: bool) -> Result<Applied> {
-        let _ = running;
-        Ok(Applied::Unsupported)
     }
 
     /// #1167：常驻 daemon 的主人（见 [`ResidentOwner`]）。读不出来（文件在但读失败、
@@ -927,6 +934,20 @@ pub trait HostingAdapter: Send + Sync {
     /// 改放 `%ProgramData%\P-Pass\`（安装器给这个文件单独授交互用户读/删）。
     fn installer_marker_dir(&self) -> PathBuf {
         crate::adapter().data_dir()
+    }
+
+    /// #1238：daemon 的 config.toml 在哪个目录——窗口程序判断「配过没有」、读库位置只认这里。
+    ///
+    /// 默认 = 数据目录（窗口程序与 daemon 同一用户）。Windows 服务形态是 `%ProgramData%\P-Pass`
+    /// （daemon 以服务账户运行，数据目录与窗口程序的不是同一个）。
+    fn daemon_config_dir(&self) -> PathBuf {
+        crate::adapter().data_dir()
+    }
+
+    /// #1238：「用户希望服务运行吗」的开关文件（[`crate::stop_switch`]）。`None` = 本形态没有
+    /// 这个开关，「用户停过」记在窗口程序自己的数据目录里。
+    fn service_stop_switch(&self) -> Option<PathBuf> {
+        None
     }
 
     // 生命周期
