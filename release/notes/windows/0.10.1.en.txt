@@ -1,0 +1,3 @@
+First official release for 64-bit Windows PCs.
+Backups run in a Windows system service, separate from the desktop app.
+The installer is not code-signed, so Windows may show a security prompt.

@@ -1,0 +1,3 @@
+Update P-Pass on the computer and phone, then pair again once. Backed-up photos won't upload again.
+Pairing now asks for the 6-digit code on your phone.
+Security was strengthened. Please update soon.
