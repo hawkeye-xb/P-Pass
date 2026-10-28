@@ -277,6 +277,17 @@ pub(crate) fn self_heal_allowed(home: &ShellHome) -> bool {
     home.configured() != Configured::No && !home.user_stopped()
 }
 
+/// 服务管理器拉不起常驻 daemon 时，壳能不能以**用户身份**一次性拉起 sidecar 兜底
+/// （#732 的退路、`start_daemon` 登记失败的退路、向导写库位置时的临时 daemon）。
+///
+/// daemon 以服务账户运行的形态（Windows 服务）不能：用户身份的 daemon 读不到服务的
+/// 身份与配置，还会抢注服务的 IPC 端点，壳按属主核对又拒绝连它，于是「连不上 → 自愈 →
+/// 再拉一份」每 15 秒循环一次（服务被禁用时实测）。这时只请服务管理器启动服务，
+/// 起不来就停在「连不上」的错误页。纯函数，单测覆盖。
+pub(crate) fn user_daemon_fallback_allowed(mode: platform::ServiceMode) -> bool {
+    !mode.daemon_runs_as_service_account()
+}
+
 /// #1060：更新前要不要「为更新暂停」常驻服务。用户自己停过就**不动**：
 /// 它本来就停着，更新前后都保持停止（暂停本身不碰停止记录，所以也不会改写这份意图）。
 pub(crate) fn should_pause_for_update(home: &ShellHome) -> bool {
@@ -798,6 +809,21 @@ mod tests {
             Configured::No,
             "macOS 首启：没有常驻登记、也没有 daemon 可问 → 向导"
         );
+    }
+
+    /// #1246：daemon 以服务账户运行的形态不以用户身份兜底拉 daemon；其余形态照旧可以。
+    /// 反证：`user_daemon_fallback_allowed` 恒 true → 第一条红。
+    #[test]
+    fn a_service_account_daemon_is_never_spawned_as_the_user() {
+        use platform::ServiceMode;
+        assert!(!user_daemon_fallback_allowed(ServiceMode::WindowsService));
+        for mode in [
+            ServiceMode::UserAutostart,
+            ServiceMode::LaunchAgent,
+            ServiceMode::ScheduledTask,
+        ] {
+            assert!(user_daemon_fallback_allowed(mode), "{mode:?}");
+        }
     }
 
     /// #1246 回归现场：服务版覆盖安装后 config.toml 对壳不可读、App 抢在服务就绪前启动。
