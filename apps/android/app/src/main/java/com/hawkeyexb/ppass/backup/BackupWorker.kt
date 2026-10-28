@@ -72,6 +72,10 @@ internal fun autoBackupWorkNames(): List<String> = listOf(
  * 代理失效、只通局域网、待网页登录的 Wi‑Fi 永远拿不到 `VALIDATED`，进程死后续传哨兵与周期兜底就一直不跑。
  * 备份走局域网直连或中继，用不着外网验证。能不能传仍由引擎在这一轮里判（`AndroidFlowRuntime` 看当前网络是否
  * 不计流量，连不上桌面走探测梯退避），这里只是唤醒的闸门。API 26–27 没有网络请求约束，退回 [NetworkType]。
+ *
+ * 例外：引擎「等条件」的唤醒（[WorkManagerWakeScheduler.scheduleWhenConditionsMet]）保持原来的 [NetworkType]。
+ * 它等的是「Wi‑Fi 成为当前能用的网络」，与引擎的判据（`activeNetwork` 不计流量）是同一件事；开着移动数据时，
+ * 未验证的 Wi‑Fi 不会成为默认网络，若它也放宽，任务会被立刻满足、引擎又判「等 Wi‑Fi」、REPLACE 重排——空转。
  */
 internal fun requiredNetworkCapabilities(spec: BackupConstraintsSpec): List<Int> =
     buildList {
@@ -79,7 +83,13 @@ internal fun requiredNetworkCapabilities(spec: BackupConstraintsSpec): List<Int>
         if (spec.requiresUnmetered) add(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
     }
 
-private fun constraintsOf(spec: BackupConstraintsSpec): Constraints {
+internal fun constraintsOf(spec: BackupConstraintsSpec, conditionWake: Boolean = false): Constraints {
+    if (conditionWake) {
+        return Constraints.Builder()
+            .setRequiredNetworkType(if (spec.requiresUnmetered) NetworkType.UNMETERED else NetworkType.CONNECTED)
+            .setRequiresBatteryNotLow(spec.requiresBatteryNotLow)
+            .build()
+    }
     val request = NetworkRequest.Builder()
         .apply { requiredNetworkCapabilities(spec).forEach { addCapability(it) } }
         .removeCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
@@ -96,9 +106,11 @@ internal fun backupWorkRequest(
     reason: TriggerReason = TriggerReason.MEDIA_CHANGE,
     initialDelayMinutes: Long = 0L,
     initialDelayMs: Long = TimeUnit.MINUTES.toMillis(initialDelayMinutes),
+    /** #1220：引擎「等条件」的唤醒，网络约束保持与引擎同一判据（见 [requiredNetworkCapabilities]）。 */
+    conditionWake: Boolean = false,
 ): OneTimeWorkRequest =
     OneTimeWorkRequestBuilder<BackupWorker>()
-        .setConstraints(constraintsOf(spec))
+        .setConstraints(constraintsOf(spec, conditionWake))
         .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
         .setInitialDelay(initialDelayMs, TimeUnit.MILLISECONDS)
         .setInputData(androidx.work.workDataOf(KEY_AUTOMATIC_WAKE to automatic, KEY_REASON to reason.name))
@@ -158,7 +170,7 @@ class WorkManagerWakeScheduler(private val context: Context) : WakeScheduler {
         WorkManager.getInstance(context).enqueueUniqueWork(
             CONSTRAINT_WAKE_WORK_NAME,
             ExistingWorkPolicy.REPLACE,
-            backupWorkRequest(spec, automatic = false, reason = TriggerReason.CONSTRAINTS_MET),
+            backupWorkRequest(spec, automatic = false, reason = TriggerReason.CONSTRAINTS_MET, conditionWake = true),
         )
     }
 
