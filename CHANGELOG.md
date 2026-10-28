@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2026.10.7] - 2026-10-28
+
 ### Added
 - Windows 端：首个正式版，支持 64 位 Windows。后台备份由 Windows 系统服务运行，与桌面应用分开；安装包暂未做代码签名，安装时系统可能弹出安全提示，点「更多信息 → 仍要运行」即可继续（#788、#1161、#1167）。
 - macOS 端：设置里的「关于」分两行显示桌面应用和后台服务的版本，两者不一致时会标出来（#1044）。
