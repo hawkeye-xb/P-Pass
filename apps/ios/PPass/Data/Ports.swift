@@ -63,22 +63,30 @@ struct AlbumBucket: Identifiable, Equatable {
     /// nil = 系统没给名字（界面显示 bucket_unnamed）。
     let name: String?
     let count: Int
+    /// 「最近项目」（整个图库）：iOS 上相机拍的照片只在这里，首次选范围默认勾上它（#1263，对位 Android 相机相册）。
+    var isCameraAlbum = false
 }
 
 /// 手机相册：授权、相册列表、备份范围。
 protocol MediaLibrary: AnyObject {
     func access() -> MediaAccess
+    /// 系统还没问过照片权限（#1259：问之前先显示一屏说明）。
+    func accessNotDetermined() -> Bool
     func requestAccess() async -> MediaAccess
     func albums() async throws -> [AlbumBucket]
     func cover(_ album: AlbumBucket, side: CGFloat) async -> UIImage?
     /// nil = 从未保存过范围（与空集不同：空集 = 一个都不备份）。读盘失败抛出，不当成「从未保存」（#971）。
     func savedScope() throws -> Set<String>?
+    /// 时间档（#1263）；nil = 从未保存过范围。
+    func savedSince() throws -> BackupSince?
     /// 上次保存范围时已知的相册（新出现的相册标「新」、默认不勾）。
     func knownAlbums() -> Set<String>
     /// 当前系统里实际存在的相册 id；没有完整授权（读不到相册）= nil。不弹授权。
     func existingAlbumIds() async -> Set<String>?
+    /// 「最近项目」的 id（相机拍的照片只在这里，#1263 照片页空状态据此分两种说法）。读不到 = nil。不弹授权。
+    func cameraAlbumId() async -> String?
     /// 写盘失败抛出（#971）：调用方不许当成已保存。
-    func saveScope(_ selected: Set<String>, known: Set<String>) async throws
+    func saveScope(_ selected: Set<String>, known: Set<String>, since: BackupSince) async throws
 }
 
 enum PairingStatus: Equatable {
@@ -92,7 +100,7 @@ enum PairingStatus: Equatable {
 enum PairOutcome: Equatable {
     /// firstTime = 这台电脑以前没连过（要去选相册）。
     /// settingSaveFailed = 配对成功，但换新电脑时清旧的后台备份意图没写下来（#1039）：不拦配对，提示用户，
-    /// 完成页会按用户的选择再写一次。
+    /// 首次选完范围时会再写一次「关」（#1263）。
     case joined(firstTime: Bool, settingSaveFailed: Bool = false)
     /// 电脑那边说不（ownerSaidNo）或这次没完成（过期 / 电脑重启 / 版本太旧）。note 是本端挑的补充说明（nil = 只显示通用文案）。
     case refused(note: PairNote?, ownerSaidNo: Bool)
@@ -196,12 +204,8 @@ protocol BackupEngine: AnyObject {
     func requestNotificationAuthorization() async -> NotificationAuthorization
     /// denied 之后唯一的出路：跳系统设置里本 App 的通知页。
     @MainActor func openNotificationSettings()
-    /// onboarding 完成页：该不该先问一次通知（页面据此显示用途说明）。
-    func shouldAskNotificationAtOnboarding() async -> Bool
-    /// 完成页点「好」：该问就问（先落盘「问过」），结果同步回开关。
-    func askNotificationAtOnboarding() async
-    /// 完成页点任一按钮：把「连过这台电脑」落盘（#1019，对位 Android `finishOnboarding` 里的 markOnboarded，MOB-114）。
-    /// 快速重连只认它；配对成功时不记，否则配完没走完首次设置就被杀，下次会跳过选相册与后台备份的选择。
+    /// 首次选范围页点「开始备份」：把「连过这台电脑」落盘（#1019 / #1263，对位 Android `finishOnboarding` 里的 markOnboarded，MOB-114）。
+    /// 快速重连只认它；配对成功时不记，否则配完没走完首次设置就被杀，下次会跳过选范围。
     func finishOnboarding() throws
     /// 「仅 Wi-Fi 时备份」（引擎 Conditions.wifiOnly 的唯一来源，默认开）。
     func wifiOnly() -> Bool
@@ -209,6 +213,9 @@ protocol BackupEngine: AnyObject {
     /// 「后台备份」：关 = 只在打开 App 时备份（Conditions.autoBackupEnabled）。
     func autoBackup() -> Bool
     func setAutoBackup(_ on: Bool) throws
+    /// 首页「开启后台备份」引导卡被用户关掉过（#1263）。
+    func backgroundCardDismissed() -> Bool
+    func dismissBackgroundCard() throws
     /// 系统「后台 App 刷新」的当前状态（设置页的后台告示据此判定）。
     func backgroundRefresh() -> BackgroundRefreshAvailability
 }

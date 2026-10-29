@@ -85,6 +85,7 @@ public enum DisconnectState: CaseIterable, Sendable {
     case flowControl
     case notifyOnFailurePrefs
     case onboardingNotificationAsk
+    case backgroundBackupOffer
     case definitiveNotices
     case sentinel
     case savedToGallery
@@ -119,7 +120,8 @@ public enum DisconnectState: CaseIterable, Sendable {
         case .nativeBlobStore: return "iroh-blobs-provider"
         case .flowControl: return FlowControlStore.fileName
         case .notifyOnFailurePrefs: return NotifyOnFailurePrefs.fileName
-        case .onboardingNotificationAsk: return OnboardingNotificationAsk.fileName
+        case .onboardingNotificationAsk: return "onboarding_notification_ask.json"
+        case .backgroundBackupOffer: return BackgroundBackupOfferPrefs.fileName
         case .definitiveNotices: return DefinitiveNoticeStore.fileName
         case .sentinel: return SentinelStore.fileName
         case .savedToGallery: return SavedToGalleryStore.fileName
@@ -161,7 +163,8 @@ public enum DisconnectState: CaseIterable, Sendable {
         case .nativeBlobStore: return "MOB-91 / IOS-07：原生内容仓库断开只 revoke，仓库本身不动"
         case .flowControl: return "\(undecidedBasis)：暂停标志 / 等待原因（#413），Android 断开从来没碰过"
         case .notifyOnFailurePrefs: return "\(undecidedBasis)：设置页「需要处理时通知我」（#130），Android 断开从来没碰过"
-        case .onboardingNotificationAsk: return "#130（#515 后续）、#975：通知权限只问一次，之后任何路径（含再走一次 onboarding）都不再问；对位 Android ONBOARDING_NOTIFICATION_ASK"
+        case .onboardingNotificationAsk: return "#1262 退役：onboarding 不再申请通知，「只问一次」的记录已无读写者；老版本留下的文件不含凭据，留着无妨（对位 Android RETIRED）"
+        case .backgroundBackupOffer: return "#1263：首页「开启后台备份」引导卡被用户点「不用了」的记录（文件名同 Android background_backup_offer.json，KEEP）。是对这台手机的选择，与连哪台电脑无关，断开不碰"
         case .definitiveNotices: return "#130/#981：失败通知的去重状态（已为哪个配对代号发过、上次相册档位 / 后台刷新状态）；对位 Android definitive_notices.json（KEEP）——清掉会让下次评估把现状当基线重发"
         case .sentinel: return "\(undecidedBasis)：「3 天没连上电脑」哨兵（SENT-01），Android 断开从来没碰过"
         case .savedToGallery: return "#1152：「保存到相册」的去重记录（内容哈希 → 相册 localIdentifier），记着这台电脑的哪些照片存进过本机相册，断开清掉；原先在 UserDefaults（清不掉、进备份），现在是存储根里的文件（整个存储根不进备份）。iOS 独有（Android 的「已保存」是 MediaStore 里的现成条目，没有这份记录）"

@@ -121,7 +121,7 @@ enum E2EDriver {
         let ids = Set(chosen.map(\.id))
         let originals = await originalHashes(albumIds: ids, dir: dir)
         write("originals", ["originals": originals])
-        model.albumsChosen(ids, known: ids, firstTime: firstTime)
+        model.albumsChosen(ids, known: ids, wantsAll: true, firstTime: firstTime) // 端到端用的是已有照片：时间档选「全部」
 
         let deadline = Date().addingTimeInterval(timeoutSecs)
         var last: FlowFacts?

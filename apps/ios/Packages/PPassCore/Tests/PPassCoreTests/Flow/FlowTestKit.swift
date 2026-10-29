@@ -88,7 +88,13 @@ final class FakeMedia: MediaSource, @unchecked Sendable {
     /// F3 / 3105：之前发出去的位置全部失效。
     func expireTokens() { state.update { $0.pairingId += 1 } }
 
-    func isInScope(_ bucket: String) -> Bool { state.get().scope?.contains(bucket) == true }
+    /// 设了就由它判断范围键（#1263：键里带拍摄时刻，判断要解析，不是集合包含）；nil = 按 [scope] 集合包含。
+    let scopeRule = Locked<(@Sendable (String) -> Bool)?>(nil)
+
+    func isInScope(_ bucket: String) -> Bool {
+        if let rule = scopeRule.get() { return rule(bucket) }
+        return state.get().scope?.contains(bucket) == true
+    }
 
     func snapshot(_ p: FakePhoto, position: DiscoveryPosition? = nil) -> MediaSnapshot {
         MediaSnapshot(mediaId: p.mediaId, sourceVersion: p.sourceVersion, bucketId: p.bucket, position: position)
@@ -98,7 +104,7 @@ final class FakeMedia: MediaSource, @unchecked Sendable {
         metadataReads.update { $0 += 1 }
         let s = state.get()
         let rows = s.photos
-            .filter { p in (after.map { MediaOrder.precedes($0, p.mediaId) } ?? true) && (s.scope?.contains(p.bucket) == true) }
+            .filter { p in (after.map { MediaOrder.precedes($0, p.mediaId) } ?? true) && isInScope(p.bucket) }
             .sorted { MediaOrder.precedes($0.mediaId, $1.mediaId) }
             .flatMap { s.duplicate.contains($0.mediaId) ? [$0, $0] : [$0] }
         return Array(rows.prefix(limit)).map { snapshot($0) }
@@ -110,7 +116,7 @@ final class FakeMedia: MediaSource, @unchecked Sendable {
         let from = FakePosition.decode(position)
         if from.pairingId != s.pairingId { throw DiscoveryCursorExpired() }
         return s.photos
-            .filter { from.isBefore($0) && s.scope?.contains($0.bucket) == true }
+            .filter { from.isBefore($0) && isInScope($0.bucket) }
             .sorted { $0.generation != $1.generation ? $0.generation < $1.generation : MediaOrder.precedes($0.mediaId, $1.mediaId) }
             .prefix(limit)
             .map { snapshot($0, position: FakePosition(pairingId: s.pairingId, generation: $0.generation, id: $0.mediaId).encoded) }

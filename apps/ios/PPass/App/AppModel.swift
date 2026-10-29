@@ -3,6 +3,9 @@ import PPassCore
 import SwiftUI
 import UIKit
 
+/// 照片页空状态的三种说法（#1263，对位 Android TwoTabs 照片 tab）。
+enum PhotosEmptyHint: Equatable { case chooseAlbums, camera, albums }
+
 /// 一条需要用户看到的失败反馈（#971 / #972）：设置没存上、命令没执行成。界面用 alert 呈现，点掉即清。
 struct UserNotice: Identifiable, Equatable {
     let id = UUID()
@@ -15,10 +18,10 @@ final class AppModel: ObservableObject {
     enum Phase: Equatable {
         /// 没配对过：欢迎页 → 扫码 / 手动输入 → 配对状态页。
         case onboarding
-        /// 首次配对成功：选相册（firstTime）。
+        /// 首次配对成功、系统还没问过照片权限：先说清照片去哪、传多少由你定、随时能停，再弹系统框（#1259）。
+        case photoIntro
+        /// 首次配对成功：选范围（firstTime）。点「开始备份」直接进首页，没有完成页（#1263）。
         case chooseAlbums
-        /// 首次选完相册：「N 张照片，正在回家」。
-        case backupStarted(count: Int64)
         case main
     }
 
@@ -31,8 +34,14 @@ final class AppModel: ObservableObject {
     @Published private(set) var access: MediaAccess = .full
     @Published private(set) var pairing: PairingStatus = .notPaired
     @Published private(set) var scope: Set<String>?
+    /// 时间档（#1263）；nil = 从未保存过范围。
+    @Published private(set) var since: BackupSince?
     /// 系统里当前实际存在的相册（nil = 没有完整授权，读不到）。「已选相册」只数已选且现存的（#983，Android #836）。
     @Published private(set) var existingAlbums: Set<String>?
+    /// 「最近项目」的 id（#1263 照片页空状态）。
+    @Published private(set) var cameraAlbumId: String?
+    /// 照片页「选择相册」：请设置页把选范围页推出来（设置 tab 可能还没建，由它出现时消费）。
+    @Published var wantsScopeEditor = false
     /// 「后台 App 刷新」不可用、而用户要后台备份时的全局告示（对位 Android `NoticeHost` 的 BACKUP_INTERRUPTED，UI-12）：
     /// 照片 / 设置两页都看得到，不给「知道了」——事实还在就一直说，退出路径是去系统设置打开，或把「后台备份」关掉。
     @Published private(set) var backgroundNotice: BackgroundNotice?
@@ -52,12 +61,12 @@ final class AppModel: ObservableObject {
     @Published private(set) var wifiOnly = true
     /// 后台备份默认关（对位 Android `AutoBackupPrefs.autoEnabled = false`，#982）；真值由 `refresh()` 从盘上读。
     @Published private(set) var autoBackup = false
+    /// 首页「开启后台备份」引导卡被关掉过（#1263）。
+    @Published private(set) var backgroundCardDismissed = false
     @Published private(set) var notifyOnFailure = true
     /// #975：系统通知授权的真实状态。开关显示 = 偏好 且 已授权（Android MainActivity 同口径）。
     @Published private(set) var notificationAuthorization: NotificationAuthorization = .notDetermined
     private var notificationRequestInFlight = false
-    /// onboarding 完成页要不要显示「接下来会问是否允许通知」。
-    @Published private(set) var asksNotificationAtOnboarding = false
     /// 当前这张字节上一次前进的时刻（用来判「N 秒没有新数据」）。
     private(set) var transferMark: (orderId: Int64, bytes: Int64, at: Date)?
 
@@ -81,7 +90,6 @@ final class AppModel: ObservableObject {
     func refreshNotificationAuthorization() {
         Task {
             notificationAuthorization = await backend.engine.notificationAuthorization()
-            asksNotificationAtOnboarding = await backend.engine.shouldAskNotificationAtOnboarding()
         }
     }
 
@@ -125,25 +133,10 @@ final class AppModel: ObservableObject {
         notice = UserNotice(message: L.s("command_failed"))
     }
 
-    /// onboarding 完成页：该问通知就先问一次（结果同步回开关），再按用户的选择开 / 不开后台备份（Android `thenContinue` 包两个按钮），进首页。
-    func finishOnboardingStarted(enableBackgroundBackup: Bool) {
-        AppLog.log("onboarding: finish tapped enableBackgroundBackup=\(enableBackgroundBackup)")
-        // 记不下来不挡进首页：后果只是下次重连同一台仍走一遍首次设置（偏安全的一侧），但要提示，不静默。
-        do { try backend.engine.finishOnboarding() } catch { settingWriteFailed("onboarded", error) }
-        Task {
-            await backend.engine.askNotificationAtOnboarding()
-            // 选「不开」也按用户的选择写一次（#1039，对位 Android `onEnterWithoutBackgroundBackup`）：配对时清旧意图
-            // 那一步若没写下来，这里补上，否则旧电脑留下的意图会被带到新电脑上。写失败同样提示，照常进首页。
-            setAutoBackup(enableBackgroundBackup)
-            refresh()
-            refreshNotificationAuthorization()
-            phase = .main
-        }
-    }
-
     func refreshExistingAlbums() {
         Task {
             existingAlbums = await backend.media.existingAlbumIds()
+            cameraAlbumId = await backend.media.cameraAlbumId()
         }
     }
 
@@ -159,14 +152,17 @@ final class AppModel: ObservableObject {
         if next != phase { AppLog.log("pairing cleared while in \(phase); back to onboarding"); tab = .photos; phase = next }
         do {
             scope = try backend.media.savedScope()
+            since = try backend.media.savedSince()
             scopeUnreadable = false
         } catch {
             if !scopeUnreadable { AppLog.log("backup-scope: unreadable: \(error)") }
             scope = nil
+            since = nil
             scopeUnreadable = true
         }
         wifiOnly = backend.engine.wifiOnly()
         autoBackup = backend.engine.autoBackup()
+        backgroundCardDismissed = backend.engine.backgroundCardDismissed()
         notifyOnFailure = backend.engine.notifyOnFailure()
         backgroundNotice = Self.backgroundNotice(backend.engine.backgroundRefresh(), backgroundRequested: autoBackup)
     }
@@ -202,6 +198,24 @@ final class AppModel: ObservableObject {
 
     func setAutoBackup(_ on: Bool) {
         do { try backend.engine.setAutoBackup(on); autoBackup = on } catch { settingWriteFailed("auto-backup", error) }
+    }
+
+    /// 首页引导卡：后台备份没开、也没被关掉过才显示。
+    var showsBackgroundCard: Bool {
+        !pairingLost && BackgroundBackupOfferPrefs.shows(autoBackup: autoBackup, dismissed: backgroundCardDismissed)
+    }
+
+    /// 引导卡「开启后台备份」。iOS 没有 App 内申请后台运行的系统框（后台 App 刷新只能在系统设置里开），所以只写意图；
+    /// 后台 App 刷新被关时由现有的 backgroundNotice 指路（Android 这里弹电池白名单——偏离登记在 tokens.json platforms.ios）。
+    func enableBackgroundFromCard() {
+        AppLog.log("background-card: enable tapped")
+        setAutoBackup(true)
+        refresh()
+    }
+
+    /// 引导卡「不用了」：写盘失败照样提示，卡片仍在（下次还能关）。
+    func dismissBackgroundCard() {
+        do { try backend.engine.dismissBackgroundCard(); backgroundCardDismissed = true } catch { settingWriteFailed("background-card", error) }
     }
 
     /// 「仅 Wi‑Fi」开关：打开直接写；关闭先弹确认（不写盘），确认后才保存（Android MOB-02 §三 / MainActivity `pendingWifiOff`）。
@@ -263,6 +277,19 @@ final class AppModel: ObservableObject {
 
     /// 范围从未保存、保存了空集、或所选相册全被删：一张都不在范围内（Android #541 / #836 同口径）。
     var noAlbums: Bool { (selectedAlbumCount ?? 0) == 0 }
+    /// 照片页空库时说哪一种（#1263）：没选相册 → 引导去选；范围里有「最近项目」→ 拍一张试试；否则 → 新存进所选相册的会回家。
+    var photosEmptyHint: PhotosEmptyHint {
+        if noAlbums { return .chooseAlbums }
+        if let camera = cameraAlbumId, scope?.contains(camera) == true { return .camera }
+        return .albums
+    }
+
+    /// 照片页「选择相册」：切到设置 tab 并直达选范围页。
+    func openScopeEditor() {
+        tab = .settings
+        wantsScopeEditor = true
+    }
+
     var uiState: BackupUiState { HomeProjection.backupUiState(facts, noAlbums: noAlbums) }
     var triplet: BackupTriplet? { HomeProjection.triplet(facts, scopeSaved: scope != nil) }
 
@@ -279,7 +306,7 @@ final class AppModel: ObservableObject {
 
     /// 配对成功后的去向：以前连过这台电脑 → 首页；否则去选相册（Android 同语义）。
     /// settingSaveFailed：换新电脑清旧的后台备份意图没写下来（#1039，对位 Android）——不拦配对，照常往下走，提示用户；
-    /// 完成页点按钮时按用户的选择再写一次。
+    /// 首次选完范围时再写一次「关」（#1263 起没有完成页）。
     func paired(firstTime: Bool, settingSaveFailed: Bool) {
         if settingSaveFailed {
             AppLog.log("settings: write failed (auto-backup new desktop, ask again)")
@@ -287,36 +314,62 @@ final class AppModel: ObservableObject {
         }
         refresh()
         refreshNotificationAuthorization()
-        phase = firstTime ? .chooseAlbums : .main
+        phase = firstTime ? (backend.media.accessNotDetermined() ? .photoIntro : .chooseAlbums) : .main
     }
 
-    func albumsChosen(_ selected: Set<String>, known: Set<String>, firstTime: Bool) {
+    /// 说明页点「继续」：弹系统照片权限框（只在没问过时有界面），不论结果都进选相册——拒绝 / 部分授权由选相册页与首页说明。
+    func photoIntroContinue() {
+        Task {
+            let access = await backend.media.requestAccess()
+            AppLog.log("onboarding: photo access after intro=\(access)")
+            refresh()
+            refreshExistingAlbums()
+            if phase == .photoIntro { phase = .chooseAlbums }
+        }
+    }
+
+    /// 选范围页点「开始备份」（首次）/「保存」（编辑）。范围 = 相册 + 时间档（#1263）。
+    /// 首次：保存范围 → 落盘「连过这台电脑」→ 写一次后台意图（关）→ 唤醒引擎 → 直接进首页，没有完成页。
+    func albumsChosen(_ selected: Set<String>, known: Set<String>, wantsAll: Bool, firstTime: Bool) {
         Task {
             // 必须在 saveScope 覆盖旧集合之前算差集（Android MOB-20）。
-            let previous: Set<String>?
-            do { previous = try backend.media.savedScope() } catch {
+            var previous: Set<String>?
+            var previousSince: BackupSince?
+            do { previous = try backend.media.savedScope(); previousSince = try backend.media.savedSince() } catch {
                 AppLog.log("backup-scope: previous scope unreadable, treating every selected album as added: \(error)")
                 previous = nil
+                previousSince = nil
             }
+            let since = ScopePolicy.sinceForSave(previous: previousSince, wantsAll: wantsAll, now: Date())
             let added = ScopePolicy.added(previous: previous, selected: selected)
-            do { try await backend.media.saveScope(selected, known: known) } catch {
-                // 没存上就不往下走：不进「正在回家」、不叫醒引擎，让用户看到失败并能重试（#971）。
+            let widened = ScopePolicy.widened(previous: previousSince, next: since)
+            do { try await backend.media.saveScope(selected, known: known, since: since) } catch {
+                // 没存上就不往下走：不进首页、不叫醒引擎，让用户看到失败并能重试（#971）。
                 AppLog.log("backup-scope: save failed: \(error)")
                 refresh()
                 notice = UserNotice(message: L.s("scope_save_failed"))
                 return
             }
+            AppLog.log("backup-scope: saved albums=\(selected.count) since=\(since.isAll ? "all" : "today") added=\(added.count) widened=\(widened)")
+            if firstTime { finishFirstScope() }
             refresh()
             refreshExistingAlbums()
-            if firstTime {
-                phase = .backupStarted(count: facts.inScopeTotal ?? 0)
-            }
-            // 只在新增了相册时触发 SCOPE_ADDED；减少或原样保存不触发（Android 同口径，#983）。
-            if !added.isEmpty {
+            // 新增相册或时间档放宽（从今天起 → 全部）才触发 SCOPE_ADDED 补扫；缩小或原样保存不触发（Android 同口径，#983 / #1263）。
+            if !added.isEmpty || widened {
                 await backend.engine.wake()
                 refresh()
             }
         }
+    }
+
+    /// 首次选完范围：记「连过这台电脑」；后台备份按「关」写一次（#1039，对位 Android `onEnterWithoutBackgroundBackup`：
+    /// 配对时清旧意图那一步若没写下来，这里补上，否则旧电脑留下的意图会被带到新电脑上）。写失败都提示，照常进首页。
+    private func finishFirstScope() {
+        AppLog.log("onboarding: first scope saved, entering home")
+        // 记不下来不挡进首页：后果只是下次重连同一台仍走一遍首次设置（偏安全的一侧），但要提示，不静默。
+        do { try backend.engine.finishOnboarding() } catch { settingWriteFailed("onboarded", error) }
+        setAutoBackup(false)
+        phase = .main
     }
 
     /// 主动断开：成功后回到欢迎页，可以重新扫码。

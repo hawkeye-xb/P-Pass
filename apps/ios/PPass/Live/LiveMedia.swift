@@ -31,11 +31,13 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
         }
     }
 
+    func accessNotDetermined() -> Bool { auth.currentLevel() == .notDetermined }
+
     func requestAccess() async -> MediaAccess { Self.map(await auth.requestFullAccess()) }
 
     func albums() async throws -> [AlbumBucket] {
         if auth.currentLevel() == .notDetermined { _ = await auth.requestFullAccess() }
-        return catalog.listAlbums().map { AlbumBucket(id: $0.id, name: $0.title, count: $0.count) }
+        return catalog.listAlbums().map { AlbumBucket(id: $0.id, name: $0.title, count: $0.count, isCameraAlbum: $0.kind == .library) }
     }
 
     func cover(_ album: AlbumBucket, side: CGFloat) async -> UIImage? {
@@ -52,6 +54,7 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
     }
 
     func savedScope() throws -> Set<String>? { try scopeStore().selectedBucketIds() }
+    func savedSince() throws -> BackupSince? { try scopeStore().since() }
     func knownAlbums() -> Set<String> {
         do { return try scopeStore().knownBucketIds() ?? [] } catch {
             AppLog.log("backup-scope: known albums unreadable: \(error)")
@@ -64,22 +67,33 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
         return Set(catalog.listAlbums().map(\.id))
     }
 
-    func saveScope(_ selected: Set<String>, known: Set<String>) async throws {
-        do { try scopeStore().saveScope(selected: selected, allCurrent: known) } catch {
+    func cameraAlbumId() async -> String? {
+        guard auth.currentLevel() != .notDetermined else { return nil }
+        return PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: .smartAlbumUserLibrary, options: nil).firstObject?.localIdentifier
+    }
+
+    func saveScope(_ selected: Set<String>, known: Set<String>, since: BackupSince) async throws {
+        do { try scopeStore().saveScope(selected: selected, allCurrent: known, since: since) } catch {
             AppLog.log("backup-scope: save failed: \(error)")
             throw error
         }
     }
 
-    /// 范围内总数 = 所选相册的**并集**去重（一张照片可以在多个相册里，不能按相册相加）。
+    /// 范围内总数 = 所选相册的**并集**去重（一张照片可以在多个相册里，不能按相册相加），再按时间档筛（#1263，首页分母跟着范围走）。
     func inScopeTotal() -> Int64? {
         guard access() == .full else { return nil }
         let selected: Set<String>
-        do { guard let saved = try savedScope() else { return nil }; selected = saved } catch {
+        let since: BackupSince
+        do {
+            guard let saved = try savedScope() else { return nil }
+            selected = saved
+            since = try savedSince() ?? .all
+        } catch {
             AppLog.log("backup-scope: unreadable, in-scope total unknown: \(error)")
             return nil
         }
-        return Int64(AlbumScope(library: PhotoKitLibrary()).count(inAlbums: selected))
+        let ids = AlbumScope(library: PhotoKitLibrary()).assetIdentifiers(inAlbums: selected)
+        return Int64(PhotoMediaSource.inTime(ids, since: since).count)
     }
 }
 
@@ -92,19 +106,43 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
 /// `(GENERATION_MODIFIED, _id)`。收件箱进箱不看范围；范围与「照片还在不在」在这里取件时过滤（MediaSource 契约：只返回范围内）。
 final class PhotoMediaSource: MediaSource, @unchecked Sendable {
     private let selected: @Sendable () -> Set<String>
+    private let since: @Sendable () -> BackupSince
+    /// 系统问过照片权限没有（#1259）。没问过时不碰 PhotoKit：App 第一次用 PhotoKit 取资源 / 读变更令牌，系统会自动弹授权框，
+    /// 配对成功后引擎那一轮会把它弹在说明屏上面。没问过 = 一张照片都读不到，范围内本来就是空的。
+    private let accessDecided: @Sendable () -> Bool
     private let library = PhotoKitLibrary()
     private let contents = OriginalContentReader()
     private let inbox: Inbox
     private let log: @Sendable (String) -> Void
 
-    init(selected: @escaping @Sendable () -> Set<String>, inbox: Inbox, log: @escaping @Sendable (String) -> Void) {
+    init(selected: @escaping @Sendable () -> Set<String>, since: @escaping @Sendable () -> BackupSince, inbox: Inbox,
+         accessDecided: @escaping @Sendable () -> Bool = { PhotoKitAuthorization().currentLevel() != .notDetermined },
+         log: @escaping @Sendable (String) -> Void) {
         self.selected = selected
+        self.since = since
+        self.accessDecided = accessDecided
         self.inbox = inbox
         self.log = log
     }
 
-    static func inScope(bucketId: String, selected: Set<String>) -> Bool {
-        !selected.isDisjoint(with: bucketId.split(separator: "\n").map(String.init))
+    /// 范围键带拍摄时刻（`ScopeKey`，#1263）：已落库的行也能按时间档判断。
+    static func inScope(bucketId: String, selected: Set<String>, since: BackupSince) -> Bool {
+        ScopeKey.inScope(bucketId, selected: selected, since: since)
+    }
+
+    /// 按拍摄时间（`creationDate`）筛出时间档内的那些 id。「全部」不查库。
+    /// iOS 偏离：Android 按 `DATE_ADDED`（进入相册的时间），PhotoKit 没有公开的对应字段（登记在 tokens.json platforms.ios）。
+    static func inTime(_ ids: Set<String>, since: BackupSince) -> Set<String> {
+        guard case .since(let ms) = since, !ids.isEmpty else { return ids }
+        let options = PHFetchOptions()
+        options.predicate = NSPredicate(format: "creationDate >= %@", Date(timeIntervalSince1970: Double(ms) / 1000) as NSDate)
+        var out = Set<String>()
+        PHAsset.fetchAssets(withLocalIdentifiers: Array(ids), options: options).enumerateObjects { a, _, _ in out.insert(a.localIdentifier) }
+        return out
+    }
+
+    static func capturedAtMs(_ asset: PHAsset) -> Int64? {
+        asset.creationDate.map { Int64($0.timeIntervalSince1970 * 1000) }
     }
 
     /// 所属可选相册（每张排序）：全量对账用 `all()` 一次拼全表；取件与 lookup 用 `of(ids)` 只反查手里这几张。
@@ -124,16 +162,21 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
             let content = await contents.read(a, resources: PHAssetResource.assetResources(for: a))
             if content.degraded { log("media: source version degraded for \(LogRedact.id(id)) (edit record unreadable or no original resource); falls back to modification time") }
             out.append(MediaSnapshot(mediaId: id, sourceVersion: content.version,
-                                     bucketId: AlbumMembership.key(members[id]), position: positions?[i] ?? nil))
+                                     bucketId: ScopeKey.encode(albums: members[id] ?? [], capturedAtMs: Self.capturedAtMs(a)),
+                                     position: positions?[i] ?? nil))
         }
         return out
     }
 
     func inScope(after: String?, limit: Int) async throws -> [MediaSnapshot] {
-        let members = membership.all()
         let chosen = selected()
-        let ids = members.filter { !chosen.isDisjoint(with: $0.value) }.keys
-            .filter { id in after.map { Array($0.utf8).lexicographicallyPrecedes(Array(id.utf8)) } ?? true }
+        // 范围空集不发查询（对位 AlbumScope / FIX-T6）；没问过照片权限不碰 PhotoKit（#1259）。
+        guard !chosen.isEmpty, accessDecided() else { return [] }
+        let members = membership.all()
+        // 时间档要在截取 limit 之前筛：一页全被筛掉会被扫描当成读完（ScopeCursor：不足一页 = 到底）。
+        let candidates = Set(members.filter { !chosen.isDisjoint(with: $0.value) }.keys
+            .filter { id in after.map { Array($0.utf8).lexicographicallyPrecedes(Array(id.utf8)) } ?? true })
+        let ids = Self.inTime(candidates, since: since())
             .sorted { Array($0.utf8).lexicographicallyPrecedes(Array($1.utf8)) }
         return await snapshots(Array(ids.prefix(limit)), members: members)
     }
@@ -145,6 +188,8 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
         var after = Inbox.seq(fromPosition: position.raw)
         var out: [MediaSnapshot] = []
         let chosen = selected()
+        guard !chosen.isEmpty, accessDecided() else { return [] }
+        let window = since()
         while out.count < limit {
             try Task.checkCancellation()
             let rows = try inbox.entries(after: after, limit: limit)
@@ -153,12 +198,18 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
             let m = membership.of(rows.map(\.assetId))
             let kept = rows.filter { !chosen.isDisjoint(with: m[$0.assetId] ?? []) }
             out += await snapshots(kept.map(\.assetId), members: m, positions: kept.map { DiscoveryPosition(raw: Inbox.position(of: $0.seq)) })
+                .filter { ScopeKey.inTime(capturedAtMs: ScopeKey.decode($0.bucketId).capturedAtMs, since: window) }
         }
         return Array(out.prefix(limit))
     }
 
     /// G 重置（首次、换电脑、照片库换了）：收件箱当前最大序号；收件箱顺带清掉 `seq <= 它` 的行。
-    func currentPosition() async throws -> DiscoveryPosition { DiscoveryPosition(raw: Inbox.position(of: try inbox.currentPosition())) }
+    /// 没问过照片权限：给 0，不读变更令牌（会弹框，#1259）。没问过只可能是全新安装，收件箱是空的，高水位本来就是 0；
+    /// 令牌留到第一次取件时初始化，之前的照片由保存范围触发的 SCOPE_ADDED 对账扫到。
+    func currentPosition() async throws -> DiscoveryPosition {
+        guard accessDecided() else { return DiscoveryPosition(raw: Inbox.position(of: 0)) }
+        return DiscoveryPosition(raw: Inbox.position(of: try inbox.currentPosition()))
+    }
 
     /// nil 是契约里的「说不出」，不是占位：PhotoKit 没有对外的照片库身份（06-ios-variants O-03 / D-07 登记了查证过程：
     /// 令牌里的 store UUID 在模拟器 erase 前后不变，认不出换库）。换库的兜底是 `preciseDiscovery = false`：每个对账轮都扫。

@@ -227,7 +227,7 @@ final class RejectedPairingCleanupWiringTests: XCTestCase {
     /// 配对被清掉：配对之后的任何页面都回欢迎页；欢迎页本身与仍有配对（含失效卡）的状态不动。
     /// 反证：把规则改成永远返回原 phase，前三条红；改成无条件回欢迎页，后几条红。
     func testPairingClearedSendsEveryLaterPhaseBackToOnboarding() {
-        for phase in [AppModel.Phase.main, .chooseAlbums, .backupStarted(count: 3)] {
+        for phase in [AppModel.Phase.main, .photoIntro, .chooseAlbums] {
             XCTAssertEqual(AppModel.phase(phase, whenPairing: .notPaired), .onboarding)
             XCTAssertEqual(AppModel.phase(phase, whenPairing: .paired(desktopName: "Mac")), phase)
             XCTAssertEqual(AppModel.phase(phase, whenPairing: .lost(desktopName: "Mac")), phase)
