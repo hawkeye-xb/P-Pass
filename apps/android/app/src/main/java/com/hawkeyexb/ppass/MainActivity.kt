@@ -699,9 +699,11 @@ fun PPassApp() {
                         // 不进重启即丢的「已配对」，也不崩。
                         val saveError = savePairingOrError { pairings.save(outcome.pairing) }
                         if (saveError != null) {
+                            // #1264：原文只进日志，屏幕上只说本机的话（tokens.json rules 第 10 条）。
+                            PLog.w("PPassFlow", "pairing joined but saving it failed: $saveError")
                             screen = Screen.Trouble(
                                 R.string.pair_failed_title, R.string.pair_failed_body,
-                                "(${context.getString(R.string.pair_save_failed)} ${saveError.take(120)})",
+                                context.getString(R.string.pair_save_failed),
                             )
                             return@LaunchedEffect
                         }
@@ -763,10 +765,14 @@ fun PPassApp() {
                         outdatedTextRes(outcome.side),
                         offerAppUpdate = offersAppUpdate(outcome.side),
                     )
-                    is PairOutcome.Failed -> screen = Screen.Trouble(
-                        R.string.pair_failed_title, R.string.pair_failed_body,
-                        "(${outcome.reason.take(160)})",
-                    )
+                    is PairOutcome.Failed -> {
+                        // #1264：异常类名、关闭码只进日志与诊断包，失败页不出现（tokens.json rules 第 10 条）。
+                        PLog.w("PPassFlow", "pairing failed: ${outcome.diagnostic}")
+                        screen = Screen.Trouble(
+                            R.string.pair_failed_title, R.string.pair_failed_body,
+                            outcome.note.orEmpty(),
+                        )
+                    }
                 }
             }
         }

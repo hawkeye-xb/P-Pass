@@ -13,7 +13,8 @@ struct OnboardingFlow: View {
         case waiting
         /// #1118：提交成功之后才有的验证码页（电脑名 + 6 位数字 + 电脑标识）。扫码后不经任何询问直接到这里（中间只有发请求的等待）。
         case code(PairCodeShown)
-        case refused(lapsed: Bool, note: String?), needsUpdate(OutdatedSide), failed(String)
+        /// failed：只带可上屏的本机说明（nil = 只有通用文案）；诊断原文进日志（#1264）。
+        case refused(lapsed: Bool, note: String?), needsUpdate(OutdatedSide), failed(note: String?)
     }
 
     @EnvironmentObject var app: AppModel
@@ -81,7 +82,9 @@ struct OnboardingFlow: View {
             case .refused(let note, let ownerSaidNo):
                 step = .status(.refused(lapsed: !ownerSaidNo, note: note?.text))
             case .needsUpdate(let side): step = .status(.needsUpdate(side))
-            case .failed(let reason): step = .status(.failed(reason))
+            case .failed(let diagnostic, let note):
+                AppLog.log("pair: failed (\(diagnostic))")
+                step = .status(.failed(note: note))
             }
         }
     }
@@ -102,7 +105,7 @@ struct OnboardingFlow: View {
                                                phoneNode: "")))
         case .pairRefused: step = .status(.refused(lapsed: false, note: nil))
         case .pairLapsed: step = .status(.refused(lapsed: true, note: PairNote.expired.text))
-        case .pairFailed: step = .status(.failed("demo: unreachable"))
+        case .pairFailed: step = .status(.failed(note: nil))
         default: break
         }
     }
@@ -191,9 +194,9 @@ struct PairStatusScreen: View {
                     // #1069：配对过程中发现版本不兼容——标题「需要更新」，正文说清是哪一端的 P-Pass。
                     message(title: L.s("pair_needs_update_title"),
                             body: L.s(side == .phone ? "state_waiting_phone_outdated" : "state_waiting_desktop_outdated"))
-                case .failed(let reason):
-                    message(title: L.s("pair_failed_title"), body: L.s("pair_failed_body"),
-                            note: "(\(String(reason.prefix(160))))")
+                case .failed(let note):
+                    // #1264：异常原文不上屏（tokens.json rules 第 10 条），只在日志里。
+                    message(title: L.s("pair_failed_title"), body: L.s("pair_failed_body"), note: note)
                 }
             }
             .padding(34)

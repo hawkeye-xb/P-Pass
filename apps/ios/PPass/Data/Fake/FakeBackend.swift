@@ -91,7 +91,7 @@ final class FakePairing: PairingService {
         try? await Task.sleep(nanoseconds: 1_200_000_000)
         if code.contains("t=deny") { return .refused(note: nil, ownerSaidNo: true) }
         if code.contains("t=expired") { return .refused(note: .expired, ownerSaidNo: false) }
-        if code.contains("t=fail") { return .failed(reason: "demo: unreachable") }
+        if code.contains("t=fail") { return .failed(diagnostic: "demo: unreachable") }
         current = .paired(desktopName: "Home-Computer")
         return .joined(firstTime: true)
     }

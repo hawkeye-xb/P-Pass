@@ -51,6 +51,8 @@ final class FakePairCrypto: PairCrypto, @unchecked Sendable {
 final class FakeDesk: @unchecked Sendable {
     enum Step {
         case resp(Resp), fail
+        /// #1264：抛出这个错误（例如 FFI 的 `PeerClosed`：电脑在握手时关掉连接）。
+        case throwing(Error)
         static func ok(_ value: some Encodable) throws -> Step { .resp(Resp(ok: true, result: try JSONValue.from(value))) }
         static func err(_ code: String, _ reason: String) -> Step { .resp(Resp(ok: false, error: RespError(code: code, reason: reason))) }
     }
@@ -79,6 +81,7 @@ final class FakeDesk: @unchecked Sendable {
         }()
         switch step {
         case .resp(let r): return r
+        case .throwing(let e): throw e
         case .fail, .none: throw Unreachable()
         }
     }

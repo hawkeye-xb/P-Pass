@@ -66,7 +66,12 @@ sealed class PairOutcome {
     }
     /** #1072: versions are incompatible — found at the hello, before any pairing request is sent. */
     data class NeedsUpdate(val side: OutdatedSide) : PairOutcome()
-    data class Failed(val reason: String) : PairOutcome()
+    /**
+     * The pairing could not be carried out. #1264: [diagnostic] is for the log only (exception class,
+     * close code, RPC reason — never on screen, tokens.json rule 10); [note] is the optional
+     * phone-worded line the trouble screen may show under its body.
+     */
+    data class Failed(val diagnostic: String, val note: String? = null) : PairOutcome()
 }
 
 /** #1072: why a pairing ended without joining (one phone-side wording each). */
@@ -83,6 +88,10 @@ enum class PairRefusal {
     CODE_WRONG,
     /** #1118: the computer's key confirmation did not verify — nothing was saved. */
     PROOF_FAILED,
+    /** #1264: the computer refused the connection itself (`not_paired` close at the handshake, before
+     *  any request): its pairing window is shut — the QR code expired, was closed, or was already
+     *  used. Not the owner's "no": scan a fresh code. */
+    QR_EXPIRED,
     /** Any other reason, including one this build does not know. */
     OTHER,
 }
@@ -228,6 +237,7 @@ suspend fun awaitPairVerdict(
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
+        if (pairWindowClosed(e)) return PairVerdict.Denied(PairRefusal.QR_EXPIRED)
         return PairVerdict.Unreachable(e.toString())
     }
     // DEV-07: withdraw only where the desktop says it understands it (an
@@ -262,6 +272,7 @@ suspend fun awaitPairVerdict(
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
+        if (pairWindowClosed(e)) return PairVerdict.Denied(PairRefusal.QR_EXPIRED)
         return PairVerdict.Unreachable(e.toString())
     }
     if (!submit.ok) {
@@ -316,7 +327,16 @@ suspend fun awaitPairVerdict(
  * 申请已提交、轮询还在继续，却被拒在握手——说明桌面手里已经没有这条申请（服务重启，内存里的待办没了），
  * 与 `pair.status` 应答 NOT_FOUND 同义。[rpc] 只连这一台电脑，关闭方经 TLS 认证就是它。
  */
-internal fun pairRequestGone(e: Exception): Boolean =
+internal fun pairRequestGone(e: Exception): Boolean = closedAsNotPaired(e)
+
+/**
+ * #1264：还没提交申请（hello / pair.request）就被这台电脑在握手时用「未配对」关闭码拒掉——它的配对窗口
+ * 已经关了：二维码过期、被关掉，或已被用掉（#1122 准入，原因只记在电脑日志里）。这不是网络问题，
+ * 出路是在电脑上刷新二维码后重扫。[rpc] 只连二维码里那台电脑，关闭方经 TLS 认证就是它。
+ */
+internal fun pairWindowClosed(e: Exception): Boolean = closedAsNotPaired(e)
+
+private fun closedAsNotPaired(e: Exception): Boolean =
     e is PeerClosedException && DesktopCloseCodes.meansNotPaired(e.code)
 
 /** One reply's meaning to the poll loop: done, or keep waiting, or a malformed reply. */
@@ -483,7 +503,7 @@ fun PairVerdict.toOutcome(join: (PairAccepted) -> Pairing): PairOutcome = when (
  * then pair. Any throw lands on [PairOutcome.Failed] carrying the
  * throwable's class and message, so "the phone's endpoint never came up"
  * ([EndpointBindTimeoutException]) and "the computer cannot be reached"
- * ([DaemonUnreachableException]) read differently on the trouble screen.
+ * ([DaemonUnreachableException]) read differently in the log (#1264: never on screen).
  * Catches Throwable, not Exception: a missing native lib
  * (UnsatisfiedLinkError) must land on the trouble screen, never crash the
  * app (real-phone T-052 lesson).
@@ -554,7 +574,7 @@ suspend fun pairWithQr(
     val parsed = try {
         parseLink(qr)
     } catch (e: Exception) {
-        return PairOutcome.Failed(invalidCodeMessage)
+        return PairOutcome.Failed("not a pairing code: ${e.javaClass.simpleName}", note = invalidCodeMessage)
     }
     // The core rebuilds the dialable address from node + relay (or the legacy full `a=` address);
     // the stored token has the same JSON shape backup's `parsePeerAddrToken` reads.
@@ -562,12 +582,12 @@ suspend fun pairWithQr(
     val addr: PeerAddrParts = try {
         parsePeerAddrToken(addrToken)
     } catch (e: Exception) {
-        return PairOutcome.Failed(invalidCodeMessage)
+        return PairOutcome.Failed("not a pairing code: ${e.javaClass.simpleName}", note = invalidCodeMessage)
     }
     // FIX-T3: a code with neither relay nor direct address (node + token only) cannot be dialled
     // from this phone — point at upgrading instead of failing silently.
     if (addr.relayUrl == null && addr.directAddresses.isEmpty()) {
-        return PairOutcome.Failed(unparseableCodeMessage)
+        return PairOutcome.Failed("pairing code has no dialable address", note = unparseableCodeMessage)
     }
 
     // Already a member on this storage (same phone, the computer's

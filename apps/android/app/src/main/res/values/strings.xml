@@ -36,6 +36,7 @@
     <string name="pair_failed_body">Make sure the computer is on and both devices have internet, then scan again.</string>
     <!-- #1072: pairing result details (decided on the desktop's reason / pair.status; worded by the phone) -->
     <string name="pair_refused_detail_token_invalid">This pairing code is invalid or has already been used. Generate a new one on the computer and scan again.</string>
+    <string name="pair_refused_detail_qr_expired">This QR code has expired or was closed on the computer. Refresh the QR code on the computer, then scan again.</string>
     <string name="pair_refused_detail_denied">The request was declined on the computer.</string>
     <string name="pair_refused_detail_expired">Nobody confirmed on the computer, so this pairing request expired. Generate a new code on the computer and scan again.</string>
     <string name="pair_refused_detail_restarted">The computer\'s service restarted, so this pairing request is no longer valid. Generate a new code on the computer and scan again.</string>

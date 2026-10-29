@@ -15,6 +15,7 @@ internal fun pairRefusalDetailRes(cause: PairRefusal): Int = when (cause) {
     PairRefusal.DESKTOP_RESTARTED -> R.string.pair_refused_detail_restarted
     PairRefusal.CODE_WRONG -> R.string.pair_refused_detail_code_wrong
     PairRefusal.PROOF_FAILED -> R.string.pair_desktop_proof_failed
+    PairRefusal.QR_EXPIRED -> R.string.pair_refused_detail_qr_expired
     PairRefusal.OTHER -> R.string.error_generic
 }
 

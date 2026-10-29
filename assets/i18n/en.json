@@ -291,6 +291,7 @@
   "ui.pair_qr_title": "Pairing QR code",
   "ui.pair_qr_body": "Scan this code with P-Pass on a family phone. The phone first shows this computer's identity; once it matches, the phone shows a 6-digit code to enter here.",
   "ui.refresh_qr": "Refresh QR code",
+  "ui.pair_qr_expired": "This QR code has expired. Refresh it, then scan again.",
   "ui.close": "Close",
   "ui.pair_generating": "Generating pairing code…",
   "ui.video_load_failed": "Can't load this video",

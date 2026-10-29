@@ -67,7 +67,7 @@ pub use ipc::ConfirmOutcome;
 pub use ipc::IpcServer;
 pub use pairing::{
     DecisionUndelivered, PairDecision, PairRejection, PairState, PairSubmission, Pairing,
-    PendingPair, PENDING_TTL_MS, TOKEN_TTL_MS,
+    PendingPair, WindowClosed, PENDING_TTL_MS, TOKEN_TTL_MS,
 };
 pub use query::QueryEngine;
 pub use reconcile::Reconcile;

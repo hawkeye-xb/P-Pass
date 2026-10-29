@@ -98,12 +98,16 @@ enum PairOutcome: Equatable {
     case refused(note: PairNote?, ownerSaidNo: Bool)
     /// #1069：版本不兼容，要先更新 [OutdatedSide] 那一端的 P-Pass（不是电脑主人拒绝的）。
     case needsUpdate(OutdatedSide)
-    case failed(reason: String)
+    /// 没能完成配对。#1264：diagnostic 只进日志（异常、关闭码、RPC 原因——不上屏，tokens.json rules 第 10 条）；
+    /// note 是本机挑的、可以显示在失败页上的补充说明（nil = 只显示通用文案）。
+    case failed(diagnostic: String, note: String? = nil)
 }
 
 /// 配对页的补充说明：本端按判决 / `reason` 挑，文字是本机文案（#1072 / #1073：线上不再带文案 key）。
 enum PairNote: Equatable, CaseIterable {
     case tokenInvalid, denied, expired, desktopRestarted, generic
+    /// #1264：电脑在握手时就拒了这台手机（未配对关闭码）：二维码已过期 / 已关掉 / 已被用掉。刷新二维码重扫。
+    case qrExpired
     /// #1118：验证码对不上（`pair_code_wrong` / `failed`），这次申请作废。
     case codeWrong
     /// #1118：电脑没能证明它用的是同一个验证码（`confirm_b` 验不过），没有保存配对。
@@ -119,6 +123,7 @@ enum PairNote: Equatable, CaseIterable {
         case .generic: return "error_generic"
         case .codeWrong: return "pair_refused_detail_code_wrong"
         case .desktopProofFailed: return "pair_desktop_proof_failed"
+        case .qrExpired: return "pair_refused_detail_qr_expired"
         }
     }
 

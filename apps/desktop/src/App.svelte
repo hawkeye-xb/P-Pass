@@ -74,6 +74,7 @@
     pairConfirmToast,
   } from "./lib/pending.js";
   import { requestId, syncRequests, setPhase, removeRequest } from "./lib/pairRequests.js";
+  import { qrPhase } from "./lib/pairQr.js";
   import { formatBytes, diskUsedPercent } from "./lib/formatBytes.js";
   // MOB-29: 「刚从库里删掉照片」警告的判据（纯函数，externalDelete.test.js
   // 钉边界）——删除会被手机传回来，这是对的，但得让用户知道。
@@ -257,6 +258,12 @@
   let devices = $state([]);
   let qrDataUrl = $state("");
   let qrText = $state("");
+  // #1264：这张码的失效时刻（daemon 的 `expires_at_ms`；老 daemon 不给 = null）与弹窗里的时钟。
+  let qrExpiresAt = $state(null);
+  let qrNow = $state(Date.now());
+  let qrAutoRefreshes = $state(0);
+  let qrRefreshing = false;
+  const qrState = $derived(qrPhase({ now: qrNow, expiresAt: qrExpiresAt, autoRefreshes: qrAutoRefreshes }));
   let pendingCount = $state(0);
   // UX-08: 待确认配对请求全量列表（pairing.pending）——一屏一行，逐行
   // 允许/拒绝；处理完该行消失，全清后模态关闭，无残留状态。
@@ -532,24 +539,51 @@
     return { shown, moreOk: Math.max(0, active.length - shown.length) };
   });
 
-  async function startPairing() {
+  // auto = 快到期时的自动换码（计次、失败不弹提示：码到期后自会盖住，给刷新按钮）。
+  async function startPairing({ auto = false } = {}) {
     showPairModal = true; // T4: 二维码是弹窗模块，不是常驻卡片
+    if (!auto) qrAutoRefreshes = 0;
+    qrRefreshing = true;
     try {
       const r = await call("pairing.start");
       qrText = r.qr;
+      qrExpiresAt = Number.isFinite(r.expires_at_ms) ? r.expires_at_ms : null;
+      qrNow = Date.now();
       // 二维码由壳生成 SVG（src-tauri/src/pair_qr.rs）：npm qrcode 与
       // freezePrototype 冲突会整页白屏。矢量图，弹窗内 360px 照样清晰。
       const svg = await invoke("pair_qr_svg", { text: r.qr });
       qrDataUrl = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
     } catch (e) {
-      flashMessage(t("ui.pair_failed", { err: errDetail(e) }), "error");
+      if (!auto) flashMessage(t("ui.pair_failed", { err: errDetail(e) }), "error");
+    } finally {
+      qrRefreshing = false;
     }
   }
+
+  // #1264：弹窗显示期间每秒拿当前时刻比一次失效时刻（不只设一个到期定时器：Mac 睡眠、窗口在后台时
+  // 定时器会被推迟，醒来那一刻就要判对）；回到前台立即比一次。弹窗收起（任何途径）即停。
+  function tickQr() {
+    qrNow = Date.now();
+    if (qrState === "refresh" && !qrRefreshing) {
+      qrAutoRefreshes += 1;
+      startPairing({ auto: true });
+    }
+  }
+  $effect(() => {
+    if (!showPairModal) return;
+    const timer = setInterval(tickQr, 1000);
+    document.addEventListener("visibilitychange", tickQr);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", tickQr);
+    };
+  });
 
   function closePairModal() {
     showPairModal = false;
     qrDataUrl = "";
     qrText = "";
+    qrExpiresAt = null;
     // #1122：二维码关了，配对窗口随之关闭——收回未用的令牌，未配对的设备
     // 从此连不进来（已提交申请的那台照常能等结果）。失败不打扰用户：令牌
     // 最多 10 分钟后自然过期。
@@ -1755,7 +1789,7 @@
               <Card class="gap-[12px] text-[16px]">
                 <h3 class="mb-0 text-[15px] font-semibold">{t("ui.add_device")}</h3>
                 <p class="m-0 flex-1 text-[13px] leading-[1.6] text-ink-40">{t("ui.add_device_body")}</p>
-                <Button class="w-full" onclick={startPairing}>{t("ui.generate_qr")}</Button>
+                <Button class="w-full" onclick={() => startPairing()}>{t("ui.generate_qr")}</Button>
                 <!-- 设计稿 v2：无法扫码的退路提升到卡片级——不打开弹窗也
                      能复制配对串（copyPairQuiet 静默取串，主路径仍是扫码）。 -->
                 <Button variant="link" tone="safe" class="w-full" onclick={copyPairQuiet}>{t("ui.qr_fallback")}</Button>
@@ -2204,13 +2238,22 @@
     <Dialog open={showPairModal} onClose={closePairModal}>
       <!-- 设计稿 v2：弹窗标题「配对二维码 · 放大版」——亮码用途一目了然 -->
       <h3>{t("ui.pair_qr_title")}</h3>
-      {#if qrDataUrl}
-        <img class="qr-lg" src={qrDataUrl} alt={t("ui.pair_qr_title")} />
+      {#if qrDataUrl && qrState === "expired"}
+        <!-- #1264：过期的码不留在屏幕上——盖住，只留刷新入口（失效时刻以 daemon 为准）。 -->
+        <div class="qr-lg qr-expired" data-testid="pair-qr-expired">
+          <p class="m-0 font-semibold">{t("ui.pair_qr_expired")}</p>
+          <Button onclick={() => startPairing()}>{t("ui.refresh_qr")}</Button>
+        </div>
+        <div class="modal-actions">
+          <Button variant="secondary" onclick={closePairModal}>{t("ui.close")}</Button>
+        </div>
+      {:else if qrDataUrl}
+        <img class="qr-lg" src={qrDataUrl} alt={t("ui.pair_qr_title")} data-testid="pair-qr" />
         <p class="hint modal-hint">
           {t("ui.pair_qr_body")}
         </p>
         <div class="modal-actions">
-          <Button variant="secondary" onclick={startPairing}>{t("ui.refresh_qr")}</Button>
+          <Button variant="secondary" onclick={() => startPairing()}>{t("ui.refresh_qr")}</Button>
           <Button onclick={closePairModal}>{t("ui.close")}</Button>
         </div>
         <!-- 设计稿离线版 v2：扫码有困难的退路——复制配对串手动传给
@@ -2586,6 +2629,16 @@
     image-rendering: pixelated;
     border-radius: var(--pp-radius-control-sm);
     margin: 14px 0 4px;
+  }
+  /* #1264：盖住过期的码——占原来二维码的位置，居中放一句话和刷新按钮。 */
+  .qr-expired {
+    aspect-ratio: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    background: var(--pp-idle-bg);
   }
   .modal-hint {
     margin: 12px 0 16px;
