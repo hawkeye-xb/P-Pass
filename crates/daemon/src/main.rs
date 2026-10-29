@@ -1289,7 +1289,7 @@ async fn run_waiting(
         let dir = dir.clone();
         tokio::task::spawn_blocking(move || {
             platform::adapter().notify(
-                &ui_text("ui.library_missing_title", &dir),
+                &ui_text("ui.library_missing_notice_title", &dir),
                 &ui_text("ui.library_missing_notice_body", &dir),
             );
         });

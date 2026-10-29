@@ -2641,14 +2641,11 @@ mod tests {
         );
         assert_eq!(v["key"], "ui.err_register_and_spawn");
         assert_eq!(v["params"]["spawn_err"], "13");
-        assert_eq!(
-            render_err("zh", &e),
-            "注册服务失败（连接后台服务失败: refused）且直接启动也失败（13）"
-        );
+        // B13：外层这句不再拼参数里的原文（原文只进日志；界面显示由前端取最内层 + 错误代码）。
+        assert_eq!(render_err("zh", &e), "后台服务没能启动。请再试一次。");
         assert_eq!(
             render_err("en", &e),
-            "Registering the service failed (Couldn't connect to the background service: refused), \
-             and starting it directly failed too (13)"
+            "The background service couldn't start. Try again."
         );
     }
 

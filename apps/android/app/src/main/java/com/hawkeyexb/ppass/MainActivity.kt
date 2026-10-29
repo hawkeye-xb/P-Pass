@@ -65,6 +65,9 @@ import com.hawkeyexb.ppass.ui.offersAppUpdate
 import com.hawkeyexb.ppass.ui.evictPhotoPreviews
 import com.hawkeyexb.ppass.ui.outdatedTextRes
 import com.hawkeyexb.ppass.ui.pairRefusalDetailRes
+import com.hawkeyexb.ppass.ui.pairRefusalErrorCode
+import com.hawkeyexb.ppass.ui.pairRefusalTitleRes
+import com.hawkeyexb.ppass.transport.PairFailure
 import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PairingStore
 import com.hawkeyexb.ppass.transport.bindThenPair
@@ -150,7 +153,14 @@ internal sealed class Screen {
     data object ManualPair : Screen()
     data class Waiting(val qr: String) : Screen()
     // #1072：offerAppUpdate = 手机版本过旧，按钮换成「检查更新」（应用内更新入口）。
-    data class Trouble(val titleRes: Int, val bodyRes: Int, val detail: String = "", val offerAppUpdate: Boolean = false) : Screen()
+    // 10-29 文案 B5/B7：bodyRes 为空 = 只有标题（电脑上点了拒绝、扫到的不是配对码）；
+    // B13：errorCode 非空时正文下加一行小字「错误代码：…」。
+    data class Trouble(
+        val titleRes: Int,
+        val bodyRes: Int? = null,
+        val offerAppUpdate: Boolean = false,
+        val errorCode: String? = null,
+    ) : Screen()
     data class Home(val pairing: Pairing) : Screen()
     // T6: 相册选择（配对成功直接进这页，或从 Home 的设置区重进）；
     // M4（全页面状态稿）：配对成功不再停一个要点按钮的 Joined 中间页，
@@ -218,15 +228,27 @@ internal fun mediaPermissionLanding(allGranted: Boolean, access: MediaAccess): M
 }
 
 /**
- * #1263：「从今天起」那一档的说法。没存过、或存的就是今天 0 点 →「从今天起」；存的是以前某天 →「从 10月29日 起」——
- * 几天以后再说「从今天起」就不对了（那一天保留不动，见 [sinceToSave]）。
+ * #1263：「只备份某天起的照片」那一档一律写日期（10-29 文案定稿）：没存过 → 今天（保存时落的就是今天 0 点，见
+ * [sinceToSave]）；存过 → 存的那一天。几天以后看也还是那一天，不会说成「从今天起」。
  */
-internal fun scopeSinceLabel(context: Context, sinceSec: Long?, nowMs: Long = System.currentTimeMillis()): String {
-    if (sinceSec == null || sinceSec >= startOfLocalDaySec(nowMs)) return context.getString(R.string.scope_time_today)
-    val date = java.time.Instant.ofEpochSecond(sinceSec).atZone(java.time.ZoneId.systemDefault()).toLocalDate()
+private fun scopeSinceDate(sinceSec: Long?, nowMs: Long): String {
+    val sec = sinceSec ?: startOfLocalDaySec(nowMs)
+    val date = java.time.Instant.ofEpochSecond(sec).atZone(java.time.ZoneId.systemDefault()).toLocalDate()
     val pattern = android.text.format.DateFormat.getBestDateTimePattern(java.util.Locale.getDefault(), "MMMd")
-    return context.getString(R.string.scope_time_since_date, java.time.format.DateTimeFormatter.ofPattern(pattern).format(date))
+    return java.time.format.DateTimeFormatter.ofPattern(pattern).format(date)
 }
+
+/** 选范围页的选项文字：「10月29日起的照片」。 */
+internal fun scopeSinceOptionLabel(context: Context, sinceSec: Long?, nowMs: Long = System.currentTimeMillis()): String =
+    context.getString(R.string.scope_time_since_date, scopeSinceDate(sinceSec, nowMs))
+
+/** 设置行「备份哪些照片」的值：[sinceSec] 为空 = 含以前的照片；否则「10月29日起的照片」（英文比选项短）。 */
+internal fun scopeValueLabel(context: Context, sinceSec: Long?, nowMs: Long = System.currentTimeMillis()): String =
+    if (sinceSec == null) {
+        context.getString(R.string.scope_value_all)
+    } else {
+        context.getString(R.string.scope_value_since, scopeSinceDate(sinceSec, nowMs))
+    }
 
 /** System back for secondary app screens; null leaves the root gesture to Android. */
 internal fun systemBackTarget(screen: Screen): Screen? = when (screen) {
@@ -679,9 +701,10 @@ fun PPassApp() {
             // #1118: sending the request → code page (with the computer's name and identity).
             var phase by remember(s.qr) { mutableStateOf<PairPhase>(PairPhase.Asking) }
             when (val ph = phase) {
+                // 10-29 文案 B8：等待页只有标题和转圈。
                 PairPhase.Asking -> PairStatusScreen(
                     title = androidx.compose.ui.res.stringResource(R.string.pair_waiting_title),
-                    body = androidx.compose.ui.res.stringResource(R.string.pair_waiting_body),
+                    body = null,
                     action = androidx.compose.ui.res.stringResource(R.string.cancel) to
                         { screen = Screen.Welcome },
                 )
@@ -705,8 +728,6 @@ fun PPassApp() {
                             deviceName(context),
                             // Shown only after the request was queued (PairSubmitted); never logged here.
                             onCode = { code, desktop, _ -> phase = PairPhase.Code(code, desktop) },
-                            invalidCodeMessage = context.getString(R.string.not_a_code),
-                            unparseableCodeMessage = context.getString(R.string.pair_unparseable_code),
                             storageDeviceNameFallback = context.getString(R.string.storage_device_default),
                             knownDesktop = { OnboardedDesktopsStore(context.filesDir).wasOnboarded(it) },
                         )
@@ -723,10 +744,8 @@ fun PPassApp() {
                         if (saveError != null) {
                             // #1264：原文只进日志，屏幕上只说本机的话（tokens.json rules 第 10 条）。
                             PLog.w("PPassFlow", "pairing joined but saving it failed: $saveError")
-                            screen = Screen.Trouble(
-                                R.string.pair_failed_title, R.string.pair_failed_body,
-                                context.getString(R.string.pair_save_failed),
-                            )
+                            // 10-29 文案：电脑已经允许了，连得上——标题是「加入失败」，正文只说存储空间。
+                            screen = Screen.Trouble(R.string.pair_lapsed_title, R.string.pair_save_failed)
                             return@LaunchedEffect
                         }
                         // MOB-87: 配对成功这个状态跃迁，此前**没有任何人接**。
@@ -774,13 +793,17 @@ fun PPassApp() {
                             enterBucketPicker(outcome.pairing, firstTime = true)
                         }
                     }
-                    is PairOutcome.Refused -> screen = Screen.Trouble(
-                        // NET-10: expired / desktop restarted are not "the computer said no".
-                        if (outcome.ownerSaidNo) R.string.pair_refused_title else R.string.pair_lapsed_title,
-                        R.string.pair_refused_body,
-                        // #1072：具体原因由桌面的 reason 决定、手机自己的文案；不认识的 → 通用提示。
-                        context.getString(pairRefusalDetailRes(outcome.cause)),
-                    )
+                    is PairOutcome.Refused -> {
+                        // 10-29 文案 B13：手机没有文案的原因，屏幕上只有「错误代码：generic」，原始 reason 进日志。
+                        outcome.wireReason?.let { PLog.w("PPassFlow", "pairing refused for a reason with no wording: $it") }
+                        screen = Screen.Trouble(
+                            // NET-10 / B6 / C10: only the owner's "decline" is "the computer said no"; an expired QR has its own title.
+                            pairRefusalTitleRes(outcome.cause),
+                            // #1072 / B5：正文就是原因行（自带操作）；拒绝时没有原因行。
+                            bodyRes = pairRefusalDetailRes(outcome.cause),
+                            errorCode = pairRefusalErrorCode(outcome.cause),
+                        )
+                    }
                     // #1072：握手就发现版本不兼容——没发配对请求。说清是哪一端的 P-Pass 太旧；手机太旧给更新入口。
                     is PairOutcome.NeedsUpdate -> screen = Screen.Trouble(
                         R.string.pair_needs_update_title,
@@ -790,10 +813,12 @@ fun PPassApp() {
                     is PairOutcome.Failed -> {
                         // #1264：异常类名、关闭码只进日志与诊断包，失败页不出现（tokens.json rules 第 10 条）。
                         PLog.w("PPassFlow", "pairing failed: ${outcome.diagnostic}")
-                        screen = Screen.Trouble(
-                            R.string.pair_failed_title, R.string.pair_failed_body,
-                            outcome.note.orEmpty(),
-                        )
+                        // 10-29 文案 B7：不是配对码 / 码里缺地址各自一页，不套「无法连接电脑」。
+                        screen = when (outcome.kind) {
+                            PairFailure.UNREACHABLE -> Screen.Trouble(R.string.pair_failed_title, R.string.pair_failed_body)
+                            PairFailure.NOT_A_CODE -> Screen.Trouble(R.string.not_a_code)
+                            PairFailure.NO_ADDRESS -> Screen.Trouble(R.string.pair_needs_update_title, R.string.pair_unparseable_code)
+                        }
                     }
                 }
             }
@@ -801,8 +826,8 @@ fun PPassApp() {
 
         is Screen.Trouble -> PairStatusScreen(
             title = androidx.compose.ui.res.stringResource(s.titleRes),
-            body = androidx.compose.ui.res.stringResource(s.bodyRes) +
-                if (s.detail.isNotEmpty()) "\n${s.detail}" else "",
+            body = s.bodyRes?.let { androidx.compose.ui.res.stringResource(it) },
+            footnote = s.errorCode?.let { androidx.compose.ui.res.stringResource(R.string.error_code_line, it) },
             action = if (s.offerAppUpdate) {
                 androidx.compose.ui.res.stringResource(R.string.update_check_now) to
                     { updateController.onCheckRowClick() }
@@ -1028,9 +1053,8 @@ fun PPassApp() {
             var selectedBucketCount by remember { mutableStateOf(BackupScopeStore(context).selectedBucketIds()?.size) }
             // #1020：存了范围但读不出来——设置行说「读不到已保存的选择」，不说「未选相册」。
             var scopeUnreadable by remember { mutableStateOf(false) }
-            // #1263：范围的开始时间（设置行的值「3 个相册 · 从今天起」）与范围里有没有相机相册（照片页空状态的说法）。
+            // #1263：范围的开始时间（设置行的值「3 个相册 · 10月29日起的照片」）。
             var scopeSince by remember { mutableStateOf(BackupScopeStore(context).sinceSec()) }
-            var scopeHasCamera by remember { mutableStateOf<Boolean?>(null) }
             LaunchedEffect(mediaAccess, resumeCount) {
                 scopeUnreadable = withContext(Dispatchers.IO) { BackupScopeStore(context).readScope() is ScopeRead.Unreadable }
                 scopeSince = withContext(Dispatchers.IO) { BackupScopeStore(context).sinceSec() }
@@ -1043,7 +1067,6 @@ fun PPassApp() {
                 }
                 val selected = withContext(Dispatchers.IO) { BackupScopeStore(context).selectedBucketIds() }
                 selectedBucketCount = selectedExistingCount(selected, listed?.map { it.id }?.toSet())
-                scopeHasCamera = listed?.let { l -> selected?.let { sel -> l.any { it.isCamera && it.id in sel } } }
             }
             val scope = rememberCoroutineScope()
             // NET-28: bind can now throw (timeout) — an uncaught throw in a
@@ -1116,13 +1139,8 @@ fun PPassApp() {
                         pairingLost = holder.pairingLost.value,
                         onReconnect = onRepairPairing,
                         daysUnreachable = daysUnreachable,
-                        // #1263：照片页空状态按范围给提示：没选相册 → 引导 + 「选择相册」（直达选范围页）；
-                        // 范围里有相机相册 →「拍一张试试」；否则 →「新存进所选相册的…」。
-                        emptyText = if (scopeHasCamera == true) {
-                            stringResource(R.string.home_empty_camera, s.pairing.storageDeviceName)
-                        } else {
-                            null
-                        },
+                        // #1263：没选相册 → 引导 + 「选择相册」（直达选范围页）；电脑上还没有照片时只有一种说法
+                        // （home_empty_albums，10-29 文案定稿 C8）。
                         // 范围存了但读不出来不算「没选」（设置行另说「读不到」）。
                         noAlbums = !scopeUnreadable && (selectedBucketCount ?: 0) == 0,
                         onChooseAlbums = { enterBucketPicker(s.pairing, firstTime = false) },
@@ -1240,11 +1258,7 @@ fun PPassApp() {
                         // #836：按「已选且当前存在」计数，与选相册页同一口径。
                         selectedBucketCount = selectedBucketCount,
                         scopeUnreadable = scopeUnreadable,
-                        scopeTimeLabel = if (scopeSince == null) {
-                            stringResource(R.string.scope_time_all)
-                        } else {
-                            scopeSinceLabel(context, scopeSince)
-                        },
+                        scopeTimeLabel = scopeValueLabel(context, scopeSince),
                         countsReadable = holder.countsReadable.value,
                         scopeSaved = holder.scopeSaved.value,
                         // MOB-03: 相册选择入口走完整权限链——MOB-02 删首页手动
@@ -1354,7 +1368,7 @@ fun PPassApp() {
                         cameraBucketIds = list.filter { it.isCamera }.map { it.id }.toSet(),
                     ),
                     initialTime = initialScopeTime(savedRead is ScopeRead.Saved, savedSince),
-                    sinceLabel = scopeSinceLabel(context, savedSince.takeIf { savedRead is ScopeRead.Saved }),
+                    sinceLabel = scopeSinceOptionLabel(context, savedSince.takeIf { savedRead is ScopeRead.Saved }),
                     firstTime = s.firstTime,
                     // MOB-02 §六: 新相册判定基准（null = 从未选过范围，全量模式）。
                     knownBuckets = scopeStore.knownBucketIds(),

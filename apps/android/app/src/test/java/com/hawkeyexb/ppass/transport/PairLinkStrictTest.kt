@@ -7,7 +7,7 @@
 // 与原生库无关的「解析失败即返回、不拨号」由注入解析器的那一条在任何环境下钉住。
 //
 // 反证：pairWithQr 改回手写解析（或解析失败后继续往下走）⇒ 「畸形串」一条变红，
-// 因为未绑定的 DaemonClient 一被调用就抛异常，且返回值不再是 invalidCodeMessage。
+// 因为未绑定的 DaemonClient 一被调用就抛异常，且返回值不再是 PairFailure.NOT_A_CODE（10-29 B7：单独成页）。
 package com.hawkeyexb.ppass.transport
 
 import com.hawkeyexb.ppass.ffi.parsePairLink
@@ -22,8 +22,6 @@ class PairLinkStrictTest {
     private val node = "58" + "66".repeat(31)
     private val token = "9fc4f658f6ce2c0300000000"
     private val relay = "https://relay.example.com:8443"
-    private val invalid = "NOT-A-P-PASS-CODE"
-
     private fun nativeAvailable(): Boolean =
         try {
             parsePairLink("x")
@@ -40,7 +38,6 @@ class PairLinkStrictTest {
             qr = qr,
             deviceName = "test",
             onCode = { _, _, _ -> error("must not reach the code step") },
-            invalidCodeMessage = invalid,
             parseLink = parseLink ?: ::parsePairLink,
         )
     }
@@ -49,7 +46,7 @@ class PairLinkStrictTest {
     fun `a link the parser rejects ends the flow before any dial`() {
         val outcome = outcomeOf("ppf://pair?whatever", parseLink = { throw IllegalArgumentException("malformed") })
         assertTrue(outcome is PairOutcome.Failed)
-        assertEquals(invalid, (outcome as PairOutcome.Failed).note)
+        assertEquals(PairFailure.NOT_A_CODE, (outcome as PairOutcome.Failed).kind)
     }
 
     @Test
@@ -85,7 +82,7 @@ class PairLinkStrictTest {
         for (qr in bad) {
             val outcome = outcomeOf(qr)
             assertTrue("$qr should fail, got $outcome", outcome is PairOutcome.Failed)
-            assertEquals(qr, invalid, (outcome as PairOutcome.Failed).note)
+            assertEquals(qr, PairFailure.NOT_A_CODE, (outcome as PairOutcome.Failed).kind)
         }
     }
 }

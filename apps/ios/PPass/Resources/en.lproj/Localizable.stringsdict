@@ -62,9 +62,9 @@
 			<key>NSStringFormatValueTypeKey</key>
 			<string>ld</string>
 			<key>one</key>
-			<string>Cannot be recovered: %1$ld photo was deleted from this phone, so it will not be sent again.</string>
+			<string>%1$ld photo was deleted from this phone and can no longer be backed up.</string>
 			<key>other</key>
-			<string>Cannot be recovered: %1$ld photos were deleted from this phone, so they will not be sent again.</string>
+			<string>%1$ld photos were deleted from this phone and can no longer be backed up.</string>
 		</dict>
 	</dict>
 	<key>notif_backup_failed_body</key>
@@ -78,9 +78,9 @@
 			<key>NSStringFormatValueTypeKey</key>
 			<string>ld</string>
 			<key>one</key>
-			<string>%1$ld photo didn't make it home — open to see</string>
+			<string>%1$ld photo couldn't be backed up. Tap to view.</string>
 			<key>other</key>
-			<string>%1$ld photos didn't make it home — open to see</string>
+			<string>%1$ld photos couldn't be backed up. Tap to view.</string>
 		</dict>
 	</dict>
 	<key>backup_scope_n</key>
@@ -110,9 +110,9 @@
 			<key>NSStringFormatValueTypeKey</key>
 			<string>ld</string>
 			<key>one</key>
-			<string>Backups have been paused for %1$ld day. Your photos are all still on this phone — reconnect and they'll catch up automatically.</string>
+			<string>Backup has been paused for %1$ld day. Pair again to resume.</string>
 			<key>other</key>
-			<string>Backups have been paused for %1$ld days. Your photos are all still on this phone — reconnect and they'll catch up automatically.</string>
+			<string>Backup has been paused for %1$ld days. Pair again to resume.</string>
 		</dict>
 	</dict>
 </dict>

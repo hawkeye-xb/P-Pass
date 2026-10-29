@@ -4,6 +4,7 @@
 // the 1024 preview. States speak the meaning colours only.
 package com.hawkeyexb.ppass.ui
 
+import com.hawkeyexb.ppass.log.PLog
 import com.hawkeyexb.ppass.backup.MediaAccess
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -293,8 +294,6 @@ internal fun PhotosScreen(
     // SENT-01 既有数据源，非新造）；null = 从未确认可达过，不编造
     // 具体天数，警示卡改用不带天数的兜底文案。
     daysUnreachable: Int? = null,
-    // #1263：一张照片都还没有时的说法（按范围里有没有相机相册给）；null = 「新存进所选相册的…」那句。
-    emptyText: String? = null,
     // #1263：范围里一个相册都没有——给引导和「选择相册」按钮（直达选范围页）。照片页不空时也在顶部给。
     noAlbums: Boolean = false,
     onChooseAlbums: () -> Unit = {},
@@ -311,6 +310,8 @@ internal fun PhotosScreen(
     val next = holder.next
     val loading = holder.loading
     val error = holder.error
+    // 10-29 文案 B13：原始报错只进日志，屏幕上只说「无法连接电脑」和用户能做的事。
+    LaunchedEffect(error) { error?.let { PLog.w("PPassTimeline", "photos tab load failed: $it") } }
     // UI-17: 配对失效时红卡是唯一出路，时间线区域的重连/错误提示一律收起（见 photosTimelineChrome）。
     val chrome = photosTimelineChrome(pairingLost, holder.state, error)
 
@@ -451,16 +452,14 @@ internal fun PhotosScreen(
             // SYNC-06: loader 尚未就绪（换配对后的极短窗口）——不渲染交互。
             loader == null -> Center(stringResource(R.string.photos_loading))
             loading -> Center(stringResource(R.string.photos_loading))
-            error != null && chrome.showTimelineError -> Center(
-                stringResource(R.string.photos_unreachable) + "\n(${error?.take(100)})"
-            )
+            error != null && chrome.showTimelineError -> Center(stringResource(R.string.photos_unreachable))
             // UI-17: 配对失效且一张都没加载到——什么都不放，上面的红卡就是全部内容
             // （落到下一条会显示「照片库还是空的——先备份一批吧」，又是一个不同的出路）。
             error != null && items.isEmpty() -> Unit
             items.isEmpty() && guide != PhotosGuide.None -> Box(Modifier.fillMaxSize().padding(34.dp), contentAlignment = Alignment.Center) {
                 PhotosGuideCard(guide, onChooseAlbums, mediaAccess, onOpenAppSettings, Modifier.fillMaxWidth())
             }
-            items.isEmpty() -> Center(emptyText ?: stringResource(R.string.home_empty_albums))
+            items.isEmpty() -> Center(stringResource(R.string.home_empty_albums))
             shown.isEmpty() -> Center(stringResource(R.string.photos_filter_empty))
             else -> LazyVerticalGrid(
                 columns = GridCells.Fixed(3),

@@ -241,7 +241,8 @@ pub fn check_with(
 /// 预检通过就把计划落盘（服务随后退出重启去搬）。
 pub fn plan(from: &Path, chosen: &Path, local_base: &Path) -> Result<Check, String> {
     let check = check(from, chosen, local_base)?;
-    std::fs::create_dir_all(chosen).map_err(io_ui_err)?;
+    // B13：建的是用户选的新位置——写不进、磁盘满各给能照做的话（其余 io_ui_err 读的是旧库，不分流）。
+    std::fs::create_dir_all(chosen).map_err(|e| crate::config::set_library_io_err(&e))?;
     save(local_base, &check.plan)?;
     clear_error(local_base);
     Ok(check)

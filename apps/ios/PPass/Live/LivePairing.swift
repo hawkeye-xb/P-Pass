@@ -23,24 +23,28 @@ enum PairVerdict: Equatable {
     var outcome: PairOutcome {
         switch self {
         case .accepted: return .joined(firstTime: true)
-        case .denied(let note): return .refused(note: note, ownerSaidNo: true)
+        // 10-29 文案 B6：只有电脑上点了「拒绝」才是电脑主人说不；配对码无效 / 不认识的原因都归「加入失败」。
+        case .denied(let note): return .refused(note: note, ownerSaidNo: note == .denied)
         case .expired: return .refused(note: .expired, ownerSaidNo: false)
         case .desktopRestarted: return .refused(note: .desktopRestarted, ownerSaidNo: false)
         case .desktopTooOld: return .needsUpdate(.desktop)
         case .versionMismatch(let side): return .needsUpdate(side)
         case .unreachable(let reason): return .failed(diagnostic: reason)
-        // 不是电脑主人拒绝的：标题用「这次加入没有完成」，原因写在说明里。
+        // 不是电脑主人拒绝的：标题用「加入失败」，原因写在说明里。
         case .codeWrong: return .refused(note: .codeWrong, ownerSaidNo: false)
         case .desktopProofFailed: return .refused(note: .desktopProofFailed, ownerSaidNo: false)
         case .qrExpired: return .refused(note: .qrExpired, ownerSaidNo: false)
         }
     }
 
-    /// pair.request 被拒（#1073 归类表配对通道）：版本不兼容单独成判决，其余都是「电脑那边说不」。
+    /// pair.request 被拒（#1073 归类表配对通道）：版本不兼容单独成判决，其余按 reason 挑原因行（不算电脑主人说不，B6）。
     static func rejected(_ error: RespError?) -> PairVerdict {
         let reason = DesktopReason(error)
         if case let .versionMismatch(side) = reasonClass(reason) { return .versionMismatch(side) }
-        return .denied(PairNote(rejection: reason))
+        let note = PairNote(rejection: reason)
+        // 10-29 文案 B13：屏幕上只有「错误代码：generic」，电脑给的原始 reason 要进日志才查得到。
+        if note == .generic { AppLog.log("pair: request refused, reason with no wording (\(error?.code ?? "")/\(error?.reason ?? ""))") }
+        return .denied(note)
     }
 }
 
@@ -295,7 +299,7 @@ final class LivePairing: PairingService, @unchecked Sendable {
     func pair(code raw: String, onCode: @escaping PairCodeSink) async -> PairOutcome {
         let code: ParsedPairLink
         do { code = try parsePairLink(link: raw.trimmingCharacters(in: .whitespacesAndNewlines)) } catch {
-            return .failed(diagnostic: "not a pairing code: \(error)", note: L.s("not_a_code"))
+            return .failed(diagnostic: "not a pairing code: \(error)", kind: .notACode)
         }
 
         let client = ProtoClient(transport: transportFor(code.peerToken))
@@ -392,7 +396,7 @@ final class LivePairing: PairingService, @unchecked Sendable {
 
     private func saveFailure(_ error: Error) -> PairOutcome {
         AppLog.log("pair: cannot persist pairing.json (\(error))")
-        return .failed(diagnostic: "persist pairing.json: \(error)", note: L.s("pair_save_failed"))
+        return .failed(diagnostic: "persist pairing.json: \(error)", kind: .saveFailed)
     }
 }
 

@@ -199,7 +199,7 @@ fun BucketScreen(
     selected: Set<Long>,
     /** #1263：时间那一档的初值。 */
     initialTime: ScopeTime = ScopeTime.SINCE_TODAY,
-    /** #1263：「从今天起」那一档的说法（存的是以前某天时写成「从 10月29日 起」）。 */
+    /** #1263：「某天起的照片」那一档的说法，一律写日期（没存过 = 今天，存过 = 存的那天）。 */
     sinceLabel: String,
     /** onboarding 首次选范围：按钮叫「开始备份」；设置里重选叫「保存」。 */
     firstTime: Boolean,

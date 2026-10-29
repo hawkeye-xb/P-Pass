@@ -3,8 +3,8 @@ import PPassCore
 import SwiftUI
 import UIKit
 
-/// 照片页空状态的三种说法（#1263，对位 Android TwoTabs 照片 tab）。
-enum PhotosEmptyHint: Equatable { case chooseAlbums, camera, albums }
+/// 照片页空状态（#1263，对位 Android TwoTabs 照片 tab）：没选相册 → 引导去选；否则只有一种说法（10-29 文案定稿 C8）。
+enum PhotosEmptyHint: Equatable { case chooseAlbums, albums }
 
 /// 一条需要用户看到的失败反馈（#971 / #972）：设置没存上、命令没执行成。界面用 alert 呈现，点掉即清。
 struct UserNotice: Identifiable, Equatable {
@@ -36,8 +36,6 @@ final class AppModel: ObservableObject {
     @Published private(set) var since: BackupSince?
     /// 系统里当前实际存在的相册（nil = 没有完整授权，读不到）。「已选相册」只数已选且现存的（#983，Android #836）。
     @Published private(set) var existingAlbums: Set<String>?
-    /// 「最近项目」的 id（#1263 照片页空状态）。
-    @Published private(set) var cameraAlbumId: String?
     /// 照片页「选择相册」：请设置页把选范围页推出来（设置 tab 可能还没建，由它出现时消费）。
     @Published var wantsScopeEditor = false
     /// 「后台 App 刷新」不可用、而用户要后台备份时的全局告示（对位 Android `NoticeHost` 的 BACKUP_INTERRUPTED，UI-12）：
@@ -137,7 +135,6 @@ final class AppModel: ObservableObject {
     func refreshExistingAlbums() {
         Task {
             existingAlbums = await backend.media.existingAlbumIds()
-            cameraAlbumId = await backend.media.cameraAlbumId()
         }
     }
 
@@ -278,12 +275,8 @@ final class AppModel: ObservableObject {
 
     /// 范围从未保存、保存了空集、或所选相册全被删：一张都不在范围内（Android #541 / #836 同口径）。
     var noAlbums: Bool { (selectedAlbumCount ?? 0) == 0 }
-    /// 照片页空库时说哪一种（#1263）：没选相册 → 引导去选；范围里有「最近项目」→ 拍一张试试；否则 → 新存进所选相册的会回家。
-    var photosEmptyHint: PhotosEmptyHint {
-        if noAlbums { return .chooseAlbums }
-        if let camera = cameraAlbumId, scope?.contains(camera) == true { return .camera }
-        return .albums
-    }
+    /// 照片页空库时说哪一种（#1263）：没选相册 → 引导去选；否则 →「还没有备份好的照片」。
+    var photosEmptyHint: PhotosEmptyHint { noAlbums ? .chooseAlbums : .albums }
 
     /// 照片页「选择相册」：切到设置 tab 并直达选范围页。
     func openScopeEditor() {

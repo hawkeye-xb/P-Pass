@@ -16,7 +16,7 @@
  */
 export function homeBlocker(serviceState, status) {
   if (serviceState === "starting") {
-    return { id: "service_starting", tone: "waiting", headlineKey: "ui.blocked_service_starting", pillKey: "ui.starting" };
+    return { id: "service_starting", tone: "waiting", headlineKey: "ui.blocked_service_starting", pillKey: "ui.blocked_service_starting_pill" };
   }
   if (serviceState !== "running") {
     return { id: "service_down", tone: "act", headlineKey: "ui.blocked_service_down", pillKey: "ui.blocked_service_down_pill" };

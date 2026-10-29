@@ -29,9 +29,9 @@ beforeAll(async () => {
     props: { defaultDir: "/Users/someone/Pictures/P-Pass", configuredLibraryDir: null, onDone: vi.fn() },
   });
   await fireEvent.click(screen.getByRole("button", { name: "继续" }));
-  await vi.waitFor(() => screen.getByText("让这台电脑保持醒着。"));
+  await vi.waitFor(() => screen.getByText("防止电脑睡眠"));
   await fireEvent.click(screen.getByRole("button", { name: "继续" }));
-  await vi.waitFor(() => screen.getByText("最后一步：设为常驻服务。"));
+  await vi.waitFor(() => screen.getByText("设为后台服务"));
   step3 = document.body.textContent;
   hasFinish = Boolean(screen.queryByRole("button", { name: "完成" }));
 });
@@ -62,8 +62,9 @@ describe("#481 向导第 3 步：如实告知本地网络弹窗", () => {
     expect(step3).toContain("「后台项目已添加」");
   });
 
-  it("「如果被拦」保留，「不会做什么」一行已删", () => {
+  // B1：「如果被拦」行删掉（拦截说明在官网下载页）。反证：恢复那一行 → 红。
+  it("「如果被拦」「不会做什么」两行都已删", () => {
     expect(step3).not.toContain("不会做什么");
-    expect(step3).toContain("如果被拦");
+    expect(step3).not.toContain("如果被拦");
   });
 });

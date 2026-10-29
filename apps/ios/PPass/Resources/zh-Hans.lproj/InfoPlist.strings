@@ -1,5 +1,5 @@
 /* 系统权限弹窗的说明（#1013）。键与 Info.plist 的 *UsageDescription 一一对应，InfoPlistStringsTests 守齐全。 */
-"NSLocalNetworkUsageDescription" = "用于在同一 Wi‑Fi 下找到你的电脑，传输照片。";
+"NSLocalNetworkUsageDescription" = "用于在同一 Wi‑Fi 下找到电脑并传输照片。";
 "NSCameraUsageDescription" = "用于扫描电脑上显示的配对二维码。";
 "NSPhotoLibraryUsageDescription" = "自动备份新照片需要访问全部照片。";
 "NSPhotoLibraryAddUsageDescription" = "用于把电脑照片库里的照片存回这台手机。";

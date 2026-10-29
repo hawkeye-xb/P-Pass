@@ -24,7 +24,7 @@ describe("活动记录的用户投影", () => {
   });
 
   it("未知 kind 出安全兜底文案，但不把机器类型直接给用户", () => {
-    expect(auditText({ kind: "future.internal.event" })).toBe("发生了一条未分类的活动");
+    expect(auditText({ kind: "future.internal.event" })).toBe("其他活动");
   });
 
   it("#1044：daemon 列为「有文案」的每个 kind，桌面字典里都真有一条（不落兜底）", () => {
@@ -51,7 +51,7 @@ describe("活动记录的用户投影", () => {
     expect(denied).toBe("加入被拒绝");
     expect(cancelled).toBe("手机已取消");
     expect(expired).toBe("配对已超时");
-    expect(codeFailed).toBe("验证码不对，未加入");
+    expect(codeFailed).toBe("验证码错误，未加入");
     const unknown = auditText({ kind: "future.internal.event" });
     for (const text of [denied, cancelled, expired, codeFailed]) expect(text).not.toBe(unknown);
     expect(new Set([denied, cancelled, expired, codeFailed]).size).toBe(4);
@@ -61,7 +61,7 @@ describe("活动记录的用户投影", () => {
   });
 
   it("本机和其它设备按审计合同显示身份", () => {
-    expect(auditWho({}, [])).toBe("【本地】");
+    expect(auditWho({}, [])).toBe("这台电脑");
     expect(
       auditWho(
         { actor: "0123456789abcdef" },

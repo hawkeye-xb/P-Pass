@@ -1,8 +1,11 @@
 package com.hawkeyexb.ppass
 
+import com.hawkeyexb.ppass.backup.BackgroundBackupState
+import com.hawkeyexb.ppass.ui.backgroundBackupNoticeRes
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -126,5 +129,21 @@ class BackgroundBackupPresentationContractTest {
             "NoticeHost must not carry a separate dismissed-state parameter",
             noticeHostBody.contains("backgroundBackupNoticeDismissed"),
         )
+    }
+
+    @Test
+    fun b11_banner_button_says_what_tapping_it_does_per_state() {
+        // 10-29 文案 B11：一个笼统的「去处理」拆成按状态的按钮。反证：两个状态共用一个按钮文案 → 红。
+        assertEquals(
+            R.string.background_backup_needs_authorization to R.string.background_backup_action_allow,
+            backgroundBackupNoticeRes(BackgroundBackupState.NeedsSystemAuthorization),
+        )
+        assertEquals(
+            R.string.background_backup_system_stopped to R.string.background_backup_action_turn_on,
+            backgroundBackupNoticeRes(BackgroundBackupState.SystemStoppedWatcher),
+        )
+        assertNull(backgroundBackupNoticeRes(BackgroundBackupState.OffByUser))
+        assertNull(backgroundBackupNoticeRes(BackgroundBackupState.Armed))
+        assertFalse(source("ui/HomeNotices.kt").contains("background_backup_notice_action"))
     }
 }

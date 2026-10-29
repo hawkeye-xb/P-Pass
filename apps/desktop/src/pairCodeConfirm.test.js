@@ -255,13 +255,13 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
     expect(confirmCalls()).toHaveLength(0);
   });
 
-  it("重连：标题点名，按钮是「允许重连」，带事实小字", async () => {
+  it("重连：标题点名，按钮是「允许重新加入」，带事实小字", async () => {
     const d = desktop();
     render(App);
     await settle();
     await openRow(d, [{ ...row("b", "客厅的手机"), known: true, paired: true, photo_count: 12 }]);
-    expect(document.querySelector(".pending-title").textContent).toBe("客厅的手机 请求重新连接");
-    expect(screen.getByRole("button", { name: "允许重连" })).toBeTruthy();
+    expect(document.querySelector(".pending-title").textContent).toBe("客厅的手机 请求重新加入");
+    expect(screen.getByRole("button", { name: "允许重新加入" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "允许加入" })).toBeNull();
     expect(screen.getByTestId("pending-request").textContent).toContain("已存 12 张");
   });
@@ -330,7 +330,7 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
     expect(dialogOpen()).toBe(true);
     const block = screen.getByTestId("pending-request");
     expect(block.dataset.phase).toBe("failed");
-    expect(block.textContent).toContain("验证码不对，这次配对已作废，请在手机上重新扫码");
+    expect(block.textContent).toContain("验证码不正确，配对已取消。");
     expect(screen.queryByRole("button", { name: "允许加入" })).toBeNull();
     const starts = () => invokeMock.mock.calls.filter(([cmd]) => daemonMethodOf(cmd) === "pairing.start").length;
     const before = starts();
@@ -360,7 +360,7 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
     await pushPendingChanged();
     const fresh = screen.getAllByTestId("pending-request").find((b) => b.dataset.phase === "input");
     expect(fresh).toBeTruthy();
-    expect(fresh.textContent).not.toContain("验证码不对");
+    expect(fresh.textContent).not.toContain("验证码不正确");
     expect(fresh.querySelector("input").value).toBe("");
     expect(within(fresh).getByRole("button", { name: "拒绝" }).disabled).toBe(false);
   });

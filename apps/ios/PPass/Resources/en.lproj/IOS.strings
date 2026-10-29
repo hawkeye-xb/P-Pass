@@ -1,20 +1,12 @@
 /* iOS-only copy, or Android wording that is not true on iOS (#315). Hand-written; a key here
    overrides the same key in Localizable.strings (generated from Android strings.xml). */
 
-/* iOS backs up in the foreground only in this round (plan §1, IOS-17). */
-"idle_auto_hint" = "Backs up automatically while P-Pass is open";
-"idle_auto_hint_any_network" = "Backs up automatically while P-Pass is open";
-
-/* iOS partial access: point at the iOS setting by name. */
-"partial_access_body" = "Backup needs full photo access. Go to Settings › P-Pass › Photos and choose Full Access to back up every photo.";
-"no_media_access_body" = "Backup needs access to your photos. Right now not a single photo can be read, so nothing is being backed up — allow access in Settings › P-Pass › Photos.";
-
 /* Failure notifications (#981): tapping a notification on iOS only opens the app (no deep link into system settings), so point at the iOS setting by name; battery optimization doesn't exist on iOS — the counterpart is Background App Refresh. */
-"notif_media_partial_body" = "Photo access changed from Full Access to Limited, so photos outside your selection won't be backed up. Go to Settings › P-Pass › Photos and switch it back to Full Access.";
-"notif_media_none_body" = "Photo access is off, so P-Pass can't read any photos and nothing is being backed up. Go to Settings › P-Pass › Photos and allow access.";
-"notif_background_refresh_off_title" = "Background App Refresh was turned off";
-"notif_background_refresh_off_body" = "iOS won't wake P-Pass in the background any more; it backs up only while P-Pass is open. You can turn it back on in Settings › General › Background App Refresh. Your photos are all still on this phone.";
-"notif_background_refresh_restricted_body" = "This iPhone no longer allows Background App Refresh for P-Pass (Screen Time or device management may be limiting it), so it backs up only while P-Pass is open. Your photos are all still on this phone.";
+"notif_media_partial_body" = "Photo access is now limited. Only selected photos will be backed up. To change it back, go to Settings › P-Pass › Photos and choose Full Access.";
+"notif_media_none_body" = "Photo access is off, so backup has stopped. To allow it, go to Settings › P-Pass › Photos.";
+"notif_background_refresh_off_title" = "Background App Refresh is off";
+"notif_background_refresh_off_body" = "Backup now runs only while P-Pass is open. You can turn it back on in Settings › General › Background App Refresh.";
+"notif_background_refresh_restricted_body" = "This iPhone restricts Background App Refresh for P-Pass (possibly Screen Time or device management). Backup now runs only while P-Pass is open.";
 
 /* Scope page when no photo can be read (access denied): say there is no access and offer Open Settings, not "No photos found" (iOS only: Android goes home after a denial and never shows this page). */
 "bucket_no_access_title" = "No access to photos";
@@ -22,10 +14,9 @@
 "bucket_no_access_action" = "Open Settings";
 
 /* Simulator and devices without a camera. */
-"scan_camera_unavailable" = "The camera isn't available on this device. Connect with the pairing string instead.";
+"scan_camera_unavailable" = "Camera unavailable. Enter the pairing code to connect.";
 
 /* Diagnostics (no Android counterpart; added on iOS for forensics, reached from the Version row). */
-"setting_diagnostics" = "Diagnostics";
 "diag_title" = "Diagnostics";
 "diag_section_build" = "This build";
 "diag_version_full" = "Full version";
@@ -35,7 +26,7 @@
 "diag_min_os" = "Minimum iOS";
 "diag_section_state" = "Current state";
 "diag_data_source" = "Data source";
-"diag_data_source_fake" = "Demo data (UI shell, not connected to real photos or a computer)";
+"diag_data_source_fake" = "Demo data (not connected to photos or a computer)";
 "diag_data_source_live" = "Live";
 "diag_media_access" = "Photo access";
 "diag_media_full" = "Full";
@@ -51,15 +42,15 @@
 "diag_copied" = "Copied";
 
 /* Two iOS-only wait reasons (PPassCore WaitReason). */
-"state_waiting_execution_blocked" = "iOS paused the backup when you left P-Pass. Come back to P-Pass and it carries on.";
-"state_waiting_original_unavailable" = "Some originals are in iCloud; they will be downloaded and backed up once you are online.";
+"state_waiting_execution_blocked" = "iOS paused the backup when you left P-Pass. It resumes when you return.";
+"state_waiting_original_unavailable" = "Some originals are in iCloud. They are downloaded and backed up when online.";
 
 "ok_got_it" = "OK";
 
 /* #1092：原图正从 iCloud 下载（还没开始传给电脑）。参数：下载百分比、第几张、共几张。 */
 "state_fetching_icloud" = "Getting original from iCloud %1$ld%% · %2$ld of %3$ld";
 
-"state_waiting_local_storage_full" = "This phone is out of storage. Free up some space and the backup carries on.";
+"state_waiting_local_storage_full" = "This phone is out of storage. Free up space to resume backup.";
 
 /* #975：iOS 系统授权框只弹一次，被拒后只能去系统设置（Android 会再弹一次申请框）。 */
 "rule_notify_denied_hint" = "Notifications are off in system Settings. Tap the switch to open Settings.";
@@ -68,39 +59,17 @@
 "notice_title" = "Couldn’t finish";
 
 /* #1013：本地网络权限是 iOS 独有的系统弹窗（Android 无对应），弹出前在扫码页先说明用途。 */
-"scan_local_network_note" = "After scanning, iPhone asks for Local Network access: it is used to find your computer on the same Wi‑Fi and transfer photos. Tap Allow.";
+"scan_local_network_note" = "After scanning, iPhone asks for Local Network access. It is used to find your computer on the same Wi‑Fi and transfer photos. Tap Allow.";
 
-/* 设置页后台刷新告示（对位 Android background_backup_system_stopped 的句式：事实 · 后果，配「去处理」）。iOS 的系统开关叫「后台 App 刷新」。 */
+/* 设置页后台刷新告示（对位 Android background_backup_system_stopped 的句式：事实 · 后果，配「去设置」，打开系统设置）。iOS 的系统开关叫「后台 App 刷新」。 */
 "background_refresh_off_notice" = "Background App Refresh is off · backs up only when P-Pass is open";
 "background_refresh_restricted_notice" = "Background refresh is restricted · backs up only when P-Pass is open";
+"background_refresh_notice_action" = "Open Settings";
 
 /* 读屏（VoiceOver）：网格缩略图的标签。Android 用的是哈希前缀，读出来没有意义，iOS 单独给一句人话。 */
 "a11y_thumb_video" = "Video";
 "a11y_thumb_photo" = "Photo";
 
-/* ── #1263 过渡段 ──────────────────────────────────────────────
-   下面的 key 是 Android 同名文案的临时副本：本分支不改 apps/android，Localizable.strings 又只能由 gen-strings.py 从 Android strings.xml 生成。
-   Android 那边落地后跑 just ios-strings，再把本段里标「过渡」的条目删掉（不删会永远盖住 Android 的文案）。标「iOS 独有」的留下。 */
-
-/* 过渡（#1263）：选范围页「备份哪些照片」= 相册 + 时间二选一；首次「开始备份」（bucket_start）、编辑「保存」。 */
-"bucket_title" = "Photos to back up";
-"bucket_save" = "Save";
-"scope_time_today" = "From today";
-"scope_time_since_date" = "From %1$@";
-"scope_time_all" = "Everything";
-/* 过渡（#1263）：设置行改名，值 = backup_scope_n · 时间档。 */
-"backup_scope" = "Photos to back up";
-"backup_scope_with_time" = "%1$@ · %2$@";
-/* 过渡（#1263）：后台备份默认关，「之后什么都不用做」不再成立。 */
-"welcome_step3" = "3 · Choose which photos to back up";
-/* 过渡（#1263）：照片页没选相册的引导与空状态。%1$@ = 电脑名。 */
-"photos_no_albums" = "No albums chosen for backup yet";
-"photos_choose_albums" = "Choose albums";
-"home_empty_camera" = "Connected to %1$@. Photos you take from now on come home on their own — try taking one.";
-"home_empty_albums" = "New photos saved to the albums you picked come home on their own.";
-/* 过渡（#1263）：首页后台备份引导卡的按钮。 */
-"background_backup_offer_action" = "Turn on";
-"background_backup_offer_dismiss" = "No thanks";
-/* iOS 独有（#1263）：首页后台备份引导卡正文。Android 说「之后不打开 App 也会自动备份」并弹电池白名单；iOS 的后台只能由系统挑时机，
-   不能承诺（#343：不写频率、不假装能保证），也没有 App 内的授权框。 */
-"background_backup_offer" = "Turn on background backup: after you leave P-Pass, iOS picks moments to keep backing up — when is up to the system";
+/* iOS 独有（#1263，10-29 文案定稿 C6）：设置页后台备份引导卡正文。iOS 的后台只能由系统挑时机，不能承诺（#343：不写频率、不假装能保证），
+   也没有 App 内的授权框；按钮「开启后台备份」「不再提示」与 Android 共用（由 strings.xml 生成）。 */
+"background_backup_offer" = "Back up new photos even after you leave the app.";

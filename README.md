@@ -85,12 +85,11 @@ The app walks you through it — just click through:
    TestFlight from the App Store, open the
    [P-Pass public link](https://testflight.apple.com/join/htBATauc) on the iPhone, then tap
    Accept and Install. Turn on automatic updates for P-Pass in TestFlight:
-   each TestFlight build stops opening 90 days after it is published, and a
-   new build is released before then.
+   each TestFlight build stops opening 90 days after it is published.
    **iPhone（iOS 16 及以上）**：通过 TestFlight 分发。先在 App Store 安装
    TestFlight，再在 iPhone 上打开 [P-Pass 公开链接](https://testflight.apple.com/join/htBATauc)，
    点「接受」「安装」。建议在 TestFlight 里为 P-Pass 打开自动更新：每个
-   TestFlight 版本发布 90 天后无法再打开，我们会在到期前发布新版本。
+   TestFlight 版本发布 90 天后无法再打开。
 2. Open the P-Pass app on your phone and scan the QR code on your computer
    screen. The phone shows a 6-digit code; enter it on the computer and click
    **Allow**. / 打开手机上的 P-Pass，扫电脑屏幕上的二维码。手机会显示 6 位

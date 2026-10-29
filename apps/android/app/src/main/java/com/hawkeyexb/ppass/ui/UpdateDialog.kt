@@ -36,18 +36,17 @@ fun UpdateDialog(
     onGiveUpInstall: () -> Unit,
 ) {
     when (state) {
-        is UpdateUiState.Available -> AlertDialog(
+        is UpdateUiState.Available -> {
+            // #741：按 App 当前语言选 notes_i18n（取不到回落 notes）→ 含网址/控制字符等
+            // 整段拒收 → 清洗截断（UPD-03 #580）。10-29 文案：结果为空就不放正文，标题和按钮已说清。
+            // 语言取自与 stringResource 同一份 Configuration（per-app 语言 / 系统语言都
+            // 反映在这里），保证说明与弹窗其余文字同一种语言。
+            val languageTag = LocalConfiguration.current.locales[0].toLanguageTag()
+            val notes = displayUpdateNotes(state.info.notesI18n, state.info.notes, languageTag)
+            AlertDialog(
             onDismissRequest = onLater,
             title = { Text(stringResource(R.string.update_available_title, state.info.version)) },
-            text = {
-                // #741：按 App 当前语言选 notes_i18n（取不到回落 notes）→ 含网址/控制字符等
-                // 整段拒收 → 清洗截断（UPD-03 #580）；结果为空回落默认文案。
-                // 语言取自与 stringResource 同一份 Configuration（per-app 语言 / 系统语言都
-                // 反映在这里），保证说明与弹窗其余文字同一种语言。
-                val languageTag = LocalConfiguration.current.locales[0].toLanguageTag()
-                val notes = displayUpdateNotes(state.info.notesI18n, state.info.notes, languageTag)
-                Text(notes.ifBlank { stringResource(R.string.update_available_body) })
-            },
+            text = if (notes.isBlank()) null else ({ Text(notes) }),
             confirmButton = {
                 TextButton(onClick = onConfirmDownload) {
                     Text(stringResource(R.string.update_download_install), color = PPColor.Act)
@@ -58,7 +57,8 @@ fun UpdateDialog(
                     Text(stringResource(R.string.update_later), color = PPColor.Ink)
                 }
             },
-        )
+            )
+        }
 
         is UpdateUiState.Downloading -> AlertDialog(
             onDismissRequest = onLater, // = 后台下载

@@ -116,11 +116,6 @@ export function normalizePairCode(raw) {
   return String(raw ?? "").replace(/[^0-9]/g, "").slice(0, 6);
 }
 
-/** #1118：确认框里「申请身份」那一行的文案键。 */
-export function pendingRoleKey(item) {
-  return item?.role === "viewer" ? "ui.pending_role_viewer" : "ui.pending_role_member";
-}
-
 /**
  * #1118：`pairing.confirm` 的结果提示。允许后 daemon 最多等 8 秒手机的确认：
  * 等到了 = 已加入；没等到（`verifying`）= 验证码已提交、还在等手机。

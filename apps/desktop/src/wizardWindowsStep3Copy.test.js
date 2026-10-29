@@ -31,7 +31,7 @@ async function step3Text(mode) {
   });
   await fireEvent.click(screen.getByRole("button", { name: "继续" }));
   await fireEvent.click(await screen.findByRole("button", { name: "继续" }));
-  await vi.waitFor(() => screen.getByText("最后一步：设为常驻服务。"));
+  await vi.waitFor(() => screen.getByText("设为后台服务"));
   await new Promise((r) => setTimeout(r, 0));
   return document.body.textContent;
 }
@@ -55,6 +55,7 @@ describe("#1167 Windows 向导第 3 步按常驻形态说", () => {
   it("形态读不到：不显示「会申请什么」，宁可不说也不说错", async () => {
     const text = await step3Text("fail");
     expect(text).not.toContain("会申请什么");
-    expect(text).toContain("如果被拦");
+    // B1：「如果被拦」行已删（拦截说明在官网下载页）。
+    expect(text).not.toContain("如果被拦");
   });
 });

@@ -89,9 +89,10 @@ class UI21UnreconciledHeroTest {
         listOf("reaches", "storage computer", "next time", "do not match").forEach {
             assertFalse("en 不许把「连上电脑」当触发条件、也不许说账对不上：$it", enText.contains(it, ignoreCase = true))
         }
-        assertTrue("zh 要说是手机在清点", zhText.contains("手机正在"))
-        assertTrue("zh 要说不需要电脑", zhText.contains("不用连电脑"))
-        assertTrue("en 要说是手机在清点", enText.contains("this phone is recounting"))
-        assertTrue("en 要说不需要电脑", enText.contains("does not need the computer"))
+        // 10-29 文案定稿：标题说「正在重新统计照片」（在手机上进行），正文只补「无需电脑或 Wi-Fi」。
+        assertTrue("zh 要说正在重新统计", zhText.contains("正在重新统计"))
+        assertTrue("zh 要说不需要电脑", zhText.contains("无需连接电脑"))
+        assertTrue("en 要说正在重新统计", enText.contains("Recounting"))
+        assertTrue("en 要说不需要电脑", enText.contains("No computer"))
     }
 }

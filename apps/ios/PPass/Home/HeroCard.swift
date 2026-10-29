@@ -94,8 +94,8 @@ struct HeroCard: View {
         let action = HomeProjection.heroAction(state, pairingLost: app.pairingLost)
         return HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 0) {
-                if state.isRunning { transferSlots(state) } else {
-                    Text(statusText(state)).font(PPFont.statusLine).foregroundStyle(statusColor(state))
+                if state.isRunning { transferSlots(state) } else if let text = statusText(state) {
+                    Text(text).font(PPFont.statusLine).foregroundStyle(statusColor(state))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -129,7 +129,8 @@ struct HeroCard: View {
                             .map { L.f("state_sending_detail", $0, done, total) } ?? L.f("state_sending", done, total))
                         .font(PPFont.sans(13)).foregroundStyle(slow ? PPColor.waiting : PPColor.ink60).lineLimit(1)
                 } else {
-                    Text(statusText(state)).font(PPFont.sans(13.5, .medium)).foregroundStyle(PPColor.ink60).lineLimit(1)
+                    // 固定三格：没有状态行时也占住这一格，高度不跳。
+                    Text(statusText(state) ?? " ").font(PPFont.sans(13.5, .medium)).foregroundStyle(PPColor.ink60).lineLimit(1)
                     Text(" ").font(PPFont.sans(13))
                 }
                 Spacer().frame(height: 8)
@@ -154,7 +155,8 @@ struct HeroCard: View {
         return max(Int(now.timeIntervalSince(m.at)), 0)
     }
 
-    private func statusText(_ s: BackupUiState) -> String {
+    /// 状态行；nil = 不渲染（10-29 文案 B12：iOS 首页不再有「打开 P-Pass 时自动备份」这一行，后台备份只靠设置页卡片引导）。
+    private func statusText(_ s: BackupUiState) -> String? {
         if case .waiting(let r) = s { return L.s(HomeProjection.waitTextKey(r)) }
         if s == .preparing { return L.s("state_preparing") }
         switch HomeProjection.statusLine(s, pendingK: app.triplet?.k ?? 0) {
@@ -165,8 +167,8 @@ struct HeroCard: View {
         case .allSafe:
             let allowed = HomeProjection.allSafeTextAllowed(app.access, app.triplet, pairingLost: app.pairingLost,
                                                             missingSource: app.facts.missingSourceUnacknowledged)
-            return L.s(allowed ? "state_safe" : "idle_auto_hint")
-        case .ready, .working, .waiting: return L.s("idle_auto_hint")
+            return allowed ? L.s("state_safe") : nil
+        case .ready, .working, .waiting: return nil
         }
     }
 

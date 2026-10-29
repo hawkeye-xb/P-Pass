@@ -115,16 +115,15 @@ struct PhotosScreen: View {
         } else if let error = model.error, model.items.isEmpty {
             // 同 Android：中间只说明，不放重试按钮。恢复靠桌面信号整页刷新 + 60 秒兜底，
             // 重连退避用完后顶部那行给「重试」（disconnected）。
-            PPStateMessage(text: L.s("photos_unreachable") + "\n(" + String(error.prefix(100)) + ")",
-                           symbol: "wifi.exclamationmark")
+            // 10-29 文案 B13：原始报错只进日志，屏幕上只说「无法连接电脑」和用户能做的事。
+            PPStateMessage(text: L.s("photos_unreachable"), symbol: "wifi.exclamationmark")
+                .onAppear { AppLog.log("photos: timeline load failed (\(error))") }
         } else if model.items.isEmpty {
             switch app.photosEmptyHint {
             case .chooseAlbums:
                 PPStateMessage(text: L.s("photos_no_albums"), symbol: "photo.on.rectangle", actionTitle: L.s("photos_choose_albums")) {
                     app.openScopeEditor()
                 }
-            case .camera:
-                PPStateMessage(text: L.f("home_empty_camera", app.desktopName ?? L.s("storage_device_default")), symbol: "camera")
             case .albums:
                 PPStateMessage(text: L.s("home_empty_albums"), symbol: "photo.on.rectangle")
             }

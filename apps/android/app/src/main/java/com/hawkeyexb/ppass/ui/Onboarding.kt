@@ -99,9 +99,12 @@ fun WelcomeScreen(onScan: () -> Unit, onManual: () -> Unit) {
     }
 }
 
-/** Pairing in flight / refused / failed states share one screen. */
+/**
+ * Pairing in flight / refused / failed states share one screen. [body] null = title only (10-29 copy
+ * B5/B7/B8); [footnote] = the small "error code" line under the body (B13).
+ */
 @Composable
-fun PairStatusScreen(title: String, body: String, action: Pair<String, () -> Unit>?) {
+fun PairStatusScreen(title: String, body: String?, action: Pair<String, () -> Unit>?, footnote: String? = null) {
     PPScreen {
         androidx.compose.material3.ProvideTextStyle(
             androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
@@ -115,11 +118,20 @@ fun PairStatusScreen(title: String, body: String, action: Pair<String, () -> Uni
                 title, fontSize = 30.sp, fontFamily = PPFont.Serif,
                 color = PPColor.Ink, textAlign = TextAlign.Center,
             )
-            Spacer(Modifier.height(14.dp))
-            Text(
-                body, fontSize = PPSize.BodyMin, lineHeight = 26.sp,
-                color = PPColor.Ink40, textAlign = TextAlign.Center,
-            )
+            if (!body.isNullOrEmpty()) {
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    body, fontSize = PPSize.BodyMin, lineHeight = 26.sp,
+                    color = PPColor.Ink40, textAlign = TextAlign.Center,
+                )
+            }
+            if (footnote != null) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    footnote, fontSize = 14.sp, lineHeight = 21.sp,
+                    color = PPColor.Ink40, textAlign = TextAlign.Center,
+                )
+            }
             if (action != null) {
                 Spacer(Modifier.height(36.dp))
                 OutlinedButton(

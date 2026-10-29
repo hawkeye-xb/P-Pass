@@ -33,7 +33,7 @@ struct SettingsScreen: View {
                 if let n = app.backgroundNotice {
                     Section {
                         NoticeRow(text: n.body,
-                                  action: n.canResolve ? (L.s("background_backup_notice_action"), { app.openAppSettings() }) : nil)
+                                  action: n.canResolve ? (L.s("background_refresh_notice_action"), { app.openAppSettings() }) : nil)
                             .accessibilityIdentifier("backgroundNotice")
                     }
                 }
@@ -178,7 +178,7 @@ struct SettingsScreen: View {
     private static let hintFont = PPFont.sans(PPUI.TextSize.rowHint, relativeTo: .footnote)
 
     /// 「备份哪些照片」：只数已选且现存的（Android #541 / #836 同口径），0 或从未保存 → 「未选相册」；
-    /// 有相册时带上时间档：「3 个相册 · 从今天起 / 从 10月29日 起 / 全部」（#1263，同 Android `backup_scope_with_time`）。
+    /// 有相册时带上时间档：「3 个相册 · 10月29日起的照片 / 含以前的照片」（#1263，同 Android `backup_scope_with_time`）。
     private var scopeValue: String {
         if app.scopeUnreadable { return L.s("backup_scope_unreadable") }
         let n = app.selectedAlbumCount ?? 0
@@ -186,17 +186,21 @@ struct SettingsScreen: View {
         return L.f("backup_scope_with_time", L.p("backup_scope_n", n), Self.timeLabel(app.since ?? .all, now: Date()))
     }
 
-    /// 时间档的说法：起点是今天零点或更晚 →「从今天起」；以前某天 →「从 M月d日 起」；全部 →「全部」（同 Android）。
+    /// 设置行时间档的说法，一律写日期（10-29 文案定稿，同 Android `scopeValueLabel`）：某天起 →「M月d日起的照片」；
+    /// 全部 →「含以前的照片」。用 scope_value_*（英文比选项短）。
     static func timeLabel(_ since: BackupSince, now: Date, calendar: Calendar = .current, locale: Locale = .current) -> String {
-        guard case .since(let ms) = since else { return L.s("scope_time_all") }
-        let start = Date(timeIntervalSince1970: Double(ms) / 1000)
-        if start >= calendar.startOfDay(for: now) { return L.s("scope_time_today") }
+        guard case .since(let ms) = since else { return L.s("scope_value_all") }
+        return L.f("scope_value_since", scopeDate(Date(timeIntervalSince1970: Double(ms) / 1000), calendar: calendar, locale: locale))
+    }
+
+    /// 「10月29日」/「Oct 29」：时间档里的日期（选项与设置行同一种写法）。
+    static func scopeDate(_ date: Date, calendar: Calendar = .current, locale: Locale = .current) -> String {
         let f = DateFormatter()
         f.calendar = calendar
         f.timeZone = calendar.timeZone
         f.locale = locale
         f.setLocalizedDateFormatFromTemplate("MMMd")
-        return L.f("scope_time_since_date", f.string(from: start))
+        return f.string(from: date)
     }
 
     /// 系统导航行：图标 + 标题 + 次级值 + 系统 chevron（NavigationLink 自带）。

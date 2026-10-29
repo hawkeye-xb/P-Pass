@@ -260,6 +260,21 @@ class NET10PairPollTest {
         assertTrue(desk.statusTimes().isEmpty())
     }
 
+    /** 10-29 B13：手机没有文案的拒绝原因 → 屏幕只说「错误代码：generic」，原始 reason 随结果带出去写日志。
+     *  反证：提交被拒时不保留原始 reason ⇒ wireReason 为 null，这条红。 */
+    @Test
+    fun unknownRefusal_keepsTheRawReasonForTheLog() = runTest {
+        val desk = FakeDesk(
+            this,
+            submit = { Resp(id = "s", ok = false, error = RespError("INTERNAL", "from_the_future")) },
+            status = { error("no poll") },
+        )
+        val v = awaitPairVerdict(desk, "t", "d", FakeCeremony())
+        assertEquals(PairVerdict.Denied(PairRefusal.OTHER, wireReason = "INTERNAL/from_the_future"), v)
+        val join = { a: PairAccepted -> Pairing("n", "t", a.storageDeviceName, 1L, a.pairingId) }
+        assertEquals("INTERNAL/from_the_future", (v.toOutcome(join) as PairOutcome.Refused).wireReason)
+    }
+
     /** 被移除过的手机：hello 被拒（查不了能力）→ 仍提交，按应答形状判断，照常轮询。 */
     @Test
     fun revokedPhone_whoseHelloIsDenied_stillSubmitsAndPolls() = runTest {
@@ -282,12 +297,12 @@ class NET10PairPollTest {
         val join = { a: PairAccepted -> Pairing("n", "t", a.storageDeviceName, 1L, a.pairingId) }
         val joined = PairVerdict.Accepted(accepted).toOutcome(join)
         assertTrue(joined is PairOutcome.Joined)
-        for (cause in listOf(PairRefusal.DENIED, PairRefusal.TOKEN_INVALID)) {
-            val o = PairVerdict.Denied(cause).toOutcome(join) as PairOutcome.Refused
-            assertEquals(cause, o.cause)
-            assertTrue("$cause is the computer saying no", o.ownerSaidNo)
-        }
+        // 10-29 B6：只有电脑上点了「拒绝」才是「电脑拒绝」；配对码无效 / 已用归「加入失败」。
+        val denied = PairVerdict.Denied(PairRefusal.DENIED).toOutcome(join) as PairOutcome.Refused
+        assertEquals(PairRefusal.DENIED, denied.cause)
+        assertTrue("DENIED is the computer saying no", denied.ownerSaidNo)
         val lapsed = listOf(
+            PairVerdict.Denied(PairRefusal.TOKEN_INVALID) to PairRefusal.TOKEN_INVALID,
             PairVerdict.Expired to PairRefusal.EXPIRED,
             PairVerdict.DesktopRestarted to PairRefusal.DESKTOP_RESTARTED,
         )
@@ -302,7 +317,7 @@ class NET10PairPollTest {
         assertTrue(failed is PairOutcome.Failed)
         // #1264：诊断原文只进日志，失败页上没有可显示的附注。
         assertEquals("java.io.IOException: x", (failed as PairOutcome.Failed).diagnostic)
-        assertEquals(null, failed.note)
+        assertEquals(PairFailure.UNREACHABLE, failed.kind)
         // #1118: a wrong code / a missing desktop proof is a refusal the desktop owner did not choose.
         for ((verdict, cause) in listOf(
             PairVerdict.CodeWrong to PairRefusal.CODE_WRONG,

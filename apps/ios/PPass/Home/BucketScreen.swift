@@ -14,6 +14,8 @@ struct BucketScreen: View {
     @State private var albums: [AlbumBucket]?
     @State private var checked: Set<String> = []
     @State private var wantsAll = false
+    /// 保存过的时间档（nil = 从未保存）：选项「M月d日起的照片」的日期从这里来。
+    @State private var savedSince: BackupSince?
     @State private var known: Set<String> = []
     @State private var error: String?
 
@@ -118,14 +120,26 @@ struct BucketScreen: View {
         .accessibilityAddTraits(on ? [.isSelected] : [])
     }
 
-    /// 时间二选一（从今天起 / 全部）：系统分段控件，一行。
+    /// 时间二选一（M月d日起的照片 / 含以前的照片）：系统分段控件，一行。
     private var timePicker: some View {
         Picker(L.s("bucket_title"), selection: $wantsAll) {
-            Text(L.s("scope_time_today")).tag(false)
+            Text(Self.sinceOptionLabel(savedSince, now: Date())).tag(false)
             Text(L.s("scope_time_all")).tag(true)
         }
         .pickerStyle(.segmented)
         .accessibilityIdentifier("bucketSince")
+    }
+
+    /// 「某天起的照片」那一档的选项文字，一律写日期（10-29 文案定稿，同 Android `scopeSinceOptionLabel`）：保存过某天 → 那一天；
+    /// 从未保存或存的是「全部」→ 今天（保存时落的就是今天零点，见 `ScopePolicy.sinceForSave`）。
+    static func sinceOptionLabel(_ saved: BackupSince?, now: Date, calendar: Calendar = .current, locale: Locale = .current) -> String {
+        let start: Date
+        if case .since(let ms)? = saved {
+            start = Date(timeIntervalSince1970: Double(ms) / 1000)
+        } else {
+            start = calendar.startOfDay(for: now)
+        }
+        return L.f("scope_time_since_date", SettingsScreen.scopeDate(start, calendar: calendar, locale: locale))
     }
 
     /// 底部唯一的主按钮：首次「开始备份」，编辑「保存」（Android 60 高 / 18 字）。paper 底 + 顶部分隔线：网格从下面滚过时仍可读。
@@ -148,8 +162,10 @@ struct BucketScreen: View {
             // 从未保存 → 默认勾「最近项目」；保存过 → 照旧，只勾当前还存在的（新相册默认不勾）。
             checked = ScopePolicy.initialSelection(saved: saved, available: Set(list.map(\.id)),
                                                    cameraAlbum: list.first(where: \.isCameraAlbum)?.id)
-            // 时间档：从未保存 → 从今天起；保存过 → 回显。
-            wantsAll = (try app.backend.media.savedSince())?.isAll ?? false
+            // 时间档：从未保存 → 今天起；保存过 → 回显。
+            let since = try app.backend.media.savedSince()
+            savedSince = since
+            wantsAll = since?.isAll ?? false
             albums = list
         } catch {
             self.error = String(describing: error)

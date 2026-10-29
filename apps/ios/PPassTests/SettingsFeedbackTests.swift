@@ -67,7 +67,6 @@ final class SettingsFeedbackTests: XCTestCase {
         func savedSince() throws -> BackupSince? { if failRead { throw Boom() }; return disk == nil ? nil : since }
         func knownAlbums() -> Set<String> { [] }
         func existingAlbumIds() async -> Set<String>? { ["a", "b"] }
-        func cameraAlbumId() async -> String? { "a" }
         func saveScope(_ selected: Set<String>, known: Set<String>, since: BackupSince) async throws {
             if failSave { throw Boom() }; disk = selected; self.since = since
         }
@@ -392,12 +391,12 @@ final class SettingsFeedbackTests: XCTestCase {
         XCTAssertNotNil(failing.notice)
     }
 
-    /// 照片页空库三种说法：没选相册 / 选了「最近项目」/ 只选了别的相册。
+    /// 照片页空库两种说法：没选相册 → 引导去选；选了相册（含「最近项目」）→ 同一句（10-29 文案定稿 C8）。
     func test_photos_empty_hint_follows_the_scope() async {
         let (app, _, media) = make()
         app.refreshExistingAlbums()
         await settle()
-        XCTAssertEqual(app.photosEmptyHint, .camera, "范围 [a]，a 是最近项目")
+        XCTAssertEqual(app.photosEmptyHint, .albums, "范围 [a]：选了相册就只有一种说法，不按「最近项目」分支")
         media.disk = ["b"]
         app.refresh()
         XCTAssertEqual(app.photosEmptyHint, .albums)
@@ -409,17 +408,24 @@ final class SettingsFeedbackTests: XCTestCase {
         XCTAssertEqual(app.photosEmptyHint, .chooseAlbums, "从未保存也是没选相册")
     }
 
-    /// 设置行的时间档：今天零点或更晚 →「从今天起」；以前某天 →「从 M月d日 起」；全部 →「全部」（同 Android）。
+    /// 设置行的时间档一律写日期（10-29 文案定稿）：今天也写「10月29日起的照片」，以前某天写那一天；全部 →「含以前的照片」。
+    /// 设置行用 scope_value_*（英文比选项短）；选范围页的选项用 scope_time_*，没存过时日期是今天。
     func test_scope_time_label() {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(secondsFromGMT: 8 * 3600)!
         let now = Date(timeIntervalSince1970: 1_793_259_000) // 2026-10-29 15:30 +08:00
         let midnight: Int64 = 1_793_203_200_000
         let zh = Locale(identifier: "zh_CN")
-        XCTAssertEqual(SettingsScreen.timeLabel(.since(ms: midnight), now: now, calendar: cal, locale: zh), L.s("scope_time_today"))
-        XCTAssertEqual(SettingsScreen.timeLabel(.all, now: now, calendar: cal, locale: zh), L.s("scope_time_all"))
+        XCTAssertEqual(SettingsScreen.timeLabel(.since(ms: midnight), now: now, calendar: cal, locale: zh), L.f("scope_value_since", "10月29日"))
+        XCTAssertEqual(SettingsScreen.timeLabel(.all, now: now, calendar: cal, locale: zh), L.s("scope_value_all"))
         let earlier = SettingsScreen.timeLabel(.since(ms: midnight - 86_400_000), now: now, calendar: cal, locale: zh)
-        XCTAssertEqual(earlier, L.f("scope_time_since_date", "10月28日"))
+        XCTAssertEqual(earlier, L.f("scope_value_since", "10月28日"))
+        // 选项：没存过 / 存的是「全部」→ 今天；存过某天 → 那一天。
+        XCTAssertEqual(BucketScreen.sinceOptionLabel(nil, now: now, calendar: cal, locale: zh), L.f("scope_time_since_date", "10月29日"))
+        XCTAssertEqual(BucketScreen.sinceOptionLabel(.all, now: now, calendar: cal, locale: zh), L.f("scope_time_since_date", "10月29日"))
+        XCTAssertEqual(BucketScreen.sinceOptionLabel(.since(ms: midnight - 86_400_000), now: now, calendar: cal, locale: zh),
+                       L.f("scope_time_since_date", "10月28日"))
+        XCTAssertNotEqual(L.s("scope_value_since"), "scope_value_since", "文案已打包")
     }
 
     /// 「选择相册」：切到设置 tab 并请设置页推出选范围页。

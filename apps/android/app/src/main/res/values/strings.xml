@@ -1,69 +1,65 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">P-Pass</string>
 
     <!-- Welcome -->
-    <string name="welcome_headline">Photos,\nfinding their way home.</string>
-    <string name="welcome_sub">Photos from your phone back up automatically to the computer at home. No account, no cloud storage.</string>
-    <string name="welcome_scan">Scan to connect</string>
+    <string name="welcome_headline">Phone photos back up automatically to your home computer</string>
+    <string name="welcome_sub">No account needed. Photos aren\'t stored in any cloud.</string>
+    <string name="welcome_scan">Scan to connect to your home computer</string>
     <!-- T-080 layout v1: welcome three steps -->
-    <string name="welcome_step1">1 · Open P-Pass on the home computer</string>
-    <string name="welcome_step2">2 · Use the button below to scan the code on its screen</string>
-    <string name="welcome_step3">3 · Choose which photos to back up</string>
+    <string name="welcome_step1">1 · Install and open P-Pass on your home computer</string>
+    <string name="welcome_step2">2 · Scan the QR code or enter the pairing code to connect to your home computer</string>
+    <string name="welcome_step3">3 · Choose the albums to back up</string>
 
     <!-- Scan (M2/M3, full-page-states doc) -->
     <string name="scan_header_title">Scan to connect</string>
-    <string name="scan_hint">Point at the P-Pass pairing QR\non your home computer\'s screen</string>
-    <string name="scan_manual_link">Can\'t scan? Enter the pairing string instead</string>
+    <string name="scan_hint">Point at the pairing QR code\non your computer\'s screen</string>
+    <string name="scan_manual_link">Can\'t scan? Enter the pairing code instead</string>
 
-    <string name="scan_manual_title">Enter pairing string</string>
-    <string name="scan_manual_body">On the computer\'s \"Add a device\" card, click \"Can\'t scan? Copy the pairing string\", send it to this phone, and paste it below.</string>
-    <!-- #739：示意真实配对串的开头（PeerAddrToken 只认 ppf://pair?），中英一致。 -->
+    <string name="scan_manual_title">Enter pairing code</string>
+    <string name="scan_manual_body">On the computer\'s \"Add a device\" card, click \"Can\'t scan? Copy the pairing code\", send it to this phone, and paste it below.</string>
+    <!-- #739：示意真实配对码的开头（PeerAddrToken 只认 ppf://pair?），中英一致。 -->
     <string name="scan_manual_placeholder">ppf://pair?node=…</string>
     <string name="scan_manual_paste">Paste</string>
-    <string name="scan_manual_note">The pairing string is valid for 10 minutes, same as the QR code.</string>
+    <string name="scan_manual_note">Pairing codes are valid for 10 minutes.</string>
     <string name="scan_manual_submit">Connect</string>
-    <string name="scan_manual_invalid">That doesn\'t look like a P-Pass pairing string</string>
+    <string name="scan_manual_invalid">This is not a P-Pass pairing code</string>
     <string name="cancel">Cancel</string>
 
     <!-- Pairing -->
-    <string name="pair_waiting_title">Asking the computer…</string>
-    <string name="pair_waiting_body">Sending the request to the computer…</string>
-    <string name="pair_refused_title">The computer said no.</string>
-    <string name="pair_refused_body">Ask the family owner to generate a fresh code and try again.</string>
-    <string name="pair_lapsed_title">This pairing didn\'t go through.</string>
-    <string name="pair_failed_title">Could not reach the computer.</string>
-    <string name="pair_failed_body">Make sure the computer is on and both devices have internet, then scan again.</string>
+    <string name="pair_waiting_title">Requesting to join…</string>
+    <string name="pair_refused_title">The computer declined the request</string>
+    <string name="pair_lapsed_title">Couldn\'t join</string>
+    <string name="pair_failed_title">Can\'t connect to your computer</string>
+    <string name="pair_failed_body">Make sure your computer is on, P-Pass is open, and both devices are online.</string>
     <!-- #1072: pairing result details (decided on the desktop's reason / pair.status; worded by the phone) -->
-    <string name="pair_refused_detail_token_invalid">This pairing code is invalid or has already been used. Generate a new one on the computer and scan again.</string>
-    <string name="pair_refused_detail_qr_expired">This QR code has expired or was closed on the computer. Refresh the QR code on the computer, then scan again.</string>
-    <string name="pair_refused_detail_denied">The request was declined on the computer.</string>
-    <string name="pair_refused_detail_expired">Nobody confirmed on the computer, so this pairing request expired. Generate a new code on the computer and scan again.</string>
-    <string name="pair_refused_detail_restarted">The computer\'s service restarted, so this pairing request is no longer valid. Generate a new code on the computer and scan again.</string>
+    <string name="pair_refused_detail_token_invalid">This pairing code is invalid or was already used. On the computer, click \"Show pairing QR\", then scan again.</string>
+    <string name="pair_qr_expired_title">QR code expired</string>
+    <string name="pair_qr_expired_body">QR codes are valid for 10 minutes.</string>
+    <string name="pair_refused_detail_expired">No one confirmed on the computer, so the request expired. On the computer, click \"Show pairing QR\", then scan again.</string>
+    <string name="pair_refused_detail_restarted">P-Pass restarted on the computer, so the request is no longer valid. On the computer, click \"Show pairing QR\", then scan again.</string>
     <!-- #1118: the code page comes straight after the scan (no "connect to this computer?" step) -->
     <string name="pair_connecting_label">Connecting to</string>
     <string name="pair_code_body">Enter these 6 digits on the computer</string>
     <string name="pair_desktop_identity">Computer ID %1$s</string>
-    <string name="pair_refused_detail_code_wrong">The code didn\'t match, so this pairing was cancelled. Show a new QR code on the computer and scan again.</string>
+    <string name="pair_refused_detail_code_wrong">The code didn\'t match, so this pairing was cancelled. On the computer, click \"Show QR code again\", then scan again.</string>
     <string name="pair_desktop_proof_failed">The computer couldn\'t prove it used the same code, so nothing was saved. Scan again.</string>
-    <string name="error_generic">Something went wrong. Please try again; if it keeps happening, update P-Pass on both the phone and the computer.</string>
+    <string name="error_generic">Try again.</string>
+    <string name="error_code_line">Error code: %1$s</string>
     <string name="state_waiting_phone_outdated">P-Pass on this phone is out of date. Please update to the latest version</string>
     <string name="state_waiting_desktop_outdated">P-Pass on the computer is out of date. Please update it on the computer</string>
     <string name="pair_needs_update_title">Update needed</string>
     <string name="state_waiting_desktop_internal">P-Pass on the computer ran into an error</string>
     <string name="scan_again">Scan again</string>
-    <string name="not_a_code">This is not a P-Pass pairing code.</string>
-    <string name="pair_unparseable_code">The pairing code cannot be parsed. Update P-Pass on both the computer and phone to the latest version.</string>
-    <string name="storage_device_default">P-Pass storage</string>
+    <string name="not_a_code">Not a P-Pass pairing code</string>
+    <string name="pair_unparseable_code">The pairing code is incomplete. Update P-Pass on both the phone and the computer.</string>
+    <string name="storage_device_default">Home computer</string>
     <string name="update_available_title">New version v%1$s</string>
-    <string name="update_available_body">Download and install it?</string>
     <string name="update_download_install">Download and install</string>
     <string name="update_later">Later</string>
-    <!-- UPD-02: 更新状态机的用户可见文案——检查行 / 下载 / 校验 / 失败分类 / 安装 / 回执。 -->
+    <!-- UPD-02: 更新状态机的用户可见文案：检查行 / 下载 / 校验 / 失败分类 / 安装 / 回执。 -->
     <string name="update_check_now">Check for updates</string>
-    <string name="update_checking">Checking…</string>
     <string name="update_up_to_date">You\'re on the latest version</string>
-    <string name="update_check_failed">Update check failed — try again later</string>
+    <string name="update_check_failed">Couldn\'t check for updates. Try again later.</string>
     <string name="update_downloading_title">Downloading update</string>
     <string name="update_downloading_progress">%1$d%% downloaded</string>
     <string name="update_downloading_unknown_total">Downloading…</string>
@@ -81,29 +77,25 @@
     <string name="update_failed_unexpected">Something went wrong. Try again later.</string>
     <string name="update_retry">Retry</string>
     <string name="update_ready_install">v%1$s has been downloaded</string>
-    <string name="update_ready_body">P-Pass will close briefly to update. Open it again when it\'s done.</string>
+    <string name="update_ready_body">P-Pass closes during the update. Open it again when it\'s done.</string>
     <string name="update_install_now">Update now</string>
     <string name="update_installing_title">Installing…</string>
     <string name="update_installing_body">Confirm in the system prompt to finish the update.</string>
     <string name="update_close">Close</string>
     <string name="notif_channel_update">App updates</string>
     <string name="notif_update_download_title">Downloading P-Pass update</string>
-    <!-- Nudge card for the notification permission when not granted, same style as the battery whitelist card. -->
-    <string name="notif_nudge_body">Tip: allow notifications so P-Pass can tell you if a backup fails.</string>
-    <string name="notif_nudge_action">Open settings</string>
     <!-- Full-image viewer attribution line (grid stays unlabeled; only
          the full view shows this). src_device is not yet on the wire
          (SYNC-05), so non-own photos say "family" rather than a name. -->
     <string name="attribution_mine">From your phone · %1$s</string>
-    <string name="attribution_family">From family\'s phone · %1$s</string>
-    <string name="code_missing_addr">The code has no address — generate a fresh one on the computer.</string>
+    <string name="attribution_family">From a family member\'s phone · %1$s</string>
 
     <!-- Home / backup -->
     <string name="state_scanning">Looking for photos… %1$d</string>
     <string name="state_hashing">Reading %1$d/%2$d</string>
-    <string name="state_sending">Sending %1$d/%2$d home</string>
+    <string name="state_sending">Backing up %1$d/%2$d</string>
     <string name="state_sending_file">Backing up %1$s (%2$d / %3$d)</string>
-    <!-- #250 / #251：备份中「当前这一张」的第二行——字节进度 + 第 x / y 张；字节 15 秒没动时换成「在等」。 -->
+    <!-- #250 / #251：备份中「当前这一张」的第二行：字节进度 + 第 x / y 张；字节 15 秒没动时换成「在等」。 -->
     <string name="state_sending_detail">%1$s · %2$d of %3$d</string>
     <string name="state_sending_slow">No new data for %1$d s, waiting</string>
     <string name="state_safe">All photos are backed up</string>
@@ -112,25 +104,22 @@
         <item quantity="one">%1$d photo still to back up</item>
         <item quantity="other">%1$d photos still to back up</item>
     </plurals>
-    <string name="state_trouble">Needs another try</string>
-    <string name="safe_detail">%1$d new photos arrived home.</string>
-    <string name="safe_detail_dup">%1$d new photos arrived home, %2$d were already there.</string>
-    <string name="backup_now">Back up now</string>
+    <string name="state_trouble">Backup didn\'t finish</string>
     <string name="backup_pause">Pause</string>
     <!-- UX-13: 被暂停后同一个位置的按钮文案（点它续传，同一条管线） -->
     <string name="backup_resume">Resume</string>
-    <string name="backup_waiting_constraints">Waiting for backup conditions</string>
+    <string name="backup_waiting_constraints">Waiting. Backup will start automatically.</string>
     <!-- #413 global state and wait reasons (drafts, pending user sign-off). "Paused" only means the user paused; waiting resumes by itself. -->
-    <string name="state_paused">Paused — tap Resume to carry on</string>
+    <string name="state_paused">Paused</string>
     <string name="state_preparing">Preparing backup…</string>
-    <string name="state_waiting_disabled">Background backup is off — backs up while P-Pass is open</string>
-    <string name="state_waiting_battery">Battery is low — backup continues once charging</string>
-    <string name="state_waiting_desktop_unreachable">Can\'t reach the storage computer — carries on once it\'s back</string>
-    <string name="state_waiting_desktop_full">The storage computer is full. Free up disk space or move the photo library to a bigger drive.</string>
-    <string name="state_waiting_desktop_library">Can\'t open the photo library folder on the storage computer</string>
-    <string name="state_waiting_desktop_error">The storage computer hit an error saving photos — check P-Pass on the computer</string>
-    <string name="state_waiting_unexpected_error">Backup hit an unexpected error — will retry later</string>
-    <string name="desktop_low_space_hint">The storage computer has less than 5 GB free</string>
+    <string name="state_waiting_disabled">Background backup is off. Backs up only while P-Pass is open.</string>
+    <string name="state_waiting_battery">Battery is low. Backup continues once the battery recovers.</string>
+    <string name="state_waiting_desktop_unreachable">Can\'t reach the computer. Backup continues once connected.</string>
+    <string name="state_waiting_desktop_full">The computer\'s disk is full. On the computer, free up space or move the photo library to a larger drive.</string>
+    <string name="state_waiting_desktop_library">The photo library on the computer can\'t be used. Check P-Pass on the computer.</string>
+    <string name="state_waiting_desktop_error">The computer hit an error saving photos. Check P-Pass on the computer.</string>
+    <string name="state_waiting_unexpected_error">Backup hit an error. Will retry later.</string>
+    <string name="desktop_low_space_hint">The computer has less than 5 GB free</string>
     <!-- 2026-09-07 real-device feedback: disable the button while a command
          is in flight so repeated taps don't queue behind it. -->
     <string name="backup_command_processing">Working…</string>
@@ -143,22 +132,22 @@
         <item quantity="one">Cancel the remaining %1$d photo?</item>
         <item quantity="other">Cancel the remaining %1$d photos?</item>
     </plurals>
-    <string name="cancel_remaining_confirm_body">These photos will not be backed up. You can restore them later from “Skipped photos”. Photos you take later are backed up as usual.</string>
+    <string name="cancel_remaining_confirm_body">These photos will be skipped and can be restored in “Skipped photos”. New photos are still backed up.</string>
     <string name="cancelled_round_cell_label">Skipped photos</string>
     <string name="cancelled_round_cell_value">%1$d · restore</string>
     <plurals name="missing_source_notice_body">
-        <item quantity="one">Cannot be recovered: %1$d photo was deleted from this phone, so it will not be sent again.</item>
-        <item quantity="other">Cannot be recovered: %1$d photos were deleted from this phone, so they will not be sent again.</item>
+        <item quantity="one">%1$d photo was deleted from this phone and can no longer be backed up.</item>
+        <item quantity="other">%1$d photos were deleted from this phone and can no longer be backed up.</item>
     </plurals>
     <string name="missing_source_notice_dismiss">Got it</string>
     <string name="missing_source_archive_label">Photos deleted from this phone</string>
     <string name="missing_source_archive_value">%1$d · cannot be recovered</string>
     <!-- T-083: hero idle state (not drawn in the mock; adjudicated on the card) -->
-    <string name="idle_auto_hint">Runs by itself on Wi-Fi when the battery isn\'t low</string>
-    <!-- #581：关掉「仅 Wi-Fi」后首页空闲行改用这句——不提 Wi-Fi，只承诺电量。 -->
-    <string name="idle_auto_hint_any_network">Runs by itself when the battery isn\'t low</string>
-    <string name="state_no_albums">No albums selected — nothing to back up</string>
-    <!-- T-083: trouble card — human copy only; raw errors live behind this fold -->
+    <string name="idle_auto_hint">Backs up automatically on Wi-Fi when the battery isn\'t low</string>
+    <!-- #581：关掉「仅 Wi-Fi」后首页空闲行改用这句：不提 Wi-Fi，只承诺电量。 -->
+    <string name="idle_auto_hint_any_network">Backs up automatically when the battery isn\'t low</string>
+    <string name="state_no_albums">No albums selected. Nothing will be backed up.</string>
+    <!-- T-083: trouble card ： human copy only; raw errors live behind this fold -->
     <string name="try_again">Try again</string>
     <string name="trouble_details_show">Show technical details</string>
     <string name="trouble_details_hide">Hide technical details</string>
@@ -166,56 +155,48 @@
     <string name="notif_channel_backup_failed">Backup needs your attention</string>
     <string name="notif_backup_failed_title">Backup didn\'t finish</string>
     <plurals name="notif_backup_failed_body">
-        <item quantity="one">%1$d photo didn\'t make it home — open to see</item>
-        <item quantity="other">%1$d photos didn\'t make it home — open to see</item>
+        <item quantity="one">%1$d photo couldn\'t be backed up. Tap to view.</item>
+        <item quantity="other">%1$d photos couldn\'t be backed up. Tap to view.</item>
     </plurals>
     <!-- #130 layer 1: definitive-event notifications (pairing lost / photo access revoked / system stopped
          background backup). Facts only, no guessing at causes. Titles reuse pairing_lost_title /
          partial_access_title / no_media_access_title. -->
-    <string name="notif_pairing_lost_body">Backup has stopped. Your photos are all still on this phone — tap to scan the code again and backup resumes.</string>
-    <string name="notif_media_partial_body">Photo access changed from All to Limited, so photos outside your selection won\'t be backed up. Tap to switch it back to All in system settings.</string>
-    <string name="notif_media_none_body">Photo access is off, so P-Pass can\'t read any photos and nothing is being backed up. Tap to allow access in system settings.</string>
+    <string name="notif_pairing_lost_body">Backup has stopped. Tap to pair again.</string>
+    <string name="notif_media_partial_body">Photo access is now limited. Only selected photos will be backed up.</string>
+    <string name="notif_media_none_body">Photo access is off, so backup has stopped. Tap to allow access in system settings.</string>
     <string name="notif_background_stopped_title">The system stopped background backup</string>
-    <string name="notif_background_stopped_body">Photos only back up while the app is open now. Tap to turn automatic backup back on. Your photos are all still on this phone.</string>
+    <string name="notif_background_stopped_body">Backup now runs only while P-Pass is open. Tap to turn background backup back on.</string>
     <string name="notif_battery_reenabled_title">Battery optimization is back on</string>
-    <string name="notif_battery_reenabled_body">P-Pass is under battery optimization again, so background backup needs to be allowed again. Tap to fix.</string>
-    <!-- NET-12: transfer foreground service — keeps the process out of the
+    <string name="notif_battery_reenabled_body">The system is limiting P-Pass in the background again, so background backup has stopped. Tap to allow it again.</string>
+    <!-- NET-12: transfer foreground service ： keeps the process out of the
          cached-process range while a Flow round is actively sending, so
          the system cannot reclaim it mid-transfer (real device: it did,
-         twice, on 2026-09-14). Silent/low-importance — it's status, not
+         twice, on 2026-09-14). Silent/low-importance ： it's status, not
          an alert. -->
     <string name="notif_channel_transfer">Backing up</string>
     <string name="notif_transfer_title">Backing up photos</string>
     <!-- MOB-101: the system stopped letting the backup run while the app is
          off screen (it allows a limited amount of that each day). Plain
          words only: no error code, no class name, no jargon. The fact is
-         learned only after the system refuses — the wording says what
+         learned only after the system refuses ： the wording says what
          happened, not what is about to happen. -->
-    <string name="state_background_budget_paused">Today\'s off-screen backup time is used up. Keep P-Pass open on screen to carry on now, or it picks up again tomorrow.</string>
-    <string name="state_background_protection_unknown">The phone turned this backup down just now and didn\'t say why. Open P-Pass and keep it on screen to carry on.</string>
-    <!-- SENT-01: 手机盯电脑哨兵——先说照片没丢，再引导看电脑。 -->
-    <string name="notif_sentinel_title">Haven\'t connected in 3 days</string>
-    <string name="notif_sentinel_body">Your photos are safe — check that P-Pass is still running on your computer.</string>
-    <!-- DOG-02b: 契机式白名单提醒——该跑没跑成才提醒。 -->
-    <string name="notif_whitelist_title">Last night\'s backup didn\'t run</string>
-    <string name="notif_whitelist_body">The system may be limiting background work. Allow P-Pass to run unrestricted — open to fix.</string>
+    <string name="state_background_budget_paused">Background backup time is used up. Keep P-Pass on screen to continue, or it resumes on its own once the time is restored.</string>
+    <string name="state_background_protection_unknown">The system didn\'t allow background backup. Keep P-Pass open on screen to continue.</string>
     <!-- M11 storage detail info card (full-page-states doc): status dot +
          device name + these two lines, not a generic "nothing uploaded" disclaimer. -->
     <string name="storage_detail_connected">Connected · %1$s</string>
-    <string name="storage_detail_paired">Paired %1$s · storing %2$s photos from this phone</string>
+    <string name="storage_detail_paired">Paired %1$s · %2$s photos backed up</string>
     <string name="storage_detail_lost">Pairing is no longer valid</string>
-    <!-- DOG-01: 恒真三元组（T-080 layout v1: hero card M / N home） -->
-    <string name="dog_triplet_line">%1$d photos · %2$d backed up · %3$d to go</string>
-    <string name="hero_of_n">/ %1$s photos home</string>
+    <string name="hero_of_n">/ %1$s photos backed up</string>
     <string name="pending_count">%1$d to back up</string>
-    <string name="triplet_unavailable">Couldn\'t read album count. Will retry later.</string>
-    <!-- #1038: the backup ledger (order table) can't be read — no progress verdict at all. Not triplet_unavailable (album count). -->
-    <string name="hero_counts_unreadable">Can\'t read the backup ledger right now, so no progress is shown — it will retry when you open the app.</string>
+    <string name="triplet_unavailable">Couldn\'t read the album photo count.</string>
+    <!-- #1038: the backup ledger (order table) can't be read ： no progress verdict at all. Not triplet_unavailable (album count). -->
+    <string name="hero_counts_unreadable">The backup record can\'t be read right now, so progress isn\'t shown. It will retry when P-Pass is opened.</string>
     <!-- UI-16 rule H-C: the two counts disagree, so no fraction may be shown.
-         Deliberately NOT triplet_unavailable — that one means "cannot read the
+         Deliberately NOT triplet_unavailable ： that one means "cannot read the
          phone's album count", a different fact. -->
-    <string name="hero_unreconciled_title">Recounting your photos</string>
-    <string name="hero_unreconciled_body">The backup record lists more photos than the selected albums hold now, so this phone is recounting against the photos that are actually there. It does not need the computer or Wi-Fi; the result shows here as soon as the count finishes.</string>
+    <string name="hero_unreconciled_title">Recounting photos</string>
+    <string name="hero_unreconciled_body">No computer or Wi-Fi needed. Progress shows when the count is done.</string>
     <string name="dog_last_success">Last success %1$s</string>
     <!-- T-080 defect(b): never render an epoch-0 date when nothing ever succeeded -->
     <string name="last_success_never">No successful backup yet</string>
@@ -224,21 +205,20 @@
     <string name="last_hours_ago">%1$d h ago</string>
     <!-- T-080 layout v1: backup rules card -->
     <!-- 2026-09-14（用户拍板）：section 标签"Backup"/"备份"和"About"/"关于"
-         均已删除——整页就是备份设置页，卡片边框已把各行分组，标签是
+         均已删除：整页就是备份设置页，卡片边框已把各行分组，标签是
          信息增量为 0 的重复（原键 rules_title、other_section_title 已
          整体移除）。 -->
-    <string name="more_section_title">More</string>
-    <!-- M10 (full-page-states doc) exact copy — a real toggle row
+    <!-- M10 (full-page-states doc) exact copy ： a real toggle row
          (NotifyOnFailurePrefs), no longer a nav row to system settings. -->
     <string name="rule_notify">Notifications</string>
-    <!-- #130: neutral caption under the switch — states which notifications it controls. -->
+    <!-- #130: neutral caption under the switch ： states which notifications it controls. -->
     <string name="rule_notify_hint">Alerts on lost pairing, revoked access or stopped backup</string>
     <!-- T1: 版本号显示 -->
     <string name="setting_version">Version</string>
     <!-- T6: 相册选择 -->
     <string name="bucket_title">Photos to back up</string>
-    <string name="bucket_hint">Albums you leave out are never backed up (e.g. photos WeChat received).</string>
-    <string name="bucket_empty">No photos or videos found on this phone.</string>
+    <string name="bucket_hint">Only checked albums are backed up.</string>
+    <string name="bucket_empty">No photos or videos on this phone.</string>
     <!-- 只给了部分照片（Android 14+「选择照片」/ iOS「有限访问」）时，选范围页顶部的一行。 -->
     <string name="bucket_partial_access_note">You\'ve allowed access to some photos only. Only those will be backed up.</string>
     <string name="bucket_loading">Reading albums…</string>
@@ -247,23 +227,23 @@
     <!-- M5 (full-page-states doc): summary sentence + single primary button. -->
     <string name="bucket_start">Start backup</string>
     <string name="bucket_save">Save</string>
-    <!-- #1263: the two time choices for the backup scope (no custom date); "From %1$s" for a "from today" saved days ago. -->
-    <string name="scope_time_today">From today</string>
-    <string name="scope_time_since_date">From %1$s</string>
-    <string name="scope_time_all">Everything</string>
+    <!-- #1263: the two time choices for the backup scope (no custom date). scope_time_* are the picker options, scope_value_* the settings-row value; both always name the date. -->
+    <string name="scope_time_since_date">Only photos from %1$s onward</string>
+    <string name="scope_time_all">Include older photos</string>
+    <string name="scope_value_since">%1$s onward</string>
+    <string name="scope_value_all">Including older photos</string>
     <string name="backup_scope_with_time">%1$s · %2$s</string>
     <!-- #1263: home card offering background backup (onboarding no longer asks). -->
-    <string name="background_backup_offer">Turn on background backup: photos back up even when the app isn\'t open</string>
-    <string name="background_backup_offer_action">Turn on</string>
-    <string name="background_backup_offer_dismiss">No thanks</string>
-    <!-- #1263: empty Photos tab, worded by what is in scope. -->
-    <string name="home_empty_camera">Connected to %1$s. Photos you take from now on come home on their own — try taking one.</string>
-    <string name="home_empty_albums">New photos saved to the albums you picked come home on their own.</string>
+    <string name="background_backup_offer">Without background backup, new photos are backed up only when you open P-Pass.</string>
+    <string name="background_backup_offer_action">Turn on background backup</string>
+    <string name="background_backup_offer_dismiss">Don\'t show again</string>
+    <!-- #1263: empty Photos tab (no photos on the computer yet); one wording only. -->
+    <string name="home_empty_albums">No backed-up photos yet. They\'ll appear here.</string>
     <!-- MOB-02 §六: 新相册徽标 -->
     <string name="bucket_new">New</string>
     <string name="backup_scope">Photos to back up</string>
     <string name="backup_scope_none">None selected</string>
-    <!-- #1020: a scope was saved but can't be read — not the same as "None selected". -->
+    <!-- #1020: a scope was saved but can't be read ： not the same as "None selected". -->
     <string name="backup_scope_unreadable">Can’t read the saved selection</string>
     <plurals name="backup_scope_n">
         <item quantity="one">%1$d album</item>
@@ -273,124 +253,108 @@
     <!-- UX-03: 后台规则一行 + 极简设置。MOB-10 起后台条件为「Wi-Fi（可在设置关闭）+ 电量不低」，
          不再要求充电；文案须与 TriggerPolicy.constraintsFor 一致（#513，MOB513BackupConditionCopyTest）。
          #581：auto_backup_rule / auto_backup_pause_hint 是无引用死文案，已删（lint-baseline 同步除名）。 -->
-    <!-- M10 (full-page-states doc) exact copy — "back up only when...", not "require...". -->
+    <!-- M10 (full-page-states doc) exact copy ： "back up only when...", not "require...". -->
     <string name="setting_wifi_only">Back up only on Wi-Fi</string>
     <!-- MOB-02 §三: 开关后果描述 + 当前条件合成句（四种组合各有明确句子） -->
-    <string name="wifi_off_confirm_title">Turn off the Wi-Fi requirement?</string>
-    <string name="wifi_off_confirm_body">Backup will also run on mobile data — it may use your data allowance.</string>
-    <string name="wifi_off_confirm_ok">Turn off anyway</string>
+    <string name="wifi_off_confirm_title">Back up on mobile data?</string>
+    <string name="wifi_off_confirm_body">This uses your mobile data.</string>
+    <string name="wifi_off_confirm_ok">Allow</string>
     <!-- MOB-02 §四事件①: 排队提示 -->
-    <string name="wifi_deferred_hint">Will run once Wi-Fi is available</string>
+    <string name="wifi_deferred_hint">Waiting for Wi-Fi</string>
     <!-- MOB-02 §二: 部分授权引导 -->
-    <string name="partial_access_title">Only some photos are accessible</string>
-    <string name="partial_access_body">Backup needs access to the full library. Grant full photo access to back up everything.</string>
+    <string name="partial_access_title">Access limited to some photos</string>
+    <string name="partial_access_body">Only selected photos will be backed up.</string>
     <string name="partial_access_action">Open settings</string>
     <!-- MOB-94: 全拒那一档，与「只给了部分」分开说 -->
-    <string name="no_media_access_title">No access to your photos</string>
-    <string name="no_media_access_body">Backup needs access to your photo library. Right now it cannot read a single photo, so nothing is being backed up. Grant photo access in Settings.</string>
-    <!-- MOB-03: 相册选择页权限链——拒绝引导（不崩不白屏，说清为什么需要） -->
+    <string name="no_media_access_title">No photo access</string>
+    <string name="no_media_access_body">P-Pass can\'t read photos, so backup has stopped.</string>
+    <!-- MOB-03: 相册选择页权限链：拒绝引导（不崩不白屏，说清为什么需要） -->
     <string name="media_permission_denied_title">Photo access needed</string>
-    <string name="media_permission_denied_body">Backup needs to see your photos and videos so you can pick which albums to back up. Grant access in system settings.</string>
-    <!-- MOB-02 §一: 设置页低调立即备份入口（测试/狗粮用） -->
-    <string name="manual_backup_entry">Back up now</string>
-    <!-- REL-02/DESK-02①: 更新通道零 UI——由构建推导（版本含 -test. → test）。 -->
-    <!-- DEV-01b: 重装识别开关行已隐藏（用户拍板）——strings 随 UI 删除。 -->
-    <!-- DOG-02: 电池白名单引导卡片 -->
-    <string name="dog_battery_title">Background protection off</string>
-    <string name="dog_battery_body">Tip: whitelist P-Pass in battery settings, so the system won\'t interrupt backups while the screen is off.</string>
-    <string name="dog_battery_action">Open settings</string>
-    <string name="reconnect">Scan a new code</string>
+    <string name="media_permission_denied_body">Choosing albums needs access to your photos and videos.</string>
+    <!-- REL-02/DESK-02①: 更新通道零 UI：由构建推导（版本含 -test. → test）。 -->
+    <!-- DEV-01b: 重装识别开关行已隐藏（用户拍板）：strings 随 UI 删除。 -->
+    <string name="reconnect">Pair again</string>
     <!-- 配对已失效（存储端移除/吊销本设备后备份被拒） -->
-    <string name="pairing_lost_title">Pairing with this computer is no longer valid</string>
-    <string name="pairing_lost_body">Your photos are all still on this phone — nothing is lost. The computer may have removed this phone; scan the code again and backup resumes.</string>
-    <string name="photos_lost_title">Lost touch with the home computer</string>
+    <string name="pairing_lost_title">Pairing with the computer is no longer valid</string>
+    <string name="pairing_lost_body">This phone may have been removed on the computer. Backup continues after you pair again.</string>
+    <string name="photos_lost_title">Pairing with the computer is no longer valid</string>
     <plurals name="photos_lost_body_days">
-        <item quantity="one">Backups have been paused for %1$d day. Your photos are all still on this phone — reconnect and they\'ll catch up automatically.</item>
-        <item quantity="other">Backups have been paused for %1$d days. Your photos are all still on this phone — reconnect and they\'ll catch up automatically.</item>
+        <item quantity="one">Backup has been paused for %1$d day. Pair again to resume.</item>
+        <item quantity="other">Backup has been paused for %1$d days. Pair again to resume.</item>
     </plurals>
-    <string name="photos_lost_body_unknown">Backups have been paused. Your photos are all still on this phone — reconnect and they\'ll catch up automatically.</string>
-    <string name="photos_lost_action">Scan the code again to reconnect</string>
+    <string name="photos_lost_body_unknown">Backup is paused. Pair again to resume.</string>
+    <string name="photos_lost_action">Pair again</string>
     <!-- UX-06: 暂停自动备份 + 断开连接 -->
     <string name="auto_backup_pause">Background backup</string>
-    <string name="background_backup_needs_authorization">Allow background access</string>
-    <string name="background_backup_system_stopped">The system stopped background monitoring · check and restart</string>
-    <!-- UI-12 (2026-09-15, second pass): Snackbar feedback for "Fix it" —
+    <string name="background_backup_needs_authorization">System hasn\'t allowed background backup</string>
+    <string name="background_backup_system_stopped">The system stopped background backup</string>
+    <string name="background_backup_action_allow">Allow</string>
+    <string name="background_backup_action_turn_on">Turn on again</string>
+    <!-- UI-12 (2026-09-15, second pass): Snackbar feedback for "Fix it" ：
          the first non-persistent feedback mechanism in this codebase. Only
          covers signals that can be honestly reported (see MainActivity.kt
          comments for why there is no "failed" variant). -->
-    <string name="background_backup_resuming">Reconnecting background monitoring…</string>
+    <string name="background_backup_resuming">Turning background backup back on…</string>
     <!-- #1020 (iOS #971 / #972): transient feedback when a setting wasn't saved or a command failed (UI-12 Snackbar). -->
-    <string name="setting_save_failed">The setting could not be saved on this phone, so it was put back to its previous value. Check the free storage and try again.</string>
-    <string name="scope_save_failed">Your album selection could not be saved on this phone. Check the free storage and try again.</string>
+    <string name="setting_save_failed">Couldn\'t save the setting; it\'s back to its previous value. Check your phone\'s free storage and try again.</string>
+    <string name="scope_save_failed">Couldn\'t save your album selection. Check your phone\'s free storage and try again.</string>
     <string name="command_failed">That didn’t go through. Please try again later.</string>
-    <string name="pair_save_failed">Could not save the pairing on this phone. Check the free storage, then scan again.</string>
-    <string name="background_backup_authorized">Background access granted</string>
-    <string name="background_backup_authorization_denied">Authorization not granted — background backup stays paused</string>
-    <!-- UI-12: shared amber-banner action label for both background-backup
-         states above (distinct from the CellRow-only wording, since this one
-         now also appears on the Photos tab via NoticeHost). -->
+    <string name="pair_save_failed">Couldn\'t save the pairing. Check your phone\'s free storage, then pair again.</string>
+    <string name="background_backup_authorized">Background backup authorized</string>
+    <string name="background_backup_authorization_denied">Not authorized. Background backup can\'t run automatically.</string>
     <!-- #843：没有位置权限时首页常驻提示。 -->
     <string name="location_redacted_notice">Backups don\'t include where photos and videos were taken</string>
-    <string name="location_redacted_notice_action">Allow</string>
-    <string name="background_backup_notice_action">Fix it</string>
-    <!-- UI-12: dismiss action — "I know, don\'t ask again for this state",
+    <string name="location_redacted_notice_action">Allow location access</string>
+    <!-- UI-12: dismiss action ： "I know, don\'t ask again for this state",
          distinct from turning auto-backup off entirely. -->
     <string name="notice_dismiss_label">Got it</string>
     <string name="disconnect">Disconnect from this computer…</string>
-    <string name="disconnect_armed_title">Disconnect for real?</string>
-    <string name="disconnect_armed_body">Backups will stop. Photos on both sides stay put — nothing is deleted. Scan again anytime to reconnect; anything already backed up won\'t re-upload.</string>
-    <string name="disconnect_confirm">Confirm disconnect</string>
-    <string name="disconnect_failed_title">Could not disconnect</string>
-    <string name="disconnect_failed">Could not reach the storage computer. Check that it is on, then try again.</string>
-    <string name="ok">OK</string>
-    <string name="run_failed">This backup didn\'t finish — it will try again automatically, and also with the next new photos or scheduled run.</string>
+    <string name="disconnect_armed_title">Disconnect?</string>
+    <string name="disconnect_armed_body">Backup stops. No photos are deleted on the phone or the computer. After you pair again, backup continues and photos already backed up aren\'t uploaded again.</string>
+    <string name="disconnect_confirm">Disconnect</string>
+    <string name="run_failed">Some photos couldn\'t be backed up.</string>
 
     <!-- Photos -->
-    <string name="photos_title">Family photos</string>
-    <string name="photos_count">%1$d photos</string>
     <!-- T-080 layout v1: photos light filter (all / this phone / family) -->
     <string name="chip_all">All</string>
     <string name="chip_local">This phone</string>
     <string name="chip_family">Family</string>
-    <string name="photos_filter_empty">No photos under this filter yet.</string>
-    <string name="photos_loading">Loading the family library…</string>
-    <string name="photos_unreachable">Could not reach the computer.</string>
+    <string name="photos_filter_empty">No photos match this filter.</string>
+    <string name="photos_loading">Loading the photo library…</string>
+    <string name="photos_unreachable">Can\'t connect to the computer. Make sure it\'s on and P-Pass is open.</string>
     <!-- #1263: Photos tab guide when no album is selected (centred when empty, on top otherwise); the button opens the scope picker. -->
-    <string name="photos_no_albums">No albums chosen for backup yet</string>
+    <string name="photos_no_albums">No albums selected. Nothing will be backed up.</string>
     <string name="photos_choose_albums">Choose albums</string>
-    <!-- SYNC-04: live subscription gave up retrying — same UX-11 philosophy
+    <!-- SYNC-04: live subscription gave up retrying ： same UX-11 philosophy
          (bounded wait -> surface an error -> hand it to the user). -->
-    <string name="photos_live_disconnected">Lost the live connection to the computer.</string>
+    <string name="photos_live_disconnected">Connection to the computer lost.</string>
     <string name="photos_live_retry">Retry</string>
     <string name="photos_live_reconnecting">Reconnecting to the computer…</string>
     <string name="back">Back</string>
-    <string name="video_loading">Fetching the video from home… %1$d%%</string>
-    <string name="video_failed">Could not fetch the video. Try again.</string>
+    <string name="video_loading">Getting the video from your computer… %1$d%%</string>
+    <string name="video_failed">Couldn\'t get the video. Try again.</string>
     <!-- RET-01: 单张取回 = 使用动作（保存到相册 / 用其他应用打开） -->
     <string name="save_to_gallery">Save to Photos</string>
     <string name="open_with_app">Open with…</string>
     <string name="saved_to_gallery">Saved to Photos</string>
     <string name="no_app_for_file">No app on this phone can open this file.</string>
-    <string name="share_download_failed">Could not fetch the original from home. Try again.</string>
+    <string name="share_download_failed">Couldn\'t get the original. Try again.</string>
     <!-- MOB-06: 右上角分享（ACTION_SEND 系统分享面板） -->
     <string name="share">Share</string>
     <string name="share_to">Share to…</string>
 
     <!-- Tabs -->
     <string name="tab_photos">Photos</string>
-    <!-- 2026-08-17: re-checked the design doc via the claude_design MCP —
+    <!-- 2026-08-17: re-checked the design doc via the claude_design MCP ：
          the tab/page name is a static "Settings", not state-dependent. -->
     <string name="tab_settings">Settings</string>
     <!-- MOB-24: 重复保存时说人话，别再写一份重复文件。 -->
-    <string name="already_in_gallery">Already in your gallery</string>
-    <!-- MOB-28: 后台备份被外力停过（force-stop / OEM 清理）的提示卡。 -->
-    <string name="backup_interrupted_body">Automatic background backup was stopped. Photos sync while the app is open; tap to resume automatic backup. Your photos are safe — nothing was lost.</string>
-    <string name="backup_interrupted_action">Resume</string>
+    <string name="already_in_gallery">Already in Photos</string>
     <!-- #1106: 设备身份读不出来时的拒绝启动页。 -->
     <string name="identity_unavailable_title">P-Pass can\'t start right now</string>
-    <string name="identity_unavailable_body">This phone\'s secure key storage isn\'t responding, so P-Pass can\'t connect to your computer. Your photos on this phone and the backups on your computer are not affected.\n\nTry again, or restart the phone and open P-Pass again.</string>
+    <string name="identity_unavailable_body">A system feature on this phone isn\'t responding, so P-Pass can\'t connect to your computer.\n\nTap \"Try again\", or restart the phone and open P-Pass again.</string>
     <string name="identity_reset_failed_body">The reset didn\'t complete. Restart the phone and try again. If it still fails, uninstall and reinstall P-Pass.</string>
     <string name="identity_unavailable_retry">Try again</string>
     <string name="identity_unavailable_reset">Reset and pair again</string>
-    <string name="identity_unavailable_reset_hint">After a reset this phone is a new device: scan the code on your computer again. Photos already backed up are not uploaded twice.</string>
+    <string name="identity_unavailable_reset_hint">After a reset, this phone counts as a new device and must pair again.</string>
 </resources>

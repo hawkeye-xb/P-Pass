@@ -81,8 +81,6 @@ protocol MediaLibrary: AnyObject {
     func knownAlbums() -> Set<String>
     /// 当前系统里实际存在的相册 id；没有完整授权（读不到相册）= nil。不弹授权。
     func existingAlbumIds() async -> Set<String>?
-    /// 「最近项目」的 id（相机拍的照片只在这里，#1263 照片页空状态据此分两种说法）。读不到 = nil。不弹授权。
-    func cameraAlbumId() async -> String?
     /// 写盘失败抛出（#971）：调用方不许当成已保存。
     func saveScope(_ selected: Set<String>, known: Set<String>, since: BackupSince) async throws
 }
@@ -100,13 +98,24 @@ enum PairOutcome: Equatable {
     /// settingSaveFailed = 配对成功，但换新电脑时清旧的后台备份意图没写下来（#1039）：不拦配对，提示用户，
     /// 首次选完范围时会再写一次「关」（#1263）。
     case joined(firstTime: Bool, settingSaveFailed: Bool = false)
-    /// 电脑那边说不（ownerSaidNo）或这次没完成（过期 / 电脑重启 / 版本太旧）。note 是本端挑的补充说明（nil = 只显示通用文案）。
+    /// 电脑上点了「拒绝」（ownerSaidNo）或这次没完成（配对码无效 / 过期 / 电脑重启……，10-29 文案 B6）。
+    /// note 是本端挑的原因行（自带操作，B5）；nil 或 `.denied` = 只有标题。
     case refused(note: PairNote?, ownerSaidNo: Bool)
     /// #1069：版本不兼容，要先更新 [OutdatedSide] 那一端的 P-Pass（不是电脑主人拒绝的）。
     case needsUpdate(OutdatedSide)
     /// 没能完成配对。#1264：diagnostic 只进日志（异常、关闭码、RPC 原因——不上屏，tokens.json rules 第 10 条）；
-    /// note 是本机挑的、可以显示在失败页上的补充说明（nil = 只显示通用文案）。
-    case failed(diagnostic: String, note: String? = nil)
+    /// kind 决定失败页（10-29 文案 B7：扫到的不是配对码单独成页，不套「无法连接电脑」）。
+    case failed(diagnostic: String, kind: PairFailure = .unreachable)
+}
+
+/// 配对没能完成的几种页面（对位 Android `PairFailure`；iOS 没有「码里缺地址」那一支）。
+enum PairFailure: Equatable {
+    /// 连不上电脑（以及其他半路出错）：「无法连接电脑」+ 联网建议。
+    case unreachable
+    /// 扫到 / 粘贴的不是 P-Pass 配对码：只有标题。
+    case notACode
+    /// 电脑已经允许了，配对信息没能写进手机：「加入失败」+ 存储空间（10-29 文案）。
+    case saveFailed
 }
 
 /// 配对页的补充说明：本端按判决 / `reason` 挑，文字是本机文案（#1072 / #1073：线上不再带文案 key）。
@@ -119,21 +128,31 @@ enum PairNote: Equatable, CaseIterable {
     /// #1118：电脑没能证明它用的是同一个验证码（`confirm_b` 验不过），没有保存配对。
     case desktopProofFailed
 
-    /// 与 Android 同一套 key（strings.xml → Localizable.strings）。
-    var key: String {
+    /// 与 Android 同一套 key（strings.xml → Localizable.strings）。电脑上点了「拒绝」没有原因行（10-29 文案 B5：标题已说清）。
+    var key: String? {
         switch self {
         case .tokenInvalid: return "pair_refused_detail_token_invalid"
-        case .denied: return "pair_refused_detail_denied"
+        case .denied: return nil
         case .expired: return "pair_refused_detail_expired"
         case .desktopRestarted: return "pair_refused_detail_restarted"
         case .generic: return "error_generic"
         case .codeWrong: return "pair_refused_detail_code_wrong"
         case .desktopProofFailed: return "pair_desktop_proof_failed"
-        case .qrExpired: return "pair_refused_detail_qr_expired"
+        case .qrExpired: return "pair_qr_expired_body"
         }
     }
 
-    var text: String { L.s(key) }
+    var text: String? { key.map { L.s($0) } }
+
+    /// 失败页标题（10-29 文案 B6 / C10，对位 Android `pairRefusalTitleRes`）：电脑上点了「拒绝」→「电脑拒绝了加入请求」；
+    /// 二维码过期 →「二维码已过期」；其余（含没有说明）→「加入失败」。
+    static func titleKey(_ note: PairNote?, ownerSaidNo: Bool) -> String {
+        if ownerSaidNo { return "pair_refused_title" }
+        return note == .qrExpired ? "pair_qr_expired_title" : "pair_lapsed_title"
+    }
+
+    /// 10-29 文案 B13：通用说明下面那行小字「错误代码：…」的代码 = 正文 key 去前缀（与桌面 `ui.err_code` 同一规则）。
+    var errorCode: String? { self == .generic ? "generic" : nil }
 
     /// pair.request 被拒时的说明（#1072 §5）：配对码无效有专门一句，其余与不认识的 reason 一律通用提示。
     /// 版本不兼容不走这里（单独成判决）。

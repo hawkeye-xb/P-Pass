@@ -150,7 +150,7 @@ describe("#1264 二维码不会过期了还挂在屏幕上", () => {
     expect(cover.textContent).toContain("二维码已过期");
     expect(screen.queryByTestId("pair-qr")).toBeNull();
     // 过期的配对串也不再给复制（弹窗里；首页卡片上的退路会现取新码）。
-    expect(within(cover.closest("[role='dialog']")).queryByRole("button", { name: "无法扫码？复制配对串" })).toBeNull();
+    expect(within(cover.closest("[role='dialog']")).queryByRole("button", { name: "无法扫码？复制配对码" })).toBeNull();
 
     await fireEvent.click(within(cover).getByRole("button", { name: "刷新二维码" }));
     await settle();

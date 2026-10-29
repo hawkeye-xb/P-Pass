@@ -1,5 +1,5 @@
-// T-083 目标 3：失败红卡渲染闸门单测——设计红线「报错永远不出现代码，
-// 先说『照片没丢』」。troubleTextOf 是原始错误串（IrohError dump / 异常
+// T-083 目标 3：失败红卡渲染闸门单测——设计红线「报错永远不出现代码」
+// （10-29 文案定稿起不再要求先说『照片没丢』：安抚话一律删除）。troubleTextOf 是原始错误串（IrohError dump / 异常
 // toString）进 UI 的唯一通道：主文案（main）恒为人话正文，绝不含代码
 // 碎片；原文只落 detail（默认收起的「查看技术详情」+ 诊断导出可达）。
 // 同 BackupStatusTest 手法解析真实 values-zh/strings.xml，把断言落到
@@ -52,27 +52,24 @@ class TroubleTextTest {
         assertEquals("详情 = 原文（仅 trim）", rawIrohError, t.detail)
     }
 
-    // ── 资源级红线：红卡人话正文先说「照片没丢」，自身不含代码 ──────
+    // ── 资源级红线：红卡人话正文只说现状和出路，自身不含代码 ──────
 
     @Test
-    fun redCardHumanCopySaysPhotosSafeAndCarriesNoCode() {
+    fun redCardHumanCopySaysWhatHappenedAndCarriesNoCode() {
         val zh = zhStrings()
-        // 配对失效卡：先说「照片没丢」+ 不含代码碎片（T-083 红线原文案）。
+        // 配对失效卡：10-29 文案定稿删掉安抚话（「一张没丢」），只说现状和出路；不含代码碎片（T-083 红线）。
         val pairingLost = zh.getValue("pairing_lost_body")
-        assertTrue("pairing_lost_body 必须先说照片没丢: $pairingLost", pairingLost.contains("没丢"))
+        assertTrue("pairing_lost_body 要给出路「重新配对」: $pairingLost", pairingLost.contains("重新配对"))
+        assertFalse("pairing_lost_body 不再写安抚话: $pairingLost", pairingLost.contains("没丢"))
         assertFalse("pairing_lost_body 不得含代码碎片", pairingLost.contains("{") || pairingLost.contains("kind:"))
-        // MOB-02 §五（2026-08-11 用户定稿）失败文案：「本次备份没有完成，
-        // 稍后会自动再试；也会随下次新照片或定时任务自动补上」——文案
-        // 职责从「先说照片没丢」改为「说明会自动捞回」，逐字照卡面。
+        // 10-29 文案定稿：失败只自动重试到上限，之后要点「再试一次」——文案不再承诺「会自动再试」。
         // 资源级红线保留：人话正文、不含任何代码碎片。
         val runFailed = zh.getValue("run_failed")
-        assertTrue(
-            "run_failed 必须是用户定稿文案: $runFailed",
-            runFailed.contains("本次备份没有完成") && runFailed.contains("自动再试"),
-        )
+        assertEquals("run_failed 必须是定稿文案", "有照片没能备份。", runFailed)
+        assertFalse("run_failed 不许承诺自动重试: $runFailed", runFailed.contains("自动再试"))
         assertFalse("run_failed 不得含代码碎片", runFailed.contains("{") || runFailed.contains("kind:"))
-        // 哨兵态主按钮文案 = 「重新扫码连接」（T-083 目标 4）。
-        assertEquals("重新扫码连接", zh.getValue("reconnect"))
+        // 配对失效主按钮 = 「重新配对」（进去后可扫码也可输入配对码）。
+        assertEquals("重新配对", zh.getValue("reconnect"))
         // 普通失败主按钮 = 「再试一次」语义。
         assertEquals("再试一次", zh.getValue("try_again"))
     }

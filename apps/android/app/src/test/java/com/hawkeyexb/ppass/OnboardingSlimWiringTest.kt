@@ -61,10 +61,34 @@ class OnboardingSlimWiringTest {
         assertTrue("按钮直达选范围页", main.contains("onChooseAlbums = { enterBucketPicker(s.pairing, firstTime = false) },"))
         for (dir in listOf("values", "values-zh")) {
             val xml = File("src/main/res/$dir/strings.xml").readText()
-            for (k in listOf("photos_no_albums", "photos_choose_albums", "home_empty_camera", "home_empty_albums")) {
+            for (k in listOf("photos_no_albums", "photos_choose_albums", "home_empty_albums")) {
                 assertTrue("$dir 缺 $k", xml.contains("name=\"$k\""))
             }
             assertFalse(xml.contains("name=\"photos_empty\""))
+            // 10-29 文案定稿：照片页空状态只有一种说法，不再按相机相册分「拍一张试试」。
+            assertFalse(xml.contains("name=\"home_empty_camera\""))
+        }
+        assertFalse(main.contains("home_empty_camera"))
+        assertFalse(photos.contains("emptyText"))
+    }
+
+    @Test
+    fun scope_time_always_names_the_date() {
+        // 10-29 文案定稿：时间二选一不再有「从今天起」；选项用 scope_time_*，设置行的值用 scope_value_*（英文更短）。
+        // 反证：设置行还用 scope_time_since_date，或留着 scope_time_today → 红。
+        assertFalse(main.contains("scope_time_today"))
+        val value = main.substringAfter("internal fun scopeValueLabel(").substringBefore("\n\n")
+        assertTrue(value.contains("R.string.scope_value_all"))
+        assertTrue(value.contains("R.string.scope_value_since"))
+        val option = main.substringAfter("internal fun scopeSinceOptionLabel(").substringBefore("\n\n")
+        assertTrue(option.contains("R.string.scope_time_since_date"))
+        assertTrue(main.contains("scopeTimeLabel = scopeValueLabel(context, scopeSince),"))
+        for (dir in listOf("values", "values-zh")) {
+            val xml = File("src/main/res/$dir/strings.xml").readText()
+            assertFalse("$dir 还有 scope_time_today", xml.contains("name=\"scope_time_today\""))
+            for (k in listOf("scope_time_since_date", "scope_time_all", "scope_value_since", "scope_value_all")) {
+                assertTrue("$dir 缺 $k", xml.contains("name=\"$k\""))
+            }
         }
     }
 }

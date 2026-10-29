@@ -50,10 +50,22 @@ final class UIResourceTests: XCTestCase {
         }
     }
 
-    /// iOS 覆盖层真的盖住了 Android 说法（iOS 本轮只做前台备份，不许说「自动进行」）。
+    /// iOS 覆盖层真的盖住了 Android 说法（iOS 点通知只打开 App，指路要写 iOS 设置项的名字，不能说「点开后在系统设置中允许」）。
     func testIOSOverlayWinsOverAndroidWording() throws {
         let zh = try XCTUnwrap(Bundle.main.path(forResource: "zh-Hans", ofType: "lproj").flatMap(Bundle.init(path:)))
-        XCTAssertEqual(zh.localizedString(forKey: "idle_auto_hint", value: nil, table: "IOS"), "打开 P-Pass 时自动备份")
-        XCTAssertEqual(zh.localizedString(forKey: "idle_auto_hint", value: nil, table: nil), "连接 Wi-Fi 且电量不低时自动进行")
+        XCTAssertEqual(zh.localizedString(forKey: "notif_media_none_body", value: nil, table: "IOS"),
+                       "照片权限已关闭，备份已停止。在「设置 › P-Pass › 照片」允许访问。")
+        XCTAssertEqual(zh.localizedString(forKey: "notif_media_none_body", value: nil, table: nil),
+                       "照片权限已关闭，备份已停止。点开后在系统设置中允许访问。")
+    }
+
+    /// 10-29 文案 B12：iOS 首页不再有 idle_auto_hint 状态行，覆盖层里也不留这两条（留着会让人以为还在用）。
+    func testIdleAutoHintIsNotOverriddenOnIOS() throws {
+        for lang in ["zh-Hans", "en"] {
+            let b = try XCTUnwrap(Bundle.main.path(forResource: lang, ofType: "lproj").flatMap(Bundle.init(path:)))
+            for key in ["idle_auto_hint", "idle_auto_hint_any_network"] {
+                XCTAssertEqual(b.localizedString(forKey: key, value: "\u{1}", table: "IOS"), "\u{1}", "\(lang) / \(key)")
+            }
+        }
     }
 }

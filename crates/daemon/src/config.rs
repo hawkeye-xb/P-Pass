@@ -178,6 +178,21 @@ pub(crate) fn ui_err(key: &str, params: &[(&str, &dyn std::fmt::Display)]) -> St
     serde_json::json!({ "key": key, "params": params }).to_string()
 }
 
+/// B13：写**用户选的照片库文件夹**失败时按原因给 key——不能写入、磁盘已满各有一句能照做的话，
+/// 其余仍是 `ui.err_set_library`。只用于操作对象是用户所选文件夹的写入；本机配置（config.toml、
+/// 库 ID 记录）写不进去时换文件夹没用，一律直接用 `ui.err_set_library`。
+pub(crate) fn set_library_io_err(e: &std::io::Error) -> String {
+    use std::io::ErrorKind;
+    let key = match e.kind() {
+        ErrorKind::PermissionDenied | ErrorKind::ReadOnlyFilesystem => {
+            "ui.err_set_library_readonly"
+        }
+        ErrorKind::StorageFull => "ui.err_set_library_disk_full",
+        _ => "ui.err_set_library",
+    };
+    ui_err(key, &[("err", e)])
+}
+
 /// DESK-26 (#209)：TOML basic string 的反转义（只认 `\\ \" \n \r \t`，
 /// 不认识的转义原样吐回）。与 [`read_config_data_dir`] 配对。
 fn unescape_toml_basic(s: &str) -> String {
@@ -938,6 +953,27 @@ mod tests {
     }
 
     const DESK49_FULL_CFG: &str = "data_dir = \"/old/library\"\n\nbind_addr = \"0.0.0.0:41145\"\n\nrelay_urls = []\n\n[telemetry]\nenabled = false\n";
+
+    /// B13：所选文件夹写不进去时按原因分流。反证：`set_library_io_err` 一律回 `ui.err_set_library`，红。
+    #[test]
+    fn set_library_io_err_maps_kind_to_key() {
+        use std::io::{Error, ErrorKind};
+        let key = |k: ErrorKind| -> String {
+            let v: serde_json::Value =
+                serde_json::from_str(&set_library_io_err(&Error::from(k))).unwrap();
+            v["key"].as_str().unwrap().to_string()
+        };
+        assert_eq!(
+            key(ErrorKind::PermissionDenied),
+            "ui.err_set_library_readonly"
+        );
+        assert_eq!(
+            key(ErrorKind::ReadOnlyFilesystem),
+            "ui.err_set_library_readonly"
+        );
+        assert_eq!(key(ErrorKind::StorageFull), "ui.err_set_library_disk_full");
+        assert_eq!(key(ErrorKind::NotFound), "ui.err_set_library");
+    }
 
     /// DESK-49 (#710)：读失败（非 UTF-8）⇒ keyed 错误、文件逐字节不变。
     /// 反证：换回 `read_to_string(..).unwrap_or_default()`，本测试必须红。

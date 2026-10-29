@@ -13,13 +13,14 @@ function codeOf(url) {
   // 2. 先把 CRLF 归一成 LF：仓库里存的是 LF，但 core.autocrlf 让 Windows
   //    检出成 CRLF。下面的断言按 LF 写，不归一化就是同一份源码 Linux 过、
   //    Windows 挂——挂的是行尾，不是代码。
+  // 先滤整行 `//` 注释再剥块注释：行注释里出现 `lib/*.js` 这类路径时，块注释的正则会从那里一路吞到下一个 `*/`。
   return readFileSync(url, "utf8")
     .replace(/\r\n/g, "\n")
-    .replace(/\/\*[\s\S]*?\*\//g, "")
-    .replace(/<!--[\s\S]*?-->/g, "")
     .split("\n")
     .filter((l) => !l.trimStart().startsWith("//"))
-    .join("\n");
+    .join("\n")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/<!--[\s\S]*?-->/g, "");
 }
 
 describe("UI-04b 改名反馈", () => {
@@ -34,7 +35,9 @@ describe("UI-04b 改名反馈", () => {
     expect(src).toContain('import { Toaster } from "$lib/components/ui/sonner"');
     expect(src).toContain('import { toast } from "svelte-sonner"');
     expect(rename).toContain('toast.success(t("ui.rename_saved"');
-    expect(rename).toContain('toast.error(t("ui.rename_failed"');
+    // B13：失败走 flashError（toast.error + 「错误代码」小字）。
+    expect(rename).toContain('flashError(e, "ui.rename_failed")');
+    expect(src).toMatch(/function flashMessage\(msg, tone = "success", description\) \{[\s\S]*?toast\.error\(msg, opts\)/);
     expect(rename).not.toContain("showRenameMessage(");
   });
 

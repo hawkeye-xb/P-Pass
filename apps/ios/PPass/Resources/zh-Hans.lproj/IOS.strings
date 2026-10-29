@@ -1,13 +1,5 @@
 /* iOS 独有或 Android 说法在 iOS 上不成立的文案（#315）。手写；同名 key 盖过 Localizable.strings（由 Android strings.xml 生成）。
-   每条都要说清为什么 iOS 不同——见行尾注释。 */
-
-/* iOS 本轮只做前台备份（规划第一节、IOS-17）：Android 的「自动进行」在 iOS 上不成立。 */
-"idle_auto_hint" = "打开 P-Pass 时自动备份";
-"idle_auto_hint_any_network" = "打开 P-Pass 时自动备份";
-
-/* iOS 的部分授权：指路要写 iOS 的设置项名字。 */
-"partial_access_body" = "备份需要完整相册权限。到「设置 › P-Pass › 照片」选「完整访问」，才能备份全部照片。";
-"no_media_access_body" = "备份需要访问相册。现在一张照片都读不到，所以什么都没在备份——到「设置 › P-Pass › 照片」允许访问。";
+   每条都要说清为什么 iOS 不同：见行尾注释。 */
 
 /* 选范围页：一张照片都读不到（拒绝了照片权限）时不说「没有找到照片」，说没有权限并给「去设置」（iOS 独有：Android 拒绝后回首页，不进这一页）。 */
 "bucket_no_access_title" = "没有照片访问权限";
@@ -15,17 +7,16 @@
 "bucket_no_access_action" = "去设置";
 
 /* 失败通知（#981）：iOS 点通知只打开 App、不会直达系统设置，指路写 iOS 设置项名字；电池优化在 iOS 上不存在，对位的是「后台 App 刷新」。 */
-"notif_media_partial_body" = "相册权限从「完整访问」变成了「部分」，没选中的照片不会备份。到「设置 › P-Pass › 照片」改回「完整访问」。";
-"notif_media_none_body" = "相册权限被关掉了，P-Pass 现在一张照片都读不到，什么都没在备份。到「设置 › P-Pass › 照片」允许访问。";
-"notif_background_refresh_off_title" = "「后台 App 刷新」被关闭了";
-"notif_background_refresh_off_body" = "iOS 不会再在后台唤醒 P-Pass，只有打开 P-Pass 时才备份。可以在「设置 › 通用 › 后台 App 刷新」里重新打开。照片都还在手机上。";
-"notif_background_refresh_restricted_body" = "这台 iPhone 现在不允许 P-Pass 后台刷新（可能被屏幕使用时间或设备管理限制），只有打开 P-Pass 时才备份。照片都还在手机上。";
+"notif_media_partial_body" = "照片权限已改为部分照片，只有选中的照片会备份。在「设置 › P-Pass › 照片」可改回「完整访问」。";
+"notif_media_none_body" = "照片权限已关闭，备份已停止。在「设置 › P-Pass › 照片」允许访问。";
+"notif_background_refresh_off_title" = "「后台 App 刷新」已关闭";
+"notif_background_refresh_off_body" = "现在只有打开 P-Pass 时才会备份。可在「设置 › 通用 › 后台 App 刷新」重新打开。";
+"notif_background_refresh_restricted_body" = "这台 iPhone 限制了 P-Pass 的后台刷新（可能是屏幕使用时间或设备管理），现在只有打开 P-Pass 时才会备份。";
 
 /* 模拟器与没有相机的设备。 */
-"scan_camera_unavailable" = "这台设备用不了相机。请改用配对串连接。";
+"scan_camera_unavailable" = "无法使用相机。请输入配对码连接。";
 
 /* 诊断页（Android 没有这一屏；iOS 为可取证而加，入口在「版本」那一行）。 */
-"setting_diagnostics" = "诊断信息";
 "diag_title" = "诊断信息";
 "diag_section_build" = "这个安装包";
 "diag_version_full" = "完整版本";
@@ -35,9 +26,9 @@
 "diag_min_os" = "最低系统";
 "diag_section_state" = "现在的状态";
 "diag_data_source" = "数据来源";
-"diag_data_source_fake" = "演示数据（界面壳，未连接真实相册与电脑）";
+"diag_data_source_fake" = "演示数据（未连接照片和电脑）";
 "diag_data_source_live" = "真实数据";
-"diag_media_access" = "相册权限";
+"diag_media_access" = "照片权限";
 "diag_media_full" = "完整";
 "diag_media_partial" = "部分";
 "diag_media_none" = "无";
@@ -51,58 +42,36 @@
 "diag_copied" = "已复制";
 
 /* iOS 新增的两个等待原因（PPassCore WaitReason：executionBlocked 对位 Android FGS_BLOCKED；originalUnavailable 是 iCloud 原图，#311 D4）。 */
-"state_waiting_execution_blocked" = "离开 P-Pass 后系统暂停了备份。回到 P-Pass 就会接着传。";
-"state_waiting_original_unavailable" = "有的照片原图在 iCloud 里，联网后会先下载再备份。";
+"state_waiting_execution_blocked" = "离开 P-Pass 后系统暂停了备份，回到 P-Pass 后继续。";
+"state_waiting_original_unavailable" = "部分原图在 iCloud，联网后下载并备份。";
 
 /* 失败提示框的确认按钮（#971）。完成页现在用 Android 的「开启后台备份 / 不开启后台备份」（#982）。 */
-"ok_got_it" = "好的";
+"ok_got_it" = "好";
 
 /* #1092：原图正从 iCloud 下载（还没开始传给电脑）。参数：下载百分比、第几张、共几张。 */
 "state_fetching_icloud" = "正在从 iCloud 获取原图 %1$ld%% · 第 %2$ld / %3$ld 张";
 
 /* PPassCore WaitReason.localStorageFull：手机自己空间不够放临时原图。 */
-"state_waiting_local_storage_full" = "手机存储空间不够，腾出一些空间后接着备份。";
+"state_waiting_local_storage_full" = "手机存储空间不足。腾出空间后继续备份。";
 
 /* #975：iOS 系统授权框只弹一次，被拒后只能去系统设置（Android 会再弹一次申请框）。 */
-"rule_notify_denied_hint" = "通知已在系统设置里关闭。点开关前往系统设置打开。";
+"rule_notify_denied_hint" = "通知已在系统设置中关闭。点开关前往设置。";
 
 /* #971 / #972：一过性提示的弹框标题。Android 用无标题的 Snackbar；提示正文两端共用（#1020，由 Android strings.xml 生成）。 */
 "notice_title" = "没能完成";
 
 /* #1013：本地网络权限是 iOS 独有的系统弹窗（Android 无对应），弹出前在扫码页先说明用途。 */
-"scan_local_network_note" = "扫码后，iPhone 会请求「本地网络」权限：用于在同一 Wi‑Fi 下找到你的电脑，传输照片。请点「允许」。";
+"scan_local_network_note" = "扫码后 iPhone 会请求「本地网络」权限，用于在同一 Wi‑Fi 下找到电脑并传输照片。请点「允许」。";
 
-/* 设置页后台刷新告示（对位 Android background_backup_system_stopped 的句式：事实 · 后果，配「去处理」）。iOS 的系统开关叫「后台 App 刷新」。 */
+/* 设置页后台刷新告示（对位 Android background_backup_system_stopped 的句式：事实 · 后果，配「去设置」，打开系统设置）。iOS 的系统开关叫「后台 App 刷新」。 */
 "background_refresh_off_notice" = "后台 App 刷新已关闭 · 只在打开 P-Pass 时备份";
 "background_refresh_restricted_notice" = "后台刷新被系统限制 · 只在打开 P-Pass 时备份";
+"background_refresh_notice_action" = "去设置";
 
 /* 读屏（VoiceOver）：网格缩略图的标签。Android 用的是哈希前缀，读出来没有意义，iOS 单独给一句人话。 */
 "a11y_thumb_video" = "视频";
 "a11y_thumb_photo" = "照片";
 
-/* ── #1263 过渡段 ──────────────────────────────────────────────
-   下面的 key 是 Android 同名文案的临时副本：本分支不改 apps/android，Localizable.strings 又只能由 gen-strings.py 从 Android strings.xml 生成。
-   Android 那边落地后跑 just ios-strings，再把本段里标「过渡」的条目删掉（不删会永远盖住 Android 的文案）。标「iOS 独有」的留下。 */
-
-/* 过渡（#1263）：选范围页「备份哪些照片」= 相册 + 时间二选一；首次「开始备份」（bucket_start）、编辑「保存」。 */
-"bucket_title" = "备份哪些照片";
-"bucket_save" = "保存";
-"scope_time_today" = "从今天起";
-"scope_time_since_date" = "从 %1$@ 起";
-"scope_time_all" = "全部";
-/* 过渡（#1263）：设置行改名，值 = backup_scope_n · 时间档。 */
-"backup_scope" = "备份哪些照片";
-"backup_scope_with_time" = "%1$@ · %2$@";
-/* 过渡（#1263）：后台备份默认关，「之后什么都不用做」不再成立。 */
-"welcome_step3" = "3 · 选好要备份哪些照片";
-/* 过渡（#1263）：照片页没选相册的引导与空状态。%1$@ = 电脑名。 */
-"photos_no_albums" = "还没选要备份的相册";
-"photos_choose_albums" = "选择相册";
-"home_empty_camera" = "已连上%1$@。从现在起拍的照片会自动回家，拍一张试试。";
-"home_empty_albums" = "新存进所选相册的照片会自动回家。";
-/* 过渡（#1263）：首页后台备份引导卡的按钮。 */
-"background_backup_offer_action" = "开启";
-"background_backup_offer_dismiss" = "不用了";
-/* iOS 独有（#1263）：首页后台备份引导卡正文。Android 说「之后不打开 App 也会自动备份」并弹电池白名单；iOS 的后台只能由系统挑时机，
-   不能承诺（#343：不写频率、不假装能保证），也没有 App 内的授权框。 */
-"background_backup_offer" = "开启后台备份：离开 P-Pass 后，iOS 会找机会接着备份；何时执行由系统决定";
+/* iOS 独有（#1263，10-29 文案定稿 C6）：设置页后台备份引导卡正文。iOS 的后台只能由系统挑时机，不能承诺（#343：不写频率、不假装能保证），
+   也没有 App 内的授权框；按钮「开启后台备份」「不再提示」与 Android 共用（由 strings.xml 生成）。 */
+"background_backup_offer" = "离开 App 后也能备份新照片。";

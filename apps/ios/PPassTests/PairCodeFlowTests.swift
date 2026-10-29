@@ -129,6 +129,13 @@ final class PairCodeFlowTests: XCTestCase {
         XCTAssertEqual(v, .qrExpired)
         XCTAssertFalse(desk.methods.contains(Methods.pairRequest))
         XCTAssertEqual(v.outcome, .refused(note: .qrExpired, ownerSaidNo: false))
+        // 10-29 文案 C10：单独一页，标题「二维码已过期」、正文「二维码 10 分钟内有效。」（对位 Android）。
+        XCTAssertEqual(PairNote.titleKey(.qrExpired, ownerSaidNo: false), "pair_qr_expired_title")
+        XCTAssertEqual(PairNote.qrExpired.key, "pair_qr_expired_body")
+        XCTAssertEqual(PairNote.titleKey(.denied, ownerSaidNo: true), "pair_refused_title")
+        XCTAssertEqual(PairNote.titleKey(.tokenInvalid, ownerSaidNo: false), "pair_lapsed_title")
+        XCTAssertEqual(PairNote.titleKey(nil, ownerSaidNo: false), "pair_lapsed_title")
+        XCTAssertNotEqual(L.s("pair_qr_expired_title"), "pair_qr_expired_title", "文案已打包")
     }
 
     /// hello 刚放行、提交那一拍码到期（新连接被 401 关掉）：同样是二维码过期。
@@ -144,9 +151,9 @@ final class PairCodeFlowTests: XCTestCase {
         let desk = FakeDesk([Methods.hello: [.throwing(FfiError.PeerClosed(nodeId: F.deskNode, code: 0))]])
         let v = try await F.loop(desk).run(token: "t", deviceName: "d")
         guard case .unreachable = v else { return XCTFail("\(v)") }
-        guard case .failed(let diagnostic, let note) = v.outcome else { return XCTFail("\(v.outcome)") }
+        guard case .failed(let diagnostic, let kind) = v.outcome else { return XCTFail("\(v.outcome)") }
         XCTAssertFalse(diagnostic.isEmpty)
-        XCTAssertNil(note)
+        XCTAssertEqual(kind, .unreachable)
     }
 
     /// 连续失败预算：confirm 一直失败 → 3 轮后判不可达（不无限重发）。

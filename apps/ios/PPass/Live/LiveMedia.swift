@@ -65,11 +65,6 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
         return Set(catalog.listAlbums().map(\.id))
     }
 
-    func cameraAlbumId() async -> String? {
-        guard auth.currentLevel() != .notDetermined else { return nil }
-        return PHAssetCollection.fetchAssetCollections(with: .smartAlbum, subtype: .smartAlbumUserLibrary, options: nil).firstObject?.localIdentifier
-    }
-
     func saveScope(_ selected: Set<String>, known: Set<String>, since: BackupSince) async throws {
         do { try scopeStore().saveScope(selected: selected, allCurrent: known, since: since) } catch {
             AppLog.log("backup-scope: save failed: \(error)")

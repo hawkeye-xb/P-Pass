@@ -1,7 +1,7 @@
 <script>
   import { invoke } from "@tauri-apps/api/core";
   import { Button } from "$lib/components/ui/button";
-  import { errDetail, t } from "$lib/i18n.js";
+  import { errCodeLine, errMessage, t } from "$lib/i18n.js";
   import { createWizardFlow, stepBar } from "$lib/wizardFlow.js";
 
   // DESK-15：按钮视觉合同收进 Button 组件本身（primary/secondary/danger/
@@ -31,15 +31,15 @@
   // 2026-08-17：一键关闭自动睡眠——独立的 busy/error 状态，不复用向导
   // 全局 busy（那个会连累"继续"按钮跟着置灰，这里只是个局部小动作）。
   let sleepFixBusy = $state(false);
-  let sleepFixError = $state("");
+  let sleepFixError = $state(null); // B13：{ text, code }
   async function fixAutoSleep() {
     sleepFixBusy = true;
-    sleepFixError = "";
+    sleepFixError = null;
     try {
       await invoke("disable_auto_sleep");
       power = await invoke("power_hint"); // 刷新，成功的话这里应该变成 never
     } catch (e) {
-      sleepFixError = errDetail(e);
+      sleepFixError = errMessage(e, "ui.wizard_sleep_fix_failed_mac");
     } finally {
       sleepFixBusy = false;
     }
@@ -67,7 +67,9 @@
   </div>
 
   {#if view.error}
-    <p class="m-0 rounded-md bg-act-bg px-[14px] py-[10px] text-[15px] text-act">{view.error}</p>
+    <p class="m-0 rounded-md bg-act-bg px-[14px] py-[10px] text-[15px] text-act">
+      {view.error.text}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(view.error)}</span>
+    </p>
   {/if}
 
   {#if view.step === 1}
@@ -127,8 +129,12 @@
             </Button>
             <Button variant="secondary" size="compact" onclick={() => invoke("open_power_settings")}>{t("ui.wizard_open_power_settings")}</Button>
           </div>
+          <!-- B3：点「关闭自动睡眠」会弹系统管理员授权框，先说清要输入登录密码（本视图只在 macOS）。 -->
+          <p class="m-0 text-[13px] leading-[1.5] text-ink-60">{t("ui.wizard_sleep_fix_needs_password")}</p>
           {#if sleepFixError}
-            <p class="m-0 text-[13px] text-act">{t("ui.wizard_sleep_fix_failed_mac", { err: sleepFixError })}</p>
+            <p class="m-0 text-[13px] text-act">
+              {sleepFixError.text}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(sleepFixError)}</span>
+            </p>
           {/if}
         </div>
       {:else}
@@ -141,7 +147,7 @@
     </div>
   {:else if view.step === 3}
     <!-- 设计稿 v2：第 3 步 = 「设为常驻服务」——先讲清会弹什么（#481：
-         开机自启通知 + 本地网络授权弹窗）/不会做什么/被拦怎么办，点「完成」才真正启动 daemon（含 autostart
+         开机自启通知 + 本地网络授权弹窗）/不会做什么（B1 起不再写「如果被拦」，拦截说明在官网下载页），点「完成」才真正启动 daemon（含 autostart
          注册，finishSetup）。 -->
     <div class="flex flex-col gap-4">
       <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_service_title")}</h2>
@@ -161,13 +167,9 @@
           <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">{t("ui.wizard_notice_only_label")}</span>
           <span class="text-[14px] leading-[1.5] text-ink-60">{t("ui.wizard_autostart_notice_mac")}</span>
         </div>
-        <div class="flex gap-3 border-b border-divider px-[18px] py-[13px]">
+        <div class="flex gap-3 px-[18px] py-[13px]">
           <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">{t("ui.wizard_allow_label")}</span>
           <span class="text-[14px] leading-[1.5] text-ink-60">{t("ui.wizard_local_network_mac")}</span>
-        </div>
-        <div class="flex gap-3 px-[18px] py-[13px]">
-          <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">{t("ui.wizard_blocked_label")}</span>
-          <span class="text-[14px] leading-[1.5] text-ink-60">{t("ui.wizard_blocked_mac")}</span>
         </div>
       </div>
     </div>

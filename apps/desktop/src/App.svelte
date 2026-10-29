@@ -72,6 +72,7 @@
     isPairCode,
     normalizePairCode,
     pairConfirmToast,
+    isKnownDevice,
   } from "./lib/pending.js";
   import { requestId, syncRequests, setPhase, removeRequest } from "./lib/pairRequests.js";
   import { qrPhase } from "./lib/pairQr.js";
@@ -89,7 +90,7 @@
   // I18N-03 (#492): t() 抽到 lib/i18n.js 共享（向导、lib/*.js 同源）；
   // T-081 暂写死在组件里的导航/页面文案已全部收编进字典。errText 负责
   // 把 Rust 壳回来的错误（key + 参数 / 裸已注册 key；不认识的一律通用错误，原串只进 console）渲染成人话。
-  import { t, errText, errDetail, errKey, getLocale, readLangPref, applyLangPref } from "./lib/i18n.js";
+  import { t, errText, errMessage, errCodeLine, errKey, getLocale, readLangPref, applyLangPref } from "./lib/i18n.js";
 
   // ---- T-081 布局 v1：侧边栏四页（总览 / 家人与设备 / 活动记录 / 设置，
   // 照片库并入设置）。hash 同步只为可验证/可深链，不引入路由依赖。
@@ -158,7 +159,7 @@
     try {
       await applyLangPref(pref, { invoke, reload: () => location.reload() });
     } catch (e) {
-      flashMessage(t("ui.save_failed", { err: errDetail(e) }), "error");
+      flashError(e, "ui.save_failed");
     }
   }
 
@@ -180,7 +181,7 @@
       await invoke("stop_daemon");
       flashMessage(t("ui.service_stopped"), "warning");
     } catch (e) {
-      flashMessage(t("ui.stop_failed", { err: errDetail(e) }), "error");
+      flashError(e, "ui.stop_failed");
     }
     // DESK-63 (#946)：状态点由 Rust 的 service-state 事件立刻更新；这里只
     // 重新对账数据与 wizard_state（user_stopped 刚落盘，向导门靠它不把人
@@ -192,7 +193,7 @@
   // 失败原因，成功为 null）。和窗口里的按钮同一个 stop_daemon、同一份标记。
   async function onServiceStopped(ev) {
     const err = ev?.payload;
-    if (err) flashMessage(t("ui.stop_failed", { err: errDetail(err) }), "error");
+    if (err) flashError(err, "ui.stop_failed");
     else flashMessage(t("ui.service_stopped"), "warning");
     await syncServiceState();
   }
@@ -209,7 +210,7 @@
     try {
       await invoke("start_daemon");
     } catch (e) {
-      flashMessage(t("ui.start_failed", { err: errDetail(e) }), "error");
+      flashError(e, "ui.start_failed");
     } finally {
       setTimeout(() => (starting = false), 3000);
     }
@@ -235,7 +236,7 @@
   let status = $state(null);
   // DESK-63 (#946): a devices.list failure is a data error, not a service
   // outage. It gets its own state and its own message.
-  let devicesError = $state("");
+  let devicesError = $state(null); // B13：{ text, code }
   // #413 §7 / #1044 B11：低空间通知何时该弹由 daemon 判定并持久化（阈值、
   // 回差、布防状态都在 crates/daemon/src/low_space.rs）。status 带出待展示的
   // 那一次（low_space_notice），这里弹完就 ack 消费掉；重开 App 不再重弹。
@@ -286,7 +287,7 @@
   // AUDIT-07（#499）：audit.list 读失败的原因。这个列表是活动记录页的唯一数据源，
   // 读不到时页面会渲染成空——空列表看起来就是「还没有任何记录」，用户会以为备份
   // 从未发生过。所以失败必须显示出来（成功一次就清掉）。
-  let auditError = $state("");
+  let auditError = $state(null); // B13：{ text, code }
   // T1 (H-10b): 界面显示版本号——报问题/排查时先知道装的是什么版本。
   let version = $state("");
   // #1044 B13：壳版本要随 status 报给 daemon 才有 shell_relation。首轮 refresh
@@ -334,10 +335,18 @@
   }
 
   // UI-04b：所有短反馈统一委托官方 Sonner；成功/等待/错误分别走三种含义色。
-  function flashMessage(msg, tone = "success") {
-    if (tone === "error") toast.error(msg);
-    else if (tone === "warning") toast.warning(msg);
-    else toast.success(msg);
+  function flashMessage(msg, tone = "success", description) {
+    const opts = description ? { description } : undefined;
+    if (tone === "error") toast.error(msg, opts);
+    else if (tone === "warning") toast.warning(msg, opts);
+    else toast.success(msg, opts);
+  }
+
+  // B13：报错 toast = 正文 + 「错误代码」小字。内层是已登记 key 就显示内层（出路最具体），
+  // 否则显示包装句；原始内容只进 console（lib/i18n.js errMessage）。
+  function flashError(e, wrapperKey) {
+    const m = errMessage(e, wrapperKey);
+    flashMessage(m.text, "error", errCodeLine(m));
   }
 
   // 首页提示分级 L1：备份完全停了（服务没在跑 / 找不到照片库）。在场时它就是首页结论，见 lib/homeBlocker.js。
@@ -349,12 +358,13 @@
   const libraryAlert = createLibraryAlert(invoke, getLocale);
   let lastRelocateError = null;
   let libraryRecheckBusy = $state(false);
-  let libraryStillMissing = $state(false);
   async function recheckLibraryNow() {
     libraryRecheckBusy = true;
-    libraryStillMissing = false;
     try {
-      libraryStillMissing = (await recheckLibrary(callDaemon)) === "still_missing";
+      // 10-29 定稿：「仍然找不到」是一次性结果，用 toast 说；阻断卡片本身不变。
+      if ((await recheckLibrary(callDaemon)) === "still_missing") {
+        flashMessage(t("ui.library_missing_still"), "warning");
+      }
     } catch (_) {
       // 后台正在带着库重启（连接断了）或暂时连不上：等下一次 refresh 看新状态。
     } finally {
@@ -401,12 +411,12 @@
         const d = await call("devices.list", { include_departed: true });
         devices = d.devices ?? [];
         lastBackupOverallWire = d.last_backup_overall ?? null;
-        devicesError = "";
+        devicesError = null;
       } catch (e) {
         // DESK-63 (#946): a data error stays in the data area. It must not
         // flip the service state — that was the bug: any failure in this
         // try-block used to make the overview say "not running".
-        devicesError = errText(e);
+        devicesError = errMessage(e);
       }
       nowMs = Date.now();
       // T-091: 水位数据单独容错——拿不到不拖垮整页（保留上次值）
@@ -420,12 +430,12 @@
       try {
         const au = await call("audit.list", { limit: 500, visibility: "user" });
         auditEvents = (au.events ?? []).slice().sort((x, y) => (y.ts ?? 0) - (x.ts ?? 0));
-        auditError = "";
+        auditError = null;
       } catch (e) {
         // AUDIT-07（#499）：这里原来是 `catch (_) {}`——失败被吞掉，活动记录页
         // 只是变空（跟「确实还没有记录」长得一模一样）。改成把错误显示在那一页上。
         auditEvents = [];
-        auditError = errDetail(e);
+        auditError = errMessage(e, "ui.log_load_failed");
       }
     } catch (e) {
       // DESK-63 (#946): only the `status` probe can reach here now
@@ -563,7 +573,7 @@
       const svg = await invoke("pair_qr_svg", { text: r.qr });
       qrDataUrl = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
     } catch (e) {
-      if (!auto) flashMessage(t("ui.pair_failed", { err: errDetail(e) }), "error");
+      if (!auto) flashError(e, "ui.pair_failed");
     } finally {
       qrRefreshing = false;
     }
@@ -679,7 +689,7 @@
         // #1118：码错 = 这次申请作废（daemon 已撤）。块停在终态，主人点「知道了」才消失。
         pairRequests = setPhase(pairRequests, id, "failed");
       } else {
-        flashMessage(t("ui.confirm_failed", { err: errDetail(e) }), "error");
+        flashError(e, "ui.confirm_failed");
         // 还在队列里就回到可输入；不在了下一轮对齐会收掉。
         pairRequests = setPhase(pairRequests, id, "input");
       }
@@ -700,7 +710,7 @@
       flashMessage(t("ui.revoked", { name }), "warning");
       await refresh();
     } catch (e) {
-      flashMessage(t("ui.revoke_failed", { err: errDetail(e) }), "error");
+      flashError(e, "ui.revoke_failed");
     }
   }
 
@@ -728,7 +738,7 @@
       toast.success(t("ui.rename_saved", { name: r.name ?? trimmed }));
       await refresh();
     } catch (e) {
-      toast.error(t("ui.rename_failed", { err: errDetail(e) }));
+      flashError(e, "ui.rename_failed");
     }
   }
 
@@ -737,7 +747,7 @@
       // #1150：揭示由壳完成，网页不碰路径。
       await openLibraryDir({ reveal: () => invoke("reveal_library") });
     } catch (e) {
-      flashMessage(t("ui.open_failed", { err: errDetail(e) }), "error");
+      flashError(e, "ui.open_failed");
     }
   }
 
@@ -749,7 +759,7 @@
       // #1150：路径由壳向 daemon 取并揭示，网页不经手。
       await invoke("reveal_device_folder", { node_id: nodeId });
     } catch (e) {
-      flashMessage(t("ui.device_open_folder_failed", { err: errDetail(e) }), "error");
+      flashError(e, "ui.device_open_folder_failed");
     }
   }
 
@@ -766,7 +776,7 @@
     try {
       check = await invoke("relocate_library", { dryRun: true });
     } catch (e) {
-      flashMessage(t("ui.save_failed", { err: errDetail(e) }), "error");
+      flashError(e, "ui.save_failed");
       return;
     }
     const body = [t("ui.change_body", { dir: check?.to ?? dir })];
@@ -782,7 +792,7 @@
       await invoke("relocate_library", { dryRun: false });
       flashMessage(t("ui.change_saved", { dir: check?.to ?? dir }));
     } catch (e) {
-      flashMessage(t("ui.save_failed", { err: errDetail(e) }), "error");
+      flashError(e, "ui.save_failed");
     }
   }
 
@@ -805,7 +815,7 @@
       if (!r) return;
       flashMessage(t("ui.logs_exported", { path: r.zip }));
     } catch (e) {
-      flashMessage(t("ui.export_failed", { err: errDetail(e) }), "error");
+      flashError(e, "ui.export_failed");
     } finally {
       exportingLogs = false;
     }
@@ -1083,7 +1093,7 @@
   // idle → checking → (up-to-date | available → downloading → installing → installed → relaunching) | failed
   let updatePhase = $state("idle");
   let updateProgress = $state(null); // 0..100；null = 总长未知（不画百分比）
-  let updateError = $state("");
+  let updateError = $state(null); // B13：{ text, code }
   let pendingVersion = $state("");
   // 忙的时候按钮必须禁用：既防重复点击（同一份更新被下两遍），也让"过程就在眼前"。
   const updateBusy = $derived(
@@ -1136,7 +1146,7 @@
   // 换壳（UPD-06）：壳旧时点「立即重启 App」。Rust 侧先试系统路径（launchd
   // kickstart：杀 + 拉都不在壳里发生），不行退化到壳自己重启；都走不到才报错。
   async function relaunchShellNow() {
-    updateError = "";
+    updateError = null;
     // 先进 relaunching：按钮随 updateBusy 置灰，等 launchctl 期间不能再点一次。
     updatePhase = "relaunching";
     try {
@@ -1177,7 +1187,7 @@
         flashMessage(t("ui.restart_service_no_change", { version: r.new_version ?? "?" }), "warning");
       }
     } catch (e) {
-      flashMessage(t("ui.restart_service_failed", { err: errDetail(e) }), "error");
+      flashError(e, "ui.restart_service_failed");
     } finally {
       restartingService = false;
     }
@@ -1187,7 +1197,7 @@
     // UPD-06 (#616)：防重复点击（按钮同时禁用，双保险）。旧实现两个都没有，
     // 同一份更新会被下两遍。
     if (updateBusy) return;
-    updateError = "";
+    updateError = null;
     updateProgress = null;
     updatePhase = "checking";
     let update;
@@ -1200,7 +1210,7 @@
       // （10-01 真机就是被这句误导的）。
       console.warn("[updater] check failed:", e);
       updatePhase = "failed";
-      updateError = errDetail(e);
+      updateError = errMessage(e, "ui.update_failed");
       return;
     }
     if (!update) {
@@ -1211,6 +1221,9 @@
     updatePhase = "available";
     const ok = await confirmDialog(t("ui.update_available", { version: update.version }), {
       title: "P-Pass",
+      // B15：按钮直接说点了会怎样。
+      okLabel: t("ui.update_install_btn"),
+      cancelLabel: t("ui.update_cancel_btn"),
     });
     if (!ok) {
       updatePhase = "idle";
@@ -1239,16 +1252,23 @@
       // 这里（它自己的老文案 + 老动作），这也是"存量壳只能靠 daemon owner 兜"的原因。
       // relaunch_shell：先系统路径（launchd kickstart，杀+拉都不在壳里发生），
       // 不行退化到壳自己重启；两处都走不到才提示手动完全退出重开。
-      await messageDialog(t("ui.update_installed"), { title: "P-Pass", kind: "info" });
+      await messageDialog(t("ui.update_installed"), {
+        title: "P-Pass",
+        kind: "info",
+        // B15：按钮写「重启」（message 的 okLabel 已弃用，用 buttons，插件 2.4.0 起支持）。
+        buttons: { ok: t("ui.update_restart_btn") },
+      });
       updatePhase = "installed";
       await relaunchShellNow();
     } catch (e) {
       // 失败时的自愈已在 runUpdate 里做过（#1046：用户主动停过的不拉）。
       const msg = String(e);
+      // B13：系统原文只进 console，界面只说人话 + 错误代码。
+      console.warn("[updater] update failed:", e);
       // UPD-06 (#616)：失败也是一个**显式状态**（原因留在界面上，可重试），
       // 不再只靠一闪而过的 toast。
       updatePhase = "failed";
-      updateError = msg;
+      updateError = errMessage("ui.update_failed");
       // Windows「文件被占用」这类失败（pause/resume 也清不掉的：第三方占用、
       // 杀软扫描握着句柄等）给用户一句能照做的话，而不是系统原文。判据在
       // Rust 侧（#1043：按系统错误码，由平台适配器回答），这里只拿 key。
@@ -1256,7 +1276,8 @@
       try {
         key = await invoke("update_failure_key", { message: msg });
       } catch (_) {}
-      flashMessage(t(key, { err: msg }), "error");
+      updateError = errMessage(key, "ui.update_failed");
+      flashError(key, "ui.update_failed");
     }
   }
 
@@ -1477,7 +1498,7 @@
     try {
       await invoke("reveal_asset", { hash: photoViewer.hash });
     } catch (e) {
-      flashMessage(t("ui.reveal_failed", { err: errDetail(e) }), "error");
+      flashError(e, "ui.reveal_failed");
     }
   }
 
@@ -1707,9 +1728,6 @@
               <Button class="mt-[12px] self-start" disabled={libraryRecheckBusy} onclick={recheckLibraryNow} data-testid="library-recheck">
                 {t("ui.library_missing_recheck")}
               </Button>
-              {#if libraryStillMissing}
-                <p class="m-0 text-[13px] leading-[1.6] text-ink-60" role="status">{t("ui.library_missing_still")}</p>
-              {/if}
             </Card>
           {:else}
             {#if pendingCount > 0 && !showConfirmModal}
@@ -1719,7 +1737,8 @@
                   <!-- 设计稿 v2：横幅直接点名刚扫码的设备（pendingList 里
                        有真实名字）；列表为空时退回数量摘要（老 daemon 过渡）。 -->
                   {#if pendingList.length > 0}
-                    <span class="text-[14px] text-ink-60">{t("ui.pending_banner_text", { name: pendingList[0].name })}</span>
+                    <!-- B9：已配对过的设备说「请求重新加入」，与审批弹窗标题同词。 -->
+                    <span class="text-[14px] text-ink-60">{t(isKnownDevice(pendingList[0]) ? "ui.pending_banner_text_known" : "ui.pending_banner_text", { name: pendingList[0].name })}</span>
                   {:else}
                     <span class="text-[14px] text-ink-60">{t("ui.pending_pairs", { n: pendingCount })}</span>
                   {/if}
@@ -1781,7 +1800,7 @@
                        this one data call failed. Say it here, never turn the
                        service badge red for it. -->
                   <p class="m-0 mb-[10px] text-[13px] leading-[1.6] text-act" data-testid="devices-error">
-                    {devicesError}
+                    {devicesError.text}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(devicesError)}</span>
                   </p>
                 {/if}
                 {#if devices.filter((d) => d.removal === "none").length === 0}
@@ -1877,7 +1896,7 @@
           <Card size="flush" class="min-h-0 flex-1 overflow-y-auto">
             {#if devicesError}
               <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-act" data-testid="devices-error">
-                {devicesError}
+                {devicesError.text}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(devicesError)}</span>
               </p>
             {/if}
             {#if devices.length === 0}
@@ -2090,7 +2109,7 @@
                    吞掉，这一页只是变空——和「确实还没有任何记录」长得一模一样，
                    用户会以为备份从没发生过。 -->
               <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-act" data-testid="audit-error"
-                >{t("ui.log_load_failed", { err: auditError })}</p
+                >{auditError.text}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(auditError)}</span></p
               >
             {:else if visibleAudit.length === 0}
               <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.log_empty")}</p>
@@ -2190,7 +2209,7 @@
                     {:else if updatePhase === "installed" || updatePhase === "relaunching"}
                       <span>{t("ui.update_installed_state")}</span>
                     {:else if updatePhase === "failed"}
-                      <span class="text-act">{t("ui.update_failed", { err: updateError })}</span>
+                      <span class="text-act">{updateError?.text}{#if updateError}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(updateError)}</span>{/if}</span>
                       <Button variant="secondary" class="ml-[10px]" onclick={() => checkForUpdate(true)}>
                         {t("ui.update_retry")}
                       </Button>
@@ -2313,7 +2332,7 @@
             {#if many}<p class="pending-name">{item.name}</p>{/if}
             {#if sub}<p class="pending-meta">{sub}</p>{/if}
             {#if req.phase === "failed"}
-              <p class="pending-error" role="alert">{t("ui.err_pair_code_wrong")}</p>
+              <p class="pending-error" role="alert">{t("ui.err_pair_code_wrong")}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(errMessage("ui.err_pair_code_wrong"))}</span></p>
               <div class="pending-actions" data-testid="pending-actions">
                 <Button onclick={() => showQrAgain(req.id)}>{t("ui.pair_show_qr_again")}</Button>
               </div>

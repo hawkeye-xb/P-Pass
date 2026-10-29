@@ -2,7 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { Button } from "$lib/components/ui/button";
   import { createWizardFlow, stepBar } from "$lib/wizardFlow.js";
-  import { t } from "$lib/i18n.js";
+  import { errCodeLine, t } from "$lib/i18n.js";
 
   // Windows onboarding — separate component, not a branch inside the
   // macOS Wizard.svelte (2026-08-26, W1 real-box run: 用户明确要求整块
@@ -45,7 +45,9 @@
   </div>
 
   {#if view.error}
-    <p class="m-0 rounded-md bg-act-bg px-[14px] py-[10px] text-[15px] text-act">{view.error}</p>
+    <p class="m-0 rounded-md bg-act-bg px-[14px] py-[10px] text-[15px] text-act">
+      {view.error.text}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(view.error)}</span>
+    </p>
   {/if}
 
   {#if view.step === 1}
@@ -93,20 +95,17 @@
     <div class="flex flex-col gap-4">
       <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.wizard_service_title")}</h2>
       <p class="m-0 text-[15px] leading-[1.7] text-ink-60">{t("ui.wizard_service_body")}</p>
-      <div class="rounded-xl border border-border">
-        {#if hosting}
-          <div class="flex gap-3 border-b border-divider px-[18px] py-[13px]">
+      <!-- B1：不再写「如果被拦」（拦截说明在官网下载页）；只剩「会申请什么」一行，形态没问到就整块不显示。 -->
+      {#if hosting}
+        <div class="rounded-xl border border-border">
+          <div class="flex gap-3 px-[18px] py-[13px]">
             <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">{t("ui.wizard_asks_label")}</span>
             <span class="text-[14px] leading-[1.5] text-ink-60">
               {t(hosting === "windows_service" ? "ui.wizard_asks_win_service" : "ui.wizard_asks_win")}
             </span>
           </div>
-        {/if}
-        <div class="flex gap-3 px-[18px] py-[13px]">
-          <span class="w-[120px] flex-none text-[14px] font-semibold text-ink-60">{t("ui.wizard_blocked_label")}</span>
-          <span class="text-[14px] leading-[1.5] text-ink-60">{t("ui.wizard_blocked_win")}</span>
         </div>
-      </div>
+      {/if}
     </div>
     <div class="mt-auto flex items-center justify-between">
       <Button variant="link" onclick={flow.back}>‹ {t("ui.wizard_back")}</Button>

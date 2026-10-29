@@ -56,7 +56,7 @@
 			<key>NSStringFormatValueTypeKey</key>
 			<string>ld</string>
 			<key>other</key>
-			<string>无法恢复：%1$ld 张照片已从手机相册删除，不会再传到电脑。</string>
+			<string>%1$ld 张照片已从手机相册删除，无法再备份。</string>
 		</dict>
 	</dict>
 	<key>notif_backup_failed_body</key>
@@ -70,7 +70,7 @@
 			<key>NSStringFormatValueTypeKey</key>
 			<string>ld</string>
 			<key>other</key>
-			<string>%1$ld 张照片没备份成功，打开看看</string>
+			<string>%1$ld 张照片未能备份，点开查看</string>
 		</dict>
 	</dict>
 	<key>backup_scope_n</key>
@@ -98,7 +98,7 @@
 			<key>NSStringFormatValueTypeKey</key>
 			<string>ld</string>
 			<key>other</key>
-			<string>备份已经暂停 %1$ld 天。照片都还在你手机上，一张没丢——重新连上就会自动补齐。</string>
+			<string>备份已暂停 %1$ld 天。重新配对后继续备份。</string>
 		</dict>
 	</dict>
 </dict>

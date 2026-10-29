@@ -13,8 +13,10 @@ struct OnboardingFlow: View {
         case waiting
         /// #1118：提交成功之后才有的验证码页（电脑名 + 6 位数字 + 电脑标识）。扫码后不经任何询问直接到这里（中间只有发请求的等待）。
         case code(PairCodeShown)
-        /// failed：只带可上屏的本机说明（nil = 只有通用文案）；诊断原文进日志（#1264）。
-        case refused(lapsed: Bool, note: String?), needsUpdate(OutdatedSide), failed(note: String?)
+        /// refused：titleKey = 标题（`PairNote.titleKey`，B6 / C10）；note = 原因行（自带操作，nil = 只有标题，10-29 文案 B5）；
+        /// errorCode = 原因行下的小字「错误代码：…」（B13）。
+        /// failed：哪一种失败页（B7）；诊断原文进日志（#1264）。
+        case refused(titleKey: String, note: String?, errorCode: String? = nil), needsUpdate(OutdatedSide), failed(PairFailure)
     }
 
     @EnvironmentObject var app: AppModel
@@ -80,11 +82,11 @@ struct OnboardingFlow: View {
             switch outcome {
             case .joined(let firstTime, let settingSaveFailed): app.paired(firstTime: firstTime, settingSaveFailed: settingSaveFailed)
             case .refused(let note, let ownerSaidNo):
-                step = .status(.refused(lapsed: !ownerSaidNo, note: note?.text))
+                step = .status(.refused(titleKey: PairNote.titleKey(note, ownerSaidNo: ownerSaidNo), note: note?.text, errorCode: note?.errorCode))
             case .needsUpdate(let side): step = .status(.needsUpdate(side))
-            case .failed(let diagnostic, let note):
+            case .failed(let diagnostic, let kind):
                 AppLog.log("pair: failed (\(diagnostic))")
-                step = .status(.failed(note: note))
+                step = .status(.failed(kind))
             }
         }
     }
@@ -103,9 +105,9 @@ struct OnboardingFlow: View {
         case .pairCode:
             step = .status(.code(PairCodeShown(code: "482916", desktop: PairDesktopInfo(name: "Home-Computer", fingerprint: "AB12 CD34"),
                                                phoneNode: "")))
-        case .pairRefused: step = .status(.refused(lapsed: false, note: nil))
-        case .pairLapsed: step = .status(.refused(lapsed: true, note: PairNote.expired.text))
-        case .pairFailed: step = .status(.failed(note: nil))
+        case .pairRefused: step = .status(.refused(titleKey: PairNote.titleKey(.denied, ownerSaidNo: true), note: nil))
+        case .pairLapsed: step = .status(.refused(titleKey: PairNote.titleKey(.expired, ownerSaidNo: false), note: PairNote.expired.text))
+        case .pairFailed: step = .status(.failed(.unreachable))
         default: break
         }
     }
@@ -183,20 +185,26 @@ struct PairStatusScreen: View {
                 // 同 Android PairStatusScreen：只有标题 + 正文，不加状态图标；等待时保留系统转圈（原生的进行中指示）。
                 switch step {
                 case .waiting:
+                    // 10-29 文案 B8：等待页只有标题和转圈。
                     ProgressView().controlSize(.large).padding(.bottom, 6)
-                    message(title: L.s("pair_waiting_title"), body: L.s("pair_waiting_body"))
+                    message(title: L.s("pair_waiting_title"))
                 case .code(let shown):
                     PairCodeView(shown: shown)
-                case .refused(let lapsed, let note):
-                    message(title: L.s(lapsed ? "pair_lapsed_title" : "pair_refused_title"), body: L.s("pair_refused_body"),
-                            note: note)
+                case .refused(let titleKey, let note, let errorCode):
+                    // 10-29 文案 B5：正文就是原因行（自带操作）；电脑上点了拒绝时没有原因行。
+                    message(title: L.s(titleKey), body: note,
+                            footnote: errorCode.map { L.f("error_code_line", $0) })
                 case .needsUpdate(let side):
                     // #1069：配对过程中发现版本不兼容——标题「需要更新」，正文说清是哪一端的 P-Pass。
                     message(title: L.s("pair_needs_update_title"),
                             body: L.s(side == .phone ? "state_waiting_phone_outdated" : "state_waiting_desktop_outdated"))
-                case .failed(let note):
-                    // #1264：异常原文不上屏（tokens.json rules 第 10 条），只在日志里。
-                    message(title: L.s("pair_failed_title"), body: L.s("pair_failed_body"), note: note)
+                case .failed(let kind):
+                    // #1264：异常原文不上屏（tokens.json rules 第 10 条），只在日志里。10-29 文案 B7：按种类各一页。
+                    switch kind {
+                    case .unreachable: message(title: L.s("pair_failed_title"), body: L.s("pair_failed_body"))
+                    case .notACode: message(title: L.s("not_a_code"))
+                    case .saveFailed: message(title: L.s("pair_lapsed_title"), body: L.s("pair_save_failed"))
+                    }
                 }
             }
             .padding(34)
@@ -216,11 +224,13 @@ struct PairStatusScreen: View {
         }
     }
 
-    private func message(title: String, body: String, note: String? = nil) -> some View {
+    private func message(title: String, body: String? = nil, footnote: String? = nil) -> some View {
         VStack(spacing: 14) {
             Text(title).font(PPFont.serif(30, .regular, relativeTo: .title)).multilineTextAlignment(.center)
-            Text(body).font(PPFont.body).foregroundStyle(PPColor.ink40).lineSpacing(5).multilineTextAlignment(.center)
-            if let note { Text(note).font(PPFont.footnote).foregroundStyle(PPColor.ink40).multilineTextAlignment(.center) }
+            if let body {
+                Text(body).font(PPFont.body).foregroundStyle(PPColor.ink40).lineSpacing(5).multilineTextAlignment(.center)
+            }
+            if let footnote { Text(footnote).font(PPFont.footnote).foregroundStyle(PPColor.ink40).multilineTextAlignment(.center) }
         }
     }
 }

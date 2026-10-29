@@ -21,7 +21,6 @@ import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -64,8 +63,9 @@ class NET28BindTimeoutTest {
         // Distinguishable from "cannot reach the computer" (UX-11's failure) — in the log (#1264).
         assertFalse(reason, reason.contains("DaemonUnreachableException"))
         assertTrue(reason, reason.contains("not the computer"))
-        // #1264: the exception text never reaches the trouble screen (tokens.json rule 10).
-        assertNull(failed.note)
+        // #1264: the exception text never reaches the trouble screen (tokens.json rule 10); it is the
+        // plain "can't connect" page (10-29 B7), not the not-a-code / needs-update pages.
+        assertEquals(PairFailure.UNREACHABLE, failed.kind)
     }
 
     @Test(timeout = 10_000)

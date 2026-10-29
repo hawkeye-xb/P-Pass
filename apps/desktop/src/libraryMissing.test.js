@@ -54,7 +54,12 @@ describe("#1253 库找不到", () => {
 
   it.each(["zh", "en"])("%s：按钮、仍找不到、系统通知都有文案，正文不再说「自动恢复」", (lang) => {
     setLocale(lang);
-    for (const key of ["ui.library_missing_recheck", "ui.library_missing_still", "ui.library_missing_notice_body"]) {
+    for (const key of [
+      "ui.library_missing_recheck",
+      "ui.library_missing_still",
+      "ui.library_missing_notice_title",
+      "ui.library_missing_notice_body",
+    ]) {
       expect(t(key)).not.toBe(key);
     }
     expect(t("ui.library_missing_body", { dir: "/x" })).not.toMatch(/自动恢复|automatically/);
@@ -64,5 +69,13 @@ describe("#1253 库找不到", () => {
   it("卡片有重新检查按钮，refresh 同步强提示", () => {
     expect(app).toContain('data-testid="library-recheck"');
     expect(app).toContain("libraryAlert.sync(status.library_missing);");
+  });
+
+  // 10-29 定稿：「仍然找不到」改为 toast，阻断卡片不变、卡片里不再常驻这一行。
+  // 反证：恢复卡片里的 `{#if libraryStillMissing}` 那行 → 红。
+  it("重新检查仍找不到：走 toast，不在卡片里常驻", () => {
+    expect(app).toContain('flashMessage(t("ui.library_missing_still"), "warning")');
+    const card = app.slice(app.indexOf('data-testid="library-missing"'), app.indexOf("{:else}", app.indexOf('data-testid="library-missing"')));
+    expect(card).not.toContain("ui.library_missing_still");
   });
 });

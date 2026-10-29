@@ -18,7 +18,7 @@ final class BucketAccessNoticeTests: XCTestCase {
                 "bucket_no_access_title": "No access to photos",
                 "bucket_no_access_body": "P-Pass can't read your photos, so it can't back them up.",
                 "bucket_no_access_action": "Open Settings",
-                "welcome_scan": "Scan to connect",
+                "welcome_scan": "Scan to connect to your home computer",
             ],
             "zh-Hans": [
                 "bucket_partial_access_note": "只授权了部分照片，只会备份你允许的那些。",
