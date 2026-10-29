@@ -13,7 +13,7 @@ Our families can't do those things, and they shouldn't need to just to keep thei
 
 And most families already own a "server": the computer that's always on anyway.
 
-So the question became very concrete: **can we build a version that needs no technical setup, where phone photos land automatically on the computer that's already running at home? Scan one code, then never think about it again.**
+So the question became very concrete: **can we build a version that needs no technical setup, where phone photos land automatically on the computer that's already running at home? Scan one code, pick the photos to back up, and let it take it from there.**
 
 ## What we crossed out first
 
@@ -41,7 +41,7 @@ One line gets quoted again and again inside the project: **show a device as "Mom
 
 Under the hood there are nodes, identities, and encrypted channels. A family member only wants to know whether their phone is connected to the computer at home.
 
-So the interaction is cut to the minimum: scan one code, then do nothing. Open the app and it shows exactly where things stand: "128 photos on this phone · 126 backed up · 2 to go". Or an honest "not safe yet, still transferring".
+So the interaction is cut to the minimum: scan one code and pick which photos to back up. Whether it keeps backing up in the background is your call, made on the home screen. Open the app and it shows exactly where things stand: "128 photos on this phone · 126 backed up · 2 to go". Or an honest "not safe yet, still transferring".
 
 The app is simple, but you can still see what it's doing and step in. There are three layers of control:
 
