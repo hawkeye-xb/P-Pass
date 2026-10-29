@@ -90,6 +90,29 @@ pub enum PairState {
     Failed,
 }
 
+/// #1264: why the pairing window was closed to an unpaired peer — diagnostics only (the peer just
+/// sees the `not_paired` close code). Judged from the tokens the desktop still holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowClosed {
+    /// No code is out: the QR dialog was closed, never shown, or the service restarted since.
+    NoCode,
+    /// A code is out but past [`TOKEN_TTL_MS`] — the QR stayed on screen too long.
+    Expired,
+    /// The code on screen was already used by another request (the dialog is still open, or was
+    /// closed after that scan).
+    Used,
+}
+
+impl std::fmt::Display for WindowClosed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            WindowClosed::NoCode => "pairing window closed (no QR code shown)",
+            WindowClosed::Expired => "QR code expired",
+            WindowClosed::Used => "QR code already used",
+        })
+    }
+}
+
 /// `pair.request{ack_then_poll}` result: what the phone polls, and until when.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairSubmission {
@@ -435,11 +458,25 @@ impl Pairing {
     /// 刚复制出去）。另外，已经提交过配对申请的那台设备在申请结束（含结束后的
     /// 保留期）之前照常放行，否则业主关掉二维码后它就没法轮询自己的结果。
     pub fn admits(&self, peer: transport::NodeId, now_ms: i64) -> bool {
+        self.admission(peer, now_ms).is_ok()
+    }
+
+    /// #1264：与 [`Self::admits`] 同一个判定，拒绝时说明窗口为什么是关的（只进诊断日志）。
+    pub fn admission(&self, peer: transport::NodeId, now_ms: i64) -> Result<(), WindowClosed> {
         let mut inner = self.inner.lock().expect("pairing lock");
         // Same retention rule as every other ledger read: a settled request past its retention no
         // longer admits its peer (nothing else may have swept since — no periodic prune runs).
         inner.sweep_tickets(now_ms);
-        Self::open_in(&inner, now_ms) || inner.tickets.values().any(|t| t.peer == peer)
+        if Self::open_in(&inner, now_ms) || inner.tickets.values().any(|t| t.peer == peer) {
+            return Ok(());
+        }
+        Err(if inner.tokens.is_empty() {
+            WindowClosed::NoCode
+        } else if inner.tokens.values().any(|t| !t.used) {
+            WindowClosed::Expired
+        } else {
+            WindowClosed::Used
+        })
     }
 
     /// #1122 / #1118：配对窗口开着（二维码在显示）——见 [`Self::admits`]。电脑名只在这期间
@@ -1193,6 +1230,47 @@ mod tests {
             !pairing.admits(transport::NodeId([0x02; 32]), 2_001),
             "别的设备不放行"
         );
+    }
+
+    /// #1264：拒绝的原因按桌面手里的令牌判——没出码 / 码过期 / 码已被用掉，三种各自可辨，
+    /// 写进准入日志。TTL 用注入的时刻推（`now_ms` 参数），不靠等。
+    /// 反证：把 `Expired` 与 `NoCode` 的判据对调，前两条变红；不区分 used，最后一条变红。
+    #[tokio::test]
+    async fn a_refusal_says_why_the_window_is_closed() {
+        let db = Db::open_in_memory().await.unwrap();
+        let (pairing, _rx) = Pairing::new(db, transport::NodeId([0xAB; 32]), None);
+        let phone = transport::NodeId([0x01; 32]);
+        assert_eq!(pairing.admission(phone, 1_000), Err(WindowClosed::NoCode));
+
+        pairing.start([0x11; 12], 1_000);
+        assert_eq!(pairing.admission(phone, 1_000 + TOKEN_TTL_MS), Ok(()));
+        assert_eq!(
+            pairing.admission(phone, 1_000 + TOKEN_TTL_MS + 1),
+            Err(WindowClosed::Expired),
+            "二维码挂过了有效期"
+        );
+        pairing.stop();
+        assert_eq!(
+            pairing.admission(phone, 2_000),
+            Err(WindowClosed::NoCode),
+            "二维码关了"
+        );
+
+        // 另一台手机用掉了屏幕上的码：这台再扫同一张码。
+        pairing.start([0x22; 12], 3_000);
+        let first = transport::NodeId([0x02; 32]);
+        let (_start, msg_a) =
+            pair_pake::PhoneStart::start("246810", &[0x22; 12], first.0, pairing.node_id().0)
+                .unwrap();
+        let req = proto::PairRequest {
+            token: "22".repeat(12),
+            device_name: "phone".into(),
+            pake_a: msg_a.iter().map(|b| format!("{b:02x}")).collect(),
+            ..Default::default()
+        };
+        pairing.submit_request(first, &req, 3_000).await.unwrap();
+        assert_eq!(pairing.admission(first, 3_001), Ok(()), "申请人照常放行");
+        assert_eq!(pairing.admission(phone, 3_001), Err(WindowClosed::Used));
     }
 
     /// 统一回归发现（#1122）：申请落定、过了保留期以后，这台设备不再过握手准入——被移除的手机

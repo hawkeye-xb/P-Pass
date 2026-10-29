@@ -7,7 +7,8 @@
 // - Esc / 关闭只收起弹窗，不拒绝；请求留在首页「待处理」；
 // - 每台一块，按钮单独一行（不和 6 个格子挤一行被裁掉）；重连的标题与按钮一致；
 // - 还在等手机（verifying）给出「验证码已提交」；
-// - 二维码弹窗里显示本机标识（status.desktop_fingerprint），供手机核对。
+// - #1257：电脑标识（status.desktop_fingerprint）只在输验证码的待确认弹窗里显示（用户正是在这一步对着手机核对），
+//   措辞同手机「电脑标识」；二维码弹窗只显示电脑名，不显示标识。
 // 反证：去掉按钮的 disabled={!isPairCode(code)} ⇒ 第一条红；confirmPair 不带 code ⇒ 第一条红。
 import { cleanup, render, screen, fireEvent, within } from "@testing-library/svelte";
 import { readFileSync } from "node:fs";
@@ -376,7 +377,8 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
     expect(document.body.textContent).toContain("验证码已提交");
   });
 
-  it("二维码弹窗显示本机名称与标识（与手机核对页上的同一对）", async () => {
+  // #1257 反证：二维码弹窗里放回 desktop-fingerprint ⇒ 这条红。
+  it("二维码弹窗显示本机名称，不显示电脑标识（核对在确认那一步）", async () => {
     const d = desktop();
     d.fingerprint = "AB12 CD34";
     d.desktopName = "客厅的 Mac";
@@ -385,6 +387,21 @@ describe("#1118 确认加入要输入手机上的验证码", () => {
     await fireEvent.click(screen.getByRole("button", { name: "显示配对二维码" }));
     await settle();
     expect(screen.getByTestId("desktop-name").textContent).toContain("客厅的 Mac");
-    expect(screen.getByTestId("desktop-fingerprint").textContent).toContain("AB12 CD34");
+    expect(screen.queryByTestId("desktop-fingerprint")).toBeNull();
+    expect(document.body.textContent).not.toContain("AB12 CD34");
+  });
+
+  // #1257 反证：从待确认弹窗删掉 desktop-fingerprint 那一段 ⇒ 这条红。
+  it("待确认弹窗（输验证码那一步）显示电脑标识，与手机上的同一串", async () => {
+    const d = desktop();
+    d.fingerprint = "AB12 CD34";
+    render(App);
+    await settle();
+    await openRow(d, [row("a", "妈妈的手机")]);
+    const dialog = screen.getByTestId("pair-code-input").closest("[role='dialog']");
+    expect(dialog).toBeTruthy();
+    const id = within(dialog).getByTestId("desktop-fingerprint");
+    expect(id.textContent).toContain("电脑标识");
+    expect(id.textContent).toContain("AB12 CD34");
   });
 });

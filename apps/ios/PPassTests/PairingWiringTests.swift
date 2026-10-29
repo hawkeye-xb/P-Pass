@@ -118,8 +118,10 @@ final class PairingWiringTests: XCTestCase {
         var paired = 0
         let outcome = await makePairing(transport, store: store, onboarded: { _ in true }) { _, _ in paired += 1; return false }
             .pair(code: link)
-        guard case .failed(let reason) = outcome else { return XCTFail("写盘失败应当配对失败，实际 \(outcome)") }
-        XCTAssertTrue(reason.contains(L.s("pair_save_failed")), reason)
+        guard case .failed(let diagnostic, let note) = outcome else { return XCTFail("写盘失败应当配对失败，实际 \(outcome)") }
+        // #1264：屏幕上只有本机的说明；系统错误原文只在诊断里。
+        XCTAssertEqual(note, L.s("pair_save_failed"))
+        XCTAssertTrue(diagnostic.contains("pairing.json"), diagnostic)
         XCTAssertEqual(paired, 0, "没落盘就不能触发 onPaired")
     }
 

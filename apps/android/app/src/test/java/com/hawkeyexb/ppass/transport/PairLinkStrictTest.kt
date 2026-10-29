@@ -49,7 +49,7 @@ class PairLinkStrictTest {
     fun `a link the parser rejects ends the flow before any dial`() {
         val outcome = outcomeOf("ppf://pair?whatever", parseLink = { throw IllegalArgumentException("malformed") })
         assertTrue(outcome is PairOutcome.Failed)
-        assertEquals(invalid, (outcome as PairOutcome.Failed).reason)
+        assertEquals(invalid, (outcome as PairOutcome.Failed).note)
     }
 
     @Test
@@ -85,7 +85,7 @@ class PairLinkStrictTest {
         for (qr in bad) {
             val outcome = outcomeOf(qr)
             assertTrue("$qr should fail, got $outcome", outcome is PairOutcome.Failed)
-            assertEquals(qr, invalid, (outcome as PairOutcome.Failed).reason)
+            assertEquals(qr, invalid, (outcome as PairOutcome.Failed).note)
         }
     }
 }

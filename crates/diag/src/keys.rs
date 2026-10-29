@@ -396,6 +396,8 @@ msg_keys! {
     UI_PAIR_QR_TITLE => "ui.pair_qr_title",
     UI_PAIR_QR_BODY => "ui.pair_qr_body",
     UI_REFRESH_QR => "ui.refresh_qr",
+    /// #1264: the QR dialog covers a code past the daemon's expiry.
+    UI_PAIR_QR_EXPIRED => "ui.pair_qr_expired",
     UI_CLOSE => "ui.close",
     UI_PAIR_GENERATING => "ui.pair_generating",
     UI_VIDEO_LOAD_FAILED => "ui.video_load_failed",
@@ -840,7 +842,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 361);
+        assert_eq!(ALL.len(), 362);
     }
 
     #[test]

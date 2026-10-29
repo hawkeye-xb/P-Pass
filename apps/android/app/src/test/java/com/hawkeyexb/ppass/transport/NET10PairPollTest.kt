@@ -40,6 +40,8 @@ class NET10PairPollTest {
         val status: (atMs: Long) -> PairStatusReply,
         /** #1118: the desktop's answer to pair.confirm (default: the code matched → accepted + cB). */
         val confirm: (PairConfirmRequest) -> Resp = { ok(ProtoJson.encodeToJsonElement(PairStatusReply.serializer(), PairStatusReply(state = "accepted", accepted = PairAccepted("Home PC", "e".repeat(32)), confirmB = "cb".repeat(32)))) },
+        /** #1264: what the desktop does to the hello instead of answering (e.g. close at the handshake). */
+        val helloThrows: (() -> Nothing)? = null,
     ) : PairRpc {
         val calls = mutableListOf<Pair<String, Long>>()
         var submitParams: JsonElement? = null
@@ -47,7 +49,9 @@ class NET10PairPollTest {
         override suspend fun call(method: String, params: JsonElement): Resp {
             calls += method to scope.currentTime
             return when (method) {
-                Methods.HELLO -> if (caps == null) {
+                Methods.HELLO -> if (helloThrows != null) {
+                    helloThrows.invoke()
+                } else if (caps == null) {
                     Resp(id = "h", ok = false, error = RespError("NOT_AUTHORIZED", "not_paired"))
                 } else {
                     ok(ProtoJson.encodeToJsonElement(Hello.serializer(), Hello(capabilities = caps)))
@@ -145,6 +149,48 @@ class NET10PairPollTest {
             confirm = { throw PeerClosedException("d".repeat(64), DesktopCloseCodes.NOT_PAIRED) },
         )
         assertEquals(PairVerdict.DesktopRestarted, awaitPairVerdict(desk, "t", "d", FakeCeremony()))
+    }
+
+    /**
+     * #1264：二维码已过期 / 已关掉——还没提交申请，电脑就在握手时用 401 关掉连接（#1122 准入）。
+     * 这是「码失效了，刷新再扫」，不是网络问题，也不是电脑主人拒绝；不发 pair.request。
+     * 反证：去掉 hello 处的 pairWindowClosed 判断 ⇒ 落到 Unreachable，这条红。
+     */
+    @Test
+    fun helloClosedWithNotPaired_isQrExpired() = runTest {
+        val desk = FakeDesk(
+            this,
+            submit = { error("must not submit") },
+            status = { error("must not poll") },
+            helloThrows = { throw PeerClosedException("d".repeat(64), DesktopCloseCodes.NOT_PAIRED) },
+        )
+        val v = awaitPairVerdict(desk, "t", "d", FakeCeremony())
+        assertEquals(PairVerdict.Denied(PairRefusal.QR_EXPIRED), v)
+        assertEquals(0, desk.calls.count { it.first == Methods.PAIR_REQUEST })
+        val outcome = v.toOutcome { error("no join") }
+        assertEquals(PairOutcome.Refused(PairRefusal.QR_EXPIRED), outcome)
+        assertFalse("码失效不是「电脑说不」", (outcome as PairOutcome.Refused).ownerSaidNo)
+    }
+
+    /** #1264：hello 刚放行、提交那一拍码恰好到期（新连接被 401 关掉），同样是码失效。 */
+    @Test
+    fun submitClosedWithNotPaired_isQrExpired() = runTest {
+        val desk = FakeDesk(
+            this,
+            submit = { throw PeerClosedException("d".repeat(64), DesktopCloseCodes.NOT_PAIRED) },
+            status = { error("must not poll") },
+        )
+        assertEquals(PairVerdict.Denied(PairRefusal.QR_EXPIRED), awaitPairVerdict(desk, "t", "d", FakeCeremony()))
+    }
+
+    /** #1264 反面：hello 被别的关闭码关掉、或真连不上，仍是「连不上」。 */
+    @Test
+    fun helloOtherFailure_staysNetworkFailure() = runTest {
+        for (thrown in listOf(PeerClosedException("d".repeat(64), 0), DaemonUnreachableException("no answer"))) {
+            val desk = FakeDesk(this, submit = { error("must not submit") }, status = { error("must not poll") }, helloThrows = { throw thrown })
+            val v = awaitPairVerdict(desk, "t", "d", FakeCeremony())
+            assertTrue("$v", v is PairVerdict.Unreachable)
+        }
     }
 
     /** #1219 V3 反面：别的关闭码（不是「未配对」）仍按连不上计数，不误报成「电脑重启了」。 */
@@ -252,7 +298,11 @@ class NET10PairPollTest {
         }
         assertEquals(PairOutcome.NeedsUpdate(OutdatedSide.DESKTOP), PairVerdict.DesktopTooOld.toOutcome(join))
         assertEquals(PairOutcome.NeedsUpdate(OutdatedSide.PHONE), PairVerdict.NeedsUpdate(OutdatedSide.PHONE).toOutcome(join))
-        assertTrue(PairVerdict.Unreachable("x").toOutcome(join) is PairOutcome.Failed)
+        val failed = PairVerdict.Unreachable("java.io.IOException: x").toOutcome(join)
+        assertTrue(failed is PairOutcome.Failed)
+        // #1264：诊断原文只进日志，失败页上没有可显示的附注。
+        assertEquals("java.io.IOException: x", (failed as PairOutcome.Failed).diagnostic)
+        assertEquals(null, failed.note)
         // #1118: a wrong code / a missing desktop proof is a refusal the desktop owner did not choose.
         for ((verdict, cause) in listOf(
             PairVerdict.CodeWrong to PairRefusal.CODE_WRONG,

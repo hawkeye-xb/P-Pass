@@ -34,6 +34,7 @@
     <string name="pair_failed_body">确认电脑开着、两边都能上网，然后重新扫码。</string>
     <!-- #1072：配对结果详情（按桌面的 reason / pair.status 判定，文字由手机自己定） -->
     <string name="pair_refused_detail_token_invalid">配对码无效或已被使用，请在电脑上重新生成后再扫。</string>
+    <string name="pair_refused_detail_qr_expired">二维码已过期或已在电脑上关掉。请在电脑上刷新二维码后重新扫码。</string>
     <string name="pair_refused_detail_denied">电脑上拒绝了这次加入。</string>
     <string name="pair_refused_detail_expired">电脑上一直没人确认，这次配对请求已过期。请在电脑上重新生成配对码再扫。</string>
     <string name="pair_refused_detail_restarted">电脑端服务重启了，这次配对请求已失效。请在电脑上重新生成配对码再扫。</string>

@@ -517,9 +517,14 @@ async fn pairing_start_and_confirm_over_ipc() {
     let (db, pairing, socket, token) = start(dir.path(), "pairing").await;
     let mut c = IpcClient::connect(&socket, &token).await;
 
+    let before = now();
     let resp = c.call("pairing.start", serde_json::Value::Null).await;
-    let qr = resp.result.unwrap()["qr"].as_str().unwrap().to_string();
+    let result = resp.result.unwrap();
+    let qr = result["qr"].as_str().unwrap().to_string();
     assert!(qr.starts_with("ppf://pair?node="));
+    // #1264: the window learns when this code dies from the daemon, not from a copy of the TTL.
+    let expires_at = result["expires_at_ms"].as_i64().expect("expires_at_ms");
+    assert!((before + daemon::TOKEN_TTL_MS..=now() + daemon::TOKEN_TTL_MS).contains(&expires_at));
 
     // A device knocks (directly through the engine — the network leg is
     // T-031's tests). The request parks in the IPC pending queue.

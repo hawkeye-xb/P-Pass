@@ -1628,8 +1628,16 @@ impl IpcServer {
                 if getrandom::fill(&mut token).is_err() {
                     return internal(id);
                 }
-                let qr = self.pairing.start(token, now_ms());
-                Resp::ok(id, serde_json::json!({ "qr": qr }))
+                let now = now_ms();
+                let qr = self.pairing.start(token, now);
+                // #1264：这张码何时失效由 daemon 说了算——窗口据此在失效前换码，或盖住过期的码。
+                Resp::ok(
+                    id,
+                    serde_json::json!({
+                        "qr": qr,
+                        "expires_at_ms": now + crate::pairing::TOKEN_TTL_MS,
+                    }),
+                )
             }
             // #1122：二维码关闭 / 配对弹窗关掉——收回未用的令牌，配对窗口立即关闭。
             "pairing.stop" => {
