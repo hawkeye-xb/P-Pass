@@ -156,6 +156,7 @@
 "bucket_title" = "备份哪些照片";
 "bucket_hint" = "没勾选的相册不会备份（比如微信收到的图片，微信自己有备份）。";
 "bucket_empty" = "手机上没有找到照片或视频。";
+"bucket_partial_access_note" = "只授权了部分照片，只会备份你允许的那些。";
 "bucket_loading" = "正在读取相册…";
 "bucket_count" = "%1$ld 张";
 "bucket_unnamed" = "未命名";

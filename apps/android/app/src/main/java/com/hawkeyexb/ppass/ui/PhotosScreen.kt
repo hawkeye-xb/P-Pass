@@ -4,6 +4,7 @@
 // the 1024 preview. States speak the meaning colours only.
 package com.hawkeyexb.ppass.ui
 
+import com.hawkeyexb.ppass.backup.MediaAccess
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Base64
@@ -297,7 +298,11 @@ internal fun PhotosScreen(
     // #1263：范围里一个相册都没有——给引导和「选择相册」按钮（直达选范围页）。照片页不空时也在顶部给。
     noAlbums: Boolean = false,
     onChooseAlbums: () -> Unit = {},
+    // 10-29：照片权限不全（只给了部分 / 一张都不给）时，引导换成设置页那张权限卡（[photosGuideOf]）。
+    mediaAccess: MediaAccess = MediaAccess.FULL,
+    onOpenAppSettings: () -> Unit = {},
 ) {
+    val guide = photosGuideOf(mediaAccess, noAlbums)
     // SYNC-06: 时间线状态（items/next/loading/error/订阅标志）全部由
     // TimelineSubscriptionHolder 持有——App 前台期间（不管显示哪个 tab）
     // 订阅连接保持，本 composable 只渲染这份状态，不再自己创建/销毁订阅。
@@ -437,9 +442,9 @@ internal fun PhotosScreen(
             }
         }
 
-        // #1263：没选相册、但照片页里已经有（家人的）照片：引导放在顶部，不挡浏览。
-        if (noAlbums && items.isNotEmpty()) {
-            NoAlbumsGuide(onChooseAlbums, Modifier.fillMaxWidth().padding(20.dp, 0.dp, 20.dp, 12.dp))
+        // #1263：照片页里已经有（家人的）照片时，引导放在顶部，不挡浏览。
+        if (guide != PhotosGuide.None && items.isNotEmpty()) {
+            PhotosGuideCard(guide, onChooseAlbums, mediaAccess, onOpenAppSettings, Modifier.fillMaxWidth().padding(20.dp, 0.dp, 20.dp, 12.dp))
         }
 
         when {
@@ -452,8 +457,8 @@ internal fun PhotosScreen(
             // UI-17: 配对失效且一张都没加载到——什么都不放，上面的红卡就是全部内容
             // （落到下一条会显示「照片库还是空的——先备份一批吧」，又是一个不同的出路）。
             error != null && items.isEmpty() -> Unit
-            items.isEmpty() && noAlbums -> Box(Modifier.fillMaxSize().padding(34.dp), contentAlignment = Alignment.Center) {
-                NoAlbumsGuide(onChooseAlbums, Modifier.fillMaxWidth())
+            items.isEmpty() && guide != PhotosGuide.None -> Box(Modifier.fillMaxSize().padding(34.dp), contentAlignment = Alignment.Center) {
+                PhotosGuideCard(guide, onChooseAlbums, mediaAccess, onOpenAppSettings, Modifier.fillMaxWidth())
             }
             items.isEmpty() -> Center(emptyText ?: stringResource(R.string.home_empty_albums))
             shown.isEmpty() -> Center(stringResource(R.string.photos_filter_empty))
@@ -842,6 +847,34 @@ internal fun PhotoFilterChip(label: String, selected: Boolean, onClick: () -> Un
         border = null,
         modifier = Modifier.height(36.dp),
     )
+}
+
+/** 照片页的引导卡给哪一张。 */
+internal enum class PhotosGuide { MediaAccess, NoAlbums, None }
+
+/**
+ * 10-29：照片权限不全时先说权限——读不到照片，选相册也选不出东西，「还没选相册」说的不是现状。
+ * 权限完整、一个相册都没选，才给「还没选相册 / 选择相册」（#1263）。
+ */
+internal fun photosGuideOf(mediaAccess: MediaAccess, noAlbums: Boolean): PhotosGuide = when {
+    mediaAccess != MediaAccess.FULL -> PhotosGuide.MediaAccess
+    noAlbums -> PhotosGuide.NoAlbums
+    else -> PhotosGuide.None
+}
+
+@Composable
+private fun PhotosGuideCard(
+    guide: PhotosGuide,
+    onChooseAlbums: () -> Unit,
+    mediaAccess: MediaAccess,
+    onOpenAppSettings: () -> Unit,
+    modifier: Modifier,
+) {
+    when (guide) {
+        PhotosGuide.MediaAccess -> MediaAccessCard(mediaAccess, onOpenAppSettings, modifier)
+        PhotosGuide.NoAlbums -> NoAlbumsGuide(onChooseAlbums, modifier)
+        PhotosGuide.None -> Unit
+    }
 }
 
 /** #1263：「还没选要备份的相册」+「选择相册」。照片页空着时居中，不空时在顶部。 */

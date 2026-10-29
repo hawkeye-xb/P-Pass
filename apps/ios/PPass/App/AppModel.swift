@@ -85,6 +85,9 @@ final class AppModel: ObservableObject {
         refreshNotificationAuthorization() // 用户可能刚从系统设置里改了通知授权回来
     }
 
+    /// 只重读照片权限档。选范围页读相册时可能刚弹过系统框（`MediaLibrary.albums`），页面要按弹框之后的那一档显示。
+    func refreshAccess() { access = backend.media.access() }
+
     func refreshNotificationAuthorization() {
         Task {
             notificationAuthorization = await backend.engine.notificationAuthorization()

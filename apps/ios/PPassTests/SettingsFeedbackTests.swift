@@ -177,6 +177,19 @@ final class SettingsFeedbackTests: XCTestCase {
         }
     }
 
+    /// 10-29：选范围页读相册时可能刚弹过系统框，`refreshAccess` 让页面按弹框之后的那一档显示（部分 → 页顶说明，拒绝 → 去设置）。
+    func test_refresh_access_picks_up_the_answer_from_the_prompt() async {
+        let (app, _, media) = make()
+        media.granted = nil
+        app.paired(firstTime: true, settingSaveFailed: false)
+        XCTAssertEqual(app.access, .none)
+        media.answer = .partial
+        _ = await media.requestAccess()
+        app.refreshAccess()
+        XCTAssertEqual(app.access, .partial)
+        XCTAssertEqual(BucketScreen.notice(for: app.access), .partial)
+    }
+
     // MARK: #1039 换新电脑清旧的后台备份意图写失败（对位 Android）
 
     /// 配对结局带着「清意图没写下来」：照常进选相册，并提示。反证：去掉 `paired` 里设 notice 那段，本条红。

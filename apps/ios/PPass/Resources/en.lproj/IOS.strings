@@ -16,6 +16,11 @@
 "notif_background_refresh_off_body" = "iOS won't wake P-Pass in the background any more; it backs up only while P-Pass is open. You can turn it back on in Settings › General › Background App Refresh. Your photos are all still on this phone.";
 "notif_background_refresh_restricted_body" = "This iPhone no longer allows Background App Refresh for P-Pass (Screen Time or device management may be limiting it), so it backs up only while P-Pass is open. Your photos are all still on this phone.";
 
+/* Scope page when no photo can be read (access denied): say there is no access and offer Open Settings, not "No photos found" (iOS only: Android goes home after a denial and never shows this page). */
+"bucket_no_access_title" = "No access to photos";
+"bucket_no_access_body" = "P-Pass can't read your photos, so it can't back them up.";
+"bucket_no_access_action" = "Open Settings";
+
 /* Simulator and devices without a camera. */
 "scan_camera_unavailable" = "The camera isn't available on this device. Connect with the pairing string instead.";
 

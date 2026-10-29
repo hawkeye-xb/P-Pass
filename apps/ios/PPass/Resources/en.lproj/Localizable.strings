@@ -2,7 +2,7 @@
 "app_name" = "P-Pass";
 "welcome_headline" = "Photos,\nfinding their way home.";
 "welcome_sub" = "Photos from your phone back up automatically to the computer at home. No account, no cloud storage.";
-"welcome_scan" = "Scan to connect the home computer";
+"welcome_scan" = "Scan to connect";
 "welcome_step1" = "1 · Open P-Pass on the home computer";
 "welcome_step2" = "2 · Use the button below to scan the code on its screen";
 "welcome_step3" = "3 · Choose which photos to back up";
@@ -156,6 +156,7 @@
 "bucket_title" = "Photos to back up";
 "bucket_hint" = "Albums you leave out are never backed up (e.g. photos WeChat received).";
 "bucket_empty" = "No photos or videos found on this phone.";
+"bucket_partial_access_note" = "You've allowed access to some photos only. Only those will be backed up.";
 "bucket_loading" = "Reading albums…";
 "bucket_count" = "%1$ld";
 "bucket_unnamed" = "Unnamed";

@@ -223,6 +223,8 @@
     <string name="bucket_title">备份哪些照片</string>
     <string name="bucket_hint">没勾选的相册不会备份（比如微信收到的图片，微信自己有备份）。</string>
     <string name="bucket_empty">手机上没有找到照片或视频。</string>
+    <!-- 只给了部分照片（Android 14+「选择照片」/ iOS「有限访问」）时，选范围页顶部的一行。 -->
+    <string name="bucket_partial_access_note">只授权了部分照片，只会备份你允许的那些。</string>
     <string name="bucket_loading">正在读取相册…</string>
     <string name="bucket_count">%1$d 张</string>
     <string name="bucket_unnamed">未命名</string>

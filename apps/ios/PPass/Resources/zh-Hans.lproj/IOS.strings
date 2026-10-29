@@ -9,6 +9,11 @@
 "partial_access_body" = "备份需要完整相册权限。到「设置 › P-Pass › 照片」选「完整访问」，才能备份全部照片。";
 "no_media_access_body" = "备份需要访问相册。现在一张照片都读不到，所以什么都没在备份——到「设置 › P-Pass › 照片」允许访问。";
 
+/* 选范围页：一张照片都读不到（拒绝了照片权限）时不说「没有找到照片」，说没有权限并给「去设置」（iOS 独有：Android 拒绝后回首页，不进这一页）。 */
+"bucket_no_access_title" = "没有照片访问权限";
+"bucket_no_access_body" = "P-Pass 读不到照片，没法备份。";
+"bucket_no_access_action" = "去设置";
+
 /* 失败通知（#981）：iOS 点通知只打开 App、不会直达系统设置，指路写 iOS 设置项名字；电池优化在 iOS 上不存在，对位的是「后台 App 刷新」。 */
 "notif_media_partial_body" = "相册权限从「完整访问」变成了「部分」，没选中的照片不会备份。到「设置 › P-Pass › 照片」改回「完整访问」。";
 "notif_media_none_body" = "相册权限被关掉了，P-Pass 现在一张照片都读不到，什么都没在备份。到「设置 › P-Pass › 照片」允许访问。";

@@ -54,8 +54,8 @@ class OnboardingSlimWiringTest {
     @Test
     fun photos_tab_guides_to_the_scope_picker_when_no_album_is_chosen() {
         val photos = File("src/main/java/com/hawkeyexb/ppass/ui/PhotosScreen.kt").readText()
-        assertTrue("空着时居中给引导", photos.contains("items.isEmpty() && noAlbums ->"))
-        assertTrue("不空时在顶部也给", photos.contains("if (noAlbums && items.isNotEmpty())"))
+        assertTrue("空着时居中给引导", photos.contains("items.isEmpty() && guide != PhotosGuide.None ->"))
+        assertTrue("不空时在顶部也给", photos.contains("if (guide != PhotosGuide.None && items.isNotEmpty())"))
         assertFalse("photos_empty 被替换", photos.contains("R.string.photos_empty"))
         assertTrue(main.contains("noAlbums = !scopeUnreadable && (selectedBucketCount ?: 0) == 0,"))
         assertTrue("按钮直达选范围页", main.contains("onChooseAlbums = { enterBucketPicker(s.pairing, firstTime = false) },"))

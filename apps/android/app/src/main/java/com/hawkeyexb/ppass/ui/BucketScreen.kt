@@ -205,6 +205,8 @@ fun BucketScreen(
     firstTime: Boolean,
     // MOB-02 §六: 新相册判定基准（null = 从未选过范围 = 全量模式，无徽标）。
     knownBuckets: Set<Long>? = null,
+    /** 10-29：只给了部分照片——页顶说明一行，只备份允许的那些。 */
+    partialAccess: Boolean = false,
     onDone: (Set<Long>, ScopeTime) -> Unit,
     onCancel: () -> Unit,
 ) {
@@ -232,6 +234,13 @@ fun BucketScreen(
                 }
             }
             Spacer(Modifier.height(6.dp))
+            if (partialAccess) {
+                Text(
+                    stringResource(R.string.bucket_partial_access_note),
+                    fontSize = 14.sp, lineHeight = 21.sp, fontWeight = FontWeight.SemiBold, color = PPColor.Waiting,
+                )
+                Spacer(Modifier.height(6.dp))
+            }
             Text(
                 stringResource(R.string.bucket_hint),
                 fontSize = 14.sp, lineHeight = 21.sp, color = PPColor.Ink40,

@@ -86,7 +86,6 @@ import com.hawkeyexb.ppass.backup.BackupSettings
 import com.hawkeyexb.ppass.backup.MediaScanner
 import com.hawkeyexb.ppass.backup.AutoBackupPrefs
 import com.hawkeyexb.ppass.backup.BackupHealthPrefs
-import com.hawkeyexb.ppass.backup.isPartialMediaAccess
 import com.hawkeyexb.ppass.backup.MediaAccess
 import com.hawkeyexb.ppass.backup.mediaAccessOf
 import com.hawkeyexb.ppass.backup.resumeAfterInterruption
@@ -194,29 +193,27 @@ internal fun isOnboardingScreen(screen: Screen): Boolean =
     screen is Screen.Buckets && screen.firstTime
 
 /** MOB-03：进选相册页时权限链的第一步。 */
-internal enum class BucketPickerEntry { RequestPermission, Home, Buckets }
+internal enum class BucketPickerEntry { RequestPermission, Buckets }
 
 /**
- * #1259（10-29 改决定）：缺照片权限就直接弹系统框，前面不加说明屏——Android 的系统框不能自定义，
- * 只给了部分 / 全拒由首页的权限卡和通知兜底（[mediaPermissionLanding]）。
+ * #1259（10-29 改决定）：缺照片权限就直接弹系统框，前面不加说明屏——Android 的系统框不能自定义。
+ * 只给了部分照片时完整权限仍算缺，照样再弹：Android 14+ 的系统框就是用户追加照片或改成「全部」的地方。
  */
-internal fun bucketPickerEntry(permissionsMissing: Boolean, partialAccess: Boolean): BucketPickerEntry = when {
-    permissionsMissing -> BucketPickerEntry.RequestPermission
-    partialAccess -> BucketPickerEntry.Home
-    else -> BucketPickerEntry.Buckets
-}
+internal fun bucketPickerEntry(permissionsMissing: Boolean): BucketPickerEntry =
+    if (permissionsMissing) BucketPickerEntry.RequestPermission else BucketPickerEntry.Buckets
 
 /** MOB-03：系统照片权限框关掉之后去哪。 */
-internal enum class MediaPermissionLanding { Buckets, Home, HomeWithDeniedDialog }
+internal enum class MediaPermissionLanding { Buckets, HomeWithDeniedDialog }
 
 /**
- * 完整授权 → 选范围页；只给了部分 → 首页（`partial_access_*` 引导卡，MOB-02 §二）；
+ * 完整授权、只给了部分照片 → 都进选范围页（10-29：部分授权也要能选范围，只备份允许的那些，
+ * 页顶说明一行 `bucket_partial_access_note`；以前直接回首页、范围是空的，用户看不出为什么不传）。
  * 全拒 → 首页（`no_media_access_*` 卡）并弹人话对话框。配对成功后直接弹系统框时界面还停在配对页，
  * 拒绝也必须离开那里，不能把用户留在配对页上。
  */
 internal fun mediaPermissionLanding(allGranted: Boolean, access: MediaAccess): MediaPermissionLanding = when {
     allGranted && access == MediaAccess.FULL -> MediaPermissionLanding.Buckets
-    access == MediaAccess.PARTIAL -> MediaPermissionLanding.Home
+    access == MediaAccess.PARTIAL -> MediaPermissionLanding.Buckets
     else -> MediaPermissionLanding.HomeWithDeniedDialog
 }
 
@@ -405,7 +402,6 @@ fun PPassApp() {
                     BackupScopeStore(context).selectedBucketIds() ?: emptySet(),
                     pendingBucketsFirstTime,
                 )
-                MediaPermissionLanding.Home -> screen = Screen.Home(pairing)
                 MediaPermissionLanding.HomeWithDeniedDialog -> {
                     screen = Screen.Home(pairing)
                     showMediaPermissionDialog = true
@@ -605,9 +601,8 @@ fun PPassApp() {
     }
 
     // MOB-03: 进相册选择页的完整权限链（Home「选择备份的相册」与配对
-    // 成功→直接选相册共用）——未授权 → 直接弹系统权限请求（#1259：不加说明屏；
-    // 完整授权后进列表）；部分授权 → Home 引导卡（MOB-02 §二，不显示假 0/0）；
-    // 拒绝 → Home + 人话对话框。备份主流程的入口，任何分支都
+    // 成功→直接选相册共用）——未授权 → 直接弹系统权限请求（#1259：不加说明屏）；
+    // 完整授权或只给了部分 → 选范围页（部分时页顶说明一行）；拒绝 → Home + 人话对话框。备份主流程的入口，任何分支都
     // 不许白屏。
     /**
      * 这台电脑以前连过吗——**在这台手机上走完过 onboarding，且这台桌面的
@@ -632,13 +627,12 @@ fun PPassApp() {
             ContextCompat.checkSelfPermission(context, it) !=
                 PackageManager.PERMISSION_GRANTED
         }
-        when (bucketPickerEntry(needed.isNotEmpty(), hasPartialMediaAccess(context))) {
+        when (bucketPickerEntry(needed.isNotEmpty())) {
             BucketPickerEntry.RequestPermission -> {
                 pendingBucketsPairing = pairing
                 pendingBucketsFirstTime = firstTime
                 bucketMediaPermission.launch(withMediaLocation(needed))
             }
-            BucketPickerEntry.Home -> screen = Screen.Home(pairing)
             BucketPickerEntry.Buckets -> screen = Screen.Buckets(
                 pairing,
                 BackupScopeStore(context).selectedBucketIds() ?: emptySet(),
@@ -1132,6 +1126,8 @@ fun PPassApp() {
                         // 范围存了但读不出来不算「没选」（设置行另说「读不到」）。
                         noAlbums = !scopeUnreadable && (selectedBucketCount ?: 0) == 0,
                         onChooseAlbums = { enterBucketPicker(s.pairing, firstTime = false) },
+                        mediaAccess = mediaAccess,
+                        onOpenAppSettings = { openAppDetailsSettings(context) },
                     )
                 },
                 backup = {
@@ -1362,14 +1358,10 @@ fun PPassApp() {
                     firstTime = s.firstTime,
                     // MOB-02 §六: 新相册判定基准（null = 从未选过范围，全量模式）。
                     knownBuckets = scopeStore.knownBucketIds(),
+                    // 10-29：只给了部分照片也照常保存范围，只备份允许的那些（页顶说明一行）；
+                    // 首页英雄卡仍由部分授权引导卡顶替（MOB-02 §二：不显示假 0/0）。
+                    partialAccess = mediaAccess == MediaAccess.PARTIAL,
                     onDone = { sel, time ->
-                        // MOB-02 §二: 部分授权态不保存范围（选了也备不完整，
-                        // 且会显示假 0/0）——直接回 Home，Home 显示部分授权
-                        // 引导卡（一键去系统设置改完全授权）。
-                        if (hasPartialMediaAccess(context)) {
-                            screen = Screen.Home(s.pairing)
-                            return@BucketScreen
-                        }
                         // MOB-02 §六: 保存范围 + 记录当前全部相册（新相册
                         // 基准）；新出现的相册默认不包含（不在 sel 里）。
                         // MOB-20: 必须在 saveScope 覆盖旧集合**之前**算差集。
@@ -1474,19 +1466,6 @@ private fun hasNotificationPermission(context: Context): Boolean =
  */
 private fun mediaAccess(context: Context): MediaAccess =
     com.hawkeyexb.ppass.backup.currentMediaAccess(context) // #130：与确定事件通知共用同一个查询点
-
-/** MOB-02 §二: 部分授权检测（走纯函数判定，权限查询为生产注入）。
- *  路由判据保持原样——「只给了部分」与「全拒」在这里不可混用。 */
-private fun hasPartialMediaAccess(context: Context): Boolean =
-    isPartialMediaAccess(
-        imagesGranted = ContextCompat.checkSelfPermission(
-            context, Manifest.permission.READ_MEDIA_IMAGES
-        ) == PackageManager.PERMISSION_GRANTED,
-        visualSelectedGranted = ContextCompat.checkSelfPermission(
-            context, Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED
-        ) == PackageManager.PERMISSION_GRANTED,
-        sdkInt = Build.VERSION.SDK_INT,
-    )
 
 /** MOB-02 §二: 一键去系统设置（应用详情页）改完整相册权限。 */
 private fun openAppDetailsSettings(context: Context) {
