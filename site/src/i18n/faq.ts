@@ -269,7 +269,7 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
           q: 'If I delete a photo on my phone, is the copy gone too?',
           a: [
             'No, it stays. Backup only ever adds.',
-            'To clear photos off the computer, open the folder and delete them there. If you move or delete files in that folder, P-Pass records it and does not quietly put them back.',
+            'To clear photos off the computer, open the folder and delete them there. If you move or delete files in that folder, P-Pass records it.',
           ],
         },
         {
@@ -536,7 +536,7 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
           q: '手机上删了照片，电脑上那份还在吗？',
           a: [
             '还在。备份只会增加文件，手机上的删除不会同步过来。',
-            '要清掉电脑上的照片，直接打开那个文件夹删除即可。你在文件夹里挪走或删掉文件，程序会照实记一笔，不会偷偷传回来。',
+            '要清掉电脑上的照片，直接打开那个文件夹删除即可。你在文件夹里挪走或删掉文件，程序会照实记一笔。',
           ],
         },
         {
