@@ -224,14 +224,17 @@ class SqliteOrderStoreDeviceTest {
             null,
         )?.use { c -> while (c.moveToNext()) allBuckets += c.getLong(0) }
 
-        val source = ContentResolverMediaSnapshotSource(context, { allBuckets })
+        val source = ContentResolverMediaSnapshotSource(context, { com.hawkeyexb.ppass.backup.BackupScope(allBuckets, null) })
         val all = source.readInScope(0L) { it.toList() }
         val ids = all.map { it.mediaId }
         assertEquals("strictly ascending _id", ids.sorted().distinct(), ids)
         assertTrue(all.all { it.bucketId in allBuckets })
+        // #1263：快照带上 DATE_ADDED（范围的时间条件按它判）。
+        assertTrue(all.all { it.dateAddedSec > 0 })
 
         // 列名或语法写错会抛异常：让真实的 selection / sortOrder 在 MediaProvider 上执行一次。bucket -1 不存在。
-        val probe = ContentResolverMediaSnapshotSource(context, { setOf(-1L) })
+        // #1263：带上开始时间，`DATE_ADDED >= ?` 那一段也在 MediaProvider 上真实执行。
+        val probe = ContentResolverMediaSnapshotSource(context, { com.hawkeyexb.ppass.backup.BackupScope(setOf(-1L), 1L) })
         assertEquals(emptyList<MediaSnapshot>(), probe.readInScope(0L) { it.toList() })
         val volumes = probe.volumeNames()
         assertTrue("at least one volume: $volumes", volumes.isNotEmpty())

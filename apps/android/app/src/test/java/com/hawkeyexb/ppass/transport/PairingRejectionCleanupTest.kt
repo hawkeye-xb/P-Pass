@@ -273,7 +273,6 @@ class PairingRejectionCleanupTest {
         val home = Screen.Home(pairing)
         assertSame(Screen.Welcome, screenAfterPairingCleared(home, "e1"))
         assertSame(Screen.Welcome, screenAfterPairingCleared(Screen.Buckets(pairing, emptySet(), firstTime = false), "e1"))
-        assertSame(Screen.Welcome, screenAfterPairingCleared(Screen.Started(pairing, 3), "e1"))
         assertSame(Screen.Welcome, screenAfterPairingCleared(Screen.PhotoIntro(pairing, firstTime = true), "e1"))
         // 清的不是这一条，或者用户正在建立新配对：不动。
         assertSame(home, screenAfterPairingCleared(home, "e0"))

@@ -7,7 +7,10 @@ package com.hawkeyexb.ppass.backup.order
 class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMillis) : OrderStore {
     private var state = State()
 
-    private data class Skip(val bucketId: Long, val sourceVersion: String)
+    private data class Skip(val bucketId: Long, val sourceVersion: String, val dateAddedSec: Long = 0L)
+
+    private fun inScope(bucketId: Long, dateAddedSec: Long, bucketIds: Set<Long>?, sinceSec: Long?) =
+        (bucketIds == null || bucketId in bucketIds) && (sinceSec == null || dateAddedSec >= sinceSec)
 
     private data class State(
         val rows: Map<Long, Order> = emptyMap(),
@@ -74,7 +77,7 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
 
     private fun Tx.insertRow(order: NewOrder, now: Long): Order {
         lastId += 1
-        val row = Order(lastId, order.mediaId, order.sourceVersion, order.bucketId, order.contentHash, order.state, 0, order.pairingId, now, now, locationRedacted = order.locationRedacted)
+        val row = Order(lastId, order.mediaId, order.sourceVersion, order.bucketId, order.contentHash, order.state, 0, order.pairingId, now, now, locationRedacted = order.locationRedacted, dateAddedSec = order.dateAddedSec)
         rows[row.id] = row
         return row
     }
@@ -175,8 +178,8 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
 
     override fun <R> readSkipList(block: (Sequence<Long>) -> R): R = block(state.skips.keys.sorted().asSequence())
 
-    override fun countSkipped(bucketIds: Set<Long>?): Long =
-        state.skips.values.count { bucketIds == null || it.bucketId in bucketIds }.toLong()
+    override fun countSkipped(bucketIds: Set<Long>?, sinceSec: Long?): Long =
+        state.skips.values.count { inScope(it.bucketId, it.dateAddedSec, bucketIds, sinceSec) }.toLong()
 
     override fun cancelRemaining(targets: List<SkipTarget>, audit: AuditRecord?): SkipResult = inTransaction {
         val now = clock()
@@ -191,7 +194,7 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
                 continue
             }
             if (target.mediaId !in skips) {
-                skips[target.mediaId] = Skip(target.bucketId, target.sourceVersion)
+                skips[target.mediaId] = Skip(target.bucketId, target.sourceVersion, target.dateAddedSec)
                 written++
             }
             if (current != null && current.state.isOpen) {
@@ -232,19 +235,19 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
         failed.size
     }
 
-    override fun countCurrentByState(bucketIds: Set<Long>?): Map<OrderState, Long> {
+    override fun countCurrentByState(bucketIds: Set<Long>?, sinceSec: Long?): Map<OrderState, Long> {
         val out = currentRows()
-            .filter { bucketIds == null || it.bucketId in bucketIds }
+            .filter { inScope(it.bucketId, it.dateAddedSec, bucketIds, sinceSec) }
             .filter { it.state != OrderState.SKIPPED_BY_USER }
             .groupingBy { it.state }.eachCount().mapValues { it.value.toLong() }
             .toMutableMap()
-        val skipped = countSkipped(bucketIds)
+        val skipped = countSkipped(bucketIds, sinceSec)
         if (skipped > 0) out[OrderState.SKIPPED_BY_USER] = skipped
         return out
     }
 
-    override fun countConfirmedPresent(bucketIds: Set<Long>?): Long =
-        currentRows().count { it.state == OrderState.CONFIRMED && !it.sourceMissing && (bucketIds == null || it.bucketId in bucketIds) }.toLong()
+    override fun countConfirmedPresent(bucketIds: Set<Long>?, sinceSec: Long?): Long =
+        currentRows().count { it.state == OrderState.CONFIRMED && !it.sourceMissing && inScope(it.bucketId, it.dateAddedSec, bucketIds, sinceSec) }.toLong()
 
     override fun lastConfirmedAtMs(): Long = currentRows().filter { it.state == OrderState.CONFIRMED }.maxOfOrNull { it.updatedAtMs } ?: 0L
 

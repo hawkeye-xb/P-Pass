@@ -257,13 +257,13 @@ class WriteFailureNoCrashTest {
     }
 
     @Test
-    fun finish_page_enter_rewrites_the_intent_and_pair_save_failure_goes_to_the_trouble_page() {
+    fun first_scope_save_rewrites_the_intent_and_pair_save_failure_goes_to_the_trouble_page() {
+        // #1263：没有完成页了——首次选范围点「开始备份」时按「后台备份关」把意图再写一次。
+        val enter = main.substringAfter("is Screen.Buckets -> {").substringAfter("if (s.firstTime) {").substringBefore("} else if")
         assertTrue(
-            "完成页「进入」要按用户的选择把意图再写一次",
-            main.contains("onEnter = onEnterWithoutBackgroundBackup,"),
+            "首次选完范围要按「关」把意图再写一次",
+            enter.contains("settingsWriter.write(\"autoBackup\", false) { disableAutoBackup(context) }"),
         )
-        val enter = main.substringAfter("val onEnterWithoutBackgroundBackup = {").substringBefore("\n            }")
-        assertTrue(enter.contains("settingsWriter.write(\"autoBackup\", false) { disableAutoBackup(context) }"))
         val joined = main.substringAfter("val saveError = savePairingOrError").substringBefore("return@LaunchedEffect")
         assertTrue("配对文件存不下来 → 配对失败页（对位 iOS pair_save_failed）", joined.contains("R.string.pair_save_failed"))
     }

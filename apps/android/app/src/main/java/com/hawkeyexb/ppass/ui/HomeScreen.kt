@@ -272,6 +272,8 @@ fun HomeScreen(
     selectedBucketCount: Int? = null,
     // #1020：存了范围但读不出来——设置行说「读不到已保存的选择」，不说「未选相册」。
     scopeUnreadable: Boolean = false,
+    // #1263：范围的时间那一档（从今天起 / 从 10月29日 起 / 全部），接在相册数后面。
+    scopeTimeLabel: String? = null,
     // #1038：账本读不到 / 范围存没存——英雄区据此在「读不到」「未选相册」「相册数量读取失败」之间选（[heroRenderOf]）。
     countsReadable: Boolean = true,
     scopeSaved: Boolean = true,
@@ -323,6 +325,11 @@ fun HomeScreen(
     // onCheckUpdate 非 null 才渲染该行——行为判定全在 UpdateUiController。
     updateRowValue: String? = null,
     onCheckUpdate: (() -> Unit)? = null,
+    // #1263：「开启后台备份」卡片（判据见 showBackgroundBackupOffer）。onboarding 不再问后台备份，
+    // 卡片只放在设置页——照片页是浏览用的，顶部不放告示（10-19 原则，与 iOS 对齐）。
+    offerBackgroundBackup: Boolean = false,
+    onEnableBackgroundBackup: () -> Unit = {},
+    onDismissBackgroundBackupOffer: () -> Unit = {},
 ) {
     val line = statusLineOf(state, triplet?.k ?: 0L)
     val busy = line is StatusLine.Working
@@ -749,6 +756,21 @@ fun HomeScreen(
                 )
             )
         }
+        // #1263：点「开启」申请电池白名单，授予了才算开（拒绝时卡片留着）；「不用了」记下来，之后不再出现，
+        // 下面的后台备份开关照旧可用。
+        if (offerBackgroundBackup) {
+            Spacer(Modifier.height(12.dp))
+            NoticeCard(
+                HomeNotice(
+                    kind = HomeNoticeKind.ENABLE_BACKGROUND_BACKUP,
+                    body = stringResource(R.string.background_backup_offer),
+                    actionLabel = stringResource(R.string.background_backup_offer_action),
+                    onAction = onEnableBackgroundBackup,
+                    dismissLabel = stringResource(R.string.background_backup_offer_dismiss),
+                    onDismiss = onDismissBackgroundBackupOffer,
+                )
+            )
+        }
         // ── "备份"（M10，全页面状态稿）：4 行——第 1 行导航到选相册，
         // 后 3 行是直接开关（不折进子页——用户实机反馈上一轮把充电/
         // WiFi 折进"什么时候备份"子页是自己想当然加的一层，设计稿就是
@@ -770,7 +792,8 @@ fun HomeScreen(
                         stringResource(R.string.backup_scope_unreadable)
                     } else {
                         backupScopeRowCount(selectedBucketCount)?.let {
-                            pluralStringResource(R.plurals.backup_scope_n, it, it)
+                            val albums = pluralStringResource(R.plurals.backup_scope_n, it, it)
+                            if (scopeTimeLabel != null) stringResource(R.string.backup_scope_with_time, albums, scopeTimeLabel) else albums
                         } ?: stringResource(R.string.backup_scope_none)
                     },
                     onClick = onOpenBucketPicker,

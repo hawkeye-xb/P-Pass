@@ -56,7 +56,14 @@ class MediaScanner(private val resolver: ContentResolver?) {
      *  图片/视频两个 collection 取全局最新）——BucketScreen 拿它解码
      *  封面缩略图，模拟系统相册选择器的交互；取不到（老数据/异常）
      *  时为 null，UI 退化为空白封面，不阻塞选择流程。 */
-    data class Bucket(val id: Long, val name: String?, val count: Int, val coverUri: Uri? = null)
+    data class Bucket(
+        val id: Long,
+        val name: String?,
+        val count: Int,
+        val coverUri: Uri? = null,
+        /** #1263：相机拍的照片所在的相册（[isCameraPath]）——首次选范围默认勾上它、首页空状态按它给提示。 */
+        val isCamera: Boolean = false,
+    )
 
     /**
      * All albums, each with a total item count (photos+videos). T6:
@@ -67,6 +74,10 @@ class MediaScanner(private val resolver: ContentResolver?) {
         val byId = LinkedHashMap<Long, MutableList<String?>>()
         val coverUri = mutableMapOf<Long, Uri>()
         val coverDate = mutableMapOf<Long, Long>()
+        val camera = mutableSetOf<Long>()
+        // #1263：RELATIVE_PATH 是 API 29 才有的列（minSdk 26），更早的系统看 `_data`。
+        @Suppress("DEPRECATION")
+        val pathColumn = if (Build.VERSION.SDK_INT >= 29) MediaStore.MediaColumns.RELATIVE_PATH else MediaStore.MediaColumns.DATA
         for ((collection, _) in listOf(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI to false,
             MediaStore.Video.Media.EXTERNAL_CONTENT_URI to true,
@@ -76,8 +87,10 @@ class MediaScanner(private val resolver: ContentResolver?) {
                 MediaStore.MediaColumns.BUCKET_ID,
                 MediaStore.MediaColumns.BUCKET_DISPLAY_NAME,
                 MediaStore.MediaColumns.DATE_ADDED,
+                pathColumn,
             )
             requireResolver().query(collection, projection, null, null, null)?.use { cur ->
+                val pathIdx = cur.getColumnIndex(pathColumn)
                 val idIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
                 val bucketIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns.BUCKET_ID)
                 val nameIdx = cur.getColumnIndexOrThrow(MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
@@ -86,6 +99,11 @@ class MediaScanner(private val resolver: ContentResolver?) {
                     val id = cur.getLong(bucketIdx)
                     val name = bucketNameOrNull(cur.getString(nameIdx))
                     byId.getOrPut(id) { mutableListOf() }.add(name)
+                    if (id !in camera && pathIdx >= 0) {
+                        val path = cur.getString(pathIdx)
+                        val cameraRow = if (Build.VERSION.SDK_INT >= 29) isCameraPath(path, null) else isCameraPath(null, path)
+                        if (cameraRow) camera += id
+                    }
                     val date = cur.getLong(dateIdx)
                     if (date > (coverDate[id] ?: -1L)) {
                         coverDate[id] = date
@@ -94,7 +112,7 @@ class MediaScanner(private val resolver: ContentResolver?) {
                 }
             }
         }
-        return byId.map { (id, names) -> Bucket(id, names.first(), names.size, coverUri[id]) }
+        return byId.map { (id, names) -> Bucket(id, names.first(), names.size, coverUri[id], isCamera = id in camera) }
             .sortedBy { it.name?.lowercase().orEmpty() }
     }
 
@@ -256,7 +274,7 @@ class MediaScanner(private val resolver: ContentResolver?) {
      * 吞——由 computeTripletSafe（refreshTriplet 生产实现）Throwable 级
      * 兜底为「三元组不显示」，绝不崩 App。
      */
-    fun countAll(bucketIds: Set<Long>? = null): Long {
+    fun countAll(bucketIds: Set<Long>? = null, sinceSec: Long? = null): Long {
         // FIX-T6: 空集 = 一个都不备 → 0（不发查询）。
         if (bucketIds != null && bucketIds.isEmpty()) return 0L
         var total = 0L
@@ -264,9 +282,11 @@ class MediaScanner(private val resolver: ContentResolver?) {
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
             MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
         )) {
-            val where = if (!bucketIds.isNullOrEmpty()) {
-                "${MediaStore.MediaColumns.BUCKET_ID} IN (${bucketIds.joinToString(",")})"
-            } else null
+            // #1263：范围带开始时间时只数进入相册不早于它的（与引擎 inScope 同一口径：DATE_ADDED）。
+            val where = listOfNotNull(
+                bucketIds?.takeIf { it.isNotEmpty() }?.let { "${MediaStore.MediaColumns.BUCKET_ID} IN (${it.joinToString(",")})" },
+                sinceSec?.let { "${MediaStore.MediaColumns.DATE_ADDED} >= $it" },
+            ).takeIf { it.isNotEmpty() }?.joinToString(" AND ")
             requireResolver().query(
                 collection,
                 arrayOf(MediaStore.MediaColumns._ID),

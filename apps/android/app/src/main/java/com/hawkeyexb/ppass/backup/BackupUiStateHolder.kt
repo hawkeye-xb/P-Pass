@@ -323,11 +323,12 @@ class BackupUiStateHolder(
      * 账目（读库）。引擎视图取最新值带上。null = 运行时还没就绪（不是读失败：不发布，等订阅接上再读）。
      * #1038：读库抛出 → [FlowProjection.unreadable]（记日志），不再沿用上一次投影、不再静默。
      */
-    private fun currentFacts(recount: Boolean, bucketIds: Set<Long>?): FlowProjection? {
+    private fun currentFacts(recount: Boolean, bucketIds: Set<Long>?, sinceSec: Long?): FlowProjection? {
         val g = gateway ?: return null
         if (recount || inScopeTotal == null) {
             inScopeTotal = try {
-                bucketIds?.let { MediaScanner(context.contentResolver).countAll(it) }
+                // #1263：分母跟着新范围一起算（相册 + 开始时间）。
+                bucketIds?.let { MediaScanner(context.contentResolver).countAll(it, sinceSec) }
             } catch (_: Throwable) {
                 null
             }
@@ -343,7 +344,7 @@ class BackupUiStateHolder(
             total, view,
             // 由好转坏时记一行，持续读不到不随每次刷新刷屏。
             onUnreadable = { e -> if (!countsUnreadableLogged) PLog.w(TAG, "home-facts: order counts unreadable", e) },
-        ) { g.facts(bucketIds, total) }
+        ) { g.facts(bucketIds, total, sinceSec) }
         countsUnreadableLogged = !p.countsReadable
         return p
     }
@@ -352,7 +353,8 @@ class BackupUiStateHolder(
         pairingLostState.syncFrom(flowDeliveryPairingLoss, PairingId(pairing.pairingId))
         // #1020：读不到的范围与「从未保存」一样不给三元组（英雄区说「未选相册」，设置行另说「读不到」），同 iOS。
         val bucketIds = (withContext(Dispatchers.IO) { scopeStore.readScope() } as? ScopeRead.Saved)?.ids
-        val p = withContext(Dispatchers.IO) { currentFacts(recount, bucketIds) } ?: return
+        val sinceSec = withContext(Dispatchers.IO) { scopeStore.sinceSec() }
+        val p = withContext(Dispatchers.IO) { currentFacts(recount, bucketIds, sinceSec) } ?: return
         lastBucketIds = bucketIds
         lastNoAlbums = noAlbumsOf(bucketIds, existingBuckets)
         publish(p)
@@ -447,7 +449,7 @@ internal interface EngineGateway {
     val revision: Flow<Long>
 
     /** 账目（读 order 表与 FlowControl），不含引擎视图。 */
-    fun facts(bucketIds: Set<Long>?, inScopeTotal: Long?): FlowProjection
+    fun facts(bucketIds: Set<Long>?, inScopeTotal: Long?, sinceSec: Long?): FlowProjection
 
     /** 只在 RUNNING 有效。 */
     suspend fun pause()
@@ -488,8 +490,8 @@ private class EngineViewGateway(private val runtime: AndroidFlowRuntime) : Engin
 
     override val revision: Flow<Long> = engine.revision
 
-    override fun facts(bucketIds: Set<Long>?, inScopeTotal: Long?): FlowProjection =
-        FlowProjection.facts(runtime.store, runtime.control, bucketIds, inScopeTotal, view = null)
+    override fun facts(bucketIds: Set<Long>?, inScopeTotal: Long?, sinceSec: Long?): FlowProjection =
+        FlowProjection.facts(runtime.store, runtime.control, bucketIds, inScopeTotal, view = null, sinceSec = sinceSec)
 
     override suspend fun pause() {
         engine.pause().await()

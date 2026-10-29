@@ -9,7 +9,7 @@
     <!-- T-080 layout v1: welcome three steps -->
     <string name="welcome_step1">1 · Open P-Pass on the home computer</string>
     <string name="welcome_step2">2 · Use the button below to scan the code on its screen</string>
-    <string name="welcome_step3">3 · Then there is nothing left to do</string>
+    <string name="welcome_step3">3 · Choose which photos to back up</string>
 
     <!-- Scan (M2/M3, full-page-states doc) -->
     <string name="scan_header_title">Scan to connect</string>
@@ -51,11 +51,6 @@
     <string name="pair_needs_update_title">Update needed</string>
     <string name="state_waiting_desktop_internal">P-Pass on the computer ran into an error</string>
     <string name="scan_again">Scan again</string>
-    <!-- M6 completion screen (full-page-states doc): shown right after the first backup is triggered. -->
-    <string name="backup_started_title">%1$s photos, on their way home.</string>
-    <string name="backup_started_body">Nothing else to do. Open the app anytime to see your photos are safe.</string>
-    <string name="background_backup_enable">Enable background backup</string>
-    <string name="background_backup_not_now">Don’t enable background backup</string>
     <string name="not_a_code">This is not a P-Pass pairing code.</string>
     <string name="pair_unparseable_code">The pairing code cannot be parsed. Update P-Pass on both the computer and phone to the latest version.</string>
     <string name="storage_device_default">P-Pass storage</string>
@@ -240,18 +235,30 @@
     <!-- T1: 版本号显示 -->
     <string name="setting_version">Version</string>
     <!-- T6: 相册选择 -->
-    <string name="bucket_title">Choose albums to back up</string>
+    <string name="bucket_title">Photos to back up</string>
     <string name="bucket_hint">Albums you leave out are never backed up (e.g. photos WeChat received).</string>
     <string name="bucket_empty">No photos or videos found on this phone.</string>
     <string name="bucket_loading">Reading albums…</string>
     <string name="bucket_count">%1$d</string>
     <string name="bucket_unnamed">Unnamed</string>
     <!-- M5 (full-page-states doc): summary sentence + single primary button. -->
-    <string name="bucket_summary">%1$s photos will back up · by default runs automatically on Wi-Fi when the battery isn\'t low, change anytime in Settings</string>
     <string name="bucket_start">Start backup</string>
+    <string name="bucket_save">Save</string>
+    <!-- #1263: the two time choices for the backup scope (no custom date); "From %1$s" for a "from today" saved days ago. -->
+    <string name="scope_time_today">From today</string>
+    <string name="scope_time_since_date">From %1$s</string>
+    <string name="scope_time_all">Everything</string>
+    <string name="backup_scope_with_time">%1$s · %2$s</string>
+    <!-- #1263: home card offering background backup (onboarding no longer asks). -->
+    <string name="background_backup_offer">Turn on background backup: photos back up even when the app isn\'t open</string>
+    <string name="background_backup_offer_action">Turn on</string>
+    <string name="background_backup_offer_dismiss">No thanks</string>
+    <!-- #1263: empty Photos tab, worded by what is in scope. -->
+    <string name="home_empty_camera">Connected to %1$s. Photos you take from now on come home on their own — try taking one.</string>
+    <string name="home_empty_albums">New photos saved to the albums you picked come home on their own.</string>
     <!-- MOB-02 §六: 新相册徽标 -->
     <string name="bucket_new">New</string>
-    <string name="backup_scope">Albums to back up</string>
+    <string name="backup_scope">Photos to back up</string>
     <string name="backup_scope_none">None selected</string>
     <!-- #1020: a scope was saved but can't be read — not the same as "None selected". -->
     <string name="backup_scope_unreadable">Can’t read the saved selection</string>
@@ -352,7 +359,9 @@
     <string name="photos_filter_empty">No photos under this filter yet.</string>
     <string name="photos_loading">Loading the family library…</string>
     <string name="photos_unreachable">Could not reach the computer.</string>
-    <string name="photos_empty">No photos in the library yet — back up a batch first.</string>
+    <!-- #1263: Photos tab guide when no album is selected (centred when empty, on top otherwise); the button opens the scope picker. -->
+    <string name="photos_no_albums">No albums chosen for backup yet</string>
+    <string name="photos_choose_albums">Choose albums</string>
     <!-- SYNC-04: live subscription gave up retrying — same UX-11 philosophy
          (bounded wait -> surface an error -> hand it to the user). -->
     <string name="photos_live_disconnected">Lost the live connection to the computer.</string>

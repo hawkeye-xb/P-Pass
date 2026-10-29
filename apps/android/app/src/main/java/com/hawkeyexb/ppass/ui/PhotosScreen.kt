@@ -292,6 +292,11 @@ internal fun PhotosScreen(
     // SENT-01 既有数据源，非新造）；null = 从未确认可达过，不编造
     // 具体天数，警示卡改用不带天数的兜底文案。
     daysUnreachable: Int? = null,
+    // #1263：一张照片都还没有时的说法（按范围里有没有相机相册给）；null = 「新存进所选相册的…」那句。
+    emptyText: String? = null,
+    // #1263：范围里一个相册都没有——给引导和「选择相册」按钮（直达选范围页）。照片页不空时也在顶部给。
+    noAlbums: Boolean = false,
+    onChooseAlbums: () -> Unit = {},
 ) {
     // SYNC-06: 时间线状态（items/next/loading/error/订阅标志）全部由
     // TimelineSubscriptionHolder 持有——App 前台期间（不管显示哪个 tab）
@@ -432,6 +437,11 @@ internal fun PhotosScreen(
             }
         }
 
+        // #1263：没选相册、但照片页里已经有（家人的）照片：引导放在顶部，不挡浏览。
+        if (noAlbums && items.isNotEmpty()) {
+            NoAlbumsGuide(onChooseAlbums, Modifier.fillMaxWidth().padding(20.dp, 0.dp, 20.dp, 12.dp))
+        }
+
         when {
             // SYNC-06: loader 尚未就绪（换配对后的极短窗口）——不渲染交互。
             loader == null -> Center(stringResource(R.string.photos_loading))
@@ -442,7 +452,10 @@ internal fun PhotosScreen(
             // UI-17: 配对失效且一张都没加载到——什么都不放，上面的红卡就是全部内容
             // （落到下一条会显示「照片库还是空的——先备份一批吧」，又是一个不同的出路）。
             error != null && items.isEmpty() -> Unit
-            items.isEmpty() -> Center(stringResource(R.string.photos_empty))
+            items.isEmpty() && noAlbums -> Box(Modifier.fillMaxSize().padding(34.dp), contentAlignment = Alignment.Center) {
+                NoAlbumsGuide(onChooseAlbums, Modifier.fillMaxWidth())
+            }
+            items.isEmpty() -> Center(emptyText ?: stringResource(R.string.home_empty_albums))
             shown.isEmpty() -> Center(stringResource(R.string.photos_filter_empty))
             else -> LazyVerticalGrid(
                 columns = GridCells.Fixed(3),
@@ -809,7 +822,7 @@ internal fun ViewerAction(
  *  组件自带的），只定制 `colors`/`shape` 让视觉贴住设计稿——不再是一个
  *  重新发明的手写药丸。 */
 @Composable
-private fun PhotoFilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
+internal fun PhotoFilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
     androidx.compose.material3.FilterChip(
         selected = selected,
         onClick = onClick,
@@ -829,6 +842,34 @@ private fun PhotoFilterChip(label: String, selected: Boolean, onClick: () -> Uni
         border = null,
         modifier = Modifier.height(36.dp),
     )
+}
+
+/** #1263：「还没选要备份的相册」+「选择相册」。照片页空着时居中，不空时在顶部。 */
+@Composable
+private fun NoAlbumsGuide(onChoose: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(
+        color = PPColor.WaitingBg,
+        shape = RoundedCornerShape(PPSize.RadiusCard),
+        modifier = modifier,
+    ) {
+        Column(Modifier.padding(18.dp)) {
+            Text(
+                stringResource(R.string.photos_no_albums),
+                fontSize = PPSize.BodyMin, lineHeight = 24.sp, color = PPColor.Ink60,
+            )
+            Spacer(Modifier.height(12.dp))
+            androidx.compose.material3.Button(
+                onClick = onChoose,
+                modifier = Modifier.fillMaxWidth().height(PPSize.TapMin),
+                shape = RoundedCornerShape(PPSize.RadiusControl),
+                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                    containerColor = PPColor.Ink, contentColor = PPColor.Paper,
+                ),
+            ) {
+                Text(stringResource(R.string.photos_choose_albums), fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
 }
 
 @Composable

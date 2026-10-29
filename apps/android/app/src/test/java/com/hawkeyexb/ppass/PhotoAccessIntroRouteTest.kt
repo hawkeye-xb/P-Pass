@@ -12,6 +12,7 @@ import org.junit.Test
  * 缺权限 → 进说明屏、不直接弹；系统框只从说明屏的「继续」弹出；已授权的路径不经过说明屏。
  */
 class PhotoAccessIntroRouteTest {
+    private val pairing = com.hawkeyexb.ppass.transport.Pairing(daemonNodeId = "a".repeat(64), daemonAddrToken = "t", storageDeviceName = "Home")
     private val main = File("src/main/java/com/hawkeyexb/ppass/MainActivity.kt").readText()
     private val res = File("src/main/res").let { r ->
         listOf("values", "values-zh").associateWith { File(r, "$it/strings.xml").readText() }
@@ -35,7 +36,10 @@ class PhotoAccessIntroRouteTest {
 
     @Test
     fun update_dialog_does_not_cover_the_intro() {
-        assertTrue(main.contains("screen !is Screen.PhotoIntro"))
+        assertTrue(main.contains("if (!isOnboardingScreen(screen) && !updateDialogSuppressed)"))
+        assertTrue(isOnboardingScreen(Screen.PhotoIntro(pairing, firstTime = true)))
+        assertTrue(isOnboardingScreen(Screen.Buckets(pairing, emptySet(), firstTime = true)))
+        assertFalse("设置里重选范围不算 onboarding", isOnboardingScreen(Screen.Buckets(pairing, emptySet(), firstTime = false)))
     }
 
     @Test

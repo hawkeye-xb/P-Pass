@@ -29,9 +29,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MOB513BackupConditionCopyTest {
-    /** 描述后台自动备份默认条件的文案（HomeScreen 空闲行 / BucketScreen 摘要）。
-     *  #581 前还有 auto_backup_rule / auto_backup_pause_hint 两条，全仓无引用，已删。 */
-    private val conditionKeys = listOf("idle_auto_hint", "bucket_summary")
+    /** 描述后台自动备份默认条件的文案（HomeScreen 空闲行）。
+     *  #581 前还有 auto_backup_rule / auto_backup_pause_hint 两条，全仓无引用，已删；#1263 删了选范围页的汇总句 bucket_summary。 */
+    private val conditionKeys = listOf("idle_auto_hint")
 
     private val res = File("src/main/res")
     private val zh = File(res, "values-zh/strings.xml").readText()

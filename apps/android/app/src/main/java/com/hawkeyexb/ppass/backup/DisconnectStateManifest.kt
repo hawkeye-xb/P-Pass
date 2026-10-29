@@ -174,6 +174,11 @@ enum class DisconnectState(
         StateLocation.FILES, "onboarding_notification_ask.json", DisconnectDisposition.RETIRED,
         "#130 遗留：onboarding 只问一次通知的标记；#1262 起 onboarding 不再申请通知，已无读写者，升级上来的机器上留着不动",
     ),
+    BACKGROUND_BACKUP_OFFER(
+        StateLocation.FILES, "background_backup_offer.json", DisconnectDisposition.KEEP,
+        "#1263：首页「开启后台备份」卡片被用户手动关掉——是对这台手机的偏好，与连哪台电脑无关",
+        owners = listOf("com.hawkeyexb.ppass.backup.BackgroundBackupOfferStore"),
+    ),
     WORK_MANAGER_DB(
         StateLocation.DATABASES, "androidx.work.workdb", DisconnectDisposition.KEEP,
         "WorkManager 库自有；断开只经由 AUTO_BACKUP_WORKS 取消 unique work，不动库文件",

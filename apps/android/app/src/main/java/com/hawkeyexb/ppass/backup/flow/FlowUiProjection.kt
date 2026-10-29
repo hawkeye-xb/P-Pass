@@ -94,13 +94,15 @@ data class FlowProjection(
             bucketIds: Set<Long>?,
             inScopeTotal: Long?,
             view: EngineView?,
+            /** #1263：范围的开始时间（null = 全部）；与 [bucketIds] 一起决定「范围内」的计数。 */
+            sinceSec: Long? = null,
         ): FlowProjection {
-            val scoped = store.countCurrentByState(bucketIds)
-            val all = if (bucketIds == null) scoped else store.countCurrentByState(null)
+            val scoped = store.countCurrentByState(bucketIds, sinceSec)
+            val all = if (bucketIds == null && sinceSec == null) scoped else store.countCurrentByState(null)
             val ackAt = control.missingSourceAckAt()
             return FlowProjection(
                 view = view,
-                confirmed = store.countConfirmedPresent(bucketIds),
+                confirmed = store.countConfirmedPresent(bucketIds, sinceSec),
                 inScopeTotal = inScopeTotal,
                 failed = all[OrderState.FAILED] ?: 0L,
                 unfinished = OrderState.entries.filter { it.isOpen }.sumOf { all[it] ?: 0L },

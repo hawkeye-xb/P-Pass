@@ -1,7 +1,8 @@
 // M5（全页面状态稿）：选相册——2 列封面卡片网格，右上角圆形勾选角标，
-// 顶部总结句+单个"开始备份"主按钮（取代旧的竖排复选框列表 +
-// "取消/备份N个相册"两按钮）。共用入口：onboarding 配对成功后 与
-// 设置页"备份哪些相册"重选，都是这一个 composable。
+// 单个主按钮（取代旧的竖排复选框列表 + "取消/备份N个相册"两按钮）。共用入口：onboarding 配对成功后 与
+// 设置页"备份哪些照片"重选，都是这一个 composable。
+// #1263：标题「备份哪些照片」；相册之外加一行时间二选一（从今天起 / 全部）；删掉底部汇总句（每个相册有张数，
+// Wi-Fi 条件在设置里）；按钮首次叫「开始备份」，编辑时叫「保存」，其余完全相同。不显示大小（iOS 没有公开接口，两端对齐）。
 package com.hawkeyexb.ppass.ui
 
 import android.content.ContentResolver
@@ -53,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.backup.MediaScanner
+import com.hawkeyexb.ppass.backup.ScopeTime
 import com.hawkeyexb.ppass.backup.newAlbumIds
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -195,16 +197,22 @@ private fun BucketCard(
 fun BucketScreen(
     buckets: List<MediaScanner.Bucket>,
     selected: Set<Long>,
+    /** #1263：时间那一档的初值。 */
+    initialTime: ScopeTime = ScopeTime.SINCE_TODAY,
+    /** #1263：「从今天起」那一档的说法（存的是以前某天时写成「从 10月29日 起」）。 */
+    sinceLabel: String,
+    /** onboarding 首次选范围：按钮叫「开始备份」；设置里重选叫「保存」。 */
+    firstTime: Boolean,
     // MOB-02 §六: 新相册判定基准（null = 从未选过范围 = 全量模式，无徽标）。
     knownBuckets: Set<Long>? = null,
-    onDone: (Set<Long>) -> Unit,
+    onDone: (Set<Long>, ScopeTime) -> Unit,
     onCancel: () -> Unit,
 ) {
     var checked by remember { mutableStateOf(selected) }
+    var time by remember { mutableStateOf(initialTime) }
     // MOB-02 §六: 新出现的相册 = 当前 − 已知；标「新」徽标，默认不勾选
     // （不在 selected 里）——配合用户「专用目录」用法。
     val newIds = newAlbumIds(buckets.map { it.id }.toSet(), knownBuckets)
-    val selectedCount = buckets.filter { it.id in checked }.sumOf { it.count }
 
     PPScreen {
         androidx.compose.material3.ProvideTextStyle(
@@ -228,7 +236,13 @@ fun BucketScreen(
                 stringResource(R.string.bucket_hint),
                 fontSize = 14.sp, lineHeight = 21.sp, color = PPColor.Ink40,
             )
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(12.dp))
+            // #1263：时间二选一。不做自选日期。
+            Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
+                PhotoFilterChip(sinceLabel, time == ScopeTime.SINCE_TODAY) { time = ScopeTime.SINCE_TODAY }
+                PhotoFilterChip(stringResource(R.string.scope_time_all), time == ScopeTime.ALL) { time = ScopeTime.ALL }
+            }
+            Spacer(Modifier.height(14.dp))
 
             Box(Modifier.weight(1f)) {
                 if (buckets.isEmpty()) {
@@ -259,15 +273,8 @@ fun BucketScreen(
             }
 
             Spacer(Modifier.height(14.dp))
-            Text(
-                stringResource(R.string.bucket_summary, groupThousands(selectedCount.toLong())),
-                fontSize = 13.5.sp, lineHeight = 20.sp, color = PPColor.Ink60,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Spacer(Modifier.height(10.dp))
             Button(
-                onClick = { onDone(checked) },
+                onClick = { onDone(checked, time) },
                 modifier = Modifier.fillMaxWidth().height(60.dp),
                 shape = RoundedCornerShape(PPSize.RadiusControl),
                 colors = ButtonDefaults.buttonColors(
@@ -275,7 +282,7 @@ fun BucketScreen(
                 ),
             ) {
                 Text(
-                    stringResource(R.string.bucket_start),
+                    stringResource(if (firstTime) R.string.bucket_start else R.string.bucket_save),
                     fontSize = 18.sp, fontWeight = FontWeight.Bold,
                 )
             }

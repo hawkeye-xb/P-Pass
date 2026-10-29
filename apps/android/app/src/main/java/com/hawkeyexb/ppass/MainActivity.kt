@@ -71,6 +71,12 @@ import com.hawkeyexb.ppass.transport.bindThenPair
 import com.hawkeyexb.ppass.transport.pairWithQr
 import com.hawkeyexb.ppass.backup.BackupScopeStore
 import com.hawkeyexb.ppass.backup.ScopeRead
+import com.hawkeyexb.ppass.backup.initialScopeTime
+import com.hawkeyexb.ppass.backup.showBackgroundBackupOffer
+import com.hawkeyexb.ppass.backup.initialSelection
+import com.hawkeyexb.ppass.backup.sinceToSave
+import com.hawkeyexb.ppass.backup.sinceWidened
+import com.hawkeyexb.ppass.backup.startOfLocalDaySec
 import com.hawkeyexb.ppass.backup.SettingsWriter
 import com.hawkeyexb.ppass.backup.savePairingOrError
 import com.hawkeyexb.ppass.backup.OnboardedDesktopsStore
@@ -105,7 +111,6 @@ import com.hawkeyexb.ppass.backup.flow.TriggerReason
 import com.hawkeyexb.ppass.backup.flow.AndroidMediaImporter
 import com.hawkeyexb.ppass.backup.flow.isOnUnmetered
 import com.hawkeyexb.ppass.backup.flow.clearFlowRuntime
-import com.hawkeyexb.ppass.ui.BackupStartedScreen
 import com.hawkeyexb.ppass.ui.PhotoAccessIntroScreen
 import com.hawkeyexb.ppass.ui.BackupUiState
 import com.hawkeyexb.ppass.ui.HomeScreen
@@ -151,15 +156,11 @@ internal sealed class Screen {
     data class Home(val pairing: Pairing) : Screen()
     // T6: 相册选择（配对成功直接进这页，或从 Home 的设置区重进）；
     // M4（全页面状态稿）：配对成功不再停一个要点按钮的 Joined 中间页，
-    // firstTime 记这次是不是 onboarding 首次选相册——只有这个分支选完
-    // 才过 M6 安心收尾页，设置页重选直接回 Home（用户实机反馈：
-    // "完成页只有首次 onboarding 才需要"）。
+    // firstTime 记这次是不是 onboarding 首次选范围——#1263 起没有完成页：首次在这页点「开始备份」
+    // 就落盘「连过这台」、唤醒引擎、直接进首页；按钮叫「开始备份」，设置里重选叫「保存」。
     data class Buckets(val pairing: Pairing, val current: Set<Long>, val firstTime: Boolean) : Screen()
     // #1259：系统照片权限框之前的一屏说明。只在要弹系统框时出现，「继续」才弹。
     data class PhotoIntro(val pairing: Pairing, val firstTime: Boolean) : Screen()
-    // M6 完成页（全页面状态稿）：选相册→触发首次备份之后、落到 Home 之前
-    // 的安心收尾页。
-    data class Started(val pairing: Pairing, val photoCount: Int) : Screen()
 }
 
 /**
@@ -187,10 +188,24 @@ internal fun screenAfterPairingCleared(screen: Screen, clearedPairingId: String)
         is Screen.Home -> screen.pairing.pairingId
         is Screen.Buckets -> screen.pairing.pairingId
         is Screen.PhotoIntro -> screen.pairing.pairingId
-        is Screen.Started -> screen.pairing.pairingId
         else -> return screen
     }
     return if (shown == clearedPairingId) Screen.Welcome else screen
+}
+
+/** #1263：onboarding 里独占屏幕的页面（说明屏、首次选范围）——更新对话框不压在上面。 */
+internal fun isOnboardingScreen(screen: Screen): Boolean =
+    screen is Screen.PhotoIntro || (screen is Screen.Buckets && screen.firstTime)
+
+/**
+ * #1263：「从今天起」那一档的说法。没存过、或存的就是今天 0 点 →「从今天起」；存的是以前某天 →「从 10月29日 起」——
+ * 几天以后再说「从今天起」就不对了（那一天保留不动，见 [sinceToSave]）。
+ */
+internal fun scopeSinceLabel(context: Context, sinceSec: Long?, nowMs: Long = System.currentTimeMillis()): String {
+    if (sinceSec == null || sinceSec >= startOfLocalDaySec(nowMs)) return context.getString(R.string.scope_time_today)
+    val date = java.time.Instant.ofEpochSecond(sinceSec).atZone(java.time.ZoneId.systemDefault()).toLocalDate()
+    val pattern = android.text.format.DateFormat.getBestDateTimePattern(java.util.Locale.getDefault(), "MMMd")
+    return context.getString(R.string.scope_time_since_date, java.time.format.DateTimeFormatter.ofPattern(pattern).format(date))
 }
 
 /** System back for secondary app screens; null leaves the root gesture to Android. */
@@ -200,7 +215,6 @@ internal fun systemBackTarget(screen: Screen): Screen? = when (screen) {
     is Screen.Waiting, is Screen.Trouble -> Screen.Scan
     is Screen.Buckets -> Screen.Home(screen.pairing)
     is Screen.PhotoIntro -> Screen.Home(screen.pairing)
-    is Screen.Started -> Screen.Home(screen.pairing)
 }
 
 class MainActivity : ComponentActivity() {
@@ -316,11 +330,14 @@ fun PPassApp() {
     // 一遍门控的话，下次改其中一条（比如再加一个「暂停中不补」的条件）就又会
     // 漏——MOB-33/34/35/38 四个 bug 全是这个形状。
     val foregroundCatchup = {
-        if (pairings.load() != null && AutoBackupPrefs(context.filesDir).enabled()) {
-            // 后台监听：中断待确认时不许重挂（MOB-28 红线，唯一入口是
-            // resumeAfterInterruption）。
-            if (!backupInterrupted) scheduleAutoBackup(context)
-            // 前台补捞：无条件跑。人在场就该传（MOB-35 的定调）。
+        if (pairings.load() != null) {
+            if (AutoBackupPrefs(context.filesDir).enabled()) {
+                // 后台监听：只在后台备份开着时挂；中断待确认时不许重挂（MOB-28 红线，唯一入口是
+                // resumeAfterInterruption）。
+                if (!backupInterrupted) scheduleAutoBackup(context)
+            }
+            // 前台补捞：无条件跑。人在场就该传（MOB-35 的定调）。#1263：后台备份默认关之后，这一条不再挂在
+            // 后台开关上——关着后台备份的用户打开 App 也照样传（首页「开启后台备份」卡片说的就是这个区别）。
             triggerUserPresentBackup(context)
         }
     }
@@ -382,10 +399,10 @@ fun PPassApp() {
             )
         }
     }
-    // 首次选完相册后的两项系统授权必须串行独占屏幕；更新可以等用户完成
+    // onboarding 里的说明屏 / 系统照片权限框 / 首次选范围独占屏幕；更新可以等用户完成
     // onboarding 后再说，绝不压在系统权限框上。「后台下载」收起的对话框
     // （dialogSuppressed）不渲染，设置行点击可重新打开。
-    if (screen !is Screen.Started && screen !is Screen.PhotoIntro && !updateDialogSuppressed) {
+    if (!isOnboardingScreen(screen) && !updateDialogSuppressed) {
         UpdateDialog(
             state = updateState,
             onConfirmDownload = updateController::onUserConfirmDownload,
@@ -906,21 +923,85 @@ fun PPassApp() {
                 }
                 Unit
             }
+            // #1263：设置页开关与首页「开启后台备份」卡片共用这一条路（卡片点「开启」= 开关打开）。
+            val onToggleAutoBackup: (Boolean) -> Unit = { enabled ->
+                // #1020：先落盘，写成功才做副作用（确认中断、重挂 / 取消任务、申请白名单）；
+                // 写失败不崩溃，开关回到盘上的意图并提示。
+                if (!enabled) {
+                    batteryRequestInFlight = false
+                    if (settingsWriter.write("autoBackup", false) { disableAutoBackup(context) }) {
+                        // #1039：关已经存上了；「已确认中断」没存上就提示，中断状态按盘上的值显示。
+                        settingsWriter.write("backupInterruption", "acknowledged") {
+                            BackupHealthPrefs(context.filesDir).acknowledge()
+                        }
+                        backupInterrupted = BackupHealthPrefs(context.filesDir).load().interruptedUnacknowledged
+                    }
+                    userRequestedBackgroundBackup = prefs.requested()
+                } else if (batteryWhitelisted) {
+                    if (backupInterrupted) {
+                        // #1039：写成功才重挂、才收起中断卡、开关才打开；写不下来开关与卡片都不动。
+                        val resumed = settingsWriter.write("backupInterruption", "acknowledged") {
+                            resumeAfterInterruption(context)
+                        }
+                        backupInterrupted = BackupHealthPrefs(context.filesDir).load().interruptedUnacknowledged
+                        if (resumed) userRequestedBackgroundBackup = true
+                    } else {
+                        settingsWriter.write("autoBackup", true) { enableAutoBackup(context) }
+                        userRequestedBackgroundBackup = prefs.requested()
+                    }
+                } else if (!batteryRequestInFlight) {
+                    if (settingsWriter.write("autoBackup", "requested") { prefs.setRequested(true) }) {
+                        batteryRequestInFlight = true
+                        batteryPermission.launch(backgroundAuthorization.requestIntent())
+                    }
+                    userRequestedBackgroundBackup = prefs.requested()
+                }
+            }
+            // #1263：首页「开启后台备份」卡片被手动关掉了吗。
+            val offerStore = remember { com.hawkeyexb.ppass.backup.BackgroundBackupOfferStore(context.filesDir) }
+            var offerDismissed by remember { mutableStateOf(offerStore.dismissed()) }
+            // #1263：卡片自己的白名单申请。与设置页开关不同，**弹框前不写意图**：拒绝了就什么都不写，仍是「没开」，
+            // 卡片留着，不变成「允许系统后台运行」的告警、设置页也不亮红点——拒绝一个可选功能不是故障。
+            // 授予了才按「开」落盘（与设置页开关授予后同一个写法）。
+            val offerBatteryPermission = rememberLauncherForActivityResult(
+                ActivityResultContracts.StartActivityForResult(),
+            ) {
+                batteryRequestInFlight = false
+                batteryWhitelisted = backgroundAuthorization.isGranted()
+                if (batteryWhitelisted && settingsWriter.write("autoBackup", true) { enableAutoBackup(context) }) {
+                    scope.launch { snackbarHostState.showSnackbar(context.getString(R.string.background_backup_authorized)) }
+                }
+                userRequestedBackgroundBackup = prefs.requested()
+            }
+            val onEnableFromOffer = {
+                if (batteryWhitelisted) {
+                    onToggleAutoBackup(true)
+                } else if (!batteryRequestInFlight) {
+                    batteryRequestInFlight = true
+                    offerBatteryPermission.launch(backgroundAuthorization.requestIntent())
+                }
+            }
             // #836：「已选相册」按已选且当前存在计数（与选相册页同源：MediaStore 里实际有的相册）。
             // 先用存下的个数占位，IO 上查完相册再校正；照片权限变化、每次回到前台都重算。
             var selectedBucketCount by remember { mutableStateOf(BackupScopeStore(context).selectedBucketIds()?.size) }
             // #1020：存了范围但读不出来——设置行说「读不到已保存的选择」，不说「未选相册」。
             var scopeUnreadable by remember { mutableStateOf(false) }
+            // #1263：范围的开始时间（设置行的值「3 个相册 · 从今天起」）与范围里有没有相机相册（照片页空状态的说法）。
+            var scopeSince by remember { mutableStateOf(BackupScopeStore(context).sinceSec()) }
+            var scopeHasCamera by remember { mutableStateOf<Boolean?>(null) }
             LaunchedEffect(mediaAccess, resumeCount) {
                 scopeUnreadable = withContext(Dispatchers.IO) { BackupScopeStore(context).readScope() is ScopeRead.Unreadable }
-                selectedBucketCount = withContext(Dispatchers.IO) {
-                    val existing = if (mediaAccess == MediaAccess.FULL) {
-                        runCatching { MediaScanner(context.contentResolver).listBuckets().map { it.id }.toSet() }.getOrNull()
+                scopeSince = withContext(Dispatchers.IO) { BackupScopeStore(context).sinceSec() }
+                val listed = withContext(Dispatchers.IO) {
+                    if (mediaAccess == MediaAccess.FULL) {
+                        runCatching { MediaScanner(context.contentResolver).listBuckets() }.getOrNull()
                     } else {
                         null
                     }
-                    selectedExistingCount(BackupScopeStore(context).selectedBucketIds(), existing)
                 }
+                val selected = withContext(Dispatchers.IO) { BackupScopeStore(context).selectedBucketIds() }
+                selectedBucketCount = selectedExistingCount(selected, listed?.map { it.id }?.toSet())
+                scopeHasCamera = listed?.let { l -> selected?.let { sel -> l.any { it.isCamera && it.id in sel } } }
             }
             val scope = rememberCoroutineScope()
             // NET-28: bind can now throw (timeout) — an uncaught throw in a
@@ -993,6 +1074,16 @@ fun PPassApp() {
                         pairingLost = holder.pairingLost.value,
                         onReconnect = onRepairPairing,
                         daysUnreachable = daysUnreachable,
+                        // #1263：照片页空状态按范围给提示：没选相册 → 引导 + 「选择相册」（直达选范围页）；
+                        // 范围里有相机相册 →「拍一张试试」；否则 →「新存进所选相册的…」。
+                        emptyText = if (scopeHasCamera == true) {
+                            stringResource(R.string.home_empty_camera, s.pairing.storageDeviceName)
+                        } else {
+                            null
+                        },
+                        // 范围存了但读不出来不算「没选」（设置行另说「读不到」）。
+                        noAlbums = !scopeUnreadable && (selectedBucketCount ?: 0) == 0,
+                        onChooseAlbums = { enterBucketPicker(s.pairing, firstTime = false) },
                     )
                 },
                 backup = {
@@ -1069,39 +1160,7 @@ fun PPassApp() {
                         autoBackupEnabled = userRequestedBackgroundBackup,
                         backgroundBackupState = backgroundBackupState,
                         onResolveBackgroundBackup = resolveBackgroundBackup,
-                        onToggleAutoBackup = { enabled ->
-                            // #1020：先落盘，写成功才做副作用（确认中断、重挂 / 取消任务、申请白名单）；
-                            // 写失败不崩溃，开关回到盘上的意图并提示。
-                            if (!enabled) {
-                                batteryRequestInFlight = false
-                                if (settingsWriter.write("autoBackup", false) { disableAutoBackup(context) }) {
-                                    // #1039：关已经存上了；「已确认中断」没存上就提示，中断状态按盘上的值显示。
-                                    settingsWriter.write("backupInterruption", "acknowledged") {
-                                        BackupHealthPrefs(context.filesDir).acknowledge()
-                                    }
-                                    backupInterrupted = BackupHealthPrefs(context.filesDir).load().interruptedUnacknowledged
-                                }
-                                userRequestedBackgroundBackup = prefs.requested()
-                            } else if (batteryWhitelisted) {
-                                if (backupInterrupted) {
-                                    // #1039：写成功才重挂、才收起中断卡、开关才打开；写不下来开关与卡片都不动。
-                                    val resumed = settingsWriter.write("backupInterruption", "acknowledged") {
-                                        resumeAfterInterruption(context)
-                                    }
-                                    backupInterrupted = BackupHealthPrefs(context.filesDir).load().interruptedUnacknowledged
-                                    if (resumed) userRequestedBackgroundBackup = true
-                                } else {
-                                    settingsWriter.write("autoBackup", true) { enableAutoBackup(context) }
-                                    userRequestedBackgroundBackup = prefs.requested()
-                                }
-                            } else if (!batteryRequestInFlight) {
-                                if (settingsWriter.write("autoBackup", "requested") { prefs.setRequested(true) }) {
-                                    batteryRequestInFlight = true
-                                    batteryPermission.launch(backgroundAuthorization.requestIntent())
-                                }
-                                userRequestedBackgroundBackup = prefs.requested()
-                            }
-                        },
+                        onToggleAutoBackup = onToggleAutoBackup,
                         // UX-06 单方停止：本地断开不依赖 daemon 回应。确认
                         // 交互（三层防误触）在 StorageComputerDetail 内部
                         // 完成（红色描边按钮→展开确认卡→「确认断开」），
@@ -1137,6 +1196,11 @@ fun PPassApp() {
                         // #836：按「已选且当前存在」计数，与选相册页同一口径。
                         selectedBucketCount = selectedBucketCount,
                         scopeUnreadable = scopeUnreadable,
+                        scopeTimeLabel = if (scopeSince == null) {
+                            stringResource(R.string.scope_time_all)
+                        } else {
+                            scopeSinceLabel(context, scopeSince)
+                        },
                         countsReadable = holder.countsReadable.value,
                         scopeSaved = holder.scopeSaved.value,
                         // MOB-03: 相册选择入口走完整权限链——MOB-02 删首页手动
@@ -1180,6 +1244,14 @@ fun PPassApp() {
                             else -> null
                         },
                         onCheckUpdate = { updateController.onCheckRowClick() },
+                        // #1263：「开启后台备份」卡片只在设置页。
+                        offerBackgroundBackup = showBackgroundBackupOffer(backgroundBackupState, offerDismissed),
+                        onEnableBackgroundBackup = onEnableFromOffer,
+                        onDismissBackgroundBackupOffer = {
+                            offerDismissed = settingsWriter.persist("backgroundBackupOffer", true, { _ -> offerStore.dismiss() }) {
+                                offerStore.dismissed()
+                            }
+                        },
                     )
                 },
             )
@@ -1211,7 +1283,8 @@ fun PPassApp() {
             }
         }
 
-        // T6: 相册选择页——「选择备份内容」与「发起备份」是两个动作。
+        // T6: 选范围页——「选择备份内容」与「发起备份」是两个动作。
+        // #1263：范围 = 相册 + 开始时间（从今天起 / 全部）；首次选完直接进首页，没有完成页。
         is Screen.Buckets -> {
             val scopeStore = remember { BackupScopeStore(context) }
             var buckets by remember { mutableStateOf<List<MediaScanner.Bucket>?>(null) }
@@ -1226,12 +1299,22 @@ fun PPassApp() {
                     Text(stringResource(R.string.bucket_loading), color = PPColor.Ink40)
                 }
             } else {
+                val savedRead = remember { scopeStore.readScope() }
+                val savedSince = remember { scopeStore.sinceSec() }
                 BucketScreen(
                     buckets = list,
-                    selected = s.current,
+                    // #1263：首次（这台电脑从没存过范围）默认勾上相机相册，识别不到就不勾。
+                    selected = initialSelection(
+                        saved = (savedRead as? ScopeRead.Saved)?.ids,
+                        firstTime = s.firstTime,
+                        cameraBucketIds = list.filter { it.isCamera }.map { it.id }.toSet(),
+                    ),
+                    initialTime = initialScopeTime(savedRead is ScopeRead.Saved, savedSince),
+                    sinceLabel = scopeSinceLabel(context, savedSince.takeIf { savedRead is ScopeRead.Saved }),
+                    firstTime = s.firstTime,
                     // MOB-02 §六: 新相册判定基准（null = 从未选过范围，全量模式）。
                     knownBuckets = scopeStore.knownBucketIds(),
-                    onDone = { sel ->
+                    onDone = { sel, time ->
                         // MOB-02 §二: 部分授权态不保存范围（选了也备不完整，
                         // 且会显示假 0/0）——直接回 Home，Home 显示部分授权
                         // 引导卡（一键去系统设置改完全授权）。
@@ -1244,94 +1327,45 @@ fun PPassApp() {
                         // MOB-20: 必须在 saveScope 覆盖旧集合**之前**算差集。
                         // #1020：读不出来的旧范围按「从未选过」算（全部新增，宁可多扫），同 iOS。
                         val prevScope = (BackupScopeStore(context).readScope() as? ScopeRead.Saved)?.ids
-                        // MOB-40: `prevScope == null` = **从未选过范围**。旧语义下
-                        // 那意味着「已经全备过了」，所以差集算空；新语义下没选过
-                        // = 一张都没备过，首次选择就是**全部新增**，按 MOB-20 的
-                        // 规矩应当归零水位（否则得靠 MOB-36 的补齐兜底才收敛，
-                        // 语义不自洽）。
+                        val prevSince = if (prevScope != null) scopeStore.sinceSec() else null
+                        // MOB-40: `prevScope == null` = **从未选过范围**——一张都没备过，首次选择就是全部新增。
                         val added = if (prevScope == null) sel else sel - prevScope
+                        // #1263：「从今天起」= 当天 0 点；原来就是「从某天起」的保留原来那天（不往后滑）。
+                        val since = sinceToSave(time, prevSince, System.currentTimeMillis())
 
-                        // #1020：没存上就不往下走——不进完成页、不叫醒引擎，留在选相册页让用户看到提示并能重试。
+                        // #1020：没存上就不往下走——不进首页、不叫醒引擎，留在选范围页让用户看到提示并能重试。
                         val saved = settingsWriter.write("backupScope", sel.size, R.string.scope_save_failed) {
                             scopeStore.saveScope(
                                 selected = sel,
                                 allCurrent = list.map { it.id }.toSet(),
+                                sinceSec = since,
                             )
                         }
                         if (!saved) return@BucketScreen
-                        // REBUILD-05: 范围扩大不再重置 legacy watermark。
-                        // 新 Flow 以当前 discovery cursor 为上界持久化历史补扫；
-                        // 它不扰动当前严格队头，结果只会追加到后续队列。
-                        // M6 完成页（全页面状态稿，用户实机反馈"只有首次
-                        // onboarding 才需要"）。首次选择只保存范围：没有点
-                        // 「进入 App」就绝不 discovery/传输。设置页重选不经过
-                        // 收尾页，仍按用户在场操作立即补扫。
+                        val settings = BackupSettings(context.filesDir).load()
+                        val constraintsSatisfied = !settings.wifiOnly || isOnUnmetered(context)
                         if (s.firstTime) {
-                            val selectedCount = list.filter { it.id in sel }.sumOf { it.count }
-                            screen = Screen.Started(s.pairing, selectedCount)
-                        } else {
-                            val settings = BackupSettings(context.filesDir).load()
-                            val constraintsSatisfied = !settings.wifiOnly || isOnUnmetered(context)
-                            if (added.isNotEmpty()) {
-                                requestFlowScopeBackfillAndWake(context, constraintsSatisfied)
+                            // MOB-114（#455）：「连过这台」的事实在这里落盘，快速重连只认它。
+                            // #1039（对位 iOS settingWriteFailed("onboarded")）：记不下来不挡进首页，提示；后果只是下次连回这台
+                            // 仍走一遍首次设置（偏安全的一侧）。
+                            settingsWriter.write("onboarded", s.pairing.daemonNodeId.take(8)) {
+                                OnboardedDesktopsStore(context.filesDir).markOnboarded(s.pairing.daemonNodeId)
                             }
-                            triggerUserPresentBackup(context)
-                            screen = Screen.Home(s.pairing)
+                            // #1263：onboarding 里不再问后台备份——新用户默认关，首页卡片引导开启。
+                            // #1039：按「关」把意图再写一次。配对时清旧意图那一步若没写下来，这里补上——否则旧电脑留下的
+                            // 意图会在回到前台时（#540 对账）把新电脑的后台备份悄悄打开。
+                            settingsWriter.write("autoBackup", false) { disableAutoBackup(context) }
+                            requestFlowScopeBackfillAndWake(context, constraintsSatisfied)
+                        } else if (added.isNotEmpty() || sinceWidened(prevSince, since)) {
+                            // REBUILD-05: 范围扩大（新勾的相册，或「从今天起」改成「全部」）走补扫（对账扫描置脏）。
+                            requestFlowScopeBackfillAndWake(context, constraintsSatisfied)
                         }
+                        triggerUserPresentBackup(context)
+                        screen = Screen.Home(s.pairing)
                     },
                     onCancel = { screen = Screen.Home(s.pairing) },
                 )
             }
-        }
-
-        is Screen.Started -> {
-            // 后台备份是用户可选能力，只在用户选「开启」时才申请。首次传输不依赖任何可选授权。
-            // #1262：onboarding 不再申请通知权限（只从设置里的「通知」开关申请）。
-            val finishOnboarding = {
-                // MOB-114（#455）：「连过这台」的事实在这里落盘，快速重连只认它。
-                // #1039（对位 iOS settingWriteFailed("onboarded")）：记不下来不挡进首页，提示；后果只是下次连回这台
-                // 仍走一遍首次设置（偏安全的一侧）。
-                settingsWriter.write("onboarded", s.pairing.daemonNodeId.take(8)) {
-                    OnboardedDesktopsStore(context.filesDir).markOnboarded(s.pairing.daemonNodeId)
-                }
-                val settings = BackupSettings(context.filesDir).load()
-                val constraintsSatisfied = !settings.wifiOnly || isOnUnmetered(context)
-                requestFlowScopeBackfillAndWake(context, constraintsSatisfied)
-                triggerUserPresentBackup(context)
-                screen = Screen.Home(s.pairing)
-            }
-            val batteryPermission = rememberLauncherForActivityResult(
-                ActivityResultContracts.StartActivityForResult(),
-            ) {
-                // #1020：记不下来不挡进首页（同 iOS 完成页），但要提示，不崩溃。
-                if (backgroundAuthorization.isGranted()) {
-                    settingsWriter.write("autoBackup", true) { enableAutoBackup(context) }
-                } else {
-                    settingsWriter.write("autoBackup", "suspended") { suspendAutoBackupUntilAuthorized(context) }
-                }
-                finishOnboarding()
-            }
-            val onEnableBackgroundBackup = {
-                if (backgroundAuthorization.isGranted()) {
-                    settingsWriter.write("autoBackup", true) { enableAutoBackup(context) }
-                    finishOnboarding()
-                } else if (settingsWriter.write("autoBackup", "requested") { AutoBackupPrefs(context.filesDir).setRequested(true) }) {
-                    batteryPermission.launch(backgroundAuthorization.requestIntent())
-                } else {
-                    finishOnboarding()
-                }
-            }
-            // #1039：选「进入」= 不开后台备份，按用户的选择把意图再写一次。配对时清旧意图那一步若没写下来，
-            // 这里补上——否则旧电脑留下的意图会在回到前台时（#540 对账）把新电脑的后台备份悄悄打开。
-            val onEnterWithoutBackgroundBackup = {
-                settingsWriter.write("autoBackup", false) { disableAutoBackup(context) }
-                finishOnboarding()
-            }
-            BackupStartedScreen(
-                photoCount = s.photoCount,
-                onEnableBackgroundBackup = onEnableBackgroundBackup,
-                onEnter = onEnterWithoutBackgroundBackup,
-            )
         }
     }
     // UI-12: 自定义 Snackbar 视觉——用 PPColor（墨底纸字），跟横幅/红卡

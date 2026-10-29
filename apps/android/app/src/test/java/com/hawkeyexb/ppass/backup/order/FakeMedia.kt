@@ -14,8 +14,10 @@ data class FakePhoto(
     val generation: Long,
     val bucketId: Long = 7,
     val volume: String = LEGACY_VOLUME,
+    /** #1263：MediaStore `DATE_ADDED`（秒）。 */
+    val dateAdded: Long = 0L,
 ) {
-    val snapshot get() = MediaSnapshot(mediaId, sourceVersionOf(modified, size), bucketId, generation, volume)
+    val snapshot get() = MediaSnapshot(mediaId, sourceVersionOf(modified, size), bucketId, generation, volume, dateAdded)
     val hash get() = fakeHashOf(content)
 }
 
@@ -44,11 +46,15 @@ class FakeMedia(photos: List<FakePhoto> = emptyList(), var scope: Set<Long>? = s
         photos.removeAll { it.mediaId == mediaId }
     }
 
-    fun inScope(bucketId: Long): Boolean = scope?.contains(bucketId) == true
+    /** #1263：范围的开始时间（DATE_ADDED 秒）；null = 全部。 */
+    var since: Long? = null
+
+    fun inScope(bucketId: Long, dateAdded: Long): Boolean =
+        scope?.let { com.hawkeyexb.ppass.backup.BackupScope(it, since).contains(bucketId, dateAdded) } == true
 
     override fun <R> readInScope(afterId: Long, block: (Sequence<MediaSnapshot>) -> R): R {
         metadataReads++
-        val rows = photos.filter { it.mediaId > afterId && inScope(it.bucketId) }.sortedBy { it.mediaId }
+        val rows = photos.filter { it.mediaId > afterId && inScope(it.bucketId, it.dateAdded) }.sortedBy { it.mediaId }
             .flatMap { if (it.mediaId in duplicateInScope) listOf(it, it) else listOf(it) }
         return block(rows.map { it.snapshot }.asSequence())
     }
@@ -58,7 +64,7 @@ class FakeMedia(photos: List<FakePhoto> = emptyList(), var scope: Set<Long>? = s
         onReadChanged()
         return block(
             photos.filter {
-                it.volume == volumeName && inScope(it.bucketId) &&
+                it.volume == volumeName && inScope(it.bucketId, it.dateAdded) &&
                     (it.generation > afterGeneration || (it.generation == afterGeneration && it.mediaId > afterMediaId))
             }
                 .sortedWith(compareBy({ it.generation }, { it.mediaId }))

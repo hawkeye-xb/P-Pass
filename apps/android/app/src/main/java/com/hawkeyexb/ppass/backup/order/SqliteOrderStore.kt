@@ -29,8 +29,10 @@ class SqliteOrderStore private constructor(
          * v4（#843）：orders 加 `location_redacted`。**v3→v4 曾只加列、不删表**——已确认的行是「哪些照片传过、
          * 传的是哪份字节」的唯一记录，删了会让全部照片重新导入；v3 的行一律记 1（那时 App 没有位置权限，读到的都是抹过的）。
          * v5（#1117 协议 v3）：`pairing_id` 列改名 `pairing_id`。旧用户不考虑——旧库一律丢弃重建，不搬数据。
+         * v6（#1263）：orders 与 skip_list 加 `date_added_sec`（范围的时间条件）。**v5→v6 只加列、不删表**（同 v3→v4 的理由：
+         * 已确认的行是「哪些照片传过」的唯一记录）；老行记 0，「从今天起」时不在范围里，「全部」时照常。
          */
-        private const val SCHEMA_VERSION = 5
+        private const val SCHEMA_VERSION = 6
         private const val PAGE_SIZE = 256
         private const val AUDIT_ONCE_PREFIX = "audit_once:"
 
@@ -56,7 +58,8 @@ class SqliteOrderStore private constructor(
                 created_at_ms   INTEGER NOT NULL,
                 updated_at_ms   INTEGER NOT NULL,
                 source_missing  INTEGER NOT NULL DEFAULT 0,
-                location_redacted INTEGER NOT NULL DEFAULT 0
+                location_redacted INTEGER NOT NULL DEFAULT 0,
+                date_added_sec  INTEGER NOT NULL DEFAULT 0
             )
             """.trimIndent(),
             // (media_id, id)：既是 media_id 索引，也让「每个 media_id 取 id 最大的一行」走索引。
@@ -77,7 +80,8 @@ class SqliteOrderStore private constructor(
                 media_id        INTEGER PRIMARY KEY,
                 bucket_id       INTEGER NOT NULL,
                 source_version  TEXT    NOT NULL,
-                created_at_ms   INTEGER NOT NULL
+                created_at_ms   INTEGER NOT NULL,
+                date_added_sec  INTEGER NOT NULL DEFAULT 0
             )
             """.trimIndent(),
             """
@@ -94,7 +98,7 @@ class SqliteOrderStore private constructor(
         )
 
         private const val COLUMNS =
-            "id, media_id, source_version, bucket_id, content_hash, state, attempts, pairing_id, created_at_ms, updated_at_ms, source_missing, location_redacted"
+            "id, media_id, source_version, bucket_id, content_hash, state, attempts, pairing_id, created_at_ms, updated_at_ms, source_missing, location_redacted, date_added_sec"
 
         /** 「o 是它那个 media_id 的当前行」。 */
         private const val IS_CURRENT = "o.id = (SELECT MAX(id) FROM orders WHERE media_id = o.media_id)"
@@ -102,6 +106,17 @@ class SqliteOrderStore private constructor(
         /** 每个 media_id 当前的那一行 = 该 media_id 下 id 最大的行。按 media_id 键集分页。 */
         private const val CURRENT_PAGE_SQL =
             "SELECT $COLUMNS FROM orders o WHERE o.media_id > ? AND $IS_CURRENT ORDER BY o.media_id ASC LIMIT $PAGE_SIZE"
+
+        /** #1263：v5→v6 只加列（见 [SCHEMA_VERSION]）。 */
+        internal val V5_TO_V6 = listOf(
+            "ALTER TABLE orders ADD COLUMN date_added_sec INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE skip_list ADD COLUMN date_added_sec INTEGER NOT NULL DEFAULT 0",
+        )
+
+        /** 范围的过滤片段（`AND …`）：相册 + 时间。[col] 是表别名前缀（`o.` 或空）。 */
+        internal fun scopeFilter(bucketIds: Set<Long>?, sinceSec: Long?, col: String): String =
+            bucketIds?.let { " AND ${col}bucket_id IN (${it.joinToString(",")})" }.orEmpty() +
+                sinceSec?.let { " AND ${col}date_added_sec >= $it" }.orEmpty()
 
         private const val OWNER_KEY = "owner"
         private const val SCAN_DIRTY_KEY = "scan_dirty"
@@ -117,11 +132,19 @@ class SqliteOrderStore private constructor(
         }
 
         override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+            if (oldVersion == 5 && newVersion == 6) {
+                V5_TO_V6.forEach(db::execSQL)
+                return
+            }
+            recreate(db)
+        }
+
+        override fun onDowngrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = recreate(db)
+
+        private fun recreate(db: SQLiteDatabase) {
             TABLES.forEach { db.execSQL("DROP TABLE IF EXISTS $it") }
             onCreate(db)
         }
-
-        override fun onDowngrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = onUpgrade(db, oldVersion, newVersion)
     }
 
     private val db: SQLiteDatabase get() = helper.writableDatabase
@@ -154,6 +177,7 @@ class SqliteOrderStore private constructor(
         sourceMissing = getInt(10) != 0,
         locationRedacted = getInt(11) != 0,
         locationVerdict = LocationVerdict.ofCode(getInt(11)),
+        dateAddedSec = getLong(12),
     )
 
     private fun queryOrders(sql: String, vararg args: String): List<Order> =
@@ -176,6 +200,7 @@ class SqliteOrderStore private constructor(
             put("updated_at_ms", now)
             put("source_missing", 0)
             put("location_redacted", if (order.locationRedacted) 1 else 0)
+            put("date_added_sec", order.dateAddedSec)
         }
         // insertOrThrow：失败抛异常，事务随之回滚（insert() 会吞掉错误返回 -1）。
         return insertOrThrow("orders", null, values)
@@ -378,10 +403,10 @@ class SqliteOrderStore private constructor(
         return block(ids)
     }
 
-    override fun countSkipped(bucketIds: Set<Long>?): Long {
+    override fun countSkipped(bucketIds: Set<Long>?, sinceSec: Long?): Long {
         if (bucketIds != null && bucketIds.isEmpty()) return 0L
-        val filter = bucketIds?.let { " WHERE bucket_id IN (${it.joinToString(",")})" }.orEmpty()
-        return db.rawQuery("SELECT COUNT(*) FROM skip_list$filter", null).use { c -> if (c.moveToFirst()) c.getLong(0) else 0L }
+        val filter = scopeFilter(bucketIds, sinceSec, col = "")
+        return db.rawQuery("SELECT COUNT(*) FROM skip_list WHERE 1 = 1$filter", null).use { c -> if (c.moveToFirst()) c.getLong(0) else 0L }
     }
 
     override fun cancelRemaining(targets: List<SkipTarget>, audit: AuditRecord?): SkipResult = inTransaction {
@@ -391,7 +416,7 @@ class SqliteOrderStore private constructor(
         var untouched = 0
         // 逐条执行预编译语句，不拼 IN (…)：API 26 的 SQLite 绑定变量上限是 999。
         compileStatement(
-            "INSERT OR IGNORE INTO skip_list (media_id, bucket_id, source_version, created_at_ms) VALUES (?, ?, ?, ?)",
+            "INSERT OR IGNORE INTO skip_list (media_id, bucket_id, source_version, created_at_ms, date_added_sec) VALUES (?, ?, ?, ?, ?)",
         ).use { addSkip ->
             compileStatement(
                 "UPDATE orders SET state = '${OrderState.SKIPPED_BY_USER.name}', updated_at_ms = ? WHERE id = ?",
@@ -410,6 +435,7 @@ class SqliteOrderStore private constructor(
                     addSkip.bindLong(2, target.bucketId)
                     addSkip.bindString(3, target.sourceVersion)
                     addSkip.bindLong(4, now)
+                    addSkip.bindLong(5, target.dateAddedSec)
                     if (addSkip.executeInsert() != -1L) written++
                     if (current != null && current.second.isOpen) {
                         skipOrder.bindLong(1, now)
@@ -482,9 +508,9 @@ class SqliteOrderStore private constructor(
         changed
     }
 
-    override fun countCurrentByState(bucketIds: Set<Long>?): Map<OrderState, Long> {
+    override fun countCurrentByState(bucketIds: Set<Long>?, sinceSec: Long?): Map<OrderState, Long> {
         if (bucketIds != null && bucketIds.isEmpty()) return emptyMap()
-        val bucketFilter = bucketIds?.let { " AND o.bucket_id IN (${it.joinToString(",")})" }.orEmpty()
+        val bucketFilter = scopeFilter(bucketIds, sinceSec, col = "o.")
         val out = db.rawQuery(
             "SELECT o.state, COUNT(*) FROM orders o WHERE $IS_CURRENT$bucketFilter AND o.state != '${OrderState.SKIPPED_BY_USER.name}' GROUP BY o.state",
             null,
@@ -494,14 +520,14 @@ class SqliteOrderStore private constructor(
             out
         }
         // 「已跳过」是意图：报跳过名单的张数（见接口 KDoc）。
-        val skipped = countSkipped(bucketIds)
+        val skipped = countSkipped(bucketIds, sinceSec)
         if (skipped > 0) out[OrderState.SKIPPED_BY_USER] = skipped
         return out
     }
 
-    override fun countConfirmedPresent(bucketIds: Set<Long>?): Long {
+    override fun countConfirmedPresent(bucketIds: Set<Long>?, sinceSec: Long?): Long {
         if (bucketIds != null && bucketIds.isEmpty()) return 0L
-        val bucketFilter = bucketIds?.let { " AND o.bucket_id IN (${it.joinToString(",")})" }.orEmpty()
+        val bucketFilter = scopeFilter(bucketIds, sinceSec, col = "o.")
         return db.rawQuery(
             "SELECT COUNT(*) FROM orders o WHERE o.state = '${OrderState.CONFIRMED.name}' AND o.source_missing = 0 AND $IS_CURRENT$bucketFilter",
             null,

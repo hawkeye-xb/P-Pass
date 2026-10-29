@@ -24,7 +24,7 @@ class UI21UnreconciledHeroTest {
     /** 与首页同一条链路：引擎视图经 visibleEngineView（EngineViewGateway 用的同一个函数）→ 账目 → 三元组。 */
     private fun Rig.heroRender(): Pair<HeroRender, Long> {
         val view = visibleEngineView(engine.view.value, engine.pendingKnown.value)
-        val n = media.photos.count { media.inScope(it.bucketId) }.toLong()
+        val n = media.photos.count { media.inScope(it.bucketId, it.dateAdded) }.toLong()
         val t = flowTripletOf(FlowProjection.facts(store, control, albums, n, view), albums)!!
         return heroRenderOf(MediaAccess.FULL, t) to t.confirmedRaw
     }

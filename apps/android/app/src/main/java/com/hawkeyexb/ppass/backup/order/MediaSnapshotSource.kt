@@ -23,6 +23,8 @@ data class MediaSnapshot(
     val bucketId: Long,
     val generation: Long,
     val volumeName: String = LEGACY_VOLUME,
+    /** #1263：MediaStore `DATE_ADDED`（秒，进入手机相册的时间），范围的时间条件按它判。 */
+    val dateAddedSec: Long = 0L,
 )
 
 /** 传输一张照片需要的全部 MediaStore 事实。 */
@@ -76,14 +78,14 @@ interface MediaSnapshotSource {
 /**
  * [MediaSnapshotSource] 的 ContentResolver 实现。
  *
- * 范围口径与旧 discovery 一致：`MEDIA_TYPE` 为图片或视频，`BUCKET_ID` 在 [selectedBuckets] 里；
- * [selectedBuckets] 返回 null 或空集 = 什么都不在范围内。
+ * 范围口径与旧 discovery 一致：`MEDIA_TYPE` 为图片或视频，`BUCKET_ID` 在 [scope] 的相册里；
+ * [scope] 返回 null 或相册为空集 = 什么都不在范围内。#1263：范围带开始时间时再加 `DATE_ADDED >= since`。
  *
  * 游标不分页：单个查询、一行一行 `moveToNext`，内存里只有当前一行。
  */
 class ContentResolverMediaSnapshotSource(
     private val context: Context,
-    private val selectedBuckets: () -> Set<Long>?,
+    private val scope: () -> com.hawkeyexb.ppass.backup.BackupScope?,
     private val resolver: ContentResolver = context.contentResolver,
 ) : MediaSnapshotSource {
 
@@ -108,9 +110,19 @@ class ContentResolverMediaSnapshotSource(
         MediaStore.MediaColumns.DATE_MODIFIED,
         MediaStore.MediaColumns.SIZE,
         MediaStore.MediaColumns.BUCKET_ID,
+        MediaStore.MediaColumns.DATE_ADDED,
         generationColumn,
         volumeColumn,
     ).distinct().toTypedArray()
+
+    /** 范围条件（不含 MEDIA_TYPE）；null = 什么都不在范围内。 */
+    private fun scopeSelection(): String? {
+        val s = scope() ?: return null
+        if (s.buckets.isEmpty()) return null
+        // bucket id 是 Long、since 是 Long，直接拼进 SQL 与旧 discovery 口径一致，且不占绑定变量名额。
+        return "${MediaStore.MediaColumns.BUCKET_ID} IN (${s.buckets.joinToString(",")})" +
+            s.sinceSec?.let { " AND ${MediaStore.MediaColumns.DATE_ADDED} >= $it" }.orEmpty()
+    }
 
     private val mediaTypeSelection = "${MediaStore.Files.FileColumns.MEDIA_TYPE} IN (?, ?)"
     private val mediaTypeArgs = arrayOf(
@@ -121,9 +133,8 @@ class ContentResolverMediaSnapshotSource(
     override val preciseGeneration: Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
 
     override fun <R> readInScope(afterId: Long, block: (Sequence<MediaSnapshot>) -> R): R {
-        val buckets = selectedBuckets()
-        if (buckets.isNullOrEmpty()) return block(emptySequence())
-        val selection = "$mediaTypeSelection AND ${MediaStore.MediaColumns.BUCKET_ID} IN (${buckets.joinToString(",")}) AND ${MediaStore.MediaColumns._ID} > ?"
+        val inScope = scopeSelection() ?: return block(emptySequence())
+        val selection = "$mediaTypeSelection AND $inScope AND ${MediaStore.MediaColumns._ID} > ?"
         return query(external, selection, mediaTypeArgs + afterId.toString(), "${MediaStore.MediaColumns._ID} ASC", LEGACY_VOLUME, block)
     }
 
@@ -139,11 +150,9 @@ class ContentResolverMediaSnapshotSource(
     }
 
     override fun <R> readChangedSince(volumeName: String, afterGeneration: Long, afterMediaId: Long, block: (Sequence<MediaSnapshot>) -> R): R {
-        val buckets = selectedBuckets()
-        if (buckets.isNullOrEmpty()) return block(emptySequence())
-        // bucket id 是 Long，直接拼进 SQL 与旧 discovery 口径一致，且不占绑定变量名额。
+        val inScope = scopeSelection() ?: return block(emptySequence())
         val id = MediaStore.MediaColumns._ID
-        val selection = "$mediaTypeSelection AND ${MediaStore.MediaColumns.BUCKET_ID} IN (${buckets.joinToString(",")}) " +
+        val selection = "$mediaTypeSelection AND $inScope " +
             "AND ($generationColumn > ? OR ($generationColumn = ? AND $id > ?))"
         return query(
             collectionOf(volumeName),
@@ -231,6 +240,7 @@ class ContentResolverMediaSnapshotSource(
             bucketId = rows.getLong(rows.getColumnIndexOrThrow(MediaStore.MediaColumns.BUCKET_ID)),
             generation = rows.getLong(rows.getColumnIndexOrThrow(generationColumn)),
             volumeName = volume ?: fallbackVolume,
+            dateAddedSec = rows.getLong(rows.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)),
         )
     }
 

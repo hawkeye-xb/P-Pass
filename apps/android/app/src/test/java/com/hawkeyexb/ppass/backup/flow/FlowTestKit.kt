@@ -346,11 +346,11 @@ internal class Rig(
         afterCycle = { afterCycles++ },
     ).also { it.start() }
 
-    fun photo(mediaId: Long, generation: Long, content: String = "c$mediaId", bucketId: Long = 7, volume: String = LEGACY_VOLUME): FakePhoto =
-        FakePhoto(mediaId, 100 + mediaId, 10 + mediaId, content, generation, bucketId, volume).also { media.put(it) }
+    fun photo(mediaId: Long, generation: Long, content: String = "c$mediaId", bucketId: Long = 7, volume: String = LEGACY_VOLUME, dateAdded: Long = 0L): FakePhoto =
+        FakePhoto(mediaId, 100 + mediaId, 10 + mediaId, content, generation, bucketId, volume, dateAdded).also { media.put(it) }
 
     fun order(p: FakePhoto, state: OrderState): Order =
-        store.insert(NewOrder(p.mediaId, p.snapshot.sourceVersion, p.bucketId, p.hash, state, "e1"))
+        store.insert(NewOrder(p.mediaId, p.snapshot.sourceVersion, p.bucketId, p.hash, state, "e1", dateAddedSec = p.dateAdded))
 
     fun state(mediaId: Long): OrderState? = store.currentForMedia(mediaId)?.state
 

@@ -325,7 +325,7 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
     )
     engine = FlowEngine(
         store = store,
-        media = ContentResolverMediaSnapshotSource(app, { scopeStore.selectedBucketIds() }),
+        media = ContentResolverMediaSnapshotSource(app, { scopeStore.scope() }),
         importer = importer,
         delivery = delivery,
         // #434：只有「有东西要传」才会探测桌面——此刻先把 provider 的 endpoint 绑上，它和 hello 并行去连
@@ -354,7 +354,7 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
                 batteryLow = isBatteryLow(app),
             )
         },
-        inScope = { bucket -> scopeStore.selectedBucketIds()?.contains(bucket) == true },
+        inScope = { bucket, added -> scopeStore.scope()?.contains(bucket, added) == true },
         mediaAbsenceTrusted = { mediaAbsenceTrustedNow(app) },
         pairingId = { pairing()?.pairingId?.takeIf { it.isNotBlank() }?.let(::PairingId) },
         scope = scope,

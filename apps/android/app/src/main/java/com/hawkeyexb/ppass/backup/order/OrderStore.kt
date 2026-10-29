@@ -75,6 +75,11 @@ data class Order(
     val locationRedacted: Boolean = false,
     /** #851 / #1005：抹过地点、已有结论（不再是待办）时的原因；还是待办或没抹过时为 null。 */
     val locationVerdict: LocationVerdict? = null,
+    /**
+     * #1263：这张照片进入手机相册的时间（MediaStore `DATE_ADDED`，秒），范围的时间条件按它判。
+     * schema v6 之前建的行是 0（「从今天起」时不在范围里——它们本来就是以前的照片）。
+     */
+    val dateAddedSec: Long = 0L,
 )
 
 /**
@@ -114,6 +119,8 @@ data class NewOrder(
     val pairingId: String,
     /** 见 [Order.locationRedacted]。 */
     val locationRedacted: Boolean = false,
+    /** 见 [Order.dateAddedSec]。 */
+    val dateAddedSec: Long = 0L,
 ) {
     init {
         require(sourceVersion.isNotBlank()) { "sourceVersion must not be blank" }
@@ -126,6 +133,8 @@ data class SkipTarget(
     val mediaId: Long,
     val sourceVersion: String,
     val bucketId: Long,
+    /** #1263：见 [Order.dateAddedSec]；「已跳过」的张数也按范围的时间条件数。 */
+    val dateAddedSec: Long = 0L,
 ) {
     init {
         require(sourceVersion.isNotBlank()) { "sourceVersion must not be blank" }
@@ -250,7 +259,7 @@ interface OrderStore {
     fun <R> readSkipList(block: (Sequence<Long>) -> R): R
 
     /** 跳过名单的张数；[bucketIds] 非 null 时只数这些相册里的（按跳过时记下的相册）。 */
-    fun countSkipped(bucketIds: Set<Long>? = null): Long
+    fun countSkipped(bucketIds: Set<Long>? = null, sinceSec: Long? = null): Long
 
     /**
      * 「取消剩余 N 张」：**一个事务**把 [targets]（弹窗那一刻的边界）写进跳过名单，它们当前行里还没结局的
@@ -296,10 +305,10 @@ interface OrderStore {
      * #413：[OrderState.SKIPPED_BY_USER] 这一项报的是**跳过名单**的张数（意图），不是 order 行数——没有传过的照片
      * 被跳过时只进名单、不建 order；恢复之后名单清空，历史的 SKIPPED_BY_USER 行也就不再算「已跳过」。
      */
-    fun countCurrentByState(bucketIds: Set<Long>? = null): Map<OrderState, Long>
+    fun countCurrentByState(bucketIds: Set<Long>? = null, sinceSec: Long? = null): Map<OrderState, Long>
 
     /** #418 英雄区的 m：当前行为 CONFIRMED、且原图还在手机上（`source_missing` = 0）的张数。 */
-    fun countConfirmedPresent(bucketIds: Set<Long>? = null): Long
+    fun countConfirmedPresent(bucketIds: Set<Long>? = null, sinceSec: Long? = null): Long
 
     /** 当前行里 CONFIRMED 的最近一次 updated_at（0 = 一张都没有）。 */
     fun lastConfirmedAtMs(): Long
