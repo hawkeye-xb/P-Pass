@@ -89,8 +89,8 @@ struct BucketScreen: View {
     /// 时间二选一（从今天起 / 全部）：系统分段控件，一行。
     private var timePicker: some View {
         Picker(L.s("bucket_title"), selection: $wantsAll) {
-            Text(L.s("bucket_since_today")).tag(false)
-            Text(L.s("bucket_since_all")).tag(true)
+            Text(L.s("scope_time_today")).tag(false)
+            Text(L.s("scope_time_all")).tag(true)
         }
         .pickerStyle(.segmented)
         .accessibilityIdentifier("bucketSince")

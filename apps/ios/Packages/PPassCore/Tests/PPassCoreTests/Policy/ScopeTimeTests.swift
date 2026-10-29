@@ -115,12 +115,12 @@ final class ScopeTimeTests: XCTestCase {
 
     func testBackgroundCardShowsUntilEnabledOrDismissed() throws {
         let tmp = TempDir()
-        let prefs = BackgroundBackupCardPrefs(directory: tmp.url)
+        let prefs = BackgroundBackupOfferPrefs(directory: tmp.url)
         XCTAssertFalse(prefs.dismissed())
-        XCTAssertTrue(BackgroundBackupCardPrefs.shows(autoBackup: false, dismissed: prefs.dismissed()))
-        XCTAssertFalse(BackgroundBackupCardPrefs.shows(autoBackup: true, dismissed: false), "开了就不再引导")
+        XCTAssertTrue(BackgroundBackupOfferPrefs.shows(autoBackup: false, dismissed: prefs.dismissed()))
+        XCTAssertFalse(BackgroundBackupOfferPrefs.shows(autoBackup: true, dismissed: false), "开了就不再引导")
         try prefs.dismiss()
-        XCTAssertTrue(BackgroundBackupCardPrefs(directory: tmp.url).dismissed())
-        XCTAssertFalse(BackgroundBackupCardPrefs.shows(autoBackup: false, dismissed: true))
+        XCTAssertTrue(BackgroundBackupOfferPrefs(directory: tmp.url).dismissed())
+        XCTAssertFalse(BackgroundBackupOfferPrefs.shows(autoBackup: false, dismissed: true))
     }
 }

@@ -20,9 +20,9 @@ struct SettingsScreen: View {
                 // 点「开启」只写意图（iOS 没有 App 内的后台授权框）；后台 App 刷新被关时由下面的告示指路。
                 if app.showsBackgroundCard {
                     Section {
-                        NoticeRow(text: L.s("background_backup_card_body"),
-                                  action: (L.s("background_backup_enable"), { app.enableBackgroundFromCard() }),
-                                  dismiss: (L.s("background_backup_card_dismiss"), { app.dismissBackgroundCard() }))
+                        NoticeRow(text: L.s("background_backup_offer"),
+                                  action: (L.s("background_backup_offer_action"), { app.enableBackgroundFromCard() }),
+                                  dismiss: (L.s("background_backup_offer_dismiss"), { app.dismissBackgroundCard() }))
                             .accessibilityIdentifier("backgroundCard")
                     }
                 }
@@ -178,12 +178,25 @@ struct SettingsScreen: View {
     private static let hintFont = PPFont.sans(PPUI.TextSize.rowHint, relativeTo: .footnote)
 
     /// 「备份哪些照片」：只数已选且现存的（Android #541 / #836 同口径），0 或从未保存 → 「未选相册」；
-    /// 有相册时带上时间档：「3 个相册 · 从今天起」/「3 个相册 · 全部」（#1263）。
+    /// 有相册时带上时间档：「3 个相册 · 从今天起 / 从 10月29日 起 / 全部」（#1263，同 Android `backup_scope_with_time`）。
     private var scopeValue: String {
         if app.scopeUnreadable { return L.s("backup_scope_unreadable") }
         let n = app.selectedAlbumCount ?? 0
         guard n > 0 else { return L.s("backup_scope_none") }
-        return L.f((app.since?.isAll ?? true) ? "backup_scope_value_all" : "backup_scope_value_today", L.p("backup_scope_n", n))
+        return L.f("backup_scope_with_time", L.p("backup_scope_n", n), Self.timeLabel(app.since ?? .all, now: Date()))
+    }
+
+    /// 时间档的说法：起点是今天零点或更晚 →「从今天起」；以前某天 →「从 M月d日 起」；全部 →「全部」（同 Android）。
+    static func timeLabel(_ since: BackupSince, now: Date, calendar: Calendar = .current, locale: Locale = .current) -> String {
+        guard case .since(let ms) = since else { return L.s("scope_time_all") }
+        let start = Date(timeIntervalSince1970: Double(ms) / 1000)
+        if start >= calendar.startOfDay(for: now) { return L.s("scope_time_today") }
+        let f = DateFormatter()
+        f.calendar = calendar
+        f.timeZone = calendar.timeZone
+        f.locale = locale
+        f.setLocalizedDateFormatFromTemplate("MMMd")
+        return L.f("scope_time_since_date", f.string(from: start))
     }
 
     /// 系统导航行：图标 + 标题 + 次级值 + 系统 chevron（NavigationLink 自带）。

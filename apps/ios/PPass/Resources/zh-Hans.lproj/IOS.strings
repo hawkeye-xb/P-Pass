@@ -79,32 +79,33 @@
    下面的 key 是 Android 同名文案的临时副本：本分支不改 apps/android，Localizable.strings 又只能由 gen-strings.py 从 Android strings.xml 生成。
    Android 那边落地后跑 just ios-strings，再把本段里标「过渡」的条目删掉（不删会永远盖住 Android 的文案）。标「iOS 独有」的留下。 */
 
-/* 过渡（#1259）：系统照片权限框之前的说明屏，措辞照卡里定稿。 */
+/* 过渡（#1259）：系统照片权限框之前的说明屏。 */
 "photo_intro_title" = "照片只回你家这台电脑";
 "photo_intro_where" = "照片存进「%1$@」，不存任何云端，也不用注册账号。";
 "photo_intro_full" = "接下来系统会问照片权限，请选「全部」，这样以后新拍的照片才能自动备份。";
 "photo_intro_choose" = "给了权限也不会马上全传：备份哪些相册、从今天起还是全部，下一步由你来选。";
-"photo_intro_pause" = "随时可以暂停或改范围。已经存好的照片就是电脑上的普通文件。";
+"photo_intro_stop" = "随时可以暂停或改范围。已经存好的照片就是电脑上的普通文件。";
 "photo_intro_continue" = "继续";
 
-/* 过渡（#1263）：选范围页「备份哪些照片」= 相册 + 时间二选一；首次「开始备份」、编辑「保存」。 */
+/* 过渡（#1263）：选范围页「备份哪些照片」= 相册 + 时间二选一；首次「开始备份」（bucket_start）、编辑「保存」。 */
 "bucket_title" = "备份哪些照片";
 "bucket_save" = "保存";
-"bucket_since_today" = "从今天起";
-"bucket_since_all" = "全部";
-/* 过渡（#1263）：设置行改名，值带时间档。%1$@ = backup_scope_n（「3 个相册」）。 */
+"scope_time_today" = "从今天起";
+"scope_time_since_date" = "从 %1$@ 起";
+"scope_time_all" = "全部";
+/* 过渡（#1263）：设置行改名，值 = backup_scope_n · 时间档。 */
 "backup_scope" = "备份哪些照片";
-"backup_scope_value_today" = "%1$@ · 从今天起";
-"backup_scope_value_all" = "%1$@ · 全部";
+"backup_scope_with_time" = "%1$@ · %2$@";
 /* 过渡（#1263）：后台备份默认关，「之后什么都不用做」不再成立。 */
 "welcome_step3" = "3 · 选好要备份哪些照片";
 /* 过渡（#1263）：照片页没选相册的引导与空状态。%1$@ = 电脑名。 */
 "photos_no_albums" = "还没选要备份的相册";
 "photos_choose_albums" = "选择相册";
-"photos_empty_camera" = "已连上「%1$@」。从现在起拍的照片会自动回家，拍一张试试。";
-"photos_empty_albums" = "新存进所选相册的照片会自动回家。";
-/* 过渡（#1263）：首页后台备份引导卡的「不用了」。 */
-"background_backup_card_dismiss" = "不用了";
-/* iOS 独有（#1263）：首页后台备份引导卡。Android 说「之后不打开 App 也会自动备份」并弹电池白名单；iOS 的后台只能由系统挑时机，
+"home_empty_camera" = "已连上%1$@。从现在起拍的照片会自动回家，拍一张试试。";
+"home_empty_albums" = "新存进所选相册的照片会自动回家。";
+/* 过渡（#1263）：首页后台备份引导卡的按钮。 */
+"background_backup_offer_action" = "开启";
+"background_backup_offer_dismiss" = "不用了";
+/* iOS 独有（#1263）：首页后台备份引导卡正文。Android 说「之后不打开 App 也会自动备份」并弹电池白名单；iOS 的后台只能由系统挑时机，
    不能承诺（#343：不写频率、不假装能保证），也没有 App 内的授权框。 */
-"background_backup_card_body" = "开启后台备份：离开 P-Pass 后，iOS 会找机会接着备份；何时执行由系统决定";
+"background_backup_offer" = "开启后台备份：离开 P-Pass 后，iOS 会找机会接着备份；何时执行由系统决定";

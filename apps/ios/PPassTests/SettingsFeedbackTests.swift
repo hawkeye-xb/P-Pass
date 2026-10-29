@@ -180,7 +180,7 @@ final class SettingsFeedbackTests: XCTestCase {
         let lines = PhotoIntroScreen.lines(desktopName: "Home-Mac")
         XCTAssertEqual(lines.count, 4)
         XCTAssertTrue(lines[0].contains("Home-Mac"))
-        for key in ["photo_intro_title", "photo_intro_full", "photo_intro_choose", "photo_intro_pause", "photo_intro_continue"] {
+        for key in ["photo_intro_title", "photo_intro_full", "photo_intro_choose", "photo_intro_stop", "photo_intro_continue"] {
             XCTAssertNotEqual(L.s(key), key, "缺文案 \(key)")
         }
     }
@@ -402,6 +402,19 @@ final class SettingsFeedbackTests: XCTestCase {
         media.disk = nil
         app.refresh()
         XCTAssertEqual(app.photosEmptyHint, .chooseAlbums, "从未保存也是没选相册")
+    }
+
+    /// 设置行的时间档：今天零点或更晚 →「从今天起」；以前某天 →「从 M月d日 起」；全部 →「全部」（同 Android）。
+    func test_scope_time_label() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 8 * 3600)!
+        let now = Date(timeIntervalSince1970: 1_793_259_000) // 2026-10-29 15:30 +08:00
+        let midnight: Int64 = 1_793_203_200_000
+        let zh = Locale(identifier: "zh_CN")
+        XCTAssertEqual(SettingsScreen.timeLabel(.since(ms: midnight), now: now, calendar: cal, locale: zh), L.s("scope_time_today"))
+        XCTAssertEqual(SettingsScreen.timeLabel(.all, now: now, calendar: cal, locale: zh), L.s("scope_time_all"))
+        let earlier = SettingsScreen.timeLabel(.since(ms: midnight - 86_400_000), now: now, calendar: cal, locale: zh)
+        XCTAssertEqual(earlier, L.f("scope_time_since_date", "10月28日"))
     }
 
     /// 「选择相册」：切到设置 tab 并请设置页推出选范围页。

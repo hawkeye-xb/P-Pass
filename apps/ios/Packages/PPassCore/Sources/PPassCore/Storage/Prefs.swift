@@ -6,7 +6,7 @@
 // | AutoBackupPrefs           | AutoBackupPrefs.kt          | auto_backup_prefs.json        | autoEnabled=false，userRequested=nil |
 // | BackupSettings            | BackupSettings.kt           | backup-settings.json          | wifiOnly=true            |
 // | NotifyOnFailurePrefs      | NotifyOnFailurePrefs.kt     | notify_on_failure_prefs.json  | enabled=false（#1262）   |
-// | BackgroundBackupCardPrefs | （#1263，文件名待对齐 Android）| background_backup_card.json   | dismissed=false          |
+// | BackgroundBackupOfferPrefs | （#1263，与 Android 同名）    | background_backup_offer.json  | dismissed=false          |
 // | OnboardedDesktopsStore    | OnboardedDesktopsStore.kt   | onboarded_desktops.json       | 空集（失败关闭：按新电脑走） |
 // | SentinelStore             | SentinelStore.kt            | sentinel.json                 | 全 0                     |
 // | BackupScopeStore          | BackupScopeStore.kt         | backup_scope[-<nodeId>].json  | nil（= 一张都不在范围内）  |
@@ -171,12 +171,12 @@ public final class NotifyOnFailurePrefs: @unchecked Sendable {
     }
 }
 
-// MARK: - BackgroundBackupCardPrefs
+// MARK: - BackgroundBackupOfferPrefs
 
 /// 首页「开启后台备份」引导卡（#1263：onboarding 不再问后台备份，改在首页引导）。卡片一直显示，直到用户开启后台备份，
 /// 或点「不用了」手动关掉——「关掉过」记在这里。缺失 / 损坏 = 没关过。
-public final class BackgroundBackupCardPrefs: @unchecked Sendable {
-    public static let fileName = "background_backup_card.json"
+public final class BackgroundBackupOfferPrefs: @unchecked Sendable {
+    public static let fileName = "background_backup_offer.json"
     private let url: URL
     private let logger: CoreLogger
 

@@ -77,32 +77,33 @@
    下面的 key 是 Android 同名文案的临时副本：本分支不改 apps/android，Localizable.strings 又只能由 gen-strings.py 从 Android strings.xml 生成。
    Android 那边落地后跑 just ios-strings，再把本段里标「过渡」的条目删掉（不删会永远盖住 Android 的文案）。标「iOS 独有」的留下。 */
 
-/* 过渡（#1259）：系统照片权限框之前的说明屏，措辞照卡里定稿。 */
+/* 过渡（#1259）：系统照片权限框之前的说明屏。 */
 "photo_intro_title" = "Your photos go to your home computer only";
-"photo_intro_where" = "Photos are stored on “%1$@”. Nothing is stored in any cloud, and there is no account.";
+"photo_intro_where" = "Photos are stored on \"%1$@\". Nothing is stored in any cloud, and there is no account.";
 "photo_intro_full" = "Next, your phone asks for photo access. Choose full access so new photos can back up on their own.";
-"photo_intro_choose" = "Granting access doesn’t send everything right away. In the next step you choose which albums, and whether to start from today or include everything.";
-"photo_intro_pause" = "You can pause or change what’s backed up at any time. Photos already stored are ordinary files on the computer.";
+"photo_intro_choose" = "Granting access doesn't send everything right away. In the next step you choose which albums, and whether to start from today or include everything.";
+"photo_intro_stop" = "You can pause or change what's backed up at any time. Photos already stored are ordinary files on the computer.";
 "photo_intro_continue" = "Continue";
 
-/* 过渡（#1263）：选范围页「备份哪些照片」= 相册 + 时间二选一；首次「开始备份」、编辑「保存」。 */
-"bucket_title" = "Which photos to back up";
+/* 过渡（#1263）：选范围页「备份哪些照片」= 相册 + 时间二选一；首次「开始备份」（bucket_start）、编辑「保存」。 */
+"bucket_title" = "Photos to back up";
 "bucket_save" = "Save";
-"bucket_since_today" = "From today";
-"bucket_since_all" = "All";
-/* 过渡（#1263）：设置行改名，值带时间档。%1$@ = backup_scope_n（「3 个相册」）。 */
-"backup_scope" = "Which photos to back up";
-"backup_scope_value_today" = "%1$@ · from today";
-"backup_scope_value_all" = "%1$@ · all";
+"scope_time_today" = "From today";
+"scope_time_since_date" = "From %1$@";
+"scope_time_all" = "Everything";
+/* 过渡（#1263）：设置行改名，值 = backup_scope_n · 时间档。 */
+"backup_scope" = "Photos to back up";
+"backup_scope_with_time" = "%1$@ · %2$@";
 /* 过渡（#1263）：后台备份默认关，「之后什么都不用做」不再成立。 */
 "welcome_step3" = "3 · Choose which photos to back up";
 /* 过渡（#1263）：照片页没选相册的引导与空状态。%1$@ = 电脑名。 */
 "photos_no_albums" = "No albums chosen for backup yet";
 "photos_choose_albums" = "Choose albums";
-"photos_empty_camera" = "Connected to “%1$@”. Photos you take from now on go home on their own — take one and see.";
-"photos_empty_albums" = "New photos saved to the chosen albums go home on their own.";
-/* 过渡（#1263）：首页后台备份引导卡的「不用了」。 */
-"background_backup_card_dismiss" = "Not now";
-/* iOS 独有（#1263）：首页后台备份引导卡。Android 说「之后不打开 App 也会自动备份」并弹电池白名单；iOS 的后台只能由系统挑时机，
+"home_empty_camera" = "Connected to %1$@. Photos you take from now on come home on their own — try taking one.";
+"home_empty_albums" = "New photos saved to the albums you picked come home on their own.";
+/* 过渡（#1263）：首页后台备份引导卡的按钮。 */
+"background_backup_offer_action" = "Turn on";
+"background_backup_offer_dismiss" = "No thanks";
+/* iOS 独有（#1263）：首页后台备份引导卡正文。Android 说「之后不打开 App 也会自动备份」并弹电池白名单；iOS 的后台只能由系统挑时机，
    不能承诺（#343：不写频率、不假装能保证），也没有 App 内的授权框。 */
-"background_backup_card_body" = "Turn on background backup: after you leave P-Pass, iOS picks moments to keep backing up — when is up to the system";
+"background_backup_offer" = "Turn on background backup: after you leave P-Pass, iOS picks moments to keep backing up — when is up to the system";

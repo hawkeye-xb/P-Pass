@@ -202,7 +202,7 @@ final class AppModel: ObservableObject {
 
     /// 首页引导卡：后台备份没开、也没被关掉过才显示。
     var showsBackgroundCard: Bool {
-        !pairingLost && BackgroundBackupCardPrefs.shows(autoBackup: autoBackup, dismissed: backgroundCardDismissed)
+        !pairingLost && BackgroundBackupOfferPrefs.shows(autoBackup: autoBackup, dismissed: backgroundCardDismissed)
     }
 
     /// 引导卡「开启后台备份」。iOS 没有 App 内申请后台运行的系统框（后台 App 刷新只能在系统设置里开），所以只写意图；

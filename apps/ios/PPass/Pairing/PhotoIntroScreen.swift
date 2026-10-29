@@ -36,6 +36,6 @@ struct PhotoIntroScreen: View {
     /// 四条说明，顺序即卡里定稿的顺序。电脑名缺失时用 `storage_device_default`（「这台电脑」）。
     static func lines(desktopName: String?) -> [String] {
         [L.f("photo_intro_where", desktopName ?? L.s("storage_device_default")),
-         L.s("photo_intro_full"), L.s("photo_intro_choose"), L.s("photo_intro_pause")]
+         L.s("photo_intro_full"), L.s("photo_intro_choose"), L.s("photo_intro_stop")]
     }
 }

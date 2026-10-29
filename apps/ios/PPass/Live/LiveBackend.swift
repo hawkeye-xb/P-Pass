@@ -26,7 +26,7 @@ final class LiveBackend: @unchecked Sendable {
     let settings: BackupSettings
     let autoPrefs: AutoBackupPrefs
     let notifyPrefs: NotifyOnFailurePrefs
-    let cardPrefs: BackgroundBackupCardPrefs
+    let cardPrefs: BackgroundBackupOfferPrefs
     let noticeStore: DefinitiveNoticeStore
     let pairingLoss = PairingLoss()
     let sentinel: SentinelStore
@@ -101,7 +101,7 @@ final class LiveBackend: @unchecked Sendable {
         settings = BackupSettings(directory: dir, logger: logger)
         autoPrefs = AutoBackupPrefs(directory: dir, logger: logger)
         notifyPrefs = NotifyOnFailurePrefs(directory: dir, logger: logger)
-        cardPrefs = BackgroundBackupCardPrefs(directory: dir, logger: logger)
+        cardPrefs = BackgroundBackupOfferPrefs(directory: dir, logger: logger)
         noticeStore = DefinitiveNoticeStore(directory: dir, logger: logger)
         // #1262：通知默认关；老用户升级保持原状态。必须在任何 markOnboarded 之前定老用户（新装用户此刻没有配对、没走过 onboarding）。
         notifyPrefs.initIfAbsent(existingUser: pairingStore.load() != nil || onboarded.anyOnboarded())

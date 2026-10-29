@@ -124,9 +124,9 @@ struct PhotosScreen: View {
                     app.openScopeEditor()
                 }
             case .camera:
-                PPStateMessage(text: L.f("photos_empty_camera", app.desktopName ?? L.s("storage_device_default")), symbol: "camera")
+                PPStateMessage(text: L.f("home_empty_camera", app.desktopName ?? L.s("storage_device_default")), symbol: "camera")
             case .albums:
-                PPStateMessage(text: L.s("photos_empty_albums"), symbol: "photo.on.rectangle")
+                PPStateMessage(text: L.s("home_empty_albums"), symbol: "photo.on.rectangle")
             }
         } else if model.shown.isEmpty {
             PPStateMessage(text: L.s("photos_filter_empty"), symbol: "line.3.horizontal.decrease.circle")
