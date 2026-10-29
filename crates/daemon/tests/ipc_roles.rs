@@ -500,3 +500,55 @@ fn library_recheck_answers_from_the_library_marker() {
     std::fs::create_dir_all(dir.join(".ppf")).unwrap();
     assert!(recheck(), "库标记回来了");
 }
+
+/// #639：搬迁中窗口锁住，服务也一律拒绝写：只答进度，改设置 / 再搬一次 / 配对 / 删设备都是「库不可用」。
+/// 反证：relocating_dispatch 放行 config.set_library 或 library.relocate ⇒ 第二段红。
+#[test]
+fn writes_are_refused_while_relocating() {
+    use daemon::ipc::relocating_dispatch;
+    use daemon::relocate::{Live, Plan};
+    let live = Live::new(Plan {
+        from: "/Users/me/Lib".into(),
+        to: "/Volumes/Disk".into(),
+        id: "ab".repeat(16),
+        flipped: false,
+        promoting: false,
+    });
+    let s = relocating_dispatch(
+        &req("status", serde_json::json!({})),
+        IpcClient::Shell,
+        "1.0.0",
+        0,
+        &live,
+    );
+    let r = s.result.unwrap();
+    assert_eq!(r["relocating"], true);
+    assert_eq!(r["relocate_to"], "/Volumes/Disk");
+
+    for m in [
+        "config.set_library",
+        "config.set",
+        "library.relocate",
+        "pairing.start",
+        "pairing.confirm",
+        "device.revoke",
+        "daemon.stop",
+    ] {
+        let r = relocating_dispatch(
+            &req(
+                m,
+                serde_json::json!({ "target": "/tmp/x", "library": "/tmp/x" }),
+            ),
+            IpcClient::Shell,
+            "1.0.0",
+            0,
+            &live,
+        );
+        assert!(!r.ok, "{m} 搬迁中不该被答");
+        assert_eq!(
+            r.error.unwrap().reason().to_string(),
+            "library_unavailable",
+            "{m}"
+        );
+    }
+}

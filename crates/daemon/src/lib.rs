@@ -31,6 +31,7 @@ pub mod presence;
 pub mod query;
 pub mod reconcile;
 pub mod redact;
+pub mod relocate;
 pub mod residue;
 pub mod router;
 pub mod sandbox;

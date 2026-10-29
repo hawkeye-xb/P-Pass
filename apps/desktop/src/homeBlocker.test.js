@@ -54,4 +54,21 @@ describe("首页阻断（L1）", () => {
     expect(app).not.toContain("class:ok={isServiceRunning(serviceState)}");
     expect(app).toMatch(/<Card variant="danger"[^>]*data-testid="library-missing"/);
   });
+
+  // #639：正在搬迁是等待（琥珀），压过「找不到照片库」（搬迁中原位置可能已经不在了）。
+  it("正在搬迁：琥珀等待，优先于找不到照片库", () => {
+    expect(homeBlocker("running", { relocating: true, library_missing: true })).toMatchObject({
+      id: "relocating",
+      tone: "waiting",
+    });
+  });
+
+  // #639：「更改照片库位置」恢复，走整库搬迁命令（不再是只改指向的 set_library_dir）。
+  // 反证：chooseFolder 仍调 set_library_dir → 红。
+  it("设置页更改位置走整库搬迁", () => {
+    expect(app).toContain('data-testid="change-library"');
+    const choose = app.slice(app.indexOf("async function chooseFolder"), app.indexOf("// DESK-10: 导出走桌面壳"));
+    expect(choose).toContain('invoke("relocate_library", { dryRun: false })');
+    expect(choose).not.toContain('invoke("set_library_dir")');
+  });
 });

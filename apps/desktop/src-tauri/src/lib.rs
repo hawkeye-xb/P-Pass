@@ -678,6 +678,35 @@ async fn set_library_dir(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// #639：「更改照片库位置」= 整库搬迁。新位置是窗口程序暂存的那次系统对话框选择（网页递不进
+/// 路径，#1150）；后台服务校验、落计划后自己重启去搬（见 daemon::relocate）。
+#[tauri::command]
+async fn relocate_library(
+    app: tauri::AppHandle,
+    dry_run: bool,
+) -> Result<serde_json::Value, String> {
+    let dir = app
+        .state::<LibraryPick>()
+        .get()
+        .ok_or_else(|| ipc::ui_err("ui.err_generic", &[]))?;
+    let result = off_main(move || {
+        // §5.3 / #1159：服务形态下先把新位置授权给服务（与 configure_library 同一条）。
+        let _ = platform::adapter().grant_library_dir(&dir);
+        // dry_run：只预检（确认框要显示最终位置、文件夹里是否已有别的东西），不落计划。
+        // 跨卷时预检要量整个库的大小（逐个文件），大库在机械盘上会超过平常的 10 秒。
+        ipc::DaemonHandle::discover()?.call_with_timeout(
+            "library.relocate",
+            json!({ "target": dir.to_string_lossy(), "dry_run": dry_run }),
+            std::time::Duration::from_secs(120),
+        )
+    })
+    .await??;
+    if !dry_run {
+        app.state::<LibraryPick>().clear();
+    }
+    Ok(result)
+}
+
 async fn configure_library_off_main(library_dir: String) -> Result<(), String> {
     off_main(move || configure_library(&library_dir)).await?
 }
@@ -932,6 +961,10 @@ async fn stop_daemon(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 fn stop_daemon_now() -> Result<(), String> {
+    // #639：搬迁中不许停——窗口已锁住，托盘的「停止」也走这里。
+    if relocating_now() {
+        return Err(ipc::ui_err("ui.err_stop_while_relocating", &[]));
+    }
     // 0) DESK-36 (#456)：先落「用户主动停止」标记，再动进程——停到一半时
     //    恰好来一次自愈 tick，它也得看见标记。落不下就不停：停了也会被
     //    自愈拉回来，不如直接告诉用户停止失败。
@@ -959,6 +992,15 @@ fn stop_daemon_now() -> Result<(), String> {
         std::thread::sleep(std::time::Duration::from_millis(250));
     }
     unregistered.map_err(|e| e.to_string())
+}
+
+/// 服务此刻是否在搬迁照片库（问不到就当不是：服务没在跑，自然也没在搬）。
+fn relocating_now() -> bool {
+    ipc::DaemonHandle::discover()
+        .ok()
+        .and_then(|h| h.call("status", json!({})).ok())
+        .and_then(|s| s.get("relocating").and_then(|v| v.as_bool()))
+        .unwrap_or(false)
 }
 
 /// W1 (2026-08-26)：Windows 上常驻的 `ppf-daemon.exe` 占着自己的文件，安装器
@@ -1897,6 +1939,7 @@ pub fn run() {
             disable_auto_sleep,
             write_config,
             set_library_dir,
+            relocate_library,
             start_daemon,
             daemon_startup_error,
             stop_daemon,

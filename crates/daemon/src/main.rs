@@ -341,6 +341,27 @@ async fn run() -> anyhow::Result<()> {
     } else {
         library_location.platform_dir().to_path_buf()
     };
+    // #639：有没搬完的搬迁计划就先接着搬（服务只答进度，不开库、不起传输）。搬完改指向、删原目录
+    // 后重启；没搬成就放弃计划（原库一字未动）并记下原因，重启后照旧在原位置。
+    if !ephemeral {
+        if let Some(plan) = daemon::relocate::pending(&local_base) {
+            if daemon::relocate::already_repointed(&plan, &data_dir) {
+                // 指向早已改好（上次改完就中断了，可能还没来得及记下），只差删原目录。
+                daemon::relocate::finish_flipped(&local_base, &plan);
+            } else {
+                let live = std::sync::Arc::new(daemon::relocate::Live::new(plan));
+                let worker = std::sync::Arc::clone(&live);
+                let location = std::sync::Arc::clone(&library_location);
+                let base = local_base.clone();
+                tokio::task::spawn_blocking(move || relocate_now(&worker, &location, &base));
+                run_waiting(
+                    std::sync::Arc::clone(&library_location),
+                    daemon::ipc::Waiting::Relocating(live),
+                )
+                .await
+            }
+        }
+    }
     let presence = startup_presence(explicitly_configured, &data_dir, &local_base);
     if presence != daemon::layout::Presence::Present {
         if let daemon::layout::Presence::OtherLibrary { found, expected } = &presence {
@@ -1142,6 +1163,48 @@ fn startup_presence(
     } else {
         daemon::layout::Presence::Present
     }
+}
+
+/// #639：搬库 → 改指向 → 删原目录 → 清计划，然后以 EXIT_CONFIGURED_RESTART 退出、带着新位置重启。
+/// 任何一步失败都放弃计划（改指向之前原库一字未动），重启后照旧在原位置。
+fn relocate_now(
+    live: &daemon::relocate::Live,
+    location: &daemon::library_location::LibraryLocation,
+    local_base: &std::path::Path,
+) {
+    let plan = &live.plan;
+    tracing::info!(
+        "#639: 开始搬迁照片库：{} → {}",
+        plan.from.display(),
+        plan.to.display()
+    );
+    // 索引在本机（#1260），搬迁不碰它；只读打开取每张照片的相对路径来对账。
+    let index = daemon::layout::local_dir(local_base, &plan.id).join("index.sqlite");
+    let rt = tokio::runtime::Handle::current();
+    let indexed = || -> Result<Vec<String>, String> {
+        if !index.exists() {
+            return Ok(Vec::new());
+        }
+        rt.block_on(storage::copy::asset_rel_paths(&index))
+            .map_err(|e| e.to_string())
+    };
+    let result =
+        daemon::relocate::move_library(local_base, plan, live, &indexed).and_then(|moved| {
+            daemon::relocate::complete(local_base, plan, |to| {
+                location.set(&to.to_string_lossy()).map(|_| ())
+            })
+            .inspect_err(|_| moved.undo(plan))
+        });
+    match result {
+        Ok(()) => {
+            tracing::info!("#639: 照片库已搬到 {}，带着新位置重启", plan.to.display());
+        }
+        Err(e) => {
+            tracing::error!("#639: 搬迁没成，照片库留在原位置：{e}");
+            daemon::relocate::abandon(local_base, &e);
+        }
+    }
+    std::process::exit(daemon::ipc::EXIT_CONFIGURED_RESTART);
 }
 
 /// #1253 / #1260：盯住照片库根目录本身。事件到了先等 [`LIBRARY_GONE_SETTLE`] 再判：库标记不在了

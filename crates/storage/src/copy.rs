@@ -25,6 +25,23 @@ pub async fn vacuum_into(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
+/// #639：索引里每张照片的库内相对路径（搬迁后对账用）。只读打开。
+pub async fn asset_rel_paths(path: &Path) -> Result<Vec<String>> {
+    let mut conn = SqliteConnectOptions::new()
+        .filename(path)
+        .read_only(true)
+        .connect()
+        .await?;
+    let rows = sqlx::query("SELECT rel_path FROM asset")
+        .fetch_all(&mut conn)
+        .await?
+        .into_iter()
+        .map(|r| r.get::<String, _>(0))
+        .collect();
+    conn.close().await?;
+    Ok(rows)
+}
+
 /// 每张表的行数（按表名排序），以及 `PRAGMA integrity_check` 是否为 ok。只读打开。
 pub async fn table_counts(path: &Path) -> Result<(bool, Vec<(String, i64)>)> {
     let mut conn = SqliteConnectOptions::new()
