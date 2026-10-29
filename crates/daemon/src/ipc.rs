@@ -547,9 +547,10 @@ pub async fn serve_unconfigured_signed(
 pub enum Waiting {
     /// #1115：正本里还没有库位置，等首启向导写入。
     Unconfigured(Arc<crate::library_location::LibraryLocation>),
-    /// #1253：库位置在，但那里找不到照片库（外置盘没接、文件夹被移走 / 删掉 / 改名）。
-    /// 不退出、不开库、不起传输，说明原因与路径，等它回来（回来由 main 的巡检发现并重启）。
-    LibraryMissing(PathBuf),
+    /// #1253：库位置在，但那里找不到照片库（外置盘没接、文件夹被移走 / 删掉 / 改名，或那里是
+    /// 别的库——#1260 库 ID 不符）。不退出、不开库、不起传输，说明原因与路径；用户放回后点
+    /// 「重新检查」（`library.recheck`）。`local_base` = 本机服务数据目录（判库 ID 用）。
+    LibraryMissing { dir: PathBuf, local_base: PathBuf },
 }
 
 /// [`Waiting`] 的签名 socket 版（macOS）。
@@ -750,8 +751,8 @@ async fn unconfigured_session(
             Waiting::Unconfigured(location) => {
                 unconfigured_dispatch(&req, client, version, started_at, location).await
             }
-            Waiting::LibraryMissing(dir) => {
-                library_missing_dispatch(&req, client, version, started_at, dir)
+            Waiting::LibraryMissing { dir, local_base } => {
+                library_missing_dispatch(&req, client, version, started_at, dir, local_base)
             }
         };
         if req.method == "config.set_library" && resp.ok {
@@ -848,6 +849,7 @@ pub fn library_missing_dispatch(
     version: &str,
     started_at: i64,
     dir: &std::path::Path,
+    local_base: &std::path::Path,
 ) -> Resp {
     let id = req.id.clone();
     if !client.may_call(&req.method) {
@@ -878,7 +880,10 @@ pub fn library_missing_dispatch(
         // 还不在 ⇒ 如实回答，状态不变（不轮询、不自动重启——库是用户自己处理的）。
         "library.recheck" => Resp::ok(
             id,
-            serde_json::json!({ "found": crate::library_location::library_marker_present(dir) }),
+            serde_json::json!({
+                "found": crate::layout::library_presence(dir, local_base)
+                    == crate::layout::Presence::Present
+            }),
         ),
         _ => Resp::err(id, RespError::new(Reason::LibraryUnavailable)),
     }

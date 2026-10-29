@@ -51,17 +51,27 @@ pub struct Reconcile {
     /// IDX-01: 本机 NodeId。`None` = 不跑收编方向——`watcher.rs` 构造的
     /// 那一份只借用 [`Reconcile::remove_asset`]，不该顺带扫全库。
     local_node_id: Option<Vec<u8>>,
+    /// #1260：缩略图根（本机）。默认库盘 `.ppf/thumbs`（老布局）。
+    thumbs_root: PathBuf,
 }
 
 impl Reconcile {
     pub fn new(db: Db, library_root: impl Into<PathBuf>) -> Self {
+        let library_root = library_root.into();
         Self {
             db,
-            library_root: library_root.into(),
+            thumbs_root: library_root.join(".ppf/thumbs"),
+            library_root,
             total_removed: std::sync::Arc::new(AtomicUsize::new(0)),
             events: None,
             local_node_id: None,
         }
+    }
+
+    /// #1260：缩略图放本机（`LibraryLayout::thumbs`）。
+    pub fn with_thumbs_root(mut self, thumbs_root: impl Into<PathBuf>) -> Self {
+        self.thumbs_root = thumbs_root.into();
+        self
     }
 
     /// IDX-01: 接上本机 NodeId 即打开「收孤儿」方向。只有 `main.rs` 那份
@@ -174,11 +184,11 @@ impl Reconcile {
         }
     }
 
-    /// 缩略图两个文件（.ppf/thumbs/<2hex>/<hex>.{256,1024}.jpg）——纯文件，
+    /// 缩略图两个文件（<缩略图根>/<2hex>/<hex>.{256,1024}.jpg）——纯文件，
     /// 直接删；不存在（从未生成过缩略图）也正常。
     fn remove_thumbs(&self, hash: &[u8]) {
         if let Ok(h32) = <[u8; 32]>::try_from(hash) {
-            let paths = media_codec::thumb_paths(&self.library_root.join(".ppf/thumbs"), &h32);
+            let paths = media_codec::thumb_paths(&self.thumbs_root, &h32);
             let _ = std::fs::remove_file(&paths.t256);
             let _ = std::fs::remove_file(&paths.t1024);
         }

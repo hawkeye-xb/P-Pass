@@ -48,6 +48,8 @@ mod keychain;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
+mod macos_unmount;
+#[cfg(target_os = "macos")]
 mod sealed_version;
 // QA-09 迁移（#211）：macOS 与 Linux 共享的 unix 实现。迁过来的分叉里有
 // 3 处是 `#[cfg(unix)]`（同时覆盖两者），没有共享模块就得抄两遍。
@@ -56,6 +58,8 @@ mod signal;
 mod unix;
 #[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+mod windows_unmount;
 // #1151：应用内更新的大小 / 总时长上限（纯逻辑，三平台都跑单测）。
 pub mod update_limits;
 // §5.1 / #1238：服务形态「要不要运行」的开关文件（纯文件读写，三平台都跑单测）。
@@ -543,6 +547,15 @@ pub trait PlatformAdapter: Send + Sync {
     /// macOS 用 kqueue `EVFILT_VNODE`（`NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE`），目录以 `O_EVTONLY`
     /// 打开——只为收事件，不算占用，不会挡住卷的推出。
     fn watch_library_root(&self, _root: &Path, _on_gone: Box<dyn FnOnce() + Send>) -> bool {
+        false
+    }
+
+    /// #1260：用户推出照片库所在的卷之前先问我们。系统卸载之前在后台线程里调用 `prepare`
+    /// （阻塞；调用方负责给它设上限），它返回后放行卸载——用来取消在途传输、等库盘上的文件
+    /// 关掉，推出就不会「磁盘正在使用」。只放行、从不拒绝用户的推出。
+    ///
+    /// 返回 `false` = 本平台没有这项能力（**默认**）。macOS 用 DiskArbitration 卸载审批回调。
+    fn approve_library_unmount(&self, _root: &Path, _prepare: Box<dyn Fn() + Send + Sync>) -> bool {
         false
     }
     /// 本平台**生效的**数据目录。

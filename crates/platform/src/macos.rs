@@ -475,6 +475,10 @@ impl PlatformAdapter for MacosAdapter {
         }
     }
 
+    fn approve_library_unmount(&self, root: &Path, prepare: Box<dyn Fn() + Send + Sync>) -> bool {
+        crate::macos_unmount::watch(root, prepare)
+    }
+
     fn notify(&self, title: &str, body: &str) {
         // Reliable notifications need a notarized .app (T-041/T-071);
         // best-effort osascript until then.

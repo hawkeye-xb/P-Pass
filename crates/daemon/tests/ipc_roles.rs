@@ -434,6 +434,7 @@ fn library_missing_state_reports_the_path_and_opens_nothing() {
         "1.0.0",
         0,
         dir,
+        dir,
     );
     assert!(s.ok);
     let r = s.result.unwrap();
@@ -446,6 +447,7 @@ fn library_missing_state_reports_the_path_and_opens_nothing() {
         IpcClient::Shell,
         "1.0.0",
         0,
+        dir,
         dir,
     );
     assert!(sub.ok, "{:?}", sub.error);
@@ -461,6 +463,7 @@ fn library_missing_state_reports_the_path_and_opens_nothing() {
             IpcClient::Shell,
             "1.0.0",
             0,
+            dir,
             dir,
         );
         assert!(!r.ok, "{m} 不该在库找不到时被答");
@@ -486,6 +489,7 @@ fn library_recheck_answers_from_the_library_marker() {
             "1.0.0",
             0,
             &dir,
+            parent.path(),
         );
         assert!(r.ok, "{:?}", r.error);
         r.result.unwrap()["found"].as_bool().unwrap()

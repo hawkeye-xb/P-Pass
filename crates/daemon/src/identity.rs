@@ -142,6 +142,46 @@ pub async fn settle_in_secure_store(
     Ok(settled)
 }
 
+/// #1260：「数据目录文件」这种存放处（Windows 非服务形态、Linux）以前在照片库 `.ppf/` 里，
+/// 现在放本机服务数据目录。返回这次该用哪个目录找 [`KEY_FILE`]：
+/// - 本机已有、或照片库里本来就没有 ⇒ 本机；
+/// - 照片库里有、本机没有 ⇒ 先拷到本机（收紧权限、fsync）、读回核对一致，再删库里那份 ⇒ 本机；
+/// - 拷不过去 / 核对不一致 ⇒ 这次照旧用照片库里那份，下次启动再试。**绝不因为搬不动而铸新身份**
+///   ——新身份 = 清空全部配对。
+pub fn data_dir_key_home(
+    library_root: &Path,
+    local_base: &Path,
+    restrict: impl Fn(&Path) -> platform::Result<platform::Applied>,
+) -> PathBuf {
+    let local = local_base.join(KEY_FILE);
+    let legacy = library_root.join(KEY_FILE);
+    if local.exists() || !legacy.exists() {
+        return local_base.to_path_buf();
+    }
+    let moved = (|| -> std::io::Result<()> {
+        let bytes = std::fs::read(&legacy)?;
+        crate::layout::write_atomically(&local, &bytes)?;
+        let _ = restrict(&local);
+        if std::fs::read(&local)? != bytes {
+            let _ = std::fs::remove_file(&local);
+            return Err(std::io::Error::other("读回的内容与原文件不一致"));
+        }
+        std::fs::remove_file(&legacy)
+    })();
+    match moved {
+        Ok(()) => {
+            tracing::info!("#1260: 身份私钥已从照片库移到本机服务数据目录");
+            local_base.to_path_buf()
+        }
+        Err(e) => {
+            tracing::warn!(
+                "#1260: 身份私钥没能移到本机（{e}），这次照旧用照片库里那份，下次启动再试"
+            );
+            library_root.to_path_buf()
+        }
+    }
+}
+
 /// daemon 这次运行用的身份。`ephemeral`（`--ephemeral` 测试 / 脚本模式）=
 /// 只在内存里生成一把随机私钥：不读写存放处、不读写文件、不删旧明文。一次性
 /// daemon 不需要稳定身份，随机 NodeId 也不在任何手机的白名单里；常驻服务
@@ -787,5 +827,39 @@ mod tests {
         .unwrap();
         assert_eq!(k, [7u8; 32]);
         assert!(!f.exists());
+    }
+
+    // #1260：库里的私钥搬到本机——内容不变（同一个身份、不清配对），库里那份删掉；本机已有就不动。
+    // 反证：搬完不删库里那份 / 搬错内容 ⇒ 断言红。
+    #[test]
+    fn a_data_dir_key_moves_from_the_library_to_the_local_disk() {
+        let lib = tempfile::tempdir().unwrap();
+        let local = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(lib.path().join(".ppf")).unwrap();
+        std::fs::write(lib.path().join(KEY_FILE), [7u8; 32]).unwrap();
+        let home = data_dir_key_home(lib.path(), local.path(), |_| Ok(platform::Applied::Done));
+        assert_eq!(home, local.path());
+        assert_eq!(
+            std::fs::read(local.path().join(KEY_FILE)).unwrap(),
+            [7u8; 32]
+        );
+        assert!(!lib.path().join(KEY_FILE).exists());
+        // 再来一次：本机已有，原样用本机。
+        assert_eq!(
+            data_dir_key_home(lib.path(), local.path(), |_| Ok(platform::Applied::Done)),
+            local.path()
+        );
+    }
+
+    #[test]
+    fn a_key_that_cannot_move_stays_in_use_where_it_is() {
+        let lib = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(lib.path().join(".ppf")).unwrap();
+        std::fs::write(lib.path().join(KEY_FILE), [7u8; 32]).unwrap();
+        let blocker = tempfile::NamedTempFile::new().unwrap();
+        // 本机目录其实是个文件：建不出 .ppf/，搬不动。
+        let home = data_dir_key_home(lib.path(), blocker.path(), |_| Ok(platform::Applied::Done));
+        assert_eq!(home, lib.path(), "搬不动就照旧用库里那份，绝不铸新身份");
+        assert!(lib.path().join(KEY_FILE).exists());
     }
 }
