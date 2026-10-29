@@ -866,6 +866,14 @@ pub fn library_missing_dispatch(
         ),
         "daemon.step_down" => Resp::ok(id, serde_json::json!({ "stepping_down": true })),
         "events.subscribe" => Resp::ok(id, serde_json::json!({ "subscribed": true })),
+        // 找不到照片库时不改库位置（向导里点「继续」也走到这里）。被拒要留证据：保存失败查得到原因。
+        "config.set_library" => {
+            tracing::warn!(
+                "#1253: 照片库找不到期间拒绝 config.set_library（库位置不变：{}）",
+                dir.display()
+            );
+            Resp::err(id, RespError::new(Reason::LibraryUnavailable))
+        }
         // 窗口上的「重新检查」：库回来了 ⇒ 应答后以 EXIT_CONFIGURED_RESTART 退出、带着库重启；
         // 还不在 ⇒ 如实回答，状态不变（不轮询、不自动重启——库是用户自己处理的）。
         "library.recheck" => Resp::ok(

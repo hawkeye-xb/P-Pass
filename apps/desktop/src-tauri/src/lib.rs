@@ -242,6 +242,13 @@ fn initial_service_state() -> ServiceState {
     )
 }
 
+/// #1253：此刻向导算不算走完——与壳启动时同一张判定表（[`initial_service_state`]），
+/// 只是用连上那一刻的事实：服务答「已配置」（含找不到照片库）且常驻服务已登记 ⇒ 走完了。
+/// 向导中途（库位置写了、常驻服务还没登记）仍算没走完，不会被一次连接踢出向导。
+fn onboarding_finished_now() -> bool {
+    initial_service_state() != ServiceState::NotConfigured
+}
+
 /// DESK-63 (#946): snapshot for the frontend's first paint. The event stream
 /// also emits on every transition; this covers the window where the UI is
 /// not listening yet.
@@ -284,7 +291,9 @@ fn start_event_stream(app: tauri::AppHandle) {
                             manager_for_open.note_connected();
                             manager_for_open.set(
                                 &app_for_open,
-                                manager_for_open.current().after_connection(),
+                                manager_for_open
+                                    .current()
+                                    .after_connection(onboarding_finished_now()),
                                 Some("event stream open"),
                             );
                         },
@@ -308,7 +317,9 @@ fn start_event_stream(app: tauri::AppHandle) {
                             manager.note_connected();
                             manager.set(
                                 &app,
-                                manager.current().after_connection(),
+                                manager
+                                    .current()
+                                    .after_connection(onboarding_finished_now()),
                                 Some("events.subscribe unsupported; status probe ok"),
                             );
                             loop {
