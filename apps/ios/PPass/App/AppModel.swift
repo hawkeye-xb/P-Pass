@@ -200,12 +200,6 @@ final class AppModel: ObservableObject {
         do { try backend.engine.setAutoBackup(on); autoBackup = on } catch { settingWriteFailed("auto-backup", error) }
     }
 
-    /// 设置页的「后台备份」开关。亲手关掉也是明确的选择：之后首页不再出引导卡（#1263）。
-    func setAutoBackupFromSettings(_ on: Bool) {
-        setAutoBackup(on)
-        if !on, autoBackup == false, !backgroundCardDismissed { dismissBackgroundCard() }
-    }
-
     /// 首页引导卡：后台备份没开、也没被关掉过才显示。
     var showsBackgroundCard: Bool {
         !pairingLost && BackgroundBackupCardPrefs.shows(autoBackup: autoBackup, dismissed: backgroundCardDismissed)

@@ -373,18 +373,12 @@ final class SettingsFeedbackTests: XCTestCase {
         XCTAssertFalse(app.showsBackgroundCard)
     }
 
-    /// 「不用了」→ 落盘、不再显示；设置页亲手关掉后台备份也算关过卡。写失败卡片仍在并提示。
-    func test_background_card_dismiss_and_settings_off_hide_it() {
+    /// 「不用了」→ 落盘、不再显示。写失败卡片仍在并提示。
+    func test_background_card_dismiss_hides_it() {
         let (app, engine, _) = make()
         app.dismissBackgroundCard()
         XCTAssertFalse(app.showsBackgroundCard)
         XCTAssertTrue(engine.cardDismissed)
-
-        let (other, otherEngine, _) = make()
-        other.setAutoBackupFromSettings(true)
-        other.setAutoBackupFromSettings(false)
-        XCTAssertTrue(otherEngine.cardDismissed, "亲手关掉是明确的选择")
-        XCTAssertFalse(other.showsBackgroundCard)
 
         let (failing, failingEngine, _) = make()
         failingEngine.failWrites = true

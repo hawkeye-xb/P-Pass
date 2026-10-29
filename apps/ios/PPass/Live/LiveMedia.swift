@@ -107,15 +107,20 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
 final class PhotoMediaSource: MediaSource, @unchecked Sendable {
     private let selected: @Sendable () -> Set<String>
     private let since: @Sendable () -> BackupSince
+    /// 系统问过照片权限没有（#1259）。没问过时不碰 PhotoKit：App 第一次用 PhotoKit 取资源 / 读变更令牌，系统会自动弹授权框，
+    /// 配对成功后引擎那一轮会把它弹在说明屏上面。没问过 = 一张照片都读不到，范围内本来就是空的。
+    private let accessDecided: @Sendable () -> Bool
     private let library = PhotoKitLibrary()
     private let contents = OriginalContentReader()
     private let inbox: Inbox
     private let log: @Sendable (String) -> Void
 
     init(selected: @escaping @Sendable () -> Set<String>, since: @escaping @Sendable () -> BackupSince, inbox: Inbox,
+         accessDecided: @escaping @Sendable () -> Bool = { PhotoKitAuthorization().currentLevel() != .notDetermined },
          log: @escaping @Sendable (String) -> Void) {
         self.selected = selected
         self.since = since
+        self.accessDecided = accessDecided
         self.inbox = inbox
         self.log = log
     }
@@ -164,8 +169,10 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
     }
 
     func inScope(after: String?, limit: Int) async throws -> [MediaSnapshot] {
-        let members = membership.all()
         let chosen = selected()
+        // 范围空集不发查询（对位 AlbumScope / FIX-T6）；没问过照片权限不碰 PhotoKit（#1259）。
+        guard !chosen.isEmpty, accessDecided() else { return [] }
+        let members = membership.all()
         // 时间档要在截取 limit 之前筛：一页全被筛掉会被扫描当成读完（ScopeCursor：不足一页 = 到底）。
         let candidates = Set(members.filter { !chosen.isDisjoint(with: $0.value) }.keys
             .filter { id in after.map { Array($0.utf8).lexicographicallyPrecedes(Array(id.utf8)) } ?? true })
@@ -181,6 +188,7 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
         var after = Inbox.seq(fromPosition: position.raw)
         var out: [MediaSnapshot] = []
         let chosen = selected()
+        guard !chosen.isEmpty, accessDecided() else { return [] }
         let window = since()
         while out.count < limit {
             try Task.checkCancellation()
@@ -196,7 +204,12 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
     }
 
     /// G 重置（首次、换电脑、照片库换了）：收件箱当前最大序号；收件箱顺带清掉 `seq <= 它` 的行。
-    func currentPosition() async throws -> DiscoveryPosition { DiscoveryPosition(raw: Inbox.position(of: try inbox.currentPosition())) }
+    /// 没问过照片权限：给 0，不读变更令牌（会弹框，#1259）。没问过只可能是全新安装，收件箱是空的，高水位本来就是 0；
+    /// 令牌留到第一次取件时初始化，之前的照片由保存范围触发的 SCOPE_ADDED 对账扫到。
+    func currentPosition() async throws -> DiscoveryPosition {
+        guard accessDecided() else { return DiscoveryPosition(raw: Inbox.position(of: 0)) }
+        return DiscoveryPosition(raw: Inbox.position(of: try inbox.currentPosition()))
+    }
 
     /// nil 是契约里的「说不出」，不是占位：PhotoKit 没有对外的照片库身份（06-ios-variants O-03 / D-07 登记了查证过程：
     /// 令牌里的 store UUID 在模拟器 erase 前后不变，认不出换库）。换库的兜底是 `preciseDiscovery = false`：每个对账轮都扫。

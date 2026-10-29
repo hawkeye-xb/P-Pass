@@ -174,7 +174,7 @@ public final class NotifyOnFailurePrefs: @unchecked Sendable {
 // MARK: - BackgroundBackupCardPrefs
 
 /// 首页「开启后台备份」引导卡（#1263：onboarding 不再问后台备份，改在首页引导）。卡片一直显示，直到用户开启后台备份，
-/// 或手动关掉——「手动关掉」记在这里（含在设置页亲手把后台备份关掉：那也是明确的选择）。缺失 / 损坏 = 没关过。
+/// 或点「不用了」手动关掉——「关掉过」记在这里。缺失 / 损坏 = 没关过。
 public final class BackgroundBackupCardPrefs: @unchecked Sendable {
     public static let fileName = "background_backup_card.json"
     private let url: URL
