@@ -77,19 +77,31 @@ The app walks you through it — just click through:
 1. **Android 8.0+**: on the same [release page](https://github.com/hawkeye-xb/P-Pass/releases),
    download **P-Pass_<版本>_android.apk**. Android may warn about installing
    from an unknown source — that's normal for a direct download; allow it.
-   (iPhone version is coming later; iOS limits background backup, so its
-   experience will differ — we'll spell that out when it ships.)
    **Android 8.0 以上**：在同一个 [Release 页面](https://github.com/hawkeye-xb/P-Pass/releases)
    下载 **P-Pass_<版本>_android.apk**。Android 会提示"未知来源安装"——直接下载
-   的正常提示，允许即可。（iPhone 版后续推出。）
+   的正常提示，允许即可。
+
+   **iPhone (iOS 16+)**: the app is distributed through TestFlight. Install
+   TestFlight from the App Store, open the
+   [P-Pass public link](https://testflight.apple.com/join/htBATauc) on the iPhone, then tap
+   Accept and Install. Turn on automatic updates for P-Pass in TestFlight:
+   each TestFlight build stops opening 90 days after it is published, and a
+   new build is released before then.
+   **iPhone（iOS 16 及以上）**：通过 TestFlight 分发。先在 App Store 安装
+   TestFlight，再在 iPhone 上打开 [P-Pass 公开链接](https://testflight.apple.com/join/htBATauc)，
+   点「接受」「安装」。建议在 TestFlight 里为 P-Pass 打开自动更新：每个
+   TestFlight 版本发布 90 天后无法再打开，我们会在到期前发布新版本。
 2. Open the P-Pass app on your phone and scan the QR code on your computer
    screen. The phone shows a 6-digit code; enter it on the computer and click
    **Allow**. / 打开手机上的 P-Pass，扫电脑屏幕上的二维码。手机会显示 6 位
    验证码，在电脑上输入后点**允许加入**。
-3. Done — your phone now backs up automatically (on Wi-Fi when the
-   battery isn't low). Open the app any time to browse the family photo timeline.
-   完成——手机从此自动备份（连接 Wi-Fi 且电量不低时）。随时打开 App 就能浏览全家
-   照片时间线。
+3. Done — an Android phone now backs up automatically (on Wi-Fi when the
+   battery isn't low). On an iPhone, backups run while P-Pass is open; whether
+   they continue in the background is up to iOS. Open the app any time to
+   browse the family photo timeline.
+   完成——Android 手机从此自动备份（连接 Wi-Fi 且电量不低时）。iPhone 上，备份
+   在打开 P-Pass 时进行，离开 App 后能否在后台接着传由 iOS 决定。随时打开 App
+   就能浏览全家照片时间线。
 
 [截图: 手机扫码配对成功的界面（时间线视图）]
 

@@ -3,9 +3,9 @@
  * render from — consts.ts and i18n/faq.ts — so a copy edit cannot leave the
  * structured data describing a different product.
  *
- * Only the platforms that actually ship are claimed: macOS, Windows and
- * Android. iOS is still in progress, and saying otherwise in structured data
- * would be a claim about the product that the product cannot back up.
+ * Only the platforms that actually ship are claimed: macOS, Windows, Android,
+ * and iOS (through TestFlight). Adding a platform here before it ships would
+ * be a claim about the product that the product cannot back up.
  */
 import { BLUESKY_URL, GITHUB_URL, RELEASES_URL, SITE_DESCRIPTION, SITE_URL, YOUTUBE_URL } from './consts';
 import { FAQ, FAQ_TITLE } from './i18n/faq';
@@ -26,7 +26,7 @@ export function softwareApplication(lang: Lang): JsonLd {
     description: SITE_DESCRIPTION[lang],
     url: lang === 'zh' ? `${SITE_URL}/zh/` : `${SITE_URL}/`,
     applicationCategory: 'MultimediaApplication',
-    operatingSystem: 'macOS, Windows, Android',
+    operatingSystem: 'macOS, Windows, Android, iOS',
     offers: { '@type': 'Offer', price: '0', priceCurrency: 'USD' },
     license: 'https://www.gnu.org/licenses/agpl-3.0.html',
     downloadUrl: RELEASES_URL,

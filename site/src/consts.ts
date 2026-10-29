@@ -17,6 +17,10 @@ export const MIRROR_MAC = `${MIRROR_BASE}/P-Pass-latest.dmg`;
 export const MIRROR_ANDROID = `${MIRROR_BASE}/P-Pass-latest.apk`;
 export const MIRROR_WINDOWS = `${MIRROR_BASE}/P-Pass-latest.exe`;
 
+// iPhone is distributed through a TestFlight public link (both languages; in
+// mainland China this stays the long-term channel). Single place to replace.
+export const TESTFLIGHT_URL = 'https://testflight.apple.com/join/htBATauc';
+
 // Canon copy (Brief §3) — one entry per language, same level.
 export const SITE_TITLE: Record<Lang, string> = {
   en: 'P-Pass — Automatic family photo backup to your home computer',

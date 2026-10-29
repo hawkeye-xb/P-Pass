@@ -15,10 +15,11 @@
  * renders all three buttons at equal weight (that is also the no-JS view); a
  * small script reads the visitor's OS and promotes the matching button to the
  * big primary one, the others drop to a quiet secondary row. Phones and
- * unknown systems keep the equal row. iPhone is not offered yet: it ships
- * through a TestFlight public link once Apple's beta review passes.
+ * unknown systems keep the equal row. iPhone ships through a TestFlight
+ * public link: iPhone / iPad visitors get it as their main button, everyone
+ * else sees it as a quiet line under the desktop and Android buttons.
  */
-import { MIRROR_ANDROID, MIRROR_MAC, MIRROR_WINDOWS, RELEASES_URL } from '../consts';
+import { MIRROR_ANDROID, MIRROR_MAC, MIRROR_WINDOWS, RELEASES_URL, TESTFLIGHT_URL } from '../consts';
 import { t, type Lang } from '../i18n/ui';
 
 interface Props {
@@ -26,6 +27,7 @@ interface Props {
 }
 
 const { lang } = Astro.props;
+const iphoneStepsHref = lang === 'zh' ? '/zh/faq/#iphone-testflight' : '/faq/#iphone-testflight';
 const platforms = [
   { os: 'mac', href: MIRROR_MAC, label: 'hero.cta.mac', sub: 'hero.cta.mac.sub' },
   { os: 'win', href: MIRROR_WINDOWS, label: 'hero.cta.win', sub: 'hero.cta.win.sub' },
@@ -47,7 +49,20 @@ const platforms = [
       ))
     }
   </div>
-  <p class="cta-ios">{t(lang, 'hero.cta.ios')}</p>
+  <div class="cta-ios">
+    <a class="cta is-primary" href={TESTFLIGHT_URL} rel="external">
+      <span class="cta-main">
+        {t(lang, 'hero.cta.ios')}
+        <span class="cta-badge">{t(lang, 'hero.cta.badge')}</span>
+      </span>
+      <span class="cta-sub">{t(lang, 'hero.cta.ios.sub')}</span>
+    </a>
+  </div>
+  <p class="cta-iphone">
+    <a href={TESTFLIGHT_URL} rel="external">{t(lang, 'hero.cta.iphone')}</a>
+    {' · '}
+    <a href={iphoneStepsHref}>{t(lang, 'hero.cta.iphone.steps')}</a>
+  </p>
   <p class="cta-note">{t(lang, 'hero.cta.win.note')}</p>
   <p class="cta-alt">
     <a href={RELEASES_URL} rel="external">{t(lang, 'hero.cta.alt')}</a>
@@ -138,7 +153,8 @@ const platforms = [
   /* The Windows note only matters when Windows is offered as the main choice
      or nothing was detected; the iOS note only for iPhone / iPad visitors. */
   .cta-ios { display: none; }
-  .dl[data-detected='ios'] .cta-ios { display: block; }
+  .dl[data-detected='ios'] .cta-ios { display: block; margin-bottom: 0.75rem; }
+  .dl[data-detected='ios'] .cta-iphone { display: none; }
   .dl:is([data-detected='mac'], [data-detected='android'], [data-detected='ios']) .cta-note { display: none; }
 
   .cta-alt {
@@ -147,12 +163,13 @@ const platforms = [
   }
   .cta-alt a { color: var(--text-meta); }
   .cta-note,
-  .cta-ios {
+  .cta-iphone {
     margin: 0.6rem auto 0;
     max-width: 36rem;
     font-size: 0.85rem;
     color: var(--text-meta);
   }
+  .cta-iphone a { color: var(--text-meta); }
   .cta-main {
     display: inline-flex;
     align-items: center;

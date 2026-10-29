@@ -65,19 +65,31 @@
 
 1. **Android 8.0 以上**：在同一个 [Release 页面](https://github.com/hawkeye-xb/P-Pass/releases)
    下载 **P-Pass_<版本>_android.apk**。Android 会提示"未知来源安装"——直接下载
-   的正常提示，允许即可。（iPhone 版后续推出；受 iOS
-   系统限制，后台自动备份的体验会不同，发布时会说清楚。）
+   的正常提示，允许即可。
    **Android 8.0+**: download **P-Pass_<版本>_android.apk** from the same
    release page. Android's "unknown source" warning is normal for a direct
-   download; allow it. (iPhone version later.)
+   download; allow it.
+
+   **iPhone（iOS 16 及以上）**：通过 TestFlight 分发。先在 App Store 安装
+   TestFlight，再在 iPhone 上打开 [P-Pass 公开链接](https://testflight.apple.com/join/htBATauc)，
+   点「接受」「安装」。建议在 TestFlight 里为 P-Pass 打开自动更新：每个
+   TestFlight 版本发布 90 天后无法再打开，我们会在到期前发布新版本。
+   **iPhone (iOS 16+)**: distributed through TestFlight. Install TestFlight
+   from the App Store, open the [P-Pass public link](https://testflight.apple.com/join/htBATauc)
+   on the iPhone, then tap Accept and Install. Turn on automatic updates for
+   P-Pass in TestFlight: each build stops opening 90 days after it is
+   published, and a new build is released before then.
 2. 打开手机上的 P-Pass，扫电脑屏幕上的二维码。手机会显示 6 位验证码，在电脑上
    输入后点**允许加入**。
    Open P-Pass on your phone and scan the QR on your computer screen. The
    phone shows a 6-digit code; enter it on the computer and click **Allow**.
-3. 完成——手机从此自动备份（连接 Wi-Fi 且电量不低时）。随时打开 App 就能浏览全家
-   照片时间线。
-   Done — your phone backs up automatically (on Wi-Fi when the battery isn't
-   low). Open the app any time to browse the family photo timeline.
+3. 完成——Android 手机从此自动备份（连接 Wi-Fi 且电量不低时）。iPhone 上，备份
+   在打开 P-Pass 时进行，离开 App 后能否在后台接着传由 iOS 决定。随时打开 App
+   就能浏览全家照片时间线。
+   Done — an Android phone backs up automatically (on Wi-Fi when the battery
+   isn't low). On an iPhone, backups run while P-Pass is open; whether they
+   continue in the background is up to iOS. Open the app any time to browse
+   the family photo timeline.
 
 [截图: 手机扫码配对成功的界面（时间线视图）]
 

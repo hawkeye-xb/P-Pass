@@ -44,6 +44,7 @@
  * these yet; the landing page and README should.
  */
 
+import { TESTFLIGHT_URL } from '../consts';
 import type { Lang } from './ui';
 
 export interface FaqLink {
@@ -134,9 +135,26 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
           id: 'supported-devices',
           q: 'Will it run on my phone and computer?',
           a: [
-            'The computer can be a Mac with an M-series chip or a PC running 64-bit Windows. The phone needs Android 8.0 or newer, any brand.',
-            'The iPhone app is not published.',
+            'The computer can be a Mac with an M-series chip or a PC running 64-bit Windows. The phone can be any Android phone on 8.0 or newer, or an iPhone on iOS 16 or newer.',
+            'The iPhone app is installed through TestFlight, not the App Store. On an iPhone, backups run while P-Pass is open; whether iOS lets them continue in the background is up to the system.',
           ],
+          more: [{ label: 'How to install on an iPhone', href: '/faq/#iphone-testflight' }],
+        },
+        {
+          id: 'iphone-testflight',
+          q: 'How do I install it on an iPhone?',
+          a: [
+            'Through TestFlight, Apple\'s own app for installing test versions.',
+            {
+              list: [
+                'Install TestFlight from the App Store.',
+                'On the iPhone, open the P-Pass public link and tap Accept, then Install.',
+                'In TestFlight, turn on automatic updates for P-Pass.',
+              ],
+            },
+            'Each TestFlight build stops opening 90 days after it is published. A new build is released before that happens, and with automatic updates on it installs by itself. Photos already on the computer are not affected either way.',
+          ],
+          more: [{ label: 'P-Pass on TestFlight', href: TESTFLIGHT_URL }],
         },
         {
           id: 'setup',
@@ -163,8 +181,8 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
                 'Camera: only for scanning the pairing QR code on the computer screen.',
                 'Notifications: pairing lost, photo permission revoked, background backup stopped by the system, or a backup that failed.',
                 'Background running: keep transferring with the screen off, and pick up again after a restart.',
-                'Battery whitelist: stop the system from killing background work to save power.',
-                'Installing updates: to install a new version from inside the app.',
+                'Battery whitelist (Android only): stop the system from killing background work to save power.',
+                'Installing updates (Android only): to install a new version from inside the app.',
               ],
             },
             'Contacts, location, microphone and SMS are not requested.',
@@ -378,9 +396,26 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
           id: 'supported-devices',
           q: '我的手机和电脑能装吗？',
           a: [
-            '电脑可以是 M1 及以后的 Mac，也可以是 64 位 Windows 电脑，手机要 Android 8.0 以上，不分牌子。',
-            'iPhone 版没有发布，下载不到。',
+            '电脑可以是 M1 及以后的 Mac，也可以是 64 位 Windows 电脑。手机可以是 Android 8.0 以上的任意牌子，也可以是 iOS 16 及以上的 iPhone。',
+            'iPhone 版通过 TestFlight 安装，不在 App Store 里。iPhone 上的备份在打开 P-Pass 时进行，离开 App 后能否在后台接着传由 iOS 决定。',
           ],
+          more: [{ label: 'iPhone 怎么安装', href: '/zh/faq/#iphone-testflight' }],
+        },
+        {
+          id: 'iphone-testflight',
+          q: 'iPhone 怎么安装？',
+          a: [
+            '通过 TestFlight 安装。TestFlight 是 Apple 官方用来分发测试版 App 的应用。',
+            {
+              list: [
+                '在 App Store 安装 TestFlight。',
+                '在 iPhone 上打开 P-Pass 的公开链接，点「接受」，再点「安装」。',
+                '在 TestFlight 里为 P-Pass 打开自动更新。',
+              ],
+            },
+            '每个 TestFlight 版本自发布起 90 天后无法再打开。我们会在到期前发布新版本，打开自动更新后会自行安装。已经备份到电脑上的照片不受影响。',
+          ],
+          more: [{ label: '在 TestFlight 中打开 P-Pass', href: TESTFLIGHT_URL }],
         },
         {
           id: 'setup',
@@ -407,8 +442,8 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
                 '相机：只用来扫电脑屏幕上的配对二维码。',
                 '通知：配对失效、相册权限被收回、后台备份被系统停掉、备份失败时提醒你。',
                 '后台运行：熄屏时继续传，手机重启后自动接着来。',
-                '电池白名单：避免系统为省电把备份掐掉。',
-                '安装更新包：应用内更新时安装新版本。',
+                '电池白名单（仅 Android）：避免系统为省电把备份掐掉。',
+                '安装更新包（仅 Android）：应用内更新时安装新版本。',
               ],
             },
             '通讯录、位置、麦克风和短信都不申请。',
