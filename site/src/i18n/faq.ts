@@ -148,7 +148,7 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
             {
               list: [
                 'Install TestFlight from the App Store.',
-                'On the iPhone, open the P-Pass public link and tap Accept, then Install.',
+                'On the iPhone, open the P-Pass public link in Safari and tap Accept, then Install. If you got the link in WeChat, tap ··· in the top-right corner and choose “Open in Safari” first; inside WeChat the link cannot open TestFlight.',
                 'In TestFlight, turn on automatic updates for P-Pass.',
               ],
             },
@@ -409,7 +409,7 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
             {
               list: [
                 '在 App Store 安装 TestFlight。',
-                '在 iPhone 上打开 P-Pass 的公开链接，点「接受」，再点「安装」。',
+                '在 iPhone 的 Safari 里打开 P-Pass 的公开链接，点「接受」，再点「安装」。如果是在微信里看到的链接，先点右上角 ··· 选「在 Safari 中打开」，在微信里无法跳转到 TestFlight。',
                 '在 TestFlight 里为 P-Pass 打开自动更新。',
               ],
             },

@@ -29,14 +29,15 @@ interface Props {
 const { lang } = Astro.props;
 const iphoneStepsHref = lang === 'zh' ? '/zh/faq/#iphone-testflight' : '/faq/#iphone-testflight';
 const platforms = [
-  { os: 'mac', href: MIRROR_MAC, label: 'hero.cta.mac', sub: 'hero.cta.mac.sub' },
-  { os: 'win', href: MIRROR_WINDOWS, label: 'hero.cta.win', sub: 'hero.cta.win.sub' },
-  { os: 'android', href: MIRROR_ANDROID, label: 'hero.cta.android', sub: 'hero.cta.android.sub' },
+  { os: 'mac', href: MIRROR_MAC, label: 'hero.cta.mac', sub: 'hero.cta.mac.sub', short: 'Mac' },
+  { os: 'win', href: MIRROR_WINDOWS, label: 'hero.cta.win', sub: 'hero.cta.win.sub', short: 'Windows' },
+  { os: 'android', href: MIRROR_ANDROID, label: 'hero.cta.android', sub: 'hero.cta.android.sub', short: 'Android' },
 ] as const;
 ---
 
 <div class="dl" data-detected="">
   <div class="cta-row">
+    <span class="cta-others">{t(lang, 'hero.cta.others')}</span>
     {
       platforms.map((p) => (
         <a class="cta" data-os={p.os} href={p.href} rel="external">
@@ -45,6 +46,7 @@ const platforms = [
             <span class="cta-badge">{t(lang, 'hero.cta.badge')}</span>
           </span>
           <span class="cta-sub">{t(lang, p.sub)}</span>
+          <span class="cta-short">{p.short}</span>
         </a>
       ))
     }
@@ -120,7 +122,7 @@ const platforms = [
 
   /* A platform was detected: its button stays the big filled one on its own
      line, the others become quiet outlined links below it. */
-  .dl:is([data-detected='mac'], [data-detected='win'], [data-detected='android']) .cta-row .cta:not(.is-primary) {
+  .dl:is([data-detected='mac'], [data-detected='win'], [data-detected='android'], [data-detected='ios']) .cta-row .cta:not(.is-primary) {
     min-height: 44px;
     padding: 0.5rem 1.1rem;
     background: transparent;
@@ -129,15 +131,15 @@ const platforms = [
     font-weight: 500;
     font-size: 0.9rem;
   }
-  .dl:is([data-detected='mac'], [data-detected='win'], [data-detected='android']) .cta-row .cta:not(.is-primary):hover {
+  .dl:is([data-detected='mac'], [data-detected='win'], [data-detected='android'], [data-detected='ios']) .cta-row .cta:not(.is-primary):hover {
     border-color: var(--border-strong);
     color: var(--text);
   }
-  .dl:is([data-detected='mac'], [data-detected='win'], [data-detected='android']) .cta-row .cta:not(.is-primary) .cta-badge,
-  .dl:is([data-detected='mac'], [data-detected='win'], [data-detected='android']) .cta-row .cta:not(.is-primary) .cta-sub {
+  .dl:is([data-detected='mac'], [data-detected='win'], [data-detected='android'], [data-detected='ios']) .cta-row .cta:not(.is-primary) .cta-badge,
+  .dl:is([data-detected='mac'], [data-detected='win'], [data-detected='android'], [data-detected='ios']) .cta-row .cta:not(.is-primary) .cta-sub {
     display: none;
   }
-  .dl:is([data-detected='mac'], [data-detected='win'], [data-detected='android']) .cta-row {
+  .dl:is([data-detected='mac'], [data-detected='win'], [data-detected='android'], [data-detected='ios']) .cta-row {
     display: grid;
     grid-template-columns: auto auto;
     justify-content: center;
@@ -153,7 +155,34 @@ const platforms = [
   /* The Windows note only matters when Windows is offered as the main choice
      or nothing was detected; the iOS note only for iPhone / iPad visitors. */
   .cta-ios { display: none; }
-  .dl[data-detected='ios'] .cta-ios { display: block; margin-bottom: 0.75rem; }
+  /* iPhone / iPad: the TestFlight button is the main one, so it goes above
+     the (now secondary) desktop and Android row. */
+  .dl[data-detected='ios'] { display: flex; flex-direction: column; }
+  .dl[data-detected='ios'] .cta-ios { display: block; order: -1; margin-bottom: 0.75rem; }
+  /* Nothing in that row installs on the phone in hand, so it shrinks to one
+     quiet line: "Also for: Mac · Windows · Android". */
+  .cta-others,
+  .cta-short { display: none; }
+  .dl[data-detected='ios'] .cta-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 0 0.9rem;
+    font-size: 0.9rem;
+    color: var(--text-meta);
+  }
+  .dl[data-detected='ios'] .cta-others { display: inline; }
+  .dl[data-detected='ios'] .cta-row .cta:not(.is-primary) {
+    min-height: 44px;
+    padding: 0;
+    border: 0;
+    text-decoration: underline;
+    text-underline-offset: 0.2em;
+    color: var(--text-meta);
+  }
+  .dl[data-detected='ios'] .cta-row .cta .cta-main { display: none; }
+  .dl[data-detected='ios'] .cta-row .cta .cta-short { display: inline; }
   .dl[data-detected='ios'] .cta-iphone { display: none; }
   .dl:is([data-detected='mac'], [data-detected='android'], [data-detected='ios']) .cta-note { display: none; }
 
