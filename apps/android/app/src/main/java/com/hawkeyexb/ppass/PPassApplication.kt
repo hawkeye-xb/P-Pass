@@ -27,6 +27,8 @@ import com.hawkeyexb.ppass.backup.flow.onFlowAppForeground
 import com.hawkeyexb.ppass.backup.flow.onFlowNetworkChanged
 import com.hawkeyexb.ppass.backup.flow.requestFlowWake
 import com.hawkeyexb.ppass.backup.evaluateDefinitiveEvents
+import com.hawkeyexb.ppass.backup.NotifyOnFailurePrefs
+import com.hawkeyexb.ppass.backup.OnboardedDesktopsStore
 import com.hawkeyexb.ppass.backup.flow.flowDeliveryPairingLoss
 import com.hawkeyexb.ppass.backup.reconcileWatchOnProcessStart
 import com.hawkeyexb.ppass.backup.flow.parkFlowNetwork
@@ -110,6 +112,13 @@ class PPassApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         resolveIdentityFirst()
+        // #1262：通知开关默认关，老用户保持原状态——任何 Activity / Worker 读偏好之前先把起始值落盘。
+        // 写不下来只记日志：文件缺失 = 关（偏隐私的一侧），下次启动再写。
+        runCatching {
+            NotifyOnFailurePrefs(filesDir).initIfAbsent(
+                existingUser = PairingStore(filesDir).load() != null || OnboardedDesktopsStore(filesDir).anyOnboarded(),
+            )
+        }.onFailure { PLog.w("PPassNotify", "notify prefs init failed; stays off until next launch", it) }
         thread(name = "ppass-boot-check") {
             requestFlowWake(this, TriggerReason.PROCESS_START)
             runCatching {

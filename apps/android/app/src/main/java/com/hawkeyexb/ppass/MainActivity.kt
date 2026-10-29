@@ -240,17 +240,6 @@ fun PPassApp() {
             if (cleared != null) screen = screenAfterPairingCleared(screen, cleared)
         }
     }
-    // #130：onboarding 只问一次通知权限。第一次运行这一版时定下是不是老用户（已有配对 / 走完过
-    // onboarding）——老用户升级不问；靠落盘标记，不靠版本号。
-    val notificationAsk = remember {
-        com.hawkeyexb.ppass.backup.OnboardingNotificationAsk(context.filesDir).also {
-            // #1039：组合期写盘，写不下来不许让 App 一启动就崩；文件没落下 = shouldAsk 按「不问」。
-            val existingUser = pairings.load() != null || OnboardedDesktopsStore(context.filesDir).anyOnboarded()
-            settingsWriter.quiet("notificationAsk", "init existingUser=$existingUser") {
-                it.initIfAbsent(existingUser = existingUser)
-            }
-        }
-    }
     // MOB-03: 相册选择页权限链——「等授权结果后去哪」的落点。设置后由
     // bucketMediaPermission 回调消费；不进 Buckets 的路径立即清掉。
     var pendingBucketsPairing by remember { mutableStateOf<Pairing?>(null) }
@@ -1031,14 +1020,31 @@ fun PPassApp() {
                         },
                         notifyOnFailure = notifyOnFailure,
                         onNotifyOnFailureChange = { enabled ->
-                            if (!enabled || hasNotificationPermission(context)) {
+                            // #1262：onboarding 不再申请通知——这里是唯一的申请入口。
+                            val action = if (!enabled) {
+                                com.hawkeyexb.ppass.backup.NotifyEnableAction.ENABLE
+                            } else {
+                                com.hawkeyexb.ppass.backup.notifyEnableAction(
+                                    granted = hasNotificationPermission(context),
+                                    askedBefore = notifyOnFailurePrefs.systemAsked(),
+                                    systemWillShowRationale = Build.VERSION.SDK_INT >= 33 &&
+                                        (context as? android.app.Activity)
+                                            ?.shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS) == true,
+                                )
+                            }
+                            when (action) {
                                 // #1020：显示值 = 盘上的值（且有系统通知权限）；写失败回到原来的值并提示。
-                                notifyOnFailure = settingsWriter.persist("notifyOnFailure", enabled, notifyOnFailurePrefs::setEnabled) {
-                                    notifyOnFailurePrefs.enabled()
-                                } && hasNotificationPermission(context)
-                            } else if (!notificationRequestInFlight) {
-                                notificationRequestInFlight = true
-                                notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                com.hawkeyexb.ppass.backup.NotifyEnableAction.ENABLE ->
+                                    notifyOnFailure = settingsWriter.persist("notifyOnFailure", enabled, notifyOnFailurePrefs::setEnabled) {
+                                        notifyOnFailurePrefs.enabled()
+                                    } && hasNotificationPermission(context)
+                                com.hawkeyexb.ppass.backup.NotifyEnableAction.REQUEST -> if (!notificationRequestInFlight) {
+                                    // 先记「问过」再弹：系统不再弹时，下次点开关直接去系统设置。
+                                    settingsWriter.quiet("notifyOnFailure", "system asked") { notifyOnFailurePrefs.markSystemAsked() }
+                                    notificationRequestInFlight = true
+                                    notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                }
+                                com.hawkeyexb.ppass.backup.NotifyEnableAction.OPEN_SETTINGS -> openAppDetailsSettings(context)
                             }
                         },
                         pairedAt = s.pairing.pairedAt,
@@ -1262,9 +1268,7 @@ fun PPassApp() {
 
         is Screen.Started -> {
             // 后台备份是用户可选能力，只在用户选「开启」时才申请。首次传输不依赖任何可选授权。
-            // #130（用户拍板）：Android 13+ 在这里**只问一次**通知权限——完成页先一句话讲清用途，
-            // 用户点任一按钮时先弹通知、再走原来的动作（两项系统授权串行，不叠框）。问过（含拒绝）
-            // 就再也不问，之后只能从设置里的「通知」开关申请；老用户升级、Android 12 及以下不问。
+            // #1262：onboarding 不再申请通知权限（只从设置里的「通知」开关申请）。
             val finishOnboarding = {
                 // MOB-114（#455）：「连过这台」的事实在这里落盘，快速重连只认它。
                 // #1039（对位 iOS settingWriteFailed("onboarded")）：记不下来不挡进首页，提示；后果只是下次连回这台
@@ -1305,39 +1309,10 @@ fun PPassApp() {
                 settingsWriter.write("autoBackup", false) { disableAutoBackup(context) }
                 finishOnboarding()
             }
-            val askNotifications = remember {
-                notificationAsk.shouldAsk(Build.VERSION.SDK_INT, hasNotificationPermission(context))
-            }
-            var afterNotificationAsk by remember { mutableStateOf<(() -> Unit)?>(null) }
-            val onboardingNotificationPermission = rememberLauncherForActivityResult(
-                ActivityResultContracts.RequestPermission(),
-            ) { granted ->
-                settingsWriter.write("notifyOnFailure", granted) {
-                    notificationAsk.onResult(granted, com.hawkeyexb.ppass.backup.NotifyOnFailurePrefs(context.filesDir))
-                }
-                afterNotificationAsk?.invoke()
-                afterNotificationAsk = null
-            }
-            // 用户点了按钮：该问就先问（先落盘「问过」再弹），弹窗结果回来后继续原动作。
-            val thenContinue = { next: () -> Unit ->
-                if (askNotifications && notificationAsk.shouldAsk(Build.VERSION.SDK_INT, hasNotificationPermission(context))) {
-                    // #1039（对位 iOS askNotificationAtOnboarding）：「问过」落不了盘就不弹——宁可少问，
-                    // 不许因为没记住而下次又问；只记日志，直接继续原动作。
-                    if (settingsWriter.quiet("notificationAsk", "asked") { notificationAsk.markAsked() }) {
-                        afterNotificationAsk = next
-                        onboardingNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-                    } else {
-                        next()
-                    }
-                } else {
-                    next()
-                }
-            }
             BackupStartedScreen(
                 photoCount = s.photoCount,
-                onEnableBackgroundBackup = { thenContinue(onEnableBackgroundBackup) },
-                onEnter = { thenContinue(onEnterWithoutBackgroundBackup) },
-                notificationAskNote = askNotifications,
+                onEnableBackgroundBackup = onEnableBackgroundBackup,
+                onEnter = onEnterWithoutBackgroundBackup,
             )
         }
     }
