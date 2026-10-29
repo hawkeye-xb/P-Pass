@@ -26,6 +26,7 @@ final class LiveBackend: @unchecked Sendable {
     let settings: BackupSettings
     let autoPrefs: AutoBackupPrefs
     let notifyPrefs: NotifyOnFailurePrefs
+    let cardPrefs: BackgroundBackupCardPrefs
     let noticeStore: DefinitiveNoticeStore
     let pairingLoss = PairingLoss()
     let sentinel: SentinelStore
@@ -100,10 +101,11 @@ final class LiveBackend: @unchecked Sendable {
         settings = BackupSettings(directory: dir, logger: logger)
         autoPrefs = AutoBackupPrefs(directory: dir, logger: logger)
         notifyPrefs = NotifyOnFailurePrefs(directory: dir, logger: logger)
+        cardPrefs = BackgroundBackupCardPrefs(directory: dir, logger: logger)
         noticeStore = DefinitiveNoticeStore(directory: dir, logger: logger)
         // #1262：通知默认关；老用户升级保持原状态。必须在任何 markOnboarded 之前定老用户（新装用户此刻没有配对、没走过 onboarding）。
         notifyPrefs.initIfAbsent(existingUser: pairingStore.load() != nil || onboarded.anyOnboarded())
-        // 全新安装后台备份默认关（对位 Android `AutoBackupPrefs.autoEnabled = false`，#982）：首次配对完成页由用户选开不开。
+        // 全新安装后台备份默认关（对位 Android `AutoBackupPrefs.autoEnabled = false`，#982）：#1263 起 onboarding 不问，由首页引导卡让用户自己开。
         // #1119：未配对不向系统挂任何后台任务（启动 / 回前台 / 引擎登记唤醒 / 短任务续挂都过这道门）。
         scheduler = PlannedWakeScheduler(directory: dir, submitter: BGTaskSubmitter(), logger: logger, isPaired: { pairingStore.load() != nil })
 
@@ -124,6 +126,13 @@ final class LiveBackend: @unchecked Sendable {
                 return []
             }
         }
+        // #1263 时间档。读失败时上面的相册已经是空集（一张都不在范围内），这里给「全部」也不会多传。
+        let since: @Sendable () -> BackupSince = {
+            do { return try media.savedSince() ?? .all } catch {
+                logger.log("backup-scope: since unreadable, album scope is empty anyway: \(error)")
+                return .all
+            }
+        }
         let settings = self.settings
         let autoPrefs = self.autoPrefs
         let network = self.network
@@ -135,7 +144,7 @@ final class LiveBackend: @unchecked Sendable {
             store: orders, desktop: FlowWiring.auditDesktop(store: pairingStore, desktop: desktop),
             acknowledge: { ids in await engineBox.engine?.acknowledgeAudit(ids) })
         engine = FlowEngine(
-            store: orders, media: PhotoMediaSource(selected: scope, inbox: inbox, log: { logger.log($0) }),
+            store: orders, media: PhotoMediaSource(selected: scope, since: since, inbox: inbox, log: { logger.log($0) }),
             importer: PhotoImporter(provider: provider, tempRoot: fm.temporaryDirectory.appendingPathComponent("ppass-originals")),
             delivery: delivery,
             probe: PrewarmingProbe(provider: provider,
@@ -146,7 +155,7 @@ final class LiveBackend: @unchecked Sendable {
                 Conditions(paired: pairingId() != nil, autoBackupEnabled: autoPrefs.enabled(), wifiOnly: settings.wifiOnly(),
                            onUnmetered: !network.isExpensive, batteryLow: BatteryState.isLow)
             },
-            inScope: { PhotoMediaSource.inScope(bucketId: $0, selected: scope()) },
+            inScope: { PhotoMediaSource.inScope(bucketId: $0, selected: scope(), since: since()) },
             mediaAbsenceTrusted: { media.access() == .full },
             pairingId: pairingId, logger: logger,
             afterCycle: FlowWiring.afterCycle(dispatcher: audit),
@@ -250,7 +259,7 @@ final class LiveBackend: @unchecked Sendable {
         // #935：换了一台电脑就清旧账（已确认计数不能算给新电脑）；同一台重新配对不动。失败要暴露，不静默沿用旧账。
         do { _ = try adoptDesktop(orders, daemonNodeId: record.daemonNodeId, nowMs: Int64(Date().timeIntervalSince1970 * 1000)) }
         catch { logger.log("adoptDesktop failed: \(error)") }
-        // 「连过这台电脑」不在这里记：要等用户走完首次设置，在完成页落盘（#1019，对位 Android finishOnboarding）。
+        // 「连过这台电脑」不在这里记：要等用户走完首次设置，在首次选范围点「开始备份」时落盘（#1019 / #1263，对位 Android finishOnboarding）。
         let settingSaveFailed = applyAutoBackupOnPairing(autoPrefs, knownDesktop: knownDesktop, logger: logger)
         mediaWatcher.start() // 断开时注销了；重新配对后恢复（#978）
         timelineLive.session.pairingChanged() // 新配对：按新对端重建实时订阅（#963）
@@ -401,8 +410,8 @@ actor LiveEngineModel {
 
 /// `BackupEngine` 端口的真实现。
 /// 配对成功后的后台备份意图（#982，对位 Android 配对结局）：断开时只停生产者、留意图（MOB-93）——连回以前连过的电脑
-/// 按意图恢复；换新电脑 = 新的信任关系，清意图，由完成页让用户重新选。
-/// 返回 true = 要提示用户：换新电脑清意图没写下来（#1039）。不拦配对；完成页点按钮时按用户的选择再写一次，
+/// 按意图恢复；换新电脑 = 新的信任关系，清意图，由首页引导卡让用户重新选（#1263）。
+/// 返回 true = 要提示用户：换新电脑清意图没写下来（#1039）。不拦配对；首次选完范围时再写一次「关」，
 /// 否则旧电脑留下的意图会被带到新电脑上。老电脑按意图恢复失败只记日志（Android `settingsWriter.quiet`）：
 /// 意图还在盘上，也没有用户在等这一步的结果。
 func applyAutoBackupOnPairing(_ prefs: AutoBackupPrefs, knownDesktop: Bool, logger: CoreLogger) -> Bool {
@@ -455,6 +464,13 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
     }
 
     func autoBackup() -> Bool { backend.autoPrefs.enabled() }
+    func backgroundCardDismissed() -> Bool { backend.cardPrefs.dismissed() }
+    func dismissBackgroundCard() throws {
+        do { try backend.cardPrefs.dismiss(); backend.logger.log("background-card: dismissed") } catch {
+            backend.logger.log("background-card: write failed: \(error)")
+            throw error
+        }
+    }
     func setAutoBackup(_ on: Bool) throws {
         do {
             try backend.autoPrefs.setUserChoice(on)

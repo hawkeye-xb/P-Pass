@@ -51,8 +51,6 @@
 
 /* 失败提示框的确认按钮（#971）。完成页现在用 Android 的「开启后台备份 / 不开启后台备份」（#982）。 */
 "ok_got_it" = "好的";
-/* Android 原句说「默认连 Wi-Fi 且电量不低时自动进行」，iOS 本轮是打开 App 时备份。 */
-"bucket_summary" = "将备份 %1$@ 张 · 打开 P-Pass 时自动备份";
 
 /* #1092：原图正从 iCloud 下载（还没开始传给电脑）。参数：下载百分比、第几张、共几张。 */
 "state_fetching_icloud" = "正在从 iCloud 获取原图 %1$ld%% · 第 %2$ld / %3$ld 张";
@@ -65,9 +63,6 @@
 
 /* #971 / #972：一过性提示的弹框标题。Android 用无标题的 Snackbar；提示正文两端共用（#1020，由 Android strings.xml 生成）。 */
 "notice_title" = "没能完成";
-
-/* #982：首次选完相册的完成页。Android 在这里申请电池白名单；iOS 没有对应物，后台只能由系统挑时机（#343：不写频率、不假装能保证）。 */
-"background_backup_ios_note" = "开启后，离开 P-Pass 时 iOS 可能会找机会接着备份；是否执行、何时执行由系统决定，不保证。";
 
 /* #1013：本地网络权限是 iOS 独有的系统弹窗（Android 无对应），弹出前在扫码页先说明用途。 */
 "scan_local_network_note" = "扫码后，iPhone 会请求「本地网络」权限：用于在同一 Wi‑Fi 下找到你的电脑，传输照片。请点「允许」。";
@@ -91,3 +86,25 @@
 "photo_intro_choose" = "给了权限也不会马上全传：备份哪些相册、从今天起还是全部，下一步由你来选。";
 "photo_intro_pause" = "随时可以暂停或改范围。已经存好的照片就是电脑上的普通文件。";
 "photo_intro_continue" = "继续";
+
+/* 过渡（#1263）：选范围页「备份哪些照片」= 相册 + 时间二选一；首次「开始备份」、编辑「保存」。 */
+"bucket_title" = "备份哪些照片";
+"bucket_save" = "保存";
+"bucket_since_today" = "从今天起";
+"bucket_since_all" = "全部";
+/* 过渡（#1263）：设置行改名，值带时间档。%1$@ = backup_scope_n（「3 个相册」）。 */
+"backup_scope" = "备份哪些照片";
+"backup_scope_value_today" = "%1$@ · 从今天起";
+"backup_scope_value_all" = "%1$@ · 全部";
+/* 过渡（#1263）：后台备份默认关，「之后什么都不用做」不再成立。 */
+"welcome_step3" = "3 · 选好要备份哪些照片";
+/* 过渡（#1263）：照片页没选相册的引导与空状态。%1$@ = 电脑名。 */
+"photos_no_albums" = "还没选要备份的相册";
+"photos_choose_albums" = "选择相册";
+"photos_empty_camera" = "已连上「%1$@」。从现在起拍的照片会自动回家，拍一张试试。";
+"photos_empty_albums" = "新存进所选相册的照片会自动回家。";
+/* 过渡（#1263）：首页后台备份引导卡的「不用了」。 */
+"background_backup_card_dismiss" = "不用了";
+/* iOS 独有（#1263）：首页后台备份引导卡。Android 说「之后不打开 App 也会自动备份」并弹电池白名单；iOS 的后台只能由系统挑时机，
+   不能承诺（#343：不写频率、不假装能保证），也没有 App 内的授权框。 */
+"background_backup_card_body" = "开启后台备份：离开 P-Pass 后，iOS 会找机会接着备份；何时执行由系统决定";

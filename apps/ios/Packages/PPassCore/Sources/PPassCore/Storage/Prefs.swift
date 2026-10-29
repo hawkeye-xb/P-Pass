@@ -6,6 +6,7 @@
 // | AutoBackupPrefs           | AutoBackupPrefs.kt          | auto_backup_prefs.json        | autoEnabled=false，userRequested=nil |
 // | BackupSettings            | BackupSettings.kt           | backup-settings.json          | wifiOnly=true            |
 // | NotifyOnFailurePrefs      | NotifyOnFailurePrefs.kt     | notify_on_failure_prefs.json  | enabled=false（#1262）   |
+// | BackgroundBackupCardPrefs | （#1263，文件名待对齐 Android）| background_backup_card.json   | dismissed=false          |
 // | OnboardedDesktopsStore    | OnboardedDesktopsStore.kt   | onboarded_desktops.json       | 空集（失败关闭：按新电脑走） |
 // | SentinelStore             | SentinelStore.kt            | sentinel.json                 | 全 0                     |
 // | BackupScopeStore          | BackupScopeStore.kt         | backup_scope[-<nodeId>].json  | nil（= 一张都不在范围内）  |
@@ -72,7 +73,7 @@ public final class AutoBackupPrefs: @unchecked Sendable {
         try JSONFile.write(State(autoEnabled: enabled, userRequested: requested), url)
     }
 
-    /// 用户在设置页 / 完成页的选择：意图与生产者同值，一次落盘（对位 Android `enableAutoBackup` / `disableAutoBackup` 的写盘部分）。
+    /// 用户在设置页 / 首页引导卡的选择：意图与生产者同值，一次落盘（对位 Android `enableAutoBackup` / `disableAutoBackup` 的写盘部分）。
     public func setUserChoice(_ on: Bool) throws { try set(requested: on, enabled: on) }
 
     /// MOB-93：断开 / 配对变化——**停生产者，留意图**（对位 `suspendAutoBackupForPairingChange`）。
@@ -85,7 +86,7 @@ public final class AutoBackupPrefs: @unchecked Sendable {
 
 extension AutoBackupPrefs {
     /// 配对成功后的后台意图（#982；对位 Android：以前连过的电脑 → `restoreAutoBackupAfterRepair` 按意图恢复；
-    /// 换新电脑 → `setRequested(false)`，由完成页让用户重新选）。
+    /// 换新电脑 → `setRequested(false)`，由首页引导卡让用户重新选，#1263）。
     /// iOS 没有 App 内申请「后台执行」的系统框（后台 App 刷新只能用户在系统设置里开），所以恢复时不因它而挂起，
     /// 关着的情况由设置页告示说明（AppModel.backgroundNotice）——见 06-ios-variants「后台备份默认值与完成页」。
     public func applyOnPairing(knownDesktop: Bool) throws {
@@ -168,6 +169,36 @@ public final class NotifyOnFailurePrefs: @unchecked Sendable {
         do { try JSONFile.write(State(enabled: existingUser), url) }
         catch { logger.log("notify-prefs: init failed: \(error)") }
     }
+}
+
+// MARK: - BackgroundBackupCardPrefs
+
+/// 首页「开启后台备份」引导卡（#1263：onboarding 不再问后台备份，改在首页引导）。卡片一直显示，直到用户开启后台备份，
+/// 或手动关掉——「手动关掉」记在这里（含在设置页亲手把后台备份关掉：那也是明确的选择）。缺失 / 损坏 = 没关过。
+public final class BackgroundBackupCardPrefs: @unchecked Sendable {
+    public static let fileName = "background_backup_card.json"
+    private let url: URL
+    private let logger: CoreLogger
+
+    public init(directory: URL, logger: CoreLogger = NoopLogger()) {
+        url = directory.appendingPathComponent(Self.fileName)
+        self.logger = logger
+    }
+
+    private struct State: Codable { var dismissed: Bool }
+
+    public func dismissed() -> Bool {
+        JSONFile.lock.lock(); defer { JSONFile.lock.unlock() }
+        return JSONFile.readObject(url, logger: logger)?.bool("dismissed") ?? false
+    }
+
+    public func dismiss() throws {
+        JSONFile.lock.lock(); defer { JSONFile.lock.unlock() }
+        try JSONFile.write(State(dismissed: true), url)
+    }
+
+    /// 卡片显示：后台备份没开、用户也没关掉过卡片。
+    public static func shows(autoBackup: Bool, dismissed: Bool) -> Bool { !autoBackup && !dismissed }
 }
 
 // MARK: - OnboardedDesktopsStore
@@ -286,7 +317,7 @@ public final class SentinelStore: @unchecked Sendable {
 
 // MARK: - BackupScopeStore
 
-/// 备份范围（选了哪些相册）——**每台桌面一份**（MOB-92）。相册 id 是 PHAssetCollection 的 localIdentifier。
+/// 备份范围（选了哪些相册 + 时间档，#1263）——**每台桌面一份**（MOB-92）。相册 id 是 PHAssetCollection 的 localIdentifier。
 ///
 /// 未配对（nodeId 为空）时读写全局那一份 `backup_scope.json`；第一台来取范围的桌面**复制**认领它一次并盖章，
 /// 之后连上的新桌面不再继承（Android `decideAdoption` 的同一判据）。
@@ -320,8 +351,12 @@ public final class BackupScopeStore: @unchecked Sendable {
         var bucketIds: [String]?
         var knownBucketIds: [String]?
         var adoptedBy: String?
+        /// #1263「从今天起」的起点（unix ms）；nil = 全部（含 #1263 之前保存的文件）。
+        var sinceMs: Int64?
 
-        enum CodingKeys: String, CodingKey { case bucketIds = "bucket_ids", knownBucketIds = "known_bucket_ids", adoptedBy = "adopted_by" }
+        enum CodingKeys: String, CodingKey {
+            case bucketIds = "bucket_ids", knownBucketIds = "known_bucket_ids", adoptedBy = "adopted_by", sinceMs = "since_ms"
+        }
     }
 
     private var url: URL { directory.appendingPathComponent(Self.fileName(nodeId: nodeId)) }
@@ -341,7 +376,7 @@ public final class BackupScopeStore: @unchecked Sendable {
             break
         case .copyThenStamp:
             // 复制不是移动：全局那份原样留着，判断错了还能追溯。
-            try JSONFile.write(State(bucketIds: legacy.bucketIds, knownBucketIds: legacy.knownBucketIds), url)
+            try JSONFile.write(State(bucketIds: legacy.bucketIds, knownBucketIds: legacy.knownBucketIds, sinceMs: legacy.sinceMs), url)
         }
         legacy.adoptedBy = id
         try JSONFile.write(legacy, legacyURL)
@@ -363,12 +398,20 @@ public final class BackupScopeStore: @unchecked Sendable {
         try current().knownBucketIds.map(Set.init)
     }
 
-    public func saveScope(selected: Set<String>, allCurrent: Set<String>) throws {
+    /// 时间档；nil = 从未保存过范围。保存过但没有 `since_ms` 字段 = 全部。
+    public func since() throws -> BackupSince? {
+        let s = try current()
+        guard s.bucketIds != nil else { return nil }
+        return s.sinceMs.map { .since(ms: $0) } ?? .all
+    }
+
+    public func saveScope(selected: Set<String>, allCurrent: Set<String>, since: BackupSince = .all) throws {
         JSONFile.lock.lock(); defer { JSONFile.lock.unlock() }
         try adoptLegacyOnce()
         var s = load(url)
         s.bucketIds = selected.sorted()
         s.knownBucketIds = allCurrent.sorted()
+        if case .since(let ms) = since { s.sinceMs = ms } else { s.sinceMs = nil }
         try JSONFile.write(s, url)
     }
 }

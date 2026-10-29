@@ -15,6 +15,8 @@ struct PhotosScreen: View {
             // （Android PhotosScreen 只收起重连 / 连不上这类提示，见 TimelineLiveChrome）。
             VStack(spacing: 0) {
                 if app.pairingLost { lostCard }
+                // #1263：范围里一个相册都没有时，照片页不空也在顶部给这条引导（空库时由下面的空状态说）。
+                if !app.pairingLost, app.noAlbums, !model.items.isEmpty { chooseAlbumsBar }
                 chips
                 disconnected
                 content
@@ -48,6 +50,20 @@ struct PhotosScreen: View {
         .background(PPColor.actBg, in: RoundedRectangle(cornerRadius: PPRadius.card, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: PPRadius.card, style: .continuous).stroke(PPColor.act.opacity(0.3), lineWidth: 1))
         .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 12)
+    }
+
+    /// 「还没选要备份的相册 · 选择相册」：一行说明 + 右侧动作，直达选范围页（#1263）。
+    private var chooseAlbumsBar: some View {
+        HStack(spacing: 12) {
+            Text(L.s("photos_no_albums")).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Button(L.s("photos_choose_albums")) { app.openScopeEditor() }
+                .font(PPFont.subheadlineBold).underline().foregroundStyle(PPColor.ink)
+                .accessibilityIdentifier("photosChooseAlbums")
+        }
+        .padding(.horizontal, 16).padding(.vertical, 12)
+        .background(PPColor.waitingBg, in: RoundedRectangle(cornerRadius: PPRadius.card, style: .continuous))
+        .padding(.horizontal, 20).padding(.top, 8)
     }
 
     /// 全部 / 本机 / 家人：胶囊 chips（Android PhotoFilterChip）：高 36、linen 底 ink-60 字，选中 = ink 底 paper 字。
@@ -102,7 +118,16 @@ struct PhotosScreen: View {
             PPStateMessage(text: L.s("photos_unreachable") + "\n(" + String(error.prefix(100)) + ")",
                            symbol: "wifi.exclamationmark")
         } else if model.items.isEmpty {
-            PPStateMessage(text: L.s("photos_empty"), symbol: "photo.on.rectangle")
+            switch app.photosEmptyHint {
+            case .chooseAlbums:
+                PPStateMessage(text: L.s("photos_no_albums"), symbol: "photo.on.rectangle", actionTitle: L.s("photos_choose_albums")) {
+                    app.openScopeEditor()
+                }
+            case .camera:
+                PPStateMessage(text: L.f("photos_empty_camera", app.desktopName ?? L.s("storage_device_default")), symbol: "camera")
+            case .albums:
+                PPStateMessage(text: L.s("photos_empty_albums"), symbol: "photo.on.rectangle")
+            }
         } else if model.shown.isEmpty {
             PPStateMessage(text: L.s("photos_filter_empty"), symbol: "line.3.horizontal.decrease.circle")
         } else {

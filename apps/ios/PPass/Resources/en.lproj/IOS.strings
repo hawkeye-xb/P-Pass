@@ -50,7 +50,6 @@
 "state_waiting_original_unavailable" = "Some originals are in iCloud; they will be downloaded and backed up once you are online.";
 
 "ok_got_it" = "OK";
-"bucket_summary" = "%1$@ photos will be backed up · automatically while P-Pass is open";
 
 /* #1092：原图正从 iCloud 下载（还没开始传给电脑）。参数：下载百分比、第几张、共几张。 */
 "state_fetching_icloud" = "Getting original from iCloud %1$ld%% · %2$ld of %3$ld";
@@ -62,9 +61,6 @@
 
 /* #971 / #972: alert title for the transient notices. Android shows a Snackbar with no title; the notice texts themselves are shared (#1020, generated from Android strings.xml). */
 "notice_title" = "Couldn’t finish";
-
-/* #982: completion page after the first album pick. iOS has no battery-whitelist equivalent; background runs only when the system picks a moment (#343: no frequency, no guarantee). */
-"background_backup_ios_note" = "If enabled, iOS may pick a moment to carry on backing up after you leave P-Pass. Whether and when is up to the system — it isn’t guaranteed.";
 
 /* #1013：本地网络权限是 iOS 独有的系统弹窗（Android 无对应），弹出前在扫码页先说明用途。 */
 "scan_local_network_note" = "After scanning, iPhone asks for Local Network access: it is used to find your computer on the same Wi‑Fi and transfer photos. Tap Allow.";
@@ -88,3 +84,25 @@
 "photo_intro_choose" = "Granting access doesn’t send everything right away. In the next step you choose which albums, and whether to start from today or include everything.";
 "photo_intro_pause" = "You can pause or change what’s backed up at any time. Photos already stored are ordinary files on the computer.";
 "photo_intro_continue" = "Continue";
+
+/* 过渡（#1263）：选范围页「备份哪些照片」= 相册 + 时间二选一；首次「开始备份」、编辑「保存」。 */
+"bucket_title" = "Which photos to back up";
+"bucket_save" = "Save";
+"bucket_since_today" = "From today";
+"bucket_since_all" = "All";
+/* 过渡（#1263）：设置行改名，值带时间档。%1$@ = backup_scope_n（「3 个相册」）。 */
+"backup_scope" = "Which photos to back up";
+"backup_scope_value_today" = "%1$@ · from today";
+"backup_scope_value_all" = "%1$@ · all";
+/* 过渡（#1263）：后台备份默认关，「之后什么都不用做」不再成立。 */
+"welcome_step3" = "3 · Choose which photos to back up";
+/* 过渡（#1263）：照片页没选相册的引导与空状态。%1$@ = 电脑名。 */
+"photos_no_albums" = "No albums chosen for backup yet";
+"photos_choose_albums" = "Choose albums";
+"photos_empty_camera" = "Connected to “%1$@”. Photos you take from now on go home on their own — take one and see.";
+"photos_empty_albums" = "New photos saved to the chosen albums go home on their own.";
+/* 过渡（#1263）：首页后台备份引导卡的「不用了」。 */
+"background_backup_card_dismiss" = "Not now";
+/* iOS 独有（#1263）：首页后台备份引导卡。Android 说「之后不打开 App 也会自动备份」并弹电池白名单；iOS 的后台只能由系统挑时机，
+   不能承诺（#343：不写频率、不假装能保证），也没有 App 内的授权框。 */
+"background_backup_card_body" = "Turn on background backup: after you leave P-Pass, iOS picks moments to keep backing up — when is up to the system";

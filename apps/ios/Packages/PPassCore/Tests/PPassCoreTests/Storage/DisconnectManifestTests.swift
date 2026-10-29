@@ -27,6 +27,7 @@ final class DisconnectManifestTests: XCTestCase {
         try NotifyOnFailurePrefs(directory: root).setEnabled(false)
         try OnboardedDesktopsStore(directory: root).markOnboarded("node-a")
         try Data(#"{"asked":true}"#.utf8).write(to: root.appendingPathComponent("onboarding_notification_ask.json")) // 老版本留下的（#1262 退役）
+        try BackgroundBackupCardPrefs(directory: root).dismiss()
         try DefinitiveNoticeStore(directory: root).save(DefinitiveNoticeState(notifiedLostPairingId: "e"))
         try SentinelStore(directory: root).recordReachable(now: 1)
         try SavedToGalleryStore(directory: root).remember(hash: "h", localIdentifier: "L")

@@ -20,7 +20,7 @@ final class SettingsFeedbackTests: XCTestCase {
         func facts() -> FlowFacts { FlowFacts() }
         func observe(_ onChange: @escaping () -> Void) {}
         func pauseOrResume() async {}
-        func wake() async {}
+        func wake() async { calls.append("wake") }
         func retryFailed() async throws { calls.append("retry"); if failCommands { throw Boom() } }
         func remainingSnapshot() async throws -> RemainingSnapshot { calls.append("snapshot"); throw Boom() }
         func cancelRemaining(_ snapshot: RemainingSnapshot) async throws -> Int? { calls.append("cancel"); if failCommands { throw Boom() }; return cancelResult }
@@ -43,6 +43,9 @@ final class SettingsFeedbackTests: XCTestCase {
             if let prefs { try prefs.setUserChoice(on); return }
             if failWrites { throw Boom() }; disk.auto = on
         }
+        var cardDismissed = false
+        func backgroundCardDismissed() -> Bool { cardDismissed }
+        func dismissBackgroundCard() throws { calls.append("card-dismissed"); if failWrites { throw Boom() }; cardDismissed = true }
         var refresh: BackgroundRefreshAvailability = .available
         func backgroundRefresh() -> BackgroundRefreshAvailability { refresh }
     }
@@ -59,9 +62,14 @@ final class SettingsFeedbackTests: XCTestCase {
         func albums() async throws -> [AlbumBucket] { [] }
         func cover(_ album: AlbumBucket, side: CGFloat) async -> UIImage? { nil }
         func savedScope() throws -> Set<String>? { if failRead { throw Boom() }; return disk }
+        var since: BackupSince? = .all
+        func savedSince() throws -> BackupSince? { if failRead { throw Boom() }; return disk == nil ? nil : since }
         func knownAlbums() -> Set<String> { [] }
         func existingAlbumIds() async -> Set<String>? { ["a", "b"] }
-        func saveScope(_ selected: Set<String>, known: Set<String>) async throws { if failSave { throw Boom() }; disk = selected }
+        func cameraAlbumId() async -> String? { "a" }
+        func saveScope(_ selected: Set<String>, known: Set<String>, since: BackupSince) async throws {
+            if failSave { throw Boom() }; disk = selected; self.since = since
+        }
     }
 
     private func make() -> (AppModel, StubEngine, StubMedia) {
@@ -103,23 +111,31 @@ final class SettingsFeedbackTests: XCTestCase {
 
     // MARK: #1019
 
-    /// 「连过这台电脑」在完成页点按钮时落盘，选不选后台备份都记（Android finishOnboarding）。反证：去掉 AppModel 里的调用，本条红。
-    func test_finishing_onboarding_marks_the_desktop_either_way() async {
-        for enable in [false, true] {
-            let (app, engine, _) = make()
-            app.finishOnboardingStarted(enableBackgroundBackup: enable)
-            await settle()
-            XCTAssertEqual(engine.calls.first, "onboarded", "完成页第一件事是记下连过（enable=\(enable)）")
-            XCTAssertEqual(engine.calls.contains("auto=true"), enable)
-            XCTAssertEqual(app.phase, .main)
-        }
+    /// 首次选范围点「开始备份」= 走完 onboarding（#1263 没有完成页）：保存范围后记「连过这台电脑」、后台备份写「关」、唤醒引擎、直接进首页。
+    /// 反证：去掉 `finishFirstScope` 的调用，onboarded 不出现、phase 停在 chooseAlbums，本条红。
+    private func chooseFirstScope(_ app: AppModel, wantsAll: Bool = false) {
+        app.albumsChosen(["a", "b"], known: ["a", "b"], wantsAll: wantsAll, firstTime: true)
+    }
+
+    func test_first_scope_saves_marks_the_desktop_and_enters_home() async {
+        let (app, engine, media) = make()
+        media.disk = nil // 从未保存
+        app.phase = .chooseAlbums
+        chooseFirstScope(app)
+        await settle()
+        XCTAssertEqual(media.disk, ["a", "b"])
+        XCTAssertEqual(engine.calls.prefix(2), ["onboarded", "auto=false"], "先记连过，后台备份默认关")
+        XCTAssertTrue(engine.calls.contains("wake"), "新增相册 → SCOPE_ADDED")
+        XCTAssertFalse(engine.calls.contains("auto=true"), "onboarding 不再问后台备份")
+        XCTAssertEqual(app.phase, .main, "没有完成页")
+        if case .since = media.since {} else { XCTFail("首次默认「从今天起」，实际 \(String(describing: media.since))") }
     }
 
     /// 记不下来：照样进首页（后果只是下次重连仍走首次设置），但要提示用户，不静默。
     func test_failed_onboarded_mark_still_enters_home_and_tells_the_user() async {
         let (app, engine, _) = make()
         engine.failOnboarded = true
-        app.finishOnboardingStarted(enableBackgroundBackup: false)
+        chooseFirstScope(app)
         await settle()
         XCTAssertEqual(app.phase, .main)
         XCTAssertEqual(app.notice?.message, L.s("setting_save_failed"))
@@ -198,11 +214,11 @@ final class SettingsFeedbackTests: XCTestCase {
         return (app, prefs, prefsDir)
     }
 
-    /// 完成页选「不开」：按用户的选择把意图写成「不开」，盘上 requested=false、enabled=false。
-    /// 反证：把 `finishOnboardingStarted` 改回只在选「开」时写，盘上仍是旧意图，本条红。
+    /// 首次选完范围：把意图写成「不开」，盘上 requested=false、enabled=false（#1039 的写入在 #1263 去掉完成页后保留）。
+    /// 反证：去掉 `finishFirstScope` 里的 `setAutoBackup(false)`，盘上仍是旧意图，本条红。
     func test_finishing_without_background_backup_writes_not_requested_to_disk() async throws {
         let (app, prefs, _) = try leftoverIntent()
-        app.finishOnboardingStarted(enableBackgroundBackup: false)
+        chooseFirstScope(app)
         await settle()
         XCTAssertFalse(prefs.requested(), "旧电脑的意图不能带到新电脑上")
         XCTAssertFalse(prefs.enabled())
@@ -217,7 +233,7 @@ final class SettingsFeedbackTests: XCTestCase {
         try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: prefsDir.path)
         XCTAssertTrue(prefs.requested(), "前提：只读目录下读仍然有效")
 
-        app.finishOnboardingStarted(enableBackgroundBackup: false)
+        chooseFirstScope(app)
         await settle()
         XCTAssertEqual(app.phase, .main, "写不下来也照常进首页")
         XCTAssertEqual(app.notice?.message, L.s("setting_save_failed"))
@@ -263,12 +279,13 @@ final class SettingsFeedbackTests: XCTestCase {
     func test_failed_scope_save_does_not_advance_and_tells_the_user() async {
         let (app, _, media) = make()
         media.failSave = true
-        app.albumsChosen(["a", "b"], known: ["a", "b"], firstTime: true)
+        app.phase = .chooseAlbums
+        chooseFirstScope(app)
         await settle()
         XCTAssertNotNil(app.notice)
         XCTAssertEqual(media.disk, ["a"], "没写进去")
         XCTAssertEqual(app.scope, ["a"], "显示的范围是盘上的真实值")
-        if case .backupStarted = app.phase { XCTFail("没存上不能进「正在回家」") }
+        XCTAssertEqual(app.phase, .chooseAlbums, "没存上不能进首页")
     }
 
     func test_scope_read_failure_is_distinguishable_from_never_saved() {
@@ -319,15 +336,86 @@ final class SettingsFeedbackTests: XCTestCase {
         XCTAssertNotNil(app.notice)
     }
 
-    func test_onboarding_choice_enables_or_leaves_background_backup() async {
+    // MARK: #1263 时间档、首页后台备份卡、照片页空状态
+
+    /// 编辑范围：从今天起 → 全部 = 放宽，走 SCOPE_ADDED（相册没变也要补扫）；改回从今天起 = 缩小，不叫醒。
+    /// 反证：`albumsChosen` 只看 added 不看 widened，第一段的 wake 断言红。
+    func test_from_today_to_all_wakes_and_back_does_not() async {
+        let (app, engine, media) = make()
+        media.since = .since(ms: 1_000)
+        app.albumsChosen(["a"], known: ["a", "b"], wantsAll: true, firstTime: false)
+        await settle()
+        XCTAssertEqual(media.since, .all)
+        XCTAssertEqual(engine.calls.filter { $0 == "wake" }.count, 1, "放宽 → 补扫")
+
+        app.albumsChosen(["a"], known: ["a", "b"], wantsAll: false, firstTime: false)
+        await settle()
+        if case .since = media.since {} else { XCTFail("改回从今天起") }
+        XCTAssertEqual(engine.calls.filter { $0 == "wake" }.count, 1, "缩小 → 不叫醒，没传的从待办里消失")
+        XCTAssertEqual(app.phase, .main, "编辑不改页面阶段")
+    }
+
+    /// 编辑相册、时间档仍是「从今天起」：起点不往后挪。
+    func test_editing_albums_keeps_the_from_today_anchor() async {
+        let (app, _, media) = make()
+        media.since = .since(ms: 1_000)
+        app.albumsChosen(["a", "b"], known: ["a", "b"], wantsAll: false, firstTime: false)
+        await settle()
+        XCTAssertEqual(media.since, .since(ms: 1_000))
+    }
+
+    /// 首页卡：后台备份没开、没关过卡 → 显示；点「开启」只写意图（iOS 没有 App 内授权框）→ 消失。
+    func test_background_card_enables_background_backup() {
         let (app, engine, _) = make()
-        app.finishOnboardingStarted(enableBackgroundBackup: false)
-        await settle()
-        XCTAssertFalse(engine.disk.auto, "选「不开启」不写开")
-        XCTAssertFalse(engine.calls.contains("auto=true"))
-        app.finishOnboardingStarted(enableBackgroundBackup: true)
-        await settle()
+        XCTAssertTrue(app.showsBackgroundCard)
+        app.enableBackgroundFromCard()
         XCTAssertTrue(engine.disk.auto)
+        XCTAssertFalse(app.showsBackgroundCard)
+    }
+
+    /// 「不用了」→ 落盘、不再显示；设置页亲手关掉后台备份也算关过卡。写失败卡片仍在并提示。
+    func test_background_card_dismiss_and_settings_off_hide_it() {
+        let (app, engine, _) = make()
+        app.dismissBackgroundCard()
+        XCTAssertFalse(app.showsBackgroundCard)
+        XCTAssertTrue(engine.cardDismissed)
+
+        let (other, otherEngine, _) = make()
+        other.setAutoBackupFromSettings(true)
+        other.setAutoBackupFromSettings(false)
+        XCTAssertTrue(otherEngine.cardDismissed, "亲手关掉是明确的选择")
+        XCTAssertFalse(other.showsBackgroundCard)
+
+        let (failing, failingEngine, _) = make()
+        failingEngine.failWrites = true
+        failing.dismissBackgroundCard()
+        XCTAssertTrue(failing.showsBackgroundCard, "没写下来就还在")
+        XCTAssertNotNil(failing.notice)
+    }
+
+    /// 照片页空库三种说法：没选相册 / 选了「最近项目」/ 只选了别的相册。
+    func test_photos_empty_hint_follows_the_scope() async {
+        let (app, _, media) = make()
+        app.refreshExistingAlbums()
+        await settle()
+        XCTAssertEqual(app.photosEmptyHint, .camera, "范围 [a]，a 是最近项目")
+        media.disk = ["b"]
+        app.refresh()
+        XCTAssertEqual(app.photosEmptyHint, .albums)
+        media.disk = []
+        app.refresh()
+        XCTAssertEqual(app.photosEmptyHint, .chooseAlbums)
+        media.disk = nil
+        app.refresh()
+        XCTAssertEqual(app.photosEmptyHint, .chooseAlbums, "从未保存也是没选相册")
+    }
+
+    /// 「选择相册」：切到设置 tab 并请设置页推出选范围页。
+    func test_choose_albums_opens_the_scope_editor() {
+        let (app, _, _) = make()
+        app.openScopeEditor()
+        XCTAssertEqual(app.tab, .settings)
+        XCTAssertTrue(app.wantsScopeEditor)
     }
 
     // MARK: #972

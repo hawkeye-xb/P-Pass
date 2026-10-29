@@ -16,6 +16,16 @@ struct SettingsScreen: View {
         NavigationStack(path: $path) {
             List {
                 HeroCard()
+                // #1263：onboarding 不再问后台备份，改在首页引导。卡片一直显示，直到用户开启后台备份或点「不用了」。
+                // 点「开启」只写意图（iOS 没有 App 内的后台授权框）；后台 App 刷新被关时由下面的告示指路。
+                if app.showsBackgroundCard {
+                    Section {
+                        NoticeRow(text: L.s("background_backup_card_body"),
+                                  action: (L.s("background_backup_enable"), { app.enableBackgroundFromCard() }),
+                                  dismiss: (L.s("background_backup_card_dismiss"), { app.dismissBackgroundCard() }))
+                            .accessibilityIdentifier("backgroundCard")
+                    }
+                }
                 // 告示区（对位 Android NoticeCard 的「一行正文 + 右侧动作」）：iOS 用系统列表行承载，
                 // 行高、内边距、圆角交给原生 insetGrouped，不再硬设 Android 的 16/13（硬设会被行高 52 撑开）。
                 // 后台刷新告示（对位 NoticeHost BACKUP_INTERRUPTED）只放设置页：照片页是浏览用的，顶部不占（用户 2026-10-19 拍板）。
@@ -87,8 +97,8 @@ struct SettingsScreen: View {
             .navigationDestination(for: Route.self) { route in
                 switch route {
                 case .bucket:
-                    BucketScreen(firstTime: false) { selected, known in
-                        app.albumsChosen(selected, known: known, firstTime: false)
+                    BucketScreen(firstTime: false) { selected, known, wantsAll in
+                        app.albumsChosen(selected, known: known, wantsAll: wantsAll, firstTime: false)
                         path.removeAll()
                     }
                 case .storage: StorageDetailScreen()
@@ -96,6 +106,8 @@ struct SettingsScreen: View {
                 }
             }
         }
+        .onAppear { if app.wantsScopeEditor { app.wantsScopeEditor = false; path = [.bucket] } }
+        .onChange(of: app.wantsScopeEditor) { wants in if wants { app.wantsScopeEditor = false; path = [.bucket] } }
         .onAppear {
             switch LaunchRoute.current {
             case .bucket: path = [.bucket]
@@ -138,7 +150,7 @@ struct SettingsScreen: View {
                     Text(L.p("missing_source_archive_value", Int(app.facts.missingSourceAcknowledged))).font(Self.valueFont).foregroundStyle(PPColor.ink40)
                 }
             }
-            Toggle(L.s("auto_backup_pause"), isOn: Binding(get: { app.autoBackup }, set: { app.setAutoBackup($0) }))
+            Toggle(L.s("auto_backup_pause"), isOn: Binding(get: { app.autoBackup }, set: { app.setAutoBackupFromSettings($0) }))
                 .font(Self.labelFont).tint(PPColor.safe)
             Toggle(L.s("setting_wifi_only"), isOn: Binding(get: { app.wifiOnly }, set: { app.setWifiOnly($0) }))
                 .font(Self.labelFont).tint(PPColor.safe)
@@ -165,11 +177,13 @@ struct SettingsScreen: View {
     private static let valueFont = PPFont.sans(PPUI.TextSize.rowValue, relativeTo: .subheadline)
     private static let hintFont = PPFont.sans(PPUI.TextSize.rowHint, relativeTo: .footnote)
 
-    /// 「备份哪些相册」：只数已选且现存的（Android #541 / #836 同口径），0 或从未保存 → 「未选相册」。
+    /// 「备份哪些照片」：只数已选且现存的（Android #541 / #836 同口径），0 或从未保存 → 「未选相册」；
+    /// 有相册时带上时间档：「3 个相册 · 从今天起」/「3 个相册 · 全部」（#1263）。
     private var scopeValue: String {
         if app.scopeUnreadable { return L.s("backup_scope_unreadable") }
         let n = app.selectedAlbumCount ?? 0
-        return n > 0 ? L.p("backup_scope_n", n) : L.s("backup_scope_none")
+        guard n > 0 else { return L.s("backup_scope_none") }
+        return L.f((app.since?.isAll ?? true) ? "backup_scope_value_all" : "backup_scope_value_today", L.p("backup_scope_n", n))
     }
 
     /// 系统导航行：图标 + 标题 + 次级值 + 系统 chevron（NavigationLink 自带）。
