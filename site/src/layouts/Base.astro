@@ -3,6 +3,7 @@ import '../styles/tokens.css';
 import '../styles/global.css';
 import { SITE_URL, GITHUB_URL, SITE_TITLE, SITE_DESCRIPTION, BLUESKY_URL, YOUTUBE_URL } from '../consts';
 import type { JsonLd } from '../schema';
+import WeChatGuide from '../components/WeChatGuide.astro';
 import { t, type Lang } from '../i18n/ui';
 
 interface Props {
@@ -121,6 +122,7 @@ const zhUrl = lang === 'zh' ? canonical : mirrorUrl;
         )
       }
     </footer>
+    <WeChatGuide lang={lang} />
   </body>
 </html>
 

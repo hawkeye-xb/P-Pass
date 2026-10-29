@@ -1,0 +1,100 @@
+---
+/**
+ * "Open in your browser" guide for visitors inside WeChat on a phone.
+ *
+ * WeChat's in-app browser blocks jumps into other apps and APK downloads, so
+ * the TestFlight link lands on Apple's page with a "View in TestFlight" button
+ * that does nothing, and the Android download is swallowed. WeChat gives web
+ * pages no way to hand themselves to the system browser, so the standard
+ * answer on Chinese download pages is to stop the click and point at the ···
+ * menu in the top-right corner. That is all this does.
+ *
+ * It lives in the base layout because both the landing download block and
+ * the FAQ link to TestFlight; the click is matched by href, so any future
+ * TestFlight or .apk link is covered without tagging it. Desktop WeChat hands
+ * links to the system browser itself and is left alone.
+ */
+import { t, type Lang } from '../i18n/ui';
+
+interface Props {
+  lang: Lang;
+}
+
+const { lang } = Astro.props;
+---
+
+<dialog class="wechat-guide" aria-labelledby="wechat-guide-title">
+  <svg class="wechat-arrow" viewBox="0 0 64 64" aria-hidden="true">
+    <path d="M10 56 C 20 30, 34 16, 54 10" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" />
+    <path d="M42 8 L 55 10 L 49 22" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+  </svg>
+  <h2 id="wechat-guide-title">{t(lang, 'wechat.title')}</h2>
+  <p data-os="ios">{t(lang, 'wechat.ios')}</p>
+  <p data-os="android">{t(lang, 'wechat.android')}</p>
+  <form method="dialog">
+    <button>{t(lang, 'wechat.close')}</button>
+  </form>
+</dialog>
+
+<script>
+  const ua = navigator.userAgent;
+  const os = /Android/i.test(ua) ? 'android' : /iPhone|iPad|iPod/i.test(ua) ? 'ios' : '';
+  const dialog = document.querySelector<HTMLDialogElement>('.wechat-guide');
+  if (/MicroMessenger/i.test(ua) && os && dialog) {
+    dialog.dataset.os = os;
+    document.addEventListener('click', (e) => {
+      const link = (e.target as Element | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
+      if (!link) return;
+      const url = new URL(link.href, location.href);
+      if (url.hostname !== 'testflight.apple.com' && !url.pathname.endsWith('.apk')) return;
+      e.preventDefault();
+      dialog.showModal();
+    });
+  }
+</script>
+
+<style>
+  .wechat-guide {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    max-height: none;
+    margin: 0;
+    padding: 6.5rem 1.5rem 2rem;
+    box-sizing: border-box;
+    border: 0;
+    background: rgba(23, 21, 18, 0.88);
+    color: #FBF8F2;
+    text-align: left;
+  }
+  .wechat-guide::backdrop { background: transparent; }
+  .wechat-arrow {
+    position: absolute;
+    top: 0.75rem;
+    right: 1.25rem;
+    width: 4.5rem;
+    height: 4.5rem;
+  }
+  .wechat-guide h2 {
+    margin: 0 0 0.75rem;
+    font-size: 1.25rem;
+  }
+  .wechat-guide p {
+    margin: 0 0 1.5rem;
+    line-height: 1.6;
+  }
+  .wechat-guide p[data-os] { display: none; }
+  .wechat-guide[data-os='ios'] p[data-os='ios'],
+  .wechat-guide[data-os='android'] p[data-os='android'] { display: block; }
+  .wechat-guide button {
+    min-height: 44px;
+    padding: 0.5rem 1.4rem;
+    border: 1px solid rgba(251, 248, 242, 0.6);
+    border-radius: var(--radius-control);
+    background: transparent;
+    color: inherit;
+    font: inherit;
+  }
+</style>

@@ -120,7 +120,7 @@ const platforms = [
 
   /* A platform was detected: its button stays the big filled one on its own
      line, the others become quiet outlined links below it. */
-  .dl:is([data-detected='mac'], [data-detected='win'], [data-detected='android']) .cta-row .cta:not(.is-primary) {
+  .dl:is([data-detected='mac'], [data-detected='win'], [data-detected='android'], [data-detected='ios']) .cta-row .cta:not(.is-primary) {
     min-height: 44px;
     padding: 0.5rem 1.1rem;
     background: transparent;
@@ -129,15 +129,15 @@ const platforms = [
     font-weight: 500;
     font-size: 0.9rem;
   }
-  .dl:is([data-detected='mac'], [data-detected='win'], [data-detected='android']) .cta-row .cta:not(.is-primary):hover {
+  .dl:is([data-detected='mac'], [data-detected='win'], [data-detected='android'], [data-detected='ios']) .cta-row .cta:not(.is-primary):hover {
     border-color: var(--border-strong);
     color: var(--text);
   }
-  .dl:is([data-detected='mac'], [data-detected='win'], [data-detected='android']) .cta-row .cta:not(.is-primary) .cta-badge,
-  .dl:is([data-detected='mac'], [data-detected='win'], [data-detected='android']) .cta-row .cta:not(.is-primary) .cta-sub {
+  .dl:is([data-detected='mac'], [data-detected='win'], [data-detected='android'], [data-detected='ios']) .cta-row .cta:not(.is-primary) .cta-badge,
+  .dl:is([data-detected='mac'], [data-detected='win'], [data-detected='android'], [data-detected='ios']) .cta-row .cta:not(.is-primary) .cta-sub {
     display: none;
   }
-  .dl:is([data-detected='mac'], [data-detected='win'], [data-detected='android']) .cta-row {
+  .dl:is([data-detected='mac'], [data-detected='win'], [data-detected='android'], [data-detected='ios']) .cta-row {
     display: grid;
     grid-template-columns: auto auto;
     justify-content: center;
@@ -153,7 +153,10 @@ const platforms = [
   /* The Windows note only matters when Windows is offered as the main choice
      or nothing was detected; the iOS note only for iPhone / iPad visitors. */
   .cta-ios { display: none; }
-  .dl[data-detected='ios'] .cta-ios { display: block; margin-bottom: 0.75rem; }
+  /* iPhone / iPad: the TestFlight button is the main one, so it goes above
+     the (now secondary) desktop and Android row. */
+  .dl[data-detected='ios'] { display: flex; flex-direction: column; }
+  .dl[data-detected='ios'] .cta-ios { display: block; order: -1; margin-bottom: 0.75rem; }
   .dl[data-detected='ios'] .cta-iphone { display: none; }
   .dl:is([data-detected='mac'], [data-detected='android'], [data-detected='ios']) .cta-note { display: none; }
 
