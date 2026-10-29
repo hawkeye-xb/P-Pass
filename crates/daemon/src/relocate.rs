@@ -907,7 +907,11 @@ mod tests {
                 assert_eq!(std::fs::read_link(&l).unwrap(), outside, "链接照搬");
             } else {
                 // Windows 无建链接特权：robocopy 拷成指向文件的内容。
-                assert!(cfg!(windows), "只有 Windows 无特权时才会拷成普通文件");
+                assert_eq!(
+                    std::env::consts::OS,
+                    "windows",
+                    "只有 Windows 无特权时才会拷成普通文件"
+                );
                 assert_eq!(std::fs::read(&l).unwrap(), b"outside");
             }
         }
