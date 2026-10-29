@@ -373,7 +373,7 @@ impl Manifest {
                 (Entry::File { len: x, .. }, Some(Entry::File { len: y, .. })) => x == y,
                 (Entry::Link { target: x, .. }, Some(Entry::Link { target: y, .. })) => x == y,
                 (Entry::Link { len: Some(x), .. }, Some(Entry::File { len: y, .. })) => {
-                    cfg!(windows) && x == y
+                    platform::COPY_MAY_MATERIALIZE_FILE_LINKS && x == y
                 }
                 _ => false,
             })
@@ -908,11 +908,9 @@ mod tests {
                 assert_eq!(std::fs::read_link(&l).unwrap(), outside, "链接照搬");
             } else {
                 // Windows 无建链接特权：robocopy 拷成指向文件的内容。
-                assert_eq!(
-                    std::env::consts::OS,
-                    "windows",
-                    "只有 Windows 无特权时才会拷成普通文件"
-                );
+                if !platform::COPY_MAY_MATERIALIZE_FILE_LINKS {
+                    panic!("只有 Windows 无特权时才会拷成普通文件");
+                }
                 assert_eq!(std::fs::read(&l).unwrap(), b"outside");
             }
         }

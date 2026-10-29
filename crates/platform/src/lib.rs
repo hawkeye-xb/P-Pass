@@ -224,6 +224,24 @@ pub fn is_network_volume(p: &Path) -> bool {
     }
 }
 
+/// Windows 无建符号链接特权时，[`copy_dir_contents`] 会把文件链接拷成指向文件的内容
+///（见它的 `/SL` 与 `/XJD` 说明）；核对拷贝结果时据此放宽。
+pub const COPY_MAY_MATERIALIZE_FILE_LINKS: bool = cfg!(windows);
+
+/// 让目录项（新建 / 改名）落到介质上。POSIX 要对目录 fsync；Windows 没有目录 fsync，
+/// NTFS 的元数据由日志保证，直接返回。
+pub fn sync_dir(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::fs::File::open(dir)?.sync_all()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+        Ok(())
+    }
+}
+
 /// #639：把目录 `src` 里的全部内容拷进 `dst`（`dst` 不存在就建），用各平台自带、久经验证的工具，
 /// 不手写递归：
 /// - macOS：`ditto <src> <dst>`——保留符号链接、硬链接、扩展属性（含 Finder 标签）、ACL、资源分叉。
