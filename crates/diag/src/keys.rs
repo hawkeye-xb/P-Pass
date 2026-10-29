@@ -281,6 +281,16 @@ msg_keys! {
     UI_WIZARD_STEP_SLEEP => "ui.wizard_step_sleep",
     UI_WIZARD_STEP_SERVICE => "ui.wizard_step_service",
     UI_WIZARD_UNCONFIGURED_NOTICE => "ui.wizard_unconfigured_notice",
+    UI_LIBRARY_MISSING_TITLE => "ui.library_missing_title",
+    UI_LIBRARY_MISSING_BODY => "ui.library_missing_body",
+    UI_LIBRARY_MISSING_NOTICE_BODY => "ui.library_missing_notice_body",
+    UI_LIBRARY_MISSING_RECHECK => "ui.library_missing_recheck",
+    UI_LIBRARY_MISSING_STILL => "ui.library_missing_still",
+    UI_BLOCKED_SERVICE_STARTING => "ui.blocked_service_starting",
+    UI_BLOCKED_SERVICE_DOWN => "ui.blocked_service_down",
+    UI_BLOCKED_LIBRARY_MISSING => "ui.blocked_library_missing",
+    UI_BLOCKED_LIBRARY_MISSING_PILL => "ui.blocked_library_missing_pill",
+    UI_BLOCKED_SERVICE_DOWN_PILL => "ui.blocked_service_down_pill",
     UI_WIZARD_LIBRARY_TITLE => "ui.wizard_library_title",
     UI_WIZARD_LIBRARY_BODY_MAC => "ui.wizard_library_body_mac",
     UI_WIZARD_LIBRARY_BODY_WIN => "ui.wizard_library_body_win",
@@ -785,10 +795,20 @@ mod tests {
             UI_ERR_DAEMON_NOT_OURS,
             UI_ERR_DAEMON_OTHER_ACCOUNT,
             UI_WIZARD_UNCONFIGURED_NOTICE,
+            UI_LIBRARY_MISSING_TITLE,
+            UI_LIBRARY_MISSING_BODY,
+            UI_LIBRARY_MISSING_NOTICE_BODY,
+            UI_LIBRARY_MISSING_RECHECK,
+            UI_LIBRARY_MISSING_STILL,
+            UI_BLOCKED_SERVICE_STARTING,
+            UI_BLOCKED_SERVICE_DOWN,
+            UI_BLOCKED_LIBRARY_MISSING,
+            UI_BLOCKED_LIBRARY_MISSING_PILL,
+            UI_BLOCKED_SERVICE_DOWN_PILL,
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 335);
+        assert_eq!(ALL.len(), 345);
     }
 
     #[test]

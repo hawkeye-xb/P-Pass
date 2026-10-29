@@ -49,7 +49,7 @@ install -d -m 755 /var/lib/ppass-review
 # #1115：Linux 上库位置的正本是平台 config.toml；没有它 daemon 进「未配置」状态、等窗口程序
 # 配置（无界面机器上没人配）。库仍放平台目录本身（与以前同一位置，ipc.token 路径不变）；
 # 已有就不动。
-mkdir -p /var/lib/ppass-review/p-pass
+mkdir -p /var/lib/ppass-review/p-pass/.ppf  # #1253：库标记，daemon 认它判「库在」
 [ -e /var/lib/ppass-review/p-pass/config.toml ] \
   || printf 'data_dir = "%s"\n' /var/lib/ppass-review/p-pass > /var/lib/ppass-review/p-pass/config.toml
 

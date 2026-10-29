@@ -13,6 +13,9 @@
   } from "./serviceState.js";
   import { invoke, convertFileSrc } from "@tauri-apps/api/core";
   import { callDaemon } from "./lib/daemonApi.js";
+  import { createLibraryAlert, recheckLibrary } from "./lib/libraryMissing.js";
+  import { homeBlocker } from "./lib/homeBlocker.js";
+  import CircleAlertIcon from "@lucide/svelte/icons/circle-alert";
   import { getVersion } from "@tauri-apps/api/app";
   import { listen } from "@tauri-apps/api/event";
   import {
@@ -329,10 +332,30 @@
     else toast.success(msg);
   }
 
+  // 首页提示分级 L1：备份完全停了（服务没在跑 / 找不到照片库）。在场时它就是首页结论，见 lib/homeBlocker.js。
+  const blocker = $derived(homeBlocker(serviceState, status));
+
+  // #1253：照片库找不到——状态变化时让壳强提示一次；「重新检查」如实回答。
+  const libraryAlert = createLibraryAlert(invoke, getLocale);
+  let libraryRecheckBusy = $state(false);
+  let libraryStillMissing = $state(false);
+  async function recheckLibraryNow() {
+    libraryRecheckBusy = true;
+    libraryStillMissing = false;
+    try {
+      libraryStillMissing = (await recheckLibrary(callDaemon)) === "still_missing";
+    } catch (_) {
+      // 后台正在带着库重启（连接断了）或暂时连不上：等下一次 refresh 看新状态。
+    } finally {
+      libraryRecheckBusy = false;
+    }
+  }
+
   async function refresh() {
     try {
       status = await call("status", { shell_version: version });
       void showLowSpaceNotice(status.low_space_notice);
+      libraryAlert.sync(status.library_missing);
       pendingCount = status.pending_pairs ?? 0;
       // UX-08: pending 全量列表（pairing.pending，只读）——列表化显示
       // 的基础；拿不到时回退数量（老 daemon 升级过渡）。
@@ -1506,14 +1529,17 @@
       </nav>
       <!-- 顶部徽章只表示服务状态（UX-04），落位侧栏底部胶囊；<1080px
            收起态缩成纯色点（设计稿：服务状态缩成底部绿点）。 -->
+      <!-- 有阻断时胶囊说的是阻断本身、用它的含义色（红 = 要用户动手，琥珀 = 等待）；绿色只在一切正常时出现。 -->
       <div
         class="service-pill"
-        class:ok={isServiceRunning(serviceState)}
-        class:bad={!isServiceRunning(serviceState)}
-        title={t(serviceStateLabelKey(serviceState))}
+        class:ok={!blocker}
+        class:bad={blocker?.tone === "act"}
+        class:wait={blocker?.tone === "waiting"}
+        title={t(blocker ? blocker.pillKey : serviceStateLabelKey(serviceState))}
+        data-testid="service-pill"
       >
         <span class="dot"></span>
-        <span class="service-label">{t(serviceStateLabelKey(serviceState))}</span>
+        <span class="service-label">{t(blocker ? blocker.pillKey : serviceStateLabelKey(serviceState))}</span>
       </div>
     </aside>
 
@@ -1560,6 +1586,15 @@
             <!-- 2026-08-13：设计稿离线版标题带真实照片数——"全家的照片"
                  换成"全家 N 张照片"，photoCount 没拿到时退回原句（不写
                  假数字）。 -->
+            {#if blocker}
+              <!-- L1 阻塞：标题就是状态本身，不给「安全地住在这台电脑上」这类完成度结论。 -->
+              <h2
+                class="m-0 font-serif text-[28px] font-normal leading-[1.3] {blocker.tone === 'act' ? 'text-act' : 'text-waiting'}"
+                data-testid="blocker-headline"
+              >
+                {t(blocker.headlineKey)}
+              </h2>
+            {:else}
             <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3] text-ink">
               {#if photoCount !== null}{t("ui.overview_title_count", { n: photoCount })}{:else}{t("ui.overview_title")}{/if}
             </h2>
@@ -1574,10 +1609,16 @@
               {/if}
               {#if status?.removed_devices > 0}{t("ui.revoked_count", { n: status.removed_devices })}{/if}
             </p>
+            {/if}
           </div>
 
           {#if !isServiceRunning(serviceState)}
-            <Card class="text-[16px]">
+            <Card
+              variant={blocker?.tone === "act" ? "danger" : "default"}
+              class="text-[16px] {blocker?.tone === 'act' ? '' : 'border-waiting bg-waiting-bg'}"
+              role={blocker?.tone === "act" ? "alert" : "status"}
+              data-testid="service-blocker"
+            >
               <p class="m-0 text-[13px] leading-[1.6] text-ink-40">
                 {#if serviceState === "starting"}
                   {t("ui.starting")}
@@ -1591,6 +1632,20 @@
                 </Button>
               {/if}
               <p class="text-[13px] leading-[1.6] text-ink-40">{t("ui.refresh_hint")}</p>
+            </Card>
+          {:else if status?.library_missing}
+            <!-- #1253：服务在，但照片库找不到——说明原因与路径；用户放回后点「重新检查」，库在就带着库重启。 -->
+            <Card variant="danger" class="text-[16px]" role="alert" data-testid="library-missing">
+              <strong class="flex items-center gap-[8px] text-act">
+                <CircleAlertIcon class="size-[18px] flex-none" aria-hidden="true" />{t("ui.library_missing_title")}
+              </strong>
+              <p class="m-0 whitespace-pre-line text-[14px] leading-[1.6] text-ink">{t("ui.library_missing_body", { dir: status.library_dir })}</p>
+              <Button class="mt-[12px] self-start" disabled={libraryRecheckBusy} onclick={recheckLibraryNow} data-testid="library-recheck">
+                {t("ui.library_missing_recheck")}
+              </Button>
+              {#if libraryStillMissing}
+                <p class="m-0 text-[13px] leading-[1.6] text-ink-60" role="status">{t("ui.library_missing_still")}</p>
+              {/if}
             </Card>
           {:else}
             {#if pendingCount > 0 && !showConfirmModal}
@@ -2376,6 +2431,13 @@
   .service-pill.bad {
     background: var(--pp-act-bg);
     color: var(--pp-act);
+  }
+  .service-pill.wait {
+    background: var(--pp-waiting-bg);
+    color: var(--pp-waiting);
+  }
+  .service-pill.wait .dot {
+    background: var(--pp-waiting);
   }
   .service-pill.bad .dot {
     background: var(--pp-act);

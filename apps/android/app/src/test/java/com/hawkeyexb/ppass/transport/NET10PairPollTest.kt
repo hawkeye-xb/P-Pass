@@ -121,6 +121,43 @@ class NET10PairPollTest {
         assertEquals(1, desk.calls.count { it.first == Methods.PAIR_REQUEST })
     }
 
+    /**
+     * #1219 V3：桌面重启后手里没了这条申请，#1122 准入在握手时就用 401 关掉连接，手机收不到 not_found——
+     * 同义，第一次就判 DesktopRestarted，不等满失败次数报「连不上」。
+     */
+    @Test
+    fun desktopRestart_closedWithNotPaired_isDesktopRestarted() = runTest {
+        val desk = FakeDesk(this, submit = { queued() }, status = { at ->
+            if (at < 5_000) pending() else throw PeerClosedException("d".repeat(64), DesktopCloseCodes.NOT_PAIRED)
+        })
+        assertEquals(PairVerdict.DesktopRestarted, awaitPairVerdict(desk, "t", "d", FakeCeremony()))
+        assertEquals((1..5).map { it * 1_000L }, desk.statusTimes())
+        assertEquals(1, desk.calls.count { it.first == Methods.PAIR_REQUEST })
+    }
+
+    /** #1219 V3：pair.confirm 那一拍被 401 关掉，同样是申请已失效。 */
+    @Test
+    fun confirmClosedWithNotPaired_isDesktopRestarted() = runTest {
+        val desk = FakeDesk(
+            this,
+            submit = { queued() },
+            status = { pendingWithPakeB() },
+            confirm = { throw PeerClosedException("d".repeat(64), DesktopCloseCodes.NOT_PAIRED) },
+        )
+        assertEquals(PairVerdict.DesktopRestarted, awaitPairVerdict(desk, "t", "d", FakeCeremony()))
+    }
+
+    /** #1219 V3 反面：别的关闭码（不是「未配对」）仍按连不上计数，不误报成「电脑重启了」。 */
+    @Test
+    fun otherCloseCode_staysNetworkFailure() = runTest {
+        val desk = FakeDesk(this, submit = { queued() }, status = {
+            throw PeerClosedException("d".repeat(64), 0)
+        })
+        val v = awaitPairVerdict(desk, "t", "d", FakeCeremony())
+        assertTrue("$v", v is PairVerdict.Unreachable)
+        assertEquals(PAIR_STATUS_MAX_CONSECUTIVE_FAILURES, desk.statusTimes().size)
+    }
+
     /** 死因 4：status RPC 自身连续失败（15 s 控制档超时）→ Unreachable。 */
     @Test
     fun statusRpcKeepsFailing_isNetworkFailure() = runTest {

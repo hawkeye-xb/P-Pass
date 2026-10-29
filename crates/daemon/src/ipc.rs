@@ -538,10 +538,30 @@ pub async fn serve_unconfigured_signed(
     version: String,
     location: Arc<crate::library_location::LibraryLocation>,
 ) -> anyhow::Result<()> {
+    serve_waiting_signed(path, version, Waiting::Unconfigured(location)).await
+}
+
+/// 常驻 daemon 还不能开库时在等什么——两种状态共用同一套端点、身份校验与单实例交接，
+/// 只是能答的方法不同。
+#[derive(Clone)]
+pub enum Waiting {
+    /// #1115：正本里还没有库位置，等首启向导写入。
+    Unconfigured(Arc<crate::library_location::LibraryLocation>),
+    /// #1253：库位置在，但那里找不到照片库（外置盘没接、文件夹被移走 / 删掉 / 改名）。
+    /// 不退出、不开库、不起传输，说明原因与路径，等它回来（回来由 main 的巡检发现并重启）。
+    LibraryMissing(PathBuf),
+}
+
+/// [`Waiting`] 的签名 socket 版（macOS）。
+pub async fn serve_waiting_signed(
+    path: &std::path::Path,
+    version: String,
+    waiting: Waiting,
+) -> anyhow::Result<()> {
     let _ = std::fs::remove_file(path);
     let name = path.to_fs_name::<GenericFilePath>()?;
     let listener = ListenerOptions::new().name(name).create_tokio()?;
-    serve_unconfigured_verified(listener, version, location).await
+    serve_unconfigured_verified(listener, version, waiting).await
 }
 
 /// #1167：Windows 命名管道上的未配置状态。口径与签名版一致；多一件事：写好库位置的那一刻
@@ -551,15 +571,24 @@ pub async fn serve_unconfigured_pipe(
     version: String,
     location: Arc<crate::library_location::LibraryLocation>,
 ) -> anyhow::Result<()> {
+    serve_waiting_pipe(pipe, version, Waiting::Unconfigured(location)).await
+}
+
+/// [`Waiting`] 的命名管道版（Windows）。
+pub async fn serve_waiting_pipe(
+    pipe: &str,
+    version: String,
+    waiting: Waiting,
+) -> anyhow::Result<()> {
     let listener = platform::bind_resident_pipe(pipe)?;
-    serve_unconfigured_verified(listener, version, location).await
+    serve_unconfigured_verified(listener, version, waiting).await
 }
 
 /// 未配置状态的按身份认证服务（签名 socket 与命名管道共用）。
 async fn serve_unconfigured_verified(
     listener: interprocess::local_socket::tokio::Listener,
     version: String,
-    location: Arc<crate::library_location::LibraryLocation>,
+    waiting: Waiting,
 ) -> anyhow::Result<()> {
     let started_at = now_ms();
     loop {
@@ -570,7 +599,7 @@ async fn serve_unconfigured_verified(
                 continue;
             }
         };
-        let location = Arc::clone(&location);
+        let waiting = waiting.clone();
         let version = version.clone();
         let floor = version.clone();
         tokio::spawn(async move {
@@ -612,7 +641,7 @@ async fn serve_unconfigured_verified(
                 user,
                 &version,
                 started_at,
-                &location,
+                &waiting,
             )
             .await;
         });
@@ -628,6 +657,22 @@ pub async fn serve_unconfigured_token(
     token: [u8; 32],
     version: String,
     location: Arc<crate::library_location::LibraryLocation>,
+) -> anyhow::Result<()> {
+    serve_waiting_token(
+        platform_dir,
+        token,
+        version,
+        Waiting::Unconfigured(location),
+    )
+    .await
+}
+
+/// [`Waiting`] 的令牌端点版（Windows / Linux 令牌模式）。
+pub async fn serve_waiting_token(
+    platform_dir: &std::path::Path,
+    token: [u8; 32],
+    version: String,
+    waiting: Waiting,
 ) -> anyhow::Result<()> {
     let token_hex: String = token.iter().map(|b| format!("{b:02x}")).collect();
     std::fs::create_dir_all(platform_dir)?;
@@ -652,7 +697,7 @@ pub async fn serve_unconfigured_token(
                 continue;
             }
         };
-        let location = Arc::clone(&location);
+        let waiting = waiting.clone();
         let version = version.clone();
         let expected = token_hex.clone();
         tokio::spawn(async move {
@@ -672,7 +717,7 @@ pub async fn serve_unconfigured_token(
                 None,
                 &version,
                 started_at,
-                &location,
+                &waiting,
             )
             .await;
         });
@@ -695,17 +740,25 @@ async fn unconfigured_session(
     user: Option<platform::PeerUser>,
     version: &str,
     started_at: i64,
-    location: &Arc<crate::library_location::LibraryLocation>,
+    waiting: &Waiting,
 ) {
     while let Ok(Some(line)) = lines.next_line().await {
         let Ok(req) = serde_json::from_str::<Req>(&line) else {
             continue;
         };
-        let mut resp = unconfigured_dispatch(&req, client, version, started_at, location).await;
+        let mut resp = match waiting {
+            Waiting::Unconfigured(location) => {
+                unconfigured_dispatch(&req, client, version, started_at, location).await
+            }
+            Waiting::LibraryMissing(dir) => {
+                library_missing_dispatch(&req, client, version, started_at, dir)
+            }
+        };
         if req.method == "config.set_library" && resp.ok {
             resp = claim_owner_after_set(resp, user.as_ref()).await;
         }
-        let configured = req.method == "config.set_library" && resp.ok;
+        let configured =
+            (req.method == "config.set_library" && resp.ok) || recheck_found(&req, &resp);
         let step_down = req.method == "daemon.step_down" && resp.ok;
         let Ok(mut out) = serde_json::to_string(&resp) else {
             return;
@@ -717,7 +770,7 @@ async fn unconfigured_session(
         if configured || step_down {
             tokio::time::sleep(Duration::from_millis(200)).await;
             if configured {
-                tracing::info!("#1115: 库位置已写入，退出以带着库重新启动");
+                tracing::info!("#1115 / #1253: 库位置已写入或照片库已回来，退出以带着库重新启动");
                 std::process::exit(EXIT_CONFIGURED_RESTART);
             }
             std::process::exit(0);
@@ -783,6 +836,64 @@ pub async fn unconfigured_dispatch(
         // 其余一律：还没有库。
         _ => Resp::err(id, RespError::new(Reason::LibraryUnavailable)),
     }
+}
+
+/// #1253：库找不到状态能答的方法。`status` 报 `library_missing` 与路径（窗口据此说明原因，
+/// **不**报 `unconfigured`——那会把人送进首启向导，向导预填的正是这个找不到的路径，一点
+/// 「完成」就会在原位置新建空目录，正是 DESK-46 防的挂载点阴影）；单实例交接与不推事件的
+/// 订阅照答。改库位置不在这里答（选新位置要单独设计），其余一律「库不可用」。
+pub fn library_missing_dispatch(
+    req: &Req,
+    client: IpcClient,
+    version: &str,
+    started_at: i64,
+    dir: &std::path::Path,
+) -> Resp {
+    let id = req.id.clone();
+    if !client.may_call(&req.method) {
+        return Resp::err(id, RespError::new(Reason::RoleForbidden));
+    }
+    match req.method.as_str() {
+        "status" => Resp::ok(
+            id,
+            serde_json::json!({
+                "library_missing": true,
+                "library_dir": dir.display().to_string(),
+                "version": version,
+                "pid": std::process::id(),
+                "started_at": started_at,
+            }),
+        ),
+        "daemon.step_down" => Resp::ok(id, serde_json::json!({ "stepping_down": true })),
+        "events.subscribe" => Resp::ok(id, serde_json::json!({ "subscribed": true })),
+        // 找不到照片库时不改库位置（向导里点「继续」也走到这里）。被拒要留证据：保存失败查得到原因。
+        "config.set_library" => {
+            tracing::warn!(
+                "#1253: 照片库找不到期间拒绝 config.set_library（库位置不变：{}）",
+                dir.display()
+            );
+            Resp::err(id, RespError::new(Reason::LibraryUnavailable))
+        }
+        // 窗口上的「重新检查」：库回来了 ⇒ 应答后以 EXIT_CONFIGURED_RESTART 退出、带着库重启；
+        // 还不在 ⇒ 如实回答，状态不变（不轮询、不自动重启——库是用户自己处理的）。
+        "library.recheck" => Resp::ok(
+            id,
+            serde_json::json!({ "found": crate::library_location::library_marker_present(dir) }),
+        ),
+        _ => Resp::err(id, RespError::new(Reason::LibraryUnavailable)),
+    }
+}
+
+/// 「重新检查」的应答是否意味着库回来了（会话据此在应答写出后退出重启）。
+fn recheck_found(req: &Req, resp: &Resp) -> bool {
+    req.method == "library.recheck"
+        && resp.ok
+        && resp
+            .result
+            .as_ref()
+            .and_then(|r| r.get("found"))
+            .and_then(|v| v.as_bool())
+            == Some(true)
 }
 
 /// #1115：Unix 域套接字路径的上限（`sockaddr_un.sun_path` 104 字节，含结尾 NUL）。

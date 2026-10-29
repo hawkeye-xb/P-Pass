@@ -89,6 +89,8 @@ internal class FlowEngine(
     private val locationReadable: () -> Boolean = { false },
     /** #851：请桌面用原图原地替换抹过地点的旧副本。null = 不做这件事。 */
     private val supersede: SupersedeClient? = null,
+    /** #1220：「仅 Wi‑Fi」时流量固定到不计流量的网上；条件检查通过后、第一次连桌面前调用。 */
+    private val route: NetworkRoute = NetworkRoute.Default,
 ) {
     // 写 `_status` 就是写原始运行态；要不要刷新通知 / 首页由 [LoopStatusCell] 按「值变了 + 节流」决定。
     private val _status = LoopStatusCell(scope, publish = { foreground.update(it) }, now = monotonicClock)
@@ -631,6 +633,11 @@ internal class FlowEngine(
         waitReasonOf(conditions(), userPresent)?.let { reason ->
             log.log("cycle $reasons: waiting for $reason (no foreground service requested)")
             return settle(reason)
+        }
+        // #1220：之后的 presence / 探测 / 传输都连桌面——先把流量固定到不计流量的网上；固定不了不退回移动数据。
+        if (!route.ensure()) {
+            log.log("cycle $reasons: wifi-only but the traffic cannot be pinned to an unmetered network; waiting for ${WaitReason.WIFI}")
+            return settle(WaitReason.WIFI)
         }
         val transferWork = hasWork(reconcile, askPresence = TriggerReason.PERIODIC in reasons)
         // #851：只有「用原图替换旧副本」可做时也要探测一次——桌面支不支持只有 hello 说得清。

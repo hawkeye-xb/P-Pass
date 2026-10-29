@@ -23,6 +23,7 @@
     "updater:allow-check",
     "allow-daemon-status",
     "allow-daemon-low-space-ack",
+    "allow-daemon-library-recheck",
     "allow-daemon-pairing-start",
     "allow-daemon-pairing-stop",
     "allow-daemon-pairing-pending",
@@ -70,6 +71,7 @@
     "allow-allow-media-scope",
     "allow-notify-system",
     "allow-set-tray-locale",
+    "allow-set-library-alert",
     "allow-update-download",
     "allow-update-install"
   ]

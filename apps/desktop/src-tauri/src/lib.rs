@@ -137,6 +137,30 @@ fn set_tray_locale(app: tauri::AppHandle, lang: String) {
     }
 }
 
+/// #1253：照片库找不到 = 备份全线停摆，窗口程序在运行时要让人看到。进入时把主窗口拉到前台，
+/// 程序坞图标持续跳动直到用户点开（Critical），菜单栏图标旁标「!」、悬停提示换成原因；恢复后撤掉。
+/// 窗口程序没在运行时由后台服务发系统通知，不替用户把窗口程序拉起来。
+/// `lang` 与 [`set_tray_locale`] 一样由前端报。纯托盘 / 窗口操作，不等任何结果。
+#[tauri::command]
+fn set_library_alert(app: tauri::AppHandle, active: bool, lang: String) {
+    let locale = tray_locale(Some(&lang));
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_title(active.then_some("!"));
+        let tip = if active {
+            format!("P-Pass · {}", tray_text(locale, "ui.library_missing_title"))
+        } else {
+            "P-Pass".to_string()
+        };
+        let _ = tray.set_tooltip(Some(tip));
+    }
+    if active {
+        bring_main_window_to_front(&app);
+        if let Some(win) = app.get_webview_window("main") {
+            let _ = win.request_user_attention(Some(tauri::UserAttentionType::Critical));
+        }
+    }
+}
+
 // MOB-47: 视频弹窗走 asset 协议从磁盘直接 streaming 播放，避免把整段
 // 视频 base64 拉进内存。安全契约（L2 审查修）：
 // - 渲染进程只传资产 hash，绝不传文件系统路径；
@@ -218,6 +242,13 @@ fn initial_service_state() -> ServiceState {
     )
 }
 
+/// #1253：此刻向导算不算走完——与壳启动时同一张判定表（[`initial_service_state`]），
+/// 只是用连上那一刻的事实：服务答「已配置」（含找不到照片库）且常驻服务已登记 ⇒ 走完了。
+/// 向导中途（库位置写了、常驻服务还没登记）仍算没走完，不会被一次连接踢出向导。
+fn onboarding_finished_now() -> bool {
+    initial_service_state() != ServiceState::NotConfigured
+}
+
 /// DESK-63 (#946): snapshot for the frontend's first paint. The event stream
 /// also emits on every transition; this covers the window where the UI is
 /// not listening yet.
@@ -260,7 +291,9 @@ fn start_event_stream(app: tauri::AppHandle) {
                             manager_for_open.note_connected();
                             manager_for_open.set(
                                 &app_for_open,
-                                manager_for_open.current().after_connection(),
+                                manager_for_open
+                                    .current()
+                                    .after_connection(onboarding_finished_now()),
                                 Some("event stream open"),
                             );
                         },
@@ -284,7 +317,9 @@ fn start_event_stream(app: tauri::AppHandle) {
                             manager.note_connected();
                             manager.set(
                                 &app,
-                                manager.current().after_connection(),
+                                manager
+                                    .current()
+                                    .after_connection(onboarding_finished_now()),
                                 Some("events.subscribe unsupported; status probe ok"),
                             );
                             loop {
@@ -1838,6 +1873,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             daemon_api::daemon_status,
             daemon_api::daemon_low_space_ack,
+            daemon_api::daemon_library_recheck,
             daemon_api::daemon_pairing_start,
             daemon_api::daemon_pairing_stop,
             daemon_api::daemon_pairing_pending,
@@ -1885,6 +1921,7 @@ pub fn run() {
             allow_media_scope,
             notify_system,
             set_tray_locale,
+            set_library_alert,
             update_install::update_download,
             update_install::update_install
         ])
@@ -2173,6 +2210,7 @@ mod tests {
     fn sync_commands_never_wait() {
         const SYNC_ALLOWED: &[&str] = &[
             "set_tray_locale",
+            "set_library_alert",
             "service_state",
             "platform_ux",
             "update_failure_key",

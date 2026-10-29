@@ -20,6 +20,8 @@ import kotlinx.coroutines.flow.StateFlow
 internal class PairingRejectionCleanup(
     private val currentPairing: () -> Pairing?,
     private val loss: FlowDeliveryPairingLoss,
+    /** #1219 V4：真的清掉之后记一笔「待说明」，下次打开 App 时说明一次（生产：PairingRemovedNoticeStore）。不许抛。 */
+    private val recordNotice: (Pairing) -> Unit = {},
     /** 断开清单的执行体（生产：clearLocalPairingLogged）。清理失败只记日志，由它自己吞掉。 */
     private val clear: (Pairing) -> Unit,
 ) {
@@ -36,6 +38,7 @@ internal class PairingRejectionCleanup(
         clear(pairing)
         // 配对记录没删掉（写盘失败）就不能让界面以为已经断开。
         if (currentPairing()?.pairingId == pairing.pairingId) return false
+        recordNotice(pairing)
         _clearedPairingId.value = pairing.pairingId
         true
     }

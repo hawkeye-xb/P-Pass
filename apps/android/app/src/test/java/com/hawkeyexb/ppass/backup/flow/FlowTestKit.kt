@@ -281,6 +281,12 @@ internal class Rig(
     var missingOnDesktop: Set<String> = emptySet()
     var presenceCalls = 0
 
+    /** #1220：选路结果（false = 「仅 Wi‑Fi」下流量固定不到不计流量的网上）；每次调用记进 [netEvents]。 */
+    var routeOk = true
+
+    /** #1220：连桌面相关动作的先后（选路 / presence / 探测），钉住「先选路、后连桌面」。 */
+    val netEvents = mutableListOf<String>()
+
     /** #1005：引擎调 afterCycle（审计 outbox 冲刷）的次数。 */
     var afterCycles = 0
     var conditions = Conditions()
@@ -319,11 +325,12 @@ internal class Rig(
         importer = importer,
         delivery = delivery,
         probe = DesktopProbe {
+            netEvents += "probe"
             probes++
             probeHook()
             probeResult
         },
-        presence = RemotePresence { hashes -> presenceCalls++; hashes.filter { it in missingOnDesktop }.toSet() },
+        presence = RemotePresence { hashes -> netEvents += "presence"; presenceCalls++; hashes.filter { it in missingOnDesktop }.toSet() },
         foreground = foreground,
         scheduler = wakes ?: scheduler,
         control = control,
@@ -344,6 +351,12 @@ internal class Rig(
         },
         appForegroundAt = { appForegroundAt },
         afterCycle = { afterCycles++ },
+        route = object : NetworkRoute {
+            override suspend fun ensure(): Boolean {
+                netEvents += "route"
+                return routeOk
+            }
+        },
     ).also { it.start() }
 
     fun photo(mediaId: Long, generation: Long, content: String = "c$mediaId", bucketId: Long = 7, volume: String = LEGACY_VOLUME, dateAdded: Long = 0L): FakePhoto =

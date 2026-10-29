@@ -310,6 +310,15 @@ suspend fun awaitPairVerdict(
     }
 }
 
+/**
+ * #1219：等配对结果时，正在配对的那台电脑在握手时就用「未配对」关闭码（401 / 410）关掉连接。
+ * 桌面只在「二维码开着，或这台手机自己的申请还没结束」时放行未配对的手机（#1122 准入）；
+ * 申请已提交、轮询还在继续，却被拒在握手——说明桌面手里已经没有这条申请（服务重启，内存里的待办没了），
+ * 与 `pair.status` 应答 NOT_FOUND 同义。[rpc] 只连这一台电脑，关闭方经 TLS 认证就是它。
+ */
+internal fun pairRequestGone(e: Exception): Boolean =
+    e is PeerClosedException && DesktopCloseCodes.meansNotPaired(e.code)
+
 /** One reply's meaning to the poll loop: done, or keep waiting, or a malformed reply. */
 private sealed class Step {
     data class Done(val verdict: PairVerdict) : Step()
@@ -380,6 +389,7 @@ private suspend fun pollPairStatus(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            if (pairRequestGone(e)) return PairVerdict.DesktopRestarted
             lastFailure = e.toString()
             null
         }
@@ -425,6 +435,7 @@ private suspend fun pollPairStatus(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (pairRequestGone(e)) return PairVerdict.DesktopRestarted
                 lastFailure = e.toString()
                 null
             }

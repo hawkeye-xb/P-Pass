@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 export const DAEMON_COMMANDS = Object.freeze({
   status: "daemon_status",
   "low_space.ack": "daemon_low_space_ack",
+  "library.recheck": "daemon_library_recheck",
   "pairing.start": "daemon_pairing_start",
   "pairing.stop": "daemon_pairing_stop",
   "pairing.pending": "daemon_pairing_pending",

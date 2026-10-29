@@ -179,6 +179,11 @@ enum class DisconnectState(
         "#1263：首页「开启后台备份」卡片被用户手动关掉——是对这台手机的偏好，与连哪台电脑无关",
         owners = listOf("com.hawkeyexb.ppass.backup.BackgroundBackupOfferStore"),
     ),
+    PAIRING_REMOVED_NOTICE(
+        StateLocation.FILES, PairingRemovedNoticeStore.FILE_NAME, DisconnectDisposition.KEEP,
+        "#1219 V4：被拒即清理之后才写入的一次性说明，必须活过这次清理；用户看过或重新配对后由界面清掉",
+        owners = listOf("com.hawkeyexb.ppass.backup.PairingRemovedNoticeStore"),
+    ),
     WORK_MANAGER_DB(
         StateLocation.DATABASES, "androidx.work.workdb", DisconnectDisposition.KEEP,
         "WorkManager 库自有；断开只经由 AUTO_BACKUP_WORKS 取消 unique work，不动库文件",
