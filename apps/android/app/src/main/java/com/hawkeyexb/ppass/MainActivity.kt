@@ -106,6 +106,7 @@ import com.hawkeyexb.ppass.backup.flow.AndroidMediaImporter
 import com.hawkeyexb.ppass.backup.flow.isOnUnmetered
 import com.hawkeyexb.ppass.backup.flow.clearFlowRuntime
 import com.hawkeyexb.ppass.ui.BackupStartedScreen
+import com.hawkeyexb.ppass.ui.PhotoAccessIntroScreen
 import com.hawkeyexb.ppass.ui.BackupUiState
 import com.hawkeyexb.ppass.ui.HomeScreen
 import com.hawkeyexb.ppass.ui.NoticeHost
@@ -154,6 +155,8 @@ internal sealed class Screen {
     // 才过 M6 安心收尾页，设置页重选直接回 Home（用户实机反馈：
     // "完成页只有首次 onboarding 才需要"）。
     data class Buckets(val pairing: Pairing, val current: Set<Long>, val firstTime: Boolean) : Screen()
+    // #1259：系统照片权限框之前的一屏说明。只在要弹系统框时出现，「继续」才弹。
+    data class PhotoIntro(val pairing: Pairing, val firstTime: Boolean) : Screen()
     // M6 完成页（全页面状态稿）：选相册→触发首次备份之后、落到 Home 之前
     // 的安心收尾页。
     data class Started(val pairing: Pairing, val photoCount: Int) : Screen()
@@ -183,6 +186,7 @@ internal fun screenAfterPairingCleared(screen: Screen, clearedPairingId: String)
     val shown = when (screen) {
         is Screen.Home -> screen.pairing.pairingId
         is Screen.Buckets -> screen.pairing.pairingId
+        is Screen.PhotoIntro -> screen.pairing.pairingId
         is Screen.Started -> screen.pairing.pairingId
         else -> return screen
     }
@@ -195,6 +199,7 @@ internal fun systemBackTarget(screen: Screen): Screen? = when (screen) {
     Screen.Scan, Screen.ManualPair -> Screen.Welcome
     is Screen.Waiting, is Screen.Trouble -> Screen.Scan
     is Screen.Buckets -> Screen.Home(screen.pairing)
+    is Screen.PhotoIntro -> Screen.Home(screen.pairing)
     is Screen.Started -> Screen.Home(screen.pairing)
 }
 
@@ -380,7 +385,7 @@ fun PPassApp() {
     // 首次选完相册后的两项系统授权必须串行独占屏幕；更新可以等用户完成
     // onboarding 后再说，绝不压在系统权限框上。「后台下载」收起的对话框
     // （dialogSuppressed）不渲染，设置行点击可重新打开。
-    if (screen !is Screen.Started && !updateDialogSuppressed) {
+    if (screen !is Screen.Started && screen !is Screen.PhotoIntro && !updateDialogSuppressed) {
         UpdateDialog(
             state = updateState,
             onConfirmDownload = updateController::onUserConfirmDownload,
@@ -527,9 +532,8 @@ fun PPassApp() {
     }
 
     // MOB-03: 进相册选择页的完整权限链（Home「选择备份的相册」与配对
-    // 成功→直接选相册共用）——未授权 → 系统权限请求（完整授权后进
-    // 列表，这就是设计稿决策「只有选相册进 onboarding」里读取照片权限
-    // 的唯一来源，不需要单独一屏）；部分授权 → Home 引导卡（MOB-02 §二，
+    // 成功→直接选相册共用）——未授权 → 先过 #1259 的说明屏、点「继续」
+    // 才弹系统权限请求（完整授权后进列表）；部分授权 → Home 引导卡（MOB-02 §二，
     // 不显示假 0/0）；拒绝 → 人话对话框。备份主流程的入口，任何分支都
     // 不许白屏。
     /**
@@ -556,11 +560,8 @@ fun PPassApp() {
                 PackageManager.PERMISSION_GRANTED
         }
         when {
-            needed.isNotEmpty() -> {
-                pendingBucketsPairing = pairing
-                pendingBucketsFirstTime = firstTime
-                bucketMediaPermission.launch(withMediaLocation(needed))
-            }
+            // #1259：先过一屏说明，用户点「继续」才弹系统框（见 Screen.PhotoIntro）。
+            needed.isNotEmpty() -> screen = Screen.PhotoIntro(pairing, firstTime)
             hasPartialMediaAccess(context) -> screen = Screen.Home(pairing)
             else -> screen = Screen.Buckets(
                 pairing,
@@ -721,6 +722,23 @@ fun PPassApp() {
                 }
             }
         }
+
+        is Screen.PhotoIntro -> PhotoAccessIntroScreen(
+            computerName = s.pairing.storageDeviceName,
+            onContinue = {
+                val needed = requiredMediaPermissions().filter {
+                    ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
+                }
+                if (needed.isEmpty()) {
+                    // 停在这一屏期间去系统设置给了权限：不用再弹，直接按原路进选相册。
+                    enterBucketPicker(s.pairing, s.firstTime)
+                } else {
+                    pendingBucketsPairing = s.pairing
+                    pendingBucketsFirstTime = s.firstTime
+                    bucketMediaPermission.launch(withMediaLocation(needed))
+                }
+            },
+        )
 
         is Screen.Trouble -> PairStatusScreen(
             title = androidx.compose.ui.res.stringResource(s.titleRes),

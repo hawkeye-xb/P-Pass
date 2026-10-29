@@ -100,6 +100,46 @@ fun WelcomeScreen(onScan: () -> Unit, onManual: () -> Unit) {
 }
 
 /**
+ * #1259：系统照片权限框之前的一屏说明——照片去哪、给权限不等于全传、随时能停。
+ * 只在真的要弹系统框时出现（[com.hawkeyexb.ppass.MainActivity] 的 enterBucketPicker 里权限缺的那一支），
+ * 已授权的用户走不到这里。不提通知（#1262：onboarding 不再申请通知）。
+ */
+@Composable
+fun PhotoAccessIntroScreen(computerName: String, onContinue: () -> Unit) {
+    PPScreen {
+        androidx.compose.material3.ProvideTextStyle(
+            androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
+        ) {
+        Column(
+            Modifier.fillMaxSize().padding(32.dp),
+        ) {
+            Spacer(Modifier.weight(1f))
+            Text(
+                stringResource(R.string.photo_intro_title),
+                fontSize = 30.sp, lineHeight = 38.sp,
+                fontFamily = PPFont.Serif, color = PPColor.Ink,
+            )
+            Spacer(Modifier.height(20.dp))
+            for (line in listOf(
+                stringResource(R.string.photo_intro_where, computerName),
+                stringResource(R.string.photo_intro_full),
+                stringResource(R.string.photo_intro_choose),
+                stringResource(R.string.photo_intro_stop),
+            )) {
+                Text(
+                    line,
+                    fontSize = PPSize.BodyMin, lineHeight = 27.sp, color = PPColor.Ink60,
+                )
+                Spacer(Modifier.height(12.dp))
+            }
+            Spacer(Modifier.height(28.dp))
+            PrimaryButton(stringResource(R.string.photo_intro_continue), onContinue)
+        }
+        }
+    }
+}
+
+/**
  * M6 完成页（全页面状态稿）：选完相册、真正触发首次备份之后的收尾——
  * 绿底给一句安心承诺,"进入 App" 才落到 Home。选相册页自己不管发生在
  * onboarding 还是设置里改范围,统一过一遍,不额外分叉判断来源。
