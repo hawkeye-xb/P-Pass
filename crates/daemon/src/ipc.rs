@@ -526,6 +526,55 @@ async fn set_library_resp(
     }
 }
 
+/// #639：「更改照片库位置」——校验、把搬迁计划落盘，应答后以 [`EXIT_CONFIGURED_RESTART`] 退出，
+/// 重启时由 main 接着搬。照片库找不到时也能调（新位置上已经是这个库 ⇒ 只改指向）。
+fn relocate_resp(
+    id: String,
+    library: &std::path::Path,
+    local_base: &std::path::Path,
+    params: &serde_json::Value,
+) -> Resp {
+    let Some(target) = params.get("target").and_then(|v| v.as_str()) else {
+        return Resp::err(id, RespError::new(Reason::BadRequest));
+    };
+    let target = std::path::Path::new(target);
+    // 预检（窗口确认前调）：不落盘，告诉窗口最终位置、文件夹里是否已有别的东西。
+    if params.get("dry_run").and_then(|v| v.as_bool()) == Some(true) {
+        return match crate::relocate::check(library, target, local_base) {
+            Ok(c) => Resp::ok(
+                id,
+                serde_json::json!({
+                    "to": c.plan.to.display().to_string(),
+                    "non_empty": c.non_empty,
+                    "adopt": c.adopt,
+                }),
+            ),
+            Err(e) => Resp::err(
+                id,
+                RespError::new(Reason::BadRequest).with_param("ui_error", e),
+            ),
+        };
+    }
+    match crate::relocate::plan(library, target, local_base) {
+        Ok(check) => {
+            let plan = check.plan;
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                tracing::info!("#639: 搬迁计划已落盘，退出以开始搬迁");
+                std::process::exit(EXIT_CONFIGURED_RESTART);
+            });
+            Resp::ok(
+                id,
+                serde_json::json!({ "to": plan.to.display().to_string() }),
+            )
+        }
+        Err(e) => Resp::err(
+            id,
+            RespError::new(Reason::BadRequest).with_param("ui_error", e),
+        ),
+    }
+}
+
 /// #1115：未配置状态写好库位置后的退出码——「请重启我」。LaunchAgent 的 KeepAlive
 /// 按非零退出把 daemon 拉起来，新实例带着库启动；壳一次性拉起的实例由壳自己收掉。
 pub const EXIT_CONFIGURED_RESTART: i32 = 75;
@@ -547,9 +596,12 @@ pub async fn serve_unconfigured_signed(
 pub enum Waiting {
     /// #1115：正本里还没有库位置，等首启向导写入。
     Unconfigured(Arc<crate::library_location::LibraryLocation>),
-    /// #1253：库位置在，但那里找不到照片库（外置盘没接、文件夹被移走 / 删掉 / 改名）。
-    /// 不退出、不开库、不起传输，说明原因与路径，等它回来（回来由 main 的巡检发现并重启）。
-    LibraryMissing(PathBuf),
+    /// #1253：库位置在，但那里找不到照片库（外置盘没接、文件夹被移走 / 删掉 / 改名，或那里是
+    /// 别的库——#1260 库 ID 不符）。不退出、不开库、不起传输，说明原因与路径；用户放回后点
+    /// 「重新检查」（`library.recheck`）。`local_base` = 本机服务数据目录（判库 ID 用）。
+    LibraryMissing { dir: PathBuf, local_base: PathBuf },
+    /// #639：正在搬迁照片库（不开库、不起传输）；只答进度。搬完由 main 改指向后重启。
+    Relocating(Arc<crate::relocate::Live>),
 }
 
 /// [`Waiting`] 的签名 socket 版（macOS）。
@@ -750,8 +802,11 @@ async fn unconfigured_session(
             Waiting::Unconfigured(location) => {
                 unconfigured_dispatch(&req, client, version, started_at, location).await
             }
-            Waiting::LibraryMissing(dir) => {
-                library_missing_dispatch(&req, client, version, started_at, dir)
+            Waiting::LibraryMissing { dir, local_base } => {
+                library_missing_dispatch(&req, client, version, started_at, dir, local_base)
+            }
+            Waiting::Relocating(live) => {
+                relocating_dispatch(&req, client, version, started_at, live)
             }
         };
         if req.method == "config.set_library" && resp.ok {
@@ -848,6 +903,7 @@ pub fn library_missing_dispatch(
     version: &str,
     started_at: i64,
     dir: &std::path::Path,
+    local_base: &std::path::Path,
 ) -> Resp {
     let id = req.id.clone();
     if !client.may_call(&req.method) {
@@ -874,12 +930,52 @@ pub fn library_missing_dispatch(
             );
             Resp::err(id, RespError::new(Reason::LibraryUnavailable))
         }
+        // #639：找不到照片库时指向新位置——新位置上已经是这个库（用户自己搬过去了）⇒ 只改指向。
+        "library.relocate" => relocate_resp(id, dir, local_base, &req.params),
         // 窗口上的「重新检查」：库回来了 ⇒ 应答后以 EXIT_CONFIGURED_RESTART 退出、带着库重启；
         // 还不在 ⇒ 如实回答，状态不变（不轮询、不自动重启——库是用户自己处理的）。
         "library.recheck" => Resp::ok(
             id,
-            serde_json::json!({ "found": crate::library_location::library_marker_present(dir) }),
+            serde_json::json!({
+                "found": crate::layout::library_presence(dir, local_base)
+                    == crate::layout::Presence::Present
+            }),
         ),
+        _ => Resp::err(id, RespError::new(Reason::LibraryUnavailable)),
+    }
+}
+
+/// #639：搬迁中——`status` 报进度（窗口按「备份已暂停：正在搬迁」呈现），其余一律「库不可用」。
+pub fn relocating_dispatch(
+    req: &Req,
+    client: IpcClient,
+    version: &str,
+    started_at: i64,
+    live: &crate::relocate::Live,
+) -> Resp {
+    let id = req.id.clone();
+    if !client.may_call(&req.method) {
+        return Resp::err(id, RespError::new(Reason::RoleForbidden));
+    }
+    match req.method.as_str() {
+        "status" => {
+            let (done, total) = live.progress();
+            Resp::ok(
+                id,
+                serde_json::json!({
+                    "relocating": true,
+                    "relocate_from": live.plan.from.display().to_string(),
+                    "relocate_to": live.plan.to.display().to_string(),
+                    "relocate_done_bytes": done,
+                    "relocate_total_bytes": total,
+                    "version": version,
+                    "pid": std::process::id(),
+                    "started_at": started_at,
+                }),
+            )
+        }
+        "daemon.step_down" => Resp::ok(id, serde_json::json!({ "stepping_down": true })),
+        "events.subscribe" => Resp::ok(id, serde_json::json!({ "subscribed": true })),
         _ => Resp::err(id, RespError::new(Reason::LibraryUnavailable)),
     }
 }
@@ -1498,6 +1594,14 @@ impl IpcServer {
                     return Resp::err(id, RespError::new(Reason::RoleForbidden));
                 };
                 set_library_resp(id, location, &req.params).await
+            }
+            // #639：更改照片库位置 = 整库搬迁。校验、计划落盘后退出，重启时接着搬（见 daemon::relocate）。
+            // 只有窗口程序能调；新位置由窗口程序从系统对话框取（网页递不进路径，#1150）。
+            "library.relocate" => {
+                let Some(location) = self.library_location.clone() else {
+                    return Resp::err(id, RespError::new(Reason::RoleForbidden));
+                };
+                relocate_resp(id, &self.data_dir, location.platform_dir(), &req.params)
             }
             "status" => match self
                 .status(req.params.get("shell_version").and_then(|v| v.as_str()))
@@ -2380,6 +2484,11 @@ impl IpcServer {
             // photo folder" needs an answer to "传到哪儿了" (real
             // walkthrough question, 2026-07-31).
             "library_dir": self.data_dir.display().to_string(),
+            // #639：上一次「更改照片库位置」没成的原因（keyed ui_err）；没有就是 null。
+            "relocate_error": self
+                .library_location
+                .as_ref()
+                .and_then(|l| crate::relocate::last_error(l.platform_dir())),
             // #1118: this desktop's identity as people read it — shown under the pairing QR code
             // and on the phone before it connects, so the two can be compared.
             "desktop_fingerprint": pair_pake::node_fingerprint(&self.pairing.node_id().to_string()),

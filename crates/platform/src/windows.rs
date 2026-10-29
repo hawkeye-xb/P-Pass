@@ -602,6 +602,34 @@ impl PlatformAdapter for WindowsAdapter {
     /// #1109 / D4：身份私钥。服务模式下放进 `%ProgramData%\P-Pass\identity.key`
     /// ——目录与文件的 DACL 只给服务账户与 Administrators，交互用户（含恶意程序）
     /// 读不到也改不了。非服务模式维持数据目录里的 `.ppf/identity.key`。
+    /// #1253 / #1260：Windows 上「运行中库消失」只认卷被拔掉（`DBT_DEVICEREMOVECOMPLETE`）；
+    /// 库目录被改名 / 删除由删除前核对库标记兜底。
+    fn watch_library_root(&self, root: &Path, on_gone: Box<dyn FnOnce() + Send>) -> bool {
+        let once = std::sync::Mutex::new(Some(on_gone));
+        crate::windows_unmount::watch(
+            root,
+            crate::windows_unmount::Hooks {
+                on_query: None,
+                on_gone: Some(Box::new(move || {
+                    if let Some(f) = once.lock().ok().and_then(|mut g| g.take()) {
+                        f();
+                    }
+                })),
+            },
+        )
+    }
+
+    /// #1260：「安全删除硬件」/ 推出之前先收手再放行。
+    fn approve_library_unmount(&self, root: &Path, prepare: Box<dyn Fn() + Send + Sync>) -> bool {
+        crate::windows_unmount::watch(
+            root,
+            crate::windows_unmount::Hooks {
+                on_query: Some(prepare),
+                on_gone: None,
+            },
+        )
+    }
+
     fn identity_key_home(&self) -> crate::IdentityKeyHome {
         match Self::service_root() {
             Some(root) => crate::IdentityKeyHome::SecureStore(Box::new(

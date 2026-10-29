@@ -47,6 +47,7 @@
     "allow-disable-auto-sleep",
     "allow-write-config",
     "allow-set-library-dir",
+    "allow-relocate-library",
     "allow-start-daemon",
     "allow-daemon-startup-error",
     "allow-stop-daemon",

@@ -325,6 +325,12 @@ impl QueryEngine {
         }
     }
 
+    /// #1260：缩略图放本机（`LibraryLayout::thumbs`）；不调时沿用库盘 `.ppf/thumbs`（老布局）。
+    pub fn with_thumbs_root(mut self, thumbs_root: impl Into<PathBuf>) -> Self {
+        self.thumbs_root = thumbs_root.into();
+        self
+    }
+
     /// TEL-04 / #949: `thumb()`/`original()` each write one local
     /// `first_byte` stats line (ms/kind) per successful request.
     fn record_first_byte(&self, started: std::time::Instant, kind: &'static str) {

@@ -157,6 +157,11 @@ impl Db {
         *index = all.into_iter().map(|p| (p.node_id.clone(), p)).collect();
     }
 
+    /// 关掉连接池（等在用的连接归还后关闭）。之后这个 `Db` 的任何查询都会失败。
+    pub async fn close(&self) {
+        self.pool.close().await;
+    }
+
     pub(crate) fn pool(&self) -> &SqlitePool {
         &self.pool
     }

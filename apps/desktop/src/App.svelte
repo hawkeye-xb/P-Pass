@@ -114,6 +114,7 @@
   };
   let page = $state(pageFromHash());
   function go(id) {
+    if (relocLock) return;
     page = id;
     location.hash = `#/${id}`;
   }
@@ -334,9 +335,12 @@
 
   // 首页提示分级 L1：备份完全停了（服务没在跑 / 找不到照片库）。在场时它就是首页结论，见 lib/homeBlocker.js。
   const blocker = $derived(homeBlocker(serviceState, status));
+  // #639：搬迁期间整个窗口锁住——下面的界面不可操作（inert），只显示进度；服务那边同样拒绝一切写。
+  const relocLock = $derived(status?.relocating === true);
 
   // #1253：照片库找不到——状态变化时让壳强提示一次；「重新检查」如实回答。
   const libraryAlert = createLibraryAlert(invoke, getLocale);
+  let lastRelocateError = null;
   let libraryRecheckBusy = $state(false);
   let libraryStillMissing = $state(false);
   async function recheckLibraryNow() {
@@ -356,6 +360,11 @@
       status = await call("status", { shell_version: version });
       void showLowSpaceNotice(status.low_space_notice);
       libraryAlert.sync(status.library_missing);
+      // #639：上一次搬迁没成——提示一次原因（同一条不重复提示）。
+      if (status.relocate_error && status.relocate_error !== lastRelocateError) {
+        flashMessage(t("ui.relocate_failed", { err: errText(status.relocate_error) }), "error");
+      }
+      lastRelocateError = status.relocate_error ?? null;
       pendingCount = status.pending_pairs ?? 0;
       // UX-08: pending 全量列表（pairing.pending，只读）——列表化显示
       // 的基础；拿不到时回退数量（老 daemon 升级过渡）。
@@ -717,17 +726,27 @@
       fromDefault: false,
     });
     if (!dir) return;
-    const yes = await confirmDialog(t("ui.change_body", { dir }), {
+    // #639：先预检（别的库 / 嵌套 / 网络盘 / 重名 / 空间不够当场拒绝），确认框里写明最终位置；
+    // 选的文件夹里已有别的东西就额外提示（照片会和它们放在一起，我们不动它们）。
+    let check;
+    try {
+      check = await invoke("relocate_library", { dryRun: true });
+    } catch (e) {
+      flashMessage(t("ui.save_failed", { err: errDetail(e) }), "error");
+      return;
+    }
+    const body = [t("ui.change_body", { dir: check?.to ?? dir })];
+    if (check?.non_empty) body.push(t("ui.change_target_not_empty"));
+    const yes = await confirmDialog(body.join("\n\n"), {
       title: t("ui.change_title"),
       kind: "warning",
     });
     if (!yes) return;
     try {
-      // DESK-46 (#638)：改库位置由壳侧 set_library_dir 一手包办（校验 +
-      // 平台 config read-modify-write + 孤儿清理）——daemon 的 folder.set
-      // 写的是当前库目录的孤儿 config.toml（零读者），已删除。
-      await invoke("set_library_dir");
-      flashMessage(t("ui.change_saved", { dir }));
+      // #639：更改位置 = 整库搬迁（手机不重扫码、不重传）。后台服务校验、落计划后自己重启去搬，
+      // 搬迁期间整个窗口锁住、只显示进度（lib/homeBlocker.js）。
+      await invoke("relocate_library", { dryRun: false });
+      flashMessage(t("ui.change_saved", { dir: check?.to ?? dir }));
     } catch (e) {
       flashMessage(t("ui.save_failed", { err: errDetail(e) }), "error");
     }
@@ -1519,7 +1538,7 @@
   </main>
 {:else}
   <div class="titlebar-drag-region shell-titlebar-drag-region" aria-hidden="true"></div>
-  <div class="shell">
+  <div class="shell" inert={relocLock}>
     <aside class="sidebar">
       <div class="brand">P-Pass</div>
       <nav>
@@ -1632,6 +1651,17 @@
                 </Button>
               {/if}
               <p class="text-[13px] leading-[1.6] text-ink-40">{t("ui.refresh_hint")}</p>
+            </Card>
+          {:else if status?.relocating}
+            <!-- #639：正在搬迁照片库——等待（琥珀），给出进度与新位置；搬完服务自己重启恢复。 -->
+            <Card class="border-waiting bg-waiting-bg text-[16px]" role="status" data-testid="relocating">
+              <p class="m-0 text-[14px] leading-[1.6] text-ink">
+                {#if status.relocate_total_bytes > 0}
+                  {t("ui.relocating_progress", { done: formatBytes(status.relocate_done_bytes), total: formatBytes(status.relocate_total_bytes), to: status.relocate_to })}
+                {:else}
+                  {t("ui.relocating_to", { to: status.relocate_to })}
+                {/if}
+              </p>
             </Card>
           {:else if status?.library_missing}
             <!-- #1253：服务在，但照片库找不到——说明原因与路径；用户放回后点「重新检查」，库在就带着库重启。 -->
@@ -2072,15 +2102,8 @@
               {/if}
               <div class="mt-[12px] flex flex-wrap gap-[10px]">
                 <Button onclick={openLibrary}>{t("ui.open_library")}</Button>
-                <!-- DESK-48（2026-10-04 验收人拍板）：**暂时隐藏**「更改照片库位置」入口。
-                     换库的正确形态是整库搬迁（#639 [DESK-47] relocation：手机零重扫码、
-                     零重传），排在下个 milestone；在那之前用户可自行手动完成——先用
-                     Finder 把整个库目录（含 .ppf/）搬走，再把应用指向新位置。
-                     能力一律未删：chooseFolder()、壳侧 invoke("set_library_dir")、四个
-                     i18n 键原样保留（Rust 侧契约 desk46_library_dir_writer_is_shell_only
-                     仍要求它们存在）。恢复方式：把下面那行 Button 放回本 div。
-                <Button variant="secondary" onclick={chooseFolder}>{t("ui.change_library")}</Button>
-                -->
+                <!-- #639：「更改照片库位置」恢复，语义改为整库搬迁（手机零重扫码、零重传、原目录搬空）。 -->
+                <Button variant="secondary" onclick={chooseFolder} data-testid="change-library">{t("ui.change_library")}</Button>
               </div>
               <!-- T-092: 磁盘水位（status.disk_free_bytes/disk_total_bytes）——
                    「可用 X GB / 共 Y GB」+ 细进度条（token 色）；任一字段
@@ -2092,9 +2115,8 @@
                 </div>
                 <div class="mt-[10px] h-2 overflow-hidden rounded-full bg-hairline"><div class="h-full rounded-full bg-ink" style="width:{diskPct}%"></div></div>
               {/if}
-              <!-- DESK-48：后果说明随入口一起隐藏（键 ui.library_change_hint 保留）。
-              <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.library_change_hint")}</p>
-              -->
+              <!-- #639：后果说明随入口恢复，文案改为整库搬迁。 -->
+              <p class="m-0 mt-[10px] text-[13px] leading-[1.6] text-ink-40">{t("ui.library_change_hint")}</p>
             </Card>
             <div class="flex flex-1 flex-col gap-[22px]">
               <Card size="flush" class="min-h-0 flex-1 overflow-y-auto text-[16px]">
@@ -2345,6 +2367,22 @@
       </footer>
     {/if}
   </div>
+  {#if relocLock}
+    <!-- #639：搬迁锁定层——等待（琥珀），只有标题与进度，没有任何可点的东西；搬完服务自己重启，状态一变层就消失。 -->
+    <div class="relocate-lock" data-testid="relocate-lock">
+      <div class="titlebar-drag-region shell-titlebar-drag-region" aria-hidden="true"></div>
+      <Card class="w-full max-w-[520px] border-waiting bg-waiting-bg text-[16px]" role="status" aria-live="polite">
+        <h2 class="m-0 font-serif text-[24px] font-normal leading-[1.3] text-waiting">{t("ui.blocked_relocating")}</h2>
+        <p class="m-0 text-[14px] leading-[1.6] text-ink">
+          {#if status.relocate_total_bytes > 0}
+            {t("ui.relocating_progress", { done: formatBytes(status.relocate_done_bytes), total: formatBytes(status.relocate_total_bytes), to: status.relocate_to })}
+          {:else}
+            {t("ui.relocating_to", { to: status.relocate_to })}
+          {/if}
+        </p>
+      </Card>
+    </div>
+  {/if}
 {/if}
 
 <style>
@@ -2371,6 +2409,19 @@
   :global(:focus-visible) {
     outline: 2px solid var(--pp-ink);
     outline-offset: 2px;
+  }
+
+  /* #639：搬迁锁定层盖住整个窗口（标题栏拖动区除外）。 */
+  .relocate-lock {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 48px 16px 16px;
+    box-sizing: border-box;
+    background: var(--pp-paper);
   }
 
   /* ---- shell：侧栏 + 内容区（布局 v1） ---- */

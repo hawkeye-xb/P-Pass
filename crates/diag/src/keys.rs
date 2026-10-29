@@ -291,6 +291,22 @@ msg_keys! {
     UI_BLOCKED_LIBRARY_MISSING => "ui.blocked_library_missing",
     UI_BLOCKED_LIBRARY_MISSING_PILL => "ui.blocked_library_missing_pill",
     UI_BLOCKED_SERVICE_DOWN_PILL => "ui.blocked_service_down_pill",
+    UI_BLOCKED_RELOCATING => "ui.blocked_relocating",
+    UI_BLOCKED_RELOCATING_PILL => "ui.blocked_relocating_pill",
+    UI_RELOCATING_PROGRESS => "ui.relocating_progress",
+    UI_RELOCATING_TO => "ui.relocating_to",
+    UI_RELOCATE_FAILED => "ui.relocate_failed",
+    UI_ERR_RELOCATE_NO_LIBRARY_ID => "ui.err_relocate_no_library_id",
+    UI_ERR_RELOCATE_NO_SPACE => "ui.err_relocate_no_space",
+    UI_ERR_RELOCATE_OTHER_LIBRARY => "ui.err_relocate_other_library",
+    UI_ERR_RELOCATE_NETWORK_VOLUME => "ui.err_relocate_network_volume",
+    UI_ERR_RELOCATE_CHANGED => "ui.err_relocate_changed",
+    UI_ERR_RELOCATE_CONFLICT => "ui.err_relocate_conflict",
+    UI_ERR_RELOCATE_COPY_FAILED => "ui.err_relocate_copy_failed",
+    UI_ERR_RELOCATE_VERIFY_FAILED => "ui.err_relocate_verify_failed",
+    UI_ERR_RELOCATE_SOURCE_MISSING => "ui.err_relocate_source_missing",
+    UI_CHANGE_TARGET_NOT_EMPTY => "ui.change_target_not_empty",
+    UI_ERR_STOP_WHILE_RELOCATING => "ui.err_stop_while_relocating",
     UI_WIZARD_LIBRARY_TITLE => "ui.wizard_library_title",
     UI_WIZARD_LIBRARY_BODY_MAC => "ui.wizard_library_body_mac",
     UI_WIZARD_LIBRARY_BODY_WIN => "ui.wizard_library_body_win",
@@ -805,10 +821,26 @@ mod tests {
             UI_BLOCKED_LIBRARY_MISSING,
             UI_BLOCKED_LIBRARY_MISSING_PILL,
             UI_BLOCKED_SERVICE_DOWN_PILL,
+            UI_BLOCKED_RELOCATING,
+            UI_BLOCKED_RELOCATING_PILL,
+            UI_RELOCATING_PROGRESS,
+            UI_RELOCATING_TO,
+            UI_RELOCATE_FAILED,
+            UI_ERR_RELOCATE_NO_LIBRARY_ID,
+            UI_ERR_RELOCATE_NO_SPACE,
+            UI_ERR_RELOCATE_OTHER_LIBRARY,
+            UI_ERR_RELOCATE_NETWORK_VOLUME,
+            UI_ERR_RELOCATE_CHANGED,
+            UI_ERR_RELOCATE_CONFLICT,
+            UI_ERR_RELOCATE_COPY_FAILED,
+            UI_ERR_RELOCATE_VERIFY_FAILED,
+            UI_ERR_RELOCATE_SOURCE_MISSING,
+            UI_CHANGE_TARGET_NOT_EMPTY,
+            UI_ERR_STOP_WHILE_RELOCATING,
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 345);
+        assert_eq!(ALL.len(), 361);
     }
 
     #[test]

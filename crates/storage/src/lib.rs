@@ -8,6 +8,7 @@
 
 mod asset_repo;
 mod audit_repo;
+pub mod copy;
 mod db;
 mod device_repo;
 mod diag_repo;

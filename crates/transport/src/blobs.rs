@@ -221,9 +221,23 @@ pub struct Blobs {
 impl Blobs {
     /// Open (or create) the blob store at `store_dir` for this endpoint.
     pub async fn open(transport: &IrohTransport, store_dir: &Path) -> Result<Self> {
-        let store = FsStore::load(store_dir)
+        Self::open_split(transport, &store_dir.join("blobs.db"), store_dir).await
+    }
+
+    /// #1260: open a store whose metadata database lives apart from its data. `db_path` is the
+    /// redb file (the daemon keeps it on the local disk); `data_root` holds `data/` and `temp/`
+    /// (kept next to the photo library — iroh-blobs requires temp and data on one volume so it
+    /// can move finished files into place atomically, and exports land on that volume too).
+    pub async fn open_split(
+        transport: &IrohTransport,
+        db_path: &Path,
+        data_root: &Path,
+    ) -> Result<Self> {
+        let store = FsStore::load_with_opts(db_path.to_path_buf(), Options::new(data_root))
             .await
-            .map_err(|e| TransportError::Io(format!("blob store {store_dir:?}: {e}")))?;
+            .map_err(|e| {
+                TransportError::Io(format!("blob store {db_path:?} / {data_root:?}: {e}"))
+            })?;
         Ok(Self {
             store,
             transport: transport.clone(),
@@ -238,6 +252,31 @@ impl Blobs {
     pub async fn open_with_periodic_gc<F>(
         transport: &IrohTransport,
         store_dir: &Path,
+        interval: Duration,
+        protected_hashes: F,
+    ) -> Result<Self>
+    where
+        F: Fn() -> Pin<Box<dyn Future<Output = Result<HashSet<[u8; 32]>>> + Send>>
+            + Send
+            + Sync
+            + 'static,
+    {
+        Self::open_split_with_periodic_gc(
+            transport,
+            &store_dir.join("blobs.db"),
+            store_dir,
+            interval,
+            protected_hashes,
+        )
+        .await
+    }
+
+    /// [`Self::open_with_periodic_gc`] with the metadata database apart from the data
+    /// (see [`Self::open_split`]).
+    pub async fn open_split_with_periodic_gc<F>(
+        transport: &IrohTransport,
+        db_path: &Path,
+        data_root: &Path,
         interval: Duration,
         protected_hashes: F,
     ) -> Result<Self>
@@ -272,14 +311,16 @@ impl Blobs {
                 }
             })
         });
-        let mut options = Options::new(store_dir);
+        let mut options = Options::new(data_root);
         options.gc = Some(GcConfig {
             interval,
             add_protected: Some(callback),
         });
-        let store = FsStore::load_with_opts(store_dir.join("blobs.db"), options)
+        let store = FsStore::load_with_opts(db_path.to_path_buf(), options)
             .await
-            .map_err(|e| TransportError::Io(format!("blob store {store_dir:?}: {e}")))?;
+            .map_err(|e| {
+                TransportError::Io(format!("blob store {db_path:?} / {data_root:?}: {e}"))
+            })?;
         Ok(Self {
             store,
             transport: transport.clone(),
@@ -645,6 +686,12 @@ impl Blobs {
     /// find the same partial data).
     pub fn store_dir(data_dir: &Path) -> PathBuf {
         data_dir.join("blobs")
+    }
+
+    /// #1260: wait until the store has no running work — its per-blob entities then unload and
+    /// close their data files (iroh-blobs' entity manager drops idle entities).
+    pub async fn wait_idle(&self) {
+        let _ = self.store.wait_idle().await;
     }
 
     /// Shut down serving (if any) and flush the store.

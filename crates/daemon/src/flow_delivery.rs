@@ -565,6 +565,22 @@ impl FlowTaskRegistry {
                 .collect(),
         )
     }
+
+    /// #1260: the library's volume is being ejected — cancel every running fetch task. Grants
+    /// stay active (unlike `cancel_by_tuple`): the phones keep the photos and resume from the
+    /// retained partials once the library is back.
+    fn interrupt_all(&self) -> Interrupted {
+        let entries = self.entries.lock().expect("flow task registry lock");
+        Interrupted(
+            entries
+                .values()
+                .map(|entry| {
+                    entry.token.cancel();
+                    entry.exited.clone()
+                })
+                .collect(),
+        )
+    }
 }
 
 /// #1126: see [`FlowDelivery::provider_endpoints`].
@@ -620,6 +636,8 @@ pub struct FlowDelivery {
     /// IDX-06 (#442): background thumbnail pre-generation. `None` = no
     /// pre-generation; `thumb.get` still generates on first view.
     thumbs: Option<ThumbPregen>,
+    /// #1260: thumbnail root (local disk). Defaults to the library's `.ppf/thumbs` (old layout).
+    thumbs_root: PathBuf,
     /// NET-29 (#467): how long one native fetch may go without receiving a
     /// payload byte before it fails as `fetch_failed`. Tests inject one.
     fetch_byte_stall: std::time::Duration,
@@ -669,6 +687,7 @@ impl FlowDelivery {
             tasks: FlowTaskRegistry::default(),
             subscriptions: None,
             awake: AwakeHold::noop(),
+            thumbs_root: root.join(".ppf/thumbs"),
             library_root: root,
             now: Arc::new(unix_ms_now),
             free_space: Arc::new(platform_free_bytes),
@@ -705,6 +724,12 @@ impl FlowDelivery {
 
     /// IDX-06 (#442): hand every freshly materialized item to the
     /// low-priority thumbnail pre-generation pool.
+    /// #1260: thumbnails live on the local disk (`LibraryLayout::thumbs`).
+    pub fn with_thumbs_root(mut self, thumbs_root: impl Into<PathBuf>) -> Self {
+        self.thumbs_root = thumbs_root.into();
+        self
+    }
+
     pub fn with_thumb_pregen(mut self, thumbs: ThumbPregen) -> Self {
         self.thumbs = Some(thumbs);
         self
@@ -1421,8 +1446,7 @@ impl FlowDelivery {
             }
             SupersedeApplied::Replaced { rel_path } => {
                 // 旧指纹的缩略图没人再引用：删掉（不留孤儿）；新指纹的照常预生成。
-                let thumbs_root = self.library_root.join(".ppf/thumbs");
-                let stale = media_codec::thumb_paths(&thumbs_root, &old);
+                let stale = media_codec::thumb_paths(&self.thumbs_root, &old);
                 let _ = std::fs::remove_file(stale.t256);
                 let _ = std::fs::remove_file(stale.t1024);
                 if let Some(thumbs) = &self.thumbs {
@@ -1466,6 +1490,17 @@ impl FlowDelivery {
     /// provider ticket can still cancel the daemon's matching grant.
     /// Mark the grant Cancelled, interrupt any in-progress task, clear the
     /// active path entry.
+    /// #1260: let go of the library's volume before it is ejected: stop every running fetch
+    /// (grants stay active, so phones resume later) and wait until the flow blob store has
+    /// closed the partial files it kept open. Bounded by the caller.
+    pub async fn release_library(&self) {
+        let interrupted = self.tasks.interrupt_all();
+        let n = interrupted.count();
+        interrupted.exited().await;
+        self.blobs.wait_idle().await;
+        tracing::info!("#1260: 照片库所在的卷要推出——已停下 {n} 个在途传输并关闭库盘上的文件");
+    }
+
     pub async fn cancel_by_tuple(
         &self,
         peer: NodeId,

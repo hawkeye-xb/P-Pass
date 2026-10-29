@@ -141,18 +141,28 @@ pub struct ResidueSweeper {
     grace: Duration,
     staging_grace: Duration,
     running: Arc<tokio::sync::Mutex<()>>,
+    /// #1260：缩略图根（本机）。默认库盘 `.ppf/thumbs`（老布局）。
+    thumbs_root: PathBuf,
 }
 
 impl ResidueSweeper {
     pub fn new(db: Db, library_root: impl Into<PathBuf>) -> Self {
+        let root: PathBuf = library_root.into();
         Self {
             db,
-            root: library_root.into(),
+            thumbs_root: root.join(".ppf/thumbs"),
+            root,
             staging_claims: None,
             grace: RESIDUE_GRACE,
             staging_grace: crate::STAGING_ORPHAN_GRACE,
             running: Arc::default(),
         }
+    }
+
+    /// #1260：缩略图放本机（`LibraryLayout::thumbs`）。
+    pub fn with_thumbs_root(mut self, thumbs_root: impl Into<PathBuf>) -> Self {
+        self.thumbs_root = thumbs_root.into();
+        self
     }
 
     /// 旧管线 staging 孤儿的保护集来源。不接 ⇒ 认不出活会话 ⇒ `staging-orphan` 整类跳过。
@@ -249,7 +259,7 @@ impl ResidueSweeper {
                 from_index(core_index::sweep_ingest_residue(&self.db, &self.root).await)
             }
             ResidueKind::ThumbTemp => {
-                let thumbs = self.root.join(".ppf/thumbs");
+                let thumbs = self.thumbs_root.clone();
                 let grace = self.grace;
                 match blocking(move || list_thumbs(&thumbs)).await {
                     Ok(listing) => KindOutcome::Swept(
@@ -273,7 +283,7 @@ impl ResidueSweeper {
         if indexed.is_empty() {
             return KindOutcome::Skipped("index_empty".into());
         }
-        let thumbs = self.root.join(".ppf/thumbs");
+        let thumbs = self.thumbs_root.clone();
         let listing = match blocking(move || list_thumbs(&thumbs)).await {
             Ok(l) => l,
             Err(e) => return KindOutcome::Skipped(format!("list_failed: {}", e.kind())),

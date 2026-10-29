@@ -6,7 +6,8 @@
 // 每个阻断都有用户自己走得通的消除路径（启动服务 / 放回照片库后重新检查）。
 // 胶囊文案必须在侧栏宽度下一行放得下：可用 151px（216 − 侧栏内边距 24 − 边框 1 − 胶囊内边距 24 − 圆点 8 − 间距 8），
 // 13px/600 实测：「已暂停：找不到照片库」130、「已暂停：后台服务未运行」143、
-// "Paused: library missing" 144、"Paused: service is off" 133。
+// "Paused: library missing" 144、"Paused: service is off" 133、「已暂停：正在搬迁」104、
+// "Paused: moving library" 141。
 
 /**
  * @param {string} serviceState 壳的服务状态（running / starting / stopped / unreachable / not_configured）
@@ -19,6 +20,10 @@ export function homeBlocker(serviceState, status) {
   }
   if (serviceState !== "running") {
     return { id: "service_down", tone: "act", headlineKey: "ui.blocked_service_down", pillKey: "ui.blocked_service_down_pill" };
+  }
+  // #639：正在搬迁照片库——等待（琥珀），搬完自动恢复，用户不用动手。
+  if (status?.relocating) {
+    return { id: "relocating", tone: "waiting", headlineKey: "ui.blocked_relocating", pillKey: "ui.blocked_relocating_pill" };
   }
   if (status?.library_missing) {
     return { id: "library_missing", tone: "act", headlineKey: "ui.blocked_library_missing", pillKey: "ui.blocked_library_missing_pill" };

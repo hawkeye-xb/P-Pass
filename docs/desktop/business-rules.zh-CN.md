@@ -288,12 +288,13 @@ daemon 是 `config.toml` 与诊断包的唯一写者：照片库位置只经 IPC
 | `supersede-staging` | `.ppf/supersede-staging/<新指纹>-<pid>.part`（旧版 `<新指纹>.part`） | `apply_supersede`（§3.6） | 名字里的 pid = 本进程（可能正在拼接）；待换表里 `staged_path` 或 `new_hash` 指向它；待换表查询失败整类跳过 | 无（不靠 mtime：复制出来的文件 mtime 可能是源文件的） | 普通文件、名字严格匹配、pid 不是本进程、没有待换记录 | `ResidueSweeper` |
 | `superseded` | `.ppf/superseded/<旧指纹>.<扩展名>` | #1182 之前的 supersede（现无写入方） | 别名 old→new 在、new 的行在且 `rel_path` 在盘上、new 没有待换记录——**全部满足才算可删**，否则留 | 无 | 同左；目录删空后 `remove_dir` | `ResidueSweeper` |
 | `ingest-temp` | `originals/**/.ppf-ingest-<pid>-<纳秒>.part` | 跨卷入库 `publish_no_clobber`（§4.4） | 名字里的 pid = 本进程（可能正在复制）；有索引行指向这个路径 | 无（同 `supersede-staging`） | 普通文件、前后缀严格匹配、pid 不是本进程、没有索引行 | `ResidueSweeper` |
-| `thumb-temp` | `.ppf/thumbs/<xx>/.thumb-XXXXXX`（6 位字母数字） | 缩略图原子写入（`media_codec`） | 未过宽限的视为正在写 | `RESIDUE_GRACE` | 普通文件、名字严格匹配、mtime 过宽限 | `ResidueSweeper` |
-| `thumb-orphan` | `.ppf/thumbs/<xx>/<hash>.{256,1024}.jpg` | 缩略图生成（§5.5） | 索引里有这个 hash（快照 + 删除前逐个现查）；索引为空整类跳过（分不清没照片与索引丢失） | `RESIDUE_GRACE` | 普通文件、名字严格匹配且 `<xx>` = hash 前两位、索引里没有、mtime 过宽限 | `ResidueSweeper` |
-| — | `.ppf/blobs/` | 旧管线回退拉取（iroh store） | 启动这一刻没有传输在飞 | 无 | 必须在 `Blobs::open` 之前处理：启动时整个 rename 成 `.ppf/blobs-retired-<pid>-<纳秒>`（O(1)，与内容多少无关）；是真目录才挪，符号链接 / 文件不碰 | `retire_blob_store`（启动同步） |
-| — | `.ppf/flow-blobs/` | Flow 拉取（iroh store） | `Db::active_flow_content_hashes` | — | iroh 周期 GC（§3.4） | iroh GC |
+| `thumb-temp` | `<缩略图根>/<xx>/.thumb-XXXXXX`（6 位字母数字；缩略图根在本机 `libraries/<库 ID>/thumbs`，#1260 之前是 `.ppf/thumbs`） | 缩略图原子写入（`media_codec`） | 未过宽限的视为正在写 | `RESIDUE_GRACE` | 普通文件、名字严格匹配、mtime 过宽限 | `ResidueSweeper` |
+| `thumb-orphan` | `<缩略图根>/<xx>/<hash>.{256,1024}.jpg` | 缩略图生成（§5.5） | 索引里有这个 hash（快照 + 删除前逐个现查）；索引为空整类跳过（分不清没照片与索引丢失） | `RESIDUE_GRACE` | 普通文件、名字严格匹配且 `<xx>` = hash 前两位、索引里没有、mtime 过宽限 | `ResidueSweeper` |
+| — | `.ppf/blobs/`（数据）+ 本机 `libraries/<库 ID>/blobs.db`（元数据，#1260） | 旧管线回退拉取（iroh store） | 启动这一刻没有传输在飞 | 无 | 必须在 `Blobs::open` 之前处理：启动时数据目录整个 rename 成 `.ppf/blobs-retired-<pid>-<纳秒>`（O(1)，与内容多少无关），挪走了（或本来就没有）才删本机的元数据库，两边同一个退役动作；是真目录才挪，符号链接 / 文件不碰 | `retire_blob_store`（启动同步） |
+| — | `.ppf/flow-blobs/`（数据）+ 本机 `libraries/<库 ID>/flow-blobs.db`（元数据，#1260） | Flow 拉取（iroh store） | `Db::active_flow_content_hashes` | — | iroh 周期 GC（§3.4） | iroh GC |
 
-- 不在清单里的库内文件：`originals/` 里被索引的照片、`.ppf/index.sqlite*`（SQLite 自管）、`.ppf/identity.key`、`ipc.token`、`logs/`（§9.1 轮转）、有索引行的缩略图。
+- 不在清单里的文件：`originals/` 里被索引的照片、库标记 `.ppf/library-id`、本机 `libraries/<库 ID>/index.sqlite*`（SQLite 自管）、身份私钥、`ipc.token`、`logs/`（§9.1 轮转）、有索引行的缩略图。
+- #1260 起服务自己的数据（索引、两个 blob store 的元数据库、缩略图）在本机服务数据目录 `libraries/<库 ID>/`，库盘上只有照片、库标记、两个 blob store 的数据 / 临时目录与各 staging；老库升级时由 `daemon::migrate_local` 先拷贝、核对、再一次同盘改名提交，失败照旧用老布局并下次重试；提交后缩略图搬过去（同盘改名、跨盘拷完即删原件），库盘里的旧索引与 `blobs.db` 直接删，全程只留一份。
 
 ## 6 对 UI 暴露的事实
 

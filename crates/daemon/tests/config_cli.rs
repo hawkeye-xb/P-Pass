@@ -72,22 +72,42 @@ fn location(home: &Path) -> LibraryLocation {
     LibraryLocation::with(None, home.join("platform"))
 }
 
-/// 写入不得触发任何 daemon 机制：不开库（`.ppf/` 只许是 #1253 的空库标记，里面没有索引）、
-/// 没有 ipc.token，平台目录只有 config.toml。
+/// 写入不得触发任何 daemon 机制：不开库（`.ppf/` 只许是 #1253 的库标记，里面只有 #1260 的库 ID、
+/// 没有索引）、没有 ipc.token，平台目录只有 config.toml 与记库 ID 的 `libraries/`。
 fn assert_no_daemon_side_effects(platform_dir: &Path, library: &Path) {
     let marker = library.join(".ppf");
     assert!(marker.is_dir(), "#1253：写位置时要建出库标记");
-    assert_eq!(
-        std::fs::read_dir(&marker).unwrap().count(),
-        0,
-        "不得开库：库标记必须是空目录"
-    );
-    assert!(!library.join("ipc.token").exists(), "不得起 IPC");
-    let entries: Vec<_> = std::fs::read_dir(platform_dir)
+    let inside: Vec<_> = std::fs::read_dir(&marker)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
         .collect();
-    assert_eq!(entries, vec!["config.toml"], "平台目录只许多出 config.toml");
+    assert_eq!(inside, vec!["library-id"], "不得开库：库标记里只有库 ID");
+    let id = daemon::layout::read_library_id(library).expect("#1260：写位置时生成库 ID");
+    assert_eq!(
+        daemon::layout::recorded_library_id(platform_dir),
+        Some(id),
+        "#1260：库 ID 记进本机"
+    );
+    assert!(!library.join("ipc.token").exists(), "不得起 IPC");
+    let mut entries: Vec<_> = std::fs::read_dir(platform_dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .collect();
+    entries.sort();
+    assert_eq!(
+        entries,
+        vec!["config.toml", "libraries"],
+        "平台目录只许多出 config.toml 与记库 ID 的 libraries/"
+    );
+    let libraries: Vec<_> = std::fs::read_dir(platform_dir.join("libraries"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .collect();
+    assert_eq!(
+        libraries,
+        vec!["current-library-id"],
+        "不得开库：本机没有建出库数据"
+    );
 }
 
 #[test]

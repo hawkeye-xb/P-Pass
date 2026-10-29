@@ -126,6 +126,12 @@ impl LibraryLocation {
         // 不能在第一次开库前被判成「库找不到」。
         std::fs::create_dir_all(Path::new(&library).join(".ppf"))
             .map_err(|e| config::ui_err("ui.err_set_library", &[("err", &e)]))?;
+        // #1260：库 ID——选的是已有的 P-Pass 库就沿用它的 ID（本机数据跟着走），新目录就生成一个；
+        // 记进本机，之后库盘上的 ID 与它不同就是别的库，不往里写。
+        let id = crate::layout::ensure_library_id(Path::new(&library))
+            .map_err(|e| config::ui_err("ui.err_set_library", &[("err", &e)]))?;
+        crate::layout::record_library_id(&self.platform_dir, &id)
+            .map_err(|e| config::ui_err("ui.err_set_library", &[("err", &e)]))?;
         if let Some(store) = &self.store {
             store
                 .write(library.as_bytes())
