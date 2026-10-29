@@ -149,8 +149,6 @@ private struct AlbumCover: View {
 /// 后台备份默认关，由用户在这里选；iOS 的后台只能由系统挑时机，所以多一句不承诺的说明（#343：不写频率、不假装有后台）。
 struct BackupStartedScreen: View {
     let count: Int64
-    /// #975：点任一按钮时会先问一次通知授权——页面上先用一句话讲清用途（Android `notificationAskNote`）。
-    var asksNotification = false
     /// 参数 = 用户是否选了「开启后台备份」。
     let onDone: (_ enableBackgroundBackup: Bool) -> Void
 
@@ -166,10 +164,6 @@ struct BackupStartedScreen: View {
                         .padding(.top, 14)
                     Text(L.s("background_backup_ios_note")).font(PPFont.sans(15, relativeTo: .subheadline)).foregroundStyle(PPColor.ink40)
                         .lineSpacing(4).padding(.top, 12)
-                    if asksNotification {
-                        Text(L.s("onboarding_notification_note")).font(PPFont.sans(15, relativeTo: .subheadline)).foregroundStyle(PPColor.ink40)
-                            .lineSpacing(4).padding(.top, 12)
-                    }
                     VStack(spacing: 12) {
                         PPButton(title: L.s("background_backup_enable"), height: 60, fontSize: 18) { onDone(true) }
                         PPButton(title: L.s("background_backup_not_now"), kind: .quiet, height: 60, fontSize: 18) { onDone(false) }

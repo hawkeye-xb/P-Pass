@@ -27,7 +27,6 @@ final class LiveBackend: @unchecked Sendable {
     let autoPrefs: AutoBackupPrefs
     let notifyPrefs: NotifyOnFailurePrefs
     let noticeStore: DefinitiveNoticeStore
-    let notificationAsk: OnboardingNotificationAsk
     let pairingLoss = PairingLoss()
     let sentinel: SentinelStore
     let heartbeat: ForegroundHeartbeat
@@ -102,9 +101,8 @@ final class LiveBackend: @unchecked Sendable {
         autoPrefs = AutoBackupPrefs(directory: dir, logger: logger)
         notifyPrefs = NotifyOnFailurePrefs(directory: dir, logger: logger)
         noticeStore = DefinitiveNoticeStore(directory: dir, logger: logger)
-        // #975：必须在任何 markOnboarded 之前定老用户（新装用户此刻没有配对、没走过 onboarding，写下 asked=false）。
-        notificationAsk = OnboardingNotificationAsk(directory: dir, logger: logger)
-        notificationAsk.initIfAbsent(existingUser: pairingStore.load() != nil || onboarded.anyOnboarded())
+        // #1262：通知默认关；老用户升级保持原状态。必须在任何 markOnboarded 之前定老用户（新装用户此刻没有配对、没走过 onboarding）。
+        notifyPrefs.initIfAbsent(existingUser: pairingStore.load() != nil || onboarded.anyOnboarded())
         // 全新安装后台备份默认关（对位 Android `AutoBackupPrefs.autoEnabled = false`，#982）：首次配对完成页由用户选开不开。
         // #1119：未配对不向系统挂任何后台任务（启动 / 回前台 / 引擎登记唤醒 / 短任务续挂都过这道门）。
         scheduler = PlannedWakeScheduler(directory: dir, submitter: BGTaskSubmitter(), logger: logger, isPaired: { pairingStore.load() != nil })
@@ -522,11 +520,7 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
     }
     @MainActor func openNotificationSettings() { SystemNotifications.openSettings() }
 
-    func shouldAskNotificationAtOnboarding() async -> Bool {
-        await notificationAuthorization() == .notDetermined && backend.notificationAsk.shouldAsk(authorization: .notDetermined)
-    }
-
-    /// 完成页点「好」：该问就先落盘「问过」再弹，结果同步回开关（Android `thenContinue` + `onResult`）。
+    /// 「连过这台电脑」落盘。
     func finishOnboarding() throws {
         guard let record = backend.pairingStore.load() else {
             backend.logger.log("onboarded: finish without a pairing; nothing to mark"); return
@@ -538,20 +532,6 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
             backend.logger.log("onboarded: mark failed: \(error)")
             throw error
         }
-    }
-
-    func askNotificationAtOnboarding() async {
-        let auth = await notificationAuthorization()
-        let ask = backend.notificationAsk.shouldAsk(authorization: auth)
-        backend.logger.log("notification-ask: onboarding done tapped, authorization=\(auth) shouldAsk=\(ask)")
-        guard ask else { return }
-        do { try backend.notificationAsk.markAsked() } catch {
-            // 落不了盘就不弹：宁可少问，不许因为没记住而下次又问。
-            backend.logger.log("notification-ask: markAsked failed, skip prompt: \(error)"); return
-        }
-        let after = await requestNotificationAuthorization()
-        do { try backend.notificationAsk.onResult(granted: after == .authorized, prefs: backend.notifyPrefs) }
-        catch { backend.logger.log("notification-ask: sync toggle failed: \(error)") }
     }
 
     func wifiOnly() -> Bool { backend.settings.wifiOnly() }

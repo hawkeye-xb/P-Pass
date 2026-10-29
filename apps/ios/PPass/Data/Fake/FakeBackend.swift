@@ -172,8 +172,6 @@ final class FakeEngine: BackupEngine {
     func notificationAuthorization() async -> NotificationAuthorization { fakeAuthorization }
     func requestNotificationAuthorization() async -> NotificationAuthorization { fakeAuthorization }
     @MainActor func openNotificationSettings() {}
-    func shouldAskNotificationAtOnboarding() async -> Bool { false }
-    func askNotificationAtOnboarding() async {}
     func finishOnboarding() throws {}
 
     func backgroundRefresh() -> BackgroundRefreshAvailability { scenario == .notices ? .denied : .available }

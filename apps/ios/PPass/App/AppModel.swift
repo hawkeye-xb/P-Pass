@@ -56,8 +56,6 @@ final class AppModel: ObservableObject {
     /// #975：系统通知授权的真实状态。开关显示 = 偏好 且 已授权（Android MainActivity 同口径）。
     @Published private(set) var notificationAuthorization: NotificationAuthorization = .notDetermined
     private var notificationRequestInFlight = false
-    /// onboarding 完成页要不要显示「接下来会问是否允许通知」。
-    @Published private(set) var asksNotificationAtOnboarding = false
     /// 当前这张字节上一次前进的时刻（用来判「N 秒没有新数据」）。
     private(set) var transferMark: (orderId: Int64, bytes: Int64, at: Date)?
 
@@ -81,7 +79,6 @@ final class AppModel: ObservableObject {
     func refreshNotificationAuthorization() {
         Task {
             notificationAuthorization = await backend.engine.notificationAuthorization()
-            asksNotificationAtOnboarding = await backend.engine.shouldAskNotificationAtOnboarding()
         }
     }
 
@@ -125,13 +122,12 @@ final class AppModel: ObservableObject {
         notice = UserNotice(message: L.s("command_failed"))
     }
 
-    /// onboarding 完成页：该问通知就先问一次（结果同步回开关），再按用户的选择开 / 不开后台备份（Android `thenContinue` 包两个按钮），进首页。
+    /// onboarding 完成页：按用户的选择开 / 不开后台备份，进首页。#1262 起不在 onboarding 里申请通知。
     func finishOnboardingStarted(enableBackgroundBackup: Bool) {
         AppLog.log("onboarding: finish tapped enableBackgroundBackup=\(enableBackgroundBackup)")
         // 记不下来不挡进首页：后果只是下次重连同一台仍走一遍首次设置（偏安全的一侧），但要提示，不静默。
         do { try backend.engine.finishOnboarding() } catch { settingWriteFailed("onboarded", error) }
         Task {
-            await backend.engine.askNotificationAtOnboarding()
             // 选「不开」也按用户的选择写一次（#1039，对位 Android `onEnterWithoutBackgroundBackup`）：配对时清旧意图
             // 那一步若没写下来，这里补上，否则旧电脑留下的意图会被带到新电脑上。写失败同样提示，照常进首页。
             setAutoBackup(enableBackgroundBackup)

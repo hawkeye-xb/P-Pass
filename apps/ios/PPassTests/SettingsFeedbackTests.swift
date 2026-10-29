@@ -31,8 +31,6 @@ final class SettingsFeedbackTests: XCTestCase {
         func notificationAuthorization() async -> NotificationAuthorization { .authorized }
         func requestNotificationAuthorization() async -> NotificationAuthorization { .authorized }
         @MainActor func openNotificationSettings() {}
-        func shouldAskNotificationAtOnboarding() async -> Bool { false }
-        func askNotificationAtOnboarding() async {}
         var failOnboarded = false
         func finishOnboarding() throws { calls.append("onboarded"); if failOnboarded { throw Boom() } }
         func wifiOnly() -> Bool { disk.wifi }

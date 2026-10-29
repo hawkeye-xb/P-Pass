@@ -1,71 +1,37 @@
-// #975：通知授权——onboarding 只问一次（对位 Android OnboardingNotificationAskTest）+ 开关三态的纯函数。
+// #975 / #1262：通知开关的默认值（新装关、老用户保持）+ 开关三态的纯函数。
 import Foundation
 import XCTest
 @testable import PPassCore
 
 final class NotificationAskTests: XCTestCase {
 
-    // MARK: 只问一次
+    // MARK: 默认值（#1262）
 
-    func testNewInstallAsksOnceWhenNotDetermined() throws {
+    /// 新装：首次启动落盘「关」；之后配对、走完 onboarding 再调用也不变（幂等）。
+    func testNewInstallDefaultsOffAndStaysOffAfterOnboarding() {
         let tmp = TempDir()
-        let ask = OnboardingNotificationAsk(directory: tmp.url)
-        ask.initIfAbsent(existingUser: false)
-        XCTAssertTrue(ask.shouldAsk(authorization: .notDetermined))
+        NotifyOnFailurePrefs(directory: tmp.url).initIfAbsent(existingUser: false)
+        XCTAssertFalse(NotifyOnFailurePrefs(directory: tmp.url).enabled())
+        NotifyOnFailurePrefs(directory: tmp.url).initIfAbsent(existingUser: true) // 配对成功后的下一次启动
+        XCTAssertFalse(NotifyOnFailurePrefs(directory: tmp.url).enabled(), "新用户不能因为后来配对了就被当成老用户打开")
     }
 
-    func testMarkAskedBeforeRequestSurvivesRestart() throws {
+    /// 老用户升级、从没动过开关（没有文件）：保持升级前的默认「开」，不重置。
+    /// 反证：initIfAbsent 改成一律写 false，这里红。
+    func testUpgradedUserWithoutFileKeepsOldDefaultOn() {
         let tmp = TempDir()
-        let ask = OnboardingNotificationAsk(directory: tmp.url)
-        ask.initIfAbsent(existingUser: false)
-        try ask.markAsked()
-        // 重启 = 新实例：申请中途进程被杀，也不再问。
-        XCTAssertFalse(OnboardingNotificationAsk(directory: tmp.url).shouldAsk(authorization: .notDetermined))
+        NotifyOnFailurePrefs(directory: tmp.url).initIfAbsent(existingUser: true)
+        XCTAssertTrue(NotifyOnFailurePrefs(directory: tmp.url).enabled())
     }
 
-    func testExistingUserIsNeverAsked() {
-        let tmp = TempDir()
-        let ask = OnboardingNotificationAsk(directory: tmp.url)
-        ask.initIfAbsent(existingUser: true)
-        XCTAssertFalse(ask.shouldAsk(authorization: .notDetermined))
-        XCTAssertEqual(ask.load()?.skippedAsExistingUser, true)
-    }
-
-    func testInitIsIdempotentSoPairingLaterDoesNotMakeNewUserLookExisting() {
-        let tmp = TempDir()
-        let ask = OnboardingNotificationAsk(directory: tmp.url)
-        ask.initIfAbsent(existingUser: false)
-        ask.initIfAbsent(existingUser: true) // 配对成功后再进来
-        XCTAssertTrue(ask.shouldAsk(authorization: .notDetermined))
-    }
-
-    func testMissingFileMeansDoNotAsk() {
-        XCTAssertFalse(OnboardingNotificationAsk(directory: TempDir().url).shouldAsk(authorization: .notDetermined), "宁可少问，不许多问")
-    }
-
-    func testCorruptFileMeansAlreadyAsked() {
-        let tmp = TempDir()
-        tmp.write(OnboardingNotificationAsk.fileName, "{not json")
-        XCTAssertFalse(OnboardingNotificationAsk(directory: tmp.url).shouldAsk(authorization: .notDetermined))
-    }
-
-    /// iOS 平台差异：系统只在 notDetermined 时才会弹框，其余两态问了也没有弹窗，不该问。
-    func testOnlyNotDeterminedCanBeAsked() {
-        let tmp = TempDir()
-        let ask = OnboardingNotificationAsk(directory: tmp.url)
-        ask.initIfAbsent(existingUser: false)
-        XCTAssertFalse(ask.shouldAsk(authorization: .denied))
-        XCTAssertFalse(ask.shouldAsk(authorization: .authorized))
-    }
-
-    func testResultSyncsToggleLikeAndroid() throws {
-        let tmp = TempDir()
-        let prefs = NotifyOnFailurePrefs(directory: tmp.url)
-        let ask = OnboardingNotificationAsk(directory: tmp.url)
-        try ask.onResult(granted: false, prefs: prefs)
-        XCTAssertFalse(prefs.enabled())
-        try ask.onResult(granted: true, prefs: prefs)
-        XCTAssertTrue(prefs.enabled())
+    /// 老用户升级、以前写过开关（含旧 onboarding 申请结果写回的值）：原样保留，开着的不关、关着的不开。
+    func testUpgradedUserKeepsSavedChoice() throws {
+        for saved in [true, false] {
+            let tmp = TempDir()
+            try NotifyOnFailurePrefs(directory: tmp.url).setEnabled(saved)
+            NotifyOnFailurePrefs(directory: tmp.url).initIfAbsent(existingUser: true)
+            XCTAssertEqual(NotifyOnFailurePrefs(directory: tmp.url).enabled(), saved)
+        }
     }
 
     // MARK: 开关三态

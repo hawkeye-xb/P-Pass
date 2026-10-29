@@ -5,8 +5,7 @@
 // |---------------------------|-----------------------------|-------------------------------|--------------------------|
 // | AutoBackupPrefs           | AutoBackupPrefs.kt          | auto_backup_prefs.json        | autoEnabled=false，userRequested=nil |
 // | BackupSettings            | BackupSettings.kt           | backup-settings.json          | wifiOnly=true            |
-// | NotifyOnFailurePrefs      | NotifyOnFailurePrefs.kt     | notify_on_failure_prefs.json  | enabled=true             |
-// | OnboardingNotificationAsk | OnboardingNotificationAsk.kt | onboarding_notification_ask.json | 缺失=不问，损坏=已问过 |
+// | NotifyOnFailurePrefs      | NotifyOnFailurePrefs.kt     | notify_on_failure_prefs.json  | enabled=false（#1262）   |
 // | OnboardedDesktopsStore    | OnboardedDesktopsStore.kt   | onboarded_desktops.json       | 空集（失败关闭：按新电脑走） |
 // | SentinelStore             | SentinelStore.kt            | sentinel.json                 | 全 0                     |
 // | BackupScopeStore          | BackupScopeStore.kt         | backup_scope[-<nodeId>].json  | nil（= 一张都不在范围内）  |
@@ -135,7 +134,8 @@ public final class BackupSettings: @unchecked Sendable {
 
 // MARK: - NotifyOnFailurePrefs
 
-/// 设置页「需要处理时通知我」（#130）。默认开。
+/// 设置页「需要处理时通知我」（#130）。#1262 起默认关：onboarding 不再申请通知，用户在设置里打开时才申请。
+/// 老用户升级保持原状态：首次启动由 [initIfAbsent] 把当时生效的值落盘（老用户 = 开，那时的默认值），之后只认文件。
 public final class NotifyOnFailurePrefs: @unchecked Sendable {
     public static let fileName = "notify_on_failure_prefs.json"
     private let url: URL
@@ -150,13 +150,23 @@ public final class NotifyOnFailurePrefs: @unchecked Sendable {
 
     public func enabled() -> Bool {
         JSONFile.lock.lock(); defer { JSONFile.lock.unlock() }
-        guard let fields = JSONFile.readObject(url, logger: logger) else { return true }
-        return fields.bool("enabled") ?? true
+        guard let fields = JSONFile.readObject(url, logger: logger) else { return false }
+        return fields.bool("enabled") ?? false
     }
 
     public func setEnabled(_ enabled: Bool) throws {
         JSONFile.lock.lock(); defer { JSONFile.lock.unlock() }
         try JSONFile.write(State(enabled: enabled), url)
+    }
+
+    /// 第一次运行（文件不存在）时定下初值：老用户（配对过 / 走完过 onboarding）= 开，保持升级前的默认；新装 = 关。
+    /// 文件已存在什么都不做（幂等）——新用户之后配对、走完 onboarding，不会被当成老用户改成开。
+    /// 必须在任何 markOnboarded 之前调用。
+    public func initIfAbsent(existingUser: Bool) {
+        JSONFile.lock.lock(); defer { JSONFile.lock.unlock() }
+        guard !FileManager.default.fileExists(atPath: url.path) else { return }
+        do { try JSONFile.write(State(enabled: existingUser), url) }
+        catch { logger.log("notify-prefs: init failed: \(error)") }
     }
 }
 

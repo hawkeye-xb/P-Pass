@@ -196,10 +196,6 @@ protocol BackupEngine: AnyObject {
     func requestNotificationAuthorization() async -> NotificationAuthorization
     /// denied 之后唯一的出路：跳系统设置里本 App 的通知页。
     @MainActor func openNotificationSettings()
-    /// onboarding 完成页：该不该先问一次通知（页面据此显示用途说明）。
-    func shouldAskNotificationAtOnboarding() async -> Bool
-    /// 完成页点「好」：该问就问（先落盘「问过」），结果同步回开关。
-    func askNotificationAtOnboarding() async
     /// 完成页点任一按钮：把「连过这台电脑」落盘（#1019，对位 Android `finishOnboarding` 里的 markOnboarded，MOB-114）。
     /// 快速重连只认它；配对成功时不记，否则配完没走完首次设置就被杀，下次会跳过选相册与后台备份的选择。
     func finishOnboarding() throws
