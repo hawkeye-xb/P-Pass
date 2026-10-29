@@ -327,7 +327,22 @@ enum Entry {
         len: u64,
         modified: Option<SystemTime>,
     },
-    Link(PathBuf),
+    /// 指向 + 指向文件的大小（指向不存在或是目录时为 None）。
+    Link {
+        target: PathBuf,
+        len: Option<u64>,
+    },
+}
+
+fn link_entry(path: &Path) -> std::io::Result<Entry> {
+    let len = std::fs::metadata(path)
+        .ok()
+        .filter(|m| m.is_file())
+        .map(|m| m.len());
+    Ok(Entry::Link {
+        target: std::fs::read_link(path)?,
+        len,
+    })
 }
 
 impl Manifest {
@@ -348,12 +363,17 @@ impl Manifest {
     }
 
     /// 内容一致（类型、大小、链接指向）——拷贝后的核对。修改时间不比：exFAT 只有 2 秒精度。
+    /// Windows 上普通用户与服务账户没有建符号链接的特权，robocopy 的 `/SL` 不生效、把文件链接
+    /// 拷成指向文件的内容：目标是同样大小的普通文件也算一致。
     fn same_content(&self, other: &Self) -> bool {
         self.0.len() == other.0.len()
             && self.0.iter().all(|(k, a)| match (a, other.0.get(k)) {
                 (Entry::Dir, Some(Entry::Dir)) => true,
                 (Entry::File { len: x, .. }, Some(Entry::File { len: y, .. })) => x == y,
-                (Entry::Link(x), Some(Entry::Link(y))) => x == y,
+                (Entry::Link { target: x, .. }, Some(Entry::Link { target: y, .. })) => x == y,
+                (Entry::Link { len: Some(x), .. }, Some(Entry::File { len: y, .. })) => {
+                    cfg!(windows) && x == y
+                }
                 _ => false,
             })
     }
@@ -370,7 +390,7 @@ fn scan_into(dir: &Path, rel: &Path, out: &mut BTreeMap<PathBuf, Entry>) -> std:
         let r = rel.join(&name);
         let kind = entry.file_type()?;
         if kind.is_symlink() {
-            out.insert(r, Entry::Link(std::fs::read_link(&path)?));
+            out.insert(r, link_entry(&path)?);
         } else if kind.is_dir() {
             out.insert(r.clone(), Entry::Dir);
             scan_into(&path, &r, out)?;
@@ -665,7 +685,7 @@ fn subset(root: &Path, names: &[OsString]) -> std::io::Result<Manifest> {
         let rel = PathBuf::from(name);
         let meta = std::fs::symlink_metadata(&path)?;
         if meta.file_type().is_symlink() {
-            m.insert(rel, Entry::Link(std::fs::read_link(&path)?));
+            m.insert(rel, link_entry(&path)?);
         } else if meta.is_dir() {
             m.insert(rel.clone(), Entry::Dir);
             scan_into(&path, &rel, &mut m)?;
@@ -879,14 +899,17 @@ mod tests {
         assert!(dest.join("mine.txt").is_file());
         if linked {
             let l = dest.join("link.jpg");
-            assert!(
-                std::fs::symlink_metadata(&l)
-                    .unwrap()
-                    .file_type()
-                    .is_symlink(),
-                "链接照搬"
-            );
-            assert_eq!(std::fs::read_link(&l).unwrap(), outside);
+            if std::fs::symlink_metadata(&l)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+            {
+                assert_eq!(std::fs::read_link(&l).unwrap(), outside, "链接照搬");
+            } else {
+                // Windows 无建链接特权：robocopy 拷成指向文件的内容。
+                assert!(cfg!(windows), "只有 Windows 无特权时才会拷成普通文件");
+                assert_eq!(std::fs::read(&l).unwrap(), b"outside");
+            }
         }
         assert!(!from.exists());
     }
