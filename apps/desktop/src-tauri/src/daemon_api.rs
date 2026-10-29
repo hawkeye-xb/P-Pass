@@ -57,6 +57,14 @@ pub(crate) async fn daemon_low_space_ack<R: tauri::Runtime>(
     forward(app, "low_space.ack", json!({})).await
 }
 
+/// #1253：照片库找不到时窗口上的「重新检查」。库回来了 ⇒ 后台应答 `found: true` 后带着库重启。
+#[tauri::command(rename_all = "snake_case")]
+pub(crate) async fn daemon_library_recheck<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<Value, String> {
+    forward(app, "library.recheck", json!({})).await
+}
+
 #[tauri::command(rename_all = "snake_case")]
 pub(crate) async fn daemon_pairing_start<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
@@ -216,6 +224,7 @@ mod tests {
         vec![
             ("daemon_status", json!({ "shell_version": "0.10.0" })),
             ("daemon_low_space_ack", json!({})),
+            ("daemon_library_recheck", json!({})),
             ("daemon_pairing_pending", json!({})),
             (
                 "daemon_pairing_confirm",
@@ -319,6 +328,7 @@ mod tests {
             .invoke_handler(tauri::generate_handler![
                 super::daemon_status,
                 super::daemon_low_space_ack,
+                super::daemon_library_recheck,
                 super::daemon_pairing_pending,
                 super::daemon_pairing_confirm,
                 super::daemon_devices_list,

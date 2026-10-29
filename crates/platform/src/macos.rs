@@ -460,6 +460,21 @@ impl PlatformAdapter for MacosAdapter {
         }
     }
 
+    fn watch_library_root(&self, root: &Path, on_gone: Box<dyn FnOnce() + Send>) -> bool {
+        match watch_vnode_gone(root) {
+            Ok(wait) => std::thread::Builder::new()
+                .name("ppf-library-root".into())
+                .spawn(move || {
+                    if wait() {
+                        on_gone();
+                    }
+                })
+                .is_ok(),
+            // 打不开 / 登记不上：如实回答「没有这项能力」，由调用方记日志。
+            Err(_) => false,
+        }
+    }
+
     fn notify(&self, title: &str, body: &str) {
         // Reliable notifications need a notarized .app (T-041/T-071);
         // best-effort osascript until then.
@@ -1152,5 +1167,112 @@ mod ux_capability_tests {
         assert!(!a.close_to_tray_hint());
         assert!(a.overlay_titlebar());
         assert_eq!(a.sleep_owner(), Some(crate::SleepOwner::User));
+    }
+}
+
+/// #1253：以 `O_EVTONLY` 打开 `root`，登记 kqueue `EVFILT_VNODE`（删除 / 改名 / 卷被撤销）。
+/// 返回一个阻塞等待的闭包：事件到达返回 `true`；kqueue 出错返回 `false`（不当成「库没了」）。
+/// 打开与登记在调用线程里做——登记失败当场报错，不留一个什么都等不到的线程。
+fn watch_vnode_gone(root: &Path) -> std::io::Result<impl FnOnce() -> bool + Send> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let c_path = CString::new(root.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "路径里有 NUL"))?;
+    // SAFETY: c_path 是以 NUL 结尾的合法 C 字符串；返回的 fd 由下面的闭包负责关闭。
+    let fd = unsafe { libc::open(c_path.as_ptr(), libc::O_EVTONLY) };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: kqueue() 无参数；失败返回 -1。
+    let kq = unsafe { libc::kqueue() };
+    if kq < 0 {
+        let e = std::io::Error::last_os_error();
+        unsafe { libc::close(fd) };
+        return Err(e);
+    }
+    let change = libc::kevent {
+        ident: fd as libc::uintptr_t,
+        filter: libc::EVFILT_VNODE,
+        flags: libc::EV_ADD | libc::EV_CLEAR,
+        fflags: libc::NOTE_DELETE | libc::NOTE_RENAME | libc::NOTE_REVOKE,
+        data: 0,
+        udata: std::ptr::null_mut(),
+    };
+    // SAFETY: change 指向一个有效的 kevent；不取回事件（nevents = 0）。
+    let rc = unsafe { libc::kevent(kq, &change, 1, std::ptr::null_mut(), 0, std::ptr::null()) };
+    if rc < 0 {
+        let e = std::io::Error::last_os_error();
+        unsafe {
+            libc::close(kq);
+            libc::close(fd);
+        }
+        return Err(e);
+    }
+    Ok(move || {
+        let mut event: libc::kevent = unsafe { std::mem::zeroed() };
+        let gone = loop {
+            // SAFETY: event 是可写的 kevent；无超时，阻塞到事件到达。
+            let n =
+                unsafe { libc::kevent(kq, std::ptr::null(), 0, &mut event, 1, std::ptr::null()) };
+            if n > 0 {
+                break true;
+            }
+            if n < 0 && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+                break false;
+            }
+        };
+        unsafe {
+            libc::close(kq);
+            libc::close(fd);
+        }
+        gone
+    })
+}
+
+#[cfg(test)]
+mod library_root_watch_tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    fn watch(dir: &Path) -> mpsc::Receiver<()> {
+        let (tx, rx) = mpsc::channel();
+        assert!(MacosAdapter.watch_library_root(dir, Box::new(move || tx.send(()).unwrap())));
+        rx
+    }
+
+    // #1253：库目录被改名（挪走）→ 立刻回调；里面的文件变化不回调。
+    #[test]
+    fn renaming_the_root_fires_and_inner_changes_do_not() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("lib");
+        std::fs::create_dir(&root).unwrap();
+        let rx = watch(&root);
+        std::fs::write(root.join("a.jpg"), b"x").unwrap();
+        assert!(
+            rx.recv_timeout(Duration::from_millis(300)).is_err(),
+            "库里的文件变化不算库没了"
+        );
+        std::fs::rename(&root, parent.path().join("lib-renamed")).unwrap();
+        rx.recv_timeout(Duration::from_secs(2))
+            .expect("改名必须回调");
+    }
+
+    #[test]
+    fn deleting_the_root_fires() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("lib");
+        std::fs::create_dir(&root).unwrap();
+        let rx = watch(&root);
+        std::fs::remove_dir(&root).unwrap();
+        rx.recv_timeout(Duration::from_secs(2))
+            .expect("删除必须回调");
+    }
+
+    #[test]
+    fn a_missing_root_reports_no_capability() {
+        let parent = tempfile::tempdir().unwrap();
+        assert!(!MacosAdapter.watch_library_root(&parent.path().join("nope"), Box::new(|| {})));
     }
 }

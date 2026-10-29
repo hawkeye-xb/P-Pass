@@ -12,7 +12,7 @@
 // 里的子进程（拉起测试二进制自身等）不面向用户，统一放行。
 #![cfg_attr(test, allow(clippy::disallowed_methods))]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // DESK-24 (#173)：数据目录搬家。整个模块**不在 cfg 里**——里面全是
 // `rename` / `read_dir`，没有一行平台专属代码，三条 lane 都跑得到它的测试。
@@ -535,6 +535,16 @@ pub trait PlatformAdapter: Send + Sync {
     }
     // 系统集成
     fn notify(&self, title: &str, body: &str);
+
+    /// #1253：盯住照片库根目录**本身**——它被删除、改名 / 挪走，或所在的卷被卸载（拔盘、强制推出）时，
+    /// 在后台线程里调用一次 `on_gone`。目录里的文件变化不算（那是目录监听的事）。
+    ///
+    /// 返回 `false` = 本平台没有这项能力（**默认**），调用方只能靠启动检查与删除前核对库标记兜底。
+    /// macOS 用 kqueue `EVFILT_VNODE`（`NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE`），目录以 `O_EVTONLY`
+    /// 打开——只为收事件，不算占用，不会挡住卷的推出。
+    fn watch_library_root(&self, _root: &Path, _on_gone: Box<dyn FnOnce() + Send>) -> bool {
+        false
+    }
     /// 本平台**生效的**数据目录。
     ///
     /// DESK-24 (#173)：Windows 上这个值不是常量——`%APPDATA%`（Roaming）时代

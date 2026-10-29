@@ -300,6 +300,9 @@ impl LibraryWatcher {
     /// 复用 [`Reconcile::remove_asset`]（thumb 约定 + 审计口径只此一份）。
     async fn reconcile_under(&self, dirs: &[PathBuf]) -> usize {
         let mut removed = 0usize;
+        if !self.inner.reconcile.library_here() {
+            return removed;
+        }
         for dir in dirs {
             let Ok(rel) = dir.strip_prefix(&self.inner.originals) else {
                 continue;

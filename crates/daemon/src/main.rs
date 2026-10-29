@@ -331,7 +331,7 @@ async fn run() -> anyhow::Result<()> {
     // 测试沙盒目录保持旧行为。
     // #1253：找不到库不再退出（以前每次启动都报错退出，窗口只能说「服务没运行」，文件夹被移走
     // 时用户在 App 里没有出路）。照 Syncthing 文件夹丢失的做法：服务照常在，只把「库找不到 +
-    // 路径」交给窗口，巡检到库回来就带着库重启。
+    // 路径」交给窗口；用户放回后点「重新检查」，库在就带着库重启。
     if !library_present(explicitly_configured, &data_dir) {
         let msg = library_missing_message(&data_dir);
         eprintln!("{msg}");
@@ -341,6 +341,28 @@ async fn run() -> anyhow::Result<()> {
             daemon::ipc::Waiting::LibraryMissing(data_dir.clone()),
         )
         .await
+    }
+    // #1253：运行中库目录被删、改名 / 挪走，或所在的盘被拔 / 强制推出——立刻停手：以
+    // EXIT_CONFIGURED_RESTART 退出，由服务管理器重新拉起，启动检查发现库不在就进上面的
+    // 「找不到照片库」状态（与启动时库不在同一条路，不另写一套运行中的状态切换）。
+    {
+        use platform::PlatformAdapter as _;
+        let watched = data_dir.clone();
+        let armed = platform::adapter().watch_library_root(
+            &data_dir,
+            Box::new(move || {
+                tracing::error!(
+                    "#1253: 照片库根目录 {} 被删除、改名或所在的盘被卸载——停手并重启进入「找不到照片库」",
+                    watched.display()
+                );
+                std::process::exit(daemon::ipc::EXIT_CONFIGURED_RESTART);
+            }),
+        );
+        if !armed {
+            tracing::warn!(
+                "#1253: 本平台不能盯住照片库根目录——运行中库消失只能靠删除前核对库标记兜底"
+            );
+        }
     }
     std::fs::create_dir_all(data_dir.join(".ppf"))?;
     // #949：清掉旧版遥测遗留的 anon_id（尽力而为，失败只 warn）。
@@ -1053,7 +1075,10 @@ async fn load_or_mint_identity(
 /// 冒出一个空目录，把它当成空库接管，桌面索引是空的、手机水位还在，就会永不补传（#639）。
 /// 库标记由写库位置时建出（[`daemon::library_location::LibraryLocation::set`]），开过一次的库本来就有。
 fn library_present(configured_in_file: bool, data_dir: &std::path::Path) -> bool {
-    library_root_ok(configured_in_file, data_dir.join(".ppf").is_dir())
+    library_root_ok(
+        configured_in_file,
+        daemon::library_location::library_marker_present(data_dir),
+    )
 }
 
 /// [`library_present`] 的纯判据，好做单测与反证。
@@ -1065,13 +1090,25 @@ fn library_root_ok(configured_in_file: bool, has_marker: bool) -> bool {
 fn library_missing_message(data_dir: &std::path::Path) -> String {
     format!(
         "找不到照片库：{}——外置盘没有接上，或文件夹被移动、改名、删除了。\
-         后台服务保持运行，照片库回到这个位置后自动恢复。",
+         后台服务保持运行，放回后在窗口里点「重新检查」即恢复。",
         data_dir.display()
     )
 }
 
-/// #1253：库找不到状态下多久看一次库回来没有。插回外置盘后几秒内恢复即可，巡检本身只是一次 stat。
-const LIBRARY_RECHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+/// #1253：服务自己发的系统通知要人话——与窗口同一份字典（`diag::I18N_*`），按系统语言选
+/// （zh* → 中文，其余 → 英文，与托盘同一规则）。`{dir}` 换成库路径；字典里没有这个键就原样给键名。
+fn ui_text(key: &str, dir: &std::path::Path) -> String {
+    use platform::PlatformAdapter as _;
+    let zh = platform::adapter()
+        .system_locale()
+        .is_some_and(|l| l.to_ascii_lowercase().starts_with("zh"));
+    let dict: serde_json::Value =
+        serde_json::from_str(if zh { diag::I18N_ZH } else { diag::I18N_EN }).unwrap_or_default();
+    dict.get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or(key)
+        .replace("{dir}", &dir.display().to_string())
+}
 
 /// #1115：未配置状态——正本里还没有库位置（macOS 钥匙串里没有；Windows / Linux 平台目录里
 /// 没有 config.toml）。单实例交接照做，然后只答 `status` 与 `config.set_library`，写好后以
@@ -1085,8 +1122,8 @@ async fn run_unconfigured(
 }
 
 /// 还不能开库时的服务（[`daemon::ipc::Waiting`]：未配置 / 库找不到）：单实例交接照做，只答
-/// 少数方法，按停止信号退出。库找不到时另起巡检，库回来就以 `EXIT_CONFIGURED_RESTART` 退出、
-/// 由服务管理器带着库重新拉起（与首启写好库位置同一条路）。
+/// 少数方法，按停止信号退出。库找不到时发一次系统通知；用户放回后点「重新检查」，库在就以
+/// `EXIT_CONFIGURED_RESTART` 退出、由服务管理器带着库重新拉起（与首启写好库位置同一条路）。
 async fn run_waiting(
     location: std::sync::Arc<daemon::library_location::LibraryLocation>,
     waiting: daemon::ipc::Waiting,
@@ -1094,15 +1131,14 @@ async fn run_waiting(
     use platform::PlatformAdapter as _;
     let version = daemon::daemon_version();
     if let daemon::ipc::Waiting::LibraryMissing(dir) = &waiting {
+        // #1253：备份全线停了，要让人知道——窗口没开也有系统通知（每次进入这个状态发一次）。
+        // 不轮询、不自动重启：库是用户自己处理的，处理好后在窗口里点「重新检查」（IPC `library.recheck`）。
         let dir = dir.clone();
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(LIBRARY_RECHECK_INTERVAL).await;
-                if library_present(true, &dir) {
-                    tracing::info!("#1253: 照片库回来了（{}），带着库重新启动", dir.display());
-                    std::process::exit(daemon::ipc::EXIT_CONFIGURED_RESTART);
-                }
-            }
+        tokio::task::spawn_blocking(move || {
+            platform::adapter().notify(
+                &ui_text("ui.library_missing_title", &dir),
+                &ui_text("ui.library_missing_notice_body", &dir),
+            );
         });
     }
     let served: std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>> =

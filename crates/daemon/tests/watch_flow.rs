@@ -23,6 +23,8 @@ struct Fixture {
 
 async fn setup(debounce: Duration) -> Fixture {
     let dir = tempfile::tempdir().unwrap();
+    // #1253：真库都带库标记；没有它的目录在删除方向上当「库不在」。
+    std::fs::create_dir_all(dir.path().join(".ppf")).unwrap();
     let db = Db::open(&dir.path().join("index.sqlite")).await.unwrap();
     let (bus, rx) = events::bus();
     let watcher = LibraryWatcher::new(db.clone(), dir.path(), NODE_ID, bus).with_debounce(debounce);

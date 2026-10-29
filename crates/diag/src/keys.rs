@@ -283,6 +283,9 @@ msg_keys! {
     UI_WIZARD_UNCONFIGURED_NOTICE => "ui.wizard_unconfigured_notice",
     UI_LIBRARY_MISSING_TITLE => "ui.library_missing_title",
     UI_LIBRARY_MISSING_BODY => "ui.library_missing_body",
+    UI_LIBRARY_MISSING_NOTICE_BODY => "ui.library_missing_notice_body",
+    UI_LIBRARY_MISSING_RECHECK => "ui.library_missing_recheck",
+    UI_LIBRARY_MISSING_STILL => "ui.library_missing_still",
     UI_WIZARD_LIBRARY_TITLE => "ui.wizard_library_title",
     UI_WIZARD_LIBRARY_BODY_MAC => "ui.wizard_library_body_mac",
     UI_WIZARD_LIBRARY_BODY_WIN => "ui.wizard_library_body_win",
@@ -789,10 +792,13 @@ mod tests {
             UI_WIZARD_UNCONFIGURED_NOTICE,
             UI_LIBRARY_MISSING_TITLE,
             UI_LIBRARY_MISSING_BODY,
+            UI_LIBRARY_MISSING_NOTICE_BODY,
+            UI_LIBRARY_MISSING_RECHECK,
+            UI_LIBRARY_MISSING_STILL,
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 337);
+        assert_eq!(ALL.len(), 340);
     }
 
     #[test]

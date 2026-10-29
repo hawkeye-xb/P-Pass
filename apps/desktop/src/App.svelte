@@ -13,6 +13,7 @@
   } from "./serviceState.js";
   import { invoke, convertFileSrc } from "@tauri-apps/api/core";
   import { callDaemon } from "./lib/daemonApi.js";
+  import { createLibraryAlert, recheckLibrary } from "./lib/libraryMissing.js";
   import { getVersion } from "@tauri-apps/api/app";
   import { listen } from "@tauri-apps/api/event";
   import {
@@ -329,10 +330,27 @@
     else toast.success(msg);
   }
 
+  // #1253：照片库找不到——状态变化时让壳强提示一次；「重新检查」如实回答。
+  const libraryAlert = createLibraryAlert(invoke, getLocale);
+  let libraryRecheckBusy = $state(false);
+  let libraryStillMissing = $state(false);
+  async function recheckLibraryNow() {
+    libraryRecheckBusy = true;
+    libraryStillMissing = false;
+    try {
+      libraryStillMissing = (await recheckLibrary(callDaemon)) === "still_missing";
+    } catch (_) {
+      // 后台正在带着库重启（连接断了）或暂时连不上：等下一次 refresh 看新状态。
+    } finally {
+      libraryRecheckBusy = false;
+    }
+  }
+
   async function refresh() {
     try {
       status = await call("status", { shell_version: version });
       void showLowSpaceNotice(status.low_space_notice);
+      libraryAlert.sync(status.library_missing);
       pendingCount = status.pending_pairs ?? 0;
       // UX-08: pending 全量列表（pairing.pending，只读）——列表化显示
       // 的基础；拿不到时回退数量（老 daemon 升级过渡）。
@@ -1593,10 +1611,16 @@
               <p class="text-[13px] leading-[1.6] text-ink-40">{t("ui.refresh_hint")}</p>
             </Card>
           {:else if status?.library_missing}
-            <!-- #1253：服务在，但照片库找不到——说明原因与路径；库回来后 daemon 自己带着库重启。 -->
+            <!-- #1253：服务在，但照片库找不到——说明原因与路径；用户放回后点「重新检查」，库在就带着库重启。 -->
             <Card class="text-[16px]" data-testid="library-missing">
               <strong>{t("ui.library_missing_title")}</strong>
               <p class="m-0 whitespace-pre-line text-[13px] leading-[1.6] text-ink-60">{t("ui.library_missing_body", { dir: status.library_dir })}</p>
+              <Button class="mt-[12px] self-start" disabled={libraryRecheckBusy} onclick={recheckLibraryNow} data-testid="library-recheck">
+                {t("ui.library_missing_recheck")}
+              </Button>
+              {#if libraryStillMissing}
+                <p class="m-0 text-[13px] leading-[1.6] text-ink-60" role="status">{t("ui.library_missing_still")}</p>
+              {/if}
             </Card>
           {:else}
             {#if pendingCount > 0 && !showConfirmModal}

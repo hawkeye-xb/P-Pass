@@ -471,3 +471,28 @@ fn library_missing_state_reports_the_path_and_opens_nothing() {
         );
     }
 }
+
+/// #1253：「重新检查」只看库标记——库标记回来了答 `found: true`（会话据此应答后带着库重启），
+/// 只有同名空目录不算回来。反证：判据改成「目录存在」⇒ 第二段红。
+#[test]
+fn library_recheck_answers_from_the_library_marker() {
+    use daemon::ipc::library_missing_dispatch;
+    let parent = tempfile::tempdir().unwrap();
+    let dir = parent.path().join("lib");
+    let recheck = || {
+        let r = library_missing_dispatch(
+            &req("library.recheck", serde_json::json!({})),
+            IpcClient::Shell,
+            "1.0.0",
+            0,
+            &dir,
+        );
+        assert!(r.ok, "{:?}", r.error);
+        r.result.unwrap()["found"].as_bool().unwrap()
+    };
+    assert!(!recheck(), "目录都不在");
+    std::fs::create_dir_all(&dir).unwrap();
+    assert!(!recheck(), "只有同名空目录不算回来");
+    std::fs::create_dir_all(dir.join(".ppf")).unwrap();
+    assert!(recheck(), "库标记回来了");
+}

@@ -16,6 +16,15 @@ use std::path::{Path, PathBuf};
 
 use crate::config::{self, Config, CONFIG_FILE_NAME};
 
+/// 库标记目录名。库标记在 = 这里确实是那个照片库（Syncthing 的 `.stfolder` 同理）。
+pub const LIBRARY_MARKER: &str = ".ppf";
+
+/// #1253：库此刻在不在——只认库标记，光有同名目录不算（外置盘没挂时原位置可能冒出一个空目录）。
+/// 启动判定与删除索引前的护栏用同一个判据。
+pub fn library_marker_present(root: &std::path::Path) -> bool {
+    root.join(LIBRARY_MARKER).is_dir()
+}
+
 /// 常驻 daemon 这次启动的库。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResidentLibrary {

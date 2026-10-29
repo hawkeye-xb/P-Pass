@@ -137,6 +137,30 @@ fn set_tray_locale(app: tauri::AppHandle, lang: String) {
     }
 }
 
+/// #1253：照片库找不到 = 备份全线停摆，窗口程序在运行时要让人看到。进入时把主窗口拉到前台，
+/// 程序坞图标持续跳动直到用户点开（Critical），菜单栏图标旁标「!」、悬停提示换成原因；恢复后撤掉。
+/// 窗口程序没在运行时由后台服务发系统通知，不替用户把窗口程序拉起来。
+/// `lang` 与 [`set_tray_locale`] 一样由前端报。纯托盘 / 窗口操作，不等任何结果。
+#[tauri::command]
+fn set_library_alert(app: tauri::AppHandle, active: bool, lang: String) {
+    let locale = tray_locale(Some(&lang));
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_title(active.then_some("!"));
+        let tip = if active {
+            format!("P-Pass · {}", tray_text(locale, "ui.library_missing_title"))
+        } else {
+            "P-Pass".to_string()
+        };
+        let _ = tray.set_tooltip(Some(tip));
+    }
+    if active {
+        bring_main_window_to_front(&app);
+        if let Some(win) = app.get_webview_window("main") {
+            let _ = win.request_user_attention(Some(tauri::UserAttentionType::Critical));
+        }
+    }
+}
+
 // MOB-47: 视频弹窗走 asset 协议从磁盘直接 streaming 播放，避免把整段
 // 视频 base64 拉进内存。安全契约（L2 审查修）：
 // - 渲染进程只传资产 hash，绝不传文件系统路径；
@@ -1838,6 +1862,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             daemon_api::daemon_status,
             daemon_api::daemon_low_space_ack,
+            daemon_api::daemon_library_recheck,
             daemon_api::daemon_pairing_start,
             daemon_api::daemon_pairing_stop,
             daemon_api::daemon_pairing_pending,
@@ -1885,6 +1910,7 @@ pub fn run() {
             allow_media_scope,
             notify_system,
             set_tray_locale,
+            set_library_alert,
             update_install::update_download,
             update_install::update_install
         ])
@@ -2173,6 +2199,7 @@ mod tests {
     fn sync_commands_never_wait() {
         const SYNC_ALLOWED: &[&str] = &[
             "set_tray_locale",
+            "set_library_alert",
             "service_state",
             "platform_ux",
             "update_failure_key",

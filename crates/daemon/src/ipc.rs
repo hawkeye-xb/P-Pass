@@ -757,7 +757,8 @@ async fn unconfigured_session(
         if req.method == "config.set_library" && resp.ok {
             resp = claim_owner_after_set(resp, user.as_ref()).await;
         }
-        let configured = req.method == "config.set_library" && resp.ok;
+        let configured =
+            (req.method == "config.set_library" && resp.ok) || recheck_found(&req, &resp);
         let step_down = req.method == "daemon.step_down" && resp.ok;
         let Ok(mut out) = serde_json::to_string(&resp) else {
             return;
@@ -769,7 +770,7 @@ async fn unconfigured_session(
         if configured || step_down {
             tokio::time::sleep(Duration::from_millis(200)).await;
             if configured {
-                tracing::info!("#1115: 库位置已写入，退出以带着库重新启动");
+                tracing::info!("#1115 / #1253: 库位置已写入或照片库已回来，退出以带着库重新启动");
                 std::process::exit(EXIT_CONFIGURED_RESTART);
             }
             std::process::exit(0);
@@ -865,8 +866,26 @@ pub fn library_missing_dispatch(
         ),
         "daemon.step_down" => Resp::ok(id, serde_json::json!({ "stepping_down": true })),
         "events.subscribe" => Resp::ok(id, serde_json::json!({ "subscribed": true })),
+        // 窗口上的「重新检查」：库回来了 ⇒ 应答后以 EXIT_CONFIGURED_RESTART 退出、带着库重启；
+        // 还不在 ⇒ 如实回答，状态不变（不轮询、不自动重启——库是用户自己处理的）。
+        "library.recheck" => Resp::ok(
+            id,
+            serde_json::json!({ "found": crate::library_location::library_marker_present(dir) }),
+        ),
         _ => Resp::err(id, RespError::new(Reason::LibraryUnavailable)),
     }
+}
+
+/// 「重新检查」的应答是否意味着库回来了（会话据此在应答写出后退出重启）。
+fn recheck_found(req: &Req, resp: &Resp) -> bool {
+    req.method == "library.recheck"
+        && resp.ok
+        && resp
+            .result
+            .as_ref()
+            .and_then(|r| r.get("found"))
+            .and_then(|v| v.as_bool())
+            == Some(true)
 }
 
 /// #1115：Unix 域套接字路径的上限（`sockaddr_un.sun_path` 104 字节，含结尾 NUL）。
