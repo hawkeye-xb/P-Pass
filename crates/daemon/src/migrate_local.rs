@@ -226,7 +226,8 @@ async fn copy_and_verify(
 
 fn copy_synced(from: &Path, to: &Path) -> std::io::Result<()> {
     std::fs::copy(from, to)?;
-    std::fs::File::open(to)?.sync_all()
+    // Windows 的 FlushFileBuffers 要写权限，只读句柄会被拒（os error 5）。
+    std::fs::OpenOptions::new().write(true).open(to)?.sync_all()
 }
 
 fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
@@ -255,8 +256,15 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// 目录项落盘是 POSIX 的做法；Windows 没有目录 fsync，NTFS 的元数据由日志保证。
+#[cfg(unix)]
 fn sync_dir(dir: &Path) -> std::io::Result<()> {
     std::fs::File::open(dir)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_dir(_dir: &Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 /// 提交之后：库盘里的旧索引与两个 `blobs.db` 直接删（本机那份已是正本）。
