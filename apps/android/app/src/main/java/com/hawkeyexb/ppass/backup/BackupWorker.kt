@@ -70,12 +70,14 @@ internal fun autoBackupWorkNames(): List<String> = listOf(
  * #1220：唤醒只要求「连着网络」（Wi‑Fi 限制时再要求不计流量），**不要求系统验证过外网**。
  * `NetworkType.CONNECTED / UNMETERED` 在 API 28+ 会被 JobScheduler 落成带 `VALIDATED` 的请求；
  * 代理失效、只通局域网、待网页登录的 Wi‑Fi 永远拿不到 `VALIDATED`，进程死后续传哨兵与周期兜底就一直不跑。
- * 备份走局域网直连或中继，用不着外网验证。能不能传仍由引擎在这一轮里判（`AndroidFlowRuntime` 看当前网络是否
- * 不计流量，连不上桌面走探测梯退避），这里只是唤醒的闸门。API 26–27 没有网络请求约束，退回 [NetworkType]。
+ * 备份走局域网直连或中继，用不着外网验证。能不能传仍由引擎在这一轮里判（「仅 Wi‑Fi」看此刻
+ * 有没有不计流量的网，并把流量固定到它上面，见 `UnmeteredRoute.kt`；连不上桌面走探测梯退避），这里只是唤醒的闸门。
+ * API 26–27 没有网络请求约束，退回 [NetworkType]。
  *
  * 例外：引擎「等条件」的唤醒（[WorkManagerWakeScheduler.scheduleWhenConditionsMet]）保持原来的 [NetworkType]。
- * 它等的是「Wi‑Fi 成为当前能用的网络」，与引擎的判据（`activeNetwork` 不计流量）是同一件事；开着移动数据时，
- * 未验证的 Wi‑Fi 不会成为默认网络，若它也放宽，任务会被立刻满足、引擎又判「等 Wi‑Fi」、REPLACE 重排——空转。
+ * 「仅 Wi‑Fi」下流量绑不到不计流量的网（系统拒绝绑定）时引擎也判「等 Wi‑Fi」；若这类唤醒放宽，未验证的 Wi‑Fi
+ * 一直在，任务会被立刻满足、引擎又判「等 Wi‑Fi」、REPLACE 重排——空转。代价：进程已死、开着移动数据、Wi‑Fi
+ * 未验证时，这类唤醒不触发，由续传哨兵、5 小时兜底与相册变更接力。
  */
 internal fun requiredNetworkCapabilities(spec: BackupConstraintsSpec): List<Int> =
     buildList {

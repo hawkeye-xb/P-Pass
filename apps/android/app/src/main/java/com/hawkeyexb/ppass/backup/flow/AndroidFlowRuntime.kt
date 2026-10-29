@@ -50,12 +50,6 @@ internal fun flowConstraintsSatisfied(context: Context): Boolean {
     return !settings.wifiOnly || isOnUnmetered(context)
 }
 
-/** 是否在不计流量网络（Wi-Fi）上。 */
-internal fun isOnUnmetered(context: Context): Boolean {
-    val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager ?: return false
-    val caps = cm.getNetworkCapabilities(cm.activeNetwork) ?: return false
-    return caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
-}
 
 /** #459：此刻的相册权限够不够把「MediaStore 查不到」当「原图被删了」（判据见 [mediaAbsenceTrusted]）。 */
 internal fun mediaAbsenceTrustedNow(context: Context): Boolean {
@@ -180,6 +174,21 @@ internal fun onFlowNetworkChanged(context: Context, lost: Boolean = false) {
     }
 }
 
+/**
+ * #1220：不计流量的网出现 / 断开（它可能不是默认网络——Wi‑Fi 测不到外网时默认网络是移动数据，默认网络回调
+ * 看不到它）。出现：叫醒引擎重新检查（「仅 Wi‑Fi」的条件可能刚满足）。断开的正是流量固定的那张：在飞的这张
+ * 立即判路径失败，下一次检查重新选路——不退回移动数据。
+ */
+internal fun onUnmeteredNetworkChanged(context: Context, network: android.net.Network, lost: Boolean) {
+    val app = context.applicationContext
+    thread(name = "ppass-flow-network") {
+        runCatching {
+            val runtime = runtimeFor(app) ?: return@runCatching
+            if (lost && runtime.route.isBound(network)) runtime.engine.onNetworkLost() else runtime.engine.onNetworkChanged()
+        }.onFailure { PLog.e(TAG, "unmetered network trigger failed", it) }
+    }
+}
+
 private fun hasDefaultNetwork(context: Context): Boolean {
     val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? android.net.ConnectivityManager ?: return false
     return cm.activeNetwork != null
@@ -203,6 +212,7 @@ internal class AndroidFlowRuntime(
     val store: OrderStore,
     val control: FlowControl,
     val bridge: IrohBlobsProviderBridge,
+    val route: UnmeteredNetworkRoute,
     private val writer: FlowWriter,
     private val scope: CoroutineScope,
     private val sqlite: SqliteOrderStore,
@@ -311,6 +321,16 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
     )
     val scopeStore = BackupScopeStore(app)
     val control = FlowControlStore(app.filesDir)
+    // #1220：换了线路，两个端点都要换上新套接字——provider 经 network_change 重绑；控制面端点没有重绑入口，
+    // 空闲时关掉，下一次用到时按新的绑定重建（忙时它连着的那张网断了自会失败重连）。
+    val route = UnmeteredNetworkRoute(
+        app,
+        wifiOnly = { BackupSettings(app.filesDir).load().wifiOnly },
+        onRebound = {
+            runCatching { bridge.networkChange() }.onFailure { PLog.w(TAG, "route: provider network_change failed", it) }
+            runCatching { client.closeIfIdle() }.onFailure { PLog.w(TAG, "route: closing the idle control endpoint failed", it) }
+        },
+    )
     val scope = CoroutineScope(SupervisorJob() + writer.dispatcher)
     val auditScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     lateinit var engine: FlowEngine
@@ -373,13 +393,14 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
             )
         },
         afterCycle = { auditScope.launch { dispatcher.flush() } },
+        route = route,
     )
     FlowForegroundHandoff.control = control
     FlowForegroundHandoff.onLost = { reason -> engine.onForegroundLost(reason) }
     // #434：引擎这一轮没结束就不回收 endpoint；一轮结束（含 afterCycle 的审计上报在飞）再由回收器等宽限期。
     scope.launch { engine.status.collect { application.networkIdleReaper.setEngineBusy(it.phase != LoopPhase.IDLE) } }
     engine.start()
-    val built = AndroidFlowRuntime(key, engine, store, control, bridge, writer, scope, sqlite) {
+    val built = AndroidFlowRuntime(key, engine, store, control, bridge, route, writer, scope, sqlite) {
         application.networkIdleReaper.setEngineBusy(false)
     }
     synchronized(runtimeLock) {

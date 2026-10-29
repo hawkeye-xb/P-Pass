@@ -293,6 +293,25 @@ interface ForegroundLease {
     fun release()
 }
 
+/**
+ * #1220：「仅 Wi‑Fi」时连桌面的流量走哪张网。Wi‑Fi 测不到外网时系统把默认网络切到移动数据，Wi‑Fi 仍连着、
+ * 局域网仍通；条件看的是「有没有不计流量的网」，流量也必须真走它。
+ */
+interface NetworkRoute {
+    /**
+     * 条件检查通过、第一次连桌面之前调用：需要时把流量固定到不计流量的网上。false = 「仅 Wi‑Fi」下没能固定
+     * （找不到 / 系统拒绝绑定）——引擎按「等 Wi‑Fi」处理，绝不退回计流量的默认网络。
+     */
+    suspend fun ensure(): Boolean
+
+    companion object {
+        /** 不需要选路的场合（测试）：永远按默认网络走。 */
+        val Default: NetworkRoute = object : NetworkRoute {
+            override suspend fun ensure() = true
+        }
+    }
+}
+
 /** 条件不满足时登记的唤醒。引擎只经 [wakePlanOf] 决定登记哪一种（#409 / #652）。 */
 interface WakeScheduler {
     /**

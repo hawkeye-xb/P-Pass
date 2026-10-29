@@ -20,11 +20,13 @@ import android.app.Application
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Bundle
 import android.os.SystemClock
 import com.hawkeyexb.ppass.backup.flow.TriggerReason
 import com.hawkeyexb.ppass.backup.flow.onFlowAppForeground
 import com.hawkeyexb.ppass.backup.flow.onFlowNetworkChanged
+import com.hawkeyexb.ppass.backup.flow.onUnmeteredNetworkChanged
 import com.hawkeyexb.ppass.backup.flow.requestFlowWake
 import com.hawkeyexb.ppass.backup.evaluateDefinitiveEvents
 import com.hawkeyexb.ppass.backup.flow.flowDeliveryPairingLoss
@@ -179,6 +181,17 @@ class PPassApplication : Application() {
                 },
             )
         }.onFailure { PLog.w("PPassFlow", "network callback registration failed", it) }
+        // #1220：不计流量的网未必是默认网络（Wi‑Fi 测不到外网时默认网络是移动数据），单独盯它的出现与断开。
+        runCatching {
+            cm.registerNetworkCallback(
+                NetworkRequest.Builder().addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED).build(),
+                object : ConnectivityManager.NetworkCallback() {
+                    override fun onAvailable(network: Network) = onUnmeteredNetworkChanged(this@PPassApplication, network, lost = false)
+
+                    override fun onLost(network: Network) = onUnmeteredNetworkChanged(this@PPassApplication, network, lost = true)
+                },
+            )
+        }.onFailure { PLog.w("PPassFlow", "unmetered network callback registration failed", it) }
     }
 
     private fun changed(signature: String, lost: Boolean = false) {
