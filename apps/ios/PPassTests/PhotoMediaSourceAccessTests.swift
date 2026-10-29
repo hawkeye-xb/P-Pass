@@ -4,7 +4,7 @@ import XCTest
 @testable import PPass
 
 /// #1259：系统还没问过照片权限时，媒体源不碰 PhotoKit（第一次用 PhotoKit 取资源 / 读变更令牌会自动弹系统框，
-/// 配对后引擎那一轮会把它弹在说明屏上面）。范围空集同样不发查询（FIX-T6）。
+/// 配对后引擎那一轮会在配对页上抢先弹出，系统框只该由选范围页弹）。范围空集同样不发查询（FIX-T6）。
 /// 反证：去掉 `PhotoMediaSource` 里的 accessDecided 守卫，currentPosition 会读变更令牌，`history.calls` 不为 0，红。
 final class PhotoMediaSourceAccessTests: XCTestCase {
     /// 被读就记一笔：断言它一次都没被读。

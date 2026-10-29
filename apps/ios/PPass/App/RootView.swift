@@ -4,7 +4,7 @@ import SwiftUI
 /// 只决定「一打开停在哪一屏」，不改任何业务数据。仅 DEBUG 构建生效。
 enum LaunchRoute: String {
     case photos, family, settings, viewer, video, bucket, storage, diagnostics
-    case welcome, scan, manual, pairWaiting, pairCode, pairRefused, pairLapsed, pairFailed, photoIntro
+    case welcome, scan, manual, pairWaiting, pairCode, pairRefused, pairLapsed, pairFailed
 
     static let current: LaunchRoute? = {
         // #1152：只在 DEBUG 构建里读（`DebugLaunchInput`）。
@@ -20,8 +20,6 @@ struct RootView: View {
             switch app.phase {
             case .onboarding:
                 OnboardingFlow()
-            case .photoIntro:
-                PhotoIntroScreen(desktopName: app.desktopName) { app.photoIntroContinue() }
             case .chooseAlbums:
                 NavigationStack {
                     BucketScreen(firstTime: true) { selected, known, wantsAll in
@@ -46,7 +44,6 @@ struct RootView: View {
         switch LaunchRoute.current {
         case .settings, .bucket, .storage, .diagnostics: app.tab = .settings
         case .welcome, .scan, .manual, .pairWaiting, .pairCode, .pairRefused, .pairLapsed, .pairFailed: app.phase = .onboarding
-        case .photoIntro: app.phase = .photoIntro
         default: break
         }
     }

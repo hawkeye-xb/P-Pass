@@ -272,13 +272,6 @@
     <string name="no_media_access_title">拿不到相册权限</string>
     <string name="no_media_access_body">备份需要访问相册。现在一张照片都读不到，所以什么都没在备份——去设置里允许访问相册。</string>
     <!-- MOB-03: 相册选择页权限链——拒绝引导（不崩不白屏，说清为什么需要） -->
-    <!-- #1259：系统照片权限框之前的一屏说明（照片去哪 / 给权限不等于全传 / 随时能停）。 -->
-    <string name="photo_intro_title">照片只回你家这台电脑</string>
-    <string name="photo_intro_where">照片存进「%1$s」，不存任何云端，也不用注册账号。</string>
-    <string name="photo_intro_full">接下来系统会问照片权限，请选「全部」，这样以后新拍的照片才能自动备份。</string>
-    <string name="photo_intro_choose">给了权限也不会马上全传：备份哪些相册、从今天起还是全部，下一步由你来选。</string>
-    <string name="photo_intro_stop">随时可以暂停或改范围。已经存好的照片就是电脑上的普通文件。</string>
-    <string name="photo_intro_continue">继续</string>
     <string name="media_permission_denied_title">需要照片权限</string>
     <string name="media_permission_denied_body">备份需要访问你的照片和视频，才能选择要备份的相册。请到系统设置中允许访问。</string>
     <!-- MOB-02 §一: 设置页低调立即备份入口（测试/狗粮用） -->

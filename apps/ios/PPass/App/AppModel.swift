@@ -18,8 +18,6 @@ final class AppModel: ObservableObject {
     enum Phase: Equatable {
         /// 没配对过：欢迎页 → 扫码 / 手动输入 → 配对状态页。
         case onboarding
-        /// 首次配对成功、系统还没问过照片权限：先说清照片去哪、传多少由你定、随时能停，再弹系统框（#1259）。
-        case photoIntro
         /// 首次配对成功：选范围（firstTime）。点「开始备份」直接进首页，没有完成页（#1263）。
         case chooseAlbums
         case main
@@ -314,18 +312,9 @@ final class AppModel: ObservableObject {
         }
         refresh()
         refreshNotificationAuthorization()
-        phase = firstTime ? (backend.media.accessNotDetermined() ? .photoIntro : .chooseAlbums) : .main
-    }
-
-    /// 说明页点「继续」：弹系统照片权限框（只在没问过时有界面），不论结果都进选相册——拒绝 / 部分授权由选相册页与首页说明。
-    func photoIntroContinue() {
-        Task {
-            let access = await backend.media.requestAccess()
-            AppLog.log("onboarding: photo access after intro=\(access)")
-            refresh()
-            refreshExistingAlbums()
-            if phase == .photoIntro { phase = .chooseAlbums }
-        }
+        // 系统照片权限框由选范围页读相册列表时弹出（`MediaLibrary.albums`），前面不加说明屏（#1259 10-29 改决定）：
+        // 说明写在系统框的用途说明 NSPhotoLibraryUsageDescription 里。
+        phase = firstTime ? .chooseAlbums : .main
     }
 
     /// 选范围页点「开始备份」（首次）/「保存」（编辑）。范围 = 相册 + 时间档（#1263）。

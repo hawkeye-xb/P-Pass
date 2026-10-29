@@ -52,7 +52,6 @@ final class FakeMediaLibrary: MediaLibrary {
         }
     }
 
-    func accessNotDetermined() -> Bool { false }
     func requestAccess() async -> MediaAccess { access() }
     func albums() async throws -> [AlbumBucket] { all }
     func savedScope() throws -> Set<String>? { scope }

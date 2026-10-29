@@ -31,8 +31,6 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
         }
     }
 
-    func accessNotDetermined() -> Bool { auth.currentLevel() == .notDetermined }
-
     func requestAccess() async -> MediaAccess { Self.map(await auth.requestFullAccess()) }
 
     func albums() async throws -> [AlbumBucket] {
@@ -107,8 +105,9 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
 final class PhotoMediaSource: MediaSource, @unchecked Sendable {
     private let selected: @Sendable () -> Set<String>
     private let since: @Sendable () -> BackupSince
-    /// 系统问过照片权限没有（#1259）。没问过时不碰 PhotoKit：App 第一次用 PhotoKit 取资源 / 读变更令牌，系统会自动弹授权框，
-    /// 配对成功后引擎那一轮会把它弹在说明屏上面。没问过 = 一张照片都读不到，范围内本来就是空的。
+    /// 系统问过照片权限没有（#1259）。没问过时不碰 PhotoKit：App 第一次用 PhotoKit 取资源 / 读变更令牌，系统会自动弹授权框；
+    /// 配对成功后引擎那一轮会在配对页上、在用户没走到选范围页之前就把它弹出来。系统框只该由选范围页读相册列表时弹（`LiveMediaLibrary.albums`）。
+    /// 没问过 = 一张照片都读不到，范围内本来就是空的。
     private let accessDecided: @Sendable () -> Bool
     private let library = PhotoKitLibrary()
     private let contents = OriginalContentReader()

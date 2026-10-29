@@ -111,7 +111,6 @@ import com.hawkeyexb.ppass.backup.flow.TriggerReason
 import com.hawkeyexb.ppass.backup.flow.AndroidMediaImporter
 import com.hawkeyexb.ppass.backup.flow.isOnUnmetered
 import com.hawkeyexb.ppass.backup.flow.clearFlowRuntime
-import com.hawkeyexb.ppass.ui.PhotoAccessIntroScreen
 import com.hawkeyexb.ppass.ui.BackupUiState
 import com.hawkeyexb.ppass.ui.HomeScreen
 import com.hawkeyexb.ppass.ui.NoticeHost
@@ -159,8 +158,6 @@ internal sealed class Screen {
     // firstTime 记这次是不是 onboarding 首次选范围——#1263 起没有完成页：首次在这页点「开始备份」
     // 就落盘「连过这台」、唤醒引擎、直接进首页；按钮叫「开始备份」，设置里重选叫「保存」。
     data class Buckets(val pairing: Pairing, val current: Set<Long>, val firstTime: Boolean) : Screen()
-    // #1259：系统照片权限框之前的一屏说明。只在要弹系统框时出现，「继续」才弹。
-    data class PhotoIntro(val pairing: Pairing, val firstTime: Boolean) : Screen()
 }
 
 /**
@@ -187,15 +184,41 @@ internal fun screenAfterPairingCleared(screen: Screen, clearedPairingId: String)
     val shown = when (screen) {
         is Screen.Home -> screen.pairing.pairingId
         is Screen.Buckets -> screen.pairing.pairingId
-        is Screen.PhotoIntro -> screen.pairing.pairingId
         else -> return screen
     }
     return if (shown == clearedPairingId) Screen.Welcome else screen
 }
 
-/** #1263：onboarding 里独占屏幕的页面（说明屏、首次选范围）——更新对话框不压在上面。 */
+/** #1263：onboarding 里独占屏幕的页面（首次选范围）——更新对话框不压在上面。 */
 internal fun isOnboardingScreen(screen: Screen): Boolean =
-    screen is Screen.PhotoIntro || (screen is Screen.Buckets && screen.firstTime)
+    screen is Screen.Buckets && screen.firstTime
+
+/** MOB-03：进选相册页时权限链的第一步。 */
+internal enum class BucketPickerEntry { RequestPermission, Home, Buckets }
+
+/**
+ * #1259（10-29 改决定）：缺照片权限就直接弹系统框，前面不加说明屏——Android 的系统框不能自定义，
+ * 只给了部分 / 全拒由首页的权限卡和通知兜底（[mediaPermissionLanding]）。
+ */
+internal fun bucketPickerEntry(permissionsMissing: Boolean, partialAccess: Boolean): BucketPickerEntry = when {
+    permissionsMissing -> BucketPickerEntry.RequestPermission
+    partialAccess -> BucketPickerEntry.Home
+    else -> BucketPickerEntry.Buckets
+}
+
+/** MOB-03：系统照片权限框关掉之后去哪。 */
+internal enum class MediaPermissionLanding { Buckets, Home, HomeWithDeniedDialog }
+
+/**
+ * 完整授权 → 选范围页；只给了部分 → 首页（`partial_access_*` 引导卡，MOB-02 §二）；
+ * 全拒 → 首页（`no_media_access_*` 卡）并弹人话对话框。配对成功后直接弹系统框时界面还停在配对页，
+ * 拒绝也必须离开那里，不能把用户留在配对页上。
+ */
+internal fun mediaPermissionLanding(allGranted: Boolean, access: MediaAccess): MediaPermissionLanding = when {
+    allGranted && access == MediaAccess.FULL -> MediaPermissionLanding.Buckets
+    access == MediaAccess.PARTIAL -> MediaPermissionLanding.Home
+    else -> MediaPermissionLanding.HomeWithDeniedDialog
+}
 
 /**
  * #1263：「从今天起」那一档的说法。没存过、或存的就是今天 0 点 →「从今天起」；存的是以前某天 →「从 10月29日 起」——
@@ -214,7 +237,6 @@ internal fun systemBackTarget(screen: Screen): Screen? = when (screen) {
     Screen.Scan, Screen.ManualPair -> Screen.Welcome
     is Screen.Waiting, is Screen.Trouble -> Screen.Scan
     is Screen.Buckets -> Screen.Home(screen.pairing)
-    is Screen.PhotoIntro -> Screen.Home(screen.pairing)
 }
 
 class MainActivity : ComponentActivity() {
@@ -377,14 +399,17 @@ fun PPassApp() {
                 ContextCompat.checkSelfPermission(context, it) !=
                     PackageManager.PERMISSION_GRANTED
             }
-            when {
-                stillNeeded.isEmpty() && mediaAccess == MediaAccess.FULL -> screen = Screen.Buckets(
+            when (mediaPermissionLanding(stillNeeded.isEmpty(), mediaAccess)) {
+                MediaPermissionLanding.Buckets -> screen = Screen.Buckets(
                     pairing,
                     BackupScopeStore(context).selectedBucketIds() ?: emptySet(),
                     pendingBucketsFirstTime,
                 )
-                mediaAccess == MediaAccess.PARTIAL -> screen = Screen.Home(pairing)
-                else -> showMediaPermissionDialog = true
+                MediaPermissionLanding.Home -> screen = Screen.Home(pairing)
+                MediaPermissionLanding.HomeWithDeniedDialog -> {
+                    screen = Screen.Home(pairing)
+                    showMediaPermissionDialog = true
+                }
             }
         }
     }
@@ -414,7 +439,7 @@ fun PPassApp() {
             )
         }
     }
-    // onboarding 里的说明屏 / 系统照片权限框 / 首次选范围独占屏幕；更新可以等用户完成
+    // onboarding 里的首次选范围独占屏幕；更新可以等用户完成
     // onboarding 后再说，绝不压在系统权限框上。「后台下载」收起的对话框
     // （dialogSuppressed）不渲染，设置行点击可重新打开。
     if (!isOnboardingScreen(screen) && !updateDialogSuppressed) {
@@ -580,9 +605,9 @@ fun PPassApp() {
     }
 
     // MOB-03: 进相册选择页的完整权限链（Home「选择备份的相册」与配对
-    // 成功→直接选相册共用）——未授权 → 先过 #1259 的说明屏、点「继续」
-    // 才弹系统权限请求（完整授权后进列表）；部分授权 → Home 引导卡（MOB-02 §二，
-    // 不显示假 0/0）；拒绝 → 人话对话框。备份主流程的入口，任何分支都
+    // 成功→直接选相册共用）——未授权 → 直接弹系统权限请求（#1259：不加说明屏；
+    // 完整授权后进列表）；部分授权 → Home 引导卡（MOB-02 §二，不显示假 0/0）；
+    // 拒绝 → Home + 人话对话框。备份主流程的入口，任何分支都
     // 不许白屏。
     /**
      * 这台电脑以前连过吗——**在这台手机上走完过 onboarding，且这台桌面的
@@ -607,11 +632,14 @@ fun PPassApp() {
             ContextCompat.checkSelfPermission(context, it) !=
                 PackageManager.PERMISSION_GRANTED
         }
-        when {
-            // #1259：先过一屏说明，用户点「继续」才弹系统框（见 Screen.PhotoIntro）。
-            needed.isNotEmpty() -> screen = Screen.PhotoIntro(pairing, firstTime)
-            hasPartialMediaAccess(context) -> screen = Screen.Home(pairing)
-            else -> screen = Screen.Buckets(
+        when (bucketPickerEntry(needed.isNotEmpty(), hasPartialMediaAccess(context))) {
+            BucketPickerEntry.RequestPermission -> {
+                pendingBucketsPairing = pairing
+                pendingBucketsFirstTime = firstTime
+                bucketMediaPermission.launch(withMediaLocation(needed))
+            }
+            BucketPickerEntry.Home -> screen = Screen.Home(pairing)
+            BucketPickerEntry.Buckets -> screen = Screen.Buckets(
                 pairing,
                 BackupScopeStore(context).selectedBucketIds() ?: emptySet(),
                 firstTime,
@@ -776,23 +804,6 @@ fun PPassApp() {
                 }
             }
         }
-
-        is Screen.PhotoIntro -> PhotoAccessIntroScreen(
-            computerName = s.pairing.storageDeviceName,
-            onContinue = {
-                val needed = requiredMediaPermissions().filter {
-                    ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
-                }
-                if (needed.isEmpty()) {
-                    // 停在这一屏期间去系统设置给了权限：不用再弹，直接按原路进选相册。
-                    enterBucketPicker(s.pairing, s.firstTime)
-                } else {
-                    pendingBucketsPairing = s.pairing
-                    pendingBucketsFirstTime = s.firstTime
-                    bucketMediaPermission.launch(withMediaLocation(needed))
-                }
-            },
-        )
 
         is Screen.Trouble -> PairStatusScreen(
             title = androidx.compose.ui.res.stringResource(s.titleRes),

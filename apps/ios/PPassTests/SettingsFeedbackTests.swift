@@ -54,11 +54,12 @@ final class SettingsFeedbackTests: XCTestCase {
         var disk: Set<String>? = ["a"]
         var failSave = false
         var failRead = false
-        var notDetermined = false
+        /// nil = 系统还没问过；问过之后是用户在系统框里的选择。
+        var granted: MediaAccess? = .full
+        var answer: MediaAccess = .full
         var requested = 0
-        func access() -> MediaAccess { notDetermined ? .none : .full }
-        func accessNotDetermined() -> Bool { notDetermined }
-        func requestAccess() async -> MediaAccess { requested += 1; notDetermined = false; return .full }
+        func access() -> MediaAccess { granted ?? .none }
+        func requestAccess() async -> MediaAccess { requested += 1; granted = answer; return answer }
         func albums() async throws -> [AlbumBucket] { [] }
         func cover(_ album: AlbumBucket, side: CGFloat) async -> UIImage? { nil }
         func savedScope() throws -> Set<String>? { if failRead { throw Boom() }; return disk }
@@ -141,47 +142,38 @@ final class SettingsFeedbackTests: XCTestCase {
         XCTAssertEqual(app.notice?.message, L.s("setting_save_failed"))
     }
 
-    // MARK: #1259 照片权限前的说明屏
+    // MARK: #1259 照片权限：不加说明屏（10-29 改决定）
 
-    /// 首次配对、系统还没问过照片权限 → 先进说明屏，不直接弹系统框。反证：`paired` 里不看 accessNotDetermined，本条红。
-    func test_first_pairing_without_photo_decision_shows_the_intro_first() {
+    /// 首次配对、系统还没问过照片权限 → 直接进选范围页，系统框由选范围页读相册时弹（说明写在 NSPhotoLibraryUsageDescription）。
+    /// 配对这一步自己不弹框，也不经过中间屏。
+    func test_first_pairing_goes_straight_to_the_scope_page() {
         let (app, _, media) = make()
-        media.notDetermined = true
-        app.paired(firstTime: true, settingSaveFailed: false)
-        XCTAssertEqual(app.phase, .photoIntro)
-        XCTAssertEqual(media.requested, 0, "说明屏出现之前不弹系统框")
-    }
-
-    /// 已授权（含重新配对的老用户）不看说明屏；连回以前连过的电脑直接进首页。
-    func test_already_decided_or_known_desktop_skips_the_intro() {
-        let (app, _, _) = make()
+        media.granted = nil
         app.paired(firstTime: true, settingSaveFailed: false)
         XCTAssertEqual(app.phase, .chooseAlbums)
+        XCTAssertEqual(media.requested, 0)
+    }
 
+    /// 连回以前连过的电脑直接进首页，不管照片权限问没问过。
+    func test_known_desktop_goes_home() {
         let (known, _, media) = make()
-        media.notDetermined = true
+        media.granted = nil
         known.paired(firstTime: false, settingSaveFailed: false)
         XCTAssertEqual(known.phase, .main)
     }
 
-    /// 点「继续」：弹一次系统框，然后进选相册。
-    func test_intro_continue_requests_access_then_chooses_albums() async {
-        let (app, _, media) = make()
-        media.notDetermined = true
-        app.paired(firstTime: true, settingSaveFailed: false)
-        app.photoIntroContinue()
-        await settle()
-        XCTAssertEqual(media.requested, 1)
-        XCTAssertEqual(app.phase, .chooseAlbums)
-    }
-
-    /// 说明屏四条：电脑名填进第一条；中英文都有（缺 key 时 L 会退回 key 本身）。
-    func test_intro_lines_name_the_computer() {
-        let lines = PhotoIntroScreen.lines(desktopName: "Home-Mac")
-        XCTAssertEqual(lines.count, 4)
-        XCTAssertTrue(lines[0].contains("Home-Mac"))
-        for key in ["photo_intro_title", "photo_intro_full", "photo_intro_choose", "photo_intro_stop", "photo_intro_continue"] {
-            XCTAssertNotEqual(L.s(key), key, "缺文案 \(key)")
+    /// 系统框里只给了部分 / 拒绝：照常走完选范围进首页，首页按三档权限出兜底卡（投影见 HomeProjectionTests 的 accessBlocked）。
+    func test_partial_or_denied_access_lands_home_with_that_tier() async {
+        for answer in [MediaAccess.partial, .none] {
+            let (app, _, media) = make()
+            media.granted = nil
+            media.answer = answer
+            app.paired(firstTime: true, settingSaveFailed: false)
+            _ = await media.requestAccess() // 选范围页读相册时弹的那一次
+            app.albumsChosen([], known: [], wantsAll: false, firstTime: true)
+            await settle()
+            XCTAssertEqual(app.phase, .main, "\(answer)")
+            XCTAssertEqual(app.access, answer, "首页要拿到系统框之后的权限档")
         }
     }
 

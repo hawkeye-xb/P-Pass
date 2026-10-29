@@ -70,8 +70,6 @@ struct AlbumBucket: Identifiable, Equatable {
 /// 手机相册：授权、相册列表、备份范围。
 protocol MediaLibrary: AnyObject {
     func access() -> MediaAccess
-    /// 系统还没问过照片权限（#1259：问之前先显示一屏说明）。
-    func accessNotDetermined() -> Bool
     func requestAccess() async -> MediaAccess
     func albums() async throws -> [AlbumBucket]
     func cover(_ album: AlbumBucket, side: CGFloat) async -> UIImage?
