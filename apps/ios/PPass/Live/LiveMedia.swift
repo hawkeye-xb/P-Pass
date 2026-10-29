@@ -31,6 +31,8 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
         }
     }
 
+    func accessNotDetermined() -> Bool { auth.currentLevel() == .notDetermined }
+
     func requestAccess() async -> MediaAccess { Self.map(await auth.requestFullAccess()) }
 
     func albums() async throws -> [AlbumBucket] {

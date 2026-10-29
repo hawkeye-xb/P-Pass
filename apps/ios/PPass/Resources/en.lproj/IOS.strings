@@ -76,3 +76,15 @@
 /* 读屏（VoiceOver）：网格缩略图的标签。Android 用的是哈希前缀，读出来没有意义，iOS 单独给一句人话。 */
 "a11y_thumb_video" = "Video";
 "a11y_thumb_photo" = "Photo";
+
+/* ── #1259 / #1263 过渡段 ──────────────────────────────────────────────
+   下面的 key 是 Android 同名文案的临时副本：本分支不改 apps/android，Localizable.strings 又只能由 gen-strings.py 从 Android strings.xml 生成。
+   Android 那边落地后跑 just ios-strings，再把本段里标「过渡」的条目删掉（不删会永远盖住 Android 的文案）。标「iOS 独有」的留下。 */
+
+/* 过渡（#1259）：系统照片权限框之前的说明屏，措辞照卡里定稿。 */
+"photo_intro_title" = "Your photos go to your home computer only";
+"photo_intro_where" = "Photos are stored on “%1$@”. Nothing is stored in any cloud, and there is no account.";
+"photo_intro_full" = "Next, your phone asks for photo access. Choose full access so new photos can back up on their own.";
+"photo_intro_choose" = "Granting access doesn’t send everything right away. In the next step you choose which albums, and whether to start from today or include everything.";
+"photo_intro_pause" = "You can pause or change what’s backed up at any time. Photos already stored are ordinary files on the computer.";
+"photo_intro_continue" = "Continue";

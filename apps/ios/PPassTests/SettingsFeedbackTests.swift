@@ -51,8 +51,11 @@ final class SettingsFeedbackTests: XCTestCase {
         var disk: Set<String>? = ["a"]
         var failSave = false
         var failRead = false
-        func access() -> MediaAccess { .full }
-        func requestAccess() async -> MediaAccess { .full }
+        var notDetermined = false
+        var requested = 0
+        func access() -> MediaAccess { notDetermined ? .none : .full }
+        func accessNotDetermined() -> Bool { notDetermined }
+        func requestAccess() async -> MediaAccess { requested += 1; notDetermined = false; return .full }
         func albums() async throws -> [AlbumBucket] { [] }
         func cover(_ album: AlbumBucket, side: CGFloat) async -> UIImage? { nil }
         func savedScope() throws -> Set<String>? { if failRead { throw Boom() }; return disk }
@@ -120,6 +123,50 @@ final class SettingsFeedbackTests: XCTestCase {
         await settle()
         XCTAssertEqual(app.phase, .main)
         XCTAssertEqual(app.notice?.message, L.s("setting_save_failed"))
+    }
+
+    // MARK: #1259 照片权限前的说明屏
+
+    /// 首次配对、系统还没问过照片权限 → 先进说明屏，不直接弹系统框。反证：`paired` 里不看 accessNotDetermined，本条红。
+    func test_first_pairing_without_photo_decision_shows_the_intro_first() {
+        let (app, _, media) = make()
+        media.notDetermined = true
+        app.paired(firstTime: true, settingSaveFailed: false)
+        XCTAssertEqual(app.phase, .photoIntro)
+        XCTAssertEqual(media.requested, 0, "说明屏出现之前不弹系统框")
+    }
+
+    /// 已授权（含重新配对的老用户）不看说明屏；连回以前连过的电脑直接进首页。
+    func test_already_decided_or_known_desktop_skips_the_intro() {
+        let (app, _, _) = make()
+        app.paired(firstTime: true, settingSaveFailed: false)
+        XCTAssertEqual(app.phase, .chooseAlbums)
+
+        let (known, _, media) = make()
+        media.notDetermined = true
+        known.paired(firstTime: false, settingSaveFailed: false)
+        XCTAssertEqual(known.phase, .main)
+    }
+
+    /// 点「继续」：弹一次系统框，然后进选相册。
+    func test_intro_continue_requests_access_then_chooses_albums() async {
+        let (app, _, media) = make()
+        media.notDetermined = true
+        app.paired(firstTime: true, settingSaveFailed: false)
+        app.photoIntroContinue()
+        await settle()
+        XCTAssertEqual(media.requested, 1)
+        XCTAssertEqual(app.phase, .chooseAlbums)
+    }
+
+    /// 说明屏四条：电脑名填进第一条；中英文都有（缺 key 时 L 会退回 key 本身）。
+    func test_intro_lines_name_the_computer() {
+        let lines = PhotoIntroScreen.lines(desktopName: "Home-Mac")
+        XCTAssertEqual(lines.count, 4)
+        XCTAssertTrue(lines[0].contains("Home-Mac"))
+        for key in ["photo_intro_title", "photo_intro_full", "photo_intro_choose", "photo_intro_pause", "photo_intro_continue"] {
+            XCTAssertNotEqual(L.s(key), key, "缺文案 \(key)")
+        }
     }
 
     // MARK: #1039 换新电脑清旧的后台备份意图写失败（对位 Android）
