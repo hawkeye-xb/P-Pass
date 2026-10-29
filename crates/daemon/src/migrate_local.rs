@@ -225,9 +225,16 @@ async fn copy_and_verify(
 }
 
 fn copy_synced(from: &Path, to: &Path) -> std::io::Result<()> {
-    std::fs::copy(from, to)?;
-    // Windows 的 FlushFileBuffers 要写权限，只读句柄会被拒（os error 5）。
-    std::fs::OpenOptions::new().write(true).open(to)?.sync_all()
+    // 在自己打开的可写句柄上写、在同一个句柄上 sync：Windows 的 FlushFileBuffers
+    // 要写权限（只读句柄报 os error 5），而 `fs::copy` 会把只读属性带到目标上。
+    let mut src = std::fs::File::open(from)?;
+    let mut dst = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(to)?;
+    std::io::copy(&mut src, &mut dst)?;
+    dst.sync_all()
 }
 
 fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
@@ -299,6 +306,19 @@ fn cleanup(root: &Path, fail_at: &impl Fn(Step) -> std::io::Result<()>) {
 mod tests {
     use super::*;
     use crate::library_location::LIBRARY_MARKER;
+
+    #[test]
+    fn copy_synced_handles_a_read_only_source() {
+        let d = tempfile::tempdir().unwrap();
+        let from = d.path().join("blobs.db");
+        std::fs::write(&from, b"db").unwrap();
+        let mut perm = std::fs::metadata(&from).unwrap().permissions();
+        perm.set_readonly(true);
+        std::fs::set_permissions(&from, perm).unwrap();
+        let to = d.path().join("copy.db");
+        copy_synced(&from, &to).unwrap();
+        assert_eq!(std::fs::read(&to).unwrap(), b"db");
+    }
 
     /// 老布局的库：库盘 `.ppf/` 里有索引（带一张照片的行）、两个 blobs.db、缩略图。
     async fn old_library() -> tempfile::TempDir {

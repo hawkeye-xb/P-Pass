@@ -517,11 +517,7 @@ fn publish_no_clobber(
                     .unwrap_or(0)
             ));
             *temp = Some(t.clone());
-            fs::copy(src, &t)?;
-            // 内容在 rename 之前就要落到介质上，否则断电后可能得到
-            // 「名字在、内容是空」。
-            // Windows 的 FlushFileBuffers 要写权限，只读句柄会被拒（os error 5）。
-            fs::OpenOptions::new().write(true).open(&t)?.sync_all()?;
+            copy_durable(src, &t)?;
             t
         }
     };
@@ -545,6 +541,20 @@ fn publish_no_clobber(
     fs::remove_file(&tmp)?;
     *temp = None;
     fs::remove_file(src)
+}
+
+/// 复制并把内容落到介质上：rename 之前不落盘，断电后可能得到「名字在、内容是空」。
+/// 在自己打开的可写句柄上写、在同一个句柄上 sync：Windows 的 FlushFileBuffers
+/// 要写权限（只读句柄报 os error 5），而 `fs::copy` 会把只读属性带到目标上。
+fn copy_durable(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let mut from = fs::File::open(src)?;
+    let mut to = fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(dst)?;
+    std::io::copy(&mut from, &mut to)?;
+    to.sync_all()
 }
 
 fn discard_temp(temp: &mut Option<PathBuf>) {
@@ -672,6 +682,18 @@ mod publish_tests {
         assert_eq!(listing(&dir), ["b.jpg"]);
         assert_eq!(fs::read(dir.join("b.jpg")).unwrap(), b"payload");
         assert!(temp.is_none() && !tmp.exists() && !src.exists());
+    }
+
+    #[test]
+    fn copy_durable_syncs_a_copy_of_a_read_only_source() {
+        // 跨卷 / exFAT 时走的拷贝回退；源设成只读，覆盖 Windows 上句柄权限的坑。
+        let (_t, src, dir) = dirs();
+        let mut perm = fs::metadata(&src).unwrap().permissions();
+        perm.set_readonly(true);
+        fs::set_permissions(&src, perm).unwrap();
+        let dst = dir.join("copy.part");
+        copy_durable(&src, &dst).unwrap();
+        assert_eq!(fs::read(&dst).unwrap(), b"payload");
     }
 
     #[test]
