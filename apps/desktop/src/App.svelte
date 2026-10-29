@@ -2219,12 +2219,10 @@
       {:else}
         <p class="hint modal-hint">{t("ui.pair_generating")}</p>
       {/if}
-      <!-- #1118：手机扫码后先显示这台电脑的标识，用户在这里核对（二维码生成前也显示）。 -->
+      <!-- #1118：这台电脑的名字（二维码生成前也显示）。#1257：电脑标识不在这里——核对发生在输验证码那一步，
+           只在确认弹窗里给。 -->
       {#if status?.desktop_name}
         <p class="pair-identity" data-testid="desktop-name">{t("ui.pair_desktop_name", { name: status.desktop_name })}</p>
-      {/if}
-      {#if status?.desktop_fingerprint}
-        <p class="pair-identity" data-testid="desktop-fingerprint">{t("ui.pair_desktop_identity", { fingerprint: status.desktop_fingerprint })}</p>
       {/if}
     </Dialog>
 
@@ -2236,6 +2234,10 @@
            删除），所以改过名的设备照样认得出来，且用桌面上那个名字称呼它。措辞在 lib/pending.js。 -->
       {@const many = pairRequests.length > 1}
       <h3 class="pending-title">{pendingDialogText(pairRequests.map((r) => r.item)).title}</h3>
+      <!-- #1257：核对就在这一步——手机验证码页上写着「电脑标识」，这里给出同一串（本机的，每个弹窗一次）。 -->
+      {#if status?.desktop_fingerprint}
+        <p class="pair-identity" data-testid="desktop-fingerprint">{t("ui.pair_desktop_identity", { fingerprint: status.desktop_fingerprint })}</p>
+      {/if}
       <div class="pending-list">
         {#each pairRequests as req (req.id)}
           {@const item = req.item}

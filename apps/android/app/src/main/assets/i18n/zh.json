@@ -162,7 +162,7 @@
   "ui.pending_role_member": "家庭成员 · 可以备份和浏览照片",
   "ui.pending_role_viewer": "只能浏览 · 不能备份照片",
   "ui.pair_desktop_name": "本机名称 {name}",
-  "ui.pair_desktop_identity": "本机标识 {fingerprint}",
+  "ui.pair_desktop_identity": "电脑标识 {fingerprint}",
   "ui.pending_known_title": "{name} 请求重新连接",
   "ui.pending_one_title": "{name} 请求加入",
   "ui.pending_sub_paired_at": "首次配对 {time}",
