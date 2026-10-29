@@ -520,7 +520,8 @@ fn publish_no_clobber(
             fs::copy(src, &t)?;
             // 内容在 rename 之前就要落到介质上，否则断电后可能得到
             // 「名字在、内容是空」。
-            fs::File::open(&t)?.sync_all()?;
+            // Windows 的 FlushFileBuffers 要写权限，只读句柄会被拒（os error 5）。
+            fs::OpenOptions::new().write(true).open(&t)?.sync_all()?;
             t
         }
     };
