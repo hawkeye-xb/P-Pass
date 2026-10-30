@@ -32,41 +32,14 @@ targets = [
 [advisories]
 yanked = "deny"
 ignore = [
-  # `unic-*` 全家（RUSTSEC-2025-0075/0080/0081/0098/0100）——**unmaintained，
-  # 不是漏洞**（informational）。五条同一个根因，链路也是同一条：
-  #   unic-ucd-* / unic-char-* / unic-common
-  #     └── urlpattern 0.3.0
-  #         └── tauri-utils 2.9.3
-  #             └── tauri 2.11.5（以及 tauri-build / tauri-runtime-wry 等）
-  # 公告原文写着 `Solution: No safe upgrade is available!` —— rust-unic 整个项目
-  # 已停止维护，而 urlpattern 仍在用它，我们对这条链路没有可选项：既不能换
-  # tauri，也不能让 tauri 换 urlpattern。
-  # 🔁 重估触发条件：升级 `tauri` 时（届时看 tauri-utils 是否已换掉
-  #    urlpattern，或 urlpattern 是否已换掉 unic-*），把这五条逐条重试一遍。
-  "RUSTSEC-2025-0075", # unic-char-range
-  "RUSTSEC-2025-0080", # unic-common
-  "RUSTSEC-2025-0081", # unic-char-property
-  "RUSTSEC-2025-0098", # unic-ucd-version
-  "RUSTSEC-2025-0100", # unic-ucd-ident
+  # #1267（tauri 2.12 / tauri-plugin-updater 2.14）删掉了这里原有的八条豁免，
+  # 升级后 cargo-deny 报它们全部未命中：
+  #   - `unic-*` 五条（RUSTSEC-2025-0075/0080/0081/0098/0100，unmaintained）：
+  #     tauri-utils 2.10 换成 urlpattern 0.6，不再依赖 unic-*。
+  #   - zip 4.6.1 三条（RUSTSEC-2026-0367/0368/0369，#1022）：updater 2.14 改用 zip 9。
   # （#1022：原先这里豁免过 `proc-macro-error` RUSTSEC-2024-0370，链路是
   # gtk3-macros ← gtk 0.18，Linux 专属。[graph] targets 收窄到发布平台后它
   # 不再出现，删掉。桌面端开始发 Linux 时它会回来，届时再议。）
-  # #1022：`zip 4.6.1` 的三个解压漏洞（RUSTSEC-2026-0367/0368/0369，修复要
-  # zip >= 9）。我们自己的直接依赖已是 9.0.3（SEC-15 #1003）；剩下这份是：
-  #   zip 4.6.1
-  #     └── tauri-plugin-updater 2.x（仅 Windows：解压更新包）
-  # 插件最新版 2.14.0 / 3.0.0-alpha.3 仍要求 `zip ^4`，我们无从升级。
-  # 不受影响的理由（三条都是「解压攻击者构造的压缩包」）：
-  #   - updater 解压前先用 tauri.conf.json 里的 minisign `pubkey` 验签，
-  #     压缩包只可能是我们自己签发的；伪造它要先拿到签名私钥。
-  #   - 0367 是 Unix SUID/SGID 位，这条链只编进 Windows 包，不适用。
-  # （想加 `expiry` 到期复查：cargo-deny 0.20.2 还不支持，主干已合未发版。）
-  # 🔁 删除条件：升级 tauri-plugin-updater 后它不再依赖 zip 4（`cargo tree
-  #    -i zip@4.6.1` 报找不到），删掉这三条——cargo-deny 届时也会报未命中。
-  # （原先这里那条 `zip@4.6.1` yank 豁免已删：上游已撤销 yank，它成了未命中项。）
-  { id = "RUSTSEC-2026-0367", reason = "updater 包先验签再解压，且仅 Windows；见 #1022" },
-  { id = "RUSTSEC-2026-0368", reason = "updater 包先验签再解压，且仅 Windows；见 #1022" },
-  { id = "RUSTSEC-2026-0369", reason = "updater 包先验签再解压，且仅 Windows；见 #1022" },
 ]
 
 [licenses]
