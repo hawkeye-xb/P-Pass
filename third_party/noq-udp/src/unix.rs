@@ -613,23 +613,16 @@ pub(crate) fn recv_single(
     let mut name = MaybeUninit::<libc::sockaddr_storage>::uninit();
     let mut ctrl = cmsg::Aligned(MaybeUninit::<[u8; cmsg::LEN]>::uninit());
     let mut hdr = unsafe { mem::zeroed::<libc::msghdr>() };
-    prepare_recv(&mut bufs[0], &mut name, &mut ctrl, &mut hdr);
+    // P-Pass patch (port of quinn-rs/quinn 462865a6c3): handle a failed
+    // recvmsg before looking at MSG_TRUNC, and re-prepare the header before
+    // every call so a stale MSG_TRUNC cannot keep the loop spinning.
     let n = loop {
-        let n = unsafe { libc::recvmsg(io.as_raw_fd(), &mut hdr, 0) };
-
-        if hdr.msg_flags & libc::MSG_TRUNC != 0 {
-            continue;
-        }
-
-        if n >= 0 {
+        let n = retry_if_interrupted(|| {
+            prepare_recv(&mut bufs[0], &mut name, &mut ctrl, &mut hdr);
+            unsafe { libc::recvmsg(io.as_raw_fd(), &mut hdr, 0) }
+        })?;
+        if hdr.msg_flags & libc::MSG_TRUNC == 0 {
             break n;
-        }
-
-        let e = io::Error::last_os_error();
-        match e.kind() {
-            // Retry receiving
-            io::ErrorKind::Interrupted => continue,
-            _ => return Err(e),
         }
     };
     meta[0] = decode_recv(&name, &hdr, n as usize)?;

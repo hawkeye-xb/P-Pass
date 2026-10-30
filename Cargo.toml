@@ -33,3 +33,11 @@ anyhow = "1"
 tracing = "0.1"
 tokio = { version = "1", features = ["sync", "rt"] }
 futures-core = "0.3"
+
+# 临时补丁：noq-udp 1.4.0 的 `recv_single`（macOS / iOS 收包路径）收到截断的数据报后
+# 不能正确返回。third_party/noq-udp 是 1.4.0 原版加一处修改（照搬 quinn-rs/quinn
+# 462865a6c3），回归测试是 crates/platform/tests/udp_recv_truncated.rs。
+# 删除条件：n0-computer/noq 发布包含同等修复的 noq-udp 后，删掉这段 [patch] 与
+# third_party/noq-udp，把 Cargo.lock 升到该版本，并保留上面那个回归测试。
+[patch.crates-io]
+noq-udp = { path = "third_party/noq-udp" }
