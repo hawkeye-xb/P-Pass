@@ -1,6 +1,6 @@
 // #1272：「自动备份」规则开关（以后哪些照片自动送到电脑）。与 [AutoBackupPrefs]（「App 关着也传」= 后台唤醒）是两件事：
 // 规则关着时引擎不做自动备份这一支（只剩手选）；规则开着，后台唤醒才有意义。
-// 老用户升级：没有这份文件时按「已有备份范围」推出初值并落盘（有范围 = 自动备份已开）。
+// 默认关：没有这份文件（新装）就是关，不做任何从旧状态推导的升级迁移。
 package com.hawkeyexb.ppass.backup
 
 import java.io.File
@@ -10,7 +10,7 @@ import kotlinx.serialization.json.Json
 @Serializable
 private data class AutoBackupRuleData(val enabled: Boolean = false)
 
-class AutoBackupRulePrefs(private val dir: File, private val hasScope: () -> Boolean = { false }) {
+class AutoBackupRulePrefs(private val dir: File) {
     private val file = File(dir, FILE_NAME)
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -18,7 +18,7 @@ class AutoBackupRulePrefs(private val dir: File, private val hasScope: () -> Boo
         if (file.isFile) {
             runCatching { json.decodeFromString(AutoBackupRuleData.serializer(), file.readText()).enabled }.getOrDefault(false)
         } else {
-            hasScope().also { save(it) }
+            false
         }
     }
 

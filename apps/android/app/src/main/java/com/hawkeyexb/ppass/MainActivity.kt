@@ -668,9 +668,7 @@ fun PPassApp() {
 
     // #1272：「自动备份」规则开关。打开时才申请全部照片权限：全部允许 → 选范围页；有限访问 → 开关不开、把允许的
     // 照片按手选链路传一次；不允许 → 开关不开、开关下方一行小字。
-    val rulePrefs = remember {
-        com.hawkeyexb.ppass.backup.AutoBackupRulePrefs(context.filesDir, hasScope = { BackupScopeStore(context).selectedBucketIds() != null })
-    }
+    val rulePrefs = remember { com.hawkeyexb.ppass.backup.AutoBackupRulePrefs(context.filesDir) }
     var ruleOn by remember { mutableStateOf(runCatching { rulePrefs.enabled() }.getOrDefault(false)) }
     var pendingRulePairing by remember { mutableStateOf<Pairing?>(null) }
     val rulePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ ->

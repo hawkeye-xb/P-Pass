@@ -1,4 +1,4 @@
-// #1272：「自动备份」规则开关——老用户（已有备份范围）升级后视为已开，新用户为关；显式设置优先于推导。
+// #1272：「自动备份」规则开关——默认关，只认显式设置，不从旧状态推导（不做升级迁移）。
 package com.hawkeyexb.ppass.backup
 
 import java.nio.file.Files
@@ -9,22 +9,18 @@ import org.junit.Test
 class AutoBackupRulePrefsTest {
     private fun dir() = Files.createTempDirectory("rule").toFile()
 
-    // 反证：enabled() 不看 hasScope（恒 false）→ 老用户升级后被关掉自动备份，红。
+    // 反证：enabled() 在没有文件时返回 true（或去推导）→ 新装默认开，红。
     @Test
-    fun `an upgrading user with a scope is treated as on and a new user as off`() {
-        assertTrue(AutoBackupRulePrefs(dir(), hasScope = { true }).enabled())
-        assertFalse(AutoBackupRulePrefs(dir(), hasScope = { false }).enabled())
+    fun `it is off by default`() {
+        assertFalse(AutoBackupRulePrefs(dir()).enabled())
     }
 
-    // 推导只在没有文件时做一次并落盘；之后用户显式关掉，范围还在也不能被再推成开。
     @Test
-    fun `an explicit choice wins over the scope-derived default`() {
+    fun `an explicit choice is persisted`() {
         val d = dir()
-        val prefs = AutoBackupRulePrefs(d, hasScope = { true })
-        assertTrue(prefs.enabled())
-        prefs.set(false)
-        assertFalse(AutoBackupRulePrefs(d, hasScope = { true }).enabled())
-        prefs.set(true)
-        assertTrue(AutoBackupRulePrefs(d, hasScope = { false }).enabled())
+        AutoBackupRulePrefs(d).set(true)
+        assertTrue(AutoBackupRulePrefs(d).enabled())
+        AutoBackupRulePrefs(d).set(false)
+        assertFalse(AutoBackupRulePrefs(d).enabled())
     }
 }
