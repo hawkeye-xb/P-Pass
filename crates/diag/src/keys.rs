@@ -807,6 +807,7 @@ mod tests {
             UI_WIZARD_UNCONFIGURED_NOTICE,
             UI_LIBRARY_MISSING_TITLE,
             UI_LIBRARY_MISSING_BODY,
+            UI_LIBRARY_MISSING_PICKED,
             UI_LIBRARY_MISSING_NOTICE_TITLE,
             UI_LIBRARY_MISSING_NOTICE_BODY,
             UI_LIBRARY_MISSING_RECHECK,
@@ -840,7 +841,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 361);
+        assert_eq!(ALL.len(), 362);
     }
 
     #[test]
