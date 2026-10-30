@@ -68,6 +68,8 @@ windows-sys = { version = "0.61", features = [
   # SetEntriesInAclW + SetNamedSecurityInfoW 重写身份密钥的 DACL。
   "Win32_Security",
   "Win32_Security_Authorization",
+  # W-3：CryptProtectData / CryptUnprotectData（身份私钥与配对白名单落盘加密）。
+  "Win32_Security_Cryptography",
   # DAE-05: GetDiskFreeSpaceExW（卷容量水位）。
   "Win32_Storage_FileSystem",
   # DAE-11 (#804) 电源来源订阅的回调常量（DEVICE_NOTIFY_CALLBACK 等）。

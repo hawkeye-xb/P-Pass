@@ -633,7 +633,7 @@ impl PlatformAdapter for WindowsAdapter {
     fn identity_key_home(&self) -> crate::IdentityKeyHome {
         match Self::service_root() {
             Some(root) => crate::IdentityKeyHome::SecureStore(Box::new(
-                crate::ProgramDataStore::new(root.join("identity.key"), "身份私钥"),
+                crate::ProgramDataStore::sealed(root.join("identity.key"), "身份私钥"),
             )),
             None => crate::IdentityKeyHome::DataDirFile,
         }
@@ -643,7 +643,7 @@ impl PlatformAdapter for WindowsAdapter {
     /// 非服务模式是 `None`（库本身即正本，维持现状）。
     fn pairing_store(&self) -> Option<Box<dyn crate::SecretBlobStore>> {
         let root = Self::service_root()?;
-        Some(Box::new(crate::ProgramDataStore::new(
+        Some(Box::new(crate::ProgramDataStore::sealed(
             root.join("pairings.json"),
             "配对白名单",
         )))
