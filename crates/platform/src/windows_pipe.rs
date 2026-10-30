@@ -347,6 +347,122 @@ pub(crate) fn pipe_owner_sid(handle: RawHandle) -> io::Result<String> {
     out
 }
 
+/// 客户端打开管道：只允许服务端在 Identification 级识别本客户端。
+///
+/// 打开方式与 interprocess 自己的客户端一致（`GENERIC_READ | GENERIC_WRITE`、可共享读写、
+/// `FILE_FLAG_OVERLAPPED`），只多带 SQOS 标志；管道忙时等它空出来再试（与 interprocess 的
+/// 无上限等待相同）。系统错误原样返回——拒绝访问仍是 `PermissionDenied`，调用方据此说话。
+fn open_identification_only(name: &str) -> io::Result<std::os::windows::io::OwnedHandle> {
+    use std::os::windows::io::FromRawHandle as _;
+    use windows_sys::Win32::Foundation::{
+        ERROR_PIPE_BUSY, GENERIC_READ, GENERIC_WRITE, INVALID_HANDLE_VALUE,
+    };
+    use windows_sys::Win32::Storage::FileSystem::{
+        CreateFileW, FILE_FLAG_OVERLAPPED, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING,
+        SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
+    };
+    use windows_sys::Win32::System::Pipes::{WaitNamedPipeW, NMPWAIT_WAIT_FOREVER};
+
+    let path: Vec<u16> = format!(r"\\.\pipe\{name}")
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
+    loop {
+        // SAFETY: path 是 NUL 结尾的宽字符串；成功时返回的句柄归我们所有。
+        let h = unsafe {
+            CreateFileW(
+                path.as_ptr(),
+                GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
+                std::ptr::null_mut(),
+            )
+        };
+        if h != INVALID_HANDLE_VALUE {
+            // SAFETY: h 是 CreateFileW 刚返回的有效句柄，所有权交给 OwnedHandle。
+            return Ok(unsafe { std::os::windows::io::OwnedHandle::from_raw_handle(h) });
+        }
+        let err = io::Error::last_os_error();
+        if err.raw_os_error() != Some(ERROR_PIPE_BUSY as i32) {
+            return Err(err);
+        }
+        // SAFETY: path 同上。
+        if unsafe { WaitNamedPipeW(path.as_ptr(), NMPWAIT_WAIT_FOREVER) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+}
+
+/// 同步客户端连接（Identification 级）。
+pub(crate) fn connect_identification_sync(
+    name: &str,
+) -> io::Result<interprocess::local_socket::Stream> {
+    let handle = open_identification_only(name)?;
+    let pipe = interprocess::os::windows::named_pipe::local_socket::Stream::try_from(handle)
+        .map_err(io::Error::from)?;
+    Ok(interprocess::local_socket::Stream::from(pipe))
+}
+
+/// tokio 客户端连接（Identification 级）。打开句柄是阻塞调用（管道忙时要等），放阻塞线程池。
+pub(crate) async fn connect_identification_tokio(
+    name: &str,
+) -> io::Result<interprocess::local_socket::tokio::Stream> {
+    let name = name.to_string();
+    let handle = tokio::task::spawn_blocking(move || open_identification_only(&name))
+        .await
+        .map_err(io::Error::other)??;
+    let pipe = interprocess::os::windows::named_pipe::local_socket::tokio::Stream::try_from(handle)
+        .map_err(io::Error::from)?;
+    Ok(interprocess::local_socket::tokio::Stream::from(pipe))
+}
+
+/// 服务端：这条连接上客户端令牌的模拟级别（`SECURITY_IMPERSONATION_LEVEL`）。只读不改，
+/// 与 [`client_sid`] 同样先模拟、再立刻恢复。用于核对客户端确实以 Identification 级连接。
+#[cfg(test)]
+pub(crate) fn client_impersonation_level(handle: RawHandle) -> io::Result<i32> {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::Security::{
+        GetTokenInformation, RevertToSelf, TokenImpersonationLevel, TOKEN_QUERY,
+    };
+    use windows_sys::Win32::System::Pipes::ImpersonateNamedPipeClient;
+    use windows_sys::Win32::System::Threading::{GetCurrentThread, OpenThreadToken};
+
+    let h = handle as HANDLE;
+    // SAFETY: 同 client_sid。
+    if unsafe { ImpersonateNamedPipeClient(h) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let mut token: HANDLE = std::ptr::null_mut();
+    let opened = unsafe { OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, 1, &mut token) };
+    let open_err = io::Error::last_os_error();
+    if unsafe { RevertToSelf() } == 0 {
+        std::process::abort();
+    }
+    if opened == 0 {
+        return Err(open_err);
+    }
+    let mut level = 0i32;
+    let mut len = 0u32;
+    // SAFETY: token 有效；level 是 4 字节可写缓冲。
+    let ok = unsafe {
+        GetTokenInformation(
+            token,
+            TokenImpersonationLevel,
+            (&mut level as *mut i32).cast(),
+            std::mem::size_of::<i32>() as u32,
+            &mut len,
+        )
+    };
+    let err = io::Error::last_os_error();
+    unsafe { CloseHandle(token) };
+    if ok == 0 {
+        return Err(err);
+    }
+    Ok(level)
+}
+
 // ── 接到 local_peer 的抽象上 ──────────────────────────────────────────────────
 
 fn check_server_side(handle: RawHandle, allowed: &[PeerRole]) -> PeerCheck {
@@ -659,6 +775,62 @@ mod tests {
             .judge(&owner, session),
             PeerCheck::Verified(PeerRole::Daemon)
         );
+    }
+
+    /// 客户端以 Identification 级连接：服务端拿到的客户端令牌级别是 `SecurityIdentification`，
+    /// 仍能读出客户端 SID（认人不受影响）。反证：interprocess 默认连接（不带 SQOS）在同一
+    /// 测试里得到的是 `SecurityImpersonation`——去掉 SQOS 标志，第一条断言就红。
+    #[tokio::test]
+    async fn pipe_client_connects_at_identification_level() {
+        use windows_sys::Win32::Security::{SecurityIdentification, SecurityImpersonation};
+
+        async fn served_level(
+            name: &str,
+            listener: &interprocess::local_socket::tokio::Listener,
+            identification: bool,
+        ) -> (i32, String) {
+            let connect = async {
+                if identification {
+                    connect_identification_tokio(name).await
+                } else {
+                    interprocess::local_socket::tokio::Stream::connect(connect_name(name)).await
+                }
+            };
+            let (client, server) = tokio::join!(connect, listener.accept());
+            let (client, server) = (client.expect("connect"), server.expect("accept"));
+            {
+                use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+                (&client).write_all(b"x\n").await.expect("write");
+                let mut buf = [0u8; 2];
+                (&server).read_exact(&mut buf).await.expect("read");
+            }
+            #[allow(irrefutable_let_patterns)]
+            let interprocess::local_socket::tokio::Stream::NamedPipe(p) = &server;
+            let handle = p.inner().as_raw_handle();
+            (
+                client_impersonation_level(handle).expect("level"),
+                client_sid(handle).expect("sid"),
+            )
+        }
+
+        let name = unique("sqos");
+        let listener =
+            bind_with_sddl(&name, &PipePolicy::User { user: me() }.sddl()).expect("bind");
+        let (level, sid) = served_level(&name, &listener, true).await;
+        assert_eq!(
+            level, SecurityIdentification,
+            "壳的连接必须是 Identification 级"
+        );
+        assert_eq!(sid, me(), "Identification 级令牌仍要能认出客户端");
+        let (level, _) = served_level(&name, &listener, false).await;
+        assert_eq!(level, SecurityImpersonation, "反证：不带 SQOS 的默认连接");
+    }
+
+    /// 同步版本走同一个打开函数；连不存在的管道得到 NotFound（调用方据此说「服务没在跑」）。
+    #[test]
+    fn pipe_client_sync_connect_reports_missing_pipe_as_not_found() {
+        let err = connect_identification_sync(&unique("missing")).expect_err("没有这个管道");
+        assert_eq!(err.kind(), io::ErrorKind::NotFound, "{err:?}");
     }
 
     /// 主人记录：往返、同一主人重写幂等、换主人被拒、坏内容是 Err 不是「没有主人」。

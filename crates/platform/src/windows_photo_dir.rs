@@ -1,46 +1,56 @@
-//! D2 / brief §5.3：照片库目录授权给服务账户。
+//! D2 / brief §5.3：照片库目录设为私有，并授权给服务账户。
 //!
-//! 服务账户默认读写不了用户目录。用户在向导/设置里选好目录后，壳以**主人身份**给该目录
-//! 加一条授予服务 SID「修改」的 ACE（可继承），目录归主人所有时不需要提权；失败时（属主
-//! 不是主人、来自别的电脑的 NTFS 盘）把错误原样交给调用方去决定要不要弹 UAC。
+//! 照片库是主人的备份，同机其他账户不该能看、改、删。用户在向导 / 设置里选好目录（首次
+//! 设置与换位置走同一入口）后，壳以**主人身份**把该目录的 DACL 设成受保护（不继承上级）、
+//! 只含四个 SID：主人、服务账户（修改）、SYSTEM、Administrators——与系统给用户配置文件
+//! 目录的权限一致。目录归主人所有时不需要提权；失败（属主不是主人、来自别的电脑的 NTFS
+//! 盘）把错误原样交给调用方。
 //!
-//! exFAT / FAT32 没有 ACL：按 brief 跳过（[`GrantOutcome::SkippedNoAcl`]），不假装成功。
+//! 只在首次设置与换位置时设置：主人事后在文件夹属性里加的权限（例如共享给装成服务的媒体
+//! 服务器），P-Pass 不再覆盖。
+//!
+//! exFAT / FAT32 没有 ACL：跳过（[`GrantOutcome::SkippedNoAcl`]），不假装成功、不提示。
 //! 网络路径本期不支持，明确拒绝。
 
 use std::path::Path;
 
 use windows_sys::Win32::Foundation::{LocalFree, ERROR_ACCESS_DENIED, ERROR_SUCCESS};
-use windows_sys::Win32::Security::Authorization::{
-    GetNamedSecurityInfoW, SetEntriesInAclW, SetNamedSecurityInfoW, EXPLICIT_ACCESS_W,
-    NO_MULTIPLE_TRUSTEE, SET_ACCESS, SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
-};
+use windows_sys::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
 use windows_sys::Win32::Security::{
-    EqualSid, GetAce, ACL, DACL_SECURITY_INFORMATION, SUB_CONTAINERS_AND_OBJECTS_INHERIT,
+    GetAce, GetSecurityDescriptorControl, ACL, DACL_SECURITY_INFORMATION, SE_DACL_PROTECTED,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    GetVolumeInformationW, GetVolumePathNameW, DELETE, FILE_GENERIC_EXECUTE, FILE_GENERIC_READ,
-    FILE_GENERIC_WRITE,
+    GetVolumeInformationW, GetVolumePathNameW, DELETE, FILE_ALL_ACCESS, FILE_GENERIC_EXECUTE,
+    FILE_GENERIC_READ, FILE_GENERIC_WRITE,
 };
 
-use crate::windows_programdata::{free_sid, sid_from_string, sid_to_string, wide};
+use crate::windows_programdata::{set_private_dacl_with, sid_to_string, wide, ADMINISTRATORS_SID};
 use crate::{PlatformError, Result};
 
-/// 「修改」= 读 + 写 + 执行 + 删；与资源管理器里「修改」一档对齐。
+/// 「修改」= 读 + 写 + 执行 + 删；与资源管理器里「修改」一档对齐。服务账户拿这一档。
 const MODIFY_MASK: u32 = FILE_GENERIC_READ | FILE_GENERIC_WRITE | FILE_GENERIC_EXECUTE | DELETE;
 
-/// 授权结果。不是 `Result<()>`：exFAT 上「没有 ACL 可加」不是失败，是平台事实。
+/// LocalSystem。
+pub const SYSTEM_SID: &str = "S-1-5-18";
+
+const ALLOWED_ACE_TYPE: u8 = 0;
+
+/// 设置结果。不是 `Result<()>`：exFAT 上「没有 ACL 可设」不是失败，是平台事实。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GrantOutcome {
-    /// ACE 已经在了，或刚加上并且回读确认过。
+    /// 已设为私有并回读确认。
     Done,
     /// 卷没有 ACL（FAT/FAT32/exFAT），跳过。
     SkippedNoAcl { file_system: String },
 }
 
-/// 给 `dir` 加一条「服务 SID 可修改、可继承」的 ACE（幂等，保留原有 ACE）。
-///
-/// 失败时把系统错误原样带上：调用方据此区分「权限不够，值得弹一次 UAC」与「盘不归我」。
-pub fn grant_modify_for_sid(dir: &Path, service_sid: &str) -> Result<GrantOutcome> {
+/// 把 `dir` 设为私有：受保护 DACL，只含 `owner_sid`、SYSTEM、Administrators（完全控制）与
+/// `service_sid`（修改），全部可继承并传播到已有子项。幂等；设完回读真实 DACL 核对。
+pub fn make_private_for_service(
+    dir: &Path,
+    service_sid: &str,
+    owner_sid: &str,
+) -> Result<GrantOutcome> {
     if is_network_path(dir) {
         return Err(failed(
             "grant_photo_dir",
@@ -61,102 +71,137 @@ pub fn grant_modify_for_sid(dir: &Path, service_sid: &str) -> Result<GrantOutcom
         }
     }
 
-    let sid = sid_from_string(service_sid)?;
-    let result = (|| -> Result<GrantOutcome> {
-        let w = wide(dir);
-        let mut dacl: *mut ACL = std::ptr::null_mut();
-        let mut sd: *mut std::ffi::c_void = std::ptr::null_mut();
-        // SAFETY: w 是 NUL 结尾的宽路径；sd 由 LocalAlloc，下面释放。
-        let rc = unsafe {
-            GetNamedSecurityInfoW(
-                w.as_ptr(),
-                SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                &mut dacl,
-                std::ptr::null_mut(),
-                &mut sd,
-            )
-        };
-        if rc != ERROR_SUCCESS {
-            return Err(io_err("GetNamedSecurityInfoW", rc));
-        }
-        let outcome = (|| -> Result<GrantOutcome> {
-            if unsafe { has_modify_ace(dacl, sid) } {
-                return Ok(GrantOutcome::Done);
-            }
-            let access = EXPLICIT_ACCESS_W {
-                grfAccessPermissions: MODIFY_MASK,
-                grfAccessMode: SET_ACCESS,
-                grfInheritance: SUB_CONTAINERS_AND_OBJECTS_INHERIT,
-                Trustee: TRUSTEE_W {
-                    pMultipleTrustee: std::ptr::null_mut(),
-                    MultipleTrusteeOperation: NO_MULTIPLE_TRUSTEE,
-                    TrusteeForm: TRUSTEE_IS_SID,
-                    TrusteeType: TRUSTEE_IS_USER,
-                    ptstrName: sid.cast(),
-                },
-            };
-            let mut new_acl: *mut ACL = std::ptr::null_mut();
-            // SAFETY: access 与其 SID 在调用期间存活；old 是上面拿到的 DACL。
-            let rc = unsafe { SetEntriesInAclW(1, &access, dacl, &mut new_acl) };
-            if rc != ERROR_SUCCESS {
-                return Err(io_err("SetEntriesInAclW", rc));
-            }
-            // SAFETY: new_acl 是合法 ACL；只改 DACL，不动 owner/group/SACL，也不设受保护位
-            // （照片目录要保留继承——文件本身仍要让主人能读）。
-            let rc = unsafe {
-                SetNamedSecurityInfoW(
-                    w.as_ptr(),
-                    SE_FILE_OBJECT,
-                    DACL_SECURITY_INFORMATION,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    new_acl,
-                    std::ptr::null(),
-                )
-            };
-            unsafe { LocalFree(new_acl.cast()) };
-            if rc == ERROR_ACCESS_DENIED {
+    let grants = library_grants(service_sid, owner_sid);
+    if let Err(e) = set_private_dacl_with(dir, &grants) {
+        if let PlatformError::Io { source, .. } = &e {
+            if source.raw_os_error() == Some(ERROR_ACCESS_DENIED as i32) {
                 return Err(failed(
                     "grant_photo_dir",
-                    "目录不归当前用户所有，改 DACL 需要管理员权限",
+                    "目录不归当前用户所有，改权限需要管理员权限",
                 ));
             }
-            if rc != ERROR_SUCCESS {
-                return Err(io_err("SetNamedSecurityInfoW", rc));
+        }
+        return Err(e);
+    }
+    // 回读确认：判据是真实 DACL，不是 SetNamedSecurityInfoW 的返回值。
+    let facts = dacl_facts(dir)?;
+    check_private(&facts, &grants)?;
+    Ok(GrantOutcome::Done)
+}
+
+/// 照片库目录的访问表（同一 SID 出现两次时只留一条）。
+fn library_grants<'a>(service_sid: &'a str, owner_sid: &'a str) -> Vec<(&'a str, u32)> {
+    let mut grants: Vec<(&str, u32)> = vec![
+        (owner_sid, FILE_ALL_ACCESS),
+        (SYSTEM_SID, FILE_ALL_ACCESS),
+        (ADMINISTRATORS_SID, FILE_ALL_ACCESS),
+        (service_sid, MODIFY_MASK),
+    ];
+    let mut seen = std::collections::HashSet::new();
+    grants.retain(|(sid, _)| seen.insert(sid.to_ascii_uppercase()));
+    grants
+}
+
+/// 一个目录 / 文件 DACL 的事实：是否受保护、每条 ACE 的（类型、掩码、SID）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DaclFacts {
+    pub protected: bool,
+    pub aces: Vec<(u8, u32, String)>,
+}
+
+impl DaclFacts {
+    /// 允许型 ACE 指向的 SID（去重、排序）。
+    pub fn allowed_sids(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .aces
+            .iter()
+            .filter(|(t, _, _)| *t == ALLOWED_ACE_TYPE)
+            .map(|(_, _, s)| s.clone())
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+}
+
+fn check_private(facts: &DaclFacts, grants: &[(&str, u32)]) -> Result<()> {
+    if !facts.protected {
+        return Err(failed("grant_photo_dir", "设置后 DACL 仍在继承上级目录"));
+    }
+    if facts.aces.iter().any(|(t, _, _)| *t != ALLOWED_ACE_TYPE) {
+        return Err(failed("grant_photo_dir", "设置后 DACL 里有非允许型 ACE"));
+    }
+    let mut want: Vec<String> = grants.iter().map(|(s, _)| s.to_string()).collect();
+    want.sort();
+    if facts.allowed_sids() != want {
+        return Err(failed(
+            "grant_photo_dir",
+            format!(
+                "设置后 DACL 的 SID 是 {:?}，应为 {want:?}",
+                facts.allowed_sids()
+            ),
+        ));
+    }
+    for (sid, mask) in grants {
+        let has = facts
+            .aces
+            .iter()
+            .any(|(_, m, s)| s == sid && m & mask == *mask);
+        if !has {
+            return Err(failed(
+                "grant_photo_dir",
+                format!("设置后 {sid} 缺少应有的访问权"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// 读回 `path` 的真实 DACL。
+pub fn dacl_facts(path: &Path) -> Result<DaclFacts> {
+    let w = wide(path);
+    let mut dacl: *mut ACL = std::ptr::null_mut();
+    let mut sd: *mut std::ffi::c_void = std::ptr::null_mut();
+    // SAFETY: w 是 NUL 结尾的宽路径；成功时 sd 由 LocalAlloc，dacl 指向 sd 内部，下面释放。
+    let rc = unsafe {
+        GetNamedSecurityInfoW(
+            w.as_ptr(),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            &mut dacl,
+            std::ptr::null_mut(),
+            &mut sd,
+        )
+    };
+    if rc != ERROR_SUCCESS {
+        return Err(io_err("GetNamedSecurityInfoW", rc));
+    }
+    let mut control = 0u16;
+    let mut revision = 0u32;
+    // SAFETY: sd 是上面拿到的合法安全描述符。
+    unsafe { GetSecurityDescriptorControl(sd, &mut control, &mut revision) };
+    let mut aces = Vec::new();
+    if !dacl.is_null() {
+        let count = unsafe { (*dacl).AceCount } as u32;
+        for i in 0..count {
+            let mut ace: *mut std::ffi::c_void = std::ptr::null_mut();
+            if unsafe { GetAce(dacl, i, &mut ace) } == 0 || ace.is_null() {
+                continue;
             }
-            // 回读确认：判据是真实 DACL，不是 SetNamedSecurityInfoW 的返回值。
-            let mut check_dacl: *mut ACL = std::ptr::null_mut();
-            let mut check_sd: *mut std::ffi::c_void = std::ptr::null_mut();
-            let rc = unsafe {
-                GetNamedSecurityInfoW(
-                    w.as_ptr(),
-                    SE_FILE_OBJECT,
-                    DACL_SECURITY_INFORMATION,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    &mut check_dacl,
-                    std::ptr::null_mut(),
-                    &mut check_sd,
-                )
-            };
-            if rc != ERROR_SUCCESS {
-                return Err(io_err("GetNamedSecurityInfoW", rc));
-            }
-            let ok = unsafe { has_modify_ace(check_dacl, sid) };
-            unsafe { LocalFree(check_sd.cast()) };
-            if !ok {
-                return Err(failed("grant_photo_dir", "写 ACE 后回读没有找到"));
-            }
-            Ok(GrantOutcome::Done)
-        })();
-        unsafe { LocalFree(sd.cast()) };
-        outcome
-    })();
-    unsafe { free_sid(sid) };
-    result
+            // ACE_HEADER（4 字节）+ 掩码（4 字节）+ SID：允许 / 拒绝型的布局相同。
+            let header = unsafe { &*(ace as *const windows_sys::Win32::Security::ACE_HEADER) };
+            let mask = unsafe { *(ace as *const u32).add(1) };
+            let sid = unsafe { (ace as *const u8).add(8) } as *mut std::ffi::c_void;
+            aces.push((header.AceType, mask, unsafe { sid_to_string(sid) }));
+        }
+    }
+    unsafe { LocalFree(sd.cast()) };
+    Ok(DaclFacts {
+        protected: control & SE_DACL_PROTECTED != 0,
+        aces,
+    })
 }
 
 fn is_network_path(dir: &Path) -> bool {
@@ -193,30 +238,6 @@ fn file_system_of(dir: &Path) -> Option<String> {
     Some(String::from_utf16_lossy(&fs_name[..len]))
 }
 
-/// SAFETY: `dacl` 必须是合法 ACL 或 null。
-unsafe fn has_modify_ace(dacl: *mut ACL, sid: *mut std::ffi::c_void) -> bool {
-    if dacl.is_null() {
-        return false;
-    }
-    let count = unsafe { (*dacl).AceCount } as u32;
-    for i in 0..count {
-        let mut ace: *mut std::ffi::c_void = std::ptr::null_mut();
-        if unsafe { GetAce(dacl, i, &mut ace) } == 0 || ace.is_null() {
-            continue;
-        }
-        let header = unsafe { &*(ace as *const windows_sys::Win32::Security::ACE_HEADER) };
-        if header.AceType != 0 {
-            continue; // 只认允许型
-        }
-        let mask = unsafe { *(ace as *const u32).add(1) };
-        let ace_sid = unsafe { (ace as *const u8).add(8) } as *mut std::ffi::c_void;
-        if mask & MODIFY_MASK == MODIFY_MASK && unsafe { EqualSid(ace_sid, sid) } != 0 {
-            return true;
-        }
-    }
-    false
-}
-
 fn failed(action: &'static str, detail: impl Into<String>) -> PlatformError {
     PlatformError::Failed {
         action,
@@ -233,52 +254,26 @@ fn io_err(action: &'static str, rc: u32) -> PlatformError {
 
 /// 给日志/诊断用的「这个目录当前给谁开了修改权」摘要（只列 SID，不列完整 DACL）。
 pub fn list_modify_sids(dir: &Path) -> Result<Vec<String>> {
-    let w = wide(dir);
-    let mut dacl: *mut ACL = std::ptr::null_mut();
-    let mut sd: *mut std::ffi::c_void = std::ptr::null_mut();
-    // SAFETY: 同上。
-    let rc = unsafe {
-        GetNamedSecurityInfoW(
-            w.as_ptr(),
-            SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &mut dacl,
-            std::ptr::null_mut(),
-            &mut sd,
-        )
-    };
-    if rc != ERROR_SUCCESS {
-        return Err(io_err("GetNamedSecurityInfoW", rc));
-    }
-    let mut out = Vec::new();
-    if !dacl.is_null() {
-        let count = unsafe { (*dacl).AceCount } as u32;
-        for i in 0..count {
-            let mut ace: *mut std::ffi::c_void = std::ptr::null_mut();
-            if unsafe { GetAce(dacl, i, &mut ace) } == 0 || ace.is_null() {
-                continue;
-            }
-            let header = unsafe { &*(ace as *const windows_sys::Win32::Security::ACE_HEADER) };
-            if header.AceType != 0 {
-                continue;
-            }
-            let mask = unsafe { *(ace as *const u32).add(1) };
-            if mask & MODIFY_MASK != MODIFY_MASK {
-                continue;
-            }
-            let ace_sid = unsafe { (ace as *const u8).add(8) } as *mut std::ffi::c_void;
-            out.push(unsafe { sid_to_string(ace_sid) });
-        }
-    }
-    unsafe { LocalFree(sd.cast()) };
-    Ok(out)
+    Ok(dacl_facts(dir)?
+        .aces
+        .into_iter()
+        .filter(|(t, m, _)| *t == ALLOWED_ACE_TYPE && m & MODIFY_MASK == MODIFY_MASK)
+        .map(|(_, _, s)| s)
+        .collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 本机账户里肯定没有的服务 SID（测试注入，不依赖服务已安装）。
+    const TEST_SERVICE: &str = "S-1-5-80-1-2-3-4-5";
+    /// Authenticated Users。
+    const AUTHENTICATED_USERS: &str = "S-1-5-11";
+
+    fn me() -> String {
+        crate::windows_programdata::current_user_sid_string().unwrap()
+    }
 
     fn tempdir() -> tempfile::TempDir {
         tempfile::Builder::new()
@@ -287,51 +282,155 @@ mod tests {
             .expect("tempdir")
     }
 
+    fn sorted(mut v: Vec<String>) -> Vec<String> {
+        v.sort();
+        v
+    }
+
+    /// 父目录给 Authenticated Users 加一条可继承的「修改」（非系统盘根目录的默认形状）。
+    fn open_parent_to_authenticated_users(dir: &Path) {
+        let ok = std::process::Command::new("icacls")
+            .arg(dir)
+            .args(["/grant", "*S-1-5-11:(OI)(CI)M"])
+            .status()
+            .expect("icacls");
+        assert!(ok.success());
+    }
+
+    /// 判据：设置后库目录 DACL 受保护、恰好是主人 / 服务 / SYSTEM / Administrators 四个 SID；
+    /// 父目录给 Authenticated Users 的可继承修改权不再落到库目录与其中已有的文件上。
+    /// 反证：去掉 PROTECTED 位（DACL 仍继承上级）⇒ 库目录与文件上都会出现 S-1-5-11，红。
     #[test]
-    fn grants_an_ace_and_is_idempotent() {
-        let d = tempdir();
-        let sid = crate::windows_programdata::current_user_sid_string().unwrap();
+    fn library_dir_private_dacl_has_exactly_four_sids_and_drops_inherited_ones() {
+        let parent = tempdir();
+        open_parent_to_authenticated_users(parent.path());
+        let lib = parent.path().join("P-Pass Library");
+        std::fs::create_dir(&lib).unwrap();
+        let child = lib.join("originals");
+        std::fs::create_dir(&child).unwrap();
+        let photo = child.join("a.jpg");
+        std::fs::write(&photo, b"x").unwrap();
+        assert!(
+            dacl_facts(&photo)
+                .unwrap()
+                .allowed_sids()
+                .contains(&AUTHENTICATED_USERS.to_string()),
+            "前提：设置前文件继承了父目录的 Authenticated Users"
+        );
+
         assert_eq!(
-            grant_modify_for_sid(d.path(), &sid).expect("grant"),
+            make_private_for_service(&lib, TEST_SERVICE, &me()).expect("make private"),
             GrantOutcome::Done
         );
-        let before = list_modify_sids(d.path()).unwrap();
+
+        let root = dacl_facts(&lib).unwrap();
+        assert!(root.protected, "库目录 DACL 必须受保护：{root:?}");
         assert_eq!(
-            grant_modify_for_sid(d.path(), &sid).expect("grant again"),
-            GrantOutcome::Done
+            root.allowed_sids(),
+            sorted(vec![
+                me(),
+                TEST_SERVICE.to_string(),
+                SYSTEM_SID.to_string(),
+                ADMINISTRATORS_SID.to_string()
+            ]),
+            "{root:?}"
         );
-        let after = list_modify_sids(d.path()).unwrap();
-        assert_eq!(before, after, "第二次不应再堆一条重复 ACE");
+        assert!(
+            list_modify_sids(&lib)
+                .unwrap()
+                .contains(&TEST_SERVICE.to_string()),
+            "服务账户要有修改权"
+        );
+        for p in [&child, &photo] {
+            let f = dacl_facts(p).unwrap();
+            assert!(
+                !f.allowed_sids().contains(&AUTHENTICATED_USERS.to_string()),
+                "{} 仍带着上级目录的 Authenticated Users：{f:?}",
+                p.display()
+            );
+            assert!(
+                f.allowed_sids().contains(&TEST_SERVICE.to_string()),
+                "{} 没有继承到服务账户：{f:?}",
+                p.display()
+            );
+        }
+    }
+
+    /// 之后新建的文件同样只继承这四个 SID。
+    #[test]
+    fn library_dir_private_dacl_is_inherited_by_new_files() {
+        let parent = tempdir();
+        open_parent_to_authenticated_users(parent.path());
+        let lib = parent.path().join("lib");
+        std::fs::create_dir(&lib).unwrap();
+        make_private_for_service(&lib, TEST_SERVICE, &me()).expect("make private");
+        let later = lib.join("later.jpg");
+        std::fs::write(&later, b"x").unwrap();
+        assert_eq!(
+            dacl_facts(&later).unwrap().allowed_sids(),
+            sorted(vec![
+                me(),
+                TEST_SERVICE.to_string(),
+                SYSTEM_SID.to_string(),
+                ADMINISTRATORS_SID.to_string()
+            ])
+        );
     }
 
     #[test]
-    fn adds_an_ace_for_a_new_sid_and_keeps_existing_ones() {
+    fn library_dir_private_dacl_is_idempotent() {
         let d = tempdir();
-        let before = list_modify_sids(d.path()).unwrap();
-        let users = "S-1-5-32-545";
+        make_private_for_service(d.path(), TEST_SERVICE, &me()).expect("first");
+        let before = dacl_facts(d.path()).unwrap();
+        make_private_for_service(d.path(), TEST_SERVICE, &me()).expect("second");
         assert_eq!(
-            grant_modify_for_sid(d.path(), users).expect("grant"),
-            GrantOutcome::Done
+            before,
+            dacl_facts(d.path()).unwrap(),
+            "第二次不应堆重复 ACE"
         );
-        let after = list_modify_sids(d.path()).unwrap();
-        assert!(after.len() > before.len());
-        assert!(after.contains(&users.to_string()), "{after:?}");
-        for old in before {
-            assert!(after.contains(&old), "原有 ACE 被弄丢了：{old}");
-        }
+    }
+
+    /// 回读核对本身：没受保护、多一个 SID、少一个 SID 都要报错。
+    #[test]
+    fn library_dir_private_check_rejects_wrong_dacls() {
+        let grants = library_grants(TEST_SERVICE, "S-1-5-21-1-2-3-1001");
+        let good = DaclFacts {
+            protected: true,
+            aces: grants
+                .iter()
+                .map(|(s, m)| (0u8, *m, s.to_string()))
+                .collect(),
+        };
+        check_private(&good, &grants).expect("good");
+        let mut inherited = good.clone();
+        inherited.protected = false;
+        assert!(check_private(&inherited, &grants).is_err());
+        let mut extra = good.clone();
+        extra
+            .aces
+            .push((0, MODIFY_MASK, AUTHENTICATED_USERS.into()));
+        assert!(check_private(&extra, &grants).is_err());
+        let mut missing = good.clone();
+        missing.aces.pop();
+        assert!(check_private(&missing, &grants).is_err());
     }
 
     #[test]
     fn rejects_network_paths() {
         let err =
-            grant_modify_for_sid(Path::new(r"\\server\share\photos"), "S-1-5-32-545").unwrap_err();
+            make_private_for_service(Path::new(r"\\server\share\photos"), TEST_SERVICE, &me())
+                .unwrap_err();
         assert!(format!("{err}").contains("网络路径"), "{err}");
     }
 
     #[test]
     fn rejects_missing_directory() {
-        let err = grant_modify_for_sid(Path::new(r"C:\definitely-not-here-ppass"), "S-1-5-32-545")
-            .unwrap_err();
+        let err = make_private_for_service(
+            Path::new(r"C:\definitely-not-here-ppass"),
+            TEST_SERVICE,
+            &me(),
+        )
+        .unwrap_err();
         assert!(format!("{err}").contains("stat_photo_dir"), "{err}");
     }
 

@@ -348,6 +348,7 @@
   "ui.err_library_target_readonly": "选择的文件夹不能写入。请换一个文件夹。",
   "ui.err_library_nested": "新位置不能与当前照片库相同或互相包含。请换一个文件夹。",
   "ui.err_set_library": "照片库位置没有保存。请再试一次。",
+  "ui.err_library_private_failed": "没能把这个文件夹设成只有你能访问，照片库位置没有改动：{err}。请换一个你自己建的文件夹。",
   "ui.err_set_library_readonly": "照片库位置没有保存。这个文件夹不能写入，请换一个文件夹。",
   "ui.err_set_library_disk_full": "照片库位置没有保存。磁盘已满，请换一个磁盘。",
   "ui.wizard_notice_only_label": "只是通知",
