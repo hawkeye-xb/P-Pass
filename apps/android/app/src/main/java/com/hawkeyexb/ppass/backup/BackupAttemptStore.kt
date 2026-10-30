@@ -3,6 +3,7 @@
 // tmp+rename 崩溃安全（WatermarkStore 同款），损坏读 0。
 package com.hawkeyexb.ppass.backup
 
+import com.hawkeyexb.ppass.io.atomicReplace
 import java.io.File
 
 class BackupAttemptStore(private val dir: File) {
@@ -18,7 +19,7 @@ class BackupAttemptStore(private val dir: File) {
         val next = current() + 1
         val tmp = File(dir, "backup-attempt.txt.tmp")
         tmp.writeText(next.toString())
-        check(tmp.renameTo(file)) { "cannot persist backup attempt counter" }
+        check(atomicReplace(tmp, file)) { "cannot persist backup attempt counter" }
         return next
     }
 

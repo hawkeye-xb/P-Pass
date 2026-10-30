@@ -11,6 +11,7 @@
 //     UI 靠它把「下载中 / 待安装」状态恢复出来，不靠内存。
 package com.hawkeyexb.ppass.update
 
+import com.hawkeyexb.ppass.io.atomicReplace
 import java.io.File
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -69,7 +70,7 @@ class UpdatePrefs(private val dir: File) {
         dir.mkdirs()
         val tmp = File(dir, "update_prefs.json.tmp")
         tmp.writeText(json.encodeToString(UpdatePrefsData.serializer(), data))
-        check(tmp.renameTo(file)) { "cannot persist update_prefs.json" }
+        check(atomicReplace(tmp, file)) { "cannot persist update_prefs.json" }
     }
 
     fun lastCheckAt(): Long = load().lastCheckAt

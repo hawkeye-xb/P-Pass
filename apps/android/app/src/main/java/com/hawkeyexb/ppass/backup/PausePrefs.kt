@@ -35,6 +35,7 @@
 // 显示成「被暂停」。锚点因此从「跑完」扩到「开跑」，见 [RunStartPrefs]。
 package com.hawkeyexb.ppass.backup
 
+import com.hawkeyexb.ppass.io.atomicReplace
 import java.io.File
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -67,7 +68,7 @@ class PausePrefs(private val dir: File) {
         dir.mkdirs()
         val tmp = File(dir, "pause_state.json.tmp")
         tmp.writeText(json.encodeToString(PauseState.serializer(), PauseState(ts)))
-        check(tmp.renameTo(file)) { "cannot persist pause_state.json" }
+        check(atomicReplace(tmp, file)) { "cannot persist pause_state.json" }
     }
 }
 
@@ -111,7 +112,7 @@ class RunStartPrefs(private val dir: File) {
         dir.mkdirs()
         val tmp = File(dir, "run_start.json.tmp")
         tmp.writeText(json.encodeToString(RunStartState.serializer(), RunStartState(ts)))
-        check(tmp.renameTo(file)) { "cannot persist run_start.json" }
+        check(atomicReplace(tmp, file)) { "cannot persist run_start.json" }
     }
 }
 

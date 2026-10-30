@@ -4,6 +4,7 @@
 // filesDir JSON（WatermarkStore 同款：tmp+rename 崩溃安全，损坏读默认）。
 package com.hawkeyexb.ppass.backup
 
+import com.hawkeyexb.ppass.io.atomicReplace
 import java.io.File
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -40,6 +41,6 @@ class BackupSettings(private val dir: File) {
                 BackupSettingsState(wifiOnly = wifiOnly),
             )
         )
-        check(tmp.renameTo(file)) { "cannot persist backup settings" }
+        check(atomicReplace(tmp, file)) { "cannot persist backup settings" }
     }
 }

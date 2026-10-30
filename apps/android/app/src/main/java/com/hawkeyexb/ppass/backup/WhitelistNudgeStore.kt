@@ -6,6 +6,7 @@
 // tmp+rename 崩溃安全，损坏当空。
 package com.hawkeyexb.ppass.backup
 
+import com.hawkeyexb.ppass.io.atomicReplace
 import java.io.File
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -65,7 +66,7 @@ class WhitelistNudgeStore(private val dir: File) {
         dir.mkdirs()
         val tmp = File(dir, "whitelist-nudge.json.tmp")
         tmp.writeText(json.encodeToString(WhitelistNudgeState.serializer(), state))
-        check(tmp.renameTo(file)) { "cannot persist whitelist nudge state" }
+        check(atomicReplace(tmp, file)) { "cannot persist whitelist nudge state" }
     }
 
     /** 自动备份成功一轮：记成功时间戳（判定条件 4 的「已恢复」证据）。 */

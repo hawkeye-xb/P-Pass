@@ -1,6 +1,7 @@
 // #1219 V4：被拒即清理（#1119）之后的一次性说明。
 package com.hawkeyexb.ppass.backup
 
+import com.hawkeyexb.ppass.io.atomicReplace
 import java.io.File
 
 /**
@@ -22,7 +23,7 @@ class PairingRemovedNoticeStore(private val dir: File) {
         dir.mkdirs()
         val tmp = File(dir, "$FILE_NAME.tmp")
         tmp.writeText(pairingId)
-        check(tmp.renameTo(file)) { "cannot persist $FILE_NAME" }
+        check(atomicReplace(tmp, file)) { "cannot persist $FILE_NAME" }
     }
 
     /** 有没有待说明的移除。 */

@@ -9,6 +9,7 @@
 // "Keystore-wrapped storage", not Keystore-held signing.
 package com.hawkeyexb.ppass.transport
 
+import com.hawkeyexb.ppass.io.atomicReplace
 import java.io.File
 import java.security.SecureRandom
 import javax.crypto.AEADBadTagException
@@ -162,7 +163,7 @@ class IdentityStore(
         // Write-then-rename so a crash never leaves a half-written file.
         val tmp = File(dir, "$SEALED_FILE.tmp")
         tmp.writeBytes(encode(wrapper.seal(secret)))
-        check(tmp.renameTo(sealedFile)) { "cannot persist $SEALED_FILE" }
+        check(atomicReplace(tmp, sealedFile)) { "cannot persist $SEALED_FILE" }
         // Read back through Keystore before anyone gets the key: a seal we cannot open is not saved.
         val back = try {
             open()
@@ -245,7 +246,7 @@ class PairingStore(private val dir: File) {
         dir.mkdirs()
         val tmp = File(dir, "pairing.json.tmp")
         tmp.writeText(json.encodeToString(Pairing.serializer(), p))
-        check(tmp.renameTo(file)) { "cannot persist pairing.json" }
+        check(atomicReplace(tmp, file)) { "cannot persist pairing.json" }
     }
 
     fun clear() {

@@ -14,6 +14,7 @@ import android.content.ContentUris
 import android.net.Uri
 import android.os.Build
 import android.provider.MediaStore
+import com.hawkeyexb.ppass.io.atomicReplace
 import java.io.File
 
 data class MediaItem(
@@ -404,6 +405,6 @@ class WatermarkStore(private val dir: File) {
         dir.mkdirs()
         val tmp = File(dir, "backup.watermark.tmp")
         tmp.writeText(value.toString())
-        check(tmp.renameTo(file)) { "cannot persist watermark" }
+        check(atomicReplace(tmp, file)) { "cannot persist watermark" }
     }
 }

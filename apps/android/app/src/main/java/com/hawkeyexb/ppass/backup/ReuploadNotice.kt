@@ -34,6 +34,7 @@
 // ——一个编出来的数字。取并集则同一批重复登记是幂等的，张数由集合大小导出。
 package com.hawkeyexb.ppass.backup
 
+import com.hawkeyexb.ppass.io.atomicReplace
 import java.io.File
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -91,7 +92,7 @@ class ReuploadNoticePrefs(private val dir: File) {
         dir.mkdirs()
         val tmp = File(dir, "reupload_notice.json.tmp")
         tmp.writeText(json.encodeToString(ReuploadNoticeState.serializer(), state))
-        check(tmp.renameTo(file)) { "cannot persist reupload_notice.json" }
+        check(atomicReplace(tmp, file)) { "cannot persist reupload_notice.json" }
     }
 }
 
