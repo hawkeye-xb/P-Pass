@@ -559,20 +559,35 @@ fn disable_auto_sleep_blocking() -> Result<(), String> {
 /// 有 daemon 在跑（含「未配置」状态）就直接问它；首启时没有，就一次性拉起内置 daemon
 /// 配好再收掉。校验失败原样交出 daemon 的 keyed 错误。生效时机：daemon 重启后。
 fn configure_library(library_dir: &str) -> Result<(), String> {
-    // §5.3 / #1159：服务模式下 daemon 是 `NT SERVICE\P-Pass`，与选目录的用户不是
-    // 同一个安全主体，它默认连读这个目录都不行。加 ACE 只能在主人身份下做，所以
-    // **先授权、再交给 daemon**（daemon 会以服务的身份复查目录）。授权失败不在这里
-    // 拦：daemon 的复查报的错更准确，用户看到的仍是同一句「这个文件夹不可用」。
-    let _ = platform::adapter().grant_library_dir(std::path::Path::new(library_dir));
+    // §5.3：**先把目录设为私有、再交给 daemon**（daemon 会以自己的身份复查目录）。
     let set = |h: &ipc::DaemonHandle| {
         h.call("config.set_library", json!({ "library": library_dir }))
             .map(|_| ())
     };
-    match ipc::DaemonHandle::discover() {
-        Ok(h) => set(&h),
-        // #1246：服务形态的库位置只能由服务写；服务连不上就如实报错，不以用户身份临时拉一份。
-        Err(e) if !user_daemon_fallback_allowed(platform::hosting().service_mode()) => Err(e),
-        Err(_) => daemon_cli::with_oneshot_daemon(&daemon_cli::bundled_sidecar()?, set),
+    private_library_then(
+        std::path::Path::new(library_dir),
+        |d| platform::adapter().grant_library_dir(d),
+        || match ipc::DaemonHandle::discover() {
+            Ok(h) => set(&h),
+            // #1246：服务形态的库位置只能由服务写；服务连不上就如实报错，不以用户身份临时拉一份。
+            Err(e) if !user_daemon_fallback_allowed(platform::hosting().service_mode()) => Err(e),
+            Err(_) => daemon_cli::with_oneshot_daemon(&daemon_cli::bundled_sidecar()?, set),
+        },
+    )
+}
+
+/// §5.3 / #1159：首次设置与换位置共用的前置步骤——以主人身份把库目录设为只有主人能访问
+/// （Windows 服务形态同时授权服务账户，见 [`platform::PlatformAdapter::grant_library_dir`]），
+/// 成功（含「本形态不需要」「卷没有权限可设」）才调 `submit` 把目录交给 daemon。
+/// 设置失败 ⇒ 原因交给界面，**不**提交：不能让 daemon 用一个没设好权限的目录。
+fn private_library_then<T>(
+    dir: &std::path::Path,
+    grant: impl FnOnce(&std::path::Path) -> platform::Result<platform::LibraryDirGrant>,
+    submit: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    match grant(dir) {
+        Ok(_) => submit(),
+        Err(e) => Err(ipc::ui_err("ui.err_library_private_failed", &[("err", &e)])),
     }
 }
 
@@ -690,14 +705,19 @@ async fn relocate_library(
         .get()
         .ok_or_else(|| ipc::ui_err("ui.err_generic", &[]))?;
     let result = off_main(move || {
-        // §5.3 / #1159：服务形态下先把新位置授权给服务（与 configure_library 同一条）。
-        let _ = platform::adapter().grant_library_dir(&dir);
-        // dry_run：只预检（确认框要显示最终位置、文件夹里是否已有别的东西），不落计划。
-        // 跨卷时预检要量整个库的大小（逐个文件），大库在机械盘上会超过平常的 10 秒。
-        ipc::DaemonHandle::discover()?.call_with_timeout(
-            "library.relocate",
-            json!({ "target": dir.to_string_lossy(), "dry_run": dry_run }),
-            std::time::Duration::from_secs(120),
+        // §5.3 / #1159：新位置先设为私有（与 configure_library 同一入口），失败就不交给 daemon。
+        private_library_then(
+            &dir,
+            |d| platform::adapter().grant_library_dir(d),
+            || {
+                // dry_run：只预检（确认框要显示最终位置、文件夹里是否已有别的东西），不落计划。
+                // 跨卷时预检要量整个库的大小（逐个文件），大库在机械盘上会超过平常的 10 秒。
+                ipc::DaemonHandle::discover()?.call_with_timeout(
+                    "library.relocate",
+                    json!({ "target": dir.to_string_lossy(), "dry_run": dry_run }),
+                    std::time::Duration::from_secs(120),
+                )
+            },
         )
     })
     .await??;
@@ -3685,6 +3705,122 @@ mod tests {
                 "{entry} 没有先解析 ProgramData 位置"
             );
         }
+    }
+
+    /// §5.3：库目录设为私有失败时，库位置**不**提交给 daemon（`config.set_library` /
+    /// `library.relocate` 都不调），错误带着原因回到界面。反证：改回 `let _ = grant(..)` 后照常
+    /// 提交 ⇒ `submitted` 变真，红。
+    #[test]
+    fn library_private_failure_does_not_submit_and_reaches_the_ui() {
+        let submitted = std::cell::Cell::new(false);
+        let err = private_library_then(
+            std::path::Path::new("/somewhere"),
+            |_| {
+                Err(platform::PlatformError::Failed {
+                    action: "grant_photo_dir",
+                    detail: "目录不归当前用户所有".into(),
+                })
+            },
+            || {
+                submitted.set(true);
+                Ok(())
+            },
+        )
+        .expect_err("设置失败必须报错");
+        assert!(!submitted.get(), "设置失败后不许再提交库位置");
+        let v: serde_json::Value = serde_json::from_str(&err).expect("keyed 错误");
+        assert_eq!(v["key"], "ui.err_library_private_failed");
+        assert!(
+            v["params"]["err"]
+                .as_str()
+                .is_some_and(|e| e.contains("目录不归当前用户所有")),
+            "原因要带给界面：{err}"
+        );
+    }
+
+    /// 设好了、本形态不需要、卷没有权限可设——三种都照常提交。
+    #[test]
+    fn library_private_ok_outcomes_submit() {
+        for outcome in [
+            platform::LibraryDirGrant::Granted,
+            platform::LibraryDirGrant::NotApplicable,
+            platform::LibraryDirGrant::SkippedNoAcl {
+                file_system: "exFAT".into(),
+            },
+        ] {
+            let submitted = std::cell::Cell::new(false);
+            private_library_then(
+                std::path::Path::new("/somewhere"),
+                |_| Ok(outcome.clone()),
+                || {
+                    submitted.set(true);
+                    Ok(())
+                },
+            )
+            .expect("ok");
+            assert!(submitted.get(), "{outcome:?} 应照常提交");
+        }
+    }
+
+    /// 服务特权收窄：`sc privs` 在注册服务的宏里、在 `sc create` 的 `${If}` 分支之外
+    /// （覆盖升级、应用内更新也重新声明），名单与 daemon 启动核对的白名单完全一致。
+    /// 反证：把 privs 挪进 create 分支、删掉这一行、或名单里多/少一项，本测试红。
+    #[test]
+    fn installer_narrows_service_privileges_outside_create_branch() {
+        let hooks = include_str!("../windows/installer-hooks.nsh").replace("\r\n", "\n");
+        let start = hooks
+            .find("!macro PPassRegisterService\n")
+            .expect("缺 PPassRegisterService 宏");
+        let end = start + hooks[start..].find("!macroend").expect("宏没有结束");
+        let block = &hooks[start..end];
+        let lines: Vec<&str> = block.lines().map(str::trim).collect();
+        let privs: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.contains("sc.exe\" privs \"${PPASS_SERVICE}\""))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(privs.len(), 1, "注册服务时必须恰好声明一次 sc privs");
+        let at = privs[0];
+        // 所在的 ${If} 嵌套层数必须是 0（不在任何分支里）。
+        let depth = lines[..at].iter().fold(0i32, |d, l| {
+            if l.starts_with("${If}") {
+                d + 1
+            } else if l.starts_with("${EndIf}") {
+                d - 1
+            } else {
+                d
+            }
+        });
+        assert_eq!(depth, 0, "sc privs 落进了 ${{If}} 分支：升级安装不会执行");
+        let create = lines
+            .iter()
+            .position(|l| l.contains("sc.exe\" create \"${PPASS_SERVICE}\""))
+            .expect("缺 sc create");
+        assert!(
+            create < at,
+            "sc privs 必须在 sc create 之后（服务要先存在）"
+        );
+        let listed: Vec<&str> = lines[at]
+            .rsplit_once("\"${PPASS_SERVICE}\" ")
+            .expect("privs 行形状不对")
+            .1
+            .trim_end_matches('\'')
+            .split('/')
+            .collect();
+        assert_eq!(listed, platform::SERVICE_PRIVILEGE_ALLOWLIST);
+        // 注册服务之后才起服务：本次安装启动的服务就已经是收窄后的令牌。
+        let post = hooks
+            .find("!macro NSIS_HOOK_POSTINSTALL")
+            .expect("缺 POSTINSTALL");
+        let post = &hooks[post..];
+        let reg = post
+            .find("!insertmacro PPassRegisterService")
+            .expect("没注册服务");
+        let start_svc = post
+            .find("sc.exe\" start \"${PPASS_SERVICE}\"")
+            .expect("没起服务");
+        assert!(reg < start_svc, "必须先声明特权再起服务");
     }
 
     /// 服务 DACL：交互用户只能查询/启停；Administrators 必须保留删除（SD）与改权限

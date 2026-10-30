@@ -668,19 +668,19 @@ impl PlatformAdapter for WindowsAdapter {
         Ok(crate::Applied::Done)
     }
 
-    /// §5.3 / #1159：把照片库目录授权给服务账户。
+    /// §5.3 / #1159：照片库目录设为私有并授权给服务账户（首次设置与换位置同一入口）。
     ///
-    /// 只有 per-machine 安装（服务已注册）才需要：老的每用户计划任务跑在用户会话
-    /// 里，权限本就一致。服务账户的 SID 由服务名派生，`grant_modify_for_sid` 幂等
-    /// 且自己回读确认，所以这里不再重复核一遍。
+    /// 只有 per-machine 安装（服务已注册）才做：老的每用户计划任务跑在用户会话里，与用户
+    /// 同一主体。「主人」取本进程用户——调用方是主人身份下的窗口程序。设置函数自己回读
+    /// 真实 DACL 核对，这里不再重复核一遍。
     fn grant_library_dir(&self, dir: &Path) -> Result<crate::LibraryDirGrant> {
         use crate::windows_service;
         if !windows_service::is_installed(windows_service::SERVICE_NAME).unwrap_or(false) {
             return Ok(crate::LibraryDirGrant::NotApplicable);
         }
-        // #1167：首启默认位置（`图片\P-Pass Library`）这时往往还不存在。ACE 只能加在已有的
+        // #1167：首启默认位置（`图片\P-Pass Library`）这时往往还不存在。权限只能设在已有的
         // 目录上，服务账户又建不了主人用户目录里的文件夹（真机：向导报「拒绝访问 (os error 5)」）
-        // ——所以由主人先建好，再授权。
+        // ——所以由主人先建好，再设权限。
         if !dir.exists() {
             std::fs::create_dir_all(dir).map_err(|e| crate::PlatformError::Io {
                 action: "create_library_dir",
@@ -688,9 +688,10 @@ impl PlatformAdapter for WindowsAdapter {
             })?;
         }
         let account = format!(r"NT SERVICE\{}", windows_service::SERVICE_NAME);
-        let sid = crate::windows_programdata::account_sid_string(&account)?;
+        let service = crate::windows_programdata::account_sid_string(&account)?;
+        let owner = crate::windows_programdata::current_user_sid_string()?;
         Ok(
-            match crate::windows_photo_dir::grant_modify_for_sid(dir, &sid)? {
+            match crate::windows_photo_dir::make_private_for_service(dir, &service, &owner)? {
                 crate::windows_photo_dir::GrantOutcome::Done => crate::LibraryDirGrant::Granted,
                 crate::windows_photo_dir::GrantOutcome::SkippedNoAcl { file_system } => {
                     crate::LibraryDirGrant::SkippedNoAcl { file_system }

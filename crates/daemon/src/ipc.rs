@@ -139,11 +139,8 @@ impl PeerEndpoint {
                 }
             }
             PeerEndpoint::Pipe(pipe) => {
-                let name = pipe
-                    .as_str()
-                    .to_ns_name::<GenericNamespaced>()
-                    .map_err(|e| format!("管道名不合法：{e}"))?;
-                let conn = interprocess::local_socket::tokio::Stream::connect(name)
+                // 与壳一致：只允许服务端识别本客户端，不允许以本客户端身份行事。
+                let conn = platform::connect_resident_pipe_tokio(pipe)
                     .await
                     .map_err(|e| format!("连不上 {pipe}：{e}"))?;
                 let (conn, check) = tokio::task::spawn_blocking(move || {

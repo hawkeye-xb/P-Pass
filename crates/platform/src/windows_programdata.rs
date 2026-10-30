@@ -359,16 +359,23 @@ impl ProgramDataDir {
     }
 }
 
-/// 用显式访问表覆盖 DACL，并打上「受保护」标记（不再继承）。
+/// 用显式访问表覆盖 DACL，并打上「受保护」标记（不再继承）。每个 SID 完全控制。
 fn set_private_dacl(path: &Path, sids: &[&str]) -> Result<()> {
-    let mut allocated: Vec<PSID> = Vec::with_capacity(sids.len());
+    let grants: Vec<(&str, u32)> = sids.iter().map(|s| (*s, FILE_ALL_ACCESS)).collect();
+    set_private_dacl_with(path, &grants)
+}
+
+/// 同 [`set_private_dacl`]，每个 SID 各给一个访问掩码。ACE 都可被子目录与文件继承；
+/// 系统随即把新的可继承 ACE 传播到已有子项（子项自己的显式 ACE 不动）。
+pub(crate) fn set_private_dacl_with(path: &Path, grants: &[(&str, u32)]) -> Result<()> {
+    let mut allocated: Vec<PSID> = Vec::with_capacity(grants.len());
     let result = (|| -> Result<()> {
-        let mut entries = Vec::with_capacity(sids.len());
-        for sid_text in sids {
+        let mut entries = Vec::with_capacity(grants.len());
+        for (sid_text, mask) in grants {
             let sid = sid_from_string(sid_text)?;
             allocated.push(sid);
             entries.push(EXPLICIT_ACCESS_W {
-                grfAccessPermissions: FILE_ALL_ACCESS,
+                grfAccessPermissions: *mask,
                 grfAccessMode: SET_ACCESS,
                 grfInheritance: windows_sys::Win32::Security::SUB_CONTAINERS_AND_OBJECTS_INHERIT,
                 Trustee: TRUSTEE_W {

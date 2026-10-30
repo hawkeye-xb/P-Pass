@@ -142,6 +142,47 @@ pub fn bind_resident_pipe(
     imp::bind_resident_pipe(name)
 }
 
+/// 以客户端身份连常驻 daemon 的命名管道（[`crate::ResidentIpc::UserPipe`]）。
+///
+/// Windows：打开管道时声明 `SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION`，服务端只能
+/// 识别客户端身份（读 `TokenUser`），不能以客户端身份行事。interprocess 不暴露这个参数，
+/// 所以自己 `CreateFileW` 再交给 interprocess 包装（见 `windows_pipe`）。别的平台没有命名
+/// 管道这种形态，按命名空间名照常连接。
+pub fn connect_resident_pipe(name: &str) -> std::io::Result<interprocess::local_socket::Stream> {
+    connect_imp::connect_sync(name)
+}
+
+/// [`connect_resident_pipe`] 的 tokio 版本。
+pub async fn connect_resident_pipe_tokio(
+    name: &str,
+) -> std::io::Result<interprocess::local_socket::tokio::Stream> {
+    connect_imp::connect_tokio(name).await
+}
+
+#[cfg(windows)]
+mod connect_imp {
+    pub(super) use crate::windows_pipe::{
+        connect_identification_sync as connect_sync, connect_identification_tokio as connect_tokio,
+    };
+}
+
+#[cfg(not(windows))]
+mod connect_imp {
+    use interprocess::local_socket::traits::{tokio::Stream as _, Stream as _};
+    use interprocess::local_socket::{GenericNamespaced, ToNsName as _};
+
+    pub(super) fn connect_sync(name: &str) -> std::io::Result<interprocess::local_socket::Stream> {
+        interprocess::local_socket::Stream::connect(name.to_ns_name::<GenericNamespaced>()?)
+    }
+
+    pub(super) async fn connect_tokio(
+        name: &str,
+    ) -> std::io::Result<interprocess::local_socket::tokio::Stream> {
+        interprocess::local_socket::tokio::Stream::connect(name.to_ns_name::<GenericNamespaced>()?)
+            .await
+    }
+}
+
 #[cfg(target_os = "macos")]
 mod imp {
     use super::{PeerCheck, PeerRole, PeerUser};

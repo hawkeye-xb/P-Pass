@@ -342,6 +342,7 @@
   "ui.err_library_target_readonly": "The selected folder isn't writable. Choose another folder.",
   "ui.err_library_nested": "The new location can't be the same as, inside, or contain the current library. Choose another folder.",
   "ui.err_set_library": "The photo library location wasn't saved. Try again.",
+  "ui.err_library_private_failed": "Couldn't make this folder private to you, so the photo library location wasn't changed: {err}. Choose a folder you created.",
   "ui.err_set_library_readonly": "The photo library location wasn't saved. This folder isn't writable. Choose another folder.",
   "ui.err_set_library_disk_full": "The photo library location wasn't saved. The disk is full. Choose another disk.",
   "ui.wizard_notice_only_label": "Just a notification",
