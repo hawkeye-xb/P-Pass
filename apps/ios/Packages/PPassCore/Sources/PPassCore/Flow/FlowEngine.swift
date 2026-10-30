@@ -44,6 +44,10 @@ public actor FlowEngine {
     private let onPairingIdAdvertised: @Sendable (String) -> Void
     /// 视图变化的出口（UI 投影订阅它）。
     private let onView: @Sendable (EngineView) -> Void
+    /// #1272：手选（系统选择器）。nil = 没有这件事（测试用）。取件时优先于自动备份，对账 / 计数碰不到它。
+    private let picked: PickedStore?
+    /// #1272：App 此刻在前台。手选只在前台传（itemProvider 只在进程存活期间有效，不复制进 App 空间）。
+    private let isForeground: @Sendable () -> Bool
 
     // MARK: 状态（只在 actor 上读写）
 
@@ -62,6 +66,8 @@ public actor FlowEngine {
     private var cycleActive = false
     private var pendingTriggers: [TriggerReason] = []
     private var started = false
+    /// #1272：正在传的是手选的一张（退到后台时据此打断这一轮）。
+    private var processingPicked = false
     /// AUDIT-07：这一轮已经发出的逐张事实计数（键 == 桌面 `audit_item_evidence.outcome`）。
     private var roundOutcomes: [String: Int] = [:]
     /// #958：这一轮因「只传照片」没处理的视频。按 mediaId 去重——同一段在一轮里可能先被发现建行、再被待传取件看到（#991）。
@@ -96,7 +102,9 @@ public actor FlowEngine {
         monotonic: @escaping @Sendable () -> Int64 = { Int64(ProcessInfo.processInfo.systemUptime * 1000) },
         afterCycle: @escaping @Sendable () async -> Void,
         onPairingIdAdvertised: @escaping @Sendable (String) -> Void,
-        onView: @escaping @Sendable (EngineView) -> Void = { _ in }
+        onView: @escaping @Sendable (EngineView) -> Void = { _ in },
+        picked: PickedStore? = nil,
+        isForeground: @escaping @Sendable () -> Bool = { true }
     ) {
         self.store = store
         self.media = media
@@ -117,6 +125,8 @@ public actor FlowEngine {
         self.afterCycle = afterCycle
         self.onPairingIdAdvertised = onPairingIdAdvertised
         self.onView = onView
+        self.picked = picked
+        self.isForeground = isForeground
         paused = control.paused()
         waitReason = control.waitReason()
     }
@@ -545,21 +555,26 @@ public actor FlowEngine {
         guard pairingId() != nil else { return settle(.notPaired) }
 
         // ---- 入口：不持有执行租约，只读元数据 ----
-        try await prepareCursors(reconcile: reconcile)
-        if reconcile { await reconcileSourcePresence() }
-        let todo = try await countTodo()
-        try Task.checkCancellation()
-        setPending(todo)
-        if todo == 0, try store.scanState().dirty {
-            // 扫描脏时计数就是全量差集：一张待办都没有 = 扫描也取不到东西，在入口就收掉，不为它申请租约。
-            try store.finishScan()
-            log("cycle \(names): reconcile scan has nothing to do (full diff is empty); cleared before the lease")
+        // #1272：手选不需要照片权限——这一轮只因手选而起（或照片库这一侧读不动）时，整段 PhotoKit 的准备跳过，只传手选。
+        let pickedReady = hasPickedReady()
+        var autoSkipped = pickedReady && reasons.allSatisfy { $0 == .pickedAdded }
+        if !autoSkipped {
+            do {
+                try await prepareAuto(reconcile: reconcile, names: names)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                guard pickedReady else { throw error }
+                log("cycle \(names): photo library side unavailable (\(error)); transferring picked photos only")
+                autoSkipped = true
+            }
         }
         if let reason = waitReasonOf(conditions(), userPresent: userPresent) {
             log("cycle \(names): waiting for \(reason.rawValue) (no lease requested)")
             return settle(reason)
         }
-        let transferWork = try await hasWork(reconcile: reconcile, askPresence: reasons.contains(.periodic))
+        var transferWork = pickedReady
+        if !transferWork { transferWork = try await hasWork(reconcile: reconcile, askPresence: reasons.contains(.periodic)) }
         guard transferWork else {
             log("cycle \(names): nothing to transfer")
             recovered("nothing left to transfer")
@@ -605,7 +620,7 @@ public actor FlowEngine {
         roundOutcomes = [:]
         roundVideosDeferred = []
         log("cycle \(names): round \(roundId) open (desktop reachable\(lease.photosOnly ? "; photos only" : ""))")
-        let round = Round(reconcile: reconcile, userPresent: userPresent)
+        let round = Round(reconcile: reconcile && !autoSkipped, userPresent: userPresent, pickedOnly: autoSkipped)
         let result: Result<WaitReason?, Error>
         do {
             result = .success(try await delivery.session { try await self.loop(round) })
@@ -624,6 +639,33 @@ public actor FlowEngine {
     }
 
     /// AUDIT-07：关掉这一轮。一轮一张都没碰过就不发终态（没有对象、没有证据，不构成一次备份操作）。
+    /// 入口里读照片库元数据的那一段（游标、对账、计数）。
+    private func prepareAuto(reconcile: Bool, names: [String]) async throws {
+        try await prepareCursors(reconcile: reconcile)
+        if reconcile { await reconcileSourcePresence() }
+        let todo = try await countTodo()
+        try Task.checkCancellation()
+        setPending(todo)
+        if todo == 0, try store.scanState().dirty {
+            // 扫描脏时计数就是全量差集：一张待办都没有 = 扫描也取不到东西，在入口就收掉，不为它申请租约。
+            try store.finishScan()
+            log("cycle \(names): reconcile scan has nothing to do (full diff is empty); cleared before the lease")
+        }
+    }
+
+    /// #1272：有手选的照片等着传，且 App 在前台。
+    private func hasPickedReady() -> Bool { isForeground() && picked?.hasOpen() == true }
+
+    /// #1272：退到后台——正在传的是手选的一张就打断这一轮（不写暂停标志：回前台由 appForeground 接着传）。
+    public func onAppBackground() async {
+        guard processingPicked else { return }
+        log("app left the foreground while a picked photo was in flight: stopping the loop; it resumes on the next foreground")
+        pendingTriggers.removeAll()
+        await cancelAndJoinCycle()
+        setStatus(LoopStatus(phase: .idle))
+        bump()
+    }
+
     private func closeRound(_ roundId: String) {
         let counts = roundOutcomes.mapValues { "\($0)" }
         roundOutcomes = [:]
@@ -686,10 +728,13 @@ public actor FlowEngine {
         var retryAfter: Int64 = 0
         var presenceDone: Bool
         var handled = Set<Int64>()
+        /// #1272：只传手选，不碰照片库（取完手选就结束）。
+        let pickedOnly: Bool
 
-        init(reconcile: Bool, userPresent: Bool) {
+        init(reconcile: Bool, userPresent: Bool, pickedOnly: Bool = false) {
             self.reconcile = reconcile
             self.userPresent = userPresent
+            self.pickedOnly = pickedOnly
             presenceDone = !reconcile
         }
     }
@@ -724,6 +769,8 @@ public actor FlowEngine {
     private enum WorkItem {
         case existing(Order, Origin)
         case fresh(MediaSnapshot, Origin)
+        /// #1272：用户手选的一张（系统选择器，不进备份范围）。
+        case picked(PickedItem)
     }
 
     private enum StepResult {
@@ -740,6 +787,9 @@ public actor FlowEngine {
 
     /// 取件固定优先级：遗留续传 → 对账扫描 → 新照片 → 对账补传（待传输 / 失败重试 / 桌面缺失）。
     private func pickNext(_ round: Round) async throws -> WorkItem? {
+        // #1272：手选优先于自动备份（正在传的那张不打断——这里只在两张之间取）；离开 P-Pass 时不取。
+        if isForeground(), let next = picked?.nextOpen() { return .picked(next) }
+        if round.pickedOnly { return nil }
         while true {
             if let order = try store.currentInStates([.transferring], afterId: round.legacyAfter, limit: 1).first {
                 round.legacyAfter = order.id
@@ -856,6 +906,75 @@ public actor FlowEngine {
         switch item {
         case let .existing(order, _): return try await processExisting(order, pairingId: pairingId)
         case let .fresh(snapshot, origin): return try await processFresh(snapshot, origin, pairingId: pairingId)
+        case let .picked(item): return try await processPicked(item, pairingId: pairingId)
+        }
+    }
+
+    /// #1272：传一张手选的照片。和 [processFresh] / [deliverAndCommit] 同一条传输链路（导入 → provider → offer），
+    /// 区别只在身份：不查照片库、不建 order、不推进任何游标、不对账；结局记在手选队列里。
+    /// 电脑上已有同内容（按哈希去重）时桌面在 offer 回复里直接给完成，一个字节没发——记「已有」。
+    private func processPicked(_ item: PickedItem, pairingId pid: String) async throws -> StepResult {
+        guard let picked else { return .next }
+        processingPicked = true
+        defer { processingPicked = false }
+        func settle(_ state: PickedState) -> StepResult {
+            picked.mark(item.id, state)
+            bump()
+            return .next
+        }
+        picked.mark(item.id, .transferring)
+        let imported: ImportResult
+        do {
+            imported = try await importer.importPicked(item)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            if Task.isCancelled { throw CancellationError() }
+            log("picked \(item.id): import failed (\(type(of: error)))")
+            return settle(.failed)
+        }
+        // 取不到原图（临时文件没了 / 空间不足 / 不可得）：这张记没传成，让用户重新挑；不当整体等待。
+        guard case let .imported(hash, size) = imported else { return settle(.failed) }
+        let details = MediaDetails(
+            snapshot: MediaSnapshot(mediaId: "picked-\(item.id)", sourceVersion: "", bucketId: ""),
+            fileName: item.fileName, mimeType: item.mimeType, sizeBytes: size, captureAtMs: 0)
+        let request = DeliveryRequest(orderId: item.queueSequence, pairingId: pid, contentHash: hash, details: details, source: "picked")
+        let sent = SentBytes()
+        return try await releasingOnAbort(hash) {
+            self.setStatus(LoopStatus(phase: .running, current: CurrentItem(orderId: request.orderId, fileName: item.fileName, bytesSent: 0, totalBytes: size)))
+            var outcome = try await self.deliverOnce(request, observed: sent)
+            if case .itemFailure = outcome { outcome = try await self.deliverOnce(request, observed: sent) }
+            switch outcome {
+            case let .confirmed(receipt):
+                let valid = receipt.queueSequence == request.orderId && receipt.pairingId == pid && (receipt.contentHash == nil || receipt.contentHash == hash)
+                if !valid {
+                    self.importer.release(hash)
+                    return settle(.failed)
+                }
+                self.importer.release(hash)
+                // 桌面按哈希判重已有：offer 直接给完成，没有任何字节进度；真传过的完成时必有进度回报。
+                return settle(sent.max == 0 ? .alreadyThere : .delivered)
+            case .sourceMissing:
+                self.importer.release(hash)
+                await self.delivery.discardPartial(orderId: request.orderId, pairingId: pid)
+                return settle(.failed)
+            case .itemFailure:
+                self.importer.release(hash)
+                return settle(.failed)
+            // 路径 / 对端 / 配对 / 版本：这张还没结，留在「传输中」，退出循环，下一次用户在场时续传。
+            case .pathFailure:
+                self.importer.release(hash)
+                return .exit(.desktopUnreachable)
+            case let .peerFailure(kind, _):
+                self.importer.release(hash)
+                return .exit(waitReasonOf(kind))
+            case .pairingLost:
+                self.importer.release(hash)
+                return .exit(.notPaired)
+            case let .versionMismatch(side):
+                self.importer.release(hash)
+                return .exit(waitReasonOf(side))
+            }
         }
     }
 
@@ -1038,6 +1157,14 @@ public actor FlowEngine {
 
     static func isVideo(_ details: MediaDetails) -> Bool { details.mimeType.lowercased().hasPrefix("video/") }
 
+    /// #1272：这一张传输期间回报过的最大字节数（进度回调里同步记，不经 actor）。
+    private final class SentBytes: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: Int64 = 0
+        func record(_ bytes: Int64) { lock.lock(); value = Swift.max(value, bytes); lock.unlock() }
+        var max: Int64 { lock.lock(); defer { lock.unlock() }; return value }
+    }
+
     /// #958：每张开始 / 结束各一行（hash 前缀、字节数、耗时），不写文件名。
     private func deliverAndCommit(_ order: Order, hash: String, details: MediaDetails, progress: Progress, pairingId: String) async throws -> StepResult {
         let started = monotonic()
@@ -1119,10 +1246,11 @@ public actor FlowEngine {
         }
     }
 
-    private func deliverOnce(_ request: DeliveryRequest) async throws -> DeliveryOutcome {
+    private func deliverOnce(_ request: DeliveryRequest, observed: SentBytes? = nil) async throws -> DeliveryOutcome {
         let lease = self.lease
         do {
             let outcome = try await delivery.deliver(request) { [weak self] bytes in
+                observed?.record(bytes)
                 lease.renew()
                 Task { await self?.progressed(request.orderId, bytes) }
             }

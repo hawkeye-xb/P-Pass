@@ -597,8 +597,10 @@ public struct FlowFetchRequest: Codable, Equatable, Sendable {
     public var captureAtMs: Int64
     /// 字节数（0 = 不知道）；桌面 offer 时按它预检空间。
     public var sizeBytes: Int64
+    /// #1272：这张照片的来源。`"picked"` = 用户在系统选择器里手选；nil = 自动备份（缺省，不上线，老电脑也认得）。
+    public var source: String?
 
-    public init(queueSequence: UInt64 = 0, pairingId: String = "", leaseToken: String = "", contentHash: String = "", fileName: String = "", mediaType: String = "", provider: String = "", captureAtMs: Int64 = 0, sizeBytes: Int64 = 0) {
+    public init(queueSequence: UInt64 = 0, pairingId: String = "", leaseToken: String = "", contentHash: String = "", fileName: String = "", mediaType: String = "", provider: String = "", captureAtMs: Int64 = 0, sizeBytes: Int64 = 0, source: String? = nil) {
         self.queueSequence = queueSequence
         self.pairingId = pairingId
         self.leaseToken = leaseToken
@@ -608,12 +610,13 @@ public struct FlowFetchRequest: Codable, Equatable, Sendable {
         self.provider = provider
         self.captureAtMs = captureAtMs
         self.sizeBytes = sizeBytes
+        self.source = source
     }
 
     enum CodingKeys: String, CodingKey {
         case queueSequence = "queue_sequence", pairingId = "pairing_id", leaseToken = "lease_token"
         case contentHash = "content_hash", fileName = "file_name", mediaType = "media_type", provider
-        case captureAtMs = "capture_at_ms", sizeBytes = "size_bytes"
+        case captureAtMs = "capture_at_ms", sizeBytes = "size_bytes", source
     }
 
     public init(from decoder: Decoder) throws {
@@ -627,6 +630,7 @@ public struct FlowFetchRequest: Codable, Equatable, Sendable {
         provider = try c.value(.provider, default: "")
         captureAtMs = try c.value(.captureAtMs, default: 0)
         sizeBytes = try c.value(.sizeBytes, default: 0)
+        source = try c.decodeIfPresent(String.self, forKey: .source)
     }
 }
 

@@ -123,11 +123,13 @@ public enum TriggerReason: String, CaseIterable, Sendable {
     case foregroundMediaChange = "FOREGROUND_MEDIA_CHANGE"
     /// 等待中（桌面不可达）时前台心跳又连上了桌面。
     case desktopReachable = "DESKTOP_REACHABLE"
+    /// #1272：用户刚在系统选择器里挑了几张。人在场（自动备份没开也要传），不对账。
+    case pickedAdded = "PICKED_ADDED"
 
     /// 人在场（打开 App、改范围、点继续、手动）——不查后台开关、不查电量。仅 Wi‑Fi 对所有触发都生效。
     public var userPresent: Bool {
         switch self {
-        case .appForeground, .scopeAdded, .pairingRepaired, .userContinue, .retryFailed, .restoreSkipped, .manual, .foregroundMediaChange, .desktopReachable:
+        case .appForeground, .scopeAdded, .pairingRepaired, .userContinue, .retryFailed, .restoreSkipped, .manual, .foregroundMediaChange, .desktopReachable, .pickedAdded:
             return true
         default:
             return false
@@ -303,8 +305,18 @@ public protocol MediaImporter: Sendable {
     /// 本机原图不必回报。可在任意线程调用。
     func importMedia(_ details: MediaDetails, onFetch: @escaping @Sendable (OriginalFetchUpdate) -> Void) async throws -> ImportResult
 
+    /// #1272：导入一张手选的照片（系统选择器的 itemProvider，不是照片库里的 asset）。只在这张轮到时才读，读完临时文件由实现负责。
+    /// 默认实现抛错（没有手选这件事的导入器 / 测试用的假导入器）。
+    func importPicked(_ item: PickedItem) async throws -> ImportResult
+
     /// 这份内容不再需要（桌面已有、放弃这一张、这一轮走不完）。幂等、不许抛。
     func release(_ contentHash: String)
+}
+
+public struct PickedImportUnsupported: Error {}
+
+extension MediaImporter {
+    public func importPicked(_ item: PickedItem) async throws -> ImportResult { throw PickedImportUnsupported() }
 }
 
 // MARK: - 传输
@@ -315,6 +327,16 @@ public struct DeliveryRequest: Equatable, Sendable {
     public let pairingId: String
     public let contentHash: String
     public let details: MediaDetails
+    /// #1272：`"picked"` = 手选；nil = 自动备份（不上线）。
+    public let source: String?
+
+    public init(orderId: Int64, pairingId: String, contentHash: String, details: MediaDetails, source: String? = nil) {
+        self.orderId = orderId
+        self.pairingId = pairingId
+        self.contentHash = contentHash
+        self.details = details
+        self.source = source
+    }
 
     public var leaseToken: String { leaseTokenFor(orderId) }
 }

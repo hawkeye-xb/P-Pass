@@ -42,6 +42,8 @@ public enum OriginalCachePaths {
     public static let fetchScratchDirName = "ppass-blobstore"
     /// `tmp/ppass-originals/`：备份导入器的临时目录（手机自己的照片，不是电脑的原图缓存）。
     public static let importScratchDirName = "ppass-originals"
+    /// `tmp/ppass-picked/`：手选导入器把正在传的那一张从选择器的临时文件拷到这里（#1272），传完即删。
+    public static let pickedScratchDirName = "ppass-picked"
 }
 
 public enum DisconnectDisposition: Equatable, Sendable {
@@ -74,6 +76,8 @@ public enum DisconnectState: CaseIterable, Sendable {
     case fetchScratch
     case thumbnailMemoryCache
     case importScratch
+    case pickedBatch
+    case pickedScratch
     case identity
     case legacyPlaintextIdentity
     case onboardedDesktops
@@ -94,7 +98,7 @@ public enum DisconnectState: CaseIterable, Sendable {
     public var base: DisconnectBase {
         switch self {
         case .originalVideoCache: return .caches
-        case .originalShareTemp, .fetchScratch, .importScratch: return .tmp
+        case .originalShareTemp, .fetchScratch, .importScratch, .pickedScratch: return .tmp
         default: return .storageRoot
         }
     }
@@ -109,6 +113,8 @@ public enum DisconnectState: CaseIterable, Sendable {
         case .originalShareTemp: return OriginalCachePaths.shareDirName
         case .fetchScratch: return OriginalCachePaths.fetchScratchDirName
         case .importScratch: return OriginalCachePaths.importScratchDirName
+        case .pickedBatch: return PickedQueue.fileName
+        case .pickedScratch: return OriginalCachePaths.pickedScratchDirName
         case .autoBackupPrefs: return AutoBackupPrefs.fileName
         case .identity: return DeviceIdentity.markerFileName
         case .legacyPlaintextIdentity: return DeviceIdentity.legacyPlaintextFileName
@@ -131,7 +137,7 @@ public enum DisconnectState: CaseIterable, Sendable {
     public var disposition: DisconnectDisposition {
         switch self {
         case .pairing, .legacyUnpairOutbox, .backgroundWakePlan, .legacyPlaintextIdentity,
-             .originalVideoCache, .originalShareTemp, .fetchScratch, .savedToGallery: return .clear
+             .originalVideoCache, .originalShareTemp, .fetchScratch, .savedToGallery, .pickedBatch, .pickedScratch: return .clear
         case .flowRuntime, .scheduledWakes, .mediaChangeObserver, .thumbnailMemoryCache: return .stop
         case .autoBackupPrefs: return .reset
         default: return .keep
@@ -149,6 +155,8 @@ public enum DisconnectState: CaseIterable, Sendable {
         case .fetchScratch: return "#1119：取电脑原图时的 iroh-blobs 临时仓库，里面是取回的原图字节，断开清掉（待确认是否算「原图缓存」，见汇报）"
         case .thumbnailMemoryCache: return "#1119：时间线缩略图的内存缓存（NSCache），断开清空，对位 Android LruCache"
         case .importScratch: return "\(undecidedBasis)：备份导入器的临时目录，装的是手机自己的照片而非电脑的原图；引擎停止时自己收拾，断开不碰"
+        case .pickedBatch: return "#1272：手选一批的汇总与序号计数（picked_batch.json）。手选是对这台电脑做的一次性动作，不跟着换电脑，断开清掉；手选的照片本身从不落盘（itemProvider 只在进程内）。iOS 独有"
+        case .pickedScratch: return "#1272：手选导入器的临时拷贝目录（手机自己的照片，传完即删）；断开清掉可能的残留，启动时也清。iOS 独有"
         case .autoBackupPrefs: return "MOB-93：停生产者（autoEnabled=false），留意图（userRequested）"
         case .backgroundWakePlan: return "MOB-93 的 iOS 对位（#340）：后台唤醒计划是生产者的一部分，断开清掉；挂着的系统请求由 scheduledWakes 撤"
         case .scheduledWakes: return "MOB-93 的 iOS 对位：BGTaskScheduler 登记的唤醒是生产者，断开撤掉"

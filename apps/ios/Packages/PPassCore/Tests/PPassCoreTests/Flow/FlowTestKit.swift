@@ -186,6 +186,16 @@ final class FakeImporter: MediaImporter, @unchecked Sendable {
         return .imported(contentHash: hashOverride.get()[id] ?? p.hash, sizeBytes: p.size)
     }
 
+    /// #1272：手选导入——按文件名给 hash / 字节数；[pickedUnreadable] 里的读不到。
+    let pickedImported = Locked<[String]>([])
+    let pickedUnreadable = Locked<Set<String>>([])
+
+    func importPicked(_ item: PickedItem) async throws -> ImportResult {
+        pickedImported.update { $0.append(item.fileName) }
+        if pickedUnreadable.get().contains(item.fileName) { return .sourceMissing }
+        return .imported(contentHash: "picked-hash-\(item.fileName)", sizeBytes: 1_000)
+    }
+
     func release(_ contentHash: String) { released.update { $0.append(contentHash) } }
 }
 
@@ -233,6 +243,8 @@ final class FakeDelivery: ItemDelivery, @unchecked Sendable {
     /// 下一次（及之后每次）传输的结局；为空时默认 Confirmed。
     let script = Locked<[(DeliveryRequest) -> DeliveryOutcome]>([])
     let hold = Locked(false)
+    /// 默认 true：传输时回报字节进度。false = 桌面按哈希判重已有，offer 直接给完成、一个字节没发（#1272「已有」）。
+    let reportsBytes = Locked(true)
     let onStart = Locked<(DeliveryRequest) -> Void>({ _ in })
     /// 结局之前的进度回调脚本。
     let progress = Locked<(DeliveryRequest, (Int64) -> Void) async -> Void>({ _, _ in })
@@ -265,7 +277,7 @@ final class FakeDelivery: ItemDelivery, @unchecked Sendable {
             }
         }
         await progress.get()(request, onProgress)
-        onProgress(request.details.sizeBytes)
+        if reportsBytes.get() { onProgress(request.details.sizeBytes) }
         let next = script.update { $0.isEmpty ? nil : $0.removeFirst() }
         return (next ?? Self.confirmed)(request)
     }
@@ -396,6 +408,9 @@ final class Rig: @unchecked Sendable {
     let advertised = Locked<[String]>([])
     let conditionsHook = Locked<(() throws -> Conditions)?>(nil)
     private(set) var engine: FlowEngine!
+    /// #1272：手选队列与「App 在前台」。
+    let picked: PickedQueue
+    let foreground = Locked(true)
 
     /// 非 nil 时引擎用它（真实的 FlowDeliveryPort）而不是 [delivery] 这个假端口。
     let portOverride: ItemDelivery?
@@ -410,6 +425,7 @@ final class Rig: @unchecked Sendable {
         schedulerOverride = scheduler
         dir = directory ?? TempDir(name)
         store = try SQLiteOrderStore(directory: dir.url, logger: logger, clock: clock.function)
+        picked = PickedQueue(directory: dir.url, logger: logger)
         importer = FakeImporter(media: media)
         if let control {
             self.control = control
@@ -443,7 +459,9 @@ final class Rig: @unchecked Sendable {
                 afterCycles.update { $0 += 1 }
             },
             onPairingIdAdvertised: { [advertised] e in advertised.update { $0.append(e) } },
-            onView: { [views] v in views.update { $0.append(v) } }
+            onView: { [views] v in views.update { $0.append(v) } },
+            picked: picked,
+            isForeground: { [foreground] in foreground.get() }
         )
     }
 
