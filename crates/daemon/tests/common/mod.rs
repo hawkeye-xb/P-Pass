@@ -270,7 +270,7 @@ pub async fn pair_settled(
             started.elapsed() < Duration::from_secs(60),
             "pairing still pending after 60s"
         );
-        // #1122：未配对对端按设备限速（每秒 5 个）；真手机每几秒轮询一次（Android 5 s）。
+        // #1122：未配对对端共用一份请求额度（每秒 20 个、突发 40）；真手机每几秒轮询一次（Android 5 s）。
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
