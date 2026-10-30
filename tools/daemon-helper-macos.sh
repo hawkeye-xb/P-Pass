@@ -200,7 +200,7 @@ dev() {
   # 解码子进程与 daemon 同目录构建（cargo build -p decode-worker）。
   local decoder
   decoder="$(dirname "$daemon")/ppf-decoder"
-  [ -x "$decoder" ] || die "ppf-decoder 不存在：$decoder（cargo build -p decode-worker）"
+  [ -x "$decoder" ] || die "ppf-decoder 不存在：${decoder}（cargo build -p decode-worker）"
   "$ROOT/tools/bundle-macos.sh" "$stage" "$daemon" "$decoder" >/dev/null
   # 壳按「可执行文件上两级/Helpers」找 helper（platform::bundled_daemon_path）：`tauri dev` 的壳在
   # <target>/debug/ 下，<target> 跟着 CARGO_TARGET_DIR 走。

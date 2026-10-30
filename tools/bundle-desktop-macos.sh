@@ -158,7 +158,7 @@ DECODER="$HELPER/Contents/MacOS/ppf-decoder"
 echo "── 5b'. 产物自检：$DECODER"
 [ -x "$DECODER" ] || { echo "FATAL: 解码子进程不存在或不可执行：$DECODER" >&2; exit 1; }
 set +e; "$DECODER" </dev/null >/dev/null 2>&1; DECODER_RC=$?; set -e
-[ "$DECODER_RC" -eq 2 ] || { echo "FATAL: ppf-decoder 空输入应以退出码 2 结束，实际 $DECODER_RC（缺库 / 签名被拒？）" >&2; exit 1; }
+[ "$DECODER_RC" -eq 2 ] || { echo "FATAL: ppf-decoder 空输入应以退出码 2 结束，实际 ${DECODER_RC}（缺库 / 签名被拒？）" >&2; exit 1; }
 echo "   ✓ ppf-decoder 可加载并走到协议校验"
 # 5b''. 同一份自检，但经生产用的 Seatbelt 策略拉起（crates/platform/src/seatbelt.sb，daemon 用的就是它）：
 # 证明 hardened runtime + 同团队签名的库在沙箱里照样加载得起来、走到协议那一步。
@@ -169,7 +169,7 @@ set +e
 /usr/bin/sandbox-exec -f "$SBPROFILE" -D "EXE=$DECODER_REAL" -D "EXEDIR=$(dirname "$DECODER_REAL")" "$DECODER_REAL" </dev/null >/dev/null 2>&1
 SB_RC=$?
 set -e
-[ "$SB_RC" -eq 2 ] || { echo "FATAL: ppf-decoder 在 Seatbelt 策略下空输入应以退出码 2 结束，实际 $SB_RC（策略放行不够 / 签名与库校验冲突？）" >&2; exit 1; }
+[ "$SB_RC" -eq 2 ] || { echo "FATAL: ppf-decoder 在 Seatbelt 策略下空输入应以退出码 2 结束，实际 ${SB_RC}（策略放行不够 / 签名与库校验冲突？）" >&2; exit 1; }
 echo "   ✓ ppf-decoder 在 Seatbelt 沙箱内可加载并走到协议校验"
 
 # ── 5c. #809 版本同源自检：外壳（Info.plist）== daemon == 本次构建版本 ─────

@@ -37,6 +37,14 @@ mod imp {
     const CHILD_ENV: &str = "PPF_ISO_PROBE_CHILD";
 
     pub fn main() {
+        // 自定义 harness 也要会答 libtest 的 `--list`（nextest 建测试清单时调用）。
+        let args: Vec<String> = std::env::args().collect();
+        if args.iter().any(|a| a == "--list") {
+            if !args.iter().any(|a| a == "--ignored") {
+                println!("isolated_adversarial: test");
+            }
+            return;
+        }
         if std::env::var_os(CHILD_ENV).is_some() {
             child();
         } else {
