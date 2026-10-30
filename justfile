@@ -231,8 +231,15 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt toolchain-check lint lint-cross test arch-check md-check token-check shell-vars-check identity-check supply-chain-check mobile-static-check
+ci: fmt toolchain-check lint lint-cross test arch-check md-check token-check shell-vars-check identity-check supply-chain-check mobile-static-check lockfile-check
   @echo "==> CI pipeline: all green ✅"
+
+# 两个 Rust workspace 的 Cargo.lock 都得和实际依赖一致（src-tauri 是独立 workspace，
+# 改了 crates/* 的依赖却没刷它的锁，本地编译会悄悄改锁、CI 不带 --locked 也不红）。
+lockfile-check:
+  cargo metadata --locked --format-version 1 > /dev/null
+  cargo metadata --locked --format-version 1 --manifest-path apps/desktop/src-tauri/Cargo.toml > /dev/null
+  @echo "ok: Cargo.lock（根 + src-tauri）与依赖一致"
 
 # ci-ios 里不需要模拟器的文字级门禁 + 手机端 i18n 副本，本地几秒跑完。
 # 为什么要这条：改了 assets/i18n 却没同步副本，本地 `ci` 全绿、要等远端 iOS lane 才红。
