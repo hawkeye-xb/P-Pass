@@ -389,7 +389,11 @@ impl Manifest {
     /// 源是链接、拷出来是同样大小的普通文件也算一致；反过来不算。
     /// F6：跨卷复制要读每个文件；第一个读不了的（路径 + 原因）。复制工具对此只报一个笼统的
     /// 退出码（robocopy 9），用户不知道是哪个文件。链接只在复制工具会按内容拷时才要读得到指向。
-    fn first_unreadable(&self, root: &Path) -> Option<(PathBuf, std::io::Error)> {
+    fn first_unreadable(
+        &self,
+        root: &Path,
+        open: &dyn Fn(&Path) -> std::io::Result<()>,
+    ) -> Option<(PathBuf, std::io::Error)> {
         self.0.iter().find_map(|(rel, e)| {
             let needs_read = match e {
                 Entry::File { .. } => true,
@@ -400,7 +404,7 @@ impl Manifest {
                 return None;
             }
             let path = root.join(rel);
-            std::fs::File::open(&path).err().map(|err| (path, err))
+            open(&path).err().map(|err| (path, err))
         })
     }
 
@@ -505,6 +509,13 @@ pub struct Deps<'a> {
     /// 跨卷核对通过、开始改名到位之前：把「正在改名到位」落进计划。
     pub promote: &'a dyn Fn() -> Result<(), String>,
     pub at: &'a dyn Fn(Stage),
+    /// 跨卷复制前的可读预检（F6）：打开一个文件读，读不了给错误。生产 = `File::open`。
+    pub open: &'a dyn Fn(&Path) -> std::io::Result<()>,
+}
+
+/// 生产的可读预检：能以只读打开。
+fn open_for_read(path: &Path) -> std::io::Result<()> {
+    std::fs::File::open(path).map(|_| ())
 }
 
 /// 搬过去之后、改指向之前的结果——改指向失败时用它撤回。
@@ -560,6 +571,7 @@ pub fn move_library(
             copy: &platform::copy_dir_contents,
             promote: &promote,
             at: &|_| {},
+            open: &open_for_read,
         },
     )
 }
@@ -643,7 +655,7 @@ pub fn move_library_with(
     } else {
         // 跨卷：系统工具拷到目标里的临时目录 → 核对 → 源目录没被改 → 改名到位。
         // F6：先确认每个文件都读得到——有读不了的就不开始，说清是哪个文件、什么原因。
-        if let Some((path, e)) = snapshot.first_unreadable(&plan.from) {
+        if let Some((path, e)) = snapshot.first_unreadable(&plan.from, deps.open) {
             // 快照里有、现在没了 = 有人在改库（与下面的核对同一结论）。
             if e.kind() == std::io::ErrorKind::NotFound {
                 return Err(changed());
@@ -882,6 +894,7 @@ mod tests {
             copy: &platform::copy_dir_contents,
             promote: &|| Ok(()),
             at,
+            open: &open_for_read,
         }
     }
 
@@ -1080,6 +1093,7 @@ mod tests {
             copy: &half,
             promote: &|| Ok(()),
             at: &|_| {},
+            open: &open_for_read,
         };
         let err = move_library_with(&c.plan, &no_progress(), &indexed_ok, &d).unwrap_err();
         assert!(err.contains("ui.err_relocate_copy_failed"), "{err}");
@@ -1088,17 +1102,8 @@ mod tests {
         assert!(from.join("originals/aa/2026/09/a.jpg").is_file());
     }
 
-    /// 权限去掉后本进程仍读得到（以 root 跑测试）就没法造这个场景。
-    #[cfg(unix)]
-    fn unreadable(path: &Path, mode: u32) -> bool {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
-        std::fs::File::open(path).is_err() || std::fs::read_dir(path).is_err()
-    }
-
     // F6（v0.10.3-test.1 回归）：库里有一个文件服务读不到，robocopy 只报「退出码 9」。跨卷搬迁先
     // 预检：不开始复制，报出是哪个文件、没有读权限。反证：去掉预检 ⇒ 报 copy_failed，红。
-    #[cfg(unix)]
     #[test]
     fn an_unreadable_file_is_named_before_copying() {
         let home = tempfile::tempdir().unwrap();
@@ -1107,34 +1112,52 @@ mod tests {
         let dest = user_dest(home.path());
         let c = plan(&from, &dest, local.path()).unwrap();
         let locked = from.join("originals/aa/2026/09/a.jpg");
-        if !unreadable(&locked, 0o000) {
-            return;
-        }
         let cross = |_: &Path, _: &Path| Some(false);
         let copied = std::cell::Cell::new(false);
         let copy = |_: &Path, _: &Path| -> std::io::Result<()> {
             copied.set(true);
             Ok(())
         };
+        // 服务账户对这一个文件没有读权限（回归现场：管理员建的链接，ACL 里没有服务账户）。
+        let open = |p: &Path| -> std::io::Result<()> {
+            if p == locked {
+                Err(std::io::ErrorKind::PermissionDenied.into())
+            } else {
+                open_for_read(p)
+            }
+        };
         let d = Deps {
             same_volume: &cross,
             copy: &copy,
             promote: &|| Ok(()),
             at: &|_| {},
+            open: &open,
         };
         let err = move_library_with(&c.plan, &no_progress(), &indexed_ok, &d).unwrap_err();
-        unreadable(&locked, 0o644);
         let v: serde_json::Value = serde_json::from_str(&err).unwrap();
         assert_eq!(v["key"], "ui.err_relocate_unreadable_denied", "{err}");
         assert_eq!(v["params"]["path"], locked.display().to_string());
         assert!(!copied.get(), "读不了就不开始复制");
         assert!(!dest.join(STAGING_DIR).exists());
         assert!(locked.is_file(), "原库不动");
+        // 别的原因读不了：不说「没有权限」。
+        let open_other = |p: &Path| -> std::io::Result<()> {
+            if p == locked {
+                Err(std::io::Error::other("device error"))
+            } else {
+                open_for_read(p)
+            }
+        };
+        let d = Deps {
+            open: &open_other,
+            ..d
+        };
+        let err = move_library_with(&c.plan, &no_progress(), &indexed_ok, &d).unwrap_err();
+        assert!(err.contains("\"ui.err_relocate_unreadable\""), "{err}");
     }
 
-    // F6：搬完了、原目录删不掉的残留——记下位置给窗口；用户删掉后记录自然消失。
-    // 反证：finish_flipped 不记录 ⇒ leftover 为 None，红。
-    #[cfg(unix)]
+    // F6：搬完了、原目录删不掉（这里用 remove_source 的拒绝造：新位置上不是这个库）——记下位置
+    // 给窗口；用户删掉后记录自然消失。反证：finish_flipped 不记录 ⇒ leftover 为 None，红。
     #[test]
     fn a_source_that_cannot_be_removed_is_reported_until_it_is_gone() {
         let home = tempfile::tempdir().unwrap();
@@ -1142,21 +1165,10 @@ mod tests {
         let (from, _) = library(home.path(), "Lib");
         let dest = user_dest(home.path());
         let c = plan(&from, &dest, local.path()).unwrap();
-        let cross = |_: &Path, _: &Path| Some(false);
-        move_library_with(&c.plan, &no_progress(), &indexed_ok, &deps(&cross, &|_| {})).unwrap();
-        // 原目录里留一个删不掉的文件（所在目录只读）。
-        let stuck = from.join("stuck");
-        std::fs::create_dir_all(&stuck).unwrap();
-        std::fs::write(stuck.join("x.jpg"), b"x").unwrap();
-        unreadable(&stuck, 0o555);
-        if std::fs::remove_file(stuck.join("x.jpg")).is_ok() {
-            unreadable(&stuck, 0o755); // 以 root 跑测试：造不出删不掉的文件
-            return;
-        }
         mark_flipped(local.path(), &c.plan).unwrap();
         finish_flipped(local.path(), &c.plan);
+        assert!(from.is_dir(), "删不掉的原目录留给用户");
         assert_eq!(leftover(local.path()), Some(from.display().to_string()));
-        unreadable(&stuck, 0o755);
         std::fs::remove_dir_all(&from).unwrap();
         assert_eq!(leftover(local.path()), None, "用户删掉后不再提示");
         assert!(!local
@@ -1184,6 +1196,7 @@ mod tests {
             copy: &lossy,
             promote: &|| Ok(()),
             at: &|_| {},
+            open: &open_for_read,
         };
         let err = move_library_with(&c.plan, &no_progress(), &indexed_ok, &d).unwrap_err();
         assert!(err.contains("ui.err_relocate_verify_failed"), "{err}");

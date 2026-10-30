@@ -823,7 +823,7 @@ fn start_resident(
         }
         Err(e) => {
             // Fall back to a one-shot spawn — still usable this session.
-            match platform::command(&sidecar)
+            match platform::command(sidecar)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .stdin(std::process::Stdio::null())
@@ -1548,7 +1548,7 @@ fn restart_daemon_process_blocking() -> Result<Value, String> {
             .map(|_| ())
             .map_err(|e| ipc::ui_err("ui.err_restart", &[("err", &e)]))
     } else {
-        restart_by_kill_and_respawn().map(|()| ())
+        restart_by_kill_and_respawn()
     };
     if let Err(e) = &brought_up {
         if !resident_service_available() {
@@ -3659,7 +3659,7 @@ mod tests {
         let src = include_str!("lib.rs").replace("\r\n", "\n");
         for (func, spawn) in [
             ("bring_up_daemon", "spawn_bundled_daemon_oneshot()"),
-            ("start_daemon_now", "// Fall back to a one-shot spawn"),
+            ("start_resident", "// Fall back to a one-shot spawn"),
             ("configure_library", "daemon_cli::with_oneshot_daemon("),
         ] {
             let body = product_fn_body(&src, func);
