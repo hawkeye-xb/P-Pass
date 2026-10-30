@@ -106,7 +106,7 @@ mod seatbelt {
     /// （自带的 dylib）、读写 /dev/null。没有网络、mach-lookup、fork、用户目录。
     /// 管道是继承来的 fd，不受路径规则约束。
     /// 调试构建额外放行 Homebrew 前缀，只为本机开发时 worker 链着系统 libheif。
-        /// 与 tools/bundle-desktop-macos.sh 的打包自检共用同一份文件。
+    /// 与 tools/bundle-desktop-macos.sh 的打包自检共用同一份文件。
     const PROFILE: &str = include_str!("seatbelt.sb");
 
     #[cfg(debug_assertions)]

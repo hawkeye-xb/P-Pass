@@ -56,7 +56,10 @@ fn with_worker<T>(worker: &Path, f: impl FnOnce() -> T) -> T {
     let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
     std::env::set_var("PPF_DECODE_WORKER", worker);
     // macOS 的 Seatbelt 只放行执行 worker 本身；假 worker（sh 脚本）要用到的程序在此点名（仅调试构建认）。
-    std::env::set_var("PPF_SEATBELT_TEST_EXEC", "/bin/sh:/bin/bash:/private/var/select/sh:/bin/sleep:/bin/cat");
+    std::env::set_var(
+        "PPF_SEATBELT_TEST_EXEC",
+        "/bin/sh:/bin/bash:/private/var/select/sh:/bin/sleep:/bin/cat",
+    );
     let out = f();
     std::env::remove_var("PPF_SEATBELT_TEST_EXEC");
     std::env::remove_var("PPF_DECODE_WORKER");
