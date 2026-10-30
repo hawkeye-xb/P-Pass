@@ -17,13 +17,16 @@ fi
 # NDK 的 Windows 版编译器是 `<triple><api>-clang.cmd`、`llvm-ar.exe`（Linux / macOS 版没有后缀）。
 # Windows 版 NDK 里同时还放着一个无后缀的同名 shell 包装，Git Bash 的 `-x` 也认它可执行，
 # 但 cargo 作为原生程序执行不了它（os error 193）——所以 Windows 上只认带后缀的。
+# Windows 上能否执行看扩展名，Git Bash 的 `-x` 却不认 `.cmd`，所以那边按「文件存在」判断。
 if command -v cygpath >/dev/null 2>&1; then
   to_shell() { cygpath -u "$1"; }
   to_native() { cygpath -m "$1"; }
+  is_tool() { [ -f "$1" ]; }
   EXE_SUFFIXES=(.cmd .exe)
 else
   to_shell() { printf '%s' "$1"; }
   to_native() { printf '%s' "$1"; }
+  is_tool() { [ -x "$1" ]; }
   EXE_SUFFIXES=("")
 fi
 NDK="$(to_shell "$ANDROID_NDK_HOME")"
@@ -35,7 +38,7 @@ CLANG=
 AR=
 for candidate in "$NDK"/toolchains/llvm/prebuilt/*; do
   for suffix in "${EXE_SUFFIXES[@]}"; do
-    if [ -x "$candidate/bin/${TARGET}${API}-clang$suffix" ]; then
+    if is_tool "$candidate/bin/${TARGET}${API}-clang$suffix"; then
       CLANG="$candidate/bin/${TARGET}${API}-clang$suffix"
       break 2
     fi
@@ -46,7 +49,7 @@ if [ -z "$CLANG" ]; then
   exit 1
 fi
 for suffix in "${EXE_SUFFIXES[@]}"; do
-  if [ -x "$(dirname "$CLANG")/llvm-ar$suffix" ]; then
+  if is_tool "$(dirname "$CLANG")/llvm-ar$suffix"; then
     AR="$(dirname "$CLANG")/llvm-ar$suffix"
     break
   fi
