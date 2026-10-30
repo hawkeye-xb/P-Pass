@@ -40,7 +40,7 @@ class MediaPermissionRouteTest {
     fun partial_access_goes_to_the_scope_page_and_can_save() {
         assertEquals(MediaPermissionLanding.Buckets, mediaPermissionLanding(allGranted = false, access = MediaAccess.PARTIAL))
         val buckets = main.substringAfter("is Screen.Buckets -> {").substringBefore("onCancel = { screen = Screen.Home(s.pairing) },")
-        assertTrue("页顶说明跟着部分授权走", buckets.contains("partialAccess = mediaAccess == MediaAccess.PARTIAL,"))
+        assertFalse("#1272：选范围页的部分授权说明已删（进选范围页的前提是有全部权限）", buckets.contains("partialAccess"))
         assertFalse("部分授权不许再跳过保存范围", buckets.contains("hasPartialMediaAccess"))
         assertTrue(buckets.contains("scopeStore.saveScope("))
     }
@@ -64,7 +64,7 @@ class MediaPermissionRouteTest {
     fun intro_copy_is_gone_and_fallback_copy_exists() {
         for ((dir, xml) in res) {
             assertFalse("$dir 还留着 photo_intro_*", xml.contains("name=\"photo_intro_"))
-            for (k in listOf("partial_access_title", "partial_access_body", "partial_access_action", "notif_media_partial_body", "bucket_partial_access_note")) {
+            for (k in listOf("partial_access_title", "notif_media_partial_body", "auto_backup_rule_denied_hint")) {
                 assertTrue("$dir 缺兜底文案 $k", xml.contains("name=\"$k\""))
             }
         }

@@ -138,7 +138,6 @@
     <string name="idle_auto_hint">连接 Wi-Fi 且电量不低时自动备份</string>
     <!-- #581：关掉「仅 Wi-Fi」后首页空闲行改用这句：不提 Wi-Fi，只承诺电量。 -->
     <string name="idle_auto_hint_any_network">电量不低时自动备份</string>
-    <string name="state_no_albums">还没有选择相册，不会备份照片</string>
     <!-- T-083: 失败红卡：正文只有人话，原始错误只住折叠区 -->
     <string name="try_again">再试一次</string>
     <string name="trouble_details_show">查看技术详情</string>
@@ -204,7 +203,6 @@
     <string name="bucket_hint">只有勾选的相册会备份。</string>
     <string name="bucket_empty">手机上没有照片或视频。</string>
     <!-- 只给了部分照片（Android 14+「选择照片」/ iOS「有限访问」）时，选范围页顶部的一行。 -->
-    <string name="bucket_partial_access_note">只授权了部分照片，只会备份你允许的那些。</string>
     <string name="bucket_loading">正在读取相册…</string>
     <string name="bucket_count">%1$d 张</string>
     <string name="bucket_unnamed">未命名</string>
@@ -248,14 +246,9 @@
     <string name="wifi_deferred_hint">等待连接 Wi-Fi</string>
     <!-- MOB-02 §二: 部分授权引导 -->
     <string name="partial_access_title">只能访问部分照片</string>
-    <string name="partial_access_body">只有选中的照片会备份。</string>
-    <string name="partial_access_action">去设置</string>
     <!-- MOB-94: 全拒那一档，与「只给了部分」分开说 -->
     <string name="no_media_access_title">无照片访问权限</string>
-    <string name="no_media_access_body">无法读取这台手机上的照片，备份已停止。</string>
     <!-- MOB-03: 相册选择页权限链：拒绝引导（不崩不白屏，说清为什么需要） -->
-    <string name="media_permission_denied_title">需要照片权限</string>
-    <string name="media_permission_denied_body">选择相册需要访问照片和视频。</string>
     <!-- REL-02/DESK-02①: 更新通道零 UI：由构建推导（版本含 -test. → test）。 -->
     <!-- DEV-01b: 重装识别开关行已隐藏（用户拍板）：strings 随 UI 删除。 -->
     <string name="reconnect">重新配对</string>
@@ -362,4 +355,7 @@
     <string name="photos_first_run_intro">已连上 %1$s。手机上的照片会存到这台电脑。</string>
     <string name="photos_first_run_enable">开启自动备份</string>
     <string name="photos_first_run_pick">先挑几张传</string>
+    <string name="auto_backup_blocked_hero">自动备份已停止</string>
+    <string name="auto_backup_rule_partial_hint">只允许访问部分照片。</string>
+    <string name="auto_backup_rule_none_hint">没有照片访问权限。</string>
 </resources>

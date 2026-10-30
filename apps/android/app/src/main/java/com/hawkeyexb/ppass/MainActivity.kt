@@ -1197,8 +1197,6 @@ fun PPassApp() {
                         // 范围存了但读不出来不算「没选」（设置行另说「读不到」）。
                         noAlbums = ruleOn && !scopeUnreadable && (selectedBucketCount ?: 0) == 0,
                         onChooseAlbums = { enterBucketPicker(s.pairing, firstTime = false) },
-                        mediaAccess = if (ruleOn) mediaAccess else MediaAccess.FULL,
-                        onOpenAppSettings = { openAppDetailsSettings(context) },
                         autoBackupRuleOn = ruleOn,
                         computerName = s.pairing.storageDeviceName,
                         onEnableAutoBackup = { onToggleRule(s.pairing, true) },
@@ -1372,7 +1370,12 @@ fun PPassApp() {
                         // #1272：「自动备份」规则开关与权限三种结果。
                         autoBackupRuleOn = ruleOn,
                         onToggleAutoBackupRule = { on -> onToggleRule(s.pairing, on) },
-                        autoBackupRuleHintRes = ruleHintRes,
+                        autoBackupRuleHintRes = ruleHintRes ?: when {
+                            !ruleOn -> null
+                            mediaAccess == MediaAccess.PARTIAL -> R.string.auto_backup_rule_partial_hint
+                            mediaAccess == MediaAccess.NONE -> R.string.auto_backup_rule_none_hint
+                            else -> null
+                        },
                     )
                 },
             )
@@ -1437,7 +1440,6 @@ fun PPassApp() {
                     knownBuckets = scopeStore.knownBucketIds(),
                     // 10-29：只给了部分照片也照常保存范围，只备份允许的那些（页顶说明一行）；
                     // 首页英雄卡仍由部分授权引导卡顶替（MOB-02 §二：不显示假 0/0）。
-                    partialAccess = mediaAccess == MediaAccess.PARTIAL,
                     onDone = { sel, time ->
                         // MOB-02 §六: 保存范围 + 记录当前全部相册（新相册
                         // 基准）；新出现的相册默认不包含（不在 sel 里）。

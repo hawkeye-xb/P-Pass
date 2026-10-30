@@ -296,16 +296,13 @@ internal fun PhotosScreen(
     // #1263：范围里一个相册都没有——给引导和「选择相册」按钮（直达选范围页）。照片页不空时也在顶部给。
     noAlbums: Boolean = false,
     onChooseAlbums: () -> Unit = {},
-    // 10-29：照片权限不全（只给了部分 / 一张都不给）时，引导换成设置页那张权限卡（[photosGuideOf]）。
-    mediaAccess: MediaAccess = MediaAccess.FULL,
-    onOpenAppSettings: () -> Unit = {},
     // #1272：没开自动备份时，电脑上还没有照片的空状态就是引导（已连上〈电脑名〉+「开启自动备份」「先挑几张传」）。
     autoBackupRuleOn: Boolean = true,
     computerName: String = "",
     onEnableAutoBackup: () -> Unit = {},
     onPickPhotos: () -> Unit = {},
 ) {
-    val guide = photosGuideOf(mediaAccess, noAlbums)
+    val guide = photosGuideOf(noAlbums)
     // SYNC-06: 时间线状态（items/next/loading/error/订阅标志）全部由
     // TimelineSubscriptionHolder 持有——App 前台期间（不管显示哪个 tab）
     // 订阅连接保持，本 composable 只渲染这份状态，不再自己创建/销毁订阅。
@@ -449,7 +446,7 @@ internal fun PhotosScreen(
 
         // #1263：照片页里已经有（家人的）照片时，引导放在顶部，不挡浏览。
         if (guide != PhotosGuide.None && items.isNotEmpty()) {
-            PhotosGuideCard(guide, onChooseAlbums, mediaAccess, onOpenAppSettings, Modifier.fillMaxWidth().padding(20.dp, 0.dp, 20.dp, 12.dp))
+            PhotosGuideCard(guide, onChooseAlbums, Modifier.fillMaxWidth().padding(20.dp, 0.dp, 20.dp, 12.dp))
         }
 
         when {
@@ -464,7 +461,7 @@ internal fun PhotosScreen(
                 FirstRunIntro(computerName, onEnableAutoBackup, onPickPhotos, Modifier.fillMaxWidth())
             }
             items.isEmpty() && guide != PhotosGuide.None -> Box(Modifier.fillMaxSize().padding(34.dp), contentAlignment = Alignment.Center) {
-                PhotosGuideCard(guide, onChooseAlbums, mediaAccess, onOpenAppSettings, Modifier.fillMaxWidth())
+                PhotosGuideCard(guide, onChooseAlbums, Modifier.fillMaxWidth())
             }
             items.isEmpty() -> Center(stringResource(R.string.home_empty_albums))
             shown.isEmpty() -> Center(stringResource(R.string.photos_filter_empty))
@@ -868,14 +865,13 @@ internal fun PhotoFilterChip(label: String, selected: Boolean, onClick: () -> Un
 }
 
 /** 照片页的引导卡给哪一张。 */
-internal enum class PhotosGuide { MediaAccess, NoAlbums, None }
+internal enum class PhotosGuide { NoAlbums, None }
 
 /**
  * 10-29：照片权限不全时先说权限——读不到照片，选相册也选不出东西，「还没选相册」说的不是现状。
  * 权限完整、一个相册都没选，才给「还没选相册 / 选择相册」（#1263）。
  */
-internal fun photosGuideOf(mediaAccess: MediaAccess, noAlbums: Boolean): PhotosGuide = when {
-    mediaAccess != MediaAccess.FULL -> PhotosGuide.MediaAccess
+internal fun photosGuideOf(noAlbums: Boolean): PhotosGuide = when {
     noAlbums -> PhotosGuide.NoAlbums
     else -> PhotosGuide.None
 }
@@ -884,12 +880,9 @@ internal fun photosGuideOf(mediaAccess: MediaAccess, noAlbums: Boolean): PhotosG
 private fun PhotosGuideCard(
     guide: PhotosGuide,
     onChooseAlbums: () -> Unit,
-    mediaAccess: MediaAccess,
-    onOpenAppSettings: () -> Unit,
     modifier: Modifier,
 ) {
     when (guide) {
-        PhotosGuide.MediaAccess -> MediaAccessCard(mediaAccess, onOpenAppSettings, modifier)
         PhotosGuide.NoAlbums -> NoAlbumsGuide(onChooseAlbums, modifier)
         PhotosGuide.None -> Unit
     }

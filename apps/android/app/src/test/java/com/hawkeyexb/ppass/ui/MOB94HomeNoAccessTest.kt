@@ -44,7 +44,7 @@ class MOB94HomeNoAccessTest {
 
         assertTrue(
             "hero 卡的判据必须是「不是 FULL」——只看 partial 会把全拒放进正常分支，那正是本卡的 bug",
-            source.contains("if (mediaAccess != MediaAccess.FULL)"),
+            source.contains("} else if (mediaAccess != MediaAccess.FULL) {"),
         )
         assertFalse(
             "不许再留布尔 partialAccess 参数——两档互斥，布尔并列表示不了",
@@ -52,18 +52,15 @@ class MOB94HomeNoAccessTest {
         )
     }
 
+    // #1272 §6：两档各说各的——现在落在开关下方的小字上（部分 / 没有访问权限），权限卡与长正文已删。
     @Test
     fun the_two_blocked_tiers_do_not_share_one_string() {
-        val source = homeScreen()
-
-        assertTrue("全拒要有自己的标题", source.contains("R.string.no_media_access_title"))
-        assertTrue("全拒要有自己的正文", source.contains("R.string.no_media_access_body"))
-        assertTrue("部分授权的文案保留", source.contains("R.string.partial_access_title"))
-
         for (loc in listOf("values", "values-zh")) {
             val strings = File("src/main/res/$loc/strings.xml").readText()
-            assertTrue("$loc 缺 no_media_access_title", strings.contains("\"no_media_access_title\""))
-            assertTrue("$loc 缺 no_media_access_body", strings.contains("\"no_media_access_body\""))
+            assertTrue("$loc 缺部分授权小字", strings.contains("\"auto_backup_rule_partial_hint\""))
+            assertTrue("$loc 缺无权限小字", strings.contains("\"auto_backup_rule_none_hint\""))
+            assertTrue("$loc 缺 no_media_access_title（通知标题仍用）", strings.contains("\"no_media_access_title\""))
+            assertFalse("$loc 长正文已删", strings.contains("\"no_media_access_body\""))
         }
     }
 }

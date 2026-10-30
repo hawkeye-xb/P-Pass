@@ -404,7 +404,7 @@ fun HomeScreen(
                     // #1272：没开自动备份是正常状态，不显示「无照片访问权限 / 还没有选择相册」。
                     Text(stringResource(R.string.auto_backup_off_hero), color = PPColor.Ink, fontSize = 15.sp)
                 } else if (mediaAccess != MediaAccess.FULL) {
-                    MediaAccessCardContent(mediaAccess, onOpenAppSettings)
+                    Text(stringResource(R.string.auto_backup_blocked_hero), color = PPColor.Ink, fontSize = 15.sp)
                 } else {
                 val t = triplet
                 val heroRender = heroRenderOf(mediaAccess, t, countsReadable = countsReadable, scopeSaved = scopeSaved)
@@ -1062,7 +1062,7 @@ private fun idleStatusText(
     backgroundBackupState: BackgroundBackupState,
     wifiOnly: Boolean,
 ): String = when (line) {
-    is StatusLine.NoAlbums -> stringResource(R.string.state_no_albums)
+    is StatusLine.NoAlbums -> stringResource(R.string.backup_scope_none)
     is StatusLine.Pending -> pluralStringResource(R.plurals.state_pending, line.k.toInt(), line.k)
     // UI-16 规则 S：闸门不过时退回既有的中性分支，**不许**说「都存好了」。
     is StatusLine.AllSafe ->
@@ -1220,60 +1220,6 @@ private fun CellRow(label: String, value: String? = null, onClick: (() -> Unit)?
             if (onClick != null) Spacer(Modifier.width(4.dp))
         }
         if (onClick != null) Text("›", fontSize = 16.sp, color = PPColor.Ink40)
-    }
-}
-
-/**
- * MOB-02 §二 / MOB-94：权限不全（只给了部分 / 一张都不给）时的引导卡内容。设置页英雄卡与照片页（10-29）共用这一份，
- * 外面的底色卡由调用方给（英雄卡自己就是那张 Surface）。
- */
-@Composable
-internal fun MediaAccessCardContent(mediaAccess: MediaAccess, onOpenAppSettings: () -> Unit) {
-    Column {
-        // MOB-94: 两档各说各的话。「只给了部分」和「一张都不给」
-        // 对用户是两件事，共用一句文案等于两边都说不准。
-        val noAccess = mediaAccess == MediaAccess.NONE
-        Text(
-            stringResource(
-                if (noAccess) R.string.no_media_access_title
-                else R.string.partial_access_title
-            ),
-            fontSize = 16.sp, fontWeight = FontWeight.Bold, color = PPColor.Act,
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            stringResource(
-                if (noAccess) R.string.no_media_access_body
-                else R.string.partial_access_body
-            ),
-            fontSize = 14.sp, lineHeight = 21.sp, color = PPColor.Ink60,
-        )
-        Spacer(Modifier.height(12.dp))
-        Button(
-            onClick = onOpenAppSettings,
-            modifier = Modifier.fillMaxWidth().height(PPSize.TapMin),
-            shape = RoundedCornerShape(PPSize.RadiusControl),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = PPColor.Ink, contentColor = PPColor.Paper,
-            ),
-        ) {
-            Text(
-                stringResource(R.string.partial_access_action),
-                fontSize = 17.sp, fontWeight = FontWeight.Bold,
-            )
-        }
-    }
-}
-
-/** 照片页用的独立一张：底色、圆角、内边距与设置页英雄卡一致。 */
-@Composable
-internal fun MediaAccessCard(mediaAccess: MediaAccess, onOpenAppSettings: () -> Unit, modifier: Modifier = Modifier) {
-    Surface(
-        color = PPColor.ActBg,
-        shape = RoundedCornerShape(PPSize.RadiusCard),
-        modifier = modifier,
-    ) {
-        Box(Modifier.padding(20.dp)) { MediaAccessCardContent(mediaAccess, onOpenAppSettings) }
     }
 }
 

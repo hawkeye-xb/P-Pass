@@ -146,7 +146,6 @@
     <string name="idle_auto_hint">Backs up automatically on Wi-Fi when the battery isn\'t low</string>
     <!-- #581：关掉「仅 Wi-Fi」后首页空闲行改用这句：不提 Wi-Fi，只承诺电量。 -->
     <string name="idle_auto_hint_any_network">Backs up automatically when the battery isn\'t low</string>
-    <string name="state_no_albums">No albums selected. Nothing will be backed up.</string>
     <!-- T-083: trouble card ： human copy only; raw errors live behind this fold -->
     <string name="try_again">Try again</string>
     <string name="trouble_details_show">Show technical details</string>
@@ -220,7 +219,6 @@
     <string name="bucket_hint">Only checked albums are backed up.</string>
     <string name="bucket_empty">No photos or videos on this phone.</string>
     <!-- 只给了部分照片（Android 14+「选择照片」/ iOS「有限访问」）时，选范围页顶部的一行。 -->
-    <string name="bucket_partial_access_note">You\'ve allowed access to some photos only. Only those will be backed up.</string>
     <string name="bucket_loading">Reading albums…</string>
     <string name="bucket_count">%1$d</string>
     <string name="bucket_unnamed">Unnamed</string>
@@ -263,14 +261,9 @@
     <string name="wifi_deferred_hint">Waiting for Wi-Fi</string>
     <!-- MOB-02 §二: 部分授权引导 -->
     <string name="partial_access_title">Access limited to some photos</string>
-    <string name="partial_access_body">Only selected photos will be backed up.</string>
-    <string name="partial_access_action">Open settings</string>
     <!-- MOB-94: 全拒那一档，与「只给了部分」分开说 -->
     <string name="no_media_access_title">No photo access</string>
-    <string name="no_media_access_body">P-Pass can\'t read photos on this phone, so backup has stopped.</string>
     <!-- MOB-03: 相册选择页权限链：拒绝引导（不崩不白屏，说清为什么需要） -->
-    <string name="media_permission_denied_title">Photo access needed</string>
-    <string name="media_permission_denied_body">Choosing albums needs access to your photos and videos.</string>
     <!-- REL-02/DESK-02①: 更新通道零 UI：由构建推导（版本含 -test. → test）。 -->
     <!-- DEV-01b: 重装识别开关行已隐藏（用户拍板）：strings 随 UI 删除。 -->
     <string name="reconnect">Pair again</string>
@@ -372,4 +365,7 @@
     <string name="photos_first_run_intro">Connected to %1$s. Photos on this phone are saved to this computer.</string>
     <string name="photos_first_run_enable">Turn on auto backup</string>
     <string name="photos_first_run_pick">Pick a few photos first</string>
+    <string name="auto_backup_blocked_hero">Auto backup has stopped</string>
+    <string name="auto_backup_rule_partial_hint">Access is limited to some photos.</string>
+    <string name="auto_backup_rule_none_hint">No access to photos.</string>
 </resources>

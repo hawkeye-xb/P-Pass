@@ -206,7 +206,6 @@ fun BucketScreen(
     // MOB-02 §六: 新相册判定基准（null = 从未选过范围 = 全量模式，无徽标）。
     knownBuckets: Set<Long>? = null,
     /** 10-29：只给了部分照片——页顶说明一行，只备份允许的那些。 */
-    partialAccess: Boolean = false,
     onDone: (Set<Long>, ScopeTime) -> Unit,
     onCancel: () -> Unit,
 ) {
