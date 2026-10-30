@@ -231,8 +231,22 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt toolchain-check lint lint-cross test arch-check md-check token-check shell-vars-check identity-check supply-chain-check
+ci: fmt toolchain-check lint lint-cross test arch-check md-check token-check shell-vars-check identity-check supply-chain-check mobile-static-check
   @echo "==> CI pipeline: all green ✅"
+
+# ci-ios 里不需要模拟器的文字级门禁 + 手机端 i18n 副本，本地几秒跑完。
+# 为什么要这条：改了 assets/i18n 却没同步副本，本地 `ci` 全绿、要等远端 iOS lane 才红。
+mobile-static-check:
+  python3 tools/ios/gen-tokens.py --check
+  tools/ios/sync-i18n.sh --check
+  tools/ios/test-stamp-version.sh > /dev/null
+  tools/ios/check-testflight-signing.sh --self-test > /dev/null
+  tools/ios/check-testflight-signing.sh
+  python3 tools/ios/gen-strings.py --check
+  tools/ios/check-no-color-literals.sh --self-test > /dev/null
+  tools/ios/check-no-color-literals.sh
+  @for l in en zh; do cmp -s assets/i18n/$l.json apps/android/app/src/main/assets/i18n/$l.json || { echo "✗ apps/android/app/src/main/assets/i18n/$l.json 与 assets/i18n 不一致——从 assets/i18n 复制过去"; exit 1; }; done
+  @echo "ok: Android i18n 副本与 assets/i18n 逐字节一致"
 
 # QA-03 文档快车道：只跑文档域的门禁，不编 Rust。
 #
