@@ -131,3 +131,54 @@ pub(crate) async fn update_install(app: tauri::AppHandle) -> Result<(), String> 
     let (update, bytes) = taken.ok_or_else(|| ui_err("ui.err_update_not_downloaded", &[]))?;
     update.install(bytes).map_err(|e| e.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use tauri::test::{mock_builder, mock_context, noop_assets};
+    use tauri_plugin_updater::UpdaterExt;
+
+    const PUBKEY: &str = include_str!("../tests/fixtures/update-tamper/test.key.pub");
+    const SIGNATURE: &str = include_str!("../tests/fixtures/update-tamper/pkg.bin.sig");
+    const PACKAGE: &[u8] = include_bytes!("../tests/fixtures/update-tamper/pkg.bin");
+
+    /// #1267：升级后的 updater 插件（2.14，minisign-verify 0.3）仍按发版公钥验包：原样的包通过，
+    /// 改一个字节被拒。`update_download` 里的验签就是这一步（`Update::download` 内部调同一个
+    /// `verify`）。反证：把篡改那一行去掉（两份字节相同），第二条断言变红。
+    #[test]
+    fn tampered_update_package_is_rejected_by_the_updater_signature_check() {
+        let mut context = mock_context(noop_assets());
+        context.config_mut().plugins.0.insert(
+            "updater".into(),
+            serde_json::json!({ "pubkey": PUBKEY.trim(), "endpoints": [] }),
+        );
+        let app = mock_builder()
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .build(context)
+            .expect("mock app");
+        let updater = app
+            .updater_builder()
+            .pubkey(PUBKEY.trim())
+            .target("ppass-test")
+            // 不会发请求（下面用 restore_update），只是 build 要求至少一个地址。
+            .endpoints(vec!["https://example.invalid/latest.json".parse().unwrap()])
+            .expect("endpoints")
+            .build()
+            .expect("updater");
+        let update = updater
+            .restore_update(serde_json::json!({
+                "version": "99.0.0",
+                "platforms": { "ppass-test": {
+                    "url": "https://example.invalid/pkg.bin",
+                    "signature": SIGNATURE.trim(),
+                } },
+            }))
+            .expect("manifest")
+            .expect("99.0.0 is newer than the mock app");
+
+        update.verify(PACKAGE).expect("原样的包验签通过");
+
+        let mut tampered = PACKAGE.to_vec();
+        tampered[0] ^= 0x01;
+        assert!(update.verify(&tampered).is_err(), "改一个字节必须被拒");
+    }
+}
