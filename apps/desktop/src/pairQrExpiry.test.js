@@ -170,6 +170,26 @@ describe("#1264 二维码不会过期了还挂在屏幕上", () => {
     expect(screen.getByTestId("pair-qr-expired")).toBeTruthy();
   });
 
+  // F4（v0.10.3-test.1 回归）：服务连不上时弹窗一直停在「正在生成配对码…」。
+  // 反证：catch 里不落 qrError ⇒ 红（仍是转圈文案、没有重试）。
+  it("生成配对码失败：弹窗说原因并给重试，不一直转圈；重试成功出码", async () => {
+    const d = desktop(TTL);
+    d.failStart = true;
+    render(App);
+    await settle();
+    await fireEvent.click(screen.getByRole("button", { name: "显示配对二维码" }));
+    await settle();
+    const err = screen.getByTestId("pair-qr-error");
+    expect(err.textContent).toContain("配对二维码没能显示");
+    expect(err.textContent).toContain("错误代码：pair_failed");
+    expect(screen.queryByText("正在生成配对码…")).toBeNull();
+    d.failStart = false;
+    await fireEvent.click(screen.getByTestId("pair-qr-retry"));
+    await settle();
+    expect(screen.queryByTestId("pair-qr-error")).toBeNull();
+    expect(screen.getByTestId("pair-qr")).toBeTruthy();
+  });
+
   it("关掉弹窗后不再换码", async () => {
     desktop(TTL);
     await openQr();

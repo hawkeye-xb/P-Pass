@@ -2497,6 +2497,11 @@ impl IpcServer {
                 .library_location
                 .as_ref()
                 .and_then(|l| crate::relocate::last_error(l.platform_dir())),
+            // F6：搬完后原目录没删干净时它的位置（用户删掉后为 null）。
+            "relocate_leftover": self
+                .library_location
+                .as_ref()
+                .and_then(|l| crate::relocate::leftover(l.platform_dir())),
             // #1118: this desktop's identity as people read it — shown under the pairing QR code
             // and on the phone before it connects, so the two can be compared.
             "desktop_fingerprint": pair_pake::node_fingerprint(&self.pairing.node_id().to_string()),

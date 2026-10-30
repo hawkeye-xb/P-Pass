@@ -1307,6 +1307,19 @@ impl HostingAdapter for WindowsAdapter {
         }
     }
 
+    /// F7：服务停着、且是正常停止（SCM 记的退出码 0）。读不到状态按「不是」处理——
+    /// 宁可多自愈一次，也不要把崩溃当成用户停的。
+    fn resident_stopped_on_request(&self) -> bool {
+        use crate::windows_service;
+        matches!(
+            windows_service::status(windows_service::SERVICE_NAME),
+            Ok(Some(s)) if crate::service_stop_was_requested(
+                matches!(s.state, windows_service::ServiceState::Stopped),
+                s.exit_code,
+            )
+        )
+    }
+
     /// 任务正在跑的实例的进程号。
     fn resident_daemon_pid(&self) -> Option<u32> {
         if let Ok(true) = crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)

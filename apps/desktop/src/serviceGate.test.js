@@ -26,7 +26,7 @@ describe("DESK-36 接线（App.svelte）", () => {
 
   it("服务状态每次变化都重读 wizard_state（show_wizard 依赖 Rust 持有的在线状态）", () => {
     const applyBody =
-      app.match(/function applyServiceState\(next\) \{[\s\S]*?\n  \}\n/)?.[0] ?? "";
+      app.match(/function applyServiceState\(next, reason\) \{[\s\S]*?\n  \}\n/)?.[0] ?? "";
     expect(applyBody).toContain("checkWizard()");
   });
 
@@ -77,7 +77,7 @@ describe("DESK-38 服务恢复判定", () => {
 
   it("接线：service-state 到 running 时触发 onServiceBackOnline，数据刷新不再判恢复", () => {
     const applyBody =
-      app.match(/function applyServiceState\(next\) \{[\s\S]*?\n  \}\n/)?.[0] ?? "";
+      app.match(/function applyServiceState\(next, reason\) \{[\s\S]*?\n  \}\n/)?.[0] ?? "";
     const refreshBody = app.match(/async function refresh\(\) \{[\s\S]*?\n  \}\n/)?.[0] ?? "";
     expect(applyBody).toContain("onServiceBackOnline()");
     expect(refreshBody).not.toContain("onServiceBackOnline");

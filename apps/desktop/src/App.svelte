@@ -15,6 +15,7 @@
   import { callDaemon } from "./lib/daemonApi.js";
   import { createLibraryAlert, recheckLibrary } from "./lib/libraryMissing.js";
   import { homeBlocker } from "./lib/homeBlocker.js";
+  import { restartOutcomeMessage } from "./lib/restartOutcome.js";
   import CircleAlertIcon from "@lucide/svelte/icons/circle-alert";
   import { getVersion } from "@tauri-apps/api/app";
   import { listen } from "@tauri-apps/api/event";
@@ -233,6 +234,8 @@
   // value: the shell and the daemon are separate processes, and the daemon
   // may still be booting. Data refreshes never write this.
   let serviceState = $state("starting");
+  // F7：最近一次状态变化的原因（Rust 给的）。`stopped` 要分是本 App 里停的还是外面正常停掉的。
+  let serviceReason = $state(null);
   let status = $state(null);
   // DESK-63 (#946): a devices.list failure is a data error, not a service
   // outage. It gets its own state and its own message.
@@ -275,6 +278,8 @@
   // （pending 出现）→ 关二维码弹窗 → 切「允许/拒绝」模态 → 处理完关闭，
   // 状态消失（不再一直占空间）。审计记录在 T5。
   let showPairModal = $state(false);
+  // F4：生成配对码失败的原因（errMessage 形状）。有它就不转圈，弹窗里说原因并给「重试」。
+  let qrError = $state(null);
   let showConfirmModal = $state(false);
   // T-091: node_id -> {last_backup_at, asset_count}（device.watermarks，毫秒）
   let watermarks = $state({});
@@ -349,7 +354,7 @@
   function flashError(e, wrapperKey) {
     const m = errMessage(e, wrapperKey);
     const action = offersServiceRestart(m.key)
-      ? { label: t("ui.restart_service"), onClick: () => restartDaemonProcess() }
+      ? { label: t("ui.restart_service"), onClick: () => restartDaemonProcess("recover") }
       : undefined;
     flashMessage(m.text, "error", errCodeLine(m), action);
   }
@@ -362,6 +367,7 @@
   // #1253：照片库找不到——状态变化时让壳强提示一次；「重新检查」如实回答。
   const libraryAlert = createLibraryAlert(invoke, getLocale);
   let lastRelocateError = null;
+  let lastRelocateLeftover = null;
   let libraryRecheckBusy = $state(false);
   async function recheckLibraryNow() {
     libraryRecheckBusy = true;
@@ -387,6 +393,11 @@
         flashMessage(t("ui.relocate_failed", { err: errText(status.relocate_error) }), "error");
       }
       lastRelocateError = status.relocate_error ?? null;
+      // F6：搬完了、原目录删不干净——告诉用户残留在哪（同一处只提示一次；设置页常驻显示到删掉为止）。
+      if (status.relocate_leftover && status.relocate_leftover !== lastRelocateLeftover) {
+        flashMessage(t("ui.relocate_leftover", { dir: status.relocate_leftover }), "warning");
+      }
+      lastRelocateLeftover = status.relocate_leftover ?? null;
       pendingCount = status.pending_pairs ?? 0;
       // UX-08: pending 全量列表（pairing.pending，只读）——列表化显示
       // 的基础；拿不到时回退数量（老 daemon 升级过渡）。
@@ -568,6 +579,7 @@
     showPairModal = true; // T4: 二维码是弹窗模块，不是常驻卡片
     if (!auto) qrAutoRefreshes = 0;
     qrRefreshing = true;
+    qrError = null;
     try {
       const r = await call("pairing.start");
       qrText = r.qr;
@@ -578,7 +590,15 @@
       const svg = await invoke("pair_qr_svg", { text: r.qr });
       qrDataUrl = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
     } catch (e) {
-      if (!auto) flashError(e, "ui.pair_failed");
+      // F4：失败就在弹窗里说原因 + 「重试」，不再停在「正在生成配对码…」一直转圈。
+      // 自动换码失败时手上那张码还能用到过期，过期后再盖住、给刷新——不打断。
+      // 手动的失败：清掉旧码，免得旧码（或它过期的遮罩）盖住失败原因。
+      if (!auto) {
+        qrDataUrl = "";
+        qrText = "";
+        qrExpiresAt = null;
+      }
+      if (!qrDataUrl) qrError = errMessage(e, "ui.pair_failed");
     } finally {
       qrRefreshing = false;
     }
@@ -605,6 +625,7 @@
 
   function closePairModal() {
     showPairModal = false;
+    qrError = null;
     qrDataUrl = "";
     qrText = "";
     qrExpiresAt = null;
@@ -897,11 +918,11 @@
     loadUpdateFailure();
     // DESK-63 (#946): service state is event-driven. Subscribe first, then
     // read the snapshot — the event may fire before the listener is ready.
-    listen("service-state", (ev) => applyServiceState(serviceStateFromEvent(ev?.payload))).then(
+    listen("service-state", (ev) => applyServiceState(serviceStateFromEvent(ev?.payload), ev?.payload?.reason)).then(
       (f) => (unlistenServiceState = f),
     );
     invoke("service_state")
-      .then((s) => applyServiceState(s?.state))
+      .then((s) => applyServiceState(s?.state, s?.reason))
       .catch(() => {});
     window.addEventListener("hashchange", onHashChange);
   });
@@ -969,10 +990,11 @@
 
   // DESK-63 (#946): the Rust shell owns the service state and pushes every
   // transition. This function only renders it; `refresh()` never writes it.
-  function applyServiceState(next) {
+  function applyServiceState(next, reason) {
     if (!next) return;
     const previous = serviceState;
     serviceState = next;
+    serviceReason = reason ?? null;
     // 向导要不要显示取决于「服务是否在线」，那是 Rust 一侧的状态——每次服务状态
     // 变化都重读 wizard_state，拿 Rust 的结论（#1045）。
     checkWizard().catch(() => {});
@@ -1167,7 +1189,9 @@
   // 磁盘上的新版本（Windows 无 KeepAlive 语义，Rust 命令内显式重拉）。
   // 成功/失败都明说：版本真变了才报成功；没变 = 服务文件没更新，提示重装。
   let restartingService = $state(false);
-  async function restartDaemonProcess() {
+  // purpose：`update` = 设置页「立即重启」（服务还是旧版本）；`recover` = 失联报错 toast /
+  // 首页阻断卡上的「重启后台服务」。两种场景对「版本没变」的说法不同（lib/restartOutcome.js）。
+  async function restartDaemonProcess(purpose = "update") {
     if (restartingService) return;
     const yes = await confirmDialog(t("ui.restart_service_confirm_body"), {
       title: t("ui.restart_service_confirm_title"),
@@ -1176,22 +1200,10 @@
     if (!yes) return;
     restartingService = true;
     try {
-      const r = await invoke("restart_daemon_process");
-      if (r?.changed) {
-        flashMessage(
-          r.old_version
-            ? t("ui.restart_service_ok", { from: r.old_version, to: r.new_version })
-            : t("ui.restart_service_started", { version: r.new_version })
-        );
-      } else if (r?.still_starting) {
-        // DESK-44 (#606)：宽限期内 daemon **还没答上** ⇒ **不说失败**。
-        // 2026-10-03 真机现场就是"假失败真成功"（12s 固定预算 vs launchd ~10s
-        // 重拉节流 + 启动）。这里如实说"还在启动中"，3 秒状态轮询会在版本一致
-        // 后自己把这一行收掉。
-        flashMessage(t("ui.restart_service_still_starting"), "warning");
-      } else {
-        flashMessage(t("ui.restart_service_no_change", { version: r.new_version ?? "?" }), "warning");
-      }
+      // DESK-44 (#606)：宽限期内 daemon **还没答上** ⇒ **不说失败**（still_starting），
+      // 3 秒状态轮询会在版本一致后自己把这一行收掉。
+      const m = restartOutcomeMessage(await invoke("restart_daemon_process"), purpose);
+      flashMessage(t(m.key, m.params), m.tone);
     } catch (e) {
       flashError(e, "ui.restart_service_failed");
     } finally {
@@ -1703,7 +1715,7 @@
                 {#if serviceState === "starting"}
                   {t("ui.starting")}
                 {:else}
-                  {t(serviceStateActionKey(serviceState))}
+                  {t(serviceStateActionKey(serviceState, serviceReason))}
                 {/if}
               </p>
               {#if serviceRecoveryAction(serviceState) === "start"}
@@ -1712,7 +1724,7 @@
                 </Button>
               {:else if serviceRecoveryAction(serviceState) === "restart"}
                 <!-- 偏离 1：失联多半是进程在、不应答；重启先杀再拉，结果用 restart_service_* 提示。 -->
-                <Button class="mt-[12px] self-start" disabled={restartingService} onclick={restartDaemonProcess} data-testid="blocker-restart">
+                <Button class="mt-[12px] self-start" disabled={restartingService} onclick={() => restartDaemonProcess("recover")} data-testid="blocker-restart">
                   {restartingService ? t("ui.restarting_service") : t("ui.restart_service")}
                 </Button>
               {/if}
@@ -2182,6 +2194,10 @@
                 </div>
                 <div class="mt-[10px] h-2 overflow-hidden rounded-full bg-hairline"><div class="h-full rounded-full bg-ink" style="width:{diskPct}%"></div></div>
               {/if}
+              {#if status?.relocate_leftover}
+                <!-- F6：原位置删不掉的残留，显示到用户删掉为止（daemon 每次 status 核一次目录还在不在）。 -->
+                <p class="m-0 mt-[10px] text-[13px] leading-[1.6] break-all text-waiting" data-testid="relocate-leftover">{t("ui.relocate_leftover", { dir: status.relocate_leftover })}</p>
+              {/if}
               <!-- #639：后果说明随入口恢复，文案改为整库搬迁。 -->
               <p class="m-0 mt-[10px] text-[13px] leading-[1.6] text-ink-40">{t("ui.library_change_hint")}</p>
             </Card>
@@ -2249,7 +2265,7 @@
                 {:else if serviceIsStale}
                   <div class="flex items-center justify-between gap-[12px] border-b border-divider px-[22px] py-[16px] text-[15px] font-medium last-of-type:border-b-0">
                     <span>{t("ui.restart_service")}</span>
-                    <Button variant="secondary" onclick={restartDaemonProcess} disabled={restartingService}>
+                    <Button variant="secondary" onclick={() => restartDaemonProcess("update")} disabled={restartingService}>
                       {restartingService ? t("ui.restarting_service") : t("ui.restart_service_btn")}
                     </Button>
                   </div>
@@ -2314,6 +2330,20 @@
         <!-- 设计稿离线版 v2：扫码有困难的退路——复制配对串手动传给
              手机（比如隔空投送/微信发给家人自己粘）。 -->
         <Button variant="link" tone="safe" onclick={copyPairString}>{t("ui.qr_fallback")}</Button>
+      {:else if qrError}
+        <!-- F4：生成失败——说原因 + 错误代码，给「重试」；联系不上后台服务的那几类再给「重启后台服务」。 -->
+        <div class="modal-hint" role="alert" data-testid="pair-qr-error">
+          <p class="m-0">{qrError.text}</p>
+          <p class="m-0 text-[12px] text-ink-40">{errCodeLine(qrError)}</p>
+        </div>
+        <div class="modal-actions">
+          {#if offersServiceRestart(qrError.key)}
+            <Button variant="secondary" disabled={restartingService} onclick={() => restartDaemonProcess("recover")}>
+              {restartingService ? t("ui.restarting_service") : t("ui.restart_service")}
+            </Button>
+          {/if}
+          <Button disabled={qrRefreshing} onclick={() => startPairing()} data-testid="pair-qr-retry">{t("ui.retry")}</Button>
+        </div>
       {:else}
         <p class="hint modal-hint">{t("ui.pair_generating")}</p>
       {/if}
