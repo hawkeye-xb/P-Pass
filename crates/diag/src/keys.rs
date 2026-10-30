@@ -75,9 +75,11 @@ msg_keys! {
     UI_STOP_CONFIRM_TITLE => "ui.stop_confirm_title",
     UI_STOP_CONFIRM_BODY => "ui.stop_confirm_body",
     UI_SERVICE_STOPPED => "ui.service_stopped",
+    UI_SERVICE_STOPPED_OUTSIDE => "ui.service_stopped_outside",
     UI_STOP_FAILED => "ui.stop_failed",
     UI_START_FAILED => "ui.start_failed",
     UI_PAIR_FAILED => "ui.pair_failed",
+    UI_RETRY => "ui.retry",
     UI_PAIR_ALLOWED => "ui.pair_allowed",
     UI_PAIR_DENIED => "ui.pair_denied",
     UI_CONFIRM_FAILED => "ui.confirm_failed",
@@ -153,6 +155,7 @@ msg_keys! {
     UI_RESTART_SERVICE_OK => "ui.restart_service_ok",
     UI_RESTART_SERVICE_NO_CHANGE => "ui.restart_service_no_change",
     UI_RESTART_SERVICE_STARTED => "ui.restart_service_started",
+    UI_RESTART_SERVICE_RECOVERED => "ui.restart_service_recovered",
     /// DESK-44 (#606)：宽限期内 daemon 还没答上——说"正在启动中"，不说失败。
     UI_RESTART_SERVICE_STILL_STARTING => "ui.restart_service_still_starting",
     UI_RESTART_SERVICE_FAILED => "ui.restart_service_failed",
@@ -284,6 +287,7 @@ msg_keys! {
     UI_RELOCATING_PROGRESS => "ui.relocating_progress",
     UI_RELOCATING_TO => "ui.relocating_to",
     UI_RELOCATE_FAILED => "ui.relocate_failed",
+    UI_RELOCATE_LEFTOVER => "ui.relocate_leftover",
     UI_ERR_RELOCATE_NO_LIBRARY_ID => "ui.err_relocate_no_library_id",
     UI_ERR_RELOCATE_NO_SPACE => "ui.err_relocate_no_space",
     UI_ERR_RELOCATE_OTHER_LIBRARY => "ui.err_relocate_other_library",
@@ -292,6 +296,8 @@ msg_keys! {
     UI_ERR_RELOCATE_CONFLICT => "ui.err_relocate_conflict",
     UI_ERR_RELOCATE_COPY_FAILED => "ui.err_relocate_copy_failed",
     UI_ERR_RELOCATE_VERIFY_FAILED => "ui.err_relocate_verify_failed",
+    UI_ERR_RELOCATE_UNREADABLE_DENIED => "ui.err_relocate_unreadable_denied",
+    UI_ERR_RELOCATE_UNREADABLE => "ui.err_relocate_unreadable",
     UI_ERR_RELOCATE_SOURCE_MISSING => "ui.err_relocate_source_missing",
     UI_CHANGE_TARGET_NOT_EMPTY => "ui.change_target_not_empty",
     UI_ERR_STOP_WHILE_RELOCATING => "ui.err_stop_while_relocating",
@@ -501,9 +507,11 @@ mod tests {
             UI_STOP_CONFIRM_TITLE,
             UI_STOP_CONFIRM_BODY,
             UI_SERVICE_STOPPED,
+            UI_SERVICE_STOPPED_OUTSIDE,
             UI_STOP_FAILED,
             UI_START_FAILED,
             UI_PAIR_FAILED,
+            UI_RETRY,
             UI_PAIR_ALLOWED,
             UI_PAIR_DENIED,
             UI_CONFIRM_FAILED,
@@ -563,6 +571,7 @@ mod tests {
             UI_RESTART_SERVICE_OK,
             UI_RESTART_SERVICE_NO_CHANGE,
             UI_RESTART_SERVICE_STARTED,
+            UI_RESTART_SERVICE_RECOVERED,
             UI_RESTART_SERVICE_STILL_STARTING,
             UI_RESTART_SERVICE_FAILED,
             UI_ENV_BADGE_TEST,
@@ -812,6 +821,7 @@ mod tests {
             UI_RELOCATING_PROGRESS,
             UI_RELOCATING_TO,
             UI_RELOCATE_FAILED,
+            UI_RELOCATE_LEFTOVER,
             UI_ERR_RELOCATE_NO_LIBRARY_ID,
             UI_ERR_RELOCATE_NO_SPACE,
             UI_ERR_RELOCATE_OTHER_LIBRARY,
@@ -820,13 +830,15 @@ mod tests {
             UI_ERR_RELOCATE_CONFLICT,
             UI_ERR_RELOCATE_COPY_FAILED,
             UI_ERR_RELOCATE_VERIFY_FAILED,
+            UI_ERR_RELOCATE_UNREADABLE_DENIED,
+            UI_ERR_RELOCATE_UNREADABLE,
             UI_ERR_RELOCATE_SOURCE_MISSING,
             UI_CHANGE_TARGET_NOT_EMPTY,
             UI_ERR_STOP_WHILE_RELOCATING,
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 355);
+        assert_eq!(ALL.len(), 361);
     }
 
     #[test]

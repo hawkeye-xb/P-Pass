@@ -864,6 +864,22 @@ impl HostingAdapter for MacosAdapter {
         })
     }
 
+    /// F7：登记文件还在、launchd 却没加载这个 job ⇒ 有人 `launchctl bootout` 了它（正常
+    /// 停止）。崩溃 / 被杀时 job 仍在 launchd 手里，由 KeepAlive 拉回，不算。
+    /// 窗口自己的「停止」会连登记一起撤（plist 不在），走用户停止标记那条，也不在这里。
+    fn resident_stopped_on_request(&self) -> bool {
+        if !Self::agent_plist_path().exists() {
+            return false;
+        }
+        let Ok(uid) = current_uid() else {
+            return false;
+        };
+        Command::new("launchctl")
+            .args(["print", &format!("gui/{uid}/{AGENT_LABEL}")])
+            .output()
+            .is_ok_and(|out| !out.status.success())
+    }
+
     fn resident_daemon_pid(&self) -> Option<u32> {
         let uid = current_uid().ok()?;
         let out = Command::new("launchctl")

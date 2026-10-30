@@ -227,6 +227,51 @@ fn daemon_online() -> bool {
         .is_ok()
 }
 
+/// F5（v0.10.3-test.1 回归 W2）：启动类动作（重启 / 自愈 / 启动）收尾时，按此刻的事实落状态。
+///
+/// 服务状态平时只由事件流驱动：连接**新建立**时翻成 running。启动类动作中途会置
+/// starting（`begin_start`）或在失败时置 unreachable；可事件流若一直连着（新 daemon 早
+/// 已就绪、连接没断），就不会再有「新建立」把状态翻回来，窗口停在「启动中」——服务其实
+/// 正常。所以动作结束时，无论成败都问一次 `status`，以它为准。
+fn settle_after_start_action(
+    app: &tauri::AppHandle,
+    manager: &ServiceStateManager,
+    action_ok: bool,
+    reason: &str,
+) {
+    let answering = daemon_online();
+    if answering {
+        manager.note_connected();
+    }
+    if let Some(next) = state_after_start_action(
+        manager.current(),
+        action_ok,
+        answering,
+        onboarding_finished_now(),
+    ) {
+        manager.set(app, next, Some(reason));
+    }
+}
+
+/// [`settle_after_start_action`] 的判据（纯函数，单测覆盖）：
+/// - 答上 `status` ⇒ 以事实为准（与事件流 open 同一条规则 `after_connection`）；
+/// - 没答上、动作本身成功 ⇒ 不动，还在起，交给事件流与启动宽限期；
+/// - 没答上、动作失败 ⇒ unreachable。
+fn state_after_start_action(
+    current: ServiceState,
+    action_ok: bool,
+    answering: bool,
+    onboarded: bool,
+) -> Option<ServiceState> {
+    if answering {
+        Some(current.after_connection(onboarded))
+    } else if action_ok {
+        None
+    } else {
+        Some(ServiceState::Unreachable)
+    }
+}
+
 /// DESK-63 (#946): the shell's initial service state, derived from the same
 /// three facts `wizard_state` reads. Keeping it next to the marker helpers
 /// means "user stopped" cannot mean one thing to the wizard and another to
@@ -306,8 +351,7 @@ fn start_event_stream(app: tauri::AppHandle) {
                         // stream ends; treat it as a lost connection.
                         Ok(()) => {
                             manager.note_connection_failure("event stream ended");
-                            let next = manager.state_after_failure();
-                            manager.set(&app, next, Some("event stream ended"));
+                            manager.apply_failure(&app, "event stream ended");
                         }
                         // Old daemon without events.subscribe: discover() just
                         // proved `status` answers, so it is running. There is
@@ -337,15 +381,13 @@ fn start_event_stream(app: tauri::AppHandle) {
                         }
                         Err(e) => {
                             manager.note_connection_failure(&e);
-                            let next = manager.state_after_failure();
-                            manager.set(&app, next, Some(&e));
+                            manager.apply_failure(&app, &e);
                         }
                     }
                 }
                 Err(e) => {
                     manager.note_connection_failure(&e);
-                    let next = manager.state_after_failure();
-                    manager.set(&app, next, Some(&e));
+                    manager.apply_failure(&app, &e);
                 }
             }
             std::thread::sleep(std::time::Duration::from_secs(2));
@@ -757,14 +799,26 @@ fn start_daemon_now(app: tauri::AppHandle) -> Result<String, String> {
     // 否则刚起来的 daemon 读到 stopped 会立刻退出（看起来像启动失败）。
     ShellHome::current().set_user_stopped(false)?;
     let manager = app.state::<ServiceStateManager>().inner().clone();
-    manager.begin_start(&app, "user start");
-    match platform::hosting().install_autostart(&sidecar) {
+    let outcome = start_resident(&app, &manager, &sidecar);
+    // F5：进了 starting 就按 status 收尾（服务本来就在跑、事件流连着时不会再翻回来）。
+    settle_after_start_action(&app, &manager, outcome.is_ok(), "start settled");
+    outcome
+}
+
+/// 置 starting 并请服务管理器起服务（登记不了就按形态退回一次性 spawn）。
+fn start_resident(
+    app: &tauri::AppHandle,
+    manager: &ServiceStateManager,
+    sidecar: &std::path::Path,
+) -> Result<String, String> {
+    manager.begin_start(app, "user start");
+    match platform::hosting().install_autostart(sidecar) {
         // LaunchAgent RunAtLoad+KeepAlive: starts immediately, survives
         // crashes and reboots.
         Ok(()) => Ok("resident".into()),
         Err(e) if !user_daemon_fallback_allowed(platform::hosting().service_mode()) => {
             // #1246：服务形态不以用户身份兜底（见 `user_daemon_fallback_allowed`）。
-            manager.set(&app, ServiceState::Unreachable, Some("start failed"));
+            // 状态由调用方 `settle_after_start_action` 按事实落。
             Err(ipc::ui_err("ui.err_respawn", &[("err", &e)]))
         }
         Err(e) => {
@@ -776,13 +830,10 @@ fn start_daemon_now(app: tauri::AppHandle) -> Result<String, String> {
                 .spawn()
             {
                 Ok(_) => Ok(format!("oneshot: {e}")),
-                Err(e2) => {
-                    manager.set(&app, ServiceState::Unreachable, Some("start failed"));
-                    Err(ipc::ui_err(
-                        "ui.err_register_and_spawn",
-                        &[("err", &e), ("spawn_err", &e2)],
-                    ))
-                }
+                Err(e2) => Err(ipc::ui_err(
+                    "ui.err_register_and_spawn",
+                    &[("err", &e), ("spawn_err", &e2)],
+                )),
             }
         }
     }
@@ -890,6 +941,18 @@ fn self_heal_daemon_blocking(app: tauri::AppHandle) -> Result<bool, String> {
         eprintln!("#1060: 为更新暂停中，跳过自愈");
         return Ok(false);
     }
+    // F7：在外面被正常停掉的（服务管理里「停止」/ `launchctl bootout`）= 用户意图，不拉回；
+    // 崩溃的恢复交给系统（SCM 失败恢复动作 / launchd KeepAlive）。窗口只落 stopped、给启动按钮。
+    let manager = app.state::<ServiceStateManager>().inner().clone();
+    if manager.stopped_outside() {
+        eprintln!("F7: 常驻服务是被正常停掉的，不自愈");
+        manager.set(
+            &app,
+            ServiceState::Stopped,
+            Some(service_state::STOPPED_OUTSIDE),
+        );
+        return Ok(false);
+    }
     self_heal_now(&app, "self heal")
 }
 
@@ -932,13 +995,11 @@ fn self_heal_now(app: &tauri::AppHandle, reason: &str) -> Result<bool, String> {
     let manager = app.state::<ServiceStateManager>().inner().clone();
     manager.begin_start(app, reason);
     // #732：有 LaunchAgent 时交给 launchd 拉（不杀在跑的——自愈只补"没在跑"）。
-    match bring_up_daemon(false) {
-        Ok(_) => Ok(true),
-        Err(e) => {
-            manager.set(app, ServiceState::Unreachable, Some(&e));
-            Err(e)
-        }
-    }
+    let outcome = bring_up_daemon(false);
+    // F5：服务本来就在跑（`AlreadyRunning`）而事件流一直连着时，没有「新建立」把
+    // starting 翻回来——收尾按 status 落状态。
+    settle_after_start_action(app, &manager, outcome.is_ok(), reason);
+    outcome.map(|_| true)
 }
 
 /// Stop the resident service the way a user means it: unregister the
@@ -1427,13 +1488,24 @@ fn relaunch_shell_blocking(app: tauri::AppHandle) -> Result<(), String> {
 async fn restart_daemon_process(app: tauri::AppHandle) -> Result<Value, String> {
     let manager = app.state::<ServiceStateManager>().inner().clone();
     manager.begin_start(&app, "restart requested");
-    let outcome = tauri::async_runtime::spawn_blocking(restart_daemon_process_blocking)
-        .await
-        .map_err(|e| ipc::ui_err("ui.err_restart", &[("err", &e)]))?;
-    if outcome.is_err() {
-        manager.set(&app, ServiceState::Unreachable, Some("restart failed"));
-    }
-    outcome
+    let app_for_settle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let outcome = restart_daemon_process_blocking();
+        // F5：成败都按 status 落状态——重启报错时新 daemon 可能早已就绪，事件流也已连上。
+        settle_after_start_action(
+            &app_for_settle,
+            &manager,
+            outcome.is_ok(),
+            if outcome.is_ok() {
+                "restart settled"
+            } else {
+                "restart failed"
+            },
+        );
+        outcome
+    })
+    .await
+    .map_err(|e| ipc::ui_err("ui.err_restart", &[("err", &e)]))?
 }
 
 /// 等它起来的**宽限期**：不是"多久算失败"，而是"多久算彻底没救"。
@@ -1467,10 +1539,23 @@ fn restart_daemon_process_blocking() -> Result<Value, String> {
     // launchd 的重拉节流（10s 量级，DESK-44 假失败的根），而且杀不到一次性 spawn
     // 的野生实例。改为：野生实例先退位 + `kickstart -k`（launchd 立刻按磁盘上的
     // 文件拉新的），内核从此归 launchd 托管。走不通才退回下面的老路。
-    if resident_service_available() {
-        bring_up_daemon(true).map_err(|e| ipc::ui_err("ui.err_restart", &[("err", &e)]))?;
+    //
+    // F5：服务管理器那条报错（Windows：卡死的进程收不到 STOP，等 Stopped 超时）不立刻
+    // 当失败——服务管理器随后仍可能把新实例拉起来（回归 W2：报错时新 daemon 已就绪）。
+    // 照样等它答上，答上了就不是失败（[`restart_verdict`]）。
+    let brought_up = if resident_service_available() {
+        bring_up_daemon(true)
+            .map(|_| ())
+            .map_err(|e| ipc::ui_err("ui.err_restart", &[("err", &e)]))
     } else {
-        restart_by_kill_and_respawn()?;
+        restart_by_kill_and_respawn().map(|()| ())
+    };
+    if let Err(e) = &brought_up {
+        if !resident_service_available() {
+            // 一次性 spawn 那条路的失败是确定的（杀不掉 / 拉不起），不用再等。
+            return Err(e.clone());
+        }
+        eprintln!("F5: 服务管理器重启报错（{e}），仍等新实例答话再下结论");
     }
     // 4) 等它**答上** `status`（每 500ms，最长 RESTART_GRACE）。
     //    答上 = 有结论（版本变了 or 没变）；一直没答上 = `still_starting`，
@@ -1492,11 +1577,21 @@ fn restart_daemon_process_blocking() -> Result<Value, String> {
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
+    restart_verdict(brought_up, answered)?;
     Ok(restart_outcome(
         old_version.as_deref(),
         new_version.as_deref(),
         answered,
     ))
+}
+
+/// F5：重启的结论以「新实例答没答上」为准。服务管理器报了错、但新实例已经答上
+/// ⇒ 不是失败（不能报「没能启动」）；报了错、也没答上 ⇒ 如实报错。
+fn restart_verdict(brought_up: Result<(), String>, answered: bool) -> Result<(), String> {
+    match brought_up {
+        Err(e) if !answered => Err(e),
+        _ => Ok(()),
+    }
 }
 
 /// DAE-04 原路径（没有服务管理器时，`ServiceMode::UserAutostart`）：杀进程，再显式拉一次。
@@ -2916,6 +3011,63 @@ mod tests {
     }
 
     // DAE-04: 版本真的变了 → changed=true（真成功，前端报「已重启」）。
+    /// F5（v0.10.3-test.1 回归 W2）：启动类动作收尾时按 status 落状态。答上了就以事实为准——
+    /// 重启报错时新 daemon 已就绪、事件流一直连着，没有「新建立」把状态翻回来，窗口卡在
+    /// 「启动中」。反证：答上时返回 None（沿用旧行为）⇒ 红。
+    #[test]
+    fn start_actions_settle_on_the_status_fact() {
+        for current in [ServiceState::Starting, ServiceState::Unreachable] {
+            assert_eq!(
+                state_after_start_action(current, false, true, true),
+                Some(ServiceState::Running),
+                "动作报错但服务答上了 ⇒ running"
+            );
+            assert_eq!(
+                state_after_start_action(current, true, true, true),
+                Some(ServiceState::Running)
+            );
+        }
+        assert_eq!(
+            state_after_start_action(ServiceState::Starting, true, false, true),
+            None,
+            "还在起：交给事件流与宽限期"
+        );
+        assert_eq!(
+            state_after_start_action(ServiceState::Starting, false, false, true),
+            Some(ServiceState::Unreachable)
+        );
+        assert_eq!(
+            state_after_start_action(ServiceState::NotConfigured, true, true, false),
+            Some(ServiceState::NotConfigured),
+            "向导没走完，答上了也不进 running（同 after_connection）"
+        );
+    }
+
+    /// F5：服务管理器报错、但新实例答上了 ⇒ 不是失败（W2：报「没能启动」时新 daemon 已就绪）。
+    #[test]
+    fn restart_is_judged_by_whether_the_new_daemon_answers() {
+        let e = || Err("ui.err_restart".to_string());
+        assert_eq!(restart_verdict(e(), true), Ok(()));
+        assert_eq!(restart_verdict(e(), false), e());
+        assert_eq!(restart_verdict(Ok(()), false), Ok(()));
+    }
+
+    /// F5：三个启动类动作都要按 status 收尾。反证：删掉任一处调用 ⇒ 红。
+    #[test]
+    fn every_start_action_settles_on_status() {
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        for f in [
+            "start_daemon_now",
+            "self_heal_now",
+            "restart_daemon_process",
+        ] {
+            assert!(
+                product_fn_body(&src, f).contains("settle_after_start_action("),
+                "{f} 收尾没按 status 落状态"
+            );
+        }
+    }
+
     #[test]
     fn restart_outcome_marks_version_change() {
         let v = restart_outcome(Some("v0.3.3-test.1"), Some("0.3.4"), true);

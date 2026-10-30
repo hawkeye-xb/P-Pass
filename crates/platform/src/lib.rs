@@ -1400,6 +1400,14 @@ pub trait HostingAdapter: Send + Sync {
         None
     }
 
+    /// F7（v0.10.3-test.1 回归）：常驻 daemon 不在跑，是不是因为有人**正常地**停了它
+    /// （Windows：服务管理里「停止」/ `sc stop`；macOS：`launchctl bootout`），而不是崩了。
+    /// 正常停止 = 用户意图，窗口不许自愈拉回；崩溃的恢复交给系统（SCM 失败恢复动作 /
+    /// launchd KeepAlive）。`false` = 在跑 / 崩了 / 没登记 / 本平台没有服务管理器。
+    fn resident_stopped_on_request(&self) -> bool {
+        false
+    }
+
     /// 让服务管理器按**磁盘上的文件**拉起常驻 daemon。
     ///
     /// `kill_running = true`：在跑的那个（服务管理器自己启动的）先被杀掉再拉
@@ -1428,6 +1436,13 @@ pub trait HostingAdapter: Send + Sync {
     fn pause_resident_daemon(&self) -> Result<ResidentPause> {
         Ok(ResidentPause::Unsupported)
     }
+}
+
+/// F7：Windows 服务停在 Stopped、且 SCM 记下的退出码是 0 ⇒ 正常停止（收到 STOP 后自己报了
+/// SERVICE_STOPPED）。崩溃 / 被结束进程时 SCM 记 1067（ERROR_PROCESS_ABORTED），那是失败
+/// 恢复动作的活。纯函数，三平台都跑单测。
+pub fn service_stop_was_requested(stopped: bool, win32_exit_code: u32) -> bool {
+    stopped && win32_exit_code == 0
 }
 
 /// [`PlatformAdapter::restart_resident_daemon`] 的结论。
@@ -1703,6 +1718,17 @@ pub fn parse_pmset(output: &str) -> PowerHint {
 
 #[cfg(test)]
 mod tests {
+    /// F7：正常停止（退出码 0）才算用户意图；崩溃（1067）与还在跑都不算。
+    #[test]
+    fn only_a_clean_service_stop_counts_as_requested() {
+        assert!(super::service_stop_was_requested(true, 0));
+        assert!(
+            !super::service_stop_was_requested(true, 1067),
+            "崩溃交给 SCM 失败恢复"
+        );
+        assert!(!super::service_stop_was_requested(false, 0), "没停");
+    }
+
     use super::*;
 
     /// 取消是独立的一类，不能被归成失败——否则 UI 会把用户自己的选择
