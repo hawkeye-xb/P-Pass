@@ -20,13 +20,13 @@ expect() {
   local want="$1" what="$2" rc; shift 2
   "$@" >"$TMP/out" 2>&1; rc=$?
   if { [ "$want" = pass ] && [ "$rc" -eq 0 ]; } || { [ "$want" = fail ] && [ "$rc" -eq 1 ]; }; then
-    pass "$what（rc=$rc）"
+    pass "${what}（rc=${rc}）"
   else
-    fail "$what：期望 $want，rc=$rc"; sed 's/^/      /' "$TMP/out" >&2
+    fail "${what}：期望 ${want}，rc=$rc"; sed 's/^/      /' "$TMP/out" >&2
   fi
 }
 
-. "$ROOT/tools/codec-deps.env"
+eval "$(tr -d '\r' < "$ROOT/tools/codec-deps.env")"
 
 # ── Windows（造样本）────────────────────────────────────────────────────
 echo "==> windows"
@@ -92,7 +92,20 @@ mk_win "$LIBHEIF_MIN" "$LIBDE265_MIN"; printf 'x265 HEVC encoder\n' >> "$W/daemo
                                                     expect fail "exe 里有 x265 插件名" win
 mk_win "$LIBHEIF_MIN" "$LIBDE265_MIN"; printf 'AOMedia AV1 decoder\n' >> "$W/daemon.exe"
                                                     expect fail "exe 里有 libaom 解码器名" win
+mk_win "$LIBHEIF_MIN" "$LIBDE265_MIN"; mkdir -p "$W/installed/vcpkg/updates"
+printf 'Package: libheif\nVersion: 1.23.6\nArchitecture: x64-windows-static-md\nStatus: install ok installed\n' \
+  > "$W/installed/vcpkg/updates/0000000001.list"
+                                                    expect fail "updates/ 里后装的 libheif 1.23.6 覆盖 status" win
+mk_win "$LIBHEIF_MIN" "$LIBDE265_MIN"; mkdir -p "$W/installed/vcpkg/updates"
+printf 'Package: x265\nVersion: 4.3\nArchitecture: x64-windows-static-md\nStatus: install ok installed\n' \
+  > "$W/installed/vcpkg/updates/0000000001.list"
+                                                    expect fail "updates/ 里装了 x265" win
+mk_win "$LIBHEIF_MIN" "$LIBDE265_MIN"; sed 's/$/\r/' "$W/installed/vcpkg/status" > "$W/s" && mv "$W/s" "$W/installed/vcpkg/status"
+                                                    expect pass "status 是 CRLF 也能读" win
 mk_win "$LIBHEIF_MIN" "$LIBDE265_MIN"
+sed 's/$/\r/' "$ROOT/tools/codec-deps.env" > "$TMP/crlf.env"
+expect pass "版本文件是 CRLF 也能读" env CODEC_DEPS_ENV="$TMP/crlf.env" "$CHECK" windows \
+  --vcpkg-installed "$W/installed" --link-output "$W/output" "$W/daemon.exe"
 expect fail "没给 --link-output" "$CHECK" windows --vcpkg-installed "$W/installed" "$W/daemon.exe"
 expect fail "没给 exe" "$CHECK" windows --vcpkg-installed "$W/installed" --link-output "$W/output"
 printf 'LIBHEIF_MIN=1.23.8\nLIBDE265_MIN=%s\n' "$LIBDE265_MIN" > "$TMP/raised.env"
@@ -102,7 +115,7 @@ expect fail "下限提高到 1.23.8 后同一份样本不再通过" env CODEC_DE
 # ── macOS（拿真包变异）──────────────────────────────────────────────────
 if [ "${1:-}" = --macos ]; then
   GOOD="${2:?usage: $0 --macos <bundle目录>}"
-  echo "==> macos（样本：$GOOD）"
+  echo "==> macos（样本：${GOOD}）"
   M="$TMP/mac"
   reset() { rm -rf "$M"; cp -R "$GOOD" "$M"; }
   heif() { ls "$M"/lib/libheif*.dylib | head -1; }

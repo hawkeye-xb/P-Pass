@@ -23,7 +23,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        . tools/codec-deps.env
+        eval "$(tr -d '\r' < tools/codec-deps.env)"
         prefix="$RUNNER_TEMP/ppf-codecs"
         {
           echo "prefix=$prefix"

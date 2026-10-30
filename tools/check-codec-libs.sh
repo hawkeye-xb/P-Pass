@@ -23,8 +23,8 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# shellcheck source=codec-deps.env
-. "${CODEC_DEPS_ENV:-$ROOT/tools/codec-deps.env}"
+# 去掉 \r 再读：Windows 检出可能把它转成 CRLF，值带 \r 会让版本比较判错。
+eval "$(tr -d '\r' < "${CODEC_DEPS_ENV:-$ROOT/tools/codec-deps.env}")"
 : "${LIBHEIF_MIN:?codec-deps.env 缺 LIBHEIF_MIN}" "${LIBDE265_MIN:?codec-deps.env 缺 LIBDE265_MIN}"
 
 # 我们只解 HEIC：只要 libheif + libde265。其余编码器与解码器都不许进包。
@@ -83,7 +83,7 @@ macos() {
     file -b "$f" | grep 'Mach-O' >/dev/null && echo "$f"
   done > "$machos"
   [ -s "$machos" ] || { bad "$* 里没有 Mach-O 文件"; rm -f "$machos"; return; }
-  echo "==> macOS：$(wc -l < "$machos" | tr -d ' ') 个 Mach-O（下限 libheif ≥ $LIBHEIF_MIN、libde265 ≥ $LIBDE265_MIN、minos ≤ $min_os）"
+  echo "==> macOS：$(wc -l < "$machos" | tr -d ' ') 个 Mach-O（下限 libheif ≥ ${LIBHEIF_MIN}、libde265 ≥ ${LIBDE265_MIN}、minos ≤ ${min_os}）"
 
   while IFS= read -r f; do
     base="$(basename "$f")"
@@ -102,7 +102,7 @@ macos() {
       *.dylib)
         minos="$(otool -l "$f" | awk '/LC_BUILD_VERSION/{b=1} b&&/minos/{print $2; exit}')"
         if [ -z "$minos" ]; then
-          bad "$base：读不到 LC_BUILD_VERSION minos"
+          bad "${base}：读不到 LC_BUILD_VERSION minos"
         elif ! ver_ge "$min_os" "$minos"; then
           bad "$base 的最低系统版本 $minos 高于 App 的 $min_os"
         fi ;;
@@ -112,14 +112,14 @@ macos() {
         heif=$((heif + 1))
         v="$(otool -l "$f" | awk '/cmd LC_ID_DYLIB/{b=1} b&&/current version/{print $3; exit}')"
         if [ -n "$v" ] && ! raw_strings "$f" | grep -x -F "$v" >/dev/null; then
-          bad "$base：LC_ID_DYLIB 版本 $v 在库里找不到对应的版本字符串"
+          bad "${base}：LC_ID_DYLIB 版本 $v 在库里找不到对应的版本字符串"
         fi
         check_floor libheif "$v" "$LIBHEIF_MIN" "$f" ;;
       libde265*.dylib)
         de265=$((de265 + 1))
         vs="$(raw_strings "$f" | grep -E -x '[0-9]+\.[0-9]+\.[0-9]+' | sort -u)"
         if [ "$(printf '%s\n' "$vs" | grep -c .)" -ne 1 ]; then
-          bad "$base：版本字符串不唯一或没有（找到：$(echo "$vs" | tr '\n' ' ')）"
+          bad "${base}：版本字符串不唯一或没有（找到：$(echo "$vs" | tr '\n' ' ')）"
         else
           check_floor libde265 "$vs" "$LIBDE265_MIN" "$f"
         fi ;;
@@ -144,21 +144,23 @@ $1"; shift ;;
   done
   [ -n "$installed" ] || { echo "usage: $0 windows --vcpkg-installed <dir> [--link-output <file>]... <exe>..." >&2; exit 2; }
   st="$installed/vcpkg/status"
-  echo "==> Windows（下限 libheif ≥ $LIBHEIF_MIN、libde265 ≥ $LIBDE265_MIN）"
+  echo "==> Windows（下限 libheif ≥ ${LIBHEIF_MIN}、libde265 ≥ ${LIBDE265_MIN}）"
   if [ ! -s "$st" ]; then
     bad "vcpkg 安装库 $st 不存在或为空"
   else
-    # status 是 Debian control 格式；每个包一段，Feature: 行属于特性段，跳过。
-    # 输出「包名 版本」，只取 Status 为 install ok installed 的主段。
+    # status 是 Debian control 格式，每个包一段；Feature: 段属于特性，跳过。
+    # vcpkg 新装的包先记在 vcpkg/updates/ 里，下次加载时才并进 status：按 status、updates/*
+    # 的顺序读，同一个包以后出现的为准。输出「包名 版本」，只留最终状态为已安装的。
     local pkgs
-    pkgs="$(tr -d '\r' < "$st" | awk '
-      function flush() { if (p != "" && !feat && inst) print p, v; p=""; v=""; feat=0; inst=0 }
+    # shellcheck disable=SC2046 # updates/* 按文件名排序展开，文件名是数字，不含空格
+    pkgs="$(cat "$st" $(ls "$installed"/vcpkg/updates/* 2>/dev/null | sort) | tr -d '\r' | awk '
+      function flush() { if (p != "" && !feat) { if (inst) state[p] = v; else delete state[p] } p=""; v=""; feat=0; inst=0 }
       /^$/ { flush(); next }
       /^Package: / { p=$2 }
       /^Version: / { v=$2 }
       /^Feature: / { feat=1 }
       /^Status: install ok installed/ { inst=1 }
-      END { flush() }')"
+      END { flush(); for (k in state) print k, state[k] }' | sort)"
     echo "$pkgs" | sed 's/^/     /'
     for name in libheif libde265; do
       ver="$(echo "$pkgs" | awk -v n="$name" '$1==n {print $2; exit}')"

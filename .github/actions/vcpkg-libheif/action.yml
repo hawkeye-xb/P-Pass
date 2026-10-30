@@ -38,7 +38,8 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        . tools/codec-deps.env
+        # 去掉 \r：Windows 检出可能把它转成 CRLF。
+        eval "$(tr -d '\r' < tools/codec-deps.env)"
         : "${VCPKG_PIN_SHA:?codec-deps.env 缺 VCPKG_PIN_SHA}"
         # 不用 `${{ env.ImageVersion }}`：env 上下文只含 workflow 里声明的变量，镜像自己的环境变量
         # 读不到，会静默变成空串、键退化成常量。在 bash 里 $ImageVersion 才读得到。
@@ -72,6 +73,7 @@ runs:
         start=$(date +%s)
         /c/vcpkg/vcpkg.exe install "libheif[core,libde265]:x64-windows-static-md" --clean-after-build
         echo "VCPKG_INSTALL_SECONDS=$(( $(date +%s) - start ))"
+        # vcpkg list 也会把 installed/vcpkg/updates/ 并进 status（check-codec-libs.sh 两处都读，不依赖它）。
         /c/vcpkg/vcpkg.exe list
         test -f /c/vcpkg/installed/x64-windows-static-md/lib/libde265.lib \
           || { echo "::error::libde265.lib missing — libheif was installed without the libde265 feature (no HEVC decoder)"; exit 1; }

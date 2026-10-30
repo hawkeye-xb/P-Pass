@@ -18,8 +18,7 @@ set -euo pipefail
 
 [ "$#" -eq 1 ] || { echo "usage: $0 <prefix>" >&2; exit 2; }
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# shellcheck source=codec-deps.env
-. "$ROOT/tools/codec-deps.env"
+eval "$(tr -d '\r' < "$ROOT/tools/codec-deps.env")"
 
 mkdir -p "$1"
 PREFIX="$(cd "$1" && pwd)"
@@ -28,7 +27,7 @@ MIN_OS="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["bundle
 STAMP="libheif=$LIBHEIF_VERSION libde265=$LIBDE265_VERSION macos=$MIN_OS script=$(shasum -a 256 "$0" | cut -c1-16)"
 
 if [ -f "$PREFIX/.complete" ] && [ "$(cat "$PREFIX/.complete")" = "$STAMP" ]; then
-  echo "codecs 已就绪（$STAMP）：$PREFIX"
+  echo "codecs 已就绪（${STAMP}）：$PREFIX"
   exit 0
 fi
 
@@ -92,5 +91,5 @@ otool -L "$heif_dylib" | grep -F "$PREFIX/lib/libde265" >/dev/null \
   || { echo "FATAL: $heif_dylib 没有链接到 $PREFIX/lib 下的 libde265" >&2; otool -L "$heif_dylib" >&2; exit 1; }
 
 echo "$STAMP" > "$PREFIX/.complete"
-echo "codecs 编译完成（$STAMP）：$PREFIX"
+echo "codecs 编译完成（${STAMP}）：$PREFIX"
 otool -L "$heif_dylib"
