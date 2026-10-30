@@ -14,15 +14,17 @@ fi
 
 # Windows 宿主（Git Bash）：NDK 路径与 Gradle 传来的输出目录是 `C:\...` 形式，bash 的
 # 通配与测试要 `/c/...`；交给 cargo / clang 这类原生程序的路径则用 `C:/...`。
-# NDK 的 Windows 版编译器是 `<triple><api>-clang.cmd`（Linux / macOS 版没有后缀）。
+# NDK 的 Windows 版编译器是 `<triple><api>-clang.cmd`、`llvm-ar.exe`（Linux / macOS 版没有后缀）。
+# Windows 版 NDK 里同时还放着一个无后缀的同名 shell 包装，Git Bash 的 `-x` 也认它可执行，
+# 但 cargo 作为原生程序执行不了它（os error 193）——所以 Windows 上只认带后缀的。
 if command -v cygpath >/dev/null 2>&1; then
   to_shell() { cygpath -u "$1"; }
   to_native() { cygpath -m "$1"; }
-  EXE_SUFFIXES=".cmd .exe"
+  EXE_SUFFIXES=(.cmd .exe)
 else
   to_shell() { printf '%s' "$1"; }
   to_native() { printf '%s' "$1"; }
-  EXE_SUFFIXES=""
+  EXE_SUFFIXES=("")
 fi
 NDK="$(to_shell "$ANDROID_NDK_HOME")"
 JNI_OUT="$(to_shell "$1")"
@@ -32,7 +34,7 @@ API=26
 CLANG=
 AR=
 for candidate in "$NDK"/toolchains/llvm/prebuilt/*; do
-  for suffix in "" $EXE_SUFFIXES; do
+  for suffix in "${EXE_SUFFIXES[@]}"; do
     if [ -x "$candidate/bin/${TARGET}${API}-clang$suffix" ]; then
       CLANG="$candidate/bin/${TARGET}${API}-clang$suffix"
       break 2
@@ -43,7 +45,7 @@ if [ -z "$CLANG" ]; then
   printf 'Android NDK clang not found: %s/toolchains/llvm/prebuilt/*/bin/%s%s-clang\n' "$NDK" "$TARGET" "$API" >&2
   exit 1
 fi
-for suffix in "" $EXE_SUFFIXES; do
+for suffix in "${EXE_SUFFIXES[@]}"; do
   if [ -x "$(dirname "$CLANG")/llvm-ar$suffix" ]; then
     AR="$(dirname "$CLANG")/llvm-ar$suffix"
     break
