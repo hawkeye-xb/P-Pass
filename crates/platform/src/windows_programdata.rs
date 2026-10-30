@@ -368,8 +368,37 @@ fn set_private_dacl(path: &Path, sids: &[&str]) -> Result<()> {
 /// 同 [`set_private_dacl`]，每个 SID 各给一个访问掩码。ACE 都可被子目录与文件继承；
 /// 系统随即把新的可继承 ACE 传播到已有子项（子项自己的显式 ACE 不动）。
 pub(crate) fn set_private_dacl_with(path: &Path, grants: &[(&str, u32)]) -> Result<()> {
+    with_explicit_acl(grants, |acl| {
+        let w = wide(path);
+        // SAFETY: acl 是刚建好的合法 ACL；只改 DACL 并设受保护位。
+        let rc = unsafe {
+            SetNamedSecurityInfoW(
+                w.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                acl,
+                ptr::null(),
+            )
+        };
+        if rc != ERROR_SUCCESS {
+            return Err(io_err(
+                "SetNamedSecurityInfoW",
+                std::io::Error::from_raw_os_error(rc as i32),
+            ));
+        }
+        Ok(())
+    })
+}
+
+/// 按访问表建一份只含显式 ACE（全部可继承）的 ACL，交给 `f` 使用，用完释放。
+pub(crate) fn with_explicit_acl<T>(
+    grants: &[(&str, u32)],
+    f: impl FnOnce(*mut ACL) -> Result<T>,
+) -> Result<T> {
     let mut allocated: Vec<PSID> = Vec::with_capacity(grants.len());
-    let result = (|| -> Result<()> {
+    let result = (|| -> Result<T> {
         let mut entries = Vec::with_capacity(grants.len());
         for (sid_text, mask) in grants {
             let sid = sid_from_string(sid_text)?;
@@ -404,27 +433,10 @@ pub(crate) fn set_private_dacl_with(path: &Path, grants: &[(&str, u32)]) -> Resu
                 std::io::Error::from_raw_os_error(rc as i32),
             ));
         }
-        let w = wide(path);
-        // SAFETY: acl 是刚建好的合法 ACL；只改 DACL 并设受保护位。
-        let rc = unsafe {
-            SetNamedSecurityInfoW(
-                w.as_ptr(),
-                SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                ptr::null_mut(),
-                ptr::null_mut(),
-                acl,
-                ptr::null(),
-            )
-        };
+        let out = f(acl);
+        // SAFETY: acl 由 SetEntriesInAclW 分配。
         unsafe { LocalFree(acl.cast()) };
-        if rc != ERROR_SUCCESS {
-            return Err(io_err(
-                "SetNamedSecurityInfoW",
-                std::io::Error::from_raw_os_error(rc as i32),
-            ));
-        }
-        Ok(())
+        out
     })();
     unsafe {
         for sid in allocated {

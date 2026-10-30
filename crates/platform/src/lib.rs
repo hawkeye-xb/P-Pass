@@ -155,6 +155,14 @@ pub fn run_as_service(body: impl FnOnce() -> i32 + Send + 'static) -> Result<boo
 /// 唯一的用途是让适配器把数据根从用户的 `%LOCALAPPDATA%` 切到
 /// `%ProgramData%\P-Pass`——服务账户读不到交互用户的任何用户级路径。
 /// 别的平台永远 `false`（它们没有这个「服务账户 ≠ 用户」的形态）。
+/// 文件夹里不算「用户的东西」的系统附属文件：Finder 的 `.DS_Store`、AppleDouble（`._<名>`，
+/// macOS 往 exFAT / FAT 写带扩展属性的文件时另生成的属性文件）。换库位置时 daemon 的预检与
+/// 窗口程序的补判共用这一份规则。
+pub fn is_folder_litter(name: &std::ffi::OsStr) -> bool {
+    let n = name.to_string_lossy();
+    n == ".DS_Store" || n.starts_with("._")
+}
+
 /// #639：这次改名失败是不是因为新旧位置不在同一个卷上（unix `EXDEV`、Windows
 /// `ERROR_NOT_SAME_DEVICE`）——是的话调用方改走「拷贝、核对、再改名」。
 pub fn is_cross_volume_rename(e: &std::io::Error) -> bool {

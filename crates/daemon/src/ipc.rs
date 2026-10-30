@@ -542,7 +542,7 @@ fn relocate_resp(
                 id,
                 serde_json::json!({
                     "to": c.plan.to.display().to_string(),
-                    "non_empty": c.non_empty,
+                    "non_empty": c.contents.to_json(),
                     "adopt": c.adopt,
                 }),
             ),
