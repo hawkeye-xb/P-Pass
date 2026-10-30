@@ -322,6 +322,9 @@
     <string name="back">返回</string>
     <string name="video_loading">正在从电脑获取视频… %1$d%%</string>
     <string name="video_failed">无法获取视频，请重试。</string>
+    <string name="video_play_size">播放（%1$s）</string>
+    <string name="video_no_space">手机剩余存储空间不足，无法下载这段视频。</string>
+    <string name="preview_unavailable">无法显示预览</string>
     <!-- RET-01: 单张取回 = 使用动作（保存到相册 / 用其他应用打开） -->
     <string name="save_to_gallery">保存到相册</string>
     <string name="open_with_app">用其他应用打开</string>

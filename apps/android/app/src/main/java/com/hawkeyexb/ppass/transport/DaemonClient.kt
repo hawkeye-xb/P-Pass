@@ -81,6 +81,28 @@ class TransportFailureException(message: String) : IOException(message)
 class OriginalHashMismatchException(expected: String, actual: String) :
     IOException("original $expected came back as $actual")
 
+/** More bytes arrived than the computer said the original has; the fetch was stopped. */
+class OriginalExceedsDeclaredSizeException(declared: Long, got: Long) :
+    IOException("original grew past its declared $declared bytes (got $got); fetch stopped")
+
+/**
+ * Stops a fetch as soon as the received byte count passes [declared]. [onBytes] gets the
+ * cumulative count (iroh-blobs `payload_bytes_read`); [abort] runs at most once.
+ * `declared <= 0` means the size is unknown and nothing is enforced here — callers that
+ * need a bound refuse to start without one.
+ */
+internal class DeclaredSizeGuard(private val declared: Long, private val abort: () -> Unit) {
+    @Volatile var exceededAt: Long = -1
+        private set
+
+    fun onBytes(got: Long) {
+        if (declared > 0 && got > declared && exceededAt < 0) {
+            exceededAt = got
+            abort()
+        }
+    }
+}
+
 private fun bindCtrlPlane(secretKey: ByteArray?): CtrlClientInterface =
     CtrlClient.bind(CtrlConfig(secretKey, emptyList(), false, BIND_TIMEOUT_MS.toULong()))
 
@@ -367,8 +389,12 @@ class DaemonClient internal constructor(
         val ticket = ProtoJson.decodeFromJsonElement(BlobTicketResponse.serializer(), checkNotNull(resp.result)).ticket
         val scratch = java.io.File(dest.absoluteFile.parentFile, ".fetch").apply { mkdirs() }
         val cancel = FetchCancel()
+        val guard = DeclaredSizeGuard(expectedBytes) { cancel.cancel() }
         val progress = object : FetchProgress {
-            override fun onBytes(bytes: ULong) = onProgress(bytes.toLong(), expectedBytes)
+            override fun onBytes(bytes: ULong) {
+                guard.onBytes(bytes.toLong())
+                onProgress(bytes.toLong(), expectedBytes)
+            }
         }
         val got = try {
             suspendCancellableCoroutine { cont ->
@@ -376,11 +402,20 @@ class DaemonClient internal constructor(
                 try {
                     cont.resume(p.fetchBlob(ticket, scratch.path, dest.path, ORIGINAL_BYTE_STALL_MS.toULong(), progress, cancel))
                 } catch (e: FfiException) {
-                    cont.resumeWithException(mapFfi(e, "fetch original $hash"))
+                    val over = guard.exceededAt
+                    cont.resumeWithException(
+                        if (over >= 0) OriginalExceedsDeclaredSizeException(expectedBytes, over)
+                        else mapFfi(e, "fetch original $hash"),
+                    )
                 }
             }
         } finally {
             cancel.destroy()
+        }
+        // The abort can lose the race with the last chunk; the result is refused either way.
+        if (guard.exceededAt >= 0) {
+            dest.delete()
+            throw OriginalExceedsDeclaredSizeException(expectedBytes, guard.exceededAt)
         }
         if (!got.equals(hash, ignoreCase = true)) {
             dest.delete()

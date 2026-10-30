@@ -333,6 +333,9 @@
     <string name="back">Back</string>
     <string name="video_loading">Getting the video from your computer… %1$d%%</string>
     <string name="video_failed">Couldn\'t get the video. Try again.</string>
+    <string name="video_play_size">Play (%1$s)</string>
+    <string name="video_no_space">Not enough free storage on this phone to download this video.</string>
+    <string name="preview_unavailable">Preview not available</string>
     <!-- RET-01: 单张取回 = 使用动作（保存到相册 / 用其他应用打开） -->
     <string name="save_to_gallery">Save to Photos</string>
     <string name="open_with_app">Open with…</string>

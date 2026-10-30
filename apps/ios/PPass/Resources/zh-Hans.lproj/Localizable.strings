@@ -212,6 +212,9 @@
 "back" = "返回";
 "video_loading" = "正在从电脑获取视频… %1$ld%%";
 "video_failed" = "无法获取视频，请重试。";
+"video_play_size" = "播放（%1$@）";
+"video_no_space" = "手机剩余存储空间不足，无法下载这段视频。";
+"preview_unavailable" = "无法显示预览";
 "save_to_gallery" = "保存到相册";
 "open_with_app" = "用其他应用打开";
 "saved_to_gallery" = "已保存到相册";

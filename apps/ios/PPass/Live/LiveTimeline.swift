@@ -11,14 +11,17 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
     private let fetchBlob: (String, URL, @escaping @Sendable (UInt64) -> Void) async throws -> String
     private let cache = NSCache<NSString, UIImage>()
     private let logger: CoreLogger
+    /// 下载视频前查的剩余空间（字节）；测试里换成固定值。
+    private let freeBytes: () -> Int64?
 
     init(client: @escaping () -> ProtoClient?, myNodeId: @escaping () -> String?,
          fetchBlob: @escaping (String, URL, @escaping @Sendable (UInt64) -> Void) async throws -> String,
-         logger: CoreLogger) {
+         logger: CoreLogger, freeBytes: @escaping () -> Int64? = LiveTimeline.systemFreeBytes) {
         self.client = client
         self.myNodeId = myNodeId
         self.fetchBlob = fetchBlob
         self.logger = logger
+        self.freeBytes = freeBytes
     }
 
     /// #987：照片页每次请求一行——方法、结果（成功或错误类别）、耗时；不记哈希、文件名、照片内容。
@@ -39,11 +42,18 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
     static func category(_ error: Error) -> String {
         if error is CancellationError { return "cancelled" }
         if let failure = error as? Failure { return "\(failure)" }
+        if let rejection = error as? DesktopThumb.Rejection { return "rejected: \(rejection)" }
         return String(describing: type(of: error))
     }
 
     enum Failure: Error, CustomStringConvertible {
         case notPaired, placeholder, originalUnsupported, hashMismatch, invalidContentHash
+        /// 电脑没给出视频大小：无从限定下载量，不下载。
+        case unknownSize
+        /// 手机剩余空间不够，没有开始下载。
+        case noRoom(needed: Int64, free: Int64)
+        /// 收到的字节超过电脑声明的大小，已中止。
+        case exceedsDeclaredSize(declared: Int64, got: Int64)
         var description: String {
             switch self {
             case .notPaired: return "not paired"
@@ -51,6 +61,9 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
             case .originalUnsupported: return "original download is not available on iOS yet"
             case .hashMismatch: return "fetched content does not match its BLAKE3 id"
             case .invalidContentHash: return "content id is not a 64-hex BLAKE3 hash"
+            case .unknownSize: return "video size unknown"
+            case let .noRoom(needed, free): return "not enough free storage: needs \(needed) bytes, \(free) free"
+            case let .exceedsDeclaredSize(declared, got): return "more data than declared: \(got) > \(declared) bytes; fetch stopped"
             }
         }
     }
@@ -78,10 +91,9 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
         let image = try await logged("thumb.get size=\(large ? 1024 : 256)", { (_: UIImage) in "" }) {
             guard let client = client() else { throw Failure.notPaired }
             let data = try await client.call(Methods.thumbGet, ThumbGet(hash: item.id, size: large ? .s1024 : .s256), as: ThumbData.self)
-            guard !data.placeholder, let bytes = Data(base64Encoded: data.jpegBase64), let image = UIImage(data: bytes) else {
-                throw Failure.placeholder
-            }
-            return image
+            guard !data.placeholder, let bytes = Data(base64Encoded: data.jpegBase64) else { throw Failure.placeholder }
+            return try DesktopThumb.decode(bytes) // 只认 JPEG、宽高 ≤1024；不合格的抛出原因，由 logged 记一行
+
         }
         cache.setObject(image, forKey: key)
         return image
@@ -116,18 +128,36 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
         try fm.createDirectory(at: dir, withIntermediateDirectories: true)
         if item.isVideo, let hit = Self.completeCached(item, in: dir) { return hit }
 
+        // 视频：先确认电脑给了大小、手机放得下，再去要票据（对位 Android VideoPlayback）。
+        if item.isVideo { try checkVideoStart(item) }
         guard let client = client() else { throw Failure.notPaired }
         let ticket = try await client.call(Methods.assetBlobTicket, BlobTicketRequest(hash: item.id), as: BlobTicketResponse.self).ticket
         let raw = dir.appendingPathComponent(item.id + ".part")
         try? fm.removeItem(at: raw)
         let total = Double(max(item.bytes ?? 0, 1))
+        // 视频收到的字节一超过声明大小就中止取回（对位 Android DeclaredSizeGuard）。
+        let limit = SizeGuard(declared: item.isVideo ? (item.bytes ?? 0) : 0)
+        let fetchBlob = self.fetchBlob
         do {
-            let got = try await fetchBlob(ticket, raw) { bytes in progress(min(Double(bytes) / total, 1)) }
+            let fetch = Task {
+                try await fetchBlob(ticket, raw) { bytes in
+                    limit.onBytes(Int64(clamping: bytes))
+                    progress(min(Double(bytes) / total, 1))
+                }
+            }
+            limit.attach(fetch)
+            let got = try await withTaskCancellationHandler { try await fetch.value } onCancel: { fetch.cancel() }
+            if let over = limit.exceededAt { throw Failure.exceedsDeclaredSize(declared: item.bytes ?? 0, got: over) }
             // item.id 就是内容 BLAKE3 hex（asset.blob_ticket 以它为键）；取回内容不符按失败处理。
             guard got.lowercased() == item.id.lowercased() else { throw Failure.hashMismatch }
             try Task.checkCancellation()
         } catch {
             try? fm.removeItem(at: raw) // 失败 / 取消 / 校验不符都不留文件
+            if let over = limit.exceededAt, !(error is Failure) {
+                // 中止是我们自己发起的取消：按「超过声明大小」失败上报，不当作用户划走。
+                logger.log("original video stopped: more data than declared (\(over) > \(item.bytes ?? 0) bytes)")
+                throw Failure.exceedsDeclaredSize(declared: item.bytes ?? 0, got: over)
+            }
             throw error
         }
         // 线上只有内容哈希、没有文件名：按文件头认格式，补上扩展名（分享面板 / 存相册靠它识别）。
@@ -135,6 +165,30 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
         try? fm.removeItem(at: named)
         try fm.moveItem(at: raw, to: named)
         return named
+    }
+
+    /// 下载一段视频要占的空间：取回时临时仓库里一份、导出到缓存文件又一份（iroh-blobs 的 export 是复制），
+    /// 所以按声明大小的两倍，再留 64 MiB 余量（与 Android `videoSpaceNeeded` 同一口径）。
+    static func videoSpaceNeeded(_ declared: Int64) -> Int64 { declared * 2 + 64 * 1024 * 1024 }
+
+    private func checkVideoStart(_ item: TimelineItem) throws {
+        guard let declared = item.bytes, declared > 0 else {
+            logger.log("original video not fetched: size unknown")
+            throw Failure.unknownSize
+        }
+        let needed = Self.videoSpaceNeeded(declared)
+        let free = freeBytes() ?? 0
+        guard free >= needed else {
+            logger.log("original video not fetched: needs \(needed) bytes, \(free) free")
+            throw Failure.noRoom(needed: needed, free: free)
+        }
+        logger.log("original video space ok: needs \(needed) bytes, \(free) free")
+    }
+
+    /// 系统给「用户主动发起的下载」可用的空间（Apple 推荐 `volumeAvailableCapacityForImportantUsage`）。
+    static func systemFreeBytes() -> Int64? {
+        try? FileManager.default.temporaryDirectory
+            .resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]).volumeAvailableCapacityForImportantUsage
     }
 
     /// 照片原图的即用即清目录（`tmp/ppass-share/`）。
@@ -174,5 +228,32 @@ final class LiveTimeline: TimelineSource, @unchecked Sendable {
             }
         }
         return isVideo ? "mov" : "jpg"
+    }
+}
+
+/// 取回过程中收到的字节一超过 [declared] 就取消取回任务（只取消一次）；`declared <= 0` 表示不限。
+/// 进度回调在 FFI 线程上来，任务句柄可能晚于第一次回调才挂上，所以两边都检查。
+final class SizeGuard: @unchecked Sendable {
+    private let declared: Int64
+    private let lock = NSLock()
+    private var task: Task<String, Error>?
+    private var exceeded: Int64?
+
+    init(declared: Int64) { self.declared = declared }
+
+    var exceededAt: Int64? { lock.withLock { exceeded } }
+
+    func attach(_ task: Task<String, Error>) {
+        let cancelNow: Bool = lock.withLock { self.task = task; return exceeded != nil }
+        if cancelNow { task.cancel() }
+    }
+
+    func onBytes(_ got: Int64) {
+        let toCancel: Task<String, Error>? = lock.withLock {
+            guard declared > 0, got > declared, exceeded == nil else { return nil }
+            exceeded = got
+            return task
+        }
+        toCancel?.cancel()
     }
 }
