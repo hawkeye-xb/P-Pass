@@ -37,7 +37,7 @@ if [ -z "$NM" ] || [ ! -x "$NM" ]; then
   exit 1
 fi
 if [ ! -f "$LIB" ]; then
-  echo "error: 缺 $LIB——先跑 tools/ios/test.sh（它生成 XCFramework）。" >&2
+  echo "error: 缺 ${LIB}——先跑 tools/ios/test.sh（它生成 XCFramework）。" >&2
   exit 1
 fi
 python3 "$ROOT/tools/ios/check-privacy-manifest.py" --nm "$NM" --lib "$LIB"
