@@ -25,7 +25,7 @@ struct BucketScreen: View {
             .ppNavBar()
             .ppScreen()
             .navigationBarTitleDisplayMode(.large)
-            .safeAreaInset(edge: .bottom, spacing: 0) { if albums != nil, error == nil { footer } }
+            .safeAreaInset(edge: .bottom, spacing: 0) { if albums != nil, error == nil, Self.offersChoices(Self.notice(for: app.access)) { footer } }
             .toolbar(firstTime ? .automatic : .hidden, for: .tabBar) // 选相册是一次完整任务，底部主按钮占位
             .task { await load() }
             // 从系统设置改完权限回来（sceneBecameActive 会重读权限档）：按新的一档重读相册。
@@ -42,9 +42,11 @@ struct BucketScreen: View {
                         Text(L.s("bucket_partial_access_note")).font(PPFont.sans(14, .semibold, relativeTo: .subheadline))
                             .foregroundStyle(PPColor.waiting).fixedSize(horizontal: false, vertical: true)
                     }
-                    Text(L.s("bucket_hint")).font(PPFont.sans(14, relativeTo: .subheadline)).foregroundStyle(PPColor.ink40)
-                        .fixedSize(horizontal: false, vertical: true)
-                    timePicker
+                    if Self.offersChoices(Self.notice(for: app.access)) {
+                        Text(L.s("bucket_hint")).font(PPFont.sans(14, relativeTo: .subheadline)).foregroundStyle(PPColor.ink40)
+                            .fixedSize(horizontal: false, vertical: true)
+                        timePicker
+                    }
                     if Self.notice(for: app.access) == .noAccess {
                         noAccess
                     } else if albums.isEmpty {
@@ -74,6 +76,9 @@ struct BucketScreen: View {
         case .none: return .noAccess
         }
     }
+
+    /// 没有照片权限时不给选择（10-30）：时间档、提示句和底部「开始备份 / 保存」都不显示——一张都读不到，选了也没用。
+    static func offersChoices(_ notice: AccessNotice) -> Bool { notice != .noAccess }
 
     /// 没有照片权限：标题 + 一句现状 +「去设置」（打开本 App 的系统设置页）。样式同首页英雄卡的权限卡。
     private var noAccess: some View {
@@ -156,16 +161,16 @@ struct BucketScreen: View {
         error = nil
         do {
             let list = try await app.backend.media.albums()
-            app.refreshAccess() // 读相册时可能刚弹过系统照片权限框
+            app.refreshAccess() // 读相册时可能刚弹过系统照片权限框（时间档初值看这一档，所以要在下面之前）
             known = app.backend.media.knownAlbums()
             let saved = try app.backend.media.savedScope() // 读失败走下面的 catch（显示错误 + 重试），不当成「从未保存」
             // 从未保存 → 默认勾「最近项目」；保存过 → 照旧，只勾当前还存在的（新相册默认不勾）。
             checked = ScopePolicy.initialSelection(saved: saved, available: Set(list.map(\.id)),
                                                    cameraAlbum: list.first(where: \.isCameraAlbum)?.id)
-            // 时间档：从未保存 → 今天起；保存过 → 回显。
+            // 时间档：保存过 → 回显；从未保存 → 部分照片「全部」、完整访问「从今天起」。
             let since = try app.backend.media.savedSince()
             savedSince = since
-            wantsAll = since?.isAll ?? false
+            wantsAll = ScopePolicy.initialWantsAll(saved: since, partialAccess: app.access == .partial)
             albums = list
         } catch {
             self.error = String(describing: error)

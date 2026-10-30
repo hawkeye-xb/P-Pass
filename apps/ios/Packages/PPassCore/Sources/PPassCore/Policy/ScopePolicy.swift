@@ -50,6 +50,13 @@ extension ScopePolicy {
         }
     }
 
+    /// 选范围页一进来时间档是不是「全部」（对位 Android `initialScopeTime`）：保存过 → 回显；没保存过、只给了部分照片 →
+    /// 「全部」（10-30：只挑了几张就是想传它们，多半是以前的照片）；没保存过、完整访问 →「从今天起」。
+    public static func initialWantsAll(saved: BackupSince?, partialAccess: Bool) -> Bool {
+        if let saved { return saved.isAll }
+        return partialAccess
+    }
+
     /// 选范围页的初始勾选：从未保存过 → 默认勾上「最近项目」（iOS 上相机拍的照片只在这里，对位 Android 的相机相册，#1263）；
     /// 保存过 → 已保存且当前还在的（新相册默认不勾，MOB-02）。
     public static func initialSelection(saved: Set<String>?, available: Set<String>, cameraAlbum: String?) -> Set<String> {

@@ -1367,7 +1367,7 @@ fun PPassApp() {
                         firstTime = s.firstTime,
                         cameraBucketIds = list.filter { it.isCamera }.map { it.id }.toSet(),
                     ),
-                    initialTime = initialScopeTime(savedRead is ScopeRead.Saved, savedSince),
+                    initialTime = initialScopeTime(savedRead is ScopeRead.Saved, savedSince, mediaAccess == MediaAccess.PARTIAL),
                     sinceLabel = scopeSinceOptionLabel(context, savedSince.takeIf { savedRead is ScopeRead.Saved }),
                     firstTime = s.firstTime,
                     // MOB-02 §六: 新相册判定基准（null = 从未选过范围，全量模式）。

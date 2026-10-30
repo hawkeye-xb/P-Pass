@@ -35,9 +35,17 @@ fun sinceToSave(choice: ScopeTime, previousSinceSec: Long?, nowMs: Long, zone: Z
         ScopeTime.SINCE_TODAY -> previousSinceSec ?: startOfLocalDaySec(nowMs, zone)
     }
 
-/** 选范围页一进来选中哪一档：存过范围且没有开始时间（老用户、或选过「全部」）→ 全部；其余（含首次）→ 从今天起。 */
-fun initialScopeTime(saved: Boolean, sinceSec: Long?): ScopeTime =
-    if (saved && sinceSec == null) ScopeTime.ALL else ScopeTime.SINCE_TODAY
+/**
+ * 选范围页一进来选中哪一档：
+ * - 存过范围 → 回显：没有开始时间（老用户、或选过「全部」）→ 全部，否则从今天起；
+ * - 没存过、只给了部分照片 → 全部（10-30：只挑了几张就是想传它们，多半是以前的照片）；
+ * - 没存过、全部权限 → 从今天起。
+ */
+fun initialScopeTime(saved: Boolean, sinceSec: Long?, partialAccess: Boolean = false): ScopeTime = when {
+    saved -> if (sinceSec == null) ScopeTime.ALL else ScopeTime.SINCE_TODAY
+    partialAccess -> ScopeTime.ALL
+    else -> ScopeTime.SINCE_TODAY
+}
 
 /** 时间条件放宽了（「从某天起」→「全部」或更早）：按范围扩大处理，走补扫。 */
 fun sinceWidened(previousSinceSec: Long?, newSinceSec: Long?): Boolean =

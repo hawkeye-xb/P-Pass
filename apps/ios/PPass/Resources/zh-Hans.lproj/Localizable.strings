@@ -168,8 +168,8 @@
 "partial_access_title" = "只能访问部分照片";
 "partial_access_body" = "只有选中的照片会备份。";
 "partial_access_action" = "去设置";
-"no_media_access_title" = "没有照片权限";
-"no_media_access_body" = "无法读取照片，备份已停止。";
+"no_media_access_title" = "无照片访问权限";
+"no_media_access_body" = "无法读取这台手机上的照片，备份已停止。";
 "media_permission_denied_title" = "需要照片权限";
 "media_permission_denied_body" = "选择相册需要访问照片和视频。";
 "reconnect" = "重新配对";

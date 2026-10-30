@@ -74,6 +74,15 @@ class BackupScopeTimeTest {
         assertEquals(ScopeTime.SINCE_TODAY, initialScopeTime(saved = true, sinceSec = 5L))
     }
 
+    // 10-30：只给了部分照片 = 用户亲手挑了要传的那几张，默认「全部」，否则挑的老照片一张都不传。
+    @Test
+    fun partial_access_opens_on_all_unless_a_choice_was_saved() {
+        assertEquals(ScopeTime.ALL, initialScopeTime(saved = false, sinceSec = null, partialAccess = true))
+        assertEquals("全部权限仍默认从今天起", ScopeTime.SINCE_TODAY, initialScopeTime(saved = false, sinceSec = null, partialAccess = false))
+        assertEquals("存过就回显，不被权限档改掉", ScopeTime.SINCE_TODAY, initialScopeTime(saved = true, sinceSec = 5L, partialAccess = true))
+        assertEquals(ScopeTime.ALL, initialScopeTime(saved = true, sinceSec = null, partialAccess = true))
+    }
+
     // ── 首次默认勾上相机相册 ────────────────────────────────────
 
     @Test

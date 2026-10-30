@@ -169,7 +169,7 @@
 "partial_access_body" = "Only selected photos will be backed up.";
 "partial_access_action" = "Open settings";
 "no_media_access_title" = "No photo access";
-"no_media_access_body" = "P-Pass can't read photos, so backup has stopped.";
+"no_media_access_body" = "P-Pass can't read photos on this phone, so backup has stopped.";
 "media_permission_denied_title" = "Photo access needed";
 "media_permission_denied_body" = "Choosing albums needs access to your photos and videos.";
 "reconnect" = "Pair again";

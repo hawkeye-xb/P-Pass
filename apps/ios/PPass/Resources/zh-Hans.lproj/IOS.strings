@@ -1,9 +1,9 @@
 /* iOS 独有或 Android 说法在 iOS 上不成立的文案（#315）。手写；同名 key 盖过 Localizable.strings（由 Android strings.xml 生成）。
    每条都要说清为什么 iOS 不同：见行尾注释。 */
 
-/* 选范围页：一张照片都读不到（拒绝了照片权限）时不说「没有找到照片」，说没有权限并给「去设置」（iOS 独有：Android 拒绝后回首页，不进这一页）。 */
-"bucket_no_access_title" = "没有照片访问权限";
-"bucket_no_access_body" = "P-Pass 读不到照片，没法备份。";
+/* 选范围页：没有照片权限（拒绝了）时不说「没有找到照片」，说没有权限并给「去设置」（iOS 独有：Android 拒绝后回首页，不进这一页）。 */
+"bucket_no_access_title" = "无照片访问权限";
+"bucket_no_access_body" = "无法读取这台手机上的照片，没法备份。";
 "bucket_no_access_action" = "去设置";
 
 /* 失败通知（#981）：iOS 点通知只打开 App、不会直达系统设置，指路写 iOS 设置项名字；电池优化在 iOS 上不存在，对位的是「后台 App 刷新」。 */

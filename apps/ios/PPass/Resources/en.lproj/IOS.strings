@@ -9,8 +9,8 @@
 "notif_background_refresh_restricted_body" = "This iPhone restricts Background App Refresh for P-Pass (possibly Screen Time or device management). Backup now runs only while P-Pass is open.";
 
 /* Scope page when no photo can be read (access denied): say there is no access and offer Open Settings, not "No photos found" (iOS only: Android goes home after a denial and never shows this page). */
-"bucket_no_access_title" = "No access to photos";
-"bucket_no_access_body" = "P-Pass can't read your photos, so it can't back them up.";
+"bucket_no_access_title" = "No photo access";
+"bucket_no_access_body" = "P-Pass can't read photos on this phone, so it can't back them up.";
 "bucket_no_access_action" = "Open Settings";
 
 /* Simulator and devices without a camera. */

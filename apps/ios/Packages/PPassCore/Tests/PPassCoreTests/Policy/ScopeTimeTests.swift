@@ -75,6 +75,15 @@ final class ScopeTimeTests: XCTestCase {
         XCTAssertTrue(ScopeKey.inScope(legacy, selected: ["recents"], since: .all))
     }
 
+    // MARK: 时间档初值（10-30：部分照片默认「全部」）
+
+    func testPartialAccessOpensOnAllUnlessAChoiceWasSaved() {
+        XCTAssertTrue(ScopePolicy.initialWantsAll(saved: nil, partialAccess: true))
+        XCTAssertFalse(ScopePolicy.initialWantsAll(saved: nil, partialAccess: false), "完整访问仍默认从今天起")
+        XCTAssertFalse(ScopePolicy.initialWantsAll(saved: .since(ms: 5), partialAccess: true), "存过就回显，不被权限档改掉")
+        XCTAssertTrue(ScopePolicy.initialWantsAll(saved: .all, partialAccess: false))
+    }
+
     // MARK: 首次默认勾选「最近项目」
 
     func testFirstTimeDefaultsToTheCameraAlbum() {
