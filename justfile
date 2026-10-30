@@ -152,6 +152,11 @@ arch-check:
   @./tools/test-arch-check.sh
   @./tools/arch-check.sh
 
+# ci-rust.yml「fmt + actionlint」job 里的同一条：每个跑 cargo 的 CI job 都必须
+# 用 rust-toolchain.toml 锁定的版本（脚本自带反证）。
+toolchain-check:
+  @tools/check-rust-toolchain-ci.sh
+
 # Markdown tables in docs/ and cards/ must not be split by a stray blank line
 #
 # QA-07: 解释器不能硬写 `python3`。Windows 上 `python3` 常解析到 Microsoft Store
@@ -226,7 +231,7 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt lint lint-cross test arch-check md-check token-check shell-vars-check identity-check supply-chain-check
+ci: fmt toolchain-check lint lint-cross test arch-check md-check token-check shell-vars-check identity-check supply-chain-check
   @echo "==> CI pipeline: all green ✅"
 
 # QA-03 文档快车道：只跑文档域的门禁，不编 Rust。
@@ -346,6 +351,7 @@ ios-screenshots *args:
 # （默认 iPhone 17，IOS_SIM_NAME 可改；不写死 runtime 版本）。本配方启动的模拟器跑完即关。
 ios-test:
   bash tools/ios/test.sh
+  bash tools/ios/privacy-manifest-local.sh
 
 # iOS 本地 SwiftPM 包（apps/ios/Packages/*/Package.swift）逐个在模拟器上测（#345）。没有包时直接通过。
 ios-test-packages:
