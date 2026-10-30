@@ -17,6 +17,7 @@ final class PrivacyManifestTests: XCTestCase {
             "NSPrivacyAccessedAPICategoryUserDefaults",
             "NSPrivacyAccessedAPICategorySystemBootTime",
             "NSPrivacyAccessedAPICategoryFileTimestamp",
+            "NSPrivacyAccessedAPICategoryDiskSpace",
         ])
     }
 }
