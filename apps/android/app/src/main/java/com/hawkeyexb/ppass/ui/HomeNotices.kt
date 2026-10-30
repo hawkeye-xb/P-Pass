@@ -24,12 +24,18 @@
 package com.hawkeyexb.ppass.ui
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -97,6 +103,9 @@ data class HomeNotice(
     val critical: Boolean = false,
     val dismissLabel: String? = null,
     val onDismiss: () -> Unit = {},
+    /** 右上角「×」的无障碍标签；非空时卡片换成「正文占满整行 + 动作另起一行 + 右上角 ×」的版式。 */
+    val closeLabel: String? = null,
+    val onClose: () -> Unit = {},
 )
 
 /**
@@ -119,6 +128,38 @@ fun topNotice(notices: List<HomeNotice>): HomeNotice? =
 fun NoticeCard(notice: HomeNotice) {
     val bg = if (notice.critical) PPColor.ActBg else PPColor.WaitingBg
     val bodyColor = if (notice.critical) PPColor.Act else PPColor.Ink60
+    if (notice.closeLabel != null) {
+        Surface(color = bg, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(start = 16.dp, top = 1.dp, bottom = 13.dp, end = 0.dp)) {
+                Row(verticalAlignment = Alignment.Top) {
+                    Text(
+                        notice.body,
+                        fontSize = 13.5.sp, lineHeight = 20.sp, color = bodyColor,
+                        modifier = Modifier.weight(1f).padding(top = 12.dp),
+                    )
+                    // IconButton 自带 48dp 最小触控区（Material 规范），图标本身 20dp。
+                    IconButton(onClick = notice.onClose) {
+                        Icon(
+                            Icons.Filled.Close,
+                            contentDescription = notice.closeLabel,
+                            tint = PPColor.Ink40,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+                if (notice.actionLabel != null) {
+                    Text(
+                        notice.actionLabel,
+                        fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
+                        textDecoration = TextDecoration.Underline,
+                        modifier = Modifier.padding(end = 16.dp)
+                            .clickable(onClick = notice.onAction).padding(vertical = 4.dp),
+                    )
+                }
+            }
+        }
+        return
+    }
     Surface(
         color = bg,
         shape = RoundedCornerShape(16.dp),

@@ -71,7 +71,3 @@
 /* 读屏（VoiceOver）：网格缩略图的标签。Android 用的是哈希前缀，读出来没有意义，iOS 单独给一句人话。 */
 "a11y_thumb_video" = "视频";
 "a11y_thumb_photo" = "照片";
-
-/* iOS 独有（#1263，10-29 文案定稿 C6）：设置页后台备份引导卡正文。iOS 的后台只能由系统挑时机，不能承诺（#343：不写频率、不假装能保证），
-   也没有 App 内的授权框；按钮「开启后台备份」「不再提示」与 Android 共用（由 strings.xml 生成）。 */
-"background_backup_offer" = "离开 App 后也能备份新照片。";

@@ -151,9 +151,9 @@
 "scope_value_since" = "%1$@起的照片";
 "scope_value_all" = "含以前的照片";
 "backup_scope_with_time" = "%1$@ · %2$@";
-"background_backup_offer" = "没有开启后台备份时，只有打开 P-Pass 才会备份新照片。";
-"background_backup_offer_action" = "开启后台备份";
-"background_backup_offer_dismiss" = "不再提示";
+"background_backup_offer" = "后台备份已关闭，打开才会自动备份";
+"background_backup_offer_action" = "开启";
+"background_backup_offer_close" = "关闭";
 "home_empty_albums" = "还没有备份好的照片。备份完成后会显示在这里。";
 "bucket_new" = "新";
 "backup_scope" = "备份哪些照片";

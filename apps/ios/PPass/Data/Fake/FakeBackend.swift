@@ -10,6 +10,8 @@ enum FakeScenario: String, CaseIterable {
     case timelineEmpty, timelineLoading, timelineError
     /// 设置页告示区：后台 App 刷新关着 + 有未确认的源已删除（两条告示同时出现）。
     case notices
+    /// 设置页「后台备份已关闭」引导卡：后台备份关着、卡片没被关掉。
+    case backgroundOff
 
     static var current: FakeScenario {
         DebugLaunchInput.scenario.flatMap(FakeScenario.init(rawValue:)) ?? .normal
@@ -121,6 +123,7 @@ final class FakeEngine: BackupEngine {
         self.scenario = scenario
         self.media = media
         paused = scenario == .paused
+        auto = scenario != .backgroundOff
     }
 
     func facts() -> FlowFacts {
