@@ -375,6 +375,9 @@ msg_keys! {
     UI_LIBRARY => "ui.library",
     UI_DISK_SPACE => "ui.disk_space",
     UI_DISK_FREE_OF_TOTAL => "ui.disk_free_of_total",
+    /// W-4: Settings shows a one-line status when the system disk is not encrypted.
+    UI_DISK_ENCRYPTION => "ui.disk_encryption",
+    UI_DISK_ENCRYPTION_OFF => "ui.disk_encryption_off",
     UI_LIBRARY_CHANGE_HINT => "ui.library_change_hint",
     /// #557: Settings → interface language (follow system / zh / en).
     UI_LANGUAGE => "ui.language",
@@ -726,6 +729,8 @@ mod tests {
             UI_LIBRARY,
             UI_DISK_SPACE,
             UI_DISK_FREE_OF_TOTAL,
+            UI_DISK_ENCRYPTION,
+            UI_DISK_ENCRYPTION_OFF,
             UI_LIBRARY_CHANGE_HINT,
             UI_LANGUAGE,
             UI_LANGUAGE_SYSTEM,
@@ -841,7 +846,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 362);
+        assert_eq!(ALL.len(), 364);
     }
 
     #[test]
