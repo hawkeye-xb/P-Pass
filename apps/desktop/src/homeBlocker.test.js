@@ -18,6 +18,14 @@ describe("首页阻断（L1）", () => {
       expect(homeBlocker(s, null)).toMatchObject({ id: "service_down", tone: "act" });
     }
     expect(homeBlocker("starting", null)).toMatchObject({ tone: "waiting" });
+    // F7（10-30）：在外面被正常停掉 = 用户意图，中性色、不像告警；其余停 / 失联仍是红。
+    expect(homeBlocker("stopped", null, "stopped outside")).toMatchObject({
+      id: "service_stopped_outside",
+      tone: "idle",
+      headlineKey: "ui.blocked_service_stopped_outside",
+    });
+    expect(homeBlocker("stopped", null, "user stopped")).toMatchObject({ id: "service_down", tone: "act" });
+    expect(homeBlocker("unreachable", null, "stopped outside")).toMatchObject({ id: "service_down", tone: "act" });
   });
 
   // 服务不在时 status 是旧的或 null——判据先看服务状态，不会被旧 status 盖过。

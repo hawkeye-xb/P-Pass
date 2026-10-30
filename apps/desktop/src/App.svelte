@@ -360,7 +360,7 @@
   }
 
   // 首页提示分级 L1：备份完全停了（服务没在跑 / 找不到照片库）。在场时它就是首页结论，见 lib/homeBlocker.js。
-  const blocker = $derived(homeBlocker(serviceState, status));
+  const blocker = $derived(homeBlocker(serviceState, status, serviceReason));
   // #639：搬迁期间整个窗口锁住——下面的界面不可操作（inert），只显示进度；服务那边同样拒绝一切写。
   const relocLock = $derived(status?.relocating === true);
 
@@ -1621,7 +1621,7 @@
       </nav>
       <!-- 顶部徽章只表示服务状态（UX-04），落位侧栏底部胶囊；<1080px
            收起态缩成纯色点（设计稿：服务状态缩成底部绿点）。 -->
-      <!-- 有阻断时胶囊说的是阻断本身、用它的含义色（红 = 要用户动手，琥珀 = 等待）；绿色只在一切正常时出现。 -->
+      <!-- 有阻断时胶囊说的是阻断本身、用它的含义色（红 = 要用户动手，琥珀 = 等待，中性 = 用户自己停的）；绿色只在一切正常时出现。 -->
       <div
         class="service-pill"
         class:ok={!blocker}
@@ -1681,7 +1681,7 @@
             {#if blocker}
               <!-- L1 阻塞：标题就是状态本身，不给「安全地住在这台电脑上」这类完成度结论。 -->
               <h2
-                class="m-0 font-serif text-[28px] font-normal leading-[1.3] {blocker.tone === 'act' ? 'text-act' : 'text-waiting'}"
+                class="m-0 font-serif text-[28px] font-normal leading-[1.3] {blocker.tone === 'act' ? 'text-act' : blocker.tone === 'idle' ? 'text-ink' : 'text-waiting'}"
                 data-testid="blocker-headline"
               >
                 {t(blocker.headlineKey)}
@@ -1707,19 +1707,22 @@
           {#if !isServiceRunning(serviceState)}
             <Card
               variant={blocker?.tone === "act" ? "danger" : "default"}
-              class="text-[16px] {blocker?.tone === 'act' ? '' : 'border-waiting bg-waiting-bg'}"
+              class="text-[16px] {blocker?.tone === 'waiting' ? 'border-waiting bg-waiting-bg' : ''}"
               role={blocker?.tone === "act" ? "alert" : "status"}
               data-testid="service-blocker"
             >
-              <p class="m-0 text-[13px] leading-[1.6] text-ink-40">
-                {#if serviceState === "starting"}
-                  {t("ui.starting")}
-                {:else}
-                  {t(serviceStateActionKey(serviceState, serviceReason))}
-                {/if}
-              </p>
+              <!-- F7：外面正常停掉的（中性）标题已说「后台服务已停止」，卡片里只留启动按钮，不重复。 -->
+              {#if blocker?.tone !== "idle"}
+                <p class="m-0 text-[13px] leading-[1.6] text-ink-40">
+                  {#if serviceState === "starting"}
+                    {t("ui.starting")}
+                  {:else}
+                    {t(serviceStateActionKey(serviceState))}
+                  {/if}
+                </p>
+              {/if}
               {#if serviceRecoveryAction(serviceState) === "start"}
-                <Button class="mt-[12px] self-start" disabled={starting} onclick={startDaemonNow}>
+                <Button class="{blocker?.tone === 'idle' ? '' : 'mt-[12px]'} self-start" disabled={starting} onclick={startDaemonNow}>
                   {starting ? t("ui.starting") : t("ui.start_service")}
                 </Button>
               {:else if serviceRecoveryAction(serviceState) === "restart"}
@@ -1729,7 +1732,7 @@
                 </Button>
               {/if}
               <!-- 这句教的是「启动」那条路；重启的结果由 restart_service_* toast 当场说。 -->
-              {#if serviceRecoveryAction(serviceState) !== "restart"}
+              {#if serviceRecoveryAction(serviceState) !== "restart" && blocker?.tone !== "idle"}
                 <p class="text-[13px] leading-[1.6] text-ink-40">{t("ui.refresh_hint")}</p>
               {/if}
             </Card>
@@ -2349,7 +2352,8 @@
       {/if}
       <!-- #1118：这台电脑的名字（二维码生成前也显示）。#1257：电脑标识不在这里——核对发生在输验证码那一步，
            只在确认弹窗里给。 -->
-      {#if status?.desktop_name}
+      <!-- F4 跟进：电脑名称是配合二维码核对用的；生成失败时没有码，这行不显示。 -->
+      {#if status?.desktop_name && !qrError}
         <p class="pair-identity" data-testid="desktop-name">{t("ui.pair_desktop_name", { name: status.desktop_name })}</p>
       {/if}
     </Dialog>

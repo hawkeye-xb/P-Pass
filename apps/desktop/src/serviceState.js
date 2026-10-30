@@ -66,11 +66,8 @@ export function serviceStateLabelKey(state) {
 }
 
 /** i18n key for the explanation under the badge. */
-export function serviceStateActionKey(state, reason) {
-  if (state !== "stopped") return "ui.offline_action";
-  // F7：在外面被正常停掉的（服务管理里「停止」/ launchctl bootout）——只是现在停着，
-  // 不是「开机也不起」。原因串与 Rust service_state::STOPPED_OUTSIDE 同值。
-  return reason === STOPPED_OUTSIDE ? "ui.service_stopped_outside" : "ui.service_stopped";
+export function serviceStateActionKey(state) {
+  return state === "stopped" ? "ui.service_stopped" : "ui.offline_action";
 }
 
 /** Rust `service_state::STOPPED_OUTSIDE`。 */
