@@ -10,7 +10,9 @@ set -euo pipefail
 OUT="$1"; shift
 mkdir -p "$OUT/lib"
 
-deps_of() { otool -L "$1" | awk 'NR>1 {print $1}' | grep -E '^/opt/homebrew|^/usr/local' || true; }
+# 非系统库 = 绝对路径且不在 /usr/lib、/System 下：brew 的（/opt/homebrew、/usr/local），
+# 以及 tools/build-codecs-macos.sh 编到任意 prefix 的 libheif / libde265。
+deps_of() { otool -L "$1" | awk 'NR>1 {print $1}' | grep -E '^/' | grep -v -E '^/usr/lib/|^/System/' || true; }
 
 # 1. Recursively collect non-system dylibs.
 queue=""
@@ -18,6 +20,7 @@ for bin in "$@"; do cp "$bin" "$OUT/"; queue="$queue $OUT/$(basename "$bin")"; d
 while [ -n "$queue" ]; do
   item="${queue%% *}"; rest="${queue#* }"
   [ "$rest" = "$queue" ] && queue="" || queue="$rest"
+  [ -n "$item" ] || continue
   for dep in $(deps_of "$item"); do
     base=$(basename "$dep")
     if [ ! -f "$OUT/lib/$base" ]; then
@@ -48,8 +51,13 @@ for bin in "$@"; do codesign --force -s - "$OUT/$(basename "$bin")" 2>/dev/null;
 
 # 4. Verify: nothing outside the bundle or /usr/lib & /System.
 echo "── residual external deps (must be empty):"
+residual=0
 for f in "$OUT"/* "$OUT"/lib/*.dylib; do
   [ -f "$f" ] || continue
-  deps_of "$f" | sed "s|^|  $f → |"
+  r="$(deps_of "$f")"
+  [ -z "$r" ] && continue
+  echo "$r" | sed "s|^|  $f → |"
+  residual=1
 done
+[ "$residual" -eq 0 ] || { echo "FATAL: bundle still references libraries outside it" >&2; exit 1; }
 echo "── bundle: $(du -sh "$OUT" | cut -f1), $(ls "$OUT/lib" | wc -l | tr -d ' ') dylibs"

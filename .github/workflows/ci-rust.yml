@@ -75,12 +75,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # Windows vcpkg 端口快照。GitHub runner 池里同时存在不同镜像（实测同一次
-  # run 里 clippy 落在 20261007、test 落在 20261021），各自自带的 vcpkg 端口
-  # 不同：libheif 1.23.6 的 libde265 是 feature，旧镜像里却是基础依赖、没有
-  # 这个 feature。所以不能依赖镜像自带的 vcpkg，钉到固定提交。
-  # 该提交已核对：ports/libheif 1.23.6 含 libde265 feature，ports/libde265 存在。
-  VCPKG_PIN_SHA: 40a678a192636131f04b3af79ba118d869effade
 
 jobs:
   # CI-11 (#255)：决定本次改动要不要跑重型门禁。
@@ -397,65 +391,13 @@ jobs:
         shell: bash
         run: tools/setup-rust-toolchain.sh
 
-      # ⭐ 本 job 能不能每个 PR 跑，全看这一步。
-      # artifacts.yml 只缓存了 cargo，**vcpkg 安装树没缓存** —— 那就是它注释里
-      # 「vcpkg static libheif is ~20min, not worth every push」、只能手工触发
-      # 的原因。这里把安装树也缓存掉。
-      # key 里带钉死的 vcpkg SHA（端口版本）和 ImageVersion（编译工具链随镜像变），
-      # 任一变化缓存都必须失效，否则会拿旧 ABI 的
-      # heif.lib 去链新工具链，炸得莫名其妙。
-      # ⚠️ 改动下面那行 install 的端口或特性时，**把 -v3 往上加**，否则会命中
-      # 旧特性的安装树 —— #235 实测过 vcpkg 换特性时 install 会拒绝执行（要
-      # --recurse），而 libheif-sys 的 build script 缓存仍注入 x265-static，
-      # 直接 LNK1181。缓存不失效会把那个一次性的坑变成常驻故障。
-      # key 在步骤里算，不用 `${{ env.ImageVersion }}` —— `env` 上下文**只含
-      # workflow/job/step 里声明的变量**，runner 镜像自己的环境变量不在其中。
-      # 那样写会静默解析成空串，key 退化成常量，而注释还在说「镜像换了会失效」
-      # —— 属于自己骗自己。在 bash 步骤里 $ImageVersion 才真的读得到。
-      - name: Compute vcpkg cache key
-        id: vkey
-        shell: bash
-        run: |
-          key="vcpkg-libheif-core-libde265-x64-windows-static-md-${VCPKG_PIN_SHA:0:12}-${ImageVersion:-unknown}-v3"
-          echo "key=$key" >> "$GITHUB_OUTPUT"
-          echo "vcpkg cache key = $key"
-      - name: Cache vcpkg (static libheif)
-        id: vcpkg-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: C:\vcpkg\installed
-          key: ${{ steps.vkey.outputs.key }}
-
-      - name: Pin vcpkg registry (端口快照不随 runner 镜像漂移)
-        shell: bash
-        run: |
-          git -C /c/vcpkg rev-parse HEAD
-          git -C /c/vcpkg rev-parse --is-shallow-repository
-          git -C /c/vcpkg fetch --depth=1 origin "$VCPKG_PIN_SHA"
-          git -C /c/vcpkg checkout --force "$VCPKG_PIN_SHA"
-          (cd /c/vcpkg && cmd //c bootstrap-vcpkg.bat -disableMetrics)
-          echo "vcpkg pinned at $(git -C /c/vcpkg rev-parse HEAD)"
-
-      # 与 artifacts.yml 逐字一致（BUILD-08 #235）：[core,libde265] = 不带
-      # 默认特性（摘掉 GPL 的 x265 编码器），再显式加回 libde265 解码器 ——
-      # 端口 1.23.x 起 libde265 是独立特性（default-features = hevc + libde265），
-      # 只写 [core] 会没有 HEVC 解码器，HEIC 解码失败。
-      # --clean-after-build 会删掉 packages/ 与 buildtrees/，所以上面只缓存
-      # installed/ —— 缓存别的目录是白占空间。
-      # 自报耗时与缓存命中，用来验「缓存命中后从 ~20min 掉到 1 分钟量级」
-      # 这条成功判据 —— 不许用「首次慢、以后快」含糊过去，要贴冷/热两次数字。
+      # ⭐ 本 job 能不能每个 PR 跑，全看这一步：vcpkg 安装树有缓存（冷编约 20min）。
+      # 钉住的 vcpkg 提交、特性、缓存键都在 composite action 里（版本来源 tools/codec-deps.env），
+      # release / artifacts 的 Windows job 用的是同一个，键相同、共用同一份缓存。
+      # main 上每次推送由本 job 把缓存存在 main 上，tag 构建（release.yml）才读得到。
       - name: Install libheif (vcpkg, static, no HEVC encoder)
-        shell: bash
-        run: |
-          echo "cache-hit = ${{ steps.vcpkg-cache.outputs.cache-hit }}"
-          start=$(date +%s)
-          /c/vcpkg/vcpkg.exe install "libheif[core,libde265]:x64-windows-static-md" --clean-after-build
-          echo "VCPKG_INSTALL_SECONDS=$(( $(date +%s) - start ))"
-          # 装完必须能看到 HEVC 解码器：vcpkg libheif 端口 1.23.x 起 libde265 从
-          # 基础依赖改成了独立特性，漏写会装出「能开容器、解不了像素」的 libheif，
-          # 到测试阶段才以 PluginLoadingError 暴露。缓存命中时同样检查。
-          test -f /c/vcpkg/installed/x64-windows-static-md/lib/libde265.lib \
-            || { echo "::error::libde265.lib missing — libheif was installed without the libde265 feature (no HEVC decoder)"; exit 1; }
+        timeout-minutes: 40
+        uses: ./.github/actions/vcpkg-libheif
 
       # ⚠️ **刻意不缓存 `target/`**（Linux 那个 job 缓存了，这里不缓存）。
       # 这是量过账之后的决定，不是抄漏了。PR #249 上四轮实测的完整对照：
@@ -571,8 +513,7 @@ jobs:
   #     就会把别的 lane 挤出去。key 相同时只有先跑完的那条会保存，另一条
   #     只读，这正是想要的效果。
   #   - **不缓存 `target/`**：理由与 test (windows) 那段账相同。
-  # vcpkg 那两步与 test (windows) 逐字一致；本卡范围只许改本文件，所以没有
-  # 抽成 composite action。改其中一处时**两处一起改**。
+  # vcpkg 那一步与 test (windows) 用同一个 composite action（.github/actions/vcpkg-libheif）。
   clippy-windows:
     name: clippy (windows)
     # CI-11 (#255)：**只有明确收到 'false' 才跳过**（fail-closed，理由同上）。
@@ -588,44 +529,11 @@ jobs:
         shell: bash
         run: tools/setup-rust-toolchain.sh
 
-      # 与 test (windows) 逐字一致 —— key 必须相同，才能共用同一份缓存。
-      - name: Compute vcpkg cache key
-        id: vkey
-        shell: bash
-        run: |
-          key="vcpkg-libheif-core-libde265-x64-windows-static-md-${VCPKG_PIN_SHA:0:12}-${ImageVersion:-unknown}-v3"
-          echo "key=$key" >> "$GITHUB_OUTPUT"
-          echo "vcpkg cache key = $key"
-      - name: Cache vcpkg (static libheif)
-        id: vcpkg-cache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: C:\vcpkg\installed
-          key: ${{ steps.vkey.outputs.key }}
-
-      - name: Pin vcpkg registry (端口快照不随 runner 镜像漂移)
-        shell: bash
-        run: |
-          git -C /c/vcpkg rev-parse HEAD
-          git -C /c/vcpkg rev-parse --is-shallow-repository
-          git -C /c/vcpkg fetch --depth=1 origin "$VCPKG_PIN_SHA"
-          git -C /c/vcpkg checkout --force "$VCPKG_PIN_SHA"
-          (cd /c/vcpkg && cmd //c bootstrap-vcpkg.bat -disableMetrics)
-          echo "vcpkg pinned at $(git -C /c/vcpkg rev-parse HEAD)"
-
       # `--all-targets` 会跑 libheif-sys 的 build script，它要找到 heif.lib。
+      # 与 test (windows) 同一个 composite action，缓存键相同。
       - name: Install libheif (vcpkg, static, no HEVC encoder)
-        shell: bash
-        run: |
-          echo "cache-hit = ${{ steps.vcpkg-cache.outputs.cache-hit }}"
-          start=$(date +%s)
-          /c/vcpkg/vcpkg.exe install "libheif[core,libde265]:x64-windows-static-md" --clean-after-build
-          echo "VCPKG_INSTALL_SECONDS=$(( $(date +%s) - start ))"
-          # 装完必须能看到 HEVC 解码器：vcpkg libheif 端口 1.23.x 起 libde265 从
-          # 基础依赖改成了独立特性，漏写会装出「能开容器、解不了像素」的 libheif，
-          # 到测试阶段才以 PluginLoadingError 暴露。缓存命中时同样检查。
-          test -f /c/vcpkg/installed/x64-windows-static-md/lib/libde265.lib \
-            || { echo "::error::libde265.lib missing — libheif was installed without the libde265 feature (no HEVC decoder)"; exit 1; }
+        timeout-minutes: 40
+        uses: ./.github/actions/vcpkg-libheif
 
       - name: Cache cargo (依赖源码；key 与 test (windows) 共用)
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

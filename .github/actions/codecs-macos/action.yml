@@ -1,0 +1,45 @@
+name: codecs-macos
+description: >-
+  macOS：按 tools/codec-deps.env 的固定版本从源码编 libheif + libde265（只编解码），按版本缓存，
+  并把 PKG_CONFIG_PATH 指过去，之后的 cargo build 链接到这里。release / artifacts 的 macOS job 引用。
+
+# 为什么不用 brew：brew 装到的是构建当天的版本，追溯不了，还连带 x265、libaom 等用不到的库。
+# 缓存键 = 版本文件 + 编译脚本的哈希 + 镜像：版本或编译参数一变就换新缓存。脚本自己还会核对
+# <prefix>/.complete 里记的配置（含最低系统版本），对不上就重编，坏缓存不会被直接用上。
+# 冷编约 1 分钟，缓存只为省这一分钟，不是正确性的前提。
+#
+# ⚠️ composite action 的每个 run 步骤都必须写 shell:；actionlint 不扫本文件。
+
+outputs:
+  prefix:
+    description: 编译产物目录（lib/、include/、lib/pkgconfig/）
+    value: ${{ steps.plan.outputs.prefix }}
+
+runs:
+  using: composite
+  steps:
+    - name: 算缓存键
+      id: plan
+      shell: bash
+      run: |
+        set -euo pipefail
+        . tools/codec-deps.env
+        prefix="$RUNNER_TEMP/ppf-codecs"
+        {
+          echo "prefix=$prefix"
+          echo "key=codecs-macos-${{ runner.arch }}-${ImageOS:-unknown}-heif${LIBHEIF_VERSION}-de265${LIBDE265_VERSION}-${{ hashFiles('tools/codec-deps.env', 'tools/build-codecs-macos.sh') }}"
+        } >> "$GITHUB_OUTPUT"
+
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ steps.plan.outputs.prefix }}
+        key: ${{ steps.plan.outputs.key }}
+
+    - name: 编译（缓存命中且配置一致时直接返回）
+      shell: bash
+      env:
+        PREFIX: ${{ steps.plan.outputs.prefix }}
+      run: |
+        set -euo pipefail
+        tools/release/with-timeout.sh "编译 libheif + libde265" 1200 1 -- tools/build-codecs-macos.sh "$PREFIX"
+        echo "PKG_CONFIG_PATH=$PREFIX/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
