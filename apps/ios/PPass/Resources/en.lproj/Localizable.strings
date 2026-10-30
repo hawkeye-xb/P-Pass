@@ -151,9 +151,9 @@
 "scope_value_since" = "%1$@ onward";
 "scope_value_all" = "Including older photos";
 "backup_scope_with_time" = "%1$@ · %2$@";
-"background_backup_offer" = "Without background backup, new photos are backed up only when you open P-Pass.";
-"background_backup_offer_action" = "Turn on background backup";
-"background_backup_offer_dismiss" = "Don't show again";
+"background_backup_offer" = "Background backup is off. Turn it on to back up automatically.";
+"background_backup_offer_action" = "Turn on";
+"background_backup_offer_close" = "Close";
 "home_empty_albums" = "No backed-up photos yet. They'll appear here.";
 "bucket_new" = "New";
 "backup_scope" = "Photos to back up";

@@ -725,7 +725,7 @@ fun HomeScreen(
                 )
             )
         }
-        // #1263：点「开启」申请电池白名单，授予了才算开（拒绝时卡片留着）；「不用了」记下来，之后不再出现，
+        // #1263：点「开启」申请电池白名单，授予了才算开（拒绝时卡片留着）；右上角 ×（沿用原「不再提示」的持久化）记下来，之后不再出现，
         // 下面的后台备份开关照旧可用。
         if (offerBackgroundBackup) {
             Spacer(Modifier.height(12.dp))
@@ -735,8 +735,8 @@ fun HomeScreen(
                     body = stringResource(R.string.background_backup_offer),
                     actionLabel = stringResource(R.string.background_backup_offer_action),
                     onAction = onEnableBackgroundBackup,
-                    dismissLabel = stringResource(R.string.background_backup_offer_dismiss),
-                    onDismiss = onDismissBackgroundBackupOffer,
+                    closeLabel = stringResource(R.string.background_backup_offer_close),
+                    onClose = onDismissBackgroundBackupOffer,
                 )
             )
         }

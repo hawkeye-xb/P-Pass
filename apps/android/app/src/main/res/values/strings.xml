@@ -234,9 +234,9 @@
     <string name="scope_value_all">Including older photos</string>
     <string name="backup_scope_with_time">%1$s · %2$s</string>
     <!-- #1263: home card offering background backup (onboarding no longer asks). -->
-    <string name="background_backup_offer">Without background backup, new photos are backed up only when you open P-Pass.</string>
-    <string name="background_backup_offer_action">Turn on background backup</string>
-    <string name="background_backup_offer_dismiss">Don\'t show again</string>
+    <string name="background_backup_offer">Background backup is off. Turn it on to back up automatically.</string>
+    <string name="background_backup_offer_action">Turn on</string>
+    <string name="background_backup_offer_close">Close</string>
     <!-- #1263: empty Photos tab (no photos on the computer yet); one wording only. -->
     <string name="home_empty_albums">No backed-up photos yet. They\'ll appear here.</string>
     <!-- MOB-02 §六: 新相册徽标 -->

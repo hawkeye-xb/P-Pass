@@ -218,9 +218,9 @@
     <string name="scope_value_all">含以前的照片</string>
     <string name="backup_scope_with_time">%1$s · %2$s</string>
     <!-- #1263：首页「开启后台备份」卡片（onboarding 不再问）。 -->
-    <string name="background_backup_offer">没有开启后台备份时，只有打开 P-Pass 才会备份新照片。</string>
-    <string name="background_backup_offer_action">开启后台备份</string>
-    <string name="background_backup_offer_dismiss">不再提示</string>
+    <string name="background_backup_offer">后台备份已关闭，打开才会自动备份</string>
+    <string name="background_backup_offer_action">开启</string>
+    <string name="background_backup_offer_close">关闭</string>
     <!-- #1263：照片页空状态（电脑上还没有照片），只有这一种说法。 -->
     <string name="home_empty_albums">还没有备份好的照片。备份完成后会显示在这里。</string>
     <!-- MOB-02 §六: 新相册徽标 -->

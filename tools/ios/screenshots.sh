@@ -85,6 +85,7 @@ shot 16-home-partial-access partialAccess settings
 shot 17-home-no-access noAccess settings
 shot 18-home-no-albums noAlbums settings
 shot 19-home-pairing-lost lost settings
+shot 25-settings-background-off backgroundOff settings
 # 子页
 shot 20-albums normal bucket
 shot 23-albums-partial-access partialAccess bucket

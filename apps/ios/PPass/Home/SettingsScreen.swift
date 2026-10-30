@@ -22,7 +22,7 @@ struct SettingsScreen: View {
                     Section {
                         NoticeRow(text: L.s("background_backup_offer"),
                                   action: (L.s("background_backup_offer_action"), { app.enableBackgroundFromCard() }),
-                                  dismiss: (L.s("background_backup_offer_dismiss"), { app.dismissBackgroundCard() }))
+                                  close: (L.s("background_backup_offer_close"), { app.dismissBackgroundCard() }))
                             .accessibilityIdentifier("backgroundCard")
                     }
                 }
@@ -221,8 +221,39 @@ private struct NoticeRow: View {
     let text: String
     var action: (String, () -> Void)? = nil
     var dismiss: (String, () -> Void)? = nil
+    /// 右上角 ×（无障碍标签, 动作）：非空时版式换成「正文占满整行 + 动作另起一行 + 右上角 ×」，同 Android NoticeCard 的 closeLabel 版式。
+    var close: (String, () -> Void)? = nil
 
     var body: some View {
+        if let c = close {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top, spacing: 8) {
+                    Text(text).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button(action: c.1) {
+                        Image(systemName: "xmark").font(PPFont.subheadlineBold).foregroundStyle(PPColor.ink40)
+                            // HIG 最小触控区 44pt；负边距让图标仍贴着右上角，不把正文往下挤。
+                            .frame(width: 44, height: 44).contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    .padding(.top, -12).padding(.trailing, -12)
+                    .accessibilityLabel(c.0)
+                    .accessibilityIdentifier("noticeClose")
+                }
+                if let a = action {
+                    Button(a.0, action: a.1)
+                        .font(PPFont.subheadlineBold).underline().foregroundStyle(PPColor.ink)
+                        .buttonStyle(.borderless)
+                        .accessibilityIdentifier("noticeAction")
+                }
+            }
+            .ppTinted(PPColor.waitingBg)
+        } else {
+            row
+        }
+    }
+
+    private var row: some View {
         HStack(alignment: .center, spacing: 12) {
             Text(text).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
                 .frame(maxWidth: .infinity, alignment: .leading)
