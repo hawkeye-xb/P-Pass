@@ -91,6 +91,9 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_Pipes",
   # #1260: RegisterClassW / WNDCLASSW——只收消息的窗口接收卷的设备通知（推出前审批、拔盘）。
   "Win32_Graphics_Gdi",
+  # 解码子进程隔离：AppContainer profile / Job 对象。
+  "Win32_Security_Isolation",
+  "Win32_System_JobObjects",
 ] }
 # #1167：管道安全描述符 SDDL 要宽字符串（interprocess 的 SecurityDescriptor::deserialize
 # 收 `&U16CStr`）。已在依赖树里（interprocess 的 Windows 依赖），这里提为直接依赖。

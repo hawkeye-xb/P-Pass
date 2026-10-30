@@ -1,0 +1,27 @@
+[package]
+name = "decode-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# 解码子进程 `ppf-decoder` 及其与 daemon 之间的协议。
+# 刻意只依赖 image + libheif-rs：不链 platform / 任何 UI 系统库，
+# 子进程才能在 Windows 上开 win32k lockdown 起得来。
+[[bin]]
+name = "ppf-decoder"
+path = "src/bin/ppf-decoder.rs"
+
+[features]
+# 从源码编 libheif 进二进制（自包含分发；默认走系统库，开发/CI 构建快）。
+vendored = ["libheif-rs/embedded-libheif"]
+
+[dependencies]
+# 与 media-codec 原先的取舍相同：关 default features 去掉 AVIF 编码器（rav1e）。
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "ico", "rayon"] }
+libheif-rs = { version = "2", default-features = false, features = ["v1_17"] }
+
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

@@ -149,6 +149,7 @@ fn pool_completes_every_job() {
         match rx.recv().expect("pool must answer every job").outcome {
             ThumbOutcome::Generated => generated += 1,
             ThumbOutcome::Placeholder { .. } => placeholder += 1,
+            ThumbOutcome::Unavailable { reason } => panic!("decoder unavailable: {reason}"),
         }
     }
     assert_eq!((generated, placeholder), (9, 3));
@@ -175,9 +176,11 @@ fn s05_fixture_sweep_failed_is_zero() {
         total += 1;
         let mut hash = [0u8; 32];
         hash[..8].copy_from_slice(&(i as u64).to_le_bytes());
-        if let ThumbOutcome::Placeholder { reason } = make_thumbs(&hash, &path, out.path()).outcome
-        {
-            failed.push(format!("{path:?}: {reason}"));
+        match make_thumbs(&hash, &path, out.path()).outcome {
+            ThumbOutcome::Placeholder { reason } | ThumbOutcome::Unavailable { reason } => {
+                failed.push(format!("{path:?}: {reason}"));
+            }
+            ThumbOutcome::Generated => {}
         }
     }
     assert!(total > 0, "fixture dir {dir} is empty");

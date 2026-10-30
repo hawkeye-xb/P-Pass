@@ -12,20 +12,16 @@
 
 use std::path::PathBuf;
 
-mod decode;
 mod ffmpeg;
 mod pool;
 mod quicklook;
-// DESK-16 (#165)：同一条回退链的 Windows 那半（薄封装，零 cfg）。
-mod system_thumb;
+// 静态图解码：交给独立的解码子进程（协议见 decode-worker，隔离拉起在 platform）。
+mod sandbox;
 mod thumb;
 
-pub use decode::decode_image;
 pub use ffmpeg::{extract_frame, ffmpeg_path};
-// DESK-16 (#165)：与 `ffmpeg_path` 同样公开，理由相同 —— 回退链的集成测试
-// 必须能把「本机有没有这个能力」写成显式前提，而不是靠条件编译分叉。
 pub use pool::{ThumbGenerator, ThumbPool};
-pub use system_thumb::capable as system_thumbnail_capable;
+pub use sandbox::{decode_image, decode_image_within, DECODE_MAX_EDGE};
 pub use thumb::{
     make_thumbs, placeholder_jpeg, thumb_paths, ThumbOutcome, ThumbPaths, ThumbResult,
     JPEG_QUALITY, THUMB_SIZES,
@@ -57,13 +53,10 @@ pub enum CodecError {
     #[error("quicklook on {path}: {msg}")]
     QuickLook { path: PathBuf, msg: String },
 
-    // DESK-16 (#165): the Windows system thumbnailer (Shell
-    // IShellItemImageFactory) — the other half of the same fallback chain.
-    // Separate variant for the same reason QuickLook is separate: the
-    // diagnostic must say which tool actually failed, not blame ffmpeg for
-    // something ffmpeg was never asked to do.
-    #[error("shell thumbnail on {path}: {msg}")]
-    ShellThumbnail { path: PathBuf, msg: String },
+    /// 解码子进程不可用（找不到、起不来）：本机的系统性问题，不是这个文件的错。
+    /// 调用方据此不把资产标成「永久失败」，留给重试。
+    #[error("decode sandbox unavailable: {0}")]
+    SandboxUnavailable(String),
 }
 
 pub type Result<T> = std::result::Result<T, CodecError>;
