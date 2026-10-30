@@ -95,9 +95,10 @@ pub(crate) fn spawn(exe: &Path, limits: &Limits) -> io::Result<IsolatedChild> {
 #[cfg(target_os = "macos")]
 mod seatbelt {
     use std::io;
+    use std::os::unix::process::CommandExt as _;
     use std::path::Path;
     use std::process::Command;
-    use std::sync::{Arc, Mutex, OnceLock};
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
@@ -150,38 +151,67 @@ mod seatbelt {
         c
     }
 
-    /// 本机能否真的套上这份沙箱（sandbox-exec 缺失、被更外层沙箱拒绝、SBPL 被系统
-    /// 拒绝都在这里暴露）。进程内只验一次；不通过时 `spawn` 一律报错，绝不退成无隔离。
-    fn self_check() -> &'static Result<(), String> {
-        static CHECK: OnceLock<Result<(), String>> = OnceLock::new();
-        CHECK.get_or_init(|| {
-            let exe = Path::new("/usr/bin/true");
-            let out = base(exe, Path::new("/usr/bin"), &profile())
-                .arg(exe)
-                .output()
-                .map_err(|e| format!("{SANDBOX_EXEC}: {e}"))?;
-            if out.status.success() {
-                Ok(())
-            } else {
-                Err(format!(
-                    "seatbelt self-check failed ({}): {}",
-                    out.status,
-                    String::from_utf8_lossy(&out.stderr).trim()
-                ))
+    /// 逐个 worker 预检：用生产策略、空 stdin 真跑一遍，证明「沙箱 + 这个 worker 加载得起来」。
+    /// 判据只区分「没跑起来」与「跑起来了」：被信号杀（dyld 缺库 / 被沙箱拦会 abort）、
+    /// sandbox-exec 自身报错（65 / 71）、sandbox-exec 缺失，都算没跑起来 → `Err`，调用方记为
+    /// 系统性失败（重试，不写 thumb_state=2，也绝不退成无隔离）；worker 自己以任何码退出、
+    /// 或超过 5s 仍在跑，都算起来了（解码对错是文件级失败）。只缓存成功：瞬时失败可重试。
+    fn preflight(exe: &Path, dir: &Path) -> io::Result<()> {
+        use std::os::unix::process::ExitStatusExt as _;
+        use std::process::Stdio;
+        static OK: Mutex<Vec<std::path::PathBuf>> = Mutex::new(Vec::new());
+        if OK
+            .lock()
+            .map(|g| g.iter().any(|p| p == exe))
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+        let mut child = base(exe, dir, &profile())
+            .arg(exe)
+            .process_group(0)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map_err(|e| io::Error::other(format!("{SANDBOX_EXEC}: {e}")))?;
+        let start = std::time::Instant::now();
+        let status = loop {
+            if let Some(st) = child.try_wait()? {
+                break Some(st);
             }
-        })
+            if start.elapsed() > Duration::from_secs(5) {
+                // SAFETY: 自己拉起、尚未回收的子进程组。
+                unsafe {
+                    libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+                }
+                let _ = child.wait();
+                break None;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        if let Some(st) = status {
+            if st.signal().is_some() || matches!(st.code(), Some(65 | 71)) {
+                return Err(io::Error::other(format!(
+                    "seatbelt preflight failed for {} ({st})",
+                    exe.display()
+                )));
+            }
+        }
+        if let Ok(mut g) = OK.lock() {
+            g.push(exe.to_path_buf());
+        }
+        Ok(())
     }
 
     pub(super) fn command(exe: &Path) -> io::Result<Command> {
-        if let Err(e) = self_check() {
-            return Err(io::Error::other(e.clone()));
-        }
         // 参数里的路径必须是真实路径（/var → /private/var 等符号链接在沙箱里按真实路径比）。
         let exe = std::fs::canonicalize(exe)?;
         let dir = exe
             .parent()
             .ok_or_else(|| io::Error::other("worker has no parent dir"))?
             .to_path_buf();
+        preflight(&exe, &dir)?;
         let mut c = base(&exe, &dir, &profile());
         c.arg(&exe);
         Ok(c)
