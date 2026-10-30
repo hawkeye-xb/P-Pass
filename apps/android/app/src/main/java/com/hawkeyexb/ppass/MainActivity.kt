@@ -1369,6 +1369,7 @@ fun PPassApp() {
                         onCheckUpdate = { updateController.onCheckRowClick() },
                         // #1272：「自动备份」规则开关与权限三种结果。
                         autoBackupRuleOn = ruleOn,
+                        scopeHasStart = scopeSince != null,
                         onToggleAutoBackupRule = { on -> onToggleRule(s.pairing, on) },
                         autoBackupRuleHintRes = ruleHintRes ?: when {
                             !ruleOn -> null

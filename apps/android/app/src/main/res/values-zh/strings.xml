@@ -358,4 +358,5 @@
     <string name="auto_backup_blocked_hero">自动备份已停止</string>
     <string name="auto_backup_rule_partial_hint">只允许访问部分照片。</string>
     <string name="auto_backup_rule_none_hint">没有照片访问权限。</string>
+    <string name="auto_backup_from_today_empty">今天新拍的照片会自动传到电脑。去拍一张试试。</string>
 </resources>

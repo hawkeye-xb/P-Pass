@@ -331,6 +331,8 @@ fun HomeScreen(
     onCheckUpdate: (() -> Unit)? = null,
     /** #1272：「自动备份」规则开关（以后哪些照片自动送到电脑）。关着是正常状态，不是故障。 */
     autoBackupRuleOn: Boolean = true,
+    /** #1272 §5：备份范围设了开始时间（「从今天起」）。 */
+    scopeHasStart: Boolean = false,
     onToggleAutoBackupRule: (Boolean) -> Unit = {},
     /** #1272：开关下方一行小字（没有照片权限 / 权限被收回或改成部分）。 */
     autoBackupRuleHintRes: Int? = null,
@@ -408,7 +410,10 @@ fun HomeScreen(
                 } else {
                 val t = triplet
                 val heroRender = heroRenderOf(mediaAccess, t, countsReadable = countsReadable, scopeSaved = scopeSaved)
-                if (heroRender == HeroRender.Triplet && t != null) {
+                if (heroRender == HeroRender.Triplet && t != null && t.n == 0L && t.m == 0L && scopeHasStart) {
+                    // #1272 §5：「从某天起」且范围里还没有照片——空状态一句话（拍完回到 P-Pass，前台补捞会把它传上去）。
+                    Text(stringResource(R.string.auto_backup_from_today_empty), color = PPColor.Ink, fontSize = 15.sp)
+                } else if (heroRender == HeroRender.Triplet && t != null) {
                     // UI-16 规则 G：五条闸门全过才准绿；任一条不成立退回墨色。
                     // 恒绿的那两行是本卡要修的缺陷本体——配对已断/有失败待处理/
                     // 被按停时，绿色是在替一件没发生的事作保。
