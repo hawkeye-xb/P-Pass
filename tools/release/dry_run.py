@@ -298,7 +298,7 @@ set -euo pipefail
 v="${PPF_BUILD_VERSION:-}"; v="$(printf '%s' "$v" | tr -d '[:space:]')"; v="${v#v}"
 [ -n "$v" ] || v="__PLACEHOLDER__"
 mkdir -p target/release
-for f in daemon daemon.exe testclient.exe; do
+for f in daemon daemon.exe testclient.exe ppf-decoder ppf-decoder.exe; do
   printf '#!/bin/sh\necho "P-Pass daemon %s"\n' "$v" > "target/release/$f"; chmod +x "target/release/$f"
 done
 echo "$v" >> "$DRYRUN_REC/daemon"
@@ -409,7 +409,7 @@ def build_versions(ck: Check, sc: "Scenario", wf: dict, tag: str, want: str):
                f"没指定 bash 的步骤：{pwsh}")
         if job_id == "macos-arm64":
             # 代替 bundle-macos.sh（dylib 收集 / rpath 改写不在范围内）：daemon + lib/ 摆进 rel 目录
-            picked.append({"name": "(dry-run) stage sidecar", "run": f"mkdir -p {rel}/lib && cp target/release/daemon {rel}/daemon"})
+            picked.append({"name": "(dry-run) stage sidecar", "run": f"mkdir -p {rel}/lib && cp target/release/daemon {rel}/daemon && cp target/release/daemon {rel}/ppf-decoder"})
             s = dict(by_name[shell_step])
             s["run"] = s["run"].replace("/tmp/rel", str(rel))  # release.yml 写死 /tmp/rel；沙箱里换成临时目录
             picked.append(s)

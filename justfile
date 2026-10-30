@@ -306,10 +306,10 @@ verify-m1:
     cargo nextest run
     tools/dogfood-smoke.sh /tmp/ppf-verify-m1
     # #809：daemon 与外壳版本同源（bundle-desktop-macos.sh 第 5c 步核对）
-    PPF_BUILD_VERSION="$(tools/release-version.sh desktop)" cargo build --release -p daemon -p testclient
+    PPF_BUILD_VERSION="$(tools/release-version.sh desktop)" cargo build --release -p daemon -p testclient -p decode-worker
     rm -rf /tmp/ppf-rel && mkdir -p /tmp/ppf-rel
     TARGET="${CARGO_TARGET_DIR:-target}"
-    tools/bundle-macos.sh /tmp/ppf-rel "$TARGET/release/daemon" "$TARGET/release/testclient"
+    tools/bundle-macos.sh /tmp/ppf-rel "$TARGET/release/daemon" "$TARGET/release/testclient" "$TARGET/release/ppf-decoder"
     tools/bundle-desktop-macos.sh /tmp/ppf-rel /tmp/ppf-rel
 
 # Android unit tests (proto golden drift check included)

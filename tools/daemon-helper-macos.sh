@@ -8,6 +8,7 @@
 #   ppf-daemon.app/Contents/
 #     Info.plist                 CFBundleIdentifier = com.hawkeyexb.ppass.desktop.daemon
 #     MacOS/ppf-daemon           bundle-macos.sh 产出的 daemon（rpath @executable_path/lib）
+#     MacOS/ppf-decoder          解码子进程（同一份 lib/；daemon 按「与自己同目录」找它，不带钥匙串权限）
 #     MacOS/lib/*.dylib          同上，与可执行文件并排
 #     embedded.provisionprofile  只在 Developer ID 签名时放
 #
@@ -51,7 +52,10 @@ assemble() {
   [ -n "$version" ] || die "assemble 需要版本号"
   rm -rf "$helper"
   mkdir -p "$helper/Contents/MacOS"
+  [ -f "$rel/ppf-decoder" ] || die "$rel/ppf-decoder 不存在——bundle-macos.sh 要同时带上 ppf-decoder"
   cp "$rel/daemon" "$helper/Contents/MacOS/$EXE_NAME"
+  cp "$rel/ppf-decoder" "$helper/Contents/MacOS/ppf-decoder"
+  chmod +x "$helper/Contents/MacOS/ppf-decoder"
   chmod +x "$helper/Contents/MacOS/$EXE_NAME"
   cp -R "$rel/lib" "$helper/Contents/MacOS/lib"
   # python3 标准库 plistlib：dry-run 在 Linux 上跑，那里没有 PlistBuddy / plutil。
@@ -126,6 +130,7 @@ sign() {
       [ -f "$lib" ] || continue
       "$WT" "codesign dylib（ad-hoc）" 120 1 -- codesign --force --sign - "$lib"
     done
+    "$WT" "codesign ppf-decoder（ad-hoc）" 120 1 -- codesign --force --sign - "$helper/Contents/MacOS/ppf-decoder"
     "$WT" "codesign helper（ad-hoc）" 120 1 -- codesign --force --sign - "$helper"
     echo "warn: helper 是 ad-hoc 签名，不带钥匙串权限——这个包里的 daemon 读写不了钥匙串。" >&2
     return 0
@@ -145,6 +150,10 @@ sign() {
     "$WT" "codesign dylib（${ts_label}）" 300 "$ts_tries" -- \
       codesign --force --sign "$identity" --options runtime "${ts[@]}" "$lib"
   done
+  # 解码子进程：同团队、hardened runtime，**不带**钥匙串权限声明（它不碰钥匙串）。
+  "$WT" "codesign ppf-decoder（${ts_label}）" 300 "$ts_tries" -- \
+    codesign --force --sign "$identity" --options runtime "${ts[@]}" \
+    "$helper/Contents/MacOS/ppf-decoder"
   "$WT" "codesign helper（${ts_label}）" 300 "$ts_tries" -- \
     codesign --force --sign "$identity" --options runtime "${ts[@]}" \
     --entitlements "$ENTITLEMENTS" "$helper"
@@ -181,14 +190,18 @@ dev() {
   local profile="${PPF_DAEMON_PROVISIONPROFILE:-}"
   [ -n "$profile" ] || die "设 PPF_DAEMON_PROVISIONPROFILE=<授权文件路径>（Developer ID 授权文件，不进仓库）"
   if [ -z "$daemon" ]; then
-    (cd "$ROOT" && cargo build -p daemon)
+    (cd "$ROOT" && cargo build -p daemon -p decode-worker)
     daemon="${CARGO_TARGET_DIR:-$ROOT/target}/debug/daemon"
   fi
   [ -x "$daemon" ] || die "daemon 不存在：$daemon"
   identity="$(identity)"
   version="$("$ROOT/tools/release-version.sh" desktop)"
   stage="$(mktemp -d)"
-  "$ROOT/tools/bundle-macos.sh" "$stage" "$daemon" >/dev/null
+  # 解码子进程与 daemon 同目录构建（cargo build -p decode-worker）。
+  local decoder
+  decoder="$(dirname "$daemon")/ppf-decoder"
+  [ -x "$decoder" ] || die "ppf-decoder 不存在：$decoder（cargo build -p decode-worker）"
+  "$ROOT/tools/bundle-macos.sh" "$stage" "$daemon" "$decoder" >/dev/null
   # 壳按「可执行文件上两级/Helpers」找 helper（platform::bundled_daemon_path）：`tauri dev` 的壳在
   # <target>/debug/ 下，<target> 跟着 CARGO_TARGET_DIR 走。
   [ -n "$helper" ] || helper="${CARGO_TARGET_DIR:-$ROOT/apps/desktop/src-tauri/target}/Helpers/ppf-daemon.app"

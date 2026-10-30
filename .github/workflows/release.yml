@@ -361,7 +361,7 @@ jobs:
           # to take over from test.7 during dogfood week). 非 tag 运行取
           # release/versions.json 里的平台版本。
           PPF_BUILD_VERSION: ${{ steps.ppf_ver.outputs.name }}
-        run: cargo build --release -p daemon
+        run: cargo build --release -p daemon -p decode-worker
 
       # /tmp/rel/{daemon,lib/} 是下面 Bundle desktop 的 sidecar 输入（.app 里的
       # ppf-daemon 及其 lib/），不单独作为 release 资产发布。
@@ -373,7 +373,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf /tmp/rel && mkdir -p /tmp/rel
-          tools/bundle-macos.sh /tmp/rel target/release/daemon
+          tools/bundle-macos.sh /tmp/rel target/release/daemon target/release/ppf-decoder
           # 先证明检查本身会变红（拿这份包做变异），再检查这份包。
           tools/release/with-timeout.sh "编解码库检查反证" 300 1 -- tools/test-check-codec-libs.sh --macos /tmp/rel
           tools/check-codec-libs.sh macos /tmp/rel
@@ -667,7 +667,7 @@ jobs:
           VCPKG_ROOT: "C:\\vcpkg"
           # DAE-01b blocker②: same version injection as the macOS job（UPD-13）.
           PPF_BUILD_VERSION: ${{ steps.ppf_ver.outputs.name }}
-        run: cargo build --release -p daemon -p testclient
+        run: cargo build --release -p daemon -p testclient -p decode-worker
 
       # T7 (H-09): Windows 图形界面——桌面壳 NSIS 安装包（未签名，
       # Authenticode 证书 H-02 挂账；SmartScreen 会警告，如实告知用户）。
@@ -692,6 +692,9 @@ jobs:
           # test.8 实锤 "resource path doesn't exist"。
           cp target/release/daemon.exe \
             apps/desktop/src-tauri/binaries/ppf-daemon-x86_64-pc-windows-msvc.exe
+          # 解码子进程：externalBin 同样按 target-triple 后缀找；安装后与 ppf-daemon.exe 同目录。
+          cp target/release/ppf-decoder.exe \
+            apps/desktop/src-tauri/binaries/ppf-decoder-x86_64-pc-windows-msvc.exe
           # #788②：test 包的应用内更新读 test-channel 里的 Windows 分端清单（正式版读
           # manifest-windows.json，地址在 tauri.windows.conf.json），同一套插件、同一把公钥。
           # #852：--config 由 macOS / Windows 共用的 tools/release/tauri-config.mjs 生成（macOS 在
@@ -713,7 +716,9 @@ jobs:
           outs=()
           for f in target/release/build/libheif-sys-*/output; do outs+=(--link-output "$f"); done
           tools/check-codec-libs.sh windows --vcpkg-installed /c/vcpkg/installed \
-            "${outs[@]}" target/release/daemon.exe apps/desktop/src-tauri/binaries/ppf-daemon-x86_64-pc-windows-msvc.exe
+            "${outs[@]}" target/release/daemon.exe target/release/ppf-decoder.exe \
+            apps/desktop/src-tauri/binaries/ppf-daemon-x86_64-pc-windows-msvc.exe \
+            apps/desktop/src-tauri/binaries/ppf-decoder-x86_64-pc-windows-msvc.exe
 
       - name: SHA256 + notes
         shell: bash

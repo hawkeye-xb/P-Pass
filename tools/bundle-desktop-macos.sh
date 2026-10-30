@@ -69,6 +69,7 @@ echo "tauri --config: $VERSION_CONFIG"
 
 [ -d "$REL/lib" ] || { echo "FATAL: $REL/lib missing — run bundle-macos.sh first" >&2; exit 1; }
 [ -f "$REL/daemon" ] || { echo "FATAL: $REL/daemon missing" >&2; exit 1; }
+[ -f "$REL/ppf-decoder" ] || { echo "FATAL: $REL/ppf-decoder missing — bundle-macos.sh 要同时带上 ppf-decoder" >&2; exit 1; }
 
 HELPER_TOOL="$(cd "$(dirname "$0")" && pwd)/daemon-helper-macos.sh"
 PROFILE="${PPF_DAEMON_PROVISIONPROFILE:-}"
@@ -150,6 +151,15 @@ if ! SELFCHECK_OUT="$("$SIDECAR" --version 2>&1)"; then
   exit 1
 fi
 echo "   ✓ $SELFCHECK_OUT"
+
+# 5b'. 解码子进程自检：空输入 = 协议错误，必须以退出码 2 结束。dyld 缺库 / 签名被拒 /
+# 权限被杀都是别的退出码——只问「它加载得起来、跑得到协议那一步」。
+DECODER="$HELPER/Contents/MacOS/ppf-decoder"
+echo "── 5b'. 产物自检：$DECODER"
+[ -x "$DECODER" ] || { echo "FATAL: 解码子进程不存在或不可执行：$DECODER" >&2; exit 1; }
+set +e; "$DECODER" </dev/null >/dev/null 2>&1; DECODER_RC=$?; set -e
+[ "$DECODER_RC" -eq 2 ] || { echo "FATAL: ppf-decoder 空输入应以退出码 2 结束，实际 $DECODER_RC（缺库 / 签名被拒？）" >&2; exit 1; }
+echo "   ✓ ppf-decoder 可加载并走到协议校验"
 
 # ── 5c. #809 版本同源自检：外壳（Info.plist）== daemon == 本次构建版本 ─────
 # 同一次构建的两个产物，版本号必须来自同一个源。以前外壳取 tauri.conf.json、
