@@ -29,6 +29,14 @@ public struct PickedBatchSummary: Codable, Equatable, Sendable {
     /// 进程被杀时这一批还没传完：下次打开读到的。
     public var interrupted: Bool
 
+    public init(total: Int, delivered: Int, alreadyThere: Int, failed: Int, interrupted: Bool) {
+        self.total = total
+        self.delivered = delivered
+        self.alreadyThere = alreadyThere
+        self.failed = failed
+        self.interrupted = interrupted
+    }
+
     public var settled: Int { delivered + alreadyThere + failed }
     public var open: Int { max(0, total - settled) }
     /// 「没传完」：被杀后提示里的张数 = 没送达的（含已记失败的）。

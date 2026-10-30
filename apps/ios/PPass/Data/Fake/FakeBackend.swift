@@ -169,6 +169,8 @@ final class FakeEngine: BackupEngine {
     func wifiOnly() -> Bool { wifi }
     func setWifiOnly(_ on: Bool) throws { wifi = on; listeners.forEach { $0() } }
     func wake() async {}
+    func pickedSummary() -> PickedBatchSummary? { nil }
+    func addPicked(_ items: [(fileName: String, mimeType: String, payload: PickedPayload)]) async {}
     func retryFailed() async throws {}
     func remainingSnapshot() async throws -> RemainingSnapshot { throw FakeBackendError.demoHasNoLedger }
     func cancelRemaining(_ snapshot: RemainingSnapshot) async throws -> Int? { nil }

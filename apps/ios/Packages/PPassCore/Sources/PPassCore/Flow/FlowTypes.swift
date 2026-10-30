@@ -313,7 +313,7 @@ public protocol MediaImporter: Sendable {
     func release(_ contentHash: String)
 }
 
-public struct PickedImportUnsupported: Error {}
+public struct PickedImportUnsupported: Error { public init() {} }
 
 extension MediaImporter {
     public func importPicked(_ item: PickedItem) async throws -> ImportResult { throw PickedImportUnsupported() }

@@ -28,6 +28,8 @@ final class LiveBackend: @unchecked Sendable {
     let notifyPrefs: NotifyOnFailurePrefs
     let cardPrefs: BackgroundBackupOfferPrefs
     let noticeStore: DefinitiveNoticeStore
+    /// #1272 挑几张传：手选队列（进程内）+ 批次汇总（落盘）。
+    let picked: PickedQueue
     let pairingLoss = PairingLoss()
     let sentinel: SentinelStore
     let heartbeat: ForegroundHeartbeat
@@ -103,6 +105,7 @@ final class LiveBackend: @unchecked Sendable {
         notifyPrefs = NotifyOnFailurePrefs(directory: dir, logger: logger)
         cardPrefs = BackgroundBackupOfferPrefs(directory: dir, logger: logger)
         noticeStore = DefinitiveNoticeStore(directory: dir, logger: logger)
+        picked = PickedQueue(directory: dir, logger: logger)
         // #1262：通知默认关；老用户升级保持原状态。必须在任何 markOnboarded 之前定老用户（新装用户此刻没有配对、没走过 onboarding）。
         notifyPrefs.initIfAbsent(existingUser: pairingStore.load() != nil || onboarded.anyOnboarded())
         // 全新安装后台备份默认关（对位 Android `AutoBackupPrefs.autoEnabled = false`，#982）：#1263 起 onboarding 不问，由首页引导卡让用户自己开。
@@ -145,7 +148,8 @@ final class LiveBackend: @unchecked Sendable {
             acknowledge: { ids in await engineBox.engine?.acknowledgeAudit(ids) })
         engine = FlowEngine(
             store: orders, media: PhotoMediaSource(selected: scope, since: since, inbox: inbox, log: { logger.log($0) }),
-            importer: PhotoImporter(provider: provider, tempRoot: fm.temporaryDirectory.appendingPathComponent("ppass-originals")),
+            importer: PhotoImporter(provider: provider, tempRoot: fm.temporaryDirectory.appendingPathComponent("ppass-originals"),
+                                    pickedRoot: fm.temporaryDirectory.appendingPathComponent(OriginalCachePaths.pickedScratchDirName)),
             delivery: delivery,
             probe: PrewarmingProbe(provider: provider,
                                    inner: ControlPlaneProbe(currentPairingId: pairingId, desktop: desktop, logger: logger, pairingLoss: pairingLoss),
@@ -160,7 +164,9 @@ final class LiveBackend: @unchecked Sendable {
             pairingId: pairingId, logger: logger,
             afterCycle: FlowWiring.afterCycle(dispatcher: audit),
             onPairingIdAdvertised: FlowWiring.pairingIdAdvertised(loss: pairingLoss, currentPairingId: pairingId),
-            onView: { view in Task { await model.engineChanged(view) } }
+            onView: { view in Task { await model.engineChanged(view) } },
+            picked: picked,
+            isForeground: { [window = self.window] in window.isAppActive }
         )
         engineBox.engine = engine
         catchup = ForegroundCatchup(engine: engine)
@@ -272,6 +278,7 @@ final class LiveBackend: @unchecked Sendable {
     /// 用户手动断开（`LivePairing.disconnect` 通知电脑之后）、被拒即清理、配对失效卡的「重新连接」共用这一份，本身不发任何通知。
     func disconnect() async {
         await engine.stopForDisconnect()
+        picked.clearAll() // #1272：手选队列与汇总随配对清空（拷贝目录、汇总文件由清单清）
         // provider 撤销（#974）、唤醒取消、相册监听注销都在清单的运行时三行里，清文件失败也不会跳过它们。
         let provider = self.provider, scheduler = self.scheduler, watcher = mediaWatcher, logger = self.logger
         let actions = DisconnectActions(stopFlow: { provider.teardownForDisconnect(logger: logger) },
@@ -295,6 +302,7 @@ final class LiveBackend: @unchecked Sendable {
 
     func setActive(_ active: Bool) {
         window.setAppActive(active)
+        if !active { Task { [engine] in await engine.onAppBackground() } } // #1272：离开 P-Pass 暂停手选传输
         providerParker.setForeground(active) // #979：不在前台且引擎空闲 → 回收 provider endpoint
         // 心跳只在前台跑（两端一致，没有后台心跳）：回前台立即拍一次，退后台停。
         if active { heartbeat.start(); timelineLive.session.start() } else { heartbeat.stop(); timelineLive.session.stop() }
@@ -437,6 +445,7 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
             await backend.engineModel.setRefresh { [weak backend] in await backend?.refreshFacts() }
             await backend.engineModel.add { [weak self] in self?.pull() }
         }
+        backend.picked.setOnChange { [weak self] in self?.pull() }
     }
 
     private func pull() {
@@ -565,6 +574,14 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
 
     func wake() async {
         _ = await backend.engine.trigger(.scopeAdded)
+        await backend.refreshFacts()
+    }
+
+    func pickedSummary() -> PickedBatchSummary? { backend.picked.summary() }
+
+    func addPicked(_ items: [(fileName: String, mimeType: String, payload: PickedPayload)]) async {
+        guard backend.picked.addBatch(items) > 0 else { return }
+        _ = await backend.engine.trigger(.pickedAdded)
         await backend.refreshFacts()
     }
 

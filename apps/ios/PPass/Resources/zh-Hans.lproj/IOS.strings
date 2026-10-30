@@ -71,3 +71,8 @@
 /* 读屏（VoiceOver）：网格缩略图的标签。Android 用的是哈希前缀，读出来没有意义，iOS 单独给一句人话。 */
 "a11y_thumb_video" = "视频";
 "a11y_thumb_photo" = "照片";
+
+/* #1272 挑几张传：照片不复制进 App，只在前台传（PHPicker 的 itemProvider 只在进程存活期间有效）——所以说离开 P-Pass 会暂停。Android 没有这个限制，不说这句。 */
+"pick_photos_ios_hint" = "离开 P-Pass 会暂停传输。";
+/* #1272：进程在传输中被杀，句柄（itemProvider）随进程没了、无法续传，只能提示重新挑。Android 靠持久 URI 授权可续传，没有这句。%1$ld = 上次挑的张数，%2$ld = 没传完的张数。 */
+"picked_interrupted" = "上次挑的 %1$ld 张有 %2$ld 张没传完，请重新挑选。";

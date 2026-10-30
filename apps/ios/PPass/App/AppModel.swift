@@ -30,6 +30,8 @@ final class AppModel: ObservableObject {
     @Published var tab: Tab = .photos
     @Published private(set) var facts = FlowFacts()
     @Published private(set) var access: MediaAccess = .full
+    /// #1272 挑几张传：最近一批的进度 / 结果（没挑过 = nil）。
+    @Published private(set) var pickedBatch: PickedBatchSummary?
     @Published private(set) var pairing: PairingStatus = .notPaired
     @Published private(set) var scope: Set<String>?
     /// 时间档（#1263）；nil = 从未保存过范围。
@@ -132,6 +134,16 @@ final class AppModel: ObservableObject {
         notice = UserNotice(message: L.s("command_failed"))
     }
 
+    /// #1272：系统选择器选完。照片不复制，只登记句柄；传输由引擎在前台逐张进行。
+    func pickedChosen(_ items: [(fileName: String, mimeType: String, payload: PickedPayload)]) {
+        guard !items.isEmpty else { return }
+        AppLog.log("picked: \(items.count) chosen")
+        Task {
+            await backend.engine.addPicked(items)
+            refresh()
+        }
+    }
+
     func refreshExistingAlbums() {
         Task {
             existingAlbums = await backend.media.existingAlbumIds()
@@ -140,6 +152,7 @@ final class AppModel: ObservableObject {
 
     func refresh() {
         facts = backend.engine.facts()
+        pickedBatch = backend.engine.pickedSummary()
         if let v = facts.view, let id = v.currentOrderId {
             if transferMark?.orderId != id || transferMark?.bytes != v.currentBytesSent { transferMark = (id, v.currentBytesSent, Date()) }
         } else { transferMark = nil }

@@ -34,6 +34,12 @@ struct HeroCard: View {
                     Rectangle().fill(PPColor.safe.opacity(0.18)).frame(height: 1)
                         .padding(.top, PPUI.Layout.heroDividerAbove).padding(.bottom, PPUI.Layout.heroDividerBelow)
                     progressRow
+                    // #1272：上次挑的几张没传完时进程被杀了——只在这里说一句，数字按实际。
+                    if let line = HomeProjection.pickedInterruptedLine(app.pickedBatch) {
+                        Text(line).font(PPFont.sans(PPUI.TextSize.statusLine, .medium, relativeTo: .footnote))
+                            .foregroundStyle(PPColor.waiting).padding(.top, 8)
+                            .accessibilityIdentifier("pickedInterrupted")
+                    }
                 }
             }
             .padding(.vertical, 6)

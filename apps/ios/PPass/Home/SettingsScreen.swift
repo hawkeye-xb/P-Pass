@@ -1,4 +1,5 @@
 import PPassCore
+import PhotosUI
 import SwiftUI
 
 /// 「设置」tab（对位 Android HomeScreen.kt）：英雄卡 → 进度 / 状态行 → 红卡 → 设置卡。
@@ -9,6 +10,7 @@ struct SettingsScreen: View {
     @State private var showDetails = false
     @State private var cancelSnapshot: RemainingSnapshot?
     @State private var asking = false
+    @State private var showPicker = false
 
     enum Route: Hashable { case bucket, storage, diagnostics }
 
@@ -80,6 +82,15 @@ struct SettingsScreen: View {
             .ppList()
             .ppCardSpacing()
             .toolbar(.hidden, for: .navigationBar) // 同 Android：无页标题
+            // #1272：系统照片选择器（不传 photoLibrary ⇒ 不需要照片权限）；选完就传。
+            .sheet(isPresented: $showPicker) {
+                PhotoPickerSheet { results in
+                    app.pickedChosen(results.enumerated().compactMap { i, r in
+                        PHPickedPayload.describe(r.itemProvider, index: i).map { (fileName: $0.name, mimeType: $0.mime, payload: $0.payload) }
+                    })
+                }
+                .ignoresSafeArea()
+            }
             // 居中警告框（同「断开连接」：iOS 26 上 confirmationDialog 是贴着按钮的气泡）。关闭按钮叫「返回」不叫「取消」：
             // 要确认的动作本身就叫取消（Android #418 同）。
             .alert(cancelSnapshot.map { L.p("cancel_remaining_confirm_title", $0.count) } ?? "",
@@ -122,6 +133,7 @@ struct SettingsScreen: View {
     @ViewBuilder private var settingsSection: some View {
         Section {
             row(L.s("backup_scope"), value: scopeValue, route: .bucket)
+            pickRow
             if let n = app.cancelRemainingCount {
                 Button {
                     Task {
@@ -170,6 +182,24 @@ struct SettingsScreen: View {
             row(L.s("setting_version"), value: AppVersion.current.displayLine, route: .diagnostics)
         }
         .ppTinted(PPUI.Surface.settingsCard)
+    }
+
+    /// #1272「挑几张传」：常驻一行，点开系统照片选择器；右侧是这一批的进度 / 结果句。
+    /// 下一行小字只有 iOS 有：照片不复制进 App，要在前台传，离开 P-Pass 就暂停。
+    private var pickRow: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Button { showPicker = true } label: {
+                HStack(spacing: 12) {
+                    Text(L.s("pick_photos_label")).font(Self.labelFont).foregroundStyle(PPColor.ink)
+                    Spacer(minLength: 8)
+                    if let line = HomeProjection.pickedLine(app.pickedBatch) {
+                        Text(line).font(Self.valueFont).foregroundStyle(PPColor.ink40).lineLimit(2).multilineTextAlignment(.trailing)
+                    }
+                }
+            }
+            .accessibilityIdentifier("pickPhotosRow")
+            Text(L.s("pick_photos_ios_hint")).font(Self.hintFont).foregroundStyle(PPColor.ink40)
+        }
     }
 
     // 设置行字号：tokens.json mobile-ui.type（iOS 覆盖为系统文字样式，见 platforms.ios）。
@@ -272,5 +302,35 @@ private struct NoticeRow: View {
             }
         }
         .ppTinted(PPColor.waitingBg)
+    }
+}
+
+/// #1272：系统照片选择器。`PHPickerConfiguration()` 不传 photoLibrary ⇒ 走进程外选择器，不需要照片权限；
+/// `.current` 给原始表示（不把 HEIC 转成 JPEG），这样内容哈希与自动备份读到的原图一致，两条路径之间才能按哈希去重。
+struct PhotoPickerSheet: UIViewControllerRepresentable {
+    let onPicked: ([PHPickerResult]) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        var config = PHPickerConfiguration()
+        config.selectionLimit = PickedQueue.maxPick
+        config.filter = .images
+        config.preferredAssetRepresentationMode = .current
+        let picker = PHPickerViewController(configuration: config)
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ controller: PHPickerViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        let parent: PhotoPickerSheet
+        init(_ parent: PhotoPickerSheet) { self.parent = parent }
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            parent.dismiss()
+            if !results.isEmpty { parent.onPicked(results) }
+        }
     }
 }

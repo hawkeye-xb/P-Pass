@@ -231,3 +231,8 @@
 "identity_unavailable_retry" = "重试";
 "identity_unavailable_reset" = "重置并重新配对";
 "identity_unavailable_reset_hint" = "重置后这台手机会作为新设备，需要重新配对。";
+"pick_photos_label" = "挑几张传";
+"picked_progress" = "正在传 %1$ld/%2$ld";
+"picked_result_delivered" = "送达 %1$ld 张";
+"picked_result_with_existing" = "送达 %1$ld 张，其中 %2$ld 张电脑上已有";
+"picked_result_failed" = "有 %1$ld 张没传成，请重新挑选";

@@ -206,6 +206,9 @@ protocol BackupEngine: AnyObject {
     func pauseOrResume() async
     /// 前台追赶：打开 App / 回到前台 / 选完相册时叫醒一轮。
     func wake() async
+    /// #1272 挑几张传：这一批的进度 / 结果（没挑过 = nil）；登记一批并叫醒引擎。
+    func pickedSummary() -> PickedBatchSummary?
+    func addPicked(_ items: [(fileName: String, mimeType: String, payload: PickedPayload)]) async
     /// 命令的失败抛给调用方（#972）：「状态不允许」是返回值，「执行出错」是抛出，两者不混。
     func retryFailed() async throws
     /// 「取消剩余 N 张」：点击那一刻的快照（N 与取消边界是同一个差集）。

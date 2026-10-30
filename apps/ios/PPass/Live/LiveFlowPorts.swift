@@ -78,11 +78,48 @@ final class PhotoImporter: MediaImporter, @unchecked Sendable {
     private let fetcher: OriginalFetcher
     private let lock = NSLock()
     private var held: [String: FetchedOriginal] = [:]
+    /// #1272：手选的拷贝（按内容哈希）。provider 按引用导入，所以这份拷贝要留到 `release` 为止。
+    private var heldPicked: [String: URL] = [:]
+    private let pickedRoot: URL
 
-    init(provider: NativeProvider, tempRoot: URL) {
+    init(provider: NativeProvider, tempRoot: URL, pickedRoot: URL) {
         self.provider = provider
+        self.pickedRoot = pickedRoot
         fetcher = OriginalFetcher(tempRoot: tempRoot)
         fetcher.purgeLeftovers()
+        try? FileManager.default.removeItem(at: pickedRoot) // 上次进程被杀留下的拷贝
+    }
+
+    /// #1272：把这一张从选择器的临时文件拷出来 → provider 导入（BLAKE3 由 Rust 侧算）。选择器不给字节数，以导入返回的为准。
+    func importPicked(_ item: PickedItem) async throws -> ImportResult {
+        guard let payload = item.payload as? PHPickedPayload else { throw PickedImportUnsupported() }
+        let copy: URL
+        do {
+            copy = try await payload.copy(into: pickedRoot, fileName: item.fileName)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let error as NSError where error.domain == NSCocoaErrorDomain && error.code == NSFileWriteOutOfSpaceError {
+            return .localStorageFull(reason: "NSCocoaErrorDomain#\(error.code)")
+        } catch {
+            if Task.isCancelled { throw CancellationError() }
+            AppLog.log("picked \(item.id): load failed (\(type(of: error)))")
+            return .sourceMissing
+        }
+        let path = copy.path
+        let imported: (hash: String, size: UInt64)
+        do {
+            let r = try await provider.run { try $0.importFile(path: path) }
+            imported = (r.hash, r.size)
+        } catch {
+            try? FileManager.default.removeItem(at: copy.deletingLastPathComponent())
+            throw error
+        }
+        lock.lock()
+        if let old = heldPicked[imported.hash] { try? FileManager.default.removeItem(at: old.deletingLastPathComponent()) }
+        heldPicked[imported.hash] = copy
+        lock.unlock()
+        AppLog.log("picked \(item.id) imported bytes=\(imported.size) hash=\(imported.hash.prefix(16))")
+        return .imported(contentHash: imported.hash, sizeBytes: Int64(imported.size))
     }
 
     func importMedia(_ details: MediaDetails, onFetch: @escaping @Sendable (OriginalFetchUpdate) -> Void) async throws -> ImportResult {
@@ -134,7 +171,9 @@ final class PhotoImporter: MediaImporter, @unchecked Sendable {
         try? provider.ffi.release(hash: contentHash)
         lock.lock()
         held.removeValue(forKey: contentHash)?.discard()
+        let pickedCopy = heldPicked.removeValue(forKey: contentHash)
         lock.unlock()
+        if let pickedCopy { try? FileManager.default.removeItem(at: pickedCopy.deletingLastPathComponent()) }
     }
 }
 

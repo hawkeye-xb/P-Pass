@@ -21,6 +21,8 @@ final class SettingsFeedbackTests: XCTestCase {
         func observe(_ onChange: @escaping () -> Void) {}
         func pauseOrResume() async {}
         func wake() async { calls.append("wake") }
+        func pickedSummary() -> PickedBatchSummary? { nil }
+        func addPicked(_ items: [(fileName: String, mimeType: String, payload: PickedPayload)]) async {}
         func retryFailed() async throws { calls.append("retry"); if failCommands { throw Boom() } }
         func remainingSnapshot() async throws -> RemainingSnapshot { calls.append("snapshot"); throw Boom() }
         func cancelRemaining(_ snapshot: RemainingSnapshot) async throws -> Int? { calls.append("cancel"); if failCommands { throw Boom() }; return cancelResult }
