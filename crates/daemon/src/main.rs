@@ -877,9 +877,16 @@ async fn run() -> anyhow::Result<()> {
             &data_dir,
             Box::new(move || {
                 let release = release.clone();
-                let _ = runtime.block_on(async move {
+                tracing::info!("#1260: 收到卷推出请求——开始停下在途传输");
+                let done = runtime.block_on(async move {
                     tokio::time::timeout(LIBRARY_RELEASE_BUDGET, release.release_library()).await
                 });
+                if done.is_err() {
+                    tracing::warn!(
+                        "#1260: {} 秒内没停完在途传输——照样放行推出",
+                        LIBRARY_RELEASE_BUDGET.as_secs()
+                    );
+                }
             }),
         );
         if !armed {
