@@ -1220,7 +1220,8 @@ mod tests {
         let err = move_library_with(&c.plan, &no_progress(), &indexed_ok, &d).unwrap_err();
         let v: serde_json::Value = serde_json::from_str(&err).unwrap();
         assert_eq!(v["key"], "ui.err_relocate_unreadable_denied", "{err}");
-        assert_eq!(v["params"]["path"], locked.display().to_string());
+        // 按路径比：Windows 上遍历得到的是 `\`，测试里拼的是 `/`，字符串会不同。
+        assert_eq!(Path::new(v["params"]["path"].as_str().unwrap()), locked);
         assert!(!copied.get(), "读不了就不开始复制");
         assert!(!dest.join(STAGING_DIR).exists());
         assert!(locked.is_file(), "原库不动");
