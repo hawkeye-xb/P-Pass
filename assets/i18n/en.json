@@ -288,6 +288,8 @@
   "ui.library": "Photo library",
   "ui.disk_space": "Disk space",
   "ui.disk_free_of_total": "{free} free of {total}",
+  "ui.disk_encryption": "Disk encryption",
+  "ui.disk_encryption_off": "Off",
   "ui.library_change_hint": "Changing the location moves the whole photo library — phones don't need to scan again and photos aren't uploaded again.",
   "ui.software_update": "Software update",
   "ui.check_update": "Check for updates",

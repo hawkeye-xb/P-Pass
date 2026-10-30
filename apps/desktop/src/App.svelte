@@ -2182,6 +2182,14 @@
                 </div>
                 <div class="mt-[10px] h-2 overflow-hidden rounded-full bg-hairline"><div class="h-full rounded-full bg-ink" style="width:{diskPct}%"></div></div>
               {/if}
+              <!-- W-4：只在确认系统盘没开磁盘加密时出现一行现状，不阻断使用；
+                   查不到（"unknown"）不提示。 -->
+              {#if status?.disk_encryption === "off"}
+                <div class="mt-[14px] flex justify-between gap-[12px] border-t border-divider pt-[14px] text-[14px] font-semibold" data-testid="disk-encryption-off">
+                  <span>{t("ui.disk_encryption")}</span>
+                  <span class="text-[14px] font-normal text-ink-40">{t("ui.disk_encryption_off")}</span>
+                </div>
+              {/if}
               <!-- #639：后果说明随入口恢复，文案改为整库搬迁。 -->
               <p class="m-0 mt-[10px] text-[13px] leading-[1.6] text-ink-40">{t("ui.library_change_hint")}</p>
             </Card>

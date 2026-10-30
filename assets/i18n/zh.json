@@ -288,6 +288,8 @@
   "ui.library": "照片库",
   "ui.disk_space": "磁盘空间",
   "ui.disk_free_of_total": "可用 {free} / 共 {total}",
+  "ui.disk_encryption": "磁盘加密",
+  "ui.disk_encryption_off": "未开启",
   "ui.library_change_hint": "更改位置会把整个照片库搬过去，手机不用重新扫码，照片也不用重传。",
   "ui.software_update": "软件更新",
   "ui.check_update": "检查更新",
