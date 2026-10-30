@@ -144,3 +144,10 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "io-ut
 # fsevents_shapes 集成测试（macOS 目录监听平台行为实测）：直接驱动 notify。
 notify = "7"
 tempfile = "3"
+
+# 隔离子进程的对抗实测：子进程就是这个测试二进制自己，要在 main 里分流，
+# 所以不用 libtest 的 harness。
+[[test]]
+name = "isolated_adversarial"
+path = "tests/isolated_adversarial.rs"
+harness = false
