@@ -74,6 +74,9 @@ enum class TriggerReason(val userPresent: Boolean = false, val reconcile: Boolea
     /** 继续：暂停期间只改了意图（范围、跳过名单），继续后待办现算，所以要对账。 */
     USER_CONTINUE(userPresent = true, reconcile = true),
     RETRY_FAILED(userPresent = true, reconcile = true),
+
+    /** #1272：用户刚在系统选择器里挑了几张。用户在场（自动备份没开也要传），不对账。 */
+    PICKED_ADDED(userPresent = true),
     /** #418「已跳过的照片 · 点击恢复」：移出跳过名单的照片在 G 以下，只有对账扫得到。 */
     RESTORE_SKIPPED(userPresent = true, reconcile = true),
     MANUAL(userPresent = true),
@@ -189,6 +192,8 @@ data class DeliveryRequest(
     val pairingId: PairingId,
     val contentHash: String,
     val details: MediaDetails,
+    /** #1272：[com.hawkeyexb.ppass.proto.FLOW_SOURCE_AUTO] / `FLOW_SOURCE_PICKED`。 */
+    val source: String = com.hawkeyexb.ppass.proto.FLOW_SOURCE_AUTO,
 ) {
     val leaseToken: String get() = leaseTokenFor(orderId)
 }

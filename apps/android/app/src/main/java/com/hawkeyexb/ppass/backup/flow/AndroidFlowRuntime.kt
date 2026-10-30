@@ -394,6 +394,8 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         },
         afterCycle = { auditScope.launch { dispatcher.flush() } },
         route = route,
+        picked = com.hawkeyexb.ppass.backup.picked.PickedUploads.store(app),
+        onPickedSettled = { com.hawkeyexb.ppass.backup.picked.PickedUploads.release(app, it.uri) },
     )
     FlowForegroundHandoff.control = control
     FlowForegroundHandoff.onLost = { reason -> engine.onForegroundLost(reason) }

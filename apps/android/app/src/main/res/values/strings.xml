@@ -360,4 +360,9 @@
     <string name="identity_unavailable_retry">Try again</string>
     <string name="identity_unavailable_reset">Reset and pair again</string>
     <string name="identity_unavailable_reset_hint">After a reset, this phone counts as a new device and must pair again.</string>
+    <string name="pick_photos_label">Pick photos to send</string>
+    <string name="picked_progress">Sending %1$d/%2$d</string>
+    <string name="picked_result_delivered">Delivered %1$d</string>
+    <string name="picked_result_with_existing">Delivered %1$d, %2$d already on your computer</string>
+    <string name="picked_result_failed">%1$d couldn\'t be sent. Please pick them again.</string>
 </resources>

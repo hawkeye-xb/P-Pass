@@ -161,6 +161,11 @@ enum class DisconnectState(
         "#413/#415 裁决 6：连回同一台桌面 CONFIRMED 仍有效；换一台桌面由 OrderStore.claimOwner 清（#282 验收 4「账本仍保留」）",
         owners = listOf("com.hawkeyexb.ppass.backup.order.SqliteOrderStore"),
     ),
+    PICKED_DB(
+        StateLocation.DATABASES, "picked-uploads.db", DisconnectDisposition.KEEP,
+        "#1272：手选订单（一次性动作）；库有活句柄不能从文件层删，断开时 clearLocalPairing 清空全部行并释放 URI 授权——挑给旧电脑的不许传给下一台",
+        owners = listOf("com.hawkeyexb.ppass.backup.picked.SqlitePickedStore"),
+    ),
     NATIVE_BLOB_STORE(
         StateLocation.FILES, "iroh-blobs-provider", DisconnectDisposition.KEEP,
         "MOB-91：原生内容仓库进程内开一次永不关，断开只 revoke，仓库本身不动",

@@ -274,6 +274,28 @@ fun PPassApp() {
     val context = LocalContext.current
     // UPD-01: 下载安装是 suspend（IO 线程下载）——按钮 onClick 从协程调。
     val scope = rememberCoroutineScope()
+    // #1272 挑几张传：系统照片选择器（不需要照片权限）。选完登记成一批手选订单，叫醒传输循环；
+    // 进度 / 结果每秒读一次手选表（只在有未结束的或刚结束时变）。
+    var pickedBatch by remember { mutableStateOf<com.hawkeyexb.ppass.backup.picked.PickedBatchSummary?>(null) }
+    val pickPhotosLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia(com.hawkeyexb.ppass.backup.picked.PickedUploads.MAX_PICK),
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            scope.launch(Dispatchers.IO) {
+                val count = com.hawkeyexb.ppass.backup.picked.PickedUploads.enqueue(context, uris)
+                if (count > 0) {
+                    pickedBatch = com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).latestBatch()
+                    com.hawkeyexb.ppass.backup.flow.requestFlowWake(context, com.hawkeyexb.ppass.backup.flow.TriggerReason.PICKED_ADDED)
+                }
+            }
+        }
+    }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        while (true) {
+            pickedBatch = withContext(Dispatchers.IO) { runCatching { com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).latestBatch() }.getOrNull() }
+            kotlinx.coroutines.delay(1000)
+        }
+    }
     // UI-12 追加（2026-09-15，用户拍板）：后台备份"去处理"的短暂反馈用
     // Snackbar——这是本代码库第一个"转瞬即逝、非持久"的反馈机制（此前
     // 所有反馈都是改一个持久状态、界面自己重组合）。只覆盖两条真实存在
@@ -1265,6 +1287,12 @@ fun PPassApp() {
                         // 备份按钮时把挂在它身上的权限申请链一起删没了，
                         // 无权限直接进列表 = MediaStore 空查询 = 全白。
                         onOpenBucketPicker = { enterBucketPicker(s.pairing, firstTime = false) },
+                        onPickPhotos = {
+                            pickPhotosLauncher.launch(
+                                androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                            )
+                        },
+                        pickedBatch = pickedBatch,
                         // MOB-02 §一: 首页主按钮删除——hero 空闲态按钮 =
                         // 「选择备份的相册」；onBackupNow 保留给：进行中暂停、
                         // 失败红卡「再试一次」——不是常驻设置页入口，
@@ -1558,6 +1586,7 @@ private fun clearLocalPairing(
             override fun clearPreviewCache() = evictPhotoPreviews()
         },
     )
+    com.hawkeyexb.ppass.backup.picked.PickedUploads.discardAll(context)
     // 登记门禁的真机一半：断开后私有目录里出现清单之外的东西，留一行日志（不拦断开）。
     context.filesDir.parentFile?.let { dataDir ->
         unregisteredStatePaths(dataDir).takeIf { it.isNotEmpty() }?.let {

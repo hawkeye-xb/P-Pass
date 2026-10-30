@@ -278,6 +278,10 @@ fun HomeScreen(
     countsReadable: Boolean = true,
     scopeSaved: Boolean = true,
     onOpenBucketPicker: () -> Unit = {},
+    /** #1272：「挑几张传」——系统照片选择器，不需要照片权限。 */
+    onPickPhotos: () -> Unit = {},
+    /** #1272：最近一批手选的进度 / 结果（null = 没挑过）。 */
+    pickedBatch: com.hawkeyexb.ppass.backup.picked.PickedBatchSummary? = null,
     // MOB-02 §二 / MOB-94: 相册权限三档——非 FULL 时 hero 显示引导卡顶替
     // 三元组（拿不到完整相册时 N/M 是假数），一键去系统设置。
     //
@@ -766,6 +770,12 @@ fun HomeScreen(
                         } ?: stringResource(R.string.backup_scope_none)
                     },
                     onClick = onOpenBucketPicker,
+                )
+                HorizontalDivider(color = PPColor.Divider)
+                CellRow(
+                    label = stringResource(R.string.pick_photos_label),
+                    value = pickedBatch?.let { pickedBatchLine(it) },
+                    onClick = onPickPhotos,
                 )
                 // #418：「取消剩余 N 张」——跟「备份哪些相册」同属「这次备份包含什么」的
                 // 语义线。N 与引擎取消时写下的张数是同一个函数算的；点了先现算一次 N，
@@ -1256,4 +1266,18 @@ internal fun MediaAccessCard(mediaAccess: MediaAccess, onOpenAppSettings: () -> 
     ) {
         Box(Modifier.padding(20.dp)) { MediaAccessCardContent(mediaAccess, onOpenAppSettings) }
     }
+}
+
+/** #1272：手选这一批的进度 / 结果句（大卡片下的一行）。没挑过 = null。 */
+@Composable
+private fun pickedBatchLine(batch: com.hawkeyexb.ppass.backup.picked.PickedBatchSummary): String? {
+    if (batch.open > 0) return stringResource(R.string.picked_progress, batch.settled + 1, batch.total)
+    val reached = batch.delivered + batch.alreadyThere
+    val head = when {
+        reached == 0 -> null
+        batch.alreadyThere > 0 -> stringResource(R.string.picked_result_with_existing, reached, batch.alreadyThere)
+        else -> stringResource(R.string.picked_result_delivered, reached)
+    }
+    val tail = if (batch.failed > 0) stringResource(R.string.picked_result_failed, batch.failed) else null
+    return listOfNotNull(head, tail).joinToString(" · ").ifEmpty { null }
 }

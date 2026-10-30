@@ -30,8 +30,15 @@ internal class AndroidMediaImporter(
     private val locationReadable: () -> Boolean = { true },
 ) : MediaImporter {
 
-    override fun import(mediaId: Long, contentUri: String, dataPath: String?): ImportResult {
-        var original = locationReadable()
+    override fun import(mediaId: Long, contentUri: String, dataPath: String?): ImportResult =
+        importFrom(mediaId, contentUri, dataPath, allowOriginal = true)
+
+    /** #1272：选择器的 URI 没有 `setRequireOriginal`，一律按抹过地点的普通描述符读，如实记 locationRedacted。 */
+    override fun importPicked(contentUri: String): ImportResult =
+        importFrom(0L, contentUri, null, allowOriginal = false)
+
+    private fun importFrom(mediaId: Long, contentUri: String, dataPath: String?, allowOriginal: Boolean): ImportResult {
+        var original = allowOriginal && locationReadable()
         val source = try {
             if (original) {
                 try {

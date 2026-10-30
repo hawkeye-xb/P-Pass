@@ -11,6 +11,8 @@
 //   skip_serializing_if = None     -> explicitNulls = false
 package com.hawkeyexb.ppass.proto
 
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -273,6 +275,7 @@ data class BlobTicketResponse(val ticket: String = "")
 // ── Single-item Flow delivery ───────────────────────
 
 /** Kotlin mirror of proto::FlowFetchRequest. */
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 data class FlowFetchRequest(
     @SerialName("queue_sequence") val queueSequence: Long = 0L,
@@ -290,7 +293,15 @@ data class FlowFetchRequest(
     @SerialName("capture_at_ms") val captureAtMs: Long = 0L,
     /** #413 契约 §5：这张的字节数（0 = 未知）。桌面 offer 时按它预检剩余空间，放不下回 `storage_full`。 */
     @SerialName("size_bytes") val sizeBytes: Long = 0L,
+    /**
+     * #1272：这张怎么来的——`"picked"`（用户在系统选择器里手选）或 `"auto"`（自动备份，默认）。
+     * auto 不上线（同 Rust 侧 skip_serializing_if），老电脑看到的帧和以前一字不差；老电脑忽略未知键。
+     */
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val source: String = FLOW_SOURCE_AUTO,
 )
+
+const val FLOW_SOURCE_AUTO = "auto"
+const val FLOW_SOURCE_PICKED = "picked"
 
 /** #851：Kotlin mirror of proto::FlowSupersedeRequest——用原图原地替换桌面上抹过地点的旧副本。 */
 @Serializable
