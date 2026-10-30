@@ -863,21 +863,21 @@ mod tests {
         assert!(lib.path().join(KEY_FILE).exists());
     }
 
-    /// W-3（Windows）：真实的 DPAPI 存放处 + `settle`。旧明文 ⇒ 删除、生成新身份、清配对；
+    /// W-3：加密存放处（Windows 上是真实 DPAPI，其他平台是行为等价的替身，
+    /// 见 `platform::test_support::sealed_identity_store`）+ `settle`。旧明文 ⇒ 删除、生成新身份、清配对；
     /// 解不开 ⇒ 拒绝启动，不生成、不清配对、文件原样。
-    #[cfg(windows)]
     mod w3_dpapi {
         use super::*;
-        use platform::ProgramDataStore;
+        use platform::test_support::sealed_identity_store;
 
         #[tokio::test]
         async fn w3_legacy_plaintext_identity_is_replaced_and_pairings_cleared() {
             let d = tempfile::tempdir().unwrap();
             let path = d.path().join("identity.key");
             std::fs::write(&path, [9u8; 32]).unwrap();
-            let store = ProgramDataStore::sealed(&path, "身份私钥");
+            let store = sealed_identity_store(&path);
             let cleared = std::sync::atomic::AtomicBool::new(false);
-            let (k, o) = settle(&store, mint_7, || async {
+            let (k, o) = settle(&*store, mint_7, || async {
                 cleared.store(true, std::sync::atomic::Ordering::SeqCst);
                 Ok(2)
             })
@@ -897,13 +897,13 @@ mod tests {
         async fn w3_undecryptable_identity_refuses_without_fallback() {
             let d = tempfile::tempdir().unwrap();
             let path = d.path().join("identity.key");
-            let store = ProgramDataStore::sealed(&path, "身份私钥");
+            let store = sealed_identity_store(&path);
             store.write(&[7u8; 32]).unwrap();
             let mut raw = std::fs::read(&path).unwrap();
             let last = raw.len() - 1;
             raw[last] ^= 0xff;
             std::fs::write(&path, &raw).unwrap();
-            let err = settle(&store, mint_must_not_run, clear_must_not_run)
+            let err = settle(&*store, mint_must_not_run, clear_must_not_run)
                 .await
                 .unwrap_err();
             assert!(matches!(err, IdentityError::Read { .. }), "{err}");
