@@ -3094,8 +3094,8 @@ mod tests {
 
         let err = verify_sidecar_runs(&fake).unwrap_err();
         assert!(
-            render_err("zh", &err).contains("跑不起来"),
-            "错误信息要说清跑不起来：{err}"
+            render_err("zh", &err).contains("拒绝运行"),
+            "错误信息要说清系统拒绝运行：{err}"
         );
     }
 

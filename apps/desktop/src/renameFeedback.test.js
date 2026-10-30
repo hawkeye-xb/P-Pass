@@ -37,7 +37,7 @@ describe("UI-04b 改名反馈", () => {
     expect(rename).toContain('toast.success(t("ui.rename_saved"');
     // B13：失败走 flashError（toast.error + 「错误代码」小字）。
     expect(rename).toContain('flashError(e, "ui.rename_failed")');
-    expect(src).toMatch(/function flashMessage\(msg, tone = "success", description\) \{[\s\S]*?toast\.error\(msg, opts\)/);
+    expect(src).toMatch(/function flashMessage\(msg, tone = "success", description, action\) \{[\s\S]*?toast\.error\(msg, opts\)/);
     expect(rename).not.toContain("showRenameMessage(");
   });
 
