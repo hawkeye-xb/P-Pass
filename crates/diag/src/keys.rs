@@ -438,6 +438,8 @@ msg_keys! {
     UI_ERR_SET_LIBRARY_READONLY => "ui.err_set_library_readonly",
     /// B13：保存照片库位置时，磁盘已满。
     UI_ERR_SET_LIBRARY_DISK_FULL => "ui.err_set_library_disk_full",
+    /// §5.3：库目录设为私有失败（首次设置 / 换位置），库位置没有提交。
+    UI_ERR_LIBRARY_PRIVATE_FAILED => "ui.err_library_private_failed",
     UI_WIZARD_NOTICE_ONLY_LABEL => "ui.wizard_notice_only_label",
     UI_WIZARD_AUTOSTART_NOTICE_MAC => "ui.wizard_autostart_notice_mac",
     UI_WIZARD_ALLOW_LABEL => "ui.wizard_allow_label",
@@ -769,6 +771,7 @@ mod tests {
             UI_ERR_SET_LIBRARY,
             UI_ERR_SET_LIBRARY_READONLY,
             UI_ERR_SET_LIBRARY_DISK_FULL,
+            UI_ERR_LIBRARY_PRIVATE_FAILED,
             UI_WIZARD_NOTICE_ONLY_LABEL,
             UI_WIZARD_AUTOSTART_NOTICE_MAC,
             UI_WIZARD_ALLOW_LABEL,
@@ -826,7 +829,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 355);
+        assert_eq!(ALL.len(), 356);
     }
 
     #[test]
