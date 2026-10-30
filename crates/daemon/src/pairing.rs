@@ -479,6 +479,27 @@ impl Pairing {
         })
     }
 
+    /// #1269：这台设备已经出示过有效令牌（账本里有它的配对申请，含结束后的保留期）。
+    /// 二维码同时只有一个、令牌一次性，这样的设备只有一两台。
+    pub fn holds_ticket(&self, peer: transport::NodeId, now_ms: i64) -> bool {
+        let mut inner = self.inner.lock().expect("pairing lock");
+        inner.sweep_tickets(now_ms);
+        inner.tickets.values().any(|t| t.peer == peer)
+    }
+
+    /// #1269：`token`（`pair.request` 里的十六进制串）是一个还没用过、没过期的令牌。只读，
+    /// 不消耗；真正的校验仍在 [`Self::submit_request`]。
+    pub fn token_open(&self, token: &str, now_ms: i64) -> bool {
+        let Some(token) = parse_token(token) else {
+            return false;
+        };
+        let inner = self.inner.lock().expect("pairing lock");
+        inner
+            .tokens
+            .get(&token)
+            .is_some_and(|t| !t.used && now_ms <= t.expires_at)
+    }
+
     /// #1122 / #1118：配对窗口开着（二维码在显示）——见 [`Self::admits`]。电脑名只在这期间
     /// 发给未配对的对端。
     pub fn window_open(&self, now_ms: i64) -> bool {
