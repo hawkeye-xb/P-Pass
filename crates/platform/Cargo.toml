@@ -114,6 +114,9 @@ windows = { version = "0.62", features = [
   "Win32_System_Com",
   # SHCreateItemFromParsingName + IShellItemImageFactory。
   "Win32_UI_Shell",
+  # W-4：IPropertyStore / SHGetPropertyStoreFromParsingName（读卷的 BitLocker 状态）。
+  "Win32_UI_Shell_PropertiesSystem",
+  "Win32_System_Com_StructuredStorage",
   # GetDIBits / BITMAP / DeleteObject —— 把 HBITMAP 变成像素要走 GDI。
   "Win32_Graphics_Gdi",
   # DESK-17 (#166)：WinRT toast —— ToastNotificationManager / XmlDocument，

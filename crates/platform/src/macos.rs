@@ -551,6 +551,14 @@ impl PlatformAdapter for MacosAdapter {
     fn volume_stats(&self, path: &Path) -> Option<crate::VolumeStats> {
         crate::unix::volume_stats(path)
     }
+    fn disk_encryption(&self) -> crate::DiskEncryption {
+        match Command::new("/usr/bin/fdesetup").arg("status").output() {
+            Ok(out) if out.status.success() => {
+                crate::filevault_verdict(&String::from_utf8_lossy(&out.stdout))
+            }
+            _ => crate::DiskEncryption::Unknown,
+        }
+    }
     fn restrict_to_owner(&self, path: &Path) -> Result<crate::Applied> {
         crate::unix::restrict_to_owner(path)
     }

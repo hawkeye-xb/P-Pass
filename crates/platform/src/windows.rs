@@ -955,6 +955,16 @@ impl PlatformAdapter for WindowsAdapter {
         })
     }
 
+    /// 系统盘的 BitLocker / 设备加密状态：读资源管理器同源的卷属性
+    /// `System.Volume.BitLockerProtection`，不需要管理员权限。读不到一律 `Unknown`。
+    fn disk_encryption(&self) -> crate::DiskEncryption {
+        let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+        match std::thread::spawn(move || bitlocker_protection(&format!("{drive}\\"))).join() {
+            Ok(Some(v)) => crate::bitlocker_verdict(v),
+            _ => crate::DiskEncryption::Unknown,
+        }
+    }
+
     /// DESK-58 (#875)：stderr 落在与 `daemon.log` 同目录的 `daemon.err`——
     /// `daemon.log` 是 tracing 的完整运行日志，这份只装 tracing 接不住的东西
     /// （文件日志之前的报错、`main` 返回的 `Err`、panic），尾行就是「为什么没
@@ -1104,6 +1114,37 @@ impl PlatformAdapter for WindowsAdapter {
 
 /// 服务 `P-Pass` 已注册（per-machine 安装）。查询失败按「没注册」——与改前
 /// `installer_marker_dir` 的口径一致。
+/// `System.Volume.BitLockerProtection` 的值。独立线程里自己初始化 COM。
+fn bitlocker_protection(root: &str) -> Option<u32> {
+    use windows::core::{GUID, HSTRING};
+    use windows::Win32::Foundation::PROPERTYKEY;
+    use windows::Win32::System::Com::StructuredStorage::PropVariantToUInt32;
+    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
+    use windows::Win32::UI::Shell::PropertiesSystem::{
+        IPropertyStore, SHGetPropertyStoreFromParsingName, GPS_DEFAULT,
+    };
+
+    // 实机用 PSGetPropertyKeyFromName("System.Volume.BitLockerProtection") 取得。
+    const KEY: PROPERTYKEY = PROPERTYKEY {
+        fmtid: GUID::from_u128(0x2d15a9a1_a556_4189_91ad_027458f11a07),
+        pid: 1717,
+    };
+    // SAFETY: 本线程内成对 CoInitializeEx / CoUninitialize；属性仓与变量都在线程内用完即放。
+    unsafe {
+        let inited = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
+        let value = (|| -> windows::core::Result<u32> {
+            let store: IPropertyStore =
+                SHGetPropertyStoreFromParsingName(&HSTRING::from(root), None, GPS_DEFAULT)?;
+            PropVariantToUInt32(&store.GetValue(&KEY)?)
+        })()
+        .ok();
+        if inited {
+            CoUninitialize();
+        }
+        value
+    }
+}
+
 fn service_registered() -> bool {
     crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME).unwrap_or(false)
 }
