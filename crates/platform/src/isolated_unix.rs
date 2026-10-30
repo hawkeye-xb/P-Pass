@@ -106,22 +106,8 @@ mod seatbelt {
     /// （自带的 dylib）、读写 /dev/null。没有网络、mach-lookup、fork、用户目录。
     /// 管道是继承来的 fd，不受路径规则约束。
     /// 调试构建额外放行 Homebrew 前缀，只为本机开发时 worker 链着系统 libheif。
-    const PROFILE: &str = r#"(version 1)
-(deny default)
-(allow process-exec (literal (param "EXE")))
-(allow file-map-executable (subpath "/usr/lib") (subpath "/System") (subpath "/System/Volumes/Preboot/Cryptexes") (subpath (param "EXEDIR")))
-(allow file-read*
-  (literal "/")
-  (subpath "/usr/lib")
-  (subpath "/System")
-  (subpath "/System/Volumes/Preboot/Cryptexes")
-  (subpath "/private/var/db/dyld")
-  (subpath (param "EXEDIR"))
-  (literal "/dev/null")
-  (literal "/dev/urandom"))
-(allow file-write* (literal "/dev/null"))
-(allow sysctl-read)
-"#;
+        /// 与 tools/bundle-desktop-macos.sh 的打包自检共用同一份文件。
+    const PROFILE: &str = include_str!("seatbelt.sb");
 
     #[cfg(debug_assertions)]
     const DEV_EXTRA: &str = r#"(allow file-map-executable (subpath "/opt/homebrew") (subpath "/usr/local"))
