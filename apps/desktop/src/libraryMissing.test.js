@@ -26,6 +26,20 @@ describe("#1253 库找不到", () => {
     expect(app).toContain('t("ui.library_missing_body", { dir: status.library_dir })');
   });
 
+  // #1272：库找不到时，手机上手动挑选传来的照片手机不会自动补回——status 带张数才说，0 / 没有都不说。
+  // 反证：删掉 `{#if status.library_missing_picked > 0}` 守卫 → 下面接线断言红；文案缺 {count} → 第一条红。
+  it.each(["zh", "en"])("%s：手选说明带张数", (lang) => {
+    setLocale(lang);
+    const text = t("ui.library_missing_picked", { count: 12 });
+    expect(text).toContain("12");
+    expect(text).not.toBe("ui.library_missing_picked");
+  });
+
+  it("手选说明只在有张数时出现", () => {
+    expect(app).toContain("{#if status.library_missing_picked > 0}");
+    expect(app).toContain('t("ui.library_missing_picked", { count: status.library_missing_picked })');
+  });
+
   // 强提示只在状态变化时发：每次 refresh 都 sync，不能每 3 秒把窗口拽到前台一次。
   // 反证：去掉 `next === active` 判断 → 调用 4 次，红。
   it("窗口置前 / 程序坞跳动只在进入与离开时各发一次", () => {
