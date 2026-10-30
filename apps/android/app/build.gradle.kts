@@ -12,13 +12,36 @@ val irohBlobsJniLibs = layout.buildDirectory.dir("generated/jniLibs")
 // #1124：同一个 libtransport.so 里还带着与 iOS 共用的 uniffi 导出（控制面、取原图、关闭码）；
 // 它们的 Kotlin 绑定由同一个任务生成（包名见 crates/transport/uniffi.toml），不入库。
 val transportKotlinBindings = layout.buildDirectory.dir("generated/source/uniffi/kotlin")
+
+// 跑仓库 .sh 脚本用的 bash。Linux / macOS 上就是 PATH 里的 bash。
+// Windows 上不能写裸名 "bash"：进程创建先查 System32，命中的是 WSL 启动器
+// （没装发行版就是 `execvpe(/bin/bash) failed`），轮不到 Git Bash。
+// 所以显式找 Git for Windows 自带的 bash：`git --exec-path` 是 <Git>/mingw64/libexec/git-core，
+// 往上三级即安装根。`PPASS_BASH` 可覆盖（Git 装在别处、或想用 MSYS2 的 bash）。
+fun posixBash(): String {
+    providers.environmentVariable("PPASS_BASH").orNull?.let { return it }
+    if (!System.getProperty("os.name").startsWith("Windows")) return "bash"
+    val execPath = runCatching {
+        providers.exec { commandLine("git", "--exec-path") }.standardOutput.asText.get().trim()
+    }.getOrNull()
+    val gitRoot = execPath?.let { File(it).parentFile?.parentFile?.parentFile }
+    return listOf("bin/bash.exe", "usr/bin/bash.exe")
+        .mapNotNull { rel -> gitRoot?.resolve(rel)?.takeIf { it.isFile } }
+        .firstOrNull()?.absolutePath
+        ?: error(
+            "Windows 上构建 Android 需要 Git for Windows 的 bash：没能从 `git --exec-path`" +
+                "（得到 ${execPath ?: "（git 不可用）"}）找到 <Git>/bin/bash.exe。" +
+                "请安装 Git for Windows，或设置环境变量 PPASS_BASH 指向 bash.exe。"
+        )
+}
+
 val buildIrohBlobsProviderBridge = tasks.register<Exec>("buildIrohBlobsProviderBridge") {
     val repoRoot = rootProject.projectDir.resolve("../..").canonicalFile
     val ndkHome = providers.environmentVariable("ANDROID_NDK_HOME").orNull
         ?: error("ANDROID_NDK_HOME must be set to build the native iroh-blobs provider")
     workingDir(repoRoot)
     commandLine(
-        "bash",
+        posixBash(),
         "tools/build-android-iroh-blobs-bridge.sh",
         irohBlobsJniLibs.get().asFile.absolutePath,
         transportKotlinBindings.get().asFile.absolutePath,

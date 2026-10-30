@@ -2,3 +2,18 @@
 # 换行随检出环境变（Windows 上 core.autocrlf=true 会转成 CRLF），同一个脚本就会在
 # 不同机器上编出不同的校验值，互相拒绝对方建的库。固定为 LF，任何检出都一样。
 *.sql text eol=lf
+
+# Shell 脚本只认 LF：CRLF 检出后 `set -euo pipefail\r` 这类行在 bash 里会坏（Git Bash 恰好
+# 容忍，不能指望）。Windows 上的 Android 构建由 Gradle 经 bash 跑 tools/ 下的脚本。
+*.sh text eol=lf
+apps/android/gradlew text eol=lf
+
+# Android 源码与资源固定 LF：单测里有一批源码门禁按 "\n" 切片匹配源码（如 UPD835、#421），
+# Windows（core.autocrlf=true）检出成 CRLF 就全部误报。二进制资源（png/ttf/jar）不受影响。
+apps/android/**/*.kt text eol=lf
+apps/android/**/*.kts text eol=lf
+apps/android/**/*.java text eol=lf
+apps/android/**/*.xml text eol=lf
+apps/android/**/*.json text eol=lf
+apps/android/**/*.properties text eol=lf
+apps/android/**/*.md text eol=lf
