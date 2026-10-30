@@ -463,13 +463,26 @@ impl BackupEngine {
             .get(&peer)
             .copied()
             .unwrap_or(0);
-        // Self-declared address beats observation — register it so every
-        // fetch below dials the uploader directly.
-        if let Some(addr) = &provider {
-            if let Err(e) = self.blobs.register_peer(addr) {
-                tracing::warn!("bad provider address from {peer:?}: {e}");
-            }
-        }
+        // Self-declared address beats observation: the fetches below dial the
+        // uploader there. #1270: only for this commit's fetches (never the shared
+        // address book), and only an address of the uploader itself — every fetch
+        // here is from `peer`.
+        let dial_at =
+            provider
+                .as_deref()
+                .and_then(|token| match token.parse::<transport::PeerAddr>() {
+                    Ok(addr) if addr.node_id() == peer => Some(addr),
+                    Ok(_) => {
+                        tracing::warn!(
+                            "provider address from {peer:?} names another device, ignored"
+                        );
+                        None
+                    }
+                    Err(e) => {
+                        tracing::warn!("bad provider address from {peer:?}: {e}");
+                        None
+                    }
+                });
 
         std::fs::create_dir_all(&self.staging).ok();
         // MOB-30：起点是上传阶段已入库的账，不是 0——否则 commit 只会看到
@@ -519,13 +532,14 @@ impl BackupEngine {
                     );
                     continue;
                 }
-                self.blobs
-                    .fetch_from(peer, hash)
-                    .await
-                    .map_err(|e| BackupError::Fetch {
-                        hash: item.hash.clone(),
-                        msg: e.to_string(),
-                    })?;
+                let fetched = match &dial_at {
+                    Some(addr) => self.blobs.fetch_from_addr(addr, hash).await,
+                    None => self.blobs.fetch_from(peer, hash).await,
+                };
+                fetched.map_err(|e| BackupError::Fetch {
+                    hash: item.hash.clone(),
+                    msg: e.to_string(),
+                })?;
                 self.blobs
                     .export_to(hash, &staged)
                     .await

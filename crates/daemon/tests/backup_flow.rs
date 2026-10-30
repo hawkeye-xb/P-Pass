@@ -25,6 +25,7 @@ async fn endpoint() -> IrohTransport {
 
 struct StorageSide {
     tp: IrohTransport,
+    blobs: std::sync::Arc<Blobs>,
     db: Db,
     backup: BackupEngine,
     #[allow(dead_code)]
@@ -37,12 +38,13 @@ async fn start_daemon(dir: &Path) -> StorageSide {
     let db = Db::open(&dir.join("index.sqlite")).await.unwrap();
     let tp = endpoint().await;
     let blobs = std::sync::Arc::new(Blobs::open(&tp, &dir.join("daemon-blobs")).await.unwrap());
-    let backup = BackupEngine::new(db.clone(), blobs, dir.join("library"));
+    let backup = BackupEngine::new(db.clone(), blobs.clone(), dir.join("library"));
     let router = Router::new(db.clone(), "storage").with_backup(backup.clone());
     let tp2 = tp.clone();
     let serve_task = tokio::spawn(async move { router.serve(&tp2).await });
     StorageSide {
         tp,
+        blobs,
         db,
         backup,
         serve_task,
@@ -361,13 +363,14 @@ async fn commit_batch_emits_timeline_invalidated_exactly_once() {
     // 合并」的**接线**，不是 1 秒窗口的墙钟行为（后者由 Throttle 单测钉）。
     // 用默认 1s 窗口时，被打满的 CI runner 上批次中途窗口到点会多 emit
     // 一次，测试薛定谔红（2026-08-22 CI 实例）。
-    let backup = BackupEngine::new(db.clone(), blobs, dir.path().join("library"))
+    let backup = BackupEngine::new(db.clone(), blobs.clone(), dir.path().join("library"))
         .with_events_and_window(event_bus, std::time::Duration::from_secs(3600));
     let router = Router::new(db.clone(), "storage").with_backup(backup.clone());
     let tp2 = tp.clone();
     let serve_task = tokio::spawn(async move { router.serve(&tp2).await });
     let storage = StorageSide {
         tp,
+        blobs,
         db,
         backup,
         serve_task,
@@ -510,4 +513,80 @@ fn member(id: &transport::NodeId) -> Pairing {
         role: Role::Member,
         paired_at: 1,
     }
+}
+
+/// #1270：已配对的手机 A 在 `backup.manifest` 里把一个假地址写在另一台设备 B 名下：A 自己的
+/// 备份照常完成（从 A 拉），电脑之后照样按原来的信息连得上 B。
+/// 反证：`commit` 改回把上报地址登记进传输层地址簿（`register_peer` / `add_peer`），B 的地址被
+/// 假地址顶掉，最后一条断言变红。
+#[tokio::test(flavor = "multi_thread")]
+async fn backup_provider_address_for_another_device_leaves_that_device_reachable() {
+    let dir = tempfile::tempdir().unwrap();
+    let storage = start_daemon(dir.path()).await;
+    let client = Client::new(dir.path(), &storage).await;
+    storage
+        .db
+        .accept_pairing(
+            &client.tp.node_id().0,
+            "phone",
+            &member(&client.tp.node_id()),
+        )
+        .await
+        .unwrap();
+
+    // 设备 B：电脑认识它（地址簿里有它的真地址），手里有一份内容。
+    let b_dir = dir.path().join("b");
+    fs::create_dir_all(&b_dir).unwrap();
+    let b_tp = endpoint().await;
+    let mut b_blobs = Blobs::open(&b_tp, &b_dir.join("store")).await.unwrap();
+    b_blobs.serve();
+    let b_bytes = b"device B's photo";
+    let b_hash = *blake3::hash(b_bytes).as_bytes();
+    fs::write(b_dir.join("b.jpg"), b_bytes).unwrap();
+    b_blobs.import(b_hash, &b_dir.join("b.jpg")).await.unwrap();
+    storage.tp.add_peer(b_tp.local_addr());
+
+    let src_dir = dir.path().join("src");
+    fs::create_dir_all(&src_dir).unwrap();
+    let files = corpus(&src_dir, 3, 0);
+    import_all(&client, &files, &src_dir).await;
+
+    assert!(
+        client
+            .call("backup.begin", serde_json::Value::Null)
+            .await
+            .ok
+    );
+    let forged = transport::PeerAddr::from_node_relay(b_tp.node_id(), Some("http://127.0.0.1:9"))
+        .unwrap()
+        .to_string();
+    let manifest = BackupManifest {
+        hashes: vec![],
+        items: files.values().map(|(_, i)| i.clone()).collect(),
+        provider: Some(forged),
+    };
+    assert!(
+        client
+            .call("backup.manifest", serde_json::to_value(&manifest).unwrap())
+            .await
+            .ok
+    );
+    let resp = client
+        .call(
+            "backup.commit",
+            serde_json::to_value(&BackupCommit { generation: None }).unwrap(),
+        )
+        .await;
+    assert!(resp.ok, "A 自己的备份照常完成：{resp:?}");
+    assert_eq!(asset_count(&storage.db).await, files.len());
+
+    let fetched = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        storage.blobs.fetch_from(b_tp.node_id(), b_hash),
+    )
+    .await;
+    assert!(
+        matches!(fetched, Ok(Ok(()))),
+        "B 的地址被别的设备上报的假地址改掉了：{fetched:?}"
+    );
 }

@@ -56,7 +56,7 @@ async fn ranged_fetch_moves_only_the_requested_groups_and_verifies_them() {
     let rx = Blobs::open(&rx_tp, &dir.path().join("rx-store"))
         .await
         .unwrap();
-    let (peer, ticket_hash) = rx.register_blob_ticket(&ticket).unwrap();
+    let (provider_addr, ticket_hash) = Blobs::parse_blob_ticket(&ticket).unwrap();
     assert_eq!(ticket_hash, hash);
 
     // A JPEG-style header range and an MP4-style tail range.
@@ -64,7 +64,7 @@ async fn ranged_fetch_moves_only_the_requested_groups_and_verifies_them() {
     let tail = (LEN as u64 - 40)..(LEN as u64 - 10);
     let (size, pieces) = rx
         .fetch_byte_ranges(
-            peer,
+            &provider_addr,
             hash,
             &[head.clone(), tail.clone()],
             Duration::from_secs(20),

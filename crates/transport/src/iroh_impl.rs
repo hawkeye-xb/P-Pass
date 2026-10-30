@@ -319,6 +319,9 @@ pub struct IrohTransport {
     inbound: InboundConnections,
     /// #1122：入站连接的准入判据（见 [`Self::set_admission`]）。
     admission: AdmissionSlot,
+    /// #1270：本端点自己配置的中继（[`own_relays`]）。对端在请求里上报的地址，只留下
+    /// 这里面的中继（见 [`scoped`]）。
+    relays: Arc<Vec<RelayUrl>>,
 }
 
 /// #1122：入站连接准入判据：`(对端, ALPN) -> 放行？`。未设置 = 全部放行。
@@ -369,6 +372,44 @@ impl iroh::endpoint::EndpointHooks for AdmissionHook {
 
 type InboundConnections = Arc<Mutex<HashMap<usize, (NodeId, Connection)>>>;
 
+/// #1270：本端点自己用的那组中继，与 [`IrohTransport::bind`] 交给 builder 的一致：配置里的
+/// 自定义中继；没配且开着 n0 服务时是 n0 预设的默认中继（同一个 `default_relay_mode()`）；
+/// 离线形态没有中继。
+fn own_relays(cfg: &TransportConfig) -> Result<Vec<RelayUrl>> {
+    if !cfg.relay_urls.is_empty() {
+        return cfg
+            .relay_urls
+            .iter()
+            .map(|u| u.parse::<RelayUrl>())
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| TransportError::Bind(format!("invalid relay url: {e}")));
+    }
+    Ok(if cfg.n0_services {
+        iroh::endpoint::default_relay_mode().relay_map().urls()
+    } else {
+        Vec::new()
+    })
+}
+
+/// #1270：对端在请求里上报的地址，只用于那一次拨号，不进地址簿。中继只留 `relays`（本端点
+/// 自己的）里的，其余丢掉——iroh 会去连地址里任何一个中继 URL（#1268）；直连地址原样
+/// 保留：连接有 TLS 身份认证，拨错了只是连不上。
+fn scoped(addr: &EndpointAddr, relays: &[RelayUrl]) -> EndpointAddr {
+    EndpointAddr {
+        id: addr.id,
+        addrs: addr
+            .addrs
+            .iter()
+            .filter(|a| match a {
+                TransportAddr::Ip(_) => true,
+                TransportAddr::Relay(url) => relays.contains(url),
+                _ => false,
+            })
+            .cloned()
+            .collect(),
+    }
+}
+
 /// DAE-02: derive the stable node id from the identity secret key
 /// WITHOUT binding an endpoint.
 ///
@@ -391,14 +432,9 @@ impl IrohTransport {
             Endpoint::builder(presets::Minimal)
         };
 
+        let relays = own_relays(&cfg)?;
         if !cfg.relay_urls.is_empty() {
-            let urls = cfg
-                .relay_urls
-                .iter()
-                .map(|u| u.parse::<RelayUrl>())
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .map_err(|e| TransportError::Bind(format!("invalid relay url: {e}")))?;
-            builder = builder.relay_mode(RelayMode::custom(urls));
+            builder = builder.relay_mode(RelayMode::custom(relays.clone()));
         }
         if let Some(bytes) = cfg.secret_key {
             builder = builder.secret_key(SecretKey::from_bytes(&bytes));
@@ -433,6 +469,7 @@ impl IrohTransport {
                 std::num::NonZeroUsize::new(crate::PEER_BOOK_CAPACITY).expect("nonzero"),
             ))),
             admission,
+            relays: Arc::new(relays),
             connections,
             connect_gates: Arc::default(),
             blobs_handler: Arc::default(),
@@ -595,6 +632,17 @@ impl IrohTransport {
     /// `(peer, ALPN)` key. A live connection returns immediately; a closed
     /// one is removed before reconnecting.
     pub(crate) async fn get_or_connect(&self, peer: NodeId, alpn: &str) -> Result<Connection> {
+        self.get_or_connect_at(peer, None, alpn).await
+    }
+
+    /// [`Self::get_or_connect`], dialing `hint` (an address the caller was told in this request;
+    /// see [`scoped`]) instead of the address book on a cache miss.
+    pub(crate) async fn get_or_connect_at(
+        &self,
+        peer: NodeId,
+        hint: Option<&PeerAddr>,
+        alpn: &str,
+    ) -> Result<Connection> {
         if let Some(conn) = self
             .connections
             .lock()
@@ -615,7 +663,7 @@ impl IrohTransport {
             return Ok(conn);
         }
 
-        let conn = self.dial(peer, alpn).await?;
+        let conn = self.dial(peer, hint, alpn).await?;
         let key = ConnectionKey::new(peer, alpn);
         self.connections
             .lock()
@@ -625,12 +673,22 @@ impl IrohTransport {
         Ok(conn)
     }
 
-    /// Dials [peer] at its registered address (or by NodeId lookup).
-    async fn dial(&self, peer: NodeId, alpn: &str) -> Result<Connection> {
-        let known = self.peers.lock().expect("peers lock").get(&peer).cloned();
-        let addr = match known {
+    /// Dials [peer] at `hint` (scoped, when it names [peer] and something usable is left), else
+    /// at its registered address (or by NodeId lookup).
+    async fn dial(&self, peer: NodeId, hint: Option<&PeerAddr>, alpn: &str) -> Result<Connection> {
+        let hinted = hint
+            .filter(|h| h.node_id() == peer)
+            .map(|h| scoped(&h.0, &self.relays))
+            .filter(|a| !a.addrs.is_empty());
+        let addr = match hinted {
             Some(addr) => addr,
-            None => EndpointAddr::from(endpoint_id(peer)?),
+            None => {
+                let known = self.peers.lock().expect("peers lock").get(&peer).cloned();
+                match known {
+                    Some(addr) => addr,
+                    None => EndpointAddr::from(endpoint_id(peer)?),
+                }
+            }
         };
         self.ep
             .connect(addr, alpn.as_bytes())
@@ -653,7 +711,7 @@ impl IrohTransport {
         peer: NodeId,
         alpn: &str,
     ) -> Result<(Connection, BiStream)> {
-        let conn = self.dial(peer, alpn).await?;
+        let conn = self.dial(peer, None, alpn).await?;
         let (send, recv) = conn.open_bi().await.map_err(|e| conn_err(&conn, e))?;
         let stream = BiStream {
             send,
@@ -663,9 +721,15 @@ impl IrohTransport {
         Ok((conn, stream))
     }
 
-    /// Crate-internal raw connection for the blobs fetch path.
-    pub(crate) async fn connect_raw(&self, peer: NodeId, alpn: &str) -> Result<Connection> {
-        self.get_or_connect(peer, alpn).await
+    /// Crate-internal raw connection for the blobs fetch path; `hint` as in
+    /// [`Self::get_or_connect_at`].
+    pub(crate) async fn connect_raw(
+        &self,
+        peer: NodeId,
+        hint: Option<&PeerAddr>,
+        alpn: &str,
+    ) -> Result<Connection> {
+        self.get_or_connect_at(peer, hint, alpn).await
     }
 }
 
@@ -1037,6 +1101,47 @@ mod tests {
 
     fn ctrl_loopback() -> TransportConfig {
         TransportConfig::loopback(vec![crate::ALPN_CTRL.into()])
+    }
+
+    /// #1270：上报地址只留本端点自己的中继，直连地址不动。三种端点形态各验一遍：自定义
+    /// 中继、n0 默认中继、离线（没有中继）。反证：`scoped` 不再过滤中继（`Relay(_) => true`），
+    /// 「别处的中继被丢掉」三条断言变红；过滤掉全部中继，「自己的中继留着」两条变红。
+    #[test]
+    fn reported_address_keeps_only_this_endpoints_own_relays() {
+        let id = SecretKey::from_bytes(&[0x41; 32]).public();
+        let ip = TransportAddr::Ip("192.0.2.7:4433".parse().unwrap());
+        let elsewhere: RelayUrl = "https://relay.elsewhere.example".parse().unwrap();
+        let reported = |relay: &RelayUrl| EndpointAddr {
+            id,
+            addrs: [
+                ip.clone(),
+                TransportAddr::Relay(relay.clone()),
+                TransportAddr::Relay(elsewhere.clone()),
+            ]
+            .into(),
+        };
+        let relays_of = |a: &EndpointAddr| -> Vec<RelayUrl> { a.relay_urls().cloned().collect() };
+
+        let custom = TransportConfig {
+            relay_urls: vec!["https://relay.self-host.example".into()],
+            ..ctrl_loopback()
+        };
+        let own = own_relays(&custom).unwrap();
+        let kept = scoped(&reported(&own[0]), &own);
+        assert_eq!(relays_of(&kept), own, "自定义中继：自己的留着，别处的丢掉");
+        assert!(kept.addrs.contains(&ip), "直连地址不动");
+
+        let n0 = TransportConfig::from_endpoints(Vec::new(), vec![crate::ALPN_CTRL.into()]);
+        let own = own_relays(&n0).unwrap();
+        assert!(!own.is_empty(), "n0 形态有默认中继");
+        let kept = scoped(&reported(&own[0]), &own);
+        assert_eq!(relays_of(&kept), vec![own[0].clone()], "n0 默认中继：同上");
+
+        let offline = own_relays(&ctrl_loopback()).unwrap();
+        assert!(offline.is_empty());
+        let kept = scoped(&reported(&elsewhere), &offline);
+        assert!(relays_of(&kept).is_empty(), "离线形态：一个中继都不留");
+        assert_eq!(kept.addrs.len(), 1, "只剩直连地址");
     }
 
     /// A reachable ctrl-ALPN server whose accept loop runs (without it the

@@ -457,6 +457,23 @@ impl Blobs {
         self.fetch_from_observing_path(peer, hash, |_| {}).await
     }
 
+    /// [`Self::fetch_from`] at an address the requester reported for this fetch (#1270: dialed
+    /// for this fetch only, never registered; see [`Self::fetch_from_observing_path_with_stall`]).
+    pub async fn fetch_from_addr(&self, provider: &PeerAddr, hash: [u8; 32]) -> Result<()> {
+        let peer = provider.node_id();
+        let conn = self
+            .transport
+            .connect_raw(peer, Some(provider), crate::ALPN_BLOBS)
+            .await
+            .map_err(|e| TransportError::Io(format!("connect for fetch: {e}")))?;
+        self.store
+            .remote()
+            .fetch(conn, Hash::from_bytes(hash))
+            .await
+            .map_err(|e| TransportError::Io(format!("fetch from {peer:?}: {e}")))?;
+        Ok(())
+    }
+
     /// Same data-plane operation, with one synchronous snapshot immediately
     /// after the cached blobs connection is ready and before a stream is
     /// opened. This reports iroh's selected path for *this exact ALPN*, not a
@@ -472,7 +489,7 @@ impl Blobs {
     {
         let conn = self
             .transport
-            .connect_raw(peer, crate::ALPN_BLOBS)
+            .connect_raw(peer, None, crate::ALPN_BLOBS)
             .await
             .map_err(|e| TransportError::Io(format!("connect for fetch: {e}")))?;
         on_connected(self.transport.path_status_of(peer, crate::ALPN_BLOBS));
@@ -491,9 +508,13 @@ impl Blobs {
     /// cut. On a stall the blobs connection is closed, so the next attempt
     /// redials instead of reusing a connection whose request went unanswered
     /// (#467 capture 1: request sent, then nothing, forever).
+    ///
+    /// #1270: `provider` is the address the requester reported for this fetch. It is dialed for
+    /// this fetch only (relays outside this endpoint's own set dropped) and never written to the
+    /// shared address book, so it cannot change how this endpoint reaches anyone else.
     pub async fn fetch_from_observing_path_with_stall<F>(
         &self,
-        peer: crate::NodeId,
+        provider: &PeerAddr,
         hash: [u8; 32],
         byte_stall: Duration,
         on_connected: F,
@@ -501,9 +522,10 @@ impl Blobs {
     where
         F: FnOnce(crate::ConnectionStatus),
     {
+        let peer = provider.node_id();
         let conn = self
             .transport
-            .connect_raw(peer, crate::ALPN_BLOBS)
+            .connect_raw(peer, Some(provider), crate::ALPN_BLOBS)
             .await
             .map_err(|e| TransportError::Io(format!("connect for fetch: {e}")))?;
         on_connected(self.transport.path_status_of(peer, crate::ALPN_BLOBS));
@@ -522,9 +544,11 @@ impl Blobs {
     ///
     /// The partial blob is held by a temp tag for the duration, so the store's periodic GC (which
     /// only protects active Flow grants) cannot collect it between the get and the export.
+    ///
+    /// #1270: `provider` is dialed as in [`Self::fetch_from_observing_path_with_stall`].
     pub async fn fetch_byte_ranges(
         &self,
-        peer: crate::NodeId,
+        provider: &PeerAddr,
         hash: [u8; 32],
         ranges: &[std::ops::Range<u64>],
         byte_stall: Duration,
@@ -554,9 +578,10 @@ impl Blobs {
         }
         groups.sort_by_key(|g| g.start);
         groups.dedup();
+        let peer = provider.node_id();
         let conn = self
             .transport
-            .connect_raw(peer, crate::ALPN_BLOBS)
+            .connect_raw(peer, Some(provider), crate::ALPN_BLOBS)
             .await
             .map_err(|e| TransportError::Io(format!("connect for ranged fetch: {e}")))?;
         let request = GetRequest::builder().root(wanted).build(h);
@@ -632,24 +657,15 @@ impl Blobs {
         Ok(())
     }
 
-    /// Admit a native iroh-blobs ticket and return its provider identity and
-    /// hash. The caller must compare both values to its durable Flow grant.
-    pub fn register_blob_ticket(&self, ticket: &str) -> Result<(NodeId, [u8; 32])> {
+    /// Parse a native iroh-blobs ticket into its provider address and hash. Nothing is
+    /// registered (#1270): pass the address to the fetch that uses it. The caller must compare
+    /// the hash to its durable Flow grant.
+    pub fn parse_blob_ticket(ticket: &str) -> Result<(PeerAddr, [u8; 32])> {
         let ticket = ticket
             .parse::<BlobTicket>()
             .map_err(|e| TransportError::Io(format!("invalid blob ticket: {e}")))?;
         let hash = *ticket.hash().as_bytes();
-        let peer = self
-            .transport
-            .add_peer(PeerAddr::from_endpoint_addr(ticket.addr().clone()));
-        Ok((peer, hash))
-    }
-
-    /// Register a peer's self-declared address token (see
-    /// [`crate::PeerAddr`]'s Display) so later fetches dial it directly.
-    pub fn register_peer(&self, addr_token: &str) -> Result<crate::NodeId> {
-        let addr: crate::PeerAddr = addr_token.parse()?;
-        Ok(self.transport.add_peer(addr))
+        Ok((PeerAddr::from_endpoint_addr(ticket.addr().clone()), hash))
     }
 
     /// Bytes of this blob already present locally (0 = nothing yet).
