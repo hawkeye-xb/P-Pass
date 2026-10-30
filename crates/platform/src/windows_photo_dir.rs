@@ -351,6 +351,82 @@ mod tests {
     /// Authenticated Users。
     const AUTHENTICATED_USERS: &str = "S-1-5-11";
 
+    /// 当前线程换成「只剩 SeChangeNotifyPrivilege」的模拟令牌，离开作用域（含 panic）还原。
+    /// 令牌取自进程令牌的副本，`CreateRestrictedToken(DISABLE_MAX_PRIVILEGE)` 删掉其余特权。
+    struct ServiceLikeThreadToken(windows_sys::Win32::Foundation::HANDLE);
+
+    impl ServiceLikeThreadToken {
+        fn enter() -> Self {
+            use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+            use windows_sys::Win32::Security::{
+                CreateRestrictedToken, DuplicateTokenEx, SecurityImpersonation, TokenImpersonation,
+                DISABLE_MAX_PRIVILEGE, TOKEN_ALL_ACCESS,
+            };
+            use windows_sys::Win32::System::Threading::{
+                GetCurrentProcess, OpenProcessToken, SetThreadToken,
+            };
+            // SAFETY: 都是带出参的 Win32 调用；失败即 panic，句柄关闭由 Drop 与下面的 CloseHandle 负责。
+            unsafe {
+                let mut process: HANDLE = std::ptr::null_mut();
+                assert_ne!(
+                    OpenProcessToken(GetCurrentProcess(), TOKEN_ALL_ACCESS, &mut process),
+                    0,
+                    "{}",
+                    std::io::Error::last_os_error()
+                );
+                let mut imp: HANDLE = std::ptr::null_mut();
+                let ok = DuplicateTokenEx(
+                    process,
+                    TOKEN_ALL_ACCESS,
+                    std::ptr::null(),
+                    SecurityImpersonation,
+                    TokenImpersonation,
+                    &mut imp,
+                );
+                CloseHandle(process);
+                assert_ne!(ok, 0, "{}", std::io::Error::last_os_error());
+                let mut restricted: HANDLE = std::ptr::null_mut();
+                let ok = CreateRestrictedToken(
+                    imp,
+                    DISABLE_MAX_PRIVILEGE,
+                    0,
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    &mut restricted,
+                );
+                CloseHandle(imp);
+                assert_ne!(ok, 0, "{}", std::io::Error::last_os_error());
+                assert_eq!(
+                    crate::windows_token::token_privilege_names(restricted).unwrap(),
+                    vec!["SeChangeNotifyPrivilege".to_string()],
+                    "模拟的服务令牌只该剩 SeChangeNotifyPrivilege"
+                );
+                assert_ne!(
+                    SetThreadToken(std::ptr::null(), restricted),
+                    0,
+                    "{}",
+                    std::io::Error::last_os_error()
+                );
+                Self(restricted)
+            }
+        }
+    }
+
+    impl Drop for ServiceLikeThreadToken {
+        fn drop(&mut self) {
+            use windows_sys::Win32::Foundation::CloseHandle;
+            use windows_sys::Win32::System::Threading::SetThreadToken;
+            // SAFETY: 还原本线程令牌，再关掉自己持有的句柄。
+            unsafe {
+                SetThreadToken(std::ptr::null(), std::ptr::null_mut());
+                CloseHandle(self.0);
+            }
+        }
+    }
+
     fn me() -> String {
         crate::windows_programdata::current_user_sid_string().unwrap()
     }
@@ -515,8 +591,15 @@ mod tests {
             .status()
             .unwrap();
         assert!(ok.success());
-        let err = make_private_for_service(d.path(), TEST_SERVICE, &me())
-            .expect_err("改不了的子项必须报错");
+        // 生产里服务令牌只剩 SeChangeNotifyPrivilege（W-1）。提权的测试令牌带着
+        // SeRestore / SeTakeOwnership / SeBackup 等，`TreeResetNamedSecurityInfoW` 会借它们
+        // 改动没有 WRITE_DAC 的子项，于是不报错——测试前提不成立。在去掉特权的线程令牌下
+        // 调用，模拟服务令牌（普通身份本来就没有这些特权，行为一致）。
+        let err = {
+            let _as_service = ServiceLikeThreadToken::enter();
+            make_private_for_service(d.path(), TEST_SERVICE, &me())
+        }
+        .expect_err("改不了的子项必须报错");
         let text = format!("{err}");
         assert!(text.contains("locked.jpg"), "要列出改不了的路径：{text}");
         // 收尾：父目录给主人的删除子项权限足以删掉它（tempdir 自己清理）。
