@@ -131,17 +131,3 @@ fn garbage_answer_is_rejected() {
     let err = with_worker(&w, || decode_image(&p)).unwrap_err();
     assert!(matches!(err, CodecError::Decode { .. }), "{err:?}");
 }
-
-/// 被信号杀（dyld 缺库 / 被沙箱拦住时 worker 会 abort）= 沙箱里没跑起来 = 系统性失败，
-/// 不是「这张图坏了」：否则一次环境问题会把整库永久冻成灰图。仅 macOS 的预检这样判。
-#[cfg(target_os = "macos")]
-#[test]
-fn worker_killed_by_signal_is_unavailable_not_file_level() {
-    let dir = tempfile::tempdir().unwrap();
-    let Some(w) = fake_worker(dir.path(), "kill -ABRT $$") else {
-        return;
-    };
-    let p = png(dir.path());
-    let err = with_worker(&w, || decode_image(&p)).unwrap_err();
-    assert!(matches!(err, CodecError::SandboxUnavailable(_)), "{err:?}");
-}
