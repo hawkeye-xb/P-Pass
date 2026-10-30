@@ -406,6 +406,10 @@ msg_keys! {
     UI_ERR_SIDECAR_VERSION_TIMEOUT => "ui.err_sidecar_version_timeout",
     UI_ERR_SIDECAR_SPAWN => "ui.err_sidecar_spawn",
     UI_ERR_SIDECAR_WAIT => "ui.err_sidecar_wait",
+    UI_ERR_SIDECAR_ARGS => "ui.err_sidecar_args",
+    UI_ERR_SIDECAR_KILLED => "ui.err_sidecar_killed",
+    UI_ERR_SIDECAR_EXITED_EARLY => "ui.err_sidecar_exited_early",
+    UI_ERR_SIDECAR_NO_ANSWER => "ui.err_sidecar_no_answer",
     UI_ERR_SIDECAR_READ => "ui.err_sidecar_read",
     UI_ERR_SIDECAR_MISSING => "ui.err_sidecar_missing",
     UI_ERR_UPDATE_NONE => "ui.err_update_none",
@@ -745,6 +749,10 @@ mod tests {
             UI_ERR_SIDECAR_VERSION_TIMEOUT,
             UI_ERR_SIDECAR_SPAWN,
             UI_ERR_SIDECAR_WAIT,
+            UI_ERR_SIDECAR_ARGS,
+            UI_ERR_SIDECAR_KILLED,
+            UI_ERR_SIDECAR_EXITED_EARLY,
+            UI_ERR_SIDECAR_NO_ANSWER,
             UI_ERR_SIDECAR_READ,
             UI_ERR_SIDECAR_MISSING,
             UI_ERR_REGISTER_AND_SPAWN,
@@ -818,7 +826,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 351);
+        assert_eq!(ALL.len(), 355);
     }
 
     #[test]

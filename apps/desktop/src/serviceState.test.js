@@ -4,7 +4,7 @@ import {
   isServiceState,
   serviceStateFromEvent,
   isServiceRunning,
-  canStartService,
+  serviceRecoveryAction,
   canStopService,
   serviceStateLabelKey,
   serviceStateActionKey,
@@ -34,11 +34,12 @@ describe("DESK-63 服务状态", () => {
   });
 
   it("开始 / 停止按钮跟着状态走", () => {
-    expect(canStartService("stopped")).toBe(true);
-    expect(canStartService("unreachable")).toBe(true);
-    expect(canStartService("starting")).toBe(false);
-    expect(canStartService("running")).toBe(false);
-    expect(canStartService("not_configured")).toBe(false);
+    // 偏离 1：用户停的 → 启动；失联（可能卡死）→ 重启，先杀再拉。
+    expect(serviceRecoveryAction("stopped")).toBe("start");
+    expect(serviceRecoveryAction("unreachable")).toBe("restart");
+    expect(serviceRecoveryAction("starting")).toBe(null);
+    expect(serviceRecoveryAction("running")).toBe(null);
+    expect(serviceRecoveryAction("not_configured")).toBe(null);
 
     // 停止只在服务真的在（或正在起）时出现，不会和「未运行」同屏。
     expect(canStopService("running")).toBe(true);

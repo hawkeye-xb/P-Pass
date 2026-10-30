@@ -137,6 +137,26 @@ export function errText(e) {
   return errMessage(e).text;
 }
 
+/**
+ * 窗口与后台服务之间的通信出错（10-30 偏离 1）。这类报错的出路是「重启后台服务」：
+ * `restart_daemon_process` 不经过这条通信，后台服务卡死或已退出都能救。
+ */
+const SERVICE_LINK_ERROR_KEYS = new Set([
+  "ui.err_socket_name",
+  "ui.err_connect",
+  "ui.err_send",
+  "ui.err_read_response",
+  "ui.err_daemon_unresponsive",
+  "ui.err_ipc_thread_spawn",
+  "ui.err_ipc_thread_exit",
+  "ui.err_not_json",
+]);
+
+/** 报错 toast 要不要带「重启后台服务」按钮：按正文所用 key（`errMessage().key`）判断。 */
+export function offersServiceRestart(key) {
+  return SERVICE_LINK_ERROR_KEYS.has(key);
+}
+
 /** keyed 错误的 key（`{"key": "ui.err_…"}` 或其 JSON 串）；不是就 null。 */
 export function errKey(e) {
   return asKeyed(e)?.key ?? null;

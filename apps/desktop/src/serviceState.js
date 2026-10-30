@@ -30,9 +30,18 @@ export function isServiceRunning(state) {
   return state === "running";
 }
 
-/** The service is down, but the user can bring it back from this screen. */
-export function canStartService(state) {
-  return state === "stopped" || state === "unreachable";
+/**
+ * 首页阻断卡的恢复按钮（10-30 偏离 1）：
+ * - `stopped`：用户停的，按钮是「启动后台服务」；
+ * - `unreachable`：进程可能还在但不应答，按钮是「重启后台服务」——
+ *   `restart_daemon_process` 先杀再拉，卡死和已退出两种都能救；
+ * - 其余状态没有按钮。
+ * @returns {"start" | "restart" | null}
+ */
+export function serviceRecoveryAction(state) {
+  if (state === "stopped") return "start";
+  if (state === "unreachable") return "restart";
+  return null;
 }
 
 /** Stop is offered only while the service is actually there. */

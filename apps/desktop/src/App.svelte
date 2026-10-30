@@ -4,7 +4,7 @@
   import { shouldShowTrayHint, TRAY_HINT_SHOWN_KEY } from "./trayHint.js";
   import { loadPlatformUx, wizardVariant } from "./platformUx.js";
     import {
-    canStartService,
+    serviceRecoveryAction,
     canStopService,
     isServiceRunning,
     serviceStateActionKey,
@@ -90,7 +90,7 @@
   // I18N-03 (#492): t() 抽到 lib/i18n.js 共享（向导、lib/*.js 同源）；
   // T-081 暂写死在组件里的导航/页面文案已全部收编进字典。errText 负责
   // 把 Rust 壳回来的错误（key + 参数 / 裸已注册 key；不认识的一律通用错误，原串只进 console）渲染成人话。
-  import { t, errText, errMessage, errCodeLine, errKey, getLocale, readLangPref, applyLangPref } from "./lib/i18n.js";
+  import { t, errText, errMessage, errCodeLine, errKey, offersServiceRestart, getLocale, readLangPref, applyLangPref } from "./lib/i18n.js";
 
   // ---- T-081 布局 v1：侧边栏四页（总览 / 家人与设备 / 活动记录 / 设置，
   // 照片库并入设置）。hash 同步只为可验证/可深链，不引入路由依赖。
@@ -335,8 +335,9 @@
   }
 
   // UI-04b：所有短反馈统一委托官方 Sonner；成功/等待/错误分别走三种含义色。
-  function flashMessage(msg, tone = "success", description) {
-    const opts = description ? { description } : undefined;
+  // action：Sonner 的 toast 按钮 `{ label, onClick }`，可选。
+  function flashMessage(msg, tone = "success", description, action) {
+    const opts = description || action ? { description, action } : undefined;
     if (tone === "error") toast.error(msg, opts);
     else if (tone === "warning") toast.warning(msg, opts);
     else toast.success(msg, opts);
@@ -344,9 +345,13 @@
 
   // B13：报错 toast = 正文 + 「错误代码」小字。内层是已登记 key 就显示内层（出路最具体），
   // 否则显示包装句；原始内容只进 console（lib/i18n.js errMessage）。
+  // 偏离 1：窗口联系不上后台服务的那几类报错，toast 上当场给「重启后台服务」。
   function flashError(e, wrapperKey) {
     const m = errMessage(e, wrapperKey);
-    flashMessage(m.text, "error", errCodeLine(m));
+    const action = offersServiceRestart(m.key)
+      ? { label: t("ui.restart_service"), onClick: () => restartDaemonProcess() }
+      : undefined;
+    flashMessage(m.text, "error", errCodeLine(m), action);
   }
 
   // 首页提示分级 L1：备份完全停了（服务没在跑 / 找不到照片库）。在场时它就是首页结论，见 lib/homeBlocker.js。
@@ -1163,6 +1168,7 @@
   // 成功/失败都明说：版本真变了才报成功；没变 = 服务文件没更新，提示重装。
   let restartingService = $state(false);
   async function restartDaemonProcess() {
+    if (restartingService) return;
     const yes = await confirmDialog(t("ui.restart_service_confirm_body"), {
       title: t("ui.restart_service_confirm_title"),
       kind: "warning",
@@ -1700,12 +1706,20 @@
                   {t(serviceStateActionKey(serviceState))}
                 {/if}
               </p>
-              {#if canStartService(serviceState)}
+              {#if serviceRecoveryAction(serviceState) === "start"}
                 <Button class="mt-[12px] self-start" disabled={starting} onclick={startDaemonNow}>
                   {starting ? t("ui.starting") : t("ui.start_service")}
                 </Button>
+              {:else if serviceRecoveryAction(serviceState) === "restart"}
+                <!-- 偏离 1：失联多半是进程在、不应答；重启先杀再拉，结果用 restart_service_* 提示。 -->
+                <Button class="mt-[12px] self-start" disabled={restartingService} onclick={restartDaemonProcess} data-testid="blocker-restart">
+                  {restartingService ? t("ui.restarting_service") : t("ui.restart_service")}
+                </Button>
               {/if}
-              <p class="text-[13px] leading-[1.6] text-ink-40">{t("ui.refresh_hint")}</p>
+              <!-- 这句教的是「启动」那条路；重启的结果由 restart_service_* toast 当场说。 -->
+              {#if serviceRecoveryAction(serviceState) !== "restart"}
+                <p class="text-[13px] leading-[1.6] text-ink-40">{t("ui.refresh_hint")}</p>
+              {/if}
             </Card>
           {:else if status?.relocating}
             <!-- #639：正在搬迁照片库——等待（琥珀），给出进度与新位置；搬完服务自己重启恢复。 -->

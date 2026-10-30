@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import Wizard from "./Wizard.svelte";
 import WizardWindows from "./WizardWindows.svelte";
-import { errCode, errMessage, errText, setLocale, t } from "./lib/i18n.js";
+import { errCode, errMessage, errText, offersServiceRestart, setLocale, t } from "./lib/i18n.js";
 
 setLocale("en");
 
@@ -166,6 +166,32 @@ describe("errMessage：Rust 壳回来的三种错误形状（B13：正文 + 错�
     expect(errCode("err.disk_full")).toBe("disk_full");
     expect(errCode("ui.update_failed_file_locked")).toBe("update_failed_file_locked");
     expect(t("ui.err_code", { code: "generic" })).toBe("Error code: generic");
+  });
+
+  // 偏离 1（10-30）：窗口联系不上后台服务的 8 类报错共用一句正文，toast 带「重启后台服务」；
+  // 错误代码区分是哪一类，参数里的 OS 原文只进 console。
+  it("通信出错的 8 个 key 带重启按钮，其它报错不带", () => {
+    const linkKeys = [
+      "ui.err_socket_name",
+      "ui.err_connect",
+      "ui.err_send",
+      "ui.err_read_response",
+      "ui.err_daemon_unresponsive",
+      "ui.err_ipc_thread_spawn",
+      "ui.err_ipc_thread_exit",
+      "ui.err_not_json",
+    ];
+    for (const key of linkKeys) {
+      expect(offersServiceRestart(key)).toBe(true);
+      const m = errMessage(JSON.stringify({ key, params: { err: "Connection refused (os error 61)", path: "/tmp/x", method: "status" } }));
+      expect(m.key).toBe(key);
+      expect(m.text).toBe("Couldn't reach the background service, so this didn't finish.");
+      expect(m.text).not.toContain("os error");
+    }
+    for (const key of ["ui.err_generic", "ui.err_sidecar_missing", "ui.restart_service_failed", "ui.err_no_daemon"]) {
+      expect(offersServiceRestart(key)).toBe(false);
+    }
+    expect(t("ui.restart_service")).toBe("Restart background service");
   });
 
   it("中文环境下同一条 keyed 错误渲染成中文原文", () => {
