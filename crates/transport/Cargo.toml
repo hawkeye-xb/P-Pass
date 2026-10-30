@@ -22,7 +22,8 @@ mobile-bindgen = ["mobile-ffi", "uniffi/cli"]
 [dependencies]
 # ADR-001 / §B.1: iroh is allowed in this crate ONLY. Declared here (not in
 # workspace.dependencies) to keep the isolation visible at a glance.
-iroh = "1"
+# 下限钉到 1.1：与 Cargo.lock 一致，cargo update 不会回退到 1.0.x。
+iroh = "1.1"
 tokio = { workspace = true, features = ["rt-multi-thread", "fs", "time", "sync"] }
 tokio-util = { version = "0.7", features = ["io"] }
 # #1122：对端地址簿有上限、按最近使用淘汰（已在依赖树里）。

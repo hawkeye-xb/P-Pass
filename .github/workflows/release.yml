@@ -336,8 +336,11 @@ jobs:
           # 不会让这条缓存失效。
           key: macos-arm64-desktop-release-${{ steps.depkeys.outputs.desktop }}
 
-      - name: System codecs (libheif via brew)
-        run: brew install libheif
+      # libheif + libde265 按 tools/codec-deps.env 的固定版本从源码编（只编解码），不用 brew：
+      # brew 装到的是构建当天的版本，还连带 x265、libaom 等用不到的库。
+      - name: Codecs (libheif + libde265 from source, pinned)
+        timeout-minutes: 25
+        uses: ./.github/actions/codecs-macos
 
       # UPD-13（#660）：daemon 版本戳不再等于 tag —— 正式 tag 用**桌面线自己的
       # 版本号**（release/versions.json），test tag 仍用 tag 名（test.8 必须能
@@ -345,6 +348,11 @@ jobs:
       - name: Resolve desktop version (UPD-13)
         id: ppf_ver
         run: echo "name=$(tools/release-version.sh desktop)" >> "$GITHUB_OUTPUT"
+
+      # libheif-sys 的构建脚本输出（链接到哪个 libheif）缓存在 target/ 里，库换了它不一定重跑；
+      # 先清掉它，让它按这次的库重新探测。
+      - name: Clean libheif-sys build-script cache
+        run: cargo clean --release -p libheif-sys
 
       - name: Build release binaries
         env:
@@ -366,6 +374,9 @@ jobs:
           set -euo pipefail
           rm -rf /tmp/rel && mkdir -p /tmp/rel
           tools/bundle-macos.sh /tmp/rel target/release/daemon
+          # 先证明检查本身会变红（拿这份包做变异），再检查这份包。
+          tools/release/with-timeout.sh "编解码库检查反证" 300 1 -- tools/test-check-codec-libs.sh --macos /tmp/rel
+          tools/check-codec-libs.sh macos /tmp/rel
 
       - name: Install Node + pnpm (desktop build)
         run: |
@@ -507,6 +518,10 @@ jobs:
           tools/release/with-timeout.sh "stapler validate" 120 1 -- xcrun stapler validate "$DMG"
           echo "notarized=yes" >> "$GITHUB_OUTPUT"
 
+      # 对最终要发出去的 .app 再查一遍（helper 里的 lib/ 是组装时拷进去的）。
+      - name: Check codec libs in the app
+        run: tools/check-codec-libs.sh macos apps/desktop/src-tauri/target/release/bundle/macos/P-Pass.app
+
       # UPD-03: 桌面 updater 包——必须从「组装 helper + 逐层签名」之后的最终 .app
       # 现打。不能用 `pnpm tauri bundle` 自己产的那份 tar.gz：它在塞 lib/
       # 之前就生成，内容缺 lib/，打出去就是 BUILD-09 的复发（用户一更新
@@ -560,7 +575,9 @@ jobs:
   windows-x64:
     name: "Windows x64 (未签名)"
     runs-on: windows-latest
-    timeout-minutes: 60
+    # vcpkg 缓存没命中时（换了 VCPKG_PIN_SHA，或 runner 镜像与 main 上存缓存的那次不同）要冷编
+    # libheif 约 20 分钟，再加带缓存时约 30 分钟的其余步骤。
+    timeout-minutes: 80
     # Windows runner 上 `run:` 默认是 pwsh，而本 job 的脚本全是 bash 语法：2026-10-12 v0.9.12-test.12
     # 「Resolve desktop version」在 pwsh 里把 `$(tools/release-version.sh desktop)` 求成空串
     # ⇒ 外壳版本为空、构建失败；「Compute dep cache keys」同理一直算出错的缓存 key。
@@ -626,40 +643,23 @@ jobs:
           # 而本 job 不编译它们。
           key: win-x64-release-${{ steps.depkeys.outputs.root }}-${{ steps.depkeys.outputs.desktop }}
 
-      # CI-04: 缓存 vcpkg 的 installed 树。libheif + 依赖（libde265 等）从源码
-      # 编要 10-20 分钟，是整条 release 管线的**长杆**——三平台并行时其余两个
-      # 早就跑完了，草稿却要等它（验收人 2026-08-26：「那为啥有一个没跑完，
-      # 我就下载不了？」）。
-      #
-      # 只缓存 `C:/vcpkg/installed`：`--clean-after-build` 已经把 buildtrees /
-      # packages 清掉了，installed 是唯一需要留的产物（含 vcpkg/status 数据库）。
-      #
-      # **刻意不加 `if: cache-hit != 'true'` 去跳过下面那步**：命中一个不完整的
-      # 缓存树时，跳过 install 会让编译在找不到头文件时才炸，错误现场离根因很远。
-      # 让 vcpkg 无条件跑一次——已装好时它几秒内识别并早退，缓存坏了它会自己修。
-      # 缓存只负责让它快，不负责让它可以不跑。
-      #
-      # **不设 restore-keys**：半个 vcpkg 树比没有更糟，只接受精确命中。
-      # key 里的 v1 是手动失效位——triplet 或包列表变了就 +1。
-      - name: Cache vcpkg (libheif)
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: C:/vcpkg/installed
-          key: vcpkg-installed-x64-windows-static-md-libheif-v1
-
-      # libheif via vcpkg（Windows 规范路径；windows-latest 预装 C:\vcpkg）。
-      # triplet x64-windows-static-md 与 vcpkg crate 默认一致（实测 x64-windows
-      # 动态版不匹配：报 "not installed for triplet x64-windows-static-md"）。
-      # 静态链接 → 自包含 exe，发布无需带 DLL。首次从源码编 libheif+依赖
-      # （libde265 等），10-20 分钟，故 timeout 45；命中缓存后是秒级。
-      - name: Install libheif (vcpkg)
-        shell: bash
-        run: |
-          /c/vcpkg/vcpkg.exe install "libheif:x64-windows-static-md" --clean-after-build
+      # libheif（静态，vcpkg）：钉在 tools/codec-deps.env 的 vcpkg 提交，[core,libde265] 不带 x265。
+      # 安装树缓存与 ci-rust 的 test (windows) 共用同一个键：GitHub 缓存按 ref 隔离，tag 构建
+      # 只读得到 main 上存的那份，main 每次推送由 ci-rust 存。镜像版本对不上时冷编约 20 分钟。
+      - name: Install libheif (vcpkg, pinned, no HEVC encoder)
+        id: vcpkg
+        timeout-minutes: 40
+        uses: ./.github/actions/vcpkg-libheif
 
       - name: Resolve desktop version (UPD-13)
         id: ppf_ver
         run: echo "name=$(tools/release-version.sh desktop)" >> "$GITHUB_OUTPUT"
+
+      # 同 macOS：先清 libheif-sys 的构建脚本缓存（#235：vcpkg 去掉 x265 后，旧缓存仍注入
+      # x265-static，链接直接 LNK1181）。
+      - name: Clean libheif-sys build-script cache
+        shell: bash
+        run: cargo clean --release -p libheif-sys
 
       - name: Build release binaries
         shell: bash
@@ -703,6 +703,17 @@ jobs:
           pnpm tauri build --bundles nsis --config "$CONFIG"
           cd ../..
           ls -la apps/desktop/src-tauri/target/release/bundle/nsis/
+
+      # 打包后检查：libheif / libde265 版本不低于 codec-deps.env 的下限，且没有 x265 / libaom。
+      # 静态链接的 exe 里没有可靠的版本号，看 vcpkg 安装库与 libheif-sys 实际输出的链接指令。
+      - name: Check codec libs
+        shell: bash
+        run: |
+          set -euo pipefail
+          outs=()
+          for f in target/release/build/libheif-sys-*/output; do outs+=(--link-output "$f"); done
+          tools/check-codec-libs.sh windows --vcpkg-installed /c/vcpkg/installed \
+            "${outs[@]}" target/release/daemon.exe apps/desktop/src-tauri/binaries/ppf-daemon-x86_64-pc-windows-msvc.exe
 
       - name: SHA256 + notes
         shell: bash

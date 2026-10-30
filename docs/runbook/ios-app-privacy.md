@@ -46,8 +46,9 @@ Apple 对「收集」的定义：数据离开设备，并且开发者或其第�
 | UserDefaults | `CA92.1`：读写只给本 App 用的数据 | `MediaViewer.swift:421-427`（「已存回相册」的去重表）；`RootView.swift:10`、`FakeBackend.swift:15`、`PPassApp.swift:160`（截图与演示用的启动参数） |
 | 系统启动时间 | `35F9.1`：计算 App 内事件之间的时间间隔 | `FlowEngine.swift:96`、`DeliveryPort.swift:197` 的单调时钟（`systemUptime`），只用于超时与间隔，不上传 |
 | 文件时间戳 | `C617.1`：访问 App 容器内文件的时间戳、大小等元数据 | Swift：`DeviceIdentity.swift:120` 的 `attributesOfItem`（判断文件是否存在）。Rust：`libtransport.a` 引用 `stat` / `fstat` / `fstatat` / `lstat`，用于导出到容器临时目录的原图和 blobs 库的变化检测（`crates/transport/src/provider.rs`） |
+| 磁盘空间 | `E174.1`：写文件前检查空间是否足够，空间不足时 App 的行为对用户可见 | `LiveTimeline.swift` 的 `systemFreeBytes`（`volumeAvailableCapacityForImportantUsage`）：用户点开视频后、下载原片前检查剩余空间，不够就不下载并提示 |
 
-不涉及：磁盘空间（无 `statfs` / `statvfs` / `volumeAvailableCapacity`）、活动键盘。
+不涉及：活动键盘。
 `libtransport.a` 还引用了 `clock_gettime`、`sysctl`、`sysctlbyname`，它们不在 Apple 的 required-reason 列表里。
 
 PhotoKit 的 `PHAsset.creationDate` / `modificationDate` 是照片元数据，不属于文件时间戳类别。

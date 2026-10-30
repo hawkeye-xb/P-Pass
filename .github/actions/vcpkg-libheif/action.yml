@@ -1,0 +1,79 @@
+name: vcpkg-libheif
+description: >-
+  Windows：把 C:\vcpkg 钉到 tools/codec-deps.env 的 VCPKG_PIN_SHA，装静态 libheif[core,libde265]（不带 x265），
+  安装树按钉住的提交缓存。ci-rust（test / clippy windows）、release、artifacts 的 Windows job 引用。
+
+# 为什么钉提交：runner 镜像自带的 C:\vcpkg 是镜像制作当天的快照（2026-10 实测停在 libheif 1.23.6），
+# 而且不同镜像各不相同。端口版本由钉住的提交决定，升级只改 codec-deps.env。
+#
+# [core,libde265]：不带默认特性（默认的 hevc 特性 = x265 编码器，GPL），再显式加回 libde265 解码器。
+# 端口 1.23.x 起 libde265 是独立特性，只写 [core] 会装出「能开容器、解不了像素」的 libheif。
+#
+# 缓存：只缓存 C:\vcpkg\installed（--clean-after-build 已删 packages/、buildtrees/）。
+# 键含钉住的提交和 ImageVersion（编译工具链随镜像变）；不设 restore-keys，半个安装树比没有更糟。
+# 所有引用方用同一个键：GitHub 的缓存按 ref 隔离，tag 构建只能读到 main 上存的缓存，
+# 而 main 上每次推送都会跑 ci-rust 的 test (windows)，由它把这份缓存存在 main 上。
+# 镜像版本不一致时（runner 池里新旧镜像并存）会冷编，约 20 分钟。
+# 命中缓存后 install 照样跑：已装好时几秒内早退，缓存坏了它会自己修。
+#
+# 换端口或特性时，把键末尾的 -v 号加一，否则会命中旧特性的安装树（#235：vcpkg 换特性时
+# install 拒绝执行；libheif-sys 的构建脚本缓存还会继续注入 x265-static）。
+#
+# ⚠️ composite action 的每个 run 步骤都必须写 shell:；actionlint 不扫本文件。
+# Windows 的 Git Bash 没有 pkill，tools/release/with-timeout.sh 用不了；限时靠调用方给这一步写 timeout-minutes。
+
+outputs:
+  installed:
+    description: vcpkg 安装树（含 vcpkg/status，tools/check-codec-libs.sh windows 读它）
+    value: C:\vcpkg\installed
+  cache-hit:
+    description: 安装树缓存是否命中
+    value: ${{ steps.cache.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: 算缓存键
+      id: plan
+      shell: bash
+      run: |
+        set -euo pipefail
+        # 去掉 \r：Windows 检出可能把它转成 CRLF。
+        eval "$(tr -d '\r' < tools/codec-deps.env)"
+        : "${VCPKG_PIN_SHA:?codec-deps.env 缺 VCPKG_PIN_SHA}"
+        # 不用 `${{ env.ImageVersion }}`：env 上下文只含 workflow 里声明的变量，镜像自己的环境变量
+        # 读不到，会静默变成空串、键退化成常量。在 bash 里 $ImageVersion 才读得到。
+        key="vcpkg-libheif-core-libde265-x64-windows-static-md-${VCPKG_PIN_SHA:0:12}-${ImageVersion:-unknown}-v3"
+        echo "vcpkg cache key = $key"
+        { echo "key=$key"; echo "pin=$VCPKG_PIN_SHA"; } >> "$GITHUB_OUTPUT"
+
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      id: cache
+      with:
+        path: C:\vcpkg\installed
+        key: ${{ steps.plan.outputs.key }}
+
+    - name: 钉 vcpkg 提交
+      shell: bash
+      env:
+        PIN: ${{ steps.plan.outputs.pin }}
+      run: |
+        set -euo pipefail
+        echo "镜像自带：$(git -C /c/vcpkg rev-parse HEAD)"
+        git -C /c/vcpkg fetch --depth=1 origin "$PIN"
+        git -C /c/vcpkg checkout --force "$PIN"
+        (cd /c/vcpkg && cmd //c bootstrap-vcpkg.bat -disableMetrics)
+        echo "vcpkg pinned at $(git -C /c/vcpkg rev-parse HEAD)"
+
+    - name: 装 libheif（静态，不带 HEVC 编码器）
+      shell: bash
+      run: |
+        set -euo pipefail
+        echo "cache-hit = ${{ steps.cache.outputs.cache-hit }}"
+        start=$(date +%s)
+        /c/vcpkg/vcpkg.exe install "libheif[core,libde265]:x64-windows-static-md" --clean-after-build
+        echo "VCPKG_INSTALL_SECONDS=$(( $(date +%s) - start ))"
+        # vcpkg list 也会把 installed/vcpkg/updates/ 并进 status（check-codec-libs.sh 两处都读，不依赖它）。
+        /c/vcpkg/vcpkg.exe list
+        test -f /c/vcpkg/installed/x64-windows-static-md/lib/libde265.lib \
+          || { echo "::error::libde265.lib missing — libheif was installed without the libde265 feature (no HEVC decoder)"; exit 1; }

@@ -212,6 +212,9 @@
 "back" = "Back";
 "video_loading" = "Getting the video from your computer… %1$ld%%";
 "video_failed" = "Couldn't get the video. Try again.";
+"video_play_size" = "Play (%1$@)";
+"video_no_space" = "Not enough free storage on this phone to download this video.";
+"preview_unavailable" = "Preview not available";
 "save_to_gallery" = "Save to Photos";
 "open_with_app" = "Open with…";
 "saved_to_gallery" = "Saved to Photos";

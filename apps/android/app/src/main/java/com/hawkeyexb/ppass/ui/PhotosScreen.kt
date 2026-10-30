@@ -7,7 +7,6 @@ package com.hawkeyexb.ppass.ui
 import com.hawkeyexb.ppass.log.PLog
 import com.hawkeyexb.ppass.backup.MediaAccess
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.util.Base64
 import android.util.LruCache
 import androidx.activity.compose.BackHandler
@@ -214,7 +213,7 @@ class TimelineLoader(
         if (!resp.ok) return null
         val data = ProtoJson.decodeFromJsonElement(ThumbData.serializer(), resp.result!!)
         val bytes = Base64.decode(data.jpegBase64, Base64.DEFAULT)
-        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return null
+        val bmp = decodeDesktopThumb(bytes, hash, size.px) ?: return null
         thumbCache.put(key, bmp)
         return bmp
     }
@@ -627,10 +626,13 @@ private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, isMine: Boolea
     // LINT-01: ProduceStateDoesNotAssignValue 误报——本函数确实在
     // producer lambda 顶层赋值了一次（`value = ...`），lint 对
     // `?:` 兜底表达式的赋值路径分析仍然把它标记为“未赋值”。
+    // 两档都取不到（含预检不合格被拒）时显示占位文案，不再一直停在「正在读取」。
+    var previewMissing by remember(asset.hash) { mutableStateOf(false) }
     @Suppress("ProduceStateDoesNotAssignValue")
     val bmp by produceState<Bitmap?>(initialValue = null, asset.hash) {
         value = runCatching { loader.thumb(asset.hash, ThumbSize.S1024) }.getOrNull()
             ?: thumbCache.get("${asset.hash}/256")
+        previewMissing = value == null
     }
     // Telephoto 处理缩放后的平移和与 Pager 的 nested scrolling 协商：图片放大后
     // 水平拖动留在图片本身，未放大时剩余的横向手势才交给 HorizontalPager。
@@ -765,7 +767,10 @@ private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, isMine: Boolea
                     contentScale = ContentScale.Fit,
                 )
             } else {
-                Text(stringResource(R.string.photos_loading), color = PPColor.PaperDim, fontSize = 16.sp)
+                Text(
+                    stringResource(if (previewMissing) R.string.preview_unavailable else R.string.photos_loading),
+                    color = PPColor.PaperDim, fontSize = 16.sp,
+                )
             }
         }
         // RET-01: 取回=使用动作——保存到相册 / 用其他应用打开。
@@ -805,19 +810,25 @@ internal fun ViewerAction(
     enabled: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    leadingIcon: androidx.compose.ui.graphics.vector.ImageVector? = null,
+    height: androidx.compose.ui.unit.Dp = 44.dp,
 ) {
-    Box(
+    Row(
         modifier
-            .height(44.dp)
+            .height(height)
             .clip(RoundedCornerShape(999.dp))
             .background(if (enabled) PPColor.Paper else PPColor.PaperDim.copy(alpha = 0.35f))
-            .clickable(enabled = enabled, onClick = onClick),
-        contentAlignment = Alignment.Center,
+            .clickable(enabled = enabled, onClick = onClick)
+            .padding(horizontal = 20.dp),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            label, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
-            color = if (enabled) PPColor.Ink else PPColor.PaperDim,
-        )
+        val tint = if (enabled) PPColor.Ink else PPColor.PaperDim
+        if (leadingIcon != null) {
+            androidx.compose.material3.Icon(leadingIcon, contentDescription = null, tint = tint)
+            Spacer(Modifier.size(6.dp))
+        }
+        Text(label, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = tint)
     }
 }
 

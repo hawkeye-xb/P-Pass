@@ -51,6 +51,16 @@ pub(crate) const THUMB_RETRY_AFTER: Duration = Duration::from_secs(10 * 60);
 /// keeps the table bounded without a background sweeper.
 const THUMB_GATE_PRUNE_AT: usize = 4096;
 
+/// How many `thumb.get`-owned generations may run at once. The budget only
+/// bounds how long a request waits: a generation past it keeps its thread
+/// (and the decoder keeps its CPU) until it returns on its own. Without a
+/// cap, every distinct slow file would add one more busy blocking thread.
+/// A request that finds every slot taken answers the placeholder at once
+/// and does not reserve the hash, so it is retried as soon as it is asked
+/// again. Pre-generation has its own fixed-size pool and is not counted
+/// here; the two together bound how many thumbnails decode at once.
+pub(crate) const THUMB_FOREGROUND_MAX: usize = 4;
+
 /// The thumbnail generator `thumb.get` (and the pre-generation pool) calls.
 /// Production is always `media_codec::make_thumbs`; the indirection exists
 /// so contract tests can count invocations and inject slow / failing
@@ -103,14 +113,14 @@ pub(crate) struct ThumbGate {
     /// pool's threads are low priority, but a video's ffmpeg / qlmanage
     /// child process is not, so yielding is the only real lever.
     foreground: tokio::sync::watch::Sender<usize>,
+    /// [`THUMB_FOREGROUND_MAX`] permits; a `thumb.get` generation holds one
+    /// from reservation until its blocking task has actually returned.
+    generations: Arc<tokio::sync::Semaphore>,
 }
 
 impl Default for ThumbGate {
     fn default() -> Self {
-        Self {
-            slots: Mutex::default(),
-            foreground: tokio::sync::watch::Sender::new(0),
-        }
+        Self::with_generation_cap(THUMB_FOREGROUND_MAX)
     }
 }
 
@@ -148,17 +158,50 @@ pub(crate) enum Plan {
         started: Instant,
         tx: tokio::sync::watch::Sender<bool>,
         done: tokio::sync::watch::Receiver<bool>,
+        /// `thumb.get` only (see [`ThumbGate::plan_foreground`]).
+        permit: Option<tokio::sync::OwnedSemaphorePermit>,
     },
 }
 
 impl ThumbGate {
+    pub(crate) fn with_generation_cap(cap: usize) -> Self {
+        Self {
+            slots: Mutex::default(),
+            foreground: tokio::sync::watch::Sender::new(0),
+            generations: Arc::new(tokio::sync::Semaphore::new(cap)),
+        }
+    }
+
     /// Resolves once no `thumb.get`-owned generation is running.
     pub(crate) async fn foreground_idle(&self) {
         let mut rx = self.foreground.subscribe();
         let _ = rx.wait_for(|n| *n == 0).await;
     }
 
+    /// Pre-generation's entry: its pool bounds its own concurrency.
     pub(crate) fn plan(&self, hash: &[u8; 32], budget: Duration, retry_after: Duration) -> Plan {
+        self.plan_inner(hash, budget, retry_after, false)
+    }
+
+    /// `thumb.get`'s entry: a `Spawn` also carries a generation permit, taken
+    /// under the same lock that reserves the slot, so a full cap never leaves
+    /// a reserved slot behind for joiners to wait on.
+    pub(crate) fn plan_foreground(
+        &self,
+        hash: &[u8; 32],
+        budget: Duration,
+        retry_after: Duration,
+    ) -> Plan {
+        self.plan_inner(hash, budget, retry_after, true)
+    }
+
+    fn plan_inner(
+        &self,
+        hash: &[u8; 32],
+        budget: Duration,
+        retry_after: Duration,
+        foreground: bool,
+    ) -> Plan {
         let mut slots = self.slots.lock().unwrap_or_else(|p| p.into_inner());
         match slots.get(hash) {
             Some(Slot::Failed { at }) if at.elapsed() < retry_after => {
@@ -184,6 +227,19 @@ impl ThumbGate {
             }
             _ => {}
         }
+        let permit = if foreground {
+            match Arc::clone(&self.generations).try_acquire_owned() {
+                Ok(p) => Some(p),
+                // Every slot is busy: nothing is reserved, ask again later.
+                Err(_) => {
+                    return Plan::Placeholder {
+                        retry_after: budget,
+                    }
+                }
+            }
+        } else {
+            None
+        };
         let started = Instant::now();
         let (tx, done) = tokio::sync::watch::channel(false);
         slots.insert(
@@ -193,7 +249,12 @@ impl ThumbGate {
                 done: done.clone(),
             },
         );
-        Plan::Spawn { started, tx, done }
+        Plan::Spawn {
+            started,
+            tx,
+            done,
+            permit,
+        }
     }
 
     /// Close out a generation: a failure becomes a negative record,
@@ -416,21 +477,26 @@ impl QueryEngine {
         // slot (`Plan::Spawn`) and `spawn_generation`: a request dropped
         // there (connection closed) would leave the slot InFlight with no
         // owner, wedging the hash on the placeholder until restart.
-        let (gen_started, mut done) = match self.gate.plan(&hash, self.budget, self.retry_after) {
-            Plan::Placeholder { retry_after } => {
-                self.record_first_byte(started, "thumb");
-                return Ok(placeholder(retry_after));
-            }
-            Plan::Wait { started, done } => (started, done),
-            Plan::Spawn {
-                started: gen_started,
-                tx,
-                done,
-            } => {
-                self.spawn_generation(hash, src, tx);
-                (gen_started, done)
-            }
-        };
+        let (gen_started, mut done) =
+            match self
+                .gate
+                .plan_foreground(&hash, self.budget, self.retry_after)
+            {
+                Plan::Placeholder { retry_after } => {
+                    self.record_first_byte(started, "thumb");
+                    return Ok(placeholder(retry_after));
+                }
+                Plan::Wait { started, done } => (started, done),
+                Plan::Spawn {
+                    started: gen_started,
+                    tx,
+                    done,
+                    permit,
+                } => {
+                    self.spawn_generation(hash, src, tx, permit);
+                    (gen_started, done)
+                }
+            };
 
         // Bounded wait on the shared deadline (the generation's start, not
         // this request's): joiners never stretch the 5 s promise.
@@ -460,7 +526,13 @@ impl QueryEngine {
     /// budget), failures land in the negative cache, and every failure or
     /// budget overrun is a WARN carrying hash prefix and reason — before
     /// this, thumbnail generation logged nothing at all.
-    fn spawn_generation(&self, hash: [u8; 32], src: PathBuf, tx: tokio::sync::watch::Sender<bool>) {
+    fn spawn_generation(
+        &self,
+        hash: [u8; 32],
+        src: PathBuf,
+        tx: tokio::sync::watch::Sender<bool>,
+        permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    ) {
         let db = self.db.clone();
         let gate = Arc::clone(&self.gate);
         let generator = Arc::clone(&self.generator);
@@ -471,6 +543,9 @@ impl QueryEngine {
         let foreground = ForegroundGuard::new(&self.gate);
         tokio::spawn(async move {
             let _foreground = foreground;
+            // Released only after the blocking task has returned — an
+            // over-budget generation keeps occupying its slot.
+            let _permit = permit;
             let prefix = hash_prefix(&hash);
             let root = thumbs_root.clone();
             let mut handle = tokio::task::spawn_blocking(move || generator(&hash, &src, &root));
@@ -926,6 +1001,101 @@ mod tests {
             "{N} concurrent thumb.get for one hash must run the generator once"
         );
         assert_eq!(thumb_state(&f, &VIDEO_A).await, 1);
+    }
+
+    /// Blocks every call on `release` and records the peak number of calls
+    /// in flight at once. Succeeds (writes real thumbs) once released.
+    fn held_counting_gen(
+        calls: Arc<AtomicUsize>,
+        peak: Arc<AtomicUsize>,
+        release: std::sync::mpsc::Receiver<()>,
+    ) -> ThumbGen {
+        let running = Arc::new(AtomicUsize::new(0));
+        let release = std::sync::Mutex::new(release);
+        Arc::new(move |hash: &[u8; 32], _src: &Path, root: &Path| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+            peak.fetch_max(now, Ordering::SeqCst);
+            let _ = release.lock().unwrap().recv();
+            running.fetch_sub(1, Ordering::SeqCst);
+            let paths = media_codec::thumb_paths(root, hash);
+            std::fs::create_dir_all(paths.t256.parent().unwrap()).unwrap();
+            std::fs::write(&paths.t256, b"REAL-256").unwrap();
+            std::fs::write(&paths.t1024, b"REAL-1024").unwrap();
+            media_codec::ThumbResult {
+                paths,
+                outcome: media_codec::ThumbOutcome::Generated,
+            }
+        })
+    }
+
+    async fn wait_calls(calls: &AtomicUsize, n: usize) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while calls.load(Ordering::SeqCst) < n {
+            assert!(Instant::now() < deadline, "generation {n} never started");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn thumb_get_generations_never_exceed_the_concurrency_cap() {
+        // CAP generations are held past the budget (a decode that does not
+        // return). Further misses on other hashes must not start more: they
+        // answer the placeholder at once, reserve nothing, and generate
+        // normally once a slot frees up.
+        const CAP: usize = 2;
+        const HASHES: [[u8; 32]; 5] = [[0x11; 32], [0x22; 32], [0x33; 32], [0x44; 32], [0x55; 32]];
+        let calls = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let (release, release_rx) = std::sync::mpsc::channel::<()>();
+        let budget = Duration::from_secs(1);
+        let mut f = fixture(
+            held_counting_gen(Arc::clone(&calls), Arc::clone(&peak), release_rx),
+            budget,
+            Duration::from_secs(3600),
+            &HASHES,
+        )
+        .await;
+        f.engine.gate = Arc::new(ThumbGate::with_generation_cap(CAP));
+
+        for (i, h) in HASHES[..CAP].iter().enumerate() {
+            let reply = f.engine.thumb_reply(&get(h)).await.unwrap();
+            assert!(reply.placeholder, "held generation answers by the budget");
+            wait_calls(&calls, i + 1).await;
+        }
+        for h in &HASHES[CAP..] {
+            let reply =
+                tokio::time::timeout(Duration::from_secs(10), f.engine.thumb_reply(&get(h)))
+                    .await
+                    .expect("a full cap answers at once")
+                    .unwrap();
+            assert!(reply.placeholder);
+            assert_eq!(
+                reply.retry_after, budget,
+                "busy: ask again after one budget"
+            );
+        }
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            CAP,
+            "no generation may start while {CAP} are still running"
+        );
+        assert_eq!(peak.load(Ordering::SeqCst), CAP);
+
+        // Free the held ones; the rejected hashes were not negative-cached.
+        for _ in 0..CAP {
+            release.send(()).unwrap();
+        }
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while f.engine.gate.generations.available_permits() < CAP {
+            assert!(Instant::now() < deadline, "permits never came back");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        drop(release); // later generations run straight through
+        let reply = f.engine.thumb_reply(&get(&HASHES[CAP])).await.unwrap();
+        assert_eq!(reply.bytes, b"REAL-256", "a rejected hash generates later");
+        assert_eq!(calls.load(Ordering::SeqCst), CAP + 1);
+        assert!(peak.load(Ordering::SeqCst) <= CAP);
     }
 
     /// #613: a generator that cannot finish until the test says so — the

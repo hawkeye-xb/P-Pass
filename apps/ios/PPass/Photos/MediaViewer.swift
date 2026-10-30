@@ -5,8 +5,8 @@ import SwiftUI
 
 /// 查看器（对位 Android MediaViewer / VideoScreen；iOS 形态对齐「照片」App）：系统背景色，左右滑翻页
 /// （页序 = 打开时的筛选结果快照）。导航栏：左上关闭、标题 = 归属行、副标题 = 「宽×高」；
-/// 底部系统工具栏：保存到相册 / 分享（点了才按需取原图）。视频页：先取原图（显示进度）再播放，
-/// 失败说「视频没取到」。保存结果用材质 toast 提示。
+/// 底部系统工具栏：保存到相册 / 分享（点了才按需取原图）。视频页：只显示封面和标着文件大小的播放按钮，
+/// 点了才取原图（显示进度）、取完才播放；失败说「视频没取到」。保存结果用材质 toast 提示。
 struct MediaViewer: View {
     let session: ViewerSession
     let timeline: TimelineSource
@@ -153,25 +153,78 @@ struct MediaViewer: View {
     }
 }
 
+/// 视频页的取回与播放（对位 Android `VideoPlayback`）：建出来只有封面，用户点了播放（[play]）才取原图。
+/// 取回前的大小 / 空间检查和超过声明大小即中止都在 `LiveTimeline.original` 里，保存 / 分享视频同样经过。
+@MainActor
+final class VideoPlaybackModel: ObservableObject {
+    enum Phase: Equatable { case cover, fetching(Double), ready(URL), noRoom, failed }
+
+    @Published private(set) var phase: Phase = .cover
+    private let item: TimelineItem
+    private let timeline: TimelineSource
+    private var task: Task<Void, Never>?
+
+    init(item: TimelineItem, timeline: TimelineSource) {
+        self.item = item
+        self.timeline = timeline
+    }
+
+    /// 用户点了播放。正在取或已就绪时忽略重复点击。
+    func play() {
+        guard task == nil else { return }
+        if case .ready = phase { return }
+        AppLog.log("viewer video play tapped")
+        phase = .fetching(0)
+        task = Task { await fetch() }
+    }
+
+    /// 翻走 / 关闭：取消还在进行的取回，回到封面。
+    func stop() {
+        task?.cancel()
+        task = nil
+        if case .fetching = phase { phase = .cover }
+    }
+
+    private func fetch() async {
+        defer { task = nil }
+        do {
+            let url = try await timeline.original(item) { p in
+                Task { @MainActor [weak self] in
+                    guard let self, case .fetching = self.phase else { return }
+                    self.phase = .fetching(p)
+                }
+            }
+            try Task.checkCancellation()
+            phase = .ready(url)
+            AppLog.log("viewer video fetched, playing")
+        } catch is CancellationError {
+            if case .fetching = phase { phase = .cover }
+        } catch LiveTimeline.Failure.noRoom {
+            phase = .noRoom // 原因已由 original() 记进日志
+        } catch {
+            AppLog.log("viewer video failed: \(LiveTimeline.category(error))")
+            phase = .failed
+        }
+    }
+}
+
 private struct ViewerPage: View {
     let item: TimelineItem
     let timeline: TimelineSource
-    /// 当前页才取视频原图：邻页只预备缩略图，左右滑一下不会静默下载整段视频（Android 同）。
+    /// 翻离视频页时取消还在进行的取回（Android 同：页面离开即取消）。
     var active = true
     var onZoom: (Bool) -> Void = { _ in }
     @State private var image: UIImage?
     @State private var photoError: String?
-    @State private var video: VideoState
-
-    enum VideoState: Equatable { case fetching(Double), ready(URL), failed }
+    @State private var photoRejected = false
+    @StateObject private var video: VideoPlaybackModel
 
     init(item: TimelineItem, timeline: TimelineSource, active: Bool = true, onZoom: @escaping (Bool) -> Void = { _ in }) {
         self.item = item
         self.timeline = timeline
         self.active = active
         self.onZoom = onZoom
-        // 已缓存的视频直接就绪：滑回来不再从 0 开始、进度条不会再跳。
-        _video = State(initialValue: timeline.cachedOriginal(item).map(VideoState.ready) ?? .fetching(0))
+        _video = StateObject(wrappedValue: VideoPlaybackModel(item: item, timeline: timeline))
     }
 
     var body: some View {
@@ -179,7 +232,8 @@ private struct ViewerPage: View {
             if item.isVideo { videoBody } else { photoBody }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .task(id: "\(item.id)-\(active)") { await load() }
+        .task(id: item.id) { await load() }
+        .onChange(of: active) { now in if !now { video.stop() } }
     }
 
     @ViewBuilder private var photoBody: some View {
@@ -189,7 +243,7 @@ private struct ViewerPage: View {
             // 原始错误只进日志（load() 里已记），界面只说人话（tokens.json rules：报错不出现代码）。
             VStack(spacing: 10) {
                 Image(systemName: "photo").font(.largeTitle).foregroundStyle(PPColor.paperDim)
-                Text(L.s("photos_unreachable")).font(PPFont.body).foregroundStyle(PPColor.paperDim).padding(.horizontal, 24)
+                Text(L.s(photoRejected ? "preview_unavailable" : "photos_unreachable")).font(PPFont.body).foregroundStyle(PPColor.paperDim).padding(.horizontal, 24)
             }
         } else {
             ProgressView().tint(PPColor.paperDim)
@@ -197,7 +251,7 @@ private struct ViewerPage: View {
     }
 
     @ViewBuilder private var videoBody: some View {
-        switch video {
+        switch video.phase {
         case .fetching(let p):
             VStack(spacing: 12) {
                 PPProgressBar(value: p, total: 1, tint: PPColor.paper, track: PPColor.paperDim.opacity(0.3)).frame(maxWidth: 220)
@@ -205,31 +259,57 @@ private struct ViewerPage: View {
             }
         case .ready(let url):
             InlineVideo(url: url)
-        case .failed:
-            VStack(spacing: 10) {
-                Image(systemName: "video.slash").font(.largeTitle).foregroundStyle(PPColor.paperDim)
-                Text(L.s("video_failed")).font(PPFont.body).foregroundStyle(PPColor.paperDim)
-            }
+        case .cover, .noRoom, .failed:
+            VideoCover(image: image, bytes: item.bytes, notice: coverNotice, onPlay: video.play)
         }
     }
 
+    private var coverNotice: String? {
+        switch video.phase {
+        case .noRoom: return L.s("video_no_space")
+        case .failed: return L.s("video_failed")
+        default: return nil
+        }
+    }
+
+    /// 照片取预览，视频取封面——都是电脑生成的缩略图，不取原片。
     private func load() async {
-        if item.isVideo {
-            guard active else { return }
-            if case .ready = video { return }
-            do {
-                let url = try await timeline.original(item) { p in Task { @MainActor in video = .fetching(p) } }
-                video = .ready(url)
-            } catch is CancellationError {
-                return // 划走 / 关闭：任务被取消，不当作失败
-            } catch { video = .failed }
-        } else {
-            // 同 Android：1024 取不到时退回网格里已缓存的 256，都没有才报失败（并写明原因）。
-            do { image = try await timeline.thumbnail(item, large: true) } catch {
-                AppLog.log("viewer 1024 thumb failed: \(error)")
-                do { image = try await timeline.thumbnail(item, large: false) } catch {
-                    AppLog.log("viewer 256 thumb failed: \(error)")
-                    photoError = String(String(describing: error).prefix(160))
+        // 同 Android：1024 取不到时退回网格里已缓存的 256，都没有才报失败（并写明原因）。
+        do { image = try await timeline.thumbnail(item, large: true) } catch {
+            AppLog.log("viewer 1024 thumb failed: \(LiveTimeline.category(error))")
+            do { image = try await timeline.thumbnail(item, large: false) } catch {
+                AppLog.log("viewer 256 thumb failed: \(LiveTimeline.category(error))")
+                photoRejected = error is DesktopThumb.Rejection
+                photoError = String(String(describing: error).prefix(160))
+            }
+        }
+    }
+}
+
+/// 视频页的初始样子（对位 Android `VideoCover`）：封面 + 居中的播放按钮，按钮上是原片大小。没点之前只有这些。
+private struct VideoCover: View {
+    let image: UIImage?
+    let bytes: Int64?
+    let notice: String?
+    let onPlay: () -> Void
+
+    var body: some View {
+        ZStack {
+            if let image {
+                Image(uiImage: image).resizable().scaledToFit()
+            }
+            VStack(spacing: 12) {
+                Button(action: onPlay) {
+                    Label(L.f("video_play_size", ByteCountFormatter.string(fromByteCount: max(bytes ?? 0, 0), countStyle: .file)),
+                          systemImage: "play.fill")
+                        .frame(minHeight: PPSize.tapMin)
+                }
+                .buttonStyle(PPChipButtonStyle())
+                if let notice {
+                    Text(notice).font(PPFont.body).foregroundStyle(PPColor.paper).multilineTextAlignment(.center)
+                        .padding(.horizontal, 12).padding(.vertical, 8)
+                        .background(PPColor.surfaceDark.opacity(0.8), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .padding(.horizontal, 24)
                 }
             }
         }

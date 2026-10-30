@@ -128,6 +128,8 @@ windows = { version = "0.62", features = [
 ] }
 
 [dev-dependencies]
+# udp_recv_truncated：iroh 底层收包（noq-udp，经根 Cargo.toml 的 [patch] 用 third_party 那份）。
+noq-udp = "1.4"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "io-util"] }
 # fsevents_shapes 集成测试（macOS 目录监听平台行为实测）：直接驱动 notify。
 notify = "7"

@@ -1,5 +1,6 @@
 // T-056: video playback — fetch the original via asset.blob_ticket + the shared fetch_blob
-// into the cache dir, then play it in-app. MOB-47 upgraded the MVP:
+// into the cache dir, then play it in-app. The page opens on the cover and a play button
+// labelled with the file size; nothing is fetched until that button is tapped (VideoPlayback). MOB-47 upgraded the MVP:
 // the system `VideoView` is replaced by the official Media3 ExoPlayer /
 // PlayerView, which ships real playback controls (play/pause, progress
 // bar, seek) and error state, and is released on dispose so nothing leaks.
@@ -9,6 +10,17 @@
 package com.hawkeyexb.ppass.ui
 
 import android.net.Uri
+import android.graphics.Bitmap
+import android.text.format.Formatter
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.runtime.collectAsState
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import com.hawkeyexb.ppass.proto.ThumbSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,16 +52,9 @@ import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import com.hawkeyexb.ppass.R
-import com.hawkeyexb.ppass.log.PLog
 import com.hawkeyexb.ppass.proto.AssetMeta
 import java.io.File
 import kotlinx.coroutines.launch
-
-sealed class VideoState {
-    data class Fetching(val percent: Int) : VideoState()
-    data class Ready(val file: File) : VideoState()
-    data object Failed : VideoState()
-}
 
 /** RET-01/MOB-06: 查看页可用动作——保存到相册 / 用其他应用打开 / 分享。 */
 private enum class VideoOp { Save, OpenWith, Share }
@@ -62,29 +67,22 @@ fun VideoScreen(
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
-    // MOB-115: 命中缓存要求长度 == asset.bytes（截断的旧缓存会被删掉重下）；
-    // 下载层断流/内容不符直接抛错，不会留下缓存文件，也就不会进 Ready。
-    // LINT-01: ProduceStateDoesNotAssignValue 误报——`value = try { … }` 在
-    // 每条路径（命中/下载成功/失败）都赋值，lint 的静态检查看不穿 try 表达式。
+    // 翻到这一页只建状态机、取封面，不下载；点了播放才走 [VideoPlayback.play]。
+    // MOB-115: 命中缓存要求长度 == asset.bytes（截断的旧缓存会被删掉重下）。
+    val playback = remember(asset.hash) {
+        VideoPlayback(
+            tag = asset.hash.take(16),
+            declared = asset.bytes,
+            cache = File(context.cacheDir, "video-${asset.hash.take(16)}.mp4"),
+            freeBytes = { allocatableCacheBytes(context) },
+            download = { dest, onProgress -> loader.download(asset.hash, dest, asset.bytes, onProgress) },
+        )
+    }
+    val state by playback.phase.collectAsState()
+    // 封面 = 电脑生成的 1024 缩略图（与照片同一条 JPEG 预检），取不到退回网格里的 256。
     @Suppress("ProduceStateDoesNotAssignValue")
-    val state by produceState<VideoState>(VideoState.Fetching(0), asset.hash) {
-        val cache = File(context.cacheDir, "video-${asset.hash.take(16)}.mp4")
-        value = try {
-            fetchOriginalCached(cache, asset.bytes) { dest ->
-                loader.download(asset.hash, dest, asset.bytes) { got, total ->
-                    if (total > 0) {
-                        value = VideoState.Fetching((got * 100 / total).toInt())
-                    }
-                }
-            }
-            VideoState.Ready(cache)
-        } catch (e: kotlin.coroutines.cancellation.CancellationException) {
-            throw e
-        } catch (e: Throwable) {
-            PLog.w("PPassVideo", "video ${asset.hash.take(16)} fetch failed", e)
-            cache.delete()
-            VideoState.Failed
-        }
+    val cover by produceState<Bitmap?>(initialValue = thumbCache.get("${asset.hash}/256"), asset.hash) {
+        runCatching { loader.thumb(asset.hash, ThumbSize.S1024) }.getOrNull()?.let { value = it }
     }
     // RET-01: 取回=使用动作——视频 Ready 后同样可保存到相册 / 用其他
     // 应用打开（播放缓存文件即用即清，cacheDir 语义由系统兜底）。
@@ -94,7 +92,7 @@ fun VideoScreen(
 
     fun runAssetAction(op: VideoOp) {
         if (busy) return
-        val ready = state as? VideoState.Ready ?: return
+        val ready = state as? VideoPhase.Ready ?: return
         busy = true
         notice = null
         scope.launch {
@@ -153,7 +151,7 @@ fun VideoScreen(
                     tint = PPColor.Paper,
                     modifier = Modifier
                         .clickable(
-                            enabled = !busy && state is VideoState.Ready,
+                            enabled = !busy && state is VideoPhase.Ready,
                             onClick = { runAssetAction(VideoOp.Share) },
                         )
                         .padding(10.dp),
@@ -172,23 +170,29 @@ fun VideoScreen(
                 contentAlignment = Alignment.Center,
             ) {
                 when (val s = state) {
-                    is VideoState.Fetching -> Text(
+                    is VideoPhase.Fetching -> Text(
                         stringResource(R.string.video_loading, s.percent),
-                        color = PPColor.PaperDim, fontSize = 16.sp,
-                    )
-                    is VideoState.Failed -> Text(
-                        stringResource(R.string.video_failed),
                         color = PPColor.PaperDim, fontSize = 16.sp,
                     )
                     // MOB-47: 播放器层换 Media3 ExoPlayer/PlayerView——
                     // PlayerView 自带播放/暂停/进度条/seek/错误态，播放器在
                     // onDispose 里 release，退出查看器不泄漏（logcat 无
                     // MediaCodec/ExoPlayer 泄漏即验收项）。
-                    is VideoState.Ready -> VideoPlayer(s.file)
+                    is VideoPhase.Ready -> VideoPlayer(s.file)
+                    else -> VideoCover(
+                        cover = cover,
+                        sizeLabel = Formatter.formatShortFileSize(context, asset.bytes.coerceAtLeast(0)),
+                        notice = when (s) {
+                            VideoPhase.NoRoom -> stringResource(R.string.video_no_space)
+                            VideoPhase.Failed -> stringResource(R.string.video_failed)
+                            else -> null
+                        },
+                        onPlay = { scope.launch { playback.play() } },
+                    )
                 }
             }
             // RET-01: 视频 Ready 才显示动作（未取到前无原图可存/可开）。
-            if (state is VideoState.Ready) {
+            if (state is VideoPhase.Ready) {
                 notice?.let {
                     Text(
                         it, fontSize = 13.sp, color = PPColor.PaperDim,
@@ -213,6 +217,39 @@ fun VideoScreen(
                         modifier = Modifier.weight(1f),
                     )
                 }
+            }
+        }
+    }
+}
+
+/** 视频页的初始样子：封面 + 居中的播放按钮（按钮上是原片大小）。没下载前只有这些。 */
+@Composable
+private fun VideoCover(cover: Bitmap?, sizeLabel: String, notice: String?, onPlay: () -> Unit) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        if (cover != null) {
+            Image(
+                bitmap = cover.asImageBitmap(), contentDescription = null,
+                modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit,
+            )
+        }
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            ViewerAction(
+                label = stringResource(R.string.video_play_size, sizeLabel),
+                enabled = true,
+                onClick = onPlay,
+                leadingIcon = Icons.Filled.PlayArrow,
+                height = PPSize.TapMin,
+            )
+            notice?.let {
+                Text(
+                    it, fontSize = 15.sp, color = PPColor.Paper,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    modifier = Modifier
+                        .padding(top = 12.dp, start = 24.dp, end = 24.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(PPColor.SurfaceDark.copy(alpha = 0.8f))
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                )
             }
         }
     }
