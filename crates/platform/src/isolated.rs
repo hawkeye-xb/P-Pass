@@ -5,7 +5,9 @@
 //!
 //! - Windows：AppContainer（不授任何 capability）+ Job（关闭即杀、禁子进程、
 //!   单进程内存上限）+ win32k lockdown + 句柄白名单，见 `isolated_windows.rs`。
-//! - 其他平台（含 macOS）：暂无隔离，普通子进程；[`IsolatedChild::isolation`]
+//! - macOS：Seatbelt（`/usr/bin/sandbox-exec` + deny-default 的 SBPL：不联网、
+//!   不读用户与密钥目录、不建子进程）+ 内存看门狗，见 `isolated_unix.rs`。
+//! - 其他 unix：暂无隔离，普通子进程；[`IsolatedChild::isolation`]
 //!   如实报告 [`Isolation::None`]。
 //!
 //! 拉起失败一律返回 `Err`，**不回退成不隔离的拉起**：调用方据此判定「本机沙箱
@@ -27,12 +29,15 @@ pub enum Isolation {
     None,
     /// Windows AppContainer + Job。
     AppContainer,
+    /// macOS Seatbelt（deny-default）+ 内存看门狗。
+    Seatbelt,
 }
 
 /// 资源上限。
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
-    /// 子进程内存上限（字节）。Windows 由 Job 强制；其他平台暂不强制。
+    /// 子进程内存上限（字节）。Windows 由 Job 强制；macOS 由看门狗轮询物理占用、超限即杀
+    /// （Darwin 不执行 RLIMIT_AS）；其他平台暂不强制。
     pub memory_bytes: u64,
 }
 
