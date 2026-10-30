@@ -48,6 +48,8 @@ public actor FlowEngine {
     private let picked: PickedStore?
     /// #1272：App 此刻在前台。手选只在前台传（itemProvider 只在进程存活期间有效，不复制进 App 空间）。
     private let isForeground: @Sendable () -> Bool
+    /// #1272 B：「自动备份」规则开关。关着 = 自动备份那一支不跑，只跑手选。
+    private let autoRuleEnabled: @Sendable () -> Bool
 
     // MARK: 状态（只在 actor 上读写）
 
@@ -104,7 +106,8 @@ public actor FlowEngine {
         onPairingIdAdvertised: @escaping @Sendable (String) -> Void,
         onView: @escaping @Sendable (EngineView) -> Void = { _ in },
         picked: PickedStore? = nil,
-        isForeground: @escaping @Sendable () -> Bool = { true }
+        isForeground: @escaping @Sendable () -> Bool = { true },
+        autoRuleEnabled: @escaping @Sendable () -> Bool = { true }
     ) {
         self.store = store
         self.media = media
@@ -127,6 +130,7 @@ public actor FlowEngine {
         self.onView = onView
         self.picked = picked
         self.isForeground = isForeground
+        self.autoRuleEnabled = autoRuleEnabled
         paused = control.paused()
         waitReason = control.waitReason()
     }
@@ -557,7 +561,8 @@ public actor FlowEngine {
         // ---- 入口：不持有执行租约，只读元数据 ----
         // #1272：手选不需要照片权限——这一轮只因手选而起（或照片库这一侧读不动）时，整段 PhotoKit 的准备跳过，只传手选。
         let pickedReady = hasPickedReady()
-        var autoSkipped = pickedReady && reasons.allSatisfy { $0 == .pickedAdded }
+        // 规则关着：自动备份不跑（没有手选可传就整轮无事）。
+        var autoSkipped = !autoRuleEnabled() || (pickedReady && reasons.allSatisfy { $0 == .pickedAdded })
         if !autoSkipped {
             do {
                 try await prepareAuto(reconcile: reconcile, names: names)
@@ -574,7 +579,7 @@ public actor FlowEngine {
             return settle(reason)
         }
         var transferWork = pickedReady
-        if !transferWork { transferWork = try await hasWork(reconcile: reconcile, askPresence: reasons.contains(.periodic)) }
+        if !transferWork && !autoSkipped { transferWork = try await hasWork(reconcile: reconcile, askPresence: reasons.contains(.periodic)) }
         guard transferWork else {
             log("cycle \(names): nothing to transfer")
             recovered("nothing left to transfer")

@@ -411,6 +411,8 @@ final class Rig: @unchecked Sendable {
     /// #1272：手选队列与「App 在前台」。
     let picked: PickedQueue
     let foreground = Locked(true)
+    /// #1272 B：自动备份规则开关。
+    let autoRule = Locked(true)
 
     /// 非 nil 时引擎用它（真实的 FlowDeliveryPort）而不是 [delivery] 这个假端口。
     let portOverride: ItemDelivery?
@@ -461,7 +463,8 @@ final class Rig: @unchecked Sendable {
             onPairingIdAdvertised: { [advertised] e in advertised.update { $0.append(e) } },
             onView: { [views] v in views.update { $0.append(v) } },
             picked: picked,
-            isForeground: { [foreground] in foreground.get() }
+            isForeground: { [foreground] in foreground.get() },
+            autoRuleEnabled: { [autoRule] in autoRule.get() }
         )
     }
 

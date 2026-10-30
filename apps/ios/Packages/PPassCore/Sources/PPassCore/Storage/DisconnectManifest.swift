@@ -76,6 +76,7 @@ public enum DisconnectState: CaseIterable, Sendable {
     case fetchScratch
     case thumbnailMemoryCache
     case importScratch
+    case autoBackupRule
     case pickedBatch
     case pickedScratch
     case identity
@@ -113,6 +114,7 @@ public enum DisconnectState: CaseIterable, Sendable {
         case .originalShareTemp: return OriginalCachePaths.shareDirName
         case .fetchScratch: return OriginalCachePaths.fetchScratchDirName
         case .importScratch: return OriginalCachePaths.importScratchDirName
+        case .autoBackupRule: return AutoBackupRulePrefs.fileName
         case .pickedBatch: return PickedQueue.fileName
         case .pickedScratch: return OriginalCachePaths.pickedScratchDirName
         case .autoBackupPrefs: return AutoBackupPrefs.fileName
@@ -155,6 +157,7 @@ public enum DisconnectState: CaseIterable, Sendable {
         case .fetchScratch: return "#1119：取电脑原图时的 iroh-blobs 临时仓库，里面是取回的原图字节，断开清掉（待确认是否算「原图缓存」，见汇报）"
         case .thumbnailMemoryCache: return "#1119：时间线缩略图的内存缓存（NSCache），断开清空，对位 Android LruCache"
         case .importScratch: return "\(undecidedBasis)：备份导入器的临时目录，装的是手机自己的照片而非电脑的原图；引擎停止时自己收拾，断开不碰"
+        case .autoBackupRule: return "#1272 B：「自动备份」规则开关（auto_backup_rule.json，对位 Android AutoBackupRulePrefs）。断开不碰；换新电脑配对时由界面层写「关」（规则按电脑重新开启）"
         case .pickedBatch: return "#1272：手选一批的汇总与序号计数（picked_batch.json）。手选是对这台电脑做的一次性动作，不跟着换电脑，断开清掉；手选的照片本身从不落盘（itemProvider 只在进程内）。iOS 独有"
         case .pickedScratch: return "#1272：手选导入器的临时拷贝目录（手机自己的照片，传完即删）；断开清掉可能的残留，启动时也清。iOS 独有"
         case .autoBackupPrefs: return "MOB-93：停生产者（autoEnabled=false），留意图（userRequested）"

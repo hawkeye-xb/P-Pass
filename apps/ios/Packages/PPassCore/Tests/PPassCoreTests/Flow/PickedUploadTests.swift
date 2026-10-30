@@ -140,6 +140,31 @@ final class PickedUploadTests: XCTestCase {
         XCTAssertEqual(q.addBatch((0..<130).map { (fileName: "p\($0)", mimeType: "image/jpeg", payload: Stub()) }), 100)
     }
 
+    /// 规则关着：范围内的新照片不传（自动备份那一支不跑）；手选照传。反证：不看规则 ⇒ 照片 1 被传，红。
+    func testAutoRuleOffSendsOnlyPicked() async throws {
+        let rig = try Rig()
+        rig.autoRule.set(false)
+        rig.photo(1, generation: 1)
+        await rig.start()
+        await rig.trigger(.appForeground)
+        XCTAssertTrue(rig.delivery.requests.get().isEmpty, "规则关着：没有手选就什么都不传")
+
+        pick(rig, ["a.jpg"])
+        await rig.trigger(.pickedAdded)
+        XCTAssertEqual(rig.delivery.requests.get().map(\.source), ["picked"])
+        await rig.trigger(.appForeground)
+        XCTAssertEqual(rig.delivery.requests.get().count, 1, "之后的前台触发也不带出自动备份")
+    }
+
+    func testRulePrefsInitializeOnceFromCurrentStateAndKeepStoredValue() throws {
+        let dir = TempDir()
+        let prefs = AutoBackupRulePrefs(directory: dir.url)
+        XCTAssertNil(prefs.stored())
+        XCTAssertTrue(prefs.initIfAbsent(current: true))
+        XCTAssertTrue(AutoBackupRulePrefs(directory: dir.url).initIfAbsent(current: false), "已存的值不被覆盖")
+        XCTAssertFalse(AutoBackupRulePrefs(directory: TempDir().url).initIfAbsent(current: false))
+    }
+
     /// 线上形状：自动备份不带 source（老电脑原样认得），手选带 "picked"；缺省解码为 nil。
     func testSourceFieldWireShape() throws {
         let auto = try JSONEncoder().encode(FlowFetchRequest(queueSequence: 1))
