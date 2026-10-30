@@ -50,7 +50,7 @@ class MediaPermissionRouteTest {
         assertEquals(MediaPermissionLanding.HomeWithDeniedDialog, mediaPermissionLanding(allGranted = false, access = MediaAccess.NONE))
         val denied = main.substringAfter("MediaPermissionLanding.HomeWithDeniedDialog -> {").substringBefore("}")
         assertTrue("拒绝后不能停在配对页", denied.contains("screen = Screen.Home(pairing)"))
-        assertTrue(denied.contains("showMediaPermissionDialog = true"))
+        assertTrue(denied.contains("ruleHintRes = R.string.auto_backup_rule_denied_hint"))
     }
 
     @Test

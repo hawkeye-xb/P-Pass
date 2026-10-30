@@ -162,8 +162,8 @@
          background backup). Facts only, no guessing at causes. Titles reuse pairing_lost_title /
          partial_access_title / no_media_access_title. -->
     <string name="notif_pairing_lost_body">Backup has stopped. Tap to pair again.</string>
-    <string name="notif_media_partial_body">Photo access is now limited. Only selected photos will be backed up.</string>
-    <string name="notif_media_none_body">Photo access is off, so backup has stopped. Tap to allow access in system settings.</string>
+    <string name="notif_media_partial_body">Photo access is now limited, so auto backup can\'t continue. Tap to allow access to all photos in system settings.</string>
+    <string name="notif_media_none_body">Photo access is off, so auto backup has stopped. Tap to allow access in system settings.</string>
     <string name="notif_background_stopped_title">The system stopped background backup</string>
     <string name="notif_background_stopped_body">Backup now runs only while P-Pass is open. Tap to turn background backup back on.</string>
     <string name="notif_battery_reenabled_title">Battery optimization is back on</string>
@@ -285,7 +285,7 @@
     <string name="photos_lost_body_unknown">Backup is paused. Pair again to resume.</string>
     <string name="photos_lost_action">Pair again</string>
     <!-- UX-06: 暂停自动备份 + 断开连接 -->
-    <string name="auto_backup_pause">Background backup</string>
+    <string name="auto_backup_pause">Keep sending when the app is closed</string>
     <string name="background_backup_needs_authorization">System hasn\'t allowed background backup</string>
     <string name="background_backup_system_stopped">The system stopped background backup</string>
     <string name="background_backup_action_allow">Allow</string>
@@ -365,4 +365,11 @@
     <string name="picked_result_delivered">Delivered %1$d</string>
     <string name="picked_result_with_existing">Delivered %1$d, %2$d already on your computer</string>
     <string name="picked_result_failed">%1$d couldn\'t be sent. Please pick them again.</string>
+    <string name="auto_backup_rule_label">Auto backup</string>
+    <string name="auto_backup_off_hero">Auto backup is off. You can pick a few photos to send for now.</string>
+    <string name="auto_backup_rule_denied_hint">Photo access wasn\'t allowed, so auto backup stays off. You can allow it in system settings, or pick a few photos to send.</string>
+    <string name="auto_backup_rule_limited_sent">Sent the %1$d photos you allowed to your computer. Auto backup needs access to all photos — you can turn it on again in Settings.</string>
+    <string name="photos_first_run_intro">Connected to %1$s. Photos on this phone are saved to this computer.</string>
+    <string name="photos_first_run_enable">Turn on auto backup</string>
+    <string name="photos_first_run_pick">Pick a few photos first</string>
 </resources>

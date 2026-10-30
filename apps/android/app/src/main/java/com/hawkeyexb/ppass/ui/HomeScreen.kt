@@ -329,11 +329,11 @@ fun HomeScreen(
     // onCheckUpdate 非 null 才渲染该行——行为判定全在 UpdateUiController。
     updateRowValue: String? = null,
     onCheckUpdate: (() -> Unit)? = null,
-    // #1263：「开启后台备份」卡片（判据见 showBackgroundBackupOffer）。onboarding 不再问后台备份，
-    // 卡片只放在设置页——照片页是浏览用的，顶部不放告示（10-19 原则，与 iOS 对齐）。
-    offerBackgroundBackup: Boolean = false,
-    onEnableBackgroundBackup: () -> Unit = {},
-    onDismissBackgroundBackupOffer: () -> Unit = {},
+    /** #1272：「自动备份」规则开关（以后哪些照片自动送到电脑）。关着是正常状态，不是故障。 */
+    autoBackupRuleOn: Boolean = true,
+    onToggleAutoBackupRule: (Boolean) -> Unit = {},
+    /** #1272：开关下方一行小字（没有照片权限 / 权限被收回或改成部分）。 */
+    autoBackupRuleHintRes: Int? = null,
 ) {
     val line = statusLineOf(state, triplet?.k ?: 0L)
     val busy = line is StatusLine.Working
@@ -395,12 +395,15 @@ fun HomeScreen(
         // MOB-02 §二: 部分授权下不显示假 0/0——引导卡顶替三元组，
         // 诚实说明「只授权了部分照片——备份需要完整相册权限」+ 去设置。
         Surface(
-            color = if (mediaAccess != MediaAccess.FULL) PPColor.ActBg else PPColor.SafeBg,
+            color = if (autoBackupRuleOn && mediaAccess != MediaAccess.FULL) PPColor.ActBg else PPColor.SafeBg,
             shape = RoundedCornerShape(PPSize.RadiusCard),
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(Modifier.padding(20.dp)) {
-                if (mediaAccess != MediaAccess.FULL) {
+                if (!autoBackupRuleOn) {
+                    // #1272：没开自动备份是正常状态，不显示「无照片访问权限 / 还没有选择相册」。
+                    Text(stringResource(R.string.auto_backup_off_hero), color = PPColor.Ink, fontSize = 15.sp)
+                } else if (mediaAccess != MediaAccess.FULL) {
                     MediaAccessCardContent(mediaAccess, onOpenAppSettings)
                 } else {
                 val t = triplet
@@ -729,21 +732,6 @@ fun HomeScreen(
                 )
             )
         }
-        // #1263：点「开启」申请电池白名单，授予了才算开（拒绝时卡片留着）；右上角 ×（沿用原「不再提示」的持久化）记下来，之后不再出现，
-        // 下面的后台备份开关照旧可用。
-        if (offerBackgroundBackup) {
-            Spacer(Modifier.height(12.dp))
-            NoticeCard(
-                HomeNotice(
-                    kind = HomeNoticeKind.ENABLE_BACKGROUND_BACKUP,
-                    body = stringResource(R.string.background_backup_offer),
-                    actionLabel = stringResource(R.string.background_backup_offer_action),
-                    onAction = onEnableBackgroundBackup,
-                    closeLabel = stringResource(R.string.background_backup_offer_close),
-                    onClose = onDismissBackgroundBackupOffer,
-                )
-            )
-        }
         // ── "备份"（M10，全页面状态稿）：4 行——第 1 行导航到选相册，
         // 后 3 行是直接开关（不折进子页——用户实机反馈上一轮把充电/
         // WiFi 折进"什么时候备份"子页是自己想当然加的一层，设计稿就是
@@ -759,24 +747,80 @@ fun HomeScreen(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column {
-                CellRow(
-                    label = stringResource(R.string.backup_scope),
-                    value = if (scopeUnreadable) {
-                        stringResource(R.string.backup_scope_unreadable)
-                    } else {
-                        backupScopeRowCount(selectedBucketCount)?.let {
-                            val albums = pluralStringResource(R.plurals.backup_scope_n, it, it)
-                            if (scopeTimeLabel != null) stringResource(R.string.backup_scope_with_time, albums, scopeTimeLabel) else albums
-                        } ?: stringResource(R.string.backup_scope_none)
-                    },
-                    onClick = onOpenBucketPicker,
+                RuleSwitchRow(
+                    label = stringResource(R.string.auto_backup_rule_label),
+                    checked = autoBackupRuleOn,
+                    onCheckedChange = onToggleAutoBackupRule,
+                    hint = autoBackupRuleHintRes?.let { stringResource(it) },
+                    hintColor = PPColor.Waiting,
+                )
+                // #1272：没开自动备份时「挑几张传」排在紧挨开关的位置；开着时降级到「通知」下面，普通行。
+                if (!autoBackupRuleOn) {
+                    HorizontalDivider(color = PPColor.Divider)
+                    CellRow(
+                        label = stringResource(R.string.pick_photos_label),
+                        value = pickedBatch?.let { pickedBatchLine(it) },
+                        onClick = onPickPhotos,
+                    )
+                }
+                if (autoBackupRuleOn) {
+                    HorizontalDivider(color = PPColor.Divider)
+                    CellRow(
+                        label = stringResource(R.string.backup_scope),
+                        value = if (scopeUnreadable) {
+                            stringResource(R.string.backup_scope_unreadable)
+                        } else {
+                            backupScopeRowCount(selectedBucketCount)?.let {
+                                val albums = pluralStringResource(R.plurals.backup_scope_n, it, it)
+                                if (scopeTimeLabel != null) stringResource(R.string.backup_scope_with_time, albums, scopeTimeLabel) else albums
+                            } ?: stringResource(R.string.backup_scope_none)
+                        },
+                        onClick = onOpenBucketPicker,
+                    )
+                    HorizontalDivider(color = PPColor.Divider)
+                    RuleSwitchRow(
+                        label = stringResource(R.string.auto_backup_pause),
+                        checked = autoBackupEnabled,
+                        onCheckedChange = onToggleAutoBackup,
+                        hint = if (backgroundBackupState != BackgroundBackupState.OffByUser &&
+                            backgroundBackupState != BackgroundBackupState.Armed
+                        ) {
+                            stringResource(
+                                when (backgroundBackupState) {
+                                    BackgroundBackupState.NeedsSystemAuthorization ->
+                                        R.string.background_backup_needs_authorization
+                                    BackgroundBackupState.SystemStoppedWatcher ->
+                                        R.string.background_backup_system_stopped
+                                    else -> error("unreachable: OffByUser/Armed excluded above")
+                                },
+                            )
+                        } else null,
+                        hintColor = PPColor.Waiting,
+                        onHintClick = onResolveBackgroundBackup,
+                    )
+                }
+                HorizontalDivider(color = PPColor.Divider)
+                RuleSwitchRow(
+                    label = stringResource(R.string.setting_wifi_only),
+                    checked = wifiOnly,
+                    onCheckedChange = onWifiOnlyChange,
                 )
                 HorizontalDivider(color = PPColor.Divider)
-                CellRow(
-                    label = stringResource(R.string.pick_photos_label),
-                    value = pickedBatch?.let { pickedBatchLine(it) },
-                    onClick = onPickPhotos,
+                RuleSwitchRow(
+                    label = stringResource(R.string.rule_notify),
+                    checked = notifyOnFailure,
+                    onCheckedChange = onNotifyOnFailureChange,
+                    // #130：短标题「通知」+ 中性小字说明管哪几类（默认 Ink40、不可点——这不是待处理状态）。
+                    hint = stringResource(R.string.rule_notify_hint),
                 )
+                if (autoBackupRuleOn) {
+                    HorizontalDivider(color = PPColor.Divider)
+                    CellRow(
+                        label = stringResource(R.string.pick_photos_label),
+                        value = pickedBatch?.let { pickedBatchLine(it) },
+                        onClick = onPickPhotos,
+                    )
+                }
                 // #418：「取消剩余 N 张」——跟「备份哪些相册」同属「这次备份包含什么」的
                 // 语义线。N 与引擎取消时写下的张数是同一个函数算的；点了先现算一次 N，
                 // 再弹确认框写明 N。取消掉的照片进下面「已跳过的照片」那一行，可以恢复。
@@ -813,41 +857,6 @@ fun HomeScreen(
                         ),
                     )
                 }
-                HorizontalDivider(color = PPColor.Divider)
-                RuleSwitchRow(
-                    label = stringResource(R.string.auto_backup_pause),
-                    checked = autoBackupEnabled,
-                    onCheckedChange = onToggleAutoBackup,
-                    hint = if (backgroundBackupState != BackgroundBackupState.OffByUser &&
-                        backgroundBackupState != BackgroundBackupState.Armed
-                    ) {
-                        stringResource(
-                            when (backgroundBackupState) {
-                                BackgroundBackupState.NeedsSystemAuthorization ->
-                                    R.string.background_backup_needs_authorization
-                                BackgroundBackupState.SystemStoppedWatcher ->
-                                    R.string.background_backup_system_stopped
-                                else -> error("unreachable: OffByUser/Armed excluded above")
-                            },
-                        )
-                    } else null,
-                    hintColor = PPColor.Waiting,
-                    onHintClick = onResolveBackgroundBackup,
-                )
-                HorizontalDivider(color = PPColor.Divider)
-                RuleSwitchRow(
-                    label = stringResource(R.string.setting_wifi_only),
-                    checked = wifiOnly,
-                    onCheckedChange = onWifiOnlyChange,
-                )
-                HorizontalDivider(color = PPColor.Divider)
-                RuleSwitchRow(
-                    label = stringResource(R.string.rule_notify),
-                    checked = notifyOnFailure,
-                    onCheckedChange = onNotifyOnFailureChange,
-                    // #130：短标题「通知」+ 中性小字说明管哪几类（默认 Ink40、不可点——这不是待处理状态）。
-                    hint = stringResource(R.string.rule_notify_hint),
-                )
             }
         }
 

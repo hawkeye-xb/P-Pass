@@ -14,6 +14,7 @@ import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import com.hawkeyexb.ppass.PPassApplication
 import com.hawkeyexb.ppass.backup.AutoBackupPrefs
+import com.hawkeyexb.ppass.backup.AutoBackupRulePrefs
 import com.hawkeyexb.ppass.backup.BackupScopeStore
 import com.hawkeyexb.ppass.backup.BackupSettings
 import com.hawkeyexb.ppass.backup.WorkManagerWakeScheduler
@@ -320,6 +321,18 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         clock = SystemClock::elapsedRealtime,
     )
     val scopeStore = BackupScopeStore(app)
+    // #1272：自动备份规则开关。inScope 每张都问，读文件按 1 秒缓存（开关翻转后至多 1 秒生效，下一轮触发前早已过去）。
+    val rulePrefs = AutoBackupRulePrefs(app.filesDir, hasScope = { scopeStore.selectedBucketIds() != null })
+    var ruleCache = false
+    var ruleCachedAt = Long.MIN_VALUE
+    val ruleOn = {
+        val now = SystemClock.elapsedRealtime()
+        if (now - ruleCachedAt > 1_000L) {
+            ruleCache = rulePrefs.enabled()
+            ruleCachedAt = now
+        }
+        ruleCache
+    }
     val control = FlowControlStore(app.filesDir)
     // #1220：换了线路，两个端点都要换上新套接字——provider 经 network_change 重绑；控制面端点没有重绑入口，
     // 空闲时关掉，下一次用到时按新的绑定重建（忙时它连着的那张网断了自会失败重连）。
@@ -345,7 +358,8 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
     )
     engine = FlowEngine(
         store = store,
-        media = ContentResolverMediaSnapshotSource(app, { scopeStore.scope() }),
+        // #1272：自动备份规则关着时范围为空——引擎只剩手选这一支。
+        media = ContentResolverMediaSnapshotSource(app, { if (ruleOn()) scopeStore.scope() else null }),
         importer = importer,
         delivery = delivery,
         // #434：只有「有东西要传」才会探测桌面——此刻先把 provider 的 endpoint 绑上，它和 hello 并行去连
@@ -374,7 +388,7 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
                 batteryLow = isBatteryLow(app),
             )
         },
-        inScope = { bucket, added -> scopeStore.scope()?.contains(bucket, added) == true },
+        inScope = { bucket, added -> ruleOn() && scopeStore.scope()?.contains(bucket, added) == true },
         mediaAbsenceTrusted = { mediaAbsenceTrustedNow(app) },
         pairingId = { pairing()?.pairingId?.takeIf { it.isNotBlank() }?.let(::PairingId) },
         scope = scope,

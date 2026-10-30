@@ -67,6 +67,8 @@ data class DefinitiveFacts(
     /** MOB-28 的中断还没被用户确认时的 `detectedAt`；null = 没有未确认的中断。 */
     val interruptionDetectedAt: Long?,
     val batteryWhitelisted: Boolean,
+    /** #1272：「自动备份」规则开着。没开自动备份时照片权限变差是正常状态，不发通知。 */
+    val autoBackupRuleOn: Boolean = true,
 )
 
 @Serializable
@@ -116,7 +118,7 @@ fun decideDefinitiveNotices(prev: DefinitiveNoticeState, facts: DefinitiveFacts)
 
     // 2. 相册权限：变差才发，回到 FULL 复位；没有基线只记不发；没配对时只记（没有要备份的东西）。
     val lastAccess = prev.lastMediaAccess?.let { name -> MediaAccess.entries.firstOrNull { it.name == name } }
-    if (lastAccess != null && rankOf(facts.mediaAccess) < rankOf(lastAccess) && paired) {
+    if (lastAccess != null && rankOf(facts.mediaAccess) < rankOf(lastAccess) && paired && facts.autoBackupRuleOn) {
         post += DefinitiveNotice.MediaAccessRevoked(facts.mediaAccess)
     }
     if (lastAccess != null && lastAccess != MediaAccess.FULL && facts.mediaAccess == MediaAccess.FULL) {
@@ -223,6 +225,7 @@ internal fun definitiveFactsOf(context: Context): DefinitiveFacts {
         backgroundRequested = AutoBackupPrefs(dir).requested(),
         interruptionDetectedAt = health.detectedAt.takeIf { health.interruptedUnacknowledged },
         batteryWhitelisted = isIgnoringBatteryOptimizations(context),
+        autoBackupRuleOn = AutoBackupRulePrefs(dir, hasScope = { BackupScopeStore(context).selectedBucketIds() != null }).enabled(),
     )
 }
 

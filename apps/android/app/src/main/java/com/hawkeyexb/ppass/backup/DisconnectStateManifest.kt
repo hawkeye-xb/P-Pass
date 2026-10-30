@@ -156,6 +156,11 @@ enum class DisconnectState(
         "#282 验收 4：Wi-Fi / 充电设置仍保留",
         owners = listOf("com.hawkeyexb.ppass.backup.BackupSettings"),
     ),
+    AUTO_BACKUP_RULE(
+        StateLocation.FILES, "auto_backup_rule.json", DisconnectDisposition.KEEP,
+        "#1272：「自动备份」规则开关随备份范围一起留着（重新配对 / 换电脑沿用原来的范围）；换新电脑时由配对入口关掉重问",
+        owners = listOf("com.hawkeyexb.ppass.backup.AutoBackupRulePrefs"),
+    ),
     ORDER_DB(
         StateLocation.DATABASES, "backup-orders.db", DisconnectDisposition.KEEP,
         "#413/#415 裁决 6：连回同一台桌面 CONFIRMED 仍有效；换一台桌面由 OrderStore.claimOwner 清（#282 验收 4「账本仍保留」）",

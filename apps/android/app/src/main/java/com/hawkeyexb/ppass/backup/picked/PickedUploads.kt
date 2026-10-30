@@ -23,16 +23,38 @@ object PickedUploads {
      * 登记一批。选完不复制原图：对每个 URI 申请持久读授权（重启后仍能读；失败不致命，选择器本身的授权在进程存活期内有效），
      * 元数据读一次存下来。返回批里的张数。
      */
-    fun enqueue(context: Context, uris: List<Uri>): Int {
+    fun enqueue(context: Context, uris: List<Uri>, limit: Int = MAX_PICK): Int {
         val app = context.applicationContext
         val resolver = app.contentResolver
-        val items = uris.take(MAX_PICK).map { uri ->
+        val items = uris.take(limit).map { uri ->
             runCatching { resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
             describe(app, uri)
         }
         if (items.isEmpty()) return 0
         store(app).addBatch(items)
         return items.size
+    }
+
+    /**
+     * #1272 §4「有限访问」：开启自动备份时用户只授权了部分照片——把系统此刻允许我们看见的图片按手选链路传一次
+     * （不进备份范围、以后追加授权的不会自动跟着传）。返回实际登记的张数（Android 的有限授权是累计的，以此为准）。
+     */
+    fun enqueueAllowedImages(context: Context): Int {
+        val app = context.applicationContext
+        val uris = runCatching {
+            app.contentResolver.query(
+                MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                arrayOf(MediaStore.Images.Media._ID),
+                null,
+                null,
+                "${MediaStore.Images.Media._ID} ASC",
+            )?.use { c ->
+                buildList {
+                    while (c.moveToNext()) add(android.content.ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, c.getLong(0)))
+                }
+            }
+        }.getOrNull().orEmpty()
+        return enqueue(app, uris, limit = Int.MAX_VALUE)
     }
 
     /** 这张传完（不论结局）：放掉持久授权。系统对每个 App 最多保留 5000 个，不放会越攒越多。 */

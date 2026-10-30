@@ -33,6 +33,6 @@ class PhotosGuideTest {
         assertTrue(home.contains("MediaAccessCardContent(mediaAccess, onOpenAppSettings)"))
         assertTrue(photos.contains("PhotosGuide.MediaAccess -> MediaAccessCard(mediaAccess, onOpenAppSettings, modifier)"))
         val photosCall = main.substringAfter("PhotosScreen(").substringBefore("backup = {")
-        assertTrue("照片页拿到真实的权限档", photosCall.contains("mediaAccess = mediaAccess,"))
+        assertTrue("照片页拿到真实的权限档", photosCall.contains("mediaAccess = if (ruleOn) mediaAccess else MediaAccess.FULL,"))
     }
 }

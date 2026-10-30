@@ -299,6 +299,11 @@ internal fun PhotosScreen(
     // 10-29：照片权限不全（只给了部分 / 一张都不给）时，引导换成设置页那张权限卡（[photosGuideOf]）。
     mediaAccess: MediaAccess = MediaAccess.FULL,
     onOpenAppSettings: () -> Unit = {},
+    // #1272：没开自动备份时，电脑上还没有照片的空状态就是引导（已连上〈电脑名〉+「开启自动备份」「先挑几张传」）。
+    autoBackupRuleOn: Boolean = true,
+    computerName: String = "",
+    onEnableAutoBackup: () -> Unit = {},
+    onPickPhotos: () -> Unit = {},
 ) {
     val guide = photosGuideOf(mediaAccess, noAlbums)
     // SYNC-06: 时间线状态（items/next/loading/error/订阅标志）全部由
@@ -455,6 +460,9 @@ internal fun PhotosScreen(
             // UI-17: 配对失效且一张都没加载到——什么都不放，上面的红卡就是全部内容
             // （落到下一条会显示「照片库还是空的——先备份一批吧」，又是一个不同的出路）。
             error != null && items.isEmpty() -> Unit
+            items.isEmpty() && !autoBackupRuleOn -> Box(Modifier.fillMaxSize().padding(34.dp), contentAlignment = Alignment.Center) {
+                FirstRunIntro(computerName, onEnableAutoBackup, onPickPhotos, Modifier.fillMaxWidth())
+            }
             items.isEmpty() && guide != PhotosGuide.None -> Box(Modifier.fillMaxSize().padding(34.dp), contentAlignment = Alignment.Center) {
                 PhotosGuideCard(guide, onChooseAlbums, mediaAccess, onOpenAppSettings, Modifier.fillMaxWidth())
             }
@@ -884,6 +892,30 @@ private fun PhotosGuideCard(
         PhotosGuide.MediaAccess -> MediaAccessCard(mediaAccess, onOpenAppSettings, modifier)
         PhotosGuide.NoAlbums -> NoAlbumsGuide(onChooseAlbums, modifier)
         PhotosGuide.None -> Unit
+    }
+}
+
+/** #1272：配对后第一次进来的空状态——一句话 + 两个按钮，与设置页对应的行做的事完全相同。 */
+@Composable
+private fun FirstRunIntro(computerName: String, onEnable: () -> Unit, onPick: () -> Unit, modifier: Modifier = Modifier) {
+    Column(modifier) {
+        Text(
+            stringResource(R.string.photos_first_run_intro, computerName),
+            fontSize = PPSize.BodyMin, lineHeight = 24.sp, color = PPColor.Ink60,
+        )
+        Spacer(Modifier.height(16.dp))
+        androidx.compose.material3.Button(
+            onClick = onEnable,
+            modifier = Modifier.fillMaxWidth().height(PPSize.TapMin),
+            shape = RoundedCornerShape(PPSize.RadiusControl),
+            colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = PPColor.Ink, contentColor = PPColor.Paper),
+        ) { Text(stringResource(R.string.photos_first_run_enable), fontSize = 17.sp, fontWeight = FontWeight.Bold) }
+        Spacer(Modifier.height(10.dp))
+        androidx.compose.material3.OutlinedButton(
+            onClick = onPick,
+            modifier = Modifier.fillMaxWidth().height(PPSize.TapMin),
+            shape = RoundedCornerShape(PPSize.RadiusControl),
+        ) { Text(stringResource(R.string.photos_first_run_pick), fontSize = 17.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink) }
     }
 }
 

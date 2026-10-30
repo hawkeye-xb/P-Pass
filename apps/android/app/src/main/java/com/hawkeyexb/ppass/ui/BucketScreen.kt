@@ -234,13 +234,6 @@ fun BucketScreen(
                 }
             }
             Spacer(Modifier.height(6.dp))
-            if (partialAccess) {
-                Text(
-                    stringResource(R.string.bucket_partial_access_note),
-                    fontSize = 14.sp, lineHeight = 21.sp, fontWeight = FontWeight.SemiBold, color = PPColor.Waiting,
-                )
-                Spacer(Modifier.height(6.dp))
-            }
             Text(
                 stringResource(R.string.bucket_hint),
                 fontSize = 14.sp, lineHeight = 21.sp, color = PPColor.Ink40,
