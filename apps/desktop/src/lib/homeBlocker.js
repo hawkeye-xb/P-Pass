@@ -9,14 +9,21 @@
 // "Paused: library missing" 144、"Paused: service is off" 133、「已暂停：正在搬迁」104、
 // "Paused: moving library" 141。
 
+import { STOPPED_OUTSIDE } from "../serviceState.js";
+
 /**
  * @param {string} serviceState 壳的服务状态（running / starting / stopped / unreachable / not_configured）
  * @param {object|null} status 后台 `status` 应答
- * @returns {{ id: string, tone: "act" | "waiting", headlineKey: string, pillKey: string } | null}
+ * @param {string|null} [reason] 壳给的状态原因（`stopped outside` = 在外面被正常停掉，F7）
+ * @returns {{ id: string, tone: "act" | "waiting" | "idle", headlineKey: string, pillKey: string } | null}
  */
-export function homeBlocker(serviceState, status) {
+export function homeBlocker(serviceState, status, reason) {
   if (serviceState === "starting") {
     return { id: "service_starting", tone: "waiting", headlineKey: "ui.blocked_service_starting", pillKey: "ui.blocked_service_starting_pill" };
+  }
+  // F7（10-30 用户拍板）：在外面被正常停掉的是用户自己的意图，不是故障——中性色（idle），不像告警。
+  if (serviceState === "stopped" && reason === STOPPED_OUTSIDE) {
+    return { id: "service_stopped_outside", tone: "idle", headlineKey: "ui.blocked_service_stopped_outside", pillKey: "ui.blocked_service_down_pill" };
   }
   if (serviceState !== "running") {
     return { id: "service_down", tone: "act", headlineKey: "ui.blocked_service_down", pillKey: "ui.blocked_service_down_pill" };

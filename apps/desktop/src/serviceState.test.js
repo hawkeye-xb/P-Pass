@@ -49,17 +49,13 @@ describe("DESK-63 服务状态", () => {
     expect(canStopService("not_configured")).toBe(false);
   });
 
-  it("文案 key 跟着状态（和停止原因）走", () => {
+  it("文案复用现有 key，不新增字典项", () => {
     expect(serviceStateLabelKey("running")).toBe("ui.service_running_long");
     expect(serviceStateLabelKey("starting")).toBe("ui.starting");
     expect(serviceStateLabelKey("stopped")).toBe("ui.offline_banner");
     expect(serviceStateLabelKey("unreachable")).toBe("ui.offline_banner");
     expect(serviceStateActionKey("stopped")).toBe("ui.service_stopped");
     expect(serviceStateActionKey("unreachable")).toBe("ui.offline_action");
-    // F7：外面正常停掉的单独一句（不是「开机也不起」）；本 App 里停的照旧。
-    expect(serviceStateActionKey("stopped", "stopped outside")).toBe("ui.service_stopped_outside");
-    expect(serviceStateActionKey("stopped", "user stopped")).toBe("ui.service_stopped");
-    expect(serviceStateActionKey("unreachable", "stopped outside")).toBe("ui.offline_action");
   });
 
   it("事件载荷只接受已知状态", () => {

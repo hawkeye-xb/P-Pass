@@ -221,31 +221,32 @@ private struct NoticeRow: View {
     let text: String
     var action: (String, () -> Void)? = nil
     var dismiss: (String, () -> Void)? = nil
-    /// 右上角 ×（无障碍标签, 动作）：非空时版式换成「正文占满整行 + 动作另起一行 + 右上角 ×」，同 Android NoticeCard 的 closeLabel 版式。
+    /// ×（无障碍标签, 动作）：非空时换成一行版式「左正文、右动作与 ×」，同 Android NoticeCard 的 closeLabel 版式（C1）。
     var close: (String, () -> Void)? = nil
 
     var body: some View {
         if let c = close {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(alignment: .top, spacing: 8) {
-                    Text(text).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    Button(action: c.1) {
-                        Image(systemName: "xmark").font(PPFont.subheadlineBold).foregroundStyle(PPColor.ink40)
-                            // HIG 最小触控区 44pt；负边距让图标仍贴着右上角，不把正文往下挤。
-                            .frame(width: 44, height: 44).contentShape(Rectangle())
-                    }
-                    .buttonStyle(.borderless)
-                    .padding(.top, -12).padding(.trailing, -12)
-                    .accessibilityLabel(c.0)
-                    .accessibilityIdentifier("noticeClose")
-                }
+            // C1（10-30 用户定版）：一行——左边正文、右边「开启」与 ×，都垂直居中；正文放不下只让正文折行。
+            HStack(alignment: .center, spacing: 4) {
+                Text(text).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
                 if let a = action {
                     Button(a.0, action: a.1)
                         .font(PPFont.subheadlineBold).underline().foregroundStyle(PPColor.ink)
                         .buttonStyle(.borderless)
+                        .fixedSize()
                         .accessibilityIdentifier("noticeAction")
                 }
+                Button(action: c.1) {
+                    Image(systemName: "xmark").font(PPFont.subheadlineBold).foregroundStyle(PPColor.ink40)
+                        // HIG 最小触控区 44pt；右侧负边距让图标贴近卡片边，不多占正文宽度。
+                        .frame(width: 44, height: 44).contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .padding(.trailing, -12)
+                .accessibilityLabel(c.0)
+                .accessibilityIdentifier("noticeClose")
             }
             .ppTinted(PPColor.waitingBg)
         } else {
