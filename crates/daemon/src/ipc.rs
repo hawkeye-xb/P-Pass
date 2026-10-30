@@ -599,7 +599,12 @@ pub enum Waiting {
     /// #1253：库位置在，但那里找不到照片库（外置盘没接、文件夹被移走 / 删掉 / 改名，或那里是
     /// 别的库——#1260 库 ID 不符）。不退出、不开库、不起传输，说明原因与路径；用户放回后点
     /// 「重新检查」（`library.recheck`）。`local_base` = 本机服务数据目录（判库 ID 用）。
-    LibraryMissing { dir: PathBuf, local_base: PathBuf },
+    LibraryMissing {
+        dir: PathBuf,
+        local_base: PathBuf,
+        /// #1272：本机索引里「手机手动挑选、已送达」的张数（读不出 = None，窗口不显示那一句）。
+        picked_count: Option<i64>,
+    },
     /// #639：正在搬迁照片库（不开库、不起传输）；只答进度。搬完由 main 改指向后重启。
     Relocating(Arc<crate::relocate::Live>),
 }
@@ -802,8 +807,12 @@ async fn unconfigured_session(
             Waiting::Unconfigured(location) => {
                 unconfigured_dispatch(&req, client, version, started_at, location).await
             }
-            Waiting::LibraryMissing { dir, local_base } => {
-                library_missing_dispatch(&req, client, version, started_at, dir, local_base)
+            Waiting::LibraryMissing {
+                dir,
+                local_base,
+                picked_count,
+            } => {
+                library_missing_dispatch(&req, client, version, started_at, dir, local_base, *picked_count)
             }
             Waiting::Relocating(live) => {
                 relocating_dispatch(&req, client, version, started_at, live)
@@ -904,22 +913,27 @@ pub fn library_missing_dispatch(
     started_at: i64,
     dir: &std::path::Path,
     local_base: &std::path::Path,
+    picked_count: Option<i64>,
 ) -> Resp {
     let id = req.id.clone();
     if !client.may_call(&req.method) {
         return Resp::err(id, RespError::new(Reason::RoleForbidden));
     }
     match req.method.as_str() {
-        "status" => Resp::ok(
-            id,
-            serde_json::json!({
+        "status" => {
+            let mut status = serde_json::json!({
                 "library_missing": true,
                 "library_dir": dir.display().to_string(),
                 "version": version,
                 "pid": std::process::id(),
                 "started_at": started_at,
-            }),
-        ),
+            });
+            // #1272：手机上手动挑选传来的照片，手机不会自动补回——有才说（0 / 读不出都不带这个字段）。
+            if let Some(n) = picked_count.filter(|n| *n > 0) {
+                status["library_missing_picked"] = serde_json::json!(n);
+            }
+            Resp::ok(id, status)
+        }
         "daemon.step_down" => Resp::ok(id, serde_json::json!({ "stepping_down": true })),
         "events.subscribe" => Resp::ok(id, serde_json::json!({ "subscribed": true })),
         // 找不到照片库时不改库位置（向导里点「继续」也走到这里）。被拒要留证据：保存失败查得到原因。

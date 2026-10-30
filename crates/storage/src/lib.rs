@@ -25,7 +25,7 @@ pub use audit_repo::{
 pub use db::Db;
 pub use device_repo::{DepartedBy, DeviceProfile, DeviceRow, DeviceWatermark, Pairing, Role};
 pub use diag_repo::DiagEvent;
-pub use flow_delivery_repo::{FlowGrant, FlowGrantState, FlowReceipt};
+pub use flow_delivery_repo::{completed_picked_count_at, FlowGrant, FlowGrantState, FlowReceipt};
 pub use low_space_repo::LowSpaceNotice;
 pub use pairing_vault::{MemoryVault, PairingVault, VaultAlignment};
 pub use supersede_repo::PendingSwap;

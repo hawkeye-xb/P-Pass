@@ -65,6 +65,22 @@ pub struct FlowReceipt {
     pub content_hash: Vec<u8>,
 }
 
+/// #1272：只读地数一下「手机上手动挑选、已送达」的张数。照片库找不到时数据库还在本机，
+/// 说明里要写这个数。打不开 / 没有这一列（更早的版本建的库）⇒ `None`，调用方不显示这一句。
+pub async fn completed_picked_count_at(path: &std::path::Path) -> Option<i64> {
+    use sqlx::ConnectOptions as _;
+    let mut conn = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(path)
+        .read_only(true)
+        .connect()
+        .await
+        .ok()?;
+    sqlx::query_scalar("SELECT COUNT(*) FROM flow_delivery WHERE source = 'picked' AND state = 'completed'")
+        .fetch_one(&mut conn)
+        .await
+        .ok()
+}
+
 /// 读出交付记录时 join 配对记录取回设备 NodeId。
 const GRANT_SELECT: &str = "SELECT p.node_id, f.queue_sequence, f.pairing_id, f.lease_token,
             f.content_hash, f.file_name, f.media_type, f.provider, f.state, f.receipt_id, f.source
@@ -360,6 +376,31 @@ mod tests {
         };
         assert_eq!(read(1).await, "auto");
         assert_eq!(read(2).await, "picked");
+    }
+
+    /// #1272：库找不到时只读数「手选、已送达」的张数：只数手选 + 已完成，自动备份的、没完成的不数；
+    /// 文件不在 / 打不开 ⇒ None。反证：去掉 `source = 'picked'` 条件 → 把自动备份的也数进去，红。
+    #[tokio::test]
+    async fn counts_completed_picked_grants_read_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("index.sqlite");
+        let db = Db::open(&path).await.unwrap();
+        pair(&db, "pairing").await;
+        let auto = grant(1, FlowGrantState::Active, 1);
+        let mut picked_done = grant(2, FlowGrantState::Active, 2);
+        picked_done.source = "picked".into();
+        let mut picked_done_too = grant(3, FlowGrantState::Active, 3);
+        picked_done_too.source = "picked".into();
+        let mut picked_open = grant(4, FlowGrantState::Active, 4);
+        picked_open.source = "picked".into();
+        for g in [&auto, &picked_done, &picked_done_too, &picked_open] {
+            db.upsert_flow_grant(g).await.unwrap();
+        }
+        for g in [&auto, &picked_done, &picked_done_too] {
+            assert!(db.complete_flow_grant(g, "receipt").await.unwrap());
+        }
+        assert_eq!(super::completed_picked_count_at(&path).await, Some(2));
+        assert_eq!(super::completed_picked_count_at(&dir.path().join("missing.sqlite")).await, None);
     }
 
     #[tokio::test]

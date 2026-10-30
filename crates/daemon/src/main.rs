@@ -378,6 +378,7 @@ async fn run() -> anyhow::Result<()> {
             daemon::ipc::Waiting::LibraryMissing {
                 dir: data_dir.clone(),
                 local_base: local_base.clone(),
+                picked_count: missing_library_picked_count(&local_base).await,
             },
         )
         .await
@@ -1277,6 +1278,14 @@ async fn run_unconfigured(
 /// 还不能开库时的服务（[`daemon::ipc::Waiting`]：未配置 / 库找不到）：单实例交接照做，只答
 /// 少数方法，按停止信号退出。库找不到时发一次系统通知；用户放回后点「重新检查」，库在就以
 /// `EXIT_CONFIGURED_RESTART` 退出、由服务管理器带着库重新拉起（与首启写好库位置同一条路）。
+/// #1272：库找不到时本机索引还在（#1260 之后服务数据在本机）——只读数一下手机手动挑选、已送达的张数。
+/// 老布局（索引在库盘里）或读不出来 ⇒ None，窗口不显示那一句。
+async fn missing_library_picked_count(local_base: &std::path::Path) -> Option<i64> {
+    let id = daemon::layout::recorded_library_id(local_base)?;
+    let index = daemon::layout::local_dir(local_base, &id).join("index.sqlite");
+    storage::completed_picked_count_at(&index).await
+}
+
 async fn run_waiting(
     location: std::sync::Arc<daemon::library_location::LibraryLocation>,
     waiting: daemon::ipc::Waiting,
