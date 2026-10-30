@@ -169,6 +169,10 @@ final class FakeEngine: BackupEngine {
     func wifiOnly() -> Bool { wifi }
     func setWifiOnly(_ on: Bool) throws { wifi = on; listeners.forEach { $0() } }
     func wake() async {}
+    private var rule = true
+    func autoRule() -> Bool { rule }
+    func setAutoRule(_ on: Bool) throws { rule = on; listeners.forEach { $0() } }
+    func sendAllowedPhotos() async -> Int { 0 }
     func pickedSummary() -> PickedBatchSummary? { nil }
     func addPicked(_ items: [(fileName: String, mimeType: String, payload: PickedPayload)]) async {}
     func retryFailed() async throws {}

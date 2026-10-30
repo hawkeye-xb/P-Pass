@@ -30,6 +30,8 @@ final class LiveBackend: @unchecked Sendable {
     let noticeStore: DefinitiveNoticeStore
     /// #1272 挑几张传：手选队列（进程内）+ 批次汇总（落盘）。
     let picked: PickedQueue
+    /// #1272 B：「自动备份」规则开关（没存过值时按当前真实状态初始化一次）。
+    let autoRule: AutoBackupRulePrefs
     let pairingLoss = PairingLoss()
     let sentinel: SentinelStore
     let heartbeat: ForegroundHeartbeat
@@ -106,6 +108,7 @@ final class LiveBackend: @unchecked Sendable {
         cardPrefs = BackgroundBackupOfferPrefs(directory: dir, logger: logger)
         noticeStore = DefinitiveNoticeStore(directory: dir, logger: logger)
         picked = PickedQueue(directory: dir, logger: logger)
+        autoRule = AutoBackupRulePrefs(directory: dir, logger: logger)
         // #1262：通知默认关；老用户升级保持原状态。必须在任何 markOnboarded 之前定老用户（新装用户此刻没有配对、没走过 onboarding）。
         notifyPrefs.initIfAbsent(existingUser: pairingStore.load() != nil || onboarded.anyOnboarded())
         // 全新安装后台备份默认关（对位 Android `AutoBackupPrefs.autoEnabled = false`，#982）：#1263 起 onboarding 不问，由首页引导卡让用户自己开。
@@ -122,6 +125,8 @@ final class LiveBackend: @unchecked Sendable {
         let delivery = FlowDeliveryPort(provider: FfiBlobProvider(provider: provider), currentPairingId: pairingId, desktop: desktop,
                                         push: ControlPlanePush(transport: CurrentPeerTransport(plane: plane, store: pairingStore)), logger: logger, pairingLoss: pairingLoss)
         let media = self.media
+        // #1272 B：规则开关没存过值 → 读现状初始化一次（有完整访问权限且已选过备份范围 ⇒ 开，否则 ⇒ 关）。
+        autoRule.initIfAbsent(current: media.access() == .full && ((try? media.savedScope()) ?? nil) != nil)
         // 读盘失败与「从未保存」都给引擎空范围（一张都不备份），但读失败要留日志，不能和从未保存混为一谈（#971）。
         let scope: @Sendable () -> Set<String> = {
             do { return try media.savedScope() ?? [] } catch {
@@ -166,7 +171,8 @@ final class LiveBackend: @unchecked Sendable {
             onPairingIdAdvertised: FlowWiring.pairingIdAdvertised(loss: pairingLoss, currentPairingId: pairingId),
             onView: { view in Task { await model.engineChanged(view) } },
             picked: picked,
-            isForeground: { [window = self.window] in window.isAppActive }
+            isForeground: { [window = self.window] in window.isAppActive },
+            autoRuleEnabled: { [rule = self.autoRule] in rule.stored() ?? false }
         )
         engineBox.engine = engine
         catchup = ForegroundCatchup(engine: engine)
@@ -357,7 +363,8 @@ final class LiveBackend: @unchecked Sendable {
             pairingLost: record?.lost == true || (assumeLostPairingId != nil && assumeLostPairingId == pairingId),
             mediaAccess: LiveMediaLibrary.tier(PhotoKitAuthorization().currentLevel()),
             backgroundRequested: autoPrefs.requested(),
-            backgroundRefresh: await Self.currentBackgroundRefresh())
+            backgroundRefresh: await Self.currentBackgroundRefresh(),
+            autoRuleOn: autoRule.stored() ?? false)
         await FailureNotifier.evaluate(facts: facts, notifyEnabled: notifyPrefs.enabled(), store: noticeStore, logger: logger)
     }
 }
@@ -575,6 +582,22 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
     func wake() async {
         _ = await backend.engine.trigger(.scopeAdded)
         await backend.refreshFacts()
+    }
+
+    func autoRule() -> Bool { backend.autoRule.stored() ?? false }
+    func setAutoRule(_ on: Bool) throws {
+        try backend.autoRule.set(on)
+        backend.logger.log("auto-rule: saved enabled=\(on)")
+    }
+
+    /// 有限访问：把用户允许的照片按手选链路传一次（只这一次，不进备份范围）。返回实际登记的张数。
+    func sendAllowedPhotos() async -> Int {
+        let items = await Task.detached { PHAssetPayload.allowedImages() }.value
+        guard backend.picked.addBatch(items) > 0 else { return 0 }
+        let n = backend.picked.summary()?.total ?? 0
+        _ = await backend.engine.trigger(.pickedAdded)
+        await backend.refreshFacts()
+        return n
     }
 
     func pickedSummary() -> PickedBatchSummary? { backend.picked.summary() }

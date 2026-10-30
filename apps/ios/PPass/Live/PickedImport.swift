@@ -1,6 +1,25 @@
 import Foundation
+import Photos
 import PPassCore
 import UniformTypeIdentifiers
+
+/// #1272 B：有限访问时用户在系统框里允许的那些照片（相册里的 asset）。传法同手选：轮到时才取原图，不复制整批。
+struct PHAssetPayload: PickedPayload, @unchecked Sendable {
+    let localIdentifier: String
+
+    /// 系统此刻允许 P-Pass 看到的静态图片（有限访问下只含用户允许的）。
+    static func allowedImages() -> [(fileName: String, mimeType: String, payload: PickedPayload)] {
+        let result = PHAsset.fetchAssets(with: .image, options: nil)
+        var out: [(fileName: String, mimeType: String, payload: PickedPayload)] = []
+        result.enumerateObjects { asset, index, _ in
+            let resource = PHAssetResource.assetResources(for: asset).first { $0.type == .photo || $0.type == .fullSizePhoto }
+            let name = resource?.originalFilename ?? "IMG_\(index + 1).jpg"
+            let mime = resource.flatMap { UTType($0.uniformTypeIdentifier)?.preferredMIMEType } ?? "image/jpeg"
+            out.append((name, mime, PHAssetPayload(localIdentifier: asset.localIdentifier)))
+        }
+        return out
+    }
+}
 
 /// #1272 挑几张传：PHPicker 给回的一张。`NSItemProvider` 只在本进程存活期间有效，所以只存句柄、不复制照片；
 /// 轮到这一张时才 `loadFileRepresentation`（系统给的临时文件在回调结束就删，所以在回调里立刻拷到 App 自己的临时目录）。

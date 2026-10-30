@@ -119,19 +119,39 @@ struct PhotosScreen: View {
             PPStateMessage(text: L.s("photos_unreachable"), symbol: "wifi.exclamationmark")
                 .onAppear { AppLog.log("photos: timeline load failed (\(error))") }
         } else if model.items.isEmpty {
-            switch app.photosEmptyHint {
-            case .chooseAlbums:
-                PPStateMessage(text: L.s("photos_no_albums"), symbol: "photo.on.rectangle", actionTitle: L.s("photos_choose_albums")) {
-                    app.openScopeEditor()
+            // #1272 B：电脑上还没有这台手机的照片：空状态就是引导，两个按钮与设置页对应的行做同一件事。
+            if !app.autoRule {
+                firstRun
+            } else {
+                switch app.photosEmptyHint {
+                case .chooseAlbums:
+                    PPStateMessage(text: L.s("photos_no_albums"), symbol: "photo.on.rectangle", actionTitle: L.s("photos_choose_albums")) {
+                        app.openScopeEditor()
+                    }
+                case .albums:
+                    PPStateMessage(text: L.s(app.since.map { !$0.isAll } == true ? "auto_backup_from_today_empty" : "home_empty_albums"), symbol: "photo.on.rectangle")
                 }
-            case .albums:
-                PPStateMessage(text: L.s("home_empty_albums"), symbol: "photo.on.rectangle")
             }
         } else if model.shown.isEmpty {
             PPStateMessage(text: L.s("photos_filter_empty"), symbol: "line.3.horizontal.decrease.circle")
         } else {
             grid
         }
+    }
+
+    private var firstRun: some View {
+        VStack(spacing: 16) {
+            Spacer()
+            Text(L.f("photos_first_run_intro", app.desktopName ?? L.s("storage_device_default")))
+                .font(PPFont.sans(15, relativeTo: .subheadline)).foregroundStyle(PPColor.ink60).multilineTextAlignment(.center)
+            PPButton(title: L.s("photos_first_run_enable")) { app.setAutoRule(true) }
+                .accessibilityIdentifier("firstRunEnable")
+            Button(L.s("photos_first_run_pick")) { app.pickerRequested = true }
+                .font(PPFont.subheadlineBold).foregroundStyle(PPColor.ink)
+                .accessibilityIdentifier("firstRunPick")
+            Spacer()
+        }
+        .padding(.horizontal, 32)
     }
 
     /// 网格对齐 Android：3 列、4pt 间隔、左右 12pt 边距、缩略图圆角 10；月份组头 serif 18，不吸顶。

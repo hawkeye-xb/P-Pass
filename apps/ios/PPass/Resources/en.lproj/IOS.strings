@@ -2,8 +2,8 @@
    overrides the same key in Localizable.strings (generated from Android strings.xml). */
 
 /* Failure notifications (#981): tapping a notification on iOS only opens the app (no deep link into system settings), so point at the iOS setting by name; battery optimization doesn't exist on iOS — the counterpart is Background App Refresh. */
-"notif_media_partial_body" = "Photo access is now limited. Only selected photos will be backed up. To change it back, go to Settings › P-Pass › Photos and choose Full Access.";
-"notif_media_none_body" = "Photo access is off, so backup has stopped. To allow it, go to Settings › P-Pass › Photos.";
+"notif_media_partial_body" = "Photo access is now limited, so auto backup can't continue. You can allow all photos in Settings › P-Pass › Photos.";
+"notif_media_none_body" = "Photo access is off, so auto backup has stopped. You can allow access in Settings › P-Pass › Photos.";
 "notif_background_refresh_off_title" = "Background App Refresh is off";
 "notif_background_refresh_off_body" = "Backup now runs only while P-Pass is open. You can turn it back on in Settings › General › Background App Refresh.";
 "notif_background_refresh_restricted_body" = "This iPhone restricts Background App Refresh for P-Pass (possibly Screen Time or device management). Backup now runs only while P-Pass is open.";
@@ -74,3 +74,6 @@
 "pick_photos_ios_hint" = "Sending pauses when you leave P-Pass.";
 /* #1272：进程在传输中被杀，句柄（itemProvider）随进程没了、无法续传，只能提示重新挑。Android 靠持久 URI 授权可续传，没有这句。%1$ld = 上次挑的张数，%2$ld = 没传完的张数。 */
 "picked_interrupted" = "Of the %1$ld photos you picked last time, %2$ld weren't sent. Please pick them again.";
+
+/* #1272 B：设置页末尾「更多」二级页入口（存储电脑、断开连接、版本、检查更新）。 */
+"more_label" = "More";

@@ -21,6 +21,11 @@ final class SettingsFeedbackTests: XCTestCase {
         func observe(_ onChange: @escaping () -> Void) {}
         func pauseOrResume() async {}
         func wake() async { calls.append("wake") }
+        var rule = true
+        var allowedSent = 0
+        func autoRule() -> Bool { rule }
+        func setAutoRule(_ on: Bool) throws { calls.append("rule=\(on)"); if failWrites { throw Boom() }; rule = on }
+        func sendAllowedPhotos() async -> Int { calls.append("sendAllowed"); return allowedSent }
         func pickedSummary() -> PickedBatchSummary? { nil }
         func addPicked(_ items: [(fileName: String, mimeType: String, payload: PickedPayload)]) async {}
         func retryFailed() async throws { calls.append("retry"); if failCommands { throw Boom() } }
@@ -370,28 +375,6 @@ final class SettingsFeedbackTests: XCTestCase {
         XCTAssertEqual(media.since, .since(ms: 1_000))
     }
 
-    /// 首页卡：后台备份没开、没关过卡 → 显示；点「开启」只写意图（iOS 没有 App 内授权框）→ 消失。
-    func test_background_card_enables_background_backup() {
-        let (app, engine, _) = make()
-        XCTAssertTrue(app.showsBackgroundCard)
-        app.enableBackgroundFromCard()
-        XCTAssertTrue(engine.disk.auto)
-        XCTAssertFalse(app.showsBackgroundCard)
-    }
-
-    /// 「不用了」→ 落盘、不再显示。写失败卡片仍在并提示。
-    func test_background_card_dismiss_hides_it() {
-        let (app, engine, _) = make()
-        app.dismissBackgroundCard()
-        XCTAssertFalse(app.showsBackgroundCard)
-        XCTAssertTrue(engine.cardDismissed)
-
-        let (failing, failingEngine, _) = make()
-        failingEngine.failWrites = true
-        failing.dismissBackgroundCard()
-        XCTAssertTrue(failing.showsBackgroundCard, "没写下来就还在")
-        XCTAssertNotNil(failing.notice)
-    }
 
     /// 照片页空库两种说法：没选相册 → 引导去选；选了相册（含「最近项目」）→ 同一句（10-29 文案定稿 C8）。
     func test_photos_empty_hint_follows_the_scope() async {

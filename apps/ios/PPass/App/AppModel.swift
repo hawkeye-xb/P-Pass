@@ -32,6 +32,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var access: MediaAccess = .full
     /// #1272 挑几张传：最近一批的进度 / 结果（没挑过 = nil）。
     @Published private(set) var pickedBatch: PickedBatchSummary?
+    /// #1272 B：「自动备份」规则开关；开关下一行小字（被拒 / 有限访问传了一次的说明）；系统照片选择器是否要弹出。
+    @Published private(set) var autoRule = false
+    @Published private(set) var ruleNote: String?
+    @Published var pickerRequested = false
     @Published private(set) var pairing: PairingStatus = .notPaired
     @Published private(set) var scope: Set<String>?
     /// 时间档（#1263）；nil = 从未保存过范围。
@@ -134,6 +138,47 @@ final class AppModel: ObservableObject {
         notice = UserNotice(message: L.s("command_failed"))
     }
 
+    /// 开关下一行小字：刚做完的动作的说明优先；其次是规则开着时权限被收回 / 改成部分的状态（#1272 B，唯一保留的权限提示）。
+    var ruleHint: String? {
+        if let ruleNote { return ruleNote }
+        guard autoRule else { return nil }
+        switch access {
+        case .full: return nil
+        case .partial: return L.s("auto_backup_rule_partial_hint")
+        case .none: return L.s("auto_backup_rule_none_hint")
+        }
+    }
+
+    /// 规则开着、但权限被收回 / 改成部分：自动备份已停止（偏好不动，单独显示成这一种状态）。
+    var autoRuleBlocked: Bool { autoRule && access != .full }
+
+    /// 「自动备份」开关（设置页与照片页空状态的主按钮共用）。关：只写偏好。开：此刻才申请照片权限——
+    /// 全部允许 → 开，没选过范围就进选范围页；有限访问 → 开关保持关，把允许的照片按手选链路传一次；不允许 → 保持关 + 一行小字。
+    func setAutoRule(_ on: Bool) {
+        ruleNote = nil
+        guard on else {
+            do { try backend.engine.setAutoRule(false); autoRule = false } catch { settingWriteFailed("auto-rule", error) }
+            return
+        }
+        Task {
+            let granted = await backend.media.requestAccess()
+            access = granted
+            switch granted {
+            case .full:
+                do { try backend.engine.setAutoRule(true); autoRule = true } catch { settingWriteFailed("auto-rule", error); return }
+                refresh()
+                refreshExistingAlbums()
+                if noAlbums { openScopeEditor() } else { await backend.engine.wake() }
+            case .partial:
+                let n = await backend.engine.sendAllowedPhotos()
+                ruleNote = n > 0 ? L.f("auto_backup_rule_limited_sent", n) : L.s("auto_backup_rule_partial_hint")
+            case .none:
+                ruleNote = L.s("auto_backup_rule_denied_hint")
+            }
+            refresh()
+        }
+    }
+
     /// #1272：系统选择器选完。照片不复制，只登记句柄；传输由引擎在前台逐张进行。
     func pickedChosen(_ items: [(fileName: String, mimeType: String, payload: PickedPayload)]) {
         guard !items.isEmpty else { return }
@@ -153,6 +198,7 @@ final class AppModel: ObservableObject {
     func refresh() {
         facts = backend.engine.facts()
         pickedBatch = backend.engine.pickedSummary()
+        autoRule = backend.engine.autoRule()
         if let v = facts.view, let id = v.currentOrderId {
             if transferMark?.orderId != id || transferMark?.bytes != v.currentBytesSent { transferMark = (id, v.currentBytesSent, Date()) }
         } else { transferMark = nil }
@@ -209,24 +255,6 @@ final class AppModel: ObservableObject {
 
     func setAutoBackup(_ on: Bool) {
         do { try backend.engine.setAutoBackup(on); autoBackup = on } catch { settingWriteFailed("auto-backup", error) }
-    }
-
-    /// 首页引导卡：后台备份没开、也没被关掉过才显示。
-    var showsBackgroundCard: Bool {
-        !pairingLost && BackgroundBackupOfferPrefs.shows(autoBackup: autoBackup, dismissed: backgroundCardDismissed)
-    }
-
-    /// 引导卡「开启后台备份」。iOS 没有 App 内申请后台运行的系统框（后台 App 刷新只能在系统设置里开），所以只写意图；
-    /// 后台 App 刷新被关时由现有的 backgroundNotice 指路（Android 这里弹电池白名单——偏离登记在 tokens.json platforms.ios）。
-    func enableBackgroundFromCard() {
-        AppLog.log("background-card: enable tapped")
-        setAutoBackup(true)
-        refresh()
-    }
-
-    /// 引导卡「不用了」：写盘失败照样提示，卡片仍在（下次还能关）。
-    func dismissBackgroundCard() {
-        do { try backend.engine.dismissBackgroundCard(); backgroundCardDismissed = true } catch { settingWriteFailed("background-card", error) }
     }
 
     /// 「仅 Wi‑Fi」开关：打开直接写；关闭先弹确认（不写盘），确认后才保存（Android MOB-02 §三 / MainActivity `pendingWifiOff`）。
@@ -321,9 +349,14 @@ final class AppModel: ObservableObject {
         }
         refresh()
         refreshNotificationAuthorization()
-        // 系统照片权限框由选范围页读相册列表时弹出（`MediaLibrary.albums`），前面不加说明屏（#1259 10-29 改决定）：
-        // 说明写在系统框的用途说明 NSPhotoLibraryUsageDescription 里。
-        phase = firstTime ? .chooseAlbums : .main
+        // #1272 B：配对后不再申请照片权限，直接进照片页；照片权限只在打开「自动备份」时才申请。
+        // 新电脑：记「连过这台」、规则与后台备份都按「关」写一次（旧电脑留下的意图不带到新电脑）。
+        if firstTime {
+            do { try backend.engine.finishOnboarding() } catch { settingWriteFailed("onboarded", error) }
+            setAutoBackup(false)
+            setAutoRule(false)
+        }
+        phase = .main
     }
 
     /// 选范围页点「开始备份」（首次）/「保存」（编辑）。范围 = 相册 + 时间档（#1263）。

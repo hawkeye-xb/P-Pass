@@ -207,6 +207,11 @@ protocol BackupEngine: AnyObject {
     /// 前台追赶：打开 App / 回到前台 / 选完相册时叫醒一轮。
     func wake() async
     /// #1272 挑几张传：这一批的进度 / 结果（没挑过 = nil）；登记一批并叫醒引擎。
+    /// #1272 B：「自动备份」规则开关（没存过值时由后端按现状初始化过一次）。
+    func autoRule() -> Bool
+    func setAutoRule(_ on: Bool) throws
+    /// 有限访问：把用户允许的照片按手选链路传一次，返回实际登记的张数。
+    func sendAllowedPhotos() async -> Int
     func pickedSummary() -> PickedBatchSummary?
     func addPicked(_ items: [(fileName: String, mimeType: String, payload: PickedPayload)]) async
     /// 命令的失败抛给调用方（#972）：「状态不允许」是返回值，「执行出错」是抛出，两者不混。

@@ -13,8 +13,13 @@ struct HeroCard: View {
         Section {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 8) {
+                    if !app.autoRule {
+                        // #1272 B：没开自动备份是正常状态，不是故障：不显示权限 / 没选相册，只说一句。
+                        Text(L.s("auto_backup_off_hero")).font(PPFont.cardBody).foregroundStyle(PPColor.ink60)
+                    } else {
                     switch render {
-                    case .accessBlocked: accessCard
+                    case .accessBlocked:
+                        Text(L.s("auto_backup_blocked_hero")).font(PPFont.cardTitle).foregroundStyle(PPColor.act)
                     case .countsUnreadable:
                         Text(L.s("hero_counts_unreadable")).font(PPFont.cardBody).foregroundStyle(PPColor.ink60)
                     case .noAlbums:
@@ -28,8 +33,9 @@ struct HeroCard: View {
                     case .triplet:
                         if let triplet { tripletView(triplet) }
                     }
+                    }
                 }
-                if render != .accessBlocked {
+                if render != .accessBlocked || !app.autoRule {
                     // 设计稿：hero 内分隔线 = safe 18%（绿系），与整卡 safe-bg 同色系，不再是系统行分隔线。
                     Rectangle().fill(PPColor.safe.opacity(0.18)).frame(height: 1)
                         .padding(.top, PPUI.Layout.heroDividerAbove).padding(.bottom, PPUI.Layout.heroDividerBelow)
@@ -43,28 +49,13 @@ struct HeroCard: View {
                 }
             }
             .padding(.vertical, 6)
-            .ppTinted(render == .accessBlocked ? PPColor.actBg : PPColor.safeBg)
+            .ppTinted(render == .accessBlocked && app.autoRule ? PPColor.actBg : PPColor.safeBg)
         } footer: {
             // 桌面空间不足：Android 是英雄卡下方、卡外的一行琥珀小字（不加底、不成卡），iOS 对位分组脚注。
             if let free = app.facts.view?.desktopFreeBytes, free < DesktopHealth.lowSpaceBytes {
                 Text(L.s("desktop_low_space_hint"))
                     .font(PPFont.sans(PPUI.TextSize.statusLine, .medium, relativeTo: .footnote))
                     .foregroundStyle(PPColor.waiting).textCase(nil)
-            }
-        }
-    }
-
-    /// MOB-02 / MOB-94：权限不全时整块数字被引导卡顶替——不显示任何数，就不会盖「都存好了」的章。
-    private var accessCard: some View {
-        let partial = app.access == .partial
-        return VStack(alignment: .leading, spacing: 10) {
-            Text(L.s(partial ? "partial_access_title" : "no_media_access_title"))
-                .font(PPFont.cardTitle).foregroundStyle(PPColor.act)
-            Text(L.s(partial ? "partial_access_body" : "no_media_access_body")).font(PPFont.cardBody)
-                .foregroundStyle(PPColor.ink60)
-            // 「去设置」不是危险操作：同 Android 用 ink 主按钮，红色只留给标题说「需要处理」。
-            PPButton(title: L.s("partial_access_action")) {
-                if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
             }
         }
     }
@@ -166,7 +157,7 @@ struct HeroCard: View {
         if case .waiting(let r) = s { return L.s(HomeProjection.waitTextKey(r)) }
         if s == .preparing { return L.s("state_preparing") }
         switch HomeProjection.statusLine(s, pendingK: app.triplet?.k ?? 0) {
-        case .noAlbums: return L.s("state_no_albums")
+        case .noAlbums: return nil
         case .pending(let k): return L.p("state_pending", Int(k))
         case .paused: return L.s("state_paused")
         case .trouble: return L.s("state_trouble")
