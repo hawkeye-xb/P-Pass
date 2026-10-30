@@ -45,8 +45,9 @@ class UpdateApkFileProviderPathTest {
     fun update_apk_sits_strictly_inside_a_declared_cache_path_directory() {
         val cacheDir = File("/data/user/0/com.hawkeyexb.ppass/cache")
         // #719: 包在按身份分的子目录里（update/<key>/ppass-update.apk），同样必须落在声明的根下。
-        val apk = updateArtifactsOf(cacheDir, downloadIdentityOf("0.9.12", "https://x.invalid/a.apk", "ab".repeat(32))).apk.path
-        val roots = cachePathRoots().map { File(cacheDir, it).path.trimEnd('/') }
+        // 比的是设备上的 Unix 路径：用 `/` 分隔的形式，宿主 JVM 是 Windows 时也不变成 `\data\...`。
+        val apk = updateArtifactsOf(cacheDir, downloadIdentityOf("0.9.12", "https://x.invalid/a.apk", "ab".repeat(32))).apk.invariantSeparatorsPath
+        val roots = cachePathRoots().map { File(cacheDir, it).invariantSeparatorsPath.trimEnd('/') }
         assertTrue(
             "更新 APK $apk 不在任何 <cache-path> 目录之下（声明的根：$roots）；" +
                 "FileProvider.getUriForFile 会越界抛异常，安装器拉不起来",

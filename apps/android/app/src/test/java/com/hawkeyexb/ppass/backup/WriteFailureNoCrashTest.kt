@@ -2,7 +2,7 @@
 // 配对文件、回到前台的对账、首页补记、启动时定老用户——写失败不崩溃、盘上停在真实值、该提示的提示；
 // 存储空间恢复后再做一次就能正常落盘。
 //
-// 写失败是真实制造的：把目录设成只读，store 的 tmp 文件写不进去（与真机「存储满」同一条抛出路径），不是 mock。
+// 写失败是真实制造的：让目录拒绝新建文件（WriteBlock：POSIX 去写权限 / Windows 加拒绝 ACL），store 的 tmp 文件写不进去（与真机「存储满」同一条抛出路径），不是 mock。
 // 界面接线（MainActivity 是否真的走这些边界）由最后两条源码门禁钉住。
 //
 // 反证（脚本逐个施加，见 PR）：SettingsWriter.quiet 去掉 catch / savePairingOrError 去掉 catch /
@@ -12,6 +12,7 @@ package com.hawkeyexb.ppass.backup
 
 import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.log.PLog
+import com.hawkeyexb.ppass.testutil.WriteBlock
 import com.hawkeyexb.ppass.transport.Pairing
 import com.hawkeyexb.ppass.transport.PairingStore
 import java.io.File
@@ -41,20 +42,19 @@ class WriteFailureNoCrashTest {
 
     @After
     fun tearDown() {
-        dir.setWritable(true)
+        WriteBlock.unblock(dir)
         dir.deleteRecursively()
         PLog.resetSink()
     }
 
     /** 存储满：之后的写盘失败。 */
     private fun breakWrites() {
-        check(dir.setWritable(false))
-        check(!File(dir, "probe").let { runCatching { it.writeText("x") }.isSuccess }) { "read-only dir is writable (running as root?)" }
+        WriteBlock.block(dir)
     }
 
     /** 用户清出了空间。 */
     private fun spaceFreed() {
-        check(dir.setWritable(true))
+        WriteBlock.unblock(dir)
     }
 
     // ── 完成页 ─────────────────────────────────────────────────
