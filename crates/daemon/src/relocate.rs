@@ -125,12 +125,58 @@ fn platform_probes() -> Probes<'static> {
     }
 }
 
+/// 选的文件夹里有没有用户的东西。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetContents {
+    /// 不存在、空，或只有系统附属文件。
+    Empty,
+    /// 有别的东西。
+    HasOtherThings,
+    /// 本服务**无权列出**这个文件夹（Windows 服务形态下，主人自己的目录在设为私有之前服务读不了；
+    /// 预检没有副作用，不会先去改权限）。只有「读取被拒」这一种原因落到这里，其余 IO 错误照常
+    /// 报错；窗口程序以主人身份补判。
+    ListingDenied,
+}
+
+impl TargetContents {
+    /// 线上形状：`false` / `true` / `null`（null = 服务读不到，由窗口程序补判）。
+    pub fn to_json(self) -> serde_json::Value {
+        match self {
+            TargetContents::Empty => serde_json::Value::Bool(false),
+            TargetContents::HasOtherThings => serde_json::Value::Bool(true),
+            TargetContents::ListingDenied => serde_json::Value::Null,
+        }
+    }
+}
+
+/// 列出 `dir` 判断有没有用户的东西。读取被拒 ⇒ [`TargetContents::ListingDenied`]；
+/// 不存在 ⇒ `Empty`（由 [`plan`] 建出来）；其他错误原样返回。
+pub fn target_contents(dir: &Path) -> std::io::Result<TargetContents> {
+    contents_from(std::fs::read_dir(dir))
+}
+
+/// [`target_contents`] 的判定部分：按「列目录」的结果分类（便于用各种错误单测）。
+fn contents_from(listing: std::io::Result<std::fs::ReadDir>) -> std::io::Result<TargetContents> {
+    match listing {
+        Ok(entries) => Ok(if entries.flatten().any(|e| !ignorable(&e.file_name())) {
+            TargetContents::HasOtherThings
+        } else {
+            TargetContents::Empty
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(TargetContents::Empty),
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            Ok(TargetContents::ListingDenied)
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// 预检结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Check {
     pub plan: Plan,
-    /// 选的文件夹里已有别的东西（照片会和它们放在一起）——窗口确认前要额外提示。
-    pub non_empty: bool,
+    /// 选的文件夹里有没有别的东西（照片会和它们放在一起）——窗口确认前要额外提示。
+    pub contents: TargetContents,
     /// 选的就是这个库（用户自己搬过去了）：只改指向。
     pub adopt: bool,
 }
@@ -196,7 +242,7 @@ pub fn check_with(
     if adopt {
         return Ok(Check {
             plan,
-            non_empty: false,
+            contents: TargetContents::Empty,
             adopt: true,
         });
     }
@@ -226,14 +272,10 @@ pub fn check_with(
             }
         }
     }
-    let non_empty = chosen.exists()
-        && std::fs::read_dir(chosen)
-            .map_err(io_ui_err)?
-            .flatten()
-            .any(|e| !ignorable(&e.file_name()));
+    let contents = target_contents(chosen).map_err(io_ui_err)?;
     Ok(Check {
         plan,
-        non_empty,
+        contents,
         adopt: false,
     })
 }
@@ -266,11 +308,9 @@ fn first_conflict(from: &Path, chosen: &Path) -> std::io::Result<Option<OsString
     Ok(None)
 }
 
-/// 不算「用户的东西」的系统附属文件：Finder 的 `.DS_Store`、AppleDouble（`._<名>`，macOS 往 exFAT /
-/// FAT 写带扩展属性的文件时另生成的属性文件）。
+/// 不算「用户的东西」的系统附属文件（规则与窗口程序共用，见 [`platform::is_folder_litter`]）。
 fn ignorable(name: &std::ffi::OsStr) -> bool {
-    let n = name.to_string_lossy();
-    n == ".DS_Store" || n.starts_with("._")
+    platform::is_folder_litter(name)
 }
 
 /// 给人看的字节数（1000 进制，与 Finder 一致）。
@@ -864,15 +904,59 @@ mod tests {
         let dest = user_dest(home.path());
         let c = check(&from, &dest, local.path()).unwrap();
         assert_eq!(c.plan.to, dest);
-        assert!(c.non_empty);
+        assert_eq!(c.contents, TargetContents::HasOtherThings);
         let empty = home.path().join("Empty");
         std::fs::create_dir_all(&empty).unwrap();
         std::fs::write(empty.join(".DS_Store"), b"x").unwrap();
-        assert!(
-            !check(&from, &empty, local.path()).unwrap().non_empty,
+        assert_eq!(
+            check(&from, &empty, local.path()).unwrap().contents,
+            TargetContents::Empty,
             ".DS_Store 不算用户的东西"
         );
         assert_eq!(pending(local.path()), None, "预检不落计划");
+    }
+
+    /// 预检读不到目标文件夹时：只有「读取被拒」报 `ListingDenied`（线上 null，窗口程序补判）；
+    /// 别的读取错误照样报错，不吞成 null。反证：删掉 PermissionDenied 分支 ⇒ 第一条红；
+    /// 把所有错误都映射成 ListingDenied ⇒ 后两条红。
+    #[test]
+    fn relocate_preview_unreadable_target_is_null_only_when_listing_is_denied() {
+        use std::io::{Error, ErrorKind};
+        assert_eq!(
+            contents_from(Err(Error::from(ErrorKind::PermissionDenied))).unwrap(),
+            TargetContents::ListingDenied
+        );
+        assert_eq!(
+            TargetContents::ListingDenied.to_json(),
+            serde_json::Value::Null
+        );
+        for kind in [
+            ErrorKind::Other,
+            ErrorKind::InvalidData,
+            ErrorKind::Interrupted,
+        ] {
+            assert!(
+                contents_from(Err(Error::from(kind))).is_err(),
+                "{kind:?} 不是「读取被拒」，必须照常报错"
+            );
+        }
+        let home = tempfile::tempdir().unwrap();
+        let file = home.path().join("a-file");
+        std::fs::write(&file, b"x").unwrap();
+        assert!(
+            target_contents(&file).is_err(),
+            "选的是文件不是目录：照常报错"
+        );
+        assert_eq!(
+            contents_from(Err(Error::from(ErrorKind::NotFound))).unwrap(),
+            TargetContents::Empty,
+            "还不存在的文件夹由 plan 建出来"
+        );
+        assert_eq!(TargetContents::Empty.to_json(), serde_json::json!(false));
+        assert_eq!(
+            TargetContents::HasOtherThings.to_json(),
+            serde_json::json!(true)
+        );
     }
 
     // 同卷：顶层条目改名过去，目标里用户原有的文件不动；改完指向后原目录删掉。
@@ -1141,7 +1225,7 @@ mod tests {
         let (from, _) = library(home.path(), "Lib");
         let dest = home.path().join("New/Photos");
         let c = check(&from, &dest, local.path()).unwrap();
-        assert!(!c.non_empty);
+        assert_eq!(c.contents, TargetContents::Empty);
         assert!(!dest.exists(), "预检不建");
         plan(&from, &dest, local.path()).unwrap();
         assert!(dest.is_dir());

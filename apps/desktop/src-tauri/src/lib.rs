@@ -705,10 +705,14 @@ async fn relocate_library(
         .get()
         .ok_or_else(|| ipc::ui_err("ui.err_generic", &[]))?;
     let result = off_main(move || {
-        // §5.3 / #1159：新位置先设为私有（与 configure_library 同一入口），失败就不交给 daemon。
-        private_library_then(
+        let current = ShellHome::current()
+            .configured_library_dir()
+            .map(std::path::PathBuf::from);
+        relocate_steps(
             &dir,
-            |d| platform::adapter().grant_library_dir(d),
+            current.as_deref(),
+            dry_run,
+            &|d| platform::adapter().grant_library_dir(d),
             || {
                 // dry_run：只预检（确认框要显示最终位置、文件夹里是否已有别的东西），不落计划。
                 // 跨卷时预检要量整个库的大小（逐个文件），大库在机械盘上会超过平常的 10 秒。
@@ -725,6 +729,45 @@ async fn relocate_library(
         app.state::<LibraryPick>().clear();
     }
     Ok(result)
+}
+
+/// #639 + §5.3：换库位置的窗口程序一侧。
+///
+/// - 预览（`dry_run`）**没有副作用**：不改任何权限。服务读不到目标文件夹时（主人自己的目录，
+///   还没设为私有），daemon 答的「是否非空」是 `null`，这里以主人身份补判（规则与 daemon 共用
+///   [`platform::is_folder_litter`]）。
+/// - 确认：先把**旧库**、再把**新位置**设为私有（[`private_library_then`]），都成功才交给 daemon
+///   搬。旧库也要设：同卷换位置是改名，文件带着原有的权限过去，旧库先私有，搬过去的就不会带着
+///   旧位置的宽松权限。旧库不存在（照片库找不到，只改指向）就只设新位置。
+fn relocate_steps(
+    target: &std::path::Path,
+    current: Option<&std::path::Path>,
+    dry_run: bool,
+    grant: &dyn Fn(&std::path::Path) -> platform::Result<platform::LibraryDirGrant>,
+    call: impl FnOnce() -> Result<Value, String>,
+) -> Result<Value, String> {
+    if dry_run {
+        let mut check = call()?;
+        if check["non_empty"].is_null() {
+            check["non_empty"] = Value::Bool(owner_sees_other_things(target)?);
+        }
+        return Ok(check);
+    }
+    if let Some(current) = current.filter(|c| c.is_dir()) {
+        private_library_then(current, grant, || Ok(()))?;
+    }
+    private_library_then(target, grant, call)
+}
+
+/// 主人身份下看选的文件夹里有没有别的东西。不存在 = 没有（会被建出来）。
+fn owner_sees_other_things(dir: &std::path::Path) -> Result<bool, String> {
+    match std::fs::read_dir(dir) {
+        Ok(entries) => Ok(entries
+            .flatten()
+            .any(|e| !platform::is_folder_litter(&e.file_name()))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(ipc::ui_err("ui.err_set_library", &[("err", &e)])),
+    }
 }
 
 async fn configure_library_off_main(library_dir: String) -> Result<(), String> {
@@ -3736,6 +3779,97 @@ mod tests {
                 .is_some_and(|e| e.contains("目录不归当前用户所有")),
             "原因要带给界面：{err}"
         );
+    }
+
+    /// 预览没有副作用：一次都不改权限；daemon 读不到目标时（`non_empty: null`）由主人补判，
+    /// daemon 给了确定答案就照用。反证：预览前调一次 grant ⇒ `granted` 非空，红。
+    #[test]
+    fn relocate_preview_changes_no_permissions_and_fills_unknown_contents() {
+        let granted = std::cell::RefCell::new(Vec::<std::path::PathBuf>::new());
+        let grant = |d: &std::path::Path| {
+            granted.borrow_mut().push(d.to_path_buf());
+            Ok(platform::LibraryDirGrant::Granted)
+        };
+        let home = tempfile::tempdir().unwrap();
+        let full = home.path().join("full");
+        std::fs::create_dir(&full).unwrap();
+        std::fs::write(full.join("mine.txt"), b"x").unwrap();
+        let litter = home.path().join("litter");
+        std::fs::create_dir(&litter).unwrap();
+        std::fs::write(litter.join(".DS_Store"), b"x").unwrap();
+        let cur = home.path().join("current");
+        std::fs::create_dir(&cur).unwrap();
+
+        let unknown = || Ok(json!({ "to": "x", "non_empty": null, "adopt": false }));
+        let got = relocate_steps(&full, Some(&cur), true, &grant, unknown).unwrap();
+        assert_eq!(got["non_empty"], true, "主人看得到文件夹里的东西");
+        let got = relocate_steps(&litter, Some(&cur), true, &grant, unknown).unwrap();
+        assert_eq!(got["non_empty"], false, ".DS_Store 不算");
+        let missing = home.path().join("missing");
+        let got = relocate_steps(&missing, Some(&cur), true, &grant, unknown).unwrap();
+        assert_eq!(got["non_empty"], false);
+        let known = || Ok(json!({ "to": "x", "non_empty": false, "adopt": false }));
+        let got = relocate_steps(&full, Some(&cur), true, &grant, known).unwrap();
+        assert_eq!(got["non_empty"], false, "daemon 有确定答案就照用");
+        assert!(
+            granted.borrow().is_empty(),
+            "预览改了权限：{:?}",
+            granted.borrow()
+        );
+    }
+
+    /// 确认搬迁：先旧库、再新位置设为私有，然后才交给 daemon；旧库设不了 ⇒ 不搬、错误到界面。
+    /// 反证：去掉对旧库的设置 ⇒ 顺序断言红；设置失败仍调 daemon ⇒ `called` 红。
+    #[test]
+    fn relocate_confirm_makes_old_and_new_private_before_moving() {
+        let home = tempfile::tempdir().unwrap();
+        let cur = home.path().join("current");
+        std::fs::create_dir(&cur).unwrap();
+        let target = home.path().join("target");
+        let order = std::cell::RefCell::new(Vec::<String>::new());
+        let grant = |d: &std::path::Path| {
+            order
+                .borrow_mut()
+                .push(d.file_name().unwrap().to_string_lossy().into_owned());
+            Ok(platform::LibraryDirGrant::Granted)
+        };
+        relocate_steps(&target, Some(&cur), false, &grant, || {
+            order.borrow_mut().push("daemon".into());
+            Ok(json!({ "to": "x" }))
+        })
+        .unwrap();
+        assert_eq!(*order.borrow(), vec!["current", "target", "daemon"]);
+
+        let called = std::cell::Cell::new(false);
+        let failing = |d: &std::path::Path| {
+            if d.ends_with("current") {
+                Err(platform::PlatformError::Failed {
+                    action: "grant_photo_dir",
+                    detail: "有 1 个文件或文件夹的权限改不了：x.jpg".into(),
+                })
+            } else {
+                Ok(platform::LibraryDirGrant::Granted)
+            }
+        };
+        let err = relocate_steps(&target, Some(&cur), false, &failing, || {
+            called.set(true);
+            Ok(json!({}))
+        })
+        .expect_err("旧库设不了必须中止");
+        assert!(!called.get(), "设置失败后不许再交给 daemon 搬");
+        assert!(err.contains("x.jpg"), "{err}");
+
+        // 旧库不存在（照片库找不到、只改指向）：只设新位置。
+        order.borrow_mut().clear();
+        relocate_steps(
+            &target,
+            Some(&home.path().join("gone")),
+            false,
+            &grant,
+            || Ok(json!({})),
+        )
+        .unwrap();
+        assert_eq!(*order.borrow(), vec!["target"]);
     }
 
     /// 设好了、本形态不需要、卷没有权限可设——三种都照常提交。
