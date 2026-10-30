@@ -363,12 +363,13 @@ impl Manifest {
             .sum()
     }
 
-    /// 内容一致（类型、大小、链接指向）——拷贝后的核对。修改时间不比：exFAT 只有 2 秒精度。
+    /// 内容一致（类型、大小、链接指向）——拷贝后的核对，`self` 是源快照、`copy` 是拷出来的。
+    /// 修改时间不比：exFAT 只有 2 秒精度。
     /// Windows 上拷贝工具把文件链接拷成指向文件的内容（普通用户与服务账户没有建符号链接的特权）：
-    /// 目标是同样大小的普通文件也算一致。
-    fn same_content(&self, other: &Self) -> bool {
-        self.0.len() == other.0.len()
-            && self.0.iter().all(|(k, a)| match (a, other.0.get(k)) {
+    /// 源是链接、拷出来是同样大小的普通文件也算一致；反过来不算。
+    fn same_content(&self, copy: &Self) -> bool {
+        self.0.len() == copy.0.len()
+            && self.0.iter().all(|(k, a)| match (a, copy.0.get(k)) {
                 (Entry::Dir, Some(Entry::Dir)) => true,
                 (Entry::File { len: x, .. }, Some(Entry::File { len: y, .. })) => x == y,
                 (Entry::Link { target: x, .. }, Some(Entry::Link { target: y, .. })) => x == y,
@@ -625,7 +626,7 @@ pub fn move_library_with(
                 .map(|m| m != snapshot)
                 .unwrap_or(true)
         };
-        if !got.same_content(&snapshot) {
+        if !snapshot.same_content(&got) {
             cleanup();
             // 拷贝与快照对不上：多半是拍完快照后用户改了库（拷进来的是改过的样子）。
             if source_changed() {
@@ -774,6 +775,32 @@ pub fn mark_flipped(local_base: &Path, plan: &Plan) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::library_location::LIBRARY_MARKER;
+
+    #[test]
+    fn a_link_copied_as_its_content_matches_only_where_the_copy_tool_does_that() {
+        let one = |e: Entry| Manifest(BTreeMap::from([(PathBuf::from("link.jpg"), e)]));
+        let link = || {
+            one(Entry::Link {
+                target: PathBuf::from("outside.jpg"),
+                len: Some(7),
+            })
+        };
+        let file = |len| {
+            one(Entry::File {
+                len,
+                modified: None,
+            })
+        };
+        assert_eq!(
+            link().same_content(&file(7)),
+            platform::COPY_MAY_MATERIALIZE_FILE_LINKS
+        );
+        assert!(!link().same_content(&file(8)), "大小不同不算一致");
+        assert!(
+            !file(7).same_content(&link()),
+            "源是文件、拷出来成了链接，不算一致"
+        );
+    }
 
     fn library(parent: &Path, name: &str) -> (PathBuf, String) {
         let lib = parent.join(name);
