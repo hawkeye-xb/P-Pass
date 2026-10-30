@@ -1,4 +1,4 @@
-// #1272：「自动备份」规则开关——默认关，只认显式设置，不从旧状态推导（不做升级迁移）。
+// #1272：「自动备份」规则开关——没存过值时按当前真实状态初始化一次（权限 + 范围），之后以存下的值为准。
 package com.hawkeyexb.ppass.backup
 
 import java.nio.file.Files
@@ -9,18 +9,26 @@ import org.junit.Test
 class AutoBackupRulePrefsTest {
     private fun dir() = Files.createTempDirectory("rule").toFile()
 
-    // 反证：enabled() 在没有文件时返回 true（或去推导）→ 新装默认开，红。
+    // 反证：initial 恒 true / 恒 false → 下面两条里总有一条红。
     @Test
-    fun `it is off by default`() {
-        assertFalse(AutoBackupRulePrefs(dir()).enabled())
+    fun `the first read follows the real state - on only with permission and a scope`() {
+        assertTrue(AutoBackupRulePrefs(dir(), initial = { true }).enabled())
+        assertFalse(AutoBackupRulePrefs(dir(), initial = { false }).enabled())
     }
 
     @Test
-    fun `an explicit choice is persisted`() {
+    fun `without an initial source it is off`() {
+        assertFalse(AutoBackupRulePrefs(dir()).enabled())
+    }
+
+    // 已存的值不被覆盖：初值只在没有文件时算一次并落盘。反证：每次都重新算 → 用户关掉后又被推成开，红。
+    @Test
+    fun `a stored value is never overwritten by the initial state`() {
         val d = dir()
+        assertTrue(AutoBackupRulePrefs(d, initial = { true }).enabled())
+        AutoBackupRulePrefs(d, initial = { true }).set(false)
+        assertFalse(AutoBackupRulePrefs(d, initial = { true }).enabled())
         AutoBackupRulePrefs(d).set(true)
-        assertTrue(AutoBackupRulePrefs(d).enabled())
-        AutoBackupRulePrefs(d).set(false)
-        assertFalse(AutoBackupRulePrefs(d).enabled())
+        assertTrue(AutoBackupRulePrefs(d, initial = { false }).enabled())
     }
 }

@@ -225,7 +225,7 @@ internal fun definitiveFactsOf(context: Context): DefinitiveFacts {
         backgroundRequested = AutoBackupPrefs(dir).requested(),
         interruptionDetectedAt = health.detectedAt.takeIf { health.interruptedUnacknowledged },
         batteryWhitelisted = isIgnoringBatteryOptimizations(context),
-        autoBackupRuleOn = AutoBackupRulePrefs(dir).enabled(),
+        autoBackupRuleOn = autoBackupRulePrefs(context).enabled(),
     )
 }
 
