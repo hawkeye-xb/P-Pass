@@ -485,7 +485,6 @@ pub struct FlowFetchRequest {
     /// once in the system photo picker. Optional and never required: an old phone omits it (auto),
     /// an automatic item is not sent at all, and an old desktop ignores the key.
     #[serde(skip_serializing_if = "FlowItemSource::is_auto")]
-
     pub source: FlowItemSource,
 }
 
