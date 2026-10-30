@@ -369,4 +369,5 @@
     <string name="auto_backup_rule_partial_hint">Access is limited to some photos.</string>
     <string name="auto_backup_rule_none_hint">No access to photos.</string>
     <string name="auto_backup_from_today_empty">Photos you take today will be sent to your computer automatically. Go take one.</string>
+    <string name="more_label">More</string>
 </resources>

@@ -345,19 +345,30 @@ fun HomeScreen(
     // "什么时候备份"子页（用户实机反馈：设计稿 M10 就是直接开关行，
     // 折进子页是上一轮自己想当然加的一层，设计稿没有）。
     var showStorageDetail by remember { mutableStateOf(false) }
+    var showMore by remember { mutableStateOf(false) }
     androidx.compose.material3.ProvideTextStyle(
         androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
     ) {
     if (showStorageDetail) {
-        BackHandler { showStorageDetail = false; onStorageDetailOpenChange(false) }
+        BackHandler { showStorageDetail = false }
         StorageComputerDetail(
             storageName = storageName,
             pairedAt = pairedAt,
             confirmedCount = triplet?.m ?: 0L,
             lastSuccessAt = triplet?.lastSuccessAt ?: 0L,
             pairingLost = pairingLost,
-            onBack = { showStorageDetail = false; onStorageDetailOpenChange(false) },
+            // #1272：详情在「更多」里打开，返回回到「更多」（底栏仍收着）。
+            onBack = { showStorageDetail = false },
             onDisconnect = onDisconnect,
+        )
+    } else if (showMore) {
+        BackHandler { showMore = false; onStorageDetailOpenChange(false) }
+        MorePage(
+            storageName = storageName,
+            onOpenStorage = { showStorageDetail = true },
+            onCheckUpdate = onCheckUpdate,
+            updateRowValue = updateRowValue,
+            onBack = { showMore = false; onStorageDetailOpenChange(false) },
         )
     } else {
 
@@ -865,10 +876,47 @@ fun HomeScreen(
             }
         }
 
-        // 2026-09-14（用户拍板，与「备份」section 标签同一决策）：去掉
-        // "关于"标签——卡片边框已把存储电脑+版本这两行圈成一组，标签是
-        // 信息增量为 0 的重复。
+        // #1272：存储电脑详情、版本、检查更新收进「更多」二级页（断开连接仍在存储电脑详情里）。
         Spacer(Modifier.height(18.dp))
+        Surface(
+            color = PPColor.Paper,
+            shape = RoundedCornerShape(PPSize.RadiusCard),
+            border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Border),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            CellRow(
+                label = stringResource(R.string.more_label),
+                onClick = { showMore = true; onStorageDetailOpenChange(true) },
+            )
+        }
+
+        Spacer(Modifier.height(8.dp))
+    }
+    }
+    }
+}
+
+/** #1272「更多」二级页：存储电脑（点开详情，断开连接在里面）、版本、检查更新。 */
+@Composable
+private fun MorePage(
+    storageName: String,
+    onOpenStorage: () -> Unit,
+    onCheckUpdate: (() -> Unit)?,
+    updateRowValue: String?,
+    onBack: () -> Unit,
+) {
+    Column(Modifier.fillMaxSize().background(PPColor.Paper).padding(20.dp, 14.dp, 20.dp, 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "‹", fontSize = 24.sp, color = PPColor.Ink,
+                modifier = Modifier.clickable(onClick = onBack).padding(4.dp, 0.dp, 12.dp, 0.dp),
+            )
+            Text(
+                stringResource(R.string.more_label),
+                fontSize = 24.sp, fontFamily = PPFont.Serif, color = PPColor.Ink,
+            )
+        }
+        Spacer(Modifier.height(16.dp))
         Surface(
             color = PPColor.Paper,
             shape = RoundedCornerShape(PPSize.RadiusCard),
@@ -882,7 +930,7 @@ fun HomeScreen(
                 CellRow(
                     label = stringResource(R.string.storage_computer),
                     value = storageName,
-                    onClick = { showStorageDetail = true; onStorageDetailOpenChange(true) },
+                    onClick = onOpenStorage,
                 )
                 HorizontalDivider(color = PPColor.Divider)
                 Row(
@@ -911,10 +959,6 @@ fun HomeScreen(
                 }
             }
         }
-
-        Spacer(Modifier.height(8.dp))
-    }
-    }
     }
 }
 
