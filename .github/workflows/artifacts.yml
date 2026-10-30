@@ -102,11 +102,11 @@ jobs:
         uses: ./.github/actions/codecs-macos
 
       # 先清 libheif-sys 的构建脚本缓存（target/ 有缓存，换了库它不一定重新探测）。
+      - name: Clear libheif-sys build cache
+        run: cargo clean --release -p libheif-sys
+
       - name: Build release binaries
-        run: |
-          set -euo pipefail
-          cargo clean --release -p libheif-sys
-          cargo build --release -p daemon -p testclient
+        run: cargo build --release -p daemon -p testclient
 
       - name: Bundle self-contained (dylibs + rpath rewrite)
         run: |
@@ -275,13 +275,16 @@ jobs:
         timeout-minutes: 40
         uses: ./.github/actions/vcpkg-libheif
 
+      - name: Clear libheif-sys build cache
+        shell: bash
+        run: cargo clean --release -p libheif-sys
+
       - name: Build release binaries
         shell: bash
         env:
           VCPKG_ROOT: "C:\\vcpkg"
         run: |
           set -euo pipefail
-          cargo clean --release -p libheif-sys
           cargo build --release -p daemon -p testclient
           outs=()
           for f in target/release/build/libheif-sys-*/output; do outs+=(--link-output "$f"); done
