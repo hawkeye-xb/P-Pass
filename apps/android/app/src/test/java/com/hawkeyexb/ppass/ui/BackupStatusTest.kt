@@ -43,13 +43,13 @@ class BackupStatusTest {
     @Test
     fun pending_copy_does_not_say_all_safe() {
         val zh = zhStrings()
-        // Pending 映射到 state_pending——它的真实中文文案不得含「都存好了」。
+        // Pending 映射到 state_pending——它的真实中文文案不得含「已全部备份」（10-29 定稿前是「都存好了」）。
         val pending = zh.getValue("state_pending")
-        assertFalse("state_pending 文案说了假话: $pending", pending.contains("都存好了"))
+        assertFalse("state_pending 文案说了假话: $pending", pending.contains("已全部备份"))
         assertTrue("state_pending 应说明欠账: $pending", pending.contains("待备份"))
-        // 「都存好了」只允许住在 state_safe 里（AllSafe 裁决独占）。
-        val offenders = zh.filterValues { it.contains("都存好了") }.keys
-        assertEquals("「都存好了」只允许出现在 state_safe: $offenders", setOf("state_safe"), offenders)
+        // 「已全部备份」只允许住在 state_safe 里（AllSafe 裁决独占）。
+        val offenders = zh.filterValues { it.contains("已全部备份") }.keys
+        assertEquals("「已全部备份」只允许出现在 state_safe: $offenders", setOf("state_safe"), offenders)
     }
 
     @Test

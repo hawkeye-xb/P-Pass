@@ -16,27 +16,35 @@ enum PairVerdict: Equatable {
     case codeWrong
     /// #1118：电脑的密钥确认（`confirm_b`）验不过 / 畸形的 PAKE 消息：没有保存配对。
     case desktopProofFailed
+    /// #1264：还没提交申请就被电脑在握手时用「未配对」关闭码拒掉——它的配对窗口关了（二维码过期 / 关掉 / 用掉）。
+    /// 不是网络问题，也不是电脑主人拒绝。
+    case qrExpired
 
     var outcome: PairOutcome {
         switch self {
         case .accepted: return .joined(firstTime: true)
-        case .denied(let note): return .refused(note: note, ownerSaidNo: true)
+        // 10-29 文案 B6：只有电脑上点了「拒绝」才是电脑主人说不；配对码无效 / 不认识的原因都归「加入失败」。
+        case .denied(let note): return .refused(note: note, ownerSaidNo: note == .denied)
         case .expired: return .refused(note: .expired, ownerSaidNo: false)
         case .desktopRestarted: return .refused(note: .desktopRestarted, ownerSaidNo: false)
         case .desktopTooOld: return .needsUpdate(.desktop)
         case .versionMismatch(let side): return .needsUpdate(side)
-        case .unreachable(let reason): return .failed(reason: reason)
-        // 不是电脑主人拒绝的：标题用「这次加入没有完成」，原因写在说明里。
+        case .unreachable(let reason): return .failed(diagnostic: reason)
+        // 不是电脑主人拒绝的：标题用「加入失败」，原因写在说明里。
         case .codeWrong: return .refused(note: .codeWrong, ownerSaidNo: false)
         case .desktopProofFailed: return .refused(note: .desktopProofFailed, ownerSaidNo: false)
+        case .qrExpired: return .refused(note: .qrExpired, ownerSaidNo: false)
         }
     }
 
-    /// pair.request 被拒（#1073 归类表配对通道）：版本不兼容单独成判决，其余都是「电脑那边说不」。
+    /// pair.request 被拒（#1073 归类表配对通道）：版本不兼容单独成判决，其余按 reason 挑原因行（不算电脑主人说不，B6）。
     static func rejected(_ error: RespError?) -> PairVerdict {
         let reason = DesktopReason(error)
         if case let .versionMismatch(side) = reasonClass(reason) { return .versionMismatch(side) }
-        return .denied(PairNote(rejection: reason))
+        let note = PairNote(rejection: reason)
+        // 10-29 文案 B13：屏幕上只有「错误代码：generic」，电脑给的原始 reason 要进日志才查得到。
+        if note == .generic { AppLog.log("pair: request refused, reason with no wording (\(error?.code ?? "")/\(error?.reason ?? ""))") }
+        return .denied(note)
     }
 }
 
@@ -49,6 +57,13 @@ protocol PairPhoneSession: AnyObject {
     func finish(pakeB: String) throws -> String
     /// 电脑的 `confirm_b`：通过才能保存配对。先 finish 才能 verify。
     func verify(confirmB: String) throws
+}
+
+/// #1264：还没提交申请（hello / pair.request）就被这台电脑在握手时用「未配对」关闭码拒掉——配对窗口已关
+/// （#1122 准入；原因只记在电脑日志里）。rpc 只连二维码里那台电脑，关闭方经 TLS 认证就是它。对位 Android `pairWindowClosed`。
+func pairWindowClosed(_ error: Error) -> Bool {
+    guard case let FfiError.PeerClosed(_, code) = error else { return false }
+    return DesktopCloseCodes.meansNotPaired(code)
 }
 
 /// 验证码生成、指纹、PAKE 会话：全部来自 FFI。
@@ -105,7 +120,10 @@ struct PairVerdictLoop {
 
     func run(token: String, deviceName: String) async throws -> PairVerdict {
         let hello: Resp
-        do { hello = try await rpc(Methods.hello, EmptyParams()) } catch { return .unreachable(String(describing: error)) }
+        do { hello = try await rpc(Methods.hello, EmptyParams()) } catch {
+            if pairWindowClosed(error) { return .qrExpired }
+            return .unreachable(String(describing: error))
+        }
         var mayWithdraw = true
         var desktopName = ""
         // #1069：版本在握手时判定——不兼容就不发起配对请求，直接提示更新哪一端。
@@ -132,7 +150,10 @@ struct PairVerdictLoop {
         let submit: Resp
         do {
             submit = try await rpc(Methods.pairRequest, PairRequest(token: token, deviceName: deviceName, ackThenPoll: true, pakeA: phone.pakeA()))
-        } catch { return .unreachable(String(describing: error)) }
+        } catch {
+            if pairWindowClosed(error) { return .qrExpired }
+            return .unreachable(String(describing: error))
+        }
         guard submit.ok else { return .rejected(submit.error) }
         // 没有 request_id 的应答（老电脑直接回 accepted）不带验证码交换：绝不当作加入。
         guard let submitted = try? submit.result?.decode(PairSubmitted.self), !submitted.requestId.isEmpty else {
@@ -278,7 +299,7 @@ final class LivePairing: PairingService, @unchecked Sendable {
     func pair(code raw: String, onCode: @escaping PairCodeSink) async -> PairOutcome {
         let code: ParsedPairLink
         do { code = try parsePairLink(link: raw.trimmingCharacters(in: .whitespacesAndNewlines)) } catch {
-            return .failed(reason: L.s("not_a_code") + " (\(error))")
+            return .failed(diagnostic: "not a pairing code: \(error)", kind: .notACode)
         }
 
         let client = ProtoClient(transport: transportFor(code.peerToken))
@@ -304,7 +325,7 @@ final class LivePairing: PairingService, @unchecked Sendable {
             }
         }
         let phoneNode: String
-        do { phoneNode = try localNodeId() } catch { return .failed(reason: "local node id: \(error)") }
+        do { phoneNode = try localNodeId() } catch { return .failed(diagnostic: "local node id: \(error)") }
         var loop = PairVerdictLoop(rpc: rpc)
         loop.crypto = crypto
         loop.phoneNode = phoneNode
@@ -315,7 +336,7 @@ final class LivePairing: PairingService, @unchecked Sendable {
         let task = Task { [loop] in try await loop.run(token: code.token, deviceName: UIDevice.current.name) }
         current = task
         let verdict: PairVerdict
-        do { verdict = try await task.value } catch { return .failed(reason: String(describing: error)) }
+        do { verdict = try await task.value } catch { return .failed(diagnostic: String(describing: error)) }
         if case .accepted(let a) = verdict {
             let known = onboarded(code.nodeId)
             do {
@@ -375,7 +396,7 @@ final class LivePairing: PairingService, @unchecked Sendable {
 
     private func saveFailure(_ error: Error) -> PairOutcome {
         AppLog.log("pair: cannot persist pairing.json (\(error))")
-        return .failed(reason: L.s("pair_save_failed") + " (\(error))")
+        return .failed(diagnostic: "persist pairing.json: \(error)", kind: .saveFailed)
     }
 }
 

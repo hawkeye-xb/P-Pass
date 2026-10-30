@@ -70,9 +70,3 @@ internal suspend fun calibrateConfirmed(
         false
     }
 }
-
-/** MOB-29: 提示文案的字典 key（注册表 `crates/diag/src/keys.rs`，
- *  文案在 `assets/i18n/{en,zh}.json`；Android 捆绑副本的漂移由
- *  `DiagTextTest.bundled_assets_never_drift_from_repo_source` 守）。 */
-internal const val MSG_REUPLOAD_TITLE = "ui.mobile_reupload_title"
-internal const val MSG_REUPLOAD_BODY = "ui.mobile_reupload_body"

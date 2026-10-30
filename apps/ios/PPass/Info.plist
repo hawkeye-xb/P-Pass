@@ -73,7 +73,7 @@
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Used to find your computer on the same Wi‑Fi and transfer photos.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Back up your photos to your own computer at home.</string>
+	<string>Automatic backup needs access to all photos.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save a photo from your home library back to this phone.</string>
 	<key>UISupportedInterfaceOrientations</key>

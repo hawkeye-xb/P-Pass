@@ -77,35 +77,16 @@ class WriteFailureNoCrashTest {
     }
 
     @Test
-    fun notification_asked_mark_failure_is_quiet_and_never_asks_twice() {
-        val ask = OnboardingNotificationAsk(dir)
-        ask.initIfAbsent(existingUser = false)
-        assertTrue(ask.shouldAsk(POST_NOTIFICATIONS_MIN_SDK, alreadyGranted = false))
+    fun notify_prefs_init_failure_on_launch_means_off_and_retries_next_launch() {
+        val prefs = NotifyOnFailurePrefs(dir)
         breakWrites()
 
-        val marked = writer.quiet("notificationAsk", "asked") { ask.markAsked() }
-
-        assertFalse("落不了盘 → 调用方不弹系统框（对位 iOS：宁可少问）", marked)
-        assertTrue("没有用户在等这一步的结果，不提示", notices.isEmpty())
-        assertTrue(logs.any { it.startsWith("settings: write failed (notificationAsk)") })
+        assertTrue(runCatching { prefs.initIfAbsent(existingUser = true) }.isFailure)
+        assertFalse("文件没落下 = 关（偏隐私的一侧）", prefs.enabled())
 
         spaceFreed()
-        assertTrue(writer.quiet("notificationAsk", "asked") { ask.markAsked() })
-        assertFalse(ask.shouldAsk(POST_NOTIFICATIONS_MIN_SDK, alreadyGranted = false))
-    }
-
-    @Test
-    fun notification_ask_init_failure_on_launch_is_quiet_and_means_do_not_ask() {
-        val ask = OnboardingNotificationAsk(dir)
-        breakWrites()
-
-        assertFalse(writer.quiet("notificationAsk", "init") { ask.initIfAbsent(existingUser = false) })
-        assertTrue(notices.isEmpty())
-        assertFalse("文件没落下 = 不问（宁可少问）", ask.shouldAsk(POST_NOTIFICATIONS_MIN_SDK, alreadyGranted = false))
-
-        spaceFreed()
-        assertTrue(writer.quiet("notificationAsk", "init") { ask.initIfAbsent(existingUser = false) })
-        assertTrue(ask.shouldAsk(POST_NOTIFICATIONS_MIN_SDK, alreadyGranted = false))
+        prefs.initIfAbsent(existingUser = true)
+        assertTrue(prefs.enabled())
     }
 
     // ── 中断卡「恢复备份」 ─────────────────────────────────────
@@ -260,8 +241,7 @@ class WriteFailureNoCrashTest {
     @Test
     fun activity_routes_the_1039_writes_through_the_boundaries() {
         assertEveryCallWrapped(".markOnboarded(s.pairing.daemonNodeId)", "settingsWriter.write(\"onboarded\"")
-        assertEveryCallWrapped("notificationAsk.markAsked()", "settingsWriter.quiet(\"notificationAsk\", \"asked\")")
-        assertEveryCallWrapped("it.initIfAbsent(", "settingsWriter.quiet(\"notificationAsk\"")
+        assertEveryCallWrapped("notifyOnFailurePrefs.markSystemAsked()", "settingsWriter.quiet(\"notifyOnFailure\", \"system asked\")")
         assertEveryCallWrapped("resumeAfterInterruption(context)", "settingsWriter.write(\"backupInterruption\", \"acknowledged\")")
         assertEveryCallWrapped("BackupHealthPrefs(context.filesDir).acknowledge()", "settingsWriter.write(\"backupInterruption\", \"acknowledged\")")
         assertEveryCallWrapped("AutoBackupPrefs(context.filesDir).setRequested(false)", "settingsWriter.write(\"autoBackup\", \"new desktop, ask again\")")
@@ -277,13 +257,13 @@ class WriteFailureNoCrashTest {
     }
 
     @Test
-    fun finish_page_enter_rewrites_the_intent_and_pair_save_failure_goes_to_the_trouble_page() {
+    fun first_scope_save_rewrites_the_intent_and_pair_save_failure_goes_to_the_trouble_page() {
+        // #1263：没有完成页了——首次选范围点「开始备份」时按「后台备份关」把意图再写一次。
+        val enter = main.substringAfter("is Screen.Buckets -> {").substringAfter("if (s.firstTime) {").substringBefore("} else if")
         assertTrue(
-            "完成页「进入」要按用户的选择把意图再写一次",
-            main.contains("onEnter = { thenContinue(onEnterWithoutBackgroundBackup) }"),
+            "首次选完范围要按「关」把意图再写一次",
+            enter.contains("settingsWriter.write(\"autoBackup\", false) { disableAutoBackup(context) }"),
         )
-        val enter = main.substringAfter("val onEnterWithoutBackgroundBackup = {").substringBefore("\n            }")
-        assertTrue(enter.contains("settingsWriter.write(\"autoBackup\", false) { disableAutoBackup(context) }"))
         val joined = main.substringAfter("val saveError = savePairingOrError").substringBefore("return@LaunchedEffect")
         assertTrue("配对文件存不下来 → 配对失败页（对位 iOS pair_save_failed）", joined.contains("R.string.pair_save_failed"))
     }

@@ -52,7 +52,10 @@ enum BGTestDriver {
         let testAlbumIds = Set(testAlbums().map(\.localIdentifier))
         let saved: Set<String>?
         do { saved = try media.savedScope() } catch { status.write("failed", ["error": "scope unreadable: \(error)", "done": true]); return }
+        let since: BackupSince?
+        do { since = try media.savedSince() } catch { status.write("failed", ["error": "scope since unreadable: \(error)", "done": true]); return }
         status.write("scope", ["selected": scopeJSON(saved),
+                               "since_ms": { if case .since(let ms)? = since { return ms as Any } else { return NSNull() } }(),
                                "known": media.knownAlbums().sorted(),
                                "selected_test_albums": (saved ?? []).intersection(testAlbumIds).count,
                                "test_assets": testAssetIds().count, "done": true])
@@ -63,7 +66,7 @@ enum BGTestDriver {
         let media = model.backend.media
         // 先清空：范围里可能还是测试相册，一连上正式桌面就会把测试照片备份进用户的真实库。
         let all = Set(((try? await media.albums()) ?? []).map(\.id))
-        do { try await media.saveScope([], known: all) } catch {
+        do { try await media.saveScope([], known: all, since: .all) } catch {
             status.write("failed", ["error": "clear scope: \(error)", "done": true]); return
         }
         let outcome = await E2EPairCode.pair(model.backend.pairing, link: link, dir: status.url.deletingLastPathComponent())
@@ -88,7 +91,9 @@ enum BGTestDriver {
             let conflict = allowTestScope ? [] : inSelected.intersection(test)
             if conflict.isEmpty {
                 do {
-                    try await media.saveScope(selected, known: known)
+                    // 导出时没有 since_ms（全部，或 #1263 之前导出的）→ 全部。
+                    let since = (json["since_ms"] as? NSNumber).map { BackupSince.since(ms: $0.int64Value) } ?? .all
+                    try await media.saveScope(selected, known: known, since: since)
                     extra["scope_restored"] = true
                 } catch {
                     extra["scope_restored"] = false
@@ -164,7 +169,7 @@ enum BGTestDriver {
         } catch { status.write("failed", ["error": "create album: \(error)", "done": true]); return }
         guard let albumId else { status.write("failed", ["error": "create album: no id", "done": true]); return }
         let known = Set(((try? await backend.media.albums()) ?? []).map(\.id)).union([albumId])
-        model.albumsChosen([albumId], known: known, firstTime: firstTime)
+        model.albumsChosen([albumId], known: known, wantsAll: true, firstTime: firstTime) // 种进来的测试照片拍摄时间可能早于今天：时间档选「全部」
         status.write("ready")
 
         let seed = dir.appendingPathComponent("seed", isDirectory: true)

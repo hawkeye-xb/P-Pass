@@ -1,5 +1,5 @@
 /* System permission prompt descriptions (#1013). Keys mirror Info.plist's *UsageDescription; InfoPlistStringsTests keeps them complete. */
 "NSLocalNetworkUsageDescription" = "Used to find your computer on the same Wi‑Fi and transfer photos.";
 "NSCameraUsageDescription" = "Scan the pairing QR code shown on your home computer.";
-"NSPhotoLibraryUsageDescription" = "Back up your photos to your own computer at home.";
+"NSPhotoLibraryUsageDescription" = "Automatic backup needs access to all photos.";
 "NSPhotoLibraryAddUsageDescription" = "Save a photo from your home library back to this phone.";

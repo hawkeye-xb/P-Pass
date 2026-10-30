@@ -127,8 +127,10 @@ describe("AUDIT-07：活动记录读失败不再静默吞掉", () => {
     await goto("log");
 
     const error = screen.getByTestId("audit-error");
-    expect(error.textContent).toContain("读不到活动记录");
-    expect(error.textContent).toContain("audit list exploded");
+    // B13：正文 + 错误代码；原始错误只进 console，不进界面。
+    expect(error.textContent).toContain(t("ui.log_load_failed"));
+    expect(error.textContent).toContain(t("ui.err_code", { code: "log_load_failed" }));
+    expect(error.textContent).not.toContain("audit list exploded");
     expect(
       screen.queryByText(t("ui.log_empty")),
       "读不到 ≠ 没有记录：空态文案不许同时出现",

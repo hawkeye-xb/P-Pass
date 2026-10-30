@@ -130,6 +130,8 @@ struct PPButton: View {
             Text(title)
                 .font(PPFont.sans(fontSize, .bold))
                 .multilineTextAlignment(.center)
+                // 长文案不顶到按钮边（欢迎页英文主按钮）；左右内边距用现有的按钮左右内边距 token。
+                .padding(.horizontal, PPUI.Layout.chipPaddingX)
                 .frame(maxWidth: .infinity, minHeight: height)
         }
         .buttonStyle(PPButtonStyle(kind: kind))

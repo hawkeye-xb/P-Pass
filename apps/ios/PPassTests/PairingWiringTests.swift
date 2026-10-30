@@ -118,9 +118,23 @@ final class PairingWiringTests: XCTestCase {
         var paired = 0
         let outcome = await makePairing(transport, store: store, onboarded: { _ in true }) { _, _ in paired += 1; return false }
             .pair(code: link)
-        guard case .failed(let reason) = outcome else { return XCTFail("写盘失败应当配对失败，实际 \(outcome)") }
-        XCTAssertTrue(reason.contains(L.s("pair_save_failed")), reason)
+        guard case .failed(let diagnostic, let kind) = outcome else { return XCTFail("写盘失败应当配对失败，实际 \(outcome)") }
+        // #1264：屏幕上只有本机的说明；系统错误原文只在诊断里。10-29 文案：「加入失败」+ pair_save_failed 那一页。
+        XCTAssertEqual(kind, .saveFailed)
+        XCTAssertTrue(diagnostic.contains("pairing.json"), diagnostic)
         XCTAssertEqual(paired, 0, "没落盘就不能触发 onPaired")
+    }
+
+    /// 10-29 文案 B7：扫到的不是 P-Pass 配对码 → 单独一页（标题 not_a_code，无正文），不套「无法连接电脑」；不拨号、不写盘。
+    func test_not_a_pairing_code_is_its_own_page() async throws {
+        let store = PairingStore(root: dir)
+        var paired = 0
+        let outcome = await makePairing(ScriptedTransport([:]), store: store) { _, _ in paired += 1; return false }
+            .pair(code: "https://example.com")
+        guard case .failed(_, let kind) = outcome else { return XCTFail("实际 \(outcome)") }
+        XCTAssertEqual(kind, .notACode)
+        XCTAssertEqual(paired, 0)
+        XCTAssertNil(store.load())
     }
 
     func test_accepted_path_also_fails_when_persisting_fails() async throws {

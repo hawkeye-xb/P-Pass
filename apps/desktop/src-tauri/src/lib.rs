@@ -137,6 +137,30 @@ fn set_tray_locale(app: tauri::AppHandle, lang: String) {
     }
 }
 
+/// #1253：照片库找不到 = 备份全线停摆，窗口程序在运行时要让人看到。进入时把主窗口拉到前台，
+/// 程序坞图标持续跳动直到用户点开（Critical），菜单栏图标旁标「!」、悬停提示换成原因；恢复后撤掉。
+/// 窗口程序没在运行时由后台服务发系统通知，不替用户把窗口程序拉起来。
+/// `lang` 与 [`set_tray_locale`] 一样由前端报。纯托盘 / 窗口操作，不等任何结果。
+#[tauri::command]
+fn set_library_alert(app: tauri::AppHandle, active: bool, lang: String) {
+    let locale = tray_locale(Some(&lang));
+    if let Some(tray) = app.tray_by_id("main") {
+        let _ = tray.set_title(active.then_some("!"));
+        let tip = if active {
+            format!("P-Pass · {}", tray_text(locale, "ui.library_missing_title"))
+        } else {
+            "P-Pass".to_string()
+        };
+        let _ = tray.set_tooltip(Some(tip));
+    }
+    if active {
+        bring_main_window_to_front(&app);
+        if let Some(win) = app.get_webview_window("main") {
+            let _ = win.request_user_attention(Some(tauri::UserAttentionType::Critical));
+        }
+    }
+}
+
 // MOB-47: 视频弹窗走 asset 协议从磁盘直接 streaming 播放，避免把整段
 // 视频 base64 拉进内存。安全契约（L2 审查修）：
 // - 渲染进程只传资产 hash，绝不传文件系统路径；
@@ -218,6 +242,13 @@ fn initial_service_state() -> ServiceState {
     )
 }
 
+/// #1253：此刻向导算不算走完——与壳启动时同一张判定表（[`initial_service_state`]），
+/// 只是用连上那一刻的事实：服务答「已配置」（含找不到照片库）且常驻服务已登记 ⇒ 走完了。
+/// 向导中途（库位置写了、常驻服务还没登记）仍算没走完，不会被一次连接踢出向导。
+fn onboarding_finished_now() -> bool {
+    initial_service_state() != ServiceState::NotConfigured
+}
+
 /// DESK-63 (#946): snapshot for the frontend's first paint. The event stream
 /// also emits on every transition; this covers the window where the UI is
 /// not listening yet.
@@ -260,7 +291,9 @@ fn start_event_stream(app: tauri::AppHandle) {
                             manager_for_open.note_connected();
                             manager_for_open.set(
                                 &app_for_open,
-                                manager_for_open.current().after_connection(),
+                                manager_for_open
+                                    .current()
+                                    .after_connection(onboarding_finished_now()),
                                 Some("event stream open"),
                             );
                         },
@@ -284,7 +317,9 @@ fn start_event_stream(app: tauri::AppHandle) {
                             manager.note_connected();
                             manager.set(
                                 &app,
-                                manager.current().after_connection(),
+                                manager
+                                    .current()
+                                    .after_connection(onboarding_finished_now()),
                                 Some("events.subscribe unsupported; status probe ok"),
                             );
                             loop {
@@ -643,6 +678,35 @@ async fn set_library_dir(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// #639：「更改照片库位置」= 整库搬迁。新位置是窗口程序暂存的那次系统对话框选择（网页递不进
+/// 路径，#1150）；后台服务校验、落计划后自己重启去搬（见 daemon::relocate）。
+#[tauri::command]
+async fn relocate_library(
+    app: tauri::AppHandle,
+    dry_run: bool,
+) -> Result<serde_json::Value, String> {
+    let dir = app
+        .state::<LibraryPick>()
+        .get()
+        .ok_or_else(|| ipc::ui_err("ui.err_generic", &[]))?;
+    let result = off_main(move || {
+        // §5.3 / #1159：服务形态下先把新位置授权给服务（与 configure_library 同一条）。
+        let _ = platform::adapter().grant_library_dir(&dir);
+        // dry_run：只预检（确认框要显示最终位置、文件夹里是否已有别的东西），不落计划。
+        // 跨卷时预检要量整个库的大小（逐个文件），大库在机械盘上会超过平常的 10 秒。
+        ipc::DaemonHandle::discover()?.call_with_timeout(
+            "library.relocate",
+            json!({ "target": dir.to_string_lossy(), "dry_run": dry_run }),
+            std::time::Duration::from_secs(120),
+        )
+    })
+    .await??;
+    if !dry_run {
+        app.state::<LibraryPick>().clear();
+    }
+    Ok(result)
+}
+
 async fn configure_library_off_main(library_dir: String) -> Result<(), String> {
     off_main(move || configure_library(&library_dir)).await?
 }
@@ -897,6 +961,10 @@ async fn stop_daemon(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 fn stop_daemon_now() -> Result<(), String> {
+    // #639：搬迁中不许停——窗口已锁住，托盘的「停止」也走这里。
+    if relocating_now() {
+        return Err(ipc::ui_err("ui.err_stop_while_relocating", &[]));
+    }
     // 0) DESK-36 (#456)：先落「用户主动停止」标记，再动进程——停到一半时
     //    恰好来一次自愈 tick，它也得看见标记。落不下就不停：停了也会被
     //    自愈拉回来，不如直接告诉用户停止失败。
@@ -924,6 +992,15 @@ fn stop_daemon_now() -> Result<(), String> {
         std::thread::sleep(std::time::Duration::from_millis(250));
     }
     unregistered.map_err(|e| e.to_string())
+}
+
+/// 服务此刻是否在搬迁照片库（问不到就当不是：服务没在跑，自然也没在搬）。
+fn relocating_now() -> bool {
+    ipc::DaemonHandle::discover()
+        .ok()
+        .and_then(|h| h.call("status", json!({})).ok())
+        .and_then(|s| s.get("relocating").and_then(|v| v.as_bool()))
+        .unwrap_or(false)
 }
 
 /// W1 (2026-08-26)：Windows 上常驻的 `ppf-daemon.exe` 占着自己的文件，安装器
@@ -1838,6 +1915,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             daemon_api::daemon_status,
             daemon_api::daemon_low_space_ack,
+            daemon_api::daemon_library_recheck,
             daemon_api::daemon_pairing_start,
             daemon_api::daemon_pairing_stop,
             daemon_api::daemon_pairing_pending,
@@ -1861,6 +1939,7 @@ pub fn run() {
             disable_auto_sleep,
             write_config,
             set_library_dir,
+            relocate_library,
             start_daemon,
             daemon_startup_error,
             stop_daemon,
@@ -1885,6 +1964,7 @@ pub fn run() {
             allow_media_scope,
             notify_system,
             set_tray_locale,
+            set_library_alert,
             update_install::update_download,
             update_install::update_install
         ])
@@ -2173,6 +2253,7 @@ mod tests {
     fn sync_commands_never_wait() {
         const SYNC_ALLOWED: &[&str] = &[
             "set_tray_locale",
+            "set_library_alert",
             "service_state",
             "platform_ux",
             "update_failure_key",
@@ -2560,14 +2641,11 @@ mod tests {
         );
         assert_eq!(v["key"], "ui.err_register_and_spawn");
         assert_eq!(v["params"]["spawn_err"], "13");
-        assert_eq!(
-            render_err("zh", &e),
-            "注册服务失败（连接后台服务失败: refused）且直接启动也失败（13）"
-        );
+        // B13：外层这句不再拼参数里的原文（原文只进日志；界面显示由前端取最内层 + 错误代码）。
+        assert_eq!(render_err("zh", &e), "后台服务没能启动。请再试一次。");
         assert_eq!(
             render_err("en", &e),
-            "Registering the service failed (Couldn't connect to the background service: refused), \
-             and starting it directly failed too (13)"
+            "The background service couldn't start. Try again."
         );
     }
 
@@ -3016,8 +3094,8 @@ mod tests {
 
         let err = verify_sidecar_runs(&fake).unwrap_err();
         assert!(
-            render_err("zh", &err).contains("跑不起来"),
-            "错误信息要说清跑不起来：{err}"
+            render_err("zh", &err).contains("拒绝运行"),
+            "错误信息要说清系统拒绝运行：{err}"
         );
     }
 

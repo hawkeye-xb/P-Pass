@@ -38,6 +38,21 @@ security-framework = { version = "3.7", features = ["OSX_10_15"] }
 core-foundation = "0.10"
 # #1116 P2-2 防降级：读已验签包里的 Info.plist 版本号（签名封装覆盖它）。
 plist = "1"
+# #1260：推出照片库所在的卷之前先问我们（DiskArbitration 卸载审批，Time Machine / Spotlight 同款）。
+# objc2 系列的官方绑定；objc2-core-foundation 已在依赖树里。
+objc2-disk-arbitration = { version = "0.3.2", default-features = false, features = [
+  "std",
+  "DADisk",
+  "DADissenter",
+  "DASession",
+] }
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = [
+  "std",
+  "CFRunLoop",
+  "CFURL",
+  "CFDictionary",
+  "CFString",
+] }
 
 [target.'cfg(windows)'.dependencies]
 # HKCU Run key: the shell's login item (DESK-72) and cleanup of the legacy
@@ -70,6 +85,8 @@ windows-sys = { version = "0.61", features = [
   "Win32_System_SystemInformation",
   # #1167: ImpersonateNamedPipeClient——管道服务端按连接取客户端 SID。
   "Win32_System_Pipes",
+  # #1260: RegisterClassW / WNDCLASSW——只收消息的窗口接收卷的设备通知（推出前审批、拔盘）。
+  "Win32_Graphics_Gdi",
 ] }
 # #1167：管道安全描述符 SDDL 要宽字符串（interprocess 的 SecurityDescriptor::deserialize
 # 收 `&U16CStr`）。已在依赖树里（interprocess 的 Windows 依赖），这里提为直接依赖。

@@ -14,7 +14,9 @@ class MOB72ScopeWakeWiringTest {
     @Test
     fun savingExpandedScopeUsesTheCurrentRuntimeWakeInsteadOfOnlyKeepScheduledCatchup() {
         val source = File("src/main/java/com/hawkeyexb/ppass/MainActivity.kt").readText()
-        val start = source.indexOf("if (added.isNotEmpty())")
+        // #1263：范围扩大 = 新勾了相册，或时间从「从今天起」放宽。
+        val start = source.indexOf("added.isNotEmpty() || sinceWidened(prevSince, since)")
+        assertTrue(start >= 0)
         val end = source.indexOf("screen = Screen.Home(s.pairing)", start)
         val saveScope = source.substring(start, end)
 

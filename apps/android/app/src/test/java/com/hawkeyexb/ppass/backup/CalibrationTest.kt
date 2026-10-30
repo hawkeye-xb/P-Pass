@@ -7,7 +7,6 @@
 // missing 里全是**没进过 confirmed** 的 hash。
 package com.hawkeyexb.ppass.backup
 
-import java.io.File
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -146,24 +145,5 @@ class CalibrationTest {
         }
         assertEquals(setOf("a", "b"), seenWhileNotifying)
         assertTrue(store.load().confirmed.isEmpty())
-    }
-
-    // ── 字典 key 与文案（用户定稿那句话不许被改写） ──────────────
-
-    @Test
-    fun notice_copy_comes_from_the_shared_dictionary() {
-        var dir = File(System.getProperty("user.dir"))
-        while (!File(dir, "assets/i18n").isDirectory) {
-            dir = dir.parentFile ?: error("assets/i18n not found")
-        }
-        val zh = File(dir, "assets/i18n/zh.json").readText()
-        assertEquals(
-            "资源在客户端丢失，正在重传",
-            com.hawkeyexb.ppass.i18n.DiagText.resolveFromJson(zh, MSG_REUPLOAD_TITLE),
-        )
-        assertEquals(
-            "如果是主动删除，请先删除移动端的数据。",
-            com.hawkeyexb.ppass.i18n.DiagText.resolveFromJson(zh, MSG_REUPLOAD_BODY),
-        )
     }
 }

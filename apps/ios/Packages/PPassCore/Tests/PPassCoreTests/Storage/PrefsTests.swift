@@ -134,13 +134,14 @@ final class PrefsTests: XCTestCase {
 
     // MARK: NotifyOnFailurePrefs
 
-    func testNotifyOnFailureDefaultsOnAndRoundTrips() throws {
+    /// #1262：缺失 / 损坏都按「关」。
+    func testNotifyOnFailureDefaultsOffAndRoundTrips() throws {
         let tmp = TempDir()
-        XCTAssertTrue(NotifyOnFailurePrefs(directory: tmp.url).enabled())
-        try NotifyOnFailurePrefs(directory: tmp.url).setEnabled(false)
         XCTAssertFalse(NotifyOnFailurePrefs(directory: tmp.url).enabled())
-        tmp.write(NotifyOnFailurePrefs.fileName, "[]")
+        try NotifyOnFailurePrefs(directory: tmp.url).setEnabled(true)
         XCTAssertTrue(NotifyOnFailurePrefs(directory: tmp.url).enabled())
+        tmp.write(NotifyOnFailurePrefs.fileName, "[]")
+        XCTAssertFalse(NotifyOnFailurePrefs(directory: tmp.url).enabled())
     }
 
     // MARK: OnboardedDesktopsStore

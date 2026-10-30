@@ -7,16 +7,38 @@ import com.hawkeyexb.ppass.proto.OutdatedSide
 import com.hawkeyexb.ppass.backup.MediaAccess
 import com.hawkeyexb.ppass.transport.PairRefusal
 
-/** The detail line under a pairing that ended without joining. */
-internal fun pairRefusalDetailRes(cause: PairRefusal): Int = when (cause) {
+/**
+ * The title of a pairing that ended without joining (10-29 copy B6 / C10): only the owner's "decline"
+ * is "the computer declined"; an expired QR code says so in the title; everything else "couldn't join".
+ */
+internal fun pairRefusalTitleRes(cause: PairRefusal): Int = when (cause) {
+    PairRefusal.DENIED -> R.string.pair_refused_title
+    PairRefusal.QR_EXPIRED -> R.string.pair_qr_expired_title
+    else -> R.string.pair_lapsed_title
+}
+
+/**
+ * The body of a pairing that ended without joining: the reason line, which carries its own way out
+ * (10-29 copy B5). Null when the owner declined on the computer: the title says it all (B5), and an
+ * empty line would still take up a row.
+ */
+internal fun pairRefusalDetailRes(cause: PairRefusal): Int? = when (cause) {
     PairRefusal.TOKEN_INVALID -> R.string.pair_refused_detail_token_invalid
-    PairRefusal.DENIED -> R.string.pair_refused_detail_denied
+    PairRefusal.DENIED -> null
     PairRefusal.EXPIRED -> R.string.pair_refused_detail_expired
     PairRefusal.DESKTOP_RESTARTED -> R.string.pair_refused_detail_restarted
     PairRefusal.CODE_WRONG -> R.string.pair_refused_detail_code_wrong
     PairRefusal.PROOF_FAILED -> R.string.pair_desktop_proof_failed
+    PairRefusal.QR_EXPIRED -> R.string.pair_qr_expired_body
     PairRefusal.OTHER -> R.string.error_generic
 }
+
+/**
+ * 10-29 copy B13: the small "error code" line under a pairing refusal. Only the generic body gets one;
+ * the code is the body's key without its prefix (same rule as the desktop's `ui.err_code`).
+ */
+internal fun pairRefusalErrorCode(cause: PairRefusal): String? =
+    if (cause == PairRefusal.OTHER) "generic" else null
 
 /**
  * #1069 sign-off: it is the P-Pass app that is out of date, not the device. One sentence per side,

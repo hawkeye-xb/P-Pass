@@ -20,15 +20,18 @@ pub mod frame_limits;
 pub mod identity;
 pub mod inbox;
 pub mod ipc;
+pub mod layout;
 pub mod library_location;
 pub mod log_guard;
 pub mod low_space;
+pub mod migrate_local;
 pub mod pairing;
 pub mod pairing_store;
 pub mod presence;
 pub mod query;
 pub mod reconcile;
 pub mod redact;
+pub mod relocate;
 pub mod residue;
 pub mod router;
 pub mod sandbox;
@@ -67,7 +70,7 @@ pub use ipc::ConfirmOutcome;
 pub use ipc::IpcServer;
 pub use pairing::{
     DecisionUndelivered, PairDecision, PairRejection, PairState, PairSubmission, Pairing,
-    PendingPair, PENDING_TTL_MS, TOKEN_TTL_MS,
+    PendingPair, WindowClosed, PENDING_TTL_MS, TOKEN_TTL_MS,
 };
 pub use query::QueryEngine;
 pub use reconcile::Reconcile;

@@ -87,6 +87,8 @@ shot 18-home-no-albums noAlbums settings
 shot 19-home-pairing-lost lost settings
 # 子页
 shot 20-albums normal bucket
+shot 23-albums-partial-access partialAccess bucket
+shot 24-albums-no-access noAccess bucket
 shot 21-storage normal storage
 shot 22-diagnostics normal diagnostics
 # 配对

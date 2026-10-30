@@ -171,9 +171,18 @@ enum class DisconnectState(
         "#413：migrateLegacyFlowState 只做一次（marker 文件）",
     ),
     ONBOARDING_NOTIFICATION_ASK(
-        StateLocation.FILES, "onboarding_notification_ask.json", DisconnectDisposition.KEEP,
-        "#130（#515 后续）：通知权限只问一次，之后任何路径（含再走一次 onboarding）都不再问",
-        owners = listOf("com.hawkeyexb.ppass.backup.OnboardingNotificationAsk"),
+        StateLocation.FILES, "onboarding_notification_ask.json", DisconnectDisposition.RETIRED,
+        "#130 遗留：onboarding 只问一次通知的标记；#1262 起 onboarding 不再申请通知，已无读写者，升级上来的机器上留着不动",
+    ),
+    BACKGROUND_BACKUP_OFFER(
+        StateLocation.FILES, "background_backup_offer.json", DisconnectDisposition.KEEP,
+        "#1263：首页「开启后台备份」卡片被用户手动关掉——是对这台手机的偏好，与连哪台电脑无关",
+        owners = listOf("com.hawkeyexb.ppass.backup.BackgroundBackupOfferStore"),
+    ),
+    PAIRING_REMOVED_NOTICE(
+        StateLocation.FILES, PairingRemovedNoticeStore.FILE_NAME, DisconnectDisposition.KEEP,
+        "#1219 V4：被拒即清理之后才写入的一次性说明，必须活过这次清理；用户看过或重新配对后由界面清掉",
+        owners = listOf("com.hawkeyexb.ppass.backup.PairingRemovedNoticeStore"),
     ),
     WORK_MANAGER_DB(
         StateLocation.DATABASES, "androidx.work.workdb", DisconnectDisposition.KEEP,

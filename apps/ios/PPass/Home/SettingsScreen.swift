@@ -16,6 +16,16 @@ struct SettingsScreen: View {
         NavigationStack(path: $path) {
             List {
                 HeroCard()
+                // #1263：onboarding 不再问后台备份，改在首页引导。卡片一直显示，直到用户开启后台备份或点「不用了」。
+                // 点「开启」只写意图（iOS 没有 App 内的后台授权框）；后台 App 刷新被关时由下面的告示指路。
+                if app.showsBackgroundCard {
+                    Section {
+                        NoticeRow(text: L.s("background_backup_offer"),
+                                  action: (L.s("background_backup_offer_action"), { app.enableBackgroundFromCard() }),
+                                  dismiss: (L.s("background_backup_offer_dismiss"), { app.dismissBackgroundCard() }))
+                            .accessibilityIdentifier("backgroundCard")
+                    }
+                }
                 // 告示区（对位 Android NoticeCard 的「一行正文 + 右侧动作」）：iOS 用系统列表行承载，
                 // 行高、内边距、圆角交给原生 insetGrouped，不再硬设 Android 的 16/13（硬设会被行高 52 撑开）。
                 // 后台刷新告示（对位 NoticeHost BACKUP_INTERRUPTED）只放设置页：照片页是浏览用的，顶部不占（用户 2026-10-19 拍板）。
@@ -23,7 +33,7 @@ struct SettingsScreen: View {
                 if let n = app.backgroundNotice {
                     Section {
                         NoticeRow(text: n.body,
-                                  action: n.canResolve ? (L.s("background_backup_notice_action"), { app.openAppSettings() }) : nil)
+                                  action: n.canResolve ? (L.s("background_refresh_notice_action"), { app.openAppSettings() }) : nil)
                             .accessibilityIdentifier("backgroundNotice")
                     }
                 }
@@ -87,8 +97,8 @@ struct SettingsScreen: View {
             .navigationDestination(for: Route.self) { route in
                 switch route {
                 case .bucket:
-                    BucketScreen(firstTime: false) { selected, known in
-                        app.albumsChosen(selected, known: known, firstTime: false)
+                    BucketScreen(firstTime: false) { selected, known, wantsAll in
+                        app.albumsChosen(selected, known: known, wantsAll: wantsAll, firstTime: false)
                         path.removeAll()
                     }
                 case .storage: StorageDetailScreen()
@@ -96,6 +106,8 @@ struct SettingsScreen: View {
                 }
             }
         }
+        .onAppear { if app.wantsScopeEditor { app.wantsScopeEditor = false; path = [.bucket] } }
+        .onChange(of: app.wantsScopeEditor) { wants in if wants { app.wantsScopeEditor = false; path = [.bucket] } }
         .onAppear {
             switch LaunchRoute.current {
             case .bucket: path = [.bucket]
@@ -165,11 +177,30 @@ struct SettingsScreen: View {
     private static let valueFont = PPFont.sans(PPUI.TextSize.rowValue, relativeTo: .subheadline)
     private static let hintFont = PPFont.sans(PPUI.TextSize.rowHint, relativeTo: .footnote)
 
-    /// 「备份哪些相册」：只数已选且现存的（Android #541 / #836 同口径），0 或从未保存 → 「未选相册」。
+    /// 「备份哪些照片」：只数已选且现存的（Android #541 / #836 同口径），0 或从未保存 → 「未选相册」；
+    /// 有相册时带上时间档：「3 个相册 · 10月29日起的照片 / 含以前的照片」（#1263，同 Android `backup_scope_with_time`）。
     private var scopeValue: String {
         if app.scopeUnreadable { return L.s("backup_scope_unreadable") }
         let n = app.selectedAlbumCount ?? 0
-        return n > 0 ? L.p("backup_scope_n", n) : L.s("backup_scope_none")
+        guard n > 0 else { return L.s("backup_scope_none") }
+        return L.f("backup_scope_with_time", L.p("backup_scope_n", n), Self.timeLabel(app.since ?? .all, now: Date()))
+    }
+
+    /// 设置行时间档的说法，一律写日期（10-29 文案定稿，同 Android `scopeValueLabel`）：某天起 →「M月d日起的照片」；
+    /// 全部 →「含以前的照片」。用 scope_value_*（英文比选项短）。
+    static func timeLabel(_ since: BackupSince, now: Date, calendar: Calendar = .current, locale: Locale = .current) -> String {
+        guard case .since(let ms) = since else { return L.s("scope_value_all") }
+        return L.f("scope_value_since", scopeDate(Date(timeIntervalSince1970: Double(ms) / 1000), calendar: calendar, locale: locale))
+    }
+
+    /// 「10月29日」/「Oct 29」：时间档里的日期（选项与设置行同一种写法）。
+    static func scopeDate(_ date: Date, calendar: Calendar = .current, locale: Locale = .current) -> String {
+        let f = DateFormatter()
+        f.calendar = calendar
+        f.timeZone = calendar.timeZone
+        f.locale = locale
+        f.setLocalizedDateFormatFromTemplate("MMMd")
+        return f.string(from: date)
     }
 
     /// 系统导航行：图标 + 标题 + 次级值 + 系统 chevron（NavigationLink 自带）。

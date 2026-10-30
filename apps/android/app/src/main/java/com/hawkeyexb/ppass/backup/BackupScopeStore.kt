@@ -76,22 +76,33 @@ class BackupScopeStore(context: Context, daemonNodeId: String? = null) {
         return raw.split(",").mapNotNull { it.toLongOrNull() }.toSet()
     }
 
+    /**
+     * #1263：范围的开始时间（epoch 秒）；null = 全部。没有这个字段（老范围）或读不出来一律按「全部」——
+     * 不许因为读不懂就悄悄把范围缩小。
+     */
+    fun sinceSec(): Long? = runCatching { prefs.getString(KEY_SINCE, null)?.toLongOrNull() }.getOrNull()
+
+    /** 引擎与计数用的完整范围；从未保存 / 读不出来为 null（= 一张都不在范围内，见 [selectedBucketIds]）。 */
+    fun scope(): BackupScope? = selectedBucketIds()?.let { BackupScope(it, sinceSec()) }
+
     /** MOB-02: 保存范围的同时记录当前全部相册集合——下次进来不在
-     *  known 里的相册标「新」、默认不勾选（选中集语义天然排除）。 */
-    fun saveScope(selected: Set<Long>, allCurrent: Set<Long>) {
+     *  known 里的相册标「新」、默认不勾选（选中集语义天然排除）。
+     *  #1263：[sinceSec] 一起落盘（null = 全部）。 */
+    fun saveScope(selected: Set<Long>, allCurrent: Set<Long>, sinceSec: Long?) {
         // #1020：commit 而不是 apply——apply 的写盘失败只在系统日志里，调用方永远不知道没存上。
-        val ok = prefs.edit()
+        val edit = prefs.edit()
             .putString(KEY_BUCKETS, selected.sorted().joinToString(","))
             .putString(KEY_KNOWN, allCurrent.sorted().joinToString(","))
-            .commit()
-        check(ok) { "cannot persist backup scope" }
-        PLog.i(TAG, "backup-scope: saved ${selected.size} albums")
+        if (sinceSec == null) edit.remove(KEY_SINCE) else edit.putString(KEY_SINCE, sinceSec.toString())
+        check(edit.commit()) { "cannot persist backup scope" }
+        PLog.i(TAG, "backup-scope: saved ${selected.size} albums since=${sinceSec ?: "all"}")
     }
 
     companion object {
         internal const val LEGACY_PREFS = "backup_scope"
         private const val KEY_BUCKETS = "bucket_ids"
         private const val KEY_KNOWN = "known_bucket_ids"
+        private const val KEY_SINCE = "since_sec"
         private const val TAG = "PPassScope"
 
         /**

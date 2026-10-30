@@ -57,12 +57,15 @@ class NET28BindTimeoutTest {
         )
 
         assertTrue("got $outcome", outcome is PairOutcome.Failed)
-        val reason = (outcome as PairOutcome.Failed).reason
+        val failed = outcome as PairOutcome.Failed
+        val reason = failed.diagnostic
         assertTrue(reason, reason.contains("EndpointBindTimeoutException"))
-        // Distinguishable from "cannot reach the computer" (UX-11's failure).
+        // Distinguishable from "cannot reach the computer" (UX-11's failure) — in the log (#1264).
         assertFalse(reason, reason.contains("DaemonUnreachableException"))
-        // Fits the trouble screen's 160-char detail cut without losing the cause.
-        assertTrue(reason, reason.take(160).contains("not the computer"))
+        assertTrue(reason, reason.contains("not the computer"))
+        // #1264: the exception text never reaches the trouble screen (tokens.json rule 10); it is the
+        // plain "can't connect" page (10-29 B7), not the not-a-code / needs-update pages.
+        assertEquals(PairFailure.UNREACHABLE, failed.kind)
     }
 
     @Test(timeout = 10_000)

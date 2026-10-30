@@ -119,6 +119,43 @@ final class PairCodeFlowTests: XCTestCase {
         XCTAssertEqual(crypto.session.events.filter { $0.hasPrefix("finish") }.count, 1)
     }
 
+    // MARK: #1264 扫到过期 / 已关掉的二维码
+
+    /// 电脑的配对窗口已关：握手时就用 401 关掉连接。说「二维码已过期」，不是「连不上」，也不是「电脑说不」；不发申请。
+    /// 反证：去掉 hello 处的 pairWindowClosed 判断 ⇒ 落到 .unreachable，本条红。
+    func test_handshake_close_with_not_paired_is_qr_expired() async throws {
+        let desk = FakeDesk([Methods.hello: [.throwing(FfiError.PeerClosed(nodeId: F.deskNode, code: DesktopCloseCodes.notPaired))]])
+        let v = try await F.loop(desk).run(token: "t", deviceName: "d")
+        XCTAssertEqual(v, .qrExpired)
+        XCTAssertFalse(desk.methods.contains(Methods.pairRequest))
+        XCTAssertEqual(v.outcome, .refused(note: .qrExpired, ownerSaidNo: false))
+        // 10-29 文案 C10：单独一页，标题「二维码已过期」、正文「二维码 10 分钟内有效。」（对位 Android）。
+        XCTAssertEqual(PairNote.titleKey(.qrExpired, ownerSaidNo: false), "pair_qr_expired_title")
+        XCTAssertEqual(PairNote.qrExpired.key, "pair_qr_expired_body")
+        XCTAssertEqual(PairNote.titleKey(.denied, ownerSaidNo: true), "pair_refused_title")
+        XCTAssertEqual(PairNote.titleKey(.tokenInvalid, ownerSaidNo: false), "pair_lapsed_title")
+        XCTAssertEqual(PairNote.titleKey(nil, ownerSaidNo: false), "pair_lapsed_title")
+        XCTAssertNotEqual(L.s("pair_qr_expired_title"), "pair_qr_expired_title", "文案已打包")
+    }
+
+    /// hello 刚放行、提交那一拍码到期（新连接被 401 关掉）：同样是二维码过期。
+    func test_submit_closed_with_not_paired_is_qr_expired() async throws {
+        let desk = FakeDesk([Methods.hello: [try F.hello()],
+                             Methods.pairRequest: [.throwing(FfiError.PeerClosed(nodeId: F.deskNode, code: DesktopCloseCodes.notPaired))]])
+        let v = try await F.loop(desk).run(token: "t", deviceName: "d")
+        XCTAssertEqual(v, .qrExpired)
+    }
+
+    /// 反面：别的关闭码仍是连不上；连不上的原文只在诊断里，失败页没有附注。
+    func test_other_close_code_stays_unreachable_without_on_screen_detail() async throws {
+        let desk = FakeDesk([Methods.hello: [.throwing(FfiError.PeerClosed(nodeId: F.deskNode, code: 0))]])
+        let v = try await F.loop(desk).run(token: "t", deviceName: "d")
+        guard case .unreachable = v else { return XCTFail("\(v)") }
+        guard case .failed(let diagnostic, let kind) = v.outcome else { return XCTFail("\(v.outcome)") }
+        XCTAssertFalse(diagnostic.isEmpty)
+        XCTAssertEqual(kind, .unreachable)
+    }
+
     /// 连续失败预算：confirm 一直失败 → 3 轮后判不可达（不无限重发）。
     func test_confirm_failures_spend_the_consecutive_failure_budget() async throws {
         let desk = FakeDesk([Methods.hello: [try F.hello()], Methods.pairRequest: [try F.submitted()],

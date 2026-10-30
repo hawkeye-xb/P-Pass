@@ -7,6 +7,7 @@
 const APP_COMMANDS: &[&str] = &[
     "daemon_status",
     "daemon_low_space_ack",
+    "daemon_library_recheck",
     "daemon_pairing_start",
     "daemon_pairing_stop",
     "daemon_pairing_pending",
@@ -30,6 +31,7 @@ const APP_COMMANDS: &[&str] = &[
     "disable_auto_sleep",
     "write_config",
     "set_library_dir",
+    "relocate_library",
     "start_daemon",
     "daemon_startup_error",
     "stop_daemon",
@@ -54,6 +56,7 @@ const APP_COMMANDS: &[&str] = &[
     "allow_media_scope",
     "notify_system",
     "set_tray_locale",
+    "set_library_alert",
     "update_download",
     "update_install",
 ];

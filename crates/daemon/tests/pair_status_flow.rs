@@ -53,8 +53,22 @@ struct Desk {
 /// `Pairing`, like `main.rs` wires them. `ttl_ms` overrides both pending
 /// TTL seams (None = production value).
 async fn desk(db: Db, ttl_ms: Option<i64>) -> Desk {
+    desk_with(db, ttl_ms, None, false).await
+}
+
+/// `secret`：固定身份（同一把私钥 = 同一台电脑；#1219 V3 用它模拟「同一台电脑的服务重启」）。
+/// `production_gate`：与 main 一样装上 #1122 的准入钩子并复核配对窗口（未配对、窗口关着、也没有
+/// 自己的申请 ⇒ 握手后即以 401 not_paired 关掉）。
+async fn desk_with(
+    db: Db,
+    ttl_ms: Option<i64>,
+    secret: Option<[u8; 32]>,
+    production_gate: bool,
+) -> Desk {
     let dir = tempfile::tempdir().unwrap();
-    let tp = endpoint().await;
+    let mut config = TransportConfig::loopback(vec![transport::ALPN_CTRL.into()]);
+    config.secret_key = secret;
+    let tp = IrohTransport::bind(config).await.unwrap();
     let addr = tp.local_addr();
     let (bus, _probe) = daemon::events::bus();
     let (pairing, pending_rx) = Pairing::new(db.clone(), tp.node_id(), None);
@@ -73,7 +87,15 @@ async fn desk(db: Db, ttl_ms: Option<i64>) -> Desk {
     if let Some(ttl) = ttl_ms {
         ipc.set_pending_ttl_for_test(ttl);
     }
-    let router = Router::new(db.clone(), "客厅的电脑").with_pairing(pairing.clone());
+    let mut router = Router::new(db.clone(), "客厅的电脑").with_pairing(pairing.clone());
+    if production_gate {
+        tp.set_admission(daemon::admission::predicate(
+            db.clone(),
+            pairing.clone(),
+            now,
+        ));
+        router = router.with_window_enforced();
+    }
     let tp2 = tp.clone();
     tokio::spawn(async move { router.serve(&tp2).await });
     Desk {
@@ -942,4 +964,77 @@ async fn a_wrong_code_voids_the_request_with_pair_code_wrong() {
     );
     assert!(d.db.get_device(&ctp.node_id().0).await.unwrap().is_none());
     assert_eq!(pair_endings(&d).await, ["pair.code_failed"]);
+}
+
+/// 发一次 RPC，原样交出传输错误（不 unwrap）——用来看「连接被对端以哪个关闭码关掉」。
+async fn try_rpc(
+    ctp: &IrohTransport,
+    daemon: transport::NodeId,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<Resp, transport::TransportError> {
+    tokio::time::timeout(CONTROL_TIER, async {
+        let mut stream = ctp.connect(daemon, transport::ALPN_CTRL).await?;
+        let req = Req {
+            id: format!("v3-{method}"),
+            method: method.into(),
+            params,
+            ..Default::default()
+        };
+        stream
+            .send_frame(&proto::codec::encode(&req).unwrap())
+            .await?;
+        stream.finish()?;
+        let frame = stream.recv_frame().await?.expect("a response");
+        Ok(proto::codec::decode::<Resp>(&frame).unwrap())
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{method}: no answer within {CONTROL_TIER:?}"))
+}
+
+/// #1219 V3：配对等待中，**同一台电脑**（同一把私钥、同一份索引）的服务重启了——配对窗口与这条
+/// 待确认的申请都随进程没了。手机下一次 `pair.status` 被以关闭码 401（not_paired）关掉；手机把它
+/// 判成「这次配对请求已失效」（Android `PairFlow.pairRequestGone` → `PairVerdict.DesktopRestarted`，
+/// 见 NET10PairPollTest）。两段合起来就是这个场景的端到端证明，不用真重启谁的服务。
+/// 反证：重启后的服务仍放行这台未配对的手机 ⇒ 拿到的是应答或别的错误，红。
+#[tokio::test]
+async fn i1219_a_pending_request_is_closed_not_paired_after_the_same_desktop_restarts() {
+    let key = [0x42u8; 32];
+    let db = Db::open_in_memory().await.unwrap();
+    let before = desk_with(db.clone(), None, Some(key), true).await;
+    let qr = before.pairing.start([0x20; 12], now());
+    let ctp = phone(&before).await;
+    let s = submitted(submit(&ctp, &before, &token_of(&qr), "Galaxy S24").await);
+    assert_eq!(
+        status(&ctp, &before, &s.request_id).await.state,
+        proto::PairStatusState::Pending,
+        "重启前：申请在等电脑确认"
+    );
+    let node = before.tp.node_id();
+    before.tp.close().await;
+
+    // 同一台电脑重启：同一把私钥（NodeId 不变）、同一份索引，配对状态是新进程的（空的）。
+    let after = desk_with(db, None, Some(key), true).await;
+    assert_eq!(after.tp.node_id(), node, "同一台电脑");
+    ctp.add_peer(after.addr.clone());
+    let got = try_rpc(
+        &ctp,
+        node,
+        methods::PAIR_STATUS,
+        serde_json::to_value(PairStatusRequest {
+            request_id: s.request_id.clone(),
+        })
+        .unwrap(),
+    )
+    .await;
+    match got {
+        Err(transport::TransportError::PeerClosed { code, .. }) => {
+            assert_eq!(
+                code,
+                u64::from(transport::NOT_PAIRED_CLOSE_CODE),
+                "以 not_paired 关闭"
+            );
+        }
+        other => panic!("重启后应当以 401 关掉这台未配对的手机，实际：{other:?}"),
+    }
 }

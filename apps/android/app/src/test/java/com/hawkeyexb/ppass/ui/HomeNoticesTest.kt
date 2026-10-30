@@ -31,9 +31,10 @@ class HomeNoticesTest {
 
     @Test
     fun source_missing_is_the_least_urgent_of_the_ranked_kinds() {
-        // 补充信息类（#418 删掉 REUPLOAD 之后，它是末位）：用户不动手也没事。
+        // 补充信息类（#418 删掉 REUPLOAD 之后，它是问题类的末位；#1263 的「开启后台备份」邀请不是问题，排在它后面）。
         // 排序是提案，但它绝不该盖住「备份停了」这类阻塞态。
-        assertEquals(HOME_NOTICE_PRIORITY.size - 1, HOME_NOTICE_PRIORITY.indexOf(HomeNoticeKind.SOURCE_MISSING))
+        assertEquals(HOME_NOTICE_PRIORITY.size - 2, HOME_NOTICE_PRIORITY.indexOf(HomeNoticeKind.SOURCE_MISSING))
+        assertEquals(HOME_NOTICE_PRIORITY.size - 1, HOME_NOTICE_PRIORITY.indexOf(HomeNoticeKind.ENABLE_BACKGROUND_BACKUP))
         val top = topNotice(listOf(notice(HomeNoticeKind.SOURCE_MISSING), notice(HomeNoticeKind.PAIRING_LOST)))
         assertEquals(HomeNoticeKind.PAIRING_LOST, top?.kind)
     }

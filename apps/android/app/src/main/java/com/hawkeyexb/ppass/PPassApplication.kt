@@ -20,13 +20,17 @@ import android.app.Application
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Bundle
 import android.os.SystemClock
 import com.hawkeyexb.ppass.backup.flow.TriggerReason
 import com.hawkeyexb.ppass.backup.flow.onFlowAppForeground
 import com.hawkeyexb.ppass.backup.flow.onFlowNetworkChanged
+import com.hawkeyexb.ppass.backup.flow.onUnmeteredNetworkChanged
 import com.hawkeyexb.ppass.backup.flow.requestFlowWake
 import com.hawkeyexb.ppass.backup.evaluateDefinitiveEvents
+import com.hawkeyexb.ppass.backup.NotifyOnFailurePrefs
+import com.hawkeyexb.ppass.backup.OnboardedDesktopsStore
 import com.hawkeyexb.ppass.backup.flow.flowDeliveryPairingLoss
 import com.hawkeyexb.ppass.backup.reconcileWatchOnProcessStart
 import com.hawkeyexb.ppass.backup.flow.parkFlowNetwork
@@ -66,6 +70,11 @@ class PPassApplication : Application() {
             currentPairing = { PairingStore(filesDir).load() },
             loss = flowDeliveryPairingLoss,
             clear = { clearLocalPairingLogged(this, it) },
+            recordNotice = {
+                // 写不下来只少一次说明，不能挡住回欢迎页；留日志。
+                runCatching { com.hawkeyexb.ppass.backup.PairingRemovedNoticeStore(filesDir).record(it.pairingId) }
+                    .onFailure { e -> PLog.w("PPassDisconnect", "pairing-removed notice not persisted", e) }
+            },
         )
     }
 
@@ -110,6 +119,13 @@ class PPassApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         resolveIdentityFirst()
+        // #1262：通知开关默认关，老用户保持原状态——任何 Activity / Worker 读偏好之前先把起始值落盘。
+        // 写不下来只记日志：文件缺失 = 关（偏隐私的一侧），下次启动再写。
+        runCatching {
+            NotifyOnFailurePrefs(filesDir).initIfAbsent(
+                existingUser = PairingStore(filesDir).load() != null || OnboardedDesktopsStore(filesDir).anyOnboarded(),
+            )
+        }.onFailure { PLog.w("PPassNotify", "notify prefs init failed; stays off until next launch", it) }
         thread(name = "ppass-boot-check") {
             requestFlowWake(this, TriggerReason.PROCESS_START)
             runCatching {
@@ -174,6 +190,17 @@ class PPassApplication : Application() {
                 },
             )
         }.onFailure { PLog.w("PPassFlow", "network callback registration failed", it) }
+        // #1220：不计流量的网未必是默认网络（Wi‑Fi 测不到外网时默认网络是移动数据），单独盯它的出现与断开。
+        runCatching {
+            cm.registerNetworkCallback(
+                NetworkRequest.Builder().addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED).build(),
+                object : ConnectivityManager.NetworkCallback() {
+                    override fun onAvailable(network: Network) = onUnmeteredNetworkChanged(this@PPassApplication, network, lost = false)
+
+                    override fun onLost(network: Network) = onUnmeteredNetworkChanged(this@PPassApplication, network, lost = true)
+                },
+            )
+        }.onFailure { PLog.w("PPassFlow", "unmetered network callback registration failed", it) }
     }
 
     private fun changed(signature: String, lost: Boolean = false) {

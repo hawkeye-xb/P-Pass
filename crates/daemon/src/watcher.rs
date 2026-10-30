@@ -101,6 +101,14 @@ impl LibraryWatcher {
         }
     }
 
+    /// #1260：局部对账删缩略图时用本机的缩略图根（`LibraryLayout::thumbs`）。须在 [`Self::spawn`] 之前调。
+    pub fn with_thumbs_root(mut self, thumbs_root: impl Into<PathBuf>) -> Self {
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            inner.reconcile = inner.reconcile.clone().with_thumbs_root(thumbs_root);
+        }
+        self
+    }
+
     /// IDX-06 (#442): hand every file the watcher ingests to the thumbnail
     /// pre-generation pool.
     pub fn with_thumb_pregen(mut self, thumbs: ThumbPregen) -> Self {
@@ -300,6 +308,9 @@ impl LibraryWatcher {
     /// 复用 [`Reconcile::remove_asset`]（thumb 约定 + 审计口径只此一份）。
     async fn reconcile_under(&self, dirs: &[PathBuf]) -> usize {
         let mut removed = 0usize;
+        if !self.inner.reconcile.library_here() {
+            return removed;
+        }
         for dir in dirs {
             let Ok(rel) = dir.strip_prefix(&self.inner.originals) else {
                 continue;

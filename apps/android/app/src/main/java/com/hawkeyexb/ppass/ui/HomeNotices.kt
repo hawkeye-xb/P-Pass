@@ -61,6 +61,10 @@ enum class HomeNoticeKind {
 
     /** #843：没有位置权限，备份照常进行，但读到的字节里拍摄地点被系统抹掉了。 */
     LOCATION_REDACTED,
+
+    /** #1263：后台备份没开——邀请开启。只在设置页（HomeScreen）渲染，不进 [NoticeHost]：照片页是浏览用的，
+     *  顶部不放告示（10-19 原则）。不是问题，排在最后。 */
+    ENABLE_BACKGROUND_BACKUP,
 }
 
 /** 优先级（越靠前越要紧）。UI-04c 口径：阻塞备份的 > 需要授权的 >
@@ -73,6 +77,7 @@ val HOME_NOTICE_PRIORITY: List<HomeNoticeKind> = listOf(
     HomeNoticeKind.LOCATION_REDACTED,
 
     HomeNoticeKind.SOURCE_MISSING,
+    HomeNoticeKind.ENABLE_BACKGROUND_BACKUP,
 )
 
 /** 一条常驻提示的全部数据。文案已解析成字符串（`stringResource` 在
@@ -176,18 +181,12 @@ fun NoticeHost(
     onAllowLocation: () -> Unit = {},
 ) {
     val candidates = buildList {
-        val bodyRes = when (backgroundBackupState) {
-            BackgroundBackupState.NeedsSystemAuthorization ->
-                R.string.background_backup_needs_authorization
-            BackgroundBackupState.SystemStoppedWatcher ->
-                R.string.background_backup_system_stopped
-            else -> null
-        }
-        if (bodyRes != null) add(
+        val backgroundRes = backgroundBackupNoticeRes(backgroundBackupState)
+        if (backgroundRes != null) add(
             HomeNotice(
                 kind = HomeNoticeKind.BACKUP_INTERRUPTED,
-                body = stringResource(bodyRes),
-                actionLabel = stringResource(R.string.background_backup_notice_action),
+                body = stringResource(backgroundRes.first),
+                actionLabel = stringResource(backgroundRes.second),
                 onAction = onResolveBackgroundBackup,
             )
         )
@@ -202,4 +201,16 @@ fun NoticeHost(
         )
     }
     topNotice(candidates)?.let { NoticeCard(it) }
+}
+
+/**
+ * 后台备份横幅的（正文, 按钮）。10-29 文案 B11：按钮按状态说点了会怎样——未获系统授权点「允许」（弹系统的
+ * 电池白名单框），系统停掉了点「重新开启」（在 App 内重新开启）；其余状态没有横幅。
+ */
+internal fun backgroundBackupNoticeRes(state: BackgroundBackupState): Pair<Int, Int>? = when (state) {
+    BackgroundBackupState.NeedsSystemAuthorization ->
+        R.string.background_backup_needs_authorization to R.string.background_backup_action_allow
+    BackgroundBackupState.SystemStoppedWatcher ->
+        R.string.background_backup_system_stopped to R.string.background_backup_action_turn_on
+    else -> null
 }

@@ -4,6 +4,8 @@
 // the 1024 preview. States speak the meaning colours only.
 package com.hawkeyexb.ppass.ui
 
+import com.hawkeyexb.ppass.log.PLog
+import com.hawkeyexb.ppass.backup.MediaAccess
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Base64
@@ -292,7 +294,14 @@ internal fun PhotosScreen(
     // SENT-01 既有数据源，非新造）；null = 从未确认可达过，不编造
     // 具体天数，警示卡改用不带天数的兜底文案。
     daysUnreachable: Int? = null,
+    // #1263：范围里一个相册都没有——给引导和「选择相册」按钮（直达选范围页）。照片页不空时也在顶部给。
+    noAlbums: Boolean = false,
+    onChooseAlbums: () -> Unit = {},
+    // 10-29：照片权限不全（只给了部分 / 一张都不给）时，引导换成设置页那张权限卡（[photosGuideOf]）。
+    mediaAccess: MediaAccess = MediaAccess.FULL,
+    onOpenAppSettings: () -> Unit = {},
 ) {
+    val guide = photosGuideOf(mediaAccess, noAlbums)
     // SYNC-06: 时间线状态（items/next/loading/error/订阅标志）全部由
     // TimelineSubscriptionHolder 持有——App 前台期间（不管显示哪个 tab）
     // 订阅连接保持，本 composable 只渲染这份状态，不再自己创建/销毁订阅。
@@ -301,6 +310,8 @@ internal fun PhotosScreen(
     val next = holder.next
     val loading = holder.loading
     val error = holder.error
+    // 10-29 文案 B13：原始报错只进日志，屏幕上只说「无法连接电脑」和用户能做的事。
+    LaunchedEffect(error) { error?.let { PLog.w("PPassTimeline", "photos tab load failed: $it") } }
     // UI-17: 配对失效时红卡是唯一出路，时间线区域的重连/错误提示一律收起（见 photosTimelineChrome）。
     val chrome = photosTimelineChrome(pairingLost, holder.state, error)
 
@@ -432,17 +443,23 @@ internal fun PhotosScreen(
             }
         }
 
+        // #1263：照片页里已经有（家人的）照片时，引导放在顶部，不挡浏览。
+        if (guide != PhotosGuide.None && items.isNotEmpty()) {
+            PhotosGuideCard(guide, onChooseAlbums, mediaAccess, onOpenAppSettings, Modifier.fillMaxWidth().padding(20.dp, 0.dp, 20.dp, 12.dp))
+        }
+
         when {
             // SYNC-06: loader 尚未就绪（换配对后的极短窗口）——不渲染交互。
             loader == null -> Center(stringResource(R.string.photos_loading))
             loading -> Center(stringResource(R.string.photos_loading))
-            error != null && chrome.showTimelineError -> Center(
-                stringResource(R.string.photos_unreachable) + "\n(${error?.take(100)})"
-            )
+            error != null && chrome.showTimelineError -> Center(stringResource(R.string.photos_unreachable))
             // UI-17: 配对失效且一张都没加载到——什么都不放，上面的红卡就是全部内容
             // （落到下一条会显示「照片库还是空的——先备份一批吧」，又是一个不同的出路）。
             error != null && items.isEmpty() -> Unit
-            items.isEmpty() -> Center(stringResource(R.string.photos_empty))
+            items.isEmpty() && guide != PhotosGuide.None -> Box(Modifier.fillMaxSize().padding(34.dp), contentAlignment = Alignment.Center) {
+                PhotosGuideCard(guide, onChooseAlbums, mediaAccess, onOpenAppSettings, Modifier.fillMaxWidth())
+            }
+            items.isEmpty() -> Center(stringResource(R.string.home_empty_albums))
             shown.isEmpty() -> Center(stringResource(R.string.photos_filter_empty))
             else -> LazyVerticalGrid(
                 columns = GridCells.Fixed(3),
@@ -809,7 +826,7 @@ internal fun ViewerAction(
  *  组件自带的），只定制 `colors`/`shape` 让视觉贴住设计稿——不再是一个
  *  重新发明的手写药丸。 */
 @Composable
-private fun PhotoFilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
+internal fun PhotoFilterChip(label: String, selected: Boolean, onClick: () -> Unit) {
     androidx.compose.material3.FilterChip(
         selected = selected,
         onClick = onClick,
@@ -829,6 +846,62 @@ private fun PhotoFilterChip(label: String, selected: Boolean, onClick: () -> Uni
         border = null,
         modifier = Modifier.height(36.dp),
     )
+}
+
+/** 照片页的引导卡给哪一张。 */
+internal enum class PhotosGuide { MediaAccess, NoAlbums, None }
+
+/**
+ * 10-29：照片权限不全时先说权限——读不到照片，选相册也选不出东西，「还没选相册」说的不是现状。
+ * 权限完整、一个相册都没选，才给「还没选相册 / 选择相册」（#1263）。
+ */
+internal fun photosGuideOf(mediaAccess: MediaAccess, noAlbums: Boolean): PhotosGuide = when {
+    mediaAccess != MediaAccess.FULL -> PhotosGuide.MediaAccess
+    noAlbums -> PhotosGuide.NoAlbums
+    else -> PhotosGuide.None
+}
+
+@Composable
+private fun PhotosGuideCard(
+    guide: PhotosGuide,
+    onChooseAlbums: () -> Unit,
+    mediaAccess: MediaAccess,
+    onOpenAppSettings: () -> Unit,
+    modifier: Modifier,
+) {
+    when (guide) {
+        PhotosGuide.MediaAccess -> MediaAccessCard(mediaAccess, onOpenAppSettings, modifier)
+        PhotosGuide.NoAlbums -> NoAlbumsGuide(onChooseAlbums, modifier)
+        PhotosGuide.None -> Unit
+    }
+}
+
+/** #1263：「还没选要备份的相册」+「选择相册」。照片页空着时居中，不空时在顶部。 */
+@Composable
+private fun NoAlbumsGuide(onChoose: () -> Unit, modifier: Modifier = Modifier) {
+    Surface(
+        color = PPColor.WaitingBg,
+        shape = RoundedCornerShape(PPSize.RadiusCard),
+        modifier = modifier,
+    ) {
+        Column(Modifier.padding(18.dp)) {
+            Text(
+                stringResource(R.string.photos_no_albums),
+                fontSize = PPSize.BodyMin, lineHeight = 24.sp, color = PPColor.Ink60,
+            )
+            Spacer(Modifier.height(12.dp))
+            androidx.compose.material3.Button(
+                onClick = onChoose,
+                modifier = Modifier.fillMaxWidth().height(PPSize.TapMin),
+                shape = RoundedCornerShape(PPSize.RadiusControl),
+                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                    containerColor = PPColor.Ink, contentColor = PPColor.Paper,
+                ),
+            ) {
+                Text(stringResource(R.string.photos_choose_albums), fontSize = 17.sp, fontWeight = FontWeight.Bold)
+            }
+        }
+    }
 }
 
 @Composable

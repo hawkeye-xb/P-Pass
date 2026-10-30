@@ -24,8 +24,8 @@
 import { invoke } from "@tauri-apps/api/core";
 
 import { callDaemon } from "./daemonApi.js";
-import { startupFailureText } from "./daemonStartupError.js";
-import { errDetail, t } from "./i18n.js";
+import { startupFailureKey } from "./daemonStartupError.js";
+import { errMessage, t } from "./i18n.js";
 
 /** 向导共三步。 */
 export const WIZARD_STEP_COUNT = 3;
@@ -104,7 +104,7 @@ export function createWizardFlow({
       if (beforeStep2) await beforeStep2();
       set({ step: 2 });
     } catch (e) {
-      set({ error: t("ui.wizard_save_failed", { err: errDetail(e) }) });
+      set({ error: errMessage(e, "ui.wizard_save_failed") });
     } finally {
       set({ busy: false });
     }
@@ -125,8 +125,8 @@ export function createWizardFlow({
   /**
    * 第 3 步完成 = 整个 onboarding 完成（不再单开扫码页，总览页常驻「添加设备」）。
    * 启动 daemon（此刻才注册开机自启）→ 轮询 status 确认真的就绪（不然主界面会闪
-   * 一下「服务未连接」）→ onDone()。起不来时红条带 daemon 的 stderr 原文与人话解释
-   * （DESK-09），读不到 stderr 才用兜底文案。
+   * 一下「服务未连接」）→ onDone()。起不来时红条说 daemon 认出的原因（DESK-09 的人话），
+   * 认不出就用兜底文案；B13 起 stderr 原文只进 console，不进红条。
    */
   async function finishSetup() {
     set({ error: "", busy: true });
@@ -134,7 +134,7 @@ export function createWizardFlow({
     try {
       await invoke("write_config");
     } catch (e) {
-      set({ step: 1, busy: false, error: t("ui.wizard_save_failed", { err: errDetail(e) }) });
+      set({ step: 1, busy: false, error: errMessage(e, "ui.wizard_save_failed") });
       return;
     }
     try {
@@ -153,11 +153,12 @@ export function createWizardFlow({
         try {
           stderr = await invoke("daemon_startup_error");
         } catch (_) {}
-        throw new Error(startupFailureText(stderr) || t("ui.wizard_daemon_not_started"));
+        // B13：daemon 认出原因就说那一句，否则说兜底；stderr 原文只进 console。
+        throw startupFailureKey(stderr) || "ui.wizard_daemon_not_started";
       }
       onDone();
     } catch (e) {
-      set({ error: t("ui.wizard_start_failed", { err: errDetail(e) }) });
+      set({ error: errMessage(e, "ui.wizard_start_failed") });
     } finally {
       set({ busy: false });
     }

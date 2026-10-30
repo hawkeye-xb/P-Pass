@@ -51,17 +51,27 @@ pub struct Reconcile {
     /// IDX-01: 本机 NodeId。`None` = 不跑收编方向——`watcher.rs` 构造的
     /// 那一份只借用 [`Reconcile::remove_asset`]，不该顺带扫全库。
     local_node_id: Option<Vec<u8>>,
+    /// #1260：缩略图根（本机）。默认库盘 `.ppf/thumbs`（老布局）。
+    thumbs_root: PathBuf,
 }
 
 impl Reconcile {
     pub fn new(db: Db, library_root: impl Into<PathBuf>) -> Self {
+        let library_root = library_root.into();
         Self {
             db,
-            library_root: library_root.into(),
+            thumbs_root: library_root.join(".ppf/thumbs"),
+            library_root,
             total_removed: std::sync::Arc::new(AtomicUsize::new(0)),
             events: None,
             local_node_id: None,
         }
+    }
+
+    /// #1260：缩略图放本机（`LibraryLayout::thumbs`）。
+    pub fn with_thumbs_root(mut self, thumbs_root: impl Into<PathBuf>) -> Self {
+        self.thumbs_root = thumbs_root.into();
+        self
     }
 
     /// IDX-01: 接上本机 NodeId 即打开「收孤儿」方向。只有 `main.rs` 那份
@@ -95,6 +105,9 @@ impl Reconcile {
             return ReconcileReport::default();
         };
         let mut report = ReconcileReport::default();
+        if !self.library_here() {
+            return report;
+        }
         for (hash, rel_path) in paths {
             if !self.library_root.join(&rel_path).exists()
                 && self.remove_asset(&hash, &rel_path).await.is_ok()
@@ -171,17 +184,30 @@ impl Reconcile {
         }
     }
 
-    /// 缩略图两个文件（.ppf/thumbs/<2hex>/<hex>.{256,1024}.jpg）——纯文件，
+    /// 缩略图两个文件（<缩略图根>/<2hex>/<hex>.{256,1024}.jpg）——纯文件，
     /// 直接删；不存在（从未生成过缩略图）也正常。
     fn remove_thumbs(&self, hash: &[u8]) {
         if let Ok(h32) = <[u8; 32]>::try_from(hash) {
-            let paths = media_codec::thumb_paths(&self.library_root.join(".ppf/thumbs"), &h32);
+            let paths = media_codec::thumb_paths(&self.thumbs_root, &h32);
             let _ = std::fs::remove_file(&paths.t256);
             let _ = std::fs::remove_file(&paths.t1024);
         }
     }
 
     /// 清理单个幽灵资产：thumb 文件 + asset 行 + 审计。
+    /// #1253：库标记不在 = 库此刻不在（盘被拔、目录被改名或挪走），不是照片被删了——这时一条都不删。
+    /// 删除方向的两个入口（每小时全量对账、目录监听的局部对账）删之前都先问这一句。
+    pub(crate) fn library_here(&self) -> bool {
+        let here = crate::library_location::library_marker_present(&self.library_root);
+        if !here {
+            tracing::warn!(
+                "#1253: 库标记不在（{}）——库此刻不在，本轮不按「文件没了」删除索引",
+                self.library_root.display()
+            );
+        }
+        here
+    }
+
     /// WATCH-01: `pub(crate)`——目录监听的局部对账复用同一清理逻辑
     /// （thumb 路径约定 + 审计口径只此一份，不复制）。
     ///
@@ -245,10 +271,17 @@ fn now_ms() -> i64 {
 mod tests {
     use super::*;
 
+    /// 带库标记的临时照片库（#1253：没有库标记的目录在删除方向上一律当「库不在」）。
+    fn library_dir() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(crate::library_location::LIBRARY_MARKER)).unwrap();
+        dir
+    }
+
     #[tokio::test]
     async fn run_once_emits_timeline_invalidated_exactly_once() {
         let db = Db::open_in_memory().await.unwrap();
-        let dir = tempfile::tempdir().unwrap();
+        let dir = library_dir();
         let (bus, mut rx) = events::bus();
         let reconcile = Reconcile::new(db, dir.path()).with_events(bus);
 
@@ -269,7 +302,7 @@ mod tests {
     #[tokio::test]
     async fn run_once_adopts_a_file_that_has_no_index_row() {
         let db = Db::open_in_memory().await.unwrap();
-        let dir = tempfile::tempdir().unwrap();
+        let dir = library_dir();
         let local = [0xccu8; 32];
         let src_dev = "aa".repeat(32);
         let month = dir.path().join(format!("originals/{src_dev}/2026/09"));
@@ -290,12 +323,41 @@ mod tests {
         );
     }
 
+    // #1253：库标记不在（盘被拔、库目录被改名或挪走）时，「文件不见了」不等于「照片被删了」——一条都不删；
+    // 标记回来后照常删（正向对照）。反证：去掉 run_once 里的 library_here 护栏 → 第一段 removed = 1，红。
+    #[tokio::test]
+    async fn a_missing_library_marker_deletes_nothing() {
+        let db = Db::open_in_memory().await.unwrap();
+        let dir = library_dir();
+        let month = dir.path().join("originals/aa/2026/09");
+        std::fs::create_dir_all(&month).unwrap();
+        std::fs::write(month.join("p.jpg"), b"photo bytes").unwrap();
+        let reconcile = Reconcile::new(db.clone(), dir.path()).with_local_node_id([0xccu8; 32]);
+        assert_eq!(reconcile.run_once().await.adopted, 1);
+
+        std::fs::remove_file(month.join("p.jpg")).unwrap();
+        std::fs::remove_dir(dir.path().join(crate::library_location::LIBRARY_MARKER)).unwrap();
+        assert_eq!(
+            reconcile.run_once().await.removed,
+            0,
+            "库不在时不按「文件没了」删"
+        );
+        assert_eq!(db.timeline_page(None, 10).await.unwrap().assets.len(), 1);
+
+        std::fs::create_dir_all(dir.path().join(crate::library_location::LIBRARY_MARKER)).unwrap();
+        assert_eq!(
+            reconcile.run_once().await.removed,
+            1,
+            "库在、文件确实没了才删"
+        );
+    }
+
     // IDX-01: 没接 with_local_node_id 就不许扫全库——watcher.rs 借用
     // remove_asset 的那一份走的就是这条路，它不该顺带做全库收编。
     #[tokio::test]
     async fn adoption_stays_off_until_the_local_node_id_is_wired() {
         let db = Db::open_in_memory().await.unwrap();
-        let dir = tempfile::tempdir().unwrap();
+        let dir = library_dir();
         let month = dir.path().join("originals/aa/2026/09");
         std::fs::create_dir_all(&month).unwrap();
         std::fs::write(month.join("orphan.jpg"), b"orphan bytes").unwrap();
@@ -315,7 +377,7 @@ mod tests {
     #[tokio::test]
     async fn adoption_never_rewrites_rows_that_are_already_indexed() {
         let db = Db::open_in_memory().await.unwrap();
-        let dir = tempfile::tempdir().unwrap();
+        let dir = library_dir();
         let month = dir.path().join("originals/aa/2026/09");
         std::fs::create_dir_all(&month).unwrap();
         let kept = month.join("kept.jpg");
@@ -358,7 +420,7 @@ mod tests {
     #[tokio::test]
     async fn non_media_rows_left_by_old_adopt_are_purged_without_touching_files() {
         let db = Db::open_in_memory().await.unwrap();
-        let dir = tempfile::tempdir().unwrap();
+        let dir = library_dir();
         let month = dir.path().join("originals/aa/2026/09");
         std::fs::create_dir_all(&month).unwrap();
         let row = |hash: u8, rel: &str, media_type: &str| storage::Asset {
@@ -444,7 +506,7 @@ mod tests {
     #[tokio::test]
     async fn run_once_without_events_bus_does_not_panic() {
         let db = Db::open_in_memory().await.unwrap();
-        let dir = tempfile::tempdir().unwrap();
+        let dir = library_dir();
         let reconcile = Reconcile::new(db, dir.path()); // 没接 with_events
 
         reconcile.run_once().await;
@@ -456,7 +518,7 @@ mod tests {
     #[tokio::test]
     async fn external_delete_leaves_a_tombstone_that_outlives_the_asset_row() {
         let db = Db::open_in_memory().await.unwrap();
-        let dir = tempfile::tempdir().unwrap();
+        let dir = library_dir();
         let hash = vec![0x42u8; 32];
         db.insert_asset(&storage::Asset {
             hash: hash.clone(),

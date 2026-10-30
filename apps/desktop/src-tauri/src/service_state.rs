@@ -86,10 +86,15 @@ impl ServiceState {
     /// Pure connection rule (unit-tested). 向导没走完时连上的 daemon 只是向导
     /// 为写库位置临时拉起的一次性进程，不是常驻服务：状态留在 NotConfigured，
     /// 否则「服务在线」会把人踢出向导、它退出后又触发自愈（统一回归首启实测）。
-    /// NotConfigured 只经显式启动（`start_daemon` 先置 Starting）离开。
-    pub fn after_connection(self) -> Self {
+    ///
+    /// #1253：「向导走没走完」不能只看壳启动那一刻——那时服务可能还没起来、登记也可能还没落，
+    /// 判成 NotConfigured 后就再也不重判，服务后来起来了、报的是「已配置」或「找不到照片库」，
+    /// 窗口仍停在向导。所以每次连上都按**此刻**的事实重判一次（[`Self::initial`] 同一张表，
+    /// 由调用方算好传进 `onboarded`）：向导真没走完（库位置没写 / 常驻服务没登记）仍留在
+    /// NotConfigured，走完了就跟着服务走。
+    pub fn after_connection(self, onboarded: bool) -> Self {
         match self {
-            Self::NotConfigured => Self::NotConfigured,
+            Self::NotConfigured if !onboarded => Self::NotConfigured,
             _ => Self::Running,
         }
     }
@@ -479,11 +484,11 @@ mod tests {
         assert!(text.contains("event=connect_failed"), "{text}");
     }
 
-    /// 反证：after_connection 对 NotConfigured 返回 Running → 红（向导被踢出、自愈误拉）。
+    /// 反证：after_connection 对没走完向导的 NotConfigured 返回 Running → 红（向导被踢出、自愈误拉）。
     #[test]
     fn connection_does_not_finish_onboarding() {
         assert_eq!(
-            ServiceState::NotConfigured.after_connection(),
+            ServiceState::NotConfigured.after_connection(false),
             ServiceState::NotConfigured
         );
         for s in [
@@ -492,8 +497,21 @@ mod tests {
             ServiceState::Running,
             ServiceState::Unreachable,
         ] {
-            assert_eq!(s.after_connection(), ServiceState::Running);
+            for onboarded in [false, true] {
+                assert_eq!(s.after_connection(onboarded), ServiceState::Running);
+            }
         }
+    }
+
+    /// #1253：壳启动时服务还没起来（也没登记）⇒ 判成 NotConfigured、进了向导；之后服务登记好、
+    /// 起来了（报「已配置」或「找不到照片库」）——连上时按此刻事实重判，离开向导跟着服务走。
+    /// 反证：NotConfigured 无论如何都留着（旧规则）⇒ 红，窗口卡在向导。
+    #[test]
+    fn a_service_that_comes_up_later_takes_the_window_out_of_the_wizard() {
+        assert_eq!(
+            ServiceState::NotConfigured.after_connection(true),
+            ServiceState::Running
+        );
     }
 
     /// 统一回归：向导期间一次性 daemon 连上过 → 点「完成」显式启动 → 一次性

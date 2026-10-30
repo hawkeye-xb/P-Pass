@@ -57,16 +57,33 @@ sealed class PairOutcome {
     data class Joined(val pairing: Pairing) : PairOutcome()
     /**
      * The pairing ended without joining; [cause] names why (#1072: decided on the desktop's
-     * `reason` / `pair.status` state, worded by the phone). [ownerSaidNo] = the desktop actually
-     * refused (owner denied, or the code was invalid/used); false = it lapsed on its own — NET-10
-     * keeps those apart so the screen does not claim "the computer said no".
+     * `reason` / `pair.status` state, worded by the phone). [ownerSaidNo] = the owner clicked
+     * "decline" on the computer; anything else (an invalid or used code, a lapsed request, …) is not
+     * the computer saying no — NET-10 / 10-29 copy B6 keep those apart so the screen does not claim it.
+     * [wireReason] = the desktop's raw reason when it maps to [PairRefusal.OTHER] (B13: the screen only
+     * says "error code: generic", so the raw reason must reach the log); null otherwise.
      */
-    data class Refused(val cause: PairRefusal) : PairOutcome() {
-        val ownerSaidNo: Boolean get() = cause == PairRefusal.TOKEN_INVALID || cause == PairRefusal.DENIED
+    data class Refused(val cause: PairRefusal, val wireReason: String? = null) : PairOutcome() {
+        val ownerSaidNo: Boolean get() = cause == PairRefusal.DENIED
     }
     /** #1072: versions are incompatible — found at the hello, before any pairing request is sent. */
     data class NeedsUpdate(val side: OutdatedSide) : PairOutcome()
-    data class Failed(val reason: String) : PairOutcome()
+    /**
+     * The pairing could not be carried out. #1264: [diagnostic] is for the log only (exception class,
+     * close code, RPC reason — never on screen, tokens.json rule 10); [kind] picks the screen (10-29
+     * copy B7: a scanned code that is not a P-Pass code is its own page, not "can't connect").
+     */
+    data class Failed(val diagnostic: String, val kind: PairFailure = PairFailure.UNREACHABLE) : PairOutcome()
+}
+
+/** 10-29 copy B7: why a pairing could not be carried out — one screen each. */
+enum class PairFailure {
+    /** The computer could not be reached (or anything else that went wrong on the way). */
+    UNREACHABLE,
+    /** What was scanned or pasted is not a P-Pass pairing code. */
+    NOT_A_CODE,
+    /** A P-Pass code with neither relay nor direct address (FIX-T3): only an update fixes it. */
+    NO_ADDRESS,
 }
 
 /** #1072: why a pairing ended without joining (one phone-side wording each). */
@@ -83,6 +100,10 @@ enum class PairRefusal {
     CODE_WRONG,
     /** #1118: the computer's key confirmation did not verify — nothing was saved. */
     PROOF_FAILED,
+    /** #1264: the computer refused the connection itself (`not_paired` close at the handshake, before
+     *  any request): its pairing window is shut — the QR code expired, was closed, or was already
+     *  used. Not the owner's "no": scan a fresh code. */
+    QR_EXPIRED,
     /** Any other reason, including one this build does not know. */
     OTHER,
 }
@@ -121,8 +142,8 @@ fun interface PairRpc {
 /** NET-10: how one pairing request ended — every cause is its own branch. */
 sealed class PairVerdict {
     data class Accepted(val accepted: PairAccepted) : PairVerdict()
-    /** Owner said no, or the code was rejected on submit (invalid/used). */
-    data class Denied(val cause: PairRefusal) : PairVerdict()
+    /** Owner said no, or the code was rejected on submit (invalid/used). [wireReason]: see [PairOutcome.Refused]. */
+    data class Denied(val cause: PairRefusal, val wireReason: String? = null) : PairVerdict()
     /** #1072: one side is too old for the other (hello, submit or status said so). */
     data class NeedsUpdate(val side: OutdatedSide) : PairVerdict()
     /** Nobody decided within the desktop's pending window. */
@@ -228,6 +249,7 @@ suspend fun awaitPairVerdict(
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
+        if (pairWindowClosed(e)) return PairVerdict.Denied(PairRefusal.QR_EXPIRED)
         return PairVerdict.Unreachable(e.toString())
     }
     // DEV-07: withdraw only where the desktop says it understands it (an
@@ -262,12 +284,16 @@ suspend fun awaitPairVerdict(
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
+        if (pairWindowClosed(e)) return PairVerdict.Denied(PairRefusal.QR_EXPIRED)
         return PairVerdict.Unreachable(e.toString())
     }
     if (!submit.ok) {
         val reason = submit.error?.reasonKind ?: Reason.UNKNOWN
         outdatedSideOf(reason)?.let { return PairVerdict.NeedsUpdate(it) }
-        return PairVerdict.Denied(pairRefusalOf(reason))
+        val cause = pairRefusalOf(reason)
+        // B13: a reason the phone has no wording for keeps its raw form for the log (the caller logs it).
+        val wire = submit.error?.let { "${it.code}/${it.reason}" }
+        return PairVerdict.Denied(cause, wireReason = wire.takeIf { cause == PairRefusal.OTHER })
     }
     val result = submit.result ?: return PairVerdict.DesktopTooOld
     val submitted = runCatching {
@@ -309,6 +335,24 @@ suspend fun awaitPairVerdict(
         throw e
     }
 }
+
+/**
+ * #1219：等配对结果时，正在配对的那台电脑在握手时就用「未配对」关闭码（401 / 410）关掉连接。
+ * 桌面只在「二维码开着，或这台手机自己的申请还没结束」时放行未配对的手机（#1122 准入）；
+ * 申请已提交、轮询还在继续，却被拒在握手——说明桌面手里已经没有这条申请（服务重启，内存里的待办没了），
+ * 与 `pair.status` 应答 NOT_FOUND 同义。[rpc] 只连这一台电脑，关闭方经 TLS 认证就是它。
+ */
+internal fun pairRequestGone(e: Exception): Boolean = closedAsNotPaired(e)
+
+/**
+ * #1264：还没提交申请（hello / pair.request）就被这台电脑在握手时用「未配对」关闭码拒掉——它的配对窗口
+ * 已经关了：二维码过期、被关掉，或已被用掉（#1122 准入，原因只记在电脑日志里）。这不是网络问题，
+ * 出路是在电脑上刷新二维码后重扫。[rpc] 只连二维码里那台电脑，关闭方经 TLS 认证就是它。
+ */
+internal fun pairWindowClosed(e: Exception): Boolean = closedAsNotPaired(e)
+
+private fun closedAsNotPaired(e: Exception): Boolean =
+    e is PeerClosedException && DesktopCloseCodes.meansNotPaired(e.code)
 
 /** One reply's meaning to the poll loop: done, or keep waiting, or a malformed reply. */
 private sealed class Step {
@@ -380,6 +424,7 @@ private suspend fun pollPairStatus(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            if (pairRequestGone(e)) return PairVerdict.DesktopRestarted
             lastFailure = e.toString()
             null
         }
@@ -425,6 +470,7 @@ private suspend fun pollPairStatus(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                if (pairRequestGone(e)) return PairVerdict.DesktopRestarted
                 lastFailure = e.toString()
                 null
             }
@@ -456,7 +502,7 @@ private suspend fun pollPairStatus(
 /** NET-10: verdict → what the pairing screen shows (one branch per cause). */
 fun PairVerdict.toOutcome(join: (PairAccepted) -> Pairing): PairOutcome = when (this) {
     is PairVerdict.Accepted -> PairOutcome.Joined(join(accepted))
-    is PairVerdict.Denied -> PairOutcome.Refused(cause)
+    is PairVerdict.Denied -> PairOutcome.Refused(cause, wireReason)
     PairVerdict.Expired -> PairOutcome.Refused(PairRefusal.EXPIRED)
     PairVerdict.DesktopRestarted -> PairOutcome.Refused(PairRefusal.DESKTOP_RESTARTED)
     // A desktop without pair.status predates the current pairing flow: the computer needs updating.
@@ -472,7 +518,7 @@ fun PairVerdict.toOutcome(join: (PairAccepted) -> Pairing): PairOutcome = when (
  * then pair. Any throw lands on [PairOutcome.Failed] carrying the
  * throwable's class and message, so "the phone's endpoint never came up"
  * ([EndpointBindTimeoutException]) and "the computer cannot be reached"
- * ([DaemonUnreachableException]) read differently on the trouble screen.
+ * ([DaemonUnreachableException]) read differently in the log (#1264: never on screen).
  * Catches Throwable, not Exception: a missing native lib
  * (UnsatisfiedLinkError) must land on the trouble screen, never crash the
  * app (real-phone T-052 lesson).
@@ -528,9 +574,6 @@ suspend fun pairWithQr(
     qr: String,
     deviceName: String,
     onCode: (code: String, desktop: PairDesktopIdentity, phoneNodeId: String) -> Unit,
-    invalidCodeMessage: String = "This is not a P-Pass pairing code.",
-    unparseableCodeMessage: String =
-        "The pairing code cannot be parsed. Update P-Pass on both the computer and phone to the latest version.",
     storageDeviceNameFallback: String = "P-Pass storage",
     knownDesktop: (nodeIdHex: String) -> Boolean = { false },
     /** Injectable only for tests; production is the shared Rust parser. */
@@ -543,7 +586,7 @@ suspend fun pairWithQr(
     val parsed = try {
         parseLink(qr)
     } catch (e: Exception) {
-        return PairOutcome.Failed(invalidCodeMessage)
+        return PairOutcome.Failed("not a pairing code: ${e.javaClass.simpleName}", PairFailure.NOT_A_CODE)
     }
     // The core rebuilds the dialable address from node + relay (or the legacy full `a=` address);
     // the stored token has the same JSON shape backup's `parsePeerAddrToken` reads.
@@ -551,12 +594,12 @@ suspend fun pairWithQr(
     val addr: PeerAddrParts = try {
         parsePeerAddrToken(addrToken)
     } catch (e: Exception) {
-        return PairOutcome.Failed(invalidCodeMessage)
+        return PairOutcome.Failed("not a pairing code: ${e.javaClass.simpleName}", PairFailure.NOT_A_CODE)
     }
     // FIX-T3: a code with neither relay nor direct address (node + token only) cannot be dialled
     // from this phone — point at upgrading instead of failing silently.
     if (addr.relayUrl == null && addr.directAddresses.isEmpty()) {
-        return PairOutcome.Failed(unparseableCodeMessage)
+        return PairOutcome.Failed("pairing code has no dialable address", PairFailure.NO_ADDRESS)
     }
 
     // Already a member on this storage (same phone, the computer's

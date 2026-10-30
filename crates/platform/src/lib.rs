@@ -12,7 +12,7 @@
 // 里的子进程（拉起测试二进制自身等）不面向用户，统一放行。
 #![cfg_attr(test, allow(clippy::disallowed_methods))]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 // DESK-24 (#173)：数据目录搬家。整个模块**不在 cfg 里**——里面全是
 // `rename` / `read_dir`，没有一行平台专属代码，三条 lane 都跑得到它的测试。
@@ -48,6 +48,8 @@ mod keychain;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "macos")]
+mod macos_unmount;
+#[cfg(target_os = "macos")]
 mod sealed_version;
 // QA-09 迁移（#211）：macOS 与 Linux 共享的 unix 实现。迁过来的分叉里有
 // 3 处是 `#[cfg(unix)]`（同时覆盖两者），没有共享模块就得抄两遍。
@@ -56,6 +58,8 @@ mod signal;
 mod unix;
 #[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+mod windows_unmount;
 // #1151：应用内更新的大小 / 总时长上限（纯逻辑，三平台都跑单测）。
 pub mod update_limits;
 // §5.1 / #1238：服务形态「要不要运行」的开关文件（纯文件读写，三平台都跑单测）。
@@ -125,6 +129,174 @@ pub fn run_as_service(body: impl FnOnce() -> i32 + Send + 'static) -> Result<boo
 /// 唯一的用途是让适配器把数据根从用户的 `%LOCALAPPDATA%` 切到
 /// `%ProgramData%\P-Pass`——服务账户读不到交互用户的任何用户级路径。
 /// 别的平台永远 `false`（它们没有这个「服务账户 ≠ 用户」的形态）。
+/// #639：这次改名失败是不是因为新旧位置不在同一个卷上（unix `EXDEV`、Windows
+/// `ERROR_NOT_SAME_DEVICE`）——是的话调用方改走「拷贝、核对、再改名」。
+pub fn is_cross_volume_rename(e: &std::io::Error) -> bool {
+    #[cfg(unix)]
+    {
+        e.raw_os_error() == Some(libc::EXDEV)
+    }
+    #[cfg(windows)]
+    {
+        e.raw_os_error() == Some(17) // ERROR_NOT_SAME_DEVICE
+    }
+}
+
+/// #639：两个已存在的路径在不在同一个卷上（同卷搬迁是一次改名，不占新空间）。读不出来 ⇒ `None`。
+pub fn same_volume(a: &Path, b: &Path) -> Option<bool> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        Some(std::fs::metadata(a).ok()?.dev() == std::fs::metadata(b).ok()?.dev())
+    }
+    #[cfg(windows)]
+    {
+        let va = windows_volume_root(a)?;
+        let vb = windows_volume_root(b)?;
+        Some(va.eq_ignore_ascii_case(&vb))
+    }
+}
+
+#[cfg(windows)]
+fn windows_volume_root(p: &Path) -> Option<String> {
+    use std::os::windows::ffi::OsStrExt as _;
+    use windows_sys::Win32::Storage::FileSystem::GetVolumePathNameW;
+    let w: Vec<u16> = p
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut buf = [0u16; 1024];
+    // SAFETY: w 以 0 结尾；buf 是可写缓冲，长度如实给出。
+    let ok = unsafe { GetVolumePathNameW(w.as_ptr(), buf.as_mut_ptr(), buf.len() as u32) };
+    if ok == 0 {
+        return None;
+    }
+    let end = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    Some(String::from_utf16_lossy(&buf[..end]))
+}
+
+/// #639：`p` 在不在网络盘（SMB / NFS / AFP 等非本地卷）上。推出审批与根目录监听在网络盘上不可靠，
+/// 照片库这一版不放上去。读不出来按「不是」——调用方另有空间与可写检查兜底。
+pub fn is_network_volume(p: &Path) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        let Ok(c) = std::ffi::CString::new(p.as_os_str().as_bytes()) else {
+            return false;
+        };
+        let mut st: libc::statfs = unsafe { std::mem::zeroed() };
+        // SAFETY: c 是合法 C 字符串，st 可写。
+        if unsafe { libc::statfs(c.as_ptr(), &mut st) } != 0 {
+            return false;
+        }
+        (st.f_flags & libc::MNT_LOCAL as u32) == 0
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        let Ok(c) = std::ffi::CString::new(p.as_os_str().as_bytes()) else {
+            return false;
+        };
+        let mut st: libc::statfs = unsafe { std::mem::zeroed() };
+        // SAFETY: c 是合法 C 字符串，st 可写。
+        if unsafe { libc::statfs(c.as_ptr(), &mut st) } != 0 {
+            return false;
+        }
+        // NFS、SMB、CIFS、SMB2（statfs(2) 的 f_type 魔数）。
+        #[allow(clippy::unnecessary_cast)]
+        let kind = st.f_type as i64;
+        matches!(kind, 0x6969 | 0x517B | 0xFF53_4D42 | 0xFE53_4D42)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt as _;
+        use windows_sys::Win32::Storage::FileSystem::GetDriveTypeW;
+        let Some(root) = windows_volume_root(p) else {
+            return false;
+        };
+        let w: Vec<u16> = std::ffi::OsStr::new(&root)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        // SAFETY: w 以 0 结尾。DRIVE_REMOTE = 4。
+        unsafe { GetDriveTypeW(w.as_ptr()) == 4 }
+    }
+}
+
+/// Windows 上 [`copy_dir_contents`] 把文件链接拷成指向文件的内容（见它的 `/XJD` 说明）；
+/// 核对拷贝结果时据此放宽。
+pub const COPY_MAY_MATERIALIZE_FILE_LINKS: bool = cfg!(windows);
+
+/// 让目录项（新建 / 改名）落到介质上。POSIX 要对目录 fsync；Windows 没有目录 fsync，
+/// NTFS 的元数据由日志保证，直接返回。
+pub fn sync_dir(dir: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::fs::File::open(dir)?.sync_all()
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+        Ok(())
+    }
+}
+
+/// #639：把目录 `src` 里的全部内容拷进 `dst`（`dst` 不存在就建），用各平台自带、久经验证的工具，
+/// 不手写递归：
+/// - macOS：`ditto <src> <dst>`——保留符号链接、硬链接、扩展属性（含 Finder 标签）、ACL、资源分叉。
+///   不加 `--noqtn` / `--noacl`：搬迁与在 Finder 里拖过去一样原样保留元数据（隔离标记对照片无害，
+///   去掉反而改了用户的数据）；目标卷不支持 ACL 时 ditto 照常复制数据。
+/// - Windows：`robocopy <src> <dst> /E /COPY:DAT /DCOPY:DAT /XJD /R:2 /W:1 /NP /NFL /NDL /NJH /NJS`
+///   ——子目录含空目录、数据 + 属性 + 时间、目录时间、跳过目录 junction / 链接、被占用重试 2 次。
+///   文件链接按指向文件的内容拷过去：不加 `/SL`，因为照搬链接要「建符号链接」特权，普通用户与服务账户
+///   没有，robocopy 会对每个链接报 ERROR 1314 并整体失败；用 `/XJD` 而不是 `/XJ`（后者连文件链接一起跳过）。
+///   不加 `/Z`：那是为网络传输设计的断点续传，本地盘之间明显更慢；中断后整次重跑时 robocopy 默认
+///   跳过大小与时间都相同的文件，已能接着拷。长路径 robocopy 原生支持。退出码 0–7 成功，≥ 8 失败。
+/// - 其它 unix：`cp -a <src>/. <dst>/`。
+pub fn copy_dir_contents(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    #[cfg(target_os = "macos")]
+    let out = command("ditto").arg(src).arg(dst).output()?;
+    #[cfg(windows)]
+    let out = command("robocopy")
+        .arg(src)
+        .arg(dst)
+        .args([
+            "/E",
+            "/COPY:DAT",
+            "/DCOPY:DAT",
+            "/XJD",
+            "/R:2",
+            "/W:1",
+            "/NP",
+            "/NFL",
+            "/NDL",
+            "/NJH",
+            "/NJS",
+        ])
+        .output()?;
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let out = command("cp")
+        .arg("-a")
+        .arg(src.join("."))
+        .arg(format!("{}/", dst.display()))
+        .output()?;
+    let code = out.status.code();
+    #[cfg(windows)]
+    let ok = matches!(code, Some(0..=7));
+    #[cfg(not(windows))]
+    let ok = code == Some(0);
+    if ok {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "复制工具失败（退出码 {code:?}）：{}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )))
+    }
+}
+
 pub fn service_mode_active() -> bool {
     #[cfg(windows)]
     {
@@ -535,6 +707,25 @@ pub trait PlatformAdapter: Send + Sync {
     }
     // 系统集成
     fn notify(&self, title: &str, body: &str);
+
+    /// #1253：盯住照片库根目录**本身**——它被删除、改名 / 挪走，或所在的卷被卸载（拔盘、强制推出）时，
+    /// 在后台线程里调用一次 `on_gone`。目录里的文件变化不算（那是目录监听的事）。
+    ///
+    /// 返回 `false` = 本平台没有这项能力（**默认**），调用方只能靠启动检查与删除前核对库标记兜底。
+    /// macOS 用 kqueue `EVFILT_VNODE`（`NOTE_DELETE | NOTE_RENAME | NOTE_REVOKE`），目录以 `O_EVTONLY`
+    /// 打开——只为收事件，不算占用，不会挡住卷的推出。
+    fn watch_library_root(&self, _root: &Path, _on_gone: Box<dyn FnOnce() + Send>) -> bool {
+        false
+    }
+
+    /// #1260：用户推出照片库所在的卷之前先问我们。系统卸载之前在后台线程里调用 `prepare`
+    /// （阻塞；调用方负责给它设上限），它返回后放行卸载——用来取消在途传输、等库盘上的文件
+    /// 关掉，推出就不会「磁盘正在使用」。只放行、从不拒绝用户的推出。
+    ///
+    /// 返回 `false` = 本平台没有这项能力（**默认**）。macOS 用 DiskArbitration 卸载审批回调。
+    fn approve_library_unmount(&self, _root: &Path, _prepare: Box<dyn Fn() + Send + Sync>) -> bool {
+        false
+    }
     /// 本平台**生效的**数据目录。
     ///
     /// DESK-24 (#173)：Windows 上这个值不是常量——`%APPDATA%`（Roaming）时代
@@ -2017,5 +2208,41 @@ mod computer_name_tests {
     #[test]
     fn posix_reads_the_hostname() {
         assert!(adapter().computer_name().is_some());
+    }
+}
+
+#[cfg(test)]
+mod relocation_probe_tests {
+    use super::*;
+
+    #[test]
+    fn two_dirs_on_one_disk_are_one_volume_and_local() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        assert_eq!(same_volume(a.path(), b.path()), Some(true));
+        assert!(!is_network_volume(a.path()));
+    }
+
+    // 系统工具拷目录：内容、空目录、隐藏文件都在，原目录不动。
+    #[test]
+    fn the_system_tool_copies_a_directory_tree() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(src.join("a/b")).unwrap();
+        std::fs::create_dir_all(src.join("empty")).unwrap();
+        std::fs::write(src.join("a/b/photo.jpg"), b"photo").unwrap();
+        std::fs::write(src.join(".hidden"), b"h").unwrap();
+        let dst = dir.path().join("dst");
+        copy_dir_contents(&src, &dst).unwrap();
+        assert_eq!(std::fs::read(dst.join("a/b/photo.jpg")).unwrap(), b"photo");
+        assert!(dst.join("empty").is_dir());
+        assert!(dst.join(".hidden").is_file());
+        assert!(src.join("a/b/photo.jpg").is_file(), "原目录不动");
+    }
+
+    #[test]
+    fn a_failing_copy_is_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(copy_dir_contents(&dir.path().join("nope"), &dir.path().join("dst")).is_err());
     }
 }

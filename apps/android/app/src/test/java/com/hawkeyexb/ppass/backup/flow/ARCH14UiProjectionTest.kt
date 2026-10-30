@@ -24,7 +24,7 @@ import org.junit.Test
 class ARCH14UiProjectionTest {
     private val albums = setOf(7L)
 
-    private fun Rig.inScopeTotal(): Long = media.photos.count { media.inScope(it.bucketId) }.toLong()
+    private fun Rig.inScopeTotal(): Long = media.photos.count { media.inScope(it.bucketId, it.dateAdded) }.toLong()
 
     private suspend fun Rig.projection(withRemaining: Boolean = true): FlowProjection =
         FlowProjection.of(

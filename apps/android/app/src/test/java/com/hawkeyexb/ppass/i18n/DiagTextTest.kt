@@ -56,10 +56,10 @@ class DiagTextTest {
     fun placeholder_formatting_works() {
         val en = dict("en")
         val withVars = DiagText.resolveFromJson(en, "ui.paired_count", mapOf("n" to "3"))
-        assertEquals("3 paired devices", withVars)
+        assertEquals("Paired devices: 3", withVars)
         // 无变量时占位符原样保留（调用方负责传参）
         val raw = DiagText.resolveFromJson(en, "ui.paired_count")
-        assertEquals("{n} paired devices", raw)
+        assertEquals("Paired devices: {n}", raw)
     }
 
     @Test

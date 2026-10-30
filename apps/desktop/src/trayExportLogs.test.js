@@ -26,7 +26,7 @@ describe("#550 托盘导出诊断包", () => {
     const body = app.match(/async function exportLogs\(\) \{[\s\S]*?\n  \}\n/)?.[0] ?? "";
     expect(body).toContain('invoke("export_logs_bundle")'); // #1150：保存位置由壳的对话框给
     expect(body).toContain('t("ui.logs_exported"');
-    expect(body).toContain('t("ui.export_failed"');
+    expect(body).toContain('flashError(e, "ui.export_failed")'); // B13：失败走 toast 正文 +「错误代码」小字
   });
 
   it("设置页不再有导出入口", () => {

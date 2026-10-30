@@ -90,8 +90,9 @@ class DisconnectStateManifestTest {
             }
             DisconnectState.NATIVE_BLOB_STORE -> fake("files/iroh-blobs-provider/blobs.db")
             DisconnectState.FLOW_MIGRATION_MARKER -> com.hawkeyexb.ppass.backup.flow.migrateLegacyFlowState(filesDir)
-            DisconnectState.ONBOARDING_NOTIFICATION_ASK ->
-                OnboardingNotificationAsk(filesDir).initIfAbsent(existingUser = true)
+            DisconnectState.ONBOARDING_NOTIFICATION_ASK -> fake("files/onboarding_notification_ask.json")
+            DisconnectState.BACKGROUND_BACKUP_OFFER -> BackgroundBackupOfferStore(filesDir).dismiss()
+            DisconnectState.PAIRING_REMOVED_NOTICE -> PairingRemovedNoticeStore(filesDir).record("e1")
             DisconnectState.WORK_MANAGER_DB -> fake("databases/androidx.work.workdb")
             DisconnectState.FLOW_CONTROL -> FlowControlStore(filesDir).setPaused(true)
             DisconnectState.NOTIFY_ON_FAILURE_PREFS -> NotifyOnFailurePrefs(filesDir).setEnabled(false)

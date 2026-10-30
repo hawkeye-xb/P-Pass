@@ -8,7 +8,8 @@
 #   -y/--yes  跳过确认提示（脚本化场景用）
 #
 # 不可逆：会删 /Applications/P-Pass.app、~/Library/Application Support/P-Pass
-# （只是 config.toml 指针）**以及 config.toml 里 data_dir 指向的照片库
+# （config.toml 指针；#1260 起还有 libraries/<库 ID>/ 下的索引、缩略图与 blob
+# 元数据库）**以及 config.toml 里 data_dir 指向的照片库
 # 目录本身**（身份 identity.key、配对白名单、index.sqlite、缩略图、
 # blob、originals 原图全部真正存在这个目录的 .ppf/ 子目录里——只删指针
 # 不删这里等于没清场，daemon 重装后指回同一个照片库会发现身份还在）。

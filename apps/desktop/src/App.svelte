@@ -4,7 +4,7 @@
   import { shouldShowTrayHint, TRAY_HINT_SHOWN_KEY } from "./trayHint.js";
   import { loadPlatformUx, wizardVariant } from "./platformUx.js";
     import {
-    canStartService,
+    serviceRecoveryAction,
     canStopService,
     isServiceRunning,
     serviceStateActionKey,
@@ -13,6 +13,9 @@
   } from "./serviceState.js";
   import { invoke, convertFileSrc } from "@tauri-apps/api/core";
   import { callDaemon } from "./lib/daemonApi.js";
+  import { createLibraryAlert, recheckLibrary } from "./lib/libraryMissing.js";
+  import { homeBlocker } from "./lib/homeBlocker.js";
+  import CircleAlertIcon from "@lucide/svelte/icons/circle-alert";
   import { getVersion } from "@tauri-apps/api/app";
   import { listen } from "@tauri-apps/api/event";
   import {
@@ -69,8 +72,10 @@
     isPairCode,
     normalizePairCode,
     pairConfirmToast,
+    isKnownDevice,
   } from "./lib/pending.js";
   import { requestId, syncRequests, setPhase, removeRequest } from "./lib/pairRequests.js";
+  import { qrPhase } from "./lib/pairQr.js";
   import { formatBytes, diskUsedPercent } from "./lib/formatBytes.js";
   // MOB-29: 「刚从库里删掉照片」警告的判据（纯函数，externalDelete.test.js
   // 钉边界）——删除会被手机传回来，这是对的，但得让用户知道。
@@ -85,7 +90,7 @@
   // I18N-03 (#492): t() 抽到 lib/i18n.js 共享（向导、lib/*.js 同源）；
   // T-081 暂写死在组件里的导航/页面文案已全部收编进字典。errText 负责
   // 把 Rust 壳回来的错误（key + 参数 / 裸已注册 key；不认识的一律通用错误，原串只进 console）渲染成人话。
-  import { t, errText, errDetail, errKey, getLocale, readLangPref, applyLangPref } from "./lib/i18n.js";
+  import { t, errText, errMessage, errCodeLine, errKey, offersServiceRestart, getLocale, readLangPref, applyLangPref } from "./lib/i18n.js";
 
   // ---- T-081 布局 v1：侧边栏四页（总览 / 家人与设备 / 活动记录 / 设置，
   // 照片库并入设置）。hash 同步只为可验证/可深链，不引入路由依赖。
@@ -111,6 +116,7 @@
   };
   let page = $state(pageFromHash());
   function go(id) {
+    if (relocLock) return;
     page = id;
     location.hash = `#/${id}`;
   }
@@ -153,7 +159,7 @@
     try {
       await applyLangPref(pref, { invoke, reload: () => location.reload() });
     } catch (e) {
-      flashMessage(t("ui.save_failed", { err: errDetail(e) }), "error");
+      flashError(e, "ui.save_failed");
     }
   }
 
@@ -175,7 +181,7 @@
       await invoke("stop_daemon");
       flashMessage(t("ui.service_stopped"), "warning");
     } catch (e) {
-      flashMessage(t("ui.stop_failed", { err: errDetail(e) }), "error");
+      flashError(e, "ui.stop_failed");
     }
     // DESK-63 (#946)：状态点由 Rust 的 service-state 事件立刻更新；这里只
     // 重新对账数据与 wizard_state（user_stopped 刚落盘，向导门靠它不把人
@@ -187,7 +193,7 @@
   // 失败原因，成功为 null）。和窗口里的按钮同一个 stop_daemon、同一份标记。
   async function onServiceStopped(ev) {
     const err = ev?.payload;
-    if (err) flashMessage(t("ui.stop_failed", { err: errDetail(err) }), "error");
+    if (err) flashError(err, "ui.stop_failed");
     else flashMessage(t("ui.service_stopped"), "warning");
     await syncServiceState();
   }
@@ -204,7 +210,7 @@
     try {
       await invoke("start_daemon");
     } catch (e) {
-      flashMessage(t("ui.start_failed", { err: errDetail(e) }), "error");
+      flashError(e, "ui.start_failed");
     } finally {
       setTimeout(() => (starting = false), 3000);
     }
@@ -230,7 +236,7 @@
   let status = $state(null);
   // DESK-63 (#946): a devices.list failure is a data error, not a service
   // outage. It gets its own state and its own message.
-  let devicesError = $state("");
+  let devicesError = $state(null); // B13：{ text, code }
   // #413 §7 / #1044 B11：低空间通知何时该弹由 daemon 判定并持久化（阈值、
   // 回差、布防状态都在 crates/daemon/src/low_space.rs）。status 带出待展示的
   // 那一次（low_space_notice），这里弹完就 ack 消费掉；重开 App 不再重弹。
@@ -254,6 +260,12 @@
   let devices = $state([]);
   let qrDataUrl = $state("");
   let qrText = $state("");
+  // #1264：这张码的失效时刻（daemon 的 `expires_at_ms`；老 daemon 不给 = null）与弹窗里的时钟。
+  let qrExpiresAt = $state(null);
+  let qrNow = $state(Date.now());
+  let qrAutoRefreshes = $state(0);
+  let qrRefreshing = false;
+  const qrState = $derived(qrPhase({ now: qrNow, expiresAt: qrExpiresAt, autoRefreshes: qrAutoRefreshes }));
   let pendingCount = $state(0);
   // UX-08: 待确认配对请求全量列表（pairing.pending）——一屏一行，逐行
   // 允许/拒绝；处理完该行消失，全清后模态关闭，无残留状态。
@@ -275,7 +287,7 @@
   // AUDIT-07（#499）：audit.list 读失败的原因。这个列表是活动记录页的唯一数据源，
   // 读不到时页面会渲染成空——空列表看起来就是「还没有任何记录」，用户会以为备份
   // 从未发生过。所以失败必须显示出来（成功一次就清掉）。
-  let auditError = $state("");
+  let auditError = $state(null); // B13：{ text, code }
   // T1 (H-10b): 界面显示版本号——报问题/排查时先知道装的是什么版本。
   let version = $state("");
   // #1044 B13：壳版本要随 status 报给 daemon 才有 shell_relation。首轮 refresh
@@ -323,16 +335,58 @@
   }
 
   // UI-04b：所有短反馈统一委托官方 Sonner；成功/等待/错误分别走三种含义色。
-  function flashMessage(msg, tone = "success") {
-    if (tone === "error") toast.error(msg);
-    else if (tone === "warning") toast.warning(msg);
-    else toast.success(msg);
+  // action：Sonner 的 toast 按钮 `{ label, onClick }`，可选。
+  function flashMessage(msg, tone = "success", description, action) {
+    const opts = description || action ? { description, action } : undefined;
+    if (tone === "error") toast.error(msg, opts);
+    else if (tone === "warning") toast.warning(msg, opts);
+    else toast.success(msg, opts);
+  }
+
+  // B13：报错 toast = 正文 + 「错误代码」小字。内层是已登记 key 就显示内层（出路最具体），
+  // 否则显示包装句；原始内容只进 console（lib/i18n.js errMessage）。
+  // 偏离 1：窗口联系不上后台服务的那几类报错，toast 上当场给「重启后台服务」。
+  function flashError(e, wrapperKey) {
+    const m = errMessage(e, wrapperKey);
+    const action = offersServiceRestart(m.key)
+      ? { label: t("ui.restart_service"), onClick: () => restartDaemonProcess() }
+      : undefined;
+    flashMessage(m.text, "error", errCodeLine(m), action);
+  }
+
+  // 首页提示分级 L1：备份完全停了（服务没在跑 / 找不到照片库）。在场时它就是首页结论，见 lib/homeBlocker.js。
+  const blocker = $derived(homeBlocker(serviceState, status));
+  // #639：搬迁期间整个窗口锁住——下面的界面不可操作（inert），只显示进度；服务那边同样拒绝一切写。
+  const relocLock = $derived(status?.relocating === true);
+
+  // #1253：照片库找不到——状态变化时让壳强提示一次；「重新检查」如实回答。
+  const libraryAlert = createLibraryAlert(invoke, getLocale);
+  let lastRelocateError = null;
+  let libraryRecheckBusy = $state(false);
+  async function recheckLibraryNow() {
+    libraryRecheckBusy = true;
+    try {
+      // 10-29 定稿：「仍然找不到」是一次性结果，用 toast 说；阻断卡片本身不变。
+      if ((await recheckLibrary(callDaemon)) === "still_missing") {
+        flashMessage(t("ui.library_missing_still"), "warning");
+      }
+    } catch (_) {
+      // 后台正在带着库重启（连接断了）或暂时连不上：等下一次 refresh 看新状态。
+    } finally {
+      libraryRecheckBusy = false;
+    }
   }
 
   async function refresh() {
     try {
       status = await call("status", { shell_version: version });
       void showLowSpaceNotice(status.low_space_notice);
+      libraryAlert.sync(status.library_missing);
+      // #639：上一次搬迁没成——提示一次原因（同一条不重复提示）。
+      if (status.relocate_error && status.relocate_error !== lastRelocateError) {
+        flashMessage(t("ui.relocate_failed", { err: errText(status.relocate_error) }), "error");
+      }
+      lastRelocateError = status.relocate_error ?? null;
       pendingCount = status.pending_pairs ?? 0;
       // UX-08: pending 全量列表（pairing.pending，只读）——列表化显示
       // 的基础；拿不到时回退数量（老 daemon 升级过渡）。
@@ -362,12 +416,12 @@
         const d = await call("devices.list", { include_departed: true });
         devices = d.devices ?? [];
         lastBackupOverallWire = d.last_backup_overall ?? null;
-        devicesError = "";
+        devicesError = null;
       } catch (e) {
         // DESK-63 (#946): a data error stays in the data area. It must not
         // flip the service state — that was the bug: any failure in this
         // try-block used to make the overview say "not running".
-        devicesError = errText(e);
+        devicesError = errMessage(e);
       }
       nowMs = Date.now();
       // T-091: 水位数据单独容错——拿不到不拖垮整页（保留上次值）
@@ -381,12 +435,12 @@
       try {
         const au = await call("audit.list", { limit: 500, visibility: "user" });
         auditEvents = (au.events ?? []).slice().sort((x, y) => (y.ts ?? 0) - (x.ts ?? 0));
-        auditError = "";
+        auditError = null;
       } catch (e) {
         // AUDIT-07（#499）：这里原来是 `catch (_) {}`——失败被吞掉，活动记录页
         // 只是变空（跟「确实还没有记录」长得一模一样）。改成把错误显示在那一页上。
         auditEvents = [];
-        auditError = errDetail(e);
+        auditError = errMessage(e, "ui.log_load_failed");
       }
     } catch (e) {
       // DESK-63 (#946): only the `status` probe can reach here now
@@ -509,24 +563,51 @@
     return { shown, moreOk: Math.max(0, active.length - shown.length) };
   });
 
-  async function startPairing() {
+  // auto = 快到期时的自动换码（计次、失败不弹提示：码到期后自会盖住，给刷新按钮）。
+  async function startPairing({ auto = false } = {}) {
     showPairModal = true; // T4: 二维码是弹窗模块，不是常驻卡片
+    if (!auto) qrAutoRefreshes = 0;
+    qrRefreshing = true;
     try {
       const r = await call("pairing.start");
       qrText = r.qr;
+      qrExpiresAt = Number.isFinite(r.expires_at_ms) ? r.expires_at_ms : null;
+      qrNow = Date.now();
       // 二维码由壳生成 SVG（src-tauri/src/pair_qr.rs）：npm qrcode 与
       // freezePrototype 冲突会整页白屏。矢量图，弹窗内 360px 照样清晰。
       const svg = await invoke("pair_qr_svg", { text: r.qr });
       qrDataUrl = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
     } catch (e) {
-      flashMessage(t("ui.pair_failed", { err: errDetail(e) }), "error");
+      if (!auto) flashError(e, "ui.pair_failed");
+    } finally {
+      qrRefreshing = false;
     }
   }
+
+  // #1264：弹窗显示期间每秒拿当前时刻比一次失效时刻（不只设一个到期定时器：Mac 睡眠、窗口在后台时
+  // 定时器会被推迟，醒来那一刻就要判对）；回到前台立即比一次。弹窗收起（任何途径）即停。
+  function tickQr() {
+    qrNow = Date.now();
+    if (qrState === "refresh" && !qrRefreshing) {
+      qrAutoRefreshes += 1;
+      startPairing({ auto: true });
+    }
+  }
+  $effect(() => {
+    if (!showPairModal) return;
+    const timer = setInterval(tickQr, 1000);
+    document.addEventListener("visibilitychange", tickQr);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", tickQr);
+    };
+  });
 
   function closePairModal() {
     showPairModal = false;
     qrDataUrl = "";
     qrText = "";
+    qrExpiresAt = null;
     // #1122：二维码关了，配对窗口随之关闭——收回未用的令牌，未配对的设备
     // 从此连不进来（已提交申请的那台照常能等结果）。失败不打扰用户：令牌
     // 最多 10 分钟后自然过期。
@@ -613,7 +694,7 @@
         // #1118：码错 = 这次申请作废（daemon 已撤）。块停在终态，主人点「知道了」才消失。
         pairRequests = setPhase(pairRequests, id, "failed");
       } else {
-        flashMessage(t("ui.confirm_failed", { err: errDetail(e) }), "error");
+        flashError(e, "ui.confirm_failed");
         // 还在队列里就回到可输入；不在了下一轮对齐会收掉。
         pairRequests = setPhase(pairRequests, id, "input");
       }
@@ -634,7 +715,7 @@
       flashMessage(t("ui.revoked", { name }), "warning");
       await refresh();
     } catch (e) {
-      flashMessage(t("ui.revoke_failed", { err: errDetail(e) }), "error");
+      flashError(e, "ui.revoke_failed");
     }
   }
 
@@ -662,7 +743,7 @@
       toast.success(t("ui.rename_saved", { name: r.name ?? trimmed }));
       await refresh();
     } catch (e) {
-      toast.error(t("ui.rename_failed", { err: errDetail(e) }));
+      flashError(e, "ui.rename_failed");
     }
   }
 
@@ -671,7 +752,7 @@
       // #1150：揭示由壳完成，网页不碰路径。
       await openLibraryDir({ reveal: () => invoke("reveal_library") });
     } catch (e) {
-      flashMessage(t("ui.open_failed", { err: errDetail(e) }), "error");
+      flashError(e, "ui.open_failed");
     }
   }
 
@@ -683,7 +764,7 @@
       // #1150：路径由壳向 daemon 取并揭示，网页不经手。
       await invoke("reveal_device_folder", { node_id: nodeId });
     } catch (e) {
-      flashMessage(t("ui.device_open_folder_failed", { err: errDetail(e) }), "error");
+      flashError(e, "ui.device_open_folder_failed");
     }
   }
 
@@ -694,19 +775,29 @@
       fromDefault: false,
     });
     if (!dir) return;
-    const yes = await confirmDialog(t("ui.change_body", { dir }), {
+    // #639：先预检（别的库 / 嵌套 / 网络盘 / 重名 / 空间不够当场拒绝），确认框里写明最终位置；
+    // 选的文件夹里已有别的东西就额外提示（照片会和它们放在一起，我们不动它们）。
+    let check;
+    try {
+      check = await invoke("relocate_library", { dryRun: true });
+    } catch (e) {
+      flashError(e, "ui.save_failed");
+      return;
+    }
+    const body = [t("ui.change_body", { dir: check?.to ?? dir })];
+    if (check?.non_empty) body.push(t("ui.change_target_not_empty"));
+    const yes = await confirmDialog(body.join("\n\n"), {
       title: t("ui.change_title"),
       kind: "warning",
     });
     if (!yes) return;
     try {
-      // DESK-46 (#638)：改库位置由壳侧 set_library_dir 一手包办（校验 +
-      // 平台 config read-modify-write + 孤儿清理）——daemon 的 folder.set
-      // 写的是当前库目录的孤儿 config.toml（零读者），已删除。
-      await invoke("set_library_dir");
-      flashMessage(t("ui.change_saved", { dir }));
+      // #639：更改位置 = 整库搬迁（手机不重扫码、不重传）。后台服务校验、落计划后自己重启去搬，
+      // 搬迁期间整个窗口锁住、只显示进度（lib/homeBlocker.js）。
+      await invoke("relocate_library", { dryRun: false });
+      flashMessage(t("ui.change_saved", { dir: check?.to ?? dir }));
     } catch (e) {
-      flashMessage(t("ui.save_failed", { err: errDetail(e) }), "error");
+      flashError(e, "ui.save_failed");
     }
   }
 
@@ -729,7 +820,7 @@
       if (!r) return;
       flashMessage(t("ui.logs_exported", { path: r.zip }));
     } catch (e) {
-      flashMessage(t("ui.export_failed", { err: errDetail(e) }), "error");
+      flashError(e, "ui.export_failed");
     } finally {
       exportingLogs = false;
     }
@@ -1007,7 +1098,7 @@
   // idle → checking → (up-to-date | available → downloading → installing → installed → relaunching) | failed
   let updatePhase = $state("idle");
   let updateProgress = $state(null); // 0..100；null = 总长未知（不画百分比）
-  let updateError = $state("");
+  let updateError = $state(null); // B13：{ text, code }
   let pendingVersion = $state("");
   // 忙的时候按钮必须禁用：既防重复点击（同一份更新被下两遍），也让"过程就在眼前"。
   const updateBusy = $derived(
@@ -1060,7 +1151,7 @@
   // 换壳（UPD-06）：壳旧时点「立即重启 App」。Rust 侧先试系统路径（launchd
   // kickstart：杀 + 拉都不在壳里发生），不行退化到壳自己重启；都走不到才报错。
   async function relaunchShellNow() {
-    updateError = "";
+    updateError = null;
     // 先进 relaunching：按钮随 updateBusy 置灰，等 launchctl 期间不能再点一次。
     updatePhase = "relaunching";
     try {
@@ -1077,6 +1168,7 @@
   // 成功/失败都明说：版本真变了才报成功；没变 = 服务文件没更新，提示重装。
   let restartingService = $state(false);
   async function restartDaemonProcess() {
+    if (restartingService) return;
     const yes = await confirmDialog(t("ui.restart_service_confirm_body"), {
       title: t("ui.restart_service_confirm_title"),
       kind: "warning",
@@ -1101,7 +1193,7 @@
         flashMessage(t("ui.restart_service_no_change", { version: r.new_version ?? "?" }), "warning");
       }
     } catch (e) {
-      flashMessage(t("ui.restart_service_failed", { err: errDetail(e) }), "error");
+      flashError(e, "ui.restart_service_failed");
     } finally {
       restartingService = false;
     }
@@ -1111,7 +1203,7 @@
     // UPD-06 (#616)：防重复点击（按钮同时禁用，双保险）。旧实现两个都没有，
     // 同一份更新会被下两遍。
     if (updateBusy) return;
-    updateError = "";
+    updateError = null;
     updateProgress = null;
     updatePhase = "checking";
     let update;
@@ -1124,7 +1216,7 @@
       // （10-01 真机就是被这句误导的）。
       console.warn("[updater] check failed:", e);
       updatePhase = "failed";
-      updateError = errDetail(e);
+      updateError = errMessage(e, "ui.update_failed");
       return;
     }
     if (!update) {
@@ -1135,6 +1227,9 @@
     updatePhase = "available";
     const ok = await confirmDialog(t("ui.update_available", { version: update.version }), {
       title: "P-Pass",
+      // B15：按钮直接说点了会怎样。
+      okLabel: t("ui.update_install_btn"),
+      cancelLabel: t("ui.update_cancel_btn"),
     });
     if (!ok) {
       updatePhase = "idle";
@@ -1163,16 +1258,23 @@
       // 这里（它自己的老文案 + 老动作），这也是"存量壳只能靠 daemon owner 兜"的原因。
       // relaunch_shell：先系统路径（launchd kickstart，杀+拉都不在壳里发生），
       // 不行退化到壳自己重启；两处都走不到才提示手动完全退出重开。
-      await messageDialog(t("ui.update_installed"), { title: "P-Pass", kind: "info" });
+      await messageDialog(t("ui.update_installed"), {
+        title: "P-Pass",
+        kind: "info",
+        // B15：按钮写「重启」（message 的 okLabel 已弃用，用 buttons，插件 2.4.0 起支持）。
+        buttons: { ok: t("ui.update_restart_btn") },
+      });
       updatePhase = "installed";
       await relaunchShellNow();
     } catch (e) {
       // 失败时的自愈已在 runUpdate 里做过（#1046：用户主动停过的不拉）。
       const msg = String(e);
+      // B13：系统原文只进 console，界面只说人话 + 错误代码。
+      console.warn("[updater] update failed:", e);
       // UPD-06 (#616)：失败也是一个**显式状态**（原因留在界面上，可重试），
       // 不再只靠一闪而过的 toast。
       updatePhase = "failed";
-      updateError = msg;
+      updateError = errMessage("ui.update_failed");
       // Windows「文件被占用」这类失败（pause/resume 也清不掉的：第三方占用、
       // 杀软扫描握着句柄等）给用户一句能照做的话，而不是系统原文。判据在
       // Rust 侧（#1043：按系统错误码，由平台适配器回答），这里只拿 key。
@@ -1180,7 +1282,8 @@
       try {
         key = await invoke("update_failure_key", { message: msg });
       } catch (_) {}
-      flashMessage(t(key, { err: msg }), "error");
+      updateError = errMessage(key, "ui.update_failed");
+      flashError(key, "ui.update_failed");
     }
   }
 
@@ -1401,7 +1504,7 @@
     try {
       await invoke("reveal_asset", { hash: photoViewer.hash });
     } catch (e) {
-      flashMessage(t("ui.reveal_failed", { err: errDetail(e) }), "error");
+      flashError(e, "ui.reveal_failed");
     }
   }
 
@@ -1496,7 +1599,7 @@
   </main>
 {:else}
   <div class="titlebar-drag-region shell-titlebar-drag-region" aria-hidden="true"></div>
-  <div class="shell">
+  <div class="shell" inert={relocLock}>
     <aside class="sidebar">
       <div class="brand">P-Pass</div>
       <nav>
@@ -1506,14 +1609,17 @@
       </nav>
       <!-- 顶部徽章只表示服务状态（UX-04），落位侧栏底部胶囊；<1080px
            收起态缩成纯色点（设计稿：服务状态缩成底部绿点）。 -->
+      <!-- 有阻断时胶囊说的是阻断本身、用它的含义色（红 = 要用户动手，琥珀 = 等待）；绿色只在一切正常时出现。 -->
       <div
         class="service-pill"
-        class:ok={isServiceRunning(serviceState)}
-        class:bad={!isServiceRunning(serviceState)}
-        title={t(serviceStateLabelKey(serviceState))}
+        class:ok={!blocker}
+        class:bad={blocker?.tone === "act"}
+        class:wait={blocker?.tone === "waiting"}
+        title={t(blocker ? blocker.pillKey : serviceStateLabelKey(serviceState))}
+        data-testid="service-pill"
       >
         <span class="dot"></span>
-        <span class="service-label">{t(serviceStateLabelKey(serviceState))}</span>
+        <span class="service-label">{t(blocker ? blocker.pillKey : serviceStateLabelKey(serviceState))}</span>
       </div>
     </aside>
 
@@ -1560,6 +1666,15 @@
             <!-- 2026-08-13：设计稿离线版标题带真实照片数——"全家的照片"
                  换成"全家 N 张照片"，photoCount 没拿到时退回原句（不写
                  假数字）。 -->
+            {#if blocker}
+              <!-- L1 阻塞：标题就是状态本身，不给「安全地住在这台电脑上」这类完成度结论。 -->
+              <h2
+                class="m-0 font-serif text-[28px] font-normal leading-[1.3] {blocker.tone === 'act' ? 'text-act' : 'text-waiting'}"
+                data-testid="blocker-headline"
+              >
+                {t(blocker.headlineKey)}
+              </h2>
+            {:else}
             <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3] text-ink">
               {#if photoCount !== null}{t("ui.overview_title_count", { n: photoCount })}{:else}{t("ui.overview_title")}{/if}
             </h2>
@@ -1574,10 +1689,16 @@
               {/if}
               {#if status?.removed_devices > 0}{t("ui.revoked_count", { n: status.removed_devices })}{/if}
             </p>
+            {/if}
           </div>
 
           {#if !isServiceRunning(serviceState)}
-            <Card class="text-[16px]">
+            <Card
+              variant={blocker?.tone === "act" ? "danger" : "default"}
+              class="text-[16px] {blocker?.tone === 'act' ? '' : 'border-waiting bg-waiting-bg'}"
+              role={blocker?.tone === "act" ? "alert" : "status"}
+              data-testid="service-blocker"
+            >
               <p class="m-0 text-[13px] leading-[1.6] text-ink-40">
                 {#if serviceState === "starting"}
                   {t("ui.starting")}
@@ -1585,12 +1706,42 @@
                   {t(serviceStateActionKey(serviceState))}
                 {/if}
               </p>
-              {#if canStartService(serviceState)}
+              {#if serviceRecoveryAction(serviceState) === "start"}
                 <Button class="mt-[12px] self-start" disabled={starting} onclick={startDaemonNow}>
                   {starting ? t("ui.starting") : t("ui.start_service")}
                 </Button>
+              {:else if serviceRecoveryAction(serviceState) === "restart"}
+                <!-- 偏离 1：失联多半是进程在、不应答；重启先杀再拉，结果用 restart_service_* 提示。 -->
+                <Button class="mt-[12px] self-start" disabled={restartingService} onclick={restartDaemonProcess} data-testid="blocker-restart">
+                  {restartingService ? t("ui.restarting_service") : t("ui.restart_service")}
+                </Button>
               {/if}
-              <p class="text-[13px] leading-[1.6] text-ink-40">{t("ui.refresh_hint")}</p>
+              <!-- 这句教的是「启动」那条路；重启的结果由 restart_service_* toast 当场说。 -->
+              {#if serviceRecoveryAction(serviceState) !== "restart"}
+                <p class="text-[13px] leading-[1.6] text-ink-40">{t("ui.refresh_hint")}</p>
+              {/if}
+            </Card>
+          {:else if status?.relocating}
+            <!-- #639：正在搬迁照片库——等待（琥珀），给出进度与新位置；搬完服务自己重启恢复。 -->
+            <Card class="border-waiting bg-waiting-bg text-[16px]" role="status" data-testid="relocating">
+              <p class="m-0 text-[14px] leading-[1.6] text-ink">
+                {#if status.relocate_total_bytes > 0}
+                  {t("ui.relocating_progress", { done: formatBytes(status.relocate_done_bytes), total: formatBytes(status.relocate_total_bytes), to: status.relocate_to })}
+                {:else}
+                  {t("ui.relocating_to", { to: status.relocate_to })}
+                {/if}
+              </p>
+            </Card>
+          {:else if status?.library_missing}
+            <!-- #1253：服务在，但照片库找不到——说明原因与路径；用户放回后点「重新检查」，库在就带着库重启。 -->
+            <Card variant="danger" class="text-[16px]" role="alert" data-testid="library-missing">
+              <strong class="flex items-center gap-[8px] text-act">
+                <CircleAlertIcon class="size-[18px] flex-none" aria-hidden="true" />{t("ui.library_missing_title")}
+              </strong>
+              <p class="m-0 whitespace-pre-line text-[14px] leading-[1.6] text-ink">{t("ui.library_missing_body", { dir: status.library_dir })}</p>
+              <Button class="mt-[12px] self-start" disabled={libraryRecheckBusy} onclick={recheckLibraryNow} data-testid="library-recheck">
+                {t("ui.library_missing_recheck")}
+              </Button>
             </Card>
           {:else}
             {#if pendingCount > 0 && !showConfirmModal}
@@ -1600,7 +1751,8 @@
                   <!-- 设计稿 v2：横幅直接点名刚扫码的设备（pendingList 里
                        有真实名字）；列表为空时退回数量摘要（老 daemon 过渡）。 -->
                   {#if pendingList.length > 0}
-                    <span class="text-[14px] text-ink-60">{t("ui.pending_banner_text", { name: pendingList[0].name })}</span>
+                    <!-- B9：已配对过的设备说「请求重新加入」，与审批弹窗标题同词。 -->
+                    <span class="text-[14px] text-ink-60">{t(isKnownDevice(pendingList[0]) ? "ui.pending_banner_text_known" : "ui.pending_banner_text", { name: pendingList[0].name })}</span>
                   {:else}
                     <span class="text-[14px] text-ink-60">{t("ui.pending_pairs", { n: pendingCount })}</span>
                   {/if}
@@ -1662,7 +1814,7 @@
                        this one data call failed. Say it here, never turn the
                        service badge red for it. -->
                   <p class="m-0 mb-[10px] text-[13px] leading-[1.6] text-act" data-testid="devices-error">
-                    {devicesError}
+                    {devicesError.text}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(devicesError)}</span>
                   </p>
                 {/if}
                 {#if devices.filter((d) => d.removal === "none").length === 0}
@@ -1700,7 +1852,7 @@
               <Card class="gap-[12px] text-[16px]">
                 <h3 class="mb-0 text-[15px] font-semibold">{t("ui.add_device")}</h3>
                 <p class="m-0 flex-1 text-[13px] leading-[1.6] text-ink-40">{t("ui.add_device_body")}</p>
-                <Button class="w-full" onclick={startPairing}>{t("ui.generate_qr")}</Button>
+                <Button class="w-full" onclick={() => startPairing()}>{t("ui.generate_qr")}</Button>
                 <!-- 设计稿 v2：无法扫码的退路提升到卡片级——不打开弹窗也
                      能复制配对串（copyPairQuiet 静默取串，主路径仍是扫码）。 -->
                 <Button variant="link" tone="safe" class="w-full" onclick={copyPairQuiet}>{t("ui.qr_fallback")}</Button>
@@ -1758,7 +1910,7 @@
           <Card size="flush" class="min-h-0 flex-1 overflow-y-auto">
             {#if devicesError}
               <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-act" data-testid="devices-error">
-                {devicesError}
+                {devicesError.text}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(devicesError)}</span>
               </p>
             {/if}
             {#if devices.length === 0}
@@ -1971,7 +2123,7 @@
                    吞掉，这一页只是变空——和「确实还没有任何记录」长得一模一样，
                    用户会以为备份从没发生过。 -->
               <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-act" data-testid="audit-error"
-                >{t("ui.log_load_failed", { err: auditError })}</p
+                >{auditError.text}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(auditError)}</span></p
               >
             {:else if visibleAudit.length === 0}
               <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.log_empty")}</p>
@@ -2017,15 +2169,8 @@
               {/if}
               <div class="mt-[12px] flex flex-wrap gap-[10px]">
                 <Button onclick={openLibrary}>{t("ui.open_library")}</Button>
-                <!-- DESK-48（2026-10-04 验收人拍板）：**暂时隐藏**「更改照片库位置」入口。
-                     换库的正确形态是整库搬迁（#639 [DESK-47] relocation：手机零重扫码、
-                     零重传），排在下个 milestone；在那之前用户可自行手动完成——先用
-                     Finder 把整个库目录（含 .ppf/）搬走，再把应用指向新位置。
-                     能力一律未删：chooseFolder()、壳侧 invoke("set_library_dir")、四个
-                     i18n 键原样保留（Rust 侧契约 desk46_library_dir_writer_is_shell_only
-                     仍要求它们存在）。恢复方式：把下面那行 Button 放回本 div。
-                <Button variant="secondary" onclick={chooseFolder}>{t("ui.change_library")}</Button>
-                -->
+                <!-- #639：「更改照片库位置」恢复，语义改为整库搬迁（手机零重扫码、零重传、原目录搬空）。 -->
+                <Button variant="secondary" onclick={chooseFolder} data-testid="change-library">{t("ui.change_library")}</Button>
               </div>
               <!-- T-092: 磁盘水位（status.disk_free_bytes/disk_total_bytes）——
                    「可用 X GB / 共 Y GB」+ 细进度条（token 色）；任一字段
@@ -2037,9 +2182,8 @@
                 </div>
                 <div class="mt-[10px] h-2 overflow-hidden rounded-full bg-hairline"><div class="h-full rounded-full bg-ink" style="width:{diskPct}%"></div></div>
               {/if}
-              <!-- DESK-48：后果说明随入口一起隐藏（键 ui.library_change_hint 保留）。
-              <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.library_change_hint")}</p>
-              -->
+              <!-- #639：后果说明随入口恢复，文案改为整库搬迁。 -->
+              <p class="m-0 mt-[10px] text-[13px] leading-[1.6] text-ink-40">{t("ui.library_change_hint")}</p>
             </Card>
             <div class="flex flex-1 flex-col gap-[22px]">
               <Card size="flush" class="min-h-0 flex-1 overflow-y-auto text-[16px]">
@@ -2079,7 +2223,7 @@
                     {:else if updatePhase === "installed" || updatePhase === "relaunching"}
                       <span>{t("ui.update_installed_state")}</span>
                     {:else if updatePhase === "failed"}
-                      <span class="text-act">{t("ui.update_failed", { err: updateError })}</span>
+                      <span class="text-act">{updateError?.text}{#if updateError}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(updateError)}</span>{/if}</span>
                       <Button variant="secondary" class="ml-[10px]" onclick={() => checkForUpdate(true)}>
                         {t("ui.update_retry")}
                       </Button>
@@ -2149,13 +2293,22 @@
     <Dialog open={showPairModal} onClose={closePairModal}>
       <!-- 设计稿 v2：弹窗标题「配对二维码 · 放大版」——亮码用途一目了然 -->
       <h3>{t("ui.pair_qr_title")}</h3>
-      {#if qrDataUrl}
-        <img class="qr-lg" src={qrDataUrl} alt={t("ui.pair_qr_title")} />
+      {#if qrDataUrl && qrState === "expired"}
+        <!-- #1264：过期的码不留在屏幕上——盖住，只留刷新入口（失效时刻以 daemon 为准）。 -->
+        <div class="qr-lg qr-expired" data-testid="pair-qr-expired">
+          <p class="m-0 font-semibold">{t("ui.pair_qr_expired")}</p>
+          <Button onclick={() => startPairing()}>{t("ui.refresh_qr")}</Button>
+        </div>
+        <div class="modal-actions">
+          <Button variant="secondary" onclick={closePairModal}>{t("ui.close")}</Button>
+        </div>
+      {:else if qrDataUrl}
+        <img class="qr-lg" src={qrDataUrl} alt={t("ui.pair_qr_title")} data-testid="pair-qr" />
         <p class="hint modal-hint">
           {t("ui.pair_qr_body")}
         </p>
         <div class="modal-actions">
-          <Button variant="secondary" onclick={startPairing}>{t("ui.refresh_qr")}</Button>
+          <Button variant="secondary" onclick={() => startPairing()}>{t("ui.refresh_qr")}</Button>
           <Button onclick={closePairModal}>{t("ui.close")}</Button>
         </div>
         <!-- 设计稿离线版 v2：扫码有困难的退路——复制配对串手动传给
@@ -2164,12 +2317,10 @@
       {:else}
         <p class="hint modal-hint">{t("ui.pair_generating")}</p>
       {/if}
-      <!-- #1118：手机扫码后先显示这台电脑的标识，用户在这里核对（二维码生成前也显示）。 -->
+      <!-- #1118：这台电脑的名字（二维码生成前也显示）。#1257：电脑标识不在这里——核对发生在输验证码那一步，
+           只在确认弹窗里给。 -->
       {#if status?.desktop_name}
         <p class="pair-identity" data-testid="desktop-name">{t("ui.pair_desktop_name", { name: status.desktop_name })}</p>
-      {/if}
-      {#if status?.desktop_fingerprint}
-        <p class="pair-identity" data-testid="desktop-fingerprint">{t("ui.pair_desktop_identity", { fingerprint: status.desktop_fingerprint })}</p>
       {/if}
     </Dialog>
 
@@ -2181,6 +2332,10 @@
            删除），所以改过名的设备照样认得出来，且用桌面上那个名字称呼它。措辞在 lib/pending.js。 -->
       {@const many = pairRequests.length > 1}
       <h3 class="pending-title">{pendingDialogText(pairRequests.map((r) => r.item)).title}</h3>
+      <!-- #1257：核对就在这一步——手机验证码页上写着「电脑标识」，这里给出同一串（本机的，每个弹窗一次）。 -->
+      {#if status?.desktop_fingerprint}
+        <p class="pair-identity" data-testid="desktop-fingerprint">{t("ui.pair_desktop_identity", { fingerprint: status.desktop_fingerprint })}</p>
+      {/if}
       <div class="pending-list">
         {#each pairRequests as req (req.id)}
           {@const item = req.item}
@@ -2191,7 +2346,7 @@
             {#if many}<p class="pending-name">{item.name}</p>{/if}
             {#if sub}<p class="pending-meta">{sub}</p>{/if}
             {#if req.phase === "failed"}
-              <p class="pending-error" role="alert">{t("ui.err_pair_code_wrong")}</p>
+              <p class="pending-error" role="alert">{t("ui.err_pair_code_wrong")}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(errMessage("ui.err_pair_code_wrong"))}</span></p>
               <div class="pending-actions" data-testid="pending-actions">
                 <Button onclick={() => showQrAgain(req.id)}>{t("ui.pair_show_qr_again")}</Button>
               </div>
@@ -2290,6 +2445,22 @@
       </footer>
     {/if}
   </div>
+  {#if relocLock}
+    <!-- #639：搬迁锁定层——等待（琥珀），只有标题与进度，没有任何可点的东西；搬完服务自己重启，状态一变层就消失。 -->
+    <div class="relocate-lock" data-testid="relocate-lock">
+      <div class="titlebar-drag-region shell-titlebar-drag-region" aria-hidden="true"></div>
+      <Card class="w-full max-w-[520px] border-waiting bg-waiting-bg text-[16px]" role="status" aria-live="polite">
+        <h2 class="m-0 font-serif text-[24px] font-normal leading-[1.3] text-waiting">{t("ui.blocked_relocating")}</h2>
+        <p class="m-0 text-[14px] leading-[1.6] text-ink">
+          {#if status.relocate_total_bytes > 0}
+            {t("ui.relocating_progress", { done: formatBytes(status.relocate_done_bytes), total: formatBytes(status.relocate_total_bytes), to: status.relocate_to })}
+          {:else}
+            {t("ui.relocating_to", { to: status.relocate_to })}
+          {/if}
+        </p>
+      </Card>
+    </div>
+  {/if}
 {/if}
 
 <style>
@@ -2316,6 +2487,19 @@
   :global(:focus-visible) {
     outline: 2px solid var(--pp-ink);
     outline-offset: 2px;
+  }
+
+  /* #639：搬迁锁定层盖住整个窗口（标题栏拖动区除外）。 */
+  .relocate-lock {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 48px 16px 16px;
+    box-sizing: border-box;
+    background: var(--pp-paper);
   }
 
   /* ---- shell：侧栏 + 内容区（布局 v1） ---- */
@@ -2376,6 +2560,13 @@
   .service-pill.bad {
     background: var(--pp-act-bg);
     color: var(--pp-act);
+  }
+  .service-pill.wait {
+    background: var(--pp-waiting-bg);
+    color: var(--pp-waiting);
+  }
+  .service-pill.wait .dot {
+    background: var(--pp-waiting);
   }
   .service-pill.bad .dot {
     background: var(--pp-act);
@@ -2522,6 +2713,16 @@
     image-rendering: pixelated;
     border-radius: var(--pp-radius-control-sm);
     margin: 14px 0 4px;
+  }
+  /* #1264：盖住过期的码——占原来二维码的位置，居中放一句话和刷新按钮。 */
+  .qr-expired {
+    aspect-ratio: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    background: var(--pp-idle-bg);
   }
   .modal-hint {
     margin: 12px 0 16px;

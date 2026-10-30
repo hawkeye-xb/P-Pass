@@ -329,14 +329,72 @@ async fn run() -> anyhow::Result<()> {
     // 绝不 create_dir_all 静默造——外置盘未挂载时会在 /Volumes 下造出同名
     // 真目录，照片写进内置盘（挂载点阴影）。默认平台目录（首启向导前）与
     // 测试沙盒目录保持旧行为。
-    if let Err(msg) = library_root_check(explicitly_configured, data_dir.is_dir(), &data_dir) {
-        // 文件日志此刻还没初始化（init_file_logging 在更后面）——走 stderr：
-        // launchd 的 StandardErrorPath 会接住，DESK-09 诊断链（壳读 plist
-        // stderr 尾行）照样能看到这句话；Windows 上落 logs\daemon.err（DESK-58）。KeepAlive 节流重拉，盘插回即自愈。
-        eprintln!("{msg}");
-        std::process::exit(1);
+    // #1253：找不到库不再退出（以前每次启动都报错退出，窗口只能说「服务没运行」，文件夹被移走
+    // 时用户在 App 里没有出路）。照 Syncthing 文件夹丢失的做法：服务照常在，只把「库找不到 +
+    // 路径」交给窗口；用户放回后点「重新检查」，库在就带着库重启。
+    // #1260：服务自己的数据（索引、blob 元数据、缩略图）放本机，按库 ID 分目录。测试沙盒放在
+    // 沙盒旁边的独立目录，不碰本机的真实数据目录。
+    let local_base = if ephemeral {
+        let mut base = data_dir.clone().into_os_string();
+        base.push("-local");
+        std::path::PathBuf::from(base)
+    } else {
+        library_location.platform_dir().to_path_buf()
+    };
+    // #639：有没搬完的搬迁计划就先接着搬（服务只答进度，不开库、不起传输）。搬完改指向、删原目录
+    // 后重启；没搬成就放弃计划（原库一字未动）并记下原因，重启后照旧在原位置。
+    if !ephemeral {
+        if let Some(plan) = daemon::relocate::pending(&local_base) {
+            if daemon::relocate::already_repointed(&plan, &data_dir) {
+                // 指向早已改好（上次改完就中断了，可能还没来得及记下），只差删原目录。
+                daemon::relocate::finish_flipped(&local_base, &plan);
+            } else {
+                let live = std::sync::Arc::new(daemon::relocate::Live::new(plan));
+                let worker = std::sync::Arc::clone(&live);
+                let location = std::sync::Arc::clone(&library_location);
+                let base = local_base.clone();
+                tokio::task::spawn_blocking(move || relocate_now(&worker, &location, &base));
+                run_waiting(
+                    std::sync::Arc::clone(&library_location),
+                    daemon::ipc::Waiting::Relocating(live),
+                )
+                .await
+            }
+        }
     }
+    let presence = startup_presence(explicitly_configured, &data_dir, &local_base);
+    if presence != daemon::layout::Presence::Present {
+        if let daemon::layout::Presence::OtherLibrary { found, expected } = &presence {
+            tracing::warn!(
+                "#1260: {} 里是别的照片库（库 ID {found}，本机记的是 {expected}）——不往里写",
+                data_dir.display()
+            );
+        }
+        let msg = library_missing_message(&data_dir);
+        eprintln!("{msg}");
+        tracing::warn!("{msg}");
+        run_waiting(
+            std::sync::Arc::clone(&library_location),
+            daemon::ipc::Waiting::LibraryMissing {
+                dir: data_dir.clone(),
+                local_base: local_base.clone(),
+            },
+        )
+        .await
+    }
+    // #1253：运行中库目录被删、改名 / 挪走，或所在的盘被拔 / 强制推出——立刻停手：以
+    // EXIT_CONFIGURED_RESTART 退出，由服务管理器重新拉起，启动检查发现库不在就进上面的
+    // 「找不到照片库」状态（与启动时库不在同一条路，不另写一套运行中的状态切换）。
+    // #1260：macOS 每次**尝试**卸载卷都会撤销 O_EVTONLY 句柄（NOTE_REVOKE），哪怕这次卸载因为别的
+    // 程序占着盘而失败——所以收到事件后稍等再看库标记：还在 = 卷没有真的卸载，继续盯住。
+    arm_library_watch(data_dir.clone());
     std::fs::create_dir_all(data_dir.join(".ppf"))?;
+    // #1260：老库（服务数据还在库盘 `.ppf/` 里）在打开任何数据库之前迁到本机；迁不成就照旧用
+    // 老布局跑这一次，下次启动重试（源数据一字未动，见 daemon::migrate_local）。
+    let layout = daemon::migrate_local::settle(&data_dir, &local_base)
+        .await
+        .layout()
+        .clone();
     // #949：清掉旧版遥测遗留的 anon_id（尽力而为，失败只 warn）。
     daemon::stats::purge_legacy_anon_id(&data_dir);
 
@@ -351,7 +409,7 @@ async fn run() -> anyhow::Result<()> {
         use platform::PlatformAdapter as _;
         platform::adapter().pairing_store()
     };
-    let index_path = data_dir.join(".ppf/index.sqlite");
+    let index_path = layout.index_db();
     let opened = match pairing_store {
         Some(store) => {
             let vault = std::sync::Arc::new(daemon::pairing_store::SecretPairingVault::new(store));
@@ -385,7 +443,7 @@ async fn run() -> anyhow::Result<()> {
     // 所有已配对手机变成孤儿——配对绑的就是 NodeId). #1109：macOS 存
     // data protection 钥匙串，Windows / Linux 仍是数据目录里的 identity.key；
     // 读不出来 / 内容不合法就拒绝启动；新身份先删全部配对记录，见 daemon::identity。
-    let secret = load_or_mint_identity(ephemeral, &data_dir, &db).await;
+    let secret = load_or_mint_identity(ephemeral, &data_dir, &local_base, &db).await;
 
     // ── DAE-02: 单实例 claim 先于 transport bind ──────────────────
     // 固定端口 config 下，在位实例占着端口会让新实例 bind 直接失败；
@@ -714,16 +772,25 @@ async fn run() -> anyhow::Result<()> {
     //
     // #1183：启动关键路径上只做 O(1) 的 rename（挪进 `.ppf/blobs-retired-<pid>-<ns>`），
     // 与里面有多少东西无关；真正的删除归库残留清扫（类别 `blobs-retired`），启动就绪后后台跑。
-    let blobs_dir = transport::Blobs::store_dir(&data_dir.join(".ppf"));
-    match daemon::retire_blob_store(&blobs_dir) {
-        daemon::BlobStoreRetire::Absent | daemon::BlobStoreRetire::Retired => {}
+    // #1260：元数据库在本机、数据在库盘——两边同一个退役动作：数据目录挪走了（或本来就没有），
+    // 本机的元数据库也删掉，否则会「元数据说有、数据没了」。挪不走就两边都留着，照常打开。
+    match daemon::retire_blob_store(&layout.blobs_data()) {
+        daemon::BlobStoreRetire::Absent | daemon::BlobStoreRetire::Retired => {
+            if !layout.is_legacy() {
+                if let Err(e) = std::fs::remove_file(layout.blobs_db()) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        tracing::warn!("BLOB-01: 回退 blob store 的元数据库没删掉（{e}）");
+                    }
+                }
+            }
+        }
         other => tracing::warn!("BLOB-01: 回退 blob store 没挪走（{other:?}），照常打开"),
     }
 
     // One blob store handle, shared by backup (pulls) and query
     // (tickets); also serves fetches through the listen loop (T-033).
     let blobs = std::sync::Arc::new(
-        transport::Blobs::open(&transport, &data_dir.join(".ppf/blobs")).await?,
+        transport::Blobs::open_split(&transport, &layout.blobs_db(), &layout.blobs_data()).await?,
     );
     // #546: the blobs data plane passes the same authz gate as ctrl /
     // upload / download — per connection and per request, device row read
@@ -751,15 +818,17 @@ async fn run() -> anyhow::Result<()> {
             >
     };
     let flow_blobs = std::sync::Arc::new(
-        transport::Blobs::open_with_periodic_gc(
+        transport::Blobs::open_split_with_periodic_gc(
             &transport,
-            &data_dir.join(".ppf/flow-blobs"),
+            &layout.flow_blobs_db(),
+            &layout.flow_blobs_data(),
             daemon::FLOW_BLOBS_GC_INTERVAL,
             flow_gc_protected,
         )
         .await?,
     );
-    let query = daemon::QueryEngine::new(db.clone(), blobs.clone(), &data_dir);
+    let query = daemon::QueryEngine::new(db.clone(), blobs.clone(), &data_dir)
+        .with_thumbs_root(layout.thumbs());
     // IDX-06 (#442): 入库后的缩略图预生成——低优先级线程池，与 thumb.get
     // 共用同一个 gate（同一 hash 只生成一次）。三条入库路径（Flow 交付、
     // 旧备份管线的 upload/commit、目录监听）都接同一个句柄；adopt 收编的
@@ -788,6 +857,7 @@ async fn run() -> anyhow::Result<()> {
         watch
     };
     let flow_delivery = daemon::flow_delivery::FlowDelivery::new(db.clone(), flow_blobs, &data_dir)
+        .with_thumbs_root(layout.thumbs())
         .with_thumb_pregen(thumb_pregen.clone())
         .with_path_registry(flow_paths)
         .with_events(event_bus.clone())
@@ -796,6 +866,28 @@ async fn run() -> anyhow::Result<()> {
         .with_subscriptions(subscriptions.clone())
         // NET-26 (#419): keep the machine awake while any fetch runs.
         .with_awake(awake.clone());
+    // #1260：用户推出照片库所在的卷之前，系统先问我们：停下在途传输（grant 保留，手机之后续传）、
+    // 等库盘上的文件关掉，再放行——推出不会因为我们「磁盘正在使用」。最多等 5 秒，到点照样放行
+    // （只放行、从不拒绝用户的推出）。卷真的卸载后由上面的根目录监听（#1253）进「找不到照片库」。
+    {
+        use platform::PlatformAdapter as _;
+        let release = flow_delivery.clone();
+        let runtime = tokio::runtime::Handle::current();
+        let armed = platform::adapter().approve_library_unmount(
+            &data_dir,
+            Box::new(move || {
+                let release = release.clone();
+                let _ = runtime.block_on(async move {
+                    tokio::time::timeout(LIBRARY_RELEASE_BUDGET, release.release_library()).await
+                });
+            }),
+        );
+        if !armed {
+            tracing::info!(
+                "#1260: 本平台没有推出前审批——推出时如有传输在进行，系统会提示磁盘正在使用"
+            );
+        }
+    }
     let backup = daemon::BackupEngine::new(db.clone(), blobs.clone(), &data_dir)
         .with_events(event_bus.clone())
         .with_thumb_pregen(thumb_pregen.clone());
@@ -808,8 +900,9 @@ async fn run() -> anyhow::Result<()> {
 
     // #1183：库残留统一清扫（清单与判据见 `daemon::residue`、业务规则 §5.7）。启动那一轮等
     // 「启动就绪」信号（下面 `STATUS_CHANGED` 处）再跑，不在启动关键路径上；之后随每小时巡检。
-    let residue =
-        daemon::residue::ResidueSweeper::new(db.clone(), &data_dir).with_staging_claims({
+    let residue = daemon::residue::ResidueSweeper::new(db.clone(), &data_dir)
+        .with_thumbs_root(layout.thumbs())
+        .with_staging_claims({
             let backup = backup.clone();
             std::sync::Arc::new(move || backup.staging_claims())
         });
@@ -839,6 +932,7 @@ async fn run() -> anyhow::Result<()> {
         Err(e) => tracing::warn!("#851: 补完原图替换失败，下次启动再试: {e}"),
     }
     let reconcile = daemon::Reconcile::new(db.clone(), &data_dir)
+        .with_thumbs_root(layout.thumbs())
         .with_events(event_bus.clone())
         .with_local_node_id(node_id.0);
     let startup = reconcile.run_once().await;
@@ -910,6 +1004,7 @@ async fn run() -> anyhow::Result<()> {
     // 合并 → SYNC-03 订阅 → 手机刷新）。启动失败降级为每小时对账兜底，
     // 不阻塞 daemon（策略与理由见 watcher.rs 模块注释 + WATCH-01 卡）。
     let watcher = daemon::LibraryWatcher::new(db.clone(), &data_dir, node_id.0, event_bus.clone())
+        .with_thumbs_root(layout.thumbs())
         .with_thumb_pregen(thumb_pregen.clone());
     if let Err(e) = watcher.spawn() {
         tracing::warn!("WATCH-01: 目录监听启动失败，降级为每小时对账兜底: {e}");
@@ -1011,14 +1106,26 @@ async fn shutdown(transport: &transport::IrohTransport, req: Option<platform::St
 async fn load_or_mint_identity(
     ephemeral: bool,
     data_dir: &std::path::Path,
+    local_base: &std::path::Path,
     db: &storage::Db,
 ) -> [u8; 32] {
     use platform::PlatformAdapter as _;
     let adapter = platform::adapter();
+    let home = adapter.identity_key_home();
+    // #1260：数据目录文件这种存放处搬到本机；安全存储（钥匙串 / ProgramData）不变，传照片库是为了
+    // 让它清掉库里的旧明文（#1109）。
+    let key_dir = match &home {
+        platform::IdentityKeyHome::DataDirFile if !ephemeral => {
+            daemon::identity::data_dir_key_home(data_dir, local_base, |p| {
+                adapter.restrict_to_owner(p)
+            })
+        }
+        _ => data_dir.to_path_buf(),
+    };
     match daemon::identity::for_run(
         ephemeral,
-        adapter.identity_key_home(),
-        data_dir,
+        home,
+        &key_dir,
         |p| adapter.restrict_to_owner(p),
         rand_token,
         // #1117：新身份 = 新设备，先删全部配对记录（档案与审计保留）。
@@ -1040,26 +1147,120 @@ async fn load_or_mint_identity(
     }
 }
 
-/// DESK-46 (#638)：库目录的启动判据（纯函数——文件系统与 env 探测都在
-/// 调用点完成，判据只由传入的事实决定，好做单测与反证）。
+/// DESK-46 (#638) / #1253 / #1260：启动时库在不在（与「重新检查」同一判据，见
+/// [`daemon::layout::library_presence`]：库标记在，且库 ID 与本机记的一致）。
 ///
-/// `configured_in_file` = data_dir 来自 config.toml 显式配置（PPF_DATA_DIR
-/// 环境变量指定的不算——场景脚本/tools 依赖自动建一次性临时库）。
-/// 显式配置的库目录不存在 ⇒ Err（人话，给 stderr / launchd 诊断链）；
-/// 默认平台目录或目录已存在 ⇒ Ok。
-fn library_root_check(
+/// 只对显式配置的库判（`PPF_DATA_DIR` 测试库、默认平台目录、沙盒照旧自动建）。光有同名目录不算——
+/// 外置盘没挂时原位置可能冒出一个空目录，把它当成空库接管，桌面索引是空的、手机水位还在，就会
+/// 永不补传（#639）。库标记由写库位置时建出（[`daemon::library_location::LibraryLocation::set`]）。
+fn startup_presence(
     configured_in_file: bool,
-    exists: bool,
     data_dir: &std::path::Path,
-) -> Result<(), String> {
-    if configured_in_file && !exists {
-        return Err(format!(
-            "库目录不存在：{}——外置盘未挂载，或文件夹被移动/删除了。\
-             请挂载/恢复后重试，或修正 config.toml 里的 data_dir。",
-            data_dir.display()
-        ));
+    local_base: &std::path::Path,
+) -> daemon::layout::Presence {
+    if configured_in_file {
+        daemon::layout::library_presence(data_dir, local_base)
+    } else {
+        daemon::layout::Presence::Present
     }
-    Ok(())
+}
+
+/// #639：搬库 → 改指向 → 删原目录 → 清计划，然后以 EXIT_CONFIGURED_RESTART 退出、带着新位置重启。
+/// 任何一步失败都放弃计划（改指向之前原库一字未动），重启后照旧在原位置。
+fn relocate_now(
+    live: &daemon::relocate::Live,
+    location: &daemon::library_location::LibraryLocation,
+    local_base: &std::path::Path,
+) {
+    let plan = &live.plan;
+    tracing::info!(
+        "#639: 开始搬迁照片库：{} → {}",
+        plan.from.display(),
+        plan.to.display()
+    );
+    // 索引在本机（#1260），搬迁不碰它；只读打开取每张照片的相对路径来对账。
+    let index = daemon::layout::local_dir(local_base, &plan.id).join("index.sqlite");
+    let rt = tokio::runtime::Handle::current();
+    let indexed = || -> Result<Vec<String>, String> {
+        if !index.exists() {
+            return Ok(Vec::new());
+        }
+        rt.block_on(storage::copy::asset_rel_paths(&index))
+            .map_err(|e| e.to_string())
+    };
+    let result =
+        daemon::relocate::move_library(local_base, plan, live, &indexed).and_then(|moved| {
+            daemon::relocate::complete(local_base, plan, |to| {
+                location.set(&to.to_string_lossy()).map(|_| ())
+            })
+            .inspect_err(|_| moved.undo(plan))
+        });
+    match result {
+        Ok(()) => {
+            tracing::info!("#639: 照片库已搬到 {}，带着新位置重启", plan.to.display());
+        }
+        Err(e) => {
+            tracing::error!("#639: 搬迁没成，照片库留在原位置：{e}");
+            daemon::relocate::abandon(local_base, &e);
+        }
+    }
+    std::process::exit(daemon::ipc::EXIT_CONFIGURED_RESTART);
+}
+
+/// #1253 / #1260：盯住照片库根目录本身。事件到了先等 [`LIBRARY_GONE_SETTLE`] 再判：库标记不在了
+/// 才停手重启（进「找不到照片库」），还在就重新盯住。
+fn arm_library_watch(root: std::path::PathBuf) {
+    use platform::PlatformAdapter as _;
+    let watched = root.clone();
+    let armed = platform::adapter().watch_library_root(
+        &root,
+        Box::new(move || {
+            std::thread::sleep(LIBRARY_GONE_SETTLE);
+            if daemon::library_location::library_marker_present(&watched) {
+                tracing::info!("#1253: 照片库所在的卷有过一次卸载尝试，但库还在——继续盯住");
+                arm_library_watch(watched);
+                return;
+            }
+            tracing::error!(
+                "#1253: 照片库根目录 {} 被删除、改名或所在的盘被卸载——停手并重启进入「找不到照片库」",
+                watched.display()
+            );
+            std::process::exit(daemon::ipc::EXIT_CONFIGURED_RESTART);
+        }),
+    );
+    if !armed {
+        tracing::warn!("#1253: 本平台不能盯住照片库根目录——运行中库消失只能靠删除前核对库标记兜底");
+    }
+}
+
+/// 根目录事件之后等多久再判库还在不在（卸载要么已经完成，要么已经失败）。
+const LIBRARY_GONE_SETTLE: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// #1260：推出审批里等「在途传输停下、库盘上的文件关掉」最多多久，到点照样放行。
+const LIBRARY_RELEASE_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// 库找不到时的人话（日志与 stderr；窗口另按 `status.library_missing` 出文案）。
+fn library_missing_message(data_dir: &std::path::Path) -> String {
+    format!(
+        "找不到照片库：{}——外置盘没有接上，或文件夹被移动、改名、删除了。\
+         后台服务保持运行，放回后在窗口里点「重新检查」即恢复。",
+        data_dir.display()
+    )
+}
+
+/// #1253：服务自己发的系统通知要人话——与窗口同一份字典（`diag::I18N_*`），按系统语言选
+/// （zh* → 中文，其余 → 英文，与托盘同一规则）。`{dir}` 换成库路径；字典里没有这个键就原样给键名。
+fn ui_text(key: &str, dir: &std::path::Path) -> String {
+    use platform::PlatformAdapter as _;
+    let zh = platform::adapter()
+        .system_locale()
+        .is_some_and(|l| l.to_ascii_lowercase().starts_with("zh"));
+    let dict: serde_json::Value =
+        serde_json::from_str(if zh { diag::I18N_ZH } else { diag::I18N_EN }).unwrap_or_default();
+    dict.get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or(key)
+        .replace("{dir}", &dir.display().to_string())
 }
 
 /// #1115：未配置状态——正本里还没有库位置（macOS 钥匙串里没有；Windows / Linux 平台目录里
@@ -1068,9 +1269,31 @@ fn library_root_check(
 async fn run_unconfigured(
     location: std::sync::Arc<daemon::library_location::LibraryLocation>,
 ) -> ! {
+    tracing::info!("#1115: 照片库位置未配置——只开放配置方法，等窗口程序的首启向导");
+    let waiting = daemon::ipc::Waiting::Unconfigured(std::sync::Arc::clone(&location));
+    run_waiting(location, waiting).await
+}
+
+/// 还不能开库时的服务（[`daemon::ipc::Waiting`]：未配置 / 库找不到）：单实例交接照做，只答
+/// 少数方法，按停止信号退出。库找不到时发一次系统通知；用户放回后点「重新检查」，库在就以
+/// `EXIT_CONFIGURED_RESTART` 退出、由服务管理器带着库重新拉起（与首启写好库位置同一条路）。
+async fn run_waiting(
+    location: std::sync::Arc<daemon::library_location::LibraryLocation>,
+    waiting: daemon::ipc::Waiting,
+) -> ! {
     use platform::PlatformAdapter as _;
     let version = daemon::daemon_version();
-    tracing::info!("#1115: 照片库位置未配置——只开放配置方法，等窗口程序的首启向导");
+    if let daemon::ipc::Waiting::LibraryMissing { dir, .. } = &waiting {
+        // #1253：备份全线停了，要让人知道——窗口没开也有系统通知（每次进入这个状态发一次）。
+        // 不轮询、不自动重启：库是用户自己处理的，处理好后在窗口里点「重新检查」（IPC `library.recheck`）。
+        let dir = dir.clone();
+        tokio::task::spawn_blocking(move || {
+            platform::adapter().notify(
+                &ui_text("ui.library_missing_notice_title", &dir),
+                &ui_text("ui.library_missing_notice_body", &dir),
+            );
+        });
+    }
     let served: std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>> =
         match platform::adapter().resident_ipc() {
             platform::ResidentIpc::SignedSocket(path) => {
@@ -1089,16 +1312,16 @@ async fn run_unconfigured(
                     &version,
                 )
                 .await;
-                Box::pin(async move {
-                    daemon::ipc::serve_unconfigured_signed(&path, version, location).await
-                })
+                Box::pin(
+                    async move { daemon::ipc::serve_waiting_signed(&path, version, waiting).await },
+                )
             }
             platform::ResidentIpc::UserPipe(pipe) => {
                 stand_down_unless_claimed(&daemon::ipc::PeerEndpoint::Pipe(pipe.clone()), &version)
                     .await;
-                Box::pin(async move {
-                    daemon::ipc::serve_unconfigured_pipe(&pipe, version, location).await
-                })
+                Box::pin(
+                    async move { daemon::ipc::serve_waiting_pipe(&pipe, version, waiting).await },
+                )
             }
             platform::ResidentIpc::NamespacedWithToken => {
                 // 前任（另一个未配置实例）的令牌在平台目录里；没有就是第一个。
@@ -1121,8 +1344,7 @@ async fn run_unconfigured(
                     }
                 };
                 Box::pin(async move {
-                    daemon::ipc::serve_unconfigured_token(&platform_dir, token, version, location)
-                        .await
+                    daemon::ipc::serve_waiting_token(&platform_dir, token, version, waiting).await
                 })
             }
         };
@@ -1190,30 +1412,45 @@ mod tests {
     use super::*;
     use std::path::Path;
 
-    // DESK-46 (#638)：显式配置的库目录不存在 ⇒ 拒绝启动（人话消息），
-    // 不再 create_dir_all 造假目录。反证：把 library_root_check 改成永远
-    // Ok，本测试必须变红。
-    #[test]
-    fn desk46_configured_library_missing_is_refused() {
-        let err = library_root_check(true, false, Path::new("/Volumes/My Passport"))
-            .expect_err("显式配置的库目录不存在时必须拒绝启动");
-        assert!(err.contains("库目录不存在"), "消息要有人话：{err}");
-        assert!(
-            err.contains("/Volumes/My Passport"),
-            "消息要带具体路径，用户才知道挂哪块盘：{err}"
-        );
+    fn present(configured: bool, lib: &Path, local: &Path) -> bool {
+        startup_presence(configured, lib, local) == daemon::layout::Presence::Present
     }
 
-    // DESK-46 (#638)：默认平台目录（首启向导前）与 PPF_DATA_DIR 场景目录
-    // 不在守卫范围内——configured_in_file=false 时即使目录不存在也放行，
-    // 由后面的 create_dir_all 自动建（tools/ 脚本契约）。
+    // DESK-46 (#638) / #1253：显式配置的库没有库标记 ⇒ 判「库找不到」（不开库、不造目录）。
+    // 反证：startup_presence 不看 configured 一律放行 ⇒ 第一条红。
+    #[test]
+    fn desk46_configured_library_without_marker_is_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(!present(true, &tmp.path().join("lib"), tmp.path()));
+    }
+
+    // 默认平台目录（首启向导前）与 PPF_DATA_DIR 场景目录不在守卫范围内——
+    // configured_in_file=false 时即使目录不存在也放行，由后面的 create_dir_all 自动建（tools/ 脚本契约）。
     #[test]
     fn desk46_default_or_env_library_may_be_created() {
-        assert!(library_root_check(false, false, Path::new("/tmp/ppf-scene/library")).is_ok());
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(present(false, &tmp.path().join("lib"), tmp.path()));
     }
 
+    // #1253：判据看库标记，不看同名目录——外置盘没挂时原位置冒出的空目录不算库。
+    // 反证：判据改回 data_dir.is_dir()，「只有空目录」那条变红。
     #[test]
-    fn desk46_existing_configured_library_passes() {
-        assert!(library_root_check(true, true, Path::new("/anywhere")).is_ok());
+    fn i1253_presence_is_the_marker_not_the_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let local = tempfile::tempdir().unwrap();
+        let lib = tmp.path().join("P-Pass Library");
+        assert!(!present(true, &lib, local.path()), "目录不存在");
+        std::fs::create_dir_all(&lib).unwrap();
+        assert!(!present(true, &lib, local.path()), "只有空目录不算库");
+        std::fs::create_dir_all(lib.join(".ppf")).unwrap();
+        assert!(present(true, &lib, local.path()));
+    }
+
+    // #1253：报错不再让人去改 config.toml（#1115 起库位置正本在钥匙串，改了也不作数），且带路径。
+    #[test]
+    fn i1253_message_names_the_path_and_not_config_toml() {
+        let msg = library_missing_message(Path::new("/Volumes/My Passport/P-Pass Library"));
+        assert!(msg.contains("/Volumes/My Passport/P-Pass Library"), "{msg}");
+        assert!(!msg.contains("config.toml"), "{msg}");
     }
 }

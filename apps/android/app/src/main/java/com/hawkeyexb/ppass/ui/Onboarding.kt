@@ -100,79 +100,11 @@ fun WelcomeScreen(onScan: () -> Unit, onManual: () -> Unit) {
 }
 
 /**
- * M6 完成页（全页面状态稿）：选完相册、真正触发首次备份之后的收尾——
- * 绿底给一句安心承诺,"进入 App" 才落到 Home。选相册页自己不管发生在
- * onboarding 还是设置里改范围,统一过一遍,不额外分叉判断来源。
+ * Pairing in flight / refused / failed states share one screen. [body] null = title only (10-29 copy
+ * B5/B7/B8); [footnote] = the small "error code" line under the body (B13).
  */
 @Composable
-fun BackupStartedScreen(
-    photoCount: Int,
-    onEnableBackgroundBackup: () -> Unit,
-    onEnter: () -> Unit,
-    /** #130：点按钮后会弹一次通知权限——先用一句话讲清用途（与欢迎页步骤说明同一样式）。 */
-    notificationAskNote: Boolean = false,
-) {
-    PPScreen(background = PPColor.SafeBg) {
-        androidx.compose.material3.ProvideTextStyle(
-            androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
-        ) {
-        Column(
-            Modifier.fillMaxSize().padding(30.dp, 0.dp, 30.dp, 40.dp),
-            verticalArrangement = Arrangement.Center,
-        ) {
-            Text(
-                stringResource(R.string.backup_started_title, groupThousands(photoCount.toLong())),
-                fontSize = 34.sp, lineHeight = 42.sp,
-                fontFamily = PPFont.Serif, color = PPColor.Safe,
-            )
-            Spacer(Modifier.height(14.dp))
-            Text(
-                stringResource(R.string.backup_started_body),
-                fontSize = 16.sp, lineHeight = 27.sp, color = PPColor.Ink60,
-            )
-            if (notificationAskNote) {
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    stringResource(R.string.onboarding_notification_note),
-                    fontSize = 15.sp, lineHeight = 25.sp, color = PPColor.Ink40,
-                )
-            }
-            Spacer(Modifier.height(28.dp))
-            Button(
-                onClick = onEnableBackgroundBackup,
-                modifier = Modifier.fillMaxWidth().height(60.dp),
-                shape = RoundedCornerShape(PPSize.RadiusControl),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = PPColor.Ink, contentColor = PPColor.Paper
-                ),
-            ) {
-                Text(
-                    stringResource(R.string.background_backup_enable),
-                    fontSize = 18.sp, fontWeight = FontWeight.Bold,
-                )
-            }
-            Spacer(Modifier.height(12.dp))
-            OutlinedButton(
-                onClick = onEnter,
-                modifier = Modifier.fillMaxWidth().height(60.dp),
-                shape = RoundedCornerShape(PPSize.RadiusControl),
-                border = androidx.compose.foundation.BorderStroke(1.5.dp, PPColor.BorderStrong),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = PPColor.Ink60),
-            ) {
-                Text(
-                    stringResource(R.string.background_backup_not_now),
-                    fontSize = 18.sp, fontWeight = FontWeight.Bold,
-                    color = PPColor.Ink60,
-                )
-            }
-        }
-        }
-    }
-}
-
-/** Pairing in flight / refused / failed states share one screen. */
-@Composable
-fun PairStatusScreen(title: String, body: String, action: Pair<String, () -> Unit>?) {
+fun PairStatusScreen(title: String, body: String?, action: Pair<String, () -> Unit>?, footnote: String? = null) {
     PPScreen {
         androidx.compose.material3.ProvideTextStyle(
             androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
@@ -186,11 +118,20 @@ fun PairStatusScreen(title: String, body: String, action: Pair<String, () -> Uni
                 title, fontSize = 30.sp, fontFamily = PPFont.Serif,
                 color = PPColor.Ink, textAlign = TextAlign.Center,
             )
-            Spacer(Modifier.height(14.dp))
-            Text(
-                body, fontSize = PPSize.BodyMin, lineHeight = 26.sp,
-                color = PPColor.Ink40, textAlign = TextAlign.Center,
-            )
+            if (!body.isNullOrEmpty()) {
+                Spacer(Modifier.height(14.dp))
+                Text(
+                    body, fontSize = PPSize.BodyMin, lineHeight = 26.sp,
+                    color = PPColor.Ink40, textAlign = TextAlign.Center,
+                )
+            }
+            if (footnote != null) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    footnote, fontSize = 14.sp, lineHeight = 21.sp,
+                    color = PPColor.Ink40, textAlign = TextAlign.Center,
+                )
+            }
             if (action != null) {
                 Spacer(Modifier.height(36.dp))
                 OutlinedButton(

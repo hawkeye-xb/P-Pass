@@ -73,21 +73,24 @@
    **iPhone（iOS 16 及以上）**：通过 TestFlight 分发。先在 App Store 安装
    TestFlight，再在 iPhone 上打开 [P-Pass 公开链接](https://testflight.apple.com/join/htBATauc)，
    点「接受」「安装」。建议在 TestFlight 里为 P-Pass 打开自动更新：每个
-   TestFlight 版本发布 90 天后无法再打开，我们会在到期前发布新版本。
+   TestFlight 版本发布 90 天后无法再打开。
    **iPhone (iOS 16+)**: distributed through TestFlight. Install TestFlight
    from the App Store, open the [P-Pass public link](https://testflight.apple.com/join/htBATauc)
    on the iPhone, then tap Accept and Install. Turn on automatic updates for
    P-Pass in TestFlight: each build stops opening 90 days after it is
-   published, and a new build is released before then.
+   published.
 2. 打开手机上的 P-Pass，扫电脑屏幕上的二维码。手机会显示 6 位验证码，在电脑上
    输入后点**允许加入**。
    Open P-Pass on your phone and scan the QR on your computer screen. The
    phone shows a 6-digit code; enter it on the computer and click **Allow**.
-3. 完成——Android 手机从此自动备份（连接 Wi-Fi 且电量不低时）。iPhone 上，备份
+3. 选好要备份哪些照片：哪些相册、从今天起还是全部。Android 上，打开 P-Pass 时就会
+   备份；在首页卡片里开启后台备份后，不打开 App 也会自动备份（连接 Wi-Fi 且电量不低时）。iPhone 上，备份
    在打开 P-Pass 时进行，离开 App 后能否在后台接着传由 iOS 决定。随时打开 App
    就能浏览全家照片时间线。
-   Done — an Android phone backs up automatically (on Wi-Fi when the battery
-   isn't low). On an iPhone, backups run while P-Pass is open; whether they
+   Choose which photos to back up: which albums, and whether to start from
+   today or include everything. On Android, photos back up whenever P-Pass is
+   open; turn on background backup from the card on the home screen and they
+   also back up without opening the app (on Wi-Fi when the battery isn't low). On an iPhone, backups run while P-Pass is open; whether they
    continue in the background is up to iOS. Open the app any time to browse
    the family photo timeline.
 

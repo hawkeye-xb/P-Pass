@@ -27,9 +27,10 @@ enum FakeBackend {
 final class FakeMediaLibrary: MediaLibrary {
     private let scenario: FakeScenario
     private var scope: Set<String>?
+    private var since: BackupSince = .since(ms: Int64(Calendar.current.startOfDay(for: Date()).timeIntervalSince1970 * 1000))
     private var known: Set<String>
     private let all: [AlbumBucket] = [
-        AlbumBucket(id: "camera", name: "Camera", count: 1_284),
+        AlbumBucket(id: "camera", name: "Recents", count: 1_284, isCameraAlbum: true),
         AlbumBucket(id: "screens", name: "Screenshots", count: 316),
         AlbumBucket(id: "family", name: "Family", count: 92),
         AlbumBucket(id: "wechat", name: "WeChat", count: 2_047),
@@ -54,11 +55,13 @@ final class FakeMediaLibrary: MediaLibrary {
     func requestAccess() async -> MediaAccess { access() }
     func albums() async throws -> [AlbumBucket] { all }
     func savedScope() throws -> Set<String>? { scope }
+    func savedSince() throws -> BackupSince? { scope == nil ? nil : since }
     func knownAlbums() -> Set<String> { known }
     func existingAlbumIds() async -> Set<String>? { access() == .full ? Set(all.map(\.id)) : nil }
 
-    func saveScope(_ selected: Set<String>, known: Set<String>) async throws {
+    func saveScope(_ selected: Set<String>, known: Set<String>, since: BackupSince) async throws {
         scope = selected
+        self.since = since
         self.known = known
     }
 
@@ -91,7 +94,7 @@ final class FakePairing: PairingService {
         try? await Task.sleep(nanoseconds: 1_200_000_000)
         if code.contains("t=deny") { return .refused(note: nil, ownerSaidNo: true) }
         if code.contains("t=expired") { return .refused(note: .expired, ownerSaidNo: false) }
-        if code.contains("t=fail") { return .failed(reason: "demo: unreachable") }
+        if code.contains("t=fail") { return .failed(diagnostic: "demo: unreachable") }
         current = .paired(desktopName: "Home-Computer")
         return .joined(firstTime: true)
     }
@@ -156,6 +159,9 @@ final class FakeEngine: BackupEngine {
     private var auto = true
     func autoBackup() -> Bool { auto }
     func setAutoBackup(_ on: Bool) throws { auto = on; listeners.forEach { $0() } }
+    private var cardDismissed = false
+    func backgroundCardDismissed() -> Bool { cardDismissed }
+    func dismissBackgroundCard() throws { cardDismissed = true; listeners.forEach { $0() } }
     private var wifi = true
     func wifiOnly() -> Bool { wifi }
     func setWifiOnly(_ on: Bool) throws { wifi = on; listeners.forEach { $0() } }
@@ -172,8 +178,6 @@ final class FakeEngine: BackupEngine {
     func notificationAuthorization() async -> NotificationAuthorization { fakeAuthorization }
     func requestNotificationAuthorization() async -> NotificationAuthorization { fakeAuthorization }
     @MainActor func openNotificationSettings() {}
-    func shouldAskNotificationAtOnboarding() async -> Bool { false }
-    func askNotificationAtOnboarding() async {}
     func finishOnboarding() throws {}
 
     func backgroundRefresh() -> BackgroundRefreshAvailability { scenario == .notices ? .denied : .available }

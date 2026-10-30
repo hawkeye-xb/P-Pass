@@ -26,6 +26,8 @@ import com.hawkeyexb.ppass.proto.Reason
 import com.hawkeyexb.ppass.proto.Resp
 import com.hawkeyexb.ppass.proto.RespError
 import com.hawkeyexb.ppass.ui.pairRefusalDetailRes
+import com.hawkeyexb.ppass.ui.pairRefusalErrorCode
+import com.hawkeyexb.ppass.ui.pairRefusalTitleRes
 import com.hawkeyexb.ppass.ui.outdatedTextRes
 import java.io.File
 import kotlinx.coroutines.test.runTest
@@ -34,6 +36,7 @@ import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -103,17 +106,31 @@ class ReasonPolicyTest {
         assertEquals(R.string.state_waiting_phone_outdated, waitReasonTextRes(WaitReason.PHONE_OUTDATED, null))
         assertEquals(R.string.state_waiting_desktop_outdated, waitReasonTextRes(WaitReason.DESKTOP_OUTDATED, null))
         // Pairing: one detail line per cause, and an unknown reason gets the generic one — never blank.
-        val details = PairRefusal.entries.map(::pairRefusalDetailRes)
-        assertEquals(PairRefusal.entries.size, details.toSet().size)
+        // 10-29 B5: the owner's "decline" is the only cause without a line (the title says it).
+        val details = PairRefusal.entries.filter { it != PairRefusal.DENIED }.map(::pairRefusalDetailRes)
+        assertTrue(details.all { it != null })
+        assertEquals(details.size, details.toSet().size)
+        assertNull(pairRefusalDetailRes(PairRefusal.DENIED))
         assertEquals(R.string.error_generic, pairRefusalDetailRes(pairRefusalOf(Reason.UNKNOWN)))
         assertEquals(R.string.pair_refused_detail_token_invalid, pairRefusalDetailRes(pairRefusalOf(Reason.PAIR_TOKEN_INVALID)))
+        // 10-29 B13: only the generic line carries an error code, and it is the key without its prefix.
+        assertEquals("generic", pairRefusalErrorCode(PairRefusal.OTHER))
+        assertTrue(PairRefusal.entries.filter { it != PairRefusal.OTHER }.all { pairRefusalErrorCode(it) == null })
+        // 10-29 C10: an expired QR code is its own page — title "QR code expired", body "valid for 10 minutes".
+        // Disproof: QR_EXPIRED falls back to the lapsed title / old detail line → red.
+        assertEquals(R.string.pair_qr_expired_title, pairRefusalTitleRes(PairRefusal.QR_EXPIRED))
+        assertEquals(R.string.pair_qr_expired_body, pairRefusalDetailRes(PairRefusal.QR_EXPIRED))
+        assertEquals(R.string.pair_refused_title, pairRefusalTitleRes(PairRefusal.DENIED))
+        for (c in PairRefusal.entries.filter { it != PairRefusal.DENIED && it != PairRefusal.QR_EXPIRED }) {
+            assertEquals("$c", R.string.pair_lapsed_title, pairRefusalTitleRes(c))
+        }
     }
 
     @Test
     fun `the new wording exists in both languages`() {
         val names = listOf(
-            "pair_refused_detail_token_invalid", "pair_refused_detail_denied", "pair_refused_detail_expired",
-            "pair_refused_detail_restarted", "error_generic", "pair_needs_update_title",
+            "pair_refused_detail_token_invalid", "pair_refused_detail_expired",
+            "pair_refused_detail_restarted", "error_generic", "error_code_line", "pair_qr_expired_title", "pair_qr_expired_body", "pair_needs_update_title",
             "state_waiting_phone_outdated", "state_waiting_desktop_outdated", "state_waiting_desktop_internal",
         )
         for (dir in listOf("values", "values-zh")) {

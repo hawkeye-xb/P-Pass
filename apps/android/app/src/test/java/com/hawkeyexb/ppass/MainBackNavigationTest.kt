@@ -21,7 +21,6 @@ class MainBackNavigationTest {
         assertEquals(Screen.Scan, systemBackTarget(Screen.Waiting("ppf://pair/test")))
         assertEquals(Screen.Scan, systemBackTarget(Screen.Trouble(1, 2)))
         assertEquals(Screen.Home(pairing), systemBackTarget(Screen.Buckets(pairing, emptySet(), firstTime = false)))
-        assertEquals(Screen.Home(pairing), systemBackTarget(Screen.Started(pairing, photoCount = 2)))
     }
 
     @Test

@@ -75,7 +75,7 @@ pub(crate) fn run(mut cmd: Command, timeout: Duration) -> Result<Option<Reply>, 
                 }
                 std::thread::sleep(Duration::from_millis(50));
             }
-            Err(e) => return Err(ui_err("ui.err_sidecar_wait", &[("err", &e)])),
+            Err(e) => return Err(unexpected(Unexpected::Wait, &e.to_string(), "")),
         }
     }
     // 已经退出，立即返回。子命令的输出都是一行，塞不满管道。
@@ -89,15 +89,46 @@ pub(crate) fn run(mut cmd: Command, timeout: Duration) -> Result<Option<Reply>, 
     }))
 }
 
-/// 壳传参错了（exit 2）、被信号杀掉、超时——都不是用户能处理的错，也没有
-/// 面向用户的专用文案，如实带上现象交给 `ui.err_sidecar_wait` 渲染。
-fn unexpected(what: &str, stderr: &str) -> String {
+/// 子进程没按契约收场的几种情形（10-30 偏离 3）。每种对用户的出路不同，各有一条文案；
+/// 原始现象（退出码、stderr 末行、status）放进 `err` 参数——界面不渲染它，前端
+/// `errMessage` 把整条 keyed 错误写进 console，对照「错误代码」查日志。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Unexpected {
+    /// 等待 / 收子进程时系统调用出错：偶发，再试一次。
+    Wait,
+    /// 退出码 2（用法错误）或回答不合契约：壳与 daemon 版本不一致，重新安装。
+    Args,
+    /// 0 / 1 / 2 以外的退出码（如 panic 的 101）：程序跑起来就带错退出，同 `--version` 的
+    /// `ui.err_sidecar_exit_code`，重新安装。
+    ExitCode,
+    /// 被信号杀掉：多半是安全软件或系统资源，再试一次。
+    Killed,
+    /// 一次性 daemon 还没答上 IPC 就退出了：再试一次。
+    ExitedEarly,
+    /// 一次性 daemon 在 [`ONESHOT_START_TIMEOUT`] 内没答上 IPC：再试一次。
+    NoAnswer,
+}
+
+impl Unexpected {
+    fn key(self) -> &'static str {
+        match self {
+            Unexpected::Wait => "ui.err_sidecar_wait",
+            Unexpected::Args => "ui.err_sidecar_args",
+            Unexpected::ExitCode => "ui.err_sidecar_exit_code",
+            Unexpected::Killed => "ui.err_sidecar_killed",
+            Unexpected::ExitedEarly => "ui.err_sidecar_exited_early",
+            Unexpected::NoAnswer => "ui.err_sidecar_no_answer",
+        }
+    }
+}
+
+fn unexpected(cause: Unexpected, what: &str, stderr: &str) -> String {
     let last = stderr.lines().rev().find(|l| !l.trim().is_empty());
     let detail = match last {
         Some(l) => format!("{what}: {}", l.trim()),
         None => what.to_string(),
     };
-    ui_err("ui.err_sidecar_wait", &[("err", &detail)])
+    ui_err(cause.key(), &[("err", &detail)])
 }
 
 /// exit 1 的 stderr 一行 = 失败原因，**原样**交出（校验类本身就是 keyed JSON，
@@ -105,18 +136,20 @@ fn unexpected(what: &str, stderr: &str) -> String {
 /// exit 1 以外一律是 [`unexpected`]。
 fn failure(reply: Option<&Reply>) -> String {
     match reply {
-        None => unexpected("timeout", ""),
+        // 诊断包在上限内没打完：没有更具体的出路，按「等待时出错」请用户再试。
+        None => unexpected(Unexpected::Wait, "timeout", ""),
         Some(r) => match r.code {
             Some(1) => {
                 let line = r.stderr.trim();
                 if line.is_empty() {
-                    unexpected("exit 1 without a reason", "")
+                    unexpected(Unexpected::Args, "exit 1 without a reason", "")
                 } else {
                     line.to_string()
                 }
             }
-            Some(code) => unexpected(&format!("exit {code}"), &r.stderr),
-            None => unexpected("killed by signal", &r.stderr),
+            Some(2) => unexpected(Unexpected::Args, "exit 2", &r.stderr),
+            Some(code) => unexpected(Unexpected::ExitCode, &format!("exit {code}"), &r.stderr),
+            None => unexpected(Unexpected::Killed, "killed by signal", &r.stderr),
         },
     }
 }
@@ -128,12 +161,18 @@ pub(crate) fn diag_reply(reply: Option<&Reply>) -> Result<Value, String> {
         Some(r) if r.code == Some(0) => r,
         other => return Err(failure(other)),
     };
-    let v: Value = serde_json::from_str(r.stdout.trim())
-        .map_err(|e| unexpected(&format!("bad diag reply ({e})"), &r.stdout))?;
+    let v: Value = serde_json::from_str(r.stdout.trim()).map_err(|e| {
+        unexpected(
+            Unexpected::Args,
+            &format!("bad diag reply ({e})"),
+            &r.stdout,
+        )
+    })?;
     if v["zip"].is_string() && v["daemon_reachable"].is_boolean() {
         Ok(v)
     } else {
         Err(unexpected(
+            Unexpected::Args,
             "diag reply is missing zip/daemon_reachable",
             &r.stdout,
         ))
@@ -208,13 +247,21 @@ pub(crate) fn with_oneshot_daemon<T>(
         }
         match child.try_wait() {
             Ok(Some(status)) => {
-                break Err(unexpected(&format!("daemon exited early ({status})"), ""));
+                break Err(unexpected(
+                    Unexpected::ExitedEarly,
+                    &format!("daemon exited early ({status})"),
+                    "",
+                ));
             }
             Ok(None) if Instant::now() >= deadline => {
-                break Err(unexpected("daemon did not answer on IPC in time", ""));
+                break Err(unexpected(
+                    Unexpected::NoAnswer,
+                    "daemon did not answer on IPC in time",
+                    "",
+                ));
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(100)),
-            Err(e) => break Err(ui_err("ui.err_sidecar_wait", &[("err", &e)])),
+            Err(e) => break Err(unexpected(Unexpected::Wait, &e.to_string(), "")),
         }
     };
     let out = handle.and_then(|h| {
@@ -289,6 +336,64 @@ mod tests {
         assert_eq!(
             diag_reply(reply(Some(1), "", "写不出 zip\n").as_ref()),
             Err("写不出 zip".to_string())
+        );
+    }
+
+    fn key_of(e: &str) -> String {
+        serde_json::from_str::<Value>(e).unwrap()["key"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    /// 偏离 3（10-30）：没按契约收场的每种情形各走一条文案，出路不同（重新安装 /
+    /// 再试一次）；原始现象只在 `err` 参数里（界面不渲染，前端写进 console）。
+    /// 反证：把任一分支并回 `ui.err_sidecar_wait` ⇒ 红。
+    #[test]
+    fn unexpected_endings_each_get_their_own_key() {
+        let cases = [
+            (None, "ui.err_sidecar_wait"),
+            (
+                reply(Some(2), "", "error: unexpected argument\n"),
+                "ui.err_sidecar_args",
+            ),
+            (reply(Some(1), "", ""), "ui.err_sidecar_args"),
+            (reply(Some(0), "not json", ""), "ui.err_sidecar_args"),
+            (
+                reply(Some(0), "{\"zip\":\"/x\"}", ""),
+                "ui.err_sidecar_args",
+            ),
+            (
+                reply(Some(101), "", "panicked\n"),
+                "ui.err_sidecar_exit_code",
+            ),
+            (reply(None, "", "SIGKILL\n"), "ui.err_sidecar_killed"),
+        ];
+        for (r, key) in cases {
+            let e = diag_reply(r.as_ref()).unwrap_err();
+            assert_eq!(key_of(&e), key, "{r:?} -> {e}");
+        }
+        let e =
+            diag_reply(reply(Some(2), "", "error: unexpected argument\n").as_ref()).unwrap_err();
+        let v: Value = serde_json::from_str(&e).unwrap();
+        assert_eq!(v["params"]["err"], "exit 2: error: unexpected argument");
+
+        // 一次性 daemon 的两种结局（起真进程才走得到，这里钉住映射）。
+        assert_eq!(
+            key_of(&unexpected(
+                Unexpected::ExitedEarly,
+                "daemon exited early (exit status: 75)",
+                ""
+            )),
+            "ui.err_sidecar_exited_early"
+        );
+        assert_eq!(
+            key_of(&unexpected(
+                Unexpected::NoAnswer,
+                "daemon did not answer on IPC in time",
+                ""
+            )),
+            "ui.err_sidecar_no_answer"
         );
     }
 

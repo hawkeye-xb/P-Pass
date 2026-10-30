@@ -18,6 +18,16 @@ final class InfoPlistStringsTests: XCTestCase {
         }
     }
 
+    /// #1259（10-29 改决定）：照片权限不加说明屏，说明就写在系统框的用途说明里。
+    func test_photo_library_usage_description_says_why_full_access() throws {
+        let expected = ["en": "Automatic backup needs access to all photos.", "zh-Hans": "自动备份新照片需要访问全部照片。"]
+        for (lang, text) in expected {
+            let path = try XCTUnwrap(Bundle.main.path(forResource: lang, ofType: "lproj"))
+            let bundle = try XCTUnwrap(Bundle(path: path))
+            XCTAssertEqual(bundle.localizedString(forKey: "NSPhotoLibraryUsageDescription", value: nil, table: "InfoPlist"), text)
+        }
+    }
+
     /// 扫码页的本地网络前置说明（iOS 独有文案）两种语言都在。
     func test_scan_local_network_note_exists_in_every_language() throws {
         for lang in ["en", "zh-Hans"] {

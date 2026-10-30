@@ -23,6 +23,7 @@
     "updater:allow-check",
     "allow-daemon-status",
     "allow-daemon-low-space-ack",
+    "allow-daemon-library-recheck",
     "allow-daemon-pairing-start",
     "allow-daemon-pairing-stop",
     "allow-daemon-pairing-pending",
@@ -46,6 +47,7 @@
     "allow-disable-auto-sleep",
     "allow-write-config",
     "allow-set-library-dir",
+    "allow-relocate-library",
     "allow-start-daemon",
     "allow-daemon-startup-error",
     "allow-stop-daemon",
@@ -70,6 +72,7 @@
     "allow-allow-media-scope",
     "allow-notify-system",
     "allow-set-tray-locale",
+    "allow-set-library-alert",
     "allow-update-download",
     "allow-update-install"
   ]

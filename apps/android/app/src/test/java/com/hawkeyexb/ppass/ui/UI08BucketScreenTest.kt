@@ -28,7 +28,6 @@ class UI08BucketScreenTest {
         assertTrue("album name must reserve the remaining row width", source.contains("Modifier.weight(1f)"))
         assertFalse("the old unconstrained row width must not return", source.contains("weight(1f, fill = false)"))
         assertTrue("selection semantics must still be keyed by bucket id", source.contains("selected = b.id in checked"))
-        assertTrue("count semantics must still be keyed by checked bucket ids", source.contains("it.id in checked"))
     }
 
     @Test

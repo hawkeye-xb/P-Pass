@@ -33,12 +33,12 @@ test("新设备维持原措辞", () => {
   const { title } = pendingDialogText([fresh]);
   expect(title).toBe("SM-S9210 请求加入");
   // 不许串到重连那套。
-  expect(title).not.toMatch(/重新连接/);
+  expect(title).not.toMatch(/重新加入/);
 });
 
 test("老设备重连点名，且点的是桌面上的名字", () => {
   const { title } = pendingDialogText([known]);
-  expect(title).toBe("三星测试及 请求重新连接");
+  expect(title).toBe("三星测试及 请求重新加入");
   // 不许串到首次配对那套。
   expect(title).not.toMatch(/请求加入/);
 });
@@ -46,7 +46,7 @@ test("老设备重连点名，且点的是桌面上的名字", () => {
 test("多台同时扫码只报数量，不替其中一台说话", () => {
   const { title } = pendingDialogText([known, fresh]);
   expect(title).toBe("2 台设备请求加入");
-  expect(title).not.toMatch(/重新连接/);
+  expect(title).not.toMatch(/重新加入/);
   expect(title).not.toMatch(/三星测试及/);
 });
 

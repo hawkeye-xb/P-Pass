@@ -183,7 +183,8 @@ fn offline_export_bundles_own_logs_and_starts_nothing() {
         .contains("bind_addr = 0.0.0.0:41145"));
 
     // 不启动任何 daemon 机制。
-    assert!(!library.join(".ppf").exists(), "不得开库");
+    // `.ppf/` 本身是写库位置时建出的空库标记（#1253）；开库才会在里面建索引。
+    assert!(!library.join(".ppf/index.sqlite").exists(), "不得开库");
     assert!(!library.join("ipc.token").exists());
     for platform_dir in &platform_dirs {
         assert!(!platform_dir.join("ipc.token").exists());

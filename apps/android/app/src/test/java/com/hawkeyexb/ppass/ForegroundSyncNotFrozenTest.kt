@@ -169,11 +169,12 @@ class ForegroundSyncNotFrozenTest {
             repoRoot(),
             "apps/android/app/src/main/res/values-zh/strings.xml",
         ).readText()
-        val line = zh.lines().first { it.contains("backup_interrupted_body") }
+        // 10-29 文案定稿：无引用的 backup_interrupted_body 已删，这件事现在由「系统停止了后台备份」通知来说。
+        val line = zh.lines().first { it.contains("\"notif_background_stopped_body\"") }
         assertTrue("中文文案要点明停的是「后台」：$line", line.contains("后台"))
         assertTrue(
             "中文文案要告诉用户前台仍会传：$line",
-            line.contains("打开 App"),
+            line.contains("打开 P-Pass"),
         )
     }
 }

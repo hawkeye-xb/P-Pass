@@ -81,6 +81,8 @@ struct Fixture {
 
 async fn fixture() -> Fixture {
     let library = tempfile::tempdir().unwrap();
+    // #1253：真库都带库标记；没有它的目录在删除方向上当「库不在」。
+    std::fs::create_dir_all(library.path().join(".ppf")).unwrap();
     let db = Db::open_in_memory().await.unwrap();
 
     let daemon_tp = bind(vec![

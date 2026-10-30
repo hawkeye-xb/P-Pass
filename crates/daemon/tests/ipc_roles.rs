@@ -419,3 +419,136 @@ async fn unconfigured_token_endpoint_answers_only_config_methods() {
     );
     assert!(!platform_dir.join("config.toml").exists());
 }
+
+/// #1253：库找不到状态。`status` 报 `library_missing` 与路径，**不**报 `unconfigured`（那会把人
+/// 送进首启向导，向导预填的正是这个找不到的路径）；订阅照常成立（壳判「运行中」，不去自愈拉起）；
+/// 这一状态不改库位置，其余方法一律「库不可用」。
+/// 反证：status 改回报 unconfigured ⇒ 第一组断言红；放行 config.set_library ⇒ 末组红。
+#[test]
+fn library_missing_state_reports_the_path_and_opens_nothing() {
+    use daemon::ipc::library_missing_dispatch;
+    let dir = std::path::Path::new("/Volumes/My Passport/P-Pass Library");
+    let s = library_missing_dispatch(
+        &req("status", serde_json::json!({})),
+        IpcClient::Shell,
+        "1.0.0",
+        0,
+        dir,
+        dir,
+    );
+    assert!(s.ok);
+    let r = s.result.unwrap();
+    assert_eq!(r["library_missing"], true);
+    assert_eq!(r["library_dir"], "/Volumes/My Passport/P-Pass Library");
+    assert!(r.get("unconfigured").is_none(), "{r}");
+
+    let sub = library_missing_dispatch(
+        &req("events.subscribe", serde_json::json!({})),
+        IpcClient::Shell,
+        "1.0.0",
+        0,
+        dir,
+        dir,
+    );
+    assert!(sub.ok, "{:?}", sub.error);
+
+    for m in [
+        "config.set_library",
+        "pairing.start",
+        "devices.list",
+        "timeline.page",
+    ] {
+        let r = library_missing_dispatch(
+            &req(m, serde_json::json!({ "library": "/tmp/x" })),
+            IpcClient::Shell,
+            "1.0.0",
+            0,
+            dir,
+            dir,
+        );
+        assert!(!r.ok, "{m} 不该在库找不到时被答");
+        assert_eq!(
+            r.error.unwrap().reason().to_string(),
+            "library_unavailable",
+            "{m}"
+        );
+    }
+}
+
+/// #1253：「重新检查」只看库标记——库标记回来了答 `found: true`（会话据此应答后带着库重启），
+/// 只有同名空目录不算回来。反证：判据改成「目录存在」⇒ 第二段红。
+#[test]
+fn library_recheck_answers_from_the_library_marker() {
+    use daemon::ipc::library_missing_dispatch;
+    let parent = tempfile::tempdir().unwrap();
+    let dir = parent.path().join("lib");
+    let recheck = || {
+        let r = library_missing_dispatch(
+            &req("library.recheck", serde_json::json!({})),
+            IpcClient::Shell,
+            "1.0.0",
+            0,
+            &dir,
+            parent.path(),
+        );
+        assert!(r.ok, "{:?}", r.error);
+        r.result.unwrap()["found"].as_bool().unwrap()
+    };
+    assert!(!recheck(), "目录都不在");
+    std::fs::create_dir_all(&dir).unwrap();
+    assert!(!recheck(), "只有同名空目录不算回来");
+    std::fs::create_dir_all(dir.join(".ppf")).unwrap();
+    assert!(recheck(), "库标记回来了");
+}
+
+/// #639：搬迁中窗口锁住，服务也一律拒绝写：只答进度，改设置 / 再搬一次 / 配对 / 删设备都是「库不可用」。
+/// 反证：relocating_dispatch 放行 config.set_library 或 library.relocate ⇒ 第二段红。
+#[test]
+fn writes_are_refused_while_relocating() {
+    use daemon::ipc::relocating_dispatch;
+    use daemon::relocate::{Live, Plan};
+    let live = Live::new(Plan {
+        from: "/Users/me/Lib".into(),
+        to: "/Volumes/Disk".into(),
+        id: "ab".repeat(16),
+        flipped: false,
+        promoting: false,
+    });
+    let s = relocating_dispatch(
+        &req("status", serde_json::json!({})),
+        IpcClient::Shell,
+        "1.0.0",
+        0,
+        &live,
+    );
+    let r = s.result.unwrap();
+    assert_eq!(r["relocating"], true);
+    assert_eq!(r["relocate_to"], "/Volumes/Disk");
+
+    for m in [
+        "config.set_library",
+        "config.set",
+        "library.relocate",
+        "pairing.start",
+        "pairing.confirm",
+        "device.revoke",
+        "daemon.stop",
+    ] {
+        let r = relocating_dispatch(
+            &req(
+                m,
+                serde_json::json!({ "target": "/tmp/x", "library": "/tmp/x" }),
+            ),
+            IpcClient::Shell,
+            "1.0.0",
+            0,
+            &live,
+        );
+        assert!(!r.ok, "{m} 搬迁中不该被答");
+        assert_eq!(
+            r.error.unwrap().reason().to_string(),
+            "library_unavailable",
+            "{m}"
+        );
+    }
+}

@@ -35,7 +35,7 @@ final class I18nDriftTests: XCTestCase {
     func test_resolver_fills_placeholders_and_returns_nil_for_unknown_keys() throws {
         let en = try XCTUnwrap(DiagText.bundledDictionary(language: "en-US"))
         XCTAssertEqual(DiagText.resolve(dictJSON: en, key: "ui.paired_count", vars: ["n": "42"]),
-                       "42 paired devices")
+                       "Paired devices: 42")
         XCTAssertNil(DiagText.resolve(dictJSON: en, key: "no.such.key"))
         let zh = try XCTUnwrap(DiagText.bundledDictionary(language: "zh-Hans-CN"))
         XCTAssertNotEqual(zh, en, "zh 开头的语言应取 zh.json")

@@ -104,7 +104,9 @@ describe("第 1 → 2 步", () => {
     });
     await bad.flow.toStep2();
     expect(bad.view.step).toBe(1);
-    expect(bad.view.error).toContain("power_hint broke");
+    // B13：原始错误不进界面，显示包装句 + 错误代码。
+    expect(bad.view.error).toMatchObject({ key: "ui.wizard_save_failed", code: "wizard_save_failed" });
+    expect(bad.view.error.text).not.toContain("power_hint broke");
   });
 });
 
@@ -174,10 +176,11 @@ describe("第 3 步 finishSetup", () => {
     expect(invokeMock).not.toHaveBeenCalledWith("start_daemon");
     expect(onDone).not.toHaveBeenCalled();
     expect(view).toMatchObject({ step: 1, busy: false });
-    expect(view.error).toContain("新位置不能与当前照片库相同或互相包含");
+    expect(view.error.text).toContain("新位置不能与当前照片库相同或互相包含");
+    expect(view.error.code).toBe("library_nested");
   });
 
-  it("start_daemon 失败：不 onDone，红条带原因", async () => {
+  it("start_daemon 失败：不 onDone，红条说没能启动（原始错误只进 console）", async () => {
     invokeMock.mockImplementation(async (cmd) => {
       if (cmd === "write_config") return null;
       throw new Error("register failed");
@@ -185,11 +188,12 @@ describe("第 3 步 finishSetup", () => {
     const { flow, view, onDone } = make();
     await flow.finishSetup();
     expect(onDone).not.toHaveBeenCalled();
-    expect(view.error).toContain("register failed");
+    expect(view.error).toMatchObject({ key: "ui.wizard_start_failed", code: "wizard_start_failed" });
+    expect(view.error.text).not.toContain("register failed");
     expect(view.busy).toBe(false);
   });
 
-  it("10 秒都没就绪：不 onDone，红条带 daemon 的 stderr 原文", async () => {
+  it("10 秒都没就绪：不 onDone，daemon 没认出原因时用兜底文案，stderr 原文不进红条", async () => {
     invokeMock.mockImplementation(async (cmd) => {
       if (cmd === "write_config") return null;
       if (cmd === "start_daemon") return "resident";
@@ -203,7 +207,8 @@ describe("第 3 步 finishSetup", () => {
     await vi.advanceTimersByTimeAsync(10_000);
     await p;
     expect(onDone).not.toHaveBeenCalled();
-    expect(view.error).toContain("Error: address already in use");
+    expect(view.error).toMatchObject({ key: "ui.wizard_daemon_not_started", code: "wizard_daemon_not_started" });
+    expect(view.error.text).not.toContain("Error: address already in use");
     expect(invokeMock.mock.calls.filter(([c]) => c === "daemon_status")).toHaveLength(20);
   });
 });

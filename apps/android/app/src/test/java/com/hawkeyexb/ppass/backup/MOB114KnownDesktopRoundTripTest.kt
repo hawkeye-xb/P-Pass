@@ -157,7 +157,8 @@ class MOB114KnownDesktopRoundTripTest {
     @Test
     fun onboarding_completion_writes_the_marker_and_disconnect_never_clears_it() {
         val src = main()
-        val finish = src.substringAfter("val finishOnboarding = {").substringBefore("\n            }")
+        // #1263：没有完成页了——首次选范围点「开始备份」就是走完 onboarding。
+        val finish = src.substringAfter("is Screen.Buckets -> {").substringAfter("if (s.firstTime) {").substringBefore("} else if")
         assertTrue("走完 onboarding 必须落标记", finish.contains("OnboardedDesktopsStore(context.filesDir).markOnboarded(s.pairing.daemonNodeId)"))
 
         val clear = src.substringAfter("private fun clearLocalPairing(").substringBefore("\n}")
