@@ -17,3 +17,8 @@ apps/android/**/*.xml text eol=lf
 apps/android/**/*.json text eol=lf
 apps/android/**/*.properties text eol=lf
 apps/android/**/*.md text eol=lf
+
+# 文案字典：源（assets/i18n）与各端捆绑的副本逐字节比较漂移（Android DiagTextTest、
+# iOS I18nDriftTests），必须按同一规则检出，否则只固定了一边就在 Windows 上误报漂移。
+assets/i18n/*.json text eol=lf
+apps/ios/PPass/Resources/i18n/*.json text eol=lf
