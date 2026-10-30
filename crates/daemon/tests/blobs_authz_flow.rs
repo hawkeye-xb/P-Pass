@@ -105,6 +105,7 @@ fn flow_request(epoch: &str, hash: [u8; 32], ticket: String) -> FlowFetchRequest
         provider: ticket,
         capture_at_ms: 0,
         size_bytes: 0,
+        source: Default::default(),
     }
 }
 

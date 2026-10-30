@@ -328,6 +328,8 @@ pub struct ProtoFlowFetchRequest {
     pub provider: String,
     pub capture_at_ms: i64,
     pub size_bytes: i64,
+    /// #1272: `"auto"` or `"picked"` ([`proto::FlowItemSource`] spelling; anything else is auto).
+    pub source: String,
 }
 
 impl From<ProtoFlowFetchRequest> for proto::FlowFetchRequest {
@@ -342,6 +344,7 @@ impl From<ProtoFlowFetchRequest> for proto::FlowFetchRequest {
             provider,
             capture_at_ms,
             size_bytes,
+            source,
         } = value;
         proto::FlowFetchRequest {
             queue_sequence,
@@ -353,6 +356,7 @@ impl From<ProtoFlowFetchRequest> for proto::FlowFetchRequest {
             provider,
             capture_at_ms,
             size_bytes,
+            source: proto::FlowItemSource::from_wire(&source),
         }
     }
 }
@@ -369,6 +373,7 @@ impl From<proto::FlowFetchRequest> for ProtoFlowFetchRequest {
             provider,
             capture_at_ms,
             size_bytes,
+            source,
         } = value;
         ProtoFlowFetchRequest {
             queue_sequence,
@@ -380,6 +385,7 @@ impl From<proto::FlowFetchRequest> for ProtoFlowFetchRequest {
             provider,
             capture_at_ms,
             size_bytes,
+            source: source.as_str().into(),
         }
     }
 }
@@ -1361,6 +1367,7 @@ mod tests {
             provider: "provider-token".into(),
             capture_at_ms: 1_790_243_013_123,
             size_bytes: 532_102,
+            source: "picked".into(),
         }
     }
 

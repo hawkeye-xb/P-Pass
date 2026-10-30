@@ -27,6 +27,8 @@ pub struct FlowGrant {
     pub provider: String,
     pub state: FlowGrantState,
     pub receipt_id: Option<String>,
+    /// #1272: `"auto"`（自动备份）或 `"picked"`（手机上手动挑选）。手机不报时是 `"auto"`。
+    pub source: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,7 +67,7 @@ pub struct FlowReceipt {
 
 /// 读出交付记录时 join 配对记录取回设备 NodeId。
 const GRANT_SELECT: &str = "SELECT p.node_id, f.queue_sequence, f.pairing_id, f.lease_token,
-            f.content_hash, f.file_name, f.media_type, f.provider, f.state, f.receipt_id
+            f.content_hash, f.file_name, f.media_type, f.provider, f.state, f.receipt_id, f.source
      FROM flow_delivery f JOIN pairing p ON p.id = f.pairing_id";
 
 impl Db {
@@ -83,8 +85,8 @@ impl Db {
     pub async fn upsert_flow_grant_at(&self, grant: &FlowGrant, now_ms: i64) -> Result<()> {
         sqlx::query(
             "INSERT INTO flow_delivery
-                (pairing_id, queue_sequence, lease_token, content_hash, file_name, media_type, provider, state, receipt_id, last_resumed_ms)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)
+                (pairing_id, queue_sequence, lease_token, content_hash, file_name, media_type, provider, state, receipt_id, last_resumed_ms, source)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
              ON CONFLICT(pairing_id, queue_sequence) DO UPDATE SET
                 lease_token = excluded.lease_token,
                 content_hash = excluded.content_hash,
@@ -93,7 +95,8 @@ impl Db {
                 provider = excluded.provider,
                 state = excluded.state,
                 receipt_id = NULL,
-                last_resumed_ms = excluded.last_resumed_ms
+                last_resumed_ms = excluded.last_resumed_ms,
+                source = excluded.source
              WHERE flow_delivery.state != 'completed'",
         )
         .bind(&grant.pairing_id)
@@ -105,6 +108,7 @@ impl Db {
         .bind(&grant.provider)
         .bind(grant.state.as_str())
         .bind(now_ms)
+        .bind(&grant.source)
         .execute(self.pool())
         .await?;
         Ok(())
@@ -290,6 +294,7 @@ fn flow_grant_from_row(row: sqlx::sqlite::SqliteRow) -> FlowGrant {
         provider: row.get("provider"),
         state: FlowGrantState::from_db(row.get::<String, _>("state").as_str()),
         receipt_id: row.get("receipt_id"),
+        source: row.get("source"),
     }
 }
 
@@ -328,7 +333,33 @@ mod tests {
             provider: "provider".into(),
             state,
             receipt_id: None,
+            source: "auto".into(),
         }
+    }
+
+    /// #1272：电脑端记下每一张是怎么来的（自动备份 / 手动挑选）。
+    /// 反证：upsert 不写 source 列（落成默认 'auto'），picked 断言变红。
+    #[tokio::test]
+    async fn a_grant_records_how_the_phone_came_to_send_it() {
+        let db = paired_db("pairing").await;
+        let auto = grant(1, FlowGrantState::Active, 1);
+        let mut picked = grant(2, FlowGrantState::Active, 2);
+        picked.source = "picked".into();
+        db.upsert_flow_grant(&auto).await.unwrap();
+        db.upsert_flow_grant(&picked).await.unwrap();
+
+        let read = |seq| {
+            let db = db.clone();
+            async move {
+                db.flow_grant(&[9; 32], "pairing", seq)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .source
+            }
+        };
+        assert_eq!(read(1).await, "auto");
+        assert_eq!(read(2).await, "picked");
     }
 
     #[tokio::test]

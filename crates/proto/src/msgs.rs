@@ -481,6 +481,53 @@ pub struct FlowFetchRequest {
     /// (old client). Desktop prechecks free space with it at offer time and
     /// refuses with `storage_full` before fetching a single byte.
     pub size_bytes: i64,
+    /// #1272: how this item came to be sent — the automatic backup rule, or the user picking it
+    /// once in the system photo picker. Optional and never required: an old phone omits it (auto),
+    /// an automatic item is not sent at all, and an old desktop ignores the key.
+    #[serde(skip_serializing_if = "FlowItemSource::is_auto")]
+
+    pub source: FlowItemSource,
+}
+
+/// #1272: the origin of one [`FlowFetchRequest`]. Unknown values decode as [`Self::Auto`] so a
+/// newer phone never breaks an older desktop's offer parsing.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FlowItemSource {
+    /// The automatic backup rule (albums + time range). The default.
+    #[default]
+    Auto,
+    /// Picked once by the user in the system photo picker; never part of the backup scope.
+    Picked,
+}
+
+impl FlowItemSource {
+    pub fn is_auto(&self) -> bool {
+        *self == Self::Auto
+    }
+
+    /// Stable storage / wire spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Picked => "picked",
+        }
+    }
+
+    /// Inverse of [`Self::as_str`]; anything else is [`Self::Auto`].
+    pub fn from_wire(value: &str) -> Self {
+        match value {
+            "picked" => Self::Picked,
+            _ => Self::Auto,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for FlowItemSource {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Option::<String>::deserialize(deserializer)?;
+        Ok(value.as_deref().map_or(Self::Auto, Self::from_wire))
+    }
 }
 
 /// #851 `flow.supersede`: replace the Desktop's location-redacted copy of a photo (`old_hash`,
@@ -1063,6 +1110,32 @@ mod tests {
         assert_eq!((old.ver, old.min_ver), (1, 1));
     }
 
+    /// #1272: `source` is optional on the wire. An old phone never sends it → auto; an automatic
+    /// item omits it (old desktops see exactly the frame they always saw); a value this build
+    /// does not know degrades to auto instead of failing the whole offer.
+    #[test]
+    fn flow_fetch_request_source_is_optional_and_forward_compatible() {
+        let old: FlowFetchRequest = serde_json::from_str(r#"{"queue_sequence":7}"#).unwrap();
+        assert_eq!(old.source, FlowItemSource::Auto);
+
+        let auto = serde_json::to_string(&FlowFetchRequest::default()).unwrap();
+        assert!(!auto.contains("source"), "auto must not be sent: {auto}");
+
+        let picked = FlowFetchRequest {
+            source: FlowItemSource::Picked,
+            ..Default::default()
+        };
+        let wire = serde_json::to_string(&picked).unwrap();
+        assert!(wire.contains(r#""source":"picked""#), "{wire}");
+        let back: FlowFetchRequest = serde_json::from_str(&wire).unwrap();
+        assert_eq!(back.source, FlowItemSource::Picked);
+
+        let future: FlowFetchRequest =
+            serde_json::from_str(r#"{"queue_sequence":7,"source":"shared_from_app"}"#).unwrap();
+        assert_eq!(future.source, FlowItemSource::Auto);
+        assert_eq!(future.queue_sequence, 7);
+    }
+
     /// DEV-02: 老版本手机仍会发 `device_hint`（DEV-01b 只藏了设置页那行
     /// UI，pref 默认开）。`PairRequest` 没有 `deny_unknown_fields`，所以
     /// 那个字段现在被静默忽略——删掉指纹不能让老手机配不上对。
@@ -1211,6 +1284,7 @@ mod tests {
             provider: "peer-address".into(),
             capture_at_ms: 1_700_000_000_000,
             size_bytes: 3_000_000,
+            source: FlowItemSource::Picked,
         }
     );
 

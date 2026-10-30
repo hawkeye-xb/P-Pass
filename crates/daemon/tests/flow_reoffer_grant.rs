@@ -53,6 +53,7 @@ fn offer_request(hash: [u8; 32], provider: String) -> FlowFetchRequest {
         provider,
         capture_at_ms: 0,
         size_bytes: PAYLOAD as i64,
+        source: Default::default(),
     }
 }
 

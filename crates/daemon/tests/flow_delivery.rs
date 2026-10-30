@@ -20,6 +20,7 @@ fn request(epoch: &str, lease: &str, hash: [u8; 32], provider: String) -> FlowFe
         provider,
         capture_at_ms: 0,
         size_bytes: 0,
+        source: Default::default(),
     }
 }
 
@@ -2953,4 +2954,55 @@ async fn a_fetch_that_receives_no_bytes_fails_within_the_stall_limit_and_pushes_
         again.task_running,
         "a re-offer after the stall starts a new attempt"
     );
+}
+
+/// #1272: the desktop records how each item came to be sent — `picked` when the phone says the
+/// user picked it in the system photo picker, `auto` when it says nothing (an old phone, or the
+/// backup rule). Counter-proof: drop `source` from `checked_request` (always auto) → the picked
+/// assertion fails.
+#[tokio::test(flavor = "multi_thread")]
+async fn offer_records_the_item_source_the_phone_reported() {
+    let root = tempdir().unwrap();
+    let peer = transport::NodeId([0x66; 32]);
+    let db = paired_db("epoch-current", peer).await;
+    let transport = IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+        .await
+        .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let delivery = FlowDelivery::new(db.clone(), receiver_blobs, root.path());
+    let provider = transport.local_addr().to_string();
+
+    let mut picked = request("epoch-current", "lease-picked", [0x11; 32], provider.clone());
+    picked.queue_sequence = 8;
+    picked.source = proto::FlowItemSource::Picked;
+    // An old phone's offer: no `source` key at all on the wire.
+    let mut old_wire = serde_json::to_value(request(
+        "epoch-current",
+        "lease-old",
+        [0x22; 32],
+        provider,
+    ))
+    .unwrap();
+    old_wire.as_object_mut().unwrap().remove("source");
+    let old: FlowFetchRequest = serde_json::from_value(old_wire).unwrap();
+
+    delivery.offer(peer, &picked).await.unwrap();
+    delivery.offer(peer, &old).await.unwrap();
+
+    let source = |seq| {
+        let db = db.clone();
+        async move {
+            db.flow_grant(&peer.0, "epoch-current", seq)
+                .await
+                .unwrap()
+                .expect("offer persisted a grant")
+                .source
+        }
+    };
+    assert_eq!(source(8).await, "picked");
+    assert_eq!(source(7).await, "auto");
 }
