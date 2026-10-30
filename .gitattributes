@@ -2,3 +2,6 @@
 # 换行随检出环境变（Windows 上 core.autocrlf=true 会转成 CRLF），同一个脚本就会在
 # 不同机器上编出不同的校验值，互相拒绝对方建的库。固定为 LF，任何检出都一样。
 *.sql text eol=lf
+
+# 更新包验签测试的夹具：签名按原始字节算，Windows 检出转 CRLF 会让原样的包也验签失败。
+apps/desktop/src-tauri/tests/fixtures/update-tamper/** -text
