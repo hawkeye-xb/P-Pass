@@ -862,4 +862,52 @@ mod tests {
         assert_eq!(home, lib.path(), "搬不动就照旧用库里那份，绝不铸新身份");
         assert!(lib.path().join(KEY_FILE).exists());
     }
+
+    /// W-3（Windows）：真实的 DPAPI 存放处 + `settle`。旧明文 ⇒ 删除、生成新身份、清配对；
+    /// 解不开 ⇒ 拒绝启动，不生成、不清配对、文件原样。
+    #[cfg(windows)]
+    mod w3_dpapi {
+        use super::*;
+        use platform::ProgramDataStore;
+
+        #[tokio::test]
+        async fn w3_legacy_plaintext_identity_is_replaced_and_pairings_cleared() {
+            let d = tempfile::tempdir().unwrap();
+            let path = d.path().join("identity.key");
+            std::fs::write(&path, [9u8; 32]).unwrap();
+            let store = ProgramDataStore::sealed(&path, "身份私钥");
+            let cleared = std::sync::atomic::AtomicBool::new(false);
+            let (k, o) = settle(&store, mint_7, || async {
+                cleared.store(true, std::sync::atomic::Ordering::SeqCst);
+                Ok(2)
+            })
+            .await
+            .unwrap();
+            assert_eq!((k, o), ([7u8; 32], Origin::Minted));
+            assert!(cleared.load(std::sync::atomic::Ordering::SeqCst));
+            let raw = std::fs::read(&path).unwrap();
+            assert!(
+                !raw.windows(32).any(|w| w == [7u8; 32]),
+                "落盘不含新私钥原文"
+            );
+            assert!(!raw.windows(32).any(|w| w == [9u8; 32]), "旧明文已被替换");
+        }
+
+        #[tokio::test]
+        async fn w3_undecryptable_identity_refuses_without_fallback() {
+            let d = tempfile::tempdir().unwrap();
+            let path = d.path().join("identity.key");
+            let store = ProgramDataStore::sealed(&path, "身份私钥");
+            store.write(&[7u8; 32]).unwrap();
+            let mut raw = std::fs::read(&path).unwrap();
+            let last = raw.len() - 1;
+            raw[last] ^= 0xff;
+            std::fs::write(&path, &raw).unwrap();
+            let err = settle(&store, mint_must_not_run, clear_must_not_run)
+                .await
+                .unwrap_err();
+            assert!(matches!(err, IdentityError::Read { .. }), "{err}");
+            assert_eq!(std::fs::read(&path).unwrap(), raw, "文件原样保留");
+        }
+    }
 }
