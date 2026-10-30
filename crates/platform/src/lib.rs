@@ -549,6 +549,45 @@ pub struct VolumeStats {
     pub total: u64,
 }
 
+/// 系统盘是否开启了磁盘加密（Windows BitLocker / 设备加密，macOS FileVault）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiskEncryption {
+    On,
+    Off,
+    /// 查不到（本平台没有实现、权限不够、系统给了没见过的值）：不提示，也不当成「已开启」。
+    Unknown,
+}
+
+impl DiskEncryption {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::On => "on",
+            Self::Off => "off",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// Windows 卷属性 `System.Volume.BitLockerProtection` 的取值：1 = 保护已启用，2 = 未启用，
+/// 其余（挂起、未知、本机不支持）一律 `Unknown`——只在确定「没开」时才提示。
+pub fn bitlocker_verdict(protection: u32) -> DiskEncryption {
+    match protection {
+        1 => DiskEncryption::On,
+        2 => DiskEncryption::Off,
+        _ => DiskEncryption::Unknown,
+    }
+}
+
+/// macOS `fdesetup status` 的输出。
+pub fn filevault_verdict(output: &str) -> DiskEncryption {
+    let first = output.lines().next().unwrap_or("").trim();
+    match first {
+        "FileVault is On." => DiskEncryption::On,
+        "FileVault is Off." => DiskEncryption::Off,
+        _ => DiskEncryption::Unknown,
+    }
+}
+
 /// #1043：电脑睡眠由谁负责（[`PlatformAdapter::sleep_owner`]）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SleepOwner {
@@ -848,6 +887,11 @@ pub trait PlatformAdapter: Send + Sync {
     fn volume_stats(&self, path: &std::path::Path) -> Option<VolumeStats> {
         let _ = path;
         None
+    }
+
+    /// 系统盘的磁盘加密状态。默认 `Unknown`（没有实现 = 不提示）。
+    fn disk_encryption(&self) -> DiskEncryption {
+        DiskEncryption::Unknown
     }
 
     /// DAE-11 (#804)：电脑此刻是否接着外部电源（插电）。
@@ -2306,5 +2350,51 @@ mod relocation_probe_tests {
     fn a_failing_copy_is_reported() {
         let dir = tempfile::tempdir().unwrap();
         assert!(copy_dir_contents(&dir.path().join("nope"), &dir.path().join("dst")).is_err());
+    }
+}
+
+#[cfg(test)]
+mod disk_encryption_tests {
+    use super::*;
+
+    #[test]
+    fn bitlocker_value_mapping() {
+        assert_eq!(bitlocker_verdict(1), DiskEncryption::On);
+        assert_eq!(bitlocker_verdict(2), DiskEncryption::Off);
+        // 挂起 / 未知 / 没见过的值：不提示。
+        for v in [0, 3, 4, 5, 6, 99] {
+            assert_eq!(bitlocker_verdict(v), DiskEncryption::Unknown, "{v}");
+        }
+    }
+
+    #[test]
+    fn filevault_output_mapping() {
+        assert_eq!(
+            filevault_verdict(
+                "FileVault is On.
+"
+            ),
+            DiskEncryption::On
+        );
+        assert_eq!(
+            filevault_verdict(
+                "FileVault is On.
+Encryption in progress: Percent = 12
+"
+            ),
+            DiskEncryption::On
+        );
+        assert_eq!(
+            filevault_verdict(
+                "FileVault is Off.
+"
+            ),
+            DiskEncryption::Off
+        );
+        assert_eq!(filevault_verdict(""), DiskEncryption::Unknown);
+        assert_eq!(
+            filevault_verdict("error: not authorized"),
+            DiskEncryption::Unknown
+        );
     }
 }
