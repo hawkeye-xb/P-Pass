@@ -364,8 +364,8 @@ impl Manifest {
     }
 
     /// 内容一致（类型、大小、链接指向）——拷贝后的核对。修改时间不比：exFAT 只有 2 秒精度。
-    /// Windows 上普通用户与服务账户没有建符号链接的特权，robocopy 的 `/SL` 不生效、把文件链接
-    /// 拷成指向文件的内容：目标是同样大小的普通文件也算一致。
+    /// Windows 上拷贝工具把文件链接拷成指向文件的内容（普通用户与服务账户没有建符号链接的特权）：
+    /// 目标是同样大小的普通文件也算一致。
     fn same_content(&self, other: &Self) -> bool {
         self.0.len() == other.0.len()
             && self.0.iter().all(|(k, a)| match (a, other.0.get(k)) {

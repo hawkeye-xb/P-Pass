@@ -224,8 +224,8 @@ pub fn is_network_volume(p: &Path) -> bool {
     }
 }
 
-/// Windows 无建符号链接特权时，[`copy_dir_contents`] 会把文件链接拷成指向文件的内容
-///（见它的 `/SL` 与 `/XJD` 说明）；核对拷贝结果时据此放宽。
+/// Windows 上 [`copy_dir_contents`] 把文件链接拷成指向文件的内容（见它的 `/XJD` 说明）；
+/// 核对拷贝结果时据此放宽。
 pub const COPY_MAY_MATERIALIZE_FILE_LINKS: bool = cfg!(windows);
 
 /// 让目录项（新建 / 改名）落到介质上。POSIX 要对目录 fsync；Windows 没有目录 fsync，
@@ -247,10 +247,10 @@ pub fn sync_dir(dir: &Path) -> std::io::Result<()> {
 /// - macOS：`ditto <src> <dst>`——保留符号链接、硬链接、扩展属性（含 Finder 标签）、ACL、资源分叉。
 ///   不加 `--noqtn` / `--noacl`：搬迁与在 Finder 里拖过去一样原样保留元数据（隔离标记对照片无害，
 ///   去掉反而改了用户的数据）；目标卷不支持 ACL 时 ditto 照常复制数据。
-/// - Windows：`robocopy <src> <dst> /E /COPY:DAT /DCOPY:DAT /SL /XJD /R:2 /W:1 /NP /NFL /NDL /NJH /NJS`
-///   ——子目录含空目录、数据 + 属性 + 时间、目录时间、链接照搬不跟进去、跳过目录 junction、被占用重试 2 次。
-///   `/SL` 要「建符号链接」特权，普通用户与服务账户没有时 robocopy 静默忽略它；用 `/XJD` 而不是 `/XJ`
-///   （后者连文件链接一起跳过），这时文件链接按指向文件的内容拷过去，不会丢。
+/// - Windows：`robocopy <src> <dst> /E /COPY:DAT /DCOPY:DAT /XJD /R:2 /W:1 /NP /NFL /NDL /NJH /NJS`
+///   ——子目录含空目录、数据 + 属性 + 时间、目录时间、跳过目录 junction / 链接、被占用重试 2 次。
+///   文件链接按指向文件的内容拷过去：不加 `/SL`，因为照搬链接要「建符号链接」特权，普通用户与服务账户
+///   没有，robocopy 会对每个链接报 ERROR 1314 并整体失败；用 `/XJD` 而不是 `/XJ`（后者连文件链接一起跳过）。
 ///   不加 `/Z`：那是为网络传输设计的断点续传，本地盘之间明显更慢；中断后整次重跑时 robocopy 默认
 ///   跳过大小与时间都相同的文件，已能接着拷。长路径 robocopy 原生支持。退出码 0–7 成功，≥ 8 失败。
 /// - 其它 unix：`cp -a <src>/. <dst>/`。
@@ -266,7 +266,6 @@ pub fn copy_dir_contents(src: &Path, dst: &Path) -> std::io::Result<()> {
             "/E",
             "/COPY:DAT",
             "/DCOPY:DAT",
-            "/SL",
             "/XJD",
             "/R:2",
             "/W:1",
