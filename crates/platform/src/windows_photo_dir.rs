@@ -599,16 +599,21 @@ mod tests {
         let locked = d.path().join("locked.jpg");
         std::fs::write(&locked, b"x").unwrap();
         let icacls = |args: &[&str]| {
-            let ok = std::process::Command::new("icacls")
+            std::process::Command::new("icacls")
                 .arg(&locked)
                 .args(args)
                 .status()
-                .unwrap();
-            assert!(ok.success(), "造「改不了的子项」失败：icacls {args:?}");
+                .unwrap()
+                .success()
         };
-        icacls(&["/setowner", "*S-1-5-18"]);
-        icacls(&["/inheritance:r"]);
-        icacls(&["/deny", "*S-1-1-0:(WDAC)"]);
+        // 第 2 条要管理员身份（SeRestorePrivilege）。非管理员造不出这个前提，明说并跳过——
+        // 假装通过比跳过更糟，红掉又会把「本机不是管理员」误报成产品缺陷。
+        if !icacls(&["/setowner", "*S-1-5-18"]) {
+            eprintln!("跳过：当前身份改不了属主（需要管理员），造不出「改不了的子项」前提");
+            return;
+        }
+        assert!(icacls(&["/inheritance:r"]), "把子项 DACL 设为受保护失败");
+        assert!(icacls(&["/deny", "*S-1-1-0:(WDAC)"]), "加拒绝 ACE 失败");
         let before = dacl_facts(&locked).expect("读一次改之前的 DACL");
         // 生产里服务令牌只剩 SeChangeNotifyPrivilege（W-1）。提权的测试令牌带着
         // SeRestore / SeTakeOwnership / SeBackup 等，这里一并去掉特权，口径与生产一致。
