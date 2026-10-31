@@ -228,9 +228,9 @@
 "picked_progress" = "正在传 %1$ld/%2$ld";
 "picked_result_delivered" = "送达 %1$ld 张";
 "picked_result_with_existing" = "送达 %1$ld 张，其中 %2$ld 张电脑上已有";
-"picked_result_failed" = "有 %1$ld 张没传成，请重新挑选";
+"picked_result_failed" = "有 %1$ld 张没传成，请重新挑选。";
 "auto_backup_rule_label" = "自动备份";
-"auto_backup_off_hero" = "还没开自动备份。可以先挑几张传。";
+"auto_backup_off_hero" = "还没开自动备份。也可以先挑几张传。";
 "auto_backup_rule_denied_hint" = "没有照片权限，自动备份没开。可以在系统设置里允许，或先挑几张传。";
 "auto_backup_rule_limited_sent" = "已把你允许的 %1$ld 张传到电脑。自动备份需要全部照片权限，可以在设置里重新开启。";
 "photos_first_run_intro" = "已连上 %1$@。手机上的照片会存到这台电脑。";

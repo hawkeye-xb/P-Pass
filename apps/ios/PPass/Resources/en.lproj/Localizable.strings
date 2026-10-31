@@ -227,12 +227,12 @@
 "pick_photos_label" = "Pick photos to send";
 "picked_progress" = "Sending %1$ld/%2$ld";
 "picked_result_delivered" = "Delivered %1$ld";
-"picked_result_with_existing" = "Delivered %1$ld, %2$ld already on your computer";
+"picked_result_with_existing" = "Delivered %1$ld, of which %2$ld were already on your computer";
 "picked_result_failed" = "%1$ld couldn't be sent. Please pick them again.";
 "auto_backup_rule_label" = "Auto backup";
-"auto_backup_off_hero" = "Auto backup is off. You can pick a few photos to send for now.";
+"auto_backup_off_hero" = "Auto backup is off. You can also pick a few photos to send for now.";
 "auto_backup_rule_denied_hint" = "Photo access wasn't allowed, so auto backup stays off. You can allow it in system settings, or pick a few photos to send.";
-"auto_backup_rule_limited_sent" = "Sent the %1$ld photos you allowed to your computer. Auto backup needs access to all photos — you can turn it on again in Settings.";
+"auto_backup_rule_limited_sent" = "Sent the %1$ld photos you allowed to your computer. Auto backup needs access to all photos. You can turn it on again in Settings.";
 "photos_first_run_intro" = "Connected to %1$@. Photos on this phone are saved to this computer.";
 "photos_first_run_enable" = "Turn on auto backup";
 "photos_first_run_pick" = "Pick a few photos first";
