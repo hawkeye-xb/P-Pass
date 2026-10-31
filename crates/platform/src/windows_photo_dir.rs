@@ -578,30 +578,38 @@ mod tests {
             .contains(&AUTHENTICATED_USERS.to_string()));
     }
 
-    /// 有子项改不了权限时：报错、列出该路径，不静默跳过。造法：**这个文件正被别的程序独占
-    /// 打开**（共享模式 0），改成私有要拿它的写 DACL 权限，必然撞共享冲突。
+    /// 有子项改不了权限时：报错、列出该路径，不静默跳过。三元造法，缺一条挡不住——
+    /// 三条要求都是从 CI 的实测反证里逼出来的（PR #1273）：
     ///
-    /// 这道障碍与身份无关：属主、特权、是不是管理员都绕不过共享冲突，所以不会像 DACL 造法
-    /// 那样随机器变。真实对应用户场景——图还开在别的程序里，这时候搬库、改目录权限就会撞上。
+    /// 1. 子项 DACL **受保护**（`/inheritance:r`）：否则改根目录时父目录的继承直接把它刷掉，
+    ///    连「打开子项」这一步都走不到；
+    /// 2. 属主**不是当前身份**（`/setowner *S-1-5-18`）：属主隐含的 `WRITE_DAC` 会绕过 DACL
+    ///    检查，连拒绝 ACE 都压不住（CI 上 runner 的文件属主是内置 Administrator）；
+    /// 3. DACL **显式拒绝所有人改 DACL**（`/deny *S-1-1-0:(WDAC)`）：`/inheritance:r` 会把继承
+    ///    来的 ACE 落成显式条目，单靠它，Administrators 那条「全权允许」足以放行。
     ///
-    /// 走过两条错路（都实测过，留在这里省下一位同事的时间）：
-    /// - 只给 OWNER RIGHTS（`S-1-3-4`）读权：windows-latest 上属主是内置 Administrator，
-    ///   属主隐含的 `WRITE_DAC` 不认这个 ACE，`TreeResetNamedSecurityInfoW` 照样改掉并返回成功。
-    /// - 再叠一条 `Everyone` 拒绝 `WDAC`：同上，拒绝 ACE 也压不住属主隐含权限，仍然返回成功
-    ///   （panic 里打出的改后 DACL 就是被重写成四家全权）。
+    /// 走错的路（都推上去实测过，留在注释里省下一位同事的时间）：
+    /// - 只有 1（只给 OWNER RIGHTS 读权）：子项被改掉，函数返回成功；
+    /// - 1+3（再叠拒绝 ACE）：仍被改掉，panic 打出的改后 DACL 是四家全权；
+    /// - 换成「独占打开子项」（共享模式 0）：仍被改掉——共享模式只管读 / 写 / 删除，
+    ///   `WRITE_DAC` 不在共享检查范围内。
     #[test]
     fn library_dir_private_reports_unchangeable_children_by_path() {
-        use std::os::windows::fs::OpenOptionsExt;
-
         let d = tempdir();
         let locked = d.path().join("locked.jpg");
         std::fs::write(&locked, b"x").unwrap();
-        // 持有到断言之后：句柄一关，障碍就没了。
-        let _holder = std::fs::OpenOptions::new()
-            .read(true)
-            .share_mode(0)
-            .open(&locked)
-            .expect("独占打开子项，模拟别的程序正开着这张图");
+        let icacls = |args: &[&str]| {
+            let ok = std::process::Command::new("icacls")
+                .arg(&locked)
+                .args(args)
+                .status()
+                .unwrap();
+            assert!(ok.success(), "造「改不了的子项」失败：icacls {args:?}");
+        };
+        icacls(&["/setowner", "*S-1-5-18"]);
+        icacls(&["/inheritance:r"]);
+        icacls(&["/deny", "*S-1-1-0:(WDAC)"]);
+        let before = dacl_facts(&locked).expect("读一次改之前的 DACL");
         // 生产里服务令牌只剩 SeChangeNotifyPrivilege（W-1）。提权的测试令牌带着
         // SeRestore / SeTakeOwnership / SeBackup 等，这里一并去掉特权，口径与生产一致。
         let outcome = {
@@ -610,7 +618,7 @@ mod tests {
         };
         let err = match outcome {
             Ok(_) => panic!(
-                "改不了的子项必须报错，但它被改动了：DACL 现在是 {:?}",
+                "改不了的子项必须报错，但它被改动了：DACL 从 {before:?} 变成 {:?}",
                 dacl_facts(&locked)
             ),
             Err(err) => err,
