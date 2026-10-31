@@ -578,8 +578,14 @@ mod tests {
             .contains(&AUTHENTICATED_USERS.to_string()));
     }
 
-    /// 有子项改不了权限时：报错、列出该路径，不静默跳过。造法：子项 DACL 受保护、只给
-    /// OWNER RIGHTS（S-1-3-4）读权——属主隐含的改权限能力被收回，主人也改不了它。
+    /// 有子项改不了权限时：报错、列出该路径，不静默跳过。造法：子项 DACL 受保护，并**显式
+    /// 拒绝所有人改 DACL**（`Everyone` 拒绝 `WDAC`）。拒绝 ACE 先于允许匹配，属主隐含的
+    /// READ_CONTROL / WRITE_DAC 也压不住它，换机器、换 Windows 版本都不会因为属主是谁而
+    /// 变成「改得了」。
+    ///
+    /// 早先的造法是只给 OWNER RIGHTS（`S-1-3-4`）读权，靠「属主隐含的改权限能力被收回」
+    /// 来挡：window-latest 上实测挡不住——`TreeResetNamedSecurityInfoW` 照样把子项改掉并
+    /// 返回成功，于是本测试在 CI 上红（PR #1273）。
     #[test]
     fn library_dir_private_reports_unchangeable_children_by_path() {
         let d = tempdir();
@@ -587,19 +593,26 @@ mod tests {
         std::fs::write(&locked, b"x").unwrap();
         let ok = std::process::Command::new("icacls")
             .arg(&locked)
-            .args(["/inheritance:r", "/grant:r", "*S-1-3-4:(R)"])
+            .args(["/inheritance:r", "/deny", "*S-1-1-0:(WDAC)"])
             .status()
             .unwrap();
         assert!(ok.success());
+        let before = dacl_facts(&locked).expect("读一次改之前的 DACL");
         // 生产里服务令牌只剩 SeChangeNotifyPrivilege（W-1）。提权的测试令牌带着
         // SeRestore / SeTakeOwnership / SeBackup 等，`TreeResetNamedSecurityInfoW` 会借它们
         // 改动没有 WRITE_DAC 的子项，于是不报错——测试前提不成立。在去掉特权的线程令牌下
         // 调用，模拟服务令牌（普通身份本来就没有这些特权，行为一致）。
-        let err = {
+        let outcome = {
             let _as_service = ServiceLikeThreadToken::enter();
             make_private_for_service(d.path(), TEST_SERVICE, &me())
-        }
-        .expect_err("改不了的子项必须报错");
+        };
+        let err = match outcome {
+            Ok(_) => panic!(
+                "改不了的子项必须报错，但它被改动了：DACL 从 {before:?} 变成 {:?}",
+                dacl_facts(&locked)
+            ),
+            Err(err) => err,
+        };
         let text = format!("{err}");
         assert!(text.contains("locked.jpg"), "要列出改不了的路径：{text}");
         // 收尾：父目录给主人的删除子项权限足以删掉它（tempdir 自己清理）。
