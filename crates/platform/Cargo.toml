@@ -17,6 +17,8 @@ semver = "1"
 # #1150：IPC 对端版本下限按项目统一的版本语义比（预发布 < 正式版；2026.10.10 > 2026.10.9）。
 version-cmp = { path = "../version-cmp" }
 thiserror.workspace = true
+# #1260：Windows 推出前审批的几条日志写进 daemon.log（与 daemon 同一个 tracing）。
+tracing.workspace = true
 # #1047：停止信号（SIGTERM / Windows 控制台事件）。只开 signal + 运行时，
 # 不拉 net/io。#1151 起加 time：更新下载的总时长上限（update_limits）。
 tokio = { version = "1", features = ["signal", "rt", "time"] }
@@ -66,6 +68,8 @@ windows-sys = { version = "0.61", features = [
   # SetEntriesInAclW + SetNamedSecurityInfoW 重写身份密钥的 DACL。
   "Win32_Security",
   "Win32_Security_Authorization",
+  # W-3：CryptProtectData / CryptUnprotectData（身份私钥与配对白名单落盘加密）。
+  "Win32_Security_Cryptography",
   # DAE-05: GetDiskFreeSpaceExW（卷容量水位）。
   "Win32_Storage_FileSystem",
   # DAE-11 (#804) 电源来源订阅的回调常量（DEVICE_NOTIFY_CALLBACK 等）。
@@ -112,6 +116,9 @@ windows = { version = "0.62", features = [
   "Win32_System_Com",
   # SHCreateItemFromParsingName + IShellItemImageFactory。
   "Win32_UI_Shell",
+  # W-4：IPropertyStore / SHGetPropertyStoreFromParsingName（读卷的 BitLocker 状态）。
+  "Win32_UI_Shell_PropertiesSystem",
+  "Win32_System_Com_StructuredStorage",
   # GetDIBits / BITMAP / DeleteObject —— 把 HBITMAP 变成像素要走 GDI。
   "Win32_Graphics_Gdi",
   # DESK-17 (#166)：WinRT toast —— ToastNotificationManager / XmlDocument，

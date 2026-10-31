@@ -41,6 +41,12 @@ Var PPassDataDir
     nsExec::ExecToLog '"$SYSDIR\sc.exe" create "${PPASS_SERVICE}" binPath= "\"$INSTDIR\ppf-daemon.exe\" --service" obj= "NT SERVICE\${PPASS_SERVICE}" start= auto DisplayName= "P-Pass"'
     Pop $0
   ${EndIf}
+  ; 服务只保留需要的特权，系统从服务令牌里去掉其余特权。放在 create 分支外：首次安装、
+  ; 覆盖升级、应用内更新都重新声明一次。名单与 daemon 启动核对的白名单
+  ; （crates/platform/src/service_privileges.rs 的 SERVICE_PRIVILEGE_ALLOWLIST）一致，
+  ; 改一边必须同时改另一边（壳的配置锁定测试比对两边）。
+  nsExec::ExecToLog '"$SYSDIR\sc.exe" privs "${PPASS_SERVICE}" SeChangeNotifyPrivilege'
+  Pop $0
   nsExec::ExecToLog '"$SYSDIR\sc.exe" failure "${PPASS_SERVICE}" reset= 86400 actions= restart/5000/restart/5000'
   Pop $0
   ; §5.1：把 start/stop/query 授给交互用户，避免每次启停都要 UAC。

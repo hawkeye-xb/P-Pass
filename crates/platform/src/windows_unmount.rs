@@ -3,16 +3,22 @@
 //!
 //! 标准做法：对库目录打开一个句柄，`RegisterDeviceNotificationW(DBT_DEVTYP_HANDLE)` 登记到一个
 //! 只收消息的隐藏窗口（服务与普通进程都能用窗口句柄接收，见 RegisterDeviceNotification 文档）：
-//! - `DBT_DEVICEQUERYREMOVE`：有人要卸载这个卷——先调 `on_query`（收手），再关掉我们自己的句柄
-//!   （不然系统会因为它拒绝卸载），返回 TRUE 放行；
+//! - `DBT_DEVICEQUERYREMOVE`：有人要卸载这个卷——先调 `on_query`（收手），再**只关**我们自己的句柄
+//!   （不然系统会因为它拒绝卸载；登记保留，等 REMOVECOMPLETE 再注销——微软标准做法），返回 TRUE 放行；
 //! - `DBT_DEVICEQUERYREMOVEFAILED`：卸载被别人挡住了——重新打开句柄、重新登记，继续盯；
-//! - `DBT_DEVICEREMOVECOMPLETE`：卷已经没了——调 `on_gone`。
+//! - `DBT_DEVICEREMOVECOMPLETE`：卷已经没了——注销登记，调 `on_gone`。
+//!
+//! #1260：资源管理器「弹出」外接盘（含 VHD）**不走 PnP 的 query-remove**，实测顺序是
+//! `DBT_CUSTOMEVENT`：`GUID_IO_VOLUME_LOCK` → `LOCK_FAILED` → `MOUNT` → `UNLOCK`，随后
+//! `DBT_DEVICEREMOVECOMPLETE`。所以 LOCK 当作「要卸载」处理（同样先 `on_query` 再只关句柄），
+//! `LOCK_FAILED` / `UNLOCK` 时卷还在就重新打开句柄并重新登记。
 
 use std::ffi::c_void;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::ptr::null_mut;
 
+use windows_sys::core::GUID;
 use windows_sys::Win32::Foundation::{
     CloseHandle, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, LRESULT, WPARAM,
 };
@@ -23,9 +29,11 @@ use windows_sys::Win32::Storage::FileSystem::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, GetWindowLongPtrW,
     RegisterClassW, RegisterDeviceNotificationW, SetWindowLongPtrW, TranslateMessage,
-    UnregisterDeviceNotification, DBT_DEVICEQUERYREMOVE, DBT_DEVICEQUERYREMOVEFAILED,
-    DBT_DEVICEREMOVECOMPLETE, DBT_DEVTYP_HANDLE, DEVICE_NOTIFY_WINDOW_HANDLE, DEV_BROADCAST_HANDLE,
-    GWLP_USERDATA, HDEVNOTIFY, HWND_MESSAGE, MSG, WM_DEVICECHANGE, WNDCLASSW,
+    UnregisterDeviceNotification, DBT_CUSTOMEVENT, DBT_DEVICEQUERYREMOVE,
+    DBT_DEVICEQUERYREMOVEFAILED, DBT_DEVICEREMOVECOMPLETE, DBT_DEVTYP_HANDLE,
+    DEVICE_NOTIFY_WINDOW_HANDLE, DEV_BROADCAST_HANDLE, GUID_IO_VOLUME_LOCK,
+    GUID_IO_VOLUME_LOCK_FAILED, GUID_IO_VOLUME_UNLOCK, GWLP_USERDATA, HDEVNOTIFY, HWND_MESSAGE,
+    MSG, WM_DEVICECHANGE, WNDCLASSW,
 };
 
 /// 收到「要卸载」与「已拔掉」时各做什么。
@@ -79,18 +87,109 @@ fn register(hwnd: HWND, dir: HANDLE) -> HDEVNOTIFY {
     }
 }
 
-fn release(state: &mut State) {
-    // SAFETY: 两个句柄都由本模块打开 / 登记；关过就置空，不会重复关。
+/// 只关目录句柄（登记保留）：LOCK / QUERYREMOVE 时给系统让路。
+fn close_dir(state: &mut State) {
+    // SAFETY: 句柄由本模块打开；关过就置空，不会重复关。
+    unsafe {
+        if state.dir != INVALID_HANDLE_VALUE && !state.dir.is_null() {
+            CloseHandle(state.dir);
+        }
+    }
+    state.dir = INVALID_HANDLE_VALUE;
+}
+
+/// 注销登记（REMOVECOMPLETE 或重新登记之前）。
+fn unregister(state: &mut State) {
+    // SAFETY: 登记由本模块做；注销过就置空。
     unsafe {
         if !state.notify.is_null() {
             UnregisterDeviceNotification(state.notify);
-            state.notify = null_mut();
-        }
-        if state.dir != INVALID_HANDLE_VALUE && !state.dir.is_null() {
-            CloseHandle(state.dir);
-            state.dir = INVALID_HANDLE_VALUE;
         }
     }
+    state.notify = null_mut();
+}
+
+fn release(state: &mut State) {
+    unregister(state);
+    close_dir(state);
+}
+
+/// 卷还在就重新打开句柄、重新登记，返回是否重新盯上了。已经盯着（句柄在）就什么也不做。
+fn reopen(hwnd: HWND, state: &mut State) -> bool {
+    if state.dir != INVALID_HANDLE_VALUE && !state.dir.is_null() {
+        return false;
+    }
+    let dir = open_dir(&state.root);
+    if dir == INVALID_HANDLE_VALUE {
+        return false; // 卷已经没了：保留原登记，等 REMOVECOMPLETE。
+    }
+    let notify = register(hwnd, dir);
+    if notify.is_null() {
+        // SAFETY: dir 刚打开、没有别处持有。
+        unsafe { CloseHandle(dir) };
+        return false;
+    }
+    unregister(state);
+    state.dir = dir;
+    state.notify = notify;
+    true
+}
+
+/// `DBT_CUSTOMEVENT` 里我们关心的卷事件。
+#[derive(Debug, PartialEq, Eq)]
+enum VolumeEvent {
+    Lock,
+    LockFailed,
+    Unlock,
+    Other,
+}
+
+fn same(a: &GUID, b: &GUID) -> bool {
+    (a.data1, a.data2, a.data3, a.data4) == (b.data1, b.data2, b.data3, b.data4)
+}
+
+fn classify_guid(g: &GUID) -> VolumeEvent {
+    if same(g, &GUID_IO_VOLUME_LOCK) {
+        VolumeEvent::Lock
+    } else if same(g, &GUID_IO_VOLUME_LOCK_FAILED) {
+        VolumeEvent::LockFailed
+    } else if same(g, &GUID_IO_VOLUME_UNLOCK) {
+        VolumeEvent::Unlock
+    } else {
+        VolumeEvent::Other
+    }
+}
+
+/// 从 `DEV_BROADCAST_HANDLE` 读 `dbch_eventguid`。偏移用 `offset_of!`（x64 上句柄是 8 字节对齐，
+/// 手算 `4+4+4+8+8` 会读歪）；先核对大小与设备类型，不是句柄类型的广播一律当 Other。
+///
+/// # Safety
+/// `lparam` 必须是系统随 `WM_DEVICECHANGE` 给的广播指针（或 0）。
+unsafe fn read_event(lparam: LPARAM) -> VolumeEvent {
+    let p = lparam as *const u8;
+    if p.is_null() {
+        return VolumeEvent::Other;
+    }
+    // SAFETY: 头三个 u32（size / devicetype / reserved）所有 DEV_BROADCAST_* 都有。
+    let (size, devtype) = unsafe {
+        (
+            std::ptr::read_unaligned(p.cast::<u32>()),
+            std::ptr::read_unaligned(p.add(4).cast::<u32>()),
+        )
+    };
+    let guid_end =
+        std::mem::offset_of!(DEV_BROADCAST_HANDLE, dbch_eventguid) + std::mem::size_of::<GUID>();
+    if devtype != DBT_DEVTYP_HANDLE || (size as usize) < guid_end {
+        return VolumeEvent::Other;
+    }
+    // SAFETY: size 已核对覆盖 dbch_eventguid。
+    let g = unsafe {
+        std::ptr::read_unaligned(
+            p.add(std::mem::offset_of!(DEV_BROADCAST_HANDLE, dbch_eventguid))
+                .cast::<GUID>(),
+        )
+    };
+    classify_guid(&g)
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -103,17 +202,37 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     if let Some(f) = &state.hooks.on_query {
                         f();
                     }
-                    release(state);
+                    // 只关句柄：登记留着，REMOVECOMPLETE 才收得到（根目录监听靠它）。
+                    close_dir(state);
                     return 1; // TRUE：放行，从不拒绝用户的推出。
                 }
                 DBT_DEVICEQUERYREMOVEFAILED => {
-                    release(state);
-                    state.dir = open_dir(&state.root);
-                    if state.dir != INVALID_HANDLE_VALUE {
-                        state.notify = register(hwnd, state.dir);
+                    reopen(hwnd, state);
+                }
+                DBT_CUSTOMEVENT => {
+                    // SAFETY: lparam 是系统给的广播指针。
+                    match unsafe { read_event(lparam) } {
+                        VolumeEvent::Lock => {
+                            tracing::info!(
+                                "#1260: 卷被锁定（资源管理器推出 / 格式化等）——先松开照片库的句柄"
+                            );
+                            if let Some(f) = &state.hooks.on_query {
+                                f();
+                            }
+                            close_dir(state);
+                        }
+                        VolumeEvent::LockFailed | VolumeEvent::Unlock => {
+                            if reopen(hwnd, state) {
+                                tracing::info!(
+                                    "#1260: 卷锁定没成（卷还在）——重新打开照片库的句柄继续盯"
+                                );
+                            }
+                        }
+                        VolumeEvent::Other => {}
                     }
                 }
                 DBT_DEVICEREMOVECOMPLETE => {
+                    tracing::info!("#1260: 照片库所在的卷已移除");
                     release(state);
                     if let Some(f) = &state.hooks.on_gone {
                         f();
@@ -205,4 +324,62 @@ pub(crate) fn watch(root: &Path, hooks: Hooks) -> bool {
             }
         });
     spawned.is_ok() && rx.recv().unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn broadcast(devtype: u32, guid: GUID) -> DEV_BROADCAST_HANDLE {
+        let mut b: DEV_BROADCAST_HANDLE = unsafe { std::mem::zeroed() };
+        b.dbch_size = std::mem::size_of::<DEV_BROADCAST_HANDLE>() as u32;
+        b.dbch_devicetype = devtype;
+        b.dbch_eventguid = guid;
+        b
+    }
+
+    fn read(b: &DEV_BROADCAST_HANDLE) -> VolumeEvent {
+        unsafe { read_event(b as *const _ as LPARAM) }
+    }
+
+    #[test]
+    fn x64_上_eventguid_在_32_字节处() {
+        // 4+4+4 填充到 16，句柄 8、hdevnotify 8 → 32；算成 28（忽略对齐）就会读歪。
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(
+            std::mem::offset_of!(DEV_BROADCAST_HANDLE, dbch_eventguid),
+            32
+        );
+    }
+
+    #[test]
+    fn 认得三种卷事件() {
+        assert_eq!(
+            read(&broadcast(DBT_DEVTYP_HANDLE, GUID_IO_VOLUME_LOCK)),
+            VolumeEvent::Lock
+        );
+        assert_eq!(
+            read(&broadcast(DBT_DEVTYP_HANDLE, GUID_IO_VOLUME_LOCK_FAILED)),
+            VolumeEvent::LockFailed
+        );
+        assert_eq!(
+            read(&broadcast(DBT_DEVTYP_HANDLE, GUID_IO_VOLUME_UNLOCK)),
+            VolumeEvent::Unlock
+        );
+    }
+
+    #[test]
+    fn 别的事件_类型不对_广播太短_空指针都当_other() {
+        use windows_sys::Win32::UI::WindowsAndMessaging::GUID_IO_VOLUME_MOUNT;
+        assert_eq!(
+            read(&broadcast(DBT_DEVTYP_HANDLE, GUID_IO_VOLUME_MOUNT)),
+            VolumeEvent::Other
+        );
+        // 设备类型不是 HANDLE：就算偏移处碰巧是 LOCK 的 GUID 也不认。
+        assert_eq!(read(&broadcast(0, GUID_IO_VOLUME_LOCK)), VolumeEvent::Other);
+        let mut short = broadcast(DBT_DEVTYP_HANDLE, GUID_IO_VOLUME_LOCK);
+        short.dbch_size = 16;
+        assert_eq!(read(&short), VolumeEvent::Other);
+        assert_eq!(unsafe { read_event(0) }, VolumeEvent::Other);
+    }
 }

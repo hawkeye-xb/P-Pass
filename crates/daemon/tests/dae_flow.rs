@@ -91,6 +91,44 @@ fn hex(t: &[u8; 32]) -> String {
     t.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// 等在位实例真的在 socket 上监听了再往下走（v0.10.3-test.1 门禁偶发红）。
+///
+/// 原来固定睡 300ms：`serve` 先写 ipc.token、再建监听，负载高时 300ms 内监听可能还没起来，
+/// claim 看到「没人在听」就 Proceed（期望 TookOver）。这里轮询到连得上为止；`serve` 提前退出
+/// （它的错误在 spawn 里被丢掉）或 10 秒还没起来，就直接说清是哪一种，而不是让后面的断言莫名其妙地红。
+async fn wait_serving(sock: &str, serve_task: &tokio::task::JoinHandle<()>) {
+    use interprocess::local_socket::tokio::{prelude::*, Stream};
+    use interprocess::local_socket::GenericNamespaced;
+    let name = sock.to_ns_name::<GenericNamespaced>().unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if Stream::connect(name.clone()).await.is_ok() {
+            return;
+        }
+        assert!(
+            !serve_task.is_finished(),
+            "在位实例的 serve 提前退出了，{sock} 没有起来"
+        );
+        assert!(
+            std::time::Instant::now() < deadline,
+            "在位实例 10 秒内没开始监听 {sock}"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
+/// 等 step_down 回调被调用（原来固定睡 500ms）；5 秒还没有就是真没收到。
+async fn wait_stepped_down(flag: &AtomicBool) -> bool {
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        if flag.load(Ordering::SeqCst) {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    flag.load(Ordering::SeqCst)
+}
+
 /// Build an IpcServer whose step_down only sets a flag (no exit).
 async fn mk_server(dir: &Path) -> (Arc<IpcServer>, Arc<AtomicBool>) {
     let db = Db::open_in_memory().await.unwrap();
@@ -123,7 +161,7 @@ async fn newer_claimant_takes_over_older_steps_down() {
             let _ = old.serve(&s, old_token).await;
         }
     });
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    wait_serving(&sock, &old_task).await;
 
     // 新实例（v0.2.0）的 token 与老实例**完全独立**——claim 根本不接受
     // 自己的 token 参数，它读 ipc.token 里的前任 token 握手。
@@ -135,9 +173,8 @@ async fn newer_claimant_takes_over_older_steps_down() {
     );
     let claim = newer.claim_single_instance(&sock, &newer_version()).await;
     assert_eq!(claim, Claim::TookOver, "newer must take over");
-    tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(
-        old_stepped_down.load(Ordering::SeqCst),
+        wait_stepped_down(&old_stepped_down).await,
         "older instance must have received step_down"
     );
 
@@ -161,7 +198,7 @@ async fn equal_or_older_claimant_stands_down() {
             let _ = i.serve(&s, incumbent_token).await;
         }
     });
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    wait_serving(&sock, &incumbent_task).await;
 
     let (late, _) = mk_server(&dir).await;
     // 同版本 → 后来者让位（先来者留，避免 launchd 重拉循环）。
@@ -207,7 +244,7 @@ async fn wrong_token_never_grabs_a_live_socket() {
             let _ = i.serve(&s, incumbent_token).await;
         }
     });
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    wait_serving(&sock, &incumbent_task).await;
 
     // 模拟旧代码的随机 token：把文件里的 token 换成与值班实例无关的
     // 随机值（旧代码等效于拿本实例新随机 token 去探测）。
@@ -299,7 +336,7 @@ async fn fixed_port_incumbent_takeover_then_bind_succeeds() {
             let _ = i.serve(&s, incumbent_token).await;
         }
     });
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    wait_serving(&sock, &inc_task).await;
 
     // 新实例（新版本）：**不 bind transport**——仅凭 secret key 预派
     // node_id + socket_name 即可 claim。端口此刻仍被在位实例占着；旧
@@ -311,9 +348,8 @@ async fn fixed_port_incumbent_takeover_then_bind_succeeds() {
         Claim::TookOver,
         "newer must take over even while the fixed port is held"
     );
-    tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(
-        incumbent_stepped_down.load(Ordering::SeqCst),
+        wait_stepped_down(&incumbent_stepped_down).await,
         "incumbent must have been asked to step down"
     );
 

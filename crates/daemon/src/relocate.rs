@@ -95,6 +95,26 @@ pub fn clear_error(local_base: &Path) {
     let _ = std::fs::remove_file(local_base.join(layout::LIBRARIES_DIR).join(ERROR_FILE));
 }
 
+/// F6：搬完了、原目录却没删干净（里面有服务删不掉的文件）——记下原目录的位置，窗口在
+/// `status.relocate_leftover` 里读到并告诉用户在哪。用户删掉那个目录后自然消失。
+pub const LEFTOVER_FILE: &str = "relocation-leftover";
+
+fn leftover_record(local_base: &Path) -> PathBuf {
+    local_base.join(layout::LIBRARIES_DIR).join(LEFTOVER_FILE)
+}
+
+/// 还留着没删掉的原目录；目录已经不在了（用户删了）就清掉记录、返回 `None`。
+pub fn leftover(local_base: &Path) -> Option<String> {
+    let record = leftover_record(local_base);
+    let dir = std::fs::read_to_string(&record).ok()?;
+    if Path::new(&dir).exists() {
+        Some(dir)
+    } else {
+        let _ = std::fs::remove_file(&record);
+        None
+    }
+}
+
 /// 搬迁没成（新位置里我们放进去的已由 [`move_library`] / [`Moved::undo`] 撤回）：记下原因、清掉计划，
 /// 下次启动照旧在原位置。
 pub fn abandon(local_base: &Path, error: &str) {
@@ -125,12 +145,58 @@ fn platform_probes() -> Probes<'static> {
     }
 }
 
+/// 选的文件夹里有没有用户的东西。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetContents {
+    /// 不存在、空，或只有系统附属文件。
+    Empty,
+    /// 有别的东西。
+    HasOtherThings,
+    /// 本服务**无权列出**这个文件夹（Windows 服务形态下，主人自己的目录在设为私有之前服务读不了；
+    /// 预检没有副作用，不会先去改权限）。只有「读取被拒」这一种原因落到这里，其余 IO 错误照常
+    /// 报错；窗口程序以主人身份补判。
+    ListingDenied,
+}
+
+impl TargetContents {
+    /// 线上形状：`false` / `true` / `null`（null = 服务读不到，由窗口程序补判）。
+    pub fn to_json(self) -> serde_json::Value {
+        match self {
+            TargetContents::Empty => serde_json::Value::Bool(false),
+            TargetContents::HasOtherThings => serde_json::Value::Bool(true),
+            TargetContents::ListingDenied => serde_json::Value::Null,
+        }
+    }
+}
+
+/// 列出 `dir` 判断有没有用户的东西。读取被拒 ⇒ [`TargetContents::ListingDenied`]；
+/// 不存在 ⇒ `Empty`（由 [`plan`] 建出来）；其他错误原样返回。
+pub fn target_contents(dir: &Path) -> std::io::Result<TargetContents> {
+    contents_from(std::fs::read_dir(dir))
+}
+
+/// [`target_contents`] 的判定部分：按「列目录」的结果分类（便于用各种错误单测）。
+fn contents_from(listing: std::io::Result<std::fs::ReadDir>) -> std::io::Result<TargetContents> {
+    match listing {
+        Ok(entries) => Ok(if entries.flatten().any(|e| !ignorable(&e.file_name())) {
+            TargetContents::HasOtherThings
+        } else {
+            TargetContents::Empty
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(TargetContents::Empty),
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            Ok(TargetContents::ListingDenied)
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// 预检结果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Check {
     pub plan: Plan,
-    /// 选的文件夹里已有别的东西（照片会和它们放在一起）——窗口确认前要额外提示。
-    pub non_empty: bool,
+    /// 选的文件夹里有没有别的东西（照片会和它们放在一起）——窗口确认前要额外提示。
+    pub contents: TargetContents,
     /// 选的就是这个库（用户自己搬过去了）：只改指向。
     pub adopt: bool,
 }
@@ -196,7 +262,7 @@ pub fn check_with(
     if adopt {
         return Ok(Check {
             plan,
-            non_empty: false,
+            contents: TargetContents::Empty,
             adopt: true,
         });
     }
@@ -226,14 +292,10 @@ pub fn check_with(
             }
         }
     }
-    let non_empty = chosen.exists()
-        && std::fs::read_dir(chosen)
-            .map_err(io_ui_err)?
-            .flatten()
-            .any(|e| !ignorable(&e.file_name()));
+    let contents = target_contents(chosen).map_err(io_ui_err)?;
     Ok(Check {
         plan,
-        non_empty,
+        contents,
         adopt: false,
     })
 }
@@ -266,11 +328,9 @@ fn first_conflict(from: &Path, chosen: &Path) -> std::io::Result<Option<OsString
     Ok(None)
 }
 
-/// 不算「用户的东西」的系统附属文件：Finder 的 `.DS_Store`、AppleDouble（`._<名>`，macOS 往 exFAT /
-/// FAT 写带扩展属性的文件时另生成的属性文件）。
+/// 不算「用户的东西」的系统附属文件（规则与窗口程序共用，见 [`platform::is_folder_litter`]）。
 fn ignorable(name: &std::ffi::OsStr) -> bool {
-    let n = name.to_string_lossy();
-    n == ".DS_Store" || n.starts_with("._")
+    platform::is_folder_litter(name)
 }
 
 /// 给人看的字节数（1000 进制，与 Finder 一致）。
@@ -367,6 +427,27 @@ impl Manifest {
     /// 修改时间不比：exFAT 只有 2 秒精度。
     /// Windows 上拷贝工具把文件链接拷成指向文件的内容（普通用户与服务账户没有建符号链接的特权）：
     /// 源是链接、拷出来是同样大小的普通文件也算一致；反过来不算。
+    /// F6：跨卷复制要读每个文件；第一个读不了的（路径 + 原因）。复制工具对此只报一个笼统的
+    /// 退出码（robocopy 9），用户不知道是哪个文件。链接只在复制工具会按内容拷时才要读得到指向。
+    fn first_unreadable(
+        &self,
+        root: &Path,
+        open: &dyn Fn(&Path) -> std::io::Result<()>,
+    ) -> Option<(PathBuf, std::io::Error)> {
+        self.0.iter().find_map(|(rel, e)| {
+            let needs_read = match e {
+                Entry::File { .. } => true,
+                Entry::Link { len: Some(_), .. } => platform::COPY_MAY_MATERIALIZE_FILE_LINKS,
+                _ => false,
+            };
+            if !needs_read {
+                return None;
+            }
+            let path = root.join(rel);
+            open(&path).err().map(|err| (path, err))
+        })
+    }
+
     fn same_content(&self, copy: &Self) -> bool {
         self.0.len() == copy.0.len()
             && self.0.iter().all(|(k, a)| match (a, copy.0.get(k)) {
@@ -468,6 +549,13 @@ pub struct Deps<'a> {
     /// 跨卷核对通过、开始改名到位之前：把「正在改名到位」落进计划。
     pub promote: &'a dyn Fn() -> Result<(), String>,
     pub at: &'a dyn Fn(Stage),
+    /// 跨卷复制前的可读预检（F6）：打开一个文件读，读不了给错误。生产 = `File::open`。
+    pub open: &'a dyn Fn(&Path) -> std::io::Result<()>,
+}
+
+/// 生产的可读预检：能以只读打开。
+fn open_for_read(path: &Path) -> std::io::Result<()> {
+    std::fs::File::open(path).map(|_| ())
 }
 
 /// 搬过去之后、改指向之前的结果——改指向失败时用它撤回。
@@ -523,6 +611,7 @@ pub fn move_library(
             copy: &platform::copy_dir_contents,
             promote: &promote,
             at: &|_| {},
+            open: &open_for_read,
         },
     )
 }
@@ -605,6 +694,20 @@ pub fn move_library_with(
         }
     } else {
         // 跨卷：系统工具拷到目标里的临时目录 → 核对 → 源目录没被改 → 改名到位。
+        // F6：先确认每个文件都读得到——有读不了的就不开始，说清是哪个文件、什么原因。
+        if let Some((path, e)) = snapshot.first_unreadable(&plan.from, deps.open) {
+            // 快照里有、现在没了 = 有人在改库（与下面的核对同一结论）。
+            if e.kind() == std::io::ErrorKind::NotFound {
+                return Err(changed());
+            }
+            tracing::warn!("#639: 搬迁预检读不了 {}：{e}", path.display());
+            let key = if e.kind() == std::io::ErrorKind::PermissionDenied {
+                "ui.err_relocate_unreadable_denied"
+            } else {
+                "ui.err_relocate_unreadable"
+            };
+            return Err(ui_err(key, &[("path", &path.display())]));
+        }
         let staging = plan.to.join(STAGING_DIR);
         let _ = std::fs::remove_dir_all(&staging);
         let total = snapshot.bytes();
@@ -753,12 +856,17 @@ pub fn complete(
     Ok(())
 }
 
-/// 指向已经改好（可能是上次改完就崩溃了）：删原目录、清计划。删不掉只记日志，原目录留给用户。
+/// 指向已经改好（可能是上次改完就崩溃了）：删原目录、清计划。删不掉就把原目录留给用户，
+/// 并记下位置让窗口告诉用户（F6：以前只写一行日志，界面上看不到）。
 pub fn finish_flipped(local_base: &Path, plan: &Plan) {
     if let Err(e) = remove_source(plan) {
         tracing::warn!(
             "#639: 原照片库目录没删掉（{e}），请手动处理：{}",
             plan.from.display()
+        );
+        let _ = layout::write_atomically(
+            &leftover_record(local_base),
+            plan.from.display().to_string().as_bytes(),
         );
     }
     clear(local_base);
@@ -826,6 +934,7 @@ mod tests {
             copy: &platform::copy_dir_contents,
             promote: &|| Ok(()),
             at,
+            open: &open_for_read,
         }
     }
 
@@ -864,15 +973,59 @@ mod tests {
         let dest = user_dest(home.path());
         let c = check(&from, &dest, local.path()).unwrap();
         assert_eq!(c.plan.to, dest);
-        assert!(c.non_empty);
+        assert_eq!(c.contents, TargetContents::HasOtherThings);
         let empty = home.path().join("Empty");
         std::fs::create_dir_all(&empty).unwrap();
         std::fs::write(empty.join(".DS_Store"), b"x").unwrap();
-        assert!(
-            !check(&from, &empty, local.path()).unwrap().non_empty,
+        assert_eq!(
+            check(&from, &empty, local.path()).unwrap().contents,
+            TargetContents::Empty,
             ".DS_Store 不算用户的东西"
         );
         assert_eq!(pending(local.path()), None, "预检不落计划");
+    }
+
+    /// 预检读不到目标文件夹时：只有「读取被拒」报 `ListingDenied`（线上 null，窗口程序补判）；
+    /// 别的读取错误照样报错，不吞成 null。反证：删掉 PermissionDenied 分支 ⇒ 第一条红；
+    /// 把所有错误都映射成 ListingDenied ⇒ 后两条红。
+    #[test]
+    fn relocate_preview_unreadable_target_is_null_only_when_listing_is_denied() {
+        use std::io::{Error, ErrorKind};
+        assert_eq!(
+            contents_from(Err(Error::from(ErrorKind::PermissionDenied))).unwrap(),
+            TargetContents::ListingDenied
+        );
+        assert_eq!(
+            TargetContents::ListingDenied.to_json(),
+            serde_json::Value::Null
+        );
+        for kind in [
+            ErrorKind::Other,
+            ErrorKind::InvalidData,
+            ErrorKind::Interrupted,
+        ] {
+            assert!(
+                contents_from(Err(Error::from(kind))).is_err(),
+                "{kind:?} 不是「读取被拒」，必须照常报错"
+            );
+        }
+        let home = tempfile::tempdir().unwrap();
+        let file = home.path().join("a-file");
+        std::fs::write(&file, b"x").unwrap();
+        assert!(
+            target_contents(&file).is_err(),
+            "选的是文件不是目录：照常报错"
+        );
+        assert_eq!(
+            contents_from(Err(Error::from(ErrorKind::NotFound))).unwrap(),
+            TargetContents::Empty,
+            "还不存在的文件夹由 plan 建出来"
+        );
+        assert_eq!(TargetContents::Empty.to_json(), serde_json::json!(false));
+        assert_eq!(
+            TargetContents::HasOtherThings.to_json(),
+            serde_json::json!(true)
+        );
     }
 
     // 同卷：顶层条目改名过去，目标里用户原有的文件不动；改完指向后原目录删掉。
@@ -1024,12 +1177,90 @@ mod tests {
             copy: &half,
             promote: &|| Ok(()),
             at: &|_| {},
+            open: &open_for_read,
         };
         let err = move_library_with(&c.plan, &no_progress(), &indexed_ok, &d).unwrap_err();
         assert!(err.contains("ui.err_relocate_copy_failed"), "{err}");
         assert!(!dest.join(STAGING_DIR).exists(), "拷了一半的清掉");
         assert!(!library_entries_at(&dest));
         assert!(from.join("originals/aa/2026/09/a.jpg").is_file());
+    }
+
+    // F6（v0.10.3-test.1 回归）：库里有一个文件服务读不到，robocopy 只报「退出码 9」。跨卷搬迁先
+    // 预检：不开始复制，报出是哪个文件、没有读权限。反证：去掉预检 ⇒ 报 copy_failed，红。
+    #[test]
+    fn an_unreadable_file_is_named_before_copying() {
+        let home = tempfile::tempdir().unwrap();
+        let local = tempfile::tempdir().unwrap();
+        let (from, _) = library(home.path(), "Lib");
+        let dest = user_dest(home.path());
+        let c = plan(&from, &dest, local.path()).unwrap();
+        let locked = from.join("originals/aa/2026/09/a.jpg");
+        let cross = |_: &Path, _: &Path| Some(false);
+        let copied = std::cell::Cell::new(false);
+        let copy = |_: &Path, _: &Path| -> std::io::Result<()> {
+            copied.set(true);
+            Ok(())
+        };
+        // 服务账户对这一个文件没有读权限（回归现场：管理员建的链接，ACL 里没有服务账户）。
+        let open = |p: &Path| -> std::io::Result<()> {
+            if p == locked {
+                Err(std::io::ErrorKind::PermissionDenied.into())
+            } else {
+                open_for_read(p)
+            }
+        };
+        let d = Deps {
+            same_volume: &cross,
+            copy: &copy,
+            promote: &|| Ok(()),
+            at: &|_| {},
+            open: &open,
+        };
+        let err = move_library_with(&c.plan, &no_progress(), &indexed_ok, &d).unwrap_err();
+        let v: serde_json::Value = serde_json::from_str(&err).unwrap();
+        assert_eq!(v["key"], "ui.err_relocate_unreadable_denied", "{err}");
+        // 按路径比：Windows 上遍历得到的是 `\`，测试里拼的是 `/`，字符串会不同。
+        assert_eq!(Path::new(v["params"]["path"].as_str().unwrap()), locked);
+        assert!(!copied.get(), "读不了就不开始复制");
+        assert!(!dest.join(STAGING_DIR).exists());
+        assert!(locked.is_file(), "原库不动");
+        // 别的原因读不了：不说「没有权限」。
+        let open_other = |p: &Path| -> std::io::Result<()> {
+            if p == locked {
+                Err(std::io::Error::other("device error"))
+            } else {
+                open_for_read(p)
+            }
+        };
+        let d = Deps {
+            open: &open_other,
+            ..d
+        };
+        let err = move_library_with(&c.plan, &no_progress(), &indexed_ok, &d).unwrap_err();
+        assert!(err.contains("\"ui.err_relocate_unreadable\""), "{err}");
+    }
+
+    // F6：搬完了、原目录删不掉（这里用 remove_source 的拒绝造：新位置上不是这个库）——记下位置
+    // 给窗口；用户删掉后记录自然消失。反证：finish_flipped 不记录 ⇒ leftover 为 None，红。
+    #[test]
+    fn a_source_that_cannot_be_removed_is_reported_until_it_is_gone() {
+        let home = tempfile::tempdir().unwrap();
+        let local = tempfile::tempdir().unwrap();
+        let (from, _) = library(home.path(), "Lib");
+        let dest = user_dest(home.path());
+        let c = plan(&from, &dest, local.path()).unwrap();
+        mark_flipped(local.path(), &c.plan).unwrap();
+        finish_flipped(local.path(), &c.plan);
+        assert!(from.is_dir(), "删不掉的原目录留给用户");
+        assert_eq!(leftover(local.path()), Some(from.display().to_string()));
+        std::fs::remove_dir_all(&from).unwrap();
+        assert_eq!(leftover(local.path()), None, "用户删掉后不再提示");
+        assert!(!local
+            .path()
+            .join(layout::LIBRARIES_DIR)
+            .join(LEFTOVER_FILE)
+            .exists());
     }
 
     // 复制工具少拷了一张（索引里有）：核对不过 ⇒ 清掉、放弃，原库完整。
@@ -1050,6 +1281,7 @@ mod tests {
             copy: &lossy,
             promote: &|| Ok(()),
             at: &|_| {},
+            open: &open_for_read,
         };
         let err = move_library_with(&c.plan, &no_progress(), &indexed_ok, &d).unwrap_err();
         assert!(err.contains("ui.err_relocate_verify_failed"), "{err}");
@@ -1141,7 +1373,7 @@ mod tests {
         let (from, _) = library(home.path(), "Lib");
         let dest = home.path().join("New/Photos");
         let c = check(&from, &dest, local.path()).unwrap();
-        assert!(!c.non_empty);
+        assert_eq!(c.contents, TargetContents::Empty);
         assert!(!dest.exists(), "预检不建");
         plan(&from, &dest, local.path()).unwrap();
         assert!(dest.is_dir());

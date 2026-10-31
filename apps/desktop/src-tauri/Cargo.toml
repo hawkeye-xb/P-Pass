@@ -35,15 +35,16 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # #1120：不开 `devtools` feature——正式包没有开发者工具；debug 构建 Tauri 默认自带。
-tauri = { version = "2", features = ["tray-icon", "image-png", "protocol-asset"] }
+tauri = { version = "2.12", features = ["tray-icon", "image-png", "protocol-asset"] }
 tauri-plugin-dialog = "2"
 # UPD-01: desktop self-update via the official updater plugin (manifest
 # served as release asset; pubkey in tauri.conf.json, minisign format)
-tauri-plugin-updater = "2"
+# #1267：≥ 2.14 才用 zip 9（2.13 及以下是 zip 4.x，有 GHSA-m665-v7pm-7grj）。
+tauri-plugin-updater = "2.14"
 tauri-plugin-opener = "2"
 # DESK-68 (#996)：Tauri 起来之前弹「请正式安装」的系统对话框。不是新依赖：
 # tauri-plugin-dialog 已带进来，版本与特性照抄它（gtk3 等后端由它统一开）。
-rfd = { version = "0.16", default-features = false, features = ["common-controls-v6"] }
+rfd = { version = "0.17", default-features = false, features = ["common-controls-v6"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 interprocess = "2"

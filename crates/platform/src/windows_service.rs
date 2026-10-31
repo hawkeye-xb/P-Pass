@@ -55,6 +55,8 @@ pub struct ServiceStatus {
     pub state: ServiceState,
     /// `state == Running` 时的进程号；别的状态是 `None`。
     pub pid: Option<u32>,
+    /// SCM 记下的 Win32 退出码（F7：正常停止 0，崩溃 1067）。
+    pub exit_code: u32,
 }
 
 fn failed(action: &'static str, detail: impl Into<String>) -> PlatformError {
@@ -147,7 +149,11 @@ pub fn status(name: &str) -> Result<Option<ServiceStatus>> {
         })?;
     let state = ServiceState::from_raw(raw.dwCurrentState.0);
     let pid = matches!(state, ServiceState::Running).then_some(raw.dwProcessId);
-    Ok(Some(ServiceStatus { state, pid }))
+    Ok(Some(ServiceStatus {
+        state,
+        pid,
+        exit_code: raw.dwWin32ExitCode,
+    }))
 }
 
 /// 服务的 ImagePath（注册时写的可执行文件路径），读不到给 `None`。

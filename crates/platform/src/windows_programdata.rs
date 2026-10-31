@@ -5,7 +5,7 @@
 //! 的任何程序——包括恶意程序——都读不到也改不了。
 //!
 //! 这里只做「目录 / 文件」这一层，不决定服务账户是谁：服务 SID 由调用方给（服务化那张
-//! 卡把它算出来）。同理，文件内容不加密、原子替换、`Ok(None)` 的严格语义都在这一层。
+//! 卡把它算出来）。同理，身份私钥与配对白名单用 DPAPI 加密（[`ProgramDataStore::sealed`]），原子替换、`Ok(None)` 的严格语义都在这一层。
 //!
 //! 失败一律拒绝：`verify` 不通过时 daemon 必须拒绝启动，不回退到用户目录、不重建目录。
 
@@ -18,6 +18,9 @@ use windows_sys::Win32::Security::Authorization::{
     ConvertSidToStringSidW, ConvertStringSidToSidW, GetNamedSecurityInfoW, SetEntriesInAclW,
     SetNamedSecurityInfoW, EXPLICIT_ACCESS_W, GRANT_ACCESS, NO_MULTIPLE_TRUSTEE, SET_ACCESS,
     SE_FILE_OBJECT, TRUSTEE_IS_SID, TRUSTEE_IS_USER, TRUSTEE_W,
+};
+use windows_sys::Win32::Security::Cryptography::{
+    CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
 };
 use windows_sys::Win32::Security::{
     EqualSid, GetAce, GetSecurityDescriptorControl, ACL, CONTAINER_INHERIT_ACE,
@@ -359,16 +362,52 @@ impl ProgramDataDir {
     }
 }
 
-/// 用显式访问表覆盖 DACL，并打上「受保护」标记（不再继承）。
+/// 用显式访问表覆盖 DACL，并打上「受保护」标记（不再继承）。每个 SID 完全控制。
 fn set_private_dacl(path: &Path, sids: &[&str]) -> Result<()> {
-    let mut allocated: Vec<PSID> = Vec::with_capacity(sids.len());
-    let result = (|| -> Result<()> {
-        let mut entries = Vec::with_capacity(sids.len());
-        for sid_text in sids {
+    let grants: Vec<(&str, u32)> = sids.iter().map(|s| (*s, FILE_ALL_ACCESS)).collect();
+    set_private_dacl_with(path, &grants)
+}
+
+/// 同 [`set_private_dacl`]，每个 SID 各给一个访问掩码。ACE 都可被子目录与文件继承；
+/// 系统随即把新的可继承 ACE 传播到已有子项（子项自己的显式 ACE 不动）。
+pub(crate) fn set_private_dacl_with(path: &Path, grants: &[(&str, u32)]) -> Result<()> {
+    with_explicit_acl(grants, |acl| {
+        let w = wide(path);
+        // SAFETY: acl 是刚建好的合法 ACL；只改 DACL 并设受保护位。
+        let rc = unsafe {
+            SetNamedSecurityInfoW(
+                w.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                acl,
+                ptr::null(),
+            )
+        };
+        if rc != ERROR_SUCCESS {
+            return Err(io_err(
+                "SetNamedSecurityInfoW",
+                std::io::Error::from_raw_os_error(rc as i32),
+            ));
+        }
+        Ok(())
+    })
+}
+
+/// 按访问表建一份只含显式 ACE（全部可继承）的 ACL，交给 `f` 使用，用完释放。
+pub(crate) fn with_explicit_acl<T>(
+    grants: &[(&str, u32)],
+    f: impl FnOnce(*mut ACL) -> Result<T>,
+) -> Result<T> {
+    let mut allocated: Vec<PSID> = Vec::with_capacity(grants.len());
+    let result = (|| -> Result<T> {
+        let mut entries = Vec::with_capacity(grants.len());
+        for (sid_text, mask) in grants {
             let sid = sid_from_string(sid_text)?;
             allocated.push(sid);
             entries.push(EXPLICIT_ACCESS_W {
-                grfAccessPermissions: FILE_ALL_ACCESS,
+                grfAccessPermissions: *mask,
                 grfAccessMode: SET_ACCESS,
                 grfInheritance: windows_sys::Win32::Security::SUB_CONTAINERS_AND_OBJECTS_INHERIT,
                 Trustee: TRUSTEE_W {
@@ -397,27 +436,10 @@ fn set_private_dacl(path: &Path, sids: &[&str]) -> Result<()> {
                 std::io::Error::from_raw_os_error(rc as i32),
             ));
         }
-        let w = wide(path);
-        // SAFETY: acl 是刚建好的合法 ACL；只改 DACL 并设受保护位。
-        let rc = unsafe {
-            SetNamedSecurityInfoW(
-                w.as_ptr(),
-                SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                ptr::null_mut(),
-                ptr::null_mut(),
-                acl,
-                ptr::null(),
-            )
-        };
+        let out = f(acl);
+        // SAFETY: acl 由 SetEntriesInAclW 分配。
         unsafe { LocalFree(acl.cast()) };
-        if rc != ERROR_SUCCESS {
-            return Err(io_err(
-                "SetNamedSecurityInfoW",
-                std::io::Error::from_raw_os_error(rc as i32),
-            ));
-        }
-        Ok(())
+        out
     })();
     unsafe {
         for sid in allocated {
@@ -510,13 +532,81 @@ pub fn grant_users_read(file: &Path) -> Result<()> {
 pub struct ProgramDataStore {
     path: PathBuf,
     what: &'static str,
+    sealed: bool,
+}
+
+/// 加密存放的文件头：之后是 DPAPI 密文。没有这个头的内容一律当成旧版明文。
+const SEALED_MAGIC: &[u8; 8] = b"PPDPAPI1";
+
+/// `CryptProtectData` / `CryptUnprotectData` 的薄封装：当前账户作用域（不带
+/// `CRYPTPROTECT_LOCAL_MACHINE`），不弹界面。`entropy` 把密文绑在用途上，
+/// 身份私钥的密文换名放进配对文件解不开。
+fn dpapi(protect: bool, input: &[u8], entropy: &[u8]) -> std::io::Result<Vec<u8>> {
+    let len = |b: &[u8]| {
+        u32::try_from(b.len())
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "内容过大"))
+    };
+    let data_in = CRYPT_INTEGER_BLOB {
+        cbData: len(input)?,
+        pbData: input.as_ptr().cast_mut(),
+    };
+    let ent = CRYPT_INTEGER_BLOB {
+        cbData: len(entropy)?,
+        pbData: entropy.as_ptr().cast_mut(),
+    };
+    let mut out = CRYPT_INTEGER_BLOB {
+        cbData: 0,
+        pbData: ptr::null_mut(),
+    };
+    // SAFETY: 三个 blob 都指向存活的缓冲区；输出由系统分配，下面用 LocalFree 释放。
+    let ok = unsafe {
+        if protect {
+            CryptProtectData(
+                &data_in,
+                ptr::null(),
+                &ent,
+                ptr::null(),
+                ptr::null(),
+                CRYPTPROTECT_UI_FORBIDDEN,
+                &mut out,
+            )
+        } else {
+            CryptUnprotectData(
+                &data_in,
+                ptr::null_mut(),
+                &ent,
+                ptr::null(),
+                ptr::null(),
+                CRYPTPROTECT_UI_FORBIDDEN,
+                &mut out,
+            )
+        }
+    };
+    if ok == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: 成功时 pbData/cbData 描述系统分配的一块内存。
+    let bytes = unsafe { std::slice::from_raw_parts(out.pbData, out.cbData as usize) }.to_vec();
+    unsafe { LocalFree(out.pbData.cast()) };
+    Ok(bytes)
 }
 
 impl ProgramDataStore {
+    /// 明文存放（`library.json`、主人记录：不是机密）。
     pub fn new(path: impl Into<PathBuf>, what: &'static str) -> Self {
         Self {
             path: path.into(),
             what,
+            sealed: false,
+        }
+    }
+
+    /// 加密存放（身份私钥、配对白名单）：写入前用 DPAPI 加密，读出后解密。
+    /// 读到没有文件头的旧版明文时删掉它、按「不存在」处理；有文件头却解不开则 `Err`。
+    pub fn sealed(path: impl Into<PathBuf>, what: &'static str) -> Self {
+        Self {
+            sealed: true,
+            ..Self::new(path, what)
         }
     }
 
@@ -545,16 +635,48 @@ impl ProgramDataStore {
 
     /// 「读不到」与「确实没有」的分界：只有 `NotFound` 是 `Ok(None)`。
     fn read_impl(&self) -> Result<Option<Vec<u8>>> {
-        match std::fs::read(&self.path) {
-            Ok(bytes) => Ok(Some(bytes)),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(e) => Err(io_err("read_programdata_blob", e)),
+        let bytes = match std::fs::read(&self.path) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(io_err("read_programdata_blob", e)),
+        };
+        if !self.sealed {
+            return Ok(Some(bytes));
         }
+        let Some(cipher) = bytes.strip_prefix(SEALED_MAGIC.as_slice()) else {
+            // 旧版明文：不迁移，删掉，由上层按全新状态处理。
+            std::fs::remove_file(&self.path).map_err(|e| io_err("remove_legacy_plaintext", e))?;
+            return Ok(None);
+        };
+        dpapi(false, cipher, self.what.as_bytes())
+            .map(Some)
+            .map_err(|e| {
+                failed(
+                    "unseal_programdata_blob",
+                    format!(
+                        "{}无法解密（{}）：{e}。若这份数据来自另一台电脑或已损坏：以管理员身份停止 P-Pass 服务，\
+                         删除 {} 下的 identity.key 与 pairings.json，再启动服务；之后按新设备生成身份，已配对的手机需要重新扫码配对",
+                        self.what,
+                        self.path.display(),
+                        self.path.parent().map(|p| p.display().to_string()).unwrap_or_default(),
+                    ),
+                )
+            })
     }
 
     /// 写临时文件 → 刷盘 → 原子替换。失败时删掉临时文件，不留半份正本。
     fn write_impl(&self, bytes: &[u8]) -> Result<()> {
         use std::io::Write as _;
+
+        let sealed;
+        let bytes = if self.sealed {
+            let cipher = dpapi(true, bytes, self.what.as_bytes())
+                .map_err(|e| io_err("seal_programdata_blob", e))?;
+            sealed = [SEALED_MAGIC.as_slice(), &cipher].concat();
+            &sealed[..]
+        } else {
+            bytes
+        };
 
         let tmp =
             self.path
@@ -951,5 +1073,90 @@ mod tests {
             .collect();
         assert_eq!(names, vec!["library.json".to_string()], "{names:?}");
         assert_eq!(store.read().unwrap().as_deref(), Some(b"bb".as_slice()));
+    }
+
+    const KEY: [u8; 32] = [0x5a; 32];
+
+    fn find(hay: &[u8], needle: &[u8]) -> bool {
+        hay.windows(needle.len()).any(|w| w == needle)
+    }
+
+    /// W-3：加密往返。写进去的和读出来的一致，重写、删除语义不变。
+    #[test]
+    fn w3_sealed_store_roundtrips() {
+        let d = tempdir();
+        let store = ProgramDataStore::sealed(d.path().join("identity.key"), "身份私钥");
+        assert!(store.read().expect("read missing").is_none());
+        store.write(&KEY).expect("write");
+        assert_eq!(store.read().expect("read").as_deref(), Some(KEY.as_slice()));
+        store.write(&[1u8; 32]).expect("rewrite");
+        assert_eq!(store.read().unwrap().as_deref(), Some([1u8; 32].as_slice()));
+        store.delete().expect("delete");
+        assert!(store.read().unwrap().is_none());
+    }
+
+    /// W-3：落盘内容里不出现私钥原文。
+    /// 反证：把 `write_impl` 里的加密去掉（直接写 bytes），这里变红。
+    #[test]
+    fn w3_sealed_file_does_not_contain_the_plaintext() {
+        let d = tempdir();
+        let path = d.path().join("identity.key");
+        ProgramDataStore::sealed(&path, "身份私钥")
+            .write(&KEY)
+            .expect("write");
+        let raw = std::fs::read(&path).unwrap();
+        assert!(raw.starts_with(SEALED_MAGIC));
+        assert!(!find(&raw, &KEY), "落盘内容不许含私钥原文");
+        // 明文存放的 library.json 不加密：对照，证明上面的断言在测加密本身。
+        let plain = d.path().join("library.json");
+        ProgramDataStore::new(&plain, "照片库位置")
+            .write(&KEY)
+            .unwrap();
+        assert!(find(&std::fs::read(&plain).unwrap(), &KEY));
+    }
+
+    /// W-3：密文被改动时读取是 `Err`，不是 `Ok(None)`（否则会被当成「没有身份」重新生成）。
+    /// 反证：把解密失败改成 `Ok(None)`，这里变红。
+    #[test]
+    fn w3_tampered_ciphertext_is_an_error_with_reset_instructions() {
+        let d = tempdir();
+        let path = d.path().join("identity.key");
+        let store = ProgramDataStore::sealed(&path, "身份私钥");
+        store.write(&KEY).unwrap();
+        let mut raw = std::fs::read(&path).unwrap();
+        let last = raw.len() - 1;
+        raw[last] ^= 0xff;
+        std::fs::write(&path, &raw).unwrap();
+        let err = store.read().expect_err("篡改必须 Err").to_string();
+        assert!(
+            err.contains("identity.key") && err.contains("重新扫码"),
+            "{err}"
+        );
+        assert!(path.exists(), "解不开时不许删文件");
+    }
+
+    /// W-3：密文绑定用途，身份私钥的密文换名放成配对文件解不开。
+    #[test]
+    fn w3_ciphertext_is_bound_to_its_purpose() {
+        let d = tempdir();
+        let a = d.path().join("identity.key");
+        let b = d.path().join("pairings.json");
+        ProgramDataStore::sealed(&a, "身份私钥")
+            .write(&KEY)
+            .unwrap();
+        std::fs::copy(&a, &b).unwrap();
+        assert!(ProgramDataStore::sealed(&b, "配对白名单").read().is_err());
+    }
+
+    /// W-3：旧版明文不读、不迁移：删掉，按「没有」处理。
+    /// 反证：把旧明文当成正常内容返回，这里变红。
+    #[test]
+    fn w3_legacy_plaintext_is_deleted_and_never_returned() {
+        let d = tempdir();
+        let path = d.path().join("identity.key");
+        std::fs::write(&path, KEY).unwrap();
+        let store = ProgramDataStore::sealed(&path, "身份私钥");
+        assert!(store.read().expect("legacy").is_none());
+        assert!(!path.exists(), "旧明文必须删除");
     }
 }

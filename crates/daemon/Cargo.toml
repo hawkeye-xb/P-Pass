@@ -41,9 +41,9 @@ notify = "7"
 getrandom = "0.3"
 hex = "0.4"
 interprocess = { version = "2", features = ["tokio"] }
-zip = { version = "9.0.3", default-features = false, features = ["deflate"] }
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-# #1122：配对窗口内未配对对端的请求按设备限速（现成库，不自己写令牌桶）。
+# #1122：配对窗口内未配对对端共用一份请求额度（现成库，不自己写令牌桶）；#1269：已出示令牌的手机另有一份。
 governor = "0.10"
 # #1122：版本不符登记表等按设备增长的表有上限、按最近使用淘汰。
 lru = "0.18"

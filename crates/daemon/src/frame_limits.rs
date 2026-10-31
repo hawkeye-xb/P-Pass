@@ -1,4 +1,5 @@
-//! #1122：控制面请求帧上限与未配对对端限速。
+//! #1122：控制面请求帧上限与未配对对端限速。#1269：配对窗口里，已出示二维码令牌的手机
+//! 走单独的名额与额度，不和还没出示令牌的连接抢。
 //!
 //! 读帧前按对端的配对状态定上限（方法在帧里，读之前还不知道）：未配对（只可能
 //! 在配对窗口内进来）只给配对流程那几 KB；viewer 只能调小方法；member 才放到
@@ -6,8 +7,10 @@
 //! 才放宽，其余一律默认小上限。配合 transport 的增量读帧、读帧超时与全进程
 //! 在途字节预算，未认证对端无法让电脑分配大块内存，已认证对端也有上限。
 
+use std::collections::VecDeque;
 use std::num::NonZeroU32;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use proto::msgs::methods;
 use storage::{Pairing, Role};
@@ -64,18 +67,97 @@ pub fn unpaired_limiter() -> UnpairedLimiter {
     Arc::new(governor::RateLimiter::direct(quota))
 }
 
-/// 同时在线的未配对连接上限（全局）。配对时一次只有一两台手机在扫码。
+/// 同时在线的、还没出示令牌的未配对连接上限（全局）。配对时一次只有一两台手机在扫码。
 pub const UNPAIRED_CONN_MAX: usize = 8;
+
+/// #1269：还没出示令牌的连接，从连接建立起最多活这么久。手机每个请求单独建一条连接、
+/// 连上即发（扫码后 `hello` 紧接着 `pair.request`），用不到 5 秒；出示过令牌的那台手机
+/// 不受这个限制（见 [`TICKET_CONN_MAX`]）。
+pub const UNPROVEN_TTL: Duration = Duration::from_secs(5);
+
+/// #1269：已出示有效令牌（有自己的配对申请）的手机，单独的连接名额。它轮询 `pair.status`
+/// 时一次一条连接、用完即关；二维码同时只有一个、令牌一次性，持有申请的设备只有一两台。
+pub const TICKET_CONN_MAX: usize = 4;
+
+/// #1269：已出示令牌的手机单独的请求额度，与未配对对端的总额度同一个量，但不共用。
+pub fn ticket_limiter() -> UnpairedLimiter {
+    unpaired_limiter()
+}
 
 /// #1149：在场的未配对连接多久复核一次「配对窗口还开着吗」。窗口关闭（二维码关闭或
 /// 令牌过期）到连接被收回，最长就是这个间隔，要求在 1 秒内。
 pub const WINDOW_RECHECK: std::time::Duration = std::time::Duration::from_millis(250);
 
-/// 未配对连接的名额池：连接建立时取一个名额、连接结束时归还；没有名额就直接断开。
-pub type UnpairedConns = Arc<tokio::sync::Semaphore>;
+/// #1269：已出示令牌的手机的名额池：连接建立时取一个名额、连接结束时归还；没有名额就断开。
+pub type TicketConns = Arc<tokio::sync::Semaphore>;
 
-pub fn unpaired_conns() -> UnpairedConns {
-    Arc::new(tokio::sync::Semaphore::new(UNPAIRED_CONN_MAX))
+pub fn ticket_conns() -> TicketConns {
+    Arc::new(tokio::sync::Semaphore::new(TICKET_CONN_MAX))
+}
+
+/// #1269：还没出示令牌的连接的名额池（全局 [`UNPAIRED_CONN_MAX`] 个）。满了不拒新来的，
+/// 而是淘汰最早来的那条（同 SSH `MaxStartups` 的思路：认证前的名额满了丢旧的）——
+/// 否则先占满名额的连接能把后来扫码的手机一直挡在外面。被淘汰的连接从
+/// [`UnprovenSlot::evicted`] 得知，由持有者断开。
+#[derive(Clone)]
+pub struct UnprovenConns(Arc<Mutex<UnprovenInner>>);
+
+struct UnprovenInner {
+    cap: usize,
+    next_id: u64,
+    /// 按到达先后排列。
+    live: VecDeque<(u64, tokio_util::sync::CancellationToken)>,
+}
+
+/// 一个名额；丢掉即归还。
+pub struct UnprovenSlot {
+    id: u64,
+    evicted: tokio_util::sync::CancellationToken,
+    pool: UnprovenConns,
+}
+
+impl UnprovenConns {
+    pub fn new(cap: usize) -> Self {
+        Self(Arc::new(Mutex::new(UnprovenInner {
+            cap,
+            next_id: 0,
+            live: VecDeque::new(),
+        })))
+    }
+
+    /// 取一个名额；满了先淘汰最早来的那条。
+    pub fn admit(&self) -> UnprovenSlot {
+        let mut inner = self.0.lock().expect("unproven conns lock");
+        while inner.live.len() >= inner.cap {
+            match inner.live.pop_front() {
+                Some((_, oldest)) => oldest.cancel(),
+                None => break,
+            }
+        }
+        let id = inner.next_id;
+        inner.next_id += 1;
+        let evicted = tokio_util::sync::CancellationToken::new();
+        inner.live.push_back((id, evicted.clone()));
+        UnprovenSlot {
+            id,
+            evicted,
+            pool: self.clone(),
+        }
+    }
+}
+
+impl UnprovenSlot {
+    /// 这个名额被后来的连接挤掉时触发。
+    pub fn evicted(&self) -> &tokio_util::sync::CancellationToken {
+        &self.evicted
+    }
+}
+
+impl Drop for UnprovenSlot {
+    fn drop(&mut self) {
+        let mut inner = self.pool.0.lock().expect("unproven conns lock");
+        inner.live.retain(|(id, _)| *id != self.id);
+    }
 }
 
 #[cfg(test)]
@@ -139,21 +221,27 @@ mod tests {
         );
     }
 
-    /// 名额用完后新的未配对连接拿不到名额；旧连接结束归还后又能进。
+    /// #1269：名额满了，新来的照样进，挤掉最早来的那条；同时在场的始终不超过上限，
+    /// 归还的名额不再占位。反证：满了改成拒绝新来的，第一条断言变红。
     #[test]
-    fn unpaired_connection_slots_are_capped_and_returned() {
-        let pool = unpaired_conns();
-        let held: Vec<_> = (0..UNPAIRED_CONN_MAX)
-            .map(|_| Arc::clone(&pool).try_acquire_owned().expect("slot"))
-            .collect();
-        assert!(
-            Arc::clone(&pool).try_acquire_owned().is_err(),
-            "第 9 个必须被拒"
-        );
+    fn full_unproven_pool_evicts_the_oldest_instead_of_refusing() {
+        let pool = UnprovenConns::new(UNPAIRED_CONN_MAX);
+        let mut held: Vec<_> = (0..UNPAIRED_CONN_MAX).map(|_| pool.admit()).collect();
+        let newcomer = pool.admit();
+        assert!(held[0].evicted().is_cancelled(), "最早来的被挤掉");
+        assert!(held[1..].iter().all(|s| !s.evicted().is_cancelled()));
+        assert!(!newcomer.evicted().is_cancelled());
+
+        // 被挤掉的那条断开（丢掉名额）；在场的仍是上限个，下一个新来的挤掉第二早的。
+        held.remove(0);
+        let next = pool.admit();
+        assert!(held[0].evicted().is_cancelled());
+        assert!(!next.evicted().is_cancelled());
+        assert_eq!(pool.0.lock().unwrap().live.len(), UNPAIRED_CONN_MAX);
+
+        // 归还后不再占位：空出来的名额直接可用，不挤任何人。
         drop(held);
-        assert!(
-            Arc::clone(&pool).try_acquire_owned().is_ok(),
-            "归还后可再进"
-        );
+        let fresh = pool.admit();
+        assert!(!newcomer.evicted().is_cancelled() && !fresh.evicted().is_cancelled());
     }
 }

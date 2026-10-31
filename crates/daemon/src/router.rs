@@ -173,12 +173,56 @@ pub struct Router {
     now: std::sync::Arc<dyn Fn() -> i64 + Send + Sync>,
     /// #1119：手机断开时关掉与它的全部连接。未注入 = 不关（测试 / 单组件构造）。
     peer_closer: Option<crate::unpair::PeerCloser>,
-    /// #1122：没有配对记录的对端（只可能在配对窗口内进来）按设备限速。
+    /// #1122：没有配对记录、也还没出示令牌的对端（只可能在配对窗口内进来）共用一份请求
+    /// 额度与 [`crate::frame_limits::UNPAIRED_CONN_MAX`] 个名额（满了淘汰最早来的，#1269）。
     unpaired_limiter: crate::frame_limits::UnpairedLimiter,
-    unpaired_conns: crate::frame_limits::UnpairedConns,
+    unproven_conns: crate::frame_limits::UnprovenConns,
+    /// #1269：还没出示令牌的连接的存活期（[`crate::frame_limits::UNPROVEN_TTL`]）。
+    unproven_ttl: std::time::Duration,
+    /// #1269：已出示令牌（有自己的配对申请）的手机单独的额度与名额，不和上面那份共用。
+    ticket_limiter: crate::frame_limits::UnpairedLimiter,
+    ticket_conns: crate::frame_limits::TicketConns,
     /// #1149：配对窗口关闭时收回在场的未配对连接。只在装了准入判据的 daemon 里有意义
     /// （没有判据 = 没有「窗口」这回事，测试 / 单组件构造不开）。
     enforce_window: bool,
+}
+
+/// #1269：一条连接在配对窗口里属于哪一类（见 [`Router::classify`]）。
+enum ConnClass {
+    /// 有配对记录：不占配对窗口的名额。
+    Paired,
+    /// 已出示有效令牌（有自己的配对申请）：单独的名额，随连接结束（丢掉）归还。
+    Ticket {
+        _permit: tokio::sync::OwnedSemaphorePermit,
+    },
+    /// 还没出示令牌：可被后来的连接挤掉，且只活 `unproven_ttl`。
+    Unproven(crate::frame_limits::UnprovenSlot),
+}
+
+impl ConnClass {
+    /// 名额被挤掉时完成；其余类别永不完成。
+    async fn evicted(&self) {
+        match self {
+            ConnClass::Unproven(slot) => slot.evicted().cancelled().await,
+            _ => std::future::pending().await,
+        }
+    }
+
+    /// 还没出示令牌的连接到了存活期时完成；其余类别永不完成。
+    async fn expired(&self, deadline: tokio::time::Instant) {
+        match self {
+            ConnClass::Unproven(_) => tokio::time::sleep_until(deadline).await,
+            _ => std::future::pending().await,
+        }
+    }
+}
+
+/// 一条流服务完之后，这条连接还要不要继续。
+#[derive(Debug, PartialEq, Eq)]
+enum StreamEnd {
+    Next,
+    /// #1269：`pair.request` 的令牌不对——回复送达后断开整条连接。
+    CloseConnection,
 }
 
 impl Router {
@@ -196,7 +240,12 @@ impl Router {
             now: std::sync::Arc::new(unix_ms_now),
             peer_closer: None,
             unpaired_limiter: crate::frame_limits::unpaired_limiter(),
-            unpaired_conns: crate::frame_limits::unpaired_conns(),
+            unproven_conns: crate::frame_limits::UnprovenConns::new(
+                crate::frame_limits::UNPAIRED_CONN_MAX,
+            ),
+            unproven_ttl: crate::frame_limits::UNPROVEN_TTL,
+            ticket_limiter: crate::frame_limits::ticket_limiter(),
+            ticket_conns: crate::frame_limits::ticket_conns(),
             enforce_window: false,
         }
     }
@@ -205,6 +254,12 @@ impl Router {
     /// 与 `transport.set_admission(admission::predicate(..))` 配套启用。
     pub fn with_window_enforced(mut self) -> Self {
         self.enforce_window = true;
+        self
+    }
+
+    /// #1269：改还没出示令牌的连接的存活期（测试用；生产是 [`crate::frame_limits::UNPROVEN_TTL`]）。
+    pub fn with_unproven_ttl(mut self, ttl: std::time::Duration) -> Self {
+        self.unproven_ttl = ttl;
         self
     }
 
@@ -299,41 +354,47 @@ impl Router {
     /// one request/response exchange (MVP framing).
     pub async fn serve_conn(&self, conn: Incoming) {
         let peer = conn.peer();
-        // #1122：未配对的连接占一个全局名额，连接结束（离开本函数）时归还；名额满了
-        // 直接断开，不读任何流。已配对设备不占名额。
-        let _slot = if self.db.active_pairing(&peer.0).is_none() {
-            match Arc::clone(&self.unpaired_conns).try_acquire_owned() {
-                Ok(slot) => Some(slot),
-                Err(_) => return,
-            }
-        } else {
-            None
+        let Some(mut class) = self.classify(peer) else {
+            return; // 已出示令牌那一类的名额满了：断开，不读任何流
         };
+        // #1269：还没出示令牌的连接，从建立起只活 `unproven_ttl`。
+        let deadline = tokio::time::Instant::now() + self.unproven_ttl;
         // #1149：未配对的连接只在配对窗口内有意义。窗口关闭（二维码关闭或令牌过期）后，
         // 这条连接既占名额又没有用处，复核到就主动关掉；它自己的配对申请还没结束时
         // （`admits` 仍为真）、或这期间已经配上对（有了配对记录）则不动。
-        let mut watching = _slot.is_some() && self.enforce_window;
         let mut tick = tokio::time::interval(crate::frame_limits::WINDOW_RECHECK);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
-            let accepted = loop {
-                if !watching {
-                    break conn.accept_bi().await;
+            let watching = !matches!(class, ConnClass::Paired) && self.enforce_window;
+            let accepted = tokio::select! {
+                r = conn.accept_bi() => r,
+                _ = tick.tick(), if watching => {
+                    if self.db.active_pairing(&peer.0).is_some() {
+                        class = ConnClass::Paired;
+                    } else if self
+                        .pairing
+                        .as_ref()
+                        .is_some_and(|p| !p.admits(peer, (self.now)()))
+                    {
+                        conn.close_not_paired();
+                        return;
+                    }
+                    continue;
                 }
-                tokio::select! {
-                    r = conn.accept_bi() => break r,
-                    _ = tick.tick() => {
-                        if self.db.active_pairing(&peer.0).is_some() {
-                            watching = false;
-                        } else if self
-                            .pairing
-                            .as_ref()
-                            .is_some_and(|p| !p.admits(peer, (self.now)()))
-                        {
+                // #1269：名额被后来的连接挤掉，或存活期到了还没出示令牌：断开。
+                _ = class.evicted() => {
+                    conn.close_not_paired();
+                    return;
+                }
+                _ = class.expired(deadline) => {
+                    match self.promote(peer, class, true) {
+                        Some(promoted) => class = promoted,
+                        None => {
                             conn.close_not_paired();
                             return;
                         }
                     }
+                    continue;
                 }
             };
             let Ok(mut stream) = accepted else {
@@ -342,25 +403,85 @@ impl Router {
             let router = self.clone();
             // Streams are independent; serve each to completion in turn.
             // (Parallel streams per connection can land later if a card
-            // needs them — the protocol allows it.)
-            if !router.serve_stream(peer, &mut stream).await {
-                // The rejected stream is terminal, but the connection stays
-                // reusable. Every later stream enters authz again, so a
-                // revoked peer remains denied until an owner re-pairs it.
-                continue;
+            // needs them — the protocol allows it.) A rejected stream does
+            // not end the connection: every later stream enters authz again,
+            // so a revoked peer remains denied until an owner re-pairs it.
+            if router.serve_stream(peer, &mut stream).await == StreamEnd::CloseConnection {
+                conn.close_not_paired();
+                return;
+            }
+            // #1269：这条流出示了有效令牌（有了配对申请），或配上了对：换到对应那一类，
+            // 不再占还没出示令牌的名额、不再受存活期限制。
+            if matches!(class, ConnClass::Unproven(_)) {
+                match self.promote(peer, class, false) {
+                    Some(promoted) => class = promoted,
+                    None => {
+                        conn.close_not_paired();
+                        return;
+                    }
+                }
             }
         }
     }
 
+    /// #1269：连接按对端身份分三类：有配对记录的；已出示有效令牌（有自己的配对申请）的，
+    /// 走单独的名额；其余还没出示令牌的，占一个可被挤掉的名额。`None` = 第二类名额满了。
+    fn classify(&self, peer: transport::NodeId) -> Option<ConnClass> {
+        if self.db.active_pairing(&peer.0).is_some() {
+            return Some(ConnClass::Paired);
+        }
+        if self.holds_ticket(peer) {
+            return Arc::clone(&self.ticket_conns)
+                .try_acquire_owned()
+                .ok()
+                .map(|permit| ConnClass::Ticket { _permit: permit });
+        }
+        Some(ConnClass::Unproven(self.unproven_conns.admit()))
+    }
+
+    /// #1269：还没出示令牌的连接重新归类：已配对或已有配对申请就换过去（释放原名额）；
+    /// 都不是时，存活期没到就保持原样，到了就断开（`None`）。第二类名额满了也是 `None`。
+    fn promote(
+        &self,
+        peer: transport::NodeId,
+        class: ConnClass,
+        expired: bool,
+    ) -> Option<ConnClass> {
+        let ConnClass::Unproven(slot) = class else {
+            return Some(class);
+        };
+        if self.db.active_pairing(&peer.0).is_some() {
+            return Some(ConnClass::Paired);
+        }
+        if self.holds_ticket(peer) {
+            return Arc::clone(&self.ticket_conns)
+                .try_acquire_owned()
+                .ok()
+                .map(|permit| ConnClass::Ticket { _permit: permit });
+        }
+        (!expired).then_some(ConnClass::Unproven(slot))
+    }
+
     /// One request/response on one stream. A rejected stream does not carry
     /// on; the caller may accept another stream, which must pass authz again.
-    async fn serve_stream(&self, peer: transport::NodeId, stream: &mut BiStream) -> bool {
+    async fn serve_stream(&self, peer: transport::NodeId, stream: &mut BiStream) -> StreamEnd {
         // #1117：授权只读配对记录的内存副本，不查库。#1122：读帧之前就用它定上限、
-        // 给未配对的对端限速——超速的流一个字节都不读。
+        // 给未配对的对端限速。
+        // #1269：已出示令牌的手机走自己那份额度，超了一个字节都不读。还没出示令牌的对端共用
+        // 总额度；总额度被打满时，帧照样在配对上限（几 KB）和读帧超时内读出来，但只放行带着
+        // 有效令牌的 `pair.request`——令牌是手机手里唯一能和别人区分开的东西，越早看它越早
+        // 分流（同 WireGuard 的 mac1：先核对对方知道的秘密，再花状态）。
         let pairing = self.db.active_pairing(&peer.0);
-        if pairing.is_none() && self.unpaired_limiter.check().is_err() {
-            return false;
-        }
+        let token_only = match &pairing {
+            Some(_) => false,
+            None if self.holds_ticket(peer) => {
+                if self.ticket_limiter.check().is_err() {
+                    return StreamEnd::Next;
+                }
+                false
+            }
+            None => self.unpaired_limiter.check().is_err(),
+        };
         let cap = crate::frame_limits::pre_read_cap(pairing.as_ref());
         let (req, frame_len) = match stream.recv_frame_max(cap).await {
             Ok(Some(frame)) => match proto::codec::decode::<Req>(&frame) {
@@ -368,22 +489,25 @@ impl Router {
                 Err(_) => {
                     let resp = Resp::err(String::new(), RespError::new(Reason::BadRequest));
                     let _ = self.send(stream, &resp).await;
-                    return false;
+                    return StreamEnd::Next;
                 }
             },
-            Ok(None) => return false, // clean finish
+            Ok(None) => return StreamEnd::Next, // clean finish
             Err(transport::TransportError::FrameTooLarge { .. }) => {
                 let resp = Resp::err(String::new(), RespError::new(Reason::BadRequest));
                 let _ = self.send(stream, &resp).await;
-                return false;
+                return StreamEnd::Next;
             }
-            Err(_) => return false, // broken stream or slow sender (#1122)
+            Err(_) => return StreamEnd::Next, // broken stream or slow sender (#1122)
         };
+        if token_only && !self.carries_open_token(&req) {
+            return StreamEnd::Next;
+        }
         // #1122：按方法核对——只有确实需要大消息的方法才放宽。
         if frame_len > crate::frame_limits::method_cap(&req.method) as usize + 4 {
             let resp = Resp::err(req.id.clone(), RespError::new(Reason::BadRequest));
             let _ = self.send(stream, &resp).await;
-            return false;
+            return StreamEnd::Next;
         }
 
         // #1070: version first — an incompatible peer is told to update and
@@ -391,7 +515,7 @@ impl Router {
         // phone probes every ~30 s).
         if let Err(error) = self.outdated.check(peer, &req) {
             let _ = self.send(stream, &Resp::err(req.id.clone(), error)).await;
-            return false;
+            return StreamEnd::Next;
         }
 
         match authz::check(pairing.as_ref(), &req.method) {
@@ -403,14 +527,26 @@ impl Router {
                 self.record_denial(peer, &req.method, &reason).await;
                 let resp = Resp::err(req.id.clone(), RespError::new(reason));
                 let _ = self.send(stream, &resp).await;
-                false // 关流 (§2.3: deny closes the connection)
+                StreamEnd::Next // 关流 (§2.3: deny closes the connection)
             }
             Decision::Allow => {
                 if req.method == methods::TIMELINE_SUBSCRIBE {
-                    return self.serve_subscription(peer, stream, &req).await;
+                    self.serve_subscription(peer, stream, &req).await;
+                    return StreamEnd::Next;
                 }
                 let resp = self.dispatch(peer, &req).await;
                 let _ = self.send(stream, &resp).await;
+                // #1269：没配对的连接拿错的令牌申请配对——让原因送达，再断开整条连接。
+                if pairing.is_none()
+                    && req.method == methods::PAIR_REQUEST
+                    && resp
+                        .error
+                        .as_ref()
+                        .is_some_and(|e| e.reason() == &Reason::PairTokenInvalid)
+                {
+                    let _ = tokio::time::timeout(UNPAIR_REPLY_GRACE, stream.delivered()).await;
+                    return StreamEnd::CloseConnection;
+                }
                 // #1119：手机自己断开、配对记录已删——先让「已断开」的回应送达
                 // （连接关闭会丢弃未送达的数据，最多等 2 秒），再关掉与它的全部
                 // 连接。电脑撤销走 IPC，不经过这里，删完立即关。
@@ -422,11 +558,29 @@ impl Router {
                             "#1119: device unpaired, closed {closed} connection(s) peer={peer:?}"
                         );
                     }
-                    return false;
                 }
-                true
+                StreamEnd::Next
             }
         }
+    }
+
+    /// #1269：这台设备已出示过有效令牌（有自己的配对申请）。
+    fn holds_ticket(&self, peer: transport::NodeId) -> bool {
+        self.pairing
+            .as_ref()
+            .is_some_and(|p| p.holds_ticket(peer, (self.now)()))
+    }
+
+    /// #1269：`req` 是带着有效、未用令牌的 `pair.request`。
+    fn carries_open_token(&self, req: &Req) -> bool {
+        if req.method != methods::PAIR_REQUEST {
+            return false;
+        }
+        let Some(pairing) = &self.pairing else {
+            return false;
+        };
+        serde_json::from_value::<proto::PairRequest>(req.params.clone())
+            .is_ok_and(|r| pairing.token_open(&r.token, (self.now)()))
     }
 
     /// `timeline.subscribe`（SYNC-03）：应答后连接不 `finish`，转入

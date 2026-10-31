@@ -33,7 +33,7 @@ use proto::{
     FlowSupersedeRequest, FlowTupleRef, Reason, SupersedeRefusal,
 };
 use storage::{Db, FlowGrant, FlowGrantState};
-use transport::{Blobs, ConnectionStatus, NodeId};
+use transport::{Blobs, ConnectionStatus, NodeId, PeerAddr};
 
 use crate::awake::AwakeHold;
 use crate::events::{EventBus, Throttle, DEFAULT_THROTTLE_WINDOW};
@@ -1230,7 +1230,7 @@ impl FlowDelivery {
         let item_started = std::time::Instant::now();
         let hash = array32(&grant.content_hash).expect("validated by checked_request");
         let provider = self.provider_for(grant)?;
-        self.note_provider_endpoint(peer, provider);
+        self.note_provider_endpoint(peer, provider.node_id());
 
         // The visible path is scoped to this exact strict item and cleared by
         // its guard on every terminal branch. Start as unknown before opening
@@ -1244,10 +1244,15 @@ impl FlowDelivery {
         let mut conn_path: &'static str = "unknown";
         let fetch_result = self
             .blobs
-            .fetch_from_observing_path_with_stall(provider, hash, self.fetch_byte_stall, |status| {
-                conn_path = status.as_str();
-                path_guard.set_path(status);
-            })
+            .fetch_from_observing_path_with_stall(
+                &provider,
+                hash,
+                self.fetch_byte_stall,
+                |status| {
+                    conn_path = status.as_str();
+                    path_guard.set_path(status);
+                },
+            )
             .await;
         let fetch_ms = fetch_started.elapsed().as_millis() as u64;
         if let Err(e) = fetch_result {
@@ -1382,7 +1387,7 @@ impl FlowDelivery {
         {
             return Ok(refused(SupersedeRefusal::PairingMismatch));
         }
-        let Ok((provider, ticket_hash)) = self.blobs.register_blob_ticket(&request.provider) else {
+        let Ok((provider, ticket_hash)) = Blobs::parse_blob_ticket(&request.provider) else {
             return Ok(refused(SupersedeRefusal::BadRequest));
         };
         // 提供方是手机的 blobs 端点（独立于控制面身份，与 flow.offer 一样不比对）；取到的每个字节都按
@@ -1417,7 +1422,7 @@ impl FlowDelivery {
         };
         let (size, pieces) = match self
             .blobs
-            .fetch_byte_ranges(provider, new, &plan.ranges, self.fetch_byte_stall)
+            .fetch_byte_ranges(&provider, new, &plan.ranges, self.fetch_byte_stall)
             .await
         {
             Ok(got) => got,
@@ -1738,14 +1743,19 @@ impl FlowDelivery {
     /// rechecked against the grant's content hash here and iroh-blobs verifies
     /// every byte against that hash, so the provider never decides what
     /// content lands and does not weaken the tuple gate.
-    fn provider_for(&self, grant: &FlowGrant) -> Result<NodeId, DeliveryError> {
-        let (provider, ticket_hash) = match self.blobs.register_blob_ticket(&grant.provider) {
+    ///
+    /// #1270: the address is only parsed. The fetch for this grant dials it
+    /// itself; it never enters the transport's shared address book, so a
+    /// device's report cannot change how this desktop reaches anyone else.
+    fn provider_for(&self, grant: &FlowGrant) -> Result<PeerAddr, DeliveryError> {
+        let (provider, ticket_hash) = match Blobs::parse_blob_ticket(&grant.provider) {
             Ok((provider, ticket_hash)) => (provider, Some(ticket_hash)),
             // Keep the existing Desktop-only fixture/address form valid while
             // Android's provider supplies the stronger self-contained ticket.
             Err(_) => (
-                self.blobs
-                    .register_peer(&grant.provider)
+                grant
+                    .provider
+                    .parse::<PeerAddr>()
                     .map_err(|e| DeliveryError::InvalidRequest(format!("provider: {e}")))?,
                 None,
             ),

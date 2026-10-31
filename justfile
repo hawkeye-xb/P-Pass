@@ -152,6 +152,11 @@ arch-check:
   @./tools/test-arch-check.sh
   @./tools/arch-check.sh
 
+# ci-rust.yml「fmt + actionlint」job 里的同一条：每个跑 cargo 的 CI job 都必须
+# 用 rust-toolchain.toml 锁定的版本（脚本自带反证）。
+toolchain-check:
+  @tools/check-rust-toolchain-ci.sh
+
 # Markdown tables in docs/ and cards/ must not be split by a stray blank line
 #
 # QA-07: 解释器不能硬写 `python3`。Windows 上 `python3` 常解析到 Microsoft Store
@@ -226,8 +231,29 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt lint lint-cross test arch-check md-check token-check shell-vars-check identity-check supply-chain-check
+ci: fmt toolchain-check lint lint-cross test arch-check md-check token-check shell-vars-check identity-check supply-chain-check mobile-static-check lockfile-check
   @echo "==> CI pipeline: all green ✅"
+
+# 两个 Rust workspace 的 Cargo.lock 都得和实际依赖一致（src-tauri 是独立 workspace，
+# 改了 crates/* 的依赖却没刷它的锁，本地编译会悄悄改锁、CI 不带 --locked 也不红）。
+lockfile-check:
+  cargo metadata --locked --format-version 1 > /dev/null
+  cargo metadata --locked --format-version 1 --manifest-path apps/desktop/src-tauri/Cargo.toml > /dev/null
+  @echo "ok: Cargo.lock（根 + src-tauri）与依赖一致"
+
+# ci-ios 里不需要模拟器的文字级门禁 + 手机端 i18n 副本，本地几秒跑完。
+# 为什么要这条：改了 assets/i18n 却没同步副本，本地 `ci` 全绿、要等远端 iOS lane 才红。
+mobile-static-check:
+  python3 tools/ios/gen-tokens.py --check
+  tools/ios/sync-i18n.sh --check
+  tools/ios/test-stamp-version.sh > /dev/null
+  tools/ios/check-testflight-signing.sh --self-test > /dev/null
+  tools/ios/check-testflight-signing.sh
+  python3 tools/ios/gen-strings.py --check
+  tools/ios/check-no-color-literals.sh --self-test > /dev/null
+  tools/ios/check-no-color-literals.sh
+  @for l in en zh; do cmp -s assets/i18n/$l.json apps/android/app/src/main/assets/i18n/$l.json || { echo "✗ apps/android/app/src/main/assets/i18n/$l.json 与 assets/i18n 不一致——从 assets/i18n 复制过去"; exit 1; }; done
+  @echo "ok: Android i18n 副本与 assets/i18n 逐字节一致"
 
 # QA-03 文档快车道：只跑文档域的门禁，不编 Rust。
 #
@@ -346,6 +372,7 @@ ios-screenshots *args:
 # （默认 iPhone 17，IOS_SIM_NAME 可改；不写死 runtime 版本）。本配方启动的模拟器跑完即关。
 ios-test:
   bash tools/ios/test.sh
+  bash tools/ios/privacy-manifest-local.sh
 
 # iOS 本地 SwiftPM 包（apps/ios/Packages/*/Package.swift）逐个在模拟器上测（#345）。没有包时直接通过。
 ios-test-packages:

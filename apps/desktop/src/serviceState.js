@@ -70,6 +70,9 @@ export function serviceStateActionKey(state) {
   return state === "stopped" ? "ui.service_stopped" : "ui.offline_action";
 }
 
+/** Rust `service_state::STOPPED_OUTSIDE`。 */
+export const STOPPED_OUTSIDE = "stopped outside";
+
 /**
  * DESK-63 contract, expressed as a function so the test documents it:
  * whatever the data layer did, the service state is unchanged here. The

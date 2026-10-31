@@ -28,8 +28,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -97,6 +102,9 @@ data class HomeNotice(
     val critical: Boolean = false,
     val dismissLabel: String? = null,
     val onDismiss: () -> Unit = {},
+    /** 「×」的无障碍标签；非空时卡片换成一行版式：左正文、右「动作」与 ×（C1）。 */
+    val closeLabel: String? = null,
+    val onClose: () -> Unit = {},
 )
 
 /**
@@ -119,6 +127,40 @@ fun topNotice(notices: List<HomeNotice>): HomeNotice? =
 fun NoticeCard(notice: HomeNotice) {
     val bg = if (notice.critical) PPColor.ActBg else PPColor.WaitingBg
     val bodyColor = if (notice.critical) PPColor.Act else PPColor.Ink60
+    if (notice.closeLabel != null) {
+        // C1（10-30 用户定版）：一行——左边正文、右边「开启」与 ×，都垂直居中；正文放不下只让正文折行。
+        Surface(color = bg, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(start = 16.dp, top = 2.dp, bottom = 2.dp),
+            ) {
+                Text(
+                    notice.body,
+                    fontSize = 13.5.sp, lineHeight = 20.sp, color = bodyColor,
+                    modifier = Modifier.weight(1f).padding(vertical = 10.dp),
+                )
+                if (notice.actionLabel != null) {
+                    Text(
+                        notice.actionLabel,
+                        fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
+                        textDecoration = TextDecoration.Underline,
+                        modifier = Modifier.clickable(onClick = notice.onAction)
+                            .padding(horizontal = 8.dp, vertical = 14.dp),
+                    )
+                }
+                // IconButton 自带 48dp 最小触控区（Material 规范），图标本身 20dp。
+                IconButton(onClick = notice.onClose) {
+                    Icon(
+                        Icons.Filled.Close,
+                        contentDescription = notice.closeLabel,
+                        tint = PPColor.Ink40,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+        }
+        return
+    }
     Surface(
         color = bg,
         shape = RoundedCornerShape(16.dp),

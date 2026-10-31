@@ -210,11 +210,9 @@ impl Endpoint {
                 }
             }
             Endpoint::Pipe(pipe) => {
-                let name = pipe
-                    .clone()
-                    .to_ns_name::<GenericNamespaced>()
-                    .map_err(|e| ui_err("ui.err_socket_name", &[("err", &e)]))?;
-                let conn = Stream::connect(name).map_err(|e| pipe_connect_error(&e))?;
+                // 只允许服务端识别壳的身份，不允许以壳的身份行事（见 platform::connect_resident_pipe）。
+                let conn =
+                    platform::connect_resident_pipe(pipe).map_err(|e| pipe_connect_error(&e))?;
                 match platform::verify_local_peer(&conn, &[platform::PeerRole::Daemon]) {
                     platform::PeerCheck::Verified(_) => Ok(conn),
                     platform::PeerCheck::Rejected(why) => Err(ui_err(

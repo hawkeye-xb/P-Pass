@@ -633,7 +633,7 @@ impl PlatformAdapter for WindowsAdapter {
     fn identity_key_home(&self) -> crate::IdentityKeyHome {
         match Self::service_root() {
             Some(root) => crate::IdentityKeyHome::SecureStore(Box::new(
-                crate::ProgramDataStore::new(root.join("identity.key"), "身份私钥"),
+                crate::ProgramDataStore::sealed(root.join("identity.key"), "身份私钥"),
             )),
             None => crate::IdentityKeyHome::DataDirFile,
         }
@@ -643,7 +643,7 @@ impl PlatformAdapter for WindowsAdapter {
     /// 非服务模式是 `None`（库本身即正本，维持现状）。
     fn pairing_store(&self) -> Option<Box<dyn crate::SecretBlobStore>> {
         let root = Self::service_root()?;
-        Some(Box::new(crate::ProgramDataStore::new(
+        Some(Box::new(crate::ProgramDataStore::sealed(
             root.join("pairings.json"),
             "配对白名单",
         )))
@@ -668,19 +668,19 @@ impl PlatformAdapter for WindowsAdapter {
         Ok(crate::Applied::Done)
     }
 
-    /// §5.3 / #1159：把照片库目录授权给服务账户。
+    /// §5.3 / #1159：照片库目录设为私有并授权给服务账户（首次设置与换位置同一入口）。
     ///
-    /// 只有 per-machine 安装（服务已注册）才需要：老的每用户计划任务跑在用户会话
-    /// 里，权限本就一致。服务账户的 SID 由服务名派生，`grant_modify_for_sid` 幂等
-    /// 且自己回读确认，所以这里不再重复核一遍。
+    /// 只有 per-machine 安装（服务已注册）才做：老的每用户计划任务跑在用户会话里，与用户
+    /// 同一主体。「主人」取本进程用户——调用方是主人身份下的窗口程序。设置函数自己回读
+    /// 真实 DACL 核对，这里不再重复核一遍。
     fn grant_library_dir(&self, dir: &Path) -> Result<crate::LibraryDirGrant> {
         use crate::windows_service;
         if !windows_service::is_installed(windows_service::SERVICE_NAME).unwrap_or(false) {
             return Ok(crate::LibraryDirGrant::NotApplicable);
         }
-        // #1167：首启默认位置（`图片\P-Pass Library`）这时往往还不存在。ACE 只能加在已有的
+        // #1167：首启默认位置（`图片\P-Pass Library`）这时往往还不存在。权限只能设在已有的
         // 目录上，服务账户又建不了主人用户目录里的文件夹（真机：向导报「拒绝访问 (os error 5)」）
-        // ——所以由主人先建好，再授权。
+        // ——所以由主人先建好，再设权限。
         if !dir.exists() {
             std::fs::create_dir_all(dir).map_err(|e| crate::PlatformError::Io {
                 action: "create_library_dir",
@@ -688,9 +688,10 @@ impl PlatformAdapter for WindowsAdapter {
             })?;
         }
         let account = format!(r"NT SERVICE\{}", windows_service::SERVICE_NAME);
-        let sid = crate::windows_programdata::account_sid_string(&account)?;
+        let service = crate::windows_programdata::account_sid_string(&account)?;
+        let owner = crate::windows_programdata::current_user_sid_string()?;
         Ok(
-            match crate::windows_photo_dir::grant_modify_for_sid(dir, &sid)? {
+            match crate::windows_photo_dir::make_private_for_service(dir, &service, &owner)? {
                 crate::windows_photo_dir::GrantOutcome::Done => crate::LibraryDirGrant::Granted,
                 crate::windows_photo_dir::GrantOutcome::SkippedNoAcl { file_system } => {
                     crate::LibraryDirGrant::SkippedNoAcl { file_system }
@@ -954,6 +955,16 @@ impl PlatformAdapter for WindowsAdapter {
         })
     }
 
+    /// 系统盘的 BitLocker / 设备加密状态：读资源管理器同源的卷属性
+    /// `System.Volume.BitLockerProtection`，不需要管理员权限。读不到一律 `Unknown`。
+    fn disk_encryption(&self) -> crate::DiskEncryption {
+        let drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".into());
+        match std::thread::spawn(move || bitlocker_protection(&format!("{drive}\\"))).join() {
+            Ok(Some(v)) => crate::bitlocker_verdict(v),
+            _ => crate::DiskEncryption::Unknown,
+        }
+    }
+
     /// DESK-58 (#875)：stderr 落在与 `daemon.log` 同目录的 `daemon.err`——
     /// `daemon.log` 是 tracing 的完整运行日志，这份只装 tracing 接不住的东西
     /// （文件日志之前的报错、`main` 返回的 `Err`、panic），尾行就是「为什么没
@@ -1103,6 +1114,37 @@ impl PlatformAdapter for WindowsAdapter {
 
 /// 服务 `P-Pass` 已注册（per-machine 安装）。查询失败按「没注册」——与改前
 /// `installer_marker_dir` 的口径一致。
+/// `System.Volume.BitLockerProtection` 的值。独立线程里自己初始化 COM。
+fn bitlocker_protection(root: &str) -> Option<u32> {
+    use windows::core::{GUID, HSTRING};
+    use windows::Win32::Foundation::PROPERTYKEY;
+    use windows::Win32::System::Com::StructuredStorage::PropVariantToUInt32;
+    use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
+    use windows::Win32::UI::Shell::PropertiesSystem::{
+        IPropertyStore, SHGetPropertyStoreFromParsingName, GPS_DEFAULT,
+    };
+
+    // 实机用 PSGetPropertyKeyFromName("System.Volume.BitLockerProtection") 取得。
+    const KEY: PROPERTYKEY = PROPERTYKEY {
+        fmtid: GUID::from_u128(0x2d15a9a1_a556_4189_91ad_027458f11a07),
+        pid: 1717,
+    };
+    // SAFETY: 本线程内成对 CoInitializeEx / CoUninitialize；属性仓与变量都在线程内用完即放。
+    unsafe {
+        let inited = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
+        let value = (|| -> windows::core::Result<u32> {
+            let store: IPropertyStore =
+                SHGetPropertyStoreFromParsingName(&HSTRING::from(root), None, GPS_DEFAULT)?;
+            PropVariantToUInt32(&store.GetValue(&KEY)?)
+        })()
+        .ok();
+        if inited {
+            CoUninitialize();
+        }
+        value
+    }
+}
+
 fn service_registered() -> bool {
     crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME).unwrap_or(false)
 }
@@ -1305,6 +1347,19 @@ impl HostingAdapter for WindowsAdapter {
         } else {
             ServiceMode::ScheduledTask
         }
+    }
+
+    /// F7：服务停着、且是正常停止（SCM 记的退出码 0）。读不到状态按「不是」处理——
+    /// 宁可多自愈一次，也不要把崩溃当成用户停的。
+    fn resident_stopped_on_request(&self) -> bool {
+        use crate::windows_service;
+        matches!(
+            windows_service::status(windows_service::SERVICE_NAME),
+            Ok(Some(s)) if crate::service_stop_was_requested(
+                matches!(s.state, windows_service::ServiceState::Stopped),
+                s.exit_code,
+            )
+        )
     }
 
     /// 任务正在跑的实例的进程号。

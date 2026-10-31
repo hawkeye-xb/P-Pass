@@ -131,6 +131,23 @@ impl StartWindow {
 /// Pure failure-state rule (unit-tested). `within_grace` only matters before
 /// the first successful connection: a daemon that is still booting should
 /// read as `starting`, not `unreachable`.
+/// F7：`stopped` 状态的原因。用户在本 App 里停的（停止标记），还是在外面被正常停掉的
+/// （服务管理里「停止」/ `launchctl bootout`）——两者都不自愈，但界面说法不同：前者开机
+/// 也不起，后者只是现在停着。
+pub const STOPPED_BY_USER: &str = "user stopped";
+pub const STOPPED_OUTSIDE: &str = "stopped outside";
+
+/// 连接失败时 `stopped` 用哪个原因（纯函数，单测覆盖）。`None` = 不是被停的。
+pub fn stop_reason(user_stopped: bool, stopped_outside: bool) -> Option<&'static str> {
+    if user_stopped {
+        Some(STOPPED_BY_USER)
+    } else if stopped_outside {
+        Some(STOPPED_OUTSIDE)
+    } else {
+        None
+    }
+}
+
 pub fn failure_state(user_stopped: bool, had_connection: bool, within_grace: bool) -> ServiceState {
     if user_stopped {
         ServiceState::Stopped
@@ -152,6 +169,8 @@ pub struct ServiceStateEvent {
 
 struct StateData {
     state: ServiceState,
+    /// 最近一次状态变化的原因（快照里带给前端：`stopped` 要分是谁停的，F7）。
+    reason: Option<String>,
     since_ms: i64,
     last_failure_ms: Option<i64>,
     last_failure_reason: String,
@@ -178,6 +197,7 @@ impl ServiceStateManager {
             inner: Arc::new(ManagerInner {
                 state: Mutex::new(StateData {
                     state: initial,
+                    reason: None,
                     since_ms: now_ms(),
                     last_failure_ms: None,
                     last_failure_reason: String::new(),
@@ -208,15 +228,44 @@ impl ServiceStateManager {
         crate::distribution::ShellHome::current().user_stopped()
     }
 
+    /// F7：常驻服务在外面被正常停掉（不是崩溃）。见
+    /// [`platform::HostingAdapter::resident_stopped_on_request`]。
+    pub fn stopped_outside(&self) -> bool {
+        use platform::HostingAdapter as _;
+        platform::hosting().resident_stopped_on_request()
+    }
+
     pub fn next_after_failure(&self, had_connection: bool, within_grace: bool) -> ServiceState {
+        self.next_after_failure_with_reason(had_connection, within_grace)
+            .0
+    }
+
+    /// 同 [`Self::next_after_failure`]，并给出 `stopped` 的原因（F7）。
+    fn next_after_failure_with_reason(
+        &self,
+        had_connection: bool,
+        within_grace: bool,
+    ) -> (ServiceState, Option<&'static str>) {
         // A failure cannot invent a "starting" service on a machine that has
         // not finished the wizard, or on one the user stopped / never
         // installed. Those states only leave via an explicit start (or a
         // successful connection, which the caller handles separately).
         match self.current() {
-            ServiceState::NotConfigured | ServiceState::Stopped => self.current(),
-            _ => failure_state(self.user_stopped(), had_connection, within_grace),
+            ServiceState::NotConfigured | ServiceState::Stopped => (self.current(), None),
+            _ => {
+                let stop = stop_reason(self.user_stopped(), self.stopped_outside());
+                let next = failure_state(stop.is_some(), had_connection, within_grace);
+                (next, stop.filter(|_| next == ServiceState::Stopped))
+            }
         }
+    }
+
+    /// 连接失败 / 断开：按「这一次启动」判宽限期落状态；被停的（本 App 里或外面）落
+    /// `stopped` 并记下是谁停的，其余用错误原文作原因。
+    pub fn apply_failure(&self, app: &AppHandle, err: &str) {
+        let (had_connection, within_grace) = self.start_window_at(Instant::now());
+        let (next, stop) = self.next_after_failure_with_reason(had_connection, within_grace);
+        self.set(app, next, Some(stop.unwrap_or(err)));
     }
 
     /// 显式启动（向导「完成」、启动服务、重启、自愈）：置 Starting，并从此刻
@@ -237,12 +286,6 @@ impl ServiceStateManager {
         guard.start.connected = true;
     }
 
-    /// 连接失败/断开后该进哪个状态：按「这一次启动」判宽限期。
-    pub fn state_after_failure(&self) -> ServiceState {
-        let (had_connection, within_grace) = self.start_window_at(Instant::now());
-        self.next_after_failure(had_connection, within_grace)
-    }
-
     fn start_window_at(&self, now: Instant) -> (bool, bool) {
         let guard = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
         guard.start.at(now)
@@ -258,6 +301,7 @@ impl ServiceStateManager {
             }
             let previous = guard.state;
             guard.state = next;
+            guard.reason = reason.map(str::to_string);
             guard.since_ms = now_ms();
             previous
         };
@@ -276,6 +320,7 @@ impl ServiceStateManager {
         let guard = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
         json!({
             "state": guard.state,
+            "reason": guard.reason,
             "since_ms": guard.since_ms,
         })
     }
@@ -439,6 +484,19 @@ mod tests {
             failure_state(false, true, true),
             ServiceState::Unreachable,
             "a lost established connection is unreachable immediately"
+        );
+    }
+
+    /// F7：本 App 里停的优先（开机也不起）；外面正常停的单独一个原因；都不是就不是 stopped。
+    #[test]
+    fn stop_reason_tells_who_stopped_it() {
+        assert_eq!(stop_reason(true, true), Some(STOPPED_BY_USER));
+        assert_eq!(stop_reason(false, true), Some(STOPPED_OUTSIDE));
+        assert_eq!(stop_reason(false, false), None, "崩了不是被停的，要自愈");
+        assert_eq!(
+            failure_state(stop_reason(false, true).is_some(), true, false),
+            ServiceState::Stopped,
+            "外面正常停掉 ⇒ stopped，不是 unreachable（不触发自愈）"
         );
     }
 

@@ -551,8 +551,19 @@ impl PlatformAdapter for MacosAdapter {
     fn volume_stats(&self, path: &Path) -> Option<crate::VolumeStats> {
         crate::unix::volume_stats(path)
     }
+    fn disk_encryption(&self) -> crate::DiskEncryption {
+        match Command::new("/usr/bin/fdesetup").arg("status").output() {
+            Ok(out) if out.status.success() => {
+                crate::filevault_verdict(&String::from_utf8_lossy(&out.stdout))
+            }
+            _ => crate::DiskEncryption::Unknown,
+        }
+    }
     fn restrict_to_owner(&self, path: &Path) -> Result<crate::Applied> {
         crate::unix::restrict_to_owner(path)
+    }
+    fn grant_library_dir(&self, dir: &Path) -> Result<crate::LibraryDirGrant> {
+        make_library_dir_private(dir)
     }
     fn identity_key_home(&self) -> crate::IdentityKeyHome {
         crate::IdentityKeyHome::SecureStore(Box::new(crate::keychain::KeychainIdentityStore::new()))
@@ -864,6 +875,22 @@ impl HostingAdapter for MacosAdapter {
         })
     }
 
+    /// F7：登记文件还在、launchd 却没加载这个 job ⇒ 有人 `launchctl bootout` 了它（正常
+    /// 停止）。崩溃 / 被杀时 job 仍在 launchd 手里，由 KeepAlive 拉回，不算。
+    /// 窗口自己的「停止」会连登记一起撤（plist 不在），走用户停止标记那条，也不在这里。
+    fn resident_stopped_on_request(&self) -> bool {
+        if !Self::agent_plist_path().exists() {
+            return false;
+        }
+        let Ok(uid) = current_uid() else {
+            return false;
+        };
+        Command::new("launchctl")
+            .args(["print", &format!("gui/{uid}/{AGENT_LABEL}")])
+            .output()
+            .is_ok_and(|out| !out.status.success())
+    }
+
     fn resident_daemon_pid(&self) -> Option<u32> {
         let uid = current_uid().ok()?;
         let out = Command::new("launchctl")
@@ -953,6 +980,127 @@ type LaunchctlRun<'a> = dyn FnMut(&[String]) -> Result<(Option<i32>, String)> + 
 
 /// [`MacosAdapter::pause_resident_daemon`] 的判据，命令执行器可注入（单测不跑真
 /// launchctl）。`run` 收参数、回 (退出码, stderr)。
+/// §5.3：照片库根目录设为 `0700`（只有主人能进）。目录不存在就先建出来——否则之后由
+/// daemon 按默认 umask 建，得到的是别人可读的 `0755`。设完回读核对。
+///
+/// 卷本身不保存权限（exFAT / FAT32，或「忽略此卷上的所有权」的外接盘）时，chmod 不生效也
+/// 不是错误：返回 [`crate::LibraryDirGrant::SkippedNoAcl`]，不阻断、不提示（方案 §2.2）。
+pub(crate) fn make_library_dir_private(dir: &Path) -> Result<crate::LibraryDirGrant> {
+    use std::os::unix::fs::PermissionsExt as _;
+    let io = |action: &'static str| move |source| PlatformError::Io { action, source };
+    if !dir.exists() {
+        std::fs::create_dir_all(dir).map_err(io("create_library_dir"))?;
+    }
+    if !std::fs::metadata(dir)
+        .map_err(io("stat_library_dir"))?
+        .is_dir()
+    {
+        return Err(PlatformError::Failed {
+            action: "grant_library_dir",
+            detail: "选的不是目录".into(),
+        });
+    }
+    let set = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+    let mode = std::fs::metadata(dir)
+        .map_err(io("stat_library_dir"))?
+        .permissions()
+        .mode()
+        & 0o777;
+    if set.is_ok() && mode == 0o700 {
+        return Ok(crate::LibraryDirGrant::Granted);
+    }
+    if let Some(file_system) = volume_without_permissions(dir) {
+        return Ok(crate::LibraryDirGrant::SkippedNoAcl { file_system });
+    }
+    match set {
+        Err(source) => Err(PlatformError::Io {
+            action: "chmod_library_dir",
+            source,
+        }),
+        Ok(()) => Err(PlatformError::Failed {
+            action: "grant_library_dir",
+            detail: format!("设置后权限是 {mode:o}，应为 700"),
+        }),
+    }
+}
+
+/// 卷不保存 unix 权限时返回它的文件系统名（`exfat` / `msdos`，或带「忽略所有权」标记的卷）。
+fn volume_without_permissions(dir: &Path) -> Option<String> {
+    use std::os::unix::ffi::OsStrExt as _;
+    let c = std::ffi::CString::new(dir.as_os_str().as_bytes()).ok()?;
+    let mut st: libc::statfs = unsafe { std::mem::zeroed() };
+    // SAFETY: c 是 NUL 结尾的路径；st 是零初始化的出参。
+    if unsafe { libc::statfs(c.as_ptr(), &mut st) } != 0 {
+        return None;
+    }
+    // SAFETY: f_fstypename 是内核写好的 NUL 结尾字符串。
+    let name = unsafe { std::ffi::CStr::from_ptr(st.f_fstypename.as_ptr()) }
+        .to_string_lossy()
+        .into_owned();
+    let no_perms = matches!(name.as_str(), "exfat" | "msdos")
+        || st.f_flags & (libc::MNT_IGNORE_OWNERSHIP as u32) != 0;
+    no_perms.then_some(name)
+}
+
+#[cfg(test)]
+mod library_dir_private_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    fn mode(p: &Path) -> u32 {
+        std::fs::metadata(p).unwrap().permissions().mode() & 0o777
+    }
+
+    /// 判据：库根目录设置后是 0700。反证：去掉 chmod（或改成 0755）⇒ 红。
+    #[test]
+    fn library_dir_private_mode_is_0700() {
+        let d = tempfile::tempdir().unwrap();
+        let lib = d.path().join("Photos");
+        std::fs::create_dir(&lib).unwrap();
+        std::fs::set_permissions(&lib, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(
+            MacosAdapter.grant_library_dir(&lib).expect("grant"),
+            crate::LibraryDirGrant::Granted
+        );
+        assert_eq!(mode(&lib), 0o700);
+        // 幂等。
+        assert_eq!(
+            MacosAdapter.grant_library_dir(&lib).expect("again"),
+            crate::LibraryDirGrant::Granted
+        );
+        assert_eq!(mode(&lib), 0o700);
+    }
+
+    /// 首启默认位置还不存在：建出来就是 0700，不留给 daemon 按 umask 建成 0755。
+    #[test]
+    fn library_dir_private_creates_missing_dir_as_0700() {
+        let d = tempfile::tempdir().unwrap();
+        let lib = d.path().join("Pictures").join("P-Pass Library");
+        assert_eq!(
+            MacosAdapter.grant_library_dir(&lib).expect("grant"),
+            crate::LibraryDirGrant::Granted
+        );
+        assert!(lib.is_dir());
+        assert_eq!(mode(&lib), 0o700);
+    }
+
+    /// 选的不是目录 ⇒ Err（调用方据此不把它交给 daemon）。
+    #[test]
+    fn library_dir_private_rejects_a_file() {
+        let d = tempfile::tempdir().unwrap();
+        let f = d.path().join("not-a-dir");
+        std::fs::write(&f, b"x").unwrap();
+        assert!(MacosAdapter.grant_library_dir(&f).is_err());
+    }
+
+    /// 本机系统盘（APFS）保存权限：不会误走「跳过」分支。
+    #[test]
+    fn library_dir_private_system_volume_keeps_permissions() {
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(volume_without_permissions(d.path()), None);
+    }
+}
+
 pub(crate) fn pause_resident_with(
     plist_exists: bool,
     uid: &str,

@@ -560,9 +560,9 @@ fn clearing_the_paired_desktop_cuts_it_off() {
         .unwrap();
     let (desktop_tp, desktop) = runtime.block_on(receiver_at(dir.path(), "desktop-store"));
     provider.set_allowed_peer(Some(desktop_tp.node_id()));
-    let (provider_id, _) = desktop.register_blob_ticket(&first_ticket).unwrap();
+    let (provider_addr, _) = Blobs::parse_blob_ticket(&first_ticket).unwrap();
     runtime
-        .block_on(desktop.fetch_from(provider_id, blake3_of(&first)))
+        .block_on(desktop.fetch_from_addr(&provider_addr, blake3_of(&first)))
         .unwrap();
 
     let _second_ticket = provider
@@ -572,13 +572,13 @@ fn clearing_the_paired_desktop_cuts_it_off() {
     runtime.block_on(async {
         assert!(
             desktop
-                .fetch_from(provider_id, blake3_of(&second))
+                .fetch_from_addr(&provider_addr, blake3_of(&second))
                 .await
                 .is_err(),
             "an unpaired desktop must not keep pulling"
         );
         assert!(desktop
-            .fetch_from(provider_id, blake3_of(&second))
+            .fetch_from_addr(&provider_addr, blake3_of(&second))
             .await
             .is_err());
         assert_eq!(desktop.local_bytes(blake3_of(&second)).await.unwrap(), 0);
@@ -620,9 +620,9 @@ fn the_paired_desktop_closing_with_410_reaches_the_close_hook() {
         provider.set_allowed_peer(Some(desktop.node_id()));
         // The daemon's way (flow delivery): learn the provider from the ticket, then fetch over
         // the cached connection.
-        let (node, ticket_hash) = blobs.register_blob_ticket(&ticket).unwrap();
-        assert_eq!(node, provider_node);
-        blobs.fetch_from(node, ticket_hash).await.unwrap();
+        let (addr, ticket_hash) = Blobs::parse_blob_ticket(&ticket).unwrap();
+        assert_eq!(addr.node_id(), provider_node);
+        blobs.fetch_from_addr(&addr, ticket_hash).await.unwrap();
         (desktop, blobs)
     });
     assert!(

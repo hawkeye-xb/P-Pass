@@ -227,6 +227,51 @@ fn daemon_online() -> bool {
         .is_ok()
 }
 
+/// F5（v0.10.3-test.1 回归 W2）：启动类动作（重启 / 自愈 / 启动）收尾时，按此刻的事实落状态。
+///
+/// 服务状态平时只由事件流驱动：连接**新建立**时翻成 running。启动类动作中途会置
+/// starting（`begin_start`）或在失败时置 unreachable；可事件流若一直连着（新 daemon 早
+/// 已就绪、连接没断），就不会再有「新建立」把状态翻回来，窗口停在「启动中」——服务其实
+/// 正常。所以动作结束时，无论成败都问一次 `status`，以它为准。
+fn settle_after_start_action(
+    app: &tauri::AppHandle,
+    manager: &ServiceStateManager,
+    action_ok: bool,
+    reason: &str,
+) {
+    let answering = daemon_online();
+    if answering {
+        manager.note_connected();
+    }
+    if let Some(next) = state_after_start_action(
+        manager.current(),
+        action_ok,
+        answering,
+        onboarding_finished_now(),
+    ) {
+        manager.set(app, next, Some(reason));
+    }
+}
+
+/// [`settle_after_start_action`] 的判据（纯函数，单测覆盖）：
+/// - 答上 `status` ⇒ 以事实为准（与事件流 open 同一条规则 `after_connection`）；
+/// - 没答上、动作本身成功 ⇒ 不动，还在起，交给事件流与启动宽限期；
+/// - 没答上、动作失败 ⇒ unreachable。
+fn state_after_start_action(
+    current: ServiceState,
+    action_ok: bool,
+    answering: bool,
+    onboarded: bool,
+) -> Option<ServiceState> {
+    if answering {
+        Some(current.after_connection(onboarded))
+    } else if action_ok {
+        None
+    } else {
+        Some(ServiceState::Unreachable)
+    }
+}
+
 /// DESK-63 (#946): the shell's initial service state, derived from the same
 /// three facts `wizard_state` reads. Keeping it next to the marker helpers
 /// means "user stopped" cannot mean one thing to the wizard and another to
@@ -306,8 +351,7 @@ fn start_event_stream(app: tauri::AppHandle) {
                         // stream ends; treat it as a lost connection.
                         Ok(()) => {
                             manager.note_connection_failure("event stream ended");
-                            let next = manager.state_after_failure();
-                            manager.set(&app, next, Some("event stream ended"));
+                            manager.apply_failure(&app, "event stream ended");
                         }
                         // Old daemon without events.subscribe: discover() just
                         // proved `status` answers, so it is running. There is
@@ -337,15 +381,13 @@ fn start_event_stream(app: tauri::AppHandle) {
                         }
                         Err(e) => {
                             manager.note_connection_failure(&e);
-                            let next = manager.state_after_failure();
-                            manager.set(&app, next, Some(&e));
+                            manager.apply_failure(&app, &e);
                         }
                     }
                 }
                 Err(e) => {
                     manager.note_connection_failure(&e);
-                    let next = manager.state_after_failure();
-                    manager.set(&app, next, Some(&e));
+                    manager.apply_failure(&app, &e);
                 }
             }
             std::thread::sleep(std::time::Duration::from_secs(2));
@@ -559,20 +601,35 @@ fn disable_auto_sleep_blocking() -> Result<(), String> {
 /// 有 daemon 在跑（含「未配置」状态）就直接问它；首启时没有，就一次性拉起内置 daemon
 /// 配好再收掉。校验失败原样交出 daemon 的 keyed 错误。生效时机：daemon 重启后。
 fn configure_library(library_dir: &str) -> Result<(), String> {
-    // §5.3 / #1159：服务模式下 daemon 是 `NT SERVICE\P-Pass`，与选目录的用户不是
-    // 同一个安全主体，它默认连读这个目录都不行。加 ACE 只能在主人身份下做，所以
-    // **先授权、再交给 daemon**（daemon 会以服务的身份复查目录）。授权失败不在这里
-    // 拦：daemon 的复查报的错更准确，用户看到的仍是同一句「这个文件夹不可用」。
-    let _ = platform::adapter().grant_library_dir(std::path::Path::new(library_dir));
+    // §5.3：**先把目录设为私有、再交给 daemon**（daemon 会以自己的身份复查目录）。
     let set = |h: &ipc::DaemonHandle| {
         h.call("config.set_library", json!({ "library": library_dir }))
             .map(|_| ())
     };
-    match ipc::DaemonHandle::discover() {
-        Ok(h) => set(&h),
-        // #1246：服务形态的库位置只能由服务写；服务连不上就如实报错，不以用户身份临时拉一份。
-        Err(e) if !user_daemon_fallback_allowed(platform::hosting().service_mode()) => Err(e),
-        Err(_) => daemon_cli::with_oneshot_daemon(&daemon_cli::bundled_sidecar()?, set),
+    private_library_then(
+        std::path::Path::new(library_dir),
+        |d| platform::adapter().grant_library_dir(d),
+        || match ipc::DaemonHandle::discover() {
+            Ok(h) => set(&h),
+            // #1246：服务形态的库位置只能由服务写；服务连不上就如实报错，不以用户身份临时拉一份。
+            Err(e) if !user_daemon_fallback_allowed(platform::hosting().service_mode()) => Err(e),
+            Err(_) => daemon_cli::with_oneshot_daemon(&daemon_cli::bundled_sidecar()?, set),
+        },
+    )
+}
+
+/// §5.3 / #1159：首次设置与换位置共用的前置步骤——以主人身份把库目录设为只有主人能访问
+/// （Windows 服务形态同时授权服务账户，见 [`platform::PlatformAdapter::grant_library_dir`]），
+/// 成功（含「本形态不需要」「卷没有权限可设」）才调 `submit` 把目录交给 daemon。
+/// 设置失败 ⇒ 原因交给界面，**不**提交：不能让 daemon 用一个没设好权限的目录。
+fn private_library_then<T>(
+    dir: &std::path::Path,
+    grant: impl FnOnce(&std::path::Path) -> platform::Result<platform::LibraryDirGrant>,
+    submit: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    match grant(dir) {
+        Ok(_) => submit(),
+        Err(e) => Err(ipc::ui_err("ui.err_library_private_failed", &[("err", &e)])),
     }
 }
 
@@ -690,14 +747,23 @@ async fn relocate_library(
         .get()
         .ok_or_else(|| ipc::ui_err("ui.err_generic", &[]))?;
     let result = off_main(move || {
-        // §5.3 / #1159：服务形态下先把新位置授权给服务（与 configure_library 同一条）。
-        let _ = platform::adapter().grant_library_dir(&dir);
-        // dry_run：只预检（确认框要显示最终位置、文件夹里是否已有别的东西），不落计划。
-        // 跨卷时预检要量整个库的大小（逐个文件），大库在机械盘上会超过平常的 10 秒。
-        ipc::DaemonHandle::discover()?.call_with_timeout(
-            "library.relocate",
-            json!({ "target": dir.to_string_lossy(), "dry_run": dry_run }),
-            std::time::Duration::from_secs(120),
+        let current = ShellHome::current()
+            .configured_library_dir()
+            .map(std::path::PathBuf::from);
+        relocate_steps(
+            &dir,
+            current.as_deref(),
+            dry_run,
+            &|d| platform::adapter().grant_library_dir(d),
+            || {
+                // dry_run：只预检（确认框要显示最终位置、文件夹里是否已有别的东西），不落计划。
+                // 跨卷时预检要量整个库的大小（逐个文件），大库在机械盘上会超过平常的 10 秒。
+                ipc::DaemonHandle::discover()?.call_with_timeout(
+                    "library.relocate",
+                    json!({ "target": dir.to_string_lossy(), "dry_run": dry_run }),
+                    std::time::Duration::from_secs(120),
+                )
+            },
         )
     })
     .await??;
@@ -705,6 +771,45 @@ async fn relocate_library(
         app.state::<LibraryPick>().clear();
     }
     Ok(result)
+}
+
+/// #639 + §5.3：换库位置的窗口程序一侧。
+///
+/// - 预览（`dry_run`）**没有副作用**：不改任何权限。服务读不到目标文件夹时（主人自己的目录，
+///   还没设为私有），daemon 答的「是否非空」是 `null`，这里以主人身份补判（规则与 daemon 共用
+///   [`platform::is_folder_litter`]）。
+/// - 确认：先把**旧库**、再把**新位置**设为私有（[`private_library_then`]），都成功才交给 daemon
+///   搬。旧库也要设：同卷换位置是改名，文件带着原有的权限过去，旧库先私有，搬过去的就不会带着
+///   旧位置的宽松权限。旧库不存在（照片库找不到，只改指向）就只设新位置。
+fn relocate_steps(
+    target: &std::path::Path,
+    current: Option<&std::path::Path>,
+    dry_run: bool,
+    grant: &dyn Fn(&std::path::Path) -> platform::Result<platform::LibraryDirGrant>,
+    call: impl FnOnce() -> Result<Value, String>,
+) -> Result<Value, String> {
+    if dry_run {
+        let mut check = call()?;
+        if check["non_empty"].is_null() {
+            check["non_empty"] = Value::Bool(owner_sees_other_things(target)?);
+        }
+        return Ok(check);
+    }
+    if let Some(current) = current.filter(|c| c.is_dir()) {
+        private_library_then(current, grant, || Ok(()))?;
+    }
+    private_library_then(target, grant, call)
+}
+
+/// 主人身份下看选的文件夹里有没有别的东西。不存在 = 没有（会被建出来）。
+fn owner_sees_other_things(dir: &std::path::Path) -> Result<bool, String> {
+    match std::fs::read_dir(dir) {
+        Ok(entries) => Ok(entries
+            .flatten()
+            .any(|e| !platform::is_folder_litter(&e.file_name()))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(ipc::ui_err("ui.err_set_library", &[("err", &e)])),
+    }
 }
 
 async fn configure_library_off_main(library_dir: String) -> Result<(), String> {
@@ -757,32 +862,41 @@ fn start_daemon_now(app: tauri::AppHandle) -> Result<String, String> {
     // 否则刚起来的 daemon 读到 stopped 会立刻退出（看起来像启动失败）。
     ShellHome::current().set_user_stopped(false)?;
     let manager = app.state::<ServiceStateManager>().inner().clone();
-    manager.begin_start(&app, "user start");
-    match platform::hosting().install_autostart(&sidecar) {
+    let outcome = start_resident(&app, &manager, &sidecar);
+    // F5：进了 starting 就按 status 收尾（服务本来就在跑、事件流连着时不会再翻回来）。
+    settle_after_start_action(&app, &manager, outcome.is_ok(), "start settled");
+    outcome
+}
+
+/// 置 starting 并请服务管理器起服务（登记不了就按形态退回一次性 spawn）。
+fn start_resident(
+    app: &tauri::AppHandle,
+    manager: &ServiceStateManager,
+    sidecar: &std::path::Path,
+) -> Result<String, String> {
+    manager.begin_start(app, "user start");
+    match platform::hosting().install_autostart(sidecar) {
         // LaunchAgent RunAtLoad+KeepAlive: starts immediately, survives
         // crashes and reboots.
         Ok(()) => Ok("resident".into()),
         Err(e) if !user_daemon_fallback_allowed(platform::hosting().service_mode()) => {
             // #1246：服务形态不以用户身份兜底（见 `user_daemon_fallback_allowed`）。
-            manager.set(&app, ServiceState::Unreachable, Some("start failed"));
+            // 状态由调用方 `settle_after_start_action` 按事实落。
             Err(ipc::ui_err("ui.err_respawn", &[("err", &e)]))
         }
         Err(e) => {
             // Fall back to a one-shot spawn — still usable this session.
-            match platform::command(&sidecar)
+            match platform::command(sidecar)
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
                 .stdin(std::process::Stdio::null())
                 .spawn()
             {
                 Ok(_) => Ok(format!("oneshot: {e}")),
-                Err(e2) => {
-                    manager.set(&app, ServiceState::Unreachable, Some("start failed"));
-                    Err(ipc::ui_err(
-                        "ui.err_register_and_spawn",
-                        &[("err", &e), ("spawn_err", &e2)],
-                    ))
-                }
+                Err(e2) => Err(ipc::ui_err(
+                    "ui.err_register_and_spawn",
+                    &[("err", &e), ("spawn_err", &e2)],
+                )),
             }
         }
     }
@@ -890,6 +1004,18 @@ fn self_heal_daemon_blocking(app: tauri::AppHandle) -> Result<bool, String> {
         eprintln!("#1060: 为更新暂停中，跳过自愈");
         return Ok(false);
     }
+    // F7：在外面被正常停掉的（服务管理里「停止」/ `launchctl bootout`）= 用户意图，不拉回；
+    // 崩溃的恢复交给系统（SCM 失败恢复动作 / launchd KeepAlive）。窗口只落 stopped、给启动按钮。
+    let manager = app.state::<ServiceStateManager>().inner().clone();
+    if manager.stopped_outside() {
+        eprintln!("F7: 常驻服务是被正常停掉的，不自愈");
+        manager.set(
+            &app,
+            ServiceState::Stopped,
+            Some(service_state::STOPPED_OUTSIDE),
+        );
+        return Ok(false);
+    }
     self_heal_now(&app, "self heal")
 }
 
@@ -932,13 +1058,11 @@ fn self_heal_now(app: &tauri::AppHandle, reason: &str) -> Result<bool, String> {
     let manager = app.state::<ServiceStateManager>().inner().clone();
     manager.begin_start(app, reason);
     // #732：有 LaunchAgent 时交给 launchd 拉（不杀在跑的——自愈只补"没在跑"）。
-    match bring_up_daemon(false) {
-        Ok(_) => Ok(true),
-        Err(e) => {
-            manager.set(app, ServiceState::Unreachable, Some(&e));
-            Err(e)
-        }
-    }
+    let outcome = bring_up_daemon(false);
+    // F5：服务本来就在跑（`AlreadyRunning`）而事件流一直连着时，没有「新建立」把
+    // starting 翻回来——收尾按 status 落状态。
+    settle_after_start_action(app, &manager, outcome.is_ok(), reason);
+    outcome.map(|_| true)
 }
 
 /// Stop the resident service the way a user means it: unregister the
@@ -1427,13 +1551,24 @@ fn relaunch_shell_blocking(app: tauri::AppHandle) -> Result<(), String> {
 async fn restart_daemon_process(app: tauri::AppHandle) -> Result<Value, String> {
     let manager = app.state::<ServiceStateManager>().inner().clone();
     manager.begin_start(&app, "restart requested");
-    let outcome = tauri::async_runtime::spawn_blocking(restart_daemon_process_blocking)
-        .await
-        .map_err(|e| ipc::ui_err("ui.err_restart", &[("err", &e)]))?;
-    if outcome.is_err() {
-        manager.set(&app, ServiceState::Unreachable, Some("restart failed"));
-    }
-    outcome
+    let app_for_settle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let outcome = restart_daemon_process_blocking();
+        // F5：成败都按 status 落状态——重启报错时新 daemon 可能早已就绪，事件流也已连上。
+        settle_after_start_action(
+            &app_for_settle,
+            &manager,
+            outcome.is_ok(),
+            if outcome.is_ok() {
+                "restart settled"
+            } else {
+                "restart failed"
+            },
+        );
+        outcome
+    })
+    .await
+    .map_err(|e| ipc::ui_err("ui.err_restart", &[("err", &e)]))?
 }
 
 /// 等它起来的**宽限期**：不是"多久算失败"，而是"多久算彻底没救"。
@@ -1467,10 +1602,23 @@ fn restart_daemon_process_blocking() -> Result<Value, String> {
     // launchd 的重拉节流（10s 量级，DESK-44 假失败的根），而且杀不到一次性 spawn
     // 的野生实例。改为：野生实例先退位 + `kickstart -k`（launchd 立刻按磁盘上的
     // 文件拉新的），内核从此归 launchd 托管。走不通才退回下面的老路。
-    if resident_service_available() {
-        bring_up_daemon(true).map_err(|e| ipc::ui_err("ui.err_restart", &[("err", &e)]))?;
+    //
+    // F5：服务管理器那条报错（Windows：卡死的进程收不到 STOP，等 Stopped 超时）不立刻
+    // 当失败——服务管理器随后仍可能把新实例拉起来（回归 W2：报错时新 daemon 已就绪）。
+    // 照样等它答上，答上了就不是失败（[`restart_verdict`]）。
+    let brought_up = if resident_service_available() {
+        bring_up_daemon(true)
+            .map(|_| ())
+            .map_err(|e| ipc::ui_err("ui.err_restart", &[("err", &e)]))
     } else {
-        restart_by_kill_and_respawn()?;
+        restart_by_kill_and_respawn()
+    };
+    if let Err(e) = &brought_up {
+        if !resident_service_available() {
+            // 一次性 spawn 那条路的失败是确定的（杀不掉 / 拉不起），不用再等。
+            return Err(e.clone());
+        }
+        eprintln!("F5: 服务管理器重启报错（{e}），仍等新实例答话再下结论");
     }
     // 4) 等它**答上** `status`（每 500ms，最长 RESTART_GRACE）。
     //    答上 = 有结论（版本变了 or 没变）；一直没答上 = `still_starting`，
@@ -1492,11 +1640,21 @@ fn restart_daemon_process_blocking() -> Result<Value, String> {
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
     }
+    restart_verdict(brought_up, answered)?;
     Ok(restart_outcome(
         old_version.as_deref(),
         new_version.as_deref(),
         answered,
     ))
+}
+
+/// F5：重启的结论以「新实例答没答上」为准。服务管理器报了错、但新实例已经答上
+/// ⇒ 不是失败（不能报「没能启动」）；报了错、也没答上 ⇒ 如实报错。
+fn restart_verdict(brought_up: Result<(), String>, answered: bool) -> Result<(), String> {
+    match brought_up {
+        Err(e) if !answered => Err(e),
+        _ => Ok(()),
+    }
 }
 
 /// DAE-04 原路径（没有服务管理器时，`ServiceMode::UserAutostart`）：杀进程，再显式拉一次。
@@ -2916,6 +3074,63 @@ mod tests {
     }
 
     // DAE-04: 版本真的变了 → changed=true（真成功，前端报「已重启」）。
+    /// F5（v0.10.3-test.1 回归 W2）：启动类动作收尾时按 status 落状态。答上了就以事实为准——
+    /// 重启报错时新 daemon 已就绪、事件流一直连着，没有「新建立」把状态翻回来，窗口卡在
+    /// 「启动中」。反证：答上时返回 None（沿用旧行为）⇒ 红。
+    #[test]
+    fn start_actions_settle_on_the_status_fact() {
+        for current in [ServiceState::Starting, ServiceState::Unreachable] {
+            assert_eq!(
+                state_after_start_action(current, false, true, true),
+                Some(ServiceState::Running),
+                "动作报错但服务答上了 ⇒ running"
+            );
+            assert_eq!(
+                state_after_start_action(current, true, true, true),
+                Some(ServiceState::Running)
+            );
+        }
+        assert_eq!(
+            state_after_start_action(ServiceState::Starting, true, false, true),
+            None,
+            "还在起：交给事件流与宽限期"
+        );
+        assert_eq!(
+            state_after_start_action(ServiceState::Starting, false, false, true),
+            Some(ServiceState::Unreachable)
+        );
+        assert_eq!(
+            state_after_start_action(ServiceState::NotConfigured, true, true, false),
+            Some(ServiceState::NotConfigured),
+            "向导没走完，答上了也不进 running（同 after_connection）"
+        );
+    }
+
+    /// F5：服务管理器报错、但新实例答上了 ⇒ 不是失败（W2：报「没能启动」时新 daemon 已就绪）。
+    #[test]
+    fn restart_is_judged_by_whether_the_new_daemon_answers() {
+        let e = || Err("ui.err_restart".to_string());
+        assert_eq!(restart_verdict(e(), true), Ok(()));
+        assert_eq!(restart_verdict(e(), false), e());
+        assert_eq!(restart_verdict(Ok(()), false), Ok(()));
+    }
+
+    /// F5：三个启动类动作都要按 status 收尾。反证：删掉任一处调用 ⇒ 红。
+    #[test]
+    fn every_start_action_settles_on_status() {
+        let src = include_str!("lib.rs").replace("\r\n", "\n");
+        for f in [
+            "start_daemon_now",
+            "self_heal_now",
+            "restart_daemon_process",
+        ] {
+            assert!(
+                product_fn_body(&src, f).contains("settle_after_start_action("),
+                "{f} 收尾没按 status 落状态"
+            );
+        }
+    }
+
     #[test]
     fn restart_outcome_marks_version_change() {
         let v = restart_outcome(Some("v0.3.3-test.1"), Some("0.3.4"), true);
@@ -3507,7 +3722,7 @@ mod tests {
         let src = include_str!("lib.rs").replace("\r\n", "\n");
         for (func, spawn) in [
             ("bring_up_daemon", "spawn_bundled_daemon_oneshot()"),
-            ("start_daemon_now", "// Fall back to a one-shot spawn"),
+            ("start_resident", "// Fall back to a one-shot spawn"),
             ("configure_library", "daemon_cli::with_oneshot_daemon("),
         ] {
             let body = product_fn_body(&src, func);
@@ -3685,6 +3900,213 @@ mod tests {
                 "{entry} 没有先解析 ProgramData 位置"
             );
         }
+    }
+
+    /// §5.3：库目录设为私有失败时，库位置**不**提交给 daemon（`config.set_library` /
+    /// `library.relocate` 都不调），错误带着原因回到界面。反证：改回 `let _ = grant(..)` 后照常
+    /// 提交 ⇒ `submitted` 变真，红。
+    #[test]
+    fn library_private_failure_does_not_submit_and_reaches_the_ui() {
+        let submitted = std::cell::Cell::new(false);
+        let err = private_library_then(
+            std::path::Path::new("/somewhere"),
+            |_| {
+                Err(platform::PlatformError::Failed {
+                    action: "grant_photo_dir",
+                    detail: "目录不归当前用户所有".into(),
+                })
+            },
+            || {
+                submitted.set(true);
+                Ok(())
+            },
+        )
+        .expect_err("设置失败必须报错");
+        assert!(!submitted.get(), "设置失败后不许再提交库位置");
+        let v: serde_json::Value = serde_json::from_str(&err).expect("keyed 错误");
+        assert_eq!(v["key"], "ui.err_library_private_failed");
+        assert!(
+            v["params"]["err"]
+                .as_str()
+                .is_some_and(|e| e.contains("目录不归当前用户所有")),
+            "原因要带给界面：{err}"
+        );
+    }
+
+    /// 预览没有副作用：一次都不改权限；daemon 读不到目标时（`non_empty: null`）由主人补判，
+    /// daemon 给了确定答案就照用。反证：预览前调一次 grant ⇒ `granted` 非空，红。
+    #[test]
+    fn relocate_preview_changes_no_permissions_and_fills_unknown_contents() {
+        let granted = std::cell::RefCell::new(Vec::<std::path::PathBuf>::new());
+        let grant = |d: &std::path::Path| {
+            granted.borrow_mut().push(d.to_path_buf());
+            Ok(platform::LibraryDirGrant::Granted)
+        };
+        let home = tempfile::tempdir().unwrap();
+        let full = home.path().join("full");
+        std::fs::create_dir(&full).unwrap();
+        std::fs::write(full.join("mine.txt"), b"x").unwrap();
+        let litter = home.path().join("litter");
+        std::fs::create_dir(&litter).unwrap();
+        std::fs::write(litter.join(".DS_Store"), b"x").unwrap();
+        let cur = home.path().join("current");
+        std::fs::create_dir(&cur).unwrap();
+
+        let unknown = || Ok(json!({ "to": "x", "non_empty": null, "adopt": false }));
+        let got = relocate_steps(&full, Some(&cur), true, &grant, unknown).unwrap();
+        assert_eq!(got["non_empty"], true, "主人看得到文件夹里的东西");
+        let got = relocate_steps(&litter, Some(&cur), true, &grant, unknown).unwrap();
+        assert_eq!(got["non_empty"], false, ".DS_Store 不算");
+        let missing = home.path().join("missing");
+        let got = relocate_steps(&missing, Some(&cur), true, &grant, unknown).unwrap();
+        assert_eq!(got["non_empty"], false);
+        let known = || Ok(json!({ "to": "x", "non_empty": false, "adopt": false }));
+        let got = relocate_steps(&full, Some(&cur), true, &grant, known).unwrap();
+        assert_eq!(got["non_empty"], false, "daemon 有确定答案就照用");
+        assert!(
+            granted.borrow().is_empty(),
+            "预览改了权限：{:?}",
+            granted.borrow()
+        );
+    }
+
+    /// 确认搬迁：先旧库、再新位置设为私有，然后才交给 daemon；旧库设不了 ⇒ 不搬、错误到界面。
+    /// 反证：去掉对旧库的设置 ⇒ 顺序断言红；设置失败仍调 daemon ⇒ `called` 红。
+    #[test]
+    fn relocate_confirm_makes_old_and_new_private_before_moving() {
+        let home = tempfile::tempdir().unwrap();
+        let cur = home.path().join("current");
+        std::fs::create_dir(&cur).unwrap();
+        let target = home.path().join("target");
+        let order = std::cell::RefCell::new(Vec::<String>::new());
+        let grant = |d: &std::path::Path| {
+            order
+                .borrow_mut()
+                .push(d.file_name().unwrap().to_string_lossy().into_owned());
+            Ok(platform::LibraryDirGrant::Granted)
+        };
+        relocate_steps(&target, Some(&cur), false, &grant, || {
+            order.borrow_mut().push("daemon".into());
+            Ok(json!({ "to": "x" }))
+        })
+        .unwrap();
+        assert_eq!(*order.borrow(), vec!["current", "target", "daemon"]);
+
+        let called = std::cell::Cell::new(false);
+        let failing = |d: &std::path::Path| {
+            if d.ends_with("current") {
+                Err(platform::PlatformError::Failed {
+                    action: "grant_photo_dir",
+                    detail: "有 1 个文件或文件夹的权限改不了：x.jpg".into(),
+                })
+            } else {
+                Ok(platform::LibraryDirGrant::Granted)
+            }
+        };
+        let err = relocate_steps(&target, Some(&cur), false, &failing, || {
+            called.set(true);
+            Ok(json!({}))
+        })
+        .expect_err("旧库设不了必须中止");
+        assert!(!called.get(), "设置失败后不许再交给 daemon 搬");
+        assert!(err.contains("x.jpg"), "{err}");
+
+        // 旧库不存在（照片库找不到、只改指向）：只设新位置。
+        order.borrow_mut().clear();
+        relocate_steps(
+            &target,
+            Some(&home.path().join("gone")),
+            false,
+            &grant,
+            || Ok(json!({})),
+        )
+        .unwrap();
+        assert_eq!(*order.borrow(), vec!["target"]);
+    }
+
+    /// 设好了、本形态不需要、卷没有权限可设——三种都照常提交。
+    #[test]
+    fn library_private_ok_outcomes_submit() {
+        for outcome in [
+            platform::LibraryDirGrant::Granted,
+            platform::LibraryDirGrant::NotApplicable,
+            platform::LibraryDirGrant::SkippedNoAcl {
+                file_system: "exFAT".into(),
+            },
+        ] {
+            let submitted = std::cell::Cell::new(false);
+            private_library_then(
+                std::path::Path::new("/somewhere"),
+                |_| Ok(outcome.clone()),
+                || {
+                    submitted.set(true);
+                    Ok(())
+                },
+            )
+            .expect("ok");
+            assert!(submitted.get(), "{outcome:?} 应照常提交");
+        }
+    }
+
+    /// 服务特权收窄：`sc privs` 在注册服务的宏里、在 `sc create` 的 `${If}` 分支之外
+    /// （覆盖升级、应用内更新也重新声明），名单与 daemon 启动核对的白名单完全一致。
+    /// 反证：把 privs 挪进 create 分支、删掉这一行、或名单里多/少一项，本测试红。
+    #[test]
+    fn installer_narrows_service_privileges_outside_create_branch() {
+        let hooks = include_str!("../windows/installer-hooks.nsh").replace("\r\n", "\n");
+        let start = hooks
+            .find("!macro PPassRegisterService\n")
+            .expect("缺 PPassRegisterService 宏");
+        let end = start + hooks[start..].find("!macroend").expect("宏没有结束");
+        let block = &hooks[start..end];
+        let lines: Vec<&str> = block.lines().map(str::trim).collect();
+        let privs: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.contains("sc.exe\" privs \"${PPASS_SERVICE}\""))
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(privs.len(), 1, "注册服务时必须恰好声明一次 sc privs");
+        let at = privs[0];
+        // 所在的 ${If} 嵌套层数必须是 0（不在任何分支里）。
+        let depth = lines[..at].iter().fold(0i32, |d, l| {
+            if l.starts_with("${If}") {
+                d + 1
+            } else if l.starts_with("${EndIf}") {
+                d - 1
+            } else {
+                d
+            }
+        });
+        assert_eq!(depth, 0, "sc privs 落进了 ${{If}} 分支：升级安装不会执行");
+        let create = lines
+            .iter()
+            .position(|l| l.contains("sc.exe\" create \"${PPASS_SERVICE}\""))
+            .expect("缺 sc create");
+        assert!(
+            create < at,
+            "sc privs 必须在 sc create 之后（服务要先存在）"
+        );
+        let listed: Vec<&str> = lines[at]
+            .rsplit_once("\"${PPASS_SERVICE}\" ")
+            .expect("privs 行形状不对")
+            .1
+            .trim_end_matches('\'')
+            .split('/')
+            .collect();
+        assert_eq!(listed, platform::SERVICE_PRIVILEGE_ALLOWLIST);
+        // 注册服务之后才起服务：本次安装启动的服务就已经是收窄后的令牌。
+        let post = hooks
+            .find("!macro NSIS_HOOK_POSTINSTALL")
+            .expect("缺 POSTINSTALL");
+        let post = &hooks[post..];
+        let reg = post
+            .find("!insertmacro PPassRegisterService")
+            .expect("没注册服务");
+        let start_svc = post
+            .find("sc.exe\" start \"${PPASS_SERVICE}\"")
+            .expect("没起服务");
+        assert!(reg < start_svc, "必须先声明特权再起服务");
     }
 
     /// 服务 DACL：交互用户只能查询/启停；Administrators 必须保留删除（SD）与改权限

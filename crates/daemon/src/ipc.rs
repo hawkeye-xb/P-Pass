@@ -139,11 +139,8 @@ impl PeerEndpoint {
                 }
             }
             PeerEndpoint::Pipe(pipe) => {
-                let name = pipe
-                    .as_str()
-                    .to_ns_name::<GenericNamespaced>()
-                    .map_err(|e| format!("管道名不合法：{e}"))?;
-                let conn = interprocess::local_socket::tokio::Stream::connect(name)
+                // 与壳一致：只允许服务端识别本客户端，不允许以本客户端身份行事。
+                let conn = platform::connect_resident_pipe_tokio(pipe)
                     .await
                     .map_err(|e| format!("连不上 {pipe}：{e}"))?;
                 let (conn, check) = tokio::task::spawn_blocking(move || {
@@ -545,7 +542,7 @@ fn relocate_resp(
                 id,
                 serde_json::json!({
                     "to": c.plan.to.display().to_string(),
-                    "non_empty": c.non_empty,
+                    "non_empty": c.contents.to_json(),
                     "adopt": c.adopt,
                 }),
             ),
@@ -2447,6 +2444,7 @@ impl IpcServer {
         let photo_count = self.db.count_assets().await?;
         let photo_sources = self.db.count_asset_sources().await?;
         let disk = disk_stats(&self.data_dir);
+        let disk_encryption = disk_encryption_cached().await;
         // #1044 B11：低空间通知由 daemon 判定并持久化（low_space.rs）；
         // 待展示的那一次随 status 带出，桌面弹完调 `low_space.ack`。
         // 尽力而为：盘真满时索引库写入可能失败（SQLITE_FULL），那正是最需要
@@ -2466,6 +2464,8 @@ impl IpcServer {
             "photo_sources": photo_sources,
             "disk_free_bytes": disk.map(|d| d.free),
             "disk_total_bytes": disk.map(|d| d.total),
+            // W-4：系统盘磁盘加密状态 "on" | "off" | "unknown"；只有 "off" 时界面才提示。
+            "disk_encryption": disk_encryption.as_str(),
             "low_space_notice": low_space_notice.map(|free| serde_json::json!({ "free_bytes": free })),
             "state": state_name(&state),
             "msg_key": state.msg_key(),
@@ -2497,6 +2497,11 @@ impl IpcServer {
                 .library_location
                 .as_ref()
                 .and_then(|l| crate::relocate::last_error(l.platform_dir())),
+            // F6：搬完后原目录没删干净时它的位置（用户删掉后为 null）。
+            "relocate_leftover": self
+                .library_location
+                .as_ref()
+                .and_then(|l| crate::relocate::leftover(l.platform_dir())),
             // #1118: this desktop's identity as people read it — shown under the pairing QR code
             // and on the phone before it connects, so the two can be compared.
             "desktop_fingerprint": pair_pake::node_fingerprint(&self.pairing.node_id().to_string()),
@@ -2625,6 +2630,26 @@ fn disk_stats(path: &std::path::Path) -> Option<DiskStats> {
         free: v.free,
         total: v.total,
     })
+}
+
+/// 磁盘加密状态的缓存时长：状态几乎不变，而 `status` 被界面频繁轮询。
+const DISK_ENCRYPTION_TTL: std::time::Duration = std::time::Duration::from_secs(600);
+
+/// 带缓存的磁盘加密状态（W-4）。查询放到阻塞线程，失败当 `Unknown`。
+async fn disk_encryption_cached() -> platform::DiskEncryption {
+    use platform::PlatformAdapter as _;
+    static CACHE: std::sync::Mutex<Option<(std::time::Instant, platform::DiskEncryption)>> =
+        std::sync::Mutex::new(None);
+    if let Some((at, v)) = *CACHE.lock().unwrap() {
+        if at.elapsed() < DISK_ENCRYPTION_TTL {
+            return v;
+        }
+    }
+    let v = tokio::task::spawn_blocking(|| platform::adapter().disk_encryption())
+        .await
+        .unwrap_or(platform::DiskEncryption::Unknown);
+    *CACHE.lock().unwrap() = Some((std::time::Instant::now(), v));
+    v
 }
 
 /// Replace the user's home directory (and thus their username) in any

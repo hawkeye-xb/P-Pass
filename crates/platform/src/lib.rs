@@ -76,11 +76,19 @@ pub use windows_programdata::{ProgramDataDir, ProgramDataStore};
 // #1167：常驻 daemon 的命名管道（按用户 SID 认人）与主人记录。
 #[cfg(windows)]
 pub mod windows_pipe;
-// §5.3：照片库目录授权给服务账户（壳在主人身份下加 ACE）。
+// §5.3：照片库目录设为私有并授权给服务账户（壳在主人身份下设 DACL）。
 #[cfg(windows)]
 pub mod windows_photo_dir;
 #[cfg(windows)]
-pub use windows_photo_dir::{grant_modify_for_sid, list_modify_sids, GrantOutcome};
+pub use windows_photo_dir::{list_modify_sids, make_private_for_service, GrantOutcome};
+// 服务令牌特权：白名单与核对口径（纯逻辑，三平台都跑单测）；读令牌只在 Windows。
+pub mod service_privileges;
+pub use service_privileges::{
+    judge_service_privileges, ServicePrivilegeVerdict, FORBIDDEN_SERVICE_PRIVILEGES,
+    SERVICE_PRIVILEGE_ALLOWLIST,
+};
+#[cfg(windows)]
+pub mod windows_token;
 
 /// 托管方（Windows SCM）要求本进程以「系统服务」方式运行。
 ///
@@ -107,14 +115,32 @@ pub fn run_as_service(body: impl FnOnce() -> i32 + Send + 'static) -> Result<boo
             match windows_programdata::verify_service_root() {
                 Ok(root) => {
                     service_boot_log(&format!("ProgramData 目录核对通过：{}", root.display()));
-                    body()
                 }
                 Err(e) => {
                     service_boot_log(&format!("启动失败：ProgramData 目录核对不通过：{e}"));
                     eprintln!("启动失败：ProgramData 目录核对不通过：{e}");
-                    1
+                    return 1;
                 }
             }
+            // 令牌特权核对（与目录核对同一模式）：安装器用 `sc privs` 收窄过特权，
+            // 令牌里仍带禁止特权 = 收窄没生效，拒绝启动；白名单外的其余特权写日志。
+            match windows_token::verify_service_token() {
+                Ok(v) if v.unexpected.is_empty() => {
+                    service_boot_log("服务令牌特权核对通过");
+                }
+                Ok(v) => {
+                    service_boot_log(&format!(
+                        "服务令牌特权核对通过，但带有白名单外的特权：{}",
+                        v.unexpected.join(", ")
+                    ));
+                }
+                Err(e) => {
+                    service_boot_log(&format!("启动失败：{e}"));
+                    eprintln!("启动失败：{e}");
+                    return 1;
+                }
+            }
+            body()
         })
     }
     #[cfg(not(windows))]
@@ -129,6 +155,14 @@ pub fn run_as_service(body: impl FnOnce() -> i32 + Send + 'static) -> Result<boo
 /// 唯一的用途是让适配器把数据根从用户的 `%LOCALAPPDATA%` 切到
 /// `%ProgramData%\P-Pass`——服务账户读不到交互用户的任何用户级路径。
 /// 别的平台永远 `false`（它们没有这个「服务账户 ≠ 用户」的形态）。
+/// 文件夹里不算「用户的东西」的系统附属文件：Finder 的 `.DS_Store`、AppleDouble（`._<名>`，
+/// macOS 往 exFAT / FAT 写带扩展属性的文件时另生成的属性文件）。换库位置时 daemon 的预检与
+/// 窗口程序的补判共用这一份规则。
+pub fn is_folder_litter(name: &std::ffi::OsStr) -> bool {
+    let n = name.to_string_lossy();
+    n == ".DS_Store" || n.starts_with("._")
+}
+
 /// #639：这次改名失败是不是因为新旧位置不在同一个卷上（unix `EXDEV`、Windows
 /// `ERROR_NOT_SAME_DEVICE`）——是的话调用方改走「拷贝、核对、再改名」。
 pub fn is_cross_volume_rename(e: &std::io::Error) -> bool {
@@ -320,8 +354,9 @@ pub use code_signature::{
 pub use data_migration::DataDirMigration;
 pub use identity_key::{IdentityKeyHome, IdentityKeyStore, SecretBlobStore};
 pub use local_peer::{
-    bind_resident_pipe, local_peer_user, peer_check_needs_first_message, verify_local_peer,
-    verify_local_peer_min_version, LocalPeerSource, PeerCheck, PeerRole, PeerUser,
+    bind_resident_pipe, connect_resident_pipe, connect_resident_pipe_tokio, local_peer_user,
+    peer_check_needs_first_message, verify_local_peer, verify_local_peer_min_version,
+    LocalPeerSource, PeerCheck, PeerRole, PeerUser,
 };
 
 /// #1115：常驻 daemon 的本机 IPC 形态（[`PlatformAdapter::resident_ipc`]）。
@@ -514,6 +549,45 @@ pub struct VolumeStats {
     pub total: u64,
 }
 
+/// 系统盘是否开启了磁盘加密（Windows BitLocker / 设备加密，macOS FileVault）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiskEncryption {
+    On,
+    Off,
+    /// 查不到（本平台没有实现、权限不够、系统给了没见过的值）：不提示，也不当成「已开启」。
+    Unknown,
+}
+
+impl DiskEncryption {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::On => "on",
+            Self::Off => "off",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// Windows 卷属性 `System.Volume.BitLockerProtection` 的取值：1 = 保护已启用，2 = 未启用，
+/// 其余（挂起、未知、本机不支持）一律 `Unknown`——只在确定「没开」时才提示。
+pub fn bitlocker_verdict(protection: u32) -> DiskEncryption {
+    match protection {
+        1 => DiskEncryption::On,
+        2 => DiskEncryption::Off,
+        _ => DiskEncryption::Unknown,
+    }
+}
+
+/// macOS `fdesetup status` 的输出。
+pub fn filevault_verdict(output: &str) -> DiskEncryption {
+    let first = output.lines().next().unwrap_or("").trim();
+    match first {
+        "FileVault is On." => DiskEncryption::On,
+        "FileVault is Off." => DiskEncryption::Off,
+        _ => DiskEncryption::Unknown,
+    }
+}
+
 /// #1043：电脑睡眠由谁负责（[`PlatformAdapter::sleep_owner`]）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SleepOwner {
@@ -593,12 +667,13 @@ pub enum Applied {
 /// 我们什么都没做」说成授权完成，而备份到那时才发现服务读不了目录。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LibraryDirGrant {
-    /// 本平台 / 本安装形态不需要授权：macOS / Linux 的 daemon 与用户同一主体，
-    /// 旧的每用户计划任务也跑在用户会话里。
+    /// 本平台 / 本安装形态不做这件事：Linux（无桌面形态），旧的每用户计划任务
+    /// （跑在用户会话里，与用户同一主体）。
     NotApplicable,
-    /// 服务账户对该目录有修改权——刚加上的，或本来就有（已回读确认）。
+    /// 库目录已设为私有（已回读确认）：Windows 服务形态是受保护 DACL（主人、服务账户、
+    /// SYSTEM、Administrators），macOS 是 `0700`。
     Granted,
-    /// 卷没有 ACL（FAT / FAT32 / exFAT），改不了权限，跳过。
+    /// 卷本身没有权限可设（FAT / FAT32 / exFAT，macOS 上忽略所有权的卷），跳过、不提示。
     SkippedNoAcl { file_system: String },
 }
 
@@ -814,6 +889,11 @@ pub trait PlatformAdapter: Send + Sync {
         None
     }
 
+    /// 系统盘的磁盘加密状态。默认 `Unknown`（没有实现 = 不提示）。
+    fn disk_encryption(&self) -> DiskEncryption {
+        DiskEncryption::Unknown
+    }
+
     /// DAE-11 (#804)：电脑此刻是否接着外部电源（插电）。
     ///
     /// 用途：daemon 运行且插电时一直持有「别因空闲而睡」的声明，拔电就释放、
@@ -940,15 +1020,15 @@ pub trait PlatformAdapter: Send + Sync {
         Ok(Applied::NotApplicable)
     }
 
-    /// §5.3 / #1159：把主人选的照片库目录授权给**常驻服务账户**。
+    /// §5.3 / #1159：把主人选的照片库目录设为**只有主人能访问**，并让常驻 daemon 能读写。
     ///
-    /// 服务模式（D1）下 daemon 以 `NT SERVICE\P-Pass` 运行，和选目录的用户不是
-    /// 同一个安全主体，默认对这个目录连读都没有。加 ACE 这件事只能在主人身份下做
-    /// （服务自己没有该目录的 `WRITE_DAC`），所以入口在窗口程序这边，在把库位置交给
-    /// daemon **之前**调。
+    /// 首次设置与换位置走这同一个入口，在把库位置交给 daemon **之前**由窗口程序以主人身份调。
+    /// Windows 服务模式（D1）下 daemon 以 `NT SERVICE\P-Pass` 运行，和选目录的用户不是同一个
+    /// 安全主体：受保护 DACL 只含主人、服务账户、SYSTEM、Administrators（服务账户自己没有
+    /// 该目录的 `WRITE_DAC`，只能在主人身份下设）。macOS 的 daemon 与用户同一主体：库根目录
+    /// `0700`。目录不存在时先建出来。
     ///
-    /// 幂等：已经有这条 ACE 就什么都不改。非服务形态（macOS / Linux / 老的每用户
-    /// 计划任务）没有「服务账户 ≠ 用户」这个问题，返回 `NotApplicable`。
+    /// 幂等。失败 = `Err`，调用方不得继续把这个目录交给 daemon。
     fn grant_library_dir(&self, dir: &std::path::Path) -> Result<LibraryDirGrant> {
         let _ = dir;
         Ok(LibraryDirGrant::NotApplicable)
@@ -1400,6 +1480,14 @@ pub trait HostingAdapter: Send + Sync {
         None
     }
 
+    /// F7（v0.10.3-test.1 回归）：常驻 daemon 不在跑，是不是因为有人**正常地**停了它
+    /// （Windows：服务管理里「停止」/ `sc stop`；macOS：`launchctl bootout`），而不是崩了。
+    /// 正常停止 = 用户意图，窗口不许自愈拉回；崩溃的恢复交给系统（SCM 失败恢复动作 /
+    /// launchd KeepAlive）。`false` = 在跑 / 崩了 / 没登记 / 本平台没有服务管理器。
+    fn resident_stopped_on_request(&self) -> bool {
+        false
+    }
+
     /// 让服务管理器按**磁盘上的文件**拉起常驻 daemon。
     ///
     /// `kill_running = true`：在跑的那个（服务管理器自己启动的）先被杀掉再拉
@@ -1428,6 +1516,13 @@ pub trait HostingAdapter: Send + Sync {
     fn pause_resident_daemon(&self) -> Result<ResidentPause> {
         Ok(ResidentPause::Unsupported)
     }
+}
+
+/// F7：Windows 服务停在 Stopped、且 SCM 记下的退出码是 0 ⇒ 正常停止（收到 STOP 后自己报了
+/// SERVICE_STOPPED）。崩溃 / 被结束进程时 SCM 记 1067（ERROR_PROCESS_ABORTED），那是失败
+/// 恢复动作的活。纯函数，三平台都跑单测。
+pub fn service_stop_was_requested(stopped: bool, win32_exit_code: u32) -> bool {
+    stopped && win32_exit_code == 0
 }
 
 /// [`PlatformAdapter::restart_resident_daemon`] 的结论。
@@ -1703,6 +1798,17 @@ pub fn parse_pmset(output: &str) -> PowerHint {
 
 #[cfg(test)]
 mod tests {
+    /// F7：正常停止（退出码 0）才算用户意图；崩溃（1067）与还在跑都不算。
+    #[test]
+    fn only_a_clean_service_stop_counts_as_requested() {
+        assert!(super::service_stop_was_requested(true, 0));
+        assert!(
+            !super::service_stop_was_requested(true, 1067),
+            "崩溃交给 SCM 失败恢复"
+        );
+        assert!(!super::service_stop_was_requested(false, 0), "没停");
+    }
+
     use super::*;
 
     /// 取消是独立的一类，不能被归成失败——否则 UI 会把用户自己的选择
@@ -2244,5 +2350,51 @@ mod relocation_probe_tests {
     fn a_failing_copy_is_reported() {
         let dir = tempfile::tempdir().unwrap();
         assert!(copy_dir_contents(&dir.path().join("nope"), &dir.path().join("dst")).is_err());
+    }
+}
+
+#[cfg(test)]
+mod disk_encryption_tests {
+    use super::*;
+
+    #[test]
+    fn bitlocker_value_mapping() {
+        assert_eq!(bitlocker_verdict(1), DiskEncryption::On);
+        assert_eq!(bitlocker_verdict(2), DiskEncryption::Off);
+        // 挂起 / 未知 / 没见过的值：不提示。
+        for v in [0, 3, 4, 5, 6, 99] {
+            assert_eq!(bitlocker_verdict(v), DiskEncryption::Unknown, "{v}");
+        }
+    }
+
+    #[test]
+    fn filevault_output_mapping() {
+        assert_eq!(
+            filevault_verdict(
+                "FileVault is On.
+"
+            ),
+            DiskEncryption::On
+        );
+        assert_eq!(
+            filevault_verdict(
+                "FileVault is On.
+Encryption in progress: Percent = 12
+"
+            ),
+            DiskEncryption::On
+        );
+        assert_eq!(
+            filevault_verdict(
+                "FileVault is Off.
+"
+            ),
+            DiskEncryption::Off
+        );
+        assert_eq!(filevault_verdict(""), DiskEncryption::Unknown);
+        assert_eq!(
+            filevault_verdict("error: not authorized"),
+            DiskEncryption::Unknown
+        );
     }
 }

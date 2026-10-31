@@ -90,7 +90,7 @@ async fn denial_diag_is_visible_immediately_every_time() {
     let (dtp, daddr) = start_daemon(db.clone()).await;
     let ctp = client().await;
     ctp.add_peer(daddr);
-    // #1122：未配对的对端按设备限速，连发 300 次会被限速丢流（不回应答）。
+    // #1122：未配对的对端共用一份请求额度，连发 300 次会被限速丢流（不回应答）。
     // 用已配对的 viewer 调它无权的方法——同样每次都写诊断、回拒绝，竞态检测不变。
     db.accept_pairing(
         &ctp.node_id().0,

@@ -214,6 +214,81 @@ impl Drop for CreationDenied {
     }
 }
 
+/// W-3：「加密存放」的身份私钥存放处，供 daemon 的 `settle` 测试用。
+///
+/// Windows 上就是产品用的 DPAPI 存放处（真实加密）；其他平台没有 DPAPI，
+/// 用一个行为等价的替身：带文件头、内容变形、带校验，旧明文（无文件头）读到即删并
+/// 当作「没有」，被改动的内容读取是 `Err`。两边对 `settle` 的可观察行为一致。
+pub fn sealed_identity_store(path: &Path) -> Box<dyn crate::IdentityKeyStore> {
+    #[cfg(windows)]
+    {
+        Box::new(crate::ProgramDataStore::sealed(path, "身份私钥"))
+    }
+    #[cfg(not(windows))]
+    {
+        Box::new(StandInSealed(path.to_path_buf()))
+    }
+}
+
+#[cfg(not(windows))]
+struct StandInSealed(std::path::PathBuf);
+
+#[cfg(not(windows))]
+impl StandInSealed {
+    const MAGIC: &'static [u8; 8] = b"PPDPAPI1";
+
+    fn checksum(body: &[u8]) -> [u8; 8] {
+        body.iter()
+            .fold(0u64, |a, b| a.wrapping_mul(31).wrapping_add(u64::from(*b)))
+            .to_le_bytes()
+    }
+}
+
+#[cfg(not(windows))]
+impl crate::IdentityKeyStore for StandInSealed {
+    fn read(&self) -> crate::Result<Option<Vec<u8>>> {
+        let bytes = match std::fs::read(&self.0) {
+            Ok(b) => b,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(source) => {
+                return Err(crate::PlatformError::Io {
+                    action: "read_programdata_blob",
+                    source,
+                })
+            }
+        };
+        let Some(rest) = bytes.strip_prefix(Self::MAGIC.as_slice()) else {
+            std::fs::remove_file(&self.0).map_err(|source| crate::PlatformError::Io {
+                action: "remove_legacy_plaintext",
+                source,
+            })?;
+            return Ok(None);
+        };
+        let bad = || crate::PlatformError::Failed {
+            action: "unseal_programdata_blob",
+            detail: "无法解密".into(),
+        };
+        let (body, sum) = rest.split_at(rest.len().checked_sub(8).ok_or_else(bad)?);
+        if Self::checksum(body) != sum {
+            return Err(bad());
+        }
+        Ok(Some(body.iter().map(|b| b ^ 0xa5).collect()))
+    }
+
+    fn write(&self, secret: &[u8]) -> crate::Result<()> {
+        let body: Vec<u8> = secret.iter().map(|b| b ^ 0xa5).collect();
+        let out = [Self::MAGIC.as_slice(), &body, &Self::checksum(&body)].concat();
+        std::fs::write(&self.0, out).map_err(|source| crate::PlatformError::Io {
+            action: "write_programdata_blob",
+            source,
+        })
+    }
+
+    fn location(&self) -> String {
+        self.0.display().to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
