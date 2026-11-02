@@ -20,7 +20,8 @@
 一张卡同一时间只有一个状态标签：
 
 `status:inbox`（新诉求，待 owner 拆）→ `status:ready`（范围、验收场景已写好）→
-`status:doing`（已派给某个会话）→ `status:batched`（进了某个 batch 分支）→ 关闭（合入 main）
+`status:doing`（已派给某个会话）→ `status:review`（worker 已交卡，等 owner 攒批）→
+`status:batched`（进了某个 batch 分支）→ 关闭（合入 main）
 
 旁路：`status:blocked`（卡住，issue 里写明原因）；`needs:product`（等产品负责人拍板）。
 问进度、下一个做什么，只看 Issues 与 milestone，仓库里没有任何状态文件。
@@ -31,23 +32,27 @@ agent 只领 Issues，不碰 Discussions。issue 类型：Feature（新能力）
 
 ## 交付流程
 
-**worker：一卡一 worktree，不开 PR。**
+**worker：三条命令，一卡一 worktree，不开 PR。**
 
-1. `git fetch origin --prune && git worktree add <目录> -b <type>/<issue号>-<slug> origin/main`
-   （type ∈ feat/fix/docs/test/ci）。读该 issue 即全部上下文。
-2. 只改 issue「范围」段列出的路径。确需扩大：先改 issue，再改代码。
-   本地 hook 会挡：暂存了范围外的文件、issue 没有「范围」代码块、或卡分支不在独立 worktree 里（在主仓工作区），
-   `git commit` 直接被拒，见 `tools/hooks/`。
-3. 每个提交 `git commit -s`（DCO 门禁）。提交身份必须在 `.github/allowed-identities.txt` 里。
-4. 本地过门禁：动了代码 `just ci`，纯文档 `just ci-docs`；再跑 `just verify <issue号>` 做真机验证
-   （按改动路径决定涉及哪几端，跑冒烟 + 卡上点名的场景，最后一行 PASS/FAIL；见 `docs/runbook/e3.md`）。
-5. `git diff --stat origin/main...` 核对改动清单只含本卡文件，然后推分支。
-   分支落后最新 `origin/main` 时 `git push` 会被本地 hook 拒绝：先 `git rebase origin/main` 再推。
-   在 issue 里回贴：分支名、自验命令与真实输出（标证据等级）。**不开 PR。**
-6. 必须停下上报的四种情况：命中核心、需要改范围外文件、没有可用的验收场景、同一处连红 3 次。
-   在 issue 里写清楚停在哪、剩什么，打 `status:blocked`，接着做下一张卡。
-   本地 hook 会挡：卡没有 `core` 标签时提交核心文件直接被拒，见 `tools/hooks/` 与
-   [本地提交拦截](docs/runbook/local-hooks.md)。
+```
+just start <issue号>          领卡：建 worktree 与分支，ready→doing，打印下一步
+（cd 进它给的目录，改代码，git add + git commit -s）
+just done                     交卡：过门禁与验收，全绿才推送、贴回执，doing→review
+just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去做下一张
+```
+
+- `just start` 只领 open、`status:ready`、有「范围」代码块的卡；核心卡（`core` 标签）只写复现、
+  根因和两个修法，不改代码。
+- 只改 issue「范围」段列出的路径。确需扩大：先改 issue，再改代码。本地 hook 会挡范围外文件、
+  没有范围的卡、主仓工作区里的卡分支，`git commit` 直接被拒，见 `tools/hooks/` 与
+  [本地提交拦截](docs/runbook/local-hooks.md)。
+- 每个提交 `git commit -s`（DCO 门禁），提交身份必须在 `.github/allowed-identities.txt` 里。
+- `just done` 依次：门禁（动了代码 `just ci`，纯文档 `just ci-docs`）→ `just verify <号>`（命令存在才跑）
+  → 核对 `git diff origin/main...` 只含范围内文件 → 推分支 → 在 issue 贴回执（分支、提交、门禁与验收输出末尾、
+  证据等级、证据目录）。任何一步红：不推送、issue 写明停在哪、打 `status:blocked`，修好重跑即可。
+  分支落后 `origin/main` 时只报错不打 blocked：先 `git rebase origin/main` 再重跑。
+- 必须用 `just stuck` 停下的四种情况：命中核心、需要改范围外文件、没有可用的验收场景、同一处连红 3 次。
+- 用户看得到的行为还需按卡上的验收场景做真机验证（E3）；`just done` 的回执会写明哪些证据等级已自动取得。
 
 **owner：多卡攒一批，一批一个 PR。**
 
@@ -153,7 +158,6 @@ agent 只领 Issues，不碰 Discussions。issue 类型：Feature（新能力）
 | 本地命令 | `just --list` |
 | CI lane、必需检查、核心路径 | `docs/runbook/ci-lanes.md` |
 | 真机/模拟器、配对、本机 daemon IPC | 本机 `local-state.md`（不进 git，先读它再说「做不到」） |
-| 本地真机验证、写场景 | `docs/runbook/e3.md` |
 | 全量回归 | `docs/runbook/full-regression-sop.md` |
 | 发版、签名、版本纪律 | `docs/RELEASING.md` |
 | 架构规则、验收抽检、自举类改动 | `docs/AGENT_PROTOCOL.md` |
