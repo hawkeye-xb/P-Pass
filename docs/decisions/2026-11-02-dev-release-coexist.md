@@ -44,10 +44,18 @@ daemon 的 Developer ID 授权文件，#1115 之后完全跑不起来。
 - 开发构建由脚本统一设置 `RUSTFLAGS="--cfg ppf_dev"`，并且使用**独立的 target 目录**
   （`target/dev`），开发产物与正式产物不共享缓存。
 - `Cargo.toml` 用 `[lints.rust] unexpected_cfgs` 登记 `cfg(ppf_dev)`。
-- `#[cfg(ppf_dev)]` 只许出现在 `crates/variant` 和下文列出的少数文件里，由 `arch-check` 白名单管着。
+- `#[cfg(ppf_dev)]` 只许出现在 `crates/variant` 与 §4 的三个签名/密钥文件里，由 `arch-check`
+  白名单管着。其余开发版差异（不注册 updater、DPAPI entropy、拒认正式库……）一律写成
+  `variant::` 常量（如 `UPDATER_ENABLED`、`DPAPI_ENTROPY: Option<&[u8]>`）或
+  `variant::VARIANT == Variant::Dev` 分支，不写 `cfg`。
+- 现有钉正式字面值的测试只允许加一行 `#[cfg(not(ppf_dev))]`，函数体不动。CI 在现有 Rust job
+  里加一步带 `--cfg ppf_dev` 的 `cargo check` + `cargo test -p variant`，**job 名不改**。
+- 仓库目前没有 `.cargo/config.toml`；以后加了 `rustflags`，开发脚本设 `RUSTFLAGS` 时要合并进去
+  （环境变量会整体覆盖配置文件，不是追加）。
+- `crates/variant/**` 加进 `.github/core-paths.txt`，改身份常量要验收人批。
 - 非 Rust 端：Android 用 `BuildConfig.VARIANT`，iOS 用 Info.plist 的 `PPassVariant`。启动时与
   原生库自报的 `variant::VARIANT` 对账，**不一致直接崩溃**。这样不会出现「开发版 APK 带着正式
-  ALPN」这种静默错配。
+  ALPN」这种静默错配。桌面外壳同理：启动时断言 tauri 配置的 `identifier == variant::DESKTOP_APP_ID`。
 
 ### 2. 身份清单（正式值不变，开发值为提议）
 
@@ -59,7 +67,10 @@ daemon 的 Developer ID 授权文件，#1115 之后完全跑不起来。
 | 数据面 ALPN | `ppf/blobs/1` | `ppf-dev/blobs/1` | `crates/transport/src/lib.rs:61` |
 | PAKE 上下文 | `ppass/pair/v1` | `ppass-dev/pair/v1` | `crates/pair-pake/src/lib.rs:31-32` |
 | 配对链接 | `ppf://pair?node=…` | 同左再加 `&v=dev` | `crates/daemon/src/pairing.rs:440`；`crates/transport/src/pair_link.rs` |
-| 库标记目录 | `.ppf` | `.ppf-dev` | `crates/daemon/src/library_location.rs:20` |
+| 库变体标记 | 无（`.ppf/` 目录） | `.ppf/` 不改名，另写 `.ppf/variant` = `dev` | `crates/daemon/src/library_location.rs:20`、`crates/daemon/src/layout.rs` |
+
+库内目录名 `.ppf` 不改：它在 `core-index/src/supersede.rs:44`、`daemon/src/{backup,flow_delivery,query,
+reconcile,residue}.rs` 里以字面值出现十多处，改名会把隔离打散到库格式各处。
 
 **macOS**
 
@@ -131,7 +142,7 @@ daemon 的 Developer ID 授权文件，#1115 之后完全跑不起来。
 | 手机开发版只能配开发版桌面 | 同上三条：手机与桌面用同一份 `variant` 常量 | 协议强制 |
 | 开发版拿不到正式版的密钥 | macOS：正式密钥在钥匙串访问组里，开发版没有该授权，系统拒绝。Android、iOS：应用沙盒。Windows 服务模式：`ProgramData\P-Pass` 的 ACL 只授权给 `NT SERVICE\P-Pass` | 系统强制 |
 | 开发版不碰正式版的文件 | 路径常量不同，开发版里没有指向正式路径的代码 | **约定**：macOS / Windows 用户模式下，同一用户的进程物理上能读这些文件。Windows 用户模式的 DPAPI 再加变体 entropy |
-| 开发版不认领正式版的照片库（含外接盘） | 库标记 `.ppf-dev`；开发版选择目录时遇到 `.ppf` 直接拒绝 | 代码强制（仅开发版） |
+| 开发版不认领正式版的照片库（含外接盘） | 开发版打开或选择库时，只要存在 `.ppf/` 而 `.ppf/variant` 不是 `dev`，就拒绝 | 代码强制（仅开发版）。反方向（正式版打开开发库）不设防：只会伤到测试数据，正式版也就不必改 |
 | 开发版收不到正式更新 | 不注册 updater、不带公钥 | 编译期强制 |
 
 偏离 #1069 的说明：#1069 规定 ALPN 不跟协议版本走，是为了让旧版对端能连上、在带内收到「请升级
@@ -167,12 +178,12 @@ Windows 按用户 SID 认对端（#1167），与代码签名无关，开发版�
 
 1. **字面值快照测试**：`crates/variant` 里有一个只在 `cfg(not(ppf_dev))` 下编译的测试，逐项断言
    上面各表的「正式值」列。现有钉死字面值的测试（`code_signature.rs:255`、`local_peer.rs:459`、
-   `windows.rs:2683` 等）一律不改。
+   `windows.rs:2683` 等）函数体一律不改，只允许加 `#[cfg(not(ppf_dev))]`。
 2. **diff 门禁**：每张卡的 PR 中，上述测试函数体的 diff 必须为空。由脚本
    `tools/check-release-identity-untouched.sh` 判定，输出 PASS/FAIL。
-3. **产物门禁**：发版打包脚本（`bundle-desktop-macos.sh`、Windows NSIS 流程、Android/iOS 发版）对
-   最终二进制跑 `strings`，出现 `ppf-dev/`、`.desktop.dev`、`ppass-dev/` 中任何一个就失败。只靠单测
-   证明不了发出去的包没带 `ppf_dev`，这一道在产物上判。
+3. **产物门禁**：`tools/check-no-dev-identity.sh <产物>` 对最终二进制跑 `strings`，出现 `ppf-dev/`、
+   `.desktop.dev`、`ppass-dev/` 中任何一个就失败。V1 写脚本，各端卡把它接进本端的发版打包步骤。
+   只靠单测证明不了发出去的包没带 `ppf_dev`，这一道在产物上判。
 4. **反证**：把 `ppf_dev` 注入正式构建（或把开发值抄进正式常量），以上三道都必须变红。
 
 ## 理由（与标准做法对照）
@@ -215,14 +226,14 @@ Windows 按用户 SID 认对端（#1167），与代码签名无关，开发版�
 
 | 卡 | 范围（路径） | 验收场景 |
 |---|---|---|
-| V1 变体常量与门禁 | `crates/variant/**`、根 `Cargo.toml`/`Cargo.lock`、`tools/arch-check.sh`、`tools/test-arch-check.sh`、`tools/check-release-identity-untouched.sh`、`justfile` | **例外：本卡没有消费方，拿不出并存证据**。验收：E1 + 快照测试；`ppf_dev` 出现在白名单外时 arch-check 变红；带 `--cfg ppf_dev` 时快照测试被排除、开发值测试通过 |
-| V2 平台身份接线 | `crates/platform/src/{code_signature,macos,keychain,local_peer,windows,windows_service,windows_pipe,windows_programdata}.rs`、`crates/daemon/src/library_location.rs`、`apps/desktop/src-tauri/src/lib.rs`（默认库名） | 正式版：用本分支打一个正式包，在主 Mac 上跑现有回归，结果与 main 一致（E3），并且身份门禁 PASS。开发版：`--cfg ppf_dev` 单测断言所有路径都带后缀 |
+| V1 变体常量与门禁 | `crates/variant/**`、根 `Cargo.toml`/`Cargo.lock`、`.github/core-paths.txt`、`.github/workflows/ci-rust.yml`（加步骤不改名）、`tools/arch-check.sh`、`tools/test-arch-check.sh`、`tools/check-release-identity-untouched.sh`、`tools/check-no-dev-identity.sh`、`justfile` | **例外：本卡没有消费方，拿不出并存证据**。验收：E1 + 快照测试；`ppf_dev` 出现在白名单外时 arch-check 变红；带 `--cfg ppf_dev` 时快照测试被排除、开发值测试通过；改 `crates/variant/src/lib.rs` 的探针 PR 触发 `CI Core review` |
+| V2 平台身份接线 | `crates/platform/src/{code_signature,macos,keychain,local_peer,windows,windows_service,windows_pipe,windows_programdata}.rs`、`crates/daemon/src/{library_location,layout}.rs`、`apps/desktop/src-tauri/src/lib.rs`（默认库名） | 正式版：用本分支打一个正式包，在主 Mac 上跑现有回归，结果与 main 一致（E3），并且身份门禁 PASS。开发版：`--cfg ppf_dev` 单测断言所有路径都带后缀，并拒开没有 `.ppf/variant` 的库 |
 | V3 协议隔离 | `crates/transport/src/lib.rs`、`crates/transport/src/pair_link.rs`、`crates/pair-pake/src/lib.rs`、`crates/daemon/src/pairing.rs`、Android `transport/DaemonClient.kt` | E2 契约矩阵：开发↔开发能配对、能传输；开发↔正式在握手阶段失败；PAKE 上下文不同则配对失败；`v` 不一致时给出提示。反证：把 ALPN 改回正式值，矩阵变红 |
-| V4 macOS 开发版签名 | `crates/platform/src/{code_signature,local_peer,keychain}.rs`（仅 `cfg(ppf_dev)` 段）、`tools/daemon-helper-macos.sh`（开发分支） | 用本机自签证书签名的开发版，外壳与 daemon 能互连；换另一张证书签的外壳被拒；ad-hoc 被拒。正式版 `code_requirement` 的测试 diff 为空 |
-| V5 macOS 开发版打包与 `mac-dev` | `tools/mac-dev.sh`、`tools/release/tauri-config.mjs`、`justfile`、开发版图标 | **主 Mac 并存**：正式版 `P-Pass.app` 与 `P-Pass Dev.app` 同时运行；`launchctl list` 能看到两个 daemon label；两个数据目录、两个库目录；正式版继续收正式手机的备份；开发版用 `tools/android-pair.sh` 配开发版手机（V6 合入前用沙盒脚本代替） |
-| V6 Android 开发版 | `apps/android/app/build.gradle.kts`、`AndroidManifest.xml`、`res/`（名称、图标）、`update/UpdateChecker.kt`、写死包名的脚本 | **三星并存**：两个 App 同时安装；开发版配 Mac 开发版桌面并完成备份；开发版扫正式版二维码时被拒并提示；正式版继续向正式桌面备份；开发版不发起更新检查（日志里没有清单请求） |
-| V7 iOS 开发版 | `apps/ios/Config/**`、`apps/ios/project.yml`、`PPass/Info.plist`、`tools/build-ios-transport-xcframework.sh` | **iPhone 并存**：TestFlight 正式版与 Xcode 装的 `P-Pass Dev` 同时存在；开发版配 Mac 开发版桌面；互扫二维码时被拒 |
-| V8 Windows 开发版 | `crates/platform/src/windows*.rs`（命名）、`apps/desktop/src-tauri/windows/installer-hooks.nsh`、Windows 打包脚本 | **回归机并存**：`sc query` 能看到 `P-Pass` 与 `P-Pass Dev` 两个服务同时在跑；两个 ProgramData 目录；卸载开发版不影响正式版 |
+| V4 macOS 开发版签名 | `crates/platform/src/{code_signature,local_peer,keychain}.rs`（仅 `cfg(ppf_dev)` 段）、`tools/daemon-helper-macos.sh`（开发分支） | 用本机自签证书签名的开发版，外壳与 daemon 能互连；换另一张证书签的外壳被拒；ad-hoc 被拒；hardened runtime 下内置编解码 dylib 能加载（加载不了就在开发版签名里关掉库校验，正式版不动）。正式版 `code_requirement` 的测试 diff 为空 |
+| V5 macOS 开发版打包与 `mac-dev` | `tools/mac-dev.sh`、`tools/release/tauri-config.mjs`、`tools/bundle-desktop-macos.sh`（接产物门禁）、`apps/desktop/src-tauri/src/{lib,update_install}.rs`（不注册 updater、identifier 对账）、`justfile`、开发版图标 | **主 Mac 并存**：正式版 `P-Pass.app` 与 `P-Pass Dev.app` 同时运行；`launchctl list` 能看到两个 daemon label；两个数据目录、两个库目录；正式版继续收正式手机的备份；开发版用 `tools/android-pair.sh` 配开发版手机（V6 合入前用沙盒脚本代替） |
+| V6 Android 开发版 | `apps/android/app/build.gradle.kts`、`AndroidManifest.xml`、`res/`（名称、图标）、`update/UpdateChecker.kt`、写死包名的脚本、Android 发版步骤（接产物门禁） | **三星并存**：两个 App 同时安装；开发版配 Mac 开发版桌面并完成备份；开发版扫正式版二维码时被拒并提示；正式版继续向正式桌面备份；开发版不发起更新检查（日志里没有清单请求） |
+| V7 iOS 开发版 | `apps/ios/Config/**`、`apps/ios/project.yml`、`PPass/Info.plist`、`tools/build-ios-transport-xcframework.sh`、iOS 发版步骤（接产物门禁） | **iPhone 并存**：TestFlight 正式版与 Xcode 装的 `P-Pass Dev` 同时存在；开发版配 Mac 开发版桌面；互扫二维码时被拒 |
+| V8 Windows 开发版 | `crates/platform/src/windows*.rs`（命名）、`apps/desktop/src-tauri/windows/installer-hooks.nsh`、Windows 打包脚本（接产物门禁） | **回归机并存**：`sc query` 能看到 `P-Pass` 与 `P-Pass Dev` 两个服务同时在跑；两个 ProgramData 目录；卸载开发版不影响正式版 |
 
 顺序：V1 → V2 → V3 → V4 → V5 → V6，之后是 V7、V8。V2、V3 合入后，正式版的行为由身份门禁和
 现有回归共同证明没有变化。
