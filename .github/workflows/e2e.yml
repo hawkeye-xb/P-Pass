@@ -34,6 +34,11 @@ on:
   schedule:
     - cron: "30 3 * * *"
   workflow_call:
+    inputs:
+      full:
+        description: "#1309：批次 PR 经 CI Rust gate 调用时为 true，不看 e2e 标签全量跑"
+        type: boolean
+        default: false
   pull_request:
     branches: [main]
     types: [labeled, unlabeled]
@@ -48,7 +53,7 @@ jobs:
     name: Build release binaries (daemon + testclient)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
+    if: inputs.full || github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -92,7 +97,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 50
     # PR 只有打了 e2e label 才跑（labeled 事件但 label 不在 = 移除，跳过）
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
+    if: inputs.full || github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -165,7 +170,7 @@ jobs:
     name: T-070 failure scenarios (in-process)
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
+    if: inputs.full || github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -193,6 +198,12 @@ jobs:
           sudo mount -t tmpfs -o size=6m tmpfs /tmp/ppf-small-fs
           sudo chmod 777 /tmp/ppf-small-fs
           df -h /tmp/ppf-small-fs
+
+      # #1306：导出写满时不留半截文件（.export → fsync → rename）的判别用例，同样要小文件系统。
+      - name: Blob export on a full disk leaves no partial file
+        env:
+          PPF_SCENARIO_SMALL_FS: /tmp/ppf-small-fs
+        run: cargo test --release -p transport --test blobs_export
 
       - name: Run scenarios (huge file / crash recovery / disk full)
         env:
