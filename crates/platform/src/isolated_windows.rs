@@ -322,13 +322,17 @@ pub(crate) fn spawn(exe: &Path, limits: &Limits) -> io::Result<IsolatedChild> {
         let mut cmd = wide(OsStr::new(&format!("\"{}\"", exe.display())));
         // 工作目录 = exe 所在目录（AppContainer 对它有读权限；继承 daemon 的未必有）。
         let cwd = exe.parent().map(|d| wide(d.as_os_str()));
+        // 不能用 CREATE_NO_WINDOW：console 程序仍会被拉起一个隐藏的 conhost.exe 子进程，
+        // 而 Job 的 ActiveProcessLimit=1 + 子进程限制会挡住它，kernel32 控制台初始化失败，
+        // 进程在 main 之前以 0xC0000142 退出。DETACHED_PROCESS 不分配控制台；
+        // 标准输入输出走 STARTF_USESTDHANDLES 的管道 / NUL，不受影响。
         let created = CreateProcessW(
             null(),
             cmd.as_mut_ptr(),
             null(),
             null(),
             1,
-            EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_NO_WINDOW,
+            EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | DETACHED_PROCESS,
             null(),
             cwd.as_ref().map_or(null(), |c| c.as_ptr()),
             &si.StartupInfo,
