@@ -85,7 +85,7 @@ def one(pattern, path):
     return match.group(1)
 
 assert one(r'^version = "([^"]+)"$', root / 'Cargo.toml') == version
-assert one(r'\?: "([^"]+)"', root / 'apps/android/app/build.gradle.kts') == version
+assert one(r'^\s*\?: "([^"]+)"\s*$', root / 'apps/android/app/build.gradle.kts') == version
 assert one(r'"version": "([^"]+)"', root / 'apps/desktop/src-tauri/tauri.conf.json') == version
 assert one(r'"version": "([^"]+)"', root / 'apps/desktop/package.json') == version
 assert one(r'^version = "([^"]+)"$', root / 'apps/desktop/src-tauri/Cargo.toml') == version
