@@ -120,6 +120,9 @@ lint-mobile:
 # 永不返回）。「nextest 没装」和「测试失败」分两路：没装才退回 cargo test
 # 并明说；在但坏了（--version 跑不通，QA-10 实测过这种活死 shim）按没装处理。
 test:
+  # daemon 的缩略图测试经 platform::decoder_worker_path 找 target/debug/ppf-decoder；
+  # cargo 不会替别的包的 bin 构建，干净 target 下不先建它，这些测试会拿到占位图而红。
+  cargo build -p decode-worker --bin ppf-decoder
   @if command -v cargo-nextest >/dev/null 2>&1 && cargo-nextest --version >/dev/null 2>&1; then \
     cargo nextest run; \
   else \
@@ -313,10 +316,10 @@ verify-m1:
     cargo nextest run
     tools/dogfood-smoke.sh /tmp/ppf-verify-m1
     # #809：daemon 与外壳版本同源（bundle-desktop-macos.sh 第 5c 步核对）
-    PPF_BUILD_VERSION="$(tools/release-version.sh desktop)" cargo build --release -p daemon -p testclient
+    PPF_BUILD_VERSION="$(tools/release-version.sh desktop)" cargo build --release -p daemon -p testclient -p decode-worker
     rm -rf /tmp/ppf-rel && mkdir -p /tmp/ppf-rel
     TARGET="${CARGO_TARGET_DIR:-target}"
-    tools/bundle-macos.sh /tmp/ppf-rel "$TARGET/release/daemon" "$TARGET/release/testclient"
+    tools/bundle-macos.sh /tmp/ppf-rel "$TARGET/release/daemon" "$TARGET/release/testclient" "$TARGET/release/ppf-decoder"
     tools/bundle-desktop-macos.sh /tmp/ppf-rel /tmp/ppf-rel
 
 # Android unit tests (proto golden drift check included)

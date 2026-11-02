@@ -298,18 +298,30 @@ pub(crate) async fn settle_generation(
     let failed = match joined {
         Ok(result) => {
             let (state, failed) = match &result.outcome {
-                media_codec::ThumbOutcome::Generated => (1, false),
+                media_codec::ThumbOutcome::Generated => (Some(1), false),
                 media_codec::ThumbOutcome::Placeholder { reason } => {
                     tracing::warn!(
                         hash = %prefix,
                         reason = %reason,
                         "thumb generation failed; placeholder served"
                     );
-                    (2, true)
+                    (Some(2), true)
+                }
+                // 解码子进程本机不可用：系统性问题，不记 thumb_state=2
+                // （否则整库被永久冻成占位图），走 retry_after 重试。
+                media_codec::ThumbOutcome::Unavailable { reason } => {
+                    tracing::error!(
+                        hash = %prefix,
+                        reason = %reason,
+                        "decode sandbox unavailable; placeholder served, will retry"
+                    );
+                    (None, true)
                 }
             };
-            if let Err(e) = db.set_thumb_state(hash, state).await {
-                tracing::warn!(hash = %prefix, "thumb_state write failed: {e}");
+            if let Some(state) = state {
+                if let Err(e) = db.set_thumb_state(hash, state).await {
+                    tracing::warn!(hash = %prefix, "thumb_state write failed: {e}");
+                }
             }
             failed
         }

@@ -461,7 +461,7 @@ daemon 是 `config.toml` 与诊断包的唯一写者：照片库位置只经 IPC
 | 登记缺失时补登记 | 否 | 是（卸载会删登记，DESK-60） | `autostart_restore_when_missing` |
 | 数据目录 | `~/Library/Application Support/P-Pass` | `%LOCALAPPDATA%\com.hawkeyexb.ppass.desktop`（老 Roaming 目录在时沿用，迁移见 §11） | `data_dir` |
 | 入库文件名 | 不改 | 去非法字符 / 保留名 / 结尾点与空格 | `ingest_file_name_sanitizer` |
-| 视频缩略图 | media-codec 用 qlmanage | 系统 `IShellItemImageFactory` | `system_video_thumbnail` |
+| 视频缩略图（没有 ffmpeg 时） | media-codec 用 qlmanage | 不提供，显示占位图 | — |
 | 关窗与标题栏 | 不提示藏到托盘；overlay 标题栏 | 提示一次；系统标题栏 | `close_to_tray_hint` / `overlay_titlebar` |
 | 更新时文件被占用 | 不适用 | 按系统错误码给 key | `is_file_in_use_os_error` |
 

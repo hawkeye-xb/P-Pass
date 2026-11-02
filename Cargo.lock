@@ -1078,6 +1078,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "decode-worker"
+version = "0.10.1"
+dependencies = [
+ "image",
+ "libheif-rs",
+ "tempfile",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3011,8 +3021,8 @@ version = "0.10.1"
 dependencies = [
  "core-index",
  "core-media",
+ "decode-worker",
  "image",
- "libheif-rs",
  "platform",
  "tempfile",
  "thiserror 2.0.19",

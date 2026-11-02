@@ -72,7 +72,7 @@ jobs:
         uses: ./.github/actions/system-codecs
 
       - name: Build release binaries (daemon + testclient)
-        run: cargo build --release -p daemon -p testclient
+        run: cargo build --release -p daemon -p testclient -p decode-worker
 
       # actions/upload-artifact 的 zip 打包会丢失可执行位（已知问题）；
       # tar 格式自带 mode bit，下游 tar -xzf 后天然恢复 +x。
