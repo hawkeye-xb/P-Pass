@@ -49,17 +49,21 @@ agent 只领 Issues，不碰 Discussions。issue 类型：Feature（新能力）
    本地 hook 会挡：卡没有 `core` 标签时提交核心文件直接被拒，见 `tools/hooks/` 与
    [本地提交拦截](docs/runbook/local-hooks.md)。
 
-**owner：多卡攒一批，一批一个 PR。**
+**owner：多卡攒一批，一批一个 PR。每一步只用下面的命令**（说明见 [owner 流程](docs/runbook/owner.md)）。
+命令自带判定；红了或判定不了，命令自己写 issue（`status:blocked`）并停下。owner 不手动补做、
+不绕过、不改判定，接着处理别的批次或卡。
 
-1. 从最新 `origin/main` 开 `batch/<日期>-<主题>`，把多张卡的分支合进来，卡打 `status:batched`。
-2. 本地全量验证（`just ci` + 全部 `tools/test-*.sh` + 受影响端真机回归）。
-3. 开一个 PR，正文逐卡列出 `closes #N` 与验证证据；盯全部 lane（不只看必需检查）到结论，
-   红了在 batch 分支上修。CI 全绿后 squash 合入。
-4. PR 落后 main：无冲突用 `gh pr update-branch`；有冲突从最新 main 新开分支重放改动，
-   关旧 PR。压缩提交只能 `reset --soft $(git merge-base HEAD origin/main)`，
+1. `just batch-plan`：看 `status:review` 的卡能否进批次（范围、核心与 ADR、DCO、冲突），输出建议批次。
+2. `just batch-open <主题> <issue...>`：按建议开 `batch/<日期>-<主题>`，逐张合入，卡打 `status:batched`。
+3. 到它打印的 worktree 里 `just batch-verify`：`just ci` + 全部 `tools/test-*.sh` + 受影响端真机，写批次报告。
+4. `just batch-pr`：开 PR、批准已定案的 core review、等全部检查；全绿 squash 合入，红了写 PR 评论停下。
+   修好后重跑 3、4。main 在批次期间前进了，按同样的卡用新主题重开（命令会给出整行命令）。
+   在批次分支上手修时，压缩提交只能 `reset --soft $(git merge-base HEAD origin/main)`，
    **绝不 `reset --soft origin/main`**（会把旧工作区当新内容提交，撤回别人刚合入的改动）。
-5. 合入后清理：`just cleanup-local`（默认预览，删除要 `--apply`）。squash 合并下判断分支能否删
+5. 要出 test 包：`just release-test <端...>`（端以 plan-builds 判定为准）。正式版只由产品负责人发布。
+6. 合入后清理：`just cleanup-local`（默认预览，删除要 `--apply`）。squash 合并下判断分支能否删
    看上游 `: gone]`，删用 `-D`。
+7. 产品取向的问题：`just owner-stuck "<问题>" --product "<选项一>" "<选项二>"`，然后做别的。
 
 ## 红线（违反 = 事故）
 
