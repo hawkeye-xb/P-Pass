@@ -39,13 +39,13 @@ use tauri::Manager;
 // 需内联注册（独立函数标注单参数类型会类型不匹配）。
 
 // ── I18N-03 (#492)：托盘菜单文案 ───────────────────────────────────────
-// 与前端同一份字典：编译期 include_str! 仓库根的 assets/i18n/*.json，不另开
-// 副本。系统语言由前端报上来（`set_tray_locale`，传的就是它自己按
+// 与前端同一份桌面字典：编译期 include_str! apps/desktop/src/i18n/*.json，不另开
+// 副本（#1302：托盘只用桌面自己的 ui.* key，不需要跨端集合 assets/i18n）。系统语言由前端报上来（`set_tray_locale`，传的就是它自己按
 // navigator.language 判出来的 zh / en），所以托盘和窗口永远同一种语言；在前端
 // 报到之前（启动后不到一秒，以及前端还没起来时的安装位置对话框），按平台适配器
 // 的 `system_locale()` 定初值：zh* → zh，其它和读不到 → en（B6，#1043）。
-const I18N_EN: &str = include_str!("../../../../assets/i18n/en.json");
-const I18N_ZH: &str = include_str!("../../../../assets/i18n/zh.json");
+const I18N_EN: &str = include_str!("../../src/i18n/en.json");
+const I18N_ZH: &str = include_str!("../../src/i18n/zh.json");
 
 /// #550：托盘「导出诊断包」的菜单 id——TRAY_ITEMS 与 on_menu_event 的分支
 /// 共用这一个常量，拼错不会被 match 的 `_ => {}` 静默吞掉。
