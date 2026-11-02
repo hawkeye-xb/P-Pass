@@ -262,7 +262,7 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check hooks-test flow-worker-test supply-chain-check mobile-static-check lockfile-check flow-owner-test heavy-lock-test
+ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check hooks-test flow-worker-test supply-chain-check mobile-static-check lockfile-check flow-owner-test heavy-lock-test ci-local-map-check
   @echo "==> CI pipeline: all green ✅"
 
 # 两个 Rust workspace 的 Cargo.lock 都得和实际依赖一致（src-tauri 是独立 workspace，
@@ -294,7 +294,7 @@ mobile-static-check:
 #
 # ⚠️ 只在这次改动**一行 Rust/Kotlin/前端都没动**时用它。碰了代码就跑 `just ci`，
 # 别拿这条快车道当省事的借口——`ci` 的依赖列表一个都没减。
-ci-docs: md-check token-check shell-vars-check identity-check hooks-test flow-worker-test supply-chain-check flow-owner-test heavy-lock-test
+ci-docs: md-check token-check shell-vars-check identity-check hooks-test flow-worker-test supply-chain-check flow-owner-test heavy-lock-test ci-local-map-check
   @echo "==> docs lane: green ✅（注意：本条不含 fmt/lint/test，动了代码必须跑 just ci）"
 
 # T-040 人工验收：自启/防睡眠/密钥仓 真机冒烟（H-09 双平台各跑一次）
@@ -418,9 +418,12 @@ ios-screenshots *args:
 
 # iOS 单元测试：生成工程 → 模拟器上 xcodebuild test。模拟器选法见 tools/ios/sim.sh
 # （默认 iPhone 17，IOS_SIM_NAME 可改；不写死 runtime 版本）。本配方启动的模拟器跑完即关。
+# 与 ci-ios.yml 同一组：App 测试 → 隐私清单 → TransportFFITests（模拟器 + 本机隔离 daemon，
+# daemon 用 debug 构建，与 CI 一致）。少跑 FFI 那步，Rust 侧改了 FFI 字段本地看不出来（11-02 #1304）。
 ios-test:
   bash tools/ios/test.sh
   bash tools/ios/privacy-manifest-local.sh
+  PPASS_DAEMON_PROFILE=dev bash tools/ios/test-transport-ffi.sh
 
 # iOS 本地 SwiftPM 包（apps/ios/Packages/*/Package.swift）逐个在模拟器上测（#345）。没有包时直接通过。
 ios-test-packages:
@@ -540,3 +543,9 @@ flow-owner-test:
 # 重编译锁入口的判据测试：可重入、串行、超时（#1308；进 ci / ci-docs）
 heavy-lock-test:
     @bash tools/test-heavy-lock.sh
+
+# CI 检查 → 本地命令对照表（tools/flow/ci-local-map.tsv）：先跑判据测试（删映射必须红），
+# 再判真实 workflow 是否每个 job 都有映射。CI 加了新 job 而对照表没跟上，这里就红。
+ci-local-map-check:
+    @bash tools/flow/ci-local-map.test.sh
+    @python3 tools/flow/ci-local-map.py check

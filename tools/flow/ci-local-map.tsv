@@ -1,0 +1,112 @@
+# CI 检查 → 本地命令对照表（#1305）。机器读：tools/flow/ci-local-map.py；说明见 docs/runbook/owner.md。
+#
+# 覆盖 .github/workflows/ci-*.yml 与 e2e.yml 里的每个 job：每个 job 至少一行，少一个 job、多一个已不存在的
+# job，`just ci-local-map-check` 都判红。一个 job 可以拆成多行（每行一步），报告按步给结论。
+#
+# 列（tab 分隔）：workflow  job  where  gate  step  command-or-reason
+#   where  mac      本机（Mac）在仓库根目录用 bash 跑 command
+#          win      Windows 回归机经 owner-win-test.sh 在交互会话里用 cmd 跑 command
+#          ci-only  本地跑不了的检查，最后一列写理由（报告里列为「只能 CI」）
+#          meta     编排、路径判定、手动发布类 job，没有检查内容，最后一列写理由（不进报告）
+#   gate   与 CI 同一口径决定跑不跑（--only 指定时忽略）：
+#          always            每次都跑
+#          paths             读该 workflow 的 changes job 传给 .github/actions/changes 的 paths，
+#                            交给 tools/ci-paths.sh hit
+#          lane[:<名字>]     tools/ci-needs-full-lane.sh <base> [名字]
+#          -                 只给 meta / ci-only 用
+#   win 的 command 写在生成的 .cmd 脚本里，%VAR% 在该行执行前展开（%CD% 是克隆根目录）。
+#   command 里的占位符：@BASE@ = merge-base(HEAD, origin/main)；
+#          @PPF_DECODER@ = 工作区有 ppf-decoder 这个 bin 时是它的构建命令（daemon 测试要拉起它，
+#          cargo test / nextest 不会替别的包构建 bin），没有时是空操作。
+#
+# 偏离 CI 的地方都写在 step 名或这里：
+#   - Linux 不单独跑（产品不支持 Linux）。ubuntu 上平台无关的检查在 Mac 跑同样的命令；
+#     结果只代表 macOS 目标，Linux 目标的编译与测试只能 CI。
+#   - actionlint / gitleaks 用本机 Homebrew 版本（CI 钉的是 Linux 二进制）；没装就红，不跳过。
+#   - pnpm 与 CI 同为 11（CI 用 npm install -g pnpm@11），本地经 npx -y pnpm@11 调用，不改全局。
+
+ci-rust.yml	changes	meta	-	-	路径判定 job，本地由 gate 列按同一脚本判
+ci-rust.yml	gate	meta	-	-	汇总 job，本地按步给结论
+ci-rust.yml	fmt	mac	lane:rust-workspace	toolchain	tools/check-rust-toolchain-ci.sh
+ci-rust.yml	fmt	mac	lane:rust-workspace	actionlint	actionlint -color
+ci-rust.yml	fmt	mac	lane:rust-workspace	fmt	cargo fmt --all -- --check
+ci-rust.yml	clippy	mac	lane:rust-workspace	clippy-all-features	cargo clippy --all-targets --all-features -- -D warnings
+ci-rust.yml	test	mac	lane:rust-workspace	nextest-all-features	@PPF_DECODER@ && cargo nextest run --all-features
+ci-rust.yml	test	mac	lane:rust-workspace	check-platform-windows-target	rustup target add x86_64-pc-windows-msvc && cargo check -p platform --target x86_64-pc-windows-msvc
+ci-rust.yml	test	mac	lane:rust-workspace	clippy-platform-x86_64-apple-darwin	rustup target add x86_64-apple-darwin && cargo clippy -p platform --all-targets --features test-support --target x86_64-apple-darwin -- -D warnings
+ci-rust.yml	test-windows	win	lane:rust-workspace	fetch-ffmpeg	set PPF_FFMPEG_FORCE_FETCH=1&& "%ProgramFiles%\Git\bin\bash.exe" tools/fetch-ffmpeg.sh
+ci-rust.yml	test-windows	win	lane:rust-workspace	nextest	set PPF_FFMPEG=%CD%\tools\ffmpeg\ffmpeg.exe&& @PPF_DECODER@ && cargo nextest run --no-fail-fast
+ci-rust.yml	clippy-windows	win	lane:rust-workspace	clippy	cargo clippy --all-targets -- -D warnings
+ci-rust.yml	test-platform-macos	mac	lane:rust-workspace	macos-tests-listed	n=$(cargo test -p platform --all-targets --features test-support -- --list 2>/dev/null | grep -c '^macos::' || true); echo "macOS-only tests listed: $n"; test "$n" -ge 1
+ci-rust.yml	test-platform-macos	mac	lane:rust-workspace	platform-tests	cargo test -p platform --all-targets --features test-support
+ci-rust.yml	arch	mac	lane	arch-check	bash tools/test-arch-check.sh && bash tools/arch-check.sh
+ci-rust.yml	fitness-check	mac	lane	egress	bash tools/test-check-egress.sh && python3 tools/check-egress.py
+ci-rust.yml	fitness-check	mac	lane	autostart	bash tools/test-check-autostart.sh && python3 tools/check-autostart.py
+ci-rust.yml	fitness-check	mac	lane	disk-growth	bash tools/test-check-disk-growth.sh && python3 tools/check-disk-growth.py
+ci-rust.yml	deny	mac	lane:rust-workspace	licenses-bans	cargo deny check licenses bans
+ci-rust.yml	deny	mac	lane:rust-workspace	advisories	tools/test-ci-deny-advisories.sh && tools/ci-deny-advisories.sh .
+
+ci-desktop.yml	changes	meta	-	-	路径判定 job，本地由 gate 列按同一脚本判
+ci-desktop.yml	gate	meta	-	-	汇总 job，本地按步给结论
+ci-desktop.yml	desktop-linux	mac	lane	stub-sidecar	mkdir -p apps/desktop/src-tauri/binaries && t=apps/desktop/src-tauri/binaries/ppf-daemon-$(rustc -vV | sed -n 's/^host: //p') && { [ -e "$t" ] || { touch "$t" && chmod +x "$t"; }; }
+ci-desktop.yml	desktop-linux	mac	lane	src-tauri-fmt	cd apps/desktop/src-tauri && cargo fmt -- --check
+ci-desktop.yml	desktop-linux	mac	lane	src-tauri-clippy	cd apps/desktop/src-tauri && cargo clippy --all-targets -- -D warnings
+ci-desktop.yml	desktop-linux	mac	lane	src-tauri-test-lib	cd apps/desktop/src-tauri && cargo test --lib
+ci-desktop.yml	desktop-linux	mac	lane	src-tauri-deny	cd apps/desktop/src-tauri && cargo deny check licenses bans
+ci-desktop.yml	desktop-linux	mac	lane	src-tauri-advisories	tools/ci-deny-advisories.sh apps/desktop/src-tauri
+ci-desktop.yml	desktop-linux	mac	lane	pnpm-install	cd apps/desktop && npx -y pnpm@11 install --frozen-lockfile
+ci-desktop.yml	desktop-linux	mac	lane	vite-build	cd apps/desktop && npx -y pnpm@11 build
+ci-desktop.yml	desktop-linux	mac	lane	pnpm-test	cd apps/desktop && npx -y pnpm@11 test
+ci-desktop.yml	desktop-linux	ci-only	-	linux-target	Linux 的 tauri 系统依赖与 Linux 目标编译（产品不支持 Linux，本地不搭 Linux 环境）
+ci-desktop.yml	desktop-windows	win	lane	src-tauri-fmt	cd apps\desktop\src-tauri && cargo fmt -- --check
+ci-desktop.yml	desktop-windows	win	lane	src-tauri-clippy	cd apps\desktop\src-tauri && (if not exist binaries mkdir binaries) && (if not exist binaries\ppf-daemon-x86_64-pc-windows-msvc.exe type nul > binaries\ppf-daemon-x86_64-pc-windows-msvc.exe) && cargo clippy --all-targets -- -D warnings
+ci-desktop.yml	desktop-windows	win	lane	src-tauri-test-lib	cd apps\desktop\src-tauri && cargo test --lib
+ci-desktop.yml	desktop-windows	win	lane	pnpm-test	cd apps\desktop && npx -y pnpm@11 install --frozen-lockfile && npx -y pnpm@11 test
+
+ci-ios.yml	changes	meta	-	-	路径判定 job，本地由 gate 列按同一脚本判
+ci-ios.yml	gate	meta	-	-	汇总 job，本地按步给结论
+ci-ios.yml	testflight	meta	-	-	手动上传 TestFlight（workflow_dispatch 才跑，PR 不跑）
+ci-ios.yml	certificates	meta	-	-	手动只读列证书（workflow_dispatch 才跑，PR 不跑）
+ci-ios.yml	ios	mac	paths	gen-tokens	python3 tools/ios/gen-tokens.py --check
+ci-ios.yml	ios	mac	paths	sync-i18n	tools/ios/sync-i18n.sh --check
+ci-ios.yml	ios	mac	paths	stamp-version	tools/ios/test-stamp-version.sh
+ci-ios.yml	ios	mac	paths	testflight-signing	tools/ios/check-testflight-signing.sh --self-test && tools/ios/check-testflight-signing.sh
+ci-ios.yml	ios	mac	paths	gen-strings	python3 tools/ios/gen-strings.py --check
+ci-ios.yml	ios	mac	paths	no-color-literals	tools/ios/check-no-color-literals.sh --self-test && tools/ios/check-no-color-literals.sh
+ci-ios.yml	ios	mac	paths	app-tests	rustup target add aarch64-apple-ios aarch64-apple-ios-sim && tools/ios/test.sh
+ci-ios.yml	ios	mac	paths	privacy-manifest	tools/ios/privacy-manifest-local.sh
+ci-ios.yml	ios	mac	paths	swiftpm-packages	tools/ios/test-packages.sh
+ci-ios.yml	ios	mac	paths	TransportFFITests	PPASS_DAEMON_PROFILE=dev tools/ios/test-transport-ffi.sh
+
+ci-android.yml	changes	meta	-	-	路径判定 job，本地由 gate 列按同一脚本判
+ci-android.yml	gate	meta	-	-	汇总 job，本地按步给结论
+ci-android.yml	android	mac	paths	unit-tests	rustup target add aarch64-linux-android && source tools/java-home.sh && cd apps/android && ./gradlew :app:testDebugUnitTest
+ci-android.yml	android	mac	paths	lint	source tools/java-home.sh && cd apps/android && ./gradlew :app:lintDebug
+ci-android.yml	android	mac	paths	assemble-debug	source tools/java-home.sh && cd apps/android && ./gradlew :app:assembleDebug
+ci-android.yml	android	mac	paths	compile-android-test	source tools/java-home.sh && cd apps/android && ./gradlew :app:compileDebugAndroidTestKotlin
+ci-android.yml	android	mac	paths	apk-native-libs	APK=$(find apps/android/app/build/outputs/apk/debug -name 'P-Pass_*.apk' | head -1); [ -n "$APK" ] || { echo "debug APK 不在"; exit 1; }; if unzip -l "$APK" | grep -q libiroh_ffi.so; then echo "APK 里还有 libiroh_ffi.so"; exit 1; fi; unzip -l "$APK" | grep -q lib/arm64-v8a/libtransport.so
+
+ci-docs.yml	changes	meta	-	-	路径判定 job，本地由 gate 列按同一脚本判
+ci-docs.yml	gate	meta	-	-	汇总 job，本地按步给结论
+ci-docs.yml	docs	mac	paths	md-token-shellvars	python3 tools/check-markdown-tables.py && python3 tools/check-token-drift.py && python3 tools/check-shell-vars.py --self-test && python3 tools/check-shell-vars.py
+ci-docs.yml	dogfood-assets	mac	paths	dogfood-assets	bash tools/test-dogfood-assets.sh --self-test && bash tools/test-dogfood-assets.sh
+ci-docs.yml	supply-chain	mac	paths	release-age-exclude	bash tools/test-release-age-exclude.sh && python3 tools/check-release-age-exclude.py
+ci-docs.yml	mirror-resolve	mac	paths	mirror-resolve	bash tools/test-mirror-resolve-tag.sh
+ci-docs.yml	release-version-source	mac	paths	release-version-source	bash tools/test-release-version-source.sh
+ci-docs.yml	release-notes	mac	paths	release-notes	node --test tools/release-notes.test.mjs && node tools/release-notes.mjs lint
+ci-docs.yml	release-plan	mac	paths	release-plan	bash tools/test-release-plan.sh && node --test tools/release/tauri-config.test.mjs && bash tools/release/test-update-key-lib.sh && bash tools/release/test-carry-signature.sh && python3 tools/release/test-secret-isolation.py --self-test
+ci-docs.yml	release-dry-run	mac	paths	release-dry-run	tools/release/dry-run.sh
+ci-docs.yml	release-timeouts	mac	paths	release-timeouts	bash tools/test-release-timeouts.sh
+
+ci-core-review.yml	changes	meta	-	-	路径判定 job（碰没碰核心），batch-pr 用同一份 core-paths 判
+ci-core-review.yml	approve	meta	-	-	owner 审批（environment 审批），由 just batch-pr 代批，不是检查
+ci-core-review.yml	gate	meta	-	-	汇总 job
+
+ci-dco.yml	dco	mac	always	dco	bash tools/test-dco-gate.sh && bash tools/check-dco.sh @BASE@..HEAD
+ci-identity.yml	identity	mac	always	identity	bash tools/test-commit-identity-gate.sh && bash tools/check-commit-identity.sh @BASE@..HEAD
+ci-secrets.yml	gitleaks	mac	always	gitleaks	gitleaks git --config .gitleaks.toml --ignore-gitleaks-allow --redact --log-opts=@BASE@..HEAD .
+
+e2e.yml	build	meta	-	-	只为下游 e2e job 产出 release 二进制，没有检查内容
+e2e.yml	e2e	ci-only	-	android-live	PR 带 e2e 标签才跑；Linux runner 上起 Android 模拟器跑 hello/pair。本地真机链路由 just verify 场景库覆盖
+e2e.yml	scenarios	mac	lane:rust-workspace	scenarios-release	cargo test --release -p daemon --test scenarios -- --ignored --test-threads=1
+e2e.yml	scenarios	ci-only	-	disk-full	磁盘满剧本要 6MB tmpfs（Linux mount），本地不设 PPF_SCENARIO_SMALL_FS 时该剧本打印 SKIP
