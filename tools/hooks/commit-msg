@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# PPASS_HOOK_BYPASS=1 时把绕过原因记进提交说明末尾的 `Hook-Bypass: <原因>` 尾行，供事后审计。
+# 检查本身在 pre-commit 里；这里只负责记账（原因为空同样拒绝，防止只装了这一个 hook 时漏记）。
+
+set -uo pipefail
+
+[ "${PPASS_HOOK_BYPASS:-}" = "1" ] || exit 0
+reason="$(printf '%s' "${PPASS_HOOK_BYPASS_REASON:-}" | tr '\n' ' ' |
+  sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+if [ -z "$reason" ]; then
+  echo "✗ 提交被拦下：PPASS_HOOK_BYPASS=1 必须同时给出 PPASS_HOOK_BYPASS_REASON" >&2
+  exit 1
+fi
+git interpret-trailers --in-place --trailer "Hook-Bypass: ${reason}" "$1"

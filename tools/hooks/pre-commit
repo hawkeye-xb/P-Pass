@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+# 本地提交拦截：核心 + 范围。由转发器（tools/hooks/dispatch.sh）从 HEAD 取出来跑，
+# 说明见 docs/runbook/local-hooks.md。
+#
+#   batch/*                         不拦（owner 的批分支）
+#   <type>/<issue号>-<slug>         查该 issue：
+#     - 暂存改动命中核心（tools/ci-paths.sh core，规则 .github/core-paths.txt）且 issue 没有 `core` 标签 → 拒绝
+#     - 暂存改动有文件不在 issue「范围」代码块的路径/glob 里 → 拒绝；没有范围代码块 → 拒绝
+#   其它分支名、detached HEAD        拒绝
+# 查不到 issue（没装 gh、没登录、离线）一律拒绝。
+# 紧急逃生：PPASS_HOOK_BYPASS=1 PPASS_HOOK_BYPASS_REASON=<原因>，commit-msg 会在提交说明末尾记一行
+# `Hook-Bypass: <原因>`。原因为空则拒绝。
+#
+# 环境变量：PPASS_HOOK_ROOT（取规则与脚本的根目录，转发器设置）；PPASS_HOOK_REPO（owner/repo，
+# 默认从 origin 的 URL 解析）。
+
+set -uo pipefail
+
+ROOT="${PPASS_HOOK_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
+PATHS="${ROOT}/tools/ci-paths.sh"
+RULES="${ROOT}/.github/core-paths.txt"
+
+deny() { # deny <一句话原因> [补充行]...
+  printf '\n✗ 提交被拦下：%s\n' "$1" >&2
+  shift
+  local l
+  for l in "$@"; do printf '    %s\n' "$l" >&2; done
+  printf '\n  规则见 AGENTS.md「交付流程」与 docs/runbook/local-hooks.md。\n\n' >&2
+  exit 1
+}
+
+trim() { printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
+
+if [ "${PPASS_HOOK_BYPASS:-}" = "1" ]; then
+  [ -n "$(trim "${PPASS_HOOK_BYPASS_REASON:-}")" ] ||
+    deny "PPASS_HOOK_BYPASS=1 必须同时给出原因" \
+      "用法：PPASS_HOOK_BYPASS=1 PPASS_HOOK_BYPASS_REASON='<为什么必须绕过>' git commit -s ..." \
+      "原因会写进提交说明的 Hook-Bypass: 尾行，供事后审计。"
+  printf '⚠ PPASS_HOOK_BYPASS：跳过核心与范围检查（原因：%s）\n' "$(trim "$PPASS_HOOK_BYPASS_REASON")" >&2
+  exit 0
+fi
+
+# --no-renames：改名要同时算旧路径和新路径，否则 git mv 能把核心文件「搬」出核心目录。
+FILES="$(git -c core.quotepath=false diff --cached --name-only --no-renames)" ||
+  deny "读不到暂存区改动列表"
+[ -n "$FILES" ] || exit 0
+
+if BRANCH="$(git symbolic-ref --quiet --short HEAD)"; then :; else BRANCH=""; fi
+case "$BRANCH" in
+  batch/*) exit 0 ;;
+esac
+if [[ "$BRANCH" =~ ^(feat|fix|docs|test|ci)/([0-9]+)-. ]]; then
+  ISSUE="${BASH_REMATCH[2]}"
+else
+  deny "当前分支「${BRANCH:-（detached HEAD）}」不是卡分支" \
+    "卡分支格式：<type>/<issue号>-<slug>，type ∈ feat/fix/docs/test/ci；owner 的批分支是 batch/*。" \
+    "开分支：git worktree add <目录> -b fix/<issue号>-<slug> origin/main"
+fi
+
+REPO="${PPASS_HOOK_REPO:-}"
+if [ -z "$REPO" ]; then
+  REPO="$(git config --get remote.origin.url 2>/dev/null |
+    sed -E -e 's#/+$##' -e 's#\.git$##' -e 's#^.*[:/]([^/:]+/[^/:]+)$#\1#')"
+fi
+[[ "$REPO" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] ||
+  deny "解析不出 GitHub 仓库（origin URL 不认识）" "设 PPASS_HOOK_REPO=<owner>/<repo> 再提交。"
+
+command -v gh >/dev/null 2>&1 ||
+  deny "找不到 gh，查不了 #${ISSUE} 的标签与范围，按拒绝处理" "装好并登录 gh（gh auth login）后再提交。"
+if ! OUT="$(gh issue view "$ISSUE" -R "$REPO" --json labels,body \
+  --jq '"labels:" + ([.labels[].name] | join(",")), .body' 2>&1)"; then
+  deny "查询 ${REPO}#${ISSUE} 失败（离线、没登录或 issue 不存在），按拒绝处理" \
+    "gh 输出：$(printf '%s' "$OUT" | head -3 | tr '\n' ' ')"
+fi
+OUT="$(printf '%s\n' "$OUT" | tr -d '\r')"
+LABELS="$(printf '%s\n' "$OUT" | sed -n '1s/^labels://p')"
+BODY="$(printf '%s\n' "$OUT" | sed '1d')"
+
+# ── 核心 ─────────────────────────────────────────────────────────────
+CORE_ERR="$(printf '%s\n' "$FILES" | bash "$PATHS" core - "$RULES" 2>&1 >/dev/null)"
+CORE="$(printf '%s\n' "$FILES" | bash "$PATHS" core - "$RULES" 2>/dev/null)"
+if [ "$CORE" != "false" ]; then
+  case ",${LABELS}," in
+    *,core,*) printf 'ok: #%s 带 core 标签，放行核心改动\n' "$ISSUE" >&2 ;;
+    *)
+      HITS=()
+      while IFS= read -r l; do
+        case "$l" in 核心：*) HITS+=("$l") ;; esac
+      done <<EOF
+$CORE_ERR
+EOF
+      deny "这是核心改动：按 AGENTS.md 红线 6 只写复现/根因/两个修法，不改代码" \
+        ${HITS[@]+"${HITS[@]}"} \
+        "做法：git restore --staged <上面的文件> 并撤回改动；在 #${ISSUE} 里写复现、根因和两个修法，打 status:blocked。" \
+        "owner 定下由谁实现后，会给 #${ISSUE} 打 core 标签，届时才放行。"
+      ;;
+  esac
+fi
+
+# ── 范围 ─────────────────────────────────────────────────────────────
+# 「范围」标题之后的第一个 ``` 代码块；代码块之前先碰到下一个 **标题** 或 # 标题，就算没有。
+SCOPE="$(printf '%s\n' "$BODY" | awk '
+  !insec && /^\*\*范围/ { insec = 1; next }
+  insec && !infence && /^[[:space:]]*```/ { infence = 1; found = 1; next }
+  infence && /^[[:space:]]*```/ { exit }
+  infence { print; next }
+  insec && (/^\*\*[^*]+\*\*/ || /^#/) { exit }
+')"
+GLOBS=()
+while IFS= read -r g; do
+  g="$(trim "$g")"
+  case "$g" in "" | "#"*) continue ;; esac
+  g="${g#./}"
+  case "$g" in */) g="${g}**" ;; esac
+  GLOBS+=("$g")
+done <<EOF
+$SCOPE
+EOF
+[ "${#GLOBS[@]}" -gt 0 ] ||
+  deny "#${ISSUE} 没有可读的「范围」" \
+    "issue 正文要有「**范围（只许动这些）**：」，下面跟一个 \`\`\` 代码块，一行一个路径或 glob（** 跨目录，* 不跨 /）。" \
+    "让 owner 先把范围补进 issue，再提交。"
+
+OUTSIDE=()
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  hit="$(printf '%s\n' "$f" | bash "$PATHS" hit - "${GLOBS[@]}" 2>/dev/null)"
+  [ "$hit" = "true" ] || OUTSIDE+=("$f")
+done <<EOF
+$FILES
+EOF
+if [ "${#OUTSIDE[@]}" -gt 0 ]; then
+  deny "有 ${#OUTSIDE[@]} 个文件不在 #${ISSUE} 的「范围」里" \
+    "${OUTSIDE[@]/#/越界：}" \
+    "范围：${GLOBS[*]}" \
+    "做法：git restore --staged <越界文件>；确需扩大，先让 owner 改 issue 的范围，再提交。"
+fi
+exit 0

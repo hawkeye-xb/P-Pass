@@ -20,6 +20,8 @@
 + tools/check-commit-identity.sh
 + tools/arch-check.sh
 + tools/arch-allowlist.txt
++ tools/hooks/**
++ tools/test-local-hooks.sh
 
 # ── 安全：配对、身份、加密、协议 ────────────────────────────
 + crates/pair-pake/**

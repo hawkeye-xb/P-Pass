@@ -36,12 +36,15 @@ agent 只领 Issues，不碰 Discussions。issue 类型：Feature（新能力）
 1. `git fetch origin --prune && git worktree add <目录> -b <type>/<issue号>-<slug> origin/main`
    （type ∈ feat/fix/docs/test/ci）。读该 issue 即全部上下文。
 2. 只改 issue「范围」段列出的路径。确需扩大：先改 issue，再改代码。
+   本地 hook 会挡：暂存了范围外的文件、或 issue 没有「范围」代码块，`git commit` 直接被拒，见 `tools/hooks/`。
 3. 每个提交 `git commit -s`（DCO 门禁）。提交身份必须在 `.github/allowed-identities.txt` 里。
 4. 本地过门禁：动了代码 `just ci`，纯文档 `just ci-docs`；按卡上的验收场景做真机验证。
 5. `git diff --stat origin/main...` 核对改动清单只含本卡文件，然后推分支。
    在 issue 里回贴：分支名、自验命令与真实输出（标证据等级）。**不开 PR。**
 6. 必须停下上报的四种情况：命中核心、需要改范围外文件、没有可用的验收场景、同一处连红 3 次。
    在 issue 里写清楚停在哪、剩什么，打 `status:blocked`，接着做下一张卡。
+   本地 hook 会挡：卡没有 `core` 标签时提交核心文件直接被拒，见 `tools/hooks/` 与
+   [本地提交拦截](docs/runbook/local-hooks.md)。
 
 **owner：多卡攒一批，一批一个 PR。**
 
