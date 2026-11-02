@@ -8,7 +8,8 @@ full-regression-sop (the pre-release full regression run, agent-executable on an
 update-signing-keys (test / stable update-signing keys: setup, rotation, compromise; the key-compromise procedure lives in its "suspected leak" section) /
 ios-app-privacy (iOS privacy manifest and App Store privacy label: answers and code evidence) /
 ci-lanes (CI lanes, required checks and why job names must never change) /
-local-hooks (the local commit gate: core paths and card scope are checked at `git commit`).
+local-hooks (the local commit gate: core paths and card scope are checked at `git commit`) /
+e3 (`just verify`: on-device smoke and scenario checks before handing in a card; how to write scenarios).
 
 ---
 
@@ -28,4 +29,5 @@ ios-app-privacy（iOS 隐私清单与 App Store 隐私标签的填法和代码�
 ci-lanes（CI lane 怎么判跳过、必需检查为什么不许改 job 名、核心路径，
 `docs/runbook/ci-lanes.md`）/
 local-hooks（本地提交拦截：`git commit` 时按核心名单与卡的「范围」拦，
-`docs/runbook/local-hooks.md`）。
+`docs/runbook/local-hooks.md`）/
+e3（`just verify`：交卡前的本地真机冒烟与场景验证、怎么写场景，`docs/runbook/e3.md`）。

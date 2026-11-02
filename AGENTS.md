@@ -39,7 +39,8 @@ agent 只领 Issues，不碰 Discussions。issue 类型：Feature（新能力）
    本地 hook 会挡：暂存了范围外的文件、issue 没有「范围」代码块、或卡分支不在独立 worktree 里（在主仓工作区），
    `git commit` 直接被拒，见 `tools/hooks/`。
 3. 每个提交 `git commit -s`（DCO 门禁）。提交身份必须在 `.github/allowed-identities.txt` 里。
-4. 本地过门禁：动了代码 `just ci`，纯文档 `just ci-docs`；按卡上的验收场景做真机验证。
+4. 本地过门禁：动了代码 `just ci`，纯文档 `just ci-docs`；再跑 `just verify <issue号>` 做真机验证
+   （按改动路径决定涉及哪几端，跑冒烟 + 卡上点名的场景，最后一行 PASS/FAIL；见 `docs/runbook/e3.md`）。
 5. `git diff --stat origin/main...` 核对改动清单只含本卡文件，然后推分支。
    分支落后最新 `origin/main` 时 `git push` 会被本地 hook 拒绝：先 `git rebase origin/main` 再推。
    在 issue 里回贴：分支名、自验命令与真实输出（标证据等级）。**不开 PR。**
@@ -152,6 +153,7 @@ agent 只领 Issues，不碰 Discussions。issue 类型：Feature（新能力）
 | 本地命令 | `just --list` |
 | CI lane、必需检查、核心路径 | `docs/runbook/ci-lanes.md` |
 | 真机/模拟器、配对、本机 daemon IPC | 本机 `local-state.md`（不进 git，先读它再说「做不到」） |
+| 本地真机验证、写场景 | `docs/runbook/e3.md` |
 | 全量回归 | `docs/runbook/full-regression-sop.md` |
 | 发版、签名、版本纪律 | `docs/RELEASING.md` |
 | 架构规则、验收抽检、自举类改动 | `docs/AGENT_PROTOCOL.md` |
