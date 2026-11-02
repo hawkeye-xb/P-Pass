@@ -15,11 +15,11 @@ if ! command -v lockf >/dev/null 2>&1; then echo "SKIP：本机没有 lockf"; ex
 # 1. 嵌套：外层持锁，内层同锁调用必须立即执行（10s 内完成）
 start=$(date +%s)
 PPASS_HEAVY_LOCK_WAIT=10 "$HL" "$HL" true; rc=$?
-[ "$rc" -eq 0 ] && [ $(( $(date +%s) - start )) -lt 9 ] && ok "嵌套调用不死锁" || bad "嵌套调用死锁或失败（rc=$rc）"
+[ "$rc" -eq 0 ] && [ $(( $(date +%s) - start )) -lt 9 ] && ok "嵌套调用不死锁" || bad "嵌套调用死锁或失败（rc=${rc}）"
 
 # 1 反证：内层绕过可重入（直接 lockf 同一把锁）必须超时
 PPASS_HEAVY_LOCK_WAIT=10 "$HL" lockf -k -t 2 "$PPASS_HEAVY_LOCK" true >/dev/null 2>&1; rc=$?
-[ "$rc" -ne 0 ] && ok "反证：绕过入口的嵌套会卡住（rc=$rc）" || bad "反证失效：直接 lockf 嵌套居然成功"
+[ "$rc" -ne 0 ] && ok "反证：绕过入口的嵌套会卡住（rc=${rc}）" || bad "反证失效：直接 lockf 嵌套居然成功"
 
 # 2. 串行：两个并发调用不重叠
 "$HL" bash -c "echo a1 >>'$tmp/seq'; sleep 1; echo a2 >>'$tmp/seq'" &
@@ -34,7 +34,7 @@ holder=$!
 sleep 0.3
 out="$(PPASS_HEAVY_LOCK_WAIT=1 "$HL" true 2>&1)"; rc=$?
 kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
-[ "$rc" -eq 75 ] && printf '%s' "$out" | grep -q '等重编译锁超过' && ok "等锁超时退出 75 并提示" || bad "超时行为不对（rc=$rc）：$out"
+[ "$rc" -eq 75 ] && printf '%s' "$out" | grep -q '等重编译锁超过' && ok "等锁超时退出 75 并提示" || bad "超时行为不对（rc=${rc}）：$out"
 
 echo
 echo "heavy-lock: ${pass} passed, ${fail} failed"
