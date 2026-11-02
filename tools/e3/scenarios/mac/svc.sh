@@ -21,7 +21,7 @@ setup() {
 
 # run_cycle <是否在停服务期间偷偷拉起 0|1>
 run_cycle() {
-  local inject="$1" mark p0 p1 p2 i t
+  local inject="$1" mark p0 p1 p2 i t p
   svc_version >"$OUT/installed-version.json"
   # 候选：有候选签名包就以它为准（just verify 会先把它装上），否则看候选 daemon 二进制
   if [ -d "$(mac_cand_app)" ]; then
@@ -32,13 +32,15 @@ run_cycle() {
   mark=$(log_mark)
   p0=$(svc_pid)
   echo "$p0" >"$OUT/pid-before.txt"
+  svc_all >"$OUT/daemons-before.txt"
   # 1) 用户停服务：bootout 后每 5s 采样一次进程表
   svc_stop
   : >"$OUT/stop-samples.txt"
   for t in $(seq 5 5 "$STOP_WINDOW"); do
     sleep 5
     [ "$inject" = 1 ] && [ "$t" = 10 ] && svc_start
-    echo "t+${t}s pid=$(svc_any_pid)" >>"$OUT/stop-samples.txt"
+    p=$(svc_any_pid)
+    echo "t+${t}s pid=${p}$( [ -n "$p" ] && echo " ppid=$(ps -o ppid= -p "$p" | tr -d ' ') parent=$(ps -o comm= -p "$(ps -o ppid= -p "$p")" 2>/dev/null)")" >>"$OUT/stop-samples.txt"
   done
   # 2) 恢复（相当于用户点「启动后台服务」）
   svc_start
@@ -60,6 +62,8 @@ run_cycle() {
   wait_ready "$mark"
   launchctl print "$MAC_DOMAIN/$MAC_LABEL" >"$OUT/launchctl-print.txt" 2>&1
   log_since "$mark" >"$OUT/daemon-log-after-kill.txt"
+  # 窗口程序这段时间的状态日志（谁在服务停掉后做了什么）
+  tail -n 80 "$HOME/Library/Application Support/P-Pass/logs/desktop.log" >"$OUT/desktop-log-tail.txt" 2>/dev/null
 }
 
 # wait_ready <打点>：等日志里出现打点之后的「启动就绪」（最多 60s；没等到交给 judge 判）
@@ -81,6 +85,7 @@ new_pid() {
   [ -n "$b" ] && [ "$a" != "$b" ]
 }
 
+single_daemon() { [ "$(grep -c . "$1/daemons-before.txt" 2>/dev/null)" = 1 ] && [ "$(awk '{print $1}' "$1/daemons-before.txt")" = "$(tr -d '[:space:]' <"$1/pid-before.txt")" ]; }
 no_line_any() { ! cat "$1"/daemon-log-*.txt 2>/dev/null | grep -Eq -- "$2"; }
 
 judge() {
@@ -90,6 +95,7 @@ judge() {
   echo "  INFO  已装版本 ${iv:-?}；候选版本 ${cv:-?}"
   [ "$iv" = "$cv" ] || echo "  INFO  已装的不是候选构建：本场景验的是已装那一版的服务行为"
   check "停服务前在线" [ -n "$(tr -d '[:space:]' <"$d/pid-before.txt" 2>/dev/null)" ]
+  check "停服务前只有一个常驻 daemon（launchd 那份）" single_daemon "$d"
   check "停服务 ${STOP_WINDOW}s 内一次都没被拉起" no_line "$d/stop-samples.txt" 'pid=[0-9]'
   check "恢复后在线" [ -n "$(tr -d '[:space:]' <"$d/pid-restarted.txt" 2>/dev/null)" ]
   check "强杀后 30s 内换了新进程" new_pid "$d"

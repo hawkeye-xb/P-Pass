@@ -72,8 +72,21 @@ mac_install_app() {
   rm -rf "$old"
   svc_start
   mac_wait_ready "$mark" || return 1
-  [ "$had_shell" = 1 ] && open "$MAC_APP"
+  [ "$had_shell" = 1 ] && { open "$MAC_APP"; mac_wait_shell_settled; }
   return 0
+}
+
+# mac_wait_shell_settled：等刚打开的窗口程序连上服务（desktop.log 出现打开之后的 to=running），再静置 10s。
+# 外壳启动的头几秒在做自己的对账，这时外部停服务会被它重新登记（11-02 e3 实测），稳态场景要避开这个窗口。
+mac_wait_shell_settled() {
+  local t0 i
+  t0=$(($(date +%s) * 1000))
+  for i in $(seq 1 60); do
+    awk -v t="$t0" 'match($0, /^at_ms=[0-9]+/) && substr($0, 7, RLENGTH - 6) + 0 >= t && /to=running/ {f = 1} END {exit !f}' \
+      "$HOME/Library/Application Support/P-Pass/logs/desktop.log" 2>/dev/null && break
+    sleep 1
+  done
+  sleep 10
 }
 
 # mac_wait_ready <打点> [秒]：服务进程在、日志里出现打点后的「启动就绪」

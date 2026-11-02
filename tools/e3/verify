@@ -101,6 +101,7 @@ if [ -z "$ends" ]; then
   exit 0
 fi
 mkdir -p "$root"
+: >"$root/.started"   # 本次运行的起点：之后留的 Mac 快照才归本次装回
 log "涉及的端：${ends}；证据：$root"
 
 # —— 构建候选 ——
@@ -177,7 +178,7 @@ for e in $ends; do
   E3_MAC_KEEP_CANDIDATE=1 "$E3_ROOT/run" $counter_flag --evidence "$root" $scns
   [ $? -eq 0 ] || fail=1
   # Mac：装回开始前的版本（mac/upgrade 开头留的快照），装不回算失败
-  if [ "$e" = mac ] && [ -d "$E3_STATE/mac-snapshot/P-Pass.app" ] && [ "$(stat -f %m "$E3_STATE/mac-snapshot")" -ge "$(stat -f %m "$root")" ]; then
+  if [ "$e" = mac ] && [ -d "$E3_STATE/mac-snapshot/P-Pass.app" ] && [ "$E3_STATE/mac-snapshot/version.txt" -nt "$root/.started" ]; then
     if "$E3_ROOT/restore" mac --snapshot >>"$root/restore.log" 2>&1; then
       echo "RESTORE mac → $(cat "$E3_STATE/mac-snapshot/version.txt")" | tee -a "$root/summary.txt"
     else

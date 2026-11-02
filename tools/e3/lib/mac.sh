@@ -19,6 +19,8 @@ mac_cand_app() { echo "${E3_MAC_CAND_APP:-$E3_STATE/mac-cand/P-Pass.app}"; }
 svc_pid() { launchctl print "$MAC_DOMAIN/$MAC_LABEL" 2>/dev/null | awk '/^\tpid = / {print $3; exit}'; }
 # 任何常驻 daemon 进程（不带参数的那种；带参数的是 CLI 子命令或测试桩）
 svc_any_pid() { ps -axwwo pid=,command= | awk -v exe="$MAC_DAEMON_EXE" '$2 == exe && NF == 2 {print $1; exit}'; }
+# 全部常驻 daemon 进程（pid ppid 启动时间），一行一个：正常只有 launchd 那一份
+svc_all() { ps -axwwo pid=,ppid=,lstart=,command= | awk -v exe="$MAC_DAEMON_EXE" 'NF == 8 && $8 == exe {print $1, $2, $3, $4, $5, $6, $7}'; }
 svc_loaded() { launchctl print "$MAC_DOMAIN/$MAC_LABEL" >/dev/null 2>&1; }
 # bootout 返回时服务可能还在拆（print 仍查得到）：等它真的从 launchd 里消失，否则紧接着的 svc_start
 # 会误以为「已登记」而什么都不做
