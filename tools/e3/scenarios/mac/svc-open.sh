@@ -25,7 +25,10 @@ setup() {
 
 # open_cycle <是否在第 10s 偷偷拉起 0|1>
 open_cycle() {
-  local inject="$1" lines t p
+  local inject="$1" lines t p i
+  # 上一轮（main）按设计把服务留在停止：本轮先恢复到 setup 时的在跑状态
+  svc_start
+  for i in $(seq 1 30); do [ -n "$(svc_pid)" ] && break; sleep 1; done
   svc_version >"$OUT/installed-version.json"
   svc_pid >"$OUT/pid-before.txt"
   mac_quit_shell
