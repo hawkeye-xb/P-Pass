@@ -14,6 +14,7 @@
 #                            交给 tools/ci-paths.sh hit
 #          lane[:<名字>]     tools/ci-needs-full-lane.sh <base> [名字]
 #          -                 只给 meta / ci-only 用
+#   win 的 command 写在生成的 .cmd 脚本里，%VAR% 在该行执行前展开（%CD% 是克隆根目录）。
 #   command 里的占位符：@BASE@ = merge-base(HEAD, origin/main)；
 #          @PPF_DECODER@ = 工作区有 ppf-decoder 这个 bin 时是它的构建命令（daemon 测试要拉起它，
 #          cargo test / nextest 不会替别的包构建 bin），没有时是空操作。
@@ -33,7 +34,8 @@ ci-rust.yml	clippy	mac	lane:rust-workspace	clippy-all-features	cargo clippy --al
 ci-rust.yml	test	mac	lane:rust-workspace	nextest-all-features	@PPF_DECODER@ && cargo nextest run --all-features
 ci-rust.yml	test	mac	lane:rust-workspace	check-platform-windows-target	rustup target add x86_64-pc-windows-msvc && cargo check -p platform --target x86_64-pc-windows-msvc
 ci-rust.yml	test	mac	lane:rust-workspace	clippy-platform-x86_64-apple-darwin	rustup target add x86_64-apple-darwin && cargo clippy -p platform --all-targets --features test-support --target x86_64-apple-darwin -- -D warnings
-ci-rust.yml	test-windows	win	lane:rust-workspace	nextest	@PPF_DECODER@ && cargo nextest run --no-fail-fast
+ci-rust.yml	test-windows	win	lane:rust-workspace	fetch-ffmpeg	set PPF_FFMPEG_FORCE_FETCH=1&& "%ProgramFiles%\Git\bin\bash.exe" tools/fetch-ffmpeg.sh
+ci-rust.yml	test-windows	win	lane:rust-workspace	nextest	set PPF_FFMPEG=%CD%\tools\ffmpeg\ffmpeg.exe&& @PPF_DECODER@ && cargo nextest run --no-fail-fast
 ci-rust.yml	clippy-windows	win	lane:rust-workspace	clippy	cargo clippy --all-targets -- -D warnings
 ci-rust.yml	test-platform-macos	mac	lane:rust-workspace	macos-tests-listed	n=$(cargo test -p platform --all-targets --features test-support -- --list 2>/dev/null | grep -c '^macos::' || true); echo "macOS-only tests listed: $n"; test "$n" -ge 1
 ci-rust.yml	test-platform-macos	mac	lane:rust-workspace	platform-tests	cargo test -p platform --all-targets --features test-support
