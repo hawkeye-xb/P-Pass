@@ -199,6 +199,12 @@ jobs:
           sudo chmod 777 /tmp/ppf-small-fs
           df -h /tmp/ppf-small-fs
 
+      # #1306：导出写满时不留半截文件（.export → fsync → rename）的判别用例，同样要小文件系统。
+      - name: Blob export on a full disk leaves no partial file
+        env:
+          PPF_SCENARIO_SMALL_FS: /tmp/ppf-small-fs
+        run: cargo test --release -p transport --test blobs_export
+
       - name: Run scenarios (huge file / crash recovery / disk full)
         env:
           PPF_SCENARIO_SMALL_FS: /tmp/ppf-small-fs
