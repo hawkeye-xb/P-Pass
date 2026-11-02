@@ -75,10 +75,12 @@ pub async fn completed_picked_count_at(path: &std::path::Path) -> Option<i64> {
         .connect()
         .await
         .ok()?;
-    sqlx::query_scalar("SELECT COUNT(*) FROM flow_delivery WHERE source = 'picked' AND state = 'completed'")
-        .fetch_one(&mut conn)
-        .await
-        .ok()
+    sqlx::query_scalar(
+        "SELECT COUNT(*) FROM flow_delivery WHERE source = 'picked' AND state = 'completed'",
+    )
+    .fetch_one(&mut conn)
+    .await
+    .ok()
 }
 
 /// 读出交付记录时 join 配对记录取回设备 NodeId。
@@ -400,7 +402,10 @@ mod tests {
             assert!(db.complete_flow_grant(g, "receipt").await.unwrap());
         }
         assert_eq!(super::completed_picked_count_at(&path).await, Some(2));
-        assert_eq!(super::completed_picked_count_at(&dir.path().join("missing.sqlite")).await, None);
+        assert_eq!(
+            super::completed_picked_count_at(&dir.path().join("missing.sqlite")).await,
+            None
+        );
     }
 
     #[tokio::test]

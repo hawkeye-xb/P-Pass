@@ -808,9 +808,15 @@ async fn unconfigured_session(
                 dir,
                 local_base,
                 picked_count,
-            } => {
-                library_missing_dispatch(&req, client, version, started_at, dir, local_base, *picked_count)
-            }
+            } => library_missing_dispatch(
+                &req,
+                client,
+                version,
+                started_at,
+                dir,
+                local_base,
+                *picked_count,
+            ),
             Waiting::Relocating(live) => {
                 relocating_dispatch(&req, client, version, started_at, live)
             }

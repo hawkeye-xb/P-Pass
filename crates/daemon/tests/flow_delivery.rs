@@ -2976,17 +2976,17 @@ async fn offer_records_the_item_source_the_phone_reported() {
     let delivery = FlowDelivery::new(db.clone(), receiver_blobs, root.path());
     let provider = transport.local_addr().to_string();
 
-    let mut picked = request("epoch-current", "lease-picked", [0x11; 32], provider.clone());
+    let mut picked = request(
+        "epoch-current",
+        "lease-picked",
+        [0x11; 32],
+        provider.clone(),
+    );
     picked.queue_sequence = 8;
     picked.source = proto::FlowItemSource::Picked;
     // An old phone's offer: no `source` key at all on the wire.
-    let mut old_wire = serde_json::to_value(request(
-        "epoch-current",
-        "lease-old",
-        [0x22; 32],
-        provider,
-    ))
-    .unwrap();
+    let mut old_wire =
+        serde_json::to_value(request("epoch-current", "lease-old", [0x22; 32], provider)).unwrap();
     old_wire.as_object_mut().unwrap().remove("source");
     let old: FlowFetchRequest = serde_json::from_value(old_wire).unwrap();
 
