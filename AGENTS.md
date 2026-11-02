@@ -24,6 +24,9 @@
 
 旁路：`status:blocked`（卡住，issue 里写明原因）；`needs:product`（等产品负责人拍板）。
 问进度、下一个做什么，只看 Issues 与 milestone，仓库里没有任何状态文件。
+**想法不进 Issues**：还没决定做的功能放 Discussions 的 Ideas 分类；产品负责人说「要做」后，
+owner 用「Create issue from discussion」转成 issue（类型 Feature，大功能拆子 issue，挂 milestone）。
+agent 只领 Issues，不碰 Discussions。issue 类型：Feature（新能力）/ Bug（行为与预期不符）/ Task（其它）。
 开卡用 issue 模板「任务卡」，字段缺了不受理。
 
 ## 交付流程
