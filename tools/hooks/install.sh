@@ -17,9 +17,9 @@
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-OWN_HOOKS="pre-commit commit-msg"
+OWN_HOOKS="pre-commit commit-msg pre-push"
 
-common="$(cd "$(git rev-parse --git-common-dir)" && pwd)"
+common="$(cd "$(git rev-parse --git-common-dir)" && pwd -P)"
 dest="${common}/ppass-hooks"
 current="$(git config --get core.hooksPath || true)"
 

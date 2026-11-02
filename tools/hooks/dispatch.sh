@@ -18,17 +18,26 @@ common="$(git rev-parse --git-common-dir 2>/dev/null)" || {
   exit 1
 }
 
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
+# 从 stdin 读参数的 hook：先存下来，原有 hook 和我们的各喂一份（否则原有 hook 读完就没了）。
+# 其它 hook 的 stdin 可能是终端，不能 cat。
+case "$name" in
+  pre-push | post-rewrite | reference-transaction) cat >"${tmp}/stdin" ;;
+  *) : >"${tmp}/stdin" ;;
+esac
+
 legacy="${common}/hooks/${name}"
 if [ -x "$legacy" ]; then
-  "$legacy" "$@" || exit $?
+  "$legacy" "$@" <"${tmp}/stdin" || exit $?
 fi
 
 git cat-file -e "HEAD:tools/hooks/${name}" 2>/dev/null || exit 0
 
-tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
-if ! git archive HEAD tools/hooks tools/ci-paths.sh .github/core-paths.txt | tar -x -C "$tmp"; then
+mkdir "${tmp}/root"
+if ! git archive HEAD tools/hooks tools/ci-paths.sh .github/core-paths.txt | tar -x -C "${tmp}/root"; then
   echo "✗ P-Pass hook：从 HEAD 取 hook 与核心规则失败，按拒绝处理" >&2
   exit 1
 fi
-PPASS_HOOK_ROOT="$tmp" bash "${tmp}/tools/hooks/${name}" "$@"
+PPASS_HOOK_ROOT="${tmp}/root" bash "${tmp}/root/tools/hooks/${name}" "$@" <"${tmp}/stdin"

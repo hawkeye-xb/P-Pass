@@ -1,7 +1,7 @@
 # 本地提交拦截（核心 + 范围）
 
 `git commit` 那一刻由 git hook 判两件事，不对就拒绝提交：改动有没有碰核心、
-有没有改出卡的「范围」。只靠 git 自身，不依赖任何 agent 外壳的 hook 机制，
+有没有改出卡的「范围」。`git push` 时再判一件：卡分支有没有跟上最新的 `origin/main`。只靠 git 自身，不依赖任何 agent 外壳的 hook 机制，
 所以不管提交是谁发起的，规则都一样。
 
 ## 判什么
@@ -9,7 +9,7 @@
 | 当前分支 | 判定 |
 |---|---|
 | `batch/*`（owner 的批分支） | 不拦 |
-| `<type>/<issue号>-<slug>`，type ∈ feat/fix/docs/test/ci | 用 `gh` 查该 issue，下面两条都要过 |
+| `<type>/<issue号>-<slug>`，type ∈ feat/fix/docs/test/ci | 必须在独立 worktree 里（在主仓工作区直接拒绝）；用 `gh` 查该 issue，下面两条都要过 |
 | 其它分支名、detached HEAD | 拒绝 |
 
 1. **核心**：暂存改动用 `tools/ci-paths.sh core` 判定，规则是 `.github/core-paths.txt`，
@@ -21,6 +21,14 @@
    需要先把范围补进 issue。范围不认项目符号列表和 `{a,b}` 写法。
 
 暂存列表按 `--no-renames` 取，改名时旧路径和新路径都要判。空提交不判。
+
+**主仓工作区**：主仓目录是产品负责人与其他会话共用的现场，卡分支只许在
+`git worktree add` 出来的独立目录里提交。`batch/*` 不受此限。
+
+**推送（pre-push）**：推送卡分支前，hook 会现取一次远端的 `main`。卡分支没有包含它时拒绝，
+并提示 `git rebase origin/main`。这条放在推送而不是提交：交付时才要求跟上 main，
+和 GitHub 的「require branches up to date」是同一个口径；干活途中 main 前进了，不会打断提交。
+`batch/*` 不管。
 查不到 issue 时一律拒绝，包括没装 `gh`、没登录、离线、issue 不存在这几种情况。
 
 ## 防篡改
@@ -66,6 +74,7 @@ PPASS_HOOK_BYPASS=1 PPASS_HOOK_BYPASS_REASON='<为什么必须绕过>' git commi
   兜底仍然是 CI 的 `core review` 和 owner 合批时的审查。
 - 通行证本身挡不住故意绕过的人：任何能编辑 issue 的账号都可以给卡打 `core` 标签、改「范围」。
   这一层防的是忘了规矩，故意绕过的情况仍然要靠 `core review` 和 owner 审查兜底。
+- 自己开 PR、自己在 GitHub 上操作，本地 hook 管不到。
 - 在卡分支上解决合并冲突后用 `git commit` 收尾时，暂存区里会带上对方分支的全部改动，
   可能被判为越界或碰了核心。卡分支本来就不该合别的分支；确实需要时，走紧急逃生并写明原因。
 - 每次在卡分支上提交都要请求一次 GitHub API（约 1 秒）。

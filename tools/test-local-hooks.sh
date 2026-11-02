@@ -91,6 +91,16 @@ bash tools/hooks/install.sh >/dev/null || {
   echo "安装失败"
   exit 1
 }
+COMMON="${R}/.git"
+# 推送目标：本地裸仓库，remote 名 up（origin 保留 SSH 别名 URL，测仓库名解析）。
+git init -q --bare --template= "${TMP}/up.git"
+git remote add up "${TMP}/up.git"
+git push -q up main
+# 卡分支只许在 linked worktree 里提交：主仓放到 detached HEAD，用例都在 worktree W 里跑。
+git checkout -q --detach
+W="${TMP}/wt"
+git worktree add -q "$W" main
+cd "$W" || exit 1
 
 # try <期望 pass|deny> <说明> <分支> <动作（在该分支上执行的 shell）> [输出必须包含的文字]
 # 每条都从 main 的干净状态开始。
@@ -181,18 +191,67 @@ try pass "不 bypass 的普通提交不带 Hook-Bypass 尾行" fix/101-nb 'echo 
 git log -1 --format=%B | grep -q '^Hook-Bypass:' && bad "  多出了 Hook-Bypass 尾行" || ok "  无 Hook-Bypass 尾行"
 
 echo "==> 7. 转发原有 hook 与其它"
-mkdir -p .git/hooks
-printf '#!/bin/sh\necho "legacy hook says no" >&2\nexit 1\n' >.git/hooks/pre-commit
-chmod +x .git/hooks/pre-commit
+mkdir -p "${COMMON}/hooks"
+printf '#!/bin/sh\necho "legacy hook says no" >&2\nexit 1\n' >"${COMMON}/hooks/pre-commit"
+chmod +x "${COMMON}/hooks/pre-commit"
 try deny "原 .git/hooks/pre-commit 拒绝时仍拒绝" batch/2026-11-02-y 'echo 1 >>docs/a/x.md; git add -A' "legacy hook says no"
-rm -f .git/hooks/pre-commit
+rm -f "${COMMON}/hooks/pre-commit"
 try pass "  反证：去掉原 hook → 放行" batch/2026-11-02-y 'echo 1 >>docs/a/x.md; git add -A'
 git checkout -q -f -B fix/101-empty main
 git commit -s -q --allow-empty -m "test: empty" 2>/dev/null && ok "卡分支上的空提交放行" || bad "卡分支上的空提交被拒"
 
-echo "==> 8. 安装自检"
+echo "==> 8. 主仓工作区"
+git -C "$R" checkout -q -f -B fix/101-main main
+echo 1 >>"${R}/docs/a/x.md"
+git -C "$R" add -A
+out="$(git -C "$R" commit -s -q -m "test: main worktree" 2>&1)" && bad "主仓工作区里的卡分支提交 → 期望 deny，实得 pass" ||
+  { printf '%s' "$out" | grep -qF "在主仓工作区里" && ok "主仓工作区里的卡分支提交 → deny" || bad "主仓工作区拒绝提示不对：${out}"; }
+git -C "$R" checkout -q -f -B batch/2026-11-02-main main
+echo 1 >>"${R}/docs/a/x.md"
+git -C "$R" add -A
+git -C "$R" commit -s -q -m "test: batch in main worktree" 2>/dev/null && ok "  主仓工作区里的 batch/* 不拦" || bad "主仓工作区里的 batch/* 被拒"
+git -C "$R" checkout -q --detach
+# 同样改动在 worktree 里放行，见第 1 节「普通卡，只改范围内文件」。
+
+echo "==> 9. 推送：卡分支必须包含最新 main"
+pushed() { # pushed <期望 pass|deny> <说明> <分支> [输出必须包含的文字]
+  local out rc got
+  out="$(git push -q -f up "$3" 2>&1)"
+  rc=$?
+  if [ "$rc" -eq 0 ]; then got=pass; else got=deny; fi
+  if [ "$got" != "$1" ]; then
+    bad "$2 → 期望 $1，实得 ${got}"
+    printf '%s\n' "$out" | sed 's/^/        /'
+  elif [ -n "${4:-}" ] && ! printf '%s' "$out" | grep -qF -- "$4"; then
+    bad "$2 → ${got}，但输出里没有「$4」：${out}"
+  else
+    ok "$2 → ${got}"
+  fi
+}
+try pass "（准备）卡分支提交" fix/101-push 'echo p >>docs/a/x.md; git add -A'
+pushed pass "基于最新 main 的卡分支" fix/101-push
+# main 在远端前进一个提交（直接造对象推上去，不经过任何分支）。
+adv="$(git commit-tree -p main -m "main moved" "main^{tree}")"
+git push -q up "${adv}:refs/heads/main"
+# 原有 pre-push 会读光 stdin：证明转发器给两边各喂了一份。
+printf '#!/bin/sh\ncat >/dev/null\nexit 0\n' >"${COMMON}/hooks/pre-push"
+chmod +x "${COMMON}/hooks/pre-push"
+git checkout -q fix/101-push
+echo q >>docs/a/x.md
+git add -A
+git commit -s -q -m "test: more"
+pushed deny "main 前进后推送落后的卡分支（原有 pre-push 先读光了 stdin）" fix/101-push "落后 up/main 1 个提交"
+git checkout -q -B batch/2026-11-02-push fix/101-push
+pushed pass "  落后的 batch/* 不拦" batch/2026-11-02-push
+git checkout -q fix/101-push
+git rebase -q up/main
+pushed pass "  反证：rebase 到 up/main 后 → 放行" fix/101-push
+rm -f "${COMMON}/hooks/pre-push"
+git fetch -q up main:main 2>/dev/null || git update-ref refs/heads/main "$adv"
+
+echo "==> 10. 安装自检"
 git checkout -q -f main
-bash tools/hooks/install.sh --check >/dev/null 2>&1 && ok "已安装 → --check 通过" || bad "已安装却 --check 失败"
+bash tools/hooks/install.sh --check >"${TMP}/check.out" 2>&1 && ok "已安装 → --check 通过" || bad "已安装却 --check 失败：$(cat "${TMP}/check.out")"
 git config --unset core.hooksPath
 bash tools/hooks/install.sh --check >/dev/null 2>&1 && bad "未安装 → --check 却通过" || ok "  反证：未安装 → --check 失败"
 git checkout -q -B fix/101-uninst main

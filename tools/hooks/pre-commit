@@ -6,7 +6,9 @@
 #   <type>/<issue号>-<slug>         查该 issue：
 #     - 暂存改动命中核心（tools/ci-paths.sh core，规则 .github/core-paths.txt）且 issue 没有 `core` 标签 → 拒绝
 #     - 暂存改动有文件不在 issue「范围」代码块的路径/glob 里 → 拒绝；没有范围代码块 → 拒绝
+#     - 卡分支在主仓工作区（不是 linked worktree）里 → 拒绝
 #   其它分支名、detached HEAD        拒绝
+# 推送时另有 tools/hooks/pre-push：卡分支必须包含最新的 origin/main。
 # 查不到 issue（没装 gh、没登录、离线）一律拒绝。
 # 紧急逃生：PPASS_HOOK_BYPASS=1 PPASS_HOOK_BYPASS_REASON=<原因>，commit-msg 会在提交说明末尾记一行
 # `Hook-Bypass: <原因>`。原因为空则拒绝。
@@ -55,6 +57,16 @@ else
   deny "当前分支「${BRANCH:-（detached HEAD）}」不是卡分支" \
     "卡分支格式：<type>/<issue号>-<slug>，type ∈ feat/fix/docs/test/ci；owner 的批分支是 batch/*。" \
     "开分支：git worktree add <目录> -b fix/<issue号>-<slug> origin/main"
+fi
+
+# 卡分支只许在独立 worktree 里提交：主仓工作区是产品负责人与其他会话共用的，
+# 在那里切分支干活会把别人的现场一起改掉。linked worktree 的 git 目录 ≠ 公共目录。
+GIT_DIR_ABS="$(cd "$(git rev-parse --absolute-git-dir)" && pwd -P)"
+COMMON_ABS="$(cd "$(git rev-parse --git-common-dir)" && pwd -P)"
+if [ "$GIT_DIR_ABS" = "$COMMON_ABS" ]; then
+  deny "卡分支「${BRANCH}」在主仓工作区里，不在独立 worktree 里" \
+    "一卡一 worktree：git fetch origin --prune && git worktree add <目录> -b <新卡分支> origin/main" \
+    "已有改动先搬过去：git stash，在新 worktree 里 git stash pop；然后把主仓切回原来的分支。"
 fi
 
 REPO="${PPASS_HOOK_REPO:-}"
