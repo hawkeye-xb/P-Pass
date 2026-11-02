@@ -687,8 +687,7 @@ impl PlatformAdapter for WindowsAdapter {
                 source: e,
             })?;
         }
-        let account = format!(r"NT SERVICE\{}", windows_service::SERVICE_NAME);
-        let service = crate::windows_programdata::account_sid_string(&account)?;
+        let service = service_account_sid()?;
         let owner = crate::windows_programdata::current_user_sid_string()?;
         Ok(
             match crate::windows_photo_dir::make_private_for_service(dir, &service, &owner)? {
@@ -697,6 +696,78 @@ impl PlatformAdapter for WindowsAdapter {
                     crate::LibraryDirGrant::SkippedNoAcl { file_system }
                 }
             },
+        )
+    }
+
+    /// t2-4：服务形态下只读核对库根（服务账户读得了 DACL，改不了）。主人取主人记录：
+    /// 服务进程的「当前用户」是服务账户自己。还没有主人 ⇒ 不核对。
+    fn library_privacy(&self, dir: &Path) -> Result<crate::LibraryPrivacy> {
+        if !crate::service_mode_active() {
+            return Ok(crate::LibraryPrivacy::NotApplicable);
+        }
+        let Some(owner) = crate::windows_pipe::read_owner_at(&crate::windows_pipe::owner_path())?
+        else {
+            return Ok(crate::LibraryPrivacy::NotApplicable);
+        };
+        let service = service_account_sid()?;
+        let privacy = crate::windows_photo_dir::root_privacy(dir, &service, &owner)?;
+        if privacy == crate::LibraryPrivacy::Private {
+            let marker = crate::windows_photo_dir::privatized_marker(
+                &crate::windows_programdata::service_root(),
+            );
+            if let Err(e) = crate::windows_photo_dir::note_private(dir, &marker) {
+                tracing::warn!("t2-4: 照片库私有化标记写不进去：{e}");
+            }
+        }
+        Ok(privacy)
+    }
+
+    /// t2-4：安装器（管理员）对服务形态的当前库「只强制一次」私有化（见
+    /// [`crate::windows_photo_dir::privatize_once`]）。库位置与主人都读 ProgramData 里的正本
+    /// （不经 `service_root()`：安装器不是以服务身份运行）。
+    fn enforce_library_private(&self) -> Result<crate::LibraryPrivacyFix> {
+        use crate::windows_service;
+        use crate::LibraryPrivacyFix::*;
+        if !windows_service::is_installed(windows_service::SERVICE_NAME)? {
+            return Ok(NotApplicable {
+                reason: "后台服务没有安装",
+            });
+        }
+        let root = crate::windows_programdata::service_root();
+        let Some(bytes) =
+            crate::ProgramDataStore::new(root.join("library.json"), "照片库位置").read()?
+        else {
+            return Ok(NotApplicable {
+                reason: "还没有配置照片库",
+            });
+        };
+        let dir = String::from_utf8(bytes)
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from)
+            .ok_or_else(|| PlatformError::Failed {
+                action: "enforce_library_private",
+                detail: "库位置正本读不懂".into(),
+            })?;
+        let Some(owner) = crate::windows_pipe::read_owner_at(&crate::windows_pipe::owner_path())?
+        else {
+            return Ok(NotApplicable {
+                reason: "还没有主人",
+            });
+        };
+        // 外置盘没插时原位置不在：不建目录、不设权限（服务启动会进「找不到照片库」）。
+        if !dir.is_dir() {
+            return Ok(NotApplicable {
+                reason: "照片库目录此刻不在",
+            });
+        }
+        let service = service_account_sid()?;
+        crate::windows_photo_dir::privatize_once(
+            &dir,
+            &service,
+            &owner,
+            &crate::windows_photo_dir::privatized_marker(&root),
         )
     }
 
@@ -965,6 +1036,12 @@ impl PlatformAdapter for WindowsAdapter {
         }
     }
 
+    /// W-4：服务形态（daemon 以服务运行，或窗口程序看到服务已注册）由窗口程序读。
+    /// daemon 进程里问不了「服务已注册」（服务账户查不了自己的服务对象），所以两个判据取或。
+    fn disk_encryption_read_by_window(&self) -> bool {
+        crate::service_mode_active() || service_registered()
+    }
+
     /// DESK-58 (#875)：stderr 落在与 `daemon.log` 同目录的 `daemon.err`——
     /// `daemon.log` 是 tracing 的完整运行日志，这份只装 tracing 接不住的东西
     /// （文件日志之前的报错、`main` 返回的 `Err`、panic），尾行就是「为什么没
@@ -1133,6 +1210,14 @@ fn bitlocker_protection(root: &str) -> Option<u32> {
         }
         value
     }
+}
+
+/// 服务账户 `NT SERVICE\P-Pass` 的 SID（由服务名派生，不需要服务正在运行）。
+fn service_account_sid() -> Result<String> {
+    crate::windows_programdata::account_sid_string(&format!(
+        r"NT SERVICE\{}",
+        crate::windows_service::SERVICE_NAME
+    ))
 }
 
 fn service_registered() -> bool {

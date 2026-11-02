@@ -4109,6 +4109,37 @@ mod tests {
         assert!(reg < start_svc, "必须先声明特权再起服务");
     }
 
+    /// t2-4：每次安装 / 升级都调一次照片库私有化（每个库根只强制一次，由 platform 判）——在
+    /// POSTINSTALL 版本复查通过的分支里、起服务之前，不在「首次注册服务」的分支里（否则升级不执行）。
+    /// 反证：删掉这一行、挪进 PPassRegisterService 的 `${If}`、或挪到 `sc start` 之后，本测试红。
+    #[test]
+    fn installer_privatizes_the_library_on_every_install_before_starting_the_service() {
+        let hooks = include_str!("../windows/installer-hooks.nsh").replace("\r\n", "\n");
+        let post = &hooks[hooks
+            .find("!macro NSIS_HOOK_POSTINSTALL")
+            .expect("缺 POSTINSTALL")..];
+        let post = &post[..post.find("!macroend").expect("宏没有结束")];
+        let line = "\"$INSTDIR\\ppf-daemon.exe\" library privatize";
+        assert_eq!(hooks.matches(line).count(), 1, "恰好调用一次");
+        let at = post.find(line).expect("POSTINSTALL 里没有收紧照片库");
+        let prepared = post
+            .find("!insertmacro PPassPrepareDataDir")
+            .expect("没准备目录");
+        let start_svc = post
+            .find("sc.exe\" start \"${PPASS_SERVICE}\"")
+            .expect("没起服务");
+        let recover = post.find("Call UpdateFailureRecover").expect("缺失败分支");
+        let else_at = post.find("${Else}").expect("缺成功分支");
+        assert!(
+            recover < else_at && else_at < at,
+            "必须在版本复查通过的分支里"
+        );
+        assert!(
+            prepared < at && at < start_svc,
+            "必须在准备目录之后、起服务之前"
+        );
+    }
+
     /// 服务 DACL：交互用户只能查询/启停；Administrators 必须保留删除（SD）与改权限
     /// （WD/WO），否则卸载器以管理员跑的 `sc delete` 被拒、服务永久残留（#1063）。
     /// 反证：把 BA 换回 `CCLCSWRPWPDTLOCRRC`，本测试红。

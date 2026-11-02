@@ -573,6 +573,16 @@ impl DiskEncryption {
             Self::Unknown => "unknown",
         }
     }
+
+    /// [`Self::as_str`] 的反向；认不出 ⇒ `None`。
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "on" => Some(Self::On),
+            "off" => Some(Self::Off),
+            "unknown" => Some(Self::Unknown),
+            _ => None,
+        }
+    }
 }
 
 /// Windows 卷属性 `System.Volume.BitLockerProtection` 的取值：1 = 保护已启用，2 = 未启用，
@@ -666,6 +676,40 @@ pub enum LibraryDirGrant {
     Granted,
     /// 卷本身没有权限可设（FAT / FAT32 / exFAT，macOS 上忽略所有权的卷），跳过、不提示。
     SkippedNoAcl { file_system: String },
+}
+
+/// t2-4：照片库目录「只有主人能访问」这条不变量此刻是否成立（只读核对的结果）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LibraryPrivacy {
+    /// 本平台 / 本形态不核对（非 Windows 服务形态，或还没有主人）。
+    NotApplicable,
+    /// 库根是受保护 DACL，恰好主人、服务账户、SYSTEM、Administrators 四个 SID。
+    Private,
+    /// 不成立；`detail` 是给日志的事实（例如「仍在继承上级目录」）。
+    NotPrivate { detail: String },
+    /// 卷没有 ACL（FAT / exFAT），无从核对。
+    NoAcl { file_system: String },
+}
+
+/// t2-4：安装 / 升级时收紧照片库目录的结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LibraryPrivacyFix {
+    /// 不需要做：`reason` 说明为什么（没装服务、还没配置库、还没有主人、库目录此刻不在）。
+    NotApplicable { reason: &'static str },
+    /// 这个库根以前已经强制过一次：只核对，不改（`now` 是核对结果）。
+    PrivatizedBefore {
+        dir: std::path::PathBuf,
+        now: LibraryPrivacy,
+    },
+    /// 库根本来就是私有的，什么都没改（不碰子项），记下标记。
+    AlreadyPrivate { dir: std::path::PathBuf },
+    /// 已收紧并回读确认。
+    Tightened { dir: std::path::PathBuf },
+    /// 卷没有 ACL，跳过。
+    SkippedNoAcl {
+        dir: std::path::PathBuf,
+        file_system: String,
+    },
 }
 
 /// 【DESK-42 #604】开机自启登记的对账结果。
@@ -885,6 +929,16 @@ pub trait PlatformAdapter: Send + Sync {
         DiskEncryption::Unknown
     }
 
+    /// W-4：磁盘加密状态要不要由窗口程序（主人身份）读、经 IPC 交给 daemon。
+    ///
+    /// Windows 服务形态下 daemon 以 `NT SERVICE\P-Pass` 运行，读不到用户 Shell 命名空间里的
+    /// 卷属性（test.2 实测服务的 status 恒为 unknown，同一 API 在会话 0 返回 VT_EMPTY），
+    /// BitLocker 的 WMI 接口（`Win32_EncryptableVolume`）又要求管理员；主人会话里读得到。为 `true` 时：窗口程序把自己读到的值随 `status` 带上，daemon 只用窗口报的值
+    /// （从没收到过就是 `Unknown`），不自己读。daemon 与窗口程序两边都问这一个判据。
+    fn disk_encryption_read_by_window(&self) -> bool {
+        false
+    }
+
     /// DAE-11 (#804)：电脑此刻是否接着外部电源（插电）。
     ///
     /// 用途：daemon 运行且插电时一直持有「别因空闲而睡」的声明，拔电就释放、
@@ -1023,6 +1077,29 @@ pub trait PlatformAdapter: Send + Sync {
     fn grant_library_dir(&self, dir: &std::path::Path) -> Result<LibraryDirGrant> {
         let _ = dir;
         Ok(LibraryDirGrant::NotApplicable)
+    }
+
+    /// t2-4：照片库目录私有这条不变量的**只读**核对，daemon 每次启动对当前库根调一次。
+    ///
+    /// Windows 服务形态下服务账户对库目录只有「修改」（不含 `WRITE_DAC`）、令牌只剩
+    /// SeChangeNotifyPrivilege，改不了 DACL；收紧由安装器以管理员身份做
+    /// （[`Self::enforce_library_private`]）。这里只读出事实，不合规由调用方记日志、不阻断启动。
+    /// 库根私有却还没有「已强制过」标记（首次设置 / 换位置时由窗口程序设的）⇒ 补上标记。
+    fn library_privacy(&self, dir: &std::path::Path) -> Result<LibraryPrivacy> {
+        let _ = dir;
+        Ok(LibraryPrivacy::NotApplicable)
+    }
+
+    /// t2-4：把服务形态的当前照片库设为私有（与 [`Self::grant_library_dir`] 同一套设置），由
+    /// 安装器以管理员身份经 `ppf-daemon library privatize` 在每次安装 / 升级时调用。
+    ///
+    /// **每个库根只强制一次**：强制过（或已确认私有）就记标记，以后只核对、不改——主人事后
+    /// 自己加的权限（例如共享给媒体服务器）不收回。库位置读服务的库位置正本，主人读主人记录
+    /// ——不取当前进程用户（装的人可能是另一个管理员）。
+    fn enforce_library_private(&self) -> Result<LibraryPrivacyFix> {
+        Ok(LibraryPrivacyFix::NotApplicable {
+            reason: "本平台没有服务形态",
+        })
     }
 
     /// §5.1 / #1161：「用户希望这个服务运行吗」。

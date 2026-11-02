@@ -25,6 +25,22 @@ pub fn library_marker_present(root: &std::path::Path) -> bool {
     root.join(LIBRARY_MARKER).is_dir()
 }
 
+/// t2-4：启动时库目录私有核对的日志（每种结果一行；成功路径也留痕）。
+pub fn log_library_privacy(dir: &Path, privacy: platform::Result<platform::LibraryPrivacy>) {
+    use platform::LibraryPrivacy::*;
+    match privacy {
+        Ok(NotApplicable) => {}
+        Ok(Private) => tracing::info!("t2-4: 照片库目录权限核对通过（只有主人能访问）"),
+        Ok(NotPrivate { detail }) => {
+            tracing::warn!("t2-4: 照片库目录不是私有的（{detail}）：{}", dir.display())
+        }
+        Ok(NoAcl { file_system }) => {
+            tracing::info!("t2-4: 照片库所在的卷（{file_system}）没有权限可设，不核对")
+        }
+        Err(e) => tracing::warn!("t2-4: 照片库目录权限核对失败：{e}"),
+    }
+}
+
 /// 常驻 daemon 这次启动的库。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResidentLibrary {
