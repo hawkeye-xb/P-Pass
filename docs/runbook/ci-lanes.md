@@ -46,7 +46,8 @@ job 名必须写死**。理由和细节在这里。
 ## 核心路径
 
 `.github/core-paths.txt` 圈住的文件（门禁本身、配对 / 身份 / 加密 / 协议、存储与迁移、
-更新链、依赖锁）改到了，PR 上 `core review` 需要仓库负责人批准。判定逻辑与语法见
+更新链、依赖锁）改到了，PR 上 `core review` 需要在 Actions 里批准。2026-11-02 起由 owner 批准，
+前提是该核心改动已按 AGENTS.md 红线 6 讨论定案（卡上引用定案）；worker 一律不批。有第二位真人协作者后改回人批。判定逻辑与语法见
 `tools/ci-paths.sh` 头注释，自测 `tools/test-ci-paths.sh`。
 
 ## 删接口 / 升依赖时的全 lane 核对
