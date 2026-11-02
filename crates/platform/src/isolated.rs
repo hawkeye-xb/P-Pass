@@ -94,10 +94,12 @@ pub fn decoder_worker_path() -> Option<PathBuf> {
     }
     let exe = std::env::current_exe().ok()?;
     let dir = exe.parent()?;
-    let mut candidates = vec![dir.join(name)];
-    #[cfg(debug_assertions)]
-    if let Some(up) = dir.parent() {
-        candidates.push(up.join(name));
-    }
-    candidates.into_iter().find(|p| p.is_file())
+    let up = if cfg!(debug_assertions) {
+        dir.parent().map(|u| u.join(name))
+    } else {
+        None
+    };
+    std::iter::once(dir.join(name))
+        .chain(up)
+        .find(|p| p.is_file())
 }
