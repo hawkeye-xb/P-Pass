@@ -25,6 +25,16 @@
 **主仓工作区**：主仓目录是产品负责人与其他会话共用的现场，卡分支只许在
 `git worktree add` 出来的独立目录里提交。`batch/*` 不受此限。
 
+**落后 main（提交时）**：卡分支提交时先现取一次 `origin/main`，下面两种情况拒绝，并提示
+`git fetch origin && git rebase origin/main`：落后超过 20 个提交（`PPASS_HOOK_MAX_BEHIND` 可调）；
+或 main 上已有本卡还没拿到的提交改过「范围」内的文件（在旧代码上改同一处，验证结果作废，合并必然冲突）。
+取不到 `origin/main`（离线）时只告警，不拒绝。
+
+**合并 main 解冲突**：卡分支上 `git merge origin/main` 解完冲突后提交，与 MERGE_HEAD 内容完全相同的文件
+是从 main 原样带进来的、已经过审，不算本卡改动；冲突解法和顺手做的改动照常判核心与范围。
+合并的不是 main（MERGE_HEAD 不在 `origin/main` 里），或离线认不出来时，按全部改动判。
+`git rebase` 过程中解冲突不触发 pre-commit，不受影响。
+
 **推送（pre-push）**：推送卡分支前，hook 会现取一次远端的 `main`。卡分支没有包含它时拒绝，
 并提示 `git rebase origin/main`。这条放在推送而不是提交：交付时才要求跟上 main，
 和 GitHub 的「require branches up to date」是同一个口径；干活途中 main 前进了，不会打断提交。
@@ -75,8 +85,6 @@ PPASS_HOOK_BYPASS=1 PPASS_HOOK_BYPASS_REASON='<为什么必须绕过>' git commi
 - 通行证本身挡不住故意绕过的人：任何能编辑 issue 的账号都可以给卡打 `core` 标签、改「范围」。
   这一层防的是忘了规矩，故意绕过的情况仍然要靠 `core review` 和 owner 审查兜底。
 - 自己开 PR、自己在 GitHub 上操作，本地 hook 管不到。
-- 在卡分支上解决合并冲突后用 `git commit` 收尾时，暂存区里会带上对方分支的全部改动，
-  可能被判为越界或碰了核心。卡分支本来就不该合别的分支；确实需要时，走紧急逃生并写明原因。
-- 每次在卡分支上提交都要请求一次 GitHub API（约 1 秒）。
+- 每次在卡分支上提交都要请求一次 GitHub API，并取一次 `origin/main`（合计约 1～2 秒）。
 - 仓库从 `origin` 的 URL 解析（支持 SSH 别名，例如 `git@github-personal:owner/repo.git`）。解析不出来时，
   设置 `PPASS_HOOK_REPO=<owner>/<repo>`。
