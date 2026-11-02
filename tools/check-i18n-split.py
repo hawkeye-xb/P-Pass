@@ -14,8 +14,10 @@
      （同一个 key 在 values 与 values-zh 里住不同文件，iOS 的某种语言就缺这句）。
   3. iOS：Swift 源码里引用的 Android key 不许住在 strings_android_only.xml
      ——gen-strings.py 只读 strings.xml，住那里 iOS 就没有这句。
-  4. 桌面壳托盘（apps/desktop/src-tauri/src/lib.rs）与 daemon 通知（crates/daemon/src/main.rs 的
-     ui_text）只加载一份字典：它们引用的 ui.* key 必须在各自 include_str! 的那份里。
+  4. 桌面壳托盘（apps/desktop/src-tauri/src/lib.rs 的 TRAY_ITEMS 与 tray_text("…")）与 daemon 通知
+     （crates/daemon/src/main.rs 的 ui_text）只加载桌面字典：它们引用的 key 必须在 apps/desktop/src/i18n，
+     放进跨端集合它们就查不到。daemon 另核 crates/diag 的 I18N_EN/ZH 确实指向桌面字典；托盘 include_str!
+     的指向由 src-tauri 自己的 tray_menu_copy_comes_from_the_shared_dictionary 测试兜（tray_text 退回 key 即红）。
 """
 from __future__ import annotations
 
@@ -33,7 +35,6 @@ RES = "apps/android/app/src/main/res"
 RES_DIRS = ("values", "values-zh")
 KEY_LIT = re.compile(r'"([a-z][a-z0-9_]*)"')
 UI_KEY_LIT = re.compile(r'"((?:ui|err|diag)\.[a-z0-9_.]+)"')
-INCLUDE = re.compile(r'include_str!\("([^"]+\.json)"\)')
 
 
 def load_json(root: Path, rel: str) -> dict:
@@ -63,17 +64,6 @@ def swift_sources(root: Path) -> str:
     return "\n".join(p.read_text(encoding="utf-8") for p in sorted((root / "apps/ios").rglob("*.swift")))
 
 
-def included_dicts(root: Path, src: Path) -> dict[str, dict]:
-    """src 里 include_str! 的每份字典 json（相对 src 所在目录解析）→ 内容。"""
-    out = {}
-    for rel in INCLUDE.findall(src.read_text(encoding="utf-8")):
-        if "/i18n/" not in rel:
-            continue
-        p = (src.parent / rel).resolve()
-        out[str(p.relative_to(root.resolve()))] = json.loads(p.read_text(encoding="utf-8"))
-    return out
-
-
 def check(root: Path) -> list[str]:
     errors: list[str] = []
 
@@ -96,12 +86,17 @@ def check(root: Path) -> list[str]:
             "iOS 会缺这句。两部手机都要说的句子挪回 strings.xml，再跑 just ios-strings"
         )
 
-    # 4. 只加载一份字典的 Rust 消费方
+    # 4. 只加载桌面字典的 Rust 消费方
+    desk_dicts = {f"apps/desktop/src/i18n/{l}.json": load_json(root, f"apps/desktop/src/i18n/{l}.json") for l in LANGS}
+    diag = root / "crates/diag/src/lib.rs"
+    if diag.exists():
+        m = re.search(r'pub const I18N_EN: &str = include_str!\("([^"]+)"\)', diag.read_text(encoding="utf-8"))
+        if not m or not m.group(1).endswith("apps/desktop/src/i18n/en.json"):
+            errors.append("crates/diag 的 I18N_EN 没指向 apps/desktop/src/i18n/en.json——daemon ui_text 会查不到桌面 key")
     for rel in ("apps/desktop/src-tauri/src/lib.rs", "crates/daemon/src/main.rs"):
         src = root / rel
         if not src.exists():
             continue
-        dicts = included_dicts(root, src)
         text = src.read_text(encoding="utf-8")
         if "src-tauri" in rel:  # 托盘：TRAY_ITEMS 表里的 key 与 tray_text("…") 直呼的 key（ui.err_* 等交给前端 t()，不归它）
             items = re.search(r"const TRAY_ITEMS[^=]*=\s*\[(.*?)\];", text, re.S)
@@ -109,18 +104,10 @@ def check(root: Path) -> list[str]:
             refs |= set(re.findall(r'tray_text\([^,()]*,\s*"([^"]+)"', text))
         else:
             refs = set(re.findall(r'ui_text\(\s*"([^"]+)"', text))
-        if "daemon" in rel:  # daemon 经 diag::I18N_EN/ZH 查表，那两个常量指向哪份由 crates/diag 决定
-            dicts = included_dicts(root, root / "crates/diag/src/lib.rs")
-            dicts = {k: v for k, v in dicts.items() if k.startswith("apps/desktop/src/i18n/")} or dicts
-        if not refs:
-            continue
-        if not dicts:
-            errors.append(f"{rel}：引用了 {sorted(refs)[:5]}，却没找到它 include_str! 的字典")
-            continue
-        for name, d in dicts.items():
+        for name, d in desk_dicts.items():
             missing = sorted(refs - set(d))
             if missing:
-                errors.append(f"{rel} 只加载 {name}，里面没有它引用的 {missing[:10]}——界面会静默显示 key 名")
+                errors.append(f"{rel} 只加载桌面字典，{name} 里却没有它引用的 {missing[:10]}——界面会静默显示 key 名")
     return errors
 
 
@@ -132,6 +119,7 @@ def self_test() -> int:
         "桌面字典 en/zh 键集不一致": lambda r: _json_add(r, "apps/desktop/src/i18n/en.json", "ui.only_en", "x"),
         "iOS 引用的 key 挪进 strings_android_only.xml": lambda r: _move_android(r, "welcome_headline"),
         "托盘 key 只在跨端集合（托盘没 include 到）": lambda r: _json_move(r, "ui.tray_quit"),
+        "daemon 通知 key 只在跨端集合": lambda r: _json_move(r, "ui.library_missing_notice_title"),
     }
     tmp = Path(tempfile.mkdtemp())
     fails = 0
@@ -142,11 +130,6 @@ def self_test() -> int:
             src = REPO / rel
             if src.is_dir():
                 shutil.copytree(src, base / rel, ignore=shutil.ignore_patterns("*.png", "*.xcassets", "build"))
-        # 托盘 include 指向哪份由第 4 条在真仓库上判；反证基线固定成拆分后的正确指向，不受它牵连。
-        tray = base / "apps/desktop/src-tauri/src/lib.rs"
-        if tray.exists():
-            tray.write_text(re.sub(r'"(?:\.\./)+assets/i18n/(en|zh)\.json"', r'"../../src/i18n/\1.json"',
-                                   tray.read_text(encoding="utf-8")), encoding="utf-8")
         baseline = check(base)
         if baseline:
             print("self-test：基线本身就红，反证无从谈起：\n  " + "\n  ".join(baseline), file=sys.stderr)
