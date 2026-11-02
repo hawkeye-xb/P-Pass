@@ -259,7 +259,7 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check hooks-test supply-chain-check mobile-static-check lockfile-check
+ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check hooks-test flow-worker-test supply-chain-check mobile-static-check lockfile-check
   @echo "==> CI pipeline: all green ✅"
 
 # 两个 Rust workspace 的 Cargo.lock 都得和实际依赖一致（src-tauri 是独立 workspace，
@@ -291,7 +291,7 @@ mobile-static-check:
 #
 # ⚠️ 只在这次改动**一行 Rust/Kotlin/前端都没动**时用它。碰了代码就跑 `just ci`，
 # 别拿这条快车道当省事的借口——`ci` 的依赖列表一个都没减。
-ci-docs: md-check token-check shell-vars-check identity-check hooks-test supply-chain-check
+ci-docs: md-check token-check shell-vars-check identity-check hooks-test flow-worker-test supply-chain-check
   @echo "==> docs lane: green ✅（注意：本条不含 fmt/lint/test，动了代码必须跑 just ci）"
 
 # T-040 人工验收：自启/防睡眠/密钥仓 真机冒烟（H-09 双平台各跑一次）
@@ -453,3 +453,24 @@ release-dry-run *args:
 test-dogfood-assets:
     bash tools/test-dogfood-assets.sh --self-test
     bash tools/test-dogfood-assets.sh
+
+# ── worker 流程 ─────────────────────────────────────────────────────────
+# worker 只需这三条：start → 改代码、git commit -s → done；卡住用 stuck。
+# 标签流转、worktree、推送、回执全由命令完成。说明见 AGENTS.md「交付流程」。
+
+# 领卡：校验 ready + 有范围 → 建 worktree 与分支 → ready→doing，打印下一步。
+start n *args:
+    bash tools/flow/worker-start.sh {{n}} {{args}}
+
+# 交卡（在卡 worktree 里跑）：门禁 + just verify（有则跑）+ 范围核对，全绿才推送并贴回执，
+# doing→review；任何一步红：不推送、issue 写明停在哪、打 blocked。
+done:
+    bash tools/flow/worker-done.sh
+
+# 四种必须停下的情况的统一出口：命中核心 / 需改范围外文件 / 没有验收场景 / 连红 3 次。
+stuck n reason:
+    bash tools/flow/worker-stuck.sh {{n}} "{{reason}}"
+
+# worker 三条命令的判据测试：临时仓库 + 假 gh / just，每条拒绝配反证；进 ci / ci-docs。
+flow-worker-test:
+    @bash tools/test-flow-worker.sh
