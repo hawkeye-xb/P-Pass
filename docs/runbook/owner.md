@@ -8,6 +8,8 @@ owner 每一步只跑下面的命令。命令自带判定：红了或判定不�
 
 | 步骤 | 命令 | 通过时最后一行 |
 |---|---|---|
+| 记想法（任何会话） | `just idea "<原话>" [--discuss] [--from <来源>]` | `IDEA DISCUSSION #N` 或 `IDEA ISSUE #N status:inbox Feature` |
+| 分拣新诉求 | `just triage <号> <方案文件>` | `TRIAGE <号> ready \| needs:product \| blocked` |
 | 看哪些卡能合批 | `just batch-plan`（`--dry-run` 不改 issue） | `PLAN BATCH <序号> <号>...` |
 | 开批次 | `just batch-open <主题> <issue...>` | `BATCH-OPEN OK batch/<日期>-<主题> <号>...` |
 | 本地全量验证 | 在批次 worktree 里 `just batch-verify` | `BATCH-VERIFY PASS <提交>` |
@@ -19,6 +21,23 @@ owner 每一步只跑下面的命令。命令自带判定：红了或判定不�
 看到 1 就不要重试同一条命令，先处理 issue。
 
 ## 每一步判什么
+
+**idea**：默认建 Discussions 的 Ideas 帖，正文是原话（一字不改）加来源和日期，不进看板。`--discuss` 建
+`status:inbox` 的 issue，类型设成 Feature。同标题已有打开的帖子或 issue 时，追加评论，不重复建。
+
+**triage**：方案由模型写进一个 markdown 文件，去向由脚本判。方案必须有这些字段：`**做法**`、`**涉及端**`、
+`**数据**`、`**用户可见行为**`、`**隐私**`、`**风险**`、`**范围**`（后面跟 ``` 代码块）、`**验收场景**`；
+没有的写「无」。缺字段就拒绝。分流规则：
+
+1. 范围命中核心：方案要有 `**ADR**：docs/decisions/<文件>.md`，而且在 `origin/main` 上是「已采纳」，
+   否则打 `status:blocked`，写明先定 ADR。有就打 `core` 标签，接着往下判。
+2. 用户可见行为、隐私、数据任一项不是「无」，或者范围碰到界面与文案路径（i18n、设计 token、
+   Android `res/` 与 `ui/`、桌面前端、iOS 界面、站点、更新说明），即使方案写了「无」，也打 `needs:product`。
+   这时方案必须有 `**选项一**` 和 `**选项二**`，各写做法与影响，否则拒绝。
+3. 其余打 `status:ready`。
+
+范围、验收场景、是否核心写进任务卡的对应字段（本地 hook 和 `just verify` 读这几处），其余内容写进正文末尾的
+「实施方案」段。写回之后，脚本用 hook 的同一套解析再读一遍范围，读不出来就不写。
 
 **batch-plan / batch-open**：每张卡必须同时满足下面几条。
 

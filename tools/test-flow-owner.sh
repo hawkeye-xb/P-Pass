@@ -80,6 +80,8 @@ case "$1 $2" in
     ;;
   "issue edit")
     n="$3"
+    bf="$(arg --body-file)"
+    [ -z "$bf" ] || cp "$bf" "$I/$n.body"
     add="$(arg --add-label)"
     rm="$(arg --remove-label)"
     cur="$(cat "$I/$n.labels")"
@@ -124,6 +126,17 @@ case "$1 $2" in
     case "$json" in
       conclusion) cat "$FAKE/run-conclusion" ;;
       *) echo "build-android: boom" ;;
+    esac
+    ;;
+  "api graphql")
+    case "$*" in
+      *createDiscussion*) echo 5 ;;
+      *addDiscussionComment*) echo '{}' ;;
+      *updateIssue*) echo '{}' ;;
+      *issueTypes*) echo "I_999 IT_feature" ;;
+      *discussionCategories*) echo "R_1 DC_ideas" ;;
+      *discussions\(*) : ;;
+      *) echo "stub gh graphql: unsupported $*" >&2; exit 2 ;;
     esac
     ;;
   "api "*)
@@ -374,6 +387,64 @@ check "只给一个选项 → 拒绝（退出码 2）" test "$?" -eq 2
 check "拒绝时没写 GitHub" bash -c '! grep -q "^issue create" "$FAKE/calls.log"'
 bash tools/flow/owner-stuck.sh "要不要保留旧照片" --product "保留，占盘翻倍" "删除，省空间" >/dev/null 2>&1
 check "反证：两个选项 → 开 issue，打 status:blocked 与 needs:product" bash -c 'grep -q "^issue create .*--label status:blocked,needs:product" "$FAKE/calls.log" && grep -q "^2. 删除，省空间" "$FAKE/created-issue.md"'
+
+echo "── 8. idea：默认记进 Discussions；--discuss 建 status:inbox 的 Feature issue"
+fresh
+out="$(bash tools/flow/owner-idea.sh "手机上能看到电脑的剩余空间" --from "产品负责人在 test 回归时说" 2>/dev/null)"
+check "默认 → 建 Ideas 讨论，不进看板" bash -c 'printf "%s\n" "$1" | grep -q "^IDEA DISCUSSION #5$" && grep -q "createDiscussion.*DC_ideas" "$FAKE/calls.log" && ! grep -q "^issue create" "$FAKE/calls.log"' _ "$out"
+check "讨论正文带原话与来源" bash -c 'grep "createDiscussion" "$FAKE/calls.log" | grep -q "> 手机上能看到电脑的剩余空间.*产品负责人在 test 回归时说"'
+out="$(bash tools/flow/owner-idea.sh "手机上能看到电脑的剩余空间" --discuss 2>/dev/null)"
+check "反证：--discuss → status:inbox issue，类型设为 Feature" bash -c 'printf "%s\n" "$1" | grep -q "^IDEA ISSUE #999 status:inbox Feature$" && grep -q "^issue create .*--label status:inbox" "$FAKE/calls.log" && grep -q "updateIssue.*I_999.*IT_feature" "$FAKE/calls.log"' _ "$out"
+bash tools/flow/owner-idea.sh "   " >/dev/null 2>&1
+check "空想法 → 拒绝（退出码 2）" test "$?" -eq 2
+
+echo "── 9. triage：分流由脚本按范围路径与字段判定"
+tcard() { # tcard <号> <标签>：按任务卡模板造一张 inbox 卡
+  printf '卡 %s' "$1" >"$FAKE/issues/$1.title"
+  printf '%s' "$2" >"$FAKE/issues/$1.labels"
+  printf '## 🟥 挂号段\n\n**产品诉求**：一句话\n\n## ⬜ 可接段\n\n**是否核心**：<!-- 是 / 否 -->\n\n**级别**：L1\n\n**范围（只许动这些）**：\n<!-- 一行一个 -->\n```\n```\n\n**验收场景**：\n<!-- 场景名 -->\n\n**前置依赖**：\n' >"$FAKE/issues/$1.body"
+}
+plan() { # plan <文件> <范围 glob> <用户可见行为> [额外行]
+  printf '**做法**：改脚本\n**涉及端**：无\n**数据**：无\n**用户可见行为**：%s\n**隐私**：无\n**风险**：低\n**范围**：\n```\n%s\n```\n**验收场景**：tools/test-x.sh 全过（E2），反证：去掉判断变红\n%s\n' "$3" "$2" "${4:-}" >"$1"
+}
+P="${S}/plan.md"
+tcard 41 status:inbox
+plan "$P" "tools/new-thing.sh" "无"
+out="$(bash tools/flow/owner-triage.sh 41 "$P" 2>/dev/null)"
+check "纯技术、非核心 → status:ready" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 41 ready$" && [ "$(cat "$FAKE/issues/41.labels")" = status:ready ]' _ "$out"
+check "写回后 hook 读得出范围，且只有一个范围代码块" bash -c 'grep -A2 "^\*\*范围" "$FAKE/issues/41.body" | grep -qx "tools/new-thing.sh" && [ "$(grep -c "^\*\*范围" "$FAKE/issues/41.body")" -eq 1 ]'
+check "验收场景填进任务卡字段，实施方案段在末尾" bash -c 'grep -A1 "^\*\*验收场景" "$FAKE/issues/41.body" | grep -q "test-x.sh" && grep -q "^## 实施方案（just triage）" "$FAKE/issues/41.body"'
+tcard 42 status:inbox
+plan "$P" "tools/new-thing.sh" "设置页多一个开关"
+bash tools/flow/owner-triage.sh 42 "$P" >/dev/null 2>&1
+check "反证：有用户可见行为但没给两个选项 → 拒绝，不写 issue" bash -c '[ "$(cat "$FAKE/issues/42.labels")" = status:inbox ] && ! grep -q "实施方案" "$FAKE/issues/42.body"'
+plan "$P" "tools/new-thing.sh" "设置页多一个开关" $'**选项一**：默认开，影响：老用户升级后多耗电\n**选项二**：默认关，影响：新功能没人发现'
+out="$(bash tools/flow/owner-triage.sh 42 "$P" 2>/dev/null)"
+check "有用户可见行为 + 两个选项 → needs:product，选项写进 issue" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 42 needs:product$" && grep -q "needs:product" "$FAKE/issues/42.labels" && grep -q "^2. 默认关" "$FAKE/issues/42.body"' _ "$out"
+tcard 43 status:inbox
+plan "$P" "assets/i18n/zh.json" "无"
+bash tools/flow/owner-triage.sh 43 "$P" >/dev/null 2>&1
+check "范围碰文案路径、方案却写「无」→ 仍按产品问题处理（无选项则拒绝）" bash -c '[ "$(cat "$FAKE/issues/43.labels")" = status:inbox ]'
+tcard 44 status:inbox
+plan "$P" "crates/storage/**" "无"
+out="$(bash tools/flow/owner-triage.sh 44 "$P" 2>/dev/null)"
+check "核心、没有已采纳 ADR → status:blocked" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 44 blocked$" && [ "$(cat "$FAKE/issues/44.labels")" = status:blocked ] && grep -q "ADR" "$FAKE/issues/44.comments"' _ "$out"
+tcard 45 status:inbox
+plan "$P" "crates/storage/new.rs" "无" "**ADR**：docs/decisions/2026-11-01-proposed.md"
+out="$(bash tools/flow/owner-triage.sh 45 "$P" 2>/dev/null)"
+check "核心新文件、ADR 只是「提议」→ status:blocked" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 45 blocked$"' _ "$out"
+tcard 46 status:inbox
+plan "$P" "crates/storage/new.rs" "无" "**ADR**：docs/decisions/2026-11-01-adopted.md"
+out="$(bash tools/flow/owner-triage.sh 46 "$P" 2>/dev/null)"
+check "反证：核心 + 已采纳 ADR → status:ready 并打 core" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 46 ready$" && grep -q "core" "$FAKE/issues/46.labels" && grep -q "^\*\*是否核心\*\*：是" "$FAKE/issues/46.body"' _ "$out"
+tcard 47 status:inbox
+printf '**做法**：改\n**范围**：\n```\ntools/a.sh\n```\n' >"$P"
+bash tools/flow/owner-triage.sh 47 "$P" >/dev/null 2>&1
+rc=$?
+check "方案缺字段 → 拒绝（退出码 2），不写 issue" bash -c '[ "$1" -eq 2 ] && ! grep -q "^issue edit 47" "$FAKE/calls.log"' _ "$rc"
+plan "$P" "tools/new-thing.sh" "无"
+bash tools/flow/owner-triage.sh 41 "$P" >/dev/null 2>&1
+check "已不是 status:inbox 的卡 → 拒绝" test "$?" -eq 2
 
 echo
 echo "flow-owner: ${PASS} passed, ${FAIL} failed"

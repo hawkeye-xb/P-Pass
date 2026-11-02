@@ -485,6 +485,15 @@ batch-pr:
 release-test +args:
     bash tools/flow/owner-release-test.sh {{args}}
 
+# 收到人类的新想法：默认记进 Discussions 的 Ideas；--discuss 建 status:inbox 的 Feature issue
+[positional-arguments]
+idea text *args:
+    bash tools/flow/owner-idea.sh "$@"
+
+# 给 status:inbox 的卡定方案：校验模型写的方案文件，按范围路径与字段分流（ready / needs:product / blocked）
+triage issue plan:
+    bash tools/flow/owner-triage.sh {{issue}} {{plan}}
+
 # owner 流程停下的统一出口：写 status:blocked issue 或评论（--issue/--pr/--product/--log）
 # 参数原样转交（带空格的原因、选项不会被拆开）。
 [positional-arguments]
