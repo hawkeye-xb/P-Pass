@@ -64,6 +64,10 @@ PPASS_HOOK_BYPASS=1 PPASS_HOOK_BYPASS_REASON='<为什么必须绕过>' git commi
 
 - `git commit --no-verify` 和改 `core.hooksPath` 都能绕过全部本地检查，这一层只能拦住守规矩的提交。
   兜底仍然是 CI 的 `core review` 和 owner 合批时的审查。
+- 通行证本身挡不住故意绕过的人：任何能编辑 issue 的账号都可以给卡打 `core` 标签、改「范围」。
+  这一层防的是忘了规矩，故意绕过的情况仍然要靠 `core review` 和 owner 审查兜底。
+- 在卡分支上解决合并冲突后用 `git commit` 收尾时，暂存区里会带上对方分支的全部改动，
+  可能被判为越界或碰了核心。卡分支本来就不该合别的分支；确实需要时，走紧急逃生并写明原因。
 - 每次在卡分支上提交都要请求一次 GitHub API（约 1 秒）。
 - 仓库从 `origin` 的 URL 解析（支持 SSH 别名，例如 `git@github-personal:owner/repo.git`）。解析不出来时，
   设置 `PPASS_HOOK_REPO=<owner>/<repo>`。

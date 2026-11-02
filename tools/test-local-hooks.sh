@@ -35,12 +35,17 @@ git config --global user.email "hook-test@example.invalid"
 git config --global init.defaultBranch main
 unset PPASS_HOOK_BYPASS PPASS_HOOK_BYPASS_REASON PPASS_HOOK_REPO PPASS_HOOK_ROOT
 
-# PATH 去掉所有带真 gh 的目录，再把桩放最前面。
-NOGH_PATH=""
-IFS=: read -r -a _dirs <<<"$PATH"
-for d in "${_dirs[@]}"; do
-  [ -n "$d" ] && [ -x "${d}/gh" ] && continue
-  NOGH_PATH="${NOGH_PATH:+${NOGH_PATH}:}${d}"
+# PATH 只放白名单命令的软链（不含 gh），桩放最前面。不能「剔掉带 gh 的目录」：
+# Linux 上 gh 常在 /usr/bin，一剔连 git / sed 都没了。测试与 hook 用到新命令要加进这里。
+NOGH_PATH="${TMP}/nogh"
+mkdir -p "$NOGH_PATH"
+for c in git bash env sh sed awk tar mktemp cat tr head grep rm cp chmod touch sort cmp \
+  basename dirname mkdir; do
+  p="$(command -v "$c")" && [ "${p#/}" != "$p" ] || {
+    echo "找不到命令 ${c}，无法搭测试环境"
+    exit 1
+  }
+  ln -s "$p" "${NOGH_PATH}/${c}"
 done
 mkdir -p "${TMP}/bin"
 cat >"${TMP}/bin/gh" <<'STUB'
