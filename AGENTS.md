@@ -93,6 +93,9 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
 6. **核心改动先讨论。** `.github/core-paths.txt` 圈住的路径（门禁、配对/身份/加密/协议、
    存储与迁移、更新链、依赖锁）：worker 只写复现、根因和两个修法，不改代码；
    由 owner 定或交产品负责人拍板后再实现；批 PR 上的 `core review` 由 owner 批准，worker 不批。
+7. **不公开的内容只进私仓。** 安全细节（漏洞利用、攻击面）、商业、竞品、运营内容不写进本仓库，
+   也不写进 issue、PR、提交说明；只写进环境变量 `PPASS_PRIVATE_DIR` 指向的私仓目录，issue 里只留
+   「细节已存私仓」。本机没配 `PPASS_PRIVATE_DIR`：一律不写，`just stuck <号> "需要写私仓，本机未配置"` 停下。
 
 ## 产品硬规矩（写卡、改代码、验收都按这些判）
 
