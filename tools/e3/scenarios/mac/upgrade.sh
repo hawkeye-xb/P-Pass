@@ -3,7 +3,7 @@
 # 测试机只有一个安装槽（docs/decisions/2026-11-02-one-install-per-test-device.md），拿到 mac 设备锁即可覆盖。
 # 输入（通用，与将来出包方式无关）：
 #   旧版产物   E3_MAC_BASE_TAG（默认取 GitHub Release 上最新的 v* tag），经 restore 下载、校验后安装
-#   候选产物   E3_MAC_CAND_APP（默认 just verify 用正式打包链路编出的签名包，见 lib/mac-install.sh）
+#   候选产物   E3_MAC_CAND_APP（CI 出的正式签名包等），默认 just dev mac 编的开发版签名包（lib/mac-install.sh）
 #   安装位置   ~/Applications/P-Pass.app（E3_MAC_APP）
 # 数据：身份私钥、配对白名单、库绑定都在钥匙串里，全机一份、不随库目录走，所以不换库目录；场景本身
 # 不写库，只装包，判定只读（已装 daemon 自己跑 diag export 拿 status 与设备表；NodeId 取日志里的端点 id）。

@@ -142,9 +142,11 @@ ensure_base_apk() {
 if [ "$build" = 1 ]; then
   build_desktop_bins || die "候选 daemon/testclient 编译失败（$root/build.log）"
   case " $ends " in *" mac "*)
-    log "编候选签名包（正式打包链路，团队签名）"
-    (source "$E3_LIB/mac.sh" && source "$E3_LIB/mac-install.sh" && mac_build_candidate) >>"$root/build.log" 2>&1 ||
-      die "候选签名包编译失败（$root/build.log）"
+    # 候选 = 开发版签名包（just dev mac 同一份构建）；V2 / test 回归可用 E3_MAC_CAND_APP 指向 CI 出的正式签名包
+    if [ -z "${E3_MAC_CAND_APP:-}" ]; then
+      log "编候选：开发版签名包（同 just dev mac）"
+      "$E3_ROOT/dev" mac --build-only >>"$root/build.log" 2>&1 || die "开发版签名包编译失败（$root/build.log）"
+    fi
     ;;
   esac
   case " $ends " in *" android "*)

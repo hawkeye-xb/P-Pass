@@ -12,7 +12,7 @@ MAC_DAEMON_EXE="$MAC_APP/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daem
 MAC_DAEMON_LOG="$HOME/Library/Application Support/P-Pass/logs/daemon.log"
 
 
-# 候选签名包（E3_MAC_CAND_APP 指定，或 lib/mac-install.sh 的 mac_build_candidate 产物）
+# 候选签名包：E3_MAC_CAND_APP 指定（如 CI 出的正式签名包），默认 just dev mac 编的开发版签名包
 mac_cand_app() { echo "${E3_MAC_CAND_APP:-$E3_STATE/mac-cand/P-Pass.app}"; }
 
 # launchd 管的那一份 daemon 的 pid（没在跑为空）
@@ -46,4 +46,6 @@ svc_version() { T 10 "$MAC_DAEMON_EXE" --version --json 2>/dev/null; }
 # 日志打点：daemon 每次启动会重写 daemon.log，所以按时间戳（UTC，与日志同格式）切，
 # 并在每次重启之后各取一份快照。
 log_mark() { date -u +%Y-%m-%dT%H:%M:%S; }
-log_since() { awk -v s="$1" 'substr($0, 1, 19) >= s' "$MAC_DAEMON_LOG" 2>/dev/null; }
+# 正式版写 daemon.log；debug 版（just dev mac）的日志走 stderr，落在 launchd 接的 daemon.err：两份都读。
+MAC_DAEMON_ERR="$(dirname "$MAC_DAEMON_LOG")/daemon.err"
+log_since() { awk -v s="$1" 'substr($0, 1, 19) >= s' "$MAC_DAEMON_LOG" "$MAC_DAEMON_ERR" 2>/dev/null | sort -s -k1,1; }
