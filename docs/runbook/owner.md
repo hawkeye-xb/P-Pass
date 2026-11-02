@@ -101,7 +101,7 @@ worktree（主仓旁边的 `P-Pass-wt/batch-<日期>-<主题>`），逐张执行
   （owner 专用的克隆，不要用别人在用的那份）和 `OWNER_WIN_WORK`。代码用 `git bundle` 送过去，
   `owner-win-run.ps1` 注册临时计划任务（LogonType Interactive），跑完删掉。主人没登录桌面时任务跑不起来，
   按「判定不了」停下。
-- **重编译互斥**：`just ci` 与 ppf-decoder 的构建套 `lockf -k /tmp/ppass-heavy-build.lock`；
+- **重编译互斥**：一律经 `tools/heavy-lock <命令>` 排队（可重入：外层已持锁时内层直接执行；等锁超时报错，#1308），不要在外面再包 `lockf`；
   `just verify` 自己会取这把锁，外面不再套。
 
 ## 产品取向的问题

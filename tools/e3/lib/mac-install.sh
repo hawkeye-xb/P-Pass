@@ -247,12 +247,12 @@ mac_build_dev() {
     set -e
     cd "$REPO_ROOT"
     export CARGO_INCREMENTAL=0
-    PPF_BUILD_VERSION="$version" /usr/bin/lockf -k /tmp/ppass-heavy-build.lock cargo build -p daemon
+    PPF_BUILD_VERSION="$version" "$REPO_ROOT/tools/heavy-lock" cargo build -p daemon
     PPF_DAEMON_PROVISIONPROFILE="$profile" tools/daemon-helper-macos.sh dev \
       "${CARGO_TARGET_DIR:-target}/debug/daemon" "$out/ppf-daemon.app"
     cd "$desktop"
     pnpm install --frozen-lockfile --silent
-    /usr/bin/lockf -k /tmp/ppass-heavy-build.lock pnpm tauri build --debug --no-bundle --config "$config"
+    "$REPO_ROOT/tools/heavy-lock" pnpm tauri build --debug --no-bundle --config "$config"
     pnpm tauri bundle --debug --bundles app --config "$config" >/dev/null
     ditto "$shell_target/debug/bundle/macos/P-Pass.app" "$out/P-Pass.app"
     mkdir -p "$out/P-Pass.app/Contents/Helpers"

@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# tools/heavy-lock <命令...>：同机重编译互斥的唯一入口（#1308）。
+#
+# 可重入：已在锁内（PPASS_HEAVY_LOCK_HELD=1，由本脚本对子进程设置）就直接执行，
+# 外层包了一层、内层再调用不会死锁。所有重编译调用点都走这里，不再各写 lockf。
+# 等锁有上限（PPASS_HEAVY_LOCK_WAIT 秒，默认 5400）：超时打印谁在持锁并退出 75，不无限等。
+# 没有 lockf（非 macOS）时直接执行。锁文件：PPASS_HEAVY_LOCK，默认 /tmp/ppass-heavy-build.lock。
+
+set -uo pipefail
+[ "$#" -gt 0 ] || { echo "用法：tools/heavy-lock <命令...>" >&2; exit 2; }
+
+lock="${PPASS_HEAVY_LOCK:-/tmp/ppass-heavy-build.lock}"
+wait_s="${PPASS_HEAVY_LOCK_WAIT:-5400}"
+
+if [ "${PPASS_HEAVY_LOCK_HELD:-}" = "1" ] || ! command -v lockf >/dev/null 2>&1; then
+  exec "$@"
+fi
+
+lockf -k -t "$wait_s" "$lock" env PPASS_HEAVY_LOCK_HELD=1 "$@"
+rc=$?
+if [ "$rc" -eq 75 ]; then
+  echo "✗ 等重编译锁超过 ${wait_s}s：${lock}" >&2
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -t "$lock" 2>/dev/null | while read -r p; do
+      echo "  持锁进程：$(ps -o pid=,etime=,command= -p "$p" 2>/dev/null | cut -c1-160)" >&2
+    done
+  fi
+  echo "  若持锁的是你自己外层的命令，说明有调用点绕过了 tools/heavy-lock，去修那个调用点。" >&2
+fi
+exit "$rc"
