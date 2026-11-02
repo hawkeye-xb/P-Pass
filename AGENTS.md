@@ -37,7 +37,8 @@ agent 只领 Issues，不碰 Discussions。issue 类型：Feature（新能力）
    （type ∈ feat/fix/docs/test/ci）。读该 issue 即全部上下文。
 2. 只改 issue「范围」段列出的路径。确需扩大：先改 issue，再改代码。
 3. 每个提交 `git commit -s`（DCO 门禁）。提交身份必须在 `.github/allowed-identities.txt` 里。
-4. 本地过门禁：动了代码 `just ci`，纯文档 `just ci-docs`；按卡上的验收场景做真机验证。
+4. 本地过门禁：动了代码 `just ci`，纯文档 `just ci-docs`；再跑 `just verify <issue号>` 做真机验证
+   （按改动路径决定涉及哪几端，跑冒烟 + 卡上点名的场景，最后一行 PASS/FAIL；见 `docs/runbook/e3.md`）。
 5. `git diff --stat origin/main...` 核对改动清单只含本卡文件，然后推分支。
    在 issue 里回贴：分支名、自验命令与真实输出（标证据等级）。**不开 PR。**
 6. 必须停下上报的四种情况：命中核心、需要改范围外文件、没有可用的验收场景、同一处连红 3 次。
@@ -144,6 +145,7 @@ agent 只领 Issues，不碰 Discussions。issue 类型：Feature（新能力）
 | 本地命令 | `just --list` |
 | CI lane、必需检查、核心路径 | `docs/runbook/ci-lanes.md` |
 | 真机/模拟器、配对、本机 daemon IPC | 本机 `local-state.md`（不进 git，先读它再说「做不到」） |
+| 本地真机验证、写场景 | `docs/runbook/e3.md` |
 | 全量回归 | `docs/runbook/full-regression-sop.md` |
 | 发版、签名、版本纪律 | `docs/RELEASING.md` |
 | 架构规则、验收抽检、自举类改动 | `docs/AGENT_PROTOCOL.md` |

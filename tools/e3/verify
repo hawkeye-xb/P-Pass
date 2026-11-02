@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+# just verify 的实现：本地真机验证（V1 / V2）。
+#
+#   tools/e3/verify <issue号>        按改动路径判定涉及哪几端（lane），跑这些端的冒烟
+#                                    + issue「验收场景」段点名的场景
+#   tools/e3/verify --smoke <端>     只跑某一端的冒烟（mac / android）
+#   tools/e3/verify --all            全量场景库（V2，owner 合批前）
+# 选项：
+#   --counter      所有场景都跑反证（默认只有注入类场景跑）
+#   --no-build     不编候选构建，直接用现有产物
+#   --base <rev>   改动判定与「上一版」的基准（默认 merge-base(HEAD, origin/main)）
+#
+# 产出：evidence/<issue|smoke-端|all>/<时间>/（gitignore）与最后一行汇总：
+#   VERIFY PASS|FAIL <对象>  android 2/2 · mac 3/3（SKIP 1）  evidence/…
+# 改动没有落在任何端的路径上（纯逻辑、文档、工具）⇒ 只需 V0（just ci），打印 VERIFY N/A 后退出 0。
+set -uo pipefail
+E3_ROOT="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib/common.sh
+source "$E3_ROOT/lib/common.sh"
+
+# 每端的冒烟（V1 必跑）。新加冒烟场景登记在这里。
+SMOKE_mac="mac/svc mac/eph-backup mac/upgrade"
+SMOKE_android="android/smoke-upgrade"
+# 每端的路径（lane）。android 与 CI 的 ci-android.yml changes 段同源（运行时从 workflow 里读）；
+# macOS 桌面在 CI 里不按路径跳过，这里按「会进桌面包的代码」列。
+MAC_GLOBS="crates/** apps/desktop/** assets/i18n/** tools/testclient/** tools/mac-dev.sh tools/daemon-helper-macos.sh tools/bundle-desktop-macos.sh"
+
+android_globs() {
+  # paths: | 块：缩进比 paths: 深的行都是条目，遇到第一行不更深的就结束
+  awk 'match($0, /^ *paths: \|/) {ind = index($0, "p"); on = 1; next}
+       on { if (match($0, /^ */) && RLENGTH < ind) exit
+            if ($1 ~ /^#/ || $1 ~ /^\.github\// || $1 == "tools/ci-paths.sh") next
+            print $1 }' "$REPO_ROOT/.github/workflows/ci-android.yml"
+}
+
+usage() { sed -n 2,18p "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+
+counter_flag=""
+build=1
+base=""
+mode=""
+target=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --counter) counter_flag=--counter ;;
+    --no-build) build=0 ;;
+    --base) base="$2"; shift ;;
+    --smoke) mode=smoke; target="${2:-}"; shift ;;
+    --all) mode=all ;;
+    -h | --help) usage ;;
+    [0-9]*) mode=issue; target="$1" ;;
+    *) usage ;;
+  esac
+  shift
+done
+[ -n "$mode" ] || usage
+[ -n "$base" ] || base="$(git -C "$REPO_ROOT" merge-base HEAD origin/main)"
+
+lane_hit() { # lane_hit <glob…>：改动有没有落在这些路径上（ci-paths.sh，fail-closed）
+  [ "$("$REPO_ROOT/tools/ci-paths.sh" hit "$base" "$@" 2>/dev/null)" != false ]
+}
+
+# —— 决定跑哪几端、哪些场景 ——
+ends=""
+extra=""
+case "$mode" in
+  smoke)
+    case "$target" in mac | android) ends="$target" ;; *) die "--smoke 只支持 mac / android（win、ios 待收编）" ;; esac
+    label="smoke-$target"
+    ;;
+  all)
+    ends="mac android"
+    label="all"
+    ;;
+  issue)
+    label="$target"
+    # shellcheck disable=SC2046
+    lane_hit $(android_globs) && ends="$ends android"
+    # shellcheck disable=SC2086
+    lane_hit $MAC_GLOBS && ends="$ends mac"
+    body="$(gh issue view "$target" --json body -q .body 2>/dev/null)" || die "读不到 issue #${target}（gh 登录？）"
+    # 「验收场景」段里形如 <端>/<名字> 的场景 id
+    extra="$(printf '%s\n' "$body" | python3 -I -c '
+import re, sys
+t = sys.stdin.read()
+m = re.search(r"\*\*验收场景\*\*(.*?)(\n\*\*|\Z)", t, re.S)
+seg = re.sub(r"<!--.*?-->", "", m.group(1), flags=re.S) if m else ""
+print(" ".join(dict.fromkeys(re.findall(r"\b(?:android|mac|win|ios)/[a-z0-9][a-z0-9-]*", seg))))')"
+    for s in $extra; do
+      [ -f "$E3_ROOT/scenarios/$s.sh" ] || die "issue #$target 点名的场景 $s 不在场景库（先写场景，见 docs/runbook/e3.md）"
+      case " $ends " in *" ${s%%/*} "*) ;; *) ends="$ends ${s%%/*}" ;; esac
+    done
+    ;;
+esac
+ends="$(echo $ends)"
+root="$REPO_ROOT/evidence/$label/$(date +%Y%m%d-%H%M%S)"
+if [ -z "$ends" ]; then
+  echo "VERIFY N/A $label  改动不在任何端的路径上：只需 V0（just ci）"
+  exit 0
+fi
+mkdir -p "$root"
+log "涉及的端：${ends}；证据：$root"
+
+# —— 构建候选 ——
+heavy() { /usr/bin/lockf -k /tmp/ppass-heavy-build.lock "$@"; }
+build_desktop_bins() {
+  log "编候选 daemon + testclient（debug）"
+  (cd "$REPO_ROOT" && CARGO_INCREMENTAL=0 PPF_BUILD_VERSION="$(tools/release-version.sh desktop)" \
+    heavy cargo build -q -p daemon -p testclient) >>"$root/build.log" 2>&1
+}
+build_apk() { # build_apk <源码目录>
+  (cd "$1" && source tools/java-home.sh && cd apps/android && CARGO_INCREMENTAL=0 heavy ./gradlew -q :app:assembleDebug) >>"$root/build.log" 2>&1
+}
+# 基线包：merge-base 的 debug 包，按 sha 缓存。应用代码没变时直接用候选包（同一份代码）。
+ensure_base_apk() {
+  local sha dst src
+  sha="$(git -C "$REPO_ROOT" rev-parse --short "$base")"
+  dst="$E3_STATE/base/$sha/app-debug.apk"
+  [ -f "$dst" ] && return 0
+  mkdir -p "$(dirname "$dst")"
+  # shellcheck disable=SC2046
+  if ! lane_hit $(android_globs); then
+    cp "$(ls -t "$REPO_ROOT"/apps/android/app/build/outputs/apk/debug/*.apk | head -1)" "$dst"
+    return 0
+  fi
+  log "编基线包（${sha}）"
+  src="$E3_STATE/base-src/$sha"
+  rm -rf "$src"
+  git -C "$REPO_ROOT" worktree add --detach "$src" "$base" >>"$root/build.log" 2>&1 || return 1
+  cp "$REPO_ROOT/apps/android/local.properties" "$src/apps/android/" 2>/dev/null
+  CARGO_TARGET_DIR="$src/target" build_apk "$src" &&
+    cp "$(ls -t "$src"/apps/android/app/build/outputs/apk/debug/*.apk | head -1)" "$dst"
+  local rc=$?
+  git -C "$REPO_ROOT" worktree remove --force "$src" >>"$root/build.log" 2>&1
+  return $rc
+}
+if [ "$build" = 1 ]; then
+  build_desktop_bins || die "候选 daemon/testclient 编译失败（$root/build.log）"
+  case " $ends " in *" android "*)
+    log "编候选 APK（debug）"
+    build_apk "$REPO_ROOT" || die "候选 APK 编译失败（$root/build.log）"
+    ensure_base_apk || die "基线 APK 编译失败（$root/build.log）"
+    ;;
+  esac
+fi
+
+# —— 跑 ——
+summary=""
+fail=0
+for e in $ends; do
+  if [ "$mode" = all ]; then
+    scns="$("$E3_ROOT/run" list "$e" | awk '{print $1}' | tr '\n' ' ')"
+  else
+    eval "scns=\"\${SMOKE_$e:-}\""
+    for s in $extra; do
+      [ "${s%%/*}" = "$e" ] && case " $scns " in *" $s "*) ;; *) scns="$scns $s" ;; esac
+    done
+  fi
+  # shellcheck disable=SC2086
+  "$E3_ROOT/run" $counter_flag --evidence "$root" $scns
+  [ $? -eq 0 ] || fail=1
+  # 本端收尾：停配对桩
+  (EPH_STATE="$E3_STATE/eph" && source "$E3_LIB/eph.sh" && eph_stop)
+  # shellcheck disable=SC2086
+  set -- $scns
+  p=$(grep -c "^PASS $e/" "$root/summary.txt")
+  k=$(grep -c "^SKIP $e/" "$root/summary.txt")
+  summary="$summary · $e $p/$(($# - k))$([ "$k" -gt 0 ] && echo "（SKIP ${k}）")"
+done
+v=PASS
+[ "$fail" = 0 ] || v=FAIL
+echo "VERIFY $v $label ${summary# · }  ${root#"$REPO_ROOT"/}" | tee -a "$root/summary.txt"
+[ "$fail" = 0 ]

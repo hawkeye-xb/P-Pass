@@ -7,7 +7,8 @@ upgrade-compat (what an old → new upgrade promises; REL-06 matrix criteria, dr
 full-regression-sop (the pre-release full regression run, agent-executable on any Mac or Windows desktop + Android pair; Windows specifics in its §9) /
 update-signing-keys (test / stable update-signing keys: setup, rotation, compromise; the key-compromise procedure lives in its "suspected leak" section) /
 ios-app-privacy (iOS privacy manifest and App Store privacy label: answers and code evidence) /
-ci-lanes (CI lanes, required checks and why job names must never change).
+ci-lanes (CI lanes, required checks and why job names must never change) /
+e3 (`just verify`: on-device smoke and scenario checks before handing in a card; how to write scenarios).
 
 ---
 
@@ -25,4 +26,5 @@ update-signing-keys（更新签名密钥：test 与正式各一把的配置、�
 ios-app-privacy（iOS 隐私清单与 App Store 隐私标签的填法和代码证据，
 `docs/runbook/ios-app-privacy.md`）/
 ci-lanes（CI lane 怎么判跳过、必需检查为什么不许改 job 名、核心路径，
-`docs/runbook/ci-lanes.md`）。
+`docs/runbook/ci-lanes.md`）/
+e3（`just verify`：交卡前的本地真机冒烟与场景验证、怎么写场景，`docs/runbook/e3.md`）。

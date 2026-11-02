@@ -319,6 +319,14 @@ verify-m1:
     tools/bundle-macos.sh /tmp/ppf-rel "$TARGET/release/daemon" "$TARGET/release/testclient"
     tools/bundle-desktop-macos.sh /tmp/ppf-rel /tmp/ppf-rel
 
+# 本地真机验证（E3，V1/V2）：按改动路径判定涉及的端，构建候选、装到真机跑冒烟 + issue「验收场景」点名的场景，
+# 证据写 evidence/（不进 git），最后一行 VERIFY PASS|FAIL。写场景、读结果见 docs/runbook/e3.md。
+#   just verify 1234            交卡前（V1）
+#   just verify --smoke android 只跑某端冒烟
+#   just verify --all           全量场景库（V2，合批前）
+verify *args:
+    tools/e3/verify {{args}}
+
 # Android unit tests (proto golden drift check included)
 android-test:
     #!/usr/bin/env bash
