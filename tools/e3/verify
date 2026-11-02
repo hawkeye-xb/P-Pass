@@ -19,7 +19,9 @@ E3_ROOT="$(cd "$(dirname "$0")" && pwd)"
 source "$E3_ROOT/lib/common.sh"
 
 # 每端的冒烟（V1 必跑）。新加冒烟场景登记在这里。
-SMOKE_mac="mac/svc mac/eph-backup mac/upgrade"
+# mac/upgrade 排第一：它把候选签名包装上（E3_MAC_KEEP_CANDIDATE=1），后面的 mac/svc 才验的是候选；
+# 全部跑完再装回开始前的版本。
+SMOKE_mac="mac/upgrade mac/svc mac/eph-backup"
 SMOKE_android="android/smoke-upgrade"
 # 每端的路径（lane）。android 与 CI 的 ci-android.yml changes 段同源（运行时从 workflow 里读）；
 # macOS 桌面在 CI 里不按路径跳过，这里按「会进桌面包的代码」列。
@@ -138,6 +140,12 @@ ensure_base_apk() {
 }
 if [ "$build" = 1 ]; then
   build_desktop_bins || die "候选 daemon/testclient 编译失败（$root/build.log）"
+  case " $ends " in *" mac "*)
+    log "编候选签名包（正式打包链路，团队签名）"
+    (source "$E3_LIB/mac.sh" && source "$E3_LIB/mac-install.sh" && mac_build_candidate) >>"$root/build.log" 2>&1 ||
+      die "候选签名包编译失败（$root/build.log）"
+    ;;
+  esac
   case " $ends " in *" android "*)
     log "编候选 APK（debug）"
     build_apk "$REPO_ROOT" || die "候选 APK 编译失败（$root/build.log）"
@@ -154,7 +162,11 @@ summary=""
 fail=0
 for e in $ends; do
   if [ "$mode" = all ]; then
-    scns="$("$E3_ROOT/run" list "$e" | awk '{print $1}' | tr '\n' ' ')"
+    # 冒烟排前面（mac/upgrade 要先把候选装上），其余按名字
+    eval "scns=\"\${SMOKE_$e:-}\""
+    for s in $("$E3_ROOT/run" list "$e" | awk '{print $1}'); do
+      case " $scns " in *" $s "*) ;; *) scns="$scns $s" ;; esac
+    done
   else
     eval "scns=\"\${SMOKE_$e:-}\""
     for s in $extra; do
@@ -162,8 +174,17 @@ for e in $ends; do
     done
   fi
   # shellcheck disable=SC2086
-  "$E3_ROOT/run" $counter_flag --evidence "$root" $scns
+  E3_MAC_KEEP_CANDIDATE=1 "$E3_ROOT/run" $counter_flag --evidence "$root" $scns
   [ $? -eq 0 ] || fail=1
+  # Mac：装回开始前的版本（mac/upgrade 开头留的快照），装不回算失败
+  if [ "$e" = mac ] && [ -d "$E3_STATE/mac-snapshot/P-Pass.app" ] && [ "$(stat -f %m "$E3_STATE/mac-snapshot")" -ge "$(stat -f %m "$root")" ]; then
+    if "$E3_ROOT/restore" mac --snapshot >>"$root/restore.log" 2>&1; then
+      echo "RESTORE mac → $(cat "$E3_STATE/mac-snapshot/version.txt")" | tee -a "$root/summary.txt"
+    else
+      echo "FAIL restore mac（$root/restore.log）" | tee -a "$root/summary.txt"
+      fail=1
+    fi
+  fi
   # 本端收尾：停配对桩
   (EPH_STATE="$E3_STATE/eph" && source "$E3_LIB/eph.sh" && eph_stop)
   # shellcheck disable=SC2086
@@ -174,7 +195,7 @@ for e in $ends; do
 done
 # 没覆盖到的（SKIP）与只验了已装版本的场景写进汇总行：只读最后一行的人也不会把它当成全过
 gaps="$(sed -n 's/^SKIP \([^ ]*\).*/\1/p' "$root/summary.txt" | tr '\n' ' ')"
-grep -q '^PASS mac/svc' "$root/summary.txt" && gaps="${gaps}mac/svc=已装版 "
+grep -q '已装的不是候选构建' "$root"/mac-svc/judge-main.txt 2>/dev/null && gaps="${gaps}mac/svc=已装版 "
 v=PASS
 [ "$fail" = 0 ] || v=FAIL
 [ "$v" = PASS ] && [ -n "$gaps" ] && v="PASS（不完整）"

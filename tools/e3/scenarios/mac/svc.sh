@@ -23,7 +23,12 @@ setup() {
 run_cycle() {
   local inject="$1" mark p0 p1 p2 i t
   svc_version >"$OUT/installed-version.json"
-  "$(cand_daemon)" --version --json >"$OUT/candidate-version.json" 2>/dev/null
+  # 候选：有候选签名包就以它为准（just verify 会先把它装上），否则看候选 daemon 二进制
+  if [ -d "$(mac_cand_app)" ]; then
+    T 10 "$(mac_cand_app)/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daemon" --version --json >"$OUT/candidate-version.json" 2>/dev/null
+  else
+    "$(cand_daemon)" --version --json >"$OUT/candidate-version.json" 2>/dev/null
+  fi
   mark=$(log_mark)
   p0=$(svc_pid)
   echo "$p0" >"$OUT/pid-before.txt"
