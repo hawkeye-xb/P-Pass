@@ -404,7 +404,7 @@ async fn run() -> anyhow::Result<()> {
     // 程序占着盘而失败——所以收到事件后稍等再看库标记：还在 = 卷没有真的卸载，继续盯住。
     arm_library_watch(data_dir.clone());
     // t2-4：「照片库只有主人能访问」每次启动核对一次（只读，后台跑，不阻断启动）。服务账户
-    // 改不了库目录权限，收紧由安装器每次安装 / 升级做（`library privatize`）。
+    // 改不了库目录权限；升级前的旧库由安装器设一次（`library privatize`，每个库根只强制一次）。
     if !ephemeral {
         let dir = data_dir.clone();
         tokio::task::spawn_blocking(move || {

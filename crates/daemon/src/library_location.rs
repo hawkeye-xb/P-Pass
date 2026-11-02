@@ -31,10 +31,9 @@ pub fn log_library_privacy(dir: &Path, privacy: platform::Result<platform::Libra
     match privacy {
         Ok(NotApplicable) => {}
         Ok(Private) => tracing::info!("t2-4: 照片库目录权限核对通过（只有主人能访问）"),
-        Ok(NotPrivate { detail }) => tracing::warn!(
-            "t2-4: 照片库目录不是私有的（{detail}）：{}——下次安装或升级 P-Pass 时收紧",
-            dir.display()
-        ),
+        Ok(NotPrivate { detail }) => {
+            tracing::warn!("t2-4: 照片库目录不是私有的（{detail}）：{}", dir.display())
+        }
         Ok(NoAcl { file_system }) => {
             tracing::info!("t2-4: 照片库所在的卷（{file_system}）没有权限可设，不核对")
         }

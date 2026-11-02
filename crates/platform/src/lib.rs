@@ -705,7 +705,12 @@ pub enum LibraryPrivacy {
 pub enum LibraryPrivacyFix {
     /// 不需要做：`reason` 说明为什么（没装服务、还没配置库、还没有主人、库目录此刻不在）。
     NotApplicable { reason: &'static str },
-    /// 库根本来就是私有的，什么都没改（不碰子项）。
+    /// 这个库根以前已经强制过一次：只核对，不改（`now` 是核对结果）。
+    PrivatizedBefore {
+        dir: std::path::PathBuf,
+        now: LibraryPrivacy,
+    },
+    /// 库根本来就是私有的，什么都没改（不碰子项），记下标记。
     AlreadyPrivate { dir: std::path::PathBuf },
     /// 已收紧并回读确认。
     Tightened { dir: std::path::PathBuf },
@@ -1088,16 +1093,18 @@ pub trait PlatformAdapter: Send + Sync {
     /// Windows 服务形态下服务账户对库目录只有「修改」（不含 `WRITE_DAC`）、令牌只剩
     /// SeChangeNotifyPrivilege，改不了 DACL；收紧由安装器以管理员身份做
     /// （[`Self::enforce_library_private`]）。这里只读出事实，不合规由调用方记日志、不阻断启动。
+    /// 库根私有却还没有「已强制过」标记（首次设置 / 换位置时由窗口程序设的）⇒ 补上标记。
     fn library_privacy(&self, dir: &std::path::Path) -> Result<LibraryPrivacy> {
         let _ = dir;
         Ok(LibraryPrivacy::NotApplicable)
     }
 
-    /// t2-4：每次安装 / 升级把服务形态的当前照片库收紧成私有（与 [`Self::grant_library_dir`]
-    /// 同一套设置），由安装器以管理员身份经 `ppf-daemon library privatize` 调用。
+    /// t2-4：把服务形态的当前照片库设为私有（与 [`Self::grant_library_dir`] 同一套设置），由
+    /// 安装器以管理员身份经 `ppf-daemon library privatize` 在每次安装 / 升级时调用。
     ///
-    /// 库位置读服务的库位置正本，主人读主人记录——不取当前进程用户（装的人可能是另一个
-    /// 管理员）。库根已经私有就什么都不改。幂等。
+    /// **每个库根只强制一次**：强制过（或已确认私有）就记标记，以后只核对、不改——主人事后
+    /// 自己加的权限（例如共享给媒体服务器）不收回。库位置读服务的库位置正本，主人读主人记录
+    /// ——不取当前进程用户（装的人可能是另一个管理员）。
     fn enforce_library_private(&self) -> Result<LibraryPrivacyFix> {
         Ok(LibraryPrivacyFix::NotApplicable {
             reason: "本平台没有服务形态",

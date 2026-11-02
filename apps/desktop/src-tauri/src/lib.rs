@@ -4109,8 +4109,8 @@ mod tests {
         assert!(reg < start_svc, "必须先声明特权再起服务");
     }
 
-    /// t2-4：每次安装 / 升级都把当前照片库收紧成私有——在 POSTINSTALL 版本复查通过的分支里、
-    /// 起服务之前，不在「首次注册服务」的分支里（否则升级不执行）。
+    /// t2-4：每次安装 / 升级都调一次照片库私有化（每个库根只强制一次，由 platform 判）——在
+    /// POSTINSTALL 版本复查通过的分支里、起服务之前，不在「首次注册服务」的分支里（否则升级不执行）。
     /// 反证：删掉这一行、挪进 PPassRegisterService 的 `${If}`、或挪到 `sc start` 之后，本测试红。
     #[test]
     fn installer_privatizes_the_library_on_every_install_before_starting_the_service() {

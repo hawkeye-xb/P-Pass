@@ -56,7 +56,7 @@ P-Pass 存储端 daemon
                组装并脱敏诊断包，写到 <zip>（后台服务不在线也能导出）
   library privatize
                Windows 安装器以管理员身份调用：把当前照片库目录设为只有主人能访问
-               （已是私有则不改）。不接受路径参数
+               （每个库只设一次，之后只核对不改）。不接受路径参数
 
 退出码：0 成功；1 操作失败（stderr 一行错误）；2 用法错误
 ";
@@ -161,6 +161,18 @@ pub fn library_privatize_line(fix: &platform::LibraryPrivacyFix) -> String {
     use platform::LibraryPrivacyFix::*;
     match fix {
         NotApplicable { reason } => format!("照片库目录私有化：不需要（{reason}）"),
+        PrivatizedBefore { dir, now } => format!(
+            "照片库目录以前已设为私有，这次不改（现状：{}）：{}",
+            match now {
+                platform::LibraryPrivacy::Private => "私有".to_string(),
+                platform::LibraryPrivacy::NotPrivate { detail } => format!("已偏离——{detail}"),
+                platform::LibraryPrivacy::NoAcl { file_system } => {
+                    format!("卷 {file_system} 没有权限可设")
+                }
+                platform::LibraryPrivacy::NotApplicable => "不核对".to_string(),
+            },
+            dir.display()
+        ),
         AlreadyPrivate { dir } => format!("照片库目录已是私有，未改动：{}", dir.display()),
         Tightened { dir } => format!("照片库目录已设为私有：{}", dir.display()),
         SkippedNoAcl { dir, file_system } => format!(

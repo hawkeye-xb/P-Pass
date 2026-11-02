@@ -710,11 +710,21 @@ impl PlatformAdapter for WindowsAdapter {
             return Ok(crate::LibraryPrivacy::NotApplicable);
         };
         let service = service_account_sid()?;
-        crate::windows_photo_dir::root_privacy(dir, &service, &owner)
+        let privacy = crate::windows_photo_dir::root_privacy(dir, &service, &owner)?;
+        if privacy == crate::LibraryPrivacy::Private {
+            let marker = crate::windows_photo_dir::privatized_marker(
+                &crate::windows_programdata::service_root(),
+            );
+            if let Err(e) = crate::windows_photo_dir::note_private(dir, &marker) {
+                tracing::warn!("t2-4: 照片库私有化标记写不进去：{e}");
+            }
+        }
+        Ok(privacy)
     }
 
-    /// t2-4：安装器（管理员）收紧服务形态的当前库。库位置与主人都读 ProgramData 里的正本
-    /// （不经 `service_root()`：安装器不是以服务身份运行）。库根已私有就不动子项。
+    /// t2-4：安装器（管理员）对服务形态的当前库「只强制一次」私有化（见
+    /// [`crate::windows_photo_dir::privatize_once`]）。库位置与主人都读 ProgramData 里的正本
+    /// （不经 `service_root()`：安装器不是以服务身份运行）。
     fn enforce_library_private(&self) -> Result<crate::LibraryPrivacyFix> {
         use crate::windows_service;
         use crate::LibraryPrivacyFix::*;
@@ -753,18 +763,11 @@ impl PlatformAdapter for WindowsAdapter {
             });
         }
         let service = service_account_sid()?;
-        if crate::windows_photo_dir::root_privacy(&dir, &service, &owner)?
-            == crate::LibraryPrivacy::Private
-        {
-            return Ok(AlreadyPrivate { dir });
-        }
-        Ok(
-            match crate::windows_photo_dir::make_private_for_service(&dir, &service, &owner)? {
-                crate::windows_photo_dir::GrantOutcome::Done => Tightened { dir },
-                crate::windows_photo_dir::GrantOutcome::SkippedNoAcl { file_system } => {
-                    SkippedNoAcl { dir, file_system }
-                }
-            },
+        crate::windows_photo_dir::privatize_once(
+            &dir,
+            &service,
+            &owner,
+            &crate::windows_photo_dir::privatized_marker(&root),
         )
     }
 
