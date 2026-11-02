@@ -116,7 +116,12 @@ cp "$OUT/512x512.png" "$ICONSET/icon_512x512.png"
 cp "$OUT/1024x1024.png" "$ICONSET/icon_512x512@2x.png"
 iconutil -c icns "$ICONSET" -o "$OUT/icon.icns"
 
-# ── 4. Tauri 标准文件集（carbon 主档 + Square 系列）─────────
+# ── 4. Tauri 标准文件集（只拷本脚本生成的档）──────────────────
+# ⚠️ 这里**只**产出本脚本会生成的文件：bundle.icon 引用的 4 个
+# （icon.icns / icon.ico / 32x32 / 128x128）+ 其余 PNG 阶梯与 app-icon.png。
+# **不生成 Square*Logo / StoreLogo**——那 10 个是 `tauri icon` 的 Appx
+# （Windows Store）遗留档，Tauri 2 的打包器只读 bundle.icon 里声明的图标，
+# 从不按约定路径去捞它们；#1189 已把图标目录里那批旧「P」占位图删掉。
 cp "$OUT/32x32.png" "$ICONS/32x32.png"
 cp "$OUT/32x32@2x.png" "$ICONS/32x32@2x.png"
 cp "$OUT/64x64.png" "$ICONS/64x64.png"
