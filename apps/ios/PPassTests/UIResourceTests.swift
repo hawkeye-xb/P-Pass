@@ -54,9 +54,9 @@ final class UIResourceTests: XCTestCase {
     func testIOSOverlayWinsOverAndroidWording() throws {
         let zh = try XCTUnwrap(Bundle.main.path(forResource: "zh-Hans", ofType: "lproj").flatMap(Bundle.init(path:)))
         XCTAssertEqual(zh.localizedString(forKey: "notif_media_none_body", value: nil, table: "IOS"),
-                       "照片权限已关闭，备份已停止。在「设置 › P-Pass › 照片」允许访问。")
+                       "照片权限已关闭，自动备份已停止。在「设置 › P-Pass › 照片」允许访问。")
         XCTAssertEqual(zh.localizedString(forKey: "notif_media_none_body", value: nil, table: nil),
-                       "照片权限已关闭，备份已停止。点开后在系统设置中允许访问。")
+                       "照片权限已关闭，自动备份已停止。点开后在系统设置中允许访问。")
     }
 
     /// 10-29 文案 B12：iOS 首页不再有 idle_auto_hint 状态行，覆盖层里也不留这两条（留着会让人以为还在用）。
