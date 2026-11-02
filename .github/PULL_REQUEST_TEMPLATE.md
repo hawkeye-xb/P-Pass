@@ -1,4 +1,4 @@
-<!-- 一 issue 一 PR。标题格式：<type>(<域>): 一句话结果。正文写 closes #N 让合并自动关 issue -->
+<!-- 一批一 PR，由 owner 从 batch/<日期>-<主题> 分支开（worker 不开 PR，见 AGENTS.md）。标题格式：batch(<日期>): 一句话结果。正文逐卡写 closes #N 让合并自动关 issue -->
 
 ## 关联 issue
 
