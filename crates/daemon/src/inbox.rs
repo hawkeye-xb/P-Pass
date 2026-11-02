@@ -120,7 +120,12 @@ pub fn sweep_flow_staging_orphans(
         let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        let Some(hash_hex) = flow_staged_file_hash_hex(name) else {
+        // #1306：导出中断留下的 `{node}-{seq}-{hash}.export` 与成品同等对待
+        // （同一套保护集与宽限），否则名字解析不出 hash、永远收不走。
+        let base = name
+            .strip_suffix(transport::EXPORT_TEMP_SUFFIX)
+            .unwrap_or(name);
+        let Some(hash_hex) = flow_staged_file_hash_hex(base) else {
             continue; // 命名对不上契约，不在本函数职责内，宁可漏收
         };
         if protected_hex.contains(hash_hex) {
@@ -354,11 +359,16 @@ pub fn sweep_partial_uploads(staging_dir: &Path) -> u64 {
 
 /// 半成品判据。**纯函数**，单测直接覆盖。
 ///
-/// 只认 `.upload` 后缀——那是上传平面写盘中的临时名，校验通过才原地 rename
-/// 成不带后缀的 `<hash>`。判据写死在这里，与 `upload.rs` 的命名是一份契约：
+/// 认两种后缀，都是「写盘中、还没 rename 成 `<hash>`」的临时名：
+/// - `.upload`：上传平面，校验通过才原地 rename 成不带后缀的 `<hash>`
+///   （与 `upload.rs` 的命名是一份契约）；
+/// - `.export`：从 blob store 导出（`transport::EXPORT_TEMP_SUFFIX`，#1306），
+///   写完、落盘后才 rename。
+///
 /// 那边改了后缀这边必须跟着改，否则半成品会被当成可 ingest 的完整文件。
 pub fn is_partial_upload(path: &Path) -> bool {
-    path.extension().and_then(|e| e.to_str()) == Some("upload")
+    let ext = path.extension().and_then(|e| e.to_str());
+    ext == Some("upload") || ext == Some(transport::EXPORT_TEMP_SUFFIX.trim_start_matches('.'))
 }
 
 #[cfg(test)]
@@ -374,6 +384,10 @@ mod tests {
     #[test]
     fn partial_uploads_are_recognised_by_suffix() {
         assert!(is_partial_upload(Path::new("/x/abc123.upload")));
+        assert!(
+            is_partial_upload(Path::new("/x/abc123.export")),
+            "#1306 导出中断的临时名"
+        );
         // 不带后缀 = 校验通过、等 ingest。绝不能误判成垃圾。
         assert!(!is_partial_upload(Path::new("/x/abc123")));
         assert!(!is_partial_upload(Path::new("/x/abc123.jpg")));
@@ -596,6 +610,27 @@ mod tests {
             d.join("garbage-name").exists(),
             "命名不合契约的文件不在本函数职责内，宁可漏收"
         );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    /// #1306：导出中断留下的 `.export` 临时名按同一套规矩收：没有活 grant 认领就收，
+    /// 有就留。反证：去掉 `strip_suffix`，名字解析不出 hash，孤儿那个收不走。
+    #[test]
+    fn flow_staging_orphan_sweep_also_takes_interrupted_exports() {
+        let d = tmp("flow-staging-export");
+        let claimed_hash = [0x44u8; 32];
+        let claimed_hex = hex::encode(claimed_hash);
+        let orphan_hex = hex::encode([0x55u8; 32]);
+        std::fs::write(d.join(format!("dd-4-{claimed_hex}.export")), b"half").unwrap();
+        std::fs::write(d.join(format!("ee-5-{orphan_hex}.export")), b"halfway").unwrap(); // 7
+
+        let protected: HashSet<[u8; 32]> = [claimed_hash].into_iter().collect();
+        assert_eq!(
+            sweep_flow_staging_orphans(&d, &protected, Duration::ZERO),
+            7
+        );
+        assert!(d.join(format!("dd-4-{claimed_hex}.export")).exists());
+        assert!(!d.join(format!("ee-5-{orphan_hex}.export")).exists());
         std::fs::remove_dir_all(&d).ok();
     }
 

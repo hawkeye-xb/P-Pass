@@ -512,6 +512,17 @@ impl BackupEngine {
             // 拉取）。那条路真的需要"边收边验+断点续传"，值得走它。
             // 短路顺序即优先级：staging 有现成的就用；没有才碰 blob store；
             // store 里也没有才向手机拉（T-032 回退路径）。
+            // #1306：名字叫 `<hash>` 不等于内容就是它——旧版本导出中断（磁盘满、
+            // 进程被杀）会在最终名下留半截文件，ingest 按内容另算 hash，会把
+            // 半截文件当成一张新照片入库、真正这张却没进来，commit 照样报成功。
+            // 用之前重算一遍：不符就删掉，走下面的导出 / 拉取重来。
+            if staged.is_file() && !staged_matches(&staged, hash).await {
+                tracing::warn!(
+                    "commit {peer:?}: staging 里 {} 的内容与 hash 不符，删掉重取",
+                    item.hash
+                );
+                let _ = std::fs::remove_file(&staged);
+            }
             if !staged.is_file() && self.blobs.export_to(hash, &staged).await.is_err() {
                 // ⚠️ MOB-32：拉取回退只对**自称可被拉取**的设备成立。
                 //
@@ -592,6 +603,17 @@ fn unix_ms_now() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// #1306：staged 文件的内容是否就是 `hash`（流式 BLAKE3，在阻塞线程里算）。
+/// 读不了也算不符——调用方会删掉重取。
+async fn staged_matches(staged: &std::path::Path, hash: [u8; 32]) -> bool {
+    let path = staged.to_path_buf();
+    tokio::task::spawn_blocking(move || core_index::hash_file(&path))
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        == Some(hash)
 }
 
 fn parse_hash(hex: &str) -> Option<[u8; 32]> {

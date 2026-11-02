@@ -590,3 +590,57 @@ async fn backup_provider_address_for_another_device_leaves_that_device_reachable
         "B 的地址被别的设备上报的假地址改掉了：{fetched:?}"
     );
 }
+
+/// #1306：staging 里以 `<hash>` 命名、内容却是半截的文件（旧版本导出中断留下：
+/// 磁盘满 / 进程被杀），commit 不许把它当成这张照片入库。
+///
+/// 旧行为：commit 见名字存在就直接 ingest，ingest 按内容另算出一个 hash，半截
+/// 文件作为「新照片」进库、真正这张仍缺，commit 照样报成功——下一轮又缺 1。
+/// 反证：去掉 `BackupEngine::commit` 里的 `staged_matches` 校验，`truncated`
+/// 这一档红（真正那张的 hash 不在索引里）；`complete` 一档前后都绿。
+#[tokio::test(flavor = "multi_thread")]
+async fn a_truncated_file_left_in_staging_is_never_taken_as_the_photo() {
+    for planted in ["truncated", "complete"] {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = start_daemon(dir.path()).await;
+        let client = Client::new(dir.path(), &storage).await;
+        storage
+            .db
+            .accept_pairing(
+                &client.tp.node_id().0,
+                "phone",
+                &member(&client.tp.node_id()),
+            )
+            .await
+            .unwrap();
+        let src_dir = dir.path().join("src");
+        fs::create_dir_all(&src_dir).unwrap();
+        let files = corpus(&src_dir, 6, 0);
+        import_all(&client, &files, &src_dir).await;
+
+        // 挑一张，在 staging 里放好它名下的文件。
+        let (victim_hex, (content, _)) = files.iter().next().unwrap();
+        let staging = dir.path().join("library/.ppf/staging");
+        fs::create_dir_all(&staging).unwrap();
+        let body = match planted {
+            "truncated" => &content[..content.len() / 2],
+            _ => &content[..],
+        };
+        fs::write(staging.join(victim_hex), body).unwrap();
+
+        assert_eq!(client.run_backup(&files).await, files.len(), "{planted}");
+        for hex in files.keys() {
+            let hash: [u8; 32] = hex::decode(hex).unwrap().try_into().unwrap();
+            assert!(
+                storage.db.get_asset(&hash).await.unwrap().is_some(),
+                "{planted}: {hex} 必须以它自己的 hash 入库"
+            );
+        }
+        assert_eq!(
+            asset_count(&storage.db).await,
+            files.len(),
+            "{planted}: 不许多出一张按半截内容算 hash 的「照片」"
+        );
+        assert_eq!(client.run_backup(&files).await, 0, "{planted}: 再跑应缺 0");
+    }
+}
