@@ -1253,7 +1253,10 @@ mod rewrite_agent_tests {
             },
             &mut |a| {
                 calls.push(a[0].clone());
-                Ok((Some(if a[0] == "print" { print_code } else { 0 }), String::new()))
+                Ok((
+                    Some(if a[0] == "print" { print_code } else { 0 }),
+                    String::new(),
+                ))
             },
         )
         .unwrap();
