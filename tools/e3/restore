@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# 把测试设备装回指定版本（ADR：每台测试设备一个安装槽）。先取设备锁，用完释放。
+#
+#   tools/e3/restore mac <tag>        从 GitHub Release 下载该 tag 的 macOS 包（校验 SHA256 与团队签名），
+#                                     覆盖装进 ~/Applications/P-Pass.app，核对已装与 daemon 版本号
+#   tools/e3/restore mac --snapshot   装回 mac/upgrade 场景开始前留的那一份
+# Android / Windows / iOS：TODO（接口相同）。
+set -uo pipefail
+E3_ROOT="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib/common.sh
+source "$E3_ROOT/lib/common.sh"
+dev="${1:-}"
+what="${2:-}"
+[ -n "$dev" ] && [ -n "$what" ] || { sed -n 2,8p "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+case "$dev" in
+  mac)
+    if [ "${E3_LOCKED_MAC:-}" != 1 ]; then exec "$E3_ROOT/lock" mac "$0" "$@"; fi
+    source "$E3_LIB/mac.sh"
+    source "$E3_LIB/mac-install.sh"
+    if [ "$what" = --snapshot ]; then mac_restore_snapshot; else mac_restore_tag "$what"; fi
+    ;;
+  *) die "restore $dev 还没收编（目前只有 mac）" ;;
+esac

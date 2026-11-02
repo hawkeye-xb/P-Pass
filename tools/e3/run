@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# E3 场景运行器。
+#
+#   tools/e3/run [选项] <场景>…          跑场景（同一台设备的场景一次跑完；自动拿设备锁）
+#   tools/e3/run judge <场景> <证据目录>   只重放判定（离线，读已有证据）
+#   tools/e3/run list [设备]              列出场景
+#
+# 选项：
+#   --counter / --no-counter   强制跑 / 不跑反证（默认按场景自己的 COUNTER=on|off）
+#   --evidence <目录>          证据根（默认 evidence/manual/<时间>）
+#
+# 场景 = tools/e3/scenarios/<设备>/<名字>.sh，id 写作 <设备>/<名字>。接口见 docs/runbook/e3.md：
+#   DESC / COUNTER=on|off      说明；是否默认跑反证
+#   setup                      准备（装包、配对、造素材）；返回 77 = 本机条件不具备，记 SKIP
+#   act                        操作，并把原始输出（日志、IPC json、dumpsys…）写进 $OUT
+#   judge <目录>               只读该目录判定：输出逐条 ok/FAIL，退出码 0 = 通过。不看截图
+#   counter                    去掉/加上故障条件，同样把原始输出写进 ${OUT}；judge 必须判红
+#   teardown                   收尾（总会执行）
+# 场景结论：judge(main) 通过，且（跑反证时）judge(counter) 不通过 ⇒ PASS。
+set -uo pipefail
+E3_ROOT="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=lib/common.sh
+source "$E3_ROOT/lib/common.sh"
+
+usage() { sed -n 2,22p "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+
+scn_file() { echo "$E3_ROOT/scenarios/$1.sh"; }
+
+cmd_list() {
+  local f id pat="${1:-*}"
+  # shellcheck disable=SC2086
+  for f in "$E3_ROOT"/scenarios/$pat/*.sh; do
+    [ -f "$f" ] || continue
+    id="${f#"$E3_ROOT"/scenarios/}"
+    id="${id%.sh}"
+    printf '%-28s %s\n' "$id" "$(sed -n 's/^DESC="\(.*\)"$/\1/p' "$f" | head -1)"
+  done
+}
+
+# 载入场景（在子 shell 里调用）
+load_scn() {
+  local f
+  f="$(scn_file "$1")"
+  [ -f "$f" ] || die "没有场景 $1（${f}）"
+  DEVICE="${1%%/*}"
+  COUNTER=off
+  # 缺省的步骤
+  setup() { :; }
+  teardown() { :; }
+  counter() { echo "（本场景没有反证步骤）" >&2; return 1; }
+  # 按设备加载共享库
+  case "$DEVICE" in
+    android) source "$E3_LIB/eph.sh"; source "$E3_LIB/adb.sh"; source "$E3_LIB/android-flow.sh"; [ -n "${E3_JUDGE_ONLY:-}" ] || adb_init ;;
+    mac) source "$E3_LIB/eph.sh"; source "$E3_LIB/mac.sh" ;;
+  esac
+  # shellcheck disable=SC1090
+  source "$f"
+}
+
+cmd_judge() {
+  local id="$1" dir="$2"
+  (E3_JUDGE_ONLY=1 && load_scn "$id" && judge "$dir")
+}
+
+# run_one <场景> <证据根> <反证模式 auto|on|off>：打印一行结论，返回 0=PASS/SKIP 1=FAIL
+run_one() {
+  local id="$1" root="$2" cmode="$3" ev rc
+  ev="$root/${id//\//-}"
+  mkdir -p "$ev/main" "$ev/counter"
+  (
+    load_scn "$id"
+    want_counter="$COUNTER"
+    [ "$cmode" = auto ] || want_counter="$cmode"
+    trap 'teardown >>"$ev/run.log" 2>&1' EXIT
+    EV="$ev"
+    export EV
+    {
+      echo "== $id  $(date '+%F %T')  反证=$want_counter"
+      echo "== setup"
+    } >>"$ev/run.log"
+    setup >>"$ev/run.log" 2>&1
+    rc=$?
+    if [ "$rc" -eq 77 ]; then
+      echo "SKIP $id  $(tail -1 "$ev/run.log")"
+      echo SKIP >"$ev/verdict.txt"
+      exit 0
+    fi
+    [ "$rc" -eq 0 ] || { echo "FAIL $id  setup 失败：$(tail -1 "$ev/run.log")（$ev/run.log）"; echo FAIL >"$ev/verdict.txt"; exit 1; }
+    echo "== act" >>"$ev/run.log"
+    OUT="$ev/main" act >>"$ev/run.log" 2>&1 || echo "act 返回非零（交给 judge 判）" >>"$ev/run.log"
+    judge "$ev/main" >"$ev/judge-main.txt" 2>&1
+    main_ok=$?
+    counter_note=""
+    counter_ok=1
+    if [ "$want_counter" = on ]; then
+      echo "== counter" >>"$ev/run.log"
+      if OUT="$ev/counter" counter >>"$ev/run.log" 2>&1; then
+        judge "$ev/counter" >"$ev/judge-counter.txt" 2>&1
+        if [ $? -ne 0 ]; then counter_note="；反证已变红"; else counter_note="；反证没变红"; counter_ok=0; fi
+      else
+        counter_note="；反证步骤失败"
+        counter_ok=0
+      fi
+    fi
+    if [ "$main_ok" -eq 0 ] && [ "$counter_ok" -eq 1 ]; then
+      echo "PASS $id${counter_note}"
+      echo PASS >"$ev/verdict.txt"
+      exit 0
+    fi
+    echo "FAIL $id${counter_note}（${ev}）"
+    echo FAIL >"$ev/verdict.txt"
+    [ "$main_ok" -eq 0 ] || grep -E '^  FAIL' "$ev/judge-main.txt" | head -5 | sed 's/^/     /'
+    exit 1
+  ) 2>>"$ev/run.log"
+  rc=$?
+  # 场景里 die 之类直接退出了子 shell：没留下结论也记 FAIL
+  if [ ! -f "$ev/verdict.txt" ]; then
+    echo "FAIL $id  中途退出：$(tail -1 "$ev/run.log")（$ev/run.log）"
+    echo FAIL >"$ev/verdict.txt"
+    return 1
+  fi
+  return $rc
+}
+
+cmd_run() {
+  local cmode=auto root="" ids=() id dev="" fails=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --counter) cmode=on ;;
+      --no-counter) cmode=off ;;
+      --evidence) root="$2"; shift ;;
+      -h | --help) usage ;;
+      *) ids+=("$1") ;;
+    esac
+    shift
+  done
+  [ "${#ids[@]}" -gt 0 ] || usage
+  for id in "${ids[@]}"; do
+    [ -f "$(scn_file "$id")" ] || die "没有场景 ${id}（tools/e3/run list 看清单）"
+    [ -z "$dev" ] || [ "$dev" = "${id%%/*}" ] || die "一次只跑同一台设备的场景（$dev 与 ${id%%/*}）"
+    dev="${id%%/*}"
+  done
+  [ -n "$root" ] || root="$REPO_ROOT/evidence/manual/$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "$root"
+  # 拿设备锁后再跑（嵌套时 lock 直接放行）
+  local var
+  var="E3_LOCKED_$(echo "$dev" | tr a-z A-Z)"
+  if [ "${!var:-}" != 1 ]; then
+    local a=()
+    [ "$cmode" != on ] || a=(--counter)
+    [ "$cmode" != off ] || a=(--no-counter)
+    exec "$E3_ROOT/lock" "$dev" "$0" "${a[@]+"${a[@]}"}" --evidence "$root" "${ids[@]}"
+  fi
+  if [ "$dev" = android ]; then (source "$E3_LIB/adb.sh" && adb_init) || exit 2; fi
+  for id in "${ids[@]}"; do
+    run_one "$id" "$root" "$cmode" | tee -a "$root/summary.txt"
+    [ "${PIPESTATUS[0]}" -eq 0 ] || fails=$((fails + 1))
+  done
+  [ "$fails" -eq 0 ]
+}
+
+case "${1:-}" in
+  list) shift; cmd_list "$@" ;;
+  judge) shift; [ $# -eq 2 ] || usage; cmd_judge "$@" ;;
+  "" | -h | --help) usage ;;
+  *) cmd_run "$@" ;;
+esac

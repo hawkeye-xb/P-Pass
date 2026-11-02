@@ -70,3 +70,6 @@ apps/ios/TransportFFITests/.swiftpm/
 # 解释器缓存与合并残留：曾误提交过 tools/__pycache__/ 与 Cargo.toml.orig。
 __pycache__/
 *.orig
+
+# E3 真机验证证据（tools/e3，不进 git）
+/evidence/

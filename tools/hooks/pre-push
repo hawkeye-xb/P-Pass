@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# 推送卡分支时要求它包含最新的 origin/main（推送前现取一次），落后就拒绝并提示 rebase。
+# 放在推送而不是提交：交付那一刻才要求跟上 main（与 GitHub「require branches up to date」同一口径），
+# 干活途中 main 动了不打断提交。batch/* 与非卡分支不管；PPASS_HOOK_BYPASS 同 pre-commit。
+# stdin：git 给的「<本地 ref> <本地 sha> <远端 ref> <远端 sha>」每行一条（转发器原样转给我们）。
+
+set -uo pipefail
+
+deny() {
+  printf '\n✗ 推送被拦下：%s\n' "$1" >&2
+  shift
+  local l
+  for l in "$@"; do printf '    %s\n' "$l" >&2; done
+  printf '\n  规则见 AGENTS.md「交付流程」与 docs/runbook/local-hooks.md。\n\n' >&2
+  exit 1
+}
+
+remote="${1:-origin}"
+if [ "${PPASS_HOOK_BYPASS:-}" = "1" ]; then
+  [ -n "$(printf '%s' "${PPASS_HOOK_BYPASS_REASON:-}" | tr -d '[:space:]')" ] ||
+    deny "PPASS_HOOK_BYPASS=1 必须同时给出 PPASS_HOOK_BYPASS_REASON"
+  exit 0
+fi
+
+fetched=""
+while read -r lref lsha _rref _rsha; do
+  case "$lref" in refs/heads/*) ;; *) continue ;; esac
+  case "$lsha" in 0000000000000000000000000000000000000000) continue ;; esac # 删除远端分支
+  branch="${lref#refs/heads/}"
+  [[ "$branch" =~ ^(feat|fix|docs|test|ci)/[0-9]+-. ]] || continue
+  if [ -z "$fetched" ]; then
+    git fetch -q "$remote" "+refs/heads/main:refs/remotes/${remote}/main" ||
+      deny "取不到 ${remote}/main，判断不了「${branch}」是否落后，按拒绝处理"
+    fetched=1
+  fi
+  if ! git merge-base --is-ancestor "refs/remotes/${remote}/main" "$lsha"; then
+    behind="$(git rev-list --count "${lsha}..refs/remotes/${remote}/main")"
+    deny "「${branch}」落后 ${remote}/main ${behind} 个提交" \
+      "先跟上：git rebase ${remote}/main，重跑本地验证，再推送（已推过的分支用 git push --force-with-lease）。"
+  fi
+done
+exit 0
