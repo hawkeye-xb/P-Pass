@@ -20,6 +20,19 @@
 + tools/check-commit-identity.sh
 + tools/arch-check.sh
 + tools/arch-allowlist.txt
++ tools/hooks/**
++ tools/test-local-hooks.sh
++ tools/check-egress.py
++ tools/check-autostart.py
++ tools/check-disk-growth.py
++ tools/fitness_lib.py
++ tools/fitness-test-lib.sh
++ tools/test-check-egress.sh
++ tools/test-check-autostart.sh
++ tools/test-check-disk-growth.sh
++ tools/egress-allowlist.txt
++ tools/autostart-registry.txt
++ tools/disk-growth-registry.txt
 
 # ── 安全：配对、身份、加密、协议 ────────────────────────────
 + crates/pair-pake/**

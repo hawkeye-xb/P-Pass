@@ -58,6 +58,15 @@ on:
       - "tools/arch-check.sh"
       - "tools/arch-allowlist.txt"
       - "tools/test-arch-check.sh"
+      - "tools/check-egress.py"
+      - "tools/check-autostart.py"
+      - "tools/check-disk-growth.py"
+      - "tools/fitness_lib.py"
+      - "tools/fitness-test-lib.sh"
+      - "tools/test-check-*.sh"
+      - "tools/egress-allowlist.txt"
+      - "tools/autostart-registry.txt"
+      - "tools/disk-growth-registry.txt"
       - "rust-toolchain.toml"
       - "tools/setup-rust-toolchain.sh"
       - "tools/check-rust-toolchain-ci.sh"
@@ -625,6 +634,30 @@ jobs:
           ARCH_BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || '' }}
           ARCH_RATCHET_SKIP: ${{ github.event_name == 'pull_request' && '0' || '1' }}
         run: bash tools/arch-check.sh
+
+  # 产品理念的适应度函数（docs/runbook/fitness.md）：无遥测 / 不新增外联、尊重用户停服务、
+  # 占盘 1x 的结构信号。纯静态扫描，与 arch 同一触发口径（扫 crates/** 与 apps/**，
+  # 所以只改 apps/** 也要跑）。job 名写死，别改——要进必需检查必须先固定名字。
+  fitness-check:
+    name: fitness checks
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run_arch != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: 无遥测 / 不新增外联
+        run: |
+          bash tools/test-check-egress.sh
+          python3 tools/check-egress.py
+      - name: 尊重用户停服务（自启 / 拉起点登记）
+        run: |
+          bash tools/test-check-autostart.sh
+          python3 tools/check-autostart.py
+      - name: 占盘 1x（落盘目录登记清理触发条件）
+        run: |
+          bash tools/test-check-disk-growth.sh
+          python3 tools/check-disk-growth.py
 
   deny:
     name: license + dependency audit

@@ -33,6 +33,10 @@ default:
 # gitleaks 是 language: system 的本机可执行文件，必须在 PATH 上 hook 才跑
 # 得动；它缺了不挡 hook 安装，但会让每次提交都硬失败，所以装完 hook 后单独
 # loud-check 一次，缺了打 WARNING 并给出安装指引。
+# 本地提交拦截（核心 + 范围，见 docs/runbook/local-hooks.md）不依赖 pre-commit 框架：
+# tools/hooks/install.sh 把 core.hooksPath 指向 git 公共目录里的转发器，转发器先跑上面装进
+# .git/hooks/ 的 hook，再跑 HEAD 里的 tools/hooks/。框架看到 core.hooksPath 会拒绝安装，
+# 所以先 --release 让路；框架装不上也照样装本拦截，再报错退出。
 setup:
   @echo "==> Checking Rust toolchain..."
   rustup show
@@ -43,6 +47,7 @@ setup:
   @echo "==> Installing just..."
   @echo "  (just is already running this file — you have it! 🎉)"
   @echo "==> Installing git hooks (pre-commit)..."
+  @bash tools/hooks/install.sh --release
   @if command -v pre-commit >/dev/null 2>&1 && pre-commit --version >/dev/null 2>&1; then \
     pre-commit install; \
   elif python3 -m pre_commit --version >/dev/null 2>&1; then \
@@ -53,8 +58,11 @@ setup:
     echo "ERROR: pre-commit not found — git hooks were NOT installed." >&2; \
     echo "  Tried: pre-commit on PATH (exists AND --version works), python3 -m pre_commit, python -m pre_commit." >&2; \
     echo "  Fix: pip install pre-commit   then re-run: just setup" >&2; \
+    bash tools/hooks/install.sh; \
     exit 1; \
   fi
+  @echo "==> Installing local commit gate (core + scope)..."
+  @bash tools/hooks/install.sh
   @if command -v gitleaks >/dev/null 2>&1; then \
     echo "  gitleaks found in PATH ($(command -v gitleaks))"; \
   else \
@@ -152,6 +160,17 @@ arch-check:
   @./tools/test-arch-check.sh
   @./tools/arch-check.sh
 
+# 产品理念的适应度函数（docs/runbook/fitness.md）：无遥测/不新增外联、尊重用户停服务、
+# 占盘 1x 的结构信号。每条先跑自测（违反必须红、还原必须绿）再判真实仓库。
+# 同一组命令在 ci-rust.yml 的 `fitness-check` job 里跑。
+fitness-check:
+  @tools/test-check-egress.sh
+  @python3 tools/check-egress.py
+  @tools/test-check-autostart.sh
+  @python3 tools/check-autostart.py
+  @tools/test-check-disk-growth.sh
+  @python3 tools/check-disk-growth.py
+
 # ci-rust.yml「fmt + actionlint」job 里的同一条：每个跑 cargo 的 CI job 都必须
 # 用 rust-toolchain.toml 锁定的版本（脚本自带反证）。
 toolchain-check:
@@ -214,6 +233,15 @@ identity-check:
   @./tools/test-commit-identity-gate.sh
   @./tools/check-commit-identity.sh
 
+# 本地提交拦截（核心 + 范围），说明见 docs/runbook/local-hooks.md。
+# hooks-test：临时仓库 + 假 gh 跑全部判据与反证，进 ci / ci-docs（纯 shell，几秒）。
+# hooks-check：检查本机是否装好（core.hooksPath 与转发器），没装好非 0 退出，修复跑 just setup。
+hooks-test:
+  @bash tools/test-local-hooks.sh
+
+hooks-check:
+  @bash tools/hooks/install.sh --check
+
 # SEC-09 (#371): pnpm 的 minimumReleaseAgeExclude 不许自己长出来。
 # 任何条目都要在 tools/release-age-exclude-allowlist.txt 显式登记；先跑变异反证再扫全仓。
 supply-chain-check:
@@ -231,7 +259,7 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt toolchain-check lint lint-cross test arch-check md-check token-check shell-vars-check identity-check supply-chain-check mobile-static-check lockfile-check
+ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check hooks-test supply-chain-check mobile-static-check lockfile-check
   @echo "==> CI pipeline: all green ✅"
 
 # 两个 Rust workspace 的 Cargo.lock 都得和实际依赖一致（src-tauri 是独立 workspace，
@@ -263,7 +291,7 @@ mobile-static-check:
 #
 # ⚠️ 只在这次改动**一行 Rust/Kotlin/前端都没动**时用它。碰了代码就跑 `just ci`，
 # 别拿这条快车道当省事的借口——`ci` 的依赖列表一个都没减。
-ci-docs: md-check token-check shell-vars-check identity-check supply-chain-check
+ci-docs: md-check token-check shell-vars-check identity-check hooks-test supply-chain-check
   @echo "==> docs lane: green ✅（注意：本条不含 fmt/lint/test，动了代码必须跑 just ci）"
 
 # T-040 人工验收：自启/防睡眠/密钥仓 真机冒烟（H-09 双平台各跑一次）

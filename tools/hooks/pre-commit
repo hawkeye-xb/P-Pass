@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+# 本地提交拦截：核心 + 范围。由转发器（tools/hooks/dispatch.sh）从 HEAD 取出来跑，
+# 说明见 docs/runbook/local-hooks.md。
+#
+#   batch/*                         不拦（owner 的批分支）
+#   <type>/<issue号>-<slug>         查该 issue：
+#     - 暂存改动命中核心（tools/ci-paths.sh core，规则 .github/core-paths.txt）且 issue 没有 `core` 标签 → 拒绝
+#     - 暂存改动有文件不在 issue「范围」代码块的路径/glob 里 → 拒绝；没有范围代码块 → 拒绝
+#     - 卡分支在主仓工作区（不是 linked worktree）里 → 拒绝
+#     - 落后 origin/main 超过 PPASS_HOOK_MAX_BEHIND（默认 20）个提交，或 main 上已有新提交改过范围内
+#       的文件 → 拒绝（现取 origin/main；取不到只告警）
+#     - 合并 origin/main 解冲突的提交：与 MERGE_HEAD 内容相同的文件不算本卡改动
+#   其它分支名、detached HEAD        拒绝
+# 推送时另有 tools/hooks/pre-push：卡分支必须包含最新的 origin/main。
+# 查不到 issue（没装 gh、没登录、离线）一律拒绝。
+# 紧急逃生：PPASS_HOOK_BYPASS=1 PPASS_HOOK_BYPASS_REASON=<原因>，commit-msg 会在提交说明末尾记一行
+# `Hook-Bypass: <原因>`。原因为空则拒绝。
+#
+# 环境变量：PPASS_HOOK_ROOT（取规则与脚本的根目录，转发器设置）；PPASS_HOOK_REPO（owner/repo，
+# 默认从 origin 的 URL 解析）。
+
+set -uo pipefail
+
+ROOT="${PPASS_HOOK_ROOT:-$(cd "$(dirname "$0")/../.." && pwd)}"
+PATHS="${ROOT}/tools/ci-paths.sh"
+RULES="${ROOT}/.github/core-paths.txt"
+
+deny() { # deny <一句话原因> [补充行]...
+  printf '\n✗ 提交被拦下：%s\n' "$1" >&2
+  shift
+  local l
+  for l in "$@"; do printf '    %s\n' "$l" >&2; done
+  printf '\n  规则见 AGENTS.md「交付流程」与 docs/runbook/local-hooks.md。\n\n' >&2
+  exit 1
+}
+
+trim() { printf '%s' "$1" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'; }
+
+if [ "${PPASS_HOOK_BYPASS:-}" = "1" ]; then
+  [ -n "$(trim "${PPASS_HOOK_BYPASS_REASON:-}")" ] ||
+    deny "PPASS_HOOK_BYPASS=1 必须同时给出原因" \
+      "用法：PPASS_HOOK_BYPASS=1 PPASS_HOOK_BYPASS_REASON='<为什么必须绕过>' git commit -s ..." \
+      "原因会写进提交说明的 Hook-Bypass: 尾行，供事后审计。"
+  printf '⚠ PPASS_HOOK_BYPASS：跳过核心与范围检查（原因：%s）\n' "$(trim "$PPASS_HOOK_BYPASS_REASON")" >&2
+  exit 0
+fi
+
+# --no-renames：改名要同时算旧路径和新路径，否则 git mv 能把核心文件「搬」出核心目录。
+FILES="$(git -c core.quotepath=false diff --cached --name-only --no-renames)" ||
+  deny "读不到暂存区改动列表"
+[ -n "$FILES" ] || exit 0
+
+if BRANCH="$(git symbolic-ref --quiet --short HEAD)"; then :; else BRANCH=""; fi
+case "$BRANCH" in
+  batch/*) exit 0 ;;
+esac
+if [[ "$BRANCH" =~ ^(feat|fix|docs|test|ci)/([0-9]+)-. ]]; then
+  ISSUE="${BASH_REMATCH[2]}"
+else
+  deny "当前分支「${BRANCH:-（detached HEAD）}」不是卡分支" \
+    "卡分支格式：<type>/<issue号>-<slug>，type ∈ feat/fix/docs/test/ci；owner 的批分支是 batch/*。" \
+    "开分支：git worktree add <目录> -b fix/<issue号>-<slug> origin/main"
+fi
+
+# 卡分支只许在独立 worktree 里提交：主仓工作区是产品负责人与其他会话共用的，
+# 在那里切分支干活会把别人的现场一起改掉。linked worktree 的 git 目录 ≠ 公共目录。
+GIT_DIR_ABS="$(cd "$(git rev-parse --absolute-git-dir)" && pwd -P)"
+COMMON_ABS="$(cd "$(git rev-parse --git-common-dir)" && pwd -P)"
+if [ "$GIT_DIR_ABS" = "$COMMON_ABS" ]; then
+  deny "卡分支「${BRANCH}」在主仓工作区里，不在独立 worktree 里" \
+    "一卡一 worktree：git fetch origin --prune && git worktree add <目录> -b <新卡分支> origin/main" \
+    "已有改动先搬过去：git stash，在新 worktree 里 git stash pop；然后把主仓切回原来的分支。"
+fi
+
+# 现取远端 main：判落后用，也用来认出「把 main 合进卡分支」的合并提交。取不到（离线）只告警，
+# 落后检查跳过，合并提交也不做下面的过滤（按全部改动判，宁严勿松）。
+MAIN_REF="refs/remotes/origin/main"
+HAVE_MAIN=""
+if GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o ConnectTimeout=5 -o BatchMode=yes}" \
+  git fetch -q origin "+refs/heads/main:${MAIN_REF}" 2>/dev/null; then
+  HAVE_MAIN=1
+else
+  printf '⚠ 取不到 origin/main（离线？），这次不检查卡分支是否落后 main\n' >&2
+fi
+
+# 合并提交：MERGE_HEAD 已在 origin/main 里（即把 main 合进来解冲突）时，内容与 MERGE_HEAD
+# 完全一致的文件是从 main 原样带进来的，已经过审，不算本卡的改动；其余文件（冲突解法、
+# 本卡自己的改动）照常判核心与范围。合并别的分支不做过滤——那等于把别处的改动夹带进卡。
+MERGE_HEAD_SHA="$(git rev-parse -q --verify MERGE_HEAD 2>/dev/null)" || MERGE_HEAD_SHA=""
+if [ -n "$MERGE_HEAD_SHA" ] && [ -n "$HAVE_MAIN" ] &&
+  git merge-base --is-ancestor "$MERGE_HEAD_SHA" "$MAIN_REF"; then
+  OWN=""
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    [ "$(git rev-parse -q --verify ":${f}" 2>/dev/null)" = \
+      "$(git rev-parse -q --verify "${MERGE_HEAD_SHA}:${f}" 2>/dev/null)" ] && continue
+    OWN="${OWN}${f}
+"
+  done <<EOF
+$FILES
+EOF
+  FILES="$(printf '%s' "$OWN" | sed '/^$/d')"
+  printf 'ok: 合并 origin/main 的提交，只判与 main 不同的文件\n' >&2
+  [ -n "$FILES" ] || exit 0
+fi
+
+REPO="${PPASS_HOOK_REPO:-}"
+if [ -z "$REPO" ]; then
+  REPO="$(git config --get remote.origin.url 2>/dev/null |
+    sed -E -e 's#/+$##' -e 's#\.git$##' -e 's#^.*[:/]([^/:]+/[^/:]+)$#\1#')"
+fi
+[[ "$REPO" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] ||
+  deny "解析不出 GitHub 仓库（origin URL 不认识）" "设 PPASS_HOOK_REPO=<owner>/<repo> 再提交。"
+
+command -v gh >/dev/null 2>&1 ||
+  deny "找不到 gh，查不了 #${ISSUE} 的标签与范围，按拒绝处理" "装好并登录 gh（gh auth login）后再提交。"
+if ! OUT="$(gh issue view "$ISSUE" -R "$REPO" --json labels,body \
+  --jq '"labels:" + ([.labels[].name] | join(",")), .body' 2>&1)"; then
+  deny "查询 ${REPO}#${ISSUE} 失败（离线、没登录或 issue 不存在），按拒绝处理" \
+    "gh 输出：$(printf '%s' "$OUT" | head -3 | tr '\n' ' ')"
+fi
+OUT="$(printf '%s\n' "$OUT" | tr -d '\r')"
+LABELS="$(printf '%s\n' "$OUT" | sed -n '1s/^labels://p')"
+BODY="$(printf '%s\n' "$OUT" | sed '1d')"
+
+# ── 核心 ─────────────────────────────────────────────────────────────
+CORE_ERR="$(printf '%s\n' "$FILES" | bash "$PATHS" core - "$RULES" 2>&1 >/dev/null)"
+CORE="$(printf '%s\n' "$FILES" | bash "$PATHS" core - "$RULES" 2>/dev/null)"
+if [ "$CORE" != "false" ]; then
+  case ",${LABELS}," in
+    *,core,*) printf 'ok: #%s 带 core 标签，放行核心改动\n' "$ISSUE" >&2 ;;
+    *)
+      HITS=()
+      while IFS= read -r l; do
+        case "$l" in 核心：*) HITS+=("$l") ;; esac
+      done <<EOF
+$CORE_ERR
+EOF
+      deny "这是核心改动：按 AGENTS.md 红线 6 只写复现/根因/两个修法，不改代码" \
+        ${HITS[@]+"${HITS[@]}"} \
+        "做法：git restore --staged <上面的文件> 并撤回改动；在 #${ISSUE} 里写复现、根因和两个修法，打 status:blocked。" \
+        "owner 定下由谁实现后，会给 #${ISSUE} 打 core 标签，届时才放行。"
+      ;;
+  esac
+fi
+
+# ── 范围 ─────────────────────────────────────────────────────────────
+# 「范围」标题之后的第一个 ``` 代码块；代码块之前先碰到下一个 **标题** 或 # 标题，就算没有。
+SCOPE="$(printf '%s\n' "$BODY" | awk '
+  !insec && /^\*\*范围/ { insec = 1; next }
+  insec && !infence && /^[[:space:]]*```/ { infence = 1; found = 1; next }
+  infence && /^[[:space:]]*```/ { exit }
+  infence { print; next }
+  insec && (/^\*\*[^*]+\*\*/ || /^#/) { exit }
+')"
+GLOBS=()
+while IFS= read -r g; do
+  g="$(trim "$g")"
+  case "$g" in "" | "#"*) continue ;; esac
+  g="${g#./}"
+  case "$g" in */) g="${g}**" ;; esac
+  GLOBS+=("$g")
+done <<EOF
+$SCOPE
+EOF
+[ "${#GLOBS[@]}" -gt 0 ] ||
+  deny "#${ISSUE} 没有可读的「范围」" \
+    "issue 正文要有「**范围（只许动这些）**：」，下面跟一个 \`\`\` 代码块，一行一个路径或 glob（** 跨目录，* 不跨 /）。" \
+    "让 owner 先把范围补进 issue，再提交。"
+
+# ── 落后 main ────────────────────────────────────────────────────────
+# 两种情况拒绝：落后超过阈值；或 main 上已有本卡还没拿到的提交改过范围内的文件（在旧代码上
+# 改同一处，验证结果作废、合并必冲突）。合并提交把 MERGE_HEAD 也算作已拿到。
+if [ -n "$HAVE_MAIN" ]; then
+  HAVE=(HEAD)
+  [ -z "$MERGE_HEAD_SHA" ] || HAVE+=("$MERGE_HEAD_SHA")
+  MAX="${PPASS_HOOK_MAX_BEHIND:-20}"
+  BEHIND="$(git rev-list --count --first-parent "$MAIN_REF" --not "${HAVE[@]}" 2>/dev/null)" || BEHIND=0
+  if [ "${BEHIND:-0}" -gt "$MAX" ]; then
+    deny "卡分支落后 origin/main ${BEHIND} 个提交（上限 ${MAX}）" \
+      "先跟上：git fetch origin && git rebase origin/main，重跑本地验证，再提交。"
+  fi
+  STALE=()
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    hit="$(printf '%s\n' "$f" | bash "$PATHS" hit - "${GLOBS[@]}" 2>/dev/null)"
+    [ "$hit" = "true" ] && STALE+=("$f")
+  done <<EOF
+$(git -c core.quotepath=false log --format= --name-only "$MAIN_REF" --not "${HAVE[@]}" 2>/dev/null | sort -u)
+EOF
+  if [ "${#STALE[@]}" -gt 0 ]; then
+    deny "origin/main 上已有新提交改过本卡范围内的文件，卡分支还没跟上" \
+      "${STALE[@]/#/main 上改过：}" \
+      "先跟上：git fetch origin && git rebase origin/main，重跑本地验证，再提交。"
+  fi
+fi
+
+OUTSIDE=()
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  hit="$(printf '%s\n' "$f" | bash "$PATHS" hit - "${GLOBS[@]}" 2>/dev/null)"
+  [ "$hit" = "true" ] || OUTSIDE+=("$f")
+done <<EOF
+$FILES
+EOF
+if [ "${#OUTSIDE[@]}" -gt 0 ]; then
+  deny "有 ${#OUTSIDE[@]} 个文件不在 #${ISSUE} 的「范围」里" \
+    "${OUTSIDE[@]/#/越界：}" \
+    "范围：${GLOBS[*]}" \
+    "做法：git restore --staged <越界文件>；确需扩大，先让 owner 改 issue 的范围，再提交。"
+fi
+exit 0
