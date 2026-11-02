@@ -1,4 +1,4 @@
-// T-080 Backup tab — aligned to layout v1 (docs/design/2026-08-05-layout-v1):
+// T-080 Backup tab — aligned to layout v1 (removed from repo in 2026-11; current: docs/design/2026-08-17-layout-v3):
 // 恒真三元组英雄卡（M / N 张已回家 + 最近成功 + 待备份 K）+ 进行中可暂停
 // + 失败才说话（Trouble/配对失效红卡）+ 备份规则卡 + 底部红字断开。
 // 状态条文案由纯函数 statusLineOf / lastSuccessOf 裁决（BackupStatus.kt，

@@ -223,7 +223,7 @@ commit_tag v0.1.0-test.1 apps/android/a.kt apps/desktop/d.js crates/core/c.rs
 commit_tag v0.1.0-test.2 apps/android/a.kt
 commit_tag v0.1.0-test.3 apps/desktop/src/d.js
 commit_tag v0.1.0-test.4 crates/core/c.rs
-commit_tag v0.1.0-test.5 docs/x.md cards/y.md apps/desktop/README.md
+commit_tag v0.1.0-test.5 docs/x.md infra/y.md apps/desktop/README.md
 commit_tag v0.1.0-test.6 tools/build-android-iroh-blobs-bridge.sh
 commit_tag v0.1.0-test.7 tools/bundle-desktop-macos.sh
 commit_tag v0.1.0-test.8 release/notes/x.txt
@@ -244,7 +244,7 @@ expect_win "只改 apps/desktop/ ⇒ Windows 也构建（两个桌面端共用�
 channel 0.1.0-test.3 0.1.0-test.3; tplan v0.1.0-test.4; expect_plan "改 crates/（共享代码）⇒ 两端构建" build build
 expect_win "改 crates/（共享代码）⇒ Windows 也构建" build
 channel 0.1.0-test.4 0.1.0-test.4; tplan v0.1.0-test.5
-if [ "$RC" != 0 ] && printf '%s' "$OUT" | grep -q "::error::test tag v0.1.0-test.5"; then ok "只改 docs/ cards/ *.md ⇒ 两端都没变 ⇒ 明确报错"; else bad "只改 docs/ cards/ *.md ⇒ 两端都没变 ⇒ 明确报错" "$OUT"; fi
+if [ "$RC" != 0 ] && printf '%s' "$OUT" | grep -q "::error::test tag v0.1.0-test.5"; then ok "只改 docs/ 与 *.md ⇒ 两端都没变 ⇒ 明确报错"; else bad "只改 docs/ 与 *.md ⇒ 两端都没变 ⇒ 明确报错" "$OUT"; fi
 channel 0.1.0-test.5 0.1.0-test.5; tplan v0.1.0-test.6; expect_plan "改 Android 构建脚本 ⇒ 只算 Android" build skip
 channel 0.1.0-test.6 0.1.0-test.6; tplan v0.1.0-test.7; expect_plan "改 macOS 打包脚本 ⇒ 只算桌面" skip build
 expect_win "改 macOS 打包脚本 ⇒ 不算 Windows" skip

@@ -879,7 +879,7 @@ jobs:
           echo "apksigner: $APKSIGNER"
           # minSdk 26 ⇒ v2 方案必需（v1 可缺，AGP 默认就不启 v1）。verify 失败 = 用户装不上。
           "$APKSIGNER" verify --min-sdk-version 26 --print-certs "$APK"
-          # 用错 key 签 = 用户无法原地升级，和没签一样严重。DN 已记录在 docs/NEXT.md / ROADMAP.md。
+          # 用错 key 签 = 用户无法原地升级，和没签一样严重。DN 即下方判据里的 CN=HawkeyeXbOrg。
           CERTS="$("$APKSIGNER" verify --min-sdk-version 26 --print-certs "$APK" 2>/dev/null)"
           if ! printf '%s\n' "$CERTS" | grep -q "CN=HawkeyeXbOrg"; then
             echo "::error::APK 签名者不是 CN=HawkeyeXbOrg（用错 key 会让老用户装不上）"

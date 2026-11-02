@@ -13,11 +13,11 @@
 # 看不见），nightly 每天白烧一份编译时间。改法：加一个 build job 编译一次，
 # upload-artifact 供两个测试 job download-artifact 复用。失败隔离不变——
 # e2e 与 scenarios 仍是两个独立 job，各自 needs: build，一个红不影响另一个
-# 出结论（不许合并成一个 job，见下方卡片链接）。
+# 出结论（不许合并成一个 job，见下方卡片出处）。
 # actions/upload-artifact 的 zip 打包会丢可执行位（已知问题），因此二进制
 # 打包为 tar.gz 上传，下游 job `tar -xzf` 解包后天然恢复 +x（tar 格式本身
 # 记录 mode bit，无需额外 chmod）。
-# 详见 cards/CI-02-e2e-compiles-release-binaries-twice.md（已归档 done/）。
+# 详见已退役卡片 CI-02（2026-11 随卡片目录删除，git 历史 8917fa05 可查）。
 #
 # 运行时机：
 #   - nightly 定时（schedule）
@@ -119,7 +119,7 @@ jobs:
       # BUILD-01（2026-09-18）：全仓 JDK 统一 21——iroh 1.1.0 的 uniffi 绑定
       # class 按 JDK 21 编译（major 65），17 加载报 UnsupportedClassVersionError；
       # 以前只有本 job 用 21、其余钉 17 靠"不触 ffi 类"绕行，现三处都读
-      # 仓根 .java-version（唯一真相，与本地 scripts/java-home.sh 同源）。
+      # 仓根 .java-version（唯一真相，与本地 tools/java-home.sh 同源）。
       - name: Setup Java (.java-version)
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:

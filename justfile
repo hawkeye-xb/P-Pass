@@ -160,7 +160,7 @@ arch-check:
 toolchain-check:
   @tools/check-rust-toolchain-ci.sh
 
-# Markdown tables in docs/ and cards/ must not be split by a stray blank line
+# Markdown tables in docs/ must not be split by a stray blank line
 #
 # QA-07: 解释器不能硬写 `python3`。Windows 上 `python3` 常解析到 Microsoft Store
 # 的应用执行别名占位程序——它**存在于 PATH**、但零输出、非零退出（本机实测
@@ -326,7 +326,7 @@ verify-m1:
 android-test:
     #!/usr/bin/env bash
     set -euo pipefail
-    source "{{ justfile_directory() }}/scripts/java-home.sh"
+    source "{{ justfile_directory() }}/tools/java-home.sh"
     cd "{{ justfile_directory() }}/apps/android"
     ./gradlew -q :app:testDebugUnitTest
 
@@ -388,7 +388,7 @@ verify-m2:
     set -euo pipefail
     cd "{{ justfile_directory() }}"
     cargo nextest run
-    source scripts/java-home.sh
+    source tools/java-home.sh
     cd apps/android
     ./gradlew -q :app:testDebugUnitTest :app:assembleDebug
     cd ..

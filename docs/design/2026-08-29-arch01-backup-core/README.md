@@ -1,7 +1,7 @@
 # ARCH-01 Backup Core Design Archive
 
 > English companion · archived 2026-08-29 · aligned with the #413 final design 2026-09-24  
-> Canonical task card: [`ARCH-01`](../../../cards/done/ARCH-01-backup-core-flow-queue-design.md) · Product design: [#413](https://github.com/hawkeye-xb/P-Pass/issues/413) · Chinese primary archive: [`README.zh-CN.md`](README.zh-CN.md) · Final design summary: [`final-design-413.md`](final-design-413.md) · Workstreams and interfaces: [`workstreams-contract-413.md`](workstreams-contract-413.md)
+> Product design: [#413](https://github.com/hawkeye-xb/P-Pass/issues/413) · Chinese primary archive: [`README.zh-CN.md`](README.zh-CN.md) · Final design summary: [`final-design-413.md`](final-design-413.md) · Workstreams and interfaces: [`workstreams-contract-413.md`](workstreams-contract-413.md)
 
 This directory archives the ARCH-01 product semantics, boundaries, and mermaid diagrams. It describes logical facts and does **not** choose a table schema, file format, Iroh FFI, or UI layout; the only storage prerequisite is that orders can be written per row and per transaction. Where this document disagrees with `final-design-413.md`, the latter wins. Implementation cards must not redefine these business rules.
 

@@ -6,7 +6,7 @@ to continue the same table but got separated by one or more blank lines does
 NOT start a new table (no header + separator row directly above it), so it
 silently renders as a raw pipe-delimited text line instead of a table row.
 
-2026-09 finding: docs/QUEUE.md accumulated several of these (rows split off
+2026-09 finding: the (since retired) task-queue doc accumulated several of these (rows split off
 from their table by blank lines left over from editing), and nothing caught
 it — `queue-check` only verifies card links, not table well-formedness. This
 script closes that gap.
@@ -75,7 +75,7 @@ def check_file(path: Path) -> list[tuple[int, str]]:
 def main() -> int:
     root = Path(__file__).resolve().parent.parent
     targets: list[Path] = []
-    for pattern in ("docs/**/*.md", "cards/**/*.md"):
+    for pattern in ("docs/**/*.md",):
         targets.extend(sorted(root.glob(pattern)))
 
     fail = False

@@ -185,7 +185,7 @@ PHAssetResourceUploadJob.h:39   @property NSURLRequest *destination;   // 我们
 
 ## 六、工作分解、卡号与门禁
 
-卡前缀 `IOS-`，与 GitHub Issues 一一对应（`docs/QUEUE.md` 已冻结只读，新工作一律开 issue，模板 `.github/ISSUE_TEMPLATE/task-card.md`）。
+卡前缀 `IOS-`，与 GitHub Issues 一一对应（新工作一律开 issue，模板 `.github/ISSUE_TEMPLATE/task-card.md`）。
 
 ### I0｜基线与准入（最先做，串行）
 

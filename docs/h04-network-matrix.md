@@ -4,7 +4,8 @@
 > 每场景 ≥20 次连接尝试。记录 ConnInfo（path + rtt_ms + throughput_mbps）。
 > 测试工具：Android Probe App（最新 APK）连桌面 iroh-probe CLI。
 > 地址说明：本文与 `h04-logs/` 中的公网地址均为文档保留段占位（IPv4：RFC 5737；IPv6：RFC 3849 `2001:db8::/32`），同一真实地址在全部文件中对应同一占位，可直接对照。
-> **相关产品传输链路取证**：NET-04 的单一 data-plane connection 真机证据与复现路径见 [2026-09-08 记录](evidence/2026-09-08-net-04-connection-reuse-samsung.md)。
+> **相关产品传输链路取证**：NET-04 的单一 data-plane connection 真机证据与复现路径见 [2026-09-08 记录](https://github.com/hawkeye-xb/P-Pass/blob/8917fa05/docs/evidence/2026-09-08-net-04-connection-reuse-samsung.md)。
+> 原始日志 `h04-logs/` 已于 2026-11 移出仓库，见 [8917fa05 版本](https://github.com/hawkeye-xb/P-Pass/tree/8917fa05/docs/h04-logs)。
 
 ## 场景表
 
