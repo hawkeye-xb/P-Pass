@@ -484,7 +484,10 @@ mod tests {
         );
         home.set_update_paused(true).unwrap();
         assert!(dir.path().join(UPDATE_PAUSED_MARKER).exists());
-        assert!(update_resume_needed(&home, true, false), "为更新暂停过：拉回");
+        assert!(
+            update_resume_needed(&home, true, false),
+            "为更新暂停过：拉回"
+        );
         home.set_update_paused(false).unwrap();
         assert!(!home.update_paused());
         assert!(!update_resume_needed(&home, true, false), "清掉之后不再拉");
