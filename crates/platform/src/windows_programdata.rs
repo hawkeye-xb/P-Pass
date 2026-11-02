@@ -646,6 +646,7 @@ impl ProgramDataStore {
         let Some(cipher) = bytes.strip_prefix(SEALED_MAGIC.as_slice()) else {
             // 旧版明文：不迁移，删掉，由上层按全新状态处理。
             std::fs::remove_file(&self.path).map_err(|e| io_err("remove_legacy_plaintext", e))?;
+            tracing::info!("已删除旧的明文{}: {}", self.what, self.path.display());
             return Ok(None);
         };
         dpapi(false, cipher, self.what.as_bytes())

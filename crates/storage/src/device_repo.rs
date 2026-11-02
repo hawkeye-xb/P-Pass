@@ -290,6 +290,32 @@ impl Db {
         Ok(from_vault.unwrap_or_else(|| removed.iter().map(row_to_pairing).collect()))
     }
 
+    /// 给已经不在配对表里的设备档案记下离开原因（档案保留）。返回记上的档案数。
+    /// 用在换身份时：同一次启动里先被镜像对齐删掉的配对（正本已作废），同样算「电脑换了身份」。
+    pub async fn mark_departed(
+        &self,
+        node_ids: &[Vec<u8>],
+        by: DepartedBy,
+        at_ms: i64,
+    ) -> Result<usize> {
+        let mut tx = self.pool().begin().await?;
+        let mut marked = 0;
+        for node_id in node_ids {
+            marked += sqlx::query(
+                "UPDATE device_profile SET departed_at = ?, departed_by = ?
+                 WHERE node_id = ? AND node_id NOT IN (SELECT node_id FROM pairing)",
+            )
+            .bind(at_ms)
+            .bind(by.as_str())
+            .bind(node_id)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected() as usize;
+        }
+        tx.commit().await?;
+        Ok(marked)
+    }
+
     /// #1115：启动时以正本为准对齐镜像（单向）。见 `pairing_vault.rs`「启动对齐」。
     pub(crate) async fn align_mirror(&self, authority: &[Pairing]) -> Result<VaultAlignment> {
         let mirror = self.list_pairings().await?;

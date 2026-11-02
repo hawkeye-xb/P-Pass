@@ -424,13 +424,21 @@ async fn run() -> anyhow::Result<()> {
                             aligned.restored_to_mirror.len()
                         );
                     }
-                    db
+                    let aligned_away = aligned
+                        .removed_from_mirror
+                        .into_iter()
+                        .map(|(node_id, _)| node_id)
+                        .collect();
+                    (db, aligned_away)
                 })
         }
-        None => storage::Db::open(&index_path).await,
+        None => storage::Db::open(&index_path)
+            .await
+            .map(|db| (db, Vec::new())),
     };
-    let db = match opened {
-        Ok(db) => db,
+    // 被对齐删掉的配对若随后遇上新身份，算作「电脑换了身份」（见 identity::retire_pairings_for_new_identity）。
+    let (db, aligned_away): (storage::Db, Vec<Vec<u8>>) = match opened {
+        Ok(opened) => opened,
         Err(e) => {
             eprintln!(
                 "{}",
@@ -443,7 +451,7 @@ async fn run() -> anyhow::Result<()> {
     // 所有已配对手机变成孤儿——配对绑的就是 NodeId). #1109：macOS 存
     // data protection 钥匙串，Windows / Linux 仍是数据目录里的 identity.key；
     // 读不出来 / 内容不合法就拒绝启动；新身份先删全部配对记录，见 daemon::identity。
-    let secret = load_or_mint_identity(ephemeral, &data_dir, &local_base, &db).await;
+    let secret = load_or_mint_identity(ephemeral, &data_dir, &local_base, &db, &aligned_away).await;
 
     // ── DAE-02: 单实例 claim 先于 transport bind ──────────────────
     // 固定端口 config 下，在位实例占着端口会让新实例 bind 直接失败；
@@ -1115,6 +1123,7 @@ async fn load_or_mint_identity(
     data_dir: &std::path::Path,
     local_base: &std::path::Path,
     db: &storage::Db,
+    aligned_away: &[Vec<u8>],
 ) -> [u8; 32] {
     use platform::PlatformAdapter as _;
     let adapter = platform::adapter();
@@ -1136,12 +1145,7 @@ async fn load_or_mint_identity(
         |p| adapter.restrict_to_owner(p),
         rand_token,
         // #1117：新身份 = 新设备，先删全部配对记录（档案与审计保留）。
-        || async {
-            Ok(db
-                .remove_all_pairings(storage::DepartedBy::Identity, unix_ms_now())
-                .await?
-                .len())
-        },
+        || daemon::identity::retire_pairings_for_new_identity(db, aligned_away, unix_ms_now()),
     )
     .await
     {
