@@ -3,6 +3,7 @@
 // filesDir JSON，tmp+rename，损坏当没关过（卡片再出现一次，偏「让用户知道有这个选项」的一侧）。
 package com.hawkeyexb.ppass.backup
 
+import com.hawkeyexb.ppass.io.atomicReplace
 import java.io.File
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -25,7 +26,7 @@ class BackgroundBackupOfferStore(private val dir: File) {
         dir.mkdirs()
         val tmp = File(dir, "$FILE_NAME.tmp")
         tmp.writeText(json.encodeToString(BackgroundBackupOfferState.serializer(), BackgroundBackupOfferState(dismissed = true)))
-        check(tmp.renameTo(file)) { "cannot persist $FILE_NAME" }
+        check(atomicReplace(tmp, file)) { "cannot persist $FILE_NAME" }
     }
 
     companion object {

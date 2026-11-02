@@ -17,7 +17,10 @@ crate-type = ["rlib", "cdylib"]
 # libc: descriptor dup for Android's ContentResolver imports and the logcat bridge's dlopen.
 mobile-ffi = ["dep:uniffi", "dep:blake3", "dep:pair-pake", "dep:libc"]
 # Swift / Kotlin binding generator (host-only tool, run by the same scripts).
-mobile-bindgen = ["mobile-ffi", "uniffi/cli"]
+# Library mode reads the exports from the already-built mobile library, so the
+# generator itself needs only uniffi's CLI — never mobile-ffi: that code is for
+# the phone targets (unix fds, dlopen) and does not compile on a Windows host.
+mobile-bindgen = ["dep:uniffi", "uniffi/cli"]
 
 [dependencies]
 # ADR-001 / §B.1: iroh is allowed in this crate ONLY. Declared here (not in

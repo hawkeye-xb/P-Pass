@@ -4,6 +4,7 @@
 // tmp+rename 崩溃安全（WatermarkStore 同款），损坏当空。
 package com.hawkeyexb.ppass.backup
 
+import com.hawkeyexb.ppass.io.atomicReplace
 import java.io.File
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -30,7 +31,7 @@ class SentinelStore(private val dir: File) {
         dir.mkdirs()
         val tmp = File(dir, "sentinel.json.tmp")
         tmp.writeText(json.encodeToString(SentinelState.serializer(), state))
-        check(tmp.renameTo(file)) { "cannot persist sentinel state" }
+        check(atomicReplace(tmp, file)) { "cannot persist sentinel state" }
     }
 
     /** 确认 daemon 可达：记时间戳。 */

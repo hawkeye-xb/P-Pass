@@ -35,6 +35,7 @@ import androidx.core.content.ContextCompat
 import com.hawkeyexb.ppass.backup.flow.PairingId
 import com.hawkeyexb.ppass.backup.flow.flowDeliveryPairingLoss
 import com.hawkeyexb.ppass.battery.isIgnoringBatteryOptimizations
+import com.hawkeyexb.ppass.io.atomicReplace
 import com.hawkeyexb.ppass.log.PLog
 import com.hawkeyexb.ppass.transport.PairingStore
 import java.io.File
@@ -163,7 +164,7 @@ class DefinitiveNoticeStore(private val dir: File) {
         dir.mkdirs()
         val tmp = File(dir, "definitive_notices.json.tmp")
         tmp.writeText(json.encodeToString(DefinitiveNoticeState.serializer(), state))
-        check(tmp.renameTo(file)) { "cannot persist definitive_notices.json" }
+        check(atomicReplace(tmp, file)) { "cannot persist definitive_notices.json" }
     }
 }
 

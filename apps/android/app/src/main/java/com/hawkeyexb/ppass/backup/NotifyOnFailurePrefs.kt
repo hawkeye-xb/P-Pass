@@ -7,6 +7,7 @@
 // 老用户升级保持原状态：进程启动时文件不存在就落一次盘（[initIfAbsent]），之后只认文件。
 package com.hawkeyexb.ppass.backup
 
+import com.hawkeyexb.ppass.io.atomicReplace
 import java.io.File
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -48,7 +49,7 @@ class NotifyOnFailurePrefs(private val dir: File) {
         dir.mkdirs()
         val tmp = File(dir, "$FILE_NAME.tmp")
         tmp.writeText(json.encodeToString(NotifyOnFailurePrefsData.serializer(), data))
-        check(tmp.renameTo(file)) { "cannot persist $FILE_NAME" }
+        check(atomicReplace(tmp, file)) { "cannot persist $FILE_NAME" }
     }
 
     private fun load(): NotifyOnFailurePrefsData =

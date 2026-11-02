@@ -5,6 +5,7 @@
 // 单个小 JSON 文件，唯一临时文件名 + rename（MOB-102 的教训：固定 .tmp 名在两个线程同一毫秒写时会互相踩）。
 package com.hawkeyexb.ppass.backup.flow
 
+import com.hawkeyexb.ppass.io.atomicReplace
 import java.io.File
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -61,7 +62,7 @@ class FlowControlStore(private val dir: File, private val clock: () -> Long = Sy
             val tmp = File.createTempFile("$FILE_NAME.", ".tmp", dir)
             try {
                 tmp.writeText(json.encodeToString(FlowControlState.serializer(), next))
-                check(tmp.renameTo(file)) { "rename failed" }
+                check(atomicReplace(tmp, file)) { "rename failed" }
             } finally {
                 tmp.delete()
             }

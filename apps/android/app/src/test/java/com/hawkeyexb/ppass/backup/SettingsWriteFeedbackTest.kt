@@ -1,7 +1,7 @@
 // #1020（对位 iOS SettingsFeedbackTests）：设置写盘失败不崩溃、显示值回到盘上的真实值、给一过性提示、记日志；
 // 相册范围「读不出来」与「从未保存」分开。
 //
-// 写失败是真实制造的：把偏好目录设成只读，store 的 tmp 文件写不进去（与真机「存储满 / 容器写失败」同一条抛出路径），
+// 写失败是真实制造的：让偏好目录拒绝新建文件（WriteBlock：POSIX 去写权限 / Windows 加拒绝 ACL），store 的 tmp 文件写不进去（与真机「存储满 / 容器写失败」同一条抛出路径），
 // 不是 mock。store 自己照旧抛出（后台写者靠它暴露问题），吞不吞只在 UI 边界 [SettingsWriter]。
 //
 // 反证：把 SettingsWriter.write 的 try/catch 去掉（直接 op()），write_failure_* 三条变红（异常抛到测试里）；
@@ -10,6 +10,7 @@ package com.hawkeyexb.ppass.backup
 
 import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.log.PLog
+import com.hawkeyexb.ppass.testutil.WriteBlock
 import java.io.File
 import java.nio.file.Files
 import org.junit.After
@@ -34,15 +35,14 @@ class SettingsWriteFeedbackTest {
 
     @After
     fun tearDown() {
-        dir.setWritable(true)
+        WriteBlock.unblock(dir)
         dir.deleteRecursively()
         PLog.resetSink()
     }
 
     /** 让之后的写盘失败：tmp 文件建不出来。 */
     private fun breakWrites() {
-        check(dir.setWritable(false))
-        check(!File(dir, "probe").let { runCatching { it.writeText("x") }.isSuccess }) { "read-only dir is writable (running as root?)" }
+        WriteBlock.block(dir)
     }
 
     @Test

@@ -37,6 +37,7 @@
 // 卡死整批」的老坑换个门重现。清理三规则见 [planReuploads] 与 doWork 的调用点。
 package com.hawkeyexb.ppass.backup
 
+import com.hawkeyexb.ppass.io.atomicReplace
 import java.io.File
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -130,7 +131,7 @@ internal class ReuploadQueue(private val dir: File) {
         dir.mkdirs()
         val tmp = File(dir, "reupload-queue.json.tmp")
         tmp.writeText(json.encodeToString(ReuploadState.serializer(), ReuploadState(keys)))
-        check(tmp.renameTo(file)) { "cannot persist reupload queue" }
+        check(atomicReplace(tmp, file)) { "cannot persist reupload queue" }
     }
 }
 

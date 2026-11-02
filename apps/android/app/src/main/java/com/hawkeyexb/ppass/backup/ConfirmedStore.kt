@@ -29,6 +29,7 @@
 // 照片页归属过滤都按内容 hash 走），只是不再当 M 用。
 package com.hawkeyexb.ppass.backup
 
+import com.hawkeyexb.ppass.io.atomicReplace
 import java.io.File
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -282,6 +283,6 @@ class ConfirmedStore(private val dir: File) {
         dir.mkdirs()
         val tmp = File(dir, "confirmed.json.tmp")
         tmp.writeText(json.encodeToString(ConfirmedState.serializer(), next))
-        check(tmp.renameTo(file)) { "cannot persist confirmed state" }
+        check(atomicReplace(tmp, file)) { "cannot persist confirmed state" }
     }
 }
