@@ -34,6 +34,11 @@ on:
   schedule:
     - cron: "30 3 * * *"
   workflow_call:
+    inputs:
+      full:
+        description: "#1309：批次 PR 经 CI Rust gate 调用时为 true，不看 e2e 标签全量跑"
+        type: boolean
+        default: false
   pull_request:
     branches: [main]
     types: [labeled, unlabeled]
@@ -48,7 +53,7 @@ jobs:
     name: Build release binaries (daemon + testclient)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
+    if: inputs.full || github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -92,7 +97,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 50
     # PR 只有打了 e2e label 才跑（labeled 事件但 label 不在 = 移除，跳过）
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
+    if: inputs.full || github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -165,7 +170,7 @@ jobs:
     name: T-070 failure scenarios (in-process)
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
+    if: inputs.full || github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e')
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
