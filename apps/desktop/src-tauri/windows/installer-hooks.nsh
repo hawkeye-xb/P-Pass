@@ -122,6 +122,11 @@ Var PPassDataDir
   ${Else}
     !insertmacro PPassRegisterService
     !insertmacro PPassPrepareDataDir
+    ; t2-4：「照片库只有主人能访问」每次安装 / 升级强制一次。服务账户对库目录没有改权限的权
+    ; （不含 WRITE_DAC），只能在这里以管理员身份做；逻辑在 platform（与首启 / 换位置同一套），
+    ; 库根已私有就不改。失败只记安装日志、不中止安装（daemon 启动时还会核对并记一行）。
+    nsExec::ExecToLog '"$INSTDIR\ppf-daemon.exe" library privatize'
+    Pop $0
     nsExec::ExecToLog '"$SYSDIR\sc.exe" start "${PPASS_SERVICE}"'
     Pop $0
     ; #1167：失败标记放在 ProgramData（见 UpdateFailureRecover）；老位置一并清掉。

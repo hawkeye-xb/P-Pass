@@ -29,6 +29,9 @@ pub enum Cli {
         out: String,
         app_version: Option<String>,
     },
+    /// t2-4：`library privatize`——安装器（管理员）把服务形态的当前照片库收紧成私有。
+    /// 不接受路径：库位置与主人只读服务的正本。
+    LibraryPrivatize,
 }
 
 pub const USAGE: &str = "\
@@ -51,6 +54,9 @@ P-Pass 存储端 daemon
 子命令（一次性短进程：不启动服务、不占端口，执行完即退出）:
   diag export --out <zip> [--app-version <v>]
                组装并脱敏诊断包，写到 <zip>（后台服务不在线也能导出）
+  library privatize
+               Windows 安装器以管理员身份调用：把当前照片库目录设为只有主人能访问
+               （已是私有则不改）。不接受路径参数
 
 退出码：0 成功；1 操作失败（stderr 一行错误）；2 用法错误
 ";
@@ -68,7 +74,10 @@ pub fn parse_cli(args: impl IntoIterator<Item = String>) -> Result<Cli, String> 
     let args: Vec<String> = args.into_iter().collect();
     // #1042：首个参数是子命令名 ⇒ 走子命令语法（同样在一切 daemon 机制之前
     // 短路，见 main.rs）。
-    if matches!(args.first().map(String::as_str), Some("config" | "diag")) {
+    if matches!(
+        args.first().map(String::as_str),
+        Some("config" | "diag" | "library")
+    ) {
         return parse_subcommand(&args);
     }
     let mut ephemeral = false;
@@ -117,6 +126,7 @@ fn parse_subcommand(args: &[String]) -> Result<Cli, String> {
             "config 子命令已删除：照片库位置只能由 P-Pass 窗口程序经 IPC 设置（#1115）".to_string(),
         ),
         ["diag", "export", flags @ ..] => parse_diag_export(flags),
+        ["library", "privatize"] => Ok(Cli::LibraryPrivatize),
         [cmd, sub, ..] => Err(format!("未知子命令：{cmd} {sub}")),
         [cmd] => Err(format!("缺少子命令：{cmd} <…>")),
         [] => Err("缺少子命令".to_string()),
@@ -144,6 +154,19 @@ fn parse_diag_export(flags: &[&str]) -> Result<Cli, String> {
     match out {
         Some(out) if !out.is_empty() => Ok(Cli::DiagExport { out, app_version }),
         _ => Err(USAGE_DIAG.to_string()),
+    }
+}
+/// t2-4：`library privatize` 成功时 stdout 的一行（安装日志里看得到做了什么）。
+pub fn library_privatize_line(fix: &platform::LibraryPrivacyFix) -> String {
+    use platform::LibraryPrivacyFix::*;
+    match fix {
+        NotApplicable { reason } => format!("照片库目录私有化：不需要（{reason}）"),
+        AlreadyPrivate { dir } => format!("照片库目录已是私有，未改动：{}", dir.display()),
+        Tightened { dir } => format!("照片库目录已设为私有：{}", dir.display()),
+        SkippedNoAcl { dir, file_system } => format!(
+            "照片库目录所在的卷（{file_system}）没有权限可设，跳过：{}",
+            dir.display()
+        ),
     }
 }
 
@@ -410,6 +433,23 @@ mod tests {
             &["diag", "export", "--out", "a", "--out", "b"],
             &["diag", "export", "--out", "a", "--bogus"],
             &["diag", "import"],
+        ] {
+            assert!(parse_cli(args(bad)).is_err(), "{bad:?} 应是用法错误");
+        }
+    }
+
+    /// t2-4：`library privatize` 严格匹配，不接受任何路径（库位置只读正本）。
+    /// 反证：放开成 `["library", "privatize", ..]`，带路径那条变红。
+    #[test]
+    fn library_privatize_takes_no_arguments() {
+        assert_eq!(
+            parse_cli(args(&["library", "privatize"])),
+            Ok(Cli::LibraryPrivatize)
+        );
+        for bad in [
+            &["library"][..],
+            &["library", "privatize", "C:\\elsewhere"],
+            &["library", "grant"],
         ] {
             assert!(parse_cli(args(bad)).is_err(), "{bad:?} 应是用法错误");
         }

@@ -91,6 +91,21 @@ async fn run() -> anyhow::Result<()> {
                 }
             }
         }
+        // t2-4：安装 / 升级时由安装器（管理员）调用，同样在一切 daemon 机制之前短路。
+        // 成功 exit 0，stdout 一行结果；失败 exit 1，stderr 一行错误（安装器只记日志、不中止）。
+        Ok(daemon::cli::Cli::LibraryPrivatize) => {
+            use platform::PlatformAdapter as _;
+            match platform::adapter().enforce_library_private() {
+                Ok(fix) => {
+                    println!("{}", daemon::cli::library_privatize_line(&fix));
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    eprintln!("照片库目录没能设为私有：{e}");
+                    std::process::exit(1);
+                }
+            }
+        }
         Ok(daemon::cli::Cli::Run { ephemeral }) => ephemeral,
         Err(e) => {
             eprintln!("{e}");
@@ -388,6 +403,18 @@ async fn run() -> anyhow::Result<()> {
     // #1260：macOS 每次**尝试**卸载卷都会撤销 O_EVTONLY 句柄（NOTE_REVOKE），哪怕这次卸载因为别的
     // 程序占着盘而失败——所以收到事件后稍等再看库标记：还在 = 卷没有真的卸载，继续盯住。
     arm_library_watch(data_dir.clone());
+    // t2-4：「照片库只有主人能访问」每次启动核对一次（只读，后台跑，不阻断启动）。服务账户
+    // 改不了库目录权限，收紧由安装器每次安装 / 升级做（`library privatize`）。
+    if !ephemeral {
+        let dir = data_dir.clone();
+        tokio::task::spawn_blocking(move || {
+            use platform::PlatformAdapter as _;
+            daemon::library_location::log_library_privacy(
+                &dir,
+                platform::adapter().library_privacy(&dir),
+            )
+        });
+    }
     std::fs::create_dir_all(data_dir.join(".ppf"))?;
     // #1260：老库（服务数据还在库盘 `.ppf/` 里）在打开任何数据库之前迁到本机；迁不成就照旧用
     // 老布局跑这一次，下次启动重试（源数据一字未动，见 daemon::migrate_local）。

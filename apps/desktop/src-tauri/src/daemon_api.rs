@@ -47,7 +47,35 @@ pub(crate) async fn daemon_status<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     shell_version: Option<String>,
 ) -> Result<Value, String> {
-    forward(app, "status", json!({ "shell_version": shell_version })).await
+    let disk_encryption = window_disk_encryption().await;
+    forward(
+        app,
+        "status",
+        json!({ "shell_version": shell_version, "disk_encryption": disk_encryption }),
+    )
+    .await
+}
+
+/// W-4：平台说磁盘加密状态由窗口程序读（Windows 服务形态：服务账户读不到）时，以主人身份读，
+/// 随 `status` 交给 daemon；否则不带（daemon 自己读）。状态几乎不变，缓存 10 分钟。
+async fn window_disk_encryption() -> Option<&'static str> {
+    use platform::PlatformAdapter as _;
+    static CACHE: std::sync::Mutex<Option<(std::time::Instant, platform::DiskEncryption)>> =
+        std::sync::Mutex::new(None);
+    const TTL: std::time::Duration = std::time::Duration::from_secs(600);
+    if !platform::adapter().disk_encryption_read_by_window() {
+        return None;
+    }
+    if let Some((at, v)) = *CACHE.lock().unwrap_or_else(|e| e.into_inner()) {
+        if at.elapsed() < TTL {
+            return Some(v.as_str());
+        }
+    }
+    let v = tauri::async_runtime::spawn_blocking(|| platform::adapter().disk_encryption())
+        .await
+        .unwrap_or(platform::DiskEncryption::Unknown);
+    *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::Instant::now(), v));
+    Some(v.as_str())
 }
 
 #[tauri::command(rename_all = "snake_case")]
