@@ -54,6 +54,13 @@ done
   [ ! -e "$d/as/libraries/x/new-thumb" ] && [ ! -e "$d/lib/.ppf/extra" ] || { echo "候选新写的文件残留"; exit 1; }
   [ -f "$d/lib/originals/b.jpg" ] || { echo "照片原件被动了"; exit 1; }
   [ "$(mac_library_dir "$d/as")" = "$d/lib" ] || { echo "库目录读错"; exit 1; }
+  # 清成空白：要先有数据快照；清掉索引与 blob，留库标识与原件
+  mac_data_blank && { echo "没有数据快照也清了"; exit 1; }
+  mkdir -p "$E3_STATE/mac-snapshot/data"
+  mac_data_blank || { echo "清空白失败"; exit 1; }
+  [ ! -e "$d/as/libraries" ] && [ ! -e "$d/lib/.ppf/extra" ] || { echo "索引或 blob 没清掉"; exit 1; }
+  [ -f "$d/lib/.ppf/library-id" ] && [ -f "$d/lib/originals/a.jpg" ] && [ -f "$d/as/config.toml" ] ||
+    { echo "库标识、原件或 config.toml 被清了"; exit 1; }
 ) || bad "mac 数据快照存/恢复"
 
 # 设备锁：第二个持锁者要等第一个释放（/usr/bin/lockf 只有 macOS 有）

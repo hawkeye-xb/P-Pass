@@ -51,10 +51,11 @@ mac_verify_sig() {
   return 0
 }
 
-# mac_install_app <源 .app> [装回的数据快照目录]：退出外壳 → 停服务 →（数据快照）→ 整个替换
+# mac_install_app <源 .app> [数据]：退出外壳 → 停服务 →（数据快照）→ 整个替换
 # ~/Applications/P-Pass.app → 起服务 → 等就绪。原来在跑的外壳装完后重新打开。返回 0 = 服务就绪。
 # 数据（#1311）：服务停着时做——mac_snapshot 之后的第一次安装把当时的数据存进快照（候选可能带新迁移，
-# 装上就改了库）；给了第二个参数就先把数据恢复成那份快照再起服务（旧版 daemon 不认新迁移，拒绝启动）。
+# 装上就改了库）。第二个参数：快照目录 = 先把数据恢复成那份再起服务（旧版 daemon 不认新迁移，拒绝启动）；
+# `blank` = 清成空白数据（mac_data_blank），装上一版 release 做升级基线时用。
 mac_install_app() {
   local src="$1" data="${2:-}" had_shell=0 mark old snap="$E3_STATE/mac-snapshot"
   [ -d "$src" ] || { log "没有要装的包：$src"; return 1; }
@@ -65,7 +66,9 @@ mac_install_app() {
     mac_data_save "$snap/data" || { svc_start; return 1; }
     rm -f "$snap/data-pending"
   fi
-  if [ -n "$data" ]; then
+  if [ "$data" = blank ]; then
+    mac_data_blank || { svc_start; return 1; }
+  elif [ -n "$data" ]; then
     mac_data_restore "$data" || { svc_start; return 1; }
   fi
   mark=$(log_mark)
@@ -135,14 +138,14 @@ mac_restore_snapshot() {
   mac_library_readable || return 1
   log "已装回 ${want}"
 }
-# mac_restore_tag <tag>：从 GitHub Release 装指定 tag，核对签名与版本
+# mac_restore_tag <tag> [数据]：从 GitHub Release 装指定 tag，核对签名与版本（数据参数同 mac_install_app）
 mac_restore_tag() {
-  local tag="$1" app want
+  local tag="$1" data="${2:-}" app want
   app=$(mac_fetch_release "$tag") || return 1
   mac_verify_sig "$app" || { log "$tag 的签名校验不过"; return 1; }
   want="${tag#v}"
   [ "$(mac_app_version "$app")" = "$want" ] || { log "$tag 包内版本是 $(mac_app_version "$app")"; return 1; }
-  mac_install_app "$app" || return 1
+  mac_install_app "$app" "$data" || return 1
   [ "$(svc_version | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')" = "$want" ] || { log "装后 daemon 版本不是 ${want}"; return 1; }
   log "已装 ${tag}"
 }
@@ -181,6 +184,23 @@ mac_data_restore() {
     ditto "$src/library-ppf" "$lib/.ppf" || return 1
   fi
   log "数据已恢复为快照（库 ${lib:-?}）"
+}
+
+# mac_data_blank：清成空白数据——删 libraries/（库索引、blob 账本、缩略图）和库目录 .ppf/ 里除库标识外的一切。
+# 留 config.toml 与 .ppf/library-id：库位置正本在钥匙串里，库标记不在 daemon 会当成库没挂上（#1253）。
+# 照片原件不动：daemon 启动时把它们收编进新索引（IDX-01），就是上一版的基线数据。只在留过数据快照后调用。
+mac_data_blank() {
+  local lib f
+  [ -z "$(svc_any_pid)" ] || { log "服务还在跑，不清数据"; return 1; }
+  [ -d "$E3_STATE/mac-snapshot/data" ] || { log "没有数据快照，不清数据"; return 1; }
+  rm -rf "$MAC_DATA_DIR/libraries"
+  lib=$(mac_library_dir "$MAC_DATA_DIR")
+  if [ -n "$lib" ] && [ -d "$lib/.ppf" ]; then
+    for f in "$lib/.ppf"/* "$lib/.ppf"/.[!.]*; do
+      [ -e "$f" ] && [ "$(basename "$f")" != library-id ] && rm -rf "$f"
+    done
+  fi
+  log "数据已清成空白（库 ${lib:-?}，原件保留）"
 }
 
 # mac_library_readable：装回后库可读——已装 daemon 自己 diag export 出的 status 里有照片数
