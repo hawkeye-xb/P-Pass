@@ -6,7 +6,7 @@ E3="$ROOT/tools/e3"
 fails=0
 bad() { echo "FAIL: $*"; fails=$((fails + 1)); }
 
-for f in "$E3"/run "$E3"/verify "$E3"/lock "$E3"/lib/*.sh "$E3"/scenarios/*/*.sh; do
+for f in "$E3"/run "$E3"/verify "$E3"/lock "$E3"/dev "$E3"/restore "$E3"/lib/*.sh "$E3"/scenarios/*/*.sh; do
   bash -n "$f" || bad "语法：$f"
 done
 for f in "$E3"/scenarios/*/*.sh; do
