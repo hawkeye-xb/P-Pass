@@ -3,9 +3,11 @@ import Foundation
 /// 把 diag 的 msg_key（注册表：crates/diag/src/keys.rs）解析成当前语言的人话（对位 Android `DiagText`）。
 ///
 /// 字典的唯一真相源是仓库 `assets/i18n/{en,zh}.json`，**逐字节**捆绑进 App 的 `i18n/` 目录
-/// （`just ios-sync-i18n`）。改源文件里一个 key 时，这四个消费者都要跟上，否则至少一条 lane 红：
-///   1. `crates/diag/src/keys.rs` 的 `msg_keys!` 注册表（双向断言）+ `ALL.len()` 硬编码计数
-///   2. 桌面壳 `apps/desktop/src/lib/i18n.js`（直接 import 源文件，无副本）
+/// （`just ios-sync-i18n`）。#1302 起这份只放跨端集合（daemon 发到线上的 msg_key），桌面自己的
+/// 文案在 `apps/desktop/src/i18n/`、不进手机包——改这份会牵动全部端的构建与发版，新 key 先想清楚
+/// 手机是否真会收到。改源文件里一个 key 时，这四个消费者都要跟上，否则至少一条 lane 红：
+///   1. `crates/diag/src/keys.rs` 的 `msg_keys!` 注册表（双向断言，每个 key 只许在两份字典之一）+ `ALL.len()` 硬编码计数
+///   2. 桌面壳 `apps/desktop/src/lib/i18n.js`（直接 import 源文件并与桌面字典合并，无副本）
 ///   3. Android 逐字节副本 `apps/android/app/src/main/assets/i18n/`（`DiagTextTest.bundled_assets_never_drift_from_repo_source`）
 ///   4. 本 iOS 逐字节副本 `apps/ios/PPass/Resources/i18n/`（`I18nDriftTests.test_bundled_assets_never_drift_from_repo_source`，#316）
 /// 占位符写法 `{name}`。

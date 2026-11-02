@@ -52,9 +52,11 @@ class DiagTextTest {
         }
     }
 
+    // #1302：手机包只捆跨端集合（线上 msg_key），原样例 ui.paired_count 是桌面 key、已不在包里；
+    // 占位符替换是解析器的行为，与具体字典无关，改用内联样例字典，意图不变。
     @Test
     fun placeholder_formatting_works() {
-        val en = dict("en")
+        val en = """{"ui.paired_count": "Paired devices: {n}"}"""
         val withVars = DiagText.resolveFromJson(en, "ui.paired_count", mapOf("n" to "3"))
         assertEquals("Paired devices: 3", withVars)
         // 无变量时占位符原样保留（调用方负责传参）

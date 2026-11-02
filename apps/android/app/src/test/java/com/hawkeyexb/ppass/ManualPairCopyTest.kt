@@ -22,10 +22,10 @@ class ManualPairCopyTest {
             ?.replace("\\'", "'")
             ?: error("缺少字符串 $name")
 
-    /** 桌面端文案的唯一来源：仓库根 `assets/i18n`（桌面壳 include_str! 的同一份）。 */
+    /** 桌面端文案的来源：`apps/desktop/src/i18n`（#1302 起桌面字典住在桌面目录下）。 */
     private fun desktop(lang: String, key: String): String =
         Regex(""""${Regex.escape(key)}":\s*"(.*?)"""")
-            .find(File("../../../assets/i18n/$lang.json").readText())?.groupValues?.get(1)
+            .find(File("../../desktop/src/i18n/$lang.json").readText())?.groupValues?.get(1)
             ?: error("桌面 i18n 缺少 $key")
 
     @Test

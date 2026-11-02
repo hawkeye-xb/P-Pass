@@ -167,7 +167,8 @@ class ForegroundSyncNotFrozenTest {
         // 文案不许自相矛盾：前台明明在传，提示不能说"什么都没在传"。
         val zh = File(
             repoRoot(),
-            "apps/android/app/src/main/res/values-zh/strings.xml",
+            // #1302：这条通知只在 Android 出现，住在 strings_android_only.xml。
+            "apps/android/app/src/main/res/values-zh/strings_android_only.xml",
         ).readText()
         // 10-29 文案定稿：无引用的 backup_interrupted_body 已删，这件事现在由「系统停止了后台备份」通知来说。
         val line = zh.lines().first { it.contains("\"notif_background_stopped_body\"") }

@@ -6,7 +6,11 @@
 
 Why Android's strings.xml is the source: the phone UI copy (both tabs, pairing, album picker,
 viewer…) only exists in apps/android/app/src/main/res/values{,-zh}/strings.xml — assets/i18n holds
-the diag/err keys and the *desktop* ui.* keys, not the phone screens. The iOS shell replicates the
+only the cross-end diag/err msg_keys, the desktop copy lives in apps/desktop/src/i18n.
+#1302: strings.xml holds only the sentences **both phones** show. Android-only copy (in-app
+update, notification channels, battery/background authorization…) lives in the sibling
+strings_android_only.xml, which this script never reads — so editing it rebuilds and releases
+Android alone. tools/check-i18n-split.py turns red if iOS starts referencing one of those keys. The iOS shell replicates the
 Android semantics, so it reuses the same keys and the same sentences instead of a hand copy that
 would silently drift. iOS-only wording (things Android says that are false on iOS — battery
 whitelist, foreground service… — plus iOS-only screens such as diagnostics) lives in the

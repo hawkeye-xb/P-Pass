@@ -129,7 +129,7 @@ describe("UI-19 设置页语言入口已隐藏（源码契约）", () => {
   });
 
   it("字典文案仍在（隐藏入口 ≠ 删文案）", () => {
-    const zh = readFileSync(new URL("../../../assets/i18n/zh.json", import.meta.url), "utf8");
+    const zh = readFileSync(new URL("./i18n/zh.json", import.meta.url), "utf8");
     expect(zh).toContain('"ui.language"');
     expect(zh).toContain('"ui.language_system"');
   });

@@ -140,8 +140,9 @@ class W5EngineViewUiTest {
     @Test
     fun `the background budget sentences no longer call the wait a pause`() {
         val res = File("src/main/res")
-        val zh = File(res, "values-zh/strings.xml").readText()
-        val en = File(res, "values/strings.xml").readText()
+        // #1302：这两句只在 Android 出现，住在 strings_android_only.xml。
+        val zh = File(res, "values-zh/strings_android_only.xml").readText()
+        val en = File(res, "values/strings_android_only.xml").readText()
         fun line(xml: String, key: String) = xml.lines().single { it.contains("name=\"$key\"") }.substringAfter(">")
         listOf("state_background_budget_paused", "state_background_protection_unknown").forEach { key ->
             assertFalse(key, line(zh, key).contains("暂停"))
