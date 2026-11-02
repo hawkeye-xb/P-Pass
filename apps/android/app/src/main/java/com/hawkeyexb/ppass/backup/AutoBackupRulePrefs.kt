@@ -5,6 +5,7 @@
 package com.hawkeyexb.ppass.backup
 
 import android.content.Context
+import com.hawkeyexb.ppass.io.atomicReplace
 import java.io.File
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -30,7 +31,7 @@ class AutoBackupRulePrefs(private val dir: File, private val initial: () -> Bool
         dir.mkdirs()
         val tmp = File(dir, "$FILE_NAME.tmp")
         tmp.writeText(json.encodeToString(AutoBackupRuleData.serializer(), AutoBackupRuleData(enabled)))
-        check(tmp.renameTo(file)) { "cannot persist $FILE_NAME" }
+        check(atomicReplace(tmp, file)) { "cannot persist $FILE_NAME" }
     }
 
     companion object {
