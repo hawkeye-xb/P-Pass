@@ -1203,17 +1203,30 @@ mod tests {
         use crate::thumb_pregen::tests::{fixture, write_jpeg};
         let calls = Arc::new(AtomicUsize::new(0));
         let c = Arc::clone(&calls);
+        // Every generation's outcome, so a red run says why (#1294).
+        let outcomes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let o = Arc::clone(&outcomes);
         let generator: ThumbGen = Arc::new(move |hash: &[u8; 32], src: &Path, root: &Path| {
             c.fetch_add(1, Ordering::SeqCst);
-            media_codec::make_thumbs(hash, src, root)
+            let r = media_codec::make_thumbs(hash, src, root);
+            o.lock().unwrap().push(r.outcome.clone());
+            r
         });
         let a = [0x41; 32];
-        let f = fixture(
+        let mut f = fixture(
             Some(generator),
             Duration::from_millis(1500),
             &[(a, "originals/p.jpg".into(), 0)],
         )
         .await;
+        // The first request must wait for the first generation to END: the
+        // window counts from its end, and the file is rewritten right after.
+        // With the fixture's 3 s budget a slow decode (busy machine: the
+        // sandboxed worker's start-up alone can take seconds) returned the
+        // placeholder early, the generation then failed late, and the third
+        // request still fell inside the window (#1294). Budget overruns have
+        // their own tests; this one is about the window.
+        f.engine.budget = Duration::from_secs(60);
         let src = f.library().join("originals/p.jpg");
         std::fs::create_dir_all(src.parent().unwrap()).unwrap();
         std::fs::write(&src, b"not a jpeg (yet)").unwrap();
@@ -1239,8 +1252,11 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(1700)).await;
         let bytes = f.engine.thumb(&get(&a)).await.unwrap();
         assert_ne!(
-            bytes, placeholder,
-            "after the window the hash is retried and serves the real thumbnail"
+            bytes,
+            placeholder,
+            "after the window the hash is retried and serves the real thumbnail; \
+             generations so far: {:?}",
+            outcomes.lock().unwrap()
         );
         image::load_from_memory(&bytes).expect("real JPEG");
         assert_eq!(calls.load(Ordering::SeqCst), 2);
