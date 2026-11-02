@@ -631,13 +631,35 @@ impl Blobs {
     }
 
     /// Export a (complete) blob from the store to a file.
+    ///
+    /// #1306: the bytes go to [`export_temp_path`] first and are renamed onto
+    /// `dest` only once complete and synced, so a file named `dest` is always
+    /// whole. The store writes its target in place: an export cut short (disk
+    /// full, process killed) used to leave a truncated file under the final
+    /// name, and callers take that name to mean "complete".
     pub async fn export_to(&self, hash: [u8; 32], dest: &Path) -> Result<()> {
-        self.store
-            .blobs()
-            .export(Hash::from_bytes(hash), dest)
-            .await
-            .map_err(|e| TransportError::Io(format!("export to {dest:?}: {e}")))?;
-        Ok(())
+        let tmp = export_temp_path(dest);
+        let _ = std::fs::remove_file(&tmp);
+        let res = async {
+            self.store
+                .blobs()
+                .export(Hash::from_bytes(hash), &tmp)
+                .await
+                .map_err(|e| TransportError::Io(format!("export to {dest:?}: {e}")))?;
+            // Write access: Windows refuses to flush a read-only handle.
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(&tmp)
+                .and_then(|f| f.sync_all())
+                .map_err(|e| TransportError::Io(format!("sync {tmp:?}: {e}")))?;
+            std::fs::rename(&tmp, dest)
+                .map_err(|e| TransportError::Io(format!("rename {tmp:?} -> {dest:?}: {e}")))
+        }
+        .await;
+        if res.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        res
     }
 
     /// Import a file into the store so peers can fetch it (backup client
@@ -765,6 +787,22 @@ async fn drive_with_stall(
             }
         }
     }
+}
+
+/// Suffix of a blob export still in progress (#1306): [`Blobs::export_to`]
+/// writes `<dest>.export` and renames it onto `dest` when complete. Residue
+/// sweeps treat a leftover one as a partial file.
+pub const EXPORT_TEMP_SUFFIX: &str = ".export";
+
+/// Where [`Blobs::export_to`] writes before the rename: `dest` plus
+/// [`EXPORT_TEMP_SUFFIX`], in the same directory (the rename stays on one volume).
+pub fn export_temp_path(dest: &Path) -> PathBuf {
+    let mut name = dest
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_default();
+    name.push(EXPORT_TEMP_SUFFIX);
+    dest.with_file_name(name)
 }
 
 #[cfg(test)]
