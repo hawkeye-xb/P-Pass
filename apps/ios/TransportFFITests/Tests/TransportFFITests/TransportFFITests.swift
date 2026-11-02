@@ -116,7 +116,7 @@ final class TransportFFITests: XCTestCase {
         XCTAssertEqual(
             Set(json.keys),
             ["queue_sequence", "pairing_id", "lease_token", "content_hash", "file_name",
-             "media_type", "provider", "capture_at_ms", "size_bytes"])
+             "media_type", "provider", "capture_at_ms", "size_bytes", "source"])
         XCTAssertEqual(json["file_name"] as? String, request.fileName)
         print("FlowFetchRequest frame \(frame.count) bytes, fields equal ✓")
     }
