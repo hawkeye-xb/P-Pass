@@ -27,8 +27,14 @@
 问进度、下一个做什么，只看 Issues 与 milestone，仓库里没有任何状态文件。
 **想法不进 Issues**：还没决定做的功能放 Discussions 的 Ideas 分类；产品负责人说「要做」后，
 owner 用「Create issue from discussion」转成 issue（类型 Feature，大功能拆子 issue，挂 milestone）。
-agent 只领 Issues，不碰 Discussions。issue 类型：Feature（新能力）/ Bug（行为与预期不符）/ Task（其它）。
+agent 只领 Issues，除 `just idea` 记想法外不碰 Discussions。issue 类型：Feature（新能力）/ Bug（行为与预期不符）/ Task（其它）。
 开卡用 issue 模板「任务卡」，字段缺了不受理。
+
+## 收到想法怎么办
+
+任何会话听到人类提出新想法，都用 `just idea "<原话>"` 记进 Discussions 的 Ideas，不顺手开工、不进看板。
+人类明确说「要做、但要先定方案」时加 `--discuss`，建一张 `status:inbox` 的 Feature issue。
+之后由 owner 跑 `just triage <号> <方案文件>` 定方案和去向，见 [owner 流程](docs/runbook/owner.md)。
 
 ## 交付流程
 
@@ -54,17 +60,23 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
 - 必须用 `just stuck` 停下的四种情况：命中核心、需要改范围外文件、没有可用的验收场景、同一处连红 3 次。
 - 用户看得到的行为还需按卡上的验收场景做真机验证（E3）；`just done` 的回执会写明哪些证据等级已自动取得。
 
-**owner：多卡攒一批，一批一个 PR。**
+**owner：多卡攒一批，一批一个 PR。每一步只用下面的命令**（说明见 [owner 流程](docs/runbook/owner.md)）。
+命令自带判定；红了或判定不了，命令自己写 issue（`status:blocked`）并停下。owner 不手动补做、
+不绕过、不改判定，接着处理别的批次或卡。
 
-1. 从最新 `origin/main` 开 `batch/<日期>-<主题>`，把多张卡的分支合进来，卡打 `status:batched`。
-2. 本地全量验证（`just ci` + 全部 `tools/test-*.sh` + 受影响端真机回归）。
-3. 开一个 PR，正文逐卡列出 `closes #N` 与验证证据；盯全部 lane（不只看必需检查）到结论，
-   红了在 batch 分支上修。CI 全绿后 squash 合入。
-4. PR 落后 main：无冲突用 `gh pr update-branch`；有冲突从最新 main 新开分支重放改动，
-   关旧 PR。压缩提交只能 `reset --soft $(git merge-base HEAD origin/main)`，
+0. 分拣新诉求：给 `status:inbox` 的卡写方案文件，`just triage <号> <方案文件>` 按范围路径分流
+   （纯技术非核心 → `status:ready`；碰用户可见行为、隐私、数据 → `needs:product`；核心无已采纳 ADR → `status:blocked`）。
+1. `just batch-plan`：看 `status:review` 的卡能否进批次（范围、核心与 ADR、DCO、冲突），输出建议批次。
+2. `just batch-open <主题> <issue...>`：按建议开 `batch/<日期>-<主题>`，逐张合入，卡打 `status:batched`。
+3. 到它打印的 worktree 里 `just batch-verify`：`just ci` + 全部 `tools/test-*.sh` + 受影响端真机，写批次报告。
+4. `just batch-pr`：开 PR、批准已定案的 core review、等全部检查；全绿 squash 合入，红了写 PR 评论停下。
+   修好后重跑 3、4。main 在批次期间前进了，按同样的卡用新主题重开（命令会给出整行命令）。
+   在批次分支上手修时，压缩提交只能 `reset --soft $(git merge-base HEAD origin/main)`，
    **绝不 `reset --soft origin/main`**（会把旧工作区当新内容提交，撤回别人刚合入的改动）。
-5. 合入后清理：`just cleanup-local`（默认预览，删除要 `--apply`）。squash 合并下判断分支能否删
+5. 要出 test 包：`just release-test <端...>`（端以 plan-builds 判定为准）。正式版只由产品负责人发布。
+6. 合入后清理：`just cleanup-local`（默认预览，删除要 `--apply`）。squash 合并下判断分支能否删
    看上游 `: gone]`，删用 `-D`。
+7. 产品取向的问题：`just owner-stuck "<问题>" --product "<选项一>" "<选项二>"`，然后做别的。
 
 ## 红线（违反 = 事故）
 

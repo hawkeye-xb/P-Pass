@@ -259,7 +259,7 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check hooks-test flow-worker-test supply-chain-check mobile-static-check lockfile-check
+ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check hooks-test flow-worker-test supply-chain-check mobile-static-check lockfile-check flow-owner-test
   @echo "==> CI pipeline: all green ✅"
 
 # 两个 Rust workspace 的 Cargo.lock 都得和实际依赖一致（src-tauri 是独立 workspace，
@@ -291,7 +291,7 @@ mobile-static-check:
 #
 # ⚠️ 只在这次改动**一行 Rust/Kotlin/前端都没动**时用它。碰了代码就跑 `just ci`，
 # 别拿这条快车道当省事的借口——`ci` 的依赖列表一个都没减。
-ci-docs: md-check token-check shell-vars-check identity-check hooks-test flow-worker-test supply-chain-check
+ci-docs: md-check token-check shell-vars-check identity-check hooks-test flow-worker-test supply-chain-check flow-owner-test
   @echo "==> docs lane: green ✅（注意：本条不含 fmt/lint/test，动了代码必须跑 just ci）"
 
 # T-040 人工验收：自启/防睡眠/密钥仓 真机冒烟（H-09 双平台各跑一次）
@@ -491,3 +491,45 @@ stuck n reason:
 # worker 三条命令的判据测试：临时仓库 + 假 gh / just，每条拒绝配反证；进 ci / ci-docs。
 flow-worker-test:
     @bash tools/test-flow-worker.sh
+
+# ── owner 流程（tools/flow/owner-*.sh，说明见 docs/runbook/owner.md）──────────
+# 每一步自动判定；红了或判定不了就经 owner-stuck 写 issue 并停下，脚本里没有跳过。
+
+# 列出 status:review 的卡，逐张判能否进批次，输出建议批次（--dry-run 不改 issue）
+batch-plan *args:
+    bash tools/flow/owner-batch-plan.sh {{args}}
+
+# 从最新 origin/main 开 batch/<日期>-<主题>（新 worktree），逐张合入卡分支
+batch-open topic +issues:
+    bash tools/flow/owner-batch-open.sh {{topic}} {{issues}}
+
+# 批次本地全量验证（ppf-decoder → just ci → tools/test-*.sh → 受影响端真机），写批次报告
+batch-verify:
+    bash tools/flow/owner-batch-verify.sh
+
+# 推批次分支、开 PR、等全部检查；全绿 squash 合入，红了写 PR 评论并停下
+batch-pr:
+    bash tools/flow/owner-batch-pr.sh
+
+# 在 origin/main 上打 test tag 并等 Release 结论（端 ∈ android macos windows ios；正式版拒绝）
+release-test +args:
+    bash tools/flow/owner-release-test.sh {{args}}
+
+# 收到人类的新想法：默认记进 Discussions 的 Ideas；--discuss 建 status:inbox 的 Feature issue
+[positional-arguments]
+idea text *args:
+    bash tools/flow/owner-idea.sh "$@"
+
+# 给 status:inbox 的卡定方案：校验模型写的方案文件，按范围路径与字段分流（ready / needs:product / blocked）
+triage issue plan:
+    bash tools/flow/owner-triage.sh {{issue}} {{plan}}
+
+# owner 流程停下的统一出口：写 status:blocked issue 或评论（--issue/--pr/--product/--log）
+# 参数原样转交（带空格的原因、选项不会被拆开）。
+[positional-arguments]
+owner-stuck reason *args:
+    bash tools/flow/owner-stuck.sh "$@"
+
+# owner 流程脚本的判据测试：临时仓库 + 假 gh，每条带反证（进 ci / ci-docs）
+flow-owner-test:
+    @bash tools/test-flow-owner.sh
