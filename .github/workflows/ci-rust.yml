@@ -715,7 +715,7 @@ jobs:
   gate:
     name: CI Rust gate
     if: always()
-    needs: [changes, fmt, clippy, test, test-windows, clippy-windows, test-platform-macos, arch, deny]
+    needs: [changes, fmt, clippy, test, test-windows, clippy-windows, test-platform-macos, arch, fitness-check, deny]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
