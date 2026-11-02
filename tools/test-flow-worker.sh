@@ -244,7 +244,7 @@ on_origin "fix/20-scope" && ok "绿时已推送到 origin" || bad "绿时没推�
 has_lbl 20 "status:review" && ! has_lbl 20 "status:blocked" && ! has_lbl 20 "status:doing" && ok "标签 → status:review，blocked 已去掉" || bad "交卡后标签不对：$(labels_of 20)"
 C="$(comments_of 20)"
 for k in "fix/20-scope" "E1" "FAKE-CI-GREEN" "just ci" "change src/ok.txt" ".evidence/20"; do
-  printf '%s' "$C" | grep -qF -- "$k" && ok "回执含「$k」" || bad "回执缺「$k」"
+  printf '%s' "$C" | grep -qF -- "$k" && ok "回执含「${k}」" || bad "回执缺「${k}」"
 done
 printf '%s' "$C" | grep -qF "$HOME" && bad "回执泄露了本机家目录" || ok "回执不含本机家目录"
 printf '%s' "$C" | grep -q "E3" && printf '%s' "$C" | grep -q "just verify 20" && bad "无 verify 时回执声称了 E3 验证" || ok "无 just verify 时不声称 E3"
