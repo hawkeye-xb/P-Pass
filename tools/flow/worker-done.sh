@@ -103,11 +103,11 @@ $FILES
 EOF2
 if [ "$docs_only" = 1 ]; then GATE="just ci-docs"; else GATE="just ci"; fi
 
-run_logged() { # run_logged <日志> <命令...>：重编译套 lockf（有就用）
+run_logged() { # run_logged <日志> <命令...>：重编译经 tools/heavy-lock 排队（可重入，#1308）
   local log="$1"
   shift
-  if [ -z "${PPASS_NO_LOCK:-}" ] && command -v lockf >/dev/null 2>&1; then
-    lockf -k /tmp/ppass-heavy-build.lock "$@" >"$log" 2>&1
+  if [ -z "${PPASS_NO_LOCK:-}" ]; then
+    "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/heavy-lock" "$@" >"$log" 2>&1
   else
     "$@" >"$log" 2>&1
   fi

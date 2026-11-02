@@ -105,7 +105,7 @@ mkdir -p "$root"
 log "涉及的端：${ends}；证据：$root"
 
 # —— 构建候选 ——
-heavy() { /usr/bin/lockf -k /tmp/ppass-heavy-build.lock "$@"; }
+heavy() { "$REPO_ROOT/tools/heavy-lock" "$@"; } # 可重入（#1308）
 build_desktop_bins() {
   log "编候选 daemon + testclient（debug）"
   (cd "$REPO_ROOT" && CARGO_INCREMENTAL=0 PPF_BUILD_VERSION="$(tools/release-version.sh desktop)" \

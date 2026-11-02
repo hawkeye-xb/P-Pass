@@ -262,7 +262,7 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check hooks-test flow-worker-test supply-chain-check mobile-static-check lockfile-check flow-owner-test
+ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check hooks-test flow-worker-test supply-chain-check mobile-static-check lockfile-check flow-owner-test heavy-lock-test
   @echo "==> CI pipeline: all green ✅"
 
 # 两个 Rust workspace 的 Cargo.lock 都得和实际依赖一致（src-tauri 是独立 workspace，
@@ -294,7 +294,7 @@ mobile-static-check:
 #
 # ⚠️ 只在这次改动**一行 Rust/Kotlin/前端都没动**时用它。碰了代码就跑 `just ci`，
 # 别拿这条快车道当省事的借口——`ci` 的依赖列表一个都没减。
-ci-docs: md-check token-check shell-vars-check identity-check hooks-test flow-worker-test supply-chain-check flow-owner-test
+ci-docs: md-check token-check shell-vars-check identity-check hooks-test flow-worker-test supply-chain-check flow-owner-test heavy-lock-test
   @echo "==> docs lane: green ✅（注意：本条不含 fmt/lint/test，动了代码必须跑 just ci）"
 
 # T-040 人工验收：自启/防睡眠/密钥仓 真机冒烟（H-09 双平台各跑一次）
@@ -536,3 +536,7 @@ owner-stuck reason *args:
 # owner 流程脚本的判据测试：临时仓库 + 假 gh，每条带反证（进 ci / ci-docs）
 flow-owner-test:
     @bash tools/test-flow-owner.sh
+
+# 重编译锁入口的判据测试：可重入、串行、超时（#1308；进 ci / ci-docs）
+heavy-lock-test:
+    @bash tools/test-heavy-lock.sh

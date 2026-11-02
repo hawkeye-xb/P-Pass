@@ -186,7 +186,7 @@ fresh() {
   git remote add origin "$ORIGIN"
   mkdir -p tools/flow tools/release .github docs/decisions src crates/storage release
   cp "${SRC}/tools/flow/"* tools/flow/
-  cp "${SRC}/tools/ci-paths.sh" "${SRC}/tools/check-dco.sh" tools/
+  cp "${SRC}/tools/ci-paths.sh" "${SRC}/tools/check-dco.sh" "${SRC}/tools/heavy-lock" tools/
   cp "${SRC}/tools/release/with-timeout.sh" tools/release/
   cp "${SRC}/.github/core-paths.txt" .github/
   cat >tools/release/plan-builds.sh <<'PB'
