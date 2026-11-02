@@ -27,7 +27,8 @@ for d in "$E3"/fixtures/*/; do
   "$E3/run" judge "$id" "$d/fail" >/dev/null && bad "${id}：fail fixture 没判红"
 done
 
-# 设备锁：第二个持锁者要等第一个释放
+# 设备锁：第二个持锁者要等第一个释放（/usr/bin/lockf 只有 macOS 有）
+if [ "$(uname)" = Darwin ]; then
 lockdir="$(mktemp -d)"
 E3_STATE="$lockdir" "$E3/lock" ios sh -c 'sleep 2' &
 sleep 0.5
@@ -36,5 +37,6 @@ E3_STATE="$lockdir" "$E3/lock" ios true 2>/dev/null
 [ $((SECONDS - t0)) -ge 1 ] || bad "设备锁没有排队"
 wait
 rm -rf "$lockdir"
+fi
 
 [ "$fails" -eq 0 ] && echo "ok: tools/e3 自测通过" || { echo "$fails 项失败"; exit 1; }

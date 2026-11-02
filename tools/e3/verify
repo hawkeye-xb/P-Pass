@@ -109,13 +109,15 @@ build_desktop_bins() {
     heavy cargo build -q -p daemon -p testclient) >>"$root/build.log" 2>&1
 }
 build_apk() { # build_apk <源码目录>
-  (cd "$1" && source tools/java-home.sh && cd apps/android && CARGO_INCREMENTAL=0 heavy ./gradlew -q :app:assembleDebug) >>"$root/build.log" 2>&1
+  # JDK / NDK 环境用当前仓库的脚本导出：旧基线的代码里可能还没有它
+  (source "$REPO_ROOT/tools/java-home.sh" && cd "$1/apps/android" && CARGO_INCREMENTAL=0 heavy ./gradlew -q :app:assembleDebug) >>"$root/build.log" 2>&1
 }
 # 基线包：merge-base 的 debug 包，按 sha 缓存。应用代码没变时直接用候选包（同一份代码）。
+base_apk_path() { echo "$E3_STATE/base/$(git -C "$REPO_ROOT" rev-parse --short "$base")/app-debug.apk"; }
 ensure_base_apk() {
-  local sha dst src
+  local dst src sha
   sha="$(git -C "$REPO_ROOT" rev-parse --short "$base")"
-  dst="$E3_STATE/base/$sha/app-debug.apk"
+  dst="$(base_apk_path)"
   [ -f "$dst" ] && return 0
   mkdir -p "$(dirname "$dst")"
   # shellcheck disable=SC2046
@@ -144,6 +146,9 @@ if [ "$build" = 1 ]; then
   esac
 fi
 
+# 场景读的基线包与这里的 --base 一致（不给 --base 时就是 merge-base）
+[ -n "${E3_ANDROID_BASE_APK:-}" ] || export E3_ANDROID_BASE_APK="$(base_apk_path)"
+
 # —— 跑 ——
 summary=""
 fail=0
@@ -167,7 +172,11 @@ for e in $ends; do
   k=$(grep -c "^SKIP $e/" "$root/summary.txt")
   summary="$summary · $e $p/$(($# - k))$([ "$k" -gt 0 ] && echo "（SKIP ${k}）")"
 done
+# 没覆盖到的（SKIP）与只验了已装版本的场景写进汇总行：只读最后一行的人也不会把它当成全过
+gaps="$(sed -n 's/^SKIP \([^ ]*\).*/\1/p' "$root/summary.txt" | tr '\n' ' ')"
+grep -q '^PASS mac/svc' "$root/summary.txt" && gaps="${gaps}mac/svc=已装版 "
 v=PASS
 [ "$fail" = 0 ] || v=FAIL
-echo "VERIFY $v $label ${summary# · }  ${root#"$REPO_ROOT"/}" | tee -a "$root/summary.txt"
+[ "$v" = PASS ] && [ -n "$gaps" ] && v="PASS（不完整）"
+echo "VERIFY $v $label ${summary# · }${gaps:+  未覆盖: ${gaps% }}  ${root#"$REPO_ROOT"/}" | tee -a "$root/summary.txt"
 [ "$fail" = 0 ]

@@ -2,7 +2,8 @@
 # 恢复后强杀（kill -9）30s 内由 launchd 拉起、日志重新「启动就绪」、无 panic。
 #
 # 作用对象是本机 ~/Applications/P-Pass.app 里**已装的那一版**（版本号写进证据；与候选版本不同时
-# judge 会打 INFO，不能当成候选已通过）。整个过程约 2 分钟，结束时服务一定恢复运行。
+# judge 会打 INFO，不能当成候选已通过）。整个过程约 2 分钟。开始时服务停着（用户停的）就 SKIP、不替用户拉起；
+# 开始时在跑的，结束时一定恢复运行。
 # 反证：停服务期间第 10s 由脚本把服务拉回来，「不被拉起」必须判红。
 DESC="已装服务在线；停服务不被拉起；强杀自恢复（launchctl + 日志判定）"
 COUNTER=off
@@ -10,10 +11,12 @@ STOP_WINDOW="${E3_MAC_STOP_WINDOW:-60}"
 
 setup() {
   [ -d "$MAC_APP" ] && [ -f "$MAC_PLIST" ] || { echo "本机没装 P-Pass（$MAC_APP / LaunchAgent）"; return 77; }
-  svc_start
-  for _ in $(seq 1 30); do [ -n "$(svc_pid)" ] && return 0; sleep 1; done
-  echo "服务起不来"
-  return 1
+  # 尊重用户停掉的服务：没在跑就不替用户拉起，记 SKIP
+  if ! svc_loaded || [ -z "$(svc_pid)" ]; then
+    echo "跳过：本机服务是停着的（按用户停的处理，不替用户拉起）"
+    return 77
+  fi
+  SVC_WAS_RUNNING=1
 }
 
 # run_cycle <是否在停服务期间偷偷拉起 0|1>
@@ -94,4 +97,5 @@ judge() {
 
 counter() { run_cycle 1; }
 
-teardown() { svc_start; }
+# 只恢复到 setup 前的状态：本场景开始时服务在跑，才保证结束时也在跑
+teardown() { [ "${SVC_WAS_RUNNING:-}" = 1 ] && svc_start; return 0; }
