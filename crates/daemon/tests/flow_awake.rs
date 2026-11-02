@@ -27,6 +27,7 @@ fn request(seq: u64, lease: &str, hash: [u8; 32], provider: String) -> FlowFetch
         provider,
         capture_at_ms: 0,
         size_bytes: 0,
+        source: Default::default(),
     }
 }
 

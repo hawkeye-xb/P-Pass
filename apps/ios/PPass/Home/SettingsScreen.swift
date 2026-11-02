@@ -1,4 +1,5 @@
 import PPassCore
+import PhotosUI
 import SwiftUI
 
 /// 「设置」tab（对位 Android HomeScreen.kt）：英雄卡 → 进度 / 状态行 → 红卡 → 设置卡。
@@ -10,22 +11,12 @@ struct SettingsScreen: View {
     @State private var cancelSnapshot: RemainingSnapshot?
     @State private var asking = false
 
-    enum Route: Hashable { case bucket, storage, diagnostics }
+    enum Route: Hashable { case bucket, storage, diagnostics, more }
 
     var body: some View {
         NavigationStack(path: $path) {
             List {
                 HeroCard()
-                // #1263：onboarding 不再问后台备份，改在首页引导。卡片一直显示，直到用户开启后台备份或点「不用了」。
-                // 点「开启」只写意图（iOS 没有 App 内的后台授权框）；后台 App 刷新被关时由下面的告示指路。
-                if app.showsBackgroundCard {
-                    Section {
-                        NoticeRow(text: L.s("background_backup_offer"),
-                                  action: (L.s("background_backup_offer_action"), { app.enableBackgroundFromCard() }),
-                                  close: (L.s("background_backup_offer_close"), { app.dismissBackgroundCard() }))
-                            .accessibilityIdentifier("backgroundCard")
-                    }
-                }
                 // 告示区（对位 Android NoticeCard 的「一行正文 + 右侧动作」）：iOS 用系统列表行承载，
                 // 行高、内边距、圆角交给原生 insetGrouped，不再硬设 Android 的 16/13（硬设会被行高 52 撑开）。
                 // 后台刷新告示（对位 NoticeHost BACKUP_INTERRUPTED）只放设置页：照片页是浏览用的，顶部不占（用户 2026-10-19 拍板）。
@@ -103,6 +94,7 @@ struct SettingsScreen: View {
                     }
                 case .storage: StorageDetailScreen()
                 case .diagnostics: DiagnosticsScreen()
+                case .more: moreScreen
                 }
             }
         }
@@ -118,10 +110,13 @@ struct SettingsScreen: View {
         }
     }
 
-    /// 同 Android 两组：备份规则（范围 + 开关）｜关于（存储电脑 + 版本）。无图标、无组标签。
+    /// #1272 B：规则关着，「自动备份」「挑几张传」排最上面两行；规则开着，「挑几张传」降级为普通行放在通知下面。
+    /// 末尾一行「更多 ›」进二级页（存储电脑、断开连接、版本、检查更新）。
     @ViewBuilder private var settingsSection: some View {
         Section {
-            row(L.s("backup_scope"), value: scopeValue, route: .bucket)
+            ruleRow
+            if !app.autoRule { pickRow }
+            if app.autoRule { row(L.s("backup_scope"), value: scopeValue, route: .bucket) }
             if let n = app.cancelRemainingCount {
                 Button {
                     Task {
@@ -150,8 +145,11 @@ struct SettingsScreen: View {
                     Text(L.p("missing_source_archive_value", Int(app.facts.missingSourceAcknowledged))).font(Self.valueFont).foregroundStyle(PPColor.ink40)
                 }
             }
-            Toggle(L.s("auto_backup_pause"), isOn: Binding(get: { app.autoBackup }, set: { app.setAutoBackup($0) }))
-                .font(Self.labelFont).tint(PPColor.safe)
+            if app.autoRule {
+                // 「App 关着也传」（原「后台备份」）：只在自动备份开着时出现。
+                Toggle(L.s("auto_backup_pause"), isOn: Binding(get: { app.autoBackup }, set: { app.setAutoBackup($0) }))
+                    .font(Self.labelFont).tint(PPColor.safe)
+            }
             Toggle(L.s("setting_wifi_only"), isOn: Binding(get: { app.wifiOnly }, set: { app.setWifiOnly($0) }))
                 .font(Self.labelFont).tint(PPColor.safe)
             VStack(alignment: .leading, spacing: 2) {
@@ -163,13 +161,58 @@ struct SettingsScreen: View {
                     Text(L.s("rule_notify_denied_hint")).font(Self.hintFont).foregroundStyle(PPColor.ink40)
                 }
             }
+            if app.autoRule { pickRow }
         }
         .ppTinted(PPUI.Surface.settingsCard)
         Section {
-            row(L.s("storage_computer"), value: app.desktopName ?? L.s("storage_device_default"), route: .storage)
-            row(L.s("setting_version"), value: AppVersion.current.displayLine, route: .diagnostics)
+            row(L.s("more_label"), value: "", route: .more)
         }
         .ppTinted(PPUI.Surface.settingsCard)
+    }
+
+    /// 「更多」二级页：存储电脑详情（含断开连接）、版本（含检查更新）。
+    private var moreScreen: some View {
+        List {
+            Section {
+                row(L.s("storage_computer"), value: app.desktopName ?? L.s("storage_device_default"), route: .storage)
+                row(L.s("setting_version"), value: AppVersion.current.displayLine, route: .diagnostics)
+            }
+            .ppTinted(PPUI.Surface.settingsCard)
+        }
+        .listStyle(.insetGrouped)
+        .ppList()
+        .navigationTitle(L.s("more_label"))
+        .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// 「自动备份」规则开关 + 下一行小字（被拒 / 有限访问已传一次 / 规则开着时权限被收回）。
+    private var ruleRow: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Toggle(L.s("auto_backup_rule_label"), isOn: Binding(get: { app.autoRule }, set: { app.setAutoRule($0) }))
+                .font(Self.labelFont).tint(PPColor.safe)
+                .accessibilityIdentifier("autoBackupRuleToggle")
+            if let hint = app.ruleHint {
+                Text(hint).font(Self.hintFont).foregroundStyle(PPColor.ink40)
+            }
+        }
+    }
+
+    /// #1272「挑几张传」：常驻一行，点开系统照片选择器；右侧是这一批的进度 / 结果句。
+    /// 下一行小字只有 iOS 有：照片不复制进 App，要在前台传，离开 P-Pass 就暂停。
+    private var pickRow: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Button { app.pickerRequested = true } label: {
+                HStack(spacing: 12) {
+                    Text(L.s("pick_photos_label")).font(Self.labelFont).foregroundStyle(PPColor.ink)
+                    Spacer(minLength: 8)
+                    if let line = HomeProjection.pickedLine(app.pickedBatch) {
+                        Text(line).font(Self.valueFont).foregroundStyle(PPColor.ink40).lineLimit(2).multilineTextAlignment(.trailing)
+                    }
+                }
+            }
+            .accessibilityIdentifier("pickPhotosRow")
+            Text(L.s("pick_photos_ios_hint")).font(Self.hintFont).foregroundStyle(PPColor.ink40)
+        }
     }
 
     // 设置行字号：tokens.json mobile-ui.type（iOS 覆盖为系统文字样式，见 platforms.ios）。
@@ -272,5 +315,35 @@ private struct NoticeRow: View {
             }
         }
         .ppTinted(PPColor.waitingBg)
+    }
+}
+
+/// #1272：系统照片选择器。`PHPickerConfiguration()` 不传 photoLibrary ⇒ 走进程外选择器，不需要照片权限；
+/// `.current` 给原始表示（不把 HEIC 转成 JPEG），这样内容哈希与自动备份读到的原图一致，两条路径之间才能按哈希去重。
+struct PhotoPickerSheet: UIViewControllerRepresentable {
+    let onPicked: ([PHPickerResult]) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    func makeUIViewController(context: Context) -> PHPickerViewController {
+        var config = PHPickerConfiguration()
+        config.selectionLimit = PickedQueue.maxPick
+        config.filter = .images
+        config.preferredAssetRepresentationMode = .current
+        let picker = PHPickerViewController(configuration: config)
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ controller: PHPickerViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, PHPickerViewControllerDelegate {
+        let parent: PhotoPickerSheet
+        init(_ parent: PhotoPickerSheet) { self.parent = parent }
+        func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+            parent.dismiss()
+            if !results.isEmpty { parent.onPicked(results) }
+        }
     }
 }

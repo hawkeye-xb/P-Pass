@@ -294,6 +294,25 @@ where
     }
 }
 
+/// 新身份作废的配对 = 这次启动时库里镜像的全部配对。返回作废条数（用于日志）。
+///
+/// `aligned_away`：同一次启动里打开索引库时，因正本里没有而被镜像对齐删掉的那些（Windows
+/// 升级时旧明文配对白名单被丢弃，正本为空，镜像里的配对在身份落定之前就已被删）。没有新身份
+/// 它们也不会留下，但离开原因要记成「电脑换了身份」，条数要算进去。
+pub async fn retire_pairings_for_new_identity(
+    db: &storage::Db,
+    aligned_away: &[Vec<u8>],
+    at_ms: i64,
+) -> anyhow::Result<usize> {
+    let removed = db
+        .remove_all_pairings(storage::DepartedBy::Identity, at_ms)
+        .await?
+        .len();
+    db.mark_departed(aligned_away, storage::DepartedBy::Identity, at_ms)
+        .await?;
+    Ok(removed + aligned_away.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -546,6 +565,87 @@ mod tests {
         assert_eq!(
             rows[0].profile.departed_by,
             Some(storage::DepartedBy::Identity)
+        );
+    }
+
+    #[derive(Clone, Default)]
+    struct LogBuf(std::sync::Arc<Mutex<Vec<u8>>>);
+    impl std::io::Write for LogBuf {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// W3-b（Windows 升级 test.1 → test.2）：旧明文配对白名单与身份私钥都被丢弃。照 daemon
+    /// 启动的真实顺序：先以（已空的）正本打开索引库，镜像里 N 条配对被对齐删掉；再落定身份
+    /// （新铸）。日志写的条数必须是 N，N 个设备档案都记「电脑换了身份」。
+    /// 反证：清配对闭包换回只调 `remove_all_pairings`（修复前），日志变成 0 条、档案离开原因为空，
+    /// 两条断言都变红。
+    #[tokio::test]
+    async fn upgrade_from_plaintext_logs_and_marks_every_old_pairing() {
+        const N: u8 = 4;
+        let dir = tempfile::tempdir().unwrap();
+        let index = dir.path().join("index.sqlite");
+        {
+            let vault = std::sync::Arc::new(storage::MemoryVault::default());
+            let (db, _) = storage::Db::open_with_vault(&index, vault).await.unwrap();
+            for n in 1..=N {
+                let p = storage::Pairing {
+                    id: format!("p{n}"),
+                    node_id: vec![n; 32],
+                    role: storage::Role::Member,
+                    paired_at: i64::from(n),
+                };
+                db.accept_pairing(&p.node_id, "phone", &p).await.unwrap();
+            }
+        }
+        // 正本为空 = 平台读到旧明文、删掉、按「没有」返回。
+        let empty = std::sync::Arc::new(storage::MemoryVault::default());
+        let (db, aligned) = storage::Db::open_with_vault(&index, empty).await.unwrap();
+        let aligned_away: Vec<Vec<u8>> = aligned
+            .removed_from_mirror
+            .into_iter()
+            .map(|(node_id, _)| node_id)
+            .collect();
+        assert_eq!(aligned_away.len(), usize::from(N));
+
+        let buf = LogBuf::default();
+        let sink = buf.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(move || sink.clone())
+            .finish();
+        let _second = tracing::Dispatch::new(tracing_subscriber::registry());
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let home = IdentityKeyHome::SecureStore(Box::new(MemStore::default()));
+        load_or_mint(
+            home,
+            dir.path(),
+            |_| unreachable!(),
+            mint_7,
+            || retire_pairings_for_new_identity(&db, &aligned_away, 9),
+        )
+        .await
+        .unwrap();
+
+        let logs = String::from_utf8(buf.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            logs.contains(&format!("已删除旧身份的配对记录 {N} 条")),
+            "{logs}"
+        );
+        let rows = db.list_devices().await.unwrap();
+        assert_eq!(rows.len(), usize::from(N), "设备档案保留");
+        assert!(
+            rows.iter().all(|r| r.pairing.is_none()
+                && r.profile.departed_by == Some(storage::DepartedBy::Identity)
+                && r.profile.departed_at == Some(9)),
+            "{rows:?}"
         );
     }
 

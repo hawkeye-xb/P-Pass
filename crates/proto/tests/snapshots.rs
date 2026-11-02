@@ -446,6 +446,8 @@ fn snapshot_flow_delivery() {
         provider: "blobticket-example".into(),
         capture_at_ms: 1_690_000_000_000,
         size_bytes: 3_500_000,
+        // #1272: auto is not sent — the frame stays byte-identical to the pre-#1272 one.
+        source: FlowItemSource::Auto,
     };
     assert_roundtrip(&fetch);
     snapshot_message("flow_fetch_request", &fetch);

@@ -91,6 +91,21 @@ async fn run() -> anyhow::Result<()> {
                 }
             }
         }
+        // t2-4：安装 / 升级时由安装器（管理员）调用，同样在一切 daemon 机制之前短路。
+        // 成功 exit 0，stdout 一行结果；失败 exit 1，stderr 一行错误（安装器只记日志、不中止）。
+        Ok(daemon::cli::Cli::LibraryPrivatize) => {
+            use platform::PlatformAdapter as _;
+            match platform::adapter().enforce_library_private() {
+                Ok(fix) => {
+                    println!("{}", daemon::cli::library_privatize_line(&fix));
+                    std::process::exit(0);
+                }
+                Err(e) => {
+                    eprintln!("照片库目录没能设为私有：{e}");
+                    std::process::exit(1);
+                }
+            }
+        }
         Ok(daemon::cli::Cli::Run { ephemeral }) => ephemeral,
         Err(e) => {
             eprintln!("{e}");
@@ -378,6 +393,7 @@ async fn run() -> anyhow::Result<()> {
             daemon::ipc::Waiting::LibraryMissing {
                 dir: data_dir.clone(),
                 local_base: local_base.clone(),
+                picked_count: missing_library_picked_count(&local_base).await,
             },
         )
         .await
@@ -388,6 +404,18 @@ async fn run() -> anyhow::Result<()> {
     // #1260：macOS 每次**尝试**卸载卷都会撤销 O_EVTONLY 句柄（NOTE_REVOKE），哪怕这次卸载因为别的
     // 程序占着盘而失败——所以收到事件后稍等再看库标记：还在 = 卷没有真的卸载，继续盯住。
     arm_library_watch(data_dir.clone());
+    // t2-4：「照片库只有主人能访问」每次启动核对一次（只读，后台跑，不阻断启动）。服务账户
+    // 改不了库目录权限；升级前的旧库由安装器设一次（`library privatize`，每个库根只强制一次）。
+    if !ephemeral {
+        let dir = data_dir.clone();
+        tokio::task::spawn_blocking(move || {
+            use platform::PlatformAdapter as _;
+            daemon::library_location::log_library_privacy(
+                &dir,
+                platform::adapter().library_privacy(&dir),
+            )
+        });
+    }
     std::fs::create_dir_all(data_dir.join(".ppf"))?;
     // #1260：老库（服务数据还在库盘 `.ppf/` 里）在打开任何数据库之前迁到本机；迁不成就照旧用
     // 老布局跑这一次，下次启动重试（源数据一字未动，见 daemon::migrate_local）。
@@ -424,13 +452,21 @@ async fn run() -> anyhow::Result<()> {
                             aligned.restored_to_mirror.len()
                         );
                     }
-                    db
+                    let aligned_away = aligned
+                        .removed_from_mirror
+                        .into_iter()
+                        .map(|(node_id, _)| node_id)
+                        .collect();
+                    (db, aligned_away)
                 })
         }
-        None => storage::Db::open(&index_path).await,
+        None => storage::Db::open(&index_path)
+            .await
+            .map(|db| (db, Vec::new())),
     };
-    let db = match opened {
-        Ok(db) => db,
+    // 被对齐删掉的配对若随后遇上新身份，算作「电脑换了身份」（见 identity::retire_pairings_for_new_identity）。
+    let (db, aligned_away): (storage::Db, Vec<Vec<u8>>) = match opened {
+        Ok(opened) => opened,
         Err(e) => {
             eprintln!(
                 "{}",
@@ -443,7 +479,7 @@ async fn run() -> anyhow::Result<()> {
     // 所有已配对手机变成孤儿——配对绑的就是 NodeId). #1109：macOS 存
     // data protection 钥匙串，Windows / Linux 仍是数据目录里的 identity.key；
     // 读不出来 / 内容不合法就拒绝启动；新身份先删全部配对记录，见 daemon::identity。
-    let secret = load_or_mint_identity(ephemeral, &data_dir, &local_base, &db).await;
+    let secret = load_or_mint_identity(ephemeral, &data_dir, &local_base, &db, &aligned_away).await;
 
     // ── DAE-02: 单实例 claim 先于 transport bind ──────────────────
     // 固定端口 config 下，在位实例占着端口会让新实例 bind 直接失败；
@@ -1115,6 +1151,7 @@ async fn load_or_mint_identity(
     data_dir: &std::path::Path,
     local_base: &std::path::Path,
     db: &storage::Db,
+    aligned_away: &[Vec<u8>],
 ) -> [u8; 32] {
     use platform::PlatformAdapter as _;
     let adapter = platform::adapter();
@@ -1136,12 +1173,7 @@ async fn load_or_mint_identity(
         |p| adapter.restrict_to_owner(p),
         rand_token,
         // #1117：新身份 = 新设备，先删全部配对记录（档案与审计保留）。
-        || async {
-            Ok(db
-                .remove_all_pairings(storage::DepartedBy::Identity, unix_ms_now())
-                .await?
-                .len())
-        },
+        || daemon::identity::retire_pairings_for_new_identity(db, aligned_away, unix_ms_now()),
     )
     .await
     {
@@ -1284,6 +1316,14 @@ async fn run_unconfigured(
 /// 还不能开库时的服务（[`daemon::ipc::Waiting`]：未配置 / 库找不到）：单实例交接照做，只答
 /// 少数方法，按停止信号退出。库找不到时发一次系统通知；用户放回后点「重新检查」，库在就以
 /// `EXIT_CONFIGURED_RESTART` 退出、由服务管理器带着库重新拉起（与首启写好库位置同一条路）。
+/// #1272：库找不到时本机索引还在（#1260 之后服务数据在本机）——只读数一下手机手动挑选、已送达的张数。
+/// 老布局（索引在库盘里）或读不出来 ⇒ None，窗口不显示那一句。
+async fn missing_library_picked_count(local_base: &std::path::Path) -> Option<i64> {
+    let id = daemon::layout::recorded_library_id(local_base)?;
+    let index = daemon::layout::local_dir(local_base, &id).join("index.sqlite");
+    storage::completed_picked_count_at(&index).await
+}
+
 async fn run_waiting(
     location: std::sync::Arc<daemon::library_location::LibraryLocation>,
     waiting: daemon::ipc::Waiting,

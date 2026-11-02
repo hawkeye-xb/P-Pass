@@ -344,7 +344,7 @@ public final class FlowDeliveryPort: ItemDelivery, @unchecked Sendable {
         let fetch = FlowFetchRequest(
             queueSequence: UInt64(request.orderId), pairingId: request.pairingId, leaseToken: request.leaseToken,
             contentHash: request.contentHash, fileName: details.fileName, mediaType: details.mimeType, provider: ticket,
-            captureAtMs: details.captureAtMs, sizeBytes: max(0, details.sizeBytes)
+            captureAtMs: details.captureAtMs, sizeBytes: max(0, details.sizeBytes), source: request.source
         )
         let tuple = FlowTupleRef(queueSequence: fetch.queueSequence, pairingId: fetch.pairingId, leaseToken: fetch.leaseToken)
         do {

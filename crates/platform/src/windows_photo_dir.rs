@@ -9,6 +9,10 @@
 //! 只在首次设置与换位置时设置：主人事后在文件夹属性里加的权限（例如共享给装成服务的媒体
 //! 服务器），P-Pass 不再覆盖。
 //!
+//! t2-4：升级前就有的库可能从没设过私有。安装器（管理员）每次安装 / 升级调一次
+//! [`privatize_once`]：每个库根只强制一次，之后只核对；daemon 每次启动只读核对（服务账户改不了
+//! DACL），偏离时记日志。
+//!
 //! exFAT / FAT32 没有 ACL：跳过（[`GrantOutcome::SkippedNoAcl`]），不假装成功、不提示。
 //! 网络路径本期不支持，明确拒绝。
 
@@ -84,8 +88,85 @@ pub fn make_private_for_service(
     reset_tree(dir, &grants)?;
     // 回读确认：判据是真实 DACL，不是设置调用的返回值。
     let facts = dacl_facts(dir)?;
-    check_private(&facts, &grants)?;
+    check_private(&facts, &grants).map_err(|e| failed("grant_photo_dir", format!("设置后 {e}")))?;
     Ok(GrantOutcome::Done)
+}
+
+/// t2-4：库根此刻是否私有。只读 DACL（服务账户有 `READ_CONTROL`，不需要 `WRITE_DAC`）；
+/// 判据与设置后的回读同一个（[`check_private`]）。只看库根：子项一律继承库根。
+pub fn root_privacy(
+    dir: &Path,
+    service_sid: &str,
+    owner_sid: &str,
+) -> Result<crate::LibraryPrivacy> {
+    if let Some(fs) = file_system_of(dir) {
+        if !matches!(fs.to_ascii_uppercase().as_str(), "NTFS" | "REFS") {
+            return Ok(crate::LibraryPrivacy::NoAcl { file_system: fs });
+        }
+    }
+    let facts = dacl_facts(dir)?;
+    Ok(
+        match check_private(&facts, &library_grants(service_sid, owner_sid)) {
+            Ok(()) => crate::LibraryPrivacy::Private,
+            Err(detail) => crate::LibraryPrivacy::NotPrivate { detail },
+        },
+    )
+}
+
+/// t2-4：「这个库根已经强制私有化过」的标记，内容是库根路径（换位置 = 新库根，标记不再匹配）。
+/// 放在服务的 ProgramData 里（只有管理员与服务账户能写）。
+pub fn privatized_marker(service_root: &Path) -> crate::ProgramDataStore {
+    crate::ProgramDataStore::new(service_root.join("library-privatized"), "照片库私有化标记")
+}
+
+fn marked(marker: &crate::ProgramDataStore, dir: &Path) -> Result<bool> {
+    Ok(marker
+        .read()?
+        .and_then(|b| String::from_utf8(b).ok())
+        .is_some_and(|s| Path::new(s.trim()) == dir))
+}
+
+fn mark(marker: &crate::ProgramDataStore, dir: &Path) -> Result<()> {
+    marker.write(dir.to_string_lossy().as_bytes())
+}
+
+/// t2-4：每个库根只强制私有化一次。没标记过 ⇒ 不私有就设为私有，然后写标记；标记过 ⇒ 只核对、
+/// 不改（主人事后自己加的权限不收回）。卷没有 ACL 也写标记（没有可设的）。
+pub fn privatize_once(
+    dir: &Path,
+    service_sid: &str,
+    owner_sid: &str,
+    marker: &crate::ProgramDataStore,
+) -> Result<crate::LibraryPrivacyFix> {
+    use crate::LibraryPrivacyFix::*;
+    let dir_buf = dir.to_path_buf();
+    if marked(marker, dir)? {
+        return Ok(PrivatizedBefore {
+            dir: dir_buf,
+            now: root_privacy(dir, service_sid, owner_sid)?,
+        });
+    }
+    let fix = match root_privacy(dir, service_sid, owner_sid)? {
+        crate::LibraryPrivacy::Private => AlreadyPrivate { dir: dir_buf },
+        _ => match make_private_for_service(dir, service_sid, owner_sid)? {
+            GrantOutcome::Done => Tightened { dir: dir_buf },
+            GrantOutcome::SkippedNoAcl { file_system } => SkippedNoAcl {
+                dir: dir_buf,
+                file_system,
+            },
+        },
+    };
+    mark(marker, dir)?;
+    Ok(fix)
+}
+
+/// t2-4：库根此刻私有、却还没有标记（首次设置 / 换位置由窗口程序设的私有）⇒ 补上标记，
+/// 以后的安装 / 升级不再改它。daemon 启动核对时调；尽力而为。
+pub fn note_private(dir: &Path, marker: &crate::ProgramDataStore) -> Result<()> {
+    if !marked(marker, dir)? {
+        mark(marker, dir)?;
+    }
+    Ok(())
 }
 
 /// 改不了的子项最多列这么多条（错误信息给人看，不必全列）。
@@ -204,22 +285,21 @@ impl DaclFacts {
     }
 }
 
-fn check_private(facts: &DaclFacts, grants: &[(&str, u32)]) -> Result<()> {
+/// 库根 DACL 是否就是 `grants` 这份私有表。`Err` 是给人看的事实，不带动作名
+/// （设置后回读与只读核对共用）。
+fn check_private(facts: &DaclFacts, grants: &[(&str, u32)]) -> std::result::Result<(), String> {
     if !facts.protected {
-        return Err(failed("grant_photo_dir", "设置后 DACL 仍在继承上级目录"));
+        return Err("DACL 仍在继承上级目录".into());
     }
     if facts.aces.iter().any(|(t, _, _)| *t != ALLOWED_ACE_TYPE) {
-        return Err(failed("grant_photo_dir", "设置后 DACL 里有非允许型 ACE"));
+        return Err("DACL 里有非允许型 ACE".into());
     }
     let mut want: Vec<String> = grants.iter().map(|(s, _)| s.to_string()).collect();
     want.sort();
     if facts.allowed_sids() != want {
-        return Err(failed(
-            "grant_photo_dir",
-            format!(
-                "设置后 DACL 的 SID 是 {:?}，应为 {want:?}",
-                facts.allowed_sids()
-            ),
+        return Err(format!(
+            "DACL 的 SID 是 {:?}，应为 {want:?}",
+            facts.allowed_sids()
         ));
     }
     for (sid, mask) in grants {
@@ -228,10 +308,7 @@ fn check_private(facts: &DaclFacts, grants: &[(&str, u32)]) -> Result<()> {
             .iter()
             .any(|(_, m, s)| s == sid && m & mask == *mask);
         if !has {
-            return Err(failed(
-                "grant_photo_dir",
-                format!("设置后 {sid} 缺少应有的访问权"),
-            ));
+            return Err(format!("{sid} 缺少应有的访问权"));
         }
     }
     Ok(())
@@ -510,6 +587,81 @@ mod tests {
                 p.display()
             );
         }
+    }
+
+    /// t2-4：只读核对的判据与设置后回读同一个。继承上级的目录 ⇒ NotPrivate；设为私有后 ⇒
+    /// Private；再给库根加一条继承 ACE（打开继承）⇒ 又是 NotPrivate。核对本身不改 DACL。
+    /// 反证：root_privacy 不看 protected（只比 SID 集合）⇒ 第三段仍判 Private，红。
+    #[test]
+    fn root_privacy_tracks_the_invariant_and_never_writes() {
+        let parent = tempdir();
+        open_parent_to_authenticated_users(parent.path());
+        let lib = parent.path().join("P-Pass Library");
+        std::fs::create_dir(&lib).unwrap();
+        let before = dacl_facts(&lib).unwrap();
+        assert!(matches!(
+            root_privacy(&lib, TEST_SERVICE, &me()).unwrap(),
+            crate::LibraryPrivacy::NotPrivate { .. }
+        ));
+        assert_eq!(dacl_facts(&lib).unwrap(), before, "核对不许改 DACL");
+
+        make_private_for_service(&lib, TEST_SERVICE, &me()).expect("make private");
+        assert_eq!(
+            root_privacy(&lib, TEST_SERVICE, &me()).unwrap(),
+            crate::LibraryPrivacy::Private
+        );
+
+        let ok = std::process::Command::new("icacls")
+            .arg(&lib)
+            .arg("/inheritance:e")
+            .status()
+            .expect("icacls");
+        assert!(ok.success());
+        assert!(matches!(
+            root_privacy(&lib, TEST_SERVICE, &me()).unwrap(),
+            crate::LibraryPrivacy::NotPrivate { .. }
+        ));
+    }
+
+    /// t2-4：每个库根只强制一次。没标记 ⇒ 设为私有并写标记；主人事后打开继承（加了上级的
+    /// 权限）⇒ 再调只核对、报偏离、不改；换一个库根（标记不匹配）⇒ 照常设一次。
+    /// 反证：privatize_once 不看标记（每次都设）⇒ 第二段 DACL 被改回受保护，红。
+    #[test]
+    fn privatize_once_tightens_a_root_once_and_then_leaves_it_alone() {
+        let parent = tempdir();
+        open_parent_to_authenticated_users(parent.path());
+        let marker = privatized_marker(parent.path());
+        let lib = parent.path().join("P-Pass Library");
+        std::fs::create_dir(&lib).unwrap();
+
+        assert_eq!(
+            privatize_once(&lib, TEST_SERVICE, &me(), &marker).unwrap(),
+            crate::LibraryPrivacyFix::Tightened { dir: lib.clone() }
+        );
+        assert!(dacl_facts(&lib).unwrap().protected);
+
+        let ok = std::process::Command::new("icacls")
+            .arg(&lib)
+            .arg("/inheritance:e")
+            .status()
+            .expect("icacls");
+        assert!(ok.success());
+        let before = dacl_facts(&lib).unwrap();
+        assert!(matches!(
+            privatize_once(&lib, TEST_SERVICE, &me(), &marker).unwrap(),
+            crate::LibraryPrivacyFix::PrivatizedBefore {
+                now: crate::LibraryPrivacy::NotPrivate { .. },
+                ..
+            }
+        ));
+        assert_eq!(dacl_facts(&lib).unwrap(), before, "强制过的库根不再改");
+
+        let other = parent.path().join("Moved Library");
+        std::fs::create_dir(&other).unwrap();
+        assert_eq!(
+            privatize_once(&other, TEST_SERVICE, &me(), &marker).unwrap(),
+            crate::LibraryPrivacyFix::Tightened { dir: other.clone() }
+        );
     }
 
     /// 同卷换位置：从宽松目录改名搬进受保护目录的文件，原本带着旧位置继承来的 ACE

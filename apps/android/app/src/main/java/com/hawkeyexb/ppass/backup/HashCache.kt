@@ -16,6 +16,7 @@
 package com.hawkeyexb.ppass.backup
 
 import android.content.Context
+import com.hawkeyexb.ppass.io.atomicReplace
 import java.io.File
 import java.io.InputStream
 import kotlinx.serialization.Serializable
@@ -112,7 +113,7 @@ class HashCache(private val file: File) {
         file.parentFile?.mkdirs()
         val tmp = File(file.parentFile, "${file.name}.tmp")
         tmp.writeText(json.encodeToString(HashCacheState.serializer(), HashCacheState(memory)))
-        check(tmp.renameTo(file)) { "cannot persist hash cache" }
+        check(atomicReplace(tmp, file)) { "cannot persist hash cache" }
     }
 
     /** 只保留 uri 前缀在 [validUris] 里的条目；无变化则不动盘。 */

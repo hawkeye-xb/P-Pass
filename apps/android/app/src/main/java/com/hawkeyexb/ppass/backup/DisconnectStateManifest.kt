@@ -156,10 +156,20 @@ enum class DisconnectState(
         "#282 验收 4：Wi-Fi / 充电设置仍保留",
         owners = listOf("com.hawkeyexb.ppass.backup.BackupSettings"),
     ),
+    AUTO_BACKUP_RULE(
+        StateLocation.FILES, "auto_backup_rule.json", DisconnectDisposition.KEEP,
+        "#1272：「自动备份」规则开关随备份范围一起留着（重新配对 / 换电脑沿用原来的范围）；换新电脑时由配对入口关掉重问",
+        owners = listOf("com.hawkeyexb.ppass.backup.AutoBackupRulePrefs"),
+    ),
     ORDER_DB(
         StateLocation.DATABASES, "backup-orders.db", DisconnectDisposition.KEEP,
         "#413/#415 裁决 6：连回同一台桌面 CONFIRMED 仍有效；换一台桌面由 OrderStore.claimOwner 清（#282 验收 4「账本仍保留」）",
         owners = listOf("com.hawkeyexb.ppass.backup.order.SqliteOrderStore"),
+    ),
+    PICKED_DB(
+        StateLocation.DATABASES, "picked-uploads.db", DisconnectDisposition.KEEP,
+        "#1272：手选订单（一次性动作）；库有活句柄不能从文件层删，断开时 clearLocalPairing 清空全部行并释放 URI 授权——挑给旧电脑的不许传给下一台",
+        owners = listOf("com.hawkeyexb.ppass.backup.picked.SqlitePickedStore"),
     ),
     NATIVE_BLOB_STORE(
         StateLocation.FILES, "iroh-blobs-provider", DisconnectDisposition.KEEP,

@@ -3,6 +3,7 @@
 // filesDir JSON，tmp+rename 崩溃安全，损坏回默认（自动备份关闭，同 [AutoBackupPrefsData] 的默认值）。
 package com.hawkeyexb.ppass.backup
 
+import com.hawkeyexb.ppass.io.atomicReplace
 import java.io.File
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -63,7 +64,7 @@ class AutoBackupPrefs(private val dir: File) {
         dir.mkdirs()
         val tmp = File(dir, "auto_backup_prefs.json.tmp")
         tmp.writeText(json.encodeToString(AutoBackupPrefsData.serializer(), data))
-        check(tmp.renameTo(file)) { "cannot persist auto_backup_prefs.json" }
+        check(atomicReplace(tmp, file)) { "cannot persist auto_backup_prefs.json" }
         _revision.value = _revision.value + 1
     }
 

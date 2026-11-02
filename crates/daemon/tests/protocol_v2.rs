@@ -224,6 +224,7 @@ fn grant(d: &Desk) -> FlowGrant {
         provider: "provider".into(),
         state: FlowGrantState::Active,
         receipt_id: None,
+        source: "auto".into(),
     }
 }
 
@@ -238,6 +239,7 @@ fn offer_params(epoch: &str) -> serde_json::Value {
         provider: "provider".into(),
         capture_at_ms: 0,
         size_bytes: 0,
+        source: Default::default(),
     })
     .unwrap()
 }

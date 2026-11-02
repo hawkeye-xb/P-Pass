@@ -1,6 +1,7 @@
 // MOB-114（#455）：「这台电脑以前连过吗」的唯一事实来源。
 package com.hawkeyexb.ppass.backup
 
+import com.hawkeyexb.ppass.io.atomicReplace
 import java.io.File
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -57,7 +58,7 @@ class OnboardedDesktopsStore(private val dir: File) {
                 current.copy(nodeIds = current.nodeIds + daemonNodeId),
             ),
         )
-        check(tmp.renameTo(file)) { "cannot persist onboarded_desktops.json" }
+        check(atomicReplace(tmp, file)) { "cannot persist onboarded_desktops.json" }
     }
 
     private fun load(): OnboardedDesktopsData =

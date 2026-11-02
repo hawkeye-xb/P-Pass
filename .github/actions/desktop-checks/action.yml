@@ -107,6 +107,11 @@ runs:
         touch "$stub"
         chmod +x "$stub"
         ls -l "$stub"
+        # 解码子进程同为 externalBin，tauri-build 同样要它存在。
+        decoder="${stub/ppf-daemon/ppf-decoder}"
+        touch "$decoder"
+        chmod +x "$decoder"
+        ls -l "$decoder"
     # CI-03: src-tauri 是独立 workspace（ADR-012），主 workspace 的
     # just ci（fmt + clippy）覆盖不到它——这里补上同档门禁，否则格式
     # 漂移无人发现（2026-08-25 实测 ipc.rs 两处既有代码被重排）。

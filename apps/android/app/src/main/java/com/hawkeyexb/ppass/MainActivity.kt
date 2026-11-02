@@ -274,6 +274,28 @@ fun PPassApp() {
     val context = LocalContext.current
     // UPD-01: 下载安装是 suspend（IO 线程下载）——按钮 onClick 从协程调。
     val scope = rememberCoroutineScope()
+    // #1272 挑几张传：系统照片选择器（不需要照片权限）。选完登记成一批手选订单，叫醒传输循环；
+    // 进度 / 结果每秒读一次手选表（只在有未结束的或刚结束时变）。
+    var pickedBatch by remember { mutableStateOf<com.hawkeyexb.ppass.backup.picked.PickedBatchSummary?>(null) }
+    val pickPhotosLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia(com.hawkeyexb.ppass.backup.picked.PickedUploads.MAX_PICK),
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            scope.launch(Dispatchers.IO) {
+                val count = com.hawkeyexb.ppass.backup.picked.PickedUploads.enqueue(context, uris)
+                if (count > 0) {
+                    pickedBatch = com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).latestBatch()
+                    com.hawkeyexb.ppass.backup.flow.requestFlowWake(context, com.hawkeyexb.ppass.backup.flow.TriggerReason.PICKED_ADDED)
+                }
+            }
+        }
+    }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        while (true) {
+            pickedBatch = withContext(Dispatchers.IO) { runCatching { com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).latestBatch() }.getOrNull() }
+            kotlinx.coroutines.delay(1000)
+        }
+    }
     // UI-12 追加（2026-09-15，用户拍板）：后台备份"去处理"的短暂反馈用
     // Snackbar——这是本代码库第一个"转瞬即逝、非持久"的反馈机制（此前
     // 所有反馈都是改一个持久状态、界面自己重组合）。只覆盖两条真实存在
@@ -320,7 +342,8 @@ fun PPassApp() {
     var pendingBucketsPairing by remember { mutableStateOf<Pairing?>(null) }
     var pendingBucketsFirstTime by remember { mutableStateOf(false) }
     // MOB-03: 媒体权限被拒 → 人话引导（不崩不白屏，说清为什么需要）。
-    var showMediaPermissionDialog by remember { mutableStateOf(false) }
+    // #1272：照片权限被拒不再弹对话框，改成「自动备份」开关下方一行小字。
+    var ruleHintRes by remember { mutableStateOf<Int?>(null) }
     // MOB-02 §二: 部分授权态（API 34+「部分照片」）——ON_RESUME 一起刷新
     // （用户去系统设置改完全授权返回后引导卡消失）；bucketMediaPermission
     // 回调里也会即时重读。声明提前：launcher 回调需要引用。
@@ -426,7 +449,7 @@ fun PPassApp() {
                 )
                 MediaPermissionLanding.HomeWithDeniedDialog -> {
                     screen = Screen.Home(pairing)
-                    showMediaPermissionDialog = true
+                    ruleHintRes = R.string.auto_backup_rule_denied_hint
                 }
             }
         }
@@ -485,26 +508,6 @@ fun PPassApp() {
             text = { Text(stringResource(R.string.pairing_lost_body)) },
             confirmButton = {
                 TextButton(onClick = acknowledge) { Text(stringResource(R.string.notice_dismiss_label)) }
-            },
-        )
-    }
-
-    // MOB-03: 媒体权限被拒的人话引导——说清为什么需要，给出去设置的路。
-    if (showMediaPermissionDialog) {
-        AlertDialog(
-            onDismissRequest = { showMediaPermissionDialog = false },
-            title = { Text(stringResource(R.string.media_permission_denied_title)) },
-            text = { Text(stringResource(R.string.media_permission_denied_body)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    showMediaPermissionDialog = false
-                    openAppDetailsSettings(context)
-                }) { Text(stringResource(R.string.partial_access_action)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { showMediaPermissionDialog = false }) {
-                    Text(stringResource(R.string.cancel))
-                }
             },
         )
     }
@@ -663,6 +666,51 @@ fun PPassApp() {
         }
     }
 
+    // #1272：「自动备份」规则开关。打开时才申请全部照片权限：全部允许 → 选范围页；有限访问 → 开关不开、把允许的
+    // 照片按手选链路传一次；不允许 → 开关不开、开关下方一行小字。
+    val rulePrefs = remember { com.hawkeyexb.ppass.backup.autoBackupRulePrefs(context) }
+    var ruleOn by remember { mutableStateOf(runCatching { rulePrefs.enabled() }.getOrDefault(false)) }
+    var pendingRulePairing by remember { mutableStateOf<Pairing?>(null) }
+    val rulePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ ->
+        val pairing = pendingRulePairing
+        pendingRulePairing = null
+        mediaAccess = mediaAccess(context)
+        mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
+        when (mediaAccess) {
+            MediaAccess.FULL -> if (pairing != null) {
+                rulePrefs.set(true)
+                ruleOn = true
+                ruleHintRes = null
+                screen = Screen.Buckets(pairing, BackupScopeStore(context).selectedBucketIds() ?: emptySet(), false)
+            }
+            MediaAccess.PARTIAL -> {
+                ruleHintRes = null
+                scope.launch(Dispatchers.IO) {
+                    val n = com.hawkeyexb.ppass.backup.picked.PickedUploads.enqueueAllowedImages(context)
+                    if (n > 0) {
+                        com.hawkeyexb.ppass.backup.flow.requestFlowWake(context, com.hawkeyexb.ppass.backup.flow.TriggerReason.PICKED_ADDED)
+                        snackbarHostState.showSnackbar(context.getString(R.string.auto_backup_rule_limited_sent, n))
+                    }
+                }
+            }
+            else -> ruleHintRes = R.string.auto_backup_rule_denied_hint
+        }
+    }
+    val onToggleRule: (Pairing, Boolean) -> Unit = { pairing, on ->
+        if (!on) {
+            rulePrefs.set(false)
+            ruleOn = false
+            ruleHintRes = null
+        } else if (mediaAccess(context) == MediaAccess.FULL) {
+            rulePrefs.set(true)
+            ruleOn = true
+            ruleHintRes = null
+            screen = Screen.Buckets(pairing, BackupScopeStore(context).selectedBucketIds() ?: emptySet(), false)
+        } else {
+            pendingRulePairing = pairing
+            rulePermission.launch(withMediaLocation(requiredMediaPermissions()))
+        }
+    }
     systemBackTarget(screen)?.let { target ->
         BackHandler { screen = target }
     }
@@ -790,7 +838,10 @@ fun PPassApp() {
                             settingsWriter.write("autoBackup", "new desktop, ask again") {
                                 AutoBackupPrefs(context.filesDir).setRequested(false)
                             }
-                            enterBucketPicker(outcome.pairing, firstTime = true)
+                            // #1272：配对后不再申请照片权限，直接进照片页；新电脑的「自动备份」从关开始。
+                            rulePrefs.set(false)
+                            ruleOn = false
+                            screen = Screen.Home(outcome.pairing)
                         }
                     }
                     is PairOutcome.Refused -> {
@@ -1142,10 +1193,16 @@ fun PPassApp() {
                         // #1263：没选相册 → 引导 + 「选择相册」（直达选范围页）；电脑上还没有照片时只有一种说法
                         // （home_empty_albums，10-29 文案定稿 C8）。
                         // 范围存了但读不出来不算「没选」（设置行另说「读不到」）。
-                        noAlbums = !scopeUnreadable && (selectedBucketCount ?: 0) == 0,
+                        noAlbums = ruleOn && !scopeUnreadable && (selectedBucketCount ?: 0) == 0,
                         onChooseAlbums = { enterBucketPicker(s.pairing, firstTime = false) },
-                        mediaAccess = mediaAccess,
-                        onOpenAppSettings = { openAppDetailsSettings(context) },
+                        autoBackupRuleOn = ruleOn,
+                        computerName = s.pairing.storageDeviceName,
+                        onEnableAutoBackup = { onToggleRule(s.pairing, true) },
+                        onPickPhotos = {
+                            pickPhotosLauncher.launch(
+                                androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                            )
+                        },
                     )
                 },
                 backup = {
@@ -1265,6 +1322,12 @@ fun PPassApp() {
                         // 备份按钮时把挂在它身上的权限申请链一起删没了，
                         // 无权限直接进列表 = MediaStore 空查询 = 全白。
                         onOpenBucketPicker = { enterBucketPicker(s.pairing, firstTime = false) },
+                        onPickPhotos = {
+                            pickPhotosLauncher.launch(
+                                androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                            )
+                        },
+                        pickedBatch = pickedBatch,
                         // MOB-02 §一: 首页主按钮删除——hero 空闲态按钮 =
                         // 「选择备份的相册」；onBackupNow 保留给：进行中暂停、
                         // 失败红卡「再试一次」——不是常驻设置页入口，
@@ -1302,13 +1365,15 @@ fun PPassApp() {
                             else -> null
                         },
                         onCheckUpdate = { updateController.onCheckRowClick() },
-                        // #1263：「开启后台备份」卡片只在设置页。
-                        offerBackgroundBackup = showBackgroundBackupOffer(backgroundBackupState, offerDismissed),
-                        onEnableBackgroundBackup = onEnableFromOffer,
-                        onDismissBackgroundBackupOffer = {
-                            offerDismissed = settingsWriter.persist("backgroundBackupOffer", true, { _ -> offerStore.dismiss() }) {
-                                offerStore.dismissed()
-                            }
+                        // #1272：「自动备份」规则开关与权限三种结果。
+                        autoBackupRuleOn = ruleOn,
+                        scopeHasStart = scopeSince != null,
+                        onToggleAutoBackupRule = { on -> onToggleRule(s.pairing, on) },
+                        autoBackupRuleHintRes = ruleHintRes ?: when {
+                            !ruleOn -> null
+                            mediaAccess == MediaAccess.PARTIAL -> R.string.auto_backup_rule_partial_hint
+                            mediaAccess == MediaAccess.NONE -> R.string.auto_backup_rule_none_hint
+                            else -> null
                         },
                     )
                 },
@@ -1374,7 +1439,6 @@ fun PPassApp() {
                     knownBuckets = scopeStore.knownBucketIds(),
                     // 10-29：只给了部分照片也照常保存范围，只备份允许的那些（页顶说明一行）；
                     // 首页英雄卡仍由部分授权引导卡顶替（MOB-02 §二：不显示假 0/0）。
-                    partialAccess = mediaAccess == MediaAccess.PARTIAL,
                     onDone = { sel, time ->
                         // MOB-02 §六: 保存范围 + 记录当前全部相册（新相册
                         // 基准）；新出现的相册默认不包含（不在 sel 里）。
@@ -1558,6 +1622,7 @@ private fun clearLocalPairing(
             override fun clearPreviewCache() = evictPhotoPreviews()
         },
     )
+    com.hawkeyexb.ppass.backup.picked.PickedUploads.discardAll(context)
     // 登记门禁的真机一半：断开后私有目录里出现清单之外的东西，留一行日志（不拦断开）。
     context.filesDir.parentFile?.let { dataDir ->
         unregisteredStatePaths(dataDir).takeIf { it.isNotEmpty() }?.let {

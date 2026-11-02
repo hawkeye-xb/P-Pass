@@ -5,6 +5,7 @@ members = [
   "crates/core-media",
   "crates/transport",
   "crates/storage",
+  "crates/decode-worker",
   "crates/media-codec",
   "crates/platform",
   "crates/daemon",

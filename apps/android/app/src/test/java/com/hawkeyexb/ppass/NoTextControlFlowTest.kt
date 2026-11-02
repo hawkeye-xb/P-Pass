@@ -39,8 +39,8 @@ class NoTextControlFlowTest {
         val files = root.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
         assertTrue("scanned nothing", files.size > 50)
         // DiagText renders the desktop diag dictionary by key; it never sees a wire reply.
-        val found = files.filter { !it.path.endsWith("i18n/DiagText.kt") }
-            .flatMap { offences(it.relativeTo(root).path, it.readText()) }
+        val found = files.filter { !it.invariantSeparatorsPath.endsWith("i18n/DiagText.kt") }
+            .flatMap { offences(it.relativeTo(root).invariantSeparatorsPath, it.readText()) }
         assertEquals(found.joinToString("\n"), 0, found.size)
     }
 }

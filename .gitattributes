@@ -5,3 +5,23 @@
 
 # 更新包验签测试的夹具：签名按原始字节算，Windows 检出转 CRLF 会让原样的包也验签失败。
 apps/desktop/src-tauri/tests/fixtures/update-tamper/** -text
+
+# Shell 脚本只认 LF：CRLF 检出后 `set -euo pipefail\r` 这类行在 bash 里会坏（Git Bash 恰好
+# 容忍，不能指望）。Windows 上的 Android 构建由 Gradle 经 bash 跑 tools/ 下的脚本。
+*.sh text eol=lf
+apps/android/gradlew text eol=lf
+
+# Android 源码与资源固定 LF：单测里有一批源码门禁按 "\n" 切片匹配源码（如 UPD835、#421），
+# Windows（core.autocrlf=true）检出成 CRLF 就全部误报。二进制资源（png/ttf/jar）不受影响。
+apps/android/**/*.kt text eol=lf
+apps/android/**/*.kts text eol=lf
+apps/android/**/*.java text eol=lf
+apps/android/**/*.xml text eol=lf
+apps/android/**/*.json text eol=lf
+apps/android/**/*.properties text eol=lf
+apps/android/**/*.md text eol=lf
+
+# 文案字典：源（assets/i18n）与各端捆绑的副本逐字节比较漂移（Android DiagTextTest、
+# iOS I18nDriftTests），必须按同一规则检出，否则只固定了一边就在 Windows 上误报漂移。
+assets/i18n/*.json text eol=lf
+apps/ios/PPass/Resources/i18n/*.json text eol=lf

@@ -63,7 +63,8 @@ read_toml_version() {
 }
 
 read_android_fallback_version() {
-  awk -F'"' '/\?: "/{print $2; exit}' "$1"
+  # 只认整行就是 `?: "x.y.z"` 的那一处（versionName 的回退串）；文件里别处的 `?: "` 不算。
+  awk -F'"' '/^[[:space:]]*\?: "[^"]*"[[:space:]]*$/{print $2; exit}' "$1"
 }
 
 read_ios_fallback_version() {
@@ -158,7 +159,7 @@ if [ "$PLATFORM" = android ] || [ "$PLATFORM" = both ]; then
   # -F'[= ]+' 下 $2 是 "versionCode"——用 gsub 去掉 "= " 前缀拿纯数字。
   NCODE=$((VCODE + 1))
   sedi "s/versionCode = $VCODE/versionCode = $NCODE/" apps/android/app/build.gradle.kts
-  sedi "s/?: \"$ALCUR\"/?: \"$NEW\"/" apps/android/app/build.gradle.kts
+  sedi "s/^\([[:space:]]*\)?: \"$ALCUR\"[[:space:]]*$/\1?: \"$NEW\"/" apps/android/app/build.gradle.kts
 fi
 
 if [ "$PLATFORM" = ios ]; then

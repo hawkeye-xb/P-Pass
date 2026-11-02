@@ -127,6 +127,26 @@ struct BackupTriplet: Equatable {
 }
 
 enum HomeProjection {
+    /// #1272：「挑几张传」行右侧的进度 / 结果句（与 Android `pickedBatchLine` 同一种拼法）。没挑过、被杀后的批次 = nil
+    /// （被杀后的提示在大卡片里，见 [pickedInterruptedLine]）。
+    static func pickedLine(_ batch: PickedBatchSummary?) -> String? {
+        guard let batch, !batch.interrupted else { return nil }
+        if batch.open > 0 { return L.f("picked_progress", batch.settled + 1, batch.total) }
+        let reached = batch.delivered + batch.alreadyThere
+        let head: String? = reached == 0 ? nil
+            : batch.alreadyThere > 0 ? L.f("picked_result_with_existing", reached, batch.alreadyThere)
+            : L.f("picked_result_delivered", reached)
+        let tail = batch.failed > 0 ? L.f("picked_result_failed", batch.failed) : nil
+        let line = [head, tail].compactMap { $0 }.joined(separator: " · ")
+        return line.isEmpty ? nil : line
+    }
+
+    /// #1272：进程在传输中被杀，下次打开时大卡片里的一句。数字按实际：「上次挑的 12 张有 3 张没传完，请重新挑选。」
+    static func pickedInterruptedLine(_ batch: PickedBatchSummary?) -> String? {
+        guard let batch, batch.interrupted, batch.notReached > 0 else { return nil }
+        return L.f("picked_interrupted", batch.total, batch.notReached)
+    }
+
     static func tripletOf(n: Int64, confirmed: Int64, lastSuccessAt: Int64, hasFailedNeedsUser: Bool = false,
                           pausedByUser: Bool = false, remaining: Int64? = nil, skippedByUser: Int64 = 0) -> BackupTriplet {
         BackupTriplet(n: n, m: min(confirmed, n), lastSuccessAt: lastSuccessAt, confirmedRaw: confirmed,

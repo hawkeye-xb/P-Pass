@@ -125,7 +125,7 @@ $others"
 install_helper() {
   local stage
   say "编译 daemon（debug，版本 ${VERSION}）"
-  (cd "$ROOT" && PPF_BUILD_VERSION="$VERSION" cargo build -p daemon)
+  (cd "$ROOT" && PPF_BUILD_VERSION="$VERSION" cargo build -p daemon -p decode-worker)
   stage="$(mktemp -d)"
   PPF_DAEMON_PROVISIONPROFILE="$(profile)" \
     "$HELPER_TOOL" dev "$DAEMON_TARGET/debug/daemon" "$stage/ppf-daemon.app"

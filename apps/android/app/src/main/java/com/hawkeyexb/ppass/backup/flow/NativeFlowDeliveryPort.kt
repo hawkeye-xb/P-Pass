@@ -435,6 +435,7 @@ internal class NativeFlowDeliveryPort(
             provider = ticket,
             captureAtMs = request.details.captureAtMs,
             sizeBytes = request.details.sizeBytes.coerceAtLeast(0L),
+            source = request.source,
         )
         val tuple = FlowTupleRef(queueSequence = fetch.queueSequence, pairingId = fetch.pairingId, leaseToken = fetch.leaseToken)
         var desktop: FlowReceiptClient? = null

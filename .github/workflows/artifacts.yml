@@ -106,12 +106,12 @@ jobs:
         run: cargo clean --release -p libheif-sys
 
       - name: Build release binaries
-        run: cargo build --release -p daemon -p testclient
+        run: cargo build --release -p daemon -p testclient -p decode-worker
 
       - name: Bundle self-contained (dylibs + rpath rewrite)
         run: |
           set -euo pipefail
-          tools/bundle-macos.sh /tmp/bin target/release/daemon target/release/testclient
+          tools/bundle-macos.sh /tmp/bin target/release/daemon target/release/testclient target/release/ppf-decoder
           tools/release/with-timeout.sh "编解码库检查反证" 300 1 -- tools/test-check-codec-libs.sh --macos /tmp/bin
           tools/check-codec-libs.sh macos /tmp/bin
 
@@ -172,7 +172,7 @@ jobs:
           packages: libheif-dev libheif-plugin-libde265 ffmpeg
 
       - name: Build release binaries
-        run: cargo build --release -p daemon -p testclient
+        run: cargo build --release -p daemon -p testclient -p decode-worker
 
       - name: Upload to dogfood release (linux-x64)
         env:
@@ -180,7 +180,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/rel
-          cp target/release/daemon target/release/testclient /tmp/rel/
+          cp target/release/daemon target/release/testclient target/release/ppf-decoder /tmp/rel/
           # REL-08 (#510)：同上；Linux 是散装资产，upload 列表直接用清单输出。
           mapfile -t STAGED < <(tools/stage-dogfood-scripts.sh /tmp/rel)
           cd /tmp/rel
@@ -285,10 +285,10 @@ jobs:
           VCPKG_ROOT: "C:\\vcpkg"
         run: |
           set -euo pipefail
-          cargo build --release -p daemon -p testclient
+          cargo build --release -p daemon -p testclient -p decode-worker
           outs=()
           for f in target/release/build/libheif-sys-*/output; do outs+=(--link-output "$f"); done
-          tools/check-codec-libs.sh windows --vcpkg-installed /c/vcpkg/installed "${outs[@]}" target/release/daemon.exe
+          tools/check-codec-libs.sh windows --vcpkg-installed /c/vcpkg/installed "${outs[@]}" target/release/daemon.exe target/release/ppf-decoder.exe
 
       - name: Upload to dogfood release (win-x64)
         shell: bash
@@ -297,7 +297,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/rel
-          cp target/release/daemon.exe target/release/testclient.exe /tmp/rel/
+          cp target/release/daemon.exe target/release/testclient.exe target/release/ppf-decoder.exe /tmp/rel/
           # 冒烟脚本是 Win 真机验证的必需件——复制失败必须响（H-09b：不许 || true 吞掉）
           cp tools/win-smoke.ps1 /tmp/rel/
           cd /tmp/rel

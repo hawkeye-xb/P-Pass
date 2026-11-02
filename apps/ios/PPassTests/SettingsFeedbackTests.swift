@@ -21,6 +21,13 @@ final class SettingsFeedbackTests: XCTestCase {
         func observe(_ onChange: @escaping () -> Void) {}
         func pauseOrResume() async {}
         func wake() async { calls.append("wake") }
+        var rule = true
+        var allowedSent = 0
+        func autoRule() -> Bool { rule }
+        func setAutoRule(_ on: Bool) throws { calls.append("rule=\(on)"); if failWrites { throw Boom() }; rule = on }
+        func sendAllowedPhotos() async -> Int { calls.append("sendAllowed"); return allowedSent }
+        func pickedSummary() -> PickedBatchSummary? { nil }
+        func addPicked(_ items: [(fileName: String, mimeType: String, payload: PickedPayload)]) async {}
         func retryFailed() async throws { calls.append("retry"); if failCommands { throw Boom() } }
         func remainingSnapshot() async throws -> RemainingSnapshot { calls.append("snapshot"); throw Boom() }
         func cancelRemaining(_ snapshot: RemainingSnapshot) async throws -> Int? { calls.append("cancel"); if failCommands { throw Boom() }; return cancelResult }
@@ -143,13 +150,13 @@ final class SettingsFeedbackTests: XCTestCase {
 
     // MARK: #1259 照片权限：不加说明屏（10-29 改决定）
 
-    /// 首次配对、系统还没问过照片权限 → 直接进选范围页，系统框由选范围页读相册时弹（说明写在 NSPhotoLibraryUsageDescription）。
+    /// 首次配对、系统还没问过照片权限 → 直接进照片页（#1272：配对后不要照片权限，打开「自动备份」时才申请、才选范围）。
     /// 配对这一步自己不弹框，也不经过中间屏。
-    func test_first_pairing_goes_straight_to_the_scope_page() {
+    func test_first_pairing_goes_straight_to_the_photos_page() {
         let (app, _, media) = make()
         media.granted = nil
         app.paired(firstTime: true, settingSaveFailed: false)
-        XCTAssertEqual(app.phase, .chooseAlbums)
+        XCTAssertEqual(app.phase, .main)
         XCTAssertEqual(media.requested, 0)
     }
 
@@ -191,11 +198,11 @@ final class SettingsFeedbackTests: XCTestCase {
 
     // MARK: #1039 换新电脑清旧的后台备份意图写失败（对位 Android）
 
-    /// 配对结局带着「清意图没写下来」：照常进选相册，并提示。反证：去掉 `paired` 里设 notice 那段，本条红。
+    /// 配对结局带着「清意图没写下来」：照常进照片页（#1272），并提示。反证：去掉 `paired` 里设 notice 那段，本条红。
     func test_new_desktop_intent_clear_failure_still_goes_on_and_tells_the_user() {
         let (app, _, _) = make()
         app.paired(firstTime: true, settingSaveFailed: true)
-        XCTAssertEqual(app.phase, .chooseAlbums, "不拦配对")
+        XCTAssertEqual(app.phase, .main, "不拦配对")
         XCTAssertEqual(app.notice?.message, L.s("setting_save_failed"))
 
         let (ok, _, _) = make()
@@ -368,28 +375,6 @@ final class SettingsFeedbackTests: XCTestCase {
         XCTAssertEqual(media.since, .since(ms: 1_000))
     }
 
-    /// 首页卡：后台备份没开、没关过卡 → 显示；点「开启」只写意图（iOS 没有 App 内授权框）→ 消失。
-    func test_background_card_enables_background_backup() {
-        let (app, engine, _) = make()
-        XCTAssertTrue(app.showsBackgroundCard)
-        app.enableBackgroundFromCard()
-        XCTAssertTrue(engine.disk.auto)
-        XCTAssertFalse(app.showsBackgroundCard)
-    }
-
-    /// 「不用了」→ 落盘、不再显示。写失败卡片仍在并提示。
-    func test_background_card_dismiss_hides_it() {
-        let (app, engine, _) = make()
-        app.dismissBackgroundCard()
-        XCTAssertFalse(app.showsBackgroundCard)
-        XCTAssertTrue(engine.cardDismissed)
-
-        let (failing, failingEngine, _) = make()
-        failingEngine.failWrites = true
-        failing.dismissBackgroundCard()
-        XCTAssertTrue(failing.showsBackgroundCard, "没写下来就还在")
-        XCTAssertNotNil(failing.notice)
-    }
 
     /// 照片页空库两种说法：没选相册 → 引导去选；选了相册（含「最近项目」）→ 同一句（10-29 文案定稿 C8）。
     func test_photos_empty_hint_follows_the_scope() async {

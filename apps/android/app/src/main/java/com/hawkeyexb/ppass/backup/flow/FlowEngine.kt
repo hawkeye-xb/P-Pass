@@ -24,6 +24,10 @@ import com.hawkeyexb.ppass.backup.order.OrderState
 import com.hawkeyexb.ppass.backup.order.OrderStore
 import com.hawkeyexb.ppass.backup.order.SkipTarget
 import com.hawkeyexb.ppass.backup.order.VolumeState
+import com.hawkeyexb.ppass.backup.picked.PickedItem
+import com.hawkeyexb.ppass.backup.picked.PickedState
+import com.hawkeyexb.ppass.backup.picked.PickedStore
+import com.hawkeyexb.ppass.proto.FLOW_SOURCE_PICKED
 import java.util.UUID
 import com.hawkeyexb.ppass.proto.FLOW_SUPERSEDE_CAPABILITY
 import com.hawkeyexb.ppass.proto.SupersedeRefusal
@@ -91,6 +95,10 @@ internal class FlowEngine(
     private val supersede: SupersedeClient? = null,
     /** #1220：「仅 Wi‑Fi」时流量固定到不计流量的网上；条件检查通过后、第一次连桌面前调用。 */
     private val route: NetworkRoute = NetworkRoute.Default,
+    /** #1272：手选订单。null = 没有这件事（测试用）。取件时优先于自动备份，对账 / 计数碰不到它。 */
+    private val picked: PickedStore? = null,
+    /** #1272：一张手选照片结束（送达 / 已有 / 没传成）——释放它的 URI 持久授权。 */
+    private val onPickedSettled: (PickedItem) -> Unit = {},
 ) {
     // 写 `_status` 就是写原始运行态；要不要刷新通知 / 首页由 [LoopStatusCell] 按「值变了 + 节流」决定。
     private val _status = LoopStatusCell(scope, publish = { foreground.update(it) }, now = monotonicClock)
@@ -765,6 +773,7 @@ internal class FlowEngine(
      * 有别的活时，对账轮照样顺带问一次。
      */
     private suspend fun hasWork(reconcile: Boolean, askPresence: Boolean): Boolean {
+        if (picked?.hasOpen() == true) return true
         // 传输中不看范围（在飞时相册被移出范围的那一行还要改待传输 + 丢弃半截）；待传输只算范围内的——
         // 否则一行范围外的待传输会让每次触发都空转一次 FGS。
         if (store.currentInStates(setOf(OrderState.TRANSFERRING), limit = 1).isNotEmpty()) return true
@@ -819,6 +828,9 @@ internal class FlowEngine(
 
         /** #851：已确认、当时地点被抹的一张——重读原样字节，请桌面原地替换。 */
         data class Upgrade(val order: Order) : WorkItem
+
+        /** #1272：用户手选的一张（系统选择器，不进备份范围）。 */
+        data class Picked(val item: PickedItem) : WorkItem
     }
 
     private sealed interface StepResult {
@@ -828,6 +840,8 @@ internal class FlowEngine(
 
     /** 取件固定优先级：遗留续传 → 对账扫描 → 新照片 → 对账补传（待传输 / 失败重试 / 桌面缺失）。 */
     private suspend fun pickNext(round: Round): WorkItem? {
+        // #1272：手选优先于自动备份（正在传的那张不打断——这里只在两张之间取）。
+        picked?.nextOpen()?.let { return WorkItem.Picked(it) }
         while (true) {
             store.currentInStates(setOf(OrderState.TRANSFERRING), afterId = round.legacyAfter, limit = 1).firstOrNull()?.let {
                 round.legacyAfter = it.id
@@ -953,6 +967,75 @@ internal class FlowEngine(
         is WorkItem.Existing -> processExisting(item.order, pid)
         is WorkItem.Fresh -> processFresh(item.snapshot, item.origin, pid)
         is WorkItem.Upgrade -> processUpgrade(item.order, pid)
+        is WorkItem.Picked -> processPicked(item.item, pid)
+    }
+
+    /**
+     * #1272：传一张手选的照片。和 [processFresh] / [deliverAndCommit] 同一条传输链路（导入 → provider → offer），
+     * 区别只在身份：不查 MediaStore、不建 order、不推进任何游标、不对账；结局记在手选表里。
+     * 电脑上已有同内容（按哈希去重）时桌面在 offer 回复里直接给完成，一个字节没发——记「已有」。
+     */
+    private suspend fun processPicked(item: PickedItem, pid: PairingId): StepResult {
+        val store = checkNotNull(picked)
+        fun settle(state: PickedState): StepResult {
+            store.mark(item.id, state)
+            onPickedSettled(item)
+            bump()
+            return StepResult.Next
+        }
+        store.mark(item.id, PickedState.TRANSFERRING)
+        val imported = try {
+            withContext(io) { importer.importPicked(item.uri) }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            log.log("picked ${item.id}: import failed (${failure.javaClass.simpleName}: ${failure.message})")
+            return settle(PickedState.FAILED)
+        }
+        if (imported !is ImportResult.Imported) return settle(PickedState.FAILED)
+        val hash = imported.contentHash
+        val details = MediaDetails(
+            snapshot = MediaSnapshot(mediaId = 0L, sourceVersion = "", bucketId = 0L, generation = 0L),
+            uri = item.uri,
+            fileName = item.fileName,
+            mimeType = item.mimeType,
+            sizeBytes = imported.sizeBytes,
+            captureAtMs = item.captureAtMs,
+        )
+        val request = DeliveryRequest(item.queueSequence, pid, hash, details, source = FLOW_SOURCE_PICKED)
+        return releasingOnAbort(hash) {
+            _status.value = LoopStatus(LoopPhase.RUNNING, CurrentItem(item.queueSequence, item.fileName, 0L, imported.sizeBytes))
+            var outcome = deliverOnce(request)
+            if (outcome is DeliveryOutcome.ItemFailure) outcome = deliverOnce(request)
+            when (outcome) {
+                is DeliveryOutcome.Confirmed -> {
+                    val receipt = outcome.receipt
+                    val valid = receipt.queueSequence == item.queueSequence && receipt.pairingId == pid &&
+                        (receipt.contentHash == null || receipt.contentHash == hash)
+                    if (!valid) {
+                        importer.release(hash)
+                        settle(PickedState.FAILED)
+                    } else {
+                        val sent = _status.value.current?.bytesSent ?: 0L
+                        settle(if (sent == 0L) PickedState.ALREADY_THERE else PickedState.DELIVERED)
+                    }
+                }
+                DeliveryOutcome.SourceMissing -> {
+                    importer.release(hash)
+                    delivery.discardPartial(item.queueSequence, pid)
+                    settle(PickedState.FAILED)
+                }
+                is DeliveryOutcome.ItemFailure -> {
+                    importer.release(hash)
+                    settle(PickedState.FAILED)
+                }
+                // 路径 / 对端 / 配对 / 版本：这张还没结，留在「传输中」，退出循环，下一次用户在场时续传。
+                is DeliveryOutcome.PathFailure -> StepResult.Exit(WaitReason.DESKTOP_UNREACHABLE)
+                is DeliveryOutcome.PeerFailure -> StepResult.Exit(waitReasonOf(outcome.kind))
+                DeliveryOutcome.PairingLost -> StepResult.Exit(WaitReason.NOT_PAIRED)
+                is DeliveryOutcome.NeedsUpdate -> StepResult.Exit(waitReasonOf(outcome.side))
+            }
+        }
     }
 
     /**

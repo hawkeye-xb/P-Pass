@@ -65,8 +65,11 @@ public struct DefinitiveFacts: Equatable, Sendable {
     /// 用户要后台备份（意图，不是此刻排没排上）。
     public var backgroundRequested: Bool
     public var backgroundRefresh: BackgroundRefreshAvailability
+    /// #1272 B：「自动备份」规则开着。权限被收回 / 改成部分只在规则开着时通知（规则关着是正常状态，不是故障）。
+    public var autoRuleOn: Bool
 
-    public init(pairingId: String?, pairingLost: Bool, mediaAccess: MediaAccessTier, backgroundRequested: Bool, backgroundRefresh: BackgroundRefreshAvailability) {
+    public init(pairingId: String?, pairingLost: Bool, mediaAccess: MediaAccessTier, backgroundRequested: Bool, backgroundRefresh: BackgroundRefreshAvailability, autoRuleOn: Bool = true) {
+        self.autoRuleOn = autoRuleOn
         self.pairingId = pairingId
         self.pairingLost = pairingLost
         self.mediaAccess = mediaAccess
@@ -121,7 +124,7 @@ public func decideDefinitiveNotices(prev: DefinitiveNoticeState, facts: Definiti
 
     // 2. 相册权限：变差才发，回到完整复位；没有基线只记不发；没配对时只记。
     let lastAccess = prev.lastMediaAccess.flatMap(MediaAccessTier.init(rawValue:))
-    if let last = lastAccess, facts.mediaAccess.rank < last.rank, paired {
+    if let last = lastAccess, facts.mediaAccess.rank < last.rank, paired, facts.autoRuleOn {
         post.append(.mediaAccessRevoked(now: facts.mediaAccess))
     }
     if let last = lastAccess, last != .full, facts.mediaAccess == .full {

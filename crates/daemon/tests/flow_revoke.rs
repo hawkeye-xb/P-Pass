@@ -53,6 +53,7 @@ fn request(epoch: &str, lease: &str, hash: [u8; 32], provider: String) -> FlowFe
         provider,
         capture_at_ms: 0,
         size_bytes: 0,
+        source: Default::default(),
     }
 }
 

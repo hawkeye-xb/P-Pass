@@ -596,7 +596,12 @@ pub enum Waiting {
     /// #1253：库位置在，但那里找不到照片库（外置盘没接、文件夹被移走 / 删掉 / 改名，或那里是
     /// 别的库——#1260 库 ID 不符）。不退出、不开库、不起传输，说明原因与路径；用户放回后点
     /// 「重新检查」（`library.recheck`）。`local_base` = 本机服务数据目录（判库 ID 用）。
-    LibraryMissing { dir: PathBuf, local_base: PathBuf },
+    LibraryMissing {
+        dir: PathBuf,
+        local_base: PathBuf,
+        /// #1272：本机索引里「手机手动挑选、已送达」的张数（读不出 = None，窗口不显示那一句）。
+        picked_count: Option<i64>,
+    },
     /// #639：正在搬迁照片库（不开库、不起传输）；只答进度。搬完由 main 改指向后重启。
     Relocating(Arc<crate::relocate::Live>),
 }
@@ -799,9 +804,19 @@ async fn unconfigured_session(
             Waiting::Unconfigured(location) => {
                 unconfigured_dispatch(&req, client, version, started_at, location).await
             }
-            Waiting::LibraryMissing { dir, local_base } => {
-                library_missing_dispatch(&req, client, version, started_at, dir, local_base)
-            }
+            Waiting::LibraryMissing {
+                dir,
+                local_base,
+                picked_count,
+            } => library_missing_dispatch(
+                &req,
+                client,
+                version,
+                started_at,
+                dir,
+                local_base,
+                *picked_count,
+            ),
             Waiting::Relocating(live) => {
                 relocating_dispatch(&req, client, version, started_at, live)
             }
@@ -901,22 +916,27 @@ pub fn library_missing_dispatch(
     started_at: i64,
     dir: &std::path::Path,
     local_base: &std::path::Path,
+    picked_count: Option<i64>,
 ) -> Resp {
     let id = req.id.clone();
     if !client.may_call(&req.method) {
         return Resp::err(id, RespError::new(Reason::RoleForbidden));
     }
     match req.method.as_str() {
-        "status" => Resp::ok(
-            id,
-            serde_json::json!({
+        "status" => {
+            let mut status = serde_json::json!({
                 "library_missing": true,
                 "library_dir": dir.display().to_string(),
                 "version": version,
                 "pid": std::process::id(),
                 "started_at": started_at,
-            }),
-        ),
+            });
+            // #1272：手机上手动挑选传来的照片，手机不会自动补回——有才说（0 / 读不出都不带这个字段）。
+            if let Some(n) = picked_count.filter(|n| *n > 0) {
+                status["library_missing_picked"] = serde_json::json!(n);
+            }
+            Resp::ok(id, status)
+        }
         "daemon.step_down" => Resp::ok(id, serde_json::json!({ "stepping_down": true })),
         "events.subscribe" => Resp::ok(id, serde_json::json!({ "subscribed": true })),
         // 找不到照片库时不改库位置（向导里点「继续」也走到这里）。被拒要留证据：保存失败查得到原因。
@@ -1601,7 +1621,13 @@ impl IpcServer {
                 relocate_resp(id, &self.data_dir, location.platform_dir(), &req.params)
             }
             "status" => match self
-                .status(req.params.get("shell_version").and_then(|v| v.as_str()))
+                .status(
+                    req.params.get("shell_version").and_then(|v| v.as_str()),
+                    req.params
+                        .get("disk_encryption")
+                        .and_then(|v| v.as_str())
+                        .and_then(platform::DiskEncryption::parse),
+                )
                 .await
             {
                 Ok(v) => Resp::ok(id, v),
@@ -2434,7 +2460,13 @@ impl IpcServer {
     }
 
     /// `shell_version`：调用方（桌面壳）自报的版本；给了才算 `shell_relation`。
-    async fn status(&self, shell_version: Option<&str>) -> anyhow::Result<serde_json::Value> {
+    /// `window_disk_encryption`：W-4，窗口程序（主人身份）读到的磁盘加密状态（见
+    /// [`platform::PlatformAdapter::disk_encryption_read_by_window`]）。
+    async fn status(
+        &self,
+        shell_version: Option<&str>,
+        window_disk_encryption: Option<platform::DiskEncryption>,
+    ) -> anyhow::Result<serde_json::Value> {
         let devices = self.db.list_devices().await?;
         let state = self.diag.state();
         // DEV-07 follow-up (#463): the banner is gated on this count — a
@@ -2444,7 +2476,7 @@ impl IpcServer {
         let photo_count = self.db.count_assets().await?;
         let photo_sources = self.db.count_asset_sources().await?;
         let disk = disk_stats(&self.data_dir);
-        let disk_encryption = disk_encryption_cached().await;
+        let disk_encryption = disk_encryption_for_status(window_disk_encryption).await;
         // #1044 B11：低空间通知由 daemon 判定并持久化（low_space.rs）；
         // 待展示的那一次随 status 带出，桌面弹完调 `low_space.ack`。
         // 尽力而为：盘真满时索引库写入可能失败（SQLITE_FULL），那正是最需要
@@ -2635,6 +2667,37 @@ fn disk_stats(path: &std::path::Path) -> Option<DiskStats> {
 /// 磁盘加密状态的缓存时长：状态几乎不变，而 `status` 被界面频繁轮询。
 const DISK_ENCRYPTION_TTL: std::time::Duration = std::time::Duration::from_secs(600);
 
+/// W-4：status 里的磁盘加密状态。平台说由窗口程序读时，只认窗口报来的值（记在内存里，
+/// 其他不带这个参数的 status 调用照样用最近一次的）；否则 daemon 自己读。
+async fn disk_encryption_for_status(
+    from_window: Option<platform::DiskEncryption>,
+) -> platform::DiskEncryption {
+    use platform::PlatformAdapter as _;
+    static FROM_WINDOW: WindowReported = WindowReported::new();
+    if platform::adapter().disk_encryption_read_by_window() {
+        FROM_WINDOW.resolve(from_window)
+    } else {
+        disk_encryption_cached().await
+    }
+}
+
+/// 窗口程序最近一次报来的值。从没报过 ⇒ `Unknown`（不提示，也不当成已开启）。
+struct WindowReported(std::sync::Mutex<Option<platform::DiskEncryption>>);
+
+impl WindowReported {
+    const fn new() -> Self {
+        Self(std::sync::Mutex::new(None))
+    }
+
+    fn resolve(&self, reported: Option<platform::DiskEncryption>) -> platform::DiskEncryption {
+        let mut last = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if reported.is_some() {
+            *last = reported;
+        }
+        last.unwrap_or(platform::DiskEncryption::Unknown)
+    }
+}
+
 /// 带缓存的磁盘加密状态（W-4）。查询放到阻塞线程，失败当 `Unknown`。
 async fn disk_encryption_cached() -> platform::DiskEncryption {
     use platform::PlatformAdapter as _;
@@ -2724,6 +2787,21 @@ fn fresh_audit_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// W-4：服务形态下只认窗口程序报的值。没报过 ⇒ Unknown（不编旧值）；报了 off ⇒ off；
+    /// 之后不带参数的 status 仍是最近一次报的值；新报的值覆盖旧值。
+    /// 反证：resolve 不记住上报（每次只看本次参数）⇒ 第三条变 Unknown，红。
+    #[test]
+    fn disk_encryption_from_window_is_unknown_until_reported_then_remembered() {
+        use platform::DiskEncryption::*;
+        let w = WindowReported::new();
+        assert_eq!(w.resolve(None), Unknown);
+        assert_eq!(w.resolve(Some(Off)), Off);
+        assert_eq!(w.resolve(None), Off);
+        assert_eq!(w.resolve(Some(On)), On);
+        assert_eq!(platform::DiskEncryption::parse("off"), Some(Off));
+        assert_eq!(platform::DiskEncryption::parse("bogus"), None);
+    }
 
     #[test]
     fn sanitize_replaces_home_with_data_marker() {

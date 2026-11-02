@@ -35,6 +35,7 @@
 package com.hawkeyexb.ppass.backup
 
 import android.content.Context
+import com.hawkeyexb.ppass.io.atomicReplace
 import com.hawkeyexb.ppass.transport.PairingStore
 import java.io.File
 import kotlinx.serialization.Serializable
@@ -133,7 +134,7 @@ class BackupHealthPrefs(private val dir: File) {
         dir.mkdirs()
         val tmp = File(dir, "backup_health.json.tmp")
         tmp.writeText(json.encodeToString(BackupHealthState.serializer(), state))
-        check(tmp.renameTo(file)) { "cannot persist backup_health.json" }
+        check(atomicReplace(tmp, file)) { "cannot persist backup_health.json" }
     }
 }
 

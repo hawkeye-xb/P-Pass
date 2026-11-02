@@ -37,6 +37,9 @@ class FakeDelivery : ItemDelivery {
     /** 结局之前的进度脚本（可挂起、可在虚拟时间里 delay）；默认什么都不报。 */
     var progress: suspend (DeliveryRequest, (Long) -> Unit) -> Unit = { _, _ -> }
 
+    /** #1272：桌面上已有的内容 hash。 */
+    val alreadyOnDesktop = mutableSetOf<String>()
+
     val deliveredMediaIds get() = requests.map { it.details.snapshot.mediaId }
 
     override suspend fun deliver(request: DeliveryRequest, onProgress: (Long) -> Unit): DeliveryOutcome {
@@ -49,7 +52,8 @@ class FakeDelivery : ItemDelivery {
             throw c
         }
         progress(request, onProgress)
-        onProgress(request.details.sizeBytes)
+        // #1272：桌面已有同内容（按哈希去重）时 offer 回复就是完成，一个字节没发。
+        if (request.contentHash !in alreadyOnDesktop) onProgress(request.details.sizeBytes)
         val next = script.removeFirstOrNull() ?: { r -> confirmed(r) }
         return next(request)
     }
@@ -238,6 +242,16 @@ internal class FakeImporter(private val media: FakeMedia) : MediaImporter {
         return ImportResult.Imported(hashOverride[mediaId] ?: photo.hash, photo.size, byReference = true, locationRedacted = locationRedacted)
     }
 
+    /** #1272：选择器 URI 读不到的（被删 / 授权丢了）。 */
+    val pickedUnreadable = mutableSetOf<String>()
+    val pickedImported = mutableListOf<String>()
+
+    override fun importPicked(contentUri: String): ImportResult {
+        pickedImported += contentUri
+        if (contentUri in pickedUnreadable) return ImportResult.SourceMissing
+        return ImportResult.Imported("hash:$contentUri", 10L, byReference = false, locationRedacted = true)
+    }
+
     override fun serve(lease: ProviderLease): String = "ticket-${lease.orderId}"
 
     override fun release(contentHash: String) {
@@ -271,6 +285,10 @@ internal class Rig(
     val importer = FakeImporter(media)
     val delivery = FakeDelivery()
     val control = FakeControl()
+
+    /** #1272：手选订单（内存版）；结束的行记在 [pickedSettled]。 */
+    val picked = InMemoryPickedStore()
+    val pickedSettled = mutableListOf<String>()
     val foreground = FakeForeground(control).also { it.clock = { test.testScheduler.currentTime } }
     val scheduler = FakeScheduler()
     var probeResult: ProbeResult = ProbeResult.Reachable()
@@ -351,6 +369,8 @@ internal class Rig(
         },
         appForegroundAt = { appForegroundAt },
         afterCycle = { afterCycles++ },
+        picked = picked,
+        onPickedSettled = { pickedSettled += it.uri },
         route = object : NetworkRoute {
             override suspend fun ensure(): Boolean {
                 netEvents += "route"

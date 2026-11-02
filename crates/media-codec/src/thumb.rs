@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 
 use image::DynamicImage;
 
-use crate::{decode, ffmpeg, quicklook, system_thumb, CodecError, Result};
+use crate::{ffmpeg, quicklook, sandbox, CodecError, Result};
 
 pub const THUMB_SIZES: [u32; 2] = [256, 1024];
 pub const JPEG_QUALITY: u8 = 85;
@@ -36,6 +36,10 @@ pub enum ThumbOutcome {
     /// Decode failed — nothing was written; `reason` is the human-readable
     /// cause. Caller serves [`placeholder_jpeg`] and records thumb_state = 2.
     Placeholder { reason: String },
+    /// 解码子进程本机不可用（系统性问题）：nothing written，也**不**记
+    /// thumb_state = 2 —— 否则一次系统问题会把整库永久冻成占位图
+    /// （DESK-35 同类教训）。调用方走重试，仍先给占位图。
+    Unavailable { reason: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +68,10 @@ pub fn make_thumbs(hash: &[u8; 32], src_path: &Path, thumbs_root: &Path) -> Thum
             paths,
             outcome: ThumbOutcome::Generated,
         },
+        Err(CodecError::SandboxUnavailable(reason)) => ThumbResult {
+            paths,
+            outcome: ThumbOutcome::Unavailable { reason },
+        },
         // DESK-35 (#441): no placeholder at the final paths — see module doc.
         Err(e) => ThumbResult {
             paths,
@@ -79,7 +87,7 @@ fn generate(src_path: &Path, paths: &ThumbPaths) -> Result<()> {
     let img = if core_index::media_kind(src_path) == Some(core_index::MediaKind::Video) {
         first_frame(src_path)?
     } else {
-        decode::decode_image(src_path)?
+        sandbox::decode_image(src_path)?
     };
     // 先合成白底再缩放：非预乘 alpha 直接缩放会把透明像素里的黑色带进边缘。
     let img = flatten_on_white(img);
@@ -105,7 +113,7 @@ fn first_frame(src: &Path) -> Result<DynamicImage> {
                     source,
                 })?;
             ffmpeg::extract_frame(&ff, src, tmp.path())?;
-            decode::decode_image(tmp.path())
+            sandbox::decode_image(tmp.path())
         }
         None => {
             // DESK-16 (#165)：系统兜底两半，按「本平台有没有这个能力」依次问。
@@ -118,15 +126,10 @@ fn first_frame(src: &Path) -> Result<DynamicImage> {
                         source,
                     })?;
                 let png = quicklook::extract_frame(&ql, src, dir.path())?;
-                return decode::decode_image(&png);
+                return sandbox::decode_image(&png);
             }
-            // Windows：Shell 缩略图（COM 在 crates/platform，本 crate 零 cfg）。
-            // 注意这里**不吞 Err**：拿不到缩略图要把原因带出去，而不是并进
-            // FfmpegMissing —— 那会让日志说成"没装 ffmpeg"，与事实不符。
-            if let Some(img) = system_thumb::first_frame(src)? {
-                return Ok(img);
-            }
-            // 两半都没有能力 ⇒ 这台机器确实只剩 ffmpeg 一条路，而它不在。
+            // 没有系统兜底的平台（Windows）⇒ 只剩 ffmpeg 一条路，而它不在，
+            // 视频给占位图。
             Err(CodecError::FfmpegMissing)
         }
     }

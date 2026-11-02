@@ -1,3 +1,4 @@
+import PhotosUI
 import SwiftUI
 
 /// 截图 / 调试用的起始路由：环境变量 `PPASS_ROUTE`（simctl launch 时用 SIMCTL_CHILD_PPASS_ROUTE 传入）。
@@ -34,6 +35,15 @@ struct RootView: View {
         .font(PPFont.body)
         .ppScreen()
         .onAppear(perform: applyLaunchRoute)
+        // #1272：系统照片选择器（设置页「挑几张传」与照片页空状态「先挑几张传」共用）。不传 photoLibrary ⇒ 不需要照片权限；选完就传。
+        .sheet(isPresented: $app.pickerRequested) {
+            PhotoPickerSheet { results in
+                app.pickedChosen(results.enumerated().compactMap { i, r in
+                    PHPickedPayload.describe(r.itemProvider, index: i).map { (fileName: $0.name, mimeType: $0.mime, payload: $0.payload) }
+                })
+            }
+            .ignoresSafeArea()
+        }
         // 设置没存上 / 命令没执行成（#971 #972）：可见的失败反馈，点掉即清。
         .alert(L.s("notice_title"), isPresented: Binding(get: { app.notice != nil }, set: { if !$0 { app.notice = nil } })) {
             Button(L.s("ok_got_it")) {}

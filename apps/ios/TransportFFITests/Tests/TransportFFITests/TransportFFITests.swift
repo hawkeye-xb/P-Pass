@@ -86,7 +86,8 @@ final class TransportFFITests: XCTestCase {
             mediaType: "image/heic",
             provider: "blobaa…ticket",
             captureAtMs: 1_790_243_013_123,
-            sizeBytes: 532_102
+            sizeBytes: 532_102,
+            source: "picked"
         )
         let frame = try encodeFlowFetchRequest(request: request)
 
@@ -106,6 +107,7 @@ final class TransportFFITests: XCTestCase {
         XCTAssertEqual(decoded.provider, request.provider)
         XCTAssertEqual(decoded.captureAtMs, request.captureAtMs)
         XCTAssertEqual(decoded.sizeBytes, request.sizeBytes)
+        XCTAssertEqual(decoded.source, request.source)
         XCTAssertEqual(decoded, request)
 
         // 线上 JSON 用的是 proto 的 snake_case 字段名——Swift 侧 Codable 要对齐的就是它。
@@ -114,7 +116,7 @@ final class TransportFFITests: XCTestCase {
         XCTAssertEqual(
             Set(json.keys),
             ["queue_sequence", "pairing_id", "lease_token", "content_hash", "file_name",
-             "media_type", "provider", "capture_at_ms", "size_bytes"])
+             "media_type", "provider", "capture_at_ms", "size_bytes", "source"])
         XCTAssertEqual(json["file_name"] as? String, request.fileName)
         print("FlowFetchRequest frame \(frame.count) bytes, fields equal ✓")
     }
