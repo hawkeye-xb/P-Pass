@@ -36,14 +36,14 @@ ALL_ENDS = ("android", "ios", "macos", "windows")
 #                                                       （#1124 / #1126 起与 iOS 同一份 uniffi 导出；绑定生成器 --features mobile-bindgen）
 #   iOS      tools/build-ios-transport-xcframework.sh   cargo rustc -p transport --features mobile-ffi
 #                                                       （绑定生成器 --features mobile-bindgen）
-#   macOS    release.yml macos-arm64                    cargo build --release -p daemon + 桌面壳
-#   Windows  release.yml windows-x64                    cargo build --release -p daemon -p testclient + 桌面壳
+#   macOS    release.yml macos-arm64                    cargo build --release -p daemon -p decode-worker + 桌面壳
+#   Windows  release.yml windows-x64                    cargo build --release -p daemon -p testclient -p decode-worker + 桌面壳
 DESKTOP_SHELL = "p-pass-desktop"
 ENTRIES = {
     "android": [("transport", ["mobile-ffi", "mobile-bindgen"])],
     "ios": [("transport", ["mobile-ffi", "mobile-bindgen"])],
-    "macos": [("daemon", []), (DESKTOP_SHELL, [])],
-    "windows": [("daemon", []), ("testclient", []), (DESKTOP_SHELL, [])],
+    "macos": [("daemon", []), ("decode-worker", []), (DESKTOP_SHELL, [])],
+    "windows": [("daemon", []), ("testclient", []), ("decode-worker", []), (DESKTOP_SHELL, [])],
 }
 
 

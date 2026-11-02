@@ -281,7 +281,7 @@ channel 0.1.0-test.90 0.1.0-test.90; tplan v0.1.0-test.5; expect_plan "基线不
 echo "plan-builds（#1062 test tag：Rust 改动按 Cargo 依赖图归属到端）"
 # 最小 Cargo workspace：transport 的 proto 依赖只在 mobile-ffi 下生效（另有一条 dev 依赖）——同真实仓库。
 # 入口（rust-impact.py ENTRIES）：Android transport[mobile-ffi]、iOS transport[mobile-ffi]、
-# macOS daemon、Windows daemon + testclient（夹具里没有桌面壳）。
+# macOS daemon + decode-worker、Windows daemon + testclient + decode-worker（夹具里没有桌面壳）。
 expect4() { # <说明> <android> <macos> <windows> <ios>
   if [ "$RC" = 0 ] && [ "$(get android)" = "$2" ] && [ "$(get macos)" = "$3" ] && [ "$(get windows)" = "$4" ] && [ "$(get ios)" = "$5" ]; then ok "$1"
   else bad "$1（期望 android=$2 macos=$3 windows=$4 ios=$5）" "$OUT"; fi
@@ -296,7 +296,7 @@ crate() { # <目录> <包名> <Cargo.toml 余下内容>
   printf '[package]\nname = "%s"\nversion.workspace = true\nedition = "2021"\n\n%s\n' "$2" "$3" > "$REPO/$1/Cargo.toml"
 }
 ws_toml() { # <workspace 版本> [额外内容]
-  printf '[workspace]\nmembers = ["crates/proto", "crates/transport", "crates/daemon", "crates/platform", "tools/testclient"]\nresolver = "2"\n\n[workspace.package]\nversion = "%s"\n%s' "$1" "${2:-}" > "$REPO/Cargo.toml"
+  printf '[workspace]\nmembers = ["crates/proto", "crates/transport", "crates/daemon", "crates/platform", "tools/testclient", "crates/decode-worker"]\nresolver = "2"\n\n[workspace.package]\nversion = "%s"\n%s' "$1" "${2:-}" > "$REPO/Cargo.toml"
 }
 lock() { # <成员版本> <iroh-x 版本> <iroh-x checksum> <sqlite-x 版本>：transport 用 iroh-x，daemon 用 sqlite-x
   python3 - "$REPO/Cargo.lock" "$@" <<'PY'
@@ -305,7 +305,7 @@ out, v, iv, ic, sv = sys.argv[1:]
 src = 'source = "registry+https://github.com/rust-lang/crates.io-index"'
 def ws(n, deps): return '[[package]]\nname = "%s"\nversion = "%s"\ndependencies = [\n%s]\n' % (n, v, "".join(' "%s",\n' % d for d in deps))
 def ext(n, ver, ck): return '[[package]]\nname = "%s"\nversion = "%s"\n%s\nchecksum = "%s"\n' % (n, ver, src, ck)
-parts = [ws("daemon", ["platform", "proto", "sqlite-x", "transport"]), ext("iroh-x", iv, ic), ws("platform", []), ws("proto", []),
+parts = [ws("daemon", ["platform", "proto", "sqlite-x", "transport"]), ws("decode-worker", []), ext("iroh-x", iv, ic), ws("platform", []), ws("proto", []),
          ext("sqlite-x", sv, "s" + sv), ws("testclient", ["proto", "transport"]), ws("transport", ["iroh-x", "proto"])]
 open(out, "w").write("version = 4\n\n" + "\n".join(parts))
 PY
@@ -325,6 +325,7 @@ crate crates/daemon daemon '[dependencies]
 proto = { path = "../proto" }
 transport = { path = "../transport" }
 platform = { path = "../platform" }'
+crate crates/decode-worker decode-worker ''
 crate tools/testclient testclient '[dependencies]
 proto = { path = "../../crates/proto" }
 transport = { path = "../../crates/transport" }'
@@ -365,6 +366,10 @@ rchk v0.2.0-test.12 "Cargo.lock 解析不了 ⇒ 拿不准 ⇒ 四端都构建" 
   && "${G[@]}" commit -q -m mv && "${G[@]}" tag v0.2.0-test.20
 channel 0.2.0-test.4 0.2.0-test.4 0.2.0-test.4 0.2.0-test.4; tplan v0.2.0-test.20
 expect4 "proto 的文件被挪进 docs/（rename）⇒ 仍按 proto 归属：四端都构建" build build build build
+# 解码子进程 ppf-decoder 随两个桌面端打包：只改 decode-worker 也得重建桌面两端，手机两端不陪跑。
+"${G[@]}" checkout -q v0.2.0-test.5 && touch_ crates/decode-worker/src/lib.rs && "${G[@]}" commit -qam dw && "${G[@]}" tag v0.2.0-test.21
+channel 0.2.0-test.5 0.2.0-test.5 0.2.0-test.5 0.2.0-test.5; tplan v0.2.0-test.21
+expect4 "只改 crates/decode-worker ⇒ 只构建桌面两端（ppf-decoder 随桌面包）" skip build build skip
 # cargo 不可用 / metadata 失败 ⇒ 拿不准 ⇒ 所有端（假 cargo 恒失败；不靠删 PATH）。
 mkdir -p "$TMP/badcargo"; printf '#!/bin/sh\necho "boom" >&2\nexit 1\n' > "$TMP/badcargo/cargo"; chmod +x "$TMP/badcargo/cargo"
 channel 0.2.0-test.1 0.2.0-test.1 0.2.0-test.1 0.2.0-test.1; "${G[@]}" checkout -q v0.2.0-test.2
@@ -380,8 +385,8 @@ has tools/build-android-iroh-blobs-bridge.sh "cargo build -p transport --feature
 has tools/build-android-iroh-blobs-bridge.sh "-p transport --features mobile-bindgen"
 has tools/build-ios-transport-xcframework.sh "-p transport --lib --features mobile-ffi"
 has tools/build-ios-transport-xcframework.sh "-p transport --features mobile-bindgen"
-grep -qE '^ +run: cargo build --release -p daemon$' "$ROOT/.github/workflows/release.yml" && ok "release.yml macOS 只编 daemon" || bad "release.yml macOS 应为 cargo build --release -p daemon（同步 ENTRIES.macos）"
-has .github/workflows/release.yml "run: cargo build --release -p daemon -p testclient"
+grep -qE '^ +run: cargo build --release -p daemon -p decode-worker$' "$ROOT/.github/workflows/release.yml" && ok "release.yml macOS 只编 daemon + decode-worker" || bad "release.yml macOS 应为 cargo build --release -p daemon -p decode-worker（同步 ENTRIES.macos）"
+has .github/workflows/release.yml "run: cargo build --release -p daemon -p testclient -p decode-worker"
 SHELL_PKG=$(sed -n 's/^name = "\(.*\)"/\1/p' "$ROOT/apps/desktop/src-tauri/Cargo.toml" | head -1)
 grep -qF "DESKTOP_SHELL = \"$SHELL_PKG\"" "$ROOT/tools/release/rust-impact.py" && ok "桌面壳包名（${SHELL_PKG}）与 ENTRIES 一致" || bad "桌面壳包名 ${SHELL_PKG} 与 rust-impact.py 的 DESKTOP_SHELL 不一致"
 # 真实仓库的依赖图：钉住「哪个 crate 归哪些端」的现状——有人给 transport 加了 path 依赖，这里先变。
