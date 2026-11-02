@@ -1,7 +1,7 @@
 # ARCH-01 Failure Case and Acceptance Matrix
 
 > English companion · archived 2026-08-29 · aligned with the #413 final design 2026-09-24  
-> Product-rule source: [`ARCH-01`](../../../cards/done/ARCH-01-backup-core-flow-queue-design.md) · [#413](https://github.com/hawkeye-xb/P-Pass/issues/413) · [Final design summary](final-design-413.md) · Chinese primary matrix: [`04-case-matrix.zh-CN.md`](04-case-matrix.zh-CN.md)
+> Product-rule source: [#413](https://github.com/hawkeye-xb/P-Pass/issues/413) · [Final design summary](final-design-413.md) · Chinese primary matrix: [`04-case-matrix.zh-CN.md`](04-case-matrix.zh-CN.md)
 
 This is the pre-production test contract. Every case is first written as a failing behavioral test; minimal implementation is written only after the failure has been observed for the expected reason. The matrix introduces no new product semantics and does not choose a table schema or UI.
 

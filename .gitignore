@@ -66,3 +66,7 @@ apps/ios/build/
 apps/ios/TransportFFITests/Generated/
 apps/ios/TransportFFITests/.build/
 apps/ios/TransportFFITests/.swiftpm/
+
+# 解释器缓存与合并残留：曾误提交过 tools/__pycache__/ 与 Cargo.toml.orig。
+__pycache__/
+*.orig

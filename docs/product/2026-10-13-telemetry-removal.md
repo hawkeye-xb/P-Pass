@@ -15,8 +15,8 @@
 | 接收端是自建的 Cloudflare Worker，代码在 `infra/workers/telemetry/`，按事件类型写入 Cloudflare Analytics Engine | T-061 `1389e1ac`（2026-08-01） |
 | 内置默认端点 `https://telemetry.p-pass.hawkeye-xb.com/ingest`（写在 `config/endpoints.default.toml`） | T-061b-fix `820f3fbd`（2026-08-03） |
 | 开关的内置默认值：`[telemetry] enabled = true`（`endpoints.default.toml`），缺省兜底是 `unwrap_or(true)`（`crates/daemon/src/config.rs`）；可以用 config.toml 或环境变量关闭 | T-004 `23c39117`（2026-07-28） |
-| 事件字典 v2 共五类：`conn` / `flow_item` / `first_byte` / `daemon_alive` / `error`，每条都带 `anon_id` / `ver` / `ts` | `cards/done/OBS-02-telemetry-event-dictionary-usefulness-review.md`；TEL-01 `8ed5179e` |
-| 接线：`conn` / `flow_item` 接在 FlowDelivery 上，`first_byte` 接在 QueryEngine 上，`error` 做了细分码和去重，HTTP 总超时 20 s，队列上限 500 | TEL-02 `517240db`、TEL-04 `30d818eb`、TEL-03 `0c2d86c7`、TEL-05 `413f9d12`；卡片见 `cards/done/TEL-0{1..5}-*.md` |
+| 事件字典 v2 共五类：`conn` / `flow_item` / `first_byte` / `daemon_alive` / `error`，每条都带 `anon_id` / `ver` / `ts` | [OBS-02 卡片](https://github.com/hawkeye-xb/P-Pass/blob/8917fa05/cards/done/OBS-02-telemetry-event-dictionary-usefulness-review.md)；TEL-01 `8ed5179e` |
+| 接线：`conn` / `flow_item` 接在 FlowDelivery 上，`first_byte` 接在 QueryEngine 上，`error` 做了细分码和去重，HTTP 总超时 20 s，队列上限 500 | TEL-02 `517240db`、TEL-04 `30d818eb`、TEL-03 `0c2d86c7`、TEL-05 `413f9d12`；卡片见 [8917fa05 的卡片目录](https://github.com/hawkeye-xb/P-Pass/tree/8917fa05/cards/done) |
 
 ## 2. 实际开启过的范围
 

@@ -183,7 +183,7 @@ class C459SourceMissingTest {
 
     private fun Rig.unrecoverableAudits() = store.pendingAudit(100).filter { it.payload["disposition"] == "UNRECOVERABLE" }
 
-    // 桌面缺 + 原图也删了：意图来源 MOB-87 卡面「对账边界」第 6 条（cards/MOB-87-…:224，与 #415 裁决 2 一致）——
+    // 桌面缺 + 原图也删了：意图来源 MOB-87 卡面「对账边界」第 6 条（已退役卡片，git 历史 8917fa05 可查；与 #415 裁决 2 一致）——
     // 标 UNRECOVERABLE、只落审计事实、**不提示**：不补传、不建新行、不进「无法恢复」横幅。
     // 反证：去掉 runRemotePresence 按 order.sourceMissing 分流的那一支 → 新建一行、取件记「源已删」、横幅 1 张，红。
     @Test

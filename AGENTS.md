@@ -1,158 +1,151 @@
-# P-Pass 执行 agent 工作规范
+# P-Pass 研发工作规范
 
-唯一必读。一页以内，读完就开工。
+唯一必读，适用于任何 agent 与任何外壳。读完就开工；规则只在这里和门禁脚本里，
+不在任何人的私有记忆里。
 
-## 流程（就这一条循环）
+## 角色
 
-```
-issue（为什么做）→ 分支 → PR（怎么做的）→ 验收人 review + CI → squash 合入
-```
+| 角色 | 职责 | 不做 |
+|---|---|---|
+| 产品负责人（人） | 提产品诉求、方向判断、优先级；test 版体验回归；凭据与付费 | 不写、不审代码，不批 PR，不排查 |
+| owner（研发负责人会话） | 把诉求拆成卡、写范围与验收、派活、攒批、全量验证、开批 PR、合入、发 test 版 | 不自己写大块功能 |
+| worker（每卡一个会话） | 在 issue 范围内改代码、本地验证、推分支交卡 | 不碰范围外、不碰核心、不开 PR |
+| QA（每批一个回归会话） | 按 `docs/runbook/full-regression-sop.md` 跑全量回归，出报告 | 不修代码 |
 
-- **执行 session**（验收人给了 issue 号）：`git fetch origin --prune`，确认不落后
-  远端，读该 issue 即全部任务上下文。issue 里 `requires:` 指到的文档才读，
-  否则不读。**没有 QUEUE/PROGRESS/NEXT/cards 需要读——它们已全部退役。**
-- **状态对齐**（问进度/下一个做什么）：看 GitHub Issues + milestone，
-  不在仓里读任何状态文件。
+技术问题 owner 自己定并记录；碰到产品取向（用户感知的行为、隐私、数据去留）的，
+用产品语言写两个选项，打 `needs:product` 交产品负责人拍板，然后接着做别的卡，不干等。
 
-## 红线（违反=事故）
+## 看板：GitHub Issues + 标签
 
-1. **issue 外的活不做。** 发现新问题开新 issue 挂号，继续当前活，不顺手修。
-2. **范围即边界。** 只动 issue「范围」段列出的文件；确需扩大时先改 issue 再改
-   代码，同批 push。产品红线：只做图片，不做文件备份/同步。不做任何遥测 / 使用统计上报，
-   诊断只写本机日志（[决策记录](docs/product/2026-10-13-telemetry-removal.md)）。
-3. **不捏造。** 报绿必须附命令 + 真实输出；故障/安全类判据必须带反证
-   （去掉故障条件必须变红）。"CI 绿"不等于验收。
-4. **凭据只在 GitHub Secrets。** 不进代码、issue、文档；本机路径/设备状态
-   只写 `local-state.md`（不进 git）。
-5. **红测不进 main。** 一 issue 一分支本身就是隔离：红测停下时把红留在自己
-   分支上、别开 PR（或标 draft），并在 issue 里写明停在哪、剩什么。
+一张卡同一时间只有一个状态标签：
 
-## 验收证据分级
+`status:inbox`（新诉求，待 owner 拆）→ `status:ready`（范围、验收场景已写好）→
+`status:doing`（已派给某个会话）→ `status:batched`（进了某个 batch 分支）→ 关闭（合入 main）
 
-- **E1** 编译 + `just ci` 硬门——永远可信
-- **E2** 针对当前架构 case matrix 写的 contract 测试——可信
-- **E3** 真机/真环境实证输出（日志/截图/测试计数）——L3 必需
-- **E4** legacy 测试——仅参考，不许单独作为验收通过依据
+旁路：`status:blocked`（卡住，issue 里写明原因）；`needs:product`（等产品负责人拍板）。
+问进度、下一个做什么，只看 Issues 与 milestone，仓库里没有任何状态文件。
+**想法不进 Issues**：还没决定做的功能放 Discussions 的 Ideas 分类；产品负责人说「要做」后，
+owner 用「Create issue from discussion」转成 issue（类型 Feature，大功能拆子 issue，挂 milestone）。
+agent 只领 Issues，不碰 Discussions。issue 类型：Feature（新能力）/ Bug（行为与预期不符）/ Task（其它）。
+开卡用 issue 模板「任务卡」，字段缺了不受理。
 
-报绿时说明每条结论出自哪一级。
+## 交付流程
 
-## 交付
+**worker：一卡一 worktree，不开 PR。**
 
-- **一 issue 一分支，走 PR 合入，不直推 main。**
-  `git fetch origin && git switch -c <type>/<issue号>-<slug> origin/main`
-  （type ∈ feat/fix/docs/test/ci）。
-- **每个提交都用 `git commit -s` 签名（DCO）**：PR 上的 `CI DCO` 检查逐个提交核对
-  `Signed-off-by` 与 author 一致，缺了就红。漏签用 `git rebase --signoff origin/main` 补。
-- **分支上快验，PR 上全验。** 推分支不触发 CI（四条 lane 的 `push` 限定
-  `branches: [main]`）：纯文档 `just ci-docs`，动了代码 `just ci`。
-  开 PR 才跑 lane，分两档：
-  - `ci-rust` / `ci-desktop` **workflow 层不设 `pull_request.paths`**
-    （CI-07 #189）——它们的检查在 `main` 的必需列表里，而被 paths 跳过的
-    workflow **根本不汇报状态**，必需检查会永久停在 Pending 并挡住合并，
-    带 paths + 设必需 = 自锁。
-    **但跳过被下放到了 job 层**（CI-11 #255）：一个 `changes` job 用
-    `tools/ci-needs-full-lane.sh` 判断，纯文档改动时下游 job 被 `if:` 跳过。
-    被 `if:` 跳过的 job **会汇报 `skipped`，而 `skipped` 对必需检查算通过**
-    （PR #260 实测），所以既省资源又挡得住。
-    ⚠️ 判据是 **allowlist**：只有改动**全部**落在无害清单里才跳过，其余一律跑。
-    往清单里加东西前先确认没有测试或构建脚本读它（`assets/i18n/**` 被 diag
-    测试消费，**不许加**）。
-    判据有**两个 lane**（CI-17 #373），因为 6 个 job 的依赖面不同：**默认**
-    lane（上面那份清单）给 `architecture enforcement` 与 `ci-desktop` 用
-    （`arch-check.sh` 扫 `apps/**`，桌面壳门禁编的就是 `apps/desktop`）；
-    **`rust-workspace`** lane 把 `apps/**` 也算惰性，给 `clippy` / `test` /
-    `test (windows)` / `license+deny` / `fmt` 用（`src-tauri` 是独立 workspace，
-    主 workspace 编不到它；`apps/` 的 Rust 由 `ci-desktop` 自己检查）。
-    ⚠️ 不带 lane 参数 = 默认 lane，这是**向后兼容契约**；未知 lane 一律判要跑。
-  - #1187 起 `ci-android` / `ci-ios` / `ci-docs` 也改成同一套：workflow 层不设
-    paths，`changes` job（`.github/actions/changes` → `tools/ci-paths.sh hit`）按路径判定，
-    没碰到就只跑判定与汇总。**每条 lane 末尾有一个 `if: always()` 的汇总 job**
-    （`CI Rust gate` / `CI Desktop gate` / `CI Android gate` / `CI iOS gate` /
-    `CI Docs gate`，判定 `tools/ci-gate.sh`），main 的必需列表只要求这些汇总、
-    `identity`、`gitleaks` 与 `core review`。`site` 仍按 paths，不进必需列表。
-  - **核心改动要人批**（#1187）：改到 `.github/core-paths.txt` 圈住的文件（安全、数据、
-    协议、更新链、依赖、门禁本身），`CI Core review` 的 `approve` job 挂在 `core-review`
-    环境上等验收人在 Actions 里批准。它用 `pull_request_target` 跑 main 上的定义、
-    不检出 PR 代码——**别给它加 PR 代码的 checkout**。agent 不许调
-    `pending_deployments` 接口替验收人批。
-  - **发版前全量验证**（#1187）：`release.yml` 以 `workflow_call` 调用各条 CI 与 E2E，
-    `create-draft` 等它们全绿；按 `plan-builds` 只验本次要构建的端。
-  - ⚠️ **任何 job 的 `name:` 都不许随手改**：`main` 的必需检查列表绑在名字上，
-    改名 = 全部 PR 永久 Pending。改名和改分支保护必须在同一次操作里成对完成。
-  - ⚠️ **进必需列表的 job，名字必须是写死的常量，不许用 `matrix` 现算。**
-    `job 被 if: 跳过` 与 `name: xxx (${{ matrix.os }})` 这两件事**单独都对，
-    凑一块儿就废**：跳过时 GitHub 不展开 matrix，只汇报一条名叫
-    `xxx (${{ matrix.os }})` 的检查（模板原文），分支保护要的那几个名字一条
-    都不来 ⇒ 必需检查永久 Pending。#240 加 Windows 矩阵、#261 加按需跳过，
-    几小时内先后落地，探针 PR #271 才撞出来（纯文档 PR `BLOCKED`）。
-    **同一次跳过里，名字写死的 job 全都正常汇报 `skipped`，一个没漏**——
-    问题只出在「名字现算」这一个特征上。要跑多平台就拆成多个 job、`name:`
-    各写死，步骤抽进 `.github/actions/<x>/action.yml` 共享（`ci-desktop` 的
-    `desktop-linux` / `desktop-windows` 就是这么做的）。
-    composite action 里每个 `run` 步骤**必须**显式写 `shell:`，且 actionlint
-    默认不扫那个文件，语法错误要到 CI 真跑才暴露。
-- PR 开出后盯受影响域 CI 到结论，红了在同一分支上修，不留红 PR。
-- **带 GitHub MCP 的会话**（协作者账号 `690591397`）：自己把 PR 全程做完——
-  推分支、开 PR（描述里逐项回接收尾检查）、盯 lane、squash 合并。
-  未绑定该账号的 agent：推完分支停下，汇报分支名 + 自验结果 + 预填开 PR
-  链接，开 PR 与合并由验收人在网页完成。
-- PR 合并后清本地：`just cleanup-local`（默认预览，删除要 `--apply`）。
-  本仓走 squash 合并，判断分支能否删看上游 `: gone]`，用 `-D` 不用 `-d`。
+1. `git fetch origin --prune && git worktree add <目录> -b <type>/<issue号>-<slug> origin/main`
+   （type ∈ feat/fix/docs/test/ci）。读该 issue 即全部上下文。
+2. 只改 issue「范围」段列出的路径。确需扩大：先改 issue，再改代码。
+3. 每个提交 `git commit -s`（DCO 门禁）。提交身份必须在 `.github/allowed-identities.txt` 里。
+4. 本地过门禁：动了代码 `just ci`，纯文档 `just ci-docs`；按卡上的验收场景做真机验证。
+5. `git diff --stat origin/main...` 核对改动清单只含本卡文件，然后推分支。
+   在 issue 里回贴：分支名、自验命令与真实输出（标证据等级）。**不开 PR。**
+6. 必须停下上报的四种情况：命中核心、需要改范围外文件、没有可用的验收场景、同一处连红 3 次。
+   在 issue 里写清楚停在哪、剩什么，打 `status:blocked`，接着做下一张卡。
+
+**owner：多卡攒一批，一批一个 PR。**
+
+1. 从最新 `origin/main` 开 `batch/<日期>-<主题>`，把多张卡的分支合进来，卡打 `status:batched`。
+2. 本地全量验证（`just ci` + 全部 `tools/test-*.sh` + 受影响端真机回归）。
+3. 开一个 PR，正文逐卡列出 `closes #N` 与验证证据；盯全部 lane（不只看必需检查）到结论，
+   红了在 batch 分支上修。CI 全绿后 squash 合入。
+4. PR 落后 main：无冲突用 `gh pr update-branch`；有冲突从最新 main 新开分支重放改动，
+   关旧 PR。压缩提交只能 `reset --soft $(git merge-base HEAD origin/main)`，
+   **绝不 `reset --soft origin/main`**（会把旧工作区当新内容提交，撤回别人刚合入的改动）。
+5. 合入后清理：`just cleanup-local`（默认预览，删除要 `--apply`）。squash 合并下判断分支能否删
+   看上游 `: gone]`，删用 `-D`。
+
+## 红线（违反 = 事故）
+
+1. **issue 外的活不做。** 发现新问题开新 issue（`status:inbox`），继续当前活，不顺手修。
+2. **范围即边界。** 只动 issue「范围」段的路径。产品红线：只做图片，不做文件备份/同步；
+   **不做任何遥测 / 使用统计上报**，诊断只写本机日志
+   （[决策记录](docs/product/2026-10-13-telemetry-removal.md)）。改这条红线须产品负责人拍板。
+3. **不捏造。** 报绿必须附命令 + 真实输出；故障/安全类判据必须带反证（去掉故障条件必须变红）。
+   「CI 绿」不等于验收。
+4. **凭据只在 GitHub Secrets。** 不进代码、issue、文档。凭据类方案先 `gh secret list`，
+   优先用现有 secret 的标准解；确需新增，先说清现有的为什么不够。
+   本机路径、设备序列号、机器状态只写本机 `local-state.md`（不进 git）。
+5. **红测不进 main。** 红的停在自己分支上，在 issue 里写明停在哪。
+6. **核心改动先讨论。** `.github/core-paths.txt` 圈住的路径（门禁、配对/身份/加密/协议、
+   存储与迁移、更新链、依赖锁）：worker 只写复现、根因和两个修法，不改代码；
+   由 owner 定或交产品负责人拍板后再实现；批 PR 上的 `core review` 由 owner 批准，worker 不批。
+
+## 产品硬规矩（写卡、改代码、验收都按这些判）
+
+- **占盘 1x**：照片库总占盘 ≈ 照片本身。隔离区、回收站、缓存、staging 只增不删都算违规，
+  不是可选策略。写盘类改动的验收必须 `du -sh` 实测各子目录，不能只数文件。
+- **尊重用户停掉的服务**：自愈、对账、自启、更新恢复时，「用户停过」永远优先于「服务该在」。
+  拿不准是不是用户意图，按「用户停的」处理，只在 App 里给显式开启入口。
+- **读现状初始化，不写迁移**：新开关/偏好没有存值时，按当前真实状态算初值（已授权、已选过
+  的就算开），之后以存值为准。「不写迁移」只针对数据格式，不能让用户已开的功能升级后悄悄停掉。
+- **iOS 没有对外用户**：iOS 本地数据格式直接改，不写旧数据迁移，不考虑升级代价，也不拿这个去问人。
+- **隐私优先**：不采任何敏感信息；对隐私有侵害的，哪怕排查更难也不采。
+- **品牌语言**：组件可以按平台原生，颜色、字体、明暗外观一律以 `assets/design/tokens.json`
+  与 Android 实现为准。偏离品牌语言的提案单独提 `needs:product`，不夹在「原生化」里。
+- **iOS 先对齐 Android**：两端小功能同步迭代，iOS 多出/少掉的按 Android 改；要加就两端一起加。
+  平台惯例（原生导航、下拉刷新等）可以保留。尺寸偏离登记进 `tokens.json` 的 `platforms.ios`
+  并写理由，不在代码里写死。
+- **桌面只改 i18n 副本**（同步 `assets/i18n` 在 Android/iOS 的逐字节副本）可以直接做；
+  任何影响手机行为、协议、真机表现的改动都要在卡上写明并经 owner 确认。
+- **界面文案**：先找行业标准（Android 权限规范、NN/g、Google、Microsoft 写作指南）。提示说现状，
+  不事事给操作建议；每句话只服务这一屏的作用；把已有功能说全，不替用户选；流程能省一屏就省；
+  说后果要准；状态类不提内部组件（写「备份已停止」，不写「后台服务未运行」）。
+  按钮名、词名先 grep 核对实物。
+
+## 验收
+
+- **证据分级**：E1 编译 + `just ci`（永远可信）｜E2 针对当前架构的 contract 测试（可信）｜
+  E3 真机/真环境实证输出（用户看得到的行为必需）｜E4 legacy 测试（仅参考，不能单独作数）。
+  报绿时每条结论标出自哪一级。
+- **真机为准**：用户看得到的行为以真机为准；只有真机造不出来的（写盘失败、系统错误码等）
+  才用单测，并在卡里写明原因。每张卡写明「日志里出现哪一行算通过」，成功路径也要打日志。
+- **只验未知**：先问这一步能证明什么现在不知道的事；能从已有实测推出来的不重测，写明推理依据。
+- **写给人照做的 SOP**：先 grep 界面的显示条件，不凭印象写入口；判定脚本只把真正必需的步骤设成失败项。
+- **删 UI 元素前**先核对它显示的是固定文案还是状态。
+- **界面改动先在本地预览**（桌面：vite dev + mock 在浏览器里把流程点一遍），自己核过再打包给人看。
+- **重复验证写成脚本**，判定交给脚本，不靠反复手动操作。
+
+## 工程纪律
+
+- **删接口 / 升依赖扫全 lane**：`git grep` 覆盖全仓所有语言；每份 `Cargo.lock` 都改到；
+  本地除 `just ci` 外跑全部 `tools/test-*.sh`。细节见 [CI lane](docs/runbook/ci-lanes.md)。
+- **job 的 name 不许随手改**；进必需检查的 job 名必须写死，不许用 `matrix` 现算。
+  理由见 [CI lane](docs/runbook/ci-lanes.md)。
+- **发版按端判定**：Android / macOS / Windows 谁改了才构建谁；test 与正式版走同一套机制。
+  汇报时说「按端判定」，不说「跳过某端」。细则见 `docs/RELEASING.md`。
+- **磁盘**：worktree 里跑 cargo 带 `CARGO_INCREMENTAL=0`，编完删 `target/`。剩余空间
+  低于 15G 先停下报告。清理任何 worktree 前用 `lsof +D <目录>` 核实无人在用；
+  有未推送提交或未提交改动的 worktree 不动。
+- **撞到 bug 被写进测试**：改断言、保意图，不删测试，并在提交说明里登记为什么改了测试。
+- **真机取证**：装完核对运行中的实际二进制版本，同版号的旧进程不会被自动替换；
+  Android debug 包用 `adb shell run-as` 直读私有目录里的账本判定手机侧状态；
+  `adb push` 造的素材要先清 `is_pending`，否则 App 查不到。
+- **改 `assets/i18n/*.json`** 要同步全部消费者（diag 键注册表与计数、手机端副本），
+  清单见 `apps/ios/PPass/I18n/DiagText.swift`，`just mobile-static-check` 兜底。
+- **shell 脚本**：macOS 自带 bash 3.2 下失败的裸 `[[ ]]` 不触发 `set -e`，断言写成 `[[ ... ]] || fail`。
+- 平台分叉只许在 `crates/platform/`，iroh 只在 `crates/transport/`：`just arch-check` 会挡，
+  规则全文见 `tools/arch-check.sh`。工具链版本唯一真相：`rust-toolchain.toml`、`.java-version`。
+- 构建产物、日志、证据不进 main。
+
+## 发版
+
 - tag 只给真发版本。调管线不发版走 Actions → Release → Run workflow。
-- **release/tag 正文 = 面向用户的 changelog（红线级）**：正文以该版本的**用户可见变更**开头
-  （对应 `CHANGELOG.md` 该版本段），**签名状态 / SHA-256 / 资产清单等构建元信息一律往后放**。
-  正文是给在网页上看 Release 的人读的，**不进更新清单**。changelog 内容在 **commit/PR 阶段**
-  维护进 `CHANGELOG.md` 的 `[Unreleased]`，publish 前落成正文。
-- **应用内更新弹窗的说明 = 手写文件**（#741）：版本号涨了的每一端写
-  `release/notes/<端>/<版本>.<zh|en>.txt`，PR 合入后再打 tag。所有生成清单的路径
-  （`release.yml`、`repair-manifests.yml`）一律 `make-update-manifest.mjs --notes-dir release/notes`，
-  产出 `notes`（中文）+ `notes_i18n`；没有文件 ⇒ 说明为空、客户端显示默认文案。
-  不许再把 release 正文 / CHANGELOG 喂进清单（`tools/release-notes.test.mjs` 扫全部 workflow 把关）。
-  写法规则见 `docs/release-notes-rules.md`，发版步骤见 `docs/RELEASING.md` §3 / §3.5。
-- 构建产物、日志不进 main。
-
-## macOS 本地开发
-
-- **日常改动用 `just mac-dev`**：前端走 vite HMR；外壳 Rust 改完由 tauri dev 自动重编、组装、
-  Developer ID 签名、拉起；daemon Rust 改完跑 `just mac-dev daemon`。窗口连本机真实的签名
-  daemon，#1115 的签名校验一字不改。实测：HMR 推送 <0.3s，外壳 Rust 改一行约 10s 重新连上。
-- ⚠️ 开发版与正式包共用 `~/Applications/P-Pass.app`、LaunchAgent、数据目录：**正式包在那里
-  （尤其正在运行）时 mac-dev 直接拒绝**，不替换、不备份。别人可能正拿正式包回归，先确认再
-  自己退出并移走正式版。退出开发模式 = Ctrl+C 后装回正式 dmg。
-- ⚠️ `just mac-dev daemon` 的「换 daemon 后自动重拉外壳」**尚未实测**（daemon 新代码生效约
-  21s 已测）。
-- **只有验打包/签名/公证链路本身时**（发版前、改了 bundle 脚本或签名形状）才打正式签名包
-  （`just verify-m1` / `tools/bundle-desktop-macos.sh`）。
-
-## 机器兜底（`just ci` 会挡，不用背）
-
-- iroh 只在 `crates/transport/`。
-- 平台分叉只许在 `crates/platform/`：自己写 `#[cfg(unix)]` / `#[cfg(windows)]`
-  这类按操作系统分叉的代码，出了 platform crate 门禁必挡——含 `cfg_attr`
-  与 `cfg!` 形态，含 unix/linux/macos/target_family/target_env 全轴；扫
-  `crates/` 与 `apps/`，不扫 `tools/`。判据（QA-09 #186）：框架抹平差异、
-  暴露统一 API 的不算分叉；我们自写「A 平台这样、B 平台那样」才算。两个
-  登记例外：`windows_subsystem` 链接器指令按**属性名**豁免。#211 已关闭，
-  B.2 不再有存量豁免；桌面壳不豁免。
-- 工具链版本唯一真相：`rust-toolchain.toml`（Rust）、CI `java-version`（JDK）。
-- 供应链门禁（SEC-09 #371）：pnpm 11 不许发布不足 24 小时的包进 lockfile。pnpm 版本由
-  `apps/desktop/package.json` 与 `tools/release/signer/package.json` 的 `packageManager` 锁定
-  （Corepack / pnpm 会按它切版本），两处 `pnpm-workspace.yaml` 的 `minimumReleaseAgeStrict: true`
-  让违规直接报错、不自动写豁免。⚠️ 报错提示里的 `pnpm clean --lockfile && pnpm install`
-  **会自己往 `minimumReleaseAgeExclude` 写白名单**（默认 `pnpm install` 也会，缺 strict 时），
-  那是在绕过门禁——别用；正确做法是把该依赖 pin 到发布已久的版本（`overrides` 或写死版本，
-  cutoff 是跑 CI 那一刻往前推 24 小时，留足余量）。任何 `minimumReleaseAgeExclude` 条目都会被
-  `just supply-chain-check` / CI 拦下；确需豁免须在 `tools/release-age-exclude-allowlist.txt`
-  登记并写理由。`site/` 与 `infra/workers/rendezvous/` 用 npm（package-lock.json），不在此门禁内。
+- release 正文 = 面向用户的 changelog：以该版本用户可见变更开头（对应 `CHANGELOG.md`
+  该版本段），签名、SHA-256、资产清单往后放。changelog 在提交阶段写进 `[Unreleased]`。
+- 应用内更新弹窗说明是手写文件：版本号涨了的每一端写 `release/notes/<端>/<版本>.<zh|en>.txt`，
+  合入后再打 tag。规则见 `docs/release-notes-rules.md`，步骤见 `docs/RELEASING.md`。
 
 ## 索引（需要时才打开）
 
-| 你要做什么 | 去哪 |
+| 要做什么 | 去哪 |
 |---|---|
-| 开 issue | GitHub issue 模板「任务卡」 |
-| 本地跑测试 | `just --list` |
-| 真机/模拟器、配对（无需摄像头）、本机 daemon IPC | 本机 `local-state.md`（不进 git，先读它再说"做不到"） |
+| 开卡 | issue 模板「任务卡」 |
+| 本地命令 | `just --list` |
+| CI lane、必需检查、核心路径 | `docs/runbook/ci-lanes.md` |
+| 真机/模拟器、配对、本机 daemon IPC | 本机 `local-state.md`（不进 git，先读它再说「做不到」） |
+| 全量回归 | `docs/runbook/full-regression-sop.md` |
 | 发版、签名、版本纪律 | `docs/RELEASING.md` |
-| 验收协议细则（L 分级由来、抽检法） | `docs/AGENT_PROTOCOL.md` |
-| 历史事故与教训（出同类事故才翻） | `docs/lessons/` |
-| 历史账本与旧卡（档案馆，非常驻阅读） | `docs/PROGRESS.md`、`cards/done/` |
+| 架构规则、验收抽检、自举类改动 | `docs/AGENT_PROTOCOL.md` |
+| 业务规则 | `docs/desktop/business-rules.zh-CN.md` |
+| 历史事故与教训 | `docs/lessons/` |

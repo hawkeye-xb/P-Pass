@@ -133,7 +133,7 @@ jobs:
           fi
           base="${{ github.event.pull_request.base.sha }}"
           # 两个 lane 各算一次（判据同一个脚本，无害清单不同）。
-          #   run_arch  ← 默认 lane：docs/cards/.claude/*.md 才算惰性。
+          #   run_arch  ← 默认 lane：docs/ .claude/ *.md 才算惰性。
           #               给 architecture enforcement 用 —— arch-check.sh 扫 apps/**。
           #   run_heavy ← rust-workspace lane：额外把 apps/** 也算惰性。
           #               给只碰主 workspace 的那五条用。

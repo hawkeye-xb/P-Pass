@@ -123,7 +123,7 @@ Desktop       = 原生 fetch/resume，保存后回完成凭据
 
 相关材料：
 
-- [ARCH-01 备份核心设计](https://github.com/hawkeye-xb/P-Pass/blob/main/cards/ARCH-01-backup-core-flow-queue-design.md)
+- [ARCH-01 备份核心设计](https://github.com/hawkeye-xb/P-Pass/blob/8917fa05/cards/done/ARCH-01-backup-core-flow-queue-design.md)
 - [ARCH-01 失败 Case Matrix](https://github.com/hawkeye-xb/P-Pass/blob/main/docs/design/2026-08-29-arch01-backup-core/04-case-matrix.zh-CN.md)
-- [旧线冻结与新 Flow 边界](https://github.com/hawkeye-xb/P-Pass/blob/main/cards/REBUILD-00-legacy-fence-and-flow-boundary.md)
-- [Worker 切换与三星首包验收](https://github.com/hawkeye-xb/P-Pass/blob/main/cards/done/REBUILD-04-worker-cutover-debug-apk.md)
+- [旧线冻结与新 Flow 边界](https://github.com/hawkeye-xb/P-Pass/blob/8917fa05/cards/done/REBUILD-00-legacy-fence-and-flow-boundary.md)
+- [Worker 切换与三星首包验收](https://github.com/hawkeye-xb/P-Pass/blob/8917fa05/cards/done/REBUILD-04-worker-cutover-debug-apk.md)

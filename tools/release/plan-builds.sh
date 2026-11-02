@@ -24,7 +24,7 @@
 #     正常就是上一个 test tag；上次该端构建失败时是更早那个——那段改动不会被漏掉）。
 #   - 基线拿不到（清单不在 / 读不出 / tag 不存在 / 不是 HEAD 的祖先 / 就是本 tag）或 diff 失败：构建。
 #   - 改动路径分类（反向 allowlist，同 tools/ci-needs-full-lane.sh：没列出的一律算所有端）：
-#       docs/ cards/ .claude/ *.md                                  不影响产物
+#       docs/ .claude/ *.md                                         不影响产物
 #       apps/android/、tools/build-android-iroh-blobs-bridge.sh      只算 Android
 #       apps/desktop/src-tauri/tauri.windows.conf.json              只算 Windows
 #       tools/bundle-macos.sh、tools/bundle-desktop-macos.sh、tools/daemon-helper-macos.sh、tools/fetch-ffmpeg.sh
@@ -98,7 +98,7 @@ if [[ "$TAG" == *-test.* ]]; then
   # 改动路径 → 影响哪些端（空格分隔）：android / macos / windows / desktop（两个桌面端）/ ios / all / none（分类见文件头）。
   classify() {
     case "$1" in
-      docs/* | cards/* | .claude/* | *.md) echo none ;;
+      docs/* | .claude/* | *.md) echo none ;;
       # #348：iOS 界面文案由 Android strings.xml 生成（tools/ios/gen-strings.py）⇒ 同时影响两端。
       apps/android/app/src/main/res/values/strings.xml | apps/android/app/src/main/res/values-zh/strings.xml) echo android ios ;;
       apps/android/* | tools/build-android-iroh-blobs-bridge.sh) echo android ;;

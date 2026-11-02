@@ -29,7 +29,7 @@
 #
 # 所以判定按**依赖面**分成两个 lane，各自独立算、各自保持 allowlist 反向写法：
 #
-#   （默认）        无害清单 = { docs/ cards/ .claude/ *.md }
+#   （默认）        无害清单 = { docs/ .claude/ *.md }
 #                   给「会读 apps/ 的门禁」用：ci-rust 的 arch，以及
 #                   ci-desktop 的两条 job（它们就是编 apps/desktop 的）。
 #                   **语义与本卡之前完全一致**，所以 ci-desktop.yml 不用改。
@@ -68,7 +68,7 @@ set -uo pipefail
 # ── 无害清单 ───────────────────────────────────────────────────────────
 # 每一条都必须先证明它对 Rust / 桌面壳 lane 是惰性的，再往里加。
 # 2026-09-20 的核实依据（grep 全仓 .rs 与 tools/arch-check.sh）：
-#   docs/ cards/ .claude/  没有任何 Rust 代码或门禁脚本读取它们
+#   docs/ .claude/         没有任何 Rust 代码或门禁脚本读取它们
 #                          （例外：docs/desktop/business-rules.zh-CN.md，见 is_inert）
 #                          （core-index/src/ingest.rs 里有一句注释提到 docs
 #                            路径，不是读取）
@@ -88,7 +88,7 @@ is_inert() {
     # 都判「要跑」。新增「Rust 测试读取 apps/ 下某文件」时，同样要把该文件登记在这里。
     apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/flow/FlowContract.kt) return 1 ;;
     apps/ios/Packages/PPassCore/Sources/PPassCore/Flow/FlowTypes.swift) return 1 ;;
-    docs/* | cards/* | .claude/*) return 0 ;;
+    docs/* | .claude/*) return 0 ;;
     *.md) return 0 ;;
   esac
   # 宽 lane 额外把 apps/** 也算惰性。依据见文件头「两个 lane」那段 ——
