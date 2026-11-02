@@ -68,6 +68,12 @@ internal sealed interface ImportResult {
 internal interface MediaImporter {
     fun import(mediaId: Long, contentUri: String, dataPath: String?): ImportResult
 
+    /**
+     * #1272：导入系统照片选择器给的 URI（不是 MediaStore 行，没有 `_id` / `_data`）。选择器的 URI 不支持
+     * `setRequireOriginal`，按普通描述符读；默认实现照旧走 [import]（测试用的假导入器）。
+     */
+    fun importPicked(contentUri: String): ImportResult = import(0L, contentUri, null)
+
     /** 让 provider 以这张 order 的 lease 对外供数，返回 ticket。 */
     fun serve(lease: ProviderLease): String
 

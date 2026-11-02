@@ -44,8 +44,8 @@ class OnboardingSlimWiringTest {
     @Test
     fun engine_and_counts_use_the_full_scope() {
         val runtime = File("src/main/java/com/hawkeyexb/ppass/backup/flow/AndroidFlowRuntime.kt").readText()
-        assertTrue(runtime.contains("ContentResolverMediaSnapshotSource(app, { scopeStore.scope() })"))
-        assertTrue(runtime.contains("inScope = { bucket, added -> scopeStore.scope()?.contains(bucket, added) == true }"))
+        assertTrue(runtime.contains("ContentResolverMediaSnapshotSource(app, { if (ruleOn()) scopeStore.scope() else null })"))
+        assertTrue(runtime.contains("inScope = { bucket, added -> ruleOn() && scopeStore.scope()?.contains(bucket, added) == true }"))
         val holder = File("src/main/java/com/hawkeyexb/ppass/backup/BackupUiStateHolder.kt").readText()
         assertTrue("首页分母跟着新范围算", holder.contains("countAll(it, sinceSec)"))
         assertTrue(holder.contains("g.facts(bucketIds, total, sinceSec)"))
@@ -57,7 +57,7 @@ class OnboardingSlimWiringTest {
         assertTrue("空着时居中给引导", photos.contains("items.isEmpty() && guide != PhotosGuide.None ->"))
         assertTrue("不空时在顶部也给", photos.contains("if (guide != PhotosGuide.None && items.isNotEmpty())"))
         assertFalse("photos_empty 被替换", photos.contains("R.string.photos_empty"))
-        assertTrue(main.contains("noAlbums = !scopeUnreadable && (selectedBucketCount ?: 0) == 0,"))
+        assertTrue(main.contains("noAlbums = ruleOn && !scopeUnreadable && (selectedBucketCount ?: 0) == 0,"))
         assertTrue("按钮直达选范围页", main.contains("onChooseAlbums = { enterBucketPicker(s.pairing, firstTime = false) },"))
         for (dir in listOf("values", "values-zh")) {
             val xml = File("src/main/res/$dir/strings.xml").readText()

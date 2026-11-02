@@ -1754,6 +1754,9 @@
                 <CircleAlertIcon class="size-[18px] flex-none" aria-hidden="true" />{t("ui.library_missing_title")}
               </strong>
               <p class="m-0 whitespace-pre-line text-[14px] leading-[1.6] text-ink">{t("ui.library_missing_body", { dir: status.library_dir })}</p>
+              {#if status.library_missing_picked > 0}
+                <p class="m-0 text-[14px] leading-[1.6] text-ink" data-testid="library-missing-picked">{t("ui.library_missing_picked", { count: status.library_missing_picked })}</p>
+              {/if}
               <Button class="mt-[12px] self-start" disabled={libraryRecheckBusy} onclick={recheckLibraryNow} data-testid="library-recheck">
                 {t("ui.library_missing_recheck")}
               </Button>

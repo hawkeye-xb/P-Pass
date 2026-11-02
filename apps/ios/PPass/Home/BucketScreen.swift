@@ -38,10 +38,6 @@ struct BucketScreen: View {
         } else if let albums {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    if Self.notice(for: app.access) == .partial {
-                        Text(L.s("bucket_partial_access_note")).font(PPFont.sans(14, .semibold, relativeTo: .subheadline))
-                            .foregroundStyle(PPColor.waiting).fixedSize(horizontal: false, vertical: true)
-                    }
                     if Self.offersChoices(Self.notice(for: app.access)) {
                         Text(L.s("bucket_hint")).font(PPFont.sans(14, relativeTo: .subheadline)).foregroundStyle(PPColor.ink40)
                             .fixedSize(horizontal: false, vertical: true)

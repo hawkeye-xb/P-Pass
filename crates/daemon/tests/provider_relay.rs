@@ -57,6 +57,7 @@ fn offer(epoch: &str, seq: u64, hash: [u8; 32], provider: String) -> FlowFetchRe
         provider,
         capture_at_ms: 0,
         size_bytes: 0,
+        source: Default::default(),
     }
 }
 

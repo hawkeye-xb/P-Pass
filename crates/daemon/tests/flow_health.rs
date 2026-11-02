@@ -31,6 +31,7 @@ fn request(lease: &str, hash: [u8; 32], provider: String, size_bytes: i64) -> Fl
         provider,
         capture_at_ms: 0,
         size_bytes,
+        source: Default::default(),
     }
 }
 

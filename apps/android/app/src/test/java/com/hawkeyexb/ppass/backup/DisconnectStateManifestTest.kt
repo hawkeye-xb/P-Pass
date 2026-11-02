@@ -88,6 +88,8 @@ class DisconnectStateManifestTest {
                 fake("databases/backup-orders.db")
                 fake("databases/backup-orders.db-wal")
             }
+            DisconnectState.AUTO_BACKUP_RULE -> AutoBackupRulePrefs(filesDir).set(true)
+            DisconnectState.PICKED_DB -> fake("databases/picked-uploads.db")
             DisconnectState.NATIVE_BLOB_STORE -> fake("files/iroh-blobs-provider/blobs.db")
             DisconnectState.FLOW_MIGRATION_MARKER -> com.hawkeyexb.ppass.backup.flow.migrateLegacyFlowState(filesDir)
             DisconnectState.ONBOARDING_NOTIFICATION_ASK -> fake("files/onboarding_notification_ask.json")

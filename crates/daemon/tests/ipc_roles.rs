@@ -435,6 +435,7 @@ fn library_missing_state_reports_the_path_and_opens_nothing() {
         0,
         dir,
         dir,
+        None,
     );
     assert!(s.ok);
     let r = s.result.unwrap();
@@ -449,6 +450,7 @@ fn library_missing_state_reports_the_path_and_opens_nothing() {
         0,
         dir,
         dir,
+        None,
     );
     assert!(sub.ok, "{:?}", sub.error);
 
@@ -465,6 +467,7 @@ fn library_missing_state_reports_the_path_and_opens_nothing() {
             0,
             dir,
             dir,
+            None,
         );
         assert!(!r.ok, "{m} 不该在库找不到时被答");
         assert_eq!(
@@ -490,6 +493,7 @@ fn library_recheck_answers_from_the_library_marker() {
             0,
             &dir,
             parent.path(),
+            None,
         );
         assert!(r.ok, "{:?}", r.error);
         r.result.unwrap()["found"].as_bool().unwrap()
@@ -551,4 +555,29 @@ fn writes_are_refused_while_relocating() {
             "{m}"
         );
     }
+}
+
+
+/// #1272：库找不到时，手机手动挑选传来的张数随 status 报给窗口（手机不会自动补回，窗口据此说明）。
+/// 0 / 读不出来都不带这个字段。反证：去掉 `filter(|n| *n > 0)` → 0 也带字段，第二组断言红。
+#[test]
+fn library_missing_status_reports_the_picked_count_only_when_there_is_one() {
+    use daemon::ipc::library_missing_dispatch;
+    let dir = std::path::Path::new("/Volumes/My Passport/P-Pass Library");
+    let status = |n| {
+        library_missing_dispatch(
+            &req("status", serde_json::json!({})),
+            IpcClient::Shell,
+            "1.0.0",
+            0,
+            dir,
+            dir,
+            n,
+        )
+        .result
+        .unwrap()
+    };
+    assert_eq!(status(Some(7))["library_missing_picked"], 7);
+    assert!(status(Some(0)).get("library_missing_picked").is_none());
+    assert!(status(None).get("library_missing_picked").is_none());
 }

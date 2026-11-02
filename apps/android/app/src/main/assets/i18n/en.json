@@ -196,6 +196,7 @@
   "ui.wizard_unconfigured_notice": "P-Pass starts backing up once you confirm the photo library location.",
   "ui.library_missing_title": "Photo library not found",
   "ui.library_missing_body": "Original location: {dir}\n\nAfter reconnecting the drive or moving the folder back, click \"Check again\".",
+  "ui.library_missing_picked": "Photos picked by hand on the phone ({count}) are not re-sent automatically. Pick them again on the phone.",
   "ui.library_missing_notice_title": "Backup paused",
   "ui.library_missing_notice_body": "Photo library not found.",
   "ui.library_missing_recheck": "Check again",

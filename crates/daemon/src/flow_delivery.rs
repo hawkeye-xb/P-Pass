@@ -1713,6 +1713,8 @@ impl FlowDelivery {
             provider: request.provider.clone(),
             state: FlowGrantState::Active,
             receipt_id: None,
+            // #1272: recorded as the phone reported it; an old phone reports nothing → auto.
+            source: request.source.as_str().into(),
         })
     }
 
@@ -1928,6 +1930,7 @@ fn resume_request(grant: &FlowGrant) -> FlowFetchRequest {
         capture_at_ms: 0,
         // Only the offer-time precheck reads it; a respawn is past that.
         size_bytes: 0,
+        source: proto::FlowItemSource::from_wire(&grant.source),
     }
 }
 

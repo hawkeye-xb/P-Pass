@@ -25,30 +25,13 @@ class BackgroundBackupPresentationContractTest {
         assertFalse("onboarding 不许申请后台授权", buckets.contains("requestIntent()"))
         assertFalse("onboarding 不许申请通知权限", buckets.contains("POST_NOTIFICATIONS"))
         assertFalse("完成页已删除", main.contains("Screen.Started"))
-        // 首页卡片点「开启」：已在白名单 = 设置页开关同一条路；不在白名单 = 卡片自己的申请，弹框前不写意图，
-        // 被拒什么都不写（仍是「关」，卡片留着，不变成告警）；授予才按「开」落盘。
-        assertTrue(main.contains("onEnableBackgroundBackup = onEnableFromOffer,"))
+        // #1272：首页「开启后台备份」卡片已删（「App 关着也传」就在「自动备份」下面）；设置页开关照旧。
         assertTrue(main.contains("onToggleAutoBackup = onToggleAutoBackup,"))
-        val offer = main.substringAfter("val onEnableFromOffer = {").substringBefore("\n            }")
-        assertTrue(offer.contains("onToggleAutoBackup(true)"))
-        assertTrue(offer.contains("offerBatteryPermission.launch(backgroundAuthorization.requestIntent())"))
-        assertFalse("卡片路径弹框前不许写意图", offer.contains("setRequested"))
-        val result = main.substringAfter("val offerBatteryPermission = rememberLauncherForActivityResult(").substringBefore("val onEnableFromOffer")
-        assertTrue(result.contains("if (batteryWhitelisted && settingsWriter.write(\"autoBackup\", true) { enableAutoBackup(context) })"))
-        assertFalse("被拒不许挂起成「等授权」", result.contains("suspendAutoBackupUntilAuthorized"))
-        assertFalse(result.contains("setRequested"))
-        // 10-29 定稿：卡片只放在设置页，照片页顶部不放告示（10-19 原则，与 iOS 对齐）；NoticeHost 不接它。
-        // 反证：卡片仍挂在 NoticeHost（照片 / 设置两页共用）→ 下面任一条红。
+        assertFalse("卡片已删", main.contains("offerBackgroundBackup"))
+        assertFalse("卡片已删", source("ui/HomeScreen.kt").contains("ENABLE_BACKGROUND_BACKUP"))
         val host = source("ui/HomeNotices.kt").substringAfter("fun NoticeHost(")
         assertFalse(host.contains("background_backup_offer"))
-        assertFalse(host.contains("ENABLE_BACKGROUND_BACKUP"))
         assertFalse(source("ui/PhotosScreen.kt").contains("background_backup_offer"))
-        assertTrue(source("ui/HomeScreen.kt").contains("kind = HomeNoticeKind.ENABLE_BACKGROUND_BACKUP"))
-        val tabs = main.substringAfter("TwoTabs(")
-        val noticeArg = tabs.substringAfter("notice = ").substringBefore("photos = {")
-        assertFalse(noticeArg.contains("offerBackgroundBackup"))
-        val homeCall = tabs.substringAfter("HomeScreen(").substringBefore("if (pendingWifiOff)")
-        assertTrue(homeCall.contains("offerBackgroundBackup = showBackgroundBackupOffer(backgroundBackupState, offerDismissed),"))
     }
 
     @Test

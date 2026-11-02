@@ -278,6 +278,10 @@ fun HomeScreen(
     countsReadable: Boolean = true,
     scopeSaved: Boolean = true,
     onOpenBucketPicker: () -> Unit = {},
+    /** #1272：「挑几张传」——系统照片选择器，不需要照片权限。 */
+    onPickPhotos: () -> Unit = {},
+    /** #1272：最近一批手选的进度 / 结果（null = 没挑过）。 */
+    pickedBatch: com.hawkeyexb.ppass.backup.picked.PickedBatchSummary? = null,
     // MOB-02 §二 / MOB-94: 相册权限三档——非 FULL 时 hero 显示引导卡顶替
     // 三元组（拿不到完整相册时 N/M 是假数），一键去系统设置。
     //
@@ -325,11 +329,13 @@ fun HomeScreen(
     // onCheckUpdate 非 null 才渲染该行——行为判定全在 UpdateUiController。
     updateRowValue: String? = null,
     onCheckUpdate: (() -> Unit)? = null,
-    // #1263：「开启后台备份」卡片（判据见 showBackgroundBackupOffer）。onboarding 不再问后台备份，
-    // 卡片只放在设置页——照片页是浏览用的，顶部不放告示（10-19 原则，与 iOS 对齐）。
-    offerBackgroundBackup: Boolean = false,
-    onEnableBackgroundBackup: () -> Unit = {},
-    onDismissBackgroundBackupOffer: () -> Unit = {},
+    /** #1272：「自动备份」规则开关（以后哪些照片自动送到电脑）。关着是正常状态，不是故障。 */
+    autoBackupRuleOn: Boolean = true,
+    /** #1272 §5：备份范围设了开始时间（「从今天起」）。 */
+    scopeHasStart: Boolean = false,
+    onToggleAutoBackupRule: (Boolean) -> Unit = {},
+    /** #1272：开关下方一行小字（没有照片权限 / 权限被收回或改成部分）。 */
+    autoBackupRuleHintRes: Int? = null,
 ) {
     val line = statusLineOf(state, triplet?.k ?: 0L)
     val busy = line is StatusLine.Working
@@ -339,19 +345,30 @@ fun HomeScreen(
     // "什么时候备份"子页（用户实机反馈：设计稿 M10 就是直接开关行，
     // 折进子页是上一轮自己想当然加的一层，设计稿没有）。
     var showStorageDetail by remember { mutableStateOf(false) }
+    var showMore by remember { mutableStateOf(false) }
     androidx.compose.material3.ProvideTextStyle(
         androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
     ) {
     if (showStorageDetail) {
-        BackHandler { showStorageDetail = false; onStorageDetailOpenChange(false) }
+        BackHandler { showStorageDetail = false }
         StorageComputerDetail(
             storageName = storageName,
             pairedAt = pairedAt,
             confirmedCount = triplet?.m ?: 0L,
             lastSuccessAt = triplet?.lastSuccessAt ?: 0L,
             pairingLost = pairingLost,
-            onBack = { showStorageDetail = false; onStorageDetailOpenChange(false) },
+            // #1272：详情在「更多」里打开，返回回到「更多」（底栏仍收着）。
+            onBack = { showStorageDetail = false },
             onDisconnect = onDisconnect,
+        )
+    } else if (showMore) {
+        BackHandler { showMore = false; onStorageDetailOpenChange(false) }
+        MorePage(
+            storageName = storageName,
+            onOpenStorage = { showStorageDetail = true },
+            onCheckUpdate = onCheckUpdate,
+            updateRowValue = updateRowValue,
+            onBack = { showMore = false; onStorageDetailOpenChange(false) },
         )
     } else {
 
@@ -391,17 +408,23 @@ fun HomeScreen(
         // MOB-02 §二: 部分授权下不显示假 0/0——引导卡顶替三元组，
         // 诚实说明「只授权了部分照片——备份需要完整相册权限」+ 去设置。
         Surface(
-            color = if (mediaAccess != MediaAccess.FULL) PPColor.ActBg else PPColor.SafeBg,
+            color = if (autoBackupRuleOn && mediaAccess != MediaAccess.FULL) PPColor.ActBg else PPColor.SafeBg,
             shape = RoundedCornerShape(PPSize.RadiusCard),
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column(Modifier.padding(20.dp)) {
-                if (mediaAccess != MediaAccess.FULL) {
-                    MediaAccessCardContent(mediaAccess, onOpenAppSettings)
+                if (!autoBackupRuleOn) {
+                    // #1272：没开自动备份是正常状态，不显示「无照片访问权限 / 还没有选择相册」。
+                    Text(stringResource(R.string.auto_backup_off_hero), color = PPColor.Ink, fontSize = 15.sp)
+                } else if (mediaAccess != MediaAccess.FULL) {
+                    Text(stringResource(R.string.auto_backup_blocked_hero), color = PPColor.Ink, fontSize = 15.sp)
                 } else {
                 val t = triplet
                 val heroRender = heroRenderOf(mediaAccess, t, countsReadable = countsReadable, scopeSaved = scopeSaved)
-                if (heroRender == HeroRender.Triplet && t != null) {
+                if (heroRender == HeroRender.Triplet && t != null && t.n == 0L && t.m == 0L && scopeHasStart) {
+                    // #1272 §5：「从某天起」且范围里还没有照片——空状态一句话（拍完回到 P-Pass，前台补捞会把它传上去）。
+                    Text(stringResource(R.string.auto_backup_from_today_empty), color = PPColor.Ink, fontSize = 15.sp)
+                } else if (heroRender == HeroRender.Triplet && t != null) {
                     // UI-16 规则 G：五条闸门全过才准绿；任一条不成立退回墨色。
                     // 恒绿的那两行是本卡要修的缺陷本体——配对已断/有失败待处理/
                     // 被按停时，绿色是在替一件没发生的事作保。
@@ -725,21 +748,6 @@ fun HomeScreen(
                 )
             )
         }
-        // #1263：点「开启」申请电池白名单，授予了才算开（拒绝时卡片留着）；右上角 ×（沿用原「不再提示」的持久化）记下来，之后不再出现，
-        // 下面的后台备份开关照旧可用。
-        if (offerBackgroundBackup) {
-            Spacer(Modifier.height(12.dp))
-            NoticeCard(
-                HomeNotice(
-                    kind = HomeNoticeKind.ENABLE_BACKGROUND_BACKUP,
-                    body = stringResource(R.string.background_backup_offer),
-                    actionLabel = stringResource(R.string.background_backup_offer_action),
-                    onAction = onEnableBackgroundBackup,
-                    closeLabel = stringResource(R.string.background_backup_offer_close),
-                    onClose = onDismissBackgroundBackupOffer,
-                )
-            )
-        }
         // ── "备份"（M10，全页面状态稿）：4 行——第 1 行导航到选相册，
         // 后 3 行是直接开关（不折进子页——用户实机反馈上一轮把充电/
         // WiFi 折进"什么时候备份"子页是自己想当然加的一层，设计稿就是
@@ -755,18 +763,80 @@ fun HomeScreen(
             modifier = Modifier.fillMaxWidth(),
         ) {
             Column {
-                CellRow(
-                    label = stringResource(R.string.backup_scope),
-                    value = if (scopeUnreadable) {
-                        stringResource(R.string.backup_scope_unreadable)
-                    } else {
-                        backupScopeRowCount(selectedBucketCount)?.let {
-                            val albums = pluralStringResource(R.plurals.backup_scope_n, it, it)
-                            if (scopeTimeLabel != null) stringResource(R.string.backup_scope_with_time, albums, scopeTimeLabel) else albums
-                        } ?: stringResource(R.string.backup_scope_none)
-                    },
-                    onClick = onOpenBucketPicker,
+                RuleSwitchRow(
+                    label = stringResource(R.string.auto_backup_rule_label),
+                    checked = autoBackupRuleOn,
+                    onCheckedChange = onToggleAutoBackupRule,
+                    hint = autoBackupRuleHintRes?.let { stringResource(it) },
+                    hintColor = PPColor.Waiting,
                 )
+                // #1272：没开自动备份时「挑几张传」排在紧挨开关的位置；开着时降级到「通知」下面，普通行。
+                if (!autoBackupRuleOn) {
+                    HorizontalDivider(color = PPColor.Divider)
+                    CellRow(
+                        label = stringResource(R.string.pick_photos_label),
+                        value = pickedBatch?.let { pickedBatchLine(it) },
+                        onClick = onPickPhotos,
+                    )
+                }
+                if (autoBackupRuleOn) {
+                    HorizontalDivider(color = PPColor.Divider)
+                    CellRow(
+                        label = stringResource(R.string.backup_scope),
+                        value = if (scopeUnreadable) {
+                            stringResource(R.string.backup_scope_unreadable)
+                        } else {
+                            backupScopeRowCount(selectedBucketCount)?.let {
+                                val albums = pluralStringResource(R.plurals.backup_scope_n, it, it)
+                                if (scopeTimeLabel != null) stringResource(R.string.backup_scope_with_time, albums, scopeTimeLabel) else albums
+                            } ?: stringResource(R.string.backup_scope_none)
+                        },
+                        onClick = onOpenBucketPicker,
+                    )
+                    HorizontalDivider(color = PPColor.Divider)
+                    RuleSwitchRow(
+                        label = stringResource(R.string.auto_backup_pause),
+                        checked = autoBackupEnabled,
+                        onCheckedChange = onToggleAutoBackup,
+                        hint = if (backgroundBackupState != BackgroundBackupState.OffByUser &&
+                            backgroundBackupState != BackgroundBackupState.Armed
+                        ) {
+                            stringResource(
+                                when (backgroundBackupState) {
+                                    BackgroundBackupState.NeedsSystemAuthorization ->
+                                        R.string.background_backup_needs_authorization
+                                    BackgroundBackupState.SystemStoppedWatcher ->
+                                        R.string.background_backup_system_stopped
+                                    else -> error("unreachable: OffByUser/Armed excluded above")
+                                },
+                            )
+                        } else null,
+                        hintColor = PPColor.Waiting,
+                        onHintClick = onResolveBackgroundBackup,
+                    )
+                }
+                HorizontalDivider(color = PPColor.Divider)
+                RuleSwitchRow(
+                    label = stringResource(R.string.setting_wifi_only),
+                    checked = wifiOnly,
+                    onCheckedChange = onWifiOnlyChange,
+                )
+                HorizontalDivider(color = PPColor.Divider)
+                RuleSwitchRow(
+                    label = stringResource(R.string.rule_notify),
+                    checked = notifyOnFailure,
+                    onCheckedChange = onNotifyOnFailureChange,
+                    // #130：短标题「通知」+ 中性小字说明管哪几类（默认 Ink40、不可点——这不是待处理状态）。
+                    hint = stringResource(R.string.rule_notify_hint),
+                )
+                if (autoBackupRuleOn) {
+                    HorizontalDivider(color = PPColor.Divider)
+                    CellRow(
+                        label = stringResource(R.string.pick_photos_label),
+                        value = pickedBatch?.let { pickedBatchLine(it) },
+                        onClick = onPickPhotos,
+                    )
+                }
                 // #418：「取消剩余 N 张」——跟「备份哪些相册」同属「这次备份包含什么」的
                 // 语义线。N 与引擎取消时写下的张数是同一个函数算的；点了先现算一次 N，
                 // 再弹确认框写明 N。取消掉的照片进下面「已跳过的照片」那一行，可以恢复。
@@ -803,48 +873,50 @@ fun HomeScreen(
                         ),
                     )
                 }
-                HorizontalDivider(color = PPColor.Divider)
-                RuleSwitchRow(
-                    label = stringResource(R.string.auto_backup_pause),
-                    checked = autoBackupEnabled,
-                    onCheckedChange = onToggleAutoBackup,
-                    hint = if (backgroundBackupState != BackgroundBackupState.OffByUser &&
-                        backgroundBackupState != BackgroundBackupState.Armed
-                    ) {
-                        stringResource(
-                            when (backgroundBackupState) {
-                                BackgroundBackupState.NeedsSystemAuthorization ->
-                                    R.string.background_backup_needs_authorization
-                                BackgroundBackupState.SystemStoppedWatcher ->
-                                    R.string.background_backup_system_stopped
-                                else -> error("unreachable: OffByUser/Armed excluded above")
-                            },
-                        )
-                    } else null,
-                    hintColor = PPColor.Waiting,
-                    onHintClick = onResolveBackgroundBackup,
-                )
-                HorizontalDivider(color = PPColor.Divider)
-                RuleSwitchRow(
-                    label = stringResource(R.string.setting_wifi_only),
-                    checked = wifiOnly,
-                    onCheckedChange = onWifiOnlyChange,
-                )
-                HorizontalDivider(color = PPColor.Divider)
-                RuleSwitchRow(
-                    label = stringResource(R.string.rule_notify),
-                    checked = notifyOnFailure,
-                    onCheckedChange = onNotifyOnFailureChange,
-                    // #130：短标题「通知」+ 中性小字说明管哪几类（默认 Ink40、不可点——这不是待处理状态）。
-                    hint = stringResource(R.string.rule_notify_hint),
-                )
             }
         }
 
-        // 2026-09-14（用户拍板，与「备份」section 标签同一决策）：去掉
-        // "关于"标签——卡片边框已把存储电脑+版本这两行圈成一组，标签是
-        // 信息增量为 0 的重复。
+        // #1272：存储电脑详情、版本、检查更新收进「更多」二级页（断开连接仍在存储电脑详情里）。
         Spacer(Modifier.height(18.dp))
+        Surface(
+            color = PPColor.Paper,
+            shape = RoundedCornerShape(PPSize.RadiusCard),
+            border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Border),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            CellRow(
+                label = stringResource(R.string.more_label),
+                onClick = { showMore = true; onStorageDetailOpenChange(true) },
+            )
+        }
+
+        Spacer(Modifier.height(8.dp))
+    }
+    }
+    }
+}
+
+/** #1272「更多」二级页：存储电脑（点开详情，断开连接在里面）、版本、检查更新。 */
+@Composable
+private fun MorePage(
+    storageName: String,
+    onOpenStorage: () -> Unit,
+    onCheckUpdate: (() -> Unit)?,
+    updateRowValue: String?,
+    onBack: () -> Unit,
+) {
+    Column(Modifier.fillMaxSize().background(PPColor.Paper).padding(20.dp, 14.dp, 20.dp, 8.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "‹", fontSize = 24.sp, color = PPColor.Ink,
+                modifier = Modifier.clickable(onClick = onBack).padding(4.dp, 0.dp, 12.dp, 0.dp),
+            )
+            Text(
+                stringResource(R.string.more_label),
+                fontSize = 24.sp, fontFamily = PPFont.Serif, color = PPColor.Ink,
+            )
+        }
+        Spacer(Modifier.height(16.dp))
         Surface(
             color = PPColor.Paper,
             shape = RoundedCornerShape(PPSize.RadiusCard),
@@ -858,7 +930,7 @@ fun HomeScreen(
                 CellRow(
                     label = stringResource(R.string.storage_computer),
                     value = storageName,
-                    onClick = { showStorageDetail = true; onStorageDetailOpenChange(true) },
+                    onClick = onOpenStorage,
                 )
                 HorizontalDivider(color = PPColor.Divider)
                 Row(
@@ -887,10 +959,6 @@ fun HomeScreen(
                 }
             }
         }
-
-        Spacer(Modifier.height(8.dp))
-    }
-    }
     }
 }
 
@@ -1043,7 +1111,7 @@ private fun idleStatusText(
     backgroundBackupState: BackgroundBackupState,
     wifiOnly: Boolean,
 ): String = when (line) {
-    is StatusLine.NoAlbums -> stringResource(R.string.state_no_albums)
+    is StatusLine.NoAlbums -> stringResource(R.string.backup_scope_none)
     is StatusLine.Pending -> pluralStringResource(R.plurals.state_pending, line.k.toInt(), line.k)
     // UI-16 规则 S：闸门不过时退回既有的中性分支，**不许**说「都存好了」。
     is StatusLine.AllSafe ->
@@ -1204,56 +1272,16 @@ private fun CellRow(label: String, value: String? = null, onClick: (() -> Unit)?
     }
 }
 
-/**
- * MOB-02 §二 / MOB-94：权限不全（只给了部分 / 一张都不给）时的引导卡内容。设置页英雄卡与照片页（10-29）共用这一份，
- * 外面的底色卡由调用方给（英雄卡自己就是那张 Surface）。
- */
+/** #1272：手选这一批的进度 / 结果句（大卡片下的一行）。没挑过 = null。 */
 @Composable
-internal fun MediaAccessCardContent(mediaAccess: MediaAccess, onOpenAppSettings: () -> Unit) {
-    Column {
-        // MOB-94: 两档各说各的话。「只给了部分」和「一张都不给」
-        // 对用户是两件事，共用一句文案等于两边都说不准。
-        val noAccess = mediaAccess == MediaAccess.NONE
-        Text(
-            stringResource(
-                if (noAccess) R.string.no_media_access_title
-                else R.string.partial_access_title
-            ),
-            fontSize = 16.sp, fontWeight = FontWeight.Bold, color = PPColor.Act,
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            stringResource(
-                if (noAccess) R.string.no_media_access_body
-                else R.string.partial_access_body
-            ),
-            fontSize = 14.sp, lineHeight = 21.sp, color = PPColor.Ink60,
-        )
-        Spacer(Modifier.height(12.dp))
-        Button(
-            onClick = onOpenAppSettings,
-            modifier = Modifier.fillMaxWidth().height(PPSize.TapMin),
-            shape = RoundedCornerShape(PPSize.RadiusControl),
-            colors = ButtonDefaults.buttonColors(
-                containerColor = PPColor.Ink, contentColor = PPColor.Paper,
-            ),
-        ) {
-            Text(
-                stringResource(R.string.partial_access_action),
-                fontSize = 17.sp, fontWeight = FontWeight.Bold,
-            )
-        }
+private fun pickedBatchLine(batch: com.hawkeyexb.ppass.backup.picked.PickedBatchSummary): String? {
+    if (batch.open > 0) return stringResource(R.string.picked_progress, batch.settled + 1, batch.total)
+    val reached = batch.delivered + batch.alreadyThere
+    val head = when {
+        reached == 0 -> null
+        batch.alreadyThere > 0 -> stringResource(R.string.picked_result_with_existing, reached, batch.alreadyThere)
+        else -> stringResource(R.string.picked_result_delivered, reached)
     }
-}
-
-/** 照片页用的独立一张：底色、圆角、内边距与设置页英雄卡一致。 */
-@Composable
-internal fun MediaAccessCard(mediaAccess: MediaAccess, onOpenAppSettings: () -> Unit, modifier: Modifier = Modifier) {
-    Surface(
-        color = PPColor.ActBg,
-        shape = RoundedCornerShape(PPSize.RadiusCard),
-        modifier = modifier,
-    ) {
-        Box(Modifier.padding(20.dp)) { MediaAccessCardContent(mediaAccess, onOpenAppSettings) }
-    }
+    val tail = if (batch.failed > 0) stringResource(R.string.picked_result_failed, batch.failed) else null
+    return listOfNotNull(head, tail).joinToString(" · ").ifEmpty { null }
 }

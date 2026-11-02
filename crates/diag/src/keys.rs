@@ -269,6 +269,8 @@ msg_keys! {
     UI_WIZARD_UNCONFIGURED_NOTICE => "ui.wizard_unconfigured_notice",
     UI_LIBRARY_MISSING_TITLE => "ui.library_missing_title",
     UI_LIBRARY_MISSING_BODY => "ui.library_missing_body",
+    /// #1272：库找不到时，手机上手动挑选传来的张数说明（手机不会自动补回）。
+    UI_LIBRARY_MISSING_PICKED => "ui.library_missing_picked",
     /// #1253：照片库找不到时系统通知的标题。
     UI_LIBRARY_MISSING_NOTICE_TITLE => "ui.library_missing_notice_title",
     UI_LIBRARY_MISSING_NOTICE_BODY => "ui.library_missing_notice_body",
@@ -813,6 +815,7 @@ mod tests {
             UI_WIZARD_UNCONFIGURED_NOTICE,
             UI_LIBRARY_MISSING_TITLE,
             UI_LIBRARY_MISSING_BODY,
+            UI_LIBRARY_MISSING_PICKED,
             UI_LIBRARY_MISSING_NOTICE_TITLE,
             UI_LIBRARY_MISSING_NOTICE_BODY,
             UI_LIBRARY_MISSING_RECHECK,
@@ -846,7 +849,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 364);
+        assert_eq!(ALL.len(), 365);
     }
 
     #[test]
