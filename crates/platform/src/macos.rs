@@ -639,51 +639,20 @@ impl HostingAdapter for MacosAdapter {
     }
 
     fn install_autostart(&self, exec: &Path) -> Result<()> {
-        // DAE-01 稳定路径纪律：plist 绝不指向 target/ 开发路径或 /tmp/——
-        // 指向那里的 launchd 条目会把旧构建永远钉在岗上（用户机实锤：
-        // launchd 至今指向 7/31 开发构建路径）。非法路径直接拒绝，不写。
-        let exec_str = exec.display().to_string();
-        if exec_str.contains("/target/") || exec_str.contains("/tmp/") {
-            return Err(PlatformError::Failed {
-                action: "install_autostart rejects unstable path",
-                detail: exec_str,
-            });
-        }
-        let logs = agent_log_paths();
-        let plist = agent_plist(exec, &logs);
-        let path = Self::agent_plist_path();
-        if let Some(dir) = path.parent() {
-            std::fs::create_dir_all(dir).map_err(io_err("create LaunchAgents dir"))?;
-        }
-        // #1046：launchd 只打开 StandardOutPath/StandardErrorPath，不建父目录——
-        // 日志目录不在（首启、数据目录刚搬过）时先建好，否则 stdio 接不上。
-        for p in [&logs.stdout, &logs.stderr].into_iter().flatten() {
-            if let Some(dir) = p.parent() {
-                std::fs::create_dir_all(dir).map_err(io_err("create daemon logs dir"))?;
-            }
-        }
-        write_atomic(&path, &plist).map_err(io_err("write LaunchAgent plist"))?;
+        let path = write_agent_plist(exec)?;
         // Load now (idempotent-ish: bootout first, ignore its failure).
-        let uid = Command::new("id")
-            .arg("-u")
-            .output()
-            .map_err(io_err("id -u"))?;
-        let uid = String::from_utf8_lossy(&uid.stdout).trim().to_string();
-        let _ = Command::new("launchctl")
-            .args(["bootout", &format!("gui/{uid}/{AGENT_LABEL}")])
-            .output();
-        let out = Command::new("launchctl")
-            .args(["bootstrap", &format!("gui/{uid}")])
-            .arg(&path)
-            .output()
-            .map_err(io_err("launchctl bootstrap"))?;
-        if !out.status.success() {
-            return Err(PlatformError::Failed {
-                action: "launchctl bootstrap",
-                detail: String::from_utf8_lossy(&out.stderr).trim().to_string(),
-            });
-        }
-        Ok(())
+        load_agent_with(&current_uid()?, &path, &mut run_launchctl)
+    }
+
+    /// #1300：对账改写登记不改运行状态——job 在 launchd 里就重新加载（按新 plist），
+    /// 不在（外面被 bootout 了）就只写文件。
+    fn rewrite_autostart(&self, exec: &Path) -> Result<()> {
+        rewrite_agent_with(
+            &current_uid()?,
+            &mut || write_agent_plist(exec),
+            &mut run_launchctl,
+        )
+        .map(|_| ())
     }
 
     fn autostart_installed(&self) -> Result<bool> {
@@ -978,6 +947,86 @@ const BOOTOUT_NOT_LOADED_CODES: [i32; 2] = [3, 113];
 /// launchctl 执行器：收参数、回 (退出码, stderr)。
 type LaunchctlRun<'a> = dyn FnMut(&[String]) -> Result<(Option<i32>, String)> + 'a;
 
+/// 真跑 launchctl 的 [`LaunchctlRun`]。
+fn run_launchctl(args: &[String]) -> Result<(Option<i32>, String)> {
+    let out = Command::new("launchctl")
+        .args(args)
+        .output()
+        .map_err(io_err("launchctl"))?;
+    Ok((
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr).trim().to_string(),
+    ))
+}
+
+/// 按本版本写 daemon 的 LaunchAgent plist（不加载），回 plist 路径。
+fn write_agent_plist(exec: &Path) -> Result<PathBuf> {
+    // DAE-01 稳定路径纪律：plist 绝不指向 target/ 开发路径或 /tmp/——
+    // 指向那里的 launchd 条目会把旧构建永远钉在岗上（用户机实锤：
+    // launchd 至今指向 7/31 开发构建路径）。非法路径直接拒绝，不写。
+    let exec_str = exec.display().to_string();
+    if exec_str.contains("/target/") || exec_str.contains("/tmp/") {
+        return Err(PlatformError::Failed {
+            action: "install_autostart rejects unstable path",
+            detail: exec_str,
+        });
+    }
+    let logs = agent_log_paths();
+    let plist = agent_plist(exec, &logs);
+    let path = MacosAdapter::agent_plist_path();
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(io_err("create LaunchAgents dir"))?;
+    }
+    // #1046：launchd 只打开 StandardOutPath/StandardErrorPath，不建父目录——
+    // 日志目录不在（首启、数据目录刚搬过）时先建好，否则 stdio 接不上。
+    for p in [&logs.stdout, &logs.stderr].into_iter().flatten() {
+        if let Some(dir) = p.parent() {
+            std::fs::create_dir_all(dir).map_err(io_err("create daemon logs dir"))?;
+        }
+    }
+    write_atomic(&path, &plist).map_err(io_err("write LaunchAgent plist"))?;
+    Ok(path)
+}
+
+/// 按 plist 加载 job（先 bootout 旧的、忽略失败，再 bootstrap；`RunAtLoad=true` ⇒ 加载即启动）。
+fn load_agent_with(uid: &str, plist: &Path, run: &mut LaunchctlRun) -> Result<()> {
+    let _ = run(&["bootout".to_string(), format!("gui/{uid}/{AGENT_LABEL}")]);
+    match run(&[
+        "bootstrap".to_string(),
+        format!("gui/{uid}"),
+        plist.display().to_string(),
+    ])? {
+        (Some(0), _) => Ok(()),
+        (_, stderr) => Err(PlatformError::Failed {
+            action: "launchctl bootstrap",
+            detail: stderr,
+        }),
+    }
+}
+
+/// #1300：对账改写登记后，job 是否被重新加载。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AgentRewrite {
+    /// 原来在 launchd 里：按新 plist 重新加载（原来在跑的照样在跑）。
+    Reloaded,
+    /// 原来没加载（外面 bootout 了 / 更新暂停中）：只写文件，保持停着。
+    FileOnly,
+}
+
+/// [`MacosAdapter::rewrite_autostart`] 的判据，写文件与 launchctl 可注入。
+pub(crate) fn rewrite_agent_with(
+    uid: &str,
+    write: &mut dyn FnMut() -> Result<PathBuf>,
+    run: &mut LaunchctlRun,
+) -> Result<AgentRewrite> {
+    let (code, _) = run(&["print".to_string(), format!("gui/{uid}/{AGENT_LABEL}")])?;
+    let plist = write()?;
+    if code != Some(0) {
+        return Ok(AgentRewrite::FileOnly);
+    }
+    load_agent_with(uid, &plist, run).map(|()| AgentRewrite::Reloaded)
+}
+
 /// [`MacosAdapter::pause_resident_daemon`] 的判据，命令执行器可注入（单测不跑真
 /// launchctl）。`run` 收参数、回 (退出码, stderr)。
 /// §5.3：照片库根目录设为 `0700`（只有主人能进）。目录不存在就先建出来——否则之后由
@@ -1185,6 +1234,52 @@ mod pause_resident_tests {
         }
         assert!(run_with(Some(1)).1.is_err());
         assert!(run_with(None).1.is_err());
+    }
+}
+
+#[cfg(test)]
+mod rewrite_agent_tests {
+    use super::*;
+
+    /// 跑一次改写：`print` 回 `print_code`，其余命令回 0。回 (调过的 launchctl 子命令, 写了几次, 结果)。
+    fn rewrite(print_code: i32) -> (Vec<String>, u32, AgentRewrite) {
+        let mut calls = Vec::new();
+        let mut writes = 0;
+        let r = rewrite_agent_with(
+            "501",
+            &mut || {
+                writes += 1;
+                Ok(PathBuf::from("/x/agent.plist"))
+            },
+            &mut |a| {
+                calls.push(a[0].clone());
+                Ok((
+                    Some(if a[0] == "print" { print_code } else { 0 }),
+                    String::new(),
+                ))
+            },
+        )
+        .unwrap();
+        (calls, writes, r)
+    }
+
+    /// #1300：job 没加载（外面 bootout 了）⇒ 只写 plist，不 bootstrap——对账不许把停着的服务拉起来。
+    /// 反证：去掉「没加载就只写文件」的分支 → calls 里出现 bootstrap，红。
+    #[test]
+    fn rewrite_keeps_a_stopped_job_stopped() {
+        let (calls, writes, r) = rewrite(113);
+        assert_eq!(r, AgentRewrite::FileOnly);
+        assert_eq!(writes, 1);
+        assert_eq!(calls, ["print"]);
+    }
+
+    /// 在 launchd 里 ⇒ 写 plist 后按新内容重新加载（#1046 的「登记刷新到本版本」照旧生效）。
+    #[test]
+    fn rewrite_reloads_a_loaded_job() {
+        let (calls, writes, r) = rewrite(0);
+        assert_eq!(r, AgentRewrite::Reloaded);
+        assert_eq!(writes, 1);
+        assert_eq!(calls, ["print", "bootout", "bootstrap"]);
     }
 }
 

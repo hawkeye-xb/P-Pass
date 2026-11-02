@@ -1,0 +1,5 @@
+at_ms=1793607285116 event=connect_failed err={"key":"ui.err_daemon_unresponsive","params":{"err":"{\"key\":\"ui.err_connect\",\"params\":{\"err\":\"Connection refused (os error 61)\"}}","path":"/Users/zhaowenli/Library/Application Support/P-Pass/run/daemon.sock"}}
+at_ms=1793607285122 event=state from=starting to=stopped reason=stopped outside
+at_ms=1793607285257 event=call_failed method=status err={"key":"ui.err_daemon_unresponsive","params":{"err":"{\"key\":\"ui.err_connect\",\"params\":{\"err\":\"No such file or directory (os error 2)\"}}","path":"/Users/zhaowenli/Library/Application Support/P-Pass/run/daemon.sock"}}
+at_ms=1793607285257 event=call_failed method=status err={"key":"ui.err_daemon_unresponsive","params":{"err":"{\"key\":\"ui.err_connect\",\"params\":{\"err\":\"No such file or directory (os error 2)\"}}","path":"/Users/zhaowenli/Library/Application Support/P-Pass/run/daemon.sock"}}
+at_ms=1793607287232 event=state from=stopped to=running reason=event stream open
