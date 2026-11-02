@@ -59,7 +59,7 @@ expect() {
 
 echo "==> 1. 正向判据 · 不带 lane 参数（ci-desktop.yml 的调法，语义须与 CI-17 之前一致）"
 expect "$SUT" false "只改 docs/"                      docs/product/a.md
-expect "$SUT" false "只改 cards/ 与根 .md"            cards/x.md README.md
+expect "$SUT" false "只改子目录 .md 与根 .md"         infra/x.md README.md
 expect "$SUT" false "只改 .claude/"                   .claude/settings.json
 expect "$SUT" true  "改了 crates/"                    crates/daemon/src/main.rs
 expect "$SUT" true  "改了桌面壳（默认 lane 必须照跑）"  apps/desktop/src-tauri/src/lib.rs
@@ -114,7 +114,7 @@ echo "==> 5. CI-17：包含关系 —— 不存在 run_arch=false 而 run_heavy=
 # 宽 lane 的无害清单是窄 lane 的**超集** ⇒ 宽 lane 判「要跑」时，窄 lane 不可能判「可跳」。
 # 这条若破，说明有人把某条路径只加进了窄清单，是真的 fail-open。
 INCL_OK=1
-for spec in "docs/a.md" "cards/x.md" ".claude/s.json" "README.md" \
+for spec in "docs/a.md" "infra/x.md" ".claude/s.json" "README.md" \
             "apps/x.kt" "apps/desktop/src-tauri/src/lib.rs" \
             "crates/a.rs" "Cargo.lock" "assets/i18n/en.json" \
             "tools/arch-check.sh" ".github/workflows/ci-rust.yml" "newthing/x.rs" \

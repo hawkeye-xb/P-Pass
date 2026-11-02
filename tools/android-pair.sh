@@ -23,7 +23,7 @@ QR="$PAIR_QR"
 # #1124：JVM 测试经 uniffi 绑定调宿主机版 libtransport。
 (cd "$ROOT" && cargo build -q -p transport --features mobile-ffi)
 cd "$ROOT/apps/android"
-source "$ROOT/scripts/java-home.sh"
+source "$ROOT/tools/java-home.sh"
 PPF_DAEMON_QR="$QR" PPF_DAEMON_IPC="$SANDBOX_DIR/ipc.token" \
   ./gradlew :app:testDebugUnitTest --tests '*DaemonPairTest' --rerun
 grep -o "PAIR OK[^<]*" app/build/test-results/testDebugUnitTest/TEST-*DaemonPairTest.xml

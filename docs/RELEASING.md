@@ -590,7 +590,7 @@ Android 靠 `channelFromVersion()` 读注入的版本串（含 `-test.` 即 test
 
 ---
 
-## 附录：发版实况（2026-09-16 从 QUEUE.md 迁入）
+## 附录：发版实况（2026-09-16 从旧队列文件迁入）
 
 - 正式产物走 CI：GitHub 网页 Actions → Release → Run workflow，`platforms`
   填 `android,macos`（Android 出签名 APK；macOS 未签名，「右键 → 打开」

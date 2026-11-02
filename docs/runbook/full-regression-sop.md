@@ -52,7 +52,7 @@ gh release download "$TAG" -R "$REPO" -D "$WORK/cand"
 gh release download "$STABLE" -R "$REPO" -D "$WORK/stable" -p '*android.apk' -p '*.dmg' -p 'SHA256SUMS*'
 ```
 
-1. **工具链**：`adb`、`python3`、`sqlite3`、`jq`、`gh` 均可用；`gh auth status` 是仓库所属账号。`apksigner` 取最新的 build-tools（`$(ls -d ~/Library/Android/sdk/build-tools/* | sort -V | tail -1)/apksigner`），运行前 `source scripts/java-home.sh` 设好 `JAVA_HOME`（它对 NDK 缺失的提示可忽略，本节不用 NDK）。
+1. **工具链**：`adb`、`python3`、`sqlite3`、`jq`、`gh` 均可用；`gh auth status` 是仓库所属账号。`apksigner` 取最新的 build-tools（`$(ls -d ~/Library/Android/sdk/build-tools/* | sort -V | tail -1)/apksigner`），运行前 `source tools/java-home.sh` 设好 `JAVA_HOME`（它对 NDK 缺失的提示可忽略，本节不用 NDK）。
 2. **手机**：`adb devices` 恰好一台 `device` 状态 → `export ANDROID_SERIAL=<它>`。记录 `ro.product.model`、`ro.build.version.release`。多于一台时先问人用哪台。
 3. **产物校验**：
    - `cd "$WORK/cand" && shasum -a 256 -c SHA256SUMS-macos-arm64`

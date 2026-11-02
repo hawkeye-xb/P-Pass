@@ -362,7 +362,7 @@ fun PPassApp() {
     // ——WorkManager 的 ForceStopRunnable 跑在 androidx.startup 的
     // ContentProvider 里，**比 Application.onCreate 还早**，它自己就把所有
     // work 重排了，应用层拦不住。留着只会显示一条"点了才恢复"却其实早已
-    // 自愈的假提示。详见 .claude/cards/backlog/MOB-18-*。
+    // 自愈的假提示。出处：已退役卡片 MOB-18（git 历史 8917fa05 可查）。
     // MOB-28: 检测到监听被外力清过、用户还没点「恢复」时，**这里不许重挂**。
     // 这条路径是"打开 App 就悄悄恢复"的那个漏子——用户实测原话："还是没有
     // 提示，强行停止立即就恢复了。" 闸门必须同时立在 Application 的对账

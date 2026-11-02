@@ -60,7 +60,6 @@ jobs:
             justfile
             tools/check-shell-vars.py
             docs/**
-            cards/**
             assets/design/tokens.json
             tools/check-markdown-tables.py
             tools/check-token-drift.py
@@ -110,7 +109,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: md-check（docs/ 与 cards/ 的 Markdown 表格不许被空行截断）
+      - name: md-check（docs/ 的 Markdown 表格不许被空行截断）
         run: python3 tools/check-markdown-tables.py
       - name: token-check（DESK-15：tokens.css 不许与 tokens.json 漂移）
         run: python3 tools/check-token-drift.py

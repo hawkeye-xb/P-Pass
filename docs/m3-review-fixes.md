@@ -17,8 +17,8 @@
 vitest green; discipline items clean (personal git identity only, no
 mainland endpoints, no hardcoded secrets). Systemic weakness: quality
 drops sharply outside the author's verification radius (VPS deploys,
-Windows real machines, supply-chain hardening) while PROGRESS.md still
-says DONE; several test/smoke assertions are tautological or soft-fail.
+Windows real machines, supply-chain hardening) while the progress ledger still
+said DONE; several test/smoke assertions are tautological or soft-fail.
 本地全量测试绿、纪律项干净；系统性短板 = 验证半径之外自信不打折 +
 断言松弛（恒真判据/soft-fail 稀释绿灯含金量）。
 

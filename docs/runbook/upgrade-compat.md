@@ -97,7 +97,7 @@
 
 | 场景 | 现状行为 | 依据 |
 |---|---|---|
-| 桌面装回旧版本，而新版本已跑过新迁移 | 旧 daemon 拒绝启动（sqlx 报 `previously applied but is missing`）；桌面壳显示原文 +「请装回新版本」。数据不被改写，装回新版即恢复 | E2（DESK-09 真机欠账 #103）；2026-08-25 真机现场见 `cards/DESK-09-wizard-swallows-daemon-startup-error.md` |
+| 桌面装回旧版本，而新版本已跑过新迁移 | 旧 daemon 拒绝启动（sqlx 报 `previously applied but is missing`）；桌面壳显示原文 +「请装回新版本」。数据不被改写，装回新版即恢复 | E2（DESK-09 真机欠账 #103）；2026-08-25 真机现场见 [DESK-09 卡片](https://github.com/hawkeye-xb/P-Pass/blob/8917fa05/cards/DESK-09-wizard-swallows-daemon-startup-error.md) |
 | 桌面装回旧版本，两版之间没有新迁移 | 旧 daemon 能开库；协议层按 §4 旧端对新字段宽容 | 读码（未演练） |
 | 桌面安装包本身是否拦截降级安装 | 未验证 | — |
 | Android 装回旧 APK | 系统拒绝低 versionCode 覆盖安装，只能先卸载；卸载会清掉 `pairing.json`、`identity.key` 与账本，等于重新配对 | 读码（Android 平台规则） |

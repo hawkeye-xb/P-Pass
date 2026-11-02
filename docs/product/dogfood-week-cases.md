@@ -77,5 +77,5 @@ E1 双手机同时备份；E2 一台备份中另一台浏览+取回；E3 备份�
 
 ## 下一步
 
-按 docs/task-card-template.md 转实施 agent 真机卡：夜间剧本脚本化
+按 issue 模板「任务卡」转实施 agent 真机卡：夜间剧本脚本化
 （三星 adb + Mac IPC 两只现成的手），D 组对账脚本即 agent 日报原型。

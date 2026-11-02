@@ -56,7 +56,7 @@ COUNT=$(desk_photo_count "$DESK")
 echo "  桌面照片数：$COUNT"
 
 echo "==> 构建并安装 debug 包与 androidTest 包"
-(cd "$ROOT/apps/android" && bash -c 'source ../../scripts/java-home.sh >/dev/null && ./gradlew -q :app:assembleDebug :app:assembleDebugAndroidTest')
+(cd "$ROOT/apps/android" && bash -c 'source ../../tools/java-home.sh >/dev/null && ./gradlew -q :app:assembleDebug :app:assembleDebugAndroidTest')
 APK=$(find "$ROOT/apps/android/app/build/outputs/apk/debug" -name 'P-Pass_*.apk' | head -1)
 TEST_APK=$(find "$ROOT/apps/android/app/build/outputs/apk/androidTest/debug" -name '*.apk' | head -1)
 if ! "${ADB[@]}" install -r "$APK" >"$OUT/install.log" 2>&1; then

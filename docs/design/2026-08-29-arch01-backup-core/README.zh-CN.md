@@ -1,7 +1,7 @@
 # ARCH-01 备份核心设计归档
 
 > 中文主档 · 2026-08-29 立档 · 2026-09-24 对齐 #413 最终设计  
-> 对应任务卡：[`ARCH-01`](../../../cards/done/ARCH-01-backup-core-flow-queue-design.md) · 业务设计：[#413](https://github.com/hawkeye-xb/P-Pass/issues/413) · 最终设计摘要：[`final-design-413.md`](final-design-413.md) · 分工与接口：[`workstreams-contract-413.md`](workstreams-contract-413.md)
+> 业务设计：[#413](https://github.com/hawkeye-xb/P-Pass/issues/413) · 最终设计摘要：[`final-design-413.md`](final-design-413.md) · 分工与接口：[`workstreams-contract-413.md`](workstreams-contract-413.md)
 
 本目录保存 ARCH-01 的业务语义、系统边界与 mermaid 图。这里描述的是逻辑事实，不规定表结构、文件格式、Iroh FFI 或 UI 细节；唯一的存储前提是 order 支持按行、按事务写入。本文与 `final-design-413.md` 不一致时以后者为准；实现卡不得改写这里的业务规则。
 
