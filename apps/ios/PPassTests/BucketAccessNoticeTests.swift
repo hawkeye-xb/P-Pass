@@ -1,7 +1,8 @@
 import XCTest
 @testable import PPass
 
-/// 10-29：选范围页按照片权限档多说一句。部分授权：页顶说明只备份允许的那些；拒绝：说没有权限并给「去设置」，不说「没有找到照片」。
+/// 10-29：选范围页按照片权限档多说一句。拒绝：说没有权限并给「去设置」，不说「没有找到照片」。
+/// （#1272 起部分授权不再在页顶加说明，改为设置页开关下一行小字；`.partial` 档仍在，只是不配文案。）
 /// 反证：`BucketScreen.notice(for:)` 把 `.none` 映射成 `.none`（回到「没有找到照片」）本条红。
 final class BucketAccessNoticeTests: XCTestCase {
     func test_each_access_tier_has_its_own_notice() {
@@ -22,14 +23,12 @@ final class BucketAccessNoticeTests: XCTestCase {
     func test_copy_exists_in_both_languages() throws {
         let expected: [String: [String: String]] = [
             "en": [
-                "bucket_partial_access_note": "You've allowed access to some photos only. Only those will be backed up.",
                 "bucket_no_access_title": "No photo access",
                 "bucket_no_access_body": "P-Pass can't read photos on this phone, so it can't back them up.",
                 "bucket_no_access_action": "Open Settings",
                 "welcome_scan": "Scan to connect to your home computer",
             ],
             "zh-Hans": [
-                "bucket_partial_access_note": "只授权了部分照片，只会备份你允许的那些。",
                 "bucket_no_access_title": "无照片访问权限",
                 "bucket_no_access_body": "无法读取这台手机上的照片，没法备份。",
                 "bucket_no_access_action": "去设置",
