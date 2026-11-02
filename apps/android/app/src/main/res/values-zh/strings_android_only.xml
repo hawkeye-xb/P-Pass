@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 只在 Android 出现的文案（#1302），说明见 values/strings_android_only.xml。 -->
+
+    <string name="pair_unparseable_code">配对码不完整。请把手机和电脑上的 P-Pass 都更新到最新版。</string>
+    <string name="update_available_title">发现新版本 v%1$s</string>
+    <string name="update_download_install">下载安装</string>
+    <string name="update_later">稍后</string>
+    <!-- UPD-02: 更新状态机的用户可见文案：检查行 / 下载 / 校验 / 失败分类 / 安装 / 回执。 -->
+    <string name="update_check_now">检查更新</string>
+    <string name="update_up_to_date">已是最新版本</string>
+    <string name="update_check_failed">检查更新失败，请稍后再试</string>
+    <string name="update_downloading_title">正在下载更新</string>
+    <string name="update_downloading_progress">已下载 %1$d%%</string>
+    <string name="update_downloading_unknown_total">正在下载…</string>
+    <string name="update_row_downloading">正在下载 %1$d%%</string>
+    <string name="update_row_ready">已下载 · 点击安装</string>
+    <string name="update_verifying">正在校验安装包…</string>
+    <string name="update_background">后台继续</string>
+    <string name="update_failed_title">更新没有完成</string>
+    <string name="update_failed_network">连不上更新服务器，请检查网络后重试。</string>
+    <string name="update_failed_server">更新服务器暂时出错，请稍后再试。</string>
+    <string name="update_failed_stalled">下载停滞了，请检查网络后重试。</string>
+    <string name="update_failed_write">安装包保存失败，请检查手机剩余存储空间。</string>
+    <string name="update_failed_verify">下载的安装包校验未通过，已删除。请稍后再试。</string>
+    <string name="update_failed_install">安装没有完成，请重试。</string>
+    <string name="update_failed_unexpected">出现未知错误，请稍后再试。</string>
+    <string name="update_retry">重试</string>
+    <string name="update_ready_install">新版本 v%1$s 已下载</string>
+    <string name="update_ready_body">更新时 P-Pass 会关闭，完成后请重新打开。</string>
+    <string name="update_install_now">立即更新</string>
+    <string name="update_installing_title">正在安装…</string>
+    <string name="update_installing_body">请在系统弹窗中确认，完成更新。</string>
+    <string name="update_close">关闭</string>
+    <string name="notif_channel_update">应用更新</string>
+    <string name="notif_update_download_title">正在下载 P-Pass 更新</string>
+
+    <string name="state_scanning">正在找照片… %1$d</string>
+    <string name="state_hashing">正在读取 %1$d/%2$d</string>
+    <string name="state_sending_file">正在备份 %1$s（第 %2$d / %3$d 张）</string>
+    <string name="backup_waiting_constraints">等待中，稍后自动备份</string>
+    <!-- UX-02: 失败通知（成功保持沉默）；MOB-67 渠道名进字典（旧代码硬编码双语） -->
+    <string name="notif_channel_backup_failed">备份需要你处理</string>
+    <string name="notif_backup_failed_title">备份未完成</string>
+    <plurals name="notif_backup_failed_body">
+        <item quantity="other">%1$d 张照片未能备份，点开查看</item>
+    </plurals>
+    <string name="notif_background_stopped_title">系统停止了后台备份</string>
+    <string name="notif_background_stopped_body">现在只有打开 P-Pass 时才会备份。点开恢复后台备份。</string>
+    <string name="notif_battery_reenabled_title">电池优化已重新开启</string>
+    <string name="notif_battery_reenabled_body">系统重新限制了 P-Pass 在后台运行，后台备份已停止。点开后重新允许。</string>
+    <!-- NET-12: 传输前台服务：传输期间把进程留在系统不会随便回收的档位，
+         防止像 2026-09-14 那样在传输中途被系统直接杀掉。低优先级/静音，
+         这是状态提示不是告警。 -->
+    <string name="notif_channel_transfer">正在备份</string>
+    <string name="notif_transfer_title">正在备份照片</string>
+    <!-- MOB-101: 系统不再允许「App 不在屏幕上时继续备份」（这件事每天有额度）。
+         只说人话：不出现代码、类名、术语。这个事实只有在系统拒绝之后才知道，
+         所以文案说的是「已经发生了什么」，不是「接下来会怎样」。 -->
+    <string name="state_background_budget_paused">后台备份时间已用完。保持 P-Pass 在屏幕上可继续，时间恢复后也会自动继续。</string>
+    <string name="state_background_protection_unknown">系统没有允许后台备份。打开 P-Pass 并保持在屏幕上可继续备份。</string>
+    <!-- #130：开关下的中性小字，只写这个开关管哪几类通知。 -->
+    <string name="rule_notify_hint">配对失效、权限收回、后台备份停止时提醒</string>
+    <!-- #1263：首页「开启后台备份」卡片（onboarding 不再问）。 -->
+    <string name="background_backup_offer">后台备份已关闭，打开才会自动备份</string>
+    <string name="background_backup_offer_action">开启</string>
+    <string name="background_backup_offer_close">关闭</string>
+    <string name="background_backup_needs_authorization">后台备份未获系统授权</string>
+    <string name="background_backup_system_stopped">系统已停止后台备份</string>
+    <string name="background_backup_action_allow">允许</string>
+    <string name="background_backup_action_turn_on">重新开启</string>
+    <!-- UI-12（2026-09-15，二次修正）："去处理"点击后的 Snackbar 反馈：
+         本代码库第一个非持久反馈机制。只覆盖能诚实上报的信号（为什么
+         没有"失败"文案，见 MainActivity.kt 的注释）。 -->
+    <string name="background_backup_resuming">正在重新开启后台备份…</string>
+    <string name="background_backup_authorized">后台备份已获授权</string>
+    <string name="background_backup_authorization_denied">未获授权，后台备份无法自动运行</string>
+    <!-- #843：没有位置权限时首页常驻提示。 -->
+    <string name="location_redacted_notice">备份的照片和视频不含拍摄地点</string>
+    <string name="location_redacted_notice_action">允许访问地点</string>
+    <!-- UI-12: "知道了"忽略动作：只是不再提醒，不等于问题已解决，也
+         不等于把自动备份关掉。 -->
+    <string name="notice_dismiss_label">知道了</string>
+    <string name="open_with_app">用其他应用打开</string>
+    <string name="no_app_for_file">手机上没有能打开这个文件的应用。</string>
+    <string name="share_to">分享到…</string>
+</resources>

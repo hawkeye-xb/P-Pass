@@ -11,9 +11,13 @@
 #     `tools/build-android-iroh-blobs-bridge.sh` + 钉工具链的 `rust-toolchain.toml`。
 #     #1124 起安卓的 libtransport.so 也开 `mobile-ffi`，transport 在它下依赖 `crates/proto`。
 #     这份清单与 gradle inputs 的一致性由 tools/test-release-version-source.sh 校验。
+#     #1302：跨端文案集合 `assets/i18n/` 逐字节捆进 APK（apps/android/…/assets/i18n），本身就是安卓的构建输入。
 #   - iOS（#348）：`apps/ios/**`、传输 XCFramework 的输入（`crates/transport/`、`crates/proto/`、
 #     `Cargo.*`、`rust-toolchain.toml`、`tools/build-ios-*`）、会进 App 的生成源（`assets/i18n/`、
 #     `assets/design/tokens.json`、Android 两份 strings.xml）与盖章/生成脚本
+#   - 文案按端归属（#1302）：桌面字典在 `apps/desktop/src/i18n/` ⇒ 只算桌面；Android 独有文案在
+#     `res/values{,-zh}/strings_android_only.xml` ⇒ 只算安卓（gen-strings 不读它）；两部手机共用的
+#     `strings.xml` ⇒ 安卓 + iOS；跨端集合 `assets/i18n/` ⇒ 三端。测试：tools/test-version-bump-i18n.sh
 #     ⇒ `versions.json.ios` 必须前进。上一个 tag 里没有 ios 线（UPD-13 之后第一次出现）时跳过这条门禁。
 #   - 只改 docs/site/.github/tools ⇒ 两端的号都不该动（动了只 warning，不判红：
 #     可能是刻意重发）
@@ -72,7 +76,7 @@ fi
 # 保守边界：src 文件里 `#[cfg(test)]` 块改动仍算产品改动——宁可多涨，不漏涨。
 PRODUCT=$(grep -Ev '(^|/)(tests?|benches)/' <<<"$CHANGED" || true)
 desk_hit=$(grep -Ec '^(crates/|apps/desktop/|assets/|Cargo\.(toml|lock)$|rust-toolchain\.toml)' <<<"$PRODUCT" || true)
-ANDROID_INPUTS='^(apps/android/|crates/(transport|proto|pair-pake)/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|tools/build-android-iroh-blobs-bridge\.sh$)'
+ANDROID_INPUTS='^(apps/android/|crates/(transport|proto|pair-pake)/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|tools/build-android-iroh-blobs-bridge\.sh$|assets/i18n/)'
 andr_hit=$(grep -Ec "$ANDROID_INPUTS" <<<"$PRODUCT" || true)
 # iOS 输入（#348）：与 ci-ios 的触发路径同口径，但 tools/ios/ 只算会进产物的盖章/生成/字体脚本，
 # 测试与 e2e 脚本不算（改它们不该逼着发一个内容相同的 TestFlight 构建）。

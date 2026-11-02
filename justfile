@@ -262,7 +262,7 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check hooks-test flow-worker-test supply-chain-check mobile-static-check lockfile-check flow-owner-test heavy-lock-test ci-local-map-check
+ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check hooks-test flow-worker-test supply-chain-check mobile-static-check i18n-split-check lockfile-check flow-owner-test heavy-lock-test ci-local-map-check
   @echo "==> CI pipeline: all green ✅"
 
 # 两个 Rust workspace 的 Cargo.lock 都得和实际依赖一致（src-tauri 是独立 workspace，
@@ -285,6 +285,13 @@ mobile-static-check:
   tools/ios/check-no-color-literals.sh
   @for l in en zh; do cmp -s assets/i18n/$l.json apps/android/app/src/main/assets/i18n/$l.json || { echo "✗ apps/android/app/src/main/assets/i18n/$l.json 与 assets/i18n 不一致——从 assets/i18n 复制过去"; exit 1; }; done
   @echo "ok: Android i18n 副本与 assets/i18n 逐字节一致"
+
+# 文案按端拆分（#1302）：key 住对文件、各消费方查得到（含反证自测）；发版判定只牵动文案所在的端。
+i18n-split-check:
+  python3 tools/check-i18n-split.py --self-test > /dev/null
+  python3 tools/check-i18n-split.py
+  bash tools/test-version-bump-i18n.sh > /dev/null
+  @echo "ok: 文案改动只牵动所在的端（tools/test-version-bump-i18n.sh）"
 
 # QA-03 文档快车道：只跑文档域的门禁，不编 Rust。
 #
@@ -393,7 +400,7 @@ android-fgs-quota *args:
 ios-gen:
   cd apps/ios && xcodegen generate
 
-# iOS i18n（#316）：assets/i18n/*.json 逐字节拷进 apps/ios/PPass/Resources/i18n/。
+# iOS i18n（#316）：assets/i18n/*.json（#1302 起只放跨端 msg_key）逐字节拷进 apps/ios/PPass/Resources/i18n/。
 # 改 i18n 要同步四个消费者（清单见 apps/ios/PPass/I18n/DiagText.swift）；--check 只比较不拷。
 ios-sync-i18n *args:
   bash tools/ios/sync-i18n.sh {{args}}
@@ -408,6 +415,7 @@ ios-icons:
   python3 tools/ios/gen-app-icon.py
 
 # iOS 界面文案（#315）：Android strings.xml → apps/ios/PPass/Resources/{en,zh-Hans}.lproj/Localizable.*。
+# #1302：只读 strings.xml（两部手机共用的句子）；Android 独有文案在 strings_android_only.xml，不进 iOS。
 # Android 改了文案就跑一次并提交；ci-ios 用 --check 逐字节比对。iOS 独有说法写在同目录的 IOS.strings。
 ios-strings *args:
   python3 tools/ios/gen-strings.py {{args}}

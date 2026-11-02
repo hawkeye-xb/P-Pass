@@ -1,15 +1,19 @@
 // I18N-03 (#492): the desktop's single t().
 //
-// Copy lives only in assets/i18n/{en,zh}.json (crates/diag registers every
-// key and its tests keep both languages complete). Imported straight from
-// the repo root — zero copies, zero drift. One language per session (the UI
+// Copy lives in two files (#1302): the desktop's own src/i18n/{en,zh}.json and
+// the small cross-end set at the repo root assets/i18n/{en,zh}.json (the
+// daemon's wire msg_keys, also bundled by the phones). crates/diag registers
+// every key, keeps both languages complete and each key in exactly one file.
+// Imported straight from source — zero copies, zero drift. One language per session (the UI
 // is single-language by design): the user's choice from Settings (#557) if
 // there is one, else the system language. The tray menu is told the same
 // answer via `set_tray_locale`, so shell and window agree.
-import enDict from "../../../../assets/i18n/en.json";
-import zhDict from "../../../../assets/i18n/zh.json";
+import sharedEn from "../../../../assets/i18n/en.json";
+import sharedZh from "../../../../assets/i18n/zh.json";
+import desktopEn from "../i18n/en.json";
+import desktopZh from "../i18n/zh.json";
 
-const DICTS = { en: enDict, zh: zhDict };
+const DICTS = { en: { ...sharedEn, ...desktopEn }, zh: { ...sharedZh, ...desktopZh } };
 
 /**
  * "zh-CN" / "zh-Hans" / "zh" → zh; anything else → en, **including an empty or

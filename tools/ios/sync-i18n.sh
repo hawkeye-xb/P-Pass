@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # #316：把 assets/i18n/*.json **逐字节**拷进 iOS App（apps/ios/PPass/Resources/i18n/）。
+# #1302：assets/i18n 只放跨端集合（线上 msg_key）；桌面文案在 apps/desktop/src/i18n，不进手机包。
 #
 #   tools/ios/sync-i18n.sh            # 拷贝（just ios-sync-i18n）
 #   tools/ios/sync-i18n.sh --check    # 只比较，不一致 exit 1
