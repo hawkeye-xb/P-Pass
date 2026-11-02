@@ -26,6 +26,7 @@
 #   - pnpm 与 CI 同为 11（CI 用 npm install -g pnpm@11），本地经 npx -y pnpm@11 调用，不改全局。
 
 ci-rust.yml	changes	meta	-	-	路径判定 job，本地由 gate 列按同一脚本判
+ci-rust.yml	e2e	meta	-	-	批次 PR 经 workflow_call 调用 e2e.yml（#1309），本地对应见 e2e.yml 各行
 ci-rust.yml	gate	meta	-	-	汇总 job，本地按步给结论
 ci-rust.yml	fmt	mac	lane:rust-workspace	toolchain	tools/check-rust-toolchain-ci.sh
 ci-rust.yml	fmt	mac	lane:rust-workspace	actionlint	actionlint -color
@@ -109,4 +110,5 @@ ci-secrets.yml	gitleaks	mac	always	gitleaks	gitleaks git --config .gitleaks.toml
 e2e.yml	build	meta	-	-	只为下游 e2e job 产出 release 二进制，没有检查内容
 e2e.yml	e2e	ci-only	-	android-live	PR 带 e2e 标签才跑；Linux runner 上起 Android 模拟器跑 hello/pair。本地真机链路由 just verify 场景库覆盖
 e2e.yml	scenarios	mac	lane:rust-workspace	scenarios-release	cargo test --release -p daemon --test scenarios -- --ignored --test-threads=1
+e2e.yml	scenarios	mac	lane:rust-workspace	blobs-export	cargo test --release -p transport --test blobs_export
 e2e.yml	scenarios	ci-only	-	disk-full	磁盘满剧本要 6MB tmpfs（Linux mount），本地不设 PPF_SCENARIO_SMALL_FS 时该剧本打印 SKIP
