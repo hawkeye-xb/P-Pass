@@ -6,6 +6,8 @@
 # shellcheck shell=bash
 
 MAC_SHELL_EXE="$MAC_APP/Contents/MacOS/p-pass-desktop"
+# daemon 数据目录（库索引、缩略图、blob 账本、config.toml）；照片原件在 config.toml 的 data_dir 里，不进快照
+MAC_DATA_DIR="${E3_MAC_DATA_DIR:-$HOME/Library/Application Support/P-Pass}"
 MAC_TEAM="${E3_MAC_TEAM:-}"
 
 mac_app_version() { defaults read "${1:-$MAC_APP}/Contents/Info.plist" CFBundleShortVersionString 2>/dev/null; }
@@ -49,14 +51,26 @@ mac_verify_sig() {
   return 0
 }
 
-# mac_install_app <源 .app>：退出外壳 → 停服务 → 整个替换 ~/Applications/P-Pass.app → 起服务 → 等就绪。
-# 原来在跑的外壳装完后重新打开。返回 0 = 服务就绪。
+# mac_install_app <源 .app> [数据]：退出外壳 → 停服务 →（数据快照）→ 整个替换
+# ~/Applications/P-Pass.app → 起服务 → 等就绪。原来在跑的外壳装完后重新打开。返回 0 = 服务就绪。
+# 数据（#1311）：服务停着时做——mac_snapshot 之后的第一次安装把当时的数据存进快照（候选可能带新迁移，
+# 装上就改了库）。第二个参数：快照目录 = 先把数据恢复成那份再起服务（旧版 daemon 不认新迁移，拒绝启动）；
+# `blank` = 清成空白数据（mac_data_blank），装上一版 release 做升级基线时用。
 mac_install_app() {
-  local src="$1" had_shell=0 mark old
+  local src="$1" data="${2:-}" had_shell=0 mark old snap="$E3_STATE/mac-snapshot"
   [ -d "$src" ] || { log "没有要装的包：$src"; return 1; }
   mac_shell_running && had_shell=1
   mac_quit_shell
-  svc_stop
+  svc_stop || return 1
+  if [ -f "$snap/data-pending" ]; then
+    mac_data_save "$snap/data" || { svc_start; return 1; }
+    rm -f "$snap/data-pending"
+  fi
+  if [ "$data" = blank ]; then
+    mac_data_blank || { svc_start; return 1; }
+  elif [ -n "$data" ]; then
+    mac_data_restore "$data" || { svc_start; return 1; }
+  fi
   mark=$(log_mark)
   old="$E3_STATE/replaced-$$.app"
   rm -rf "$old"
@@ -101,35 +115,103 @@ mac_wait_ready() {
 }
 
 # —— 装回原状 ——
-# mac_snapshot：记下当前装的版本，并整包留一份（装回时优先用它：装的可能是不在 release 上的开发构建）
+# mac_snapshot：记下当前装的版本，并整包留一份（装回时优先用它：装的可能是不在 release 上的开发构建）。
+# 数据快照与它同生命周期：标记 data-pending，由紧接着的那次 mac_install_app 在服务停下后存（#1311）。
 mac_snapshot() {
   local s="$E3_STATE/mac-snapshot"
   rm -rf "$s"
   mkdir -p "$s"
   mac_app_version >"$s/version.txt"
   ditto "$MAC_APP" "$s/P-Pass.app"
+  : >"$s/data-pending"
   echo "$s"
 }
-# mac_restore_snapshot：装回 mac_snapshot 留的那份，并核对版本
+# mac_restore_snapshot：装回 mac_snapshot 留的那份（连同数据快照），核对版本，且 daemon 在线、库可读
 mac_restore_snapshot() {
-  local s="$E3_STATE/mac-snapshot" want
+  local s="$E3_STATE/mac-snapshot" want data=
   [ -d "$s/P-Pass.app" ] || { log "没有可装回的快照"; return 1; }
   want=$(cat "$s/version.txt")
-  mac_install_app "$s/P-Pass.app" || return 1
+  if [ -d "$s/data" ]; then data="$s/data"; else log "快照里没有数据（旧快照或还没装过候选）：只装回程序"; fi
+  mac_install_app "$s/P-Pass.app" "$data" || return 1
   [ "$(mac_app_version)" = "$want" ] && [ "$(svc_version | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')" = "$want" ] ||
     { log "装回后版本不是 ${want}"; return 1; }
+  mac_library_readable || return 1
   log "已装回 ${want}"
 }
-# mac_restore_tag <tag>：从 GitHub Release 装指定 tag，核对签名与版本
+# mac_restore_tag <tag> [数据]：从 GitHub Release 装指定 tag，核对签名与版本（数据参数同 mac_install_app）
 mac_restore_tag() {
-  local tag="$1" app want
+  local tag="$1" data="${2:-}" app want
   app=$(mac_fetch_release "$tag") || return 1
   mac_verify_sig "$app" || { log "$tag 的签名校验不过"; return 1; }
   want="${tag#v}"
   [ "$(mac_app_version "$app")" = "$want" ] || { log "$tag 包内版本是 $(mac_app_version "$app")"; return 1; }
-  mac_install_app "$app" || return 1
+  mac_install_app "$app" "$data" || return 1
   [ "$(svc_version | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')" = "$want" ] || { log "装后 daemon 版本不是 ${want}"; return 1; }
   log "已装 ${tag}"
+}
+
+# —— 数据快照（#1311）：只在服务停着时存、恢复 ——
+# 范围：$MAC_DATA_DIR 下的 config.toml 与 libraries/（库索引、blob 账本、缩略图），加库目录（config.toml 的
+# data_dir）下的 .ppf/（blob 存储与库标识）。不含照片原件（originals/）与日志。身份与配对在钥匙串里，不随之变。
+mac_library_dir() { sed -n 's/^data_dir *= *"\(.*\)"$/\1/p' "$1/config.toml" 2>/dev/null | head -1; }
+
+# mac_data_save <目标目录>
+mac_data_save() {
+  local dst="$1" lib
+  [ -z "$(svc_any_pid)" ] || { log "服务还在跑，不存数据快照"; return 1; }
+  [ -f "$MAC_DATA_DIR/config.toml" ] || { log "没有 $MAC_DATA_DIR/config.toml"; return 1; }
+  rm -rf "$dst"
+  mkdir -p "$dst/appsupport"
+  ditto "$MAC_DATA_DIR/config.toml" "$dst/appsupport/config.toml" || return 1
+  if [ -d "$MAC_DATA_DIR/libraries" ]; then ditto "$MAC_DATA_DIR/libraries" "$dst/appsupport/libraries" || return 1; fi
+  lib=$(mac_library_dir "$MAC_DATA_DIR")
+  echo "$lib" >"$dst/library-dir.txt"
+  if [ -n "$lib" ] && [ -d "$lib/.ppf" ]; then ditto "$lib/.ppf" "$dst/library-ppf" || return 1; fi
+  log "数据快照已存（$(du -sh "$dst" | cut -f1)）"
+}
+
+# mac_data_restore <快照目录>：把 mac_data_save 存的那份放回原处（先删现有的同名目录，避免新文件残留）
+mac_data_restore() {
+  local src="$1" lib
+  [ -f "$src/appsupport/config.toml" ] || { log "数据快照不完整：$src"; return 1; }
+  [ -z "$(svc_any_pid)" ] || { log "服务还在跑，不恢复数据"; return 1; }
+  ditto "$src/appsupport/config.toml" "$MAC_DATA_DIR/config.toml" || return 1
+  rm -rf "$MAC_DATA_DIR/libraries"
+  if [ -d "$src/appsupport/libraries" ]; then ditto "$src/appsupport/libraries" "$MAC_DATA_DIR/libraries" || return 1; fi
+  lib=$(cat "$src/library-dir.txt")
+  if [ -n "$lib" ] && [ -d "$src/library-ppf" ]; then
+    rm -rf "$lib/.ppf"
+    ditto "$src/library-ppf" "$lib/.ppf" || return 1
+  fi
+  log "数据已恢复为快照（库 ${lib:-?}）"
+}
+
+# mac_data_blank：清成空白数据——删 libraries/（库索引、blob 账本、缩略图）和库目录 .ppf/ 里除库标识外的一切。
+# 留 config.toml 与 .ppf/library-id：库位置正本在钥匙串里，库标记不在 daemon 会当成库没挂上（#1253）。
+# 照片原件不动：daemon 启动时把它们收编进新索引（IDX-01），就是上一版的基线数据。只在留过数据快照后调用。
+mac_data_blank() {
+  local lib f
+  [ -z "$(svc_any_pid)" ] || { log "服务还在跑，不清数据"; return 1; }
+  [ -d "$E3_STATE/mac-snapshot/data" ] || { log "没有数据快照，不清数据"; return 1; }
+  rm -rf "$MAC_DATA_DIR/libraries"
+  lib=$(mac_library_dir "$MAC_DATA_DIR")
+  if [ -n "$lib" ] && [ -d "$lib/.ppf" ]; then
+    for f in "$lib/.ppf"/* "$lib/.ppf"/.[!.]*; do
+      [ -e "$f" ] && [ "$(basename "$f")" != library-id ] && rm -rf "$f"
+    done
+  fi
+  log "数据已清成空白（库 ${lib:-?}，原件保留）"
+}
+
+# mac_library_readable：装回后库可读——已装 daemon 自己 diag export 出的 status 里有照片数
+mac_library_readable() {
+  local d="$E3_STATE/restore-diag-$$" n
+  rm -rf "$d"
+  mac_diag "$d" || { log "装回后 diag export 失败：库读不出"; return 1; }
+  n=$(jget "$d/status.json" 'j["photo_count"]')
+  rm -rf "$d"
+  [ -n "$n" ] || { log "装回后 status 里没有照片数：库读不出"; return 1; }
+  log "装回后库可读（照片数 ${n}）"
 }
 
 # —— 只读取证（已装 daemon 是签名 socket，脚本不能直连；用它自己的 diag export 子命令拿 status 与设备表） ——
