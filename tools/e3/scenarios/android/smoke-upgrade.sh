@@ -16,7 +16,8 @@ setup() {
   [ -f "$base" ] || { echo "缺基线包：${base}（just verify 会编；或 E3_ANDROID_BASE_APK=…）"; return 1; }
   [ -f "$cand" ] || { echo "缺候选包（apps/android 的 assembleDebug 产物；或 E3_ANDROID_APK=…）"; return 1; }
   [ -x "$(cand_daemon)" ] || { echo "缺候选 daemon：$(cand_daemon)"; return 1; }
-  rm_photos "PPR_$TAG"
+  # 清掉所有场景推过的测试素材（包括视频场景留下的那段），计数才只算本场景推的
+  rm_photos "PPR_"
   eph_start "$(cand_daemon)"
   install_fresh "$base"
   pkg_info >"$EV/base-pkg.txt"

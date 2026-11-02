@@ -23,8 +23,8 @@ done
 for d in "$E3"/fixtures/*/; do
   id="$(basename "$d")"
   id="${id/-//}"
-  "$E3/run" judge "$id" "$d/pass" >/dev/null || bad "$id：pass fixture 没判过"
-  "$E3/run" judge "$id" "$d/fail" >/dev/null && bad "$id：fail fixture 没判红"
+  "$E3/run" judge "$id" "$d/pass" >/dev/null || bad "${id}：pass fixture 没判过"
+  "$E3/run" judge "$id" "$d/fail" >/dev/null && bad "${id}：fail fixture 没判红"
 done
 
 # 设备锁：第二个持锁者要等第一个释放

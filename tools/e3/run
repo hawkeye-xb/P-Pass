@@ -82,9 +82,10 @@ run_one() {
     rc=$?
     if [ "$rc" -eq 77 ]; then
       echo "SKIP $id  $(tail -1 "$ev/run.log")"
+      echo SKIP >"$ev/verdict.txt"
       exit 0
     fi
-    [ "$rc" -eq 0 ] || { echo "FAIL $id  setup 失败（$ev/run.log）"; exit 1; }
+    [ "$rc" -eq 0 ] || { echo "FAIL $id  setup 失败：$(tail -1 "$ev/run.log")（$ev/run.log）"; echo FAIL >"$ev/verdict.txt"; exit 1; }
     echo "== act" >>"$ev/run.log"
     OUT="$ev/main" act >>"$ev/run.log" 2>&1 || echo "act 返回非零（交给 judge 判）" >>"$ev/run.log"
     judge "$ev/main" >"$ev/judge-main.txt" 2>&1
@@ -110,7 +111,15 @@ run_one() {
     echo FAIL >"$ev/verdict.txt"
     [ "$main_ok" -eq 0 ] || grep -E '^  FAIL' "$ev/judge-main.txt" | head -5 | sed 's/^/     /'
     exit 1
-  )
+  ) 2>>"$ev/run.log"
+  rc=$?
+  # 场景里 die 之类直接退出了子 shell：没留下结论也记 FAIL
+  if [ ! -f "$ev/verdict.txt" ]; then
+    echo "FAIL $id  中途退出：$(tail -1 "$ev/run.log")（$ev/run.log）"
+    echo FAIL >"$ev/verdict.txt"
+    return 1
+  fi
+  return $rc
 }
 
 cmd_run() {

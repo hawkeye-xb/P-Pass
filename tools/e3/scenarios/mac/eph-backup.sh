@@ -6,7 +6,9 @@ COUNTER=off
 N="${E3_MAC_N:-30}"
 
 setup() {
+  # 与 Android 的配对桩分开（状态目录与端口都不同），两端可以同时跑
   EPH_STATE="$E3_STATE/eph-mac"
+  E3_EPH_PORT="${E3_MAC_EPH_PORT:-41246}"
   [ -x "$(cand_daemon)" ] && [ -x "$(cand_testclient)" ] || { echo "候选二进制没编：$(cand_daemon) / $(cand_testclient)"; return 1; }
   eph_start "$(cand_daemon)"
   W="$E3_STATE/mac-tc"
