@@ -40,7 +40,7 @@ unset PPASS_HOOK_BYPASS PPASS_HOOK_BYPASS_REASON PPASS_HOOK_REPO PPASS_HOOK_ROOT
 NOGH_PATH="${TMP}/nogh"
 mkdir -p "$NOGH_PATH"
 for c in git bash env sh sed awk tar mktemp cat tr head grep rm cp chmod touch sort cmp \
-  basename dirname mkdir; do
+  basename dirname mkdir mv; do
   p="$(command -v "$c")" && [ "${p#/}" != "$p" ] || {
     echo "找不到命令 ${c}，无法搭测试环境"
     exit 1
@@ -96,6 +96,8 @@ COMMON="${R}/.git"
 git init -q --bare --template= "${TMP}/up.git"
 git remote add up "${TMP}/up.git"
 git push -q up main
+# origin 的 URL 仍是 SSH 别名（测仓库名解析），实际取推都落到同一个裸仓库。
+git config --global url."${TMP}/up.git".insteadOf git@github-personal:hawkeye-xb/P-Pass.git
 # 卡分支只许在 linked worktree 里提交：主仓放到 detached HEAD，用例都在 worktree W 里跑。
 git checkout -q --detach
 W="${TMP}/wt"
@@ -106,10 +108,15 @@ cd "$W" || exit 1
 # 每条都从 main 的干净状态开始。
 LAST_OUT=""
 try() {
-  local want="$1" label="$2" branch="$3" action="$4" needle="${5:-}" rc got
   git checkout -q -f main && git clean -qfdx
-  git checkout -q -B "$branch" main
-  eval "$action"
+  git checkout -q -B "$3" main
+  eval "$4"
+  commit_is "$1" "$2" "${5:-}"
+}
+
+# commit_is <期望 pass|deny> <说明> [输出必须包含的文字]：对当前暂存区提交并断言。
+commit_is() {
+  local want="$1" label="$2" needle="${3:-}" rc got
   LAST_OUT="$(git commit -s -q -m "test: ${label}" 2>&1)"
   rc=$?
   if [ "$rc" -eq 0 ]; then got=pass; else got=deny; fi
@@ -125,6 +132,31 @@ try() {
   fi
   ok "${label} → ${got}"
 }
+
+# advance <n> [文件]...：在远端 main 上叠 n 个提交；给了文件时第一个提交把它们改成新内容。
+advance() {
+  local n="$1" base tree c f blob
+  shift
+  git fetch -q up main
+  base="$(git rev-parse FETCH_HEAD)"
+  tree="$(git rev-parse "${base}^{tree}")"
+  if [ "$#" -gt 0 ]; then
+    GIT_INDEX_FILE="${TMP}/idx" git read-tree "$tree"
+    for f in "$@"; do
+      blob="$(printf 'main changed %s\n' "$f" | git hash-object -w --stdin)"
+      GIT_INDEX_FILE="${TMP}/idx" git update-index --add --cacheinfo "100644,${blob},${f}"
+    done
+    tree="$(GIT_INDEX_FILE="${TMP}/idx" git write-tree)"
+    rm -f "${TMP}/idx"
+  fi
+  c="$base"
+  while [ "$n" -gt 0 ]; do
+    c="$(git commit-tree -p "$c" -m "main +${n}" "$tree")"
+    n=$((n - 1))
+  done
+  git push -q -f up "${c}:refs/heads/main"
+}
+reset_main() { git push -q -f up "$(git rev-parse refs/heads/main):refs/heads/main"; }
 
 issue 101 "status:doing" "$(scope_body 'docs/a/**' 'crates/storage/')"
 issue 102 "status:doing" "## ⬜ 可接段
@@ -200,7 +232,61 @@ try pass "  反证：去掉原 hook → 放行" batch/2026-11-02-y 'echo 1 >>doc
 git checkout -q -f -B fix/101-empty main
 git commit -s -q --allow-empty -m "test: empty" 2>/dev/null && ok "卡分支上的空提交放行" || bad "卡分支上的空提交被拒"
 
-echo "==> 8. 主仓工作区"
+echo "==> 8. 提交时落后 main"
+advance 21
+try deny "落后 origin/main 21 个提交" fix/101-stale 'echo 1 >>docs/a/x.md; git add -A' "落后 origin/main 21 个提交"
+reset_main
+advance 20
+try pass "  反证：落后 20 个 → 放行" fix/101-stale 'echo 1 >>docs/a/x.md; git add -A'
+reset_main
+advance 1 docs/a/x.md
+try deny "main 上已有新提交改过范围内文件" fix/101-scope 'echo z >docs/a/z.md; git add -A' "main 上改过：docs/a/x.md"
+reset_main
+advance 1 docs/b/y.md
+try pass "  反证：main 上新提交只改范围外文件 → 放行" fix/101-scope 'echo z >docs/a/z.md; git add -A'
+reset_main
+advance 21 docs/a/x.md
+mv "${TMP}/up.git" "${TMP}/up.off"
+try pass "离线取不到 origin/main：只告警不拒" fix/101-off2 'echo 1 >>docs/a/x.md; git add -A' "取不到 origin/main"
+mv "${TMP}/up.off" "${TMP}/up.git"
+reset_main
+
+echo "==> 9. 合并 origin/main 解冲突"
+git checkout -q -f main && git clean -qfdx
+git checkout -q -B fix/101-merge main
+echo card >>docs/a/x.md
+git add -A
+git commit -s -q -m "card work"
+CARD="$(git rev-parse HEAD)"
+# main 上：改了与卡冲突的 docs/a/x.md、核心文件、范围外文件。
+advance 1 docs/a/x.md crates/storage/src/a.rs docs/b/y.md
+git fetch -q origin
+merge_main() { # 从卡的提交重新合并 origin/main，解冲突
+  git checkout -q -f -B "$1" "$CARD" && git clean -qfdx
+  git merge -q --no-edit origin/main >/dev/null 2>&1
+  echo resolved >docs/a/x.md
+  git add -A
+}
+merge_main fix/101-merge1
+commit_is pass "合并 origin/main：带进来的核心与范围外文件不算本卡改动"
+merge_main fix/101-merge2
+echo mine >>docs/b/y.md
+git add -A
+commit_is deny "  反证：合并时顺手改了范围外文件 → 拒绝" "越界：docs/b/y.md"
+merge_main fix/101-merge3
+echo mine >>crates/storage/src/a.rs
+git add -A
+commit_is deny "  反证：合并时顺手改了核心文件 → 拒绝" "这是核心改动"
+side="$(git commit-tree -p main -m "side" "$(git rev-parse "origin/main^{tree}")")"
+git checkout -q -f -B fix/101-merge4 "$CARD"
+git merge -q --no-commit --no-ff "$side" >/dev/null 2>&1
+echo resolved >docs/a/x.md
+git add -A
+commit_is deny "  反证：合并的不是 main 而是别的分支 → 按全部改动判" "这是核心改动"
+git merge --abort 2>/dev/null
+reset_main
+
+echo "==> 10. 主仓工作区"
 git -C "$R" checkout -q -f -B fix/101-main main
 echo 1 >>"${R}/docs/a/x.md"
 git -C "$R" add -A
@@ -213,7 +299,7 @@ git -C "$R" commit -s -q -m "test: batch in main worktree" 2>/dev/null && ok "  
 git -C "$R" checkout -q --detach
 # 同样改动在 worktree 里放行，见第 1 节「普通卡，只改范围内文件」。
 
-echo "==> 9. 推送：卡分支必须包含最新 main"
+echo "==> 11. 推送：卡分支必须包含最新 main"
 pushed() { # pushed <期望 pass|deny> <说明> <分支> [输出必须包含的文字]
   local out rc got
   out="$(git push -q -f up "$3" 2>&1)"
@@ -249,7 +335,7 @@ pushed pass "  反证：rebase 到 up/main 后 → 放行" fix/101-push
 rm -f "${COMMON}/hooks/pre-push"
 git fetch -q up main:main 2>/dev/null || git update-ref refs/heads/main "$adv"
 
-echo "==> 10. 安装自检"
+echo "==> 12. 安装自检"
 git checkout -q -f main
 bash tools/hooks/install.sh --check >"${TMP}/check.out" 2>&1 && ok "已安装 → --check 通过" || bad "已安装却 --check 失败：$(cat "${TMP}/check.out")"
 git config --unset core.hooksPath

@@ -7,6 +7,9 @@
 #     - 暂存改动命中核心（tools/ci-paths.sh core，规则 .github/core-paths.txt）且 issue 没有 `core` 标签 → 拒绝
 #     - 暂存改动有文件不在 issue「范围」代码块的路径/glob 里 → 拒绝；没有范围代码块 → 拒绝
 #     - 卡分支在主仓工作区（不是 linked worktree）里 → 拒绝
+#     - 落后 origin/main 超过 PPASS_HOOK_MAX_BEHIND（默认 20）个提交，或 main 上已有新提交改过范围内
+#       的文件 → 拒绝（现取 origin/main；取不到只告警）
+#     - 合并 origin/main 解冲突的提交：与 MERGE_HEAD 内容相同的文件不算本卡改动
 #   其它分支名、detached HEAD        拒绝
 # 推送时另有 tools/hooks/pre-push：卡分支必须包含最新的 origin/main。
 # 查不到 issue（没装 gh、没登录、离线）一律拒绝。
@@ -67,6 +70,38 @@ if [ "$GIT_DIR_ABS" = "$COMMON_ABS" ]; then
   deny "卡分支「${BRANCH}」在主仓工作区里，不在独立 worktree 里" \
     "一卡一 worktree：git fetch origin --prune && git worktree add <目录> -b <新卡分支> origin/main" \
     "已有改动先搬过去：git stash，在新 worktree 里 git stash pop；然后把主仓切回原来的分支。"
+fi
+
+# 现取远端 main：判落后用，也用来认出「把 main 合进卡分支」的合并提交。取不到（离线）只告警，
+# 落后检查跳过，合并提交也不做下面的过滤（按全部改动判，宁严勿松）。
+MAIN_REF="refs/remotes/origin/main"
+HAVE_MAIN=""
+if GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-ssh -o ConnectTimeout=5 -o BatchMode=yes}" \
+  git fetch -q origin "+refs/heads/main:${MAIN_REF}" 2>/dev/null; then
+  HAVE_MAIN=1
+else
+  printf '⚠ 取不到 origin/main（离线？），这次不检查卡分支是否落后 main\n' >&2
+fi
+
+# 合并提交：MERGE_HEAD 已在 origin/main 里（即把 main 合进来解冲突）时，内容与 MERGE_HEAD
+# 完全一致的文件是从 main 原样带进来的，已经过审，不算本卡的改动；其余文件（冲突解法、
+# 本卡自己的改动）照常判核心与范围。合并别的分支不做过滤——那等于把别处的改动夹带进卡。
+MERGE_HEAD_SHA="$(git rev-parse -q --verify MERGE_HEAD 2>/dev/null)" || MERGE_HEAD_SHA=""
+if [ -n "$MERGE_HEAD_SHA" ] && [ -n "$HAVE_MAIN" ] &&
+  git merge-base --is-ancestor "$MERGE_HEAD_SHA" "$MAIN_REF"; then
+  OWN=""
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    [ "$(git rev-parse -q --verify ":${f}" 2>/dev/null)" = \
+      "$(git rev-parse -q --verify "${MERGE_HEAD_SHA}:${f}" 2>/dev/null)" ] && continue
+    OWN="${OWN}${f}
+"
+  done <<EOF
+$FILES
+EOF
+  FILES="$(printf '%s' "$OWN" | sed '/^$/d')"
+  printf 'ok: 合并 origin/main 的提交，只判与 main 不同的文件\n' >&2
+  [ -n "$FILES" ] || exit 0
 fi
 
 REPO="${PPASS_HOOK_REPO:-}"
@@ -132,6 +167,33 @@ EOF
   deny "#${ISSUE} 没有可读的「范围」" \
     "issue 正文要有「**范围（只许动这些）**：」，下面跟一个 \`\`\` 代码块，一行一个路径或 glob（** 跨目录，* 不跨 /）。" \
     "让 owner 先把范围补进 issue，再提交。"
+
+# ── 落后 main ────────────────────────────────────────────────────────
+# 两种情况拒绝：落后超过阈值；或 main 上已有本卡还没拿到的提交改过范围内的文件（在旧代码上
+# 改同一处，验证结果作废、合并必冲突）。合并提交把 MERGE_HEAD 也算作已拿到。
+if [ -n "$HAVE_MAIN" ]; then
+  HAVE=(HEAD)
+  [ -z "$MERGE_HEAD_SHA" ] || HAVE+=("$MERGE_HEAD_SHA")
+  MAX="${PPASS_HOOK_MAX_BEHIND:-20}"
+  BEHIND="$(git rev-list --count --first-parent "$MAIN_REF" --not "${HAVE[@]}" 2>/dev/null)" || BEHIND=0
+  if [ "${BEHIND:-0}" -gt "$MAX" ]; then
+    deny "卡分支落后 origin/main ${BEHIND} 个提交（上限 ${MAX}）" \
+      "先跟上：git fetch origin && git rebase origin/main，重跑本地验证，再提交。"
+  fi
+  STALE=()
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    hit="$(printf '%s\n' "$f" | bash "$PATHS" hit - "${GLOBS[@]}" 2>/dev/null)"
+    [ "$hit" = "true" ] && STALE+=("$f")
+  done <<EOF
+$(git -c core.quotepath=false log --format= --name-only "$MAIN_REF" --not "${HAVE[@]}" 2>/dev/null | sort -u)
+EOF
+  if [ "${#STALE[@]}" -gt 0 ]; then
+    deny "origin/main 上已有新提交改过本卡范围内的文件，卡分支还没跟上" \
+      "${STALE[@]/#/main 上改过：}" \
+      "先跟上：git fetch origin && git rebase origin/main，重跑本地验证，再提交。"
+  fi
+fi
 
 OUTSIDE=()
 while IFS= read -r f; do
