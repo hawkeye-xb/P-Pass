@@ -143,35 +143,39 @@ mac_diag() {
   rm -f "$z"
 }
 # mac_node_prefix：daemon 日志里 iroh 端点 id（NodeId 前 10 位）——最近一次启动的
-mac_node_prefix() { grep -o 'endpoint{id=[0-9a-f]*}' "$MAC_DAEMON_LOG" 2>/dev/null | tail -1 | sed 's/endpoint{id=\(.*\)}/\1/'; }
+mac_node_prefix() { log_since 0 | grep -o 'endpoint{id=[0-9a-f]*}' | tail -1 | sed 's/endpoint{id=\(.*\)}/\1/'; }
 
-# —— 候选签名包 ——
-# mac_build_candidate：走正式打包链路出候选包：bundle-macos.sh（daemon + 编解码库）→ bundle-desktop-macos.sh
-# 只跑 build 阶段（不带签名，不出 dmg：签名路径下它会出 dmg，还要用 Finder 的 AppleScript 排版）→
-# 按它第 4–5 步同样的做法组装 helper、由内向外签名（团队 Developer ID + daemon 描述文件，daemon 才读写得了
-# 钥匙串）。重编译套 heavy-build 锁排队。描述文件：PPF_DAEMON_PROVISIONPROFILE，或 just mac-dev 记下的那份。
-mac_build_candidate() {
-  local out="$E3_STATE/mac-cand" profile ident target version
+# —— 开发版签名包（just dev mac 与 mac/upgrade 的候选）——
+# mac_build_dev：debug daemon（组装成签名 helper，复用 daemon-helper-macos.sh dev）+ tauri bundle --debug 出的外壳，
+# 外层用同一张团队 Developer ID 签名（hardened runtime、不请求 Apple 时间戳），与 tools/mac-dev.sh 同一做法、
+# 不起 tauri dev。daemon 带描述文件签名，才读写得了钥匙串。产物：$(mac_cand_app)。重编译套 heavy-build 锁排队。
+# 描述文件：PPF_DAEMON_PROVISIONPROFILE，或 just mac-dev 记下的那份。
+mac_build_dev() {
+  local out="$E3_STATE/mac-cand" profile ident version config desktop shell_target
   profile="${PPF_DAEMON_PROVISIONPROFILE:-$HOME/Library/Application Support/p-pass-mac-dev/daemon.provisionprofile}"
   [ -f "$profile" ] || { log "缺 daemon 描述文件（PPF_DAEMON_PROVISIONPROFILE）"; return 1; }
   ident="$("$REPO_ROOT/tools/daemon-helper-macos.sh" identity)" || return 1
-  target="${CARGO_TARGET_DIR:-$REPO_ROOT/target}"
   version="$("$REPO_ROOT/tools/release-version.sh" desktop)"
+  config="$(node "$REPO_ROOT/tools/release/tauri-config.mjs" macos "$version")"
+  desktop="$REPO_ROOT/apps/desktop"
+  shell_target="${CARGO_TARGET_DIR:-$desktop/src-tauri/target}"
   rm -rf "$out"
-  mkdir -p "$out/rel"
+  mkdir -p "$out"
   (
     set -e
     cd "$REPO_ROOT"
     export CARGO_INCREMENTAL=0
-    PPF_BUILD_VERSION="$version" /usr/bin/lockf -k /tmp/ppass-heavy-build.lock \
-      cargo build --release -p daemon -p testclient
-    tools/bundle-macos.sh "$out/rel" "$target/release/daemon" "$target/release/testclient"
-    PPF_BUNDLE_PHASE=build /usr/bin/lockf -k /tmp/ppass-heavy-build.lock \
-      tools/bundle-desktop-macos.sh "$out/rel" "$out/rel"
-    ditto "${CARGO_TARGET_DIR:-apps/desktop/src-tauri/target}/release/bundle/macos/P-Pass.app" "$out/P-Pass.app"
-    tools/daemon-helper-macos.sh assemble "$out/rel" "$out/P-Pass.app/Contents/Helpers/ppf-daemon.app" "$version"
-    tools/daemon-helper-macos.sh sign "$out/P-Pass.app/Contents/Helpers/ppf-daemon.app" "$ident" "$profile"
-    codesign --force --sign "$ident" --options runtime --timestamp "$out/P-Pass.app"
+    PPF_BUILD_VERSION="$version" /usr/bin/lockf -k /tmp/ppass-heavy-build.lock cargo build -p daemon
+    PPF_DAEMON_PROVISIONPROFILE="$profile" tools/daemon-helper-macos.sh dev \
+      "${CARGO_TARGET_DIR:-target}/debug/daemon" "$out/ppf-daemon.app"
+    cd "$desktop"
+    pnpm install --frozen-lockfile --silent
+    /usr/bin/lockf -k /tmp/ppass-heavy-build.lock pnpm tauri build --debug --no-bundle --config "$config"
+    pnpm tauri bundle --debug --bundles app --config "$config" >/dev/null
+    ditto "$shell_target/debug/bundle/macos/P-Pass.app" "$out/P-Pass.app"
+    mkdir -p "$out/P-Pass.app/Contents/Helpers"
+    mv "$out/ppf-daemon.app" "$out/P-Pass.app/Contents/Helpers/ppf-daemon.app"
+    codesign --force --sign "$ident" --options runtime --timestamp=none "$out/P-Pass.app"
     codesign --verify --deep --strict "$out/P-Pass.app"
   )
 }

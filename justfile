@@ -355,6 +355,15 @@ verify-m1:
 verify *args:
     tools/e3/verify {{args}}
 
+# 研发本地看改动：编开发版签名包、取设备锁后覆盖装到测试设备（目前 mac）。装回：just restore。见 docs/runbook/e3.md。
+#   just dev mac
+dev *args:
+    tools/e3/dev {{args}}
+
+# 把测试设备装回指定版本（先取设备锁）：just restore mac <tag> | just restore mac --snapshot
+restore *args:
+    tools/e3/restore {{args}}
+
 # Android unit tests (proto golden drift check included)
 android-test:
     #!/usr/bin/env bash
