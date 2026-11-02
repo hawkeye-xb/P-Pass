@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 const lf = (s) => s.replace(/\r\n/g, "\n");
 const app = lf(readFileSync(new URL("./App.svelte", import.meta.url), "utf8"));
-const zh = JSON.parse(readFileSync(new URL("../../../assets/i18n/zh.json", import.meta.url), "utf8"));
-const en = JSON.parse(readFileSync(new URL("../../../assets/i18n/en.json", import.meta.url), "utf8"));
+const zh = JSON.parse(readFileSync(new URL("./i18n/zh.json", import.meta.url), "utf8"));
+const en = JSON.parse(readFileSync(new URL("./i18n/en.json", import.meta.url), "utf8"));
 
 describe("W-4 磁盘加密提示", () => {
   it("只有确认未开启（off）才显示；unknown / on 不提示", () => {

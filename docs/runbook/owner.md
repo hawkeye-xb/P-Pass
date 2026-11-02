@@ -59,13 +59,39 @@ worktree（主仓旁边的 `P-Pass-wt/batch-<日期>-<主题>`），逐张执行
 2. 跑 `just ci`。
 3. 跑全部 `tools/test-*.sh`。跑之前把 `GIT_TEMPLATE_DIR` 设成空目录：本机全局 git 模板里的身份 hook 会拦下
    测试夹具用的假身份，造成和改动无关的红。
-4. 受影响端按 `tools/ci-paths.sh` 判定，再跑对应端的真机验证：
-   - Mac 与 Android：`just verify --smoke <端>`。场景库在才跑，最后一行必须是 `VERIFY PASS`。
-   - Windows：`tools/flow/owner-win-test.sh`，用交互会话的计划任务跑。经 ssh 直接跑测试时，令牌是网络登录，
-     命名管道与 ACL 测试会红或挂死，结论不可信。
-   - iOS：场景库还没收编。
+4. 按「CI 检查 → 本地命令」对照表跑本机能跑的全部步骤（见下一节），第 2、3 步漏掉的 CI 检查在这里补齐。
+5. 对照表里要在 Windows 跑的步骤：`tools/flow/owner-win-test.sh`，用交互会话的计划任务跑。经 ssh 直接跑测试时，
+   令牌是网络登录，命名管道与 ACL 测试会红或挂死，结论不可信。
+6. 受影响端按 `tools/ci-paths.sh` 判定，再跑对应端的真机验证：
+   - Mac 与 Android：`just verify --all`。场景库在才跑，最后一行必须是 `VERIFY PASS`。
+   - iOS：真机场景库还没收编（模拟器上的测试已在第 4 步）。
 
    没跑成的端记为「未覆盖」，既不算绿也不算红，会写进报告与 PR 正文，留给 test 回归。
+
+## CI 检查 → 本地命令对照表
+
+对照表是 `tools/flow/ci-local-map.tsv`，覆盖 `.github/workflows/ci-*.yml` 与 `e2e.yml` 里的每个 job，
+一个 job 可以拆成多行，每行一步。每行写明在哪跑：
+
+| where | 含义 |
+|---|---|
+| `mac` | 本机在仓库根目录用 bash 跑 |
+| `win` | Windows 回归机在交互会话里用 cmd 跑 |
+| `ci-only` | 本地跑不了，最后一列写理由，报告与 PR 正文的「只能 CI」一节列出 |
+| `meta` | 路径判定、汇总、手动发布类 job，没有检查内容，最后一列写理由 |
+
+跑不跑与 CI 同一口径（`gate` 列）：`paths` 读该 workflow 的 `changes` job 交给 `.github/actions/changes` 的
+路径，用 `tools/ci-paths.sh hit` 判；`lane[:<名字>]` 用 `tools/ci-needs-full-lane.sh` 判；判不出来按要跑。
+基准是 `merge-base HEAD origin/main`。
+
+- Linux 不单独跑。ubuntu 上平台无关的检查在 Mac 跑同样的命令，结果只代表 macOS 目标；
+  Linux 目标的编译与测试标「只能 CI」。
+- `just ci-local-map-check`（`just ci` 与 `just ci-docs` 都跑）判覆盖：有 job 没映射、映射指向的 job 已不存在、
+  `ci-only` / `meta` 没写理由，都红。CI 加了新 job，先在对照表里补一行。
+- 单独跑某个 job 或对旧提交跑：`tools/flow/owner-ci-local.sh --repo <检出> --only ci-ios.yml:ios`。
+  对照表从脚本所在目录读，命令在 `--repo` 里跑；红了即停，最后一行 `CI-LOCAL FAIL <步骤>`。
+  每步都取重编译锁排队。
+- 报告里「CI 判定不用跑」一节列出 gate 判定跳过的 job。
 
 批次报告存在 `<git 公共目录>/ppass-batch/<批次>/verify-<提交>/report.md`，与验证时的提交绑定，不进 git。
 
@@ -99,9 +125,11 @@ worktree（主仓旁边的 `P-Pass-wt/batch-<日期>-<主题>`），逐张执行
   也换新名，不强推。
 - **Windows 测试**：需要本机配置 `~/.config/ppass/owner.env`，内容是 `OWNER_WIN_HOST`、`OWNER_WIN_CLONE`
   （owner 专用的克隆，不要用别人在用的那份）和 `OWNER_WIN_WORK`。代码用 `git bundle` 送过去，
-  `owner-win-run.ps1` 注册临时计划任务（LogonType Interactive），跑完删掉。主人没登录桌面时任务跑不起来，
+  对照表里 `win` 的步骤生成一个 cmd 脚本，`owner-win-run.ps1` 注册临时计划任务（LogonType Interactive）
+  跑它，跑完删掉。编译限 `CARGO_BUILD_JOBS=4`、`CARGO_INCREMENTAL=0`，PATH 最前加 `rust-toolchain.toml`
+  锁定版本的工具链。日志里 `PPASS_FAILED_STEP=` 是红的那步。主人没登录桌面时任务跑不起来，
   按「判定不了」停下。
-- **重编译互斥**：`just ci` 与 ppf-decoder 的构建套 `lockf -k /tmp/ppass-heavy-build.lock`；
+- **重编译互斥**：一律经 `tools/heavy-lock <命令>` 排队（可重入：外层已持锁时内层直接执行；等锁超时报错，#1308）（`just ci`、ppf-decoder 构建与对照表的每一步都走它），不要在外面再包 `lockf`；
   `just verify` 自己会取这把锁，外面不再套。
 
 ## 产品取向的问题

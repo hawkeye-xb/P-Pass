@@ -26,23 +26,35 @@ class StringsSymmetryTest {
         return File(dir, "apps/android/app/src/main/res")
     }
 
-    /** 解析 strings.xml 为 key→text 映射（真实 DOM，不丢任何条目）。 */
+    /**
+     * 该语言目录下的全部文案文件：strings.xml（两部手机共用）+ strings_android_only.xml（#1302，
+     * 只在 Android 出现）。aapt 把同目录的 values 文件合成一张表，这里也按一张表查。
+     */
+    private fun stringFiles(resDir: File, localeDir: String): List<File> {
+        val files = File(resDir, localeDir).listFiles()
+            ?.filter { it.name == "strings.xml" || it.name == "strings_android_only.xml" }
+            ?.sortedBy { it.name }.orEmpty()
+        check(files.any { it.name == "strings.xml" }) { "strings.xml missing under $localeDir" }
+        return files
+    }
+
+    /** 解析全部文案文件为 key→text 映射（真实 DOM，不丢任何条目；跨文件重复也算重复）。 */
     private fun keys(resDir: File, localeDir: String): Map<String, String> {
-        val xml = File(resDir, localeDir).listFiles()?.firstOrNull { it.name == "strings.xml" }
-            ?: error("strings.xml missing under $localeDir")
         val factory = DocumentBuilderFactory.newInstance()
         factory.isNamespaceAware = true
-        val doc = factory.newDocumentBuilder().parse(xml)
-        val nodes = doc.getElementsByTagName("string")
         val result = LinkedHashMap<String, String>()
-        for (i in 0 until nodes.length) {
-            val el = nodes.item(i) as Element
-            val name = el.getAttribute("name")
-            // 文本内容 = 全部子节点文本（含 CDATA/多行），trim 后保留
-            val text = el.textContent?.trim().orEmpty()
-            check(name.isNotEmpty()) { "strings.xml ($localeDir) 有缺 name 的 <string> 节点" }
-            check(!result.containsKey(name)) { "strings.xml ($localeDir) 重复 key: $name" }
-            result[name] = text
+        for (xml in stringFiles(resDir, localeDir)) {
+            val doc = factory.newDocumentBuilder().parse(xml)
+            val nodes = doc.getElementsByTagName("string")
+            for (i in 0 until nodes.length) {
+                val el = nodes.item(i) as Element
+                val name = el.getAttribute("name")
+                // 文本内容 = 全部子节点文本（含 CDATA/多行），trim 后保留
+                val text = el.textContent?.trim().orEmpty()
+                check(name.isNotEmpty()) { "strings.xml ($localeDir) 有缺 name 的 <string> 节点" }
+                check(!result.containsKey(name)) { "strings.xml ($localeDir) 重复 key: $name" }
+                result[name] = text
+            }
         }
         return result
     }
@@ -61,16 +73,17 @@ class StringsSymmetryTest {
 
     /** plurals：name → (quantity → text)。 */
     private fun plurals(resDir: File, localeDir: String): Map<String, Map<String, String>> {
-        val xml = File(resDir, "$localeDir/strings.xml")
-        val doc = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(xml)
-        val nodes = doc.getElementsByTagName("plurals")
         val result = LinkedHashMap<String, Map<String, String>>()
-        for (i in 0 until nodes.length) {
-            val el = nodes.item(i) as Element
-            val items = el.getElementsByTagName("item")
-            result[el.getAttribute("name")] = (0 until items.length).associate { j ->
-                val item = items.item(j) as Element
-                item.getAttribute("quantity") to item.textContent.trim()
+        for (xml in stringFiles(resDir, localeDir)) {
+            val doc = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(xml)
+            val nodes = doc.getElementsByTagName("plurals")
+            for (i in 0 until nodes.length) {
+                val el = nodes.item(i) as Element
+                val items = el.getElementsByTagName("item")
+                result[el.getAttribute("name")] = (0 until items.length).associate { j ->
+                    val item = items.item(j) as Element
+                    item.getAttribute("quantity") to item.textContent.trim()
+                }
             }
         }
         return result

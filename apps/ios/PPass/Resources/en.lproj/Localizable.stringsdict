@@ -67,22 +67,6 @@
 			<string>%1$ld photos were deleted from this phone and can no longer be backed up.</string>
 		</dict>
 	</dict>
-	<key>notif_backup_failed_body</key>
-	<dict>
-		<key>NSStringLocalizedFormatKey</key>
-		<string>%#@n@</string>
-		<key>n</key>
-		<dict>
-			<key>NSStringFormatSpecTypeKey</key>
-			<string>NSStringPluralRuleType</string>
-			<key>NSStringFormatValueTypeKey</key>
-			<string>ld</string>
-			<key>one</key>
-			<string>%1$ld photo couldn't be backed up. Tap to view.</string>
-			<key>other</key>
-			<string>%1$ld photos couldn't be backed up. Tap to view.</string>
-		</dict>
-	</dict>
 	<key>backup_scope_n</key>
 	<dict>
 		<key>NSStringLocalizedFormatKey</key>

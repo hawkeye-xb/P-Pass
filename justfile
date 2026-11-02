@@ -262,7 +262,7 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check hooks-test flow-worker-test supply-chain-check mobile-static-check lockfile-check flow-owner-test
+ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check hooks-test flow-worker-test supply-chain-check mobile-static-check i18n-split-check lockfile-check flow-owner-test heavy-lock-test ci-local-map-check
   @echo "==> CI pipeline: all green ✅"
 
 # 两个 Rust workspace 的 Cargo.lock 都得和实际依赖一致（src-tauri 是独立 workspace，
@@ -286,6 +286,13 @@ mobile-static-check:
   @for l in en zh; do cmp -s assets/i18n/$l.json apps/android/app/src/main/assets/i18n/$l.json || { echo "✗ apps/android/app/src/main/assets/i18n/$l.json 与 assets/i18n 不一致——从 assets/i18n 复制过去"; exit 1; }; done
   @echo "ok: Android i18n 副本与 assets/i18n 逐字节一致"
 
+# 文案按端拆分（#1302）：key 住对文件、各消费方查得到（含反证自测）；发版判定只牵动文案所在的端。
+i18n-split-check:
+  python3 tools/check-i18n-split.py --self-test > /dev/null
+  python3 tools/check-i18n-split.py
+  bash tools/test-version-bump-i18n.sh > /dev/null
+  @echo "ok: 文案改动只牵动所在的端（tools/test-version-bump-i18n.sh）"
+
 # QA-03 文档快车道：只跑文档域的门禁，不编 Rust。
 #
 # 为什么要这条：`ci` 里的 fmt/lint/test 是全量 Rust 构建 + clippy + nextest，
@@ -294,7 +301,7 @@ mobile-static-check:
 #
 # ⚠️ 只在这次改动**一行 Rust/Kotlin/前端都没动**时用它。碰了代码就跑 `just ci`，
 # 别拿这条快车道当省事的借口——`ci` 的依赖列表一个都没减。
-ci-docs: md-check token-check shell-vars-check identity-check hooks-test flow-worker-test supply-chain-check flow-owner-test
+ci-docs: md-check token-check shell-vars-check identity-check hooks-test flow-worker-test supply-chain-check flow-owner-test heavy-lock-test ci-local-map-check
   @echo "==> docs lane: green ✅（注意：本条不含 fmt/lint/test，动了代码必须跑 just ci）"
 
 # T-040 人工验收：自启/防睡眠/密钥仓 真机冒烟（H-09 双平台各跑一次）
@@ -393,7 +400,7 @@ android-fgs-quota *args:
 ios-gen:
   cd apps/ios && xcodegen generate
 
-# iOS i18n（#316）：assets/i18n/*.json 逐字节拷进 apps/ios/PPass/Resources/i18n/。
+# iOS i18n（#316）：assets/i18n/*.json（#1302 起只放跨端 msg_key）逐字节拷进 apps/ios/PPass/Resources/i18n/。
 # 改 i18n 要同步四个消费者（清单见 apps/ios/PPass/I18n/DiagText.swift）；--check 只比较不拷。
 ios-sync-i18n *args:
   bash tools/ios/sync-i18n.sh {{args}}
@@ -408,6 +415,7 @@ ios-icons:
   python3 tools/ios/gen-app-icon.py
 
 # iOS 界面文案（#315）：Android strings.xml → apps/ios/PPass/Resources/{en,zh-Hans}.lproj/Localizable.*。
+# #1302：只读 strings.xml（两部手机共用的句子）；Android 独有文案在 strings_android_only.xml，不进 iOS。
 # Android 改了文案就跑一次并提交；ci-ios 用 --check 逐字节比对。iOS 独有说法写在同目录的 IOS.strings。
 ios-strings *args:
   python3 tools/ios/gen-strings.py {{args}}
@@ -418,9 +426,12 @@ ios-screenshots *args:
 
 # iOS 单元测试：生成工程 → 模拟器上 xcodebuild test。模拟器选法见 tools/ios/sim.sh
 # （默认 iPhone 17，IOS_SIM_NAME 可改；不写死 runtime 版本）。本配方启动的模拟器跑完即关。
+# 与 ci-ios.yml 同一组：App 测试 → 隐私清单 → TransportFFITests（模拟器 + 本机隔离 daemon，
+# daemon 用 debug 构建，与 CI 一致）。少跑 FFI 那步，Rust 侧改了 FFI 字段本地看不出来（11-02 #1304）。
 ios-test:
   bash tools/ios/test.sh
   bash tools/ios/privacy-manifest-local.sh
+  PPASS_DAEMON_PROFILE=dev bash tools/ios/test-transport-ffi.sh
 
 # iOS 本地 SwiftPM 包（apps/ios/Packages/*/Package.swift）逐个在模拟器上测（#345）。没有包时直接通过。
 ios-test-packages:
@@ -536,3 +547,13 @@ owner-stuck reason *args:
 # owner 流程脚本的判据测试：临时仓库 + 假 gh，每条带反证（进 ci / ci-docs）
 flow-owner-test:
     @bash tools/test-flow-owner.sh
+
+# 重编译锁入口的判据测试：可重入、串行、超时（#1308；进 ci / ci-docs）
+heavy-lock-test:
+    @bash tools/test-heavy-lock.sh
+
+# CI 检查 → 本地命令对照表（tools/flow/ci-local-map.tsv）：先跑判据测试（删映射必须红），
+# 再判真实 workflow 是否每个 job 都有映射。CI 加了新 job 而对照表没跟上，这里就红。
+ci-local-map-check:
+    @bash tools/flow/ci-local-map.test.sh
+    @python3 tools/flow/ci-local-map.py check

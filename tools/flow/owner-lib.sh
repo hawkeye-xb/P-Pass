@@ -262,10 +262,6 @@ set_status() { # set_status <号> <status:xxx>
 }
 
 # 重编译互斥：同机只跑一个大编译。没有 lockf（非 macOS）时直接跑。
-heavy() {
-  if command -v lockf >/dev/null 2>&1; then
-    lockf -k "$HEAVY_LOCK" "$@"
-  else
-    "$@"
-  fi
+heavy() { # 经 tools/heavy-lock 排队（可重入，#1308）
+  PPASS_HEAVY_LOCK="$HEAVY_LOCK" "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/heavy-lock" "$@"
 }

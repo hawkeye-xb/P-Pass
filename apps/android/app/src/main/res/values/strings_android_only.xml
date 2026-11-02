@@ -1,0 +1,95 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 只在 Android 出现的文案（#1302）。两部手机共用的句子放同目录 strings.xml——tools/ios/gen-strings.py 只读那一份生成 iOS 文案；
+         这里的 key 一旦被 iOS 引用，tools/check-i18n-split.py 会红。改这里只牵动 Android 的构建与发版。 -->
+
+    <string name="pair_unparseable_code">The pairing code is incomplete. Update P-Pass on both the phone and the computer.</string>
+    <string name="update_available_title">New version v%1$s</string>
+    <string name="update_download_install">Download and install</string>
+    <string name="update_later">Later</string>
+    <!-- UPD-02: 更新状态机的用户可见文案：检查行 / 下载 / 校验 / 失败分类 / 安装 / 回执。 -->
+    <string name="update_check_now">Check for updates</string>
+    <string name="update_up_to_date">You\'re on the latest version</string>
+    <string name="update_check_failed">Couldn\'t check for updates. Try again later.</string>
+    <string name="update_downloading_title">Downloading update</string>
+    <string name="update_downloading_progress">%1$d%% downloaded</string>
+    <string name="update_downloading_unknown_total">Downloading…</string>
+    <string name="update_row_downloading">Downloading %1$d%%</string>
+    <string name="update_row_ready">Downloaded · tap to install</string>
+    <string name="update_verifying">Verifying the package…</string>
+    <string name="update_background">Continue in background</string>
+    <string name="update_failed_title">Update didn\'t finish</string>
+    <string name="update_failed_network">Couldn\'t reach the update server. Check the network and try again.</string>
+    <string name="update_failed_server">The update server returned an error. Try again later.</string>
+    <string name="update_failed_stalled">The download stalled. Check the network and try again.</string>
+    <string name="update_failed_write">Couldn\'t save the update package. Check available storage.</string>
+    <string name="update_failed_verify">The downloaded package failed verification and was deleted. Try again later.</string>
+    <string name="update_failed_install">The installation didn\'t complete. Try again.</string>
+    <string name="update_failed_unexpected">Something went wrong. Try again later.</string>
+    <string name="update_retry">Retry</string>
+    <string name="update_ready_install">v%1$s has been downloaded</string>
+    <string name="update_ready_body">P-Pass closes during the update. Open it again when it\'s done.</string>
+    <string name="update_install_now">Update now</string>
+    <string name="update_installing_title">Installing…</string>
+    <string name="update_installing_body">Confirm in the system prompt to finish the update.</string>
+    <string name="update_close">Close</string>
+    <string name="notif_channel_update">App updates</string>
+    <string name="notif_update_download_title">Downloading P-Pass update</string>
+
+    <!-- Home / backup -->
+    <string name="state_scanning">Looking for photos… %1$d</string>
+    <string name="state_hashing">Reading %1$d/%2$d</string>
+    <string name="state_sending_file">Backing up %1$s (%2$d / %3$d)</string>
+    <string name="backup_waiting_constraints">Waiting. Backup will start automatically.</string>
+    <!-- UX-02: 失败通知（成功保持沉默）；MOB-67 渠道名进字典（旧代码硬编码双语） -->
+    <string name="notif_channel_backup_failed">Backup needs your attention</string>
+    <string name="notif_backup_failed_title">Backup didn\'t finish</string>
+    <plurals name="notif_backup_failed_body">
+        <item quantity="one">%1$d photo couldn\'t be backed up. Tap to view.</item>
+        <item quantity="other">%1$d photos couldn\'t be backed up. Tap to view.</item>
+    </plurals>
+    <string name="notif_background_stopped_title">The system stopped background backup</string>
+    <string name="notif_background_stopped_body">Backup now runs only while P-Pass is open. Tap to turn background backup back on.</string>
+    <string name="notif_battery_reenabled_title">Battery optimization is back on</string>
+    <string name="notif_battery_reenabled_body">The system is limiting P-Pass in the background again, so background backup has stopped. Tap to allow it again.</string>
+    <!-- NET-12: transfer foreground service ： keeps the process out of the
+         cached-process range while a Flow round is actively sending, so
+         the system cannot reclaim it mid-transfer (real device: it did,
+         twice, on 2026-09-14). Silent/low-importance ： it's status, not
+         an alert. -->
+    <string name="notif_channel_transfer">Backing up</string>
+    <string name="notif_transfer_title">Backing up photos</string>
+    <!-- MOB-101: the system stopped letting the backup run while the app is
+         off screen (it allows a limited amount of that each day). Plain
+         words only: no error code, no class name, no jargon. The fact is
+         learned only after the system refuses ： the wording says what
+         happened, not what is about to happen. -->
+    <string name="state_background_budget_paused">Background backup time is used up. Keep P-Pass on screen to continue, or it resumes on its own once the time is restored.</string>
+    <string name="state_background_protection_unknown">The system didn\'t allow background backup. Keep P-Pass open on screen to continue.</string>
+    <!-- #130: neutral caption under the switch ： states which notifications it controls. -->
+    <string name="rule_notify_hint">Alerts on lost pairing, revoked access or stopped backup</string>
+    <!-- #1263: home card offering background backup (onboarding no longer asks). -->
+    <string name="background_backup_offer">Background backup is off. Turn it on to back up automatically.</string>
+    <string name="background_backup_offer_action">Turn on</string>
+    <string name="background_backup_offer_close">Close</string>
+    <string name="background_backup_needs_authorization">System hasn\'t allowed background backup</string>
+    <string name="background_backup_system_stopped">The system stopped background backup</string>
+    <string name="background_backup_action_allow">Allow</string>
+    <string name="background_backup_action_turn_on">Turn on again</string>
+    <!-- UI-12 (2026-09-15, second pass): Snackbar feedback for "Fix it" ：
+         the first non-persistent feedback mechanism in this codebase. Only
+         covers signals that can be honestly reported (see MainActivity.kt
+         comments for why there is no "failed" variant). -->
+    <string name="background_backup_resuming">Turning background backup back on…</string>
+    <string name="background_backup_authorized">Background backup authorized</string>
+    <string name="background_backup_authorization_denied">Not authorized. Background backup can\'t run automatically.</string>
+    <!-- #843：没有位置权限时首页常驻提示。 -->
+    <string name="location_redacted_notice">Backups don\'t include where photos and videos were taken</string>
+    <string name="location_redacted_notice_action">Allow location access</string>
+    <!-- UI-12: dismiss action ： "I know, don\'t ask again for this state",
+         distinct from turning auto-backup off entirely. -->
+    <string name="notice_dismiss_label">Got it</string>
+    <string name="open_with_app">Open with…</string>
+    <string name="no_app_for_file">No app on this phone can open this file.</string>
+    <string name="share_to">Share to…</string>
+</resources>

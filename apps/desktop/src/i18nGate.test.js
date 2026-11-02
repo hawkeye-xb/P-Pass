@@ -1,4 +1,5 @@
-// I18N-03 (#492) 门禁：桌面端用户可见文案只许从 assets/i18n/{en,zh}.json 取。
+// I18N-03 (#492) 门禁：桌面端用户可见文案只许从字典取（#1302 起是 src/i18n/{en,zh}.json
+// 加跨端集合 assets/i18n/{en,zh}.json 两份，与 lib/i18n.js 同一合并口径）。
 //
 // 1. 源码里（src/**/*.{svelte,js,ts}，排除 *.test.js，剔除注释）出现 CJK
 //    字符即红——中文只许留在注释、测试和字典里。
@@ -13,8 +14,13 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { cjkLines, stripJsComments, stripSvelteComments } from "./i18nGate.helpers.js";
-import enDict from "../../../assets/i18n/en.json";
-import zhDict from "../../../assets/i18n/zh.json";
+import sharedEn from "../../../assets/i18n/en.json";
+import sharedZh from "../../../assets/i18n/zh.json";
+import desktopEn from "./i18n/en.json";
+import desktopZh from "./i18n/zh.json";
+
+const enDict = { ...sharedEn, ...desktopEn };
+const zhDict = { ...sharedZh, ...desktopZh };
 
 const SRC = fileURLToPath(new URL(".", import.meta.url));
 
@@ -90,7 +96,7 @@ describe("门禁：桌面端源码里没有写死的中文", () => {
     const hits = sources.flatMap(({ file, code }) =>
       cjkLines(code).map((h) => `${file}:${h.line}: ${h.text}`),
     );
-    expect(hits, "用户可见文案要进 assets/i18n/{en,zh}.json，用 t() 取").toEqual([]);
+    expect(hits, "用户可见文案要进 src/i18n/{en,zh}.json，用 t() 取").toEqual([]);
   });
 });
 

@@ -20,7 +20,7 @@ mod provider;
 /// #548：Rust → logcat 出口的脱敏（daemon `redact()` 的日志口径拷贝，跑共用向量）。
 pub mod redact;
 
-pub use blobs::{Blobs, PeerGate};
+pub use blobs::{export_temp_path, Blobs, PeerGate, EXPORT_TEMP_SUFFIX};
 pub use conninfo::{ConnInfo, ConnectionStatus, PathKind};
 pub use iroh_impl::{
     node_id_from_secret_key, Admission, BiStream, Incoming, IrohTransport, PeerAddr,

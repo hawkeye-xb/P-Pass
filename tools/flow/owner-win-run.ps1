@@ -11,12 +11,18 @@
 #   ... command output ...
 #   PPASS_TASK_RESULT=<LastTaskResult>
 #   PPASS_EXIT=<exit code of the command, or 'none' when it never ran / timed out>
+#
+# Pass either -Command (one cmd.exe command line) or -ScriptFile (a .cmd script; owner-win-test.sh
+# generates one with a step per mapping-table row).
 param(
   [Parameter(Mandatory)][string]$Workdir,
-  [Parameter(Mandatory)][string]$Command,
-  [int]$TimeoutMin = 120
+  [string]$Command,
+  [string]$ScriptFile,
+  [int]$TimeoutMin = 180
 )
 $ErrorActionPreference = 'Stop'
+if ($ScriptFile) { $Command = "call `"$ScriptFile`"" }
+if (-not $Command) { throw 'pass -Command or -ScriptFile' }
 $tn = 'ppass-owner-verify'
 $out = Join-Path $Workdir 'owner-out.txt'
 $rc = Join-Path $Workdir 'owner-rc.txt'

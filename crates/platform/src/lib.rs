@@ -1361,9 +1361,17 @@ pub trait HostingAdapter: Send + Sync {
                 | AutostartReconcile::Repaired
                 | AutostartReconcile::Refreshed
         ) {
-            self.install_autostart(expected)?;
+            self.rewrite_autostart(expected)?;
         }
         Ok(action)
+    }
+
+    /// #1300：对账**改写**已有登记。和 [`Self::install_autostart`]（用户点「启动」时登记并拉起）
+    /// 不同，对账只纠正登记内容，不改服务的运行状态：服务原来停着（外面被停掉），改写后仍停着。
+    ///
+    /// 默认 = `install_autostart`：登记与运行状态分不开的平台保持原样；macOS 覆盖（job 没加载就只写 plist）。
+    fn rewrite_autostart(&self, expected: &std::path::Path) -> Result<()> {
+        self.install_autostart(expected)
     }
 
     fn service_mode(&self) -> ServiceMode;

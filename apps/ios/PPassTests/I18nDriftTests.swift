@@ -32,10 +32,13 @@ final class I18nDriftTests: XCTestCase {
         }
     }
 
+    /// #1302：手机包只捆跨端集合（线上 msg_key），原样例 ui.paired_count 是桌面 key、已不在包里；
+    /// 占位符替换是解析器的行为，改用内联样例字典，捆绑字典仍用来验 nil 与按语言选文件。
     func test_resolver_fills_placeholders_and_returns_nil_for_unknown_keys() throws {
-        let en = try XCTUnwrap(DiagText.bundledDictionary(language: "en-US"))
-        XCTAssertEqual(DiagText.resolve(dictJSON: en, key: "ui.paired_count", vars: ["n": "42"]),
+        let sample = Data(#"{"ui.paired_count": "Paired devices: {n}"}"#.utf8)
+        XCTAssertEqual(DiagText.resolve(dictJSON: sample, key: "ui.paired_count", vars: ["n": "42"]),
                        "Paired devices: 42")
+        let en = try XCTUnwrap(DiagText.bundledDictionary(language: "en-US"))
         XCTAssertNil(DiagText.resolve(dictJSON: en, key: "no.such.key"))
         let zh = try XCTUnwrap(DiagText.bundledDictionary(language: "zh-Hans-CN"))
         XCTAssertNotEqual(zh, en, "zh 开头的语言应取 zh.json")

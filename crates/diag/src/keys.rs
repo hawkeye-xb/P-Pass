@@ -1,7 +1,9 @@
 //! msg_key dictionary — the single registry of user-visible message keys.
 //!
-//! Every key registered here MUST have a translation in both
-//! `assets/i18n/en.json` and `assets/i18n/zh.json`; this is enforced by
+//! Every key registered here MUST have a translation in both languages, in
+//! exactly one of two tables (#1302): the cross-end `assets/i18n/{en,zh}.json`
+//! (msg_keys a phone can receive) or the desktop's own
+//! `apps/desktop/src/i18n/{en,zh}.json`; this is enforced by
 //! [`crate::assert_all_keys_translated`], which runs as a test.
 
 /// Registers msg_keys as compile-time constants and collects them into

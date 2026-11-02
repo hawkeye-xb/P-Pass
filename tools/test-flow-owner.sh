@@ -177,6 +177,9 @@ fresh() {
   export FAKE="${S}/fake" ORIGIN="${S}/origin.git"
   export PPASS_OWNER_WT_ROOT="${S}/wt"
   mkdir -p "$FAKE/issues"
+  # CI 对照表换成夹具：一步本机检查（$FAKE/map-fail 存在就红）+ 一条只能 CI，没有 Windows 步骤。
+  export PPASS_CI_LOCAL_MAP="${FAKE}/ci-local-map.tsv"
+  printf 'ci-x.yml\tchk\tmac\talways\tfake-check\t[ ! -e "$FAKE/map-fail" ]\nci-x.yml\tlinux\tci-only\t-\tlinux\t只有 Linux runner\n' >"$PPASS_CI_LOCAL_MAP"
   printf '%s\n' status:inbox status:ready status:doing status:review status:batched status:blocked needs:product core >"$FAKE/labels"
   : >"$FAKE/calls.log"
   git init -q --bare "$ORIGIN"
@@ -186,7 +189,7 @@ fresh() {
   git remote add origin "$ORIGIN"
   mkdir -p tools/flow tools/release .github docs/decisions src crates/storage release
   cp "${SRC}/tools/flow/"* tools/flow/
-  cp "${SRC}/tools/ci-paths.sh" "${SRC}/tools/check-dco.sh" tools/
+  cp "${SRC}/tools/ci-paths.sh" "${SRC}/tools/check-dco.sh" "${SRC}/tools/heavy-lock" tools/
   cp "${SRC}/tools/release/with-timeout.sh" tools/release/
   cp "${SRC}/.github/core-paths.txt" .github/
   cat >tools/release/plan-builds.sh <<'PB'
@@ -296,8 +299,17 @@ touch "$FAKE/dummy-fail"
 bash tools/flow/owner-batch-verify.sh >/dev/null 2>&1
 check "tools/test-*.sh 红 → batch-verify 非 0" test "$?" -ne 0
 rm -f "$FAKE/dummy-fail"
+touch "$FAKE/map-fail"
+bash tools/flow/owner-batch-verify.sh >/dev/null 2>&1
+check "CI 对照表本机步骤红 → batch-verify 非 0" test "$?" -ne 0
+check "停下的 issue 点名对照表里红的那步" grep -q "CI 对照表 ci-x.yml:chk/fake-check" "$FAKE/created-issue.md"
+rm -f "$FAKE/map-fail"
 out="$(bash tools/flow/owner-batch-verify.sh 2>/dev/null)"
 check "反证：全绿 → BATCH-VERIFY PASS <HEAD>" bash -c 'printf "%s\n" "$1" | grep -q "^BATCH-VERIFY PASS $(git rev-parse HEAD)$"' _ "$out"
+RPT="$(git rev-parse --git-common-dir)/ppass-batch/batch_2026-11-02-ok/verify-$(git rev-parse --short=12 HEAD)/report.md"
+check "报告逐步列出对照表步骤结果" grep -q "^| ci-x.yml:chk/fake-check | PASS |" "$RPT"
+check "报告列出「只能 CI」项" bash -c 'grep -q "^## 只能 CI" "$1" && grep -q "^- ci-x.yml:linux/linux：只有 Linux runner" "$1"' _ "$RPT"
+check "对照表没有 Windows 步骤 → Windows 不算未覆盖" bash -c '! grep -q "^- windows" "$1"' _ "$RPT"
 check "报告记下未覆盖的端（无场景库）" bash -c 'grep -q "^- mac：场景库" "$(git rev-parse --git-common-dir)/ppass-batch/batch_2026-11-02-ok/verify-$(git rev-parse --short=12 HEAD)/report.md"'
 
 echo "── 5. batch-pr：验证后加提交拒绝；CI 红写评论不合入；CI 绿合入"
@@ -311,6 +323,7 @@ printf '[{"name":"clippy","bucket":"fail","link":"https://github.com/t/r/actions
 bash tools/flow/owner-batch-pr.sh >/dev/null 2>&1
 check "CI 红 → batch-pr 非 0" test "$?" -ne 0
 check "开了 PR，正文逐卡 closes 并带验证证据与未覆盖项" bash -c 'grep -q "^- closes #21 " "$FAKE/pr-body.md" && grep -q "^- closes #23 " "$FAKE/pr-body.md" && grep -q "^BATCH-VERIFY PASS " "$FAKE/pr-body.md" && grep -q "^## 未覆盖项" "$FAKE/pr-body.md"'
+check "PR 正文带上「只能 CI」项" grep -q "ci-x.yml:linux/linux" "$FAKE/pr-body.md"
 check "失败 job 与日志切片写进 PR 评论" bash -c 'grep -q "clippy" "$FAKE/pr.comments" && grep -q "boom" "$FAKE/pr.comments"'
 check "CI 红时没有合入" bash -c '! grep -q "^pr merge" "$FAKE/calls.log"'
 printf '[{"name":"clippy","bucket":"pass","link":"","workflow":"CI Rust"},{"name":"ios","bucket":"skipping","link":"","workflow":"CI iOS"}]' >"$FAKE/checks.json"

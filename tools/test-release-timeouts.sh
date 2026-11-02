@@ -61,13 +61,16 @@ import os, sys, yaml
 root = sys.argv[2]
 jobs = yaml.safe_load(open(sys.argv[1]))["jobs"]
 miss = []
-for k, v in jobs.items():
-    uses = v.get("uses")
-    if uses:
-        called = yaml.safe_load(open(os.path.join(root, uses.removeprefix("./"))))["jobs"]
-        miss += [f"{k}→{c}" for c, cv in called.items() if "timeout-minutes" not in cv]
-    elif "timeout-minutes" not in v:
-        miss.append(k)
+def walk(prefix, jobs):
+    # 被调用的 workflow 里又有 uses 的 job（#1309：ci-rust 的 e2e 调 e2e.yml）同样递归下去
+    for k, v in jobs.items():
+        uses = v.get("uses")
+        name = f"{prefix}{k}"
+        if uses and uses.startswith("./"):
+            walk(name + "→", yaml.safe_load(open(os.path.join(root, uses.removeprefix("./"))))["jobs"])
+        elif "timeout-minutes" not in v:
+            miss.append(name)
+walk("", jobs)
 print(" ".join(miss))
 PY
 )"

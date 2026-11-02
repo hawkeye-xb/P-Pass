@@ -179,6 +179,13 @@ pub(crate) fn user_stopped_marker(data_dir: &std::path::Path) -> std::path::Path
     data_dir.join(USER_STOPPED_MARKER)
 }
 
+/// #1300：「本壳为更新暂停了后台服务」的持久标记。旧壳暂停前落、新壳启动对账读完即清。
+///
+/// 为什么要落盘：macOS 上「为更新暂停」（`launchctl bootout`、登记保留）与用户在外面
+/// `launchctl bootout` 在 launchd 里是同一个状态（登记在、job 没加载）。新壳只看 launchd
+/// 现状分不出来，只能凭这份意图判断「是不是我们自己停的」——没有它就按用户停的处理，不拉。
+pub(crate) const UPDATE_PAUSED_MARKER: &str = "desktop-update-paused";
+
 /// #1238：壳判断「配过没有」「用户停过没有」时读的东西各在哪。只有这一个入口——
 /// 读的位置必须和写的位置是同一处，否则就是 #1238：Windows 服务形态的配置在
 /// `%ProgramData%\P-Pass`，壳却去读用户目录，服务一停就把已配置的机器打回首启向导。
@@ -268,6 +275,28 @@ impl ShellHome {
             }
         }
     }
+
+    /// #1300：本壳为更新暂停过后台服务、还没被新壳接手。
+    pub(crate) fn update_paused(&self) -> bool {
+        self.state_dir.join(UPDATE_PAUSED_MARKER).exists()
+    }
+
+    /// #1300：落 / 清「为更新暂停」。内容只给人看（暂停时刻），判据只看文件在不在。
+    pub(crate) fn set_update_paused(&self, paused: bool) -> std::io::Result<()> {
+        let marker = self.state_dir.join(UPDATE_PAUSED_MARKER);
+        if paused {
+            let at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            std::fs::create_dir_all(&self.state_dir)?;
+            return std::fs::write(&marker, format!("paused for update at unix {at}\n"));
+        }
+        match std::fs::remove_file(&marker) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+            _ => Ok(()),
+        }
+    }
 }
 
 /// 自愈判据（纯函数，单测覆盖）：不是「没配置过」、且不是用户主动停的，才允许自愈。
@@ -294,13 +323,27 @@ pub(crate) fn should_pause_for_update(home: &ShellHome) -> bool {
     !home.user_stopped()
 }
 
-/// #1060：新壳启动时要不要把服务拉回来（「更新后恢复」）。三个条件缺一不可：
-/// 自愈判据过（配置过、且用户没停——停过的更新前后都保持停止）、服务管理器里
-/// 有登记（`resident_service_available`）、此刻内核不在线（在线 = 无事可做；
-/// 登录时 launchd 并发拉起的那份也落在这条，随后 `restart_resident_daemon(false)`
-/// 会报 AlreadyRunning，不会二次重启）。
+/// #1060：新壳启动时要不要把服务拉回来（「更新后恢复」）。四个条件缺一不可：
+/// 有「为更新暂停」标记（#1300：是我们自己停的——没有标记的「登记在、不在线」可能是
+/// 用户在外面停的，launchd 里分不出来，按用户停的处理）、自愈判据过（配置过、且用户
+/// 没停——停过的更新前后都保持停止）、服务管理器里有登记（`resident_service_available`）、
+/// 此刻内核不在线（在线 = 无事可做；登录时 launchd 并发拉起的那份也落在这条，随后
+/// `restart_resident_daemon(false)` 会报 AlreadyRunning，不会二次重启）。
 pub(crate) fn update_resume_needed(home: &ShellHome, registered: bool, online: bool) -> bool {
-    registered && !online && self_heal_allowed(home)
+    home.update_paused() && registered && !online && self_heal_allowed(home)
+}
+
+/// #1300：新壳启动对账读「为更新暂停」：先按 [`update_resume_needed`] 判要不要拉，再把标记
+/// 清掉——不管拉不拉，这次更新已由本壳接手，之后同样的现状（登记在、不在线）按用户停的处理。
+/// 清不掉只记日志：留着最多让下一次开窗口再恢复一次「我们自己暂停的」服务。
+pub(crate) fn take_update_resume(home: &ShellHome, registered: bool, online: bool) -> bool {
+    let resume = update_resume_needed(home, registered, online);
+    if home.update_paused() {
+        if let Err(e) = home.set_update_paused(false) {
+            eprintln!("#1300: 清「为更新暂停」标记失败：{e}");
+        }
+    }
+    resume
 }
 
 /// DESK-60 (#877)：登记缺失时要不要补。与自愈同一条判据——配置过（不是首启，
@@ -388,6 +431,7 @@ mod tests {
     #[test]
     fn user_stopped_service_is_neither_paused_nor_resumed() {
         let dir = tempfile::tempdir().unwrap();
+        configured_home(dir.path()).set_update_paused(true).unwrap();
         assert!(should_pause_for_update(&configured_home(dir.path())));
         assert!(update_resume_needed(
             &configured_home(dir.path()),
@@ -403,10 +447,11 @@ mod tests {
         ));
     }
 
-    /// 已登记、没停过、内核不在线 ⇒ 拉；在线 / 没登记 / 没配置过 ⇒ 不拉。
+    /// 为更新暂停过、已登记、没停过、内核不在线 ⇒ 拉；在线 / 没登记 / 没配置过 ⇒ 不拉。
     #[test]
     fn resume_only_when_registered_configured_and_offline() {
         let dir = tempfile::tempdir().unwrap();
+        configured_home(dir.path()).set_update_paused(true).unwrap();
         assert!(
             !update_resume_needed(&ShellHome::shared(dir.path()), true, false),
             "没配置过（首启向导的事）"
@@ -424,6 +469,52 @@ mod tests {
             !update_resume_needed(&configured_home(dir.path()), false, false),
             "没登记"
         );
+    }
+
+    /// #1300：「登记在、不在线」但没有「为更新暂停」标记 = 可能是用户在外面停的 ⇒ 不拉；
+    /// 有标记 ⇒ 拉，清掉标记后同样的现状不再拉（标记只管一次更新）。
+    /// 反证：`update_resume_needed` 去掉 `home.update_paused()` → 第一条红。
+    #[test]
+    fn resume_needs_the_update_pause_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = configured_home(dir.path());
+        assert!(
+            !update_resume_needed(&home, true, false),
+            "没有暂停标记：外面停掉的服务不许拉起"
+        );
+        home.set_update_paused(true).unwrap();
+        assert!(dir.path().join(UPDATE_PAUSED_MARKER).exists());
+        assert!(
+            update_resume_needed(&home, true, false),
+            "为更新暂停过：拉回"
+        );
+        home.set_update_paused(false).unwrap();
+        assert!(!home.update_paused());
+        assert!(!update_resume_needed(&home, true, false), "清掉之后不再拉");
+        home.set_update_paused(false).unwrap();
+    }
+
+    /// #1300：新壳启动对账——有标记 ⇒ 恢复并清标记；没标记 ⇒ 不拉；在线时也清（接手了这次更新）。
+    /// 反证：`take_update_resume` 不清标记 → 「清掉了」那条红；去掉标记判据 → 「没标记不拉」红。
+    #[test]
+    fn startup_takes_the_update_pause_marker_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = configured_home(dir.path());
+        assert!(!take_update_resume(&home, true, false), "没标记不拉");
+
+        home.set_update_paused(true).unwrap();
+        assert!(take_update_resume(&home, true, false), "有标记：恢复");
+        assert!(!home.update_paused(), "清掉了");
+        assert!(!take_update_resume(&home, true, false), "只管一次");
+
+        home.set_update_paused(true).unwrap();
+        assert!(!take_update_resume(&home, true, true), "在线：无事可做");
+        assert!(!home.update_paused(), "在线也清");
+
+        home.set_update_paused(true).unwrap();
+        home.set_user_stopped(true).unwrap();
+        assert!(!take_update_resume(&home, true, false), "用户停过：不拉");
+        assert!(!home.update_paused());
     }
 
     // ── #667 / #732：自动换内核判据 ───────────────────────────────────

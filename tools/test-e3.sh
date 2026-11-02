@@ -27,6 +27,42 @@ for d in "$E3"/fixtures/*/; do
   "$E3/run" judge "$id" "$d/fail" >/dev/null && bad "${id}：fail fixture 没判红"
 done
 
+# #1311 数据快照：服务在跑不存；存 → 候选改库（新迁移、新文件）→ 恢复后库回到快照，照片原件不动
+(
+  d="$(mktemp -d)"
+  trap 'rm -rf "$d"' EXIT
+  MAC_APP="$d/none.app" E3_MAC_DATA_DIR="$d/as" E3_STATE="$d/state"
+  log() { :; }
+  running=1
+  svc_any_pid() { [ "$running" = 1 ] && echo 123; return 0; }
+  # shellcheck source=e3/lib/mac-install.sh
+  source "$E3/lib/mac-install.sh"
+  mkdir -p "$d/as/libraries/x" "$d/lib/.ppf" "$d/lib/originals"
+  printf 'data_dir = "%s"\n' "$d/lib" >"$d/as/config.toml"
+  echo v13 >"$d/as/libraries/x/index.sqlite"
+  echo id >"$d/lib/.ppf/library-id"
+  echo a >"$d/lib/originals/a.jpg"
+  mac_data_save "$d/snap" && { echo "服务在跑时存了快照"; exit 1; }
+  running=0
+  mac_data_save "$d/snap" || { echo "存快照失败"; exit 1; }
+  echo v14 >"$d/as/libraries/x/index.sqlite"
+  echo n >"$d/as/libraries/x/new-thumb"
+  echo n >"$d/lib/.ppf/extra"
+  echo b >"$d/lib/originals/b.jpg"
+  mac_data_restore "$d/snap" || { echo "恢复失败"; exit 1; }
+  [ "$(cat "$d/as/libraries/x/index.sqlite")" = v13 ] || { echo "库索引没回到快照"; exit 1; }
+  [ ! -e "$d/as/libraries/x/new-thumb" ] && [ ! -e "$d/lib/.ppf/extra" ] || { echo "候选新写的文件残留"; exit 1; }
+  [ -f "$d/lib/originals/b.jpg" ] || { echo "照片原件被动了"; exit 1; }
+  [ "$(mac_library_dir "$d/as")" = "$d/lib" ] || { echo "库目录读错"; exit 1; }
+  # 清成空白：要先有数据快照；清掉索引与 blob，留库标识与原件
+  mac_data_blank && { echo "没有数据快照也清了"; exit 1; }
+  mkdir -p "$E3_STATE/mac-snapshot/data"
+  mac_data_blank || { echo "清空白失败"; exit 1; }
+  [ ! -e "$d/as/libraries" ] && [ ! -e "$d/lib/.ppf/extra" ] || { echo "索引或 blob 没清掉"; exit 1; }
+  [ -f "$d/lib/.ppf/library-id" ] && [ -f "$d/lib/originals/a.jpg" ] && [ -f "$d/as/config.toml" ] ||
+    { echo "库标识、原件或 config.toml 被清了"; exit 1; }
+) || bad "mac 数据快照存/恢复"
+
 # 设备锁：第二个持锁者要等第一个释放（/usr/bin/lockf 只有 macOS 有）
 if [ "$(uname)" = Darwin ]; then
 lockdir="$(mktemp -d)"
