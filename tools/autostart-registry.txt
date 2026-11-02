@@ -1,0 +1,23 @@
+# 登记的自启 / 拉起 / 周期调度调用点（门禁：tools/check-autostart.py；说明见 docs/runbook/fitness.md）。
+# 格式：autostart|文件|guard:<判断函数/类型>  或  test:<contract 测试名>|说明
+# 规矩（AGENTS.md）：「用户停过」永远优先于「服务该在」；拿不准按「用户停的」处理。
+# 本表登记于门禁引入时（2026-11），守卫符号由机器核对存在，守卫语义由登记时 review 判定。
+#
+# ── Android ──
+autostart|apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt|guard:AutoBackupPrefs|入队 / 周期兜底前先看 AutoBackupPrefs.enabled()（用户关了自动备份就直接 return）；手动备份是用户点的
+autostart|apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/MediaWatchJob.kt|guard:AutoBackupPrefs|onStartJob 与重挂前都读 AutoBackupPrefs.enabled()；关闭时不派活也不重挂
+autostart|apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BootWatchReceiver.kt|guard:AutoBackupPrefs|开机只重挂媒体监听（reconcileWatchOnProcessStart），重挂受 AutoBackupPrefs.enabled() 约束
+autostart|apps/android/app/src/main/AndroidManifest.xml|guard:AutoBackupPrefs|声明 BOOT_COMPLETED 接收器（BootWatchReceiver）；是否拉起由接收器内的 AutoBackupPrefs 判断
+autostart|apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/flow/FlowTransferForegroundService.kt|guard:AutoBackupPrefs|Flow 一轮才申请前台服务，且这一轮由 MediaWatchJob（AutoBackupPrefs 已判）或用户操作触发
+autostart|apps/android/app/src/main/java/com/hawkeyexb/ppass/update/UpdateDownloadWorker.kt|guard:UpdateUiController|APK 下载只由 UpdateUiController 在用户点「下载」后入队，没有后台自动下载
+#
+# ── 桌面 / 平台适配层 ──
+autostart|apps/desktop/src-tauri/src/distribution.rs|guard:user_stopped|对账 / 自愈先判 ShellHome::user_stopped()：停过只撤登记、绝不拉起（#957）
+autostart|apps/desktop/src-tauri/src/lib.rs|test:self_heal_never_revives_a_daemon_the_user_stopped|start_resident 是用户点「启动」；自愈路径走 distribution.rs 的 user_stopped 闸门，contract 测试覆盖
+autostart|crates/platform/src/lib.rs|guard:user_stopped|HostingAdapter 的 install_autostart / kickstart_shell_agent 声明；只有桌面壳能调（arch-check G2），壳侧由 user_stopped 把关
+autostart|crates/platform/src/macos.rs|test:self_heal_never_revives_a_daemon_the_user_stopped|launchctl bootstrap / kickstart 的 macOS 实现；调用方是桌面壳（user_stopped 闸门之后）
+autostart|crates/platform/src/windows.rs|test:self_heal_never_revives_a_daemon_the_user_stopped|计划任务登记并运行的 Windows 实现；调用方是桌面壳（user_stopped 闸门之后）
+autostart|crates/platform/src/windows_service.rs|test:self_heal_never_revives_a_daemon_the_user_stopped|StartServiceW 的 Windows 服务实现；调用方是桌面壳（user_stopped 闸门之后）
+#
+# ── iOS ──
+autostart|apps/ios/Packages/PPassCore/Sources/PPassBackgroundTasks/PPassBackgroundTasks.swift|guard:applyDisconnectManifest|BGTaskScheduler 薄层，只提交 PlannedWakeScheduler 规划好的唤醒；断开配对时 applyDisconnectManifest 的 scheduledWakes 项 清掉已挂的

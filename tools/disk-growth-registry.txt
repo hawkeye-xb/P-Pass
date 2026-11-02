@@ -1,0 +1,18 @@
+# 登记的落盘目录 / 命名（门禁：tools/check-disk-growth.py；说明见 docs/runbook/fitness.md）。
+# 格式：dir|名字|清理触发条件（谁、什么条件下清；或为何不随照片数增长）
+# 规矩（AGENTS.md「占盘 1x」）：隔离区、回收站、缓存、staging 只增不删都算违规。
+# 各类残留的判据全文：docs/desktop/business-rules.zh-CN.md §5.7 库残留清扫清单（有测试与代码双向核对）。
+#
+# ── 库盘 .ppf/ 下的服务私有目录 ──
+dir|staging|ResidueSweeper 的 staging-partial / staging-orphan：启动就绪后清扫 + 每小时巡检（PATROL_INTERVAL）；无活会话声明且过 STAGING_ORPHAN_GRACE 即删
+dir|flow-staging|ResidueSweeper 的 flow-staging：不在 active_flow_content_hashes 保护集且过 STAGING_ORPHAN_GRACE 即删；成功 ingest 当场删
+dir|supersede-staging|ResidueSweeper 的 supersede-staging：待换表不再引用且 pid 非本进程即删；apply_supersede 成功后当场删
+dir|superseded|已无写入方（#1182）；sweep_superseded_residue / ResidueSweeper 的 superseded 类按「新指纹行在且无待换记录」清掉存量
+dir|blobs|旧管线 iroh blob store：每次启动在无传输在飞时 retire_blob_store 整体 rename 成 blobs-retired-*，再由 residue 删（O(1) 启动 + 后台删）
+dir|blobs-retired-|ResidueSweeper 的 blobs-retired：.ppf/ 直接子项、名字严格 blobs-retired-<pid>-<纳秒>、真目录即删，无宽限
+dir|blobs.db|blobs 的元数据库，随 blobs 一起 retire 后重建，体量只随在飞数据变化
+dir|flow-blobs|Flow 的 iroh blob store：iroh 周期 GC（FLOW_BLOBS_GC_INTERVAL，每 60s）按 active_flow_content_hashes 回收
+dir|flow-blobs.db|flow-blobs 的元数据库，随 iroh GC 收敛
+dir|thumbs|缩略图：ThumbOrphan 清扫（索引里已无此 hash 即删）+ ThumbTemp（.thumb-* 过 RESIDUE_GRACE 即删）；有索引行的缩略图是照片的派生物，随照片删除而清
+dir|.thumb-|缩略图原子写入的临时文件：ResidueSweeper 的 thumb-temp，过 RESIDUE_GRACE 即删
+dir|identity|设备身份私钥文件（.ppf/identity.key），单文件，不随照片数增长

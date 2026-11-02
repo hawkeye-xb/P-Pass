@@ -1,0 +1,20 @@
+# 登记的网络出口（门禁：tools/check-egress.py；说明见 docs/runbook/fitness.md）。
+# 格式：种类|键|用途。新增出口必须登记，并在 PR 里说明为什么需要。
+# 红线 2：不做遥测。这里只许出现「功能必需、数据不含使用统计」的出口。
+#
+# ── site：含网络客户端 / 套接字 / 更新器调用的文件 ──
+site|crates/transport/src/iroh_impl.rs|配对与同步的 P2P 传输：iroh Endpoint（直连 + 可选中继），只传照片与配对握手
+site|apps/desktop/src-tauri/src/update_install.rs|桌面更新：tauri-plugin-updater 拉清单与安装包（用户可见、可跳过）
+site|apps/desktop/src-tauri/src/lib.rs|桌面更新：注册 tauri-plugin-updater 插件
+site|apps/desktop/src-tauri/tauri.conf.json|桌面更新清单端点（下方两个 host）
+site|apps/desktop/src/App.svelte|桌面前端发起更新检查（@tauri-apps/plugin-updater）
+site|apps/android/app/src/main/java/com/hawkeyexb/ppass/update/UpdateChecker.kt|Android 更新：HttpURLConnection 拉清单与 APK
+site|apps/android/app/src/main/AndroidManifest.xml|Android INTERNET 权限：P2P 传输与更新检查所需
+#
+# ── host：产品源码 / 配置里的外部主机 ──
+host|p-pass-dl.hawkeye-xb.com|官方下载站：更新清单与安装包（桌面 + Android）
+host|github.com|更新清单的 GitHub Releases 备用源，以及「发行页」链接
+#
+# ── dep：网络类依赖 ──
+dep|tauri-plugin-updater|桌面更新（Rust 侧）
+dep|@tauri-apps/plugin-updater|桌面更新（前端侧）

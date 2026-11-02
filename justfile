@@ -160,6 +160,17 @@ arch-check:
   @./tools/test-arch-check.sh
   @./tools/arch-check.sh
 
+# 产品理念的适应度函数（docs/runbook/fitness.md）：无遥测/不新增外联、尊重用户停服务、
+# 占盘 1x 的结构信号。每条先跑自测（违反必须红、还原必须绿）再判真实仓库。
+# 同一组命令在 ci-rust.yml 的 `fitness-check` job 里跑。
+fitness-check:
+  @tools/test-check-egress.sh
+  @python3 tools/check-egress.py
+  @tools/test-check-autostart.sh
+  @python3 tools/check-autostart.py
+  @tools/test-check-disk-growth.sh
+  @python3 tools/check-disk-growth.py
+
 # ci-rust.yml「fmt + actionlint」job 里的同一条：每个跑 cargo 的 CI job 都必须
 # 用 rust-toolchain.toml 锁定的版本（脚本自带反证）。
 toolchain-check:
@@ -248,7 +259,7 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt toolchain-check lint lint-cross test arch-check md-check token-check shell-vars-check identity-check hooks-test supply-chain-check mobile-static-check lockfile-check
+ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check hooks-test supply-chain-check mobile-static-check lockfile-check
   @echo "==> CI pipeline: all green ✅"
 
 # 两个 Rust workspace 的 Cargo.lock 都得和实际依赖一致（src-tauri 是独立 workspace，

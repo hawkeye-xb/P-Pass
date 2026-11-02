@@ -65,7 +65,7 @@ agent 只领 Issues，不碰 Discussions。issue 类型：Feature（新能力）
 1. **issue 外的活不做。** 发现新问题开新 issue（`status:inbox`），继续当前活，不顺手修。
 2. **范围即边界。** 只动 issue「范围」段的路径。产品红线：只做图片，不做文件备份/同步；
    **不做任何遥测 / 使用统计上报**，诊断只写本机日志
-   （[决策记录](docs/product/2026-10-13-telemetry-removal.md)）。改这条红线须产品负责人拍板。
+   （[决策记录](docs/product/2026-10-13-telemetry-removal.md)）。改这条红线须产品负责人拍板。新增网络出口、遥测类依赖由 `just ci` 会挡（`tools/check-egress.py`，例外登记见 [适应度门禁](docs/runbook/fitness.md)）。
 3. **不捏造。** 报绿必须附命令 + 真实输出；故障/安全类判据必须带反证（去掉故障条件必须变红）。
    「CI 绿」不等于验收。
 4. **凭据只在 GitHub Secrets。** 不进代码、issue、文档。凭据类方案先 `gh secret list`，
@@ -80,19 +80,22 @@ agent 只领 Issues，不碰 Discussions。issue 类型：Feature（新能力）
 
 - **占盘 1x**：照片库总占盘 ≈ 照片本身。隔离区、回收站、缓存、staging 只增不删都算违规，
   不是可选策略。写盘类改动的验收必须 `du -sh` 实测各子目录，不能只数文件。
+  新增落盘目录必须登记清理触发条件（`just ci` 会挡，`tools/check-disk-growth.py`）。
 - **尊重用户停掉的服务**：自愈、对账、自启、更新恢复时，「用户停过」永远优先于「服务该在」。
   拿不准是不是用户意图，按「用户停的」处理，只在 App 里给显式开启入口。
+  新增自启 / 拉起调用点必须登记「先检查用户停过」的判断函数或 contract 测试（`just ci` 会挡，`tools/check-autostart.py`）。
 - **读现状初始化，不写迁移**：新开关/偏好没有存值时，按当前真实状态算初值（已授权、已选过
   的就算开），之后以存值为准。「不写迁移」只针对数据格式，不能让用户已开的功能升级后悄悄停掉。
 - **iOS 没有对外用户**：iOS 本地数据格式直接改，不写旧数据迁移，不考虑升级代价，也不拿这个去问人。
 - **隐私优先**：不采任何敏感信息；对隐私有侵害的，哪怕排查更难也不采。
 - **品牌语言**：组件可以按平台原生，颜色、字体、明暗外观一律以 `assets/design/tokens.json`
-  与 Android 实现为准。偏离品牌语言的提案单独提 `needs:product`，不夹在「原生化」里。
+  与 Android 实现为准（iOS 的 token 由 `tools/ios/gen-tokens.py --check` 逐字节比对、颜色字面量由 `check-no-color-literals.sh` 拦，`just ci` 会挡）。偏离品牌语言的提案单独提 `needs:product`，不夹在「原生化」里。
 - **iOS 先对齐 Android**：两端小功能同步迭代，iOS 多出/少掉的按 Android 改；要加就两端一起加。
   平台惯例（原生导航、下拉刷新等）可以保留。尺寸偏离登记进 `tokens.json` 的 `platforms.ios`
   并写理由，不在代码里写死。
 - **桌面只改 i18n 副本**（同步 `assets/i18n` 在 Android/iOS 的逐字节副本）可以直接做；
   任何影响手机行为、协议、真机表现的改动都要在卡上写明并经 owner 确认。
+  副本逐字节一致由 `just mobile-static-check` 兜底（`just ci` 会挡）。
 - **界面文案**：先找行业标准（Android 权限规范、NN/g、Google、Microsoft 写作指南）。提示说现状，
   不事事给操作建议；每句话只服务这一屏的作用；把已有功能说全，不替用户选；流程能省一屏就省；
   说后果要准；状态类不提内部组件（写「备份已停止」，不写「后台服务未运行」）。
