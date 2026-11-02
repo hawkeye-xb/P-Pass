@@ -64,6 +64,7 @@ judge() {
   check "窗口打开了" [ -n "$(tr -d '[:space:]' <"$d/shell-pid.txt" 2>/dev/null)" ]
   check "开窗口后 ${OPEN_WINDOW}s 内一次都没被拉起" no_line "$d/open-samples.txt" 'pid=[0-9]'
   check "窗口落在「stopped outside」且之后没回到 running" stays_stopped "$d"
+  check "窗口 stderr：没有为更新暂停的记录、按用户停的处理不拉" has_line "$d/shell.err" '^#1300: 新壳启动，服务不在线且没有为更新暂停的记录'
   verdict
 }
 

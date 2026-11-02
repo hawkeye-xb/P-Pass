@@ -22,7 +22,7 @@ mod update_install;
 // 每个函数各写一遍 `use ... as _` 已经不划算；提到文件级。
 use distribution::{
     daemon_is_unmanaged, kernel_convergence_verdict, reconcile_autostart_registration,
-    self_heal_allowed, should_pause_for_update, show_wizard, update_resume_needed,
+    self_heal_allowed, should_pause_for_update, show_wizard, take_update_resume,
     user_daemon_fallback_allowed, Configured, DaemonAnswer, KernelFacts, KernelVerdict, ShellHome,
 };
 use platform::{HostingAdapter as _, PlatformAdapter as _};
@@ -1046,6 +1046,10 @@ async fn resume_after_failed_update(app: tauri::AppHandle) -> Result<bool, Strin
 
 fn resume_after_failed_update_blocking(app: tauri::AppHandle) -> Result<bool, String> {
     app.state::<UpdatePause>().end();
+    // #1300：更新没成，本壳自己接手恢复——标记不留给下一个壳。
+    if let Err(e) = ShellHome::current().set_update_paused(false) {
+        eprintln!("#1300: 清「为更新暂停」标记失败：{e}");
+    }
     self_heal_now(&app, "update failed")
 }
 
@@ -1145,6 +1149,12 @@ fn pause_daemon_for_update_blocking(app: tauri::AppHandle) -> Result<(), String>
     if !should_pause_for_update(&ShellHome::current()) {
         return Ok(());
     }
+    // #1300：先落「为更新暂停」标记，新壳只凭它恢复服务（launchd 里分不出更新暂停与用户在
+    // 外面停）。落不下就不暂停：服务照常跑着更新，新壳的内核对账（#667）换成新版。
+    if let Err(e) = ShellHome::current().set_update_paused(true) {
+        eprintln!("#1300: 落「为更新暂停」标记失败，不暂停服务：{e}");
+        return Ok(());
+    }
     // 先进入暂停窗口、再停：停掉那一刻前端就会收到断连并请求自愈。
     app.state::<UpdatePause>().begin();
     // 先让服务管理器卸下常驻那份（登记保留、不写停止标记）：只 kill 的话 launchd
@@ -1153,6 +1163,7 @@ fn pause_daemon_for_update_blocking(app: tauri::AppHandle) -> Result<(), String>
         // #1063：Windows 不需要壳暂停——安装器 PREINSTALL/POSTINSTALL/onInstFailed
         // 负责停、起、失败恢复。这里必须**连 stop_bundled_daemon 都不做**，否则又会
         // 把服务杀掉、回到「安装器没启动就没人恢复」的老问题。
+        // 「为更新暂停」标记留着：安装器没把服务起来时，新壳照旧按它恢复（#1300 前的行为）。
         Ok(platform::ResidentPause::NotApplicable) => {
             app.state::<UpdatePause>().end();
             eprintln!("#1063: 本平台由安装器负责停/起服务，壳不暂停");
@@ -1917,12 +1928,17 @@ fn startup_reconcile(app: tauri::AppHandle) {
 /// 把它拉回来——直接就是新内核，不再经过「旧内核被 KeepAlive 拉起、再被换一次」。
 /// 判据见 `update_resume_needed`（用户停过的保持停止）。排在登记对账之后：登记
 /// 被重写时那一下 bootstrap 已经起了服务，这里看到在线就不动，避免并发重启。
+///
+/// #1300：只认旧壳落的「为更新暂停」标记（`take_update_resume` 读完即清）。没有标记的
+/// 「登记在、不在线」可能是用户在外面停的（launchd 里与更新暂停同一个状态），不拉。
 fn resume_after_update(app: &tauri::AppHandle) {
-    if !update_resume_needed(
-        &ShellHome::current(),
-        resident_service_available(),
-        daemon_online(),
-    ) {
+    let home = ShellHome::current();
+    let paused = home.update_paused();
+    let online = daemon_online();
+    if !take_update_resume(&home, resident_service_available(), online) {
+        if !paused && !online {
+            eprintln!("#1300: 新壳启动，服务不在线且没有为更新暂停的记录——按用户停的处理，不拉");
+        }
         return;
     }
     match self_heal_now(app, "resume after update") {
@@ -2585,6 +2601,13 @@ mod tests {
             .find("UpdatePause>().begin()")
             .expect("暂停前进入窗口");
         assert!(begin_at < pause.find("pause_resident_daemon").unwrap());
+        // #1300：暂停前先落「为更新暂停」标记（新壳只凭它恢复），落不下就不暂停；
+        // 失败恢复由本壳接手，清掉标记。
+        let mark_at = pause
+            .find("set_update_paused(true)")
+            .expect("暂停前落为更新暂停标记");
+        assert!(mark_at < begin_at);
+        assert!(resume.contains("set_update_paused(false)"));
     }
 
     /// #809：外壳自报版本（诊断包）只认 tauri `package_info`——
@@ -3569,6 +3592,12 @@ mod tests {
             .expect("自愈不杀在跑的内核");
         assert!(gate < spawn, "判据必须在 spawn 之前");
         assert!(body("self_heal_daemon_blocking").contains("self_heal_now(&app, "));
+        // #1300：更新后恢复只认「为更新暂停」标记（读完即清），判据在拉起之前。
+        let resume = body("resume_after_update");
+        let take = resume
+            .find("take_update_resume(")
+            .expect("更新后恢复走 take_update_resume");
+        assert!(take < resume.find("self_heal_now(").unwrap());
         let converge = body("converge_kernel_on_startup");
         let state_gate = converge
             .find("if manager.current() != ServiceState::Unreachable {")
