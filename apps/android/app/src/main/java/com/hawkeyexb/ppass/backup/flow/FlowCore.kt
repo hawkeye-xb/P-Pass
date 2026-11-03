@@ -186,6 +186,18 @@ fun waitReasonOf(conditions: Conditions, userPresent: Boolean): WaitReason? = wh
     else -> null
 }
 
+/**
+ * #1272 / #1317：自动备份规则开关的读取节流判据。
+ *
+ * 不能直接写成 `now - cachedAt > 1000`：首次读取的哨兵是 [RULE_CACHE_NEVER_MS]（Long.MIN_VALUE），
+ * 大正数减 Long.MIN_VALUE 在 64 位补码里溢出成负数，条件永远不成立，开关就停在初值 false
+ * （test.4 的 P0：范围选好了也一张不传）。对哨兵做显式判断，减法只用在两个真实时刻上。
+ */
+internal const val RULE_CACHE_NEVER_MS = Long.MIN_VALUE
+
+internal fun ruleCacheDue(nowMs: Long, cachedAtMs: Long): Boolean =
+    cachedAtMs == RULE_CACHE_NEVER_MS || nowMs - cachedAtMs > 1_000L
+
 /** 传一张的请求。queue_sequence = [orderId]，lease_token = [leaseTokenFor]。 */
 data class DeliveryRequest(
     val orderId: Long,
