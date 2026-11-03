@@ -16,6 +16,31 @@ contribution has to meet.
 - **Code changes**: one change per branch and pull request. Fill in the
   [pull request template](.github/PULL_REQUEST_TEMPLATE.md).
 
+## Working from a fork
+
+Outside contributors work from a fork and open pull requests against this
+repository; only maintainers push branches here.
+
+1. Fork the repository on GitHub, clone your fork, and run `just doctor` from
+   the repository root. Without the maintainers' private repository next to
+   the main copy it reports **collaborator mode**: that is expected for a
+   fork, and it is not an error.
+2. Never put confidential material (security details, business or operations
+   content) in the repo, issues, pull requests or commit messages. The project
+   keeps that in a private repository that forks do not have; stop and ask a
+   maintainer instead of writing it here.
+3. Make the change on a branch and commit with `git commit -s`. Every commit
+   needs the DCO sign-off described below; `CI DCO` fails otherwise.
+4. Open a pull request against the upstream `main`. One change per branch and
+   pull request.
+5. Some paths are **core paths** (listed in `.github/core-paths.txt`): pairing,
+   identity, crypto, protocol, storage and migrations, the update chain, and
+   the dependency locks. A change there needs an explicit owner approval
+   before it can merge; open an issue and agree on the approach first.
+6. Pull requests from forks do not receive repository secrets. Workflows that
+   need them (release, signing, device builds) do not run for a fork pull
+   request; those checks run on the maintainers' side.
+
 ## License of contributions
 
 By contributing, you agree that your contribution is licensed under the
