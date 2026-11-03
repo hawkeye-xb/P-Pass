@@ -44,6 +44,9 @@ export PPASS_OWNER_ENV="${TMP}/no-owner.env"
 export PPASS_OWNER_RUN_WAIT=0
 export PPASS_OWNER_MAIN_CI_WAIT=0
 export PPASS_OWNER_MAIN_CI_EMPTY_WAIT=0
+# doctor 在每条 owner 命令开头跑：磁盘下限在测试里放开（CI runner 空间不固定），设备只列不判。
+export PPASS_DOCTOR_MIN_FREE_GB=0
+export PPASS_DOCTOR_SKIP_DEVICES=1
 unset PPASS_OWNER_STATE_DIR PPASS_OWNER_JUST PPASS_HOOK_BYPASS
 
 # ── 桩 ──────────────────────────────────────────────────────────────
@@ -63,7 +66,7 @@ case "$1 $2" in
   "label list") cat "$FAKE/labels" ;;
   "issue list")
     case "$(arg --label)" in
-      status:review) for f in "$I"/*.labels; do grep -q 'status:review' "$f" && basename "$f" .labels; done ;;
+      status:review) for f in "$I"/*.labels; do [ -e "$f" ] || continue; grep -q 'status:review' "$f" && basename "$f" .labels; done ;;
       *) : ;;
     esac
     ;;
@@ -189,6 +192,11 @@ fresh() {
   git remote add origin "$ORIGIN"
   mkdir -p tools/flow tools/release .github docs/decisions src crates/storage release
   cp "${SRC}/tools/flow/"* tools/flow/
+  cp -R "${SRC}/tools/hooks" tools/hooks
+  # 测试只看 doctor 有没有接通 install.sh --check；真 hook 的判据在 tools/test-local-hooks.sh。
+  # 空转发器让卡分支的夹具提交不被真 hook 的范围检查提前拦掉。
+  printf '#!/usr/bin/env bash\nexit 0\n' >tools/hooks/dispatch.sh
+  printf 'Flow Test <flow-test@example.invalid>\n' >.github/allowed-identities.txt
   cp "${SRC}/tools/ci-paths.sh" "${SRC}/tools/check-dco.sh" "${SRC}/tools/heavy-lock" tools/
   cp "${SRC}/tools/release/with-timeout.sh" tools/release/
   cp "${SRC}/.github/core-paths.txt" .github/
@@ -208,6 +216,8 @@ PB
   git commit -q -s -m init
   git push -q origin HEAD:refs/heads/main
   git fetch -q origin
+  # doctor 要求提交拦截已装；1b 用例会先解开、再装回来。
+  bash tools/hooks/install.sh >/dev/null 2>&1
 }
 
 # card <号> <标签> <范围 glob> <正文附加> <文件> <内容>：造 issue + 推一条卡分支（基于 origin/main）
@@ -238,7 +248,7 @@ fresh
 card 11 status:review "src/**" "" src/x.txt $'line1\nCHANGED-A\nline3\n'
 card 12 status:review "src/**" "" src/x.txt $'line1\nCHANGED-B\nline3\n'
 card 13 status:review "docs/b.md" "" docs/b.md $'b2\n'
-out="$(bash tools/flow/owner-batch-plan.sh --dry-run 2>/dev/null)"
+out="$(bash tools/flow/owner-batch-plan.sh --dry-run 2>&1)"
 check "#11 与 #12 改同一行 → 不同批" bash -c '! printf "%s\n" "$1" | grep "^PLAN BATCH " | grep -E "(^| )11( |$)" | grep -qE "(^| )12( |$)"' _ "$out"
 check "反证：#11 与 #13 不相干 → 同一批" plan_line_has "$out" 11 13
 check "--dry-run 不改任何 issue" bash -c '! grep -q "issue edit" "$FAKE/calls.log"'
@@ -249,6 +259,17 @@ check "没有 status:review 标签 → 停下（退出码 1）" test "$rc" -eq 1
 check "--dry-run 停下时也不写 GitHub" bash -c '! grep -q "^issue create" "$FAKE/calls.log"'
 bash tools/flow/owner-batch-plan.sh >/dev/null 2>&1
 check "反证：非预演停下时开 issue" grep -q "^issue create" "$FAKE/calls.log"
+
+echo "── 1b. owner 命令开头先跑 doctor：环境不满足就停在自己的判定之前"
+fresh
+git config --unset core.hooksPath || true
+bash tools/flow/owner-batch-plan.sh --dry-run >"${S}/out-1b" 2>&1
+rc=$?
+check "拦截未装 → batch-plan 非 0（doctor 挡在开头）" test "$rc" -eq 1
+check "停在 batch-plan 自己的判定之前：没读标签列表、没写 issue" bash -c '! grep -q "^label list" "$FAKE/calls.log" && ! grep -q "^issue edit" "$FAKE/calls.log"'
+bash tools/hooks/install.sh >/dev/null 2>&1
+out="$(bash tools/flow/owner-batch-plan.sh --dry-run 2>/dev/null)"
+check "反证：装上拦截 → batch-plan 正常判定（PLAN EMPTY）" bash -c 'printf "%s\n" "$1" | grep -q "^PLAN EMPTY$"' _ "$out"
 
 echo "── 2. batch-plan：核心卡没有「已采纳」ADR → 排除并打回 status:blocked"
 fresh
@@ -336,7 +357,7 @@ echo "── 5b. batch-pr 代批 core review：核心卡有已采纳 ADR 才批�
 fresh
 card 31 "status:review,core" "crates/storage/**" "定案见 docs/decisions/2026-11-01-adopted.md" crates/storage/s.rs $'s9\n'
 card 32 "status:review,needs:product" "docs/b.md" "" docs/b.md $'b9\n'
-out="$(bash tools/flow/owner-batch-plan.sh --dry-run 2>/dev/null)"
+out="$(bash tools/flow/owner-batch-plan.sh --dry-run 2>&1)"
 check "带 needs:product 的卡不进批次" bash -c 'printf "%s\n" "$1" | grep -q "^PLAN EXCLUDE 32 .*needs:product"' _ "$out"
 bash tools/flow/owner-batch-open.sh core 31 >/dev/null 2>&1
 W="${PPASS_OWNER_WT_ROOT}/batch-2026-11-02-core"

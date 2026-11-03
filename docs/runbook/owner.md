@@ -4,6 +4,19 @@ owner 每一步只跑下面的命令。命令自带判定：红了或判定不�
 或评论到对应的卡、PR，然后非 0 退出。owner 不补做、不绕过、不改判定，接着做别的。
 脚本在 `tools/flow/owner-*.sh`，测试是 `tools/test-flow-owner.sh`（`just ci` 与 `just ci-docs` 都会跑）。
 
+## 开工自检（doctor）
+
+每条 owner 命令开头都会先跑 `just doctor`（`tools/flow/doctor.sh`）。它在你自己的外壳里检查：
+当前目录是主副本或它的 worktree、bash 能否真执行（Windows 上必须是 Git Bash，不能是 WSL 桩）、
+本地提交拦截已装、gh 能读本仓库 issue、提交身份在 `.github/allowed-identities.txt` 里、磁盘 ≥ 15G。
+私仓模式与在线设备只报不判。任一必需项不满足就非 0 退出并打印怎么修，修好再重跑。
+
+- 私仓：主副本旁边有 `../private` 就是**完整模式**；没有就是**协作者模式**——不写不公开内容，
+  遇到要写私仓的活，`just stuck <号> "需要写私仓，本机是协作者模式"` 停下。
+- `just owner-stuck` 是停下的出口，doctor 不过时也能用。
+- Windows 回归克隆根目录放 `.ppass-verify-clone` 标记：doctor 看到就拒绝在这个克隆里开工，
+  `owner-win-test.sh` 检查标记存在，没有就按「未覆盖」退出 3。怎么建见「已知坑，脚本已处理」。
+
 ## 命令
 
 | 步骤 | 命令 | 通过时最后一行 |
@@ -124,11 +137,19 @@ worktree（主仓旁边的 `P-Pass-wt/batch-<日期>-<主题>`），逐张执行
   全部是这一个时，才换新分支名（`-r2`、`-r3`）重推，不用 `--no-verify`。远端已有同名分支且内容不同时，
   也换新名，不强推。
 - **Windows 测试**：需要本机配置 `~/.config/ppass/owner.env`，内容是 `OWNER_WIN_HOST`、`OWNER_WIN_CLONE`
-  （owner 专用的克隆，不要用别人在用的那份）和 `OWNER_WIN_WORK`。代码用 `git bundle` 送过去，
-  对照表里 `win` 的步骤生成一个 cmd 脚本，`owner-win-run.ps1` 注册临时计划任务（LogonType Interactive）
-  跑它，跑完删掉。编译限 `CARGO_BUILD_JOBS=4`、`CARGO_INCREMENTAL=0`，PATH 最前加 `rust-toolchain.toml`
-  锁定版本的工具链。日志里 `PPASS_FAILED_STEP=` 是红的那步。主人没登录桌面时任务跑不起来，
-  按「判定不了」停下。
+  （owner 专用的克隆，不要用别人在用的那份）和 `OWNER_WIN_WORK`。这个克隆要单独 clone 一份，
+  并在**克隆根目录**放标记文件 `.ppass-verify-clone`，声明它是回归专用克隆：
+
+  ```powershell
+  # Windows（PowerShell）；cmd 里用：type nul > C:\src\P-Pass-owner\.ppass-verify-clone
+  New-Item -ItemType File C:\src\P-Pass-owner\.ppass-verify-clone
+  ```
+
+  没有标记时 `owner-win-test.sh` 按「未覆盖」退出 3，不把别人的工作克隆当回归机；doctor 在有标记的
+  目录里也会拒绝开工。代码用 `git bundle` 送过去，对照表里 `win` 的步骤生成一个 cmd 脚本，
+  `owner-win-run.ps1` 注册临时计划任务（LogonType Interactive）跑它，跑完删掉。编译限
+  `CARGO_BUILD_JOBS=4`、`CARGO_INCREMENTAL=0`，PATH 最前加 `rust-toolchain.toml` 锁定版本的工具链。
+  日志里 `PPASS_FAILED_STEP=` 是红的那步。主人没登录桌面时任务跑不起来，按「判定不了」停下。
 - **重编译互斥**：一律经 `tools/heavy-lock <命令>` 排队（可重入：外层已持锁时内层直接执行；等锁超时报错，#1308）（`just ci`、ppf-decoder 构建与对照表的每一步都走它），不要在外面再包 `lockf`；
   `just verify` 自己会取这把锁，外面不再套。
 

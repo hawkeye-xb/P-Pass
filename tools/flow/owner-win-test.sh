@@ -10,6 +10,8 @@
 #   OWNER_WIN_HOST=<ssh 主机别名>
 #   OWNER_WIN_CLONE=<Windows 上 owner 专用的仓库克隆，如 C:\src\P-Pass-owner；不要用别人在用的克隆>
 #   OWNER_WIN_WORK=<临时目录，如 C:\pp-owner>
+# OWNER_WIN_CLONE 的根目录必须放 .ppass-verify-clone 标记（怎么建见 docs/runbook/owner.md）；
+# 没有标记就说明不是回归专用克隆，按「未覆盖」退出 3。
 #
 # 编译限 CARGO_BUILD_JOBS=4、CARGO_INCREMENTAL=0；PATH 最前加 rust-toolchain.toml 锁定版本的工具链 bin。
 # 日志里每步前有 PPASS_STEP=<步骤>，红了有 PPASS_FAILED_STEP=<步骤>。
@@ -70,6 +72,10 @@ git update-ref -d "$ref"
 ssh_ps() { ssh -o BatchMode=yes -o ConnectTimeout=15 "$OWNER_WIN_HOST" "powershell -NoProfile -ExecutionPolicy Bypass -Command \"$1\""; }
 ssh_ps "New-Item -ItemType Directory -Force '${OWNER_WIN_WORK}' | Out-Null" >>"$LOG" 2>&1 ||
   { note "ssh ${OWNER_WIN_HOST} 不通"; exit 4; }
+# 专用克隆的根目录必须有标记文件：没有就说明这不是 owner-win-test 该用的回归克隆，
+# 按「未覆盖」算，不把别人的工作克隆当回归机（doctor 在那边也会拒绝开工）。
+ssh_ps "if (Test-Path -LiteralPath '${OWNER_WIN_CLONE}\\.ppass-verify-clone') { exit 0 } else { exit 1 }" >>"$LOG" 2>&1 ||
+  { note "Windows 克隆 ${OWNER_WIN_CLONE} 根目录没有 .ppass-verify-clone：它不是 owner 专用回归克隆，Windows 端未覆盖（怎么建见 docs/runbook/owner.md）"; exit 3; }
 work_fwd="$(printf '%s' "$OWNER_WIN_WORK" | tr '\\' '/')"
 script_cmd >"${tmp}/owner-steps.cmd"
 scp -q -o BatchMode=yes "${tmp}/batch.bundle" "${tmp}/owner-steps.cmd" "${HERE}/owner-win-run.ps1" "${OWNER_WIN_HOST}:${work_fwd}/" >>"$LOG" 2>&1 ||

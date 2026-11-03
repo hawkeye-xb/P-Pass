@@ -18,6 +18,9 @@ set -uo pipefail
 # shellcheck source=tools/flow/owner-lib.sh
 source "$(cd "$(dirname "$0")" && pwd)/owner-lib.sh"
 
+# 开工前自检：位置、shell、提交拦截、gh、提交身份、磁盘、私仓模式。不过就停，不带病继续。
+bash "${FLOW_DIR}/doctor.sh" || exit 1
+
 case "${1:-}" in "") ;; *) sed -n 2,17p "$0" | sed 's/^# \{0,1\}//'; exit 2 ;; esac
 GRACE="${PPASS_OWNER_CHECK_GRACE:-60}"
 RUN_WAIT="${PPASS_OWNER_RUN_WAIT:-600}"  # 等 core review 进入待批状态的上限（秒）

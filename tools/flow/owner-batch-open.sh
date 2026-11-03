@@ -14,6 +14,9 @@ set -uo pipefail
 # shellcheck source=tools/flow/owner-lib.sh
 source "$(cd "$(dirname "$0")" && pwd)/owner-lib.sh"
 
+# 开工前自检：位置、shell、提交拦截、gh、提交身份、磁盘、私仓模式。不过就停，不带病继续。
+bash "${FLOW_DIR}/doctor.sh" || exit 1
+
 usage() { sed -n 2,12p "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 [ $# -ge 2 ] || usage
 TOPIC="$1"
