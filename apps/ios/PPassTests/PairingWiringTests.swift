@@ -55,8 +55,9 @@ final class PairingWiringTests: XCTestCase {
 
     private func makePairing(_ transport: ScriptedTransport, store: PairingStore,
                              onboarded: @escaping (String) -> Bool = { _ in false },
+                             knownDesktop: ((String) -> Bool)? = nil,
                              onPaired: @escaping (PairingRecord, Bool) -> Bool = { _, _ in false }) -> LivePairing {
-        LivePairing(transportFor: { _ in transport }, store: store, onboarded: onboarded, onPaired: onPaired,
+        LivePairing(transportFor: { _ in transport }, store: store, onboarded: onboarded, knownDesktop: knownDesktop, onPaired: onPaired,
                     onDisconnect: {}, logger: LogSink(), localNodeId: { PairFixtures.phoneNode }, crypto: FakePairCrypto())
     }
 
@@ -206,17 +207,18 @@ final class PairingWiringTests: XCTestCase {
         XCTAssertFalse(check("node-c"), "存过空集也是空")
     }
 
-    /// 接到 LivePairing 上：有记录、这台范围为空的电脑重连 → 报首次（走决定页），且不信它的「已是成员」（走验证码）。
-    /// 反证：同上，判据只看记录 → 报 `firstTime: false`，本条红。
-    func test_pairing_with_a_record_but_no_scope_is_a_new_desktop() async throws {
+    /// 接到 LivePairing 上：有记录、这台范围为空、电脑仍认它是成员（选了单张备份、断开通知没送到）→ 走 memberHello 快路径
+    /// （不走 pair.request，否则被拒 role_forbidden），回来报首次（进决定页）。脚本里没有 pair.request：走了验证码这条就配不上。
+    /// 反证：信任改用完整判据（`trusted = knownDesktop(...)`），不走快路径、配不上，本条红；「是不是首次」改回只看记录，firstTime 断言红。
+    func test_member_with_a_record_but_no_scope_uses_the_fast_path_then_decides() async throws {
         let nodeId = try XCTUnwrap(URLComponents(string: link)?.queryItems?.first(where: { $0.name == "node" })?.value)
         let onboarded = OnboardedDesktopsStore(directory: dir)
         try onboarded.markOnboarded(nodeId)
         let check = LiveBackend.knownDesktopCheck(onboarded: onboarded, directory: dir, logger: LogSink())
+        let transport = ScriptedTransport([Methods.hello: try .ok(Hello(deviceName: "Mac", pairingId: "e9"))])
         var knownSeenByOnPaired: Bool?
-        let outcome = await makePairing(try acceptedPairing(pairingId: "e9"), store: PairingStore(root: dir), onboarded: check) { _, known in
-            knownSeenByOnPaired = known; return false
-        }.pair(code: link)
+        let outcome = await makePairing(transport, store: PairingStore(root: dir), onboarded: { onboarded.wasOnboarded($0) },
+                                        knownDesktop: check) { _, known in knownSeenByOnPaired = known; return false }.pair(code: link)
         XCTAssertEqual(outcome, .joined(firstTime: true))
         XCTAssertEqual(knownSeenByOnPaired, false)
     }

@@ -264,7 +264,7 @@ final class LiveBackend: @unchecked Sendable {
     }
 
     /// 配对成功后的分流判据（#1323，ADR 结论 3，两端同名同义）：`isKnownDesktop = 有记录 && 这台范围非空`。
-    /// LivePairing 也拿它决定要不要先试 memberHello（只信本机做过决定、范围还在的那台）。范围惰性读：没记录不读（读会触发 MOB-92 认领）。
+    /// 只决定「是不是首次」；要不要信「已是成员」只看记录（LivePairing `onboarded`）。范围惰性读：没记录不读（读会触发 MOB-92 认领）。
     static func knownDesktopCheck(onboarded: OnboardedDesktopsStore, directory: URL, logger: CoreLogger) -> (String) -> Bool {
         { nodeId in isKnownDesktop(onboarded, daemonNodeId: nodeId) { scopeNonEmpty(directory: directory, daemonNodeId: nodeId, logger: logger) } }
     }
@@ -278,7 +278,8 @@ final class LiveBackend: @unchecked Sendable {
     /// 对外的端口集合（界面只认这几个 protocol）。
     func ports() -> Backend {
         let pairing = LivePairing(transportFor: { [plane] in PeerCtrlTransport(plane: plane, peerToken: $0) }, store: pairingStore,
-                                  onboarded: Self.knownDesktopCheck(onboarded: onboarded, directory: root.url, logger: logger),
+                                  onboarded: { [onboarded] in onboarded.wasOnboarded($0) },
+                                  knownDesktop: Self.knownDesktopCheck(onboarded: onboarded, directory: root.url, logger: logger),
                                   onPaired: { [weak self] record, known in self?.paired(record, knownDesktop: known) ?? false },
                                   onDisconnect: { [weak self] in await self?.disconnect() }, logger: logger,
                                   localNodeId: { [plane] in try plane.nodeId() })

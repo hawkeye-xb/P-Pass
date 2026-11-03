@@ -265,7 +265,10 @@ struct EmptyParams: Codable {}
 final class LivePairing: PairingService, @unchecked Sendable {
     private let transportFor: (String) -> CtrlTransport
     private let store: PairingStore
+    /// 信任「你已是成员」（走 memberHello 快路径）：本机对这台做过决定（有「连过」记录）就信，不看范围（#1323，对位 Android pairWithQr）。
     private let onboarded: (String) -> Bool
+    /// 连过这台（不进决定页、`firstTime = false`）：完整判据 `有记录 && 这台范围非空`（#1323 ADR 结论 3）；没给 = 同 `onboarded`。
+    private let knownDesktop: (String) -> Bool
     /// 返回 true = 配对已落盘、但有设置没写下来要提示用户（#1039：换新电脑清旧的后台备份意图失败）。
     private let onPaired: (PairingRecord, _ knownDesktop: Bool) -> Bool
     private let onDisconnect: () async -> Void
@@ -276,6 +279,7 @@ final class LivePairing: PairingService, @unchecked Sendable {
     private var current: Task<PairVerdict, Error>?
 
     init(transportFor: @escaping (String) -> CtrlTransport, store: PairingStore, onboarded: @escaping (String) -> Bool,
+         knownDesktop: ((String) -> Bool)? = nil,
          onPaired: @escaping (PairingRecord, _ knownDesktop: Bool) -> Bool, onDisconnect: @escaping () async -> Void,
          logger: CoreLogger, localNodeId: @escaping () throws -> String, crypto: PairCrypto = FfiPairCrypto()) {
         self.localNodeId = localNodeId
@@ -284,6 +288,7 @@ final class LivePairing: PairingService, @unchecked Sendable {
         self.logger = logger
         self.store = store
         self.onboarded = onboarded
+        self.knownDesktop = knownDesktop ?? onboarded
         self.onPaired = onPaired
         self.onDisconnect = onDisconnect
     }
@@ -313,8 +318,11 @@ final class LivePairing: PairingService, @unchecked Sendable {
         // #1116 N1：「你已是成员」是电脑自己说的——只信本机已经配对完成过的那台（同一 NodeId，同 SSH known_hosts）；
         // 二维码指向别的节点一律走验证码，不然伪造的二维码自称成员就绕过了 #1118 的验证码。对位 Android `trustedMembership`。
         // 「连没连过」必须在 save 之前定：save 里的 onPaired 会把这台标成连过（#982：之前顺序反了，firstTime 恒为 false）。
-        let known = onboarded(code.nodeId)
-        let member: MemberHello = known ? await memberHello(rpc) : .none
+        // #1323：信任（要不要走 memberHello）只看记录；「是不是首次 / 进不进决定页」用完整判据。选了单张备份的人（有记录、范围空）
+        // 断开时撤销通知没送到、电脑仍认它是成员：走 pair.request 会被拒（role_forbidden），所以仍走快路径，只是回来后进决定页。
+        let trusted = onboarded(code.nodeId)
+        let known = knownDesktop(code.nodeId)
+        let member: MemberHello = trusted ? await memberHello(rpc) : .none
         if case let .outdated(side) = member { return PairVerdict.versionMismatch(side).outcome }
         if case let .hello(hello) = member, let pairingId = hello.pairingId, !pairingId.isEmpty {
             do {
@@ -338,7 +346,7 @@ final class LivePairing: PairingService, @unchecked Sendable {
         let verdict: PairVerdict
         do { verdict = try await task.value } catch { return .failed(diagnostic: String(describing: error)) }
         if case .accepted(let a) = verdict {
-            let known = onboarded(code.nodeId)
+            let known = knownDesktop(code.nodeId)
             do {
                 let settingSaveFailed = try save(code, name: a.storageDeviceName, pairingId: a.pairingId, known: known)
                 return .joined(firstTime: !known, settingSaveFailed: settingSaveFailed)
