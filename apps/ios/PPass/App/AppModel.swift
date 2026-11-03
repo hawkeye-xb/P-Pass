@@ -38,9 +38,31 @@ final class AppModel: ObservableObject {
     enum Phase: Equatable {
         /// 没配对过：欢迎页 → 扫码 / 手动输入 → 配对状态页。
         case onboarding
-        /// 首次配对成功：选范围（firstTime）。点「开始备份」直接进首页，没有完成页（#1263）。
+        /// #1323 决定页（onboarding 闸门 2026-11-03）：首次 / 新电脑配对后，先决定「备份哪些照片」（范围备份 / 单张备份），做完才进照片页。
+        case decision
+        /// 决定页选了范围备份、照片权限全部允许：首次选范围（firstTime）。点「开始备份」直接进首页，没有完成页（#1263）；取消回决定页。
         case chooseAlbums
         case main
+    }
+
+    /// 冷启动的首屏（#1323 判断 B，对位 Android `launchScreen`）。补记（`OnboardedDesktopsStore.initIfAbsent`）已在
+    /// `LiveBackend.init` 做过，这里**只看记录**：这台没有记录（含决定页被杀）→ 决定页。不看范围——选了单张备份的人有记录、
+    /// 范围为空，看范围的话每次打开都会被拦一次。完整判据 `isKnownDesktop` 只用在配对成功后的分流（`LivePairing`）。
+    /// 配对失效（`.lost`）→ 照片页：只有那里有「重新连接」红卡，决定页没有出路。
+    nonisolated static func launchPhase(_ pairing: PairingStatus, onboarded: Bool) -> Phase {
+        switch pairing {
+        case .notPaired: return .onboarding
+        case .lost: return .main
+        case .paired: return onboarded ? .main : .decision
+        }
+    }
+
+    /// 决定页主按钮「选择备份范围」在照片权限框之后去哪（ADR 结论 5，对位 Android `decisionLanding`）：
+    /// 全部允许 → 选范围页；部分允许或拒绝 → 系统选图（单张备份），不新增第三个出口。
+    enum DecisionLanding: Equatable { case chooseScope, pickPhotos }
+
+    nonisolated static func decisionLanding(_ access: MediaAccess) -> DecisionLanding {
+        access == .full ? .chooseScope : .pickPhotos
     }
 
     enum Tab: Hashable { case photos, settings }
@@ -97,7 +119,7 @@ final class AppModel: ObservableObject {
     init(backend: Backend) {
         self.backend = backend
         let status = backend.pairing.status()
-        phase = status == .notPaired ? .onboarding : .main
+        phase = Self.launchPhase(status, onboarded: status != .notPaired && backend.engine.onboardedCurrent())
         refresh()
         refreshExistingAlbums()
         refreshNotificationAuthorization()
@@ -175,7 +197,8 @@ final class AppModel: ObservableObject {
     var autoRuleBlocked: Bool { autoRule && access != .full }
 
     /// 「自动备份」开关（设置页与照片页空状态的主按钮共用）。关：只写偏好。开：此刻才申请照片权限——
-    /// 全部允许 → 开，没选过范围就进选范围页；有限访问 → 开关保持关，把允许的照片按手选链路传一次；不允许 → 保持关 + 一行小字。
+    /// 全部允许 → 开，并总是进选范围页确认范围（#1323，对位 Android：已有范围也不再直接开始）；
+    /// 有限访问 → 开关保持关，把允许的照片按手选链路传一次；不允许 → 保持关 + 一行小字。
     func setAutoRule(_ on: Bool) {
         ruleNote = nil
         guard on else {
@@ -190,7 +213,9 @@ final class AppModel: ObservableObject {
                 do { try backend.engine.setAutoRule(true); autoRule = true } catch { settingWriteFailed("auto-rule", error); return }
                 refresh()
                 refreshExistingAlbums()
-                if noAlbums { openScopeEditor() } else { await backend.engine.wake() }
+                openScopeEditor()
+                // 已有范围的用户在选范围页原样「保存」不会触发补扫（没有新增 / 放宽），规则刚打开要叫醒一轮，不然开了也不跑。
+                if !noAlbums { await backend.engine.wake() }
             case .partial:
                 let n = await backend.engine.sendAllowedPhotos()
                 ruleNote = n > 0 ? L.f("auto_backup_rule_limited_sent", n) : L.s("auto_backup_rule_partial_hint")
@@ -202,13 +227,60 @@ final class AppModel: ObservableObject {
     }
 
     /// #1272：系统选择器选完。照片不复制，只登记句柄；传输由引擎在前台逐张进行。
+    /// #1323：在决定页选的（单张备份）——登记成功才算做了决定：落盘「连过这台」、进照片页；取消或一张没登记上 → 留在决定页。
     func pickedChosen(_ items: [(fileName: String, mimeType: String, payload: PickedPayload)]) {
-        guard !items.isEmpty else { return }
+        guard !items.isEmpty else {
+            if phase == .decision { AppLog.log("onboarding: pick cancelled, staying on decision") }
+            return
+        }
         AppLog.log("picked: \(items.count) chosen")
         Task {
-            await backend.engine.addPicked(items)
+            let added = await backend.engine.addPicked(items)
             refresh()
+            guard phase == .decision else { return }
+            guard added > 0 else { AppLog.log("onboarding: pick registered nothing, staying on decision"); return }
+            markDecided(via: "pick")
+            phase = .main
         }
+    }
+
+    // MARK: #1323 决定页
+
+    /// 决定页出现（含冷启动直接落在决定页）：和 Android 同一句日志，E3 据此判定。
+    func decisionShown() {
+        AppLog.log("onboarding: decision shown")
+    }
+
+    /// 决定页主按钮「选择备份范围」：申请照片权限（读写、全部照片），按结果分流（`decisionLanding`）。
+    func decisionChooseScope() {
+        Task {
+            let granted = await backend.media.requestAccess()
+            access = granted
+            AppLog.log("onboarding: photo access after prompt=\(granted)")
+            guard phase == .decision else { return }
+            switch Self.decisionLanding(granted) {
+            case .chooseScope: phase = .chooseAlbums
+            case .pickPhotos: pickerRequested = true
+            }
+        }
+    }
+
+    /// 决定页次入口「先挑几张试试」：直接系统选图（不要照片权限）。
+    func decisionPickPhotos() { pickerRequested = true }
+
+    /// 首次选范围页「返回」：还没做决定，回决定页（对位 Android `systemBackTarget` 的 Buckets(firstTime) → Decision）。
+    func leaveFirstScope() {
+        guard phase == .chooseAlbums else { return }
+        phase = .decision
+    }
+
+    /// 「连过这台电脑」落盘（ADR 结论 2）：只在决定页做出选择那一刻——范围保存成功（via=scope）或单张选完登记成功（via=pick）。
+    /// 记不下来不挡进照片页、提示（#1039 同口径）：后果只是下次打开仍回决定页（偏安全的一侧）。
+    private func markDecided(via: String) {
+        do {
+            try backend.engine.finishOnboarding()
+            AppLog.log("onboarding: marked onboarded via=\(via)")
+        } catch { settingWriteFailed("onboarded", error) }
     }
 
     func refreshExistingAlbums() {
@@ -432,7 +504,8 @@ final class AppModel: ObservableObject {
 
     func retry() { runCommand("retry-failed") { try await self.backend.engine.retryFailed() } }
 
-    /// 配对成功后的去向：以前连过这台电脑 → 首页；否则去选相册（Android 同语义）。
+    /// 配对成功后的去向（#1323，ADR 结论 3、4）：连过这台电脑（有记录 && 这台范围非空，`LivePairing` 判）→ 首页，保留原配置；
+    /// 首次 / 新电脑 → 决定页。配对成功本身**不**落盘「连过」，落盘在决定页的选择回调（`markDecided`）。
     /// settingSaveFailed：换新电脑清旧的后台备份意图没写下来（#1039，对位 Android）——不拦配对，照常往下走，提示用户；
     /// 首次选完范围时再写一次「关」（#1263 起没有完成页）。
     func paired(firstTime: Bool, settingSaveFailed: Bool) {
@@ -442,14 +515,15 @@ final class AppModel: ObservableObject {
         }
         refresh()
         refreshNotificationAuthorization()
-        // #1272 B：配对后不再申请照片权限，直接进照片页；照片权限只在打开「自动备份」时才申请。
-        // 新电脑：记「连过这台」、规则与后台备份都按「关」写一次（旧电脑留下的意图不带到新电脑）。
+        // #1272 B：配对这一步不申请照片权限；决定页主按钮才申请。
+        // 新电脑：规则与后台备份都按「关」写一次（旧电脑留下的意图不带到新电脑）。
         if firstTime {
-            do { try backend.engine.finishOnboarding() } catch { settingWriteFailed("onboarded", error) }
             setAutoBackup(false)
             setAutoRule(false)
+            phase = .decision
+        } else {
+            phase = .main
         }
-        phase = .main
     }
 
     /// 选范围页点「开始备份」（首次）/「保存」（编辑）。范围 = 相册 + 时间档（#1263）。
@@ -486,12 +560,14 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// 首次选完范围：记「连过这台电脑」；后台备份按「关」写一次（#1039，对位 Android `onEnterWithoutBackgroundBackup`：
-    /// 配对时清旧意图那一步若没写下来，这里补上，否则旧电脑留下的意图会被带到新电脑上）。写失败都提示，照常进首页。
+    /// 首次选完范围（决定页选了范围备份）：记「连过这台电脑」（via=scope）；「自动备份」规则随之打开（#1323，对位 Android
+    /// `rulePrefs.set(true)`——直接写，不走 `setAutoRule(true)`：那条会再申请一次权限、再推一次选范围页）；
+    /// 后台备份按「关」写一次（#1039，对位 Android `onEnterWithoutBackgroundBackup`：配对时清旧意图那一步若没写下来，这里补上，
+    /// 否则旧电脑留下的意图会被带到新电脑上）。写失败都提示，照常进首页。
     private func finishFirstScope() {
         AppLog.log("onboarding: first scope saved, entering home")
-        // 记不下来不挡进首页：后果只是下次重连同一台仍走一遍首次设置（偏安全的一侧），但要提示，不静默。
-        do { try backend.engine.finishOnboarding() } catch { settingWriteFailed("onboarded", error) }
+        markDecided(via: "scope")
+        do { try backend.engine.setAutoRule(true); autoRule = true } catch { settingWriteFailed("auto-rule", error) }
         setAutoBackup(false)
         phase = .main
     }

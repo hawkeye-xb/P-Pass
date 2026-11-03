@@ -183,6 +183,44 @@ final class PairingWiringTests: XCTestCase {
         XCTAssertEqual(knownSeenByOnPaired, true)
     }
 
+    // MARK: #1323 配对后分流的判据（ADR 结论 3，两端同名同义）：连过 = 有记录 && 这台电脑的范围非空
+
+    /// 真实的记录文件与按 nodeId 的范围文件，经 `LiveBackend.knownDesktopCheck`（`ports()` 交给 LivePairing 的同一个闭包）。
+    /// 反证：`knownDesktopCheck` 改回只看记录（`onboarded.wasOnboarded`），「有记录无范围」红。
+    func test_known_desktop_needs_a_record_and_this_desktops_scope() throws {
+        let onboarded = OnboardedDesktopsStore(directory: dir)
+        let check = LiveBackend.knownDesktopCheck(onboarded: onboarded, directory: dir, logger: LogSink())
+        XCTAssertFalse(check("node-a"), "没记录 → 新电脑")
+
+        try BackupScopeStore(directory: dir, daemonNodeId: "node-b").saveScope(selected: ["x"], allCurrent: ["x"])
+        XCTAssertFalse(check("node-b"), "没记录、有范围 → 新电脑（不靠范围认旧电脑）")
+
+        try onboarded.markOnboarded("node-c")
+        XCTAssertFalse(check("node-c"), "有记录、这台范围为空 → 新电脑（宁可多问一次）")
+
+        try onboarded.markOnboarded("node-d")
+        try BackupScopeStore(directory: dir, daemonNodeId: "node-d").saveScope(selected: ["x"], allCurrent: ["x"])
+        XCTAssertTrue(check("node-d"), "有记录 && 这台范围非空 → 连过")
+
+        try BackupScopeStore(directory: dir, daemonNodeId: "node-c").saveScope(selected: [], allCurrent: ["x"])
+        XCTAssertFalse(check("node-c"), "存过空集也是空")
+    }
+
+    /// 接到 LivePairing 上：有记录、这台范围为空的电脑重连 → 报首次（走决定页），且不信它的「已是成员」（走验证码）。
+    /// 反证：同上，判据只看记录 → 报 `firstTime: false`，本条红。
+    func test_pairing_with_a_record_but_no_scope_is_a_new_desktop() async throws {
+        let nodeId = try XCTUnwrap(URLComponents(string: link)?.queryItems?.first(where: { $0.name == "node" })?.value)
+        let onboarded = OnboardedDesktopsStore(directory: dir)
+        try onboarded.markOnboarded(nodeId)
+        let check = LiveBackend.knownDesktopCheck(onboarded: onboarded, directory: dir, logger: LogSink())
+        var knownSeenByOnPaired: Bool?
+        let outcome = await makePairing(try acceptedPairing(pairingId: "e9"), store: PairingStore(root: dir), onboarded: check) { _, known in
+            knownSeenByOnPaired = known; return false
+        }.pair(code: link)
+        XCTAssertEqual(outcome, .joined(firstTime: true))
+        XCTAssertEqual(knownSeenByOnPaired, false)
+    }
+
     func test_member_fast_path_saves_name_and_pairing_id_when_hello_succeeds() async throws {
         let store = PairingStore(root: dir)
         let transport = ScriptedTransport([

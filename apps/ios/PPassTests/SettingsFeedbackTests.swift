@@ -8,6 +8,7 @@ import XCTest
 @MainActor
 final class SettingsFeedbackTests: XCTestCase {
     private struct Boom: Error {}
+    private struct StubPayload: PickedPayload {}
 
     /// 「盘」：写失败时不动，读永远是盘上的值。
     private final class StubEngine: BackupEngine {
@@ -28,7 +29,11 @@ final class SettingsFeedbackTests: XCTestCase {
         func setAutoRule(_ on: Bool) throws { calls.append("rule=\(on)"); if failWrites { throw Boom() }; rule = on }
         func sendAllowedPhotos() async -> Int { calls.append("sendAllowed"); return allowedSent }
         func pickedSummary() -> PickedBatchSummary? { nil }
-        func addPicked(_ items: [(fileName: String, mimeType: String, payload: PickedPayload)]) async {}
+        /// 登记上几张（nil = 全部登记上）；0 = 一张没登记上。
+        var pickedAdds: Int?
+        func addPicked(_ items: [(fileName: String, mimeType: String, payload: PickedPayload)]) async -> Int {
+            calls.append("picked"); return pickedAdds ?? items.count
+        }
         func retryFailed() async throws { calls.append("retry"); if failCommands { throw Boom() } }
         func remainingSnapshot() async throws -> RemainingSnapshot { calls.append("snapshot"); throw Boom() }
         func cancelRemaining(_ snapshot: RemainingSnapshot) async throws -> Int? { calls.append("cancel"); if failCommands { throw Boom() }; return cancelResult }
@@ -40,7 +45,10 @@ final class SettingsFeedbackTests: XCTestCase {
         func requestNotificationAuthorization() async -> NotificationAuthorization { .authorized }
         @MainActor func openNotificationSettings() {}
         var failOnboarded = false
-        func finishOnboarding() throws { calls.append("onboarded"); if failOnboarded { throw Boom() } }
+        func finishOnboarding() throws { calls.append("onboarded"); if failOnboarded { throw Boom() }; onboarded = true }
+        /// 演示配对（`FakePairing`）是已配对：默认当作做过决定，冷启动进照片页；冷启动用例自己改。
+        var onboarded = true
+        func onboardedCurrent() -> Bool { onboarded }
         func wifiOnly() -> Bool { disk.wifi }
         func setWifiOnly(_ on: Bool) throws { calls.append("wifi=\(on)"); if failWrites { throw Boom() }; disk.wifi = on }
         /// 设了就走真盘：与 `LiveEngineAdapter.setAutoBackup` 同一个写盘函数，写失败来自真实的只读目录（#1039）。
@@ -80,8 +88,9 @@ final class SettingsFeedbackTests: XCTestCase {
         }
     }
 
-    private func make() -> (AppModel, StubEngine, StubMedia) {
+    private func make(onboarded: Bool = true) -> (AppModel, StubEngine, StubMedia) {
         let engine = StubEngine(), media = StubMedia()
+        engine.onboarded = onboarded
         let fake = FakeBackend.make(.normal)
         let backend = Backend(isDemo: true, timeline: fake.timeline, live: fake.live, media: media, pairing: fake.pairing, engine: engine)
         return (AppModel(backend: backend), engine, media)
@@ -119,8 +128,9 @@ final class SettingsFeedbackTests: XCTestCase {
 
     // MARK: #1019
 
-    /// 首次选范围点「开始备份」= 走完 onboarding（#1263 没有完成页）：保存范围后记「连过这台电脑」、后台备份写「关」、唤醒引擎、直接进首页。
-    /// 反证：去掉 `finishFirstScope` 的调用，onboarded 不出现、phase 停在 chooseAlbums，本条红。
+    /// 首次选范围点「开始备份」= 决定页选了范围备份（#1263 没有完成页）：保存范围后记「连过这台电脑」、「自动备份」规则打开（#1323）、
+    /// 后台备份写「关」、唤醒引擎、直接进首页。
+    /// 反证：去掉 `finishFirstScope` 的调用，onboarded 不出现、phase 停在 chooseAlbums，本条红；去掉里面写规则那行，rule=true 不出现，本条红。
     private func chooseFirstScope(_ app: AppModel, wantsAll: Bool = false) {
         app.albumsChosen(["a", "b"], known: ["a", "b"], wantsAll: wantsAll, firstTime: true)
     }
@@ -132,7 +142,8 @@ final class SettingsFeedbackTests: XCTestCase {
         chooseFirstScope(app)
         await settle()
         XCTAssertEqual(media.disk, ["a", "b"])
-        XCTAssertEqual(engine.calls.prefix(2), ["onboarded", "auto=false"], "先记连过，后台备份默认关")
+        XCTAssertEqual(Array(engine.calls.prefix(3)), ["onboarded", "rule=true", "auto=false"], "先记连过，规则随范围备份打开，后台备份默认关")
+        XCTAssertTrue(app.autoRule)
         XCTAssertTrue(engine.calls.contains("wake"), "新增相册 → SCOPE_ADDED")
         XCTAssertFalse(engine.calls.contains("auto=true"), "onboarding 不再问后台备份")
         XCTAssertEqual(app.phase, .main, "没有完成页")
@@ -151,37 +162,120 @@ final class SettingsFeedbackTests: XCTestCase {
 
     // MARK: #1259 照片权限：不加说明屏（10-29 改决定）
 
-    /// 首次配对、系统还没问过照片权限 → 直接进照片页（#1272：配对后不要照片权限，打开「自动备份」时才申请、才选范围）。
-    /// 配对这一步自己不弹框，也不经过中间屏。
-    func test_first_pairing_goes_straight_to_the_photos_page() {
-        let (app, _, media) = make()
+    /// #1323（改断言、保意图：原「首次配对直接进照片页」）：首次 / 新电脑配对 → 决定页；配对这一步不弹照片权限框，
+    /// 也**不落盘**「连过这台」（落盘在决定页的选择回调）；规则与后台备份按「关」写一次。
+    /// 反证：把 `finishOnboarding()` 留在 `paired` 里，onboarded 出现，本条红；`paired` 仍进 `.main`，phase 断言红。
+    func test_first_pairing_goes_to_the_decision_page_without_marking() {
+        let (app, engine, media) = make()
         media.granted = nil
         app.paired(firstTime: true, settingSaveFailed: false)
-        XCTAssertEqual(app.phase, .main)
+        XCTAssertEqual(app.phase, .decision)
         XCTAssertEqual(media.requested, 0)
+        XCTAssertFalse(engine.calls.contains("onboarded"), "配对成功本身不算连过")
+        XCTAssertTrue(engine.calls.contains("rule=false"))
+        XCTAssertTrue(engine.calls.contains("auto=false"))
     }
 
-    /// 连回以前连过的电脑直接进首页，不管照片权限问没问过。
+    /// 连回以前连过的电脑直接进首页，不管照片权限问没问过；不重写规则、不落盘。
     func test_known_desktop_goes_home() {
-        let (known, _, media) = make()
+        let (known, engine, media) = make()
         media.granted = nil
         known.paired(firstTime: false, settingSaveFailed: false)
         XCTAssertEqual(known.phase, .main)
+        XCTAssertTrue(engine.calls.isEmpty, "保留原配置：\(engine.calls)")
     }
 
-    /// 系统框里只给了部分 / 拒绝：照常走完选范围进首页，首页按三档权限出兜底卡（投影见 HomeProjectionTests 的 accessBlocked）。
-    func test_partial_or_denied_access_lands_home_with_that_tier() async {
-        for answer in [MediaAccess.partial, .none] {
-            let (app, _, media) = make()
+    /// #1323（改断言、保意图：原「部分 / 拒绝照常走完选范围」）：决定页主按钮申请照片权限——全部允许 → 选范围页；
+    /// 部分 / 拒绝 → 系统选图（单张备份），不新增出口、不落盘。
+    /// 反证：`decisionLanding` 恒返回 `.chooseScope`，部分 / 拒绝两轮红。
+    func test_decision_main_button_lands_by_photo_access() async {
+        for (answer, expected) in [(MediaAccess.full, AppModel.Phase.chooseAlbums), (.partial, .decision), (.none, .decision)] {
+            let (app, engine, media) = make()
             media.granted = nil
             media.answer = answer
             app.paired(firstTime: true, settingSaveFailed: false)
-            _ = await media.requestAccess() // 选范围页读相册时弹的那一次
-            app.albumsChosen([], known: [], wantsAll: false, firstTime: true)
+            app.decisionChooseScope()
             await settle()
-            XCTAssertEqual(app.phase, .main, "\(answer)")
-            XCTAssertEqual(app.access, answer, "首页要拿到系统框之后的权限档")
+            XCTAssertEqual(media.requested, 1, "\(answer)")
+            XCTAssertEqual(app.phase, expected, "\(answer)")
+            XCTAssertEqual(app.pickerRequested, answer != .full, "\(answer)")
+            XCTAssertEqual(app.access, answer, "页面要拿到系统框之后的权限档")
+            XCTAssertFalse(engine.calls.contains("onboarded"), "还没做出选择：\(answer)")
         }
+    }
+
+    /// 决定页的范围出口：选范围页返回 → 回决定页（还没做决定）；再进、保存 → 落盘 via=scope、进照片页。
+    /// 反证：`leaveFirstScope` 改成进 `.main`，第一段红；`finishFirstScope` 不落盘，onboarded 断言红。
+    func test_decision_scope_exit_back_returns_and_save_marks() async {
+        let (app, engine, media) = make()
+        media.disk = nil
+        app.paired(firstTime: true, settingSaveFailed: false)
+        app.decisionChooseScope()
+        await settle()
+        XCTAssertEqual(app.phase, .chooseAlbums)
+        app.leaveFirstScope()
+        XCTAssertEqual(app.phase, .decision, "返回 = 还没做决定")
+        XCTAssertFalse(engine.calls.contains("onboarded"))
+        app.decisionChooseScope()
+        await settle()
+        chooseFirstScope(app)
+        await settle()
+        XCTAssertEqual(engine.calls.filter { $0 == "onboarded" }.count, 1)
+        XCTAssertEqual(app.phase, .main)
+    }
+
+    /// 决定页的单张出口：系统选图选完、登记成功 → 落盘 via=pick、进照片页；取消（空）或一张没登记上 → 留在决定页、不落盘。
+    /// 反证：`pickedChosen` 里去掉 `markDecided(via: "pick")`，onboarded 断言红；去掉 `added > 0` 守卫，「没登记上」那段红。
+    func test_decision_pick_exit_marks_only_when_registered() async {
+        let item: (fileName: String, mimeType: String, payload: PickedPayload) = ("a.jpg", "image/jpeg", StubPayload())
+        let (app, engine, _) = make()
+        app.paired(firstTime: true, settingSaveFailed: false)
+        app.decisionPickPhotos()
+        XCTAssertTrue(app.pickerRequested)
+        app.pickedChosen([]) // 选图取消
+        await settle()
+        XCTAssertEqual(app.phase, .decision)
+
+        engine.pickedAdds = 0
+        app.pickedChosen([item])
+        await settle()
+        XCTAssertEqual(app.phase, .decision, "一张没登记上不算做了决定")
+        XCTAssertFalse(engine.calls.contains("onboarded"))
+
+        engine.pickedAdds = nil
+        app.pickedChosen([item])
+        await settle()
+        XCTAssertEqual(engine.calls.filter { $0 == "onboarded" }.count, 1)
+        XCTAssertEqual(app.phase, .main)
+
+        app.pickedChosen([item]) // 照片页里再挑：不再落盘
+        await settle()
+        XCTAssertEqual(engine.calls.filter { $0 == "onboarded" }.count, 1)
+    }
+
+    /// 冷启动（判断 B）：有配对、这台没有记录（含决定页被杀）→ 决定页；有记录 → 照片页。
+    /// 反证：`init` 改回「有配对就进 .main」，第一段红。
+    func test_cold_launch_without_a_record_lands_on_the_decision_page() {
+        let (fresh, _, _) = make(onboarded: false)
+        XCTAssertEqual(fresh.phase, .decision)
+        let (known, _, _) = make(onboarded: true)
+        XCTAssertEqual(known.phase, .main)
+    }
+
+    /// 打开「自动备份」规则（全部允许）且已有范围：也进选范围页确认范围（#1323，对位 Android），不再直接开始。
+    /// 反证：改回 `if noAlbums { openScopeEditor() } else { wake }`，wantsScopeEditor 断言红。
+    func test_turning_the_rule_on_with_a_scope_still_opens_the_scope_editor() async {
+        let (app, engine, _) = make()
+        engine.rule = false
+        app.refresh()
+        app.refreshExistingAlbums()
+        await settle()
+        XCTAssertFalse(app.noAlbums, "前提：已有范围")
+        app.setAutoRule(true)
+        await settle()
+        XCTAssertTrue(app.autoRule)
+        XCTAssertTrue(app.wantsScopeEditor)
+        XCTAssertEqual(app.tab, .settings)
     }
 
     /// 10-29：选范围页读相册时可能刚弹过系统框，`refreshAccess` 让页面按弹框之后的那一档显示（部分 → 页顶说明，拒绝 → 去设置）。
@@ -199,11 +293,11 @@ final class SettingsFeedbackTests: XCTestCase {
 
     // MARK: #1039 换新电脑清旧的后台备份意图写失败（对位 Android）
 
-    /// 配对结局带着「清意图没写下来」：照常进照片页（#1272），并提示。反证：去掉 `paired` 里设 notice 那段，本条红。
+    /// 配对结局带着「清意图没写下来」：照常往下走（#1323 起新电脑进决定页），并提示。反证：去掉 `paired` 里设 notice 那段，本条红。
     func test_new_desktop_intent_clear_failure_still_goes_on_and_tells_the_user() {
         let (app, _, _) = make()
         app.paired(firstTime: true, settingSaveFailed: true)
-        XCTAssertEqual(app.phase, .main, "不拦配对")
+        XCTAssertEqual(app.phase, .decision, "不拦配对")
         XCTAssertEqual(app.notice?.message, L.s("setting_save_failed"))
 
         let (ok, _, _) = make()
