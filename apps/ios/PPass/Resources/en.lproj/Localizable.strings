@@ -8,6 +8,11 @@
 "scan_header_title" = "Scan to connect";
 "scan_hint" = "Point at the pairing QR code\non your computer's screen";
 "scan_manual_link" = "Can't scan? Enter the pairing code instead";
+"decision_connected" = "Connected to %1$@";
+"decision_title" = "Choose the photos to back up automatically";
+"decision_choose_scope" = "Choose what to back up";
+"decision_choose_scope_note" = "Requires access to all photos";
+"decision_pick_photos" = "Pick a few to try first";
 "scan_manual_title" = "Enter pairing code";
 "scan_manual_body" = "On the computer's \"Add a device\" card, click \"Can't scan? Copy the pairing code\", send it to this phone, and paste it below.";
 "scan_manual_placeholder" = "ppf://pair?node=…";

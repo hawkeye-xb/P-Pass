@@ -13,6 +13,12 @@
     <string name="scan_header_title">扫码连接</string>
     <string name="scan_hint">对准电脑屏幕上的\n配对二维码</string>
     <string name="scan_manual_link">无法扫码？手动输入配对码</string>
+    <!-- #1321 决定页：配对后、进照片页之前必须做一次「备份哪些照片」的决定。 -->
+    <string name="decision_connected">已连上 %1$s</string>
+    <string name="decision_title">选择要自动备份的照片</string>
+    <string name="decision_choose_scope">选择备份范围</string>
+    <string name="decision_choose_scope_note">需要允许访问全部照片</string>
+    <string name="decision_pick_photos">先挑几张试试</string>
 
     <!-- M3 全页面状态稿：独立子页，不是内联展开。 -->
     <string name="scan_manual_title">输入配对码</string>

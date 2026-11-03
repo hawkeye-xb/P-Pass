@@ -215,10 +215,22 @@ public final class OnboardedDesktopsStore: @unchecked Sendable {
         self.logger = logger
     }
 
-    private struct State: Codable { var nodeIds: [String] }
+    /// initialized：onboarding 闸门（2026-11-03 判断 A）升级后的一次性补记做过没有；老文件没有这个字段 = 没做过。
+    private struct State: Codable { var nodeIds: [String]; var initialized: Bool? }
 
     private func load() -> Set<String> {
         Set(JSONFile.read(State.self, url, logger: logger)?.nodeIds ?? [])
+    }
+
+    /// nil = 文件在、但读不出来。
+    private func readState() -> State? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return State(nodeIds: [], initialized: nil) }
+        return JSONFile.read(State.self, url, logger: logger)
+    }
+
+    /// 新版本写下的文件一律带「已初始化」：判断 A 的补记只在升级后第一次启动做。
+    private func write(_ ids: Set<String>) throws {
+        try JSONFile.write(State(nodeIds: ids.sorted(), initialized: true), url)
     }
 
     public func wasOnboarded(_ daemonNodeId: String) -> Bool {
@@ -237,7 +249,27 @@ public final class OnboardedDesktopsStore: @unchecked Sendable {
         guard !daemonNodeId.isBlank else { return }
         var ids = load()
         guard ids.insert(daemonNodeId).inserted else { return }
-        try JSONFile.write(State(nodeIds: ids.sorted()), url)
+        try write(ids)
+    }
+
+    /// onboarding 闸门（2026-11-03 判断 A，对位 Android `OnboardedDesktopsStore.initIfAbsent`）：升级后第一次启动，按现状给
+    /// **当时配着的那台**补记一次，之后不再补。每次进照片页都补的话，一台从没连过的新电脑经 MOB-92 一次性认领拿到老的全局范围，
+    /// 范围非空，就被误记成「连过」。
+    /// - 没做过（文件不存在、或老文件没有 `initialized`）：有配对、没记录、`scopeNonEmpty` → 补记；然后落「已初始化」。返回这次有没有补记。
+    /// - 文件读不出来：按已初始化处理，不补（和「损坏 = 空集 = 多问一次」同方向）。
+    /// - `scopeNonEmpty` 惰性：不补的情况下不读范围（读范围会触发认领）。
+    @discardableResult
+    public func initIfAbsent(daemonNodeId: String?, scopeNonEmpty: () -> Bool) throws -> Bool {
+        JSONFile.lock.lock(); defer { JSONFile.lock.unlock() }
+        guard let state = readState(), state.initialized != true else { return false }
+        var ids = Set(state.nodeIds)
+        var backfill = false
+        if let id = daemonNodeId, !id.isBlank, !ids.contains(id), scopeNonEmpty() {
+            ids.insert(id)
+            backfill = true
+        }
+        try write(ids)
+        return backfill
     }
 }
 

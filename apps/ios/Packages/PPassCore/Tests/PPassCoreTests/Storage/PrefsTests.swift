@@ -170,6 +170,73 @@ final class PrefsTests: XCTestCase {
         XCTAssertFalse(store.anyOnboarded())
     }
 
+    // MARK: onboarding 闸门判断 A（#1323，对位 Android OnboardingGateTest）：补记只在升级后第一次启动做一次
+
+    func testInitBackfillsTheDesktopPairedAtUpgradeOnce() throws {
+        let tmp = TempDir()
+        tmp.write(OnboardedDesktopsStore.fileName, #"{"nodeIds": ["node-old"]}"#)
+        let store = OnboardedDesktopsStore(directory: tmp.url)
+        XCTAssertTrue(try store.initIfAbsent(daemonNodeId: "node-mac") { true })
+        XCTAssertTrue(store.wasOnboarded("node-mac"))
+        XCTAssertTrue(store.wasOnboarded("node-old"), "老记录原样保留")
+        XCTAssertFalse(try store.initIfAbsent(daemonNodeId: "node-mac") { true }, "只补一次")
+    }
+
+    func testInitWithoutScopeDoesNotBackfill() throws {
+        let tmp = TempDir()
+        let store = OnboardedDesktopsStore(directory: tmp.url)
+        XCTAssertFalse(try store.initIfAbsent(daemonNodeId: "node-mac") { false })
+        XCTAssertFalse(store.wasOnboarded("node-mac"))
+    }
+
+    /// 已初始化之后，新电脑经 MOB-92 认领拿到非空范围，不被补记成连过。
+    /// 反证：去掉「已初始化」判断（每次启动都补），这条红。
+    func testNewDesktopThatInheritedTheLegacyScopeIsNotBackfilledAfterInit() throws {
+        let tmp = TempDir()
+        let store = OnboardedDesktopsStore(directory: tmp.url)
+        XCTAssertFalse(try store.initIfAbsent(daemonNodeId: nil) { XCTFail("没有配对不读范围"); return true })
+        XCTAssertFalse(try store.initIfAbsent(daemonNodeId: "node-win") { true })
+        XCTAssertFalse(store.wasOnboarded("node-win"))
+        XCTAssertFalse(isKnownDesktop(store, daemonNodeId: "node-win") { true })
+    }
+
+    func testInitDoesNotReadScopeOnceInitialized() throws {
+        let tmp = TempDir()
+        let store = OnboardedDesktopsStore(directory: tmp.url)
+        try store.markOnboarded("node-mac")
+        var reads = 0
+        XCTAssertFalse(try store.initIfAbsent(daemonNodeId: "node-win") { reads += 1; return true })
+        XCTAssertEqual(reads, 0, "新版本写下的文件已带「已初始化」，不读范围（读范围会触发认领）")
+    }
+
+    /// App 里的闭包是真的读这台电脑的范围（`BackupScopeStore` 也拿 `JSONFile.lock`）：持锁求值不能死锁，且按 nodeId 读到的是这台的范围。
+    /// 放到后台队列 + 超时，回归成不可重入的锁时本条超时变红而不是挂住整个测试进程。
+    func testInitWithARealScopeReadDoesNotDeadlock() throws {
+        let tmp = TempDir()
+        tmp.write(OnboardedDesktopsStore.fileName, #"{"nodeIds": []}"#)
+        try BackupScopeStore(directory: tmp.url, daemonNodeId: "node-mac").saveScope(selected: ["a"], allCurrent: ["a"])
+        let store = OnboardedDesktopsStore(directory: tmp.url)
+        let done = expectation(description: "init returns")
+        var backfilled = false
+        DispatchQueue.global().async {
+            backfilled = (try? store.initIfAbsent(daemonNodeId: "node-mac") {
+                (try? BackupScopeStore(directory: tmp.url, daemonNodeId: "node-mac").selectedBucketIds())?.isEmpty == false
+            }) ?? false
+            done.fulfill()
+        }
+        wait(for: [done], timeout: 2)
+        XCTAssertTrue(backfilled)
+        XCTAssertTrue(store.wasOnboarded("node-mac"))
+    }
+
+    func testInitLeavesACorruptFileAlone() throws {
+        let tmp = TempDir()
+        tmp.write(OnboardedDesktopsStore.fileName, #"{"nodeIds": "#)
+        let store = OnboardedDesktopsStore(directory: tmp.url)
+        XCTAssertFalse(try store.initIfAbsent(daemonNodeId: "node-mac") { true })
+        XCTAssertFalse(store.wasOnboarded("node-mac"), "损坏 = 多问一次")
+    }
+
     /// 标记不在就不读范围（读范围会触发一次性认领）。
     func testKnownDesktopDoesNotTouchScopeWhenNotOnboarded() throws {
         let tmp = TempDir()
