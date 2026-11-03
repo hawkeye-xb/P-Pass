@@ -324,10 +324,10 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
     // #1272：自动备份规则开关。inScope 每张都问，读文件按 1 秒缓存（开关翻转后至多 1 秒生效，下一轮触发前早已过去）。
     val rulePrefs = com.hawkeyexb.ppass.backup.autoBackupRulePrefs(app)
     var ruleCache = false
-    var ruleCachedAt = Long.MIN_VALUE
+    var ruleCachedAt = RULE_CACHE_NEVER_MS
     val ruleOn = {
         val now = SystemClock.elapsedRealtime()
-        if (now - ruleCachedAt > 1_000L) {
+        if (ruleCacheDue(now, ruleCachedAt)) {
             ruleCache = rulePrefs.enabled()
             ruleCachedAt = now
         }
