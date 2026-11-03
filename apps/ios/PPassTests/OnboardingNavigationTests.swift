@@ -1,3 +1,4 @@
+@testable import PPassCore
 import XCTest
 @testable import PPass
 
@@ -9,5 +10,49 @@ final class OnboardingNavigationTests: XCTestCase {
 
     func testManualFromWelcomeGoesBackToWelcome() {
         XCTAssertEqual(OnboardingFlow.manualBackTarget(fromScan: false), .welcome)
+    }
+
+    // MARK: #1324 照片页引导位（ADR 结论 6、7，对位 Android PhotosGuideTest）
+
+    private func facts(scopeOn: Bool = false, firstUploaded: Bool = false, backgroundOn: Bool = false, finished: Bool = false) -> GuideFacts {
+        GuideFacts(scopeOn: scopeOn, firstUploaded: firstUploaded, backgroundOn: backgroundOn, finished: finished)
+    }
+
+    /// 按状态现算，同一时间最多一张（返回值只有一个）。
+    /// 反证：去掉「已开启不出现」判断（后台开了仍出第二步），最后一条红。
+    func testGuideFollowsTheCurrentSwitches() {
+        XCTAssertEqual(AppModel.photosGuideOf(facts()), .enableScope, "没开范围备份 → 第一步")
+        XCTAssertEqual(AppModel.photosGuideOf(facts(firstUploaded: true)), .enableScope, "单张传过也一样先引导开范围备份")
+        XCTAssertEqual(AppModel.photosGuideOf(facts(scopeOn: true)), .none, "范围已开、还没传成功 → 不出卡")
+        XCTAssertEqual(AppModel.photosGuideOf(facts(scopeOn: true, firstUploaded: true)), .enableBackground, "第一张已传、后台没开 → 第二步")
+        XCTAssertEqual(AppModel.photosGuideOf(facts(scopeOn: true, firstUploaded: true, backgroundOn: true)), .none, "都开了 → 结束")
+    }
+
+    /// 起点按现状：决定页直接选了范围备份的，不出「开启范围备份」，第一张成功后直接出后台备份卡。
+    /// 反证：把起点写死为第一步（没走过第一步就一直给第一步），第一条红。
+    func testStartingPointIsTheCurrentStateNotStepOne() {
+        let decidedScope = facts(scopeOn: true)
+        XCTAssertNotEqual(AppModel.photosGuideOf(decidedScope), .enableScope)
+        XCTAssertEqual(AppModel.photosGuideOf(GuideFacts(scopeOn: true, firstUploaded: true, backgroundOn: false, finished: false)), .enableBackground)
+    }
+
+    /// 点过 × 不再出卡（开关怎么变都一样）；标记按手机记：断开清单里这一行是 KEEP（断开、配对失效、换电脑都走断开清单）。
+    /// 反证：换电脑时清掉标记（断开清单把 backgroundBackupOffer 改成 clear），最后一条红。
+    func testDismissalEndsTheGuideAndSurvivesDisconnectAndANewDesktop() {
+        for scope in [false, true] { for up in [false, true] { for bg in [false, true] {
+            XCTAssertEqual(AppModel.photosGuideOf(facts(scopeOn: scope, firstUploaded: up, backgroundOn: bg, finished: true)), .none, "\(scope)/\(up)/\(bg)")
+        } } }
+        XCTAssertEqual(DisconnectState.backgroundBackupOffer.disposition, .keep)
+        XCTAssertEqual(DisconnectState.backgroundBackupOffer.path, BackgroundBackupOfferPrefs.fileName)
+    }
+
+    /// 范围内无照片是状态提示：范围开着且一张都没有才说；不受 ×；有第一张就不说；没数出来不说。
+    /// 反证：提示也看 ×（点过 × 就不说），第二条红。
+    func testScopeEmptyHintIsAStatusLineNotAGuide() {
+        XCTAssertTrue(AppModel.scopeEmptyHintShown(facts(scopeOn: true), inScope: 0))
+        XCTAssertTrue(AppModel.scopeEmptyHintShown(facts(scopeOn: true, finished: true), inScope: 0), "不受 × 影响")
+        XCTAssertFalse(AppModel.scopeEmptyHintShown(facts(scopeOn: true), inScope: 1), "有了第一张就不说")
+        XCTAssertFalse(AppModel.scopeEmptyHintShown(facts(), inScope: 0), "范围备份没开不说（那是引导位的事）")
+        XCTAssertFalse(AppModel.scopeEmptyHintShown(facts(scopeOn: true), inScope: nil), "还没数出来不说")
     }
 }

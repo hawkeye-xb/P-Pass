@@ -3,8 +3,28 @@ import PPassCore
 import SwiftUI
 import UIKit
 
-/// 照片页空状态（#1263，对位 Android TwoTabs 照片 tab）：没选相册 → 引导去选；否则只有一种说法（10-29 文案定稿 C8）。
-enum PhotosEmptyHint: Equatable { case chooseAlbums, albums }
+/// #1324 照片页引导位给哪一张（ADR 结论 6，对位 Android `PhotosGuide`）。决定页之后的引导都是可选的，按当前开关现算，不按「走到第几步」记。
+enum PhotosGuide: String, Equatable {
+    /// 没开范围备份（「自动备份」关，或开着但一个相册都没选）。原「还没有选择相册」与首次空状态并入这一步。
+    case enableScope = "scope"
+    /// 范围备份已开、第一张已传成功、后台备份没开。
+    case enableBackground = "background"
+    case none
+
+    var logName: String { rawValue }
+}
+
+/// `AppModel.photosGuideOf` 的输入：都是此刻的真实状态（对位 Android `GuideFacts`）。
+struct GuideFacts: Equatable {
+    /// 「自动备份」规则开着，且范围里至少有一个相册（读不出来的范围按「有」算，设置行另说「读不到」）。
+    var scopeOn: Bool
+    /// 成功传过至少一张（账本里最后成功时间不为 0）。
+    var firstUploaded: Bool
+    /// 用户开了后台备份（意图；系统「后台 App 刷新」没放行另有告示接手）。
+    var backgroundOn: Bool
+    /// 「onboarding 已走完」：用户点过引导位的 ×。按手机记（`background_backup_offer.json`，断开清单 KEEP），断开、换电脑都不重置。
+    var finished: Bool
+}
 
 /// 一条需要用户看到的失败反馈（#971 / #972）：设置没存上、命令没执行成。界面用 alert 呈现，点掉即清。
 struct UserNotice: Identifiable, Equatable {
@@ -316,8 +336,61 @@ final class AppModel: ObservableObject {
 
     /// 范围从未保存、保存了空集、或所选相册全被删：一张都不在范围内（Android #541 / #836 同口径）。
     var noAlbums: Bool { (selectedAlbumCount ?? 0) == 0 }
-    /// 照片页空库时说哪一种（#1263）：没选相册 → 引导去选；否则 →「还没有备份好的照片」。
-    var photosEmptyHint: PhotosEmptyHint { noAlbums ? .chooseAlbums : .albums }
+
+    // MARK: #1324 照片页引导位与范围内暂无照片的现状（ADR 结论 6、7，对位 Android #1322）
+
+    /// 没开范围备份 → 引导开启；范围备份已开、第一张已传、后台没开 → 引导开后台；都开了 → 结束。点过 × 整条结束。
+    /// 起点按现状：决定页直接选了范围备份的，不会出现「开启范围备份」。
+    nonisolated static func photosGuideOf(_ f: GuideFacts) -> PhotosGuide {
+        if f.finished { return .none }
+        if !f.scopeOn { return .enableScope }
+        if f.firstUploaded && !f.backgroundOn { return .enableBackground }
+        return .none
+    }
+
+    /// 范围备份开着、范围里一张照片都还没有 → 过滤条下方一行现状。状态提示不是引导：不看 `finished`；有了第一张就不说；
+    /// `inScope` 为 nil（还没数出来）不说。
+    nonisolated static func scopeEmptyHintShown(_ f: GuideFacts, inScope: Int64?) -> Bool { f.scopeOn && inScope == 0 }
+
+    var guideFacts: GuideFacts {
+        GuideFacts(scopeOn: autoRule && (scopeUnreadable || !noAlbums), firstUploaded: facts.lastSuccessAt > 0,
+                   backgroundOn: autoBackup, finished: backgroundCardDismissed)
+    }
+
+    var photosGuide: PhotosGuide { Self.photosGuideOf(guideFacts) }
+
+    /// 范围内暂无照片的一行现状；nil = 不显示。「从今天起」一律写日期（同设置行）。
+    var scopeEmptyHint: String? {
+        guard Self.scopeEmptyHintShown(guideFacts, inScope: triplet?.n) else { return nil }
+        let name = desktopName ?? L.s("storage_device_default")
+        if case .since(let ms)? = since {
+            return L.f("photos_scope_empty_since", SettingsScreen.scopeDate(Date(timeIntervalSince1970: Double(ms) / 1000)), name)
+        }
+        return L.f("photos_scope_empty_all", name)
+    }
+
+    /// 引导位的按钮。第一步：规则开着（只是没选相册）→ 直达选范围页，关着 → 走开启链路（权限 → 选范围页）。
+    /// 第二步（iOS）：写「后台备份」意图，并跳本 App 的系统设置页（「后台 App 刷新」开关在那一页）。
+    func guideAction(_ guide: PhotosGuide) {
+        switch guide {
+        case .enableScope:
+            if autoRule { openScopeEditor() } else { setAutoRule(true) }
+        case .enableBackground:
+            setAutoBackup(true)
+            openAppSettings()
+        case .none:
+            break
+        }
+    }
+
+    /// 引导位的 ×：「onboarding 已走完」落盘（按手机记）。写不下来卡片留着、提示（#1039 同口径）。
+    func dismissGuide() {
+        do {
+            try backend.engine.dismissBackgroundCard()
+            backgroundCardDismissed = true
+            AppLog.log("photos-guide: dismissed")
+        } catch { settingWriteFailed("onboarding-guide", error) }
+    }
 
     /// 照片页「选择相册」：切到设置 tab 并直达选范围页。
     func openScopeEditor() {

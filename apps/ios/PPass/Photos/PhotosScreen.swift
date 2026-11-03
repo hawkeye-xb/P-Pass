@@ -15,10 +15,12 @@ struct PhotosScreen: View {
             // （Android PhotosScreen 只收起重连 / 连不上这类提示，见 TimelineLiveChrome）。
             VStack(spacing: 0) {
                 if app.pairingLost { lostCard }
-                // #1263：范围里一个相册都没有时，照片页不空也在顶部给这条引导（空库时由下面的空状态说）。
-                if !app.pairingLost, app.noAlbums, !model.items.isEmpty { chooseAlbumsBar }
                 chips
                 disconnected
+                // #1324（ADR 结论 7）：范围里还没有照片——过滤条下方次要提示位说一行现状，不带按钮，不受 ×。
+                if let hint = app.scopeEmptyHint { scopeEmptyLine(hint) }
+                // #1324（ADR 结论 6）：引导位——同一时间最多一张，不挡浏览、不弹窗。失联时让位给红卡。
+                if !app.pairingLost, app.photosGuide != .none { guideCard(app.photosGuide) }
                 content
             }
             .ppScreen()
@@ -52,18 +54,42 @@ struct PhotosScreen: View {
         .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 12)
     }
 
-    /// 「还没选要备份的相册 · 选择相册」：一行说明 + 右侧动作，直达选范围页（#1263）。
-    private var chooseAlbumsBar: some View {
-        HStack(spacing: 12) {
-            Text(L.s("photos_no_albums")).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Button(L.s("photos_choose_albums")) { app.openScopeEditor() }
-                .font(PPFont.subheadlineBold).underline().foregroundStyle(PPColor.ink)
-                .accessibilityIdentifier("photosChooseAlbums")
+    /// 引导位小卡（对位 Android `PhotosGuideCard`）：一句话 + 一个按钮 + 右上角 ×。第一步按钮「开启」；第二步 iOS 是「去设置」
+    /// （跳本 App 的系统设置页，「后台 App 刷新」在那一页）。
+    private func guideCard(_ guide: PhotosGuide) -> some View {
+        let text = guide == .enableScope ? L.f("photos_guide_scope", app.desktopName ?? L.s("storage_device_default")) : L.s("photos_guide_background")
+        let action = guide == .enableScope ? L.s("photos_guide_enable") : L.s("background_refresh_notice_action")
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 8) {
+                Text(text).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button { app.dismissGuide() } label: {
+                    Image(systemName: "xmark").font(PPFont.subheadlineBold).foregroundStyle(PPColor.ink40)
+                        .frame(width: 32, height: 32)
+                }
+                .accessibilityLabel(L.s("photos_guide_close"))
+                .accessibilityIdentifier("photosGuideClose")
+            }
+            PPButton(title: action) { app.guideAction(guide) }
+                .accessibilityIdentifier("photosGuideAction")
         }
-        .padding(.horizontal, 16).padding(.vertical, 12)
+        .padding(.leading, 16).padding(.trailing, 8).padding(.vertical, 12)
         .background(PPColor.waitingBg, in: RoundedRectangle(cornerRadius: PPRadius.card, style: .continuous))
-        .padding(.horizontal, 20).padding(.top, 8)
+        .padding(.horizontal, 20).padding(.bottom, 12)
+        .onAppear { AppLog.log("photos-guide: shown \(guide.logName)") }
+        .id(guide)
+    }
+
+    /// 范围内暂无照片的一行现状（与「实时更新已断开 · 重试」同一层级的次要提示位），没有按钮。
+    private func scopeEmptyLine(_ hint: String) -> some View {
+        Text(hint).font(PPFont.sans(13)).foregroundStyle(PPColor.ink40)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20).padding(.bottom, 12)
+            .background(PPColor.paper)
+            .onAppear { AppLog.log("photos-guide: scope empty hint") }
+            .accessibilityIdentifier("photosScopeEmptyHint")
     }
 
     /// 全部 / 本机 / 家人：胶囊 chips（Android PhotoFilterChip）：高 36、linen 底 ink-60 字，选中 = ink 底 paper 字。
@@ -119,39 +145,13 @@ struct PhotosScreen: View {
             PPStateMessage(text: L.s("photos_unreachable"), symbol: "wifi.exclamationmark")
                 .onAppear { AppLog.log("photos: timeline load failed (\(error))") }
         } else if model.items.isEmpty {
-            // #1272 B：电脑上还没有这台手机的照片：空状态就是引导，两个按钮与设置页对应的行做同一件事。
-            if !app.autoRule {
-                firstRun
-            } else {
-                switch app.photosEmptyHint {
-                case .chooseAlbums:
-                    PPStateMessage(text: L.s("photos_no_albums"), symbol: "photo.on.rectangle", actionTitle: L.s("photos_choose_albums")) {
-                        app.openScopeEditor()
-                    }
-                case .albums:
-                    PPStateMessage(text: L.s(app.since.map { !$0.isAll } == true ? "auto_backup_from_today_empty" : "home_empty_albums"), symbol: "photo.on.rectangle")
-                }
-            }
+            // #1324：引导并入顶部引导位（原首次空状态 / 「还没有选择相册」），范围现状由过滤条下方那行说；这里只剩一种说法（对位 Android）。
+            PPStateMessage(text: L.s("home_empty_albums"), symbol: "photo.on.rectangle")
         } else if model.shown.isEmpty {
             PPStateMessage(text: L.s("photos_filter_empty"), symbol: "line.3.horizontal.decrease.circle")
         } else {
             grid
         }
-    }
-
-    private var firstRun: some View {
-        VStack(spacing: 16) {
-            Spacer()
-            Text(L.f("photos_first_run_intro", app.desktopName ?? L.s("storage_device_default")))
-                .font(PPFont.sans(15, relativeTo: .subheadline)).foregroundStyle(PPColor.ink60).multilineTextAlignment(.center)
-            PPButton(title: L.s("photos_first_run_enable")) { app.setAutoRule(true) }
-                .accessibilityIdentifier("firstRunEnable")
-            Button(L.s("photos_first_run_pick")) { app.pickerRequested = true }
-                .font(PPFont.subheadlineBold).foregroundStyle(PPColor.ink)
-                .accessibilityIdentifier("firstRunPick")
-            Spacer()
-        }
-        .padding(.horizontal, 32)
     }
 
     /// 网格对齐 Android：3 列、4pt 间隔、左右 12pt 边距、缩略图圆角 10；月份组头 serif 18，不吸顶。
