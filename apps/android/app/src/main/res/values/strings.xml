@@ -163,16 +163,16 @@
     <string name="bucket_start">Start backup</string>
     <string name="bucket_save">Save</string>
     <!-- #1263: the two time choices for the backup scope (no custom date). scope_time_* are the picker options, scope_value_* the settings-row value; both always name the date. -->
-    <string name="scope_time_since_date">Only photos from %1$s onward</string>
+    <string name="scope_time_since_date">From %1$s onward</string>
     <string name="scope_time_all">Include older photos</string>
     <string name="scope_value_since">%1$s onward</string>
     <string name="scope_value_all">Including older photos</string>
-    <string name="backup_scope_with_time">%1$s · %2$s</string>
+    <string name="backup_scope_with_time">%1$s, %2$s</string>
     <!-- #1263: empty Photos tab (no photos on the computer yet); one wording only. -->
     <string name="home_empty_albums">No backed-up photos yet. They\'ll appear here.</string>
     <!-- MOB-02 §六: 新相册徽标 -->
     <string name="bucket_new">New</string>
-    <string name="backup_scope">Photos to back up</string>
+    <string name="backup_scope">Backup range</string>
     <string name="backup_scope_none">None selected</string>
     <!-- #1020: a scope was saved but can't be read ： not the same as "None selected". -->
     <string name="backup_scope_unreadable">Can’t read the saved selection</string>

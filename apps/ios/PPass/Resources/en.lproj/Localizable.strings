@@ -98,14 +98,14 @@
 "bucket_unnamed" = "Unnamed";
 "bucket_start" = "Start backup";
 "bucket_save" = "Save";
-"scope_time_since_date" = "Only photos from %1$@ onward";
+"scope_time_since_date" = "From %1$@ onward";
 "scope_time_all" = "Include older photos";
 "scope_value_since" = "%1$@ onward";
 "scope_value_all" = "Including older photos";
-"backup_scope_with_time" = "%1$@ · %2$@";
+"backup_scope_with_time" = "%1$@, %2$@";
 "home_empty_albums" = "No backed-up photos yet. They'll appear here.";
 "bucket_new" = "New";
-"backup_scope" = "Photos to back up";
+"backup_scope" = "Backup range";
 "backup_scope_none" = "None selected";
 "backup_scope_unreadable" = "Can’t read the saved selection";
 "storage_computer" = "Storage computer";

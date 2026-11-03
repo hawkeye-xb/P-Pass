@@ -152,18 +152,17 @@
     <string name="bucket_start">开始备份</string>
     <string name="bucket_save">保存</string>
     <!-- #1263：备份范围的时间二选一（不做自选日期）。scope_time_* 是选范围页的选项，scope_value_* 是设置行的值，一律写日期。 -->
-    <string name="scope_time_since_date">%1$s起的照片</string>
+    <string name="scope_time_since_date">%1$s以后</string>
     <string name="scope_time_all">含以前的照片</string>
-    <string name="scope_value_since">%1$s起的照片</string>
+    <string name="scope_value_since">%1$s以后</string>
     <string name="scope_value_all">含以前的照片</string>
-    <string name="backup_scope_with_time">%1$s · %2$s</string>
+    <string name="backup_scope_with_time">%1$s，%2$s</string>
     <!-- #1263：照片页空状态（电脑上还没有照片），只有这一种说法。 -->
     <string name="home_empty_albums">还没有备份好的照片。备份完成后会显示在这里。</string>
     <!-- MOB-02 §六: 新相册徽标 -->
     <string name="bucket_new">新</string>
-    <!-- 2026-08-17 设计稿对齐：这行原文是"备份范围"，改成设计稿原文
-         "备份哪些相册"，跟下面几行同款"问句式"标签。 -->
-    <string name="backup_scope">备份哪些照片</string>
+    <!-- 2026-11-03（产品负责人）：改回"备份范围"；值写成「N 个相册，10月29日以后」。 -->
+    <string name="backup_scope">备份范围</string>
     <string name="backup_scope_none">未选相册</string>
     <!-- #1020：存了范围但读不出来，不是「未选相册」。 -->
     <string name="backup_scope_unreadable">读不到已保存的选择</string>

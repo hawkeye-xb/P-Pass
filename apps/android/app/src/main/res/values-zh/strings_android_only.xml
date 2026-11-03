@@ -59,8 +59,6 @@
          所以文案说的是「已经发生了什么」，不是「接下来会怎样」。 -->
     <string name="state_background_budget_paused">后台备份时间已用完。保持 P-Pass 在屏幕上可继续，时间恢复后也会自动继续。</string>
     <string name="state_background_protection_unknown">系统没有允许后台备份。打开 P-Pass 并保持在屏幕上可继续备份。</string>
-    <!-- #130：开关下的中性小字，只写这个开关管哪几类通知。 -->
-    <string name="rule_notify_hint">配对失效、权限收回、后台备份停止时提醒</string>
     <!-- #1263：首页「开启后台备份」卡片（onboarding 不再问）。 -->
     <string name="background_backup_offer">后台备份已关闭，打开才会自动备份</string>
     <string name="background_backup_offer_action">开启</string>

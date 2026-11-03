@@ -200,11 +200,14 @@ class DefinitiveEventNoticesTest {
         return File(root, "apps/android/app/src/main/java/com/hawkeyexb/ppass/$rel").readText()
     }
 
+    // 2026-11-03 产品负责人拍板：通知下面不再放解释小字（原来是「配对失效、权限收回…」）。
+    // 断言从「有」改成「没有」——保的是同一件事：这一行只留开关本身。
     @Test
-    fun the_notify_switch_explains_itself_in_a_neutral_non_clickable_hint() {
-        val row = src("ui/HomeScreen.kt").substringAfter("label = stringResource(R.string.rule_notify),").substringBefore(")\n")
-        assertTrue("开关下有说明小字", row.contains("hint = stringResource(R.string.rule_notify_hint)"))
-        assertTrue("说明小字用默认中性色、不可点", !row.contains("hintColor") && !row.contains("onHintClick"))
+    fun the_notify_switch_has_no_explaining_caption() {
+        assertTrue(
+            "通知下面不应再有解释小字",
+            !src("ui/HomeScreen.kt").contains("rule_notify_hint"),
+        )
     }
 
     @Test

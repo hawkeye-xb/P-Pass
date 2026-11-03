@@ -826,8 +826,6 @@ fun HomeScreen(
                     label = stringResource(R.string.rule_notify),
                     checked = notifyOnFailure,
                     onCheckedChange = onNotifyOnFailureChange,
-                    // #130：短标题「通知」+ 中性小字说明管哪几类（默认 Ink40、不可点——这不是待处理状态）。
-                    hint = stringResource(R.string.rule_notify_hint),
                 )
                 if (autoBackupRuleOn) {
                     HorizontalDivider(color = PPColor.Divider)
@@ -873,21 +871,14 @@ fun HomeScreen(
                         ),
                     )
                 }
+                // 2026-11-03（产品负责人）：「更多」不再单独一张卡，并进上面的设置卡；
+                // 点进去仍是原来的二级页（存储电脑详情、版本、检查更新）。
+                HorizontalDivider(color = PPColor.Divider)
+                CellRow(
+                    label = stringResource(R.string.more_label),
+                    onClick = { showMore = true; onStorageDetailOpenChange(true) },
+                )
             }
-        }
-
-        // #1272：存储电脑详情、版本、检查更新收进「更多」二级页（断开连接仍在存储电脑详情里）。
-        Spacer(Modifier.height(18.dp))
-        Surface(
-            color = PPColor.Paper,
-            shape = RoundedCornerShape(PPSize.RadiusCard),
-            border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Border),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            CellRow(
-                label = stringResource(R.string.more_label),
-                onClick = { showMore = true; onStorageDetailOpenChange(true) },
-            )
         }
 
         Spacer(Modifier.height(8.dp))
