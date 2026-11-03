@@ -2,6 +2,10 @@
 # worker 流程三条命令（start / done / stuck）共用的函数。只被 source，不直接运行。
 # 说明见 AGENTS.md「交付流程」。gh 调用都集中在这里，测试用假 gh 桩替换。
 
+# 「已采纳」方案解析（adopted_adrs）与 owner 共用一份。
+# shellcheck source=decision-lib.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/decision-lib.sh"
+
 # 仓库（owner/repo）：PPASS_HOOK_REPO 优先，否则从 origin URL 解析（与 tools/hooks/pre-commit 同口径）。
 flow_repo() {
   local r="${PPASS_HOOK_REPO:-}"

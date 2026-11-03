@@ -51,8 +51,8 @@ just done                     交卡：过门禁与验收，全绿才推送、�
 just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去做下一张
 ```
 
-- `just start` 只领 open、`status:ready`、有「范围」代码块的卡；核心卡（`core` 标签）只写复现、
-  根因和两个修法，不改代码。
+- `just start` 只领 open、`status:ready`、有「范围」代码块的卡；核心卡（`core` 标签）正文引用了
+  `origin/main` 上「已采纳」的方案就按方案实现，没有引用就只写复现、根因和两个修法，不改代码。
 - 只改 issue「范围」段列出的路径。确需扩大：先改 issue，再改代码。本地 hook 会挡范围外文件、
   没有范围的卡、主仓工作区里的卡分支，`git commit` 直接被拒，见 `tools/hooks/` 与
   [本地提交拦截](docs/runbook/local-hooks.md)。
@@ -69,7 +69,8 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
 不绕过、不改判定，接着处理别的批次或卡。
 
 0. 分拣新诉求：给 `status:inbox` 的卡写方案文件，`just triage <号> <方案文件>` 按范围路径分流
-   （纯技术非核心 → `status:ready`；碰用户可见行为、隐私、数据 → `needs:product`；核心无已采纳 ADR → `status:blocked`）。
+   （纯技术非核心 → `status:ready`；碰用户可见行为、隐私、数据 → `needs:product`，除非 `**产品定案**` 引用已采纳、
+   产品负责人确认过的方案；核心无已采纳 ADR → `status:blocked`）。
 1. `just batch-plan`：看 `status:review` 的卡能否进批次（范围、核心与 ADR、DCO、冲突），输出建议批次。
 2. `just batch-open <主题> <issue...>`：按建议开 `batch/<日期>-<主题>`，逐张合入，卡打 `status:batched`。
 3. 到它打印的 worktree 里 `just batch-verify`：`just ci` + 全部 `tools/test-*.sh` + 受影响端真机，写批次报告。

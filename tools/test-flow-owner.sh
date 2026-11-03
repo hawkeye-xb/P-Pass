@@ -471,6 +471,39 @@ tcard 46 status:inbox
 plan "$P" "crates/storage/new.rs" "无" "**ADR**：docs/decisions/2026-11-01-adopted.md"
 out="$(bash tools/flow/owner-triage.sh 46 "$P" 2>/dev/null)"
 check "反证：核心 + 已采纳 ADR → status:ready 并打 core" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 46 ready$" && grep -q "core" "$FAKE/issues/46.labels" && grep -q "^\*\*是否核心\*\*：是" "$FAKE/issues/46.body"' _ "$out"
+DEC_OK="**产品定案**：docs/decisions/2026-11-01-adopted.md，产品负责人 2026-11-03 已确认"
+tcard 48 status:inbox
+plan "$P" "assets/i18n/zh.json" "首页多一张引导" "$DEC_OK"
+out="$(bash tools/flow/owner-triage.sh 48 "$P" 2>/dev/null)"
+check "界面路径 + 用户可见行为 + 产品定案（已采纳、产品负责人已确认）→ status:ready，不打 needs:product" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 48 ready$" && [ "$(cat "$FAKE/issues/48.labels")" = status:ready ] && grep -q "^\*\*产品定案\*\*：docs/decisions/2026-11-01-adopted.md" "$FAKE/issues/48.body"' _ "$out"
+tcard 49 status:inbox
+plan "$P" "assets/i18n/zh.json" "首页多一张引导"
+bash tools/flow/owner-triage.sh 49 "$P" >/dev/null 2>&1
+rc=$?
+check "反证：同一张卡去掉产品定案 → 仍按产品问题处理（无选项则拒绝，不写 issue）" bash -c '[ "$1" -eq 2 ] && [ "$(cat "$FAKE/issues/49.labels")" = status:inbox ] && ! grep -q "实施方案" "$FAKE/issues/49.body"' _ "$rc"
+tcard 50 status:inbox
+plan "$P" "assets/i18n/zh.json" "首页多一张引导" "**产品定案**：docs/decisions/2026-11-01-proposed.md，产品负责人 2026-11-03 已确认"
+err="$(bash tools/flow/owner-triage.sh 50 "$P" 2>&1 >/dev/null)"
+rc=$?
+check "产品定案只引用「提议」方案 → 拒绝（退出码 2），不写 issue" bash -c '[ "$1" -eq 2 ] && printf "%s\n" "$2" | grep -q "已采纳" && ! grep -q "^issue edit 50" "$FAKE/calls.log"' _ "$rc" "$err"
+plan "$P" "assets/i18n/zh.json" "首页多一张引导" "**产品定案**：docs/decisions/2026-11-01-adopted.md docs/decisions/2026-11-01-proposed.md，产品负责人 2026-11-03 已确认"
+bash tools/flow/owner-triage.sh 50 "$P" >/dev/null 2>&1
+check "产品定案里混了一份「提议」方案 → 拒绝" test "$?" -eq 2
+plan "$P" "assets/i18n/zh.json" "首页多一张引导" "$DEC_OK"
+out="$(bash tools/flow/owner-triage.sh 50 "$P" 2>/dev/null)"
+check "反证：同一张卡改为引用「已采纳」方案 → status:ready" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 50 ready$"' _ "$out"
+tcard 51 status:inbox
+plan "$P" "assets/i18n/zh.json" "首页多一张引导" "**产品定案**：docs/decisions/2026-11-01-adopted.md"
+err="$(bash tools/flow/owner-triage.sh 51 "$P" 2>&1 >/dev/null)"
+rc=$?
+check "产品定案没写明产品负责人确认 → 拒绝（退出码 2），不写 issue" bash -c '[ "$1" -eq 2 ] && printf "%s\n" "$2" | grep -q "产品负责人已确认" && ! grep -q "^issue edit 51" "$FAKE/calls.log"' _ "$rc" "$err"
+plan "$P" "assets/i18n/zh.json" "首页多一张引导" "$DEC_OK"
+out="$(bash tools/flow/owner-triage.sh 51 "$P" 2>/dev/null)"
+check "反证：同一张卡补上产品负责人确认 → status:ready" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 51 ready$"' _ "$out"
+tcard 52 status:inbox
+plan "$P" "assets/i18n/zh.json" "首页多一张引导" "**产品定案**：无"
+bash tools/flow/owner-triage.sh 52 "$P" >/dev/null 2>&1
+check "产品定案写「无」等于没写 → 仍按产品问题处理（无选项则拒绝）" bash -c '[ "$(cat "$FAKE/issues/52.labels")" = status:inbox ]'
 tcard 47 status:inbox
 printf '**做法**：改\n**范围**：\n```\ntools/a.sh\n```\n' >"$P"
 bash tools/flow/owner-triage.sh 47 "$P" >/dev/null 2>&1

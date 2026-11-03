@@ -139,7 +139,7 @@ git init -q "${TMP}/main"
 (
   cd "${TMP}/main" || exit 1
   git remote add origin "${TMP}/origin.git"
-  mkdir -p tools .github src docs core
+  mkdir -p tools .github src docs/decisions core
   cp -R "${SRC}/tools/flow" tools/flow
   cp -R "${SRC}/tools/hooks" tools/hooks
   # 测试只看 doctor 有没有接通 install.sh --check；真 hook 的判据在 tools/test-local-hooks.sh。
@@ -151,6 +151,8 @@ git init -q "${TMP}/main"
   echo a >src/a.txt
   echo d >docs/d.md
   echo c >core/c.txt
+  printf '# A\n\n- 状态：已采纳\n' >docs/decisions/2026-11-01-adopted.md
+  printf '# P\n\n- 状态：提议\n' >docs/decisions/2026-11-01-proposed.md
   git add -A
   git commit -q -m init
   git push -q origin HEAD:refs/heads/main
@@ -160,8 +162,8 @@ git init -q "${TMP}/main"
 export PPASS_WT_ROOT="${TMP}/wt"
 M="${TMP}/main"
 
-issue() { # issue <号> <标签> <标题> <范围 glob，空格分隔，空=无范围块> [类型]
-  local n="$1" labels="$2" title="$3" scope="$4" type="${5:-}"
+issue() { # issue <号> <标签> <标题> <范围 glob，空格分隔，空=无范围块> [类型] [正文附加行]
+  local n="$1" labels="$2" title="$3" scope="$4" type="${5:-}" extra="${6:-}"
   set -f # 范围里的 ** 不能被 shell 展开
   printf 'OPEN' >"${FAKE_GH}/${n}.state"
   printf '%s' "$labels" >"${FAKE_GH}/${n}.labels"
@@ -175,6 +177,7 @@ issue() { # issue <号> <标签> <标题> <范围 glob，空格分隔，空=无�
       printf '```\r\n'
     fi
     printf '\r\n**验收场景**：y\r\n'
+    [ -z "$extra" ] || printf '\r\n%s\r\n' "$extra"
   } >"${FAKE_GH}/${n}.body"
   set +f
 }
@@ -288,6 +291,16 @@ git -C "${PPASS_WT_ROOT}/15-doc-tweak" symbolic-ref --short HEAD | grep -q '^doc
 issue 16 "status:ready,core" "[T-16] core card" "core/**" "Bug"
 OUT="$(START 16 2>&1)"
 printf '%s' "$OUT" | grep -q "只写复现" && ok "核心卡提示「只写复现、根因和两个修法」" || bad "核心卡没有提示"
+printf '%s' "$OUT" | grep -q "按方案实现" && bad "没引用方案的核心卡出了「按方案实现」" || ok "反证：核心卡没引用方案 → 不出「按方案实现」"
+issue 18 "status:ready,core" "[T-18] core adopted" "core/**" "Bug" "**ADR**：docs/decisions/2026-11-01-adopted.md"
+OUT="$(START 18 2>&1)"
+printf '%s' "$OUT" | grep -q "按方案实现" && ! printf '%s' "$OUT" | grep -q "只写复现" &&
+  ok "核心卡引用已采纳方案 → 提示「按方案实现」，不出「只写复现」" || bad "核心卡引用已采纳方案仍没提示按方案实现：$OUT"
+printf '%s' "$OUT" | grep -q "方案：docs/decisions/2026-11-01-adopted.md" && ok "提示里列出已采纳方案路径" || bad "提示里没列方案路径"
+issue 19 "status:ready,core" "[T-19] core proposed" "core/**" "Bug" "**ADR**：docs/decisions/2026-11-01-proposed.md"
+OUT="$(START 19 2>&1)"
+printf '%s' "$OUT" | grep -q "只写复现" && ! printf '%s' "$OUT" | grep -q "按方案实现" &&
+  ok "反证：核心卡只引用「提议」方案 → 仍提示「只写复现、根因和两个修法」" || bad "引用「提议」方案的核心卡提示不对：$OUT"
 issue 17 "status:ready" "[T-17] plain" "src/**" "Bug"
 OUT="$(START 17 2>&1)"
 printf '%s' "$OUT" | grep -q "只写复现" && bad "非核心卡也出了核心提示" || ok "反证：非核心卡不出核心提示"
