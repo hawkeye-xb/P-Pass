@@ -162,9 +162,7 @@ struct SettingsScreen: View {
                 }
             }
             if app.autoRule { pickRow }
-        }
-        .ppTinted(PPUI.Surface.settingsCard)
-        Section {
+            // 2026-11-03（产品负责人）：不再单独一个 Section，并进上面的设置卡；点进去仍是二级页。
             row(L.s("more_label"), value: "", route: .more)
         }
         .ppTinted(PPUI.Surface.settingsCard)

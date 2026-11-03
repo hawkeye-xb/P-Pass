@@ -66,8 +66,6 @@
          happened, not what is about to happen. -->
     <string name="state_background_budget_paused">Background backup time is used up. Keep P-Pass on screen to continue, or it resumes on its own once the time is restored.</string>
     <string name="state_background_protection_unknown">The system didn\'t allow background backup. Keep P-Pass open on screen to continue.</string>
-    <!-- #130: neutral caption under the switch ： states which notifications it controls. -->
-    <string name="rule_notify_hint">Alerts on lost pairing, revoked access or stopped backup</string>
     <!-- #1263: home card offering background backup (onboarding no longer asks). -->
     <string name="background_backup_offer">Background backup is off. Turn it on to back up automatically.</string>
     <string name="background_backup_offer_action">Turn on</string>
