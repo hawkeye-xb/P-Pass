@@ -6,6 +6,9 @@
 #   just ci / ci-docs 看 $FAKE_GH/ci_fail；just verify 看 has_verify / verify_fail
 # 每条拒绝都配一条只去掉触发条件的放行用例作反证。
 #
+# just doctor 的用例也在这里：私仓两种模式、.ppass-verify-clone 标记、WSL 桩 bash、拦截未装、
+# 磁盘低于下限、提交身份不在白名单、gh 不可用，每条都配反证（去掉触发条件必须通过）。
+#
 # 用法: tools/test-flow-worker.sh
 # 退出码: 0 全过 / 1 有失败
 
@@ -41,12 +44,15 @@ git config --global init.defaultBranch main
 export PPASS_HOOK_REPO="o/r"
 export PPASS_FLOW_SKIP_HOOK_INSTALL=1
 export PPASS_NO_LOCK=1
+# doctor 的磁盘下限在测试里放开（CI runner 的剩余空间不固定）；设备只列不判，测试不去碰真设备。
+export PPASS_DOCTOR_MIN_FREE_GB=0
+export PPASS_DOCTOR_SKIP_DEVICES=1
 unset PPASS_HOOK_BYPASS PPASS_HOOK_BYPASS_REASON PPASS_HOOK_ROOT PPASS_WT_ROOT
 
 BIN="${TMP}/pathbin"
 mkdir -p "$BIN"
 for c in git bash env sh sed awk tar mktemp cat tr head tail grep rm cp chmod touch sort cmp \
-  basename dirname mkdir mv cut wc ls diff; do
+  basename dirname mkdir mv cut wc ls diff df uname rmdir; do
   p="$(command -v "$c")" && [ "${p#/}" != "$p" ] || {
     echo "找不到命令 ${c}，无法搭测试环境"
     exit 1
@@ -61,6 +67,7 @@ cat >"${BIN}/gh" <<'STUB'
 G="$FAKE_GH"
 case "$1 $2" in
   "auth status") exit 0 ;;
+  "issue list") exit 0 ;;
   "label create") echo "label create $3" >>"$G/calls"; exit 0 ;;
   "issue view")
     n="$3"
@@ -134,6 +141,11 @@ git init -q "${TMP}/main"
   git remote add origin "${TMP}/origin.git"
   mkdir -p tools .github src docs core
   cp -R "${SRC}/tools/flow" tools/flow
+  cp -R "${SRC}/tools/hooks" tools/hooks
+  # 测试只看 doctor 有没有接通 install.sh --check；真 hook 的判据在 tools/test-local-hooks.sh。
+  # 这里装一个空转发器，免得测试里「故意提交范围外文件」的夹具被真 hook 提前拦掉。
+  printf '#!/usr/bin/env bash\nexit 0\n' >tools/hooks/dispatch.sh
+  printf 'Flow Test <flow-test@example.invalid>\n' >.github/allowed-identities.txt
   cp "${SRC}/tools/ci-paths.sh" tools/ci-paths.sh
   printf '+ core/**\n' >.github/core-paths.txt
   echo a >src/a.txt
@@ -142,6 +154,8 @@ git init -q "${TMP}/main"
   git add -A
   git commit -q -m init
   git push -q origin HEAD:refs/heads/main
+  # doctor 要求提交拦截已装；后面「拦截未装」的用例会先解开再装回来。
+  bash tools/hooks/install.sh >/dev/null 2>&1
 )
 export PPASS_WT_ROOT="${TMP}/wt"
 M="${TMP}/main"
@@ -171,6 +185,66 @@ on_origin() { git --git-dir="${TMP}/origin.git" rev-parse -q --verify "refs/head
 START() { (cd "$M" && bash tools/flow/worker-start.sh "$@"); }
 STUCK() { (cd "$M" && bash tools/flow/worker-stuck.sh "$@"); }
 DONE() { (cd "$1" && bash tools/flow/worker-done.sh); }
+REAL_BASH="$(command -v bash)"
+DOCTOR() { (cd "$M" && "$REAL_BASH" tools/flow/doctor.sh); }
+
+# ── just doctor ───────────────────────────────────────────────────────
+echo "== just doctor =="
+if DOCTOR >"${TMP}/d0" 2>&1; then ok "doctor 在健康的主副本里通过"; else bad "doctor 在健康的主副本里失败：$(tail -5 "${TMP}/d0")"; fi
+grep -q "协作者模式" "${TMP}/d0" && ok "没有 ../private → 报协作者模式" || bad "没有 ../private 时没报协作者模式"
+grep -q "完整模式" "${TMP}/d0" && bad "没有 ../private 却报了完整模式" || ok "反证：没有 ../private 不报完整模式"
+mkdir -p "${TMP}/private"
+if DOCTOR >"${TMP}/d1" 2>&1 && grep -q "完整模式" "${TMP}/d1"; then ok "反证：放上 ../private → 报完整模式"; else bad "有 ../private 时没报完整模式"; fi
+rmdir "${TMP}/private"
+
+touch "${M}/.ppass-verify-clone"
+if DOCTOR >"${TMP}/d2" 2>&1; then bad "带 .ppass-verify-clone 仍放行"; else ok "带 .ppass-verify-clone → doctor 拒绝"; fi
+grep -q "回归专用克隆" "${TMP}/d2" && ok "拒绝理由点名 Windows 回归专用克隆" || bad "拒绝理由没点名回归克隆"
+rm -f "${M}/.ppass-verify-clone"
+DOCTOR >/dev/null 2>&1 && ok "反证：去掉标记 → doctor 通过" || bad "去掉标记后 doctor 仍失败"
+
+# bash 是 WSL 桩（用假 bash 模拟）：doctor 必须报错，而不是继续往下跑
+mkdir -p "${TMP}/wslbin"
+cat >"${TMP}/wslbin/bash" <<'STUB'
+#!/bin/sh
+echo "Windows Subsystem for Linux has no installed distributions." >&2
+exit 1
+STUB
+chmod +x "${TMP}/wslbin/bash"
+if (cd "$M" && PATH="${TMP}/wslbin:${PATH}" "$REAL_BASH" tools/flow/doctor.sh) >"${TMP}/d3" 2>&1; then
+  bad "bash 是 WSL 桩也放行"
+else
+  ok "bash 是 WSL 桩（假 bash）→ doctor 报错"
+fi
+grep -q "Git Bash" "${TMP}/d3" && ok "报错里给了 Git Bash 的修法" || bad "报错里没给 Git Bash 的修法"
+
+# 拦截没装：just start 必须非 0；装上后放行（反证）
+issue 18 "status:ready" "[T-18] hook off" "src/**"
+git -C "$M" config --unset core.hooksPath || true
+if START 18 >"${TMP}/d4" 2>&1; then bad "拦截未装时 just start 仍放行"; else ok "拦截未装 → just start 非 0"; fi
+grep -q "本地提交拦截" "${TMP}/d4" && ok "拒绝理由点名本地提交拦截" || bad "拒绝理由没点名本地提交拦截"
+[ ! -d "${PPASS_WT_ROOT}/18-hook-off" ] && ok "拦截未装时没建 worktree（没带病继续）" || bad "拦截未装却建了 worktree"
+(cd "$M" && bash tools/hooks/install.sh >/dev/null 2>&1)
+if START 18 >"${TMP}/d5" 2>&1; then ok "反证：装上拦截 → just start 通过"; else bad "装上拦截后 start 仍失败：$(tail -5 "${TMP}/d5")"; fi
+
+# 磁盘低于下限：拒绝；把下限调回去：通过
+if (cd "$M" && PPASS_DOCTOR_MIN_FREE_GB=999999 "$REAL_BASH" tools/flow/doctor.sh) >"${TMP}/d6" 2>&1; then bad "磁盘低于下限也放行"; else ok "磁盘低于下限 → doctor 拒绝"; fi
+grep -q "磁盘" "${TMP}/d6" && ok "拒绝理由点名磁盘" || bad "拒绝理由没点名磁盘"
+PPASS_DOCTOR_MIN_FREE_GB=0 DOCTOR >/dev/null 2>&1 && ok "反证：磁盘下限 0 → 通过" || bad "磁盘下限 0 仍失败"
+
+# 提交身份不在白名单：拒绝；改回去：通过
+git -C "$M" config user.email "outsider@example.invalid"
+if DOCTOR >"${TMP}/d7" 2>&1; then bad "提交身份不在白名单也放行"; else ok "提交身份不在白名单 → doctor 拒绝"; fi
+grep -q "allowed-identities" "${TMP}/d7" && ok "拒绝理由点名白名单" || bad "拒绝理由没点名白名单"
+git -C "$M" config --unset user.email
+DOCTOR >/dev/null 2>&1 && ok "反证：身份改回白名单 → 通过" || bad "身份改回后仍失败"
+
+# gh 不可用：拒绝；放回去：通过
+mv "${BIN}/gh" "${BIN}/gh.off"
+if DOCTOR >"${TMP}/d8" 2>&1; then bad "gh 不可用也放行"; else ok "gh 不可用 → doctor 拒绝"; fi
+grep -q "gh" "${TMP}/d8" && ok "拒绝理由点名 gh" || bad "拒绝理由没点名 gh"
+mv "${BIN}/gh.off" "${BIN}/gh"
+DOCTOR >/dev/null 2>&1 && ok "反证：gh 可用 → 通过" || bad "gh 恢复后仍失败"
 
 # ── just start ────────────────────────────────────────────────────────
 echo "== just start =="
@@ -197,6 +271,14 @@ check "Bug → fix/ 分支" git -C "${PPASS_WT_ROOT}/13-fix-the-thing" symbolic-
 has_lbl 13 "status:doing" && ! has_lbl 13 "status:ready" && ok "标签 ready → doing" || bad "标签没从 ready 换成 doing"
 [ -z "$(git -C "${PPASS_WT_ROOT}/13-fix-the-thing" config --get branch.fix/13-fix-the-thing.merge)" ] && ok "上游已解除（裸 git push 不会推到 main）" || bad "上游仍指向 origin/main"
 printf '%s' "$OUT" | grep -q "just done" && ok "打印了下一步" || bad "没打印下一步"
+# 标记在主副本根上，从卡 worktree 里也要认出来（不是只看 cwd）
+touch "${M}/.ppass-verify-clone"
+if (cd "${PPASS_WT_ROOT}/13-fix-the-thing" && "$REAL_BASH" tools/flow/doctor.sh) >"${TMP}/d9" 2>&1; then
+  bad "卡 worktree 里没认出主副本根上的回归克隆标记"
+else
+  ok "卡 worktree 里也拒绝带 .ppass-verify-clone 的主副本"
+fi
+rm -f "${M}/.ppass-verify-clone"
 issue 14 "status:ready" "[T-14] feature" "src/**" "Feature"
 START 14 >/dev/null 2>&1
 git -C "${PPASS_WT_ROOT}/14-feature" symbolic-ref --short HEAD | grep -q '^feat/14-' && ok "Feature → feat/" || bad "Feature 没推成 feat/"
@@ -315,6 +397,13 @@ has_lbl 30 "status:blocked" && bad "空原因也打了 blocked" || ok "空原因
 STUCK 30 "命中核心：根因在配对握手；修法 A / 修法 B" >/dev/null 2>&1 && ok "stuck 带原因成功" || bad "stuck 带原因失败"
 has_lbl 30 "status:blocked" && ! has_lbl 30 "status:doing" && ok "stuck 打 status:blocked 并去掉 doing" || bad "stuck 标签不对"
 comments_of 30 | grep -q "命中核心：根因在配对握手" && ok "stuck 评论含原因" || bad "stuck 评论缺原因"
+
+# 协作者模式遇到要写私仓的活：doctor 不通过（拦截解开）时 just stuck 仍必须可用——它是停下的出口
+issue 31 "status:doing" "[T-31] collaborator" "src/**"
+git -C "$M" config --unset core.hooksPath || true
+if STUCK 31 "需要写私仓，本机是协作者模式" >/dev/null 2>&1; then ok "doctor 不通过时 just stuck 仍可用（协作者模式 → stuck）"; else bad "doctor 不通过时 stuck 也失败了"; fi
+comments_of 31 | grep -q "本机是协作者模式" && ok "stuck 评论写明协作者模式" || bad "stuck 评论缺协作者模式"
+(cd "$M" && bash tools/hooks/install.sh >/dev/null 2>&1)
 
 echo
 echo "通过 ${PASS}，失败 ${FAIL}"
