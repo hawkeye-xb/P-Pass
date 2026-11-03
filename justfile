@@ -71,6 +71,12 @@ setup:
     echo "  Install it: https://github.com/gitleaks/gitleaks#installing" >&2; \
   fi
 
+# 开工前环境自检（worker 与 owner 都先跑）：位置（主副本 / 卡 worktree、拒绝 Windows 回归克隆）、
+# bash 能否真执行、本地提交拦截、gh 读 issue、提交身份白名单、磁盘 ≥ 15G；私仓模式与在线设备只报不判。
+# 任一必需项不满足就非 0 退出并打印怎么修。just start 与 owner 各命令开头都会先跑它。
+doctor:
+  @bash tools/flow/doctor.sh
+
 # ── Format & Lint ───────────────────────────────────
 
 # Format all Rust code
