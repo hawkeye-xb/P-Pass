@@ -8,11 +8,14 @@
 #   **验收场景**：…        （按任务卡模板：场景 id，或步骤 + 日志判据 + 反证，标 E1–E4）
 #   **ADR**：docs/decisions/<文件>.md        （范围命中核心时必填）
 #   **选项一**：… **选项二**：…               （需要产品负责人拍板时必填，各写做法与影响）
+#   **产品定案**：docs/decisions/<文件>.md，产品负责人 <日期> 已确认   （可选；写「无」等于没写）
 #
 # 分流由脚本判定，不看模型的结论：
 #   1. 范围命中核心（.github/core-paths.txt）：要有 origin/main 上「已采纳」的 ADR；
 #      没有 ⇒ status:blocked（写明先定 ADR）。有 ⇒ 打 core 标签，继续往下判。
-#   2. 用户可见行为 / 隐私 / 数据 任一不是「无」，或范围碰到界面与文案路径
+#   2. 有「产品定案」：引用的方案全部在 origin/main 上「已采纳」，且字段写明产品负责人确认，
+#      否则拒绝；合格 ⇒ 产品取向已定，不打 needs:product、不要选项，按 3 判。
+#      没有「产品定案」：用户可见行为 / 隐私 / 数据 任一不是「无」，或范围碰到界面与文案路径
 #      （即使方案写了「无」也算）⇒ needs:product，必须有两个选项，否则拒绝。
 #   3. 其余 ⇒ status:ready。
 # 方案写回 issue：「范围」「验收场景」「是否核心」填进任务卡对应字段（hook 与 just verify 读它们），
@@ -46,7 +49,7 @@ python3 -I - "$PLAN" "$TMPD" <<'PY'
 import re, sys, pathlib
 text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").replace("\r", "")
 out = pathlib.Path(sys.argv[2])
-names = ["做法", "涉及端", "数据", "用户可见行为", "隐私", "风险", "范围", "验收场景", "ADR", "选项一", "选项二"]
+names = ["做法", "涉及端", "数据", "用户可见行为", "隐私", "风险", "范围", "验收场景", "ADR", "选项一", "选项二", "产品定案"]
 pat = re.compile(r"^\*\*(" + "|".join(names) + r")\*\*[：:]?[ \t]*", re.M)
 hits = list(pat.finditer(text))
 fields = {}
@@ -115,11 +118,24 @@ if [ "$CORE" != false ]; then
     DECISION=blocked
   fi
 fi
+# 产品定案：引用的方案全部已采纳、且写明产品负责人确认，才算产品取向已定。
+DECIDED=""
+if [ -n "$(field 产品定案)" ] && ! is_none 产品定案; then
+  refs="$(decision_refs "$(field 产品定案)")"
+  DECIDED="$(adopted_adrs "$(field 产品定案)")"
+  [ -n "$refs" ] && [ "$refs" = "$DECIDED" ] ||
+    refuse "**产品定案** 引用的方案不是全部在 origin/main 上「已采纳」（引用：$(printf '%s' "${refs:-无}" | tr '\n' ' ')；已采纳：$(printf '%s' "${DECIDED:-无}" | tr '\n' ' ')）" \
+      "等方案采纳并合入 main 再重跑；产品取向还没定就去掉这个字段，走 needs:product。"
+  [[ "$(field 产品定案 | tr '\n' ' ')" =~ 产品负责人.*确认 ]] ||
+    refuse "**产品定案** 没写明产品负责人已确认（要写成「产品负责人 <日期> 已确认」）" \
+      "确认过就补上再重跑；没确认就去掉这个字段，走 needs:product。"
+fi
 PRODUCT=0
 is_none 用户可见行为 || { PRODUCT=1; REASONS="${REASONS}用户可见行为；"; }
 is_none 隐私 || { PRODUCT=1; REASONS="${REASONS}隐私；"; }
 is_none 数据 || { PRODUCT=1; REASONS="${REASONS}数据去留；"; }
 [ "$UI" = false ] || { PRODUCT=1; REASONS="${REASONS}范围碰到界面或文案路径；"; }
+[ -z "$DECIDED" ] || PRODUCT=0
 if [ "${DECISION:-}" != blocked ]; then
   if [ "$PRODUCT" = 1 ]; then
     [ -n "$(field 选项一)" ] && [ -n "$(field 选项二)" ] ||
@@ -174,7 +190,7 @@ else:
 
 sec = [begin, "## 实施方案（just triage）", ""]
 sec += extra
-for k in ("做法", "涉及端", "数据", "用户可见行为", "隐私", "风险", "ADR"):
+for k in ("做法", "涉及端", "数据", "用户可见行为", "隐私", "风险", "ADR", "产品定案"):
     if f(k):
         sec.append("**" + k + "**：" + f(k) + "\n")
 if decision == "needs:product":

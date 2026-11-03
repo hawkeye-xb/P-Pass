@@ -135,14 +135,9 @@ scope_globs() {
     grep -v -e '^$' -e '^#' | sed -e 's#/$#/**#'
 }
 
-# 正文引用的、在 origin/main 上状态为「已采纳」的 ADR（一行一个路径）。
-adopted_adrs() {
-  local p
-  for p in $(printf '%s\n' "$1" | grep -oE 'docs/decisions/[0-9]{4}-[0-9]{2}-[0-9]{2}-[A-Za-z0-9._-]+\.md' | sort -u); do
-    git show "origin/main:${p}" 2>/dev/null | grep -qE '^[-*][[:space:]]*状态(：|:)[[:space:]]*已采纳' &&
-      printf '%s\n' "$p"
-  done
-}
+# 「已采纳」方案解析（adopted_adrs / decision_refs）与 worker 共用一份。
+# shellcheck source=tools/flow/decision-lib.sh
+source "${FLOW_DIR}/decision-lib.sh"
 
 # 读 issue：设置 ISSUE_TITLE / ISSUE_LABELS（逗号分隔）/ ISSUE_BODY / ISSUE_STATE。
 load_issue() {

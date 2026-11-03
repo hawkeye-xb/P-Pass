@@ -90,9 +90,18 @@ echo "   标签：status:ready → status:doing"
 echo "   范围（只许动这些）："
 printf '     %s\n' "${GLOBS[@]}"
 echo
+# 核心卡：正文引用了 origin/main 上「已采纳」的方案 ⇒ 已定案，按方案实现（与 batch-plan 准入同一判据）；
+# 没有 ⇒ 还没定案，只写复现、根因和两个修法。
 if has_label core; then
-  echo "⚠ 这是核心卡（带 core 标签）：只写复现、根因和两个修法，写进 issue 评论；不要自己改代码。"
-  echo "  写好后：just stuck ${N} \"命中核心：<一句话根因>；修法 A …；修法 B …\""
+  ADRS="$(adopted_adrs "$I_BODY")"
+  if [ -n "$ADRS" ]; then
+    echo "⚠ 这是核心卡（带 core 标签），已引用 origin/main 上「已采纳」的方案：按方案实现，只改「范围」里的文件。"
+    printf '%s\n' "$ADRS" | sed 's/^/  方案：/'
+    echo "  实现要偏离方案、或方案没覆盖到：just stuck ${N} \"<原因>\"，不自己定。"
+  else
+    echo "⚠ 这是核心卡（带 core 标签）：只写复现、根因和两个修法，写进 issue 评论；不要自己改代码。"
+    echo "  写好后：just stuck ${N} \"命中核心：<一句话根因>；修法 A …；修法 B …\""
+  fi
   echo
 fi
 echo "下一步："
