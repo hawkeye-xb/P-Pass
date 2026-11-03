@@ -19,6 +19,9 @@ set -uo pipefail
 # shellcheck source=tools/flow/owner-lib.sh
 source "$(cd "$(dirname "$0")" && pwd)/owner-lib.sh"
 
+# 开工前自检：位置、shell、提交拦截、gh、提交身份、磁盘、私仓模式。不过就停，不带病继续。
+bash "${FLOW_DIR}/doctor.sh" || exit 1
+
 DRY=0
 case "${1:-}" in
   --dry-run) DRY=1; export PPASS_OWNER_DRY=1 ;;

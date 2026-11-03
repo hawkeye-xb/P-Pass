@@ -27,6 +27,9 @@ set -uo pipefail
 # shellcheck source=tools/flow/owner-lib.sh
 source "$(cd "$(dirname "$0")" && pwd)/owner-lib.sh"
 
+# 开工前自检：位置、shell、提交拦截、gh、提交身份、磁盘、私仓模式。不过就停，不带病继续。
+bash "${FLOW_DIR}/doctor.sh" || exit 1
+
 usage() { sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 FORMAL_MSG="正式版只能由产品负责人发布（docs/RELEASING.md §3 第 5 步：在网页上审 draft 后 Publish）；owner 脚本只打 test tag"
 TIMEOUT="${PPASS_OWNER_RELEASE_TIMEOUT:-14400}"

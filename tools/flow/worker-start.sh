@@ -16,6 +16,9 @@ shift
 TYPE_OVERRIDE=""
 if [ "${1:-}" = "--type" ]; then TYPE_OVERRIDE="${2:-}"; fi
 
+# 开工前自检：位置、shell、提交拦截、gh、提交身份、磁盘、私仓模式。不过就停，不带病继续。
+bash "${HERE}/doctor.sh" || exit 1
+
 command -v gh >/dev/null 2>&1 || die "找不到 gh，查不了 #${N}" "装好并登录：gh auth login"
 REPO="$(flow_repo)"
 flow_load_issue "$N"
@@ -79,7 +82,8 @@ flow_labels "$N" "status:doing" "status:ready"
 if [ -z "${PPASS_FLOW_SKIP_HOOK_INSTALL:-}" ] && [ -f "${DIR}/tools/hooks/install.sh" ]; then
   if ! (cd "$DIR" && bash tools/hooks/install.sh --check >/dev/null 2>&1); then
     (cd "$DIR" && bash tools/hooks/install.sh >/dev/null 2>&1) ||
-      printf '⚠ 本地提交拦截没装上，跑 just setup 看原因；没装好时范围与核心不会被拦。\n'
+      die "本地提交拦截没装上：范围与核心不会被拦，不能开工" \
+        "在 ${DIR} 里跑 bash tools/hooks/install.sh 看原因；装好后重跑 just start ${N}。"
   fi
 fi
 
