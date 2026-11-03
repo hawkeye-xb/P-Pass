@@ -15,7 +15,12 @@ class OnboardingSlimWiringTest {
 
     @Test
     fun first_scope_save_finishes_onboarding_and_goes_home() {
-        assertTrue(firstTime.contains("OnboardedDesktopsStore(context.filesDir).markOnboarded(s.pairing.daemonNodeId)"))
+        // #1321：落盘收口到决定页的 markDecided（范围备份 / 单张备份两个出口共用）；首次选范围同时打开「自动备份」规则。
+        assertTrue(firstTime.contains("markDecided(s.pairing, \"scope\")"))
+        assertTrue(firstTime.contains("rulePrefs.set(true)"))
+        val mark = main.substringAfter("val markDecided: (Pairing, String) -> Unit = {").substringBefore("\n    }")
+        assertTrue(mark.contains("OnboardedDesktopsStore(context.filesDir).markOnboarded(pairing.daemonNodeId)"))
+        assertTrue(mark.contains("onboarding: marked onboarded"))
         assertTrue("后台备份默认关", firstTime.contains("disableAutoBackup(context)"))
         assertTrue(firstTime.contains("requestFlowScopeBackfillAndWake(context, constraintsSatisfied)"))
         val after = main.substringAfter("is Screen.Buckets -> {").substringAfter("if (s.firstTime) {").substringBefore("onCancel =")

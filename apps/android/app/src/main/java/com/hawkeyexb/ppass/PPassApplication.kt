@@ -126,6 +126,15 @@ class PPassApplication : Application() {
                 existingUser = PairingStore(filesDir).load() != null || OnboardedDesktopsStore(filesDir).anyOnboarded(),
             )
         }.onFailure { PLog.w("PPassNotify", "notify prefs init failed; stays off until next launch", it) }
+        // #1321 判断 A：升级后第一次启动，按现状给当时配着的那台补记「连过」，只做这一次（排在上面「老用户」判定之后）。
+        // 之后进照片页不再补：从没连过的新电脑经 MOB-92 认领拿到老范围，会被误记成连过。写不下来下次启动再做。
+        runCatching {
+            val nodeId = PairingStore(filesDir).load()?.daemonNodeId
+            if (OnboardedDesktopsStore(filesDir).initIfAbsent(nodeId) {
+                    com.hawkeyexb.ppass.backup.BackupScopeStore(this, nodeId).selectedBucketIds()?.isNotEmpty() == true
+                }
+            ) PLog.i("PPassFlow", "onboarding: backfilled desktop=${nodeId?.take(8)} at upgrade")
+        }.onFailure { PLog.w("PPassFlow", "onboarding: backfill init failed; retried next launch", it) }
         thread(name = "ppass-boot-check") {
             requestFlowWake(this, TriggerReason.PROCESS_START)
             runCatching {

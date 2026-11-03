@@ -7,7 +7,11 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
 @Serializable
-private data class OnboardedDesktopsData(val nodeIds: Set<String> = emptySet())
+private data class OnboardedDesktopsData(
+    val nodeIds: Set<String> = emptySet(),
+    /** onboarding 闸门（2026-11-03 判断 A）：升级后的一次性补记做过没有。老文件没有这个字段 = 没做过。 */
+    val initialized: Boolean = false,
+)
 
 /**
  * 哪些桌面（按 daemonNodeId）在这台手机上**走完过 onboarding**。
@@ -50,21 +54,43 @@ class OnboardedDesktopsStore(private val dir: File) {
         if (daemonNodeId.isBlank()) return
         val current = load()
         if (daemonNodeId in current.nodeIds) return
+        write(current.copy(nodeIds = current.nodeIds + daemonNodeId))
+    }
+
+    /**
+     * onboarding 闸门（2026-11-03 判断 A）：升级后第一次启动，按现状给**当时配着的那台**补记一次，之后不再补。
+     *
+     * 补记要回答的是「升级那一刻用户是不是已经在用这台电脑」，是一次性的初值，不是长期规则。每次进照片页都补
+     * 的话，一台从没连过的新电脑经 MOB-92 一次性认领拿到老的全局范围，范围非空，就被误记成「连过」。
+     *
+     * - 没做过（文件不存在、或老文件没有 `initialized`）：[daemonNodeId] 有值、没记录、[scopeNonEmpty] → 补记；
+     *   然后落「已初始化」。返回这次有没有补记。
+     * - 文件读不出来：按「已初始化」处理，不补——和「损坏 = 空集合 = 多问一次」同方向。
+     * - [scopeNonEmpty] 惰性：不补的情况下不读范围（读范围会触发 MOB-92 认领）。
+     */
+    fun initIfAbsent(daemonNodeId: String?, scopeNonEmpty: () -> Boolean): Boolean {
+        val current = read() ?: return false
+        if (current.initialized) return false
+        val backfill = !daemonNodeId.isNullOrBlank() && daemonNodeId !in current.nodeIds && scopeNonEmpty()
+        val ids = if (backfill) current.nodeIds + daemonNodeId!! else current.nodeIds
+        write(current.copy(nodeIds = ids))
+        return backfill
+    }
+
+    /** 新版本写下的文件一律带「已初始化」：判断 A 的补记只在升级后第一次启动做。 */
+    private fun write(data: OnboardedDesktopsData) {
         dir.mkdirs()
         val tmp = File(dir, "onboarded_desktops.json.tmp")
-        tmp.writeText(
-            json.encodeToString(
-                OnboardedDesktopsData.serializer(),
-                current.copy(nodeIds = current.nodeIds + daemonNodeId),
-            ),
-        )
+        tmp.writeText(json.encodeToString(OnboardedDesktopsData.serializer(), data.copy(initialized = true)))
         check(atomicReplace(tmp, file)) { "cannot persist onboarded_desktops.json" }
     }
 
-    private fun load(): OnboardedDesktopsData =
+    private fun load(): OnboardedDesktopsData = read() ?: OnboardedDesktopsData()
+
+    /** null = 文件在、但读不出来。 */
+    private fun read(): OnboardedDesktopsData? =
         if (file.isFile) {
-            runCatching { json.decodeFromString(OnboardedDesktopsData.serializer(), file.readText()) }
-                .getOrDefault(OnboardedDesktopsData())
+            runCatching { json.decodeFromString(OnboardedDesktopsData.serializer(), file.readText()) }.getOrNull()
         } else {
             OnboardedDesktopsData()
         }
@@ -83,16 +109,3 @@ fun isKnownDesktop(
     daemonNodeId: String,
     scopeNonEmpty: () -> Boolean,
 ): Boolean = store.wasOnboarded(daemonNodeId) && scopeNonEmpty()
-
-/**
- * 存量补记：本修复之前走完 onboarding 的桌面没有标记。人已经在首页、而且这台
- * 桌面有自己的相册范围——首页只有走完 onboarding（或快速重连）才进得来，
- * 这就是「连过」。不补的话，升级后第一次断开再连回，仍会被当成新电脑。
- */
-fun backfillOnboardedOnHome(
-    store: OnboardedDesktopsStore,
-    daemonNodeId: String,
-    scopeNonEmpty: () -> Boolean,
-) {
-    if (!store.wasOnboarded(daemonNodeId) && scopeNonEmpty()) store.markOnboarded(daemonNodeId)
-}

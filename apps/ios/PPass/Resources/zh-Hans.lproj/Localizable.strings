@@ -8,6 +8,11 @@
 "scan_header_title" = "扫码连接";
 "scan_hint" = "对准电脑屏幕上的\n配对二维码";
 "scan_manual_link" = "无法扫码？手动输入配对码";
+"decision_connected" = "已连上 %1$@";
+"decision_title" = "选择要自动备份的照片";
+"decision_choose_scope" = "选择备份范围";
+"decision_choose_scope_note" = "需要允许访问全部照片";
+"decision_pick_photos" = "先挑几张试试";
 "scan_manual_title" = "输入配对码";
 "scan_manual_body" = "在电脑的「添加设备」里点「无法扫码？复制配对码」，把它发到这台手机上，粘贴到下面。";
 "scan_manual_placeholder" = "ppf://pair?node=…";

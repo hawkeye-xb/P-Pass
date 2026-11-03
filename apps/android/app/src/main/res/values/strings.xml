@@ -14,6 +14,12 @@
     <string name="scan_header_title">Scan to connect</string>
     <string name="scan_hint">Point at the pairing QR code\non your computer\'s screen</string>
     <string name="scan_manual_link">Can\'t scan? Enter the pairing code instead</string>
+    <!-- #1321 决定页：配对后、进照片页之前必须做一次「备份哪些照片」的决定。 -->
+    <string name="decision_connected">Connected to %1$s</string>
+    <string name="decision_title">Choose the photos to back up automatically</string>
+    <string name="decision_choose_scope">Choose what to back up</string>
+    <string name="decision_choose_scope_note">Requires access to all photos</string>
+    <string name="decision_pick_photos">Pick a few to try first</string>
 
     <string name="scan_manual_title">Enter pairing code</string>
     <string name="scan_manual_body">On the computer\'s \"Add a device\" card, click \"Can\'t scan? Copy the pairing code\", send it to this phone, and paste it below.</string>
