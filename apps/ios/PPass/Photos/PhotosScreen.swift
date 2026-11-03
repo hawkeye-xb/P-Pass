@@ -54,11 +54,11 @@ struct PhotosScreen: View {
         .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 12)
     }
 
-    /// 引导位小卡（对位 Android `PhotosGuideCard`）：一句话 + 一个按钮 + 右上角 ×。第一步按钮「开启」；第二步 iOS 是「去设置」
-    /// （跳本 App 的系统设置页，「后台 App 刷新」在那一页）。
+    /// 引导位小卡（对位 Android `PhotosGuideCard`）：一句话 + 一个按钮 + 右上角 ×。第一步按钮「开启」；第二步：系统「后台 App 刷新」
+    /// 没开 →「去设置」（跳本 App 的系统设置页），已放行、只差 App 里的开关 →「开启」。
     private func guideCard(_ guide: PhotosGuide) -> some View {
         let text = guide == .enableScope ? L.f("photos_guide_scope", app.desktopName ?? L.s("storage_device_default")) : L.s("photos_guide_background")
-        let action = guide == .enableScope ? L.s("photos_guide_enable") : L.s("background_refresh_notice_action")
+        let action = guide == .enableScope ? L.s("photos_guide_enable") : L.s(app.backgroundGuideActionKey)
         return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 8) {
                 Text(text).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)

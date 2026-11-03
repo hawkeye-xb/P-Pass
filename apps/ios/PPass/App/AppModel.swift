@@ -85,6 +85,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var autoBackup = false
     /// 首页「开启后台备份」引导卡被关掉过（#1263）。
     @Published private(set) var backgroundCardDismissed = false
+    /// 系统「后台 App 刷新」此刻的真实状态（#1324：引导位第二步按它现算）。
+    @Published private(set) var backgroundRefresh: BackgroundRefreshAvailability = .available
     @Published private(set) var notifyOnFailure = true
     /// #975：系统通知授权的真实状态。开关显示 = 偏好 且 已授权（Android MainActivity 同口径）。
     @Published private(set) var notificationAuthorization: NotificationAuthorization = .notDetermined
@@ -241,7 +243,9 @@ final class AppModel: ObservableObject {
         autoBackup = backend.engine.autoBackup()
         backgroundCardDismissed = backend.engine.backgroundCardDismissed()
         notifyOnFailure = backend.engine.notifyOnFailure()
-        backgroundNotice = Self.backgroundNotice(backend.engine.backgroundRefresh(), backgroundRequested: autoBackup)
+        // 系统「后台 App 刷新」的真实状态：回到前台（sceneBecameActive → refresh）时重读，用户在系统设置里改了回来就生效。
+        backgroundRefresh = backend.engine.backgroundRefresh()
+        backgroundNotice = Self.backgroundNotice(backgroundRefresh, backgroundRequested: autoBackup)
     }
 
     /// 「取消剩余 N 张」行的 N（Android cancelRemainingRowCount）：只在已暂停 / 等待中、配对没失效、确有剩余时出现。
@@ -354,8 +358,22 @@ final class AppModel: ObservableObject {
 
     var guideFacts: GuideFacts {
         GuideFacts(scopeOn: autoRule && (scopeUnreadable || !noAlbums), firstUploaded: facts.lastSuccessAt > 0,
-                   backgroundOn: autoBackup, finished: backgroundCardDismissed)
+                   backgroundOn: Self.backgroundBackupOn(intent: autoBackup, refresh: backgroundRefresh), finished: backgroundCardDismissed)
     }
+
+    /// iOS 后台备份真正生效 = App 里「后台备份」开着（这是 App 自己的开关，系统里没有对应项，只能读它的存值）
+    /// **且**系统「后台 App 刷新」放行（读系统真实状态）。被限制（屏幕使用时间 / 设备管理）用户自己改不了，引导位不劝，
+    /// 交给设置页告示说现状——按「已开」处理，不出第二步卡。
+    nonisolated static func backgroundBackupOn(intent: Bool, refresh: BackgroundRefreshAvailability) -> Bool {
+        switch refresh {
+        case .available: return intent
+        case .denied: return false
+        case .restricted: return true
+        }
+    }
+
+    /// 第二步卡的按钮名：系统「后台 App 刷新」没开 →「去设置」；系统已放行、只差 App 里的开关 →「开启」。
+    var backgroundGuideActionKey: String { backgroundRefresh == .available ? "photos_guide_enable" : "background_refresh_notice_action" }
 
     var photosGuide: PhotosGuide { Self.photosGuideOf(guideFacts) }
 
@@ -370,14 +388,16 @@ final class AppModel: ObservableObject {
     }
 
     /// 引导位的按钮。第一步：规则开着（只是没选相册）→ 直达选范围页，关着 → 走开启链路（权限 → 选范围页）。
-    /// 第二步（iOS）：写「后台备份」意图，并跳本 App 的系统设置页（「后台 App 刷新」开关在那一页）。
+    /// 第二步（iOS）：见 `backgroundBackupOn`——缺哪项补哪项。
     func guideAction(_ guide: PhotosGuide) {
         switch guide {
         case .enableScope:
             if autoRule { openScopeEditor() } else { setAutoRule(true) }
         case .enableBackground:
-            setAutoBackup(true)
-            openAppSettings()
+            // App 里的「后台备份」开关系统读不到、只能由 App 写（唯一「先写意图」的一项）；系统「后台 App 刷新」不预先写任何东西，
+            // 只把用户带到本 App 的系统设置页，回到前台时按真实状态重算卡片。
+            if !autoBackup { setAutoBackup(true) }
+            if backgroundRefresh != .available { openAppSettings() }
         case .none:
             break
         }

@@ -431,6 +431,44 @@ final class SettingsFeedbackTests: XCTestCase {
         XCTAssertNil(app.scopeEmptyHint, "有了第一张就不说")
     }
 
+    /// 第二步按系统真实状态现算（owner 判断）：App 里「后台备份」开着但系统「后台 App 刷新」被关 → 仍出卡（按钮「去设置」）；
+    /// 回到前台读到系统已放行 → 卡消失；被限制（用户改不了）→ 不劝。按钮不预先写系统侧任何东西。
+    /// 反证：卡片判定改回只看意图（`backgroundOn: autoBackup`），「意图开、系统关」那段红。
+    func test_background_step_follows_the_real_system_state() async {
+        let (app, engine, _) = make()
+        app.refreshExistingAlbums()
+        await settle()
+        engine.stubFacts.lastSuccessAt = 1
+        engine.disk.auto = true
+        engine.refresh = .denied
+        app.sceneBecameActive()
+        XCTAssertEqual(app.photosGuide, .enableBackground, "意图开着、系统后台 App 刷新关着：后台备份并没有生效")
+        XCTAssertEqual(app.backgroundGuideActionKey, "background_refresh_notice_action", "按钮「去设置」")
+        let before = engine.calls
+        engine.refresh = .available // 用户在系统设置里打开后回到前台
+        app.sceneBecameActive()
+        XCTAssertEqual(app.photosGuide, .none, "回到前台按真实状态重算")
+        XCTAssertEqual(engine.calls, before, "没有任何预先写入")
+        engine.refresh = .restricted
+        app.sceneBecameActive()
+        XCTAssertEqual(app.photosGuide, .none, "被限制：用户改不了，引导位不劝")
+    }
+
+    /// 系统已放行、只差 App 里的「后台备份」开关（系统读不到这一项）：按钮「开启」，写这一项。
+    func test_background_step_with_refresh_available_turns_on_the_app_switch() async {
+        let (app, engine, _) = make()
+        app.refreshExistingAlbums()
+        await settle()
+        engine.stubFacts.lastSuccessAt = 1
+        engine.refresh = .available
+        app.refresh()
+        XCTAssertEqual(app.photosGuide, .enableBackground)
+        XCTAssertEqual(app.backgroundGuideActionKey, "photos_guide_enable")
+        app.guideAction(.enableBackground)
+        XCTAssertTrue(engine.calls.contains("auto=true"))
+        XCTAssertEqual(app.photosGuide, .none)
+    }
+
     /// × 写不下来：卡片留着、提示用户。
     func test_dismiss_write_failure_keeps_the_card_and_tells_the_user() async {
         let (app, engine, _) = make()
