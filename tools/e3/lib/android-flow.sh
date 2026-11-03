@@ -15,13 +15,9 @@ install_fresh() {
   A install "$1" >/dev/null || die "安装失败：$1"
 }
 
-# pair_with_stub <证据目录>：从欢迎页手动输入配对串 → 桩 IPC 批准 → 系统照片权限框「全部允许」→「开始备份」
-# 只在 P-Pass 在前台时点。成功返回 0。
-pair_with_stub() {
-  local ev="$1" qr code node xy end
-  app_stop
-  A shell pm clear "$PKG" >/dev/null
-  app_start
+# pair_enter_code <证据目录>：App 停在欢迎页时，手动输入配对串 → 桩 IPC 批准。只配对，配对之后的页面不碰。
+pair_enter_code() {
+  local ev="$1" qr code node xy
   wait_text "扫码连接家里的电脑" 30 || { ui_dump "$ev/pair-no-welcome.xml"; return 1; }
   tap_text "无法扫码？手动输入配对码" || return 1
   wait_text "输入配对码" 15 || return 1
@@ -44,6 +40,18 @@ pair_with_stub() {
   [ -n "$node" ] && [ -n "$code" ] || { log "没等到配对请求（node=$node code=${code}）"; return 1; }
   eph_ipc pairing.confirm "{\"accept\":true,\"node_id\":\"$node\",\"code\":\"$code\"}" >"$ev/pair-confirm.json" || return 1
   echo "$node" >"$E3_STATE/android-node"
+}
+
+# pair_with_stub <证据目录>：清数据 → 配对 →（#1321 决定页「选择备份范围」）→ 系统照片权限框「全部允许」→「开始备份」
+# 只在 P-Pass 在前台时点。成功返回 0。
+pair_with_stub() {
+  local ev="$1" end
+  app_stop
+  A shell pm clear "$PKG" >/dev/null
+  app_start
+  pair_enter_code "$ev" || return 1
+  # #1321 起配对后先进决定页（候选包）；上一版包没有这一页，等不到就往下走。
+  if wait_text "选择要自动备份的照片" 15; then tap_text "选择备份范围" || return 1; fi
   # 系统照片权限框 → 全部允许；之后「开始备份」
   end=$((SECONDS + 60))
   while [ $SECONDS -lt $end ]; do
