@@ -268,7 +268,7 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check hooks-test flow-worker-test supply-chain-check mobile-static-check i18n-split-check lockfile-check flow-owner-test heavy-lock-test
+ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check hooks-test flow-worker-test flow-review-test supply-chain-check mobile-static-check i18n-split-check lockfile-check flow-owner-test heavy-lock-test
   @echo "==> CI pipeline: all green ✅"
 
 # 两个 Rust workspace 的 Cargo.lock 都得和实际依赖一致（src-tauri 是独立 workspace，
@@ -307,7 +307,7 @@ i18n-split-check:
 #
 # ⚠️ 只在这次改动**一行 Rust/Kotlin/前端都没动**时用它。碰了代码就跑 `just ci`，
 # 别拿这条快车道当省事的借口——`ci` 的依赖列表一个都没减。
-ci-docs: md-check token-check shell-vars-check identity-check hooks-test flow-worker-test supply-chain-check flow-owner-test heavy-lock-test
+ci-docs: md-check token-check shell-vars-check identity-check hooks-test flow-worker-test flow-review-test supply-chain-check flow-owner-test heavy-lock-test
   @echo "==> docs lane: green ✅（注意：本条不含 fmt/lint/test，动了代码必须跑 just ci）"
 
 # T-040 人工验收：自启/防睡眠/密钥仓 真机冒烟（H-09 双平台各跑一次）
@@ -509,6 +509,15 @@ done *args:
 # 四种必须停下的情况的统一出口：命中核心 / 需改范围外文件 / 没有验收场景 / 连红 3 次。
 stuck n reason:
     bash tools/flow/worker-stuck.sh {{n}} "{{reason}}"
+
+# 合入前独立评审：新起一个没参与写代码的只读 agent，对照 PR 关联卡的范围与验收查正确性，
+# 结果写成 PR 评论并在头提交上写提交状态 review/agent。模型可配（默认 claude，PPASS_REVIEW_AGENT 可换命令）。
+review pr *args:
+    bash tools/flow/review.sh {{pr}} {{args}}
+
+# just review 的判据测试：假 gh + 假 agent，校验评论格式、提交状态与只读权限；进 ci / ci-docs。
+flow-review-test:
+    @bash tools/test-flow-review.sh
 
 # worker 三条命令的判据测试：临时仓库 + 假 gh / just，每条拒绝配反证；进 ci / ci-docs。
 flow-worker-test:

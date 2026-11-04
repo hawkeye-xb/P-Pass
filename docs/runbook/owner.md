@@ -26,7 +26,20 @@ owner 只统筹，不当传声筒：这些命令是 owner 的工具，不是合�
 | 记想法（任何会话） | `just idea "<原话>" [--discuss] [--from <来源>]` | `IDEA DISCUSSION #N` 或 `IDEA ISSUE #N status:inbox Feature` |
 | 分拣新诉求 | `just triage <号> <方案文件>` | `TRIAGE <号> ready \| needs:product \| blocked` |
 | 出 test 包 | `just release-test <端...>` | `RELEASE-TEST OK v<X.Y.Z>-test.N <端...>` |
+| 合入前独立评审 | `just review <PR号> [--model <模型>]` | `✅ #N 独立评审通过，review/agent=success` |
 | 停下 | `just owner-stuck "<原因>" [--issue N \| --pr N] [--product "<一>" "<二>"] [--log 文件]` | `ok: ...` |
+
+### 合入前独立评审（`just review`）
+
+起一个没参与写这个 PR 的只读 agent（`claude -p`，只给 Read / Grep / Glob，不能改文件、不能跑命令），
+对照 PR 正文 `closes #N` 的卡的「范围」「验收场景」查正确性问题，不评风格。结果写成 PR 评论
+（「通过」或「未通过 + 问题清单」），并在 PR 头提交上写提交状态 `review/agent`（success / failure）。
+
+- 判定看 agent 输出最后一行 `VERDICT: PASS`；agent 崩了、没给 VERDICT、评审期间改了检出，一律按未通过。
+- 结论只对评审时的头提交有效，之后推了新提交要重跑。
+- 换模型：`--model <名>`，或 `PPASS_REVIEW_MODEL`；换成别家的命令用 `PPASS_REVIEW_AGENT`
+  （要接受同样的 `-p`、`--model`、`--allowedTools` 参数，提示词走 stdin）。
+- `review/agent` 要不要进 main 的必需检查、评审通过后是否自动合入，由 owner 在仓库设置与流程里定，本命令不改仓库设置。
 
 退出码：0 通过；1 停下了（已写 issue 或评论）；2 拒绝（用法错，或前置条件没满足，提示里给了下一条命令）。
 看到 1 就不要重试同一条命令，先处理 issue。
