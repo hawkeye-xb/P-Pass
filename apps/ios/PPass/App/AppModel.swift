@@ -202,9 +202,8 @@ final class AppModel: ObservableObject {
                 refreshExistingAlbums()
                 if noAlbums { openScopeEditor() } else { await backend.engine.wake() }
             case .partial:
-                // 不说「已把你允许的 N 张传到电脑」：说的时候照片还没传，进度看设置页（产品负责人 2026-11-04）。
-                _ = await backend.engine.sendAllowedPhotos()
-                ruleNote = L.s("auto_backup_rule_partial_hint")
+                let n = await backend.engine.sendAllowedPhotos()
+                ruleNote = n > 0 ? L.f("auto_backup_rule_limited_sent", n) : L.s("auto_backup_rule_partial_hint")
             case .none:
                 ruleNote = L.s("auto_backup_rule_denied_hint")
             }

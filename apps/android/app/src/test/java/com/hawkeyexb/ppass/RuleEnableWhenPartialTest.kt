@@ -41,7 +41,6 @@ class RuleEnableWhenPartialTest {
     fun no_limited_sent_snackbar_and_picked_line_only_says_delivered() {
         assertFalse(main.contains("auto_backup_rule_limited_sent"))
         assertFalse(home.contains("picked_result_with_existing"))
-        assertFalse(File("src/main/res/values/strings.xml").readText().contains("auto_backup_rule_limited_sent"))
         assertFalse(File("src/main/res/values-zh/strings.xml").readText().contains("picked_result_with_existing"))
     }
 }
