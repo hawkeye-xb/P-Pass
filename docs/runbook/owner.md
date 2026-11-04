@@ -4,6 +4,9 @@
 或评论到对应的卡、PR，然后非 0 退出。不补做、不绕过、不改判定，接着做别的。
 脚本在 `tools/flow/owner-*.sh`，测试是 `tools/test-flow-owner.sh`（`just ci` 与 `just ci-docs` 都会跑）。
 
+owner 只统筹，不当传声筒：这些命令是 owner 的工具，不是合入的必经之路。合入由 CI 与独立评审把关、自动完成
+（角色分工见 [AGENTS.md](../../AGENTS.md)「角色」「通知」「机器与模型」）。
+
 ## 开工自检（doctor）
 
 每条 owner 命令开头都会先跑 `just doctor`（`tools/flow/doctor.sh`）。它在你自己的外壳里检查：
