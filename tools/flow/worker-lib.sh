@@ -100,7 +100,7 @@ flow_labels() {
 
 flow_ensure_review_label() {
   gh label create "status:review" -R "$REPO" \
-    -d "worker 已交卡，等 owner 攒批" -c "5319e7" >/dev/null 2>&1 || true
+    -d "已交卡，等 PR 的 CI 与放行" -c "5319e7" >/dev/null 2>&1 || true
 }
 
 flow_comment() { # flow_comment <号> <正文文件>
