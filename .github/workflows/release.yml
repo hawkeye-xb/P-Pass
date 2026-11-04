@@ -47,14 +47,19 @@
 name: Release
 
 on:
-  push:
-    tags: ["v*"]
+  # #1349：不再由推 tag 触发（手动推 `v*` tag 什么都不会发生）。发版唯一入口 = 手动触发本 workflow、
+  # release=true：全量发版前验证通过后，由 create-draft 才建 tag 与 release 草稿，
+  # 所以验证红了不会留下垃圾 tag。release=false + 已存在的 tag = 补跑单端（原行为）。
   workflow_dispatch:
     inputs:
       tag:
-        description: "手工触发的 tag 名（草稿发布用）"
-        required: false
-      # CI-01②: 平台选择（只对 workflow_dispatch 生效；tag push 恒全量构建）。
+        description: "tag 名。release=true：本次要发的新 tag（尚不存在，由流程创建，必须在 main 上触发）；release=false：要补跑的已有 tag"
+        required: true
+      release:
+        description: "发版（先验证、通过后才建 tag 与草稿）。留空/false = 补跑已有 tag 的单端"
+        type: boolean
+        default: false
+      # CI-01②: 平台选择（只对补跑生效；release=true 恒全量按 plan-builds 判定构建）。
       # ⚠️ 原注释这里写的是「发布完整性不许分块」——CI-04② 已经把**上传**
       # 分块了（三条 lane 各传各的，Android 先到手）。「不许分块」那条原则
       # 现在只管**正式版的 publish 时机**：draft 等人工点发布，那一刻资产
@@ -68,17 +73,18 @@ permissions:
   contents: read
 
 env:
-  # CI-01②: dispatch 指定平台集合；tag push（发布）恒全量。
+  # CI-01②: 补跑指定平台集合；发版（release=true）恒全量。
   # ⚠️ 表达式在 job 级 if 里用 ${{ }} 求值，env 里不能引用 github ——
   # 平台门控在每 job 的 if 里直接写表达式（见下）。
   PLATFORMS: ${{ inputs.platforms || 'all' }}
-  # REL-11（#708）：本次发布的 tag。dispatch 补跑时 GITHUB_REF_NAME=main，
+  # REL-11（#708）：本次发布的 tag（一律来自 inputs.tag；dispatch 时 GITHUB_REF_NAME=main）。
   # tools/release-version.sh 优先读它来判 test / 正式线。
-  # REL-13（#716）：同理，每个 checkout 都显式 `ref: ${{ inputs.tag || github.ref }}`——
-  # dispatch 时默认检出的是 main，构建出的代码与 versions.json 都不是被补跑的那个 tag。
-  # 「构建自哪个提交」也一律取实际检出的 HEAD，不用 GITHUB_SHA（dispatch 时它是 main）。
+  # REL-13（#716）：每个 checkout 都显式 `ref: ${{ env.BUILD_REF }}`——
+  # 补跑 = 被补跑的 tag；发版（release=true）= 触发时 main 的提交（此时 tag 还不存在，由 create-draft 建在该提交上）。
+  # 「构建自哪个提交」一律取实际检出的 HEAD。
   # 有测试看守：tools/test-release-version-source.sh ④。
-  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+  RELEASE_TAG: ${{ inputs.tag }}
+  BUILD_REF: ${{ inputs.release && github.sha || inputs.tag }}
 
 jobs:
   # ══ #838：构建一次、到处复用 ══════════════════════════════════════════
@@ -107,13 +113,34 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ env.BUILD_REF }}
           fetch-depth: 0
+      # #1349：发版（release=true）的入口守卫。任何一条不满足就在最前面失败，什么都不建。
+      - name: 发版入口守卫（#1349）
+        if: ${{ inputs.release }}
+        env:
+          TAG: ${{ inputs.tag }}
+          PLATFORMS_IN: ${{ inputs.platforms }}
+        run: |
+          set -euo pipefail
+          # 渠道由 tag 名决定（版本串里的 `-test.` 判通道，见 docs/RELEASING.md §3.6），只接受这两种形状。
+          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-test\.[0-9]+$ ]]; then CH="test"
+          elif [[ "$TAG" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+$ ]]; then CH="stable"
+          else echo "::error::tag 名 ${TAG} 不是 v<X.Y.Z>-test.N（test）或 v<YYYY>.<M>.<N>（正式）"; exit 1; fi
+          [ -z "$PLATFORMS_IN" ] || [ "$PLATFORMS_IN" = all ] || { echo "::error::发版恒全量按 plan-builds 判定，不接受 platforms=${PLATFORMS_IN}（补跑单端请用 release=false）"; exit 1; }
+          [[ "$GITHUB_REF" == refs/heads/* ]] || { echo "::error::发版必须在分支上触发（当前 ${GITHUB_REF}）"; exit 1; }
+          git fetch -q origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "::error::${GITHUB_SHA} 不在 main 上，不发"; exit 1; }
+          if [ -n "$(git ls-remote --tags origin "refs/tags/${TAG}")" ]; then
+            echo "::error::tag ${TAG} 已存在。发版只建新 tag；补跑已有 tag 请用 release=false"; exit 1
+          fi
+          echo "守卫通过：${TAG}（${CH} 通道）@ ${GITHUB_SHA}"
+
       - name: Plan builds (#838)
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag || github.ref_name }}
+          TAG: ${{ inputs.tag }}
           # #1062：plan-builds 只跑 `cargo metadata --no-deps`（读清单、不编译），用 runner 自带的 stable，
           # 免得为它先装 rust-toolchain.toml 钉住的工具链。
           RUSTUP_TOOLCHAIN: stable
@@ -132,7 +159,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ env.BUILD_REF }}
       - name: Reuse android artifact from Latest (#838)
         id: reuse
         env:
@@ -167,7 +194,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ env.BUILD_REF }}
       - name: Reuse macos artifact from Latest (#838)
         id: reuse
         env:
@@ -198,7 +225,7 @@ jobs:
   windows-reuse:
     name: "Windows x64（复用 Latest 产物，#838）"
     needs: [plan-builds]
-    if: github.event_name == 'push' && needs.plan-builds.outputs.windows == 'reuse'
+    if: inputs.release && needs.plan-builds.outputs.windows == 'reuse'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -206,7 +233,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ env.BUILD_REF }}
       - name: Reuse windows artifact from Latest (#838)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -290,7 +317,7 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ env.BUILD_REF }}
 
       - name: Set Rust toolchain from rust-toolchain.toml
         shell: bash
@@ -604,8 +631,8 @@ jobs:
     needs: [plan-builds]
     if: >-
       !cancelled() && (
-        (github.event_name == 'workflow_dispatch' && (inputs.platforms == '' || inputs.platforms == 'all' || contains(format('{0},', inputs.platforms || 'all'), 'windows')))
-        || (github.event_name == 'push' && needs.plan-builds.outputs.windows == 'build')
+        (!inputs.release && (inputs.platforms == '' || inputs.platforms == 'all' || contains(format('{0},', inputs.platforms || 'all'), 'windows')))
+        || (inputs.release && needs.plan-builds.outputs.windows == 'build')
       )
     # #1151：不拿 id-token / attestations——来源证明由 attest job 生成。
     permissions:
@@ -613,7 +640,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ env.BUILD_REF }}
 
       - name: Set Rust toolchain from rust-toolchain.toml
         shell: bash
@@ -773,7 +800,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ env.BUILD_REF }}
 
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
@@ -1061,7 +1088,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ env.BUILD_REF }}
 
       # 正式 tag 用 iOS 线自己的版本号（release/versions.json.ios），test tag 用 tag 名。
       - name: Resolve iOS version
@@ -1093,14 +1120,14 @@ jobs:
   # 全部通过才执行，下游上传、清单定稿（会移动 test-channel 指针）都挂在 create-draft 之后，
   # 所以任何一条红都发不出去。按 plan-builds 按需：某端复用或跳过 ⇒ 产物与上一版逐字节相同，
   # 不重复验证；Rust / 文档 / E2E 每次都跑。
-  # 只在 tag push 上验证：workflow_dispatch 补跑检出的是 inputs.tag，而被调用的 CI 只会检出
-  # github.ref（dispatch 时是 main），验的不是同一份代码；补跑的 tag 在原 push 时已验过。
+  # 只在发版（release=true）时验证：补跑检出的是 inputs.tag，而被调用的 CI 只会检出
+  # github.ref（dispatch 触发的分支），验的不是同一份代码；补跑的 tag 在原发版时已验过。
   # 调用外部 workflow 的 job 不能写 timeout-minutes：超时由被调用 workflow 里每个 job 各自的
   # timeout-minutes 兜（tools/test-release-timeouts.sh 连同被调用的 workflow 一起检查）。
   verify-rust:
     name: "发版前验证 · Rust"
     needs: [plan-builds]
-    if: github.event_name == 'push'
+    if: inputs.release
     permissions:
       contents: read
       actions: read
@@ -1109,31 +1136,31 @@ jobs:
   verify-docs:
     name: "发版前验证 · 发布链与文档"
     needs: [plan-builds]
-    if: github.event_name == 'push'
+    if: inputs.release
     uses: ./.github/workflows/ci-docs.yml
 
   verify-e2e:
     name: "发版前验证 · E2E"
     needs: [plan-builds]
-    if: github.event_name == 'push'
+    if: inputs.release
     uses: ./.github/workflows/e2e.yml
 
   verify-desktop:
     name: "发版前验证 · 桌面壳"
     needs: [plan-builds]
-    if: github.event_name == 'push' && (needs.plan-builds.outputs.macos == 'build' || needs.plan-builds.outputs.windows == 'build')
+    if: inputs.release && (needs.plan-builds.outputs.macos == 'build' || needs.plan-builds.outputs.windows == 'build')
     uses: ./.github/workflows/ci-desktop.yml
 
   verify-android:
     name: "发版前验证 · Android"
     needs: [plan-builds]
-    if: github.event_name == 'push' && needs.plan-builds.outputs.android == 'build'
+    if: inputs.release && needs.plan-builds.outputs.android == 'build'
     uses: ./.github/workflows/ci-android.yml
 
   verify-ios:
     name: "发版前验证 · iOS"
     needs: [plan-builds]
-    if: github.event_name == 'push' && needs.plan-builds.outputs.ios == 'build'
+    if: inputs.release && needs.plan-builds.outputs.ios == 'build'
     uses: ./.github/workflows/ci-ios.yml
 
   create-draft:
@@ -1160,19 +1187,15 @@ jobs:
       # UPD-13（#660）：fetch-depth 0 —— 下面的版本门禁要能解析上一个 v* tag。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ env.BUILD_REF }}
           fetch-depth: 0
 
       - name: Resolve tag
         id: tag
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ inputs.tag }}"
-          else
-            TAG="${GITHUB_REF_NAME}"
-          fi
-          [ -n "$TAG" ] || { echo "TAG 缺失（dispatch 需 tag 输入）"; exit 1; }
+          TAG="${{ inputs.tag }}"
+          [ -n "$TAG" ] || { echo "TAG 缺失（需 tag 输入）"; exit 1; }
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
@@ -1190,7 +1213,8 @@ jobs:
             echo "::notice::没有上一个 v* tag，跳出版本门禁"
             exit 0
           fi
-          tools/check-version-bump.sh "$PREV" "$TAG"
+          # #1349：发版时 tag 还不存在（下一步才建），第二个参数用已检出的提交，补跑时它就是 tag 的提交。
+          tools/check-version-bump.sh "$PREV" "$(git rev-parse HEAD)"
 
       # #741：正式 tag 某端版本号涨了、却没有该版本的手写更新说明 ⇒ 告警，**不阻断**
       # （允许「无用户可见变更」——弹窗显示默认文案）。比较口径与上面的版本门禁相同
@@ -1245,6 +1269,26 @@ jobs:
           TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
+          # #1349：发版时 tag 到这里才建（verify-* 全过、版本门禁过了才会走到本步）：
+          # 验证红 ⇒ 不会有 tag。补跑（release=false）时 tag 早就在，下面只核对它指向的提交。
+          # 草稿 release 不会自己建 git tag，而 tag 是各端构建基线、plan-builds 要解析它，所以显式建。
+          SHA="$(git rev-parse HEAD)"
+          if [ "${{ inputs.release }}" = "true" ]; then
+            # 发版期间触发用的分支前进了 ⇒ 验证（检出分支当前提交）与本次构建（触发时的提交）可能不是同一份代码，拒绝。
+            HEAD_NOW="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | cut -f1)"
+            [ "$HEAD_NOW" = "$GITHUB_SHA" ] || {
+              echo "::error::${GITHUB_REF_NAME} 已从 ${GITHUB_SHA} 前进到 ${HEAD_NOW:-（不存在）}：验证与构建不一定是同一份代码，请重新触发（要固定提交，先建一条指向它的分支再在该分支上触发）"
+              exit 1
+            }
+            EXIST="$(git ls-remote --tags origin "refs/tags/${TAG}^{}" "refs/tags/${TAG}" | cut -f1 | head -1)"
+            if [ -z "$EXIST" ]; then
+              git push origin "${SHA}:refs/tags/${TAG}"
+              echo "已建 tag ${TAG} → ${SHA}"
+            else
+              [ "$EXIST" = "$SHA" ] || { echo "::error::tag ${TAG} 已存在且指向 ${EXIST}，不是本次提交 ${SHA}；不移动、不覆盖已有 tag"; exit 1; }
+              echo "tag ${TAG} 已在且指向本次提交（同一次 run 重跑）"
+            fi
+          fi
           # 幂等：重跑 workflow 时 release 已存在，裸 create 会失败。已存在
           # 就只更新骨架 notes，不动 draft/prerelease 标志——发布与否只由人工
           # publish 决定（#872 起 test tag 也一直是 draft，客户端读 test-channel）。
@@ -1274,7 +1318,7 @@ jobs:
       # 这条需要仓库文件。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ env.BUILD_REF }}
 
       - name: Download android artifact
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -1497,7 +1541,7 @@ jobs:
       # checkout 是为了 tools/make-update-manifest.mjs。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ env.BUILD_REF }}
 
       - name: Download android artifact
         if: needs.upload-android.result == 'success'
@@ -1600,7 +1644,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ env.BUILD_REF }}
 
       - name: Download windows installer
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -1652,11 +1696,11 @@ jobs:
     permissions:
       contents: write
     env:
-      TAG: ${{ inputs.tag || github.ref_name }}
+      TAG: ${{ inputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ env.BUILD_REF }}
       - name: Point test-channel at the iOS manifest
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1688,7 +1732,7 @@ jobs:
       # 必须是第一步：checkout 会清空工作目录，下面的 artifact 下载要在它之后。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ env.BUILD_REF }}
       # CI-09: 逐 lane 具名下载，不再用「无 name 全量下载」——v5+ 在该模式下
       # 只有 1 个 artifact 时会平铺到 path、不建 <name>/ 子目录（README 未记载，
       # 源码 src/download-artifact.ts 比对确认），下游按 artifacts/<name>/ 的

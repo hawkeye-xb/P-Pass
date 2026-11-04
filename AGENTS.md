@@ -165,11 +165,13 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
 
 ## 发版
 
-- tag 只给真发版本。调管线不发版走 Actions → Release → Run workflow。
+- 发版只有一个入口：手动触发 Actions → Release → Run workflow（`release` 勾上，填新 tag 名，在 main 上；
+  test 版用 `just release-test`）。验证全绿后流程自己建 tag 与 release 草稿；**不要手动推 `v*` tag**
+  （推了不会触发任何东西）。`release` 不勾 + 已有 tag = 补跑单端，调管线不发版也走这里。
 - release 正文 = 面向用户的 changelog：以该版本用户可见变更开头（对应 `CHANGELOG.md`
   该版本段），签名、SHA-256、资产清单往后放。changelog 在提交阶段写进 `[Unreleased]`。
 - 应用内更新弹窗说明是手写文件：版本号涨了的每一端写 `release/notes/<端>/<版本>.<zh|en>.txt`，
-  合入后再打 tag。规则见 `docs/release-notes-rules.md`，步骤见 `docs/RELEASING.md`。
+  合入后再触发发版。规则见 `docs/release-notes-rules.md`，步骤见 `docs/RELEASING.md`。
 
 ## 索引（需要时才打开）
 
