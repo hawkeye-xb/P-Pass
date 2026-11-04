@@ -197,6 +197,26 @@ try deny "工作区改掉 hook 本身再提交（hook 取自 HEAD）" fix/101-ho
   'printf "#!/bin/sh\nexit 0\n" >tools/hooks/pre-commit; echo 1 >>crates/storage/src/a.rs; git add crates/storage' "这是核心改动"
 try deny "暂存核心规则文件本身" fix/105-rules 'echo "# x" >>.github/core-paths.txt; git add -A' "越界：.github/core-paths.txt"
 
+echo "==> 3b. 多卡分支（just start <号> <号>…，卡号记在 branch.<分支>.ppasscards）：范围取并集"
+issue 106 "status:doing" "$(scope_body 'docs/b/**')"
+cards() { git config "branch.$(git symbolic-ref --short HEAD).ppasscards" "$1"; }
+try pass "两张卡：分别改两张卡范围内的文件" fix/101-multi \
+  'cards "101 106"; echo 1 >>docs/a/x.md; echo 1 >>docs/b/y.md; git add -A'
+try deny "  反证：同样改动，分支没记第二张卡 → 第二张卡的文件越界" fix/101-single \
+  'echo 1 >>docs/a/x.md; echo 1 >>docs/b/y.md; git add -A' "越界：docs/b/y.md"
+try deny "两张卡：并集之外的文件仍越界" fix/101-multi-out \
+  'cards "101 106"; echo n >docs/new.md; echo 1 >>docs/b/y.md; git add -A' "越界：docs/new.md"
+try deny "两张卡：其中一张没有范围" fix/101-multi-noscope \
+  'cards "101 103"; echo 1 >>docs/a/x.md; git add -A' "#103 没有可读的「范围」"
+try pass "两张卡：核心改动，第二张卡带 core 标签 → 放行" fix/101-multi-core \
+  'cards "101 105"; echo 1 >>crates/storage/src/a.rs; git add -A'
+try deny "  反证：两张卡都没 core 标签 → 拒绝" fix/101-multi-nocore \
+  'cards "101 106"; echo 1 >>crates/storage/src/a.rs; git add -A' "这是核心改动"
+try deny "分支记录的卡号不是数字" fix/101-multi-bad \
+  'cards "101 abc"; echo 1 >>docs/a/x.md; git add -A' "卡号「abc」不对"
+try pass "  分支记录里重复写了主卡也照常" fix/101-multi-dup \
+  'cards "106 101"; echo 1 >>docs/b/y.md; git add -A'
+
 echo "==> 4. batch 分支"
 try pass "batch/* 上核心 + 越界都不拦（且不查 gh）" batch/2026-11-02-x \
   'touch "$FAKE_GH/fail"; echo 1 >>crates/storage/src/a.rs; echo 1 >>docs/b/y.md; git add -A'

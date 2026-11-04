@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# just done：在卡 worktree 里交卡。
+# just done [--accepted "<时间>"]：在卡 worktree 里交卡。
 #   门禁（just ci / 纯文档 just ci-docs）→ just verify <号>（命令存在才跑）→ 核对改动只含范围内文件
-#   → 全绿才 git push → 在 issue 贴回执 → status:doing→status:review。
+#   → 全绿才 git push → 在每张卡贴回执 → status:doing→status:review → 开 PR（正文 closes 全部卡）。
+# 多卡分支（just start <号> <号>…）：卡号读 git config branch.<分支>.ppasscards，范围取并集。
+# 用户看得到的改动（apps/**、assets/**、核心路径）：要先由产品负责人真机验收，交卡时给
+# --accepted "<时间>"，PR 正文写「产品负责人 <时间> 真机验收通过」；没给就只推分支、不开 PR。
 # 任何一步红：不推送，在 issue 写明停在哪并贴错误末尾，打 status:blocked，退出码非 0。
 # 前置不满足（不在卡 worktree、没提交、工作区不干净、落后 main）只报错退出，不打 blocked。
 # 环境: PPASS_NO_LOCK=1 不套 lockf；PPASS_HOOK_REPO 覆盖仓库。
@@ -10,6 +13,14 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=worker-lib.sh
 . "${HERE}/worker-lib.sh"
+
+ACCEPTED=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --accepted) ACCEPTED="${2:-}"; shift 2 || shift ;;
+    *) die "用法: just done [--accepted \"<产品负责人真机验收通过的时间>\"]" ;;
+  esac
+done
 
 command -v gh >/dev/null 2>&1 || die "找不到 gh"
 TOP="$(git rev-parse --show-toplevel 2>/dev/null)" || die "不在 git 仓库里"
@@ -23,6 +34,11 @@ GIT_DIR_ABS="$(cd "$(git rev-parse --absolute-git-dir)" && pwd -P)"
 COMMON_ABS="$(cd "$(git rev-parse --git-common-dir)" && pwd -P)"
 [ "$GIT_DIR_ABS" != "$COMMON_ABS" ] || die "你在主仓工作区里，不是卡 worktree" "cd 到 just start 给你的那个目录再跑 just done。"
 REPO="$(flow_repo)"
+# 这条分支关联的卡：主卡 + 分支配置里记的其余卡（与 tools/hooks/pre-commit 同口径）。
+CARDS="$(git config --get "branch.${BRANCH}.ppasscards" 2>/dev/null)" || CARDS=""
+case " ${CARDS} " in *" ${N} "*) ;; *) CARDS="${N}${CARDS:+ ${CARDS}}" ;; esac
+for c in $CARDS; do [[ "$c" =~ ^[0-9]+$ ]] || die "分支记录的卡号「${c}」不对" "git config --get branch.${BRANCH}.ppasscards"; done
+CARDS_SHOW="#$(printf '%s' "$CARDS" | sed 's/  */、#/g')"
 
 [ -z "$(git status --porcelain)" ] || die "工作区有未提交的改动" "$(git status --short | head -5)" \
   "先 git add + git commit -s；不该提交的改动撤掉。"
@@ -56,10 +72,12 @@ fail_blocked() { # fail_blocked <停在哪> <日志文件|空> [补充行]
       echo '```'
     fi
   } >"$tmp"
-  flow_comment "$N" "$tmp"
+  for c in $CARDS; do
+    flow_comment "$c" "$tmp"
+    flow_labels "$c" "status:blocked" "status:doing,status:review,status:ready"
+  done
   rm -f "$tmp"
-  flow_labels "$N" "status:blocked" "status:doing,status:review,status:ready"
-  printf '\n✗ 交卡失败，停在：%s。未推送，#%s 已打 status:blocked。\n' "$step" "$N" >&2
+  printf '\n✗ 交卡失败，停在：%s。未推送，%s 已打 status:blocked。\n' "$step" "$CARDS_SHOW" >&2
   [ -z "$extra" ] || printf '  %s\n' "$extra" >&2
   [ -z "$log" ] || { printf '  日志：%s/%s\n' "$EVID_SHOW" "$(basename "$log")" >&2; tail -n 15 "$log" >&2; }
   if [ "$cnt" -ge 3 ]; then
@@ -70,9 +88,18 @@ fail_blocked() { # fail_blocked <停在哪> <日志文件|空> [补充行]
   exit 1
 }
 
-flow_load_issue "$N"
-flow_parse_scope "$I_BODY"
-[ "${#GLOBS[@]}" -gt 0 ] || fail_blocked "读范围" "" "#${N} 没有可读的「范围」代码块"
+ALL_GLOBS=()
+IS_CORE=0
+TITLES=()
+for c in $CARDS; do
+  flow_load_issue "$c"
+  flow_parse_scope "$I_BODY"
+  [ "${#GLOBS[@]}" -gt 0 ] || fail_blocked "读范围" "" "#${c} 没有可读的「范围」代码块"
+  ALL_GLOBS+=("${GLOBS[@]}")
+  has_label core && IS_CORE=1
+  TITLES+=("$I_TITLE")
+done
+GLOBS=("${ALL_GLOBS[@]}")
 
 # ── 1. 改动清单只含范围内文件；核心判定 ───────────────────────────────
 FILES="$(git -c core.quotepath=false diff --name-only --no-renames origin/main...HEAD)"
@@ -89,8 +116,8 @@ if [ "${#OUTSIDE[@]}" -gt 0 ]; then
 撤掉越界改动重新交卡；确需改这些文件，just stuck ${N} \"需改范围外文件：…\"。"
 fi
 CORE="$(printf '%s\n' "$FILES" | bash "$FLOW_PATHS" core - "${TOP}/.github/core-paths.txt" 2>/dev/null)"
-if [ "$CORE" != "false" ] && ! has_label core; then
-  fail_blocked "核心判定" "" "改动命中核心路径（.github/core-paths.txt）而 #${N} 没有 core 标签：只写复现、根因和两个修法，撤回代码改动，just stuck ${N} \"命中核心：…\"。"
+if [ "$CORE" != "false" ] && [ "$IS_CORE" = 0 ]; then
+  fail_blocked "核心判定" "" "改动命中核心路径（.github/core-paths.txt）而 ${CARDS_SHOW} 都没有 core 标签：只写复现、根因和两个修法，撤回代码改动，just stuck ${N} \"命中核心：…\"。"
 fi
 
 # ── 2. 门禁：按改动路径挑，挑不出来才退回全量 just ci ──────────────────
@@ -208,18 +235,29 @@ git merge-base --is-ancestor origin/main HEAD ||
 PUSH_LOG="${EVID_DIR}/push.log"
 git push -u origin "HEAD:refs/heads/${BRANCH}" >"$PUSH_LOG" 2>&1 || fail_blocked "git push" "$PUSH_LOG"
 
-# ── 5. 回执 ───────────────────────────────────────────────────────────
+# ── 5. 回执（贴到每张卡）────────────────────────────────────────────────
 if [ "$VERIFY_STATE" = "passed" ]; then
   LEVEL="E1（${GATE}）+ E3（just verify ${N}）"
 else
   LEVEL="E1（${GATE}）；验收场景未经 just verify 自动验证，E3 需手工补"
+fi
+# 用户看得到的改动：App 与共享资源（apps/**、assets/**）或核心路径。要产品负责人真机验收后才开 PR。
+VISIBLE=0
+[ "$CORE" = "false" ] || VISIBLE=1
+[ "$(printf '%s\n' "$FILES" | bash "$FLOW_PATHS" hit - 'apps/**' 'assets/**' 2>/dev/null)" = "true" ] && VISIBLE=1
+ACCEPT_LINE=""
+if [ "$VISIBLE" = 1 ] && [ -n "$ACCEPTED" ]; then
+  ACCEPT_LINE="产品负责人 ${ACCEPTED} 真机验收通过"
+elif [ "$VISIBLE" = 0 ]; then
+  ACCEPT_LINE="用户看不到的改动（工具、测试、文档、内部代码），不需要真机验收"
 fi
 flow_ensure_review_label
 tmp="$(mktemp)"
 {
   echo "**worker 已交卡**"
   echo
-  echo "- 分支：\`${BRANCH}\`（已推送，未开 PR）"
+  if [ "$CARDS" != "$N" ]; then echo "- 关联卡：${CARDS_SHOW}（同一条功能分支，范围取并集）"; fi
+  echo "- 分支：\`${BRANCH}\`（已推送）"
   echo "- 提交："
   git log --format='  - `%h` %s' origin/main..HEAD
   echo "- 改动清单（只含范围内文件）："
@@ -238,15 +276,51 @@ tmp="$(mktemp)"
   else
     echo "- 验收：本仓暂无 \`just verify\`，未自动验证。"
   fi
+  [ -z "$ACCEPT_LINE" ] || echo "- 真机验收：${ACCEPT_LINE}"
   echo "- 证据等级：${LEVEL}"
   echo "- 证据目录（本机，不进 git）：\`${EVID_SHOW}\`"
 } >"$tmp"
-flow_comment "$N" "$tmp"
-rm -f "$tmp"
-flow_labels "$N" "status:review" "status:doing,status:blocked"
+for c in $CARDS; do
+  flow_comment "$c" "$tmp"
+  flow_labels "$c" "status:review" "status:doing,status:blocked"
+done
+RECEIPT="$tmp"
 rm -f "$FAILS_FILE"
 
 echo
-echo "✅ #${N} 已交卡：${BRANCH} 已推送，标签 → status:review，回执已贴。"
+echo "✅ ${CARDS_SHOW} 已交卡：${BRANCH} 已推送，标签 → status:review，回执已贴。"
 echo "   证据等级：${LEVEL}"
-echo "   下一步：开 PR（正文 closes #N + 证据），CI 绿后按卡的级别合入；然后 just start <下一张卡的 issue号>。"
+
+# ── 6. 开 PR（正文 closes 全部卡）──────────────────────────────────────
+if [ -z "$ACCEPT_LINE" ]; then
+  rm -f "$RECEIPT"
+  echo "   用户看得到的改动：没开 PR。先把改动装到真机，请产品负责人验收；"
+  echo "   通过后重跑：just done --accepted \"<验收时间，如 2026-11-04 15:30>\""
+  exit 0
+fi
+PR_URL="$(gh pr view "$BRANCH" -R "$REPO" --json url --jq .url 2>/dev/null)" || PR_URL=""
+if [ -n "$PR_URL" ]; then
+  rm -f "$RECEIPT"
+  echo "   PR 已存在：${PR_URL}（已推最新提交）"
+  exit 0
+fi
+if [ "$(git rev-list --count origin/main..HEAD)" = 1 ]; then
+  PR_TITLE="$(git log -1 --format=%s)"
+else
+  PR_TITLE="${BRANCH%%/*}: $(printf '%s' "${TITLES[0]}" | sed -e 's/^\[[^]]*\][[:space:]]*//') ($(printf '#%s ' $CARDS | sed 's/ $//'))"
+fi
+PR_BODY="$(mktemp)"
+{
+  for c in $CARDS; do echo "closes #${c}"; done
+  echo
+  echo "- 真机验收：${ACCEPT_LINE}"
+  sed -n '3,$p' "$RECEIPT" | grep -v '^- 真机验收：'
+} >"$PR_BODY"
+rm -f "$RECEIPT"
+PR_URL="$(gh pr create -R "$REPO" --base main --head "$BRANCH" --title "$PR_TITLE" --body-file "$PR_BODY" 2>&1)" || {
+  rm -f "$PR_BODY"
+  die "开 PR 失败：$(printf '%s' "$PR_URL" | tail -2 | tr '\n' ' ')" "分支已推送、回执已贴；手动开：gh pr create --head ${BRANCH}，正文 closes ${CARDS_SHOW}"
+}
+rm -f "$PR_BODY"
+echo "   PR：${PR_URL}"
+echo "   下一步：CI 红了修到绿；然后 just start <下一张卡的 issue号>。"
