@@ -399,7 +399,8 @@ internal fun PhotosScreen(
                 guide, computerName,
                 onAction = { onGuideAction(guide) },
                 onDismiss = onGuideDismiss,
-                modifier = Modifier.fillMaxWidth().padding(20.dp, 0.dp, 20.dp, 12.dp),
+                // 左右 12 与照片网格对齐。
+                modifier = Modifier.fillMaxWidth().padding(12.dp, 0.dp, 12.dp, 12.dp),
             )
         }
 
@@ -912,7 +913,7 @@ internal fun photosGuideOf(f: GuideFacts): PhotosGuide = when {
  */
 internal fun scopeEmptyHintShown(f: GuideFacts, inScope: Long?): Boolean = f.scopeOn && inScope == 0L
 
-/** 引导位提示条：图标 + 一句话 + 文字按钮，× 靠右（产品负责人 11-04：弱引导，不用整宽大按钮、不做成胶囊）。 */
+/** 引导位：一句话 + 动作 + ×，用现成提示条 [NoticeCard]（产品负责人 11-04）。 */
 @Composable
 private fun PhotosGuideCard(
     guide: PhotosGuide,
@@ -926,45 +927,18 @@ private fun PhotosGuideCard(
         PhotosGuide.EnableBackground -> stringResource(R.string.photos_guide_background)
         PhotosGuide.None -> return
     }
-    // 提示条：小圆角 + 浅底细描边；图标、文字、按钮从左紧挨着排，× 单独靠右。文字折行时按钮跟在右侧，不悬空。
-    Surface(
-        color = PPColor.WaitingBg,
-        shape = RoundedCornerShape(PPSize.RadiusControlSm),
-        border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Border),
-        modifier = modifier,
-    ) {
-        Row(Modifier.padding(start = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            androidx.compose.material3.Icon(
-                androidx.compose.ui.res.painterResource(
-                    if (guide == PhotosGuide.EnableScope) R.drawable.ic_guide_upload else R.drawable.ic_guide_battery,
-                ),
-                contentDescription = null,
-                tint = PPColor.Ink60,
-                modifier = Modifier.size(20.dp),
-            )
-            Row(Modifier.weight(1f).padding(start = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text,
-                    fontSize = 15.sp, lineHeight = 22.sp, color = PPColor.Ink,
-                    modifier = Modifier.weight(1f, fill = false).padding(vertical = 12.dp),
-                )
-                androidx.compose.material3.TextButton(
-                    onClick = onAction,
-                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
-                    colors = androidx.compose.material3.ButtonDefaults.textButtonColors(contentColor = PPColor.Ink),
-                ) {
-                    Text(stringResource(R.string.photos_guide_enable), fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-            // IconButton 自带 48dp 点击区；「关闭」只作无障碍标签，不显示成文字。
-            androidx.compose.material3.IconButton(onClick = onDismiss) {
-                androidx.compose.material3.Icon(
-                    androidx.compose.material.icons.Icons.Filled.Close,
-                    contentDescription = stringResource(R.string.photos_guide_close),
-                    tint = PPColor.Ink40,
-                )
-            }
-        }
+    // 复用现成提示条（NoticeCard 的 × 一行版式，C1）：外形、颜色、边距与设置页提示条一致，不另起组件。
+    Box(modifier) {
+        NoticeCard(
+            HomeNotice(
+                kind = HomeNoticeKind.PHOTOS_GUIDE,
+                body = text,
+                actionLabel = stringResource(R.string.photos_guide_enable),
+                onAction = onAction,
+                closeLabel = stringResource(R.string.photos_guide_close),
+                onClose = onDismiss,
+            ),
+        )
     }
 }
 

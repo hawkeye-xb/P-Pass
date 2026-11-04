@@ -46,7 +46,6 @@ object PPSize {
     val TapMin = 56.dp
     val RadiusCard = 20.dp
     val RadiusControl = 20.dp
-    val RadiusControlSm = 12.dp // tokens.json radius.control-sm
 }
 
 // Brand fonts (MOB-66): Newsreader for headlines/conclusion sentences,

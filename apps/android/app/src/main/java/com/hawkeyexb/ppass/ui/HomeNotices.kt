@@ -70,6 +70,9 @@ enum class HomeNoticeKind {
     /** #1263：后台备份没开——邀请开启。只在设置页（HomeScreen）渲染，不进 [NoticeHost]：照片页是浏览用的，
      *  顶部不放告示（10-19 原则）。不是问题，排在最后。 */
     ENABLE_BACKGROUND_BACKUP,
+
+    /** #1322：照片页引导位（开启自动备份 / 后台备份），照片页直接渲染，不进 [NoticeHost] 的优先级。 */
+    PHOTOS_GUIDE,
 }
 
 /** 优先级（越靠前越要紧）。UI-04c 口径：阻塞备份的 > 需要授权的 >
