@@ -93,28 +93,71 @@ if [ "$CORE" != "false" ] && ! has_label core; then
   fail_blocked "核心判定" "" "改动命中核心路径（.github/core-paths.txt）而 #${N} 没有 core 标签：只写复现、根因和两个修法，撤回代码改动，just stuck ${N} \"命中核心：…\"。"
 fi
 
-# ── 2. 门禁 ───────────────────────────────────────────────────────────
-docs_only=1
+# ── 2. 门禁：按改动路径挑，挑不出来才退回全量 just ci ──────────────────
+# 本地只跑改动涉及的检查；全量 just ci 是 PR 上 CI 的事（合入门槛），不在本地重复跑。
+#   纯文档                     → just ci-docs
+#   apps/android/**            → just android-test
+#   apps/ios/**、tools/ios/**  → just ios-test
+#   assets/i18n/**、strings*.xml → just mobile-static-check
+#   crates/<名>/**             → cargo nextest run -p <包名>
+#   其余（桌面、tools、.github、justfile…）任何一个挑不出来 → just ci
+GATES=()
+add_gate() { # 去重追加
+  local g
+  for g in ${GATES[@]+"${GATES[@]}"}; do [ "$g" = "$1" ] && return 0; done
+  GATES+=("$1")
+}
+FULL=0
+HAS_CODE=0
 while IFS= read -r f; do
   [ -n "$f" ] || continue
-  case "$f" in docs/* | *.md | release/notes/*) ;; *) docs_only=0 ;; esac
+  case "$f" in
+    docs/* | *.md | release/notes/*) continue ;;
+  esac
+  HAS_CODE=1
+  case "$f" in
+    apps/android/*)
+      add_gate "just android-test"
+      case "$f" in */strings*.xml) add_gate "just mobile-static-check" ;; esac
+      ;;
+    apps/ios/* | tools/ios/*) add_gate "just ios-test" ;;
+    assets/i18n/*) add_gate "just mobile-static-check" ;;
+    crates/*/*)
+      crate_dir="${f#crates/}"
+      crate_dir="${crate_dir%%/*}"
+      pkg="$(sed -n 's/^name *= *"\(.*\)"/\1/p' "crates/${crate_dir}/Cargo.toml" 2>/dev/null | head -1)"
+      if [ -n "$pkg" ]; then add_gate "cargo nextest run -p ${pkg}"; else FULL=1; fi
+      ;;
+    *) FULL=1 ;;
+  esac
 done <<EOF2
 $FILES
 EOF2
-if [ "$docs_only" = 1 ]; then GATE="just ci-docs"; else GATE="just ci"; fi
+if [ "$HAS_CODE" = 0 ]; then
+  GATES=("just ci-docs")
+elif [ "$FULL" = 1 ] || [ "${#GATES[@]}" -eq 0 ]; then
+  GATES=("just ci")
+fi
+GATE=""
+for g in "${GATES[@]}"; do GATE="${GATE:+${GATE} + }${g}"; done
 
 run_logged() { # run_logged <日志> <命令...>：重编译经 tools/heavy-lock 排队（可重入，#1308）
   local log="$1"
   shift
   if [ -z "${PPASS_NO_LOCK:-}" ]; then
-    "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/heavy-lock" "$@" >"$log" 2>&1
+    "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/heavy-lock" "$@" >>"$log" 2>&1
   else
-    "$@" >"$log" 2>&1
+    "$@" >>"$log" 2>&1
   fi
 }
 
 echo "==> ${GATE}（日志：${EVID_SHOW}/gate.log）"
-run_logged "${EVID_DIR}/gate.log" $GATE || fail_blocked "${GATE}" "${EVID_DIR}/gate.log"
+: >"${EVID_DIR}/gate.log"
+for g in "${GATES[@]}"; do
+  printf '\n==> %s\n' "$g" >>"${EVID_DIR}/gate.log"
+  # shellcheck disable=SC2086 # 刻意按空格拆成命令与参数
+  run_logged "${EVID_DIR}/gate.log" $g || fail_blocked "${g}" "${EVID_DIR}/gate.log"
+done
 GATE_TAIL="$(tail -n 5 "${EVID_DIR}/gate.log" | scrub)"
 
 # ── 3. 验收场景（just verify 存在才跑）──────────────────────────────────
