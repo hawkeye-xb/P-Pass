@@ -914,7 +914,7 @@ internal fun photosGuideOf(f: GuideFacts): PhotosGuide = when {
  */
 internal fun scopeEmptyHintShown(f: GuideFacts, inScope: Long?): Boolean = f.scopeOn && inScope == 0L
 
-/** 引导位：一句话 + 动作 + ×，用现成提示条 [NoticeCard]（产品负责人 11-04）。 */
+/** 引导位：一句话 + 动作 + ×，用现成提示条 [ClosableNoticeCard]（产品负责人 11-04）。 */
 @Composable
 private fun PhotosGuideCard(
     guide: PhotosGuide,
@@ -928,17 +928,14 @@ private fun PhotosGuideCard(
         PhotosGuide.EnableBackground -> stringResource(R.string.photos_guide_background)
         PhotosGuide.None -> return
     }
-    // 复用现成提示条（NoticeCard 的 × 一行版式，C1）：外形、颜色、边距与设置页提示条一致，不另起组件。
+    // 复用现成提示条（NoticeCard 的 × 一行版式 ClosableNoticeCard，C1）：外形、颜色、边距与设置页提示条一致，不另起组件。
     Box(modifier) {
-        NoticeCard(
-            HomeNotice(
-                kind = HomeNoticeKind.PHOTOS_GUIDE,
-                body = text,
-                actionLabel = stringResource(R.string.photos_guide_enable),
-                onAction = onAction,
-                closeLabel = stringResource(R.string.photos_guide_close),
-                onClose = onDismiss,
-            ),
+        ClosableNoticeCard(
+            body = text,
+            actionLabel = stringResource(R.string.photos_guide_enable),
+            onAction = onAction,
+            closeLabel = stringResource(R.string.photos_guide_close),
+            onClose = onDismiss,
         )
     }
 }
