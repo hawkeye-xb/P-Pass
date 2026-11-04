@@ -100,4 +100,24 @@ class PhotosGuideTest {
         assertTrue(homeCall.contains("mediaAccess == MediaAccess.PARTIAL -> R.string.auto_backup_rule_partial_hint"))
         assertTrue(homeCall.contains("mediaAccess == MediaAccess.NONE -> R.string.auto_backup_rule_none_hint"))
     }
+
+    /**
+     * 场景 B（产品负责人 2026-11-04）：拒绝后挑了照片（单张备份）进了照片页，用户自己去设置改成「全部」再回来——
+     * 自动备份保持关（用户没选过开启，不替他开）；引导卡是第一张「开启」；点它走开启链路（全部权限下不弹框、直接进选范围页）；不出红卡。
+     * 反证：回前台按权限替用户把开关打开（ON_RESUME 里写 rulePrefs），或「开启」在开关关着时绕过 onToggleRule，本条红。
+     */
+    @Test
+    fun user_grants_full_in_settings_after_picking_and_nothing_is_turned_on_for_them() {
+        val main = File("src/main/java/com/hawkeyexb/ppass/MainActivity.kt").readText()
+        // 开关关着：引导位是第一张（开启范围备份），与权限档无关
+        assertEquals(PhotosGuide.EnableScope, photosGuideOf(facts(scopeOn = false, firstUploaded = true)))
+        // 回前台只重读权限，不动开关
+        val resume = main.substringAfter("Lifecycle.Event.ON_RESUME -> {").substringBefore("resumeCount++")
+        assertTrue(resume.contains("mediaAccess = mediaAccess(context)"))
+        assertFalse("不替用户开自动备份", resume.contains("rulePrefs.set("))
+        // 「开启」：开关关着 → 走开启链路；全部权限下开启链路不弹框、直接开并进选范围页
+        val action = main.substringAfter("onGuideAction = { g ->").substringBefore("PhotosGuide.EnableBackground")
+        assertTrue(action.contains("if (ruleOn) enterBucketPicker(s.pairing, firstTime = false) else onToggleRule(s.pairing, true)"))
+        // 全部权限下 onToggleRule 不弹框、直接开并进选范围页：由 #1353 的 RuleEnableWhenPartialTest（Apply 分支）钉住，这里不重复解析它的实现。
+    }
 }
