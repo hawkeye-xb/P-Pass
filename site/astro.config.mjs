@@ -22,4 +22,13 @@ export default defineConfig({
       prefixDefaultLocale: false,
     },
   },
+  markdown: {
+    shikiConfig: {
+      // Astro's default github-dark theme draws comments in #6a737d on
+      // #24292e (3.04:1), below WCAG AA for body text (#1133). The
+      // high-contrast variant keeps the GitHub palette while its comment
+      // colour (#bdc4cc on #0a0c10) reaches 11.12:1.
+      theme: 'github-dark-high-contrast',
+    },
+  },
 });
