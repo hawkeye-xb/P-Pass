@@ -3,9 +3,10 @@
 # 说明见 docs/runbook/local-hooks.md。
 #
 #   batch/*                         不拦（owner 的批分支）
-#   <type>/<issue号>-<slug>         查该 issue：
-#     - 暂存改动命中核心（tools/ci-paths.sh core，规则 .github/core-paths.txt）且 issue 没有 `core` 标签 → 拒绝
-#     - 暂存改动有文件不在 issue「范围」代码块的路径/glob 里 → 拒绝；没有范围代码块 → 拒绝
+#   <type>/<issue号>-<slug>         查该 issue；多卡分支查分支记录的每张卡（git config branch.<分支>.ppasscards，
+#                                   just start <号> <号>… 写入），范围取并集：
+#     - 暂存改动命中核心（tools/ci-paths.sh core，规则 .github/core-paths.txt）且没有一张卡带 `core` 标签 → 拒绝
+#     - 暂存改动有文件不在这些卡「范围」代码块的路径/glob 并集里 → 拒绝；任一张卡没有范围代码块 → 拒绝
 #     - 卡分支在主仓工作区（不是 linked worktree）里 → 拒绝
 #     - 落后 origin/main 超过 PPASS_HOOK_MAX_BEHIND（默认 20）个提交，或 main 上已有新提交改过范围内
 #       的文件 → 拒绝（现取 origin/main；取不到只告警）
@@ -112,61 +113,76 @@ fi
 [[ "$REPO" =~ ^[^/[:space:]]+/[^/[:space:]]+$ ]] ||
   deny "解析不出 GitHub 仓库（origin URL 不认识）" "设 PPASS_HOOK_REPO=<owner>/<repo> 再提交。"
 
-command -v gh >/dev/null 2>&1 ||
-  deny "找不到 gh，查不了 #${ISSUE} 的标签与范围，按拒绝处理" "装好并登录 gh（gh auth login）后再提交。"
-if ! OUT="$(gh issue view "$ISSUE" -R "$REPO" --json labels,body \
-  --jq '"labels:" + ([.labels[].name] | join(",")), .body' 2>&1)"; then
-  deny "查询 ${REPO}#${ISSUE} 失败（离线、没登录或 issue 不存在），按拒绝处理" \
-    "gh 输出：$(printf '%s' "$OUT" | head -3 | tr '\n' ' ')"
-fi
-OUT="$(printf '%s\n' "$OUT" | tr -d '\r')"
-LABELS="$(printf '%s\n' "$OUT" | sed -n '1s/^labels://p')"
-BODY="$(printf '%s\n' "$OUT" | sed '1d')"
+# 这条分支关联的卡：主卡（分支名里的号）+ just start 多卡时记在分支配置里的其余卡。
+CARDS="$(git config --get "branch.${BRANCH}.ppasscards" 2>/dev/null)" || CARDS=""
+case " ${CARDS} " in *" ${ISSUE} "*) ;; *) CARDS="${ISSUE}${CARDS:+ ${CARDS}}" ;; esac
+CARDS_SHOW="#$(printf '%s' "$CARDS" | sed 's/  */、#/g')"
 
-# ── 核心 ─────────────────────────────────────────────────────────────
-CORE_ERR="$(printf '%s\n' "$FILES" | bash "$PATHS" core - "$RULES" 2>&1 >/dev/null)"
-CORE="$(printf '%s\n' "$FILES" | bash "$PATHS" core - "$RULES" 2>/dev/null)"
-if [ "$CORE" != "false" ]; then
-  case ",${LABELS}," in
-    *,core,*) printf 'ok: #%s 带 core 标签，放行核心改动\n' "$ISSUE" >&2 ;;
-    *)
-      HITS=()
-      while IFS= read -r l; do
-        case "$l" in 核心：*) HITS+=("$l") ;; esac
-      done <<EOF
-$CORE_ERR
-EOF
-      deny "这是核心改动：按 AGENTS.md 红线 6 只写复现/根因/两个修法，不改代码" \
-        ${HITS[@]+"${HITS[@]}"} \
-        "做法：git restore --staged <上面的文件> 并撤回改动；在 #${ISSUE} 里写复现、根因和两个修法，打 status:blocked。" \
-        "owner 定下由谁实现后，会给 #${ISSUE} 打 core 标签，届时才放行。"
-      ;;
-  esac
-fi
+command -v gh >/dev/null 2>&1 ||
+  deny "找不到 gh，查不了 ${CARDS_SHOW} 的标签与范围，按拒绝处理" "装好并登录 gh（gh auth login）后再提交。"
 
 # ── 范围 ─────────────────────────────────────────────────────────────
-# 「范围」标题之后的第一个 ``` 代码块；代码块之前先碰到下一个 **标题** 或 # 标题，就算没有。
-SCOPE="$(printf '%s\n' "$BODY" | awk '
+# parse_scope <issue 正文>：「范围」标题之后的第一个 ``` 代码块，追加进 GLOBS；读到了才返回成功。
+# 代码块之前先碰到下一个 **标题** 或 # 标题，就算没有。awk 与 tools/flow/worker-lib.sh 逐字相同。
+parse_scope() {
+  local scope g n=0
+  scope="$(printf '%s\n' "$1" | awk '
   !insec && /^\*\*范围/ { insec = 1; next }
   insec && !infence && /^[[:space:]]*```/ { infence = 1; found = 1; next }
   infence && /^[[:space:]]*```/ { exit }
   infence { print; next }
   insec && (/^\*\*[^*]+\*\*/ || /^#/) { exit }
 ')"
-GLOBS=()
-while IFS= read -r g; do
-  g="$(trim "$g")"
-  case "$g" in "" | "#"*) continue ;; esac
-  g="${g#./}"
-  case "$g" in */) g="${g}**" ;; esac
-  GLOBS+=("$g")
-done <<EOF
-$SCOPE
+  while IFS= read -r g; do
+    g="$(trim "$g")"
+    case "$g" in "" | "#"*) continue ;; esac
+    g="${g#./}"
+    case "$g" in */) g="${g}**" ;; esac
+    GLOBS+=("$g")
+    n=$((n + 1))
+  done <<EOF
+$scope
 EOF
-[ "${#GLOBS[@]}" -gt 0 ] ||
-  deny "#${ISSUE} 没有可读的「范围」" \
-    "issue 正文要有「**范围（只许动这些）**：」，下面跟一个 \`\`\` 代码块，一行一个路径或 glob（** 跨目录，* 不跨 /）。" \
-    "让 owner 先把范围补进 issue，再提交。"
+  [ "$n" -gt 0 ]
+}
+
+GLOBS=()
+CORE_CARD=""
+for c in $CARDS; do
+  [[ "$c" =~ ^[0-9]+$ ]] ||
+    deny "分支 ${BRANCH} 记录的卡号「${c}」不对" "查看：git config --get branch.${BRANCH}.ppasscards（空格分隔的 issue 号）"
+  if ! OUT="$(gh issue view "$c" -R "$REPO" --json labels,body \
+    --jq '"labels:" + ([.labels[].name] | join(",")), .body' 2>&1)"; then
+    deny "查询 ${REPO}#${c} 失败（离线、没登录或 issue 不存在），按拒绝处理" \
+      "gh 输出：$(printf '%s' "$OUT" | head -3 | tr '\n' ' ')"
+  fi
+  OUT="$(printf '%s\n' "$OUT" | tr -d '\r')"
+  case ",$(printf '%s\n' "$OUT" | sed -n '1s/^labels://p')," in *,core,*) CORE_CARD="${CORE_CARD:-$c}" ;; esac
+  parse_scope "$(printf '%s\n' "$OUT" | sed '1d')" ||
+    deny "#${c} 没有可读的「范围」" \
+      "issue 正文要有「**范围（只许动这些）**：」，下面跟一个 \`\`\` 代码块，一行一个路径或 glob（** 跨目录，* 不跨 /）。" \
+      "让 owner 先把范围补进 issue，再提交。"
+done
+
+# ── 核心 ─────────────────────────────────────────────────────────────
+CORE_ERR="$(printf '%s\n' "$FILES" | bash "$PATHS" core - "$RULES" 2>&1 >/dev/null)"
+CORE="$(printf '%s\n' "$FILES" | bash "$PATHS" core - "$RULES" 2>/dev/null)"
+if [ "$CORE" != "false" ]; then
+  if [ -n "$CORE_CARD" ]; then
+    printf 'ok: #%s 带 core 标签，放行核心改动\n' "$CORE_CARD" >&2
+  else
+    HITS=()
+    while IFS= read -r l; do
+      case "$l" in 核心：*) HITS+=("$l") ;; esac
+    done <<EOF
+$CORE_ERR
+EOF
+    deny "这是核心改动：按 AGENTS.md 红线 6 只写复现/根因/两个修法，不改代码" \
+      ${HITS[@]+"${HITS[@]}"} \
+      "做法：git restore --staged <上面的文件> 并撤回改动；在 #${ISSUE} 里写复现、根因和两个修法，打 status:blocked。" \
+      "owner 定下由谁实现后，会给 #${ISSUE} 打 core 标签，届时才放行。"
+  fi
+fi
 
 # ── 落后 main ────────────────────────────────────────────────────────
 # 两种情况拒绝：落后超过阈值；或 main 上已有本卡还没拿到的提交改过范围内的文件（在旧代码上
@@ -204,7 +220,7 @@ done <<EOF
 $FILES
 EOF
 if [ "${#OUTSIDE[@]}" -gt 0 ]; then
-  deny "有 ${#OUTSIDE[@]} 个文件不在 #${ISSUE} 的「范围」里" \
+  deny "有 ${#OUTSIDE[@]} 个文件不在 ${CARDS_SHOW} 的「范围」里" \
     "${OUTSIDE[@]/#/越界：}" \
     "范围：${GLOBS[*]}" \
     "做法：git restore --staged <越界文件>；确需扩大，先让 owner 改 issue 的范围，再提交。"

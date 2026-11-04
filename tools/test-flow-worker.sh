@@ -104,6 +104,20 @@ case "$1 $2" in
       shift
     done
     ;;
+  "pr view")
+    [ -e "$G/pr.created" ] && [ "$(cat "$G/pr.created")" = "$3" ] && { echo "https://example.invalid/pr/1"; exit 0; }
+    exit 1 ;;
+  "pr create")
+    shift 2
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --head) printf '%s' "$2" >"$G/pr.created"; shift 2 ;;
+        --title) printf '%s' "$2" >"$G/pr.title"; shift 2 ;;
+        --body-file) cp "$2" "$G/pr.body"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+    echo "https://example.invalid/pr/1" ;;
   "api repos/o/r/issues/"*) [ -f "$G/${2##*/}.type" ] && cat "$G/${2##*/}.type"; exit 0 ;;
   *)
     case "$1" in
@@ -196,7 +210,7 @@ comments_of() { cat "${FAKE_GH}/$1.comments" 2>/dev/null; }
 on_origin() { git --git-dir="${TMP}/origin.git" rev-parse -q --verify "refs/heads/$1" >/dev/null; }
 START() { (cd "$M" && bash tools/flow/worker-start.sh "$@"); }
 STUCK() { (cd "$M" && bash tools/flow/worker-stuck.sh "$@"); }
-DONE() { (cd "$1" && bash tools/flow/worker-done.sh); }
+DONE() { local d="$1"; shift; (cd "$d" && bash tools/flow/worker-done.sh "$@"); }
 REAL_BASH="$(command -v bash)"
 DOCTOR() { (cd "$M" && "$REAL_BASH" tools/flow/doctor.sh); }
 
@@ -483,6 +497,50 @@ git -C "$M" config --unset core.hooksPath || true
 if STUCK 31 "需要写私仓，本机是协作者模式" >/dev/null 2>&1; then ok "doctor 不通过时 just stuck 仍可用（协作者模式 → stuck）"; else bad "doctor 不通过时 stuck 也失败了"; fi
 comments_of 31 | grep -q "本机是协作者模式" && ok "stuck 评论写明协作者模式" || bad "stuck 评论缺协作者模式"
 (cd "$M" && bash tools/hooks/install.sh >/dev/null 2>&1)
+
+# ── 多卡一条功能分支（#1376）────────────────────────────────────────────
+echo "== 多卡分支 =="
+issue 51 "status:ready" "[T-51] multi a" "src/**" "Bug"
+issue 52 "status:ready" "[T-52] multi b" "docs/**" "Feature"
+issue 53 "status:inbox" "[T-53] not ready" "core/**" "Bug"
+if START 51 53 >"${TMP}/o51x" 2>&1; then bad "多卡里有一张不是 ready 也领了"; else ok "多卡：有一张不合格整批不领"; fi
+has_lbl 51 "status:ready" && [ ! -d "${PPASS_WT_ROOT}/51-multi-a" ] && ok "  整批不领时第一张卡没被改、没建目录" || bad "整批不领却留了半截"
+OUT="$(START 51 52 --name "Onboarding Gate" 2>&1)" || bad "多卡领卡失败：$OUT"
+MW="${PPASS_WT_ROOT}/51-onboarding-gate"
+[ "$(git -C "$MW" symbolic-ref --short HEAD 2>/dev/null)" = "feat/51-onboarding-gate" ] &&
+  ok "多卡：一条分支，号取第一张、名取 --name、有 Feature 就 feat/" || bad "多卡分支名不对：$(git -C "$MW" symbolic-ref --short HEAD 2>&1)"
+[ "$(git -C "$MW" config --get branch.feat/51-onboarding-gate.ppasscards)" = "51 52" ] &&
+  ok "多卡：分支配置记下了两张卡" || bad "分支配置没记卡号"
+has_lbl 51 "status:doing" && has_lbl 52 "status:doing" && ok "多卡：两张卡都转 doing" || bad "多卡标签不对：$(labels_of 51) / $(labels_of 52)"
+printf '%s' "$OUT" | grep -q 'src/\*\*' && printf '%s' "$OUT" | grep -q 'docs/\*\*' && ok "多卡：打印的范围是并集" || bad "多卡范围没取并集"
+commit_file "$MW" src/m.txt
+commit_file "$MW" docs/m.md
+if DONE "$MW" >"${TMP}/o51" 2>&1; then ok "多卡：两张卡范围内的文件都放行"; else bad "多卡交卡失败：$(tail -5 "${TMP}/o51")"; fi
+comments_of 51 | grep -q "worker 已交卡" && comments_of 52 | grep -q "worker 已交卡" && ok "多卡：回执贴到每张卡" || bad "回执没贴到每张卡"
+has_lbl 51 "status:review" && has_lbl 52 "status:review" && ok "多卡：两张卡都转 review" || bad "多卡交卡后标签不对"
+grep -qx 'closes #51' "${FAKE_GH}/pr.body" && grep -qx 'closes #52' "${FAKE_GH}/pr.body" &&
+  ok "多卡：PR 正文 closes 两张卡" || bad "PR 正文没 closes 两张卡：$(cat "${FAKE_GH}/pr.body" 2>/dev/null | head -5)"
+grep -q '不需要真机验收' "${FAKE_GH}/pr.body" && ok "用户看不到的改动：PR 写明不需要真机验收" || bad "PR 没写验收说明"
+# 反证：同样的改动，分支只记一张卡 → 第二张卡范围内的文件算越界
+issue 54 "status:ready" "[T-54] single" "src/**" "Bug"
+SW="$(START 54 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/54-"*)"
+commit_file "$SW" src/m.txt
+commit_file "$SW" docs/m.md
+if DONE "$SW" >"${TMP}/o54" 2>&1; then bad "单卡分支放行了别的卡范围里的文件"; else ok "反证：只认一张卡时 docs/ 越界被拒"; fi
+
+# 用户看得到的改动：没给验收时间 → 只推分支、不开 PR；给了 → PR 写「产品负责人 <时间> 真机验收通过」
+issue 55 "status:ready" "[T-55] visible" "apps/**" "Bug"
+VW="$(START 55 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/55-"*)"
+mkdir -p "$VW/apps/x"
+commit_file "$VW" apps/x/ui.txt
+rm -f "${FAKE_GH}/pr.body" "${FAKE_GH}/pr.created"
+DONE "$VW" >"${TMP}/o55" 2>&1 || bad "可见改动交卡失败：$(tail -5 "${TMP}/o55")"
+on_origin "fix/55-visible" && ok "可见改动：分支已推送" || bad "可见改动没推分支"
+[ ! -e "${FAKE_GH}/pr.created" ] && ok "可见改动没给验收时间：不开 PR" || bad "没验收就开了 PR"
+grep -q 'just done --accepted' "${TMP}/o55" && ok "  提示先验收再 --accepted" || bad "没提示先验收"
+DONE "$VW" --accepted "2026-11-04 15:30" >"${TMP}/o55b" 2>&1 || bad "带验收时间交卡失败：$(tail -5 "${TMP}/o55b")"
+grep -qF '产品负责人 2026-11-04 15:30 真机验收通过' "${FAKE_GH}/pr.body" 2>/dev/null &&
+  ok "反证：给了验收时间 → 开 PR，正文写明验收" || bad "给了验收时间仍没开 PR 或正文缺验收行"
 
 echo
 echo "通过 ${PASS}，失败 ${FAIL}"

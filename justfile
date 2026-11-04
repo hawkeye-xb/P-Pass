@@ -496,13 +496,15 @@ test-dogfood-assets:
 # 标签流转、worktree、推送、回执全由命令完成。说明见 AGENTS.md「交付流程」。
 
 # 领卡：校验 ready + 有范围 → 建 worktree 与分支 → ready→doing，打印下一步。
+# 同一个功能的几张卡领到一条分支：just start <号> <号>… [--name <功能名>]（范围取并集）。
 start n *args:
     bash tools/flow/worker-start.sh {{n}} {{args}}
 
-# 交卡（在卡 worktree 里跑）：门禁 + just verify（有则跑）+ 范围核对，全绿才推送并贴回执，
-# doing→review；任何一步红：不推送、issue 写明停在哪、打 blocked。
-done:
-    bash tools/flow/worker-done.sh
+# 交卡（在卡 worktree 里跑）：门禁 + just verify（有则跑）+ 范围核对，全绿才推送、每张卡贴回执，
+# doing→review，开 PR（closes 全部卡）；任何一步红：不推送、issue 写明停在哪、打 blocked。
+# 用户看得到的改动先真机验收：just done --accepted "<验收时间>"，没给只推分支、不开 PR。
+done *args:
+    bash tools/flow/worker-done.sh {{args}}
 
 # 四种必须停下的情况的统一出口：命中核心 / 需改范围外文件 / 没有验收场景 / 连红 3 次。
 stuck n reason:
