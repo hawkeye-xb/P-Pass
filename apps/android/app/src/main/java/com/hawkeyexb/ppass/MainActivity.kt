@@ -117,6 +117,10 @@ import com.hawkeyexb.ppass.ui.HomeScreen
 import com.hawkeyexb.ppass.ui.NoticeHost
 import com.hawkeyexb.ppass.ui.LoaderTimelineChannel
 import com.hawkeyexb.ppass.ui.PhotosScreen
+import com.hawkeyexb.ppass.ui.PhotosGuide
+import com.hawkeyexb.ppass.ui.GuideFacts
+import com.hawkeyexb.ppass.ui.photosGuideOf
+import com.hawkeyexb.ppass.ui.scopeEmptyHintShown
 import com.hawkeyexb.ppass.ui.TimelineLoader
 import com.hawkeyexb.ppass.ui.TimelineSubscriptionHolder
 import com.hawkeyexb.ppass.ui.TwoTabs
@@ -259,7 +263,7 @@ internal fun mediaPermissionLanding(allGranted: Boolean, access: MediaAccess): M
  * #1263：「只备份某天起的照片」那一档一律写日期（10-29 文案定稿）：没存过 → 今天（保存时落的就是今天 0 点，见
  * [sinceToSave]）；存过 → 存的那一天。几天以后看也还是那一天，不会说成「从今天起」。
  */
-private fun scopeSinceDate(sinceSec: Long?, nowMs: Long): String {
+internal fun scopeSinceDate(sinceSec: Long?, nowMs: Long): String {
     val sec = sinceSec ?: startOfLocalDaySec(nowMs)
     val date = java.time.Instant.ofEpochSecond(sec).atZone(java.time.ZoneId.systemDefault()).toLocalDate()
     val pattern = android.text.format.DateFormat.getBestDateTimePattern(java.util.Locale.getDefault(), "MMMd")
@@ -1221,6 +1225,8 @@ fun PPassApp() {
             var scopeUnreadable by remember { mutableStateOf(false) }
             // #1263：范围的开始时间（设置行的值「3 个相册 · 10月29日起的照片」）。
             var scopeSince by remember { mutableStateOf(BackupScopeStore(context).sinceSec()) }
+            // #1322：范围备份开着 = 「自动备份」规则开、且至少选了一个相册（读不出来按「有」，设置行另说「读不到」）。
+            val scopeOn = ruleOn && (scopeUnreadable || (selectedBucketCount ?: 0) > 0)
             LaunchedEffect(mediaAccess, resumeCount) {
                 scopeUnreadable = withContext(Dispatchers.IO) { BackupScopeStore(context).readScope() is ScopeRead.Unreadable }
                 scopeSince = withContext(Dispatchers.IO) { BackupScopeStore(context).sinceSec() }
@@ -1299,25 +1305,44 @@ fun PPassApp() {
                     }
                 } else null,
                 photos = {
+                    val guideFacts = GuideFacts(
+                        scopeOn = scopeOn,
+                        firstUploaded = (holder.triplet.value?.lastSuccessAt ?: 0L) > 0L,
+                        backgroundOn = userRequestedBackgroundBackup,
+                        finished = offerDismissed,
+                    )
                     PhotosScreen(
                         timeline,
                         onViewerOpenChange = { photoViewerOpen = it },
                         pairingLost = holder.pairingLost.value,
                         onReconnect = onRepairPairing,
                         daysUnreachable = daysUnreachable,
-                        // #1263：没选相册 → 引导 + 「选择相册」（直达选范围页）；电脑上还没有照片时只有一种说法
-                        // （home_empty_albums，10-29 文案定稿 C8）。
+                        // #1322：引导位按当前开关现算（方案结论 6）；「还没有选择相册」并入「开启范围备份」这一步。
                         // 范围存了但读不出来不算「没选」（设置行另说「读不到」）。
-                        noAlbums = ruleOn && !scopeUnreadable && (selectedBucketCount ?: 0) == 0,
-                        onChooseAlbums = { enterBucketPicker(s.pairing, firstTime = false) },
-                        autoBackupRuleOn = ruleOn,
+                        guide = photosGuideOf(guideFacts),
                         computerName = s.pairing.storageDeviceName,
-                        onEnableAutoBackup = { onToggleRule(s.pairing, true) },
-                        onPickPhotos = {
-                            pickPhotosLauncher.launch(
-                                androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
-                            )
+                        onGuideAction = { g ->
+                            when (g) {
+                                // 开关开着、只是没选相册 → 直达选范围页；开关关着 → 走开启链路（权限 → 选范围页）。
+                                PhotosGuide.EnableScope ->
+                                    if (ruleOn) enterBucketPicker(s.pairing, firstTime = false) else onToggleRule(s.pairing, true)
+                                PhotosGuide.EnableBackground -> onEnableFromOffer()
+                                PhotosGuide.None -> Unit
+                            }
                         },
+                        onGuideDismiss = {
+                            // × = 「onboarding 已走完」，按手机记；写不下来卡片留着、提示（#1039 同口径）。
+                            if (settingsWriter.write("onboardingGuide", "dismissed") { offerStore.dismiss() }) {
+                                offerDismissed = true
+                                PLog.i("PPassGuide", "photos-guide: dismissed")
+                            }
+                        },
+                        // 方案结论 7：范围备份开着、范围里一张照片都还没有 → 一行现状。triplet 未算出来（null）时不说。
+                        scopeEmptyHint = if (scopeEmptyHintShown(guideFacts, holder.triplet.value?.n)) {
+                            scopeSince?.let {
+                                context.getString(R.string.photos_scope_empty_since, scopeSinceDate(it, System.currentTimeMillis()), s.pairing.storageDeviceName)
+                            } ?: context.getString(R.string.photos_scope_empty_all, s.pairing.storageDeviceName)
+                        } else null,
                     )
                 },
                 backup = {

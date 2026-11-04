@@ -128,37 +128,7 @@ fun NoticeCard(notice: HomeNotice) {
     val bg = if (notice.critical) PPColor.ActBg else PPColor.WaitingBg
     val bodyColor = if (notice.critical) PPColor.Act else PPColor.Ink60
     if (notice.closeLabel != null) {
-        // C1（10-30 用户定版）：一行——左边正文、右边「开启」与 ×，都垂直居中；正文放不下只让正文折行。
-        Surface(color = bg, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(start = 16.dp, top = 2.dp, bottom = 2.dp),
-            ) {
-                Text(
-                    notice.body,
-                    fontSize = 13.5.sp, lineHeight = 20.sp, color = bodyColor,
-                    modifier = Modifier.weight(1f).padding(vertical = 10.dp),
-                )
-                if (notice.actionLabel != null) {
-                    Text(
-                        notice.actionLabel,
-                        fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
-                        textDecoration = TextDecoration.Underline,
-                        modifier = Modifier.clickable(onClick = notice.onAction)
-                            .padding(horizontal = 8.dp, vertical = 14.dp),
-                    )
-                }
-                // IconButton 自带 48dp 最小触控区（Material 规范），图标本身 20dp。
-                IconButton(onClick = notice.onClose) {
-                    Icon(
-                        Icons.Filled.Close,
-                        contentDescription = notice.closeLabel,
-                        tint = PPColor.Ink40,
-                        modifier = Modifier.size(20.dp),
-                    )
-                }
-            }
-        }
+        ClosableNoticeCard(notice.body, notice.actionLabel, notice.onAction, notice.closeLabel, notice.onClose, notice.critical)
         return
     }
     Surface(
@@ -190,6 +160,50 @@ fun NoticeCard(notice: HomeNotice) {
                     fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
                     textDecoration = TextDecoration.Underline,
                     modifier = Modifier.clickable(onClick = notice.onAction).padding(4.dp),
+                )
+            }
+        }
+    }
+}
+
+/** C1（10-30 用户定版）的一行版式：左边正文、右边动作与 ×。设置页带 × 的提示条与照片页引导位（#1322）共用。 */
+@Composable
+fun ClosableNoticeCard(
+    body: String,
+    actionLabel: String?,
+    onAction: () -> Unit,
+    closeLabel: String,
+    onClose: () -> Unit,
+    critical: Boolean = false,
+) {
+    val bg = if (critical) PPColor.ActBg else PPColor.WaitingBg
+    val bodyColor = if (critical) PPColor.Act else PPColor.Ink60
+    Surface(color = bg, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(start = 16.dp, top = 2.dp, bottom = 2.dp),
+        ) {
+            Text(
+                body,
+                fontSize = 13.5.sp, lineHeight = 20.sp, color = bodyColor,
+                modifier = Modifier.weight(1f).padding(vertical = 10.dp),
+            )
+            if (actionLabel != null) {
+                Text(
+                    actionLabel,
+                    fontSize = 14.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
+                    textDecoration = TextDecoration.Underline,
+                    modifier = Modifier.clickable(onClick = onAction)
+                        .padding(horizontal = 8.dp, vertical = 14.dp),
+                )
+            }
+            // IconButton 自带 48dp 最小触控区（Material 规范），图标本身 20dp。
+            IconButton(onClick = onClose) {
+                Icon(
+                    Icons.Filled.Close,
+                    contentDescription = closeLabel,
+                    tint = PPColor.Ink40,
+                    modifier = Modifier.size(20.dp),
                 )
             }
         }

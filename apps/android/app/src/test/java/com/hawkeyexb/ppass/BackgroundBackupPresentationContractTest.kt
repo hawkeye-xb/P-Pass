@@ -33,6 +33,8 @@ class BackgroundBackupPresentationContractTest {
         val host = source("ui/HomeNotices.kt").substringAfter("fun NoticeHost(")
         assertFalse(host.contains("background_backup_offer"))
         assertFalse(source("ui/PhotosScreen.kt").contains("background_backup_offer"))
+        // #1322：「App 关着也能自动备份」回到照片页引导位第二步，走卡片自己的白名单申请（弹框前不写意图）。
+        assertTrue(main.contains("PhotosGuide.EnableBackground -> onEnableFromOffer()"))
     }
 
     @Test
