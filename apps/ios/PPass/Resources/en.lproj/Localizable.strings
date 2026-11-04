@@ -10,7 +10,7 @@
 "scan_manual_link" = "Can't scan? Pair manually";
 "decision_connected" = "Connected to %1$@";
 "decision_title" = "Choose the photos to back up automatically";
-"decision_destination" = "Once you choose what to back up, photos are sent to %1$@ automatically.";
+"decision_destination" = "After you choose albums and a time range, photos in that range are sent to %1$@ each time you open the app.";
 "decision_choose_scope" = "Choose what to back up";
 "decision_choose_scope_note" = "Requires access to all photos";
 "decision_pick_photos" = "Pick a few to try first";

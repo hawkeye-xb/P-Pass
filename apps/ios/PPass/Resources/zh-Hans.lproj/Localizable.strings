@@ -10,7 +10,7 @@
 "scan_manual_link" = "无法扫码？手动配对";
 "decision_connected" = "已连上 %1$@";
 "decision_title" = "选择要自动备份的照片";
-"decision_destination" = "选好范围后，照片会自动传到 %1$@。";
+"decision_destination" = "选好相册和时间范围后，每次打开 App，范围内的照片会自动传到 %1$@。";
 "decision_choose_scope" = "选择备份范围";
 "decision_choose_scope_note" = "需要允许访问全部照片";
 "decision_pick_photos" = "先挑几张试试";
