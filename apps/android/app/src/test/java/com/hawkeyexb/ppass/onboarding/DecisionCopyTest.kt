@@ -19,7 +19,7 @@ class DecisionCopyTest {
         val ui = File("src/main/java/com/hawkeyexb/ppass/ui/DecisionScreen.kt").readText()
         assertTrue(ui.contains("stringResource(R.string.decision_destination, name)"))
         assertTrue(ui.contains("computerName.ifBlank { stringResource(R.string.storage_device_default) }"))
-        assertEquals("选好范围后，照片会自动传到 %1\$s。", strings("values-zh")["decision_destination"])
+        assertEquals("选好相册和时间范围后，每次打开 App，范围内的照片会自动传到 %1\$s。", strings("values-zh")["decision_destination"])
         assertTrue(strings("values")["decision_destination"]!!.contains("%1\$s"))
     }
 
