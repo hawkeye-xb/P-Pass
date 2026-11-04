@@ -57,7 +57,7 @@ struct PhotosScreen: View {
     /// 引导位（对位 Android `PhotosGuideCard`）：一句话 + 动作 + ×，用现成提示条 `NoticeRow`。
     /// 第一步按钮「开启」（已是部分照片权限时「去设置」）；第二步：系统「后台 App 刷新」没开 →「去设置」，已放行 →「开启」。
     private func guideCard(_ guide: PhotosGuide) -> some View {
-        var text = guide == .enableScope ? L.f("photos_guide_scope", app.desktopName ?? L.s("storage_device_default")) : L.s("photos_guide_background")
+        var text = guide == .enableScope ? L.s("photos_guide_scope") : L.s("photos_guide_background")
         // 部分照片权限、按钮是「去设置」：正文补同一句路径说明（与决定页同一说法）。
         if guide == .enableScope, app.scopeGuideActionKey != "photos_guide_enable" { text += "\n" + L.s("photo_access_change_later_hint") }
         let action = guide == .enableScope ? L.s(app.scopeGuideActionKey) : L.s(app.backgroundGuideActionKey)
