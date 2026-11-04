@@ -260,11 +260,26 @@ jobs:
     if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # 增量编译产物在无缓存的一次性 runner 上纯属占盘（不缓存 target/，见下）。
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Disk report (start)
         run: df -h / | tail -1
+
+      # #1371：本 job 的 target/ 实测 34G（nextest --all-features，2026-11-04 run
+      # 41808196090；windows / macOS 交叉 check 只增 ~1G），而 GitHub 托管 Linux
+      # runner 的起始余量因镜像批次而异，余量小的那批会在编译中途报
+      # No space left on device（#1354、#1368，重跑换到大盘 runner 才过）。
+      # 标准做法：开头删 runner 自带、本仓用不到的大目录（社区通行写法）。
+      # 只删 dotnet / android / ghc / CodeQL，不动 /usr/local/share/boost 等可能
+      # 被系统依赖的目录；失败不阻塞。
+      - name: Free runner disk (remove unused preinstalled toolchains)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h / | tail -1
 
       - name: Set Rust toolchain from rust-toolchain.toml
         shell: bash
