@@ -39,7 +39,10 @@ owner 只统筹，不当传声筒：这些命令是 owner 的工具，不是合�
 - 结论只对评审时的头提交有效，之后推了新提交要重跑。
 - 换模型：`--model <名>`，或 `PPASS_REVIEW_MODEL`；换成别家的命令用 `PPASS_REVIEW_AGENT`
   （要接受同样的 `-p`、`--model`、`--allowedTools` 参数，提示词走 stdin）。
-- `review/agent` 要不要进 main 的必需检查、评审通过后是否自动合入，由 owner 在仓库设置与流程里定，本命令不改仓库设置。
+- 评审通过后对所有级别的 PR 执行 `gh pr merge --auto --squash`，CI 全绿即合。盯梢、人控级（改动碰界面文案路径
+  或核心路径）多一个条件：PR 正文要有「产品负责人 <时间> 真机验收通过」这一行，没有就判未通过、不开自动合入，
+  评论里写明缺这一行。界面路径清单与 `owner-triage.sh` 的 `UI_GLOBS` 共用，核心路径取 `origin/main` 上的 `.github/core-paths.txt`。
+- 把 `review/agent` 加进 main 的必需检查是 owner 在仓库设置里做的，本命令不改仓库设置；加之前它只是评论与提交状态，不拦合入。
 
 退出码：0 通过；1 停下了（已写 issue 或评论）；2 拒绝（用法错，或前置条件没满足，提示里给了下一条命令）。
 看到 1 就不要重试同一条命令，先处理 issue。

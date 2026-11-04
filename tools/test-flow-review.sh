@@ -49,7 +49,10 @@ case "$1 $2" in
     printf 'state:%s\nsha:%s\ntitle:%s\nbody:\n' "$(cat "$F/pr.state")" "$(cat "$F/pr.sha")" "T-7 title"
     cat "$F/pr.body"
     ;;
-  "pr diff") cat "$F/pr.diff" ;;
+  "pr diff")
+    case " $* " in *" --name-only "*) cat "$F/pr.files" ;; *) cat "$F/pr.diff" ;; esac
+    ;;
+  "pr merge") echo "$*" >>"$F/merges"; [ ! -e "$F/merge_fail" ] || { echo "auto-merge not allowed" >&2; exit 1; } ;;
   "pr comment")
     n="$3"; shift 3
     while [ $# -gt 0 ]; do
@@ -94,8 +97,10 @@ git init -q "${TMP}/main"
 (
   cd "${TMP}/main" || exit 1
   git remote add origin "${TMP}/origin.git"
-  mkdir -p tools/flow
+  mkdir -p tools/flow .github
   cp -R "${SRC}/tools/flow/." tools/flow/
+  cp "${SRC}/tools/ci-paths.sh" tools/ci-paths.sh
+  printf '+ core/**\n' >.github/core-paths.txt
   printf 'echo base\n' >tools/x.sh
   git add -A && git commit -q -m init
   git push -q origin HEAD:refs/heads/main
@@ -107,6 +112,7 @@ git init -q "${TMP}/main"
   git checkout -q main
 )
 printf 'OPEN' >"$FAKE/pr.state"
+printf 'tools/x.sh\n' >"$FAKE/pr.files"
 printf -- '--- a/tools/x.sh\n+++ b/tools/x.sh\n@@\n-echo base\n+echo changed-DIFFLINE\n' >"$FAKE/pr.diff"
 printf '**范围（只许动这些）**：\n```\ntools/x.sh\n```\n\n**验收场景**：MARK-ACCEPT 引号必须加。\n' >"$FAKE/issue.77"
 printf 'closes #77\n\n改了 x。\n' >"$FAKE/pr.body"
@@ -116,6 +122,8 @@ REVIEW() { (cd "${TMP}/main" && bash tools/flow/review.sh "$@"); }
 reset() {
   : >"$FAKE/comments"
   : >"$FAKE/statuses"
+  : >"$FAKE/merges"
+  rm -f "$FAKE/merge_fail"
   rm -f "$FAKE/agent.args" "$FAKE/agent.cwd" "$FAKE/agent.stdin"
   printf '%s' "$1" >"$FAKE/mode"
 }
@@ -128,6 +136,8 @@ has "独立评审：通过" "$FAKE/comments" && ok "评论写「通过」" || ba
 has "state=success" "$FAKE/statuses" && has "context=review/agent" "$FAKE/statuses" && ok "提交状态 review/agent=success" || bad "状态不对：$(cat "$FAKE/statuses")"
 grep -q "${SHA}" "$FAKE/statuses" && ok "状态写在 PR 头提交上" || bad "状态没写在头提交上"
 has "VERDICT" "$FAKE/comments" && bad "评论里留了 VERDICT 行" || ok "评论里不带 VERDICT 行"
+
+has "pr merge 7" "$FAKE/merges" && has "--auto --squash" "$FAKE/merges" && ok "评审通过 → gh pr merge --auto --squash" || bad "通过后没开自动合入：$(cat "$FAKE/merges")"
 
 echo "==> 只读权限与输入"
 ARGS="$FAKE/agent.args"
@@ -154,6 +164,7 @@ reset fail
 REVIEW 7 >"${TMP}/o2" 2>&1 && bad "VERDICT: FAIL 却退出 0" || ok "VERDICT: FAIL → 退出非 0"
 has "独立评审：未通过" "$FAKE/comments" && has "MAC_GLOBS" "$FAKE/comments" && ok "评论写「未通过」并带问题清单" || bad "评论不对：$(cat "$FAKE/comments")"
 has "state=failure" "$FAKE/statuses" && ok "提交状态 review/agent=failure" || bad "状态不对：$(cat "$FAKE/statuses")"
+[ ! -s "$FAKE/merges" ] && ok "未通过 → 不开自动合入" || bad "未通过却开了自动合入"
 reset noverdict
 REVIEW 7 >/dev/null 2>&1 && bad "没有 VERDICT 却通过" || ok "没有 VERDICT → 按未通过（反证：有 VERDICT: PASS 才通过）"
 has "state=failure" "$FAKE/statuses" && ok "没有 VERDICT → 状态 failure" || bad "没有 VERDICT 状态不是 failure"
@@ -164,6 +175,30 @@ reset tamper
 REVIEW 7 >/dev/null 2>&1 && bad "agent 改了检出却通过" || ok "agent 改动检出 → 评审作废（即使它说 PASS）"
 has "state=failure" "$FAKE/statuses" && has "改动了只读检出" "$FAKE/comments" && ok "改动检出 → failure 并写明" || bad "改动检出的记录不对"
 git -C "${TMP}/main" worktree list | grep -q checkout && bad "临时检出没清掉" || ok "临时检出评审后清掉"
+
+echo "==> 盯梢、人控级要有真机验收记录"
+ACC='产品负责人 2026-11-04 16:30 真机验收通过'
+for case_ in "界面文案路径:assets/i18n/en.json" "核心路径:core/c.txt"; do
+  name="${case_%%:*}"; file="${case_#*:}"
+  reset pass
+  printf '%s\n' "$file" >"$FAKE/pr.files"
+  printf 'closes #77\n' >"$FAKE/pr.body"
+  REVIEW 7 >/dev/null 2>&1 && bad "${name}：没有验收记录却通过" || ok "${name}：正文没有验收记录 → 未通过"
+  has "缺「产品负责人 <时间> 真机验收通过」" "$FAKE/comments" && ok "${name}：评论写明缺这一行" || bad "${name}：评论没写缺验收行：$(cat "$FAKE/comments")"
+  has "state=failure" "$FAKE/statuses" && [ ! -s "$FAKE/merges" ] && ok "${name}：状态 failure 且不开自动合入" || bad "${name}：状态或自动合入不对"
+  reset pass
+  printf 'closes #77\n\n%s\n' "$ACC" >"$FAKE/pr.body"
+  REVIEW 7 >/dev/null 2>&1 && ok "${name}：反证：补上验收行 → 通过" || bad "${name}：补上验收行仍失败"
+  has "--auto --squash" "$FAKE/merges" && ok "${name}：补上验收行 → 开自动合入" || bad "${name}：补上验收行没开自动合入"
+done
+reset pass
+printf 'tools/x.sh\n' >"$FAKE/pr.files"
+printf 'closes #77\n' >"$FAKE/pr.body"
+REVIEW 7 >/dev/null 2>&1 && has "--auto --squash" "$FAKE/merges" && ok "反证：用户看不到的改动（tools）不要验收行也通过并开自动合入" || bad "用户看不到的改动被要求验收行"
+reset pass
+touch "$FAKE/merge_fail"
+REVIEW 7 >/dev/null 2>&1 && bad "开自动合入失败却退出 0" || ok "开自动合入失败 → 退出非 0"
+has "state=success" "$FAKE/statuses" && ok "开自动合入失败时评审状态仍已写（评审本身通过）" || bad "评审状态没写"
 
 echo "==> 拒绝评审"
 reset pass

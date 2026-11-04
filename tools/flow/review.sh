@@ -5,6 +5,10 @@
 #   → 在 PR 头提交的临时只读检出里起一个新 agent（只给 Read / Grep / Glob，不能改文件、不能跑命令）
 #   → 结果写成 PR 评论（「通过」或「未通过 + 问题清单」），并在 PR 头提交上写提交状态 review/agent
 #
+# 评审通过后对所有级别的 PR 执行 gh pr merge --auto --squash（CI 全绿即合）。盯梢、人控级（改动碰界面文案路径
+# 或核心路径）多一个条件：PR 正文里必须有「产品负责人 <时间> 真机验收通过」这一行，没有就判未通过、
+# 不开自动合入，评论里写明缺这一行（验收即放行，验收发生在开 PR 之前，AGENTS.md「角色」）。
+#
 # 判定从 agent 输出最后一行的 VERDICT 解析：不是 PASS 就是失败（agent 挂了、没给 VERDICT、
 # 评审期间改动了检出，一律按失败，宁可误拦不放过）。
 #
@@ -88,6 +92,27 @@ ${accept:-（卡上没找到验收场景）}
 "
 done
 
+# ── 2b. 级别：碰核心路径或界面文案路径 = 盯梢 / 人控，合入要有真机验收记录 ──
+gh pr diff "$PR" -R "$REPO" --name-only >"${WORK}/pr.files" 2>/dev/null ||
+  die "读取 #${PR} 的改动文件清单失败"
+NEEDS_ACCEPT=""
+CORE_RULES="${WORK}/core-paths.txt"
+git -C "$TOP" show origin/main:.github/core-paths.txt >"$CORE_RULES" 2>/dev/null || : >"$CORE_RULES"
+if [ "$(bash "${TOP}/tools/ci-paths.sh" core - "$CORE_RULES" <"${WORK}/pr.files" 2>/dev/null)" != "false" ]; then
+  NEEDS_ACCEPT="碰核心路径（人控级）"
+fi
+# 界面与文案路径的清单与 owner-triage.sh 共用同一份；读不到就按需要验收处理（宁严勿松）。
+UI_GLOBS="$(sed -n 's/^UI_GLOBS="\(.*\)"$/\1/p' "${FLOW_DIR}/owner-triage.sh" 2>/dev/null)"
+if [ -z "$UI_GLOBS" ]; then
+  NEEDS_ACCEPT="${NEEDS_ACCEPT:-读不到界面路径清单，按盯梢级处理}"
+else
+  # shellcheck disable=SC2086 # 清单里是空格分隔的 glob，刻意拆开
+  set -f
+  [ "$(bash "${TOP}/tools/ci-paths.sh" hit - $UI_GLOBS <"${WORK}/pr.files" 2>/dev/null)" != "false" ] &&
+    NEEDS_ACCEPT="${NEEDS_ACCEPT:-碰界面或文案路径（盯梢级）}"
+  set +f
+fi
+
 # ── 3. 改动 diff ─────────────────────────────────────────────────────
 gh pr diff "$PR" -R "$REPO" >"${WORK}/pr.diff" 2>"${WORK}/diff.err" ||
   die "读取 #${PR} 的 diff 失败" "$(head -3 "${WORK}/diff.err" | tr '\n' ' ')"
@@ -135,6 +160,12 @@ else
     *) REASON="评审输出最后一行不是 VERDICT: PASS / VERDICT: FAIL，按未通过处理。" ;;
   esac
 fi
+# 盯梢、人控级：PR 正文必须有验收记录；没有就算未通过（即使 agent 说 PASS）。
+if [ "$VERDICT" = "PASS" ] && [ -n "$NEEDS_ACCEPT" ] &&
+  ! printf '%s\n' "$PR_BODY" | grep -qE '产品负责人 .+ 真机验收通过'; then
+  VERDICT="FAIL"
+  REASON="${NEEDS_ACCEPT}，PR 正文缺「产品负责人 <时间> 真机验收通过」这一行：没有验收记录不开自动合入。验收通过后在 PR 正文补上这一行，再重跑 just review。"
+fi
 # 评审期间检出被改动 = 只读约束被破坏，评审作废。
 if [ -n "$(git -C "$WT" status --porcelain 2>/dev/null)" ]; then
   VERDICT="FAIL"
@@ -166,6 +197,9 @@ gh api -X POST "repos/${REPO}/statuses/${SHA}" -f state="$STATE" -f context="rev
 
 if [ "$VERDICT" = "PASS" ]; then
   echo "✅ #${PR} 独立评审通过，review/agent=success（${SHA:0:10}）"
+  gh pr merge "$PR" -R "$REPO" --auto --squash >"${WORK}/merge.out" 2>&1 ||
+    die "开自动合入失败（评审状态已写）" "$(head -3 "${WORK}/merge.out" | tr '\n' ' ')" "手动：gh pr merge ${PR} -R ${REPO} --auto --squash"
+  echo "   已开自动合入（squash）：CI 全绿后自动合入。"
 else
   echo "✗ #${PR} 独立评审未通过，review/agent=failure（${SHA:0:10}）；问题清单已贴在 PR 评论里。" >&2
   exit 1
