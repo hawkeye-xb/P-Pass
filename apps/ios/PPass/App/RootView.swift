@@ -55,6 +55,8 @@ struct RootView: View {
             }
             .ignoresSafeArea()
         }
+        // 当前页的瞬时提示（对位 Android snackbar）：部分照片权限下开自动备份的结果等。
+        .ppToast($app.toast)
         // 设置没存上 / 命令没执行成（#971 #972）：可见的失败反馈，点掉即清。
         .alert(L.s("notice_title"), isPresented: Binding(get: { app.notice != nil }, set: { if !$0 { app.notice = nil } })) {
             Button(L.s("ok_got_it")) {}

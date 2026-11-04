@@ -614,6 +614,66 @@ final class SettingsFeedbackTests: XCTestCase {
         XCTAssertEqual(app.tab, .settings)
     }
 
+    /// 部分照片权限下开自动备份（引导卡「开启」/ 设置开关）：iOS 不会再弹授权框，同一意图的做法是去系统设置改成「所有照片」；
+    /// 回到前台按真实权限现算——改成全部 → 规则开、进选范围页；仍是部分（含没改直接回来）→ 传一次允许的照片 + 瞬时提示、开关保持关。
+    /// 不预写开关。反证：去掉 `setAutoRule` 里「已是部分 → 去设置」那段，第一段 settings / requested 断言红；
+    /// 去掉 `sceneBecameActive` 里的 `resumeAutoRuleAfterSettings()`，回来后两段红。
+    func test_partial_access_enable_goes_to_settings_and_resumes_by_real_access() async {
+        for (back, ruleOn) in [(MediaAccess.full, true), (.partial, false)] {
+            let (app, engine, media) = make()
+            var opened = 0
+            app.settingsOpener = { opened += 1 }
+            try? engine.setAutoRule(false)
+            media.granted = .partial
+            app.refresh()
+            XCTAssertEqual(app.scopeGuideActionKey, "background_refresh_notice_action", "部分权限、规则关：按钮说「去设置」")
+            engine.calls.removeAll()
+            app.guideAction(.enableScope)
+            await settle()
+            XCTAssertEqual(opened, 1, "去系统设置")
+            XCTAssertEqual(media.requested, 0, "iOS 不会再弹授权框，不去申请")
+            XCTAssertFalse(app.autoRule, "不预写开关")
+            XCTAssertTrue(engine.calls.isEmpty, "去设置之前什么都不做：\(engine.calls)")
+
+            media.granted = back
+            app.sceneBecameActive()
+            await settle()
+            XCTAssertEqual(app.autoRule, ruleOn, "\(back)")
+            if back == .full {
+                XCTAssertTrue(app.wantsScopeEditor, "改成全部 → 进选范围页")
+                XCTAssertNil(app.toast)
+            } else {
+                XCTAssertTrue(engine.calls.contains("sendAllowed"), "仍是部分 → 传一次允许的照片")
+                XCTAssertNotNil(app.toast, "当前页瞬时提示")
+            }
+            // 只接一次：再回前台不重复执行
+            engine.calls.removeAll()
+            app.sceneBecameActive()
+            await settle()
+            XCTAssertFalse(engine.calls.contains("sendAllowed"), "\(back)")
+        }
+    }
+
+    /// 还没问过照片权限时开自动备份：系统会弹框（同 Android），选「部分」→ 传一次允许的照片 + 瞬时提示，不去设置。
+    /// 反证：`applyAutoRuleAccess` 的部分分支不设 toast，本条红。
+    func test_first_prompt_partial_sends_allowed_and_toasts_without_settings() async {
+        let (app, engine, media) = make()
+        var opened = 0
+        app.settingsOpener = { opened += 1 }
+        try? engine.setAutoRule(false)
+        media.granted = nil
+        media.answer = .partial
+        engine.allowedSent = 3
+        app.refresh()
+        XCTAssertEqual(app.scopeGuideActionKey, "photos_guide_enable")
+        app.setAutoRule(true)
+        await settle()
+        XCTAssertEqual(media.requested, 1)
+        XCTAssertEqual(opened, 0)
+        XCTAssertFalse(app.autoRule)
+        XCTAssertEqual(app.toast, L.f("auto_backup_rule_limited_sent", 3))
+    }
+
     /// 现状那一行：「从今天起」写日期，「全部」说所选相册。
     func test_scope_empty_hint_wording() async {
         let (app, engine, media) = make()

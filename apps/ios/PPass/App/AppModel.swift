@@ -104,6 +104,10 @@ final class AppModel: ObservableObject {
     @Published var commandInFlight = false
     /// 最近一次失败反馈（设置写盘失败 / 命令出错）。界面 alert 绑定它。
     @Published var notice: UserNotice?
+    /// 当前页的瞬时提示（对位 Android snackbar），任何页面都显示，几秒后自动消失。
+    @Published var toast: String?
+    /// 部分照片权限下点了开自动备份、被带去系统设置：回到前台时按真实权限接着走。只在内存里，不落盘。
+    private(set) var awaitingFullPhotoAccess = false
     /// 「仅 Wi‑Fi」要关：等用户在确认框里点「仍然关闭」才写盘（Android MOB-02 §三：移动网络会消耗流量）。
     @Published var pendingWifiOff = false
     /// 范围文件读不出来（与「从未保存」不同，#971）；设置行据此显示「读不到」而不是「未选相册」。
@@ -135,6 +139,7 @@ final class AppModel: ObservableObject {
     /// 回到前台：照常刷新，并重读系统相册（相册可能在系统相册里被删了）。枚举 PhotoKit 有成本，不放进每次引擎回调的 refresh。
     func sceneBecameActive() {
         refresh()
+        resumeAutoRuleAfterSettings()
         refreshExistingAlbums()
         refreshNotificationAuthorization() // 用户可能刚从系统设置里改了通知授权回来
     }
@@ -211,25 +216,50 @@ final class AppModel: ObservableObject {
             do { try backend.engine.setAutoRule(false); autoRule = false } catch { settingWriteFailed("auto-rule", error) }
             return
         }
+        // 已经是「部分照片」：iOS 不会再弹授权框（Android 这一步会再弹一次、可当场改成「全部允许」）。同一意图的 iOS 做法是
+        // 带用户去系统设置里本 App 的「照片」项改成「所有照片」；回到前台按真实权限接着走（`sceneBecameActive`）。不预写任何开关。
+        if backend.media.access() == .partial {
+            awaitingFullPhotoAccess = true
+            AppLog.log("auto-rule: partial photo access, opening system settings for full access")
+            openAppSettings()
+            return
+        }
         Task {
             let granted = await backend.media.requestAccess()
-            access = granted
-            switch granted {
-            case .full:
-                do { try backend.engine.setAutoRule(true); autoRule = true } catch { settingWriteFailed("auto-rule", error); return }
-                refresh()
-                refreshExistingAlbums()
-                openScopeEditor()
-                // 已有范围的用户在选范围页原样「保存」不会触发补扫（没有新增 / 放宽），规则刚打开要叫醒一轮，不然开了也不跑。
-                if !noAlbums { await backend.engine.wake() }
-            case .partial:
-                let n = await backend.engine.sendAllowedPhotos()
-                ruleNote = n > 0 ? L.f("auto_backup_rule_limited_sent", n) : L.s("auto_backup_rule_partial_hint")
-            case .none:
-                ruleNote = L.s("auto_backup_rule_denied_hint")
-            }
-            refresh()
+            await applyAutoRuleAccess(granted)
         }
+    }
+
+    /// 开自动备份时拿到的照片权限档 → 结果（对位 Android 授权回调）：全部 → 开、进选范围页；
+    /// 部分 → 开关保持关，把允许的照片传一次，当前页瞬时提示；拒绝 → 保持关 + 一行小字。
+    private func applyAutoRuleAccess(_ granted: MediaAccess) async {
+        access = granted
+        switch granted {
+        case .full:
+            do { try backend.engine.setAutoRule(true); autoRule = true } catch { settingWriteFailed("auto-rule", error); return }
+            refresh()
+            refreshExistingAlbums()
+            openScopeEditor()
+            // 已有范围的用户在选范围页原样「保存」不会触发补扫（没有新增 / 放宽），规则刚打开要叫醒一轮，不然开了也不跑。
+            if !noAlbums { await backend.engine.wake() }
+        case .partial:
+            let n = await backend.engine.sendAllowedPhotos()
+            ruleNote = n > 0 ? L.f("auto_backup_rule_limited_sent", n) : L.s("auto_backup_rule_partial_hint")
+            toast = ruleNote
+            AppLog.log("auto-rule: partial photo access, sent allowed photos n=\(n), rule stays off")
+        case .none:
+            ruleNote = L.s("auto_backup_rule_denied_hint")
+        }
+        refresh()
+    }
+
+    /// 从系统设置回来：按真实照片权限现算（同 #1324 读后台刷新的口径）。只处理一次。
+    private func resumeAutoRuleAfterSettings() {
+        guard awaitingFullPhotoAccess else { return }
+        awaitingFullPhotoAccess = false
+        let now = backend.media.access()
+        AppLog.log("auto-rule: back from settings, photo access=\(now)")
+        Task { await applyAutoRuleAccess(now) }
     }
 
     /// #1272：系统选择器选完。照片不复制，只登记句柄；传输由引擎在前台逐张进行。
@@ -413,7 +443,10 @@ final class AppModel: ObservableObject {
     }
 
     /// 「去处理」：跳到系统设置里 P-Pass 的页面（「后台 App 刷新」开关就在那一页）。
-    @MainActor func openAppSettings() {
+    @MainActor func openAppSettings() { settingsOpener() }
+
+    /// 真正跳系统设置的动作；测试换成计数，不去开真的设置。
+    var settingsOpener: @MainActor () -> Void = {
         guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
         UIApplication.shared.open(url)
     }
@@ -464,6 +497,9 @@ final class AppModel: ObservableObject {
     }
 
     /// 第二步卡的按钮名：系统「后台 App 刷新」没开 →「去设置」；系统已放行、只差 App 里的开关 →「开启」。
+    /// 第一步卡的按钮名：已是「部分照片」、规则没开 → 点了会去系统设置改权限，按钮说「去设置」（复用现有词）；否则「开启」。
+    var scopeGuideActionKey: String { !autoRule && access == .partial ? "background_refresh_notice_action" : "photos_guide_enable" }
+
     var backgroundGuideActionKey: String { backgroundRefresh == .available ? "photos_guide_enable" : "background_refresh_notice_action" }
 
     var photosGuide: PhotosGuide { Self.photosGuideOf(guideFacts) }
