@@ -171,7 +171,7 @@ if [ "$(uname)" = Darwin ]; then
   t0=$SECONDS
   E3_STATE="$lockdir" "$E3/lock" --no-wait android true 2>"$lockdir/err"
   rc=$?
-  [ "$rc" = 75 ] || bad "设备被占时 --no-wait 没拒绝（退出码 $rc）"
+  [ "$rc" = 75 ] || bad "设备被占时 --no-wait 没拒绝（退出码 ${rc}）"
   [ $((SECONDS - t0)) -lt 2 ] || bad "设备被占时 --no-wait 排队了"
   grep -q '正被别的会话占用（pid ' "$lockdir/err" || bad "拒绝时没说谁占着：$(cat "$lockdir/err")"
   wait "$holder"
@@ -196,7 +196,7 @@ if command -v just >/dev/null 2>&1; then
     got="$(just --justfile "$ROOT/justfile" --working-directory "$d/main/sub" --command printenv CARGO_TARGET_DIR)"
     [ "$got" = "$d/P-Pass-cache/cargo-target" ] || { echo "just 没读到共享 CARGO_TARGET_DIR（得到 ${got:-空}）"; exit 1; }
     got="$(CARGO_TARGET_DIR=/x just --justfile "$ROOT/justfile" --working-directory "$d/main/sub" --command printenv CARGO_TARGET_DIR)"
-    [ "$got" = /x ] || { echo "环境里已设的 CARGO_TARGET_DIR 被配置覆盖了（得到 $got）"; exit 1; }
+    [ "$got" = /x ] || { echo "环境里已设的 CARGO_TARGET_DIR 被配置覆盖了（得到 ${got}）"; exit 1; }
     echo 'CARGO_TARGET_DIR=/changed' >"$f"
     dev_cache_init "$d/main" >/dev/null
     grep -qx 'CARGO_TARGET_DIR=/changed' "$f" || { echo "dev_cache_init 覆盖了人改过的配置"; exit 1; }
