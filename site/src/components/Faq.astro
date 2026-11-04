@@ -307,6 +307,12 @@ const top = FAQ_TOP.map((id) => byId.get(id)).filter((item) => item !== undefine
     .qa .detail {
       color: var(--idle);
     }
+    /* --border-strong only carries the light-mode ink alpha; on surface-dark
+       it composites to #1F1C18 and the hover outline disappears (1.02:1).
+       --idle is 4.53:1 on surface-dark. */
+    .sections a:hover {
+      border-color: var(--idle);
+    }
   }
   .qa p:last-child {
     margin-bottom: 0;

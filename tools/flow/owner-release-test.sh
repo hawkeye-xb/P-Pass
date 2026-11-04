@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# just release-test <端...>：在 origin/main 最新提交上打 test tag，等 Release workflow 出结论。
+# just release-test <端...>：在 origin/main 最新提交上触发 test 发版（release.yml，release=true），等 Release workflow 出结论。
 # 说明见 docs/runbook/owner.md；规则见 docs/RELEASING.md §3.6、§4。
 #
 #   owner-release-test.sh android macos            端 ∈ android macos windows ios，至少一个
@@ -19,7 +19,7 @@
 #   3b. origin/main 这个提交的全部检查（check-runs 与 commit status）跑完且没有红（main 必须是绿的，
 #      RELEASING §3）；还在跑就等（上限 PPASS_OWNER_MAIN_CI_WAIT 秒），红了或读不到就停下。
 #      一条检查都没有（纯文档提交不触发 CI）时先等 PPASS_OWNER_MAIN_CI_EMPTY_WAIT 秒再认。
-#   4. 打 annotated tag、推送；找到这个 tag 的 Release run，gh run watch 到结论（上限
+#   4. 手动触发 release.yml（release=true，tag 由流程在验证全绿后才建，这里不推 tag）；找到这次 run，gh run watch 到结论（上限
 #      PPASS_OWNER_RELEASE_TIMEOUT 秒，默认 14400）；红 ⇒ 失败 job 日志切片写 issue，停下。
 #   5. 绿了再核对 test-channel 里每个端的分端清单 version = 本次版本号。
 
@@ -33,7 +33,7 @@ bash "${FLOW_DIR}/doctor.sh" || exit 1
 usage() { sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 FORMAL_MSG="正式版只能由产品负责人发布（docs/RELEASING.md §3 第 5 步：在网页上审 draft 后 Publish）；owner 脚本只打 test tag"
 TIMEOUT="${PPASS_OWNER_RELEASE_TIMEOUT:-14400}"
-RUN_WAIT="${PPASS_OWNER_RUN_WAIT:-600}"  # 推 tag 后等 Release run 出现的上限（秒）
+RUN_WAIT="${PPASS_OWNER_RUN_WAIT:-600}"  # 触发后等 Release run 出现的上限（秒）
 MAIN_CI_WAIT="${PPASS_OWNER_MAIN_CI_WAIT:-3600}"   # 等 origin/main 的检查跑完的上限（秒）
 MAIN_CI_EMPTY_WAIT="${PPASS_OWNER_MAIN_CI_EMPTY_WAIT:-180}"  # 一条检查都没有时，等它们注册的时长
 
@@ -180,31 +180,39 @@ if [ "$DRY" = 1 ]; then
   exit 0
 fi
 
-step "打 tag ${TAG} 并推送"
-git tag -a "$TAG" -m "test build ${TAG}（${PLANNED% }）" "$MAIN" || die_stuck "git tag 失败"
-if ! git push origin "refs/tags/${TAG}" >"${OUT}/push.log" 2>&1; then
-  git tag -d "$TAG" >/dev/null 2>&1
-  die_stuck "推送 ${TAG} 失败（远端没有这个 tag，可修好后重跑）" --log "${OUT}/push.log"
+step "触发发版 ${TAG}"
+# #1349：发版唯一入口 = 手动触发 release.yml（release=true）。tag 由流程在发版前验证全绿后才建，
+# 这里不推 tag。触发在一条临时分支上（指向本次判定用的 origin/main 提交），这样发版前验证检出的
+# 就是这个提交，期间 main 前进了也不影响；跑完删掉这条分支。
+RC_BRANCH="release-run/${TAG}"
+if ! git push origin "${MAIN}:refs/heads/${RC_BRANCH}" >"${OUT}/push.log" 2>&1; then
+  die_stuck "推送临时分支 ${RC_BRANCH} 失败（远端没有它，可修好后重跑）" --log "${OUT}/push.log"
+fi
+cleanup_branch() { git push origin --delete "$RC_BRANCH" >/dev/null 2>&1 || true; }
+if ! gh workflow run release.yml -R "$REPO" --ref "$RC_BRANCH" -f "tag=${TAG}" -f release=true >"${OUT}/dispatch.log" 2>&1; then
+  cleanup_branch
+  die_stuck "触发 release.yml（tag=${TAG}）失败，没有建任何 tag" --log "${OUT}/dispatch.log"
 fi
 
 step "等 Release workflow"
 run=""
 waited=0
 while [ "$waited" -le "$RUN_WAIT" ]; do
-  run="$(gh run list -R "$REPO" --workflow release.yml --event push --limit 30 \
-    --json databaseId,headBranch --jq ".[] | select(.headBranch == \"${TAG}\") | .databaseId" 2>/dev/null | head -1)"
+  run="$(gh run list -R "$REPO" --workflow release.yml --event workflow_dispatch --limit 30 \
+    --json databaseId,headBranch --jq ".[] | select(.headBranch == \"${RC_BRANCH}\") | .databaseId" 2>/dev/null | head -1)"
   [ -n "$run" ] && break
   sleep 5
   waited=$((waited + 5))
 done
-[ -n "$run" ] || die_stuck "推送 ${TAG} 后 ${RUN_WAIT}s 没等到 Release run，判定不了"
+[ -n "$run" ] || { cleanup_branch; die_stuck "触发 ${TAG} 后 ${RUN_WAIT}s 没等到 Release run，判定不了"; }
 okmsg "Release run ${run}"
 bash "${REPO_ROOT}/tools/release/with-timeout.sh" "gh run watch ${run}" "$TIMEOUT" 1 -- \
   gh run watch "$run" -R "$REPO" --exit-status --interval 60 >"${OUT}/watch.log" 2>&1
+cleanup_branch
 concl="$(gh run view "$run" -R "$REPO" --json conclusion --jq .conclusion 2>/dev/null)"
 if [ "$concl" != success ]; then
   gh run view "$run" -R "$REPO" --log-failed 2>&1 | tail -n 120 >"${OUT}/failed.log"
-  die_stuck "Release ${TAG}（run ${run}）结论 ${concl:-未出}，test 包没发出来。tag 保留不动，修好后下一次用 -test.$((N + 1))" --log "${OUT}/failed.log"
+  die_stuck "Release ${TAG}（run ${run}）结论 ${concl:-未出}，test 包没发出来。若发版前验证就红了，没有建 tag，同一个版本号可直接重试；若 tag 已建（构建阶段红），tag 保留不动，修好后下一次用 -test.$((N + 1))" --log "${OUT}/failed.log"
 fi
 
 step "核对 test-channel 分端清单"

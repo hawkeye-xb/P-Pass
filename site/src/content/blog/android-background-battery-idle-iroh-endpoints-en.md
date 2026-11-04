@@ -106,7 +106,7 @@ Now one outage gets one set of four probes: the first after 10 minutes, then 20,
 
 On the emulator, against the same test desktop, we recorded the app's traffic every 30 seconds for 6 minutes after sending it to the background.
 
-| | Traffic over 6 minutes | Log |
+| Stage | Traffic over 6 minutes | Log |
 |---|---|---|
 | Before | 695KB in, 562KB out, still climbing, about 12.6MB/hour | no reaper log |
 | After | 0KB | `network idle for 30000ms in background: endpoints parked` |

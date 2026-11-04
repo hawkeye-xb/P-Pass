@@ -26,7 +26,7 @@ flow_load_issue "$N"
 [ "$I_STATE" = "OPEN" ] || die "#${N} 不是 open（现在是 ${I_STATE:-未知}），不领"
 if ! has_label "status:ready"; then
   die "#${N} 没有 status:ready 标签，不能领（现有标签：${I_LABELS:-无}）" \
-    "inbox = 还没写范围与验收；doing = 别人在做；blocked = 卡住；review/batched = 已交卡。" \
+    "inbox = 还没写范围与验收；doing = 别人在做；blocked = 卡住；review = 已交卡。" \
     "去找 owner 把范围与验收写好并转 ready。"
 fi
 flow_parse_scope "$I_BODY"
@@ -94,7 +94,7 @@ echo "   标签：status:ready → status:doing"
 echo "   范围（只许动这些）："
 printf '     %s\n' "${GLOBS[@]}"
 echo
-# 核心卡：正文引用了 origin/main 上「已采纳」的方案 ⇒ 已定案，按方案实现（与 batch-plan 准入同一判据）；
+# 核心卡：正文引用了 origin/main 上「已采纳」的方案 ⇒ 已定案，按方案实现；
 # 没有 ⇒ 还没定案，只写复现、根因和两个修法。
 if has_label core; then
   ADRS="$(adopted_adrs "$I_BODY")"

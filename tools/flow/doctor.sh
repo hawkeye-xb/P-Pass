@@ -57,7 +57,7 @@ fi
 if [ -e "${TOP}/.ppass-verify-clone" ] || [ -e "${MAIN_ROOT}/.ppass-verify-clone" ]; then
   bad "这是 Windows 回归专用克隆（根目录有 .ppass-verify-clone），不能当日常工作目录"
   fix "回主副本开工：cd ${MAIN_ROOT}" \
-    "这个克隆只给 tools/flow/owner-win-test.sh 用；怎么建见 docs/runbook/owner.md"
+    "这个克隆只给 Windows 回归会话用；怎么建见 docs/runbook/full-regression-sop.md"
 fi
 
 # ── 2. bash 真能执行（Windows 上必须是 Git Bash，不是 WSL 桩）─────────
