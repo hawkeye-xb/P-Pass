@@ -28,6 +28,10 @@ for d in "$E3"/fixtures/*/; do
 done
 
 # #1311 数据快照：服务在跑不存；存 → 候选改库（新迁移、新文件）→ 恢复后库回到快照，照片原件不动
+# 依赖 macOS 的 ditto；没有它（Windows/Linux）时跳过并说明原因（#1366）。
+if ! command -v ditto >/dev/null 2>&1; then
+  echo "SKIP: mac 数据快照存/恢复（本机没有 ditto，非 macOS）"
+else
 (
   d="$(mktemp -d)"
   trap 'rm -rf "$d"' EXIT
@@ -62,6 +66,7 @@ done
   [ -f "$d/lib/.ppf/library-id" ] && [ -f "$d/lib/originals/a.jpg" ] && [ -f "$d/as/config.toml" ] ||
     { echo "库标识、原件或 config.toml 被清了"; exit 1; }
 ) || bad "mac 数据快照存/恢复"
+fi
 
 # 设备锁：第二个持锁者要等第一个释放（/usr/bin/lockf 只有 macOS 有）
 if [ "$(uname)" = Darwin ]; then

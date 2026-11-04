@@ -11,6 +11,10 @@ apps/desktop/src-tauri/tests/fixtures/update-tamper/** -text
 *.sh text eol=lf
 apps/android/gradlew text eol=lf
 
+# .github 下的文本规则按行解析（core-paths.txt 被 tools/ci-paths.sh 逐行读）。
+# core.autocrlf=true 检出成 CRLF 时行尾带 \r，规则解析从严判成「全是核心」（#1330、#1366）。
+.github/*.txt text eol=lf
+
 # Android 源码与资源固定 LF：单测里有一批源码门禁按 "\n" 切片匹配源码（如 UPD835、#421），
 # Windows（core.autocrlf=true）检出成 CRLF 就全部误报。二进制资源（png/ttf/jar）不受影响。
 apps/android/**/*.kt text eol=lf
