@@ -21,7 +21,7 @@ esac
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # REL-11（#708）：RELEASE_TAG 优先。release.yml 被 workflow_dispatch 补跑时
 # GITHUB_REF_NAME 是 main（不是 tag），只看它会把 test tag 误判成正式 tag。
-# release.yml 顶层 env 注入 RELEASE_TAG = inputs.tag || github.ref_name。
+# release.yml 顶层 env 注入 RELEASE_TAG = inputs.tag（#1349 起 release.yml 只由手动触发，tag 一律来自输入）。
 # 空串等同未设置（`:-`），回落到 GITHUB_REF_NAME / git describe，本地用法不变。
 REF_NAME="${RELEASE_TAG:-${GITHUB_REF_NAME:-$(git describe --tags --exact-match 2>/dev/null || echo '')}}"
 

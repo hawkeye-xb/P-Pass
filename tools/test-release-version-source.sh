@@ -277,14 +277,16 @@ else
   fi
 fi
 
-# ── ④ release.yml：dispatch 补跑必须检出被补跑的 tag（REL-13 #716）──────
+# ── ④ release.yml：补跑必须检出被补跑的 tag，发版检出触发时的提交（REL-13 #716 / #1349）──────
 # dispatch 时 actions/checkout 默认检出 main ⇒ 构建出的代码与 versions.json 都不是那个
-# tag。判据：每个 checkout 的 with 块里都有 `ref: ${{ inputs.tag || github.ref }}`；
-# 全文不再出现 GITHUB_SHA / github.sha（dispatch 时它们指向 main）。
+# tag。判据：每个 checkout 的 with 块里都有 `ref: ${{ env.BUILD_REF }}`，而 BUILD_REF 恰为
+# `inputs.release && github.sha || inputs.tag`（补跑 = tag，发版 = 触发时的提交，tag 此时还不存在）；
+# 补跑路径上不得用 GITHUB_SHA / github.sha（补跑时它们指向 main）：全文只许出现在 BUILD_REF 定义、
+# 发版入口守卫与 create-draft 的发版分支里（共三处，都带 release 判断）。
 # RELEASE_YML 可指向另一份文件做反证（例如 origin/main 上修复前的版本）。
 REL_YML="${RELEASE_YML:-$ROOT/.github/workflows/release.yml}"
 # shellcheck disable=SC2016  # 字面量：要匹配 YAML 里的 ${{ }} 原文，不是展开
-want_ref='ref: ${{ inputs.tag || github.ref }}'
+want_ref='ref: ${{ env.BUILD_REF }}'
 total=0; missing=0
 while IFS= read -r ln; do
   total=$((total + 1))
@@ -299,10 +301,24 @@ else
   fail "④ release.yml checkout 共 $total 个，缺 ref 的 $missing 个"
 fi
 # 只看代码行：注释里提到 GITHUB_SHA（解释为什么不用它）不算。
-if grep -n -E 'GITHUB_SHA|github\.sha' "$REL_YML" | grep -v -E '^[0-9]+: *#' >&2; then
-  fail "④ release.yml 仍引用 GITHUB_SHA / github.sha（dispatch 时是 main 的提交）"
+# shellcheck disable=SC2016  # 字面量：要匹配 YAML 里的 ${{ }} 原文
+if grep -qF 'BUILD_REF: ${{ inputs.release && github.sha || inputs.tag }}' "$REL_YML"; then
+  pass "④ BUILD_REF = inputs.release && github.sha || inputs.tag"
 else
-  pass "④ release.yml 不再引用 GITHUB_SHA / github.sha"
+  fail "④ BUILD_REF 的定义不是 inputs.release && github.sha || inputs.tag"
+fi
+sha_lines=$(grep -n -E 'GITHUB_SHA|github\.sha' "$REL_YML" | grep -v -E '^[0-9]+: *#' | grep -v 'BUILD_REF:' | cut -d: -f1 | tr '\n' ' ')
+sha_cnt=$(wc -w <<<"$sha_lines")
+# 其余引用只许在「发版」专用步骤里：入口守卫、create-draft（都在 inputs.release 的分支里）。
+bad=0
+for ln in $sha_lines; do
+  ctx=$(sed -n "$((ln > 40 ? ln - 40 : 1)),${ln}p" "$REL_YML")
+  grep -qE 'inputs\.release' <<<"$ctx" || { printf '  行 %s 引用 GITHUB_SHA 但附近没有 inputs.release 判断\n' "$ln" >&2; bad=$((bad + 1)); }
+done
+if [ "$bad" -eq 0 ]; then
+  pass "④ GITHUB_SHA / github.sha 只出现在发版（inputs.release）路径里（$sha_cnt 处）"
+else
+  fail "④ release.yml 有 $bad 处在补跑路径上引用 GITHUB_SHA / github.sha"
 fi
 
 if [ "$fails" -ne 0 ]; then

@@ -477,6 +477,7 @@ class Runner:
             "GITHUB_EVENT_NAME": ctx.github["event_name"],
             "GITHUB_REF": ctx.github.get("ref", ""),
             "GITHUB_REF_NAME": ctx.github.get("ref_name", ""),
+            "GITHUB_SHA": ctx.github.get("sha", ""),
             "GITHUB_OUTPUT": str(out_file),
             "GITHUB_ENV": str(gh_env_file),
             "GITHUB_STEP_SUMMARY": str(tmp.parent / "summary.md"),
