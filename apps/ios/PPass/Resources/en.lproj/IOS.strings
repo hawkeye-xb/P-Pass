@@ -81,3 +81,6 @@
 /* #1323（iOS 独有）：部分照片权限之后怎么改成全部。iOS 不会再弹授权框，只能在系统设置里改；Android 由系统权限框自己说明。
    路径按苹果官方「隐私与安全性 › 照片」（iOS 14 至今都在，不受 iOS 18 把 App 设置挪到「App」分组影响），选项名 iOS 18 起为「完全访问」。 */
 "photo_access_change_later_hint" = "You can change it to “Full Access” anytime in Settings › Privacy & Security › Photos › P-Pass.";
+
+/* 照片页引导卡：iOS 没有「App 关闭也能备份」，靠后台 App 刷新（产品负责人 11-04）。 */
+"photos_guide_background" = "Backs up even when the app is in the background";
