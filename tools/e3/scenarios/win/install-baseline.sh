@@ -23,7 +23,7 @@ setup() {
   win_adb uninstall com.hawkeyexb.ppass >/dev/null 2>&1 || true
   win_adb install -r "$(cygpath -w "$apk")" >/dev/null || { echo "基线 APK 安装失败"; return 1; }
   win_phone_grant
-  [ "$(win_phone_version)" = "$WIN_BASE_PHONE_VER" ] || { echo "手机版本不是 $WIN_BASE_PHONE_VER：$(win_phone_version)"; return 1; }
+  [ "$(win_phone_version)" = "$WIN_BASE_PHONE_VER" ] || { echo "手机版本不是 ${WIN_BASE_PHONE_VER}：$(win_phone_version)"; return 1; }
 
   # 桌面清理到全新机器状态（旧库挪走，不硬删）。
   win_reset_desktop_state

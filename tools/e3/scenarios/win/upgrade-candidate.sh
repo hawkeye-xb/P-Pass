@@ -35,8 +35,8 @@ snapshot() { # snapshot <证据目录> <前缀>
 setup() {
   win_app_running || { echo "桌面 App 没在跑（先跑 win/install-baseline）"; return 77; }
   win_daemon_running || { echo "daemon 没在跑（先跑 win/install-baseline）"; return 77; }
-  [ "$(win_app_version)" = "$WIN_BASE_VER" ] || { echo "桌面安装版本不是基线 $WIN_BASE_VER：$(win_app_version)（先跑 win/install-baseline）"; return 77; }
-  [ "$(win_phone_version)" = "$WIN_BASE_PHONE_VER" ] || { echo "手机不是基线 $WIN_BASE_PHONE_VER：$(win_phone_version)"; return 77; }
+  [ "$(win_app_version)" = "$WIN_BASE_VER" ] || { echo "桌面安装版本不是基线 ${WIN_BASE_VER}：$(win_app_version)（先跑 win/install-baseline）"; return 77; }
+  [ "$(win_phone_version)" = "$WIN_BASE_PHONE_VER" ] || { echo "手机不是基线 ${WIN_BASE_PHONE_VER}：$(win_phone_version)"; return 77; }
   win_diag "$EV/main" >/dev/null 2>&1 || true
   [ "$(win_json_array_len "$EV/main/diag/devices.json")" = 1 ] || { echo "桌面没有 1 台配对设备（先跑 win/pair-backup）"; return 77; }
   # 候选包

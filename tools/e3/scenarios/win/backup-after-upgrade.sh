@@ -26,8 +26,8 @@ snapshot() { # snapshot <目录> <前缀>
 setup() {
   win_app_running || { echo "桌面 App 没在跑（先跑 win/upgrade-candidate）"; return 77; }
   win_daemon_running || { echo "daemon 没在跑（先跑 win/upgrade-candidate）"; return 77; }
-  [ "$(win_app_version)" = "$WIN_CAND_VER" ] || { echo "桌面不是候选 $WIN_CAND_VER：$(win_app_version)"; return 77; }
-  [ "$(win_phone_version)" = "$WIN_CAND_VER" ] || { echo "手机不是候选 $WIN_CAND_VER：$(win_phone_version)"; return 77; }
+  [ "$(win_app_version)" = "$WIN_CAND_VER" ] || { echo "桌面不是候选 ${WIN_CAND_VER}：$(win_app_version)"; return 77; }
+  [ "$(win_phone_version)" = "$WIN_CAND_VER" ] || { echo "手机不是候选 ${WIN_CAND_VER}：$(win_phone_version)"; return 77; }
   EXTRA_DIR="$E3_STATE/win/photos-extra-$EXTRA"
   if [ "$(ls "$EXTRA_DIR"/*.jpg 2>/dev/null | wc -l)" != "$EXTRA" ]; then
     rm -rf "$EXTRA_DIR"

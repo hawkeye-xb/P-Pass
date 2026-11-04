@@ -57,7 +57,7 @@ scope_select_only() {
 
 setup() {
   win_phone_state | grep -qx device || { echo "adb 看不到手机 ${E3_ANDROID_SERIAL}"; return 77; }
-  [ "$(win_phone_version)" = "$WIN_BASE_PHONE_VER" ] || { echo "手机不是基线 $WIN_BASE_PHONE_VER：$(win_phone_version)（先跑 win/install-baseline）"; return 77; }
+  [ "$(win_phone_version)" = "$WIN_BASE_PHONE_VER" ] || { echo "手机不是基线 ${WIN_BASE_PHONE_VER}：$(win_phone_version)（先跑 win/install-baseline）"; return 77; }
   win_app_running || win_start_app || { echo "桌面 App 没起来"; return 1; }
   local i
   for i in $(seq 1 30); do win_daemon_running && break; sleep 1; done
@@ -132,7 +132,7 @@ act() {
     fi
     sleep 3
   done
-  [ "$ok" = 1 ] || echo "等待备份完成超时（期望 $want）"
+  [ "$ok" = 1 ] || echo "等待备份完成超时（期望 ${want}）"
   win_diag "$d" || true
   win_library_hashes "$d" || true
   win_phone_hashes "$d/phone-hashes.txt" || true
