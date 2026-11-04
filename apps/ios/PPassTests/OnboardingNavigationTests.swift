@@ -99,4 +99,27 @@ final class OnboardingNavigationTests: XCTestCase {
         XCTAssertEqual(AppModel.decisionLanding(.partial), .registerAllowed, "部分允许：系统已弹过选照片页，不再弹 App 的选图器")
         XCTAssertEqual(AppModel.decisionLanding(.none), .pickPhotos)
     }
+
+    /// 产品负责人 2026-11-04：部分照片权限下不让系统在 App 回前台 / 首次读相册时自动弹「选择更多照片」——
+    /// 苹果标准做法是 Info.plist 的 PHPhotoLibraryPreventAutomaticLimitedAccessAlert = YES。反证：删掉这个键，本条红。
+    func testLimitedAccessAutoAlertIsSuppressed() {
+        XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "PHPhotoLibraryPreventAutomaticLimitedAccessAlert") as? Bool, true)
+    }
+
+    /// 决定页小字与部分权限时引导卡正文用同一句路径说明（iOS 独有文案，按苹果官方「隐私与安全性 › 照片」）。
+    func testChangeLaterHintIsTheOfficialPathInBothScreens() throws {
+        let hint = L.s("photo_access_change_later_hint")
+        XCTAssertNotEqual(hint, "photo_access_change_later_hint", "词条要在 IOS.strings 里")
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let decision = try String(contentsOf: root.appendingPathComponent("PPass/Home/DecisionScreen.swift"), encoding: .utf8)
+        let photos = try String(contentsOf: root.appendingPathComponent("PPass/Photos/PhotosScreen.swift"), encoding: .utf8)
+        XCTAssertTrue(decision.contains("L.s(\"photo_access_change_later_hint\")"))
+        XCTAssertTrue(photos.contains("L.s(\"photo_access_change_later_hint\")"))
+        for lang in ["zh-Hans", "en"] {
+            let strings = try String(contentsOf: root.appendingPathComponent("PPass/Resources/\(lang).lproj/IOS.strings"), encoding: .utf8)
+            XCTAssertTrue(strings.contains("\"photo_access_change_later_hint\""), lang)
+        }
+        let zh = try String(contentsOf: root.appendingPathComponent("PPass/Resources/zh-Hans.lproj/IOS.strings"), encoding: .utf8)
+        XCTAssertTrue(zh.contains("设置 › 隐私与安全性 › 照片 › P-Pass") && zh.contains("完全访问"))
+    }
 }

@@ -21,8 +21,11 @@ struct DecisionScreen: View {
                     PPButton(title: L.s("decision_choose_scope"), height: 64, fontSize: 19) { app.decisionChooseScope() }
                         .accessibilityIdentifier("decisionChooseScope")
                         .padding(.top, 40)
-                    Text(L.s("decision_choose_scope_note")).font(PPFont.sans(14, relativeTo: .footnote)).foregroundStyle(PPColor.ink40)
+                    // iOS 补一句「之后怎么改成全部」：选了部分照片之后 iOS 不会再弹框，只能去系统设置（行业惯例写明路径）。
+                    Text(L.s("decision_choose_scope_note") + "\n" + L.s("photo_access_change_later_hint"))
+                        .font(PPFont.sans(14, relativeTo: .footnote)).foregroundStyle(PPColor.ink40)
                         .multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.top, 8)
+                        .fixedSize(horizontal: false, vertical: true)
                     Button(L.s("decision_pick_photos")) { app.decisionPickPhotos() }
                         .font(PPFont.sans(15, .bold, relativeTo: .subheadline)).foregroundStyle(PPColor.ink60)
                         .frame(maxWidth: .infinity, minHeight: 44).padding(.top, 10)
