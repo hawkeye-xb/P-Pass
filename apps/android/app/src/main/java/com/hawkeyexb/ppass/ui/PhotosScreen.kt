@@ -408,8 +408,9 @@ internal fun PhotosScreen(
         // UI-13: 私有 FilterChip（手写药丸）改用 Material3 同名组件——
         // 之前跟框架组件撞名字纯属巧合式重新发明轮子，见 PhotoFilterChip
         // 的 wrapper（保留私有壳只是为了封装 colors，不算"手写控件"）。
+        // 左右 12 与照片网格对齐（产品负责人 11-04）。
         Row(
-            Modifier.fillMaxWidth().padding(20.dp, 0.dp, 20.dp, 12.dp),
+            Modifier.fillMaxWidth().padding(12.dp, 0.dp, 12.dp, 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             PhotoFilterChip(stringResource(R.string.chip_all), filter == TimelineFilter.All) {
