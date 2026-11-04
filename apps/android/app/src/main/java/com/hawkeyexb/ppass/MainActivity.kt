@@ -698,6 +698,17 @@ fun PPassApp() {
             else -> ruleHintRes = R.string.auto_backup_rule_denied_hint
         }
     }
+    // #1353：部分权限下开自动备份、系统已不再弹框（拒过两次被锁）→ 去本 App 的系统设置页，回到前台按真实权限现算（同 iOS）。
+    // 不预写开关；只记「去了设置、回来要接着走」（Activity 重建也保留）。
+    var ruleAwaitingSettings by rememberSaveable { mutableStateOf(false) }
+    // 从系统设置回来（ON_RESUME 推进 resumeCount、先重读了 mediaAccess）：按真实权限接着走，只接一次。
+    LaunchedEffect(resumeCount) {
+        if (!ruleAwaitingSettings) return@LaunchedEffect
+        ruleAwaitingSettings = false
+        val now = mediaAccess(context)
+        PLog.i("PPassFlow", "auto-rule: back from settings, photo access=$now")
+        applyRuleAccess(pairings.load(), now)
+    }
     val rulePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ ->
         val pairing = pendingRulePairing
         pendingRulePairing = null
@@ -705,10 +716,6 @@ fun PPassApp() {
         mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
         applyRuleAccess(pairing, mediaAccess)
     }
-    // #1353：已是「部分照片」时开自动备份——不再申请权限：部分权限下再申请，系统不会给「全部允许」
-    // （三星真机：决定页选部分 + 第一次「开启」选部分 = 拒绝两次，READ_MEDIA_IMAGES 变 USER_FIXED，请求 4ms 内直接跳系统选图）。
-    // 直接打开本 App 的系统设置页让用户改成「全部允许」，回到前台按真实权限现算（同 iOS）。不预写开关。
-    var ruleAwaitingSettings by rememberSaveable { mutableStateOf(false) }
     val onToggleRule: (Pairing, Boolean) -> Unit = { pairing, on ->
         if (!on) {
             rulePrefs.set(false)
@@ -726,14 +733,6 @@ fun PPassApp() {
                 rulePermission.launch(withMediaLocation(requiredMediaPermissions()))
             }
         }
-    }
-    // 从系统设置回来（ON_RESUME 推进 resumeCount、先重读了 mediaAccess）：按真实权限接着走，只接一次。
-    LaunchedEffect(resumeCount) {
-        if (!ruleAwaitingSettings) return@LaunchedEffect
-        ruleAwaitingSettings = false
-        val now = mediaAccess(context)
-        PLog.i("PPassFlow", "auto-rule: back from settings, photo access=$now")
-        applyRuleAccess(pairings.load(), now)
     }
     systemBackTarget(screen)?.let { target ->
         BackHandler { screen = target }

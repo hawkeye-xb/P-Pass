@@ -35,7 +35,7 @@ class RuleEnableWhenPartialTest {
     /** 接线：Settings 分支只去设置、不申请、不预写开关；Request 分支申请；判断用系统的 rationale。 */
     @Test
     fun routes_are_wired_to_settings_and_request() {
-        val toggle = main.substringAfter("val onToggleRule: (Pairing, Boolean) -> Unit").substringBefore("// 从系统设置回来")
+        val toggle = main.substringAfter("val onToggleRule: (Pairing, Boolean) -> Unit").substringBefore("\n    }\n")
         assertTrue(toggle.contains("ruleEnableRoute(mediaAccess(context), canPromptForFullMediaAccess(context))"))
         val settings = toggle.substringAfter("RuleEnableRoute.Settings -> {").substringBefore("RuleEnableRoute.Request")
         assertTrue(settings.contains("openAppDetailsSettings(context)"))
