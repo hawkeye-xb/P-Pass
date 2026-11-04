@@ -85,19 +85,22 @@ core_is "$PATHS" "$RULES" true "配对验证码 crate" crates/pair-pake/src/lib.
 core_is "$PATHS" "$RULES" true "数据库迁移" crates/storage/migrations/0001_init.sql
 core_is "$PATHS" "$RULES" true "钥匙串" crates/platform/src/keychain.rs
 core_is "$PATHS" "$RULES" true "daemon 鉴权" crates/daemon/src/authz.rs
-core_is "$PATHS" "$RULES" true "**daemon 新文件（未登记）默认是核心**" crates/daemon/src/brand_new.rs
-core_is "$PATHS" "$RULES" true "**安卓 backup 新文件默认是核心**" "$J/backup/BrandNew.kt"
+core_is "$PATHS" "$RULES" false "daemon 新文件（未登记）不算核心：人控名单只列具体文件" crates/daemon/src/brand_new.rs
+core_is "$PATHS" "$RULES" false "安卓 backup 新文件（未登记）不算核心" "$J/backup/BrandNew.kt"
+core_is "$PATHS" "$RULES" true "安卓备份账本" "$J/backup/order/SqliteOrderStore.kt"
 core_is "$PATHS" "$RULES" true "安卓 Keystore" "$J/transport/AndroidKeystoreIdentityWrapper.kt"
-core_is "$PATHS" "$RULES" true "安卓脱敏（log/ 下唯一受审）" "$J/log/Redact.kt"
-core_is "$PATHS" "$RULES" true "安卓 res/xml（+ 压过 -）" apps/android/app/src/main/res/xml/file_paths.xml
+core_is "$PATHS" "$RULES" false "安卓脱敏（已移出人控）" "$J/log/Redact.kt"
+core_is "$PATHS" "$RULES" true "安卓 res/xml" apps/android/app/src/main/res/xml/file_paths.xml
 core_is "$PATHS" "$RULES" true "安卓清单" apps/android/app/src/main/AndroidManifest.xml
 core_is "$PATHS" "$RULES" true "iOS 配对" apps/ios/PPass/Live/LivePairing.swift
 core_is "$PATHS" "$RULES" true "iOS 权限声明" apps/ios/PPass/PPass.entitlements
 core_is "$PATHS" "$RULES" true "桌面壳权限声明" apps/desktop/src-tauri/capabilities/default.json
-core_is "$PATHS" "$RULES" true "workflow" .github/workflows/ci-rust.yml
+core_is "$PATHS" "$RULES" false "CI workflow 归 owner 定的技术类，不走人控" .github/workflows/ci-rust.yml
+core_is "$PATHS" "$RULES" true "发版 workflow（更新链）" .github/workflows/release.yml
 core_is "$PATHS" "$RULES" true "核心名单自身" .github/core-paths.txt
-core_is "$PATHS" "$RULES" true "判定脚本自身" tools/ci-paths.sh
-core_is "$PATHS" "$RULES" true "依赖锁" Cargo.lock
+core_is "$PATHS" "$RULES" false "门禁脚本归 owner 定的技术类" tools/ci-paths.sh
+core_is "$PATHS" "$RULES" false "依赖锁不属于人控的五类" Cargo.lock
+core_is "$PATHS" "$RULES" true "更新链脚本" tools/release/plan-builds.sh
 core_is "$PATHS" "$RULES" true "混合：界面 + 核心" "$J/ui/HomeScreen.kt" crates/proto/src/lib.rs
 core_is "$PATHS" "$RULES" false "安卓界面" "$J/ui/HomeScreen.kt"
 core_is "$PATHS" "$RULES" false "安卓文案资源" apps/android/app/src/main/res/values/strings.xml

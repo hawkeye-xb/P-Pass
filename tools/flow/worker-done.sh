@@ -179,4 +179,4 @@ rm -f "$FAILS_FILE"
 echo
 echo "✅ #${N} 已交卡：${BRANCH} 已推送，标签 → status:review，回执已贴。"
 echo "   证据等级：${LEVEL}"
-echo "   下一步：just start <下一张卡的 issue号>；owner 会攒批合入。不要自己开 PR。"
+echo "   下一步：开 PR（正文 closes #N + 证据），CI 绿后按卡的级别合入；然后 just start <下一张卡的 issue号>。"
