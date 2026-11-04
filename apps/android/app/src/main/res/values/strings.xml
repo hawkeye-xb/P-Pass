@@ -278,6 +278,13 @@
     <string name="photos_first_run_intro">Connected to %1$s. Photos on this phone are saved to this computer.</string>
     <string name="photos_first_run_enable">Turn on auto backup</string>
     <string name="photos_first_run_pick">Pick a few photos first</string>
+    <!-- #1322 照片页引导位（方案结论 6）与范围内暂无照片的现状（结论 7）。 -->
+    <string name="photos_guide_scope">Turn on auto backup so new photos go to %1$s automatically.</string>
+    <string name="photos_guide_background">Back up automatically even when the app is closed.</string>
+    <string name="photos_guide_enable">Turn on</string>
+    <string name="photos_guide_close">Close</string>
+    <string name="photos_scope_empty_since">Auto backup is on. Photos taken from %1$s onward will go to %2$s.</string>
+    <string name="photos_scope_empty_all">Auto backup is on. Photos in the chosen albums will go to %1$s.</string>
     <string name="auto_backup_blocked_hero">Auto backup has stopped</string>
     <string name="auto_backup_rule_partial_hint">Access is limited to some photos.</string>
     <string name="auto_backup_rule_none_hint">No access to photos.</string>

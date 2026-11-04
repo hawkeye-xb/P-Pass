@@ -17,7 +17,8 @@ final class SettingsFeedbackTests: XCTestCase {
         var cancelResult: Int?
         var calls: [String] = []
 
-        func facts() -> FlowFacts { FlowFacts() }
+        var stubFacts = FlowFacts()
+        func facts() -> FlowFacts { stubFacts }
         func observe(_ onChange: @escaping () -> Void) {}
         func pauseOrResume() async {}
         func wake() async { calls.append("wake") }
@@ -376,21 +377,134 @@ final class SettingsFeedbackTests: XCTestCase {
     }
 
 
-    /// 照片页空库两种说法：没选相册 → 引导去选；选了相册（含「最近项目」）→ 同一句（10-29 文案定稿 C8）。
-    func test_photos_empty_hint_follows_the_scope() async {
-        let (app, _, media) = make()
+    /// #1324（改写自原「照片页空库两种说法」：「没选相册 → 引导去选」并入引导位第一步）：引导位的事实来自真实开关——
+    /// 规则开 + 选了相册（含「最近项目」）才算范围备份开着；没选 / 从未保存 / 规则关 → 第一步。
+    func test_photos_guide_reads_the_real_switches() async {
+        let (app, engine, media) = make()
         app.refreshExistingAlbums()
         await settle()
-        XCTAssertEqual(app.photosEmptyHint, .albums, "范围 [a]：选了相册就只有一种说法，不按「最近项目」分支")
-        media.disk = ["b"]
-        app.refresh()
-        XCTAssertEqual(app.photosEmptyHint, .albums)
+        XCTAssertTrue(app.guideFacts.scopeOn, "规则开、范围 [a]")
+        XCTAssertEqual(app.photosGuide, .none, "还没传成功：不出卡")
         media.disk = []
         app.refresh()
-        XCTAssertEqual(app.photosEmptyHint, .chooseAlbums)
+        XCTAssertEqual(app.photosGuide, .enableScope, "一个相册都没选")
         media.disk = nil
         app.refresh()
-        XCTAssertEqual(app.photosEmptyHint, .chooseAlbums, "从未保存也是没选相册")
+        XCTAssertEqual(app.photosGuide, .enableScope, "从未保存也是没选相册")
+        media.disk = ["a"]
+        engine.rule = false
+        app.refresh()
+        XCTAssertEqual(app.photosGuide, .enableScope, "规则关")
+        engine.rule = true
+        engine.stubFacts.lastSuccessAt = 1
+        app.refresh()
+        XCTAssertEqual(app.photosGuide, .enableBackground, "第一张已传、后台没开")
+        app.setAutoBackup(true)
+        XCTAssertEqual(app.photosGuide, .none, "都开了")
+    }
+
+    /// × 即走完：落盘「onboarding 已走完」（与 Android 同一个 background_backup_offer.json），之后开关怎么变都不再出卡；
+    /// 范围内暂无照片的现状不受 × 影响。
+    /// 反证：`dismissGuide` 不落盘（不调 dismissBackgroundCard），card-dismissed 断言红；现状提示也看 ×，最后一段红。
+    func test_dismissing_the_guide_ends_it_but_not_the_scope_status_line() async {
+        let (app, engine, _) = make()
+        app.refreshExistingAlbums()
+        await settle()
+        engine.stubFacts.inScopeTotal = 0
+        app.refresh()
+        XCTAssertNotNil(app.scopeEmptyHint, "范围开着、范围里还没有照片 → 说现状")
+        engine.stubFacts.lastSuccessAt = 1
+        app.refresh()
+        XCTAssertEqual(app.photosGuide, .enableBackground)
+        app.dismissGuide()
+        XCTAssertTrue(engine.calls.contains("card-dismissed"))
+        app.refresh()
+        XCTAssertEqual(app.photosGuide, .none)
+        engine.rule = false
+        app.refresh()
+        XCTAssertEqual(app.photosGuide, .none, "规则关了也不再出第一步")
+        engine.rule = true
+        app.refresh()
+        XCTAssertNotNil(app.scopeEmptyHint, "不受 × 影响")
+        engine.stubFacts.inScopeTotal = 1
+        app.refresh()
+        XCTAssertNil(app.scopeEmptyHint, "有了第一张就不说")
+    }
+
+    /// 第二步按系统真实状态现算（owner 判断）：App 里「后台备份」开着但系统「后台 App 刷新」被关 → 仍出卡（按钮「去设置」）；
+    /// 回到前台读到系统已放行 → 卡消失；被限制（用户改不了）→ 不劝。按钮不预先写系统侧任何东西。
+    /// 反证：卡片判定改回只看意图（`backgroundOn: autoBackup`），「意图开、系统关」那段红。
+    func test_background_step_follows_the_real_system_state() async {
+        let (app, engine, _) = make()
+        app.refreshExistingAlbums()
+        await settle()
+        engine.stubFacts.lastSuccessAt = 1
+        engine.disk.auto = true
+        engine.refresh = .denied
+        app.sceneBecameActive()
+        XCTAssertEqual(app.photosGuide, .enableBackground, "意图开着、系统后台 App 刷新关着：后台备份并没有生效")
+        XCTAssertEqual(app.backgroundGuideActionKey, "background_refresh_notice_action", "按钮「去设置」")
+        let before = engine.calls
+        engine.refresh = .available // 用户在系统设置里打开后回到前台
+        app.sceneBecameActive()
+        XCTAssertEqual(app.photosGuide, .none, "回到前台按真实状态重算")
+        XCTAssertEqual(engine.calls, before, "没有任何预先写入")
+        engine.refresh = .restricted
+        app.sceneBecameActive()
+        XCTAssertEqual(app.photosGuide, .none, "被限制：用户改不了，引导位不劝")
+    }
+
+    /// 系统已放行、只差 App 里的「后台备份」开关（系统读不到这一项）：按钮「开启」，写这一项。
+    func test_background_step_with_refresh_available_turns_on_the_app_switch() async {
+        let (app, engine, _) = make()
+        app.refreshExistingAlbums()
+        await settle()
+        engine.stubFacts.lastSuccessAt = 1
+        engine.refresh = .available
+        app.refresh()
+        XCTAssertEqual(app.photosGuide, .enableBackground)
+        XCTAssertEqual(app.backgroundGuideActionKey, "photos_guide_enable")
+        app.guideAction(.enableBackground)
+        XCTAssertTrue(engine.calls.contains("auto=true"))
+        XCTAssertEqual(app.photosGuide, .none)
+    }
+
+    /// × 写不下来：卡片留着、提示用户。
+    func test_dismiss_write_failure_keeps_the_card_and_tells_the_user() async {
+        let (app, engine, _) = make()
+        engine.failWrites = true
+        engine.rule = false
+        app.refresh()
+        app.dismissGuide()
+        XCTAssertEqual(app.photosGuide, .enableScope)
+        XCTAssertEqual(app.notice?.message, L.s("setting_save_failed"))
+    }
+
+    /// 第一步的按钮：规则开着（只是没选相册）→ 直达选范围页。
+    func test_enable_scope_with_the_rule_on_opens_the_scope_editor() {
+        let (app, engine, media) = make()
+        media.disk = []
+        app.refresh()
+        XCTAssertTrue(engine.rule)
+        app.guideAction(.enableScope)
+        XCTAssertTrue(app.wantsScopeEditor)
+        XCTAssertEqual(app.tab, .settings)
+    }
+
+    /// 现状那一行：「从今天起」写日期，「全部」说所选相册。
+    func test_scope_empty_hint_wording() async {
+        let (app, engine, media) = make()
+        app.refreshExistingAlbums()
+        await settle()
+        engine.stubFacts.inScopeTotal = 0
+        media.since = .all
+        app.refresh()
+        XCTAssertEqual(app.scopeEmptyHint, L.f("photos_scope_empty_all", "Home-Computer"))
+        let ms: Int64 = 1_793_203_200_000
+        media.since = .since(ms: ms)
+        app.refresh()
+        XCTAssertEqual(app.scopeEmptyHint, L.f("photos_scope_empty_since", SettingsScreen.scopeDate(Date(timeIntervalSince1970: Double(ms) / 1000)), "Home-Computer"))
+        XCTAssertNotEqual(L.s("photos_scope_empty_all"), "photos_scope_empty_all", "文案已打包")
     }
 
     /// 设置行的时间档一律写日期（10-29 文案定稿）：今天也写「10月29日起的照片」，以前某天写那一天；全部 →「含以前的照片」。

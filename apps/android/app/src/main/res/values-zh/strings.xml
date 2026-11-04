@@ -273,6 +273,13 @@
     <string name="photos_first_run_intro">已连上 %1$s。手机上的照片会存到这台电脑。</string>
     <string name="photos_first_run_enable">开启自动备份</string>
     <string name="photos_first_run_pick">先挑几张传</string>
+    <!-- #1322 照片页引导位（方案结论 6）与范围内暂无照片的现状（结论 7）。 -->
+    <string name="photos_guide_scope">开启自动备份，以后拍的照片会自动传到 %1$s。</string>
+    <string name="photos_guide_background">App 关着也能自动备份。</string>
+    <string name="photos_guide_enable">开启</string>
+    <string name="photos_guide_close">关闭</string>
+    <string name="photos_scope_empty_since">自动备份已开启，%1$s以后拍的照片会传到 %2$s。</string>
+    <string name="photos_scope_empty_all">自动备份已开启，所选相册里的照片会传到 %1$s。</string>
     <string name="auto_backup_blocked_hero">自动备份已停止</string>
     <string name="auto_backup_rule_partial_hint">只允许访问部分照片。</string>
     <string name="auto_backup_rule_none_hint">没有照片访问权限。</string>
