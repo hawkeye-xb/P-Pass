@@ -120,6 +120,10 @@ final class OnboardingNavigationTests: XCTestCase {
             XCTAssertTrue(strings.contains("\"photo_access_change_later_hint\""), lang)
         }
         let zh = try String(contentsOf: root.appendingPathComponent("PPass/Resources/zh-Hans.lproj/IOS.strings"), encoding: .utf8)
-        XCTAssertTrue(zh.contains("设置 › 隐私与安全性 › 照片 › P-Pass") && zh.contains("完全访问"))
+        // 全 App 同一件事只有一种说法：决定页 / 引导卡 / 两条失败通知都是同一条路径与选项名。
+        for key in ["photo_access_change_later_hint", "notif_media_partial_body", "notif_media_none_body"] {
+            let line = zh.components(separatedBy: "\n").first { $0.hasPrefix("\"\(key)\"") } ?? ""
+            XCTAssertTrue(line.contains("「设置 › 隐私与安全性 › 照片 › P-Pass」") && line.contains("「完全访问」"), key)
+        }
     }
 }
