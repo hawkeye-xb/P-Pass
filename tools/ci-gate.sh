@@ -21,6 +21,7 @@ fi
 
 bad=0
 while read -r job result; do
+  result="${result%$'\r'}" # Windows 版 jq 输出 CRLF，行尾的 \r 会混进 result（#1366）
   case "$result" in
     success | skipped) echo "OK    ${job}: ${result}" ;;
     *)

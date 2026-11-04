@@ -179,6 +179,11 @@ if not setup_script.is_file():
 # Counterproof: execute the setup script against two toolchain TOMLs with mocked
 # rustup/rustc. If the script hardcodes a version or stops exporting the parsed
 # value, either run fails or the observed version does not follow the TOML.
+# Windows 的 CreateProcess 先搜 System32 再搜 PATH，["bash"] 会撞上 WSL 桩（#1366）；
+# 用 PATH 解析出的绝对路径，Windows 上是 Git Bash，Linux/macOS 上是 /bin/bash。
+bash = shutil.which("bash") or "bash"
+
+
 def run_setup(channel: str) -> None:
     with tempfile.TemporaryDirectory() as temporary:
         workdir = pathlib.Path(temporary)
@@ -204,11 +209,14 @@ def run_setup(channel: str) -> None:
         for executable in bin_dir.iterdir():
             executable.chmod(0o755)
         environment = os.environ | {
-            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            # os.pathsep：Windows 是 ;，Linux/macOS 是 :。写死 : 会让 Windows 的 PATH 解析错位，
+            # 子进程找不到 Bash（先撞上 System32 的 WSL 桩，#1366）。
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
             "RUSTUP_LOG": str(rustup_log),
             "GITHUB_ENV": str(github_env),
         }
-        subprocess.run([str(setup_script)], cwd=workdir, env=environment, check=True)
+        # 显式经 bash 执行：Windows 的 CreateProcess 不认 .sh 的 shebang（WinError 193，#1366）。
+        subprocess.run([bash, str(setup_script)], cwd=workdir, env=environment, check=True)
         observed = github_env.read_text().splitlines()
         expected_export = f"RUSTUP_TOOLCHAIN={channel}"
         if observed != [expected_export]:
