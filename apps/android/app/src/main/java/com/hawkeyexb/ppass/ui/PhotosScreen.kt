@@ -912,7 +912,7 @@ internal fun photosGuideOf(f: GuideFacts): PhotosGuide = when {
  */
 internal fun scopeEmptyHintShown(f: GuideFacts, inScope: Long?): Boolean = f.scopeOn && inScope == 0L
 
-/** 弱引导一行：一句话 + 文字按钮 + ×（产品负责人 11-04：弱引导不用整宽大按钮）。 */
+/** 引导位提示条：图标 + 一句话 + 文字按钮，× 靠右（产品负责人 11-04：弱引导，不用整宽大按钮、不做成胶囊）。 */
 @Composable
 private fun PhotosGuideCard(
     guide: PhotosGuide,
@@ -926,23 +926,35 @@ private fun PhotosGuideCard(
         PhotosGuide.EnableBackground -> stringResource(R.string.photos_guide_background)
         PhotosGuide.None -> return
     }
-    // 浅底、一行：左边一句话，右边文字按钮（墨色加粗）+ ×；字长时正文折行，按钮和 × 不动。
+    // 提示条：小圆角 + 浅底细描边；图标、文字、按钮从左紧挨着排，× 单独靠右。文字折行时按钮跟在右侧，不悬空。
     Surface(
         color = PPColor.WaitingBg,
-        shape = RoundedCornerShape(PPSize.RadiusCard),
+        shape = RoundedCornerShape(PPSize.RadiusControlSm),
+        border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Border),
         modifier = modifier,
     ) {
-        Row(Modifier.padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text,
-                fontSize = 15.sp, lineHeight = 22.sp, color = PPColor.Ink60,
-                modifier = Modifier.weight(1f).padding(vertical = 12.dp),
+        Row(Modifier.padding(start = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            androidx.compose.material3.Icon(
+                androidx.compose.ui.res.painterResource(
+                    if (guide == PhotosGuide.EnableScope) R.drawable.ic_guide_upload else R.drawable.ic_guide_battery,
+                ),
+                contentDescription = null,
+                tint = PPColor.Ink60,
+                modifier = Modifier.size(20.dp),
             )
-            androidx.compose.material3.TextButton(
-                onClick = onAction,
-                colors = androidx.compose.material3.ButtonDefaults.textButtonColors(contentColor = PPColor.Ink),
-            ) {
-                Text(stringResource(R.string.photos_guide_enable), fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            Row(Modifier.weight(1f).padding(start = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text,
+                    fontSize = 15.sp, lineHeight = 22.sp, color = PPColor.Ink,
+                    modifier = Modifier.weight(1f, fill = false).padding(vertical = 12.dp),
+                )
+                androidx.compose.material3.TextButton(
+                    onClick = onAction,
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp),
+                    colors = androidx.compose.material3.ButtonDefaults.textButtonColors(contentColor = PPColor.Ink),
+                ) {
+                    Text(stringResource(R.string.photos_guide_enable), fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                }
             }
             // IconButton 自带 48dp 点击区；「关闭」只作无障碍标签，不显示成文字。
             androidx.compose.material3.IconButton(onClick = onDismiss) {
