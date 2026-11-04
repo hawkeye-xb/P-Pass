@@ -100,12 +100,29 @@ fi
 #   apps/ios/**、tools/ios/**  → just ios-test
 #   assets/i18n/**、strings*.xml → just mobile-static-check
 #   crates/<名>/**             → cargo nextest run -p <包名>
-#   其余（桌面、tools、.github、justfile…）任何一个挑不出来 → just ci
+#   tools/<文件>               → 改动里的 tools/test-*.sh 本身 + 引用到它的 tools/test-*.sh（git grep 找）
+#   其余（桌面、.github、justfile、没有任何测试引用的 tools 文件…）任何一个挑不出来 → just ci
 GATES=()
 add_gate() { # 去重追加
   local g
   for g in ${GATES[@]+"${GATES[@]}"}; do [ "$g" = "$1" ] && return 0; done
   GATES+=("$1")
+}
+tool_tests() { # tool_tests <tools/下的文件>：打印要跑的测试，一行一个；没有就什么也不打印
+  local f="$1" base dir
+  case "$f" in
+    tools/test-*.sh)
+      [ -f "$f" ] && printf '%s\n' "$f"
+      return 0
+      ;;
+  esac
+  base="${f##*/}"
+  dir="${f%/*}"
+  if [ "$dir" = tools ]; then
+    git grep -l -F -e "$f" -e "$base" -- 'tools/test-*.sh' 2>/dev/null || true
+  else
+    git grep -l -F -e "$f" -e "$base" -e "${dir}/" -- 'tools/test-*.sh' 2>/dev/null || true
+  fi
 }
 FULL=0
 HAS_CODE=0
@@ -127,6 +144,16 @@ while IFS= read -r f; do
       crate_dir="${crate_dir%%/*}"
       pkg="$(sed -n 's/^name *= *"\(.*\)"/\1/p' "crates/${crate_dir}/Cargo.toml" 2>/dev/null | head -1)"
       if [ -n "$pkg" ]; then add_gate "cargo nextest run -p ${pkg}"; else FULL=1; fi
+      ;;
+    tools/*)
+      tests="$(tool_tests "$f")"
+      if [ -n "$tests" ]; then
+        while IFS= read -r t; do add_gate "bash ${t}"; done <<EOF3
+$tests
+EOF3
+      else
+        FULL=1
+      fi
       ;;
     *) FULL=1 ;;
   esac
