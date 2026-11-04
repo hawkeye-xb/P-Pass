@@ -126,6 +126,8 @@ fi
 #   apps/android/**            → just android-test
 #   apps/ios/**、tools/ios/**  → just ios-test
 #   assets/i18n/**、strings*.xml → just mobile-static-check
+#   iOS 文案（apps/ios/**/*.strings、*.xcstrings、assets/i18n/**）→ 另加 just ios-test --lang en 与 --lang zh
+#     （本机模拟器多是中文、CI 是英文：写死某一种语言的断言只在另一种语言下红，#1342）
 #   crates/<名>/**             → cargo nextest run -p <包名>
 #   tools/<文件>               → 改动里的 tools/test-*.sh 本身 + 引用到它的 tools/test-*.sh（git grep 找）
 #   其余（桌面、.github、justfile、没有任何测试引用的 tools 文件…）任何一个挑不出来 → just ci
@@ -153,12 +155,16 @@ tool_tests() { # tool_tests <tools/下的文件>：打印要跑的测试，一�
 }
 FULL=0
 HAS_CODE=0
+LANG_TEST=0
 while IFS= read -r f; do
   [ -n "$f" ] || continue
   case "$f" in
     docs/* | *.md | release/notes/*) continue ;;
   esac
   HAS_CODE=1
+  case "$f" in
+    apps/ios/*.strings | apps/ios/*.xcstrings | assets/i18n/*) LANG_TEST=1 ;;
+  esac
   case "$f" in
     apps/android/*)
       add_gate "just android-test"
@@ -191,6 +197,10 @@ if [ "$HAS_CODE" = 0 ]; then
   GATES=("just ci-docs")
 elif [ "$FULL" = 1 ] || [ "${#GATES[@]}" -eq 0 ]; then
   GATES=("just ci")
+fi
+if [ "$LANG_TEST" = 1 ]; then
+  add_gate "just ios-test --lang en"
+  add_gate "just ios-test --lang zh"
 fi
 GATE=""
 for g in "${GATES[@]}"; do GATE="${GATE:+${GATE} + }${g}"; done
