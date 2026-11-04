@@ -106,7 +106,7 @@ final class OnboardingNavigationTests: XCTestCase {
         XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "PHPhotoLibraryPreventAutomaticLimitedAccessAlert") as? Bool, true)
     }
 
-    /// 决定页小字与部分权限时引导卡正文用同一句路径说明（iOS 独有文案，按苹果官方「隐私与安全性 › 照片」）。
+    /// 决定页小字写路径说明（iOS 独有文案，按苹果官方「隐私与安全性 › 照片」）；照片页引导卡不写。
     func testChangeLaterHintIsTheOfficialPathInBothScreens() throws {
         let hint = L.s("photo_access_change_later_hint")
         XCTAssertNotEqual(hint, "photo_access_change_later_hint", "词条要在 IOS.strings 里")
@@ -114,7 +114,8 @@ final class OnboardingNavigationTests: XCTestCase {
         let decision = try String(contentsOf: root.appendingPathComponent("PPass/Home/DecisionScreen.swift"), encoding: .utf8)
         let photos = try String(contentsOf: root.appendingPathComponent("PPass/Photos/PhotosScreen.swift"), encoding: .utf8)
         XCTAssertTrue(decision.contains("L.s(\"photo_access_change_later_hint\")"))
-        XCTAssertTrue(photos.contains("L.s(\"photo_access_change_later_hint\")"))
+        // 引导卡的「去设置」直接跳过去，卡上不重复路径说明（产品负责人 11-04）。
+        XCTAssertFalse(photos.contains("L.s(\"photo_access_change_later_hint\")"))
         for lang in ["zh-Hans", "en"] {
             let strings = try String(contentsOf: root.appendingPathComponent("PPass/Resources/\(lang).lproj/IOS.strings"), encoding: .utf8)
             XCTAssertTrue(strings.contains("\"photo_access_change_later_hint\""), lang)

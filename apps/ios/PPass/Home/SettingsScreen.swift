@@ -275,8 +275,8 @@ struct NoticeRow: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.vertical, standalone ? 10 : 0)
                 if let a = action {
-                    Button(a.0, action: a.1)
-                        .font(PPFont.subheadlineBold).underline().foregroundStyle(PPColor.ink)
+                    Button(action: a.1) { Text(a.0).underline() }
+                        .font(PPFont.subheadlineBold).foregroundStyle(PPColor.ink)
                         .buttonStyle(.borderless)
                         .fixedSize()
                         .padding(.horizontal, standalone ? 8 : 0)
@@ -311,8 +311,8 @@ struct NoticeRow: View {
                     .accessibilityIdentifier("noticeDismiss")
             }
             if let a = action {
-                Button(a.0, action: a.1)
-                    .font(PPFont.subheadlineBold).underline().foregroundStyle(PPColor.ink)
+                Button(action: a.1) { Text(a.0).underline() }
+                    .font(PPFont.subheadlineBold).foregroundStyle(PPColor.ink)
                     .buttonStyle(.borderless)
                     .accessibilityIdentifier("noticeAction")
             }
