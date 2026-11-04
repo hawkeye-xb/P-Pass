@@ -437,13 +437,34 @@ ios-screenshots *args:
   bash tools/ios/screenshots.sh {{args}}
 
 # iOS 单元测试：生成工程 → 模拟器上 xcodebuild test。模拟器选法见 tools/ios/sim.sh
-# （默认 iPhone 17，IOS_SIM_NAME 可改；不写死 runtime 版本）。本配方启动的模拟器跑完即关。
+# （默认 iPhone 17，IOS_SIM_NAME 可改；不写死 runtime 版本）。
 # 与 ci-ios.yml 同一组：App 测试 → 隐私清单 → TransportFFITests（模拟器 + 本机隔离 daemon，
 # daemon 用 debug 构建，与 CI 一致）。少跑 FFI 那步，Rust 侧改了 FFI 字段本地看不出来（11-02 #1304）。
-ios-test:
-  bash tools/ios/test.sh
-  bash tools/ios/privacy-manifest-local.sh
-  PPASS_DAEMON_PROFILE=dev bash tools/ios/test-transport-ffi.sh
+# #1378：just ios-test --lang en|zh 只跑 App 测试并指定测试语言（本机模拟器多是中文、CI 是英文；
+# 文案改动交卡时 just done 中英各跑一次）。结束时关掉本配方运行期间新开的模拟器（tools/ios/sim.sh shutdown-new）。
+ios-test *args:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd "{{ justfile_directory() }}"
+  lang=""
+  set -- {{args}}
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --lang) lang="${2:-}"; shift 2 || shift ;;
+      *) echo "用法: just ios-test [--lang en|zh]" >&2; exit 2 ;;
+    esac
+  done
+  [ -z "$lang" ] || langargs="$(bash tools/ios/sim.sh lang-args "$lang")"
+  before="$(bash tools/ios/sim.sh booted)"
+  trap 'bash tools/ios/sim.sh shutdown-new "$before"' EXIT
+  if [ -n "$lang" ]; then
+    # shellcheck disable=SC2086 # 刻意按空格拆成参数
+    bash tools/ios/test.sh $langargs
+  else
+    bash tools/ios/test.sh
+    bash tools/ios/privacy-manifest-local.sh
+    PPASS_DAEMON_PROFILE=dev bash tools/ios/test-transport-ffi.sh
+  fi
 
 # iOS 本地 SwiftPM 包（apps/ios/Packages/*/Package.swift）逐个在模拟器上测（#345）。没有包时直接通过。
 ios-test-packages:

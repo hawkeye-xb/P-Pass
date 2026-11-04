@@ -220,5 +220,88 @@ fi
   touch "$out/P-Pass_0.10.2_android-debug.apk"
   [ "$(dev_android_apk)" = "$out/P-Pass_0.10.2_android-debug.apk" ] || { echo "没取到最新的改名包：$(dev_android_apk)"; exit 1; }
 ) || bad "just dev android 找改名后的 debug 包"
+# #1378 设备归属：有主人的设备，别人取不到锁（不排队、退出 75、说出主人）；主人自己、release 之后都能取
+if [ "$(uname)" = Darwin ]; then
+  (
+    d="$(mktemp -d)" || exit 1
+    trap 'rm -rf "$d"' EXIT
+    export E3_STATE="$d"
+    unset PPASS_DEVICE_OWNER
+    "$E3/lock" claim android 回归会话 >/dev/null || { echo "claim 失败"; exit 1; }
+    "$E3/lock" android true 2>"$d/err"
+    rc=$?
+    [ "$rc" = 75 ] || { echo "设备有主人时别人取锁没被拒（退出码 ${rc}）"; exit 1; }
+    grep -q '现在归 回归会话' "$d/err" || { echo "拒绝时没说主人：$(cat "$d/err")"; exit 1; }
+    PPASS_DEVICE_OWNER=回归会话 "$E3/lock" android true || { echo "主人自己取锁被拒"; exit 1; }
+    "$E3/lock" claim android 别的会话 2>/dev/null && { echo "有主人时别人 claim 成功了"; exit 1; }
+    st="$("$E3/lock" status)" # 先存再判：grep -q 提前退出会让 pipefail 把管道判成失败
+    printf '%s\n' "$st" | grep -q '^android  归 回归会话' || { echo "status 没列出主人：${st}"; exit 1; }
+    "$E3/lock" release android >/dev/null
+    "$E3/lock" android true || { echo "release 后取锁仍被拒"; exit 1; }
+    st="$("$E3/lock" status)"
+    printf '%s\n' "$st" | grep -q '^android  无主人；空闲' || { echo "release 后 status 不对：${st}"; exit 1; }
+    exit 0
+  ) || bad "设备归属（claim / release / status）"
+fi
+
+# #1378 模拟器用完即关：只关「要用的那台」且是本次运行期间才开机的；别的会话持着模拟器锁时不关。
+# 用假 xcrun（读 $FAKE_SIM 目录），不碰真模拟器。
+(
+  d="$(mktemp -d)" || exit 1
+  trap '[ -z "${holder:-}" ] || kill "$holder" 2>/dev/null; rm -rf "$d"' EXIT
+  export FAKE_SIM="$d" TMPDIR="$d/tmp"
+  mkdir -p "$d/bin" "$TMPDIR"
+  cat >"$d/bin/xcrun" <<'STUB'
+#!/usr/bin/env bash
+case "$*" in
+  "simctl list runtimes available -j") echo '{"runtimes":[{"platform":"iOS","isAvailable":true,"version":"26.4","identifier":"rt"}]}' ;;
+  "simctl list devices available -j") echo '{"devices":{"rt":[{"name":"iPhone 17","udid":"TARGET"}]}}' ;;
+  "simctl list devices booted -j") cat "$FAKE_SIM/booted.json" ;;
+  "simctl shutdown "*) echo "$3" >>"$FAKE_SIM/shutdown" ;;
+  *) echo "fake xcrun: unsupported $*" >&2; exit 2 ;;
+esac
+STUB
+  chmod +x "$d/bin/xcrun"
+  export PATH="$d/bin:$PATH"
+  sim="$ROOT/tools/ios/sim.sh"
+  booted() { # booted <udid:分钟前开机>...
+    local items="" u m t
+    for a in "$@"; do
+      u="${a%%:*}" m="${a##*:}"
+      t="$(python3 -I -c 'import datetime,sys; print((datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(minutes=int(sys.argv[1]))).strftime("%Y-%m-%dT%H:%M:%SZ"))' "$m")"
+      items="${items:+$items,}{\"name\":\"iPhone 17\",\"udid\":\"$u\",\"lastBootedAt\":\"$t\"}"
+    done
+    printf '{"devices":{"rt":[%s]}}' "$items" >"$d/booted.json"
+  }
+  booted
+  before="$(bash "$sim" booted)"
+  booted TARGET:1 OTHER:1
+  bash "$sim" shutdown-new "$before" 2>/dev/null
+  [ "$(cat "$d/shutdown" 2>/dev/null)" = TARGET ] || { echo "本次开的那台没关，或关了别的：$(cat "$d/shutdown" 2>/dev/null)"; exit 1; }
+  rm -f "$d/shutdown"
+  before="$(bash "$sim" booted)"
+  bash "$sim" shutdown-new "$before" 2>/dev/null
+  [ ! -e "$d/shutdown" ] || { echo "开跑前就开着的模拟器被关了"; exit 1; }
+  booted
+  before="$(bash "$sim" booted)"
+  booted TARGET:1
+  mkdir -p "$TMPDIR/ppass-ios-sim.lock"
+  sleep 30 &
+  holder=$!
+  echo "$holder" >"$TMPDIR/ppass-ios-sim.lock/pid"
+  bash "$sim" shutdown-new "$before" 2>/dev/null
+  [ ! -e "$d/shutdown" ] || { echo "别的会话持着模拟器锁时仍关了模拟器"; exit 1; }
+  [ -z "$(bash "$sim" idle 10)" ] || { echo "有人持锁时仍报闲置"; exit 1; }
+  kill "$holder"
+  wait "$holder" 2>/dev/null
+  booted TARGET:25 OTHER:3
+  idle="$(bash "$sim" idle 10)"
+  printf '%s' "$idle" | grep -q 'TARGET' && ! printf '%s' "$idle" | grep -q 'OTHER' ||
+    { echo "闲置判定不对（25 分钟的该报、3 分钟的不该报）：$idle"; exit 1; }
+  [ "$(bash "$sim" lang-args en)" = "-testLanguage en -testRegion US" ] &&
+    [ "$(bash "$sim" lang-args zh)" = "-testLanguage zh-Hans -testRegion CN" ] || { echo "测试语言参数不对"; exit 1; }
+  bash "$sim" lang-args fr 2>/dev/null && { echo "不认识的语言没报错"; exit 1; }
+  exit 0
+) || bad "模拟器用完即关 / 闲置 / 测试语言"
 
 [ "$fails" -eq 0 ] && echo "ok: tools/e3 自测通过" || { echo "$fails 项失败"; exit 1; }

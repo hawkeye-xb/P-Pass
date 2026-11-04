@@ -131,7 +131,9 @@ cat >"${BIN}/just" <<'STUB'
 G="$FAKE_GH"
 case "$1" in
   ci | ci-docs | android-test | ios-test | mobile-static-check)
-    echo "==> just $1 running"
+    echo "==> just $* running"
+    # 回放 #1342：断言写死中文原文，只在英文测试语言下红
+    if [ "$*" = "ios-test --lang en" ] && [ -e "$G/zh_hardcoded" ]; then echo "error: XCTAssertEqual failed: FAKE-EN-RED"; exit 1; fi
     if [ -e "$G/ci_fail" ]; then echo "error: lint failed: FAKE-CI-RED"; exit 1; fi
     echo "==> CI pipeline: all green FAKE-CI-GREEN"
     ;;
@@ -558,6 +560,31 @@ grep -q '^CARGO_TARGET_DIR=' "${FAR}/wt/41-cache-elsewhere/.env.ppass-dev" 2>/de
 printf '%s' "$OUT" | grep -q '编译缓存：共享' && ok "start 打印了共享编译缓存" || bad "start 没打印编译缓存：$OUT"
 git -C "$M" worktree remove --force "${FAR}/wt/41-cache-elsewhere" >/dev/null 2>&1
 rm -rf "$FAR"
+# ── #1378 iOS 文案改动：交卡时 iOS 单测中英各跑一次 ─────────────────────────
+echo "== iOS 文案中英两语 =="
+issue 61 "status:ready" "[T-61] ios copy" "apps/ios/**" "Bug"
+LW="$(START 61 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/61-"*)"
+mkdir -p "$LW/apps/ios/PPass/Resources/en.lproj"
+commit_file "$LW" apps/ios/PPass/Resources/en.lproj/Localizable.strings '"k" = "v";'
+DONE "$LW" >"${TMP}/o61" 2>&1 || bad "iOS 文案交卡失败：$(tail -5 "${TMP}/o61")"
+C61="$(comments_of 61)"
+printf '%s' "$C61" | grep -qF "just ios-test --lang en" && printf '%s' "$C61" | grep -qF "just ios-test --lang zh" &&
+  ok "改 iOS 文案 → 门禁含 just ios-test --lang en 与 --lang zh" || bad "改 iOS 文案没有中英两轮：$(printf '%s' "$C61" | grep -m1 门禁)"
+issue 62 "status:ready" "[T-62] ios code" "apps/ios/**" "Bug"
+LW2="$(START 62 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/62-"*)"
+mkdir -p "$LW2/apps/ios/PPass"
+commit_file "$LW2" apps/ios/PPass/A.swift 'let a = 1'
+DONE "$LW2" >"${TMP}/o62" 2>&1 || bad "iOS 代码交卡失败：$(tail -5 "${TMP}/o62")"
+comments_of 62 | grep -qF -- "--lang" && bad "只改 iOS 代码也跑了中英两轮" || ok "反证：只改 iOS 代码不加中英两轮"
+# 回放 #1342：测试写死中文原文，只在英文下红 → 本地交卡就被拦下（英文那一轮去掉时这条变红）
+issue 63 "status:ready" "[T-63] zh hardcoded" "assets/i18n/**" "Bug"
+LW3="$(START 63 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/63-"*)"
+mkdir -p "$LW3/assets/i18n"
+commit_file "$LW3" assets/i18n/zh.json '{}'
+touch "${FAKE_GH}/zh_hardcoded"
+if DONE "$LW3" >"${TMP}/o63" 2>&1; then bad "写死中文的测试在本地没被发现（英文那一轮没跑）"; else ok "回放 #1342：英文那一轮在本地就红，没推送"; fi
+has_lbl 63 "status:blocked" && comments_of 63 | grep -qF "just ios-test --lang en" && ok "  停在 just ios-test --lang en，打了 blocked" || bad "停的位置不对：$(comments_of 63 | head -3)"
+rm -f "${FAKE_GH}/zh_hardcoded"
 
 echo
 echo "通过 ${PASS}，失败 ${FAIL}"

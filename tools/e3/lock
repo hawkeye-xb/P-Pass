@@ -3,19 +3,68 @@
 # 同一台设备（mac / android / win / ios）同一时间只许一个会话装包、点界面。默认拿不到锁就排队等，
 # 不报错；排队时打印一行谁在用。--no-wait（just dev 用）：被占就打印谁在用并退出 75，不排队。
 # 用 /usr/bin/lockf（内核文件锁，进程退出即释放，不会留死锁）。
+#
+# 设备归属（#1378）：一台设备同一时间只归一个主人（产品负责人验收、某个会话在用）。
+#   tools/e3/lock claim <设备> <主人>   记下主人（本机文件，不进仓库）
+#   tools/e3/lock release <设备>        去掉主人
+#   tools/e3/lock status                每台设备的主人与当前占用（just doctor 会列）
+# 设备有主人时，只有 PPASS_DEVICE_OWNER 等于该主人的命令能取锁，别人一律拒绝（退出 75），不排队。
 set -euo pipefail
+dir="${E3_STATE:-$HOME/.cache/ppass-e3}"
+mkdir -p "$dir"
+DEVS="mac android ios win"
+check_dev() { case "$1" in mac | android | win | ios) ;; *) echo "未知设备：${1}（mac/android/win/ios）" >&2; exit 2 ;; esac; }
+owner_of() { [ -f "$dir/owner-$1" ] && cut -f1 "$dir/owner-$1"; }
+
+case "${1:-}" in
+  claim)
+    check_dev "${2:-}"
+    [ -n "${3:-}" ] || { echo "用法: tools/e3/lock claim <设备> <主人>" >&2; exit 2; }
+    cur="$(owner_of "$2" || true)"
+    if [ -n "$cur" ] && [ "$cur" != "$3" ]; then
+      echo "✗ 设备 $2 已归 ${cur}，先由它 release 再 claim" >&2
+      exit 75
+    fi
+    printf '%s\t%s\n' "$3" "$(date '+%m-%d %H:%M')" >"$dir/owner-$2"
+    echo "设备 $2 现在归 $3"
+    exit 0
+    ;;
+  release)
+    check_dev "${2:-}"
+    rm -f "$dir/owner-$2"
+    echo "设备 $2 已释放（没有主人）"
+    exit 0
+    ;;
+  status)
+    for d in $DEVS; do
+      own="无主人"
+      [ -f "$dir/owner-$d" ] && own="归 $(cut -f1 "$dir/owner-$d")（自 $(cut -f2 "$dir/owner-$d")）"
+      use="空闲"
+      if [ -f "$dir/lock-$d" ] && ! /usr/bin/lockf -t 0 "$dir/lock-$d" true 2>/dev/null; then
+        use="正被占用（$(cat "$dir/lock-$d.who" 2>/dev/null || echo 未知)）"
+      fi
+      printf '%-8s %s；%s\n' "$d" "$own" "$use"
+    done
+    exit 0
+    ;;
+esac
+
 wait=1
 if [ "${1:-}" = --no-wait ]; then wait=0; shift; fi
 dev="${1:?用法: tools/e3/lock [--no-wait] <设备> <命令…>}"
 shift
 [ "$#" -gt 0 ] || { echo "用法: tools/e3/lock [--no-wait] <设备> <命令…>" >&2; exit 2; }
-case "$dev" in mac | android | win | ios) ;; *) echo "未知设备：${dev}（mac/android/win/ios）" >&2; exit 2 ;; esac
-dir="${E3_STATE:-$HOME/.cache/ppass-e3}"
-mkdir -p "$dir"
+check_dev "$dev"
 lk="$dir/lock-$dev"
 var="E3_LOCKED_$(echo "$dev" | tr a-z A-Z)"
 # 已在锁里（runner 嵌套调用）：直接跑
 if [ "${!var:-}" = 1 ]; then exec "$@"; fi
+own="$(owner_of "$dev" || true)"
+if [ -n "$own" ] && [ "$own" != "${PPASS_DEVICE_OWNER:-}" ]; then
+  echo "✗ 设备 $dev 现在归 ${own}（$(cut -f2 "$dir/owner-$dev")起），不装、不点。要用先问它；用完由它 tools/e3/lock release $dev。" >&2
+  echo "  （是你的设备：设 PPASS_DEVICE_OWNER=${own} 再跑）" >&2
+  exit 75
+fi
 timeout=()
 if ! /usr/bin/lockf -t 0 "$lk" true 2>/dev/null; then
   who="$(cat "$lk.who" 2>/dev/null || echo 未知)"

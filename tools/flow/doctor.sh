@@ -211,6 +211,19 @@ else
   warn "在线设备：本机没有 adb / devicectl，跳过（只列不判失败）"
 fi
 
+# ── 9. 设备归属与闲置模拟器（#1378；只列，不判失败）─────────────────────────
+if [ -z "${PPASS_DOCTOR_SKIP_DEVICES:-}" ] && [ -x /usr/bin/lockf ]; then
+  echo "  ℹ 设备归属（tools/e3/lock status；有主人的设备别人取不到锁）："
+  bash "$(dirname "$0")/../e3/lock" status 2>&1 | sed -e 's/^/      /'
+fi
+if [ -z "${PPASS_DOCTOR_SKIP_DEVICES:-}" ] && command -v xcrun >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
+  idle="$(bash "$(dirname "$0")/../ios/sim.sh" idle 10 2>/dev/null)"
+  if [ -n "$idle" ]; then
+    warn "模拟器开着没人用（谁开谁关；确认不是你的会话在用再关：xcrun simctl shutdown <UDID>）："
+    printf '%s\n' "$idle" | sed -e 's/^/      /'
+  fi
+fi
+
 echo
 if [ "$FAIL" -ne 0 ]; then
   printf '✗ doctor 没通过：%s 项必需条件没满足。修好再开工，别带病继续。\n' "$FAIL"
