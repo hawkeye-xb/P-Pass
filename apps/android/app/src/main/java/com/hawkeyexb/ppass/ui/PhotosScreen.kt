@@ -924,7 +924,7 @@ private fun PhotosGuideCard(
     modifier: Modifier,
 ) {
     val text = when (guide) {
-        PhotosGuide.EnableScope -> stringResource(R.string.photos_guide_scope, computerName)
+        PhotosGuide.EnableScope -> stringResource(R.string.photos_guide_scope)
         PhotosGuide.EnableBackground -> stringResource(R.string.photos_guide_background)
         PhotosGuide.None -> return
     }

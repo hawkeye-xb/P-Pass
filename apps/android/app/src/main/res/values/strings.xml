@@ -279,7 +279,7 @@
     <string name="photos_first_run_enable">Turn on auto backup</string>
     <string name="photos_first_run_pick">Pick a few photos first</string>
     <!-- #1322 照片页引导位（方案结论 6）与范围内暂无照片的现状（结论 7）。 -->
-    <string name="photos_guide_scope">Turn on auto backup so new photos go to %1$s automatically.</string>
+    <string name="photos_guide_scope">Auto backup is off</string>
     <string name="photos_guide_background">Backs up even when the app is closed</string>
     <string name="photos_guide_enable">Turn on</string>
     <string name="photos_guide_close">Close</string>
