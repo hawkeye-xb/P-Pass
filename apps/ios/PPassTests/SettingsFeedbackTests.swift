@@ -688,6 +688,79 @@ final class SettingsFeedbackTests: XCTestCase {
         XCTAssertEqual(app.ruleNote, L.s("auto_backup_rule_partial_hint"))
     }
 
+    // MARK: 拒绝后用户自己去系统设置改成「全部」再回来（产品负责人 2026-11-04 补的场景，两端同一预期）
+
+    /// 场景 A：决定页「选择备份范围」→ 不允许 → 系统选图里取消 → 留在决定页；自己去设置改成全部回来 → 仍在决定页
+    /// （决定还没做，回前台不替用户跳过、不落「连过」）；再点主按钮 → 不弹选图器、直接进选范围页。
+    /// 反证：`sceneBecameActive` 里按权限把 phase 往前推，或 `decisionLanding(.full)` 不进选范围页，本条红。
+    func test_scenario_a_full_access_granted_in_settings_keeps_decision_until_the_user_chooses() async {
+        let (app, engine, media) = make(onboarded: false)
+        media.granted = nil
+        media.answer = .none
+        app.paired(firstTime: true, settingSaveFailed: false)
+        app.decisionChooseScope()
+        await settle()
+        XCTAssertTrue(app.pickerRequested, "拒绝 → 系统选图")
+        app.pickerRequested = false
+        app.pickedChosen([])
+        await settle()
+        XCTAssertEqual(app.phase, .decision, "选图取消：留在决定页")
+
+        media.granted = .full
+        app.sceneBecameActive()
+        await settle()
+        XCTAssertEqual(app.phase, .decision, "回前台不替用户做决定")
+        XCTAssertFalse(engine.calls.contains("onboarded"))
+
+        media.answer = .full
+        app.decisionChooseScope()
+        await settle()
+        XCTAssertEqual(app.phase, .chooseAlbums, "已是全部：直接进选范围页")
+        XCTAssertFalse(app.pickerRequested)
+    }
+
+    /// 场景 B：拒绝后挑了照片（单张备份）进了照片页；自己去设置改成全部回来 → 自动备份保持关（不替用户开）；
+    /// 引导卡第一张、按钮是「开启」不是「去设置」；点它 → 不去设置、直接开并进选范围页；不出「自动备份已停止」。
+    /// 反证：回前台按权限替用户把开关打开，或全部权限下按钮仍是「去设置」，本条红。
+    func test_scenario_b_full_access_after_picking_does_not_turn_backup_on_for_the_user() async {
+        let (app, engine, media) = make()
+        var opened = 0
+        app.settingsOpener = { opened += 1 }
+        try? engine.setAutoRule(false)
+        media.granted = .none
+        app.refresh()
+        media.granted = .full
+        app.sceneBecameActive()
+        await settle()
+        XCTAssertFalse(app.autoRule, "不替用户开自动备份")
+        XCTAssertEqual(app.photosGuide, .enableScope)
+        XCTAssertEqual(app.scopeGuideActionKey, "photos_guide_enable", "全部权限：按钮是「开启」")
+        XCTAssertFalse(app.autoRuleBlocked, "开关关着：不是「自动备份已停止」")
+
+        app.guideAction(.enableScope)
+        await settle()
+        XCTAssertEqual(opened, 0, "全部权限：不去设置")
+        XCTAssertTrue(app.autoRule)
+        XCTAssertTrue(app.wantsScopeEditor, "直接进选范围页")
+    }
+
+    /// 场景 C：自动备份开着时权限被收回（自动备份已停止），用户没点「去设置」而是自己去设置改回全部再回来
+    /// → 不再是「已停止」、开关仍开（不用碰开关，备份按开关恢复）。
+    /// 反证：`refresh` 不重读权限，或回前台改了开关，本条红。
+    func test_scenario_c_user_restores_full_access_on_their_own() async {
+        let (app, engine, media) = make()
+        XCTAssertTrue(engine.rule)
+        media.granted = .partial
+        app.refresh()
+        XCTAssertTrue(app.autoRuleBlocked, "权限被收回：自动备份已停止")
+        media.granted = .full
+        app.sceneBecameActive()
+        await settle()
+        XCTAssertFalse(app.autoRuleBlocked, "回前台按真实权限现算")
+        XCTAssertTrue(app.autoRule, "开关不动")
+        XCTAssertFalse(engine.calls.contains("rule=false"))
+    }
+
     /// 现状那一行：「从今天起」写日期，「全部」说所选相册。
     func test_scope_empty_hint_wording() async {
         let (app, engine, media) = make()
