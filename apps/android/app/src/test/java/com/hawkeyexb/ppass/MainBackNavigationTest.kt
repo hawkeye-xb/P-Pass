@@ -21,6 +21,9 @@ class MainBackNavigationTest {
         assertEquals(Screen.Scan, systemBackTarget(Screen.Waiting("ppf://pair/test")))
         assertEquals(Screen.Scan, systemBackTarget(Screen.Trouble(1, 2)))
         assertEquals(Screen.Home(pairing), systemBackTarget(Screen.Buckets(pairing, emptySet(), firstTime = false)))
+        // #1321：首次选范围从决定页进来，返回回决定页；决定页本身不能被返回绕过。
+        assertEquals(Screen.Decision(pairing), systemBackTarget(Screen.Buckets(pairing, emptySet(), firstTime = true)))
+        assertNull(systemBackTarget(Screen.Decision(pairing)))
     }
 
     @Test

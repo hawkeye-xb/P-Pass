@@ -57,6 +57,7 @@ class MediaPermissionRouteTest {
     fun update_dialog_does_not_cover_the_first_scope_page() {
         assertTrue(main.contains("if (!isOnboardingScreen(screen) && !updateDialogSuppressed)"))
         assertTrue(isOnboardingScreen(Screen.Buckets(pairing, emptySet(), firstTime = true)))
+        assertTrue("#1321 决定页也不压更新对话框", isOnboardingScreen(Screen.Decision(pairing)))
         assertFalse("设置里重选范围不算 onboarding", isOnboardingScreen(Screen.Buckets(pairing, emptySet(), firstTime = false)))
     }
 

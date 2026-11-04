@@ -7,8 +7,8 @@
 "bucket_no_access_action" = "去设置";
 
 /* 失败通知（#981）：iOS 点通知只打开 App、不会直达系统设置，指路写 iOS 设置项名字；电池优化在 iOS 上不存在，对位的是「后台 App 刷新」。 */
-"notif_media_partial_body" = "照片权限已改为部分照片，自动备份暂时无法继续。在「设置 › P-Pass › 照片」可改回「完整访问」。";
-"notif_media_none_body" = "照片权限已关闭，自动备份已停止。在「设置 › P-Pass › 照片」允许访问。";
+"notif_media_partial_body" = "照片权限已改为部分照片，自动备份暂时无法继续。可随时在「设置 › 隐私与安全性 › 照片 › P-Pass」改为「完全访问」。";
+"notif_media_none_body" = "照片权限已关闭，自动备份已停止。可随时在「设置 › 隐私与安全性 › 照片 › P-Pass」改为「完全访问」。";
 "notif_background_refresh_off_title" = "「后台 App 刷新」已关闭";
 "notif_background_refresh_off_body" = "现在只有打开 P-Pass 时才会备份。可在「设置 › 通用 › 后台 App 刷新」重新打开。";
 "notif_background_refresh_restricted_body" = "这台 iPhone 限制了 P-Pass 的后台刷新（可能是屏幕使用时间或设备管理），现在只有打开 P-Pass 时才会备份。";
@@ -61,7 +61,7 @@
 "notice_title" = "没能完成";
 
 /* #1013：本地网络权限是 iOS 独有的系统弹窗（Android 无对应），弹出前在扫码页先说明用途。 */
-"scan_local_network_note" = "扫码后 iPhone 会请求「本地网络」权限，用于在同一 Wi‑Fi 下找到电脑并传输照片。请点「允许」。";
+"scan_local_network_note" = "扫码后 iPhone 会请求「本地网络」权限。允许后，同一 Wi‑Fi 下直接传到电脑，速度更快。";
 
 /* 设置页后台刷新告示（对位 Android background_backup_system_stopped 的句式：事实 · 后果，配「去设置」，打开系统设置）。iOS 的系统开关叫「后台 App 刷新」。 */
 "background_refresh_off_notice" = "后台 App 刷新已关闭 · 只在打开 P-Pass 时备份";
@@ -73,9 +73,15 @@
 "a11y_thumb_photo" = "照片";
 
 /* #1272 挑几张传：照片不复制进 App，只在前台传（PHPicker 的 itemProvider 只在进程存活期间有效）——所以说离开 P-Pass 会暂停。Android 没有这个限制，不说这句。 */
-"pick_photos_ios_hint" = "离开 P-Pass 会暂停传输。";
 /* #1272：进程在传输中被杀，句柄（itemProvider）随进程没了、无法续传，只能提示重新挑。Android 靠持久 URI 授权可续传，没有这句。%1$ld = 上次挑的张数，%2$ld = 没传完的张数。 */
 "picked_interrupted" = "上次挑的 %1$ld 张有 %2$ld 张没传完，请重新挑选。";
 
 /* #1272 B：设置页末尾「更多」二级页入口（存储电脑、断开连接、版本、检查更新）。 */
 "more_label" = "更多";
+
+/* #1323（iOS 独有）：部分照片权限之后怎么改成全部。iOS 不会再弹授权框，只能在系统设置里改；Android 由系统权限框自己说明。
+   路径按苹果官方「隐私与安全性 › 照片」（iOS 14 至今都在，不受 iOS 18 把 App 设置挪到「App」分组影响），选项名 iOS 18 起为「完全访问」。 */
+"photo_access_change_later_hint" = "可随时在「设置 › 隐私与安全性 › 照片 › P-Pass」改为「完全访问」。";
+
+/* 照片页引导卡：iOS 没有「App 关闭也能备份」，靠后台 App 刷新（产品负责人 11-04）。 */
+"photos_guide_background" = "App 在后台也能备份";

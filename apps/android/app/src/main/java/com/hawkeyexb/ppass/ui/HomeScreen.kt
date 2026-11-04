@@ -418,6 +418,17 @@ fun HomeScreen(
                     Text(stringResource(R.string.auto_backup_off_hero), color = PPColor.Ink, fontSize = 15.sp)
                 } else if (mediaAccess != MediaAccess.FULL) {
                     Text(stringResource(R.string.auto_backup_blocked_hero), color = PPColor.Ink, fontSize = 15.sp)
+                    // #1353：权限被收回（部分 / 全拒）后的唯一出口：去本 App 的系统设置页改回。开关保持开，回来按真实权限现算。
+                    if (blockedHeroOffersSettings(autoBackupRuleOn, mediaAccess)) {
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedButton(
+                            onClick = onOpenAppSettings,
+                            modifier = Modifier.height(40.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Act.copy(alpha = 0.4f)),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = PPColor.Act),
+                        ) { Text(stringResource(R.string.auto_backup_blocked_action), fontSize = 15.sp, fontWeight = FontWeight.Bold) }
+                    }
                 } else {
                 val t = triplet
                 val heroRender = heroRenderOf(mediaAccess, t, countsReadable = countsReadable, scopeSaved = scopeSaved)
@@ -1268,11 +1279,11 @@ private fun CellRow(label: String, value: String? = null, onClick: (() -> Unit)?
 private fun pickedBatchLine(batch: com.hawkeyexb.ppass.backup.picked.PickedBatchSummary): String? {
     if (batch.open > 0) return stringResource(R.string.picked_progress, batch.settled + 1, batch.total)
     val reached = batch.delivered + batch.alreadyThere
-    val head = when {
-        reached == 0 -> null
-        batch.alreadyThere > 0 -> stringResource(R.string.picked_result_with_existing, reached, batch.alreadyThere)
-        else -> stringResource(R.string.picked_result_delivered, reached)
-    }
+    // 只说送达几张；「其中几张电脑上已有」是实现细节，用户不需要（产品负责人 2026-11-04）。
+    val head = if (reached == 0) null else stringResource(R.string.picked_result_delivered, reached)
     val tail = if (batch.failed > 0) stringResource(R.string.picked_result_failed, batch.failed) else null
     return listOfNotNull(head, tail).joinToString(" · ").ifEmpty { null }
 }
+
+/** #1353：「自动备份已停止」状态卡带「去设置」——开关开着、照片权限不全（部分 / 全拒）。开关关着是正常状态，不给。 */
+internal fun blockedHeroOffersSettings(ruleOn: Boolean, access: MediaAccess): Boolean = ruleOn && access != MediaAccess.FULL

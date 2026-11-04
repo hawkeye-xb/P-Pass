@@ -15,7 +15,12 @@ class OnboardingSlimWiringTest {
 
     @Test
     fun first_scope_save_finishes_onboarding_and_goes_home() {
-        assertTrue(firstTime.contains("OnboardedDesktopsStore(context.filesDir).markOnboarded(s.pairing.daemonNodeId)"))
+        // #1321：落盘收口到决定页的 markDecided（范围备份 / 单张备份两个出口共用）；首次选范围同时打开「自动备份」规则。
+        assertTrue(firstTime.contains("markDecided(s.pairing, \"scope\")"))
+        assertTrue(firstTime.contains("rulePrefs.set(true)"))
+        val mark = main.substringAfter("val markDecided: (Pairing, String) -> Unit = {").substringBefore("\n    }")
+        assertTrue(mark.contains("OnboardedDesktopsStore(context.filesDir).markOnboarded(pairing.daemonNodeId)"))
+        assertTrue(mark.contains("onboarding: marked onboarded"))
         assertTrue("后台备份默认关", firstTime.contains("disableAutoBackup(context)"))
         assertTrue(firstTime.contains("requestFlowScopeBackfillAndWake(context, constraintsSatisfied)"))
         val after = main.substringAfter("is Screen.Buckets -> {").substringAfter("if (s.firstTime) {").substringBefore("onCancel =")
@@ -53,15 +58,15 @@ class OnboardingSlimWiringTest {
 
     @Test
     fun photos_tab_guides_to_the_scope_picker_when_no_album_is_chosen() {
+        // #1322：「还没有选择相册」并入引导位第一步（开启范围备份）：开关开着只是没选相册 → 按钮直达选范围页。
         val photos = File("src/main/java/com/hawkeyexb/ppass/ui/PhotosScreen.kt").readText()
-        assertTrue("空着时居中给引导", photos.contains("items.isEmpty() && guide != PhotosGuide.None ->"))
-        assertTrue("不空时在顶部也给", photos.contains("if (guide != PhotosGuide.None && items.isNotEmpty())"))
+        assertTrue(photos.contains("if (guide != PhotosGuide.None) {"))
         assertFalse("photos_empty 被替换", photos.contains("R.string.photos_empty"))
-        assertTrue(main.contains("noAlbums = ruleOn && !scopeUnreadable && (selectedBucketCount ?: 0) == 0,"))
-        assertTrue("按钮直达选范围页", main.contains("onChooseAlbums = { enterBucketPicker(s.pairing, firstTime = false) },"))
+        assertTrue(main.contains("val scopeOn = ruleOn && (scopeUnreadable || (selectedBucketCount ?: 0) > 0)"))
+        assertTrue("按钮直达选范围页", main.contains("if (ruleOn) enterBucketPicker(s.pairing, firstTime = false) else onToggleRule(s.pairing, true)"))
         for (dir in listOf("values", "values-zh")) {
             val xml = File("src/main/res/$dir/strings.xml").readText()
-            for (k in listOf("photos_no_albums", "photos_choose_albums", "home_empty_albums")) {
+            for (k in listOf("photos_guide_scope", "photos_guide_enable", "home_empty_albums")) {
                 assertTrue("$dir 缺 $k", xml.contains("name=\"$k\""))
             }
             assertFalse(xml.contains("name=\"photos_empty\""))

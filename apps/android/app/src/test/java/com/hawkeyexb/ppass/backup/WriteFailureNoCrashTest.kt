@@ -181,14 +181,16 @@ class WriteFailureNoCrashTest {
         assertTrue(AutoBackupPrefs(dir).enabled())
     }
 
+    // #1321 判断 A：补记从「每次进首页」挪到进程启动时只做一次（PPassApplication 用 runCatching 包住，只记日志）。
+    // 写不下来：这次没补、也没落「已初始化」，下次启动再做。
     @Test
-    fun home_backfill_failure_is_quiet() {
+    fun launch_backfill_failure_is_retried_next_launch() {
         val store = OnboardedDesktopsStore(dir)
         breakWrites()
-        assertFalse(writer.quiet("onboarded", "backfill") { backfillOnboardedOnHome(store, nodeId) { true } })
-        assertTrue(notices.isEmpty())
+        assertTrue(runCatching { store.initIfAbsent(nodeId) { true } }.isFailure)
+        assertFalse(store.wasOnboarded(nodeId))
         spaceFreed()
-        assertTrue(writer.quiet("onboarded", "backfill") { backfillOnboardedOnHome(store, nodeId) { true } })
+        assertTrue(store.initIfAbsent(nodeId) { true })
         assertTrue(store.wasOnboarded(nodeId))
     }
 
@@ -240,14 +242,14 @@ class WriteFailureNoCrashTest {
 
     @Test
     fun activity_routes_the_1039_writes_through_the_boundaries() {
-        assertEveryCallWrapped(".markOnboarded(s.pairing.daemonNodeId)", "settingsWriter.write(\"onboarded\"")
+        assertEveryCallWrapped(".markOnboarded(pairing.daemonNodeId)", "settingsWriter.write(\"onboarded\"")
         assertEveryCallWrapped("notifyOnFailurePrefs.markSystemAsked()", "settingsWriter.quiet(\"notifyOnFailure\", \"system asked\")")
         assertEveryCallWrapped("resumeAfterInterruption(context)", "settingsWriter.write(\"backupInterruption\", \"acknowledged\")")
         assertEveryCallWrapped("BackupHealthPrefs(context.filesDir).acknowledge()", "settingsWriter.write(\"backupInterruption\", \"acknowledged\")")
         assertEveryCallWrapped("AutoBackupPrefs(context.filesDir).setRequested(false)", "settingsWriter.write(\"autoBackup\", \"new desktop, ask again\")")
         assertEveryCallWrapped("restoreAutoBackupAfterRepair(", "settingsWriter.quiet(\"autoBackup\"")
         assertEveryCallWrapped("restoreAutoBackupAfterAuthorizationReturned(context", "settingsWriter.")
-        assertEveryCallWrapped("backfillOnboardedOnHome(", "settingsWriter.quiet(\"onboarded\", \"backfill\")")
+        assertFalse("#1321 判断 A：首页不再补记", main.contains("backfillOnboardedOnHome("))
         assertEveryCallWrapped("pairings.save(outcome.pairing)", "savePairingOrError {")
         assertFalse(
             "断开 / 重新扫码不许直接调会抛出的 clearLocalPairing",

@@ -165,6 +165,9 @@ final class FakeEngine: BackupEngine {
     private var cardDismissed = false
     func backgroundCardDismissed() -> Bool { cardDismissed }
     func dismissBackgroundCard() throws { cardDismissed = true; listeners.forEach { $0() } }
+    private var pendingAccess = false
+    func pendingFullPhotoAccess() -> Bool { pendingAccess }
+    func setPendingFullPhotoAccess(_ pending: Bool) throws { pendingAccess = pending }
     private var wifi = true
     func wifiOnly() -> Bool { wifi }
     func setWifiOnly(_ on: Bool) throws { wifi = on; listeners.forEach { $0() } }
@@ -174,7 +177,7 @@ final class FakeEngine: BackupEngine {
     func setAutoRule(_ on: Bool) throws { rule = on; listeners.forEach { $0() } }
     func sendAllowedPhotos() async -> Int { 0 }
     func pickedSummary() -> PickedBatchSummary? { nil }
-    func addPicked(_ items: [(fileName: String, mimeType: String, payload: PickedPayload)]) async {}
+    func addPicked(_ items: [(fileName: String, mimeType: String, payload: PickedPayload)]) async -> Int { items.count }
     func retryFailed() async throws {}
     func remainingSnapshot() async throws -> RemainingSnapshot { throw FakeBackendError.demoHasNoLedger }
     func cancelRemaining(_ snapshot: RemainingSnapshot) async throws -> Int? { nil }
@@ -187,7 +190,10 @@ final class FakeEngine: BackupEngine {
     func notificationAuthorization() async -> NotificationAuthorization { fakeAuthorization }
     func requestNotificationAuthorization() async -> NotificationAuthorization { fakeAuthorization }
     @MainActor func openNotificationSettings() {}
-    func finishOnboarding() throws {}
+    /// 演示数据：已配对的场景都当作做过决定（直接进照片页）；演示配对（`FakePairing.pair` 恒为首次）之后走决定页，选完落这里。
+    private lazy var onboarded = scenario != .notPaired
+    func finishOnboarding() throws { onboarded = true }
+    func onboardedCurrent() -> Bool { onboarded }
 
     func backgroundRefresh() -> BackgroundRefreshAvailability { scenario == .notices ? .denied : .available }
 }

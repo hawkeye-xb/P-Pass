@@ -39,6 +39,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -83,7 +84,6 @@ import com.hawkeyexb.ppass.backup.startOfLocalDaySec
 import com.hawkeyexb.ppass.backup.SettingsWriter
 import com.hawkeyexb.ppass.backup.savePairingOrError
 import com.hawkeyexb.ppass.backup.OnboardedDesktopsStore
-import com.hawkeyexb.ppass.backup.backfillOnboardedOnHome
 import com.hawkeyexb.ppass.backup.isKnownDesktop
 import com.hawkeyexb.ppass.backup.BackupSettings
 import com.hawkeyexb.ppass.backup.MediaScanner
@@ -118,6 +118,10 @@ import com.hawkeyexb.ppass.ui.HomeScreen
 import com.hawkeyexb.ppass.ui.NoticeHost
 import com.hawkeyexb.ppass.ui.LoaderTimelineChannel
 import com.hawkeyexb.ppass.ui.PhotosScreen
+import com.hawkeyexb.ppass.ui.PhotosGuide
+import com.hawkeyexb.ppass.ui.GuideFacts
+import com.hawkeyexb.ppass.ui.photosGuideOf
+import com.hawkeyexb.ppass.ui.scopeEmptyHintShown
 import com.hawkeyexb.ppass.ui.TimelineLoader
 import com.hawkeyexb.ppass.ui.TimelineSubscriptionHolder
 import com.hawkeyexb.ppass.ui.TwoTabs
@@ -134,6 +138,7 @@ import com.hawkeyexb.ppass.ui.PPTheme
 import com.hawkeyexb.ppass.ui.PPSize
 import com.hawkeyexb.ppass.ui.ScanScreen
 import com.hawkeyexb.ppass.ui.WelcomeScreen
+import com.hawkeyexb.ppass.ui.DecisionScreen
 import com.hawkeyexb.ppass.ui.UpdateDialog
 import com.hawkeyexb.ppass.update.UpdateUiController
 import com.hawkeyexb.ppass.update.UpdateUiState
@@ -167,6 +172,48 @@ internal sealed class Screen {
     // firstTime 记这次是不是 onboarding 首次选范围——#1263 起没有完成页：首次在这页点「开始备份」
     // 就落盘「连过这台」、唤醒引擎、直接进首页；按钮叫「开始备份」，设置里重选叫「保存」。
     data class Buckets(val pairing: Pairing, val current: Set<Long>, val firstTime: Boolean) : Screen()
+    // #1321：新电脑 / 首次配对后的决定页——「备份哪些照片」二选一（范围备份 / 单张备份），做完才进照片页。
+    data class Decision(val pairing: Pairing) : Screen()
+}
+
+/**
+ * #1321 判断 B：冷启动的首屏。先补记（[com.hawkeyexb.ppass.backup.OnboardedDesktopsStore.initIfAbsent]，进程启动时
+ * 已做），再按**记录**判：没做过决定（含决定页被杀）→ 决定页。不看范围——选了单张备份的人有记录、范围为空，
+ * 看范围的话他们每次打开都会被拦一次。完整判据 [isKnownDesktop] 只用在配对成功后的分流（[screenAfterPairing]）。
+ */
+internal fun launchScreen(pairing: Pairing?, onboarded: (String) -> Boolean): Screen = when {
+    pairing == null -> Screen.Welcome
+    onboarded(pairing.daemonNodeId) -> Screen.Home(pairing)
+    else -> Screen.Decision(pairing)
+}
+
+/** #1321：决定页主按钮「选择备份范围」在照片权限框关掉之后去哪。 */
+internal enum class DecisionLanding { ChooseScope, RegisterAllowed, PickPhotos }
+
+/**
+ * 决定页「处理中」锁（定案：决定开始处理后两个按钮都不可点，直到进照片页或回到决定页）。
+ * 点任一按钮先 [tryLock]：锁住时再点不触发第二次；离开决定页或这次处理落空（取消、没登记上、结果丢失、拉不起系统页）就 [unlock]。
+ */
+internal class DecisionLock {
+    var busy by mutableStateOf(false)
+        private set
+    fun tryLock(): Boolean {
+        if (busy) return false
+        busy = true
+        return true
+    }
+    fun unlock() { busy = false }
+}
+
+/**
+ * 全部允许 → 选范围页；拒绝 → 系统选图（单张备份）。
+ * 部分允许：用户在系统权限框里已经选了照片，那次选择就是这次的「系统选图」——直接登记已授权的照片（单张备份），
+ * 不再弹选图器让人选第二遍（三星验收：用户以为没生效、反复选了几次）。两端同一口径（iOS #1323）。方案结论 5：不新增第三个出口。
+ */
+internal fun decisionLanding(access: MediaAccess): DecisionLanding = when (access) {
+    MediaAccess.FULL -> DecisionLanding.ChooseScope
+    MediaAccess.PARTIAL -> DecisionLanding.RegisterAllowed
+    else -> DecisionLanding.PickPhotos
 }
 
 /**
@@ -193,14 +240,15 @@ internal fun screenAfterPairingCleared(screen: Screen, clearedPairingId: String)
     val shown = when (screen) {
         is Screen.Home -> screen.pairing.pairingId
         is Screen.Buckets -> screen.pairing.pairingId
+        is Screen.Decision -> screen.pairing.pairingId
         else -> return screen
     }
     return if (shown == clearedPairingId) Screen.Welcome else screen
 }
 
-/** #1263：onboarding 里独占屏幕的页面（首次选范围）——更新对话框不压在上面。 */
+/** #1263：onboarding 里独占屏幕的页面（#1321 决定页、首次选范围）——更新对话框不压在上面。 */
 internal fun isOnboardingScreen(screen: Screen): Boolean =
-    screen is Screen.Buckets && screen.firstTime
+    screen is Screen.Decision || (screen is Screen.Buckets && screen.firstTime)
 
 /** MOB-03：进选相册页时权限链的第一步。 */
 internal enum class BucketPickerEntry { RequestPermission, Buckets }
@@ -231,7 +279,7 @@ internal fun mediaPermissionLanding(allGranted: Boolean, access: MediaAccess): M
  * #1263：「只备份某天起的照片」那一档一律写日期（10-29 文案定稿）：没存过 → 今天（保存时落的就是今天 0 点，见
  * [sinceToSave]）；存过 → 存的那一天。几天以后看也还是那一天，不会说成「从今天起」。
  */
-private fun scopeSinceDate(sinceSec: Long?, nowMs: Long): String {
+internal fun scopeSinceDate(sinceSec: Long?, nowMs: Long): String {
     val sec = sinceSec ?: startOfLocalDaySec(nowMs)
     val date = java.time.Instant.ofEpochSecond(sec).atZone(java.time.ZoneId.systemDefault()).toLocalDate()
     val pattern = android.text.format.DateFormat.getBestDateTimePattern(java.util.Locale.getDefault(), "MMMd")
@@ -252,10 +300,12 @@ internal fun scopeValueLabel(context: Context, sinceSec: Long?, nowMs: Long = Sy
 
 /** System back for secondary app screens; null leaves the root gesture to Android. */
 internal fun systemBackTarget(screen: Screen): Screen? = when (screen) {
-    Screen.Welcome, is Screen.Home -> null
+    // #1321：决定页是必经步骤，返回不能绕过它（交给系统，退到桌面）。
+    Screen.Welcome, is Screen.Home, is Screen.Decision -> null
     Screen.Scan, Screen.ManualPair -> Screen.Welcome
     is Screen.Waiting, is Screen.Trouble -> Screen.Scan
-    is Screen.Buckets -> Screen.Home(screen.pairing)
+    // #1321：首次选范围是从决定页进来的，返回回决定页——还没做决定，不能进照片页。
+    is Screen.Buckets -> if (screen.firstTime) Screen.Decision(screen.pairing) else Screen.Home(screen.pairing)
 }
 
 class MainActivity : ComponentActivity() {
@@ -313,8 +363,9 @@ fun PPassApp() {
     val pairings = remember { PairingStore(context.filesDir) }
     val client = remember { app.daemonClient }
 
+    // #1321 判断 B：补记已在进程启动时做过（PPassApplication），这里只按记录判首屏。
     var screen by remember {
-        mutableStateOf<Screen>(pairings.load()?.let { Screen.Home(it) } ?: Screen.Welcome)
+        mutableStateOf(launchScreen(pairings.load(), OnboardedDesktopsStore(context.filesDir)::wasOnboarded))
     }
     // #1219 V4：被拒即清理多半发生在后台，没有界面；落盘的「待说明」在用户下次看到 App 时弹一次。
     // 已经重新配对的不再说明（顺手清掉）。
@@ -581,7 +632,10 @@ fun PPassApp() {
                     }
 
                     daysUnreachable = computeDaysUnreachable()
+                    val accessBefore = mediaAccess
                     mediaAccess = mediaAccess(context)
+                    // #1353：从系统设置改完权限回来，按真实权限现算；变了就记一行（回来读到 FULL = 状态卡消失、自动备份恢复）。
+                    if (mediaAccess != accessBefore) PLog.i("PPassFlow", "photo access on resume: $accessBefore -> $mediaAccess")
                     mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
                     resumeCount++
                     heartbeat.start()
@@ -671,12 +725,10 @@ fun PPassApp() {
     val rulePrefs = remember { com.hawkeyexb.ppass.backup.autoBackupRulePrefs(context) }
     var ruleOn by remember { mutableStateOf(runCatching { rulePrefs.enabled() }.getOrDefault(false)) }
     var pendingRulePairing by remember { mutableStateOf<Pairing?>(null) }
-    val rulePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ ->
-        val pairing = pendingRulePairing
-        pendingRulePairing = null
-        mediaAccess = mediaAccess(context)
-        mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
-        when (mediaAccess) {
+    // 开自动备份时拿到的照片权限档 → 结果：全部 → 开、进选范围页；部分 → 开关不开，把允许的照片按手选链路传一次
+    // （不弹提示：弹出时照片还没传，进度看设置页）；拒绝 → 开关不开、开关下方一行小字。
+    val applyRuleAccess: (Pairing?, MediaAccess) -> Unit = { pairing, access ->
+        when (access) {
             MediaAccess.FULL -> if (pairing != null) {
                 rulePrefs.set(true)
                 ruleOn = true
@@ -687,30 +739,156 @@ fun PPassApp() {
                 ruleHintRes = null
                 scope.launch(Dispatchers.IO) {
                     val n = com.hawkeyexb.ppass.backup.picked.PickedUploads.enqueueAllowedImages(context)
+                    PLog.i("PPassFlow", "auto-rule: partial photo access, sent allowed photos n=$n, rule stays off")
                     if (n > 0) {
                         com.hawkeyexb.ppass.backup.flow.requestFlowWake(context, com.hawkeyexb.ppass.backup.flow.TriggerReason.PICKED_ADDED)
-                        snackbarHostState.showSnackbar(context.getString(R.string.auto_backup_rule_limited_sent, n))
                     }
                 }
             }
             else -> ruleHintRes = R.string.auto_backup_rule_denied_hint
         }
     }
+    // #1353：部分权限下开自动备份、系统已不再弹框（拒过两次被锁）→ 去本 App 的系统设置页，回到前台按真实权限现算（同 iOS）。
+    // 不预写开关；只记「去了设置、回来要接着走」（Activity 重建也保留）。
+    var ruleAwaitingSettings by rememberSaveable { mutableStateOf(false) }
+    // 从系统设置回来（ON_RESUME 推进 resumeCount、先重读了 mediaAccess）：按真实权限接着走，只接一次。
+    LaunchedEffect(resumeCount) {
+        if (!ruleAwaitingSettings) return@LaunchedEffect
+        ruleAwaitingSettings = false
+        val now = mediaAccess(context)
+        PLog.i("PPassFlow", "auto-rule: back from settings, photo access=$now")
+        applyRuleAccess(pairings.load(), now)
+    }
+    val rulePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ ->
+        val pairing = pendingRulePairing
+        pendingRulePairing = null
+        mediaAccess = mediaAccess(context)
+        mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
+        applyRuleAccess(pairing, mediaAccess)
+    }
     val onToggleRule: (Pairing, Boolean) -> Unit = { pairing, on ->
         if (!on) {
             rulePrefs.set(false)
             ruleOn = false
             ruleHintRes = null
-        } else if (mediaAccess(context) == MediaAccess.FULL) {
-            rulePrefs.set(true)
-            ruleOn = true
-            ruleHintRes = null
-            screen = Screen.Buckets(pairing, BackupScopeStore(context).selectedBucketIds() ?: emptySet(), false)
-        } else {
-            pendingRulePairing = pairing
-            rulePermission.launch(withMediaLocation(requiredMediaPermissions()))
+        } else when (ruleEnableRoute(mediaAccess(context), canPromptForFullMediaAccess(context))) {
+            RuleEnableRoute.Apply -> applyRuleAccess(pairing, MediaAccess.FULL)
+            RuleEnableRoute.Settings -> {
+                ruleAwaitingSettings = true
+                PLog.i("PPassFlow", "auto-rule: partial photo access, prompt locked; opening app settings for full access")
+                openAppDetailsSettings(context)
+            }
+            RuleEnableRoute.Request -> {
+                pendingRulePairing = pairing
+                rulePermission.launch(withMediaLocation(requiredMediaPermissions()))
+            }
         }
     }
+    // #1321：决定页的两个出口。「连过这台」在这里落盘——范围保存成功（选范围页 firstTime），或单张选完登记成功；
+    // 配对成功本身不落盘。记不下来不挡进照片页、提示（#1039 同口径）：后果只是下次重开仍回决定页（偏安全的一侧）。
+    val markDecided: (Pairing, String) -> Unit = { pairing, how ->
+        if (settingsWriter.write("onboarded", pairing.daemonNodeId.take(8)) {
+                OnboardedDesktopsStore(context.filesDir).markOnboarded(pairing.daemonNodeId)
+            }
+        ) {
+            PLog.i("PPassFlow", "onboarding: marked onboarded via=$how desktop=${pairing.daemonNodeId.take(8)}")
+        }
+    }
+    // 决定页处理中锁：离开决定页（进照片页 / 选范围页）一律解锁；留在决定页的出口在各自分支里解锁。
+    val decisionLock = remember { DecisionLock() }
+    LaunchedEffect(screen) { if (screen !is Screen.Decision) decisionLock.unlock() }
+    // 单张备份：系统选图（不要照片权限）。选完登记成一批手选订单才算做了决定；取消 = 还在决定页。
+    var decisionPickPairing by remember { mutableStateOf<Pairing?>(null) }
+    val decisionPickLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia(com.hawkeyexb.ppass.backup.picked.PickedUploads.MAX_PICK),
+    ) { uris ->
+        val pairing = decisionPickPairing
+        decisionPickPairing = null
+        if (pairing == null || uris.isEmpty()) {
+            PLog.i("PPassFlow", "onboarding: pick cancelled, staying on decision")
+            decisionLock.unlock()
+            return@rememberLauncherForActivityResult
+        }
+        scope.launch {
+            val count = withContext(Dispatchers.IO) {
+                runCatching { com.hawkeyexb.ppass.backup.picked.PickedUploads.enqueue(context, uris) }
+                    .onFailure { PLog.w("PPassFlow", "onboarding: picked enqueue failed", it) }
+                    .getOrDefault(0)
+            }
+            if (count <= 0) {
+                PLog.i("PPassFlow", "onboarding: pick registered nothing, staying on decision")
+                decisionLock.unlock()
+                return@launch
+            }
+            pickedBatch = withContext(Dispatchers.IO) {
+                runCatching { com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).latestBatch() }.getOrNull()
+            }
+            com.hawkeyexb.ppass.backup.flow.requestFlowWake(context, com.hawkeyexb.ppass.backup.flow.TriggerReason.PICKED_ADDED)
+            markDecided(pairing, "pick")
+            if (screen == Screen.Decision(pairing)) screen = Screen.Home(pairing)
+        }
+    }
+    val launchDecisionPick: (Pairing) -> Unit = { pairing ->
+        decisionPickPairing = pairing
+        runCatching {
+            decisionPickLauncher.launch(
+                androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+            )
+        }.onFailure {
+            PLog.w("PPassFlow", "onboarding: picker failed to open", it)
+            decisionPickPairing = null
+            decisionLock.unlock()
+        }
+    }
+    // 部分允许：系统权限框里的选择就是用户的选择——当场落盘、进照片页（不停在决定页等），已授权的照片在后台登记成一批手选订单。
+    val registerDecisionAllowed: (Pairing) -> Unit = { pairing ->
+        markDecided(pairing, "partial")
+        if (screen == Screen.Decision(pairing)) screen = Screen.Home(pairing)
+        scope.launch {
+            val n = withContext(Dispatchers.IO) {
+                runCatching { com.hawkeyexb.ppass.backup.picked.PickedUploads.enqueueAllowedImages(context) }
+                    .onFailure { PLog.w("PPassFlow", "onboarding: allowed enqueue failed", it) }
+                    .getOrDefault(0)
+            }
+            PLog.i("PPassFlow", "onboarding: partial access registered $n allowed photos")
+            if (n <= 0) return@launch
+            pickedBatch = withContext(Dispatchers.IO) {
+                runCatching { com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).latestBatch() }.getOrNull()
+            }
+            com.hawkeyexb.ppass.backup.flow.requestFlowWake(context, com.hawkeyexb.ppass.backup.flow.TriggerReason.PICKED_ADDED)
+        }
+    }
+    // 主按钮「选择备份范围」：申请全部照片权限；全部允许 → 选范围页（firstTime），部分 → 登记已授权照片，拒绝 → 系统选图（方案结论 5）。
+    var decisionPermissionPairing by remember { mutableStateOf<Pairing?>(null) }
+    val decisionPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ ->
+        val pairing = decisionPermissionPairing
+        decisionPermissionPairing = null
+        mediaAccess = mediaAccess(context)
+        mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
+        if (pairing == null) {
+            decisionLock.unlock()
+            return@rememberLauncherForActivityResult
+        }
+        PLog.i("PPassFlow", "onboarding: photo access after prompt=$mediaAccess")
+        when (decisionLanding(mediaAccess)) {
+            DecisionLanding.ChooseScope -> screen = Screen.Buckets(pairing, emptySet(), firstTime = true)
+            DecisionLanding.RegisterAllowed -> registerDecisionAllowed(pairing)
+            DecisionLanding.PickPhotos -> launchDecisionPick(pairing)
+        }
+    }
+    val onDecisionChooseScope: (Pairing) -> Unit = { pairing ->
+        if (mediaAccess(context) == MediaAccess.FULL) {
+            screen = Screen.Buckets(pairing, emptySet(), firstTime = true)
+        } else {
+            decisionPermissionPairing = pairing
+            runCatching { decisionPermission.launch(withMediaLocation(requiredMediaPermissions())) }.onFailure {
+                PLog.w("PPassFlow", "onboarding: permission prompt failed to open", it)
+                decisionPermissionPairing = null
+                decisionLock.unlock()
+            }
+        }
+    }
+
     systemBackTarget(screen)?.let { target ->
         BackHandler { screen = target }
     }
@@ -838,10 +1016,10 @@ fun PPassApp() {
                             settingsWriter.write("autoBackup", "new desktop, ask again") {
                                 AutoBackupPrefs(context.filesDir).setRequested(false)
                             }
-                            // #1272：配对后不再申请照片权限，直接进照片页；新电脑的「自动备份」从关开始。
+                            // 新电脑的「自动备份」从关开始；#1321：先进决定页，做了决定才落「连过」、进照片页。
                             rulePrefs.set(false)
                             ruleOn = false
-                            screen = Screen.Home(outcome.pairing)
+                            screen = Screen.Decision(outcome.pairing)
                         }
                     }
                     is PairOutcome.Refused -> {
@@ -875,6 +1053,18 @@ fun PPassApp() {
             }
         }
 
+        is Screen.Decision -> {
+            LaunchedEffect(s.pairing.daemonNodeId) {
+                PLog.i("PPassFlow", "onboarding: decision shown desktop=${s.pairing.daemonNodeId.take(8)}")
+            }
+            DecisionScreen(
+                computerName = s.pairing.storageDeviceName,
+                busy = decisionLock.busy,
+                onChooseScope = { if (decisionLock.tryLock()) onDecisionChooseScope(s.pairing) },
+                onPickPhotos = { if (decisionLock.tryLock()) launchDecisionPick(s.pairing) },
+            )
+        }
+
         is Screen.Trouble -> PairStatusScreen(
             title = androidx.compose.ui.res.stringResource(s.titleRes),
             body = s.bodyRes?.let { androidx.compose.ui.res.stringResource(it) },
@@ -905,17 +1095,6 @@ fun PPassApp() {
             // #541：权限档位（ON_RESUME / 权限弹窗回调重读）变了要让 holder 重数 n——授权不会触发
             // MediaStore 的 ContentObserver，也不会杀进程，不接这一下英雄卡就停在无权限时数出来的 0 / 0。
             LaunchedEffect(holder, mediaAccess) { holder.onMediaAccess(mediaAccess) }
-            // MOB-114（#455）：存量补记——本修复前走完 onboarding 的桌面没有标记。
-            LaunchedEffect(s.pairing.daemonNodeId) {
-                withContext(Dispatchers.IO) {
-                    // #1039：补记写不下来只记日志——下次进首页再补。
-                    settingsWriter.quiet("onboarded", "backfill") {
-                        backfillOnboardedOnHome(OnboardedDesktopsStore(context.filesDir), s.pairing.daemonNodeId) {
-                            BackupScopeStore(context, s.pairing.daemonNodeId).selectedBucketIds()?.isNotEmpty() == true
-                        }
-                    }
-                }
-            }
             // UX-03: 极简设置状态（仅充电/仅 WiFi）——改开关即落盘 +
             // 按新约束重建周期任务。MOB-02 起语义为「需要充电/需要 Wi-Fi」
             // 两档运行条件（默认都开），设置页有后果描述 + 合成句。
@@ -1106,6 +1285,8 @@ fun PPassApp() {
             var scopeUnreadable by remember { mutableStateOf(false) }
             // #1263：范围的开始时间（设置行的值「3 个相册 · 10月29日起的照片」）。
             var scopeSince by remember { mutableStateOf(BackupScopeStore(context).sinceSec()) }
+            // #1322：范围备份开着 = 「自动备份」规则开、且至少选了一个相册（读不出来按「有」，设置行另说「读不到」）。
+            val scopeOn = ruleOn && (scopeUnreadable || (selectedBucketCount ?: 0) > 0)
             LaunchedEffect(mediaAccess, resumeCount) {
                 scopeUnreadable = withContext(Dispatchers.IO) { BackupScopeStore(context).readScope() is ScopeRead.Unreadable }
                 scopeSince = withContext(Dispatchers.IO) { BackupScopeStore(context).sinceSec() }
@@ -1184,25 +1365,47 @@ fun PPassApp() {
                     }
                 } else null,
                 photos = {
+                    val guideFacts = GuideFacts(
+                        scopeOn = scopeOn,
+                        firstUploaded = (holder.triplet.value?.lastSuccessAt ?: 0L) > 0L,
+                        backgroundOn = userRequestedBackgroundBackup,
+                        finished = offerDismissed,
+                    )
                     PhotosScreen(
                         timeline,
                         onViewerOpenChange = { photoViewerOpen = it },
                         pairingLost = holder.pairingLost.value,
                         onReconnect = onRepairPairing,
                         daysUnreachable = daysUnreachable,
-                        // #1263：没选相册 → 引导 + 「选择相册」（直达选范围页）；电脑上还没有照片时只有一种说法
-                        // （home_empty_albums，10-29 文案定稿 C8）。
+                        // #1322：引导位按当前开关现算（方案结论 6）；「还没有选择相册」并入「开启范围备份」这一步。
                         // 范围存了但读不出来不算「没选」（设置行另说「读不到」）。
-                        noAlbums = ruleOn && !scopeUnreadable && (selectedBucketCount ?: 0) == 0,
-                        onChooseAlbums = { enterBucketPicker(s.pairing, firstTime = false) },
-                        autoBackupRuleOn = ruleOn,
+                        guide = photosGuideOf(guideFacts),
                         computerName = s.pairing.storageDeviceName,
-                        onEnableAutoBackup = { onToggleRule(s.pairing, true) },
-                        onPickPhotos = {
-                            pickPhotosLauncher.launch(
-                                androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
-                            )
+                        // #1353：开关关着、点了会去系统设置（部分权限且系统不再弹框）→ 按钮说「去设置」。
+                        guideActionGoesToSettings = !ruleOn &&
+                            ruleEnableRoute(mediaAccess, canPromptForFullMediaAccess(context)) == RuleEnableRoute.Settings,
+                        onGuideAction = { g ->
+                            when (g) {
+                                // 开关开着、只是没选相册 → 直达选范围页；开关关着 → 走开启链路（权限 → 选范围页）。
+                                PhotosGuide.EnableScope ->
+                                    if (ruleOn) enterBucketPicker(s.pairing, firstTime = false) else onToggleRule(s.pairing, true)
+                                PhotosGuide.EnableBackground -> onEnableFromOffer()
+                                PhotosGuide.None -> Unit
+                            }
                         },
+                        onGuideDismiss = {
+                            // × = 「onboarding 已走完」，按手机记；写不下来卡片留着、提示（#1039 同口径）。
+                            if (settingsWriter.write("onboardingGuide", "dismissed") { offerStore.dismiss() }) {
+                                offerDismissed = true
+                                PLog.i("PPassGuide", "photos-guide: dismissed")
+                            }
+                        },
+                        // 方案结论 7：范围备份开着、范围里一张照片都还没有 → 一行现状。triplet 未算出来（null）时不说。
+                        scopeEmptyHint = if (scopeEmptyHintShown(guideFacts, holder.triplet.value?.n)) {
+                            scopeSince?.let {
+                                context.getString(R.string.photos_scope_empty_since, scopeSinceDate(it, System.currentTimeMillis()), s.pairing.storageDeviceName)
+                            } ?: context.getString(R.string.photos_scope_empty_all, s.pairing.storageDeviceName)
+                        } else null,
                     )
                 },
                 backup = {
@@ -1343,7 +1546,10 @@ fun PPassApp() {
                         // MOB-02 §二: 部分授权引导（只授权了部分照片 →
                         // 一键去系统设置；部分授权态不保存范围、不显示假 0/0）。
                         mediaAccess = mediaAccess,
-                        onOpenAppSettings = { openAppDetailsSettings(context) },
+                        onOpenAppSettings = {
+                            PLog.i("PPassFlow", "auto-rule: blocked (photo access=$mediaAccess), opening app settings")
+                            openAppDetailsSettings(context)
+                        },
                         // UPD-02: 设置行「检查更新」——value 跟随状态机
                         // （下载中显示百分比 / 待安装显示「可安装」），
                         // 点击行为按当前状态分流（重新打开已收起的对话框 /
@@ -1463,12 +1669,10 @@ fun PPassApp() {
                         val settings = BackupSettings(context.filesDir).load()
                         val constraintsSatisfied = !settings.wifiOnly || isOnUnmetered(context)
                         if (s.firstTime) {
-                            // MOB-114（#455）：「连过这台」的事实在这里落盘，快速重连只认它。
-                            // #1039（对位 iOS settingWriteFailed("onboarded")）：记不下来不挡进首页，提示；后果只是下次连回这台
-                            // 仍走一遍首次设置（偏安全的一侧）。
-                            settingsWriter.write("onboarded", s.pairing.daemonNodeId.take(8)) {
-                                OnboardedDesktopsStore(context.filesDir).markOnboarded(s.pairing.daemonNodeId)
-                            }
+                            // #1321：决定页选了范围备份——「自动备份」规则随之打开，「连过这台」在这里落盘（快速重连只认它）。
+                            rulePrefs.set(true)
+                            ruleOn = true
+                            markDecided(s.pairing, "scope")
                             // #1263：onboarding 里不再问后台备份——新用户默认关，首页卡片引导开启。
                             // #1039：按「关」把意图再写一次。配对时清旧意图那一步若没写下来，这里补上——否则旧电脑留下的
                             // 意图会在回到前台时（#540 对账）把新电脑的后台备份悄悄打开。
@@ -1481,7 +1685,8 @@ fun PPassApp() {
                         triggerUserPresentBackup(context)
                         screen = Screen.Home(s.pairing)
                     },
-                    onCancel = { screen = Screen.Home(s.pairing) },
+                    // #1321：首次选范围是从决定页进来的，取消回决定页。
+                    onCancel = { screen = if (s.firstTime) Screen.Decision(s.pairing) else Screen.Home(s.pairing) },
                 )
             }
         }
@@ -1504,6 +1709,27 @@ fun PPassApp() {
         }
     }
     }
+}
+
+/** #1353：开自动备份时按当前照片权限走哪条路。 */
+internal enum class RuleEnableRoute { Apply, Request, Settings }
+
+/**
+ * 全部 → 直接开；部分且系统还肯弹框 → 照旧申请（用户在框里能选「全部允许」）；
+ * 部分且系统不再弹（拒过两次被锁，USER_FIXED）→ 去本 App 的系统设置页；没给过 / 拒绝 → 申请（被锁时系统直接回拒绝，落到小字）。
+ * 部分态一定问过至少一次，所以这里的 `canPrompt == false` 只可能是被锁（Android 官方：shouldShowRequestPermissionRationale）。
+ */
+internal fun ruleEnableRoute(access: MediaAccess, canPrompt: Boolean): RuleEnableRoute = when {
+    access == MediaAccess.FULL -> RuleEnableRoute.Apply
+    access == MediaAccess.PARTIAL && !canPrompt -> RuleEnableRoute.Settings
+    else -> RuleEnableRoute.Request
+}
+
+/** 系统还会不会为「全部照片」弹框：shouldShowRequestPermissionRationale(READ_MEDIA_IMAGES)。API 33 以下没有部分权限，按会弹算。 */
+internal fun canPromptForFullMediaAccess(context: Context): Boolean {
+    if (android.os.Build.VERSION.SDK_INT < 33) return true
+    val activity = context as? android.app.Activity ?: return true
+    return androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.READ_MEDIA_IMAGES)
 }
 
 private fun requiredMediaPermissions(): List<String> =

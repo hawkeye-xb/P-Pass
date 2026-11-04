@@ -38,6 +38,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -293,16 +294,16 @@ internal fun PhotosScreen(
     // SENT-01 既有数据源，非新造）；null = 从未确认可达过，不编造
     // 具体天数，警示卡改用不带天数的兜底文案。
     daysUnreachable: Int? = null,
-    // #1263：范围里一个相册都没有——给引导和「选择相册」按钮（直达选范围页）。照片页不空时也在顶部给。
-    noAlbums: Boolean = false,
-    onChooseAlbums: () -> Unit = {},
-    // #1272：没开自动备份时，电脑上还没有照片的空状态就是引导（已连上〈电脑名〉+「开启自动备份」「先挑几张传」）。
-    autoBackupRuleOn: Boolean = true,
+    // #1322：引导位这一刻给哪一张（[photosGuideOf] 按当前开关现算），同一时间最多一张。
+    guide: PhotosGuide = PhotosGuide.None,
     computerName: String = "",
-    onEnableAutoBackup: () -> Unit = {},
-    onPickPhotos: () -> Unit = {},
+    onGuideAction: (PhotosGuide) -> Unit = {},
+    /** #1353：第一步卡的按钮会去系统设置（部分权限、系统不再弹框）时说「去设置」，否则「开启」。 */
+    guideActionGoesToSettings: Boolean = false,
+    onGuideDismiss: () -> Unit = {},
+    // #1322（方案结论 7）：范围里还没有照片时的一行现状；null = 不显示。不是引导，不受 × 影响。
+    scopeEmptyHint: String? = null,
 ) {
-    val guide = photosGuideOf(noAlbums)
     // SYNC-06: 时间线状态（items/next/loading/error/订阅标志）全部由
     // TimelineSubscriptionHolder 持有——App 前台期间（不管显示哪个 tab）
     // 订阅连接保持，本 composable 只渲染这份状态，不再自己创建/销毁订阅。
@@ -393,12 +394,26 @@ internal fun PhotosScreen(
             }
         }
 
+        // #1322（方案结论 6）：引导位——同一时间最多一张，在过滤条上面，不挡浏览、不弹窗（产品负责人 11-04 定位置）。
+        if (guide != PhotosGuide.None) {
+            LaunchedEffect(guide) { PLog.i("PPassGuide", "photos-guide: shown ${guide.logName}") }
+            PhotosGuideCard(
+                guide, computerName,
+                goesToSettings = guideActionGoesToSettings,
+                onAction = { onGuideAction(guide) },
+                onDismiss = onGuideDismiss,
+                // 左右 12 与照片网格对齐。
+                modifier = Modifier.fillMaxWidth().padding(12.dp, 0.dp, 12.dp, 12.dp),
+            )
+        }
+
         // T-080: 轻过滤器 chips（设计稿样式:胶囊,选中=墨底纸字）。
         // UI-13: 私有 FilterChip（手写药丸）改用 Material3 同名组件——
         // 之前跟框架组件撞名字纯属巧合式重新发明轮子，见 PhotoFilterChip
         // 的 wrapper（保留私有壳只是为了封装 colors，不算"手写控件"）。
+        // 左右 12 与照片网格对齐（产品负责人 11-04）。
         Row(
-            Modifier.fillMaxWidth().padding(20.dp, 0.dp, 20.dp, 12.dp),
+            Modifier.fillMaxWidth().padding(12.dp, 0.dp, 12.dp, 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             PhotoFilterChip(stringResource(R.string.chip_all), filter == TimelineFilter.All) {
@@ -444,9 +459,14 @@ internal fun PhotosScreen(
             }
         }
 
-        // #1263：照片页里已经有（家人的）照片时，引导放在顶部，不挡浏览。
-        if (guide != PhotosGuide.None && items.isNotEmpty()) {
-            PhotosGuideCard(guide, onChooseAlbums, Modifier.fillMaxWidth().padding(20.dp, 0.dp, 20.dp, 12.dp))
+        // #1322（方案结论 7）：范围里还没有照片——过滤条下方次要提示位说一行现状，不带按钮。
+        if (scopeEmptyHint != null) {
+            LaunchedEffect(Unit) { PLog.i("PPassGuide", "photos-guide: scope empty hint") }
+            Text(
+                scopeEmptyHint,
+                fontSize = 13.sp, color = PPColor.Ink40,
+                modifier = Modifier.fillMaxWidth().padding(20.dp, 0.dp, 20.dp, 12.dp),
+            )
         }
 
         when {
@@ -457,12 +477,6 @@ internal fun PhotosScreen(
             // UI-17: 配对失效且一张都没加载到——什么都不放，上面的红卡就是全部内容
             // （落到下一条会显示「照片库还是空的——先备份一批吧」，又是一个不同的出路）。
             error != null && items.isEmpty() -> Unit
-            items.isEmpty() && !autoBackupRuleOn -> Box(Modifier.fillMaxSize().padding(34.dp), contentAlignment = Alignment.Center) {
-                FirstRunIntro(computerName, onEnableAutoBackup, onPickPhotos, Modifier.fillMaxWidth())
-            }
-            items.isEmpty() && guide != PhotosGuide.None -> Box(Modifier.fillMaxSize().padding(34.dp), contentAlignment = Alignment.Center) {
-                PhotosGuideCard(guide, onChooseAlbums, Modifier.fillMaxWidth())
-            }
             items.isEmpty() -> Center(stringResource(R.string.home_empty_albums))
             shown.isEmpty() -> Center(stringResource(R.string.photos_filter_empty))
             else -> LazyVerticalGrid(
@@ -864,79 +878,70 @@ internal fun PhotoFilterChip(label: String, selected: Boolean, onClick: () -> Un
     )
 }
 
-/** 照片页的引导卡给哪一张。 */
-internal enum class PhotosGuide { NoAlbums, None }
+/** #1322：照片页引导位给哪一张（方案结论 6）。决定页之后的引导都是可选的，按当前开关现算，不按「走到第几步」记。 */
+internal enum class PhotosGuide(val logName: String) {
+    /** 没开范围备份（「自动备份」关，或开着但一个相册都没选）。现有「还没有选择相册」并入这一步。 */
+    EnableScope("scope"),
+
+    /** 范围备份已开、第一张已传成功、后台备份没开。 */
+    EnableBackground("background"),
+    None("none"),
+}
+
+/** [photosGuideOf] 的输入：都是此刻的真实状态。 */
+internal data class GuideFacts(
+    /** 「自动备份」规则开着，且范围里至少有一个相册（读不出来的范围按「有」算，设置行另说「读不到」）。 */
+    val scopeOn: Boolean,
+    /** 范围备份成功传过至少一张（账本里最后成功时间不为 0）。 */
+    val firstUploaded: Boolean,
+    /** 用户开了后台备份（意图；系统没放行另有提示接手）。 */
+    val backgroundOn: Boolean,
+    /** 「onboarding 已走完」：用户点过引导位的 ×。按手机记，断开、换电脑都不重置。 */
+    val finished: Boolean,
+)
 
 /**
- * 10-29：照片权限不全时先说权限——读不到照片，选相册也选不出东西，「还没选相册」说的不是现状。
- * 权限完整、一个相册都没选，才给「还没选相册 / 选择相册」（#1263）。
+ * 方案结论 6：没开范围备份 → 引导开启；范围备份已开、第一张已传、后台没开 → 引导开后台；都开了 → 结束。
+ * 点过 × 就整条结束。起点按现状：决定页直接选了范围备份的，不会出现「开启范围备份」。
  */
-internal fun photosGuideOf(noAlbums: Boolean): PhotosGuide = when {
-    noAlbums -> PhotosGuide.NoAlbums
+internal fun photosGuideOf(f: GuideFacts): PhotosGuide = when {
+    f.finished -> PhotosGuide.None
+    !f.scopeOn -> PhotosGuide.EnableScope
+    f.firstUploaded && !f.backgroundOn -> PhotosGuide.EnableBackground
     else -> PhotosGuide.None
 }
 
+/**
+ * 方案结论 7：范围备份开着、范围里一张照片都还没有（如「从今天起」而今天还没拍）→ 过滤条下方一行现状。
+ * 这是状态提示，不是引导：不看 [GuideFacts.finished]（点过 × 照样说）；有了第一张就不说。[inScope] 为 null = 还没数出来，不说。
+ */
+internal fun scopeEmptyHintShown(f: GuideFacts, inScope: Long?): Boolean = f.scopeOn && inScope == 0L
+
+/** 引导位：一句话 + 动作 + ×，用现成提示条 [ClosableNoticeCard]（产品负责人 11-04）。 */
 @Composable
 private fun PhotosGuideCard(
     guide: PhotosGuide,
-    onChooseAlbums: () -> Unit,
+    computerName: String,
+    goesToSettings: Boolean,
+    onAction: () -> Unit,
+    onDismiss: () -> Unit,
     modifier: Modifier,
 ) {
-    when (guide) {
-        PhotosGuide.NoAlbums -> NoAlbumsGuide(onChooseAlbums, modifier)
-        PhotosGuide.None -> Unit
+    val label = if (guide == PhotosGuide.EnableScope && goesToSettings) R.string.auto_backup_blocked_action else R.string.photos_guide_enable
+    val text = when (guide) {
+        PhotosGuide.EnableScope -> stringResource(R.string.photos_guide_scope)
+        PhotosGuide.EnableBackground -> stringResource(R.string.photos_guide_background)
+        PhotosGuide.None -> return
     }
-}
-
-/** #1272：配对后第一次进来的空状态——一句话 + 两个按钮，与设置页对应的行做的事完全相同。 */
-@Composable
-private fun FirstRunIntro(computerName: String, onEnable: () -> Unit, onPick: () -> Unit, modifier: Modifier = Modifier) {
-    Column(modifier) {
-        Text(
-            stringResource(R.string.photos_first_run_intro, computerName),
-            fontSize = PPSize.BodyMin, lineHeight = 24.sp, color = PPColor.Ink60,
+    // 复用现成提示条（NoticeCard 的 × 一行版式 ClosableNoticeCard，C1）：外形、颜色、边距与设置页提示条一致，不另起组件。
+    Box(modifier) {
+        ClosableNoticeCard(
+            body = text,
+            actionLabel = stringResource(label),
+            onAction = onAction,
+            closeLabel = stringResource(R.string.photos_guide_close),
+            onClose = onDismiss,
         )
-        Spacer(Modifier.height(16.dp))
-        androidx.compose.material3.Button(
-            onClick = onEnable,
-            modifier = Modifier.fillMaxWidth().height(PPSize.TapMin),
-            shape = RoundedCornerShape(PPSize.RadiusControl),
-            colors = androidx.compose.material3.ButtonDefaults.buttonColors(containerColor = PPColor.Ink, contentColor = PPColor.Paper),
-        ) { Text(stringResource(R.string.photos_first_run_enable), fontSize = 17.sp, fontWeight = FontWeight.Bold) }
-        Spacer(Modifier.height(10.dp))
-        androidx.compose.material3.OutlinedButton(
-            onClick = onPick,
-            modifier = Modifier.fillMaxWidth().height(PPSize.TapMin),
-            shape = RoundedCornerShape(PPSize.RadiusControl),
-        ) { Text(stringResource(R.string.photos_first_run_pick), fontSize = 17.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink) }
-    }
-}
-
-/** #1263：「还没选要备份的相册」+「选择相册」。照片页空着时居中，不空时在顶部。 */
-@Composable
-private fun NoAlbumsGuide(onChoose: () -> Unit, modifier: Modifier = Modifier) {
-    Surface(
-        color = PPColor.WaitingBg,
-        shape = RoundedCornerShape(PPSize.RadiusCard),
-        modifier = modifier,
-    ) {
-        Column(Modifier.padding(18.dp)) {
-            Text(
-                stringResource(R.string.photos_no_albums),
-                fontSize = PPSize.BodyMin, lineHeight = 24.sp, color = PPColor.Ink60,
-            )
-            Spacer(Modifier.height(12.dp))
-            androidx.compose.material3.Button(
-                onClick = onChoose,
-                modifier = Modifier.fillMaxWidth().height(PPSize.TapMin),
-                shape = RoundedCornerShape(PPSize.RadiusControl),
-                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                    containerColor = PPColor.Ink, contentColor = PPColor.Paper,
-                ),
-            ) {
-                Text(stringResource(R.string.photos_choose_albums), fontSize = 17.sp, fontWeight = FontWeight.Bold)
-            }
-        }
     }
 }
 

@@ -20,6 +20,11 @@ struct HeroCard: View {
                     switch render {
                     case .accessBlocked:
                         Text(L.s("auto_backup_blocked_hero")).font(PPFont.cardTitle).foregroundStyle(PPColor.act)
+                        // #1353：权限被收回后的唯一出口：去本 App 的系统设置页改回；开关保持开（对位 Android 英雄卡）。
+                        if app.blockedHeroOffersSettings {
+                            PPButton(title: L.s("auto_backup_blocked_action"), kind: .quiet) { app.openSettingsFromBlockedHero() }
+                                .accessibilityIdentifier("blockedHeroSettings")
+                        }
                     case .countsUnreadable:
                         Text(L.s("hero_counts_unreadable")).font(PPFont.cardBody).foregroundStyle(PPColor.ink60)
                     case .noAlbums:

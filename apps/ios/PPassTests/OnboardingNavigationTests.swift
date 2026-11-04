@@ -3,6 +3,7 @@ import XCTest
 @testable import PPass
 
 /// 手动输入配对串的「返回」：从哪儿进来就回哪儿（Android ScanScreen `leaveManual`）。
+/// #1323 onboarding 闸门：冷启动首屏、决定页主按钮的落点（纯函数，对位 Android `launchScreen` / `decisionLanding`）。
 final class OnboardingNavigationTests: XCTestCase {
     func testManualFromScanGoesBackToScan() {
         XCTAssertEqual(OnboardingFlow.manualBackTarget(fromScan: true), .scan)
@@ -54,5 +55,100 @@ final class OnboardingNavigationTests: XCTestCase {
         XCTAssertFalse(AppModel.scopeEmptyHintShown(facts(scopeOn: true), inScope: 1), "有了第一张就不说")
         XCTAssertFalse(AppModel.scopeEmptyHintShown(facts(), inScope: 0), "范围备份没开不说（那是引导位的事）")
         XCTAssertFalse(AppModel.scopeEmptyHintShown(facts(scopeOn: true), inScope: nil), "还没数出来不说")
+    }
+
+    // MARK: #1323 判断 B：冷启动只看记录，不看范围
+
+    private func tempDir() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("onboarding-nav-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        return dir
+    }
+
+    /// 冷启动的首屏：真实的记录文件与这台电脑的范围文件，经 `LiveBackend.onboardedForLaunch`（App 冷启动用的同一个函数）。
+    /// 四种：无配对 → 欢迎页；有配对无记录（含决定页被杀）→ 决定页；有记录有范围 → 照片页；有记录无范围（单张备份）→ 照片页。
+    /// 反证：`onboardedForLaunch` 改用完整判据（`knownDesktopCheck`：有记录 && 范围非空），「有记录无范围」红。
+    func testLaunchPhaseLooksAtTheRecordOnly() throws {
+        let dir = try tempDir()
+        let store = OnboardedDesktopsStore(directory: dir)
+        func launch(_ node: String?) -> AppModel.Phase {
+            let pairing: PairingStatus = node == nil ? .notPaired : .paired(desktopName: "Mac")
+            return AppModel.launchPhase(pairing, onboarded: LiveBackend.onboardedForLaunch(store, daemonNodeId: node))
+        }
+        XCTAssertEqual(launch(nil), .onboarding, "无配对 → 欢迎页")
+        XCTAssertEqual(launch("node-new"), .decision, "有配对、这台没有记录 → 决定页")
+
+        try store.markOnboarded("node-scope")
+        try BackupScopeStore(directory: dir, daemonNodeId: "node-scope").saveScope(selected: ["a"], allCurrent: ["a"])
+        XCTAssertEqual(launch("node-scope"), .main, "有记录有范围 → 照片页")
+
+        try store.markOnboarded("node-pick") // 决定页选了单张备份：有记录、范围为空
+        XCTAssertEqual(launch("node-pick"), .main, "有记录无范围 → 照片页（不能每次打开都被拦进决定页）")
+    }
+
+    /// 配对失效：照片页才有「重新连接」红卡，决定页没有出路——不管有没有记录都进照片页。
+    func testLostPairingLaunchesIntoMainForTheReconnectCard() {
+        XCTAssertEqual(AppModel.launchPhase(.lost(desktopName: "Mac"), onboarded: false), .main)
+        XCTAssertEqual(AppModel.launchPhase(.lost(desktopName: "Mac"), onboarded: true), .main)
+    }
+
+    /// 决定页主按钮「选择备份范围」在照片权限框之后：全部允许 → 选范围页；部分 / 拒绝 → 系统选图（ADR 结论 5）。
+    func testDecisionLandingByPhotoAccess() {
+        XCTAssertEqual(AppModel.decisionLanding(.full), .chooseScope)
+        XCTAssertEqual(AppModel.decisionLanding(.partial), .registerAllowed, "部分允许：系统已弹过选照片页，不再弹 App 的选图器")
+        XCTAssertEqual(AppModel.decisionLanding(.none), .pickPhotos)
+    }
+
+    /// 产品负责人 2026-11-04：部分照片权限下不让系统在 App 回前台 / 首次读相册时自动弹「选择更多照片」——
+    /// 苹果标准做法是 Info.plist 的 PHPhotoLibraryPreventAutomaticLimitedAccessAlert = YES。反证：删掉这个键，本条红。
+    func testLimitedAccessAutoAlertIsSuppressed() {
+        XCTAssertEqual(Bundle.main.object(forInfoDictionaryKey: "PHPhotoLibraryPreventAutomaticLimitedAccessAlert") as? Bool, true)
+    }
+
+    /// 决定页小字写路径说明（iOS 独有文案，按苹果官方「隐私与安全性 › 照片」）；照片页引导卡不写。
+    func testChangeLaterHintIsTheOfficialPathInBothScreens() throws {
+        let hint = L.s("photo_access_change_later_hint")
+        XCTAssertNotEqual(hint, "photo_access_change_later_hint", "词条要在 IOS.strings 里")
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let decision = try String(contentsOf: root.appendingPathComponent("PPass/Home/DecisionScreen.swift"), encoding: .utf8)
+        let photos = try String(contentsOf: root.appendingPathComponent("PPass/Photos/PhotosScreen.swift"), encoding: .utf8)
+        XCTAssertTrue(decision.contains("L.s(\"photo_access_change_later_hint\")"))
+        // 引导卡的「去设置」直接跳过去，卡上不重复路径说明（产品负责人 11-04）。
+        XCTAssertFalse(photos.contains("L.s(\"photo_access_change_later_hint\")"))
+        for lang in ["zh-Hans", "en"] {
+            let strings = try String(contentsOf: root.appendingPathComponent("PPass/Resources/\(lang).lproj/IOS.strings"), encoding: .utf8)
+            XCTAssertTrue(strings.contains("\"photo_access_change_later_hint\""), lang)
+        }
+        let zh = try String(contentsOf: root.appendingPathComponent("PPass/Resources/zh-Hans.lproj/IOS.strings"), encoding: .utf8)
+        // 全 App 同一件事只有一种说法：决定页 / 引导卡 / 两条失败通知的指路是同一句话（产品负责人 11-04 定「可随时在…」）。
+        // 期望值按语言从 bundle 取，不跟着运行环境的语言走（CI 模拟器是英文、本机是中文）。
+        let zhBundle = try XCTUnwrap(Bundle.main.path(forResource: "zh-Hans", ofType: "lproj").flatMap(Bundle.init(path:)))
+        let enBundle = try XCTUnwrap(Bundle.main.path(forResource: "en", ofType: "lproj").flatMap(Bundle.init(path:)))
+        XCTAssertEqual(zhBundle.localizedString(forKey: "photo_access_change_later_hint", value: nil, table: "IOS"),
+                       "可随时在「设置 › 隐私与安全性 › 照片 › P-Pass」改为「完全访问」。")
+        XCTAssertEqual(enBundle.localizedString(forKey: "photo_access_change_later_hint", value: nil, table: "IOS"),
+                       "You can change it to “Full Access” anytime in Settings › Privacy & Security › Photos › P-Pass.")
+        for key in ["photo_access_change_later_hint", "notif_media_partial_body", "notif_media_none_body"] {
+            let line = zh.components(separatedBy: "\n").first { $0.hasPrefix("\"\(key)\"") } ?? ""
+            XCTAssertTrue(line.hasSuffix("可随时在「设置 › 隐私与安全性 › 照片 › P-Pass」改为「完全访问」。\";"), key)
+        }
+        for lang in ["zh-Hans", "en"] {
+            let path = try XCTUnwrap(Bundle.main.path(forResource: lang, ofType: "lproj"))
+            let bundle = try XCTUnwrap(Bundle(path: path))
+            let hint = bundle.localizedString(forKey: "photo_access_change_later_hint", value: nil, table: "IOS")
+            for key in ["notif_media_partial_body", "notif_media_none_body"] {
+                XCTAssertTrue(bundle.localizedString(forKey: key, value: nil, table: "IOS").hasSuffix(hint), "\(lang) \(key)")
+            }
+        }
+    }
+
+    /// 决定页标题下一行说明照片传到哪台电脑（对位 Android decision_destination）；没有电脑名时退回默认叫法。
+    func testDecisionPageSaysWherePhotosGo() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let decision = try String(contentsOf: root.appendingPathComponent("PPass/Home/DecisionScreen.swift"), encoding: .utf8)
+        XCTAssertTrue(decision.contains("L.f(\"decision_destination\", computerName)"))
+        XCTAssertTrue(decision.contains("return L.s(\"storage_device_default\")"))
+        XCTAssertNotEqual(L.s("decision_destination"), "decision_destination")
     }
 }

@@ -139,15 +139,18 @@ class MOB114KnownDesktopRoundTripTest {
     }
 
     @Test
-    fun devices_onboarded_before_this_fix_are_backfilled_from_home() {
-        // 存量：onboarding 在旧版本走完，没有标记；首页 + 有范围 = 连过。
+    fun devices_onboarded_before_this_fix_are_backfilled_once_at_launch() {
+        // 存量：onboarding 在旧版本走完，没有标记。#1321 判断 A：升级后第一次启动，当时配着的那台 + 有范围 = 连过。
         scopes[macNodeId] = setOf(1L)
-        backfillOnboardedOnHome(OnboardedDesktopsStore(dir()), macNodeId) { scopes[macNodeId]?.isNotEmpty() == true }
+        OnboardedDesktopsStore(dir()).initIfAbsent(macNodeId) { scopes[macNodeId]?.isNotEmpty() == true }
         disconnect(macNodeId)
         assertTrue(rejoin(macNodeId))
+    }
 
-        // 首页上没有范围（部分授权直接回首页那条路）不算走完 onboarding。
-        backfillOnboardedOnHome(OnboardedDesktopsStore(dir()), newNodeId) { false }
+    @Test
+    fun a_desktop_without_scope_at_upgrade_is_not_backfilled() {
+        // 升级时这台没有范围（部分授权直接回首页那条路）不算走完 onboarding。
+        OnboardedDesktopsStore(dir()).initIfAbsent(newNodeId) { false }
         assertFalse(OnboardedDesktopsStore(dir()).wasOnboarded(newNodeId))
     }
 
@@ -158,8 +161,12 @@ class MOB114KnownDesktopRoundTripTest {
     fun onboarding_completion_writes_the_marker_and_disconnect_never_clears_it() {
         val src = main()
         // #1263：没有完成页了——首次选范围点「开始备份」就是走完 onboarding。
+        // #1321：决定页的两个出口（首次选范围 / 单张选完）都经 markDecided 落标记。
         val finish = src.substringAfter("is Screen.Buckets -> {").substringAfter("if (s.firstTime) {").substringBefore("} else if")
-        assertTrue("走完 onboarding 必须落标记", finish.contains("OnboardedDesktopsStore(context.filesDir).markOnboarded(s.pairing.daemonNodeId)"))
+        assertTrue("走完 onboarding 必须落标记", finish.contains("markDecided(s.pairing, \"scope\")"))
+        val mark = src.substringAfter("val markDecided: (Pairing, String) -> Unit = {").substringBefore("\n    }")
+        assertTrue(mark.contains("OnboardedDesktopsStore(context.filesDir).markOnboarded(pairing.daemonNodeId)"))
+        assertTrue("单张选完也算做了决定", src.substringAfter("val decisionPickLauncher").substringBefore("val launchDecisionPick").contains("markDecided(pairing, \"pick\")"))
 
         val clear = src.substringAfter("private fun clearLocalPairing(").substringBefore("\n}")
         assertFalse("断开 / 配对失效不许碰「连过」的标记", clear.contains("OnboardedDesktops"))

@@ -69,13 +69,15 @@
 	<key>UIUserInterfaceStyle</key>
 	<string>Light</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Scan the pairing QR code shown on your home computer.</string>
+	<string>Scan the pairing QR code shown on the computer.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Used to find your computer on the same Wi‑Fi and transfer photos.</string>
+	<string>If you allow it, photos go straight to your computer on the same Wi‑Fi, which is faster.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Automatic backup needs access to all photos.</string>
+	<key>PHPhotoLibraryPreventAutomaticLimitedAccessAlert</key>
+	<true/>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>Save a photo from your home library back to this phone.</string>
+	<string>Save a photo from the computer's photo library back to this phone.</string>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

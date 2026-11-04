@@ -55,8 +55,9 @@ final class PairingWiringTests: XCTestCase {
 
     private func makePairing(_ transport: ScriptedTransport, store: PairingStore,
                              onboarded: @escaping (String) -> Bool = { _ in false },
+                             knownDesktop: ((String) -> Bool)? = nil,
                              onPaired: @escaping (PairingRecord, Bool) -> Bool = { _, _ in false }) -> LivePairing {
-        LivePairing(transportFor: { _ in transport }, store: store, onboarded: onboarded, onPaired: onPaired,
+        LivePairing(transportFor: { _ in transport }, store: store, onboarded: onboarded, knownDesktop: knownDesktop, onPaired: onPaired,
                     onDisconnect: {}, logger: LogSink(), localNodeId: { PairFixtures.phoneNode }, crypto: FakePairCrypto())
     }
 
@@ -181,6 +182,45 @@ final class PairingWiringTests: XCTestCase {
         let outcome = await makePairing(transport, store: store, onboarded: { _ in true }) { _, known in knownSeenByOnPaired = known; return false }.pair(code: link)
         XCTAssertEqual(outcome, .joined(firstTime: false))
         XCTAssertEqual(knownSeenByOnPaired, true)
+    }
+
+    // MARK: #1323 配对后分流的判据（ADR 结论 3，两端同名同义）：连过 = 有记录 && 这台电脑的范围非空
+
+    /// 真实的记录文件与按 nodeId 的范围文件，经 `LiveBackend.knownDesktopCheck`（`ports()` 交给 LivePairing 的同一个闭包）。
+    /// 反证：`knownDesktopCheck` 改回只看记录（`onboarded.wasOnboarded`），「有记录无范围」红。
+    func test_known_desktop_needs_a_record_and_this_desktops_scope() throws {
+        let onboarded = OnboardedDesktopsStore(directory: dir)
+        let check = LiveBackend.knownDesktopCheck(onboarded: onboarded, directory: dir, logger: LogSink())
+        XCTAssertFalse(check("node-a"), "没记录 → 新电脑")
+
+        try BackupScopeStore(directory: dir, daemonNodeId: "node-b").saveScope(selected: ["x"], allCurrent: ["x"])
+        XCTAssertFalse(check("node-b"), "没记录、有范围 → 新电脑（不靠范围认旧电脑）")
+
+        try onboarded.markOnboarded("node-c")
+        XCTAssertFalse(check("node-c"), "有记录、这台范围为空 → 新电脑（宁可多问一次）")
+
+        try onboarded.markOnboarded("node-d")
+        try BackupScopeStore(directory: dir, daemonNodeId: "node-d").saveScope(selected: ["x"], allCurrent: ["x"])
+        XCTAssertTrue(check("node-d"), "有记录 && 这台范围非空 → 连过")
+
+        try BackupScopeStore(directory: dir, daemonNodeId: "node-c").saveScope(selected: [], allCurrent: ["x"])
+        XCTAssertFalse(check("node-c"), "存过空集也是空")
+    }
+
+    /// 接到 LivePairing 上：有记录、这台范围为空、电脑仍认它是成员（选了单张备份、断开通知没送到）→ 走 memberHello 快路径
+    /// （不走 pair.request，否则被拒 role_forbidden），回来报首次（进决定页）。脚本里没有 pair.request：走了验证码这条就配不上。
+    /// 反证：信任改用完整判据（`trusted = knownDesktop(...)`），不走快路径、配不上，本条红；「是不是首次」改回只看记录，firstTime 断言红。
+    func test_member_with_a_record_but_no_scope_uses_the_fast_path_then_decides() async throws {
+        let nodeId = try XCTUnwrap(URLComponents(string: link)?.queryItems?.first(where: { $0.name == "node" })?.value)
+        let onboarded = OnboardedDesktopsStore(directory: dir)
+        try onboarded.markOnboarded(nodeId)
+        let check = LiveBackend.knownDesktopCheck(onboarded: onboarded, directory: dir, logger: LogSink())
+        let transport = ScriptedTransport([Methods.hello: try .ok(Hello(deviceName: "Mac", pairingId: "e9"))])
+        var knownSeenByOnPaired: Bool?
+        let outcome = await makePairing(transport, store: PairingStore(root: dir), onboarded: { onboarded.wasOnboarded($0) },
+                                        knownDesktop: check) { _, known in knownSeenByOnPaired = known; return false }.pair(code: link)
+        XCTAssertEqual(outcome, .joined(firstTime: true))
+        XCTAssertEqual(knownSeenByOnPaired, false)
     }
 
     func test_member_fast_path_saves_name_and_pairing_id_when_hello_succeeds() async throws {

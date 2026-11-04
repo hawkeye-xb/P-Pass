@@ -29,9 +29,10 @@ import com.hawkeyexb.ppass.R
 import androidx.compose.ui.unit.sp
 
 @Composable
-internal fun PrimaryButton(text: String, onClick: () -> Unit) {
+internal fun PrimaryButton(text: String, onClick: () -> Unit, enabled: Boolean = true) {
     Button(
         onClick = onClick,
+        enabled = enabled,
         modifier = Modifier.fillMaxWidth().height(64.dp),
         shape = RoundedCornerShape(PPSize.RadiusControl),
         colors = ButtonDefaults.buttonColors(

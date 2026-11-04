@@ -27,6 +27,7 @@ final class LiveBackend: @unchecked Sendable {
     let autoPrefs: AutoBackupPrefs
     let notifyPrefs: NotifyOnFailurePrefs
     let cardPrefs: BackgroundBackupOfferPrefs
+    let pendingAccessPrefs: PendingFullPhotoAccessPrefs
     let noticeStore: DefinitiveNoticeStore
     /// #1272 挑几张传：手选队列（进程内）+ 批次汇总（落盘）。
     let picked: PickedQueue
@@ -106,11 +107,21 @@ final class LiveBackend: @unchecked Sendable {
         autoPrefs = AutoBackupPrefs(directory: dir, logger: logger)
         notifyPrefs = NotifyOnFailurePrefs(directory: dir, logger: logger)
         cardPrefs = BackgroundBackupOfferPrefs(directory: dir, logger: logger)
+        pendingAccessPrefs = PendingFullPhotoAccessPrefs(directory: dir, logger: logger)
         noticeStore = DefinitiveNoticeStore(directory: dir, logger: logger)
         picked = PickedQueue(directory: dir, logger: logger)
         autoRule = AutoBackupRulePrefs(directory: dir, logger: logger)
         // #1262：通知默认关；老用户升级保持原状态。必须在任何 markOnboarded 之前定老用户（新装用户此刻没有配对、没走过 onboarding）。
         notifyPrefs.initIfAbsent(existingUser: pairingStore.load() != nil || onboarded.anyOnboarded())
+        // #1323 判断 A：「连过」记录的一次性补记——升级后第一次启动，给**当时配着的那台**（范围按这台 nodeId 读、非空）补记一次，
+        // 之后不再补（不然新电脑经 MOB-92 认领拿到旧的全局范围会被误记成连过）。必须在 AppModel 判冷启动首屏之前（判断 B）。
+        // 写不下来只记日志：后果是老用户这次多见一次决定页（偏安全的一侧）。
+        let launchNode = pairingStore.load()?.daemonNodeId
+        do {
+            if try onboarded.initIfAbsent(daemonNodeId: launchNode, scopeNonEmpty: { Self.scopeNonEmpty(directory: dir, daemonNodeId: launchNode ?? "", logger: logger) }) {
+                logger.log("onboarding: backfilled desktop=\(LogRedact.id(launchNode ?? "")) at init")
+            }
+        } catch { logger.log("onboarding: init backfill failed: \(error)") }
         // 全新安装后台备份默认关（对位 Android `AutoBackupPrefs.autoEnabled = false`，#982）：#1263 起 onboarding 不问，由首页引导卡让用户自己开。
         // #1119：未配对不向系统挂任何后台任务（启动 / 回前台 / 引擎登记唤醒 / 短任务续挂都过这道门）。
         scheduler = PlannedWakeScheduler(directory: dir, submitter: BGTaskSubmitter(), logger: logger, isPaired: { pairingStore.load() != nil })
@@ -246,9 +257,31 @@ final class LiveBackend: @unchecked Sendable {
         BackgroundTarget(engine: engine, window: window, scheduler: scheduler, afterRun: { [weak self] in await self?.evaluateNotices() })
     }
 
+    /// 这台电脑（按 nodeId 显式读，不按当前已存的配对读——配对那一刻存的可能还是旧电脑）的相册范围非空。读不出来 = 空（宁可多问一次）。
+    static func scopeNonEmpty(directory: URL, daemonNodeId: String, logger: CoreLogger) -> Bool {
+        do { return try BackupScopeStore(directory: directory, daemonNodeId: daemonNodeId, logger: logger).selectedBucketIds()?.isEmpty == false } catch {
+            logger.log("onboarding: scope unreadable for desktop=\(LogRedact.id(daemonNodeId)), treating as new: \(error)")
+            return false
+        }
+    }
+
+    /// 配对成功后的分流判据（#1323，ADR 结论 3，两端同名同义）：`isKnownDesktop = 有记录 && 这台范围非空`。
+    /// 只决定「是不是首次」；要不要信「已是成员」只看记录（LivePairing `onboarded`）。范围惰性读：没记录不读（读会触发 MOB-92 认领）。
+    static func knownDesktopCheck(onboarded: OnboardedDesktopsStore, directory: URL, logger: CoreLogger) -> (String) -> Bool {
+        { nodeId in isKnownDesktop(onboarded, daemonNodeId: nodeId) { scopeNonEmpty(directory: directory, daemonNodeId: nodeId, logger: logger) } }
+    }
+
+    /// 冷启动首屏用（#1323 判断 B）：**只看记录**，不看范围——选了单张备份的人有记录、范围为空，看范围会每次打开都被拦进决定页。
+    static func onboardedForLaunch(_ onboarded: OnboardedDesktopsStore, daemonNodeId: String?) -> Bool {
+        guard let id = daemonNodeId else { return false }
+        return onboarded.wasOnboarded(id)
+    }
+
     /// 对外的端口集合（界面只认这几个 protocol）。
     func ports() -> Backend {
-        let pairing = LivePairing(transportFor: { [plane] in PeerCtrlTransport(plane: plane, peerToken: $0) }, store: pairingStore, onboarded: { [onboarded] in onboarded.wasOnboarded($0) },
+        let pairing = LivePairing(transportFor: { [plane] in PeerCtrlTransport(plane: plane, peerToken: $0) }, store: pairingStore,
+                                  onboarded: { [onboarded] in onboarded.wasOnboarded($0) },
+                                  knownDesktop: Self.knownDesktopCheck(onboarded: onboarded, directory: root.url, logger: logger),
                                   onPaired: { [weak self] record, known in self?.paired(record, knownDesktop: known) ?? false },
                                   onDisconnect: { [weak self] in await self?.disconnect() }, logger: logger,
                                   localNodeId: { [plane] in try plane.nodeId() })
@@ -271,7 +304,7 @@ final class LiveBackend: @unchecked Sendable {
         // #935：换了一台电脑就清旧账（已确认计数不能算给新电脑）；同一台重新配对不动。失败要暴露，不静默沿用旧账。
         do { _ = try adoptDesktop(orders, daemonNodeId: record.daemonNodeId, nowMs: Int64(Date().timeIntervalSince1970 * 1000)) }
         catch { logger.log("adoptDesktop failed: \(error)") }
-        // 「连过这台电脑」不在这里记：要等用户走完首次设置，在首次选范围点「开始备份」时落盘（#1019 / #1263，对位 Android finishOnboarding）。
+        // 「连过这台电脑」不在这里记：要等用户在决定页做出选择（范围保存成功 / 单张选完）才落盘（#1323 onboarding 闸门，对位 Android markOnboarded）。
         let settingSaveFailed = applyAutoBackupOnPairing(autoPrefs, knownDesktop: knownDesktop, logger: logger)
         mediaWatcher.start() // 断开时注销了；重新配对后恢复（#978）
         timelineLive.session.pairingChanged() // 新配对：按新对端重建实时订阅（#963）
@@ -481,6 +514,8 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
 
     func autoBackup() -> Bool { backend.autoPrefs.enabled() }
     func backgroundCardDismissed() -> Bool { backend.cardPrefs.dismissed() }
+    func pendingFullPhotoAccess() -> Bool { backend.pendingAccessPrefs.pending() }
+    func setPendingFullPhotoAccess(_ pending: Bool) throws { try backend.pendingAccessPrefs.set(pending) }
     func dismissBackgroundCard() throws {
         do { try backend.cardPrefs.dismiss(); backend.logger.log("background-card: dismissed") } catch {
             backend.logger.log("background-card: write failed: \(error)")
@@ -552,6 +587,10 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
     }
     @MainActor func openNotificationSettings() { SystemNotifications.openSettings() }
 
+    func onboardedCurrent() -> Bool {
+        LiveBackend.onboardedForLaunch(backend.onboarded, daemonNodeId: backend.pairingStore.load()?.daemonNodeId)
+    }
+
     /// 「连过这台电脑」落盘。
     func finishOnboarding() throws {
         guard let record = backend.pairingStore.load() else {
@@ -602,10 +641,12 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
 
     func pickedSummary() -> PickedBatchSummary? { backend.picked.summary() }
 
-    func addPicked(_ items: [(fileName: String, mimeType: String, payload: PickedPayload)]) async {
-        guard backend.picked.addBatch(items) > 0 else { return }
+    func addPicked(_ items: [(fileName: String, mimeType: String, payload: PickedPayload)]) async -> Int {
+        let added = backend.picked.addBatch(items)
+        guard added > 0 else { return 0 }
         _ = await backend.engine.trigger(.pickedAdded)
         await backend.refreshFacts()
+        return added
     }
 
     func retryFailed() async throws {

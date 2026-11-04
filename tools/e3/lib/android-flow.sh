@@ -15,15 +15,12 @@ install_fresh() {
   A install "$1" >/dev/null || die "安装失败：$1"
 }
 
-# pair_with_stub <证据目录>：从欢迎页手动输入配对串 → 桩 IPC 批准 → 系统照片权限框「全部允许」→「开始备份」
-# 只在 P-Pass 在前台时点。成功返回 0。
-pair_with_stub() {
-  local ev="$1" qr code node xy end
-  app_stop
-  A shell pm clear "$PKG" >/dev/null
-  app_start
-  wait_text "扫码连接家里的电脑" 30 || { ui_dump "$ev/pair-no-welcome.xml"; return 1; }
-  tap_text "无法扫码？手动输入配对码" || return 1
+# pair_enter_code <证据目录>：App 停在欢迎页时，手动输入配对串 → 桩 IPC 批准。只配对，配对之后的页面不碰。
+pair_enter_code() {
+  local ev="$1" qr code node xy
+  # 只认前缀：smoke-upgrade 在 main 的基线包上配对，基线包还是旧文案（11-04 前是「扫码连接家里的电脑」「手动输入配对码」）。
+  wait_text "扫码连接" 30 || { ui_dump "$ev/pair-no-welcome.xml"; return 1; }
+  tap_text "无法扫码？手动" || return 1
   wait_text "输入配对码" 15 || return 1
   qr=$(eph_qr) || return 1
   xy=$(python3 -I "$E3_LIB/ui.py" class "$UI_XML" EditText) || { log "找不到配对码输入框"; return 1; }
@@ -44,6 +41,19 @@ pair_with_stub() {
   [ -n "$node" ] && [ -n "$code" ] || { log "没等到配对请求（node=$node code=${code}）"; return 1; }
   eph_ipc pairing.confirm "{\"accept\":true,\"node_id\":\"$node\",\"code\":\"$code\"}" >"$ev/pair-confirm.json" || return 1
   echo "$node" >"$E3_STATE/android-node"
+}
+
+# pair_with_stub <证据目录>：清数据 → 配对 →（#1321 决定页「选择备份范围」）→ 系统照片权限框「全部允许」→「开始备份」
+# 只在 P-Pass 在前台时点。成功返回 0。
+pair_with_stub() {
+  local ev="$1" end
+  app_stop
+  A shell pm clear "$PKG" >/dev/null
+  app_start
+  pair_enter_code "$ev" || return 1
+  # #1321 起配对后先进决定页（候选包）；上一版包（#1272 起）配对后直接进照片页，从「开启自动备份」进。
+  if wait_text "选择要自动备份的照片" 15; then tap_text "选择备份范围" || return 1
+  elif ui_has "开启自动备份"; then tap_text "开启自动备份" || return 1; fi
   # 系统照片权限框 → 全部允许；之后「开始备份」
   end=$((SECONDS + 60))
   while [ $SECONDS -lt $end ]; do
@@ -52,7 +62,10 @@ pair_with_stub() {
   done
   tap_text "全部允许" || tap_text "Allow all" || { log "没等到系统照片权限框"; return 1; }
   sleep 3
-  wait_text "开始备份" 20 && tap_text "开始备份"
+  # 首次选范围页按钮是「开始备份」（默认勾相机相册）；上一版的选范围页按钮是「保存」、默认不勾，勾上 Camera 再保存
+  wait_text "开始备份" 20 || wait_text "保存" 5
+  if ui_has "开始备份"; then tap_text "开始备份"
+  elif ui_has "保存"; then tap_text "Camera"; sleep 1; tap_text "保存"; fi
   sleep 4
   # 通知权限等后续系统框：不在本流程判定范围内，一律「不允许」
   if fg | grep -q permissioncontroller; then tap_text "不允许" || true; sleep 2; fi
@@ -72,7 +85,7 @@ gen_photos() { rm -rf "$1"; python3 -I "$E3_LIB/gen-photos.py" "$1" "$2" "$3" >/
 # app_on_welcome：开 App 后停在欢迎页 = 没配对
 app_on_welcome() {
   app_start
-  wait_text "扫码连接家里的电脑" 6 >/dev/null 2>&1
+  wait_text "扫码连接" 6 >/dev/null 2>&1
 }
 
 # ensure_paired <证据目录>：手机装的是候选 debug 包、与当前桩配着对；不是就装候选包重新配对。

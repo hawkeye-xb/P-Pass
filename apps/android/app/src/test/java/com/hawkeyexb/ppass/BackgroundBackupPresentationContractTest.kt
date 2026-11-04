@@ -20,7 +20,8 @@ class BackgroundBackupPresentationContractTest {
     fun onboarding_asks_for_neither_background_authorization_nor_notifications() {
         // #1263：onboarding 里不再问后台备份（首页卡片引导开启）；#1262：也不再申请通知。
         val main = source("MainActivity.kt")
-        val buckets = main.substringAfter("\n        is Screen.Buckets -> {").substringBefore("onCancel = { screen = Screen.Home(s.pairing) }")
+        // #1321：首次选范围取消回决定页，切片终点改成 onCancel 本身（不再写死回首页那一句）。
+        val buckets = main.substringAfter("\n        is Screen.Buckets -> {").substringBefore("onCancel = {")
         assertTrue(buckets.contains("if (s.firstTime) {"))
         assertFalse("onboarding 不许申请后台授权", buckets.contains("requestIntent()"))
         assertFalse("onboarding 不许申请通知权限", buckets.contains("POST_NOTIFICATIONS"))
@@ -32,6 +33,8 @@ class BackgroundBackupPresentationContractTest {
         val host = source("ui/HomeNotices.kt").substringAfter("fun NoticeHost(")
         assertFalse(host.contains("background_backup_offer"))
         assertFalse(source("ui/PhotosScreen.kt").contains("background_backup_offer"))
+        // #1322：「App 关着也能自动备份」回到照片页引导位第二步，走卡片自己的白名单申请（弹框前不写意图）。
+        assertTrue(main.contains("PhotosGuide.EnableBackground -> onEnableFromOffer()"))
     }
 
     @Test
