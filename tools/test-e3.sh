@@ -75,4 +75,76 @@ wait
 rm -rf "$lockdir"
 fi
 
+# #1343：android 代码有改动时，ensure_base_apk 不许把候选包当基线。
+# 用假仓库造 diff，直接调 source 出来的函数，不编 APK、不碰设备。
+(
+  d="$(mktemp -d)" || exit 1
+  trap 'rm -rf "$d"' EXIT
+  fake="$d/repo"
+  mkdir -p "$fake/tools" "$fake/.github/workflows" "$fake/apps/android/app/src" \
+    "$fake/apps/android/app/build/outputs/apk/debug"
+  cp "$ROOT/tools/ci-paths.sh" "$fake/tools/ci-paths.sh"
+  chmod +x "$fake/tools/ci-paths.sh"
+  cat >"$fake/.github/workflows/ci-android.yml" <<'YML'
+jobs:
+  changes:
+    steps:
+      - with:
+          paths: |
+            apps/android/**
+            tools/ci-paths.sh
+YML
+  printf 'candidate\n' >"$fake/apps/android/app/build/outputs/apk/debug/app-debug.apk"
+  git -C "$fake" init -q
+  git -C "$fake" add -A
+  git -C "$fake" -c user.name=t -c user.email=t@t commit -q -m base
+  base="$(git -C "$fake" rev-parse HEAD)"
+  export E3_STATE="$d/state"
+  # shellcheck source=../tools/e3/verify
+  source "$E3/verify" || exit 1
+  REPO_ROOT="$fake"
+  cd "$fake" || exit 1 # lane_hit 里 ci-paths.sh 按当前目录取 git diff
+  root="$d/root"
+  mkdir -p "$root"
+  build_apk() { return 1; } # 真去编基线就会失败：用来证明没走「拷候选包」分支
+
+  # 1) android 有改动：必须走编基线分支。顶层新文件让「glob 被 shell 展开成子目录」的回归也红。
+  printf 'x\n' >"$fake/apps/android/app/src/x.kt"
+  printf 'y\n' >"$fake/apps/android/newfile.kt"
+  git -C "$fake" add -A
+  git -C "$fake" -c user.name=t -c user.email=t@t commit -q -m android
+  if ensure_base_apk; then
+    echo "android 有改动，ensure_base_apk 却成功返回（把候选包当基线了）"
+    exit 1
+  fi
+  [ ! -f "$(base_apk_path)" ] || { echo "android 有改动，基线包却被写了出来"; exit 1; }
+
+  # 2) 只有非 android 改动：同一份应用代码，允许直接拷候选包
+  git -C "$fake" checkout -q -b docs-only "$base"
+  printf 'note\n' >"$fake/docs.md"
+  git -C "$fake" add -A
+  git -C "$fake" -c user.name=t -c user.email=t@t commit -q -m docs
+  E3_STATE="$d/state-docs"
+  if ! ensure_base_apk; then
+    echo "非 android 改动，ensure_base_apk 应直接拷候选包却失败了"
+    exit 1
+  fi
+  [ -f "$(base_apk_path)" ] || { echo "非 android 改动，候选包没有拷成基线"; exit 1; }
+) || bad "ensure_base_apk：android 改动判定"
+
+# #1343 审查补充：MAC_GLOBS 数组里的通配符必须加引号。未加引号时，赋值那一刻 shell 会按
+# 当前目录展开（在仓库根目录 crates/** 会变成一堆具体目录），通配语义和与目录无关性都丢了。
+(
+  cd "$ROOT" || exit 1
+  E3_STATE="$(mktemp -d)" || exit 1
+  export E3_STATE
+  trap 'rm -rf "$E3_STATE"' EXIT
+  # shellcheck source=../tools/e3/verify
+  source "$E3/verify" || exit 1
+  [ "${MAC_GLOBS[0]}" = 'crates/**' ] ||
+    { printf 'MAC_GLOBS[0]=%s，期望字面量 crates/**\n' "${MAC_GLOBS[0]}"; exit 1; }
+  [ "${#MAC_GLOBS[@]}" -eq 7 ] ||
+    { printf 'MAC_GLOBS 有 %s 项，期望 7\n' "${#MAC_GLOBS[@]}"; exit 1; }
+) || bad "MAC_GLOBS 通配符被 shell 按路径展开"
+
 [ "$fails" -eq 0 ] && echo "ok: tools/e3 自测通过" || { echo "$fails 项失败"; exit 1; }
