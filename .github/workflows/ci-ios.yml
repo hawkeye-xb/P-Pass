@@ -37,8 +37,6 @@ on:
   # 没改到 iOS 相关路径的 PR 只跑 changes 与 gate（ubuntu，十几秒），不开 macOS runner。
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
   # #1187：发版前由 release.yml 以全量模式调用（只在 iOS 本次要构建时）。
   workflow_call:
   workflow_dispatch:
