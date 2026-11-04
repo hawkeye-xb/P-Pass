@@ -1,5 +1,7 @@
 package com.hawkeyexb.ppass
 
+import com.hawkeyexb.ppass.backup.MediaAccess
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -16,15 +18,45 @@ class RuleEnableWhenPartialTest {
     private val main by lazy { File("src/main/java/com/hawkeyexb/ppass/MainActivity.kt").readText() }
     private val home by lazy { File("src/main/java/com/hawkeyexb/ppass/ui/HomeScreen.kt").readText() }
 
-    /** 反证：部分权限分支改回 `rulePermission.launch`，本条红。 */
+    /**
+     * 产品负责人 2026-11-04 改定（Android 官方做法）：部分权限下先看系统还肯不肯弹框——
+     * 肯弹（rationale=true）→ 照旧申请，用户在框里能选「全部允许」；被锁（rationale=false）→ 去系统设置。
+     * 反证：部分权限一律走 Settings（不看 canPrompt），rationale=true 那条红。
+     */
     @Test
-    fun partial_access_opens_app_settings_instead_of_requesting_again() {
+    fun partial_access_requests_while_the_system_still_prompts_and_goes_to_settings_once_locked() {
+        assertEquals(RuleEnableRoute.Request, ruleEnableRoute(MediaAccess.PARTIAL, canPrompt = true))
+        assertEquals(RuleEnableRoute.Settings, ruleEnableRoute(MediaAccess.PARTIAL, canPrompt = false))
+        assertEquals(RuleEnableRoute.Apply, ruleEnableRoute(MediaAccess.FULL, canPrompt = false))
+        assertEquals(RuleEnableRoute.Apply, ruleEnableRoute(MediaAccess.FULL, canPrompt = true))
+        assertEquals("没给过 / 拒绝：申请", RuleEnableRoute.Request, ruleEnableRoute(MediaAccess.NONE, canPrompt = false))
+    }
+
+    /** 接线：Settings 分支只去设置、不申请、不预写开关；Request 分支申请；判断用系统的 rationale。 */
+    @Test
+    fun routes_are_wired_to_settings_and_request() {
         val toggle = main.substringAfter("val onToggleRule: (Pairing, Boolean) -> Unit").substringBefore("// 从系统设置回来")
-        val partial = toggle.substringAfter("== MediaAccess.PARTIAL) {").substringBefore("} else {")
-        assertTrue(partial.contains("openAppDetailsSettings(context)"))
-        assertTrue(partial.contains("ruleAwaitingSettings = true"))
-        assertFalse("部分权限下不再申请", partial.contains("rulePermission.launch"))
-        assertFalse("不预写开关", partial.contains("rulePrefs.set(true)"))
+        assertTrue(toggle.contains("ruleEnableRoute(mediaAccess(context), canPromptForFullMediaAccess(context))"))
+        val settings = toggle.substringAfter("RuleEnableRoute.Settings -> {").substringBefore("RuleEnableRoute.Request")
+        assertTrue(settings.contains("openAppDetailsSettings(context)"))
+        assertTrue(settings.contains("ruleAwaitingSettings = true"))
+        assertFalse("被锁时不再申请", settings.contains("rulePermission.launch"))
+        assertFalse("不预写开关", settings.contains("rulePrefs.set(true)"))
+        val request = toggle.substringAfter("RuleEnableRoute.Request -> {")
+        assertTrue(request.contains("rulePermission.launch"))
+        assertTrue(main.contains("shouldShowRequestPermissionRationale(activity, Manifest.permission.READ_MEDIA_IMAGES)"))
+    }
+
+    /**
+     * 场景 C（产品负责人 2026-11-04）：开关开着时权限被收回、用户没点「去设置」而是自己去设置改回全部再回来——
+     * ON_RESUME 重读真实权限，状态卡按 `blockedHeroOffersSettings` 现算消失，开关不动。
+     */
+    @Test
+    fun user_restores_full_access_on_their_own_and_the_blocked_card_goes_away() {
+        val resume = main.substringAfter("Lifecycle.Event.ON_RESUME -> {").substringBefore("resumeCount++")
+        assertTrue(resume.contains("mediaAccess = mediaAccess(context)"))
+        assertFalse(resume.contains("rulePrefs.set("))
+        assertFalse(com.hawkeyexb.ppass.ui.blockedHeroOffersSettings(ruleOn = true, access = MediaAccess.FULL))
     }
 
     /** 反证：去掉 resume 里的接续，或不清标记（会重复接），本条红。 */

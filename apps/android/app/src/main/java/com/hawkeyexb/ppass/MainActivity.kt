@@ -714,15 +714,17 @@ fun PPassApp() {
             rulePrefs.set(false)
             ruleOn = false
             ruleHintRes = null
-        } else if (mediaAccess(context) == MediaAccess.FULL) {
-            applyRuleAccess(pairing, MediaAccess.FULL)
-        } else if (mediaAccess(context) == MediaAccess.PARTIAL) {
-            ruleAwaitingSettings = true
-            PLog.i("PPassFlow", "auto-rule: partial photo access, opening app settings for full access")
-            openAppDetailsSettings(context)
-        } else {
-            pendingRulePairing = pairing
-            rulePermission.launch(withMediaLocation(requiredMediaPermissions()))
+        } else when (ruleEnableRoute(mediaAccess(context), canPromptForFullMediaAccess(context))) {
+            RuleEnableRoute.Apply -> applyRuleAccess(pairing, MediaAccess.FULL)
+            RuleEnableRoute.Settings -> {
+                ruleAwaitingSettings = true
+                PLog.i("PPassFlow", "auto-rule: partial photo access, prompt locked; opening app settings for full access")
+                openAppDetailsSettings(context)
+            }
+            RuleEnableRoute.Request -> {
+                pendingRulePairing = pairing
+                rulePermission.launch(withMediaLocation(requiredMediaPermissions()))
+            }
         }
     }
     // 从系统设置回来（ON_RESUME 推进 resumeCount、先重读了 mediaAccess）：按真实权限接着走，只接一次。
@@ -1529,6 +1531,27 @@ fun PPassApp() {
         }
     }
     }
+}
+
+/** #1353：开自动备份时按当前照片权限走哪条路。 */
+internal enum class RuleEnableRoute { Apply, Request, Settings }
+
+/**
+ * 全部 → 直接开；部分且系统还肯弹框 → 照旧申请（用户在框里能选「全部允许」）；
+ * 部分且系统不再弹（拒过两次被锁，USER_FIXED）→ 去本 App 的系统设置页；没给过 / 拒绝 → 申请（被锁时系统直接回拒绝，落到小字）。
+ * 部分态一定问过至少一次，所以这里的 `canPrompt == false` 只可能是被锁（Android 官方：shouldShowRequestPermissionRationale）。
+ */
+internal fun ruleEnableRoute(access: MediaAccess, canPrompt: Boolean): RuleEnableRoute = when {
+    access == MediaAccess.FULL -> RuleEnableRoute.Apply
+    access == MediaAccess.PARTIAL && !canPrompt -> RuleEnableRoute.Settings
+    else -> RuleEnableRoute.Request
+}
+
+/** 系统还会不会为「全部照片」弹框：shouldShowRequestPermissionRationale(READ_MEDIA_IMAGES)。API 33 以下没有部分权限，按会弹算。 */
+internal fun canPromptForFullMediaAccess(context: Context): Boolean {
+    if (android.os.Build.VERSION.SDK_INT < 33) return true
+    val activity = context as? android.app.Activity ?: return true
+    return androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.READ_MEDIA_IMAGES)
 }
 
 private fun requiredMediaPermissions(): List<String> =
