@@ -174,6 +174,16 @@ final class AppModel: ObservableObject {
     /// 规则开着、但权限被收回 / 改成部分：自动备份已停止（偏好不动，单独显示成这一种状态）。
     var autoRuleBlocked: Bool { autoRule && access != .full }
 
+    /// #1353：「自动备份已停止」状态卡带「去设置」——开关开着、照片权限不全（部分 / 全拒）。开关关着是正常状态，不给。
+    /// 开关本身不动；回到前台 `refresh` 重读真实权限，变成全部就不再是这张卡（对位 Android `blockedHeroOffersSettings`）。
+    nonisolated static func blockedHeroOffersSettings(autoRule: Bool, access: MediaAccess) -> Bool { autoRule && access != .full }
+    var blockedHeroOffersSettings: Bool { Self.blockedHeroOffersSettings(autoRule: autoRule, access: access) }
+
+    @MainActor func openSettingsFromBlockedHero() {
+        AppLog.log("auto-rule: blocked (photo access=\(access)), opening app settings")
+        openAppSettings()
+    }
+
     /// 「自动备份」开关（设置页与照片页空状态的主按钮共用）。关：只写偏好。开：此刻才申请照片权限——
     /// 全部允许 → 开，没选过范围就进选范围页；有限访问 → 开关保持关，把允许的照片按手选链路传一次；不允许 → 保持关 + 一行小字。
     func setAutoRule(_ on: Bool) {
@@ -224,7 +234,10 @@ final class AppModel: ObservableObject {
         if let v = facts.view, let id = v.currentOrderId {
             if transferMark?.orderId != id || transferMark?.bytes != v.currentBytesSent { transferMark = (id, v.currentBytesSent, Date()) }
         } else { transferMark = nil }
+        let accessBefore = access
         access = backend.media.access()
+        // #1353：从系统设置改完权限回来按真实权限现算；变了记一行（读到 full = 状态卡消失、自动备份恢复）。
+        if access != accessBefore { AppLog.log("photo access now \(access) (was \(accessBefore))") }
         pairing = backend.pairing.status()
         // #1119：配对被清掉（被拒即清理）→ 回欢迎页。界面不在欢迎页（含选相册 / 首次备份）而配对没了，就是这一种。
         let next = Self.phase(phase, whenPairing: pairing)

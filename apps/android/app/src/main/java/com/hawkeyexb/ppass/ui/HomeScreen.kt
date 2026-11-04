@@ -418,6 +418,17 @@ fun HomeScreen(
                     Text(stringResource(R.string.auto_backup_off_hero), color = PPColor.Ink, fontSize = 15.sp)
                 } else if (mediaAccess != MediaAccess.FULL) {
                     Text(stringResource(R.string.auto_backup_blocked_hero), color = PPColor.Ink, fontSize = 15.sp)
+                    // #1353：权限被收回（部分 / 全拒）后的唯一出口：去本 App 的系统设置页改回。开关保持开，回来按真实权限现算。
+                    if (blockedHeroOffersSettings(autoBackupRuleOn, mediaAccess)) {
+                        Spacer(Modifier.height(12.dp))
+                        OutlinedButton(
+                            onClick = onOpenAppSettings,
+                            modifier = Modifier.height(40.dp),
+                            shape = RoundedCornerShape(14.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, PPColor.Act.copy(alpha = 0.4f)),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = PPColor.Act),
+                        ) { Text(stringResource(R.string.auto_backup_blocked_action), fontSize = 15.sp, fontWeight = FontWeight.Bold) }
+                    }
                 } else {
                 val t = triplet
                 val heroRender = heroRenderOf(mediaAccess, t, countsReadable = countsReadable, scopeSaved = scopeSaved)
@@ -1276,3 +1287,6 @@ private fun pickedBatchLine(batch: com.hawkeyexb.ppass.backup.picked.PickedBatch
     val tail = if (batch.failed > 0) stringResource(R.string.picked_result_failed, batch.failed) else null
     return listOfNotNull(head, tail).joinToString(" · ").ifEmpty { null }
 }
+
+/** #1353：「自动备份已停止」状态卡带「去设置」——开关开着、照片权限不全（部分 / 全拒）。开关关着是正常状态，不给。 */
+internal fun blockedHeroOffersSettings(ruleOn: Boolean, access: MediaAccess): Boolean = ruleOn && access != MediaAccess.FULL

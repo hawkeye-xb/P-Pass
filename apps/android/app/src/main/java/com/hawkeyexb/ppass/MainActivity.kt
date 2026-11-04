@@ -581,7 +581,10 @@ fun PPassApp() {
                     }
 
                     daysUnreachable = computeDaysUnreachable()
+                    val accessBefore = mediaAccess
                     mediaAccess = mediaAccess(context)
+                    // #1353：从系统设置改完权限回来，按真实权限现算；变了就记一行（回来读到 FULL = 状态卡消失、自动备份恢复）。
+                    if (mediaAccess != accessBefore) PLog.i("PPassFlow", "photo access on resume: $accessBefore -> $mediaAccess")
                     mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
                     resumeCount++
                     heartbeat.start()
@@ -1343,7 +1346,10 @@ fun PPassApp() {
                         // MOB-02 §二: 部分授权引导（只授权了部分照片 →
                         // 一键去系统设置；部分授权态不保存范围、不显示假 0/0）。
                         mediaAccess = mediaAccess,
-                        onOpenAppSettings = { openAppDetailsSettings(context) },
+                        onOpenAppSettings = {
+                            PLog.i("PPassFlow", "auto-rule: blocked (photo access=$mediaAccess), opening app settings")
+                            openAppDetailsSettings(context)
+                        },
                         // UPD-02: 设置行「检查更新」——value 跟随状态机
                         // （下载中显示百分比 / 待安装显示「可安装」），
                         // 点击行为按当前状态分流（重新打开已收起的对话框 /

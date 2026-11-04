@@ -181,6 +181,7 @@
 "photos_scope_empty_since" = "自动备份已开启，%1$@以后拍的照片会传到 %2$@。";
 "photos_scope_empty_all" = "自动备份已开启，所选相册里的照片会传到 %1$@。";
 "auto_backup_blocked_hero" = "自动备份已停止";
+"auto_backup_blocked_action" = "去设置";
 "auto_backup_rule_partial_hint" = "只允许访问部分照片。";
 "auto_backup_rule_none_hint" = "没有照片访问权限。";
 "auto_backup_from_today_empty" = "今天新拍的照片会自动传到电脑。去拍一张试试。";
