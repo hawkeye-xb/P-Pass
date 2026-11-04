@@ -54,7 +54,7 @@ final class UIResourceTests: XCTestCase {
     func testIOSOverlayWinsOverAndroidWording() throws {
         let zh = try XCTUnwrap(Bundle.main.path(forResource: "zh-Hans", ofType: "lproj").flatMap(Bundle.init(path:)))
         XCTAssertEqual(zh.localizedString(forKey: "notif_media_none_body", value: nil, table: "IOS"),
-                       "照片权限已关闭，自动备份已停止。在「设置 › P-Pass › 照片」允许访问。")
+                       "照片权限已关闭，自动备份已停止。可随时在「设置 › 隐私与安全性 › 照片 › P-Pass」改为「完全访问」。")
         XCTAssertEqual(zh.localizedString(forKey: "notif_media_none_body", value: nil, table: nil),
                        "照片权限已关闭，自动备份已停止。点开后在系统设置中允许访问。")
     }

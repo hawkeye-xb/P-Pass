@@ -213,7 +213,9 @@ protocol BackupEngine: AnyObject {
     /// 有限访问：把用户允许的照片按手选链路传一次，返回实际登记的张数。
     func sendAllowedPhotos() async -> Int
     func pickedSummary() -> PickedBatchSummary?
-    func addPicked(_ items: [(fileName: String, mimeType: String, payload: PickedPayload)]) async
+    /// 返回实际登记的张数（0 = 一张没登记上）：决定页据此判断「单张备份」这个决定成没成（#1323）。
+    @discardableResult
+    func addPicked(_ items: [(fileName: String, mimeType: String, payload: PickedPayload)]) async -> Int
     /// 命令的失败抛给调用方（#972）：「状态不允许」是返回值，「执行出错」是抛出，两者不混。
     func retryFailed() async throws
     /// 「取消剩余 N 张」：点击那一刻的快照（N 与取消边界是同一个差集）。
@@ -234,9 +236,11 @@ protocol BackupEngine: AnyObject {
     func requestNotificationAuthorization() async -> NotificationAuthorization
     /// denied 之后唯一的出路：跳系统设置里本 App 的通知页。
     @MainActor func openNotificationSettings()
-    /// 首次选范围页点「开始备份」：把「连过这台电脑」落盘（#1019 / #1263，对位 Android `finishOnboarding` 里的 markOnboarded，MOB-114）。
-    /// 快速重连只认它；配对成功时不记，否则配完没走完首次设置就被杀，下次会跳过选范围。
+    /// 决定页做出选择（范围保存成功 / 单张选完登记成功）：把「连过这台电脑」落盘（#1323 onboarding 闸门，对位 Android `markOnboarded`）。
+    /// 配对成功时不记，否则配完没做决定就被杀，下次会跳过决定页。
     func finishOnboarding() throws
+    /// 当前配对的这台电脑有没有「连过」记录（#1323 判断 B：冷启动只看记录，不看范围）。没有配对 = false。
+    func onboardedCurrent() -> Bool
     /// 「仅 Wi-Fi 时备份」（引擎 Conditions.wifiOnly 的唯一来源，默认开）。
     func wifiOnly() -> Bool
     func setWifiOnly(_ on: Bool) throws
@@ -246,6 +250,9 @@ protocol BackupEngine: AnyObject {
     /// 首页「开启后台备份」引导卡被用户关掉过（#1263）。
     func backgroundCardDismissed() -> Bool
     func dismissBackgroundCard() throws
+    /// #1323：部分照片权限下开自动备份、被带去系统设置改权限，还没接着走完（落盘：iOS 改权限会结束进程）。
+    func pendingFullPhotoAccess() -> Bool
+    func setPendingFullPhotoAccess(_ pending: Bool) throws
     /// 系统「后台 App 刷新」的当前状态（设置页的后台告示据此判定）。
     func backgroundRefresh() -> BackgroundRefreshAvailability
 }

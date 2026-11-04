@@ -5,6 +5,8 @@ import SwiftUI
 /// 只决定「一打开停在哪一屏」，不改任何业务数据。仅 DEBUG 构建生效。
 enum LaunchRoute: String {
     case photos, family, settings, viewer, video, bucket, storage, diagnostics
+    /// #1323 决定页（截图 / 预览用：演示数据下直接停在决定页）。
+    case decision
     case welcome, scan, manual, pairWaiting, pairCode, pairRefused, pairLapsed, pairFailed
 
     static let current: LaunchRoute? = {
@@ -21,10 +23,19 @@ struct RootView: View {
             switch app.phase {
             case .onboarding:
                 OnboardingFlow()
+            case .decision:
+                DecisionScreen()
             case .chooseAlbums:
                 NavigationStack {
                     BucketScreen(firstTime: true) { selected, known, wantsAll in
                         app.albumsChosen(selected, known: known, wantsAll: wantsAll, firstTime: true)
+                    }
+                    // #1323：首次选范围是从决定页进来的，还没做决定——返回回决定页（对位 Android Buckets(firstTime) 的返回）。
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarLeading) {
+                            Button { app.leaveFirstScope() } label: { Label(L.s("back"), systemImage: "chevron.backward") }
+                                .accessibilityIdentifier("firstScopeBack")
+                        }
                     }
                 }
             case .main:
@@ -54,6 +65,7 @@ struct RootView: View {
         switch LaunchRoute.current {
         case .settings, .bucket, .storage, .diagnostics: app.tab = .settings
         case .welcome, .scan, .manual, .pairWaiting, .pairCode, .pairRefused, .pairLapsed, .pairFailed: app.phase = .onboarding
+        case .decision: app.phase = .decision
         default: break
         }
     }

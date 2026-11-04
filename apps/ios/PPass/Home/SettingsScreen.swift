@@ -196,7 +196,6 @@ struct SettingsScreen: View {
     }
 
     /// #1272「挑几张传」：常驻一行，点开系统照片选择器；右侧是这一批的进度 / 结果句。
-    /// 下一行小字只有 iOS 有：照片不复制进 App，要在前台传，离开 P-Pass 就暂停。
     private var pickRow: some View {
         VStack(alignment: .leading, spacing: 2) {
             Button { app.pickerRequested = true } label: {
@@ -209,7 +208,6 @@ struct SettingsScreen: View {
                 }
             }
             .accessibilityIdentifier("pickPhotosRow")
-            Text(L.s("pick_photos_ios_hint")).font(Self.hintFont).foregroundStyle(PPColor.ink40)
         }
     }
 
@@ -258,37 +256,44 @@ struct SettingsScreen: View {
 
 /// 告示行：一行正文 + 右侧动作（对位 Android `NoticeCard`）。底色 waitingBg 是品牌语义色，按 tokens 走；
 /// 行高与内边距用系统列表行。「知道了」比「去处理」弱一档（无下划线、ink40），同 Android 的主次区分。
-private struct NoticeRow: View {
+struct NoticeRow: View {
     let text: String
     var action: (String, () -> Void)? = nil
     var dismiss: (String, () -> Void)? = nil
     /// ×（无障碍标签, 动作）：非空时换成一行版式「左正文、右动作与 ×」，同 Android NoticeCard 的 closeLabel 版式（C1）。
     var close: (String, () -> Void)? = nil
+    /// 不在 List 里用（照片页引导位）：List 行的底色与圆角由 List 给，这里自己补同样的浅底圆角与左内边距。
+    var standalone = false
 
     var body: some View {
         if let c = close {
             // C1（10-30 用户定版）：一行——左边正文、右边「开启」与 ×，都垂直居中；正文放不下只让正文折行。
-            HStack(alignment: .center, spacing: 4) {
+            // standalone 的边距逐项对位 Android NoticeCard：行上下 2 + 正文上下 10、动作左右 8、× 48 点击区贴右边。
+            HStack(alignment: .center, spacing: standalone ? 0 : 4) {
                 Text(text).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(.vertical, standalone ? 10 : 0)
                 if let a = action {
-                    Button(a.0, action: a.1)
-                        .font(PPFont.subheadlineBold).underline().foregroundStyle(PPColor.ink)
+                    Button(action: a.1) { Text(a.0).underline() }
+                        .font(PPFont.subheadlineBold).foregroundStyle(PPColor.ink)
                         .buttonStyle(.borderless)
                         .fixedSize()
+                        .padding(.horizontal, standalone ? 8 : 0)
                         .accessibilityIdentifier("noticeAction")
                 }
                 Button(action: c.1) {
                     Image(systemName: "xmark").font(PPFont.subheadlineBold).foregroundStyle(PPColor.ink40)
                         // HIG 最小触控区 44pt；右侧负边距让图标贴近卡片边，不多占正文宽度。
-                        .frame(width: 44, height: 44).contentShape(Rectangle())
+                        .frame(width: standalone ? 48 : 44, height: standalone ? 48 : 44).contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)
-                .padding(.trailing, -12)
+                .padding(.trailing, standalone ? 0 : -12)
                 .accessibilityLabel(c.0)
                 .accessibilityIdentifier("noticeClose")
             }
+            .padding(.leading, standalone ? 16 : 0).padding(.vertical, standalone ? 2 : 0)
+            .background(standalone ? PPColor.waitingBg : .clear, in: RoundedRectangle(cornerRadius: PPRadius.control, style: .continuous))
             .ppTinted(PPColor.waitingBg)
         } else {
             row
@@ -306,8 +311,8 @@ private struct NoticeRow: View {
                     .accessibilityIdentifier("noticeDismiss")
             }
             if let a = action {
-                Button(a.0, action: a.1)
-                    .font(PPFont.subheadlineBold).underline().foregroundStyle(PPColor.ink)
+                Button(action: a.1) { Text(a.0).underline() }
+                    .font(PPFont.subheadlineBold).foregroundStyle(PPColor.ink)
                     .buttonStyle(.borderless)
                     .accessibilityIdentifier("noticeAction")
             }

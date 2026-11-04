@@ -15,12 +15,12 @@ struct PhotosScreen: View {
             // （Android PhotosScreen 只收起重连 / 连不上这类提示，见 TimelineLiveChrome）。
             VStack(spacing: 0) {
                 if app.pairingLost { lostCard }
+                // #1324（ADR 结论 6）：引导位——同一时间最多一张，在过滤条上面，不挡浏览、不弹窗。失联时让位给红卡。
+                if guideShown { guideCard(app.photosGuide) }
                 chips
                 disconnected
                 // #1324（ADR 结论 7）：范围里还没有照片——过滤条下方次要提示位说一行现状，不带按钮，不受 ×。
                 if let hint = app.scopeEmptyHint { scopeEmptyLine(hint) }
-                // #1324（ADR 结论 6）：引导位——同一时间最多一张，不挡浏览、不弹窗。失联时让位给红卡。
-                if !app.pairingLost, app.photosGuide != .none { guideCard(app.photosGuide) }
                 content
             }
             .ppScreen()
@@ -54,29 +54,16 @@ struct PhotosScreen: View {
         .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 12)
     }
 
-    /// 引导位小卡（对位 Android `PhotosGuideCard`）：一句话 + 一个按钮 + 右上角 ×。第一步按钮「开启」；第二步：系统「后台 App 刷新」
-    /// 没开 →「去设置」（跳本 App 的系统设置页），已放行、只差 App 里的开关 →「开启」。
+    /// 引导位（对位 Android `PhotosGuideCard`）：一句话 + 动作 + ×，用现成提示条 `NoticeRow`。
+    /// 第一步按钮「开启」（已是部分照片权限时「去设置」）；第二步：系统「后台 App 刷新」没开 →「去设置」，已放行 →「开启」。
     private func guideCard(_ guide: PhotosGuide) -> some View {
-        let text = guide == .enableScope ? L.f("photos_guide_scope", app.desktopName ?? L.s("storage_device_default")) : L.s("photos_guide_background")
-        let action = guide == .enableScope ? L.s("photos_guide_enable") : L.s(app.backgroundGuideActionKey)
-        return VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 8) {
-                Text(text).font(PPFont.subheadline).foregroundStyle(PPColor.ink60)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Button { app.dismissGuide() } label: {
-                    Image(systemName: "xmark").font(PPFont.subheadlineBold).foregroundStyle(PPColor.ink40)
-                        .frame(width: 32, height: 32)
-                }
-                .accessibilityLabel(L.s("photos_guide_close"))
-                .accessibilityIdentifier("photosGuideClose")
-            }
-            PPButton(title: action) { app.guideAction(guide) }
-                .accessibilityIdentifier("photosGuideAction")
-        }
-        .padding(.leading, 16).padding(.trailing, 8).padding(.vertical, 12)
-        .background(PPColor.waitingBg, in: RoundedRectangle(cornerRadius: PPRadius.card, style: .continuous))
-        .padding(.horizontal, 20).padding(.bottom, 12)
+        // 部分照片权限时按钮是「去设置」，点了直接跳过去，卡上不再重复路径说明（产品负责人 11-04：只留核心）。
+        let text = guide == .enableScope ? L.s("photos_guide_scope") : L.s("photos_guide_background")
+        let action = guide == .enableScope ? L.s(app.scopeGuideActionKey) : L.s(app.backgroundGuideActionKey)
+        // 复用现成提示条 NoticeRow 的 × 一行版式（C1），不另起组件；左右 12 与照片网格对齐。
+        return NoticeRow(text: text, action: (action, { app.guideAction(guide) }),
+                         close: (L.s("photos_guide_close"), { app.dismissGuide() }), standalone: true)
+        .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 12)
         .onAppear { AppLog.log("photos-guide: shown \(guide.logName)") }
         .id(guide)
     }
@@ -107,9 +94,11 @@ struct PhotosScreen: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 20).padding(.top, app.pairingLost ? 0 : 8).padding(.bottom, 12)
+        .padding(.horizontal, 12).padding(.top, app.pairingLost || guideShown ? 0 : 8).padding(.bottom, 12) // 左右 12 与照片网格对齐
         .background(PPColor.paper)
     }
+
+    private var guideShown: Bool { !app.pairingLost && app.photosGuide != .none }
 
     /// 实时更新的提示（Android `photosTimelineChrome`）：断线重连中给一行小字；退避用完停下来，提示 + 重试，不挡住已加载的照片。
     @ViewBuilder private var disconnected: some View {
