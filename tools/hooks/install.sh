@@ -23,6 +23,18 @@ common="$(cd "$(git rev-parse --git-common-dir)" && pwd -P)"
 dest="${common}/ppass-hooks"
 current="$(git config --get core.hooksPath || true)"
 
+# Windows Git Bash：bash 里是 /c/...，原生 git.exe 把参数转成 C:/... 写进 .git/config，
+# 读回来与 bash 算出的路径字面不等。有 cygpath（Git Bash / MSYS2 / Cygwin）才两边都转成 /c/... 再比；
+# macOS / Linux 没有 cygpath，原样比较。
+norm_path() {
+  if [ -n "$1" ] && command -v cygpath >/dev/null 2>&1; then
+    cygpath -u "$1" 2>/dev/null || printf '%s\n' "$1"
+  else
+    printf '%s\n' "$1"
+  fi
+}
+same_path() { [ "$(norm_path "$1")" = "$(norm_path "$2")" ]; }
+
 hook_names() {
   local n
   for n in $OWN_HOOKS; do echo "$n"; done
@@ -37,7 +49,7 @@ hook_names() {
 
 if [ "${1:-}" = "--check" ]; then
   bad=0
-  if [ "$current" != "$dest" ]; then
+  if ! same_path "$current" "$dest"; then
     echo "✗ core.hooksPath 是「${current:-（未设置）}」，应为「${dest}」" >&2
     bad=1
   fi
@@ -63,11 +75,11 @@ fi
 # pre-commit 框架看到 core.hooksPath 就拒绝安装。`just setup` 先 --release 解开、装框架
 # （它写进 <公共目录>/hooks/，转发器照样会先跑它），再重新安装本拦截。
 if [ "${1:-}" = "--release" ]; then
-  [ "$current" = "$dest" ] && git config --unset core.hooksPath
+  if same_path "$current" "$dest"; then git config --unset core.hooksPath; fi
   exit 0
 fi
 
-if [ -n "$current" ] && [ "$current" != "$dest" ]; then
+if [ -n "$current" ] && ! same_path "$current" "$dest"; then
   echo "✗ core.hooksPath 已被设成「${current}」，不覆盖。确认无用后 git config --unset core.hooksPath 再重跑" >&2
   exit 1
 fi
