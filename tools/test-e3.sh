@@ -68,11 +68,21 @@ else
 ) || bad "mac 数据快照存/恢复"
 fi
 
+# 等后台持锁者真的拿到锁（不靠固定 sleep：机器忙时持锁者可能还没起来，判定就成了碰运气）
+wait_held() { # wait_held <锁文件>
+  local i
+  for i in $(seq 1 100); do
+    [ -f "$1" ] && ! /usr/bin/lockf -t 0 "$1" true 2>/dev/null && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
 # 设备锁：第二个持锁者要等第一个释放（/usr/bin/lockf 只有 macOS 有）
 if [ "$(uname)" = Darwin ]; then
 lockdir="$(mktemp -d)"
 E3_STATE="$lockdir" "$E3/lock" ios sh -c 'sleep 2' &
-sleep 0.5
+wait_held "$lockdir/lock-ios" || bad "持锁者 10 秒内没拿到锁"
 t0=$SECONDS
 E3_STATE="$lockdir" "$E3/lock" ios true 2>/dev/null
 [ $((SECONDS - t0)) -ge 1 ] || bad "设备锁没有排队"
@@ -151,5 +161,64 @@ YML
   [ "${#MAC_GLOBS[@]}" -eq 7 ] ||
     { printf 'MAC_GLOBS 有 %s 项，期望 7\n' "${#MAC_GLOBS[@]}"; exit 1; }
 ) || bad "MAC_GLOBS 通配符被 shell 按路径展开"
+
+# #1375 just dev 手机：设备被占就拒绝（--no-wait），不排队；反证：释放后同一条命令成功
+if [ "$(uname)" = Darwin ]; then
+  lockdir="$(mktemp -d)"
+  E3_STATE="$lockdir" "$E3/lock" android sh -c 'sleep 3' &
+  holder=$!
+  wait_held "$lockdir/lock-android" || bad "持锁者 10 秒内没拿到锁"
+  t0=$SECONDS
+  E3_STATE="$lockdir" "$E3/lock" --no-wait android true 2>"$lockdir/err"
+  rc=$?
+  [ "$rc" = 75 ] || bad "设备被占时 --no-wait 没拒绝（退出码 ${rc}）"
+  [ $((SECONDS - t0)) -lt 2 ] || bad "设备被占时 --no-wait 排队了"
+  grep -q '正被别的会话占用（pid ' "$lockdir/err" || bad "拒绝时没说谁占着：$(cat "$lockdir/err")"
+  wait "$holder"
+  E3_STATE="$lockdir" "$E3/lock" --no-wait android true || bad "锁释放后 --no-wait 仍被拒绝"
+  rm -rf "$lockdir"
+fi
+
+# #1375 共享编译缓存：justfile 从当前目录往上读到 .env.ppass-dev；没有这个文件（CI）时不设 CARGO_TARGET_DIR
+if command -v just >/dev/null 2>&1; then
+  (
+    d="$(cd -P "$(mktemp -d)" && pwd)" || exit 1
+    trap 'rm -rf "$d"' EXIT
+    mkdir -p "$d/main/sub"
+    git -C "$d/main" init -q
+    unset CARGO_TARGET_DIR PPASS_DEV_CACHE_PARENT
+    # shellcheck source=e3/lib/dev-cache.sh
+    source "$E3/lib/dev-cache.sh"
+    got="$(just --justfile "$ROOT/justfile" --working-directory "$d/main/sub" --command printenv CARGO_TARGET_DIR 2>/dev/null)"
+    [ -z "$got" ] || { echo "没有配置文件却设了 CARGO_TARGET_DIR=$got"; exit 1; }
+    f="$(dev_cache_init "$d/main/sub")" || { echo "dev_cache_init 失败"; exit 1; }
+    [ "$f" = "$d/.env.ppass-dev" ] || { echo "配置不在主副本旁：$f"; exit 1; }
+    got="$(just --justfile "$ROOT/justfile" --working-directory "$d/main/sub" --command printenv CARGO_TARGET_DIR)"
+    [ "$got" = "$d/P-Pass-cache/cargo-target" ] || { echo "just 没读到共享 CARGO_TARGET_DIR（得到 ${got:-空}）"; exit 1; }
+    got="$(CARGO_TARGET_DIR=/x just --justfile "$ROOT/justfile" --working-directory "$d/main/sub" --command printenv CARGO_TARGET_DIR)"
+    [ "$got" = /x ] || { echo "环境里已设的 CARGO_TARGET_DIR 被配置覆盖了（得到 ${got}）"; exit 1; }
+    echo 'CARGO_TARGET_DIR=/changed' >"$f"
+    dev_cache_init "$d/main" >/dev/null
+    grep -qx 'CARGO_TARGET_DIR=/changed' "$f" || { echo "dev_cache_init 覆盖了人改过的配置"; exit 1; }
+    dev_cache_covers "$d/main-wt/1-x" || { echo "主副本旁的卡目录没认出被覆盖"; exit 1; }
+    dev_cache_covers "$(mktemp -d)" && { echo "无关目录却认成被覆盖"; exit 1; }
+    exit 0
+  ) || bad "共享编译缓存配置"
+fi
+
+# #1375 just dev android：debug 包被 build.gradle.kts 改了名（P-Pass_<版本>_android-debug.apk），按目录取最新的
+(
+  d="$(mktemp -d)" || exit 1
+  trap 'rm -rf "$d"' EXIT
+  REPO_ROOT="$d"
+  # shellcheck source=e3/lib/dev-phone.sh
+  source "$E3/lib/dev-phone.sh"
+  out="$d/apps/android/app/build/outputs/apk/debug"
+  mkdir -p "$out"
+  [ -z "$(dev_android_apk)" ] || { echo "没有包时却返回了路径"; exit 1; }
+  touch -t 202601010000 "$out/P-Pass_0.10.1_android-debug.apk"
+  touch "$out/P-Pass_0.10.2_android-debug.apk"
+  [ "$(dev_android_apk)" = "$out/P-Pass_0.10.2_android-debug.apk" ] || { echo "没取到最新的改名包：$(dev_android_apk)"; exit 1; }
+) || bad "just dev android 找改名后的 debug 包"
 
 [ "$fails" -eq 0 ] && echo "ok: tools/e3 自测通过" || { echo "$fails 项失败"; exit 1; }

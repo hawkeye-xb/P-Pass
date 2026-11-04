@@ -1,26 +1,99 @@
 #!/usr/bin/env bash
-# 研发本地看改动：编开发版并覆盖装到测试设备（ADR：每台测试设备一个安装槽，先取设备锁再覆盖）。
+# 研发本地看改动：增量编开发版并覆盖装到测试设备（ADR：每台测试设备一个安装槽，先取设备锁再覆盖）。
 #
-#   tools/e3/dev mac               编开发版签名包 → 取 mac 锁 → 留快照 → 覆盖 ~/Applications/P-Pass.app → 等服务就绪
-#   tools/e3/dev mac --build-only  只编（产物 ~/.cache/ppass-e3/mac-cand/P-Pass.app；just verify 用它当候选）
-# 看完装回：tools/e3/restore mac --snapshot（装回覆盖前那一份）或 tools/e3/restore mac <tag>。
-# Android / Windows / iOS：TODO。
+#   tools/e3/dev android [页面] [--fresh]  增量编 debug 包 → 取安卓锁（被占就拒绝）→ 覆盖安装（不卸载）→ 启动 App
+#   tools/e3/dev ios [页面] [--fresh]      增量编 Debug 包 → 取 iOS 锁（被占就拒绝）→ 覆盖安装 → 打开到页面（PPASS_ROUTE）
+#   tools/e3/dev mac                       编开发版签名包 → 取 mac 锁 → 留快照 → 覆盖 ~/Applications/P-Pass.app → 等服务就绪
+#   tools/e3/dev mac --build-only          只编（产物 ~/.cache/ppass-e3/mac-cand/P-Pass.app；just verify 用它当候选）
+#   tools/e3/dev cache                     建 / 查看共享编译缓存配置（just start 会自动建）
+# --fresh：先卸载再装（数据清空，从头走流程时用）。安卓还没有深链，页面参数只提示、先启动 App。
+# 设备：只有一台在线就用它；多台用 E3_ANDROID_SERIAL / PPASS_DEVICE 指定。
+# mac 看完装回：tools/e3/restore mac --snapshot（装回覆盖前那一份）或 tools/e3/restore mac <tag>。Windows：TODO。
 set -uo pipefail
 E3_ROOT="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=lib/common.sh
 source "$E3_ROOT/lib/common.sh"
-source "$E3_LIB/mac.sh"
-source "$E3_LIB/mac-install.sh"
+source "$E3_LIB/dev-cache.sh"
+source "$E3_LIB/dev-phone.sh"
 dev="${1:-}"
+[ "$#" -gt 0 ] && shift
+
+# 手机：解析 [页面] [--fresh]
+page="" fresh=0
+phone_args() {
+  local a
+  for a in "$@"; do
+    case "$a" in
+      --fresh) fresh=1 ;;
+      --*) die "未知参数：$a" ;;
+      *) [ -z "$page" ] || die "页面只能给一个：$page / $a"; page="$a" ;;
+    esac
+  done
+}
+t0=$SECONDS
+done_line() { echo "已装到 $1 并打开（用时 $((SECONDS - t0))s）"; }
+
 case "$dev" in
+  cache)
+    f="$(dev_cache_init "$REPO_ROOT")" || die "建共享编译缓存配置失败"
+    echo "共享编译缓存配置：$f"
+    sed -n 's/^\([A-Z_]*\)=/  \1=/p' "$f"
+    ;;
+  android)
+    phone_args "$@"
+    source "$E3_LIB/adb.sh"
+    serial="$(dev_android_pick)" || die "选不出安卓手机"
+    if [ "${E3_LOCKED_ANDROID:-}" != 1 ]; then
+      log "增量编 debug 包（CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-本目录 target}）"
+      dev_android_build || die "debug 包编译失败"
+      args=(android)
+      [ -n "$page" ] && args+=("$page")
+      [ "$fresh" = 1 ] && args+=(--fresh)
+      E3_ANDROID_SERIAL="$serial" DEV_T0="$t0" exec "$E3_ROOT/lock" --no-wait android "$0" "${args[@]}"
+    fi
+    t0="${DEV_T0:-$t0}"
+    # 手机直接插在本机上（本机默认 adb 端口看得到它）就用本机连接，不走 e3.env 里给异地手机配的隧道
+    if [ "$(ANDROID_ADB_SERVER_PORT=5037 T 20 adb -s "$serial" get-state 2>/dev/null)" = device ]; then
+      export E3_ADB_PORT=5037
+      unset E3_ADB_TUNNEL_HOST
+    fi
+    E3_ANDROID_SERIAL="$serial" adb_init
+    apk="$(dev_android_apk)"
+    [ -n "$apk" ] || die "找不到编出来的 debug 包（apps/android/app/build/outputs/apk/debug/*.apk）"
+    dev_android_install "$apk" "$fresh" "$page" ||
+      die "安装或启动失败（装着签名不同的包时要 --fresh，会清数据）"
+    done_line "安卓 $serial"
+    ;;
+  ios)
+    phone_args "$@"
+    udid="$(dev_ios_pick)" || die "选不出 iPhone"
+    out="$E3_STATE/dev-ios/$$"
+    if [ "${E3_LOCKED_IOS:-}" != 1 ]; then
+      log "增量编 Debug 包（CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-本目录 target}）"
+      dev_ios_build "$out" || die "Debug 包编译失败"
+      args=(ios)
+      [ -n "$page" ] && args+=("$page")
+      [ "$fresh" = 1 ] && args+=(--fresh)
+      PPASS_DEVICE="$udid" DEV_T0="$t0" DEV_IOS_APP="$out/PPass.app" "$E3_ROOT/lock" --no-wait ios "$0" "${args[@]}"
+      rc=$?
+      rm -rf "$out"
+      exit "$rc"
+    fi
+    t0="${DEV_T0:-$t0}"
+    app="${DEV_IOS_APP:?}"
+    dev_ios_install "$udid" "$app" "$fresh" "$page" || die "安装或启动失败（装着签名不同的包时要 --fresh，会清数据）"
+    done_line "iPhone"
+    ;;
   mac)
+    source "$E3_LIB/mac.sh"
+    source "$E3_LIB/mac-install.sh"
     if [ "${E3_LOCKED_MAC:-}" != 1 ]; then
       log "编开发版签名包"
       mac_build_dev || die "开发版编译失败"
-      [ "${2:-}" = --build-only ] && { echo "$(mac_cand_app)"; exit 0; }
+      [ "${1:-}" = --build-only ] && { echo "$(mac_cand_app)"; exit 0; }
       exec "$E3_ROOT/lock" mac "$0" mac --install-only
     fi
-    [ "${2:-}" = --install-only ] || mac_build_dev || die "开发版编译失败"
+    [ "${1:-}" = --install-only ] || mac_build_dev || die "开发版编译失败"
     # 只在装的是正式签名包（带 Apple 时间戳）时留快照：连着 dev 两次，--snapshot 仍装回最初那一份
     if codesign -dvv "$MAC_APP" 2>&1 | grep -q '^Timestamp=' || [ ! -d "$E3_STATE/mac-snapshot/P-Pass.app" ]; then
       mac_snapshot >/dev/null || die "留快照失败"
@@ -28,5 +101,5 @@ case "$dev" in
     mac_install_app "$(mac_cand_app)" || die "覆盖安装后服务没就绪（装回：tools/e3/restore mac --snapshot）"
     echo "已装开发版 $(mac_app_version)（覆盖前是 $(cat "$E3_STATE/mac-snapshot/version.txt")；装回：just restore mac --snapshot）"
     ;;
-  *) sed -n 2,8p "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  *) sed -n 2,13p "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

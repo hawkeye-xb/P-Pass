@@ -114,6 +114,18 @@ fi
 
 for c in "${CARDS[@]}"; do flow_labels "$c" "status:doing" "status:ready"; done
 
+# #1375 共享编译缓存：主副本旁的 .env.ppass-dev（没有就建）；卡目录不在它下面时拷一份进卡目录根。
+CACHE_ENV=""
+if [ -f "${HERE}/../e3/lib/dev-cache.sh" ]; then
+  # shellcheck source=../e3/lib/dev-cache.sh
+  . "${HERE}/../e3/lib/dev-cache.sh"
+  if CACHE_ENV="$(dev_cache_init "$DIR")"; then
+    dev_cache_covers "$DIR" || cp "$CACHE_ENV" "${DIR}/${DEV_CACHE_ENV_NAME}" || CACHE_ENV=""
+  else
+    CACHE_ENV=""
+  fi
+fi
+
 if [ -z "${PPASS_FLOW_SKIP_HOOK_INSTALL:-}" ] && [ -f "${DIR}/tools/hooks/install.sh" ]; then
   if ! (cd "$DIR" && bash tools/hooks/install.sh --check >/dev/null 2>&1); then
     (cd "$DIR" && bash tools/hooks/install.sh >/dev/null 2>&1) ||
@@ -131,6 +143,11 @@ fi
 echo "   分支：${BRANCH}"
 echo "   目录：${DIR}"
 echo "   标签：status:ready → status:doing"
+if [ -n "$CACHE_ENV" ]; then
+  echo "   编译缓存：共享（${CACHE_ENV}；just 命令自动用，直接跑 cargo 先 set -a; . ${CACHE_ENV}; set +a）"
+else
+  echo "   编译缓存：没建成共享配置，本目录单独编（tools/e3/dev cache 看原因）"
+fi
 echo "   范围（只许动这些；多卡取并集）："
 printf '     %s\n' "${GLOBS[@]}"
 echo

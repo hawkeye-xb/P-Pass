@@ -167,6 +167,8 @@ git init -q "${TMP}/main"
   printf '#!/usr/bin/env bash\nexit 0\n' >tools/hooks/dispatch.sh
   printf 'Flow Test <flow-test@example.invalid>\n' >.github/allowed-identities.txt
   cp "${SRC}/tools/ci-paths.sh" tools/ci-paths.sh
+  mkdir -p tools/e3/lib
+  cp "${SRC}/tools/e3/lib/dev-cache.sh" tools/e3/lib/dev-cache.sh
   printf '+ core/**\n' >.github/core-paths.txt
   echo a >src/a.txt
   echo d >docs/d.md
@@ -541,6 +543,21 @@ grep -q 'just done --accepted' "${TMP}/o55" && ok "  提示先验收再 --accept
 DONE "$VW" --accepted "2026-11-04 15:30" >"${TMP}/o55b" 2>&1 || bad "带验收时间交卡失败：$(tail -5 "${TMP}/o55b")"
 grep -qF '产品负责人 2026-11-04 15:30 真机验收通过' "${FAKE_GH}/pr.body" 2>/dev/null &&
   ok "反证：给了验收时间 → 开 PR，正文写明验收" || bad "给了验收时间仍没开 PR 或正文缺验收行"
+
+# ── #1375 共享编译缓存：just start 建主副本旁的 .env.ppass-dev ────────────────
+# 卡目录在主副本旁（<主副本>-wt 之类）时靠 just 往上找到它，不拷；不在旁边时拷进卡目录根。
+[ -f "${TMP}/.env.ppass-dev" ] && grep -q "^CARGO_TARGET_DIR=$(cd -P "$TMP" && pwd)/P-Pass-cache/cargo-target$" "${TMP}/.env.ppass-dev" &&
+  ok "start 在主副本旁建了共享编译缓存配置" || bad "start 没建共享编译缓存配置"
+[ ! -e "${PPASS_WT_ROOT}/13-fix-the-thing/.env.ppass-dev" ] &&
+  ok "卡目录在主副本旁：不拷配置（just 往上找得到）" || bad "卡目录在主副本旁却拷了配置"
+issue 41 "status:ready" "[T-41] cache elsewhere" "src/**" "Bug"
+FAR="$(mktemp -d)"
+OUT="$(PPASS_WT_ROOT="${FAR}/wt" START 41 2>&1)" || bad "start 41 失败：$OUT"
+grep -q '^CARGO_TARGET_DIR=' "${FAR}/wt/41-cache-elsewhere/.env.ppass-dev" 2>/dev/null &&
+  ok "卡目录不在主副本旁：配置拷进卡目录根" || bad "卡目录不在主副本旁却没拷配置"
+printf '%s' "$OUT" | grep -q '编译缓存：共享' && ok "start 打印了共享编译缓存" || bad "start 没打印编译缓存：$OUT"
+git -C "$M" worktree remove --force "${FAR}/wt/41-cache-elsewhere" >/dev/null 2>&1
+rm -rf "$FAR"
 
 echo
 echo "通过 ${PASS}，失败 ${FAIL}"
