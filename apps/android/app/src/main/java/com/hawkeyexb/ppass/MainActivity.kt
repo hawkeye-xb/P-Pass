@@ -183,11 +183,18 @@ internal fun launchScreen(pairing: Pairing?, onboarded: (String) -> Boolean): Sc
 }
 
 /** #1321：决定页主按钮「选择备份范围」在照片权限框关掉之后去哪。 */
-internal enum class DecisionLanding { ChooseScope, PickPhotos }
+internal enum class DecisionLanding { ChooseScope, RegisterAllowed, PickPhotos }
 
-/** 全部允许 → 选范围页；部分允许或拒绝 → 系统选图（单张备份）。方案结论 5：不新增第三个出口。 */
-internal fun decisionLanding(access: MediaAccess): DecisionLanding =
-    if (access == MediaAccess.FULL) DecisionLanding.ChooseScope else DecisionLanding.PickPhotos
+/**
+ * 全部允许 → 选范围页；拒绝 → 系统选图（单张备份）。
+ * 部分允许：用户在系统权限框里已经选了照片，那次选择就是这次的「系统选图」——直接登记已授权的照片（单张备份），
+ * 不再弹选图器让人选第二遍（三星验收：用户以为没生效、反复选了几次）。两端同一口径（iOS #1323）。方案结论 5：不新增第三个出口。
+ */
+internal fun decisionLanding(access: MediaAccess): DecisionLanding = when (access) {
+    MediaAccess.FULL -> DecisionLanding.ChooseScope
+    MediaAccess.PARTIAL -> DecisionLanding.RegisterAllowed
+    else -> DecisionLanding.PickPhotos
+}
 
 /**
  * UI-18（#355）：配对失效红卡「重新扫码连接」的落点——直达扫码，中间零多余屏。
@@ -777,7 +784,25 @@ fun PPassApp() {
             androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
         )
     }
-    // 主按钮「选择备份范围」：申请全部照片权限；全部允许 → 选范围页（firstTime），部分 / 拒绝 → 系统选图（方案结论 5）。
+    // 部分允许：系统权限框里的选择就是用户的选择——当场落盘、进照片页（不停在决定页等），已授权的照片在后台登记成一批手选订单。
+    val registerDecisionAllowed: (Pairing) -> Unit = { pairing ->
+        markDecided(pairing, "partial")
+        if (screen == Screen.Decision(pairing)) screen = Screen.Home(pairing)
+        scope.launch {
+            val n = withContext(Dispatchers.IO) {
+                runCatching { com.hawkeyexb.ppass.backup.picked.PickedUploads.enqueueAllowedImages(context) }
+                    .onFailure { PLog.w("PPassFlow", "onboarding: allowed enqueue failed", it) }
+                    .getOrDefault(0)
+            }
+            PLog.i("PPassFlow", "onboarding: partial access registered $n allowed photos")
+            if (n <= 0) return@launch
+            pickedBatch = withContext(Dispatchers.IO) {
+                runCatching { com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).latestBatch() }.getOrNull()
+            }
+            com.hawkeyexb.ppass.backup.flow.requestFlowWake(context, com.hawkeyexb.ppass.backup.flow.TriggerReason.PICKED_ADDED)
+        }
+    }
+    // 主按钮「选择备份范围」：申请全部照片权限；全部允许 → 选范围页（firstTime），部分 → 登记已授权照片，拒绝 → 系统选图（方案结论 5）。
     var decisionPermissionPairing by remember { mutableStateOf<Pairing?>(null) }
     val decisionPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ ->
         val pairing = decisionPermissionPairing
@@ -788,6 +813,7 @@ fun PPassApp() {
         PLog.i("PPassFlow", "onboarding: photo access after prompt=$mediaAccess")
         when (decisionLanding(mediaAccess)) {
             DecisionLanding.ChooseScope -> screen = Screen.Buckets(pairing, emptySet(), firstTime = true)
+            DecisionLanding.RegisterAllowed -> registerDecisionAllowed(pairing)
             DecisionLanding.PickPhotos -> launchDecisionPick(pairing)
         }
     }

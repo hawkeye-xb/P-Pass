@@ -88,8 +88,29 @@ class OnboardingGateTest {
     @Test
     fun decision_main_button_lands_by_photo_permission() {
         assertEquals(DecisionLanding.ChooseScope, decisionLanding(MediaAccess.FULL))
-        assertEquals("部分允许落到单张备份，不新增第三个出口", DecisionLanding.PickPhotos, decisionLanding(MediaAccess.PARTIAL))
+        assertEquals(
+            "部分允许：系统权限框里已选过照片，直接登记，不再弹选图器（三星验收选两遍）",
+            DecisionLanding.RegisterAllowed,
+            decisionLanding(MediaAccess.PARTIAL),
+        )
         assertEquals(DecisionLanding.PickPhotos, decisionLanding(MediaAccess.NONE))
+    }
+
+    /**
+     * 部分允许的接线：权限框回调里 RegisterAllowed 分支不打开选图器，用已授权照片登记、落盘 via=partial、进照片页。
+     * 反证：恢复旧路由（部分允许 → `launchDecisionPick`），本条红。
+     */
+    @Test
+    fun partial_access_registers_allowed_photos_instead_of_opening_the_picker() {
+        val callback = main.substringAfter("val decisionPermission = rememberLauncherForActivityResult")
+            .substringBefore("val onDecisionChooseScope")
+        assertTrue(callback.contains("DecisionLanding.RegisterAllowed -> registerDecisionAllowed(pairing)"))
+        assertFalse("部分允许不再弹选图器", Regex("RegisterAllowed -> launchDecisionPick").containsMatchIn(callback))
+        val register = main.substringAfter("val registerDecisionAllowed").substringBefore("// 主按钮「选择备份范围」")
+        assertTrue(register.contains("PickedUploads.enqueueAllowedImages(context)"))
+        assertTrue(register.contains("markDecided(pairing, \"partial\")"))
+        assertTrue(register.contains("screen = Screen.Home(pairing)"))
+        assertFalse(register.contains("PickMultipleVisualMedia"))
     }
 
     // ── 判断 A：补记只在升级后第一次启动做一次 ───────────────
