@@ -162,9 +162,9 @@ else
 fi
 # 盯梢、人控级：PR 正文必须有验收记录；没有就算未通过（即使 agent 说 PASS）。
 if [ "$VERDICT" = "PASS" ] && [ -n "$NEEDS_ACCEPT" ] &&
-  ! printf '%s\n' "$PR_BODY" | grep -qE '产品负责人 .+ 真机验收通过'; then
+  ! printf '%s\n' "$PR_BODY" | grep -qE '^[*_> -]*产品负责人 ([0-9]{4}-)?[0-9]{2}-[0-9]{2}.*真机验收通过'; then
   VERDICT="FAIL"
-  REASON="${NEEDS_ACCEPT}，PR 正文缺「产品负责人 <时间> 真机验收通过」这一行：没有验收记录不开自动合入。验收通过后在 PR 正文补上这一行，再重跑 just review。"
+  REASON="${NEEDS_ACCEPT}，PR 正文缺「产品负责人 <时间> 真机验收通过」这一行（须单独成行、以「产品负责人」开头、时间处是具体日期如 2026-11-04）：没有验收记录不开自动合入。验收通过后在 PR 正文补上这一行，再重跑 just review。"
 fi
 # 评审期间检出被改动 = 只读约束被破坏，评审作废。
 if [ -n "$(git -C "$WT" status --porcelain 2>/dev/null)" ]; then
@@ -201,6 +201,11 @@ if [ "$VERDICT" = "PASS" ]; then
     die "开自动合入失败（评审状态已写）" "$(head -3 "${WORK}/merge.out" | tr '\n' ' ')" "手动：gh pr merge ${PR} -R ${REPO} --auto --squash"
   echo "   已开自动合入（squash）：CI 全绿后自动合入。"
 else
+  # 之前通过时开过自动合入：评审判未通过必须撤销，否则 CI 绿了照样合。没开过时 gh 会报「未启用」，只容忍这一种。
+  if ! gh pr merge "$PR" -R "$REPO" --disable-auto >"${WORK}/disable.out" 2>&1 &&
+    ! grep -qiE "not enabled|isn't enabled|not.*auto.?merge|auto.?merge.*not" "${WORK}/disable.out"; then
+    echo "!! 撤销 #${PR} 的自动合入失败，请手动：gh pr merge ${PR} -R ${REPO} --disable-auto（$(head -3 "${WORK}/disable.out" | tr '\n' ' ')）" >&2
+  fi
   echo "✗ #${PR} 独立评审未通过，review/agent=failure（${SHA:0:10}）；问题清单已贴在 PR 评论里。" >&2
   exit 1
 fi

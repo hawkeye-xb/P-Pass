@@ -52,7 +52,13 @@ case "$1 $2" in
   "pr diff")
     case " $* " in *" --name-only "*) cat "$F/pr.files" ;; *) cat "$F/pr.diff" ;; esac
     ;;
-  "pr merge") echo "$*" >>"$F/merges"; [ ! -e "$F/merge_fail" ] || { echo "auto-merge not allowed" >&2; exit 1; } ;;
+  "pr merge")
+    case " $* " in *" --disable-auto "*)
+      echo "$*" >>"$F/disables"
+      [ ! -e "$F/disable_fail" ] || { echo "${DISABLE_ERR:-HTTP 500}" >&2; exit 1; }
+      exit 0 ;;
+    esac
+    echo "$*" >>"$F/merges"; [ ! -e "$F/merge_fail" ] || { echo "auto-merge not allowed" >&2; exit 1; } ;;
   "pr comment")
     n="$3"; shift 3
     while [ $# -gt 0 ]; do
@@ -123,6 +129,8 @@ reset() {
   : >"$FAKE/comments"
   : >"$FAKE/statuses"
   : >"$FAKE/merges"
+  : >"$FAKE/disables"
+  rm -f "$FAKE/disable_fail"
   rm -f "$FAKE/merge_fail"
   rm -f "$FAKE/agent.args" "$FAKE/agent.cwd" "$FAKE/agent.stdin"
   printf '%s' "$1" >"$FAKE/mode"
@@ -213,6 +221,37 @@ REVIEW 7 >/dev/null 2>&1 && bad "已合并的 PR 也评审了" || ok "PR 不是 
 printf 'OPEN' >"$FAKE/pr.state"
 REVIEW abc >/dev/null 2>&1 && bad "非数字 PR 号被接受" || ok "PR 号不是数字 → 拒绝"
 REVIEW >/dev/null 2>&1 && bad "没给 PR 号被接受" || ok "没给 PR 号 → 拒绝"
+
+echo "==> 验收行判定收紧 + 判未通过时撤销自动合入"
+printf 'core/c.txt\n' >"$FAKE/pr.files"
+accept_case() { # 名称 正文行 期望(pass|fail)
+  reset pass
+  printf 'core/c.txt\n' >"$FAKE/pr.files"
+  printf 'closes #77\n\n%s\n' "$2" >"$FAKE/pr.body"
+  if REVIEW 7 >/dev/null 2>&1; then got=pass; else got=fail; fi
+  [[ "$got" == "$3" ]] && ok "验收行 ${1} → ${3}" || bad "验收行 ${1}：期望 ${3}，实际 ${got}"
+}
+accept_case "占位句" '产品负责人 <时间> 真机验收通过' fail
+accept_case "否定句" '没有 产品负责人 2026-11-04 真机验收通过' fail
+accept_case "规则句嵌在句中" '合入条件：PR 正文写「产品负责人 2026-11-04 真机验收通过」' fail
+accept_case "正常写法（具体日期）" '产品负责人 2026-11-04 真机验收通过' pass
+accept_case "正常写法（加粗、短日期、本地，同 #1373）" '**产品负责人 11-04 本地真机验收通过**' pass
+
+reset fail
+printf 'tools/x.sh\n' >"$FAKE/pr.files"
+REVIEW 7 >/dev/null 2>&1 && bad "FAIL 用例没失败" || ok "评审判 FAIL → 退出非 0"
+has "pr merge 7" "$FAKE/disables" && has "--disable-auto" "$FAKE/disables" && ok "判 FAIL → 调用 gh pr merge --disable-auto" || bad "判 FAIL 没撤销自动合入：$(cat "$FAKE/disables")"
+reset pass
+printf 'tools/x.sh\n' >"$FAKE/pr.files"
+REVIEW 7 >/dev/null 2>&1
+[ ! -s "$FAKE/disables" ] && ok "反证：判 PASS 不调用 --disable-auto" || bad "判 PASS 却撤销了自动合入"
+reset fail
+printf 'tools/x.sh\n' >"$FAKE/pr.files"
+touch "$FAKE/disable_fail"
+DISABLE_ERR="Auto merge is not enabled for this pull request" REVIEW 7 >/dev/null 2>"$FAKE/err1" || true
+! has "撤销" "$FAKE/err1" && ok "PR 本没开自动合入（未启用）→ 容忍，不报撤销失败" || bad "未启用被当成错误：$(cat "$FAKE/err1")"
+DISABLE_ERR="HTTP 500 server error" REVIEW 7 >/dev/null 2>"$FAKE/err2" || true
+has "撤销" "$FAKE/err2" && ok "反证：别的错误（HTTP 500）不吞，报出来" || bad "别的错误被吞了：$(cat "$FAKE/err2")"
 
 echo
 echo "flow-review: ${PASS} passed, ${FAIL} failed"
