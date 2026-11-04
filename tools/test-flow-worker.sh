@@ -157,6 +157,9 @@ git init -q "${TMP}/main"
   echo a >src/a.txt
   echo d >docs/d.md
   echo c >core/c.txt
+  # tools 挑选（#1365）的夹具：test-ref 引用 ci-paths.sh，test-other 不引用
+  printf '#!/usr/bin/env bash\n# 引用 tools/ci-paths.sh\necho FAKE-TOOLTEST-REF-RAN\n[ ! -e "$FAKE_GH/tool_fail" ] || { echo FAKE-TOOLTEST-RED; exit 1; }\n' >tools/test-ref.sh
+  printf '#!/usr/bin/env bash\necho FAKE-TOOLTEST-OTHER-RAN\n' >tools/test-other.sh
   printf '# A\n\n- 状态：已采纳\n' >docs/decisions/2026-11-01-adopted.md
   printf '# P\n\n- 状态：提议\n' >docs/decisions/2026-11-01-proposed.md
   git add -A
@@ -405,6 +408,29 @@ printf 'b\n' >"$W/tools/b.sh"
 git -C "$W" add -A && git -C "$W" commit -q -s -m "mixed"
 DONE "$W" >/dev/null 2>&1
 comments_of 127 | grep -qF '`just ci`' && ok "反证：夹带挑不出来的文件 → 退回全量 just ci" || bad "挑不出来时没退回全量"
+# tools 脚本按引用挑测试（#1365）：只改被 test-ref.sh 引用的 ci-paths.sh → 只跑 test-ref.sh，不跑全量、不跑无关测试
+W="$(card 129 "[T-129] tools referenced" "tools/**")"
+printf '# touched\n' >>"$W/tools/ci-paths.sh"
+git -C "$W" add -A && git -C "$W" commit -q -s -m "touch ci-paths"
+DONE "$W" >"${TMP}/o129" 2>&1
+C29="$(comments_of 129)"
+printf '%s' "$C29" | grep -qF "bash tools/test-ref.sh" && ok "改被引用的 tools 脚本 → 跑引用它的测试" || bad "没跑引用它的测试：$(tail -4 "${TMP}/o129")"
+printf '%s' "$C29" | grep -qF '`just ci`' && bad "tools 脚本有引用测试却退回了全量 just ci" || ok "反证：没有全量 just ci"
+printf '%s' "$C29" | grep -qF "test-other.sh" && bad "跑了不相关的测试" || ok "没引用的测试不跑"
+# 改动里本身就是 tools/test-*.sh → 跑它自己
+W="$(card 130 "[T-130] tools test itself" "tools/**")"
+printf '# touched\n' >>"$W/tools/test-other.sh"
+git -C "$W" add -A && git -C "$W" commit -q -s -m "touch test"
+DONE "$W" >/dev/null 2>&1
+comments_of 130 | grep -qF "bash tools/test-other.sh" && ok "改 tools/test-*.sh → 跑它自己" || bad "没跑改动的测试"
+# 挑出来的测试红 → blocked，不推
+W="$(card 131 "[T-131] tools test red" "tools/**")"
+printf '# touched2\n' >>"$W/tools/ci-paths.sh"
+git -C "$W" add -A && git -C "$W" commit -q -s -m "touch ci-paths red"
+touch "${FAKE_GH}/tool_fail"
+DONE "$W" >/dev/null 2>&1 && bad "引用测试红时 done 仍成功" || ok "引用的测试红 → done 失败"
+has_lbl 131 "status:blocked" && ok "tools 测试红 → status:blocked" || bad "tools 测试红没打 blocked"
+rm -f "${FAKE_GH}/tool_fail"
 # 门禁中任一项红 → blocked，不推
 W="$(card 128 "[T-128] android red" "apps/android/**")"
 mkdir -p "$W/apps/android"
