@@ -18,8 +18,9 @@ install_fresh() {
 # pair_enter_code <证据目录>：App 停在欢迎页时，手动输入配对串 → 桩 IPC 批准。只配对，配对之后的页面不碰。
 pair_enter_code() {
   local ev="$1" qr code node xy
-  wait_text "扫码连接家里的电脑" 30 || { ui_dump "$ev/pair-no-welcome.xml"; return 1; }
-  tap_text "无法扫码？手动输入配对码" || return 1
+  # 只认前缀：smoke-upgrade 在 main 的基线包上配对，基线包还是旧文案（11-04 前是「扫码连接家里的电脑」「手动输入配对码」）。
+  wait_text "扫码连接" 30 || { ui_dump "$ev/pair-no-welcome.xml"; return 1; }
+  tap_text "无法扫码？手动" || return 1
   wait_text "输入配对码" 15 || return 1
   qr=$(eph_qr) || return 1
   xy=$(python3 -I "$E3_LIB/ui.py" class "$UI_XML" EditText) || { log "找不到配对码输入框"; return 1; }
@@ -84,7 +85,7 @@ gen_photos() { rm -rf "$1"; python3 -I "$E3_LIB/gen-photos.py" "$1" "$2" "$3" >/
 # app_on_welcome：开 App 后停在欢迎页 = 没配对
 app_on_welcome() {
   app_start
-  wait_text "扫码连接家里的电脑" 6 >/dev/null 2>&1
+  wait_text "扫码连接" 6 >/dev/null 2>&1
 }
 
 # ensure_paired <证据目录>：手机装的是候选 debug 包、与当前桩配着对；不是就装候选包重新配对。

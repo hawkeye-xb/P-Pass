@@ -126,7 +126,7 @@ judge() {
   check "⑤ 开始备份 → 落盘（via=scope）" has_line "$d/logcat-scope.txt" 'onboarding: marked onboarded via=scope'
   check "⑤ 开始备份 → 进照片页（底栏在）" has_line "$d/5-after-start.txt" '^设置$'
   check "⑤ 开始备份 → 离开决定页" no_line "$d/5-after-start.txt" '选择要自动备份的照片'
-  check "⑥ 断开后回到欢迎页" has_line "$d/6-after-disconnect.txt" '扫码连接家里的电脑'
+  check "⑥ 断开后回到欢迎页" has_line "$d/6-after-disconnect.txt" '扫码连接电脑'
   check "⑥ 连回同一台：进照片页（底栏在）" has_line "$d/6-after-reconnect.txt" '^设置$'
   check "⑥ 连回同一台：不出决定页（界面）" no_line "$d/6-after-reconnect.txt" '选择要自动备份的照片'
   check "⑥ 连回同一台：日志已抓到" [ -s "$d/logcat-reconnect.txt" ]
