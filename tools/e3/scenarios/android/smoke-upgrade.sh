@@ -75,7 +75,7 @@ judge() {
   check "覆盖安装成功" has_line "$d/install.txt" 'Success'
   check "是升级不是重装（firstInstallTime 不变）" same_first_install "$d"
   check "App 进程在（前台不崩）" [ -n "$(tr -d '[:space:]' <"$d/pid.txt" 2>/dev/null)" ]
-  check "升级后没回到欢迎页（配对仍在）" no_line "$d/home.txt" '扫码连接家里的电脑'
+  check "升级后没回到欢迎页（配对仍在）" no_line "$d/home.txt" '扫码连接电脑'
   check "桩里照片数 = 推送数（$got / $(cat "$d/expected.txt")）" [ "$got" = "$(cat "$d/expected.txt")" ]
   check "手机账本已确认数 = 桩里照片数（$phone / ${got}）" [ "$phone" = "$got" ]
   check "logcat 无 FATAL" no_line "$d/logcat.txt" 'FATAL EXCEPTION'
