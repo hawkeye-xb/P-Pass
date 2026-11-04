@@ -32,6 +32,6 @@ class DecisionCopyTest {
         }
         assertEquals("电脑", strings("values-zh")["storage_device_default"])
         assertEquals("无法扫码？手动配对", strings("values-zh")["scan_manual_link"])
-        assertEquals("不经过云端，不用注册账号。", strings("values-zh")["welcome_sub"])
+        assertEquals("照片不存云端，不用注册账号。", strings("values-zh")["welcome_sub"])
     }
 }

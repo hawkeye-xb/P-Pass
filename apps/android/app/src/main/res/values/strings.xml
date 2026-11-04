@@ -3,7 +3,7 @@
 
     <!-- Welcome -->
     <string name="welcome_headline">Phone photos back up automatically to a computer</string>
-    <string name="welcome_sub">Nothing goes through the cloud. No account needed.</string>
+    <string name="welcome_sub">Photos aren\'t stored in the cloud. No account needed.</string>
     <string name="welcome_scan">Scan to connect to a computer</string>
     <!-- T-080 layout v1: welcome three steps -->
     <string name="welcome_step1">1 · Install and open P-Pass on the computer</string>

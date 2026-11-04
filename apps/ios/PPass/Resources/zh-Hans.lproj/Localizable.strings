@@ -1,6 +1,6 @@
 /* 由 tools/ios/gen-strings.py 从 apps/android/app/src/main/res/values-zh/strings.xml 生成——不要手改。 */
 "welcome_headline" = "手机照片自动备份到电脑";
-"welcome_sub" = "不经过云端，不用注册账号。";
+"welcome_sub" = "照片不存云端，不用注册账号。";
 "welcome_scan" = "扫码连接电脑";
 "welcome_step1" = "1 · 在电脑上安装并打开 P-Pass";
 "welcome_step2" = "2 · 扫码或输入配对码，连接电脑";

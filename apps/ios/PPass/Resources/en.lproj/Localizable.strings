@@ -1,6 +1,6 @@
 /* 由 tools/ios/gen-strings.py 从 apps/android/app/src/main/res/values/strings.xml 生成——不要手改。 */
 "welcome_headline" = "Phone photos back up automatically to a computer";
-"welcome_sub" = "Nothing goes through the cloud. No account needed.";
+"welcome_sub" = "Photos aren't stored in the cloud. No account needed.";
 "welcome_scan" = "Scan to connect to a computer";
 "welcome_step1" = "1 · Install and open P-Pass on the computer";
 "welcome_step2" = "2 · Scan the QR code or enter the pairing code to connect to the computer";

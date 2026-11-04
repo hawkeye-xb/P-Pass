@@ -71,7 +71,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Scan the pairing QR code shown on the computer.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Used to find your computer on the same Wi‑Fi and transfer photos.</string>
+	<string>If you allow it, photos go straight to your computer on the same Wi‑Fi, which is faster.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Automatic backup needs access to all photos.</string>
 	<key>PHPhotoLibraryPreventAutomaticLimitedAccessAlert</key>

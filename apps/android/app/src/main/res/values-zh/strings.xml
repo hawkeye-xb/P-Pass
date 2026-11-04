@@ -2,7 +2,7 @@
 <resources>
 
     <string name="welcome_headline">手机照片自动备份到电脑</string>
-    <string name="welcome_sub">不经过云端，不用注册账号。</string>
+    <string name="welcome_sub">照片不存云端，不用注册账号。</string>
     <string name="welcome_scan">扫码连接电脑</string>
     <!-- T-080 layout v1: 首屏三步说明 -->
     <string name="welcome_step1">1 · 在电脑上安装并打开 P-Pass</string>
