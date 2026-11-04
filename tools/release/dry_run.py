@@ -136,6 +136,16 @@ def good_notes() -> dict[str, str]:
 BAD_NOTES = {"android/9.8.3.zh.txt": "详情见 https://example.invalid/notes\n", "android/9.8.3.en.txt": "See the notes page.\n"}
 
 
+def release_github(tag: str, sha: str) -> dict:
+    """#1349：发版 = 在 main 上手动触发 release.yml（release=true）；tag 此时还不存在，由 create-draft 建。"""
+    return {"event_name": "workflow_dispatch", "ref": "refs/heads/main", "ref_name": "main", "sha": sha,
+            "repository": REPO, "token": "dry-run-token", "workflow_sha": sha, "event": {}}
+
+
+def release_inputs(tag: str) -> dict:
+    return {"tag": tag, "release": True, "platforms": "all"}
+
+
 def make_origin(d: Path, name: str, commits: list, changelog: str = CHANGELOG) -> tuple[Path, str]:
     """临时仓库：按 commits（versions, notes, tags）依次提交打 tag。返回 (bare origin, 最后一个提交的 sha)。
 
@@ -368,11 +378,10 @@ def apple_cert_gate(ck: Check, sc: "Scenario", wf: dict, tag: str):
         raise SimError(f"macos-arm64 job 应恰有 1 个「{APPLE_CERT_GATE}」步骤，实际 {len(gate)}")
     ck(steps[0].get("name") == APPLE_CERT_GATE, f"#1121 @ {tag}：证书门禁是 macOS job 的第一步（不白跑构建）",
        json.dumps([s.get("name") or s.get("uses") for s in steps[:3]], ensure_ascii=False))
-    github = {"event_name": "push", "ref": f"refs/tags/{tag}", "ref_name": tag, "repository": REPO,
-              "token": "dry-run-token", "workflow_sha": sc.sha, "event": {}}
+    github = release_github(tag, sc.sha)
     mini = {"env": wf.get("env") or {}, "jobs": {"macos-arm64": {"steps": gate}}}
     for secret, want in (("", "failure"), ("ZHVtbXk=", "success")):
-        r = sc.runner.run_job(mini, "macos-arm64", github=github, inputs={},
+        r = sc.runner.run_job(mini, "macos-arm64", github=github, inputs=release_inputs(tag),
                               secrets={"APPLE_CERT_P12": secret}, needs={})
         ck(r.result == want, f"#1121 @ {tag}：APPLE_CERT_P12 {'缺失' if not secret else '在位'} ⇒ {want}", r.log)
 
@@ -387,8 +396,7 @@ def build_versions(ck: Check, sc: "Scenario", wf: dict, tag: str, want: str):
         (stub / name).chmod(0o755)
     runner = Runner(sc.dir / "build-jobs", origin=sc.runner.origin, artifacts=sc.artifacts, stub_bin=stub,
                     repository=REPO, base_path=os.environ["PATH"])
-    github = {"event_name": "push", "ref": f"refs/tags/{tag}", "ref_name": tag, "repository": REPO,
-              "token": "dry-run-token", "workflow_sha": sc.sha, "event": {}}
+    github = release_github(tag, sc.sha)
     for job_id, shell_step in SHELL_STEPS.items():
         rec = sc.dir / f"build-rec-{job_id}"
         rec.mkdir()
@@ -417,7 +425,7 @@ def build_versions(ck: Check, sc: "Scenario", wf: dict, tag: str, want: str):
             picked.append(by_name[shell_step])
         mini = {"env": {**(wf.get("env") or {}), "DRYRUN_REC": str(rec)},
                 "jobs": {job_id: {"steps": picked}}}
-        r = runner.run_job(mini, job_id, github=github, inputs={}, secrets={}, needs={})
+        r = runner.run_job(mini, job_id, github=github, inputs=release_inputs(tag), secrets={}, needs={})
         resolved = r.steps[1].outputs.get("name", "") if len(r.steps) > 1 else ""
 
         def read(name: str) -> list[str]:
@@ -483,8 +491,13 @@ class Scenario:
 
     def release(self, wf: dict, tag: str, jobs=RELEASE_JOBS):
         self.tag = tag
-        github = {"event_name": "push", "ref": f"refs/tags/{tag}", "ref_name": tag, "repository": REPO,
-                  "token": "dry-run-token", "workflow_sha": self.sha, "event": {}}
+        # 发版时 tag 还不存在（create-draft 才建）、main 在被发的提交上：把仿真源仓库摆成这个样子。
+        commit = subprocess.run(["git", "-C", str(self.runner.origin), "rev-parse", f"{tag}^{{commit}}"],
+                                capture_output=True, text=True).stdout.strip() or self.sha
+        subprocess.run(["git", "-C", str(self.runner.origin), "update-ref", "-d", f"refs/tags/{tag}"], check=False)
+        subprocess.run(["git", "-C", str(self.runner.origin), "update-ref", "refs/heads/main", commit], check=True)
+        self.sha = commit
+        github = release_github(tag, commit)
         self.wf, self.github = wf, github
         for job_id in jobs:
             needs = {}
@@ -502,12 +515,17 @@ class Scenario:
                 else:
                     raise SimError(f"{job_id} needs {n}，dry-run 没有它的结果")
             # 没配置的 secret 在 GitHub 上是空串（VT_API_KEY 未配置 ⇒ VirusTotal 步跳过）
-            self.jobs[job_id] = self.runner.run_job(wf, job_id, github=github, inputs={},
+            self.jobs[job_id] = self.runner.run_job(wf, job_id, github=github, inputs=release_inputs(tag),
                                                     secrets={"UPDATE_SIGNING_KEY": self.key["stable"][0],
                                                              "UPDATE_SIGNING_KEY_TEST": self.key["test"][0],
                                                              "VT_API_KEY": ""},
                                                     needs=needs)
         return self.jobs
+
+    def tag_commit(self, tag: str) -> str:
+        """源仓库里 tag 指向的提交；没有这个 tag 返回空串。"""
+        return subprocess.run(["git", "-C", str(self.runner.origin), "rev-parse", "-q", "--verify", f"refs/tags/{tag}^{{commit}}"],
+                              capture_output=True, text=True).stdout.strip()
 
     def build_result(self, job: str) -> str:
         """构建 job 不在 dry-run 里跑：#838 之后它跑不跑取决于 plan-builds 的判定。"""
@@ -517,7 +535,7 @@ class Scenario:
             # 不在这里另写一份规则——job 的步骤换成空表，只看它被不被跳过。
             stub = {**self.wf, "jobs": {job: {**self.wf["jobs"][job], "steps": []}}}
             needs = {"plan-builds": {"result": plan.result, "outputs": plan.outputs}}
-            return self.runner.run_job(stub, job, github=self.github, inputs={}, secrets={}, needs=needs).result
+            return self.runner.run_job(stub, job, github=self.github, inputs=release_inputs(self.tag), secrets={}, needs=needs).result
         return BUILD_RESULTS[job]
 
     def verify_result(self, job: str) -> str:
@@ -527,7 +545,7 @@ class Scenario:
         stub = {**self.wf, "jobs": {job: {**{k: v for k, v in self.wf["jobs"][job].items() if k != "uses"},
                                           "runs-on": "ubuntu-latest", "steps": []}}}
         needs = {"plan-builds": {"result": plan.result, "outputs": plan.outputs}}
-        r = self.runner.run_job(stub, job, github=self.github, inputs={}, secrets={}, needs=needs).result
+        r = self.runner.run_job(stub, job, github=self.github, inputs=release_inputs(self.tag), secrets={}, needs=needs).result
         return "failure" if r == "success" and job in self.verify_fail else r
 
     def rebuild_artifacts(self, wf: dict, android_ver: str, desktop_ver: str):
@@ -654,6 +672,7 @@ def formal(ck: Check, base: Path, key: str, pub: Path, rel: dict, mirror: dict):
     jobs = sc.release(rel, FORMAL_TAG)
     for j in ("create-draft", "upload-android", "upload-macos", "finalize-manifest"):
         job_ok(ck, jobs, j)
+    ck(sc.tag_commit(FORMAL_TAG) == sha, f"#1349：验证全过后 create-draft 才建 tag {FORMAL_TAG}，指向被验证的提交")
     check_macos_assets(ck, sc, FORMAL_TAG, dv)
     build_versions(ck, sc, rel, FORMAL_TAG, dv)
     apple_cert_gate(ck, sc, rel, FORMAL_TAG)
@@ -795,6 +814,7 @@ def verify_gate(ck: Check, base: Path, key: dict, rel: dict):
         for j in ("create-draft", "upload-android", "upload-macos", "finalize-manifest"):
             job_ok(ck, jobs, j, "skipped")
         ck(sc.meta(FORMAL_TAG) is None, f"{failing} 红 ⇒ 没有建出 Release（连草稿都没有）")
+        ck(sc.tag_commit(FORMAL_TAG) == "", f"#1349：{failing} 红 ⇒ 也没有建出 tag {FORMAL_TAG}（验证先于 tag）")
 
 
 def bad_notes(ck: Check, base: Path, key: str, pub: Path, rel: dict):
@@ -897,7 +917,7 @@ def test_per_end(ck: Check, base: Path, key: str, pub: Path, rel: dict):
         # （写 test-channel/manifest-ios.json），本次判 build 才有（#348）。
         if jobs["plan-builds"].outputs.get("ios") == "build":
             needs = {"ios": {"result": "success", "outputs": {"uploaded": "yes", "version": v, "build": "1"}}}
-            r = sc.runner.run_job(sc.wf, "finalize-ios", github=sc.github, inputs={}, secrets={}, needs=needs)
+            r = sc.runner.run_job(sc.wf, "finalize-ios", github=sc.github, inputs=release_inputs(sc.tag), secrets={}, needs=needs)
             jobs["finalize-ios"] = r
             job_ok(ck, jobs, "finalize-ios")
         return jobs

@@ -125,6 +125,7 @@ case "$1 $2" in
   "pr edit") : ;;
   "run list") cat "$FAKE/run-id" 2>/dev/null ;;
   "run watch") exit 0 ;;
+  "workflow run") exit 0 ;;
   "run view")
     case "$json" in
       conclusion) cat "$FAKE/run-conclusion" ;;
@@ -279,10 +280,12 @@ echo failure >"$FAKE/run-conclusion"
 bash tools/flow/owner-release-test.sh android >/dev/null 2>&1
 rc=$?
 check "Release 红 → 非 0 并开 issue" bash -c '[ "$1" -ne 0 ] && grep -q "Release v0.10.3-test.3" "$FAKE/created-titles"' _ "$rc"
+check "#1349：发版走手动触发（release=true、tag=v0.10.3-test.3），脚本自己不推 tag" bash -c 'grep -q "^workflow run release.yml .*tag=v0.10.3-test.3.* release=true" "$FAKE/calls.log" && [ "$(git ls-remote --tags origin | wc -l | tr -d " ")" -eq 1 ]'
+check "临时触发分支跑完即删，远端不留" bash -c '! git ls-remote --heads origin | grep -q release-run/'
 echo success >"$FAKE/run-conclusion"
-echo "0.10.3-test.4" >"$FAKE/channel-version"
+echo "0.10.3-test.3" >"$FAKE/channel-version"
 out="$(bash tools/flow/owner-release-test.sh android 2>/dev/null)"
-check "反证：test tag → v0.10.3-test.4 已推送（失败的 test.3 保留不动）" bash -c 'printf "%s\n" "$1" | grep -q "^RELEASE-TEST OK v0.10.3-test.4 android$" && git ls-remote --tags origin | grep -q "refs/tags/v0.10.3-test.3$"' _ "$out"
+check "反证：绿了 → RELEASE-TEST OK v0.10.3-test.3（上一次验证红没有建 tag，号码直接重用）" bash -c 'printf "%s\n" "$1" | grep -q "^RELEASE-TEST OK v0.10.3-test.3 android$"' _ "$out"
 printf '{"desktop": "0.10.1", "android": "0.10.3", "ios": "0.10.2"}\n' >release/versions.json
 git commit -q -s -am bump
 git push -q origin HEAD:refs/heads/main
