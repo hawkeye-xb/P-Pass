@@ -338,6 +338,18 @@ git fetch -q up main:main 2>/dev/null || git update-ref refs/heads/main "$adv"
 echo "==> 12. 安装自检"
 git checkout -q -f main
 bash tools/hooks/install.sh --check >"${TMP}/check.out" 2>&1 && ok "已安装 → --check 通过" || bad "已安装却 --check 失败：$(cat "${TMP}/check.out")"
+# Windows Git Bash（#1364）：git.exe 把 /c/... 写成 C:/...，读回与 bash 的路径写法不同。
+# 这里用假 cygpath 模拟：假 git 写法是 WIN:<路径>，cygpath -u 去掉前缀还原。
+WINPATH="$(git config --get core.hooksPath)"
+mkdir -p "${TMP}/cyg"
+printf '#!/usr/bin/env bash\n[ "$1" = "-u" ] || exit 2\nprintf "%%s\\n" "${2#WIN:}"\n' >"${TMP}/cyg/cygpath"
+chmod +x "${TMP}/cyg/cygpath"
+git config core.hooksPath "WIN:${WINPATH}"
+PATH="${TMP}/cyg:${PATH}" bash tools/hooks/install.sh --check >"${TMP}/check.out" 2>&1 && ok "Windows 写法（有 cygpath）→ --check 通过" || bad "Windows 写法 --check 失败：$(cat "${TMP}/check.out")"
+bash tools/hooks/install.sh --check >/dev/null 2>&1 && bad "没有 cygpath 时 Windows 写法仍通过（归一化没有只在有 cygpath 时走）" || ok "  反证：没有 cygpath → 字面比较，Windows 写法不等 → --check 失败"
+PATH="${TMP}/cyg:${PATH}" bash tools/hooks/install.sh >/dev/null 2>&1 && ok "Windows 写法下重复安装 → 认得是自己的，不拒绝" || bad "Windows 写法下重复安装被拒"
+git config core.hooksPath "WIN:${WINPATH}-other"
+PATH="${TMP}/cyg:${PATH}" bash tools/hooks/install.sh --check >/dev/null 2>&1 && bad "指向别处的 Windows 写法却通过" || ok "  反证：Windows 写法但指向别处 → --check 失败"
 git config --unset core.hooksPath
 bash tools/hooks/install.sh --check >/dev/null 2>&1 && bad "未安装 → --check 却通过" || ok "  反证：未安装 → --check 失败"
 git checkout -q -B fix/101-uninst main
