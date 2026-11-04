@@ -25,7 +25,8 @@ SMOKE_mac="mac/upgrade mac/svc mac/eph-backup"
 SMOKE_android="android/smoke-upgrade"
 # 每端的路径（lane）。android 与 CI 的 ci-android.yml changes 段同源（运行时从 workflow 里读）；
 # macOS 桌面在 CI 里不按路径跳过，这里按「会进桌面包的代码」列。
-MAC_GLOBS=(crates/** apps/desktop/** assets/i18n/** tools/testclient/** tools/mac-dev.sh tools/daemon-helper-macos.sh tools/bundle-desktop-macos.sh)
+# 每项都要加引号：数组赋值时未加引号的通配符会被 shell 按当前目录展开（#1343 审查）。
+MAC_GLOBS=('crates/**' 'apps/desktop/**' 'assets/i18n/**' 'tools/testclient/**' 'tools/mac-dev.sh' 'tools/daemon-helper-macos.sh' 'tools/bundle-desktop-macos.sh')
 
 android_globs() {
   # paths: | 块：缩进比 paths: 深的行都是条目，遇到第一行不更深的就结束

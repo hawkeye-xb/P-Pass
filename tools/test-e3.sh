@@ -132,4 +132,19 @@ YML
   [ -f "$(base_apk_path)" ] || { echo "非 android 改动，候选包没有拷成基线"; exit 1; }
 ) || bad "ensure_base_apk：android 改动判定"
 
+# #1343 审查补充：MAC_GLOBS 数组里的通配符必须加引号。未加引号时，赋值那一刻 shell 会按
+# 当前目录展开（在仓库根目录 crates/** 会变成一堆具体目录），通配语义和与目录无关性都丢了。
+(
+  cd "$ROOT" || exit 1
+  E3_STATE="$(mktemp -d)" || exit 1
+  export E3_STATE
+  trap 'rm -rf "$E3_STATE"' EXIT
+  # shellcheck source=../tools/e3/verify
+  source "$E3/verify" || exit 1
+  [ "${MAC_GLOBS[0]}" = 'crates/**' ] ||
+    { printf 'MAC_GLOBS[0]=%s，期望字面量 crates/**\n' "${MAC_GLOBS[0]}"; exit 1; }
+  [ "${#MAC_GLOBS[@]}" -eq 7 ] ||
+    { printf 'MAC_GLOBS 有 %s 项，期望 7\n' "${#MAC_GLOBS[@]}"; exit 1; }
+) || bad "MAC_GLOBS 通配符被 shell 按路径展开"
+
 [ "$fails" -eq 0 ] && echo "ok: tools/e3 自测通过" || { echo "$fails 项失败"; exit 1; }
