@@ -9,28 +9,42 @@ bash 能否真执行、本地提交拦截、gh 能否读 issue、提交身份、
 
 ## 角色
 
-| 角色 | 职责 | 不做 |
-|---|---|---|
-| 产品负责人（人） | 提产品诉求、方向判断、优先级；test 版体验回归；凭据与付费 | 不写、不审代码，不批 PR，不排查 |
-| owner（研发负责人会话） | 把诉求拆成卡、写范围与验收、派活、攒批、全量验证、开批 PR、合入、发 test 版 | 不自己写大块功能 |
-| worker（每卡一个会话） | 在 issue 范围内改代码、本地验证、推分支交卡 | 不碰范围外、不碰核心、不开 PR |
-| QA（每批一个回归会话） | 按 `docs/runbook/full-regression-sop.md` 跑全量回归，出报告 | 不修代码 |
+方向归人，判定归机器。
 
-技术问题 owner 自己定并记录；碰到产品取向（用户感知的行为、隐私、数据去留）的，
+| 谁 | 做什么 |
+|---|---|
+| 产品负责人（人） | 定 milestone 与优先级；回答产品取向问题；在盯梢节点放行；体验 test 包；发正式版；凭据与付费 |
+| agent（任何模型，按会话分工） | 领卡、写代码、开 PR、修到 CI 全绿；到盯梢节点停下等人，等的时候做别的卡 |
+| CI | 判定能不能合入：格式、lint、测试、范围、核心方案引用、网络出口、占盘 |
+
+文字规则只写 CI 管不到的事；能写成检查的，一律写成检查。
+技术问题 agent 自己定并记录；碰到产品取向（用户感知的行为、隐私、数据去留）的，
 用产品语言写两个选项，打 `needs:product` 交产品负责人拍板，然后接着做别的卡，不干等。
+
+### 任务分三级：级别决定人在哪里介入
+
+| 级别 | 什么卡 | 人在哪里介入 | 合入条件 |
+|---|---|---|---|
+| 自动 | 文档、内部重构、测试、工具，用户看不到的修复 | 不介入 | CI 全绿 |
+| 盯梢 | 用户看得到的行为：界面、文案、备份行为、权限流程 | PR 阶段：agent 在 PR 上贴真机截图或录屏、日志里的通过行，必要时附 test 包；产品负责人看过后放行 | CI 全绿 + 产品负责人放行 |
+| 人控 | 核心路径（配对、加密、协议、存储迁移、更新链），以及产品负责人点名要把控的卡 | 开工前：agent 先在 issue 里写方案（做法 + 两个选项 + 风险），产品负责人点头才写代码；PR 阶段同「盯梢」 | CI 全绿 + 已采纳方案 + 产品负责人放行 |
+
+- 级别按范围路径判：界面路径 → 盯梢，核心路径（`.github/core-paths.txt`）→ 人控；产品负责人可以调高，agent 不能调低。
+- 「放行」= 产品负责人在 PR 上评论「放行」。agent 开好盯梢、人控级的 PR 后，在 PR 上留一条「等产品负责人放行」，
+  转去做别的卡；看到「放行」评论才合入，不自己批准、不替人做决定。
+- 现状：agent 与人共用同一个 GitHub 账号，GitHub 不允许给自己的 PR 批准，所以这一条只能靠规则约束，CI 拦不住
+  （产品负责人 2026-11-03 定：先靠自觉，暂不开独立身份；出现 agent 自己合入盯梢级 PR 再开）。
 
 ## 看板：GitHub Issues + 标签
 
-一张卡同一时间只有一个状态标签：
+issue、PR、milestone 就是全部状态，仓库里没有任何状态文件。问进度、下一个做什么，只看 Issues 与 milestone；
+换会话、换模型，读 issue 与 PR 就能接着干。
 
-`status:inbox`（新诉求，待 owner 拆）→ `status:ready`（范围、验收场景已写好）→
-`status:doing`（已派给某个会话）→ `status:review`（worker 已交卡，等 owner 攒批）→
-`status:batched`（进了某个 batch 分支）→ 关闭（合入 main）
-
+一张卡的状态标签：`status:inbox`（新诉求，待定范围）→ `status:ready`（范围、验收场景已写好）→
+`status:doing`（已领）→ `status:review`（已交卡并开了 PR，等 CI 与放行）→ 合入后关闭。
 旁路：`status:blocked`（卡住，issue 里写明原因）；`needs:product`（等产品负责人拍板）。
-问进度、下一个做什么，只看 Issues 与 milestone，仓库里没有任何状态文件。
 **想法不进 Issues**：还没决定做的功能放 Discussions 的 Ideas 分类；产品负责人说「要做」后，
-owner 用「Create issue from discussion」转成 issue（类型 Feature，大功能拆子 issue，挂 milestone）。
+用「Create issue from discussion」转成 issue（类型 Feature，大功能拆子 issue，挂 milestone）。
 agent 只领 Issues，除 `just idea` 记想法外不碰 Discussions。issue 类型：Feature（新能力）/ Bug（行为与预期不符）/ Task（其它）。
 开卡用 issue 模板「任务卡」，字段缺了不受理。
 
@@ -38,16 +52,18 @@ agent 只领 Issues，除 `just idea` 记想法外不碰 Discussions。issue 类
 
 任何会话听到人类提出新想法，都用 `just idea "<原话>"` 记进 Discussions 的 Ideas，不顺手开工、不进看板。
 人类明确说「要做、但要先定方案」时加 `--discuss`，建一张 `status:inbox` 的 Feature issue。
-之后由 owner 跑 `just triage <号> <方案文件>` 定方案和去向，见 [owner 流程](docs/runbook/owner.md)。
+之后用 `just triage <号> <方案文件>` 定方案和去向，见 [owner 流程](docs/runbook/owner.md)。
 
 ## 交付流程
 
-**worker：三条命令，一卡一 worktree，不开 PR。**
+**一张卡一个 PR，PR 上的一次 CI 是合入的唯一门槛。** 合入不等于发版：真机全量回归在发版车次做
+（见「发版」与 `docs/runbook/full-regression-sop.md`）。
 
 ```
 just start <issue号>          领卡：建 worktree 与分支，ready→doing，打印下一步
 （cd 进它给的目录，改代码，git add + git commit -s）
 just done                     交卡：过门禁与验收，全绿才推送、贴回执，doing→review
+（开 PR：正文 closes #N、改了什么、证据与证据等级；CI 红了就修到绿）
 just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去做下一张
 ```
 
@@ -57,31 +73,28 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
   没有范围的卡、主仓工作区里的卡分支，`git commit` 直接被拒，见 `tools/hooks/` 与
   [本地提交拦截](docs/runbook/local-hooks.md)。
 - 每个提交 `git commit -s`（DCO 门禁），提交身份必须在 `.github/allowed-identities.txt` 里。
+- 本地只做快检查：提交前钩子拦格式与范围；开发时只跑改动涉及的测试，不在本地跑全量。
 - `just done` 依次：门禁（动了代码 `just ci`，纯文档 `just ci-docs`）→ `just verify <号>`（命令存在才跑）
   → 核对 `git diff origin/main...` 只含范围内文件 → 推分支 → 在 issue 贴回执（分支、提交、门禁与验收输出末尾、
   证据等级、证据目录）。任何一步红：不推送、issue 写明停在哪、打 `status:blocked`，修好重跑即可。
   分支落后 `origin/main` 时只报错不打 blocked：先 `git rebase origin/main` 再重跑。
-- 必须用 `just stuck` 停下的四种情况：命中核心、需要改范围外文件、没有可用的验收场景、同一处连红 3 次。
+- 自动级的 PR：CI 全绿就合（squash）。盯梢、人控级：等产品负责人放行再合。
+- 必须用 `just stuck` 停下的四种情况：命中核心且没有已采纳方案、需要改范围外文件、没有可用的验收场景、
+  同一处连红 3 次。
 - 用户看得到的行为还需按卡上的验收场景做真机验证（E3）；`just done` 的回执会写明哪些证据等级已自动取得。
-
-**owner：多卡攒一批，一批一个 PR。每一步只用下面的命令**（说明见 [owner 流程](docs/runbook/owner.md)）。
-命令自带判定；红了或判定不了，命令自己写 issue（`status:blocked`）并停下。owner 不手动补做、
-不绕过、不改判定，接着处理别的批次或卡。
-
-0. 分拣新诉求：给 `status:inbox` 的卡写方案文件，`just triage <号> <方案文件>` 按范围路径分流
-   （纯技术非核心 → `status:ready`；碰用户可见行为、隐私、数据 → `needs:product`，除非 `**产品定案**` 引用已采纳、
-   产品负责人确认过的方案；核心无已采纳 ADR → `status:blocked`）。
-1. `just batch-plan`：看 `status:review` 的卡能否进批次（范围、核心与 ADR、DCO、冲突），输出建议批次。
-2. `just batch-open <主题> <issue...>`：按建议开 `batch/<日期>-<主题>`，逐张合入，卡打 `status:batched`。
-3. 到它打印的 worktree 里 `just batch-verify`：`just ci` + 全部 `tools/test-*.sh` + 受影响端真机，写批次报告。
-4. `just batch-pr`：开 PR、批准已定案的 core review、等全部检查；全绿 squash 合入，红了写 PR 评论停下。
-   修好后重跑 3、4。main 在批次期间前进了，按同样的卡用新主题重开（命令会给出整行命令）。
-   在批次分支上手修时，压缩提交只能 `reset --soft $(git merge-base HEAD origin/main)`，
-   **绝不 `reset --soft origin/main`**（会把旧工作区当新内容提交，撤回别人刚合入的改动）。
-5. 要出 test 包：`just release-test <端...>`（端以 plan-builds 判定为准）。正式版只由产品负责人发布。
-6. 合入后清理：`just cleanup-local`（默认预览，删除要 `--apply`）。squash 合并下判断分支能否删
-   看上游 `: gone]`，删用 `-D`。
-7. 产品取向的问题：`just owner-stuck "<问题>" --product "<选项一>" "<选项二>"`，然后做别的。
+- 防发散：一个 PR 只关联一个 issue；改到范围外文件就是红；新增网络出口、遥测依赖、自启点、落盘目录由 `just ci` 挡
+  （现有适应度检查）。PR 大小上限、同时打开的 PR 数上限、「盯梢 / 人控级没有放行不许合」的必需检查尚未建，
+  目前靠自觉：PR 尽量小，同时不开超过 3 个。
+- 压缩提交只能 `reset --soft $(git merge-base HEAD origin/main)`，**绝不 `reset --soft origin/main`**
+  （会把旧工作区当新内容提交，撤回别人刚合入的改动）。
+- 分拣、出 test 包、停下、记想法的命令见 [owner 流程](docs/runbook/owner.md)：
+  `just triage <号> <方案文件>` 给 `status:inbox` 的卡定范围并分流
+  （纯技术非核心 → `status:ready`；碰用户可见行为、隐私、数据 → `needs:product`，除非 `**产品定案**` 引用已采纳、
+  产品负责人确认过的方案；核心无已采纳方案 → `status:blocked`）；
+  `just release-test <端...>` 出 test 包（端以 plan-builds 判定为准，正式版只由产品负责人发布）；
+  `just owner-stuck "<问题>" --product "<选项一>" "<选项二>"` 交产品取向的问题；
+  `just cleanup-local`（默认预览，删除要 `--apply`）清本机构建产物，squash 合并下判断分支能否删
+  看上游 `: gone]`，删用 `-D`。命令自带判定，红了或判定不了就写 issue 并停下，不绕过、不改判定。
 
 ## 红线（违反 = 事故）
 
@@ -96,8 +109,8 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
    本机路径、设备序列号、机器状态只写本机 `local-state.md`（不进 git）。
 5. **红测不进 main。** 红的停在自己分支上，在 issue 里写明停在哪。
 6. **核心改动先讨论。** `.github/core-paths.txt` 圈住的路径（门禁、配对/身份/加密/协议、
-   存储与迁移、更新链、依赖锁）：worker 只写复现、根因和两个修法，不改代码；
-   由 owner 定或交产品负责人拍板后再实现；批 PR 上的 `core review` 由 owner 批准，worker 不批。
+   存储与迁移、更新链、依赖锁）：没有已采纳方案时只写复现、根因和两个修法，不改代码；
+   由产品负责人拍板方案后再实现，PR 阶段同样要产品负责人放行。
 7. **不公开的内容只进私仓。** 安全细节（漏洞利用、攻击面）、商业、竞品、运营内容不写进本仓库，
    也不写进 issue、PR、提交说明；只写进主副本旁边的 `../private`，issue 里只留
    「细节已存私仓」。「主副本旁边」是相对主仓根说的，不是相对当前目录，也不是环境变量。
@@ -121,7 +134,7 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
   平台惯例（原生导航、下拉刷新等）可以保留。尺寸偏离登记进 `tokens.json` 的 `platforms.ios`
   并写理由，不在代码里写死。
 - **桌面只改 i18n 副本**（同步 `assets/i18n` 在 Android/iOS 的逐字节副本）可以直接做；
-  任何影响手机行为、协议、真机表现的改动都要在卡上写明并经 owner 确认。
+  任何影响手机行为、协议、真机表现的改动都要在卡上写明并经产品负责人确认。
   副本逐字节一致由 `just mobile-static-check` 兜底（`just ci` 会挡）。
 - **界面文案**：先找行业标准（Android 权限规范、NN/g、Google、Microsoft 写作指南）。提示说现状，
   不事事给操作建议；每句话只服务这一屏的作用；把已有功能说全，不替用户选；流程能省一屏就省；
