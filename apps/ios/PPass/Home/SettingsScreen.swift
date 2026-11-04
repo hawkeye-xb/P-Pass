@@ -258,12 +258,14 @@ struct SettingsScreen: View {
 
 /// 告示行：一行正文 + 右侧动作（对位 Android `NoticeCard`）。底色 waitingBg 是品牌语义色，按 tokens 走；
 /// 行高与内边距用系统列表行。「知道了」比「去处理」弱一档（无下划线、ink40），同 Android 的主次区分。
-private struct NoticeRow: View {
+struct NoticeRow: View {
     let text: String
     var action: (String, () -> Void)? = nil
     var dismiss: (String, () -> Void)? = nil
     /// ×（无障碍标签, 动作）：非空时换成一行版式「左正文、右动作与 ×」，同 Android NoticeCard 的 closeLabel 版式（C1）。
     var close: (String, () -> Void)? = nil
+    /// 不在 List 里用（照片页引导位）：List 行的底色与圆角由 List 给，这里自己补同样的浅底圆角与左内边距。
+    var standalone = false
 
     var body: some View {
         if let c = close {
@@ -289,6 +291,8 @@ private struct NoticeRow: View {
                 .accessibilityLabel(c.0)
                 .accessibilityIdentifier("noticeClose")
             }
+            .padding(.leading, standalone ? 16 : 0).padding(.trailing, standalone ? 12 : 0)
+            .background(standalone ? PPColor.waitingBg : .clear, in: RoundedRectangle(cornerRadius: PPRadius.control, style: .continuous))
             .ppTinted(PPColor.waitingBg)
         } else {
             row
