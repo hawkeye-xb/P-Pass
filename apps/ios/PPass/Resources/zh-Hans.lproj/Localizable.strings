@@ -175,7 +175,7 @@
 "photos_first_run_enable" = "开启自动备份";
 "photos_first_run_pick" = "先挑几张传";
 "photos_guide_scope" = "开启自动备份，以后拍的照片会自动传到 %1$@。";
-"photos_guide_background" = "App 关着也能自动备份。";
+"photos_guide_background" = "App 关闭也能备份";
 "photos_guide_enable" = "开启";
 "photos_guide_close" = "关闭";
 "photos_scope_empty_since" = "自动备份已开启，%1$@以后拍的照片会传到 %2$@。";

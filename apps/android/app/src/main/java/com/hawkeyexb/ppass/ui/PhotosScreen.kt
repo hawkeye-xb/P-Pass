@@ -392,6 +392,17 @@ internal fun PhotosScreen(
             }
         }
 
+        // #1322（方案结论 6）：引导位——同一时间最多一张，在过滤条上面，不挡浏览、不弹窗（产品负责人 11-04 定位置）。
+        if (guide != PhotosGuide.None) {
+            LaunchedEffect(guide) { PLog.i("PPassGuide", "photos-guide: shown ${guide.logName}") }
+            PhotosGuideCard(
+                guide, computerName,
+                onAction = { onGuideAction(guide) },
+                onDismiss = onGuideDismiss,
+                modifier = Modifier.fillMaxWidth().padding(20.dp, 0.dp, 20.dp, 12.dp),
+            )
+        }
+
         // T-080: 轻过滤器 chips（设计稿样式:胶囊,选中=墨底纸字）。
         // UI-13: 私有 FilterChip（手写药丸）改用 Material3 同名组件——
         // 之前跟框架组件撞名字纯属巧合式重新发明轮子，见 PhotoFilterChip
@@ -449,17 +460,6 @@ internal fun PhotosScreen(
             Text(
                 scopeEmptyHint,
                 fontSize = 13.sp, color = PPColor.Ink40,
-                modifier = Modifier.fillMaxWidth().padding(20.dp, 0.dp, 20.dp, 12.dp),
-            )
-        }
-
-        // #1322（方案结论 6）：引导位——同一时间最多一张，在顶部，不挡浏览、不弹窗。
-        if (guide != PhotosGuide.None) {
-            LaunchedEffect(guide) { PLog.i("PPassGuide", "photos-guide: shown ${guide.logName}") }
-            PhotosGuideCard(
-                guide, computerName,
-                onAction = { onGuideAction(guide) },
-                onDismiss = onGuideDismiss,
                 modifier = Modifier.fillMaxWidth().padding(20.dp, 0.dp, 20.dp, 12.dp),
             )
         }
@@ -912,7 +912,7 @@ internal fun photosGuideOf(f: GuideFacts): PhotosGuide = when {
  */
 internal fun scopeEmptyHintShown(f: GuideFacts, inScope: Long?): Boolean = f.scopeOn && inScope == 0L
 
-/** 一句话 + 一个按钮 + 右上角 ×（方案「提示小卡规则」）。 */
+/** 弱引导一行：一句话 + 文字按钮 + ×（产品负责人 11-04：弱引导不用整宽大按钮）。 */
 @Composable
 private fun PhotosGuideCard(
     guide: PhotosGuide,
@@ -926,36 +926,31 @@ private fun PhotosGuideCard(
         PhotosGuide.EnableBackground -> stringResource(R.string.photos_guide_background)
         PhotosGuide.None -> return
     }
+    // 浅底、一行：左边一句话，右边文字按钮（墨色加粗）+ ×；字长时正文折行，按钮和 × 不动。
     Surface(
         color = PPColor.WaitingBg,
         shape = RoundedCornerShape(PPSize.RadiusCard),
         modifier = modifier,
     ) {
-        Column(Modifier.padding(18.dp, 10.dp, 6.dp, 18.dp)) {
-            Row(verticalAlignment = Alignment.Top) {
-                Text(
-                    text,
-                    fontSize = PPSize.BodyMin, lineHeight = 24.sp, color = PPColor.Ink60,
-                    modifier = Modifier.weight(1f).padding(top = 8.dp),
-                )
-                androidx.compose.material3.IconButton(onClick = onDismiss) {
-                    androidx.compose.material3.Icon(
-                        androidx.compose.material.icons.Icons.Filled.Close,
-                        contentDescription = stringResource(R.string.photos_guide_close),
-                        tint = PPColor.Ink40,
-                    )
-                }
-            }
-            Spacer(Modifier.height(12.dp))
-            androidx.compose.material3.Button(
+        Row(Modifier.padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text,
+                fontSize = 15.sp, lineHeight = 22.sp, color = PPColor.Ink60,
+                modifier = Modifier.weight(1f).padding(vertical = 12.dp),
+            )
+            androidx.compose.material3.TextButton(
                 onClick = onAction,
-                modifier = Modifier.padding(end = 12.dp).fillMaxWidth().height(PPSize.TapMin),
-                shape = RoundedCornerShape(PPSize.RadiusControl),
-                colors = androidx.compose.material3.ButtonDefaults.buttonColors(
-                    containerColor = PPColor.Ink, contentColor = PPColor.Paper,
-                ),
+                colors = androidx.compose.material3.ButtonDefaults.textButtonColors(contentColor = PPColor.Ink),
             ) {
-                Text(stringResource(R.string.photos_guide_enable), fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                Text(stringResource(R.string.photos_guide_enable), fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            }
+            // IconButton 自带 48dp 点击区；「关闭」只作无障碍标签，不显示成文字。
+            androidx.compose.material3.IconButton(onClick = onDismiss) {
+                androidx.compose.material3.Icon(
+                    androidx.compose.material.icons.Icons.Filled.Close,
+                    contentDescription = stringResource(R.string.photos_guide_close),
+                    tint = PPColor.Ink40,
+                )
             }
         }
     }
