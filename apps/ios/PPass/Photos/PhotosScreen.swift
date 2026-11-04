@@ -54,22 +54,28 @@ struct PhotosScreen: View {
         .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 12)
     }
 
-    /// 引导位弱引导（对位 Android `PhotosGuideCard`）：一行，左边一句话，右边文字按钮（墨色加粗）+ ×，浅底不抢照片。
+    /// 引导位提示条（对位 Android `PhotosGuideCard`）：图标 + 一句话 + 文字按钮（墨色加粗），× 靠右；小圆角浅底细描边。
     /// 第一步按钮「开启」（已是部分照片权限时「去设置」）；第二步：系统「后台 App 刷新」没开 →「去设置」，已放行 →「开启」。
     private func guideCard(_ guide: PhotosGuide) -> some View {
         var text = guide == .enableScope ? L.f("photos_guide_scope", app.desktopName ?? L.s("storage_device_default")) : L.s("photos_guide_background")
         // 部分照片权限、按钮是「去设置」：正文补同一句路径说明（与决定页同一说法）。
         if guide == .enableScope, app.scopeGuideActionKey != "photos_guide_enable" { text += "\n" + L.s("photo_access_change_later_hint") }
         let action = guide == .enableScope ? L.s(app.scopeGuideActionKey) : L.s(app.backgroundGuideActionKey)
-        return HStack(spacing: 0) {
-            Text(text).font(PPFont.sans(15, relativeTo: .subheadline)).foregroundStyle(PPColor.ink60)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 12)
-            Button(action) { app.guideAction(guide) }
-                .font(PPFont.sans(15, .bold, relativeTo: .subheadline)).foregroundStyle(PPColor.ink)
-                .padding(.horizontal, 8).frame(minHeight: 44)
-                .accessibilityIdentifier("photosGuideAction")
+        // 提示条：小圆角 + 浅底细描边；图标、文字、按钮从左紧挨着排，× 单独靠右。文字折行时按钮跟在右侧，不悬空。
+        return HStack(spacing: 10) {
+            Image(systemName: guide == .enableScope ? "arrow.up.circle" : "battery.100")
+                .font(.system(size: 20)).foregroundStyle(PPColor.ink60)
+                .frame(width: 20, height: 20).accessibilityHidden(true)
+            HStack(spacing: 4) {
+                Text(text).font(PPFont.sans(15, relativeTo: .subheadline)).foregroundStyle(PPColor.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.vertical, 12)
+                Button(action) { app.guideAction(guide) }
+                    .font(PPFont.sans(15, .bold, relativeTo: .subheadline)).foregroundStyle(PPColor.ink)
+                    .padding(.horizontal, 6).frame(minHeight: 44)
+                    .accessibilityIdentifier("photosGuideAction")
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
             // 点击区 44×44；「关闭」只作无障碍标签，不显示成文字。
             Button { app.dismissGuide() } label: {
                 Image(systemName: "xmark").font(PPFont.subheadlineBold).foregroundStyle(PPColor.ink40)
@@ -78,8 +84,9 @@ struct PhotosScreen: View {
             .accessibilityLabel(L.s("photos_guide_close"))
             .accessibilityIdentifier("photosGuideClose")
         }
-        .padding(.leading, 16).padding(.trailing, 4)
-        .background(PPColor.waitingBg, in: RoundedRectangle(cornerRadius: PPRadius.card, style: .continuous))
+        .padding(.leading, 14).padding(.trailing, 2)
+        .background(PPColor.waitingBg, in: RoundedRectangle(cornerRadius: PPRadius.controlSm, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: PPRadius.controlSm, style: .continuous).stroke(PPColor.border, lineWidth: 1))
         .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 12)
         .onAppear { AppLog.log("photos-guide: shown \(guide.logName)") }
         .id(guide)
