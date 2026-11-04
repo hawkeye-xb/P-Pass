@@ -28,7 +28,7 @@ struct DecisionScreen: View {
                     Text(L.f("decision_destination", computerName))
                         .font(PPFont.sans(15, relativeTo: .subheadline)).foregroundStyle(PPColor.ink60).lineSpacing(5)
                         .fixedSize(horizontal: false, vertical: true).padding(.top, 12)
-                    PPButton(title: L.s("decision_choose_scope"), height: 64, fontSize: 19) { app.decisionChooseScope() }
+                    PPButton(title: L.s("decision_choose_scope"), enabled: !app.decisionBusy, height: 64, fontSize: 19) { app.decisionChooseScope() }
                         .accessibilityIdentifier("decisionChooseScope")
                         .padding(.top, 40)
                     // iOS 补一句「怎么改成全部」：选了部分照片之后 iOS 不会再弹框，只能去系统设置（行业惯例写明路径）。
@@ -39,6 +39,8 @@ struct DecisionScreen: View {
                     Button(L.s("decision_pick_photos")) { app.decisionPickPhotos() }
                         .font(PPFont.sans(15, .bold, relativeTo: .subheadline)).foregroundStyle(PPColor.ink60)
                         .frame(maxWidth: .infinity, minHeight: 44).padding(.top, 10)
+                        // 处理中（点了任一按钮、还没进照片页或回到决定页）两个出口都不可点。
+                        .disabled(app.decisionBusy)
                         .accessibilityIdentifier("decisionPickPhotos")
                 }
                 .padding(32)

@@ -228,6 +228,53 @@ final class SettingsFeedbackTests: XCTestCase {
         }
     }
 
+    /// #1373 评审（定案「决定开始处理后，决定页两个按钮都不可点，直到进照片页或回到决定页」）：
+    /// 处理中再点（任一按钮）不触发第二次；选图取消 / 没登记上 / 换页之后能再点。
+    /// 反证：去掉 `decisionChooseScope` / `decisionPickPhotos` 开头的 `guard !decisionBusy`，requested / picker 断言红；
+    /// 去掉 `pickerRequested` 收起时的解锁，「取消后能再点」那段红。
+    func test_decision_buttons_lock_while_processing_and_unlock_on_every_exit() async {
+        let (app, engine, media) = make()
+        media.granted = nil
+        media.answer = .none
+        app.paired(firstTime: true, settingSaveFailed: false)
+        XCTAssertFalse(app.decisionBusy)
+
+        app.decisionPickPhotos()
+        XCTAssertTrue(app.decisionBusy, "点了就锁")
+        app.decisionChooseScope() // 另一个按钮
+        app.decisionPickPhotos()  // 同一个按钮
+        await settle()
+        XCTAssertEqual(media.requested, 0, "处理中再点不触发第二次")
+
+        app.pickerRequested = false // 系统选图器取消 / 下滑关掉（不回调 pickedChosen）
+        XCTAssertFalse(app.decisionBusy, "取消后能再点")
+        app.decisionChooseScope()
+        await settle()
+        XCTAssertEqual(media.requested, 1)
+        XCTAssertTrue(app.pickerRequested, "拒绝 → 系统选图，仍在处理中")
+        XCTAssertTrue(app.decisionBusy)
+        app.decisionChooseScope()
+        await settle()
+        XCTAssertEqual(media.requested, 1, "选图器开着时再点主按钮不再申请")
+
+        let item: (fileName: String, mimeType: String, payload: PickedPayload) = ("a.jpg", "image/jpeg", StubPayload())
+        app.pickerRequested = false
+        engine.pickedAdds = 0
+        app.pickedChosen([item])
+        await settle()
+        XCTAssertEqual(app.phase, .decision)
+        XCTAssertFalse(app.decisionBusy, "一张没登记上：回到决定页，能再点")
+
+        media.answer = .full
+        app.decisionChooseScope()
+        await settle()
+        XCTAssertEqual(app.phase, .chooseAlbums)
+        XCTAssertFalse(app.decisionBusy, "进了下一页就解锁")
+        app.leaveFirstScope()
+        XCTAssertEqual(app.phase, .decision)
+        XCTAssertFalse(app.decisionBusy, "从选范围页回到决定页能再点")
+    }
+
     /// 决定页的范围出口：选范围页返回 → 回决定页（还没做决定）；再进、保存 → 落盘 via=scope、进照片页。
     /// 反证：`leaveFirstScope` 改成进 `.main`，第一段红；`finishFirstScope` 不落盘，onboarded 断言红。
     func test_decision_scope_exit_back_returns_and_save_marks() async {

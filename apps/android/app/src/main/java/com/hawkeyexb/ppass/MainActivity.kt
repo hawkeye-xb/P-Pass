@@ -191,6 +191,21 @@ internal fun launchScreen(pairing: Pairing?, onboarded: (String) -> Boolean): Sc
 internal enum class DecisionLanding { ChooseScope, RegisterAllowed, PickPhotos }
 
 /**
+ * 决定页「处理中」锁（定案：决定开始处理后两个按钮都不可点，直到进照片页或回到决定页）。
+ * 点任一按钮先 [tryLock]：锁住时再点不触发第二次；离开决定页或这次处理落空（取消、没登记上、结果丢失、拉不起系统页）就 [unlock]。
+ */
+internal class DecisionLock {
+    var busy by mutableStateOf(false)
+        private set
+    fun tryLock(): Boolean {
+        if (busy) return false
+        busy = true
+        return true
+    }
+    fun unlock() { busy = false }
+}
+
+/**
  * 全部允许 → 选范围页；拒绝 → 系统选图（单张备份）。
  * 部分允许：用户在系统权限框里已经选了照片，那次选择就是这次的「系统选图」——直接登记已授权的照片（单张备份），
  * 不再弹选图器让人选第二遍（三星验收：用户以为没生效、反复选了几次）。两端同一口径（iOS #1323）。方案结论 5：不新增第三个出口。
@@ -779,6 +794,9 @@ fun PPassApp() {
             PLog.i("PPassFlow", "onboarding: marked onboarded via=$how desktop=${pairing.daemonNodeId.take(8)}")
         }
     }
+    // 决定页处理中锁：离开决定页（进照片页 / 选范围页）一律解锁；留在决定页的出口在各自分支里解锁。
+    val decisionLock = remember { DecisionLock() }
+    LaunchedEffect(screen) { if (screen !is Screen.Decision) decisionLock.unlock() }
     // 单张备份：系统选图（不要照片权限）。选完登记成一批手选订单才算做了决定；取消 = 还在决定页。
     var decisionPickPairing by remember { mutableStateOf<Pairing?>(null) }
     val decisionPickLauncher = rememberLauncherForActivityResult(
@@ -788,6 +806,7 @@ fun PPassApp() {
         decisionPickPairing = null
         if (pairing == null || uris.isEmpty()) {
             PLog.i("PPassFlow", "onboarding: pick cancelled, staying on decision")
+            decisionLock.unlock()
             return@rememberLauncherForActivityResult
         }
         scope.launch {
@@ -796,7 +815,11 @@ fun PPassApp() {
                     .onFailure { PLog.w("PPassFlow", "onboarding: picked enqueue failed", it) }
                     .getOrDefault(0)
             }
-            if (count <= 0) return@launch
+            if (count <= 0) {
+                PLog.i("PPassFlow", "onboarding: pick registered nothing, staying on decision")
+                decisionLock.unlock()
+                return@launch
+            }
             pickedBatch = withContext(Dispatchers.IO) {
                 runCatching { com.hawkeyexb.ppass.backup.picked.PickedUploads.store(context).latestBatch() }.getOrNull()
             }
@@ -807,9 +830,15 @@ fun PPassApp() {
     }
     val launchDecisionPick: (Pairing) -> Unit = { pairing ->
         decisionPickPairing = pairing
-        decisionPickLauncher.launch(
-            androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
-        )
+        runCatching {
+            decisionPickLauncher.launch(
+                androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+            )
+        }.onFailure {
+            PLog.w("PPassFlow", "onboarding: picker failed to open", it)
+            decisionPickPairing = null
+            decisionLock.unlock()
+        }
     }
     // 部分允许：系统权限框里的选择就是用户的选择——当场落盘、进照片页（不停在决定页等），已授权的照片在后台登记成一批手选订单。
     val registerDecisionAllowed: (Pairing) -> Unit = { pairing ->
@@ -836,7 +865,10 @@ fun PPassApp() {
         decisionPermissionPairing = null
         mediaAccess = mediaAccess(context)
         mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
-        if (pairing == null) return@rememberLauncherForActivityResult
+        if (pairing == null) {
+            decisionLock.unlock()
+            return@rememberLauncherForActivityResult
+        }
         PLog.i("PPassFlow", "onboarding: photo access after prompt=$mediaAccess")
         when (decisionLanding(mediaAccess)) {
             DecisionLanding.ChooseScope -> screen = Screen.Buckets(pairing, emptySet(), firstTime = true)
@@ -849,7 +881,11 @@ fun PPassApp() {
             screen = Screen.Buckets(pairing, emptySet(), firstTime = true)
         } else {
             decisionPermissionPairing = pairing
-            decisionPermission.launch(withMediaLocation(requiredMediaPermissions()))
+            runCatching { decisionPermission.launch(withMediaLocation(requiredMediaPermissions())) }.onFailure {
+                PLog.w("PPassFlow", "onboarding: permission prompt failed to open", it)
+                decisionPermissionPairing = null
+                decisionLock.unlock()
+            }
         }
     }
 
@@ -1023,8 +1059,9 @@ fun PPassApp() {
             }
             DecisionScreen(
                 computerName = s.pairing.storageDeviceName,
-                onChooseScope = { onDecisionChooseScope(s.pairing) },
-                onPickPhotos = { launchDecisionPick(s.pairing) },
+                busy = decisionLock.busy,
+                onChooseScope = { if (decisionLock.tryLock()) onDecisionChooseScope(s.pairing) },
+                onPickPhotos = { if (decisionLock.tryLock()) launchDecisionPick(s.pairing) },
             )
         }
 

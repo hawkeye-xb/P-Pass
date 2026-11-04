@@ -74,7 +74,10 @@ final class AppModel: ObservableObject {
     enum Tab: Hashable { case photos, settings }
 
     let backend: Backend
-    @Published var phase: Phase
+    /// 换页一律解开决定页的「处理中」锁（进照片页 / 选范围页，或从选范围页回到决定页）。
+    @Published var phase: Phase { didSet { if phase != oldValue { decisionBusy = false } } }
+    /// 决定页「处理中」锁（定案：决定开始处理后两个按钮都不可点，直到进照片页或回到决定页）。
+    @Published private(set) var decisionBusy = false
     @Published var tab: Tab = .photos
     @Published private(set) var facts = FlowFacts()
     @Published private(set) var access: MediaAccess = .full
@@ -83,7 +86,10 @@ final class AppModel: ObservableObject {
     /// #1272 B：「自动备份」规则开关；开关下一行小字（被拒 / 有限访问传了一次的说明）；系统照片选择器是否要弹出。
     @Published private(set) var autoRule = false
     @Published private(set) var ruleNote: String?
-    @Published var pickerRequested = false
+    /// 选图器收起（含下滑关掉、点取消——系统选图器取消时不回调 `pickedChosen`）：还在决定页就解锁，按钮能再点。
+    @Published var pickerRequested = false {
+        didSet { if oldValue, !pickerRequested, phase == .decision { decisionBusy = false } }
+    }
     @Published private(set) var pairing: PairingStatus = .notPaired
     @Published private(set) var scope: Set<String>?
     /// 时间档（#1263）；nil = 从未保存过范围。
@@ -277,15 +283,21 @@ final class AppModel: ObservableObject {
     /// #1323：在决定页选的（单张备份）——登记成功才算做了决定：落盘「连过这台」、进照片页；取消或一张没登记上 → 留在决定页。
     func pickedChosen(_ items: [(fileName: String, mimeType: String, payload: PickedPayload)]) {
         guard !items.isEmpty else {
-            if phase == .decision { AppLog.log("onboarding: pick cancelled, staying on decision") }
+            if phase == .decision { AppLog.log("onboarding: pick cancelled, staying on decision"); decisionBusy = false }
             return
         }
         AppLog.log("picked: \(items.count) chosen")
+        // 选图器先收起再回调：收起那一下已解锁，登记期间重新锁住。
+        if phase == .decision { decisionBusy = true }
         Task {
             let added = await backend.engine.addPicked(items)
             refresh()
             guard phase == .decision else { return }
-            guard added > 0 else { AppLog.log("onboarding: pick registered nothing, staying on decision"); return }
+            guard added > 0 else {
+                AppLog.log("onboarding: pick registered nothing, staying on decision")
+                decisionBusy = false
+                return
+            }
             markDecided(via: "pick")
             phase = .main
         }
@@ -300,11 +312,13 @@ final class AppModel: ObservableObject {
 
     /// 决定页主按钮「选择备份范围」：申请照片权限（读写、全部照片），按结果分流（`decisionLanding`）。
     func decisionChooseScope() {
+        guard !decisionBusy else { return }
+        decisionBusy = true
         Task {
             let granted = await backend.media.requestAccess()
             access = granted
             AppLog.log("onboarding: photo access after prompt=\(granted)")
-            guard phase == .decision else { return }
+            guard phase == .decision else { decisionBusy = false; return }
             switch Self.decisionLanding(granted) {
             case .chooseScope: phase = .chooseAlbums
             case .registerAllowed: registerAllowedOnDecision()
@@ -326,7 +340,11 @@ final class AppModel: ObservableObject {
     }
 
     /// 决定页次入口「先挑几张试试」：直接系统选图（不要照片权限）。
-    func decisionPickPhotos() { pickerRequested = true }
+    func decisionPickPhotos() {
+        guard !decisionBusy else { return }
+        decisionBusy = true
+        pickerRequested = true
+    }
 
     /// 首次选范围页「返回」：还没做决定，回决定页（对位 Android `systemBackTarget` 的 Buckets(firstTime) → Decision）。
     func leaveFirstScope() {

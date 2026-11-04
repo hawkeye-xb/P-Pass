@@ -20,7 +20,7 @@ import androidx.compose.ui.unit.sp
 import com.hawkeyexb.ppass.R
 
 @Composable
-fun DecisionScreen(computerName: String, onChooseScope: () -> Unit, onPickPhotos: () -> Unit) {
+fun DecisionScreen(computerName: String, busy: Boolean = false, onChooseScope: () -> Unit, onPickPhotos: () -> Unit) {
     val name = computerName.ifBlank { stringResource(R.string.storage_device_default) }
     PPScreen {
         androidx.compose.material3.ProvideTextStyle(
@@ -44,7 +44,8 @@ fun DecisionScreen(computerName: String, onChooseScope: () -> Unit, onPickPhotos
                     modifier = Modifier.padding(top = 12.dp),
                 )
                 Spacer(Modifier.height(40.dp))
-                PrimaryButton(stringResource(R.string.decision_choose_scope), onChooseScope)
+                // 处理中（点了任一按钮、还没进照片页或回到决定页）两个出口都不可点。
+                PrimaryButton(stringResource(R.string.decision_choose_scope), onChooseScope, enabled = !busy)
                 Spacer(Modifier.height(8.dp))
                 Text(
                     stringResource(R.string.decision_choose_scope_note),
@@ -55,10 +56,10 @@ fun DecisionScreen(computerName: String, onChooseScope: () -> Unit, onPickPhotos
                 // 与欢迎页「手动配对」同一种次入口：一行文字链接。
                 Text(
                     stringResource(R.string.decision_pick_photos),
-                    fontSize = 15.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink60,
+                    fontSize = 15.sp, fontWeight = FontWeight.Bold, color = if (busy) PPColor.Ink40 else PPColor.Ink60,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.fillMaxWidth()
-                        .clickable(onClick = onPickPhotos)
+                        .clickable(enabled = !busy, onClick = onPickPhotos)
                         .padding(26.dp, 18.dp, 26.dp, 8.dp),
                 )
             }
