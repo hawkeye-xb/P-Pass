@@ -54,10 +54,10 @@
 
 - 版本号取远端最新 `v<X.Y.Z>-test.N` 的 N+1。X.Y.Z 必须高于 `release/versions.json` 里每一端的正式版本号，
   否则 test 设备收不到；不满足时给出建议的 `--base`。
-- 打 tag 之前先在 `origin/main` 上本地跑 `tools/release/plan-builds.sh`，它判「构建」的端必须正好等于参数里的端。
+- 触发发版之前先在 `origin/main` 上本地跑 `tools/release/plan-builds.sh`，它判「构建」的端必须正好等于参数里的端。
 - test tag 没有手写更新说明（[规则](../release-notes-rules.md)），脚本只做校验。
-- 推送 tag 后等 Release run 出结论。绿了再核对 test-channel 里各端清单的 version。
-- 失败的 tag 保留不动，下一次用 `-test.N+1`。
+- 发版入口是手动触发 `release.yml`（`release=true`，tag 填算出的新 tag）：脚本在一条临时分支（指向判定用的 main 提交）上触发，等这次 run，跑完删临时分支；**脚本不推 tag**，tag 由流程在发版前验证全绿后才建。绿了再核对 test-channel 里各端清单的 version。
+- 发版前验证就红了：没有建 tag，同一个版本号可直接重试。tag 已建（构建阶段红）：tag 保留不动，下一次用 `-test.N+1`；这类旧的 test 草稿与 tag 会在下一次成功的 test 发布时由 `point-test-channel.sh` 清掉（被 test-channel 清单指向的保留）。
 - 正式版本号、`--formal` / `stable` / `publish` 一律拒绝。正式发布只由产品负责人在网页上做。
 
 ## 产品取向的问题
