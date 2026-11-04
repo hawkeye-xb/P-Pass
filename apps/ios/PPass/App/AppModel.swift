@@ -104,8 +104,6 @@ final class AppModel: ObservableObject {
     @Published var commandInFlight = false
     /// 最近一次失败反馈（设置写盘失败 / 命令出错）。界面 alert 绑定它。
     @Published var notice: UserNotice?
-    /// 当前页的瞬时提示（对位 Android snackbar），任何页面都显示，几秒后自动消失。
-    @Published var toast: String?
     /// 「仅 Wi‑Fi」要关：等用户在确认框里点「仍然关闭」才写盘（Android MOB-02 §三：移动网络会消耗流量）。
     @Published var pendingWifiOff = false
     /// 范围文件读不出来（与「从未保存」不同，#971）；设置行据此显示「读不到」而不是「未选相册」。
@@ -231,7 +229,7 @@ final class AppModel: ObservableObject {
     }
 
     /// 开自动备份时拿到的照片权限档 → 结果（对位 Android 授权回调）：全部 → 开、进选范围页；
-    /// 部分 → 开关保持关，把允许的照片传一次，当前页瞬时提示；拒绝 → 保持关 + 一行小字。
+    /// 部分 → 开关保持关，把允许的照片传一次，开关下方一行现状；拒绝 → 保持关 + 一行小字。
     private func applyAutoRuleAccess(_ granted: MediaAccess) async {
         access = granted
         switch granted {
@@ -244,8 +242,9 @@ final class AppModel: ObservableObject {
             if !noAlbums { await backend.engine.wake() }
         case .partial:
             let n = await backend.engine.sendAllowedPhotos()
-            ruleNote = n > 0 ? L.f("auto_backup_rule_limited_sent", n) : L.s("auto_backup_rule_partial_hint")
-            toast = ruleNote
+            // 不弹「已把你允许的 N 张传到电脑」：弹出时照片还没传，过去时不实；进度看设置页（产品负责人 2026-11-04）。
+            // 只在开关下方说现状。
+            ruleNote = L.s("auto_backup_rule_partial_hint")
             AppLog.log("auto-rule: partial photo access, sent allowed photos n=\(n), rule stays off")
         case .none:
             ruleNote = L.s("auto_backup_rule_denied_hint")

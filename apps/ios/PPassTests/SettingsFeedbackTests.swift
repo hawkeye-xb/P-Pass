@@ -639,10 +639,10 @@ final class SettingsFeedbackTests: XCTestCase {
             XCTAssertEqual(app.autoRule, ruleOn, "\(back)")
             if back == .full {
                 XCTAssertTrue(app.wantsScopeEditor, "改成全部 → 进选范围页")
-                XCTAssertNil(app.toast)
+                XCTAssertNil(app.ruleNote)
             } else {
                 XCTAssertTrue(engine.calls.contains("sendAllowed"), "仍是部分 → 传一次允许的照片")
-                XCTAssertNotNil(app.toast, "当前页瞬时提示")
+                XCTAssertEqual(app.ruleNote, L.s("auto_backup_rule_partial_hint"), "只有开关下方一行现状，不弹提示")
             }
             engine.calls.removeAll()
             app.sceneBecameActive()
@@ -666,9 +666,10 @@ final class SettingsFeedbackTests: XCTestCase {
         XCTAssertTrue(cold.wantsScopeEditor)
     }
 
-    /// 还没问过照片权限时开自动备份：系统会弹框（同 Android），选「部分」→ 传一次允许的照片 + 瞬时提示，不去设置。
-    /// 反证：`applyAutoRuleAccess` 的部分分支不设 toast，本条红。
-    func test_first_prompt_partial_sends_allowed_and_toasts_without_settings() async {
+    /// 还没问过照片权限时开自动备份：系统会弹框（同 Android），选「部分」→ 传一次允许的照片、开关保持关，
+    /// 开关下方只说现状（不弹「已传 N 张」：弹出时照片还没传，产品负责人 2026-11-04），不去设置。
+    /// 反证：部分分支改回「已把你允许的 N 张…」，本条红。
+    func test_first_prompt_partial_sends_allowed_without_settings_or_sent_claim() async {
         let (app, engine, media) = make()
         var opened = 0
         app.settingsOpener = { opened += 1 }
@@ -683,7 +684,8 @@ final class SettingsFeedbackTests: XCTestCase {
         XCTAssertEqual(media.requested, 1)
         XCTAssertEqual(opened, 0)
         XCTAssertFalse(app.autoRule)
-        XCTAssertEqual(app.toast, L.f("auto_backup_rule_limited_sent", 3))
+        XCTAssertTrue(engine.calls.contains("sendAllowed"))
+        XCTAssertEqual(app.ruleNote, L.s("auto_backup_rule_partial_hint"))
     }
 
     /// 现状那一行：「从今天起」写日期，「全部」说所选相册。
