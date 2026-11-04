@@ -106,8 +106,6 @@ final class AppModel: ObservableObject {
     @Published var notice: UserNotice?
     /// 当前页的瞬时提示（对位 Android snackbar），任何页面都显示，几秒后自动消失。
     @Published var toast: String?
-    /// 部分照片权限下点了开自动备份、被带去系统设置：回到前台时按真实权限接着走。只在内存里，不落盘。
-    private(set) var awaitingFullPhotoAccess = false
     /// 「仅 Wi‑Fi」要关：等用户在确认框里点「仍然关闭」才写盘（Android MOB-02 §三：移动网络会消耗流量）。
     @Published var pendingWifiOff = false
     /// 范围文件读不出来（与「从未保存」不同，#971）；设置行据此显示「读不到」而不是「未选相册」。
@@ -131,6 +129,7 @@ final class AppModel: ObservableObject {
         let status = backend.pairing.status()
         phase = Self.launchPhase(status, onboarded: status != .notPaired && backend.engine.onboardedCurrent())
         refresh()
+        resumeAutoRuleAfterSettings() // iOS 改照片权限会结束进程：从系统设置回来可能是冷启动
         refreshExistingAlbums()
         refreshNotificationAuthorization()
         backend.engine.observe { [weak self] in Task { @MainActor in self?.refresh() } }
@@ -219,7 +218,8 @@ final class AppModel: ObservableObject {
         // 已经是「部分照片」：iOS 不会再弹授权框（Android 这一步会再弹一次、可当场改成「全部允许」）。同一意图的 iOS 做法是
         // 带用户去系统设置里本 App 的「照片」项改成「所有照片」；回到前台按真实权限接着走（`sceneBecameActive`）。不预写任何开关。
         if backend.media.access() == .partial {
-            awaitingFullPhotoAccess = true
+            // 记号落盘：iOS 改照片权限会结束 App 进程，回来可能是冷启动。写不下来照样去设置，只是回来不能自动接着走。
+            do { try backend.engine.setPendingFullPhotoAccess(true) } catch { AppLog.log("auto-rule: pending mark write failed: \(error)") }
             AppLog.log("auto-rule: partial photo access, opening system settings for full access")
             openAppSettings()
             return
@@ -253,10 +253,12 @@ final class AppModel: ObservableObject {
         refresh()
     }
 
-    /// 从系统设置回来：按真实照片权限现算（同 #1324 读后台刷新的口径）。只处理一次。
-    private func resumeAutoRuleAfterSettings() {
-        guard awaitingFullPhotoAccess else { return }
-        awaitingFullPhotoAccess = false
+    /// 从系统设置回来（回到前台，或 iOS 改权限后结束了进程、这次是冷启动）：按真实照片权限现算（同 #1324 读后台刷新的口径）。
+    /// 读到记号就先清掉，只接一次；不在照片页（配对没了 / 还在决定页）只清不接。
+    func resumeAutoRuleAfterSettings() {
+        guard backend.engine.pendingFullPhotoAccess() else { return }
+        do { try backend.engine.setPendingFullPhotoAccess(false) } catch { AppLog.log("auto-rule: pending mark clear failed: \(error)"); return }
+        guard phase == .main else { AppLog.log("auto-rule: back from settings outside main (\(phase)); dropped"); return }
         let now = backend.media.access()
         AppLog.log("auto-rule: back from settings, photo access=\(now)")
         Task { await applyAutoRuleAccess(now) }
@@ -296,22 +298,22 @@ final class AppModel: ObservableObject {
             guard phase == .decision else { return }
             switch Self.decisionLanding(granted) {
             case .chooseScope: phase = .chooseAlbums
-            case .registerAllowed: await registerAllowedOnDecision()
+            case .registerAllowed: registerAllowedOnDecision()
             case .pickPhotos: pickerRequested = true
             }
         }
     }
 
-    /// 部分允许：登记系统已授权的照片（同 `pickedChosen` 的单张备份口径）。登记上才算做了决定：落盘、进照片页；
-    /// 一张都没登记上（授权集为空）→ 留在决定页。
-    private func registerAllowedOnDecision() async {
-        let n = await backend.engine.sendAllowedPhotos()
-        refresh()
-        guard phase == .decision else { return }
-        guard n > 0 else { AppLog.log("onboarding: partial access registered nothing, staying on decision"); return }
-        AppLog.log("onboarding: partial access registered \(n) allowed photos")
+    /// 部分允许：用户在系统选照片页已经做了选择——当场落盘、进照片页，不停在决定页等（停着按钮还能再点）；
+    /// 登记系统已授权的照片（同 `pickedChosen` 的单张备份口径）放到后台做。
+    private func registerAllowedOnDecision() {
         markDecided(via: "pick")
         phase = .main
+        Task {
+            let n = await backend.engine.sendAllowedPhotos()
+            AppLog.log("onboarding: partial access registered \(n) allowed photos")
+            refresh()
+        }
     }
 
     /// 决定页次入口「先挑几张试试」：直接系统选图（不要照片权限）。

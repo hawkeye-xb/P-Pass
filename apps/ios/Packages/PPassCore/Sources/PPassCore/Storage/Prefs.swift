@@ -7,6 +7,7 @@
 // | BackupSettings            | BackupSettings.kt           | backup-settings.json          | wifiOnly=true            |
 // | NotifyOnFailurePrefs      | NotifyOnFailurePrefs.kt     | notify_on_failure_prefs.json  | enabled=false（#1262）   |
 // | BackgroundBackupOfferPrefs | （#1263，与 Android 同名）    | background_backup_offer.json  | dismissed=false          |
+// | PendingFullPhotoAccessPrefs | （#1323，iOS 特有）          | pending_full_photo_access.json | pending=false           |
 // | OnboardedDesktopsStore    | OnboardedDesktopsStore.kt   | onboarded_desktops.json       | 空集（失败关闭：按新电脑走） |
 // | SentinelStore             | SentinelStore.kt            | sentinel.json                 | 全 0                     |
 // | BackupScopeStore          | BackupScopeStore.kt         | backup_scope[-<nodeId>].json  | nil（= 一张都不在范围内）  |
@@ -199,6 +200,34 @@ public final class BackgroundBackupOfferPrefs: @unchecked Sendable {
 
     /// 卡片显示：后台备份没开、用户也没关掉过卡片。
     public static func shows(autoBackup: Bool, dismissed: Bool) -> Bool { !autoBackup && !dismissed }
+}
+
+// MARK: - PendingFullPhotoAccessPrefs
+
+/// #1323（iOS 特有，Android 无对位）：部分照片权限下点了开自动备份、被带去系统设置改成「所有照片」，这一步还没接着走完。
+/// iOS 在系统设置里改照片权限会结束 App 进程，只放内存会丢，所以落盘；回到前台或冷启动读到就按真实权限接着走、随即清掉。
+/// 不是开关的存值，只记「还有一步没走完」。缺失 / 损坏 = 没有。
+public final class PendingFullPhotoAccessPrefs: @unchecked Sendable {
+    public static let fileName = "pending_full_photo_access.json"
+    private let url: URL
+    private let logger: CoreLogger
+
+    public init(directory: URL, logger: CoreLogger = NoopLogger()) {
+        url = directory.appendingPathComponent(Self.fileName)
+        self.logger = logger
+    }
+
+    private struct State: Codable { var pending: Bool }
+
+    public func pending() -> Bool {
+        JSONFile.lock.lock(); defer { JSONFile.lock.unlock() }
+        return JSONFile.readObject(url, logger: logger)?.bool("pending") ?? false
+    }
+
+    public func set(_ pending: Bool) throws {
+        JSONFile.lock.lock(); defer { JSONFile.lock.unlock() }
+        try JSONFile.write(State(pending: pending), url)
+    }
 }
 
 // MARK: - OnboardedDesktopsStore

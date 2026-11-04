@@ -62,6 +62,9 @@ final class SettingsFeedbackTests: XCTestCase {
         var cardDismissed = false
         func backgroundCardDismissed() -> Bool { cardDismissed }
         func dismissBackgroundCard() throws { calls.append("card-dismissed"); if failWrites { throw Boom() }; cardDismissed = true }
+        var pendingAccess = false
+        func pendingFullPhotoAccess() -> Bool { pendingAccess }
+        func setPendingFullPhotoAccess(_ pending: Bool) throws { if failWrites { throw Boom() }; pendingAccess = pending }
         var refresh: BackgroundRefreshAvailability = .available
         func backgroundRefresh() -> BackgroundRefreshAvailability { refresh }
     }
@@ -205,32 +208,24 @@ final class SettingsFeedbackTests: XCTestCase {
         }
     }
 
-    /// #1323 部分允许：iOS 权限框里系统已弹过选照片页，那次选择就是「系统选图」——直接登记已授权的照片（单张备份）、
-    /// 落盘 via=pick、进照片页；不再弹 App 的选图器（真机实测曾让用户选两遍）。授权集为空 → 留在决定页、不落盘。
-    /// 反证：部分允许改回 `pickerRequested = true`（旧行为），第一段 picker / phase / onboarded 断言红。
+    /// #1323 部分允许：iOS 权限框里系统已弹过选照片页，那次选择就是「系统选图」——当场落盘 via=pick、进照片页
+    /// （不停在决定页等登记，真机上停着按钮还能再点），已授权的照片在后台登记（单张备份）；不再弹 App 的选图器
+    /// （真机实测曾让用户选两遍）。授权集为空也往下走：用户已经做了选择。
+    /// 反证：部分允许改回 `pickerRequested = true`（旧行为），picker / phase / onboarded 断言红。
     func test_decision_partial_registers_system_selection_without_second_picker() async {
-        let (app, engine, media) = make()
-        media.granted = nil
-        media.answer = .partial
-        engine.allowedSent = 2
-        app.paired(firstTime: true, settingSaveFailed: false)
-        app.decisionChooseScope()
-        await settle()
-        XCTAssertFalse(app.pickerRequested, "不弹第二个选图器")
-        XCTAssertTrue(engine.calls.contains("sendAllowed"), "\(engine.calls)")
-        XCTAssertTrue(engine.calls.contains("onboarded"), "登记上了就是做了决定")
-        XCTAssertEqual(app.phase, .main)
-
-        let (empty, emptyEngine, emptyMedia) = make()
-        emptyMedia.granted = nil
-        emptyMedia.answer = .partial
-        emptyEngine.allowedSent = 0
-        empty.paired(firstTime: true, settingSaveFailed: false)
-        empty.decisionChooseScope()
-        await settle()
-        XCTAssertEqual(empty.phase, .decision, "一张没登记上：还没做决定")
-        XCTAssertFalse(empty.pickerRequested)
-        XCTAssertFalse(emptyEngine.calls.contains("onboarded"))
+        for allowed in [2, 0] {
+            let (app, engine, media) = make()
+            media.granted = nil
+            media.answer = .partial
+            engine.allowedSent = allowed
+            app.paired(firstTime: true, settingSaveFailed: false)
+            app.decisionChooseScope()
+            await settle()
+            XCTAssertFalse(app.pickerRequested, "不弹第二个选图器")
+            XCTAssertTrue(engine.calls.contains("sendAllowed"), "\(engine.calls)")
+            XCTAssertTrue(engine.calls.contains("onboarded"), "做了选择就落盘：\(allowed)")
+            XCTAssertEqual(app.phase, .main, "\(allowed)")
+        }
     }
 
     /// 决定页的范围出口：选范围页返回 → 回决定页（还没做决定）；再进、保存 → 落盘 via=scope、进照片页。
@@ -615,9 +610,10 @@ final class SettingsFeedbackTests: XCTestCase {
     }
 
     /// 部分照片权限下开自动备份（引导卡「开启」/ 设置开关）：iOS 不会再弹授权框，同一意图的做法是去系统设置改成「所有照片」；
-    /// 回到前台按真实权限现算——改成全部 → 规则开、进选范围页；仍是部分（含没改直接回来）→ 传一次允许的照片 + 瞬时提示、开关保持关。
-    /// 不预写开关。反证：去掉 `setAutoRule` 里「已是部分 → 去设置」那段，第一段 settings / requested 断言红；
-    /// 去掉 `sceneBecameActive` 里的 `resumeAutoRuleAfterSettings()`，回来后两段红。
+    /// 回来按真实权限现算——改成全部 → 规则开、进选范围页（同 Android 授权成功）；仍是部分（含没改直接回来）→ 传一次允许的照片
+    /// + 瞬时提示、开关保持关。iOS 改照片权限会结束进程，所以「还没走完」的记号落盘，冷启动也接着走。不预写开关。
+    /// 反证：去掉「已是部分 → 去设置」那段，settings / requested 断言红；去掉 `sceneBecameActive` 里的接续，回前台两段红；
+    /// 去掉 init 里的接续，冷启动那段红。
     func test_partial_access_enable_goes_to_settings_and_resumes_by_real_access() async {
         for (back, ruleOn) in [(MediaAccess.full, true), (.partial, false)] {
             let (app, engine, media) = make()
@@ -633,11 +629,13 @@ final class SettingsFeedbackTests: XCTestCase {
             XCTAssertEqual(opened, 1, "去系统设置")
             XCTAssertEqual(media.requested, 0, "iOS 不会再弹授权框，不去申请")
             XCTAssertFalse(app.autoRule, "不预写开关")
+            XCTAssertTrue(engine.pendingAccess, "记号落盘")
             XCTAssertTrue(engine.calls.isEmpty, "去设置之前什么都不做：\(engine.calls)")
 
             media.granted = back
             app.sceneBecameActive()
             await settle()
+            XCTAssertFalse(engine.pendingAccess, "接过就清")
             XCTAssertEqual(app.autoRule, ruleOn, "\(back)")
             if back == .full {
                 XCTAssertTrue(app.wantsScopeEditor, "改成全部 → 进选范围页")
@@ -646,12 +644,26 @@ final class SettingsFeedbackTests: XCTestCase {
                 XCTAssertTrue(engine.calls.contains("sendAllowed"), "仍是部分 → 传一次允许的照片")
                 XCTAssertNotNil(app.toast, "当前页瞬时提示")
             }
-            // 只接一次：再回前台不重复执行
             engine.calls.removeAll()
             app.sceneBecameActive()
             await settle()
-            XCTAssertFalse(engine.calls.contains("sendAllowed"), "\(back)")
+            XCTAssertFalse(engine.calls.contains("sendAllowed"), "只接一次：\(back)")
         }
+    }
+
+    /// iOS 改照片权限后结束了进程：带着记号冷启动（新的 AppModel）→ 按真实权限接着走，改成全部就进选范围页。
+    /// 反证：去掉 init 里的 `resumeAutoRuleAfterSettings()`，本条红。
+    func test_pending_full_access_resumes_on_cold_start() async {
+        let (_, engine, media) = make()
+        try? engine.setAutoRule(false)
+        engine.pendingAccess = true
+        media.granted = .full
+        let fake = FakeBackend.make(.normal)
+        let cold = AppModel(backend: Backend(isDemo: true, timeline: fake.timeline, live: fake.live, media: media, pairing: fake.pairing, engine: engine))
+        await settle()
+        XCTAssertFalse(engine.pendingAccess)
+        XCTAssertTrue(cold.autoRule)
+        XCTAssertTrue(cold.wantsScopeEditor)
     }
 
     /// 还没问过照片权限时开自动备份：系统会弹框（同 Android），选「部分」→ 传一次允许的照片 + 瞬时提示，不去设置。

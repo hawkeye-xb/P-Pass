@@ -318,4 +318,16 @@ final class PrefsTests: XCTestCase {
         tmp.write(BackupScopeStore.fileName(nodeId: "mac"), "{")
         XCTAssertNil(try BackupScopeStore(directory: tmp.url, daemonNodeId: "mac").selectedBucketIds())
     }
+
+    /// #1323：「去系统设置改照片权限、还没接着走完」的记号——缺失 / 损坏 = 没有；写了重启还在（iOS 改权限会结束进程），清了就没了。
+    func testPendingFullPhotoAccessSurvivesRestartAndCorruptMeansNone() throws {
+        let tmp = TempDir()
+        XCTAssertFalse(PendingFullPhotoAccessPrefs(directory: tmp.url).pending())
+        try PendingFullPhotoAccessPrefs(directory: tmp.url).set(true)
+        XCTAssertTrue(PendingFullPhotoAccessPrefs(directory: tmp.url).pending(), "新实例（= 冷启动）读得到")
+        try PendingFullPhotoAccessPrefs(directory: tmp.url).set(false)
+        XCTAssertFalse(PendingFullPhotoAccessPrefs(directory: tmp.url).pending())
+        tmp.write(PendingFullPhotoAccessPrefs.fileName, "{")
+        XCTAssertFalse(PendingFullPhotoAccessPrefs(directory: tmp.url).pending())
+    }
 }

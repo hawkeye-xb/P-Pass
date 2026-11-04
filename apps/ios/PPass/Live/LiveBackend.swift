@@ -27,6 +27,7 @@ final class LiveBackend: @unchecked Sendable {
     let autoPrefs: AutoBackupPrefs
     let notifyPrefs: NotifyOnFailurePrefs
     let cardPrefs: BackgroundBackupOfferPrefs
+    let pendingAccessPrefs: PendingFullPhotoAccessPrefs
     let noticeStore: DefinitiveNoticeStore
     /// #1272 挑几张传：手选队列（进程内）+ 批次汇总（落盘）。
     let picked: PickedQueue
@@ -106,6 +107,7 @@ final class LiveBackend: @unchecked Sendable {
         autoPrefs = AutoBackupPrefs(directory: dir, logger: logger)
         notifyPrefs = NotifyOnFailurePrefs(directory: dir, logger: logger)
         cardPrefs = BackgroundBackupOfferPrefs(directory: dir, logger: logger)
+        pendingAccessPrefs = PendingFullPhotoAccessPrefs(directory: dir, logger: logger)
         noticeStore = DefinitiveNoticeStore(directory: dir, logger: logger)
         picked = PickedQueue(directory: dir, logger: logger)
         autoRule = AutoBackupRulePrefs(directory: dir, logger: logger)
@@ -512,6 +514,8 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
 
     func autoBackup() -> Bool { backend.autoPrefs.enabled() }
     func backgroundCardDismissed() -> Bool { backend.cardPrefs.dismissed() }
+    func pendingFullPhotoAccess() -> Bool { backend.pendingAccessPrefs.pending() }
+    func setPendingFullPhotoAccess(_ pending: Bool) throws { try backend.pendingAccessPrefs.set(pending) }
     func dismissBackgroundCard() throws {
         do { try backend.cardPrefs.dismiss(); backend.logger.log("background-card: dismissed") } catch {
             backend.logger.log("background-card: write failed: \(error)")

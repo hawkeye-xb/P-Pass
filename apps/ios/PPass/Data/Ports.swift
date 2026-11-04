@@ -250,6 +250,9 @@ protocol BackupEngine: AnyObject {
     /// 首页「开启后台备份」引导卡被用户关掉过（#1263）。
     func backgroundCardDismissed() -> Bool
     func dismissBackgroundCard() throws
+    /// #1323：部分照片权限下开自动备份、被带去系统设置改权限，还没接着走完（落盘：iOS 改权限会结束进程）。
+    func pendingFullPhotoAccess() -> Bool
+    func setPendingFullPhotoAccess(_ pending: Bool) throws
     /// 系统「后台 App 刷新」的当前状态（设置页的后台告示据此判定）。
     func backgroundRefresh() -> BackgroundRefreshAvailability
 }

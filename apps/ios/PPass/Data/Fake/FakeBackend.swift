@@ -165,6 +165,9 @@ final class FakeEngine: BackupEngine {
     private var cardDismissed = false
     func backgroundCardDismissed() -> Bool { cardDismissed }
     func dismissBackgroundCard() throws { cardDismissed = true; listeners.forEach { $0() } }
+    private var pendingAccess = false
+    func pendingFullPhotoAccess() -> Bool { pendingAccess }
+    func setPendingFullPhotoAccess(_ pending: Bool) throws { pendingAccess = pending }
     private var wifi = true
     func wifiOnly() -> Bool { wifi }
     func setWifiOnly(_ on: Bool) throws { wifi = on; listeners.forEach { $0() } }
