@@ -7,7 +7,7 @@
 "bucket_no_access_action" = "去设置";
 
 /* 失败通知（#981）：iOS 点通知只打开 App、不会直达系统设置，指路写 iOS 设置项名字；电池优化在 iOS 上不存在，对位的是「后台 App 刷新」。 */
-"notif_media_partial_body" = "照片权限已改为部分照片，自动备份暂时无法继续。在「设置 › P-Pass › 照片」可改回「完整访问」。";
+"notif_media_partial_body" = "照片权限已改为部分照片，自动备份暂时无法继续。在「设置 › 隐私与安全性 › 照片 › P-Pass」可改回「完全访问」。";
 "notif_media_none_body" = "照片权限已关闭，自动备份已停止。在「设置 › P-Pass › 照片」允许访问。";
 "notif_background_refresh_off_title" = "「后台 App 刷新」已关闭";
 "notif_background_refresh_off_body" = "现在只有打开 P-Pass 时才会备份。可在「设置 › 通用 › 后台 App 刷新」重新打开。";

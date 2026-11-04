@@ -2,7 +2,7 @@
    overrides the same key in Localizable.strings (generated from Android strings.xml). */
 
 /* Failure notifications (#981): tapping a notification on iOS only opens the app (no deep link into system settings), so point at the iOS setting by name; battery optimization doesn't exist on iOS — the counterpart is Background App Refresh. */
-"notif_media_partial_body" = "Photo access is now limited, so auto backup can't continue. You can allow all photos in Settings › P-Pass › Photos.";
+"notif_media_partial_body" = "Photo access is now limited, so auto backup can't continue. You can change it back to “Full Access” in Settings › Privacy & Security › Photos › P-Pass.";
 "notif_media_none_body" = "Photo access is off, so auto backup has stopped. You can allow access in Settings › P-Pass › Photos.";
 "notif_background_refresh_off_title" = "Background App Refresh is off";
 "notif_background_refresh_off_body" = "Backup now runs only while P-Pass is open. You can turn it back on in Settings › General › Background App Refresh.";
