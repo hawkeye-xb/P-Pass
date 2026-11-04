@@ -1,15 +1,16 @@
 /* 由 tools/ios/gen-strings.py 从 apps/android/app/src/main/res/values-zh/strings.xml 生成——不要手改。 */
-"welcome_headline" = "手机照片自动备份到家里的电脑";
-"welcome_sub" = "无需注册账号，照片不存到云端。";
-"welcome_scan" = "扫码连接家里的电脑";
-"welcome_step1" = "1 · 在家里的电脑上安装并打开 P-Pass";
-"welcome_step2" = "2 · 扫码或输入配对码，连接家里的电脑";
+"welcome_headline" = "手机照片自动备份到电脑";
+"welcome_sub" = "不经过云端，不用注册账号。";
+"welcome_scan" = "扫码连接电脑";
+"welcome_step1" = "1 · 在电脑上安装并打开 P-Pass";
+"welcome_step2" = "2 · 扫码或输入配对码，连接电脑";
 "welcome_step3" = "3 · 选择要备份的相册";
 "scan_header_title" = "扫码连接";
 "scan_hint" = "对准电脑屏幕上的\n配对二维码";
-"scan_manual_link" = "无法扫码？手动输入配对码";
+"scan_manual_link" = "无法扫码？手动配对";
 "decision_connected" = "已连上 %1$@";
 "decision_title" = "选择要自动备份的照片";
+"decision_destination" = "选好范围后，照片会自动传到 %1$@。";
 "decision_choose_scope" = "选择备份范围";
 "decision_choose_scope_note" = "需要允许访问全部照片";
 "decision_pick_photos" = "先挑几张试试";
@@ -44,7 +45,7 @@
 "state_waiting_desktop_internal" = "电脑上的 P-Pass 出错了";
 "scan_again" = "重新扫码";
 "not_a_code" = "不是 P-Pass 配对码";
-"storage_device_default" = "家里的电脑";
+"storage_device_default" = "电脑";
 "attribution_mine" = "来自你的手机 · %1$@";
 "attribution_family" = "来自家人的手机 · %1$@";
 "state_sending" = "正在备份 %1$ld/%2$ld";

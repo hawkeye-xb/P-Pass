@@ -1,15 +1,16 @@
 /* 由 tools/ios/gen-strings.py 从 apps/android/app/src/main/res/values/strings.xml 生成——不要手改。 */
-"welcome_headline" = "Phone photos back up automatically to your home computer";
-"welcome_sub" = "No account needed. Photos aren't stored in any cloud.";
-"welcome_scan" = "Scan to connect to your home computer";
-"welcome_step1" = "1 · Install and open P-Pass on your home computer";
-"welcome_step2" = "2 · Scan the QR code or enter the pairing code to connect to your home computer";
+"welcome_headline" = "Phone photos back up automatically to a computer";
+"welcome_sub" = "Nothing goes through the cloud. No account needed.";
+"welcome_scan" = "Scan to connect to a computer";
+"welcome_step1" = "1 · Install and open P-Pass on the computer";
+"welcome_step2" = "2 · Scan the QR code or enter the pairing code to connect to the computer";
 "welcome_step3" = "3 · Choose the albums to back up";
 "scan_header_title" = "Scan to connect";
 "scan_hint" = "Point at the pairing QR code\non your computer's screen";
-"scan_manual_link" = "Can't scan? Enter the pairing code instead";
+"scan_manual_link" = "Can't scan? Pair manually";
 "decision_connected" = "Connected to %1$@";
 "decision_title" = "Choose the photos to back up automatically";
+"decision_destination" = "Once you choose what to back up, photos are sent to %1$@ automatically.";
 "decision_choose_scope" = "Choose what to back up";
 "decision_choose_scope_note" = "Requires access to all photos";
 "decision_pick_photos" = "Pick a few to try first";
@@ -44,7 +45,7 @@
 "state_waiting_desktop_internal" = "P-Pass on the computer ran into an error";
 "scan_again" = "Scan again";
 "not_a_code" = "Not a P-Pass pairing code";
-"storage_device_default" = "Home computer";
+"storage_device_default" = "Computer";
 "attribution_mine" = "From your phone · %1$@";
 "attribution_family" = "From a family member's phone · %1$@";
 "state_sending" = "Backing up %1$ld/%2$ld";

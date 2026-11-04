@@ -2,8 +2,8 @@
    overrides the same key in Localizable.strings (generated from Android strings.xml). */
 
 /* Failure notifications (#981): tapping a notification on iOS only opens the app (no deep link into system settings), so point at the iOS setting by name; battery optimization doesn't exist on iOS — the counterpart is Background App Refresh. */
-"notif_media_partial_body" = "Photo access is now limited, so auto backup can't continue. You can change it back to “Full Access” in Settings › Privacy & Security › Photos › P-Pass.";
-"notif_media_none_body" = "Photo access is off, so auto backup has stopped. You can change it to “Full Access” in Settings › Privacy & Security › Photos › P-Pass.";
+"notif_media_partial_body" = "Photo access is now limited, so auto backup can't continue. You can change it to “Full Access” anytime in Settings › Privacy & Security › Photos › P-Pass.";
+"notif_media_none_body" = "Photo access is off, so auto backup has stopped. You can change it to “Full Access” anytime in Settings › Privacy & Security › Photos › P-Pass.";
 "notif_background_refresh_off_title" = "Background App Refresh is off";
 "notif_background_refresh_off_body" = "Backup now runs only while P-Pass is open. You can turn it back on in Settings › General › Background App Refresh.";
 "notif_background_refresh_restricted_body" = "This iPhone restricts Background App Refresh for P-Pass (possibly Screen Time or device management). Backup now runs only while P-Pass is open.";
@@ -80,4 +80,4 @@
 
 /* #1323（iOS 独有）：部分照片权限之后怎么改成全部。iOS 不会再弹授权框，只能在系统设置里改；Android 由系统权限框自己说明。
    路径按苹果官方「隐私与安全性 › 照片」（iOS 14 至今都在，不受 iOS 18 把 App 设置挪到「App」分组影响），选项名 iOS 18 起为「完全访问」。 */
-"photo_access_change_later_hint" = "You can change it to “Full Access” later in Settings › Privacy & Security › Photos › P-Pass.";
+"photo_access_change_later_hint" = "You can change it to “Full Access” anytime in Settings › Privacy & Security › Photos › P-Pass.";

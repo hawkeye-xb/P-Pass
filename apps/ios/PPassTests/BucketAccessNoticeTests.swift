@@ -26,7 +26,7 @@ final class BucketAccessNoticeTests: XCTestCase {
                 "bucket_no_access_title": "No photo access",
                 "bucket_no_access_body": "P-Pass can't read photos on this phone, so it can't back them up.",
                 "bucket_no_access_action": "Open Settings",
-                "welcome_scan": "Scan to connect to your home computer",
+                "welcome_scan": "Scan to connect to a computer",
             ],
             "zh-Hans": [
                 "bucket_no_access_title": "无照片访问权限",

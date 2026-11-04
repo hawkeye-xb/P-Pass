@@ -2,21 +2,22 @@
 <resources>
 
     <!-- Welcome -->
-    <string name="welcome_headline">Phone photos back up automatically to your home computer</string>
-    <string name="welcome_sub">No account needed. Photos aren\'t stored in any cloud.</string>
-    <string name="welcome_scan">Scan to connect to your home computer</string>
+    <string name="welcome_headline">Phone photos back up automatically to a computer</string>
+    <string name="welcome_sub">Nothing goes through the cloud. No account needed.</string>
+    <string name="welcome_scan">Scan to connect to a computer</string>
     <!-- T-080 layout v1: welcome three steps -->
-    <string name="welcome_step1">1 · Install and open P-Pass on your home computer</string>
-    <string name="welcome_step2">2 · Scan the QR code or enter the pairing code to connect to your home computer</string>
+    <string name="welcome_step1">1 · Install and open P-Pass on the computer</string>
+    <string name="welcome_step2">2 · Scan the QR code or enter the pairing code to connect to the computer</string>
     <string name="welcome_step3">3 · Choose the albums to back up</string>
 
     <!-- Scan (M2/M3, full-page-states doc) -->
     <string name="scan_header_title">Scan to connect</string>
     <string name="scan_hint">Point at the pairing QR code\non your computer\'s screen</string>
-    <string name="scan_manual_link">Can\'t scan? Enter the pairing code instead</string>
+    <string name="scan_manual_link">Can\'t scan? Pair manually</string>
     <!-- #1321 决定页：配对后、进照片页之前必须做一次「备份哪些照片」的决定。 -->
     <string name="decision_connected">Connected to %1$s</string>
     <string name="decision_title">Choose the photos to back up automatically</string>
+    <string name="decision_destination">Once you choose what to back up, photos are sent to %1$s automatically.</string>
     <string name="decision_choose_scope">Choose what to back up</string>
     <string name="decision_choose_scope_note">Requires access to all photos</string>
     <string name="decision_pick_photos">Pick a few to try first</string>
@@ -57,7 +58,7 @@
     <string name="state_waiting_desktop_internal">P-Pass on the computer ran into an error</string>
     <string name="scan_again">Scan again</string>
     <string name="not_a_code">Not a P-Pass pairing code</string>
-    <string name="storage_device_default">Home computer</string>
+    <string name="storage_device_default">Computer</string>
     <!-- Full-image viewer attribution line (grid stays unlabeled; only
          the full view shows this). src_device is not yet on the wire
          (SYNC-05), so non-own photos say "family" rather than a name. -->

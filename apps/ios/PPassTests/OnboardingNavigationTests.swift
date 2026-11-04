@@ -120,10 +120,28 @@ final class OnboardingNavigationTests: XCTestCase {
             XCTAssertTrue(strings.contains("\"photo_access_change_later_hint\""), lang)
         }
         let zh = try String(contentsOf: root.appendingPathComponent("PPass/Resources/zh-Hans.lproj/IOS.strings"), encoding: .utf8)
-        // 全 App 同一件事只有一种说法：决定页 / 引导卡 / 两条失败通知都是同一条路径与选项名。
+        // 全 App 同一件事只有一种说法：决定页 / 引导卡 / 两条失败通知的指路是同一句话（产品负责人 11-04 定「可随时在…」）。
+        XCTAssertEqual(L.s("photo_access_change_later_hint"), "可随时在「设置 › 隐私与安全性 › 照片 › P-Pass」改为「完全访问」。")
         for key in ["photo_access_change_later_hint", "notif_media_partial_body", "notif_media_none_body"] {
             let line = zh.components(separatedBy: "\n").first { $0.hasPrefix("\"\(key)\"") } ?? ""
-            XCTAssertTrue(line.contains("「设置 › 隐私与安全性 › 照片 › P-Pass」") && line.contains("「完全访问」"), key)
+            XCTAssertTrue(line.hasSuffix("可随时在「设置 › 隐私与安全性 › 照片 › P-Pass」改为「完全访问」。\";"), key)
         }
+        for lang in ["zh-Hans", "en"] {
+            let path = try XCTUnwrap(Bundle.main.path(forResource: lang, ofType: "lproj"))
+            let bundle = try XCTUnwrap(Bundle(path: path))
+            let hint = bundle.localizedString(forKey: "photo_access_change_later_hint", value: nil, table: "IOS")
+            for key in ["notif_media_partial_body", "notif_media_none_body"] {
+                XCTAssertTrue(bundle.localizedString(forKey: key, value: nil, table: "IOS").hasSuffix(hint), "\(lang) \(key)")
+            }
+        }
+    }
+
+    /// 决定页标题下一行说明照片传到哪台电脑（对位 Android decision_destination）；没有电脑名时退回默认叫法。
+    func testDecisionPageSaysWherePhotosGo() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let decision = try String(contentsOf: root.appendingPathComponent("PPass/Home/DecisionScreen.swift"), encoding: .utf8)
+        XCTAssertTrue(decision.contains("L.f(\"decision_destination\", computerName)"))
+        XCTAssertTrue(decision.contains("return L.s(\"storage_device_default\")"))
+        XCTAssertNotEqual(L.s("decision_destination"), "decision_destination")
     }
 }
