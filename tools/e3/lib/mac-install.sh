@@ -246,7 +246,6 @@ mac_build_dev() {
   (
     set -e
     cd "$REPO_ROOT"
-    export CARGO_INCREMENTAL=0
     PPF_BUILD_VERSION="$version" "$REPO_ROOT/tools/heavy-lock" cargo build -p daemon
     PPF_DAEMON_PROVISIONPROFILE="$profile" tools/daemon-helper-macos.sh dev \
       "${CARGO_TARGET_DIR:-target}/debug/daemon" "$out/ppf-daemon.app"

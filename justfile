@@ -14,6 +14,12 @@
 # 只影响 Windows：其余平台仍用 just 默认的 `sh -cu`。
 set windows-shell := ["bash", "-cu"]
 
+# #1375 共享编译缓存：主副本与所有卡目录共用一份 CARGO_TARGET_DIR / Xcode DerivedData。
+# 变量在主副本旁边的 .env.ppass-dev（just start 自动建，just 从当前目录往上找到它）；
+# 没有这个文件（CI、新机器）时什么都不设，行为不变。环境里已设的变量优先。见 tools/e3/lib/dev-cache.sh。
+set dotenv-filename := ".env.ppass-dev"
+set dotenv-load
+
 default:
   @just --list
 
@@ -371,8 +377,8 @@ verify-m1:
 verify *args:
     tools/e3/verify {{args}}
 
-# 研发本地看改动：编开发版签名包、取设备锁后覆盖装到测试设备（目前 mac）。装回：just restore。见 docs/runbook/e3.md。
-#   just dev mac
+# 研发本地看改动：增量编译 → 取设备锁（手机被占就拒绝）→ 覆盖安装（不卸载）→ 打开。见 docs/runbook/e3.md。
+#   just dev android [页面] [--fresh]   just dev ios [页面] [--fresh]   just dev mac（装回：just restore）
 dev *args:
     tools/e3/dev {{args}}
 

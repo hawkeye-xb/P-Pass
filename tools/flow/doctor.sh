@@ -162,6 +162,26 @@ else
   fi
 fi
 
+# ── 6b. 共享编译缓存（#1375；只报不判）────────────────────────────────
+CACHE_LIB="$(dirname "$0")/../e3/lib/dev-cache.sh"
+if [ -f "$CACHE_LIB" ]; then
+  # shellcheck source=../e3/lib/dev-cache.sh
+  . "$CACHE_LIB"
+  cache_env="$(dev_cache_env_file "$MAIN_ROOT" 2>/dev/null)"
+  if [ -n "$cache_env" ] && [ -f "$cache_env" ]; then
+    ok "编译缓存：共享（$(dev_cache_value CARGO_TARGET_DIR "$MAIN_ROOT")，配置 ${cache_env}）"
+    if [ -n "${CARGO_TARGET_DIR:-}" ] && [ "$CARGO_TARGET_DIR" != "$(dev_cache_value CARGO_TARGET_DIR "$MAIN_ROOT")" ]; then
+      warn "编译缓存：当前环境的 CARGO_TARGET_DIR=${CARGO_TARGET_DIR} 与共享配置不同，以环境为准"
+    fi
+  else
+    warn "编译缓存：还没有共享配置，每个卡目录各编一份（just start 会自动建；或跑 tools/e3/dev cache）"
+  fi
+  old_targets="$(find "$(dirname "$MAIN_ROOT")/$(basename "$MAIN_ROOT")-wt" -mindepth 2 -maxdepth 2 -name target -type d 2>/dev/null | wc -l | tr -d ' ')"
+  if [ "${old_targets:-0}" -gt 0 ]; then
+    warn "编译缓存：${old_targets} 个卡目录里还留着各自的 target/（共享缓存之前编的）；清理前 lsof +D 核实没人在用"
+  fi
+fi
+
 # ── 7. 私仓（只报模式，不算失败）─────────────────────────────────────
 PRIVATE_DIR="$(dirname "$MAIN_ROOT")/private"
 if [ -d "$PRIVATE_DIR" ]; then

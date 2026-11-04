@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# 设备锁：tools/e3/lock <设备> <命令…>
-# 同一台设备（mac / android / win / ios）同一时间只许一个会话装包、点界面。拿不到锁就排队等，
-# 不报错；排队时打印一行谁在用。用 /usr/bin/lockf（内核文件锁，进程退出即释放，不会留死锁）。
+# 设备锁：tools/e3/lock [--no-wait] <设备> <命令…>
+# 同一台设备（mac / android / win / ios）同一时间只许一个会话装包、点界面。默认拿不到锁就排队等，
+# 不报错；排队时打印一行谁在用。--no-wait（just dev 用）：被占就打印谁在用并退出 75，不排队。
+# 用 /usr/bin/lockf（内核文件锁，进程退出即释放，不会留死锁）。
 set -euo pipefail
-dev="${1:?用法: tools/e3/lock <设备> <命令…>}"
+wait=1
+if [ "${1:-}" = --no-wait ]; then wait=0; shift; fi
+dev="${1:?用法: tools/e3/lock [--no-wait] <设备> <命令…>}"
 shift
-[ "$#" -gt 0 ] || { echo "用法: tools/e3/lock <设备> <命令…>" >&2; exit 2; }
+[ "$#" -gt 0 ] || { echo "用法: tools/e3/lock [--no-wait] <设备> <命令…>" >&2; exit 2; }
 case "$dev" in mac | android | win | ios) ;; *) echo "未知设备：${dev}（mac/android/win/ios）" >&2; exit 2 ;; esac
 dir="${E3_STATE:-$HOME/.cache/ppass-e3}"
 mkdir -p "$dir"
@@ -13,8 +16,15 @@ lk="$dir/lock-$dev"
 var="E3_LOCKED_$(echo "$dev" | tr a-z A-Z)"
 # 已在锁里（runner 嵌套调用）：直接跑
 if [ "${!var:-}" = 1 ]; then exec "$@"; fi
+timeout=()
 if ! /usr/bin/lockf -t 0 "$lk" true 2>/dev/null; then
-  echo "设备 $dev 正被占用（$(cat "$lk.who" 2>/dev/null || echo 未知)），排队等待……" >&2
+  who="$(cat "$lk.who" 2>/dev/null || echo 未知)"
+  if [ "$wait" = 0 ]; then
+    echo "✗ 设备 $dev 正被别的会话占用（${who}），不装。等它用完再跑，或先问占用的会话。" >&2
+    exit 75
+  fi
+  echo "设备 $dev 正被占用（${who}），排队等待……" >&2
 fi
+[ "$wait" = 0 ] && timeout=(-t 0)
 export "$var=1"
-exec /usr/bin/lockf -k "$lk" /bin/bash -c 'echo "pid $PPID $(date +%T) $PWD" >"$0.who"; exec "$@"' "$lk" "$@"
+exec /usr/bin/lockf -k ${timeout[@]+"${timeout[@]}"} "$lk" /bin/bash -c 'echo "pid $PPID $(date +%T) $PWD" >"$0.who"; exec "$@"' "$lk" "$@"
