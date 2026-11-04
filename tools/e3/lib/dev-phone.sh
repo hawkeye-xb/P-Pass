@@ -23,7 +23,8 @@ dev_android_pick() {
   esac
 }
 
-dev_android_apk() { echo "$REPO_ROOT/apps/android/app/build/outputs/apk/debug/app-debug.apk"; }
+# debug 包名由 build.gradle.kts 改成 P-Pass_<版本>_android-debug.apk：取目录里最新的那个（与 tools/e3/verify 同口径）
+dev_android_apk() { ls -t "$REPO_ROOT"/apps/android/app/build/outputs/apk/debug/*.apk 2>/dev/null | head -1; }
 
 # 增量编 debug 包：gradle 整个跑在重编译锁里（libtransport.so 由 gradle 任务编进本目录的 build/，不会被别的目录覆盖）。
 dev_android_build() {

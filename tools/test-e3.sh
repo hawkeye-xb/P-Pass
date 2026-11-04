@@ -206,4 +206,19 @@ if command -v just >/dev/null 2>&1; then
   ) || bad "共享编译缓存配置"
 fi
 
+# #1375 just dev android：debug 包被 build.gradle.kts 改了名（P-Pass_<版本>_android-debug.apk），按目录取最新的
+(
+  d="$(mktemp -d)" || exit 1
+  trap 'rm -rf "$d"' EXIT
+  REPO_ROOT="$d"
+  # shellcheck source=e3/lib/dev-phone.sh
+  source "$E3/lib/dev-phone.sh"
+  out="$d/apps/android/app/build/outputs/apk/debug"
+  mkdir -p "$out"
+  [ -z "$(dev_android_apk)" ] || { echo "没有包时却返回了路径"; exit 1; }
+  touch -t 202601010000 "$out/P-Pass_0.10.1_android-debug.apk"
+  touch "$out/P-Pass_0.10.2_android-debug.apk"
+  [ "$(dev_android_apk)" = "$out/P-Pass_0.10.2_android-debug.apk" ] || { echo "没取到最新的改名包：$(dev_android_apk)"; exit 1; }
+) || bad "just dev android 找改名后的 debug 包"
+
 [ "$fails" -eq 0 ] && echo "ok: tools/e3 自测通过" || { echo "$fails 项失败"; exit 1; }

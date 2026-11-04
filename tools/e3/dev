@@ -52,8 +52,15 @@ case "$dev" in
       E3_ANDROID_SERIAL="$serial" DEV_T0="$t0" exec "$E3_ROOT/lock" --no-wait android "$0" "${args[@]}"
     fi
     t0="${DEV_T0:-$t0}"
+    # 手机直接插在本机上（本机默认 adb 端口看得到它）就用本机连接，不走 e3.env 里给异地手机配的隧道
+    if [ "$(ANDROID_ADB_SERVER_PORT=5037 T 20 adb -s "$serial" get-state 2>/dev/null)" = device ]; then
+      export E3_ADB_PORT=5037
+      unset E3_ADB_TUNNEL_HOST
+    fi
     E3_ANDROID_SERIAL="$serial" adb_init
-    dev_android_install "$(dev_android_apk)" "$fresh" "$page" ||
+    apk="$(dev_android_apk)"
+    [ -n "$apk" ] || die "找不到编出来的 debug 包（apps/android/app/build/outputs/apk/debug/*.apk）"
+    dev_android_install "$apk" "$fresh" "$page" ||
       die "安装或启动失败（装着签名不同的包时要 --fresh，会清数据）"
     done_line "安卓 $serial"
     ;;
