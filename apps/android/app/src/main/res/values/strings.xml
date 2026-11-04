@@ -276,7 +276,6 @@
     <string name="pick_photos_label">Pick photos to send</string>
     <string name="picked_progress">Sending %1$d/%2$d</string>
     <string name="picked_result_delivered">Delivered %1$d</string>
-    <string name="picked_result_with_existing">Delivered %1$d, of which %2$d were already on your computer</string>
     <string name="picked_result_failed">%1$d couldn\'t be sent. Please pick them again.</string>
     <string name="auto_backup_rule_label">Auto backup</string>
     <string name="auto_backup_off_hero">Auto backup is off. You can also pick a few photos to send for now.</string>
@@ -293,6 +292,7 @@
     <string name="photos_scope_empty_since">Auto backup is on. Photos taken from %1$s onward will go to %2$s.</string>
     <string name="photos_scope_empty_all">Auto backup is on. Photos in the chosen albums will go to %1$s.</string>
     <string name="auto_backup_blocked_hero">Auto backup has stopped</string>
+    <string name="auto_backup_blocked_action">Open settings</string>
     <string name="auto_backup_rule_partial_hint">Access is limited to some photos.</string>
     <string name="auto_backup_rule_none_hint">No access to photos.</string>
     <string name="auto_backup_from_today_empty">Photos you take today will be sent to your computer automatically. Go take one.</string>

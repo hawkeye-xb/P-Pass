@@ -271,7 +271,6 @@
     <string name="pick_photos_label">挑几张传</string>
     <string name="picked_progress">正在传 %1$d/%2$d</string>
     <string name="picked_result_delivered">送达 %1$d 张</string>
-    <string name="picked_result_with_existing">送达 %1$d 张，其中 %2$d 张电脑上已有</string>
     <string name="picked_result_failed">有 %1$d 张没传成，请重新挑选。</string>
     <string name="auto_backup_rule_label">自动备份</string>
     <string name="auto_backup_off_hero">还没开自动备份。也可以先挑几张传。</string>
@@ -288,6 +287,7 @@
     <string name="photos_scope_empty_since">自动备份已开启，%1$s以后拍的照片会传到 %2$s。</string>
     <string name="photos_scope_empty_all">自动备份已开启，所选相册里的照片会传到 %1$s。</string>
     <string name="auto_backup_blocked_hero">自动备份已停止</string>
+    <string name="auto_backup_blocked_action">去设置</string>
     <string name="auto_backup_rule_partial_hint">只允许访问部分照片。</string>
     <string name="auto_backup_rule_none_hint">没有照片访问权限。</string>
     <string name="auto_backup_from_today_empty">今天新拍的照片会自动传到电脑。去拍一张试试。</string>

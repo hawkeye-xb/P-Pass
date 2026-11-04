@@ -39,6 +39,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -616,7 +617,10 @@ fun PPassApp() {
                     }
 
                     daysUnreachable = computeDaysUnreachable()
+                    val accessBefore = mediaAccess
                     mediaAccess = mediaAccess(context)
+                    // #1353：从系统设置改完权限回来，按真实权限现算；变了就记一行（回来读到 FULL = 状态卡消失、自动备份恢复）。
+                    if (mediaAccess != accessBefore) PLog.i("PPassFlow", "photo access on resume: $accessBefore -> $mediaAccess")
                     mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
                     resumeCount++
                     heartbeat.start()
@@ -706,12 +710,10 @@ fun PPassApp() {
     val rulePrefs = remember { com.hawkeyexb.ppass.backup.autoBackupRulePrefs(context) }
     var ruleOn by remember { mutableStateOf(runCatching { rulePrefs.enabled() }.getOrDefault(false)) }
     var pendingRulePairing by remember { mutableStateOf<Pairing?>(null) }
-    val rulePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ ->
-        val pairing = pendingRulePairing
-        pendingRulePairing = null
-        mediaAccess = mediaAccess(context)
-        mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
-        when (mediaAccess) {
+    // 开自动备份时拿到的照片权限档 → 结果：全部 → 开、进选范围页；部分 → 开关不开，把允许的照片按手选链路传一次
+    // （不弹提示：弹出时照片还没传，进度看设置页）；拒绝 → 开关不开、开关下方一行小字。
+    val applyRuleAccess: (Pairing?, MediaAccess) -> Unit = { pairing, access ->
+        when (access) {
             MediaAccess.FULL -> if (pairing != null) {
                 rulePrefs.set(true)
                 ruleOn = true
@@ -722,28 +724,49 @@ fun PPassApp() {
                 ruleHintRes = null
                 scope.launch(Dispatchers.IO) {
                     val n = com.hawkeyexb.ppass.backup.picked.PickedUploads.enqueueAllowedImages(context)
+                    PLog.i("PPassFlow", "auto-rule: partial photo access, sent allowed photos n=$n, rule stays off")
                     if (n > 0) {
                         com.hawkeyexb.ppass.backup.flow.requestFlowWake(context, com.hawkeyexb.ppass.backup.flow.TriggerReason.PICKED_ADDED)
-                        snackbarHostState.showSnackbar(context.getString(R.string.auto_backup_rule_limited_sent, n))
                     }
                 }
             }
             else -> ruleHintRes = R.string.auto_backup_rule_denied_hint
         }
     }
+    // #1353：部分权限下开自动备份、系统已不再弹框（拒过两次被锁）→ 去本 App 的系统设置页，回到前台按真实权限现算（同 iOS）。
+    // 不预写开关；只记「去了设置、回来要接着走」（Activity 重建也保留）。
+    var ruleAwaitingSettings by rememberSaveable { mutableStateOf(false) }
+    // 从系统设置回来（ON_RESUME 推进 resumeCount、先重读了 mediaAccess）：按真实权限接着走，只接一次。
+    LaunchedEffect(resumeCount) {
+        if (!ruleAwaitingSettings) return@LaunchedEffect
+        ruleAwaitingSettings = false
+        val now = mediaAccess(context)
+        PLog.i("PPassFlow", "auto-rule: back from settings, photo access=$now")
+        applyRuleAccess(pairings.load(), now)
+    }
+    val rulePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ ->
+        val pairing = pendingRulePairing
+        pendingRulePairing = null
+        mediaAccess = mediaAccess(context)
+        mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
+        applyRuleAccess(pairing, mediaAccess)
+    }
     val onToggleRule: (Pairing, Boolean) -> Unit = { pairing, on ->
         if (!on) {
             rulePrefs.set(false)
             ruleOn = false
             ruleHintRes = null
-        } else if (mediaAccess(context) == MediaAccess.FULL) {
-            rulePrefs.set(true)
-            ruleOn = true
-            ruleHintRes = null
-            screen = Screen.Buckets(pairing, BackupScopeStore(context).selectedBucketIds() ?: emptySet(), false)
-        } else {
-            pendingRulePairing = pairing
-            rulePermission.launch(withMediaLocation(requiredMediaPermissions()))
+        } else when (ruleEnableRoute(mediaAccess(context), canPromptForFullMediaAccess(context))) {
+            RuleEnableRoute.Apply -> applyRuleAccess(pairing, MediaAccess.FULL)
+            RuleEnableRoute.Settings -> {
+                ruleAwaitingSettings = true
+                PLog.i("PPassFlow", "auto-rule: partial photo access, prompt locked; opening app settings for full access")
+                openAppDetailsSettings(context)
+            }
+            RuleEnableRoute.Request -> {
+                pendingRulePairing = pairing
+                rulePermission.launch(withMediaLocation(requiredMediaPermissions()))
+            }
         }
     }
     // #1321：决定页的两个出口。「连过这台」在这里落盘——范围保存成功（选范围页 firstTime），或单张选完登记成功；
@@ -1483,7 +1506,10 @@ fun PPassApp() {
                         // MOB-02 §二: 部分授权引导（只授权了部分照片 →
                         // 一键去系统设置；部分授权态不保存范围、不显示假 0/0）。
                         mediaAccess = mediaAccess,
-                        onOpenAppSettings = { openAppDetailsSettings(context) },
+                        onOpenAppSettings = {
+                            PLog.i("PPassFlow", "auto-rule: blocked (photo access=$mediaAccess), opening app settings")
+                            openAppDetailsSettings(context)
+                        },
                         // UPD-02: 设置行「检查更新」——value 跟随状态机
                         // （下载中显示百分比 / 待安装显示「可安装」），
                         // 点击行为按当前状态分流（重新打开已收起的对话框 /
@@ -1643,6 +1669,27 @@ fun PPassApp() {
         }
     }
     }
+}
+
+/** #1353：开自动备份时按当前照片权限走哪条路。 */
+internal enum class RuleEnableRoute { Apply, Request, Settings }
+
+/**
+ * 全部 → 直接开；部分且系统还肯弹框 → 照旧申请（用户在框里能选「全部允许」）；
+ * 部分且系统不再弹（拒过两次被锁，USER_FIXED）→ 去本 App 的系统设置页；没给过 / 拒绝 → 申请（被锁时系统直接回拒绝，落到小字）。
+ * 部分态一定问过至少一次，所以这里的 `canPrompt == false` 只可能是被锁（Android 官方：shouldShowRequestPermissionRationale）。
+ */
+internal fun ruleEnableRoute(access: MediaAccess, canPrompt: Boolean): RuleEnableRoute = when {
+    access == MediaAccess.FULL -> RuleEnableRoute.Apply
+    access == MediaAccess.PARTIAL && !canPrompt -> RuleEnableRoute.Settings
+    else -> RuleEnableRoute.Request
+}
+
+/** 系统还会不会为「全部照片」弹框：shouldShowRequestPermissionRationale(READ_MEDIA_IMAGES)。API 33 以下没有部分权限，按会弹算。 */
+internal fun canPromptForFullMediaAccess(context: Context): Boolean {
+    if (android.os.Build.VERSION.SDK_INT < 33) return true
+    val activity = context as? android.app.Activity ?: return true
+    return androidx.core.app.ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.READ_MEDIA_IMAGES)
 }
 
 private fun requiredMediaPermissions(): List<String> =

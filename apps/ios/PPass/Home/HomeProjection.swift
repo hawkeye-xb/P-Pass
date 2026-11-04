@@ -134,7 +134,6 @@ enum HomeProjection {
         if batch.open > 0 { return L.f("picked_progress", batch.settled + 1, batch.total) }
         let reached = batch.delivered + batch.alreadyThere
         let head: String? = reached == 0 ? nil
-            : batch.alreadyThere > 0 ? L.f("picked_result_with_existing", reached, batch.alreadyThere)
             : L.f("picked_result_delivered", reached)
         let tail = batch.failed > 0 ? L.f("picked_result_failed", batch.failed) : nil
         let line = [head, tail].compactMap { $0 }.joined(separator: " · ")

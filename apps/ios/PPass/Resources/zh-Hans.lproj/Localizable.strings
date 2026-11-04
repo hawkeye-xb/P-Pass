@@ -171,7 +171,6 @@
 "pick_photos_label" = "挑几张传";
 "picked_progress" = "正在传 %1$ld/%2$ld";
 "picked_result_delivered" = "送达 %1$ld 张";
-"picked_result_with_existing" = "送达 %1$ld 张，其中 %2$ld 张电脑上已有";
 "picked_result_failed" = "有 %1$ld 张没传成，请重新挑选。";
 "auto_backup_rule_label" = "自动备份";
 "auto_backup_off_hero" = "还没开自动备份。也可以先挑几张传。";
@@ -187,6 +186,7 @@
 "photos_scope_empty_since" = "自动备份已开启，%1$@以后拍的照片会传到 %2$@。";
 "photos_scope_empty_all" = "自动备份已开启，所选相册里的照片会传到 %1$@。";
 "auto_backup_blocked_hero" = "自动备份已停止";
+"auto_backup_blocked_action" = "去设置";
 "auto_backup_rule_partial_hint" = "只允许访问部分照片。";
 "auto_backup_rule_none_hint" = "没有照片访问权限。";
 "auto_backup_from_today_empty" = "今天新拍的照片会自动传到电脑。去拍一张试试。";

@@ -171,7 +171,6 @@
 "pick_photos_label" = "Pick photos to send";
 "picked_progress" = "Sending %1$ld/%2$ld";
 "picked_result_delivered" = "Delivered %1$ld";
-"picked_result_with_existing" = "Delivered %1$ld, of which %2$ld were already on your computer";
 "picked_result_failed" = "%1$ld couldn't be sent. Please pick them again.";
 "auto_backup_rule_label" = "Auto backup";
 "auto_backup_off_hero" = "Auto backup is off. You can also pick a few photos to send for now.";
@@ -187,6 +186,7 @@
 "photos_scope_empty_since" = "Auto backup is on. Photos taken from %1$@ onward will go to %2$@.";
 "photos_scope_empty_all" = "Auto backup is on. Photos in the chosen albums will go to %1$@.";
 "auto_backup_blocked_hero" = "Auto backup has stopped";
+"auto_backup_blocked_action" = "Open settings";
 "auto_backup_rule_partial_hint" = "Access is limited to some photos.";
 "auto_backup_rule_none_hint" = "No access to photos.";
 "auto_backup_from_today_empty" = "Photos you take today will be sent to your computer automatically. Go take one.";
