@@ -307,7 +307,7 @@ final class AppModel: ObservableObject {
     /// 部分允许：用户在系统选照片页已经做了选择——当场落盘、进照片页，不停在决定页等（停着按钮还能再点）；
     /// 登记系统已授权的照片（同 `pickedChosen` 的单张备份口径）放到后台做。
     private func registerAllowedOnDecision() {
-        markDecided(via: "pick")
+        markDecided(via: "partial") // 与 Android 同一日志口径
         phase = .main
         Task {
             let n = await backend.engine.sendAllowedPhotos()
