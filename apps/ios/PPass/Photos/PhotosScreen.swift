@@ -95,7 +95,7 @@ struct PhotosScreen: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 20).padding(.top, app.pairingLost || guideShown ? 0 : 8).padding(.bottom, 12)
+        .padding(.horizontal, 12).padding(.top, app.pairingLost || guideShown ? 0 : 8).padding(.bottom, 12) // 左右 12 与照片网格对齐
         .background(PPColor.paper)
     }
 
