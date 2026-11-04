@@ -260,8 +260,26 @@ jobs:
     if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # 增量编译产物在无缓存的一次性 runner 上纯属占盘（不缓存 target/，见下）。
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Disk report (start)
+        run: df -h / | tail -1
+
+      # #1371：本 job 的 target/ 实测 34G（nextest --all-features，2026-11-04 run
+      # 41808196090；windows / macOS 交叉 check 只增 ~1G），而 GitHub 托管 Linux
+      # runner 的起始余量因镜像批次而异，余量小的那批会在编译中途报
+      # No space left on device（#1354、#1368，重跑换到大盘 runner 才过）。
+      # 标准做法：开头删 runner 自带、本仓用不到的大目录（社区通行写法）。
+      # 只删 dotnet / android / ghc / CodeQL，不动 /usr/local/share/boost 等可能
+      # 被系统依赖的目录；失败不阻塞。
+      - name: Free runner disk (remove unused preinstalled toolchains)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h / | tail -1
 
       - name: Set Rust toolchain from rust-toolchain.toml
         shell: bash
@@ -310,6 +328,10 @@ jobs:
         # ("Unsupported codec"), verified in a clean noble container.
         uses: ./.github/actions/system-codecs
 
+      - name: Disk report (after codecs)
+        if: always()
+        run: df -h / | tail -1; du -sh target 2>/dev/null || true
+
       - name: Install cargo-nextest
         uses: taiki-e/install-action@68a389c788b2cd04016ce8c80ee23b80d2ab3d68 # v2.88.1
         with:
@@ -321,11 +343,23 @@ jobs:
       - name: Build ppf-decoder (thumbnail tests need it)
         run: cargo build -p decode-worker --bin ppf-decoder
 
+      - name: Disk report (after ppf-decoder)
+        if: always()
+        run: df -h / | tail -1; du -sh target 2>/dev/null || true
+
       - name: Test (nextest)
         run: cargo nextest run --all-features
 
+      - name: Disk report (after nextest)
+        if: always()
+        run: df -h / | tail -1; du -sh target 2>/dev/null || true
+
       - name: Windows cross-check (platform crate compiles for msvc)
         run: rustup target add x86_64-pc-windows-msvc && cargo check -p platform --target x86_64-pc-windows-msvc
+
+      - name: Disk report (after windows check)
+        if: always()
+        run: df -h / | tail -1; du -sh target 2>/dev/null || true
 
       # CI-14 (#278)：与上面那条对称。在此之前 **PR 门禁里没有任何一步会编译
       # macOS 侧的平台代码**——三个 ubuntu job 走 HeadlessAdapter、两个 windows
@@ -346,6 +380,10 @@ jobs:
       # 照样不需要 macOS SDK。step 名字不改（不是必需检查，但别平白改动）。
       - name: macOS cross-check (platform crate compiles for darwin)
         run: rustup target add x86_64-apple-darwin && cargo clippy -p platform --all-targets --features test-support --target x86_64-apple-darwin -- -D warnings
+
+      - name: Disk report (after macOS check)
+        if: always()
+        run: df -h / | tail -1; du -sh target 2>/dev/null || true
 
   # CI-06 后半（#164，2026-09-20）：daemon 侧的测试第一次在**真 Windows** 上跑。
   #
