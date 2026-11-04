@@ -26,15 +26,6 @@ on:
   # 摘掉，否则不碰 apps/desktop/** 的 PR 会全部卡死。
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
-    paths:
-      - "apps/desktop/**"
-      - "assets/**"
-      - "rust-toolchain.toml"
-      - "tools/setup-rust-toolchain.sh"
-      - ".github/workflows/ci-desktop.yml"
-
   # #1187：发版前由 release.yml 以全量模式调用（changes 对非 pull_request 事件恒定全跑）。
   workflow_call:
 

@@ -47,31 +47,6 @@ on:
   # 否则会把所有不碰 crates/** 的 PR 全部卡死。
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
-    paths:
-      - "crates/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - "config/**"
-      - "assets/i18n/**"
-      - "tools/arch-check.sh"
-      - "tools/arch-allowlist.txt"
-      - "tools/test-arch-check.sh"
-      - "tools/check-egress.py"
-      - "tools/check-autostart.py"
-      - "tools/check-disk-growth.py"
-      - "tools/fitness_lib.py"
-      - "tools/fitness-test-lib.sh"
-      - "tools/test-check-*.sh"
-      - "tools/egress-allowlist.txt"
-      - "tools/autostart-registry.txt"
-      - "tools/disk-growth-registry.txt"
-      - "rust-toolchain.toml"
-      - "tools/setup-rust-toolchain.sh"
-      - "tools/check-rust-toolchain-ci.sh"
-      - ".github/workflows/ci-rust.yml"
-
   # #1187：发版前由 release.yml 以全量模式调用（changes 对非 pull_request 事件恒定全跑）。
   workflow_call:
 
