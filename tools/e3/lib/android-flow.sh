@@ -50,8 +50,9 @@ pair_with_stub() {
   A shell pm clear "$PKG" >/dev/null
   app_start
   pair_enter_code "$ev" || return 1
-  # #1321 起配对后先进决定页（候选包）；上一版包没有这一页，等不到就往下走。
-  if wait_text "选择要自动备份的照片" 15; then tap_text "选择备份范围" || return 1; fi
+  # #1321 起配对后先进决定页（候选包）；上一版包（#1272 起）配对后直接进照片页，从「开启自动备份」进。
+  if wait_text "选择要自动备份的照片" 15; then tap_text "选择备份范围" || return 1
+  elif ui_has "开启自动备份"; then tap_text "开启自动备份" || return 1; fi
   # 系统照片权限框 → 全部允许；之后「开始备份」
   end=$((SECONDS + 60))
   while [ $SECONDS -lt $end ]; do
@@ -60,7 +61,10 @@ pair_with_stub() {
   done
   tap_text "全部允许" || tap_text "Allow all" || { log "没等到系统照片权限框"; return 1; }
   sleep 3
-  wait_text "开始备份" 20 && tap_text "开始备份"
+  # 首次选范围页按钮是「开始备份」（默认勾相机相册）；上一版的选范围页按钮是「保存」、默认不勾，勾上 Camera 再保存
+  wait_text "开始备份" 20 || wait_text "保存" 5
+  if ui_has "开始备份"; then tap_text "开始备份"
+  elif ui_has "保存"; then tap_text "Camera"; sleep 1; tap_text "保存"; fi
   sleep 4
   # 通知权限等后续系统框：不在本流程判定范围内，一律「不允许」
   if fg | grep -q permissioncontroller; then tap_text "不允许" || true; sleep 2; fi
