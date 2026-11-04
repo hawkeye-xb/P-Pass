@@ -189,4 +189,22 @@ class OnboardingGateTest {
         store().initIfAbsent(mac, scopeNonEmpty(mac))
         assertTrue("升级上来的老用户不被拦进决定页", launchScreen(pairing(mac), store()::wasOnboarded) is Screen.Home)
     }
+
+    /**
+     * 场景 A（产品负责人 2026-11-04）：决定页「选择备份范围」→ 不允许 → 系统选图里取消 → 留在决定页；
+     * 用户自己去设置改成「全部」再回来 → 仍在决定页（决定还没做，回前台不自动跳过）；再点主按钮 → 不弹框、直接进选范围页。
+     * 反证：主按钮不先看现有权限（一律 launch 权限框），或 ON_RESUME 里改 screen，本条红。
+     */
+    @Test
+    fun user_grants_full_in_settings_then_main_button_goes_straight_to_scope_without_prompt() {
+        val chooseScope = main.substringAfter("val onDecisionChooseScope: (Pairing) -> Unit = { pairing ->").substringBefore("\n    }\n")
+        val fullBranch = chooseScope.substringAfter("if (mediaAccess(context) == MediaAccess.FULL) {").substringBefore("} else {")
+        assertTrue(fullBranch.contains("screen = Screen.Buckets(pairing, emptySet(), firstTime = true)"))
+        assertFalse("已是全部：不弹框", fullBranch.contains("decisionPermission.launch"))
+        val resume = main.substringAfter("Lifecycle.Event.ON_RESUME -> {").substringBefore("resumeCount++")
+        assertTrue("回前台重读真实权限", resume.contains("mediaAccess = mediaAccess(context)"))
+        assertFalse("回前台不替用户做决定：不改 screen", resume.contains("screen ="))
+        assertFalse("回前台不落「连过」", resume.contains("markDecided"))
+        assertEquals(DecisionLanding.ChooseScope, decisionLanding(MediaAccess.FULL))
+    }
 }
