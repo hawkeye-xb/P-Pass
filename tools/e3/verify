@@ -14,7 +14,7 @@
 #   VERIFY PASS|FAIL <对象>  android 2/2 · mac 3/3（SKIP 1）  evidence/…
 # 改动没有落在任何端的路径上（纯逻辑、文档、工具）⇒ 只需 V0（just ci），打印 VERIFY N/A 后退出 0。
 set -uo pipefail
-E3_ROOT="$(cd "$(dirname "$0")" && pwd)"
+E3_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=lib/common.sh
 source "$E3_ROOT/lib/common.sh"
 
@@ -25,7 +25,7 @@ SMOKE_mac="mac/upgrade mac/svc mac/eph-backup"
 SMOKE_android="android/smoke-upgrade"
 # 每端的路径（lane）。android 与 CI 的 ci-android.yml changes 段同源（运行时从 workflow 里读）；
 # macOS 桌面在 CI 里不按路径跳过，这里按「会进桌面包的代码」列。
-MAC_GLOBS="crates/** apps/desktop/** assets/i18n/** tools/testclient/** tools/mac-dev.sh tools/daemon-helper-macos.sh tools/bundle-desktop-macos.sh"
+MAC_GLOBS=(crates/** apps/desktop/** assets/i18n/** tools/testclient/** tools/mac-dev.sh tools/daemon-helper-macos.sh tools/bundle-desktop-macos.sh)
 
 android_globs() {
   # paths: | 块：缩进比 paths: 深的行都是条目，遇到第一行不更深的就结束
@@ -35,7 +35,60 @@ android_globs() {
             print $1 }' "$REPO_ROOT/.github/workflows/ci-android.yml"
 }
 
+# 把 android_globs 的结果读进数组再传参：直接 $(android_globs) 不带引号会被 shell
+# 再做一次路径展开，apps/android/** 变成 apps/android/app 等具体路径，通配语义丢失（#1343）。
+android_lane_hit() {
+  local g
+  local -a globs=()
+  while IFS= read -r g; do
+    [ -n "$g" ] && globs+=("$g")
+  done < <(android_globs)
+  lane_hit ${globs[@]+"${globs[@]}"}
+}
+
+lane_hit() { # lane_hit <glob…>：改动有没有落在这些路径上（ci-paths.sh，fail-closed）
+  [ "$("$REPO_ROOT/tools/ci-paths.sh" hit "$base" "$@" 2>/dev/null)" != false ]
+}
+
+# —— 构建候选 ——
+heavy() { "$REPO_ROOT/tools/heavy-lock" "$@"; } # 可重入（#1308）
+build_desktop_bins() {
+  log "编候选 daemon + testclient（debug）"
+  (cd "$REPO_ROOT" && CARGO_INCREMENTAL=0 PPF_BUILD_VERSION="$(tools/release-version.sh desktop)" \
+    heavy cargo build -q -p daemon -p testclient) >>"$root/build.log" 2>&1
+}
+build_apk() { # build_apk <源码目录>
+  # JDK / NDK 环境用当前仓库的脚本导出：旧基线的代码里可能还没有它
+  (source "$REPO_ROOT/tools/java-home.sh" && cd "$1/apps/android" && CARGO_INCREMENTAL=0 heavy ./gradlew -q :app:assembleDebug) >>"$root/build.log" 2>&1
+}
+# 基线包：merge-base 的 debug 包，按 sha 缓存。应用代码没变时直接用候选包（同一份代码）。
+base_apk_path() { echo "$E3_STATE/base/$(git -C "$REPO_ROOT" rev-parse --short "$base")/app-debug.apk"; }
+ensure_base_apk() {
+  local dst src sha
+  sha="$(git -C "$REPO_ROOT" rev-parse --short "$base")"
+  dst="$(base_apk_path)"
+  [ -f "$dst" ] && return 0
+  mkdir -p "$(dirname "$dst")"
+  if ! android_lane_hit; then
+    cp "$(ls -t "$REPO_ROOT"/apps/android/app/build/outputs/apk/debug/*.apk | head -1)" "$dst"
+    return 0
+  fi
+  log "编基线包（${sha}）"
+  src="$E3_STATE/base-src/$sha"
+  rm -rf "$src"
+  git -C "$REPO_ROOT" worktree add --detach "$src" "$base" >>"$root/build.log" 2>&1 || return 1
+  cp "$REPO_ROOT/apps/android/local.properties" "$src/apps/android/" 2>/dev/null
+  CARGO_TARGET_DIR="$src/target" build_apk "$src" &&
+    cp "$(ls -t "$src"/apps/android/app/build/outputs/apk/debug/*.apk | head -1)" "$dst"
+  local rc=$?
+  git -C "$REPO_ROOT" worktree remove --force "$src" >>"$root/build.log" 2>&1
+  return $rc
+}
+
 usage() { sed -n 2,18p "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+
+# 被 tools/test-e3.sh source 时只定义函数（测试直接调 ensure_base_apk），不跑主流程。
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then return 0; fi
 
 counter_flag=""
 build=1
@@ -58,10 +111,6 @@ done
 [ -n "$mode" ] || usage
 [ -n "$base" ] || base="$(git -C "$REPO_ROOT" merge-base HEAD origin/main)"
 
-lane_hit() { # lane_hit <glob…>：改动有没有落在这些路径上（ci-paths.sh，fail-closed）
-  [ "$("$REPO_ROOT/tools/ci-paths.sh" hit "$base" "$@" 2>/dev/null)" != false ]
-}
-
 # —— 决定跑哪几端、哪些场景 ——
 ends=""
 extra=""
@@ -76,10 +125,8 @@ case "$mode" in
     ;;
   issue)
     label="$target"
-    # shellcheck disable=SC2046
-    lane_hit $(android_globs) && ends="$ends android"
-    # shellcheck disable=SC2086
-    lane_hit $MAC_GLOBS && ends="$ends mac"
+    android_lane_hit && ends="$ends android"
+    lane_hit "${MAC_GLOBS[@]}" && ends="$ends mac"
     body="$(gh issue view "$target" --json body -q .body 2>/dev/null)" || die "读不到 issue #${target}（gh 登录？）"
     # 「验收场景」段里形如 <端>/<名字> 的场景 id
     extra="$(printf '%s\n' "$body" | python3 -I -c '
@@ -104,41 +151,6 @@ mkdir -p "$root"
 : >"$root/.started"   # 本次运行的起点：之后留的 Mac 快照才归本次装回
 log "涉及的端：${ends}；证据：$root"
 
-# —— 构建候选 ——
-heavy() { "$REPO_ROOT/tools/heavy-lock" "$@"; } # 可重入（#1308）
-build_desktop_bins() {
-  log "编候选 daemon + testclient（debug）"
-  (cd "$REPO_ROOT" && CARGO_INCREMENTAL=0 PPF_BUILD_VERSION="$(tools/release-version.sh desktop)" \
-    heavy cargo build -q -p daemon -p testclient) >>"$root/build.log" 2>&1
-}
-build_apk() { # build_apk <源码目录>
-  # JDK / NDK 环境用当前仓库的脚本导出：旧基线的代码里可能还没有它
-  (source "$REPO_ROOT/tools/java-home.sh" && cd "$1/apps/android" && CARGO_INCREMENTAL=0 heavy ./gradlew -q :app:assembleDebug) >>"$root/build.log" 2>&1
-}
-# 基线包：merge-base 的 debug 包，按 sha 缓存。应用代码没变时直接用候选包（同一份代码）。
-base_apk_path() { echo "$E3_STATE/base/$(git -C "$REPO_ROOT" rev-parse --short "$base")/app-debug.apk"; }
-ensure_base_apk() {
-  local dst src sha
-  sha="$(git -C "$REPO_ROOT" rev-parse --short "$base")"
-  dst="$(base_apk_path)"
-  [ -f "$dst" ] && return 0
-  mkdir -p "$(dirname "$dst")"
-  # shellcheck disable=SC2046
-  if ! lane_hit $(android_globs); then
-    cp "$(ls -t "$REPO_ROOT"/apps/android/app/build/outputs/apk/debug/*.apk | head -1)" "$dst"
-    return 0
-  fi
-  log "编基线包（${sha}）"
-  src="$E3_STATE/base-src/$sha"
-  rm -rf "$src"
-  git -C "$REPO_ROOT" worktree add --detach "$src" "$base" >>"$root/build.log" 2>&1 || return 1
-  cp "$REPO_ROOT/apps/android/local.properties" "$src/apps/android/" 2>/dev/null
-  CARGO_TARGET_DIR="$src/target" build_apk "$src" &&
-    cp "$(ls -t "$src"/apps/android/app/build/outputs/apk/debug/*.apk | head -1)" "$dst"
-  local rc=$?
-  git -C "$REPO_ROOT" worktree remove --force "$src" >>"$root/build.log" 2>&1
-  return $rc
-}
 if [ "$build" = 1 ]; then
   build_desktop_bins || die "候选 daemon/testclient 编译失败（$root/build.log）"
   case " $ends " in *" mac "*)

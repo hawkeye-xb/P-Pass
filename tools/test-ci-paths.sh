@@ -57,6 +57,9 @@ gate_is() {
 echo "==> 1. hit：glob 语义与 GitHub paths 一致"
 hit_is "$PATHS" true "dir/** 命中深层文件" "apps/android/app/src/x.kt" "apps/android/**"
 hit_is "$PATHS" false "dir/** 不命中兄弟目录" "apps/ios/x.swift" "apps/android/**"
+hit_is "$PATHS" true "裸目录名命中其下文件（#1343）" "apps/android/app/src/x.kt" "apps/android/app"
+hit_is "$PATHS" false "裸目录名不命中兄弟路径（#1343）" "apps/android/README.md" "apps/android/app"
+hit_is "$PATHS" false "裸目录名按 / 分段，不按字符串前缀（#1343）" "apps/android/appx/y.kt" "apps/android/app"
 hit_is "$PATHS" true "**.sh 命中任意深度的 .sh" "tools/ios/e3-judge.sh" "**.sh"
 hit_is "$PATHS" false "* 不跨 /" "tools/ios/e3-judge.sh" "tools/*.sh"
 hit_is "$PATHS" true "* 在本层命中" "tools/arch-check.sh" "tools/*.sh"
@@ -159,6 +162,9 @@ expect_red() { # expect_red <说明> <命令…>：命令输出 ❌ 才算变异
 if M="$(mutant "$PATHS" star-crosses-slash 's@\[^/\]\*#g@.*#g@')"; then
   expect_red "* 跨 /" hit_is "$M" false "* 不跨 /" "tools/ios/e3-judge.sh" "tools/*.sh"
 else bad "变异体生成失败：star-crosses-slash"; fi
+if M="$(mutant "$PATHS" bare-dir-exact-only 's/^    \*) printf .*$/    *) glob_re "$g" ;;/')"; then
+  expect_red "裸目录名回到整串精确匹配" hit_is "$M" true "裸目录名命中其下文件（#1343）" "apps/android/app/src/x.kt" "apps/android/app"
+else bad "变异体生成失败：bare-dir-exact-only"; fi
 if M="$(mutant "$PATHS" empty-means-false 's/保守判定：true"$/&; echo false; exit 0/')"; then
   expect_red "空列表判 false" hit_is "$M" true "空列表 → true" "" "crates/**"
 else bad "变异体生成失败：empty-means-false"; fi

@@ -11,6 +11,8 @@
 #
 # ## glob 语法（与 GitHub Actions 的 paths 一致）
 #   `**` 跨目录，`*` 与 `?` 不跨 `/`。`dir/**` 匹配 dir 下全部文件。
+#   hit 里没有通配符的裸路径按目录处理：匹配它自己或它下面的文件（按 `/` 分段，
+#   `apps/android/app` 不命中 `apps/android/appx/y`）。core 的规则仍是整串精确匹配。
 #
 # ## 核心规则文件（.github/core-paths.txt）
 #   + <glob>   命中即核心
@@ -23,13 +25,29 @@ set -uo pipefail
 
 say() { printf '%s\n' "$*" >&2; }
 
+# 字面部分转义成正则，`*` `?` 留给 glob 语义处理。
+glob_literal() {
+  printf '%s' "$1" | sed -e 's/[.+^$(){}|\\[]/\\&/g'
+}
+
 # glob → 扩展正则（锚定全串）。
 glob_re() {
-  printf '%s' "$1" | sed -e 's/[.+^$(){}|\\[]/\\&/g' \
-    -e 's#\*\*/#@DSS@#g' -e 's#\*\*#@DS@#g' \
-    -e 's#\*#[^/]*#g' -e 's#?#[^/]#g' \
-    -e 's#@DSS@#(.*/)?#g' -e 's#@DS@#.*#g' |
+  glob_literal "$1" |
+    sed -e 's#\*\*/#@DSS@#g' -e 's#\*\*#@DS@#g' \
+      -e 's#\*#[^/]*#g' -e 's#?#[^/]#g' \
+      -e 's#@DSS@#(.*/)?#g' -e 's#@DS@#.*#g' |
     sed -e 's/^/^/' -e 's/$/$/'
+}
+
+# hit 专用：没有通配符的裸路径按「它自己或它下面的文件」匹配（#1343）。
+# android_globs 从 workflow 取到的是目录名时，必须能命中目录里的改动；
+# 按 / 分段，所以 apps/android/app 不命中 apps/android/appx/y。
+hit_glob_re() {
+  local g="$1"
+  case "$g" in
+    *[*?]*) glob_re "$g" ;;
+    *) printf '^%s(/.*)?$\n' "$(glob_literal "$g")" ;;
+  esac
 }
 
 # 规则在读入时就编译成正则（glob_re 要起 sed），逐文件匹配只用 bash 内置的 =~，
@@ -74,7 +92,7 @@ cmd_hit() {
   load_files "$base" || { echo true; return 0; }
   local f g
   RES=()
-  for g in "$@"; do RES+=("$(glob_re "$g")"); done
+  for g in "$@"; do RES+=("$(hit_glob_re "$g")"); done
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     for g in "${RES[@]}"; do
