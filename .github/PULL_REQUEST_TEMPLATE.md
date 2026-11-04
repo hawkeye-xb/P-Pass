@@ -1,4 +1,4 @@
-<!-- 一批一 PR，由 owner 从 batch/<日期>-<主题> 分支开（worker 不开 PR，见 AGENTS.md）。标题格式：batch(<日期>): 一句话结果。正文逐卡写 closes #N 让合并自动关 issue -->
+<!-- 一张卡一个 PR，正文写 closes #N（一个 PR 只关联一个 issue）。标题格式：<type>(<范围>): 一句话结果。盯梢、人控级的 PR 开好后留一条「等产品负责人放行」，看到「放行」评论才合入（见 AGENTS.md） -->
 
 ## 关联 issue
 

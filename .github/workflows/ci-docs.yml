@@ -25,8 +25,6 @@ on:
   # 下面每个 job 都是秒级、无编译；路径没碰到时只跑 changes 与 gate。
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
   # #1187：发版前由 release.yml 以全量模式调用。
   workflow_call:
   workflow_dispatch:

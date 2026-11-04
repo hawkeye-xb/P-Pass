@@ -74,8 +74,13 @@
    A formal tag whose platform version went up without a notes file gets a
    `::warning::` in `create-draft` (not blocking).
 3. **PR** → merge to main (main must be green: PR Checks).
-4. **Tag**: `git tag v<version>` + push. Tag pushes run the Release
-   workflow (release.yml) → draft Release with platform assets.
+4. **Release (#1349 — the only entry)**: run the Release workflow by hand
+   (Actions → Release → Run workflow, `tag` = the new tag name, `release` = true, on `main`;
+   for test builds `just release-test <platforms>` does exactly this). **Do not push a `v*`
+   tag — pushing one no longer triggers anything.** The workflow first runs the entry guard
+   (tag name shape, on `main`, tag does not exist yet) and the full pre-release verification;
+   only when all of it is green does `create-draft` create the tag (on the verified commit)
+   and the draft Release with platform assets. A red verification leaves no tag behind.
    > **UPD-13 门禁**：`create-draft` 第一步跑 `tools/check-version-bump.sh` ——
    > 改了 `crates/**` / `apps/desktop/**` / `assets/**` / `Cargo.*` 却没涨
    > `desktop` 号，或改了 `apps/android/**` 却没涨 `android` 号，**直接红**
@@ -215,8 +220,9 @@ version string (`-test.` ⇒ test):
   `plan-builds` still says `build` for it (it does when test-channel already
   points that platform at this tag, i.e. a re-run). Dispatch cannot force a
   platform that `plan-builds` skips (Windows is the exception: a dispatch
-  naming it always builds it), and it cannot replace the tag push: the tag
-  must exist first, and pushing it already runs the per-platform plan.
+  naming it always builds it), and it cannot replace a release: the tag
+  must exist first (the rebuild mode is `release` = false), and a release (`release` = true)
+  already runs the per-platform plan.
   **Test channel (REL-07 / #872):** `test-channel` is a fixed, rolling
   prerelease (created on the first test release, never latest; do not
   delete it) holding both the per-platform manifests (`manifest-android.json`,
@@ -390,8 +396,11 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
    [`docs/release-notes-rules.md`](release-notes-rules.md)。正式 tag 某端版本号涨了
    却没有说明文件 ⇒ `create-draft` 告警（不阻断）。
 3. **PR** → 合入 main（main 必须绿：PR Checks）。
-4. **打 tag**：`git tag v<版本>` + push。tag 触发 Release workflow →
-   draft Release（三平台资产）。
+4. **发版（#1349，唯一入口）**：手动触发 Release workflow（Actions → Release → Run workflow，
+   `tag` 填新 tag 名，`release` 勾上，在 `main` 上触发；test 版用 `just release-test <端...>`，
+   它做的就是这件事）。**不要手动推 `v*` tag——推了也不会触发任何东西。** 流程先过入口守卫
+   （tag 名形状、在 main 上、tag 尚不存在）与全量发版前验证；全绿之后 `create-draft` 才在被验证的
+   提交上建 tag 与 draft Release（三平台资产）。验证红了不会留下 tag。
    > **构建一次、到处复用（#838）**：正式 tag 上，`plan-builds`
    > （`tools/release/plan-builds.sh`）拿每一端在 `release/versions.json` 的版本号，
    > 和 Latest 正式版该端清单的 version 比。号没变 ⇒ 该端**不重新构建**，
@@ -479,8 +488,8 @@ Android 靠 `channelFromVersion()` 读注入的版本串（含 `-test.` 即 test
   **单独重出某一端的 test 包**：dispatch `release.yml`，`tag` 填已存在的 test tag、`platforms`
   填如 `macos`，只重跑这一端并重新指向它在 test-channel 的清单——前提是 `plan-builds` 对这一端
   仍判 `build`（test-channel 已把该端指向本 tag，即补跑时成立）。dispatch 不能强制构建
-  `plan-builds` 判 skip 的一端（Windows 例外：dispatch 点名就构建），也替代不了推 tag：
-  tag 必须先存在，而推 tag 本身就会按端判定跑一遍。
+  `plan-builds` 判 skip 的一端（Windows 例外：dispatch 点名就构建），也替代不了发版：
+  补跑要求 tag 已存在（`release` 不勾），而发版（`release` 勾上）本身就会按端判定跑一遍。
   **test 通道（REL-07 / #872）**：`test-channel` 是固定的滚动 prerelease（首次 test 发布时
   自动创建，永不是 latest，勿删），同时放分端清单（`manifest-android.json`、
   `manifest-macos.json`、`manifest-windows.json`，外加给旧版 Android test 包读的老格式
@@ -536,7 +545,7 @@ Android 靠 `channelFromVersion()` 读注入的版本串（含 `-test.` 即 test
 - `ci-desktop.yml`（apps/desktop/** assets/**）→ src-tauri lib tests + vite build。
 - 每个 workflow 带 `concurrency: cancel-in-progress`（连续 push 取消旧 run）。
 - release.yml 加 `platforms` dispatch 输入（android/macos/windows 逗号
-  组合，留空=all）；tag push 按端构建：正式 tag 看版本号（#838；#788 起含 Windows），
+  组合，留空=all）；发版（release=true）按端构建：正式 tag 看版本号（#838；#788 起含 Windows），
   test tag 看改动路径（#852）。
 - R2 镜像：**2026-08-25 已撤除**。资产只从 GitHub release 下载提供，
   update manifest 恒指 GitHub 直链。撤除原因是耦合方向错（manifest 在

@@ -70,7 +70,7 @@ trap 'rm -f "$BODY"' EXIT
   printf '\n脚本已停下，没有做任何绕过。处理完后从停下的那一步重跑对应的 just 命令。\n'
 } >"$BODY"
 
-# 预演（batch-plan / release-test 的 --dry-run）：只打印，不写 GitHub。
+# 预演（release-test 的 --dry-run）：只打印，不写 GitHub。
 if [ "${PPASS_OWNER_DRY:-}" = 1 ]; then
   say "（预演，不写 GitHub）将要写入${ISSUE:+ #${ISSUE}}${PR:+ PR #${PR}}："
   cat "$BODY" >&2
