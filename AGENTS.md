@@ -76,8 +76,13 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
   没有范围的卡、主仓工作区里的卡分支，`git commit` 直接被拒，见 `tools/hooks/` 与
   [本地提交拦截](docs/runbook/local-hooks.md)。
 - 每个提交 `git commit -s`（DCO 门禁），提交身份必须在 `.github/allowed-identities.txt` 里。
-- 本地只做快检查：提交前钩子拦格式与范围；开发时只跑改动涉及的测试，不在本地跑全量。
-- `just done` 依次：门禁（动了代码 `just ci`，纯文档 `just ci-docs`）→ `just verify <号>`（命令存在才跑）
+- 本地分阶段，不在本地跑全量：
+  - **迭代期**（产品负责人在真机上看界面、提意见）：改完直接增量打包、覆盖安装（不卸载）、打开到对应页面，**不跑测试**——
+    测试结果这时没人用，只会拖慢他看到改动。
+  - **定稿后、推分支前**：只跑改动涉及的测试，跑一次（`just done` 按改动路径挑，见下）。提交前钩子随时拦格式与范围。
+  - **PR 上**：CI 全量跑一次，是合入门禁。
+- `just done` 依次：门禁（按改动路径挑：安卓 `just android-test`、iOS `just ios-test`、文案/i18n `just mobile-static-check`、
+  Rust crate 对应 crate 的 `cargo nextest run -p`、纯文档 `just ci-docs`；有一个文件挑不出来才退回全量 `just ci`）→ `just verify <号>`（命令存在才跑）
   → 核对 `git diff origin/main...` 只含范围内文件 → 推分支 → 在 issue 贴回执（分支、提交、门禁与验收输出末尾、
   证据等级、证据目录）。任何一步红：不推送、issue 写明停在哪、打 `status:blocked`，修好重跑即可。
   分支落后 `origin/main` 时只报错不打 blocked：先 `git rebase origin/main` 再重跑。

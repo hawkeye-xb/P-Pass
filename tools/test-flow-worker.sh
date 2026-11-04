@@ -116,7 +116,7 @@ cat >"${BIN}/just" <<'STUB'
 #!/usr/bin/env bash
 G="$FAKE_GH"
 case "$1" in
-  ci | ci-docs)
+  ci | ci-docs | android-test | ios-test | mobile-static-check)
     echo "==> just $1 running"
     if [ -e "$G/ci_fail" ]; then echo "error: lint failed: FAKE-CI-RED"; exit 1; fi
     echo "==> CI pipeline: all green FAKE-CI-GREEN"
@@ -130,7 +130,13 @@ case "$1" in
   *) echo "stub just: unsupported $*" >&2; exit 2 ;;
 esac
 STUB
-chmod +x "${BIN}/gh" "${BIN}/just"
+cat >"${BIN}/cargo" <<'STUB'
+#!/usr/bin/env bash
+echo "==> cargo $* running"
+if [ -e "$FAKE_GH/ci_fail" ]; then echo "error: lint failed: FAKE-CI-RED"; exit 1; fi
+echo "==> CI pipeline: all green FAKE-CI-GREEN (cargo $*)"
+STUB
+chmod +x "${BIN}/gh" "${BIN}/just" "${BIN}/cargo"
 export PATH="$BIN"
 
 # ── 仓库：裸 origin + 主仓 ─────────────────────────────────────────────
@@ -374,6 +380,40 @@ commit_file "$W" docs/n.md
 DONE "$W" >/dev/null 2>&1
 comments_of 23 | grep -q "just ci-docs" && ok "纯文档改动跑 just ci-docs" || bad "纯文档没走 ci-docs"
 comments_of 20 | grep -q "just ci-docs" && bad "代码改动误走 ci-docs" || ok "反证：代码改动走 just ci"
+
+# 门禁按改动路径挑（#1361）：只改安卓文案 → android-test + mobile-static-check，不跑全量 just ci
+W="$(card 125 "[T-125] android copy" "apps/android/**")"
+mkdir -p "$W/apps/android/app/src/main/res/values"
+printf '<resources/>\n' >"$W/apps/android/app/src/main/res/values/strings.xml"
+git -C "$W" add -A && git -C "$W" commit -q -s -m "android copy"
+DONE "$W" >"${TMP}/o125" 2>&1
+C25="$(comments_of 125)"
+printf '%s' "$C25" | grep -qF "just android-test + just mobile-static-check" && ok "只改安卓文案 → 门禁是 android-test + mobile-static-check" || bad "安卓文案门禁不对：$(tail -4 "${TMP}/o125")"
+printf '%s' "$C25" | grep -qF '`just ci`' && bad "只改安卓文案仍跑了全量 just ci" || ok "反证：没有全量 just ci"
+# Rust crate → 对应 crate 的测试
+W="$(card 126 "[T-126] rust crate" "crates/**")"
+mkdir -p "$W/crates/foo"
+printf '[package]\nname = "foo-pkg"\nversion = "0.1.0"\n' >"$W/crates/foo/Cargo.toml"
+git -C "$W" add -A && git -C "$W" commit -q -s -m "crate"
+DONE "$W" >/dev/null 2>&1
+comments_of 126 | grep -qF "cargo nextest run -p foo-pkg" && ok "改 Rust crate → 跑该 crate 的测试" || bad "Rust crate 门禁不对"
+# 有一个挑不出来的文件 → 退回全量
+W="$(card 127 "[T-127] mixed" "apps/android/** tools/**")"
+mkdir -p "$W/apps/android" "$W/tools"
+printf 'a\n' >"$W/apps/android/a.kt"
+printf 'b\n' >"$W/tools/b.sh"
+git -C "$W" add -A && git -C "$W" commit -q -s -m "mixed"
+DONE "$W" >/dev/null 2>&1
+comments_of 127 | grep -qF '`just ci`' && ok "反证：夹带挑不出来的文件 → 退回全量 just ci" || bad "挑不出来时没退回全量"
+# 门禁中任一项红 → blocked，不推
+W="$(card 128 "[T-128] android red" "apps/android/**")"
+mkdir -p "$W/apps/android"
+printf 'a\n' >"$W/apps/android/r.kt"
+git -C "$W" add -A && git -C "$W" commit -q -s -m "red"
+touch "${FAKE_GH}/ci_fail"
+DONE "$W" >/dev/null 2>&1 && bad "android-test 红时 done 仍成功" || ok "android-test 红 → done 失败"
+has_lbl 128 "status:blocked" && ok "挑选后的门禁红 → status:blocked" || bad "没打 blocked"
+rm -f "${FAKE_GH}/ci_fail"
 
 # 核心改动无 core 标签 → blocked；
 W="$(card 24 "[T-24] core hit" "core/** src/**")"
