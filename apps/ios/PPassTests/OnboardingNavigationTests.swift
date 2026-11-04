@@ -122,7 +122,13 @@ final class OnboardingNavigationTests: XCTestCase {
         }
         let zh = try String(contentsOf: root.appendingPathComponent("PPass/Resources/zh-Hans.lproj/IOS.strings"), encoding: .utf8)
         // 全 App 同一件事只有一种说法：决定页 / 引导卡 / 两条失败通知的指路是同一句话（产品负责人 11-04 定「可随时在…」）。
-        XCTAssertEqual(L.s("photo_access_change_later_hint"), "可随时在「设置 › 隐私与安全性 › 照片 › P-Pass」改为「完全访问」。")
+        // 期望值按语言从 bundle 取，不跟着运行环境的语言走（CI 模拟器是英文、本机是中文）。
+        let zhBundle = try XCTUnwrap(Bundle.main.path(forResource: "zh-Hans", ofType: "lproj").flatMap(Bundle.init(path:)))
+        let enBundle = try XCTUnwrap(Bundle.main.path(forResource: "en", ofType: "lproj").flatMap(Bundle.init(path:)))
+        XCTAssertEqual(zhBundle.localizedString(forKey: "photo_access_change_later_hint", value: nil, table: "IOS"),
+                       "可随时在「设置 › 隐私与安全性 › 照片 › P-Pass」改为「完全访问」。")
+        XCTAssertEqual(enBundle.localizedString(forKey: "photo_access_change_later_hint", value: nil, table: "IOS"),
+                       "You can change it to “Full Access” anytime in Settings › Privacy & Security › Photos › P-Pass.")
         for key in ["photo_access_change_later_hint", "notif_media_partial_body", "notif_media_none_body"] {
             let line = zh.components(separatedBy: "\n").first { $0.hasPrefix("\"\(key)\"") } ?? ""
             XCTAssertTrue(line.hasSuffix("可随时在「设置 › 隐私与安全性 › 照片 › P-Pass」改为「完全访问」。\";"), key)
