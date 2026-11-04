@@ -39,6 +39,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -674,12 +675,10 @@ fun PPassApp() {
     val rulePrefs = remember { com.hawkeyexb.ppass.backup.autoBackupRulePrefs(context) }
     var ruleOn by remember { mutableStateOf(runCatching { rulePrefs.enabled() }.getOrDefault(false)) }
     var pendingRulePairing by remember { mutableStateOf<Pairing?>(null) }
-    val rulePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ ->
-        val pairing = pendingRulePairing
-        pendingRulePairing = null
-        mediaAccess = mediaAccess(context)
-        mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
-        when (mediaAccess) {
+    // 开自动备份时拿到的照片权限档 → 结果：全部 → 开、进选范围页；部分 → 开关不开，把允许的照片按手选链路传一次
+    // （不弹提示：弹出时照片还没传，进度看设置页）；拒绝 → 开关不开、开关下方一行小字。
+    val applyRuleAccess: (Pairing?, MediaAccess) -> Unit = { pairing, access ->
+        when (access) {
             MediaAccess.FULL -> if (pairing != null) {
                 rulePrefs.set(true)
                 ruleOn = true
@@ -690,29 +689,49 @@ fun PPassApp() {
                 ruleHintRes = null
                 scope.launch(Dispatchers.IO) {
                     val n = com.hawkeyexb.ppass.backup.picked.PickedUploads.enqueueAllowedImages(context)
+                    PLog.i("PPassFlow", "auto-rule: partial photo access, sent allowed photos n=$n, rule stays off")
                     if (n > 0) {
                         com.hawkeyexb.ppass.backup.flow.requestFlowWake(context, com.hawkeyexb.ppass.backup.flow.TriggerReason.PICKED_ADDED)
-                        snackbarHostState.showSnackbar(context.getString(R.string.auto_backup_rule_limited_sent, n))
                     }
                 }
             }
             else -> ruleHintRes = R.string.auto_backup_rule_denied_hint
         }
     }
+    val rulePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { _ ->
+        val pairing = pendingRulePairing
+        pendingRulePairing = null
+        mediaAccess = mediaAccess(context)
+        mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
+        applyRuleAccess(pairing, mediaAccess)
+    }
+    // #1353：已是「部分照片」时开自动备份——不再申请权限：部分权限下再申请，系统不会给「全部允许」
+    // （三星真机：决定页选部分 + 第一次「开启」选部分 = 拒绝两次，READ_MEDIA_IMAGES 变 USER_FIXED，请求 4ms 内直接跳系统选图）。
+    // 直接打开本 App 的系统设置页让用户改成「全部允许」，回到前台按真实权限现算（同 iOS）。不预写开关。
+    var ruleAwaitingSettings by rememberSaveable { mutableStateOf(false) }
     val onToggleRule: (Pairing, Boolean) -> Unit = { pairing, on ->
         if (!on) {
             rulePrefs.set(false)
             ruleOn = false
             ruleHintRes = null
         } else if (mediaAccess(context) == MediaAccess.FULL) {
-            rulePrefs.set(true)
-            ruleOn = true
-            ruleHintRes = null
-            screen = Screen.Buckets(pairing, BackupScopeStore(context).selectedBucketIds() ?: emptySet(), false)
+            applyRuleAccess(pairing, MediaAccess.FULL)
+        } else if (mediaAccess(context) == MediaAccess.PARTIAL) {
+            ruleAwaitingSettings = true
+            PLog.i("PPassFlow", "auto-rule: partial photo access, opening app settings for full access")
+            openAppDetailsSettings(context)
         } else {
             pendingRulePairing = pairing
             rulePermission.launch(withMediaLocation(requiredMediaPermissions()))
         }
+    }
+    // 从系统设置回来（ON_RESUME 推进 resumeCount、先重读了 mediaAccess）：按真实权限接着走，只接一次。
+    LaunchedEffect(resumeCount) {
+        if (!ruleAwaitingSettings) return@LaunchedEffect
+        ruleAwaitingSettings = false
+        val now = mediaAccess(context)
+        PLog.i("PPassFlow", "auto-rule: back from settings, photo access=$now")
+        applyRuleAccess(pairings.load(), now)
     }
     systemBackTarget(screen)?.let { target ->
         BackHandler { screen = target }

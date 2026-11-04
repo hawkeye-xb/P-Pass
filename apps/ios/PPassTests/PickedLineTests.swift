@@ -19,7 +19,8 @@ final class PickedLineTests: XCTestCase {
 
     func test_result_sentences_match_android() {
         XCTAssertEqual(HomeProjection.pickedLine(batch(total: 3, delivered: 3)), L.f("picked_result_delivered", 3))
-        XCTAssertEqual(HomeProjection.pickedLine(batch(total: 3, delivered: 1, existing: 2)), L.f("picked_result_with_existing", 3, 2))
+        XCTAssertEqual(HomeProjection.pickedLine(batch(total: 3, delivered: 1, existing: 2)), L.f("picked_result_delivered", 3),
+                       "电脑上已有的也算送达，只说送达几张（2026-11-04）")
         XCTAssertEqual(HomeProjection.pickedLine(batch(total: 3, delivered: 2, failed: 1)),
                        L.f("picked_result_delivered", 2) + " · " + L.f("picked_result_failed", 1))
         XCTAssertEqual(HomeProjection.pickedLine(batch(total: 2, failed: 2)), L.f("picked_result_failed", 2))

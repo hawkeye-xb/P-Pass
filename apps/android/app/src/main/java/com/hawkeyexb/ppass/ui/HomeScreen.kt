@@ -1279,11 +1279,8 @@ private fun CellRow(label: String, value: String? = null, onClick: (() -> Unit)?
 private fun pickedBatchLine(batch: com.hawkeyexb.ppass.backup.picked.PickedBatchSummary): String? {
     if (batch.open > 0) return stringResource(R.string.picked_progress, batch.settled + 1, batch.total)
     val reached = batch.delivered + batch.alreadyThere
-    val head = when {
-        reached == 0 -> null
-        batch.alreadyThere > 0 -> stringResource(R.string.picked_result_with_existing, reached, batch.alreadyThere)
-        else -> stringResource(R.string.picked_result_delivered, reached)
-    }
+    // 只说送达几张；「其中几张电脑上已有」是实现细节，用户不需要（产品负责人 2026-11-04）。
+    val head = if (reached == 0) null else stringResource(R.string.picked_result_delivered, reached)
     val tail = if (batch.failed > 0) stringResource(R.string.picked_result_failed, batch.failed) else null
     return listOfNotNull(head, tail).joinToString(" · ").ifEmpty { null }
 }
