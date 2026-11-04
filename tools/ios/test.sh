@@ -4,7 +4,7 @@
 #   tools/ios/test.sh            # 本机 / CI 同一条命令（just ios-test）
 #
 # 只跑 App 测试（scheme PPass）。TransportFFITests 是单独一步 tools/ios/test-transport-ffi.sh，
-# ci-ios.yml 分两步调；本地 just ios-test 与 just batch-verify（对照表 ci-ios.yml:ios）两步都跑。
+# ci-ios.yml 分两步调；本地 just ios-test 两步都跑。
 # 只跑本脚本会漏掉 FFI 字段类的红（11-02 #1304）。
 #
 # - 工程由 apps/ios/project.yml 生成，.xcodeproj 不入库。

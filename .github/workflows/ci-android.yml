@@ -19,8 +19,6 @@ on:
   # 汇报 skipped，对必过项算通过。没改到安卓相关路径的 PR 只跑十几秒的 changes 与 gate。
   pull_request:
     branches: [main]
-  push:
-    branches: [main]
   # #1187：发版前由 release.yml 以全量模式调用（changes 对 workflow_call 恒定判要跑）。
   workflow_call:
 

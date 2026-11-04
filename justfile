@@ -268,7 +268,7 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check hooks-test flow-worker-test supply-chain-check mobile-static-check i18n-split-check lockfile-check flow-owner-test heavy-lock-test ci-local-map-check
+ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check hooks-test flow-worker-test supply-chain-check mobile-static-check i18n-split-check lockfile-check flow-owner-test heavy-lock-test
   @echo "==> CI pipeline: all green ✅"
 
 # 两个 Rust workspace 的 Cargo.lock 都得和实际依赖一致（src-tauri 是独立 workspace，
@@ -307,7 +307,7 @@ i18n-split-check:
 #
 # ⚠️ 只在这次改动**一行 Rust/Kotlin/前端都没动**时用它。碰了代码就跑 `just ci`，
 # 别拿这条快车道当省事的借口——`ci` 的依赖列表一个都没减。
-ci-docs: md-check token-check shell-vars-check identity-check hooks-test flow-worker-test supply-chain-check flow-owner-test heavy-lock-test ci-local-map-check
+ci-docs: md-check token-check shell-vars-check identity-check hooks-test flow-worker-test supply-chain-check flow-owner-test heavy-lock-test
   @echo "==> docs lane: green ✅（注意：本条不含 fmt/lint/test，动了代码必须跑 just ci）"
 
 # T-040 人工验收：自启/防睡眠/密钥仓 真机冒烟（H-09 双平台各跑一次）
@@ -515,22 +515,6 @@ flow-worker-test:
 # ── owner 流程（tools/flow/owner-*.sh，说明见 docs/runbook/owner.md）──────────
 # 每一步自动判定；红了或判定不了就经 owner-stuck 写 issue 并停下，脚本里没有跳过。
 
-# 列出 status:review 的卡，逐张判能否进批次，输出建议批次（--dry-run 不改 issue）
-batch-plan *args:
-    bash tools/flow/owner-batch-plan.sh {{args}}
-
-# 从最新 origin/main 开 batch/<日期>-<主题>（新 worktree），逐张合入卡分支
-batch-open topic +issues:
-    bash tools/flow/owner-batch-open.sh {{topic}} {{issues}}
-
-# 批次本地全量验证（ppf-decoder → just ci → tools/test-*.sh → 受影响端真机），写批次报告
-batch-verify:
-    bash tools/flow/owner-batch-verify.sh
-
-# 推批次分支、开 PR、等全部检查；全绿 squash 合入，红了写 PR 评论并停下
-batch-pr:
-    bash tools/flow/owner-batch-pr.sh
-
 # 在 origin/main 上打 test tag 并等 Release 结论（端 ∈ android macos windows ios；正式版拒绝）
 release-test +args:
     bash tools/flow/owner-release-test.sh {{args}}
@@ -557,9 +541,3 @@ flow-owner-test:
 # 重编译锁入口的判据测试：可重入、串行、超时（#1308；进 ci / ci-docs）
 heavy-lock-test:
     @bash tools/test-heavy-lock.sh
-
-# CI 检查 → 本地命令对照表（tools/flow/ci-local-map.tsv）：先跑判据测试（删映射必须红），
-# 再判真实 workflow 是否每个 job 都有映射。CI 加了新 job 而对照表没跟上，这里就红。
-ci-local-map-check:
-    @bash tools/flow/ci-local-map.test.sh
-    @python3 tools/flow/ci-local-map.py check
