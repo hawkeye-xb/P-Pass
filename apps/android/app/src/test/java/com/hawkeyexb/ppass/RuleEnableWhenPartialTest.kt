@@ -74,5 +74,23 @@ class RuleEnableWhenPartialTest {
         assertFalse(main.contains("auto_backup_rule_limited_sent"))
         assertFalse(home.contains("picked_result_with_existing"))
         assertFalse(File("src/main/res/values-zh/strings.xml").readText().contains("picked_result_with_existing"))
+        // 不用的提示句连词条一起删掉（两种语言）。
+        for (dir in listOf("values", "values-zh")) {
+            assertFalse(dir, File("src/main/res/$dir/strings.xml").readText().contains("auto_backup_rule_limited_sent"))
+        }
+    }
+
+    /**
+     * 照片页第一张引导卡的按钮跟着「点了会去哪」说：开关关着且会去系统设置（部分权限、系统不再弹框）→「去设置」，否则「开启」。
+     * 判断用的是开关链路同一个 [ruleEnableRoute]，两处不会说的和做的不一样。反证：按钮写死「开启」或不传这个判断，本条红。
+     */
+    @Test
+    fun scope_guide_button_says_open_settings_when_enabling_would_go_to_settings() {
+        val photos = File("src/main/java/com/hawkeyexb/ppass/ui/PhotosScreen.kt").readText()
+        assertTrue(main.contains("guideActionGoesToSettings = !ruleOn &&"))
+        assertTrue(main.contains("ruleEnableRoute(mediaAccess, canPromptForFullMediaAccess(context)) == RuleEnableRoute.Settings"))
+        assertTrue(photos.contains("goesToSettings = guideActionGoesToSettings"))
+        assertTrue(photos.contains("if (guide == PhotosGuide.EnableScope && goesToSettings) R.string.auto_backup_blocked_action else R.string.photos_guide_enable"))
+        assertTrue(photos.contains("actionLabel = stringResource(label)"))
     }
 }

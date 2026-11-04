@@ -1344,6 +1344,9 @@ fun PPassApp() {
                         // 范围存了但读不出来不算「没选」（设置行另说「读不到」）。
                         guide = photosGuideOf(guideFacts),
                         computerName = s.pairing.storageDeviceName,
+                        // #1353：开关关着、点了会去系统设置（部分权限且系统不再弹框）→ 按钮说「去设置」。
+                        guideActionGoesToSettings = !ruleOn &&
+                            ruleEnableRoute(mediaAccess, canPromptForFullMediaAccess(context)) == RuleEnableRoute.Settings,
                         onGuideAction = { g ->
                             when (g) {
                                 // 开关开着、只是没选相册 → 直达选范围页；开关关着 → 走开启链路（权限 → 选范围页）。

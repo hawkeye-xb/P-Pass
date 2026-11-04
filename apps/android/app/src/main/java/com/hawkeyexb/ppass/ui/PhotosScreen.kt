@@ -298,6 +298,8 @@ internal fun PhotosScreen(
     guide: PhotosGuide = PhotosGuide.None,
     computerName: String = "",
     onGuideAction: (PhotosGuide) -> Unit = {},
+    /** #1353：第一步卡的按钮会去系统设置（部分权限、系统不再弹框）时说「去设置」，否则「开启」。 */
+    guideActionGoesToSettings: Boolean = false,
     onGuideDismiss: () -> Unit = {},
     // #1322（方案结论 7）：范围里还没有照片时的一行现状；null = 不显示。不是引导，不受 × 影响。
     scopeEmptyHint: String? = null,
@@ -397,6 +399,7 @@ internal fun PhotosScreen(
             LaunchedEffect(guide) { PLog.i("PPassGuide", "photos-guide: shown ${guide.logName}") }
             PhotosGuideCard(
                 guide, computerName,
+                goesToSettings = guideActionGoesToSettings,
                 onAction = { onGuideAction(guide) },
                 onDismiss = onGuideDismiss,
                 // 左右 12 与照片网格对齐。
@@ -919,10 +922,12 @@ internal fun scopeEmptyHintShown(f: GuideFacts, inScope: Long?): Boolean = f.sco
 private fun PhotosGuideCard(
     guide: PhotosGuide,
     computerName: String,
+    goesToSettings: Boolean,
     onAction: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier,
 ) {
+    val label = if (guide == PhotosGuide.EnableScope && goesToSettings) R.string.auto_backup_blocked_action else R.string.photos_guide_enable
     val text = when (guide) {
         PhotosGuide.EnableScope -> stringResource(R.string.photos_guide_scope)
         PhotosGuide.EnableBackground -> stringResource(R.string.photos_guide_background)
@@ -932,7 +937,7 @@ private fun PhotosGuideCard(
     Box(modifier) {
         ClosableNoticeCard(
             body = text,
-            actionLabel = stringResource(R.string.photos_guide_enable),
+            actionLabel = stringResource(label),
             onAction = onAction,
             closeLabel = stringResource(R.string.photos_guide_close),
             onClose = onDismiss,
