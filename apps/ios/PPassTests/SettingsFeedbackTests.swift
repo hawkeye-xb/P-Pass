@@ -186,10 +186,10 @@ final class SettingsFeedbackTests: XCTestCase {
     }
 
     /// #1323（改断言、保意图：原「部分 / 拒绝照常走完选范围」）：决定页主按钮申请照片权限——全部允许 → 选范围页；
-    /// 部分 / 拒绝 → 系统选图（单张备份），不新增出口、不落盘。
-    /// 反证：`decisionLanding` 恒返回 `.chooseScope`，部分 / 拒绝两轮红。
+    /// 拒绝 → 系统选图（单张备份），不落盘。不新增出口。
+    /// 反证：`decisionLanding` 恒返回 `.chooseScope`，拒绝一轮红。
     func test_decision_main_button_lands_by_photo_access() async {
-        for (answer, expected) in [(MediaAccess.full, AppModel.Phase.chooseAlbums), (.partial, .decision), (.none, .decision)] {
+        for (answer, expected) in [(MediaAccess.full, AppModel.Phase.chooseAlbums), (.none, .decision)] {
             let (app, engine, media) = make()
             media.granted = nil
             media.answer = answer
@@ -201,7 +201,36 @@ final class SettingsFeedbackTests: XCTestCase {
             XCTAssertEqual(app.pickerRequested, answer != .full, "\(answer)")
             XCTAssertEqual(app.access, answer, "页面要拿到系统框之后的权限档")
             XCTAssertFalse(engine.calls.contains("onboarded"), "还没做出选择：\(answer)")
+            XCTAssertFalse(engine.calls.contains("sendAllowed"), "\(answer)")
         }
+    }
+
+    /// #1323 部分允许：iOS 权限框里系统已弹过选照片页，那次选择就是「系统选图」——直接登记已授权的照片（单张备份）、
+    /// 落盘 via=pick、进照片页；不再弹 App 的选图器（真机实测曾让用户选两遍）。授权集为空 → 留在决定页、不落盘。
+    /// 反证：部分允许改回 `pickerRequested = true`（旧行为），第一段 picker / phase / onboarded 断言红。
+    func test_decision_partial_registers_system_selection_without_second_picker() async {
+        let (app, engine, media) = make()
+        media.granted = nil
+        media.answer = .partial
+        engine.allowedSent = 2
+        app.paired(firstTime: true, settingSaveFailed: false)
+        app.decisionChooseScope()
+        await settle()
+        XCTAssertFalse(app.pickerRequested, "不弹第二个选图器")
+        XCTAssertTrue(engine.calls.contains("sendAllowed"), "\(engine.calls)")
+        XCTAssertTrue(engine.calls.contains("onboarded"), "登记上了就是做了决定")
+        XCTAssertEqual(app.phase, .main)
+
+        let (empty, emptyEngine, emptyMedia) = make()
+        emptyMedia.granted = nil
+        emptyMedia.answer = .partial
+        emptyEngine.allowedSent = 0
+        empty.paired(firstTime: true, settingSaveFailed: false)
+        empty.decisionChooseScope()
+        await settle()
+        XCTAssertEqual(empty.phase, .decision, "一张没登记上：还没做决定")
+        XCTAssertFalse(empty.pickerRequested)
+        XCTAssertFalse(emptyEngine.calls.contains("onboarded"))
     }
 
     /// 决定页的范围出口：选范围页返回 → 回决定页（还没做决定）；再进、保存 → 落盘 via=scope、进照片页。

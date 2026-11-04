@@ -58,11 +58,17 @@ final class AppModel: ObservableObject {
     }
 
     /// 决定页主按钮「选择备份范围」在照片权限框之后去哪（ADR 结论 5，对位 Android `decisionLanding`）：
-    /// 全部允许 → 选范围页；部分允许或拒绝 → 系统选图（单张备份），不新增第三个出口。
-    enum DecisionLanding: Equatable { case chooseScope, pickPhotos }
+    /// 全部允许 → 选范围页；拒绝 → 系统选图（单张备份）。
+    /// 部分允许：iOS 在权限框里已经弹了系统自己的选照片页，用户在那里选的就是这次的「系统选图」——
+    /// 直接登记这些已授权的照片（单张备份），不再弹 App 的选图器让人选第二遍。都不新增第三个出口。
+    enum DecisionLanding: Equatable { case chooseScope, registerAllowed, pickPhotos }
 
     nonisolated static func decisionLanding(_ access: MediaAccess) -> DecisionLanding {
-        access == .full ? .chooseScope : .pickPhotos
+        switch access {
+        case .full: return .chooseScope
+        case .partial: return .registerAllowed
+        case .none: return .pickPhotos
+        }
     }
 
     enum Tab: Hashable { case photos, settings }
@@ -260,9 +266,22 @@ final class AppModel: ObservableObject {
             guard phase == .decision else { return }
             switch Self.decisionLanding(granted) {
             case .chooseScope: phase = .chooseAlbums
+            case .registerAllowed: await registerAllowedOnDecision()
             case .pickPhotos: pickerRequested = true
             }
         }
+    }
+
+    /// 部分允许：登记系统已授权的照片（同 `pickedChosen` 的单张备份口径）。登记上才算做了决定：落盘、进照片页；
+    /// 一张都没登记上（授权集为空）→ 留在决定页。
+    private func registerAllowedOnDecision() async {
+        let n = await backend.engine.sendAllowedPhotos()
+        refresh()
+        guard phase == .decision else { return }
+        guard n > 0 else { AppLog.log("onboarding: partial access registered nothing, staying on decision"); return }
+        AppLog.log("onboarding: partial access registered \(n) allowed photos")
+        markDecided(via: "pick")
+        phase = .main
     }
 
     /// 决定页次入口「先挑几张试试」：直接系统选图（不要照片权限）。

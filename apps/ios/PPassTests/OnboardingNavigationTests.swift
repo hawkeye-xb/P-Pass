@@ -96,7 +96,7 @@ final class OnboardingNavigationTests: XCTestCase {
     /// 决定页主按钮「选择备份范围」在照片权限框之后：全部允许 → 选范围页；部分 / 拒绝 → 系统选图（ADR 结论 5）。
     func testDecisionLandingByPhotoAccess() {
         XCTAssertEqual(AppModel.decisionLanding(.full), .chooseScope)
-        XCTAssertEqual(AppModel.decisionLanding(.partial), .pickPhotos)
+        XCTAssertEqual(AppModel.decisionLanding(.partial), .registerAllowed, "部分允许：系统已弹过选照片页，不再弹 App 的选图器")
         XCTAssertEqual(AppModel.decisionLanding(.none), .pickPhotos)
     }
 }
