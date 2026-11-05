@@ -587,7 +587,19 @@ DONE "$W" >"${TMP}/o140a" 2>&1 || bad "复用前第一次交卡失败：$(tail -
 DONE "$W" >"${TMP}/o140b" 2>&1 || bad "复用交卡失败：$(tail -5 "${TMP}/o140b")"
 [ ! -s "${FAKE_GH}/just_calls" ] && ok "树没变 → 门禁不重跑" || bad "树没变仍重跑了门禁：$(cat "${FAKE_GH}/just_calls")"
 grep -q "复用 .* 的验证" "${TMP}/o140b" && comments_of 140 | grep -q "复用 .* 的验证" && ok "  输出与回执写明复用了哪次的验证" || bad "回执没写复用"
-comments_of 140 | tail -n 40 | grep -q "FAKE-CI-GREEN" && ok "  复用时回执仍贴上次门禁的输出末尾" || bad "复用时回执缺门禁输出"
+# 只看最后一份回执（复用那次）；失败时把回执、gate.tail 与第一次交卡的输出打出来，留下触发条件（2026-11-05 在 just done 里红过一次，未复现）
+last_receipt() { comments_of "$1" | awk '/^-----$/ { if (cur != "") last = cur; cur = ""; next } { cur = cur $0 "\n" } END { if (cur != "") last = cur; printf "%s", last }'; }
+if last_receipt 140 | grep -q "FAKE-CI-GREEN"; then
+  ok "  复用时回执仍贴上次门禁的输出末尾"
+else
+  bad "复用时回执缺门禁输出"
+  { echo "--- 最后一份回执"; last_receipt 140; echo "--- gate.tail"; cat "${PPASS_WT_ROOT}/.evidence/140/gate.tail"; echo "--- verified"; cat "${PPASS_WT_ROOT}/.evidence/140/verified"; echo "--- 第一次交卡输出"; tail -n 15 "${TMP}/o140a"; } 2>&1 | sed 's/^/        | /'
+fi
+: >"${PPASS_WT_ROOT}/.evidence/140/gate.tail"
+: >"${FAKE_GH}/just_calls"
+DONE "$W" >"${TMP}/o140e" 2>&1 || bad "gate.tail 为空时交卡失败：$(tail -5 "${TMP}/o140e")"
+[ "$(grep -c . "${FAKE_GH}/just_calls")" = 1 ] && last_receipt 140 | grep -q "FAKE-CI-GREEN" &&
+  ok "  上次的门禁输出（gate.tail）是空的 → 不复用，重跑门禁，回执带输出" || bad "gate.tail 为空仍复用：$(cat "${FAKE_GH}/just_calls")"
 commit_file "$W" src/r1.txt "x2"
 : >"${FAKE_GH}/just_calls"
 DONE "$W" >"${TMP}/o140c" 2>&1 || bad "改后交卡失败：$(tail -5 "${TMP}/o140c")"

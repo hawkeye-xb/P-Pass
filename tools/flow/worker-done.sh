@@ -306,7 +306,7 @@ just --show verify >/dev/null 2>&1 && HAS_VERIFY=1
 VERIFIED="${EVID_DIR}/verified"
 VKEY="tree=${TREE} gates=${GATE} verify=${HAS_VERIFY}"
 REUSED=""
-if [ -s "$VERIFIED" ] && [ "$(head -n 1 "$VERIFIED")" = "$VKEY" ] && [ -f "${EVID_DIR}/gate.tail" ]; then
+if [ -s "$VERIFIED" ] && [ "$(head -n 1 "$VERIFIED")" = "$VKEY" ] && [ -s "${EVID_DIR}/gate.tail" ]; then
   REUSED="$(sed -n 2p "$VERIFIED")"
 fi
 VERIFY_STATE="skipped"
