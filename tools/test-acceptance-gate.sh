@@ -53,6 +53,11 @@ gate 0 "反证：不碰 apps → 绿" "tools/x.sh" "closes #1"
 gate 0 "反证：apps/desktop/src/ 下只改测试文件 → 绿" "apps/desktop/src/foo.test.ts apps/desktop/src/test/x.js" "closes #1"
 gate 1 "  apps/desktop/src/ 下改非测试文件 → 红" "apps/desktop/src/foo.ts apps/desktop/src/foo.test.ts" "closes #1"
 
+gate 1 "SpeedTest.svelte（名字以 Test 结尾的正式组件）单独改 → 红" "apps/desktop/src/SpeedTest.svelte" "closes #1"
+gate 1 "  Kotlin 正式文件 PairingTest.kt 放在 main 下 → 红" "apps/android/app/src/main/java/com/hawkeyexb/ppass/PairingTest.kt" "closes #1"
+gate 1 "  Swift 正式文件 SpeedTests.swift 在非测试目录 → 红" "apps/ios/PPass/Views/SpeedTests.swift" "closes #1"
+gate 0 "反证：同名文件在测试目录下 → 绿" "apps/android/app/src/androidTest/java/com/hawkeyexb/ppass/NetProbeTest.kt apps/ios/PPassTests/XTests.swift apps/ios/Packages/PPassCore/Tests/PPassCoreTests/Flow/A.swift apps/desktop/src/a.spec.ts apps/desktop/src/__tests__/b.js apps/desktop/src-tauri/tests/c.rs" "closes #1"
+
 # classify
 printf '%s\n' "$UI" | bash "$G" classify --repo "${TMP}/repo" | grep -qx ui && ok "classify：界面 → ui" || bad "classify 界面"
 printf '%s\n' core/x.rs | bash "$G" classify --repo "${TMP}/repo" | grep -qx core && ok "classify：核心 → core" || bad "classify 核心"
