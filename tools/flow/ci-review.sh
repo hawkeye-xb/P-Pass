@@ -91,12 +91,13 @@ infra_report() {
     echo "ci-review: 贴评论失败" >&2
 }
 
+list_fail_comments >"${STATE}/before"
+
 if [ -z "${ANTHROPIC_AUTH_TOKEN:-}" ]; then
   infra_report "没有拿到评审用的 key（Secret PPASS_REVIEW_API_KEY 为空；fork 与 Dependabot 的 PR 拿不到 Secret）"
   exit 0
 fi
 
-list_fail_comments >"${STATE}/before"
 export PPASS_REVIEW_NO_MERGE=1
 export PPASS_CI_SHIM=1
 export PPASS_REVIEW_AGENT="${FLOW_DIR}/ci-review.sh"

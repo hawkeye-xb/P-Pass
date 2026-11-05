@@ -180,6 +180,10 @@ reset pass
 ANTHROPIC_AUTH_TOKEN= CI 7 >/dev/null 2>&1
 tail -n 1 "$FAKE/statuses" | grep -qF "state=error" && [ "$(calls)" = 0 ] && has "评审没跑成" "$FAKE/comments" && ok "没有 key → error + 评审没跑成，不调 agent" || bad "没有 key 处理不对"
 reset pass
+printf '**独立评审：未通过**（头提交 `%s`）\n更早的真实结论\n-----\n' "${SHA:0:10}" >"$FAKE/comments"
+ANTHROPIC_AUTH_TOKEN= CI 7 >/dev/null 2>&1
+[ ! -s "$FAKE/deletes" ] && ok "没有 key 的提前返回也不误删更早的真实「未通过」评论" || bad "没有 key 时误删：$(cat "$FAKE/deletes")"
+reset pass
 printf 'no card\n' >"$FAKE/pr.body"
 CI 7 >/dev/null 2>&1 && tail -n 1 "$FAKE/statuses" | grep -qF "state=error" && ok "review.sh 提前退出（正文没有 closes）→ error，job 仍成功" || bad "提前退出处理不对：$(cat "$FAKE/statuses")"
 printf 'closes #77\n' >"$FAKE/pr.body"
