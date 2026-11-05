@@ -6,7 +6,7 @@
 # 约定：
 # - 只在 Git Bash 里跑；Windows 原生程序的参数用 `cygpath -w` 传，避免 MSYS 改写路径。
 # - adb 的参数一律加 MSYS2_ARG_CONV_EXCL='*'，否则 /sdcard/... 会被改写成 C:\Program Files\Git\...
-# - 手机经 ssh 反向隧道：本机 e3.env 的 ADB_SERVER_SOCKET=tcp:127.0.0.1:5039（common.sh 已导入）。
+# - 手机经 ssh 反向隧道：本机 e3.env 的 ADB_SERVER_SOCKET=tcp:127.0.0.1:<端口>（common.sh 已导入）。
 # shellcheck shell=bash
 
 WIN_APP_DIR_WIN="${LOCALAPPDATA}\\P-Pass"
@@ -21,7 +21,6 @@ WIN_SCN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WIN_UIA_PS="$(cygpath -w "$REPO_ROOT/tools/windows/uia-drive.ps1")"
 WIN_OUTSIDE_PS="$(cygpath -w "$REPO_ROOT/tools/windows/run-outside-package.ps1")"
 WIN_WATCH_PS="$(cygpath -w "$REPO_ROOT/tools/windows/watch-new-windows.ps1")"
-WIN_RESET_PS="$(cygpath -w "$REPO_ROOT/tools/windows/reset-ppass-env.ps1")"
 
 # 稳定标签（Latest）与候选标签，场景可用环境变量覆盖。
 WIN_BASE_TAG="${E3_WIN_BASE_TAG:-v2026.10.7}"
@@ -519,3 +518,6 @@ win_watch_wait() { # 返回 watcher 退出码
 
 win_json_array_len() { python3 -I -c 'import json,sys; d=json.load(open(sys.argv[1])); print(len(d if isinstance(d,list) else d.get("devices",[])))' "$1" 2>/dev/null; }
 win_sleep() { sleep "$1"; }
+
+# 常见判据的管道封装：check 的行里不能出现管道符（管道会把 check 放进子 shell，E3_FAILS 丢失）。
+no_line_panic() { no_line "$1" 'panicked|PANIC'; }

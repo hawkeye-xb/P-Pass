@@ -88,16 +88,18 @@ hash_extra() {
   [ "$missing" -eq 0 ] && [ "$dup" -eq 0 ]
 }
 
+photo_count_matches() { grep -qx "photo_count=$(sed -n 's/^expected=//p' "$1" | head -1)" "$1"; }
+
 judge() {
   local d="$1" pre_n post_n
   pre_n=$(grep -c . "$d/pre-library-hashes.txt" 2>/dev/null || echo 0)
   post_n=$(grep -c . "$d/post-library-hashes.txt" 2>/dev/null || echo 0)
-  check "照片数 = 增量前 + 8" grep -qx "photo_count=$(sed -n 's/^expected=//p' "$d/backup.txt" | head -1)" "$d/backup.txt"
+  check "照片数 = 增量前 + 8" photo_count_matches "$d/backup.txt"
   check "8 张全部增量入库且不重复" hash_extra "$d"
   check "库哈希清单 = 增量前 + 8 行（原有照片仍在、不重复）" [ "$post_n" -eq "$((pre_n + 8))" ]
   check "两端仍是候选版本" grep -qx "status_version=$WIN_CAND_VER" "$d/post-versions.txt"
   check "手机仍是候选版本" grep -qx "phone_version=$WIN_CAND_VER" "$d/post-versions.txt"
-  check "daemon 日志无 panic" no_line "$d/post-daemon.log" 'panicked|PANIC'
+  check "daemon 日志无 panic" no_line_panic "$d/post-daemon.log"
   verdict
 }
 

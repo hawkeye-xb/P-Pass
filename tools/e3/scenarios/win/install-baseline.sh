@@ -86,7 +86,7 @@ judge() {
   check "daemon 进程在" grep -Eq '^daemon_pid=[0-9]+' "$d/versions.txt"
   check "手机基线版本 $WIN_BASE_PHONE_VER" grep -qx "phone_version=$WIN_BASE_PHONE_VER" "$d/versions.txt"
   check "照片库目录已由向导写入" grep -Eq '^library=.+P-Pass' "$d/versions.txt"
-  check "daemon 日志无 panic" no_line "$d/diag/daemon.log" 'panicked|PANIC'
+  check "daemon 日志无 panic" no_line_panic "$d/diag/daemon.log"
   verdict
 }
 

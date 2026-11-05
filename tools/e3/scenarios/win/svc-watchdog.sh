@@ -65,6 +65,9 @@ act() {
   } >"$d/after.txt"
 }
 
+parent_is_svchost_or_shell() { grep -Eq 'parent_name=(svchost|p-pass-desktop)' "$1"; }
+status_online() { jget "$1" "j['state']" 2>/dev/null | grep -q ONLINE; }
+
 judge() {
   local d="$1" tag
   for tag in shell-open shell-closed; do
@@ -76,12 +79,12 @@ judge() {
     else
       # 壳开着时壳自己也会自愈拉起 daemon（实测父进程 ppass-desktop），这是可接受的恢复路径；
       # 两种父进程都算「1 分钟内被拉起」，壳关着时才必须由计划任务（svchost）拉起。
-      check "[$tag] 被拉起（父进程 svchost 或壳自愈）" grep -Eq 'parent_name=(svchost|p-pass-desktop)' "$d/$tag-parent.txt"
+      check "[$tag] 被拉起（父进程 svchost 或壳自愈）" parent_is_svchost_or_shell "$d/$tag-parent.txt"
       grep -q 'parent_name=p-pass-desktop' "$d/$tag-parent.txt" && echo "  INFO  shell-open 由壳自愈拉起（父进程 p-pass-desktop；SOP 写的是 svchost）"
     fi
-    check "[$tag] 拉起后 daemon 在线" jget "$d/$tag-status.json" "j['state']" 2>/dev/null | grep -q ONLINE
+    check "[$tag] 拉起后 daemon 在线" status_online "$d/$tag-status.json"
     check "[$tag] 日志出现「启动就绪」" has_line "$d/$tag-daemon.log" '启动就绪'
-    check "[$tag] 日志无 panic" no_line "$d/$tag-daemon.log" 'panicked|PANIC'
+    check "[$tag] 日志无 panic" no_line_panic "$d/$tag-daemon.log"
   done
   verdict
 }

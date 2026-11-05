@@ -91,6 +91,8 @@ act() {
   snapshot "$d" post
 }
 
+photo_count_unchanged() { [ "$(grep -o '^photo_count=[0-9]*' "$1/pre-versions.txt" | cut -d= -f2)" = "$(grep -o '^photo_count=[0-9]*' "$1/post-versions.txt" | cut -d= -f2)" ]; }
+
 judge() {
   local d="$1"
   check "桌面 exe 版本 = $WIN_CAND_VER" grep -qx "exe_version=$WIN_CAND_VER" "$d/post-versions.txt"
@@ -100,8 +102,8 @@ judge() {
   check "配对设备仍在（1 台）" grep -qx 'devices=1' "$d/post-versions.txt"
   check "身份 key 未变（升级不重配）" cmp -s "$d/pre-identity.txt" "$d/post-identity.txt"
   check "照片库哈希未变（升级不丢/不重入库）" cmp -s "$d/pre-library-hashes.txt" "$d/post-library-hashes.txt"
-  check "照片数未变" [ "$(grep -o '^photo_count=[0-9]*' "$d/pre-versions.txt" | cut -d= -f2)" = "$(grep -o '^photo_count=[0-9]*' "$d/post-versions.txt" | cut -d= -f2)" ]
-  check "daemon 日志无 panic" no_line "$d/post-daemon.log" 'panicked|PANIC'
+  check "照片数未变" photo_count_unchanged "$d"
+  check "daemon 日志无 panic" no_line_panic "$d/post-daemon.log"
   verdict
 }
 

@@ -10,7 +10,7 @@
 | id | 覆盖 | 前置 | 反证 |
 |---|---|---|---|
 | `win/install-baseline` | R0.1 手机基线 0.10.2；R0.2/R0.3 桌面基线 0.10.1 + 首启向导 | 无 | 装好不启动 App（向导不走），版本/主界面判据变红 |
-| `win/pair-backup` | R0.4 配对；R0.5 只选 PPassRegression、40 张逐张 sha256 对账 | install-baseline | 从 `originals/` 删一张再对账，sha256 判据变红（teardown 放回） |
+| `win/pair-backup` | R0.4 配对；R0.5 只选 PPassRegression、40 张逐张 sha256 对账 | install-baseline | 从**手机那 40 张**里挑一张删掉库里对应原图再对账，sha256 判据变红（teardown 放回；中途被杀会在库里留缺一张，先看 `$E3_STATE/win/counter-keep`） |
 | `win/upgrade-candidate` | R1.1/R1.2/R1.4 覆盖升级到候选，桌面/daemon/手机版本一致，配对/身份/照片不丢 | pair-backup | 用升级前的真实快照跑同一判据，版本判据变红（不降级、不动库） |
 | `win/backup-after-upgrade` | R1.5 升级后再 push 8 张，增量 +8、不重复 | upgrade-candidate | 不触发这次备份（用 push 前快照 + 8 张哈希），8 张全部报缺 |
 | `win/svc-watchdog` | R3.2 强杀 daemon，1 分钟内拉起（壳开/关各一次） | upgrade-candidate | 禁用计划任务再杀，90s 内没有新进程 |
@@ -38,6 +38,13 @@
   `uninstall.exe` 解到 `%LOCALAPPDATA%\P-Pass`，并写 HKCU 卸载登记（App 只认安装程序登记的
   `InstallLocation`）。这样能在没有提权的机器上继续跑非安装类用例；**报告必须写明「安装器路径未验证」**。
 - 解包依赖 7-Zip 的完整版 `7z.exe`（NSIS 格式）；本机放在 `$E3_STATE/win/tools/7zfull/`。
+
+## 为什么另写 gen-photos.ps1
+
+`tools/e3/lib/gen-photos.py` 用 macOS 自带 `sips` 把 PNG 转 JPEG，Windows 没有；公共库本卡不能改，
+所以 `tools/e3/scenarios/win/gen-photos.ps1` 用 Windows 自带的 System.Drawing 生成同样命名的 JPEG
+（内容按 sha256 判重）。后续提升到公共库时，按平台分派（macOS 用 sips，Windows 用 System.Drawing），
+场景只保留一个入口。
 
 ## 判定数据源
 

@@ -160,28 +160,26 @@ hash_reconcile() {
   [ "$missing" -eq 0 ] && [ "$dup" -eq 0 ]
 }
 
+photo_count_matches() { grep -qx "photo_count=$(sed -n 's/^expected=//p' "$1" | head -1)" "$1"; }
+
 judge() {
   local d="$1"
   check "桌面恰好 1 台配对设备" grep -qx 'devices=1' "$d/backup.txt"
-  check "库内照片数 = 备份前 + 40" grep -qx "photo_count=$(sed -n 's/^expected=//p' "$d/backup.txt" | head -1)" "$d/backup.txt"
+  check "库内照片数 = 备份前 + 40" photo_count_matches "$d/backup.txt"
   check "手机 40 张的 sha256 全部入库且不重复" hash_reconcile "$d"
   check "只有 PPassRegression 被选" grep -qx 'PPassRegression' "$d/scope-selected.txt"
   check "没有选其它相册" [ "$(grep -c . "$d/scope-selected.txt")" = 1 ]
-  check "daemon 日志无 panic" no_line "$d/diag/daemon.log" 'panicked|PANIC'
+  check "daemon 日志无 panic" no_line_panic "$d/diag/daemon.log"
   verdict
 }
 
 counter() {
-  local d="$OUT" victim rel
-  # 故障条件：从 originals 删掉一张已入库的原图，再按同样规则对账 ⇒ 必须变红。
-  victim="$(sed -n '1s/^[0-9a-f]*  //p' "$d/../main/library-hashes.txt")"
-  [ -n "$victim" ] || victim="$(sed -n '1s/^[0-9a-f]*  //p' "$E3_STATE/win/pair-precheck/library-hashes.txt" 2>/dev/null)"
-  if [ -z "$victim" ]; then
-    # 没有主证据时现取一张
-    win_library_hashes "$d" >/dev/null 2>&1 || true
-    victim="$(sed -n '1s/^[0-9a-f]*  //p' "$d/library-hashes.txt")"
-  fi
-  rel="$victim"
+  local d="$OUT" victim_h rel
+  # 故障条件：从手机那 40 张里挑一张（phone-hashes 第一条），删掉库里对应的原图，
+  # 再按同样规则对账 ⇒ sha256 判据必须变红。teardown 放回。
+  victim_h="$(sed -n '1s/ .*//p' "$d/../main/phone-hashes.txt" 2>/dev/null)"
+  # sha256sum 在 Git Bash 下输出 "hash *路径"（二进制模式带 *），统一去掉。
+  rel="$(grep -m1 "^$victim_h " "$d/../main/library-hashes.txt" 2>/dev/null | awk '{print $2}' | sed 's/^\*//')"
   if [ -n "$rel" ]; then
     mkdir -p "$E3_STATE/win/counter-keep"
     cp "$(win_library_dir)/$rel" "$E3_STATE/win/counter-keep/victim.jpg"
@@ -190,13 +188,20 @@ counter() {
   fi
   win_diag "$d" || true
   win_library_hashes "$d" || true
-  win_phone_hashes "$d/phone-hashes.txt" || true
+  # 手机清单用主证据里的同一份（反证不重新读手机，避免依赖 adb 与文件仍在）
+  cp "$d/../main/phone-hashes.txt" "$d/phone-hashes.txt" 2>/dev/null || true
   cp "$d/../main/backup.txt" "$d/backup.txt" 2>/dev/null || true
+  # 先把主证据里的字段读进变量，再写文件——重定向会先截断，边读边写会读到空。
+  local base expected pc dev
+  base="$(sed -n 's/^base_count=//p' "$d/backup.txt" 2>/dev/null)"
+  expected="$(sed -n 's/^expected=//p' "$d/backup.txt" 2>/dev/null)"
+  pc="$(win_status_field "$d" photo_count)"
+  dev="$(win_json_array_len "$d/diag/devices.json")"
   {
-    echo "base_count=$(sed -n 's/^base_count=//p' "$d/backup.txt" 2>/dev/null)"
-    echo "expected=$(sed -n 's/^expected=//p' "$d/backup.txt" 2>/dev/null)"
-    echo "photo_count=$(win_status_field "$d" photo_count)"
-    echo "devices=$(win_json_array_len "$d/diag/devices.json")"
+    echo "base_count=$base"
+    echo "expected=$expected"
+    echo "photo_count=$pc"
+    echo "devices=$dev"
   } >"$d/backup.txt"
   cp "$d/../main/scope-selected.txt" "$d/scope-selected.txt" 2>/dev/null || true
 }

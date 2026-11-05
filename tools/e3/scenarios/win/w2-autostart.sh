@@ -46,7 +46,8 @@ counter() {
   # 去掉触发条件：人为写回一个 HKCU Run 值，判据必须变红。
   win_ps "New-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'P-Pass' -Value 'C:\\fake\\p-pass-desktop.exe' -PropertyType String -Force | Out-Null" >/dev/null 2>&1 || true
   cp "$EV/main/task.txt" "$d/task.txt" 2>/dev/null || true
-  echo "RUN_VALUE_PRESENT" >"$d/run-value.txt"
+  # 真读注册表：写不进去就记 MISSING，判据是否变红与写入结果绑定。
+  if win_run_value_exists; then echo "RUN_VALUE_PRESENT" >"$d/run-value.txt"; else echo "RUN_VALUE_MISSING" >"$d/run-value.txt"; fi
   cp "$EV/main/state.txt" "$d/state.txt" 2>/dev/null || true
 }
 

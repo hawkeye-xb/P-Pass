@@ -46,7 +46,7 @@ phone_disconnect() {
   win_phone_tap_xml "$dump" '更多' || { echo "手机设置没有更多"; return 1; }
   sleep 1
   win_phone_dump "$dump" || return 1
-  win_phone_tap_xml "$dump" 'lizhaowen|存储电脑' || { echo "手机没有存储电脑"; return 1; }
+  win_phone_tap_xml "$dump" '存储电脑' || { echo "手机没有存储电脑"; return 1; }
   sleep 1
   win_phone_dump "$dump" || return 1
   win_phone_tap_xml "$dump" '断开与这台电脑的连接' || { echo "手机没有断开连接"; return 1; }
@@ -97,16 +97,19 @@ act() {
   win_phone_dump "$d/phone-after-disconnect.xml" || true
 }
 
+task_not_seen() { no_line "$1" 'task=Running|task=Ready'; }
+phone_welcome() { grep -Eq '扫码连接|无法扫码' "$1"; }
+
 judge() {
   local d="$1"
   check "停服务期间 daemon 一次都没出现" no_line "$d/stop-samples.txt" 'pid=[0-9]'
-  check "停服务期间计划任务被删" no_line "$d/stop-samples.txt" 'task=Running|task=Ready'
+  check "停服务期间计划任务被删" task_not_seen "$d/stop-samples.txt"
   check "App 显示已停止" win_ui_has "$d/stop-dialog.txt" '已停止'
   check "恢复后 daemon 在跑" grep -Eq '^restored_pid=[0-9]+' "$d/restore.txt"
   check "恢复后计划任务在运行" grep -qx 'restored_task=Running' "$d/restore.txt"
   check "恢复后 daemon 在线" grep -qx 'restored_state=ONLINE_DIRECT' "$d/restore.txt"
   check "断开后桌面把该设备标为未配对" grep -q '"paired": false' "$d/devices-after-disconnect.json"
-  check "手机回到欢迎页（出现扫码/手动配对）" grep -Eq '扫码连接|无法扫码' "$d/phone-after-disconnect.xml"
+  check "手机回到欢迎页（出现扫码/手动配对）" phone_welcome "$d/phone-after-disconnect.xml"
   verdict
 }
 
