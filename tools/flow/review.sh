@@ -8,7 +8,8 @@
 # CI 上由 tools/flow/ci-review.sh 调用（PPASS_REVIEW_NO_MERGE=1），review/agent 是 main 的必需检查，即合入门禁；
 # 本机 just review 只在 CI 评审不可用时兜底（本机写的状态不顶替必需检查），通过后对 PR 执行
 # gh pr merge --auto --squash。盯梢、人控级（改动碰界面文案路径或核心路径）多一个条件：PR 正文里必须有
-# 「产品负责人 <时间> 真机验收通过」这一行（只改更新说明的是「文案确认通过」，#1448），没有就判未通过
+# 验收记录（#1452 起「产品负责人 <时间> 按 SOP <链接> 操作，owner 判日志通过」，旧写法与文案确认行也认；看不见的核心
+# 改动改为要已采纳方案与测试，#1448），没有就判未通过
 # （验收即放行，AGENTS.md「角色」）。级别与验收行都由 acceptance-gate.sh 判，这里不另存一份。
 # Dependabot 的 PR：按「依赖升级、无关联卡」照常评审，不放行、不跳过；正文里上游 release notes 带的
 # closes / fixes #N 不是本仓的卡，不解析（#1441）。
@@ -146,25 +147,28 @@ ${accept:-（卡上没找到验收场景）}
 "
 done
 
-# ── 2b. 级别：碰核心路径或界面文案路径 = 盯梢 / 人控，合入要有真机验收记录 ──
+# ── 2b. 级别：碰核心路径或界面文案路径 = 盯梢 / 人控，合入要有验收记录 ──
 gh pr diff "$PR" -R "$REPO" --name-only >"${WORK}/pr.files" 2>/dev/null ||
   die "读取 #${PR} 的改动文件清单失败"
+# 完整 diff（不截断）：核心判定要看「是不是只改了版本号行」（#1451），截断的 diff 会漏掉别的改动。
+gh pr diff "$PR" -R "$REPO" >"${WORK}/pr.full.diff" 2>"${WORK}/diff.err" ||
+  die "读取 #${PR} 的 diff 失败" "$(head -3 "${WORK}/diff.err" | tr '\n' ' ')"
 NEEDS_ACCEPT=""
 CORE_RULES="${WORK}/core-paths.txt"
 # Git Bash 会把 origin/main:<path> 的冒号当路径分隔符改写；禁止 MSYS 做路径转换。
 MSYS_NO_PATHCONV=1 git -C "$TOP" show origin/main:.github/core-paths.txt >"$CORE_RULES" 2>/dev/null || : >"$CORE_RULES"
 # 判定与 worker-done.sh、CI 的 acceptance gate 共用 acceptance-gate.sh classify（核心路径、界面文案路径、
 # apps/** 下的非测试文件；读不到界面清单按需要验收处理，宁严勿松）。核心路径规则取 origin/main 上的。
-case "$(bash "${FLOW_DIR}/acceptance-gate.sh" classify --repo "$TOP" --core-rules "$CORE_RULES" <"${WORK}/pr.files" 2>/dev/null)" in
+case "$(bash "${FLOW_DIR}/acceptance-gate.sh" classify --repo "$TOP" --core-rules "$CORE_RULES" --diff "${WORK}/pr.full.diff" <"${WORK}/pr.files" 2>/dev/null)" in
   none) ;;
-  core) NEEDS_ACCEPT="碰核心路径（人控级）" ;;
+  core) NEEDS_ACCEPT="碰核心路径、用户看得到（人控级）" ;;
+  core-hidden) NEEDS_ACCEPT="碰核心路径、用户看不见（要已采纳方案与测试）" ;;
   notes) NEEDS_ACCEPT="只改更新说明（要产品负责人文案确认）" ;;
   *) NEEDS_ACCEPT="碰界面或文案路径、App 代码（盯梢级）" ;;
 esac
 
-# ── 3. 改动 diff ─────────────────────────────────────────────────────
-gh pr diff "$PR" -R "$REPO" >"${WORK}/pr.diff" 2>"${WORK}/diff.err" ||
-  die "读取 #${PR} 的 diff 失败" "$(head -3 "${WORK}/diff.err" | tr '\n' ' ')"
+# ── 3. 改动 diff（完整那份已在 2b 取好；给 agent 的这份超长就截断）────────
+cp "${WORK}/pr.full.diff" "${WORK}/pr.diff"
 DIFF_NOTE=""
 if [ "$(wc -c <"${WORK}/pr.diff")" -gt "$MAX_DIFF" ]; then
   head -c "$MAX_DIFF" "${WORK}/pr.diff" >"${WORK}/pr.diff.cut"
@@ -253,11 +257,10 @@ fi
 printf '%s\n' "$PR_BODY" >"${WORK}/body.check"
 if [ "$VERDICT" = "PASS" ] && [ -n "$NEEDS_ACCEPT" ] &&
   ! bash "${FLOW_DIR}/acceptance-gate.sh" check --repo "$TOP" --core-rules "${WORK}/core-paths.txt" \
-    --files "${WORK}/pr.files" --body "${WORK}/body.check" >/dev/null 2>&1; then
+    --diff "${WORK}/pr.full.diff" --files "${WORK}/pr.files" --body "${WORK}/body.check" >"${WORK}/gate.out" 2>&1; then
   VERDICT="FAIL"
-  WANT_LINE="产品负责人 <时间> 真机验收通过"
-  case "$NEEDS_ACCEPT" in 只改更新说明*) WANT_LINE="产品负责人 <时间> 文案确认通过" ;; esac
-  REASON="${NEEDS_ACCEPT}，PR 正文缺「${WANT_LINE}」这一行（须单独成行、以「产品负责人」开头、时间处是具体日期如 2026-11-04）：没有验收记录不开自动合入。验收通过后在 PR 正文补上这一行，再重跑 just review。"
+  # 缺什么由 acceptance-gate.sh 说（真机 / SOP / 文案确认 / 已采纳方案与测试），这里不另写一份。
+  REASON="${NEEDS_ACCEPT}：$(tr '\n' ' ' <"${WORK}/gate.out")没有验收记录不开自动合入；补上后推新提交或改正文即重评。"
 fi
 # 评审期间检出被改动 = 只读约束被破坏，评审作废。
 if [ -n "$(git -C "$WT" status --porcelain 2>/dev/null)" ]; then

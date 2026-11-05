@@ -78,13 +78,15 @@ R="${TMP}/repo"
 git init -q --template= "$R"
 cd "$R" || exit 1
 git remote add origin git@github-personal:hawkeye-xb/P-Pass.git
-mkdir -p tools/hooks .github docs/a docs/b crates/storage/src
+mkdir -p tools/hooks .github docs/a docs/b crates/storage/src apps/desktop/src-tauri
 cp "${SRC}/tools/hooks/"* tools/hooks/
 cp "${SRC}/tools/ci-paths.sh" tools/
 cp "${SRC}/.github/core-paths.txt" .github/
 echo a >docs/a/x.md
 echo b >docs/b/y.md
 echo s >crates/storage/src/a.rs
+TC=apps/desktop/src-tauri/tauri.conf.json
+printf '{\n  "productName": "P-Pass",\n  "version": "0.10.1",\n  "plugins": {\n    "updater": {\n      "endpoints": ["https://a.example/latest.json"]\n    }\n  }\n}\n' >"$TC"
 git add -A
 git commit -q -m init
 bash tools/hooks/install.sh >/dev/null || {
@@ -170,6 +172,7 @@ issue 103 "status:doing" "## 现象
 只有挂号段，还没写范围"
 issue 104 "status:doing" "$(scope_body)"
 issue 105 "status:doing,core" "$(scope_body 'docs/a/**' 'crates/storage/')"
+issue 106 "status:doing" "$(scope_body 'apps/desktop/src-tauri/tauri.conf.json')"
 
 echo "==> 1. 范围"
 try pass "普通卡，只改范围内文件" fix/101-ok 'echo 1 >>docs/a/x.md; git add docs/a/x.md'
@@ -195,6 +198,13 @@ try deny "工作区改掉核心规则再提交核心文件（规则取自 HEAD�
   'sed -i.bak "/crates\/storage/d" .github/core-paths.txt; rm -f .github/core-paths.txt.bak; echo 1 >>crates/storage/src/a.rs; git add crates/storage' "这是核心改动"
 try deny "工作区改掉 hook 本身再提交（hook 取自 HEAD）" fix/101-hook \
   'printf "#!/bin/sh\nexit 0\n" >tools/hooks/pre-commit; echo 1 >>crates/storage/src/a.rs; git add crates/storage' "这是核心改动"
+# #1451：只改版本号行（tools/bump-version.sh 的写法）不算核心；同一文件再改别的行仍是核心。
+BUMP='sed -i.bak "s/\"version\": \"0.10.1\"/\"version\": \"0.11.0\"/" "$TC"'
+ENDPOINT='sed -i.bak "s#a\.example#evil.example#" "$TC"'
+try pass "卡无 core 标签，tauri.conf.json 只改 version 行 → 放行（#1451）" fix/106-bump \
+  "${BUMP}; rm -f \"\$TC\".bak; git add \"\$TC\""
+try deny "  反证：同一提交再改 updater endpoint → 核心" fix/106-endpoint \
+  "${BUMP}; ${ENDPOINT}; rm -f \"\$TC\".bak; git add \"\$TC\"" "这是核心改动"
 try deny "暂存核心规则文件本身" fix/105-rules 'echo "# x" >>.github/core-paths.txt; git add -A' "越界：.github/core-paths.txt"
 
 echo "==> 3b. 多卡分支（just start <号> <号>…，卡号记在 branch.<分支>.ppasscards）：范围取并集"

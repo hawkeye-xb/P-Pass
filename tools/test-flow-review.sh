@@ -108,7 +108,10 @@ git init -q "${TMP}/main"
   mkdir -p tools/flow .github
   cp -R "${SRC}/tools/flow/." tools/flow/
   cp "${SRC}/tools/ci-paths.sh" tools/ci-paths.sh
-  printf '+ core/**\n' >.github/core-paths.txt
+  # core/** 是用户看不见的核心（如发布链脚本），apps/core/** 是用户看得见的核心。
+  printf '+ core/**\n+ apps/core/**\n' >.github/core-paths.txt
+  mkdir -p docs/decisions
+  printf '# 方案\n\n- 状态：已采纳\n' >docs/decisions/2026-11-01-adopted.md
   printf 'echo base\n' >tools/x.sh
   git add -A && git commit -q -m init
   git push -q origin HEAD:refs/heads/main
@@ -191,13 +194,13 @@ git -C "${TMP}/main" worktree list | grep -q checkout && bad "临时检出没清
 
 echo "==> 盯梢、人控级要有真机验收记录"
 ACC='产品负责人 2026-11-04 16:30 真机验收通过'
-for case_ in "界面文案路径:assets/i18n/en.json" "核心路径:core/c.txt"; do
+for case_ in "界面文案路径:assets/i18n/en.json" "核心路径（看得见）:apps/core/c.kt"; do
   name="${case_%%:*}"; file="${case_#*:}"
   reset pass
   printf '%s\n' "$file" >"$FAKE/pr.files"
   printf 'closes #77\n' >"$FAKE/pr.body"
   REVIEW 7 >/dev/null 2>&1 && bad "${name}：没有验收记录却通过" || ok "${name}：正文没有验收记录 → 未通过"
-  has "缺「产品负责人 <时间> 真机验收通过」" "$FAKE/comments" && ok "${name}：评论写明缺这一行" || bad "${name}：评论没写缺验收行：$(cat "$FAKE/comments")"
+  has "缺验收记录" "$FAKE/comments" && has "真机验收通过" "$FAKE/comments" && ok "${name}：评论写明缺这一行" || bad "${name}：评论没写缺验收行：$(cat "$FAKE/comments")"
   has "state=failure" "$FAKE/statuses" && [ ! -s "$FAKE/merges" ] && ok "${name}：状态 failure 且不开自动合入" || bad "${name}：状态或自动合入不对"
   reset pass
   printf 'closes #77\n\n%s\n' "$ACC" >"$FAKE/pr.body"
@@ -237,10 +240,10 @@ REVIEW abc >/dev/null 2>&1 && bad "非数字 PR 号被接受" || ok "PR 号不�
 REVIEW >/dev/null 2>&1 && bad "没给 PR 号被接受" || ok "没给 PR 号 → 拒绝"
 
 echo "==> 验收行判定收紧 + 判未通过时撤销自动合入"
-printf 'core/c.txt\n' >"$FAKE/pr.files"
+printf 'apps/core/c.kt\n' >"$FAKE/pr.files"
 accept_case() { # 名称 正文行 期望(pass|fail)
   reset pass
-  printf 'core/c.txt\n' >"$FAKE/pr.files"
+  printf 'apps/core/c.kt\n' >"$FAKE/pr.files"
   printf 'closes #77\n\n%s\n' "$2" >"$FAKE/pr.body"
   if REVIEW 7 >/dev/null 2>&1; then got=pass; else got=fail; fi
   [[ "$got" == "$3" ]] && ok "验收行 ${1} → ${3}" || bad "验收行 ${1}：期望 ${3}，实际 ${got}"
@@ -302,6 +305,34 @@ reset pass
 REVIEW 7 >/dev/null 2>&1
 has "### 卡 #77" "$FAKE/agent.stdin" && ok "  反证：普通作者正文的 fixes #77 照常当关联卡" || bad "普通作者的 fixes #77 没当关联卡"
 rm -f "$FAKE/pr.author"
+printf 'closes #77\n\n改了 x。\n' >"$FAKE/pr.body"
+
+echo "==> #1448：核心但用户看不见 → 不要验收行，要已采纳方案 + 测试"
+hidden_case() { # 名称 改动文件（空格分隔） 正文附加行 期望(pass|fail)
+  reset pass
+  printf '%s\n' $2 >"$FAKE/pr.files"
+  printf 'closes #77\n\n%s\n' "$3" >"$FAKE/pr.body"
+  if REVIEW 7 >/dev/null 2>&1; then got=pass; else got=fail; fi
+  [[ "$got" == "$4" ]] && ok "看不见的核心 ${1} → ${4}" || bad "看不见的核心 ${1}：期望 ${4}，实际 ${got}：$(head -4 "$FAKE/comments")"
+}
+hidden_case "只有验收行" "core/c.txt" '产品负责人 2026-11-04 真机验收通过' fail
+has "已采纳" "$FAKE/comments" && ok "  未通过理由点名要已采纳方案" || bad "理由没点名已采纳方案"
+hidden_case "引用已采纳方案但没测试" "core/c.txt" '方案：docs/decisions/2026-11-01-adopted.md' fail
+hidden_case "反证：已采纳方案 + 测试文件" "core/c.txt tools/test-c.sh" '方案：docs/decisions/2026-11-01-adopted.md' pass
+hidden_case "方案不在 origin/main 上" "core/c.txt tools/test-c.sh" '方案：docs/decisions/2026-11-09-nope.md' fail
+
+echo "==> #1452：SOP 格式验收行与整体模式"
+reset pass
+printf 'assets/i18n/en.json\n' >"$FAKE/pr.files"
+printf 'closes #77\n\n产品负责人 2026-11-05 15:30 按 SOP https://x/1 操作，owner 判日志通过\n' >"$FAKE/pr.body"
+REVIEW 7 >/dev/null 2>&1 && ok "SOP 格式验收行 → 通过" || bad "SOP 格式验收行不认：$(head -4 "$FAKE/comments")"
+reset pass
+printf 'closes #77\n\n随模块验收 #9\n' >"$FAKE/pr.body"
+REVIEW 7 >/dev/null 2>&1 && ok "界面改动整体模式「随模块验收 #9」→ 通过" || bad "随模块验收不认"
+reset pass
+printf 'apps/core/c.kt\n' >"$FAKE/pr.files"
+REVIEW 7 >/dev/null 2>&1 && bad "看得见的核心只靠随模块验收也通过了" || ok "反证：看得见的核心只有随模块验收 → 未通过"
+printf 'tools/x.sh\n' >"$FAKE/pr.files"
 printf 'closes #77\n\n改了 x。\n' >"$FAKE/pr.body"
 
 echo "==> #1448：只改更新说明要「文案确认通过」行"

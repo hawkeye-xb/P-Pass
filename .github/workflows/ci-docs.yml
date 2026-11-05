@@ -102,7 +102,8 @@ jobs:
             tools/ci-paths.sh
 
   # #1422：盯梢、人控级先开草稿 PR，CI、评审与真机验收并行；验收由本 job 在合入前把关
-  # （碰界面或核心路径的 PR，正文要有「产品负责人 <时间> 真机验收通过」；只改更新说明的是「文案确认通过」）。名字写死，不依赖路径判定。
+  # （用户看得到的改动要验收记录或「随模块验收 #<模块卡>」；只改更新说明的可用「文案确认通过」；
+  # 碰核心但用户看不见的要已采纳方案 + 测试。判定见 tools/flow/acceptance-gate.sh 头注释）。名字写死，不依赖路径判定。
   acceptance-gate:
     name: acceptance gate
     if: ${{ github.event_name == 'pull_request' }}
@@ -113,7 +114,9 @@ jobs:
         with:
           fetch-depth: 0
       - name: 判据测试
-        run: bash tools/test-acceptance-gate.sh
+        run: |
+          bash tools/test-acceptance-gate.sh
+          bash tools/test-release-acceptance.sh
       - name: 验收行检查
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
@@ -121,7 +124,10 @@ jobs:
         run: |
           printf '%s\n' "$PR_BODY" >"${RUNNER_TEMP}/pr-body.txt"
           git -c core.quotepath=false diff --name-only --no-renames "origin/${BASE_REF}...HEAD" >"${RUNNER_TEMP}/pr-files.txt"
-          bash tools/flow/acceptance-gate.sh check --files "${RUNNER_TEMP}/pr-files.txt" --body "${RUNNER_TEMP}/pr-body.txt"
+          # 完整 diff：只改版本号行的核心文件不算核心（#1451，判定在 tools/ci-paths.sh）。
+          git -c core.quotepath=false diff --no-color --no-renames --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ "origin/${BASE_REF}...HEAD" >"${RUNNER_TEMP}/pr.diff"
+          bash tools/flow/acceptance-gate.sh check --files "${RUNNER_TEMP}/pr-files.txt" --body "${RUNNER_TEMP}/pr-body.txt" \
+            --diff "${RUNNER_TEMP}/pr.diff"
 
   docs:
     name: md-check + token-check

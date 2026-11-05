@@ -11,7 +11,8 @@
 # ⚠️ 为什么是 pull_request_target 而不是 pull_request：pull_request 跑的是 **PR 分支里**的
 # 这份文件，改 workflow 的人能在同一个 PR 里把审批删掉。pull_request_target 跑的是 main 上的
 # 定义、读 main 上的 core-paths.txt 与判定脚本。改动文件列表从 GitHub API 取，**全程不检出、
-# 不执行 PR 里的任何代码**——这是 pull_request_target 唯一安全的用法，别往这里加 PR 代码的 checkout。
+# 不执行 PR 里的任何代码**（「只改版本号」例外也只读 API 返回的 patch 文本，见 #1451）——
+# 这是 pull_request_target 唯一安全的用法，别往这里加 PR 代码的 checkout。
 # 代价：改核心名单 / 判定脚本 / 本文件的 PR，按 main 上的旧规则审（它们本身就在旧规则的核心里，
 # 照样要批）。
 #
@@ -59,13 +60,15 @@ jobs:
           CHANGED: ${{ github.event.pull_request.changed_files }}
         run: |
           set -uo pipefail
-          # 改名的文件新旧两个路径都算：把核心文件挪出核心目录也要审。
-          if ! files="$(gh api --paginate "repos/${REPO}/pulls/${PR}/files" \
-                --jq '.[] | .filename, (.previous_filename // empty)')"; then
+          # 一次取回文件接口的原始 JSON（--paginate 输出多页数组，jq -s 'add' 合成一个）。
+          if ! gh api --paginate "repos/${REPO}/pulls/${PR}/files" >"${RUNNER_TEMP}/files.json" ||
+            ! jq -s 'add // []' "${RUNNER_TEMP}/files.json" >"${RUNNER_TEMP}/all.json"; then
             echo "::warning::取不到 PR 改动列表 → 按碰了核心处理"
             echo "core=true" >>"$GITHUB_OUTPUT"
             exit 0
           fi
+          # 改名的文件新旧两个路径都算：把核心文件挪出核心目录也要审。
+          files="$(jq -r '.[] | .filename, (.previous_filename // empty)' "${RUNNER_TEMP}/all.json")"
           # 文件接口最多返回 3000 个；条数对不上说明列表不全，按碰了核心处理。
           n="$(printf '%s\n' "$files" | sort -u | grep -c . || true)"
           if [ "$n" -lt "${CHANGED:-0}" ]; then
@@ -73,7 +76,16 @@ jobs:
             echo "core=true" >>"$GITHUB_OUTPUT"
             exit 0
           fi
-          core="$(printf '%s\n' "$files" | tools/ci-paths.sh core - .github/core-paths.txt)"
+          # 「只改版本号」例外（#1451）用的 unified diff：只拼 status=modified 且有 patch 的文件。
+          # 新增 / 删除 / 改名 / 没有 patch（大文件、二进制）的文件不进 diff，ci-paths.sh 找不到它的
+          # 那一节，就照常判核心。patch 是 GitHub 生成的文本，只当数据读，不执行。
+          if ! jq -r '.[] | select(.status == "modified" and (.patch | type) == "string")
+                | "diff --git a/\(.filename) b/\(.filename)\n--- a/\(.filename)\n+++ b/\(.filename)\n\(.patch)"' \
+                "${RUNNER_TEMP}/all.json" >"${RUNNER_TEMP}/pr.diff"; then
+            echo "::warning::拼不出 PR diff → 不认只改版本号例外"
+            rm -f "${RUNNER_TEMP}/pr.diff"
+          fi
+          core="$(printf '%s\n' "$files" | tools/ci-paths.sh core - .github/core-paths.txt --diff "${RUNNER_TEMP}/pr.diff")"
           echo "判定结果: core=${core}"
           echo "core=${core}" >>"$GITHUB_OUTPUT"
 

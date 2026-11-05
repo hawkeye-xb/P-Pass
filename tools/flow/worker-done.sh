@@ -114,11 +114,16 @@ for c in $CARDS; do
   ALL_GLOBS+=("${GLOBS[@]}")
   has_label core && IS_CORE=1
   TITLES+=("$I_TITLE")
+  CARD_TEXT="${CARD_TEXT:-}${I_BODY}
+"
 done
 GLOBS=("${ALL_GLOBS[@]}")
 
 # ── 1. 改动清单只含范围内文件；核心判定 ───────────────────────────────
 FILES="$(git -c core.quotepath=false diff --name-only --no-renames origin/main...HEAD)"
+# 完整 diff：核心判定要看「是不是只改了版本号行」（#1451）。
+BRANCH_DIFF="${EVID_DIR}/branch.diff"
+git -c core.quotepath=false diff --no-color --no-renames --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ origin/main...HEAD >"$BRANCH_DIFF" || : >"$BRANCH_DIFF"
 OUTSIDE=()
 while IFS= read -r f; do
   [ -n "$f" ] || continue
@@ -131,7 +136,7 @@ if [ "${#OUTSIDE[@]}" -gt 0 ]; then
 范围：${GLOBS[*]}
 撤掉越界改动重新交卡；确需改这些文件，just stuck ${N} \"需改范围外文件：…\"。"
 fi
-CORE="$(printf '%s\n' "$FILES" | bash "$FLOW_PATHS" core - "${TOP}/.github/core-paths.txt" 2>/dev/null)"
+CORE="$(printf '%s\n' "$FILES" | bash "$FLOW_PATHS" core - "${TOP}/.github/core-paths.txt" --diff "$BRANCH_DIFF" 2>/dev/null)"
 if [ "$CORE" != "false" ] && [ "$IS_CORE" = 0 ]; then
   fail_blocked "核心判定" "" "改动命中核心路径（.github/core-paths.txt）而 ${CARDS_SHOW} 都没有 core 标签：只写复现、根因和两个修法，撤回代码改动，just stuck ${N} \"命中核心：…\"。"
 fi
@@ -357,14 +362,23 @@ else
 fi
 # 用户看得到的改动：碰界面与文案路径或核心路径（判定口径与 owner-triage.sh 一致，见 acceptance-gate.sh）。
 # 这类改动开草稿 PR，验收与 CI、评审并行。只改更新说明（notes）的验收方式是文案确认（#1448）。
-KIND="$(printf '%s\n' "$FILES" | bash "${HERE}/acceptance-gate.sh" classify --repo "$TOP")"
+KIND="$(printf '%s\n' "$FILES" | bash "${HERE}/acceptance-gate.sh" classify --repo "$TOP" --diff "$BRANCH_DIFF")"
 VISIBLE=0
-[ "$KIND" = none ] || VISIBLE=1
+case "$KIND" in none | core-hidden) ;; *) VISIBLE=1 ;; esac
 CONFIRM="真机验收"
 [ "$KIND" != notes ] || CONFIRM="文案确认"
+# 验收记录的标准写法（#1452）：owner 判定之后写；旧写法「产品负责人 <时间> 真机验收通过」也认。
+RECORD_HINT="产品负责人 <日期 时间> 按 SOP <链接> 操作，owner 判日志通过"
+[ "$KIND" != notes ] || RECORD_HINT="产品负责人 <日期 时间> 文案确认通过"
 ACCEPT_LINE=""
+ADR_LINE=""
 DRAFT_ARGS=()
-if [ "$VISIBLE" = 1 ] && [ -n "$ACCEPTED" ]; then
+if [ "$KIND" = core-hidden ]; then
+  # 核心但用户看不见（#1448）：不要验收行，正文引用卡上已采纳的方案，改动里要带测试（acceptance gate 判）。
+  ADRS="$(adopted_adrs "${CARD_TEXT:-}" | tr '\n' ' ' | sed 's/ $//')"
+  ACCEPT_LINE="核心改动、用户看不见：不要真机验收；合入要求正文引用已采纳方案并带测试"
+  ADR_LINE="采纳方案：${ADRS:-（卡上没有引用 origin/main 上已采纳的方案，acceptance gate 会红）}"
+elif [ "$VISIBLE" = 1 ] && [ -n "$ACCEPTED" ]; then
   ACCEPT_LINE="产品负责人 ${ACCEPTED} ${CONFIRM}通过"
 elif [ "$VISIBLE" = 1 ]; then
   ACCEPT_LINE="待产品负责人${CONFIRM}"
@@ -421,7 +435,7 @@ PR_URL="$(gh pr view "$BRANCH" -R "$REPO" --json url --jq .url 2>/dev/null)" || 
 if [ -n "$PR_URL" ]; then
   rm -f "$RECEIPT"
   echo "   PR 已存在：${PR_URL}（已推最新提交）"
-  [ "${#DRAFT_ARGS[@]}" -eq 0 ] || echo "   ${CONFIRM}后在 PR 正文补「产品负责人 <日期 时间> ${CONFIRM}通过」，再 gh pr ready。"
+  [ "${#DRAFT_ARGS[@]}" -eq 0 ] || echo "   ${CONFIRM}后在 PR 正文补「${RECORD_HINT}」，再 gh pr ready。"
   exit 0
 fi
 if [ "$(git rev-list --count origin/main..HEAD)" = 1 ]; then
@@ -439,12 +453,13 @@ BODY_TEXT="$(
   for c in $CARDS; do echo "closes #${c}"; done
   echo
   if [ "${#DRAFT_ARGS[@]}" -gt 0 ]; then
-    echo "- 真机验收：${ACCEPT_LINE}（草稿 PR；${CONFIRM}后在正文单独补一行「产品负责人 <日期 时间> ${CONFIRM}通过」，再 gh pr ready）"
+    echo "- 真机验收：${ACCEPT_LINE}（草稿 PR；${CONFIRM}后在正文单独补一行「${RECORD_HINT}」，再 gh pr ready；整体模式写「随模块验收 #<模块卡>」）"
   elif [ "$VISIBLE" = 1 ]; then
     echo "$ACCEPT_LINE"
   else
     echo "- 真机验收：${ACCEPT_LINE}"
   fi
+  [ -z "$ADR_LINE" ] || echo "$ADR_LINE"
   sed -n '3,$p' "$RECEIPT" | grep -v '^- 真机验收：'
 )"
 rm -f "${PR_BODY}.tmp"

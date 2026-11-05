@@ -46,6 +46,18 @@ core_is() {
   [ "$got" = "$want" ] && ok "$label → $got" || bad "$label → 期望 ${want}，实得 $got"
 }
 
+# core_diff_is <脚本> <期望> <说明> <diff 文件，空串 = 不给 --diff> <文件>...（真实规则文件）
+core_diff_is() {
+  local script="$1" want="$2" label="$3" diff="$4" got
+  shift 4
+  if [ -n "$diff" ]; then
+    got="$(printf '%s\n' "$@" | bash "$script" core - "$RULES" --diff "$diff" 2>/dev/null)"
+  else
+    got="$(printf '%s\n' "$@" | bash "$script" core - "$RULES" 2>/dev/null)"
+  fi
+  [ "$got" = "$want" ] && ok "$label → $got" || bad "$label → 期望 ${want}，实得 $got"
+}
+
 # gate_is <脚本> <期望退出码> <说明> <NEEDS json>
 gate_is() {
   local script="$1" want="$2" label="$3" got
@@ -132,6 +144,83 @@ printf '%s\n' '+ a/**' 'zoen z/**' >"$TMP/typo.txt"
 core_is "$PATHS" "$TMP/typo.txt" true "规则拼错（zoen）→ true，不许静默忽略" docs/a.md
 
 echo
+echo "==> 4b. core：只改版本号不算核心（#1451）"
+TC=apps/desktop/src-tauri/tauri.conf.json
+# mkdiff <输出> <文件> <hunk 行>...：按 git diff / CI 拼的格式造一节 unified diff。
+mkdiff() {
+  local out="$1" f="$2"
+  shift 2
+  {
+    printf 'diff --git a/%s b/%s\n--- a/%s\n+++ b/%s\n' "$f" "$f" "$f" "$f"
+    printf '%s\n' "$@"
+  } >"$out"
+}
+V_HUNK=('@@ -1,5 +1,5 @@' ' {' '   "productName": "P-Pass",' '-  "version": "0.10.1",' '+  "version": "0.11.0-beta.1",' '   "identifier": "x",')
+EP_HUNK=('@@ -86,3 +86,3 @@' '       "endpoints": [' '-        "https://a.example/latest.json"' '+        "https://evil.example/latest.json"' '       ]')
+PK_HUNK=('@@ -86,1 +86,1 @@' '-      "pubkey": "AAAA",' '+      "pubkey": "BBBB",')
+mkdiff "$TMP/v.diff" "$TC" "${V_HUNK[@]}"
+mkdiff "$TMP/v-ep.diff" "$TC" "${V_HUNK[@]}" "${EP_HUNK[@]}"
+mkdiff "$TMP/v-pk.diff" "$TC" "${V_HUNK[@]}" "${PK_HUNK[@]}"
+mkdiff "$TMP/bad-semver.diff" "$TC" '@@ -4 +4 @@' '-  "version": "0.10.1",' '+  "version": "0.11",'
+mkdiff "$TMP/bad-semver-old.diff" "$TC" '@@ -4 +4 @@' '-  "version": "v0.10.1",' '+  "version": "0.11.0",'
+mkdiff "$TMP/no-comma.diff" "$TC" '@@ -4 +4 @@' '-  "version": "0.10.1"' '+  "version": "0.11.0"'
+mkdiff "$TMP/add-only.diff" "$TC" '@@ -4,0 +5 @@' '+  "version": "0.11.0",'
+mkdiff "$TMP/moved.diff" "$TC" '@@ -4 +4 @@' '-  "version": "0.10.1",' '@@ -86 +86 @@' '+      "version": "0.11.0",'
+{ printf 'diff --git a/%s b/%s\nnew file mode 100644\n' "$TC" "$TC"; sed 1d "$TMP/v.diff"; } >"$TMP/newfile.diff"
+mkdiff "$TMP/ep-only.diff" "$TC" "${EP_HUNK[@]}"
+# 第二节只有头没有 hunk：改动计数仍是删 1 加 1，只有「恰好一节」能把它判回核心。
+{ cat "$TMP/v.diff"; mkdiff "$TMP/hdr.diff" "$TC"; cat "$TMP/hdr.diff"; } >"$TMP/twice.diff"
+printf '这不是 diff\n\x01\x02garbage\n' >"$TMP/garbage.diff"
+CR=crates/proto/src/lib.rs
+mkdiff "$TMP/proto-version.diff" "$CR" '@@ -4 +4 @@' '-  "version": "0.10.1",' '+  "version": "0.11.0",'
+cat "$TMP/v.diff" "$TMP/proto-version.diff" >"$TMP/v-proto.diff"
+
+core_diff_is "$PATHS" false "tauri.conf.json 只改 version 行 → 不算核心" "$TMP/v.diff" "$TC"
+core_diff_is "$PATHS" false "  version 行不带逗号也认" "$TMP/no-comma.diff" "$TC"
+core_diff_is "$PATHS" false "  只改 version 行 + 非核心文件" "$TMP/v.diff" "$TC" docs/a.md
+core_diff_is "$PATHS" true "  反证：同一 diff 再改 updater endpoint → 核心" "$TMP/v-ep.diff" "$TC"
+core_diff_is "$PATHS" true "  反证：同一 diff 再改 updater pubkey → 核心" "$TMP/v-pk.diff" "$TC"
+core_diff_is "$PATHS" true "  反证：只改 endpoint 一行（删一加一，但不是版本号行）→ 核心" "$TMP/ep-only.diff" "$TC"
+core_diff_is "$PATHS" true "  反证：新版本号不是 SemVer → 核心" "$TMP/bad-semver.diff" "$TC"
+core_diff_is "$PATHS" true "  反证：旧版本号不是 SemVer → 核心" "$TMP/bad-semver-old.diff" "$TC"
+core_diff_is "$PATHS" true "  反证：只加不删 version 行 → 核心" "$TMP/add-only.diff" "$TC"
+core_diff_is "$PATHS" true "  反证：version 行挪了位置（不是原地替换）→ 核心" "$TMP/moved.diff" "$TC"
+core_diff_is "$PATHS" true "  反证：新增文件 → 核心" "$TMP/newfile.diff" "$TC"
+core_diff_is "$PATHS" true "  反证：同一文件 diff 里出现两节 → 核心" "$TMP/twice.diff" "$TC"
+core_diff_is "$PATHS" true "  反证：不给 diff → 核心" "" "$TC"
+core_diff_is "$PATHS" true "  反证：diff 文件不存在 → 核心" "$TMP/missing.diff" "$TC"
+core_diff_is "$PATHS" true "  反证：diff 是乱码 → 核心" "$TMP/garbage.diff" "$TC"
+core_diff_is "$PATHS" true "  反证：diff 里没有这个文件的节 → 核心" "$TMP/proto-version.diff" "$TC"
+core_diff_is "$PATHS" true "  反证：白名单外的核心文件只改了形如 version 的行 → 核心" "$TMP/proto-version.diff" "$CR"
+core_diff_is "$PATHS" true "  反证：version 例外 + 另一个核心文件 → 核心" "$TMP/v-proto.diff" "$TC" "$CR"
+got="$(printf '%s\n' "$TC" | bash "$PATHS" core - --diff "$TMP/v.diff" "$RULES" 2>/dev/null)"
+[ "$got" = false ] && ok "--diff 写在规则文件前面也认 → $got" || bad "--diff 在规则文件前 → 期望 false，实得 $got"
+got="$(printf '%s\n' "$TC" | bash "$PATHS" core - "$RULES" --diff 2>/dev/null)"
+[ "$got" = true ] && ok "--diff 后面没给文件 → $got" || bad "--diff 没给文件 → 期望 true，实得 $got"
+
+# base 是真实 sha、不给 --diff：脚本自己取 git diff <base>...HEAD。
+G="$TMP/git"
+mkdir -p "$G/apps/desktop/src-tauri"
+printf '{\n  "productName": "P-Pass",\n  "version": "0.10.1",\n  "plugins": {\n    "updater": {\n      "pubkey": "AAAA",\n      "endpoints": ["https://a.example/latest.json"]\n    }\n  }\n}\n' >"$G/$TC"
+git_core() { # git_core <期望> <说明> <sed 表达式>：在临时仓库里改 tauri.conf.json 提交，按 base sha 判
+  local want="$1" label="$2" base got
+  git -C "$G" checkout -q -f --detach "$G_BASE"
+  sed -e "$3" "$G/$TC" >"$G/tc.tmp" && mv "$G/tc.tmp" "$G/$TC"
+  git -C "$G" -c user.name=t -c user.email=t@invalid commit -q -am "$label"
+  base="$G_BASE"
+  got="$(cd "$G" && bash "$PATHS" core "$base" "$RULES" 2>/dev/null)"
+  [ "$got" = "$want" ] && ok "$label → $got" || bad "$label → 期望 ${want}，实得 $got"
+}
+if git -C "$G" init -q --template= 2>/dev/null &&
+  git -C "$G" add -A && git -C "$G" -c user.name=t -c user.email=t@invalid commit -q -m base; then
+  G_BASE="$(git -C "$G" rev-parse HEAD)"
+  git_core false "base sha 模式：只改 version 行 → 不算核心" 's/"0\.10\.1"/"0.11.0"/'
+  git_core true "  反证：base sha 模式再改 endpoint → 核心" 's/"0\.10\.1"/"0.11.0"/; s#a\.example#evil.example#'
+else
+  bad "临时 git 仓库建不起来"
+fi
+
+echo
 echo "==> 5. gate：只有 success / skipped 能过"
 gate_is "$GATE" 0 "全 success" '{"changes":{"result":"success"},"android":{"result":"success"}}'
 gate_is "$GATE" 0 "按需跳过" '{"changes":{"result":"success"},"android":{"result":"skipped"}}'
@@ -177,6 +266,22 @@ else bad "变异体生成失败：minus-beats-plus"; fi
 if M="$(mutant "$PATHS" typo-ignored 's/^        say "规则文件里有看不懂的行.*$/        continue/')"; then
   expect_red "拼错的规则被静默忽略" core_is "$M" "$TMP/typo.txt" true "规则拼错 → true" docs/a.md
 else bad "变异体生成失败：typo-ignored"; fi
+# 正向也要有反证：例外逻辑整个拿掉，「只改 version 行 → false」必须变红（否则那条是恒真式）。
+if M="$(mutant "$PATHS" no-version-exception 's/if \[ -n "\$DIFF_FILE" \] && version_only "\$f"; then/if false; then/')"; then
+  expect_red "去掉只改版本号例外" core_diff_is "$M" false "只改 version 行 → false" "$TMP/v.diff" "$TC"
+else bad "变异体生成失败：no-version-exception"; fi
+if M="$(mutant "$PATHS" semver-any 's/^SEMVER_RE=.*$/SEMVER_RE=".*"/')"; then
+  expect_red "SemVer 不校验" core_diff_is "$M" true "新版本号不是 SemVer → 核心" "$TMP/bad-semver.diff" "$TC"
+else bad "变异体生成失败：semver-any"; fi
+if M="$(mutant "$PATHS" version-any-line 's/^      printf .%s. .\^\[\[:space:\]\]\*"version".*$/      printf "%s" ".*"/')"; then
+  expect_red "白名单放过任意行" core_diff_is "$M" true "只改 endpoint 一行 → 核心" "$TMP/ep-only.diff" "$TC"
+else bad "变异体生成失败：version-any-line"; fi
+if M="$(mutant "$PATHS" no-inplace-check 's/\[ "\$prev" = minus \] ||/true ||/')"; then
+  expect_red "不查原地替换" core_diff_is "$M" true "version 行挪了位置 → 核心" "$TMP/moved.diff" "$TC"
+else bad "变异体生成失败：no-inplace-check"; fi
+if M="$(mutant "$PATHS" multi-section-ok 's/\[ "\$n" -eq 1 \] ||/[ "$n" -ge 1 ] ||/')"; then
+  expect_red "一个文件多节也认" core_diff_is "$M" true "两节 → 核心" "$TMP/twice.diff" "$TC"
+else bad "变异体生成失败：multi-section-ok"; fi
 if M="$(mutant "$GATE" failure-passes 's/success | skipped)/success | skipped | failure)/')"; then
   expect_red "gate 放过 failure" gate_is "$M" 1 "有 failure" '{"a":{"result":"failure"}}'
 else bad "变异体生成失败：failure-passes"; fi

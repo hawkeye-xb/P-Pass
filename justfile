@@ -534,6 +534,11 @@ start n *args:
 done *args:
     bash tools/flow/worker-done.sh {{args}}
 
+# 发版前的模块验收检查（#1452）：上一个正式 tag 之后合入、正文标了「随模块验收 #<模块卡>」的 PR，
+# 对应模块卡上都要有验收记录，缺一个就红并列出卡号。接进 release.yml 前由 owner 发版前手动跑。
+release-acceptance tag *args:
+    bash tools/flow/release-acceptance.sh {{tag}} {{args}}
+
 # 四种必须停下的情况的统一出口：命中核心 / 需改范围外文件 / 没有验收场景 / 连红 3 次。
 stuck n reason:
     bash tools/flow/worker-stuck.sh {{n}} "{{reason}}"
