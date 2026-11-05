@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# 推送卡分支时要求它包含最新的 origin/main（推送前现取一次），落后就拒绝并提示 rebase。
-# 放在推送而不是提交：交付那一刻才要求跟上 main（与 GitHub「require branches up to date」同一口径），
-# 干活途中 main 动了不打断提交。batch/* 与非卡分支不管；PPASS_HOOK_BYPASS 同 pre-commit。
+# 推送卡分支前现取一次 origin/main：与 main 有冲突才拒绝并提示 rebase；只是落后（没有冲突）只提示，照推（#1423）。
+# 理由：合入门禁在 PR 上的 CI，测的是合并后的结果；main 保护不要求分支跟上最新（strict=false），
+# 本地按「落后」拒推只拖节奏，不多保证任何东西。冲突用 git merge-tree --write-tree 判（git ≥ 2.38）；
+# git 太旧判不了时只提示，冲突留给 PR 上 GitHub 显示。batch/* 与非卡分支不管；PPASS_HOOK_BYPASS 同 pre-commit。
 # stdin：git 给的「<本地 ref> <本地 sha> <远端 ref> <远端 sha>」每行一条（转发器原样转给我们）。
 
 set -uo pipefail
@@ -23,10 +24,11 @@ if [ "${PPASS_HOOK_BYPASS:-}" = "1" ]; then
 fi
 
 fetched=""
-while read -r lref lsha _rref _rsha; do
-  case "$lref" in refs/heads/*) ;; *) continue ;; esac
+# 按远端目标引用认卡分支：just done 用 HEAD:refs/heads/<分支> 推送，这时本地引用是 HEAD，按本地引用认会整条跳过。
+while read -r _lref lsha rref _rsha; do
+  case "$rref" in refs/heads/*) ;; *) continue ;; esac
   case "$lsha" in 0000000000000000000000000000000000000000) continue ;; esac # 删除远端分支
-  branch="${lref#refs/heads/}"
+  branch="${rref#refs/heads/}"
   [[ "$branch" =~ ^(feat|fix|docs|test|ci)/[0-9]+-. ]] || continue
   if [ -z "$fetched" ]; then
     git fetch -q "$remote" "+refs/heads/main:refs/remotes/${remote}/main" ||
@@ -35,8 +37,14 @@ while read -r lref lsha _rref _rsha; do
   fi
   if ! git merge-base --is-ancestor "refs/remotes/${remote}/main" "$lsha"; then
     behind="$(git rev-list --count "${lsha}..refs/remotes/${remote}/main")"
-    deny "「${branch}」落后 ${remote}/main ${behind} 个提交" \
-      "先跟上：git rebase ${remote}/main，重跑本地验证，再推送（已推过的分支用 git push --force-with-lease）。"
+    rc=0
+    git merge-tree --write-tree --no-messages "refs/remotes/${remote}/main" "$lsha" >/dev/null 2>&1 || rc=$?
+    case "$rc" in
+      0) printf '⚠ 「%s」落后 %s/main %s 个提交，没有冲突，照推（PR 上的 CI 测合并后的结果）。\n' "$branch" "$remote" "$behind" >&2 ;;
+      1) deny "「${branch}」与 ${remote}/main 有冲突（落后 ${behind} 个提交）" \
+        "先跟上：git rebase ${remote}/main，解冲突、重跑本地验证，再推送（已推过的分支用 git push --force-with-lease）。" ;;
+      *) printf '⚠ 「%s」落后 %s/main %s 个提交；本机 git 判不了冲突（merge-tree 退出码 %s），照推，冲突看 PR 页面。\n' "$branch" "$remote" "$behind" "$rc" >&2 ;;
+    esac
   fi
 done
 exit 0

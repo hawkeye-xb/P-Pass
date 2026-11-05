@@ -40,6 +40,8 @@ else
   d="$(mktemp -d)"
   trap 'rm -rf "$d"' EXIT
   MAC_APP="$d/none.app" E3_MAC_DATA_DIR="$d/as" E3_STATE="$d/state"
+  # 改数据的函数要求持 mac 锁（#1449，mac_need_lock 在 mac.sh；这里不 source 它）：只动临时目录，视作持锁
+  mac_need_lock() { :; }
   log() { :; }
   running=1
   svc_any_pid() { [ "$running" = 1 ] && echo 123; return 0; }
@@ -76,7 +78,7 @@ fi
 wait_held() { # wait_held <锁文件>
   local i
   for i in $(seq 1 100); do
-    [ -f "$1" ] && ! /usr/bin/lockf -t 0 "$1" true 2>/dev/null && return 0
+    [ -f "$1" ] && ! /usr/bin/lockf -k -t 0 "$1" true 2>/dev/null && return 0
     sleep 0.1
   done
   return 1
@@ -182,6 +184,160 @@ if [ "$(uname)" = Darwin ]; then
   E3_STATE="$lockdir" "$E3/lock" --no-wait android true || bad "锁释放后 --no-wait 仍被拒绝"
   rm -rf "$lockdir"
 fi
+
+# #1449 .who 只代表活着的持有者：持有期间 status 报占用；命令退出后不留记录、退出码原样透传；
+# 记录指向已退出的进程（kill -9 收不了尾、或人为造的）→ status 不报占用，说明是残留并清掉。
+if [ "$(uname)" = Darwin ]; then
+  (
+    d="$(mktemp -d)" || exit 1
+    export E3_STATE="$d"
+    trap 'kill "$(cat "$d/sleeper" 2>/dev/null)" 2>/dev/null; rm -rf "$d"' EXIT
+    line() { "$E3/lock" status | grep "^$1 "; }
+    # 持有期间 status 报占用（也是下面「空闲」判定的反证：同一个 status，只差有没有活着的持有者）
+    "$E3/lock" ios sh -c 'sleep 3' &
+    holder=$!
+    wait_held "$d/lock-ios" || { echo "持锁者 10 秒内没拿到锁"; exit 1; }
+    st="$(line ios)"
+    printf '%s' "$st" | grep -q '正被占用（pid ' || { echo "持有期间 status 没报占用：$st"; exit 1; }
+    wait "$holder"
+    [ ! -e "$d/lock-ios.who" ] || { echo "持有命令退出后 .who 还在：$(cat "$d/lock-ios.who")"; exit 1; }
+    st="$(line ios)"
+    printf '%s' "$st" | grep -q '空闲$' || { echo "持有命令退出后 status 不是空闲：$st"; exit 1; }
+    "$E3/lock" ios sh -c 'exit 3'
+    rc=$?
+    [ "$rc" = 3 ] || { echo "被包命令的退出码没透传（得到 ${rc}）"; exit 1; }
+    [ ! -e "$d/lock-ios.who" ] || { echo "命令失败退出后 .who 还在"; exit 1; }
+    # 人为造一条指向不存在进程的记录
+    sh -c 'exit 0' &
+    dead=$!
+    wait "$dead"
+    echo "pid $dead 00:00:00 /nowhere" >"$d/lock-mac.who"
+    st="$(line mac)"
+    printf '%s' "$st" | grep -q "空闲（残留记录指向已退出的进程 ${dead}）" || { echo "死 pid 的记录 status 没认出残留：$st"; exit 1; }
+    [ ! -e "$d/lock-mac.who" ] || { echo "status 没清掉残留记录"; exit 1; }
+    # kill -9 持锁的 lockf：收不了尾，留下的记录由 status 认出并清掉
+    "$E3/lock" android sh -c 'echo $$ >"$0"; exec sleep 30' "$d/sleeper" &
+    holder=$!
+    wait_held "$d/lock-android" || { echo "持锁者 10 秒内没拿到锁"; exit 1; }
+    lk_pid="$(sed -n 's/^pid \([0-9]*\) .*/\1/p' "$d/lock-android.who")"
+    [ "$lk_pid" = "$holder" ] || { echo ".who 记的不是持锁的 lockf（${lk_pid} ≠ ${holder}）"; exit 1; }
+    kill -9 "$holder"
+    wait "$holder" 2>/dev/null
+    st="$(line android)"
+    printf '%s' "$st" | grep -q "空闲（残留记录指向已退出的进程 ${holder}）" || { echo "kill -9 后 status 不对：$st"; exit 1; }
+    [ ! -e "$d/lock-android.who" ] || { echo "kill -9 后 status 没清掉残留"; exit 1; }
+    "$E3/lock" --no-wait android true || { echo "kill -9 后取锁仍被拒"; exit 1; }
+    exit 0
+  ) || bad "设备锁 .who 只代表活着的持有者（#1449）"
+fi
+
+# #1449 人工验收：owner 替人拿锁（hold-for-human，一次多台、跨命令持有）→ agent 取锁排队、--no-wait 退出 75；
+# release-human 后排队的接着跑；持锁进程被 kill 后锁自动释放、status 不报占用。
+if [ "$(uname)" = Darwin ]; then
+  (
+    d="$(mktemp -d)" || exit 1
+    export E3_STATE="$d"
+    trap '"$E3/lock" release-human mac ios >/dev/null 2>&1; rm -rf "$d"' EXIT
+    line() { "$E3/lock" status | grep "^$1 "; }
+    # 反证：没人工持锁时，同一条取锁命令立刻跑
+    "$E3/lock" mac touch "$d/ran0" && [ -f "$d/ran0" ] || { echo "没人持锁时取锁的命令没跑"; exit 1; }
+    "$E3/lock" hold-for-human mac ios >"$d/hold.out" 2>&1 || { echo "hold-for-human 失败：$(cat "$d/hold.out")"; exit 1; }
+    st="$(line mac)"
+    printf '%s' "$st" | grep -q '人工验收中（自 ' || { echo "人工持锁时 status 没显示人工验收中：$st"; exit 1; }
+    st="$(line ios)"
+    printf '%s' "$st" | grep -q '人工验收中（自 ' || { echo "一次拿两台，ios 没拿到：$st"; exit 1; }
+    # 跨命令持有：hold-for-human 已返回，锁仍在
+    "$E3/lock" --no-wait mac true 2>"$d/err"
+    rc=$?
+    [ "$rc" = 75 ] || { echo "人工持锁时 --no-wait 没退出 75（${rc}）"; exit 1; }
+    grep -q '人工验收中' "$d/err" || { echo "--no-wait 拒绝时没说人工验收中：$(cat "$d/err")"; exit 1; }
+    # 排队：取锁的命令在人工持锁期间不跑
+    "$E3/lock" mac touch "$d/ran1" 2>"$d/queue.err" &
+    q=$!
+    sleep 3
+    [ ! -e "$d/ran1" ] || { echo "人工持锁期间别的命令没排队就跑了"; exit 1; }
+    kill -0 "$q" 2>/dev/null || { echo "排队的命令没在等，直接退出了"; exit 1; }
+    grep -q '排队等待' "$d/queue.err" || { echo "排队时没说谁在用：$(cat "$d/queue.err")"; exit 1; }
+    "$E3/lock" release-human mac >/dev/null || { echo "release-human mac 失败"; exit 1; }
+    wait "$q" || { echo "release 后排队的命令失败"; exit 1; }
+    [ -f "$d/ran1" ] || { echo "release 后排队的命令没跑"; exit 1; }
+    st="$(line mac)"
+    printf '%s' "$st" | grep -q '；空闲$' || { echo "release 后 mac 不是空闲：$st"; exit 1; }
+    # 持锁进程意外死掉（kill -9 持锁的 lockf）：锁自动释放，status 不报占用
+    hp="$(sed -n 's/^pid \([0-9]*\) .*/\1/p' "$d/lock-ios.who")"
+    [ -n "$hp" ] && kill -9 "$hp"
+    for _ in $(seq 1 50); do line ios | grep -q '空闲' && break; sleep 0.1; done
+    st="$(line ios)"
+    printf '%s' "$st" | grep -q '空闲' || { echo "人工持锁进程被 kill 后 status 仍报占用：$st"; exit 1; }
+    "$E3/lock" --no-wait ios true || { echo "人工持锁进程被 kill 后取锁仍被拒"; exit 1; }
+    sleep 1.5 # 持锁内容每秒看一次 lockf 还在不在：被 kill 后自己也退出，不留后台进程
+    ! pgrep -f "$d/lock-ios.human" >/dev/null || { echo "持锁进程被 kill 后后台进程没退出"; exit 1; }
+    exit 0
+  ) || bad "人工验收锁 hold-for-human / release-human（#1449）"
+fi
+
+# #1449 改本机 P-Pass（正式版也算 mac 设备）的步骤必须在 mac 锁里：不持锁就拒绝、不碰 App；
+# 反证：持锁（E3_LOCKED_MAC=1，lock 进锁时设的）同一调用照常替换。装包要停服务、等就绪的步骤用桩代替。
+(
+  d="$(mktemp -d)" || exit 1
+  trap 'rm -rf "$d"' EXIT
+  E3_MAC_APP="$d/Applications/P-Pass.app" E3_STATE="$d/state" E3_MAC_DATA_DIR="$d/as"
+  export E3_MAC_APP E3_STATE E3_MAC_DATA_DIR
+  log() { echo "$*" >>"$d/log"; }
+  # shellcheck source=e3/lib/mac.sh
+  source "$E3/lib/mac.sh"
+  # shellcheck source=e3/lib/mac-install.sh
+  source "$E3/lib/mac-install.sh"
+  mkdir -p "$MAC_APP" "$d/cand.app" "$E3_STATE"
+  echo old >"$MAC_APP/v"
+  echo new >"$d/cand.app/v"
+  # 数据守卫的前置条件都备齐（有数据快照、恢复源完整、服务没跑），没持锁是唯一会拦下它们的原因：
+  # 否则删掉 mac_need_lock，函数也会因为别的前置条件返回 1，这条照样绿（CI 评审 #1456 指出）。
+  mkdir -p "$E3_STATE/mac-snapshot/data" "$MAC_DATA_DIR/libraries" "$d/snap/appsupport"
+  echo cur >"$MAC_DATA_DIR/config.toml"
+  echo idx >"$MAC_DATA_DIR/libraries/index"
+  echo snap >"$d/snap/appsupport/config.toml"
+  : >"$d/snap/library-dir.txt"
+  launchctl() { echo "launchctl $*" >>"$d/touched"; }
+  osascript() { echo "osascript $*" >>"$d/touched"; }
+  pkill() { echo "pkill $*" >>"$d/touched"; }
+  ditto() { cp -R "$1" "$2"; } # 测的是锁守卫，不是 ditto：非 macOS 上也能跑
+  mac_shell_running() { return 1; }
+  svc_loaded() { return 1; }
+  svc_any_pid() { :; }
+  log_mark() { echo 0; }
+  mac_wait_ready() { return 0; }
+  unset E3_LOCKED_MAC
+  for f in mac_install_app svc_stop svc_start mac_quit_shell mac_data_blank mac_data_restore; do
+    case "$f" in
+      mac_install_app) "$f" "$d/cand.app" ;;
+      mac_data_restore) "$f" "$d/snap" ;;
+      *) "$f" ;;
+    esac && { echo "没持锁时 $f 照样执行了"; exit 1; }
+    grep -q "拒绝 ${f}：没持 mac 设备锁" "$d/log" || { echo "没持锁时 $f 不是被锁守卫拦下的：$(tail -2 "$d/log")"; exit 1; }
+  done
+  [ "$(cat "$MAC_APP/v")" = old ] || { echo "没持锁时 App 被替换了"; exit 1; }
+  [ -f "$MAC_DATA_DIR/libraries/index" ] || { echo "没持锁时 mac_data_blank 清了数据"; exit 1; }
+  [ "$(cat "$MAC_DATA_DIR/config.toml")" = cur ] || { echo "没持锁时 mac_data_restore 覆盖了数据"; exit 1; }
+  [ ! -e "$d/touched" ] || { echo "没持锁时碰了服务或外壳：$(cat "$d/touched")"; exit 1; }
+  grep -q '没持 mac 设备锁' "$d/log" || { echo "拒绝时没说原因"; exit 1; }
+  export E3_LOCKED_MAC=1
+  mac_install_app "$d/cand.app" || { echo "持锁时装包失败：$(tail -3 "$d/log")"; exit 1; }
+  [ "$(cat "$MAC_APP/v")" = new ] || { echo "持锁时 App 没被替换（反证不成立）"; exit 1; }
+  mac_data_restore "$d/snap" || { echo "持锁时恢复数据失败：$(tail -3 "$d/log")"; exit 1; }
+  [ "$(cat "$MAC_DATA_DIR/config.toml")" = snap ] || { echo "持锁时 mac_data_restore 没恢复（反证不成立）"; exit 1; }
+  echo idx >"$MAC_DATA_DIR/libraries/index"
+  mac_data_blank || { echo "持锁时清空白失败：$(tail -3 "$d/log")"; exit 1; }
+  [ ! -e "$MAC_DATA_DIR/libraries" ] || { echo "持锁时 mac_data_blank 没清（反证不成立）"; exit 1; }
+  exit 0
+) || bad "改本机 P-Pass 的步骤必须持 mac 锁（#1449）"
+# 调用这些函数的入口都先取 mac 锁：场景经 run（cmd_run 先 exec lock）、dev mac、restore mac
+grep -q 'exec "$E3_ROOT/lock" "$dev"' "$E3/run" &&
+  grep -q 'exec "$E3_ROOT/lock" mac "$0" mac --install-only' "$E3/dev" &&
+  grep -q 'exec "$E3_ROOT/lock" mac "$0"' "$E3/restore" || bad "run / dev mac / restore mac 不再先取 mac 锁"
+for f in $(grep -rlE 'mac_install_app|mac_restore_(snapshot|tag)|svc_(stop|start)|mac_quit_shell|mac_data_(blank|restore)' "$E3" | grep -v '/lib/'); do
+  case "$f" in "$E3"/scenarios/mac/* | "$E3"/dev | "$E3"/restore) ;; *) bad "${f#"$ROOT"/} 动本机 P-Pass，但不在已知持锁的入口里" ;; esac
+done
 
 # #1375 共享编译缓存：justfile 从当前目录往上读到 .env.ppass-dev；没有这个文件（CI）时不设 CARGO_TARGET_DIR
 if command -v just >/dev/null 2>&1; then

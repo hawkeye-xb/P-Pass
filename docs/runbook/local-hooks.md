@@ -40,9 +40,10 @@
 合并的不是 main（MERGE_HEAD 不在 `origin/main` 里），或离线认不出来时，按全部改动判。
 `git rebase` 过程中解冲突不触发 pre-commit，不受影响。
 
-**推送（pre-push）**：推送卡分支前，hook 会现取一次远端的 `main`。卡分支没有包含它时拒绝，
-并提示 `git rebase origin/main`。这条放在推送而不是提交：交付时才要求跟上 main，
-和 GitHub 的「require branches up to date」是同一个口径；干活途中 main 前进了，不会打断提交。
+**推送（pre-push）**：推送卡分支前，hook 会现取一次远端的 `main`。卡分支与它有冲突时拒绝
+（`git merge-tree --write-tree` 判），并提示 `git rebase origin/main`；只是落后、没有冲突，只提示落后几个提交，照推。
+理由：合入门禁在 PR 上的 CI，测的是合并后的结果；main 保护不要求分支跟上最新（strict=false），按「落后」拒推只拖节奏。
+本机 git 太旧判不了冲突时只提示，冲突看 PR 页面。`just done` 推送前用同一口径。
 `batch/*` 不管。
 查不到 issue 时一律拒绝，包括没装 `gh`、没登录、离线、issue 不存在这几种情况。
 
