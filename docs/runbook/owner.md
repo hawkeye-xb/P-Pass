@@ -27,6 +27,8 @@ owner 只统筹，不当传声筒：这些命令是 owner 的工具，不是合�
 | 分拣新诉求 | `just triage <号> <方案文件>` | `TRIAGE <号> ready \| needs:product \| blocked` |
 | 出 test 包 | `just release-test <端...>` | `RELEASE-TEST OK v<X.Y.Z>-test.N <端...>` |
 | 合入前独立评审 | `just review <PR号> [--model <模型>]` | `✅ #N 独立评审通过，review/agent=success` |
+| 查 PR 为什么合不进去（任何会话） | `just pr-status <PR号>` | `✅ 全清：…`（退出码 1 有卡点、3 还在等结果） |
+| 回复并关闭评审线程（任何会话） | `just pr-thread <线程ID> "<理由>"` | `已关闭线程 PRRT_…` |
 | 停下 | `just owner-stuck "<原因>" [--issue N \| --pr N] [--product "<一>" "<二>"] [--log 文件]` | `ok: ...` |
 
 ### 合入前独立评审（`just review`）

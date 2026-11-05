@@ -16,3 +16,13 @@
 - **主会话只做**：根因分析、方案设计、改代码、判定结果、写报告。
 - **先把脚本写对再跑**：失败一次就停下来想清楚，不要边跑边改、来回试。
 - 长流程（如全量回归）开始前就按上面拆好，不要跑到一半才拆。
+
+## 开 PR 后立即打开 PR 监控（Claude Desktop，产品负责人 2026-11-05 定）
+
+`AGENTS.md`「交付流程」要求开 PR 的会话把它推进到合入。在 Claude Desktop 里由 app 的 PR 监控唤醒会话：
+
+- 开完 PR（`just done` 或 `gh pr create`）立刻调 `set_monitor`，`auto_fix`、`address_comments`、
+  `auto_archive_on_close` 三项全开。app 没有全局默认开关，每个 PR 都要开。
+- `get_status` 没报出这个 PR 时先 `bind_pr` 再开。只有本会话自己开的 PR 能由会话打开 `auto_fix`；
+  事后绑上的别人的 PR 开不了时，把报错原文报给 owner，不换花样重试。
+- 打开后不轮询 CI（不用 `/loop`、定时任务或反复 `gh pr checks`），等 CI 红、新评审意见、冲突把会话唤醒再处理。

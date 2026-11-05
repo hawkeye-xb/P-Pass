@@ -333,4 +333,7 @@ PR_URL="$(gh pr create -R "$REPO" --base main --head "$BRANCH" --title "$PR_TITL
 }
 rm -f "$PR_BODY"
 echo "   PR：${PR_URL}"
-echo "   下一步：CI 红了修到绿；然后 just start <下一张卡的 issue号>。"
+echo "   下一步：本会话负责把这个 PR 推进到合入。外壳有 PR 监控的现在就打开（自动修 CI、处理评审意见、合入后归档），"
+echo "     之后被唤醒再修，不手动盯 CI。CI 红、未解决的评审线程、冲突都算没过，修到全清："
+echo "     just pr-status <PR号> 列卡点；评审意见逐条判定，改了或不改都用 just pr-thread <线程ID> \"<理由>\" 回复并关闭。"
+echo "     然后 just start <下一张卡的 issue号>。"
