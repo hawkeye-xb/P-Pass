@@ -68,7 +68,7 @@ fun TwoTabs(
     PPScreen {
         Column(Modifier.fillMaxSize()) {
             if (notice != null) {
-                Box(Modifier.fillMaxWidth().padding(20.dp, 12.dp, 20.dp, 0.dp)) { notice() }
+                Box(Modifier.fillMaxWidth().padding(PPSize.PageGutter, 12.dp, PPSize.PageGutter, 0.dp)) { notice() }
             }
             Box(Modifier.weight(1f)) {
                 if (tab == 0) photos() else backup()
