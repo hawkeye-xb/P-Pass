@@ -11,6 +11,8 @@ WATCH="${E3_WIN_W1_SECONDS:-75}"
 
 . "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 
+watcher_no_console() { [ -s "$1" ] && no_line "$1" 'CONSOLE'; }
+
 run_window() { # run_window <证据目录> <故障注入 0|1> <秒>
   local d="$1" fault="$2" secs="$3" rc=0
   mkdir -p "$d"
@@ -60,7 +62,7 @@ judge() {
   local d="$1"
   check "watcher 正常退出（没有可见控制台）" eq_file "$d/watcher-rc.txt" "0"
   check "watcher 报告 0 个控制台窗口" has_line "$d/watcher.log" '^console windows seen: 0$'
-  check "watcher 日志没有 CONSOLE 命中" no_line "$d/watcher.log" 'CONSOLE'
+  check "watcher 日志没有 CONSOLE 命中" watcher_no_console "$d/watcher.log"
   check "动作后 daemon 在跑" grep -qx 'daemon=up' "$d/final-state.txt"
   verdict
 }

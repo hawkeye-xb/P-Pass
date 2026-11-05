@@ -97,12 +97,12 @@ act() {
   win_phone_dump "$d/phone-after-disconnect.xml" || true
 }
 
-task_not_seen() { no_line "$1" 'task=Running|task=Ready'; }
+task_not_seen() { [ -s "$1" ] && no_line "$1" 'task=Running|task=Ready'; }
 phone_welcome() { grep -Eq '扫码连接|无法扫码' "$1"; }
 
 judge() {
   local d="$1"
-  check "停服务期间 daemon 一次都没出现" no_line "$d/stop-samples.txt" 'pid=[0-9]'
+  check "停服务期间 daemon 一次都没出现" samples_no_daemon "$d/stop-samples.txt"
   check "停服务期间计划任务被删" task_not_seen "$d/stop-samples.txt"
   check "App 显示已停止" win_ui_has "$d/stop-dialog.txt" '已停止'
   check "恢复后 daemon 在跑" grep -Eq '^restored_pid=[0-9]+' "$d/restore.txt"

@@ -520,4 +520,8 @@ win_json_array_len() { python3 -I -c 'import json,sys; d=json.load(open(sys.argv
 win_sleep() { sleep "$1"; }
 
 # 常见判据的管道封装：check 的行里不能出现管道符（管道会把 check 放进子 shell，E3_FAILS 丢失）。
-no_line_panic() { no_line "$1" 'panicked|PANIC'; }
+# 「文件里没有坏行」类判据必须先要求证据文件存在且非空——文件缺失/为空时 no_line 会放过，
+# 等于把「没采到证据」当成「没有问题」（评审非阻塞 2）。
+no_line_panic() { [ -s "$1" ] && no_line "$1" 'panicked|PANIC'; }
+samples_no_daemon() { [ -s "$1" ] && no_line "$1" 'pid=[0-9]'; }
+same_nonempty() { [ -s "$1" ] && [ -s "$2" ] && cmp -s "$1" "$2"; }
