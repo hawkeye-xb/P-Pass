@@ -172,8 +172,9 @@ while IFS= read -r f; do
       ;;
     tools/ios/test-*.sh)
       # tools/ios 下的测试脚本是构建辅助脚本的测试（由 mobile-static-check / ci-ios 调），
-      # 不是 App 代码：直接跑它，别拉模拟器。
-      add_gate "bash $f" ;;
+      # 不是 App 代码：直接跑它，别拉模拟器。删除的脚本不跑（diff 也会列出已删除路径）；
+      # 需要模拟器的脚本在非 macOS 上自己跳过。
+      [ -f "$f" ] && add_gate "bash $f" ;;
     apps/ios/* | tools/ios/*) add_gate "just ios-test" ;;
     assets/i18n/*) add_gate "just mobile-static-check" ;;
     crates/*/*)

@@ -17,6 +17,8 @@ set -uo pipefail
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+# 真实 PATH：下面把 PATH 换成假命令目录跑流程；个别用例要跑真实脚本（#1425）。
+REAL_PATH="$PATH"
 
 PASS=0
 FAIL=0
@@ -476,6 +478,25 @@ DONE "$W" >"${TMP}/o132" 2>&1
 C32="$(comments_of 132)"
 printf '%s' "$C32" | grep -qF "bash tools/ios/test-stamp-version.sh" && ok "改 tools/ios/test-*.sh → 跑该脚本自身" || bad "tools/ios 测试门禁不对：$(tail -4 "${TMP}/o132")"
 printf '%s' "$C32" | grep -qF "just ios-test" && bad "tools/ios 测试仍拉了 just ios-test" || ok "反证：没有拉模拟器 lane"
+# #1425 评审 1/2：真实 test-stamp-version.sh 在本平台能跑通（非 macOS 跳过 plist 节）——
+# 这条会在修 #1420 的 plutil 依赖之前红，E1 第二条有可判红的证据。
+if PATH="$REAL_PATH" "$REAL_BASH" "$SRC/tools/ios/test-stamp-version.sh" >"${TMP}/stamp-real.out" 2>&1; then
+  ok "真实 tools/ios/test-stamp-version.sh 在本平台跑通（plist 节按平台跳过）"
+else
+  bad "真实 tools/ios/test-stamp-version.sh 在本平台失败：$(tail -3 "${TMP}/stamp-real.out")"
+fi
+# 删除 tools/ios/test-*.sh → 不跑不存在的脚本（#1425 评审）
+mkdir -p "$M/tools/ios"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$M/tools/ios/test-old.sh"
+git -C "$M" add tools/ios/test-old.sh && git -C "$M" commit -q -s -m "seed ios tool test"
+git -C "$M" push -q origin HEAD:refs/heads/main
+W="$(card 133 "[T-133] ios tool deleted" "tools/**")"
+git -C "$W" rm -q tools/ios/test-old.sh
+git -C "$W" commit -q -s -m "delete ios tool test"
+DONE "$W" >"${TMP}/o133" 2>&1
+C33="$(comments_of 133)"
+printf '%s' "$C33" | grep -qF "bash tools/ios/test-old.sh" && bad "删除的 ios 测试脚本仍被当门禁" || ok "删除的 ios 测试脚本不跑"
+printf '%s' "$C33" | grep -qF '`just ci`' && ok "反证：删除后没剩可挑的 → 退回 just ci（不是跑不存在的脚本）" || bad "删除后没退回 just ci：$(tail -4 "${TMP}/o133")"
 # 挑出来的测试红 → blocked，不推
 W="$(card 131 "[T-131] tools test red" "tools/**")"
 printf '# touched2\n' >>"$W/tools/ci-paths.sh"
