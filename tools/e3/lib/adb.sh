@@ -93,20 +93,63 @@ pkg_info() { A shell dumpsys package "$PKG" | grep -E 'versionName|versionCode|f
 is_debuggable() { A shell dumpsys package "$PKG" | grep -m1 'pkgFlags' | grep -q DEBUGGABLE; }
 
 # —— 素材 ——
-# push_photos <本地目录>：推进相机目录并通知媒体库（否则 App 查不到）
+# #1412：场景素材只进专用测试相册，不碰相机相册——测试机上当天拍的真实照片不会被算进场景的计数。
+# 相册名以 `00-` 开头：选范围页按名字排序，排在首屏不用滚动。
+E3_ALBUM="${E3_ANDROID_ALBUM:-00-PPassE3}"
+E3_ALBUM_DIR="/sdcard/Pictures/$E3_ALBUM"
+
+# push_photos <本地目录>：推进专用测试相册并通知媒体库（否则 App 查不到）
 push_photos() {
   local f
+  A shell mkdir -p "$E3_ALBUM_DIR" || return 1
   for f in "$1"/*; do
-    A push "$f" /sdcard/DCIM/Camera/ >/dev/null || return 1
+    A push "$f" "$E3_ALBUM_DIR/" >/dev/null || return 1
     A shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE \
-      -d "file:///sdcard/DCIM/Camera/$(basename "$f")" >/dev/null
+      -d "file://$E3_ALBUM_DIR/$(basename "$f")" >/dev/null
   done
 }
-# rm_photos <前缀>：删掉推过的素材
+# rm_photos <前缀>：删掉推过的素材（连同改用专用相册前留在相机相册里的）
 rm_photos() {
-  local f
-  for f in $(A shell ls /sdcard/DCIM/Camera/ 2>/dev/null | tr -d '\r' | grep "^$1"); do
-    A shell rm -f "/sdcard/DCIM/Camera/$f"
-    A shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d "file:///sdcard/DCIM/Camera/$f" >/dev/null
+  local d f
+  for d in "$E3_ALBUM_DIR" /sdcard/DCIM/Camera; do
+    for f in $(A shell ls "$d/" 2>/dev/null | tr -d '\r' | grep "^$1"); do
+      A shell rm -f "$d/$f"
+      A shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d "file://$d/$f" >/dev/null
+    done
   done
+}
+# album_query <projection>：媒体库里专用相册的图片行（已入库、is_pending=0 的）
+album_query() {
+  A shell "content query --uri content://media/external/images/media --projection $1 --where \"relative_path='Pictures/$E3_ALBUM/' AND is_pending=0\"" 2>/dev/null | tr -d '\r'
+}
+# album_bucket_id：专用相册在媒体库里的 bucket_id（相册里还没有已入库的图时输出空）
+album_bucket_id() { album_query bucket_id | sed -n 's/.*bucket_id=\(-\{0,1\}[0-9][0-9]*\).*/\1/p' | head -1; }
+# album_count：专用相册里已入库的图片数
+album_count() { album_query _id | grep -c '_id=' || true; }
+# album_wait <张数> [秒]：等媒体库扫到专用相册里至少这么多张（扫描广播是异步的）
+album_wait() {
+  local end=$((SECONDS + ${2:-30})) n=
+  while [ $SECONDS -lt $end ]; do
+    n=$(album_count)
+    [ "${n:-0}" -ge "$1" ] && return 0
+    sleep 1
+  done
+  log "等 ${2:-30}s：专用相册入库 ${n:-0} 张，期望 $1"
+  return 1
+}
+# app_scope_ids：App 存下的备份范围（shared_prefs 里每台桌面一份的 bucket_ids，逗号分隔）。
+# 不是恰好一份（没存过、或配过多台桌面）输出空——调用方按「范围不对」处理。
+app_scope_ids() {
+  local out
+  out=$(A exec-out run-as "$PKG" sh -c 'cat shared_prefs/backup_scope-*.xml' 2>/dev/null \
+    | sed -n 's/.*<string name="bucket_ids">\([^<]*\)<\/string>.*/\1/p')
+  [ "$(printf '%s\n' "$out" | grep -c .)" = 1 ] && printf '%s\n' "$out"
+  return 0
+}
+# scope_is_album：App 的备份范围恰好是专用测试相册这一个
+scope_is_album() {
+  local a s
+  a=$(album_bucket_id)
+  s=$(app_scope_ids)
+  [ -n "$a" ] && [ "$s" = "$a" ]
 }
