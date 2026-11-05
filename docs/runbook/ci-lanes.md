@@ -73,9 +73,10 @@ CI、评审与验收并行，验收后补这一行再 `gh pr ready`（`edited` /
 ## 核心路径
 
 `.github/core-paths.txt` 圈住的文件（门禁本身、配对 / 身份 / 加密 / 协议、存储与迁移、
-更新链、依赖锁）改到了，PR 上 `core review` 需要在 Actions 里批准。2026-11-02 起由 owner 批准，
-前提是该核心改动已按 AGENTS.md 红线 6 讨论定案（卡上引用定案）；worker 一律不批。有第二位真人协作者后改回人批。判定逻辑与语法见
-`tools/ci-paths.sh` 头注释，自测 `tools/test-ci-paths.sh`。
+更新链、依赖锁）改到了，就是 AGENTS.md 里的人控级任务，没有单独的审批 job。三道关把关：
+开工前方案按红线 6 定案（卡上引用已采纳方案）；PR 正文有产品负责人真机验收行（`acceptance gate` 检查）；
+独立评审通过（CI 评审 job 的 `review/agent`）。判定逻辑与语法见 `tools/ci-paths.sh` 头注释，
+自测 `tools/test-ci-paths.sh`。
 
 ## 独立评审 `review/agent`
 

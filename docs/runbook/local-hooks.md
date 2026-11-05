@@ -13,7 +13,7 @@
 | 其它分支名、detached HEAD | 拒绝 |
 
 1. **核心**：暂存改动用 `tools/ci-paths.sh core` 判定，规则是 `.github/core-paths.txt`，
-   和 CI 的 `core review` 用的是同一套。命中核心、而 issue 没有 `core` 标签时拒绝。
+   和 CI 的 acceptance gate 与独立评审用的是同一套。命中核心、而 issue 没有 `core` 标签时拒绝。
    这时按 AGENTS.md 红线 6，只写复现、根因和两个修法。
 2. **范围**：issue 正文里「**范围（只许动这些）**：」下面那个 ```` ``` ```` 代码块，一行写一个
    路径或 glob（`**` 可以跨目录，`*` 和 `?` 不跨 `/`；以 `/` 结尾的行视为 `目录/**`；空行和 `#` 开头的行忽略）。
@@ -87,9 +87,9 @@ PPASS_HOOK_BYPASS=1 PPASS_HOOK_BYPASS_REASON='<为什么必须绕过>' git commi
 ## 已知局限
 
 - `git commit --no-verify` 和改 `core.hooksPath` 都能绕过全部本地检查，这一层只能拦住守规矩的提交。
-  兜底仍然是 CI 的 `core review` 和 owner 合批时的审查。
+  兜底仍然是 PR 上的独立评审与 CI；用户可见或核心改动还有 acceptance gate 的验收行。
 - 通行证本身挡不住故意绕过的人：任何能编辑 issue 的账号都可以给卡打 `core` 标签、改「范围」。
-  这一层防的是忘了规矩，故意绕过的情况仍然要靠 `core review` 和 owner 审查兜底。
+  这一层防的是忘了规矩，故意绕过的情况仍然要靠 PR 上的独立评审、CI 与 acceptance gate 兜底。
 - 自己开 PR、自己在 GitHub 上操作，本地 hook 管不到。
 - 每次在卡分支上提交都要请求一次 GitHub API，并取一次 `origin/main`（合计约 1～2 秒）。
 - 仓库从 `origin` 的 URL 解析（支持 SSH 别名，例如 `git@github-personal:owner/repo.git`）。解析不出来时，
