@@ -39,10 +39,12 @@ setup() {
   [ "$(win_phone_version)" = "$WIN_BASE_PHONE_VER" ] || { echo "手机不是基线 ${WIN_BASE_PHONE_VER}：$(win_phone_version)"; return 77; }
   win_diag "$EV/main" >/dev/null 2>&1 || true
   [ "$(win_json_array_len "$EV/main/diag/devices.json")" = 1 ] || { echo "桌面没有 1 台配对设备（先跑 win/pair-backup）"; return 77; }
-  # 候选包
-  local exe
+  # 候选包：桌面和手机两份都在 setup 里先确认，缺了就别停服务、别动桌面状态。
+  local exe apk
   exe="$(win_release_file "$WIN_CAND_TAG" '*_x64-setup.exe')"
   [ -n "$exe" ] || { echo "缺候选安装包（$WIN_REL_DIR/$WIN_CAND_TAG/*_x64-setup.exe）"; return 77; }
+  apk="$(win_release_file "$WIN_CAND_TAG" '*_android.apk')"
+  [ -n "$apk" ] || { echo "缺候选 APK（$WIN_REL_DIR/$WIN_CAND_TAG/*_android.apk）"; return 77; }
   echo "候选安装包：$exe"
   echo "sha256：$(sha256sum "$exe" | awk '{print $1}')"
   # 装不了就别开始：非提权且没给 extract 时，setup 返回 SKIP，不动机器状态。

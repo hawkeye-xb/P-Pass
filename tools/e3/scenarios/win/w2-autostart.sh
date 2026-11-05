@@ -13,8 +13,9 @@ setup() {
   local orig="$E3_STATE/win/w2-run-orig.txt"
   mkdir -p "$(dirname "$orig")"
   win_ps "
-\$v=(Get-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'P-Pass' -ErrorAction SilentlyContinue).'P-Pass'
-if(\$null -eq \$v){ 'ABSENT' } else { 'VALUE=' + \$v }
+\$k=Get-Item -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
+\$v=\$k.GetValue('P-Pass', \$null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+if(\$null -eq \$v){ 'ABSENT' } else { 'KIND=' + \$k.GetValueKind('P-Pass'); 'VALUE=' + \$v }
 " >"$orig" 2>&1
 }
 
@@ -68,27 +69,49 @@ counter() {
 }
 
 teardown() {
-  local orig="$E3_STATE/win/w2-run-orig.txt" marker="$E3_STATE/win/w2-counter-wrote" val_file="$E3_STATE/win/w2-run-orig-value.txt"
+  local orig="$E3_STATE/win/w2-run-orig.txt" marker="$E3_STATE/win/w2-counter-wrote" val_file="$E3_STATE/win/w2-run-orig-value.txt" orig_clean kind
   if [ ! -s "$orig" ] || [ ! -f "$marker" ]; then
     # setup 没保存原值（SKIP/失败）或 counter 没跑：不动用户注册表。
     return 0
   fi
-  if grep -qx 'ABSENT' "$orig"; then
-    # 测试前明确没有这个值：删除测试写入的值。
-    win_ps "Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'P-Pass' -ErrorAction SilentlyContinue" >/dev/null 2>&1 || true
-    rm -f "$orig" "$marker"
-  elif grep -q '^VALUE=' "$orig"; then
-    # 原值存在：恢复原值（值里可能有空格/引号，用变量传入）。
-    sed -n 's/^VALUE=//p' "$orig" >"$val_file" 2>/dev/null || true
-    win_ps "
+  # PowerShell 输出是 CRLF；先去掉 \r 再解析，避免把 ABSENT/VALUE 当成读不到。
+  orig_clean="$(tr -d '\r' <"$orig")"
+  kind="$(printf '%s\n' "$orig_clean" | sed -n 's/^KIND=//p' | head -1)"
+  if printf '%s\n' "$orig_clean" | grep -qx 'ABSENT'; then
+    # 测试前明确没有这个值：删除测试写入的值；删完核对确实不存在，失败就保留恢复数据。
+    if win_ps "
+Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'P-Pass' -ErrorAction SilentlyContinue
+\$k=Get-Item -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
+if(\$null -ne \$k.GetValue('P-Pass')){ exit 1 }
+" >/dev/null 2>&1; then
+      rm -f "$orig" "$marker"
+    else
+      echo "teardown：删除测试写入的 HKCU Run 值失败，保留 ${orig} 供排查" >&2
+    fi
+  elif printf '%s\n' "$orig_clean" | grep -q '^VALUE=' && { [ "$kind" = String ] || [ "$kind" = ExpandString ]; }; then
+    # 原值存在：按原类型和未展开的原文恢复（值里可能有空格/引号/环境变量，用文件传入）。
+    printf '%s\n' "$orig_clean" | sed -n 's/^VALUE=//p' >"$val_file"
+    if win_ps "
+\$path='HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
+\$name='P-Pass'
 \$v=[IO.File]::ReadAllText('$(cygpath -w "$val_file")').TrimEnd([char]13,[char]10)
-Set-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'P-Pass' -Value \$v -Type String
-" >/dev/null 2>&1 || echo "teardown：恢复原 HKCU Run 值失败，原值见 $val_file" >&2
-    rm -f "$val_file" "$orig" "$marker"
+Remove-ItemProperty -Path \$path -Name \$name -ErrorAction SilentlyContinue
+if('$kind' -eq 'ExpandString'){
+  New-ItemProperty -Path \$path -Name \$name -Value \$v -PropertyType ExpandString -Force | Out-Null
+} else {
+  New-ItemProperty -Path \$path -Name \$name -Value \$v -PropertyType String -Force | Out-Null
+}
+\$k=Get-Item -Path \$path
+\$now=\$k.GetValue(\$name, \$null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+if(\$now -ne \$v -or \$k.GetValueKind(\$name).ToString() -ne '$kind'){ exit 1 }
+" >/dev/null 2>&1; then
+      rm -f "$val_file" "$orig" "$marker"
+    else
+      echo "teardown：恢复原 HKCU Run 值失败，原值见 ${val_file}" >&2
+    fi
   else
-    # 原值读取失败/内容不认识：宁可不碰注册表，保留 orig 供排查。
-    echo "teardown：原 HKCU Run 值读取失败（见 ${orig}），不动注册表" >&2
-    rm -f "$marker"
+    # 原值读取失败/类型不支持：宁可不碰注册表，保留 orig 供排查。
+    echo "teardown：原 HKCU Run 值读取失败或类型不支持（kind=${kind:-?}，见 ${orig}），不动注册表" >&2
   fi
   return 0
 }

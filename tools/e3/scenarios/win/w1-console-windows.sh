@@ -14,10 +14,24 @@ WATCH="${E3_WIN_W1_SECONDS:-75}"
 watcher_no_console() { [ -s "$1" ] && no_line "$1" 'CONSOLE'; }
 
 run_window() { # run_window <证据目录> <故障注入 0|1> <秒>
-  local d="$1" fault="$2" secs="$3" rc=0
+  local d="$1" fault="$2" secs="$3" rc=0 ready=0 i
   mkdir -p "$d"
   win_watch_start "$d/watcher.log" "$secs"
-  if [ "$fault" = 1 ]; then
+  # 等 watcher 打出「watching for」再动作：此前它在编译并取初始窗口快照，还没开始盯新窗口。
+  for i in $(seq 1 150); do
+    if grep -q 'watching for' "$d/watcher.log" 2>/dev/null; then ready=1; break; fi
+    sleep 0.2
+  done
+  if [ "$ready" = 1 ]; then
+    echo "ready=ok" >"$d/watcher-ready.txt"
+  else
+    echo "ready=fail" >"$d/watcher-ready.txt"
+    echo "watcher 30s 内没就绪，动作不开始" >&2
+    kill "$WIN_WATCH_PID" 2>/dev/null || true
+  fi
+  if [ "$ready" != 1 ]; then
+    : # 未就绪就不做动作；ready=fail 会让 judge 判红。
+  elif [ "$fault" = 1 ]; then
     # 可见控制台：start 会新建一个窗口，watcher 应把它抓成 CONSOLE。
     win_ps "Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = 'cmd.exe /c start \"\" cmd.exe /c \"timeout /t 3\"' } | Out-Null" >/dev/null 2>&1 || true
     sleep 4
@@ -88,6 +102,7 @@ act() { run_window "$OUT" 0 "$WATCH"; }
 
 judge() {
   local d="$1"
+  check "watcher 就绪后才开始动作" eq_file "$d/watcher-ready.txt" "ok"
   check "watcher 正常退出（没有可见控制台）" eq_file "$d/watcher-rc.txt" "0"
   check "watcher 报告 0 个控制台窗口" has_line "$d/watcher.log" '^console windows seen: 0$'
   check "watcher 日志没有 CONSOLE 命中" watcher_no_console "$d/watcher.log"

@@ -73,6 +73,8 @@ act() {
   # 1) 停服务，采样 2 分钟
   stop_via_app || return 1
   : >"$d/stop-samples.txt"
+  # 立刻采一次：daemon/任务可能只是短暂残留，10s 后才采会漏掉。
+  echo "t+0s pid=$(win_daemon_pid) task=$(win_task_state)" >>"$d/stop-samples.txt"
   for i in $(seq 10 10 "$STOP_WINDOW"); do
     # 先等再采：最后一个点覆盖到 STOP_WINDOW，而不是提前 10s 收尾。
     sleep 10
