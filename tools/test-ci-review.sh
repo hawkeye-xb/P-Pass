@@ -137,6 +137,7 @@ sed -i.bak 's|  "pr view")|  "pr view")\n    case " $* " in *" headRefOid --jq .
 sed -i.bak 's|  "pr view")|  "pr view")\n    case " $* " in *" --json author "*) cat "$F/pr.author" 2>/dev/null; exit 0 ;; esac|' "${TMP}/bin/gh"
 printf 'someone' >"$FAKE/pr.author"
 export GH_TOKEN=stub-gh-token
+export PPASS_CI_STATE="${TMP}/state"
 
 CI() { (cd "${TMP}/main" && bash tools/flow/ci-review.sh "$@"); }
 reset() {
@@ -160,7 +161,7 @@ grep -qx 'gh_token:' "$FAKE/agent.env" && ok "评审 agent 拿不到 GH_TOKEN（
 has "VERDICT: PASS" "${TMP}/o1" && ok "日志里留有 agent 返回的 VERDICT 行" || bad "日志里没有 VERDICT 行"
 [ "$(calls)" = 1 ] && ok "通过 → agent 只调一次" || bad "调了 $(calls) 次"
 (cd "${TMP}/main" && PPASS_REVIEW_AGENT="${TMP}/bin/fake-claude" PPASS_REVIEW_NO_MERGE=1 bash tools/flow/review.sh 7) >/dev/null 2>&1
-grep -qx 'gh_token:stub-gh-token' "$FAKE/agent.env" && ok "反证：不经垫片直接调 agent 时 GH_TOKEN 在（垫片的去除才是生效的那一步）" || bad "反证不成立：$(cat "$FAKE/agent.env")"
+grep -qx 'gh_token:stub-gh-token' "$FAKE/agent.env" && ok "反证：不拆步骤、直接一条龙调 agent 时 GH_TOKEN 在（拆步骤才是生效的那一步）" || bad "反证不成立：$(cat "$FAKE/agent.env")"
 
 echo "==> 不通过（代码有问题）"
 reset fail
@@ -178,17 +179,8 @@ CI 7 >/dev/null 2>&1 && ok "infra → job 退出 0" || bad "infra 时 job 失败
 [ "$(calls)" = 2 ] && ok "infra → 重试一次（共 2 次）" || bad "调用次数 $(calls)，应为 2"
 tail -n 1 "$FAKE/statuses" | grep -qF "state=error" && ok "状态 error（不是 failure）" || bad "状态不对：$(cat "$FAKE/statuses")"
 has "评审没跑成" "$FAKE/comments" && has "不是代码有问题" "$FAKE/comments" && ok "评论写「评审没跑成」" || bad "评论不对：$(cat "$FAKE/comments")"
-has "comments/4242" "$FAKE/deletes" && ok "infra → 删掉 review.sh 贴的「未通过」评论，避免与「评审没跑成」矛盾" || bad "没删「未通过」评论：$(cat "$FAKE/deletes")"
-[ ! -s "$FAKE/merges" ] && ok "infra → 不碰自动合入" || bad "infra 开了自动合入"
-reset infra
-printf '**独立评审：未通过**（头提交 `%s`）\n更早一次的真实结论\n-----\n' "${SHA:0:10}" >"$FAKE/comments"
-CI 7 >/dev/null 2>&1
-[ ! -s "$FAKE/deletes" ] && ok "反证：同一提交上更早的真实「未通过」评论不删" || bad "误删了更早的评论：$(cat "$FAKE/deletes")"
-reset infra
-touch "$FAKE/list_fail"
-CI 7 >/dev/null 2>&1
-[ ! -s "$FAKE/deletes" ] && tail -n 1 "$FAKE/statuses" | grep -qF "state=error" && ok "快照取失败 → 不删评论，但仍写 error 状态" || bad "快照失败处理不对：$(cat "$FAKE/deletes")"
-rm -f "$FAKE/list_fail"
+! has "独立评审：未通过" "$FAKE/comments" && ok "infra → 不贴「未通过」评论（不再先贴后删）" || bad "infra 贴了「未通过」：$(cat "$FAKE/comments")"
+[ ! -s "$FAKE/merges" ] && [ ! -s "$FAKE/disables" ] && ok "infra → 不碰自动合入" || bad "infra 碰了自动合入"
 reset noverdict
 CI 7 >/dev/null 2>&1
 tail -n 1 "$FAKE/statuses" | grep -qF "state=error" && [ "$(calls)" = 2 ] && ok "退出 0 但没有 VERDICT 行 → 也算 infra，重试后 error" || bad "无 VERDICT 处理不对：$(cat "$FAKE/statuses") 调用 $(calls)"
@@ -199,13 +191,48 @@ reset pass
 ANTHROPIC_AUTH_TOKEN= CI 7 >/dev/null 2>&1
 tail -n 1 "$FAKE/statuses" | grep -qF "state=error" && [ "$(calls)" = 0 ] && has "评审没跑成" "$FAKE/comments" && ok "没有 key → error + 评审没跑成，不调 agent" || bad "没有 key 处理不对"
 reset pass
-printf '**独立评审：未通过**（头提交 `%s`）\n更早的真实结论\n-----\n' "${SHA:0:10}" >"$FAKE/comments"
-ANTHROPIC_AUTH_TOKEN= CI 7 >/dev/null 2>&1
-[ ! -s "$FAKE/deletes" ] && ok "没有 key 的提前返回也不误删更早的真实「未通过」评论" || bad "没有 key 时误删：$(cat "$FAKE/deletes")"
-reset pass
 printf 'no card\n' >"$FAKE/pr.body"
-CI 7 >/dev/null 2>&1 && tail -n 1 "$FAKE/statuses" | grep -qF "state=error" && ok "review.sh 提前退出（正文没有 closes）→ error，job 仍成功" || bad "提前退出处理不对：$(cat "$FAKE/statuses")"
+CI 7 >/dev/null 2>&1 && tail -n 1 "$FAKE/statuses" | grep -qF "state=error" && [ "$(calls)" = 0 ] && ok "准备阶段失败（正文没有 closes）→ error、不跑 agent，job 仍成功" || bad "提前退出处理不对：$(cat "$FAKE/statuses")"
 printf 'closes #77\n' >"$FAKE/pr.body"
+
+echo "==> agent 那步拿不到凭据"
+STEP() { (cd "${TMP}/main" && bash tools/flow/ci-review.sh "$@"); }
+CLEAN_AGENT() { env -u GH_TOKEN -u GITHUB_TOKEN bash -c 'cd "$1" && bash tools/flow/ci-review.sh agent' _ "${TMP}/main"; }
+reset pass
+STEP prepare 7 >/dev/null 2>&1
+GH_TOKEN=leak STEP agent >/dev/null 2>&1
+[ "$(calls)" = 0 ] && grep -q "GH_TOKEN" "${PPASS_CI_STATE}/agent.err" && ok "agent 步骤环境里有 GH_TOKEN → 拒绝运行" || bad "带着 GH_TOKEN 也跑了 agent（调用 $(calls)）"
+env -u GH_TOKEN GITHUB_TOKEN=leak bash -c 'cd "$1" && bash tools/flow/ci-review.sh agent' _ "${TMP}/main" >/dev/null 2>&1
+[ "$(calls)" = 0 ] && ok "agent 步骤环境里有 GITHUB_TOKEN → 拒绝运行" || bad "带着 GITHUB_TOKEN 也跑了 agent"
+git -C "${TMP}/main" config http.https://github.com/.extraheader "AUTHORIZATION: basic xxx"
+CLEAN_AGENT >/dev/null 2>&1
+[ "$(calls)" = 0 ] && grep -q "extraheader" "${PPASS_CI_STATE}/agent.err" && ok "磁盘上的 git 配置留有凭据 → 拒绝运行" || bad "git 配置里有凭据也跑了 agent"
+git -C "${TMP}/main" config --unset http.https://github.com/.extraheader
+CLEAN_AGENT >/dev/null 2>&1
+[ "$(calls)" = 1 ] && grep -qx 'gh_token:' "$FAKE/agent.env" && [ "$(cat "${PPASS_CI_STATE}/agent.rc")" = 0 ] &&
+  ok "反证：没有 token、没有 git 凭据 → agent 正常跑完" || bad "干净环境下 agent 没跑：调用 $(calls)"
+STEP publish 7 >/dev/null 2>&1
+tail -n 1 "$FAKE/statuses" | grep -qF "state=success" && ok "分步跑：prepare → agent → publish 写出 success" || bad "分步跑结果不对：$(cat "$FAKE/statuses")"
+reset pass
+STEP prepare 7 >/dev/null 2>&1
+STEP publish 7 >/dev/null 2>&1
+tail -n 1 "$FAKE/statuses" | grep -qF "state=error" && ! has "state=success" "$FAKE/statuses" &&
+  ok "agent 那步没跑完（被取消）→ publish 写 error，不是 success" || bad "agent 没跑完却：$(cat "$FAKE/statuses")"
+
+echo "==> 本机 just review：agent 没跑成写 error，不当作未通过"
+LOCAL() { (cd "${TMP}/main" && env -u PPASS_REVIEW_NO_MERGE PPASS_REVIEW_AGENT="${TMP}/bin/fake-claude" bash tools/flow/review.sh 7); }
+reset infra
+LOCAL >/dev/null 2>&1 && bad "本机没跑成却退出 0" || ok "本机没跑成 → 退出非 0"
+tail -n 1 "$FAKE/statuses" | grep -qF "state=error" && has "评审没跑成" "$FAKE/comments" && ! has "独立评审：未通过" "$FAKE/comments" &&
+  ok "本机 agent 退出非 0 → error +「评审没跑成」，不贴「未通过」" || bad "本机没跑成处理不对：$(cat "$FAKE/statuses")"
+[ ! -s "$FAKE/disables" ] && [ ! -s "$FAKE/merges" ] && ok "本机没跑成 → 不碰自动合入" || bad "本机没跑成碰了自动合入"
+reset noverdict
+LOCAL >/dev/null 2>&1
+tail -n 1 "$FAKE/statuses" | grep -qF "state=error" && ok "本机 agent 没给 VERDICT 行 → error" || bad "本机无 VERDICT 处理不对：$(cat "$FAKE/statuses")"
+reset fail
+LOCAL >/dev/null 2>&1
+tail -n 1 "$FAKE/statuses" | grep -qF "state=failure" && has "独立评审：未通过" "$FAKE/comments" &&
+  ok "反证：本机 VERDICT: FAIL → 仍是 failure +「未通过」" || bad "本机 FAIL 处理不对：$(cat "$FAKE/statuses")"
 
 echo "==> 评审结论绑定头提交"
 reset pass
@@ -287,6 +314,19 @@ grep -q "sender.type != 'Bot'" "$WF" && ok "edited 不认 bot 改正文" || bad 
 ! grep -q '^concurrency:' "$WF" && grep -q '^    concurrency:' "$WF" &&
   ok "并发写在 job 上：被跳过的运行不取消正在跑的评审" || bad "并发写在 workflow 上"
 ! grep -qE '^ *contents: *write' "$WF" && ok "不升 contents: write（CI 不开自动合入）" || bad "要了 contents: write"
+grep -q 'persist-credentials: false' "$WF" && ok "检出不把 token 留在磁盘上的 git 配置里" || bad "检出没写 persist-credentials: false"
+python3 - "$WF" <<'PY3' && ok "GH_TOKEN 只在准备、发布两步；评审那步与 job 级 env 都没有" || bad "GH_TOKEN 给到了 agent 那步或 job 级"
+import re,sys
+t=open(sys.argv[1]).read()
+job_env=t[t.index("    env:\n"):t.index("    steps:\n")]
+steps=re.split(r"\n      - ", t[t.index("    steps:\n"):])
+agent=[x for x in steps if "ci-review.sh agent" in x]
+tok=[x for x in steps if "GH_TOKEN" in x]
+ok = ("GH_TOKEN" not in job_env and "github.token" not in job_env and len(agent)==1
+      and "GH_TOKEN" not in agent[0] and "github.token" not in agent[0]
+      and len(tok)==2 and all(("prepare" in x) or ("publish" in x) for x in tok))
+sys.exit(0 if ok else 1)
+PY3
 
 echo
 echo "ci-review: ${PASS} passed, ${FAIL} failed"

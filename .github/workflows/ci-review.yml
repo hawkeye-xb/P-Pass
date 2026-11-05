@@ -9,7 +9,7 @@
 # ⚠️ 为什么是 pull_request_target：评审结论是门禁，评审工具（本文件、tools/flow/*.sh、review-prompt.md、
 # 界面路径清单、核心名单）必须取 main 上的版本，否则 PR 改一下评审脚本就能让自己恒判通过。PR 头提交只当
 # 被读的数据：review.sh 从 refs/pull/N/head 建临时只读检出，评审 agent 只有 Read / Grep / Glob，且不读检出里的
-# .claude/ 配置、hooks、MCP（ci-review.sh 垫片加 --setting-sources user --strict-mcp-config）。
+# .claude/ 配置、hooks、MCP（ci-review.sh 的 agent 那步加 --setting-sources user --strict-mcp-config；那步也不给任何 GitHub token）。
 # 别往这里加执行 PR 代码的步骤（构建、测试、npm install PR 里的依赖）。
 # 代价：改评审工具本身的 PR 按 main 上的旧工具评审。
 #
@@ -46,23 +46,34 @@ jobs:
       cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    # token 按步骤给：GH_TOKEN 只给「准备」「发布」两步，评审 key 只给「评审」那步；跑 agent 的那步没有任何 GitHub token。
     env:
-      GH_TOKEN: ${{ github.token }}
       PPASS_HOOK_REPO: ${{ github.repository }}
-      ANTHROPIC_AUTH_TOKEN: ${{ secrets.PPASS_REVIEW_API_KEY }}
-      ANTHROPIC_BASE_URL: ${{ vars.PPASS_REVIEW_BASE_URL || 'https://api.deepseek.com/anthropic' }}
-      PPASS_REVIEW_MODEL: ${{ vars.PPASS_REVIEW_MODEL || 'deepseek-flash' }}
+      PR: ${{ github.event.pull_request.number }}
     steps:
       # 检出 main（pull_request_target 的默认 ref），不检出 PR 头提交；PR 内容由 review.sh 只读取用。
+      # persist-credentials: false：不把 GITHUB_TOKEN 写进磁盘上的 git 配置，评审 agent 用 Read 读不到。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
       - name: 安装评审用的 claude 命令行（版本写死）
         run: npm install -g @anthropic-ai/claude-code@2.1.318
-      - name: 评审（job 永远成功；结论写成必需检查 review/agent 与评论）
+      - name: 准备（写 pending、取 PR、建只读检出）
         env:
-          PR: ${{ github.event.pull_request.number }}
-        run: bash tools/flow/ci-review.sh "$PR"
+          GH_TOKEN: ${{ github.token }}
+          PPASS_REVIEW_MODEL: ${{ vars.PPASS_REVIEW_MODEL || 'deepseek-flash' }}
+        run: bash tools/flow/ci-review.sh prepare "$PR"
+      - name: 评审（不带任何 GitHub token）
+        env:
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.PPASS_REVIEW_API_KEY }}
+          ANTHROPIC_BASE_URL: ${{ vars.PPASS_REVIEW_BASE_URL || 'https://api.deepseek.com/anthropic' }}
+        run: bash tools/flow/ci-review.sh agent
+      - name: 发布结论（必需检查 review/agent 与评论；job 永远成功）
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash tools/flow/ci-review.sh publish "$PR"
