@@ -35,18 +35,42 @@ git config --global user.email "hook-test@example.invalid"
 git config --global init.defaultBranch main
 unset PPASS_HOOK_BYPASS PPASS_HOOK_BYPASS_REASON PPASS_HOOK_REPO PPASS_HOOK_ROOT
 
-# PATH 只放白名单命令的软链（不含 gh），桩放最前面。不能「剔掉带 gh 的目录」：
+# 假命令：MSYS/Cygwin（Git Bash）不能执行指向 .exe 的符号链接，改生成 wrapper 脚本；
+# 其他平台保持 symlink。调用方：fake_cmd <目录> <命令名>。
+fake_cmd() {
+  local dir="$1" c="$2" p
+  p="$(command -v "$c")" && [ "${p#/}" != "$p" ] || return 1
+  case "$(uname -s 2>/dev/null)" in
+    MINGW* | MSYS* | CYGWIN*)
+      # 原生 git.exe spawn 钩子的解释器时要真正的 sh.exe，wrapper 脚本不行：
+      # 不放进假 bin，让 PATH 末尾的真实 /usr/bin 供给（见 EXTRA_PATH）。
+      [ "$c" = sh ] && return 0
+      printf '#!/bin/sh\nexec "%s" "$@"\n' "$p" >"${dir}/${c}" && chmod +x "${dir}/${c}"
+      ;;
+    *)
+      ln -s "$p" "${dir}/${c}"
+      ;;
+  esac
+}
+
+# PATH 只放白名单命令的假命令（不含 gh），桩放最前面。不能「剔掉带 gh 的目录」：
 # Linux 上 gh 常在 /usr/bin，一剔连 git / sed 都没了。测试与 hook 用到新命令要加进这里。
 NOGH_PATH="${TMP}/nogh"
 mkdir -p "$NOGH_PATH"
 for c in git bash env sh sed awk tar mktemp cat tr head grep rm cp chmod touch sort cmp \
   basename dirname mkdir mv; do
-  p="$(command -v "$c")" && [ "${p#/}" != "$p" ] || {
+  fake_cmd "$NOGH_PATH" "$c" || {
     echo "找不到命令 ${c}，无法搭测试环境"
     exit 1
   }
-  ln -s "$p" "${NOGH_PATH}/${c}"
 done
+# Git Bash 上原生 git.exe 需要真实 sh.exe：把 MSYS 的 /usr/bin 放在假 PATH 末尾。
+# 那里没有 gh，所以「PATH 里没有 gh」的用例仍然成立。
+case "$(uname -s 2>/dev/null)" in
+  MINGW* | MSYS* | CYGWIN*) EXTRA_PATH=":/usr/bin:/mingw64/bin" ;;
+  *) EXTRA_PATH="" ;;
+esac
+export EXTRA_PATH
 mkdir -p "${TMP}/bin"
 cat >"${TMP}/bin/gh" <<'STUB'
 #!/usr/bin/env bash
@@ -61,7 +85,7 @@ STUB
 chmod +x "${TMP}/bin/gh"
 export FAKE_GH="${TMP}/gh"
 mkdir -p "$FAKE_GH"
-export PATH="${TMP}/bin:${NOGH_PATH}"
+export PATH="${TMP}/bin:${NOGH_PATH}${EXTRA_PATH}"
 
 issue() { # issue <号> <标签,逗号分隔> <正文>
   printf '%s' "$2" >"${FAKE_GH}/$1.labels"
@@ -233,8 +257,8 @@ try pass "batch/* 上核心 + 越界都不拦（且不查 gh）" batch/2026-11-0
 rm -f "${FAKE_GH}/fail"
 
 echo "==> 5. gh 不可用"
-try deny "PATH 里没有 gh" fix/101-nogh 'PATH="$NOGH_PATH"; echo 1 >>docs/a/x.md; git add -A' "找不到 gh"
-PATH="${TMP}/bin:${NOGH_PATH}"
+try deny "PATH 里没有 gh" fix/101-nogh 'PATH="${NOGH_PATH}${EXTRA_PATH}"; echo 1 >>docs/a/x.md; git add -A' "找不到 gh"
+PATH="${TMP}/bin:${NOGH_PATH}${EXTRA_PATH}"
 try deny "gh 报错（离线 / 没登录）" fix/101-off 'touch "$FAKE_GH/fail"; echo 1 >>docs/a/x.md; git add -A' "按拒绝处理"
 rm -f "${FAKE_GH}/fail"
 try deny "issue 不存在" fix/999-x 'echo 1 >>docs/a/x.md; git add -A' "按拒绝处理"
