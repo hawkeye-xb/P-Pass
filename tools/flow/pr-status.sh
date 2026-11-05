@@ -107,6 +107,9 @@ if failed:
     block.append("%d 个检查没过" % len(failed))
 if running:
     wait.append("%d 个检查还在跑" % len(running))
+if not (ctx.get("nodes") or []):
+    print("  （头提交上还没有任何检查：刚推送，CI 还没登记）")
+    wait.append("头提交上还没有检查")
 
 # ── 评审线程 ──
 CHUNK = r"(?:\*\*[^*]+\*\*|_[^_]+_)"

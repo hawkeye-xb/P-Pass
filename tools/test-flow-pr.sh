@@ -160,6 +160,8 @@ if opts.get("check") == "cancel":
     checks[0]["conclusion"] = "CANCELLED"
 if opts.get("check") == "run":
     checks[0]["status"] = "IN_PROGRESS"; checks[0]["conclusion"] = None
+if opts.get("check") == "none":
+    checks = []
 if opts.get("status") == "fail":
     checks[2]["state"] = "FAILURE"
 threads = [{"id": "PRRT_done", "isResolved": True, "isOutdated": False, "path": "a.sh", "line": 3, "originalLine": 3,
@@ -198,6 +200,10 @@ check "StatusContext 失败 → 退出 1" bash -c '[ "$1" = 1 ] && grep -qF "rev
 reset; mk check=run
 run bash "$STATUS" 7
 check "检查还在跑 → 退出 3，不算全清" bash -c '[ "$1" = 3 ] && grep -qF "… CI gate" "$2" && ! grep -qF "全清" "$2"' _ "$RC" "${TMP}/out"
+
+reset; mk check=none
+run bash "$STATUS" 7
+check "头提交上一个检查都没有（刚推送）→ 退出 3，不报全清" bash -c '[ "$1" = 3 ] && ! grep -qF "全清" "$2"' _ "$RC" "${TMP}/out"
 
 reset; mk thread=open
 run bash "$STATUS" 7
