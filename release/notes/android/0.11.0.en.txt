@@ -1,0 +1,3 @@
+Send a few hand-picked photos without turning on auto backup.
+After pairing, turn on auto backup or try a few photos first.
+Wi-Fi-only backup now works on Wi-Fi without internet access.

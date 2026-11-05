@@ -1,0 +1,3 @@
+After updating, pair again once by scanning the QR code.
+Move your library in Settings without re-uploading photos.
+Index and thumbnails now stay on this computer. No going back to older versions.

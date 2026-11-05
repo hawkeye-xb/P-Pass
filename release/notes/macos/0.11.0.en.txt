@@ -1,0 +1,3 @@
+Move your library in Settings. No re-pairing or re-uploading.
+A library on an external drive can be ejected when idle.
+Index and thumbnails now stay on this computer. No going back to older versions.
