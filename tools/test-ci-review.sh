@@ -72,6 +72,7 @@ case "$1 $2" in
     cat "$F/issue.$3"
     ;;
   "api repos/o/r/issues/7/comments")
+    [ ! -e "$F/list_fail" ] || { echo "HTTP 502" >&2; exit 1; }
     grep -q "独立评审：未通过" "$F/comments" && echo 4242 || true ;;
   "api -X")
     [ "$3" != DELETE ] || { echo "$*" >>"$F/deletes"; exit 0; }
@@ -170,6 +171,11 @@ reset infra
 printf '**独立评审：未通过**（头提交 `%s`）\n更早一次的真实结论\n-----\n' "${SHA:0:10}" >"$FAKE/comments"
 CI 7 >/dev/null 2>&1
 [ ! -s "$FAKE/deletes" ] && ok "反证：同一提交上更早的真实「未通过」评论不删" || bad "误删了更早的评论：$(cat "$FAKE/deletes")"
+reset infra
+touch "$FAKE/list_fail"
+CI 7 >/dev/null 2>&1
+[ ! -s "$FAKE/deletes" ] && tail -n 1 "$FAKE/statuses" | grep -qF "state=error" && ok "快照取失败 → 不删评论，但仍写 error 状态" || bad "快照失败处理不对：$(cat "$FAKE/deletes")"
+rm -f "$FAKE/list_fail"
 reset noverdict
 CI 7 >/dev/null 2>&1
 tail -n 1 "$FAKE/statuses" | grep -qF "state=error" && [ "$(calls)" = 2 ] && ok "退出 0 但没有 VERDICT 行 → 也算 infra，重试后 error" || bad "无 VERDICT 处理不对：$(cat "$FAKE/statuses") 调用 $(calls)"

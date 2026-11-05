@@ -65,7 +65,7 @@ SHA="$(gh pr view "$PR" -R "$REPO" --json headRefOid --jq .headRefOid 2>/dev/nul
 
 list_fail_comments() {
   gh api "repos/${REPO}/issues/${PR}/comments" --paginate \
-    --jq ".[] | select(.body | startswith(\"**独立评审：未通过**（头提交 \`${SHA:0:10}\`\")) | .id" 2>/dev/null || true
+    --jq ".[] | select(.body | startswith(\"**独立评审：未通过**（头提交 \`${SHA:0:10}\`\")) | .id" 2>/dev/null
 }
 
 # 评审没跑成：状态 error + 评论，不是代码问题。
@@ -79,8 +79,9 @@ infra_report() {
   fi
   # review.sh 把 agent 失败当「未通过」贴过一条评论，和这里的结论矛盾，删掉它
   # 只删本次运行贴的（跑之前就存在的是同一提交上更早的真实评审结论，要留着）
-  if [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
-    for cid in $(list_fail_comments); do
+  # 跑之前的快照没取全就不删：宁可多留一条矛盾评论，也不误删真实结论
+  if [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] && [ "${BEFORE_OK:-0}" = 1 ]; then
+    for cid in $(list_fail_comments || true); do
       grep -qx "$cid" "${STATE}/before" 2>/dev/null && continue
       gh api -X DELETE "repos/${REPO}/issues/comments/${cid}" >/dev/null 2>&1 || true
     done
@@ -91,7 +92,8 @@ infra_report() {
     echo "ci-review: 贴评论失败" >&2
 }
 
-list_fail_comments >"${STATE}/before"
+BEFORE_OK=0
+if list_fail_comments >"${STATE}/before"; then BEFORE_OK=1; fi
 
 if [ -z "${ANTHROPIC_AUTH_TOKEN:-}" ]; then
   infra_report "没有拿到评审用的 key（Secret PPASS_REVIEW_API_KEY 为空；fork 与 Dependabot 的 PR 拿不到 Secret）"
