@@ -102,7 +102,8 @@ else
   BASE_VER="$LATEST_BASE"
   N=$((LATEST_N + 1))
 fi
-vers="$(git show origin/main:release/versions.json 2>/dev/null)" || die_stuck "读不到 origin/main 的 release/versions.json"
+# Git Bash 会把 origin/main:<path> 的冒号当路径分隔符改写；禁止 MSYS 做路径转换。
+vers="$(MSYS_NO_PATHCONV=1 git show origin/main:release/versions.json 2>/dev/null)" || die_stuck "读不到 origin/main 的 release/versions.json"
 maxv="$(printf '%s' "$vers" | python3 -c '
 import json, sys
 d = json.load(sys.stdin)
