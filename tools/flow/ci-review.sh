@@ -11,7 +11,7 @@
 # 环境变量：
 #   ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL / PPASS_REVIEW_MODEL  交给 claude 与 review.sh
 #   PPASS_CI_CLAUDE        真正的评审命令（默认 claude；测试用桩）
-#   PPASS_CI_TIMEOUT       单次 agent 调用的超时秒数（默认 900；系统没有 timeout 命令则不限）
+#   PPASS_CI_TIMEOUT       单次 agent 调用的超时秒数（默认 600；系统没有 timeout 命令则不限）
 #   PPASS_CI_RETRY_SLEEP   重试前等几秒（默认 10）
 #   GH_TOKEN               gh 用的令牌（workflow 里是 github.token）
 
@@ -23,7 +23,7 @@ FLOW_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ "${PPASS_CI_SHIM:-}" = "1" ]; then
   STATE="${PPASS_CI_STATE:?}"
   CLAUDE="${PPASS_CI_CLAUDE:-claude}"
-  LIMIT="${PPASS_CI_TIMEOUT:-900}"
+  LIMIT="${PPASS_CI_TIMEOUT:-600}"
   cat >"${STATE}/prompt"
   reason=""
   for attempt in 1 2; do
@@ -87,14 +87,15 @@ export PPASS_REVIEW_NO_MERGE=1
 export PPASS_CI_SHIM=1
 export PPASS_REVIEW_AGENT="${FLOW_DIR}/ci-review.sh"
 RC=0
-bash "${FLOW_DIR}/review.sh" "$PR" || RC=$?
+bash "${FLOW_DIR}/review.sh" "$PR" >"${STATE}/review.log" 2>&1 || RC=$?
+cat "${STATE}/review.log"
 
 # agent 的 stderr 被 review.sh 截走了，这里把垫片记下的结论打进 job 日志（E3 证据）
 [ ! -s "${STATE}/verdict" ] || cat "${STATE}/verdict"
 if [ -s "${STATE}/infra" ]; then
   infra_report "$(cat "${STATE}/infra")"
-elif [ "$RC" -ne 0 ] && [ ! -s "${STATE}/out" ]; then
-  # agent 根本没被调到：review.sh 在前面 die 了（读不到 PR、正文没有 closes #N 等）
-  infra_report "review.sh 在调用评审 agent 之前就退出了（退出码 ${RC}），详见 job 日志"
+elif [ "$RC" -ne 0 ] && ! grep -q 'review/agent=' "${STATE}/review.log"; then
+  # review.sh 没走到「写完状态」就退了：agent 之前（读不到 PR、没有 closes #N）或之后（贴评论、写状态的 gh 调用失败）
+  infra_report "review.sh 没写出评审状态就退出了（退出码 ${RC}）：$(tail -n 3 "${STATE}/review.log" | tr '\n' ' ')"
 fi
 exit 0

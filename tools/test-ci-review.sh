@@ -60,6 +60,7 @@ case "$1 $2" in
     esac
     echo "$*" >>"$F/merges"; [ ! -e "$F/merge_fail" ] || { echo "auto-merge not allowed" >&2; exit 1; } ;;
   "pr comment")
+    [ ! -e "$F/comment_fail" ] || { echo "HTTP 502" >&2; exit 1; }
     n="$3"; shift 3
     while [ $# -gt 0 ]; do
       [ "$1" = "--body-file" ] && { cat "$2" >>"$F/comments"; echo "-----" >>"$F/comments"; }
@@ -182,6 +183,27 @@ has "--auto --squash" "$FAKE/merges" && ok "没设 PPASS_REVIEW_NO_MERGE → 通
 reset fail
 (cd "${TMP}/main" && env -u PPASS_REVIEW_NO_MERGE bash tools/flow/review.sh 7) >/dev/null 2>&1
 has "--disable-auto" "$FAKE/disables" && ok "没设开关 → 未通过撤销自动合入" || bad "没撤销"
+
+echo "==> review.sh 在 agent 跑完后才失败（贴评论的 gh 调用挂了）"
+reset pass
+touch "$FAKE/comment_fail"
+CI 7 >"${TMP}/o9" 2>&1 && ok "退出 0" || bad "job 失败了"
+tail -n 1 "$FAKE/statuses" | grep -qF "state=error" && ok "没写出评审状态 → 补写 error，结论不被静默丢掉" || bad "状态不对：$(cat "$FAKE/statuses")"
+rm -f "$FAKE/comment_fail"
+reset pass
+CI 7 >/dev/null 2>&1
+has "state=success" "$FAKE/statuses" && ! has "state=error" "$FAKE/statuses" && ok "反证：gh 正常 → success，不补 error" || bad "反证不对：$(cat "$FAKE/statuses")"
+
+echo "==> 超时预算"
+python3 - "${SRC}" <<'PY2' && ok "两次 agent 超时 + 重试间隔 + 安装耗时 < job 超时" || bad "超时预算超过 job 上限"
+import re,sys
+src=sys.argv[1]
+sh=open(src+"/tools/flow/ci-review.sh").read()
+yml=open(src+"/.github/workflows/ci-review.yml").read()
+per=int(re.search(r'PPASS_CI_TIMEOUT:-(\d+)',sh).group(1))
+job=int(re.search(r'timeout-minutes: (\d+)',yml).group(1))*60
+sys.exit(0 if 2*per+10+600 < job else 1)
+PY2
 
 echo
 echo "ci-review: ${PASS} passed, ${FAIL} failed"
