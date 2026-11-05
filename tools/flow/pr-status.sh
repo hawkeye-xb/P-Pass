@@ -6,7 +6,8 @@
 # 给不在 Claude Desktop 里的执行端与 owner 排查用；线程用 just pr-thread 回复并关闭。
 #
 # 用法: tools/flow/pr-status.sh <PR号>
-# 退出码: 0 全清（或已合入）；1 有卡点；3 没有卡点但还没出结果（检查在跑、冲突待 GitHub 算）；2 用法错或读不到。
+# 退出码: 0 全清（或已合入）；1 有卡点；3 没有卡点但还没出结果（检查在跑、冲突待 GitHub 算、检查或线程超过 100 个没读全）；
+#         2 用法错或读不到。
 
 set -uo pipefail
 
@@ -94,6 +95,7 @@ for c in ctx.get("nodes") or []:
             failed.append("%s（%s）%s" % (name, st, url))
 if (ctx.get("pageInfo") or {}).get("hasNextPage"):
     print("⚠ 检查超过 100 个，只看了前 100 个")
+    wait.append("检查超过 100 个，结果不完整（到网页上看全）")
 
 print()
 print("检查：未过 %d，进行中 %d" % (len(failed), len(running)))
@@ -153,6 +155,7 @@ for t in open_t:
         print("      " + text)
 if threads["pageInfo"].get("hasNextPage"):
     print("⚠ 评审线程超过 100 条，只看了前 100 条")
+    wait.append("评审线程超过 100 条，结果不完整（到网页上看全）")
 if open_t:
     block.append("%d 条评审线程没解决（判定后用 just pr-thread <线程ID> \"<回复>\" 回复并关闭）" % len(open_t))
 

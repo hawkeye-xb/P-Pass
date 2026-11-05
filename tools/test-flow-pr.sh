@@ -79,7 +79,10 @@ case "$q" in
   *) echo "stub gh: unknown query" >&2; exit 2 ;;
 esac
 STUB
-chmod +x "${TMP}/bin/gh"
+chmod +x "${TMP}/bin/gh" || {
+  printf '%s\n' "无法让假 gh 可执行，终止测试（否则会调到本机真 gh）" >&2
+  exit 1
+}
 
 reset() { rm -f "$FAKE"/*; }
 calls() { cat "$FAKE/calls" 2>/dev/null; }
@@ -168,8 +171,8 @@ if opts.get("thread") == "open":
 pr = {"number": 7, "title": "T", "url": "https://github.com/o/r/pull/7", "state": opts.get("state", "OPEN"), "isDraft": False,
       "mergeable": opts.get("mergeable", "MERGEABLE"), "mergeStateStatus": opts.get("mss", "CLEAN"),
       "autoMergeRequest": {"mergeMethod": "SQUASH"} if opts.get("auto") == "on" else None,
-      "commits": {"nodes": [{"commit": {"oid": "abc", "statusCheckRollup": {"contexts": {"pageInfo": {"hasNextPage": False}, "nodes": checks}}}}]},
-      "reviewThreads": {"pageInfo": {"hasNextPage": False}, "nodes": threads}}
+      "commits": {"nodes": [{"commit": {"oid": "abc", "statusCheckRollup": {"contexts": {"pageInfo": {"hasNextPage": opts.get("more") == "checks"}, "nodes": checks}}}}]},
+      "reviewThreads": {"pageInfo": {"hasNextPage": opts.get("more") == "threads"}, "nodes": threads}}
 print(json.dumps({"data": {"repository": {"pullRequest": pr}}}))
 PY
 }
@@ -210,6 +213,14 @@ check "冲突 → 退出 1" bash -c '[ "$1" = 1 ] && grep -qF "冲突：有" "$2
 reset; mk mergeable=UNKNOWN mss=UNKNOWN
 run bash "$STATUS" 7
 check "冲突未知 → 退出 3，不当成无冲突" bash -c '[ "$1" = 3 ] && grep -qF "冲突：未知" "$2"' _ "$RC" "${TMP}/out"
+
+reset; mk more=threads
+run bash "$STATUS" 7
+check "评审线程超过 100 条没读全 → 退出 3，不报全清" bash -c '[ "$1" = 3 ] && ! grep -qF "全清" "$2" && grep -qF "结果不完整" "$2"' _ "$RC" "${TMP}/out"
+
+reset; mk more=checks
+run bash "$STATUS" 7
+check "检查超过 100 个没读全 → 退出 3，不报全清" bash -c '[ "$1" = 3 ] && ! grep -qF "全清" "$2"' _ "$RC" "${TMP}/out"
 
 reset; mk auto=on
 run bash "$STATUS" 7
