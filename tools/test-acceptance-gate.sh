@@ -50,6 +50,9 @@ gate 1 "apps/android/.../backup/flow/** 也红" "apps/android/app/src/main/java/
 gate 0 "反证：只改 apps 下的测试文件 → 绿" "apps/android/app/src/test/java/com/hawkeyexb/ppass/backup/BackupWorkerTest.kt apps/desktop/x/a.test.ts" "closes #1"
 gate 0 "反证：不碰 apps → 绿" "tools/x.sh" "closes #1"
 
+gate 0 "反证：apps/desktop/src/ 下只改测试文件 → 绿" "apps/desktop/src/foo.test.ts apps/desktop/src/test/x.js" "closes #1"
+gate 1 "  apps/desktop/src/ 下改非测试文件 → 红" "apps/desktop/src/foo.ts apps/desktop/src/foo.test.ts" "closes #1"
+
 # classify
 printf '%s\n' "$UI" | bash "$G" classify --repo "${TMP}/repo" | grep -qx ui && ok "classify：界面 → ui" || bad "classify 界面"
 printf '%s\n' core/x.rs | bash "$G" classify --repo "${TMP}/repo" | grep -qx core && ok "classify：核心 → core" || bad "classify 核心"

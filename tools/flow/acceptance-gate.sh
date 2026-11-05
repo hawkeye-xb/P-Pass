@@ -41,7 +41,8 @@ classify() {
   # apps/** 下的非测试文件都算用户看得到的行为（如安卓备份行为 backup/**）；UI_GLOBS 只管界面与文案，不够。
   # 过滤后为空就不判（ci-paths 对空输入 fail-closed 判 true）。
   nontest="$(printf '%s\n' "$files" | grep -Ev '(^|/)test/|Test\.[^/]*$|\.test\.[^/]*$')"
-  if [ -n "$nontest" ] && [ "$(printf '%s\n' "$nontest" | bash "${REPO}/tools/ci-paths.sh" hit - 'apps/**' 2>/dev/null)" != "false" ]; then
+  [ -n "$nontest" ] || { echo none; return; }
+  if [ "$(printf '%s\n' "$nontest" | bash "${REPO}/tools/ci-paths.sh" hit - 'apps/**' 2>/dev/null)" != "false" ]; then
     echo ui
     return
   fi
@@ -49,7 +50,7 @@ classify() {
   if [ -z "$ui_globs" ]; then echo ui; return; fi
   set -f
   # shellcheck disable=SC2086 # 清单是空格分隔的 glob，刻意拆开
-  ui="$(printf '%s\n' "$files" | bash "${REPO}/tools/ci-paths.sh" hit - $ui_globs 2>/dev/null)"
+  ui="$(printf '%s\n' "$nontest" | bash "${REPO}/tools/ci-paths.sh" hit - $ui_globs 2>/dev/null)"
   set +f
   if [ "$ui" != "false" ]; then echo ui; else echo none; fi
 }
