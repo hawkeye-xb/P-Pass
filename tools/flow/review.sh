@@ -17,6 +17,7 @@
 #                       --allowedTools 参数，prompt 走 stdin，即可替换；测试用假 agent）
 #   PPASS_REVIEW_MODEL  默认模型（--model 优先）
 #   PPASS_REVIEW_MAX_DIFF  diff 超过这个字节数就截断并写明（默认 300000）
+#   PPASS_REVIEW_NO_MERGE  设为 1：评审通过不开自动合入，未通过也不撤销（CI 试跑期只提示用，tools/flow/ci-review.sh）
 
 set -euo pipefail
 
@@ -197,10 +198,15 @@ gh api -X POST "repos/${REPO}/statuses/${SHA}" -f state="$STATE" -f context="rev
 
 if [ "$VERDICT" = "PASS" ]; then
   echo "✅ #${PR} 独立评审通过，review/agent=success（${SHA:0:10}）"
+  [ "${PPASS_REVIEW_NO_MERGE:-}" != "1" ] || exit 0
   gh pr merge "$PR" -R "$REPO" --auto --squash >"${WORK}/merge.out" 2>&1 ||
     die "开自动合入失败（评审状态已写）" "$(head -3 "${WORK}/merge.out" | tr '\n' ' ')" "手动：gh pr merge ${PR} -R ${REPO} --auto --squash"
   echo "   已开自动合入（squash）：CI 全绿后自动合入。"
 else
+  [ "${PPASS_REVIEW_NO_MERGE:-}" != "1" ] || {
+    echo "✗ #${PR} 独立评审未通过，review/agent=failure（${SHA:0:10}）；不动自动合入（PPASS_REVIEW_NO_MERGE=1）。" >&2
+    exit 1
+  }
   # 之前通过时开过自动合入：评审判未通过必须撤销，否则 CI 绿了照样合。没开过时 gh 会报「未启用」，只容忍这一种。
   if ! gh pr merge "$PR" -R "$REPO" --disable-auto >"${WORK}/disable.out" 2>&1 &&
     ! grep -qiE "not enabled|isn't enabled|not.*auto.?merge|auto.?merge.*not" "${WORK}/disable.out"; then
