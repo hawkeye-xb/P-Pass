@@ -13,7 +13,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # 失败留证：外层把整次输出 tee 到临时文件；红了就把失败用例名与完整输出存进
 # ${PPF_TEST_FAIL_DIR:-<仓库上一级>/.evidence/test-fail}/test-release-timeouts-<时间>.log，
-# 只在终端打一行汇总、截断后查不出是哪条的情况不再发生。绿了不留文件。
+# 只在终端打一行汇总、截断后查不出是哪条的情况不再发生。绿了不留文件；失败日志只留最近 10 份。
 if [ -z "${PPF_TEST_INNER:-}" ]; then
   outer_log="$(mktemp "${TMPDIR:-/tmp}/test-release-timeouts.XXXXXX")" || exit 1
   PPF_TEST_INNER=1 bash "$0" "$@" 2>&1 | tee "$outer_log"
@@ -23,6 +23,9 @@ if [ -z "${PPF_TEST_INNER:-}" ]; then
     fail_log="${fail_dir}/test-release-timeouts-$(date +%Y%m%d-%H%M%S)-$$.log"
     if mkdir -p "$fail_dir" && cp "$outer_log" "$fail_log"; then
       echo "失败留证：${fail_log}" >&2
+      # 清理条件（占盘 1x）：本测试的失败日志只留最近 10 份，更早的删掉；本次这份一定在最近之列。
+      ls -t "$fail_dir"/test-release-timeouts-*.log 2>/dev/null | tail -n +11 |
+        while IFS= read -r old; do rm -f "$old"; done
     else
       echo "失败留证写不进 ${fail_dir}，完整输出见上" >&2
     fi
