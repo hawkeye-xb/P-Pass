@@ -564,6 +564,19 @@ commit_file "$SW" src/m.txt
 commit_file "$SW" docs/m.md
 if DONE "$SW" >"${TMP}/o54" 2>&1; then bad "单卡分支放行了别的卡范围里的文件"; else ok "反证：只认一张卡时 docs/ 越界被拒"; fi
 
+# PR 正文写不进去（旧的 pr-body.md 只读）→ 失败、不打印开 PR 命令，免得用旧正文开 PR
+issue 57 "status:ready" "[T-57] body" "src/**" "Bug"
+BW="$(START 57 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/57-"*)"
+commit_file "$BW" src/b.txt
+mkdir -p "${PPASS_WT_ROOT}/.evidence/57"
+echo "closes #999 旧正文" >"${PPASS_WT_ROOT}/.evidence/57/pr-body.md"
+chmod 444 "${PPASS_WT_ROOT}/.evidence/57/pr-body.md"
+if DONE "$BW" >"${TMP}/o57" 2>&1; then bad "PR 正文写不进去仍成功"; else ok "PR 正文写不进去 → done 失败"; fi
+[ -z "$(pr_cmd "${TMP}/o57")" ] && ok "  写不进去时不打印开 PR 命令" || bad "写不进去仍打印了开 PR 命令"
+chmod 644 "${PPASS_WT_ROOT}/.evidence/57/pr-body.md"
+DONE "$BW" >"${TMP}/o57b" 2>&1 && [ -n "$(pr_cmd "${TMP}/o57b")" ] && grep -qx 'closes #57' "${PPASS_WT_ROOT}/.evidence/57/pr-body.md" &&
+  ok "反证：可写后打印命令，正文是新的" || bad "可写后仍失败或正文没更新：$(tail -3 "${TMP}/o57b")"
+
 # 用户看得到的改动：没给验收时间 → 开草稿 PR（--draft，正文「待产品负责人真机验收」）；
 # 给了 → 正式 PR，正文单独一行「产品负责人 <时间> 真机验收通过」
 issue 55 "status:ready" "[T-55] visible" "apps/ios/**" "Bug"

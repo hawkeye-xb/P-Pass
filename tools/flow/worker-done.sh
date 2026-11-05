@@ -336,7 +336,11 @@ PR_BODY="${EVID_DIR}/pr-body.md"
     echo "- 真机验收：${ACCEPT_LINE}"
   fi
   sed -n '3,$p' "$RECEIPT" | grep -v '^- 真机验收：'
-} >"$PR_BODY"
+  true
+} >"$PR_BODY" || {
+  rm -f "$RECEIPT"
+  die "写 PR 正文失败：${PR_BODY}" "分支已推送、回执已贴；修好这个文件的写权限后重跑 just done（不打印命令，免得用旧正文开 PR）"
+}
 rm -f "$RECEIPT"
 sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 PR_CMD="gh pr create -R $(sq "$REPO") --base main --head $(sq "$BRANCH")"

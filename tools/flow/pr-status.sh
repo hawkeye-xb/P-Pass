@@ -31,8 +31,8 @@ Q='query($owner: String!, $name: String!, $n: Int!) {
         pageInfo { hasNextPage }
         nodes {
           __typename
-          ... on CheckRun { name status conclusion detailsUrl }
-          ... on StatusContext { context state targetUrl }
+          ... on CheckRun { name status conclusion detailsUrl startedAt }
+          ... on StatusContext { context state targetUrl createdAt }
         }
       } } } } }
       reviewThreads(first: 100) {
@@ -75,12 +75,19 @@ if pr.get("isDraft"):
     block.append("草稿 PR：转成 ready for review 才会合")
 
 # ── 检查 ──
-FAILED = {"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "ERROR"}
+FAILED = {"FAILURE", "TIMED_OUT", "CANCELLED", "ACTION_REQUIRED", "STARTUP_FAILURE", "STALE", "ERROR"}
 failed, running = [], []
 nodes = pr["commits"]["nodes"]
 roll = (nodes[0]["commit"].get("statusCheckRollup") if nodes else None) or {}
 ctx = roll.get("contexts") or {"nodes": [], "pageInfo": {}}
+# 同名检查被重跑时，同一头提交上会留着旧的那次（常见是被取消的）；只看最新一次，与网页一致。
+latest = {}
 for c in ctx.get("nodes") or []:
+    key = (c.get("__typename"), c.get("name") if c.get("__typename") == "CheckRun" else c.get("context"))
+    ts = c.get("startedAt") or c.get("createdAt") or ""
+    if key not in latest or ts >= latest[key][0]:
+        latest[key] = (ts, c)
+for _, c in latest.values():
     if c.get("__typename") == "CheckRun":
         name, url = c.get("name"), c.get("detailsUrl") or ""
         if c.get("status") != "COMPLETED":
@@ -116,23 +123,25 @@ CHUNK = r"(?:\*\*[^*]+\*\*|_[^_]+_)"
 META = re.compile(CHUNK + r"(?:\s*[·|]\s*" + CHUNK + r")*")
 LEVEL = re.compile(r"\b(Critical|Major|Minor|Trivial|Nitpick)\b")
 
+def is_meta(line):
+    # 级别徽章行，如 **Minor** · **Quick win**、_⚠️ Potential issue_ | _🟠 Major_、单独的 **Major**
+    return bool(META.fullmatch(line)) and bool(re.search(r"[·|]", line) or (LEVEL.search(line) and len(line) < 40))
+
 def gist(body):
-    # 评审机器人的首条评论：先是级别徽章行（如 **Minor** · **Quick win**），再是加粗的要点。
+    # 评审机器人的首条评论：级别徽章行 + 整行加粗的要点；中间可能夹着附注（如 Supported by static analysis、脚本输出）。
     body = re.sub(r"<!--.*?-->", "", body or "", flags=re.S)
     body = re.sub(r"<[^>]+>", "", body)
-    level, text = "", ""
-    for line in body.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        if META.fullmatch(line) and (re.search(r"[·|]", line) or (LEVEL.search(line) and len(line) < 40)):
-            m = LEVEL.search(line)
-            if m and not level:
-                level = m.group(1)
-            continue
-        text = line.replace("**", "").replace("`", "").strip(" _#>-\t")
-        if text:
-            break
+    lines = [l.strip() for l in body.splitlines() if l.strip()]
+    level = ""
+    for line in lines:
+        if is_meta(line):
+            level = LEVEL.search(line).group(1) if LEVEL.search(line) else ""
+            if level:
+                break
+    rest = [l for l in lines if not is_meta(l)]
+    bold = [l for l in rest if re.fullmatch(r"\*\*.+\*\*", l)]
+    pick = (bold or rest or [""])[0]
+    text = pick.replace("**", "").replace("`", "").strip(" _#>-\t")
     text = re.sub(r"\s+", " ", text).strip()
     if len(text) > 100:
         text = text[:100] + "…"
@@ -166,7 +175,7 @@ if open_t:
 print()
 ms, mg = pr.get("mergeStateStatus"), pr.get("mergeable")
 if ms == "DIRTY" or mg == "CONFLICTING":
-    print("冲突：有（先 git rebase origin/main 解决）")
+    print("冲突：有（PR 已开：git merge origin/main 解决后正常 push，不 force）")
     block.append("和 main 有冲突")
 elif mg == "UNKNOWN":
     print("冲突：未知（GitHub 还在算，过一会儿再看）")
@@ -175,6 +184,12 @@ else:
     print("冲突：无")
 if ms == "BEHIND":
     print("  分支落后 main（mergeStateStatus=BEHIND）")
+if ms == "UNKNOWN" and mg != "UNKNOWN":
+    wait.append("合并状态还没算出来")
+# 检查、线程、冲突都清了 GitHub 仍判 BLOCKED：还缺别的必需条件（如必需审批）
+if ms == "BLOCKED" and not block and not wait:
+    print("  GitHub 判 BLOCKED（mergeStateStatus=BLOCKED）：检查、线程、冲突之外还缺必需条件，到网页看")
+    block.append("GitHub 判 BLOCKED，还缺别的必需条件")
 
 # ── 自动合入 ──
 am = pr.get("autoMergeRequest")

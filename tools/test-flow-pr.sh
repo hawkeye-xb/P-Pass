@@ -151,7 +151,7 @@ mk() {
   python3 -I -X utf8 - "$@" >"$FAKE/status.json" <<'PY'
 import json, sys
 opts = dict(a.split("=", 1) for a in sys.argv[1:])
-checks = [{"__typename": "CheckRun", "name": "CI gate", "status": "COMPLETED", "conclusion": "SUCCESS", "detailsUrl": "u1"},
+checks = [{"__typename": "CheckRun", "name": "CI gate", "status": "COMPLETED", "conclusion": "SUCCESS", "detailsUrl": "u1", "startedAt": "2026-11-05T07:20:00Z"},
           {"__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "SKIPPED", "detailsUrl": "u2"},
           {"__typename": "StatusContext", "context": "review/agent", "state": "SUCCESS", "targetUrl": ""}]
 if opts.get("check") == "fail":
@@ -162,6 +162,13 @@ if opts.get("check") == "run":
     checks[0]["status"] = "IN_PROGRESS"; checks[0]["conclusion"] = None
 if opts.get("check") == "none":
     checks = []
+if opts.get("check") == "stale":
+    checks[0]["conclusion"] = "STALE"
+if opts.get("check") == "rerun":   # 同名检查：旧的一次被取消，重跑成功
+    checks.append({"__typename": "CheckRun", "name": "CI gate", "status": "COMPLETED", "conclusion": "CANCELLED", "detailsUrl": "old", "startedAt": "2026-11-05T07:10:00Z"})
+if opts.get("check") == "rerun-red":   # 反证：重跑的那次反而失败
+    checks[0]["conclusion"] = "FAILURE"
+    checks.append({"__typename": "CheckRun", "name": "CI gate", "status": "COMPLETED", "conclusion": "SUCCESS", "detailsUrl": "old", "startedAt": "2026-11-05T07:10:00Z"})
 if opts.get("status") == "fail":
     checks[2]["state"] = "FAILURE"
 threads = [{"id": "PRRT_done", "isResolved": True, "isOutdated": False, "path": "a.sh", "line": 3, "originalLine": 3,
@@ -169,7 +176,7 @@ threads = [{"id": "PRRT_done", "isResolved": True, "isOutdated": False, "path": 
 if opts.get("thread") == "open":
     threads.append({"id": "PRRT_open", "isResolved": False, "isOutdated": True, "path": "tools/x.sh", "line": None, "originalLine": 42,
                     "comments": {"nodes": [{"author": {"login": "coderabbitai"}, "body":
-                        "<!-- coderabbit-ai-generated:v1 -->\n\n**<picture><img src=\"x.svg\"></picture> Major** · **Functional Correctness**\n\n**`teardown` 不恢复后台服务。**\n\n细节……"}]}})
+                        "<!-- coderabbit-ai-generated:v1 -->\n\n**<picture><img src=\"x.svg\"></picture> Major** · **Functional Correctness**\n\n<details><summary>Supported by static analysis</summary>\nScript executed:\n</details>\n\n**`teardown` 不恢复后台服务。**\n\n细节……"}]}})
 pr = {"number": 7, "title": "T", "url": "https://github.com/o/r/pull/7", "state": opts.get("state", "OPEN"), "isDraft": False,
       "mergeable": opts.get("mergeable", "MERGEABLE"), "mergeStateStatus": opts.get("mss", "CLEAN"),
       "autoMergeRequest": {"mergeMethod": "SQUASH"} if opts.get("auto") == "on" else None,
@@ -196,6 +203,18 @@ check "CheckRun 被取消也算没过 → 退出 1" [ "$RC" = 1 ]
 reset; mk status=fail
 run bash "$STATUS" 7
 check "StatusContext 失败 → 退出 1" bash -c '[ "$1" = 1 ] && grep -qF "review/agent（FAILURE）" "$2"' _ "$RC" "${TMP}/out"
+
+reset; mk check=stale
+run bash "$STATUS" 7
+check "CheckRun 结论 STALE 也算没过 → 退出 1" bash -c '[ "$1" = 1 ] && grep -qF "CI gate（STALE）" "$2"' _ "$RC" "${TMP}/out"
+
+reset; mk check=rerun
+run bash "$STATUS" 7
+check "同名检查被重跑：旧的那次取消不算，看最新一次 → 退出 0" bash -c '[ "$1" = 0 ] && ! grep -qF "CANCELLED" "$2"' _ "$RC" "${TMP}/out"
+
+reset; mk check=rerun-red
+run bash "$STATUS" 7
+check "反证：最新一次失败、旧的一次成功 → 退出 1" bash -c '[ "$1" = 1 ] && grep -qF "CI gate（FAILURE）u1" "$2"' _ "$RC" "${TMP}/out"
 
 reset; mk check=run
 run bash "$STATUS" 7
@@ -227,6 +246,18 @@ check "评审线程超过 100 条没读全 → 退出 3，不报全清" bash -c 
 reset; mk more=checks
 run bash "$STATUS" 7
 check "检查超过 100 个没读全 → 退出 3，不报全清" bash -c '[ "$1" = 3 ] && ! grep -qF "全清" "$2"' _ "$RC" "${TMP}/out"
+
+reset; mk mss=BLOCKED
+run bash "$STATUS" 7
+check "检查、线程、冲突都清了 GitHub 仍判 BLOCKED → 退出 1" bash -c '[ "$1" = 1 ] && grep -qF "BLOCKED" "$2" && ! grep -qF "全清" "$2"' _ "$RC" "${TMP}/out"
+
+reset; mk mss=BLOCKED check=run
+run bash "$STATUS" 7
+check "BLOCKED 但检查还在跑 → 退出 3（BLOCKED 是在等检查）" [ "$RC" = 3 ]
+
+reset; mk mss=UNKNOWN
+run bash "$STATUS" 7
+check "合并状态未知（mergeable 已算出）→ 退出 3" bash -c '[ "$1" = 3 ] && ! grep -qF "全清" "$2"' _ "$RC" "${TMP}/out"
 
 reset; mk auto=on
 run bash "$STATUS" 7
