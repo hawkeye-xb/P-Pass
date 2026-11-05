@@ -56,6 +56,8 @@ collect() {
   app_scope_ids >"$OUT/scope.txt"
   album_bucket_id >"$OUT/album-bucket.txt"
   eph_sql "select rel_path from asset order by rel_path" >"$OUT/stub-assets.txt" 2>/dev/null || true
+  # 本场景推的那批文件名：judge 按名字逐张对账，数量对上但被别的照片顶替也判红
+  ls "$E3_STATE/photos-$TAG" "$E3_STATE/photos-$TAG-b" 2>/dev/null | grep '^PPR_' | sort >"$OUT/expected-names.txt"
   echo $((N + 2)) >"$OUT/expected.txt"
   logcat_save "$OUT/logcat.txt"
   cp "$EV/base-pkg.txt" "$OUT/base-pkg.txt"
@@ -86,10 +88,17 @@ judge() {
   check "升级后没回到欢迎页（配对仍在）" no_line "$d/home.txt" '扫码连接电脑'
   check "备份范围只含测试相册（[$scope] / ${album}）" same_nonempty "$scope" "$album"
   check "桩里照片数 = 推送数（$got / $(cat "$d/expected.txt")）" [ "$got" = "$(cat "$d/expected.txt")" ]
+  check "桩里就是本场景推的那批（逐张按文件名）" same_names "$d/stub-assets.txt" "$d/expected-names.txt"
   check "手机账本已确认数 = 桩里照片数（$phone / ${got}）" [ "$phone" = "$got" ]
   check "logcat 无 FATAL" no_line "$d/logcat.txt" 'FATAL EXCEPTION'
   check "桩日志无 panic" no_line "$d/stub-daemon.log" 'panicked|PANIC'
   verdict
+}
+
+# same_names <桩资产 rel_path 清单> <期望文件名清单>：两边的文件名集合完全一致（期望不能为空）
+same_names() {
+  [ -s "$2" ] || return 1
+  [ "$(sed 's#.*/##' "$1" 2>/dev/null | sort)" = "$(sort "$2")" ]
 }
 
 same_nonempty() { [ -n "$2" ] && [ "$1" = "$2" ]; }
