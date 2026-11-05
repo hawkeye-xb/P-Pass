@@ -170,6 +170,10 @@ while IFS= read -r f; do
       add_gate "just android-test"
       case "$f" in */strings*.xml) add_gate "just mobile-static-check" ;; esac
       ;;
+    tools/ios/test-*.sh)
+      # tools/ios 下的测试脚本是构建辅助脚本的测试（由 mobile-static-check / ci-ios 调），
+      # 不是 App 代码：直接跑它，别拉模拟器。
+      add_gate "bash $f" ;;
     apps/ios/* | tools/ios/*) add_gate "just ios-test" ;;
     assets/i18n/*) add_gate "just mobile-static-check" ;;
     crates/*/*)
