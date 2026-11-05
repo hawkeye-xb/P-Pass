@@ -46,6 +46,8 @@ object PPSize {
     val TapMin = 56.dp
     val RadiusCard = 20.dp
     val RadiusControl = 20.dp
+    /** tokens.json mobile-ui.layout.page-gutter：卡片 / 提示条离屏幕左右边。 */
+    val PageGutter = 20.dp
 }
 
 // Brand fonts (MOB-66): Newsreader for headlines/conclusion sentences,

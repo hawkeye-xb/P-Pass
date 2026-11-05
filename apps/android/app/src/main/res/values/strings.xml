@@ -218,7 +218,7 @@
     <string name="photos_lost_body_unknown">Backup is paused. Pair again to resume.</string>
     <string name="photos_lost_action">Pair again</string>
     <!-- UX-06: 暂停自动备份 + 断开连接 -->
-    <string name="auto_backup_pause">Keep sending when the app is closed</string>
+    <string name="auto_backup_pause">Send in the background</string>
     <!-- #1020 (iOS #971 / #972): transient feedback when a setting wasn't saved or a command failed (UI-12 Snackbar). -->
     <string name="setting_save_failed">Couldn\'t save the setting; it\'s back to its previous value. Check your phone\'s free storage and try again.</string>
     <string name="scope_save_failed">Couldn\'t save your album selection. Check your phone\'s free storage and try again.</string>
@@ -285,7 +285,7 @@
     <string name="photos_first_run_pick">Pick a few photos first</string>
     <!-- #1322 照片页引导位（方案结论 6）与范围内暂无照片的现状（结论 7）。 -->
     <string name="photos_guide_scope">Auto backup is off</string>
-    <string name="photos_guide_background">Backs up even when the app is closed</string>
+    <string name="photos_guide_background">Back up in the background</string>
     <string name="photos_guide_enable">Turn on</string>
     <string name="photos_guide_close">Close</string>
     <string name="photos_scope_empty_since">Auto backup is on. Photos taken from %1$s onward will go to %2$s.</string>

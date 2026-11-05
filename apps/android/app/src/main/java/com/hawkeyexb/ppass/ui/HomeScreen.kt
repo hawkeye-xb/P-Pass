@@ -364,7 +364,6 @@ fun HomeScreen(
     } else if (showMore) {
         BackHandler { showMore = false; onStorageDetailOpenChange(false) }
         MorePage(
-            storageName = storageName,
             onOpenStorage = { showStorageDetail = true },
             onCheckUpdate = onCheckUpdate,
             updateRowValue = updateRowValue,
@@ -901,7 +900,6 @@ fun HomeScreen(
 /** #1272「更多」二级页：存储电脑（点开详情，断开连接在里面）、版本、检查更新。 */
 @Composable
 private fun MorePage(
-    storageName: String,
     onOpenStorage: () -> Unit,
     onCheckUpdate: (() -> Unit)?,
     updateRowValue: String?,
@@ -931,7 +929,7 @@ private fun MorePage(
                 // 配对才刷新，如实挂账，不做新协议改动）。
                 CellRow(
                     label = stringResource(R.string.storage_computer),
-                    value = storageName,
+                    // #1251：电脑名不放在这一行（英文标签会被挤折行），点进去详情里看。
                     onClick = onOpenStorage,
                 )
                 HorizontalDivider(color = PPColor.Divider)
