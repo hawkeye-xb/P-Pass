@@ -528,8 +528,8 @@ start n *args:
     bash tools/flow/worker-start.sh {{n}} {{args}}
 
 # 交卡（在卡 worktree 里跑）：门禁 + just verify（有则跑）+ 范围核对，全绿才推送、每张卡贴回执，
-# doing→review，开 PR（closes 全部卡）；任何一步红：不推送、issue 写明停在哪、打 blocked。
-# 用户看得到的改动先真机验收：just done --accepted "<验收时间>"，没给只推分支、不开 PR。
+# doing→review，打印开 PR 的命令（PR-CREATE: gh pr create …，closes 全部卡），由执行者自己运行；任何一步红：不推送、
+# issue 写明停在哪、打 blocked。用户看得到的改动先真机验收：just done --accepted "<验收时间>"，没给只推分支、不打印命令。
 done *args:
     bash tools/flow/worker-done.sh {{args}}
 

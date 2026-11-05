@@ -542,7 +542,14 @@ has_lbl 51 "status:doing" && has_lbl 52 "status:doing" && ok "多卡：两张卡
 printf '%s' "$OUT" | grep -q 'src/\*\*' && printf '%s' "$OUT" | grep -q 'docs/\*\*' && ok "多卡：打印的范围是并集" || bad "多卡范围没取并集"
 commit_file "$MW" src/m.txt
 commit_file "$MW" docs/m.md
+rm -f "${FAKE_GH}/pr.body" "${FAKE_GH}/pr.created" "${FAKE_GH}/pr.title"
 if DONE "$MW" >"${TMP}/o51" 2>&1; then ok "多卡：两张卡范围内的文件都放行"; else bad "多卡交卡失败：$(tail -5 "${TMP}/o51")"; fi
+# #1421：just done 不自己开 PR，只打印命令；执行者运行打印的命令才开出 PR
+[ ! -e "${FAKE_GH}/pr.created" ] && ok "done 不自己调 gh pr create" || bad "done 自己开了 PR"
+pr_cmd() { sed -n 's/^PR-CREATE: //p' "$1"; }
+[ "$(pr_cmd "${TMP}/o51" | grep -c '^gh pr create ')" = 1 ] && ok "done 打印了一条开 PR 命令（PR-CREATE:）" || bad "done 没打印开 PR 命令"
+(cd "$MW" && eval "$(pr_cmd "${TMP}/o51")") >/dev/null 2>&1 || bad "打印的开 PR 命令跑不起来：$(pr_cmd "${TMP}/o51")"
+[ "$(cat "${FAKE_GH}/pr.created" 2>/dev/null)" = "feat/51-onboarding-gate" ] && ok "反证：运行打印的命令 → 在本分支开出 PR" || bad "运行打印的命令没开出本分支的 PR"
 comments_of 51 | grep -q "worker 已交卡" && comments_of 52 | grep -q "worker 已交卡" && ok "多卡：回执贴到每张卡" || bad "回执没贴到每张卡"
 has_lbl 51 "status:review" && has_lbl 52 "status:review" && ok "多卡：两张卡都转 review" || bad "多卡交卡后标签不对"
 grep -qx 'closes #51' "${FAKE_GH}/pr.body" && grep -qx 'closes #52' "${FAKE_GH}/pr.body" &&
@@ -560,12 +567,18 @@ issue 55 "status:ready" "[T-55] visible" "apps/**" "Bug"
 VW="$(START 55 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/55-"*)"
 mkdir -p "$VW/apps/x"
 commit_file "$VW" apps/x/ui.txt
-rm -f "${FAKE_GH}/pr.body" "${FAKE_GH}/pr.created"
+VTITLE="fix: 标题带 'quote' 与 \$HOME 原样"
+git -C "$VW" commit -q --amend -s -m "$VTITLE"
+rm -f "${FAKE_GH}/pr.body" "${FAKE_GH}/pr.created" "${FAKE_GH}/pr.title"
 DONE "$VW" >"${TMP}/o55" 2>&1 || bad "可见改动交卡失败：$(tail -5 "${TMP}/o55")"
 on_origin "fix/55-visible" && ok "可见改动：分支已推送" || bad "可见改动没推分支"
 [ ! -e "${FAKE_GH}/pr.created" ] && ok "可见改动没给验收时间：不开 PR" || bad "没验收就开了 PR"
 grep -q 'just done --accepted' "${TMP}/o55" && ok "  提示先验收再 --accepted" || bad "没提示先验收"
+[ -z "$(pr_cmd "${TMP}/o55")" ] && ok "  没验收：不打印开 PR 命令" || bad "没验收却打印了开 PR 命令"
 DONE "$VW" --accepted "2026-11-04 15:30" >"${TMP}/o55b" 2>&1 || bad "带验收时间交卡失败：$(tail -5 "${TMP}/o55b")"
+[ ! -e "${FAKE_GH}/pr.created" ] && [ -n "$(pr_cmd "${TMP}/o55b")" ] && ok "给了验收时间：打印开 PR 命令，脚本自己不开" || bad "给了验收时间后开 PR 的方式不对"
+(cd "$VW" && eval "$(pr_cmd "${TMP}/o55b")") >/dev/null 2>&1 || bad "打印的开 PR 命令跑不起来：$(pr_cmd "${TMP}/o55b")"
+[ "$(cat "${FAKE_GH}/pr.title" 2>/dev/null)" = "$VTITLE" ] && ok "标题里的单引号、\$ 经打印的命令原样传给 gh" || bad "标题被改写：$(cat "${FAKE_GH}/pr.title" 2>/dev/null)"
 grep -qF '产品负责人 2026-11-04 15:30 真机验收通过' "${FAKE_GH}/pr.body" 2>/dev/null &&
   ok "反证：给了验收时间 → 开 PR，正文写明验收" || bad "给了验收时间仍没开 PR 或正文缺验收行"
 
