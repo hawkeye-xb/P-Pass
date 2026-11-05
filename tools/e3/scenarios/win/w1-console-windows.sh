@@ -86,6 +86,8 @@ run_window() { # run_window <证据目录> <故障注入 0|1> <秒>
     echo "covered=fail" >>"$d/actions.txt"
   fi
   win_watch_wait || rc=$?
+  # powershell.exe 的 stdout 是 CRLF；去掉 \r，判据里的 ^...$ 才能匹配（w2 同样处理）。
+  tr -d '\r' <"$d/watcher.log" >"$d/watcher-lf.log" 2>/dev/null && mv "$d/watcher-lf.log" "$d/watcher.log"
   echo "$rc" >"$d/watcher-rc.txt"
   {
     echo "daemon=$(win_daemon_running && echo up || echo down)"

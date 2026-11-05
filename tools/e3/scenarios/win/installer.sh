@@ -5,8 +5,11 @@
 #         Program Files 落盘、写 HKLM 卸载登记、注册并启动 Windows 服务 P-Pass。
 #   R1.2  覆盖安装候选 v0.11.0-test.1（daemon 服务运行中，PREINSTALL 先停服务），版本一致。
 #   W3    就是 R1.2 的安装时 daemon 正在跑：不先手动停服务，安装成功、装完是新版本。
-#   W5    真实卸载：服务/任务/程序被删、70s 内没有 daemon；ProgramData（身份/配对）、
-#         壳数据目录（config.toml）和照片库保留；重装候选后服务恢复、身份 key 不变。
+#   W5    真实卸载：服务/程序被删、旧计划任务残留被清、70s 内没有 daemon；ProgramData
+#         （身份/配对存储 devices.json）、壳数据目录（config.toml）和照片库（originals
+#         清单 + daemon photo_count）卸载前后一致；重装候选并打开 App 直接进主界面
+#         （不走向导/不用重新配对）、照片不重不计、服务恢复、身份 key 不变。
+#         本场景桌面端独立完成、不接手机；配对保留按 devices.json 与身份 key 前后一致判。
 #
 # 安装器是 perMachine（requireAdministrator）：每一步经 Start-Process -Verb RunAs 弹 UAC，
 # 由人点「是」。每步前打印「UAC：请点是 —— <装什么>」，最多等 3 分钟（没人点就停）。
@@ -190,7 +193,17 @@ diag_inst() { # diag_inst <证据目录>
 diag_ver() { jget "$1/diag/status.json" "j['version']" 2>/dev/null; }
 
 snapshot_state() { # snapshot_state <证据目录> <名字>
-  local d="$1" tag="$2"
+  local d="$1" tag="$2" ts dev lh
+  # diag 先跑：devices / photo_count 从这次导出取；卸载后没有 daemon，这两项为空。
+  diag_inst "$d/$tag-diag" || true
+  diag_ver "$d/$tag-diag" >"$d/$tag-diag-version.txt" 2>/dev/null || true
+  cp "$d/$tag-diag/diag/devices.json" "$d/$tag-devices.json" 2>/dev/null || true
+  ts="$(win_task_state)"
+  dev="$(win_json_array_len "$d/$tag-devices.json" 2>/dev/null)"
+  # 库 originals 全量清单：卸载/重装都不该动文件（不丢、不重传成两份）。
+  lh="$d/$tag-library"
+  mkdir -p "$lh"
+  win_library_hashes "$lh" >/dev/null 2>&1 || true
   {
     echo "inst_exe_version=$(inst_exe_version)"
     echo "hklm_version=$(hklm_version)"
@@ -202,9 +215,13 @@ snapshot_state() { # snapshot_state <证据目录> <名字>
     echo "daemon_pid=$(win_daemon_pid)"
     echo "inst_exe_present=$([ -f "$INST_EXE" ] && echo yes || echo no)"
     echo "svc_exists=$(svc_exists)"
+    echo "task=${ts:-none}"
+    echo "devices=${dev}"
+    echo "photo_count=$(win_status_field "$d/$tag-diag" photo_count 2>/dev/null)"
+    echo "library=$(win_library_dir_win 2>/dev/null || true)"
+    echo "library_files=$(wc -l <"$lh/library-hashes.txt" 2>/dev/null | tr -d ' ')"
+    echo "library_hash=$(sha256sum "$lh/library-hashes.txt" 2>/dev/null | awk '{print $1}')"
   } >"$d/$tag.txt"
-  diag_inst "$d/$tag-diag" || true
-  diag_ver "$d/$tag-diag" >"$d/$tag-diag-version.txt" 2>/dev/null || true
 }
 
 # 清掉上一轮的 extract 安装（不是被测对象），保留壳数据目录/库供 W5 对照。
@@ -332,13 +349,23 @@ act() {
   wait_installed "$WIN_CAND_VER" || echo "重装后等不到 $WIN_CAND_VER 的 exe"
   sleep 8
   snapshot_state "$d" after-reinstall
+  # SOP W5：重装并打开 App 后应直接进主界面——配置和配对都还在，不该再出首启向导。
+  start_installed_app
+  local j ok=0
+  for j in $(seq 1 45); do
+    win_ui_dump "$d/reinstall-main.txt" || true
+    main_ui_ready "$d/reinstall-main.txt" && { ok=1; break; }
+    sleep 2
+  done
+  [ "$ok" = 1 ] || echo "重装后打开 App 没进主界面（可能又出了首启向导）"
 }
 
 # ProgramData 里的 identity.key 是服务模式下的身份私钥（受保护 DACL，只有管理员能读哈希）。
 # 用卸载步骤里的 before/after 两次哈希：向导配置后已铸造（before 非空），卸载不动它
 # （after 相同），重装后还是同一个（reinstall 相同）。
-identity_hash() { grep -o '^identity_sha256=.*' "$1" 2>/dev/null | cut -d= -f2; }
-identity_before_hash() { grep -o '^identity_before_sha256=.*' "$1" 2>/dev/null | cut -d= -f2; }
+# 提权脚本用 Set-Content 写证据（CRLF），取值时统一去掉 \r。
+identity_hash() { grep -o '^identity_sha256=.*' "$1" 2>/dev/null | cut -d= -f2 | tr -d '\r'; }
+identity_before_hash() { grep -o '^identity_before_sha256=.*' "$1" 2>/dev/null | cut -d= -f2 | tr -d '\r'; }
 identity_present_and_same() {
   local b c d
   b="$(identity_before_hash "$1/after-uninstall-install.txt")"
@@ -350,6 +377,12 @@ config_unchanged() {
   local a b
   a="$(grep -o '^config_hash=.*' "$1/after-configure.txt" 2>/dev/null | cut -d= -f2)"
   b="$(grep -o '^config_hash=.*' "$1/after-uninstall.txt" 2>/dev/null | cut -d= -f2)"
+  [ -n "$a" ] && [ "$a" = "$b" ]
+}
+same_field() { # same_field <证据目录> <字段> <tagA> <tagB>：两边都有值且相等
+  local a b
+  a="$(sed -n "s/^$2=//p" "$1/$3.txt" 2>/dev/null | head -1)"
+  b="$(sed -n "s/^$2=//p" "$1/$4.txt" 2>/dev/null | head -1)"
   [ -n "$a" ] && [ "$a" = "$b" ]
 }
 
@@ -376,9 +409,17 @@ judge() {
   check "W5 卸载后 70s 内没有 daemon" samples_no_daemon "$d/uninstall-samples.txt"
   check "W5 卸载后 ProgramData 保留" grep -qx 'pd_dir=present' "$d/after-uninstall.txt"
   check "W5 卸载后壳 config.toml 不变" config_unchanged "$d"
+  check "W5 卸载后库目录不变（config.toml 的 data_dir）" same_field "$d" library after-configure after-uninstall
+  check "W5 卸载后照片库 originals 清单不变（库还在、没丢图）" same_field "$d" library_hash after-configure after-uninstall
+  check "W5 卸载后计划任务已删除（旧任务无残留）" grep -qx 'task=none' "$d/after-uninstall.txt"
   check "W5 卸载前后身份 key 是同一个（读 ProgramData）" identity_present_and_same "$d"
   check "W5 重装后服务在运行" grep -qx 'svc_state=Running' "$d/after-reinstall.txt"
   check "W5 重装后 daemon 版本 0.11.0-test.1" eq_file "$d/after-reinstall-diag-version.txt" "0.11.0-test.1"
+  check "W5 重装后配对存储 devices.json 不变" same_nonempty "$d/after-configure-devices.json" "$d/after-reinstall-devices.json"
+  check "W5 重装后配对台数不变" same_field "$d" devices after-configure after-reinstall
+  check "W5 重装后照片数不变（不重传/不重复入库）" same_field "$d" photo_count after-configure after-reinstall
+  check "W5 重装后照片库 originals 清单不变（不重传/不重复）" same_field "$d" library_hash after-configure after-reinstall
+  check "W5 重装后打开 App 直接进主界面（不用重新配对/配置）" main_ui_ready "$d/reinstall-main.txt"
   verdict
 }
 
