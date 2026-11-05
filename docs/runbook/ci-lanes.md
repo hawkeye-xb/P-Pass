@@ -17,6 +17,19 @@ job 名必须写死**。理由和细节在这里。
   - `ci-android` / `site` / `ci-docs` 仍按 paths 只在改到自己域时跑，不进必需列表，
     被跳过无害。
 
+## 停用门禁 / 撤必需检查
+
+停 workflow、改 branch protection 都是仓库设置动作：**不进 git、不产生提交、不走 PR**，
+所以没有任何东西会提醒「这扇门关了」。2026-11-05 `CI Review` 被手动停了六小时，
+第二天 AGENTS.md 还写着它是必需检查——这就是没有账的样子。
+
+规矩见 AGENTS.md「工程纪律」：同一次操作里开一张卡，**标题里写出 workflow 的 `name:`**，
+写明恢复条件与到期日；然后跑一次 `just gate-status` 确认它认得到这张卡。
+
+`just gate-status` 报两块：停用中的 workflow 及各自的关联卡、main 的必需检查清单；
+读不出来时一律 fail-closed（不当作「没有停用项」）。关联卡**只认标题**——
+正文里顺口提到 `CI Review` 的卡不算这扇门的账。
+
 ## `tools/ci-needs-full-lane.sh` 的判据
 
 - 判据是 **allowlist**：改动**全部**落在无害清单里才跳过，其余一律跑。往清单里加
