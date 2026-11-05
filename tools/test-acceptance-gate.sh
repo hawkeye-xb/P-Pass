@@ -42,6 +42,14 @@ gate 0 "反证口径：没有验收行但不碰界面，同样绿" "tools/x.sh d
 gate 1 "多文件里只要一个碰界面 → 红" "docs/a.md $UI" "closes #1"
 gate 1 "文案路径 assets/i18n 也算界面 → 红" "assets/i18n/zh.json" "closes #1"
 
+# 非界面路径的 App 行为（安卓备份等）也要验收；测试文件除外
+BK=apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt
+gate 1 "改 backup/BackupWorker.kt、没有验收行 → 红" "$BK" "closes #1"
+gate 0 "反证：补验收行 → 绿" "$BK" $'closes #1\n'"$LINE"
+gate 1 "apps/android/.../backup/flow/** 也红" "apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/flow/X.kt" "closes #1"
+gate 0 "反证：只改 apps 下的测试文件 → 绿" "apps/android/app/src/test/java/com/hawkeyexb/ppass/backup/BackupWorkerTest.kt apps/desktop/x/a.test.ts" "closes #1"
+gate 0 "反证：不碰 apps → 绿" "tools/x.sh" "closes #1"
+
 # classify
 printf '%s\n' "$UI" | bash "$G" classify --repo "${TMP}/repo" | grep -qx ui && ok "classify：界面 → ui" || bad "classify 界面"
 printf '%s\n' core/x.rs | bash "$G" classify --repo "${TMP}/repo" | grep -qx core && ok "classify：核心 → core" || bad "classify 核心"

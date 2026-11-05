@@ -5,7 +5,7 @@
 #   acceptance-gate.sh classify [--repo <仓库根>] < 改动文件列表   打印 core / ui / none
 #
 # 口径与 owner-triage.sh 一致：碰核心路径（.github/core-paths.txt）或界面与文案路径
-# （owner-triage.sh 里的 UI_GLOBS）= 需要验收；其余（自动级）直接绿。
+# （owner-triage.sh 里的 UI_GLOBS）、apps/** 下的非测试文件 = 需要验收；其余（自动级）直接绿。
 # 验收行的正则与 review.sh 的一份相同（那份已验证过），这里只读不改 review.sh。
 # 退出码：0 绿 / 1 红 / 2 用法错误。
 
@@ -34,10 +34,17 @@ done
 
 # 界面路径清单与 owner-triage.sh 共用同一份；读不到按需要验收处理（宁严勿松）。
 classify() {
-  local files core ui_globs ui
+  local files core ui_globs ui nontest
   files="$(cat)"
   core="$(printf '%s\n' "$files" | bash "${REPO}/tools/ci-paths.sh" core - "${REPO}/.github/core-paths.txt" 2>/dev/null)"
   if [ "$core" != "false" ]; then echo core; return; fi
+  # apps/** 下的非测试文件都算用户看得到的行为（如安卓备份行为 backup/**）；UI_GLOBS 只管界面与文案，不够。
+  # 过滤后为空就不判（ci-paths 对空输入 fail-closed 判 true）。
+  nontest="$(printf '%s\n' "$files" | grep -Ev '(^|/)test/|Test\.[^/]*$|\.test\.[^/]*$')"
+  if [ -n "$nontest" ] && [ "$(printf '%s\n' "$nontest" | bash "${REPO}/tools/ci-paths.sh" hit - 'apps/**' 2>/dev/null)" != "false" ]; then
+    echo ui
+    return
+  fi
   ui_globs="$(sed -n 's/^UI_GLOBS="\(.*\)"$/\1/p' "${REPO}/tools/flow/owner-triage.sh" 2>/dev/null)"
   if [ -z "$ui_globs" ]; then echo ui; return; fi
   set -f
