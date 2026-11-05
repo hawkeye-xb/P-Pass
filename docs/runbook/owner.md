@@ -64,6 +64,11 @@ owner 只统筹，不当传声筒：这些命令是 owner 的工具，不是合�
    例外：产品取向已经定过的，写 `**产品定案**：docs/decisions/<文件>.md，产品负责人 <日期> 已确认`。
    引用的方案必须全部在 `origin/main` 上是「已采纳」，字段里必须写明产品负责人确认，任一不满足就拒绝；
    满足就不打 `needs:product`、不要选项，按第 3 条走。写「无」等于没写。
+   另一个例外：`**owner 定案**：AGENTS.md「<逐字原文>」` 和/或仓库 owner 账号的评论链接。原文必须在 `origin/main` 的
+   AGENTS.md 里逐字出现（至少 8 个字）；评论用 `gh api` 核对存在、作者是仓库 owner。任一依据不成立就拒绝。
+   合格且隐私、数据都是「无」、卡类型不是 Feature：不打 `needs:product`、不要选项，打 `decided:owner`，
+   依据写进「实施方案」。隐私或数据不是「无」、或 Feature 卡，owner 定案不顶用，照常 `needs:product`。
+   不带这个字段，行为与之前一样。
 3. 其余打 `status:ready`。
 
 范围、验收场景、是否核心写进任务卡的对应字段（本地 hook 和 `just verify` 读这几处），其余内容写进正文末尾的

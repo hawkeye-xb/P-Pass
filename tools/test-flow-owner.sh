@@ -147,6 +147,8 @@ case "$1 $2" in
     case "$2" in
       */commits/*/check-runs*) cat "$FAKE/main-ci" 2>/dev/null || echo "completed success CI Rust gate" ;;
       */commits/*/status) echo "success 0" ;;
+      */issues/comments/*) cat "$FAKE/comments/${2##*/}" 2>/dev/null || exit 1 ;;
+      */issues/[0-9]*) cat "$I/${2##*/}.type" 2>/dev/null || echo "" ;;
       */workflows/ci-core-review.yml/runs*) echo "123 waiting" ;;
       */actions/runs/123/pending_deployments) echo 9 ;;
       -X) echo '{}' ;;
@@ -390,6 +392,74 @@ check "方案缺字段 → 拒绝（退出码 2），不写 issue" bash -c '[ "$
 plan "$P" "tools/new-thing.sh" "无"
 bash tools/flow/owner-triage.sh 41 "$P" >/dev/null 2>&1
 check "已不是 status:inbox 的卡 → 拒绝" test "$?" -eq 2
+
+echo "── 9b. triage：owner 定案（依据只认 AGENTS.md 原文与仓库 owner 的评论）"
+printf '\n## 角色\n\niOS 先对齐 Android，要加就两端一起加。\n' >>AGENTS.md
+git add -A && git commit -q -s -m "agents" && git push -q origin HEAD:refs/heads/main && git fetch -q origin
+mkdir -p "$FAKE/comments"
+printf 't\n' >"$FAKE/comments/101"
+printf 'someone-else\n' >"$FAKE/comments/102"
+OD_OK="**owner 定案**：AGENTS.md「iOS 先对齐 Android，要加就两端一起加」"
+UIP="assets/i18n/zh.json"
+tcard 61 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "$OD_OK"
+out="$(bash tools/flow/owner-triage.sh 61 "$P" 2>/dev/null)"
+check "AGENTS.md 原文依据 → ready + decided:owner，不打 needs:product，依据写进实施方案" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 61 ready$" && grep -q "decided:owner" "$FAKE/issues/61.labels" && grep -q "status:ready" "$FAKE/issues/61.labels" && ! grep -q "needs:product" "$FAKE/issues/61.labels" && grep -q "^\*\*owner 定案\*\*：AGENTS.md「iOS 先对齐" "$FAKE/issues/61.body"' _ "$out"
+tcard 62 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "**owner 定案**：AGENTS.md「iOS 先对齐 Android，两端随便加」"
+err="$(bash tools/flow/owner-triage.sh 62 "$P" 2>&1 >/dev/null)"
+rc=$?
+check "反证：原文不在 AGENTS.md 里 → 拒绝（退出码 2），不写 issue、不打标签" bash -c '[ "$1" -eq 2 ] && printf "%s\n" "$2" | grep -q "找不到" && [ "$(cat "$FAKE/issues/62.labels")" = status:inbox ] && ! grep -q "^issue edit 62" "$FAKE/calls.log"' _ "$rc" "$err"
+tcard 63 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "**owner 定案**：AGENTS.md「先对齐」"
+bash tools/flow/owner-triage.sh 63 "$P" >/dev/null 2>&1
+check "原文太短（凑巧能匹配）→ 拒绝" test "$?" -eq 2
+tcard 64 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "**owner 定案**：https://github.com/t/r/issues/9#issuecomment-101"
+out="$(bash tools/flow/owner-triage.sh 64 "$P" 2>/dev/null)"
+check "仓库 owner 的评论链接 → ready + decided:owner" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 64 ready$" && grep -q "decided:owner" "$FAKE/issues/64.labels"' _ "$out"
+tcard 65 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "**owner 定案**：https://github.com/t/r/issues/9#issuecomment-102"
+err="$(bash tools/flow/owner-triage.sh 65 "$P" 2>&1 >/dev/null)"
+rc=$?
+check "反证：评论作者不是仓库 owner → 拒绝（退出码 2），不写 issue" bash -c '[ "$1" -eq 2 ] && printf "%s\n" "$2" | grep -q "不是仓库 owner" && [ "$(cat "$FAKE/issues/65.labels")" = status:inbox ] && ! grep -q "^issue edit 65" "$FAKE/calls.log"' _ "$rc" "$err"
+tcard 66 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "**owner 定案**：https://github.com/t/r/issues/9#issuecomment-999"
+bash tools/flow/owner-triage.sh 66 "$P" >/dev/null 2>&1
+check "评论不存在 → 拒绝" test "$?" -eq 2
+tcard 67 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "**owner 定案**：https://github.com/other/repo/issues/9#issuecomment-101"
+bash tools/flow/owner-triage.sh 67 "$P" >/dev/null 2>&1
+check "别的仓库的评论链接 → 拒绝（依据数为 0）" test "$?" -eq 2
+tcard 68 status:inbox
+printf '**做法**：改\n**涉及端**：无\n**数据**：无\n**用户可见行为**：首页多一张引导\n**隐私**：会读通讯录\n**风险**：低\n**范围**：\n```\n%s\n```\n**验收场景**：x（E2）\n%s\n' "$UIP" "$OD_OK" >"$P"
+bash tools/flow/owner-triage.sh 68 "$P" >/dev/null 2>&1
+check "隐私不为「无」，带 owner 定案仍 needs:product（无选项则拒绝，不打 decided:owner）" bash -c '[ "$(cat "$FAKE/issues/68.labels")" = status:inbox ]'
+printf '**选项一**：读\n**选项二**：不读\n' >>"$P"
+out="$(bash tools/flow/owner-triage.sh 68 "$P" 2>/dev/null)"
+check "反证：同一张卡补上两个选项 → needs:product，没有 decided:owner" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 68 needs:product$" && grep -q "needs:product" "$FAKE/issues/68.labels" && ! grep -q "decided:owner" "$FAKE/issues/68.labels"' _ "$out"
+tcard 69 status:inbox
+printf '**做法**：改\n**涉及端**：无\n**数据**：新增本地缓存\n**用户可见行为**：首页多一张引导\n**隐私**：无\n**风险**：低\n**范围**：\n```\n%s\n```\n**验收场景**：x（E2）\n%s\n**选项一**：留\n**选项二**：删\n' "$UIP" "$OD_OK" >"$P"
+out="$(bash tools/flow/owner-triage.sh 69 "$P" 2>/dev/null)"
+check "数据不为「无」，带 owner 定案仍 needs:product" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 69 needs:product$" && ! grep -q "decided:owner" "$FAKE/issues/69.labels"' _ "$out"
+tcard 70 status:inbox
+printf 'Feature' >"$FAKE/issues/70.type"
+plan "$P" "$UIP" "首页多一张引导" $'**owner 定案**：AGENTS.md「iOS 先对齐 Android，要加就两端一起加」\n**选项一**：做\n**选项二**：不做'
+out="$(bash tools/flow/owner-triage.sh 70 "$P" 2>/dev/null)"
+check "Feature 卡带 owner 定案 → 仍 needs:product" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 70 needs:product$" && ! grep -q "decided:owner" "$FAKE/issues/70.labels"' _ "$out"
+rm -f "$FAKE/issues/70.type"
+tcard 73 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "$OD_OK"
+out="$(bash tools/flow/owner-triage.sh 73 "$P" 2>/dev/null)"
+check "反证：同样的方案、卡类型不是 Feature → ready + decided:owner" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 73 ready$" && grep -q "decided:owner" "$FAKE/issues/73.labels"' _ "$out"
+tcard 71 status:inbox
+plan "$P" "$UIP" "首页多一张引导" $'**选项一**：做\n**选项二**：不做'
+out="$(bash tools/flow/owner-triage.sh 71 "$P" 2>/dev/null)"
+check "不带 owner 定案：行为不变（needs:product、无 decided:owner、不调 gh api 查卡类型）" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 71 needs:product$" && ! grep -q "decided:owner" "$FAKE/issues/71.labels" && ! grep -q "^api repos/t/r/issues/71" "$FAKE/calls.log"' _ "$out"
+tcard 72 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "**owner 定案**：无"
+bash tools/flow/owner-triage.sh 72 "$P" >/dev/null 2>&1
+check "owner 定案写「无」等于没写 → 仍按产品问题处理" bash -c '[ "$(cat "$FAKE/issues/72.labels")" = status:inbox ]'
 
 echo
 echo "flow-owner: ${PASS} passed, ${FAIL} failed"

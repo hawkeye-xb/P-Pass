@@ -9,6 +9,7 @@
 #   **ADR**：docs/decisions/<文件>.md        （范围命中核心时必填）
 #   **选项一**：… **选项二**：…               （需要产品负责人拍板时必填，各写做法与影响）
 #   **产品定案**：docs/decisions/<文件>.md，产品负责人 <日期> 已确认   （可选；写「无」等于没写）
+#   **owner 定案**：AGENTS.md「<逐字原文>」 和/或 <仓库 owner 的评论链接>   （可选；写「无」等于没写）
 #
 # 分流由脚本判定，不看模型的结论：
 #   1. 范围命中核心（.github/core-paths.txt）：要有 origin/main 上「已采纳」的 ADR；
@@ -17,6 +18,10 @@
 #      否则拒绝；合格 ⇒ 产品取向已定，不打 needs:product、不要选项，按 3 判。
 #      没有「产品定案」：用户可见行为 / 隐私 / 数据 任一不是「无」，或范围碰到界面与文案路径
 #      （即使方案写了「无」也算）⇒ needs:product，必须有两个选项，否则拒绝。
+#      有「owner 定案」：依据只认 AGENTS.md 原文（「」里的句子在 origin/main 的 AGENTS.md 里逐字出现）
+#      和仓库 owner 账号的评论链接（gh api 核对评论存在、作者是 owner），任一不成立就拒绝；
+#      合格且隐私、数据都是「无」、卡类型不是 Feature ⇒ 不打 needs:product、不要选项，打 decided:owner。
+#      隐私或数据不是「无」、或 Feature 卡：owner 定案不顶用，照常 needs:product。
 #   3. 其余 ⇒ status:ready。
 # 方案写回 issue：「范围」「验收场景」「是否核心」填进任务卡对应字段（hook 与 just verify 读它们），
 # 其余放进正文末尾的「实施方案」段（重跑覆盖，不叠加）。
@@ -52,7 +57,7 @@ python3 -I - "$PLAN" "$TMPD" <<'PY'
 import re, sys, pathlib
 text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").replace("\r", "")
 out = pathlib.Path(sys.argv[2])
-names = ["做法", "涉及端", "数据", "用户可见行为", "隐私", "风险", "范围", "验收场景", "ADR", "选项一", "选项二", "产品定案"]
+names = ["做法", "涉及端", "数据", "用户可见行为", "隐私", "风险", "范围", "验收场景", "ADR", "选项一", "选项二", "产品定案", "owner 定案"]
 pat = re.compile(r"^\*\*(" + "|".join(names) + r")\*\*[：:]?[ \t]*", re.M)
 hits = list(pat.finditer(text))
 fields = {}
@@ -133,12 +138,54 @@ if [ -n "$(field 产品定案)" ] && ! is_none 产品定案; then
     refuse "**产品定案** 没写明产品负责人已确认（要写成「产品负责人 <日期> 已确认」）" \
       "确认过就补上再重跑；没确认就去掉这个字段，走 needs:product。"
 fi
+# owner 定案：依据只认 AGENTS.md 原文与仓库 owner 的评论链接；不带这个字段时下面整段不执行。
+OWNER_DECIDED=0
+if [ -n "$(field "owner 定案")" ] && ! is_none "owner 定案"; then
+  basis="$(field "owner 定案")"
+  nbasis=0
+  while IFS= read -r q; do
+    [ -n "$q" ] || continue
+    [ "$(printf '%s' "$q" | python3 -I -c 'import sys; print(len(sys.stdin.read()))')" -ge 8 ] || refuse "**owner 定案** 引用的 AGENTS.md 原文太短（「${q}」，至少 8 个字）" "引一整句规矩原文。"
+    git show origin/main:AGENTS.md 2>/dev/null | grep -qF -- "$q" ||
+      refuse "**owner 定案** 引用的原文在 origin/main 的 AGENTS.md 里找不到：「${q}」" \
+        "逐字照抄 AGENTS.md 的句子；找不到依据就去掉这个字段，走 needs:product。"
+    nbasis=$((nbasis + 1))
+  done <<EOF2
+$(printf '%s\n' "$basis" | python3 -I -c 'import re, sys; print("\n".join(re.findall("「([^」]*)」", sys.stdin.read())))')
+EOF2
+  owner_login="${REPO%%/*}"
+  while IFS= read -r url; do
+    [ -n "$url" ] || continue
+    cid="${url##*issuecomment-}"
+    author="$(gh api "repos/${REPO}/issues/comments/${cid}" --jq .user.login 2>/dev/null)" ||
+      refuse "**owner 定案** 的评论链接读不到：${url}" "核对链接，或去掉这个字段走 needs:product。"
+    [ "$author" = "$owner_login" ] ||
+      refuse "**owner 定案** 的评论作者是「${author:-未知}」，不是仓库 owner「${owner_login}」：${url}" \
+        "只认仓库 owner 账号的评论；别人的话不算依据。"
+    nbasis=$((nbasis + 1))
+  done <<EOF2
+$(printf '%s\n' "$basis" | grep -oE "https://github\.com/${REPO}/(issues|pull)/[0-9]+#issuecomment-[0-9]+" | sort -u)
+EOF2
+  [ "$nbasis" -gt 0 ] ||
+    refuse "**owner 定案** 里没有可校验的依据" "写 AGENTS.md「<原文>」或仓库 owner 的评论链接；没有依据就去掉这个字段。"
+  OWNER_DECIDED=1
+fi
 PRODUCT=0
 is_none 用户可见行为 || { PRODUCT=1; REASONS="${REASONS}用户可见行为；"; }
 is_none 隐私 || { PRODUCT=1; REASONS="${REASONS}隐私；"; }
 is_none 数据 || { PRODUCT=1; REASONS="${REASONS}数据去留；"; }
 [ "$UI" = false ] || { PRODUCT=1; REASONS="${REASONS}范围碰到界面或文案路径；"; }
 [ -z "$DECIDED" ] || PRODUCT=0
+# 只在本来要 needs:product 时才用得上 owner 定案；隐私或数据不是「无」、或 Feature 卡，owner 不能代定。
+USED_OWNER=0
+if [ "$OWNER_DECIDED" = 1 ] && [ "$PRODUCT" = 1 ]; then
+  if is_none 隐私 && is_none 数据; then
+    itype="$(gh api "repos/${REPO}/issues/${N}" --jq '.type.name // ""' 2>/dev/null)" ||
+      refuse "读不到 #${N} 的卡类型，判断不了 owner 定案是否适用" "稍后重跑。"
+    [ "$itype" = Feature ] || { PRODUCT=0; USED_OWNER=1; }
+  fi
+  [ "$USED_OWNER" = 1 ] || REASONS="${REASONS}owner 定案不适用（隐私或数据非「无」，或 Feature 卡）；"
+fi
 if [ "${DECISION:-}" != blocked ]; then
   if [ "$PRODUCT" = 1 ]; then
     [ -n "$(field 选项一)" ] && [ -n "$(field 选项二)" ] ||
@@ -149,6 +196,7 @@ if [ "${DECISION:-}" != blocked ]; then
     DECISION=ready
   fi
 fi
+[ "$DECISION" = ready ] || USED_OWNER=0
 
 # 写回 issue 正文。
 printf '%s\n' "$ISSUE_BODY" >"${TMPD}/body"
@@ -193,7 +241,7 @@ else:
 
 sec = [begin, "## 实施方案（just triage）", ""]
 sec += extra
-for k in ("做法", "涉及端", "数据", "用户可见行为", "隐私", "风险", "ADR", "产品定案"):
+for k in ("做法", "涉及端", "数据", "用户可见行为", "隐私", "风险", "ADR", "产品定案", "owner 定案"):
     if f(k):
         sec.append("**" + k + "**：" + f(k) + "\n")
 if decision == "needs:product":
@@ -223,6 +271,7 @@ case "$DECISION" in
     ;;
   ready)
     [ "$CORE" = false ] || gh issue edit "$N" -R "$REPO" --add-label core >/dev/null
+    [ "$USED_OWNER" = 0 ] || gh issue edit "$N" -R "$REPO" --add-label decided:owner >/dev/null || die_stuck "给 #${N} 打 decided:owner 失败"
     set_status "$N" status:ready || die_stuck "把 #${N} 换成 status:ready 失败"
     ;;
 esac
