@@ -202,7 +202,8 @@ git init -q "${TMP}/main"
   cp "${SRC}/tools/ci-paths.sh" tools/ci-paths.sh
   mkdir -p tools/e3/lib
   cp "${SRC}/tools/e3/lib/dev-cache.sh" tools/e3/lib/dev-cache.sh
-  printf '+ core/**\n' >.github/core-paths.txt
+  # core/** 是用户看不见的核心，apps/core/** 是用户看得见的核心（#1448）。
+  printf '+ core/**\n+ apps/core/**\n' >.github/core-paths.txt
   echo a >src/a.txt
   echo d >docs/d.md
   echo c >core/c.txt
@@ -372,6 +373,22 @@ printf '%s' "$OUT" | grep -q "只写复现" && ! printf '%s' "$OUT" | grep -q "�
 issue 17 "status:ready" "[T-17] plain" "src/**" "Bug"
 OUT="$(START 17 2>&1)"
 printf '%s' "$OUT" | grep -q "只写复现" && bad "非核心卡也出了核心提示" || ok "反证：非核心卡不出核心提示"
+
+# #1423 apps/android/local.properties（git 不跟踪的本机配置）：主副本有 → 拷进卡目录；没有 → 不建、打印提示（反证）
+mkdir -p "${M}/apps/android"
+printf 'sdk.dir=/fake/sdk\n' >"${M}/apps/android/local.properties"
+issue 71 "status:ready" "[T-71] props copied" "src/**" "Bug"
+OUT="$(START 71 2>&1)" || bad "start 71 失败：$OUT"
+cmp -s "${M}/apps/android/local.properties" "${PPASS_WT_ROOT}/71-props-copied/apps/android/local.properties" &&
+  ok "主副本有 local.properties → 卡目录里内容一致" || bad "主副本有 local.properties，卡目录里没有或内容不同：$OUT"
+printf '%s' "$OUT" | grep -q 'local.properties：已从主副本拷入' && ok "  打印了已拷入" || bad "  没打印已拷入：$OUT"
+rm -rf "${M}/apps"
+issue 72 "status:ready" "[T-72] props missing" "src/**" "Bug"
+OUT="$(START 72 2>&1)" || bad "start 72 失败：$OUT"
+[ ! -e "${PPASS_WT_ROOT}/72-props-missing/apps/android/local.properties" ] &&
+  ok "反证：主副本没有 local.properties → 卡目录里也没有" || bad "主副本没有，卡目录里却有 local.properties"
+printf '%s' "$OUT" | grep -q '主副本没有 apps/android/local.properties：.*just verify 编不出 APK' &&
+  ok "  主副本没有 → 打印影响与补法" || bad "  主副本没有却没打印提示：$OUT"
 
 # 范围解析与 hook 里那份逐字相同（防漂移）；先证明比对本身会红
 awk_block() { sed -n "/awk '\$/,/^')\"/p" "$1" | sed 1d; }
@@ -721,7 +738,7 @@ DONE "$VW" --accepted "2026-11-04 15:30" >"${TMP}/o55b" 2>&1 || bad "带验收�
 grep -qxF '产品负责人 2026-11-04 15:30 真机验收通过' "${FAKE_GH}/pr.body" 2>/dev/null &&
   ok "反证：给了验收时间 → 正文单独一行写明验收" || bad "给了验收时间但正文缺验收行"
 [ -e "${FAKE_GH}/pr.created" ] && [ ! -e "${FAKE_GH}/pr.draft" ] && ok "  已验收：正式 PR，不带 --draft" || bad "已验收却开了草稿（或没开出 PR）"
-# 核心路径同样先开草稿 PR
+# 核心但用户看不见（#1448）：不开草稿、不要验收行，正文写卡上已采纳的方案；看得见的核心照样先开草稿
 issue 56 "status:ready,core" "[T-56] core change" "core/**" "Bug" "**ADR**：docs/decisions/2026-11-01-adopted.md"
 CW="$(START 56 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/56-"*)"
 mkdir -p "$CW/core"
@@ -729,7 +746,15 @@ commit_file "$CW" core/c.txt
 rm -f "${FAKE_GH}/pr.body" "${FAKE_GH}/pr.created" "${FAKE_GH}/pr.draft"
 DONE "$CW" >"${TMP}/o56" 2>&1 || bad "核心改动交卡失败：$(tail -5 "${TMP}/o56")"
 (cd "$CW" && eval "$(pr_cmd "${TMP}/o56")") >/dev/null 2>&1 || bad "打印的开 PR 命令跑不起来：$(pr_cmd "${TMP}/o56")"
-[ -e "${FAKE_GH}/pr.draft" ] && ok "人控级（核心路径）：草稿 PR" || bad "核心路径没开草稿 PR：$(tail -3 "${TMP}/o56")"
+[ ! -e "${FAKE_GH}/pr.draft" ] && grep -qx '采纳方案：docs/decisions/2026-11-01-adopted.md' "${FAKE_GH}/pr.body" && ! grep -q '待产品负责人' "${FAKE_GH}/pr.body" &&
+  ok "核心看不见：正式 PR，正文写已采纳方案，不等验收" || bad "看不见的核心 PR 不对：$(head -6 "${FAKE_GH}/pr.body" 2>/dev/null)"
+issue 156 "status:ready,core" "[T-156] core visible" "apps/**" "Bug" "**ADR**：docs/decisions/2026-11-01-adopted.md"
+CV="$(START 156 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/156-"*)"
+commit_file "$CV" apps/core/c.kt
+rm -f "${FAKE_GH}/pr.body" "${FAKE_GH}/pr.created" "${FAKE_GH}/pr.draft"
+DONE "$CV" >"${TMP}/o156" 2>&1 || bad "看得见的核心交卡失败：$(tail -5 "${TMP}/o156")"
+(cd "$CV" && eval "$(pr_cmd "${TMP}/o156")") >/dev/null 2>&1
+[ -e "${FAKE_GH}/pr.draft" ] && grep -qF '按 SOP' "${FAKE_GH}/pr.body" && ok "反证：核心看得见 → 草稿 PR，正文提示按 SOP 验收记录" || bad "看得见的核心没开草稿：$(tail -3 "${TMP}/o156")"
 # 只改更新说明（#1448）：草稿 PR，正文写「待产品负责人文案确认」，不要真机验收；给了时间写「文案确认通过」
 issue 144 "status:ready" "[T-144] notes" "release/**" "Task"
 NW="$(START 144 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/144-"*)"

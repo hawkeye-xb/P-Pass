@@ -12,6 +12,15 @@ MAC_DAEMON_EXE="$MAC_APP/Contents/Helpers/ppf-daemon.app/Contents/MacOS/ppf-daem
 MAC_DAEMON_LOG="$HOME/Library/Application Support/P-Pass/logs/daemon.log"
 
 
+# 本机桌面 App（MAC_APP，可能就是人在用的正式版）也是 mac 设备：替换、安装、启停服务、退出外壳、改数据
+# 都必须在 mac 设备锁里（tools/e3/lock mac；人工验收时 owner 用 hold-for-human 占着它，场景排队）。
+# 改它的函数开头调这个，不在锁里就拒绝，不碰 App（#1449）。
+mac_need_lock() {
+  [ "${E3_LOCKED_MAC:-}" = 1 ] && return 0
+  log "拒绝 ${FUNCNAME[1]:-?}：没持 mac 设备锁就要动本机 P-Pass（${MAC_APP}）。经 tools/e3/run / dev / restore 跑，或包在 tools/e3/lock mac 里"
+  return 1
+}
+
 # 候选签名包：E3_MAC_CAND_APP 指定（如 CI 出的正式签名包），默认 just dev mac 编的开发版签名包
 mac_cand_app() { echo "${E3_MAC_CAND_APP:-$E3_STATE/mac-cand/P-Pass.app}"; }
 
@@ -26,6 +35,7 @@ svc_loaded() { launchctl print "$MAC_DOMAIN/$MAC_LABEL" >/dev/null 2>&1; }
 # 会误以为「已登记」而什么都不做
 svc_stop() {
   local i
+  mac_need_lock || return 1
   launchctl bootout "$MAC_DOMAIN/$MAC_LABEL" 2>/dev/null
   for i in $(seq 1 60); do svc_loaded || return 0; sleep 0.5; done
   log "服务 30s 内没从 launchd 里卸掉"
@@ -34,6 +44,7 @@ svc_stop() {
 # bootout 刚返回时 launchd 还在拆旧实例，紧接着 bootstrap 会报 5: Input/output error：重试到登记成功
 svc_start() {
   local i
+  mac_need_lock || return 1
   for i in $(seq 1 30); do
     svc_loaded && return 0
     launchctl bootstrap "$MAC_DOMAIN" "$MAC_PLIST" 2>/dev/null && return 0

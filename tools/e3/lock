@@ -2,9 +2,17 @@
 # 设备锁：tools/e3/lock [--no-wait] <设备> <命令…>
 # 同一台设备（mac / android / win / ios）同一时间只许一个会话装包、点界面。默认拿不到锁就排队等，
 # 不报错；排队时打印一行谁在用。--no-wait（just dev 用）：被占就打印谁在用并退出 75，不排队。
-# 用 /usr/bin/lockf（内核文件锁，进程退出即释放，不会留死锁）。
+# 用 /usr/bin/lockf（内核文件锁，进程退出即释放，不会留死锁）。锁只包操作设备的步骤（装包、启停、点界面、
+# 取证），编译在锁外（tools/e3/run、dev、restore 先编完再取锁）。本机桌面 App（MAC_APP，含正式版）也算 mac 设备。
 #
-# 设备归属（#1378）：一台设备同一时间只归一个主人（产品负责人验收、某个会话在用）。
+# 人工验收（#1449）：人在设备上照 SOP 操作时，由 owner 替人拿锁，agent 的场景对这些设备排队等。
+#   tools/e3/lock hold-for-human <设备>…   后台起持锁进程一直持有（一次可拿多台），拿到才返回
+#   tools/e3/lock release-human <设备>…    结束持锁进程，锁随之释放，排队的场景接着跑
+# 持锁进程意外退出时内核锁自动释放，status 不再报占用。--no-wait 照旧打印谁在用并退出 75。
+#
+# 设备归属（#1378）：一台设备同一时间只归一个主人。和人工验收的区别：归属不持锁、长期有效，
+# 别人取锁直接拒绝（退出 75），不排队；人工验收是真持锁，别人排队、验完 release-human 就接着跑。
+# hold-for-human 走同一条取锁路径，设备归别人时同样被拒。
 #   tools/e3/lock claim <设备> <主人>   记下主人（本机文件，不进仓库）
 #   tools/e3/lock release <设备>        去掉主人
 #   tools/e3/lock status                每台设备的主人与当前占用（just doctor 会列）
@@ -15,6 +23,29 @@ mkdir -p "$dir"
 DEVS="mac android ios win"
 check_dev() { case "$1" in mac | android | win | ios) ;; *) echo "未知设备：${1}（mac/android/win/ios）" >&2; exit 2 ;; esac; }
 owner_of() { [ -f "$dir/owner-$1" ] && cut -f1 "$dir/owner-$1"; }
+# 内核锁现在是否被持有。探测必须带 -k：不带时 lockf 拿到锁后会删掉锁文件，
+# 正在排队的人锁的是被删的那个文件，之后来的人新建一个，两边同时「持锁」。
+held() { [ -f "$1" ] && ! /usr/bin/lockf -k -t 0 "$1" true 2>/dev/null; }
+# .who 记录：「pid <持锁的 lockf 进程> <时刻> <目录>」。只代表活着的持有者：持有命令退出时自己删，
+# 被 kill -9 删不了的由 status 发现 pid 已退出后清掉。
+who_pid() { [ -f "$1" ] || return 0; sed -n '1s/^pid \([0-9][0-9]*\) .*/\1/p' "$1" 2>/dev/null || true; }
+pid_alive() { [ -n "$1" ] && ps -p "$1" >/dev/null 2>&1; }
+# 记录的可读说明：人工验收的记录是「pid <n> <时刻> human <月-日 时:分>」。
+who_text() { # who_text <.who 文件>
+  local l
+  l="$(head -1 "$1" 2>/dev/null || true)"
+  case "$l" in
+    "pid "*" human "*) echo "人工验收中（自 ${l##* human }）" ;;
+    *) printf '%s\n' "$l" ;;
+  esac
+}
+# 占用说明：记录里的进程还活着就给记录，否则说明没有登记。
+who_of() { # who_of <锁文件>
+  local p
+  p="$(who_pid "$1.who")"
+  if pid_alive "$p"; then who_text "$1.who"; else echo "持有者未登记"; fi
+}
+is_human() { head -1 "$1.who" 2>/dev/null | grep -q '^pid [0-9][0-9]* .* human '; }
 
 case "${1:-}" in
   claim)
@@ -35,13 +66,106 @@ case "${1:-}" in
     echo "设备 $2 已释放（没有主人）"
     exit 0
     ;;
+  hold-for-human)
+    shift
+    [ "$#" -gt 0 ] || { echo "用法: tools/e3/lock hold-for-human <设备>…（mac/android/ios/win）" >&2; exit 2; }
+    for d in "$@"; do check_dev "$d"; done
+    since="$(date '+%m-%d %H:%M')"
+    wait_s="${E3_HOLD_WAIT:-600}"
+    pids=""
+    for d in "$@"; do
+      lk="$dir/lock-$d"
+      if held "$lk" && is_human "$lk" && pid_alive "$(who_pid "$lk.who")"; then
+        echo "设备 $d 已在$(who_text "$lk.who")"
+        pids="$pids -"
+        continue
+      fi
+      # 走普通取锁路径（排队、设备归属判定都一样）。持锁内容：一直等到持锁的 lockf 退出为止，
+      # 把自己的 pid 记进 lock-<设备>.human，release-human 结束它。nohup：开它的终端或会话关了也不放。
+      # 去掉 E3_LOCKED_*：不能因为调用方在别的锁里就跳过取锁。
+      # shellcheck disable=SC2016  # 内层脚本的变量在内层展开
+      env -u E3_LOCKED_MAC -u E3_LOCKED_ANDROID -u E3_LOCKED_IOS -u E3_LOCKED_WIN \
+        E3_LOCK_WHO="human ${since}" nohup "$0" "$d" /bin/bash -c '
+          echo $$ >"$0"
+          while ps -p "$E3_LOCK_PID" >/dev/null 2>&1; do sleep 1; done' "$lk.human" >"$lk.human.log" 2>&1 &
+      pids="$pids $!"
+    done
+    # 撤掉这次起的持锁进程（排队中的、已拿到的都撤；之前就在人工验收的不动）
+    abort() { local q; for q in $pids; do [ "$q" = - ] || kill "$q" 2>/dev/null || true; done; }
+    # 等每台都真的拿到（记录里的 pid 是这次起的持锁进程）；前面有场景在跑就排队，超时放弃并撤掉已拿的。
+    i=0
+    while :; do
+      all=1
+      n=0
+      for d in "$@"; do
+        n=$((n + 1))
+        p="$(echo $pids | cut -d' ' -f"$n")"
+        [ "$p" = - ] && continue
+        pid_alive "$p" || {
+          echo "✗ 设备 $d 没拿到人工验收锁：$(grep -v '^nohup' "$dir/lock-$d.human.log" 2>/dev/null | head -2 | tr '\n' ' ')；这次拿的一并撤掉" >&2
+          abort
+          exit 75
+        }
+        [ "$(who_pid "$dir/lock-$d.who")" = "$p" ] || all=0
+      done
+      [ "$all" = 1 ] && break
+      [ "$i" = 3 ] && echo "有设备正被场景占用，排队等它跑完（最多 ${wait_s}s）……" >&2
+      i=$((i + 1))
+      if [ "$i" -gt "$wait_s" ]; then
+        echo "✗ ${wait_s}s 内没全部拿到，这次拿的已撤掉" >&2
+        abort
+        exit 75
+      fi
+      sleep 1
+    done
+    for d in "$@"; do echo "设备 $d：$(who_text "$dir/lock-$d.who")；验完 tools/e3/lock release-human $d"; done
+    exit 0
+    ;;
+  release-human)
+    shift
+    [ "$#" -gt 0 ] || { echo "用法: tools/e3/lock release-human <设备>…" >&2; exit 2; }
+    for d in "$@"; do check_dev "$d"; done
+    rc=0
+    for d in "$@"; do
+      lk="$dir/lock-$d"
+      hp="$(cat "$lk.human" 2>/dev/null || true)"
+      if [ -n "$hp" ] && pid_alive "$hp"; then
+        kill "$hp" 2>/dev/null || true
+        for _ in $(seq 1 50); do held "$lk" && is_human "$lk" || break; sleep 0.1; done
+      fi
+      if held "$lk" && is_human "$lk"; then
+        echo "✗ 设备 $d 的人工验收锁没放掉（$(who_text "$lk.who")）" >&2
+        rc=1
+        continue
+      fi
+      rm -f "$lk.human" "$lk.human.log"
+      echo "设备 $d 人工验收结束，锁已释放"
+    done
+    exit "$rc"
+    ;;
   status)
     for d in $DEVS; do
       own="无主人"
       [ -f "$dir/owner-$d" ] && own="归 $(cut -f1 "$dir/owner-$d")（自 $(cut -f2 "$dir/owner-$d")）"
+      lk="$dir/lock-$d"
       use="空闲"
-      if [ -f "$dir/lock-$d" ] && ! /usr/bin/lockf -t 0 "$dir/lock-$d" true 2>/dev/null; then
-        use="正被占用（$(cat "$dir/lock-$d.who" 2>/dev/null || echo 未知)）"
+      p="$(who_pid "$lk.who")"
+      if held "$lk"; then
+        # 内核锁在：有人持着。记录指向已退出的进程只会出现在抢锁的一瞬间或绕过本脚本持锁，不说空闲。
+        if pid_alive "$p"; then
+          if is_human "$lk"; then use="$(who_text "$lk.who")"; else use="正被占用（$(who_text "$lk.who")）"; fi
+        else
+          use="正被占用（持有者未登记${p:+；记录指向已退出的进程 ${p}}）"
+        fi
+      elif [ -f "$lk.who" ]; then
+        if pid_alive "$p"; then
+          # lockf 已不在，被包的命令还活着（lockf 被单独杀掉）：锁已放，记录由那个命令收尾时删
+          use="空闲（记录里的进程 ${p} 还在，但已不持锁）"
+        else
+          use="空闲（残留记录指向已退出的进程 ${p:-未知}）"
+          # 只在记录仍是这一份时删：中途有人拿到锁写了新记录就不动
+          [ "$(who_pid "$lk.who")" = "$p" ] && rm -f "$lk.who"
+        fi
       fi
       printf '%-8s %s；%s\n' "$d" "$own" "$use"
     done
@@ -66,8 +190,8 @@ if [ -n "$own" ] && [ "$own" != "${PPASS_DEVICE_OWNER:-}" ]; then
   exit 75
 fi
 timeout=()
-if ! /usr/bin/lockf -t 0 "$lk" true 2>/dev/null; then
-  who="$(cat "$lk.who" 2>/dev/null || echo 未知)"
+if held "$lk"; then
+  who="$(who_of "$lk")"
   if [ "$wait" = 0 ]; then
     echo "✗ 设备 $dev 正被别的会话占用（${who}），不装。等它用完再跑，或先问占用的会话。" >&2
     exit 75
@@ -76,4 +200,19 @@ if ! /usr/bin/lockf -t 0 "$lk" true 2>/dev/null; then
 fi
 [ "$wait" = 0 ] && timeout=(-t 0)
 export "$var=1"
-exec /usr/bin/lockf -k ${timeout[@]+"${timeout[@]}"} "$lk" /bin/bash -c 'echo "pid $PPID $(date +%T) $PWD" >"$0.who"; exec "$@"' "$lk" "$@"
+# 持锁的内层：先登记（pid 记 lockf 本身，它与内核锁同生同死），跑完命令删记录，退出码原样透传。
+# 不 exec：要留在命令后面收尾。Ctrl-C / kill 也走 EXIT 收尾；kill -9 收不了尾，由 status 清残留。
+# 只删仍是自己的记录：lockf 被单独杀掉后锁已归别人，别人的记录不能删。
+# shellcheck disable=SC2016  # 内层脚本的变量在内层展开
+exec /usr/bin/lockf -k ${timeout[@]+"${timeout[@]}"} "$lk" /bin/bash -c '
+  w="$0.who" me="$PPID"
+  echo "pid $me $(date +%T) ${E3_LOCK_WHO:-$PWD}" >"$w"
+  unset E3_LOCK_WHO
+  export E3_LOCK_PID="$me"
+  unreg() { [ "$(sed -n "s/^pid \([0-9][0-9]*\) .*/\1/p" "$w" 2>/dev/null | head -1)" = "$me" ] && rm -f "$w"; return 0; }
+  trap unreg EXIT
+  trap "exit 129" HUP
+  trap "exit 130" INT
+  trap "exit 143" TERM
+  "$@"
+' "$lk" "$@"
