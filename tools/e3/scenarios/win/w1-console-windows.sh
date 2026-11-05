@@ -102,7 +102,7 @@ act() { run_window "$OUT" 0 "$WATCH"; }
 
 judge() {
   local d="$1"
-  check "watcher 就绪后才开始动作" eq_file "$d/watcher-ready.txt" "ok"
+  check "watcher 就绪后才开始动作" grep -qx 'ready=ok' "$d/watcher-ready.txt"
   check "watcher 正常退出（没有可见控制台）" eq_file "$d/watcher-rc.txt" "0"
   check "watcher 报告 0 个控制台窗口" has_line "$d/watcher.log" '^console windows seen: 0$'
   check "watcher 日志没有 CONSOLE 命中" watcher_no_console "$d/watcher.log"
