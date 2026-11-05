@@ -402,7 +402,7 @@ internal fun PhotosScreen(
                 goesToSettings = guideActionGoesToSettings,
                 onAction = { onGuideAction(guide) },
                 onDismiss = onGuideDismiss,
-                // 提示条左右用 page-gutter，与同页失联卡、顶部提示条一致（#1405）；照片网格仍是 12。
+                // 提示条左右用 page-gutter，与筛选条、照片网格、失联卡、顶部提示条同一条线（#1405）。
                 modifier = Modifier.fillMaxWidth().padding(PPSize.PageGutter, 0.dp, PPSize.PageGutter, 12.dp),
             )
         }
@@ -411,9 +411,9 @@ internal fun PhotosScreen(
         // UI-13: 私有 FilterChip（手写药丸）改用 Material3 同名组件——
         // 之前跟框架组件撞名字纯属巧合式重新发明轮子，见 PhotoFilterChip
         // 的 wrapper（保留私有壳只是为了封装 colors，不算"手写控件"）。
-        // 左右 12 与照片网格对齐（产品负责人 11-04）。
+        // 提示条、筛选条、照片网格左右同一条线，都用 page-gutter（#1405，产品负责人 11-05 验收）。
         Row(
-            Modifier.fillMaxWidth().padding(12.dp, 0.dp, 12.dp, 12.dp),
+            Modifier.fillMaxWidth().padding(PPSize.PageGutter, 0.dp, PPSize.PageGutter, 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             PhotoFilterChip(stringResource(R.string.chip_all), filter == TimelineFilter.All) {
@@ -481,7 +481,7 @@ internal fun PhotosScreen(
             shown.isEmpty() -> Center(stringResource(R.string.photos_filter_empty))
             else -> LazyVerticalGrid(
                 columns = GridCells.Fixed(3),
-                modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp),
+                modifier = Modifier.fillMaxSize().padding(horizontal = PPSize.PageGutter),
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
@@ -492,7 +492,7 @@ internal fun PhotosScreen(
                             month,
                             fontSize = 18.sp, fontFamily = PPFont.Serif,
                             color = PPColor.Ink,
-                            modifier = Modifier.padding(8.dp, 16.dp, 8.dp, 6.dp),
+                            modifier = Modifier.padding(0.dp, 16.dp, 0.dp, 6.dp),
                         )
                     }
                     items(group, key = { it.hash }) { asset ->
