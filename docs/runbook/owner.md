@@ -26,10 +26,14 @@ owner 只统筹，不当传声筒：这些命令是 owner 的工具，不是合�
 | 记想法（任何会话） | `just idea "<原话>" [--discuss] [--from <来源>]` | `IDEA DISCUSSION #N` 或 `IDEA ISSUE #N status:inbox Feature` |
 | 分拣新诉求 | `just triage <号> <方案文件>` | `TRIAGE <号> ready \| needs:product \| blocked` |
 | 出 test 包 | `just release-test <端...>` | `RELEASE-TEST OK v<X.Y.Z>-test.N <端...>` |
-| 合入前独立评审 | `just review <PR号> [--model <模型>]` | `✅ #N 独立评审通过，review/agent=success` |
+| 合入前独立评审（兜底，平时由 CI 评审 job 做） | `just review <PR号> [--model <模型>]` | `✅ #N 独立评审通过，review/agent=success` |
 | 停下 | `just owner-stuck "<原因>" [--issue N \| --pr N] [--product "<一>" "<二>"] [--log 文件]` | `ok: ...` |
 
 ### 合入前独立评审（`just review`）
+
+平时不用跑：CI 评审 job（`.github/workflows/ci-review.yml` → `tools/flow/ci-review.sh`）就是独立评审，每个头提交自动跑，
+结论写成必需检查 `review/agent`（只认 GitHub Actions 写的状态）。`error` 是评审没跑成，在 Actions 里重跑那次评审即可。
+本命令只在评审 job 不可用或产品负责人点名时由 owner 派新会话跑；它写的状态不顶替必需检查。
 
 起一个没参与写这个 PR 的只读 agent（`claude -p`，只给 Read / Grep / Glob，不能改文件、不能跑命令），
 对照 PR 正文 `closes #N` 的卡的「范围」「验收场景」查正确性问题，不评风格。结果写成 PR 评论
@@ -39,10 +43,11 @@ owner 只统筹，不当传声筒：这些命令是 owner 的工具，不是合�
 - 结论只对评审时的头提交有效，之后推了新提交要重跑。
 - 换模型：`--model <名>`，或 `PPASS_REVIEW_MODEL`；换成别家的命令用 `PPASS_REVIEW_AGENT`
   （要接受同样的 `-p`、`--model`、`--allowedTools` 参数，提示词走 stdin）。
-- 评审通过后对所有级别的 PR 执行 `gh pr merge --auto --squash`，CI 全绿即合。盯梢、人控级（改动碰界面文案路径
+- 本机跑时，评审通过后对 PR 执行 `gh pr merge --auto --squash`（CI 上不开，自动合入由 `just done` 开 PR 时开）。盯梢、人控级（改动碰界面文案路径
   或核心路径）多一个条件：PR 正文要有「产品负责人 <时间> 真机验收通过」这一行，没有就判未通过、不开自动合入，
   评论里写明缺这一行。界面路径清单与 `owner-triage.sh` 的 `UI_GLOBS` 共用，核心路径取 `origin/main` 上的 `.github/core-paths.txt`。
-- 把 `review/agent` 加进 main 的必需检查是 owner 在仓库设置里做的，本命令不改仓库设置；加之前它只是评论与提交状态，不拦合入。
+- `review/agent` 进 main 的必需检查由产品负责人在仓库设置里做（命令见 #1435 的 PR 正文），脚本不改仓库设置。
+  没进之前它只是评论与提交状态，不拦合入，`just done` 也不会开自动合入。
 
 退出码：0 通过；1 停下了（已写 issue 或评论）；2 拒绝（用法错，或前置条件没满足，提示里给了下一条命令）。
 看到 1 就不要重试同一条命令，先处理 issue。

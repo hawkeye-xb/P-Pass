@@ -141,6 +141,10 @@ case "$1 $2" in
       esac
     done
     echo "https://example.invalid/pr/1" ;;
+  "api repos/o/r/branches/main/protection/required_status_checks")
+    [ -f "$G/required" ] || { echo "HTTP 404: Branch not protected" >&2; exit 1; }
+    cat "$G/required" ;;
+  "pr merge") echo "$*" >>"$G/merges" ;;
   "api repos/o/r/issues/"*) [ -f "$G/${2##*/}.type" ] && cat "$G/${2##*/}.type"; exit 0 ;;
   *)
     case "$1" in
@@ -568,6 +572,31 @@ grep -q 'just done --accepted' "${TMP}/o55" && ok "  提示先验收再 --accept
 DONE "$VW" --accepted "2026-11-04 15:30" >"${TMP}/o55b" 2>&1 || bad "带验收时间交卡失败：$(tail -5 "${TMP}/o55b")"
 grep -qF '产品负责人 2026-11-04 15:30 真机验收通过' "${FAKE_GH}/pr.body" 2>/dev/null &&
   ok "反证：给了验收时间 → 开 PR，正文写明验收" || bad "给了验收时间仍没开 PR 或正文缺验收行"
+# #1435：验收行单独成行，review.sh 的验收判定认得出（写成「- 真机验收：产品负责人 …」会被判缺验收记录）
+ACCEPT_RE="$(grep -o "'^\[\*_> -\]\*产品负责人[^']*'" "${SRC}/tools/flow/review.sh" | head -1 | tr -d "'")"
+[ -n "$ACCEPT_RE" ] && grep -qE "$ACCEPT_RE" "${FAKE_GH}/pr.body" &&
+  ok "PR 正文的验收行能被 review.sh 的验收判定认出" || bad "review.sh 认不出 PR 正文的验收行（正则：${ACCEPT_RE:-没取到}）"
+printf -- '- 真机验收：产品负责人 2026-11-04 15:30 真机验收通过\n' | grep -qE "$ACCEPT_RE" &&
+  bad "反证失败：旧格式「- 真机验收：产品负责人 …」也被认出，测试没测到东西" || ok "反证：旧格式「- 真机验收：产品负责人 …」认不出"
+
+# #1435：开 PR 后开自动合入，但只在 review/agent 已是必需检查时（否则 CI 一绿就合，绕过评审）
+[ ! -s "${FAKE_GH}/merges" ] && ok "保护设置读不到 → 不开自动合入" || bad "读不到保护设置却开了自动合入：$(cat "${FAKE_GH}/merges")"
+grep -q '没开自动合入' "${TMP}/o55b" && ok "  提示没开自动合入的原因" || bad "没提示为什么没开自动合入"
+printf 'identity\nCI Rust gate\n' >"${FAKE_GH}/required"
+issue 56 "status:ready" "[T-56] am-off" "src/**" "Bug"
+AW="$(START 56 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/56-"*)"
+commit_file "$AW" src/am.txt
+: >"${FAKE_GH}/merges"
+DONE "$AW" >"${TMP}/o56" 2>&1 || bad "交卡失败：$(tail -5 "${TMP}/o56")"
+[ ! -s "${FAKE_GH}/merges" ] && ok "review/agent 不在必需检查里 → 不开自动合入" || bad "不在必需检查里却开了：$(cat "${FAKE_GH}/merges")"
+printf 'identity\nreview/agent\nCI Rust gate\n' >"${FAKE_GH}/required"
+issue 57 "status:ready" "[T-57] am-on" "src/**" "Bug"
+BW="$(START 57 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/57-"*)"
+commit_file "$BW" src/am2.txt
+: >"${FAKE_GH}/merges"
+DONE "$BW" >"${TMP}/o57" 2>&1 || bad "交卡失败：$(tail -5 "${TMP}/o57")"
+grep -q -- '--auto --squash' "${FAKE_GH}/merges" 2>/dev/null && ok "反证：review/agent 是必需检查 → 开 PR 后开自动合入" || bad "必需检查里有 review/agent 却没开自动合入：$(tail -3 "${TMP}/o57")"
+rm -f "${FAKE_GH}/required"
 
 # ── #1375 共享编译缓存：just start 建主副本旁的 .env.ppass-dev ────────────────
 # 卡目录在主副本旁（<主副本>-wt 之类）时靠 just 往上找到它，不拷；不在旁边时拷进卡目录根。

@@ -1,16 +1,27 @@
-# 独立评审搬到 CI（#1410）：试跑期只提示，不挡合入。
+# 独立评审（#1410 落地，#1435 起即合入门禁）：CI 上的评审 job 就是 AGENTS.md「独立评审」。
 #
-# 结论写成 PR 评论 + 非必需的提交状态 review/agent；job 永远成功。攒够误拦、漏放的数据后，
-# 由产品负责人决定是否设为必需检查。与 CodeRabbit 分工：它管通用代码问题，这里只核对关联卡
-# 的「范围」「验收场景」和同类问题有没有漏改（tools/flow/review-prompt.md）。
+# 门禁怎么成立：结论写成提交状态 review/agent（success / failure / error / pending），它是 main 的必需检查，
+# 来源锁定 GitHub Actions（app_id 15368），本机 gh 写的同名状态不算。状态按提交记：推了新提交，新提交上
+# 没有 review/agent，旧结论自然作废；error（评审没跑成）、pending 都不算通过。job 本身永远成功，结论只看状态。
+# 自动合入不在这里开：用 GITHUB_TOKEN 开的自动合入，合入由 github-actions 完成，不触发 main 上的 push 流水线；
+# 改由开 PR 的会话用自己的身份开（just done），靠必需检查把关。
 #
-# 配置（仓库里已配好，名字别改）：Secret PPASS_REVIEW_API_KEY；Variables PPASS_REVIEW_BASE_URL、
-# PPASS_REVIEW_MODEL。key 只给本仓库分支的 PR：fork 的 PR 跳过（拿不到 Secret，也不该拿）。
-# 用 pull_request（跑 PR 分支里的脚本）而不是 pull_request_target：本仓库分支的 PR 本来就有写权限。
+# ⚠️ 为什么是 pull_request_target：评审结论是门禁，评审工具（本文件、tools/flow/*.sh、review-prompt.md、
+# 界面路径清单、核心名单）必须取 main 上的版本，否则 PR 改一下评审脚本就能让自己恒判通过。PR 头提交只当
+# 被读的数据：review.sh 从 refs/pull/N/head 建临时只读检出，评审 agent 只有 Read / Grep / Glob，且不读检出里的
+# .claude/ 配置、hooks、MCP（ci-review.sh 垫片加 --setting-sources user --strict-mcp-config）。
+# 别往这里加执行 PR 代码的步骤（构建、测试、npm install PR 里的依赖）。
+# 代价：改评审工具本身的 PR 按 main 上的旧工具评审。
+#
+# 配置（名字别改）：Secret PPASS_REVIEW_API_KEY；Variables PPASS_REVIEW_BASE_URL、PPASS_REVIEW_MODEL。
+# Dependabot 的 PR 只拿得到 Dependabot secrets：同名 Secret 要另存一份（gh secret set PPASS_REVIEW_API_KEY
+# --app dependabot）；Variables 对 Dependabot 是否可读文档没写明，这里给与现值相同的默认值兜底。
+# Dependabot 触发时 GITHUB_TOKEN 默认只读，下面显式写的 permissions 会把它提到所需权限。
+# fork 的 PR 跳过（拿不到 Secret，也不该拿）：review/agent 不出现，合不进，由 owner 处理。
 name: CI Review
 
 on:
-  pull_request:
+  pull_request_target:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review, edited]
 
@@ -20,23 +31,29 @@ permissions:
   statuses: write
   issues: read
 
-concurrency:
-  group: ci-review-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
 jobs:
   review:
-    name: review (独立评审，试跑期不挡合入)
-    if: ${{ !github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository }}
+    name: review (独立评审)
+    # edited 只认人改正文（补验收行）：CodeRabbit 等 bot 会改 PR 正文写摘要，不能每次都让同一提交重评一遍
+    # （LLM 结论有波动，同一提交的 success 可能被重评成 failure），也不能把正在跑的评审取消掉。
+    if: >-
+      ${{ !github.event.pull_request.draft
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && (github.event.action != 'edited' || (github.event.sender.type != 'Bot' && github.event.changes.body != null)) }}
+    # 并发写在 job 上而不是 workflow 上：被上面 if 跳过的运行不进并发组，不会取消正在跑的评审。
+    concurrency:
+      group: ci-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 40
     env:
       GH_TOKEN: ${{ github.token }}
       PPASS_HOOK_REPO: ${{ github.repository }}
       ANTHROPIC_AUTH_TOKEN: ${{ secrets.PPASS_REVIEW_API_KEY }}
-      ANTHROPIC_BASE_URL: ${{ vars.PPASS_REVIEW_BASE_URL }}
-      PPASS_REVIEW_MODEL: ${{ vars.PPASS_REVIEW_MODEL }}
+      ANTHROPIC_BASE_URL: ${{ vars.PPASS_REVIEW_BASE_URL || 'https://api.deepseek.com/anthropic' }}
+      PPASS_REVIEW_MODEL: ${{ vars.PPASS_REVIEW_MODEL || 'deepseek-flash' }}
     steps:
+      # 检出 main（pull_request_target 的默认 ref），不检出 PR 头提交；PR 内容由 review.sh 只读取用。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
@@ -45,7 +62,7 @@ jobs:
           node-version: 22
       - name: 安装评审用的 claude 命令行（版本写死）
         run: npm install -g @anthropic-ai/claude-code@2.1.318
-      - name: 评审（永远成功；失败写成状态与评论）
+      - name: 评审（job 永远成功；结论写成必需检查 review/agent 与评论）
         env:
           PR: ${{ github.event.pull_request.number }}
         run: bash tools/flow/ci-review.sh "$PR"

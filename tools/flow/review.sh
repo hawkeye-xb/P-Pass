@@ -5,9 +5,11 @@
 #   → 在 PR 头提交的临时只读检出里起一个新 agent（只给 Read / Grep / Glob，不能改文件、不能跑命令）
 #   → 结果写成 PR 评论（「通过」或「未通过 + 问题清单」），并在 PR 头提交上写提交状态 review/agent
 #
-# 评审通过后对所有级别的 PR 执行 gh pr merge --auto --squash（CI 全绿即合）。盯梢、人控级（改动碰界面文案路径
-# 或核心路径）多一个条件：PR 正文里必须有「产品负责人 <时间> 真机验收通过」这一行，没有就判未通过、
-# 不开自动合入，评论里写明缺这一行（验收即放行，验收发生在开 PR 之前，AGENTS.md「角色」）。
+# CI 上由 tools/flow/ci-review.sh 调用（PPASS_REVIEW_NO_MERGE=1），review/agent 是 main 的必需检查，即合入门禁；
+# 本机 just review 只在 CI 评审不可用时兜底（本机写的状态不顶替必需检查），通过后对 PR 执行
+# gh pr merge --auto --squash。盯梢、人控级（改动碰界面文案路径或核心路径）多一个条件：PR 正文里必须有
+# 「产品负责人 <时间> 真机验收通过」这一行，没有就判未通过（验收即放行，验收发生在开 PR 之前，AGENTS.md「角色」）。
+# Dependabot 的 PR 正文没有 closes #N：按「依赖升级、无关联卡」照常评审，不放行、不跳过。
 #
 # 判定从 agent 输出最后一行的 VERDICT 解析：不是 PASS 就是失败（agent 挂了、没给 VERDICT、
 # 评审期间改动了检出，一律按失败，宁可误拦不放过）。
@@ -17,7 +19,8 @@
 #                       --allowedTools 参数，prompt 走 stdin，即可替换；测试用假 agent）
 #   PPASS_REVIEW_MODEL  默认模型（--model 优先）
 #   PPASS_REVIEW_MAX_DIFF  diff 超过这个字节数就截断并写明（默认 300000）
-#   PPASS_REVIEW_NO_MERGE  设为 1：评审通过不开自动合入，未通过也不撤销（CI 试跑期只提示用，tools/flow/ci-review.sh）
+#   PPASS_REVIEW_NO_MERGE  设为 1：评审通过不开自动合入，未通过也不撤销（CI 上用，tools/flow/ci-review.sh；
+#                          自动合入由开 PR 的会话开，靠必需检查 review/agent 把关）
 
 set -euo pipefail
 
@@ -75,9 +78,24 @@ PR_BODY="$(printf '%s\n' "$PR_OUT" | sed '1,4d')"
 
 # ── 2. 关联卡：正文里的 closes / fixes / resolves #N ─────────────────
 CARDS="$(printf '%s\n' "$PR_BODY" | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?) +#[0-9]+' | grep -oE '[0-9]+' | sort -un || true)"
-[ -n "$CARDS" ] || die "#${PR} 正文里没有 closes #N，评审不知道对照哪张卡" "在 PR 正文补上 closes #N 再评审。"
-
 CARD_TEXT=""
+if [ -z "$CARDS" ]; then
+  # Dependabot 的依赖升级 PR 没有卡：照常评审，对照说明换成「只许改依赖版本与对应的锁文件 / 哈希」。
+  PR_AUTHOR="$(gh pr view "$PR" -R "$REPO" --json author --jq .author.login 2>/dev/null | tr -d '\r')" || PR_AUTHOR=""
+  case "$PR_AUTHOR" in
+    app/dependabot | dependabot | "dependabot[bot]")
+      CARD_TEXT="
+### 无关联卡：Dependabot 依赖升级
+
+范围：只许改依赖的版本号、对应的锁文件与固定哈希（含 workflow 里 action 的 SHA 与版本注释）。
+
+验收场景：改动只是版本升级，没有夹带其它改动；升级跨了大版本、或 PR 说明里列出不兼容变更时，写明哪些调用点要核对。
+"
+      ;;
+    *) die "#${PR} 正文里没有 closes #N，评审不知道对照哪张卡" "在 PR 正文补上 closes #N 再评审。" ;;
+  esac
+fi
+
 for n in $CARDS; do
   flow_load_issue "$n"
   flow_parse_scope "$I_BODY"
@@ -186,7 +204,7 @@ BODY_FILE="${WORK}/comment.md"
   # 评审正文：去掉最后的 VERDICT 行，原样贴上
   grep -v '^[[:space:]]*VERDICT:[[:space:]]*\(PASS\|FAIL\)[[:space:]]*$' "${WORK}/agent.out" 2>/dev/null || true
   echo
-  echo "<sub>评审人：新开的只读 agent${MODEL:+（${MODEL}）}，只看 PR 改动与关联卡 $(printf '#%s ' $CARDS)；结论只对头提交 \`${SHA:0:10}\` 有效，之后有新提交要重评。</sub>"
+  echo "<sub>评审人：新开的只读 agent${MODEL:+（${MODEL}）}，只看 PR 改动与关联卡 ${CARDS:+$(printf '#%s ' $CARDS)}${CARDS:-（无，Dependabot 依赖升级）}；结论只对头提交 \`${SHA:0:10}\` 有效，之后有新提交要重评。</sub>"
 } >"$BODY_FILE"
 
 gh pr comment "$PR" -R "$REPO" --body-file "$BODY_FILE" >/dev/null 2>&1 ||

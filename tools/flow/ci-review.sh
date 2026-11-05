@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
 # CI 上的独立评审（.github/workflows/ci-review.yml 调用）：ci-review.sh <PR号>
 #
-# 复用 review.sh，试跑期只提示、不挡合入：
-#   - PPASS_REVIEW_NO_MERGE=1：评审通过不开自动合入，未通过也不撤销；
-#   - 本脚本永远退出 0，结论只写 PR 评论和非必需的提交状态 review/agent；
+# 复用 review.sh。结论写成提交状态 review/agent，它是 main 的必需检查（#1435），即合入门禁：
+#   - 起跑先在头提交上写 pending，结论出来再改成 success / failure / error；
+#   - PPASS_REVIEW_NO_MERGE=1：CI 不开、不撤销自动合入（自动合入由开 PR 的会话开，靠必需检查把关；
+#     用 GITHUB_TOKEN 开的自动合入不会触发 main 上的 push 流水线）；
+#   - 本脚本永远退出 0，结论只看状态和 PR 评论；
 #   - 评审 agent 经本脚本自己的「垫片」调用 claude：非 0 退出、超时、没有 VERDICT 行都算
 #     基础设施失败（key、网络、超时），自动重试一次，仍失败就写状态 error + 评论「评审没跑成」，
-#     不当作代码有问题；agent 给出了 VERDICT: FAIL 才是「评审不通过」（状态 failure，review.sh 写）。
+#     error 不算通过、挡合入，但不当作代码有问题；agent 给出了 VERDICT: FAIL 才是「评审不通过」（状态 failure，review.sh 写）。
+#   - 垫片只给 claude 评审要用的环境：去掉 GH_TOKEN / GITHUB_TOKEN（agent 不需要写 GitHub），
+#     加 --setting-sources user --strict-mcp-config（不读 PR 检出里的 .claude/ 配置、hooks、MCP，
+#     防止被评审的 PR 借 hooks 在 job 里执行命令、伪造结论）。
 #
 # 环境变量：
 #   ANTHROPIC_AUTH_TOKEN / ANTHROPIC_BASE_URL / PPASS_REVIEW_MODEL  交给 claude 与 review.sh
@@ -27,7 +32,7 @@ if [ "${PPASS_CI_SHIM:-}" = "1" ]; then
   cat >"${STATE}/prompt"
   reason=""
   for attempt in 1 2; do
-    run=("$CLAUDE" "$@")
+    run=(env -u GH_TOKEN -u GITHUB_TOKEN "$CLAUDE" "$@" --setting-sources user --strict-mcp-config)
     if command -v timeout >/dev/null 2>&1; then run=(timeout "$LIMIT" "${run[@]}"); fi
     rc=0
     "${run[@]}" <"${STATE}/prompt" >"${STATE}/out" 2>"${STATE}/err" || rc=$?
@@ -86,11 +91,17 @@ infra_report() {
       gh api -X DELETE "repos/${REPO}/issues/comments/${cid}" >/dev/null 2>&1 || true
     done
   fi
-  printf '**独立评审：评审没跑成**（头提交 `%s`）\n\n基础设施问题（key、网络、超时或脚本异常），**不是代码有问题**（评审 agent 失败时已自动重试一次）。试跑期不挡合入。\n\n原因：%s\n' \
+  printf '**独立评审：评审没跑成**（头提交 `%s`）\n\n基础设施问题（key、网络、超时或脚本异常），**不是代码有问题**（评审 agent 失败时已自动重试一次）。review/agent=error 不算通过，合入会被挡住：在 Actions 里重跑这次评审即可。\n\n原因：%s\n' \
     "${SHA:0:10}" "$why" >"${STATE}/infra.md"
   gh pr comment "$PR" -R "$REPO" --body-file "${STATE}/infra.md" >/dev/null 2>&1 ||
     echo "ci-review: 贴评论失败" >&2
 }
+
+# 起跑先写 pending：结论没出来之前，这个头提交上的必需检查不是空着而是「等待中」。
+if [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+  gh api -X POST "repos/${REPO}/statuses/${SHA}" -f state=pending -f context="review/agent" \
+    -f description="独立评审进行中" >/dev/null 2>&1 || echo "ci-review: 写状态 pending 失败" >&2
+fi
 
 BEFORE_OK=0
 if list_fail_comments >"${STATE}/before"; then BEFORE_OK=1; fi

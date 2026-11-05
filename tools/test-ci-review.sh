@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# CI 评审（tools/flow/ci-review.sh，#1410）的判据测试：复用 review.sh，试跑期只提示、不挡合入。
+# CI 评审（tools/flow/ci-review.sh，#1410 / #1435）的判据测试：复用 review.sh；结论写成必需检查 review/agent，
+# CI 不开自动合入（由开 PR 的会话开，靠必需检查把关）。
 #
 # 临时仓库（裸 origin 里有 refs/pull/7/head）里走真实路径；gh 与评审 agent 都是桩：
 #   gh     读写 $FAKE 目录：pr 头提交、正文，issue 正文；评论与提交状态记在文件里
@@ -90,6 +91,7 @@ cat >"${TMP}/bin/fake-claude" <<'STUB'
 F="$FAKE"
 cat >/dev/null
 echo x >>"$F/calls"
+printf 'args:%s\ngh_token:%s\n' "$*" "${GH_TOKEN:-}${GITHUB_TOKEN:-}" >"$F/agent.env"
 n="$(wc -l <"$F/calls" | tr -d ' ')"
 case "$(cat "$F/mode")" in
   pass) echo "未发现问题。"; echo "VERDICT: PASS" ;;
@@ -131,6 +133,10 @@ printf 'closes #77\n' >"$FAKE/pr.body"
 SHA="$(cat "$FAKE/pr.sha")"
 # 假 gh 补一条：pr view --json headRefOid（ci-review.sh 取头提交）
 sed -i.bak 's|  "pr view")|  "pr view")\n    case " $* " in *" headRefOid --jq .headRefOid "*) cat "$F/pr.sha"; exit 0 ;; esac|' "${TMP}/bin/gh"
+# 再补一条：pr view --json author（review.sh 遇到没有 closes 的 PR 时看是不是 Dependabot）
+sed -i.bak 's|  "pr view")|  "pr view")\n    case " $* " in *" --json author "*) cat "$F/pr.author" 2>/dev/null; exit 0 ;; esac|' "${TMP}/bin/gh"
+printf 'someone' >"$FAKE/pr.author"
+export GH_TOKEN=stub-gh-token
 
 CI() { (cd "${TMP}/main" && bash tools/flow/ci-review.sh "$@"); }
 reset() {
@@ -145,9 +151,16 @@ reset pass
 CI 7 >"${TMP}/o1" 2>&1 && ok "通过 → 退出 0" || bad "通过却失败：$(tail -3 "${TMP}/o1")"
 has "state=success" "$FAKE/statuses" && has "context=review/agent" "$FAKE/statuses" && ok "状态 review/agent=success" || bad "状态不对：$(cat "$FAKE/statuses")"
 has "独立评审：通过" "$FAKE/comments" && ok "评论写通过" || bad "评论不对"
-[ ! -s "$FAKE/merges" ] && ok "通过 → 不开自动合入（试跑期）" || bad "通过却开了自动合入：$(cat "$FAKE/merges")"
+[ ! -s "$FAKE/merges" ] && ok "通过 → CI 不开自动合入（由开 PR 的会话开，靠必需检查把关）" || bad "通过却开了自动合入：$(cat "$FAKE/merges")"
+head -n 1 "$FAKE/statuses" | grep -qF "state=pending" && tail -n 1 "$FAKE/statuses" | grep -qF "state=success" &&
+  ok "起跑先写 pending，结论出来改成 success" || bad "状态顺序不对：$(cat "$FAKE/statuses")"
+grep -q -- '--setting-sources user --strict-mcp-config' "$FAKE/agent.env" &&
+  ok "评审 agent 不读 PR 检出里的 .claude/ 配置、hooks、MCP" || bad "agent 参数缺隔离：$(cat "$FAKE/agent.env")"
+grep -qx 'gh_token:' "$FAKE/agent.env" && ok "评审 agent 拿不到 GH_TOKEN（写 GitHub 的令牌）" || bad "agent 环境里有 GH_TOKEN：$(cat "$FAKE/agent.env")"
 has "VERDICT: PASS" "${TMP}/o1" && ok "日志里留有 agent 返回的 VERDICT 行" || bad "日志里没有 VERDICT 行"
 [ "$(calls)" = 1 ] && ok "通过 → agent 只调一次" || bad "调了 $(calls) 次"
+(cd "${TMP}/main" && PPASS_REVIEW_AGENT="${TMP}/bin/fake-claude" PPASS_REVIEW_NO_MERGE=1 bash tools/flow/review.sh 7) >/dev/null 2>&1
+grep -qx 'gh_token:stub-gh-token' "$FAKE/agent.env" && ok "反证：不经垫片直接调 agent 时 GH_TOKEN 在（垫片的去除才是生效的那一步）" || bad "反证不成立：$(cat "$FAKE/agent.env")"
 
 echo "==> 不通过（代码有问题）"
 reset fail
@@ -194,6 +207,47 @@ printf 'no card\n' >"$FAKE/pr.body"
 CI 7 >/dev/null 2>&1 && tail -n 1 "$FAKE/statuses" | grep -qF "state=error" && ok "review.sh 提前退出（正文没有 closes）→ error，job 仍成功" || bad "提前退出处理不对：$(cat "$FAKE/statuses")"
 printf 'closes #77\n' >"$FAKE/pr.body"
 
+echo "==> 评审结论绑定头提交"
+reset pass
+printf '%s' "0000000000000000000000000000000000000000" >"$FAKE/pr.sha"
+CI 7 >/dev/null 2>&1
+! has "state=success" "$FAKE/statuses" && tail -n 1 "$FAKE/statuses" | grep -qF "state=error" &&
+  ok "评审途中头提交变了（PR 头与检出不一致）→ 不写 success，写 error" || bad "头提交变了仍写了：$(cat "$FAKE/statuses")"
+printf '%s' "$SHA" >"$FAKE/pr.sha"
+reset pass
+CI 7 >/dev/null 2>&1
+has "statuses/${SHA}" "$FAKE/statuses" && tail -n 1 "$FAKE/statuses" | grep -qF "state=success" &&
+  ok "反证：头提交一致 → success 写在这个头提交上" || bad "反证不对：$(cat "$FAKE/statuses")"
+
+echo "==> 盯梢级：评审 job 替代不了验收"
+reset pass
+printf 'apps/desktop/src/x.ts\n' >"$FAKE/pr.files"
+CI 7 >/dev/null 2>&1
+tail -n 1 "$FAKE/statuses" | grep -qF "state=failure" && has "真机验收通过" "$FAKE/comments" &&
+  ok "碰界面路径、正文缺验收行 → 即使 agent 说 PASS 也是 failure" || bad "缺验收行没挡住：$(cat "$FAKE/statuses")"
+reset pass
+printf 'closes #77\n\n- 产品负责人 2026-11-04 15:30 真机验收通过\n' >"$FAKE/pr.body"
+CI 7 >/dev/null 2>&1
+tail -n 1 "$FAKE/statuses" | grep -qF "state=success" && ok "反证：有验收行 → success" || bad "有验收行仍不过：$(cat "$FAKE/statuses")"
+printf 'closes #77\n' >"$FAKE/pr.body"
+printf 'tools/x.sh\n' >"$FAKE/pr.files"
+
+echo "==> Dependabot：没有 closes 也照常评审"
+reset pass
+printf 'Bumps foo from 1 to 2.\n' >"$FAKE/pr.body"
+printf 'app/dependabot' >"$FAKE/pr.author"
+CI 7 >/dev/null 2>&1
+[ "$(calls)" = 1 ] && tail -n 1 "$FAKE/statuses" | grep -qF "state=success" && has "Dependabot 依赖升级" "$FAKE/comments" &&
+  ok "Dependabot PR 无 closes → 按依赖升级评审，通过即 success" || bad "Dependabot 处理不对：$(cat "$FAKE/statuses") 调用 $(calls)"
+reset fail
+CI 7 >/dev/null 2>&1
+tail -n 1 "$FAKE/statuses" | grep -qF "state=failure" && ok "Dependabot 评审不通过 → failure（不放行）" || bad "Dependabot 不通过却：$(cat "$FAKE/statuses")"
+reset pass
+printf 'someone' >"$FAKE/pr.author"
+CI 7 >/dev/null 2>&1
+[ "$(calls)" = 0 ] && tail -n 1 "$FAKE/statuses" | grep -qF "state=error" && ok "反证：别人的 PR 无 closes → 不评审、error" || bad "反证不对：$(cat "$FAKE/statuses") 调用 $(calls)"
+printf 'closes #77\n' >"$FAKE/pr.body"
+
 echo "==> 不带开关时 review.sh 行为不变（反证）"
 reset pass
 export PPASS_REVIEW_AGENT="${TMP}/bin/fake-claude"
@@ -223,6 +277,16 @@ per=int(re.search(r'PPASS_CI_TIMEOUT:-(\d+)',sh).group(1))
 job=int(re.search(r'timeout-minutes: (\d+)',yml).group(1))*60
 sys.exit(0 if 2*per+10+600 < job else 1)
 PY2
+
+echo "==> workflow 的触发与权限（静态核对）"
+WF="${SRC}/.github/workflows/ci-review.yml"
+grep -q '^  pull_request_target:' "$WF" && ! grep -q '^  pull_request:' "$WF" &&
+  ok "触发是 pull_request_target：评审工具取 main 上的版本" || bad "触发不是 pull_request_target"
+! grep -q 'ref: *\${{ *github.event.pull_request.head' "$WF" && ok "不检出 PR 头提交" || bad "检出了 PR 头提交"
+grep -q "sender.type != 'Bot'" "$WF" && ok "edited 不认 bot 改正文" || bad "bot 改正文也会重评"
+! grep -q '^concurrency:' "$WF" && grep -q '^    concurrency:' "$WF" &&
+  ok "并发写在 job 上：被跳过的运行不取消正在跑的评审" || bad "并发写在 workflow 上"
+! grep -qE '^ *contents: *write' "$WF" && ok "不升 contents: write（CI 不开自动合入）" || bad "要了 contents: write"
 
 echo
 echo "ci-review: ${PASS} passed, ${FAIL} failed"

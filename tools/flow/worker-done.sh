@@ -323,7 +323,9 @@ PR_BODY="$(mktemp)"
 {
   for c in $CARDS; do echo "closes #${c}"; done
   echo
-  echo "- 真机验收：${ACCEPT_LINE}"
+  # 验收行单独成行（「- 产品负责人 <时间> 真机验收通过」）：review.sh 只认以「产品负责人」开头的那一行，
+  # 写成「- 真机验收：产品负责人 …」会被判缺验收记录，评审门禁永远不过。
+  echo "- ${ACCEPT_LINE}"
   sed -n '3,$p' "$RECEIPT" | grep -v '^- 真机验收：'
 } >"$PR_BODY"
 rm -f "$RECEIPT"
@@ -333,4 +335,19 @@ PR_URL="$(gh pr create -R "$REPO" --base main --head "$BRANCH" --title "$PR_TITL
 }
 rm -f "$PR_BODY"
 echo "   PR：${PR_URL}"
+# ── 7. 开自动合入：靠必需检查把关（CI 评审 review/agent 即独立评审，AGENTS.md「独立评审」）──────
+# 用本会话的身份开（GITHUB_TOKEN 开的合入不触发 main 上的 push 流水线）。只在 review/agent 已是 main 的必需检查时开：
+# 查不到或不在里面就不开（否则 CI 一绿就合，绕过评审），交给 owner。
+REQ="$(gh api "repos/${REPO}/branches/main/protection/required_status_checks" --jq '.contexts[]' 2>/dev/null | tr -d '\r')" || REQ=""
+if printf '%s\n' "$REQ" | grep -qx 'review/agent'; then
+  MERGE_ERR="$(mktemp)"
+  if gh pr merge "$PR_URL" -R "$REPO" --auto --squash >/dev/null 2>"$MERGE_ERR"; then
+    echo "   已开自动合入（squash）：CI 评审 review/agent 与其它必需检查全过即合；评审未通过就按 PR 评论里的阻断项修。"
+  else
+    echo "   !! 开自动合入失败：$(head -2 "$MERGE_ERR" | tr '\n' ' ')；手动：gh pr merge ${PR_URL} --auto --squash" >&2
+  fi
+  rm -f "$MERGE_ERR"
+else
+  echo "   没开自动合入：review/agent 还不是 main 的必需检查（或读不到保护设置），开了会绕过评审；交 owner。"
+fi
 echo "   下一步：CI 红了修到绿；然后 just start <下一张卡的 issue号>。"

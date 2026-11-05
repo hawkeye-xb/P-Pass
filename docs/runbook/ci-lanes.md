@@ -50,6 +50,13 @@ job 名必须写死**。理由和细节在这里。
 前提是该核心改动已按 AGENTS.md 红线 6 讨论定案（卡上引用定案）；worker 一律不批。有第二位真人协作者后改回人批。判定逻辑与语法见
 `tools/ci-paths.sh` 头注释，自测 `tools/test-ci-paths.sh`。
 
+## 独立评审 `review/agent`
+
+`ci-review.yml` 把评审结论写成**提交状态** `review/agent`（不是 job 名），进 main 必需检查时按状态名登记，
+来源锁 GitHub Actions（`app_id` 15368），本机 gh 写的同名状态不算。job 名 `review (独立评审)` 不进必需列表，
+job 永远成功，结论只看状态。它用 `pull_request_target`：评审工具取 main 上的版本，PR 头提交只当数据读，
+别往里加执行 PR 代码的步骤（理由见该 workflow 头注释）。fork 的 PR 不跑、不出状态，合不进。
+
 ## 删接口 / 升依赖时的全 lane 核对
 
 必需检查只是全部 lane 的子集。iOS FFI、Windows test、E2E 这些非必需 lane 专门覆盖
