@@ -97,7 +97,8 @@ act() {
   win_phone_dump "$d/phone-after-disconnect.xml" || true
 }
 
-task_not_seen() { [ -s "$1" ] && no_line "$1" 'task=Running|task=Ready'; }
+task_not_seen() { [ -s "$1" ] && no_line "$1" 'task=[A-Za-z]'; }
+paired_count() { python3 -I -X utf8 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sum(1 for x in (d if isinstance(d,list) else d.get("devices",[])) if x.get("paired")))' "$1" 2>/dev/null; }
 phone_welcome() { grep -Eq '扫码连接|无法扫码' "$1"; }
 
 judge() {
@@ -137,11 +138,13 @@ teardown() {
     win_ui_click '启动后台服务' >/dev/null 2>&1 || true
     local i
     for i in $(seq 1 30); do win_daemon_running && break; sleep 1; done
+    win_daemon_running || echo "teardown：后台服务未恢复运行" >&2
   fi
   local d="$E3_STATE/win/teardown-pair"
   mkdir -p "$d"
   win_diag "$d" >/dev/null 2>&1 || true
-  if [ "$(win_json_array_len "$d/diag/devices.json")" != 1 ]; then
+  # 断开后 devices.json 仍可能留着 paired=false 的记录；按 paired=true 的台数判断要不要重配。
+  if [ "$(paired_count "$d/diag/devices.json")" != 1 ]; then
     win_app_running || win_start_app >/dev/null 2>&1 || true
     win_pair "$d" >/dev/null 2>&1 || true
   fi

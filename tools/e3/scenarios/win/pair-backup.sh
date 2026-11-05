@@ -182,9 +182,13 @@ counter() {
   rel="$(grep -m1 "^$victim_h " "$d/../main/library-hashes.txt" 2>/dev/null | awk '{print $2}' | sed 's/^\*//')"
   if [ -n "$rel" ]; then
     mkdir -p "$E3_STATE/win/counter-keep"
-    cp "$(win_library_dir)/$rel" "$E3_STATE/win/counter-keep/victim.jpg"
-    echo "$rel" >"$E3_STATE/win/counter-keep/rel.txt"
-    rm -f "$(win_library_dir)/$rel"
+    # 先备好可恢复的副本，成功后才删库里的原图。
+    if cp "$(win_library_dir)/$rel" "$E3_STATE/win/counter-keep/victim.jpg"; then
+      echo "$rel" >"$E3_STATE/win/counter-keep/rel.txt"
+      rm -f "$(win_library_dir)/$rel"
+    else
+      echo "反证：备份原图失败，不删库内文件" >&2
+    fi
   fi
   win_diag "$d" || true
   win_library_hashes "$d" || true
@@ -210,8 +214,11 @@ teardown() {
   if [ -f "$E3_STATE/win/counter-keep/rel.txt" ]; then
     local rel
     rel="$(cat "$E3_STATE/win/counter-keep/rel.txt")"
-    cp "$E3_STATE/win/counter-keep/victim.jpg" "$(win_library_dir)/$rel" 2>/dev/null || true
-    rm -rf "$E3_STATE/win/counter-keep"
+    if cp "$E3_STATE/win/counter-keep/victim.jpg" "$(win_library_dir)/$rel"; then
+      rm -rf "$E3_STATE/win/counter-keep"
+    else
+      echo "teardown：放回 $rel 失败，保留 $E3_STATE/win/counter-keep" >&2
+    fi
   fi
   return 0
 }

@@ -2,10 +2,10 @@
 #
 # 计划任务由壳登记（RunLevel Limited、Interactive），动作是 %LOCALAPPDATA%\P-Pass\ppf-daemon.exe；
 # 看门狗拉起时父进程应是 svchost（SOP §9.3）。
-# 反证：先 Disable-ScheduledTask 再杀 daemon ⇒ 90s 内没有新进程，判据变红；teardown 恢复任务。
+# 反证：先 Disable-ScheduledTask 再杀 daemon ⇒ 看门狗窗口内没有新进程，判据变红；teardown 恢复任务。
 DESC="R3.2：kill -9 daemon 后看门狗 1 分钟内拉起（壳开/关各一次，父进程 svchost）"
 COUNTER=on
-WINDOW="${E3_WIN_WATCHDOG_WINDOW:-90}"
+WINDOW="${E3_WIN_WATCHDOG_WINDOW:-60}"
 
 . "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 
@@ -93,12 +93,18 @@ counter() {
   local d="$OUT" old pid
   # 去掉看门狗这个触发条件：禁用计划任务、关掉壳（壳也会自发拉起 daemon），再杀 daemon。
   win_task_disable
+  if [ "$(win_task_state)" != Disabled ]; then
+    echo "反证：看门狗任务没被禁用（$(win_task_state)）" >&2
+    return 1
+  fi
   win_stop_app
   win_diag "$d" >/dev/null 2>&1 || true
   old="$(win_status_field "$d" pid)"
+  [ -n "$old" ] || { echo "反证：杀之前拿不到 daemon pid" >&2; return 1; }
   echo "$old" >"$d/counter-pid-before.txt"
   win_ps "Stop-Process -Id $old -Force" >/dev/null 2>&1 || true
-  sleep 20
+  # 完整看门狗窗口：任务已禁用，WINDOW 内不应该出现新 pid。
+  sleep "$WINDOW"
   pid="$(win_daemon_pid)"
   echo "${pid:-}" >"$d/counter-pid-after.txt"
   echo "task=$(win_task_state)" >"$d/counter-task.txt"
@@ -107,10 +113,11 @@ counter() {
   cp "$d/counter-pid-before.txt" "$d/shell-open-pid-before.txt"
   cp "$d/counter-pid-after.txt" "$d/shell-open-pid-after.txt"
   cp "$d/counter-daemon.log" "$d/shell-open-daemon.log" 2>/dev/null || true
-  : >"$d/shell-open-parent.txt"
+  # 没有新 pid 就没有父进程；如实记 none，不拿空文件冒充证据。
+  echo "parent_name=none" >"$d/shell-open-parent.txt"
   cp "$d/counter-pid-before.txt" "$d/shell-closed-pid-before.txt"
   cp "$d/counter-pid-after.txt" "$d/shell-closed-pid-after.txt"
-  : >"$d/shell-closed-parent.txt"
+  echo "parent_name=none" >"$d/shell-closed-parent.txt"
 }
 
 teardown() {

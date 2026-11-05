@@ -1,11 +1,9 @@
 # R0.1/R0.2/R0.3：手机装基线正式版；桌面装基线 0.10.1；走完首启向导，daemon 起来。
 #
-# 安装器是 perMachine（manifest requireAdministrator，UAC 必须）；提权会话直接装。
-# 非提权会话不能弹 UAC，按 SOP「记下、跳过」处理：
-#   - 默认 SKIP（77）并说明需要提权；
-#   - 设 E3_WIN_PROVISION=extract 时，用同一个安装包里的文件解到 %LOCALAPPDATA%\P-Pass
-#     并写 HKCU 卸载登记（App 只认这个登记），用来在没有提权的回归机上继续跑非安装类用例。
-#     报告里必须写明「安装器路径未验证」。
+# 本场景只搭**用户态**基线：用安装包载荷解到 %LOCALAPPDATA%\P-Pass 并写 HKCU 卸载登记
+# （App 只认这个登记）。perMachine 真实安装器（Program Files + HKLM + Windows 服务）
+# 由 tools/e3/scenarios/win/installer.sh 覆盖；R0.2 的安装器语义以那个场景为准。
+# 与安装器无关的用例用本场景的用户态基线，提权/非提权会话都一样，避免两套布局混用。
 # 反证：装好后不启动 App（向导没走），版本与主界面判据必须变红。
 DESC="R0.1/R0.2/R0.3：手机与桌面都装基线 0.10.1/0.10.2，桌面走完向导、daemon 起来"
 COUNTER=on
@@ -16,33 +14,28 @@ setup() {
   win_phone_state | grep -qx device || { echo "adb 看不到手机 ${E3_ANDROID_SERIAL}"; return 77; }
   # R0.1：手机卸载重装基线（清数据，保证首次配对状态）。已经是基线也重装——
   # 上一轮留下的配对/范围会让「首次配对」用例失真。
-  local apk
+  # 先把所有 SKIP 前提（APK、安装包）查完，再动手机/桌面状态——
+  # 报 SKIP 的一次运行不能把机器改了一半。
+  local apk exe
   apk="$(win_release_file "$WIN_BASE_TAG" '*_android.apk')"
   [ -n "$apk" ] || { echo "缺基线 APK（$WIN_REL_DIR/$WIN_BASE_TAG/*_android.apk）"; return 77; }
+  exe="$(win_release_file "$WIN_BASE_TAG" '*_x64-setup.exe')"
+  [ -n "$exe" ] || { echo "缺基线安装包（$WIN_REL_DIR/$WIN_BASE_TAG/*_x64-setup.exe）"; return 77; }
+  echo "基线安装包：$exe"
+  echo "sha256：$(sha256sum "$exe" | awk '{print $1}')"
+
+  # R0.1：手机卸载重装基线（清数据，保证首次配对状态）。已经是基线也重装——
+  # 上一轮留下的配对/范围会让「首次配对」用例失真。
   win_phone_stop
   win_adb uninstall com.hawkeyexb.ppass >/dev/null 2>&1 || true
   win_adb install -r "$(cygpath -w "$apk")" >/dev/null || { echo "基线 APK 安装失败"; return 1; }
   win_phone_grant
   [ "$(win_phone_version)" = "$WIN_BASE_PHONE_VER" ] || { echo "手机版本不是 ${WIN_BASE_PHONE_VER}：$(win_phone_version)"; return 1; }
 
-  # 桌面清理到全新机器状态（旧库挪走，不硬删）。
+  # 桌面清理到全新机器状态（旧库挪走，不硬删），再解包安装用户态基线。
   win_reset_desktop_state
-
-  local exe
-  exe="$(win_release_file "$WIN_BASE_TAG" '*_x64-setup.exe')"
-  [ -n "$exe" ] || { echo "缺基线安装包（$WIN_REL_DIR/$WIN_BASE_TAG/*_x64-setup.exe）"; return 77; }
-  echo "基线安装包：$exe"
-  echo "sha256：$(sha256sum "$exe" | awk '{print $1}')"
-  if win_is_elevated; then
-    win_install_silent "$exe" || { echo "安装器失败"; return 1; }
-    echo "provision=installer"
-  elif [ "${E3_WIN_PROVISION:-}" = extract ]; then
-    win_provision_extract "$exe" "$WIN_BASE_VER" || { echo "解包安装失败"; return 1; }
-    echo "provision=extract（本机非提权，安装器路径未验证）"
-  else
-    echo "跳过：安装器需要 UAC 提权（requireAdministrator）；提权会话重跑，或设 E3_WIN_PROVISION=extract 用同一安装包载荷"
-    return 77
-  fi
+  win_provision_extract "$exe" "$WIN_BASE_VER" || { echo "解包安装失败"; return 1; }
+  echo "provision=extract（用户态基线；perMachine 真实安装器见 win/installer）"
   [ -x "$WIN_DESKTOP_EXE" ] && [ -x "$WIN_DAEMON_EXE" ] || { echo "安装目录缺可执行文件"; return 1; }
 }
 

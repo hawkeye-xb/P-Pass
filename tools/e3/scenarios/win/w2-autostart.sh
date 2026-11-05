@@ -16,10 +16,13 @@ act() {
   win_ps "
 \$t=Get-ScheduledTask -TaskName 'P-Pass' -ErrorAction SilentlyContinue
 if(\$t){
-  (\$t.Actions | Select-Object -First 1).Execute
+  \$a=(\$t.Actions | Select-Object -First 1)
+  'EXECUTE=' + \$a.Execute
+  'ARGUMENTS=' + \$a.Arguments
   'STATE=' + \$t.State
   'PRINCIPAL=' + \$t.Principal.UserId + '/' + \$t.Principal.LogonType + '/' + \$t.Principal.RunLevel
   'TRIGGERS=' + ((\$t.Triggers | ForEach-Object { \$_.CimClass.CimClassName }) -join ',')
+  'REPETITION=' + ((\$t.Triggers | Where-Object { \$_.Repetition } | ForEach-Object { \$_.Repetition.Interval }) -join ',')
 } else { 'NO_TASK' }
 " >"$d/task.txt" 2>&1
   if win_run_value_exists; then echo "RUN_VALUE_PRESENT" >"$d/run-value.txt"; else echo "RUN_VALUE_ABSENT" >"$d/run-value.txt"; fi
@@ -32,26 +35,48 @@ if(\$t){
 
 judge() {
   local d="$1"
-  check "计划任务存在且动作是安装目录里的 ppf-daemon" grep -Fq "$WIN_APP_DIR_WIN\\ppf-daemon.exe" "$d/task.txt"
+  check "计划任务的 Execute 是安装目录里的 ppf-daemon" grep -Fq "EXECUTE=$WIN_APP_DIR_WIN\\ppf-daemon.exe" "$d/task.txt"
   check "计划任务在运行" grep -q 'STATE=Running' "$d/task.txt"
   check "任务主体是交互用户、Limited（不弹 UAC）" grep -q 'PRINCIPAL=.*/Interactive/Limited' "$d/task.txt"
-  check "有登录触发和看门狗重复触发" grep -Eq 'TRIGGERS=.*LogonTrigger' "$d/task.txt"
+  check "有登录触发" grep -Eq 'TRIGGERS=.*LogonTrigger' "$d/task.txt"
+  check "看门狗每分钟重复触发（PT1M）" grep -Eq 'REPETITION=.*PT1M' "$d/task.txt"
   check "HKCU Run 下没有 P-Pass 值" eq_file "$d/run-value.txt" "RUN_VALUE_ABSENT"
   check "daemon 在跑" grep -Eq '^daemon_pid=[0-9]+' "$d/state.txt"
   verdict
 }
 
 counter() {
-  local d="$OUT"
-  # 去掉触发条件：人为写回一个 HKCU Run 值，判据必须变红。
-  win_ps "New-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'P-Pass' -Value 'C:\\fake\\p-pass-desktop.exe' -PropertyType String -Force | Out-Null" >/dev/null 2>&1 || true
+  local d="$OUT" orig="$E3_STATE/win/w2-run-orig.txt" val_file="$E3_STATE/win/w2-run-orig-value.txt"
+  mkdir -p "$(dirname "$orig")"
+  # 先保存用户原有的 Run 值（不存在记 ABSENT）；teardown 按原样恢复/删除。
+  win_ps "
+\$v=(Get-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'P-Pass' -ErrorAction SilentlyContinue).'P-Pass'
+if(\$null -eq \$v){ 'ABSENT' } else { 'VALUE=' + \$v }
+" >"$orig" 2>&1
+  # 去掉触发条件：人为写回一个 HKCU Run 值，判据必须变红。写不进去就是反证本身失败，不能算红。
+  win_ps "New-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'P-Pass' -Value 'C:\\fake\\p-pass-desktop.exe' -PropertyType String -Force | Out-Null" >/dev/null 2>&1 ||
+    { echo "反证：写 HKCU Run 值失败" >&2; return 1; }
+  win_run_value_exists || { echo "反证：写入后读不到 HKCU Run 值" >&2; return 1; }
+  echo "RUN_VALUE_PRESENT" >"$d/run-value.txt"
   cp "$EV/main/task.txt" "$d/task.txt" 2>/dev/null || true
-  # 真读注册表：写不进去就记 MISSING，判据是否变红与写入结果绑定。
-  if win_run_value_exists; then echo "RUN_VALUE_PRESENT" >"$d/run-value.txt"; else echo "RUN_VALUE_MISSING" >"$d/run-value.txt"; fi
   cp "$EV/main/state.txt" "$d/state.txt" 2>/dev/null || true
+  rm -f "$val_file"
+  sed -n 's/^VALUE=//p' "$orig" >"$val_file" 2>/dev/null || true
 }
 
 teardown() {
-  win_ps "Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'P-Pass' -ErrorAction SilentlyContinue" >/dev/null 2>&1 || true
+  local orig="$E3_STATE/win/w2-run-orig.txt" val_file="$E3_STATE/win/w2-run-orig-value.txt"
+  if [ -s "$orig" ] && grep -q '^VALUE=' "$orig"; then
+    # 原值存在：恢复原值（值里可能有空格/引号，用变量传入）。
+    win_ps "
+\$v=[IO.File]::ReadAllText('$(cygpath -w "$val_file")').TrimEnd([char]13,[char]10)
+Set-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'P-Pass' -Value \$v -Type String
+" >/dev/null 2>&1 || echo "teardown：恢复原 HKCU Run 值失败，原值见 $val_file" >&2
+    rm -f "$val_file" "$orig"
+  else
+    # 原值不存在：只删除测试写入的值。
+    win_ps "Remove-ItemProperty -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run' -Name 'P-Pass' -ErrorAction SilentlyContinue" >/dev/null 2>&1 || true
+    rm -f "$orig"
+  fi
   return 0
 }

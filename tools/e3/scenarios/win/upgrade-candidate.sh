@@ -45,6 +45,11 @@ setup() {
   [ -n "$exe" ] || { echo "缺候选安装包（$WIN_REL_DIR/$WIN_CAND_TAG/*_x64-setup.exe）"; return 77; }
   echo "候选安装包：$exe"
   echo "sha256：$(sha256sum "$exe" | awk '{print $1}')"
+  # 装不了就别开始：非提权且没给 extract 时，setup 返回 SKIP，不动机器状态。
+  win_is_elevated || [ "${E3_WIN_PROVISION:-}" = extract ] || {
+    echo "跳过：安装器需要 UAC 提权；提权会话重跑，或设 E3_WIN_PROVISION=extract"
+    return 77
+  }
   echo "--- 升级前快照 ---"
   snapshot "$EV/main" pre
   cat "$EV/main/pre-versions.txt"
@@ -55,7 +60,12 @@ act() {
   snapshot "$d" pre
   exe="$(win_release_file "$WIN_CAND_TAG" '*_x64-setup.exe')"
   # 覆盖安装：先停壳与 daemon（安装器的 PREINSTALL 钩子在 extract 路径下没有，手动做）。
-  # **保留计划任务**：真实安装器不删它，POSTINSTALL 会重新运行任务；删了壳会以为没装过、重走向导。
+  # 计划任务：真实安装器保留并重跑；extract 路径的 win_provision_extract 会先 unregister 任务，
+  # 装完后任务不在就手动起 daemon（下面的 schtasks /run 分支跳过）。报告里注明这个 extract 偏差。
+  win_is_elevated || [ "${E3_WIN_PROVISION:-}" = extract ] || {
+    echo "跳过：安装器需要 UAC 提权；提权会话重跑，或设 E3_WIN_PROVISION=extract"
+    return 77
+  }
   win_stop_all || { echo "停不掉桌面 App/daemon"; return 1; }
   if win_is_elevated; then
     win_install_silent "$exe" || { echo "候选安装器失败"; return 1; }
@@ -67,6 +77,7 @@ act() {
     echo "跳过：安装器需要 UAC 提权（requireAdministrator）；提权会话重跑，或设 E3_WIN_PROVISION=extract"
     return 1
   fi
+  [ "${E3_WIN_PROVISION:-}" != extract ] || echo "task=removed_by_extract（真实安装器会保留任务）" >"$d/extract-note.txt"
   # 手机覆盖安装候选 APK（保留数据）。
   local apk
   apk="$(win_release_file "$WIN_CAND_TAG" '*_android.apk')"

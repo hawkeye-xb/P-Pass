@@ -9,14 +9,15 @@
 
 | id | 覆盖 | 前置 | 反证 |
 |---|---|---|---|
-| `win/install-baseline` | R0.1 手机基线 0.10.2；R0.2/R0.3 桌面基线 0.10.1 + 首启向导 | 无 | 装好不启动 App（向导不走），版本/主界面判据变红 |
+| `win/install-baseline` | R0.1 手机基线 0.10.2；R0.2/R0.3 桌面**用户态**基线 0.10.1（extract）+ 首启向导 | 无 | 装好不启动 App（向导不走），版本/主界面判据变红 |
 | `win/pair-backup` | R0.4 配对；R0.5 只选 PPassRegression、40 张逐张 sha256 对账 | install-baseline | 从**手机那 40 张**里挑一张删掉库里对应原图再对账，sha256 判据变红（teardown 放回；中途被杀会在库里留缺一张，先看 `$E3_STATE/win/counter-keep`） |
 | `win/upgrade-candidate` | R1.1/R1.2/R1.4 覆盖升级到候选，桌面/daemon/手机版本一致，配对/身份/照片不丢 | pair-backup | 用升级前的真实快照跑同一判据，版本判据变红（不降级、不动库） |
 | `win/backup-after-upgrade` | R1.5 升级后再 push 8 张，增量 +8、不重复 | upgrade-candidate | 不触发这次备份（用 push 前快照 + 8 张哈希），8 张全部报缺 |
-| `win/svc-watchdog` | R3.2 强杀 daemon，1 分钟内拉起（壳开/关各一次） | upgrade-candidate | 禁用计划任务再杀，90s 内没有新进程 |
+| `win/svc-watchdog` | R3.2 强杀 daemon，1 分钟内拉起（壳开/关各一次） | upgrade-candidate | 禁用计划任务再杀，看门狗窗口内没有新进程 |
 | `win/svc-stop` | R3.3 停服务 2 分钟不被拉起、任务被删、恢复后回来；R4.1 手机断开后桌面标未配对 | pair-backup | 不执行停止（daemon 一直跑），停服务窗口采样出现 pid |
 | `win/w1-console-windows` | W1 启动/自愈/停启服务不闪控制台窗口 | 任一已装状态 | 窗口期内开一个可见控制台，watcher 必须报 CONSOLE |
-| `win/w2-autostart` | W2 自启是计划任务（指向安装目录 daemon），无 HKCU Run 值 | 任一已装状态 | 临时写一个 HKCU Run 值，判据变红（teardown 删除） |
+| `win/w2-autostart` | W2 自启是计划任务（指向安装目录 daemon，登录 + 每分钟看门狗），无 HKCU Run 值 | 任一已装状态 | 临时写一个 HKCU Run 值，判据变红（counter 先保存原值，teardown 恢复） |
+| `win/installer` | R0.2/R1.2 真实 perMachine 安装器（干净 ProgramData 装 0.10.1）、W3 服务运行中覆盖候选、W5 卸载/重装 | 无（桌面端；需要 UAC）；建议放在用户态场景之后跑 | 卸载后不重装，重装后的服务/版本判据必须变红；UAC 每一步由人点「是」 |
 
 ## 前置条件
 
@@ -30,14 +31,17 @@
 
 ## 安装器与 UAC
 
-安装包是 perMachine（PE manifest `requireAdministrator`）：**提权会话**下场景直接跑安装器
-（`run-outside-package.ps1`，绕开 MSIX 虚拟化）。**非提权会话**不能弹 UAC，按 SOP「记下、跳过」处理：
+安装包是 perMachine（PE manifest `requireAdministrator`）。职责分两套，不混用：
 
-- 默认：`win/install-baseline`、`win/upgrade-candidate` 返回 SKIP，原因写「需要 UAC 提权」；
-- 设 `E3_WIN_PROVISION=extract`：用**同一个安装包**里的 `p-pass-desktop.exe` / `ppf-daemon.exe` /
-  `uninstall.exe` 解到 `%LOCALAPPDATA%\P-Pass`，并写 HKCU 卸载登记（App 只认安装程序登记的
-  `InstallLocation`）。这样能在没有提权的机器上继续跑非安装类用例；**报告必须写明「安装器路径未验证」**。
-- 解包依赖 7-Zip 的完整版 `7z.exe`（NSIS 格式）；本机放在 `$E3_STATE/win/tools/7zfull/`。
+- `win/install-baseline` **只搭用户态基线**：把**同一个安装包**里的 `p-pass-desktop.exe` /
+  `ppf-daemon.exe` / `uninstall.exe` 解到 `%LOCALAPPDATA%\P-Pass`，并写 HKCU 卸载登记
+  （App 只认安装程序登记的 `InstallLocation`）；与安装器无关的用例都跑这套。解包依赖 7-Zip 完整版
+  `7z.exe`（NSIS 格式，本机在 `$E3_STATE/win/tools/7zfull/`）。
+- `win/upgrade-candidate` 在非提权且没设 `E3_WIN_PROVISION=extract` 时 **SKIP**（不改机器状态）；
+  extract 路径会先 unregister 计划任务，装完任务不在就手动起 daemon，报告里注明这个偏差。
+- `win/installer` 是**真实安装器语义**：每步 `Start-Process -Verb RunAs` 弹 UAC，由人点「是」；
+  覆盖 R0.2（干净 ProgramData 装基线）、R1.2/W3（服务运行中覆盖候选）、W5（卸载/重装 + 数据/身份保留）。
+  需要提权会话，且跑完会留下 perMachine 候选（Program Files + Windows 服务），建议放在用户态场景之后。
 
 ## 为什么另写 gen-photos.ps1
 
@@ -70,5 +74,5 @@
 
 - R2.1–R2.5 大批量/断网/崩溃/取回/删除、R3.4 Doze、R4.2–R4.3、R5.1–R5.2 隐私检索、R6 界面观感：
   本卡未写成场景（R3.4/R6.2 按 SOP 归人工）。
-- W3（daemon 在跑时覆盖安装）、W5（卸载/重装）：安装器路径，需要 UAC 提权。
+- W3（daemon 在跑时覆盖安装）、W5（卸载/重装）：由 `win/installer` 覆盖（需要 UAC，人在旁边点「是」）。
 - W4 `powercfg /requests`：需要管理员；W6 低磁盘通知：需要接近写满的测试机。
