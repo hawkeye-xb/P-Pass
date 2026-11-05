@@ -23,7 +23,7 @@ gate() {
   printf '%s\n' "$body" >"${TMP}/body"
   bash "$G" check --repo "${TMP}/repo" --files "${TMP}/files" --body "${TMP}/body" >"${TMP}/out" 2>&1
   rc=$?
-  if [ "$rc" = "$want" ]; then ok "$desc"; else bad "$desc（期望 ${want}，实际 ${rc}：$(tr '\n' ' ' <"${TMP}/out")）"; fi
+  if [ "$rc" = "$want" ]; then ok "${desc}"; else bad "${desc}（期望 ${want}，实际 ${rc}：$(tr '\n' ' ' <"${TMP}/out")）"; fi
 }
 
 UI=apps/ios/PPass/Home.swift
