@@ -1,0 +1,64 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit 降噪配置（#1421）。键名以官方 schema.v2 为准。
+# main 要求「对话全部解决」才能合入，CodeRabbit 每条行内意见都要开 PR 的会话判定、回复、关闭
+# （AGENTS.md「交付流程」，just pr-thread）。所以这里只留它擅长的通用代码正确性意见，
+# 摘要、走查、诗、标签与评审人建议这类不需要处理却占篇幅的输出一律关掉。
+# 范围、验收、产品取向由独立评审（AGENTS.md）与产品负责人把关，不交给 CodeRabbit。
+
+language: zh-CN
+tone_instructions: "只指出会导致错误行为的具体问题，直接说哪一行、什么输入下出错、怎么改。不评风格、命名、措辞，不提可有可无的建议，不复述改动。"
+
+reviews:
+  profile: chill
+  # 不要摘要、走查、诗与各类附加段落
+  high_level_summary: false
+  high_level_summary_in_walkthrough: false
+  collapse_walkthrough: true
+  changed_files_summary: false
+  sequence_diagrams: false
+  estimate_code_review_effort: false
+  assess_linked_issues: false
+  related_issues: false
+  related_prs: false
+  suggested_labels: false
+  suggested_reviewers: false
+  auto_apply_labels: false
+  auto_assign_reviewers: false
+  poem: false
+  review_details: false
+  in_progress_fortune: false
+  auto_review:
+    enabled: true
+    drafts: false
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+  # 证据、日志不是代码，不评
+  path_filters:
+    - "!docs/evidence/**"
+    - "!evidence/**"
+  # 中文文档的拼写 / 格式检查只会刷屏；markdown 由仓库自己的 md-check 管。CI 失败由开 PR 的会话自己看。
+  tools:
+    languagetool:
+      enabled: false
+    markdownlint:
+      enabled: false
+    github-checks:
+      enabled: false
+  path_instructions:
+    - path: "**"
+      instructions: |
+        只评通用代码正确性：逻辑错误、边界条件、错误处理遗漏、并发与资源泄漏、shell 引号与 set -e 陷阱、
+        路径与编码问题、安全问题（注入、凭据泄露）、测试断言写错或测不到想测的东西。
+        不评：代码风格、命名、注释措辞、文档文字润色、「可以考虑」类的可选建议、重复改动摘要。
+        拿不准是不是问题的，不发。
+        仓库红线（违反时指出）：不做任何遥测或使用统计上报；凭据不进代码与文档；只做图片备份，不做文件同步；
+        新增落盘目录要有清理条件（占盘 1x）。
+    - path: "**/*.md"
+      instructions: |
+        文档只在命令、路径、参数与仓库实物不一致，或前后规则自相矛盾时指出；不评文字风格与排版。
+
+chat:
+  art: false

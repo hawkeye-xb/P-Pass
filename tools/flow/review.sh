@@ -144,20 +144,13 @@ NEEDS_ACCEPT=""
 CORE_RULES="${WORK}/core-paths.txt"
 # Git Bash 会把 origin/main:<path> 的冒号当路径分隔符改写；禁止 MSYS 做路径转换。
 MSYS_NO_PATHCONV=1 git -C "$TOP" show origin/main:.github/core-paths.txt >"$CORE_RULES" 2>/dev/null || : >"$CORE_RULES"
-if [ "$(bash "${TOP}/tools/ci-paths.sh" core - "$CORE_RULES" <"${WORK}/pr.files" 2>/dev/null)" != "false" ]; then
-  NEEDS_ACCEPT="碰核心路径（人控级）"
-fi
-# 界面与文案路径的清单与 owner-triage.sh 共用同一份；读不到就按需要验收处理（宁严勿松）。
-UI_GLOBS="$(sed -n 's/^UI_GLOBS="\(.*\)"$/\1/p' "${FLOW_DIR}/owner-triage.sh" 2>/dev/null)"
-if [ -z "$UI_GLOBS" ]; then
-  NEEDS_ACCEPT="${NEEDS_ACCEPT:-读不到界面路径清单，按盯梢级处理}"
-else
-  # shellcheck disable=SC2086 # 清单里是空格分隔的 glob，刻意拆开
-  set -f
-  [ "$(bash "${TOP}/tools/ci-paths.sh" hit - $UI_GLOBS <"${WORK}/pr.files" 2>/dev/null)" != "false" ] &&
-    NEEDS_ACCEPT="${NEEDS_ACCEPT:-碰界面或文案路径（盯梢级）}"
-  set +f
-fi
+# 判定与 worker-done.sh、CI 的 acceptance gate 共用 acceptance-gate.sh classify（核心路径、界面文案路径、
+# apps/** 下的非测试文件；读不到界面清单按需要验收处理，宁严勿松）。核心路径规则取 origin/main 上的。
+case "$(bash "${FLOW_DIR}/acceptance-gate.sh" classify --repo "$TOP" --core-rules "$CORE_RULES" <"${WORK}/pr.files" 2>/dev/null)" in
+  none) ;;
+  core) NEEDS_ACCEPT="碰核心路径（人控级）" ;;
+  *) NEEDS_ACCEPT="碰界面或文案路径、App 代码（盯梢级）" ;;
+esac
 
 # ── 3. 改动 diff ─────────────────────────────────────────────────────
 gh pr diff "$PR" -R "$REPO" >"${WORK}/pr.diff" 2>"${WORK}/diff.err" ||
@@ -238,8 +231,11 @@ if [ -n "$INFRA" ]; then
   exit 1
 fi
 # 盯梢、人控级：PR 正文必须有验收记录；没有就算未通过（即使 agent 说 PASS）。
+# 验收行的判定与 CI 的 acceptance gate 共用 acceptance-gate.sh check（同一个正则，不在这里再抄一份）。
+printf '%s\n' "$PR_BODY" >"${WORK}/body.check"
 if [ "$VERDICT" = "PASS" ] && [ -n "$NEEDS_ACCEPT" ] &&
-  ! printf '%s\n' "$PR_BODY" | grep -qE '^[*_> -]*产品负责人 ([0-9]{4}-)?[0-9]{2}-[0-9]{2}( +[0-9]{1,2}:[0-9]{2})? *(本地)?真机验收通过([*_ ]*|\*\*.*)$'; then
+  ! bash "${FLOW_DIR}/acceptance-gate.sh" check --repo "$TOP" --core-rules "${WORK}/core-paths.txt" \
+    --files "${WORK}/pr.files" --body "${WORK}/body.check" >/dev/null 2>&1; then
   VERDICT="FAIL"
   REASON="${NEEDS_ACCEPT}，PR 正文缺「产品负责人 <时间> 真机验收通过」这一行（须单独成行、以「产品负责人」开头、时间处是具体日期如 2026-11-04）：没有验收记录不开自动合入。验收通过后在 PR 正文补上这一行，再重跑 just review。"
 fi

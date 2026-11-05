@@ -17,6 +17,8 @@ set -uo pipefail
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
+# 真实 PATH：下面把 PATH 换成假命令目录跑流程；个别用例要跑真实脚本（#1425）。
+REAL_PATH="$PATH"
 
 PASS=0
 FAIL=0
@@ -137,6 +139,7 @@ case "$1 $2" in
         --head) printf '%s' "$2" >"$G/pr.created"; shift 2 ;;
         --title) printf '%s' "$2" >"$G/pr.title"; shift 2 ;;
         --body-file) cp "$2" "$G/pr.body"; shift 2 ;;
+        --draft) : >"$G/pr.draft"; shift ;;
         *) shift ;;
       esac
     done
@@ -468,6 +471,37 @@ printf '# touched\n' >>"$W/tools/test-other.sh"
 git -C "$W" add -A && git -C "$W" commit -q -s -m "touch test"
 DONE "$W" >/dev/null 2>&1
 comments_of 130 | grep -qF "bash tools/test-other.sh" && ok "改 tools/test-*.sh → 跑它自己" || bad "没跑改动的测试"
+# tools/ios/test-*.sh 是构建辅助脚本的测试，不是 App 代码：跑脚本自身，不拉模拟器（#1425）
+W="$(card 132 "[T-132] ios tool test" "tools/**")"
+mkdir -p "$W/tools/ios"
+printf '#!/usr/bin/env bash
+exit 0
+' >"$W/tools/ios/test-stamp-version.sh"
+chmod +x "$W/tools/ios/test-stamp-version.sh"
+git -C "$W" add -A && git -C "$W" commit -q -s -m "ios tool test"
+DONE "$W" >"${TMP}/o132" 2>&1
+C32="$(comments_of 132)"
+printf '%s' "$C32" | grep -qF "bash tools/ios/test-stamp-version.sh" && ok "改 tools/ios/test-*.sh → 跑该脚本自身" || bad "tools/ios 测试门禁不对：$(tail -4 "${TMP}/o132")"
+printf '%s' "$C32" | grep -qF "just ios-test" && bad "tools/ios 测试仍拉了 just ios-test" || ok "反证：没有拉模拟器 lane"
+# #1425 评审 1/2：真实 test-stamp-version.sh 在本平台能跑通（非 macOS 跳过 plist 节）——
+# 这条会在修 #1420 的 plutil 依赖之前红，E1 第二条有可判红的证据。
+if PATH="$REAL_PATH" "$REAL_BASH" "$SRC/tools/ios/test-stamp-version.sh" >"${TMP}/stamp-real.out" 2>&1; then
+  ok "真实 tools/ios/test-stamp-version.sh 在本平台跑通（plist 节按平台跳过）"
+else
+  bad "真实 tools/ios/test-stamp-version.sh 在本平台失败：$(tail -3 "${TMP}/stamp-real.out")"
+fi
+# 删除 tools/ios/test-*.sh → 不跑不存在的脚本（#1425 评审）
+mkdir -p "$M/tools/ios"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$M/tools/ios/test-old.sh"
+git -C "$M" add tools/ios/test-old.sh && git -C "$M" commit -q -s -m "seed ios tool test"
+git -C "$M" push -q origin HEAD:refs/heads/main
+W="$(card 133 "[T-133] ios tool deleted" "tools/**")"
+git -C "$W" rm -q tools/ios/test-old.sh
+git -C "$W" commit -q -s -m "delete ios tool test"
+DONE "$W" >"${TMP}/o133" 2>&1
+C33="$(comments_of 133)"
+printf '%s' "$C33" | grep -qF "bash tools/ios/test-old.sh" && bad "删除的 ios 测试脚本仍被当门禁" || ok "删除的 ios 测试脚本不跑"
+printf '%s' "$C33" | grep -qF '`just ci`' && ok "反证：删除后没剩可挑的 → 退回 just ci（不是跑不存在的脚本）" || bad "删除后没退回 just ci：$(tail -4 "${TMP}/o133")"
 # 挑出来的测试红 → blocked，不推
 W="$(card 131 "[T-131] tools test red" "tools/**")"
 printf '# touched2\n' >>"$W/tools/ci-paths.sh"
@@ -546,12 +580,20 @@ has_lbl 51 "status:doing" && has_lbl 52 "status:doing" && ok "多卡：两张卡
 printf '%s' "$OUT" | grep -q 'src/\*\*' && printf '%s' "$OUT" | grep -q 'docs/\*\*' && ok "多卡：打印的范围是并集" || bad "多卡范围没取并集"
 commit_file "$MW" src/m.txt
 commit_file "$MW" docs/m.md
+rm -f "${FAKE_GH}/pr.body" "${FAKE_GH}/pr.created" "${FAKE_GH}/pr.title" "${FAKE_GH}/pr.draft"
 if DONE "$MW" >"${TMP}/o51" 2>&1; then ok "多卡：两张卡范围内的文件都放行"; else bad "多卡交卡失败：$(tail -5 "${TMP}/o51")"; fi
+# #1421：just done 不自己开 PR，只打印命令；执行者运行打印的命令才开出 PR
+[ ! -e "${FAKE_GH}/pr.created" ] && ok "done 不自己调 gh pr create" || bad "done 自己开了 PR"
+pr_cmd() { sed -n 's/^PR-CREATE: //p' "$1"; }
+[ "$(pr_cmd "${TMP}/o51" | grep -c '^gh pr create ')" = 1 ] && ok "done 打印了一条开 PR 命令（PR-CREATE:）" || bad "done 没打印开 PR 命令"
+(cd "$MW" && eval "$(pr_cmd "${TMP}/o51")") >/dev/null 2>&1 || bad "打印的开 PR 命令跑不起来：$(pr_cmd "${TMP}/o51")"
+[ "$(cat "${FAKE_GH}/pr.created" 2>/dev/null)" = "feat/51-onboarding-gate" ] && ok "反证：运行打印的命令 → 在本分支开出 PR" || bad "运行打印的命令没开出本分支的 PR"
 comments_of 51 | grep -q "worker 已交卡" && comments_of 52 | grep -q "worker 已交卡" && ok "多卡：回执贴到每张卡" || bad "回执没贴到每张卡"
 has_lbl 51 "status:review" && has_lbl 52 "status:review" && ok "多卡：两张卡都转 review" || bad "多卡交卡后标签不对"
 grep -qx 'closes #51' "${FAKE_GH}/pr.body" && grep -qx 'closes #52' "${FAKE_GH}/pr.body" &&
   ok "多卡：PR 正文 closes 两张卡" || bad "PR 正文没 closes 两张卡：$(cat "${FAKE_GH}/pr.body" 2>/dev/null | head -5)"
 grep -q '不需要真机验收' "${FAKE_GH}/pr.body" && ok "用户看不到的改动：PR 写明不需要真机验收" || bad "PR 没写验收说明"
+[ ! -e "${FAKE_GH}/pr.draft" ] && ok "自动级：PR 不带 --draft" || bad "自动级 PR 带了 --draft"
 # 反证：同样的改动，分支只记一张卡 → 第二张卡范围内的文件算越界
 issue 54 "status:ready" "[T-54] single" "src/**" "Bug"
 SW="$(START 54 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/54-"*)"
@@ -559,45 +601,72 @@ commit_file "$SW" src/m.txt
 commit_file "$SW" docs/m.md
 if DONE "$SW" >"${TMP}/o54" 2>&1; then bad "单卡分支放行了别的卡范围里的文件"; else ok "反证：只认一张卡时 docs/ 越界被拒"; fi
 
-# 用户看得到的改动：没给验收时间 → 只推分支、不开 PR；给了 → PR 写「产品负责人 <时间> 真机验收通过」
-issue 55 "status:ready" "[T-55] visible" "apps/**" "Bug"
+# PR 正文写不进去（旧的 pr-body.md 只读）→ 失败、不打印开 PR 命令，免得用旧正文开 PR
+issue 57 "status:ready" "[T-57] body" "src/**" "Bug"
+BW="$(START 57 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/57-"*)"
+commit_file "$BW" src/b.txt
+mkdir -p "${PPASS_WT_ROOT}/.evidence/57"
+echo "closes #999 旧正文" >"${PPASS_WT_ROOT}/.evidence/57/pr-body.md"
+chmod 444 "${PPASS_WT_ROOT}/.evidence/57/pr-body.md"
+if DONE "$BW" >"${TMP}/o57" 2>&1; then bad "PR 正文写不进去仍成功"; else ok "PR 正文写不进去 → done 失败"; fi
+[ -z "$(pr_cmd "${TMP}/o57")" ] && ok "  写不进去时不打印开 PR 命令" || bad "写不进去仍打印了开 PR 命令"
+chmod 644 "${PPASS_WT_ROOT}/.evidence/57/pr-body.md"
+DONE "$BW" >"${TMP}/o57b" 2>&1 && [ -n "$(pr_cmd "${TMP}/o57b")" ] && grep -qx 'closes #57' "${PPASS_WT_ROOT}/.evidence/57/pr-body.md" &&
+  ok "反证：可写后打印命令，正文是新的" || bad "可写后仍失败或正文没更新：$(tail -3 "${TMP}/o57b")"
+
+# 用户看得到的改动：没给验收时间 → 开草稿 PR（--draft，正文「待产品负责人真机验收」）；
+# 给了 → 正式 PR，正文单独一行「产品负责人 <时间> 真机验收通过」
+issue 55 "status:ready" "[T-55] visible" "apps/ios/**" "Bug"
 VW="$(START 55 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/55-"*)"
-mkdir -p "$VW/apps/x"
-commit_file "$VW" apps/x/ui.txt
-rm -f "${FAKE_GH}/pr.body" "${FAKE_GH}/pr.created"
+mkdir -p "$VW/apps/ios/PPass"
+commit_file "$VW" apps/ios/PPass/Ui.swift 'let ui = 1'
+VTITLE="fix: 标题带 'quote' 与 \$HOME 原样"
+git -C "$VW" commit -q --amend -s -m "$VTITLE"
+rm -f "${FAKE_GH}/pr.body" "${FAKE_GH}/pr.created" "${FAKE_GH}/pr.draft" "${FAKE_GH}/pr.title"
 DONE "$VW" >"${TMP}/o55" 2>&1 || bad "可见改动交卡失败：$(tail -5 "${TMP}/o55")"
 on_origin "fix/55-visible" && ok "可见改动：分支已推送" || bad "可见改动没推分支"
-[ ! -e "${FAKE_GH}/pr.created" ] && ok "可见改动没给验收时间：不开 PR" || bad "没验收就开了 PR"
-grep -q 'just done --accepted' "${TMP}/o55" && ok "  提示先验收再 --accepted" || bad "没提示先验收"
+[ ! -e "${FAKE_GH}/pr.created" ] && ok "  可见改动：done 自己也不开 PR" || bad "可见改动 done 自己开了 PR"
+pr_cmd "${TMP}/o55" | grep -q -- ' --draft ' && ok "  盯梢级：打印的开 PR 命令带 --draft" || bad "盯梢级打印的命令没带 --draft：$(pr_cmd "${TMP}/o55")"
+(cd "$VW" && eval "$(pr_cmd "${TMP}/o55")") >/dev/null 2>&1 || bad "打印的开 PR 命令跑不起来：$(pr_cmd "${TMP}/o55")"
+[ -e "${FAKE_GH}/pr.created" ] && [ -e "${FAKE_GH}/pr.draft" ] &&
+  ok "盯梢级：没验收也开了草稿 PR（--draft）" || bad "盯梢级没开草稿 PR"
+grep -qF '待产品负责人真机验收' "${FAKE_GH}/pr.body" 2>/dev/null && ok "  草稿正文写「待产品负责人真机验收」" || bad "草稿正文缺待验收说明"
+! grep -qE '^产品负责人 .*真机验收通过' "${FAKE_GH}/pr.body" 2>/dev/null && ok "  草稿正文没有验收通过行" || bad "草稿正文自带验收通过行"
+grep -q 'set_monitor' "${TMP}/o55" && ok "  提示马上打开 PR 监控" || bad "没提示打开 PR 监控"
+[ "$(cat "${FAKE_GH}/pr.title" 2>/dev/null)" = "$VTITLE" ] && ok "标题里的单引号、\$ 经打印的命令原样传给 gh" || bad "标题被改写：$(cat "${FAKE_GH}/pr.title" 2>/dev/null)"
+rm -f "${FAKE_GH}/pr.body" "${FAKE_GH}/pr.created" "${FAKE_GH}/pr.draft"
 DONE "$VW" --accepted "2026-11-04 15:30" >"${TMP}/o55b" 2>&1 || bad "带验收时间交卡失败：$(tail -5 "${TMP}/o55b")"
-grep -qF '产品负责人 2026-11-04 15:30 真机验收通过' "${FAKE_GH}/pr.body" 2>/dev/null &&
-  ok "反证：给了验收时间 → 开 PR，正文写明验收" || bad "给了验收时间仍没开 PR 或正文缺验收行"
-# #1435：验收行单独成行，review.sh 的验收判定认得出（写成「- 真机验收：产品负责人 …」会被判缺验收记录）
-ACCEPT_RE="$(grep -o "'^\[\*_> -\]\*产品负责人[^']*'" "${SRC}/tools/flow/review.sh" | head -1 | tr -d "'")"
-[ -n "$ACCEPT_RE" ] && grep -qE "$ACCEPT_RE" "${FAKE_GH}/pr.body" &&
-  ok "PR 正文的验收行能被 review.sh 的验收判定认出" || bad "review.sh 认不出 PR 正文的验收行（正则：${ACCEPT_RE:-没取到}）"
-printf -- '- 真机验收：产品负责人 2026-11-04 15:30 真机验收通过\n' | grep -qE "$ACCEPT_RE" &&
-  bad "反证失败：旧格式「- 真机验收：产品负责人 …」也被认出，测试没测到东西" || ok "反证：旧格式「- 真机验收：产品负责人 …」认不出"
+(cd "$VW" && eval "$(pr_cmd "${TMP}/o55b")") >/dev/null 2>&1 || bad "打印的开 PR 命令跑不起来：$(pr_cmd "${TMP}/o55b")"
+grep -qxF '产品负责人 2026-11-04 15:30 真机验收通过' "${FAKE_GH}/pr.body" 2>/dev/null &&
+  ok "反证：给了验收时间 → 正文单独一行写明验收" || bad "给了验收时间但正文缺验收行"
+[ -e "${FAKE_GH}/pr.created" ] && [ ! -e "${FAKE_GH}/pr.draft" ] && ok "  已验收：正式 PR，不带 --draft" || bad "已验收却开了草稿（或没开出 PR）"
+# 核心路径同样先开草稿 PR
+issue 56 "status:ready,core" "[T-56] core change" "core/**" "Bug" "**ADR**：docs/decisions/2026-11-01-adopted.md"
+CW="$(START 56 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/56-"*)"
+mkdir -p "$CW/core"
+commit_file "$CW" core/c.txt
+rm -f "${FAKE_GH}/pr.body" "${FAKE_GH}/pr.created" "${FAKE_GH}/pr.draft"
+DONE "$CW" >"${TMP}/o56" 2>&1 || bad "核心改动交卡失败：$(tail -5 "${TMP}/o56")"
+(cd "$CW" && eval "$(pr_cmd "${TMP}/o56")") >/dev/null 2>&1 || bad "打印的开 PR 命令跑不起来：$(pr_cmd "${TMP}/o56")"
+[ -e "${FAKE_GH}/pr.draft" ] && ok "人控级（核心路径）：草稿 PR" || bad "核心路径没开草稿 PR：$(tail -3 "${TMP}/o56")"
 
-# #1435：开 PR 后开自动合入，但只在 review/agent 已是必需检查时（否则 CI 一绿就合，绕过评审）
-[ ! -s "${FAKE_GH}/merges" ] && ok "保护设置读不到 → 不开自动合入" || bad "读不到保护设置却开了自动合入：$(cat "${FAKE_GH}/merges")"
-grep -q '没开自动合入' "${TMP}/o55b" && ok "  提示没开自动合入的原因" || bad "没提示为什么没开自动合入"
+# #1435：自动合入只在 review/agent 已是必需检查时提示开（否则 CI 一绿就合，绕过评审）；done 自己不调 merge
+[ ! -s "${FAKE_GH}/merges" ] && ok "done 自己不调 gh pr merge" || bad "done 自己开了自动合入：$(cat "${FAKE_GH}/merges")"
+! grep -q '^AUTO-MERGE:' "${TMP}/o56" && grep -q '先不开自动合入' "${TMP}/o56" &&
+  ok "保护设置读不到 → 不提示开自动合入，并说明原因" || bad "读不到保护设置却提示开自动合入"
 printf 'identity\nCI Rust gate\n' >"${FAKE_GH}/required"
-issue 56 "status:ready" "[T-56] am-off" "src/**" "Bug"
-AW="$(START 56 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/56-"*)"
+issue 58 "status:ready" "[T-58] am-off" "src/**" "Bug"
+AW="$(START 58 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/58-"*)"
 commit_file "$AW" src/am.txt
-: >"${FAKE_GH}/merges"
-DONE "$AW" >"${TMP}/o56" 2>&1 || bad "交卡失败：$(tail -5 "${TMP}/o56")"
-[ ! -s "${FAKE_GH}/merges" ] && ok "review/agent 不在必需检查里 → 不开自动合入" || bad "不在必需检查里却开了：$(cat "${FAKE_GH}/merges")"
+DONE "$AW" >"${TMP}/o58" 2>&1 || bad "交卡失败：$(tail -5 "${TMP}/o58")"
+! grep -q '^AUTO-MERGE:' "${TMP}/o58" && ok "review/agent 不在必需检查里 → 不提示开自动合入" || bad "不在必需检查里却提示开"
 printf 'identity\nreview/agent\nCI Rust gate\n' >"${FAKE_GH}/required"
-issue 57 "status:ready" "[T-57] am-on" "src/**" "Bug"
-BW="$(START 57 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/57-"*)"
-commit_file "$BW" src/am2.txt
-: >"${FAKE_GH}/merges"
-DONE "$BW" >"${TMP}/o57" 2>&1 || bad "交卡失败：$(tail -5 "${TMP}/o57")"
-grep -q -- '--auto --squash' "${FAKE_GH}/merges" 2>/dev/null && ok "反证：review/agent 是必需检查 → 开 PR 后开自动合入" || bad "必需检查里有 review/agent 却没开自动合入：$(tail -3 "${TMP}/o57")"
+issue 59 "status:ready" "[T-59] am-on" "src/**" "Bug"
+AW2="$(START 59 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/59-"*)"
+commit_file "$AW2" src/am2.txt
+DONE "$AW2" >"${TMP}/o59" 2>&1 || bad "交卡失败：$(tail -5 "${TMP}/o59")"
+grep -q '^AUTO-MERGE: gh pr merge .* --auto --squash' "${TMP}/o59" && ok "反证：review/agent 是必需检查 → 提示开自动合入" || bad "必需检查里有 review/agent 却没提示：$(tail -3 "${TMP}/o59")"
 rm -f "${FAKE_GH}/required"
-
 # ── #1375 共享编译缓存：just start 建主副本旁的 .env.ppass-dev ────────────────
 # 卡目录在主副本旁（<主副本>-wt 之类）时靠 just 往上找到它，不拷；不在旁边时拷进卡目录根。
 cache_norm() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi; }

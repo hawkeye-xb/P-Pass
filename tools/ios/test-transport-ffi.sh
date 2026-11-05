@@ -24,6 +24,11 @@
 #
 # 模拟器选择、"Unable to find a destination" 的处理同 tools/ios/test.sh。
 set -euo pipefail
+# 需要 iOS 模拟器（xcrun/xcodebuild）；非 macOS 平台显式跳过，CI 的 macOS lane 照常跑。
+if [ "$(uname -s)" != Darwin ]; then
+  echo "跳过：test-transport-ffi.sh 需要 macOS 模拟器（xcrun/xcodebuild）"
+  exit 0
+fi
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PKG="$ROOT/apps/ios/TransportFFITests"
 cd "$ROOT"

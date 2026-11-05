@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # just done [--accepted "<时间>"]：在卡 worktree 里交卡。
 #   门禁（just ci / 纯文档 just ci-docs）→ just verify <号>（命令存在才跑）→ 核对改动只含范围内文件
-#   → 全绿才 git push → 在每张卡贴回执 → status:doing→status:review → 开 PR（正文 closes 全部卡）。
+#   → 全绿才 git push → 在每张卡贴回执 → status:doing→status:review → 写好 PR 正文、打印开 PR 的命令
+#   （PR-CREATE: gh pr create …，由执行者自己运行；脚本不开 PR，见第 6 步）。
 # 多卡分支（just start <号> <号>…）：卡号读 git config branch.<分支>.ppasscards，范围取并集。
-# 用户看得到的改动（apps/**、assets/**、核心路径）：要先由产品负责人真机验收，交卡时给
-# --accepted "<时间>"，PR 正文写「产品负责人 <时间> 真机验收通过」；没给就只推分支、不开 PR。
+# 用户看得到的改动（界面与文案路径、核心路径，口径同 owner-triage.sh）：开草稿 PR，
+# 正文写「待产品负责人真机验收」，CI 与评审并行跑；验收后补验收行再 gh pr ready。
+# 交卡时已验收过可给 --accepted "<时间>"：正文直接写「产品负责人 <时间> 真机验收通过」，开正式 PR。
+# 合入前由 CI 的 acceptance gate 检查验收行（tools/flow/acceptance-gate.sh）。
 # 任何一步红：不推送，在 issue 写明停在哪并贴错误末尾，打 status:blocked，退出码非 0。
 # 前置不满足（不在卡 worktree、没提交、工作区不干净、落后 main）只报错退出，不打 blocked。
 # 环境: PPASS_NO_LOCK=1 不套 lockf；PPASS_HOOK_REPO 覆盖仓库。
@@ -170,6 +173,11 @@ while IFS= read -r f; do
       add_gate "just android-test"
       case "$f" in */strings*.xml) add_gate "just mobile-static-check" ;; esac
       ;;
+    tools/ios/test-*.sh)
+      # tools/ios 下的测试脚本是构建辅助脚本的测试（由 mobile-static-check / ci-ios 调），
+      # 不是 App 代码：直接跑它，别拉模拟器。删除的脚本不跑（diff 也会列出已删除路径）；
+      # 需要模拟器的脚本在非 macOS 上自己跳过。
+      [ -f "$f" ] && add_gate "bash $f" ;;
     apps/ios/* | tools/ios/*) add_gate "just ios-test" ;;
     assets/i18n/*) add_gate "just mobile-static-check" ;;
     crates/*/*)
@@ -251,14 +259,18 @@ if [ "$VERIFY_STATE" = "passed" ]; then
 else
   LEVEL="E1（${GATE}）；验收场景未经 just verify 自动验证，E3 需手工补"
 fi
-# 用户看得到的改动：App 与共享资源（apps/**、assets/**）或核心路径。要产品负责人真机验收后才开 PR。
+# 用户看得到的改动：碰界面与文案路径或核心路径（判定口径与 owner-triage.sh 一致，见 acceptance-gate.sh）。
+# 这类改动开草稿 PR，真机验收与 CI、评审并行。
 VISIBLE=0
-[ "$CORE" = "false" ] || VISIBLE=1
-[ "$(printf '%s\n' "$FILES" | bash "$FLOW_PATHS" hit - 'apps/**' 'assets/**' 2>/dev/null)" = "true" ] && VISIBLE=1
+[ "$(printf '%s\n' "$FILES" | bash "${HERE}/acceptance-gate.sh" classify --repo "$TOP")" = none ] || VISIBLE=1
 ACCEPT_LINE=""
+DRAFT_ARGS=()
 if [ "$VISIBLE" = 1 ] && [ -n "$ACCEPTED" ]; then
   ACCEPT_LINE="产品负责人 ${ACCEPTED} 真机验收通过"
-elif [ "$VISIBLE" = 0 ]; then
+elif [ "$VISIBLE" = 1 ]; then
+  ACCEPT_LINE="待产品负责人真机验收"
+  DRAFT_ARGS=(--draft)
+else
   ACCEPT_LINE="用户看不到的改动（工具、测试、文档、内部代码），不需要真机验收"
 fi
 flow_ensure_review_label
@@ -301,17 +313,12 @@ echo
 echo "✅ ${CARDS_SHOW} 已交卡：${BRANCH} 已推送，标签 → status:review，回执已贴。"
 echo "   证据等级：${LEVEL}"
 
-# ── 6. 开 PR（正文 closes 全部卡）──────────────────────────────────────
-if [ -z "$ACCEPT_LINE" ]; then
-  rm -f "$RECEIPT"
-  echo "   用户看得到的改动：没开 PR。先把改动装到真机，请产品负责人验收；"
-  echo "   通过后重跑：just done --accepted \"<验收时间，如 2026-11-04 15:30>\""
-  exit 0
-fi
+# ── 6. 打印开 PR 的命令（正文 closes 全部卡；用户看得到的改动带 --draft）──────────────
 PR_URL="$(gh pr view "$BRANCH" -R "$REPO" --json url --jq .url 2>/dev/null)" || PR_URL=""
 if [ -n "$PR_URL" ]; then
   rm -f "$RECEIPT"
   echo "   PR 已存在：${PR_URL}（已推最新提交）"
+  [ "${#DRAFT_ARGS[@]}" -eq 0 ] || echo "   验收后在 PR 正文补「产品负责人 <日期 时间> 真机验收通过」，再 gh pr ready。"
   exit 0
 fi
 if [ "$(git rev-list --count origin/main..HEAD)" = 1 ]; then
@@ -319,35 +326,49 @@ if [ "$(git rev-list --count origin/main..HEAD)" = 1 ]; then
 else
   PR_TITLE="${BRANCH%%/*}: $(printf '%s' "${TITLES[0]}" | sed -e 's/^\[[^]]*\][[:space:]]*//') ($(printf '#%s ' $CARDS | sed 's/ $//'))"
 fi
-PR_BODY="$(mktemp)"
+# 不在脚本里开 PR，只把正文写进证据目录、打印开 PR 的命令，由执行者自己运行（#1421）：
+# 外壳（如 Claude Desktop 的 PR 监控）只认会话自己直接执行的 gh pr create 为「本会话所开」，
+# 藏在脚本里开的 PR 事后只能按分支绑定，开不了自动修 CI / 处理评审意见。
+PR_BODY="${EVID_DIR}/pr-body.md"
 {
   for c in $CARDS; do echo "closes #${c}"; done
   echo
-  # 验收行单独成行（「- 产品负责人 <时间> 真机验收通过」）：review.sh 只认以「产品负责人」开头的那一行，
-  # 写成「- 真机验收：产品负责人 …」会被判缺验收记录，评审门禁永远不过。
-  echo "- ${ACCEPT_LINE}"
+  if [ "${#DRAFT_ARGS[@]}" -gt 0 ]; then
+    echo "- 真机验收：${ACCEPT_LINE}（草稿 PR；验收后在正文单独补一行「产品负责人 <日期 时间> 真机验收通过」，再 gh pr ready）"
+  elif [ "$VISIBLE" = 1 ]; then
+    echo "$ACCEPT_LINE"
+  else
+    echo "- 真机验收：${ACCEPT_LINE}"
+  fi
   sed -n '3,$p' "$RECEIPT" | grep -v '^- 真机验收：'
-} >"$PR_BODY"
-rm -f "$RECEIPT"
-PR_URL="$(gh pr create -R "$REPO" --base main --head "$BRANCH" --title "$PR_TITLE" --body-file "$PR_BODY" 2>&1)" || {
-  rm -f "$PR_BODY"
-  die "开 PR 失败：$(printf '%s' "$PR_URL" | tail -2 | tr '\n' ' ')" "分支已推送、回执已贴；手动开：gh pr create --head ${BRANCH}，正文 closes ${CARDS_SHOW}"
+  true
+} >"$PR_BODY" || {
+  rm -f "$RECEIPT"
+  die "写 PR 正文失败：${PR_BODY}" "分支已推送、回执已贴；修好这个文件的写权限后重跑 just done（不打印命令，免得用旧正文开 PR）"
 }
-rm -f "$PR_BODY"
-echo "   PR：${PR_URL}"
-# ── 7. 开自动合入：靠必需检查把关（CI 评审 review/agent 即独立评审，AGENTS.md「独立评审」）──────
-# 用本会话的身份开（GITHUB_TOKEN 开的合入不触发 main 上的 push 流水线）。只在 review/agent 已是 main 的必需检查时开：
+rm -f "$RECEIPT"
+sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+PR_CMD="gh pr create -R $(sq "$REPO") --base main --head $(sq "$BRANCH")"
+[ "${#DRAFT_ARGS[@]}" -eq 0 ] || PR_CMD="${PR_CMD} --draft"
+PR_CMD="${PR_CMD} --title $(sq "$PR_TITLE") --body-file $(sq "$PR_BODY")"
+echo "   开 PR：在本目录原样运行下面这条命令（自己运行，不要包进别的脚本；正文已写好，closes ${CARDS_SHOW}）："
+echo
+echo "PR-CREATE: ${PR_CMD}"
+echo
+if [ "${#DRAFT_ARGS[@]}" -gt 0 ]; then
+  echo "   草稿 PR：CI 与评审照常并行跑。请产品负责人真机验收；通过后在正文补验收行，再 gh pr ready。"
+fi
+echo "   开完之后：本会话负责把这个 PR 推进到合入。外壳有 PR 监控的马上打开（Claude Desktop：set_monitor auto_fix，见 CLAUDE.md），"
+echo "     之后被唤醒再修，不手动盯 CI。CI 红、未解决的评审线程、冲突都算没过，修到全清："
+echo "     just pr-status <PR号> 列卡点；评审意见逐条判定，改了或不改都用 just pr-thread <线程ID> \"<理由>\" 回复并关闭。"
+echo "     然后 just start <下一张卡的 issue号>。"
+# 自动合入靠必需检查把关（CI 评审 review/agent 即独立评审，AGENTS.md「独立评审」）：用本会话的身份开
+# （GITHUB_TOKEN 开的合入不触发 main 上的 push 流水线）。只在 review/agent 已是 main 的必需检查时提示开：
 # 查不到或不在里面就不开（否则 CI 一绿就合，绕过评审），交给 owner。
 REQ="$(gh api "repos/${REPO}/branches/main/protection/required_status_checks" --jq '.contexts[]' 2>/dev/null | tr -d '\r')" || REQ=""
 if printf '%s\n' "$REQ" | grep -qx 'review/agent'; then
-  MERGE_ERR="$(mktemp)"
-  if gh pr merge "$PR_URL" -R "$REPO" --auto --squash >/dev/null 2>"$MERGE_ERR"; then
-    echo "   已开自动合入（squash）：CI 评审 review/agent 与其它必需检查全过即合；评审未通过就按 PR 评论里的阻断项修。"
-  else
-    echo "   !! 开自动合入失败：$(head -2 "$MERGE_ERR" | tr '\n' ' ')；手动：gh pr merge ${PR_URL} --auto --squash" >&2
-  fi
-  rm -f "$MERGE_ERR"
+  echo "   自动合入：review/agent 已是必需检查，PR 开出后（草稿的话 gh pr ready 之后）开自动合入，评审与 CI 全过即合："
+  echo "AUTO-MERGE: gh pr merge <PR号> -R $(sq "$REPO") --auto --squash"
 else
-  echo "   没开自动合入：review/agent 还不是 main 的必需检查（或读不到保护设置），开了会绕过评审；交 owner。"
+  echo "   先不开自动合入：review/agent 还不是 main 的必需检查（或读不到保护设置），开了会绕过评审；交 owner。"
 fi
-echo "   下一步：CI 红了修到绿；然后 just start <下一张卡的 issue号>。"

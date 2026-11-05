@@ -206,6 +206,15 @@ reset pass
 printf 'tools/x.sh\n' >"$FAKE/pr.files"
 printf 'closes #77\n' >"$FAKE/pr.body"
 REVIEW 7 >/dev/null 2>&1 && has "--auto --squash" "$FAKE/merges" && ok "反证：用户看不到的改动（tools）不要验收行也通过并开自动合入" || bad "用户看不到的改动被要求验收行"
+# 只改测试文件（apps 下）：与 worker-done / CI gate 同一口径，不要验收行也通过；改正式文件则要
+reset pass
+printf 'apps/desktop/src/foo.test.js\n' >"$FAKE/pr.files"
+printf 'closes #77\n' >"$FAKE/pr.body"
+REVIEW 7 >/dev/null 2>&1 && has "--auto --squash" "$FAKE/merges" && ok "反证：apps 下只改测试文件，不要验收行也通过" || bad "只改测试文件被要求验收行"
+reset pass
+printf 'apps/desktop/src/foo.test.js\napps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt\n' >"$FAKE/pr.files"
+REVIEW 7 >/dev/null 2>&1 && bad "改了 backup/BackupWorker.kt 没有验收行却通过" || ok "改 apps 下的正式文件（备份行为）→ 要验收行"
+printf 'tools/x.sh\n' >"$FAKE/pr.files"
 reset pass
 touch "$FAKE/merge_fail"
 REVIEW 7 >/dev/null 2>&1 && bad "开自动合入失败却退出 0" || ok "开自动合入失败 → 退出非 0"
