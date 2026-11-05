@@ -90,11 +90,11 @@ while :; do
     if [ "$retries" -lt "$max_retries" ]; then
       delay="${delays[$retries]}"
       retries=$((retries + 1))
-      echo "RETRY: 「${name}」退出码 $rc，stderr 命中「${retry_on}」（第 $retries/$max_retries 次重试），${delay}s 后重试" >&2
+      echo "RETRY: 「${name}」退出码 ${rc}，stderr 命中「${retry_on}」（第 ${retries}/${max_retries} 次重试），${delay}s 后重试" >&2
       sleep "$delay"
       continue
     fi
-    echo "FAILED: 「${name}」退出码 $rc，stderr 命中「${retry_on}」，已重试 $max_retries 次仍失败" >&2
+    echo "FAILED: 「${name}」退出码 ${rc}，stderr 命中「${retry_on}」，已重试 ${max_retries} 次仍失败" >&2
     exit "$rc"
   fi
   [ "$rc" -eq 0 ] || echo "FAILED: 「${name}」退出码 $rc" >&2

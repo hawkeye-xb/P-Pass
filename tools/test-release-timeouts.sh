@@ -70,12 +70,18 @@ echo "created: /tmp/fake.dmg"
 SH
 chmod +x "$fake"
 export PPF_RETRY_DELAYS="0 0 0"
+# 发布 runner 是 macOS /bin/bash 3.2 + UTF-8 locale：日志里 $rc 紧挨中文时变量名会吞进多字节首字节，
+# set -u 下 unbound variable 直接退出、重试不发生（check-shell-vars.py 文件头的现场）。这里用 UTF-8 跑，
+# 本机 macOS 上能复现；Linux bash 5 不复现，那条由 check-shell-vars.py 兜。
+utf8_locale="$(locale -a 2>/dev/null | grep -iE '^(en_US|C)\.utf-?8$' | head -1)"
+[ -n "$utf8_locale" ] && export LC_ALL="$utf8_locale"
 
 : > "$TMP/count"
 out="$("$WT" --retry-on 'Resource busy' "hdiutil create" 5 1 -- "$fake" "$TMP/count" 2 2>"$TMP/err")"; rc=$?
 runs=$(wc -l < "$TMP/count" | tr -d ' ')
 { [ "$rc" -eq 0 ] && [ "$runs" -eq 3 ] && [ "$out" = "created: /tmp/fake.dmg" ] \
-  && [ "$(grep -c '^RETRY: 「hdiutil create」' "$TMP/err")" -eq 2 ] && grep -q "Resource busy" "$TMP/err"; } \
+  && [ "$(grep -c '^RETRY: 「hdiutil create」' "$TMP/err")" -eq 2 ] \
+  && [ "$(grep -c '^hdiutil: create failed - Resource busy$' "$TMP/err")" -eq 2 ]; } \
   && pass "busy 两次后成功：跑 3 次、退出码 0、hdiutil 的 stderr 原样回放" || fail "busy 两次后成功：rc=$rc runs=$runs err=$(cat "$TMP/err")"
 
 : > "$TMP/count"
@@ -108,7 +114,7 @@ took=$(( $(date +%s) - start ))
 runs=$(wc -l < "$TMP/count2" | tr -d ' ')
 { [ "$rc" -eq 1 ] && [ "$runs" -eq 2 ] && [ "$took" -ge 2 ] && grep -q "2s 后重试" "$TMP/err"; } \
   && pass "重试间隔按 PPF_RETRY_DELAYS 生效（1 个间隔 = 最多重试 1 次）" || fail "间隔：rc=$rc runs=$runs took=${took}s"
-unset PPF_RETRY_DELAYS
+unset PPF_RETRY_DELAYS LC_ALL
 
 default_delays="$(sed -n 's/^retry_delays="\${PPF_RETRY_DELAYS-\(.*\)}"$/\1/p' "$WT")"
 [ "$default_delays" = "5 10 20" ] && pass "默认间隔 5 10 20 秒（最多重试 3 次）" || fail "默认间隔：$default_delays"
