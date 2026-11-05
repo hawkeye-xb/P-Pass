@@ -38,16 +38,21 @@ for v in 0.5.7-rc.1 0.5.7-test.0 0.5.7-test.500 0.5.7-beta.499 0.5 0.5.7.1 0.100
 done
 if PPF_BUILD_VERSION= PPASS_FALLBACK_VERSION= "$SUT" --print >/dev/null 2>&1; then bad "无输入应报错"; else ok "PPF_BUILD_VERSION 与回退值都为空 ⇒ 报错"; fi
 
-echo "写 plist"
-TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
-P="$TMP/Info.plist"
-plutil -create xml1 "$P" && plutil -insert CFBundleShortVersionString -string 0.0.0 "$P" && plutil -insert CFBundleVersion -string 0 "$P"
-PPF_BUILD_VERSION=v0.5.7-test.1 "$SUT" "$P" >/dev/null
-PPF_BUILD_VERSION=v0.5.8-test.2 "$SUT" "$P" >/dev/null
-r() { /usr/libexec/PlistBuddy -c "Print :$1" "$P" 2>/dev/null; }
-[[ "$(r CFBundleShortVersionString) $(r CFBundleVersion) $(r PPassFullVersion) $(r PPassVersionSource)" == "0.5.8 5008002 0.5.8-test.2 PPF_BUILD_VERSION" ]] && ok "两次盖章后四个键都是第二次的值" || bad "plist 内容不对：$(plutil -p "$P")"
-PPF_BUILD_VERSION= PPASS_FALLBACK_VERSION=0.1.0 "$SUT" "$P" >/dev/null
-[[ "$(r PPassFullVersion) $(r PPassVersionSource)" == "0.1.0 fallback" ]] && ok "PPF_BUILD_VERSION 为空 ⇒ 回退值，来源记 fallback" || bad "回退不对：$(plutil -p "$P")"
+# plutil / PlistBuddy 只在 macOS 上有；其他平台跳过这一节，换算/单调/拒绝三节照跑。
+if command -v plutil >/dev/null 2>&1 && [ -x /usr/libexec/PlistBuddy ]; then
+  echo "写 plist"
+  TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+  P="$TMP/Info.plist"
+  plutil -create xml1 "$P" && plutil -insert CFBundleShortVersionString -string 0.0.0 "$P" && plutil -insert CFBundleVersion -string 0 "$P"
+  PPF_BUILD_VERSION=v0.5.7-test.1 "$SUT" "$P" >/dev/null
+  PPF_BUILD_VERSION=v0.5.8-test.2 "$SUT" "$P" >/dev/null
+  r() { /usr/libexec/PlistBuddy -c "Print :$1" "$P" 2>/dev/null; }
+  [[ "$(r CFBundleShortVersionString) $(r CFBundleVersion) $(r PPassFullVersion) $(r PPassVersionSource)" == "0.5.8 5008002 0.5.8-test.2 PPF_BUILD_VERSION" ]] && ok "两次盖章后四个键都是第二次的值" || bad "plist 内容不对：$(plutil -p "$P")"
+  PPF_BUILD_VERSION= PPASS_FALLBACK_VERSION=0.1.0 "$SUT" "$P" >/dev/null
+  [[ "$(r PPassFullVersion) $(r PPassVersionSource)" == "0.1.0 fallback" ]] && ok "PPF_BUILD_VERSION 为空 ⇒ 回退值，来源记 fallback" || bad "回退不对：$(plutil -p "$P")"
+else
+  echo "写 plist（跳过：plutil/PlistBuddy 只在 macOS 上有）"
+fi
 
 echo
 echo "通过 ${PASS} / 失败 ${FAIL}"
