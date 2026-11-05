@@ -10,12 +10,35 @@
 #   把 --retry-on 的重试分支删掉 →「busy 两次后成功」用例判红。
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# 失败留证：外层把整次输出 tee 到临时文件；红了就把失败用例名与完整输出存进
+# ${PPF_TEST_FAIL_DIR:-<仓库上一级>/.evidence/test-fail}/test-release-timeouts-<时间>.log，
+# 只在终端打一行汇总、截断后查不出是哪条的情况不再发生。绿了不留文件。
+if [ -z "${PPF_TEST_INNER:-}" ]; then
+  outer_log="$(mktemp "${TMPDIR:-/tmp}/test-release-timeouts.XXXXXX")" || exit 1
+  PPF_TEST_INNER=1 bash "$0" "$@" 2>&1 | tee "$outer_log"
+  rc=${PIPESTATUS[0]}
+  if [ "$rc" -ne 0 ]; then
+    fail_dir="${PPF_TEST_FAIL_DIR:-$(dirname "$ROOT")/.evidence/test-fail}"
+    fail_log="${fail_dir}/test-release-timeouts-$(date +%Y%m%d-%H%M%S)-$$.log"
+    if mkdir -p "$fail_dir" && cp "$outer_log" "$fail_log"; then
+      echo "失败留证：${fail_log}" >&2
+    else
+      echo "失败留证写不进 ${fail_dir}，完整输出见上" >&2
+    fi
+  fi
+  rm -f "$outer_log"
+  exit "$rc"
+fi
+
 WT="$ROOT/tools/release/with-timeout.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 fails=0
 pass() { echo "  ✅ $1"; }
-fail() { echo "  ❌ $1" >&2; fails=$((fails + 1)); }
+fail() { echo "  ❌ $1" >&2; fails=$((fails + 1)); failed_names="${failed_names}  - ${1%%：*}
+"; }
+failed_names=""
 
 echo "==> with-timeout.sh"
 
@@ -68,7 +91,8 @@ if [ -n "${3:-}" ]; then echo "hdiutil: create failed - $3" >&2; exit 1; fi
 if [ "$n" -le "$2" ]; then echo "hdiutil: create failed - Resource busy" >&2; exit 1; fi
 echo "created: /tmp/fake.dmg"
 SH
-chmod +x "$fake"
+# 用 bash "$fake" 读脚本，不直接 exec 新建的可执行文件：macOS 对新文件首次 exec 有安全检查，
+# 机器忙时能拖过 5 秒上限，假 hdiutil 一次没跑就被判超时（30 次循环里 5 次，失败留证 runs=0、rc=124）。
 export PPF_RETRY_DELAYS="0 0 0"
 # 发布 runner 是 macOS /bin/bash 3.2 + UTF-8 locale：日志里 $rc 紧挨中文时变量名会吞进多字节首字节，
 # set -u 下 unbound variable 直接退出、重试不发生（check-shell-vars.py 文件头的现场）。这里用 UTF-8 跑，
@@ -77,7 +101,7 @@ utf8_locale="$(locale -a 2>/dev/null | grep -iE '^(en_US|C)\.utf-?8$' | head -1)
 [ -n "$utf8_locale" ] && export LC_ALL="$utf8_locale"
 
 : > "$TMP/count"
-out="$("$WT" --retry-on 'Resource busy' "hdiutil create" 5 1 -- "$fake" "$TMP/count" 2 2>"$TMP/err")"; rc=$?
+out="$("$WT" --retry-on 'Resource busy' "hdiutil create" 5 1 -- bash "$fake" "$TMP/count" 2 2>"$TMP/err")"; rc=$?
 runs=$(wc -l < "$TMP/count" | tr -d ' ')
 { [ "$rc" -eq 0 ] && [ "$runs" -eq 3 ] && [ "$out" = "created: /tmp/fake.dmg" ] \
   && [ "$(grep -c '^RETRY: 「hdiutil create」' "$TMP/err")" -eq 2 ] \
@@ -85,19 +109,19 @@ runs=$(wc -l < "$TMP/count" | tr -d ' ')
   && pass "busy 两次后成功：跑 3 次、退出码 0、hdiutil 的 stderr 原样回放" || fail "busy 两次后成功：rc=$rc runs=$runs err=$(cat "$TMP/err")"
 
 : > "$TMP/count"
-"$WT" --retry-on 'Resource busy' "hdiutil create" 5 1 -- "$fake" "$TMP/count" 99 2>"$TMP/err" >/dev/null; rc=$?
+"$WT" --retry-on 'Resource busy' "hdiutil create" 5 1 -- bash "$fake" "$TMP/count" 99 2>"$TMP/err" >/dev/null; rc=$?
 runs=$(wc -l < "$TMP/count" | tr -d ' ')
 { [ "$rc" -eq 1 ] && [ "$runs" -eq 4 ] && grep -q "「hdiutil create」退出码 1，stderr 命中「Resource busy」，已重试 3 次仍失败" "$TMP/err"; } \
   && pass "一直 busy：重试 3 次（共跑 4 次）后透传退出码 1 并点名步骤" || fail "一直 busy：rc=$rc runs=$runs err=$(cat "$TMP/err")"
 
 : > "$TMP/count"
-"$WT" --retry-on 'Resource busy' "hdiutil create" 5 1 -- "$fake" "$TMP/count" 0 "No space left on device" 2>"$TMP/err" >/dev/null; rc=$?
+"$WT" --retry-on 'Resource busy' "hdiutil create" 5 1 -- bash "$fake" "$TMP/count" 0 "No space left on device" 2>"$TMP/err" >/dev/null; rc=$?
 runs=$(wc -l < "$TMP/count" | tr -d ' ')
 { [ "$rc" -eq 1 ] && [ "$runs" -eq 1 ] && ! grep -q '^RETRY:' "$TMP/err" && grep -q "No space left on device" "$TMP/err"; } \
   && pass "其它错误（反证）：只跑 1 次、不重试、立即透传" || fail "其它错误：rc=$rc runs=$runs err=$(cat "$TMP/err")"
 
 : > "$TMP/count"
-"$WT" "hdiutil create" 5 1 -- "$fake" "$TMP/count" 2 2>"$TMP/err" >/dev/null; rc=$?
+"$WT" "hdiutil create" 5 1 -- bash "$fake" "$TMP/count" 2 2>"$TMP/err" >/dev/null; rc=$?
 runs=$(wc -l < "$TMP/count" | tr -d ' ')
 { [ "$rc" -eq 1 ] && [ "$runs" -eq 1 ]; } \
   && pass "不带 --retry-on：busy 也不重试（旧调用行为不变）" || fail "不带 --retry-on：rc=$rc runs=$runs"
@@ -109,7 +133,7 @@ took=$(( $(date +%s) - start ))
   && pass "带 --retry-on 时超时仍以 124 退出" || fail "带 --retry-on 超时：rc=$rc took=${took}s err=$(cat "$TMP/err")"
 
 start=$(date +%s); : > "$TMP/count2"
-PPF_RETRY_DELAYS="2" "$WT" --retry-on 'Resource busy' "间隔" 5 1 -- "$fake" "$TMP/count2" 99 2>"$TMP/err" >/dev/null; rc=$?
+PPF_RETRY_DELAYS="2" "$WT" --retry-on 'Resource busy' "间隔" 5 1 -- bash "$fake" "$TMP/count2" 99 2>"$TMP/err" >/dev/null; rc=$?
 took=$(( $(date +%s) - start ))
 runs=$(wc -l < "$TMP/count2" | tr -d ' ')
 { [ "$rc" -eq 1 ] && [ "$runs" -eq 2 ] && [ "$took" -ge 2 ] && grep -q "2s 后重试" "$TMP/err"; } \
@@ -131,7 +155,7 @@ echo "==> 门禁：release.yml 每个 job 都有 timeout-minutes"
 missing="$(python3 - "$ROOT/.github/workflows/release.yml" "$ROOT" <<'PY'
 import os, sys, yaml
 root = sys.argv[2]
-jobs = yaml.safe_load(open(sys.argv[1]))["jobs"]
+jobs = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))["jobs"]
 miss = []
 def walk(prefix, jobs):
     # 被调用的 workflow 里又有 uses 的 job（#1309：ci-rust 的 e2e 调 e2e.yml）同样递归下去
@@ -139,14 +163,16 @@ def walk(prefix, jobs):
         uses = v.get("uses")
         name = f"{prefix}{k}"
         if uses and uses.startswith("./"):
-            walk(name + "→", yaml.safe_load(open(os.path.join(root, uses.removeprefix("./"))))["jobs"])
+            walk(name + "→", yaml.safe_load(open(os.path.join(root, uses.removeprefix("./")), encoding="utf-8"))["jobs"])
         elif "timeout-minutes" not in v:
             miss.append(name)
 walk("", jobs)
 print(" ".join(miss))
 PY
-)"
-[ -z "$missing" ] && pass "全部 job 都有" || fail "缺 timeout-minutes：$missing"
+)"; py_rc=$?
+if [ "$py_rc" -ne 0 ]; then fail "解析 release.yml 失败（退出码 ${py_rc}），不能判定 timeout-minutes"
+elif [ -z "$missing" ]; then pass "全部 job 都有"
+else fail "缺 timeout-minutes：$missing"; fi
 
 echo "==> 门禁：bundle-desktop-macos.sh / daemon-helper-macos.sh 的 codesign / hdiutil / osascript 都经 with-timeout"
 # 续行（上一行以 \ 结尾）是同一条命令的后半截，不算裸调用。
@@ -157,6 +183,7 @@ bare="$(awk '/^[[:space:]]*#/ {cont=0; next}
 
 if [ "$fails" -ne 0 ]; then
   echo "FAILED: $fails 项" >&2
+  printf "失败用例：\n${failed_names}" >&2
   exit 1
 fi
 echo "ok: 发布链超时测试全部通过"
