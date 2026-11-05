@@ -16,8 +16,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ACCEPT_RE='^[*_> -]*产品负责人 ([0-9]{4}-)?[0-9]{2}-[0-9]{2}( +[0-9]{1,2}:[0-9]{2})? *(本地)?真机验收通过([*_ ]*|\*\*.*)$'
 
 # 只认真实测试位置：*.test.* / *.spec.* 文件，或测试目录下的文件（test、tests、__tests__、androidTest、
-# iOS 的 *Tests 与 Tests 目录）。不按文件名后缀 Test 判，否则 SpeedTest.svelte 这种正式组件会被漏掉。
-TEST_RE='(\.(test|spec)\.[^/]*$)|((^|/)([^/]*Tests|Tests|tests|test|__tests__|androidTest)/)'
+# sharedTest、iOS 的 PPassTests 与各包的 Tests 目录；对照过 build.gradle.kts / Package.swift / project.yml / Cargo）。
+# 注意 iOS 的 TransportFFITests/Package.swift 是 App 依赖的包清单，不是测试，所以不能按「*Tests 目录」放过。不按文件名后缀 Test 判，否则 SpeedTest.svelte 这种正式组件会被漏掉。
+TEST_RE='(\.(test|spec)\.[^/]*$)|((^|/)(PPassTests|Tests|tests|test|__tests__|androidTest|sharedTest)/)'
 
 usage() { sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
