@@ -4,7 +4,10 @@
 #      按次数重试、子进程一并杀掉、stdin（heredoc）照常可用。
 #   2. 门禁：release.yml 每个 job 都有 timeout-minutes；bundle-desktop-macos.sh 里 codesign /
 #      hdiutil / osascript 的每次调用都经 with-timeout.sh。
-# 反证锚点：把 with-timeout.sh 的超时分支删掉（只 wait 不 kill）→「挂住」用例超出 10 秒判红。
+#   3. #1438 --retry-on：只对 stderr 命中模式的非 0 退出退避重试，最多 3 次；其它失败第一次就红；
+#      门禁：bundle 脚本里 hdiutil create / attach / detach 都带 --retry-on 'Resource busy'。
+# 反证锚点：把 with-timeout.sh 的超时分支删掉（只 wait 不 kill）→「挂住」用例超出 10 秒判红；
+#   把 --retry-on 的重试分支删掉 →「busy 两次后成功」用例判红。
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WT="$ROOT/tools/release/with-timeout.sh"
@@ -52,6 +55,69 @@ from heredoc
 EOF
 )"
 [ "$out" = "from heredoc" ] && pass "stdin（heredoc）照常喂给命令" || fail "stdin：out=$out"
+
+echo "==> with-timeout.sh --retry-on（#1438）"
+# 假 hdiutil：前 N 次（计数文件行数 <= N）报 busy 退 1，之后成功。
+fake="$TMP/fake-hdiutil"
+cat >"$fake" <<'SH'
+#!/usr/bin/env bash
+# 用法：fake-hdiutil <计数文件> <busy 次数> [其它错误]
+echo x >> "$1"
+n=$(wc -l < "$1" | tr -d ' ')
+if [ -n "${3:-}" ]; then echo "hdiutil: create failed - $3" >&2; exit 1; fi
+if [ "$n" -le "$2" ]; then echo "hdiutil: create failed - Resource busy" >&2; exit 1; fi
+echo "created: /tmp/fake.dmg"
+SH
+chmod +x "$fake"
+export PPF_RETRY_DELAYS="0 0 0"
+
+: > "$TMP/count"
+out="$("$WT" --retry-on 'Resource busy' "hdiutil create" 5 1 -- "$fake" "$TMP/count" 2 2>"$TMP/err")"; rc=$?
+runs=$(wc -l < "$TMP/count" | tr -d ' ')
+{ [ "$rc" -eq 0 ] && [ "$runs" -eq 3 ] && [ "$out" = "created: /tmp/fake.dmg" ] \
+  && [ "$(grep -c '^RETRY: 「hdiutil create」' "$TMP/err")" -eq 2 ] && grep -q "Resource busy" "$TMP/err"; } \
+  && pass "busy 两次后成功：跑 3 次、退出码 0、hdiutil 的 stderr 原样回放" || fail "busy 两次后成功：rc=$rc runs=$runs err=$(cat "$TMP/err")"
+
+: > "$TMP/count"
+"$WT" --retry-on 'Resource busy' "hdiutil create" 5 1 -- "$fake" "$TMP/count" 99 2>"$TMP/err" >/dev/null; rc=$?
+runs=$(wc -l < "$TMP/count" | tr -d ' ')
+{ [ "$rc" -eq 1 ] && [ "$runs" -eq 4 ] && grep -q "「hdiutil create」退出码 1，stderr 命中「Resource busy」，已重试 3 次仍失败" "$TMP/err"; } \
+  && pass "一直 busy：重试 3 次（共跑 4 次）后透传退出码 1 并点名步骤" || fail "一直 busy：rc=$rc runs=$runs err=$(cat "$TMP/err")"
+
+: > "$TMP/count"
+"$WT" --retry-on 'Resource busy' "hdiutil create" 5 1 -- "$fake" "$TMP/count" 0 "No space left on device" 2>"$TMP/err" >/dev/null; rc=$?
+runs=$(wc -l < "$TMP/count" | tr -d ' ')
+{ [ "$rc" -eq 1 ] && [ "$runs" -eq 1 ] && ! grep -q '^RETRY:' "$TMP/err" && grep -q "No space left on device" "$TMP/err"; } \
+  && pass "其它错误（反证）：只跑 1 次、不重试、立即透传" || fail "其它错误：rc=$rc runs=$runs err=$(cat "$TMP/err")"
+
+: > "$TMP/count"
+"$WT" "hdiutil create" 5 1 -- "$fake" "$TMP/count" 2 2>"$TMP/err" >/dev/null; rc=$?
+runs=$(wc -l < "$TMP/count" | tr -d ' ')
+{ [ "$rc" -eq 1 ] && [ "$runs" -eq 1 ]; } \
+  && pass "不带 --retry-on：busy 也不重试（旧调用行为不变）" || fail "不带 --retry-on：rc=$rc runs=$runs"
+
+start=$(date +%s)
+"$WT" --retry-on 'Resource busy' "挂住的 hdiutil" 1 1 -- sleep 30 2>"$TMP/err"; rc=$?
+took=$(( $(date +%s) - start ))
+{ [ "$rc" -eq 124 ] && [ "$took" -le 10 ] && grep -q "TIMEOUT: 「挂住的 hdiutil」" "$TMP/err"; } \
+  && pass "带 --retry-on 时超时仍以 124 退出" || fail "带 --retry-on 超时：rc=$rc took=${took}s err=$(cat "$TMP/err")"
+
+start=$(date +%s); : > "$TMP/count2"
+PPF_RETRY_DELAYS="2" "$WT" --retry-on 'Resource busy' "间隔" 5 1 -- "$fake" "$TMP/count2" 99 2>"$TMP/err" >/dev/null; rc=$?
+took=$(( $(date +%s) - start ))
+runs=$(wc -l < "$TMP/count2" | tr -d ' ')
+{ [ "$rc" -eq 1 ] && [ "$runs" -eq 2 ] && [ "$took" -ge 2 ] && grep -q "2s 后重试" "$TMP/err"; } \
+  && pass "重试间隔按 PPF_RETRY_DELAYS 生效（1 个间隔 = 最多重试 1 次）" || fail "间隔：rc=$rc runs=$runs took=${took}s"
+unset PPF_RETRY_DELAYS
+
+default_delays="$(sed -n 's/^retry_delays="\${PPF_RETRY_DELAYS-\(.*\)}"$/\1/p' "$WT")"
+[ "$default_delays" = "5 10 20" ] && pass "默认间隔 5 10 20 秒（最多重试 3 次）" || fail "默认间隔：$default_delays"
+
+echo "==> 门禁：bundle-desktop-macos.sh 的 hdiutil create / attach / detach 带 --retry-on 'Resource busy'"
+for sub in create attach detach; do
+  grep -qE "^\"\\\$WT\" --retry-on 'Resource busy' \"hdiutil ${sub}[^\"]*\" [0-9]+ [0-9]+ -- hdiutil ${sub} " "$ROOT/tools/bundle-desktop-macos.sh" \
+    && pass "hdiutil ${sub} 带 --retry-on" || fail "hdiutil ${sub} 没带 --retry-on 'Resource busy'"
+done
 
 echo "==> 门禁：release.yml 每个 job 都有 timeout-minutes"
 # #1187：调用外部 workflow 的 job（uses: ./.github/workflows/x.yml）GitHub 不许写 timeout-minutes，

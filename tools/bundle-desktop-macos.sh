@@ -239,9 +239,12 @@ cp -R "$APP" /tmp/pp-dmg-stage/
 # 挂载后放 Applications 链接 + Finder 布局（图标位置/视图选项），
 # 再转 UDZO。缺布局时 dmg 里"孤零零一个程序"，用户不知道拖到
 # Applications（真机实测反馈）。
-"$WT" "hdiutil create（可写 dmg）" 600 1 -- hdiutil create -volname "P-Pass" -srcfolder /tmp/pp-dmg-stage \
+# #1438：runner 上磁盘镜像子系统偶发占用，create / attach / detach 报「Resource busy」时
+# 由 with-timeout.sh 退避重试（5/10/20s，最多 3 次）；其它失败照旧立即红。
+# 方案：docs/decisions/2026-11-05-release-hdiutil-busy-retry.md
+"$WT" --retry-on 'Resource busy' "hdiutil create（可写 dmg）" 600 1 -- hdiutil create -volname "P-Pass" -srcfolder /tmp/pp-dmg-stage \
   -ov -format UDRW /tmp/pp-dmg-rw.dmg
-"$WT" "hdiutil attach" 120 1 -- hdiutil attach /tmp/pp-dmg-rw.dmg -mountpoint /Volumes/P-Pass -nobrowse
+"$WT" --retry-on 'Resource busy' "hdiutil attach" 120 1 -- hdiutil attach /tmp/pp-dmg-rw.dmg -mountpoint /Volumes/P-Pass -nobrowse
 ln -s /Applications /Volumes/P-Pass/Applications
 # 几何（2026-08-25 修）：窗口必须装得下两个图标 + 文字标签。
 # 旧值 bounds {100,100,520,400} = 420 宽，而 Applications 图标位置
@@ -284,7 +287,7 @@ APPLESCRIPT
 # 执行不到——注释里写的「布局失败不致命」在旧写法下是假的，无头 CI 的
 # TCC 拦 Apple Events 就会连带炸掉整个打包步骤（2026-08-25 发现）。
 # 布局确实不致命：Applications 链接已在，拖拽路径仍然成立。
-"$WT" "hdiutil detach" 120 1 -- hdiutil detach /Volumes/P-Pass -quiet
+"$WT" --retry-on 'Resource busy' "hdiutil detach" 120 1 -- hdiutil detach /Volumes/P-Pass -quiet
 "$WT" "hdiutil convert（压缩 dmg）" 600 1 -- hdiutil convert /tmp/pp-dmg-rw.dmg -format UDZO -o "$DMG_OUT/$DMG_NAME"
 rm -f /tmp/pp-dmg-rw.dmg
 
