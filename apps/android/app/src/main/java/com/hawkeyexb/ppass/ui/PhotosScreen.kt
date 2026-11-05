@@ -402,8 +402,8 @@ internal fun PhotosScreen(
                 goesToSettings = guideActionGoesToSettings,
                 onAction = { onGuideAction(guide) },
                 onDismiss = onGuideDismiss,
-                // 左右 12 与照片网格对齐。
-                modifier = Modifier.fillMaxWidth().padding(12.dp, 0.dp, 12.dp, 12.dp),
+                // 提示条左右用 page-gutter，与同页失联卡、顶部提示条一致（#1405）；照片网格仍是 12。
+                modifier = Modifier.fillMaxWidth().padding(PPSize.PageGutter, 0.dp, PPSize.PageGutter, 12.dp),
             )
         }
 

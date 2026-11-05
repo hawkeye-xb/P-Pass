@@ -60,10 +60,10 @@ struct PhotosScreen: View {
         // 部分照片权限时按钮是「去设置」，点了直接跳过去，卡上不再重复路径说明（产品负责人 11-04：只留核心）。
         let text = guide == .enableScope ? L.s("photos_guide_scope") : L.s("photos_guide_background")
         let action = guide == .enableScope ? L.s(app.scopeGuideActionKey) : L.s(app.backgroundGuideActionKey)
-        // 复用现成提示条 NoticeRow 的 × 一行版式（C1），不另起组件；左右 12 与照片网格对齐。
+        // 复用现成提示条 NoticeRow 的 × 一行版式（C1），不另起组件；左右 20 与同页失联卡一致（#1405），照片网格仍是 12。
         return NoticeRow(text: text, action: (action, { app.guideAction(guide) }),
                          close: (L.s("photos_guide_close"), { app.dismissGuide() }), standalone: true)
-        .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 12)
+        .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 12)
         .onAppear { AppLog.log("photos-guide: shown \(guide.logName)") }
         .id(guide)
     }
