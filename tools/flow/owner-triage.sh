@@ -150,7 +150,8 @@ if [ -n "$(field "owner 定案")" ] && ! is_none "owner 定案"; then
   while IFS= read -r q; do
     [ -n "$q" ] || continue
     [ "$(printf '%s' "$q" | python3 -I -c 'import sys; print(len(sys.stdin.read()))')" -ge 8 ] || refuse "**owner 定案** 引用的 AGENTS.md 原文太短（「${q}」，至少 8 个字）" "引一整句规矩原文。"
-    git show origin/main:AGENTS.md 2>/dev/null | grep -qF -- "$q" ||
+    # Git Bash 会把 origin/main:<path> 的冒号当路径分隔符改写；禁止 MSYS 做路径转换。
+    MSYS_NO_PATHCONV=1 git show origin/main:AGENTS.md 2>/dev/null | grep -qF -- "$q" ||
       refuse "**owner 定案** 引用的原文在 origin/main 的 AGENTS.md 里找不到：「${q}」" \
         "逐字照抄 AGENTS.md 的句子；找不到依据就去掉这个字段，走 needs:product。"
     nbasis=$((nbasis + 1))

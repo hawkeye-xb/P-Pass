@@ -97,7 +97,8 @@ gh pr diff "$PR" -R "$REPO" --name-only >"${WORK}/pr.files" 2>/dev/null ||
   die "读取 #${PR} 的改动文件清单失败"
 NEEDS_ACCEPT=""
 CORE_RULES="${WORK}/core-paths.txt"
-git -C "$TOP" show origin/main:.github/core-paths.txt >"$CORE_RULES" 2>/dev/null || : >"$CORE_RULES"
+# Git Bash 会把 origin/main:<path> 的冒号当路径分隔符改写；禁止 MSYS 做路径转换。
+MSYS_NO_PATHCONV=1 git -C "$TOP" show origin/main:.github/core-paths.txt >"$CORE_RULES" 2>/dev/null || : >"$CORE_RULES"
 if [ "$(bash "${TOP}/tools/ci-paths.sh" core - "$CORE_RULES" <"${WORK}/pr.files" 2>/dev/null)" != "false" ]; then
   NEEDS_ACCEPT="碰核心路径（人控级）"
 fi
