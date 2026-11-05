@@ -280,7 +280,7 @@ BODY_FILE="${WORK}/comment.md"
   # 评审正文：去掉最后的 VERDICT 行，原样贴上
   grep -v '^[[:space:]]*VERDICT:[[:space:]]*\(PASS\|FAIL\)[[:space:]]*$' "${WORK}/agent.out" 2>/dev/null || true
   echo
-  echo "<sub>评审人：新开的只读 agent${MODEL:+（${MODEL}）}，只看 PR 改动与关联卡 ${CARDS:+$(printf '#%s ' $CARDS)}${CARDS:-（无，Dependabot 依赖升级）}；结论只对头提交 \`${SHA:0:10}\` 有效，之后有新提交要重评。</sub>"
+  echo "<sub>评审人：新开的只读 agent${MODEL:+（${MODEL}）}，只看 PR 改动与关联卡 ${CARDS:+$(printf '#%s ' $CARDS)}$([ -n "$CARDS" ] || echo '（无，Dependabot 依赖升级）')；结论只对头提交 \`${SHA:0:10}\` 有效，之后有新提交要重评。</sub>"
 } >"$BODY_FILE"
 
 gh pr comment "$PR" -R "$REPO" --body-file "$BODY_FILE" >/dev/null 2>&1 ||

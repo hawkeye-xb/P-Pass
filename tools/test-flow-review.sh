@@ -307,6 +307,12 @@ has "### 卡 #77" "$FAKE/agent.stdin" && ok "  反证：普通作者正文的 fi
 rm -f "$FAKE/pr.author"
 printf 'closes #77\n\n改了 x。\n' >"$FAKE/pr.body"
 
+reset pass
+printf 'tools/x.sh\n' >"$FAKE/pr.files"
+printf 'closes #77\n\n改了 x。\n' >"$FAKE/pr.body"
+REVIEW 7 >/dev/null 2>&1
+grep -q '关联卡 #77 ；' "$FAKE/comments" && ok "评论脚注只列一次关联卡号" || bad "评论脚注卡号不对：$(grep '关联卡' "$FAKE/comments")"
+
 echo "==> #1448：核心但用户看不见 → 不要验收行，要已采纳方案 + 测试"
 hidden_case() { # 名称 改动文件（空格分隔） 正文附加行 期望(pass|fail)
   reset pass

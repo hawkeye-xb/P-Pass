@@ -203,7 +203,9 @@ git init -q "${TMP}/main"
   mkdir -p tools/e3/lib
   cp "${SRC}/tools/e3/lib/dev-cache.sh" tools/e3/lib/dev-cache.sh
   # core/** 是用户看不见的核心，apps/core/** 是用户看得见的核心（#1448）。
-  printf '+ core/**\n+ apps/core/**\n' >.github/core-paths.txt
+  printf '+ core/**\n+ apps/core/**\n+ apps/desktop/src-tauri/tauri.conf.json\n' >.github/core-paths.txt
+  mkdir -p apps/desktop/src-tauri
+  printf '{\n  "productName": "P-Pass",\n  "version": "0.11.0",\n  "plugins": { "updater": { "endpoints": ["https://a"] } }\n}\n' >apps/desktop/src-tauri/tauri.conf.json
   echo a >src/a.txt
   echo d >docs/d.md
   echo c >core/c.txt
@@ -382,7 +384,7 @@ OUT="$(START 71 2>&1)" || bad "start 71 失败：$OUT"
 cmp -s "${M}/apps/android/local.properties" "${PPASS_WT_ROOT}/71-props-copied/apps/android/local.properties" &&
   ok "主副本有 local.properties → 卡目录里内容一致" || bad "主副本有 local.properties，卡目录里没有或内容不同：$OUT"
 printf '%s' "$OUT" | grep -q 'local.properties：已从主副本拷入' && ok "  打印了已拷入" || bad "  没打印已拷入：$OUT"
-rm -rf "${M}/apps"
+rm -f "${M}/apps/android/local.properties"
 issue 72 "status:ready" "[T-72] props missing" "src/**" "Bug"
 OUT="$(START 72 2>&1)" || bad "start 72 失败：$OUT"
 [ ! -e "${PPASS_WT_ROOT}/72-props-missing/apps/android/local.properties" ] &&
@@ -598,6 +600,18 @@ rm -f "${FAKE_GH}/ci_fail"
 : >"${FAKE_GH}/just_calls"
 DONE "$W" >"${TMP}/o140d" 2>&1
 [ "$(grep -c . "${FAKE_GH}/just_calls")" = 1 ] && ok "  门禁红过的树不记复用，修好后重跑门禁" || bad "红过的树被复用了"
+
+# 只改版本号不算核心（#1451）：卡没有 core 标签，tauri.conf.json 只原地改 version 行 → just done 放行；
+# 同时改了 updater endpoint → 核心判定拦下（反证）
+W="$(card 145 "[T-145] bump only" "apps/desktop/**")"
+sed -i.bak 's/"version": "0.11.0"/"version": "0.12.0"/' "$W/apps/desktop/src-tauri/tauri.conf.json" && rm -f "$W/apps/desktop/src-tauri/tauri.conf.json.bak"
+git -C "$W" add -A && git -C "$W" commit -q -s -m "bump"
+if DONE "$W" >"${TMP}/o145" 2>&1; then ok "只改 tauri.conf.json 的版本号、卡无 core 标签 → 放行"; else bad "只改版本号被当核心拦了：$(tail -5 "${TMP}/o145")"; fi
+W="$(card 146 "[T-146] bump plus endpoint" "apps/desktop/**")"
+sed -i.bak -e 's/"version": "0.11.0"/"version": "0.12.0"/' -e 's#https://a#https://evil#' "$W/apps/desktop/src-tauri/tauri.conf.json" && rm -f "$W/apps/desktop/src-tauri/tauri.conf.json.bak"
+git -C "$W" add -A && git -C "$W" commit -q -s -m "bump plus endpoint"
+if DONE "$W" >"${TMP}/o146" 2>&1; then bad "改了 updater endpoint 仍放行"; else ok "反证：同时改了 updater endpoint → 核心判定拦下"; fi
+grep -q "核心" "${TMP}/o146" && ok "  拦下理由是命中核心" || bad "拦下理由不对：$(tail -4 "${TMP}/o146")"
 
 # 推送前自查（#1447）：没有自查 / 自查是旧代码的 → 不推、不打 blocked，打印清单；写好当前树的 → 推送，结论进回执与 PR 正文
 W="$(card 141 "[T-141] self review" "src/**")"
