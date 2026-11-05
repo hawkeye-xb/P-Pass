@@ -43,7 +43,8 @@ pair_enter_code() {
   echo "$node" >"$E3_STATE/android-node"
 }
 
-# pair_with_stub <证据目录>：清数据 → 配对 →（#1321 决定页「选择备份范围」）→ 系统照片权限框「全部允许」→「开始备份」
+# pair_with_stub <证据目录>：清数据 → 配对 →（#1321 决定页「选择备份范围」）→ 系统照片权限框「全部允许」→
+# 范围只勾专用测试相册 →「开始备份」→ 读回存下的范围核对。调用前专用相册里要已有图（album_seed 或场景自己推）。
 # 只在 P-Pass 在前台时点。成功返回 0。
 pair_with_stub() {
   local ev="$1" end
@@ -62,14 +63,30 @@ pair_with_stub() {
   done
   tap_text "全部允许" || tap_text "Allow all" || { log "没等到系统照片权限框"; return 1; }
   sleep 3
-  # 首次选范围页按钮是「开始备份」（默认勾相机相册）；上一版的选范围页按钮是「保存」、默认不勾，勾上 Camera 再保存
+  # #1412：范围只勾专用测试相册。首次选范围页按钮是「开始备份」、默认勾相机相册（点一下取消）；
+  # 上一版的选范围页按钮是「保存」、默认不勾。两种都点上测试相册，存下之后读回来核对。
   wait_text "开始备份" 20 || wait_text "保存" 5
-  if ui_has "开始备份"; then tap_text "开始备份"
-  elif ui_has "保存"; then tap_text "Camera"; sleep 1; tap_text "保存"; fi
+  ui_dump "$ev/scope-page.xml"
+  ui_has "$E3_ALBUM" || { log "选范围页首屏没有测试相册 $E3_ALBUM"; return 1; }
+  tap_text "$E3_ALBUM" || return 1
+  if ui_has "开始备份"; then
+    if ui_has "Camera"; then tap_text "Camera" || return 1; fi
+    tap_text "开始备份"
+  elif ui_has "保存"; then tap_text "保存"; fi
   sleep 4
   # 通知权限等后续系统框：不在本流程判定范围内，一律「不允许」
   if fg | grep -q permissioncontroller; then tap_text "不允许" || true; sleep 2; fi
+  app_scope_ids >"$ev/scope.txt"
+  scope_is_album || { log "备份范围不是只有测试相册（存下的 [$(cat "$ev/scope.txt")]，测试相册 $(album_bucket_id)）"; return 1; }
   return 0
+}
+
+# album_seed：专用测试相册里没有图就推一张——相册要有图才出现在选范围页
+album_seed() {
+  [ "$(album_count)" -ge 1 ] && return 0
+  gen_photos "$E3_STATE/photos-E3seed" 1 E3seed
+  push_photos "$E3_STATE/photos-E3seed" || return 1
+  album_wait 1
 }
 
 # stub_paired：桩里这台手机还在配对列表里
@@ -92,8 +109,10 @@ app_on_welcome() {
 # 注入类场景的 setup 用它，不关心升级路径。
 ensure_paired() {
   eph_ensure "$(cand_daemon)"
-  if is_debuggable && stub_paired && ! app_on_welcome; then
-    log "手机已与当前桩配对，复用"
+  album_seed || return 1
+  # 复用的前提还有范围只含测试相册（#1412）：旧配对的范围若是相机相册，推进测试相册的图不会被备份
+  if is_debuggable && stub_paired && ! app_on_welcome && scope_is_album; then
+    log "手机已与当前桩配对、范围是测试相册，复用"
     return 0
   fi
   install_fresh "$(cand_apk)"

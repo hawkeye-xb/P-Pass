@@ -16,6 +16,7 @@ mac_shell_running() { pgrep -f "^$MAC_SHELL_EXE( |$)" >/dev/null; }
 # mac_quit_shell：退出窗口程序（否则替换 .app 时它会被内核按签名失效杀掉，或单实例守卫挡住新壳）
 mac_quit_shell() {
   local i
+  mac_need_lock || return 1
   mac_shell_running || return 0
   osascript -e 'tell application id "com.hawkeyexb.ppass.desktop" to quit' >/dev/null 2>&1
   for i in $(seq 1 30); do mac_shell_running || return 0; sleep 0.5; done
@@ -58,6 +59,7 @@ mac_verify_sig() {
 # `blank` = 清成空白数据（mac_data_blank），装上一版 release 做升级基线时用。
 mac_install_app() {
   local src="$1" data="${2:-}" had_shell=0 mark old snap="$E3_STATE/mac-snapshot"
+  mac_need_lock || return 1
   [ -d "$src" ] || { log "没有要装的包：$src"; return 1; }
   mac_shell_running && had_shell=1
   mac_quit_shell
@@ -173,6 +175,7 @@ mac_data_save() {
 # mac_data_restore <快照目录>：把 mac_data_save 存的那份放回原处（先删现有的同名目录，避免新文件残留）
 mac_data_restore() {
   local src="$1" lib
+  mac_need_lock || return 1
   [ -f "$src/appsupport/config.toml" ] || { log "数据快照不完整：$src"; return 1; }
   [ -z "$(svc_any_pid)" ] || { log "服务还在跑，不恢复数据"; return 1; }
   ditto "$src/appsupport/config.toml" "$MAC_DATA_DIR/config.toml" || return 1
@@ -191,6 +194,7 @@ mac_data_restore() {
 # 照片原件不动：daemon 启动时把它们收编进新索引（IDX-01），就是上一版的基线数据。只在留过数据快照后调用。
 mac_data_blank() {
   local lib f
+  mac_need_lock || return 1
   [ -z "$(svc_any_pid)" ] || { log "服务还在跑，不清数据"; return 1; }
   [ -d "$E3_STATE/mac-snapshot/data" ] || { log "没有数据快照，不清数据"; return 1; }
   rm -rf "$MAC_DATA_DIR/libraries"
