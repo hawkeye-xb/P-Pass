@@ -31,7 +31,8 @@ Q='query($owner: String!, $name: String!, $n: Int!) {
         pageInfo { hasNextPage }
         nodes {
           __typename
-          ... on CheckRun { name status conclusion detailsUrl startedAt }
+          ... on CheckRun { name databaseId status conclusion detailsUrl
+            checkSuite { app { slug } workflowRun { workflow { name } } } }
           ... on StatusContext { context state targetUrl createdAt }
         }
       } } } } }
@@ -80,13 +81,20 @@ failed, running = [], []
 nodes = pr["commits"]["nodes"]
 roll = (nodes[0]["commit"].get("statusCheckRollup") if nodes else None) or {}
 ctx = roll.get("contexts") or {"nodes": [], "pageInfo": {}}
-# 同名检查被重跑时，同一头提交上会留着旧的那次（常见是被取消的）；只看最新一次，与网页一致。
+# 同一头提交上，同一个检查被重跑会留下旧的那次（常见是被取消的）。按「所属 workflow（或 app）+ 检查名」分组，
+# 每组只看最新一次：CheckRun 用 databaseId（单调递增；排队中的也有，不像 startedAt 为空），StatusContext 用 createdAt。
+# 不同 workflow 里同名的检查各算各的，不互相覆盖。
+def group(c):
+    if c.get("__typename") == "CheckRun":
+        suite = c.get("checkSuite") or {}
+        owner = ((suite.get("workflowRun") or {}).get("workflow") or {}).get("name") or (suite.get("app") or {}).get("slug") or ""
+        return ("run", owner, c.get("name")), c.get("databaseId") or 0
+    return ("status", "", c.get("context")), c.get("createdAt") or ""
 latest = {}
 for c in ctx.get("nodes") or []:
-    key = (c.get("__typename"), c.get("name") if c.get("__typename") == "CheckRun" else c.get("context"))
-    ts = c.get("startedAt") or c.get("createdAt") or ""
-    if key not in latest or ts >= latest[key][0]:
-        latest[key] = (ts, c)
+    key, order = group(c)
+    if key not in latest or order >= latest[key][0]:
+        latest[key] = (order, c)
 for _, c in latest.values():
     if c.get("__typename") == "CheckRun":
         name, url = c.get("name"), c.get("detailsUrl") or ""

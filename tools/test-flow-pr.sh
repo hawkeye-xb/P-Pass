@@ -151,7 +151,9 @@ mk() {
   python3 -I -X utf8 - "$@" >"$FAKE/status.json" <<'PY'
 import json, sys
 opts = dict(a.split("=", 1) for a in sys.argv[1:])
-checks = [{"__typename": "CheckRun", "name": "CI gate", "status": "COMPLETED", "conclusion": "SUCCESS", "detailsUrl": "u1", "startedAt": "2026-11-05T07:20:00Z"},
+def suite(wf):
+    return {"app": {"slug": "github-actions"}, "workflowRun": {"workflow": {"name": wf}}}
+checks = [{"__typename": "CheckRun", "name": "CI gate", "status": "COMPLETED", "conclusion": "SUCCESS", "detailsUrl": "u1", "databaseId": 200, "checkSuite": suite("CI Docs")},
           {"__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "SKIPPED", "detailsUrl": "u2"},
           {"__typename": "StatusContext", "context": "review/agent", "state": "SUCCESS", "targetUrl": ""}]
 if opts.get("check") == "fail":
@@ -165,10 +167,16 @@ if opts.get("check") == "none":
 if opts.get("check") == "stale":
     checks[0]["conclusion"] = "STALE"
 if opts.get("check") == "rerun":   # 同名检查：旧的一次被取消，重跑成功
-    checks.append({"__typename": "CheckRun", "name": "CI gate", "status": "COMPLETED", "conclusion": "CANCELLED", "detailsUrl": "old", "startedAt": "2026-11-05T07:10:00Z"})
+    checks.append({"__typename": "CheckRun", "name": "CI gate", "status": "COMPLETED", "conclusion": "CANCELLED", "detailsUrl": "old", "databaseId": 100, "checkSuite": suite("CI Docs")})
 if opts.get("check") == "rerun-red":   # 反证：重跑的那次反而失败
     checks[0]["conclusion"] = "FAILURE"
-    checks.append({"__typename": "CheckRun", "name": "CI gate", "status": "COMPLETED", "conclusion": "SUCCESS", "detailsUrl": "old", "startedAt": "2026-11-05T07:10:00Z"})
+    checks.append({"__typename": "CheckRun", "name": "CI gate", "status": "COMPLETED", "conclusion": "SUCCESS", "detailsUrl": "old", "databaseId": 100, "checkSuite": suite("CI Docs")})
+if opts.get("check") == "rerun-queued":   # 重跑的那次还在排队（没有 startedAt），旧的一次成功
+    checks[0].update({"status": "QUEUED", "conclusion": None})
+    checks.append({"__typename": "CheckRun", "name": "CI gate", "status": "COMPLETED", "conclusion": "SUCCESS", "detailsUrl": "old", "databaseId": 100, "checkSuite": suite("CI Docs")})
+if opts.get("check") == "two-workflows":   # 两个 workflow 里同名的检查，一个红一个绿
+    # 放在前面且 databaseId 更小：只按检查名去重的写法会让绿的那个盖掉它
+    checks.insert(0, {"__typename": "CheckRun", "name": "CI gate", "status": "COMPLETED", "conclusion": "FAILURE", "detailsUrl": "other", "databaseId": 150, "checkSuite": suite("CI Rust")})
 if opts.get("status") == "fail":
     checks[2]["state"] = "FAILURE"
 threads = [{"id": "PRRT_done", "isResolved": True, "isOutdated": False, "path": "a.sh", "line": 3, "originalLine": 3,
@@ -215,6 +223,14 @@ check "同名检查被重跑：旧的那次取消不算，看最新一次 → �
 reset; mk check=rerun-red
 run bash "$STATUS" 7
 check "反证：最新一次失败、旧的一次成功 → 退出 1" bash -c '[ "$1" = 1 ] && grep -qF "CI gate（FAILURE）u1" "$2"' _ "$RC" "${TMP}/out"
+
+reset; mk check=rerun-queued
+run bash "$STATUS" 7
+check "重跑的那次还在排队、旧的一次成功 → 退出 3，不报全清" bash -c '[ "$1" = 3 ] && grep -qF "… CI gate" "$2" && ! grep -qF "全清" "$2"' _ "$RC" "${TMP}/out"
+
+reset; mk check=two-workflows
+run bash "$STATUS" 7
+check "不同 workflow 里同名的检查各算各的：一个红就退出 1" bash -c '[ "$1" = 1 ] && grep -qF "CI gate（FAILURE）other" "$2"' _ "$RC" "${TMP}/out"
 
 reset; mk check=run
 run bash "$STATUS" 7
