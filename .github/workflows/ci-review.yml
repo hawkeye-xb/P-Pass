@@ -23,7 +23,9 @@ name: CI Review
 on:
   pull_request_target:
     branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review, edited]
+    # 草稿 PR 也评审（盯梢、人控级先开草稿，评审与真机验收并行，#1441）；草稿转正式不改头提交，
+    # 不重评（ready_for_review 不在触发里），新提交走 synchronize。
+    types: [opened, synchronize, reopened, edited]
 
 permissions:
   contents: read
@@ -37,8 +39,7 @@ jobs:
     # edited 只认人改正文（补验收行）：CodeRabbit 等 bot 会改 PR 正文写摘要，不能每次都让同一提交重评一遍
     # （LLM 结论有波动，同一提交的 success 可能被重评成 failure），也不能把正在跑的评审取消掉。
     if: >-
-      ${{ !github.event.pull_request.draft
-      && github.event.pull_request.head.repo.full_name == github.repository
+      ${{ github.event.pull_request.head.repo.full_name == github.repository
       && (github.event.action != 'edited' || (github.event.sender.type != 'Bot' && github.event.changes.body != null)) }}
     # 并发写在 job 上而不是 workflow 上：被上面 if 跳过的运行不进并发组，不会取消正在跑的评审。
     concurrency:
@@ -46,11 +47,20 @@ jobs:
       cancel-in-progress: true
     runs-on: ubuntu-latest
     timeout-minutes: 40
-    # token 按步骤给：GH_TOKEN 只给「准备」「发布」两步，评审 key 只给「评审」那步；跑 agent 的那步没有任何 GitHub token。
+    # token 按步骤给：GH_TOKEN 只给「先写 pending」「准备」「发布」三步，评审 key 只给「评审」那步；跑 agent 的那步没有任何 GitHub token。
     env:
       PPASS_HOOK_REPO: ${{ github.repository }}
       PR: ${{ github.event.pull_request.number }}
     steps:
+      # 第一步就写 pending（#1441）：edited（如删掉验收行）后、新结论出来前，这个头提交上不能还挂着旧的 success，
+      # 否则自动合入会在检出、装 claude 那几分钟里抢先合入。只用事件里的头提交，不检出任何代码。
+      - name: 先写 pending（检出之前）
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" -f state=pending -f context="review/agent" \
+            -f description="独立评审进行中" >/dev/null
       # 检出 main（pull_request_target 的默认 ref），不检出 PR 头提交；PR 内容由 review.sh 只读取用。
       # persist-credentials: false：不把 GITHUB_TOKEN 写进磁盘上的 git 配置，评审 agent 用 Read 读不到。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

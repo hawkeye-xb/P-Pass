@@ -527,10 +527,10 @@ test-dogfood-assets:
 start n *args:
     bash tools/flow/worker-start.sh {{n}} {{args}}
 
-# 交卡（在卡 worktree 里跑）：门禁 + just verify（有则跑）+ 范围核对，全绿才推送、每张卡贴回执，
-# doing→review，打印开 PR 的命令（PR-CREATE: gh pr create …，closes 全部卡），由执行者自己运行；任何一步红：不推送、
-# issue 写明停在哪、打 blocked。用户看得到的改动打印的是草稿 PR 命令（--draft），验收后补验收行再 gh pr ready；
-# 已验收过可给 --accepted "<验收时间>"，打印正式 PR 命令。
+# 交卡（在卡 worktree 里跑）：范围核对 + 推送前自查（self-review.md）+ 门禁 + just verify（有则跑；代码没变复用上次结果），
+# 全绿才推送、每张卡贴回执，doing→review，单独一行打印开 PR 的命令（gh pr create …，closes 全部卡），由执行者自己运行；
+# 任何一步红：不推送、issue 写明停在哪、打 blocked。落后 main 只提示，有冲突才停。用户看得到的改动打印的是草稿 PR 命令
+# （--draft），验收后补验收行再 gh pr ready；已验收过可给 --accepted "<验收时间>"，打印正式 PR 命令。
 done *args:
     bash tools/flow/worker-done.sh {{args}}
 

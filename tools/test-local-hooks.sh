@@ -319,7 +319,7 @@ git -C "$R" commit -s -q -m "test: batch in main worktree" 2>/dev/null && ok "  
 git -C "$R" checkout -q --detach
 # 同样改动在 worktree 里放行，见第 1 节「普通卡，只改范围内文件」。
 
-echo "==> 11. 推送：卡分支必须包含最新 main"
+echo "==> 11. 推送：落后 main 只提示，有冲突才拒（#1423）"
 pushed() { # pushed <期望 pass|deny> <说明> <分支> [输出必须包含的文字]
   local out rc got
   out="$(git push -q -f up "$3" 2>&1)"
@@ -336,8 +336,10 @@ pushed() { # pushed <期望 pass|deny> <说明> <分支> [输出必须包含的�
 }
 try pass "（准备）卡分支提交" fix/101-push 'echo p >>docs/a/x.md; git add -A'
 pushed pass "基于最新 main 的卡分支" fix/101-push
-# main 在远端前进一个提交（直接造对象推上去，不经过任何分支）。
-adv="$(git commit-tree -p main -m "main moved" "main^{tree}")"
+# main 在远端前进一个不冲突的提交（另起一个文件；直接造对象推上去，不经过任何分支）。
+blob="$(printf 'other\n' | git hash-object -w --stdin)"
+adv_tree="$(git ls-tree main | { cat; printf '100644 blob %s\tmain-moved.txt\n' "$blob"; } | git mktree)"
+adv="$(git commit-tree -p main -m "main moved" "$adv_tree")"
 git push -q up "${adv}:refs/heads/main"
 # 原有 pre-push 会读光 stdin：证明转发器给两边各喂了一份。
 printf '#!/bin/sh\ncat >/dev/null\nexit 0\n' >"${COMMON}/hooks/pre-push"
@@ -346,14 +348,32 @@ git checkout -q fix/101-push
 echo q >>docs/a/x.md
 git add -A
 git commit -s -q -m "test: more"
-pushed deny "main 前进后推送落后的卡分支（原有 pre-push 先读光了 stdin）" fix/101-push "落后 up/main 1 个提交"
+pushed pass "main 前进、没有冲突的落后卡分支照推并提示（原有 pre-push 先读光了 stdin）" fix/101-push "落后 up/main 1 个提交，没有冲突"
+# main 再前进一个改同一行的提交：与卡分支冲突。
+git show "${adv}:docs/a/x.md" >"${TMP}/x.main" 2>/dev/null || : >"${TMP}/x.main"
+echo conflict >>"${TMP}/x.main"
+cblob="$(git hash-object -w "${TMP}/x.main")"
+ctree="$(GIT_INDEX_FILE="${TMP}/idx" git read-tree "$adv" &&
+  GIT_INDEX_FILE="${TMP}/idx" git update-index --add --cacheinfo "100644,${cblob},docs/a/x.md" &&
+  GIT_INDEX_FILE="${TMP}/idx" git write-tree)"
+cadv="$(git commit-tree -p "$adv" -m "main conflicts" "$ctree")"
+git push -q up "${cadv}:refs/heads/main"
+# 推送内容不变时 git 不调 pre-push：卡分支再加一个提交（pre-commit 会因 main 改过范围内文件拦，这里只测推送，跳过它）。
+echo s >>docs/a/y.md
+git add -A
+git commit --no-verify -s -q -m "test: after conflict"
+pushed deny "  与 main 有冲突的卡分支 → 拒" fix/101-push "有冲突"
 git checkout -q -B batch/2026-11-02-push fix/101-push
-pushed pass "  落后的 batch/* 不拦" batch/2026-11-02-push
+pushed pass "  落后且冲突的 batch/* 不拦" batch/2026-11-02-push
 git checkout -q fix/101-push
-git rebase -q up/main
-pushed pass "  反证：rebase 到 up/main 后 → 放行" fix/101-push
+git fetch -q up main
+git reset -q --hard up/main
+echo r >>docs/a/x.md
+git add -A
+git commit -s -q -m "test: rebased"
+pushed pass "  反证：跟上 up/main 后 → 放行" fix/101-push
 rm -f "${COMMON}/hooks/pre-push"
-git fetch -q up main:main 2>/dev/null || git update-ref refs/heads/main "$adv"
+git fetch -q up main:main 2>/dev/null || git update-ref refs/heads/main "$cadv"
 
 echo "==> 12. 安装自检"
 git checkout -q -f main

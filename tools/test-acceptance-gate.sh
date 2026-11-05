@@ -60,10 +60,29 @@ gate 0 "反证：同名文件在测试目录下 → 绿" "apps/android/app/src/a
 
 gate 1 "  iOS TransportFFITests/Package.swift 是 App 依赖的包清单，不算测试 → 红" "apps/ios/TransportFFITests/Package.swift" "closes #1"
 
+# 更新说明（#1448）：只改 release/notes/**（可带 CHANGELOG.md）→ 文案确认行；混改界面仍要真机验收行
+NOTE=release/notes/android/0.11.0.zh.txt
+COPY='产品负责人 2026-11-05 15:30 文案确认通过'
+gate 1 "只改更新说明、没有确认行 → 红" "$NOTE" "closes #1"
+gate 0 "反证：补「文案确认通过」行 → 绿" "$NOTE" $'closes #1\n'"$COPY"
+gate 0 "  更新说明 + CHANGELOG.md、有确认行 → 绿" "$NOTE CHANGELOG.md" $'closes #1\n- **'"$COPY"'**'
+gate 0 "  已有真机验收行也算确认 → 绿" "$NOTE" $'closes #1\n'"$LINE"
+gate 1 "  确认行嵌在句子中间 → 红" "$NOTE" $'closes #1\n备注：'"$COPY"
+gate 1 "  确认行日期不是具体日期 → 红" "$NOTE" $'closes #1\n产品负责人 <时间> 文案确认通过'
+gate 1 "更新说明 + 界面、只有文案确认行 → 红" "$NOTE $UI" $'closes #1\n'"$COPY"
+gate 0 "反证：更新说明 + 界面补真机验收行 → 绿" "$NOTE $UI" $'closes #1\n'"$LINE"
+gate 1 "界面改动只有文案确认行 → 红（文案确认顶不了真机验收）" "$UI" $'closes #1\n'"$COPY"
+gate 0 "只改 CHANGELOG.md → 自动级，绿" "CHANGELOG.md" "closes #1"
+# #1446 的真实文件清单（v0.11.0 三端更新说明）+ 带确认行的正文 → 绿
+gate 0 "#1446 的文件清单 + 文案确认行 → 绿" "release/notes/android/0.11.0.en.txt release/notes/android/0.11.0.zh.txt release/notes/macos/0.11.0.en.txt release/notes/macos/0.11.0.zh.txt release/notes/windows/0.11.0.en.txt release/notes/windows/0.11.0.zh.txt" $'closes #1444\n'"$COPY"
+gate 1 "  反证：同一清单没有确认行 → 红" "release/notes/android/0.11.0.en.txt release/notes/macos/0.11.0.zh.txt" "closes #1444"
+
 # classify
 printf '%s\n' "$UI" | bash "$G" classify --repo "${TMP}/repo" | grep -qx ui && ok "classify：界面 → ui" || bad "classify 界面"
 printf '%s\n' core/x.rs | bash "$G" classify --repo "${TMP}/repo" | grep -qx core && ok "classify：核心 → core" || bad "classify 核心"
 printf '%s\n' docs/a.md | bash "$G" classify --repo "${TMP}/repo" | grep -qx none && ok "classify：文档 → none" || bad "classify 文档"
+printf '%s\n' "$NOTE" CHANGELOG.md | bash "$G" classify --repo "${TMP}/repo" | grep -qx notes && ok "classify：更新说明 → notes" || bad "classify 更新说明"
+printf '%s\n' "$NOTE" "$UI" | bash "$G" classify --repo "${TMP}/repo" | grep -qx ui && ok "classify：更新说明 + 界面 → ui" || bad "classify 混改"
 # 界面清单读不到 → 宁严勿松
 rm "${TMP}/repo/tools/flow/owner-triage.sh"
 printf '%s\n' docs/a.md | bash "$G" classify --repo "${TMP}/repo" | grep -qx ui && ok "界面清单读不到 → 按需要验收处理" || bad "清单缺失时放行了"

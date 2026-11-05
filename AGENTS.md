@@ -40,6 +40,8 @@ bash 能否真执行、本地提交拦截、gh 能否读 issue、提交身份、
 - **验收即放行**：产品负责人真机验收通过就算放行，PR 上不再要求另外留言放行。盯梢、人控级的 PR 先开草稿，验收通过后
   PR 正文补一行「产品负责人 <时间> 真机验收通过」再 `gh pr ready`；没有这句 acceptance gate 红、不合入，不替人做验收、不自己编这句。
   验收之后代码又有实质改动（例如评审要求改逻辑）且用户看得到的，要产品负责人在真机上再看一眼。
+  只改更新说明（`release/notes/**`，可带 `CHANGELOG.md`）的 PR，发版前没有真机可看，验收方式是文案确认：正文补一行
+  「产品负责人 <时间> 文案确认通过」；更新说明和界面一起改的仍要真机验收行（判定在 `tools/flow/acceptance-gate.sh`）。
 - **独立评审**：三级都要有一个没参与写这个 PR 的 agent 只读评审（对照关联卡的范围与验收查漏），通过才合入。
   **CI 评审 job 即独立评审**（`.github/workflows/ci-review.yml`）：每个 PR 的每个头提交自动跑一次，结论写在 PR 评论
   和提交状态 `review/agent` 里；`review/agent` 是 main 的必需检查，只认 GitHub Actions 写的状态。推了新提交，旧结论作废、重评；
@@ -48,7 +50,7 @@ bash 能否真执行、本地提交拦截、gh 能否读 issue、提交身份、
   owner 只在评审 job 不可用（例如模型服务长时间故障）或产品负责人点名时，派一个新会话用 `just review` 评审，
   本机评审写的状态不顶替必需检查；评审 job 长期不可用时，是否临时撤掉这项必需检查交产品负责人定。
   PR 开出后就开自动合入（`gh pr merge --auto --squash`；草稿 PR 在 `gh pr ready` 之后开），评审与其它必需检查全过即合；
-  只在 `review/agent` 已是 main 的必需检查时开（`just done` 会先核对，是才打印 `AUTO-MERGE:` 命令），否则 CI 一绿就合，等于绕过评审。
+  只在 `review/agent` 已是 main 的必需检查时开（`just done` 会先核对，是才打印开自动合入的命令），否则 CI 一绿就合，等于绕过评审。
 - 现状：agent 与人共用同一个 GitHub 账号，GitHub 不允许给自己的 PR 批准，所以评审不用 approve，改用必需检查 `review/agent` 把关；
   评审工具取 main 上的版本，被评审的 PR 改不了自己的评审结论
   （产品负责人 2026-11-03 定：先靠自觉，暂不开独立身份；出现 agent 自己合入盯梢级 PR 再开）。
@@ -120,11 +122,17 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
     测试结果这时没人用，只会拖慢他看到改动。
   - **定稿后、推分支前**：只跑改动涉及的测试，跑一次（`just done` 按改动路径挑，见下）。提交前钩子随时拦格式与范围。
   - **PR 上**：CI 全量跑一次，是合入门禁。
-- `just done` 依次：门禁（按改动路径挑：安卓 `just android-test`、iOS `just ios-test`、文案/i18n `just mobile-static-check`、
+- `just done` 依次：核对范围 → 推送前自查 → 门禁（按改动路径挑：安卓 `just android-test`、iOS `just ios-test`、文案/i18n `just mobile-static-check`、
   Rust crate 对应 crate 的 `cargo nextest run -p`、纯文档 `just ci-docs`；有一个文件挑不出来才退回全量 `just ci`）→ `just verify <号>`（命令存在才跑）
-  → 核对 `git diff origin/main...` 只含范围内文件 → 推分支 → 在 issue 贴回执（分支、提交、门禁与验收输出末尾、
-  证据等级、证据目录）。任何一步红：不推送、issue 写明停在哪、打 `status:blocked`，修好重跑即可。
-  分支落后 `origin/main` 时只报错不打 blocked：先 `git rebase origin/main` 再重跑。
+  → 推分支 → 在 issue 贴回执（分支、提交、门禁与验收输出末尾、证据等级、证据目录、自查结论）。
+  任何一步红：不推送、issue 写明停在哪、打 `status:blocked`，修好重跑即可。
+  - **推送前自查**：用 CI 评审的同一份清单（`tools/flow/review-prompt.md`）对自己的改动自查，重点是每处改动的规则、判定、
+    写法、文案，`git grep` 全仓同类写法逐条处理（同一规矩在 AGENTS.md、模板、justfile、runbook 里的旧写法，另一端、另一个脚本里的同一份判定）。
+    结论写进证据目录的 `self-review.md`，首行是 `just done` 给出的「自查对象：<树哈希>」；没有或代码改过就不推送，打印清单与漏改提示。
+    结论进回执与 PR 正文，CI 评审可对照。
+  - **代码没变就复用验证**：门禁与 verify 通过后记下树哈希；重跑 `just done` 时树和门禁清单都没变就不重跑，回执写明复用了哪次的验证。
+  - **落后 main 不拦**：PR 上的 CI 测的是合并后的结果，main 也不要求分支跟上最新，所以落后只提示、照推；
+    和 main 有冲突才停（不打 blocked）：`git rebase origin/main` 解冲突后重跑。推送时的 pre-push hook 同一口径。
 - 自动级的 PR：CI 全绿且独立评审通过就合（squash）。盯梢、人控级：推分支就开草稿 PR（`just done` 打印的开 PR 命令自动带 `--draft`），CI、评审与验收并行；验收通过补验收行、`gh pr ready`，acceptance gate、CI 全绿且评审通过就合。开完 PR 立刻打开外壳的 PR 监控（见下两条）；CI 红了由干活的 agent 修到绿，不叫人。
 - 必须用 `just stuck` 停下的四种情况：命中核心且没有已采纳方案、需要改范围外文件、没有可用的验收场景、
   同一处连红 3 次。
@@ -132,14 +140,17 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
 - 防发散：PR 正文 closes 它解决的所有卡，不夹带无关改动；同时开着的分支不超过 3 个、一两天内合；要好几天的功能用开关先合进 main、默认关；改到范围外文件就是红；新增网络出口、遥测依赖、自启点、落盘目录由 `just ci` 挡
   （现有适应度检查）。PR 大小上限、同时打开的分支数上限、「盯梢 / 人控级没有验收记录或评审不许合」的必需检查尚未建，
   目前靠自觉。
-- **PR 由执行者自己开**：`just done` 推送后不开 PR，只写好正文、打印一条开 PR 的命令（`PR-CREATE:` 开头那行），
-  执行者原样自己运行，不包进别的脚本（外壳的 PR 监控只认会话直接运行的开 PR 命令）。
+- **PR 由执行者自己开**：`just done` 推送后不开 PR，只写好正文、单独一行打印开 PR 的命令（`gh pr create …`，不带前缀），
+  执行者整行照抄自己运行，单独执行，不包进别的脚本（外壳的 PR 监控只认会话直接运行的开 PR 命令）。
 - **开 PR 的会话负责把它推进到合入**：CI 红、未解决的评审线程、和 main 冲突，任一条都算 PR 没过，由开 PR 的会话修到全清；
   `just pr-status <PR号>` 一次列出这几类卡点。外壳有 PR 监控的（会在 CI 红、新评审意见、冲突时唤醒会话），开完 PR 立即打开，
   之后被唤醒再修；不手动轮询 CI。各外壳的开法写在各自的说明里（Claude Code 见 `CLAUDE.md`）。
 - **评审意见逐条判定**（CodeRabbit 等机器人的行内意见同样算）：成立就改；改完、不改或不成立，都在线程里回一句理由，
   再标为已解决，一步做完用 `just pr-thread <线程ID> "<理由>"`。判不了的交 owner，不找产品负责人。
   回复或关闭被外壳权限拒绝时，停下把被拒的命令原文报给 owner，不绕过。
+  **独立评审通过之后**再来的意见（owner 2026-11-05 定），只有两类在本 PR 修：会误放行或误报全清的、安全相关的；
+  其余记到后续卡（新卡或已有卡的评论），在线程里写明卡号后用 `just pr-thread` 关闭，不为它推新提交——
+  每推一次都会招来新一轮意见，还要重评。
 - 压缩提交只能 `reset --soft $(git merge-base HEAD origin/main)`，**绝不 `reset --soft origin/main`**
   （会把旧工作区当新内容提交，撤回别人刚合入的改动）。
 - 分拣、出 test 包、停下、记想法的命令见 [owner 流程](docs/runbook/owner.md)：

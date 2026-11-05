@@ -47,7 +47,7 @@ owner 只统筹，不当传声筒：这些命令是 owner 的工具，不是合�
 - 换模型：`--model <名>`，或 `PPASS_REVIEW_MODEL`；换成别家的命令用 `PPASS_REVIEW_AGENT`
   （要接受同样的 `-p`、`--model`、`--allowedTools` 参数，提示词走 stdin）。
 - 本机跑时，评审通过后对 PR 执行 `gh pr merge --auto --squash`（CI 上不开，自动合入由 `just done` 开 PR 时开）。盯梢、人控级（改动碰界面文案路径
-  或核心路径）多一个条件：PR 正文要有「产品负责人 <时间> 真机验收通过」这一行，没有就判未通过、不开自动合入，
+  或核心路径）多一个条件：PR 正文要有「产品负责人 <时间> 真机验收通过」这一行（只改更新说明的是「文案确认通过」），没有就判未通过、不开自动合入，
   评论里写明缺这一行。判定与 `just done`、CI 的 acceptance gate 共用 `acceptance-gate.sh classify`：碰核心路径、`UI_GLOBS`，或 `apps/**` 下的非测试文件。这类 PR 一开始是草稿（`just done` 打印的开 PR 命令自动带 `--draft`），验收后补验收行再 `gh pr ready`；
   CI 的 `acceptance gate`（`tools/flow/acceptance-gate.sh`）合入前也查这一行。界面路径清单与 `owner-triage.sh` 的 `UI_GLOBS` 共用，核心路径规则取 `origin/main` 上的 `.github/core-paths.txt`。
 - `review/agent` 进 main 的必需检查由产品负责人在仓库设置里做（命令见 #1435 的 PR 正文），脚本不改仓库设置。

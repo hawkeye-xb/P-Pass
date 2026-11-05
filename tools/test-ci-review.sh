@@ -77,6 +77,8 @@ case "$1 $2" in
     grep -q "独立评审：未通过" "$F/comments" && echo 4242 || true ;;
   "api -X")
     [ "$3" != DELETE ] || { echo "$*" >>"$F/deletes"; exit 0; }
+    # 写 error 状态失败一次（#1441：review.sh 写不出 error 时 publish 要走兜底）
+    case " $* " in *" state=error "*) [ ! -e "$F/error_fail_once" ] || { rm -f "$F/error_fail_once"; echo "HTTP 502" >&2; exit 1; } ;; esac
     shift 2
     echo "$*" >>"$F/statuses"
     ;;
@@ -315,7 +317,7 @@ grep -q "sender.type != 'Bot'" "$WF" && ok "edited 不认 bot 改正文" || bad 
   ok "并发写在 job 上：被跳过的运行不取消正在跑的评审" || bad "并发写在 workflow 上"
 ! grep -qE '^ *contents: *write' "$WF" && ok "不升 contents: write（CI 不开自动合入）" || bad "要了 contents: write"
 grep -q 'persist-credentials: false' "$WF" && ok "检出不把 token 留在磁盘上的 git 配置里" || bad "检出没写 persist-credentials: false"
-python3 - "$WF" <<'PY3' && ok "GH_TOKEN 只在准备、发布两步；评审那步与 job 级 env 都没有" || bad "GH_TOKEN 给到了 agent 那步或 job 级"
+python3 - "$WF" <<'PY3' && ok "GH_TOKEN 只在写 pending、准备、发布三步；评审那步与 job 级 env 都没有" || bad "GH_TOKEN 给到了 agent 那步或 job 级"
 import re,sys
 t=open(sys.argv[1]).read()
 job_env=t[t.index("    env:\n"):t.index("    steps:\n")]
@@ -324,9 +326,37 @@ agent=[x for x in steps if "ci-review.sh agent" in x]
 tok=[x for x in steps if "GH_TOKEN" in x]
 ok = ("GH_TOKEN" not in job_env and "github.token" not in job_env and len(agent)==1
       and "GH_TOKEN" not in agent[0] and "github.token" not in agent[0]
-      and len(tok)==2 and all(("prepare" in x) or ("publish" in x) for x in tok))
+      and len(tok)==3 and all(("prepare" in x) or ("publish" in x) or ("state=pending" in x) for x in tok))
 sys.exit(0 if ok else 1)
 PY3
+
+python3 - "$WF" <<'PY4' && ok "#1441：第一步就写 review/agent=pending，在检出与装 claude 之前，用事件里的头提交" || bad "pending 不是第一步"
+import re,sys
+t=open(sys.argv[1]).read()
+steps=re.split(r"\n      - ", t[t.index("    steps:\n"):])[1:]
+first=steps[0]
+sys.exit(0 if ("state=pending" in first and "review/agent" in first and "pull_request.head.sha" in first
+               and "checkout" not in first and "npm install" not in first) else 1)
+PY4
+python3 - "$WF" <<'PY5' && ok "#1441：草稿 PR 也评审；ready_for_review 不触发重评" || bad "草稿仍被排除或 ready_for_review 还会重评"
+import re,sys
+t=open(sys.argv[1]).read()
+types=re.search(r"types: \[([^]]*)\]", t).group(1)
+cond=t[t.index("    if: >-"):t.index("    concurrency:")]
+sys.exit(0 if ("draft" not in cond and "ready_for_review" not in types and "edited" in types and "synchronize" in types) else 1)
+PY5
+
+echo "==> #1441：review.sh 写 error 状态失败 → publish 走兜底 infra_report"
+reset infra
+touch "$FAKE/error_fail_once"
+CI 7 >"${TMP}/o10" 2>&1
+has "review.sh 没写出评审状态就退出了" "${TMP}/o10" && tail -n 1 "$FAKE/statuses" | grep -qF "state=error" &&
+  ok "review.sh 写 error 失败 → 兜底补写 error" || bad "写 error 失败后没兜底：$(tail -5 "${TMP}/o10")；状态 $(cat "$FAKE/statuses")"
+! has "REVIEW_STATUS_WRITTEN=" "${TMP}/o10" && ok "  写失败时没有「状态已写」标记" || bad "写失败却打了标记"
+reset infra
+CI 7 >"${TMP}/o11" 2>&1
+has "REVIEW_STATUS_WRITTEN=error" "${TMP}/o11" && ! has "review.sh 没写出评审状态就退出了" "${TMP}/o11" &&
+  ok "  反证：error 写成功 → 有标记，不重复兜底" || bad "反证不对：$(tail -5 "${TMP}/o11")"
 
 echo
 echo "ci-review: ${PASS} passed, ${FAIL} failed"
