@@ -60,10 +60,10 @@ struct PhotosScreen: View {
         // 部分照片权限时按钮是「去设置」，点了直接跳过去，卡上不再重复路径说明（产品负责人 11-04：只留核心）。
         let text = guide == .enableScope ? L.s("photos_guide_scope") : L.s("photos_guide_background")
         let action = guide == .enableScope ? L.s(app.scopeGuideActionKey) : L.s(app.backgroundGuideActionKey)
-        // 复用现成提示条 NoticeRow 的 × 一行版式（C1），不另起组件；左右 12 与照片网格对齐。
+        // 复用现成提示条 NoticeRow 的 × 一行版式（C1），不另起组件；左右 20，与筛选条、照片网格、失联卡同一条线（#1405）。
         return NoticeRow(text: text, action: (action, { app.guideAction(guide) }),
                          close: (L.s("photos_guide_close"), { app.dismissGuide() }), standalone: true)
-        .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 12)
+        .padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 12)
         .onAppear { AppLog.log("photos-guide: shown \(guide.logName)") }
         .id(guide)
     }
@@ -94,7 +94,7 @@ struct PhotosScreen: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12).padding(.top, app.pairingLost || guideShown ? 0 : 8).padding(.bottom, 12) // 左右 12 与照片网格对齐
+        .padding(.horizontal, 20).padding(.top, app.pairingLost || guideShown ? 0 : 8).padding(.bottom, 12) // 提示条、筛选条、照片网格左右同一条线（#1405）
         .background(PPColor.paper)
     }
 
@@ -143,7 +143,7 @@ struct PhotosScreen: View {
         }
     }
 
-    /// 网格对齐 Android：3 列、4pt 间隔、左右 12pt 边距、缩略图圆角 10；月份组头 serif 18，不吸顶。
+    /// 网格对齐 Android：3 列、4pt 间隔、左右 20pt 边距（page-gutter）、缩略图圆角 10；月份组头 serif 18，不吸顶。
     private var grid: some View {
         ScrollView {
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 3), spacing: 4) {
@@ -157,11 +157,11 @@ struct PhotosScreen: View {
                     } header: {
                         Text(section.title).font(PPFont.serif(18, .regular, relativeTo: .title3))
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(.init(top: 16, leading: 8, bottom: 6, trailing: 8))
+                            .padding(.init(top: 16, leading: 0, bottom: 6, trailing: 0))
                     }
                 }
             }
-            .padding(.horizontal, 12).padding(.bottom, 8)
+            .padding(.horizontal, 20).padding(.bottom, 8)
         }
         .refreshable { await model.loadFirst(reason: .pull) }
     }

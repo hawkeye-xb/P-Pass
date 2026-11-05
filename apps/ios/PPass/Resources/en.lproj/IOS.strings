@@ -82,4 +82,4 @@
 "photo_access_change_later_hint" = "You can change it to “Full Access” anytime in Settings › Privacy & Security › Photos › P-Pass.";
 
 /* 照片页引导卡：iOS 没有「App 关闭也能备份」，靠后台 App 刷新（产品负责人 11-04）。 */
-"photos_guide_background" = "Backs up even when the app is in the background";
+"photos_guide_background" = "Back up in the background";
