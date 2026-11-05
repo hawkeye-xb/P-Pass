@@ -21,10 +21,35 @@
 
 `AGENTS.md`「交付流程」要求开 PR 的会话把它推进到合入。在 Claude Desktop 里由 app 的 PR 监控唤醒会话：
 
-- `just done` 末尾打印 `PR-CREATE: gh pr create …`。用 Bash 工具**直接**运行冒号后面那条命令（不包进脚本、
+- `just done` 末尾单独一行打印 `gh pr create …`。用 Bash 工具**直接**运行这一整行（不包进脚本、
   不放后台），app 才把这个 PR 记为本会话所开；`just done` 自己不开 PR。
 - 运行后立刻调 `set_monitor`，`auto_fix`、`address_comments`、`auto_archive_on_close` 三项全开（先 `get_status`，
   没报出这个 PR 就 `bind_pr`）。app 没有全局默认开关，每个 PR 都要开。
 - 只有本会话直接运行 `gh pr create` 开的 PR 能由会话打开 `auto_fix`；事后按分支绑上的开不了，
   把报错原文报给 owner，不换花样重试。
 - 打开后不轮询 CI（不用 `/loop`、定时任务或反复 `gh pr checks`），等 CI 红、新评审意见、冲突把会话唤醒再处理。
+
+## 已放行命令的写法（Claude Desktop，产品负责人 2026-11-05 定）
+
+放行规则按命令开头逐字匹配，写法不对就弹窗打断人。照下面写，不试错：
+
+- 自动合入：`gh pr merge --auto --squash <号> --repo <owner>/<repo>`（参数顺序固定，`just done` 打印的就是这一行）。
+- 处理评审线程：`just pr-thread <线程ID> "<理由>"`；查 PR 卡点：`just pr-status <号>`。
+- 记想法：`just idea "<原话>"`，原话必须是第一个参数，要先定方案再加 `--discuss`：`just idea "<原话>" --discuss`。
+- 领卡、交卡、停下：`just start …`、`just done …`、`just stuck <号> "<原因>"`。
+- **放行的命令一律单独执行**：不在前面接 `cd … &&`，不放进管道或 `;` / `&&` 复合命令的开头。要换目录，先单独 `cd <目录>`
+  （会话目录内的 `cd` 会保留到下一次调用），再单独运行命令。
+
+## 长命令与后台任务
+
+- 默认跑在前台，等它结束再汇报。只有预计超过前台上限（约 10 分钟）时才放后台。
+- 放后台后汇报「在等」时，附上正在跑的进程 pid 和日志路径（`pgrep -fl <命令>` 核实还活着）；进程已经不在就不说「在等」，
+  先看日志结尾判断它是跑完了还是挂了。
+
+## 设备锁
+
+- 规则与命令在 `docs/runbook/e3.md`「设备锁」（构建在锁外、本机桌面 App 算 mac 设备、人工验收前 `hold-for-human`）。
+  Claude Desktop 这边要注意的：手动操作设备时用 `tools/e3/lock <设备> <命令…>` 套住那一条命令，不要另起一个长驻后台进程占着锁；
+  会话结束或转去做别的事之前跑 `tools/e3/lock status`，确认自己没留下占用。
+- `hold-for-human` 的持锁进程只靠 nohup 挡挂断信号，外壳中断整个进程组时锁会被放掉：发 SOP 前和判定前各跑一次
+  `tools/e3/lock status`，确认仍是「人工验收中」。

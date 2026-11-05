@@ -114,6 +114,23 @@ fi
 
 for c in "${CARDS[@]}"; do flow_labels "$c" "status:doing" "status:ready"; done
 
+# #1423 apps/android/local.properties 是本机配置（sdk.dir 等），git 不跟踪，新 worktree 里没有：
+# 主副本有就拷进卡目录（卡目录已有不覆盖）；拷不成只提示，不拦领卡。
+LOCAL_PROPS="apps/android/local.properties"
+LOCAL_PROPS_NOTE=""
+MAIN_ROOT="$(flow_main_root 2>/dev/null || true)"
+if [ -e "${DIR}/${LOCAL_PROPS}" ]; then
+  LOCAL_PROPS_NOTE="卡目录里已有，没动"
+elif [ -n "$MAIN_ROOT" ] && [ -f "${MAIN_ROOT}/${LOCAL_PROPS}" ]; then
+  if mkdir -p "${DIR}/apps/android" && cp "${MAIN_ROOT}/${LOCAL_PROPS}" "${DIR}/${LOCAL_PROPS}"; then
+    LOCAL_PROPS_NOTE="已从主副本拷入"
+  else
+    LOCAL_PROPS_NOTE="⚠ 从主副本拷 ${LOCAL_PROPS} 失败：安卓构建与 just verify 编不出 APK；手动 cp ${MAIN_ROOT}/${LOCAL_PROPS} ${DIR}/${LOCAL_PROPS}"
+  fi
+else
+  LOCAL_PROPS_NOTE="⚠ 主副本没有 ${LOCAL_PROPS}：本卡目录的安卓构建与 just verify 编不出 APK（找不到 Android SDK）。要编安卓：在主副本建这个文件（写一行 sdk.dir=<本机 Android SDK 路径>，或用 Android Studio 打开 apps/android 自动生成），再拷到 ${DIR}/${LOCAL_PROPS}；不碰安卓可忽略"
+fi
+
 # #1375 共享编译缓存：主副本旁的 .env.ppass-dev（没有就建）；卡目录不在它下面时拷一份进卡目录根。
 CACHE_ENV=""
 if [ -f "${HERE}/../e3/lib/dev-cache.sh" ]; then
@@ -148,6 +165,7 @@ if [ -n "$CACHE_ENV" ]; then
 else
   echo "   编译缓存：没建成共享配置，本目录单独编（tools/e3/dev cache 看原因）"
 fi
+echo "   ${LOCAL_PROPS}：${LOCAL_PROPS_NOTE}"
 echo "   范围（只许动这些；多卡取并集）："
 printf '     %s\n' "${GLOBS[@]}"
 echo
