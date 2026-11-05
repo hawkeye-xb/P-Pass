@@ -460,6 +460,26 @@ tcard 72 status:inbox
 plan "$P" "$UIP" "首页多一张引导" "**owner 定案**：无"
 bash tools/flow/owner-triage.sh 72 "$P" >/dev/null 2>&1
 check "owner 定案写「无」等于没写 → 仍按产品问题处理" bash -c '[ "$(cat "$FAKE/issues/72.labels")" = status:inbox ]'
+tcard 74 status:inbox
+printf '**做法**：改\n**涉及端**：无\n**数据**：无\n**用户可见行为**：首页多一张引导\n**隐私**：无\n读取联系人\n**风险**：低\n**范围**：\n```\n%s\n```\n**验收场景**：x（E2）\n%s\n' "$UIP" "$OD_OK" >"$P"
+bash tools/flow/owner-triage.sh 74 "$P" >/dev/null 2>&1
+check "隐私「无」后面换行还有内容 → 不算无，owner 定案不顶用（无选项则拒绝）" bash -c '[ "$(cat "$FAKE/issues/74.labels")" = status:inbox ] && ! grep -q "decided:owner" "$FAKE/issues/74.labels"'
+tcard 75 status:inbox
+printf '**做法**：改\n**涉及端**：无\n**数据**：无\n分类别缓存\n**用户可见行为**：首页多一张引导\n**隐私**：无\n**风险**：低\n**范围**：\n```\n%s\n```\n**验收场景**：x（E2）\n%s\n' "$UIP" "$OD_OK" >"$P"
+bash tools/flow/owner-triage.sh 75 "$P" >/dev/null 2>&1
+check "数据「无」后面换行还有内容 → 不算无" bash -c '[ "$(cat "$FAKE/issues/75.labels")" = status:inbox ]'
+tcard 76 status:inbox
+printf '**做法**：改\n**涉及端**：无\n**数据**：无\n**用户可见行为**：首页多一张引导\n**隐私**：无\n**风险**：低\n**范围**：\n```\n%s\n```\n**验收场景**：x（E2）\n%s\n' "$UIP" "$OD_OK" >"$P"
+out="$(bash tools/flow/owner-triage.sh 76 "$P" 2>/dev/null)"
+check "反证：隐私、数据整个字段就是「无」→ ready + decided:owner" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 76 ready$" && grep -q "decided:owner" "$FAKE/issues/76.labels"' _ "$out"
+tcard 77 status:inbox
+plan "$P" "$UIP" "首页多一张引导" $'**owner 定案**：AGENTS.md「iOS 先对齐 Android，\n要加就两端一起加」'
+bash tools/flow/owner-triage.sh 77 "$P" >/dev/null 2>&1
+check "多行引用 → 拒绝（退出码 2），不拆成几段各自匹配" bash -c '[ "$(cat "$FAKE/issues/77.labels")" = status:inbox ] && ! grep -q "^issue edit 77" "$FAKE/calls.log"'
+tcard 78 status:inbox
+plan "$P" "$UIP" "首页多一张引导" $'**owner 定案**：AGENTS.md「iOS 先对齐 Android，要加就两端一起加」'
+out="$(bash tools/flow/owner-triage.sh 78 "$P" 2>/dev/null)"
+check "反证：同一句写在一行里 → ready" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 78 ready$"' _ "$out"
 
 echo
 echo "flow-owner: ${PASS} passed, ${FAIL} failed"

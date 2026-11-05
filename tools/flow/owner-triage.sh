@@ -80,6 +80,8 @@ rc=$?
 [ "$rc" -eq 0 ] || refuse "方案不完整（见上一行）" "补齐 ${PLAN} 再重跑 just triage ${N} ${PLAN}。"
 field() { [ -f "${TMPD}/$1" ] && cat "${TMPD}/$1"; }
 is_none() { [[ "$(field "$1" | head -1 | tr -d '[:space:]')" =~ ^(无|没有|不涉及|none|无。)$ ]]; }
+# 整个字段（含换行后的内容）都只是「无」才算无；隐私、数据用这个，不能只看第一行。
+is_none_full() { [[ "$(field "$1" | tr -d '[:space:]')" =~ ^(无|没有|不涉及|none|无。)$ ]]; }
 
 GLOBS=()
 while IFS= read -r g; do
@@ -143,6 +145,8 @@ OWNER_DECIDED=0
 if [ -n "$(field "owner 定案")" ] && ! is_none "owner 定案"; then
   basis="$(field "owner 定案")"
   nbasis=0
+  printf '%s\n' "$basis" | python3 -I -c 'import re, sys; sys.exit(1 if any("\n" in q for q in re.findall("「([^」]*)」", sys.stdin.read())) else 0)' ||
+    refuse "**owner 定案** 引用的 AGENTS.md 原文跨行了" "只认单行原文；一句话写在一行里，分别引用多句。"
   while IFS= read -r q; do
     [ -n "$q" ] || continue
     [ "$(printf '%s' "$q" | python3 -I -c 'import sys; print(len(sys.stdin.read()))')" -ge 8 ] || refuse "**owner 定案** 引用的 AGENTS.md 原文太短（「${q}」，至少 8 个字）" "引一整句规矩原文。"
@@ -172,14 +176,14 @@ EOF2
 fi
 PRODUCT=0
 is_none 用户可见行为 || { PRODUCT=1; REASONS="${REASONS}用户可见行为；"; }
-is_none 隐私 || { PRODUCT=1; REASONS="${REASONS}隐私；"; }
-is_none 数据 || { PRODUCT=1; REASONS="${REASONS}数据去留；"; }
+is_none_full 隐私 || { PRODUCT=1; REASONS="${REASONS}隐私；"; }
+is_none_full 数据 || { PRODUCT=1; REASONS="${REASONS}数据去留；"; }
 [ "$UI" = false ] || { PRODUCT=1; REASONS="${REASONS}范围碰到界面或文案路径；"; }
 [ -z "$DECIDED" ] || PRODUCT=0
 # 只在本来要 needs:product 时才用得上 owner 定案；隐私或数据不是「无」、或 Feature 卡，owner 不能代定。
 USED_OWNER=0
 if [ "$OWNER_DECIDED" = 1 ] && [ "$PRODUCT" = 1 ]; then
-  if is_none 隐私 && is_none 数据; then
+  if is_none_full 隐私 && is_none_full 数据; then
     itype="$(gh api "repos/${REPO}/issues/${N}" --jq '.type.name // ""' 2>/dev/null)" ||
       refuse "读不到 #${N} 的卡类型，判断不了 owner 定案是否适用" "稍后重跑。"
     [ "$itype" = Feature ] || { PRODUCT=0; USED_OWNER=1; }
