@@ -330,13 +330,14 @@ ok = ("GH_TOKEN" not in job_env and "github.token" not in job_env and len(agent)
 sys.exit(0 if ok else 1)
 PY3
 
-python3 - "$WF" <<'PY4' && ok "#1441：第一步就写 review/agent=pending，在检出与装 claude 之前，用事件里的头提交" || bad "pending 不是第一步"
+python3 - "$WF" <<'PY4' && ok "#1441：第一步就写 review/agent=pending，在检出与装 claude 之前，用事件里的头提交；失败不跳过后续步骤" || bad "pending 不是第一步"
 import re,sys
 t=open(sys.argv[1]).read()
 steps=re.split(r"\n      - ", t[t.index("    steps:\n"):])[1:]
 first=steps[0]
 sys.exit(0 if ("state=pending" in first and "review/agent" in first and "pull_request.head.sha" in first
-               and "checkout" not in first and "npm install" not in first) else 1)
+               and "checkout" not in first and "npm install" not in first
+               and "continue-on-error: true" in first) else 1)
 PY4
 python3 - "$WF" <<'PY5' && ok "#1441：草稿 PR 也评审；ready_for_review 不触发重评" || bad "草稿仍被排除或 ready_for_review 还会重评"
 import re,sys

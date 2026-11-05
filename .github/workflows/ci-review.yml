@@ -54,7 +54,10 @@ jobs:
     steps:
       # 第一步就写 pending（#1441）：edited（如删掉验收行）后、新结论出来前，这个头提交上不能还挂着旧的 success，
       # 否则自动合入会在检出、装 claude 那几分钟里抢先合入。只用事件里的头提交，不检出任何代码。
+      # continue-on-error：这一步失败（GitHub API 一时不通）不能让后面的检出、评审、发布都被跳过——那样同一头提交上
+      # 旧的 success 会留着；准备那步会再写一次 pending，发布那步照常写出最终结论。
       - name: 先写 pending（检出之前）
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}

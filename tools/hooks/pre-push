@@ -24,10 +24,11 @@ if [ "${PPASS_HOOK_BYPASS:-}" = "1" ]; then
 fi
 
 fetched=""
-while read -r lref lsha _rref _rsha; do
-  case "$lref" in refs/heads/*) ;; *) continue ;; esac
+# 按远端目标引用认卡分支：just done 用 HEAD:refs/heads/<分支> 推送，这时本地引用是 HEAD，按本地引用认会整条跳过。
+while read -r _lref lsha rref _rsha; do
+  case "$rref" in refs/heads/*) ;; *) continue ;; esac
   case "$lsha" in 0000000000000000000000000000000000000000) continue ;; esac # 删除远端分支
-  branch="${lref#refs/heads/}"
+  branch="${rref#refs/heads/}"
   [[ "$branch" =~ ^(feat|fix|docs|test|ci)/[0-9]+-. ]] || continue
   if [ -z "$fetched" ]; then
     git fetch -q "$remote" "+refs/heads/main:refs/remotes/${remote}/main" ||

@@ -373,6 +373,9 @@ echo s >>docs/a/y.md
 git add -A
 git commit --no-verify -s -q -m "test: after conflict"
 pushed deny "  与 main 有冲突的卡分支 → 拒" fix/101-push "有冲突"
+# just done 用 HEAD:refs/heads/<分支> 推送：本地引用是 HEAD，要按远端目标引用认出卡分支
+out="$(git push -q -f up "HEAD:refs/heads/fix/101-push" 2>&1)" && bad "  HEAD:refs/heads/<卡分支> 推送冲突分支 → 期望 deny，实得 pass" ||
+  { printf '%s' "$out" | grep -qF "有冲突" && ok "  HEAD:refs/heads/<卡分支>（just done 的推法）推冲突分支 → 拒" || bad "  HEAD 推送拒绝理由不对：${out}"; }
 git checkout -q -B batch/2026-11-02-push fix/101-push
 pushed pass "  落后且冲突的 batch/* 不拦" batch/2026-11-02-push
 git checkout -q fix/101-push
