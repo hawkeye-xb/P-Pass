@@ -49,16 +49,39 @@ export PPASS_DOCTOR_MIN_FREE_GB=0
 export PPASS_DOCTOR_SKIP_DEVICES=1
 unset PPASS_HOOK_BYPASS PPASS_HOOK_BYPASS_REASON PPASS_HOOK_ROOT PPASS_WT_ROOT
 
+# 假命令：MSYS/Cygwin（Git Bash）不能执行指向 .exe 的符号链接，改生成 wrapper 脚本；
+# 其他平台保持 symlink。调用方：fake_cmd <目录> <命令名>。
+fake_cmd() {
+  local dir="$1" c="$2" p
+  p="$(command -v "$c")" && [ "${p#/}" != "$p" ] || return 1
+  case "$(uname -s 2>/dev/null)" in
+    MINGW* | MSYS* | CYGWIN*)
+      # 原生 git.exe spawn 钩子的解释器时要真正的 sh.exe，wrapper 脚本不行：
+      # 不放进假 bin，让 PATH 末尾的真实 /usr/bin 供给（见 EXTRA_PATH）。
+      [ "$c" = sh ] && return 0
+      printf '#!/bin/sh\nexec "%s" "$@"\n' "$p" >"${dir}/${c}" && chmod +x "${dir}/${c}"
+      ;;
+    *)
+      ln -s "$p" "${dir}/${c}"
+      ;;
+  esac
+}
+
 BIN="${TMP}/pathbin"
 mkdir -p "$BIN"
 for c in git bash env sh sed awk tar mktemp cat tr head tail grep rm cp chmod touch sort cmp \
   basename dirname mkdir mv cut wc ls diff df uname rmdir; do
-  p="$(command -v "$c")" && [ "${p#/}" != "$p" ] || {
+  fake_cmd "$BIN" "$c" || {
     echo "找不到命令 ${c}，无法搭测试环境"
     exit 1
   }
-  ln -s "$p" "${BIN}/${c}"
 done
+# Git Bash 上原生 git.exe 需要真实 sh.exe：把 MSYS 的 /usr/bin 放在假 PATH 末尾。
+case "$(uname -s 2>/dev/null)" in
+  MINGW* | MSYS* | CYGWIN*) EXTRA_PATH=":/usr/bin:/mingw64/bin" ;;
+  *) EXTRA_PATH="" ;;
+esac
+export EXTRA_PATH
 
 export FAKE_GH="${TMP}/gh"
 mkdir -p "$FAKE_GH"
@@ -153,7 +176,7 @@ if [ -e "$FAKE_GH/ci_fail" ]; then echo "error: lint failed: FAKE-CI-RED"; exit 
 echo "==> CI pipeline: all green FAKE-CI-GREEN (cargo $*)"
 STUB
 chmod +x "${BIN}/gh" "${BIN}/just" "${BIN}/cargo"
-export PATH="$BIN"
+export PATH="$BIN${EXTRA_PATH}"
 
 # ── 仓库：裸 origin + 主仓 ─────────────────────────────────────────────
 git init -q --bare "${TMP}/origin.git"
@@ -548,7 +571,10 @@ grep -qF '产品负责人 2026-11-04 15:30 真机验收通过' "${FAKE_GH}/pr.bo
 
 # ── #1375 共享编译缓存：just start 建主副本旁的 .env.ppass-dev ────────────────
 # 卡目录在主副本旁（<主副本>-wt 之类）时靠 just 往上找到它，不拷；不在旁边时拷进卡目录根。
-[ -f "${TMP}/.env.ppass-dev" ] && grep -q "^CARGO_TARGET_DIR=$(cd -P "$TMP" && pwd)/P-Pass-cache/cargo-target$" "${TMP}/.env.ppass-dev" &&
+cache_norm() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
+cache_want="$(cd -P "$TMP" && pwd)/P-Pass-cache/cargo-target"
+cache_got="$(sed -n 's/^CARGO_TARGET_DIR=//p' "${TMP}/.env.ppass-dev" 2>/dev/null | tail -1)"
+[ -n "$cache_got" ] && [ "$(cache_norm "$cache_got")" = "$(cache_norm "$cache_want")" ] &&
   ok "start 在主副本旁建了共享编译缓存配置" || bad "start 没建共享编译缓存配置"
 [ ! -e "${PPASS_WT_ROOT}/13-fix-the-thing/.env.ppass-dev" ] &&
   ok "卡目录在主副本旁：不拷配置（just 往上找得到）" || bad "卡目录在主副本旁却拷了配置"

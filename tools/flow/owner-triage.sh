@@ -53,7 +53,7 @@ has_label status:inbox || refuse "#${N} 不是 status:inbox（标签：${ISSUE_L
 TMPD="$(mktemp -d)"
 trap 'rm -rf "$TMPD"' EXIT
 # 解析方案：字段 → 文件（TMPD/<字段>）。缺字段在 stderr 列出并退出 3。
-python3 -I - "$PLAN" "$TMPD" <<'PY'
+python3 -I -X utf8 - "$PLAN" "$TMPD" <<'PY'
 import re, sys, pathlib
 text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").replace("\r", "")
 out = pathlib.Path(sys.argv[2])
@@ -100,7 +100,7 @@ FILES="${TMPD}/files"
 : >"$FILES"
 ALL="$(git ls-tree -r --name-only origin/main)"
 for g in "${GLOBS[@]}"; do
-  hits="$(printf '%s\n' "$ALL" | python3 -I -c '
+  hits="$(printf '%s\n' "$ALL" | python3 -I -X utf8 -c '
 import re, sys
 g = sys.argv[1]
 r = re.escape(g).replace(r"\*\*/", "(?:.*/)?").replace(r"\*\*", ".*").replace(r"\*", "[^/]*").replace(r"\?", "[^/]")
@@ -145,17 +145,18 @@ OWNER_DECIDED=0
 if [ -n "$(field "owner 定案")" ] && ! is_none "owner 定案"; then
   basis="$(field "owner 定案")"
   nbasis=0
-  printf '%s\n' "$basis" | python3 -I -c 'import re, sys; sys.exit(1 if any("\n" in q for q in re.findall("「([^」]*)」", sys.stdin.read())) else 0)' ||
+  printf '%s\n' "$basis" | python3 -I -X utf8 -c 'import re, sys; sys.exit(1 if any("\n" in q for q in re.findall("「([^」]*)」", sys.stdin.read())) else 0)' ||
     refuse "**owner 定案** 引用的 AGENTS.md 原文跨行了" "只认单行原文；一句话写在一行里，分别引用多句。"
   while IFS= read -r q; do
     [ -n "$q" ] || continue
-    [ "$(printf '%s' "$q" | python3 -I -c 'import sys; print(len(sys.stdin.read()))')" -ge 8 ] || refuse "**owner 定案** 引用的 AGENTS.md 原文太短（「${q}」，至少 8 个字）" "引一整句规矩原文。"
-    git show origin/main:AGENTS.md 2>/dev/null | grep -qF -- "$q" ||
+    [ "$(printf '%s' "$q" | python3 -I -X utf8 -c 'import sys; print(len(sys.stdin.read()))')" -ge 8 ] || refuse "**owner 定案** 引用的 AGENTS.md 原文太短（「${q}」，至少 8 个字）" "引一整句规矩原文。"
+    # Git Bash 会把 origin/main:<path> 的冒号当路径分隔符改写；禁止 MSYS 做路径转换。
+    MSYS_NO_PATHCONV=1 git show origin/main:AGENTS.md 2>/dev/null | grep -qF -- "$q" ||
       refuse "**owner 定案** 引用的原文在 origin/main 的 AGENTS.md 里找不到：「${q}」" \
         "逐字照抄 AGENTS.md 的句子；找不到依据就去掉这个字段，走 needs:product。"
     nbasis=$((nbasis + 1))
   done <<EOF2
-$(printf '%s\n' "$basis" | python3 -I -c 'import re, sys; print("\n".join(re.findall("「([^」]*)」", sys.stdin.read())))')
+$(printf '%s\n' "$basis" | python3 -I -X utf8 -c 'import re, sys; print("\n".join(re.findall("「([^」]*)」", sys.stdin.read())))')
 EOF2
   owner_login="${REPO%%/*}"
   while IFS= read -r url; do
@@ -206,7 +207,7 @@ fi
 printf '%s\n' "$ISSUE_BODY" >"${TMPD}/body"
 CORE_TXT="否（范围不命中 .github/core-paths.txt）"
 [ "$CORE" = false ] || CORE_TXT="是（定案：$(printf '%s' "${ADRS:-无}" | tr '\n' ' ')）"
-python3 -I - "${TMPD}" "$CORE_TXT" "$DECISION" "${REASONS%；}" <<'PY'
+python3 -I -X utf8 - "${TMPD}" "$CORE_TXT" "$DECISION" "${REASONS%；}" <<'PY'
 import re, sys, pathlib
 d = pathlib.Path(sys.argv[1]); core_txt, decision, reasons = sys.argv[2], sys.argv[3], sys.argv[4]
 f = lambda k: (d / k).read_text(encoding="utf-8").strip() if (d / k).exists() else ""
