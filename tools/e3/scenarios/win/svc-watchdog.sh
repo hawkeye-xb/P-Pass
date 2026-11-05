@@ -28,7 +28,13 @@ one_round() { # one_round <证据目录> <轮次名> <壳开着 1|0>
   echo "task=$(win_task_state)" >"$d/$tag-task.txt"
   if [ "$shell_up" = 0 ]; then
     win_stop_app
-    win_app_running && { echo "$tag: 壳没停掉，看门狗轮次无效"; return 1; }
+    if win_app_running; then
+      # 壳还活着时，daemon 可能由壳自愈拉起（父进程不是 svchost），这一轮证明不了看门狗。
+      echo "running" >"$d/$tag-shell.txt"
+      echo "$tag: 壳没停掉，看门狗轮次无效"
+      return 1
+    fi
+    echo "stopped" >"$d/$tag-shell.txt"
   fi
   # 强杀
   win_ps "Stop-Process -Id $old -Force" >/dev/null 2>&1 || true
@@ -78,6 +84,7 @@ judge() {
     check "[$tag] ${WINDOW}s 内出现新 pid" grep -Eq '[0-9]+' "$d/$tag-pid-after.txt"
     check "[$tag] 新 pid 与旧的不同" [ "$(tr -d '[:space:]' <"$d/$tag-pid-before.txt")" != "$(tr -d '[:space:]' <"$d/$tag-pid-after.txt")" ]
     if [ "$tag" = shell-closed ]; then
+      check "[$tag] 壳已关闭（壳关闭轮前提）" eq_file "$d/$tag-shell.txt" "stopped"
       check "[$tag] 父进程是 svchost（计划任务看门狗）" grep -q 'parent_name=svchost' "$d/$tag-parent.txt"
     else
       # 壳开着时壳自己也会自愈拉起 daemon（实测父进程 ppass-desktop），这是可接受的恢复路径；
