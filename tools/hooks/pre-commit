@@ -5,7 +5,8 @@
 #   batch/*                         不拦（owner 的批分支）
 #   <type>/<issue号>-<slug>         查该 issue；多卡分支查分支记录的每张卡（git config branch.<分支>.ppasscards，
 #                                   just start <号> <号>… 写入），范围取并集：
-#     - 暂存改动命中核心（tools/ci-paths.sh core，规则 .github/core-paths.txt）且没有一张卡带 `core` 标签 → 拒绝
+#     - 暂存改动命中核心（tools/ci-paths.sh core，规则 .github/core-paths.txt，带暂存区 diff：
+#       只改版本号行的不算核心，#1451）且没有一张卡带 `core` 标签 → 拒绝
 #     - 暂存改动有文件不在这些卡「范围」代码块的路径/glob 并集里 → 拒绝；任一张卡没有范围代码块 → 拒绝
 #     - 卡分支在主仓工作区（不是 linked worktree）里 → 拒绝
 #     - 落后 origin/main 超过 PPASS_HOOK_MAX_BEHIND（默认 20）个提交，或 main 上已有新提交改过范围内
@@ -165,8 +166,18 @@ for c in $CARDS; do
 done
 
 # ── 核心 ─────────────────────────────────────────────────────────────
-CORE_ERR="$(printf '%s\n' "$FILES" | bash "$PATHS" core - "$RULES" 2>&1 >/dev/null)"
-CORE="$(printf '%s\n' "$FILES" | bash "$PATHS" core - "$RULES" 2>/dev/null)"
+# 带上暂存区的 diff：只改版本号行（tools/bump-version.sh）的核心文件不算核心（#1451）。
+# 固定前缀、关掉外部 diff / textconv / 颜色，免得本机 git 配置改掉格式；取不到就不带 --diff，照旧按文件判。
+CORE_ARGS=(core - "$RULES")
+if STAGED_DIFF="$(mktemp 2>/dev/null)"; then
+  trap 'rm -f "$STAGED_DIFF"' EXIT
+  if git -c core.quotepath=false diff --cached --no-renames --no-color --no-ext-diff --no-textconv \
+    --src-prefix=a/ --dst-prefix=b/ >"$STAGED_DIFF" 2>/dev/null; then
+    CORE_ARGS+=(--diff "$STAGED_DIFF")
+  fi
+fi
+CORE_ERR="$(printf '%s\n' "$FILES" | bash "$PATHS" "${CORE_ARGS[@]}" 2>&1 >/dev/null)"
+CORE="$(printf '%s\n' "$FILES" | bash "$PATHS" "${CORE_ARGS[@]}" 2>/dev/null)"
 if [ "$CORE" != "false" ]; then
   if [ -n "$CORE_CARD" ]; then
     printf 'ok: #%s 带 core 标签，放行核心改动\n' "$CORE_CARD" >&2

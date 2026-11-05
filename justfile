@@ -274,7 +274,7 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check hooks-test flow-worker-test flow-review-test supply-chain-check mobile-static-check i18n-split-check lockfile-check flow-owner-test heavy-lock-test
+ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check hooks-test flow-worker-test flow-review-test flow-pr-test supply-chain-check mobile-static-check i18n-split-check lockfile-check flow-owner-test heavy-lock-test
   @echo "==> CI pipeline: all green ✅"
 
 # 两个 Rust workspace 的 Cargo.lock 都得和实际依赖一致（src-tauri 是独立 workspace，
@@ -313,7 +313,7 @@ i18n-split-check:
 #
 # ⚠️ 只在这次改动**一行 Rust/Kotlin/前端都没动**时用它。碰了代码就跑 `just ci`，
 # 别拿这条快车道当省事的借口——`ci` 的依赖列表一个都没减。
-ci-docs: md-check token-check shell-vars-check identity-check hooks-test flow-worker-test flow-review-test supply-chain-check flow-owner-test heavy-lock-test
+ci-docs: md-check token-check shell-vars-check identity-check hooks-test flow-worker-test flow-review-test flow-pr-test supply-chain-check flow-owner-test heavy-lock-test
   @echo "==> docs lane: green ✅（注意：本条不含 fmt/lint/test，动了代码必须跑 just ci）"
 
 # T-040 人工验收：自启/防睡眠/密钥仓 真机冒烟（H-09 双平台各跑一次）
@@ -527,11 +527,17 @@ test-dogfood-assets:
 start n *args:
     bash tools/flow/worker-start.sh {{n}} {{args}}
 
-# 交卡（在卡 worktree 里跑）：门禁 + just verify（有则跑）+ 范围核对，全绿才推送、每张卡贴回执，
-# doing→review，开 PR（closes 全部卡）；任何一步红：不推送、issue 写明停在哪、打 blocked。
-# 用户看得到的改动开草稿 PR（--draft），验收后补验收行再 gh pr ready；已验收过可给 --accepted "<验收时间>" 开正式 PR。
+# 交卡（在卡 worktree 里跑）：范围核对 + 推送前自查（self-review.md）+ 门禁 + just verify（有则跑；代码没变复用上次结果），
+# 全绿才推送、每张卡贴回执，doing→review，单独一行打印开 PR 的命令（gh pr create …，closes 全部卡），由执行者自己运行；
+# 任何一步红：不推送、issue 写明停在哪、打 blocked。落后 main 只提示，有冲突才停。用户看得到的改动打印的是草稿 PR 命令
+# （--draft），验收后补验收行再 gh pr ready；已验收过可给 --accepted "<验收时间>"，打印正式 PR 命令。
 done *args:
     bash tools/flow/worker-done.sh {{args}}
+
+# 发版前的模块验收检查（#1452）：上一个正式 tag 之后合入、正文标了「随模块验收 #<模块卡>」的 PR，
+# 对应模块卡上都要有验收记录，缺一个就红并列出卡号。接进 release.yml 前由 owner 发版前手动跑。
+release-acceptance tag *args:
+    bash tools/flow/release-acceptance.sh {{tag}} {{args}}
 
 # 四种必须停下的情况的统一出口：命中核心 / 需改范围外文件 / 没有验收场景 / 连红 3 次。
 stuck n reason:
@@ -545,6 +551,19 @@ review pr *args:
 # just review 的判据测试：假 gh + 假 agent，校验评论格式、提交状态与只读权限；进 ci / ci-docs。
 flow-review-test:
     @bash tools/test-flow-review.sh
+
+# PR 卡点：列出未过的检查、未解决的评审线程、冲突、是否开了自动合入（退出码 0 全清 / 1 有卡点 / 3 还在等结果）。
+pr-status pr:
+    bash tools/flow/pr-status.sh {{pr}}
+
+# 回复一条评审线程并标为已解决（线程 ID 用 just pr-status 查）；只关闭用 tools/flow/pr-thread.sh --resolve-only <ID>。
+[positional-arguments]
+pr-thread id reply:
+    bash tools/flow/pr-thread.sh "$@"
+
+# just pr-status / pr-thread 的判据测试：假 gh，每条卡点配反证；进 ci / ci-docs。
+flow-pr-test:
+    @bash tools/test-flow-pr.sh
 
 # worker 三条命令的判据测试：临时仓库 + 假 gh / just，每条拒绝配反证；进 ci / ci-docs。
 flow-worker-test:

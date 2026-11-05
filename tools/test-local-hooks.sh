@@ -78,13 +78,15 @@ R="${TMP}/repo"
 git init -q --template= "$R"
 cd "$R" || exit 1
 git remote add origin git@github-personal:hawkeye-xb/P-Pass.git
-mkdir -p tools/hooks .github docs/a docs/b crates/storage/src
+mkdir -p tools/hooks .github docs/a docs/b crates/storage/src apps/desktop/src-tauri
 cp "${SRC}/tools/hooks/"* tools/hooks/
 cp "${SRC}/tools/ci-paths.sh" tools/
 cp "${SRC}/.github/core-paths.txt" .github/
 echo a >docs/a/x.md
 echo b >docs/b/y.md
 echo s >crates/storage/src/a.rs
+TC=apps/desktop/src-tauri/tauri.conf.json
+printf '{\n  "productName": "P-Pass",\n  "version": "0.10.1",\n  "plugins": {\n    "updater": {\n      "endpoints": ["https://a.example/latest.json"]\n    }\n  }\n}\n' >"$TC"
 git add -A
 git commit -q -m init
 bash tools/hooks/install.sh >/dev/null || {
@@ -170,6 +172,7 @@ issue 103 "status:doing" "## 现象
 只有挂号段，还没写范围"
 issue 104 "status:doing" "$(scope_body)"
 issue 105 "status:doing,core" "$(scope_body 'docs/a/**' 'crates/storage/')"
+issue 106 "status:doing" "$(scope_body 'apps/desktop/src-tauri/tauri.conf.json')"
 
 echo "==> 1. 范围"
 try pass "普通卡，只改范围内文件" fix/101-ok 'echo 1 >>docs/a/x.md; git add docs/a/x.md'
@@ -195,6 +198,13 @@ try deny "工作区改掉核心规则再提交核心文件（规则取自 HEAD�
   'sed -i.bak "/crates\/storage/d" .github/core-paths.txt; rm -f .github/core-paths.txt.bak; echo 1 >>crates/storage/src/a.rs; git add crates/storage' "这是核心改动"
 try deny "工作区改掉 hook 本身再提交（hook 取自 HEAD）" fix/101-hook \
   'printf "#!/bin/sh\nexit 0\n" >tools/hooks/pre-commit; echo 1 >>crates/storage/src/a.rs; git add crates/storage' "这是核心改动"
+# #1451：只改版本号行（tools/bump-version.sh 的写法）不算核心；同一文件再改别的行仍是核心。
+BUMP='sed -i.bak "s/\"version\": \"0.10.1\"/\"version\": \"0.11.0\"/" "$TC"'
+ENDPOINT='sed -i.bak "s#a\.example#evil.example#" "$TC"'
+try pass "卡无 core 标签，tauri.conf.json 只改 version 行 → 放行（#1451）" fix/106-bump \
+  "${BUMP}; rm -f \"\$TC\".bak; git add \"\$TC\""
+try deny "  反证：同一提交再改 updater endpoint → 核心" fix/106-endpoint \
+  "${BUMP}; ${ENDPOINT}; rm -f \"\$TC\".bak; git add \"\$TC\"" "这是核心改动"
 try deny "暂存核心规则文件本身" fix/105-rules 'echo "# x" >>.github/core-paths.txt; git add -A' "越界：.github/core-paths.txt"
 
 echo "==> 3b. 多卡分支（just start <号> <号>…，卡号记在 branch.<分支>.ppasscards）：范围取并集"
@@ -319,7 +329,7 @@ git -C "$R" commit -s -q -m "test: batch in main worktree" 2>/dev/null && ok "  
 git -C "$R" checkout -q --detach
 # 同样改动在 worktree 里放行，见第 1 节「普通卡，只改范围内文件」。
 
-echo "==> 11. 推送：卡分支必须包含最新 main"
+echo "==> 11. 推送：落后 main 只提示，有冲突才拒（#1423）"
 pushed() { # pushed <期望 pass|deny> <说明> <分支> [输出必须包含的文字]
   local out rc got
   out="$(git push -q -f up "$3" 2>&1)"
@@ -336,8 +346,10 @@ pushed() { # pushed <期望 pass|deny> <说明> <分支> [输出必须包含的�
 }
 try pass "（准备）卡分支提交" fix/101-push 'echo p >>docs/a/x.md; git add -A'
 pushed pass "基于最新 main 的卡分支" fix/101-push
-# main 在远端前进一个提交（直接造对象推上去，不经过任何分支）。
-adv="$(git commit-tree -p main -m "main moved" "main^{tree}")"
+# main 在远端前进一个不冲突的提交（另起一个文件；直接造对象推上去，不经过任何分支）。
+blob="$(printf 'other\n' | git hash-object -w --stdin)"
+adv_tree="$(git ls-tree main | { cat; printf '100644 blob %s\tmain-moved.txt\n' "$blob"; } | git mktree)"
+adv="$(git commit-tree -p main -m "main moved" "$adv_tree")"
 git push -q up "${adv}:refs/heads/main"
 # 原有 pre-push 会读光 stdin：证明转发器给两边各喂了一份。
 printf '#!/bin/sh\ncat >/dev/null\nexit 0\n' >"${COMMON}/hooks/pre-push"
@@ -346,14 +358,35 @@ git checkout -q fix/101-push
 echo q >>docs/a/x.md
 git add -A
 git commit -s -q -m "test: more"
-pushed deny "main 前进后推送落后的卡分支（原有 pre-push 先读光了 stdin）" fix/101-push "落后 up/main 1 个提交"
+pushed pass "main 前进、没有冲突的落后卡分支照推并提示（原有 pre-push 先读光了 stdin）" fix/101-push "落后 up/main 1 个提交，没有冲突"
+# main 再前进一个改同一行的提交：与卡分支冲突。
+git show "${adv}:docs/a/x.md" >"${TMP}/x.main" 2>/dev/null || : >"${TMP}/x.main"
+echo conflict >>"${TMP}/x.main"
+cblob="$(git hash-object -w "${TMP}/x.main")"
+ctree="$(GIT_INDEX_FILE="${TMP}/idx" git read-tree "$adv" &&
+  GIT_INDEX_FILE="${TMP}/idx" git update-index --add --cacheinfo "100644,${cblob},docs/a/x.md" &&
+  GIT_INDEX_FILE="${TMP}/idx" git write-tree)"
+cadv="$(git commit-tree -p "$adv" -m "main conflicts" "$ctree")"
+git push -q up "${cadv}:refs/heads/main"
+# 推送内容不变时 git 不调 pre-push：卡分支再加一个提交（pre-commit 会因 main 改过范围内文件拦，这里只测推送，跳过它）。
+echo s >>docs/a/y.md
+git add -A
+git commit --no-verify -s -q -m "test: after conflict"
+pushed deny "  与 main 有冲突的卡分支 → 拒" fix/101-push "有冲突"
+# just done 用 HEAD:refs/heads/<分支> 推送：本地引用是 HEAD，要按远端目标引用认出卡分支
+out="$(git push -q -f up "HEAD:refs/heads/fix/101-push" 2>&1)" && bad "  HEAD:refs/heads/<卡分支> 推送冲突分支 → 期望 deny，实得 pass" ||
+  { printf '%s' "$out" | grep -qF "有冲突" && ok "  HEAD:refs/heads/<卡分支>（just done 的推法）推冲突分支 → 拒" || bad "  HEAD 推送拒绝理由不对：${out}"; }
 git checkout -q -B batch/2026-11-02-push fix/101-push
-pushed pass "  落后的 batch/* 不拦" batch/2026-11-02-push
+pushed pass "  落后且冲突的 batch/* 不拦" batch/2026-11-02-push
 git checkout -q fix/101-push
-git rebase -q up/main
-pushed pass "  反证：rebase 到 up/main 后 → 放行" fix/101-push
+git fetch -q up main
+git reset -q --hard up/main
+echo r >>docs/a/x.md
+git add -A
+git commit -s -q -m "test: rebased"
+pushed pass "  反证：跟上 up/main 后 → 放行" fix/101-push
 rm -f "${COMMON}/hooks/pre-push"
-git fetch -q up main:main 2>/dev/null || git update-ref refs/heads/main "$adv"
+git fetch -q up main:main 2>/dev/null || git update-ref refs/heads/main "$cadv"
 
 echo "==> 12. 安装自检"
 git checkout -q -f main
