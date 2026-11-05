@@ -172,7 +172,8 @@ struct SettingsScreen: View {
     private var moreScreen: some View {
         List {
             Section {
-                row(L.s("storage_computer"), value: app.desktopName ?? L.s("storage_device_default"), route: .storage)
+                // #1251：电脑名不放在这一行，点进去详情里看（与 Android 一致）。
+                row(L.s("storage_computer"), value: "", route: .storage)
                 row(L.s("setting_version"), value: AppVersion.current.displayLine, route: .diagnostics)
             }
             .ppTinted(PPUI.Surface.settingsCard)
