@@ -1600,14 +1600,12 @@
       <WizardWindows
         defaultDir={wizard.default_dir}
         configuredLibraryDir={wizard.configured_library_dir}
-        unconfigured={wizard.unconfigured === true}
         onDone={() => { checkWizard(); refresh(); }}
       />
     {:else}
       <Wizard
         defaultDir={wizard.default_dir}
         configuredLibraryDir={wizard.configured_library_dir}
-        unconfigured={wizard.unconfigured === true}
         onDone={() => { checkWizard(); refresh(); }}
       />
     {/if}

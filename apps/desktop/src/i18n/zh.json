@@ -187,7 +187,6 @@
   "ui.wizard_step_library": "照片库",
   "ui.wizard_step_sleep": "电脑睡眠",
   "ui.wizard_step_service": "后台服务",
-  "ui.wizard_unconfigured_notice": "完成设置后，P-Pass 开始接收备份。",
   "ui.library_missing_title": "找不到照片库",
   "ui.library_missing_body": "原来的位置：{dir}\n\n接回硬盘或把文件夹放回原处后，点「重新检查」。",
   "ui.library_missing_picked": "这 {count} 张是从手机手动挑选传来的，手机不会自动补回，需要在手机上重新挑选。",

@@ -268,7 +268,6 @@ msg_keys! {
     UI_WIZARD_STEP_LIBRARY => "ui.wizard_step_library",
     UI_WIZARD_STEP_SLEEP => "ui.wizard_step_sleep",
     UI_WIZARD_STEP_SERVICE => "ui.wizard_step_service",
-    UI_WIZARD_UNCONFIGURED_NOTICE => "ui.wizard_unconfigured_notice",
     UI_LIBRARY_MISSING_TITLE => "ui.library_missing_title",
     UI_LIBRARY_MISSING_BODY => "ui.library_missing_body",
     /// #1272：库找不到时，手机上手动挑选传来的张数说明（手机不会自动补回）。
@@ -817,7 +816,6 @@ mod tests {
             UI_ERR_UPDATE_NOT_DOWNLOADED,
             UI_ERR_DAEMON_NOT_OURS,
             UI_ERR_DAEMON_OTHER_ACCOUNT,
-            UI_WIZARD_UNCONFIGURED_NOTICE,
             UI_LIBRARY_MISSING_TITLE,
             UI_LIBRARY_MISSING_BODY,
             UI_LIBRARY_MISSING_PICKED,
@@ -854,7 +852,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 366);
+        assert_eq!(ALL.len(), 365);
     }
 
     #[test]
