@@ -291,6 +291,13 @@ fi
   mkdir -p "$MAC_APP" "$d/cand.app" "$E3_STATE"
   echo old >"$MAC_APP/v"
   echo new >"$d/cand.app/v"
+  # 数据守卫的前置条件都备齐（有数据快照、恢复源完整、服务没跑），没持锁是唯一会拦下它们的原因：
+  # 否则删掉 mac_need_lock，函数也会因为别的前置条件返回 1，这条照样绿（CI 评审 #1456 指出）。
+  mkdir -p "$E3_STATE/mac-snapshot/data" "$MAC_DATA_DIR/libraries" "$d/snap/appsupport"
+  echo cur >"$MAC_DATA_DIR/config.toml"
+  echo idx >"$MAC_DATA_DIR/libraries/index"
+  echo snap >"$d/snap/appsupport/config.toml"
+  : >"$d/snap/library-dir.txt"
   launchctl() { echo "launchctl $*" >>"$d/touched"; }
   osascript() { echo "osascript $*" >>"$d/touched"; }
   pkill() { echo "pkill $*" >>"$d/touched"; }
@@ -301,15 +308,27 @@ fi
   log_mark() { echo 0; }
   mac_wait_ready() { return 0; }
   unset E3_LOCKED_MAC
-  for f in mac_install_app svc_stop svc_start mac_quit_shell mac_data_blank; do
-    if [ "$f" = mac_install_app ]; then "$f" "$d/cand.app"; else "$f"; fi && { echo "没持锁时 $f 照样执行了"; exit 1; }
+  for f in mac_install_app svc_stop svc_start mac_quit_shell mac_data_blank mac_data_restore; do
+    case "$f" in
+      mac_install_app) "$f" "$d/cand.app" ;;
+      mac_data_restore) "$f" "$d/snap" ;;
+      *) "$f" ;;
+    esac && { echo "没持锁时 $f 照样执行了"; exit 1; }
+    grep -q "拒绝 ${f}：没持 mac 设备锁" "$d/log" || { echo "没持锁时 $f 不是被锁守卫拦下的：$(tail -2 "$d/log")"; exit 1; }
   done
   [ "$(cat "$MAC_APP/v")" = old ] || { echo "没持锁时 App 被替换了"; exit 1; }
+  [ -f "$MAC_DATA_DIR/libraries/index" ] || { echo "没持锁时 mac_data_blank 清了数据"; exit 1; }
+  [ "$(cat "$MAC_DATA_DIR/config.toml")" = cur ] || { echo "没持锁时 mac_data_restore 覆盖了数据"; exit 1; }
   [ ! -e "$d/touched" ] || { echo "没持锁时碰了服务或外壳：$(cat "$d/touched")"; exit 1; }
   grep -q '没持 mac 设备锁' "$d/log" || { echo "拒绝时没说原因"; exit 1; }
   export E3_LOCKED_MAC=1
   mac_install_app "$d/cand.app" || { echo "持锁时装包失败：$(tail -3 "$d/log")"; exit 1; }
   [ "$(cat "$MAC_APP/v")" = new ] || { echo "持锁时 App 没被替换（反证不成立）"; exit 1; }
+  mac_data_restore "$d/snap" || { echo "持锁时恢复数据失败：$(tail -3 "$d/log")"; exit 1; }
+  [ "$(cat "$MAC_DATA_DIR/config.toml")" = snap ] || { echo "持锁时 mac_data_restore 没恢复（反证不成立）"; exit 1; }
+  echo idx >"$MAC_DATA_DIR/libraries/index"
+  mac_data_blank || { echo "持锁时清空白失败：$(tail -3 "$d/log")"; exit 1; }
+  [ ! -e "$MAC_DATA_DIR/libraries" ] || { echo "持锁时 mac_data_blank 没清（反证不成立）"; exit 1; }
   exit 0
 ) || bad "改本机 P-Pass 的步骤必须持 mac 锁（#1449）"
 # 调用这些函数的入口都先取 mac 锁：场景经 run（cmd_run 先 exec lock）、dev mac、restore mac
