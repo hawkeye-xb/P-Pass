@@ -5,6 +5,8 @@
 // 单张失败通知仍不发（#418），这个开关不管它。
 // #1262：默认**关**——onboarding 不再申请通知权限，用户在设置里打开开关时才申请。
 // 老用户升级保持原状态：进程启动时文件不存在就落一次盘（[initIfAbsent]），之后只认文件。
+// #1398：0.10.2 的默认值是开，kotlinx 不写等于默认值的字段，开着的老用户文件内容是 `{}`。
+// 所以文件里**缺 enabled 字段 = 旧版语义的开**；本版起落盘一律显式写出字段。
 package com.hawkeyexb.ppass.backup
 
 import com.hawkeyexb.ppass.io.atomicReplace
@@ -14,16 +16,20 @@ import kotlinx.serialization.json.Json
 
 @Serializable
 data class NotifyOnFailurePrefsData(
-    val enabled: Boolean = false,
+    /** 磁盘上缺字段（0.10.2 默认值开、不落盘）读成 null，由 [NotifyOnFailurePrefs] 解释成开。 */
+    val enabled: Boolean? = null,
     /** #1262：从设置开关发起过系统通知申请。用来分辨「系统不会再弹」（问过且不再给解释机会）→ 去系统设置。 */
     val systemAsked: Boolean = false,
 )
 
 class NotifyOnFailurePrefs(private val dir: File) {
     private val file = File(dir, FILE_NAME)
-    private val json = Json { ignoreUnknownKeys = true }
+    private val json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+    }
 
-    fun enabled(): Boolean = load().enabled
+    fun enabled(): Boolean = load().enabled == true
 
     fun systemAsked(): Boolean = load().systemAsked
 
@@ -55,14 +61,17 @@ class NotifyOnFailurePrefs(private val dir: File) {
     private fun load(): NotifyOnFailurePrefsData =
         if (file.isFile) {
             runCatching {
-                json.decodeFromString(NotifyOnFailurePrefsData.serializer(), file.readText())
-            }.getOrDefault(NotifyOnFailurePrefsData())
+                val data = json.decodeFromString(NotifyOnFailurePrefsData.serializer(), file.readText())
+                // 缺字段 = 0.10.2 写的 `{}`：旧版默认开。resolve 后再回写，不会把它存成关。
+                data.copy(enabled = data.enabled ?: true)
+            }.getOrDefault(OFF)
         } else {
-            NotifyOnFailurePrefsData()
+            OFF
         }
 
     companion object {
         const val FILE_NAME = "notify_on_failure_prefs.json"
+        private val OFF = NotifyOnFailurePrefsData(enabled = false)
     }
 }
 
