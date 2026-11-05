@@ -137,6 +137,7 @@ case "$1 $2" in
         --head) printf '%s' "$2" >"$G/pr.created"; shift 2 ;;
         --title) printf '%s' "$2" >"$G/pr.title"; shift 2 ;;
         --body-file) cp "$2" "$G/pr.body"; shift 2 ;;
+        --draft) : >"$G/pr.draft"; shift ;;
         *) shift ;;
       esac
     done
@@ -542,12 +543,14 @@ has_lbl 51 "status:doing" && has_lbl 52 "status:doing" && ok "多卡：两张卡
 printf '%s' "$OUT" | grep -q 'src/\*\*' && printf '%s' "$OUT" | grep -q 'docs/\*\*' && ok "多卡：打印的范围是并集" || bad "多卡范围没取并集"
 commit_file "$MW" src/m.txt
 commit_file "$MW" docs/m.md
+rm -f "${FAKE_GH}/pr.draft" "${FAKE_GH}/pr.created"
 if DONE "$MW" >"${TMP}/o51" 2>&1; then ok "多卡：两张卡范围内的文件都放行"; else bad "多卡交卡失败：$(tail -5 "${TMP}/o51")"; fi
 comments_of 51 | grep -q "worker 已交卡" && comments_of 52 | grep -q "worker 已交卡" && ok "多卡：回执贴到每张卡" || bad "回执没贴到每张卡"
 has_lbl 51 "status:review" && has_lbl 52 "status:review" && ok "多卡：两张卡都转 review" || bad "多卡交卡后标签不对"
 grep -qx 'closes #51' "${FAKE_GH}/pr.body" && grep -qx 'closes #52' "${FAKE_GH}/pr.body" &&
   ok "多卡：PR 正文 closes 两张卡" || bad "PR 正文没 closes 两张卡：$(cat "${FAKE_GH}/pr.body" 2>/dev/null | head -5)"
 grep -q '不需要真机验收' "${FAKE_GH}/pr.body" && ok "用户看不到的改动：PR 写明不需要真机验收" || bad "PR 没写验收说明"
+[ ! -e "${FAKE_GH}/pr.draft" ] && ok "自动级：PR 不带 --draft" || bad "自动级 PR 带了 --draft"
 # 反证：同样的改动，分支只记一张卡 → 第二张卡范围内的文件算越界
 issue 54 "status:ready" "[T-54] single" "src/**" "Bug"
 SW="$(START 54 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/54-"*)"
@@ -555,20 +558,33 @@ commit_file "$SW" src/m.txt
 commit_file "$SW" docs/m.md
 if DONE "$SW" >"${TMP}/o54" 2>&1; then bad "单卡分支放行了别的卡范围里的文件"; else ok "反证：只认一张卡时 docs/ 越界被拒"; fi
 
-# 用户看得到的改动：没给验收时间 → 只推分支、不开 PR；给了 → PR 写「产品负责人 <时间> 真机验收通过」
-issue 55 "status:ready" "[T-55] visible" "apps/**" "Bug"
+# 用户看得到的改动：没给验收时间 → 开草稿 PR（--draft，正文「待产品负责人真机验收」）；
+# 给了 → 正式 PR，正文单独一行「产品负责人 <时间> 真机验收通过」
+issue 55 "status:ready" "[T-55] visible" "apps/ios/**" "Bug"
 VW="$(START 55 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/55-"*)"
-mkdir -p "$VW/apps/x"
-commit_file "$VW" apps/x/ui.txt
-rm -f "${FAKE_GH}/pr.body" "${FAKE_GH}/pr.created"
+mkdir -p "$VW/apps/ios/PPass"
+commit_file "$VW" apps/ios/PPass/Ui.swift 'let ui = 1'
+rm -f "${FAKE_GH}/pr.body" "${FAKE_GH}/pr.created" "${FAKE_GH}/pr.draft"
 DONE "$VW" >"${TMP}/o55" 2>&1 || bad "可见改动交卡失败：$(tail -5 "${TMP}/o55")"
 on_origin "fix/55-visible" && ok "可见改动：分支已推送" || bad "可见改动没推分支"
-[ ! -e "${FAKE_GH}/pr.created" ] && ok "可见改动没给验收时间：不开 PR" || bad "没验收就开了 PR"
-grep -q 'just done --accepted' "${TMP}/o55" && ok "  提示先验收再 --accepted" || bad "没提示先验收"
+[ -e "${FAKE_GH}/pr.created" ] && [ -e "${FAKE_GH}/pr.draft" ] &&
+  ok "盯梢级：没验收也开了草稿 PR（--draft）" || bad "盯梢级没开草稿 PR"
+grep -qF '待产品负责人真机验收' "${FAKE_GH}/pr.body" 2>/dev/null && ok "  草稿正文写「待产品负责人真机验收」" || bad "草稿正文缺待验收说明"
+! grep -qE '^产品负责人 .*真机验收通过' "${FAKE_GH}/pr.body" 2>/dev/null && ok "  草稿正文没有验收通过行" || bad "草稿正文自带验收通过行"
+grep -q 'set_monitor' "${TMP}/o55" && ok "  提示马上打开 PR 监控" || bad "没提示打开 PR 监控"
+rm -f "${FAKE_GH}/pr.body" "${FAKE_GH}/pr.created" "${FAKE_GH}/pr.draft"
 DONE "$VW" --accepted "2026-11-04 15:30" >"${TMP}/o55b" 2>&1 || bad "带验收时间交卡失败：$(tail -5 "${TMP}/o55b")"
-grep -qF '产品负责人 2026-11-04 15:30 真机验收通过' "${FAKE_GH}/pr.body" 2>/dev/null &&
-  ok "反证：给了验收时间 → 开 PR，正文写明验收" || bad "给了验收时间仍没开 PR 或正文缺验收行"
-
+grep -qxF '产品负责人 2026-11-04 15:30 真机验收通过' "${FAKE_GH}/pr.body" 2>/dev/null &&
+  ok "反证：给了验收时间 → 正文单独一行写明验收" || bad "给了验收时间但正文缺验收行"
+[ ! -e "${FAKE_GH}/pr.draft" ] && ok "  已验收：正式 PR，不带 --draft" || bad "已验收却开了草稿"
+# 核心路径同样先开草稿 PR
+issue 56 "status:ready,core" "[T-56] core change" "core/**" "Bug" "**ADR**：docs/decisions/2026-11-01-adopted.md"
+CW="$(START 56 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/56-"*)"
+mkdir -p "$CW/core"
+commit_file "$CW" core/c.txt
+rm -f "${FAKE_GH}/pr.body" "${FAKE_GH}/pr.created" "${FAKE_GH}/pr.draft"
+DONE "$CW" >"${TMP}/o56" 2>&1 || bad "核心改动交卡失败：$(tail -5 "${TMP}/o56")"
+[ -e "${FAKE_GH}/pr.draft" ] && ok "人控级（核心路径）：草稿 PR" || bad "核心路径没开草稿 PR：$(tail -3 "${TMP}/o56")"
 # ── #1375 共享编译缓存：just start 建主副本旁的 .env.ppass-dev ────────────────
 # 卡目录在主副本旁（<主副本>-wt 之类）时靠 just 往上找到它，不拷；不在旁边时拷进卡目录根。
 cache_norm() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi; }

@@ -3,8 +3,10 @@
 #   门禁（just ci / 纯文档 just ci-docs）→ just verify <号>（命令存在才跑）→ 核对改动只含范围内文件
 #   → 全绿才 git push → 在每张卡贴回执 → status:doing→status:review → 开 PR（正文 closes 全部卡）。
 # 多卡分支（just start <号> <号>…）：卡号读 git config branch.<分支>.ppasscards，范围取并集。
-# 用户看得到的改动（apps/**、assets/**、核心路径）：要先由产品负责人真机验收，交卡时给
-# --accepted "<时间>"，PR 正文写「产品负责人 <时间> 真机验收通过」；没给就只推分支、不开 PR。
+# 用户看得到的改动（界面与文案路径、核心路径，口径同 owner-triage.sh）：开草稿 PR，
+# 正文写「待产品负责人真机验收」，CI 与评审并行跑；验收后补验收行再 gh pr ready。
+# 交卡时已验收过可给 --accepted "<时间>"：正文直接写「产品负责人 <时间> 真机验收通过」，开正式 PR。
+# 合入前由 CI 的 acceptance gate 检查验收行（tools/flow/acceptance-gate.sh）。
 # 任何一步红：不推送，在 issue 写明停在哪并贴错误末尾，打 status:blocked，退出码非 0。
 # 前置不满足（不在卡 worktree、没提交、工作区不干净、落后 main）只报错退出，不打 blocked。
 # 环境: PPASS_NO_LOCK=1 不套 lockf；PPASS_HOOK_REPO 覆盖仓库。
@@ -251,14 +253,18 @@ if [ "$VERIFY_STATE" = "passed" ]; then
 else
   LEVEL="E1（${GATE}）；验收场景未经 just verify 自动验证，E3 需手工补"
 fi
-# 用户看得到的改动：App 与共享资源（apps/**、assets/**）或核心路径。要产品负责人真机验收后才开 PR。
+# 用户看得到的改动：碰界面与文案路径或核心路径（判定口径与 owner-triage.sh 一致，见 acceptance-gate.sh）。
+# 这类改动开草稿 PR，真机验收与 CI、评审并行。
 VISIBLE=0
-[ "$CORE" = "false" ] || VISIBLE=1
-[ "$(printf '%s\n' "$FILES" | bash "$FLOW_PATHS" hit - 'apps/**' 'assets/**' 2>/dev/null)" = "true" ] && VISIBLE=1
+[ "$(printf '%s\n' "$FILES" | bash "${HERE}/acceptance-gate.sh" classify --repo "$TOP")" = none ] || VISIBLE=1
 ACCEPT_LINE=""
+DRAFT_ARGS=()
 if [ "$VISIBLE" = 1 ] && [ -n "$ACCEPTED" ]; then
   ACCEPT_LINE="产品负责人 ${ACCEPTED} 真机验收通过"
-elif [ "$VISIBLE" = 0 ]; then
+elif [ "$VISIBLE" = 1 ]; then
+  ACCEPT_LINE="待产品负责人真机验收"
+  DRAFT_ARGS=(--draft)
+else
   ACCEPT_LINE="用户看不到的改动（工具、测试、文档、内部代码），不需要真机验收"
 fi
 flow_ensure_review_label
@@ -302,16 +308,11 @@ echo "✅ ${CARDS_SHOW} 已交卡：${BRANCH} 已推送，标签 → status:revi
 echo "   证据等级：${LEVEL}"
 
 # ── 6. 开 PR（正文 closes 全部卡）──────────────────────────────────────
-if [ -z "$ACCEPT_LINE" ]; then
-  rm -f "$RECEIPT"
-  echo "   用户看得到的改动：没开 PR。先把改动装到真机，请产品负责人验收；"
-  echo "   通过后重跑：just done --accepted \"<验收时间，如 2026-11-04 15:30>\""
-  exit 0
-fi
 PR_URL="$(gh pr view "$BRANCH" -R "$REPO" --json url --jq .url 2>/dev/null)" || PR_URL=""
 if [ -n "$PR_URL" ]; then
   rm -f "$RECEIPT"
   echo "   PR 已存在：${PR_URL}（已推最新提交）"
+  [ "${#DRAFT_ARGS[@]}" -eq 0 ] || echo "   验收后在 PR 正文补「产品负责人 <日期 时间> 真机验收通过」，再 gh pr ready。"
   exit 0
 fi
 if [ "$(git rev-list --count origin/main..HEAD)" = 1 ]; then
@@ -323,14 +324,23 @@ PR_BODY="$(mktemp)"
 {
   for c in $CARDS; do echo "closes #${c}"; done
   echo
-  echo "- 真机验收：${ACCEPT_LINE}"
+  if [ "${#DRAFT_ARGS[@]}" -gt 0 ]; then
+    echo "- 真机验收：${ACCEPT_LINE}（草稿 PR；验收后在正文单独补一行「产品负责人 <日期 时间> 真机验收通过」，再 gh pr ready）"
+  elif [ "$VISIBLE" = 1 ]; then
+    echo "$ACCEPT_LINE"
+  else
+    echo "- 真机验收：${ACCEPT_LINE}"
+  fi
   sed -n '3,$p' "$RECEIPT" | grep -v '^- 真机验收：'
 } >"$PR_BODY"
 rm -f "$RECEIPT"
-PR_URL="$(gh pr create -R "$REPO" --base main --head "$BRANCH" --title "$PR_TITLE" --body-file "$PR_BODY" 2>&1)" || {
+PR_URL="$(gh pr create -R "$REPO" --base main --head "$BRANCH" "${DRAFT_ARGS[@]+"${DRAFT_ARGS[@]}"}" --title "$PR_TITLE" --body-file "$PR_BODY" 2>&1)" || {
   rm -f "$PR_BODY"
   die "开 PR 失败：$(printf '%s' "$PR_URL" | tail -2 | tr '\n' ' ')" "分支已推送、回执已贴；手动开：gh pr create --head ${BRANCH}，正文 closes ${CARDS_SHOW}"
 }
 rm -f "$PR_BODY"
 echo "   PR：${PR_URL}"
-echo "   下一步：CI 红了修到绿；然后 just start <下一张卡的 issue号>。"
+if [ "${#DRAFT_ARGS[@]}" -gt 0 ]; then
+  echo "   草稿 PR：CI 与评审照常并行跑。请产品负责人真机验收；通过后在正文补验收行，再 gh pr ready。"
+fi
+echo "   下一步：马上打开 app 的 PR 监控（mcp__ccd_pr__set_monitor auto_fix=true）；CI 红了修到绿；然后 just start <下一张卡的 issue号>。"

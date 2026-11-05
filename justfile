@@ -529,7 +529,7 @@ start n *args:
 
 # 交卡（在卡 worktree 里跑）：门禁 + just verify（有则跑）+ 范围核对，全绿才推送、每张卡贴回执，
 # doing→review，开 PR（closes 全部卡）；任何一步红：不推送、issue 写明停在哪、打 blocked。
-# 用户看得到的改动先真机验收：just done --accepted "<验收时间>"，没给只推分支、不开 PR。
+# 用户看得到的改动开草稿 PR（--draft），验收后补验收行再 gh pr ready；已验收过可给 --accepted "<验收时间>" 开正式 PR。
 done *args:
     bash tools/flow/worker-done.sh {{args}}
 
