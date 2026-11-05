@@ -145,9 +145,12 @@ SELF_REVIEW_SHOW="${EVID_SHOW}/self-review.md"
 # 可能漏改的同类旧写法：diff 里删掉的行，全仓仍出现的位置（只是提示，删掉的行是通用写法时会有噪音）。
 stale_hints() {
   local line hit
+  # 同一 diff 里又加回来的行（挪位置、改缩进）不算删掉的旧写法。
   git -c core.quotepath=false diff -U0 --no-color origin/main...HEAD |
-    sed -n 's/^-\([^-].*\)$/\1/p' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' |
-    awk 'length($0) >= 16' | sort -u | head -n 60 |
+    awk '/^(\+\+\+|---) (a\/|b\/|\/dev\/null)/ { next }
+      /^[-+]/ { t = substr($0, 2); gsub(/^[ \t]+|[ \t]+$/, "", t); if (length(t) < 16) next
+        if (substr($0, 1, 1) == "+") add[t] = 1; else del[t] = 1 }
+      END { for (k in del) if (!(k in add)) print k }' | sort | head -n 60 |
     while IFS= read -r line; do
       git grep -n -I -F -e "$line" -- . 2>/dev/null | head -n 3 | while IFS= read -r hit; do
         printf '  %s\n      删掉的：%s\n' "$(printf '%s' "$hit" | cut -c1-160)" "$(printf '%s' "$line" | cut -c1-120)"

@@ -602,14 +602,18 @@ grep -q "SR-SCOPE-OK" "${PPASS_WT_ROOT}/.evidence/141/pr-body.md" && ok "  PR �
 printf 'OLD_RULE_SPELLING=keep-me-in-sync\n' >"$M/src/a.cfg"
 printf 'OLD_RULE_SPELLING=keep-me-in-sync\n' >"$M/src/b.cfg"
 printf 'UNIQUE_SPELLING_ONLY_HERE=1\n' >"$M/src/u.cfg"
+printf 'MOVED_SPELLING_STAYS_SAME=1\nfiller\n' >"$M/src/m.cfg"
+printf 'MOVED_SPELLING_STAYS_SAME=1\n' >"$M/src/m2.cfg"
 git -C "$M" add -A && git -C "$M" commit -q -s -m "seed same-class" && git -C "$M" push -q origin HEAD:refs/heads/main
 W="$(card 142 "[T-142] stale hint" "src/**")"
 printf 'NEW_RULE_SPELLING=keep-me-in-sync\n' >"$W/src/a.cfg"
 printf 'UNIQUE_SPELLING_CHANGED=1\n' >"$W/src/u.cfg"
+printf 'filler\n    MOVED_SPELLING_STAYS_SAME=1\n' >"$W/src/m.cfg"
 git -C "$W" add -A && git -C "$W" commit -q -s -m "change one place"
 NO_SR=1 DONE "$W" >"${TMP}/o142" 2>&1
 grep -q "src/b.cfg:1:OLD_RULE_SPELLING" "${TMP}/o142" && ok "机械提示列出别处仍是旧写法的位置（改一处漏一处）" || bad "没列出漏改的同类旧写法：$(tail -12 "${TMP}/o142")"
 grep -q "UNIQUE_SPELLING_ONLY_HERE" "${TMP}/o142" && bad "  别处没有的删除行也被列了" || ok "  反证：别处没有同样写法的删除行不列"
+grep -q "MOVED_SPELLING_STAYS_SAME" "${TMP}/o142" && bad "  挪了位置的行被当成删掉的旧写法" || ok "  同一 diff 里又加回来的行（挪位置、改缩进）不列"
 
 # 主仓工作区、未提交改动
 if (cd "$M" && bash tools/flow/worker-done.sh) >/dev/null 2>&1; then bad "在主仓工作区 done 也成功"; else ok "done 拒绝在主仓工作区运行"; fi
