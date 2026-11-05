@@ -64,6 +64,46 @@ class NotifyOnFailurePrefsTest {
     }
 
     @Test
+    fun legacy_empty_object_file_reads_as_on() {
+        // #1398：0.10.2 默认值是开，kotlinx 不写等于默认值的字段 → 开着的老用户文件内容是 {}。
+        File(dir, NotifyOnFailurePrefs.FILE_NAME).writeText("{}")
+        assertTrue(NotifyOnFailurePrefs(dir).enabled())
+        NotifyOnFailurePrefs(dir).initIfAbsent(existingUser = false)
+        assertTrue("文件已存在，init 不动它", NotifyOnFailurePrefs(dir).enabled())
+    }
+
+    @Test
+    fun explicit_false_file_reads_as_off() {
+        File(dir, NotifyOnFailurePrefs.FILE_NAME).writeText("""{"enabled":false}""")
+        assertFalse(NotifyOnFailurePrefs(dir).enabled())
+    }
+
+    @Test
+    fun legacy_empty_object_survives_mark_system_asked_and_keeps_system_asked() {
+        File(dir, NotifyOnFailurePrefs.FILE_NAME).writeText("{}")
+        val prefs = NotifyOnFailurePrefs(dir)
+        prefs.markSystemAsked()
+        assertTrue("记「问过」不能把缺字段的老文件写成关", NotifyOnFailurePrefs(dir).enabled())
+        assertTrue(NotifyOnFailurePrefs(dir).systemAsked())
+    }
+
+    @Test
+    fun saved_file_always_writes_enabled_field_explicitly() {
+        NotifyOnFailurePrefs(dir).setEnabled(true)
+        val text = File(dir, NotifyOnFailurePrefs.FILE_NAME).readText()
+        assertTrue(text, text.contains("\"enabled\":true"))
+        NotifyOnFailurePrefs(dir).setEnabled(false)
+        val text2 = File(dir, NotifyOnFailurePrefs.FILE_NAME).readText()
+        assertTrue(text2, text2.contains("\"enabled\":false"))
+    }
+
+    @Test
+    fun corrupt_file_reads_as_off() {
+        File(dir, NotifyOnFailurePrefs.FILE_NAME).writeText("not json")
+        assertFalse(NotifyOnFailurePrefs(dir).enabled())
+    }
+
+    @Test
     fun enabling_the_switch_decides_by_grant_state() {
         assertEquals(NotifyEnableAction.ENABLE, notifyEnableAction(granted = true, askedBefore = true, systemWillShowRationale = false))
         assertEquals(NotifyEnableAction.REQUEST, notifyEnableAction(granted = false, askedBefore = false, systemWillShowRationale = false))
