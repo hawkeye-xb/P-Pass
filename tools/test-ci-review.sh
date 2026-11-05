@@ -370,11 +370,15 @@ printf '#!/usr/bin/env bash\necho "✗ 写提交状态 review/agent=error 失败
 STEP publish 7 >"${TMP}/o12" 2>&1
 has "review.sh 没写出评审状态就退出了" "${TMP}/o12" && tail -n 1 "$FAKE/statuses" | grep -qF "state=error" &&
   ok "报错带 review/agent= 字样、没有标记 → 兜底写 error" || bad "报错带 review/agent= 字样时没兜底：$(tail -4 "${TMP}/o12")"
-printf '#!/usr/bin/env bash\necho "REVIEW_STATUS_WRITTEN=error"\necho "✗ 写提交状态 review/agent=error 之后别的步骤失败" >&2\nexit 1\n' >"${TMP}/main/tools/flow/review.sh"
+# 反证：先用真实 review.sh 做完准备，再换成「打标记行后失败」的桩跑发布（桩装在准备之前，准备会失败、发布被跳过，断言恒真）
+cp "${TMP}/review.sh.real" "${TMP}/main/tools/flow/review.sh"
 STEP prepare 7 >/dev/null 2>&1
+[ ! -e "${PPASS_CI_STATE}/skip" ] || bad "（准备）真实 review.sh 准备失败，反证跑不起来"
+printf '#!/usr/bin/env bash\necho "REVIEW_STATUS_WRITTEN=error"\necho "✗ 写提交状态 review/agent=error 之后别的步骤失败" >&2\nexit 1\n' >"${TMP}/main/tools/flow/review.sh"
 : >"$FAKE/statuses"
 STEP publish 7 >"${TMP}/o13" 2>&1
-! has "review.sh 没写出评审状态就退出了" "${TMP}/o13" && ok "  反证：有标记行 → 不重复兜底" || bad "有标记仍兜底：$(tail -4 "${TMP}/o13")"
+has "REVIEW_STATUS_WRITTEN=error" "${TMP}/o13" && ! has "review.sh 没写出评审状态就退出了" "${TMP}/o13" &&
+  ok "  反证：发布跑到了桩、桩打了标记行 → 不重复兜底" || bad "有标记仍兜底或发布没跑到桩：$(tail -4 "${TMP}/o13")"
 cp "${TMP}/review.sh.real" "${TMP}/main/tools/flow/review.sh"
 
 echo
