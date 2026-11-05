@@ -88,26 +88,40 @@ def group(c):
     if c.get("__typename") == "CheckRun":
         suite = c.get("checkSuite") or {}
         owner = ((suite.get("workflowRun") or {}).get("workflow") or {}).get("name") or (suite.get("app") or {}).get("slug") or ""
-        return ("run", owner, c.get("name")), c.get("databaseId") or 0
-    return ("status", "", c.get("context")), c.get("createdAt") or ""
-latest = {}
+        return ("run", owner, c.get("name")), c.get("databaseId")
+    return ("status", "", c.get("context")), c.get("createdAt")
+groups = {}
 for c in ctx.get("nodes") or []:
     key, order = group(c)
-    if key not in latest or order >= latest[key][0]:
-        latest[key] = (order, c)
-for _, c in latest.values():
+    groups.setdefault(key, []).append((order, c))
+
+def verdict(c):  # ("failed"|"running"|"ok", 名字, 明细)
     if c.get("__typename") == "CheckRun":
         name, url = c.get("name"), c.get("detailsUrl") or ""
         if c.get("status") != "COMPLETED":
-            running.append(name)
-        elif c.get("conclusion") in FAILED:
-            failed.append("%s（%s）%s" % (name, c.get("conclusion"), url))
+            return "running", name, ""
+        if c.get("conclusion") in FAILED:
+            return "failed", name, "%s（%s）%s" % (name, c.get("conclusion"), url)
+        return "ok", name, ""
+    name, url, st = c.get("context"), c.get("targetUrl") or "", c.get("state")
+    if st in ("PENDING", "EXPECTED"):
+        return "running", name, ""
+    if st in FAILED:
+        return "failed", name, "%s（%s）%s" % (name, st, url)
+    return "ok", name, ""
+
+for members in groups.values():
+    if all(o is not None for o, _ in members):
+        picked = [max(members, key=lambda m: m[0])[1]]
     else:
-        name, url, st = c.get("context"), c.get("targetUrl") or "", c.get("state")
-        if st in ("PENDING", "EXPECTED"):
-            running.append(name)
-        elif st in FAILED:
-            failed.append("%s（%s）%s" % (name, st, url))
+        # 有一次缺排序依据（databaseId / createdAt 为空）：判断不出哪次最新，整组按最差的一次算，宁可不报全清
+        picked = [c for _, c in members]
+    vs = [verdict(c) for c in picked]
+    bad = [v for v in vs if v[0] == "failed"]
+    if bad:
+        failed.append(bad[0][2])
+    elif any(v[0] == "running" for v in vs):
+        running.append(vs[0][1])
 if (ctx.get("pageInfo") or {}).get("hasNextPage"):
     print("⚠ 检查超过 100 个，只看了前 100 个")
     wait.append("检查超过 100 个，结果不完整（到网页上看全）")

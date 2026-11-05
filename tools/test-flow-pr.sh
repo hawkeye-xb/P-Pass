@@ -174,6 +174,12 @@ if opts.get("check") == "rerun-red":   # 反证：重跑的那次反而失败
 if opts.get("check") == "rerun-queued":   # 重跑的那次还在排队（没有 startedAt），旧的一次成功
     checks[0].update({"status": "QUEUED", "conclusion": None})
     checks.append({"__typename": "CheckRun", "name": "CI gate", "status": "COMPLETED", "conclusion": "SUCCESS", "detailsUrl": "old", "databaseId": 100, "checkSuite": suite("CI Docs")})
+if opts.get("check") == "noid":   # 两次都缺 databaseId，排在后面的是旧的成功：判断不出谁新，不能报全清
+    checks[0].update({"status": "QUEUED", "conclusion": None, "databaseId": None})
+    checks.append({"__typename": "CheckRun", "name": "CI gate", "status": "COMPLETED", "conclusion": "SUCCESS", "detailsUrl": "old", "databaseId": None, "checkSuite": suite("CI Docs")})
+if opts.get("check") == "noid-green":   # 反证：缺 databaseId 但每一次都成功 → 照常全清
+    checks[0]["databaseId"] = None
+    checks.append({"__typename": "CheckRun", "name": "CI gate", "status": "COMPLETED", "conclusion": "SUCCESS", "detailsUrl": "old", "databaseId": None, "checkSuite": suite("CI Docs")})
 if opts.get("check") == "two-workflows":   # 两个 workflow 里同名的检查，一个红一个绿
     # 放在前面且 databaseId 更小：只按检查名去重的写法会让绿的那个盖掉它
     checks.insert(0, {"__typename": "CheckRun", "name": "CI gate", "status": "COMPLETED", "conclusion": "FAILURE", "detailsUrl": "other", "databaseId": 150, "checkSuite": suite("CI Rust")})
@@ -227,6 +233,14 @@ check "反证：最新一次失败、旧的一次成功 → 退出 1" bash -c '[
 reset; mk check=rerun-queued
 run bash "$STATUS" 7
 check "重跑的那次还在排队、旧的一次成功 → 退出 3，不报全清" bash -c '[ "$1" = 3 ] && grep -qF "… CI gate" "$2" && ! grep -qF "全清" "$2"' _ "$RC" "${TMP}/out"
+
+reset; mk check=noid
+run bash "$STATUS" 7
+check "同组缺 databaseId、判断不出哪次最新 → 按最差的算，退出 3 不报全清" bash -c '[ "$1" = 3 ] && ! grep -qF "全清" "$2"' _ "$RC" "${TMP}/out"
+
+reset; mk check=noid-green
+run bash "$STATUS" 7
+check "反证：缺 databaseId 但每次都成功 → 照常全清" [ "$RC" = 0 ]
 
 reset; mk check=two-workflows
 run bash "$STATUS" 7
