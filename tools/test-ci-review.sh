@@ -71,7 +71,10 @@ case "$1 $2" in
     printf 'state:OPEN\ntitle:%s\nlabels:status:doing\nbody:\n' "card $3"
     cat "$F/issue.$3"
     ;;
+  "api repos/o/r/issues/7/comments")
+    grep -q "独立评审：未通过" "$F/comments" && echo 4242 || true ;;
   "api -X")
+    [ "$3" != DELETE ] || { echo "$*" >>"$F/deletes"; exit 0; }
     shift 2
     echo "$*" >>"$F/statuses"
     ;;
@@ -130,7 +133,7 @@ sed -i.bak 's|  "pr view")|  "pr view")\n    case " $* " in *" headRefOid --jq .
 
 CI() { (cd "${TMP}/main" && bash tools/flow/ci-review.sh "$@"); }
 reset() {
-  : >"$FAKE/comments"; : >"$FAKE/statuses"; : >"$FAKE/merges"; : >"$FAKE/disables"; : >"$FAKE/calls"
+  : >"$FAKE/deletes"; : >"$FAKE/comments"; : >"$FAKE/statuses"; : >"$FAKE/merges"; : >"$FAKE/disables"; : >"$FAKE/calls"
   printf '%s' "$1" >"$FAKE/mode"
 }
 has() { grep -qF -- "$1" "$2"; }
@@ -150,6 +153,7 @@ reset fail
 CI 7 >/dev/null 2>&1 && ok "不通过 → job 仍退出 0（不挡合入）" || bad "不通过时 job 失败了"
 has "state=failure" "$FAKE/statuses" && ok "状态 failure" || bad "状态不对：$(cat "$FAKE/statuses")"
 has "独立评审：未通过" "$FAKE/comments" && ok "评论写未通过" || bad "评论不对"
+[ ! -s "$FAKE/deletes" ] && ok "反证：真不通过 → 不删「未通过」评论" || bad "真不通过却删了评论"
 [ ! -s "$FAKE/merges" ] && [ ! -s "$FAKE/disables" ] && ok "不通过 → 不开也不撤销自动合入" || bad "碰了自动合入：$(cat "$FAKE/merges" "$FAKE/disables")"
 [ "$(calls)" = 1 ] && ok "VERDICT: FAIL 是评审结论，不重试" || bad "FAIL 被重试了（$(calls) 次）"
 has "评审没跑成" "$FAKE/comments" && bad "不通过被写成评审没跑成" || ok "不通过不写「评审没跑成」"
@@ -160,6 +164,7 @@ CI 7 >/dev/null 2>&1 && ok "infra → job 退出 0" || bad "infra 时 job 失败
 [ "$(calls)" = 2 ] && ok "infra → 重试一次（共 2 次）" || bad "调用次数 $(calls)，应为 2"
 tail -n 1 "$FAKE/statuses" | grep -qF "state=error" && ok "状态 error（不是 failure）" || bad "状态不对：$(cat "$FAKE/statuses")"
 has "评审没跑成" "$FAKE/comments" && has "不是代码有问题" "$FAKE/comments" && ok "评论写「评审没跑成」" || bad "评论不对：$(cat "$FAKE/comments")"
+has "comments/4242" "$FAKE/deletes" && ok "infra → 删掉 review.sh 贴的「未通过」评论，避免与「评审没跑成」矛盾" || bad "没删「未通过」评论：$(cat "$FAKE/deletes")"
 [ ! -s "$FAKE/merges" ] && ok "infra → 不碰自动合入" || bad "infra 开了自动合入"
 reset noverdict
 CI 7 >/dev/null 2>&1

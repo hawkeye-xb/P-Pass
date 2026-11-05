@@ -72,7 +72,14 @@ infra_report() {
       -f description="评审没跑成（基础设施问题，不是代码问题）" >/dev/null 2>&1 ||
       echo "ci-review: 写状态 error 失败" >&2
   fi
-  printf '**独立评审：评审没跑成**（头提交 `%s`）\n\n基础设施问题（key、网络、超时或脚本异常），**不是代码有问题**，已自动重试一次。试跑期不挡合入。\n\n原因：%s\n' \
+  # review.sh 把 agent 失败当「未通过」贴过一条评论，和这里的结论矛盾，删掉它
+  if [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+    for cid in $(gh api "repos/${REPO}/issues/${PR}/comments" --paginate \
+      --jq ".[] | select(.body | startswith(\"**独立评审：未通过**（头提交 \`${SHA:0:10}\`\")) | .id" 2>/dev/null); do
+      gh api -X DELETE "repos/${REPO}/issues/comments/${cid}" >/dev/null 2>&1 || true
+    done
+  fi
+  printf '**独立评审：评审没跑成**（头提交 `%s`）\n\n基础设施问题（key、网络、超时或脚本异常），**不是代码有问题**（评审 agent 失败时已自动重试一次）。试跑期不挡合入。\n\n原因：%s\n' \
     "${SHA:0:10}" "$why" >"${STATE}/infra.md"
   gh pr comment "$PR" -R "$REPO" --body-file "${STATE}/infra.md" >/dev/null 2>&1 ||
     echo "ci-review: 贴评论失败" >&2
