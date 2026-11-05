@@ -26,11 +26,11 @@ describe.each([
   ["Wizard", Wizard],
   ["WizardWindows", WizardWindows],
 ])("%s：未配置提示", (_name, Component) => {
-  // A3：状态类文案不报组件状态，只说确认照片库位置后开始备份。
-  it("未配置时显示「确认照片库位置后开始备份」", () => {
+  // A3：状态类文案不报组件状态，只说完成设置后开始接收备份。
+  it("未配置时显示「完成设置后开始接收备份」", () => {
     render(Component, { props: { ...base, unconfigured: true } });
     const notice = screen.getByTestId("wizard-unconfigured");
-    expect(notice.textContent).toContain("确认照片库位置后，P-Pass 开始备份。");
+    expect(notice.textContent).toContain("完成设置后，P-Pass 开始接收备份。");
     expect(notice.textContent).not.toContain("后台服务");
   });
 
