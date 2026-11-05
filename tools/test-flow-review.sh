@@ -174,11 +174,14 @@ has "独立评审：未通过" "$FAKE/comments" && has "MAC_GLOBS" "$FAKE/commen
 has "state=failure" "$FAKE/statuses" && ok "提交状态 review/agent=failure" || bad "状态不对：$(cat "$FAKE/statuses")"
 [ ! -s "$FAKE/merges" ] && ok "未通过 → 不开自动合入" || bad "未通过却开了自动合入"
 reset noverdict
-REVIEW 7 >/dev/null 2>&1 && bad "没有 VERDICT 却通过" || ok "没有 VERDICT → 按未通过（反证：有 VERDICT: PASS 才通过）"
-has "state=failure" "$FAKE/statuses" && ok "没有 VERDICT → 状态 failure" || bad "没有 VERDICT 状态不是 failure"
+# #1435 起「agent 没给出结论」与「评审不通过」分开：前者写 error +「评审没跑成」（不算通过，也不当作代码有问题）。
+REVIEW 7 >/dev/null 2>&1 && bad "没有 VERDICT 却通过" || ok "没有 VERDICT → 不通过（反证：有 VERDICT: PASS 才通过）"
+has "state=error" "$FAKE/statuses" && ! has "state=success" "$FAKE/statuses" && has "评审没跑成" "$FAKE/comments" &&
+  ok "没有 VERDICT → 状态 error、评论写「评审没跑成」" || bad "没有 VERDICT 状态不是 error"
 reset crash
-REVIEW 7 >/dev/null 2>&1 && bad "agent 崩了却通过" || ok "agent 退出非 0 → 未通过"
-has "state=failure" "$FAKE/statuses" && has "退出码 3" "$FAKE/comments" && ok "agent 崩溃 → 状态 failure，评论写明原因" || bad "agent 崩溃的记录不对"
+REVIEW 7 >/dev/null 2>&1 && bad "agent 崩了却通过" || ok "agent 退出非 0 → 不通过"
+has "state=error" "$FAKE/statuses" && has "退出码 3" "$FAKE/comments" && has "评审没跑成" "$FAKE/comments" &&
+  ok "agent 崩溃 → 状态 error，评论写「评审没跑成」与原因" || bad "agent 崩溃的记录不对"
 reset tamper
 REVIEW 7 >/dev/null 2>&1 && bad "agent 改了检出却通过" || ok "agent 改动检出 → 评审作废（即使它说 PASS）"
 has "state=failure" "$FAKE/statuses" && has "改动了只读检出" "$FAKE/comments" && ok "改动检出 → failure 并写明" || bad "改动检出的记录不对"

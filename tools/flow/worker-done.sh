@@ -362,3 +362,13 @@ echo "   开完之后：本会话负责把这个 PR 推进到合入。外壳有 
 echo "     之后被唤醒再修，不手动盯 CI。CI 红、未解决的评审线程、冲突都算没过，修到全清："
 echo "     just pr-status <PR号> 列卡点；评审意见逐条判定，改了或不改都用 just pr-thread <线程ID> \"<理由>\" 回复并关闭。"
 echo "     然后 just start <下一张卡的 issue号>。"
+# 自动合入靠必需检查把关（CI 评审 review/agent 即独立评审，AGENTS.md「独立评审」）：用本会话的身份开
+# （GITHUB_TOKEN 开的合入不触发 main 上的 push 流水线）。只在 review/agent 已是 main 的必需检查时提示开：
+# 查不到或不在里面就不开（否则 CI 一绿就合，绕过评审），交给 owner。
+REQ="$(gh api "repos/${REPO}/branches/main/protection/required_status_checks" --jq '.contexts[]' 2>/dev/null | tr -d '\r')" || REQ=""
+if printf '%s\n' "$REQ" | grep -qx 'review/agent'; then
+  echo "   自动合入：review/agent 已是必需检查，PR 开出后（草稿的话 gh pr ready 之后）开自动合入，评审与 CI 全过即合："
+  echo "AUTO-MERGE: gh pr merge <PR号> -R $(sq "$REPO") --auto --squash"
+else
+  echo "   先不开自动合入：review/agent 还不是 main 的必需检查（或读不到保护设置），开了会绕过评审；交 owner。"
+fi

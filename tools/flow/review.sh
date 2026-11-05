@@ -5,19 +5,27 @@
 #   → 在 PR 头提交的临时只读检出里起一个新 agent（只给 Read / Grep / Glob，不能改文件、不能跑命令）
 #   → 结果写成 PR 评论（「通过」或「未通过 + 问题清单」），并在 PR 头提交上写提交状态 review/agent
 #
-# 评审通过后对所有级别的 PR 执行 gh pr merge --auto --squash（CI 全绿即合）。盯梢、人控级（改动碰界面文案路径
-# 或核心路径）多一个条件：PR 正文里必须有「产品负责人 <时间> 真机验收通过」这一行，没有就判未通过、
-# 不开自动合入，评论里写明缺这一行（验收即放行，验收发生在开 PR 之前，AGENTS.md「角色」）。
+# CI 上由 tools/flow/ci-review.sh 调用（PPASS_REVIEW_NO_MERGE=1），review/agent 是 main 的必需检查，即合入门禁；
+# 本机 just review 只在 CI 评审不可用时兜底（本机写的状态不顶替必需检查），通过后对 PR 执行
+# gh pr merge --auto --squash。盯梢、人控级（改动碰界面文案路径或核心路径）多一个条件：PR 正文里必须有
+# 「产品负责人 <时间> 真机验收通过」这一行，没有就判未通过（验收即放行，验收发生在开 PR 之前，AGENTS.md「角色」）。
+# Dependabot 的 PR 正文没有 closes #N：按「依赖升级、无关联卡」照常评审，不放行、不跳过。
 #
-# 判定从 agent 输出最后一行的 VERDICT 解析：不是 PASS 就是失败（agent 挂了、没给 VERDICT、
-# 评审期间改动了检出，一律按失败，宁可误拦不放过）。
+# 判定从 agent 输出最后一行的 VERDICT 解析：VERDICT: PASS 才通过（success）；VERDICT: FAIL 或评审期间改动了检出
+# 是未通过（failure）；agent 挂了、没给 VERDICT 是「评审没跑成」（error，不算通过，也不当作代码有问题）。
 #
 # 环境变量：
 #   PPASS_REVIEW_AGENT  评审 agent 的命令（默认 claude；其它模型只要接受同样的 -p / --model /
 #                       --allowedTools 参数，prompt 走 stdin，即可替换；测试用假 agent）
 #   PPASS_REVIEW_MODEL  默认模型（--model 优先）
 #   PPASS_REVIEW_MAX_DIFF  diff 超过这个字节数就截断并写明（默认 300000）
-#   PPASS_REVIEW_NO_MERGE  设为 1：评审通过不开自动合入，未通过也不撤销（CI 试跑期只提示用，tools/flow/ci-review.sh）
+#   PPASS_REVIEW_PHASE  分阶段跑（CI 上把「拿 token 的步骤」和「跑 agent 的步骤」拆开，tools/flow/ci-review.sh）：
+#                       prepare  只取 PR、建只读检出、写好提示词和 agent 参数，存进 PPASS_REVIEW_STATE 后退出（要 gh）；
+#                       publish  读 PPASS_REVIEW_STATE 里 agent 的输出（agent.out / agent.err / agent.rc），判定、贴评论、写状态（要 gh）；
+#                       不设     一条龙（本机 just review）。
+#   PPASS_REVIEW_STATE  分阶段时的状态目录
+#   PPASS_REVIEW_NO_MERGE  设为 1：评审通过不开自动合入，未通过也不撤销（CI 上用，tools/flow/ci-review.sh；
+#                          自动合入由开 PR 的会话开，靠必需检查 review/agent 把关）
 
 set -euo pipefail
 
@@ -53,13 +61,34 @@ AGENT="${PPASS_REVIEW_AGENT:-claude}"
 MAX_DIFF="${PPASS_REVIEW_MAX_DIFF:-300000}"
 
 TOP="$(git rev-parse --show-toplevel)"
-WORK="$(mktemp -d)"
+PHASE="${PPASS_REVIEW_PHASE:-}"
+case "$PHASE" in
+  "")
+    WORK="$(mktemp -d)"
+    ;;
+  prepare | publish)
+    WORK="${PPASS_REVIEW_STATE:-}"
+    [ -n "$WORK" ] && mkdir -p "$WORK" || die "PPASS_REVIEW_PHASE=${PHASE} 要配 PPASS_REVIEW_STATE（状态目录）"
+    ;;
+  *) die "PPASS_REVIEW_PHASE 只能是 prepare / publish（或不设）：${PHASE}" ;;
+esac
 WT="${WORK}/checkout"
 cleanup() {
   git -C "$TOP" worktree remove --force "$WT" >/dev/null 2>&1 || true
-  rm -rf "$WORK"
+  # 分阶段时状态目录归调用方（ci-review.sh）管，这里不删
+  [ -n "$PHASE" ] || rm -rf "$WORK"
 }
-trap cleanup EXIT
+# prepare 留着检出给后面的步骤；publish 用完删检出。
+[ "$PHASE" = prepare ] || trap cleanup EXIT
+
+if [ "$PHASE" = publish ]; then
+  [ -s "${WORK}/sha" ] || die "状态目录里没有 prepare 的结果（${WORK}/sha）"
+  SHA="$(cat "${WORK}/sha")"
+  PR_BODY="$(cat "${WORK}/body")"
+  NEEDS_ACCEPT="$(cat "${WORK}/needs_accept")"
+  CARDS="$(cat "${WORK}/cards")"
+  MODEL="$(cat "${WORK}/model")"
+else
 
 # ── 1. PR 的头提交、标题、正文 ────────────────────────────────────────
 PR_OUT="$(gh pr view "$PR" -R "$REPO" --json state,headRefOid,title,body \
@@ -75,9 +104,24 @@ PR_BODY="$(printf '%s\n' "$PR_OUT" | sed '1,4d')"
 
 # ── 2. 关联卡：正文里的 closes / fixes / resolves #N ─────────────────
 CARDS="$(printf '%s\n' "$PR_BODY" | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?) +#[0-9]+' | grep -oE '[0-9]+' | sort -un || true)"
-[ -n "$CARDS" ] || die "#${PR} 正文里没有 closes #N，评审不知道对照哪张卡" "在 PR 正文补上 closes #N 再评审。"
-
 CARD_TEXT=""
+if [ -z "$CARDS" ]; then
+  # Dependabot 的依赖升级 PR 没有卡：照常评审，对照说明换成「只许改依赖版本与对应的锁文件 / 哈希」。
+  PR_AUTHOR="$(gh pr view "$PR" -R "$REPO" --json author --jq .author.login 2>/dev/null | tr -d '\r')" || PR_AUTHOR=""
+  case "$PR_AUTHOR" in
+    app/dependabot | dependabot | "dependabot[bot]")
+      CARD_TEXT="
+### 无关联卡：Dependabot 依赖升级
+
+范围：只许改依赖的版本号、对应的锁文件与固定哈希（含 workflow 里 action 的 SHA 与版本注释）。
+
+验收场景：改动只是版本升级，没有夹带其它改动；升级跨了大版本、或 PR 说明里列出不兼容变更时，写明哪些调用点要核对。
+"
+      ;;
+    *) die "#${PR} 正文里没有 closes #N，评审不知道对照哪张卡" "在 PR 正文补上 closes #N 再评审。" ;;
+  esac
+fi
+
 for n in $CARDS; do
   flow_load_issue "$n"
   flow_parse_scope "$I_BODY"
@@ -119,9 +163,15 @@ if [ "$(wc -c <"${WORK}/pr.diff")" -gt "$MAX_DIFF" ]; then
 fi
 
 # ── 4. PR 头提交的临时检出（agent 的工作目录，只读用）─────────────────
-git -C "$TOP" fetch -q origin "refs/pull/${PR}/head" || die "取不到 refs/pull/${PR}/head"
+# CI 上检出不留凭据（persist-credentials: false）：取 PR 头提交时只在这一条命令上临时带 token，不写进磁盘上的 git 配置。
+FETCH_AUTH=()
+if [ "${GITHUB_ACTIONS:-}" = true ] && [ -n "${GH_TOKEN:-}" ]; then
+  FETCH_AUTH=(-c "http.https://github.com/.extraheader=AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')")
+fi
+git -C "$TOP" ${FETCH_AUTH[@]+"${FETCH_AUTH[@]}"} fetch -q origin "refs/pull/${PR}/head" || die "取不到 refs/pull/${PR}/head"
 [ "$(git -C "$TOP" rev-parse FETCH_HEAD)" = "$SHA" ] ||
   die "PR 头提交在评审途中变了（${SHA} → $(git -C "$TOP" rev-parse FETCH_HEAD)）" "重跑 just review ${PR}。"
+git -C "$TOP" worktree prune >/dev/null 2>&1 || true
 git -C "$TOP" worktree add -q --detach "$WT" "$SHA" || die "建临时检出失败"
 
 # ── 5. 起 agent：只读工具；提示词走 stdin ─────────────────────────────
@@ -138,26 +188,54 @@ AGENT_ARGS=(-p --no-session-persistence
   --disallowedTools "Bash Edit Write NotebookEdit WebFetch WebSearch Agent")
 [ -z "$MODEL" ] || AGENT_ARGS+=(--model "$MODEL")
 
+if [ "$PHASE" = prepare ]; then
+  printf '%s' "$SHA" >"${WORK}/sha"
+  printf '%s' "$PR_BODY" >"${WORK}/body"
+  printf '%s' "$NEEDS_ACCEPT" >"${WORK}/needs_accept"
+  printf '%s' "$CARDS" >"${WORK}/cards"
+  printf '%s' "$MODEL" >"${WORK}/model"
+  printf '%s\n' "${AGENT_ARGS[@]}" >"${WORK}/agent.args"
+  echo "==> 评审准备好了 ${REPO}#${PR}（${SHA:0:10}）：检出 ${WT}，提示词 ${WORK}/prompt.txt"
+  exit 0
+fi
 echo "==> 评审 ${REPO}#${PR}（${SHA:0:10}）：${AGENT}${MODEL:+ --model ${MODEL}}"
-AGENT_RC=0
-(cd "$WT" && "$AGENT" "${AGENT_ARGS[@]}" <"${WORK}/prompt.txt" >"${WORK}/agent.out" 2>"${WORK}/agent.err") || AGENT_RC=$?
+(cd "$WT" && "$AGENT" "${AGENT_ARGS[@]}" <"${WORK}/prompt.txt" >"${WORK}/agent.out" 2>"${WORK}/agent.err") && echo 0 >"${WORK}/agent.rc" || echo "$?" >"${WORK}/agent.rc"
+fi
+AGENT_RC="$(cat "${WORK}/agent.rc" 2>/dev/null || echo 1)"
+[[ "$AGENT_RC" =~ ^[0-9]+$ ]] || AGENT_RC=1
 
 # ── 6. 判定 ──────────────────────────────────────────────────────────
+# agent 没跑成（退出码非 0、没给 VERDICT 行）不是代码有问题：写 error + 「评审没跑成」，不算通过，也不当作未通过。
 VERDICT="FAIL"
 REASON=""
+INFRA=""
 if [ "$AGENT_RC" -ne 0 ]; then
-  REASON="评审 agent 退出码 ${AGENT_RC}，没有产出可用结论。$(head -c 400 "${WORK}/agent.err" | tr '\n' ' ')"
+  INFRA="评审 agent 退出码 ${AGENT_RC}（超时为 124），没有产出结论：$(head -c 400 "${WORK}/agent.err" 2>/dev/null | tr '\n' ' ')"
 else
-  LAST="$(grep -v '^[[:space:]]*$' "${WORK}/agent.out" | tail -n 1 | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  LAST="$(grep -v '^[[:space:]]*$' "${WORK}/agent.out" 2>/dev/null | tail -n 1 | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
   case "$LAST" in
     "VERDICT: PASS") VERDICT="PASS" ;;
     "VERDICT: FAIL") ;;
-    *) REASON="评审输出最后一行不是 VERDICT: PASS / VERDICT: FAIL，按未通过处理。" ;;
+    *) INFRA="评审 agent 输出的最后一行不是 VERDICT: PASS / VERDICT: FAIL，没有产出结论。" ;;
   esac
 fi
+if [ -n "$INFRA" ]; then
+  printf '**独立评审：评审没跑成**（头提交 `%s`）\n\n基础设施问题（key、网络、超时或模型没按格式回答），**不是代码有问题**。review/agent=error 不算通过：重跑评审即可。\n\n原因：%s\n' \
+    "${SHA:0:10}" "$INFRA" >"${WORK}/infra.md"
+  gh pr comment "$PR" -R "$REPO" --body-file "${WORK}/infra.md" >/dev/null 2>&1 ||
+    echo "!! 往 #${PR} 贴「评审没跑成」评论失败" >&2
+  gh api -X POST "repos/${REPO}/statuses/${SHA}" -f state=error -f context="review/agent" \
+    -f description="评审没跑成（基础设施问题，不是代码问题）" >/dev/null 2>&1 ||
+    die "写提交状态 review/agent=error 失败" "原因：${INFRA}"
+  echo "✗ #${PR} 评审没跑成，review/agent=error（${SHA:0:10}）：${INFRA}" >&2
+  exit 1
+fi
 # 盯梢、人控级：PR 正文必须有验收记录；没有就算未通过（即使 agent 说 PASS）。
+# 验收行的判定与 CI 的 acceptance gate 共用 acceptance-gate.sh check（同一个正则，不在这里再抄一份）。
+printf '%s\n' "$PR_BODY" >"${WORK}/body.check"
 if [ "$VERDICT" = "PASS" ] && [ -n "$NEEDS_ACCEPT" ] &&
-  ! printf '%s\n' "$PR_BODY" | grep -qE '^[*_> -]*产品负责人 ([0-9]{4}-)?[0-9]{2}-[0-9]{2}( +[0-9]{1,2}:[0-9]{2})? *(本地)?真机验收通过([*_ ]*|\*\*.*)$'; then
+  ! bash "${FLOW_DIR}/acceptance-gate.sh" check --repo "$TOP" --core-rules "${WORK}/core-paths.txt" \
+    --files "${WORK}/pr.files" --body "${WORK}/body.check" >/dev/null 2>&1; then
   VERDICT="FAIL"
   REASON="${NEEDS_ACCEPT}，PR 正文缺「产品负责人 <时间> 真机验收通过」这一行（须单独成行、以「产品负责人」开头、时间处是具体日期如 2026-11-04）：没有验收记录不开自动合入。验收通过后在 PR 正文补上这一行，再重跑 just review。"
 fi
@@ -179,7 +257,7 @@ BODY_FILE="${WORK}/comment.md"
   # 评审正文：去掉最后的 VERDICT 行，原样贴上
   grep -v '^[[:space:]]*VERDICT:[[:space:]]*\(PASS\|FAIL\)[[:space:]]*$' "${WORK}/agent.out" 2>/dev/null || true
   echo
-  echo "<sub>评审人：新开的只读 agent${MODEL:+（${MODEL}）}，只看 PR 改动与关联卡 $(printf '#%s ' $CARDS)；结论只对头提交 \`${SHA:0:10}\` 有效，之后有新提交要重评。</sub>"
+  echo "<sub>评审人：新开的只读 agent${MODEL:+（${MODEL}）}，只看 PR 改动与关联卡 ${CARDS:+$(printf '#%s ' $CARDS)}${CARDS:-（无，Dependabot 依赖升级）}；结论只对头提交 \`${SHA:0:10}\` 有效，之后有新提交要重评。</sub>"
 } >"$BODY_FILE"
 
 gh pr comment "$PR" -R "$REPO" --body-file "$BODY_FILE" >/dev/null 2>&1 ||

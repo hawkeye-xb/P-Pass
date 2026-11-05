@@ -144,6 +144,10 @@ case "$1 $2" in
       esac
     done
     echo "https://example.invalid/pr/1" ;;
+  "api repos/o/r/branches/main/protection/required_status_checks")
+    [ -f "$G/required" ] || { echo "HTTP 404: Branch not protected" >&2; exit 1; }
+    cat "$G/required" ;;
+  "pr merge") echo "$*" >>"$G/merges" ;;
   "api repos/o/r/issues/"*) [ -f "$G/${2##*/}.type" ] && cat "$G/${2##*/}.type"; exit 0 ;;
   *)
     case "$1" in
@@ -645,6 +649,24 @@ rm -f "${FAKE_GH}/pr.body" "${FAKE_GH}/pr.created" "${FAKE_GH}/pr.draft"
 DONE "$CW" >"${TMP}/o56" 2>&1 || bad "核心改动交卡失败：$(tail -5 "${TMP}/o56")"
 (cd "$CW" && eval "$(pr_cmd "${TMP}/o56")") >/dev/null 2>&1 || bad "打印的开 PR 命令跑不起来：$(pr_cmd "${TMP}/o56")"
 [ -e "${FAKE_GH}/pr.draft" ] && ok "人控级（核心路径）：草稿 PR" || bad "核心路径没开草稿 PR：$(tail -3 "${TMP}/o56")"
+
+# #1435：自动合入只在 review/agent 已是必需检查时提示开（否则 CI 一绿就合，绕过评审）；done 自己不调 merge
+[ ! -s "${FAKE_GH}/merges" ] && ok "done 自己不调 gh pr merge" || bad "done 自己开了自动合入：$(cat "${FAKE_GH}/merges")"
+! grep -q '^AUTO-MERGE:' "${TMP}/o56" && grep -q '先不开自动合入' "${TMP}/o56" &&
+  ok "保护设置读不到 → 不提示开自动合入，并说明原因" || bad "读不到保护设置却提示开自动合入"
+printf 'identity\nCI Rust gate\n' >"${FAKE_GH}/required"
+issue 58 "status:ready" "[T-58] am-off" "src/**" "Bug"
+AW="$(START 58 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/58-"*)"
+commit_file "$AW" src/am.txt
+DONE "$AW" >"${TMP}/o58" 2>&1 || bad "交卡失败：$(tail -5 "${TMP}/o58")"
+! grep -q '^AUTO-MERGE:' "${TMP}/o58" && ok "review/agent 不在必需检查里 → 不提示开自动合入" || bad "不在必需检查里却提示开"
+printf 'identity\nreview/agent\nCI Rust gate\n' >"${FAKE_GH}/required"
+issue 59 "status:ready" "[T-59] am-on" "src/**" "Bug"
+AW2="$(START 59 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/59-"*)"
+commit_file "$AW2" src/am2.txt
+DONE "$AW2" >"${TMP}/o59" 2>&1 || bad "交卡失败：$(tail -5 "${TMP}/o59")"
+grep -q '^AUTO-MERGE: gh pr merge .* --auto --squash' "${TMP}/o59" && ok "反证：review/agent 是必需检查 → 提示开自动合入" || bad "必需检查里有 review/agent 却没提示：$(tail -3 "${TMP}/o59")"
+rm -f "${FAKE_GH}/required"
 # ── #1375 共享编译缓存：just start 建主副本旁的 .env.ppass-dev ────────────────
 # 卡目录在主副本旁（<主副本>-wt 之类）时靠 just 往上找到它，不拷；不在旁边时拷进卡目录根。
 cache_norm() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
