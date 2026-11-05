@@ -325,7 +325,10 @@ hidden_case "只有验收行" "core/c.txt" '产品负责人 2026-11-04 真机验
 has "已采纳" "$FAKE/comments" && ok "  未通过理由点名要已采纳方案" || bad "理由没点名已采纳方案"
 hidden_case "引用已采纳方案但没测试" "core/c.txt" '方案：docs/decisions/2026-11-01-adopted.md' fail
 hidden_case "反证：已采纳方案 + 测试文件" "core/c.txt tools/test-c.sh" '方案：docs/decisions/2026-11-01-adopted.md' pass
-hidden_case "方案不在 origin/main 上" "core/c.txt tools/test-c.sh" '方案：docs/decisions/2026-11-09-nope.md' fail
+# 工作区里放一份写着「已采纳」、但没进 origin/main 的方案：只读 origin/main 才判得红
+printf '# 方案\n\n- 状态：已采纳\n' >"${TMP}/main/docs/decisions/2026-11-09-nope.md"
+hidden_case "方案只在工作区、不在 origin/main 上" "core/c.txt tools/test-c.sh" '方案：docs/decisions/2026-11-09-nope.md' fail
+rm -f "${TMP}/main/docs/decisions/2026-11-09-nope.md"
 
 echo "==> #1452：SOP 格式验收行与整体模式"
 reset pass

@@ -59,8 +59,17 @@ for pr in $prs; do
     READ_FAIL=1
     continue
   fi
-  tr -d '\r' <"${TMP}/pr-body" | grep -E "$MARK_RE" | sed -E 's/.*#([0-9]+).*/\1/' |
-    awk -v pr="$pr" '{ print $0 " " pr }' >>"${TMP}/pairs"
+  tr -d '\r' <"${TMP}/pr-body" | grep -E "$MARK_RE" | sed -E 's/.*#([0-9]+).*/\1/' >"${TMP}/marks"
+  [ -s "${TMP}/marks" ] || continue
+  # 来源 PR 的级别（acceptance-gate.sh classify）：只有全是更新说明（notes）的模块卡，文案确认行才算验收记录。
+  if ! gh pr view "$pr" -R "$REPO" --json files --jq '.files[].path' >"${TMP}/pr-files" 2>"${TMP}/err"; then
+    printf '✗ 读不到 PR #%s 的改动文件：%s\n' "$pr" "$(head -3 "${TMP}/err" | tr '\n' ' ')" >&2
+    READ_FAIL=1
+    continue
+  fi
+  kind="$(tr -d '\r' <"${TMP}/pr-files" | bash "${HERE}/acceptance-gate.sh" classify 2>/dev/null)"
+  [ -n "$kind" ] || kind=unknown
+  awk -v pr="$pr" -v k="$kind" '{ print $0 " " pr " " k }' "${TMP}/marks" >>"${TMP}/pairs"
 done
 
 modules="$(awk '{ print $1 }' "${TMP}/pairs" | awk '!seen[$0]++')"
@@ -75,7 +84,9 @@ for m in $modules; do
   fi
   tr -d '\r' <"${TMP}/issue" >"${TMP}/issue-text"
   CHECKED=$((CHECKED + 1))
-  bash "${HERE}/acceptance-gate.sh" record --body "${TMP}/issue-text" >/dev/null 2>"${TMP}/err"
+  copy=()
+  [ -n "$(awk -v m="$m" '$1 == m && $3 != "notes"' "${TMP}/pairs")" ] || copy=(--allow-copy)
+  bash "${HERE}/acceptance-gate.sh" record --body "${TMP}/issue-text" ${copy[@]+"${copy[@]}"} >/dev/null 2>"${TMP}/err"
   rc=$?
   case "$rc" in
     0) ;;

@@ -32,7 +32,10 @@ case "${kind} ${sub}" in
   "pr view")
     [ -e "${FAKE}/pr/${num}.fail" ] && { echo "HTTP 502: stub failure" >&2; exit 1; }
     [ -f "${FAKE}/pr/${num}.body" ] || { echo "no pull request #${num}" >&2; exit 1; }
-    cat "${FAKE}/pr/${num}.body"
+    case " $* " in
+      *" files "*) if [ -f "${FAKE}/pr/${num}.files" ]; then cat "${FAKE}/pr/${num}.files"; else echo apps/desktop/src/App.svelte; fi ;;
+      *) cat "${FAKE}/pr/${num}.body" ;;
+    esac
     ;;
   "issue view")
     [ -e "${FAKE}/issue/${num}.fail" ] && { echo "HTTP 502: stub failure" >&2; exit 1; }
@@ -135,6 +138,20 @@ body 21 $'closes #2\n这次改动以后会随模块验收 #100 一起看'
 run 0 "「随模块验收 #100」嵌在句子中间 → 不算标记，绿" v1.0.0
 body 21 $'closes #2\n随模块验收 #100'
 run 1 "反证：同样内容单独成行 → 红" v1.0.0
+
+echo "── 文案确认行只对更新说明的模块算数（CodeRabbit #1456）"
+COPY='产品负责人 2026-11-05 15:30 文案确认通过'
+reset_fake
+body 21 $'随模块验收 #100'
+printf '%s\n' "$COPY" >"${FAKE}/issue/100.c1"
+run 1 "界面改动的模块卡上只有文案确认行 → 红（不算验收）" v1.0.0
+has "#100 没有验收记录" && ok "  点名 #100" || bad "  输出不对：$(cat "${TMP}/out")"
+printf 'release/notes/android/0.12.0.zh.txt\nCHANGELOG.md\n' >"${FAKE}/pr/21.files"
+run 0 "反证：来源 PR 只改更新说明 → 文案确认行算数，绿" v1.0.0
+body 22 $'随模块验收 #100'
+run 1 "  同一模块卡另有界面改动的来源 PR → 文案确认不够，红" v1.0.0
+printf '%s\n' "$LINE" >"${FAKE}/issue/100.c2"
+run 0 "  补真机 / SOP 验收行 → 绿" v1.0.0
 
 echo "── gh 读失败 fail-closed"
 reset_fake

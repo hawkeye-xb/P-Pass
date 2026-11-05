@@ -4,7 +4,9 @@
 #   acceptance-gate.sh check    --files <改动文件列表> --body <PR 正文文件> [--repo <仓库根>] [--core-rules <规则文件>] [--diff <unified diff>]
 #   acceptance-gate.sh classify [--repo <仓库根>] [--core-rules <规则文件>] [--diff <unified diff>] < 改动文件列表
 #                               打印 core / core-hidden / ui / notes / none
-#   acceptance-gate.sh record   --body <文本文件>     文本里有没有任一格式的验收记录（0 有 / 1 没有；发版前的模块验收检查用）
+#   acceptance-gate.sh record   --body <文本文件> [--allow-copy]
+#                               文本里有没有验收记录（0 有 / 1 没有；发版前的模块验收检查用）。只认 SOP 行与真机行；
+#                               --allow-copy 才也认文案确认行（只在来源 PR 全是更新说明类时由调用方加）
 #
 # 级别判定与验收行判定只在这里一份：worker-done.sh（classify）、review.sh（classify + check）、CI 的 acceptance gate（check）、
 # release-acceptance.sh（record）都调用本脚本，别在别处再抄一份。
@@ -56,6 +58,7 @@ BODY_F=""
 REPO="$(cd "${HERE}/../.." && pwd)"
 CORE_RULES=""
 DIFF_F=""
+ALLOW_COPY=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --files) FILES_F="${2:-}"; shift 2 || shift ;;
@@ -63,6 +66,7 @@ while [ "$#" -gt 0 ]; do
     --repo) REPO="${2:-}"; shift 2 || shift ;;
     --core-rules) CORE_RULES="${2:-}"; shift 2 || shift ;;
     --diff) DIFF_F="${2:-}"; shift 2 || shift ;;
+    --allow-copy) ALLOW_COPY=1; shift ;;
     *) usage ;;
   esac
 done
@@ -120,7 +124,8 @@ case "$MODE" in
   classify) classify ;;
   record)
     [ -f "$BODY_F" ] || usage
-    has_record "$BODY_F" || grep -qE "$COPY_RE" "$BODY_F"
+    # 文案确认只对更新说明算数：界面改动的模块卡上只有文案确认行，不算验收过（CodeRabbit #1456）。
+    has_record "$BODY_F" || { [ "$ALLOW_COPY" = 1 ] && grep -qE "$COPY_RE" "$BODY_F"; }
     ;;
   check)
     [ -f "$FILES_F" ] && [ -f "$BODY_F" ] || usage

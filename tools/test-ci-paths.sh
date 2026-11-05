@@ -155,7 +155,7 @@ mkdiff() {
     printf '%s\n' "$@"
   } >"$out"
 }
-V_HUNK=('@@ -1,5 +1,5 @@' ' {' '   "productName": "P-Pass",' '-  "version": "0.10.1",' '+  "version": "0.11.0-beta.1",' '   "identifier": "x",')
+V_HUNK=('@@ -1,4 +1,4 @@' ' {' '   "productName": "P-Pass",' '-  "version": "0.10.1",' '+  "version": "0.11.0-beta.1",' '   "identifier": "x",')
 EP_HUNK=('@@ -86,3 +86,3 @@' '       "endpoints": [' '-        "https://a.example/latest.json"' '+        "https://evil.example/latest.json"' '       ]')
 PK_HUNK=('@@ -86,1 +86,1 @@' '-      "pubkey": "AAAA",' '+      "pubkey": "BBBB",')
 mkdiff "$TMP/v.diff" "$TC" "${V_HUNK[@]}"
@@ -165,12 +165,17 @@ mkdiff "$TMP/bad-semver.diff" "$TC" '@@ -4 +4 @@' '-  "version": "0.10.1",' '+  
 mkdiff "$TMP/bad-semver-old.diff" "$TC" '@@ -4 +4 @@' '-  "version": "v0.10.1",' '+  "version": "0.11.0",'
 mkdiff "$TMP/no-comma.diff" "$TC" '@@ -4 +4 @@' '-  "version": "0.10.1"' '+  "version": "0.11.0"'
 mkdiff "$TMP/add-only.diff" "$TC" '@@ -4,0 +5 @@' '+  "version": "0.11.0",'
-mkdiff "$TMP/moved.diff" "$TC" '@@ -4 +4 @@' '-  "version": "0.10.1",' '@@ -86 +86 @@' '+      "version": "0.11.0",'
+# 挪位置：行数与 @@ 头一致、缩进也是顶层，只有「不是原地替换」这一条不满足
+mkdiff "$TMP/moved.diff" "$TC" '@@ -4 +3,0 @@' '-  "version": "0.10.1",' '@@ -86,0 +86 @@' '+  "version": "0.11.0",'
 { printf 'diff --git a/%s b/%s\nnew file mode 100644\n' "$TC" "$TC"; sed 1d "$TMP/v.diff"; } >"$TMP/newfile.diff"
 mkdiff "$TMP/ep-only.diff" "$TC" "${EP_HUNK[@]}"
 # 第二节只有头没有 hunk：改动计数仍是删 1 加 1，只有「恰好一节」能把它判回核心。
 { cat "$TMP/v.diff"; mkdiff "$TMP/hdr.diff" "$TC"; cat "$TMP/hdr.diff"; } >"$TMP/twice.diff"
 printf '这不是 diff\n\x01\x02garbage\n' >"$TMP/garbage.diff"
+# 嵌套对象里的 "version" 键（比如 plugins 里）原地换 SemVer：不是顶层版本号行，仍算核心（CodeRabbit #1456）
+mkdiff "$TMP/nested.diff" "$TC" '@@ -88 +88 @@' '-      "version": "1.0.0",' '+      "version": "1.0.1",'
+# @@ 头声明 10 行、实际只有 4 行（diff 被截断，后面可能还有 endpoint / pubkey 改动）：看不懂，算核心
+mkdiff "$TMP/truncated.diff" "$TC" '@@ -1,10 +1,10 @@' ' {' '   "productName": "P-Pass",' '-  "version": "0.10.1",' '+  "version": "0.11.0",'
 CR=crates/proto/src/lib.rs
 mkdiff "$TMP/proto-version.diff" "$CR" '@@ -4 +4 @@' '-  "version": "0.10.1",' '+  "version": "0.11.0",'
 cat "$TMP/v.diff" "$TMP/proto-version.diff" >"$TMP/v-proto.diff"
@@ -187,6 +192,8 @@ core_diff_is "$PATHS" true "  反证：只加不删 version 行 → 核心" "$TM
 core_diff_is "$PATHS" true "  反证：version 行挪了位置（不是原地替换）→ 核心" "$TMP/moved.diff" "$TC"
 core_diff_is "$PATHS" true "  反证：新增文件 → 核心" "$TMP/newfile.diff" "$TC"
 core_diff_is "$PATHS" true "  反证：同一文件 diff 里出现两节 → 核心" "$TMP/twice.diff" "$TC"
+core_diff_is "$PATHS" true "  反证：嵌套对象里的 version 键换值 → 核心（只认顶层那一行）" "$TMP/nested.diff" "$TC"
+core_diff_is "$PATHS" true "  反证：hunk 行数与 @@ 头不符（截断的 diff）→ 核心" "$TMP/truncated.diff" "$TC"
 core_diff_is "$PATHS" true "  反证：不给 diff → 核心" "" "$TC"
 core_diff_is "$PATHS" true "  反证：diff 文件不存在 → 核心" "$TMP/missing.diff" "$TC"
 core_diff_is "$PATHS" true "  反证：diff 是乱码 → 核心" "$TMP/garbage.diff" "$TC"
@@ -273,9 +280,15 @@ else bad "变异体生成失败：no-version-exception"; fi
 if M="$(mutant "$PATHS" semver-any 's/^SEMVER_RE=.*$/SEMVER_RE=".*"/')"; then
   expect_red "SemVer 不校验" core_diff_is "$M" true "新版本号不是 SemVer → 核心" "$TMP/bad-semver.diff" "$TC"
 else bad "变异体生成失败：semver-any"; fi
-if M="$(mutant "$PATHS" version-any-line 's/^      printf .%s. .\^\[\[:space:\]\]\*"version".*$/      printf "%s" ".*"/')"; then
+if M="$(mutant "$PATHS" version-any-line 's/^      printf .%s. .\^  "version".*$/      printf "%s" ".*"/')"; then
   expect_red "白名单放过任意行" core_diff_is "$M" true "只改 endpoint 一行 → 核心" "$TMP/ep-only.diff" "$TC"
 else bad "变异体生成失败：version-any-line"; fi
+if M="$(mutant "$PATHS" version-any-indent 's/\^  "version"/^[[:space:]]*"version"/')"; then
+  expect_red "不限顶层缩进" core_diff_is "$M" true "嵌套 version 键 → 核心" "$TMP/nested.diff" "$TC"
+else bad "变异体生成失败：version-any-indent"; fi
+if M="$(mutant "$PATHS" no-hunk-count 's/^    \[ "\$want_old" -lt 0 \] && return 0$/    return 0/')"; then
+  expect_red "不核对 hunk 行数" core_diff_is "$M" true "截断的 diff → 核心" "$TMP/truncated.diff" "$TC"
+else bad "变异体生成失败：no-hunk-count"; fi
 if M="$(mutant "$PATHS" no-inplace-check 's/\[ "\$prev" = minus \] ||/true ||/')"; then
   expect_red "不查原地替换" core_diff_is "$M" true "version 行挪了位置 → 核心" "$TMP/moved.diff" "$TC"
 else bad "变异体生成失败：no-inplace-check"; fi

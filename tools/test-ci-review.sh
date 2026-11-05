@@ -359,6 +359,24 @@ CI 7 >"${TMP}/o11" 2>&1
 has "REVIEW_STATUS_WRITTEN=error" "${TMP}/o11" && ! has "review.sh 没写出评审状态就退出了" "${TMP}/o11" &&
   ok "  反证：error 写成功 → 有标记，不重复兜底" || bad "反证不对：$(tail -5 "${TMP}/o11")"
 
+echo "==> #1441：publish 只认 REVIEW_STATUS_WRITTEN 标记，报错里带 review/agent= 字样不算已写"
+# review.sh 换成桩：先只打一行带 review/agent=error 字样的报错就失败（旧判据 grep 'review/agent=' 会误以为已写、跳过兜底）；
+# 反证：打标记行再失败 → 不兜底。
+reset pass
+STEP prepare 7 >/dev/null 2>&1
+cp "${TMP}/main/tools/flow/review.sh" "${TMP}/review.sh.real"
+printf '#!/usr/bin/env bash\necho "✗ 写提交状态 review/agent=error 失败" >&2\nexit 1\n' >"${TMP}/main/tools/flow/review.sh"
+: >"$FAKE/statuses"
+STEP publish 7 >"${TMP}/o12" 2>&1
+has "review.sh 没写出评审状态就退出了" "${TMP}/o12" && tail -n 1 "$FAKE/statuses" | grep -qF "state=error" &&
+  ok "报错带 review/agent= 字样、没有标记 → 兜底写 error" || bad "报错带 review/agent= 字样时没兜底：$(tail -4 "${TMP}/o12")"
+printf '#!/usr/bin/env bash\necho "REVIEW_STATUS_WRITTEN=error"\necho "✗ 写提交状态 review/agent=error 之后别的步骤失败" >&2\nexit 1\n' >"${TMP}/main/tools/flow/review.sh"
+STEP prepare 7 >/dev/null 2>&1
+: >"$FAKE/statuses"
+STEP publish 7 >"${TMP}/o13" 2>&1
+! has "review.sh 没写出评审状态就退出了" "${TMP}/o13" && ok "  反证：有标记行 → 不重复兜底" || bad "有标记仍兜底：$(tail -4 "${TMP}/o13")"
+cp "${TMP}/review.sh.real" "${TMP}/main/tools/flow/review.sh"
+
 echo
 echo "ci-review: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]

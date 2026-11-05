@@ -54,7 +54,16 @@ gate 1 "  引用已采纳方案但没带测试 → 红" "core/x.rs" $'closes #1\
 gate 1 "  带测试但没引用方案 → 红" "core/x.rs tools/test-x.sh" "closes #1"
 gate 0 "反证：引用已采纳方案 + 带测试 → 绿（不要验收行）" "core/x.rs tools/test-x.sh" $'closes #1\n方案：'"$ADR"
 gate 1 "  引用的是草稿方案 → 红" "core/x.rs tools/test-x.sh" $'closes #1\n方案：docs/decisions/2026-11-02-draft.md'
-gate 1 "  引用的方案不在 origin/main 上（PR 自己加的）→ 红" "core/x.rs tools/test-x.sh" $'closes #1\n方案：docs/decisions/2026-11-03-new.md'
+# PR 自己带进来、写着「已采纳」但还没进 origin/main 的方案：工作区里有这份文件，只读 origin/main 才判得红
+printf '# 方案\n\n- 状态：已采纳\n' >"${TMP}/repo/docs/decisions/2026-11-03-new.md"
+gate 1 "  引用的方案只在工作区（PR 自己加的，写着已采纳）、不在 origin/main 上 → 红" "core/x.rs tools/test-x.sh" $'closes #1\n方案：docs/decisions/2026-11-03-new.md'
+(
+  cd "${TMP}/repo" || exit 1
+  export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+  git add docs/decisions/2026-11-03-new.md && git -c user.name=t -c user.email=t@example.invalid commit -q -m adopt &&
+    git update-ref refs/remotes/origin/main HEAD
+) || bad "（准备）把方案合进 origin/main 失败"
+gate 0 "  反证：同一份方案合进 origin/main 后 → 绿" "core/x.rs tools/test-x.sh" $'closes #1\n方案：docs/decisions/2026-11-03-new.md'
 # 看得见的核心：仍要验收记录
 CV=apps/android/core/Pair.kt
 gate 1 "核心、看得见：没有验收行 → 红" "$CV" $'closes #1\n方案：'"$ADR"
@@ -120,7 +129,9 @@ gate 0 "反证：核心看得见 + 随模块验收 + 已采纳方案 → 绿" "$
 rec() { printf '%s\n' "$2" >"${TMP}/rec"; bash "$G" record --body "${TMP}/rec" >/dev/null 2>&1; [ "$?" = "$1" ] && ok "record：$3" || bad "record：$3"; }
 rec 0 "$SOP" "SOP 行 → 有记录"
 rec 0 "$LINE" "旧格式真机行 → 有记录"
-rec 0 "$COPY" "文案确认行 → 有记录"
+rec 1 "$COPY" "文案确认行默认不算（界面模块要真机 / SOP 记录）"
+printf '%s\n' "$COPY" >"${TMP}/rec"
+bash "$G" record --body "${TMP}/rec" --allow-copy >/dev/null 2>&1 && ok "record：反证：--allow-copy（来源全是更新说明）→ 文案确认行算记录" || bad "record --allow-copy 不认文案确认行"
 rec 1 $'随模块验收 #9\n产品负责人 <时间> 真机验收通过' "反证：只有标记与占位行 → 没有记录"
 
 # 只改版本号行（#1451）：tauri.conf.json 只改 version 行不算核心（仍在 apps/** 下，按界面级要验收或随模块验收）；

@@ -30,6 +30,8 @@
 #     - diff 里这个文件恰好一节，头是 `diff --git a/<f> b/<f>`，有 `--- a/<f>` 与 `+++ b/<f>`，
 #       没有新增 / 删除 / 改名 / 改权限 / 二进制等别的头；
 #     - 改动恰好删一行、紧接着加一行（原地换值），两行都匹配白名单的版本号行（新旧值都是 SemVer）。
+#     - 版本号行只认顶层那一行（tauri.conf.json 按两个空格缩进；嵌套对象里的 "version" 键不算）；
+#     - 每个 hunk 的实际行数与 @@ 头声明一致（对不上 = diff 被截断或拼错，照旧算核心）。
 #   同一文件还改了任何别的行（如 updater 的 pubkey、endpoints）→ 仍是核心。
 #   diff 来源：给了 `--diff <文件>` 就用它；没给且 base 是真实 sha，自取
 #   `git diff --no-renames <base>...HEAD`；stdin 模式（`-`）没给 `--diff` 就照旧按文件判。
@@ -147,8 +149,10 @@ SEMVER_RE='(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0
 version_line_re() {
   case "$1" in
     # tools/bump-version.sh：sed "s/\"version\": \"<旧>\"/\"version\": \"<新>\"/"
+    # 只认顶层那一行（文件按两个空格缩进）：嵌套对象里的 "version" 键（比如以后 plugins 里加一个）不算版本号行，
+    # 改它仍走核心审批。
     apps/desktop/src-tauri/tauri.conf.json)
-      printf '%s' '^[[:space:]]*"version":[[:space:]]*"'"${SEMVER_RE}"'",?[[:space:]]*$'
+      printf '%s' '^  "version": "'"${SEMVER_RE}"'",?[[:space:]]*$'
       ;;
     *) return 1 ;;
   esac
@@ -167,6 +171,25 @@ version_only() {
     on { print }' "$DIFF_FILE" 2>/dev/null)" || { WHY_NOT="解析 diff 失败"; return 1; }
   [ -n "$sect" ] || { WHY_NOT="diff 里没有这个文件（新增 / 删除 / 改名 / 没给 patch 都算）"; return 1; }
   local hdr_minus=false hdr_plus=false prev=""
+  # 每个 hunk 核对 @@ 头声明的行数（省略时为 1）：行数对不上 = diff 被截断或拼错，按看不懂处理（照旧算核心）。
+  local want_old=-1 want_new=-1 got_old=0 got_new=0 h
+  hunk_ok() {
+    [ "$want_old" -lt 0 ] && return 0
+    [ "$got_old" -eq "$want_old" ] && [ "$got_new" -eq "$want_new" ] && return 0
+    WHY_NOT="hunk 实际行数（旧 ${got_old} / 新 ${got_new}）与 @@ 头声明（旧 ${want_old} / 新 ${want_new}）不符"
+    return 1
+  }
+  hunk_start() { # hunk_start <@@ 行>
+    hunk_ok || return 1
+    h="$(printf '%s' "$1" | sed -n 's/^@@ -[0-9][0-9]*\(,\([0-9][0-9]*\)\)\{0,1\} +[0-9][0-9]*\(,\([0-9][0-9]*\)\)\{0,1\} @@.*/\2 \4/p')"
+    [ -n "$h" ] || { WHY_NOT="看不懂的 hunk 头「$1」"; return 1; }
+    want_old="${h% *}"
+    want_new="${h#* }"
+    [ -n "$want_old" ] || want_old=1
+    [ -n "$want_new" ] || want_new=1
+    got_old=0
+    got_new=0
+  }
   while IFS= read -r line || [ -n "$line" ]; do
     if [ "$line" = "@@SECTION@@" ]; then
       n=$((n + 1))
@@ -178,16 +201,17 @@ version_only() {
         "--- a/${f}") hdr_minus=true ;;
         "+++ b/${f}") hdr_plus=true ;;
         "index "*) ;;
-        "@@ "*) in_hunk=true ;;
+        "@@ "*) hunk_start "$line" || return 1; in_hunk=true ;;
         *) WHY_NOT="diff 头里有「${line}」（新增 / 删除 / 改名 / 改权限 / 二进制都不算只改版本号）"; return 1 ;;
       esac
       continue
     fi
     case "$line" in
-      "@@ "*) prev=hunk ;;
-      " "* | "") prev=ctx ;;
+      "@@ "*) hunk_start "$line" || return 1; prev=hunk ;;
+      " "* | "") got_old=$((got_old + 1)); got_new=$((got_new + 1)); prev=ctx ;;
       -*)
         [[ ${line#-} =~ $re ]] || { WHY_NOT="删了非版本号行「${line}」"; return 1; }
+        got_old=$((got_old + 1))
         minus=$((minus + 1))
         prev=minus
         ;;
@@ -195,6 +219,7 @@ version_only() {
         [[ ${line#+} =~ $re ]] || { WHY_NOT="加了非版本号行「${line}」"; return 1; }
         # 新行必须紧跟在被删的旧行后面：原地换值，不许把版本号行挪到别的位置（比如挪进 plugins）。
         [ "$prev" = minus ] || { WHY_NOT="新增的版本号行不是原地替换旧行"; return 1; }
+        got_new=$((got_new + 1))
         plus=$((plus + 1))
         prev=plus
         ;;
@@ -203,6 +228,7 @@ version_only() {
   done <<EOF
 $sect
 EOF
+  hunk_ok || return 1
   [ "$n" -eq 1 ] || { WHY_NOT="diff 里这个文件有 ${n} 节（应恰好 1 节）"; return 1; }
   [ "$hdr_minus" = true ] && [ "$hdr_plus" = true ] || { WHY_NOT="diff 缺 ---/+++ 头"; return 1; }
   [ "$minus" -eq 1 ] && [ "$plus" -eq 1 ] ||
