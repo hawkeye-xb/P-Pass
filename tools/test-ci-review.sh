@@ -166,6 +166,10 @@ tail -n 1 "$FAKE/statuses" | grep -qF "state=error" && ok "状态 error（不是
 has "评审没跑成" "$FAKE/comments" && has "不是代码有问题" "$FAKE/comments" && ok "评论写「评审没跑成」" || bad "评论不对：$(cat "$FAKE/comments")"
 has "comments/4242" "$FAKE/deletes" && ok "infra → 删掉 review.sh 贴的「未通过」评论，避免与「评审没跑成」矛盾" || bad "没删「未通过」评论：$(cat "$FAKE/deletes")"
 [ ! -s "$FAKE/merges" ] && ok "infra → 不碰自动合入" || bad "infra 开了自动合入"
+reset infra
+printf '**独立评审：未通过**（头提交 `%s`）\n更早一次的真实结论\n-----\n' "${SHA:0:10}" >"$FAKE/comments"
+CI 7 >/dev/null 2>&1
+[ ! -s "$FAKE/deletes" ] && ok "反证：同一提交上更早的真实「未通过」评论不删" || bad "误删了更早的评论：$(cat "$FAKE/deletes")"
 reset noverdict
 CI 7 >/dev/null 2>&1
 tail -n 1 "$FAKE/statuses" | grep -qF "state=error" && [ "$(calls)" = 2 ] && ok "退出 0 但没有 VERDICT 行 → 也算 infra，重试后 error" || bad "无 VERDICT 处理不对：$(cat "$FAKE/statuses") 调用 $(calls)"

@@ -63,6 +63,11 @@ export PPASS_CI_STATE="$STATE"
 
 SHA="$(gh pr view "$PR" -R "$REPO" --json headRefOid --jq .headRefOid 2>/dev/null | tr -d '\r')"
 
+list_fail_comments() {
+  gh api "repos/${REPO}/issues/${PR}/comments" --paginate \
+    --jq ".[] | select(.body | startswith(\"**独立评审：未通过**（头提交 \`${SHA:0:10}\`\")) | .id" 2>/dev/null || true
+}
+
 # 评审没跑成：状态 error + 评论，不是代码问题。
 infra_report() {
   local why="$1"
@@ -73,9 +78,10 @@ infra_report() {
       echo "ci-review: 写状态 error 失败" >&2
   fi
   # review.sh 把 agent 失败当「未通过」贴过一条评论，和这里的结论矛盾，删掉它
+  # 只删本次运行贴的（跑之前就存在的是同一提交上更早的真实评审结论，要留着）
   if [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
-    for cid in $(gh api "repos/${REPO}/issues/${PR}/comments" --paginate \
-      --jq ".[] | select(.body | startswith(\"**独立评审：未通过**（头提交 \`${SHA:0:10}\`\")) | .id" 2>/dev/null); do
+    for cid in $(list_fail_comments); do
+      grep -qx "$cid" "${STATE}/before" 2>/dev/null && continue
       gh api -X DELETE "repos/${REPO}/issues/comments/${cid}" >/dev/null 2>&1 || true
     done
   fi
@@ -90,6 +96,7 @@ if [ -z "${ANTHROPIC_AUTH_TOKEN:-}" ]; then
   exit 0
 fi
 
+list_fail_comments >"${STATE}/before"
 export PPASS_REVIEW_NO_MERGE=1
 export PPASS_CI_SHIM=1
 export PPASS_REVIEW_AGENT="${FLOW_DIR}/ci-review.sh"
