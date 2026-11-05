@@ -74,9 +74,10 @@ act() {
   stop_via_app || return 1
   : >"$d/stop-samples.txt"
   for i in $(seq 10 10 "$STOP_WINDOW"); do
+    # 先等再采：最后一个点覆盖到 STOP_WINDOW，而不是提前 10s 收尾。
+    sleep 10
     pid="$(win_daemon_pid)"
     echo "t+${i}s pid=${pid} task=$(win_task_state)" >>"$d/stop-samples.txt"
-    sleep 10
   done
   win_diag "$d" >/dev/null 2>&1 || true
   # 2) 恢复
@@ -84,10 +85,15 @@ act() {
   sleep 5
   win_diag "$d" >/dev/null 2>&1 || true
   cp "$d/diag/devices.json" "$d/devices-after-restore.json" 2>/dev/null || true
+  local rpid rparent
+  rpid="$(win_daemon_pid)"
+  rparent=""
+  [ -z "$rpid" ] || rparent="$(win_process_name "$(win_process_parent "$rpid")" 2>/dev/null)"
   {
-    echo "restored_pid=$(win_daemon_pid)"
+    echo "restored_pid=$rpid"
     echo "restored_task=$(win_task_state)"
     echo "restored_state=$(win_status_field "$d" state)"
+    echo "restored_parent=$rparent"
   } >"$d/restore.txt"
   # 3) R4.1 手机断开
   phone_disconnect || echo "手机断开流程失败"
@@ -109,6 +115,7 @@ judge() {
   check "恢复后 daemon 在跑" grep -Eq '^restored_pid=[0-9]+' "$d/restore.txt"
   check "恢复后计划任务在运行" grep -qx 'restored_task=Running' "$d/restore.txt"
   check "恢复后 daemon 在线" grep -qx 'restored_state=ONLINE_DIRECT' "$d/restore.txt"
+  check "恢复后父进程是 svchost（计划任务拉起）" grep -qx 'restored_parent=svchost' "$d/restore.txt"
   check "断开后桌面把该设备标为未配对" grep -q '"paired": false' "$d/devices-after-disconnect.json"
   check "手机回到欢迎页（出现扫码/手动配对）" phone_welcome "$d/phone-after-disconnect.xml"
   verdict

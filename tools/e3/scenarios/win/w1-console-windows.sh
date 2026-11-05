@@ -65,6 +65,12 @@ run_window() { # run_window <证据目录> <故障注入 0|1> <秒>
     fi
     sleep 10
   fi
+  # watcher 必须还活着覆盖到全部动作结束；提前退出 = 尾部动作没被盯到。
+  if [ -n "${WIN_WATCH_PID:-}" ] && kill -0 "$WIN_WATCH_PID" 2>/dev/null; then
+    echo "covered=ok" >>"$d/actions.txt"
+  else
+    echo "covered=fail" >>"$d/actions.txt"
+  fi
   win_watch_wait || rc=$?
   echo "$rc" >"$d/watcher-rc.txt"
   {
@@ -90,6 +96,7 @@ judge() {
   check "强杀后 daemon 换新 pid 恢复" grep -qx 'recover=ok' "$d/actions.txt"
   check "停服务动作生效（daemon 确实停了）" grep -qx 'stop=ok' "$d/actions.txt"
   check "恢复服务动作生效（daemon 回来了）" grep -qx 'restore=ok' "$d/actions.txt"
+  check "watcher 覆盖到动作结束（没有提前退出）" grep -qx 'covered=ok' "$d/actions.txt"
   check "动作后 daemon 在跑" grep -qx 'daemon=up' "$d/final-state.txt"
   verdict
 }
@@ -98,6 +105,8 @@ counter() {
   local d="$OUT"
   # 去掉触发条件：窗口期内人为开一个可见控制台，watcher 必须报红。
   run_window "$d" 1 15
+  # 反证复用主路径的动作证据：反证变红只能因为 watcher 抓到 CONSOLE，不是 actions.txt 缺失。
+  cp "$EV/main/actions.txt" "$d/actions.txt" 2>/dev/null || true
   : >"$d/note.txt"
 }
 

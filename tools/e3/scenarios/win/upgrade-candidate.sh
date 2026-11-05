@@ -73,11 +73,11 @@ act() {
   elif [ "${E3_WIN_PROVISION:-}" = extract ]; then
     win_provision_extract "$exe" "$WIN_CAND_VER" || { echo "候选解包安装失败"; return 1; }
     echo "provision=extract" >"$d/provision.txt"
+    echo "task=removed_by_extract（真实安装器会保留任务）" >"$d/extract-note.txt"
   else
     echo "跳过：安装器需要 UAC 提权（requireAdministrator）；提权会话重跑，或设 E3_WIN_PROVISION=extract"
     return 1
   fi
-  [ "${E3_WIN_PROVISION:-}" != extract ] || echo "task=removed_by_extract（真实安装器会保留任务）" >"$d/extract-note.txt"
   # 手机覆盖安装候选 APK（保留数据）。
   local apk
   apk="$(win_release_file "$WIN_CAND_TAG" '*_android.apk')"

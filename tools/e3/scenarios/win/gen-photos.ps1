@@ -30,7 +30,7 @@ for ($i = 0; $i -lt $Count; $i++) {
     $mark = [System.Drawing.SolidBrush]::new($markColor)
     $g.FillRectangle($mark, 10, 10, 20 + $i, 20 + $i)
     $mark.Dispose()
-    $path = Join-Path $Out ('{0}_{1:D3}.jpg' -f $Prefix, $i)
+    $path = Join-Path $Out ('PPR_{0}_{1:D3}.jpg' -f $Prefix, $i)
     $bmp.Save($path, [System.Drawing.Imaging.ImageFormat]::Jpeg)
     $g.Dispose()
     $bmp.Dispose()

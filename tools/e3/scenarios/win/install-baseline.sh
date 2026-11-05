@@ -33,6 +33,7 @@ setup() {
   [ "$(win_phone_version)" = "$WIN_BASE_PHONE_VER" ] || { echo "手机版本不是 ${WIN_BASE_PHONE_VER}：$(win_phone_version)"; return 1; }
 
   # 桌面清理到全新机器状态（旧库挪走，不硬删），再解包安装用户态基线。
+  APP_TOUCHED=1
   win_reset_desktop_state
   win_provision_extract "$exe" "$WIN_BASE_VER" || { echo "解包安装失败"; return 1; }
   echo "provision=extract（用户态基线；perMachine 真实安装器见 win/installer）"
@@ -68,6 +69,10 @@ act() {
   } >"$d/versions.txt"
 }
 
+task_action_is_expected() { # 整条比较，避免 ...\P-Pass-old\ppf-daemon.exe 这种前缀冒充
+  [ "$(sed -n 's/^task_action=//p' "$1" | tr -d '')" = "$WIN_APP_DIR_WIN\ppf-daemon.exe" ]
+}
+
 judge() {
   local d="$1"
   check "daemon 版本 0.10.1（diag status）" grep -qx "status_version=$WIN_BASE_VER" "$d/versions.txt"
@@ -75,7 +80,7 @@ judge() {
   check "安装登记 DisplayVersion 0.10.1" grep -qx "install_version=$WIN_BASE_VER" "$d/versions.txt"
   check "首启向导走完（主界面「后台服务运行中」）" win_ui_has "$d/desktop-main.txt" '后台服务运行中'
   check "计划任务 P-Pass 在运行" grep -qx 'task_state=Running' "$d/versions.txt"
-  check "计划任务指向安装目录里的 daemon" grep -Fq "task_action=$WIN_APP_DIR_WIN" "$d/versions.txt"
+  check "计划任务指向安装目录里的 daemon" task_action_is_expected "$d/versions.txt"
   check "daemon 进程在" grep -Eq '^daemon_pid=[0-9]+' "$d/versions.txt"
   check "手机基线版本 $WIN_BASE_PHONE_VER" grep -qx "phone_version=$WIN_BASE_PHONE_VER" "$d/versions.txt"
   check "照片库目录已由向导写入" grep -Eq '^library=.+P-Pass' "$d/versions.txt"
@@ -107,7 +112,8 @@ counter() {
 }
 
 teardown() {
-  # 恢复运行（向导已完成，App 起来后看门狗/自愈会把 daemon 拉回来）。
+  # 只恢复本场景动过的 App；setup SKIP（77）时什么都没停，不能凭空启动一个 App。
+  [ "${APP_TOUCHED:-0}" = 1 ] || return 0
   win_app_running || win_start_app >/dev/null 2>&1 || true
   return 0
 }

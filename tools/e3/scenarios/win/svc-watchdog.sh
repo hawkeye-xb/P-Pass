@@ -26,7 +26,10 @@ one_round() { # one_round <证据目录> <轮次名> <壳开着 1|0>
   old="$(win_status_field "$d" pid)"
   echo "$old" >"$d/$tag-pid-before.txt"
   echo "task=$(win_task_state)" >"$d/$tag-task.txt"
-  if [ "$shell_up" = 0 ]; then win_stop_app; fi
+  if [ "$shell_up" = 0 ]; then
+    win_stop_app
+    win_app_running && { echo "$tag: 壳没停掉，看门狗轮次无效"; return 1; }
+  fi
   # 强杀
   win_ps "Stop-Process -Id $old -Force" >/dev/null 2>&1 || true
   new="$(wait_new_pid "$old" "$WINDOW")" || { echo "$tag: ${WINDOW}s 内没有新 daemon"; echo "" >"$d/$tag-pid-after.txt"; return 1; }
@@ -98,6 +101,7 @@ counter() {
     return 1
   fi
   win_stop_app
+  win_app_running && { echo "反证：壳没停掉" >&2; return 1; }
   win_diag "$d" >/dev/null 2>&1 || true
   old="$(win_status_field "$d" pid)"
   [ -n "$old" ] || { echo "反证：杀之前拿不到 daemon pid" >&2; return 1; }
