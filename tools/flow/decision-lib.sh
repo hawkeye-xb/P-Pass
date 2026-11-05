@@ -12,7 +12,8 @@ decision_refs() {
 adopted_adrs() {
   local p
   for p in $(decision_refs "$1"); do
-    git show "origin/main:${p}" 2>/dev/null | grep -qE '^[-*][[:space:]]*状态(：|:)[[:space:]]*已采纳' &&
+    # Git Bash 会把 origin/main:<path> 的冒号当路径分隔符改写；禁止 MSYS 做路径转换。
+    MSYS_NO_PATHCONV=1 git show "origin/main:${p}" 2>/dev/null | grep -qE '^[-*][[:space:]]*状态(：|:)[[:space:]]*已采纳' &&
       printf '%s\n' "$p"
   done
 }

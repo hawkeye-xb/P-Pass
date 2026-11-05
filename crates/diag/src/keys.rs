@@ -268,7 +268,6 @@ msg_keys! {
     UI_WIZARD_STEP_LIBRARY => "ui.wizard_step_library",
     UI_WIZARD_STEP_SLEEP => "ui.wizard_step_sleep",
     UI_WIZARD_STEP_SERVICE => "ui.wizard_step_service",
-    UI_WIZARD_UNCONFIGURED_NOTICE => "ui.wizard_unconfigured_notice",
     UI_LIBRARY_MISSING_TITLE => "ui.library_missing_title",
     UI_LIBRARY_MISSING_BODY => "ui.library_missing_body",
     /// #1272：库找不到时，手机上手动挑选传来的张数说明（手机不会自动补回）。
@@ -475,6 +474,8 @@ msg_keys! {
     UI_PAIR_DESKTOP_IDENTITY => "ui.pair_desktop_identity",
     UI_PAIR_DESKTOP_NAME => "ui.pair_desktop_name",
     UI_AUDIT_PAIR_CODE_FAILED => "ui.audit_pair_code_failed",
+    /// #1406：设备名为空时设备列表里的兜底名「手机 · <ID 前 4 位>」。
+    UI_DEVICE_FALLBACK_NAME => "ui.device_fallback_name",
 }
 
 #[cfg(test)]
@@ -808,13 +809,13 @@ mod tests {
             UI_PAIR_DESKTOP_IDENTITY,
             UI_PAIR_DESKTOP_NAME,
             UI_AUDIT_PAIR_CODE_FAILED,
+            UI_DEVICE_FALLBACK_NAME,
             UI_ERR_UPDATE_NONE,
             UI_ERR_UPDATE_VERSION_CHANGED,
             UI_ERR_UPDATE_PUBLISHER_REJECTED,
             UI_ERR_UPDATE_NOT_DOWNLOADED,
             UI_ERR_DAEMON_NOT_OURS,
             UI_ERR_DAEMON_OTHER_ACCOUNT,
-            UI_WIZARD_UNCONFIGURED_NOTICE,
             UI_LIBRARY_MISSING_TITLE,
             UI_LIBRARY_MISSING_BODY,
             UI_LIBRARY_MISSING_PICKED,

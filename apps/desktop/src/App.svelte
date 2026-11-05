@@ -745,6 +745,9 @@
   let renameTarget = $state(null); // { nodeId, name }
   let renameValue = $state("");
 
+  // #1406：名字为空时的兜底显示名（按钮要有宽度才点得到）。ID 取自 ID 列同一个短指纹。
+  const displayName = (d) => d.name?.trim() || t("ui.device_fallback_name", { id: d.node_id.slice(0, 4) });
+
   function startRename(d) {
     renameTarget = { nodeId: d.node_id, name: d.name };
     renameValue = d.name;
@@ -1597,14 +1600,12 @@
       <WizardWindows
         defaultDir={wizard.default_dir}
         configuredLibraryDir={wizard.configured_library_dir}
-        unconfigured={wizard.unconfigured === true}
         onDone={() => { checkWizard(); refresh(); }}
       />
     {:else}
       <Wizard
         defaultDir={wizard.default_dir}
         configuredLibraryDir={wizard.configured_library_dir}
-        unconfigured={wizard.unconfigured === true}
         onDone={() => { checkWizard(); refresh(); }}
       />
     {/if}
@@ -1987,7 +1988,7 @@
                             class="-ml-[6px] h-auto min-h-0 flex-none self-start justify-start rounded-sm border-0 border-none px-[6px] py-[2px] text-left text-[16px] leading-[1.38] font-semibold text-ink hover:bg-linen hover:underline hover:underline-offset-[3px]"
                             title={t("ui.rename")}
                             onclick={() => startRename(d)}
-                          >{d.name}</Button>
+                          >{displayName(d)}</Button>
                         {/if}
                         <!-- #1071：协议版本不符的一端要更新才能互通；daemon 在
                              devices.list 每行给 needs_update（"phone" | "desktop" | null）。 -->
