@@ -576,8 +576,14 @@ has_lbl 51 "status:doing" && has_lbl 52 "status:doing" && ok "多卡：两张卡
 printf '%s' "$OUT" | grep -q 'src/\*\*' && printf '%s' "$OUT" | grep -q 'docs/\*\*' && ok "多卡：打印的范围是并集" || bad "多卡范围没取并集"
 commit_file "$MW" src/m.txt
 commit_file "$MW" docs/m.md
-rm -f "${FAKE_GH}/pr.draft" "${FAKE_GH}/pr.created"
+rm -f "${FAKE_GH}/pr.body" "${FAKE_GH}/pr.created" "${FAKE_GH}/pr.title" "${FAKE_GH}/pr.draft"
 if DONE "$MW" >"${TMP}/o51" 2>&1; then ok "多卡：两张卡范围内的文件都放行"; else bad "多卡交卡失败：$(tail -5 "${TMP}/o51")"; fi
+# #1421：just done 不自己开 PR，只打印命令；执行者运行打印的命令才开出 PR
+[ ! -e "${FAKE_GH}/pr.created" ] && ok "done 不自己调 gh pr create" || bad "done 自己开了 PR"
+pr_cmd() { sed -n 's/^PR-CREATE: //p' "$1"; }
+[ "$(pr_cmd "${TMP}/o51" | grep -c '^gh pr create ')" = 1 ] && ok "done 打印了一条开 PR 命令（PR-CREATE:）" || bad "done 没打印开 PR 命令"
+(cd "$MW" && eval "$(pr_cmd "${TMP}/o51")") >/dev/null 2>&1 || bad "打印的开 PR 命令跑不起来：$(pr_cmd "${TMP}/o51")"
+[ "$(cat "${FAKE_GH}/pr.created" 2>/dev/null)" = "feat/51-onboarding-gate" ] && ok "反证：运行打印的命令 → 在本分支开出 PR" || bad "运行打印的命令没开出本分支的 PR"
 comments_of 51 | grep -q "worker 已交卡" && comments_of 52 | grep -q "worker 已交卡" && ok "多卡：回执贴到每张卡" || bad "回执没贴到每张卡"
 has_lbl 51 "status:review" && has_lbl 52 "status:review" && ok "多卡：两张卡都转 review" || bad "多卡交卡后标签不对"
 grep -qx 'closes #51' "${FAKE_GH}/pr.body" && grep -qx 'closes #52' "${FAKE_GH}/pr.body" &&
@@ -591,25 +597,45 @@ commit_file "$SW" src/m.txt
 commit_file "$SW" docs/m.md
 if DONE "$SW" >"${TMP}/o54" 2>&1; then bad "单卡分支放行了别的卡范围里的文件"; else ok "反证：只认一张卡时 docs/ 越界被拒"; fi
 
+# PR 正文写不进去（旧的 pr-body.md 只读）→ 失败、不打印开 PR 命令，免得用旧正文开 PR
+issue 57 "status:ready" "[T-57] body" "src/**" "Bug"
+BW="$(START 57 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/57-"*)"
+commit_file "$BW" src/b.txt
+mkdir -p "${PPASS_WT_ROOT}/.evidence/57"
+echo "closes #999 旧正文" >"${PPASS_WT_ROOT}/.evidence/57/pr-body.md"
+chmod 444 "${PPASS_WT_ROOT}/.evidence/57/pr-body.md"
+if DONE "$BW" >"${TMP}/o57" 2>&1; then bad "PR 正文写不进去仍成功"; else ok "PR 正文写不进去 → done 失败"; fi
+[ -z "$(pr_cmd "${TMP}/o57")" ] && ok "  写不进去时不打印开 PR 命令" || bad "写不进去仍打印了开 PR 命令"
+chmod 644 "${PPASS_WT_ROOT}/.evidence/57/pr-body.md"
+DONE "$BW" >"${TMP}/o57b" 2>&1 && [ -n "$(pr_cmd "${TMP}/o57b")" ] && grep -qx 'closes #57' "${PPASS_WT_ROOT}/.evidence/57/pr-body.md" &&
+  ok "反证：可写后打印命令，正文是新的" || bad "可写后仍失败或正文没更新：$(tail -3 "${TMP}/o57b")"
+
 # 用户看得到的改动：没给验收时间 → 开草稿 PR（--draft，正文「待产品负责人真机验收」）；
 # 给了 → 正式 PR，正文单独一行「产品负责人 <时间> 真机验收通过」
 issue 55 "status:ready" "[T-55] visible" "apps/ios/**" "Bug"
 VW="$(START 55 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/55-"*)"
 mkdir -p "$VW/apps/ios/PPass"
 commit_file "$VW" apps/ios/PPass/Ui.swift 'let ui = 1'
-rm -f "${FAKE_GH}/pr.body" "${FAKE_GH}/pr.created" "${FAKE_GH}/pr.draft"
+VTITLE="fix: 标题带 'quote' 与 \$HOME 原样"
+git -C "$VW" commit -q --amend -s -m "$VTITLE"
+rm -f "${FAKE_GH}/pr.body" "${FAKE_GH}/pr.created" "${FAKE_GH}/pr.draft" "${FAKE_GH}/pr.title"
 DONE "$VW" >"${TMP}/o55" 2>&1 || bad "可见改动交卡失败：$(tail -5 "${TMP}/o55")"
 on_origin "fix/55-visible" && ok "可见改动：分支已推送" || bad "可见改动没推分支"
+[ ! -e "${FAKE_GH}/pr.created" ] && ok "  可见改动：done 自己也不开 PR" || bad "可见改动 done 自己开了 PR"
+pr_cmd "${TMP}/o55" | grep -q -- ' --draft ' && ok "  盯梢级：打印的开 PR 命令带 --draft" || bad "盯梢级打印的命令没带 --draft：$(pr_cmd "${TMP}/o55")"
+(cd "$VW" && eval "$(pr_cmd "${TMP}/o55")") >/dev/null 2>&1 || bad "打印的开 PR 命令跑不起来：$(pr_cmd "${TMP}/o55")"
 [ -e "${FAKE_GH}/pr.created" ] && [ -e "${FAKE_GH}/pr.draft" ] &&
   ok "盯梢级：没验收也开了草稿 PR（--draft）" || bad "盯梢级没开草稿 PR"
 grep -qF '待产品负责人真机验收' "${FAKE_GH}/pr.body" 2>/dev/null && ok "  草稿正文写「待产品负责人真机验收」" || bad "草稿正文缺待验收说明"
 ! grep -qE '^产品负责人 .*真机验收通过' "${FAKE_GH}/pr.body" 2>/dev/null && ok "  草稿正文没有验收通过行" || bad "草稿正文自带验收通过行"
 grep -q 'set_monitor' "${TMP}/o55" && ok "  提示马上打开 PR 监控" || bad "没提示打开 PR 监控"
+[ "$(cat "${FAKE_GH}/pr.title" 2>/dev/null)" = "$VTITLE" ] && ok "标题里的单引号、\$ 经打印的命令原样传给 gh" || bad "标题被改写：$(cat "${FAKE_GH}/pr.title" 2>/dev/null)"
 rm -f "${FAKE_GH}/pr.body" "${FAKE_GH}/pr.created" "${FAKE_GH}/pr.draft"
 DONE "$VW" --accepted "2026-11-04 15:30" >"${TMP}/o55b" 2>&1 || bad "带验收时间交卡失败：$(tail -5 "${TMP}/o55b")"
+(cd "$VW" && eval "$(pr_cmd "${TMP}/o55b")") >/dev/null 2>&1 || bad "打印的开 PR 命令跑不起来：$(pr_cmd "${TMP}/o55b")"
 grep -qxF '产品负责人 2026-11-04 15:30 真机验收通过' "${FAKE_GH}/pr.body" 2>/dev/null &&
   ok "反证：给了验收时间 → 正文单独一行写明验收" || bad "给了验收时间但正文缺验收行"
-[ ! -e "${FAKE_GH}/pr.draft" ] && ok "  已验收：正式 PR，不带 --draft" || bad "已验收却开了草稿"
+[ -e "${FAKE_GH}/pr.created" ] && [ ! -e "${FAKE_GH}/pr.draft" ] && ok "  已验收：正式 PR，不带 --draft" || bad "已验收却开了草稿（或没开出 PR）"
 # 核心路径同样先开草稿 PR
 issue 56 "status:ready,core" "[T-56] core change" "core/**" "Bug" "**ADR**：docs/decisions/2026-11-01-adopted.md"
 CW="$(START 56 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/56-"*)"
@@ -617,6 +643,7 @@ mkdir -p "$CW/core"
 commit_file "$CW" core/c.txt
 rm -f "${FAKE_GH}/pr.body" "${FAKE_GH}/pr.created" "${FAKE_GH}/pr.draft"
 DONE "$CW" >"${TMP}/o56" 2>&1 || bad "核心改动交卡失败：$(tail -5 "${TMP}/o56")"
+(cd "$CW" && eval "$(pr_cmd "${TMP}/o56")") >/dev/null 2>&1 || bad "打印的开 PR 命令跑不起来：$(pr_cmd "${TMP}/o56")"
 [ -e "${FAKE_GH}/pr.draft" ] && ok "人控级（核心路径）：草稿 PR" || bad "核心路径没开草稿 PR：$(tail -3 "${TMP}/o56")"
 # ── #1375 共享编译缓存：just start 建主副本旁的 .env.ppass-dev ────────────────
 # 卡目录在主副本旁（<主副本>-wt 之类）时靠 just 往上找到它，不拷；不在旁边时拷进卡目录根。

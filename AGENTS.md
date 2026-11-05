@@ -97,7 +97,7 @@ just start <issue号>          领卡：建 worktree 与分支，ready→doing�
 （cd 进它给的目录，改代码，git add + git commit -s）
 just done                     交卡：过门禁与验收，全绿才推送、贴回执，doing→review
 （自动级：开 PR，正文 closes #N、改了什么、证据与证据等级，CI 红了就修到绿；
-  盯梢、人控级：`just done` 自动开草稿 PR，CI、评审与真机验收并行；验收后补验收行、`gh pr ready`）
+  盯梢、人控级：`just done` 打印的开 PR 命令带 `--draft`，开草稿 PR，CI、评审与真机验收并行；验收后补验收行、`gh pr ready`）
 just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去做下一张
 ```
 
@@ -117,13 +117,21 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
   → 核对 `git diff origin/main...` 只含范围内文件 → 推分支 → 在 issue 贴回执（分支、提交、门禁与验收输出末尾、
   证据等级、证据目录）。任何一步红：不推送、issue 写明停在哪、打 `status:blocked`，修好重跑即可。
   分支落后 `origin/main` 时只报错不打 blocked：先 `git rebase origin/main` 再重跑。
-- 自动级的 PR：CI 全绿且独立评审通过就合（squash）。盯梢、人控级：推分支就开草稿 PR（`just done` 自动带 `--draft`），CI、评审与验收并行；验收通过补验收行、`gh pr ready`，acceptance gate、CI 全绿且评审通过就合。开完 PR 立刻打开 app 的 PR 监控（`mcp__ccd_pr__set_monitor` auto_fix=true）；CI 红了由干活的 agent 修到绿，不叫人。
+- 自动级的 PR：CI 全绿且独立评审通过就合（squash）。盯梢、人控级：推分支就开草稿 PR（`just done` 打印的开 PR 命令自动带 `--draft`），CI、评审与验收并行；验收通过补验收行、`gh pr ready`，acceptance gate、CI 全绿且评审通过就合。开完 PR 立刻打开外壳的 PR 监控（见下两条）；CI 红了由干活的 agent 修到绿，不叫人。
 - 必须用 `just stuck` 停下的四种情况：命中核心且没有已采纳方案、需要改范围外文件、没有可用的验收场景、
   同一处连红 3 次。
 - 用户看得到的行为还需按卡上的验收场景做真机验证（E3）；验证环境开工时探测（见「验收」）；`just done` 的回执会写明哪些证据等级已自动取得。
 - 防发散：PR 正文 closes 它解决的所有卡，不夹带无关改动；同时开着的分支不超过 3 个、一两天内合；要好几天的功能用开关先合进 main、默认关；改到范围外文件就是红；新增网络出口、遥测依赖、自启点、落盘目录由 `just ci` 挡
   （现有适应度检查）。PR 大小上限、同时打开的分支数上限、「盯梢 / 人控级没有验收记录或评审不许合」的必需检查尚未建，
   目前靠自觉。
+- **PR 由执行者自己开**：`just done` 推送后不开 PR，只写好正文、打印一条开 PR 的命令（`PR-CREATE:` 开头那行），
+  执行者原样自己运行，不包进别的脚本（外壳的 PR 监控只认会话直接运行的开 PR 命令）。
+- **开 PR 的会话负责把它推进到合入**：CI 红、未解决的评审线程、和 main 冲突，任一条都算 PR 没过，由开 PR 的会话修到全清；
+  `just pr-status <PR号>` 一次列出这几类卡点。外壳有 PR 监控的（会在 CI 红、新评审意见、冲突时唤醒会话），开完 PR 立即打开，
+  之后被唤醒再修；不手动轮询 CI。各外壳的开法写在各自的说明里（Claude Code 见 `CLAUDE.md`）。
+- **评审意见逐条判定**（CodeRabbit 等机器人的行内意见同样算）：成立就改；改完、不改或不成立，都在线程里回一句理由，
+  再标为已解决，一步做完用 `just pr-thread <线程ID> "<理由>"`。判不了的交 owner，不找产品负责人。
+  回复或关闭被外壳权限拒绝时，停下把被拒的命令原文报给 owner，不绕过。
 - 压缩提交只能 `reset --soft $(git merge-base HEAD origin/main)`，**绝不 `reset --soft origin/main`**
   （会把旧工作区当新内容提交，撤回别人刚合入的改动）。
 - 分拣、出 test 包、停下、记想法的命令见 [owner 流程](docs/runbook/owner.md)：

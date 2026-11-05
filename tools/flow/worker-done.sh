@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # just done [--accepted "<时间>"]：在卡 worktree 里交卡。
 #   门禁（just ci / 纯文档 just ci-docs）→ just verify <号>（命令存在才跑）→ 核对改动只含范围内文件
-#   → 全绿才 git push → 在每张卡贴回执 → status:doing→status:review → 开 PR（正文 closes 全部卡）。
+#   → 全绿才 git push → 在每张卡贴回执 → status:doing→status:review → 写好 PR 正文、打印开 PR 的命令
+#   （PR-CREATE: gh pr create …，由执行者自己运行；脚本不开 PR，见第 6 步）。
 # 多卡分支（just start <号> <号>…）：卡号读 git config branch.<分支>.ppasscards，范围取并集。
 # 用户看得到的改动（界面与文案路径、核心路径，口径同 owner-triage.sh）：开草稿 PR，
 # 正文写「待产品负责人真机验收」，CI 与评审并行跑；验收后补验收行再 gh pr ready。
@@ -312,7 +313,7 @@ echo
 echo "✅ ${CARDS_SHOW} 已交卡：${BRANCH} 已推送，标签 → status:review，回执已贴。"
 echo "   证据等级：${LEVEL}"
 
-# ── 6. 开 PR（正文 closes 全部卡）──────────────────────────────────────
+# ── 6. 打印开 PR 的命令（正文 closes 全部卡；用户看得到的改动带 --draft）──────────────
 PR_URL="$(gh pr view "$BRANCH" -R "$REPO" --json url --jq .url 2>/dev/null)" || PR_URL=""
 if [ -n "$PR_URL" ]; then
   rm -f "$RECEIPT"
@@ -325,7 +326,10 @@ if [ "$(git rev-list --count origin/main..HEAD)" = 1 ]; then
 else
   PR_TITLE="${BRANCH%%/*}: $(printf '%s' "${TITLES[0]}" | sed -e 's/^\[[^]]*\][[:space:]]*//') ($(printf '#%s ' $CARDS | sed 's/ $//'))"
 fi
-PR_BODY="$(mktemp)"
+# 不在脚本里开 PR，只把正文写进证据目录、打印开 PR 的命令，由执行者自己运行（#1421）：
+# 外壳（如 Claude Desktop 的 PR 监控）只认会话自己直接执行的 gh pr create 为「本会话所开」，
+# 藏在脚本里开的 PR 事后只能按分支绑定，开不了自动修 CI / 处理评审意见。
+PR_BODY="${EVID_DIR}/pr-body.md"
 {
   for c in $CARDS; do echo "closes #${c}"; done
   echo
@@ -337,15 +341,24 @@ PR_BODY="$(mktemp)"
     echo "- 真机验收：${ACCEPT_LINE}"
   fi
   sed -n '3,$p' "$RECEIPT" | grep -v '^- 真机验收：'
-} >"$PR_BODY"
-rm -f "$RECEIPT"
-PR_URL="$(gh pr create -R "$REPO" --base main --head "$BRANCH" "${DRAFT_ARGS[@]+"${DRAFT_ARGS[@]}"}" --title "$PR_TITLE" --body-file "$PR_BODY" 2>&1)" || {
-  rm -f "$PR_BODY"
-  die "开 PR 失败：$(printf '%s' "$PR_URL" | tail -2 | tr '\n' ' ')" "分支已推送、回执已贴；手动开：gh pr create --head ${BRANCH}，正文 closes ${CARDS_SHOW}"
+  true
+} >"$PR_BODY" || {
+  rm -f "$RECEIPT"
+  die "写 PR 正文失败：${PR_BODY}" "分支已推送、回执已贴；修好这个文件的写权限后重跑 just done（不打印命令，免得用旧正文开 PR）"
 }
-rm -f "$PR_BODY"
-echo "   PR：${PR_URL}"
+rm -f "$RECEIPT"
+sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+PR_CMD="gh pr create -R $(sq "$REPO") --base main --head $(sq "$BRANCH")"
+[ "${#DRAFT_ARGS[@]}" -eq 0 ] || PR_CMD="${PR_CMD} --draft"
+PR_CMD="${PR_CMD} --title $(sq "$PR_TITLE") --body-file $(sq "$PR_BODY")"
+echo "   开 PR：在本目录原样运行下面这条命令（自己运行，不要包进别的脚本；正文已写好，closes ${CARDS_SHOW}）："
+echo
+echo "PR-CREATE: ${PR_CMD}"
+echo
 if [ "${#DRAFT_ARGS[@]}" -gt 0 ]; then
   echo "   草稿 PR：CI 与评审照常并行跑。请产品负责人真机验收；通过后在正文补验收行，再 gh pr ready。"
 fi
-echo "   下一步：马上打开 app 的 PR 监控（mcp__ccd_pr__set_monitor auto_fix=true）；CI 红了修到绿；然后 just start <下一张卡的 issue号>。"
+echo "   开完之后：本会话负责把这个 PR 推进到合入。外壳有 PR 监控的马上打开（Claude Desktop：set_monitor auto_fix，见 CLAUDE.md），"
+echo "     之后被唤醒再修，不手动盯 CI。CI 红、未解决的评审线程、冲突都算没过，修到全清："
+echo "     just pr-status <PR号> 列卡点；评审意见逐条判定，改了或不改都用 just pr-thread <线程ID> \"<理由>\" 回复并关闭。"
+echo "     然后 just start <下一张卡的 issue号>。"
