@@ -127,8 +127,19 @@ counter() {
 
 teardown() {
   # 恢复服务与 App（counter 只开了个 timeout 窗口，不影响服务）。
+  # 主路径的「恢复」一步失败时服务还停着：按主路径同样的界面操作再拉一次，
+  # 否则下一个场景会在 setup 里被跳过或误红。
   win_app_running || win_start_app >/dev/null 2>&1 || true
-  local i
+  local i dump
+  if ! win_daemon_running; then
+    dump="$(mktemp)"
+    if win_ui_click '总览' >/dev/null 2>&1; then
+      sleep 1
+      win_ui_dump "$dump" || true
+      if win_ui_has "$dump" '启动后台服务'; then win_ui_click '启动后台服务' >/dev/null 2>&1 || true; fi
+    fi
+    rm -f "$dump"
+  fi
   for i in $(seq 1 30); do win_daemon_running && break; sleep 1; done
   return 0
 }
