@@ -24,7 +24,11 @@ for d in "$E3"/fixtures/*/; do
   id="$(basename "$d")"
   id="${id/-//}"
   "$E3/run" judge "$id" "$d/pass" >/dev/null || bad "${id}：pass fixture 没判过"
-  "$E3/run" judge "$id" "$d/fail" >/dev/null && bad "${id}：fail fixture 没判红"
+  # fail、fail-<原因>…：每个反例只让一条判据出错，删掉或放宽那条判据回放就会红
+  for f in "$d"/fail "$d"/fail-*; do
+    [ -d "$f" ] || continue
+    "$E3/run" judge "$id" "$f" >/dev/null && bad "${id}：$(basename "$f") fixture 没判红"
+  done
 done
 
 # #1311 数据快照：服务在跑不存；存 → 候选改库（新迁移、新文件）→ 恢复后库回到快照，照片原件不动
