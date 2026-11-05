@@ -100,20 +100,13 @@ NEEDS_ACCEPT=""
 CORE_RULES="${WORK}/core-paths.txt"
 # Git Bash 会把 origin/main:<path> 的冒号当路径分隔符改写；禁止 MSYS 做路径转换。
 MSYS_NO_PATHCONV=1 git -C "$TOP" show origin/main:.github/core-paths.txt >"$CORE_RULES" 2>/dev/null || : >"$CORE_RULES"
-if [ "$(bash "${TOP}/tools/ci-paths.sh" core - "$CORE_RULES" <"${WORK}/pr.files" 2>/dev/null)" != "false" ]; then
-  NEEDS_ACCEPT="碰核心路径（人控级）"
-fi
-# 界面与文案路径的清单与 owner-triage.sh 共用同一份；读不到就按需要验收处理（宁严勿松）。
-UI_GLOBS="$(sed -n 's/^UI_GLOBS="\(.*\)"$/\1/p' "${FLOW_DIR}/owner-triage.sh" 2>/dev/null)"
-if [ -z "$UI_GLOBS" ]; then
-  NEEDS_ACCEPT="${NEEDS_ACCEPT:-读不到界面路径清单，按盯梢级处理}"
-else
-  # shellcheck disable=SC2086 # 清单里是空格分隔的 glob，刻意拆开
-  set -f
-  [ "$(bash "${TOP}/tools/ci-paths.sh" hit - $UI_GLOBS <"${WORK}/pr.files" 2>/dev/null)" != "false" ] &&
-    NEEDS_ACCEPT="${NEEDS_ACCEPT:-碰界面或文案路径（盯梢级）}"
-  set +f
-fi
+# 判定与 worker-done.sh、CI 的 acceptance gate 共用 acceptance-gate.sh classify（核心路径、界面文案路径、
+# apps/** 下的非测试文件；读不到界面清单按需要验收处理，宁严勿松）。核心路径规则取 origin/main 上的。
+case "$(bash "${FLOW_DIR}/acceptance-gate.sh" classify --repo "$TOP" --core-rules "$CORE_RULES" <"${WORK}/pr.files" 2>/dev/null)" in
+  none) ;;
+  core) NEEDS_ACCEPT="碰核心路径（人控级）" ;;
+  *) NEEDS_ACCEPT="碰界面或文案路径、App 代码（盯梢级）" ;;
+esac
 
 # ── 3. 改动 diff ─────────────────────────────────────────────────────
 gh pr diff "$PR" -R "$REPO" >"${WORK}/pr.diff" 2>"${WORK}/diff.err" ||

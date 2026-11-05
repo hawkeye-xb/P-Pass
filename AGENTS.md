@@ -97,7 +97,7 @@ just start <issue号>          领卡：建 worktree 与分支，ready→doing�
 （cd 进它给的目录，改代码，git add + git commit -s）
 just done                     交卡：过门禁与验收，全绿才推送、贴回执，doing→review
 （自动级：开 PR，正文 closes #N、改了什么、证据与证据等级，CI 红了就修到绿；
-  盯梢、人控级：先装真机让产品负责人本地验收，通过后再开 PR）
+  盯梢、人控级：`just done` 自动开草稿 PR，CI、评审与真机验收并行；验收后补验收行、`gh pr ready`）
 just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去做下一张
 ```
 

@@ -2,7 +2,8 @@
 # acceptance gate：用户看得到的改动，PR 正文必须有产品负责人真机验收那一行，否则红。
 #
 #   acceptance-gate.sh check    --files <改动文件列表> --body <PR 正文文件> [--repo <仓库根>]
-#   acceptance-gate.sh classify [--repo <仓库根>] < 改动文件列表   打印 core / ui / none
+#   acceptance-gate.sh classify [--repo <仓库根>] [--core-rules <规则文件>] < 改动文件列表   打印 core / ui / none
+#     （worker-done.sh、review.sh 与本 gate 共用这一个判定，别在别处再抄一份）
 #
 # 口径与 owner-triage.sh 一致：碰核心路径（.github/core-paths.txt）或界面与文案路径
 # （owner-triage.sh 里的 UI_GLOBS）、apps/** 下的非测试文件（测试 = 上面 TEST_RE 圈出的位置）= 需要验收；其余（自动级）直接绿。
@@ -28,11 +29,13 @@ shift
 FILES_F=""
 BODY_F=""
 REPO="$(cd "${HERE}/../.." && pwd)"
+CORE_RULES=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --files) FILES_F="${2:-}"; shift 2 || shift ;;
     --body) BODY_F="${2:-}"; shift 2 || shift ;;
     --repo) REPO="${2:-}"; shift 2 || shift ;;
+    --core-rules) CORE_RULES="${2:-}"; shift 2 || shift ;;
     *) usage ;;
   esac
 done
@@ -41,7 +44,8 @@ done
 classify() {
   local files core ui_globs ui nontest
   files="$(cat)"
-  core="$(printf '%s\n' "$files" | bash "${REPO}/tools/ci-paths.sh" core - "${REPO}/.github/core-paths.txt" 2>/dev/null)"
+  [ -n "$CORE_RULES" ] || CORE_RULES="${REPO}/.github/core-paths.txt"
+  core="$(printf '%s\n' "$files" | bash "${REPO}/tools/ci-paths.sh" core - "$CORE_RULES" 2>/dev/null)"
   if [ "$core" != "false" ]; then echo core; return; fi
   # apps/** 下的非测试文件都算用户看得到的行为（如安卓备份行为 backup/**）；UI_GLOBS 只管界面与文案，不够。
   # 过滤后为空就不判（ci-paths 对空输入 fail-closed 判 true）。
