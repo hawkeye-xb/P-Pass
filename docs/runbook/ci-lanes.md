@@ -43,6 +43,13 @@ job 名必须写死**。理由和细节在这里。
 - composite action 里每个 `run` 步骤**必须**显式写 `shell:`；actionlint 默认不扫那个
   文件，语法错误要到 CI 真跑才暴露。
 
+## acceptance gate（#1422）
+
+`ci-docs.yml` 里名字写死的 job `acceptance gate`：PR 碰界面文案路径（`owner-triage.sh` 的 `UI_GLOBS`）或核心路径时，
+正文必须有单独一行「产品负责人 <时间> 真机验收通过」，否则红；自动级直接绿。盯梢、人控级 PR 先开草稿，
+CI、评审与验收并行，验收后补这一行再 `gh pr ready`（`edited` / `ready_for_review` 事件会重跑它）。
+它先只是一个检查，设为必需检查是 owner 在仓库设置里做的，和 job 名成对。判定见 `tools/flow/acceptance-gate.sh`，自测 `tools/test-acceptance-gate.sh`。
+
 ## 核心路径
 
 `.github/core-paths.txt` 圈住的文件（门禁本身、配对 / 身份 / 加密 / 协议、存储与迁移、

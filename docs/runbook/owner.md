@@ -41,7 +41,8 @@ owner 只统筹，不当传声筒：这些命令是 owner 的工具，不是合�
   （要接受同样的 `-p`、`--model`、`--allowedTools` 参数，提示词走 stdin）。
 - 评审通过后对所有级别的 PR 执行 `gh pr merge --auto --squash`，CI 全绿即合。盯梢、人控级（改动碰界面文案路径
   或核心路径）多一个条件：PR 正文要有「产品负责人 <时间> 真机验收通过」这一行，没有就判未通过、不开自动合入，
-  评论里写明缺这一行。界面路径清单与 `owner-triage.sh` 的 `UI_GLOBS` 共用，核心路径取 `origin/main` 上的 `.github/core-paths.txt`。
+  评论里写明缺这一行。这类 PR 一开始是草稿（`just done` 自动带 `--draft`），验收后补验收行再 `gh pr ready`；
+  CI 的 `acceptance gate`（`tools/flow/acceptance-gate.sh`）合入前也查这一行。界面路径清单与 `owner-triage.sh` 的 `UI_GLOBS` 共用，核心路径取 `origin/main` 上的 `.github/core-paths.txt`。
 - 把 `review/agent` 加进 main 的必需检查是 owner 在仓库设置里做的，本命令不改仓库设置；加之前它只是评论与提交状态，不拦合入。
 
 退出码：0 通过；1 停下了（已写 issue 或评论）；2 拒绝（用法错，或前置条件没满足，提示里给了下一条命令）。
