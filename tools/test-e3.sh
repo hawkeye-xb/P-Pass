@@ -326,7 +326,10 @@ fi
   [ "$(cat "$MAC_APP/v")" = new ] || { echo "持锁时 App 没被替换（反证不成立）"; exit 1; }
   mac_data_restore "$d/snap" || { echo "持锁时恢复数据失败：$(tail -3 "$d/log")"; exit 1; }
   [ "$(cat "$MAC_DATA_DIR/config.toml")" = snap ] || { echo "持锁时 mac_data_restore 没恢复（反证不成立）"; exit 1; }
+  # 恢复数据那步删了 libraries/（快照里没有它），重建后再清，清空断言才有区分力
+  mkdir -p "$MAC_DATA_DIR/libraries"
   echo idx >"$MAC_DATA_DIR/libraries/index"
+  [ -f "$MAC_DATA_DIR/libraries/index" ] || { echo "造数据失败，反证不成立"; exit 1; }
   mac_data_blank || { echo "持锁时清空白失败：$(tail -3 "$d/log")"; exit 1; }
   [ ! -e "$MAC_DATA_DIR/libraries" ] || { echo "持锁时 mac_data_blank 没清（反证不成立）"; exit 1; }
   exit 0
