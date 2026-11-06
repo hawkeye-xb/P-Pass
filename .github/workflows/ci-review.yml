@@ -30,7 +30,7 @@ name: CI Review
 on:
   pull_request_target:
     branches: [main]
-    # 草稿不评（下面 if 挡）；盯梢、人控级验收后转正式，ready_for_review 时评（#1470）。
+    # 草稿不评（下面 if 挡）；三级都直接开正式 PR，开了草稿的转正式时（ready_for_review）评（#1470）。
     types: [opened, synchronize, reopened, ready_for_review, edited]
   # owner 复核放行（/review-override <理由>）；issue_comment 的 workflow 取 main 上的版本。
   issue_comment:
@@ -45,7 +45,7 @@ permissions:
 jobs:
   review:
     name: review (独立评审)
-    # edited 只认人改正文（补验收行）：CodeRabbit 等 bot 会改 PR 正文写摘要，不能每次都让同一提交重评一遍
+    # edited 只认人改正文（如补方案引用）：CodeRabbit 等 bot 会改 PR 正文写摘要，不能每次都让同一提交重评一遍
     # （LLM 结论有波动，同一提交的 success 可能被重评成 failure），也不能把正在跑的评审取消掉。
     # 草稿不评（#1470）；edited 头提交已评过时 review.sh 复用结论、不调模型。
     if: >-
@@ -64,7 +64,7 @@ jobs:
       PPASS_HOOK_REPO: ${{ github.repository }}
       PR: ${{ github.event.pull_request.number }}
     steps:
-      # 第一步就写 pending（#1441）：edited（如删掉验收行）后、新结论出来前，这个头提交上不能还挂着旧的 success，
+      # 第一步就写 pending（#1441）：edited（如改了方案引用）后、新结论出来前，这个头提交上不能还挂着旧的 success，
       # 否则自动合入会在检出、装 claude 那几分钟里抢先合入。只用事件里的头提交，不检出任何代码。
       # continue-on-error：这一步失败（GitHub API 一时不通）不能让后面的检出、评审、发布都被跳过——那样同一头提交上
       # 旧的 success 会留着；准备那步会再写一次 pending，发布那步照常写出最终结论。

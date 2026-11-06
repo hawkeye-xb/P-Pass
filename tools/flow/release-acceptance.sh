@@ -4,7 +4,7 @@
 #   release-acceptance.sh <台账 issue 号> [<候选 ref，默认 origin/main>]
 #
 # 判据（实现在 release-scope.sh --check，范围算法只在那一份）：
-#   1. 范围 = 台账记下的起点（上一个正式 tag）..候选 ref 里 squash 合入的 PR，acceptance-gate.sh classify 判为 ui / core / notes 的。
+#   1. 范围 = 台账记下的起点（上一个正式 tag）..候选 ref 里 squash 或普通合并的 PR，acceptance-gate.sh classify 判为 ui / core / notes 的。
 #   2. 每个 PR 都要在台账里、已勾 [x]，且它改过的文件在「验过的包..候选 ref」之间没再改过；不在台账里的（最后一个 test 包之后才合入）
 #      也算待验。台账里还有没勾的项同样不放行。
 # 输出：每个待验 / 待重验项一行。
