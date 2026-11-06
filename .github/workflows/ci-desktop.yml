@@ -127,10 +127,17 @@ jobs:
   # 正是本仓这一轮在修的 fail-open。写成 `!= 'false'` 则失败时照跑。
   # `!cancelled()` 是状态函数，它让本 job 在 changes 失败时**仍然执行**
   # （否则 needs 的隐式 success() 会把它跳掉，又回到 fail-open）。
+  #
+  # #1535（产品负责人 2026-11-06 拍板「要不就别跑Linux了」）：Linux 桌面包不在
+  # 发版范围里，Release 只是对同一份提交重复跑 main 已经跑过的检查。`workflow_call`
+  # （发版前验证）时跳过本 job；PR 与 push 到 main 照旧跑，必需检查
+  # `desktop (ubuntu-latest)` 与 fail-closed 口径都不变。桌面 Windows 端照跑。
+  # 暂停的恢复条件与到期日见卡 #1536；恢复时连同 tools/test-ci-lane-invariants.sh
+  # 与文档一起改回。
   desktop-linux:
     name: desktop (ubuntu-latest)
     needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
+    if: ${{ !cancelled() && github.event_name != 'workflow_call' && needs.changes.outputs.run_heavy != 'false' }}
     runs-on: ubuntu-latest
     # 实测 1m11s。#240 为了迁就 Windows 把两边一起提到 45，现在拆开了，
     # Linux 这边回到 CI-01 原本的 30。
