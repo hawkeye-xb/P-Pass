@@ -3,7 +3,7 @@
 #
 # 假 gh：workflow 列表、开放卡、分支保护都从 $FAKE 目录读；每种情形配一条只去掉触发条件的反证。
 # 关联卡只认标题——第 6 条专门盯这个：标题里提到了「workflow」的卡不算某扇具体门的账。
-# #1535：第 7–11 条盯发版调用时被跳过的 job——有卡/没卡/只跑发版（反证）/旧写法/读不到 workflow 目录（fail-closed）。
+# #1535：第 7–12 条盯发版调用时被跳过的 job——有卡/没卡/只跑发版（反证）/块标量/旧写法/读不到 workflow 目录（fail-closed）。
 # 用法: tools/test-gate-status.sh    退出码: 0 全过 / 1 有失败
 
 set -uo pipefail
@@ -153,7 +153,32 @@ run
 [ "${rc}" -eq 0 ] && ok "反证：只跑发版的 job 不算停用（无卡也绿）" || bad "只跑发版的 job 被误判成停用：rc=${rc} ${out}"
 if has 'CI Desktop ——'; then bad "只跑发版的 job 被列成停用项：${out}"; else ok "只跑发版的 job 不进停用列表"; fi
 
-# ── 10. 旧写法 github.event_name != 'workflow_call' 仍算「想跳过发版」→ 要卡 ──
+# ── 10. 块标量 if: >- 里的跳过条件也要识别 ─────────────────────────
+reset
+cat >"${GATE_STATUS_WORKFLOW_DIR}/fake-desktop.yml" <<'YML'
+name: CI Desktop
+on:
+  workflow_call:
+    inputs:
+      release_call:
+        type: boolean
+        default: true
+jobs:
+  desktop-linux:
+    name: desktop (ubuntu-latest)
+    if: >-
+      ${{ !cancelled() &&
+      !inputs.release_call &&
+      needs.changes.outputs.run_heavy != 'false' }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: "true"
+YML
+run
+[ "${rc}" -eq 1 ] && ok "块标量 if 里的跳过条件：没卡判红" || bad "块标量 if 漏判：应为 1，实得 ${rc}：${out}"
+has '✗ CI Desktop —— 没有开着的卡' && ok "块标量 if 也点名 workflow" || bad "块标量 if 没点名 workflow：${out}"
+
+# ── 11. 旧写法 github.event_name != 'workflow_call' 仍算「想跳过发版」→ 要卡 ──
 reset
 cat >"${GATE_STATUS_WORKFLOW_DIR}/fake-desktop.yml" <<'YML'
 name: CI Desktop
@@ -171,7 +196,7 @@ run
 [ "${rc}" -eq 1 ] && ok "旧写法想跳过发版：没卡判红" || bad "旧写法想跳过发版：应为 1，实得 ${rc}：${out}"
 has '✗ CI Desktop —— 没有开着的卡' && ok "旧写法也点名 workflow" || bad "旧写法没点名 workflow：${out}"
 
-# ── 11. 读不到 workflow 目录 → fail-closed ──────────────────────────
+# ── 12. 读不到 workflow 目录 → fail-closed ──────────────────────────
 reset
 GATE_STATUS_WORKFLOW_DIR="${TMP}/no-such-dir" run
 [ "${rc}" -eq 1 ] && ok "读不到 workflow 目录：退出码 1" || bad "读不到 workflow 目录时应为 1，实得 ${rc}：${out}"

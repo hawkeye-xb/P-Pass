@@ -77,13 +77,37 @@ for fn in sorted(os.listdir(root)):
             break
     hits = []
     current = None
-    for line in lines:
+    i = 0
+    while i < len(lines):
+        line = lines[i]
         m = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", line)
         if m:
             current = m.group(1)
         # job 级 if 缩进 4 个空格；步骤级 if 更深，不算。
-        if re.match(r"^    if:\s*", line) and skip.search(line):
-            hits.append(current or "?")
+        m = re.match(r"^    if:\s*(.*)$", line)
+        if m:
+            cond = m.group(1)
+            if cond.startswith(("|", ">")):
+                # 块标量（if: >- / if: |）：收集缩进更深的行再匹配整个条件。
+                block = []
+                j = i + 1
+                while j < len(lines):
+                    nxt = lines[j]
+                    if nxt.strip() == "":
+                        block.append("")
+                        j += 1
+                        continue
+                    if len(nxt) - len(nxt.lstrip(" ")) <= 4:
+                        break
+                    block.append(nxt.strip())
+                    j += 1
+                if skip.search(" ".join(block)):
+                    hits.append(current or "?")
+                i = j
+                continue
+            if skip.search(cond):
+                hits.append(current or "?")
+        i += 1
     if hits:
         rows.append("\t".join((name or fn, fn, ",".join(hits))))
 print("\n".join(rows))
