@@ -205,7 +205,8 @@ version string (`-test.` ⇒ test):
   whose inputs changed since the version that platform's test-channel
   manifest points at (`tools/release/plan-builds.sh`): `apps/android/` →
   Android; `apps/desktop/` → macOS + Windows; macOS packaging scripts →
-  macOS; `tauri.windows.conf.json` → Windows; docs → none; Rust
+  macOS; `tauri.windows.conf.json` → Windows; docs, `.coderabbit.yaml`,
+  `.github/ISSUE_TEMPLATE/` → none; Rust
   (`crates/`, `tools/testclient/`, root `Cargo.toml` / `Cargo.lock`) → by the
   Cargo dependency graph (#1062, `tools/release/rust-impact.py`): a changed
   workspace crate triggers only the platforms whose entry package depends on
@@ -215,8 +216,8 @@ version string (`-test.` ⇒ test):
   root `Cargo.toml` change that only bumps `[workspace.package].version` →
   macOS + Windows; `Cargo.lock` → the platforms that reach the changed
   external packages; anything Rust it cannot resolve → all. Everything else
-  (`assets/` incl. `assets/i18n/`, `tools/`, `.github/`, `release/`,
-  `rust-toolchain.toml`, …) or anything uncertain → all. An
+  (`assets/` incl. `assets/i18n/`, `tools/`, `.github/` except issue
+  templates, `release/`, `rust-toolchain.toml`, …) or anything uncertain → all. An
   unchanged platform is not built and its test-channel manifest is left as
   is. Nothing changed anywhere ⇒ `plan-builds` fails, no draft.
   **Rebuilding one platform of a test tag:** dispatching `release.yml` with
@@ -489,14 +490,14 @@ Android 靠 `channelFromVersion()` 读注入的版本串（含 `-test.` 即 test
   **test 按端构建（#852）**：test tag 只构建自「该端 test-channel 清单所指版本」以来
   输入有改动的那几端（`tools/release/plan-builds.sh`）：`apps/android/` → Android；
   `apps/desktop/` → macOS + Windows；macOS 打包脚本 → macOS；`tauri.windows.conf.json`
-  → Windows；文档 → 都不算；Rust（`crates/`、`tools/testclient/`、根 `Cargo.toml` /
+  → Windows；文档、`.coderabbit.yaml`、`.github/ISSUE_TEMPLATE/` → 都不算；Rust（`crates/`、`tools/testclient/`、根 `Cargo.toml` /
   `Cargo.lock`）→ 按 Cargo 依赖图归属（#1062，`tools/release/rust-impact.py`）：改动的
   workspace crate 只触发入口包依赖它的端（Android 与 iOS
   `transport[mobile-ffi]`、macOS `daemon` + 桌面壳、Windows `daemon` + `testclient` + 桌面壳），
   所以 `crates/daemon` → macOS + Windows，`crates/transport` → 四端；根 `Cargo.toml` 只涨
   `[workspace.package].version` → macOS + Windows；`Cargo.lock` → 能走到变动外部包的端；
-  判定不了的 Rust 改动 → 所有端。其余（`assets/` 含 `assets/i18n/`、`tools/`、`.github/`、
-  `release/`、`rust-toolchain.toml` …）或拿不准 → 所有端。
+  判定不了的 Rust 改动 → 所有端。其余（`assets/` 含 `assets/i18n/`、`tools/`、`.github/`
+  （issue 模板除外）、`release/`、`rust-toolchain.toml` …）或拿不准 → 所有端。
   没改动的一端不构建，它在 test-channel 里的清单不动；所有端都没改动 ⇒ `plan-builds`
   报错、不建草稿。
   **单独重出某一端的 test 包**：dispatch `release.yml`，`tag` 填已存在的 test tag、`platforms`

@@ -117,6 +117,14 @@ latest() {
 }
 export STUB_STATE="$TMP/state"
 
+# run_plan <tag> [PATH 前缀]：GITHUB_OUTPUT 走临时文件（/dev/stdout 在部分沙箱不可写），
+# OUT 同时含 GITHUB_OUTPUT 与 stderr/stdout，现有 get() / expect_* 照常解析。
+run_plan() {
+  local tag="$1" path="${2:-$PATH}"
+  : > "$TMP/gh-output"
+  OUT=$(cd "$REPO" && PATH="$path" TAG="$tag" GITHUB_OUTPUT="$TMP/gh-output" tools/release/plan-builds.sh 2>&1); RC=$?
+  OUT="$(cat "$TMP/gh-output")"$'\n'"$OUT"
+}
 # plan <tag> <android 号> <macOS 号> [ios 号] ⇒ 设置 RC / OUT（不给 ios 号 = versions.json 里没有 ios 线）
 plan() {
   if [ -n "${4:-}" ]; then
@@ -124,7 +132,7 @@ plan() {
   else
     printf '{"desktop":"%s","android":"%s"}\n' "$3" "$2" > "$REPO/release/versions.json"
   fi
-  OUT=$(cd "$REPO" && TAG="$1" GITHUB_OUTPUT=/dev/stdout tools/release/plan-builds.sh 2>&1); RC=$?
+  run_plan "$1"
 }
 get() { printf '%s\n' "$OUT" | sed -n "s/^$1=//p" | tail -1; }
 expect_plan() { # 说明 android macos
@@ -215,7 +223,7 @@ expect_win() { # <说明> <windows 判定>
 }
 tplan() { # <tag>：在该 tag 的提交上跑 plan-builds（release/versions.json 各 tag 相同）
   "${G[@]}" checkout -q "$1"
-  OUT=$(cd "$REPO" && TAG="$1" GITHUB_OUTPUT=/dev/stdout tools/release/plan-builds.sh 2>&1); RC=$?
+  run_plan "$1"
 }
 rm -rf "$TMP/state"; mkdir -p "$TMP/state"
 printf '{"desktop":"2.0.0","android":"1.0.0"}\n' > "$REPO/release/versions.json"
@@ -235,6 +243,10 @@ commit_tag v0.1.0-test.11 apps/ios/PPass/x.swift apps/android/a.kt
 commit_tag v0.1.0-test.12 apps/android/app/src/main/res/values-zh/strings.xml
 # #1121：正式更新公钥在 tauri.conf.json，Android 构建期也从这里读 ⇒ 改它两端都要重建。
 commit_tag v0.1.0-test.13 apps/desktop/src-tauri/tauri.conf.json
+# #1532：只服务 GitHub / 评审工具、不进安装包的路径 ⇒ 四端都不构建（不再白跑四端）。
+commit_tag v0.1.0-test.14 .coderabbit.yaml
+commit_tag v0.1.0-test.15 .github/ISSUE_TEMPLATE/config.yml
+commit_tag v0.1.0-test.16 .coderabbit.yaml apps/android/a.kt
 
 channel 0.1.0-test.1 0.1.0-test.1; tplan v0.1.0-test.2; expect_plan "只改 apps/android/ ⇒ Android 构建、桌面 skip" build skip
 expect_win "只改 apps/android/ ⇒ Windows 也不陪跑" skip
@@ -263,6 +275,15 @@ channel 0.1.0-test.11 0.1.0-test.11; tplan v0.1.0-test.12; expect_plan "只改 A
 expect_ios "只改 Android strings.xml（iOS 文案由它生成）⇒ iOS 也构建" build
 channel 0.1.0-test.12 0.1.0-test.12; tplan v0.1.0-test.13; expect_plan "只改 tauri.conf.json（#1121：Android 也从这里读更新公钥）⇒ Android、macOS 都构建" build build
 expect_win "只改 tauri.conf.json ⇒ Windows 也构建" build
+channel 0.1.0-test.13 0.1.0-test.13; tplan v0.1.0-test.14
+if [ "$RC" != 0 ] && printf '%s' "$OUT" | grep -q "::error::test tag v0.1.0-test.14"; then ok "只改 .coderabbit.yaml ⇒ 四端都 skip ⇒ 明确报错"; else bad "只改 .coderabbit.yaml ⇒ 四端都 skip ⇒ 明确报错" "$OUT"; fi
+[ "$(printf '%s\n' "$OUT" | grep -c '没有影响该端的改动')" = 4 ] && ok "只改 .coderabbit.yaml ⇒ 四端各判 skip" || bad "只改 .coderabbit.yaml ⇒ 四端各判 skip" "$OUT"
+channel 0.1.0-test.14 0.1.0-test.14; tplan v0.1.0-test.15
+if [ "$RC" != 0 ] && printf '%s' "$OUT" | grep -q "::error::test tag v0.1.0-test.15"; then ok "只改 .github/ISSUE_TEMPLATE/config.yml ⇒ 四端都 skip ⇒ 明确报错"; else bad "只改 .github/ISSUE_TEMPLATE/config.yml ⇒ 四端都 skip ⇒ 明确报错" "$OUT"; fi
+[ "$(printf '%s\n' "$OUT" | grep -c '没有影响该端的改动')" = 4 ] && ok "只改 .github/ISSUE_TEMPLATE/config.yml ⇒ 四端各判 skip" || bad "只改 .github/ISSUE_TEMPLATE/config.yml ⇒ 四端各判 skip" "$OUT"
+channel 0.1.0-test.15 0.1.0-test.15; tplan v0.1.0-test.16; expect_plan "只改 .coderabbit.yaml 与 apps/android/ 混改 ⇒ 只 Android 构建" build skip
+expect_win "只改 .coderabbit.yaml 与 apps/android/ 混改 ⇒ Windows 不陪跑" skip
+expect_ios "只改 .coderabbit.yaml 与 apps/android/ 混改 ⇒ iOS 不陪跑" skip
 channel 0.1.0-test.11 0.1.0-test.11 0.1.0-test.11 -; tplan v0.1.0-test.12; expect_ios "test-channel 没有 iOS 清单 ⇒ 拿不准 ⇒ iOS 构建" build
 channel 0.1.0-test.8 0.1.0-test.8 -; tplan v0.1.0-test.9; expect_win "test-channel 没有 Windows 清单 ⇒ 拿不准 ⇒ Windows 构建" build
 channel 0.1.0-test.2 0.1.0-test.1; tplan v0.1.0-test.2
@@ -373,7 +394,7 @@ expect4 "只改 crates/decode-worker ⇒ 只构建桌面两端（ppf-decoder 随
 # cargo 不可用 / metadata 失败 ⇒ 拿不准 ⇒ 所有端（假 cargo 恒失败；不靠删 PATH）。
 mkdir -p "$TMP/badcargo"; printf '#!/bin/sh\necho "boom" >&2\nexit 1\n' > "$TMP/badcargo/cargo"; chmod +x "$TMP/badcargo/cargo"
 channel 0.2.0-test.1 0.2.0-test.1 0.2.0-test.1 0.2.0-test.1; "${G[@]}" checkout -q v0.2.0-test.2
-OUT=$(cd "$REPO" && PATH="$TMP/badcargo:$PATH" TAG=v0.2.0-test.2 GITHUB_OUTPUT=/dev/stdout tools/release/plan-builds.sh 2>&1); RC=$?
+run_plan v0.2.0-test.2 "$TMP/badcargo:$PATH"
 expect4 "cargo metadata 失败 ⇒ 只改 crates/daemon 也四端都构建" build build build build
 printf '%s' "$OUT" | grep -q "::warning::cargo metadata 失败" && ok "cargo metadata 失败时打 ::warning::（不静默降级）" || bad "cargo metadata 失败时打 ::warning::" "$OUT"
 REPO="$REPO_MAIN"

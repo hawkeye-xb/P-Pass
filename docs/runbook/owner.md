@@ -116,7 +116,9 @@ owner 只统筹，不当传声筒：这些命令是 owner 的工具，不是合�
 **release-test** 的判定：
 
 - 版本号取远端最新 `v<X.Y.Z>-test.N` 的 N+1。X.Y.Z 必须高于 `release/versions.json` 里每一端的正式版本号，
-  否则 test 设备收不到；不满足时给出建议的 `--base`。
+  否则 test 设备收不到。不带 `--base` 且最新 test 的 X.Y.Z 不高于正式版本线时，自动取正式版本线的下一个补丁号、
+  `-test.1`（例如正式 0.11.0 已发、最新 test 是 `v0.11.0-test.4` ⇒ `v0.11.1-test.1`）；`--base` 只做显式覆盖
+  （必须高于最新 test tag 与正式版本线）与校验，不自动算。
 - 触发发版之前先在 `origin/main` 上本地跑 `tools/release/plan-builds.sh`，它判「构建」的端必须正好等于参数里的端。
 - 触发发版之前 `origin/main` 这个提交的 CI 要跑完且全绿：看这个提交上所有在 main 上 push 触发的 workflow 运行（不限名单），加上 commit status。同一提交上别的事件触发的运行（临时分支上手动触发的 Release 等）不算 main 红，所以失败的 Release 不挡同号重试。
 - test tag 没有手写更新说明（[规则](../release-notes-rules.md)），脚本只做校验。

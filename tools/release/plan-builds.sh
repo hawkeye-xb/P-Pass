@@ -24,7 +24,7 @@
 #     正常就是上一个 test tag；上次该端构建失败时是更早那个——那段改动不会被漏掉）。
 #   - 基线拿不到（清单不在 / 读不出 / tag 不存在 / 不是 HEAD 的祖先 / 就是本 tag）或 diff 失败：构建。
 #   - 改动路径分类（反向 allowlist，同 tools/ci-needs-full-lane.sh：没列出的一律算所有端）：
-#       docs/ .claude/ *.md                                         不影响产物
+#       docs/ .claude/ *.md .coderabbit.yaml .github/ISSUE_TEMPLATE/  不影响产物
 #       apps/android/、tools/build-android-iroh-blobs-bridge.sh      只算 Android
 #       apps/desktop/src-tauri/tauri.windows.conf.json              只算 Windows
 #       tools/bundle-macos.sh、tools/bundle-desktop-macos.sh、tools/daemon-helper-macos.sh、tools/fetch-ffmpeg.sh
@@ -33,7 +33,7 @@
 #       apps/ios/、tools/ios/、tools/build-ios-*                    只算 iOS（#887；#348 起有发版 lane：TestFlight）
 #       apps/android/…/values{,-zh}/strings.xml                     Android + iOS（iOS 界面文案由它生成，gen-strings.py）
 #       crates/、tools/testclient/、根 Cargo.toml / Cargo.lock       按 Cargo 依赖图归属到端（#1062，见下）
-#       其余（assets/、release/、tools/、.github/、rust-toolchain.toml …） 所有端
+#       其余（assets/、release/、tools/、.github/（issue 模板除外）、rust-toolchain.toml …） 所有端
 #   - Rust 改动（#1062，tools/release/rust-impact.py）：cargo metadata（--no-deps，不联网）算出每端入口包
 #     （Android transport[mobile-ffi]、iOS transport[mobile-ffi]、macOS daemon + 桌面壳、Windows daemon +
 #     testclient + 桌面壳）传递依赖哪些 workspace crate，改动的 crate 只触发依赖它的端。根 Cargo.toml 只变
@@ -98,7 +98,9 @@ if [[ "$TAG" == *-test.* ]]; then
   # 改动路径 → 影响哪些端（空格分隔）：android / macos / windows / desktop（两个桌面端）/ ios / all / none（分类见文件头）。
   classify() {
     case "$1" in
-      docs/* | .claude/* | *.md) echo none ;;
+      # 只服务 GitHub / 评审工具的路径，不进任何安装包：issue 模板、CodeRabbit 配置、文档。
+      # docs/*、.claude/*、*.md 已覆盖其余文档；未登记路径仍落到 all。
+      docs/* | .claude/* | *.md | .coderabbit.yaml | .github/ISSUE_TEMPLATE/*) echo none ;;
       # #348：iOS 界面文案由 Android strings.xml 生成（tools/ios/gen-strings.py）⇒ 同时影响两端。
       apps/android/app/src/main/res/values/strings.xml | apps/android/app/src/main/res/values-zh/strings.xml) echo android ios ;;
       apps/android/* | tools/build-android-iroh-blobs-bridge.sh) echo android ;;

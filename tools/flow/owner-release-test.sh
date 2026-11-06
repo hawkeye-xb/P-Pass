@@ -3,7 +3,7 @@
 # 说明见 docs/runbook/owner.md；规则见 docs/RELEASING.md §3.6、§4。
 #
 #   owner-release-test.sh android macos            端 ∈ android macos windows ios，至少一个
-#   owner-release-test.sh --base 0.10.4 android    换新的 X.Y.Z（必须高于最新 test tag 的 X.Y.Z）
+#   owner-release-test.sh --base 0.10.4 android    换新的 X.Y.Z（必须高于最新 test tag 与正式版本线）
 #   owner-release-test.sh --dry-run android        只做第 1~3 步的判定，不打 tag、不写 GitHub
 #
 # 只做 test tag。正式版（不带 -test. 的版本号、发布 draft、--formal 之类）一律拒绝：
@@ -11,7 +11,8 @@
 #
 # 判定（任何一条不过即拒绝或停下；tag 永不移动、永不复用，失败了下一次用 -test.N+1）：
 #   1. 版本号 = 远端最新 v<X.Y.Z>-test.N 的 N+1；X.Y.Z 必须高于 release/versions.json 里每一端的
-#      正式版本号（否则 test 设备收不到），不满足就拒绝并给出建议的 --base。
+#      正式版本号（否则 test 设备收不到）。不带 --base 且最新 test 的 X.Y.Z 不高于正式版本线时，
+#      自动取正式版本线的下一个补丁号、N=1；--base 只做显式覆盖与校验，不自动算。
 #   2. test tag 没有手写更新说明文件（docs/release-notes-rules.md）：release/notes/ 下不许有这个版本的文件；
 #      有 node 时跑一遍 tools/release-notes.mjs lint。
 #   3. 打 tag 前在 origin/main 上本地跑 tools/release/plan-builds.sh：它判「构建」的端必须
@@ -96,14 +97,6 @@ latest="$(printf '%s\n' "$tags" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-test\.[0-9]+
 set -- $latest
 LATEST_BASE="$1.$2.$3"
 LATEST_N="$4"
-if [ -n "$BASE_VER" ]; then
-  semver_gt "$BASE_VER" "$LATEST_BASE" ||
-    refuse "--base ${BASE_VER} 不高于最新 test tag 的 ${LATEST_BASE}" "test 版本号必须单调上升，test 设备才能互相升级。"
-  N=1
-else
-  BASE_VER="$LATEST_BASE"
-  N=$((LATEST_N + 1))
-fi
 # Git Bash 会把 origin/main:<path> 的冒号当路径分隔符改写；禁止 MSYS 做路径转换。
 vers="$(MSYS_NO_PATHCONV=1 git show origin/main:release/versions.json 2>/dev/null)" || die_stuck "读不到 origin/main 的 release/versions.json"
 maxv="$(printf '%s' "$vers" | python3 -c '
@@ -112,6 +105,25 @@ d = json.load(sys.stdin)
 vs = [d[k] for k in ("desktop", "android", "ios") if isinstance(d.get(k), str)]
 print(max(vs, key=lambda v: tuple(int(x) for x in v.split("."))))
 ')" || die_stuck "解析 release/versions.json 失败"
+if [ -n "$BASE_VER" ]; then
+  semver_gt "$BASE_VER" "$LATEST_BASE" ||
+    refuse "--base ${BASE_VER} 不高于最新 test tag 的 ${LATEST_BASE}" "test 版本号必须单调上升，test 设备才能互相升级。"
+  N=1
+else
+  if ! semver_gt "$LATEST_BASE" "$maxv"; then
+    # 正式版本线已经占用了最新 test 的 X.Y.Z（例如正式 0.11.0 已发、最新 test 还是 0.11.0-test.N）：
+    # 自动取正式线的下一个补丁号，N 从 1 开始。test 设备要能升级到比正式版更高的号。
+    IFS=. read -r a b c <<EOF
+$maxv
+EOF
+    BASE_VER="${a}.${b}.$((c + 1))"
+    N=1
+    say "正式版本线 ${maxv} 已占用 ${LATEST_BASE}：自动取下一个补丁版本 ${BASE_VER}"
+  else
+    BASE_VER="$LATEST_BASE"
+    N=$((LATEST_N + 1))
+  fi
+fi
 if ! semver_gt "$BASE_VER" "$maxv"; then
   IFS=. read -r a b c <<EOF
 $maxv
