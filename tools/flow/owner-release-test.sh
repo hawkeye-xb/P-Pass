@@ -16,9 +16,11 @@
 #      有 node 时跑一遍 tools/release-notes.mjs lint。
 #   3. 打 tag 前在 origin/main 上本地跑 tools/release/plan-builds.sh：它判「构建」的端必须
 #      恰好等于参数给的端（不一致说明对改动的理解有误，先停下核对）。
-#   3b. origin/main 这个提交的全部检查（check-runs 与 commit status）跑完且没有红（main 必须是绿的，
-#      RELEASING §3）；还在跑就等（上限 PPASS_OWNER_MAIN_CI_WAIT 秒），红了或读不到就停下。
-#      一条检查都没有（纯文档提交不触发 CI）时先等 PPASS_OWNER_MAIN_CI_EMPTY_WAIT 秒再认。
+#   3b. origin/main 这个提交的 CI 跑完且没有红（main 必须是绿的，RELEASING §3）：看这个提交上所有在 main 上
+#      push 触发的 workflow 运行（不限名单，与「main 红了开卡」#1469 同取 event=push、branch=main），加上 commit status；
+#      同一提交上别的事件触发的运行（临时分支上手动触发的 Release 等）不算，上一次发版失败不挡同号重试（#1396）。
+#      还在跑就等（上限 PPASS_OWNER_MAIN_CI_WAIT 秒），红了或读不到就停下。
+#      一条 run 都没有时先等 PPASS_OWNER_MAIN_CI_EMPTY_WAIT 秒再认。
 #   4. 手动触发 release.yml（release=true，tag 由流程在验证全绿后才建，这里不推 tag）；找到这次 run，gh run watch 到结论（上限
 #      PPASS_OWNER_RELEASE_TIMEOUT 秒，默认 14400）；红 ⇒ 失败 job 日志切片写 issue，停下。
 #   5. 绿了再核对 test-channel 里每个端的分端清单 version = 本次版本号。
@@ -149,11 +151,17 @@ cat "${OUT}/plan.log" >&2
 okmsg "将构建：${PLANNED% }"
 
 step "origin/main ${MAIN:0:10} 的 CI"
+# main 的 CI = 这个提交上所有在 main 上 push 触发的 workflow 运行，不限名单（名单外的 CI Secrets、
+# Dogfood 等红了也要拦）。不读提交上的全部 check run：同一提交上失败的 Release
+# （release-run/<tag> 上的 workflow_dispatch）也挂在这个提交上，会被误判成 main 红，
+# tag 没建成也无法同号重试（#1396）。
 waited=0
 while :; do
-  runs="$(gh api "repos/${REPO}/commits/${MAIN}/check-runs?per_page=100" \
-    --jq '.check_runs[] | "\(.status) \(.conclusion // "-") \(.name)"' 2>&1)" ||
-    die_stuck "读不到 origin/main ${MAIN:0:10} 的检查结果：$(printf '%s' "$runs" | head -1)"
+  # jq 只取字段（名字可能带空格，放最后、tab 分隔）；事件、分支的过滤在下面 awk 里做。
+  raw="$(gh api "repos/${REPO}/actions/runs?head_sha=${MAIN}&event=push&branch=main&per_page=100" \
+    --jq '.workflow_runs[] | "\(.status)\t\(.conclusion // "-")\t\(.event)\t\(.head_branch)\t\(.name)"' 2>&1)" ||
+    die_stuck "读不到 origin/main ${MAIN:0:10} 的 CI 运行结果：$(printf '%s' "$raw" | head -1)"
+  runs="$(printf '%s\n' "$raw" | awk -F'\t' 'NF >= 5 && $3 == "push" && $4 == "main" { print $1 " " $2 " " $5 }')"
   st="$(gh api "repos/${REPO}/commits/${MAIN}/status" --jq '"\(.state) \(.total_count)"' 2>&1)" ||
     die_stuck "读不到 origin/main ${MAIN:0:10} 的 commit status：$(printf '%s' "$st" | head -1)"
   red="$(printf '%s\n' "$runs" | awk '$1 == "completed" && $2 != "success" && $2 != "skipped" && $2 != "neutral"' | head -5)"
@@ -165,11 +173,11 @@ commit status: ${st}" ;; esac
   case "$st" in "pending "[1-9]*) pending=$((pending + 1)) ;; esac
   total="$(printf '%s\n' "$runs" | awk 'NF' | wc -l | tr -d ' ')"
   if [ "$pending" -eq 0 ] && [ "$total" -gt 0 ]; then
-    okmsg "origin/main 的 ${total} 项检查全部通过"
+    okmsg "origin/main 的 ${total} 条 CI 运行全部通过"
     break
   fi
   if [ "$total" -eq 0 ] && [ "$waited" -ge "$MAIN_CI_EMPTY_WAIT" ]; then
-    okmsg "origin/main 这个提交没有触发任何检查（等了 ${waited}s）"
+    okmsg "origin/main 这个提交没有 push 触发的任何 CI（等了 ${waited}s）"
     break
   fi
   [ "$waited" -lt "$MAIN_CI_WAIT" ] || die_stuck "origin/main ${MAIN:0:10} 的检查 ${MAIN_CI_WAIT}s 内没跑完，判定不了"

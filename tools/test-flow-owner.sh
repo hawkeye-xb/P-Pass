@@ -146,7 +146,8 @@ case "$1 $2" in
     ;;
   "api "*)
     case "$2" in
-      */commits/*/check-runs*) cat "$FAKE/main-ci" 2>/dev/null || echo "completed success CI Rust gate" ;;
+      # main 的 CI：未过滤的原始行（status<TAB>conclusion<TAB>event<TAB>branch<TAB>workflow 名），过滤由脚本做。
+      */actions/runs\?head_sha=*) cat "$FAKE/main-ci" 2>/dev/null || printf 'completed\tsuccess\tpush\tmain\tCI Rust\n' ;;
       */commits/*/status) echo "success 0" ;;
       */issues/comments/*) cat "$FAKE/comments/${2##*/}" 2>/dev/null || exit 1 ;;
       */issues/[0-9]*) cat "$I/${2##*/}.type" 2>/dev/null || echo "" ;;
@@ -267,15 +268,31 @@ done
 bash tools/flow/owner-release-test.sh macos >/dev/null 2>&1
 check "端与 plan-builds 判定不符 → 拒绝" test "$?" -eq 2
 check "以上都没有推任何新 tag" test "$(git ls-remote --tags origin | wc -l | tr -d ' ')" -eq 1
-printf 'completed success CI Rust gate\ncompleted failure CI Android\n' >"$FAKE/main-ci"
+# #1396：同一提交上失败的 Release 运行（临时分支上手动触发）不算 main 的 CI 红，号码可同号重试
+REL_RED=$'completed\tfailure\tworkflow_dispatch\trelease-run/v0.10.3-test.3\tRelease'
+printf '%s\ncompleted\tsuccess\tpush\tmain\tCI Rust\ncompleted\tsuccess\tpush\tmain\tCI Android\n' "$REL_RED" >"$FAKE/main-ci"
+out="$(bash tools/flow/owner-release-test.sh --dry-run android 2>/dev/null)"
+check "#1396：同提交上 Release 红、main 的 CI 全绿 → 放行，仍是 v0.10.3-test.3" bash -c 'printf "%s\n" "$1" | grep -q "^RELEASE-TEST DRY-RUN v0.10.3-test.3 android$"' _ "$out"
+printf 'completed\tfailure\tpull_request\tfix/x\tCI Android\ncompleted\tfailure\tworkflow_run\tmain\tMain Red\ncompleted\tsuccess\tpush\tmain\tCI Rust\n' >"$FAKE/main-ci"
+out="$(bash tools/flow/owner-release-test.sh --dry-run android 2>/dev/null)"
+check "PR 分支上的运行、非 push 事件触发的运行红 → 不算 main 红" bash -c 'printf "%s\n" "$1" | grep -q "^RELEASE-TEST DRY-RUN v0.10.3-test.3 android$"' _ "$out"
+printf '%s\ncompleted\tsuccess\tpush\tmain\tCI Rust\ncompleted\tfailure\tpush\tmain\tCI Secrets\n' "$REL_RED" >"$FAKE/main-ci"
+bash tools/flow/owner-release-test.sh --dry-run android >/dev/null 2>&1
+rc=$?
+check "反证：main 上 push 触发的 workflow 不限名单（如 CI Secrets）红 → 停下" test "$rc" -eq 1
+printf '%s\ncompleted\tsuccess\tpush\tmain\tCI Rust\ncompleted\tfailure\tpush\tmain\tCI Android\n' "$REL_RED" >"$FAKE/main-ci"
+bash tools/flow/owner-release-test.sh android >/dev/null 2>&1
+rc=$?
+check "反证：Release 红之外 main 的 CI 也红 → 停下，不打 tag、不触发发版" bash -c '[ "$1" -eq 1 ] && [ "$(git ls-remote --tags origin | wc -l | tr -d " ")" -eq 1 ] && ! grep -q "^workflow run" "$FAKE/calls.log"' _ "$rc"
+printf 'completed\tsuccess\tpush\tmain\tCI Rust\ncompleted\tfailure\tpush\tmain\tCI Android\n' >"$FAKE/main-ci"
 bash tools/flow/owner-release-test.sh android >/dev/null 2>&1
 rc=$?
 check "origin/main 的 CI 有红 → 停下，不打 tag" bash -c '[ "$1" -eq 1 ] && [ "$(git ls-remote --tags origin | wc -l | tr -d " ")" -eq 1 ]' _ "$rc"
-printf 'completed success CI Rust gate\nin_progress - CI Android\n' >"$FAKE/main-ci"
+printf '%s\ncompleted\tsuccess\tpush\tmain\tCI Rust\nin_progress\t-\tpush\tmain\tCI Android\n' "$REL_RED" >"$FAKE/main-ci"
 bash tools/flow/owner-release-test.sh android >/dev/null 2>&1
 rc=$?
-check "origin/main 的 CI 还在跑且超过等待上限 → 停下，不打 tag" bash -c '[ "$1" -eq 1 ] && [ "$(git ls-remote --tags origin | wc -l | tr -d " ")" -eq 1 ]' _ "$rc"
-printf 'completed success CI Rust gate\ncompleted skipped CI Android\n' >"$FAKE/main-ci"
+check "origin/main 的 CI 还在跑且超过等待上限（同提交上 Release 红也一样）→ 停下，不打 tag" bash -c '[ "$1" -eq 1 ] && [ "$(git ls-remote --tags origin | wc -l | tr -d " ")" -eq 1 ]' _ "$rc"
+printf 'completed\tsuccess\tpush\tmain\tCI Rust\ncompleted\tskipped\tpush\tmain\tCI Android\n' >"$FAKE/main-ci"
 echo 4242 >"$FAKE/run-id"
 echo failure >"$FAKE/run-conclusion"
 bash tools/flow/owner-release-test.sh android >/dev/null 2>&1
