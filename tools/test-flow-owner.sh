@@ -124,9 +124,13 @@ case "$1 $2" in
   "pr merge") touch "$FAKE/merged" ;;
   "pr comment") cat "$(arg --body-file)" >>"$FAKE/pr.comments" ;;
   "pr edit") : ;;
-  "run list") cat "$FAKE/run-id" 2>/dev/null ;;
+  "run list") cat "$FAKE/runs" 2>/dev/null ;;
   "run watch") exit 0 ;;
-  "workflow run") [ -e "$FAKE/dispatch-fail" ] && exit 1; exit 0 ;;
+  "workflow run")
+    [ -e "$FAKE/dispatch-fail" ] && exit 1
+    [ -f "$FAKE/next-run-id" ] && cat "$FAKE/next-run-id" >>"$FAKE/runs"
+    exit 0
+    ;;
   "run view")
     case "$json" in
       conclusion) cat "$FAKE/run-conclusion" ;;
@@ -313,7 +317,8 @@ bash tools/flow/owner-release-test.sh android >/dev/null 2>&1
 rc=$?
 check "origin/main 的 CI 还在跑且超过等待上限（同提交上 Release 红也一样）→ 停下，不打 tag" bash -c '[ "$1" -eq 1 ] && [ "$(git ls-remote --tags origin | wc -l | tr -d " ")" -eq 1 ]' _ "$rc"
 printf 'completed\tsuccess\tpush\tmain\tCI Rust\ncompleted\tskipped\tpush\tmain\tCI Android\n' >"$FAKE/main-ci"
-echo 4242 >"$FAKE/run-id"
+: >"$FAKE/runs"
+echo 4242 >"$FAKE/next-run-id"
 echo failure >"$FAKE/run-conclusion"
 out="$(bash tools/flow/owner-release-test.sh android 2>&1 >/dev/null)"
 rc=$?
@@ -322,25 +327,36 @@ check "#1349：发版走手动触发（release=true、tag=v0.10.3-test.3），�
 check "Release 红 → 临时触发分支保留在远端（不删）" bash -c 'git ls-remote --heads origin | grep -q "release-run/v0.10.3-test.3"'
 check "Release 红 → 提示保留的分支与清理命令" bash -c 'printf "%s\n" "$1" | grep -q "release-run/v0.10.3-test.3 保留" && printf "%s\n" "$1" | grep -q "git push origin --delete release-run/v0.10.3-test.3"' _ "$out"
 echo cancelled >"$FAKE/run-conclusion"
+echo 4243 >"$FAKE/next-run-id"
 out="$(bash tools/flow/owner-release-test.sh android 2>&1 >/dev/null)"
 rc=$?
 check "Release 取消 → 仍 die_stuck（非 0）且分支保留" bash -c '[ "$1" -ne 0 ] && git ls-remote --heads origin | grep -q "release-run/v0.10.3-test.3"' _ "$rc"
-rm -f "$FAKE/run-id"
+rm -f "$FAKE/next-run-id" # 本次 dispatch 后不再出现新 run（模拟等不到）
 out="$(bash tools/flow/owner-release-test.sh android 2>&1 >/dev/null)"
 rc=$?
 check "等 Release run 超时（RUN_WAIT=0）→ 非 0 且分支保留" bash -c '[ "$1" -ne 0 ] && git ls-remote --heads origin | grep -q "release-run/v0.10.3-test.3"' _ "$rc"
 check "等 Release run 超时 → 提示保留的分支与清理命令" bash -c 'printf "%s\n" "$1" | grep -q "release-run/v0.10.3-test.3 保留" && printf "%s\n" "$1" | grep -q "git push origin --delete"' _ "$out"
-echo 4242 >"$FAKE/run-id"
+# 同一 tag 重试：分支上还挂着旧 run 1111，本次 dispatch 才产生 2222，不能把 1111 当成本次 run
+printf '1111\n' >"$FAKE/runs"
+echo 2222 >"$FAKE/next-run-id"
+echo success >"$FAKE/run-conclusion"
+echo "0.10.3-test.3" >"$FAKE/channel-version"
+out="$(bash tools/flow/owner-release-test.sh android 2>&1)"
+check "同一 tag 重试 → 排除分支上已有的旧 run，只等本次 dispatch 的新 run 2222" bash -c 'printf "%s\n" "$1" | grep -q "Release run 2222" && ! printf "%s\n" "$1" | grep -q "Release run 1111"' _ "$out"
+check "反证：run success → 临时触发分支才删除，远端不留" bash -c '! git ls-remote --heads origin | grep -q release-run/'
+echo 4244 >"$FAKE/next-run-id"
 touch "$FAKE/dispatch-fail"
 out="$(bash tools/flow/owner-release-test.sh android 2>&1 >/dev/null)"
 rc=$?
 check "dispatch 失败 → 非 0 且分支保留" bash -c '[ "$1" -ne 0 ] && git ls-remote --heads origin | grep -q "release-run/v0.10.3-test.3"' _ "$rc"
 rm -f "$FAKE/dispatch-fail"
+echo 4245 >"$FAKE/next-run-id"
 echo success >"$FAKE/run-conclusion"
 echo "0.10.3-test.3" >"$FAKE/channel-version"
 out="$(bash tools/flow/owner-release-test.sh android 2>/dev/null)"
 check "反证：绿了 → RELEASE-TEST OK v0.10.3-test.3（上一次验证红没有建 tag，号码直接重用）" bash -c 'printf "%s\n" "$1" | grep -q "^RELEASE-TEST OK v0.10.3-test.3 android$"' _ "$out"
-check "反证：run success → 临时触发分支才删除，远端不留" bash -c '! git ls-remote --heads origin | grep -q release-run/'
+check "反证：run success → 临时触发分支删除，远端不留" bash -c '! git ls-remote --heads origin | grep -q release-run/'
+rm -f "$FAKE/next-run-id"
 # #1532：正式版本线已经占用最新 test 的 X.Y.Z（正式 0.10.3、最新 test v0.10.3-test.2）⇒ 自动取 0.10.4-test.1
 printf '{"desktop": "0.10.1", "android": "0.10.3", "ios": "0.10.2"}\n' >release/versions.json
 git commit -q -s -am bump
