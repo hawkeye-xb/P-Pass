@@ -318,11 +318,28 @@ echo success >"$FAKE/run-conclusion"
 echo "0.10.3-test.3" >"$FAKE/channel-version"
 out="$(bash tools/flow/owner-release-test.sh android 2>/dev/null)"
 check "反证：绿了 → RELEASE-TEST OK v0.10.3-test.3（上一次验证红没有建 tag，号码直接重用）" bash -c 'printf "%s\n" "$1" | grep -q "^RELEASE-TEST OK v0.10.3-test.3 android$"' _ "$out"
+# #1532：正式版本线已经占用最新 test 的 X.Y.Z（正式 0.10.3、最新 test v0.10.3-test.2）⇒ 自动取 0.10.4-test.1
 printf '{"desktop": "0.10.1", "android": "0.10.3", "ios": "0.10.2"}\n' >release/versions.json
 git commit -q -s -am bump
 git push -q origin HEAD:refs/heads/main
-bash tools/flow/owner-release-test.sh android >/dev/null 2>&1
-check "test 版本不高于正式版本线 → 拒绝" test "$?" -eq 2
+out="$(bash tools/flow/owner-release-test.sh --dry-run android 2>/dev/null)"
+check "正式线已占用最新 test 的 X.Y.Z → 自动取下一个补丁号 v0.10.4-test.1" bash -c 'printf "%s\n" "$1" | grep -q "^RELEASE-TEST DRY-RUN v0.10.4-test.1 android$"' _ "$out"
+bash tools/flow/owner-release-test.sh --base 0.10.3 android >/dev/null 2>&1
+check "反证：--base 不高于最新 test 基线 → 仍拒绝" test "$?" -eq 2
+out="$(bash tools/flow/owner-release-test.sh --base 0.10.5 --dry-run android 2>/dev/null)"
+check "--base 仍然只做覆盖：v0.10.5-test.1" bash -c 'printf "%s\n" "$1" | grep -q "^RELEASE-TEST DRY-RUN v0.10.5-test.1 android$"' _ "$out"
+# test 基线已经高于正式线（正式 0.10.3、最新 test v0.10.4-test.2）⇒ 继续 0.10.4-test.3，不跳号
+git push -q origin "$(git rev-parse HEAD):refs/tags/v0.10.4-test.2"
+out="$(bash tools/flow/owner-release-test.sh --dry-run android 2>/dev/null)"
+check "test 基线已高于正式线 → 继续 N+1（v0.10.4-test.3，不跳号）" bash -c 'printf "%s\n" "$1" | grep -q "^RELEASE-TEST DRY-RUN v0.10.4-test.3 android$"' _ "$out"
+# 正式线高于 test 基线（正式 0.11.0、最新 test v0.10.4-test.2）⇒ 自动取 0.11.1-test.1
+printf '{"desktop": "0.10.1", "android": "0.11.0", "ios": "0.10.2"}\n' >release/versions.json
+git commit -q -s -am bump2
+git push -q origin HEAD:refs/heads/main
+out="$(bash tools/flow/owner-release-test.sh --dry-run android 2>/dev/null)"
+check "正式线高于 test 基线 → 自动取 v0.11.1-test.1" bash -c 'printf "%s\n" "$1" | grep -q "^RELEASE-TEST DRY-RUN v0.11.1-test.1 android$"' _ "$out"
+bash tools/flow/owner-release-test.sh --base 0.10.5 android >/dev/null 2>&1
+check "反证：--base 高于 test 基线但不高于正式线 → 拒绝" test "$?" -eq 2
 
 echo "── 7. owner-stuck：产品取向必须给两个选项"
 fresh
