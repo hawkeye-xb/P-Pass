@@ -72,10 +72,13 @@ EOF
 # 2. 清理旧的 test 草稿（#872）：test tag 自己的 release 只是构建记录。版本没有被任何清单指向、
 #    且比被指向的最新版本还旧的 test 草稿连同它的 tag 一起删——它既不是谁的下载来源，也不是
 #    plan-builds 的基线。比最新被指向版本新的不动：那可能是正在跑、还没写指针的 test tag。
+#    本次 run 自己的 $TAG 也不动：补跑一个比通道旧的 tag 时，四个 writer 都因「不回拨」退出 0，
+#    收敛不能把正在跑的 release 与 tag 删掉（否则并行的 finalize-notes 会红、tag 也丢）。
 # shellcheck disable=SC2086 # KEEP_DRAFTS 是空格分隔的版本列表，刻意拆分
 NEWEST=$(printf '%s\n' $KEEP_DRAFTS | sort -V | tail -n1)
 for t in $(gh release list --limit 200 --json tagName,isDraft \
              -q '.[] | select(.isDraft and (.tagName | contains("-test."))) | .tagName'); do
+  [ "$t" = "$TAG" ] && continue
   v=${t#v}
   case " $KEEP_DRAFTS " in *" $v "*) continue ;; esac
   [ "$v" != "$NEWEST" ] && [ "$(printf '%s\n%s\n' "$v" "$NEWEST" | sort -V | tail -n1)" = "$NEWEST" ] || continue

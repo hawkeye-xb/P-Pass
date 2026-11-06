@@ -252,6 +252,19 @@ run_cleanup v0.3.0-test.4
 { [ "${RC}" = 0 ] && has_asset P-Pass_0.1.0-test.1_android.apk && has_draft v0.1.0-test.1; } \
   && ok "通道里没有清单 ⇒ 退出 0、什么都不删" || bad "没有清单时仍然删除（rc=${RC}）" "${OUT}"
 
+# 本次 run 自己的 tag 比通道旧（补跑旧 tag）：不能删自己的草稿与 tag
+reset_channel
+manifest manifest-android.json 0.3.0-test.4
+manifest manifest-macos.json 0.3.0-test.4
+manifest manifest-windows.json 0.3.0-test.4
+manifest manifest-ios.json 0.3.0-test.4
+draft v0.3.0-test.3
+draft v0.2.0-test.2
+run_cleanup v0.3.0-test.3
+{ [ "${RC}" = 0 ] && has_draft v0.3.0-test.3 && ! has_draft v0.2.0-test.2; } \
+  && ok "补跑比通道旧的 tag：不删本次 run 自己的草稿 / tag，别的旧草稿照删" \
+  || bad "补跑旧 tag 时删了自己的草稿 / tag（rc=${RC}）" "${OUT}$(find "$STUB_STATE/releases" -name DRAFT)"
+
 # 通道不存在：退出 0
 rm -rf "$STUB_STATE/releases/test-channel"
 run_cleanup v0.3.0-test.4

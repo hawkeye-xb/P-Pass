@@ -243,7 +243,8 @@ version string (`-test.` ⇒ test):
   job runs `tools/release/cleanup-test-channel.sh` once, serially and
   idempotently: it deletes installers whose version no manifest points at,
   and test drafts (and their tags) older than the newest version any manifest
-  points at and not pointed at themselves. So `test-channel` always
+  points at and not pointed at themselves; the current run's own tag is never
+  deleted (a re-run of an older tag must not lose its release). So `test-channel` always
   holds exactly the current package per platform, and the Releases page
   carries no `-test.N`. Re-running an older tag's workflow never moves a
   pointer backwards. A cleanup failure is a warning, not a failed release:
@@ -522,7 +523,8 @@ Android 靠 `channelFromVersion()` 读注入的版本串（含 `-test.` 即 test
   才继续，否则拒绝 ③ 覆盖该端清单。它**不删除任何东西**：各端 job 并行、各自只拥有自己那份
   清单与安装包。所有写入完成后，由唯一的 `cleanup-test-channel` job 跑一次
   `tools/release/cleanup-test-channel.sh`（单点、串行、幂等）：删掉没有任何清单指向的版本的
-  安装包，再删掉比被指向的最新版本还旧、且自己没被指向的 test 草稿（连同 tag）。所以
+  安装包，再删掉比被指向的最新版本还旧、且自己没被指向的 test 草稿（连同 tag）；本次 run
+  自己的 tag 不删（补跑旧 tag 不能把正在跑的 release 删掉）。所以
   `test-channel` 里永远只有各端当前那一个包，Releases 页面不出现 `-test.N`。
   重跑旧 tag 的 workflow 不会把指针往回拨。收敛失败只打 **warning**、不判整轮红：
   此时资产已上传、清单已指向，客户端能下载，失败只影响占盘；上传 / 指向失败照旧红，
