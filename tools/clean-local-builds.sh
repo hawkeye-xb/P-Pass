@@ -182,8 +182,9 @@ target_size() {
 open_files_under() {
   local dir="$1" listing
   command -v lsof >/dev/null 2>&1 || return 2
-  # lsof exits 1 when some process could not be read; the listing is still valid.
-  listing=$(lsof -nP -Fn 2>/dev/null) || [[ -n "$listing" ]] || return 2
+  # A non-zero exit means some process could not be read: the listing may be
+  # missing exactly the one using <dir>, so it counts as "cannot tell".
+  listing=$(lsof -nP -Fn 2>/dev/null) || return 2
   listing=$(printf '%s\n' "$listing" | sed -n 's/^n//p' |
     awk -v d="$dir" '$0 == d || index($0, d "/") == 1' | sort -u | head -5)
   [[ -n "$listing" ]] || return 1

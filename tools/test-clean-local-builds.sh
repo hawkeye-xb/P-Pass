@@ -253,6 +253,16 @@ if command -v lsof >/dev/null 2>&1; then
     trap 'rm -rf "$tmp"' EXIT
   fi
 
+  # An incomplete lsof listing (non-zero exit, partial output) is "cannot tell",
+  # never "nobody uses it".
+  mkdir -p "$tmp/partial-lsof-bin"
+  printf '#!/usr/bin/env bash\nprintf "p1\\nn/unrelated/file\\n"\nexit 1\n' > "$tmp/partial-lsof-bin/lsof"
+  chmod +x "$tmp/partial-lsof-bin/lsof"
+  partial_status=0
+  partial=$(cd "$repo" && PATH="$tmp/partial-lsof-bin:$stub_bin:$PATH" bash "$cleanup_script" --apply --cache) || partial_status=$?
+  [[ $partial_status -ne 0 && "$partial" == *'cannot tell whether a build is using it'* ]] || fail "partial lsof listing was trusted: $partial"
+  [[ ! -e "$sweep_log" ]] || fail 'cargo-sweep ran on a partial lsof listing'
+
   # A failed sweep is a failure in preview too, not a silent exit 0.
   printf '#!/usr/bin/env bash\nexit 7\n' > "$tmp/broken-sweep"
   mkdir -p "$tmp/broken-bin" && mv "$tmp/broken-sweep" "$tmp/broken-bin/cargo-sweep" && chmod +x "$tmp/broken-bin/cargo-sweep"
