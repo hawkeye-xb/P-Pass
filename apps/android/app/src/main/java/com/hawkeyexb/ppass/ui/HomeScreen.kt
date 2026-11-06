@@ -1074,11 +1074,14 @@ private fun storageDetailBody(
     if (pairingLost) return stringResource(R.string.storage_detail_lost)
     val line1 = stringResource(R.string.storage_detail_connected, lastSuccessText(lastSuccessAt))
     if (pairedAt <= 0) return line1
-    val date = java.text.SimpleDateFormat("yyyy年M月d日", java.util.Locale.getDefault())
-        .format(java.util.Date(pairedAt))
-    val line2 = stringResource(R.string.storage_detail_paired, date, groupThousands(confirmedCount))
+    val line2 = stringResource(R.string.storage_detail_paired, pairedDateText(pairedAt), groupThousands(confirmedCount))
     return "$line1\n$line2"
 }
+
+/** 「存储电脑」配对日期（#1206）：按界面语言给本地化长日期，不自己拼格式串。
+ *  中文「2026年10月14日」、英文「October 14, 2026」；locale 与界面同一份（App 语言）。 */
+internal fun pairedDateText(pairedAt: Long, locale: java.util.Locale = java.util.Locale.getDefault()): String =
+    java.text.DateFormat.getDateInstance(java.text.DateFormat.LONG, locale).format(java.util.Date(pairedAt))
 
 /** 进行中裁决 → 字符串资源（T-083 目标 2：进度区只在 Working 出状态行）。 */
 @Composable

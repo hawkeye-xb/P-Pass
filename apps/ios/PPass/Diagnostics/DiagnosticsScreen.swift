@@ -77,6 +77,18 @@ struct DiagnosticsScreen: View {
     }
 }
 
+/// 「存储电脑」配对日期（#1206）：按界面语言给本地化长日期，不自己拼格式串。
+/// 中文「2026年10月14日」、英文「October 14, 2026」；locale 与 `L` 同一份（App 语言）。
+enum PairedDateText {
+    static func format(pairedAt ms: Int64, locale: Locale = .current) -> String {
+        let f = DateFormatter()
+        f.locale = locale
+        f.dateStyle = .long
+        f.timeStyle = .none
+        return f.string(from: Date(timeIntervalSince1970: Double(ms) / 1000))
+    }
+}
+
 /// 存储电脑详情（对位 Android 的详情子页）：状态图标 + 名称 + 配对状态 + 断开连接（`device.unpair` + 断开清单）。
 struct StorageDetailScreen: View {
     @EnvironmentObject var app: AppModel
@@ -88,9 +100,7 @@ struct StorageDetailScreen: View {
         if app.pairingLost { return L.s("storage_detail_lost") }
         let line1 = L.f("storage_detail_connected", LastSuccessText.fragment(app.triplet?.lastSuccessAt))
         guard let ms = app.pairedAtMs else { return line1 }
-        let f = DateFormatter()
-        f.dateFormat = "yyyy年M月d日"
-        let line2 = L.f("storage_detail_paired", f.string(from: Date(timeIntervalSince1970: Double(ms) / 1000)),
+        let line2 = L.f("storage_detail_paired", PairedDateText.format(pairedAt: ms),
                         (app.triplet?.m ?? 0).formatted())
         return line1 + "\n" + line2
     }
