@@ -52,19 +52,43 @@ lane_hit() { # lane_hit <glob…>：改动有没有落在这些路径上（ci-pa
 }
 
 # 端只能在本机上验：mac 的打包、安装、场景都要 macOS（#1524）。按路径判出来的端先过这一道，
-# 本机验不了的摘掉并写明原因（CI 的 macOS 任务照跑），摘掉的端记在 HOST_SKIPPED 里供汇总。
+# 本机验不了的摘掉并写明原因（mac 端的 e3 场景目前没有 CI 任务代跑，要在 macOS 上验）。
+# 结果写进 HOST_ENDS / HOST_SKIPPED（调用处要读），不走 stdout：命令替换是子 shell，
+# 里面改的变量主流程看不见，N/A 那条汇总就会说得不对。
+HOST_ENDS=""
 HOST_SKIPPED=""
 host_ends() { # host_ends <空格分隔的端>
-  local out="" e
+  local e
+  HOST_ENDS=""
+  HOST_SKIPPED=""
   for e in $1; do
     if [ "$e" = mac ] && [ "$(uname -s)" != Darwin ]; then
-      log "跳过 ${e}：本机不是 macOS（由 CI 的 macOS 任务覆盖）"
+      log "跳过 ${e}：本机不是 macOS（mac 端要在 macOS 上验）"
       HOST_SKIPPED="${HOST_SKIPPED:+$HOST_SKIPPED }$e"
       continue
     fi
-    out="${out:+$out }$e"
+    HOST_ENDS="${HOST_ENDS:+$HOST_ENDS }$e"
   done
-  printf '%s' "$out"
+}
+
+# 汇总行的「未覆盖」清单：本机验不了被摘掉的端 + SKIP 的场景 + 只验了已装版本的场景。
+# 被摘掉的端也必须在这里出现：涉及 mac 又同时涉及别的端时 ends 非空，光靠 N/A 分支记不住，
+# 只读最后一行的人会把它当成涉及的端全过了（#1524）。
+collect_gaps() { # collect_gaps <证据根> <HOST_SKIPPED>
+  local root="$1" e gaps=""
+  # shellcheck disable=SC2086
+  for e in $2; do gaps="${gaps}${e}（本机验不了） "; done
+  gaps="${gaps}$(sed -n 's/^SKIP \([^ ]*\).*/\1/p' "$root/summary.txt" | tr '\n' ' ')"
+  grep -q '已装的不是候选构建' "$root"/mac-svc/judge-main.txt 2>/dev/null && gaps="${gaps}mac/svc=已装版 "
+  printf '%s' "$gaps"
+}
+
+# 结论词：失败优先；没有失败的 PASS 但存在未覆盖项时写 PASS（不完整）。
+verdict_word() { # verdict_word <失败数> <gaps>
+  local v=PASS
+  [ "$1" = 0 ] || v=FAIL
+  [ "$v" = PASS ] && [ -n "$2" ] && v="PASS（不完整）"
+  printf '%s' "$v"
 }
 
 # —— 构建候选 ——
@@ -183,14 +207,15 @@ print(" ".join(dict.fromkeys(re.findall(r"\b(?:android|mac|win|ios)/[a-z0-9][a-z
     ;;
 esac
 ends="$(echo $ends)"
-ends="$(host_ends "$ends")"
+host_ends "$ends"
+ends="$HOST_ENDS"
 if [ -z "$ends" ] && [ "$mode" = smoke ]; then
   die "--smoke ${target} 要在能验 ${target} 的机器上跑（本机 $(uname -s)）"
 fi
 root="$REPO_ROOT/evidence/$label/$(date +%Y%m%d-%H%M%S)"
 if [ -z "$ends" ]; then
   if [ -n "$HOST_SKIPPED" ]; then
-    echo "VERIFY N/A $label  本机验不了涉及的端（${HOST_SKIPPED}），由 CI 覆盖：本地只需 V0（just ci）"
+    echo "VERIFY N/A $label  本机验不了涉及的端（${HOST_SKIPPED}），要在能验这些端的机器上验：本地只需 V0（just ci）"
   else
     echo "VERIFY N/A $label  改动不在任何端的路径上：只需 V0（just ci）"
   fi
@@ -262,11 +287,9 @@ for e in $ends; do
   k=$(grep -c "^SKIP $e/" "$root/summary.txt")
   summary="$summary · $e $p/$(($# - k))$([ "$k" -gt 0 ] && echo "（SKIP ${k}）")"
 done
-# 没覆盖到的（SKIP）与只验了已装版本的场景写进汇总行：只读最后一行的人也不会把它当成全过
-gaps="$(sed -n 's/^SKIP \([^ ]*\).*/\1/p' "$root/summary.txt" | tr '\n' ' ')"
-grep -q '已装的不是候选构建' "$root"/mac-svc/judge-main.txt 2>/dev/null && gaps="${gaps}mac/svc=已装版 "
-v=PASS
-[ "$fail" = 0 ] || v=FAIL
-[ "$v" = PASS ] && [ -n "$gaps" ] && v="PASS（不完整）"
+# 没覆盖到的（SKIP、本机验不了被摘掉的端）与只验了已装版本的场景写进汇总行：
+# 只读最后一行的人也不会把它当成全过。
+gaps="$(collect_gaps "$root" "$HOST_SKIPPED")"
+v="$(verdict_word "$fail" "$gaps")"
 echo "VERIFY $v $label ${summary# · }${gaps:+  未覆盖: ${gaps% }}  ${root#"$REPO_ROOT"/}" | tee -a "$root/summary.txt"
 [ "$fail" = 0 ]
