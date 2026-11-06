@@ -29,7 +29,8 @@ printf 'jobs:\n  a:\n    runs-on: macos-26 # x\n' > "$tmp/good.yml"
 hits="$(scan "$WF"/*.yml)"
 if [ -z "$hits" ]; then ok "workflows 里没有 macos-14/15/latest"; else ko "仍有旧 runner："; echo "$hits"; fi
 
-n="$(grep -hcE '^[[:space:]]*runs-on:[[:space:]]*"?macos-26\b' "$WF"/*.yml | paste -sd+ - | bc)"
+# 求和用 awk：Windows Git Bash 没有 bc（#1518）。
+n="$(grep -hcE '^[[:space:]]*runs-on:[[:space:]]*"?macos-26\b' "$WF"/*.yml | awk '{s += $1} END {print s + 0}')"
 [ "${n:-0}" -ge 5 ] && ok "macos-26 共 $n 处（≥5）" || ko "macos-26 只有 ${n:-0} 处，预期 ≥5"
 
 [ "$fail" -eq 0 ] && echo "macos-runner: all passed" || { echo "macos-runner: FAILED"; exit 1; }
