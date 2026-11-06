@@ -81,6 +81,8 @@ set -uo pipefail
 #   tools/ci-paths.sh 与其自测             只被 android/ios/docs/core-review lane 与流程脚本调用
 #   release/notes/                         应用内更新说明（由 ci-docs 的 release/** 路径负责）
 #   .github/ISSUE_TEMPLATE/                issue 模板
+#   .coderabbit.yaml                       CodeRabbit 配置。构建、crates/、桌面壳都不读
+#                                          （与 plan-builds 同一口径，#1545）
 #   核实：git grep 这些路径于 crates/ apps/desktop/ config/ .github/actions/
 #   ci-rust.yml ci-desktop.yml 无命中；arch-check.sh 写明 tools/** 不扫；
 #   fitness 检查的 SCAN_ROOTS 只有 crates/ apps/ config/（tools/fitness_lib.py）。
@@ -118,6 +120,8 @@ static_inert() {
     tools/ci-paths.sh | tools/test-ci-paths.sh) return 0 ;;
     release/notes/*) return 0 ;;
     .github/ISSUE_TEMPLATE/*) return 0 ;;
+    # #1545：只服务 CodeRabbit，不进安装包，Rust / 桌面门禁也不读。
+    .coderabbit.yaml) return 0 ;;
   esac
   # 宽 lane 额外把 apps/** 也算惰性。依据见文件头「两个 lane」那段 ——
   # 往这里加东西之前先证明它对**该 lane 的每一条 job** 都是惰性的。
