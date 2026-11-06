@@ -403,8 +403,9 @@ jobs:
   #     （只是 cargo check 一个 crate），正名留给**独立的一次操作**：
   #     删冗余步骤 + 改名 + 同步改分支保护，三件必须在同一次里成对完成。
   #
-  # ⚠️ 本 job **刻意不进必需检查**（至少本轮不进）。它是每个 PR 都跑的，
-  # 一旦设为必需，所有人的等待时间就被本 job 顶到底。先量稳定耗时再由用户决定。
+  # ⚠️ 本 job **不进必需检查**。#1468 起它在 pull_request 上被下面的 if 跳过（汇报 skipped），
+  # 只在合入 main 后的 push 全量与 Release 调用里跑，不再拖 PR 的等待时间；main 上红了由
+  # main-red.yml 自动开卡（#1469），修或回滚元凶 PR。不变量由 tools/test-ci-lane-invariants.sh 判红。
   test-windows:
     name: test (windows)
     # CI-11 (#255)：**只有明确收到 'false' 才跳过**。
@@ -548,6 +549,8 @@ jobs:
   # 为什么单独成一个 job，而不是往 `test (windows)` 里加一步：那条 job
   # 刻意**不进**必需检查（9–13 分钟，全仓最慢）。lint 挂在它身上，红了也
   # 挡不住合并，等于没加。单独成 job 才能按自己的耗时决定要不要设为必需。
+  # #1468 起两条 Windows job 在 PR 上都被跳过、都不挡合并，只在合入 main 后的 push 全量
+  # 与 Release 调用里跑，红了由 main-red.yml 开卡兜底；仍各自成 job，红了一眼分清是 lint 还是测试。
   #
   # ⚠️ 与上面那条 `clippy` 的差别都是有理由的，不是抄漏了：
   #   - **不带 `--all-features`**：mobile-ffi 在 Windows 上编不过，理由见

@@ -294,7 +294,11 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
   nightly + tag gate.
 - `ci-android.yml` — `apps/android/** assets/i18n/**` → unit tests + APK.
 - `ci-desktop.yml` — `apps/desktop/** assets/**` → src-tauri lib tests + vite build.
-- Every workflow has `concurrency: cancel-in-progress`.
+- Every workflow has a `concurrency` group. Since #1468 the five lanes
+  (rust / desktop / android / ios / docs) put the event name in the group and
+  set `cancel-in-progress` to false for `push` to main (a running full run is
+  never cancelled; only the newest queued one is kept); other events still
+  cancel older runs. `tools/test-ci-lane-invariants.sh` guards this.
 - `release.yml` gained a `platforms` dispatch input (`android`/`macos`/
   `windows` comma list; empty = all). Tag pushes build per platform:
   formal tags by version bump (#838; Windows included since #788),
@@ -553,7 +557,9 @@ Android 靠 `channelFromVersion()` 读注入的版本串（含 `-test.` 即 test
   nightly + tag 门禁。
 - `ci-android.yml`（apps/android/** assets/i18n/**）→ 单测 + APK。
 - `ci-desktop.yml`（apps/desktop/** assets/**）→ src-tauri lib tests + vite build。
-- 每个 workflow 带 `concurrency: cancel-in-progress`（连续 push 取消旧 run）。
+- 每个 workflow 带 `concurrency`。#1468 起五条 lane（rust / desktop / android / ios / docs）的 group 带事件名，
+  `cancel-in-progress` 只对 push 到 main 为 false（正在跑的全量不取消、排队只留最新），其余事件照旧取消旧 run；
+  由 `tools/test-ci-lane-invariants.sh` 判红。
 - release.yml 加 `platforms` dispatch 输入（android/macos/windows 逗号
   组合，留空=all）；发版（release=true）按端构建：正式 tag 看版本号（#838；#788 起含 Windows），
   test tag 看改动路径（#852）。
