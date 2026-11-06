@@ -18,6 +18,9 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 SUT="$HERE/ci-needs-full-lane.sh"
+# 本测试会在临时仓库里跑 git。在 git hook 里运行时（如 pre-push 触发 just ci），继承来的
+# GIT_DIR 等仓库定位变量会盖过 -C / cd，把 add/commit 写进真仓库，所以先清掉。
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_PREFIX
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
