@@ -588,6 +588,27 @@ CI 7 >/dev/null 2>&1
 [ "$(calls)" = 1 ] && grep -qF -- "-echo inc INC-LINE rewritten again" "$FAKE/agent.stdin" &&
   ok "评过的文件恢复成 base（删掉）→ 不复用，增量里带这次删除" || bad "删掉评过的文件后复用了或增量没带删除：调用 $(calls)"
 
+# 中文文件名：git 默认把它转义成带引号的路径，取上次改动文件要用原始路径，否则恢复成 base 时漏进增量
+(
+  cd "${TMP}/main" && git checkout -q pr7 && printf 'zh ZH-LINE\n' >"tools/中文.sh" && git add "tools/中文.sh" && git commit -q -m "add zh" &&
+    git push -q origin HEAD:refs/pull/7/head && git rev-parse HEAD >"${FAKE}/pr.sha" && git checkout -q main
+)
+printf 'tools/x.sh\ntools/中文.sh\n' >"$FAKE/pr.files"
+printf -- '--- a/tools/x.sh\n+++ b/tools/x.sh\n+echo changed FULL-ONLY\n+zh ZH-LINE\n' >"$FAKE/pr.diff"
+again pass
+CI 7 >/dev/null 2>&1
+(
+  cd "${TMP}/main" && git checkout -q pr7 && git rm -q "tools/中文.sh" && git commit -q -m "drop zh" &&
+    git push -q origin HEAD:refs/pull/7/head && git rev-parse HEAD >"${FAKE}/pr.sha" && git checkout -q main
+)
+printf 'tools/x.sh\n' >"$FAKE/pr.files"
+# PR 整体 diff 的桩要与之前各轮都不同：与评过的某一轮相同会按「diff 没变」复用（那是对的）
+printf -- '--- a/tools/x.sh\n+++ b/tools/x.sh\n+echo changed FULL-ONLY (after zh)\n' >"$FAKE/pr.diff"
+again pass
+CI 7 >/dev/null 2>&1
+[ "$(calls)" = 1 ] && grep -qF -- "-zh ZH-LINE" "$FAKE/agent.stdin" &&
+  ok "中文文件名的文件恢复成 base → 增量里带这次删除" || bad "中文文件名的删除漏了：调用 $(calls)"
+
 echo "==> #1470：agent 报错里带放行标记 → 「没跑成」评论里删掉"
 reset infra_inject
 CI 7 >/dev/null 2>&1

@@ -256,11 +256,10 @@ elif [ -n "$PRIOR_SHA" ] && [ "${#PR_FILES[@]}" -gt 0 ] &&
   # 「PR 的文件」取上次评审时与现在的并集：上次改过、现在恢复成 base 的文件（例如删掉了评过的测试）也要进增量。
   # 算不出上次的改动文件（找不到 merge-base）就全量。
   INC_FILES=("${PR_FILES[@]}")
+  # -z：中文等非 ASCII 文件名按原始路径取（默认 core.quotepath 会转义加引号，路径对不上就漏进增量）。
   if PRIOR_BASE="$(git -C "$TOP" merge-base origin/main "$PRIOR_SHA" 2>/dev/null)" &&
-    PRIOR_FILES="$(git -C "$TOP" diff --name-only "$PRIOR_BASE" "$PRIOR_SHA" 2>/dev/null)"; then
-    while IFS= read -r f; do [ -z "$f" ] || INC_FILES+=("$f"); done <<EOF
-$PRIOR_FILES
-EOF
+    git -C "$TOP" diff --name-only -z "$PRIOR_BASE" "$PRIOR_SHA" >"${WORK}/prior.files" 2>/dev/null; then
+    while IFS= read -r -d '' f; do [ -z "$f" ] || INC_FILES+=("$f"); done <"${WORK}/prior.files"
   else
     INC_FILES=()
   fi
