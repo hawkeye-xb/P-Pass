@@ -79,16 +79,19 @@ owner 只统筹，不当传声筒：这些命令是 owner 的工具，不是合�
      - `docs/decisions/<文件>.md，产品负责人 <日期> 已确认`：引用的方案必须全部在 `origin/main` 上是「已采纳」，
        字段里必须写明产品负责人确认；
      - 本仓 issue/PR 评论链接 `https://github.com/<repo>/issues/<号>#issuecomment-<id>`（`pull` 同理）：
-       `gh api` 核对评论存在，作者必须是产品负责人（对本仓有 admin 权限的 User）。评论链接本身就是拍板依据，
-       不要求另写「已确认」。
-     两种依据同时出现时，所有方案引用都要已采纳、所有评论链接都要是产品负责人的；任一不满足就拒绝。
-     满足就不打 `needs:product`、不要选项，按第 3 条走。写「无」等于没写。
+       `gh api` 核对评论存在，链接里的 issue/PR 号必须与评论实际所属一致；作者必须是产品负责人
+       （对本仓有 admin 权限的 User）。字段里出现外仓评论链接就拒绝，不静默忽略。评论链接本身就是
+       拍板依据，不要求另写「已确认」。
+     两种依据同时出现时，所有方案引用都要已采纳、所有评论链接都要属于本仓且作者是产品负责人、编号一致；
+     任一不满足就拒绝。满足就不打 `needs:product`、不要选项，按第 3 条走。写「无」等于没写。
      非核心卡的产品定案可以用评论链接，不要求另开一份方案文档；核心卡仍按第 1 条引用已采纳 ADR。
    - `**owner 定案**：AGENTS.md「<逐字原文>」` 和/或仓库 owner 账号的评论链接。原文必须在 `origin/main` 的
      AGENTS.md 里逐字出现（至少 8 个字）；评论用 `gh api` 核对存在、作者是仓库 owner。任一依据不成立就拒绝。
    - `**标准依据**`：写明 WAI-ARIA/WCAG/ARIA APG、Android 权限规范、NN/g、Google 或 Microsoft 写作指南、
-     Apple HIG、Material Design 等业界标准（或官方链接）。脚本只认得出这些标准；写不认识的出处就拒绝，
-     不静默放行。
+     Apple HIG、Material Design 等业界标准。链接只认完整主机和适用路径：w3.org 的 `/WAI/` 或 `/TR/`、
+     nngroup.com、developer.android.com、developers.google.com/style、learn.microsoft.com/…style、
+     developer.apple.com/design、m3.material.io；其他主机或路径直接拒绝。没有链接时按标准名校验，
+     写不认识的出处也拒绝，不静默放行。
    owner 定案或标准依据合格，且隐私、数据都是「无」、卡类型不是 Feature：不打 `needs:product`、不要选项，
    打 `decided:owner`，依据写进「实施方案」。隐私或数据不是「无」、或 Feature 卡，owner 定案 / 标准依据都不顶用，
    照常 `needs:product`。
