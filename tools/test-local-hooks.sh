@@ -105,7 +105,11 @@ git remote add origin git@github-personal:hawkeye-xb/P-Pass.git
 mkdir -p tools/hooks .github docs/a docs/b crates/storage/src apps/desktop/src-tauri
 cp "${SRC}/tools/hooks/"* tools/hooks/
 cp "${SRC}/tools/ci-paths.sh" tools/
-cp "${SRC}/.github/core-paths.txt" .github/
+# 规则用几条代表性夹具，不搬真实名单（同 test-flow-worker / test-release-acceptance）：
+# hooks-test 测的是拦截逻辑，规则内容由 tools/test-ci-paths.sh 对着真名单测。
+# 真名单 70+ 条，ci-paths 编译每条要起 3 个 sed，hook 每次提交跑两遍 core；Windows Git Bash
+# 上每次进程启动约 30ms，50 条用例累计十几分钟，看起来就是「提交不返回」（#1418）。
+printf '+ .github/core-paths.txt\n+ crates/storage/**\n+ apps/desktop/src-tauri/tauri.conf.json\n' >.github/core-paths.txt
 echo a >docs/a/x.md
 echo b >docs/b/y.md
 echo s >crates/storage/src/a.rs
@@ -418,6 +422,11 @@ bash tools/hooks/install.sh --check >"${TMP}/check.out" 2>&1 && ok "已安装 �
 # Windows Git Bash（#1364）：git.exe 把 /c/... 写成 C:/...，读回与 bash 的路径写法不同。
 # 这里用假 cygpath 模拟：假 git 写法是 WIN:<路径>，cygpath -u 去掉前缀还原。
 WINPATH="$(git config --get core.hooksPath)"
+# Windows 上 git 读回的是 C:/... 写法（#1364），不是 bash 的 /tmp/...：先用本机真 cygpath 换回来，
+# 再模拟「git 写了另一种写法」。Linux/macOS 没有 cygpath，读回的就是同一写法。
+if command -v cygpath >/dev/null 2>&1; then
+  WINPATH="$(cygpath -u "$WINPATH" 2>/dev/null || printf '%s' "$WINPATH")"
+fi
 mkdir -p "${TMP}/cyg"
 printf '#!/usr/bin/env bash\n[ "$1" = "-u" ] || exit 2\nprintf "%%s\\n" "${2#WIN:}"\n' >"${TMP}/cyg/cygpath"
 chmod +x "${TMP}/cyg/cygpath"
