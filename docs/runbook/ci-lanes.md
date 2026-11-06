@@ -63,9 +63,15 @@ CI、评审与验收并行，验收后补这一行再 `gh pr ready`（`edited` /
 来源锁 GitHub Actions（`app_id` 15368），本机 gh 写的同名状态不算。job 名 `review (独立评审)` 不进必需列表，
 job 永远成功，结论只看状态。它用 `pull_request_target`：评审工具取 main 上的版本，PR 头提交只当数据读，
 别往里加执行 PR 代码的步骤（理由见该 workflow 头注释）。fork 的 PR 不跑、不出状态，合不进。
-草稿 PR 也评审（与真机验收并行），草稿转正式不重评；job 第一步（检出之前）就把头提交的 `review/agent` 写成 pending，
+只评正式 PR（#1470）：草稿不评，`ready_for_review` 转正式时评，与 CI 并行；job 第一步（检出之前）就把头提交的 `review/agent` 写成 pending，
 改正文（如删掉验收行）后、新结论出来前不会挂着旧的 success。`review.sh` 写成状态后才打 `REVIEW_STATUS_WRITTEN=` 标记，
 `ci-review.sh publish` 没看到标记就兜底写 error。
+每次评审在评论末尾留隐藏标记（头提交、PR 整体 diff 的指纹、agent 结论），只认 `github-actions[bot]` 写的：头提交评过、或 PR 整体 diff
+没变（只合进了 main）就复用结论、不调模型，用当前正文重判验收行；上次评到的提交是头提交的祖先就只评增量（只看 PR 上次与现在改动的文件），
+附上次的评审意见与已关闭线程的裁决；不是祖先或判不了就全量。意见分「阻断 / 建议 / 风格」，只看阻断行：有阻断行写 failure（模型写 PASS 也算），只有建议、风格写 success（模型写 FAIL 也算）。
+owner 复核放行：PR 上评论 `/review-override <理由>` 触发 `issue_comment` 的 `review override (owner 复核放行)` job，
+用 gh api 现查作者对本仓的权限（admin 才认，`author_association` 在组织仓库是 MEMBER，不作依据），通过后留 `agent=OVERRIDE` 标记，
+只对当时的头提交有效。判据测试：`tools/test-ci-review.sh`、`tools/test-flow-review.sh`。
 
 ## 删接口 / 升依赖时的全 lane 核对
 
