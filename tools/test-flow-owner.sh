@@ -769,6 +769,29 @@ err="$(bash tools/flow/owner-triage.sh 140 "$P" 2>&1 >/dev/null)"
 rc=$?
 check "反证：官方主机但路径不是写作指南 → 拒绝" bash -c '[ "$1" -eq 2 ] && printf "%s\n" "$2" | grep -q "不是可核对的官方标准出处"' _ "$rc" "$err"
 
+echo "── 9f. triage：重跑时摘掉旧的 needs:product（#1551）"
+tcard 180 "status:inbox,needs:product"
+plan "$P" "$UIP" "首页多一张引导" "$STD_ARIA"
+out="$(bash tools/flow/owner-triage.sh 180 "$P" 2>/dev/null)"
+check "已带 needs:product，标准依据判 ready → 摘掉 needs:product，留下 decided:owner" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 180 ready$" && grep -q "decided:owner" "$FAKE/issues/180.labels" && grep -q "status:ready" "$FAKE/issues/180.labels" && ! grep -q "needs:product" "$FAKE/issues/180.labels"' _ "$out"
+tcard 181 "status:inbox,needs:product"
+plan "$P" "$UIP" "首页多一张引导" $'**选项一**：做\n**选项二**：不做'
+out="$(bash tools/flow/owner-triage.sh 181 "$P" 2>/dev/null)"
+check "判 needs:product 时旧标签留着" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 181 needs:product$" && grep -q "needs:product" "$FAKE/issues/181.labels"' _ "$out"
+cp tools/flow/owner-triage.sh "${TMP}/triage-1551.bak"
+sed 's/--remove-label needs:product/--remove-label needs:not-the-label/' tools/flow/owner-triage.sh >"${TMP}/triage-1551.mut"
+if [ "$(grep -c -- '--remove-label needs:not-the-label' "${TMP}/triage-1551.mut")" -eq 1 ] &&
+   [ "$(grep -c -- '--remove-label needs:product' "${TMP}/triage-1551.mut")" -eq 0 ]; then
+  cp "${TMP}/triage-1551.mut" tools/flow/owner-triage.sh
+  tcard 182 "status:inbox,needs:product"
+  plan "$P" "$UIP" "首页多一张引导" "$STD_ARIA"
+  bash tools/flow/owner-triage.sh 182 "$P" >/dev/null 2>&1
+  check "反证：摘标签指错名字后 needs:product 还在" bash -c 'grep -q "needs:product" "$FAKE/issues/182.labels" && grep -q "status:ready" "$FAKE/issues/182.labels"'
+  cp "${TMP}/triage-1551.bak" tools/flow/owner-triage.sh
+else
+  bad "摘标签那一行没匹配上，变异没生效"
+fi
+
 echo
 echo "flow-owner: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
