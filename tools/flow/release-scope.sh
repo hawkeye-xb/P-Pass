@@ -23,7 +23,7 @@
 #   - [x] #<PR> <级别> | 已验 @<包>（<提交>） | 场景：… | 结论：…
 #   <!-- release-ledger:end -->
 #   勾 [x] 的含义：在这一项写着的 @<包> 上验过。
-#   <提交> 是 test 包 tag 指向的提交（前 12 位）：旧 test tag 会被 tools/release/point-test-channel.sh 连同草稿删掉，
+#   <提交> 是 test 包 tag 指向的提交（前 12 位）：旧 test tag 会被 tools/release/cleanup-test-channel.sh 连同草稿删掉，
 #   提交在 main 上不会消失，判「验过之后有没有再改」优先用它；只有包号、没有提交的旧行，tag 不在就判不了 → 待重验（fail-closed）。
 # 退出码：0 绿 / 1 红（发版检查有待验项，或 gh / git 读不到，fail-closed）/ 2 用法错误、tag 或 ref 不存在。
 #

@@ -7,7 +7,8 @@
   test 自动发布、test-channel 指针）→ upload-macos → finalize-manifest（桌面收口：冻结件 / 动态清单、
   分端清单、签名、上传）→ upload-windows → finalize-manifest-windows（#788②：test tag 出 Windows
   分端清单并写进 test-channel；#788：正式 tag 同样出 manifest-windows.json，版本号不变时复用 Latest 的
-  Windows 产物）→ mirror-latest 的镜像判定。
+  Windows 产物）→ finalize-ios → cleanup-test-channel（#1546：所有写入完成后单点收敛 test-channel）
+  → mirror-latest 的镜像判定。
   #852：test tag 按端发布——同一个场景里连发几个 test tag（只改 Android / 只改桌面 / 改共享代码 /
   只改文档），断言没改动的一端零构建、它在 test-channel 里的清单逐字节不动。
 
@@ -69,7 +70,7 @@ WINDOWS_INSTALLER = "P-Pass_{v}_x64-setup.exe"
 TEST_CHANNEL_WINDOWS_MANIFEST = f"https://github.com/{REPO}/releases/download/test-channel/manifest-windows.json"
 TEST_CHANNEL_MACOS_MANIFEST = f"https://github.com/{REPO}/releases/download/test-channel/manifest-macos.json"  # #852
 RELEASE_JOBS = ["plan-builds", "android-reuse", "macos-reuse", "windows-reuse", "create-draft", "upload-android", "upload-macos", "upload-windows", "finalize-manifest", "finalize-manifest-windows",
-                "finalize-notes"]
+                "finalize-ios", "finalize-notes"]
 
 # #773：假 CHANGELOG——正式场景只该取 [2099.1.1] 那一节（不带 Unreleased、不带上一版）。
 FORMAL_SECTION = "**Android 9.8.2 · macOS 9.8.2**\n\n### Fixed\n- 演练条目：只该出现在 2099.1.1 的正文开头。"
@@ -522,6 +523,30 @@ class Scenario:
                                                     needs=needs)
         return self.jobs
 
+    def cleanup(self, wf: dict):
+        """#1546：所有 writer 之后单独跑一次收敛 job（dry-run 不像 GitHub 那样按 needs 自动排队）。"""
+        jid = "cleanup-test-channel"
+        if jid not in wf["jobs"]:
+            return None
+        needs = {}
+        for n in wf["jobs"][jid].get("needs") or []:
+            if n in self.jobs:
+                needs[n] = {"result": self.jobs[n].result, "outputs": self.jobs[n].outputs}
+            elif n in BUILD_RESULTS:
+                needs[n] = {"result": self.build_result(n), "outputs": {}}
+            elif n == "attest":
+                built = any(self.build_result(b) == "success" for b in ("android", "macos-arm64", "windows-x64"))
+                needs[n] = {"result": "success" if built else "skipped", "outputs": {}}
+            elif "uses" in wf["jobs"].get(n, {}):
+                needs[n] = {"result": self.verify_result(n), "outputs": {}}
+            else:
+                raise SimError(f"{jid} needs {n}，dry-run 没有它的结果")
+        self.jobs[jid] = self.runner.run_job(wf, jid, github=self.github, inputs=release_inputs(self.tag),
+                                             secrets={"UPDATE_SIGNING_KEY": self.key["stable"][0],
+                                                      "UPDATE_SIGNING_KEY_TEST": self.key["test"][0],
+                                                      "VT_API_KEY": ""}, needs=needs)
+        return self.jobs[jid]
+
     def tag_commit(self, tag: str) -> str:
         """源仓库里 tag 指向的提交；没有这个 tag 返回空串。"""
         return subprocess.run(["git", "-C", str(self.runner.origin), "rev-parse", "-q", "--verify", f"refs/tags/{tag}^{{commit}}"],
@@ -711,6 +736,9 @@ def formal(ck: Check, base: Path, key: str, pub: Path, rel: dict, mirror: dict):
                    notes=zh, notes_i18n={"zh": zh, "en": en})
     check_manifest(ck, sc, pub, FORMAL_TAG, "manifest-macos.json", version=dv, targets={"darwin-aarch64": mac},
                    notes="", notes_i18n={})
+    sc.cleanup(rel)
+    job_ok(ck, jobs, "cleanup-test-channel")
+    step_is(ck, jobs, "cleanup-test-channel", "收敛 test-channel（失败只告警，不判红）", "success")
     ck(not any("test-channel" in a for c in sc.calls() for a in c), "没有任何 gh 调用碰 test-channel")
     # #773：草稿正文（finalize-notes 补齐之后）以 CHANGELOG 本版小节开头，台账在后。
     job_ok(ck, jobs, "finalize-notes")
@@ -760,6 +788,8 @@ def test_tag(ck: Check, base: Path, key: dict, pub: Path, rel: dict, mirror: dic
     step_is(ck, jobs, "upload-android", "Point test-channel at this manifest (REL-07)", "success")
     meta = sc.meta(TEST_TAG) or {}
     ck(meta.get("draft") is True, "#872：test tag 的 release 保持 draft（客户端读 test-channel）", json.dumps(meta))
+    sc.cleanup(rel)
+    job_ok(ck, jobs, "cleanup-test-channel")
     check_channel(ck, sc, TEST_TAG)
     job_ok(ck, jobs, "finalize-notes")
     body = meta.get("body", "")
@@ -920,6 +950,10 @@ def test_per_end(ck: Check, base: Path, key: str, pub: Path, rel: dict):
             r = sc.runner.run_job(sc.wf, "finalize-ios", github=sc.github, inputs=release_inputs(sc.tag), secrets={}, needs=needs)
             jobs["finalize-ios"] = r
             job_ok(ck, jobs, "finalize-ios")
+        # #1546：收敛必须等 finalize-ios 写完之后再跑（真实 workflow 的 needs 就是这么排的）。
+        # plan-builds 失败 ⇒ create-draft 跳过 ⇒ 收敛 job 也跳过，不拿一次空清理掩盖失败。
+        sc.cleanup(rel)
+        job_ok(ck, jobs, "cleanup-test-channel", "success" if jobs["plan-builds"].result == "success" else "skipped")
         return jobs
 
     # test.1：首发，两端构建

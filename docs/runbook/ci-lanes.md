@@ -40,6 +40,28 @@ job 名必须写死**。理由和细节在这里。
   - `ci-android` / `site` / `ci-docs` 仍按 paths 只在改到自己域时跑，不进必需列表，
     被跳过无害。
 
+## Release 的 test-channel 收敛（#1546）
+
+`release.yml` 里 `test-channel` 有两类动作，必须分开看：
+
+- **写**：`upload-android`、`finalize-manifest`（macOS + 收口 Android）、`finalize-manifest-windows`、
+  `finalize-ios` 并行调 `tools/release/point-test-channel.sh`，只上传自己那份安装包、写自己那份清单，
+  **不删除任何东西**。任一步失败，那个 job 红，整轮 Release 红（fail-closed 不变）。
+- **收敛**：唯一的 job `cleanup-test-channel`（`name: "收敛 test-channel（清理旧包与旧草稿）"`，写死）
+  在四个 writer 之后跑一次 `tools/release/cleanup-test-channel.sh`，删没有清单指向的旧安装包与
+  过期且无人引用的 test 草稿。`needs` 是上面四个 writer；`if:` 逐项要求它们不是 `failure`
+  （被判 skip 的端是正常的），任一 writer 失败时本 job 跳过，失败不会被一次成功的清理盖住。
+  `timeout-minutes: 10`；非 test tag 时脚本自己退出 0。
+
+失败语义：收敛脚本失败，步骤打 `::warning::` 并退出 0；checkout / runner 这类基础设施失败由 job 级
+`continue-on-error: true` 兜住。收敛失败只影响占盘——此时资产已上传、清单已指向，客户端能下载——
+所以不判整轮红。上传 / 指向失败仍然红（writer job 不许加 `continue-on-error`）。
+
+判据测试 `tools/test-release-channel.sh`（在 `ci-docs.yml` 的 `release-plan` job 里）：
+stub `gh` 真跑两个脚本，再从 `release.yml` 抽收敛步骤的 run 块、用一定失败的假脚本执行。
+三条反证：① 把收敛调用放回任一端 writer job ⇒ 红；② 收敛失败判红 ⇒ 红；③ 上传失败被吞 ⇒ 红。
+设计见 [ADR](../decisions/2026-11-06-release-test-channel-single-writer.md)。
+
 ## 停用门禁 / 撤必需检查
 
 停 workflow、改 branch protection 都是仓库设置动作：**不进 git、不产生提交、不走 PR**，

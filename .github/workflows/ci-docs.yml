@@ -249,6 +249,11 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: 依赖（PyYAML：test-channel 测试读 release.yml 的 job 表）
+        run: python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
+      # #1546：写路径只上传 / 指向、收敛单点跑一次且失败只告警——三条反证都在脚本里。
+      - name: test-channel 写入 / 收敛分权（#1546）
+        run: bash tools/test-release-channel.sh
       - name: 判定与校验测试（stub gh）
         run: bash tools/test-release-plan.sh
       # #852：桌面构建的 tauri --config（macOS / Windows 共用）——test 版本指向 test-channel 的

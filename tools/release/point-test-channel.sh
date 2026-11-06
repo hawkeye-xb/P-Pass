@@ -17,13 +17,14 @@
 #   重跑同一个 tag 会重新构建，字节可能变，清单里的 sha256 跟的是本次的文件。
 # 输入：TAG（job env）、GITHUB_REPOSITORY；gh 已登录（GH_TOKEN）。
 #
-# 顺序与不变量（任何时刻客户端读到的清单，其下载链接都可达）：
+# 职责：只写、不清理（#1546）。
 #   1. 重跑旧 tag 不许把指针往回拨：通道里同名清单已是更新版本 ⇒ 什么都不做。
 #   2. 先传安装包；清单里每个下载链接都必须是 test-channel 里已有的文件，否则拒绝写清单。
 #   3. 再覆盖清单。
-#   4. 最后清理：删掉 test-channel 里**没有任何清单指向的版本**的安装包。按「被引用的版本」而不是
-#      「被引用的文件」判，dmg 这类不进清单、但与当前版本配套的包才留得住；不带版本号的文件不动。
-#   5. 删掉比被指向的最新版本还旧、且没被指向的 test 草稿（连同 tag）。
+# 收敛（删没有清单指向的旧安装包、删过期且无人引用的 test 草稿）不在本脚本：各端 job 并行调用本脚本，
+# 谁都没有全局视野，各自清理会删到对方刚枚举出来的资产（2026-11-06 run 42210867452）。
+# 收敛在所有写入完成后由 tools/release/cleanup-test-channel.sh 单点跑一次；见
+# docs/decisions/2026-11-06-release-test-channel-single-writer.md。
 set -euo pipefail
 : "${TAG:?TAG 未设置（job env）}"
 : "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY 未设置}"
@@ -84,39 +85,3 @@ done < <(node -e 'for (const p of Object.values(require(process.argv[1]).platfor
 # 3. 覆盖清单
 gh release upload "$CH" "$SRC" --clobber
 echo "test-channel/${NAME} → ${NEW}: ${CH_BASE}/${NAME}"
-
-# 4. 清理：被任一清单指向的版本才保留
-KEEP_DIR="${RUNNER_TEMP:-/tmp}/ch-keep"
-rm -rf "$KEEP_DIR"; mkdir -p "$KEEP_DIR"
-KEEP=""
-# #348：manifest-ios.json 只是 plan-builds 的基线（iOS 包在 TestFlight，不在 test-channel）。
-# 它指向的版本要保住 test 草稿与 tag（基线 tag 被删 ⇒ 下次判不了改动 ⇒ 白白构建），
-# 但不该把那个版本的 Android / macOS / Windows 安装包也留住：只进 KEEP_DRAFTS，不进 KEEP。
-KEEP_DRAFTS=""
-for m in $(ch_assets | grep -E '^manifest(-[a-z]+)?\.json$' || true); do
-  gh release download "$CH" -p "$m" -O "$KEEP_DIR/$m" --clobber
-  mv_=$(version_of "$KEEP_DIR/$m")
-  KEEP_DRAFTS="$KEEP_DRAFTS $mv_"
-  [ "$m" = manifest-ios.json ] || KEEP="$KEEP $mv_"
-done
-for n in $(ch_assets | grep -E '^P-Pass_' || true); do
-  v=${n#P-Pass_}; v=${v%%_*}
-  case " $KEEP " in
-    *" $v "*) ;;
-    *) gh release delete-asset "$CH" "$n" --yes; echo "test-channel：删除没有清单指向的旧包 ${n}" ;;
-  esac
-done
-
-# 5. 清理旧的 test 草稿（#872）：test tag 自己的 release 只是构建记录。版本没有被任何清单指向、
-#    且比被指向的最新版本还旧的 test 草稿连同它的 tag 一起删——它既不是谁的下载来源，也不是
-#    plan-builds 的基线。比最新被指向版本新的不动：那可能是正在跑、还没写指针的 test tag。
-# shellcheck disable=SC2086 # KEEP 是空格分隔的版本列表，刻意拆分
-NEWEST=$(printf '%s\n' $KEEP_DRAFTS | sort -V | tail -n1)
-for t in $(gh release list --limit 200 --json tagName,isDraft \
-             -q '.[] | select(.isDraft and (.tagName | contains("-test."))) | .tagName'); do
-  v=${t#v}
-  case " $KEEP_DRAFTS " in *" $v "*) continue ;; esac
-  [ "$v" != "$NEWEST" ] && [ "$(printf '%s\n%s\n' "$v" "$NEWEST" | sort -V | tail -n1)" = "$NEWEST" ] || continue
-  gh release delete "$t" --yes --cleanup-tag
-  echo "删除旧的 test 草稿与 tag：${t}"
-done
