@@ -149,7 +149,21 @@ case "$1 $2" in
       # main 的 CI：未过滤的原始行（status<TAB>conclusion<TAB>event<TAB>branch<TAB>workflow 名），过滤由脚本做。
       */actions/runs\?head_sha=*) cat "$FAKE/main-ci" 2>/dev/null || printf 'completed\tsuccess\tpush\tmain\tCI Rust\n' ;;
       */commits/*/status) echo "success 0" ;;
-      */issues/comments/*) cat "$FAKE/comments/${2##*/}" 2>/dev/null || exit 1 ;;
+      */issues/comments/*)
+        cid="${2##*/}"
+        [ -f "$FAKE/comments/$cid" ] || exit 1
+        case " $* " in
+          *".user.type"*)
+            printf '%s\t%s\n' "$(cat "$FAKE/comments/$cid")" "$(cat "$FAKE/comment-types/$cid" 2>/dev/null || echo User)"
+            ;;
+          *) cat "$FAKE/comments/$cid" ;;
+        esac
+        ;;
+      */collaborators/*)
+        rest="${2#*/collaborators/}"
+        login="${rest%/permission}"
+        cat "$FAKE/perm.${login}" 2>/dev/null || echo read
+        ;;
       */issues/[0-9]*) cat "$I/${2##*/}.type" 2>/dev/null || echo "" ;;
       -X) echo '{}' ;;
       *) echo "stub gh api: unsupported $*" >&2; exit 2 ;;
@@ -539,6 +553,99 @@ printf '2026-12-30T00:00:00Z' >"$FAKE/issues/93.due"
 IMPACT_T=局部 TIMING_T=无 plan "$P" "tools/new-thing.sh" "无"
 bash tools/flow/owner-triage.sh 93 "$P" >/dev/null 2>&1
 check "反证：milestone 还很远 → 不升级，仍 P3" bash -c 'tr "," "\n" <"$FAKE/issues/93.labels" | grep -qx P3'
+
+echo "── 9d. triage：产品定案可引用产品负责人评论；标准依据由 owner 定"
+mkdir -p "$FAKE/comments" "$FAKE/comment-types"
+printf '690591397\n' >"$FAKE/comments/201"
+printf 'admin' >"$FAKE/perm.690591397"
+printf 'someone\n' >"$FAKE/comments/202"
+printf 'write' >"$FAKE/perm.someone"
+printf 'github-actions[bot]\n' >"$FAKE/comments/203"
+printf 'Bot' >"$FAKE/comment-types/203"
+printf 'admin' >"$FAKE/perm.github-actions[bot]"
+PD_COMMENT="**产品定案**：https://github.com/t/r/issues/9#issuecomment-201"
+IMPACT_T=局部
+TIMING_T=无
+tcard 100 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "$PD_COMMENT"
+out="$(bash tools/flow/owner-triage.sh 100 "$P" 2>/dev/null)"
+check "非核心界面卡 + 产品定案引用产品负责人评论 → ready，不打 needs:product、不打 decided:owner" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 100 ready$" && grep -q "status:ready" "$FAKE/issues/100.labels" && ! grep -q "needs:product" "$FAKE/issues/100.labels" && ! grep -q "decided:owner" "$FAKE/issues/100.labels"' _ "$out"
+tcard 101 status:inbox
+plan "$P" "$UIP" "首页多一张引导" $'**选项一**：做\n**选项二**：不做'
+out="$(bash tools/flow/owner-triage.sh 101 "$P" 2>/dev/null)"
+check "反证：同一张卡去掉产品定案 → needs:product" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 101 needs:product$" && grep -q "needs:product" "$FAKE/issues/101.labels"' _ "$out"
+tcard 102 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "**产品定案**：https://github.com/t/r/issues/9#issuecomment-202"
+err="$(bash tools/flow/owner-triage.sh 102 "$P" 2>&1 >/dev/null)"
+rc=$?
+check "反证：产品定案评论作者无 admin 权限 → 拒绝（退出码 2），不写 issue" bash -c '[ "$1" -eq 2 ] && printf "%s\n" "$2" | grep -q "不是产品负责人" && [ "$(cat "$FAKE/issues/102.labels")" = status:inbox ] && ! grep -q "^issue edit 102" "$FAKE/calls.log"' _ "$rc" "$err"
+tcard 103 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "**产品定案**：https://github.com/t/r/issues/9#issuecomment-999"
+bash tools/flow/owner-triage.sh 103 "$P" >/dev/null 2>&1
+check "评论不存在 → 拒绝（退出码 2），不写 issue" bash -c '[ "$1" -eq 2 ] && [ "$(cat "$FAKE/issues/103.labels")" = status:inbox ]' _ "$?"
+tcard 104 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "**产品定案**：https://github.com/other/repo/issues/9#issuecomment-201"
+err="$(bash tools/flow/owner-triage.sh 104 "$P" 2>&1 >/dev/null)"
+rc=$?
+check "反证：别的仓库的评论链接 → 拒绝（没有可校验依据）" bash -c '[ "$1" -eq 2 ] && printf "%s\n" "$2" | grep -q "没有可校验的依据"' _ "$rc" "$err"
+tcard 105 status:inbox
+plan "$P" "crates/storage/new.rs" "无" "$PD_COMMENT"
+out="$(bash tools/flow/owner-triage.sh 105 "$P" 2>/dev/null)"
+check "核心卡只有产品定案评论、没有已采纳 ADR → 仍 blocked" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 105 blocked$"' _ "$out"
+tcard 106 status:inbox
+plan "$P" "crates/storage/new.rs" "无" "$PD_COMMENT
+**ADR**：docs/decisions/2026-11-01-adopted.md"
+out="$(bash tools/flow/owner-triage.sh 106 "$P" 2>/dev/null)"
+check "反证：核心卡 + 已采纳 ADR + 产品定案评论 → ready + core" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 106 ready$" && tr "," "\n" <"$FAKE/issues/106.labels" | grep -qx core' _ "$out"
+tcard 107 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "**产品定案**：https://github.com/t/r/issues/9#issuecomment-203"
+err="$(bash tools/flow/owner-triage.sh 107 "$P" 2>&1 >/dev/null)"
+rc=$?
+check "评论作者是 bot、不是真人 → 拒绝（退出码 2）" bash -c '[ "$1" -eq 2 ] && printf "%s\n" "$2" | grep -q "不是真人账号"' _ "$rc" "$err"
+STD_ARIA="**标准依据**：WAI-ARIA 模态对话框模式（https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/）"
+tcard 110 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "$STD_ARIA"
+out="$(bash tools/flow/owner-triage.sh 110 "$P" 2>/dev/null)"
+check "界面卡 + 标准依据 WAI-ARIA → ready + decided:owner，不打 needs:product" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 110 ready$" && grep -q "decided:owner" "$FAKE/issues/110.labels" && ! grep -q "needs:product" "$FAKE/issues/110.labels"' _ "$out"
+tcard 111 status:inbox
+plan "$P" "$UIP" "首页多一张引导" $'**选项一**：做\n**选项二**：不做'
+out="$(bash tools/flow/owner-triage.sh 111 "$P" 2>/dev/null)"
+check "反证：同一张卡去掉标准依据 → needs:product，没有 decided:owner" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 111 needs:product$" && ! grep -q "decided:owner" "$FAKE/issues/111.labels"' _ "$out"
+tcard 112 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "**标准依据**：我们觉得这样更好"
+err="$(bash tools/flow/owner-triage.sh 112 "$P" 2>&1 >/dev/null)"
+rc=$?
+check "反证：标准依据写不出可核对的标准 → 拒绝（退出码 2），不写 issue" bash -c '[ "$1" -eq 2 ] && printf "%s\n" "$2" | grep -q "没写出可核对" && [ "$(cat "$FAKE/issues/112.labels")" = status:inbox ] && ! grep -q "^issue edit 112" "$FAKE/calls.log"' _ "$rc" "$err"
+for pair in "113|Android 权限规范：运行时权限要说明用途" "114|NN/g 提示文案指南" "115|Google 开发者文档写作指南" "116|Microsoft Writing Style Guide"; do
+  n="${pair%%|*}"
+  text="${pair#*|}"
+  tcard "$n" status:inbox
+  plan "$P" "$UIP" "首页多一张引导" "**标准依据**：${text}"
+  out="$(bash tools/flow/owner-triage.sh "$n" "$P" 2>/dev/null)"
+  check "标准依据：${text} → ready + decided:owner" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE $2 ready$" && grep -q "decided:owner" "$FAKE/issues/$2.labels" && ! grep -q "needs:product" "$FAKE/issues/$2.labels"' _ "$out" "$n"
+done
+tcard 117 status:inbox
+printf '**做法**：改\n**涉及端**：无\n**数据**：无\n**用户可见行为**：首页多一张引导\n**隐私**：会读通讯录\n**风险**：低\n**影响**：局部\n**时间性**：无\n**范围**：\n```\n%s\n```\n**验收场景**：x（E2）\n%s\n**选项一**：读\n**选项二**：不读\n' "$UIP" "$STD_ARIA" >"$P"
+out="$(bash tools/flow/owner-triage.sh 117 "$P" 2>/dev/null)"
+check "隐私不为「无」，标准依据不顶用 → needs:product，无 decided:owner" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 117 needs:product$" && grep -q "needs:product" "$FAKE/issues/117.labels" && ! grep -q "decided:owner" "$FAKE/issues/117.labels"' _ "$out"
+tcard 118 status:inbox
+printf '**做法**：改\n**涉及端**：无\n**数据**：新增本地缓存\n**用户可见行为**：首页多一张引导\n**隐私**：无\n**风险**：低\n**影响**：局部\n**时间性**：无\n**范围**：\n```\n%s\n```\n**验收场景**：x（E2）\n%s\n**选项一**：留\n**选项二**：删\n' "$UIP" "$STD_ARIA" >"$P"
+out="$(bash tools/flow/owner-triage.sh 118 "$P" 2>/dev/null)"
+check "数据不为「无」，标准依据不顶用 → needs:product，无 decided:owner" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 118 needs:product$" && ! grep -q "decided:owner" "$FAKE/issues/118.labels"' _ "$out"
+printf 'Feature' >"$FAKE/issues/119.type"
+tcard 119 status:inbox
+plan "$P" "$UIP" "首页多一张引导" $'**标准依据**：WAI-ARIA 模态对话框模式\n**选项一**：做\n**选项二**：不做'
+out="$(bash tools/flow/owner-triage.sh 119 "$P" 2>/dev/null)"
+check "Feature 卡带标准依据 → 仍 needs:product，无 decided:owner" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 119 needs:product$" && ! grep -q "decided:owner" "$FAKE/issues/119.labels"' _ "$out"
+rm -f "$FAKE/issues/119.type"
+tcard 120 status:inbox
+plan "$P" "crates/storage/new.rs" "无" "$STD_ARIA"
+out="$(bash tools/flow/owner-triage.sh 120 "$P" 2>/dev/null)"
+check "核心卡只有标准依据、没有已采纳 ADR → 仍 blocked" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 120 blocked$"' _ "$out"
+tcard 121 status:inbox
+printf '**做法**：改\n**涉及端**：无\n**数据**：无\n**用户可见行为**：首页多一张引导\n**隐私**：无\n**风险**：低\n**影响**：局部\n**时间性**：无\n**范围**：\n```\ncrates/storage/new.rs\n```\n**验收场景**：x（E2）\n%s\n**ADR**：docs/decisions/2026-11-01-adopted.md\n' "$STD_ARIA" >"$P"
+out="$(bash tools/flow/owner-triage.sh 121 "$P" 2>/dev/null)"
+check "反证：核心卡 + 已采纳 ADR + 标准依据（有用户可见行为）→ ready + core + decided:owner" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 121 ready$" && tr "," "\n" <"$FAKE/issues/121.labels" | grep -qx core && grep -q "decided:owner" "$FAKE/issues/121.labels"' _ "$out"
 
 echo
 echo "flow-owner: ${PASS} passed, ${FAIL} failed"
