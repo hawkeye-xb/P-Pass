@@ -7,7 +7,7 @@
 #       没有 PR 号、却改了用户看得见文件的提交进不了台账，直接红；起点不是 <to> 的祖先也红。
 #       --since 可给任何 tag（例如上一个 test 包，数「自上个 test 包以来用户可见 PR 数」）。
 #   release-scope.sh --ledger <台账 issue 号> --pkg <test 包 tag> [--since <tag>] [--dry-run]
-#       出新 test 包时更新台账（每个版本一张 issue，标题「[验收] v<版本>」，清单只存在 issue 里）：
+#       出新 test 包时更新台账（每个版本一张 issue，标题「[验收] <正式 tag>」，正式 tag 即批次号，清单只存在 issue 里）：
 #         新增的用户可见 PR → 待验；
 #         已验项（[x] @<验过的包>）若该 PR 改过的文件在「验过的包..新包」之间又被改动 → 待重验，没被改动 → 沿用；
 #         判不了（tag 不存在、git 失败、勾了却没有包号）一律待重验（fail-closed）。
@@ -19,13 +19,16 @@
 #
 # 台账块（脚本维护；人只做一件事：按 SOP 验过、owner 判日志通过后，把那一项的 [ ] 勾成 [x]，可在行尾补「| 结论：…」）：
 #   <!-- release-ledger:begin since=<tag> -->
-#   - [ ] #<PR> <级别> | 待验 @<包> | 场景：<关联卡的验收场景>
-#   - [x] #<PR> <级别> | 已验 @<包> | 场景：… | 结论：…
+#   - [ ] #<PR> <级别> | 待验 @<包>（<提交>） | 场景：<关联卡的验收场景>
+#   - [x] #<PR> <级别> | 已验 @<包>（<提交>） | 场景：… | 结论：…
 #   <!-- release-ledger:end -->
 #   勾 [x] 的含义：在这一项写着的 @<包> 上验过。
+#   <提交> 是 test 包 tag 指向的提交（前 12 位）：旧 test tag 会被 tools/release/point-test-channel.sh 连同草稿删掉，
+#   提交在 main 上不会消失，判「验过之后有没有再改」优先用它；只有包号、没有提交的旧行，tag 不在就判不了 → 待重验（fail-closed）。
 # 退出码：0 绿 / 1 红（发版检查有待验项，或 gh / git 读不到，fail-closed）/ 2 用法错误、tag 或 ref 不存在。
 #
-# 接进 release.yml 属更新链（核心），另立方案，不在本卡；在那之前 owner 发版前手动跑 just release-acceptance <台账号>。
+# 已接进 release.yml（#1486，方案 docs/decisions/2026-11-06-release-acceptance-gate.md）：正式版发版时 plan-builds 按标题
+# 「[验收] <正式 tag>」找台账，调 release-acceptance.sh（即本脚本 --check），红了什么都不构建。
 
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -194,6 +197,24 @@ load_ledger() {
 item_of() { grep -E "^- \[[ xX]\] #${1} " "${TMP}/items" | head -n 1; }
 item_checked() { printf '%s\n' "$1" | grep -qE '^- \[[xX]\]'; }
 # 第二栏「待验 @<包>（…）」里的包号（全角括号用 index 找，不放进正则方括号：C locale 下会被拆成字节）。
+# 包号后面全角括号里的第一段（到「，」或「）」为止），是十六进制提交号才算。
+item_sha() {
+  printf '%s\n' "$1" | awk -F' [|] ' '{ f = $2; i = index(f, "@"); if (!i) exit; f = substr(f, i + 1)
+    j = index(f, "（"); if (!j) exit; f = substr(f, j + length("（"))
+    k = index(f, "）"); if (k) f = substr(f, 1, k - 1); c = index(f, "，"); if (c) f = substr(f, 1, c - 1)
+    if (f ~ /^[0-9a-f]+$/ && length(f) >= 7 && length(f) <= 40) print f }'
+}
+# 判「验过之后有没有再改」的基准：提交号在本地解析得到就用它，否则退回包号（tag）。
+item_base() {
+  local s
+  s="$(item_sha "$1")"
+  if [ -n "$s" ] && commit_of "$s" >/dev/null; then echo "$s"; else item_pkg "$1"; fi
+}
+# 写台账用的「<包>（<提交>）」：提交取 <ref> 解析出的前 12 位；解析不到只写包号（之后按 tag 判，判不了就待重验）。
+pkg_at() {
+  local c
+  if c="$(commit_of "$2")"; then printf '%s（%s）' "$1" "${c:0:12}"; else printf '%s' "$1"; fi
+}
 item_pkg() {
   printf '%s\n' "$1" | awk -F' [|] ' '{ f = $2; i = index(f, "@"); if (!i) exit; f = substr(f, i + 1)
     j = index(f, "（"); if (j) f = substr(f, 1, j - 1); sub(/[ (].*/, "", f); print f }'
@@ -224,7 +245,7 @@ if [ "$CHECK" = 1 ]; then
       continue
     fi
     v="$(item_pkg "$it")"
-    moved="$(changed_since "$v" "$TO" "$pr")"
+    moved="$(changed_since "$(item_base "$it")" "$TO" "$pr")"
     if [ -n "$moved" ]; then
       if [ "$moved" = "?" ]; then
         printf '#%s（%s）待重验：判不了验过的包 @%s 与候选版之间的改动\n' "$pr" "$kind" "${v:-（没写包号）}"
@@ -255,6 +276,9 @@ fi
 # ── 更新台账 ─────────────────────────────────────────────────────────────
 if [ -n "$LEDGER" ]; then
   need_ref "$PKG"
+  PKG_SHA="$(commit_of "$PKG")"
+  PKG_SHA="${PKG_SHA:0:12}"
+  PKG_AT="${PKG}（${PKG_SHA}）"
   load_ledger
   if [ -n "$LEDGER_SINCE" ]; then
     if [ -n "$SINCE" ] && [ "$SINCE" != "$LEDGER_SINCE" ]; then
@@ -272,7 +296,7 @@ if [ -n "$LEDGER" ]; then
   while read -r pr kind; do
     it="$(item_of "$pr")"
     if [ -z "$it" ]; then
-      printf -- '- [ ] #%s %s | 待验 @%s | 场景：%s\n' "$pr" "$kind" "$PKG" "$(scene_of "$pr")" >>"${TMP}/new-items"
+      printf -- '- [ ] #%s %s | 待验 @%s | 场景：%s\n' "$pr" "$kind" "$PKG_AT" "$(scene_of "$pr")" >>"${TMP}/new-items"
       printf '新增  #%s（%s）\n' "$pr" "$kind"
       N_NEW=$((N_NEW + 1))
       continue
@@ -281,14 +305,16 @@ if [ -n "$LEDGER" ]; then
     tail_="$(item_tail "$it")"
     v="$(item_pkg "$it")"
     if item_checked "$it"; then
-      moved="$(changed_since "$v" "$PKG" "$pr")"
+      base="$(item_base "$it")"
+      moved="$(changed_since "$base" "$PKG" "$pr")"
       if [ -z "$moved" ]; then
-        printf -- '- [x] #%s %s | 已验 @%s | %s%s\n' "$pr" "$kind" "$v" "$scene" "$tail_" >>"${TMP}/new-items"
+        # 沿用：包号后面补上（或保留）提交号，之后旧 test tag 被删也能判。
+        printf -- '- [x] #%s %s | 已验 @%s | %s%s\n' "$pr" "$kind" "$(pkg_at "$v" "$base")" "$scene" "$tail_" >>"${TMP}/new-items"
         N_KEEP=$((N_KEEP + 1))
       else
         why="又改了 $(printf '%s\n' "$moved" | paste -sd ' ' -)"
         [ "$moved" != "?" ] || why="判不了改动"
-        printf -- '- [ ] #%s %s | 待重验 @%s（上次验过 @%s，%s） | %s%s\n' "$pr" "$kind" "$PKG" "${v:-?}" "$why" "$scene" "$tail_" >>"${TMP}/new-items"
+        printf -- '- [ ] #%s %s | 待重验 @%s（%s，上次验过 @%s，%s） | %s%s\n' "$pr" "$kind" "$PKG" "$PKG_SHA" "${v:-?}" "$why" "$scene" "$tail_" >>"${TMP}/new-items"
         printf '待重验 #%s（%s）：上次验过 @%s，%s\n' "$pr" "$kind" "${v:-?}" "$why"
         N_RE=$((N_RE + 1))
       fi
@@ -296,7 +322,7 @@ if [ -n "$LEDGER" ]; then
       # 还没验的：待验包更新成新包，「待验 / 待重验」原样保留。
       word="$(printf '%s\n' "$it" | awk -F' [|] ' '{ print $2 }' | grep -oE '^待重?验')"
       [ -n "$word" ] || word="待验"
-      printf -- '- [ ] #%s %s | %s @%s | %s%s\n' "$pr" "$kind" "$word" "$PKG" "$scene" "$tail_" >>"${TMP}/new-items"
+      printf -- '- [ ] #%s %s | %s @%s | %s%s\n' "$pr" "$kind" "$word" "$PKG_AT" "$scene" "$tail_" >>"${TMP}/new-items"
       N_WAIT=$((N_WAIT + 1))
     fi
   done <"${TMP}/scope"

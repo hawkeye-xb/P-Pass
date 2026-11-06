@@ -12,6 +12,8 @@ ADR，验收人拍板后再拆卡实现。代码注释里出现的 ADR-003、ADR
 | 2026-11-03 | [自动备份规则缓存的到期判据](2026-11-03-flow-rule-cache-sentinel.md) | 已采纳 |
 | 2026-11-03 | [onboarding 闸门与「连过这台电脑」判据](2026-11-03-onboarding-gate.md) | 已采纳 |
 | 2026-11-05 | [发布链 hdiutil 遇到「Resource busy」时退避重试](2026-11-05-release-hdiutil-busy-retry.md) | 已采纳 |
+| 2026-11-06 | [macOS runner 全仓统一 macos-26](2026-11-06-macos-runner-26.md) | 已采纳 |
+| 2026-11-06 | [发版闸接进 release.yml：按「[验收] <正式 tag>」找台账](2026-11-06-release-acceptance-gate.md) | 已采纳 |
 
 ## 写法
 

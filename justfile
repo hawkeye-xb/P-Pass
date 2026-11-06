@@ -541,7 +541,7 @@ release-scope *args:
     bash tools/flow/release-scope.sh {{args}}
 
 # 发版前验收门禁（#1471）：台账里候选版的用户可见改动全部已验、验过之后相关文件没再改，才绿；有待验 / 待重验逐项列出。
-# 接进 release.yml 前由 owner 发版前手动跑。
+# 正式版发版时 Release 自动按标题「[验收] <正式 tag>」找台账跑同一份判定（#1486）；这里供 owner 提前手动查。
 release-acceptance ledger *args:
     bash tools/flow/release-acceptance.sh {{ledger}} {{args}}
 

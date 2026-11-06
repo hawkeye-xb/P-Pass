@@ -536,6 +536,22 @@ def positional():
         out.append(a)
     return out
 def fail(msg, rc=1): sys.stderr.write(msg + "\n"); sys.exit(rc)
+# #1486：发版闸（plan-builds）按标题「[验收] <正式 tag>」找台账、读台账。dry-run 不验台账内容（判定的测试在
+# tools/test-release-acceptance-gate.sh / test-release-scope.sh），只给本次 tag 一张已清零的台账：
+# 起点 = 本次构建的提交（GITHUB_SHA），范围为空，判定照常由 tools/flow/release-acceptance.sh 跑。
+def emit(rows):
+    q = opt("-q") or opt("--jq")
+    if not q:
+        sys.stdout.write(json.dumps(rows, ensure_ascii=False) + "\n"); sys.exit(0)
+    r = subprocess.run(["jq", "-r", q], input=json.dumps(rows, ensure_ascii=False), text=True, capture_output=True)
+    sys.stdout.write(r.stdout); sys.stderr.write(r.stderr); sys.exit(r.returncode)
+if args[:2] == ["issue", "list"]:
+    tag = (opt("--search") or "").split(" ")[0]
+    if not tag: fail(f"gh stub: issue list 要带 --search <tag>：{args}", 2)
+    emit([{"number": 1, "title": f"[验收] {tag}"}])
+if args[:2] == ["issue", "view"]:
+    sha = os.environ.get("GITHUB_SHA") or fail("gh stub: issue view 需要 GITHUB_SHA", 2)
+    emit({"body": f"dry-run 台账\n\n<!-- release-ledger:begin since={sha} -->\n<!-- release-ledger:end -->\n"})
 if args[:1] != ["release"]: fail(f"gh stub: unsupported {args}", 2)
 sub = args[1] if len(args) > 1 else ""
 pos = positional()

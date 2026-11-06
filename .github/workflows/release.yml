@@ -97,9 +97,13 @@ jobs:
   plan-builds:
     name: "判定各端构建或复用（#838）"
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # #1486：发版闸在这个 job 里重算候选版的验收范围（每个提交判一次级别），比原先的 5 分钟长。
+    timeout-minutes: 15
     permissions:
       contents: read
+      # #1486 发版闸：按标题找验收台账、读台账（gh issue list / view）。
+      issues: read
+      pull-requests: read
     outputs:
       android: ${{ steps.plan.outputs.android }}
       macos: ${{ steps.plan.outputs.macos }}
@@ -135,6 +139,42 @@ jobs:
             echo "::error::tag ${TAG} 已存在。发版只建新 tag；补跑已有 tag 请用 release=false"; exit 1
           fi
           echo "守卫通过：${TAG}（${CH} 通道）@ ${GITHUB_SHA}"
+
+      # #1486：发版闸（方案 docs/decisions/2026-11-06-release-acceptance-gate.md）。正式版要求「[验收] <正式 tag>」台账清零，
+      # 判定只在 tools/flow/release-acceptance.sh（这里不另写一份）；红了本 job 失败，所有构建、TestFlight 上传、建 tag 与草稿都不跑。
+      # test tag 不查。有测试看守：tools/test-release-acceptance-gate.sh。
+      - name: 发版闸：验收台账清零（#1486）
+        if: ${{ inputs.release }}
+        env:
+          TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          PPASS_HOOK_REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          if ! [[ "$TAG" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+$ ]]; then
+            echo "test 包（${TAG}）不查验收台账"; exit 0
+          fi
+          TITLE="[验收] ${TAG}"
+          SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/null}"
+          red() { echo "::error::$1"; printf '### 发版闸未通过（%s）\n\n%s\n' "$TAG" "$1" >>"$SUMMARY"; exit 1; }
+          # 正式 tag 即批次号，台账标题恒为「[验收] <正式 tag>」：先按 tag 搜，再按标题全等过滤；open / closed 都算。
+          if ! found="$(gh issue list -R "$PPASS_HOOK_REPO" --state all --search "${TAG} in:title" --limit 100 --json number,title)"; then
+            red "读不到 GitHub issue，判不了台账（fail-closed）；修好后用同一个 tag 重跑"
+          fi
+          nums="$(jq -r --arg t "$TITLE" '.[] | select(.title == $t) | .number' <<<"$found")" || red "解析 issue 列表失败（fail-closed）"
+          n="$(grep -c . <<<"$nums" || true)"
+          [ "$n" -ge 1 ] || red "没有标题为「${TITLE}」的验收台账（出第一个 test 包时用 just release-scope --ledger <号> --pkg <test tag> 建；刚建的台账搜索可能有延迟，稍后重跑）"
+          [ "$n" -eq 1 ] || red "标题为「${TITLE}」的台账有 ${n} 张（#$(paste -sd ' ' - <<<"$nums" | sed 's/ / #/g')），一个版本只许一张"
+          echo "台账 #${nums}（${TITLE}），候选 ${GITHUB_SHA}"
+          out="${RUNNER_TEMP:-/tmp}/release-acceptance.txt"
+          bash tools/flow/release-acceptance.sh "$nums" "$GITHUB_SHA" >"$out" 2>&1
+          rc=$?
+          cat "$out"
+          if [ "$rc" -ne 0 ]; then
+            { printf '### 发版闸未通过（%s，台账 #%s）\n\n```\n' "$TAG" "$nums"; cat "$out"; printf '```\n'; } >>"$SUMMARY"
+            echo "::error::验收台账 #${nums} 没清零（退出码 ${rc}），不出正式版；待验项见上与 job 摘要"
+            exit 1
+          fi
 
       - name: Plan builds (#838)
         id: plan
