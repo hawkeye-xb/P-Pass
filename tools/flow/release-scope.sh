@@ -143,12 +143,15 @@ scene_of() {
   echo "$out"
 }
 
-# changed_since <验过的包> <新 ref> <PR>：PR 改过的文件在两者之间又被改过就打印这些文件；判不了打印「?」。
+# changed_since <验过的包> <新 ref> <PR>：PR 改过的文件在两者之间又被改过（内容有差异，或中间有提交碰过）就打印这些文件；判不了打印「?」。
 changed_since() {
   local from="$1" to="$2" pr="$3"
   { [ -n "$from" ] && commit_of "$from" >/dev/null; } || { echo "?"; return; }
-  git -c core.quotepath=false diff --name-only --no-renames "$from" "$to" >"${TMP}/moved" 2>/dev/null || { echo "?"; return; }
-  grep -Fxf "${TMP}/files/${pr}" "${TMP}/moved" | head -n 5
+  # 两头内容的差异 + 中间提交历史里碰过的文件（改了又改回也算「又被改动」，宁严勿松）。
+  { git -c core.quotepath=false diff --name-only --no-renames "$from" "$to" &&
+    git -c core.quotepath=false log --format= --name-only --no-renames "${from}..${to}"; } >"${TMP}/moved" 2>/dev/null ||
+    { echo "?"; return; }
+  sort -u "${TMP}/moved" | grep -Fxf "${TMP}/files/${pr}" | head -n 5
 }
 
 # 读台账：${TMP}/ledger-body（整份正文），${TMP}/items（块内每项一行原文），LEDGER_SINCE。
