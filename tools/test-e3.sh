@@ -440,6 +440,7 @@ STUB
   git -C "$E3_TAG_REPO" tag v2026.10.7
   [ "$(mac_tag_version v2026.10.7)" = 0.10.1 ] || { echo "正式 tag 的版本没取 versions.json 的 desktop：$(mac_tag_version v2026.10.7)"; exit 1; }
   [ "$(mac_tag_version v0.11.0-test.4)" = 0.11.0-test.4 ] || { echo "test tag 的版本不是 tag 名"; exit 1; }
+  [ "$(mac_tag_version v2026.10.7-test.1)" = 2026.10.7-test.1 ] || { echo "批次号前缀的 test tag 的版本不是 tag 名"; exit 1; }
   [ "$(mac_tag_version v0.10.1)" = 0.10.1 ] || { echo "批次制之前的 tag 的版本不是 tag 名"; exit 1; }
   mac_tag_version v2026.11.9 >/dev/null && { echo "本机没有的正式 tag 没判失败"; exit 1; }
   grep -q 'v2026.11.9' "$d/log" || { echo "取不到 tag 时没说明原因"; exit 1; }

@@ -141,12 +141,13 @@ mac_restore_snapshot() {
   log "已装回 ${want}"
 }
 # mac_tag_version <tag>：这个 release tag 装的桌面版本号。正式发版 tag 是批次号（vYYYY.M.N），与每端版本号是
-# 两条线（docs/RELEASING.md UPD-13），取仓库在该 tag 上的 release/versions.json 的 desktop；其余（test tag
-# v0.11.0-test.N、批次制之前的 v0.x.y）tag 名就是版本号。读不到 tag 或 versions.json 就失败并说明，不猜。
+# 两条线（docs/RELEASING.md UPD-13），取仓库在该 tag 上的 release/versions.json 的 desktop；其余（含 -test. 的
+# test tag，不论前缀是不是批次号；批次制之前的 v0.x.y）tag 名就是版本号。读不到 tag 或 versions.json 就失败并说明，不猜。
 # 读的是本检出的 git 仓库（E3_TAG_REPO 可改，自测用）。
 mac_tag_version() {
   local tag="$1" json v
   case "$tag" in
+    *-test.*) echo "${tag#v}"; return 0 ;; # 与 tools/release-version.sh 同口径：test tag 一律用 tag 名
     v[0-9][0-9][0-9][0-9].*) ;;
     *) echo "${tag#v}"; return 0 ;;
   esac
