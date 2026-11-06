@@ -529,15 +529,21 @@ start n *args:
 
 # 交卡（在卡 worktree 里跑）：范围核对 + 推送前自查（self-review.md）+ 门禁 + just verify（有则跑；代码没变复用上次结果），
 # 全绿才推送、每张卡贴回执，doing→review，单独一行打印开 PR 的命令（gh pr create …，closes 全部卡），由执行者自己运行；
-# 任何一步红：不推送、issue 写明停在哪、打 blocked。落后 main 只提示，有冲突才停。用户看得到的改动打印的是草稿 PR 命令
-# （--draft），验收后补验收行再 gh pr ready；已验收过可给 --accepted "<验收时间>"，打印正式 PR 命令。
+# 任何一步红：不推送、issue 写明停在哪、打 blocked。落后 main 只提示，有冲突才停。三级都打印正式 PR 命令；
+# 用户看得到的改动正文写「随版本验收」，不在 PR 上验收（#1471）。
 done *args:
     bash tools/flow/worker-done.sh {{args}}
 
-# 发版前的模块验收检查（#1452）：上一个正式 tag 之后合入、正文标了「随模块验收 #<模块卡>」的 PR，
-# 对应模块卡上都要有验收记录，缺一个就红并列出卡号。接进 release.yml 前由 owner 发版前手动跑。
-release-acceptance tag *args:
-    bash tools/flow/release-acceptance.sh {{tag}} {{args}}
+# 按版本验收（#1471）：从 git 算候选版相对上一个正式版、用户看得见的改动（PR + 级别 + 卡上的验收场景）。
+#   just release-scope [--since <tag>] [--to <ref>]                列范围（--since 给上个 test 包 = 数自上个包以来的用户可见 PR）
+#   just release-scope --ledger <台账号> --pkg <test 包 tag>        出新 test 包后更新台账：只新增待验与待重验，其余沿用
+release-scope *args:
+    bash tools/flow/release-scope.sh {{args}}
+
+# 发版前验收门禁（#1471）：台账里候选版的用户可见改动全部已验、验过之后相关文件没再改，才绿；有待验 / 待重验逐项列出。
+# 接进 release.yml 前由 owner 发版前手动跑。
+release-acceptance ledger *args:
+    bash tools/flow/release-acceptance.sh {{ledger}} {{args}}
 
 # 四种必须停下的情况的统一出口：命中核心 / 需改范围外文件 / 没有验收场景 / 连红 3 次。
 stuck n reason:

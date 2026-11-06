@@ -1,16 +1,14 @@
 #!/usr/bin/env bash
-# just done [--accepted "<时间>"]：在卡 worktree 里交卡。
+# just done：在卡 worktree 里交卡。
 #   核对改动只含范围内文件 → 推送前自查（证据目录里的 self-review.md，#1447）→ 门禁（按改动路径挑）
 #   → just verify <号>（命令存在才跑）→ 全绿才 git push → 在每张卡贴回执 → status:doing→status:review
 #   → 写好 PR 正文、单独一行打印开 PR 的命令（gh pr create …，由执行者自己运行；脚本不开 PR，见第 6 步）。
 # 代码没变就复用验证（#1423）：门禁与 verify 都通过时记下 HEAD 的树哈希与门禁清单；下次树与清单都没变，
 #   不重跑，回执写「复用 <时间> 的验证」。改任何一个字节（树变了）都重跑。
 # 多卡分支（just start <号> <号>…）：卡号读 git config branch.<分支>.ppasscards，范围取并集。
-# 用户看得到的改动（界面与文案路径、核心路径，口径同 owner-triage.sh）：开草稿 PR，
-# 正文写「待产品负责人真机验收」，CI 与评审并行跑；验收后补验收行再 gh pr ready。
-# 只改更新说明（release/notes/**，可带 CHANGELOG.md，#1448）：验收方式是文案确认，行写「产品负责人 <时间> 文案确认通过」。
-# 交卡时已验收过可给 --accepted "<时间>"：正文直接写对应的验收行，开正式 PR。
-# 合入前由 CI 的 acceptance gate 检查验收行（tools/flow/acceptance-gate.sh）。
+# 三级都开正式 PR（#1471 按版本验收）：用户看得到的改动（界面与文案路径、apps 下的非测试文件、看得见的核心、更新说明，
+# 口径见 acceptance-gate.sh classify）正文写一行「随版本验收」，合入不等真机验收，发版前由 just release-scope 的台账兜住；
+# 碰核心的正文写卡上引用的已采纳方案（CI 的 acceptance gate 判）。
 # 任何一步红：不推送，在 issue 写明停在哪并贴错误末尾，打 status:blocked，退出码非 0。
 # 前置不满足（不在卡 worktree、没提交、工作区不干净、与 main 冲突、没写自查）只报错退出，不打 blocked。
 # 分支落后 main 但没有冲突：只提示，照推（PR 上的 CI 测合并后的结果，main 保护不要求跟上最新，#1423）。
@@ -21,13 +19,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=worker-lib.sh
 . "${HERE}/worker-lib.sh"
 
-ACCEPTED=""
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --accepted) ACCEPTED="${2:-}"; shift 2 || shift ;;
-    *) die "用法: just done [--accepted \"<产品负责人验收通过的时间>\"]" ;;
-  esac
-done
+[ "$#" -eq 0 ] || die "用法: just done（#1471 起用户看得到的改动随版本验收，不再有 --accepted）"
 
 command -v gh >/dev/null 2>&1 || die "找不到 gh"
 TOP="$(git rev-parse --show-toplevel 2>/dev/null)" || die "不在 git 仓库里"
@@ -360,32 +352,22 @@ if [ "$VERIFY_STATE" = "passed" ]; then
 else
   LEVEL="E1（${GATE}）；验收场景未经 just verify 自动验证，E3 需手工补"
 fi
-# 用户看得到的改动：碰界面与文案路径或核心路径（判定口径与 owner-triage.sh 一致，见 acceptance-gate.sh）。
-# 这类改动开草稿 PR，验收与 CI、评审并行。只改更新说明（notes）的验收方式是文案确认（#1448）。
+# 级别（判定口径与 owner-triage.sh 一致，见 acceptance-gate.sh classify）：用户看得到的改动随版本验收（#1471），
+# 合入不要验收行；碰核心的（看得见或看不见）正文引用卡上已采纳的方案，看不见的还要带测试（acceptance gate 判）。
 KIND="$(printf '%s\n' "$FILES" | bash "${HERE}/acceptance-gate.sh" classify --repo "$TOP" --diff "$BRANCH_DIFF")"
-VISIBLE=0
-case "$KIND" in none | core-hidden) ;; *) VISIBLE=1 ;; esac
-CONFIRM="真机验收"
-[ "$KIND" != notes ] || CONFIRM="文案确认"
-# 验收记录的标准写法（#1452）：owner 判定之后写；旧写法「产品负责人 <时间> 真机验收通过」也认。
-RECORD_HINT="产品负责人 <日期 时间> 按 SOP <链接> 操作，owner 判日志通过"
-[ "$KIND" != notes ] || RECORD_HINT="产品负责人 <日期 时间> 文案确认通过"
 ACCEPT_LINE=""
 ADR_LINE=""
-DRAFT_ARGS=()
-if [ "$KIND" = core-hidden ]; then
-  # 核心但用户看不见（#1448）：不要验收行，正文引用卡上已采纳的方案，改动里要带测试（acceptance gate 判）。
-  ADRS="$(adopted_adrs "${CARD_TEXT:-}" | tr '\n' ' ' | sed 's/ $//')"
-  ACCEPT_LINE="核心改动、用户看不见：不要真机验收；合入要求正文引用已采纳方案并带测试"
-  ADR_LINE="采纳方案：${ADRS:-（卡上没有引用 origin/main 上已采纳的方案，acceptance gate 会红）}"
-elif [ "$VISIBLE" = 1 ] && [ -n "$ACCEPTED" ]; then
-  ACCEPT_LINE="产品负责人 ${ACCEPTED} ${CONFIRM}通过"
-elif [ "$VISIBLE" = 1 ]; then
-  ACCEPT_LINE="待产品负责人${CONFIRM}"
-  DRAFT_ARGS=(--draft)
-else
-  ACCEPT_LINE="用户看不到的改动（工具、测试、文档、内部代码），不需要真机验收"
-fi
+case "$KIND" in
+  core | core-hidden)
+    ADRS="$(adopted_adrs "${CARD_TEXT:-}" | tr '\n' ' ' | sed 's/ $//')"
+    ADR_LINE="采纳方案：${ADRS:-（卡上没有引用 origin/main 上已采纳的方案，acceptance gate 会红）}"
+    ;;
+esac
+case "$KIND" in
+  core-hidden) ACCEPT_LINE="核心改动、用户看不见：不进验收台账；合入要求正文引用已采纳方案并带测试" ;;
+  none) ACCEPT_LINE="用户看不到的改动（工具、测试、文档、内部代码），不需要真机验收" ;;
+  *) ACCEPT_LINE="随版本验收（${KIND} 级，用户看得见）：合入不等真机验收，发版前由 just release-scope 列进台账验完" ;;
+esac
 flow_ensure_review_label
 tmp="$(mktemp)"
 {
@@ -430,12 +412,11 @@ echo
 echo "✅ ${CARDS_SHOW} 已交卡：${BRANCH} 已推送，标签 → status:review，回执已贴。"
 echo "   证据等级：${LEVEL}"
 
-# ── 6. 打印开 PR 的命令（正文 closes 全部卡；用户看得到的改动带 --draft）──────────────
+# ── 6. 打印开 PR 的命令（正文 closes 全部卡）──────────────────────────────
 PR_URL="$(gh pr view "$BRANCH" -R "$REPO" --json url --jq .url 2>/dev/null)" || PR_URL=""
 if [ -n "$PR_URL" ]; then
   rm -f "$RECEIPT"
   echo "   PR 已存在：${PR_URL}（已推最新提交）"
-  [ "${#DRAFT_ARGS[@]}" -eq 0 ] || echo "   ${CONFIRM}后在 PR 正文补「${RECORD_HINT}」，再 gh pr ready。"
   exit 0
 fi
 if [ "$(git rev-list --count origin/main..HEAD)" = 1 ]; then
@@ -452,13 +433,7 @@ PR_BODY="${EVID_DIR}/pr-body.md"
 BODY_TEXT="$(
   for c in $CARDS; do echo "closes #${c}"; done
   echo
-  if [ "${#DRAFT_ARGS[@]}" -gt 0 ]; then
-    echo "- 真机验收：${ACCEPT_LINE}（草稿 PR；${CONFIRM}后在正文单独补一行「${RECORD_HINT}」，再 gh pr ready；整体模式写「随模块验收 #<模块卡>」）"
-  elif [ "$VISIBLE" = 1 ]; then
-    echo "$ACCEPT_LINE"
-  else
-    echo "- 真机验收：${ACCEPT_LINE}"
-  fi
+  echo "- 真机验收：${ACCEPT_LINE}"
   [ -z "$ADR_LINE" ] || echo "$ADR_LINE"
   sed -n '3,$p' "$RECEIPT" | grep -v '^- 真机验收：'
 )"
@@ -470,15 +445,11 @@ fi
 rm -f "$RECEIPT"
 sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 PR_CMD="gh pr create -R $(sq "$REPO") --base main --head $(sq "$BRANCH")"
-[ "${#DRAFT_ARGS[@]}" -eq 0 ] || PR_CMD="${PR_CMD} --draft"
 PR_CMD="${PR_CMD} --title $(sq "$PR_TITLE") --body-file $(sq "$PR_BODY")"
 echo "   开 PR：在本目录原样运行下面单独一行的命令（自己运行，单独执行，不接 cd … &&、不包进别的脚本；正文已写好，closes ${CARDS_SHOW}）："
 echo
 echo "${PR_CMD}"
 echo
-if [ "${#DRAFT_ARGS[@]}" -gt 0 ]; then
-  echo "   草稿 PR：CI 与评审照常并行跑。请产品负责人${CONFIRM}；通过后在正文补验收行，再 gh pr ready。"
-fi
 echo "   开完之后：本会话负责把这个 PR 推进到合入。外壳有 PR 监控的马上打开（Claude Desktop：set_monitor auto_fix，见 CLAUDE.md），"
 echo "     之后被唤醒再修，不手动盯 CI。CI 红、未解决的评审线程、冲突都算没过，修到全清："
 echo "     just pr-status <PR号> 列卡点；评审意见逐条判定，改了或不改都用 just pr-thread <线程ID> \"<理由>\" 回复并关闭。"
@@ -488,7 +459,7 @@ echo "     然后 just start <下一张卡的 issue号>。"
 # 查不到或不在里面就不开（否则 CI 一绿就合，绕过评审），交给 owner。
 REQ="$(gh api "repos/${REPO}/branches/main/protection/required_status_checks" --jq '.contexts[]' 2>/dev/null | tr -d '\r')" || REQ=""
 if printf '%s\n' "$REQ" | grep -qx 'review/agent'; then
-  echo "   自动合入：review/agent 已是必需检查，PR 开出后（草稿的话 gh pr ready 之后）开自动合入，评审与 CI 全过即合"
+  echo "   自动合入：review/agent 已是必需检查，PR 开出后就开自动合入，评审与 CI 全过即合"
   echo "   （参数顺序照写，与放行规则一致；单独执行）："
   echo
   echo "gh pr merge --auto --squash <PR号> --repo ${REPO}"

@@ -23,7 +23,7 @@ name: CI Docs
 on:
   # #1187：路径判定挪到 job 层（.github/actions/changes），本 lane 进必过项。
   # 下面每个 job 都是秒级、无编译；路径没碰到时只跑 changes 与 gate。
-  # #1422：edited / ready_for_review 让「改 PR 正文补验收行」「草稿转正式」重跑 acceptance gate。
+  # #1422：edited / ready_for_review 让「改 PR 正文补方案引用」「草稿转正式」重跑 acceptance gate（#1471 起合入不再要验收行）。
   # #1468：合入 main 后批量跑全量（含 Windows）。PR 上只跑快检，Windows 留到这里。
   # 同组同一时间只跑一次：正在跑的不取消（cancel-in-progress 对 push 为 false），
   # 排队只留最新（GitHub concurrency 原生行为：新来的替掉还在排队的）。
@@ -110,9 +110,9 @@ jobs:
             .github/actions/changes/**
             tools/ci-paths.sh
 
-  # #1422：盯梢、人控级先开草稿 PR，CI、评审与真机验收并行；验收由本 job 在合入前把关
-  # （用户看得到的改动要验收记录或「随模块验收 #<模块卡>」；只改更新说明的可用「文案确认通过」；
-  # 碰核心但用户看不见的要已采纳方案 + 测试。判定见 tools/flow/acceptance-gate.sh 头注释）。名字写死，不依赖路径判定。
+  # #1471 按版本验收：用户看得到的改动合入时不要验收行（发版前由 just release-scope 的台账清零兜住）；
+  # 本 job 只把核心的方案关：碰核心的要正文引用已采纳方案，看不见的核心还要带测试。
+  # 判定见 tools/flow/acceptance-gate.sh 头注释。名字写死，不依赖路径判定。
   acceptance-gate:
     name: acceptance gate
     if: ${{ github.event_name == 'pull_request' }}
@@ -125,8 +125,9 @@ jobs:
       - name: 判据测试
         run: |
           bash tools/test-acceptance-gate.sh
+          bash tools/test-release-scope.sh
           bash tools/test-release-acceptance.sh
-      - name: 验收行检查
+      - name: 核心方案检查
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
           BASE_REF: ${{ github.base_ref }}
