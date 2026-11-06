@@ -76,6 +76,94 @@ expect_lane "$SUT" rust-workspace true "#1066：iOS 低空间常量文件（宽 
 expect "$SUT" true "#1066：Android 低空间常量文件（默认 lane）" "$ANDROID_LOW"
 expect_lane "$SUT" rust-workspace false "#1066：同目录其他手机文件仍可跳" apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/flow/Other.kt
 
+# #1467：按依赖面补进的无害路径（两个 lane 都可跳）
+INERT_1467=(
+  tools/flow/worker-done.sh
+  tools/flow/review-prompt.md
+  tools/e3/verify
+  tools/hooks/pre-commit
+  tools/test-flow-worker.sh
+  tools/test-acceptance-gate.sh
+  tools/test-ci-review.sh
+  tools/test-e3.sh
+  tools/test-local-hooks.sh
+  tools/test-release-acceptance.sh
+  tools/ci-paths.sh
+  tools/test-ci-paths.sh
+  release/notes/android/0.11.0.zh.txt
+  .github/ISSUE_TEMPLATE/task.yml
+)
+for f in "${INERT_1467[@]}"; do
+  expect "$SUT" false "#1467：只改 $f"                      "$f"
+  expect_lane "$SUT" rust-workspace false "#1467：只改 $f（宽 lane）" "$f"
+done
+expect "$SUT" false "#1467：流程脚本 + 更新说明 + 文档混合"  tools/flow/a.sh release/notes/macos/1.0.0.en.txt docs/a.md
+expect "$SUT" true  "#1467：流程脚本 + crates 混合 → 要跑"    tools/flow/a.sh crates/daemon/src/lib.rs
+expect "$SUT" true  "#1467：release/ 下 notes 之外 → 要跑"   release/other.txt
+expect "$SUT" true  "#1467：判据脚本自身 → 要跑"             tools/ci-needs-full-lane.sh
+expect "$SUT" true  "#1467：fitness 登记表 → 要跑"           tools/egress-allowlist.txt
+expect "$SUT" true  "#1467：tools/ 下其他自测 → 要跑"        tools/test-check-egress.sh
+expect "$SUT" true  "#1467：.github/ 其它文件 → 要跑"        .github/actions/desktop-checks/action.yml
+# #1467：crates/diag 用 include_str! 读桌面 i18n 字典，宽 lane 不能当 apps/** 跳过
+DIAG_EN="apps/desktop/src/i18n/en.json"
+DIAG_ZH="apps/desktop/src/i18n/zh.json"
+expect_lane "$SUT" rust-workspace true "#1467：桌面 i18n en（diag 读，宽 lane 要跑）" "$DIAG_EN"
+expect_lane "$SUT" rust-workspace true "#1467：桌面 i18n zh（diag 读，宽 lane 要跑）" "$DIAG_ZH"
+expect_lane "$SUT" rust-workspace false "#1467：桌面其他前端文件仍可跳" apps/desktop/src/lib/x.ts
+
+echo
+echo "==> 1c. #1467：从源码派生的反向用例（被 gated job 读到的文件两个 lane 都必须判要跑）"
+REPO="$(cd "$HERE/.." && pwd)"
+DERIVED="$TMP/derived.txt"
+: >"$DERIVED"
+# ① crates/ 里 include_str!/include_bytes! 指向 crates/ 之外的目标（按所在文件解析相对路径）
+(cd "$REPO" && git grep -nE 'include_(str|bytes)!\("[^"]+"\)' -- 'crates/*.rs') |
+  python3 -c '
+import os, re, sys
+for line in sys.stdin:
+    path = line.split(":", 1)[0]
+    for t in re.findall(r"include_(?:str|bytes)!\(\"([^\"]+)\"\)", line):
+        p = os.path.normpath(os.path.join(os.path.dirname(path), t))
+        if not p.startswith("crates/") and not p.startswith(".."):
+            print(p)
+' >>"$DERIVED"
+# ② ci-rust.yml、ci-desktop.yml 及其 composite action 里引用的 tools/ 文件
+WF_FILES=("$REPO/.github/workflows/ci-rust.yml" "$REPO/.github/workflows/ci-desktop.yml")
+ACTIONS="$(grep -hoE 'uses: \./\.github/actions/[A-Za-z0-9_-]+' "${WF_FILES[@]}" | sed 's#uses: \./##' | sort -u)"
+while IFS= read -r a; do
+  [ -n "$a" ] || continue
+  WF_FILES+=("$REPO/$a/action.yml")
+  echo "$a/action.yml" >>"$DERIVED"
+done <<EOF2
+$ACTIONS
+EOF2
+grep -hoE 'tools/[A-Za-z0-9_./-]*[A-Za-z0-9_-]' "${WF_FILES[@]}" >>"$DERIVED"
+sort -u "$DERIVED" -o "$DERIVED"
+n="$(grep -c . "$DERIVED")"
+bad=0
+if [ "$n" -lt 10 ]; then
+  echo "  ❌ 派生出的文件只有 $n 个，提取逻辑可能失效（期望至少 10 个）"
+  bad=1
+fi
+grep -qx 'apps/desktop/src/i18n/en.json' "$DERIVED" || { echo "  ❌ 派生清单里没有 diag 读的桌面 i18n（提取逻辑失效）"; bad=1; }
+grep -qx 'tools/setup-rust-toolchain.sh' "$DERIVED" || { echo "  ❌ 派生清单里没有 setup-rust-toolchain.sh（提取逻辑失效）"; bad=1; }
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  for lane in default rust-workspace; do
+    got="$(decide "$SUT" "$lane" "$f")"
+    if [ "$got" != "true" ]; then
+      printf '  ❌ 「%s」被 gated job 读到，lane=%s 却判 %s\n' "$f" "$lane" "$got"
+      bad=1
+    fi
+  done
+done <"$DERIVED"
+if [ "$bad" -eq 0 ]; then
+  echo "  ✅ 派生出 $n 个被读文件，两个 lane 全部判要跑"
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+fi
+
 echo
 echo "==> 2. fail-closed 的命门：不认识的东西一律要跑"
 expect "$SUT" true  "**未知新目录**（清单里没有）"      newthing/x.rs
@@ -118,6 +206,8 @@ for spec in "docs/a.md" "infra/x.md" ".claude/s.json" "README.md" \
             "apps/x.kt" "apps/desktop/src-tauri/src/lib.rs" \
             "crates/a.rs" "Cargo.lock" "assets/i18n/en.json" \
             "tools/arch-check.sh" ".github/workflows/ci-rust.yml" "newthing/x.rs" \
+            "tools/flow/a.sh" "release/notes/x.txt" ".github/ISSUE_TEMPLATE/t.yml" \
+            "apps/desktop/src/i18n/en.json" \
             "" ; do
   a="$(decide "$SUT" default $spec)"
   h="$(decide "$SUT" rust-workspace $spec)"
@@ -127,7 +217,7 @@ for spec in "docs/a.md" "infra/x.md" ".claude/s.json" "README.md" \
   fi
 done
 if [ "$INCL_OK" -eq 1 ]; then
-  echo "  ✅ 13 组输入全部满足 run_heavy=true ⇒ run_arch=true"
+  echo "  ✅ 17 组输入全部满足 run_heavy=true ⇒ run_arch=true"
   PASS=$((PASS + 1))
 else
   FAIL=$((FAIL + 1))
@@ -203,6 +293,57 @@ else
     PASS=$((PASS + 1))
   else
     echo "  ❌ 变异后只有 $gained/2 条变红 ⇒ 断言判别力不足，必须修"
+    FAIL=$((before + 1))
+  fi
+fi
+
+echo
+echo "==> 7c. 变异反证丁（#1467）：去掉新补的无害条目，「可跳」断言必须变红"
+MUT4="$TMP/mutated4.sh"
+grep -v '^    tools/flow/\* | tools/e3/\*\|^    release/notes/\*) return 0\|^    tools/test-flow-\*' "$SUT" >"$MUT4"
+if [ "$(wc -l <"$SUT")" -ne "$(( $(wc -l <"$MUT4") + 3 ))" ]; then
+  echo "  ❌ 变异没生效（锚点没匹配上 3 行）—— 这一节等于没跑，判失败"
+  FAIL=$((FAIL + 1))
+else
+  before=$FAIL
+  expect "$MUT4" false "【变异后应失败】只改 tools/flow"        tools/flow/worker-done.sh
+  expect "$MUT4" false "【变异后应失败】只改 release/notes"     release/notes/android/0.11.0.zh.txt
+  expect "$MUT4" false "【变异后应失败】只改 tools/test-flow-*" tools/test-flow-worker.sh
+  gained=$((FAIL - before))
+  if [ "$gained" -eq 3 ]; then
+    echo "  ✅ 三条断言在变异后全部变红 ⇒ 新清单真的在起作用，不是恒假式"
+    FAIL=$((FAIL - 3))
+    PASS=$((PASS + 1))
+  else
+    echo "  ❌ 变异后只有 $gained/3 条变红 ⇒ 断言判别力不足，必须修"
+    FAIL=$((before + 1))
+  fi
+fi
+
+echo
+echo "==> 7d. 变异反证戊（#1467）：去掉桌面 i18n 的登记，宽 lane 断言与派生断言都必须变红"
+MUT5="$TMP/mutated5.sh"
+grep -v 'apps/desktop/src/i18n/zh.json) return 1' "$SUT" >"$MUT5"
+if cmp -s "$SUT" "$MUT5"; then
+  echo "  ❌ 变异没生效（锚点没匹配上）—— 这一节等于没跑，判失败"
+  FAIL=$((FAIL + 1))
+else
+  before=$FAIL
+  expect_lane "$MUT5" rust-workspace true "【变异后应失败】桌面 i18n en" "$DIAG_EN"
+  expect_lane "$MUT5" rust-workspace true "【变异后应失败】桌面 i18n zh" "$DIAG_ZH"
+  dgot="$(decide "$MUT5" rust-workspace "$DIAG_EN")"
+  if [ "$dgot" = "false" ] && grep -qx "$DIAG_EN" "$DERIVED"; then
+    derived_red=1
+  else
+    derived_red=0
+  fi
+  gained=$((FAIL - before))
+  if [ "$gained" -eq 2 ] && [ "$derived_red" -eq 1 ]; then
+    echo "  ✅ 两条断言变红，派生清单同样会抓到 ⇒ 登记与派生都在起作用"
+    FAIL=$((FAIL - 2))
+    PASS=$((PASS + 1))
+  else
+    echo "  ❌ 变异后 $gained/2 条变红、派生是否抓到=$derived_red ⇒ 判别力不足，必须修"
     FAIL=$((before + 1))
   fi
 fi

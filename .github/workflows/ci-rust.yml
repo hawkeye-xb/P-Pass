@@ -73,7 +73,8 @@ jobs:
   #
   # 判据本身在 tools/ci-needs-full-lane.sh，口径是 **allowlist 不是
   # blocklist**：只有每个改动文件都落在无害清单里才判可跳过，任何不确定
-  # 都判要跑。它有变异测试（tools/test-ci-needs-full-lane.sh）。
+  # 都判要跑。它有变异测试（tools/test-ci-needs-full-lane.sh）。无害清单按
+  # 依赖面定（#1467：文档、流程脚本、更新说明等），完整清单见脚本 is_inert。
   #
   # ⚠️ 两个 workflow 各有一份这个 job（workflow 之间不能共享 output）。
   # 改判据只改 tools/ 里那个脚本，这里两处只是调用。
@@ -117,7 +118,7 @@ jobs:
           fi
           base="${{ github.event.pull_request.base.sha }}"
           # 两个 lane 各算一次（判据同一个脚本，无害清单不同）。
-          #   run_arch  ← 默认 lane：docs/ .claude/ *.md 才算惰性。
+          #   run_arch  ← 默认 lane：docs/ .claude/ *.md、流程脚本、更新说明等才算惰性（见 is_inert）。
           #               给 architecture enforcement 用 —— arch-check.sh 扫 apps/**。
           #   run_heavy ← rust-workspace lane：额外把 apps/** 也算惰性。
           #               给只碰主 workspace 的那五条用。

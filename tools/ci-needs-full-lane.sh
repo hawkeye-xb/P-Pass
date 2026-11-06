@@ -29,7 +29,8 @@
 #
 # 所以判定按**依赖面**分成两个 lane，各自独立算、各自保持 allowlist 反向写法：
 #
-#   （默认）        无害清单 = { docs/ .claude/ *.md }
+#   （默认）        无害清单 = { docs/ .claude/ *.md tools/flow/ release/notes/ … }
+#                   （完整清单见 is_inert）
 #                   给「会读 apps/ 的门禁」用：ci-rust 的 arch，以及
 #                   ci-desktop 的两条 job（它们就是编 apps/desktop 的）。
 #                   **语义与本卡之前完全一致**，所以 ci-desktop.yml 不用改。
@@ -43,8 +44,9 @@
 #     ADR-012；单向依赖 crates/platform 与 crates/version-cmp），不在根
 #     Cargo.toml 的 members 里 ⇒ `cargo nextest` / `clippy` / `cargo deny` /
 #     `cargo fmt --all` 编译不到它；
-#   - `grep -rn "apps/" crates/ --include="*.rs"` 的命中**全是注释**，
-#     `include_str!` / `fs::read` / `File::open` 指向 apps/ 的**一条都没有**；
+#   - `grep -rn "apps/" crates/ --include="*.rs"`：`include_str!` / `fs::read` 指向
+#     apps/ 的只有 #1066 的两个手机端常量文件与 #1467 的桌面 i18n 字典
+#     （crates/diag/src/lib.rs），它们在 is_inert 里单独登记成「要跑」；
 #   - `crates/daemon/build.rs` 只读 `PPF_BUILD_VERSION` 环境变量，不碰路径。
 #   - ⚠️ 方向别看反：daemon 的 `--version --json`（`cli::VERSION_PRODUCT`）是
 #     契约，src-tauri 的 `daemon_cli::DAEMON_PRODUCT` 消费它，那是**反向**依赖。
@@ -73,6 +75,20 @@ set -uo pipefail
 #                          （core-index/src/ingest.rs 里有一句注释提到 docs
 #                            路径，不是读取）
 #   *.md                   任何位置的 markdown 都不参与编译
+# 2026-11-06（#1467）按依赖面补进两个 lane 共用的清单：
+#   tools/flow/ tools/e3/ tools/hooks/   流程、真机验收、本地钩子脚本
+#   上述目录的自测 tools/test-{flow-*,acceptance-gate,ci-review,e3,local-hooks,release-acceptance}.sh
+#   tools/ci-paths.sh 与其自测             只被 android/ios/docs/core-review lane 与流程脚本调用
+#   release/notes/                         应用内更新说明（由 ci-docs 的 release/** 路径负责）
+#   .github/ISSUE_TEMPLATE/                issue 模板
+#   核实：git grep 这些路径于 crates/ apps/desktop/ config/ .github/actions/
+#   ci-rust.yml ci-desktop.yml 无命中；arch-check.sh 写明 tools/** 不扫；
+#   fitness 检查的 SCAN_ROOTS 只有 crates/ apps/ config/（tools/fitness_lib.py）。
+#   兜底仍是「要跑」：判据脚本自身、tools/*.txt 登记表、fitness / arch 的脚本与自测、
+#   setup-rust-toolchain.sh 等 gated job 调用的脚本都不在清单里。
+#   tools/test-ci-needs-full-lane.sh 从源码派生反向用例：crates/ 里每个 include_str!/
+#   include_bytes! 指向 crates/ 之外的目标，以及 ci-rust.yml、ci-desktop.yml 与其
+#   composite action 里引用的 tools/ 脚本，两个 lane 都必须判「要跑」。
 # ⚠️ 往这里加东西之前先问：有没有测试/构建脚本会读它？读了就不能加。
 # ⚠️ assets/i18n/** 被 diag 的 keys 测试消费，**绝不能**加进来。
 is_inert() {
@@ -88,8 +104,18 @@ is_inert() {
     # 都判「要跑」。新增「Rust 测试读取 apps/ 下某文件」时，同样要把该文件登记在这里。
     apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/flow/FlowContract.kt) return 1 ;;
     apps/ios/Packages/PPassCore/Sources/PPassCore/Flow/FlowTypes.swift) return 1 ;;
+    # #1467：crates/diag/src/lib.rs 用 include_str! 读桌面 i18n 字典做键对账，
+    # 只改它时宽 lane 也必须跑（原先被 apps/* 静默跳过）。必须排在 apps/* 之前。
+    apps/desktop/src/i18n/en.json | apps/desktop/src/i18n/zh.json) return 1 ;;
     docs/* | .claude/*) return 0 ;;
     *.md) return 0 ;;
+    # #1467：流程与发布说明，两个 lane 都惰性（核实依据见上方清单注释）。
+    tools/flow/* | tools/e3/* | tools/hooks/*) return 0 ;;
+    tools/test-flow-*.sh | tools/test-acceptance-gate.sh | tools/test-ci-review.sh) return 0 ;;
+    tools/test-e3.sh | tools/test-local-hooks.sh | tools/test-release-acceptance.sh) return 0 ;;
+    tools/ci-paths.sh | tools/test-ci-paths.sh) return 0 ;;
+    release/notes/*) return 0 ;;
+    .github/ISSUE_TEMPLATE/*) return 0 ;;
   esac
   # 宽 lane 额外把 apps/** 也算惰性。依据见文件头「两个 lane」那段 ——
   # 往这里加东西之前先证明它对**该 lane 的每一条 job** 都是惰性的。
