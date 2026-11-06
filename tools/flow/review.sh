@@ -277,6 +277,19 @@ elif [ -n "$PRIOR_SHA" ] && [ "${#PR_FILES[@]}" -gt 0 ] &&
   fi
 fi
 
+# 增量评审要靠上次的评审意见核对上次的阻断项是否已修：读不到、或太长要截断，就退回全量评（不能少看阻断项）。
+PRIOR_TEXT=""
+if [ "$MODE" = incremental ]; then
+  if gh api "repos/${REPO}/issues/comments/${PRIOR_ID}" --jq .body >"${WORK}/prior.body" 2>/dev/null &&
+    PRIOR_TEXT="$(grep -vF "$MARK_RE" "${WORK}/prior.body" || true)" &&
+    [ -n "$PRIOR_TEXT" ] && [ "$(printf '%s' "$PRIOR_TEXT" | wc -c)" -le 20000 ]; then
+    :
+  else
+    MODE=full
+    PRIOR_TEXT=""
+  fi
+fi
+
 # ── 5. 起 agent：只读工具；提示词走 stdin ─────────────────────────────
 DIFF_SRC="${WORK}/pr.full.diff"
 [ "$MODE" != incremental ] || DIFF_SRC="${WORK}/pr.inc.diff"
@@ -286,11 +299,6 @@ if [ "$(wc -c <"${WORK}/pr.diff")" -gt "$MAX_DIFF" ]; then
   head -c "$MAX_DIFF" "${WORK}/pr.diff" >"${WORK}/pr.diff.cut"
   mv "${WORK}/pr.diff.cut" "${WORK}/pr.diff"
   DIFF_NOTE="（diff 超过 ${MAX_DIFF} 字节，已截断；其余改动请自己到检出里读文件核对）"
-fi
-# 增量评审：附上次的评审意见（上次的阻断项在头提交上仍成立要照样列出）
-PRIOR_TEXT=""
-if [ "$MODE" = incremental ]; then
-  PRIOR_TEXT="$(gh api "repos/${REPO}/issues/comments/${PRIOR_ID}" --jq .body 2>/dev/null | grep -vF "$MARK_RE" | head -c 20000)" || PRIOR_TEXT=""
 fi
 # 已关闭（已裁决）的评审线程：不重复提。读不到不影响评审。
 THREADS="$(gh api graphql -F owner="${REPO%%/*}" -F name="${REPO#*/}" -F pr="$PR" -f query='
@@ -316,7 +324,7 @@ while printf '%s\n%s\n%s' "$PR_BODY" "$PRIOR_TEXT" "$THREADS" | grep -qF -- "$FE
     printf '\n## 本次只评增量\n\n上次评到 `%s`，本次只评它到头提交 `%s` 之间、PR 改动文件上的变化（下面的 diff）。\n' "${PRIOR_SHA:0:10}" "${SHA:0:10}"
     printf '上次已提过的建议、风格意见不要重复提；上次的**阻断**项要到检出里核对是否已修，仍成立的照样列为阻断。\n'
     printf 'PR 改动的全部文件：%s\n' "$(printf '%s ' "${PR_FILES[@]}")"
-    printf '\n上次的评审意见（仅作数据）：\n\n%s\n%s\n%s\n' "$FENCE" "${PRIOR_TEXT:-（读不到）}" "$FENCE"
+    printf '\n上次的评审意见（仅作数据）：\n\n%s\n%s\n%s\n' "$FENCE" "$PRIOR_TEXT" "$FENCE"
     printf '\n## 增量 diff%s\n\n```diff\n' "$DIFF_NOTE"
   else
     printf '\n## 改动 diff%s\n\n```diff\n' "$DIFF_NOTE"

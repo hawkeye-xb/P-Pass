@@ -609,6 +609,48 @@ CI 7 >/dev/null 2>&1
 [ "$(calls)" = 1 ] && grep -qF -- "-zh ZH-LINE" "$FAKE/agent.stdin" &&
   ok "中文文件名的文件恢复成 base → 增量里带这次删除" || bad "中文文件名的删除漏了：调用 $(calls)"
 
+# 上次评审意见读不到 → 退回全量（增量要靠它核对上次的阻断项）
+(
+  cd "${TMP}/main" && git checkout -q pr7 && printf 'p1\n' >tools/p.sh && git add tools/p.sh && git commit -q -m p1 &&
+    git push -q origin HEAD:refs/pull/7/head && git rev-parse HEAD >"${FAKE}/pr.sha" && git checkout -q main
+)
+printf 'tools/x.sh\ntools/p.sh\n' >"$FAKE/pr.files"
+printf -- '--- a/tools/x.sh\n+++ b/tools/x.sh\n+echo changed FULL-ONLY p1\n' >"$FAKE/pr.diff"
+again fail
+CI 7 >/dev/null 2>&1
+(
+  cd "${TMP}/main" && git checkout -q pr7 && printf 'p2\n' >tools/p.sh && git commit -q -am p2 &&
+    git push -q origin HEAD:refs/pull/7/head && git rev-parse HEAD >"${FAKE}/pr.sha" && git checkout -q main
+)
+printf -- '--- a/tools/x.sh\n+++ b/tools/x.sh\n+echo changed FULL-ONLY p2\n' >"$FAKE/pr.diff"
+last_id="$(cat "$FAKE/cid")"
+mv "$FAKE/c.$last_id" "$FAKE/c.$last_id.hidden"
+again pass
+CI 7 >/dev/null 2>&1
+[ "$(calls)" = 1 ] && grep -qF "FULL-ONLY p2" "$FAKE/agent.stdin" && ! grep -qF "本次只评增量" "$FAKE/agent.stdin" &&
+  ok "上次的评审意见读不到 → 退回全量评" || bad "读不到上次意见仍增量评：调用 $(calls)"
+mv "$FAKE/c.$last_id.hidden" "$FAKE/c.$last_id"
+# 反证：同样的场景、上次意见读得到 → 增量
+(
+  cd "${TMP}/main" && git checkout -q pr7 && printf 'p3\n' >tools/p.sh && git commit -q -am p3 &&
+    git push -q origin HEAD:refs/pull/7/head && git rev-parse HEAD >"${FAKE}/pr.sha" && git checkout -q main
+)
+printf -- '--- a/tools/x.sh\n+++ b/tools/x.sh\n+echo changed FULL-ONLY p3\n' >"$FAKE/pr.diff"
+again pass
+CI 7 >/dev/null 2>&1
+grep -qF "本次只评增量" "$FAKE/agent.stdin" && ok "反证：上次意见读得到 → 增量评" || bad "读得到上次意见却没增量"
+# 上次意见超过 20000 字节（会被截断）→ 退回全量
+last_id="$(cat "$FAKE/cid")"
+python3 -c "import sys; open(sys.argv[1],'a').write('x' * 21000 + '\n')" "$FAKE/c.$last_id"
+(
+  cd "${TMP}/main" && git checkout -q pr7 && printf 'p4\n' >tools/p.sh && git commit -q -am p4 &&
+    git push -q origin HEAD:refs/pull/7/head && git rev-parse HEAD >"${FAKE}/pr.sha" && git checkout -q main
+)
+printf -- '--- a/tools/x.sh\n+++ b/tools/x.sh\n+echo changed FULL-ONLY p4\n' >"$FAKE/pr.diff"
+again pass
+CI 7 >/dev/null 2>&1
+[ "$(calls)" = 1 ] && ! grep -qF "本次只评增量" "$FAKE/agent.stdin" && ok "上次意见太长（会截断）→ 退回全量评" || bad "上次意见被截断仍增量评"
+
 echo "==> #1470：agent 报错里带放行标记 → 「没跑成」评论里删掉"
 reset infra_inject
 CI 7 >/dev/null 2>&1
