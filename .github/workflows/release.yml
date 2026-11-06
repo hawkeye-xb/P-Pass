@@ -1422,7 +1422,7 @@ jobs:
         run: tools/release/verify-published.sh "$TAG" manifest-android.json
 
       # #872：test tag 的 release 保持 draft（只当构建记录）——客户端从滚动的 test-channel
-      # 下载，安装包随清单一起进 test-channel（point-test-channel.sh：先传包、再写清单、后清旧包）。
+      # 下载，安装包随清单一起进 test-channel（point-test-channel.sh：只传包、写清单；旧包由 cleanup-test-channel 统一收敛）。
       # 正式 tag 同样保持 draft，等人工 publish。
       # REL-07: test 通道指针——把本次**已组装/签名**的 manifest.json 原样
       # 覆盖进固定的滚动 prerelease `test-channel`（逻辑在 tools/release/point-test-channel.sh，
@@ -1727,7 +1727,7 @@ jobs:
 
   # iOS 的 test-channel 基线（#348）：TestFlight 上传成功后，往 test-channel 写 manifest-ios.json
   # （只有 version、没有安装包）——plan-builds 下一次 test tag 据此判 iOS「自上一次发布以来变没变」。
-  # 与其它端的清单同一条机制（point-test-channel.sh：不回拨、清理旧版本）。正式 tag 不写：
+  # 与其它端的清单同一条机制（point-test-channel.sh：不回拨、只写；收敛由 cleanup-test-channel 统一做）。正式 tag 不写：
   # 正式 tag 的 iOS 基线是 Latest 那个 tag 里的 release/versions.json.ios（见 plan-builds.sh）。
   finalize-ios:
     name: "记录 iOS test 基线（#348）"
@@ -1752,6 +1752,46 @@ jobs:
           mkdir -p artifacts
           jq -n --arg v "$IOS_VERSION" '{version: $v, platforms: {}}' > artifacts/manifest-ios.json
           tools/release/point-test-channel.sh artifacts/manifest-ios.json
+
+  # ── test-channel 收敛（#1546）：所有写入完成后只跑一次 ─────────────────
+  # 四个 writer（upload-android / finalize-manifest / finalize-manifest-windows / finalize-ios）
+  # 并行写同一个 test-channel；各自清理会删到对方刚枚举出来的资产（2026-11-06 run 42210867452）。
+  # 清理统一收到这里：单点、串行、幂等，只在上传/指向全部结束后跑一次。
+  #
+  # 失败语义（docs/decisions/2026-11-06-release-test-channel-single-writer.md）：
+  #   - 任一 writer 失败 ⇒ 本 job 不跑，整轮仍因那个 writer 红（fail-closed 不变）；
+  #   - 本 job 的脚本失败 ⇒ 打 warning、步骤退出 0；checkout / runner 的基础设施失败由 job 级
+  #     continue-on-error 兜住。收敛失败只影响占盘，此时包已可下载，不判整轮 Release 红。
+  #   - 非 test tag ⇒ 脚本自己退出 0，不碰 test-channel。
+  cleanup-test-channel:
+    name: "收敛 test-channel（清理旧包与旧草稿）"
+    needs: [create-draft, upload-android, finalize-manifest, finalize-manifest-windows, finalize-ios]
+    # 逐项判 != 'failure' 而不是 !failure()：被判 skip 的端（#852 按端发布）是正常情况，
+    # 不能让收敛整段不跑；任一 writer 真失败时本 job 跳过，失败不会被一次成功的清理盖住。
+    if: ${{ !cancelled() && needs.create-draft.result == 'success' && needs.upload-android.result != 'failure' && needs.finalize-manifest.result != 'failure' && needs.finalize-manifest-windows.result != 'failure' && needs.finalize-ios.result != 'failure' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.create-draft.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.BUILD_REF }}
+
+      - name: 收敛 test-channel（失败只告警，不判红）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          if tools/release/cleanup-test-channel.sh; then
+            echo "test-channel 收敛完成"
+          else
+            rc=$?
+            echo "::warning::test-channel 收敛失败（退出码 ${rc}）：安装包与清单已上传、客户端可下载；本次只影响占盘，不判本轮 Release 红"
+          fi
 
   # ── 收口：补签名状态 + 资产 sha256（晚到不拖任何资产） ──
   finalize-notes:

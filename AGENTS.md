@@ -166,7 +166,7 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
   - **定稿后、推分支前**：只跑改动涉及的测试，跑一次（`just done` 按改动路径挑，见下）。提交前钩子随时拦格式与范围。
   - **PR 上**：CI 只跑与改动相关的快检（Windows 不在 PR 上跑），是合入门禁。
   - **合入 main 后**：CI 全量（含 Windows）批量跑：同一时间一次、正在跑的不取消、排队只留最新；main 红了只修或回滚元凶 PR，main 不冻结。
-  - **发版前**：Release 再验证一遍（桌面壳只跑 Windows；Linux 桌面检查只在 PR/main 跑，见 [CI lane](docs/runbook/ci-lanes.md)），只从全绿提交切 tag。
+  - **发版前**：Release 再验证一遍（桌面壳只跑 Windows；Linux 桌面检查已随 #1555 永久移除，见 [CI lane](docs/runbook/ci-lanes.md)），只从全绿提交切 tag。
 - `just done` 依次：核对范围 → 推送前自查 → 门禁（按改动路径挑：安卓 `just android-test`、iOS `just ios-test`、文案/i18n `just mobile-static-check`、
   桌面前端 `pnpm -C apps/desktop test`、Rust crate（含桌面 `apps/desktop/src-tauri`）对应 crate 的 `cargo nextest run -p`、纯文档 `just ci-docs`；
   有一个文件挑不出来才退回全量 `just ci`）→ 推分支 → 在 issue 贴回执（分支、提交、门禁与验收输出末尾、证据等级、证据目录、自查结论）。
@@ -269,7 +269,7 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
   | agent 自己干、无人在场 | 改一处跑一处相关测试（自查的手段） |
   | 定稿后、推送前 | 改动涉及的测试跑一次；界面文案在中英两种语言下都跑 |
   | PR 上 | CI 跑与改动相关的快检（不含 Windows），合入门槛 |
-  | 合入 main 后 | CI 全量（含 Windows）批量跑，不挡合入；发版前 Release 再验证（桌面壳只跑 Windows；Linux 桌面检查只在 PR/main） |
+  | 合入 main 后 | CI 全量（含 Windows）批量跑，不挡合入；发版前 Release 再验证（桌面壳只跑 Windows；Linux 桌面检查已永久移除） |
 
 - **设备归属**：一台设备同一时间只归一个主人。产品负责人验收或结对时归他，agent 要用先问；他不在时归 owner 分配。
   用完还原（挪走的照片挪回、模拟器关掉）。开工探测在线设备，不写死。

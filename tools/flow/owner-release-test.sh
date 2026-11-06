@@ -204,14 +204,34 @@ fi
 step "触发发版 ${TAG}"
 # #1349：发版唯一入口 = 手动触发 release.yml（release=true）。tag 由流程在发版前验证全绿后才建，
 # 这里不推 tag。触发在一条临时分支上（指向本次判定用的 origin/main 提交），这样发版前验证检出的
-# 就是这个提交，期间 main 前进了也不影响；跑完删掉这条分支。
+# 就是这个提交，期间 main 前进了也不影响。临时分支只在 run 结论 success 后删；失败 / 取消 / 超时
+# 一律保留，否则 owner 重跑时 create-draft 的守卫会报「已从 … 前进到 （不存在）」。
 RC_BRANCH="release-run/${TAG}"
 if ! git push origin "${MAIN}:refs/heads/${RC_BRANCH}" >"${OUT}/push.log" 2>&1; then
   die_stuck "推送临时分支 ${RC_BRANCH} 失败（远端没有它，可修好后重跑）" --log "${OUT}/push.log"
 fi
-cleanup_branch() { git push origin --delete "$RC_BRANCH" >/dev/null 2>&1 || true; }
+cleanup_branch() {
+  if git push origin --delete "$RC_BRANCH" >/dev/null 2>&1; then
+    okmsg "已删除临时触发分支 ${RC_BRANCH}（Release run success）"
+  else
+    say "临时触发分支 ${RC_BRANCH} 没删掉；确认不要了用 git push origin --delete ${RC_BRANCH}"
+  fi
+}
+keep_branch_hint() {
+  say "临时触发分支 ${RC_BRANCH} 保留（指向 ${MAIN:0:10}）：重跑在这条分支上触发 release.yml，或重跑本次 run 的失败 job；确认不要了用 git push origin --delete ${RC_BRANCH}"
+}
+branch_runs() { # 这条临时分支上已有的 workflow_dispatch run ID（每行一个；stderr 由调用方处理）
+  gh run list -R "$REPO" --workflow release.yml --event workflow_dispatch --limit 30 \
+    --json databaseId,headBranch --jq ".[] | select(.headBranch == \"${RC_BRANCH}\") | .databaseId"
+}
+# 同一 tag 重试时分支上还挂着上一次的 run：先记下来，等待时排除，只认本次 dispatch 产生的 run。
+# 查不到就停（fail closed）：不知道哪些是旧 run 时继续 dispatch，可能把旧 run 当成本次的。
+if ! old_runs="$(branch_runs 2>"${OUT}/runs.log" | tr '\n' ' ')"; then
+  keep_branch_hint
+  die_stuck "读不到临时分支 ${RC_BRANCH} 上已有的 Release run，判定不了哪些是本次触发的，先不触发发版" --log "${OUT}/runs.log"
+fi
 if ! gh workflow run release.yml -R "$REPO" --ref "$RC_BRANCH" -f "tag=${TAG}" -f release=true >"${OUT}/dispatch.log" 2>&1; then
-  cleanup_branch
+  keep_branch_hint
   die_stuck "触发 release.yml（tag=${TAG}）失败，没有建任何 tag" --log "${OUT}/dispatch.log"
 fi
 
@@ -219,22 +239,30 @@ step "等 Release workflow"
 run=""
 waited=0
 while [ "$waited" -le "$RUN_WAIT" ]; do
-  run="$(gh run list -R "$REPO" --workflow release.yml --event workflow_dispatch --limit 30 \
-    --json databaseId,headBranch --jq ".[] | select(.headBranch == \"${RC_BRANCH}\") | .databaseId" 2>/dev/null | head -1)"
+  run=""
+  while IFS= read -r rid; do
+    [ -n "$rid" ] || continue
+    case " ${old_runs} " in *" ${rid} "*) continue ;; esac
+    run="$rid"
+    break
+  done <<EOF
+$(branch_runs 2>/dev/null)
+EOF
   [ -n "$run" ] && break
   sleep 5
   waited=$((waited + 5))
 done
-[ -n "$run" ] || { cleanup_branch; die_stuck "触发 ${TAG} 后 ${RUN_WAIT}s 没等到 Release run，判定不了"; }
+[ -n "$run" ] || { keep_branch_hint; die_stuck "触发 ${TAG} 后 ${RUN_WAIT}s 没等到 Release run，判定不了"; }
 okmsg "Release run ${run}"
 bash "${REPO_ROOT}/tools/release/with-timeout.sh" "gh run watch ${run}" "$TIMEOUT" 1 -- \
   gh run watch "$run" -R "$REPO" --exit-status --interval 60 >"${OUT}/watch.log" 2>&1
-cleanup_branch
 concl="$(gh run view "$run" -R "$REPO" --json conclusion --jq .conclusion 2>/dev/null)"
 if [ "$concl" != success ]; then
+  keep_branch_hint
   gh run view "$run" -R "$REPO" --log-failed 2>&1 | tail -n 120 >"${OUT}/failed.log"
   die_stuck "Release ${TAG}（run ${run}）结论 ${concl:-未出}，test 包没发出来。若发版前验证就红了，没有建 tag，同一个版本号可直接重试；若 tag 已建（构建阶段红），tag 保留不动，修好后下一次用 -test.$((N + 1))" --log "${OUT}/failed.log"
 fi
+cleanup_branch
 
 step "核对 test-channel 分端清单"
 for e in "${ENDS[@]}"; do
