@@ -389,9 +389,10 @@ verify-m1:
 
 # 本地真机验证（E3，V1/V2）：按改动路径判定涉及的端，构建候选、装到真机跑冒烟 + issue「验收场景」点名的场景，
 # 证据写 evidence/（不进 git），最后一行 VERIFY PASS|FAIL。写场景、读结果见 docs/runbook/e3.md。
-#   just verify 1234            交卡前（V1）
+#   just verify 1234            卡上写明需要真机验证时
 #   just verify --smoke android 只跑某端冒烟
 #   just verify --all           全量场景库（V2，合批前）
+# 卡上写明需要真机验证时才跑。
 verify *args:
     tools/e3/verify {{args}}
 
@@ -545,10 +546,11 @@ test-dogfood-assets:
 start n *args:
     bash tools/flow/worker-start.sh {{n}} {{args}}
 
-# 交卡（在卡 worktree 里跑）：范围核对 + 推送前自查（self-review.md）+ 门禁 + just verify（有则跑；代码没变复用上次结果），
+# 交卡（在卡 worktree 里跑）：范围核对 + 推送前自查（self-review.md）+ 门禁。卡上写明「真机验证：需要」才跑 just verify（代码没变复用上次结果），
 # 全绿才推送、每张卡贴回执，doing→review，单独一行打印开 PR 的命令（gh pr create …，closes 全部卡），由执行者自己运行；
 # 任何一步红：不推送、issue 写明停在哪、打 blocked。落后 main 只提示，有冲突才停。三级都打印正式 PR 命令；
 # 用户看得到的改动正文写「随版本验收」，不在 PR 上验收（#1471）。
+# 卡上写明「真机验证：需要」才跑真机验证，不默认跑。
 done *args:
     bash tools/flow/worker-done.sh {{args}}
 
