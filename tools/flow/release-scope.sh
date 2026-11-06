@@ -4,6 +4,7 @@
 #   release-scope.sh [--since <tag>] [--to <ref>]
 #       列出验收范围：<since>..<to>（默认：<to> 往前最近的正式 tag .. origin/main）里 squash 合入的 PR，
 #       逐个用 acceptance-gate.sh classify（带该提交的 diff）判级，ui / core / notes 进范围，每项带关联卡的「验收场景」。
+#       没有 PR 号、却改了用户看得见文件的提交进不了台账，直接红；起点不是 <to> 的祖先也红。
 #       --since 可给任何 tag（例如上一个 test 包，数「自上个 test 包以来用户可见 PR 数」）。
 #   release-scope.sh --ledger <台账 issue 号> --pkg <test 包 tag> [--since <tag>] [--dry-run]
 #       出新 test 包时更新台账（每个版本一张 issue，标题「[验收] v<版本>」，清单只存在 issue 里）：
@@ -97,6 +98,11 @@ compute_scope() {
     printf '✗ 当前是浅克隆（或判不了），历史可能不全，算不出完整的验收范围；先 git fetch --unshallow --tags 再跑\n' >&2
     exit 1
   fi
+  # 起点要是候选版的祖先（上一个正式版在这条线上），since..to 才是「候选版相对起点新增的提交」。
+  git merge-base --is-ancestor "$since" "$to" 2>/dev/null || {
+    printf '✗ 起点 %s 不是 %s 的祖先，算不出候选版相对它的范围（起点要填候选版之前的正式版）\n' "$since" "$to" >&2
+    exit 1
+  }
   mkdir -p "${TMP}/files"
   : >"${TMP}/scope"
   : >"${TMP}/allprs"
@@ -104,17 +110,27 @@ compute_scope() {
     printf '✗ git log %s..%s 失败：%s\n' "$since" "$to" "$(head -3 "${TMP}/err" | tr '\n' ' ')" >&2
     exit 1
   }
+  local key
   while IFS=' ' read -r sha subj; do
-    # 本仓 squash 合入，提交标题末尾是「(#<PR号>)」；没有 PR 号的提交不算 PR。
-    pr="$(printf '%s\n' "$subj" | sed -n -E 's/.*\(#([0-9]+)\)[[:space:]]*$/\1/p')"
-    [ -n "$pr" ] || continue
+    # PR 号：squash 合入的标题末尾「(#<PR号>)」，或早年普通合并的「Merge pull request #<PR号> from …」。
+    pr="$(printf '%s\n' "$subj" | sed -n -E -e 's/^Merge pull request #([0-9]+) .*/\1/p' -e 's/.*\(#([0-9]+)\)[[:space:]]*$/\1/p' | head -n 1)"
+    key="${pr:-${sha:0:12}}"
+    # 文件与 diff 一律对第一父提交取：squash 提交与合并提交都是「这次合入带进主线的改动」。
+    git -c core.quotepath=false diff --name-only --no-renames "${sha}^1" "$sha" >"${TMP}/files/${key}" 2>/dev/null ||
+      { printf '✗ 读不到提交 %s 的改动文件\n' "${sha:0:12}" >&2; mark_fail; continue; }
+    git -c core.quotepath=false diff --no-color --no-renames --no-ext-diff --no-textconv \
+      --src-prefix=a/ --dst-prefix=b/ "${sha}^1" "$sha" >"${TMP}/diff" 2>/dev/null ||
+      { printf '✗ 读不到提交 %s 的 diff\n' "${sha:0:12}" >&2; mark_fail; continue; }
+    kind="$(bash "${HERE}/acceptance-gate.sh" classify --diff "${TMP}/diff" <"${TMP}/files/${key}" 2>/dev/null)"
+    if [ -z "$pr" ]; then
+      # 没有 PR 号的提交（直接推到主线）：用户看不见的放过；看得见的进不了按 PR 记的台账，拒绝（fail-closed）。
+      case "$kind" in
+        none | core-hidden) ;;
+        *) printf '✗ 提交 %s 没有 PR 号、改了用户看得见的文件（%s），进不了台账：%s\n' "${sha:0:12}" "${kind:-判不了}" "$subj" >&2; mark_fail ;;
+      esac
+      continue
+    fi
     echo "$pr" >>"${TMP}/allprs"
-    git -c core.quotepath=false diff-tree -r --no-commit-id --name-only --no-renames "$sha" >"${TMP}/files/${pr}" 2>/dev/null ||
-      { printf '✗ 读不到 PR #%s 的改动文件（%s）\n' "$pr" "$sha" >&2; mark_fail; continue; }
-    git -c core.quotepath=false show --format= --no-color --no-renames --no-ext-diff --no-textconv \
-      --src-prefix=a/ --dst-prefix=b/ "$sha" >"${TMP}/diff" 2>/dev/null ||
-      { printf '✗ 读不到 PR #%s 的 diff（%s）\n' "$pr" "$sha" >&2; mark_fail; continue; }
-    kind="$(bash "${HERE}/acceptance-gate.sh" classify --diff "${TMP}/diff" <"${TMP}/files/${pr}" 2>/dev/null)"
     case "$kind" in
       ui | core | notes) echo "$pr $kind" >>"${TMP}/scope" ;;
       none | core-hidden) ;;

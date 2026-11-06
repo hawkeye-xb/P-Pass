@@ -81,14 +81,22 @@ chmod +x "${TMP}/bin/gh"
   echo 2 >tools/a.sh && c "chore: 工具二 (#27)"
   git tag v1.1.0-test.2
   echo 1 >apps/desktop/src/Late.svelte && echo 3 >apps/desktop/src/Other.svelte && c "feat: 晚到的界面 (#28)"
+  # 之后（只给「列范围」的边界用例）：没有 PR 号、只改文档 → test.3 → 早年普通合并「Merge pull request #29」改界面 → test.4
+  # → 没有 PR 号、直接推的界面改动
+  mkdir -p docs && echo 1 >docs/y.md && c "docs: 直接推的文档"
+  git tag v1.1.0-test.3
+  git switch -q -c side && echo 1 >apps/desktop/src/M.svelte && c "feat: 合并分支上的界面"
+  git switch -q main && git -c core.hooksPath=/dev/null merge -q --no-ff --no-verify -m "Merge pull request #29 from o/side" side
+  git tag v1.1.0-test.4
+  echo 1 >apps/desktop/src/D.svelte && c "fix: 直接推的界面改动"
   git update-ref refs/remotes/origin/main HEAD
 ) || { echo "造临时仓库失败"; exit 1; }
 
 reset_fake() {
   rm -f "${FAKE}"/pr/* "${FAKE}"/issue/*
-  for n in 21 22 23 24 26 27 28; do printf 'closes #%s\n' "$((n + 100))" >"${FAKE}/pr/${n}.body"; done
+  for n in 21 22 23 24 26 27 28 29; do printf 'closes #%s\n' "$((n + 100))" >"${FAKE}/pr/${n}.body"; done
   printf '改了设置页，没关联卡\n' >"${FAKE}/pr/25.body"
-  for n in 121 122 123 124 126 127 128; do printf '卡 %s\n\n**范围**：\n```\nx\n```\n\n**验收场景**：\nE3 场景%s 第一行\n第二行 a|b\n\n**是否核心**：否\n' "$n" "$n" >"${FAKE}/issue/${n}.body"; done
+  for n in 121 122 123 124 126 127 128 129; do printf '卡 %s\n\n**范围**：\n```\nx\n```\n\n**验收场景**：\nE3 场景%s 第一行\n第二行 a|b\n\n**是否核心**：否\n' "$n" "$n" >"${FAKE}/issue/${n}.body"; done
   printf '[验收] v1.1.0 台账\n\n人写的说明保留\n' >"${FAKE}/issue/500.body"
 }
 
@@ -126,6 +134,14 @@ run 1 "gh 读 PR #21 失败 → 红（范围可能不全，fail-closed）" --sin
 has "读不到 PR #21" && ok "  说明读不到哪个 PR" || bad "  没说明：$(cat "${TMP}/out")"
 rm -f "${FAKE}/pr/21.fail"
 run 2 "ref 不存在 → 退出 2" --to no-such-ref
+run 0 "没有 PR 号、只改文档的提交 → 不算 PR，放过" --since v1.1.0-test.2 --to v1.1.0-test.3
+has "1 个 PR 里 1 个用户看得见" && ok "  只数到 #28" || bad "  计数不对：$(head -1 "${TMP}/out")"
+run 0 "早年普通合并「Merge pull request #29 from …」→ 认出 PR 号" --since v1.1.0-test.3 --to v1.1.0-test.4
+has "- #29 ui | 场景：#129：" && ok "  #29 进范围（文件对第一父提交取，合并分支上的界面改动算进来）" || bad "  #29 没认出：$(cat "${TMP}/out")"
+run 1 "没有 PR 号、改了界面的提交 → 进不了台账，红（fail-closed）" --since v1.1.0-test.4 --to origin/main
+has "没有 PR 号、改了用户看得见的文件" && ok "  点名这个提交" || bad "  没点名：$(cat "${TMP}/out")"
+run 1 "起点不是候选版的祖先 → 红" --since v1.1.0-test.2 --to v1.1.0-test.1
+has "不是 v1.1.0-test.1 的祖先" && ok "  说明起点不在候选版这条线上" || bad "  没说明：$(cat "${TMP}/out")"
 
 echo "── 第一个 test 包：建台账"
 reset_fake
