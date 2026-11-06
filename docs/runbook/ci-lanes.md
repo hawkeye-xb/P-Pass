@@ -14,15 +14,20 @@ job 名必须写死**。理由和细节在这里。
      因为排队会替掉中间的 push）。`concurrency` 的 group 带事件名，`cancel-in-progress` 只对 push 为 false：
      同一时间只跑一次、正在跑的不取消、排队只留最新（GitHub concurrency 原生行为）。
      main 红了不冻结、不挡其他合入，只修或回滚元凶 PR。
-  3. **发版前验证**：Release 用 `workflow_call` 调这五条 lane（事件是 `workflow_dispatch`）。
+  3. **发版前验证**：Release 用 `workflow_call` 调这五条 lane（调用方事件是 `workflow_dispatch`）。
      `desktop-linux`（检查名 `desktop (ubuntu-latest)`）在发版调用时跳过——P-Pass 不发 Linux 安装包，
      Release 只是对同一份提交重复跑 main 已经跑过的检查；PR 与 push 到 main 照跑。桌面 lane 的
      `desktop-windows`（检查名 `desktop (windows-latest)`）照跑，其余四层全跑；恢复条件与到期日见卡 #1536。
      只从全绿提交切 tag。
+    > ⚠️ 可复用 workflow 里 `github.event_name` 是**调用方**的事件，不是 `workflow_call`
+    > （实测 Release run 的「发版前验证 · Android / changes」日志打的是 `事件 workflow_dispatch`）。
+    > 判「发版调用」用 `workflow_call.inputs.release_call`（`type: boolean` / `default: true`）+
+    > job 的 `if: ... && !inputs.release_call`；不要用 `github.event_name != 'workflow_call'`。
   - 第 1、2 层的不变量（三个 Windows job 在 PR 上跳过、五条 lane 有 `push: branches: [main]`、push 上
     `cancel-in-progress` 为 false）由 `tools/test-ci-lane-invariants.sh`（`just ci-lane-invariants-test`，在 `flow-tests` 里）判红；
-    第 3 层的桌面发版跳过（`desktop-linux` 的 `if:` 同时含 `!cancelled()`、`github.event_name != 'workflow_call'`、
-    `needs.changes.outputs.run_heavy != 'false'`，且 `desktop-windows` 与 `CI Desktop gate` 不变）也由同一脚本判红。
+    第 3 层的桌面发版跳过（`release_call` 的 `type: boolean` / `default: true`、`desktop-linux` 的 `if:` 同时含
+    `!cancelled()`、`!inputs.release_call`、`needs.changes.outputs.run_heavy != 'false'`，且 `desktop-windows`
+    与 `CI Desktop gate` 不变）也由同一脚本判红。
 - **推分支不触发 CI**：`push` 限定 `branches: [main]`，只有合入才算。本地快验：
   纯文档 `just ci-docs`，动了代码 `just ci`。
 - **PR 上按路径判跑哪些 job**，分两档：
@@ -49,8 +54,9 @@ job 名必须写死**。理由和细节在这里。
 `just gate-status` 报三块：停用中的 workflow 及各自的关联卡、发版调用时被 job 级 `if:`
 跳过的门禁及各自的关联卡、main 的必需检查清单；读不出来时一律 fail-closed（不当作「没有停用项」）。
 关联卡**只认标题**——正文里顺口提到 `CI Review` 的卡不算这扇门的账。
-发版跳过的检测只认 `github.event_name != 'workflow_call'`（跳过发版），
-不认 `== 'workflow_call'`（只在发版跑，不是停用）；测试用 `GATE_STATUS_WORKFLOW_DIR` 注入假 workflow 目录。
+发版跳过的检测认本仓约定的 `!inputs.release_call`，也认旧写法 `github.event_name != 'workflow_call'`
+（它在可复用 workflow 里不成立，但同样表示想跳过发版）；只跑发版（`inputs.release_call` 不带 `!`、
+`github.event_name == 'workflow_call'`）不算停用。测试用 `GATE_STATUS_WORKFLOW_DIR` 注入假 workflow 目录。
 
 ## `tools/ci-needs-full-lane.sh` 的判据
 

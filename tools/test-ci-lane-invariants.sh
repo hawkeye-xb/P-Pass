@@ -9,15 +9,19 @@
 #      开头、整式不许出现 `||`（顶层合取项，PR 上 job 层跳过、汇报 skipped）；且 test (windows)、clippy (windows)、
 #      desktop (windows-latest) 三个名字写死的 job 必须都在（防删 job 后断言落空还报绿）。
 #   4. #1535：`ci-desktop.yml` 的 desktop-linux（必需检查名 `desktop (ubuntu-latest)`）在 Release 的
-#      `workflow_call` 下跳过，但 PR 与 push 到 main 照跑；`if:` 必须同时含 `!cancelled()`、
-#      `github.event_name != 'workflow_call'`、`needs.changes.outputs.run_heavy != 'false'`，整式不许出现 `||`。
+#      `workflow_call` 调用下跳过，但 PR 与 push 到 main 照跑。可复用 workflow 里 `github.event_name`
+#      是**调用方**的事件（Release 是 workflow_dispatch），不是 `workflow_call`；所以用
+#      `workflow_call.inputs.release_call`（type boolean / default true）+ `if:` 里的
+#      `!inputs.release_call` 识别，且 `if:` 必须同时含 `!cancelled()`、
+#      `needs.changes.outputs.run_heavy != 'false'`，整式不许出现 `||`。
 #      `desktop-windows` 的跳过条件与 `CI Desktop gate` 的 `name: / if: always()` 也在断言里（一个字不能改）。
 # YAML 1.1 把键 `on` 读成布尔 True，取触发表按 d.get('on', d.get(True)) 两头都认。
 # 缺 PyYAML 一律判红（exit 1），不 SKIP。
 # 反证：在临时目录里复制 workflows 造变异（去掉 Windows job 的 pull_request 条件 / 某条 lane 的 cancel-in-progress
 # 改 true / 删掉某条 lane 的 push 触发 / push.branches 改成别的分支 / 删掉一个 Windows job /
-# 去掉 desktop-linux 的 workflow_call 跳过、去掉 !cancelled()、改成 fail-open、删掉 desktop-linux job、
-# 去掉 gate 的 if: always()），每种都必须判红；原样必须判绿。
+# 去掉 desktop-linux 的 !inputs.release_call、把 release_call 默认改成 false、改用 event_name、
+# 去掉 !cancelled()、改成 fail-open、删掉 desktop-linux job、去掉 gate 的 if: always()），
+# 每种都必须判红；原样必须判绿。
 #
 # 用法: tools/test-ci-lane-invariants.sh
 # 退出码: 0 全过 / 1 有失败
@@ -49,9 +53,10 @@ DESKTOP_GATE_NAME = "CI Desktop gate"
 # #1535：发版调用（workflow_call）跳过 Linux，PR/main 照跑；fail-closed 口径三项缺一不可。
 DESKTOP_LINUX_IF = (
     "!cancelled()",
-    "github.event_name != 'workflow_call'",
+    "!inputs.release_call",
     "needs.changes.outputs.run_heavy != 'false'",
 )
+DESKTOP_RELEASE_INPUT = "release_call"
 bad = []
 seen_win = set()
 
@@ -93,6 +98,13 @@ for lane in LANES:
 
     # #1535：desktop-linux 只在 workflow_call（发版调用）跳过，PR/main 照跑；桌面 Windows 与 gate 不动。
     if lane == "ci-desktop.yml":
+        call = on.get("workflow_call") if isinstance(on, dict) else None
+        call_inputs = call.get("inputs") if isinstance(call, dict) else None
+        rel = call_inputs.get(DESKTOP_RELEASE_INPUT) if isinstance(call_inputs, dict) else None
+        if not isinstance(rel, dict) or rel.get("type") != "boolean" or rel.get("default") is not True:
+            bad.append(
+                f"ci-desktop.yml: workflow_call.inputs.{DESKTOP_RELEASE_INPUT} 必须是 type: boolean / default: true，实为 {rel!r}"
+            )
         linux = jobs.get("desktop-linux")
         if not isinstance(linux, dict):
             bad.append("ci-desktop.yml: 缺 desktop-linux job（desktop (ubuntu-latest) 是必需检查）")
@@ -177,8 +189,12 @@ mutant "ci-android 删掉 push 触发" ci-android.yml \
   "/^  push:\$/,/^    branches: \\[main\\]\$/d"
 mutant "ci-rust 的 push.branches 改成 develop" ci-rust.yml \
   "/^  push:\$/,/^    branches:/ s/branches: \\[main\\]/branches: [develop]/"
-mutant "desktop (ubuntu-latest) 去掉 workflow_call 跳过条件（发版又跑 Linux）" ci-desktop.yml \
-  "/name: desktop \\(ubuntu-latest\\)/,/runs-on/ s/ github\\.event_name != 'workflow_call' &&//"
+mutant "desktop (ubuntu-latest) 去掉 !inputs.release_call（发版又跑 Linux）" ci-desktop.yml \
+  "/name: desktop \\(ubuntu-latest\\)/,/runs-on/ s/!inputs\\.release_call && //"
+mutant "release_call 默认改成 false（发版又跑 Linux）" ci-desktop.yml \
+  "/^      release_call:/,/^        default:/ s/default: true/default: false/"
+mutant "desktop (ubuntu-latest) 改用 github.event_name != 'workflow_call'（可复用 workflow 里不成立）" ci-desktop.yml \
+  "/name: desktop \\(ubuntu-latest\\)/,/runs-on/ s/!inputs\\.release_call/github.event_name != 'workflow_call'/"
 mutant "desktop (ubuntu-latest) 去掉 !cancelled()（fail-open）" ci-desktop.yml \
   "/name: desktop \\(ubuntu-latest\\)/,/runs-on/ s/!cancelled\\(\\) && //"
 mutant "desktop (ubuntu-latest) 改成 == 'true'（fail-open）" ci-desktop.yml \

@@ -46,7 +46,10 @@ if ! wf_list="$(gh api "repos/${REPO}/actions/workflows?per_page=100" \
 fi
 
 # 发版调用（workflow_call）时被 job 级 if: 跳过的门禁。按 workflow 的 name: 找账。
-# 只认 `github.event_name != 'workflow_call'`（跳过发版）；`== 'workflow_call'`（只跑发版）不是停用。
+# 本仓约定用 `!inputs.release_call`（可复用 workflow 的 input 默认 true；见 #1535）：
+# 可复用 workflow 里 `github.event_name` 是调用方的事件，不是 workflow_call。
+# 也认 `github.event_name != 'workflow_call'` 的旧写法——它在可复用 workflow 里不成立，
+# 但同样表示「想跳过发版」，要留账。
 release_skipped=""
 release_skip_err=""
 if [ -d "${WORKFLOW_DIR}" ]; then
@@ -54,7 +57,7 @@ if [ -d "${WORKFLOW_DIR}" ]; then
 import os, re, sys
 
 root = sys.argv[1]
-skip = re.compile(r"github\.event_name\s*!=\s*'workflow_call'")
+skip = re.compile(r"!inputs\.release_call\b|github\.event_name\s*!=\s*'workflow_call'")
 rows = []
 for fn in sorted(os.listdir(root)):
     if not fn.endswith((".yml", ".yaml")):

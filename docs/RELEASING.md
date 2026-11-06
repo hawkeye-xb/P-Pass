@@ -561,7 +561,8 @@ Android 靠 `channelFromVersion()` 读注入的版本串（含 `-test.` 即 test
 - `ci-desktop.yml`（apps/desktop/** assets/**）→ src-tauri lib tests + vite build。
   #1535：发版前验证（`workflow_call`）只跳过 `desktop (ubuntu-latest)`（P-Pass 不发 Linux 安装包，
   Release 只是对同一份提交重复跑 main 已经跑过的检查）；PR 与 push 到 main 照跑，`desktop (windows-latest)`
-  在发版调用时照跑。恢复条件与到期日见卡 #1536。
+  在发版调用时照跑。用 `workflow_call.inputs.release_call` 默认 true 识别发版调用
+  （可复用 workflow 里 `github.event_name` 是调用方事件，不是 `workflow_call`）。恢复条件与到期日见卡 #1536。
 - 每个 workflow 带 `concurrency`。#1468 起五条 lane（rust / desktop / android / ios / docs）的 group 带事件名，
   `cancel-in-progress` 只对 push 到 main 为 false（正在跑的全量不取消、排队只留最新），其余事件照旧取消旧 run；
   由 `tools/test-ci-lane-invariants.sh` 判红。
