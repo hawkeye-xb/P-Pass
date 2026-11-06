@@ -32,7 +32,18 @@ on:
   pull_request:
     branches: [main]
   # #1187：发版前由 release.yml 以全量模式调用（changes 对非 pull_request 事件恒定全跑）。
+  # #1535：可复用 workflow 里 `github.event_name` 是**调用方**的事件，不是 `workflow_call`
+  # （release.yml 用 workflow_dispatch 触发；实测 run 42210867452 的「发版前验证 · Android /
+  # changes」日志打的是「事件 workflow_dispatch」）。所以用 workflow_call 的 input 默认值
+  # 识别发版调用：Release 不传 with: 时 release_call 取 true，跳过 desktop-linux；
+  # PR / push 不走 workflow_call，inputs 为空，`!inputs.release_call` 为 true，照跑。
+  # 其它调用方要 Linux 就显式传 `release_call: false`。
   workflow_call:
+    inputs:
+      release_call:
+        description: "发版前验证调用（#1535）：跳过 Linux 桌面检查；其它调用方要 Linux 就传 false"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -127,10 +138,18 @@ jobs:
   # 正是本仓这一轮在修的 fail-open。写成 `!= 'false'` 则失败时照跑。
   # `!cancelled()` 是状态函数，它让本 job 在 changes 失败时**仍然执行**
   # （否则 needs 的隐式 success() 会把它跳掉，又回到 fail-open）。
+  #
+  # #1535（产品负责人 2026-11-06 拍板「要不就别跑Linux了」）：Linux 桌面包不在
+  # 发版范围里，Release 只是对同一份提交重复跑 main 已经跑过的检查。
+  # `workflow_call.inputs.release_call` 默认 true（见上），发版调用时跳过本 job；
+  # PR 与 push 到 main 不走 workflow_call，inputs 为空，照旧跑。必需检查
+  # `desktop (ubuntu-latest)` 与 fail-closed 口径都不变。桌面 Windows 端照跑。
+  # 暂停的恢复条件与到期日见卡 #1536；恢复时连同 tools/test-ci-lane-invariants.sh
+  # 与文档一起改回。
   desktop-linux:
     name: desktop (ubuntu-latest)
     needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
+    if: ${{ !cancelled() && !inputs.release_call && needs.changes.outputs.run_heavy != 'false' }}
     runs-on: ubuntu-latest
     # 实测 1m11s。#240 为了迁就 Windows 把两边一起提到 45，现在拆开了，
     # Linux 这边回到 CI-01 原本的 30。

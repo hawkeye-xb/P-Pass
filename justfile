@@ -593,7 +593,8 @@ pr-thread id reply:
 flow-pr-test:
     @bash tools/test-flow-pr.sh
 
-# 门的状态：被手动停用的 workflow、main 的必需检查，以及每个停用项有没有标题带它名字的卡。
+# 门的状态：被手动停用的 workflow、发版调用（workflow_call）时被跳过的 job、main 的必需检查，
+# 以及每个停用项有没有标题带 workflow 名字的卡。
 # 停了没卡就红（退出码 1）——停用 workflow 是仓库设置动作，不进 git，只有这条命令会把这件事照出来。
 gate-status:
     bash tools/flow/gate-status.sh

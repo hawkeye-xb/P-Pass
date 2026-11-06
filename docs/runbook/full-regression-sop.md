@@ -34,7 +34,7 @@
 
 全部满足才开跑，任一不满足就停下，报告写明原因。
 
-- [ ] 候选 tag 的 Release run 结论 success。#1187 起它包含发版前全量验证（本次要构建的各端 CI + E2E），任一条红都建不出 Release，所以不必再逐条查 CI。
+- [ ] 候选 tag 的 Release run 结论 success。#1187 起它包含发版前验证（本次要构建的各端 CI + E2E；桌面壳只跑 Windows，Linux 桌面检查只在 PR/main，见 #1535），任一条红都建不出 Release，所以不必再逐条查 CI。
 - [ ] 候选 Release 资产齐全：Android APK、macOS dmg 与 app.tar.gz、`SHA256SUMS-macos-arm64`、三份 manifest。
 - [ ] 目标里程碑没有未关闭的阻塞卡。
 - [ ] `test-channel` 指针已指向候选 tag（`gh release download test-channel -p manifest.json -O -` 的 `version` 等于候选版本）。
