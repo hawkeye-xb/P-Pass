@@ -2,6 +2,7 @@
 # #1486 发版闸的测试（方案 docs/decisions/2026-11-06-release-acceptance-gate.md）：按 step 名从 release.yml 抽出
 # 「发版闸：验收台账清零（#1486）」，在临时仓库里用假 gh 跑五种情况：
 #   台账全勾 → 过；有一项没勾 → 红；没有台账 → 红；同名台账两张 → 红；test tag → 不查。
+# 测试自己注入 TAG / GITHUB_SHA 等，所以另外逐字核对 step 的 if 与 env（TAG、GH_TOKEN、PPASS_HOOK_REPO），关掉或断了入参都红。
 # 另查位置与权限：它在 plan-builds 里、在「发版入口守卫（#1349）」之后、「Plan builds (#838)」之前（所有构建 job 都 needs plan-builds），
 # plan-builds 有 issues: read、pull-requests: read。
 # 反证（脚本自带）：把这一步的判定去掉（run 换成只打印），未勾 / 无台账 / 同名两张三条必须转绿——证明它们的红来自这一步。
@@ -37,8 +38,14 @@ for k in ("issues", "pull-requests"):
     if perms.get(k) not in ("read", "write"):
         sys.exit(f"plan-builds 缺 permissions {k}: read")
 step = job["steps"][i]
-if "inputs.release" not in str(step.get("if", "")):
-    sys.exit("发版闸要带 inputs.release 条件（只在发版时跑）")
+# 条件与入参逐字核对：改成 !inputs.release、丢了 TAG（空 TAG 会走「test 包不查」直接放行）都要红。
+if str(step.get("if", "")).strip() != "${{ inputs.release }}":
+    sys.exit(f"发版闸的 if 要恰为 ${{{{ inputs.release }}}}（现在：{step.get('if')!r}）")
+want_env = {"TAG": "${{ inputs.tag }}", "GH_TOKEN": "${{ github.token }}", "PPASS_HOOK_REPO": "${{ github.repository }}"}
+env = step.get("env") or {}
+for k, v in want_env.items():
+    if str(env.get(k, "")).strip() != v:
+        sys.exit(f"发版闸的 env.{k} 要恰为 {v}（现在：{env.get(k)!r}）")
 run = step["run"]
 if mutate == "1":
     run = 'echo "（反证：判定已去掉）"\n'
@@ -46,7 +53,7 @@ open(out, "w").write(run)
 PY
 }
 if extract "${TMP}/gate.sh" 0 2>"${TMP}/err"; then
-  ok "plan-builds 里有「${STEP_NAME}」，位置在入口守卫之后、Plan builds 之前，带 inputs.release 条件，有 issues / pull-requests 读权限"
+  ok "plan-builds 里有「${STEP_NAME}」，位置在入口守卫之后、Plan builds 之前，if 与 env 逐字正确，有 issues / pull-requests 读权限"
 else
   bad "抽不到发版闸：$(cat "${TMP}/err")"
   echo
