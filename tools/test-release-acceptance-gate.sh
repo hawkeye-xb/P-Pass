@@ -97,6 +97,8 @@ case "$1 $2" in
     args=" $* "
     [[ "$args" == *" --state all "* ]] || { echo "stub gh: issue list 没带 --state all：$*" >&2; exit 3; }
     [[ "$args" == *"--search ${TAG} in:title"* ]] || { echo "stub gh: issue list 没按 tag 搜标题：$*" >&2; exit 3; }
+    # 上限判定按 100 判：--limit 必须恰为 100（删掉会落回 gh 默认 30 条，截断却不判红）。
+    [[ "$args" == *" --limit 100 "* ]] || { echo "stub gh: issue list 的 --limit 不是 100：$*" >&2; exit 3; }
     [ -e "${FAKE}/list.fail" ] && { echo "HTTP 502: stub failure" >&2; exit 1; }
     cat "${FAKE}/list.json" ;;
   "issue view")
