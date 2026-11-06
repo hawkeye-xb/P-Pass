@@ -25,10 +25,50 @@
 		children?: Snippet;
 	} = $props();
 
+	/* WAI-ARIA 模态对话框：打开时焦点进弹窗（第一个可聚焦元素，没有就聚焦面板本身）、
+	   Tab / Shift+Tab 在弹窗内循环、关闭后焦点回到打开前的元素（已不在 DOM 就跳过）。 */
+	const FOCUSABLE =
+		'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+	let panel: HTMLElement | undefined = $state();
+
+	function focusables(): HTMLElement[] {
+		return panel ? Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE)) : [];
+	}
+
+	$effect(() => {
+		if (!open || !panel) return;
+		const opener = document.activeElement as HTMLElement | null;
+		(focusables()[0] ?? panel).focus();
+		return () => {
+			if (opener && opener.isConnected) opener.focus();
+		};
+	});
+
 	function onKeydown(e: KeyboardEvent) {
-		if (open && onClose && e.key === "Escape") {
+		if (!open) return;
+		if (onClose && e.key === "Escape") {
 			e.preventDefault();
 			onClose();
+			return;
+		}
+		if (e.key !== "Tab" || !panel) return;
+		const items = focusables();
+		if (items.length === 0) {
+			e.preventDefault();
+			panel.focus();
+			return;
+		}
+		const first = items[0];
+		const last = items[items.length - 1];
+		const active = document.activeElement;
+		const outside = !panel.contains(active) || active === panel;
+		if (e.shiftKey && (active === first || outside)) {
+			e.preventDefault();
+			last.focus();
+		} else if (!e.shiftKey && (active === last || outside)) {
+			e.preventDefault();
+			first.focus();
 		}
 	}
 </script>
@@ -41,10 +81,12 @@
 		onclick={onClose}
 	>
 		<div
+			bind:this={panel}
 			role="dialog"
 			aria-modal="true"
+			tabindex="-1"
 			class={cn(
-				"relative w-[420px] max-w-[92vw] rounded-xl bg-paper px-[30px] pt-[26px] pb-[22px] text-center shadow-[0_18px_50px_rgba(0,0,0,0.28)]",
+				"relative outline-none w-[420px] max-w-[92vw] rounded-xl bg-paper px-[30px] pt-[26px] pb-[22px] text-center shadow-[0_18px_50px_rgba(0,0,0,0.28)]",
 				className,
 			)}
 			onclick={(e) => e.stopPropagation()}
