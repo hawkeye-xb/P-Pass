@@ -443,7 +443,13 @@ case "$DECISION" in
     [ "$CORE" = false ] || gh issue edit "$N" -R "$REPO" --add-label core >/dev/null
     [ "$USED_OWNER" = 0 ] && [ "$USED_STANDARD" = 0 ] ||
       gh issue edit "$N" -R "$REPO" --add-label decided:owner >/dev/null || die_stuck "给 #${N} 打 decided:owner 失败"
+    had_needs=0
+    has_label needs:product && had_needs=1
     set_status "$N" status:ready || die_stuck "把 #${N} 换成 status:ready 失败"
+    # 重跑分拣时，旧的「等产品拍板」不能和 ready / decided:owner 叠在一起（#1551）。
+    if [ "$had_needs" = 1 ]; then
+      gh issue edit "$N" -R "$REPO" --remove-label needs:product >/dev/null || die_stuck "摘掉 #${N} 的 needs:product 失败"
+    fi
     ;;
 esac
 printf 'TRIAGE %s %s\nPRIORITY %s P%s\n' "$N" "$DECISION" "$N" "$PRIO"
