@@ -91,7 +91,9 @@ set -uo pipefail
 #   composite action 里引用的 tools/ 脚本，两个 lane 都必须判「要跑」。
 # ⚠️ 往这里加东西之前先问：有没有测试/构建脚本会读它？读了就不能加。
 # ⚠️ assets/i18n/** 被 diag 的 keys 测试消费，**绝不能**加进来。
-is_inert() {
+# 2026-11-06（#1504）：tools/ 下没在本清单登记的文件，不再一律判要跑，改由
+#   tools_closure_inert 按引用闭包判（见该函数）；本清单是它的前置，结果只会更严不会更松。
+static_inert() {
   case "$1" in
     # #1049 E2：桌面业务规则文档 §12 常量表被三处测试读取（daemon 与壳的
     # cargo 测试 include_str!、前端 vitest readFileSync），只改它也必须跑
@@ -125,6 +127,135 @@ is_inert() {
     esac
   fi
   return 1
+}
+
+# ── tools/ 的引用闭包（#1504）─────────────────────────────────────────────
+# 问题：只改 tools/ 下一个跟 Rust 无关的脚本（如本地清理脚本），以前因为不在上面
+# 清单里就判要跑，PR 被拖上 Rust 全量近一小时；逐个往清单里加又追不上新脚本。
+#
+# 做法：tools/ 下的文件只有被门禁 job 用到才影响结果，而「用到」必然写在某个文件里。
+# 从改动文件出发，git grep 找提到它的文件（关键字取去掉扩展名的文件名，同时盖住
+# 完整路径、`$(dirname "$0")/x.sh`、相对路径、Python 的 `from x import`），
+# 引用方在 tools/ 下就接着往上追，直到闭包封口。引用方的分类**同样是 allowlist**：
+#   - 自己、已追过的、判据脚本与其自测（它们提到别的路径只是数据；两者本身被
+#     changes job 无条件执行，被改时按闭包照样判要跑）→ 跳过；
+#   - 落在上面静态无害清单里（沿用当前 lane）→ 跳过；
+#   - justfile（门禁 job 不调用 just，已核实 ci-rust.yml、ci-desktop.yml 与其 action
+#     只在注释里提到 just）、ci-rust.yml / ci-desktop.yml 以外的 workflow → 跳过；
+#   - tools/ 下的 → 入队继续追；
+#   - 其余一律判要跑（门禁 workflow 与其 action、crates/、apps/desktop、Cargo.*、
+#     build.rs、config/、不认识的路径……）。
+# 判不了的一律判要跑：取不到仓库根、改动文件在 HEAD 已不存在（改名/删除的旧路径，
+# 引用方可能正因此坏掉）、git grep 出错（退出码 ≥2；1 只表示没命中）、闭包超过上限、
+# 门禁 workflow 或其 action 用 tools/ 加通配符或变量拼路径（引用不写名字，追不到）。
+GATED_WORKFLOWS=".github/workflows/ci-rust.yml .github/workflows/ci-desktop.yml"
+CLOSURE_MAX=300
+ROOT=""
+DYN_CHECKED=""
+
+# 门禁 workflow 及其 composite action 里有没有追不到的动态 tools/ 引用。
+# 有、或读不到这些文件 → 返回 0（判不了）。
+gated_has_dynamic_tools_ref() {
+  local wf_files w a actions
+  wf_files=()
+  for w in $GATED_WORKFLOWS; do
+    if [ ! -f "$w" ]; then
+      say "门禁 workflow「${w}」不存在 → 判不了引用闭包"
+      return 0
+    fi
+    wf_files+=("$w")
+  done
+  actions="$(grep -hoE 'uses: \./\.github/actions/[A-Za-z0-9_-]+' "${wf_files[@]}" | sed 's#uses: \./##' | sort -u)"
+  for a in $actions; do
+    if [ ! -f "$a/action.yml" ]; then
+      say "门禁用到的 action「${a}」读不到 → 判不了引用闭包"
+      return 0
+    fi
+    wf_files+=("$a/action.yml")
+  done
+  if grep -nE 'tools/[A-Za-z0-9_./-]*[*$]' "${wf_files[@]}" >&2; then
+    say "门禁 workflow / action 用通配符或变量拼 tools/ 路径（见上）→ 引用追不全"
+    return 0
+  fi
+  false
+}
+
+tools_closure_inert() {
+  local f="$1" i cur base stem refs rc r seen NL
+  NL='
+'
+  if [ -z "$ROOT" ]; then
+    if ! ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || [ -z "$ROOT" ] || ! cd "$ROOT"; then
+      ROOT=""
+      say "取不到仓库根 → 判不了「${f}」的引用闭包"
+      return 1
+    fi
+  fi
+  if [ -z "$DYN_CHECKED" ]; then
+    if gated_has_dynamic_tools_ref; then DYN_CHECKED=dynamic; else DYN_CHECKED=ok; fi
+  fi
+  if [ "$DYN_CHECKED" != ok ]; then
+    return 1
+  fi
+  if [ ! -e "$f" ]; then
+    say "「${f}」在 HEAD 不存在（改名或删除）→ 引用方可能正因此坏掉"
+    return 1
+  fi
+  local queue=("$f")
+  seen="$NL$f$NL"
+  i=0
+  while [ "$i" -lt "${#queue[@]}" ]; do
+    cur="${queue[$i]}"
+    i=$((i + 1))
+    if [ "$i" -gt "$CLOSURE_MAX" ]; then
+      say "「${f}」的引用闭包超过 ${CLOSURE_MAX} 个文件 → 不再追"
+      return 1
+    fi
+    base="${cur##*/}"
+    stem="${base%.*}"
+    [ -n "$stem" ] || stem="$base"
+    refs="$(git -c core.quotepath=off grep -lF -e "$stem" -- 2>/dev/null)"
+    rc=$?
+    if [ "$rc" -gt 1 ]; then
+      say "git grep「${stem}」出错（退出码 ${rc}）→ 判不了「${f}」"
+      return 1
+    fi
+    while IFS= read -r r; do
+      [ -n "$r" ] || continue
+      case "$seen" in *"$NL$r$NL"*) continue ;; esac
+      case "$r" in
+        tools/ci-needs-full-lane.sh | tools/test-ci-needs-full-lane.sh) continue ;;
+      esac
+      static_inert "$r" && continue
+      case "$r" in
+        justfile) continue ;;
+        .github/workflows/ci-rust.yml | .github/workflows/ci-desktop.yml) ;;
+        .github/workflows/*) continue ;;
+        tools/*)
+          seen="$seen$r$NL"
+          queue+=("$r") # 闭包追溯：引用方在 tools/ 下就接着往上追
+          continue
+          ;;
+      esac
+      if [ "$cur" = "$f" ]; then
+        say "「${f}」被「${r}」引用（门禁会用到或不认识）→ 要跑"
+      else
+        say "「${f}」经「${cur}」被「${r}」引用（门禁会用到或不认识）→ 要跑"
+      fi
+      return 1
+    done <<EOF
+$refs
+EOF
+  done
+  say "「${f}」的引用闭包（${#queue[@]} 个 tools/ 文件）里没有门禁入口 → 惰性"
+}
+
+is_inert() {
+  static_inert "$1" && return 0
+  case "$1" in
+    tools/*) tools_closure_inert "$1" ;;
+    *) false ;;
+  esac
 }
 
 say() { printf '%s\n' "$*" >&2; }
