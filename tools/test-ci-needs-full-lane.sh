@@ -94,8 +94,8 @@ INERT_1467=(
   .github/ISSUE_TEMPLATE/task.yml
 )
 for f in "${INERT_1467[@]}"; do
-  expect "$SUT" false "#1467：只改 $f"                      "$f"
-  expect_lane "$SUT" rust-workspace false "#1467：只改 $f（宽 lane）" "$f"
+  expect "$SUT" false "#1467：只改 ${f}"                      "$f"
+  expect_lane "$SUT" rust-workspace false "#1467：只改 ${f}（宽 lane）" "$f"
 done
 expect "$SUT" false "#1467：流程脚本 + 更新说明 + 文档混合"  tools/flow/a.sh release/notes/macos/1.0.0.en.txt docs/a.md
 expect "$SUT" true  "#1467：流程脚本 + crates 混合 → 要跑"    tools/flow/a.sh crates/daemon/src/lib.rs
