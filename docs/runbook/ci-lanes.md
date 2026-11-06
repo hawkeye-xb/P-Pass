@@ -82,6 +82,20 @@ job 名必须写死**。理由和细节在这里。
 （`ci-paths.sh core --diff`）；自动级直接绿。改正文补方案引用后 `edited` 事件会重跑它。
 它先只是一个检查，设为必需检查是 owner 在仓库设置里做的，和 job 名成对。判定见 `tools/flow/acceptance-gate.sh`，自测 `tools/test-acceptance-gate.sh`；同一个 job 还跑按版本验收的 `tools/test-release-scope.sh`、`tools/test-release-acceptance.sh`。
 
+## 流程自测 flow-tests（#1493）
+
+流程门禁脚本（`tools/flow/`、本地提交拦截、重编译锁、main 红了开卡等）的自测，清单只有一份：justfile 的 `flow-tests` recipe。
+本地 `just ci` / `just ci-docs` 依赖它，CI 上 `ci-docs.yml` 里名字写死的 job `flow-tests` 在 ubuntu 上装 just 跑 `just flow-tests`，
+在 `CI Docs gate` 的 needs 里；PR 上按自己的路径判（`tools/**`、`justfile`、`.github/**`、`AGENTS.md`），push 到 main 与发版调用时全跑。
+已在别的 job 里跑的（md-check、token-check、shell-vars-check、identity-check、supply-chain-check）不进这份清单，免得重复。
+
+新加 `*-test` recipe 时：能在 ubuntu 上跑的进 `flow-tests`；只能在别的 lane 跑的（要 Android SDK、Xcode 模拟器等），
+登记进 `tools/test-flow-tests-wired.sh` 头部的例外表，写明 workflow 文件、该 workflow 非注释行里必须出现的字符串和原因。
+在 ubuntu 上会 SKIP 的（如 `heavy-lock-test` 依赖 macOS 的 `lockf`）不许进 `flow-tests` 假绿：登记为「CI 上没有 lane」、带跟进卡号，
+并留在 `ci-docs` 的直接依赖里，至少本地照跑。
+元测试 `just flow-tests-wired-test` 核对每个 `*-test` 都接上了、例外登记的字符串真在那个 workflow 里、
+gate 的 needs 里有 `flow-tests`、触发接线（`changes` 的 `flow` 输出与路径）没被改成恒跳过，并带变异反证；它本身也在 `flow-tests` 里。
+
 ## 核心路径
 
 `.github/core-paths.txt` 圈住的文件（门禁本身、配对 / 身份 / 加密 / 协议、存储与迁移、
