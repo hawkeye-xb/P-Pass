@@ -37,8 +37,12 @@ bash 能否真执行、本地提交拦截、gh 能否读 issue、提交身份、
 文字规则只写 CI 管不到的事；能写成检查的，一律写成检查。
 技术问题干活的会话自己定并记在卡上；碰到产品取向（用户感知的行为、隐私、数据去留）的，
 用产品语言写两个选项，打 `needs:product` 交产品负责人拍板，然后接着做别的卡，不干等。
-规矩原文或产品负责人原话已经能定的（依据只认 AGENTS.md 原文和仓库 owner 的评论），owner 直接定并留依据，
-打 `decided:owner`；涉及隐私或数据的、Feature 新功能、真要取舍的，仍交产品负责人。
+规矩原文或产品负责人原话已经能定的（owner 定案的依据只认 AGENTS.md 原文和仓库 owner 的评论），owner 直接定并留依据，
+打 `decided:owner`；卡上写明了 WAI-ARIA、Android 权限规范、NN/g、Google/Microsoft 写作指南等业界标准出处的，
+写 `**标准依据**`，同样由 owner 直接定，打 `decided:owner`。
+产品负责人已在本仓 issue 评论里拍板的，`**产品定案**` 引用那条评论即可，不要求另开一份方案文档；
+核心卡仍要按红线 6 引用 origin/main 上已采纳的方案。
+涉及隐私或数据的、Feature 新功能、真要取舍的，仍交产品负责人。
 
 ### 任务分三级：级别决定人在哪里介入
 
@@ -131,7 +135,10 @@ agent 只领 Issues，除 `just idea` 记想法外不碰 Discussions。issue 类
 
 任何会话听到人类提出新想法，都用 `just idea "<原话>"` 记进 Discussions 的 Ideas，不顺手开工、不进看板。
 人类明确说「要做、但要先定方案」时加 `--discuss`，建一张 `status:inbox` 的 Feature issue。
-之后用 `just triage <号> <方案文件>` 定方案和去向，见 [owner 流程](docs/runbook/owner.md)。
+之后用 `just triage <号> <方案文件>` 定方案和去向：产品负责人已在本仓 issue 评论里拍板的，方案里
+`**产品定案**` 引用评论链接即可；卡上写明 WAI-ARIA、Android 权限规范、NN/g、Google/Microsoft 写作指南等
+业界标准的，写 `**标准依据**`，owner 直接定。只有核心卡要求引用 origin/main 上已采纳的方案。
+见 [owner 流程](docs/runbook/owner.md)。
 
 ## 交付流程
 
@@ -196,8 +203,8 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
   （会把旧工作区当新内容提交，撤回别人刚合入的改动）。
 - 分拣、出 test 包、停下、记想法的命令见 [owner 流程](docs/runbook/owner.md)：
   `just triage <号> <方案文件>` 给 `status:inbox` 的卡定范围并分流
-  （纯技术非核心 → `status:ready`；碰用户可见行为、隐私、数据 → `needs:product`，除非 `**产品定案**` 引用已采纳、
-  产品负责人确认过的方案；核心无已采纳方案 → `status:blocked`）；
+  （纯技术非核心 → `status:ready`；碰用户可见行为、隐私、数据 → `needs:product`，除非 `**产品定案**` 引用
+  产品负责人在本仓 issue 的拍板评论或已采纳方案、`**owner 定案**`/`**标准依据**` 成立；核心无已采纳方案 → `status:blocked`）；
   `just release-test <端...>` 出 test 包（端以 plan-builds 判定为准，正式版只由产品负责人发布）；
   `just owner-stuck "<问题>" --product "<选项一>" "<选项二>"` 交产品取向的问题；
   `just cleanup-local`（默认预览，删除要 `--apply`）清本机构建产物，squash 合并下判断分支能否删
