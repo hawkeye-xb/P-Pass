@@ -35,6 +35,11 @@ name: CI iOS
 on:
   # #1187：路径判定挪到 job 层（.github/actions/changes），本 lane 进必过项；
   # 没改到 iOS 相关路径的 PR 只跑 changes 与 gate（ubuntu，十几秒），不开 macOS runner。
+  # #1468：合入 main 后批量跑全量（含 Windows）。PR 上只跑快检，Windows 留到这里。
+  # 同组同一时间只跑一次：正在跑的不取消（cancel-in-progress 对 push 为 false），
+  # 排队只留最新（GitHub concurrency 原生行为：新来的替掉还在排队的）。
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
   # #1187：发版前由 release.yml 以全量模式调用（只在 iOS 本次要构建时）。
@@ -54,10 +59,12 @@ on:
 permissions:
   contents: read
 
+# #1468：group 带上事件名，push 到 main 的全量单独成组，不被 Release（workflow_call，
+# 事件是 workflow_dispatch）或 PR 抢占；只有 push 不取消正在跑的，其余事件行为不变。
 concurrency:
-  group: ci-ios-${{ github.ref }}
+  group: ci-ios-${{ github.event_name }}-${{ github.ref }}
   # 上传 TestFlight 的手动 run 不许被后来的 run 取消（取消在上传中途会留下半成品）。
-  cancel-in-progress: ${{ inputs.testflight_version == '' }}
+  cancel-in-progress: ${{ github.event_name != 'push' && inputs.testflight_version == '' }}
 
 env:
   # XcodeGen 钉版本 + 校验摘要（runner 镜像不带 xcodegen；brew 装的是「当天最新」，
@@ -72,7 +79,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      run: ${{ steps.c.outputs.run }}
+      # #1468：push 到 main 一律全跑。排队只留最新，中间的 push 会被替掉，按单次 push 的
+      # diff 判会漏掉被替掉那几次的改动；PR 上照旧按路径判。
+      run: ${{ github.event_name == 'push' && 'true' || steps.c.outputs.run }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

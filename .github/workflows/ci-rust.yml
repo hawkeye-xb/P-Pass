@@ -45,6 +45,11 @@ on:
   # 墙钟约 4min）。公开仓不计费，这个代价是 0。
   # ⚠️ 谁要给本 lane 加回 paths，请先把 main 的必需检查里对应的三条摘掉，
   # 否则会把所有不碰 crates/** 的 PR 全部卡死。
+  # #1468：合入 main 后批量跑全量（含 Windows）。PR 上只跑快检，Windows 留到这里。
+  # 同组同一时间只跑一次：正在跑的不取消（cancel-in-progress 对 push 为 false），
+  # 排队只留最新（GitHub concurrency 原生行为：新来的替掉还在排队的）。
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
   # #1187：发版前由 release.yml 以全量模式调用（changes 对非 pull_request 事件恒定全跑）。
@@ -53,9 +58,11 @@ on:
 permissions:
   contents: read
 
+# #1468：group 带上事件名，push 到 main 的全量单独成组，不被 Release（workflow_call，
+# 事件是 workflow_dispatch）或 PR 抢占；只有 push 不取消正在跑的，其余事件行为不变。
 concurrency:
-  group: ci-rust-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-rust-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -407,7 +414,9 @@ jobs:
     # `!cancelled()` 是状态函数，它让本 job 在 changes 失败时**仍然执行**
     # （否则 needs 的隐式 success() 会把它跳掉，又回到 fail-open）。
     needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
+    # #1468：PR 上不跑 Windows（跳过汇报 skipped，对必需检查算通过，名字不变），
+    # 合入 main 后的 push 全量与 Release 调用照跑。
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.changes.outputs.run_heavy != 'false' }}
     runs-on: windows-latest
     # 冷缓存那次要建 vcpkg 静态 libheif（约 20min）+ 全量冷构建，给足余量；
     # 热缓存下应远低于此。cargo test 没有单测级超时，DAE-06 (#176) 那种 300s
@@ -554,7 +563,9 @@ jobs:
     name: clippy (windows)
     # CI-11 (#255)：**只有明确收到 'false' 才跳过**（fail-closed，理由同上）。
     needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
+    # #1468：PR 上不跑 Windows（跳过汇报 skipped，对必需检查算通过，名字不变），
+    # 合入 main 后的 push 全量与 Release 调用照跑。
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.changes.outputs.run_heavy != 'false' }}
     runs-on: windows-latest
     # 冷缓存要建 vcpkg 静态 libheif（约 20min），给足余量；热缓存下远低于此。
     timeout-minutes: 45

@@ -5,7 +5,18 @@ job 名必须写死**。理由和细节在这里。
 
 ## 什么时候跑什么
 
-- **推分支不触发 CI**：四条 lane 的 `push` 限定 `branches: [main]`。本地快验：
+- **三层（#1468，产品负责人 2026-11-06 定）**：
+  1. **PR 上快检**：只跑与改动相关的 job，是合入门禁。`test (windows)`、`clippy (windows)`、
+     `desktop (windows-latest)` 在 `pull_request` 事件下被 job 层 `if:` 跳过（汇报 `skipped`，
+     对必需检查算通过，名字不变）。
+  2. **合入 main 后全量**：五条 lane（rust / desktop / android / ios / docs）都有 `push: branches: [main]`，
+     push 事件下 `changes` 一律判全跑（含 Windows；android / ios / docs 也不按单次 push 的 diff 判，
+     因为排队会替掉中间的 push）。`concurrency` 的 group 带事件名，`cancel-in-progress` 只对 push 为 false：
+     同一时间只跑一次、正在跑的不取消、排队只留最新（GitHub concurrency 原生行为）。
+     main 红了不冻结、不挡其他合入，只修或回滚元凶 PR。
+  3. **发版前全量验证**：Release 用 `workflow_call` 调这五条 lane（事件是 `workflow_dispatch`），
+     全跑，行为不变；只从全绿提交切 tag。
+- **推分支不触发 CI**：`push` 限定 `branches: [main]`，只有合入才算。本地快验：
   纯文档 `just ci-docs`，动了代码 `just ci`。
 - **开 PR 才跑 lane**，分两档：
   - `ci-rust` / `ci-desktop`：workflow 层**不设** `pull_request.paths`（CI-07 #189）。
