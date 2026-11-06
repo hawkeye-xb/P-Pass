@@ -191,6 +191,29 @@ open_files_under() {
   return 0
 }
 
+# #1490: runs inside tools/heavy-lock. 0 = swept; 3 = cache in use, skipped;
+# 4 = cannot tell whether it is in use, refused; anything else = sweep failed.
+locked_sweep() {
+  local cache="$1" main_root="$2" days="$3" max="$4" held held_status=0 policy
+  shift 4
+  held=$(open_files_under "$cache") || held_status=$?
+  if [[ $held_status -eq 0 ]]; then
+    printf 'SKIP       %s — files open in it (a build is using it); try again later:\n' "$cache"
+    printf '%s\n' "$held" | sed 's/^/             /'
+    return 3
+  elif [[ $held_status -ge 2 ]]; then
+    printf 'SKIP       %s — cannot tell whether a build is using it (no usable lsof); refusing to sweep\n' "$cache"
+    return 4
+  fi
+  for policy in "--time $days" "--maxsize $max"; do
+    # shellcheck disable=SC2086 # policy is "<flag> <value>" on purpose
+    if ! CARGO_TARGET_DIR="$cache" cargo-sweep sweep "$@" $policy "$main_root"; then
+      printf 'FAILED     cargo-sweep sweep %s\n' "$policy"
+      return 1
+    fi
+  done
+}
+
 worktree_is_removable() {
   local worktree="$1"
   local active
@@ -406,32 +429,22 @@ if "$clean_cache" || "$preview_cache_location"; then
     "$apply" && cache_failed=true
   else
     main_root=$(dev_cache_main_root "$repo_root")
-    probe_status=0
-    open_files=$(open_files_under "$cache") || probe_status=$?
-    if [[ $probe_status -eq 0 ]]; then
-      printf 'SKIP       %s — files open in it (a build is using it); try again later:\n' "$cache"
-      printf '%s\n' "$open_files" | sed 's/^/             /'
-    elif [[ $probe_status -ge 2 ]]; then
-      printf 'SKIP       %s — cannot tell whether a build is using it (no usable lsof); refusing to sweep\n' "$cache"
-      "$apply" && cache_failed=true
-    else
-      sweep_args=()
-      "$apply" || sweep_args+=(--dry-run)
-      printf 'CACHE      %s (free before: %s)\n' "$cache" "$(free_space "$cache")"
-      # Wait for running heavy builds instead of sweeping under them (#1308 lock).
-      for policy in "--time $cache_days" "--maxsize $cache_max"; do
-        # shellcheck disable=SC2086 # policy is "<flag> <value>" on purpose
-        if ! "$script_dir/heavy-lock" env CARGO_TARGET_DIR="$cache" \
-          cargo-sweep sweep ${sweep_args[@]+"${sweep_args[@]}"} $policy "$main_root"; then
-          printf 'FAILED     cargo-sweep sweep %s\n' "$policy"
-          cache_failed=true
-          break
-        fi
-      done
-      if "$apply" && ! "$cache_failed"; then
-        printf 'SWEPT      %s (free after: %s)\n' "$cache" "$(free_space "$cache")"
-      fi
-    fi
+    sweep_args=()
+    "$apply" || sweep_args+=(--dry-run)
+    printf 'CACHE      %s (free before: %s)\n' "$cache" "$(free_space "$cache")"
+    # Check-then-sweep runs inside ONE hold of the heavy-build lock (#1308):
+    # checking first and queueing for the lock afterwards would let a build
+    # that starts while we wait (up to PPASS_HEAVY_LOCK_WAIT) slip past the
+    # check and have its artifacts swept from under it.
+    export -f open_files_under locked_sweep
+    sweep_status=0
+    "$script_dir/heavy-lock" bash -c 'locked_sweep "$@"' locked_sweep \
+      "$cache" "$main_root" "$cache_days" "$cache_max" ${sweep_args[@]+"${sweep_args[@]}"} || sweep_status=$?
+    case $sweep_status in
+      0) "$apply" && printf 'SWEPT      %s (free after: %s)\n' "$cache" "$(free_space "$cache")" ;;
+      3) ;;  # in use: skipped, try again later; not a failure
+      *) "$apply" && cache_failed=true ;;
+    esac
   fi
 fi
 
