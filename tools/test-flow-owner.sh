@@ -200,9 +200,6 @@ fresh() {
   cp "${SRC}/tools/ci-paths.sh" "${SRC}/tools/check-dco.sh" "${SRC}/tools/heavy-lock" tools/
   cp "${SRC}/tools/release/with-timeout.sh" tools/release/
   cp "${SRC}/.github/core-paths.txt" .github/
-  # release-test 判 main CI 的 workflow 名单取自真文件（与 main 红了开卡同一份）
-  mkdir -p .github/workflows
-  cp "${SRC}/.github/workflows/main-red.yml" .github/workflows/
   cat >tools/release/plan-builds.sh <<'PB'
 #!/usr/bin/env bash
 cat "$FAKE/plan"
@@ -276,9 +273,13 @@ REL_RED=$'completed\tfailure\tworkflow_dispatch\trelease-run/v0.10.3-test.3\tRel
 printf '%s\ncompleted\tsuccess\tpush\tmain\tCI Rust\ncompleted\tsuccess\tpush\tmain\tCI Android\n' "$REL_RED" >"$FAKE/main-ci"
 out="$(bash tools/flow/owner-release-test.sh --dry-run android 2>/dev/null)"
 check "#1396：同提交上 Release 红、main 的 CI 全绿 → 放行，仍是 v0.10.3-test.3" bash -c 'printf "%s\n" "$1" | grep -q "^RELEASE-TEST DRY-RUN v0.10.3-test.3 android$"' _ "$out"
-printf 'completed\tfailure\tpush\tmain\tCI Android gate\ncompleted\tfailure\tpull_request\tfix/x\tCI Android\ncompleted\tfailure\tworkflow_run\tmain\tMain Red\ncompleted\tsuccess\tpush\tmain\tCI Rust\n' >"$FAKE/main-ci"
+printf 'completed\tfailure\tpull_request\tfix/x\tCI Android\ncompleted\tfailure\tworkflow_run\tmain\tMain Red\ncompleted\tsuccess\tpush\tmain\tCI Rust\n' >"$FAKE/main-ci"
 out="$(bash tools/flow/owner-release-test.sh --dry-run android 2>/dev/null)"
-check "名单外的 workflow（名字只是相近也不算）、PR 分支上的 run 红 → 不算 main 红" bash -c 'printf "%s\n" "$1" | grep -q "^RELEASE-TEST DRY-RUN v0.10.3-test.3 android$"' _ "$out"
+check "PR 分支上的运行、非 push 事件触发的运行红 → 不算 main 红" bash -c 'printf "%s\n" "$1" | grep -q "^RELEASE-TEST DRY-RUN v0.10.3-test.3 android$"' _ "$out"
+printf '%s\ncompleted\tsuccess\tpush\tmain\tCI Rust\ncompleted\tfailure\tpush\tmain\tCI Secrets\n' "$REL_RED" >"$FAKE/main-ci"
+bash tools/flow/owner-release-test.sh --dry-run android >/dev/null 2>&1
+rc=$?
+check "反证：main 上 push 触发的 workflow 不限名单（如 CI Secrets）红 → 停下" test "$rc" -eq 1
 printf '%s\ncompleted\tsuccess\tpush\tmain\tCI Rust\ncompleted\tfailure\tpush\tmain\tCI Android\n' "$REL_RED" >"$FAKE/main-ci"
 bash tools/flow/owner-release-test.sh android >/dev/null 2>&1
 rc=$?
@@ -308,14 +309,6 @@ git commit -q -s -am bump
 git push -q origin HEAD:refs/heads/main
 bash tools/flow/owner-release-test.sh android >/dev/null 2>&1
 check "test 版本不高于正式版本线 → 拒绝" test "$?" -eq 2
-printf '{"desktop": "0.10.1", "android": "0.10.2", "ios": "0.10.2"}\n' >release/versions.json
-git rm -q .github/workflows/main-red.yml
-git commit -q -s -am "drop main-red"
-git push -q origin HEAD:refs/heads/main
-: >"$FAKE/calls.log"
-bash tools/flow/owner-release-test.sh --dry-run android >/dev/null 2>&1
-rc=$?
-check "main CI 的 workflow 名单读不到 → 停下（不当成没有 CI 放行）" bash -c '[ "$1" -eq 1 ] && ! grep -q "actions/runs" "$FAKE/calls.log"' _ "$rc"
 
 echo "── 7. owner-stuck：产品取向必须给两个选项"
 fresh
