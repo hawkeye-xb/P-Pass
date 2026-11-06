@@ -12,11 +12,15 @@ Without --apply, this command only previews candidates.
 
 Scopes:
   --targets     Remove target/ directories only. Source worktrees remain.
+                Targets inside .claude/worktrees/ are skipped unless
+                --session-worktrees is also given.
   --worktrees   Remove only registered worktrees that are clean, merged into
                 origin/main, not the current worktree, and have no active build.
                 Worktrees under .claude/worktrees/ (Claude Code session working
                 directories, archived by the app) are skipped unless
-                --session-worktrees is also given.
+                --session-worktrees is also given; even then one is kept
+                while any process has its cwd or a file open inside it, or
+                when that cannot be checked (no lsof).
   --all         Select --targets and --worktrees.
   --cache       Sweep the shared Cargo cache (#1375, located through
                 tools/e3/lib/dev-cache.sh) with cargo-sweep: first artifacts
@@ -313,6 +317,16 @@ if "$clean_targets"; then
   printf '\n== Build caches ==\n'
   for worktree in "${worktrees[@]}"; do
     [[ -d "$worktree" ]] || continue  # A selected worktree may have just gone away.
+    # #1490: same rule as --worktrees — a live session may be building there
+    # with a relative command line that has_active_build cannot attribute.
+    case "$worktree" in
+      */.claude/worktrees/*)
+        if ! "$session_worktrees"; then
+          printf 'SKIP       %s — Claude Code session worktree (add --session-worktrees to include)\n' "$worktree"
+          continue
+        fi
+        ;;
+    esac
 
     active=$(has_active_build "$worktree" || true)
     if [[ -n "$active" ]]; then
@@ -352,7 +366,10 @@ if "$clean_targets"; then
         rm -rf "$target"
         printf 'REMOVED    %s\n' "$target"
       fi
-    done < <(find "$worktree" \( -type d -name node_modules -o -type d -name .git \) -prune -o \
+    # #1490: prune .claude/worktrees — session worktrees nest inside the main
+    # checkout and are handled (or skipped) as registered worktrees of their own.
+    done < <(find "$worktree" \( -type d -name node_modules -o -type d -name .git \
+                  -o -type d -path '*/.claude/worktrees' \) -prune -o \
                   -type d -name target -print 2>/dev/null | sort)
 
     "$found_any" || printf 'ABSENT     %s — no Cargo target directory\n' "$worktree"

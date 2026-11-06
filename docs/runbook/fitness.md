@@ -50,7 +50,8 @@
   再从最旧的删起直到总量低于 40GB（`--cache-days`、`--cache-max` 可调）；没装 cargo-sweep 只提示安装，不退化成整目录删除。
 - **什么时候清**：`just doctor` 见剩余不到 30G 就提示，跌破 15G 开工下限时修法第一条也是它。
 - **不清什么**：有进程开着缓存里的文件时整轮跳过；正在跑的重编译先等 `tools/heavy-lock`。
-  `.claude/worktrees/` 下的会话目录不在 `--worktrees` 默认范围内，要显式加 `--session-worktrees`。
+  `.claude/worktrees/` 下的会话目录（及其 target）不在 `--worktrees`、`--targets` 默认范围内，要显式加 `--session-worktrees`；
+  加了也只删没人占用的：目录里有进程的工作目录或打开的文件，或者没有 lsof、判不了，一律不删。
 
 ## 做不到机器化、仍靠文字规矩与验收的
 

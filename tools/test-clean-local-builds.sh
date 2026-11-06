@@ -93,6 +93,7 @@ git -C "$repo" worktree add -b pending "$repo/.worktrees/pending" main >/dev/nul
 # #1490: a Claude Code session directory that is clean and merged — exactly what
 # --worktrees would otherwise remove while the session is still open.
 git -C "$repo" worktree add -b session "$repo/.claude/worktrees/session" main >/dev/null
+mkdir -p "$repo/.claude/worktrees/session/target"
 
 mkdir -p "$repo/target" "$repo/.worktrees/merged/target" \
   "$repo/.worktrees/dirty/target" "$repo/.worktrees/active/target"
@@ -123,6 +124,8 @@ no_cache=$(cd "$repo" && PPASS_DEV_CACHE_PARENT="$tmp/no-cache-parent" bash "$cl
 [[ -d "$repo/.worktrees/dirty" ]] || fail "[[ -d \"$repo/.worktrees/dirty\" ]]"
 [[ -d "$repo/.worktrees/pending" ]] || fail "[[ -d \"$repo/.worktrees/pending\" ]]"
 [[ -f "$cache/debug/deps/libfixture.rlib" ]] || fail '--targets touched the shared cache'
+# #1490: a session worktree's target is not cleared by default either.
+[[ -d "$repo/.claude/worktrees/session/target" ]] || fail '--targets removed a Claude Code session target'
 
 # #1490 --cache: never rm -rf when cargo-sweep is missing — refuse and say how to install it.
 missing_status=0
