@@ -63,10 +63,17 @@ case "$1 $2" in
   "pr comment")
     n="$3"; shift 3
     while [ $# -gt 0 ]; do
-      [ "$1" = "--body-file" ] && { cat "$2" >>"$F/comments"; echo "-----" >>"$F/comments"; }
+      if [ "$1" = "--body-file" ]; then
+        cat "$2" >>"$F/comments"; echo "-----" >>"$F/comments"
+        # 本机 just review 用人的账号贴评论：标记的作者不是 github-actions[bot]
+        m="$(sed -n 's/.*<!-- ppass-review \([^>]*\) -->.*/\1/p' "$2" | tail -n 1)"
+        [ -z "$m" ] || printf '%s\t%s\t%s\n' "$(cat "$F/commenter" 2>/dev/null || echo 690591397)" "$RANDOM" "$m" >>"$F/marks"
+      fi
       shift
     done
     ;;
+  "api repos/o/r/issues/7/comments") cat "$F/marks" 2>/dev/null || true ;;
+  "api graphql") true ;;
   "issue view")
     printf 'state:OPEN\ntitle:%s\nlabels:status:doing\nbody:\n' "card $3"
     cat "$F/issue.$3"
@@ -89,7 +96,9 @@ pwd -P >"$F/agent.cwd"
 cat >"$F/agent.stdin"
 case "$(cat "$F/mode")" in
   pass) echo "未发现正确性问题。"; echo "VERDICT: PASS" ;;
-  fail) echo "tools/x.sh:3 —— MAC_GLOBS 没加引号，会被 shell 展开。"; echo "VERDICT: FAIL" ;;
+  fail) echo "- [阻断] tools/x.sh:3 —— MAC_GLOBS 没加引号，会被 shell 展开。"; echo "VERDICT: FAIL" ;;
+  suggest) echo "- [建议] tools/x.sh:3 —— 可以补一条用例。"; echo "VERDICT: PASS" ;;
+  block_says_pass) echo "**[阻断]** tools/x.sh:3 —— 判定会误放行。"; echo "VERDICT: PASS" ;;
   noverdict) echo "看起来还行。" ;;
   empty) printf '\n   \n\n' ;;
   crash) echo "boom" >&2; exit 3 ;;
@@ -137,7 +146,8 @@ reset() {
   : >"$FAKE/disables"
   rm -f "$FAKE/disable_fail"
   rm -f "$FAKE/merge_fail"
-  rm -f "$FAKE/agent.args" "$FAKE/agent.cwd" "$FAKE/agent.stdin"
+  rm -f "$FAKE/agent.args" "$FAKE/agent.cwd" "$FAKE/agent.stdin" "$FAKE/commenter"
+  : >"$FAKE/marks"
   printf '%s' "$1" >"$FAKE/mode"
 }
 has() { grep -qF -- "$1" "$2"; }
@@ -357,6 +367,30 @@ has "文案确认通过" "$FAKE/comments" && ok "  未通过理由点名「文�
 notes_case "反证：有确认行" '产品负责人 2026-11-05 15:30 文案确认通过' pass
 printf 'tools/x.sh\n' >"$FAKE/pr.files"
 printf 'closes #77\n\n改了 x。\n' >"$FAKE/pr.body"
+
+echo "==> #1470：三级结论（本机 just review 同一判定）"
+reset suggest
+REVIEW 7 >/dev/null 2>&1 && has "state=success" "$FAKE/statuses" && has "--auto --squash" "$FAKE/merges" &&
+  ok "只有 [建议] → 通过并开自动合入" || bad "只有建议却没通过：$(cat "$FAKE/statuses")"
+has "建议 1 条" "$FAKE/comments" && ok "  评论列出建议条数，写明由开 PR 的会话自行判断" || bad "评论没列建议：$(head -5 "$FAKE/comments")"
+reset block_says_pass
+REVIEW 7 >/dev/null 2>&1 && bad "有加粗的 [阻断] 行却通过" || ok "反证：有 [阻断] 行（即使 VERDICT: PASS）→ 未通过"
+has "state=failure" "$FAKE/statuses" && ok "  状态 failure" || bad "  状态不对：$(cat "$FAKE/statuses")"
+has "<!-- ppass-review sha=${SHA} " "$FAKE/comments" && has "agent=FAIL -->" "$FAKE/comments" &&
+  ok "评论末尾留隐藏标记（头提交、agent 结论）" || bad "评论里没有标记"
+
+echo "==> #1470：本机评论的标记作者不是 github-actions[bot]，不复用"
+reset pass
+REVIEW 7 >/dev/null 2>&1
+rm -f "$FAKE/agent.stdin"
+REVIEW 7 >/dev/null 2>&1
+[ -s "$FAKE/agent.stdin" ] && ok "人账号写的标记 → 再评一次照常调 agent" || bad "人账号写的标记被复用了"
+reset pass
+printf 'github-actions[bot]' >"$FAKE/commenter"
+REVIEW 7 >/dev/null 2>&1
+rm -f "$FAKE/agent.stdin"
+REVIEW 7 >"$FAKE/out.reuse" 2>&1
+[ ! -e "$FAKE/agent.stdin" ] && has "复用" "$FAKE/out.reuse" && ok "反证：github-actions[bot] 的标记、同一头提交 → 复用，不调 agent" || bad "bot 标记没复用：$(tail -3 "$FAKE/out.reuse")"
 
 echo
 echo "flow-review: ${PASS} passed, ${FAIL} failed"
