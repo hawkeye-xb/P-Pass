@@ -202,7 +202,9 @@ SELF_REVIEW_BODY="$(grep -v '^[[:space:]]*$' "$SELF_REVIEW" | sed '1d' | scrub)"
 #     （本机模拟器多是中文、CI 是英文：写死某一种语言的断言只在另一种语言下红，#1342）
 #   crates/<名>/**             → cargo nextest run -p <包名>
 #   tools/<文件>               → 改动里的 tools/test-*.sh 本身 + 引用到它的 tools/test-*.sh（git grep 找）
-#   其余（桌面、.github、justfile、没有任何测试引用的 tools 文件…）任何一个挑不出来 → just ci
+#   .github/workflows/*        → actionlint + just ci-docs（相关 tools/test-ci-*.sh 由 ci-docs 与 tools 规则覆盖）
+#   justfile、.github/ISSUE_TEMPLATE/*、.github/PULL_REQUEST_TEMPLATE.md → just ci-docs
+#   其余（桌面、其它 .github、没有任何测试引用的 tools 文件…）任何一个挑不出来 → just ci（fail-closed）
 GATES=()
 add_gate() { # 去重追加
   local g
@@ -265,6 +267,11 @@ EOF3
         FULL=1
       fi
       ;;
+    .github/workflows/*)
+      add_gate "actionlint"
+      add_gate "just ci-docs"
+      ;;
+    justfile | .github/ISSUE_TEMPLATE/* | .github/PULL_REQUEST_TEMPLATE.md) add_gate "just ci-docs" ;;
     *) FULL=1 ;;
   esac
 done <<EOF2

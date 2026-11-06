@@ -183,7 +183,13 @@ echo "==> cargo $* running"
 if [ -e "$FAKE_GH/ci_fail" ]; then echo "error: lint failed: FAKE-CI-RED"; exit 1; fi
 echo "==> CI pipeline: all green FAKE-CI-GREEN (cargo $*)"
 STUB
-chmod +x "${BIN}/gh" "${BIN}/just" "${BIN}/cargo"
+cat >"${BIN}/actionlint" <<'STUB'
+#!/usr/bin/env bash
+echo "actionlint" >>"$FAKE_GH/just_calls"
+if [ -e "$FAKE_GH/ci_fail" ]; then echo "error: actionlint failed: FAKE-CI-RED"; exit 1; fi
+echo "==> actionlint green FAKE-CI-GREEN"
+STUB
+chmod +x "${BIN}/gh" "${BIN}/just" "${BIN}/cargo" "${BIN}/actionlint"
 export PATH="$BIN${EXTRA_PATH}"
 
 # ── 仓库：裸 origin + 主仓 ─────────────────────────────────────────────
@@ -461,6 +467,34 @@ commit_file "$W" docs/n.md
 DONE "$W" >/dev/null 2>&1
 comments_of 23 | grep -q "just ci-docs" && ok "纯文档改动跑 just ci-docs" || bad "纯文档没走 ci-docs"
 comments_of 20 | grep -q "just ci-docs" && bad "代码改动误走 ci-docs" || ok "反证：代码改动走 just ci"
+
+# 流程文件改动不退回全量（#1481）：workflows → actionlint + ci-docs；justfile / issue 模板 → ci-docs；未知 .github 路径仍全量
+W="$(card 150 "[T-150] workflow only" ".github/**")"
+commit_file "$W" .github/workflows/x.yml
+DONE "$W" >"${TMP}/o150" 2>&1
+C50="$(comments_of 150)"
+printf '%s' "$C50" | grep -qF "actionlint + just ci-docs" && ok "只改 workflow → actionlint + just ci-docs" || bad "workflow 门禁不对：$(tail -4 "${TMP}/o150")"
+printf '%s' "$C50" | grep -qF '`just ci`' && bad "只改 workflow 仍跑了全量 just ci" || ok "反证：workflow 没有全量 just ci"
+W="$(card 151 "[T-151] justfile only" "justfile .github/**")"
+commit_file "$W" justfile
+commit_file "$W" .github/ISSUE_TEMPLATE/t.yml
+commit_file "$W" .github/PULL_REQUEST_TEMPLATE.md
+DONE "$W" >"${TMP}/o151" 2>&1
+C51="$(comments_of 151)"
+printf '%s' "$C51" | grep -qF '`just ci-docs`' && ok "justfile / issue 模板 / PR 模板 → just ci-docs" || bad "justfile 门禁不对：$(tail -4 "${TMP}/o151")"
+printf '%s' "$C51" | grep -qF '`just ci`' && bad "justfile 仍跑了全量 just ci" || ok "反证：justfile 没有全量 just ci"
+printf '%s' "$C51" | grep -qF 'actionlint' && bad "justfile 不该跑 actionlint" || ok "justfile 不跑 actionlint"
+W="$(card 152 "[T-152] unknown github path" ".github/**")"
+commit_file "$W" .github/CODEOWNERS
+DONE "$W" >"${TMP}/o152" 2>&1
+C152="$(comments_of 152)"
+printf '%s' "$C152" | grep -qF '`just ci`' && ok "反证：未知 .github 路径 → 仍退回全量 just ci（fail-closed）" || bad "未知路径没退回全量：$(comments_of 152 | grep -m3 -E "门禁|just ")"
+W="$(card 153 "[T-153] workflow plus unknown" ".github/**")"
+commit_file "$W" .github/workflows/y.yml
+commit_file "$W" .github/CODEOWNERS
+DONE "$W" >"${TMP}/o153" 2>&1
+C153="$(comments_of 153)"
+printf '%s' "$C153" | grep -qF '`just ci`' && ok "反证：workflow 夹带未知路径 → 全量 just ci" || bad "夹带未知路径没退回全量"
 
 # 门禁按改动路径挑（#1361）：只改安卓文案 → android-test + mobile-static-check，不跑全量 just ci
 W="$(card 125 "[T-125] android copy" "apps/android/**")"
