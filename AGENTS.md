@@ -267,6 +267,10 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
   本地除 `just ci` 外跑全部 `tools/test-*.sh`。细节见 [CI lane](docs/runbook/ci-lanes.md)。
 - **job 的 name 不许随手改**；进必需检查的 job 名必须写死，不许用 `matrix` 现算。
   理由见 [CI lane](docs/runbook/ci-lanes.md)。
+- **停用门禁要留卡**：手动停一个 workflow，或者从 main 的必需检查里撤掉一项，必须在同一次操作里
+  开一张卡——标题里写出那个 workflow 的 `name:`（`just gate-status` 只认标题），并写明恢复条件与到期日。
+  改完跑一次 `just gate-status` 确认它认得到这张卡。停了没卡 = 没人知道门关着：
+  2026-11-05 `CI Review` 停了一晚，第二天本文件还写着它是必需检查。
 - **发版按端判定**：Android / macOS / Windows 谁改了才构建谁；test 与正式版走同一套机制。
   汇报时说「按端判定」，不说「跳过某端」。细则见 `docs/RELEASING.md`。
 - **磁盘**：各工作目录共用编译缓存（共享缓存由配套卡落地，落地前沿用各自 `target/`，编完可删）。剩余空间
@@ -300,6 +304,7 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
 | 开卡 | issue 模板「任务卡」 |
 | 本地命令 | `just --list` |
 | CI lane、必需检查、核心路径 | `docs/runbook/ci-lanes.md` |
+| 门开着还是关着 | `just gate-status` |
 | 真机/模拟器、配对、本机 daemon IPC | 本机 `local-state.md`（不进 git，先读它再说「做不到」） |
 | 全量回归 | `docs/runbook/full-regression-sop.md` |
 | 发版、签名、版本纪律 | `docs/RELEASING.md` |

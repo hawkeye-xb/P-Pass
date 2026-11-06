@@ -274,7 +274,7 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check hooks-test flow-worker-test flow-review-test flow-pr-test supply-chain-check mobile-static-check i18n-split-check lockfile-check flow-owner-test heavy-lock-test
+ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check hooks-test flow-worker-test flow-review-test flow-pr-test flow-gate-status-test supply-chain-check mobile-static-check i18n-split-check lockfile-check flow-owner-test heavy-lock-test
   @echo "==> CI pipeline: all green ✅"
 
 # 两个 Rust workspace 的 Cargo.lock 都得和实际依赖一致（src-tauri 是独立 workspace，
@@ -313,7 +313,7 @@ i18n-split-check:
 #
 # ⚠️ 只在这次改动**一行 Rust/Kotlin/前端都没动**时用它。碰了代码就跑 `just ci`，
 # 别拿这条快车道当省事的借口——`ci` 的依赖列表一个都没减。
-ci-docs: md-check token-check shell-vars-check identity-check hooks-test flow-worker-test flow-review-test flow-pr-test supply-chain-check flow-owner-test heavy-lock-test
+ci-docs: md-check token-check shell-vars-check identity-check hooks-test flow-worker-test flow-review-test flow-pr-test flow-gate-status-test supply-chain-check flow-owner-test heavy-lock-test
   @echo "==> docs lane: green ✅（注意：本条不含 fmt/lint/test，动了代码必须跑 just ci）"
 
 # T-040 人工验收：自启/防睡眠/密钥仓 真机冒烟（H-09 双平台各跑一次）
@@ -564,6 +564,15 @@ pr-thread id reply:
 # just pr-status / pr-thread 的判据测试：假 gh，每条卡点配反证；进 ci / ci-docs。
 flow-pr-test:
     @bash tools/test-flow-pr.sh
+
+# 门的状态：被手动停用的 workflow、main 的必需检查，以及每个停用项有没有标题带它名字的卡。
+# 停了没卡就红（退出码 1）——停用 workflow 是仓库设置动作，不进 git，只有这条命令会把这件事照出来。
+gate-status:
+    bash tools/flow/gate-status.sh
+
+# just gate-status 的判据测试：假 gh，六种情形（含反证，含"只认标题"）；进 ci / ci-docs。
+flow-gate-status-test:
+    @bash tools/test-gate-status.sh
 
 # worker 三条命令的判据测试：临时仓库 + 假 gh / just，每条拒绝配反证；进 ci / ci-docs。
 flow-worker-test:
