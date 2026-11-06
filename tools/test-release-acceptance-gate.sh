@@ -2,6 +2,7 @@
 # #1486 发版闸的测试（方案 docs/decisions/2026-11-06-release-acceptance-gate.md）：按 step 名从 release.yml 抽出
 # 「发版闸：验收台账清零（#1486）」，在临时仓库里用假 gh 跑五种情况：
 #   台账全勾 → 过；有一项没勾 → 红；没有台账 → 红；同名台账两张 → 红；test tag → 不查。
+# 另有：搜索结果到 100 条上限 → 红（可能截掉第二张同名台账）；读不到 GitHub → 红。
 # 测试自己注入 TAG / GITHUB_SHA 等，所以另外逐字核对 step 的 if 与 env（TAG、GH_TOKEN、PPASS_HOOK_REPO），关掉或断了入参都红。
 # 另查位置与权限：它在 plan-builds 里、在「发版入口守卫（#1349）」之后、「Plan builds (#838)」之前（所有构建 job 都 needs plan-builds），
 # plan-builds 有 issues: read、pull-requests: read。
@@ -145,6 +146,10 @@ run "${TMP}/gate.sh" 0 "台账全勾 → 过" v2026.2.0
 has "发版前验收通过（台账 #501" "${TMP}/out" && ok "  判定来自 release-acceptance.sh（台账 #501、候选 = GITHUB_SHA）" || bad "  没跑判定：$(cat "${TMP}/out")"
 cases "${TMP}/gate.sh" gate
 rm -f "${FAKE}/list.json"
+ledger 501 x  # 台账本身全勾：去掉上限判定就会放行，这条才能证明红来自上限判定
+list "$(python3 -c 'import json; print(json.dumps([{"number": 501, "title": "[验收] v2026.2.0"}] + [{"number": 1000 + i, "title": f"[REL] v2026.2.0 第 {i} 张"} for i in range(99)]))')"
+run "${TMP}/gate.sh" 1 "搜索结果到 100 条上限（可能截掉第二张同名台账）→ 红（fail-closed）" v2026.2.0
+has "达到 100 条上限" "${TMP}/out" && ok "  说明判不了唯一" || bad "  没说明：$(cat "${TMP}/out")"
 touch "${FAKE}/list.fail"
 run "${TMP}/gate.sh" 0 "test tag → 不查（gh 坏着也不碰）" v2026.2.0-test.2
 has "不查验收台账" "${TMP}/out" && ok "  说明不查" || bad "  没说明：$(cat "${TMP}/out")"
