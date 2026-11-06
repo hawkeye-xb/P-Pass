@@ -92,6 +92,11 @@ print(s[:160] + ("…（全文见卡）" if len(s) > 160 else ""))
 # compute_scope <since> <to>：写 ${TMP}/scope（每行「<PR> <级别>」，按合入先后）与 ${TMP}/files/<PR>（该 PR 改过的文件）。
 compute_scope() {
   local since="$1" to="$2" sha subj pr kind
+  # 浅克隆的历史可能被浅边界截断（主线上缺 PR、合并分支上缺提交），范围与重验都算不全：直接拒绝（fail-closed）。
+  if [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" != false ]; then
+    printf '✗ 当前是浅克隆（或判不了），历史可能不全，算不出完整的验收范围；先 git fetch --unshallow --tags 再跑\n' >&2
+    exit 1
+  fi
   mkdir -p "${TMP}/files"
   : >"${TMP}/scope"
   : >"${TMP}/allprs"
@@ -147,8 +152,7 @@ scene_of() {
 changed_since() {
   local from="$1" to="$2" pr="$3"
   { [ -n "$from" ] && commit_of "$from" >/dev/null; } || { echo "?"; return; }
-  # 区间历史要完整才判得了：浅克隆（合并分支上可能缺提交，祖先检查也查不出来）、验过的包不是新 ref 的祖先，都判不了 → 待重验。
-  [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = false ] || { echo "?"; return; }
+  # 验过的包要是新 ref 的祖先，区间历史才完整，不是就判不了 → 待重验（浅克隆在 compute_scope 就拒绝了）。
   git merge-base --is-ancestor "$from" "$to" 2>/dev/null || { echo "?"; return; }
   # 两头内容的差异 + 中间提交历史里碰过的文件（改了又改回也算「又被改动」，宁严勿松）。
   { git -c core.quotepath=false diff --name-only --no-renames "$from" "$to" &&
