@@ -3,7 +3,7 @@
 #
 # 临时仓库（裸 origin + 主仓克隆）里走真实路径；gh 与 just 是 PATH 注入的桩：
 #   gh   读写 $FAKE_GH 目录：<号>.state/.title/.labels/.body/.type，评论追加到 <号>.comments
-#   just ci / ci-docs 看 $FAKE_GH/ci_fail；just verify 看 has_verify / verify_fail
+#   just ci / ci-docs 看 $FAKE_GH/ci_fail；just verify 看 has_verify / verify_fail（卡上写明需要真机验证才跑）
 # 每条拒绝都配一条只去掉触发条件的放行用例作反证。
 #
 # just doctor 的用例也在这里：私仓两种模式、.ppass-verify-clone 标记、WSL 桩 bash、拦截未装、
@@ -189,7 +189,13 @@ echo "actionlint" >>"$FAKE_GH/just_calls"
 if [ -e "$FAKE_GH/ci_fail" ]; then echo "error: actionlint failed: FAKE-CI-RED"; exit 1; fi
 echo "==> actionlint green FAKE-CI-GREEN"
 STUB
-chmod +x "${BIN}/gh" "${BIN}/just" "${BIN}/cargo" "${BIN}/actionlint"
+cat >"${BIN}/pnpm" <<'STUB'
+#!/usr/bin/env bash
+echo "==> pnpm $* running"
+if [ -e "$FAKE_GH/ci_fail" ]; then echo "error: lint failed: FAKE-CI-RED"; exit 1; fi
+echo "==> CI pipeline: all green FAKE-CI-GREEN (pnpm $*)"
+STUB
+chmod +x "${BIN}/gh" "${BIN}/just" "${BIN}/cargo" "${BIN}/actionlint" "${BIN}/pnpm"
 export PATH="$BIN${EXTRA_PATH}"
 
 # ── 仓库：裸 origin + 主仓 ─────────────────────────────────────────────
@@ -212,6 +218,8 @@ git init -q "${TMP}/main"
   printf '+ core/**\n+ apps/core/**\n+ apps/desktop/src-tauri/tauri.conf.json\n' >.github/core-paths.txt
   mkdir -p apps/desktop/src-tauri
   printf '{\n  "productName": "P-Pass",\n  "version": "0.11.0",\n  "plugins": { "updater": { "endpoints": ["https://a"] } }\n}\n' >apps/desktop/src-tauri/tauri.conf.json
+  # 桌面 Rust 门禁会补 tauri-build 要的 sidecar 占位文件；真实仓库里这个目录被忽略（#1530）。
+  printf 'src-tauri/binaries/\n' >apps/desktop/.gitignore
   echo a >src/a.txt
   echo d >docs/d.md
   echo c >core/c.txt
@@ -407,8 +415,8 @@ LIB_AWK="$(awk_block "${SRC}/tools/flow/worker-lib.sh")"
 
 # ── just done ─────────────────────────────────────────────────────────
 echo "== just done =="
-card() { # card <号> <标题> <范围> → 领卡并输出 worktree 目录
-  issue "$1" "status:ready" "$2" "$3" "Bug"
+card() { # card <号> <标题> <范围> [正文附加行] → 领卡并输出 worktree 目录
+  issue "$1" "status:ready" "$2" "$3" "Bug" "${4:-}"
   START "$1" >/dev/null 2>&1 || { echo "领卡失败" >&2; return 1; }
   ls -d "${PPASS_WT_ROOT}/$1-"*
 }
@@ -448,9 +456,9 @@ comments_of 21 | grep -q "FAKE-CI-RED" && ok "评论贴了错误末尾（FAKE-CI
 rm -f "${FAKE_GH}/ci_fail"
 DONE "$W" >/dev/null 2>&1 && on_origin "fix/21-ci-red" && ok "反证：去掉故障后推送" || bad "去掉故障后仍失败"
 
-# verify 存在且红 → blocked；绿 → 回执写 E3
+# verify 存在且红 → blocked；绿 → 回执写 E3。只有卡上写明需要真机验证才跑（#1530）
 touch "${FAKE_GH}/has_verify"
-W="$(card 22 "[T-22] verify" "src/**")"
+W="$(card 22 "[T-22] verify" "src/**" "**真机验证**：需要")"
 commit_file "$W" src/v.txt
 touch "${FAKE_GH}/verify_fail"
 if DONE "$W" >/dev/null 2>&1; then bad "verify 红时 done 仍成功"; else ok "just verify 红 → done 失败"; fi
@@ -459,6 +467,28 @@ comments_of 22 | grep -q "FAKE-VERIFY-RED" && ok "评论贴了 verify 错误末�
 rm -f "${FAKE_GH}/verify_fail"
 DONE "$W" >/dev/null 2>&1 && on_origin "fix/22-verify" && ok "反证：verify 绿后推送" || bad "verify 绿后仍失败"
 comments_of 22 | grep -q "E3" && comments_of 22 | grep -q "FAKE-VERIFY-GREEN" && ok "有 verify 时回执写 E3 并贴输出" || bad "回执缺 E3 / verify 输出"
+# 卡上没写要求（即使 verify 存在、会红）→ 不跑 verify，照常推送；反证是上面有要求的 22
+touch "${FAKE_GH}/verify_fail"
+W="$(card 154 "[T-154] verify not requested" "src/**")"
+commit_file "$W" src/nv.txt
+DONE "$W" >"${TMP}/o154" 2>&1 && ok "卡上没写需要真机验证 → verify 不跑，照常推送" || bad "没要求真机验证却仍跑了 verify：$(tail -5 "${TMP}/o154")"
+on_origin "fix/154-verify-not-requested" && ok "  没要求真机验证时分支已推送" || bad "  没推分支"
+C154="$(comments_of 154)"
+printf '%s' "$C154" | grep -q "FAKE-VERIFY-RED" && bad "  没要求真机验证却执行了 verify" || ok "  反证：verify_fail 存在也不执行"
+printf '%s' "$C154" | grep -q "just verify 154" && bad "  回执声称跑了 just verify" || ok "  回执没有 just verify 154"
+printf '%s' "$C154" | grep -q "未跑 \`just verify\`" && ok "  回执写明没跑 verify 及原因" || bad "  回执没写没跑原因：$(printf '%s' "$C154" | grep -m2 -E '验收|证据等级')"
+printf '%s' "$C154" | grep -q "E3" && bad "  没跑 verify 却声称 E3" || ok "  证据等级不声称 E3"
+# 明确写「不需要」也不能被当成「需要」（子串反证）
+W="$(card 155 "[T-155] verify not needed" "src/**" "**真机验证**：不需要")"
+commit_file "$W" src/nn.txt
+DONE "$W" >"${TMP}/o155" 2>&1 && ok "卡上写「不需要」→ verify 不跑" || bad "写「不需要」却跑了 verify：$(tail -5 "${TMP}/o155")"
+comments_of 155 | grep -q "FAKE-VERIFY-RED" && bad "  「不需要」被执行成需要" || ok "  反证：「不需要」不被子串匹配成需要"
+# LC_ALL=C 下也要能识别全角冒号（PR #1538 评审反例：含多字节字符的括号表达式在 C locale 下不匹配）
+rm -f "${FAKE_GH}/verify_fail"
+W="$(card 157 "[T-157] verify C locale" "src/**" "**真机验证**：需要")"
+commit_file "$W" src/cl.txt
+LC_ALL=C DONE "$W" >"${TMP}/o157" 2>&1 && ok "LC_ALL=C 下卡上写需要真机验证 → 照常推送" || bad "LC_ALL=C 下交卡失败：$(tail -5 "${TMP}/o157")"
+comments_of 157 | grep -q "FAKE-VERIFY-GREEN" && ok "  LC_ALL=C 下仍识别全角冒号并跑 just verify" || bad "  LC_ALL=C 下没识别出真机验证要求"
 rm -f "${FAKE_GH}/has_verify"
 
 # 纯文档走 ci-docs
@@ -512,6 +542,35 @@ printf '[package]\nname = "foo-pkg"\nversion = "0.1.0"\n' >"$W/crates/foo/Cargo.
 git -C "$W" add -A && git -C "$W" commit -q -s -m "crate"
 DONE "$W" >/dev/null 2>&1
 comments_of 126 | grep -qF "cargo nextest run -p foo-pkg" && ok "改 Rust crate → 跑该 crate 的测试" || bad "Rust crate 门禁不对"
+# 桌面端按路径挑（#1530）：apps/desktop/src/** → 前端 vitest；src-tauri/** → 独立 workspace 的 nextest；
+# 两条之外的 apps/desktop/** 仍 fail-closed 退回全量。反证：去掉 worker-done.sh 里对应规则，下面断言会红。
+W="$(card 160 "[T-160] desktop frontend" "apps/desktop/**")"
+mkdir -p "$W/apps/desktop/src"
+printf 'let x = 1\n' >"$W/apps/desktop/src/App.svelte"
+git -C "$W" add -A && git -C "$W" commit -q -s -m "desktop frontend"
+DONE "$W" >"${TMP}/o160" 2>&1
+C160="$(comments_of 160)"
+printf '%s' "$C160" | grep -qF "pnpm -C apps/desktop test" && ok "只改桌面前端 → 跑 apps/desktop 的 vitest" || bad "桌面前端门禁不对：$(tail -4 "${TMP}/o160")"
+printf '%s' "$C160" | grep -qF '`just ci`' && bad "只改桌面前端仍跑了全量 just ci" || ok "反证：没有全量 just ci"
+W="$(card 161 "[T-161] desktop rust" "apps/desktop/**")"
+mkdir -p "$W/apps/desktop/src-tauri/src"
+printf 'fn hi() {}\n' >"$W/apps/desktop/src-tauri/src/lib.rs"
+git -C "$W" add -A && git -C "$W" commit -q -s -m "desktop rust"
+DONE "$W" >"${TMP}/o161" 2>&1
+C161="$(comments_of 161)"
+printf '%s' "$C161" | grep -qF "cargo nextest run --manifest-path apps/desktop/src-tauri/Cargo.toml -p p-pass-desktop" &&
+  ok "只改桌面 Rust → 跑该 crate 的 nextest" || bad "桌面 Rust 门禁不对：$(tail -4 "${TMP}/o161")"
+printf '%s' "$C161" | grep -qF '`just ci`' && bad "只改桌面 Rust 仍跑了全量 just ci" || ok "反证：没有全量 just ci"
+ls "$W/apps/desktop/src-tauri/binaries" 2>/dev/null | grep -q '^ppf-daemon-' &&
+  ok "  跑前补了 tauri-build 要的 sidecar 占位文件" || bad "  没补 sidecar 占位文件"
+# 反证：两条桌面规则之外的文件仍挑不出来 → fail-closed
+W="$(card 162 "[T-162] desktop unknown" "apps/desktop/**")"
+mkdir -p "$W/apps/desktop"
+printf '{}\n' >"$W/apps/desktop/package.json"
+git -C "$W" add -A && git -C "$W" commit -q -s -m "desktop unknown"
+DONE "$W" >"${TMP}/o162" 2>&1
+C162="$(comments_of 162)"
+case "$C162" in *'`just ci`'*) ok "反证：apps/desktop 的未覆盖文件仍退回全量 just ci" ;; *) bad "未覆盖文件没退回全量：$(tail -4 "${TMP}/o162")" ;; esac
 # 有一个挑不出来的文件 → 退回全量
 W="$(card 127 "[T-127] mixed" "apps/android/** tools/**")"
 mkdir -p "$W/apps/android" "$W/tools"
