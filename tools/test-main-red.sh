@@ -142,6 +142,16 @@ reset
 run failure
 check "反证：有上次绿时正文不含「无法确定区间」" bash -c "! grep -q '无法确定区间' '$FAKE/create.args'"
 
+echo "── 其余读取失败也要开卡 ──"
+reset
+echo '{}' >"$FAKE/compare.json"
+run failure
+check "compare 读失败：回退到最近提交并开卡" bash -c "grep -q '#201' '$FAKE/create.args' && grep -q '无法确定区间' '$FAKE/create.args'"
+reset
+echo '{}' >"$FAKE/jobs.json"
+run failure
+check "失败 job 读失败：开卡并写兜底文案" bash -c "grep -q '没读到失败 job' '$FAKE/create.args' && grep -q '#101' '$FAKE/create.args'"
+
 echo "── 不该处理的 run ──"
 reset
 BRANCH=feature run failure

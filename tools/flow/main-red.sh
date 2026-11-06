@@ -69,13 +69,17 @@ base_sha="$(gh api "repos/${REPO}/actions/workflows/${workflow_id}/runs?branch=m
   --jq "[.workflow_runs[] | select(.created_at < \"${created_at}\")] | sort_by(.created_at) | last | .head_sha // empty")" || base_sha=""
 
 # 提交行：「短 sha 标题」；PR 号从标题末尾的 (#N)（squash 合入的写法）取
+# 读失败一律降级（宁可列得粗，也不能因此不开卡）
+commit_lines=""
 if [ -n "$base_sha" ]; then
   commit_lines="$(gh api "repos/${REPO}/compare/${base_sha}...${head_sha}" \
-    --jq '.commits[] | "\(.sha[0:8]) \(.commit.message | split("\n")[0])"')"
+    --jq '.commits[] | "\(.sha[0:8]) \(.commit.message | split("\n")[0])"')" || base_sha=""
+fi
+if [ -n "$base_sha" ]; then
   scope_note="区间：上次全绿提交 \`${base_sha:0:8}\`（不含）→ 本次红的提交 \`${head_sha:0:8}\`（含）。"
 else
   commit_lines="$(gh api "repos/${REPO}/commits?sha=${head_sha}&per_page=${RECENT_N}" \
-    --jq '.[] | "\(.sha[0:8]) \(.commit.message | split("\n")[0])"')"
+    --jq '.[] | "\(.sha[0:8]) \(.commit.message | split("\n")[0])"')" || commit_lines=""
   scope_note="⚠️ 读不到这条流水线在 main 上更早的全绿记录，**无法确定区间**：下面列的是到本次红的提交为止最近 ${RECENT_N} 个提交，元凶可能更早。"
 fi
 
@@ -91,7 +95,7 @@ done <<<"$commit_lines"
 [ -n "$candidates" ] || candidates="- （区间内没有提交：可能是重跑或 force-push，请直接看 run 日志）"$'\n'
 
 failed_jobs="$(gh api "repos/${REPO}/actions/runs/${RUN_ID}/jobs" \
-  --jq '.jobs[] | select(.conclusion == "failure" or .conclusion == "timed_out") | "- [\(.name)](\(.html_url))"')"
+  --jq '.jobs[] | select(.conclusion == "failure" or .conclusion == "timed_out") | "- [\(.name)](\(.html_url))"')" || failed_jobs=""
 [ -n "$failed_jobs" ] || failed_jobs="- （没读到失败 job，看 run 页面）"
 
 body="main 上 **${WORKFLOW}** 红了（${CONCLUSION}）：${run_url}
