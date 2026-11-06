@@ -192,7 +192,7 @@ tick 21; tick 26
 has "#28（ui）待验：不在台账里" && ok "  #28 不在台账里 → 待验" || bad "  没点名 #28：$(cat "${TMP}/out")"
 has "#25（ui）待重验：验过 @v1.1.0-test.1 之后又改了 apps/desktop/src/Other.svelte" && ok "  已验的 #25 文件在候选版里又被改 → 待重验" || bad "  没判 #25 重验：$(cat "${TMP}/out")"
 has "#21（" && bad "  文件没再改的 #21 也被点名" || ok "  反证：#21 验过之后文件没再改 → 不点名"
-# #1486：旧 test tag 会被 point-test-channel.sh 连同草稿删掉；台账记了包的提交，tag 删了也按提交判。
+# #1486：旧 test tag 会被 cleanup-test-channel.sh 连同草稿删掉；台账记了包的提交，tag 删了也按提交判。
 cp "$L" "${TMP}/ledger.keep"
 check_test2() { (cd "$R" && PATH="${TMP}/bin:${PATH}" FAKE="$FAKE" PPASS_HOOK_REPO=o/r bash tools/flow/release-acceptance.sh 500 v1.1.0-test.2) >"${TMP}/out" 2>&1; }
 git -C "$R" tag -d v1.1.0-test.1 >/dev/null

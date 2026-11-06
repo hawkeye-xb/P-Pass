@@ -237,14 +237,22 @@ version string (`-test.` ⇒ test):
   point at. For each platform it built, `tools/release/point-test-channel.sh`
   (1) uploads the installers (plus the macOS dmg for manual installs),
   (2) refuses unless every download URL in the manifest is already in
-  `test-channel`, (3) overwrites that platform's manifest, (4) deletes
-  installers whose version no manifest points at, (5) deletes test drafts
-  (and their tags) older than the newest version any manifest points at and
-  not pointed at themselves. So `test-channel` always
+  `test-channel`, (3) overwrites that platform's manifest. It never deletes:
+  the per-platform jobs run in parallel and each only owns its own manifest
+  and installers. After all of them finish, the single `cleanup-test-channel`
+  job runs `tools/release/cleanup-test-channel.sh` once, serially and
+  idempotently: it deletes installers whose version no manifest points at,
+  and test drafts (and their tags) older than the newest version any manifest
+  points at and not pointed at themselves. So `test-channel` always
   holds exactly the current package per platform, and the Releases page
   carries no `-test.N`. Re-running an older tag's workflow never moves a
-  pointer backwards. Nothing calls the GitHub
-  API, so there is no anonymous rate limit and no `GH_TOKEN` to manage.
+  pointer backwards. A cleanup failure is a warning, not a failed release:
+  the assets are uploaded and the manifests already point at them, so clients
+  can download; only disk usage is affected. A failed upload/point still
+  fails the run, and the cleanup job is skipped then, so it cannot mask that
+  failure. Nothing calls the GitHub
+  API at client time, so there is no anonymous rate limit and no `GH_TOKEN`
+  to manage on devices.
   Each client reads its own manifest: Android
   `test-channel/manifest-android.json`; the desktop shell's updater plugin
   `test-channel/manifest-<platform>.json` (endpoint baked at build time by
@@ -511,11 +519,15 @@ Android 靠 `channelFromVersion()` 读注入的版本串（含 `-test.` 即 test
   `manifest-macos.json`、`manifest-windows.json`，外加给旧版 Android test 包读的老格式
   `manifest.json`）和清单指向的安装包。每构建一端，`tools/release/point-test-channel.sh`
   ① 上传安装包（macOS 另带手动安装用的 dmg）② 清单里每个下载链接都已在 `test-channel`
-  才继续，否则拒绝 ③ 覆盖该端清单 ④ 删掉没有任何清单指向的版本的安装包 ⑤ 删掉比被指向的
-  最新版本还旧、且自己没被指向的 test 草稿（连同 tag）。所以
+  才继续，否则拒绝 ③ 覆盖该端清单。它**不删除任何东西**：各端 job 并行、各自只拥有自己那份
+  清单与安装包。所有写入完成后，由唯一的 `cleanup-test-channel` job 跑一次
+  `tools/release/cleanup-test-channel.sh`（单点、串行、幂等）：删掉没有任何清单指向的版本的
+  安装包，再删掉比被指向的最新版本还旧、且自己没被指向的 test 草稿（连同 tag）。所以
   `test-channel` 里永远只有各端当前那一个包，Releases 页面不出现 `-test.N`。
-  重跑旧 tag 的 workflow 不会把指针往回拨。全程不调 GitHub
-  API → 没有匿名限流，也没有 `GH_TOKEN` 要管。
+  重跑旧 tag 的 workflow 不会把指针往回拨。收敛失败只打 **warning**、不判整轮红：
+  此时资产已上传、清单已指向，客户端能下载，失败只影响占盘；上传 / 指向失败照旧红，
+  且收敛 job 会跳过，不会把失败盖过去。客户端不调 GitHub
+  API → 没有匿名限流，设备上也没有 `GH_TOKEN` 要管。
   各端读自己那份：Android 读 `test-channel/manifest-android.json`；桌面壳的更新插件读
   `test-channel/manifest-<端>.json`（版本号含 `-test.` 时由 `tools/release/tauri-config.mjs`
   在构建期写进 endpoint）。客户端直读 GitHub；原先的 Cloudflare 更新 Worker 已随 #860 下线。
