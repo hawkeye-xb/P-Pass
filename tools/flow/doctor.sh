@@ -153,11 +153,17 @@ if [ -z "$avail_kb" ]; then
 else
   need_kb=$((MIN_GB * 1024 * 1024))
   avail_gb=$((avail_kb / 1024 / 1024))
+  # 低于 30G 先提示（#1490）：多个会话并行编译一天就能把共享编译缓存撑到 100G，等跌破下限再清就挡开工了。
+  WARN_GB=30
   if [ "$avail_kb" -ge "$need_kb" ]; then
     ok "磁盘：剩余 ${avail_gb}G（要求 ≥ ${MIN_GB}G）"
+    if [ "$avail_gb" -lt "$WARN_GB" ]; then
+      warn "磁盘：剩余不到 ${WARN_GB}G，先清共享编译缓存：just cleanup-local --cache --apply（要 cargo-sweep：cargo install cargo-sweep --locked）"
+    fi
   else
     bad "磁盘：剩余 ${avail_gb}G，低于 ${MIN_GB}G"
-    fix "清本机 worktree 与构建产物：just cleanup-local（默认只预览，--apply 才删）" \
+    fix "先清共享编译缓存：just cleanup-local --cache --apply（要 cargo-sweep：cargo install cargo-sweep --locked）" \
+      "再清本机 worktree 与构建产物：just cleanup-local（默认只预览，--apply 才删）" \
       "有未推送提交或未提交改动的 worktree 先处理，别直接删"
   fi
 fi

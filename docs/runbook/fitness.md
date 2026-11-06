@@ -41,6 +41,18 @@
 写明**谁、什么条件下清**（残留清扫类别、宽限、GC 周期），或为什么它不随照片数增长。
 落盘目录的清理判据全文见 `docs/desktop/business-rules.zh-CN.md` §5.7。
 
+### 本机开发缓存（不进登记表）
+
+`disk-growth-registry.txt` 只管产品落盘目录。本机开发用的共享编译缓存 `P-Pass-cache/cargo-target`（#1375，位置由
+`tools/e3/lib/dev-cache.sh` 定）同样不能只增不删，清理触发条件登记在这里：
+
+- **谁清**：`just cleanup-local --cache --apply`（`tools/clean-local-builds.sh`），用 cargo-sweep 先删 7 天前的产物，
+  再从最旧的删起直到总量低于 40GB（`--cache-days`、`--cache-max` 可调）；没装 cargo-sweep 只提示安装，不退化成整目录删除。
+- **什么时候清**：`just doctor` 见剩余不到 30G 就提示，跌破 15G 开工下限时修法第一条也是它。
+- **不清什么**：有进程开着缓存里的文件时整轮跳过；正在跑的重编译先等 `tools/heavy-lock`。
+  `.claude/worktrees/` 下的会话目录（及其 target）不在 `--worktrees`、`--targets` 默认范围内，要显式加 `--session-worktrees`；
+  加了也只删没人占用的：目录里有进程的工作目录或打开的文件，或者没有 lsof、判不了，一律不删。
+
 ## 做不到机器化、仍靠文字规矩与验收的
 
 - **占盘 ≈ 1x 的实际量**：门禁只能挡「悄悄多出一个目录」，挡不了「已有目录里的文件只增不删」；写盘改动仍要 `du -sh` 实测（AGENTS.md）。手机端临时目录不在扫描范围内。

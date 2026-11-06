@@ -21,6 +21,9 @@ SUT="$HERE/ci-needs-full-lane.sh"
 # 本测试会在临时仓库里跑 git。在 git hook 里运行时（如 pre-push 触发 just ci），继承来的
 # GIT_DIR 等仓库定位变量会盖过 -C / cd，把 add/commit 写进真仓库，所以先清掉。
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_PREFIX
+# #1504：tools/ 的判定要在仓库里 git grep 引用方，判据按当前目录找仓库根，所以在仓库根跑。
+REPO="$(cd "$HERE/.." && pwd)"
+cd "$REPO" || exit 1
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -115,8 +118,17 @@ expect_lane "$SUT" rust-workspace true "#1467：桌面 i18n zh（diag 读，宽 
 expect_lane "$SUT" rust-workspace false "#1467：桌面其他前端文件仍可跳" apps/desktop/src/lib/x.ts
 
 echo
+echo "==> 1b. #1504：tools/ 下没登记的文件按引用闭包判（真仓库）"
+for lane in default rust-workspace; do
+  expect_lane "$SUT" "$lane" false "只改本地清理脚本（lane=${lane}）"        tools/clean-local-builds.sh
+  expect_lane "$SUT" "$lane" false "只改本地清理脚本的自测（lane=${lane}）"  tools/test-clean-local-builds.sh
+  expect_lane "$SUT" "$lane" true  "arch-check（ci-rust 直接调用，lane=${lane}）" tools/arch-check.sh
+  expect_lane "$SUT" "$lane" true  "fitness_lib（被 import，lane=${lane}）"  tools/fitness_lib.py
+done
+expect "$SUT" true "清理脚本 + crates 混合 → 要跑" tools/clean-local-builds.sh crates/daemon/src/lib.rs
+
+echo
 echo "==> 1c. #1467：从源码派生的反向用例（被 gated job 读到的文件两个 lane 都必须判要跑）"
-REPO="$(cd "$HERE/.." && pwd)"
 DERIVED="$TMP/derived.txt"
 : >"$DERIVED"
 # ① crates/ 里 include_str!/include_bytes! 指向 crates/ 之外的目标（按所在文件解析相对路径）
@@ -210,7 +222,7 @@ for spec in "docs/a.md" "infra/x.md" ".claude/s.json" "README.md" \
             "crates/a.rs" "Cargo.lock" "assets/i18n/en.json" \
             "tools/arch-check.sh" ".github/workflows/ci-rust.yml" "newthing/x.rs" \
             "tools/flow/a.sh" "release/notes/x.txt" ".github/ISSUE_TEMPLATE/t.yml" \
-            "apps/desktop/src/i18n/en.json" \
+            "apps/desktop/src/i18n/en.json" "tools/clean-local-builds.sh" \
             "" ; do
   a="$(decide "$SUT" default $spec)"
   h="$(decide "$SUT" rust-workspace $spec)"
@@ -220,7 +232,7 @@ for spec in "docs/a.md" "infra/x.md" ".claude/s.json" "README.md" \
   fi
 done
 if [ "$INCL_OK" -eq 1 ]; then
-  echo "  ✅ 17 组输入全部满足 run_heavy=true ⇒ run_arch=true"
+  echo "  ✅ 18 组输入全部满足 run_heavy=true ⇒ run_arch=true"
   PASS=$((PASS + 1))
 else
   FAIL=$((FAIL + 1))
@@ -384,6 +396,114 @@ else
     PASS=$((PASS + 1))
   else
     echo "  ❌ 反证：去掉 --no-renames 后仍判 ${got} ⇒ 用例没有判别力"
+    FAIL=$((FAIL + 1))
+  fi
+fi
+
+echo
+echo "==> 7f. #1504：引用闭包（临时仓库：ci-rust 调 gated.sh，gated.sh source helper.sh，lonely.sh 只被 justfile 提到）"
+CR="$TMP/closure-repo"
+mkdir -p "$CR/.github/workflows" "$CR/tools"
+printf 'jobs:\n  t:\n    steps:\n      - run: tools/gated.sh\n' >"$CR/.github/workflows/ci-rust.yml"
+printf 'jobs:\n  d:\n    steps:\n      - run: echo desktop\n' >"$CR/.github/workflows/ci-desktop.yml"
+# shellcheck disable=SC2016 # 字面量写进夹具，不展开
+printf '#!/usr/bin/env bash\nsource "$(dirname "$0")/helper.sh"\n' >"$CR/tools/gated.sh"
+printf 'h() { :; }\n' >"$CR/tools/helper.sh"
+printf 'echo lonely\n' >"$CR/tools/lonely.sh"
+printf 'lonely:\n  bash tools/lonely.sh\n' >"$CR/justfile"
+git -C "$CR" init -q --template= && git -C "$CR" add -A &&
+  git -C "$CR" -c user.name=t -c user.email=t@invalid commit -q -m base
+# cdecide <脚本> <lane> <文件...>：在临时仓库里按 stdin 判
+cdecide() {
+  local script="$1" lane="$2"
+  shift 2
+  (cd "$CR" && printf '%s\n' "$@" | bash "$script" - "$lane" 2>/dev/null)
+}
+cexpect() { # cexpect <脚本> <lane> <期望> <说明> <文件...>
+  local script="$1" lane="$2" want="$3" label="$4" got
+  shift 4
+  got="$(cdecide "$script" "$lane" "$@")"
+  if [ "$got" = "$want" ]; then
+    printf '  ✅ %-56s → %s\n' "$label" "$got"
+    PASS=$((PASS + 1))
+  else
+    printf '  ❌ %-56s → 期望 %s，实得 %s\n' "$label" "$want" "$got"
+    FAIL=$((FAIL + 1))
+  fi
+}
+for lane in default rust-workspace; do
+  cexpect "$SUT" "$lane" true  "ci-rust 直接调用的脚本（lane=${lane}）"   tools/gated.sh
+  cexpect "$SUT" "$lane" true  "被它 source 的辅助脚本（lane=${lane}）"   tools/helper.sh
+  cexpect "$SUT" "$lane" false "只被 justfile 提到的脚本（lane=${lane}）" tools/lonely.sh
+  cexpect "$SUT" "$lane" true  "HEAD 里已不存在的 tools 文件（lane=${lane}）" tools/gone.sh
+done
+
+# git grep 出错：PATH 里垫一个 git，只让 grep 子命令以 2 退出（其余照常转给真 git）。
+REAL_GIT="$(command -v git)"
+SHIM="$TMP/git-shim"
+mkdir -p "$SHIM"
+# shellcheck disable=SC2016 # 字面量写进夹具，不展开
+printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = grep ] && exit 2; done\nexec "%s" "$@"\n' "$REAL_GIT" >"$SHIM/git"
+chmod +x "$SHIM/git"
+shim_decide() { (cd "$CR" && echo tools/lonely.sh | PATH="$SHIM:$PATH" bash "$1" - 2>/dev/null); }
+got="$(shim_decide "$SUT")"
+if [ "$got" = "true" ]; then
+  echo "  ✅ git grep 出错（退出码 2）时 lonely.sh → true"
+  PASS=$((PASS + 1))
+else
+  echo "  ❌ git grep 出错（退出码 2）时 lonely.sh → 期望 true，实得 ${got}"
+  FAIL=$((FAIL + 1))
+fi
+
+# 门禁 workflow 用通配符拼 tools/ 路径：引用不写名字，追不到，一律要跑。
+DYN="$TMP/closure-dyn"
+rm -rf "$DYN" && cp -R "$CR" "$DYN"
+# shellcheck disable=SC2016 # 字面量写进夹具，不展开
+printf '      - run: for s in tools/gen/*.sh; do "$s"; done\n' >>"$DYN/.github/workflows/ci-rust.yml"
+got="$( (cd "$DYN" && echo tools/lonely.sh | bash "$SUT" - 2>/dev/null) )"
+if [ "$got" = "true" ]; then
+  echo "  ✅ 门禁 workflow 里有 tools/*.sh 通配时 lonely.sh → true"
+  PASS=$((PASS + 1))
+else
+  echo "  ❌ 门禁 workflow 里有 tools/*.sh 通配时 lonely.sh → 期望 true，实得 ${got}"
+  FAIL=$((FAIL + 1))
+fi
+
+echo "  -- 反证：去掉闭包追溯（只看直接引用），辅助脚本必须判 false --"
+MUT7="$TMP/mutated7.sh"
+grep -v '# 闭包追溯' "$SUT" >"$MUT7"
+if [ "$(wc -l <"$SUT")" -ne "$(( $(wc -l <"$MUT7") + 1 ))" ]; then
+  echo "  ❌ 变异没生效（锚点没匹配上 1 行）—— 这一节等于没跑，判失败"
+  FAIL=$((FAIL + 1))
+else
+  before=$FAIL
+  cexpect "$MUT7" default true "【变异后应失败】被 source 的辅助脚本" tools/helper.sh
+  cexpect "$MUT7" default true "直接调用的脚本（变异不影响）"       tools/gated.sh
+  gained=$((FAIL - before))
+  if [ "$gained" -eq 1 ]; then
+    echo "  ✅ 只有辅助脚本那条变红 ⇒ 闭包追溯真的在起作用"
+    FAIL=$((FAIL - 1))
+    PASS=$((PASS + 1))
+  else
+    echo "  ❌ 变异后 ${gained}/1 条变红（期望恰好 1）⇒ 判别力不足，必须修"
+    FAIL=$((before + 1))
+  fi
+fi
+
+echo "  -- 反证：忽略 git grep 的退出码，垫片下 lonely.sh 必须判 false --"
+MUT8="$TMP/mutated8.sh"
+# shellcheck disable=SC2016 # 字面量写进夹具，不展开
+sed 's/if \[ "\$rc" -gt 1 \]; then/if false; then/' "$SUT" >"$MUT8"
+if cmp -s "$SUT" "$MUT8"; then
+  echo "  ❌ 变异没生效（锚点没匹配上）—— 这一节等于没跑，判失败"
+  FAIL=$((FAIL + 1))
+else
+  got="$(shim_decide "$MUT8")"
+  if [ "$got" = "false" ]; then
+    echo "  ✅ 忽略退出码后同一垫片判 false ⇒ git grep 出错的用例有判别力"
+    PASS=$((PASS + 1))
+  else
+    echo "  ❌ 忽略退出码后仍判 ${got} ⇒ 用例没有判别力"
     FAIL=$((FAIL + 1))
   fi
 fi
