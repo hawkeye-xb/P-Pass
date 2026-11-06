@@ -2,7 +2,7 @@
 #
 # 测试机只有一个安装槽（docs/decisions/2026-11-02-one-install-per-test-device.md），拿到 mac 设备锁即可覆盖。
 # 输入（通用，与将来出包方式无关）：
-#   旧版产物   E3_MAC_BASE_TAG（默认取 GitHub Release 上最新的 v* tag），经 restore 下载、校验后安装
+#   旧版产物   E3_MAC_BASE_TAG（默认取 GitHub Release 上最新的已发布正式版 v* tag，不含 Draft / Pre-release），经 restore 下载、校验后安装
 #   候选产物   E3_MAC_CAND_APP（CI 出的正式签名包等），默认 just dev mac 编的开发版签名包（lib/mac-install.sh）
 #   安装位置   ~/Applications/P-Pass.app（E3_MAC_APP）
 # 数据（#1311）：升级基线不依赖本机库的现状——本机库可能已被更新的构建迁移过（多出上一版不认的迁移，
@@ -21,7 +21,9 @@ source "$E3_LIB/mac-install.sh"
 
 base_tag() {
   [ -n "${E3_MAC_BASE_TAG:-}" ] && { echo "$E3_MAC_BASE_TAG"; return; }
-  gh release list -R "${E3_GH_REPO:-hawkeye-xb/P-Pass}" --limit 30 --json tagName -q '.[].tagName' | grep -m1 '^v[0-9]'
+  # 只认已发布的正式版：Draft 还没发、Pre-release 是 test 通道，都不是用户手上的「上一版」（#1511）
+  gh release list -R "${E3_GH_REPO:-hawkeye-xb/P-Pass}" --exclude-drafts --exclude-pre-releases --limit 30 \
+    --json tagName -q '.[].tagName' | grep -m1 '^v[0-9]'
 }
 
 setup() {

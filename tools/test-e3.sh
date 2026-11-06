@@ -118,7 +118,7 @@ YML
   printf 'candidate\n' >"$fake/apps/android/app/build/outputs/apk/debug/app-debug.apk"
   git -C "$fake" init -q
   git -C "$fake" add -A
-  git -C "$fake" -c user.name=t -c user.email=t@t commit -q -m base
+  git -C "$fake" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t commit -q -m base
   base="$(git -C "$fake" rev-parse HEAD)"
   export E3_STATE="$d/state"
   # shellcheck source=../tools/e3/verify
@@ -133,7 +133,7 @@ YML
   printf 'x\n' >"$fake/apps/android/app/src/x.kt"
   printf 'y\n' >"$fake/apps/android/newfile.kt"
   git -C "$fake" add -A
-  git -C "$fake" -c user.name=t -c user.email=t@t commit -q -m android
+  git -C "$fake" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t commit -q -m android
   if ensure_base_apk; then
     echo "android 有改动，ensure_base_apk 却成功返回（把候选包当基线了）"
     exit 1
@@ -144,7 +144,7 @@ YML
   git -C "$fake" checkout -q -b docs-only "$base"
   printf 'note\n' >"$fake/docs.md"
   git -C "$fake" add -A
-  git -C "$fake" -c user.name=t -c user.email=t@t commit -q -m docs
+  git -C "$fake" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t commit -q -m docs
   E3_STATE="$d/state-docs"
   if ! ensure_base_apk; then
     echo "非 android 改动，ensure_base_apk 应直接拷候选包却失败了"
@@ -406,6 +406,46 @@ if [ "$(uname)" = Darwin ]; then
     exit 0
   ) || bad "设备归属（claim / release / status）"
 fi
+
+# #1511 mac/upgrade 的上一版：base_tag 只取已发布正式版（列表首项是 Draft 也跳过）；装的版本号对正式批次 tag
+# 取该 tag 上 release/versions.json 的 desktop，test tag 与批次制之前的 tag 取 tag 名；读不到不猜。
+# 假 gh 只在带齐 --exclude-drafts --exclude-pre-releases 时去掉 Draft；临时 git 仓库造 tag，不依赖本检出有没有 tag。
+(
+  d="$(mktemp -d)" || exit 1
+  trap 'rm -rf "$d"' EXIT
+  mkdir -p "$d/bin"
+  cat >"$d/bin/gh" <<'STUB'
+#!/usr/bin/env bash
+case " $* " in
+  *" --exclude-drafts "*--exclude-pre-releases" "*) printf 'v2026.10.7\nv2026.10.6\n' ;;
+  *) printf 'v2026.11.1\nv0.11.0-test.4\nv2026.10.7\n' ;;
+esac
+STUB
+  chmod +x "$d/bin/gh"
+  PATH="$d/bin:$PATH"
+  log() { echo "$*" >>"$d/log"; }
+  E3_LIB="$E3/lib" MAC_APP="$d/none.app"
+  unset E3_MAC_BASE_TAG
+  # shellcheck source=e3/scenarios/mac/upgrade.sh
+  source "$E3/scenarios/mac/upgrade.sh"
+  [ "$(base_tag)" = v2026.10.7 ] || { echo "列表首项是 Draft 时 base_tag 取成了 $(base_tag)"; exit 1; }
+  [ "$(E3_MAC_BASE_TAG=v0.10.1 base_tag)" = v0.10.1 ] || { echo "E3_MAC_BASE_TAG 覆盖不生效"; exit 1; }
+
+  export E3_TAG_REPO="$d/repo"
+  git init -q "$E3_TAG_REPO"
+  mkdir -p "$E3_TAG_REPO/release"
+  printf '{\n  "desktop": "0.10.1",\n  "android": "0.10.2"\n}\n' >"$E3_TAG_REPO/release/versions.json"
+  git -C "$E3_TAG_REPO" add release/versions.json
+  git -C "$E3_TAG_REPO" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t commit -qm v
+  git -C "$E3_TAG_REPO" tag v2026.10.7
+  [ "$(mac_tag_version v2026.10.7)" = 0.10.1 ] || { echo "正式 tag 的版本没取 versions.json 的 desktop：$(mac_tag_version v2026.10.7)"; exit 1; }
+  [ "$(mac_tag_version v0.11.0-test.4)" = 0.11.0-test.4 ] || { echo "test tag 的版本不是 tag 名"; exit 1; }
+  [ "$(mac_tag_version v2026.10.7-test.1)" = 2026.10.7-test.1 ] || { echo "批次号前缀的 test tag 的版本不是 tag 名"; exit 1; }
+  [ "$(mac_tag_version v0.10.1)" = 0.10.1 ] || { echo "批次制之前的 tag 的版本不是 tag 名"; exit 1; }
+  mac_tag_version v2026.11.9 >/dev/null && { echo "本机没有的正式 tag 没判失败"; exit 1; }
+  grep -q 'v2026.11.9' "$d/log" || { echo "取不到 tag 时没说明原因"; exit 1; }
+  exit 0
+) || bad "mac/upgrade 上一版 tag 与版本号（#1511）"
 
 # #1378 模拟器用完即关：只关「要用的那台」且是本次运行期间才开机的；别的会话持着模拟器锁时不关。
 # 用假 xcrun（读 $FAKE_SIM 目录），不碰真模拟器。
