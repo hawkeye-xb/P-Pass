@@ -77,16 +77,18 @@ job 名必须写死**。理由和细节在这里。
 ## acceptance gate（#1422）
 
 `ci-docs.yml` 里名字写死的 job `acceptance gate`：PR 碰界面文案路径（`owner-triage.sh` 的 `UI_GLOBS`）、核心路径，或 `apps/**` 下的非测试文件（测试位置见 `acceptance-gate.sh` 的 `TEST_RE`）时，
-正文必须有验收记录（「产品负责人 <时间> 按 SOP <链接> 操作，owner 判日志通过」，旧写法「…真机验收通过」也认）或整体模式「随模块验收 #<模块卡>」，否则红；只改更新说明（`release/notes/**`，可带 `CHANGELOG.md`）的也可用「产品负责人 <时间> 文案确认通过」；碰核心但用户看不见的（如发布链脚本）不要验收行，要正文引用 origin/main 上已采纳的方案且改动带测试；只改版本号行的核心文件不算核心（`ci-paths.sh core --diff`）；自动级直接绿。盯梢、人控级 PR 先开草稿，
-CI、评审与验收并行，验收后补这一行再 `gh pr ready`（`edited` / `ready_for_review` 事件会重跑它）。
-它先只是一个检查，设为必需检查是 owner 在仓库设置里做的，和 job 名成对。判定见 `tools/flow/acceptance-gate.sh`，自测 `tools/test-acceptance-gate.sh`。
+按级别判（#1471 按版本验收）：用户看得到的改动（含只改更新说明）合入不要验收行，直接绿，发版前由 `just release-scope` 的台账兜住；
+碰核心的要正文引用 origin/main 上已采纳的方案，看不见的核心（如发布链脚本）还要改动带测试，否则红；只改版本号行的核心文件不算核心
+（`ci-paths.sh core --diff`）；自动级直接绿。改正文补方案引用后 `edited` 事件会重跑它。
+它先只是一个检查，设为必需检查是 owner 在仓库设置里做的，和 job 名成对。判定见 `tools/flow/acceptance-gate.sh`，自测 `tools/test-acceptance-gate.sh`；同一个 job 还跑按版本验收的 `tools/test-release-scope.sh`、`tools/test-release-acceptance.sh`。
 
 ## 核心路径
 
 `.github/core-paths.txt` 圈住的文件（门禁本身、配对 / 身份 / 加密 / 协议、存储与迁移、
-更新链、依赖锁）改到了，PR 上 `core review` 需要在 Actions 里批准。2026-11-02 起由 owner 批准，
-前提是该核心改动已按 AGENTS.md 红线 6 讨论定案（卡上引用定案）；worker 一律不批。有第二位真人协作者后改回人批。判定逻辑与语法见
-`tools/ci-paths.sh` 头注释，自测 `tools/test-ci-paths.sh`。
+更新链、依赖锁）改到了，就是 AGENTS.md 里的人控级任务，没有单独的审批 job。三道关把关：
+开工前方案按红线 6 定案（卡上引用已采纳方案）；PR 正文有产品负责人真机验收行（`acceptance gate` 检查）；
+独立评审通过（CI 评审 job 的 `review/agent`）。判定逻辑与语法见 `tools/ci-paths.sh` 头注释，
+自测 `tools/test-ci-paths.sh`。
 
 ## 独立评审 `review/agent`
 
@@ -95,10 +97,10 @@ CI、评审与验收并行，验收后补这一行再 `gh pr ready`（`edited` /
 job 永远成功，结论只看状态。它用 `pull_request_target`：评审工具取 main 上的版本，PR 头提交只当数据读，
 别往里加执行 PR 代码的步骤（理由见该 workflow 头注释）。fork 的 PR 不跑、不出状态，合不进。
 只评正式 PR（#1470）：草稿不评，`ready_for_review` 转正式时评，与 CI 并行；job 第一步（检出之前）就把头提交的 `review/agent` 写成 pending，
-改正文（如删掉验收行）后、新结论出来前不会挂着旧的 success。`review.sh` 写成状态后才打 `REVIEW_STATUS_WRITTEN=` 标记，
+改正文（如删掉方案引用）后、新结论出来前不会挂着旧的 success。`review.sh` 写成状态后才打 `REVIEW_STATUS_WRITTEN=` 标记，
 `ci-review.sh publish` 没看到标记就兜底写 error。
 每次评审在评论末尾留隐藏标记（头提交、PR 整体 diff 的指纹、agent 结论），只认 `github-actions[bot]` 写的：头提交评过、或 PR 整体 diff
-没变（只合进了 main）就复用结论、不调模型，用当前正文重判验收行；上次评到的提交是头提交的祖先就只评增量（只看 PR 上次与现在改动的文件），
+没变（只合进了 main）就复用结论、不调模型，用当前正文重判方案引用（acceptance gate）；上次评到的提交是头提交的祖先就只评增量（只看 PR 上次与现在改动的文件），
 附上次的评审意见与已关闭线程的裁决；不是祖先或判不了就全量。意见分「阻断 / 建议 / 风格」，只看阻断行：有阻断行写 failure（模型写 PASS 也算），只有建议、风格写 success（模型写 FAIL 也算）。
 owner 复核放行：PR 上评论 `/review-override <理由>` 触发 `issue_comment` 的 `review override (owner 复核放行)` job，
 用 gh api 现查作者对本仓的权限（admin 才认，`author_association` 在组织仓库是 MEMBER，不作依据），通过后留 `agent=OVERRIDE` 标记，

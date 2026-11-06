@@ -202,33 +202,35 @@ REVIEW 7 >/dev/null 2>&1 && bad "agent 改了检出却通过" || ok "agent 改�
 has "state=failure" "$FAKE/statuses" && has "改动了只读检出" "$FAKE/comments" && ok "改动检出 → failure 并写明" || bad "改动检出的记录不对"
 git -C "${TMP}/main" worktree list | grep -q checkout && bad "临时检出没清掉" || ok "临时检出评审后清掉"
 
-echo "==> 盯梢、人控级要有真机验收记录"
+echo "==> #1471 按版本验收：用户看得到的不要验收行；碰核心的要已采纳方案"
 ACC='产品负责人 2026-11-04 16:30 真机验收通过'
-for case_ in "界面文案路径:assets/i18n/en.json" "核心路径（看得见）:apps/core/c.kt"; do
+ADR='方案：docs/decisions/2026-11-01-adopted.md'
+for case_ in "界面文案路径:assets/i18n/en.json" "apps 下的正式文件（备份行为）:apps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt" "更新说明:release/notes/android/0.11.0.zh.txt"; do
   name="${case_%%:*}"; file="${case_#*:}"
   reset pass
   printf '%s\n' "$file" >"$FAKE/pr.files"
   printf 'closes #77\n' >"$FAKE/pr.body"
-  REVIEW 7 >/dev/null 2>&1 && bad "${name}：没有验收记录却通过" || ok "${name}：正文没有验收记录 → 未通过"
-  has "缺验收记录" "$FAKE/comments" && has "真机验收通过" "$FAKE/comments" && ok "${name}：评论写明缺这一行" || bad "${name}：评论没写缺验收行：$(cat "$FAKE/comments")"
-  has "state=failure" "$FAKE/statuses" && [ ! -s "$FAKE/merges" ] && ok "${name}：状态 failure 且不开自动合入" || bad "${name}：状态或自动合入不对"
-  reset pass
-  printf 'closes #77\n\n%s\n' "$ACC" >"$FAKE/pr.body"
-  REVIEW 7 >/dev/null 2>&1 && ok "${name}：反证：补上验收行 → 通过" || bad "${name}：补上验收行仍失败"
-  has "--auto --squash" "$FAKE/merges" && ok "${name}：补上验收行 → 开自动合入" || bad "${name}：补上验收行没开自动合入"
+  REVIEW 7 >/dev/null 2>&1 && has "--auto --squash" "$FAKE/merges" && ok "${name}：正文没有验收行 → 通过并开自动合入（随版本验收）" || bad "${name}：没有验收行被判未通过：$(head -4 "$FAKE/comments")"
 done
+reset pass
+printf 'apps/core/c.kt\n' >"$FAKE/pr.files"
+printf 'closes #77\n' >"$FAKE/pr.body"
+REVIEW 7 >/dev/null 2>&1 && bad "看得见的核心没有方案引用却通过" || ok "核心（看得见）：正文没有已采纳方案 → 未通过"
+has "已采纳" "$FAKE/comments" && ok "  评论写明缺已采纳方案" || bad "  评论没写缺什么：$(cat "$FAKE/comments")"
+has "state=failure" "$FAKE/statuses" && [ ! -s "$FAKE/merges" ] && ok "  状态 failure 且不开自动合入" || bad "  状态或自动合入不对"
+reset pass
+printf 'closes #77\n\n%s\n' "$ACC" >"$FAKE/pr.body"
+REVIEW 7 >/dev/null 2>&1 && bad "看得见的核心只有验收行也通过了" || ok "  只有验收行不顶替方案 → 未通过"
+reset pass
+printf 'closes #77\n\n随模块验收 #9\n' >"$FAKE/pr.body"
+REVIEW 7 >/dev/null 2>&1 && bad "旧口径「随模块验收」让核心通过了" || ok "  旧口径「随模块验收」不再算数 → 未通过"
+reset pass
+printf 'closes #77\n\n%s\n' "$ADR" >"$FAKE/pr.body"
+REVIEW 7 >/dev/null 2>&1 && has "--auto --squash" "$FAKE/merges" && ok "  反证：引用已采纳方案、没有验收行 → 通过并开自动合入" || bad "  引用了方案仍未通过：$(head -4 "$FAKE/comments")"
 reset pass
 printf 'tools/x.sh\n' >"$FAKE/pr.files"
 printf 'closes #77\n' >"$FAKE/pr.body"
-REVIEW 7 >/dev/null 2>&1 && has "--auto --squash" "$FAKE/merges" && ok "反证：用户看不到的改动（tools）不要验收行也通过并开自动合入" || bad "用户看不到的改动被要求验收行"
-# 只改测试文件（apps 下）：与 worker-done / CI gate 同一口径，不要验收行也通过；改正式文件则要
-reset pass
-printf 'apps/desktop/src/foo.test.js\n' >"$FAKE/pr.files"
-printf 'closes #77\n' >"$FAKE/pr.body"
-REVIEW 7 >/dev/null 2>&1 && has "--auto --squash" "$FAKE/merges" && ok "反证：apps 下只改测试文件，不要验收行也通过" || bad "只改测试文件被要求验收行"
-reset pass
-printf 'apps/desktop/src/foo.test.js\napps/android/app/src/main/java/com/hawkeyexb/ppass/backup/BackupWorker.kt\n' >"$FAKE/pr.files"
-REVIEW 7 >/dev/null 2>&1 && bad "改了 backup/BackupWorker.kt 没有验收行却通过" || ok "改 apps 下的正式文件（备份行为）→ 要验收行"
+REVIEW 7 >/dev/null 2>&1 && has "--auto --squash" "$FAKE/merges" && ok "用户看不到的改动（tools）通过并开自动合入" || bad "用户看不到的改动未通过"
 printf 'tools/x.sh\n' >"$FAKE/pr.files"
 reset pass
 touch "$FAKE/merge_fail"
@@ -249,24 +251,7 @@ printf 'OPEN' >"$FAKE/pr.state"
 REVIEW abc >/dev/null 2>&1 && bad "非数字 PR 号被接受" || ok "PR 号不是数字 → 拒绝"
 REVIEW >/dev/null 2>&1 && bad "没给 PR 号被接受" || ok "没给 PR 号 → 拒绝"
 
-echo "==> 验收行判定收紧 + 判未通过时撤销自动合入"
-printf 'apps/core/c.kt\n' >"$FAKE/pr.files"
-accept_case() { # 名称 正文行 期望(pass|fail)
-  reset pass
-  printf 'apps/core/c.kt\n' >"$FAKE/pr.files"
-  printf 'closes #77\n\n%s\n' "$2" >"$FAKE/pr.body"
-  if REVIEW 7 >/dev/null 2>&1; then got=pass; else got=fail; fi
-  [[ "$got" == "$3" ]] && ok "验收行 ${1} → ${3}" || bad "验收行 ${1}：期望 ${3}，实际 ${got}"
-}
-accept_case "占位句" '产品负责人 <时间> 真机验收通过' fail
-accept_case "否定句" '没有 产品负责人 2026-11-04 真机验收通过' fail
-accept_case "规则句嵌在句中" '合入条件：PR 正文写「产品负责人 2026-11-04 真机验收通过」' fail
-accept_case "日期后插入否定「未」" '产品负责人 11-04 未真机验收通过' fail
-accept_case "日期后接未完成、后面才提验收" '产品负责人 11-04 尚未完成，待真机验收通过后补' fail
-accept_case "加粗后接括号说明（#1373 真实整行）" '**产品负责人 11-04 本地真机验收通过**（三星 SM-S9210 + iPhone 16，按合在一起的包）。步骤摘要：' pass
-accept_case "正常写法（具体日期）" '产品负责人 2026-11-04 真机验收通过' pass
-accept_case "正常写法（加粗、短日期、本地，同 #1373）" '**产品负责人 11-04 本地真机验收通过**' pass
-
+echo "==> 判未通过时撤销自动合入"
 reset fail
 printf 'tools/x.sh\n' >"$FAKE/pr.files"
 REVIEW 7 >/dev/null 2>&1 && bad "FAIL 用例没失败" || ok "评审判 FAIL → 退出非 0"
@@ -323,7 +308,7 @@ printf 'closes #77\n\n改了 x。\n' >"$FAKE/pr.body"
 REVIEW 7 >/dev/null 2>&1
 grep -q '关联卡 #77 ；' "$FAKE/comments" && ok "评论脚注只列一次关联卡号" || bad "评论脚注卡号不对：$(grep '关联卡' "$FAKE/comments")"
 
-echo "==> #1448：核心但用户看不见 → 不要验收行，要已采纳方案 + 测试"
+echo "==> #1448：核心但用户看不见 → 要已采纳方案 + 测试"
 hidden_case() { # 名称 改动文件（空格分隔） 正文附加行 期望(pass|fail)
   reset pass
   printf '%s\n' $2 >"$FAKE/pr.files"
@@ -331,7 +316,7 @@ hidden_case() { # 名称 改动文件（空格分隔） 正文附加行 期望(p
   if REVIEW 7 >/dev/null 2>&1; then got=pass; else got=fail; fi
   [[ "$got" == "$4" ]] && ok "看不见的核心 ${1} → ${4}" || bad "看不见的核心 ${1}：期望 ${4}，实际 ${got}：$(head -4 "$FAKE/comments")"
 }
-hidden_case "只有验收行" "core/c.txt" '产品负责人 2026-11-04 真机验收通过' fail
+hidden_case "只有旧验收行" "core/c.txt" '产品负责人 2026-11-04 真机验收通过' fail
 has "已采纳" "$FAKE/comments" && ok "  未通过理由点名要已采纳方案" || bad "理由没点名已采纳方案"
 hidden_case "引用已采纳方案但没测试" "core/c.txt" '方案：docs/decisions/2026-11-01-adopted.md' fail
 hidden_case "反证：已采纳方案 + 测试文件" "core/c.txt tools/test-c.sh" '方案：docs/decisions/2026-11-01-adopted.md' pass
@@ -340,31 +325,6 @@ printf '# 方案\n\n- 状态：已采纳\n' >"${TMP}/main/docs/decisions/2026-11
 hidden_case "方案只在工作区、不在 origin/main 上" "core/c.txt tools/test-c.sh" '方案：docs/decisions/2026-11-09-nope.md' fail
 rm -f "${TMP}/main/docs/decisions/2026-11-09-nope.md"
 
-echo "==> #1452：SOP 格式验收行与整体模式"
-reset pass
-printf 'assets/i18n/en.json\n' >"$FAKE/pr.files"
-printf 'closes #77\n\n产品负责人 2026-11-05 15:30 按 SOP https://x/1 操作，owner 判日志通过\n' >"$FAKE/pr.body"
-REVIEW 7 >/dev/null 2>&1 && ok "SOP 格式验收行 → 通过" || bad "SOP 格式验收行不认：$(head -4 "$FAKE/comments")"
-reset pass
-printf 'closes #77\n\n随模块验收 #9\n' >"$FAKE/pr.body"
-REVIEW 7 >/dev/null 2>&1 && ok "界面改动整体模式「随模块验收 #9」→ 通过" || bad "随模块验收不认"
-reset pass
-printf 'apps/core/c.kt\n' >"$FAKE/pr.files"
-REVIEW 7 >/dev/null 2>&1 && bad "看得见的核心只靠随模块验收也通过了" || ok "反证：看得见的核心只有随模块验收 → 未通过"
-printf 'tools/x.sh\n' >"$FAKE/pr.files"
-printf 'closes #77\n\n改了 x。\n' >"$FAKE/pr.body"
-
-echo "==> #1448：只改更新说明要「文案确认通过」行"
-notes_case() { # 名称 正文行 期望(pass|fail)
-  reset pass
-  printf 'release/notes/android/0.11.0.zh.txt\n' >"$FAKE/pr.files"
-  printf 'closes #77\n\n%s\n' "$2" >"$FAKE/pr.body"
-  if REVIEW 7 >/dev/null 2>&1; then got=pass; else got=fail; fi
-  [[ "$got" == "$3" ]] && ok "更新说明 ${1} → ${3}" || bad "更新说明 ${1}：期望 ${3}，实际 ${got}"
-}
-notes_case "没有确认行" '- 文案确认：待产品负责人文案确认' fail
-has "文案确认通过" "$FAKE/comments" && ok "  未通过理由点名「文案确认通过」行" || bad "理由没点名文案确认行：$(head -5 "$FAKE/comments")"
-notes_case "反证：有确认行" '产品负责人 2026-11-05 15:30 文案确认通过' pass
 printf 'tools/x.sh\n' >"$FAKE/pr.files"
 printf 'closes #77\n\n改了 x。\n' >"$FAKE/pr.body"
 

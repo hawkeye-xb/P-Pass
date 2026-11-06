@@ -1,29 +1,23 @@
 #!/usr/bin/env bash
-# acceptance gate：用户看得到的改动要有产品负责人的验收记录；看不见的核心改动要有已采纳方案与测试。否则红。
+# acceptance gate：PR 合入时只把核心改动的方案关；用户看得到的改动不在 PR 上验收，随版本验收（#1471）。
 #
 #   acceptance-gate.sh check    --files <改动文件列表> --body <PR 正文文件> [--repo <仓库根>] [--core-rules <规则文件>] [--diff <unified diff>]
 #   acceptance-gate.sh classify [--repo <仓库根>] [--core-rules <规则文件>] [--diff <unified diff>] < 改动文件列表
 #                               打印 core / core-hidden / ui / notes / none
-#   acceptance-gate.sh record   --body <文本文件> [--allow-copy]
-#                               文本里有没有验收记录（0 有 / 1 没有；发版前的模块验收检查用）。只认 SOP 行与真机行；
-#                               --allow-copy 才也认文案确认行（只在来源 PR 全是更新说明类时由调用方加）
 #
-# 级别判定与验收行判定只在这里一份：worker-done.sh（classify）、review.sh（classify + check）、CI 的 acceptance gate（check）、
-# release-acceptance.sh（record）都调用本脚本，别在别处再抄一份。
+# 级别判定只在这里一份：worker-done.sh（classify）、review.sh（classify + check）、CI 的 acceptance gate（check）、
+# release-scope.sh（classify，算每个版本的验收范围）都调用本脚本，别在别处再抄一份。
 #
 # 口径与 owner-triage.sh 一致。「用户可见」= 界面与文案路径（owner-triage.sh 的 UI_GLOBS）或 apps/** 下的非测试文件
 # （测试 = 下面 TEST_RE 圈出的位置）。核心 = .github/core-paths.txt（给了 --diff 时，只改版本号行的文件不算，见 tools/ci-paths.sh）。
-#   core        命中核心且用户可见：已采纳方案（triage 时就要有）+ 验收记录；「随模块验收」只在正文同时引用已采纳方案时算数
-#   core-hidden 命中核心、用户看不见（如发布链脚本，#1448）：不要验收行，要正文引用 origin/main 上「已采纳」的方案
-#               （docs/decisions/<文件>.md），且改动里带测试文件（带反证的自动化测试）
-#   ui          用户可见：验收记录，或整体模式「随模块验收 #<模块卡>」（#1452）
-#   notes       只改更新说明（非测试文件全在 release/notes/** 与 CHANGELOG.md，且至少一个 release/notes/**）：
-#               文案确认行、任一验收记录，或「随模块验收 #<模块卡>」；notes 与界面混改是 ui；只改 CHANGELOG.md 是 none
+#   core        命中核心且用户可见：正文引用 origin/main 上「已采纳」的方案（docs/decisions/<文件>.md）；不要验收行，随版本验收
+#   core-hidden 命中核心、用户看不见（如发布链脚本，#1448）：正文引用已采纳方案，且改动里带测试文件（带反证的自动化测试）
+#   ui          用户可见：合入不要验收行，随版本验收
+#   notes       只改更新说明（非测试文件全在 release/notes/** 与 CHANGELOG.md，且至少一个 release/notes/**）：同 ui，
+#               发版前在台账里做文案确认；notes 与界面混改是 ui；只改 CHANGELOG.md 是 none
 #   none        自动级，直接绿
-# 验收记录（单独成行，行首可有列表/引用/加粗符号，时间处是具体日期）：
-#   产品负责人 <时间> 按 SOP <链接> 操作，owner 判日志通过     （#1452 起的标准写法：owner 判定之后写）
-#   产品负责人 <时间> 真机验收通过                            （旧写法，继续认）
-#   产品负责人 <时间> 文案确认通过                            （只对 notes 算数）
+# 随版本验收：验收单位是候选版相对上一个正式版、用户看得见的改动。just release-scope 从 git 算范围（ui / core / notes），
+# 台账每版一张 issue，发版前 just release-acceptance <台账号> 清零才出正式版（AGENTS.md「验收」）。
 # 退出码：0 绿 / 1 红 / 2 用法错误。
 
 set -uo pipefail
@@ -31,14 +25,6 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=decision-lib.sh
 . "${HERE}/decision-lib.sh"
 
-# 单独成行：「产品负责人 <日期[ 时间]> [本地]真机验收通过」，允许行首的列表/引用/加粗符号。
-ACCEPT_RE='^[*_> -]*产品负责人 ([0-9]{4}-)?[0-9]{2}-[0-9]{2}( +[0-9]{1,2}:[0-9]{2})? *(本地)?真机验收通过([*_ ]*|\*\*.*)$'
-# 更新说明的文案确认行：格式同上，只是动词换成「文案确认通过」。
-COPY_RE='^[*_> -]*产品负责人 ([0-9]{4}-)?[0-9]{2}-[0-9]{2}( +[0-9]{1,2}:[0-9]{2})? *文案确认通过([*_ ]*|\*\*.*)$'
-# 按 SOP 验收（#1452）：「产品负责人 <时间> 按 SOP <链接> 操作，owner 判日志通过」。
-SOP_RE='^[*_> -]*产品负责人 ([0-9]{4}-)?[0-9]{2}-[0-9]{2}( +[0-9]{1,2}:[0-9]{2})? *按 SOP +[^ ]+ +操作(，|,) *owner 判日志通过(。)?([*_ ]*|\*\*.*)$'
-# 整体模式（#1452）：「随模块验收 #<模块卡>」，单独成行。
-MODULE_RE='^[*_> -]*随模块验收 +#[0-9]+[*_ ]*$'
 # 注意：方括号里不放全角字符（C locale 下 grep 按字节解析，会把它拆成几个字节）。
 # 更新说明路径（release/notes/**）与随版本写的 CHANGELOG.md。
 NOTES_RE='^(release/notes/|CHANGELOG\.md$)'
@@ -58,7 +44,6 @@ BODY_F=""
 REPO="$(cd "${HERE}/../.." && pwd)"
 CORE_RULES=""
 DIFF_F=""
-ALLOW_COPY=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --files) FILES_F="${2:-}"; shift 2 || shift ;;
@@ -66,7 +51,6 @@ while [ "$#" -gt 0 ]; do
     --repo) REPO="${2:-}"; shift 2 || shift ;;
     --core-rules) CORE_RULES="${2:-}"; shift 2 || shift ;;
     --diff) DIFF_F="${2:-}"; shift 2 || shift ;;
-    --allow-copy) ALLOW_COPY=1; shift ;;
     *) usage ;;
   esac
 done
@@ -118,15 +102,9 @@ classify() {
 # 正文引用的、origin/main 上「已采纳」的方案（一行一个）。在仓库根下判，取 origin/main 上的版本：
 # PR 自己加进来的方案文件不算（没合进 main 就不是已采纳）。
 adopted_in_body() { (cd "$REPO" && adopted_adrs "$(cat "$BODY_F")"); }
-has_record() { grep -qE "$SOP_RE" "$1" || grep -qE "$ACCEPT_RE" "$1"; }
 
 case "$MODE" in
   classify) classify ;;
-  record)
-    [ -f "$BODY_F" ] || usage
-    # 文案确认只对更新说明算数：界面改动的模块卡上只有文案确认行，不算验收过（CodeRabbit #1456）。
-    has_record "$BODY_F" || { [ "$ALLOW_COPY" = 1 ] && grep -qE "$COPY_RE" "$BODY_F"; }
-    ;;
   check)
     [ -f "$FILES_F" ] && [ -f "$BODY_F" ] || usage
     KIND="$(classify <"$FILES_F")"
@@ -142,44 +120,26 @@ case "$MODE" in
           echo "acceptance gate：核心改动、用户看不见，正文引用已采纳方案（$(printf '%s' "$adrs" | tr '\n' ' ')）且带测试 ✅"
           exit 0
         fi
-        echo "acceptance gate ❌：改动碰核心路径、用户看不见（不要真机验收行），但缺："
+        echo "acceptance gate ❌：改动碰核心路径、用户看不见（不要验收行），但缺："
         [ -n "$adrs" ] || echo "  - PR 正文引用 origin/main 上「已采纳」的方案（docs/decisions/<日期>-<名>.md）"
         [ -n "$tests" ] || echo "  - 改动里带测试文件（带反证的自动化测试）"
         exit 1
         ;;
     esac
-    if has_record "$BODY_F"; then
-      echo "acceptance gate：${KIND} 级改动，PR 正文有产品负责人验收记录 ✅"
+    if [ "$KIND" = core ]; then
+      adrs="$(adopted_in_body)"
+      if [ -z "$adrs" ]; then
+        echo "acceptance gate ❌：改动碰核心路径（用户看得到），PR 正文缺 origin/main 上「已采纳」的方案引用（docs/decisions/<日期>-<名>.md）。"
+        exit 1
+      fi
+      echo "acceptance gate：核心且用户可见，引用了已采纳方案（$(printf '%s' "$adrs" | tr '\n' ' ')），合入不要验收行，随版本验收 ✅"
       exit 0
     fi
-    if [ "$KIND" = notes ] && grep -qE "$COPY_RE" "$BODY_F"; then
-      echo "acceptance gate：只改更新说明，PR 正文有产品负责人文案确认记录 ✅"
+    if [ "$KIND" = ui ] || [ "$KIND" = notes ]; then
+      echo "acceptance gate：${KIND} 级改动（用户看得见），合入不要验收行，随版本验收（just release-scope 列进台账，发版前清零）✅"
       exit 0
     fi
-    if grep -qE "$MODULE_RE" "$BODY_F"; then
-      if [ "$KIND" != core ]; then
-        echo "acceptance gate：${KIND} 级改动，整体模式「$(grep -E "$MODULE_RE" "$BODY_F" | head -n 1 | sed 's/^[*_> -]*//')」，正式发版前统一验收 ✅"
-        exit 0
-      fi
-      if [ -n "$(adopted_in_body)" ]; then
-        echo "acceptance gate：核心且用户可见，引用了已采纳方案，整体模式随模块验收 ✅"
-        exit 0
-      fi
-      echo "acceptance gate ❌：碰核心路径的改动，「随模块验收」要同时在正文引用 origin/main 上「已采纳」的方案（docs/decisions/<日期>-<名>.md）。"
-      exit 1
-    fi
-    if [ "$KIND" = notes ]; then
-      echo "acceptance gate ❌：只改更新说明（release/notes/**），PR 正文缺文案确认行。"
-      echo "产品负责人确认文案后，在 PR 正文单独写一行：「产品负责人 <日期 时间> 文案确认通过」（如 2026-11-05 15:30），"
-      echo "或整体模式写「随模块验收 #<模块卡>」。"
-      exit 1
-    fi
-    WHAT="界面或文案路径、App 代码"
-    [ "$KIND" != core ] || WHAT="核心路径（用户看得到）"
-    echo "acceptance gate ❌：改动碰${WHAT}，PR 正文缺验收记录。"
-    echo "产品负责人按 SOP 操作、owner 判日志通过后，由 owner 在 PR 正文单独写一行："
-    echo "「产品负责人 <日期 时间> 按 SOP <链接> 操作，owner 判日志通过」（旧写法「产品负责人 <日期 时间> 真机验收通过」也认），再 gh pr ready；"
-    [ "$KIND" = core ] || echo "或整体模式写「随模块验收 #<模块卡>」，正式发版前统一验收。"
+    echo "acceptance gate ❌：判不了级别（classify 输出「${KIND}」），不放行。"
     exit 1
     ;;
   *) usage ;;

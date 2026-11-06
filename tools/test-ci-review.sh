@@ -138,6 +138,8 @@ git init -q "${TMP}/main"
   cp "${SRC}/tools/ci-paths.sh" tools/ci-paths.sh
   printf '+ core/**\n' >.github/core-paths.txt
   printf 'echo base\n' >tools/x.sh
+  # 碰核心的 PR 要引用 origin/main 上已采纳的方案（acceptance gate，#1471 起看得见的界面改动不再要验收行）
+  mkdir -p docs/decisions && printf '# 方案\n\n- 状态：已采纳\n' >docs/decisions/2026-11-01-adopted.md
   git add -A && git commit -q -m init
   git push -q origin HEAD:refs/heads/main
   git checkout -q -b pr7
@@ -274,16 +276,21 @@ CI 7 >/dev/null 2>&1
 has "statuses/${SHA}" "$FAKE/statuses" && tail -n 1 "$FAKE/statuses" | grep -qF "state=success" &&
   ok "反证：头提交一致 → success 写在这个头提交上" || bad "反证不对：$(cat "$FAKE/statuses")"
 
-echo "==> 盯梢级：评审 job 替代不了验收"
+echo "==> #1471：界面改动不要验收行；碰核心的评审 job 替代不了方案拍板"
 reset pass
 printf 'apps/desktop/src/x.ts\n' >"$FAKE/pr.files"
 CI 7 >/dev/null 2>&1
-tail -n 1 "$FAKE/statuses" | grep -qF "state=failure" && has "真机验收通过" "$FAKE/comments" &&
-  ok "碰界面路径、正文缺验收行 → 即使 agent 说 PASS 也是 failure" || bad "缺验收行没挡住：$(cat "$FAKE/statuses")"
+tail -n 1 "$FAKE/statuses" | grep -qF "state=success" &&
+  ok "碰界面路径、正文没有验收行 → success（随版本验收）" || bad "界面改动没有验收行被挡：$(cat "$FAKE/statuses")"
 reset pass
-printf 'closes #77\n\n- 产品负责人 2026-11-04 15:30 真机验收通过\n' >"$FAKE/pr.body"
+printf 'core/c.txt\ntools/test-c.sh\n' >"$FAKE/pr.files"
 CI 7 >/dev/null 2>&1
-tail -n 1 "$FAKE/statuses" | grep -qF "state=success" && ok "反证：有验收行 → success" || bad "有验收行仍不过：$(cat "$FAKE/statuses")"
+tail -n 1 "$FAKE/statuses" | grep -qF "state=failure" && has "已采纳" "$FAKE/comments" &&
+  ok "碰核心、正文没有已采纳方案 → 即使 agent 说 PASS 也是 failure" || bad "缺方案引用没挡住：$(cat "$FAKE/statuses")"
+reset pass
+printf 'closes #77\n\n方案：docs/decisions/2026-11-01-adopted.md\n' >"$FAKE/pr.body"
+CI 7 >/dev/null 2>&1
+tail -n 1 "$FAKE/statuses" | grep -qF "state=success" && ok "反证：引用已采纳方案 → success" || bad "引用了方案仍不过：$(cat "$FAKE/statuses")"
 printf 'closes #77\n' >"$FAKE/pr.body"
 printf 'tools/x.sh\n' >"$FAKE/pr.files"
 
@@ -466,22 +473,22 @@ CI 7 >/dev/null 2>&1
 [ "$(calls)" = 1 ] && tail -n 1 "$FAKE/statuses" | grep -qF "state=failure" &&
   ok "人账号伪造 agent=PASS 标记 → 不复用，照常评审判 failure" || bad "伪造标记被复用：$(cat "$FAKE/statuses")"
 
-echo "==> #1470：复用时用当前正文重判验收行"
+echo "==> #1470：复用时用当前正文重判方案引用"
 reset pass
-printf 'apps/desktop/src/x.ts\n' >"$FAKE/pr.files"
-printf 'closes #77\n\n- 产品负责人 2026-11-04 15:30 真机验收通过\n' >"$FAKE/pr.body"
+printf 'core/c.txt\ntools/test-c.sh\n' >"$FAKE/pr.files"
+printf 'closes #77\n\n方案：docs/decisions/2026-11-01-adopted.md\n' >"$FAKE/pr.body"
 CI 7 >/dev/null 2>&1
-tail -n 1 "$FAKE/statuses" | grep -qF "state=success" || bad "（准备）带验收行的首评没通过：$(cat "$FAKE/statuses")"
+tail -n 1 "$FAKE/statuses" | grep -qF "state=success" || bad "（准备）带方案引用的首评没通过：$(cat "$FAKE/statuses")"
 again pass
 printf 'closes #77\n' >"$FAKE/pr.body"
 CI 7 >/dev/null 2>&1
 [ "$(calls)" = 0 ] && tail -n 1 "$FAKE/statuses" | grep -qF "state=failure" &&
-  ok "复用时删掉验收行 → 不调模型，failure" || bad "删验收行后：调用 $(calls)，状态 $(cat "$FAKE/statuses")"
+  ok "复用时删掉方案引用 → 不调模型，failure" || bad "删方案引用后：调用 $(calls)，状态 $(cat "$FAKE/statuses")"
 again pass
-printf 'closes #77\n\n- 产品负责人 2026-11-04 15:30 真机验收通过\n' >"$FAKE/pr.body"
+printf 'closes #77\n\n方案：docs/decisions/2026-11-01-adopted.md\n' >"$FAKE/pr.body"
 CI 7 >/dev/null 2>&1
 [ "$(calls)" = 0 ] && tail -n 1 "$FAKE/statuses" | grep -qF "state=success" &&
-  ok "反证：补回验收行 → 不调模型，success" || bad "补回验收行后：调用 $(calls)，状态 $(cat "$FAKE/statuses")"
+  ok "反证：补回方案引用 → 不调模型，success" || bad "补回方案引用后：调用 $(calls)，状态 $(cat "$FAKE/statuses")"
 printf 'closes #77\n' >"$FAKE/pr.body"
 printf 'tools/x.sh\n' >"$FAKE/pr.files"
 

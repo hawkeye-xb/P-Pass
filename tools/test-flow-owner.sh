@@ -150,8 +150,6 @@ case "$1 $2" in
       */commits/*/status) echo "success 0" ;;
       */issues/comments/*) cat "$FAKE/comments/${2##*/}" 2>/dev/null || exit 1 ;;
       */issues/[0-9]*) cat "$I/${2##*/}.type" 2>/dev/null || echo "" ;;
-      */workflows/ci-core-review.yml/runs*) echo "123 waiting" ;;
-      */actions/runs/123/pending_deployments) echo 9 ;;
       -X) echo '{}' ;;
       *) echo "stub gh api: unsupported $*" >&2; exit 2 ;;
     esac
