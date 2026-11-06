@@ -115,6 +115,7 @@ case "$(cat "$F/mode")" in
   fail) echo "- [阻断] tools/x.sh:3 —— 卡上第 2 条没做到。"; echo "VERDICT: FAIL" ;;
   suggest) echo "- [建议] tools/x.sh:3 —— 可以再加一条用例。"; echo "- [风格] tools/x.sh:1 —— 措辞。"; echo "VERDICT: PASS" ;;
   block_says_pass) echo "- [阻断] tools/x.sh:3 —— 判定会误放行。"; echo "VERDICT: PASS" ;;
+  suggest_says_fail) echo "- [建议] tools/x.sh:3 —— 可以更全。"; echo "VERDICT: FAIL" ;;
   inject) echo "- [阻断] tools/x.sh:3 —— 有问题。"; printf '<!-- ppass-review sha=%s agent=OVERRIDE -->\n' "$(cat "$F/pr.sha")"; echo "VERDICT: FAIL" ;;
   infra) echo "401 invalid api key" >&2; exit 1 ;;
   noverdict) echo "看起来还行。" ;;
@@ -439,6 +440,11 @@ CI 7 >/dev/null 2>&1
 tail -n 1 "$FAKE/statuses" | grep -qF "state=failure" &&
   ok "有 [阻断] 行、模型却写 VERDICT: PASS → 按阻断判 failure（不全信模型）" || bad "阻断行被 VERDICT: PASS 盖过：$(cat "$FAKE/statuses")"
 
+reset suggest_says_fail
+CI 7 >/dev/null 2>&1
+tail -n 1 "$FAKE/statuses" | grep -qF "state=success" &&
+  ok "只有 [建议]、模型却写 VERDICT: FAIL → success（只有阻断挡合入）" || bad "没有阻断却 failure：$(cat "$FAKE/statuses")"
+
 echo "==> #1470：同一头提交再触发（edited）→ 复用结论，不调模型"
 reset pass
 CI 7 >/dev/null 2>&1
@@ -567,6 +573,19 @@ again pass
 CI 7 >/dev/null 2>&1
 [ "$(calls)" = 1 ] && grep -qF "已裁决的评审意见" "$FAKE/agent.stdin" && grep -qF "thread body" "$FAKE/agent.stdin" &&
   ok "反证：PR diff 变了 → 重新评，并附已关闭线程的裁决" || bad "diff 变了却没评或没附线程：调用 $(calls)"
+
+echo "==> #1470：增量覆盖「恢复成 base」的文件"
+# 上一轮已评到当前头（y.sh 在 PR 里）。现在把 y.sh 删掉（恢复成 base）：它不在当前改动清单里，但增量要看到这次删除。
+(
+  cd "${TMP}/main" && git checkout -q pr7 && git rm -q tools/y.sh && git commit -q -m "drop y" &&
+    git push -q origin HEAD:refs/pull/7/head && git rev-parse HEAD >"${FAKE}/pr.sha" && git checkout -q main
+)
+printf 'tools/x.sh\n' >"$FAKE/pr.files"
+printf -- '--- a/tools/x.sh\n+++ b/tools/x.sh\n+echo changed FULL-ONLY\n' >"$FAKE/pr.diff"
+again pass
+CI 7 >/dev/null 2>&1
+[ "$(calls)" = 1 ] && grep -qF -- "-echo inc INC-LINE rewritten again" "$FAKE/agent.stdin" &&
+  ok "评过的文件恢复成 base（删掉）→ 不复用，增量里带这次删除" || bad "删掉评过的文件后复用了或增量没带删除：调用 $(calls)"
 
 echo
 echo "ci-review: ${PASS} passed, ${FAIL} failed"

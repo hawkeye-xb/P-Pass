@@ -17,7 +17,7 @@
 # review/agent 写成功后打印一行 REVIEW_STATUS_WRITTEN=<状态>，ci-review.sh 只认这一行判「状态已写」。
 #
 # 判定（#1470 三级结论）：agent 每条意见标「[阻断] / [建议] / [风格]」，只有阻断级（误放行 / 安全 / 越界）判未通过：
-# 输出里有任何 [阻断] 行、或最后一行是 VERDICT: FAIL、或评审期间改动了检出 → failure；只有建议、风格 → success，
+# 输出里有任何 [阻断] 行、或评审期间改动了检出 → failure；只有建议、风格 → success（VERDICT 行只判是否跑成），
 # 意见照贴在评论里，由开 PR 的会话自行判断改不改。agent 挂了、没给 VERDICT 行是「评审没跑成」（error，不算通过，
 # 也不当作代码有问题）。
 #
@@ -253,7 +253,19 @@ if [ -n "$REUSE_AGENT" ]; then
 elif [ -n "$PRIOR_SHA" ] && [ "${#PR_FILES[@]}" -gt 0 ] &&
   git -C "$TOP" merge-base --is-ancestor "$PRIOR_SHA" "$SHA" 2>/dev/null; then
   # 增量只看 PR 自己改动的文件：中间合进来的 main 改了别的文件，不算这个 PR 的改动。
-  if git -C "$TOP" diff "$PRIOR_SHA" "$SHA" -- "${PR_FILES[@]}" >"${WORK}/pr.inc.diff" 2>/dev/null; then
+  # 「PR 的文件」取上次评审时与现在的并集：上次改过、现在恢复成 base 的文件（例如删掉了评过的测试）也要进增量。
+  # 算不出上次的改动文件（找不到 merge-base）就全量。
+  INC_FILES=("${PR_FILES[@]}")
+  if PRIOR_BASE="$(git -C "$TOP" merge-base origin/main "$PRIOR_SHA" 2>/dev/null)" &&
+    PRIOR_FILES="$(git -C "$TOP" diff --name-only "$PRIOR_BASE" "$PRIOR_SHA" 2>/dev/null)"; then
+    while IFS= read -r f; do [ -z "$f" ] || INC_FILES+=("$f"); done <<EOF
+$PRIOR_FILES
+EOF
+  else
+    INC_FILES=()
+  fi
+  if [ "${#INC_FILES[@]}" -gt 0 ] &&
+    git -C "$TOP" diff "$PRIOR_SHA" "$SHA" -- "${INC_FILES[@]}" >"${WORK}/pr.inc.diff" 2>/dev/null; then
     if [ -s "${WORK}/pr.inc.diff" ]; then
       MODE=incremental
     else
@@ -375,8 +387,9 @@ else
     BLOCK="$(count_tag 阻断 "${WORK}/agent.out")"
     SUGGEST="$(count_tag 建议 "${WORK}/agent.out")"
     STYLE="$(count_tag 风格 "${WORK}/agent.out")"
-    # 只有阻断级挡合入；有阻断行或 agent 自己判 FAIL 都算（宁严勿松），只有建议、风格算通过。
-    [ "$LAST" != "VERDICT: PASS" ] || [ "${BLOCK:-0}" -gt 0 ] || AGENT_VERDICT=PASS
+    # 只有阻断级挡合入（产品负责人 2026-11-06 定）：结论只看 [阻断] 行，VERDICT 行只用来判「跑成了没有」；
+    # 模型写 VERDICT: PASS 但有阻断行照样 failure，写 VERDICT: FAIL 但只有建议、风格照样 success。
+    [ "${BLOCK:-0}" -gt 0 ] || AGENT_VERDICT=PASS
   fi
 fi
 if [ -n "$INFRA" ]; then
