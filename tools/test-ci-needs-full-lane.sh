@@ -524,6 +524,29 @@ for args in "" "rust-workspace"; do
 done
 
 echo
+echo "==> 7g. 变异反证（#1545）：去掉 .coderabbit.yaml 登记，可跳断言必须变红"
+expect "$SUT" false "#1545：只改 .coderabbit.yaml" .coderabbit.yaml
+expect_lane "$SUT" rust-workspace false "#1545：只改 .coderabbit.yaml（宽 lane）" .coderabbit.yaml
+MUT9="$TMP/mutated9.sh"
+grep -v '^[ ]*\.coderabbit\.yaml) return 0 ;;$' "$SUT" >"$MUT9"
+if [ "$(wc -l <"$SUT")" -ne "$(( $(wc -l <"$MUT9") + 1 ))" ]; then
+  echo "  ❌ 变异没生效（锚点没匹配上）—— 这一节等于没跑，判失败"
+  FAIL=$((FAIL + 1))
+else
+  before=$FAIL
+  expect "$MUT9" false "【变异后应失败】只改 .coderabbit.yaml" .coderabbit.yaml
+  gained=$((FAIL - before))
+  if [ "$gained" -eq 1 ]; then
+    echo "  ✅ 断言在变异后变红 ⇒ .coderabbit.yaml 登记真的在起作用"
+    FAIL=$((FAIL - 1))
+    PASS=$((PASS + 1))
+  else
+    echo "  ❌ 变异后 $gained/1 条变红 ⇒ 断言判别力不足，必须修"
+    FAIL=$((before + 1))
+  fi
+fi
+
+echo
 echo "────────────────────────────────"
 printf '通过 %d，失败 %d\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ] || exit 1

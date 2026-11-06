@@ -526,6 +526,34 @@ DONE "$W" >"${TMP}/o153" 2>&1
 C153="$(comments_of 153)"
 printf '%s' "$C153" | grep -qF '`just ci`' && ok "反证：workflow 夹带未知路径 → 全量 just ci" || bad "夹带未知路径没退回全量"
 
+# #1545：只改 .coderabbit.yaml 走 ci-docs；去掉登记后退回全量
+W="$(card 158 "[T-158] coderabbit only" ".coderabbit.yaml")"
+commit_file "$W" .coderabbit.yaml "language: en"
+DONE "$W" >"${TMP}/o158" 2>&1
+C158="$(comments_of 158)"
+printf '%s' "$C158" | grep -qF '`just ci-docs`' && ok "只改 .coderabbit.yaml → just ci-docs" || bad "coderabbit 门禁不对：$(tail -6 "${TMP}/o158")"
+printf '%s' "$C158" | grep -qF '`just ci`' && bad "只改 .coderabbit.yaml 仍跑了全量 just ci" || ok "反证：coderabbit 没有全量 just ci"
+cp "$M/tools/flow/worker-done.sh" "${TMP}/wd-1545.bak"
+grep -v '^[ ]*\.coderabbit\.yaml) add_gate "just ci-docs"' "$M/tools/flow/worker-done.sh" >"${TMP}/wd-1545.mut"
+if [ "$(wc -l <"$M/tools/flow/worker-done.sh")" -eq "$(( $(wc -l <"${TMP}/wd-1545.mut") + 1 ))" ]; then
+  cp "${TMP}/wd-1545.mut" "$M/tools/flow/worker-done.sh"
+  git -C "$M" add tools/flow/worker-done.sh
+  git -C "$M" commit -q -s -m "mutate coderabbit gate"
+  git -C "$M" push -q origin HEAD:refs/heads/main
+  W="$(card 159 "[T-159] coderabbit unregistered" ".coderabbit.yaml")"
+  commit_file "$W" .coderabbit.yaml "language: en"
+  DONE "$W" >"${TMP}/o159" 2>&1
+  C159="$(comments_of 159)"
+  printf '%s' "$C159" | grep -qF '`just ci`' && ok "反证：去掉登记后只改 .coderabbit.yaml → 退回全量 just ci" || bad "去掉登记后没退回全量：$(tail -6 "${TMP}/o159")"
+  printf '%s' "$C159" | grep -qF '`just ci-docs`' && bad "去掉登记后仍走 ci-docs" || ok "反证：去掉登记后不再是 ci-docs"
+else
+  bad "coderabbit 登记行没匹配上，变异没生效"
+fi
+cp "${TMP}/wd-1545.bak" "$M/tools/flow/worker-done.sh"
+git -C "$M" add tools/flow/worker-done.sh
+git -C "$M" commit -q -s -m "restore coderabbit gate"
+git -C "$M" push -q origin HEAD:refs/heads/main
+
 # 门禁按改动路径挑（#1361）：只改安卓文案 → android-test + mobile-static-check，不跑全量 just ci
 W="$(card 125 "[T-125] android copy" "apps/android/**")"
 mkdir -p "$W/apps/android/app/src/main/res/values"
