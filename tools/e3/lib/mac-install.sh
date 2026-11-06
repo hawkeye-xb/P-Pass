@@ -140,12 +140,29 @@ mac_restore_snapshot() {
   mac_library_readable || return 1
   log "已装回 ${want}"
 }
+# mac_tag_version <tag>：这个 release tag 装的桌面版本号。正式发版 tag 是批次号（vYYYY.M.N），与每端版本号是
+# 两条线（docs/RELEASING.md UPD-13），取仓库在该 tag 上的 release/versions.json 的 desktop；其余（test tag
+# v0.11.0-test.N、批次制之前的 v0.x.y）tag 名就是版本号。读不到 tag 或 versions.json 就失败并说明，不猜。
+# 读的是本检出的 git 仓库（E3_TAG_REPO 可改，自测用）。
+mac_tag_version() {
+  local tag="$1" json v
+  case "$tag" in
+    v[0-9][0-9][0-9][0-9].*) ;;
+    *) echo "${tag#v}"; return 0 ;;
+  esac
+  json=$(git -C "${E3_TAG_REPO:-$(dirname "${BASH_SOURCE[0]}")}" show "refs/tags/${tag}:release/versions.json" 2>/dev/null) ||
+    { log "取不到 $tag 上的 release/versions.json（本机没有这个 tag？先 git fetch --tags）"; return 1; }
+  v=$(printf '%s' "$json" | python3 -I -c 'import json, sys; print(json.load(sys.stdin).get("desktop") or "")' 2>/dev/null)
+  [ -n "$v" ] || { log "$tag 的 release/versions.json 没有 desktop 版本"; return 1; }
+  echo "$v"
+}
+
 # mac_restore_tag <tag> [数据]：从 GitHub Release 装指定 tag，核对签名与版本（数据参数同 mac_install_app）
 mac_restore_tag() {
   local tag="$1" data="${2:-}" app want
+  want=$(mac_tag_version "$tag") || return 1
   app=$(mac_fetch_release "$tag") || return 1
   mac_verify_sig "$app" || { log "$tag 的签名校验不过"; return 1; }
-  want="${tag#v}"
   [ "$(mac_app_version "$app")" = "$want" ] || { log "$tag 包内版本是 $(mac_app_version "$app")"; return 1; }
   mac_install_app "$app" "$data" || return 1
   [ "$(svc_version | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')" = "$want" ] || { log "装后 daemon 版本不是 ${want}"; return 1; }
