@@ -17,6 +17,11 @@ on:
   # #1187：路径判定从触发层挪到 job 层（.github/actions/changes），本 lane 进必过项。
   # 被 workflow 级 paths 过滤掉的 workflow 不汇报状态，设成必过就永久 Pending；job 级跳过
   # 汇报 skipped，对必过项算通过。没改到安卓相关路径的 PR 只跑十几秒的 changes 与 gate。
+  # #1468：合入 main 后批量跑全量（含 Windows）。PR 上只跑快检，Windows 留到这里。
+  # 同组同一时间只跑一次：正在跑的不取消（cancel-in-progress 对 push 为 false），
+  # 排队只留最新（GitHub concurrency 原生行为：新来的替掉还在排队的）。
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
   # #1187：发版前由 release.yml 以全量模式调用（changes 对 workflow_call 恒定判要跑）。
@@ -25,9 +30,11 @@ on:
 permissions:
   contents: read
 
+# #1468：group 带上事件名，push 到 main 的全量单独成组，不被 Release（workflow_call，
+# 事件是 workflow_dispatch）或 PR 抢占；只有 push 不取消正在跑的，其余事件行为不变。
 concurrency:
-  group: ci-android-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-android-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
   changes:
@@ -35,7 +42,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      run: ${{ steps.c.outputs.run }}
+      # #1468：push 到 main 一律全跑。排队只留最新，中间的 push 会被替掉，按单次 push 的
+      # diff 判会漏掉被替掉那几次的改动；PR 上照旧按路径判。
+      run: ${{ github.event_name == 'push' && 'true' || steps.c.outputs.run }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
