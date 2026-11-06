@@ -10,7 +10,8 @@
 # UPD-18 (#706) 起兼收 mirror-resolve：R2 镜像的 tag 判定（test 不许覆盖 stable）
 # 同理——mirror-latest.yml 只在发布后触发，拦不住合并前的回归。
 # REL-13 (#716) 起兼收 release-version-source：补跑 / 修复清单路径的版本来源与
-# release.yml 每个 checkout 都检出被补跑的 tag（tools/test-release-version-source.sh）。
+# release.yml 每个 checkout 都检出被补跑的 tag（tools/test-release-version-source.sh）；
+# #1486 起同一 job 兼跑发版闸测试（tools/test-release-acceptance-gate.sh，同样按 step 名抽 run 块）。
 # #741 起兼收 release-notes：更新 manifest 的说明改为手写文件 release/notes/**，
 # lint（长度/条数/成对/禁止模式/双向控制符与零宽字符）与清单工具测试都放这里——
 # release.yml 只在 tag 上跑，拦不住合并前的回归。（原 UPD-03 的 update-notes job
@@ -88,6 +89,10 @@ jobs:
             tools/release-version.sh
             tools/check-version-bump.sh
             tools/test-release-version-source.sh
+            # #1486：release.yml 的发版闸调 release-acceptance.sh（判定在 release-scope.sh），这几处改了都要跑它的测试。
+            tools/test-release-acceptance-gate.sh
+            tools/flow/release-acceptance.sh
+            tools/flow/release-scope.sh
             # #894：上面的测试校验 gradle 原生库 inputs 与版本门禁安卓口径一致——gradle 改了也要跑。
             apps/android/app/build.gradle.kts
             tools/make-update-manifest.mjs
@@ -219,6 +224,8 @@ jobs:
         run: python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
       - name: 补跑口径测试
         run: bash tools/test-release-version-source.sh
+      - name: 发版闸测试（#1486：验收台账没清零不出正式版）
+        run: bash tools/test-release-acceptance-gate.sh
 
   release-notes:
     name: release-notes（#741：手写更新说明 lint + 清单工具）

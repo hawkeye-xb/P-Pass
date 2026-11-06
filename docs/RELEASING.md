@@ -81,6 +81,11 @@
    (tag name shape, on `main`, tag does not exist yet) and the full pre-release verification;
    only when all of it is green does `create-draft` create the tag (on the verified commit)
    and the draft Release with platform assets. A red verification leaves no tag behind.
+   > **Acceptance gate (#1486)**: a formal release requires an issue titled exactly
+   > `[验收] <formal tag>` (e.g. `[验收] v2026.11.2`; create it with the first test build via
+   > `just release-scope --ledger <n> --pkg <test tag>`). `plan-builds` finds it by title and runs
+   > `tools/flow/release-acceptance.sh <n> <commit>`; missing ledger, duplicate ledgers, or any item
+   > not yet accepted ⇒ red before anything is built. Test tags are not checked.
    > **UPD-13 门禁**：`create-draft` 第一步跑 `tools/check-version-bump.sh` ——
    > 改了 `crates/**` / `apps/desktop/**` / `assets/**` / `Cargo.*` 却没涨
    > `desktop` 号，或改了 `apps/android/**` 却没涨 `android` 号，**直接红**
@@ -401,6 +406,11 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
    它做的就是这件事）。**不要手动推 `v*` tag——推了也不会触发任何东西。** 流程先过入口守卫
    （tag 名形状、在 main 上、tag 尚不存在）与全量发版前验证；全绿之后 `create-draft` 才在被验证的
    提交上建 tag 与 draft Release（三平台资产）。验证红了不会留下 tag。
+   > **发版闸（#1486）**：正式版发版前必须已有标题恰为「[验收] <正式 tag>」的台账 issue（如「[验收] v2026.11.2」，
+   > 出第一个 test 包时用 `just release-scope --ledger <号> --pkg <test 包 tag>` 建）。`plan-builds` 按标题找到它，
+   > 调 `tools/flow/release-acceptance.sh <台账号> <本次构建提交>`：没有台账、同名多张、有一项没清零，都在构建之前红，
+   > 不上传 TestFlight、不建 tag 与草稿；修好（验完勾上，或写「结论：免验，理由…」）后用同一个 tag 号重跑。
+   > 免验的项在验过的包之后相关文件又改过，仍判待重验，要先出含这些改动的 test 包并更新台账。test tag 不查。
    > **构建一次、到处复用（#838）**：正式 tag 上，`plan-builds`
    > （`tools/release/plan-builds.sh`）拿每一端在 `release/versions.json` 的版本号，
    > 和 Latest 正式版该端清单的 version 比。号没变 ⇒ 该端**不重新构建**，

@@ -150,7 +150,9 @@ lhas "release-ledger" && bad "  --dry-run 改了台账" || ok "  --dry-run 不�
 run 0 "--ledger 500 --pkg v1.1.0-test.1 → 写台账" --ledger 500 --pkg v1.1.0-test.1
 lhas "<!-- release-ledger:begin since=v1.0.0 -->" && ok "  记下起点 since=v1.0.0" || bad "  没记起点：$(cat "$L")"
 lhas "人写的说明保留" && ok "  台账块外的正文保留" || bad "  正文被冲掉了"
-lhas "- [ ] #21 ui | 待验 @v1.1.0-test.1 | 场景：#121：E3 场景121" && ok "  #21 待验 @test.1，带场景" || bad "  #21 不对：$(cat "$L")"
+SHA1="$(git -C "$R" rev-parse v1.1.0-test.1)"
+SHA2="$(git -C "$R" rev-parse v1.1.0-test.2)"
+lhas "- [ ] #21 ui | 待验 @v1.1.0-test.1（${SHA1:0:12}） | 场景：#121：E3 场景121" && ok "  #21 待验 @test.1（记下包的提交），带场景" || bad "  #21 不对：$(cat "$L")"
 lhas "- [ ] #24 notes | 待验 @v1.1.0-test.1" && ok "  #24 待验" || bad "  #24 不对"
 lhas "#22 " && bad "  只改 tools 的 #22 进了台账" || ok "  #22 不进台账"
 has "新增 3，待重验 0" && ok "  打印新增 3 项" || bad "  汇总不对：$(cat "${TMP}/out")"
@@ -167,10 +169,10 @@ has "3 项用户可见改动都已验" && ok "  打印清零" || bad "  输出�
 
 echo "── 第二个 test 包：只列新增与需重验"
 run 0 "--ledger 500 --pkg v1.1.0-test.2" --ledger 500 --pkg v1.1.0-test.2
-lhas "- [ ] #21 ui | 待重验 @v1.1.0-test.2（上次验过 @v1.1.0-test.1，又改了 apps/desktop/src/App.svelte）" &&
+lhas "- [ ] #21 ui | 待重验 @v1.1.0-test.2（${SHA2:0:12}，上次验过 @v1.1.0-test.1，又改了 apps/desktop/src/App.svelte）" &&
   ok "已验的 #21，文件被 #26 改过 → 待重验" || bad "#21 没判待重验：$(cat "$L")"
 lhas "| 结论：首页 OK" && ok "  结论保留" || bad "  结论丢了"
-lhas "- [x] #25 ui | 已验 @v1.1.0-test.1" && ok "反证：已验的 #25，文件没被改 → 沿用（去掉重验判断，两条里必有一条红）" || bad "#25 没沿用：$(cat "$L")"
+lhas "- [x] #25 ui | 已验 @v1.1.0-test.1（${SHA1:0:12}）" && ok "反证：已验的 #25，文件没被改 → 沿用（去掉重验判断，两条里必有一条红）" || bad "#25 没沿用：$(cat "$L")"
 lhas "- [x] #24 notes | 已验 @v1.1.0-test.1" && ok "  #24 沿用" || bad "  #24 不对"
 lhas "- [ ] #26 ui | 待验 @v1.1.0-test.2" && ok "  新合入的 #26 → 待验" || bad "  #26 不对"
 has "新增 1，待重验 1，仍待验 0，沿用 2" && ok "  汇总：新增 1、待重验 1、沿用 2" || bad "  汇总不对：$(cat "${TMP}/out")"
@@ -190,9 +192,26 @@ tick 21; tick 26
 has "#28（ui）待验：不在台账里" && ok "  #28 不在台账里 → 待验" || bad "  没点名 #28：$(cat "${TMP}/out")"
 has "#25（ui）待重验：验过 @v1.1.0-test.1 之后又改了 apps/desktop/src/Other.svelte" && ok "  已验的 #25 文件在候选版里又被改 → 待重验" || bad "  没判 #25 重验：$(cat "${TMP}/out")"
 has "#21（" && bad "  文件没再改的 #21 也被点名" || ok "  反证：#21 验过之后文件没再改 → 不点名"
-sed -i.bak -E 's/^- \[x\] #26 ui \| 已验 @v1\.1\.0-test\.2/- [x] #26 ui | 已验 @v9.9.9-test.1/; s/^- \[x\] #26 ui \| 待验 @v1\.1\.0-test\.2/- [x] #26 ui | 待验 @v9.9.9-test.1/' "$L" && rm -f "${L}.bak"
-(cd "$R" && PATH="${TMP}/bin:${PATH}" FAKE="$FAKE" PPASS_HOOK_REPO=o/r bash tools/flow/release-acceptance.sh 500 v1.1.0-test.2) >"${TMP}/out" 2>&1
-[ $? = 1 ] && has "#26（ui）待重验：判不了" && ok "勾了但验过的包 tag 不存在 → 待重验（fail-closed）" || bad "包号不存在却放行：$(cat "${TMP}/out")"
+# #1486：旧 test tag 会被 point-test-channel.sh 连同草稿删掉；台账记了包的提交，tag 删了也按提交判。
+cp "$L" "${TMP}/ledger.keep"
+check_test2() { (cd "$R" && PATH="${TMP}/bin:${PATH}" FAKE="$FAKE" PPASS_HOOK_REPO=o/r bash tools/flow/release-acceptance.sh 500 v1.1.0-test.2) >"${TMP}/out" 2>&1; }
+git -C "$R" tag -d v1.1.0-test.1 >/dev/null
+check_test2
+[ $? = 0 ] && ok "验过的包 tag 已删、提交还在、文件没再改 → 沿用（绿）" || bad "tag 删了就误红：$(cat "${TMP}/out")"
+sed -i.bak -E 's/@v1\.1\.0-test\.1（[0-9a-f]+）/@v1.1.0-test.1/' "$L" && rm -f "${L}.bak"
+check_test2
+[ $? = 1 ] && has "#25（ui）待重验：判不了" && ok "  反证：去掉提交号（旧格式只有 tag）、tag 已删 → 待重验" || bad "  没提交号也放行了：$(cat "${TMP}/out")"
+git -C "$R" tag v1.1.0-test.1 "$SHA1"
+check_test2
+[ $? = 0 ] && ok "  旧格式只有 tag、tag 在 → 照旧按 tag 判（绿）" || bad "  旧格式误红：$(cat "${TMP}/out")"
+cp "${TMP}/ledger.keep" "$L"
+sed -i.bak -E 's/^- \[x\] #26 ui \| (已|待)验 @v1\.1\.0-test\.2（[0-9a-f]+）/- [x] #26 ui | \1验 @v9.9.9-test.1/' "$L" && rm -f "${L}.bak"
+check_test2
+[ $? = 1 ] && has "#26（ui）待重验：判不了" && ok "勾了但验过的包 tag 不存在、没有提交号 → 待重验（fail-closed）" || bad "包号不存在却放行：$(cat "${TMP}/out")"
+cp "${TMP}/ledger.keep" "$L"
+sed -i.bak -E 's/^- \[x\] #26 ui \| (已|待)验 @v1\.1\.0-test\.2（[0-9a-f]+）/- [x] #26 ui | \1验 @v9.9.9-test.1（deadbeef0000）/' "$L" && rm -f "${L}.bak"
+check_test2
+[ $? = 1 ] && has "#26（ui）待重验：判不了" && ok "  提交号解析不到、tag 也不存在 → 待重验（fail-closed）" || bad "  假提交号放行了：$(cat "${TMP}/out")"
 
 echo "── 读失败 fail-closed"
 reset_fake

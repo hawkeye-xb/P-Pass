@@ -10,8 +10,9 @@
 # 输出：每个待验 / 待重验项一行。
 # 退出码：0 清零 / 1 有待验项，或 gh / git 读不到（fail-closed，不当通过）/ 2 用法错误、ref 不存在。
 #
-# 接进 release.yml 的 release 模式属于更新链（核心），按 AGENTS.md 红线 6 另立方案，不在本卡；
-# 在那之前由 owner 发版前手动跑：just release-acceptance <台账号> [<候选 ref>]。
+# 已接进 release.yml（#1486，方案 docs/decisions/2026-11-06-release-acceptance-gate.md）：正式版发版时 plan-builds 按标题
+# 「[验收] <正式 tag>」找台账，以 <台账号> <本次构建提交> 调本脚本，红了什么都不构建。owner 也可随时手动跑：
+# just release-acceptance <台账号> [<候选 ref>]。
 
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
