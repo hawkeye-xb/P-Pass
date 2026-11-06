@@ -36,7 +36,7 @@
    - AGENTS.md「按版本验收」
 
    同时，「接进 release workflow 另立方案」这句改成「已接入」。`docs/RELEASING.md` 的发版步骤里写明：正式版发版前必须已有这张台账。
-6. **测试**：照 `tools/test-release-version-source.sh` 的做法，按 step 名从 `release.yml` 里抽出守卫脚本，用假的 `gh` 跑下面几种情况。反证是去掉判定这一步后，后两种情况必须转红。
+6. **测试**：照 `tools/test-release-version-source.sh` 的做法，按 step 名从 `release.yml` 里抽出守卫脚本，用假的 `gh` 跑下面几种情况。反证：去掉守卫里的台账检查这一步后，「有一项没勾」「没有台账」「同名台账两张」这三条用例必须失败。
    - 台账全勾 → 过
    - 有一项没勾 → 红
    - 没有台账 → 红
