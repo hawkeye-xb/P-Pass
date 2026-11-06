@@ -106,6 +106,16 @@ owner 复核放行：PR 上评论 `/review-override <理由>` 触发 `issue_comm
 用 gh api 现查作者对本仓的权限（admin 才认，`author_association` 在组织仓库是 MEMBER，不作依据），通过后留 `agent=OVERRIDE` 标记，
 只对当时的头提交有效。判据测试：`tools/test-ci-review.sh`、`tools/test-flow-review.sh`。
 
+## main 红了自动开卡（#1469）
+
+`main-red.yml`（`on: workflow_run`，监听 CI Rust / Desktop / Android / iOS / Docs）在 **main 上 push 触发**的 run 红了
+（failure、timed_out）时，由 `tools/flow/main-red.sh` 开卡「[MAIN-RED] <workflow 名>」（打 `P0`），正文列出该 workflow
+上次在 main 全绿的提交到本次红的提交之间的 PR（从 squash 标题末尾的 `(#N)` 取）与失败 job 链接；同名卡已开就追加评论，不重复开；
+同一 workflow 之后在 main 转绿就评论并关卡。读不到上次全绿时改列最近 20 个提交并写明「无法确定区间」。
+口径：main 不冻结、不挡其他合入；owner 二分找元凶，修起来简单就往前修，拿不准就回滚元凶 PR。
+权限只有 `issues: write`、`actions: read`、`contents: read`，只检出 main。main 上的 push 触发由 #1468 加，在那之前这个 workflow 不会被触发。
+判据测试 `just main-red-test`（假 gh，每条带反证）。
+
 ## 删接口 / 升依赖时的全 lane 核对
 
 必需检查只是全部 lane 的子集。iOS FFI、Windows test、E2E 这些非必需 lane 专门覆盖
