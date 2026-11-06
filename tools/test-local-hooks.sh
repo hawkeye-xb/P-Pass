@@ -64,13 +64,18 @@ for c in git bash env sh sed awk tar mktemp cat tr head grep rm cp chmod touch s
     exit 1
   }
 done
-# Git Bash 上原生 git.exe 需要真实 sh.exe：把 MSYS 的 /usr/bin 放在假 PATH 末尾。
-# 那里没有 gh，所以「PATH 里没有 gh」的用例仍然成立。
+# Git Bash 上原生 git.exe 需要真实的 sh.exe 与 git-receive-pack：把 MSYS 的真实目录放在假 PATH 末尾。
+# 实测去掉它们，git 起不了 hook（cannot spawn … pre-commit），本地推拉也找不到 git-receive-pack。
 case "$(uname -s 2>/dev/null)" in
   MINGW* | MSYS* | CYGWIN*) EXTRA_PATH=":/usr/bin:/mingw64/bin" ;;
   *) EXTRA_PATH="" ;;
 esac
 export EXTRA_PATH
+# 「PATH 里没有 gh」用例的前提：假 PATH 末尾的真实目录里也没有 gh（#1418 评审指出）。
+# 真目录里有 gh 时没法为了排除它去掉 sh.exe / git-receive-pack，该用例跳过并打印原因；
+# 当前机器与 CI 的 Git for Windows 不自带 gh，照常执行。
+NO_GH_CASE=1
+if ( PATH="${NOGH_PATH}${EXTRA_PATH}"; command -v gh >/dev/null 2>&1 ); then NO_GH_CASE=0; fi
 mkdir -p "${TMP}/bin"
 cat >"${TMP}/bin/gh" <<'STUB'
 #!/usr/bin/env bash
@@ -261,7 +266,11 @@ try pass "batch/* 上核心 + 越界都不拦（且不查 gh）" batch/2026-11-0
 rm -f "${FAKE_GH}/fail"
 
 echo "==> 5. gh 不可用"
-try deny "PATH 里没有 gh" fix/101-nogh 'PATH="${NOGH_PATH}${EXTRA_PATH}"; echo 1 >>docs/a/x.md; git add -A' "找不到 gh"
+if [ "$NO_GH_CASE" = 1 ]; then
+  try deny "PATH 里没有 gh" fix/101-nogh 'PATH="${NOGH_PATH}${EXTRA_PATH}"; echo 1 >>docs/a/x.md; git add -A' "找不到 gh"
+else
+  echo "  ⏭ 跳过「PATH 里没有 gh」：真实 PATH 目录里有 gh，排除它就去掉了 git 需要的 sh.exe / git-receive-pack"
+fi
 PATH="${TMP}/bin:${NOGH_PATH}${EXTRA_PATH}"
 try deny "gh 报错（离线 / 没登录）" fix/101-off 'touch "$FAKE_GH/fail"; echo 1 >>docs/a/x.md; git add -A' "按拒绝处理"
 rm -f "${FAKE_GH}/fail"
