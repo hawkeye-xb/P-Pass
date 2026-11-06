@@ -36,7 +36,9 @@ STATE="${PPASS_CI_STATE:-${RUNNER_TEMP:-/tmp}/ppass-ci-review}"
 
 # 评审没跑成：状态 error + 评论，不是代码问题（只用在 review.sh 自己没写出状态的时候）。
 infra_report() {
-  local pr="$1" sha="$2" why="$3"
+  local pr="$1" sha="$2" why
+  # 原因来自日志尾部，可能带 agent 输出：删掉标记字样（只认 review.sh 写在评论末尾的那一行）
+  why="$(printf '%s' "$3" | sed 's/<!-- *ppass-review/<!- ppass-review/g')"
   echo "ci-review: 评审没跑成：${why}" >&2
   if [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
     gh api -X POST "repos/${REPO}/statuses/${sha}" -f state=error -f context="review/agent" \

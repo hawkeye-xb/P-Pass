@@ -217,7 +217,7 @@ PRIOR_ID=""
 REUSE_AGENT=""
 REUSE_SHA=""
 MARKS="$(gh api "repos/${REPO}/issues/${PR}/comments" --paginate \
-  --jq '.[] | select(.body | contains("<!-- ppass-review ")) | [.user.login, (.id | tostring), (.body | capture("<!-- ppass-review (?<m>[^<>\\r\\n]*) -->\\s*\\z").m)] | @tsv' \
+  --jq '.[] | select(.body | contains("<!-- ppass-review ")) | [.user.login, (.id | tostring), (.body | capture("(?:^|\\n)<!-- ppass-review (?<m>[^<>\\r\\n]*) -->\\s*\\z").m)] | @tsv' \
   2>/dev/null | tr -d '\r')" || MARKS=""
 while IFS=$'\t' read -r m_login m_id m_mark; do
   [ "$m_login" = "$REVIEW_BOT" ] || continue
@@ -393,6 +393,8 @@ else
   fi
 fi
 if [ -n "$INFRA" ]; then
+  # 原因里可能带 agent 的报错原文：删掉标记字样，免得被下次当成复用 / 放行依据。
+  INFRA="$(printf '%s' "$INFRA" | sed 's/<!-- *ppass-review/<!- ppass-review/g')"
   printf '**独立评审：评审没跑成**（头提交 `%s`）\n\n基础设施问题（key、网络、超时或模型没按格式回答），**不是代码有问题**。review/agent=error 不算通过：重跑评审即可。\n\n原因：%s\n' \
     "${SHA:0:10}" "$INFRA" >"${WORK}/infra.md"
   gh pr comment "$PR" -R "$REPO" --body-file "${WORK}/infra.md" >/dev/null 2>&1 ||
