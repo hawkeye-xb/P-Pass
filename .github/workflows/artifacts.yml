@@ -69,7 +69,7 @@ concurrency:
 
 jobs:
   macos-arm64-bin:
-    runs-on: macos-14 # Apple Silicon
+    runs-on: macos-15 # Apple Silicon；2026-11-06 起 GitHub 不再支持 macos-14（#1474）
     # 只手动触发：macOS runner 私有仓计费 10x，而这只是自用裸二进制。
     # 需要 macOS 包时 `gh workflow run artifacts.yml`（或 Actions 页 Run workflow）。
     if: github.event_name == 'workflow_dispatch'
