@@ -56,8 +56,8 @@ chmod +x "${TMP}/bin/gh"
   git update-ref refs/remotes/origin/main HEAD
 ) || { echo "造临时仓库失败"; exit 1; }
 
-ledger() { # ledger <#31 的勾选：x 或空格>
-  printf '[验收] v1.1.0\n\n<!-- release-ledger:begin since=v1.0.0 -->\n- [%s] #31 ui | 待验 @v1.1.0-test.1 | 场景：#131：A\n<!-- release-ledger:end -->\n' "$1" >"${FAKE}/ledger"
+ledger() { # ledger <#31 的勾选：x 或空格> [<验过的包，默认 v1.1.0-test.1>]
+  printf '[验收] v1.1.0\n\n<!-- release-ledger:begin since=v1.0.0 -->\n- [%s] #31 ui | 待验 @%s | 场景：#131：A\n<!-- release-ledger:end -->\n' "$1" "${2:-v1.1.0-test.1}" >"${FAKE}/ledger"
 }
 run() { # run <期望退出码> <描述> [参数...]
   local want="$1" desc="$2" rc
@@ -79,7 +79,12 @@ has "#33（ui）待验：不在台账里" && ok "  点名 #33" || bad "  没点�
 has "#31（ui）待重验：验过 @v1.1.0-test.1 之后又改了 apps/desktop/src/A.svelte" &&
   ok "  #31 的文件在验过之后被改了又改回（两头内容一样）→ 仍待重验" || bad "  改了又改回没判待重验：$(cat "${TMP}/out")"
 run 1 "  反证：候选版停在改动之前（test.2，只多了 #33）→ 只因 #33 红" 500 v1.1.0-test.2
+has "#33（ui）待验：不在台账里" && ok "  红的原因是 #33" || bad "  不是因 #33 红：$(cat "${TMP}/out")"
 has "#31（" && bad "  文件没被碰过的 #31 也被点名：$(cat "${TMP}/out")" || ok "  #31 不点名"
+ledger x v1.1.0-test.2
+run 1 "验过的包不是候选版的祖先（历史不完整 / 不在一条线上）→ 判不了，红" 500 v1.1.0-test.1
+has "#31（ui）待重验：判不了" && ok "  #31 判待重验" || bad "  没判待重验：$(cat "${TMP}/out")"
+ledger x
 touch "${FAKE}/ledger.fail"
 run 1 "读不到台账 → 红（fail-closed）" 500 v1.1.0-test.1
 rm -f "${FAKE}/ledger.fail"
