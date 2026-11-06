@@ -4,6 +4,8 @@
 # 方案由模型写进一个 markdown 文件，下面这些字段一个都不能少（值写「无」也算写了）：
 #   **做法**：…            **涉及端**：android / mac / windows / ios / 无
 #   **数据**：…            **用户可见行为**：…      **隐私**：…      **风险**：…
+#   **影响**：不可挽回 / 面广 / 局部     （不可挽回＝丢照片、隐私泄露、安全；面广＝主流程坏、发不了版；局部＝文案、样式）
+#   **时间性**：停线 / 截止日 / 线性 / 无   （停线＝此刻卡住交付或卡着产品负责人；产品负责人点名的一类卡也算停线）
 #   **范围**：后面跟一个 ``` 代码块，一行一个路径或 glob（新文件也要写上）
 #   **验收场景**：…        （按任务卡模板：场景 id，或步骤 + 日志判据 + 反证，标 E1–E4）
 #   **ADR**：docs/decisions/<文件>.md        （范围命中核心时必填）
@@ -23,9 +25,13 @@
 #      合格且隐私、数据都是「无」、卡类型不是 Feature ⇒ 不打 needs:product、不要选项，打 decided:owner。
 #      隐私或数据不是「无」、或 Feature 卡：owner 定案不顶用，照常 needs:product。
 #   3. 其余 ⇒ status:ready。
+# 优先级（P0–P3）也由脚本按「影响」×「时间性」算，不看模型的结论，不看卡的类型（流程 / 功能）：
+#   停线 → P0；不可挽回（其余时间性）→ P1；面广：截止日 → P1、线性 → P2、无 → P3；局部：截止日 → P2，线性、无 → P3。
+#   自动定级：标题以 [MAIN-RED] 开头 → 直接 P0；挂了 milestone 且到期不足 3 天（含已过期）→ 在上表结果上升一级（最高 P0）。
+#   写标签时替换这张卡上已有的 P0–P3，不叠加；产品负责人可直接改标签覆盖。
 # 方案写回 issue：「范围」「验收场景」「是否核心」填进任务卡对应字段（hook 与 just verify 读它们），
 # 其余放进正文末尾的「实施方案」段（重跑覆盖，不叠加）。
-# 输出：TRIAGE <号> ready | needs:product | blocked
+# 输出：TRIAGE <号> ready | needs:product | blocked，下一行 PRIORITY <号> P0–P3
 
 set -uo pipefail
 # shellcheck source=tools/flow/owner-lib.sh
@@ -57,7 +63,7 @@ python3 -I -X utf8 - "$PLAN" "$TMPD" <<'PY'
 import re, sys, pathlib
 text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").replace("\r", "")
 out = pathlib.Path(sys.argv[2])
-names = ["做法", "涉及端", "数据", "用户可见行为", "隐私", "风险", "范围", "验收场景", "ADR", "选项一", "选项二", "产品定案", "owner 定案"]
+names = ["做法", "涉及端", "数据", "用户可见行为", "隐私", "风险", "影响", "时间性", "范围", "验收场景", "ADR", "选项一", "选项二", "产品定案", "owner 定案"]
 pat = re.compile(r"^\*\*(" + "|".join(names) + r")\*\*[：:]?[ \t]*", re.M)
 hits = list(pat.finditer(text))
 fields = {}
@@ -69,7 +75,7 @@ if "范围" in fields:
     m = re.search(r"```[^\n]*\n(.*?)```", fields["范围"], re.S)
     scope = m.group(1).strip() if m else ""
     fields["范围"] = scope
-missing = [n for n in names[:8] if not fields.get(n, "").strip()]
+missing = [n for n in names[:10] if not fields.get(n, "").strip()]
 if missing:
     print("方案缺字段或字段为空：" + "、".join(missing) + ("（范围要有 ``` 代码块）" if "范围" in missing else ""), file=sys.stderr)
     sys.exit(3)
@@ -93,6 +99,44 @@ done <<EOF
 $(field 范围)
 EOF
 [ "${#GLOBS[@]}" -gt 0 ] || refuse "范围代码块里没有路径"
+
+# 优先级：影响 × 时间性（脚本判，缺或写错都拒绝）。
+IMPACT=""
+case "$(field 影响 | head -1 | tr -d '[:space:]')" in
+  不可挽回*) IMPACT=irreversible ;;
+  面广*) IMPACT=wide ;;
+  局部*) IMPACT=local ;;
+esac
+[ -n "$IMPACT" ] || refuse "**影响** 必须是 不可挽回 / 面广 / 局部 之一（现在写的是「$(field 影响 | head -1)」）" "按方案模板补正后重跑。"
+TIMING=""
+case "$(field 时间性 | head -1 | tr -d '[:space:]')" in
+  停线*) TIMING=stop ;;
+  截止日*) TIMING=deadline ;;
+  线性*) TIMING=linear ;;
+  无*) TIMING=none ;;
+esac
+[ -n "$TIMING" ] || refuse "**时间性** 必须是 停线 / 截止日 / 线性 / 无 之一（现在写的是「$(field 时间性 | head -1)」）" "按方案模板补正后重跑。"
+if [ "$TIMING" = stop ]; then PRIO=0
+elif [ "$IMPACT" = irreversible ]; then PRIO=1
+elif [ "$IMPACT" = wide ]; then
+  case "$TIMING" in deadline) PRIO=1 ;; linear) PRIO=2 ;; *) PRIO=3 ;; esac
+else
+  case "$TIMING" in deadline) PRIO=2 ;; *) PRIO=3 ;; esac
+fi
+PRIO_WHY="影响=$(field 影响 | head -1 | tr -d '[:space:]')，时间性=$(field 时间性 | head -1 | tr -d '[:space:]')"
+case "$ISSUE_TITLE" in
+  "[MAIN-RED]"*) PRIO=0; PRIO_WHY="${PRIO_WHY}；标题 [MAIN-RED]：main 红了，自动 P0" ;;
+esac
+# 挂了带截止日的 milestone：到期前 3 天（含已过期）升一级。
+MS_DUE="$(gh issue view "$N" -R "$REPO" --json milestone --jq '.milestone.dueOn // ""' 2>/dev/null)" ||
+  refuse "读不到 #${N} 的 milestone，算不了截止日升级" "稍后重跑。"
+if [ -n "$MS_DUE" ] && [ "$PRIO" -gt 0 ]; then
+  days="$(python3 -I -X utf8 -c '
+import sys, datetime
+due = datetime.date.fromisoformat(sys.argv[1][:10]); now = datetime.date.fromisoformat(sys.argv[2])
+print((due - now).days)' "$MS_DUE" "$(today)")" || refuse "milestone 到期日「${MS_DUE}」读不懂" "核对 milestone 的 due date。"
+  if [ "$days" -lt 3 ]; then PRIO=$((PRIO - 1)); PRIO_WHY="${PRIO_WHY}；milestone 到期还剩 ${days} 天，升一级"; fi
+fi
 
 # 范围 → 具体文件：已有文件按 glob 展开；没展开出东西的（新文件 / 新目录）把通配换成占位名照样判，
 # 宁可多判核心，不漏判。
@@ -207,9 +251,9 @@ fi
 printf '%s\n' "$ISSUE_BODY" >"${TMPD}/body"
 CORE_TXT="否（范围不命中 .github/core-paths.txt）"
 [ "$CORE" = false ] || CORE_TXT="是（定案：$(printf '%s' "${ADRS:-无}" | tr '\n' ' ')）"
-python3 -I -X utf8 - "${TMPD}" "$CORE_TXT" "$DECISION" "${REASONS%；}" <<'PY'
+python3 -I -X utf8 - "${TMPD}" "$CORE_TXT" "$DECISION" "${REASONS%；}" "$PRIO" "$PRIO_WHY" <<'PY'
 import re, sys, pathlib
-d = pathlib.Path(sys.argv[1]); core_txt, decision, reasons = sys.argv[2], sys.argv[3], sys.argv[4]
+d = pathlib.Path(sys.argv[1]); core_txt, decision, reasons, prio, prio_why = sys.argv[2:7]
 f = lambda k: (d / k).read_text(encoding="utf-8").strip() if (d / k).exists() else ""
 body = (d / "body").read_text(encoding="utf-8").replace("\r", "")
 begin, end = "<!-- triage:begin -->", "<!-- triage:end -->"
@@ -246,13 +290,14 @@ else:
 
 sec = [begin, "## 实施方案（just triage）", ""]
 sec += extra
-for k in ("做法", "涉及端", "数据", "用户可见行为", "隐私", "风险", "ADR", "产品定案", "owner 定案"):
+for k in ("做法", "涉及端", "数据", "用户可见行为", "隐私", "风险", "影响", "时间性", "ADR", "产品定案", "owner 定案"):
     if f(k):
         sec.append("**" + k + "**：" + f(k) + "\n")
 if decision == "needs:product":
     sec.append("**需要产品负责人拍板**（" + reasons + "）：\n")
     sec.append("1. " + f("选项一"))
     sec.append("2. " + f("选项二") + "\n")
+sec.append("**优先级**：`P" + prio + "`（" + prio_why + "）\n")
 sec.append("分流结果：`" + decision + "`（脚本按范围路径与字段判定）")
 sec.append(end)
 (d / "newbody").write_text(body.rstrip() + "\n\n" + "\n".join(sec) + "\n", encoding="utf-8")
@@ -265,6 +310,16 @@ want="$(printf '%s\n' "${GLOBS[@]}" | tr '\n' ' ')"
 [ "$got" = "$want" ] || die_stuck "triage #${N}：写回后的「范围」读出来是「${got}」，不是「${want}」，没有写入" --issue "$N"
 
 gh issue edit "$N" -R "$REPO" --body-file "${TMPD}/newbody" >/dev/null || die_stuck "写回 #${N} 正文失败"
+# 打优先级标签：去掉这张卡上其它的 P0–P3，再加新的（替换，不叠加）。
+OLD_P=""
+for l in $(printf '%s' "$ISSUE_LABELS" | tr ',' ' '); do
+  case "$l" in P[0-3]) [ "$l" = "P${PRIO}" ] || OLD_P="${OLD_P:+${OLD_P},}${l}" ;; esac
+done
+if [ -n "$OLD_P" ]; then
+  gh issue edit "$N" -R "$REPO" --add-label "P${PRIO}" --remove-label "$OLD_P" >/dev/null || die_stuck "给 #${N} 换优先级标签失败"
+else
+  gh issue edit "$N" -R "$REPO" --add-label "P${PRIO}" >/dev/null || die_stuck "给 #${N} 打优先级标签失败"
+fi
 case "$DECISION" in
   blocked)
     bash "${FLOW_DIR}/owner-stuck.sh" "范围命中核心（.github/core-paths.txt），方案没有引用 origin/main 上「已采纳」的 ADR。先按 AGENTS.md 红线 6 写 ADR（docs/decisions/）并定案，再重跑 just triage" --issue "$N" ||
@@ -280,4 +335,4 @@ case "$DECISION" in
     set_status "$N" status:ready || die_stuck "把 #${N} 换成 status:ready 失败"
     ;;
 esac
-printf 'TRIAGE %s %s\n' "$N" "$DECISION"
+printf 'TRIAGE %s %s\nPRIORITY %s P%s\n' "$N" "$DECISION" "$N" "$PRIO"

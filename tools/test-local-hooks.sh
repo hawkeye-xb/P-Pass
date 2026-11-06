@@ -35,18 +35,47 @@ git config --global user.email "hook-test@example.invalid"
 git config --global init.defaultBranch main
 unset PPASS_HOOK_BYPASS PPASS_HOOK_BYPASS_REASON PPASS_HOOK_REPO PPASS_HOOK_ROOT
 
-# PATH 只放白名单命令的软链（不含 gh），桩放最前面。不能「剔掉带 gh 的目录」：
+# 假命令：MSYS/Cygwin（Git Bash）不能执行指向 .exe 的符号链接，改生成 wrapper 脚本；
+# 其他平台保持 symlink。调用方：fake_cmd <目录> <命令名>。
+fake_cmd() {
+  local dir="$1" c="$2" p
+  p="$(command -v "$c")" && [ "${p#/}" != "$p" ] || return 1
+  case "$(uname -s 2>/dev/null)" in
+    MINGW* | MSYS* | CYGWIN*)
+      # 原生 git.exe spawn 钩子的解释器时要真正的 sh.exe，wrapper 脚本不行：
+      # 不放进假 bin，让 PATH 末尾的真实 /usr/bin 供给（见 EXTRA_PATH）。
+      [ "$c" = sh ] && return 0
+      printf '#!/bin/sh\nexec "%s" "$@"\n' "$p" >"${dir}/${c}" && chmod +x "${dir}/${c}"
+      ;;
+    *)
+      ln -s "$p" "${dir}/${c}"
+      ;;
+  esac
+}
+
+# PATH 只放白名单命令的假命令（不含 gh），桩放最前面。不能「剔掉带 gh 的目录」：
 # Linux 上 gh 常在 /usr/bin，一剔连 git / sed 都没了。测试与 hook 用到新命令要加进这里。
 NOGH_PATH="${TMP}/nogh"
 mkdir -p "$NOGH_PATH"
 for c in git bash env sh sed awk tar mktemp cat tr head grep rm cp chmod touch sort cmp \
   basename dirname mkdir mv; do
-  p="$(command -v "$c")" && [ "${p#/}" != "$p" ] || {
+  fake_cmd "$NOGH_PATH" "$c" || {
     echo "找不到命令 ${c}，无法搭测试环境"
     exit 1
   }
-  ln -s "$p" "${NOGH_PATH}/${c}"
 done
+# Git Bash 上原生 git.exe 需要真实的 sh.exe 与 git-receive-pack：把 MSYS 的真实目录放在假 PATH 末尾。
+# 实测去掉它们，git 起不了 hook（cannot spawn … pre-commit），本地推拉也找不到 git-receive-pack。
+case "$(uname -s 2>/dev/null)" in
+  MINGW* | MSYS* | CYGWIN*) EXTRA_PATH=":/usr/bin:/mingw64/bin" ;;
+  *) EXTRA_PATH="" ;;
+esac
+export EXTRA_PATH
+# 「PATH 里没有 gh」用例的前提：假 PATH 末尾的真实目录里也没有 gh（#1418 评审指出）。
+# 真目录里有 gh 时没法为了排除它去掉 sh.exe / git-receive-pack，该用例跳过并打印原因；
+# 当前机器与 CI 的 Git for Windows 不自带 gh，照常执行。
+NO_GH_CASE=1
+if ( PATH="${NOGH_PATH}${EXTRA_PATH}"; command -v gh >/dev/null 2>&1 ); then NO_GH_CASE=0; fi
 mkdir -p "${TMP}/bin"
 cat >"${TMP}/bin/gh" <<'STUB'
 #!/usr/bin/env bash
@@ -61,7 +90,7 @@ STUB
 chmod +x "${TMP}/bin/gh"
 export FAKE_GH="${TMP}/gh"
 mkdir -p "$FAKE_GH"
-export PATH="${TMP}/bin:${NOGH_PATH}"
+export PATH="${TMP}/bin:${NOGH_PATH}${EXTRA_PATH}"
 
 issue() { # issue <号> <标签,逗号分隔> <正文>
   printf '%s' "$2" >"${FAKE_GH}/$1.labels"
@@ -81,7 +110,11 @@ git remote add origin git@github-personal:hawkeye-xb/P-Pass.git
 mkdir -p tools/hooks .github docs/a docs/b crates/storage/src apps/desktop/src-tauri
 cp "${SRC}/tools/hooks/"* tools/hooks/
 cp "${SRC}/tools/ci-paths.sh" tools/
-cp "${SRC}/.github/core-paths.txt" .github/
+# 规则用几条代表性夹具，不搬真实名单（同 test-flow-worker / test-release-acceptance）：
+# hooks-test 测的是拦截逻辑，规则内容由 tools/test-ci-paths.sh 对着真名单测。
+# 真名单 70+ 条，ci-paths 编译每条要起 3 个 sed，hook 每次提交跑两遍 core；Windows Git Bash
+# 上每次进程启动约 30ms，50 条用例累计十几分钟，看起来就是「提交不返回」（#1418）。
+printf '+ .github/core-paths.txt\n+ crates/storage/**\n+ apps/desktop/src-tauri/tauri.conf.json\n' >.github/core-paths.txt
 echo a >docs/a/x.md
 echo b >docs/b/y.md
 echo s >crates/storage/src/a.rs
@@ -233,8 +266,12 @@ try pass "batch/* 上核心 + 越界都不拦（且不查 gh）" batch/2026-11-0
 rm -f "${FAKE_GH}/fail"
 
 echo "==> 5. gh 不可用"
-try deny "PATH 里没有 gh" fix/101-nogh 'PATH="$NOGH_PATH"; echo 1 >>docs/a/x.md; git add -A' "找不到 gh"
-PATH="${TMP}/bin:${NOGH_PATH}"
+if [ "$NO_GH_CASE" = 1 ]; then
+  try deny "PATH 里没有 gh" fix/101-nogh 'PATH="${NOGH_PATH}${EXTRA_PATH}"; echo 1 >>docs/a/x.md; git add -A' "找不到 gh"
+else
+  echo "  ⏭ 跳过「PATH 里没有 gh」：真实 PATH 目录里有 gh，排除它就去掉了 git 需要的 sh.exe / git-receive-pack"
+fi
+PATH="${TMP}/bin:${NOGH_PATH}${EXTRA_PATH}"
 try deny "gh 报错（离线 / 没登录）" fix/101-off 'touch "$FAKE_GH/fail"; echo 1 >>docs/a/x.md; git add -A' "按拒绝处理"
 rm -f "${FAKE_GH}/fail"
 try deny "issue 不存在" fix/999-x 'echo 1 >>docs/a/x.md; git add -A' "按拒绝处理"
@@ -394,6 +431,11 @@ bash tools/hooks/install.sh --check >"${TMP}/check.out" 2>&1 && ok "已安装 �
 # Windows Git Bash（#1364）：git.exe 把 /c/... 写成 C:/...，读回与 bash 的路径写法不同。
 # 这里用假 cygpath 模拟：假 git 写法是 WIN:<路径>，cygpath -u 去掉前缀还原。
 WINPATH="$(git config --get core.hooksPath)"
+# Windows 上 git 读回的是 C:/... 写法（#1364），不是 bash 的 /tmp/...：先用本机真 cygpath 换回来，
+# 再模拟「git 写了另一种写法」。Linux/macOS 没有 cygpath，读回的就是同一写法。
+if command -v cygpath >/dev/null 2>&1; then
+  WINPATH="$(cygpath -u "$WINPATH" 2>/dev/null || printf '%s' "$WINPATH")"
+fi
 mkdir -p "${TMP}/cyg"
 printf '#!/usr/bin/env bash\n[ "$1" = "-u" ] || exit 2\nprintf "%%s\\n" "${2#WIN:}"\n' >"${TMP}/cyg/cygpath"
 chmod +x "${TMP}/cyg/cygpath"
