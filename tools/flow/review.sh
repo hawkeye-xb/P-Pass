@@ -217,7 +217,7 @@ PRIOR_ID=""
 REUSE_AGENT=""
 REUSE_SHA=""
 MARKS="$(gh api "repos/${REPO}/issues/${PR}/comments" --paginate \
-  --jq '.[] | select(.body | contains("<!-- ppass-review ")) | [.user.login, (.id | tostring), (.body | capture("<!-- ppass-review (?<m>[^>]*) -->").m)] | @tsv' \
+  --jq '.[] | select(.body | contains("<!-- ppass-review ")) | [.user.login, (.id | tostring), (.body | capture("<!-- ppass-review (?<m>[^<>\\r\\n]*) -->\\s*\\z").m)] | @tsv' \
   2>/dev/null | tr -d '\r')" || MARKS=""
 while IFS=$'\t' read -r m_login m_id m_mark; do
   [ "$m_login" = "$REVIEW_BOT" ] || continue
@@ -428,8 +428,10 @@ else
       echo "建议 ${SUGGEST} 条、风格 ${STYLE} 条：不挡合入，由开 PR 的会话自行判断改不改；不改的回一句理由即可。"
       echo
     fi
-    # 评审正文：去掉最后的 VERDICT 行，原样贴上
-    grep -v '^[[:space:]]*VERDICT:[[:space:]]*\(PASS\|FAIL\)[[:space:]]*$' "${WORK}/agent.out" 2>/dev/null || true
+    # 评审正文：去掉最后的 VERDICT 行，原样贴上。模型输出里的标记字样一律删掉：评论由 bot 贴出，
+    # 照抄进来的「agent=OVERRIDE」会被下次当成 owner 放行（标记只认评论末尾、本脚本写的那一行）。
+    grep -v '^[[:space:]]*VERDICT:[[:space:]]*\(PASS\|FAIL\)[[:space:]]*$' "${WORK}/agent.out" 2>/dev/null |
+      sed 's/<!-- *ppass-review[^>]*-->//g; s/<!-- *ppass-review/<!- ppass-review/g' || true
     echo
     echo "<sub>评审人：新开的只读 agent${MODEL:+（${MODEL}）}，只看 PR 改动与关联卡 ${CARDS:+$(printf '#%s ' $CARDS)}$([ -n "$CARDS" ] || echo '（无，Dependabot 依赖升级）')；结论只对头提交 \`${SHA:0:10}\` 有效，推新提交只评增量。判不了的找 owner，owner 评论 \`/review-override <理由>\` 可复核放行。</sub>"
     # 下次复用 / 增量的依据（只认 github-actions[bot] 写的这一行）
