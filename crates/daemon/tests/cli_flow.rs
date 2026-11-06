@@ -709,7 +709,8 @@ fn without_config_toml_the_resident_daemon_waits_for_the_library_then_restarts()
 /// #1167：Windows 常驻 daemon（非服务的计划任务形态，测试进程就是这种）不再写令牌文件：
 /// 没有 config.toml ⇒ 在**本用户的命名管道**上进未配置状态，按 Windows 用户 SID 认人；
 /// 在管道上写好库位置后以 75 退出。整个过程里数据目录与库目录都不出现 `ipc.token`。
-/// 别的平台（签名 socket / 令牌）跳过。
+/// 别的平台（签名 socket / 令牌）跳过；本机装了 P-Pass 服务（服务停着也算）时管道名是
+/// 服务形态的 `ppf-svc`，本条前提不成立，也跳过（#1523）。
 /// 反证：daemon 退回令牌模式 ⇒ 管道上没人答 / 目录里出现 ipc.token，红。
 #[test]
 fn windows_resident_daemon_serves_on_the_user_pipe_without_any_token_file() {
@@ -719,6 +720,16 @@ fn windows_resident_daemon_serves_on_the_user_pipe_without_any_token_file() {
         eprintln!("跳过：本平台常驻 daemon 不走命名管道");
         return;
     };
+    // 管道名由 windows_pipe::service_hosted() 决定：本进程是服务，或**本机装了服务**
+    // （is_installed），就是服务形态的 SERVICE_PIPE_NAME。客户端在服务形态下要求管道属主
+    // 是 NT SERVICE\P-Pass、服务端在会话 0，而这里拉起的是交互会话里的普通 daemon，
+    // 接不上——不是产品坏了，是这条用例的计划任务形态前提不成立（#1523）。
+    if pipe == "ppf-svc" {
+        eprintln!(
+            "跳过：{pipe} 是服务形态的管道（本机装了 P-Pass 服务），本条用例测的是计划任务形态"
+        );
+        return;
+    }
     let rt = tokio::runtime::Runtime::new().unwrap();
     let endpoint = daemon::ipc::PeerEndpoint::Pipe(pipe.clone());
     async fn call(
@@ -769,13 +780,13 @@ fn windows_resident_daemon_serves_on_the_user_pipe_without_any_token_file() {
     );
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
     let answered = loop {
-        if let Ok(v) = rt.block_on(call(&endpoint, status.clone())) {
-            break v;
+        match rt.block_on(call(&endpoint, status.clone())) {
+            Ok(v) => break v,
+            Err(e) => assert!(
+                std::time::Instant::now() < deadline,
+                "20 秒内管道 {pipe} 上没有 daemon 应答（最后一次连接错误：{e}）"
+            ),
         }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "20 秒内管道 {pipe} 上没有 daemon 应答"
-        );
         std::thread::sleep(std::time::Duration::from_millis(200));
     };
     assert_eq!(answered["result"]["unconfigured"], true, "{answered}");
