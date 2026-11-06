@@ -452,7 +452,8 @@ if "$clean_cache" || "$preview_cache_location"; then
     case $sweep_status in
       0) "$apply" && printf 'SWEPT      %s (free after: %s)\n' "$cache" "$(free_space "$cache")" ;;
       3) ;;  # in use: skipped, try again later; not a failure
-      *) "$apply" && cache_failed=true ;;
+      4) "$apply" && cache_failed=true ;;  # cannot tell: refusing is a failure only when deleting
+      *) cache_failed=true ;;  # cargo-sweep or the lock failed: a failed dry run is a failure too
     esac
   fi
 fi

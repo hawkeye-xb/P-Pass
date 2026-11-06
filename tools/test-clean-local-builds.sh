@@ -228,15 +228,22 @@ if command -v lsof >/dev/null 2>&1; then
   if command -v lockf >/dev/null 2>&1; then
     # The in-use check happens inside the heavy-build lock, not before queueing:
     # a build that starts while the sweep waits for the lock must still stop it.
-    lockf -k "$PPASS_HEAVY_LOCK" sleep 3 &
+    # The lock is released only after the holder's open file is visible to lsof,
+    # so the outcome does not depend on how fast Python starts.
+    lockf -k "$PPASS_HEAVY_LOCK" bash -c 'while [ ! -e "$1" ]; do sleep 0.1; done' _ "$tmp/go" &
     lock_pid=$!
     sleep 1
     (cd "$repo" && PATH="$stub_bin:$PATH" bash "$cleanup_script" --apply --cache > "$tmp/waited.out") &
     waiter_pid=$!
-    sleep 1
     "$sleeper" -c 'import sys, time; f = open(sys.argv[1]); time.sleep(300)' "$cache/debug/deps/libfixture.rlib" &
     holder_pid=$!
-    trap 'kill "$holder_pid" 2>/dev/null || true; rm -rf "$tmp"' EXIT
+    trap 'kill "$holder_pid" 2>/dev/null || true; touch "$tmp/go"; rm -rf "$tmp"' EXIT
+    for _ in $(seq 1 100); do
+      lsof -nP -Fn -p "$holder_pid" 2>/dev/null | grep -qF "libfixture.rlib" && break
+      sleep 0.1
+    done
+    lsof -nP -Fn -p "$holder_pid" 2>/dev/null | grep -qF "libfixture.rlib" || fail 'fixture holder never opened the cache file'
+    touch "$tmp/go"
     wait "$waiter_pid" || fail "sweep that waited for the lock failed: $(cat "$tmp/waited.out")"
     wait "$lock_pid" 2>/dev/null || true
     [[ "$(cat "$tmp/waited.out")" == *"SKIP       $cache_real — files open in it"* ]] || fail "build started while waiting for the lock was not seen: $(cat "$tmp/waited.out")"
@@ -245,6 +252,13 @@ if command -v lsof >/dev/null 2>&1; then
     wait "$holder_pid" 2>/dev/null || true
     trap 'rm -rf "$tmp"' EXIT
   fi
+
+  # A failed sweep is a failure in preview too, not a silent exit 0.
+  printf '#!/usr/bin/env bash\nexit 7\n' > "$tmp/broken-sweep"
+  mkdir -p "$tmp/broken-bin" && mv "$tmp/broken-sweep" "$tmp/broken-bin/cargo-sweep" && chmod +x "$tmp/broken-bin/cargo-sweep"
+  broken_status=0
+  broken=$(cd "$repo" && PATH="$tmp/broken-bin:$PATH" bash "$cleanup_script" --cache) || broken_status=$?
+  [[ $broken_status -ne 0 && "$broken" == *'FAILED     cargo-sweep sweep'* ]] || fail "failed dry run reported success: $broken"
 
   # Preview is a cargo-sweep dry run against the shared cache, for both policies.
   (cd "$repo" && PATH="$stub_bin:$PATH" bash "$cleanup_script" --cache >/dev/null)
