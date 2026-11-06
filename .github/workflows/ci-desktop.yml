@@ -24,6 +24,11 @@ on:
   # Pending）。本 lane 实测 1m11s，是四条业务 lane 里最便宜的一条。
   # ⚠️ 谁要给本 lane 加回 paths，请先把 main 的必需检查里 desktop 那条
   # 摘掉，否则不碰 apps/desktop/** 的 PR 会全部卡死。
+  # #1468：合入 main 后批量跑全量（含 Windows）。PR 上只跑快检，Windows 留到这里。
+  # 同组同一时间只跑一次：正在跑的不取消（cancel-in-progress 对 push 为 false），
+  # 排队只留最新（GitHub concurrency 原生行为：新来的替掉还在排队的）。
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
   # #1187：发版前由 release.yml 以全量模式调用（changes 对非 pull_request 事件恒定全跑）。
@@ -32,9 +37,11 @@ on:
 permissions:
   contents: read
 
+# #1468：group 带上事件名，push 到 main 的全量单独成组，不被 Release（workflow_call，
+# 事件是 workflow_dispatch）或 PR 抢占；只有 push 不取消正在跑的，其余事件行为不变。
 concurrency:
-  group: ci-desktop-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-desktop-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
   # CI-11 (#255)：决定本次改动要不要跑重型门禁。
@@ -155,7 +162,9 @@ jobs:
   desktop-windows:
     name: desktop (windows-latest)
     needs: changes
-    if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
+    # #1468：PR 上不跑 Windows（跳过汇报 skipped，对必需检查算通过，名字不变），
+    # 合入 main 后的 push 全量与 Release 调用照跑。
+    if: ${{ !cancelled() && github.event_name != 'pull_request' && needs.changes.outputs.run_heavy != 'false' }}
     runs-on: windows-latest
     # Windows 冷构建（tauri 依赖树 + MSVC 链接）比 Linux 慢得多，30min 不够；
     # 显式给到 45。cargo test 没有单测级超时，真挂死（DAE-06 #176 那种 300s

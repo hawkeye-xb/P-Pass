@@ -24,6 +24,11 @@ on:
   # #1187：路径判定挪到 job 层（.github/actions/changes），本 lane 进必过项。
   # 下面每个 job 都是秒级、无编译；路径没碰到时只跑 changes 与 gate。
   # #1422：edited / ready_for_review 让「改 PR 正文补验收行」「草稿转正式」重跑 acceptance gate。
+  # #1468：合入 main 后批量跑全量（含 Windows）。PR 上只跑快检，Windows 留到这里。
+  # 同组同一时间只跑一次：正在跑的不取消（cancel-in-progress 对 push 为 false），
+  # 排队只留最新（GitHub concurrency 原生行为：新来的替掉还在排队的）。
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, edited, ready_for_review]
@@ -34,9 +39,11 @@ on:
 permissions:
   contents: read
 
+# #1468：group 带上事件名，push 到 main 的全量单独成组，不被 Release（workflow_call，
+# 事件是 workflow_dispatch）或 PR 抢占；只有 push 不取消正在跑的，其余事件行为不变。
 concurrency:
-  group: ci-docs-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-docs-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
   changes:
@@ -44,7 +51,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      run: ${{ steps.c.outputs.run }}
+      # #1468：push 到 main 一律全跑。排队只留最新，中间的 push 会被替掉，按单次 push 的
+      # diff 判会漏掉被替掉那几次的改动；PR 上照旧按路径判。
+      run: ${{ github.event_name == 'push' && 'true' || steps.c.outputs.run }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
