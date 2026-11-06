@@ -14,20 +14,15 @@ job 名必须写死**。理由和细节在这里。
      因为排队会替掉中间的 push）。`concurrency` 的 group 带事件名，`cancel-in-progress` 只对 push 为 false：
      同一时间只跑一次、正在跑的不取消、排队只留最新（GitHub concurrency 原生行为）。
      main 红了不冻结、不挡其他合入，只修或回滚元凶 PR。
-  3. **发版前验证**：Release 用 `workflow_call` 调这五条 lane（调用方事件是 `workflow_dispatch`）。
-     `desktop-linux`（检查名 `desktop (ubuntu-latest)`）在发版调用时跳过——P-Pass 不发 Linux 安装包，
-     Release 只是对同一份提交重复跑 main 已经跑过的检查；PR 与 push 到 main 照跑。桌面 lane 的
-     `desktop-windows`（检查名 `desktop (windows-latest)`）照跑，其余四层全跑；恢复条件与到期日见卡 #1536。
-     只从全绿提交切 tag。
-    > ⚠️ 可复用 workflow 里 `github.event_name` 是**调用方**的事件，不是 `workflow_call`
-    > （实测 Release run 的「发版前验证 · Android / changes」日志打的是 `事件 workflow_dispatch`）。
-    > 判「发版调用」用 `workflow_call.inputs.release_call`（`type: boolean` / `default: true`）+
-    > job 的 `if: ... && !inputs.release_call`；不要用 `github.event_name != 'workflow_call'`。
+  3. **发版前验证**：Release 用 `workflow_call` 调这五条 lane（调用方事件是 `workflow_dispatch`），
+     五条都按全量跑，只从全绿提交切 tag。P-Pass 不发 Linux 安装包：#1555 起 Linux 桌面检查
+     （`desktop-linux` / `desktop (ubuntu-latest)`）**永久移除**，桌面 lane 只剩 `desktop-windows`
+     （检查名 `desktop (windows-latest)`）；它在 PR 上按第 1 层跳过，push 到 main 与发版调用照跑。
   - 第 1、2 层的不变量（三个 Windows job 在 PR 上跳过、五条 lane 有 `push: branches: [main]`、push 上
     `cancel-in-progress` 为 false）由 `tools/test-ci-lane-invariants.sh`（`just ci-lane-invariants-test`，在 `flow-tests` 里）判红；
-    第 3 层的桌面发版跳过（`release_call` 的 `type: boolean` / `default: true`、`desktop-linux` 的 `if:` 同时含
-    `!cancelled()`、`!inputs.release_call`、`needs.changes.outputs.run_heavy != 'false'`，且 `desktop-windows`
-    与 `CI Desktop gate` 不变）也由同一脚本判红。
+    #1555 的移除事实（`ci-desktop.yml` 没有 `desktop-linux` job、gate 不再要它、共享 action 里
+    cargo-deny / advisory / vite build 四步不带任何 `if:`、`System deps` 不再回来，以及两条必需检查名与
+    `if: always()` 不变）也由同一脚本判红，带「加回去必须变红」的反证。
 - **推分支不触发 CI**：`push` 限定 `branches: [main]`，只有合入才算。本地快验：
   纯文档 `just ci-docs`，动了代码 `just ci`。
 - **PR 上按路径判跑哪些 job**，分两档：
@@ -70,8 +65,8 @@ stub `gh` 真跑两个脚本，再从 `release.yml` 抽收敛步骤的 run 块�
 
 规矩见 AGENTS.md「工程纪律」：同一次操作里开一张卡，**标题里写出 workflow 的 `name:`**，
 写明恢复条件与到期日；然后跑一次 `just gate-status` 确认它认得到这张卡。
-让某个 job 在 `workflow_call`（发版调用）时被 `if:` 跳过，同样算停用一道发版门禁
-（#1535 的 `CI Desktop` 就是这样），也要卡。
+让某个 job 在 `workflow_call`（发版调用）时被 `if:` 跳过，同样算停用一道发版门禁，也要卡
+（#1535 的 `CI Desktop` 曾这样，已由 #1555 改为永久移除 Linux job，不再需要恢复条件）。
 
 `just gate-status` 报三块：停用中的 workflow 及各自的关联卡、发版调用时被 job 级 `if:`
 跳过的门禁及各自的关联卡、main 的必需检查清单；读不出来时一律 fail-closed（不当作「没有停用项」）。
@@ -108,8 +103,8 @@ stub `gh` 真跑两个脚本，再从 `release.yml` 抽收敛步骤的 run 块�
   跳过」与「`name: xxx (${{ matrix.os }})`」凑在一起时，GitHub 不展开 matrix，只汇报
   一条名叫模板原文的检查，分支保护要的名字一条都不来 ⇒ 永久 Pending（#240 + #261，
   探针 PR #271 撞出）。要跑多平台就拆成多个 job、`name:` 各写死，步骤抽进
-  `.github/actions/<x>/action.yml` 共享（`ci-desktop` 的 `desktop-linux` /
-  `desktop-windows` 就是这么做的）。
+  `.github/actions/<x>/action.yml` 共享（`ci-desktop` 的 `desktop-windows` 就是这么做的；
+  #1555 之前还有 `desktop-linux`）。
 - composite action 里每个 `run` 步骤**必须**显式写 `shell:`；actionlint 默认不扫那个
   文件，语法错误要到 CI 真跑才暴露。
 

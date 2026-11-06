@@ -32,18 +32,10 @@ on:
   pull_request:
     branches: [main]
   # #1187：发版前由 release.yml 以全量模式调用（changes 对非 pull_request 事件恒定全跑）。
-  # #1535：可复用 workflow 里 `github.event_name` 是**调用方**的事件，不是 `workflow_call`
-  # （release.yml 用 workflow_dispatch 触发；实测 run 42210867452 的「发版前验证 · Android /
-  # changes」日志打的是「事件 workflow_dispatch」）。所以用 workflow_call 的 input 默认值
-  # 识别发版调用：Release 不传 with: 时 release_call 取 true，跳过 desktop-linux；
-  # PR / push 不走 workflow_call，inputs 为空，`!inputs.release_call` 为 true，照跑。
-  # 其它调用方要 Linux 就显式传 `release_call: false`。
+  # #1555：Linux 桌面 job 已整个移除（产品不发 Linux 包），不再需要 `release_call`
+  # 输入来识别发版调用——发版调用与 push 到 main 跑同一套桌面检查（只剩
+  # desktop-windows），PR 上照 #1468 跳过 Windows。
   workflow_call:
-    inputs:
-      release_call:
-        description: "发版前验证调用（#1535）：跳过 Linux 桌面检查；其它调用方要 Linux 就传 false"
-        type: boolean
-        default: true
 
 permissions:
   contents: read
@@ -105,7 +97,7 @@ jobs:
           echo "run_heavy=$need" >> "$GITHUB_OUTPUT"
 
   # CI-11 修正（#255，2026-09-20，探针 PR #271 抓到）：
-  # **拆成两个 job，名字写死，不再用 matrix 现算。**
+  # **job 名字写死，不再用 matrix 现算。**
   #
   # 原来这里是一个带 matrix 的 job，靠 `name: desktop (${{ matrix.os }})`
   # 从 `os: [ubuntu-latest, windows-latest]` 现算出两个检查名。#261 给它加上
@@ -122,48 +114,26 @@ jobs:
   # 特征**，所以修法就是把名字改回常量：没有东西可算，跳过时照样汇报。
   # 这也正是 #240 之前的写法（当时是单个 job，`name:` 是写死的字符串）。
   #
-  # 为什么不用 matrix 反而更诚实：这条 lane 的 12 个步骤里有 5 个标着
-  # 「只在 Linux 跑」——它本来就不是「同样的活跑两遍」。
-  # 两个 job 天然互不牵连，原来那个 `fail-fast: false` 也就不需要了
-  # （CI-01④「四层洋葱」事故的教训：一边红不能掩掉另一边的结论）。
+  # #1555（产品负责人 2026-11-06「Linux 都摘出来。全部，都没支持不能成为我们的
+  # 卡点」）：P-Pass 不发 Linux 包，原来的 desktop-linux / `desktop (ubuntu-latest)`
+  # job **整个删除**。原来只在 Linux 跑的 cargo-deny 与 vite build 已去掉平台
+  # 判断，搬进共享 action 跟着本 job 跑——它们判的是 Cargo.lock / advisory DB /
+  # Node 产物，与 runner 平台无关。
   #
-  # ⚠️ 这两个 `name:` 的字面值 = main 的必需检查名，**一个字都不能改**。
+  # ⚠️ 这个 `name:` 的字面值 = main 的必需检查名，**一个字都不能改**。
   #    改名 = 分支保护等一个永不汇报的名字 = 全部 PR 永久 Pending。
   # ⚠️ 步骤**只有一份**，在 .github/actions/desktop-checks/action.yml。
-  #    要加步骤改那里，别在这两个 job 里各写一遍——重复就会漂移。
+  #    要加步骤改那里，别在这个 job 里写一遍——重复就会漂移。
   #
-  # 下面两处 `if:` 的口径（CI-11 #255）：**只有明确收到 'false' 才跳过**。
+  # 下面 `if:` 的口径（CI-11 #255）：**只有明确收到 'false' 才跳过**。
   # 不能写成 `== 'true'` —— 那样 changes job 一旦失败，输出为空、条件算 false、
   # 本 job 被跳过、而 skipped 对必需检查**算通过** ⇒ 判据自己挂了反而放行，
   # 正是本仓这一轮在修的 fail-open。写成 `!= 'false'` 则失败时照跑。
   # `!cancelled()` 是状态函数，它让本 job 在 changes 失败时**仍然执行**
   # （否则 needs 的隐式 success() 会把它跳掉，又回到 fail-open）。
   #
-  # #1535（产品负责人 2026-11-06 拍板「要不就别跑Linux了」）：Linux 桌面包不在
-  # 发版范围里，Release 只是对同一份提交重复跑 main 已经跑过的检查。
-  # `workflow_call.inputs.release_call` 默认 true（见上），发版调用时跳过本 job；
-  # PR 与 push 到 main 不走 workflow_call，inputs 为空，照旧跑。必需检查
-  # `desktop (ubuntu-latest)` 与 fail-closed 口径都不变。桌面 Windows 端照跑。
-  # 暂停的恢复条件与到期日见卡 #1536；恢复时连同 tools/test-ci-lane-invariants.sh
-  # 与文档一起改回。
-  desktop-linux:
-    name: desktop (ubuntu-latest)
-    needs: changes
-    if: ${{ !cancelled() && !inputs.release_call && needs.changes.outputs.run_heavy != 'false' }}
-    runs-on: ubuntu-latest
-    # 实测 1m11s。#240 为了迁就 Windows 把两边一起提到 45，现在拆开了，
-    # Linux 这边回到 CI-01 原本的 30。
-    timeout-minutes: 30
-    steps:
-      # 全 pin commit SHA（CI 重构③，2026-08-23）：供应链攻击面归零，
-      # dependabot 统一升级。
-      # checkout 必须留在 job 里：下一步引用的是仓库内的本地 action
-      # （./.github/actions/...），没 checkout 就没有那个文件。
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # SEC-15 (#1003)：src-tauri 的 advisories 步骤（tools/ci-deny-advisories.sh）要和 HEAD^1 比 Cargo.lock。
-          fetch-depth: 2
-      - uses: ./.github/actions/desktop-checks
+  # #1468：PR 上跳过本 job（汇报 skipped，对必需检查算通过，名字不变），
+  # 合入 main 后的 push 全量与 Release 调用照跑。
 
   # CI-06（#164，2026-09-20）：Windows 这条是这次里程碑新加的。
   # 在此之前**整个 CI 里没有一台 Windows 机器**——ci-rust.yml 里那个叫
@@ -190,7 +160,16 @@ jobs:
     # 级别的）只能靠 job 超时兜底。
     timeout-minutes: 45
     steps:
+      # 全 pin commit SHA（CI 重构③，2026-08-23）：供应链攻击面归零，
+      # dependabot 统一升级。
+      # checkout 必须留在 job 里：下一步引用的是仓库内的本地 action
+      # （./.github/actions/...），没 checkout 就没有那个文件。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # SEC-15 (#1003)：src-tauri 的 advisories 步骤（tools/ci-deny-advisories.sh）
+          # 要和 HEAD^1 比 Cargo.lock。这个步骤 #1555 从 Linux job 搬过来了，
+          # fetch-depth 必须一起搬，否则浅 clone 拿不到 HEAD^1、每次都照跑（fail-closed）。
+          fetch-depth: 2
       - uses: ./.github/actions/desktop-checks
 
   # #1187：分支保护只要求这一条（原来逐个 job 列为必过项）。`if: always()` 必不可少：
@@ -198,7 +177,7 @@ jobs:
   gate:
     name: CI Desktop gate
     if: always()
-    needs: [changes, desktop-linux, desktop-windows]
+    needs: [changes, desktop-windows]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

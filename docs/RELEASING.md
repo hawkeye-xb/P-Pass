@@ -418,8 +418,8 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
 4. **发版（#1349，唯一入口）**：手动触发 Release workflow（Actions → Release → Run workflow，
    `tag` 填新 tag 名，`release` 勾上，在 `main` 上触发；test 版用 `just release-test <端...>`，
    它做的就是这件事）。**不要手动推 `v*` tag——推了也不会触发任何东西。** 流程先过入口守卫
-   （tag 名形状、在 main 上、tag 尚不存在）与发版前验证（桌面壳只跑 Windows；Linux 桌面检查只在
-   PR/main 跑，见 #1535）；全绿之后 `create-draft` 才在被验证的
+   （tag 名形状、在 main 上、tag 尚不存在）与发版前验证（桌面壳只跑 Windows；Linux 桌面检查
+   已随 #1555 永久移除）；全绿之后 `create-draft` 才在被验证的
    提交上建 tag 与 draft Release（三平台资产）。验证红了不会留下 tag。
    > **发版闸（#1486）**：正式版发版前必须已有标题恰为「[验收] <正式 tag>」的台账 issue（如「[验收] v2026.11.2」，
    > 出第一个 test 包时用 `just release-scope --ledger <号> --pkg <test 包 tag>` 建）。`plan-builds` 按标题找到它，
@@ -572,11 +572,10 @@ Android 靠 `channelFromVersion()` 读注入的版本串（含 `-test.` 即 test
   → lint + test + arch-check + deny；T-070 scenarios 挪到 e2e.yml 的
   nightly + tag 门禁。
 - `ci-android.yml`（apps/android/** assets/i18n/**）→ 单测 + APK。
-- `ci-desktop.yml`（apps/desktop/** assets/**）→ src-tauri lib tests + vite build。
-  #1535：发版前验证（`workflow_call`）只跳过 `desktop (ubuntu-latest)`（P-Pass 不发 Linux 安装包，
-  Release 只是对同一份提交重复跑 main 已经跑过的检查）；PR 与 push 到 main 照跑，`desktop (windows-latest)`
-  在发版调用时照跑。用 `workflow_call.inputs.release_call` 默认 true 识别发版调用
-  （可复用 workflow 里 `github.event_name` 是调用方事件，不是 `workflow_call`）。恢复条件与到期日见卡 #1536。
+- `ci-desktop.yml`（apps/desktop/** assets/**）→ src-tauri lib tests + cargo-deny + vite build。
+  #1555：Linux 桌面检查（`desktop (ubuntu-latest)`）整个移除（P-Pass 不发 Linux 安装包），桌面检查
+  只剩 `desktop (windows-latest)`：PR 上按 #1468 跳过，push 到 main 与发版调用照跑；cargo-deny 与
+  vite build 不再带平台判断，跟着 Windows 跑。
 - 每个 workflow 带 `concurrency`。#1468 起五条 lane（rust / desktop / android / ios / docs）的 group 带事件名，
   `cancel-in-progress` 只对 push 到 main 为 false（正在跑的全量不取消、排队只留最新），其余事件照旧取消旧 run；
   由 `tools/test-ci-lane-invariants.sh` 判红。
