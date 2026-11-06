@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # just triage <号> <方案文件>：owner 给 status:inbox 的卡定方案（方案闸门）。说明见 docs/runbook/owner.md。
 #
-# 方案由模型写进一个 markdown 文件，下面这些字段一个都不能少（值写「无」也算写了）：
+# 方案由模型写进一个 markdown 文件；必填字段一个都不能少（值写「无」也算写了），可选字段见下：
 #   **做法**：…            **涉及端**：android / mac / windows / ios / 无
 #   **数据**：…            **用户可见行为**：…      **隐私**：…      **风险**：…
 #   **影响**：不可挽回 / 面广 / 局部     （不可挽回＝丢照片、隐私泄露、安全；面广＝主流程坏、发不了版；局部＝文案、样式）
@@ -10,20 +10,27 @@
 #   **验收场景**：…        （按任务卡模板：场景 id，或步骤 + 日志判据 + 反证，标 E1–E4）
 #   **ADR**：docs/decisions/<文件>.md        （范围命中核心时必填）
 #   **选项一**：… **选项二**：…               （需要产品负责人拍板时必填，各写做法与影响）
-#   **产品定案**：docs/decisions/<文件>.md，产品负责人 <日期> 已确认   （可选；写「无」等于没写）
+#   **产品定案**：docs/decisions/<文件>.md，产品负责人 <日期> 已确认
+#                 或 <本仓 issue/PR 的评论链接>   （可选；写「无」等于没写）
 #   **owner 定案**：AGENTS.md「<逐字原文>」 和/或 <仓库 owner 的评论链接>   （可选；写「无」等于没写）
+#   **标准依据**：WAI-ARIA / Android 权限规范 / NN/g / Google 或 Microsoft 写作指南等业界标准   （可选；写「无」等于没写）
 #
 # 分流由脚本判定，不看模型的结论：
 #   1. 范围命中核心（.github/core-paths.txt）：要有 origin/main 上「已采纳」的 ADR；
 #      没有 ⇒ status:blocked（写明先定 ADR）。有 ⇒ 打 core 标签，继续往下判。
-#   2. 有「产品定案」：引用的方案全部在 origin/main 上「已采纳」，且字段写明产品负责人确认，
-#      否则拒绝；合格 ⇒ 产品取向已定，不打 needs:product、不要选项，按 3 判。
+#   2. 有「产品定案」：引用的方案全部在 origin/main 上「已采纳」（同时有时），引用的本仓评论链接
+#      作者必须是产品负责人（对本仓有 admin 权限的 User）；评论链接本身就是拍板依据，不要求另写
+#      「产品负责人…确认」。任一不成立就拒绝；合格 ⇒ 产品取向已定，不打 needs:product、不要选项。
+#      核心卡仍要第 1 条已采纳 ADR，评论链接不能替代 ADR。
 #      没有「产品定案」：用户可见行为 / 隐私 / 数据 任一不是「无」，或范围碰到界面与文案路径
 #      （即使方案写了「无」也算）⇒ needs:product，必须有两个选项，否则拒绝。
 #      有「owner 定案」：依据只认 AGENTS.md 原文（「」里的句子在 origin/main 的 AGENTS.md 里逐字出现）
 #      和仓库 owner 账号的评论链接（gh api 核对评论存在、作者是 owner），任一不成立就拒绝；
 #      合格且隐私、数据都是「无」、卡类型不是 Feature ⇒ 不打 needs:product、不要选项，打 decided:owner。
-#      隐私或数据不是「无」、或 Feature 卡：owner 定案不顶用，照常 needs:product。
+#      有「标准依据」：值须写明可核对的业界标准（WAI-ARIA/WCAG/ARIA APG、Android 权限规范、NN/g、
+#      Google/Microsoft 写作指南、Apple HIG、Material Design 或其官方链接），否则拒绝；
+#      标准成立且隐私、数据都是「无」、卡类型不是 Feature ⇒ 同上，打 decided:owner。
+#      隐私或数据不是「无」、或 Feature 卡：owner 定案 / 标准依据都不顶用，照常 needs:product。
 #   3. 其余 ⇒ status:ready。
 # 优先级（P0–P3）也由脚本按「影响」×「时间性」算，不看模型的结论，不看卡的类型（流程 / 功能）：
 #   停线 → P0；不可挽回（其余时间性）→ P1；面广：截止日 → P1、线性 → P2、无 → P3；局部：截止日 → P2，线性、无 → P3。
@@ -63,7 +70,7 @@ python3 -I -X utf8 - "$PLAN" "$TMPD" <<'PY'
 import re, sys, pathlib
 text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").replace("\r", "")
 out = pathlib.Path(sys.argv[2])
-names = ["做法", "涉及端", "数据", "用户可见行为", "隐私", "风险", "影响", "时间性", "范围", "验收场景", "ADR", "选项一", "选项二", "产品定案", "owner 定案"]
+names = ["做法", "涉及端", "数据", "用户可见行为", "隐私", "风险", "影响", "时间性", "范围", "验收场景", "ADR", "选项一", "选项二", "产品定案", "标准依据", "owner 定案"]
 pat = re.compile(r"^\*\*(" + "|".join(names) + r")\*\*[：:]?[ \t]*", re.M)
 hits = list(pat.finditer(text))
 fields = {}
@@ -172,17 +179,53 @@ if [ "$CORE" != false ]; then
     DECISION=blocked
   fi
 fi
-# 产品定案：引用的方案全部已采纳、且写明产品负责人确认，才算产品取向已定。
+# 产品定案：两种依据——已采纳方案（要写明产品负责人确认），或本仓产品负责人的评论链接。
+# 两者可同时出现：所有方案引用都须已采纳，所有评论链接都须是产品负责人的；至少一条依据。
 DECIDED=""
+PRODUCT_COMMENTS=0
 if [ -n "$(field 产品定案)" ] && ! is_none 产品定案; then
-  refs="$(decision_refs "$(field 产品定案)")"
-  DECIDED="$(adopted_adrs "$(field 产品定案)")"
-  [ -n "$refs" ] && [ "$refs" = "$DECIDED" ] ||
+  basis="$(field 产品定案)"
+  refs="$(decision_refs "$basis")"
+  DECIDED="$(adopted_adrs "$basis")"
+  [ -z "$refs" ] || [ "$refs" = "$DECIDED" ] ||
     refuse "**产品定案** 引用的方案不是全部在 origin/main 上「已采纳」（引用：$(printf '%s' "${refs:-无}" | tr '\n' ' ')；已采纳：$(printf '%s' "${DECIDED:-无}" | tr '\n' ' ')）" \
       "等方案采纳并合入 main 再重跑；产品取向还没定就去掉这个字段，走 needs:product。"
-  [[ "$(field 产品定案 | tr '\n' ' ')" =~ 产品负责人.*确认 ]] ||
-    refuse "**产品定案** 没写明产品负责人已确认（要写成「产品负责人 <日期> 已确认」）" \
-      "确认过就补上再重跑；没确认就去掉这个字段，走 needs:product。"
+  if [ -n "$DECIDED" ]; then
+    [[ "$(printf '%s' "$basis" | tr '\n' ' ')" =~ 产品负责人.*确认 ]] ||
+      refuse "**产品定案** 引用方案时没写明产品负责人已确认（要写成「产品负责人 <日期> 已确认」）" \
+        "确认过就补上再重跑；没确认就去掉这个字段，走 needs:product。"
+  fi
+  # 本仓 issue/PR 评论链接：作者必须是产品负责人（对本仓有 admin 权限的 User）。
+  while IFS= read -r url; do
+    [ -n "$url" ] || continue
+    cid="${url##*issuecomment-}"
+    meta="$(gh api "repos/${REPO}/issues/comments/${cid}" --jq '[.user.login, .user.type] | @tsv' 2>/dev/null | tr -d '\r')" ||
+      refuse "**产品定案** 的评论链接读不到：${url}" "核对链接，或去掉这个字段走 needs:product。"
+    IFS=$'\t' read -r login utype <<<"$meta"
+    [ "$utype" = User ] ||
+      refuse "**产品定案** 的评论作者「${login:-未知}」不是真人账号（${utype:-未知}）：${url}" \
+        "只认产品负责人的评论；别人的话不算依据。"
+    perm="$(gh api "repos/${REPO}/collaborators/${login}/permission" --jq .permission 2>/dev/null | tr -d '\r')" || perm=""
+    [ "$perm" = admin ] ||
+      refuse "**产品定案** 的评论作者「${login:-未知}」不是产品负责人（对本仓权限：${perm:-无}）：${url}" \
+        "只认对本仓有 admin 权限的产品负责人评论；别人的话不算依据。"
+    PRODUCT_COMMENTS=$((PRODUCT_COMMENTS + 1))
+  done <<EOF2
+$(printf '%s\n' "$basis" | grep -oE "https://github\.com/${REPO}/(issues|pull)/[0-9]+#issuecomment-[0-9]+" | sort -u)
+EOF2
+  [ -n "$DECIDED" ] || [ "$PRODUCT_COMMENTS" -gt 0 ] ||
+    refuse "**产品定案** 里没有可校验的依据" \
+      "写已采纳的 docs/decisions/<文件>.md（产品负责人 <日期> 已确认），或本仓产品负责人的评论链接；没有依据就去掉这个字段走 needs:product。"
+fi
+# 标准依据：只认列得出的业界标准；写错就拒绝，不静默忽略。
+STANDARD_OK=0
+if [ -n "$(field 标准依据)" ] && ! is_none 标准依据; then
+  standard="$(field 标准依据)"
+  standard_re='(WAI-ARIA|WCAG|ARIA[[:space:]]*(Authoring Practices|APG)|Android.*权限|Android.*[Pp]ermission|NN/g|Nielsen[[:space:]]*Norman|尼尔森|(Google|Microsoft).*(写作|文案|风格|[Ss]tyle[[:space:]]+[Gg]uide|developer documentation)|Apple.*(HIG|Human Interface Guidelines|人机界面指南)|Material[[:space:]]*Design|w3\.org/.*(aria|wcag)|nngroup\.com|developer\.android\.com|developers\.google\.com/style|learn\.microsoft\.com/.*style|developer\.apple\.com/design|m3\.material\.io)'
+  printf '%s\n' "$standard" | grep -qiE "$standard_re" ||
+    refuse "**标准依据** 没写出可核对的业界标准（现在写的是「$(printf '%s' "$standard" | head -1)」）" \
+      "写明 WAI-ARIA / WCAG、Android 权限规范、NN/g、Google 或 Microsoft 写作指南、Apple HIG、Material Design 等标准（或官方链接）。"
+  STANDARD_OK=1
 fi
 # owner 定案：依据只认 AGENTS.md 原文与仓库 owner 的评论链接；不带这个字段时下面整段不执行。
 OWNER_DECIDED=0
@@ -224,16 +267,28 @@ is_none 用户可见行为 || { PRODUCT=1; REASONS="${REASONS}用户可见行为
 is_none_full 隐私 || { PRODUCT=1; REASONS="${REASONS}隐私；"; }
 is_none_full 数据 || { PRODUCT=1; REASONS="${REASONS}数据去留；"; }
 [ "$UI" = false ] || { PRODUCT=1; REASONS="${REASONS}范围碰到界面或文案路径；"; }
-[ -z "$DECIDED" ] || PRODUCT=0
-# 只在本来要 needs:product 时才用得上 owner 定案；隐私或数据不是「无」、或 Feature 卡，owner 不能代定。
+PRODUCT_DECIDED=0
+[ -z "$DECIDED" ] || PRODUCT_DECIDED=1
+[ "$PRODUCT_COMMENTS" -eq 0 ] || PRODUCT_DECIDED=1
+[ "$PRODUCT_DECIDED" = 0 ] || PRODUCT=0
+# 只在本来要 needs:product 时才用得上 owner 定案 / 标准依据；隐私或数据不是「无」、或 Feature 卡，owner 不能代定。
 USED_OWNER=0
-if [ "$OWNER_DECIDED" = 1 ] && [ "$PRODUCT" = 1 ]; then
+USED_STANDARD=0
+if [ "$PRODUCT" = 1 ] && { [ "$OWNER_DECIDED" = 1 ] || [ "$STANDARD_OK" = 1 ]; }; then
   if is_none_full 隐私 && is_none_full 数据; then
-    itype="$(gh api "repos/${REPO}/issues/${N}" --jq '.type.name // ""' 2>/dev/null)" ||
+    itype="$(gh api "repos/${REPO}/issues/${N}" --jq '.type.name // ""' 2>/dev/null | tr -d '\r')" ||
       refuse "读不到 #${N} 的卡类型，判断不了 owner 定案是否适用" "稍后重跑。"
-    [ "$itype" = Feature ] || { PRODUCT=0; USED_OWNER=1; }
+    if [ "$itype" != Feature ]; then
+      [ "$OWNER_DECIDED" = 0 ] || { PRODUCT=0; USED_OWNER=1; }
+      [ "$STANDARD_OK" = 0 ] || { PRODUCT=0; USED_STANDARD=1; }
+    fi
   fi
-  [ "$USED_OWNER" = 1 ] || REASONS="${REASONS}owner 定案不适用（隐私或数据非「无」，或 Feature 卡）；"
+  if [ "$OWNER_DECIDED" = 1 ] && [ "$USED_OWNER" = 0 ]; then
+    REASONS="${REASONS}owner 定案不适用（隐私或数据非「无」，或 Feature 卡）；"
+  fi
+  if [ "$STANDARD_OK" = 1 ] && [ "$USED_STANDARD" = 0 ]; then
+    REASONS="${REASONS}标准依据不适用（隐私或数据非「无」，或 Feature 卡）；"
+  fi
 fi
 if [ "${DECISION:-}" != blocked ]; then
   if [ "$PRODUCT" = 1 ]; then
@@ -245,7 +300,7 @@ if [ "${DECISION:-}" != blocked ]; then
     DECISION=ready
   fi
 fi
-[ "$DECISION" = ready ] || USED_OWNER=0
+[ "$DECISION" = ready ] || { USED_OWNER=0; USED_STANDARD=0; }
 
 # 写回 issue 正文。
 printf '%s\n' "$ISSUE_BODY" >"${TMPD}/body"
@@ -290,7 +345,7 @@ else:
 
 sec = [begin, "## 实施方案（just triage）", ""]
 sec += extra
-for k in ("做法", "涉及端", "数据", "用户可见行为", "隐私", "风险", "影响", "时间性", "ADR", "产品定案", "owner 定案"):
+for k in ("做法", "涉及端", "数据", "用户可见行为", "隐私", "风险", "影响", "时间性", "ADR", "产品定案", "标准依据", "owner 定案"):
     if f(k):
         sec.append("**" + k + "**：" + f(k) + "\n")
 if decision == "needs:product":
@@ -331,7 +386,8 @@ case "$DECISION" in
     ;;
   ready)
     [ "$CORE" = false ] || gh issue edit "$N" -R "$REPO" --add-label core >/dev/null
-    [ "$USED_OWNER" = 0 ] || gh issue edit "$N" -R "$REPO" --add-label decided:owner >/dev/null || die_stuck "给 #${N} 打 decided:owner 失败"
+    [ "$USED_OWNER" = 0 ] && [ "$USED_STANDARD" = 0 ] ||
+      gh issue edit "$N" -R "$REPO" --add-label decided:owner >/dev/null || die_stuck "给 #${N} 打 decided:owner 失败"
     set_status "$N" status:ready || die_stuck "把 #${N} 换成 status:ready 失败"
     ;;
 esac
