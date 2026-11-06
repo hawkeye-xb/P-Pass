@@ -54,6 +54,8 @@ jobs:
       # #1468：push 到 main 一律全跑。排队只留最新，中间的 push 会被替掉，按单次 push 的
       # diff 判会漏掉被替掉那几次的改动；PR 上照旧按路径判。
       run: ${{ github.event_name == 'push' && 'true' || steps.c.outputs.run }}
+      # #1493：流程自测（flow-tests job）按自己的路径判，不放宽上面那组 paths（会改掉其它 job 的触发）。
+      flow: ${{ github.event_name == 'push' && 'true' || steps.f.outputs.run }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -109,6 +111,15 @@ jobs:
             tools/release-age-exclude-allowlist.txt
             .github/actions/changes/**
             tools/ci-paths.sh
+      - id: f
+        uses: ./.github/actions/changes
+        with:
+          # #1493：流程门禁脚本、它们的自测、justfile 清单、workflow 与 AGENTS.md 里的规矩。
+          paths: |
+            tools/**
+            justfile
+            .github/**
+            AGENTS.md
 
   # #1471 按版本验收：用户看得到的改动合入时不要验收行（发版前由 just release-scope 的台账清零兜住）；
   # 本 job 只把核心的方案关：碰核心的要正文引用已采纳方案，看不见的核心还要带测试。
@@ -277,11 +288,32 @@ jobs:
       - name: with-timeout.sh 行为 + 门禁
         run: bash tools/test-release-timeouts.sh
 
+  # #1493：流程门禁脚本的自测（hooks-test、flow-*-test、heavy-lock-test、macos-runner-test、main-red-test …）。
+  # 清单只在 justfile 的 flow-tests recipe 里一份，本地 just ci / ci-docs 与这里共用；
+  # 每个 *-test recipe 要么在清单里、要么登记了别的 lane，由 tools/test-flow-tests-wired.sh 挡。名字写死，进 gate。
+  flow-tests:
+    name: flow-tests
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.flow != 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: 装 just
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq just
+          just --version
+      - name: just flow-tests
+        run: just flow-tests
+
   # #1187：分支保护只要求这一条。`if: always()` 必不可少，见 ci-android.yml 同名 job。
   gate:
     name: CI Docs gate
     if: always()
-    needs: [changes, docs, dogfood-assets, supply-chain, mirror-resolve, release-version-source, release-notes, release-plan, release-dry-run, release-timeouts]
+    needs: [changes, flow-tests, docs, dogfood-assets, supply-chain, mirror-resolve, release-version-source, release-notes, release-plan, release-dry-run, release-timeouts]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
