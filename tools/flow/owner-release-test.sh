@@ -220,12 +220,16 @@ cleanup_branch() {
 keep_branch_hint() {
   say "临时触发分支 ${RC_BRANCH} 保留（指向 ${MAIN:0:10}）：重跑在这条分支上触发 release.yml，或重跑本次 run 的失败 job；确认不要了用 git push origin --delete ${RC_BRANCH}"
 }
-branch_runs() { # 这条临时分支上已有的 workflow_dispatch run ID（每行一个）
+branch_runs() { # 这条临时分支上已有的 workflow_dispatch run ID（每行一个；stderr 由调用方处理）
   gh run list -R "$REPO" --workflow release.yml --event workflow_dispatch --limit 30 \
-    --json databaseId,headBranch --jq ".[] | select(.headBranch == \"${RC_BRANCH}\") | .databaseId" 2>/dev/null
+    --json databaseId,headBranch --jq ".[] | select(.headBranch == \"${RC_BRANCH}\") | .databaseId"
 }
 # 同一 tag 重试时分支上还挂着上一次的 run：先记下来，等待时排除，只认本次 dispatch 产生的 run。
-old_runs="$(branch_runs | tr '\n' ' ')"
+# 查不到就停（fail closed）：不知道哪些是旧 run 时继续 dispatch，可能把旧 run 当成本次的。
+if ! old_runs="$(branch_runs 2>"${OUT}/runs.log" | tr '\n' ' ')"; then
+  keep_branch_hint
+  die_stuck "读不到临时分支 ${RC_BRANCH} 上已有的 Release run，判定不了哪些是本次触发的，先不触发发版" --log "${OUT}/runs.log"
+fi
 if ! gh workflow run release.yml -R "$REPO" --ref "$RC_BRANCH" -f "tag=${TAG}" -f release=true >"${OUT}/dispatch.log" 2>&1; then
   keep_branch_hint
   die_stuck "触发 release.yml（tag=${TAG}）失败，没有建任何 tag" --log "${OUT}/dispatch.log"
@@ -242,7 +246,7 @@ while [ "$waited" -le "$RUN_WAIT" ]; do
     run="$rid"
     break
   done <<EOF
-$(branch_runs)
+$(branch_runs 2>/dev/null)
 EOF
   [ -n "$run" ] && break
   sleep 5

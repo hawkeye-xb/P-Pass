@@ -124,7 +124,7 @@ case "$1 $2" in
   "pr merge") touch "$FAKE/merged" ;;
   "pr comment") cat "$(arg --body-file)" >>"$FAKE/pr.comments" ;;
   "pr edit") : ;;
-  "run list") cat "$FAKE/runs" 2>/dev/null ;;
+  "run list") [ -e "$FAKE/run-list-fail" ] && exit 1; cat "$FAKE/runs" 2>/dev/null ;;
   "run watch") exit 0 ;;
   "workflow run")
     [ -e "$FAKE/dispatch-fail" ] && exit 1
@@ -326,6 +326,13 @@ check "Release 红 → 非 0 并开 issue" bash -c '[ "$1" -ne 0 ] && grep -q "R
 check "#1349：发版走手动触发（release=true、tag=v0.10.3-test.3），脚本自己不推 tag" bash -c 'grep -q "^workflow run release.yml .*tag=v0.10.3-test.3.* release=true" "$FAKE/calls.log" && [ "$(git ls-remote --tags origin | wc -l | tr -d " ")" -eq 1 ]'
 check "Release 红 → 临时触发分支保留在远端（不删）" bash -c 'git ls-remote --heads origin | grep -q "release-run/v0.10.3-test.3"'
 check "Release 红 → 提示保留的分支与清理命令" bash -c 'printf "%s\n" "$1" | grep -q "release-run/v0.10.3-test.3 保留" && printf "%s\n" "$1" | grep -q "git push origin --delete release-run/v0.10.3-test.3"' _ "$out"
+# 查不到旧 run 就停（fail closed）：不知道哪些是上次的 run 时不能继续 dispatch
+n0="$(grep -c '^workflow run' "$FAKE/calls.log" 2>/dev/null || true)"
+touch "$FAKE/run-list-fail"
+out="$(bash tools/flow/owner-release-test.sh android 2>&1 >/dev/null)"
+rc=$?
+rm -f "$FAKE/run-list-fail"
+check "旧 run 查询失败 → 不 dispatch、分支保留" bash -c '[ "$1" -ne 0 ] && [ "$(grep -c "^workflow run" "$FAKE/calls.log")" -eq "$2" ] && git ls-remote --heads origin | grep -q "release-run/v0.10.3-test.3"' _ "$rc" "$n0"
 echo cancelled >"$FAKE/run-conclusion"
 echo 4243 >"$FAKE/next-run-id"
 out="$(bash tools/flow/owner-release-test.sh android 2>&1 >/dev/null)"
