@@ -101,6 +101,13 @@ final class RejectedPairingCleanupWiringTests: XCTestCase {
 
     private func isEmpty(_ dir: URL) -> Bool { ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).isEmpty }
 
+    private func videosCleared() -> Bool {
+        let dir = caches.appendingPathComponent("ppass-videos")
+        return isEmpty(dir) || !FileManager.default.fileExists(atPath: dir.path)
+    }
+
+    private func shareTempCleared() -> Bool { !FileManager.default.fileExists(atPath: tmp.appendingPathComponent("ppass-share").path) }
+
     private func waitUntil(_ what: String, _ condition: () -> Bool) async {
         for _ in 0..<250 {
             if condition() { return }
@@ -127,11 +134,15 @@ final class RejectedPairingCleanupWiringTests: XCTestCase {
             let rig = try Rig(root: root, caches: caches, tmp: tmp, behavior: behavior)
             let first = await rig.probe.probe()
             XCTAssertEqual(first, .pairingLost, name)
-            await waitUntil("\(name): 清理完成") { rig.store.load() == nil && rig.submitter.cancels >= 1 }
+            // 清理在 setOnLost 起的 Task 里按清单逐行执行，caches / tmp 两行排在配对记录与取消之后（#1464）：
+            // 等到清单里最后要验的那几行都生效再断言，否则主线程可能看到清理进行到一半。
+            await waitUntil("\(name): 清理完成") {
+                rig.store.load() == nil && rig.submitter.cancels >= 1 && videosCleared() && shareTempCleared()
+            }
             XCTAssertNil(rig.store.load(), "\(name): 配对记录被删")
             XCTAssertEqual(rig.submitter.cancels, 1, "\(name): 后台任务取消（长 + 短由提交器一次取消）")
-            XCTAssertTrue(isEmpty(caches.appendingPathComponent("ppass-videos")) || !FileManager.default.fileExists(atPath: caches.appendingPathComponent("ppass-videos").path), "\(name): 视频缓存清空")
-            XCTAssertFalse(FileManager.default.fileExists(atPath: tmp.appendingPathComponent("ppass-share").path), "\(name): 照片临时目录清空")
+            XCTAssertTrue(videosCleared(), "\(name): 视频缓存清空")
+            XCTAssertTrue(shareTempCleared(), "\(name): 照片临时目录清空")
             XCTAssertEqual(rig.announced.value, 1, "\(name): 提示一次")
 
             // 清完之后再收到拒绝（迟到的应答 / 另一条路径）：空操作。
