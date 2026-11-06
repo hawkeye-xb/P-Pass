@@ -153,6 +153,12 @@ case "$1 $2" in
         cid="${2##*/}"
         [ -f "$FAKE/comments/$cid" ] || exit 1
         case " $* " in
+          *".issue_url"*)
+            printf '%s\t%s\t%s\n' \
+              "$(cat "$FAKE/comments/$cid")" \
+              "$(cat "$FAKE/comment-types/$cid" 2>/dev/null || echo User)" \
+              "https://api.github.com/repos/t/r/issues/$(cat "$FAKE/comment-issues/$cid" 2>/dev/null || echo 9)"
+            ;;
           *".user.type"*)
             printf '%s\t%s\n' "$(cat "$FAKE/comments/$cid")" "$(cat "$FAKE/comment-types/$cid" 2>/dev/null || echo User)"
             ;;
@@ -604,7 +610,7 @@ tcard 104 status:inbox
 plan "$P" "$UIP" "首页多一张引导" "**产品定案**：https://github.com/other/repo/issues/9#issuecomment-201"
 err="$(bash tools/flow/owner-triage.sh 104 "$P" 2>&1 >/dev/null)"
 rc=$?
-check "反证：别的仓库的评论链接 → 拒绝（没有可校验依据）" bash -c '[ "$1" -eq 2 ] && printf "%s\n" "$2" | grep -q "没有可校验的依据"' _ "$rc" "$err"
+check "反证：别的仓库的评论链接 → 拒绝（退出码 2），不写 issue" bash -c '[ "$1" -eq 2 ] && [ "$(cat "$FAKE/issues/104.labels")" = status:inbox ] && ! grep -q "^issue edit 104" "$FAKE/calls.log"' _ "$rc"
 tcard 105 status:inbox
 plan "$P" "crates/storage/new.rs" "无" "$PD_COMMENT"
 out="$(bash tools/flow/owner-triage.sh 105 "$P" 2>/dev/null)"
@@ -663,6 +669,65 @@ tcard 121 status:inbox
 printf '**做法**：改\n**涉及端**：无\n**数据**：无\n**用户可见行为**：首页多一张引导\n**隐私**：无\n**风险**：低\n**影响**：局部\n**时间性**：无\n**范围**：\n```\ncrates/storage/new.rs\n```\n**验收场景**：x（E2）\n%s\n**ADR**：docs/decisions/2026-11-01-adopted.md\n' "$STD_ARIA" >"$P"
 out="$(bash tools/flow/owner-triage.sh 121 "$P" 2>/dev/null)"
 check "反证：核心卡 + 已采纳 ADR + 标准依据（有用户可见行为）→ ready + core + decided:owner" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 121 ready$" && tr "," "\n" <"$FAKE/issues/121.labels" | grep -qx core && grep -q "decided:owner" "$FAKE/issues/121.labels"' _ "$out"
+
+echo "── 9e. triage：标准依据 URL 主机/路径、评论链接归属与编号校验"
+mkdir -p "$FAKE/comment-issues"
+printf '690591397\n' >"$FAKE/comments/204"
+printf '8' >"$FAKE/comment-issues/204"
+tcard 130 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "**标准依据**：https://developer.android.com.evil.test/"
+err="$(bash tools/flow/owner-triage.sh 130 "$P" 2>&1 >/dev/null)"
+rc=$?
+check "标准依据：冒充官方主机的 URL → 拒绝（退出码 2），不写 issue" bash -c '[ "$1" -eq 2 ] && printf "%s\n" "$2" | grep -q "不是可核对的官方标准出处" && [ "$(cat "$FAKE/issues/130.labels")" = status:inbox ] && ! grep -q "^issue edit 130" "$FAKE/calls.log"' _ "$rc" "$err"
+tcard 131 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "**标准依据**：Android 权限规范（https://developer.android.com.evil.test/）"
+err="$(bash tools/flow/owner-triage.sh 131 "$P" 2>&1 >/dev/null)"
+rc=$?
+check "反证：标准名对、链接主机错 → 仍拒绝，不静默放行" bash -c '[ "$1" -eq 2 ] && printf "%s\n" "$2" | grep -q "不是可核对的官方标准出处"' _ "$rc" "$err"
+tcard 132 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "**标准依据**：https://evil.test/developer.android.com"
+err="$(bash tools/flow/owner-triage.sh 132 "$P" 2>&1 >/dev/null)"
+rc=$?
+check "反证：官方域名只出现在路径里 → 拒绝" bash -c '[ "$1" -eq 2 ] && printf "%s\n" "$2" | grep -q "不是可核对的官方标准出处"' _ "$rc" "$err"
+tcard 133 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "**标准依据**：https://developer.android.com/guide/topics/permissions/overview"
+out="$(bash tools/flow/owner-triage.sh 133 "$P" 2>/dev/null)"
+check "标准依据：官方 Android 链接（只有 URL）→ ready + decided:owner" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 133 ready$" && grep -q "decided:owner" "$FAKE/issues/133.labels" && ! grep -q "needs:product" "$FAKE/issues/133.labels"' _ "$out"
+tcard 134 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "**产品定案**：https://github.com/t/r/issues/9#issuecomment-201 https://github.com/other/repo/issues/9#issuecomment-201"
+err="$(bash tools/flow/owner-triage.sh 134 "$P" 2>&1 >/dev/null)"
+rc=$?
+check "产品定案：本仓链接混入外仓链接 → 拒绝，不忽略外仓链接" bash -c '[ "$1" -eq 2 ] && printf "%s\n" "$2" | grep -q "不是本仓的评论链接" && [ "$(cat "$FAKE/issues/134.labels")" = status:inbox ]' _ "$rc" "$err"
+tcard 135 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "**产品定案**：https://github.com/t/r/issues/9#issuecomment-204"
+err="$(bash tools/flow/owner-triage.sh 135 "$P" 2>&1 >/dev/null)"
+rc=$?
+check "产品定案：链接里的 issue 号与评论实际所属不符 → 拒绝" bash -c '[ "$1" -eq 2 ] && printf "%s\n" "$2" | grep -q "与评论实际所属不符" && [ "$(cat "$FAKE/issues/135.labels")" = status:inbox ]' _ "$rc" "$err"
+plan "$P" "$UIP" "首页多一张引导" "**产品定案**：https://github.com/t/r/issues/8#issuecomment-204"
+out="$(bash tools/flow/owner-triage.sh 135 "$P" 2>/dev/null)"
+check "反证：把链接里的 issue 号改成评论实际所属 → ready" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 135 ready$" && ! grep -q "needs:product" "$FAKE/issues/135.labels"' _ "$out"
+tcard 136 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "**标准依据**：https://www.w3.org/WAI/ARIA/apg/patterns/dialog-modal/"
+out="$(bash tools/flow/owner-triage.sh 136 "$P" 2>/dev/null)"
+check "标准依据：官方 W3C 链接（只有 URL）→ ready + decided:owner" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 136 ready$" && grep -q "decided:owner" "$FAKE/issues/136.labels"' _ "$out"
+tcard 137 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "**标准依据**：https://developers.google.com/style/"
+out="$(bash tools/flow/owner-triage.sh 137 "$P" 2>/dev/null)"
+check "标准依据：官方 Google 写作指南链接 → ready" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 137 ready$" && grep -q "decided:owner" "$FAKE/issues/137.labels"' _ "$out"
+tcard 138 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "**标准依据**：https://developers.google.com/evil/style"
+err="$(bash tools/flow/owner-triage.sh 138 "$P" 2>&1 >/dev/null)"
+rc=$?
+check "反证：官方主机但路径不是写作指南 → 拒绝" bash -c '[ "$1" -eq 2 ] && printf "%s\n" "$2" | grep -q "不是可核对的官方标准出处"' _ "$rc" "$err"
+tcard 139 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "**标准依据**：https://learn.microsoft.com/en-us/style-guide/welcome/"
+out="$(bash tools/flow/owner-triage.sh 139 "$P" 2>/dev/null)"
+check "标准依据：官方 Microsoft 写作指南链接 → ready" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 139 ready$" && grep -q "decided:owner" "$FAKE/issues/139.labels"' _ "$out"
+tcard 140 status:inbox
+plan "$P" "$UIP" "首页多一张引导" "**标准依据**：https://learn.microsoft.com/en-us/azure/"
+err="$(bash tools/flow/owner-triage.sh 140 "$P" 2>&1 >/dev/null)"
+rc=$?
+check "反证：官方主机但路径不是写作指南 → 拒绝" bash -c '[ "$1" -eq 2 ] && printf "%s\n" "$2" | grep -q "不是可核对的官方标准出处"' _ "$rc" "$err"
 
 echo
 echo "flow-owner: ${PASS} passed, ${FAIL} failed"

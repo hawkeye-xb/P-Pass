@@ -19,7 +19,8 @@
 #   1. 范围命中核心（.github/core-paths.txt）：要有 origin/main 上「已采纳」的 ADR；
 #      没有 ⇒ status:blocked（写明先定 ADR）。有 ⇒ 打 core 标签，继续往下判。
 #   2. 有「产品定案」：引用的方案全部在 origin/main 上「已采纳」（同时有时），引用的本仓评论链接
-#      作者必须是产品负责人（对本仓有 admin 权限的 User）；评论链接本身就是拍板依据，不要求另写
+#      作者必须是产品负责人（对本仓有 admin 权限的 User），链接里的 issue/PR 号必须与评论实际所属一致；
+#      字段里所有评论链接都必须属于本仓，外仓链接直接拒绝。评论链接本身就是拍板依据，不要求另写
 #      「产品负责人…确认」。任一不成立就拒绝；合格 ⇒ 产品取向已定，不打 needs:product、不要选项。
 #      核心卡仍要第 1 条已采纳 ADR，评论链接不能替代 ADR。
 #      没有「产品定案」：用户可见行为 / 隐私 / 数据 任一不是「无」，或范围碰到界面与文案路径
@@ -28,7 +29,8 @@
 #      和仓库 owner 账号的评论链接（gh api 核对评论存在、作者是 owner），任一不成立就拒绝；
 #      合格且隐私、数据都是「无」、卡类型不是 Feature ⇒ 不打 needs:product、不要选项，打 decided:owner。
 #      有「标准依据」：值须写明可核对的业界标准（WAI-ARIA/WCAG/ARIA APG、Android 权限规范、NN/g、
-#      Google/Microsoft 写作指南、Apple HIG、Material Design 或其官方链接），否则拒绝；
+#      Google/Microsoft 写作指南、Apple HIG、Material Design）；官方链接只认完整主机与适用路径，
+#      其他主机/路径直接拒绝，没有链接时按标准名校验，否则拒绝；
 #      标准成立且隐私、数据都是「无」、卡类型不是 Feature ⇒ 同上，打 decided:owner。
 #      隐私或数据不是「无」、或 Feature 卡：owner 定案 / 标准依据都不顶用，照常 needs:product。
 #   3. 其余 ⇒ status:ready。
@@ -195,13 +197,27 @@ if [ -n "$(field 产品定案)" ] && ! is_none 产品定案; then
       refuse "**产品定案** 引用方案时没写明产品负责人已确认（要写成「产品负责人 <日期> 已确认」）" \
         "确认过就补上再重跑；没确认就去掉这个字段，走 needs:product。"
   fi
-  # 本仓 issue/PR 评论链接：作者必须是产品负责人（对本仓有 admin 权限的 User）。
+  # 字段里所有 GitHub issue/PR 评论链接都必须属于本仓；外仓链接不能静默忽略。
+  all_links="$(printf '%s\n' "$basis" | grep -oE 'https://github\.com/[^/[:space:]]+/[^/[:space:]]+/(issues|pull)/[0-9]+#issuecomment-[0-9]+' | sort -u)"
+  foreign="$(printf '%s\n' "$all_links" | grep -vE "^https://github\.com/${REPO}/(issues|pull)/[0-9]+#issuecomment-[0-9]+$" || true)"
+  [ -z "$foreign" ] ||
+    refuse "**产品定案** 里有不是本仓的评论链接：$(printf '%s' "$foreign" | tr '\n' ' ')" \
+      "只认 https://github.com/${REPO}/... 的产品负责人评论；去掉外仓链接再重跑。"
+  # 本仓 issue/PR 评论链接：作者必须是产品负责人（对本仓有 admin 权限的 User），
+  # 且链接里的 issue/PR 号必须与评论实际所属的 issue 一致。
   while IFS= read -r url; do
     [ -n "$url" ] || continue
     cid="${url##*issuecomment-}"
-    meta="$(gh api "repos/${REPO}/issues/comments/${cid}" --jq '[.user.login, .user.type] | @tsv' 2>/dev/null | tr -d '\r')" ||
+    rest="${url#https://github.com/${REPO}/}"
+    rest="${rest#*/}"
+    link_num="${rest%%#*}"
+    meta="$(gh api "repos/${REPO}/issues/comments/${cid}" --jq '[.user.login, .user.type, .issue_url] | @tsv' 2>/dev/null | tr -d '\r')" ||
       refuse "**产品定案** 的评论链接读不到：${url}" "核对链接，或去掉这个字段走 needs:product。"
-    IFS=$'\t' read -r login utype <<<"$meta"
+    IFS=$'\t' read -r login utype issue_url <<<"$meta"
+    actual_num="${issue_url##*/}"
+    [ "$actual_num" = "$link_num" ] ||
+      refuse "**产品定案** 的评论链接 issue/PR 号与评论实际所属不符（链接 #${link_num}，评论属于 #${actual_num:-未知}）：${url}" \
+        "核对链接里的 issue/PR 号，或直接贴评论的原始链接。"
     [ "$utype" = User ] ||
       refuse "**产品定案** 的评论作者「${login:-未知}」不是真人账号（${utype:-未知}）：${url}" \
         "只认产品负责人的评论；别人的话不算依据。"
@@ -211,21 +227,60 @@ if [ -n "$(field 产品定案)" ] && ! is_none 产品定案; then
         "只认对本仓有 admin 权限的产品负责人评论；别人的话不算依据。"
     PRODUCT_COMMENTS=$((PRODUCT_COMMENTS + 1))
   done <<EOF2
-$(printf '%s\n' "$basis" | grep -oE "https://github\.com/${REPO}/(issues|pull)/[0-9]+#issuecomment-[0-9]+" | sort -u)
+$(printf '%s\n' "$all_links" | grep -E "^https://github\.com/${REPO}/(issues|pull)/[0-9]+#issuecomment-[0-9]+$" || true)
 EOF2
   [ -n "$DECIDED" ] || [ "$PRODUCT_COMMENTS" -gt 0 ] ||
     refuse "**产品定案** 里没有可校验的依据" \
       "写已采纳的 docs/decisions/<文件>.md（产品负责人 <日期> 已确认），或本仓产品负责人的评论链接；没有依据就去掉这个字段走 needs:product。"
 fi
 # 标准依据：只认列得出的业界标准；写错就拒绝，不静默忽略。
+# 有链接时，链接必须是完整主机 + 适用路径的官方出处；名称匹配不能替代对错链接的校验。
 STANDARD_OK=0
 if [ -n "$(field 标准依据)" ] && ! is_none 标准依据; then
   standard="$(field 标准依据)"
-  standard_re='(WAI-ARIA|WCAG|ARIA[[:space:]]*(Authoring Practices|APG)|Android.*权限|Android.*[Pp]ermission|NN/g|Nielsen[[:space:]]*Norman|尼尔森|(Google|Microsoft).*(写作|文案|风格|[Ss]tyle[[:space:]]+[Gg]uide|developer documentation)|Apple.*(HIG|Human Interface Guidelines|人机界面指南)|Material[[:space:]]*Design|w3\.org/.*(aria|wcag)|nngroup\.com|developer\.android\.com|developers\.google\.com/style|learn\.microsoft\.com/.*style|developer\.apple\.com/design|m3\.material\.io)'
-  printf '%s\n' "$standard" | grep -qiE "$standard_re" ||
+  standard_re='(WAI-ARIA|WCAG|ARIA[[:space:]]*(Authoring Practices|APG)|Android.*权限|Android.*[Pp]ermission|NN/g|Nielsen[[:space:]]*Norman|尼尔森|(Google|Microsoft).*(写作|文案|风格|[Ss]tyle[[:space:]]+[Gg]uide|developer documentation)|Apple.*(HIG|Human Interface Guidelines|人机界面指南)|Material[[:space:]]*Design)'
+  url_state="$(printf '%s' "$standard" | python3 -I -X utf8 -c '
+import re, sys
+from urllib.parse import urlparse
+text = sys.stdin.read()
+urls = [u.rstrip("。，,;；") for u in re.findall(r"https?://[^\s（）()]+", text)]
+if not urls:
+    print("NONE")
+    sys.exit(0)
+hosts = {
+    "w3.org", "www.w3.org", "nngroup.com", "www.nngroup.com",
+    "developer.android.com", "developers.google.com",
+    "learn.microsoft.com", "developer.apple.com", "m3.material.io",
+}
+bad = []
+for u in urls:
+    p = urlparse(u)
+    host = (p.hostname or "").lower()
+    path = p.path or "/"
+    ok = host in hosts
+    if host in ("w3.org", "www.w3.org"):
+        ok = ok and ("/WAI/" in path or "/TR/" in path)
+    elif host == "developers.google.com":
+        ok = ok and path.startswith("/style")
+    elif host == "learn.microsoft.com":
+        ok = ok and "style" in path
+    elif host == "developer.apple.com":
+        ok = ok and path.startswith("/design")
+    if not ok:
+        bad.append(u)
+print("BAD " + " ".join(bad) if bad else "OK")
+')" || refuse "**标准依据** 里的链接读不懂" "改用官方标准名或完整官方链接。"
+  case "$url_state" in
+    BAD*)
+      refuse "**标准依据** 里的链接不是可核对的官方标准出处：${url_state#BAD }" \
+        "只认 w3.org、nngroup.com、developer.android.com、developers.google.com/style、learn.microsoft.com/…style、developer.apple.com/design、m3.material.io 的官方链接；没有链接就写标准名。"
+      ;;
+    OK) STANDARD_OK=1 ;;
+  esac
+  printf '%s\n' "$standard" | grep -qiE "$standard_re" && STANDARD_OK=1
+  [ "$STANDARD_OK" = 1 ] ||
     refuse "**标准依据** 没写出可核对的业界标准（现在写的是「$(printf '%s' "$standard" | head -1)」）" \
       "写明 WAI-ARIA / WCAG、Android 权限规范、NN/g、Google 或 Microsoft 写作指南、Apple HIG、Material Design 等标准（或官方链接）。"
-  STANDARD_OK=1
 fi
 # owner 定案：依据只认 AGENTS.md 原文与仓库 owner 的评论链接；不带这个字段时下面整段不执行。
 OWNER_DECIDED=0
