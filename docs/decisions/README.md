@@ -15,6 +15,7 @@ ADR，验收人拍板后再拆卡实现。代码注释里出现的 ADR-003、ADR
 | 2026-11-06 | [macOS runner 全仓统一 macos-26](2026-11-06-macos-runner-26.md) | 已采纳 |
 | 2026-11-06 | [发版闸接进 release.yml：按「[验收] <正式 tag>」找台账](2026-11-06-release-acceptance-gate.md) | 已采纳 |
 | 2026-11-06 | [test 版本号自动补丁与发版路径惰性登记](2026-11-06-release-test-next-patch-and-inert-paths.md) | 已采纳 |
+| 2026-11-06 | [test-channel：写入与收敛分权，收敛单点跑一次、失败只告警](2026-11-06-release-test-channel-single-writer.md) | 已采纳 |
 
 ## 写法
 
