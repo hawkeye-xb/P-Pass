@@ -75,6 +75,7 @@ case "$1 $2" in
     [ -f "$I/$n.body" ] || { echo "no issue $n" >&2; exit 1; }
     case "$json" in
       state) cat "$I/$n.state" 2>/dev/null || echo OPEN ;;
+      milestone) cat "$I/$n.due" 2>/dev/null || true ;;
       *)
         printf 'title:%s\nstate:%s\nlabels:%s\n' "$(cat "$I/$n.title")" "$(cat "$I/$n.state" 2>/dev/null || echo OPEN)" "$(cat "$I/$n.labels")"
         cat "$I/$n.body"
@@ -183,7 +184,7 @@ fresh() {
   export FAKE="${S}/fake" ORIGIN="${S}/origin.git"
   export PPASS_OWNER_WT_ROOT="${S}/wt"
   mkdir -p "$FAKE/issues"
-  printf '%s\n' status:inbox status:ready status:doing status:review status:batched status:blocked needs:product core >"$FAKE/labels"
+  printf '%s\n' status:inbox status:ready status:doing status:review status:batched status:blocked needs:product core P0 P1 P2 P3 >"$FAKE/labels"
   : >"$FAKE/calls.log"
   git init -q --bare "$ORIGIN"
   R="${S}/repo"
@@ -319,13 +320,13 @@ tcard() { # tcard <号> <标签>：按任务卡模板造一张 inbox 卡
   printf '## 🟥 挂号段\n\n**产品诉求**：一句话\n\n## ⬜ 可接段\n\n**是否核心**：<!-- 是 / 否 -->\n\n**级别**：L1\n\n**范围（只许动这些）**：\n<!-- 一行一个 -->\n```\n```\n\n**验收场景**：\n<!-- 场景名 -->\n\n**前置依赖**：\n' >"$FAKE/issues/$1.body"
 }
 plan() { # plan <文件> <范围 glob> <用户可见行为> [额外行]
-  printf '**做法**：改脚本\n**涉及端**：无\n**数据**：无\n**用户可见行为**：%s\n**隐私**：无\n**风险**：低\n**范围**：\n```\n%s\n```\n**验收场景**：tools/test-x.sh 全过（E2），反证：去掉判断变红\n%s\n' "$3" "$2" "${4:-}" >"$1"
+  printf '**做法**：改脚本\n**涉及端**：无\n**数据**：无\n**用户可见行为**：%s\n**隐私**：无\n**风险**：低\n**影响**：%s\n**时间性**：%s\n**范围**：\n```\n%s\n```\n**验收场景**：tools/test-x.sh 全过（E2），反证：去掉判断变红\n%s\n' "$3" "${IMPACT_T:-局部}" "${TIMING_T:-无}" "$2" "${4:-}" >"$1"
 }
 P="${S}/plan.md"
 tcard 41 status:inbox
 plan "$P" "tools/new-thing.sh" "无"
 out="$(bash tools/flow/owner-triage.sh 41 "$P" 2>/dev/null)"
-check "纯技术、非核心 → status:ready" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 41 ready$" && [ "$(cat "$FAKE/issues/41.labels")" = status:ready ]' _ "$out"
+check "纯技术、非核心 → status:ready" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 41 ready$" && [ "$(cat "$FAKE/issues/41.labels")" = P3,status:ready ]' _ "$out"
 check "写回后 hook 读得出范围，且只有一个范围代码块" bash -c 'grep -A2 "^\*\*范围" "$FAKE/issues/41.body" | grep -qx "tools/new-thing.sh" && [ "$(grep -c "^\*\*范围" "$FAKE/issues/41.body")" -eq 1 ]'
 check "验收场景填进任务卡字段，实施方案段在末尾" bash -c 'grep -A1 "^\*\*验收场景" "$FAKE/issues/41.body" | grep -q "test-x.sh" && grep -q "^## 实施方案（just triage）" "$FAKE/issues/41.body"'
 tcard 42 status:inbox
@@ -342,7 +343,7 @@ check "范围碰文案路径、方案却写「无」→ 仍按产品问题处理
 tcard 44 status:inbox
 plan "$P" "crates/storage/**" "无"
 out="$(bash tools/flow/owner-triage.sh 44 "$P" 2>/dev/null)"
-check "核心、没有已采纳 ADR → status:blocked" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 44 blocked$" && [ "$(cat "$FAKE/issues/44.labels")" = status:blocked ] && grep -q "ADR" "$FAKE/issues/44.comments"' _ "$out"
+check "核心、没有已采纳 ADR → status:blocked" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 44 blocked$" && [ "$(cat "$FAKE/issues/44.labels")" = P3,status:blocked ] && grep -q "ADR" "$FAKE/issues/44.comments"' _ "$out"
 tcard 45 status:inbox
 plan "$P" "crates/storage/new.rs" "无" "**ADR**：docs/decisions/2026-11-01-proposed.md"
 out="$(bash tools/flow/owner-triage.sh 45 "$P" 2>/dev/null)"
@@ -355,7 +356,7 @@ DEC_OK="**产品定案**：docs/decisions/2026-11-01-adopted.md，产品负责�
 tcard 48 status:inbox
 plan "$P" "assets/i18n/zh.json" "首页多一张引导" "$DEC_OK"
 out="$(bash tools/flow/owner-triage.sh 48 "$P" 2>/dev/null)"
-check "界面路径 + 用户可见行为 + 产品定案（已采纳、产品负责人已确认）→ status:ready，不打 needs:product" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 48 ready$" && [ "$(cat "$FAKE/issues/48.labels")" = status:ready ] && grep -q "^\*\*产品定案\*\*：docs/decisions/2026-11-01-adopted.md" "$FAKE/issues/48.body"' _ "$out"
+check "界面路径 + 用户可见行为 + 产品定案（已采纳、产品负责人已确认）→ status:ready，不打 needs:product" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 48 ready$" && [ "$(cat "$FAKE/issues/48.labels")" = P3,status:ready ] && grep -q "^\*\*产品定案\*\*：docs/decisions/2026-11-01-adopted.md" "$FAKE/issues/48.body"' _ "$out"
 tcard 49 status:inbox
 plan "$P" "assets/i18n/zh.json" "首页多一张引导"
 bash tools/flow/owner-triage.sh 49 "$P" >/dev/null 2>&1
@@ -432,14 +433,14 @@ plan "$P" "$UIP" "首页多一张引导" "**owner 定案**：https://github.com/
 bash tools/flow/owner-triage.sh 67 "$P" >/dev/null 2>&1
 check "别的仓库的评论链接 → 拒绝（依据数为 0）" test "$?" -eq 2
 tcard 68 status:inbox
-printf '**做法**：改\n**涉及端**：无\n**数据**：无\n**用户可见行为**：首页多一张引导\n**隐私**：会读通讯录\n**风险**：低\n**范围**：\n```\n%s\n```\n**验收场景**：x（E2）\n%s\n' "$UIP" "$OD_OK" >"$P"
+printf '**做法**：改\n**涉及端**：无\n**数据**：无\n**用户可见行为**：首页多一张引导\n**隐私**：会读通讯录\n**风险**：低\n**影响**：局部\n**时间性**：无\n**范围**：\n```\n%s\n```\n**验收场景**：x（E2）\n%s\n' "$UIP" "$OD_OK" >"$P"
 bash tools/flow/owner-triage.sh 68 "$P" >/dev/null 2>&1
 check "隐私不为「无」，带 owner 定案仍 needs:product（无选项则拒绝，不打 decided:owner）" bash -c '[ "$(cat "$FAKE/issues/68.labels")" = status:inbox ]'
 printf '**选项一**：读\n**选项二**：不读\n' >>"$P"
 out="$(bash tools/flow/owner-triage.sh 68 "$P" 2>/dev/null)"
 check "反证：同一张卡补上两个选项 → needs:product，没有 decided:owner" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 68 needs:product$" && grep -q "needs:product" "$FAKE/issues/68.labels" && ! grep -q "decided:owner" "$FAKE/issues/68.labels"' _ "$out"
 tcard 69 status:inbox
-printf '**做法**：改\n**涉及端**：无\n**数据**：新增本地缓存\n**用户可见行为**：首页多一张引导\n**隐私**：无\n**风险**：低\n**范围**：\n```\n%s\n```\n**验收场景**：x（E2）\n%s\n**选项一**：留\n**选项二**：删\n' "$UIP" "$OD_OK" >"$P"
+printf '**做法**：改\n**涉及端**：无\n**数据**：新增本地缓存\n**用户可见行为**：首页多一张引导\n**隐私**：无\n**风险**：低\n**影响**：局部\n**时间性**：无\n**范围**：\n```\n%s\n```\n**验收场景**：x（E2）\n%s\n**选项一**：留\n**选项二**：删\n' "$UIP" "$OD_OK" >"$P"
 out="$(bash tools/flow/owner-triage.sh 69 "$P" 2>/dev/null)"
 check "数据不为「无」，带 owner 定案仍 needs:product" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 69 needs:product$" && ! grep -q "decided:owner" "$FAKE/issues/69.labels"' _ "$out"
 tcard 70 status:inbox
@@ -461,15 +462,15 @@ plan "$P" "$UIP" "首页多一张引导" "**owner 定案**：无"
 bash tools/flow/owner-triage.sh 72 "$P" >/dev/null 2>&1
 check "owner 定案写「无」等于没写 → 仍按产品问题处理" bash -c '[ "$(cat "$FAKE/issues/72.labels")" = status:inbox ]'
 tcard 74 status:inbox
-printf '**做法**：改\n**涉及端**：无\n**数据**：无\n**用户可见行为**：首页多一张引导\n**隐私**：无\n读取联系人\n**风险**：低\n**范围**：\n```\n%s\n```\n**验收场景**：x（E2）\n%s\n' "$UIP" "$OD_OK" >"$P"
+printf '**做法**：改\n**涉及端**：无\n**数据**：无\n**用户可见行为**：首页多一张引导\n**隐私**：无\n读取联系人\n**风险**：低\n**影响**：局部\n**时间性**：无\n**范围**：\n```\n%s\n```\n**验收场景**：x（E2）\n%s\n' "$UIP" "$OD_OK" >"$P"
 bash tools/flow/owner-triage.sh 74 "$P" >/dev/null 2>&1
 check "隐私「无」后面换行还有内容 → 不算无，owner 定案不顶用（无选项则拒绝）" bash -c '[ "$(cat "$FAKE/issues/74.labels")" = status:inbox ] && ! grep -q "decided:owner" "$FAKE/issues/74.labels"'
 tcard 75 status:inbox
-printf '**做法**：改\n**涉及端**：无\n**数据**：无\n分类别缓存\n**用户可见行为**：首页多一张引导\n**隐私**：无\n**风险**：低\n**范围**：\n```\n%s\n```\n**验收场景**：x（E2）\n%s\n' "$UIP" "$OD_OK" >"$P"
+printf '**做法**：改\n**涉及端**：无\n**数据**：无\n分类别缓存\n**用户可见行为**：首页多一张引导\n**隐私**：无\n**风险**：低\n**影响**：局部\n**时间性**：无\n**范围**：\n```\n%s\n```\n**验收场景**：x（E2）\n%s\n' "$UIP" "$OD_OK" >"$P"
 bash tools/flow/owner-triage.sh 75 "$P" >/dev/null 2>&1
 check "数据「无」后面换行还有内容 → 不算无" bash -c '[ "$(cat "$FAKE/issues/75.labels")" = status:inbox ]'
 tcard 76 status:inbox
-printf '**做法**：改\n**涉及端**：无\n**数据**：无\n**用户可见行为**：首页多一张引导\n**隐私**：无\n**风险**：低\n**范围**：\n```\n%s\n```\n**验收场景**：x（E2）\n%s\n' "$UIP" "$OD_OK" >"$P"
+printf '**做法**：改\n**涉及端**：无\n**数据**：无\n**用户可见行为**：首页多一张引导\n**隐私**：无\n**风险**：低\n**影响**：局部\n**时间性**：无\n**范围**：\n```\n%s\n```\n**验收场景**：x（E2）\n%s\n' "$UIP" "$OD_OK" >"$P"
 out="$(bash tools/flow/owner-triage.sh 76 "$P" 2>/dev/null)"
 check "反证：隐私、数据整个字段就是「无」→ ready + decided:owner" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 76 ready$" && grep -q "decided:owner" "$FAKE/issues/76.labels"' _ "$out"
 tcard 77 status:inbox
@@ -480,6 +481,49 @@ tcard 78 status:inbox
 plan "$P" "$UIP" "首页多一张引导" $'**owner 定案**：AGENTS.md「iOS 先对齐 Android，要加就两端一起加」'
 out="$(bash tools/flow/owner-triage.sh 78 "$P" 2>/dev/null)"
 check "反证：同一句写在一行里 → ready" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 78 ready$"' _ "$out"
+
+echo "── 9c. triage：优先级由「影响」×「时间性」算，替换旧 P 标签"
+prio_of() { # prio_of <影响> <时间性> <号> [初始标签]：跑一次 triage，输出该卡最终的 P 标签（逗号分隔）
+  tcard "$3" "${4:-status:inbox}"
+  IMPACT_T="$1" TIMING_T="$2" plan "$P" "tools/new-thing.sh" "无"
+  bash tools/flow/owner-triage.sh "$3" "$P" >/dev/null 2>&1
+  tr ',' '\n' <"$FAKE/issues/$3.labels" | grep -E '^P[0-3]$' | paste -sd, -
+}
+tcard 80 status:inbox
+printf '**做法**：改\n**涉及端**：无\n**数据**：无\n**用户可见行为**：无\n**隐私**：无\n**风险**：低\n**时间性**：无\n**范围**：\n```\ntools/new-thing.sh\n```\n**验收场景**：x（E2）\n' >"$P"
+bash tools/flow/owner-triage.sh 80 "$P" >/dev/null 2>&1
+check "缺「影响」→ 拒绝，不写 issue、不打 P 标签" bash -c '[ "$(cat "$FAKE/issues/80.labels")" = status:inbox ] && ! grep -q "^issue edit 80" "$FAKE/calls.log"'
+tcard 81 status:inbox
+printf '**做法**：改\n**涉及端**：无\n**数据**：无\n**用户可见行为**：无\n**隐私**：无\n**风险**：低\n**影响**：局部\n**范围**：\n```\ntools/new-thing.sh\n```\n**验收场景**：x（E2）\n' >"$P"
+bash tools/flow/owner-triage.sh 81 "$P" >/dev/null 2>&1
+check "缺「时间性」→ 拒绝，不写 issue、不打 P 标签" bash -c '[ "$(cat "$FAKE/issues/81.labels")" = status:inbox ] && ! grep -q "^issue edit 81" "$FAKE/calls.log"'
+tcard 82 status:inbox
+IMPACT_T="很严重" TIMING_T="无" plan "$P" "tools/new-thing.sh" "无"
+bash tools/flow/owner-triage.sh 82 "$P" >/dev/null 2>&1
+check "「影响」写成不认识的值 → 拒绝" bash -c '[ "$(cat "$FAKE/issues/82.labels")" = status:inbox ]'
+check "停线 → P0（影响再小也是）" test "$(prio_of 局部 停线 83)" = P0
+check "不可挽回 + 无时间压力 → P1" test "$(prio_of 不可挽回 无 84)" = P1
+check "面广 + 截止日 → P1" test "$(prio_of 面广 截止日 85)" = P1
+check "局部 + 截止日 → P2" test "$(prio_of 局部 截止日 86)" = P2
+check "局部 + 无 → P3" test "$(prio_of 局部 无 87)" = P3
+check "反证：同样「局部」，只把时间性换成截止日 → 不再是 P3" test "$(prio_of 局部 截止日 88)" != P3
+check "重跑 triage 替换旧 P 标签，不叠加（旧 P3 → P2，只剩一个）" test "$(prio_of 局部 截止日 89 status:inbox,P3)" = P2
+check "旧 P 标签与新结果相同 → 仍只有一个" test "$(prio_of 局部 无 90 status:inbox,P3)" = P3
+tcard 91 status:inbox
+printf '[MAIN-RED] main 红了' >"$FAKE/issues/91.title"
+IMPACT_T=局部 TIMING_T=无 plan "$P" "tools/new-thing.sh" "无"
+bash tools/flow/owner-triage.sh 91 "$P" >/dev/null 2>&1
+check "标题 [MAIN-RED] → 自动 P0" bash -c 'tr "," "\n" <"$FAKE/issues/91.labels" | grep -qx P0'
+tcard 92 status:inbox
+printf '2026-11-04T00:00:00Z' >"$FAKE/issues/92.due"
+IMPACT_T=局部 TIMING_T=无 plan "$P" "tools/new-thing.sh" "无"
+bash tools/flow/owner-triage.sh 92 "$P" >/dev/null 2>&1
+check "milestone 到期前 3 天内 → 升一级（P3 → P2）" bash -c 'tr "," "\n" <"$FAKE/issues/92.labels" | grep -qx P2'
+tcard 93 status:inbox
+printf '2026-12-30T00:00:00Z' >"$FAKE/issues/93.due"
+IMPACT_T=局部 TIMING_T=无 plan "$P" "tools/new-thing.sh" "无"
+bash tools/flow/owner-triage.sh 93 "$P" >/dev/null 2>&1
+check "反证：milestone 还很远 → 不升级，仍 P3" bash -c 'tr "," "\n" <"$FAKE/issues/93.labels" | grep -qx P3'
 
 echo
 echo "flow-owner: ${PASS} passed, ${FAIL} failed"
