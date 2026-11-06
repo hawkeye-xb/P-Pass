@@ -56,11 +56,16 @@ bash 能否真执行、本地提交拦截、gh 能否读 issue、提交身份、
     要 PR 正文引用 origin/main 上已采纳的方案（`docs/decisions/<文件>.md`），且改动里带测试（带反证）。
     只改版本号行（`tools/bump-version.sh` 产生的 `tauri.conf.json` 的 version 行）不算核心改动；同一文件改了别的行（如 updater 公钥、endpoints）仍算。
   - 判定都在 `tools/flow/acceptance-gate.sh`，CI 的 acceptance gate、评审、`just done` 共用。
-- **独立评审**：三级都要有一个没参与写这个 PR 的 agent 只读评审（对照关联卡的范围与验收查漏），通过才合入。
-  **CI 评审 job 即独立评审**（`.github/workflows/ci-review.yml`）：每个 PR 的每个头提交自动跑一次，结论写在 PR 评论
-  和提交状态 `review/agent` 里；`review/agent` 是 main 的必需检查，只认 GitHub Actions 写的状态。推了新提交，旧结论作废、重评；
-  评审没跑成（`error`）不算通过，在 Actions 里重跑即可。未通过时按评论里的阻断项修，推新提交即重评，不找 owner。
-  盯梢、人控级 PR 正文缺验收行，评审一律判未通过：评审替代不了验收。
+- **独立评审**：由一个没参与写这个 PR 的 agent 只读评审（对照关联卡的范围与验收查漏），没有阻断项才合入（产品负责人 2026-11-06 定）。
+  **CI 评审 job 即独立评审**（`.github/workflows/ci-review.yml`），结论写在 PR 评论和提交状态 `review/agent` 里，
+  `review/agent` 是 main 的必需检查，只认 GitHub Actions 写的状态。
+  - **只评正式 PR，与 CI 并行**：草稿不评；盯梢、人控级验收后 `gh pr ready` 转正式时评。推新提交自动重评，但只评
+    上次评到的提交之后的增量；改写历史（强推）就全量评一次。只改正文（如补验收行）、只合进了 main 的，复用上次结论、不调模型。
+  - **意见分三级**：阻断（只有误放行、安全、越界三类）、建议、风格。只有阻断让 `review/agent` 为 failure，按评论里的阻断项修，
+    推新提交即重评；建议与风格不挡合入，由开 PR 的会话自己判断改不改，不改就回一句理由。评审没跑成（`error`）不算通过，在 Actions 里重跑即可。
+  - **判不了的交 owner**：owner 复核后可在 PR 上评论 `/review-override <理由>` 放行，评审 job 只认对本仓有 admin 权限的账号，
+    把该头提交的 `review/agent` 改为 success 并引用这条评论；推新提交即作废。
+  盯梢、人控级 PR 正文缺验收行，评审一律判未通过（复用结论、owner 放行时也一样）：评审替代不了验收。
   owner 只在评审 job 不可用（例如模型服务长时间故障）或产品负责人点名时，派一个新会话用 `just review` 评审，
   本机评审写的状态不顶替必需检查；评审 job 长期不可用时，是否临时撤掉这项必需检查交产品负责人定。
   PR 开出后就开自动合入（`gh pr merge --auto --squash`；草稿 PR 在 `gh pr ready` 之后开），评审与其它必需检查全过即合；
@@ -262,6 +267,10 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
   本地除 `just ci` 外跑全部 `tools/test-*.sh`。细节见 [CI lane](docs/runbook/ci-lanes.md)。
 - **job 的 name 不许随手改**；进必需检查的 job 名必须写死，不许用 `matrix` 现算。
   理由见 [CI lane](docs/runbook/ci-lanes.md)。
+- **停用门禁要留卡**：手动停一个 workflow，或者从 main 的必需检查里撤掉一项，必须在同一次操作里
+  开一张卡——标题里写出那个 workflow 的 `name:`（`just gate-status` 只认标题），并写明恢复条件与到期日。
+  改完跑一次 `just gate-status` 确认它认得到这张卡。停了没卡 = 没人知道门关着：
+  2026-11-05 `CI Review` 停了一晚，第二天本文件还写着它是必需检查。
 - **发版按端判定**：Android / macOS / Windows 谁改了才构建谁；test 与正式版走同一套机制。
   汇报时说「按端判定」，不说「跳过某端」。细则见 `docs/RELEASING.md`。
 - **磁盘**：各工作目录共用编译缓存（共享缓存由配套卡落地，落地前沿用各自 `target/`，编完可删）。剩余空间
@@ -295,6 +304,7 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
 | 开卡 | issue 模板「任务卡」 |
 | 本地命令 | `just --list` |
 | CI lane、必需检查、核心路径 | `docs/runbook/ci-lanes.md` |
+| 门开着还是关着 | `just gate-status` |
 | 真机/模拟器、配对、本机 daemon IPC | 本机 `local-state.md`（不进 git，先读它再说「做不到」） |
 | 全量回归 | `docs/runbook/full-regression-sop.md` |
 | 发版、签名、版本纪律 | `docs/RELEASING.md` |

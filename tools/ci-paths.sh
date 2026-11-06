@@ -5,7 +5,7 @@
 #   tools/ci-paths.sh core <base-sha|-> [规则文件] [--diff <文件>]
 #                                                         改动有没有碰核心（默认 .github/core-paths.txt）
 #
-# base 传 `-` 时从 stdin 读改动文件列表（测试用）；否则取 `git diff --name-only <base>...HEAD`。
+# base 传 `-` 时从 stdin 读改动文件列表（测试用）；否则取 `git diff --no-renames --name-only <base>...HEAD`（改名的新旧路径都算）。
 # `--diff` 可放在规则文件前或后，见下面「只改版本号」。
 # stdout 恒为一行 `true` / `false`（true = 要跑 / 碰了核心）。理由写 stderr。
 # **退出码恒为 0**，任何异常都判 true（fail-closed），与 tools/ci-needs-full-lane.sh 同一口径：
@@ -81,7 +81,8 @@ list_changed_files() {
   case "$1" in
     0000000000000000000000000000000000000000) return 1 ;;
   esac
-  git diff --name-only "$1...HEAD" 2>/dev/null
+  # --no-renames：改名的旧路径也算改动（把核心或某端的文件挪走，旧路径同样要命中）。
+  git diff --no-renames --name-only "$1...HEAD" 2>/dev/null
 }
 
 # 取改动列表；取不到或为空都判 true（空列表说明没搞清状况，不是「什么都没改」）。

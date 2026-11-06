@@ -5,6 +5,11 @@
 #   ci-review.sh agent            不给任何 GitHub token：只跑评审 agent，结论写进状态目录（agent.out / agent.err / agent.rc）
 #   ci-review.sh publish <PR号>   要 GH_TOKEN：review.sh 判定、贴评论、写 review/agent（success / failure / error）
 #   ci-review.sh <PR号>           三步连着跑（本机自测用；agent 那步同样去掉 GH_TOKEN / GITHUB_TOKEN）
+#   ci-review.sh override <PR号> <评论ID>   要 GH_TOKEN：owner 复核放行（#1470），见 do_override
+#
+# 只评正式 PR（#1470）：草稿 PR 不评（prepare 读到 isDraft=true 就整次跳过，不写状态、不调模型）；
+# 转正式（ready_for_review）再评。复用、增量、三级结论在 review.sh 里判（见它的头注释）：
+# 复用时 agent 那步不调模型。
 #
 # review/agent 是 main 的必需检查，即合入门禁（#1435）：
 #   - PPASS_REVIEW_NO_MERGE=1：CI 不开、不撤销自动合入（自动合入由开 PR 的会话开，靠必需检查把关；
@@ -31,7 +36,9 @@ STATE="${PPASS_CI_STATE:-${RUNNER_TEMP:-/tmp}/ppass-ci-review}"
 
 # 评审没跑成：状态 error + 评论，不是代码问题（只用在 review.sh 自己没写出状态的时候）。
 infra_report() {
-  local pr="$1" sha="$2" why="$3"
+  local pr="$1" sha="$2" why
+  # 原因来自日志尾部，可能带 agent 输出：删掉标记字样（只认 review.sh 写在评论末尾的那一行）
+  why="$(printf '%s' "$3" | sed 's/<!-- *ppass-review/<!- ppass-review/g')"
   echo "ci-review: 评审没跑成：${why}" >&2
   if [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
     gh api -X POST "repos/${REPO}/statuses/${sha}" -f state=error -f context="review/agent" \
@@ -55,6 +62,12 @@ do_prepare() {
   load_repo
   rm -rf "$STATE"
   mkdir -p "$STATE"
+  # 草稿不评：盯梢、人控级先开草稿、验收后转正式，转正式时（ready_for_review）再评一次。
+  if [ "$(gh pr view "$pr" -R "$REPO" --json isDraft --jq .isDraft 2>/dev/null | tr -d '\r')" = true ]; then
+    : >"${STATE}/skip"
+    echo "ci-review: #${pr} 是草稿，不评审（转正式后再评）"
+    return 0
+  fi
   sha="$(gh pr view "$pr" -R "$REPO" --json headRefOid --jq .headRefOid 2>/dev/null | tr -d '\r')"
   # 起跑先写 pending：结论没出来之前，这个头提交上的必需检查不是空着而是「等待中」。
   if [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
@@ -81,7 +94,14 @@ agent_refuse() {
 # 只读 agent：在不带任何 GitHub token 的步骤里跑。结论文件：agent.out / agent.err / agent.rc。
 do_agent() {
   local claude="${PPASS_CI_CLAUDE:-claude}" limit="${PPASS_CI_TIMEOUT:-600}" attempt rc=1 last top a
-  [ ! -e "${STATE}/skip" ] || { echo "ci-review: 准备阶段已失败，不跑 agent"; return 0; }
+  [ ! -e "${STATE}/skip" ] || { echo "ci-review: 准备阶段已跳过或失败，不跑 agent"; return 0; }
+  if [ -e "${STATE}/reuse" ]; then
+    # 复用上次的结论（头提交评过、PR 整体 diff 没变、或 owner 复核放行）：不调模型
+    : >"${STATE}/agent.out"
+    echo 0 >"${STATE}/agent.rc"
+    echo "ci-review: 复用评审结论（$(cat "${STATE}/reuse")），不调模型"
+    return 0
+  fi
   if [ -n "${GH_TOKEN:-}${GITHUB_TOKEN:-}" ]; then
     agent_refuse "agent 步骤的环境里有 GH_TOKEN / GITHUB_TOKEN：拒绝运行（评审 agent 不许拿到写 GitHub 的令牌）"
     return 0
@@ -119,7 +139,7 @@ do_agent() {
 do_publish() {
   local pr="$1" rc=0 sha
   load_repo
-  [ ! -e "${STATE}/skip" ] || { echo "ci-review: 准备阶段已失败，已写 error"; return 0; }
+  [ ! -e "${STATE}/skip" ] || { echo "ci-review: 准备阶段已跳过或失败（失败时已写 error）"; return 0; }
   sha="$(cat "${STATE}/sha" 2>/dev/null)"
   if [ ! -s "${STATE}/agent.rc" ]; then
     echo 1 >"${STATE}/agent.rc"
@@ -135,7 +155,57 @@ do_publish() {
   fi
 }
 
+# owner 复核放行（#1470）：评审判不了、或阻断项 owner 判定不成立时，仓库 owner 在 PR 上评论
+# 「/review-override <理由>」。只认对本仓有 admin 权限的真人账号（仓库属组织，author_association 是 MEMBER，
+# 不能当依据；用 gh api 现查作者与权限，不信事件载荷）；理由不能为空。
+# 通过后贴一条带 agent=OVERRIDE 标记的评论（只对当时的头提交有效，推新提交即作废），
+# 再走一遍 prepare / publish：复用这个结论，不调模型；盯梢、人控级仍要验收行。
+do_override() {
+  local pr="$1" cid="$2" meta login utype url body reason perm sha
+  load_repo
+  rm -rf "$STATE"
+  mkdir -p "$STATE"
+  meta="$(gh api "repos/${REPO}/issues/comments/${cid}" --jq '[.user.login, .user.type, .html_url] | @tsv' 2>/dev/null | tr -d '\r')" ||
+    { echo "ci-review: 读不到评论 ${cid}，不放行" >&2; return 0; }
+  IFS=$'\t' read -r login utype url <<<"$meta"
+  body="$(gh api "repos/${REPO}/issues/comments/${cid}" --jq .body 2>/dev/null | tr -d '\r' | head -n 1)"
+  reason="$(printf '%s' "$body" | sed -n 's|^/review-override[[:space:]][[:space:]]*\([^[:space:]].*\)$|\1|p')"
+  if [ -z "$reason" ]; then
+    echo "ci-review: 评论 ${cid} 不是「/review-override <理由>」（理由不能为空），不放行" >&2
+    return 0
+  fi
+  perm="$(gh api "repos/${REPO}/collaborators/${login}/permission" --jq .permission 2>/dev/null | tr -d '\r')" || perm=""
+  if [ "$utype" != User ] || [ "$perm" != admin ]; then
+    echo "ci-review: ${login}（${utype:-?}，权限 ${perm:-无}）不是仓库 owner，/review-override 无效" >&2
+    return 0
+  fi
+  sha="$(gh pr view "$pr" -R "$REPO" --json headRefOid --jq .headRefOid 2>/dev/null | tr -d '\r')"
+  [[ "$sha" =~ ^[0-9a-f]{40}$ ]] || { echo "ci-review: 读不到 #${pr} 的头提交，不放行" >&2; return 0; }
+  {
+    printf '**独立评审：owner 复核放行**（头提交 `%s`）\n\n' "${sha:0:10}"
+    printf '%s 在 %s 复核放行，理由：%s\n\n' "$login" "$url" "$reason"
+    printf '<sub>只对头提交 `%s` 有效，推新提交照常评审；盯梢、人控级仍要验收记录。</sub>\n' "${sha:0:10}"
+    printf '<!-- ppass-review sha=%s agent=OVERRIDE -->\n' "$sha"
+  } >"${STATE}/override.md"
+  gh pr comment "$pr" -R "$REPO" --body-file "${STATE}/override.md" >/dev/null 2>&1 ||
+    { infra_report "$pr" "$sha" "贴 owner 复核放行评论失败"; return 0; }
+  do_prepare "$pr"
+  [ ! -e "${STATE}/skip" ] || return 0
+  if [ ! -e "${STATE}/reuse" ]; then
+    # 标记没被认出来（例如评论列表读不到）：不能退回去调模型，判没跑成，owner 重发一次即可
+    agent_refuse "没认出刚贴的 owner 复核放行标记，未放行（重发 /review-override 即可）"
+  else
+    : >"${STATE}/agent.out"
+    echo 0 >"${STATE}/agent.rc"
+  fi
+  do_publish "$pr"
+}
+
 case "${1:-}" in
+  override)
+    [[ "${2:-}" =~ ^[0-9]+$ ]] && [[ "${3:-}" =~ ^[0-9]+$ ]] || { echo "用法：ci-review.sh override <PR号> <评论ID>" >&2; exit 2; }
+    do_override "$2" "$3"
+    ;;
   prepare)
     [[ "${2:-}" =~ ^[0-9]+$ ]] || { echo "用法：ci-review.sh prepare <PR号>" >&2; exit 2; }
     do_prepare "$2"

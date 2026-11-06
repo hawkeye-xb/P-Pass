@@ -68,6 +68,7 @@ reset() {
 J
   cat >"$FAKE/wfruns.json" <<'J'
 {"workflow_runs":[
+ {"created_at":"2026-11-06T08:00:00Z","head_sha":"eeeeeeee0000000000000000000000000000000000"},
  {"created_at":"2026-11-06T09:00:00Z","head_sha":"aaaaaaaa1111111111111111111111111111111111"},
  {"created_at":"2026-11-06T11:00:00Z","head_sha":"ffffffff9999999999999999999999999999999999"}]}
 J
@@ -98,7 +99,7 @@ check "开卡一次，标题固定、带 P0" bash -c "grep -qx '\[MAIN-RED\] CI 
 check "列出区间内的 PR（#101 #102）" bash -c "grep -q '#101' '$FAKE/create.args' && grep -q '#102' '$FAKE/create.args'"
 check "区间外的 PR 不列" bash -c "! grep -q '#201' '$FAKE/create.args'"
 check "无 PR 号的提交也列出" bash -c "grep -q '无 PR 号' '$FAKE/create.args'"
-check "只取早于本次的最近一次绿（不取晚于本次的）" bash -c "grep -q 'compare/aaaaaaaa1111' '$FAKE/calls' && ! grep -q 'ffffffff' '$FAKE/calls'"
+check "只取早于本次的最近一次绿（不取晚于本次的）" bash -c "grep -q 'compare/aaaaaaaa1111' '$FAKE/calls' && ! grep -q 'ffffffff' '$FAKE/calls' && ! grep -q 'eeeeeeee' '$FAKE/calls'"
 check "带失败 job 链接且不列成功 job" bash -c "grep -q 'https://x/job/1' '$FAKE/create.args' && ! grep -q 'https://x/job/2' '$FAKE/create.args'"
 check "写明处理口径（往前修 / 回滚）" bash -c "grep -q '回滚元凶' '$FAKE/create.args' && grep -q '不冻结' '$FAKE/create.args'"
 
@@ -129,6 +130,10 @@ run success
 check "反证：没有开着的卡时绿了无事发生" bash -c "! grep -q 'issue close\|issue create' '$FAKE/calls'"
 
 echo "── 读不到上次绿 ──"
+reset
+echo '{}' >"$FAKE/wfruns.json"   # jq 取不出 workflow_runs → 查询失败
+run failure
+check "查询上次绿失败也开卡（回退到最近提交）" bash -c "grep -q '无法确定区间' '$FAKE/create.args'"
 reset
 echo '{"workflow_runs":[]}' >"$FAKE/wfruns.json"
 run failure

@@ -15,6 +15,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 PATHS="$HERE/ci-paths.sh"
 GATE="$HERE/ci-gate.sh"
 RULES="$HERE/../.github/core-paths.txt"
+# 本测试会在临时仓库里跑 git。在 git hook 里运行时（如 pre-push 触发 just ci），继承来的
+# GIT_DIR 等仓库定位变量会盖过 -C / cd，把 add/commit 写进真仓库，所以先清掉。
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR GIT_PREFIX
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -227,6 +230,20 @@ else
   bad "临时 git 仓库建不起来"
 fi
 
+# #1467：改名的旧路径也算改动——把安卓文件挪出 apps/android，android lane 仍要命中。
+GR="$TMP/rename"
+rename_hit() { # rename_hit <脚本>：临时仓库里把 apps/android/x.kt 挪到 other/x.kt，按 base 判 hit
+  rm -rf "$GR" && mkdir -p "$GR/apps/android" && seq 1 50 >"$GR/apps/android/x.kt" &&
+    git -C "$GR" init -q --template= &&
+    git -C "$GR" add -A && git -C "$GR" -c user.name=t -c user.email=t@invalid commit -q -m base &&
+    local b && b="$(git -C "$GR" rev-parse HEAD)" &&
+    mkdir -p "$GR/other" && git -C "$GR" mv apps/android/x.kt other/x.kt &&
+    git -C "$GR" -c user.name=t -c user.email=t@invalid commit -q -m mv &&
+    (cd "$GR" && bash "$1" hit "$b" 'apps/android/**' 2>/dev/null)
+}
+got="$(rename_hit "$PATHS")"
+[ "$got" = true ] && ok "base sha 模式：改名把文件挪出 apps/android → $got" || bad "改名挪出 apps/android → 期望 true，实得 $got"
+
 echo
 echo "==> 5. gate：只有 success / skipped 能过"
 gate_is "$GATE" 0 "全 success" '{"changes":{"result":"success"},"android":{"result":"success"}}'
@@ -304,6 +321,11 @@ if M="$(mutant "$GATE" empty-passes 's/jq -er /jq -r /; s/if length == 0 then er
   [ -n "$job" ] || continue/')"; then
   expect_red "gate 放过空 NEEDS" gate_is "$M" 1 "NEEDS 为空对象" '{}'
 else bad "变异体生成失败：empty-passes"; fi
+
+if M="$(mutant "$PATHS" renames-hidden 's/git diff --no-renames --name-only/git diff --name-only/')"; then
+  got="$(rename_hit "$M")"
+  [ "$got" = false ] && ok "变异被抓到：去掉 --no-renames 后改名判 $got" || bad "变异没被抓到：去掉 --no-renames 后改名仍判 $got"
+else bad "变异体生成失败：renames-hidden"; fi
 
 echo
 echo "通过 ${PASS}，失败 $FAIL"

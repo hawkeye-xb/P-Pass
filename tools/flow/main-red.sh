@@ -64,8 +64,9 @@ created_at="$(jq -r '.created_at' <<<"$run_json")"
 workflow_id="$(jq -r '.workflow_id' <<<"$run_json")"
 
 # 该 workflow 在 main 上、早于本次 run 的最近一次 success 的提交
+# 查询失败按「读不到上次绿」处理（回退到最近提交），不能因此不开卡
 base_sha="$(gh api "repos/${REPO}/actions/workflows/${workflow_id}/runs?branch=main&event=push&status=success&per_page=50" \
-  --jq "[.workflow_runs[] | select(.created_at < \"${created_at}\")] | sort_by(.created_at) | last | .head_sha // empty")"
+  --jq "[.workflow_runs[] | select(.created_at < \"${created_at}\")] | sort_by(.created_at) | last | .head_sha // empty")" || base_sha=""
 
 # 提交行：「短 sha 标题」；PR 号从标题末尾的 (#N)（squash 合入的写法）取
 if [ -n "$base_sha" ]; then

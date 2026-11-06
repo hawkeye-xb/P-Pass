@@ -12,23 +12,43 @@ job 名必须写死**。理由和细节在这里。
     它们的检查在 `main` 的必需列表里，而被 paths 跳过的 workflow **根本不汇报状态**，
     必需检查会永久停在 Pending 并挡住合并——带 paths + 设必需 = 自锁。
   - 跳过被下放到 job 层（CI-11 #255）：`changes` job 用 `tools/ci-needs-full-lane.sh`
-    判断，纯文档改动时下游 job 被 `if:` 跳过。被 `if:` 跳过的 job 汇报 `skipped`，
+    判断，改动不落在依赖面上（文档、流程脚本、更新说明等）时下游 job 被 `if:` 跳过。被 `if:` 跳过的 job 汇报 `skipped`，
     `skipped` 对必需检查算通过（PR #260 实测）。
   - `ci-android` / `site` / `ci-docs` 仍按 paths 只在改到自己域时跑，不进必需列表，
     被跳过无害。
+
+## 停用门禁 / 撤必需检查
+
+停 workflow、改 branch protection 都是仓库设置动作：**不进 git、不产生提交、不走 PR**，
+所以没有任何东西会提醒「这扇门关了」。2026-11-05 `CI Review` 被手动停了六小时，
+第二天 AGENTS.md 还写着它是必需检查——这就是没有账的样子。
+
+规矩见 AGENTS.md「工程纪律」：同一次操作里开一张卡，**标题里写出 workflow 的 `name:`**，
+写明恢复条件与到期日；然后跑一次 `just gate-status` 确认它认得到这张卡。
+
+`just gate-status` 报两块：停用中的 workflow 及各自的关联卡、main 的必需检查清单；
+读不出来时一律 fail-closed（不当作「没有停用项」）。关联卡**只认标题**——
+正文里顺口提到 `CI Review` 的卡不算这扇门的账。
 
 ## `tools/ci-needs-full-lane.sh` 的判据
 
 - 判据是 **allowlist**：改动**全部**落在无害清单里才跳过，其余一律跑。往清单里加
   东西前先确认没有测试或构建脚本读它（`assets/i18n/**` 被 diag 测试消费，**不许加**）。
 - 两个 lane（CI-17 #373），因为 6 个 job 的依赖面不同：
-  - **默认** lane（无害 = `docs/`、`.claude/`、`*.md`）：给 `architecture enforcement`
+  - **默认** lane（无害 = `docs/`、`.claude/`、`*.md`，以及 #1467 按依赖面补进的
+    `tools/flow/`、`tools/e3/`、`tools/hooks/`、它们的自测、`tools/ci-paths.sh`、
+    `release/notes/`、`.github/ISSUE_TEMPLATE/`；完整清单与核实依据见脚本 `is_inert`）：给 `architecture enforcement`
     与 `ci-desktop` 用（`arch-check.sh` 扫 `apps/**`，桌面壳门禁编的就是 `apps/desktop`）。
   - **`rust-workspace`** lane 把 `apps/**` 也算惰性：给 `clippy` / `test` /
     `test (windows)` / `license+deny` / `fmt` 用（`src-tauri` 是独立 workspace，
-    主 workspace 编不到它；`apps/` 的 Rust 由 `ci-desktop` 自己检查）。
+    主 workspace 编不到它；`apps/` 的 Rust 由 `ci-desktop` 自己检查）。例外：主 workspace
+    读到的 `apps/` 文件（桌面 i18n 字典、两个手机端低空间常量文件）单独登记成要跑。
 - 不带 lane 参数 = 默认 lane，这是向后兼容契约；未知 lane 一律判要跑。
-- 自测：`tools/test-ci-needs-full-lane.sh`（两个 lane 都做变异反证）。
+- 自测：`tools/test-ci-needs-full-lane.sh`（两个 lane 都做变异反证）。它从源码派生反向用例：
+  `crates/` 里 `include_str!` / `include_bytes!` 指向 `crates/` 之外的文件，以及
+  `ci-rust.yml`、`ci-desktop.yml` 与其 composite action 引用的 `tools/` 文件，两个 lane 都必须判要跑；
+  新增这类读取不用手工登记也会被自测抓到。
+- `ci-android` / `ci-ios` / `ci-docs` 是按正向路径触发的，#1467 已核对，没有收紧。
 
 ## job 名
 
@@ -63,9 +83,15 @@ CI、评审与验收并行，验收后补这一行再 `gh pr ready`（`edited` /
 来源锁 GitHub Actions（`app_id` 15368），本机 gh 写的同名状态不算。job 名 `review (独立评审)` 不进必需列表，
 job 永远成功，结论只看状态。它用 `pull_request_target`：评审工具取 main 上的版本，PR 头提交只当数据读，
 别往里加执行 PR 代码的步骤（理由见该 workflow 头注释）。fork 的 PR 不跑、不出状态，合不进。
-草稿 PR 也评审（与真机验收并行），草稿转正式不重评；job 第一步（检出之前）就把头提交的 `review/agent` 写成 pending，
+只评正式 PR（#1470）：草稿不评，`ready_for_review` 转正式时评，与 CI 并行；job 第一步（检出之前）就把头提交的 `review/agent` 写成 pending，
 改正文（如删掉验收行）后、新结论出来前不会挂着旧的 success。`review.sh` 写成状态后才打 `REVIEW_STATUS_WRITTEN=` 标记，
 `ci-review.sh publish` 没看到标记就兜底写 error。
+每次评审在评论末尾留隐藏标记（头提交、PR 整体 diff 的指纹、agent 结论），只认 `github-actions[bot]` 写的：头提交评过、或 PR 整体 diff
+没变（只合进了 main）就复用结论、不调模型，用当前正文重判验收行；上次评到的提交是头提交的祖先就只评增量（只看 PR 上次与现在改动的文件），
+附上次的评审意见与已关闭线程的裁决；不是祖先或判不了就全量。意见分「阻断 / 建议 / 风格」，只看阻断行：有阻断行写 failure（模型写 PASS 也算），只有建议、风格写 success（模型写 FAIL 也算）。
+owner 复核放行：PR 上评论 `/review-override <理由>` 触发 `issue_comment` 的 `review override (owner 复核放行)` job，
+用 gh api 现查作者对本仓的权限（admin 才认，`author_association` 在组织仓库是 MEMBER，不作依据），通过后留 `agent=OVERRIDE` 标记，
+只对当时的头提交有效。判据测试：`tools/test-ci-review.sh`、`tools/test-flow-review.sh`。
 
 ## main 红了自动开卡（#1469）
 

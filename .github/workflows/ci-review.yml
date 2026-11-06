@@ -1,4 +1,11 @@
-# 独立评审（#1410 落地，#1435 起即合入门禁）：CI 上的评审 job 就是 AGENTS.md「独立评审」。
+# 独立评审（#1410 落地，#1435 起即合入门禁，#1470 改为只评正式 PR、只评增量、三级结论）：CI 上的评审 job 就是
+# AGENTS.md「独立评审」。
+#
+# 什么时候评（#1470）：草稿 PR 不评；正式 PR（opened 非草稿、ready_for_review、synchronize、reopened）评，与 CI 并行。
+# 推新提交只评增量（上次评到的提交是头提交的祖先时）；edited（只改正文）与只合进 main 的推送复用上次结论、不调模型；
+# 只有阻断级（误放行 / 安全 / 越界）意见让 review/agent 为 failure。判定都在 tools/flow/review.sh。
+# owner 复核放行：仓库 owner 在 PR 上评论「/review-override <理由>」，override job 核对作者后把该头提交的
+# review/agent 改为 success（tools/flow/ci-review.sh override）。
 #
 # 门禁怎么成立：结论写成提交状态 review/agent（success / failure / error / pending），它是 main 的必需检查，
 # 来源锁定 GitHub Actions（app_id 15368），本机 gh 写的同名状态不算。状态按提交记：推了新提交，新提交上
@@ -23,9 +30,11 @@ name: CI Review
 on:
   pull_request_target:
     branches: [main]
-    # 草稿 PR 也评审（盯梢、人控级先开草稿，评审与真机验收并行，#1441）；草稿转正式不改头提交，
-    # 不重评（ready_for_review 不在触发里），新提交走 synchronize。
-    types: [opened, synchronize, reopened, edited]
+    # 草稿不评（下面 if 挡）；盯梢、人控级验收后转正式，ready_for_review 时评（#1470）。
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  # owner 复核放行（/review-override <理由>）；issue_comment 的 workflow 取 main 上的版本。
+  issue_comment:
+    types: [created]
 
 permissions:
   contents: read
@@ -38,8 +47,11 @@ jobs:
     name: review (独立评审)
     # edited 只认人改正文（补验收行）：CodeRabbit 等 bot 会改 PR 正文写摘要，不能每次都让同一提交重评一遍
     # （LLM 结论有波动，同一提交的 success 可能被重评成 failure），也不能把正在跑的评审取消掉。
+    # 草稿不评（#1470）；edited 头提交已评过时 review.sh 复用结论、不调模型。
     if: >-
-      ${{ github.event.pull_request.head.repo.full_name == github.repository
+      ${{ github.event_name == 'pull_request_target'
+      && github.event.pull_request.head.repo.full_name == github.repository
+      && !github.event.pull_request.draft
       && (github.event.action != 'edited' || (github.event.sender.type != 'Bot' && github.event.changes.body != null)) }}
     # 并发写在 job 上而不是 workflow 上：被上面 if 跳过的运行不进并发组，不会取消正在跑的评审。
     concurrency:
@@ -90,3 +102,30 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: bash tools/flow/ci-review.sh publish "$PR"
+
+  # owner 复核放行（#1470）：不装 claude、不拿评审 key、不调模型。作者与权限由 ci-review.sh 用 gh api 现查（只认对本仓
+  # 有 admin 权限的真人账号），这里的 if 只是尽早过滤，免得每条评论都起一次 run。
+  override:
+    name: review override (owner 复核放行)
+    if: >-
+      ${{ github.event_name == 'issue_comment' && github.event.issue.pull_request
+      && startsWith(github.event.comment.body, '/review-override') }}
+    # 与评审同一并发组但不取消：正在跑的评审先跑完，放行后写，不会被评审结论盖掉。
+    concurrency:
+      group: ci-review-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PPASS_HOOK_REPO: ${{ github.repository }}
+      PR: ${{ github.event.issue.number }}
+      COMMENT_ID: ${{ github.event.comment.id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: 核对 owner、放行（不调模型）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash tools/flow/ci-review.sh override "$PR" "$COMMENT_ID"
