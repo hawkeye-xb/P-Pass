@@ -250,6 +250,25 @@ grep -q 'pin_cand_bins "$cand_dir"' "$E3/verify" || bad "verify 没把场景指�
     { printf 'MAC_GLOBS 有 %s 项，期望 7\n' "${#MAC_GLOBS[@]}"; exit 1; }
 ) || bad "MAC_GLOBS 通配符被 shell 按路径展开"
 
+# #1524：mac 端只能在本机能验时才排进这一轮；别的端不受影响，摘掉时要说原因。
+(
+  E3_STATE="$(mktemp -d)" || exit 1
+  export E3_STATE
+  trap 'rm -rf "$E3_STATE"' EXIT
+  # shellcheck source=../tools/e3/verify
+  source "$E3/verify" || exit 1
+  got="$(host_ends "mac android" 2>/dev/null)"
+  if [ "$(uname -s)" = Darwin ]; then
+    [ "$got" = "mac android" ] || { printf 'macOS 上 host_ends 应原样保留：%s\n' "$got"; exit 1; }
+  else
+    [ "$got" = "android" ] || { printf '非 macOS 上 host_ends 应摘掉 mac：%s\n' "$got"; exit 1; }
+    host_ends "mac android" 2>&1 >/dev/null | grep -q '跳过 mac' ||
+      { echo "非 macOS 上摘掉 mac 时没说原因"; exit 1; }
+  fi
+  [ "$(host_ends "android" 2>/dev/null)" = "android" ] || { echo "host_ends 动了 android"; exit 1; }
+  [ -z "$(host_ends "" 2>/dev/null)" ] || { echo "空输入应返回空"; exit 1; }
+) || bad "host_ends：按宿主摘掉本机验不了的端"
+
 # #1375 just dev 手机：设备被占就拒绝（--no-wait），不排队；反证：释放后同一条命令成功
 if [ "$(uname)" = Darwin ]; then
   lockdir="$(mktemp -d)"

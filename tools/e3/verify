@@ -51,6 +51,22 @@ lane_hit() { # lane_hit <glob…>：改动有没有落在这些路径上（ci-pa
   [ "$("$REPO_ROOT/tools/ci-paths.sh" hit "$base" "$@" 2>/dev/null)" != false ]
 }
 
+# 端只能在本机上验：mac 的打包、安装、场景都要 macOS（#1524）。按路径判出来的端先过这一道，
+# 本机验不了的摘掉并写明原因（CI 的 macOS 任务照跑），摘掉的端记在 HOST_SKIPPED 里供汇总。
+HOST_SKIPPED=""
+host_ends() { # host_ends <空格分隔的端>
+  local out="" e
+  for e in $1; do
+    if [ "$e" = mac ] && [ "$(uname -s)" != Darwin ]; then
+      log "跳过 ${e}：本机不是 macOS（由 CI 的 macOS 任务覆盖）"
+      HOST_SKIPPED="${HOST_SKIPPED:+$HOST_SKIPPED }$e"
+      continue
+    fi
+    out="${out:+$out }$e"
+  done
+  printf '%s' "$out"
+}
+
 # —— 构建候选 ——
 heavy() { "$REPO_ROOT/tools/heavy-lock" "$@"; } # 可重入（#1308）
 # 不设 CARGO_INCREMENTAL：本仓其余构建路径（just dev mac、dev android）都走默认增量，
@@ -167,9 +183,17 @@ print(" ".join(dict.fromkeys(re.findall(r"\b(?:android|mac|win|ios)/[a-z0-9][a-z
     ;;
 esac
 ends="$(echo $ends)"
+ends="$(host_ends "$ends")"
+if [ -z "$ends" ] && [ "$mode" = smoke ]; then
+  die "--smoke ${target} 要在能验 ${target} 的机器上跑（本机 $(uname -s)）"
+fi
 root="$REPO_ROOT/evidence/$label/$(date +%Y%m%d-%H%M%S)"
 if [ -z "$ends" ]; then
-  echo "VERIFY N/A $label  改动不在任何端的路径上：只需 V0（just ci）"
+  if [ -n "$HOST_SKIPPED" ]; then
+    echo "VERIFY N/A $label  本机验不了涉及的端（${HOST_SKIPPED}），由 CI 覆盖：本地只需 V0（just ci）"
+  else
+    echo "VERIFY N/A $label  改动不在任何端的路径上：只需 V0（just ci）"
+  fi
   exit 0
 fi
 mkdir -p "$root"
