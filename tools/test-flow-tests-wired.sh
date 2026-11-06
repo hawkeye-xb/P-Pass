@@ -43,8 +43,9 @@ check() {
     return 1
   fi
   local recipes flow
-  recipes="$(printf '%s' "$dump" | jq -r '.recipes | keys[]')"
-  flow="$(printf '%s' "$dump" | jq -r '.recipes["flow-tests"].dependencies[]?.recipe')"
+  # jq 在 Windows 上按 CRLF 输出；带 \r 的行与下面的精确比较永远对不上（#1520）。
+  recipes="$(printf '%s' "$dump" | jq -r '.recipes | keys[]' | tr -d '\r')"
+  flow="$(printf '%s' "$dump" | jq -r '.recipes["flow-tests"].dependencies[]?.recipe' | tr -d '\r')"
   if [ -z "$flow" ]; then
     echo "justfile 里没有 flow-tests recipe（或它没有依赖）"
     return 1
@@ -162,7 +163,7 @@ expect pass "原样副本"
 
 fresh
 victim="$(just --justfile "$ROOT/justfile" --working-directory "$ROOT" --dump --dump-format json |
-  jq -r '.recipes["flow-tests"].dependencies[0].recipe')"
+  jq -r '.recipes["flow-tests"].dependencies[0].recipe' | tr -d '\r')"
 python3 - "$tmp/r/justfile" "$victim" <<'PY'
 import re, sys
 p, v = sys.argv[1], sys.argv[2]
