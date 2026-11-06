@@ -163,6 +163,14 @@ reset
 run cancelled
 check "cancelled：不开卡也不关卡" bash -c "! grep -q 'issue create\|issue close' '$FAKE/calls' 2>/dev/null"
 reset
+echo '[{"number":321,"title":"[MAIN-RED] CI Rust"}]' >"$FAKE/issues.json"
+run cancelled
+check "cancelled（被并发组替掉的 run）：已有开着的卡也不关、不追加评论" bash -c "! grep -q 'issue close\|issue comment' '$FAKE/calls' && [ ! -f '$FAKE/comment.args' ]"
+reset
+echo '[{"number":321,"title":"[MAIN-RED] CI Rust"}]' >"$FAKE/issues.json"
+run success
+check "反证：同样的开着的卡，success 才关" bash -c "grep -q 'issue close 321' '$FAKE/calls'"
+reset
 run timed_out
 check "反证：timed_out 算红，开卡" bash -c "grep -q 'issue create' '$FAKE/calls'"
 
