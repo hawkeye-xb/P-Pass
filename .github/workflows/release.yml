@@ -263,7 +263,7 @@ jobs:
 
   macos-arm64:
     name: "macOS arm64 (签名门控)"
-    runs-on: macos-14
+    runs-on: macos-26 # 统一 macos-26，见 docs/decisions/2026-11-06-macos-runner-26.md（追新不追旧）
     # #772：22 次成功发版里本 job 平均 11.4 分钟、最长 13 分钟（含缓存）；冷缓存的整套
     # release 构建 + notarytool 自身的 15 分钟上限都要装得下，取 45。没有这一行时挂住要等
     # GitHub 默认 360 分钟（v2026.10.3 的 codesign 就挂了 14 分钟才被人工取消）。
@@ -408,7 +408,7 @@ jobs:
       - name: Install Node + pnpm (desktop build)
         run: |
           set -euo pipefail
-          # macos-14 runner 自带 node；pnpm 11（allowBuilds 机制所在版本，
+          # macOS runner 自带 node；pnpm 11（allowBuilds 机制所在版本，
           # 见 apps/desktop/pnpm-workspace.yaml）。corepack 无 packageManager
           # 字段不可用，直接 npm 全局装。
           npm install -g pnpm@11
