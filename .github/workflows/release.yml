@@ -408,7 +408,7 @@ jobs:
       - name: Install Node + pnpm (desktop build)
         run: |
           set -euo pipefail
-          # macos-14 runner 自带 node；pnpm 11（allowBuilds 机制所在版本，
+          # macOS runner 自带 node；pnpm 11（allowBuilds 机制所在版本，
           # 见 apps/desktop/pnpm-workspace.yaml）。corepack 无 packageManager
           # 字段不可用，直接 npm 全局装。
           npm install -g pnpm@11
