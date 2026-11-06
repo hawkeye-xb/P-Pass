@@ -184,8 +184,23 @@ kill "$active_pid" 2>/dev/null || true
 wait "$active_pid" 2>/dev/null || true
 trap 'rm -rf "$tmp"' EXIT
 
-# …only when asked for explicitly (counter-proof that the skip is the new rule,
-# not something else keeping the fixture alive).
+if command -v lsof >/dev/null 2>&1; then
+  # …and even when asked, not while a process still works inside it (a live
+  # session's shell has its cwd there).
+  (cd "$repo/.claude/worktrees/session" && exec "$sleeper" -c 'import time; time.sleep(300)') &
+  session_pid=$!
+  trap 'kill "$session_pid" 2>/dev/null || true; rm -rf "$tmp"' EXIT
+  sleep 1
+  in_use=$(cd "$repo" && bash "$cleanup_script" --apply --worktrees --session-worktrees)
+  [[ -d "$repo/.claude/worktrees/session" ]] || fail "--session-worktrees removed a session worktree in use: $in_use"
+  [[ "$in_use" == *"SKIP       $repo_as_printed/.claude/worktrees/session — Claude Code session worktree in use"* ]] || fail "in-use session worktree not reported: $in_use"
+  kill "$session_pid" 2>/dev/null || true
+  wait "$session_pid" 2>/dev/null || true
+  trap 'rm -rf "$tmp"' EXIT
+fi
+
+# …only when asked for explicitly and nobody is inside it (counter-proof that
+# the skips are the new rules, not something else keeping the fixture alive).
 session_apply=$(cd "$repo" && bash "$cleanup_script" --apply --worktrees --session-worktrees)
 [[ ! -d "$repo/.claude/worktrees/session" ]] || fail "--session-worktrees did not remove the merged session worktree: $session_apply"
 

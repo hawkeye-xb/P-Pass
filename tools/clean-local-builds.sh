@@ -172,6 +172,21 @@ target_size() {
   du -sh "$1/target" 2>/dev/null | awk '{print $1}' || printf '?'
 }
 
+# #1490: 0 = some process holds a file open (or has its working directory)
+# inside <dir> (paths on stdout); 1 = none; 2 = cannot tell. Same three states
+# as has_active_build: not being able to look is not the same as nobody using it.
+open_files_under() {
+  local dir="$1" listing
+  command -v lsof >/dev/null 2>&1 || return 2
+  # lsof exits 1 when some process could not be read; the listing is still valid.
+  listing=$(lsof -nP -Fn 2>/dev/null) || [[ -n "$listing" ]] || return 2
+  listing=$(printf '%s\n' "$listing" | sed -n 's/^n//p' |
+    awk -v d="$dir" '$0 == d || index($0, d "/") == 1' | sort -u | head -5)
+  [[ -n "$listing" ]] || return 1
+  printf '%s\n' "$listing"
+  return 0
+}
+
 worktree_is_removable() {
   local worktree="$1"
   local active
@@ -191,6 +206,17 @@ worktree_is_removable() {
     */.claude/worktrees/*)
       if ! "$session_worktrees"; then
         printf 'Claude Code session worktree (add --session-worktrees to include)'
+        return 1
+      fi
+      # Even when asked: a session that is still open has its shell (cwd) or
+      # files inside the directory. Not being able to look means refusing.
+      local held held_status=0
+      held=$(open_files_under "$(cd "$worktree" 2>/dev/null && pwd -P || printf '%s' "$worktree")") || held_status=$?
+      if [[ $held_status -eq 0 ]]; then
+        printf 'Claude Code session worktree in use: %s' "$(printf '%s' "$held" | head -1)"
+        return 1
+      elif [[ $held_status -ge 2 ]]; then
+        printf 'cannot tell whether this session worktree is in use (no usable lsof); refusing to remove'
         return 1
       fi
       ;;
@@ -348,20 +374,6 @@ free_space() {
   df -Pk "$1" 2>/dev/null | awk 'NR==2 {printf "%.1fG", $4 / 1024 / 1024}'
 }
 
-# 0 = some process holds a file open inside the cache (paths on stdout);
-# 1 = none; 2 = cannot tell. Same three states as has_active_build: not being
-# able to look is not the same as nobody using it.
-cache_open_files() {
-  local cache="$1" listing
-  command -v lsof >/dev/null 2>&1 || return 2
-  # lsof exits 1 when some process could not be read; the listing is still valid.
-  listing=$(lsof -nP -Fn 2>/dev/null) || [[ -n "$listing" ]] || return 2
-  listing=$(printf '%s\n' "$listing" | sed -n 's/^n//p' | grep -F "$cache/" | sort -u | head -5)
-  [[ -n "$listing" ]] || return 1
-  printf '%s\n' "$listing"
-  return 0
-}
-
 cache_failed=false
 if "$clean_cache" || "$preview_cache_location"; then
   printf '\n== Shared Cargo cache ==\n'
@@ -378,7 +390,7 @@ if "$clean_cache" || "$preview_cache_location"; then
   else
     main_root=$(dev_cache_main_root "$repo_root")
     probe_status=0
-    open_files=$(cache_open_files "$cache") || probe_status=$?
+    open_files=$(open_files_under "$cache") || probe_status=$?
     if [[ $probe_status -eq 0 ]]; then
       printf 'SKIP       %s — files open in it (a build is using it); try again later:\n' "$cache"
       printf '%s\n' "$open_files" | sed 's/^/             /'
