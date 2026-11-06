@@ -483,7 +483,13 @@ W="$(card 155 "[T-155] verify not needed" "src/**" "**真机验证**：不需要
 commit_file "$W" src/nn.txt
 DONE "$W" >"${TMP}/o155" 2>&1 && ok "卡上写「不需要」→ verify 不跑" || bad "写「不需要」却跑了 verify：$(tail -5 "${TMP}/o155")"
 comments_of 155 | grep -q "FAKE-VERIFY-RED" && bad "  「不需要」被执行成需要" || ok "  反证：「不需要」不被子串匹配成需要"
-rm -f "${FAKE_GH}/verify_fail" "${FAKE_GH}/has_verify"
+# LC_ALL=C 下也要能识别全角冒号（PR #1538 评审反例：含多字节字符的括号表达式在 C locale 下不匹配）
+rm -f "${FAKE_GH}/verify_fail"
+W="$(card 157 "[T-157] verify C locale" "src/**" "**真机验证**：需要")"
+commit_file "$W" src/cl.txt
+LC_ALL=C DONE "$W" >"${TMP}/o157" 2>&1 && ok "LC_ALL=C 下卡上写需要真机验证 → 照常推送" || bad "LC_ALL=C 下交卡失败：$(tail -5 "${TMP}/o157")"
+comments_of 157 | grep -q "FAKE-VERIFY-GREEN" && ok "  LC_ALL=C 下仍识别全角冒号并跑 just verify" || bad "  LC_ALL=C 下没识别出真机验证要求"
+rm -f "${FAKE_GH}/has_verify"
 
 # 纯文档走 ci-docs
 W="$(card 23 "[T-23] docs only" "docs/**")"

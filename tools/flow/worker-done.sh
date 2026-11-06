@@ -326,7 +326,8 @@ run_logged() { # run_logged <日志> <命令...>：重编译经 tools/heavy-lock
 HAS_VERIFY=0
 just --show verify >/dev/null 2>&1 && HAS_VERIFY=1
 VERIFY_REQUESTED=0
-if printf '%s\n' "${CARD_TEXT:-}" | grep -Eq '真机验证[^：:]*[：:][[:space:]]*需要'; then VERIFY_REQUESTED=1; fi
+# 先把全角冒号统一成 ASCII：LC_ALL=C 时 [^：:] 这类含多字节字符的括号表达式匹配不了全角冒号。
+if printf '%s\n' "${CARD_TEXT:-}" | sed 's/：/:/g' | grep -Eq '真机验证[^:]*:[[:space:]]*需要'; then VERIFY_REQUESTED=1; fi
 DO_VERIFY=0
 [ "$HAS_VERIFY" = 0 ] || [ "$VERIFY_REQUESTED" = 0 ] || DO_VERIFY=1
 VERIFIED="${EVID_DIR}/verified"
