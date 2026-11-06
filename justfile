@@ -309,7 +309,7 @@ i18n-split-check:
 # 只收别的 lane 都没跑的流程自测；md-check / token-check / shell-vars-check / identity-check / supply-chain-check
 # 已在 ci-docs.yml、ci-identity.yml 的其它 job 里跑，留在 ci-docs 的直接依赖里。
 # justfile 里每个 *-test recipe 要么在这里，要么登记在 tools/test-flow-tests-wired.sh 的例外表里（flow-tests-wired-test 会挡）。
-flow-tests: hooks-test flow-worker-test flow-review-test flow-pr-test flow-gate-status-test flow-owner-test heavy-lock-test macos-runner-test main-red-test flow-tests-wired-test
+flow-tests: hooks-test flow-worker-test flow-review-test flow-ci-review-test flow-pr-test flow-gate-status-test flow-owner-test heavy-lock-test macos-runner-test main-red-test flow-tests-wired-test
   @echo "==> flow-tests: green ✅"
 
 # 元测试：每个 *-test recipe 都接进了 flow-tests 或登记的 lane，ci / ci-docs 都依赖 flow-tests，
@@ -569,6 +569,10 @@ review pr *args:
 # just review 的判据测试：假 gh + 假 agent，校验评论格式、提交状态与只读权限；进 ci / ci-docs。
 flow-review-test:
     @bash tools/test-flow-review.sh
+
+# CI 评审 job（tools/flow/ci-review.sh）的判据测试：假 gh + 假 agent，结论写成 review/agent；进 flow-tests（#1493）。
+flow-ci-review-test:
+    @bash tools/test-ci-review.sh
 
 # PR 卡点：列出未过的检查、未解决的评审线程、冲突、是否开了自动合入（退出码 0 全清 / 1 有卡点 / 3 还在等结果）。
 pr-status pr:
