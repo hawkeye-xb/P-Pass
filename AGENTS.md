@@ -161,8 +161,9 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
   - **合入 main 后**：CI 全量（含 Windows）批量跑：同一时间一次、正在跑的不取消、排队只留最新；main 红了只修或回滚元凶 PR，main 不冻结。
   - **发版前**：Release 全量验证不变，只从全绿提交切 tag。
 - `just done` 依次：核对范围 → 推送前自查 → 门禁（按改动路径挑：安卓 `just android-test`、iOS `just ios-test`、文案/i18n `just mobile-static-check`、
-  Rust crate 对应 crate 的 `cargo nextest run -p`、纯文档 `just ci-docs`；有一个文件挑不出来才退回全量 `just ci`）→ `just verify <号>`（命令存在才跑）
-  → 推分支 → 在 issue 贴回执（分支、提交、门禁与验收输出末尾、证据等级、证据目录、自查结论）。
+  桌面前端 `pnpm -C apps/desktop test`、Rust crate（含桌面 `apps/desktop/src-tauri`）对应 crate 的 `cargo nextest run -p`、纯文档 `just ci-docs`；
+  有一个文件挑不出来才退回全量 `just ci`）→ 推分支 → 在 issue 贴回执（分支、提交、门禁与验收输出末尾、证据等级、证据目录、自查结论）。
+  `just verify <号>` 不再默认跑：只有卡上写明 `**真机验证**：需要` 才跑（用户看得到的改动按「按版本验收」随版本验，#1471）。
   任何一步红：不推送、issue 写明停在哪、打 `status:blocked`，修好重跑即可。
   - **推送前自查**：用 CI 评审的同一份清单（`tools/flow/review-prompt.md`）对自己的改动自查，重点是每处改动的规则、判定、
     写法、文案，`git grep` 全仓同类写法逐条处理（同一规矩在 AGENTS.md、模板、justfile、runbook 里的旧写法，另一端、另一个脚本里的同一份判定）。
@@ -175,7 +176,8 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
   用户看得到的改动随版本验收，发版前台账清零（见「按版本验收」）。开完 PR 立刻打开外壳的 PR 监控（见下两条）；CI 红了由干活的 agent 修到绿，不叫人。
 - 必须用 `just stuck` 停下的四种情况：命中核心且没有已采纳方案、需要改范围外文件、没有可用的验收场景、
   同一处连红 3 次。
-- 用户看得到的行为还需按卡上的验收场景做真机验证（E3）；验证环境开工时探测（见「验收」）；`just done` 的回执会写明哪些证据等级已自动取得。
+- 用户看得到的行为按卡上的验收场景做真机验证（E3）：卡上写明 `**真机验证**：需要` 的，`just done` 才跑 `just verify`；
+  其余按「按版本验收」随版本验。验证环境开工时探测（见「验收」）；`just done` 的回执会写明哪些证据等级已自动取得。
 - 防发散：PR 正文 closes 它解决的所有卡，不夹带无关改动；同时开着的分支不超过 3 个、一两天内合；要好几天的功能用开关先合进 main、默认关；改到范围外文件就是红；新增网络出口、遥测依赖、自启点、落盘目录由 `just ci` 挡
   （现有适应度检查）。「核心没有已采纳方案或评审不许合」的检查已建（acceptance gate、`review/agent`），
   待产品负责人在仓库设置里设为必需检查后生效；「台账没清零不许发正式版」的检查已建并接进 Release（`just release-acceptance`，#1486）；PR 大小上限、同时打开的分支数上限尚未建，目前靠自觉。

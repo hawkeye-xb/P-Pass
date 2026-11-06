@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # just done：在卡 worktree 里交卡。
 #   核对改动只含范围内文件 → 推送前自查（证据目录里的 self-review.md，#1447）→ 门禁（按改动路径挑）
-#   → just verify <号>（命令存在才跑）→ 全绿才 git push → 在每张卡贴回执 → status:doing→status:review
+#   → just verify <号>（卡上写明需要真机验证且命令存在才跑）→ 全绿才 git push → 在每张卡贴回执 → status:doing→status:review
 #   → 写好 PR 正文、单独一行打印开 PR 的命令（gh pr create …，由执行者自己运行；脚本不开 PR，见第 6 步）。
 # 代码没变就复用验证（#1423）：门禁与 verify 都通过时记下 HEAD 的树哈希与门禁清单；下次树与清单都没变，
 #   不重跑，回执写「复用 <时间> 的验证」。改任何一个字节（树变了）都重跑。
@@ -201,10 +201,12 @@ SELF_REVIEW_BODY="$(grep -v '^[[:space:]]*$' "$SELF_REVIEW" | sed '1d' | scrub)"
 #   iOS 文案（apps/ios/**/*.strings、*.xcstrings、assets/i18n/**）→ 另加 just ios-test --lang en 与 --lang zh
 #     （本机模拟器多是中文、CI 是英文：写死某一种语言的断言只在另一种语言下红，#1342）
 #   crates/<名>/**             → cargo nextest run -p <包名>
+#   apps/desktop/src/**        → pnpm -C apps/desktop test（桌面前端 vitest）
+#   apps/desktop/src-tauri/**  → cargo nextest run -p p-pass-desktop（独立 workspace，用 --manifest-path）
 #   tools/<文件>               → 改动里的 tools/test-*.sh 本身 + 引用到它的 tools/test-*.sh（git grep 找）
 #   .github/workflows/*        → actionlint + just ci-docs（相关 tools/test-ci-*.sh 由 ci-docs 与 tools 规则覆盖）
 #   justfile、.github/ISSUE_TEMPLATE/*、.github/PULL_REQUEST_TEMPLATE.md → just ci-docs
-#   其余（桌面、其它 .github、没有任何测试引用的 tools 文件…）任何一个挑不出来 → just ci（fail-closed）
+#   其余（apps/desktop 下上面两条之外的其它文件、其它 .github、没有任何测试引用的 tools 文件…）任何一个挑不出来 → just ci（fail-closed）
 GATES=()
 add_gate() { # 去重追加
   local g
@@ -226,6 +228,20 @@ tool_tests() { # tool_tests <tools/下的文件>：打印要跑的测试，一�
   else
     git grep -l -F -e "$f" -e "$base" -e "${dir}/" -- 'tools/test-*.sh' 2>/dev/null || true
   fi
+}
+desktop_rust_stubs() {
+  # apps/desktop/src-tauri 是独立 Cargo workspace；tauri-build 要求 externalBin 指向的
+  # 占位文件存在（CI 的 desktop-checks 也先 touch 这两个）。占位目录在 apps/desktop/.gitignore 里。
+  local host suffix name stub
+  host="$(rustc -vV 2>/dev/null | sed -n 's/^host: //p')"
+  [ -n "$host" ] || host="x86_64-unknown-linux-gnu"
+  case "$host" in *windows*) suffix=".exe" ;; *) suffix="" ;; esac
+  mkdir -p apps/desktop/src-tauri/binaries
+  for name in ppf-daemon ppf-decoder; do
+    stub="apps/desktop/src-tauri/binaries/${name}-${host}${suffix}"
+    [ -e "$stub" ] || : >"$stub"
+    chmod +x "$stub" 2>/dev/null || true
+  done
 }
 FULL=0
 HAS_CODE=0
@@ -251,6 +267,12 @@ while IFS= read -r f; do
       [ -f "$f" ] && add_gate "bash $f" ;;
     apps/ios/* | tools/ios/*) add_gate "just ios-test" ;;
     assets/i18n/*) add_gate "just mobile-static-check" ;;
+    apps/desktop/src-tauri/*)
+      # 外壳 Rust 是独立 workspace：nextest 要显式 --manifest-path；跑前补 tauri-build 的 sidecar 占位文件。
+      desktop_rust_stubs
+      add_gate "cargo nextest run --manifest-path apps/desktop/src-tauri/Cargo.toml -p p-pass-desktop"
+      ;;
+    apps/desktop/src/*) add_gate "pnpm -C apps/desktop test" ;;
     crates/*/*)
       crate_dir="${f#crates/}"
       crate_dir="${crate_dir%%/*}"
@@ -299,11 +321,16 @@ run_logged() { # run_logged <日志> <命令...>：重编译经 tools/heavy-lock
   fi
 }
 
-# 复用验证：树哈希 + 门禁清单 + 有没有 just verify 都相同，就不重跑。
+# 复用验证：树哈希 + 门禁清单 + 卡上有没有要求真机验证都相同，就不重跑。
+# #1530：just verify 不再默认跑；卡正文写明 **真机验证**：需要 才跑（用户看得到的改动随版本验收，#1471）。
 HAS_VERIFY=0
 just --show verify >/dev/null 2>&1 && HAS_VERIFY=1
+VERIFY_REQUESTED=0
+if printf '%s\n' "${CARD_TEXT:-}" | grep -Eq '真机验证[^：:]*[：:][[:space:]]*需要'; then VERIFY_REQUESTED=1; fi
+DO_VERIFY=0
+[ "$HAS_VERIFY" = 0 ] || [ "$VERIFY_REQUESTED" = 0 ] || DO_VERIFY=1
 VERIFIED="${EVID_DIR}/verified"
-VKEY="tree=${TREE} gates=${GATE} verify=${HAS_VERIFY}"
+VKEY="tree=${TREE} gates=${GATE} verify=${DO_VERIFY}"
 REUSED=""
 if [ -s "$VERIFIED" ] && [ "$(head -n 1 "$VERIFIED")" = "$VKEY" ] && [ -s "${EVID_DIR}/gate.tail" ]; then
   REUSED="$(sed -n 2p "$VERIFIED")"
@@ -311,9 +338,9 @@ fi
 VERIFY_STATE="skipped"
 VERIFY_TAIL=""
 if [ -n "$REUSED" ]; then
-  echo "==> 代码没变（树 ${TREE:0:10}）：复用 ${REUSED} 的验证（${GATE}$([ "$HAS_VERIFY" = 0 ] || echo " + just verify ${N}")），不重跑"
+  echo "==> 代码没变（树 ${TREE:0:10}）：复用 ${REUSED} 的验证（${GATE}$([ "$DO_VERIFY" = 0 ] || echo " + just verify ${N}")），不重跑"
   GATE_TAIL="$(cat "${EVID_DIR}/gate.tail")"
-  if [ "$HAS_VERIFY" = 1 ]; then
+  if [ "$DO_VERIFY" = 1 ]; then
     VERIFY_STATE="passed"
     VERIFY_TAIL="$(cat "${EVID_DIR}/verify.tail" 2>/dev/null)"
   fi
@@ -328,16 +355,18 @@ else
   done
   GATE_TAIL="$(tail -n 5 "${EVID_DIR}/gate.log" | scrub)"
 
-  # ── 3. 验收场景（just verify 存在才跑）──────────────────────────────────
-  if [ "$HAS_VERIFY" = 1 ]; then
+  # ── 3. 验收场景（卡上写明需要真机验证、且 just verify 存在才跑）────────
+  if [ "$DO_VERIFY" = 1 ]; then
     echo "==> just verify ${N}（日志：${EVID_SHOW}/verify.log）"
     run_logged "${EVID_DIR}/verify.log" just verify "$N" || fail_blocked "just verify ${N}" "${EVID_DIR}/verify.log"
     VERIFY_STATE="passed"
     VERIFY_TAIL="$(tail -n 8 "${EVID_DIR}/verify.log" | scrub)"
+  elif [ "$VERIFY_REQUESTED" = 1 ]; then
+    echo "⚠ 卡上写了需要真机验证，但本仓还没有 just verify：只跑了 ${GATE}。验收场景需按 issue 上写的步骤手工做真机验证并回帖。"
   else
-    echo "⚠ 本仓还没有 just verify：只跑了 ${GATE}。验收场景需按 issue 上写的步骤手工做真机验证并回帖。"
+    echo "==> 卡上没写「真机验证：需要」：不跑 just verify（用户看得到的改动随版本验收，#1471）"
   fi
-  # 门禁与 verify 都通过才记：下次树没变就复用。
+  # 门禁与 verify（卡上要求时）都通过才记：下次树没变就复用。
   printf '%s\n' "$GATE_TAIL" >"${EVID_DIR}/gate.tail"
   printf '%s\n' "$VERIFY_TAIL" >"${EVID_DIR}/verify.tail"
   printf '%s\n%s\n' "$VKEY" "$(date '+%Y-%m-%d %H:%M')" >"$VERIFIED"
@@ -356,8 +385,10 @@ git push -u origin "HEAD:refs/heads/${BRANCH}" >"$PUSH_LOG" 2>&1 || fail_blocked
 # ── 5. 回执（贴到每张卡）────────────────────────────────────────────────
 if [ "$VERIFY_STATE" = "passed" ]; then
   LEVEL="E1（${GATE}）+ E3（just verify ${N}）"
+elif [ "$VERIFY_REQUESTED" = 1 ]; then
+  LEVEL="E1（${GATE}）；卡上要求真机验证但本仓暂无 just verify，E3 需手工补"
 else
-  LEVEL="E1（${GATE}）；验收场景未经 just verify 自动验证，E3 需手工补"
+  LEVEL="E1（${GATE}）；卡上没要求真机验证，未跑 just verify"
 fi
 # 级别（判定口径与 owner-triage.sh 一致，见 acceptance-gate.sh classify）：用户看得到的改动随版本验收（#1471），
 # 合入不要验收行；碰核心的（看得见或看不见）正文引用卡上已采纳的方案，看不见的还要带测试（acceptance gate 判）。
@@ -397,8 +428,10 @@ tmp="$(mktemp)"
     echo '```'
     printf '%s\n' "$VERIFY_TAIL"
     echo '```'
+  elif [ "$VERIFY_REQUESTED" = 1 ]; then
+    echo "- 验收：卡上要求真机验证，但本仓暂无 \`just verify\`，未自动验证。"
   else
-    echo "- 验收：本仓暂无 \`just verify\`，未自动验证。"
+    echo "- 验收：卡上没要求真机验证，未跑 \`just verify\`。"
   fi
   [ -z "$ACCEPT_LINE" ] || echo "- 真机验收：${ACCEPT_LINE}"
   echo "- 证据等级：${LEVEL}"
