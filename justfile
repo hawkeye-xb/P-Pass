@@ -274,7 +274,7 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check supply-chain-check mobile-static-check i18n-split-check lockfile-check flow-tests
+ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check supply-chain-check mobile-static-check i18n-split-check lockfile-check flow-tests heavy-lock-test
   @echo "==> CI pipeline: all green ✅"
 
 # 两个 Rust workspace 的 Cargo.lock 都得和实际依赖一致（src-tauri 是独立 workspace，
@@ -309,7 +309,8 @@ i18n-split-check:
 # 只收别的 lane 都没跑的流程自测；md-check / token-check / shell-vars-check / identity-check / supply-chain-check
 # 已在 ci-docs.yml、ci-identity.yml 的其它 job 里跑，留在 ci-docs 的直接依赖里。
 # justfile 里每个 *-test recipe 要么在这里，要么登记在 tools/test-flow-tests-wired.sh 的例外表里（flow-tests-wired-test 会挡）。
-flow-tests: hooks-test flow-worker-test flow-review-test flow-ci-review-test flow-pr-test flow-gate-status-test flow-owner-test heavy-lock-test macos-runner-test main-red-test flow-tests-wired-test
+# heavy-lock-test 依赖 macOS 才有的 lockf，ubuntu 上会 SKIP 假绿，不进这里；登记为例外（#1502），本地 ci / ci-docs 直接依赖它。
+flow-tests: hooks-test flow-worker-test flow-review-test flow-ci-review-test flow-pr-test flow-gate-status-test flow-owner-test macos-runner-test main-red-test flow-tests-wired-test
   @echo "==> flow-tests: green ✅"
 
 # 元测试：每个 *-test recipe 都接进了 flow-tests 或登记的 lane，ci / ci-docs 都依赖 flow-tests，
@@ -325,7 +326,7 @@ flow-tests-wired-test:
 #
 # ⚠️ 只在这次改动**一行 Rust/Kotlin/前端都没动**时用它。碰了代码就跑 `just ci`，
 # 别拿这条快车道当省事的借口——`ci` 的依赖列表一个都没减。
-ci-docs: md-check token-check shell-vars-check identity-check supply-chain-check flow-tests
+ci-docs: md-check token-check shell-vars-check identity-check supply-chain-check flow-tests heavy-lock-test
   @echo "==> docs lane: green ✅（注意：本条不含 fmt/lint/test，动了代码必须跑 just ci）"
 
 # T-040 人工验收：自启/防睡眠/密钥仓 真机冒烟（H-09 双平台各跑一次）

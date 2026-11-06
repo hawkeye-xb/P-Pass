@@ -288,7 +288,8 @@ jobs:
       - name: with-timeout.sh 行为 + 门禁
         run: bash tools/test-release-timeouts.sh
 
-  # #1493：流程门禁脚本的自测（hooks-test、flow-*-test、heavy-lock-test、macos-runner-test、main-red-test …）。
+  # #1493：流程门禁脚本的自测（hooks-test、flow-*-test、macos-runner-test、main-red-test …）。
+  # heavy-lock-test 依赖 macOS 的 lockf，ubuntu 上会 SKIP 假绿，不在这里跑（例外登记，跟进 #1502）。
   # 清单只在 justfile 的 flow-tests recipe 里一份，本地 just ci / ci-docs 与这里共用；
   # 每个 *-test recipe 要么在清单里、要么登记了别的 lane，由 tools/test-flow-tests-wired.sh 挡。名字写死，进 gate。
   flow-tests:

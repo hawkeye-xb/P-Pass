@@ -90,9 +90,11 @@ job 名必须写死**。理由和细节在这里。
 已在别的 job 里跑的（md-check、token-check、shell-vars-check、identity-check、supply-chain-check）不进这份清单，免得重复。
 
 新加 `*-test` recipe 时：能在 ubuntu 上跑的进 `flow-tests`；只能在别的 lane 跑的（要 Android SDK、Xcode 模拟器等），
-登记进 `tools/test-flow-tests-wired.sh` 头部的例外表，写明 workflow 文件、该 workflow 里必须出现的字符串和原因。
+登记进 `tools/test-flow-tests-wired.sh` 头部的例外表，写明 workflow 文件、该 workflow 非注释行里必须出现的字符串和原因。
+在 ubuntu 上会 SKIP 的（如 `heavy-lock-test` 依赖 macOS 的 `lockf`）不许进 `flow-tests` 假绿：登记为「CI 上没有 lane」、带跟进卡号，
+并留在 `ci-docs` 的直接依赖里，至少本地照跑。
 元测试 `just flow-tests-wired-test` 核对每个 `*-test` 都接上了、例外登记的字符串真在那个 workflow 里、
-gate 的 needs 里有 `flow-tests`，并带变异反证；它本身也在 `flow-tests` 里。
+gate 的 needs 里有 `flow-tests`、触发接线（`changes` 的 `flow` 输出与路径）没被改成恒跳过，并带变异反证；它本身也在 `flow-tests` 里。
 
 ## 核心路径
 
