@@ -349,6 +349,43 @@ else
 fi
 
 echo
+echo "==> 7e. #1467：base sha 模式下改名的旧路径也参与判定（把 gated 脚本挪进惰性目录必须要跑）"
+GR="$TMP/rename-repo"
+rename_decide() { # rename_decide <脚本>：临时仓库里把 tools/setup-rust-toolchain.sh 挪到 tools/flow/，按 base 判
+  rm -rf "$GR" && mkdir -p "$GR/tools" &&
+    seq 1 50 >"$GR/tools/setup-rust-toolchain.sh" &&
+    git -C "$GR" init -q --template= &&
+    git -C "$GR" add -A && git -C "$GR" -c user.name=t -c user.email=t@invalid commit -q -m base &&
+    local b && b="$(git -C "$GR" rev-parse HEAD)" &&
+    mkdir -p "$GR/tools/flow" && git -C "$GR" mv tools/setup-rust-toolchain.sh tools/flow/setup-rust-toolchain.sh &&
+    git -C "$GR" -c user.name=t -c user.email=t@invalid commit -q -m mv &&
+    (cd "$GR" && bash "$1" "$b" rust-workspace 2>/dev/null)
+}
+got="$(rename_decide "$SUT")"
+if [ "$got" = "true" ]; then
+  echo "  ✅ 改名 tools/setup-rust-toolchain.sh → tools/flow/ → true"
+  PASS=$((PASS + 1))
+else
+  echo "  ❌ 改名 tools/setup-rust-toolchain.sh → tools/flow/ → 期望 true，实得 ${got}"
+  FAIL=$((FAIL + 1))
+fi
+MUT6="$TMP/mutated6.sh"
+sed 's/git diff --no-renames --name-only/git diff --name-only/' "$SUT" >"$MUT6"
+if cmp -s "$SUT" "$MUT6"; then
+  echo "  ❌ 变异没生效（锚点没匹配上）—— 这一节等于没跑，判失败"
+  FAIL=$((FAIL + 1))
+else
+  got="$(rename_decide "$MUT6")"
+  if [ "$got" = "false" ]; then
+    echo "  ✅ 反证：去掉 --no-renames 后同一改名判 false ⇒ 用例有判别力"
+    PASS=$((PASS + 1))
+  else
+    echo "  ❌ 反证：去掉 --no-renames 后仍判 ${got} ⇒ 用例没有判别力"
+    FAIL=$((FAIL + 1))
+  fi
+fi
+
+echo
 echo "==> 8. 异常路径：不给参数时必须判「要跑」"
 for args in "" "rust-workspace"; do
   # shellcheck disable=SC2086

@@ -138,7 +138,9 @@ list_changed_files() {
   if [ -z "$base" ]; then
     return 1
   fi
-  git diff --name-only "$base...HEAD" 2>/dev/null
+  # --no-renames：改名时旧路径也要参与判定。默认的改名检测只列新路径，把 gated job
+  # 调用的脚本挪进惰性目录（如 tools/setup-rust-toolchain.sh → tools/flow/）就会被判可跳。
+  git diff --no-renames --name-only "$base...HEAD" 2>/dev/null
 }
 
 main() {
