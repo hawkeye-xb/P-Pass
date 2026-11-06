@@ -147,7 +147,8 @@ scene_of() {
 changed_since() {
   local from="$1" to="$2" pr="$3"
   { [ -n "$from" ] && commit_of "$from" >/dev/null; } || { echo "?"; return; }
-  # 验过的包要是新 ref 的祖先，区间历史才完整（浅克隆缺提交、包不在这条线上都判不了 → 待重验）。
+  # 区间历史要完整才判得了：浅克隆（合并分支上可能缺提交，祖先检查也查不出来）、验过的包不是新 ref 的祖先，都判不了 → 待重验。
+  [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = false ] || { echo "?"; return; }
   git merge-base --is-ancestor "$from" "$to" 2>/dev/null || { echo "?"; return; }
   # 两头内容的差异 + 中间提交历史里碰过的文件（改了又改回也算「又被改动」，宁严勿松）。
   { git -c core.quotepath=false diff --name-only --no-renames "$from" "$to" &&

@@ -85,6 +85,11 @@ ledger x v1.1.0-test.2
 run 1 "验过的包不是候选版的祖先（历史不完整 / 不在一条线上）→ 判不了，红" 500 v1.1.0-test.1
 has "#31（ui）待重验：判不了" && ok "  #31 判待重验" || bad "  没判待重验：$(cat "${TMP}/out")"
 ledger x
+# 浅克隆：合并分支上可能缺提交，区间历史不可信 → 判不了。用 .git/shallow 把同一个仓库标成浅克隆（对象都在，只改「是否浅」）。
+git -C "$R" rev-list --max-parents=0 HEAD >"${R}/.git/shallow"
+run 1 "浅克隆里判不了验过之后有没有再改 → 红（fail-closed）" 500 v1.1.0-test.2
+has "#31（ui）待重验：判不了" && ok "  #31 判待重验" || bad "  浅克隆没判待重验：$(cat "${TMP}/out")"
+rm -f "${R}/.git/shallow"
 touch "${FAKE}/ledger.fail"
 run 1 "读不到台账 → 红（fail-closed）" 500 v1.1.0-test.1
 rm -f "${FAKE}/ledger.fail"
