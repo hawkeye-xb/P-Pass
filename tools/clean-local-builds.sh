@@ -348,6 +348,15 @@ if "$clean_targets"; then
           printf 'SKIP       %s — Claude Code session worktree (add --session-worktrees to include)\n' "$worktree"
           continue
         fi
+        held_status=0
+        held=$(open_files_under "$(cd "$worktree" && pwd -P)") || held_status=$?
+        if [[ $held_status -eq 0 ]]; then
+          printf 'SKIP       %s — Claude Code session worktree in use: %s\n' "$worktree" "$(printf '%s' "$held" | head -1)"
+          continue
+        elif [[ $held_status -ge 2 ]]; then
+          printf 'SKIP       %s — cannot tell whether this session worktree is in use (no usable lsof)\n' "$worktree"
+          continue
+        fi
         ;;
     esac
 

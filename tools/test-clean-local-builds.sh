@@ -197,6 +197,9 @@ if command -v lsof >/dev/null 2>&1; then
   in_use=$(cd "$repo" && bash "$cleanup_script" --apply --worktrees --session-worktrees)
   [[ -d "$repo/.claude/worktrees/session" ]] || fail "--session-worktrees removed a session worktree in use: $in_use"
   [[ "$in_use" == *"SKIP       $repo_as_printed/.claude/worktrees/session — Claude Code session worktree in use"* ]] || fail "in-use session worktree not reported: $in_use"
+  mkdir -p "$repo/.claude/worktrees/session/target"
+  in_use_targets=$(cd "$repo" && bash "$cleanup_script" --apply --targets --session-worktrees)
+  [[ -d "$repo/.claude/worktrees/session/target" ]] || fail "--targets --session-worktrees removed the target of a session in use: $in_use_targets"
   kill "$session_pid" 2>/dev/null || true
   wait "$session_pid" 2>/dev/null || true
   trap 'rm -rf "$tmp"' EXIT
