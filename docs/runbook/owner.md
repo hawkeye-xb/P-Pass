@@ -26,7 +26,9 @@ owner 只统筹，不当传声筒：这些命令是 owner 的工具，不是合�
 | 记想法（任何会话） | `just idea "<原话>" [--discuss] [--from <来源>]` | `IDEA DISCUSSION #N` 或 `IDEA ISSUE #N status:inbox Feature` |
 | 分拣新诉求 | `just triage <号> <方案文件>` | `TRIAGE <号> ready \| needs:product \| blocked` |
 | 出 test 包 | `just release-test <端...>` | `RELEASE-TEST OK v<X.Y.Z>-test.N <端...>` |
-| 正式发版前查模块验收 | `just release-acceptance <上一个正式 tag>` | `✓ 发版前验收门禁通过（…）`（退出码 1：缺验收的模块卡逐张列出） |
+| 数自上个 test 包以来的用户可见 PR（每日同步报给产品负责人） | `just release-scope --since <上个 test 包 tag>` | `验收范围 …：N 个 PR 里 M 个用户看得见` |
+| 出 test 包后更新验收台账 | `just release-scope --ledger <台账号> --pkg <test 包 tag>` | `台账 #N（…）：新增 a，待重验 b，仍待验 c，沿用 d` |
+| 正式发版前查台账清零 | `just release-acceptance <台账号> [<候选 ref>]` | `✓ 发版前验收通过（…）`（退出码 1：待验 / 待重验逐项列出） |
 | 合入前独立评审（兜底，平时由 CI 评审 job 做） | `just review <PR号> [--model <模型>]` | `✅ #N 独立评审通过，review/agent=success` |
 | 查 PR 为什么合不进去（任何会话） | `just pr-status <PR号>` | `✅ 全清：…`（退出码 1 有卡点、3 还在等结果） |
 | 回复并关闭评审线程（任何会话） | `just pr-thread <线程ID> "<理由>"` | `已关闭线程 PRRT_…` |
@@ -47,10 +49,10 @@ owner 只统筹，不当传声筒：这些命令是 owner 的工具，不是合�
 - 结论只对评审时的头提交有效，之后推了新提交要重跑。
 - 换模型：`--model <名>`，或 `PPASS_REVIEW_MODEL`；换成别家的命令用 `PPASS_REVIEW_AGENT`
   （要接受同样的 `-p`、`--model`、`--allowedTools` 参数，提示词走 stdin）。
-- 本机跑时，评审通过后对 PR 执行 `gh pr merge --auto --squash`（CI 上不开，自动合入由 `just done` 开 PR 时开）。盯梢、人控级（改动碰界面文案路径
-  或核心路径）多一个条件：与 CI 的 acceptance gate 同一判定（验收记录 / 随模块验收 / 文案确认 / 看不见的核心要已采纳方案与测试，见 `acceptance-gate.sh` 头注释），不满足就判未通过、不开自动合入，
-  评论里写明缺这一行。判定与 `just done`、CI 的 acceptance gate 共用 `acceptance-gate.sh classify`：碰核心路径、`UI_GLOBS`，或 `apps/**` 下的非测试文件。这类 PR 一开始是草稿（`just done` 打印的开 PR 命令自动带 `--draft`），验收后补验收行再 `gh pr ready`；
-  CI 的 `acceptance gate`（`tools/flow/acceptance-gate.sh`）合入前也查这一行。界面路径清单与 `owner-triage.sh` 的 `UI_GLOBS` 共用，核心路径规则取 `origin/main` 上的 `.github/core-paths.txt`。
+- 本机跑时，评审通过后对 PR 执行 `gh pr merge --auto --squash`（CI 上不开，自动合入由 `just done` 开 PR 时开）。碰核心路径的 PR
+  多一个条件：与 CI 的 acceptance gate 同一判定（正文引用已采纳方案，看不见的核心还要带测试，见 `acceptance-gate.sh` 头注释），不满足就判未通过、不开自动合入，
+  评论里写明缺什么。用户看得到的改动（`UI_GLOBS`、`apps/**` 下的非测试文件）合入不要验收行，随版本验收（AGENTS.md「按版本验收」）。
+  级别判定与 `just done`、`just release-scope`、CI 的 acceptance gate 共用 `acceptance-gate.sh classify`；界面路径清单与 `owner-triage.sh` 的 `UI_GLOBS` 共用，核心路径规则取 `origin/main` 上的 `.github/core-paths.txt`。
 - `review/agent` 进 main 的必需检查由产品负责人在仓库设置里做（命令见 #1435 的 PR 正文），脚本不改仓库设置。
   没进之前它只是评论与提交状态，不拦合入，`just done` 也不会开自动合入。
 
