@@ -4,25 +4,45 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: tools/clean-local-builds.sh [--targets] [--worktrees] [--all] [--apply]
+Usage: tools/clean-local-builds.sh [--targets] [--worktrees] [--all] [--cache]
+                                   [--cache-days N] [--cache-max SIZE]
+                                   [--session-worktrees] [--apply]
 
 Without --apply, this command only previews candidates.
 
 Scopes:
   --targets     Remove target/ directories only. Source worktrees remain.
+                Targets inside .claude/worktrees/ are skipped unless
+                --session-worktrees is also given.
   --worktrees   Remove only registered worktrees that are clean, merged into
                 origin/main, not the current worktree, and have no active build.
-  --all         Select both scopes.
+                Worktrees under .claude/worktrees/ (Claude Code session working
+                directories, archived by the app) are skipped unless
+                --session-worktrees is also given; even then one is kept
+                while any process has its cwd or a file open inside it, or
+                when that cannot be checked (no lsof).
+  --all         Select --targets and --worktrees.
+  --cache       Sweep the shared Cargo cache (#1375, located through
+                tools/e3/lib/dev-cache.sh) with cargo-sweep: first artifacts
+                older than --cache-days (default 7), then oldest artifacts
+                until the cache is below --cache-max (default 40GB).
+                Needs cargo-sweep (cargo install cargo-sweep --locked).
 
 Safety:
   --apply is mandatory for deletion. --apply also requires an explicit scope.
   A target/ or worktree with an active Cargo/Rustc/Gradle/Node build is skipped.
+  --cache waits for the heavy-build lock (tools/heavy-lock) and does not sweep
+  while any process holds a file open inside the cache.
 EOF
 }
 
 apply=false
 clean_targets=false
 clean_worktrees=false
+clean_cache=false
+session_worktrees=false
+cache_days=7
+cache_max=40GB
 selected_scope=false
 
 while (($#)); do
@@ -31,6 +51,13 @@ while (($#)); do
     --targets) clean_targets=true; selected_scope=true ;;
     --worktrees) clean_worktrees=true; selected_scope=true ;;
     --all) clean_targets=true; clean_worktrees=true; selected_scope=true ;;
+    --cache) clean_cache=true; selected_scope=true ;;
+    --session-worktrees) session_worktrees=true ;;
+    --cache-days|--cache-max)
+      [[ $# -ge 2 ]] || { printf 'error: %s needs a value\n' "$1" >&2; exit 2; }
+      if [[ "$1" == --cache-days ]]; then cache_days="$2"; else cache_max="$2"; fi
+      shift
+      ;;
     -h|--help) usage; exit 0 ;;
     *) printf 'error: unknown option: %s\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
@@ -38,14 +65,22 @@ while (($#)); do
 done
 
 if "$apply" && ! "$selected_scope"; then
-  printf 'error: --apply requires --targets, --worktrees, or --all\n' >&2
+  printf 'error: --apply requires --targets, --worktrees, --all, or --cache\n' >&2
   exit 2
 fi
 
+case "$cache_days" in
+  ''|*[!0-9]*) printf 'error: --cache-days must be a whole number of days\n' >&2; exit 2 ;;
+esac
+
 # Previewing without a selector means show both categories; it cannot delete.
+# The shared cache is only named here (its dry run walks ~100G and takes minutes);
+# --cache previews it for real.
+preview_cache_location=false
 if ! "$selected_scope"; then
   clean_targets=true
   clean_worktrees=true
+  preview_cache_location=true
 fi
 
 repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
@@ -55,6 +90,11 @@ repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || {
 repo_root=$(cd "$repo_root" && pwd -P)
 current_worktree=$(pwd -P)
 cd "$repo_root"
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+# #1490: the shared cache lives outside every worktree, so it can only be found
+# the way the build finds it — through the same dev-cache helpers.
+# shellcheck source=tools/e3/lib/dev-cache.sh
+. "$script_dir/e3/lib/dev-cache.sh"
 
 mapfile_worktrees() {
   git worktree list --porcelain | while IFS= read -r line; do
@@ -136,6 +176,45 @@ target_size() {
   du -sh "$1/target" 2>/dev/null | awk '{print $1}' || printf '?'
 }
 
+# #1490: 0 = some process holds a file open (or has its working directory)
+# inside <dir> (paths on stdout); 1 = none; 2 = cannot tell. Same three states
+# as has_active_build: not being able to look is not the same as nobody using it.
+open_files_under() {
+  local dir="$1" listing
+  command -v lsof >/dev/null 2>&1 || return 2
+  # A non-zero exit means some process could not be read: the listing may be
+  # missing exactly the one using <dir>, so it counts as "cannot tell".
+  listing=$(lsof -nP -Fn 2>/dev/null) || return 2
+  listing=$(printf '%s\n' "$listing" | sed -n 's/^n//p' |
+    awk -v d="$dir" '$0 == d || index($0, d "/") == 1' | sort -u | head -5)
+  [[ -n "$listing" ]] || return 1
+  printf '%s\n' "$listing"
+  return 0
+}
+
+# #1490: runs inside tools/heavy-lock. 0 = swept; 3 = cache in use, skipped;
+# 4 = cannot tell whether it is in use, refused; anything else = sweep failed.
+locked_sweep() {
+  local cache="$1" main_root="$2" days="$3" max="$4" held held_status=0 policy
+  shift 4
+  held=$(open_files_under "$cache") || held_status=$?
+  if [[ $held_status -eq 0 ]]; then
+    printf 'SKIP       %s — files open in it (a build is using it); try again later:\n' "$cache"
+    printf '%s\n' "$held" | sed 's/^/             /'
+    return 3
+  elif [[ $held_status -ge 2 ]]; then
+    printf 'SKIP       %s — cannot tell whether a build is using it (no usable lsof); refusing to sweep\n' "$cache"
+    return 4
+  fi
+  for policy in "--time $days" "--maxsize $max"; do
+    # shellcheck disable=SC2086 # policy is "<flag> <value>" on purpose
+    if ! CARGO_TARGET_DIR="$cache" cargo-sweep sweep "$@" $policy "$main_root"; then
+      printf 'FAILED     cargo-sweep sweep %s\n' "$policy"
+      return 1
+    fi
+  done
+}
+
 worktree_is_removable() {
   local worktree="$1"
   local active
@@ -146,6 +225,30 @@ worktree_is_removable() {
   # `-ef` 比的是 device+inode，即「是不是同一个文件」——顺带也解决了 macOS
   # 上 /var 与 /private/var 这类符号链接导致的写法差异。
   # `-ef` 要求两边都存在，所以前面加 -d 守一下，并保留字符串相等作为兜底。
+  # #1490: .claude/worktrees/* are live Claude Code session directories. Their
+  # branch is often pushed and merged (upstream gone) while the session is still
+  # open, so the merged test below would delete a session from under itself —
+  # it did on 2026-11-06, twice. The app archives them; we only touch them when
+  # asked explicitly.
+  case "$worktree" in
+    */.claude/worktrees/*)
+      if ! "$session_worktrees"; then
+        printf 'Claude Code session worktree (add --session-worktrees to include)'
+        return 1
+      fi
+      # Even when asked: a session that is still open has its shell (cwd) or
+      # files inside the directory. Not being able to look means refusing.
+      local held held_status=0
+      held=$(open_files_under "$(cd "$worktree" 2>/dev/null && pwd -P || printf '%s' "$worktree")") || held_status=$?
+      if [[ $held_status -eq 0 ]]; then
+        printf 'Claude Code session worktree in use: %s' "$(printf '%s' "$held" | head -1)"
+        return 1
+      elif [[ $held_status -ge 2 ]]; then
+        printf 'cannot tell whether this session worktree is in use (no usable lsof); refusing to remove'
+        return 1
+      fi
+      ;;
+  esac
   if [[ -d "$worktree" && "$worktree" -ef "$current_worktree" ]] ||
     [[ "$worktree" == "$current_worktree" ]]; then
     printf 'current worktree'
@@ -238,6 +341,25 @@ if "$clean_targets"; then
   printf '\n== Build caches ==\n'
   for worktree in "${worktrees[@]}"; do
     [[ -d "$worktree" ]] || continue  # A selected worktree may have just gone away.
+    # #1490: same rule as --worktrees — a live session may be building there
+    # with a relative command line that has_active_build cannot attribute.
+    case "$worktree" in
+      */.claude/worktrees/*)
+        if ! "$session_worktrees"; then
+          printf 'SKIP       %s — Claude Code session worktree (add --session-worktrees to include)\n' "$worktree"
+          continue
+        fi
+        held_status=0
+        held=$(open_files_under "$(cd "$worktree" && pwd -P)") || held_status=$?
+        if [[ $held_status -eq 0 ]]; then
+          printf 'SKIP       %s — Claude Code session worktree in use: %s\n' "$worktree" "$(printf '%s' "$held" | head -1)"
+          continue
+        elif [[ $held_status -ge 2 ]]; then
+          printf 'SKIP       %s — cannot tell whether this session worktree is in use (no usable lsof)\n' "$worktree"
+          continue
+        fi
+        ;;
+    esac
 
     active=$(has_active_build "$worktree" || true)
     if [[ -n "$active" ]]; then
@@ -277,13 +399,69 @@ if "$clean_targets"; then
         rm -rf "$target"
         printf 'REMOVED    %s\n' "$target"
       fi
-    done < <(find "$worktree" \( -type d -name node_modules -o -type d -name .git \) -prune -o \
+    # #1490: prune .claude/worktrees — session worktrees nest inside the main
+    # checkout and are handled (or skipped) as registered worktrees of their own.
+    done < <(find "$worktree" \( -type d -name node_modules -o -type d -name .git \
+                  -o -type d -path '*/.claude/worktrees' \) -prune -o \
                   -type d -name target -print 2>/dev/null | sort)
 
     "$found_any" || printf 'ABSENT     %s — no Cargo target directory\n' "$worktree"
   done
 fi
 
+# #1490: the shared Cargo cache (CARGO_TARGET_DIR from .env.ppass-dev). Before
+# this, nothing here ever looked at it: the cleanup only knew <worktree>/target,
+# so the one directory that actually grows (104G on 2026-11-06) was invisible.
+shared_cache_dir() {
+  local dir
+  dir=$(dev_cache_value CARGO_TARGET_DIR "$repo_root")
+  [[ -n "$dir" ]] || dir="${CARGO_TARGET_DIR:-}"
+  [[ -n "$dir" && -d "$dir" ]] || return 1
+  (cd "$dir" && pwd -P)
+}
+
+free_space() {
+  df -Pk "$1" 2>/dev/null | awk 'NR==2 {printf "%.1fG", $4 / 1024 / 1024}'
+}
+
+cache_failed=false
+if "$clean_cache" || "$preview_cache_location"; then
+  printf '\n== Shared Cargo cache ==\n'
+  if ! cache=$(shared_cache_dir); then
+    printf 'ABSENT     no shared cache configured (%s has no CARGO_TARGET_DIR)\n' \
+      "$(dev_cache_env_file "$repo_root" 2>/dev/null || printf '.env.ppass-dev')"
+  elif ! "$clean_cache"; then
+    printf 'CACHE      %s (preview and sweep it with --cache)\n' "$cache"
+  elif ! command -v cargo-sweep >/dev/null 2>&1; then
+    # Never fall back to rm -rf: the cache is shared by every session on this
+    # machine, and cargo-sweep is what knows which artifacts are stale.
+    printf 'SKIP       %s — cargo-sweep is not installed; run: cargo install cargo-sweep --locked\n' "$cache"
+    "$apply" && cache_failed=true
+  else
+    main_root=$(dev_cache_main_root "$repo_root")
+    sweep_args=()
+    "$apply" || sweep_args+=(--dry-run)
+    printf 'CACHE      %s (free before: %s)\n' "$cache" "$(free_space "$cache")"
+    # Check-then-sweep runs inside ONE hold of the heavy-build lock (#1308):
+    # checking first and queueing for the lock afterwards would let a build
+    # that starts while we wait (up to PPASS_HEAVY_LOCK_WAIT) slip past the
+    # check and have its artifacts swept from under it.
+    export -f open_files_under locked_sweep
+    sweep_status=0
+    "$script_dir/heavy-lock" bash -c 'locked_sweep "$@"' locked_sweep \
+      "$cache" "$main_root" "$cache_days" "$cache_max" ${sweep_args[@]+"${sweep_args[@]}"} || sweep_status=$?
+    case $sweep_status in
+      0) "$apply" && printf 'SWEPT      %s (free after: %s)\n' "$cache" "$(free_space "$cache")" ;;
+      3) ;;  # in use: skipped, try again later; not a failure
+      4) "$apply" && cache_failed=true ;;  # cannot tell: refusing is a failure only when deleting
+      *) cache_failed=true ;;  # cargo-sweep or the lock failed: a failed dry run is a failure too
+    esac
+  fi
+fi
+
 if ! "$apply"; then
   printf '\nPreview only. Re-run with --apply and an explicit scope to delete.\n'
+fi
+if "$cache_failed"; then
+  exit 1
 fi

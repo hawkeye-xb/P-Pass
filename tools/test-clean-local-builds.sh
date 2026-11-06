@@ -14,6 +14,39 @@ trap 'rm -rf "$tmp"' EXIT
 # 删掉」这种安全回归都照样报 ok。与 QA-02 记录的「变异 C 空转」同型。
 fail() { printf 'ASSERT FAILED: %s\n' "$1" >&2; exit 1; }
 
+# #1490: the shared Cargo cache is located through tools/e3/lib/dev-cache.sh.
+# Point it at a fixture parent so the test can never see — let alone sweep —
+# the developer's real cache. `just` loads CARGO_TARGET_DIR from .env.ppass-dev
+# into every recipe, so it must be cleared too, or a broken locator would
+# silently "pass" by falling back to the real cache in the environment.
+unset CARGO_TARGET_DIR
+cache_parent="$tmp/cache-parent"
+cache="$cache_parent/P-Pass-cache/cargo-target"
+mkdir -p "$cache/debug/deps"
+printf 'artifact\n' > "$cache/debug/deps/libfixture.rlib"
+printf 'CARGO_TARGET_DIR=%s\n' "$cache" > "$cache_parent/.env.ppass-dev"
+export PPASS_DEV_CACHE_PARENT="$cache_parent"
+cache_real=$(cd "$cache" && pwd -P)
+# Our own heavy-build lock, so the test neither waits for nor blocks real builds.
+export PPASS_HEAVY_LOCK="$tmp/heavy.lock"
+unset PPASS_HEAVY_LOCK_HELD
+# A cargo-sweep stub that only records how it was called.
+stub_bin="$tmp/stub-bin"
+sweep_log="$tmp/sweep.log"
+mkdir -p "$stub_bin"
+cat > "$stub_bin/cargo-sweep" <<EOF
+#!/usr/bin/env bash
+printf 'CARGO_TARGET_DIR=%s args=%s\\n' "\$CARGO_TARGET_DIR" "\$*" >> "$sweep_log"
+EOF
+chmod +x "$stub_bin/cargo-sweep"
+# PATH without any real cargo-sweep (the developer may have one installed).
+no_sweep_path=""
+IFS=: read -r -a path_entries <<< "$PATH"
+for entry in "${path_entries[@]}"; do
+  [[ -n "$entry" && ! -x "$entry/cargo-sweep" ]] || continue
+  no_sweep_path="${no_sweep_path:+$no_sweep_path:}$entry"
+done
+
 
 remote="$tmp/remote.git"
 repo="$tmp/repo"
@@ -57,6 +90,10 @@ git -C "$repo" worktree add -b merged "$repo/.worktrees/merged" main >/dev/null
 git -C "$repo" worktree add -b dirty "$repo/.worktrees/dirty" main >/dev/null
 git -C "$repo" worktree add -b active "$repo/.worktrees/active" main >/dev/null
 git -C "$repo" worktree add -b pending "$repo/.worktrees/pending" main >/dev/null
+# #1490: a Claude Code session directory that is clean and merged — exactly what
+# --worktrees would otherwise remove while the session is still open.
+git -C "$repo" worktree add -b session "$repo/.claude/worktrees/session" main >/dev/null
+mkdir -p "$repo/.claude/worktrees/session/target"
 
 mkdir -p "$repo/target" "$repo/.worktrees/merged/target" \
   "$repo/.worktrees/dirty/target" "$repo/.worktrees/active/target"
@@ -68,6 +105,14 @@ git -C "$repo/.worktrees/pending" commit --no-verify -m 'pending' >/dev/null
 # Default mode is a non-destructive preview.
 preview=$(cd "$repo" && bash "$cleanup_script")
 [[ "$preview" == *'Mode: PREVIEW'* ]] || fail "[[ \"$preview\" == *'Mode: PREVIEW'* ]]"
+# #1490: the shared cache is found through dev-cache, and only named in a plain preview.
+[[ "$preview" == *"CACHE      $cache_real (preview and sweep it with --cache)"* ]] || fail "plain preview does not locate the shared cache: $preview"
+[[ ! -e "$sweep_log" ]] || fail 'plain preview ran cargo-sweep'
+# Counter-proof: without the dev-cache env file there is nothing to find.
+mkdir -p "$tmp/no-cache-parent"
+no_cache=$(cd "$repo" && PPASS_DEV_CACHE_PARENT="$tmp/no-cache-parent" bash "$cleanup_script")
+[[ "$no_cache" == *'ABSENT     no shared cache configured'* ]] || fail "cache found without dev-cache config: $no_cache"
+[[ "$no_cache" != *"$cache_real"* ]] || fail "cache path printed without dev-cache config: $no_cache"
 [[ -d "$repo/target" ]] || fail "[[ -d \"$repo/target\" ]]"
 [[ -d "$repo/.worktrees/merged/target" ]] || fail "[[ -d \"$repo/.worktrees/merged/target\" ]]"
 
@@ -78,6 +123,17 @@ preview=$(cd "$repo" && bash "$cleanup_script")
 [[ -d "$repo/.worktrees/merged" ]] || fail "[[ -d \"$repo/.worktrees/merged\" ]]"
 [[ -d "$repo/.worktrees/dirty" ]] || fail "[[ -d \"$repo/.worktrees/dirty\" ]]"
 [[ -d "$repo/.worktrees/pending" ]] || fail "[[ -d \"$repo/.worktrees/pending\" ]]"
+[[ -f "$cache/debug/deps/libfixture.rlib" ]] || fail '--targets touched the shared cache'
+# #1490: a session worktree's target is not cleared by default either.
+[[ -d "$repo/.claude/worktrees/session/target" ]] || fail '--targets removed a Claude Code session target'
+
+# #1490 --cache: never rm -rf when cargo-sweep is missing — refuse and say how to install it.
+missing_status=0
+missing=$(cd "$repo" && PATH="$no_sweep_path" bash "$cleanup_script" --apply --cache) || missing_status=$?
+[[ $missing_status -ne 0 ]] || fail "--apply --cache without cargo-sweep exited 0: $missing"
+[[ "$missing" == *'cargo install cargo-sweep --locked'* ]] || fail "no install hint: $missing"
+[[ -f "$cache/debug/deps/libfixture.rlib" ]] || fail 'cache touched without cargo-sweep'
+[[ ! -e "$sweep_log" ]] || fail 'stub ran although PATH had no cargo-sweep'
 
 # A process whose command line represents a build in this worktree blocks removal.
 mkdir -p "$repo/.worktrees/active/target"
@@ -108,6 +164,9 @@ trap 'kill "$active_pid" 2>/dev/null || true; rm -rf "$tmp"' EXIT
 sleep 1
 
 worktree_apply=$(cd "$repo" && bash "$cleanup_script" --apply --worktrees)
+# #1490: session directories are not removed by default…
+[[ -d "$repo/.claude/worktrees/session" ]] || fail "--worktrees removed a Claude Code session worktree: $worktree_apply"
+[[ "$worktree_apply" == *"SKIP       $repo_as_printed/.claude/worktrees/session — Claude Code session worktree"* ]] || fail "session worktree not reported as skipped: $worktree_apply"
 [[ "$worktree_apply" == *"REMOVED    $repo_as_printed/.worktrees/merged"* ]] || fail "[[ \"\$worktree_apply\" == *\"REMOVED    $repo_as_printed/.worktrees/merged\"* ]]"
 [[ ! -d "$repo/.worktrees/merged" ]] || fail "[[ ! -d \"$repo/.worktrees/merged\" ]]"
 [[ -d "$repo/.worktrees/dirty" ]] || fail "[[ -d \"$repo/.worktrees/dirty\" ]]"
@@ -127,5 +186,109 @@ worktree_apply=$(cd "$repo" && bash "$cleanup_script" --apply --worktrees)
 kill "$active_pid" 2>/dev/null || true
 wait "$active_pid" 2>/dev/null || true
 trap 'rm -rf "$tmp"' EXIT
+
+if command -v lsof >/dev/null 2>&1; then
+  # …and even when asked, not while a process still works inside it (a live
+  # session's shell has its cwd there).
+  (cd "$repo/.claude/worktrees/session" && exec "$sleeper" -c 'import time; time.sleep(300)') &
+  session_pid=$!
+  trap 'kill "$session_pid" 2>/dev/null || true; rm -rf "$tmp"' EXIT
+  sleep 1
+  in_use=$(cd "$repo" && bash "$cleanup_script" --apply --worktrees --session-worktrees)
+  [[ -d "$repo/.claude/worktrees/session" ]] || fail "--session-worktrees removed a session worktree in use: $in_use"
+  [[ "$in_use" == *"SKIP       $repo_as_printed/.claude/worktrees/session — Claude Code session worktree in use"* ]] || fail "in-use session worktree not reported: $in_use"
+  mkdir -p "$repo/.claude/worktrees/session/target"
+  in_use_targets=$(cd "$repo" && bash "$cleanup_script" --apply --targets --session-worktrees)
+  [[ -d "$repo/.claude/worktrees/session/target" ]] || fail "--targets --session-worktrees removed the target of a session in use: $in_use_targets"
+  kill "$session_pid" 2>/dev/null || true
+  wait "$session_pid" 2>/dev/null || true
+  trap 'rm -rf "$tmp"' EXIT
+fi
+
+# …only when asked for explicitly and nobody is inside it (counter-proof that
+# the skips are the new rules, not something else keeping the fixture alive).
+session_apply=$(cd "$repo" && bash "$cleanup_script" --apply --worktrees --session-worktrees)
+[[ ! -d "$repo/.claude/worktrees/session" ]] || fail "--session-worktrees did not remove the merged session worktree: $session_apply"
+
+if command -v lsof >/dev/null 2>&1; then
+  # #1490: a file held open inside the cache (a build using it) blocks the sweep.
+  "$sleeper" -c 'import sys, time; f = open(sys.argv[1]); time.sleep(300)' "$cache/debug/deps/libfixture.rlib" &
+  holder_pid=$!
+  trap 'kill "$holder_pid" 2>/dev/null || true; rm -rf "$tmp"' EXIT
+  sleep 1
+  held=$(cd "$repo" && PATH="$stub_bin:$PATH" bash "$cleanup_script" --apply --cache)
+  [[ "$held" == *"SKIP       $cache_real — files open in it"* ]] || fail "open cache file did not block the sweep: $held"
+  [[ "$held" == *"$cache_real/debug/deps/libfixture.rlib"* ]] || fail "open file not named: $held"
+  [[ ! -e "$sweep_log" ]] || fail 'cargo-sweep ran while a file in the cache was open'
+  [[ -f "$cache/debug/deps/libfixture.rlib" ]] || fail 'open cache file was removed'
+  kill "$holder_pid" 2>/dev/null || true
+  wait "$holder_pid" 2>/dev/null || true
+  trap 'rm -rf "$tmp"' EXIT
+
+  if command -v lockf >/dev/null 2>&1; then
+    # The in-use check happens inside the heavy-build lock, not before queueing:
+    # a build that starts while the sweep waits for the lock must still stop it.
+    # The lock is released only after the holder's open file is visible to lsof,
+    # so the outcome does not depend on how fast Python starts.
+    lockf -k "$PPASS_HEAVY_LOCK" bash -c 'while [ ! -e "$1" ]; do sleep 0.1; done' _ "$tmp/go" &
+    lock_pid=$!
+    sleep 1
+    (cd "$repo" && PATH="$stub_bin:$PATH" bash "$cleanup_script" --apply --cache > "$tmp/waited.out") &
+    waiter_pid=$!
+    "$sleeper" -c 'import sys, time; f = open(sys.argv[1]); time.sleep(300)' "$cache/debug/deps/libfixture.rlib" &
+    holder_pid=$!
+    trap 'kill "$holder_pid" 2>/dev/null || true; touch "$tmp/go"; rm -rf "$tmp"' EXIT
+    for _ in $(seq 1 100); do
+      lsof -nP -Fn -p "$holder_pid" 2>/dev/null | grep -qF "libfixture.rlib" && break
+      sleep 0.1
+    done
+    lsof -nP -Fn -p "$holder_pid" 2>/dev/null | grep -qF "libfixture.rlib" || fail 'fixture holder never opened the cache file'
+    touch "$tmp/go"
+    wait "$waiter_pid" || fail "sweep that waited for the lock failed: $(cat "$tmp/waited.out")"
+    wait "$lock_pid" 2>/dev/null || true
+    [[ "$(cat "$tmp/waited.out")" == *"SKIP       $cache_real — files open in it"* ]] || fail "build started while waiting for the lock was not seen: $(cat "$tmp/waited.out")"
+    [[ ! -e "$sweep_log" ]] || fail 'cargo-sweep ran although a build started while it waited for the lock'
+    kill "$holder_pid" 2>/dev/null || true
+    wait "$holder_pid" 2>/dev/null || true
+    trap 'rm -rf "$tmp"' EXIT
+  fi
+
+  # An incomplete lsof listing (non-zero exit, partial output) is "cannot tell",
+  # never "nobody uses it".
+  mkdir -p "$tmp/partial-lsof-bin"
+  printf '#!/usr/bin/env bash\nprintf "p1\\nn/unrelated/file\\n"\nexit 1\n' > "$tmp/partial-lsof-bin/lsof"
+  chmod +x "$tmp/partial-lsof-bin/lsof"
+  partial_status=0
+  partial=$(cd "$repo" && PATH="$tmp/partial-lsof-bin:$stub_bin:$PATH" bash "$cleanup_script" --apply --cache) || partial_status=$?
+  [[ $partial_status -ne 0 && "$partial" == *'cannot tell whether a build is using it'* ]] || fail "partial lsof listing was trusted: $partial"
+  [[ ! -e "$sweep_log" ]] || fail 'cargo-sweep ran on a partial lsof listing'
+
+  # A failed sweep is a failure in preview too, not a silent exit 0.
+  printf '#!/usr/bin/env bash\nexit 7\n' > "$tmp/broken-sweep"
+  mkdir -p "$tmp/broken-bin" && mv "$tmp/broken-sweep" "$tmp/broken-bin/cargo-sweep" && chmod +x "$tmp/broken-bin/cargo-sweep"
+  broken_status=0
+  broken=$(cd "$repo" && PATH="$tmp/broken-bin:$PATH" bash "$cleanup_script" --cache) || broken_status=$?
+  [[ $broken_status -ne 0 && "$broken" == *'FAILED     cargo-sweep sweep'* ]] || fail "failed dry run reported success: $broken"
+
+  # Preview is a cargo-sweep dry run against the shared cache, for both policies.
+  (cd "$repo" && PATH="$stub_bin:$PATH" bash "$cleanup_script" --cache >/dev/null)
+  [[ "$(grep -c -- '--dry-run' "$sweep_log")" == 2 ]] || fail "preview did not dry-run both sweeps: $(cat "$sweep_log")"
+  grep -qF -- "CARGO_TARGET_DIR=$cache_real args=sweep --dry-run --time 7 $repo" "$sweep_log" || fail "time sweep not aimed at the shared cache: $(cat "$sweep_log")"
+  grep -qF -- "CARGO_TARGET_DIR=$cache_real args=sweep --dry-run --maxsize 40GB $repo" "$sweep_log" || fail "size sweep not aimed at the shared cache: $(cat "$sweep_log")"
+  rm -f "$sweep_log"
+
+  # Apply (nothing open any more) sweeps for real, with the given limits.
+  swept=$(cd "$repo" && PATH="$stub_bin:$PATH" bash "$cleanup_script" --apply --cache --cache-days 3 --cache-max 10GB)
+  [[ "$swept" == *"SWEPT      $cache_real"* ]] || fail "apply did not report the sweep: $swept"
+  grep -qF -- "CARGO_TARGET_DIR=$cache_real args=sweep --time 3 $repo" "$sweep_log" || fail "time sweep not applied: $(cat "$sweep_log")"
+  grep -qF -- "CARGO_TARGET_DIR=$cache_real args=sweep --maxsize 10GB $repo" "$sweep_log" || fail "size sweep not applied: $(cat "$sweep_log")"
+  ! grep -q -- '--dry-run' "$sweep_log" || fail "apply still dry-ran: $(cat "$sweep_log")"
+else
+  # No lsof (Git Bash on Windows): cannot tell whether the cache is in use → refuse.
+  blind_status=0
+  blind=$(cd "$repo" && PATH="$stub_bin:$PATH" bash "$cleanup_script" --apply --cache) || blind_status=$?
+  [[ $blind_status -ne 0 && "$blind" == *'cannot tell whether a build is using it'* ]] || fail "sweep without lsof was not refused: $blind"
+  [[ ! -e "$sweep_log" ]] || fail 'cargo-sweep ran without lsof'
+fi
 
 printf 'ok: clean-local-builds safety integration test\n'
