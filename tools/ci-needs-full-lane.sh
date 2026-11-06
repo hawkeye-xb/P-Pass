@@ -147,8 +147,15 @@ static_inert() {
 #     build.rs、config/、不认识的路径……）。
 # 判不了的一律判要跑：取不到仓库根、改动文件在 HEAD 已不存在（改名/删除的旧路径，
 # 引用方可能正因此坏掉）、git grep 出错（退出码 ≥2；1 只表示没命中）、闭包超过上限、
-# 门禁 workflow 或其 action 用 tools/ 加通配符或变量拼路径（引用不写名字，追不到）。
+# 门禁 workflow 或其 action 用 tools/ 加通配符或变量拼路径、门禁直接调用的 tools/ 脚本
+# 用变量拼要 source / 执行的文件名（引用不写名字，追不到）。
 GATED_WORKFLOWS=".github/workflows/ci-rust.yml .github/workflows/ci-desktop.yml"
+# 「文件名是变量」：参数的最后一段以 $var / ${var} 开头。多判只会多跑。
+DYN_VAR='\$\{?[A-Za-z_][A-Za-z0-9_]*\}?'
+DYN_ARG='("?'"$DYN_VAR"'[^/"[:space:]]*"?|[^;&|]*/'"$DYN_VAR"'[^/"[:space:]]*"?)([[:space:];)]|$)'
+DYN_SOURCE='(^|[[:space:];&|(])source[[:space:]]+'"$DYN_ARG"
+DYN_DOT='(^[[:space:]]*|[;&|(][[:space:]]*)\.[[:space:]]+'"$DYN_ARG"
+DYN_EXEC='(^|[[:space:];&|(])(bash|sh|python3?|exec)[[:space:]]+([^;&|]*/'"$DYN_VAR"'[^/"[:space:]]*|"?'"$DYN_VAR"'\.(sh|py))"?([[:space:];)]|$)'
 CLOSURE_MAX=300
 ROOT=""
 DYN_CHECKED=""
@@ -177,6 +184,20 @@ gated_has_dynamic_tools_ref() {
     say "门禁 workflow / action 用通配符或变量拼 tools/ 路径（见上）→ 引用追不全"
     return 0
   fi
+  # 门禁直接调用的 tools/ 脚本里，source / . / bash / sh / python / exec 的目标文件名是变量
+  # （如 `source "$(dirname "$0")/$lib.sh"`）：被拼出来的那个文件不写名字，闭包追不到它。
+  local entries e
+  entries="$(grep -hoE 'tools/[A-Za-z0-9_./-]*[A-Za-z0-9_-]' "${wf_files[@]}" | sort -u)"
+  for e in $entries; do
+    case "$e" in
+      tools/ci-needs-full-lane.sh | tools/test-ci-needs-full-lane.sh) continue ;;
+    esac
+    [ -f "$e" ] || continue
+    if grep -nHE -e "$DYN_SOURCE" -e "$DYN_DOT" -e "$DYN_EXEC" "$e" >&2; then
+      say "门禁调用的「${e}」用变量拼要加载/执行的文件名（见上）→ 引用追不全"
+      return 0
+    fi
+  done
   false
 }
 

@@ -469,6 +469,40 @@ else
   FAIL=$((FAIL + 1))
 fi
 
+# 门禁直接调用的脚本用变量拼 source 的文件名：被拼出来的辅助脚本不写名字，追不到，一律要跑。
+# （基准仓库里 gated.sh 已有一行写死文件名的 source，lonely.sh 判 false ⇒ 写死的不会误判。）
+DS="$TMP/closure-dyn-source"
+rm -rf "$DS" && cp -R "$CR" "$DS"
+# shellcheck disable=SC2016 # 字面量写进夹具，不展开
+printf 'lib="$1"\nsource "$(dirname "$0")/$lib.sh"\n' >>"$DS/tools/gated.sh"
+ds_decide() { (cd "$DS" && echo tools/lonely.sh | bash "$1" - "$2" 2>/dev/null); }
+for lane in default rust-workspace; do
+  got="$(ds_decide "$SUT" "$lane")"
+  if [ "$got" = "true" ]; then
+    echo "  ✅ 门禁脚本用变量拼 source 文件名时 lonely.sh（lane=${lane}）→ true"
+    PASS=$((PASS + 1))
+  else
+    echo "  ❌ 门禁脚本用变量拼 source 文件名时 lonely.sh（lane=${lane}）→ 期望 true，实得 ${got}"
+    FAIL=$((FAIL + 1))
+  fi
+done
+MUT9="$TMP/mutated9.sh"
+# shellcheck disable=SC2016 # sed 表达式里的 $ 是字面量
+sed 's/-e "\$DYN_SOURCE" -e "\$DYN_DOT" -e "\$DYN_EXEC" "\$e"/-e zzz-never-matches "$e"/' "$SUT" >"$MUT9"
+if cmp -s "$SUT" "$MUT9"; then
+  echo "  ❌ 变异没生效（锚点没匹配上）—— 动态 source 的反证等于没跑，判失败"
+  FAIL=$((FAIL + 1))
+else
+  got="$(ds_decide "$MUT9" default)"
+  if [ "$got" = "false" ]; then
+    echo "  ✅ 反证：去掉门禁脚本的动态引用检查后同一夹具判 false ⇒ 用例有判别力"
+    PASS=$((PASS + 1))
+  else
+    echo "  ❌ 反证：去掉动态引用检查后仍判 ${got} ⇒ 用例没有判别力"
+    FAIL=$((FAIL + 1))
+  fi
+fi
+
 echo "  -- 反证：去掉闭包追溯（只看直接引用），辅助脚本必须判 false --"
 MUT7="$TMP/mutated7.sh"
 grep -v '# 闭包追溯' "$SUT" >"$MUT7"
