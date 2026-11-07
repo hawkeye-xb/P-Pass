@@ -82,10 +82,15 @@
    only when all of it is green does `create-draft` create the tag (on the verified commit)
    and the draft Release with platform assets. A red verification leaves no tag behind.
    > **Acceptance gate (#1486)**: a formal release requires an issue titled exactly
-   > `[验收] <formal tag>` (e.g. `[验收] v2026.11.2`; create it with the first test build via
-   > `just release-scope --ledger <n> --pkg <test tag>`). `plan-builds` finds it by title and runs
-   > `tools/flow/release-acceptance.sh <n> <commit>`; missing ledger, duplicate ledgers, or any item
-   > not yet accepted ⇒ red before anything is built. Test tags are not checked.
+   > `[验收] <formal tag>` (e.g. `[验收] v2026.11.2`). `just release-scope --ledger <n> --pkg <test tag>`
+   > only reads and writes an existing issue; it does not create one. Create that issue by hand with
+   > the exact title, then run the command with its number (the first test build fills the ledger).
+   > `plan-builds` finds it by title and runs `tools/flow/release-acceptance.sh <n> <commit>`; missing
+   > ledger, duplicate ledgers, or any item not yet accepted ⇒ red before anything is built. To clear
+   > an item, check it off first; an exemption also needs `结论：免验，理由…` at the end of the line.
+   > A reason without the checkbox still fails the gate. After the boxes are checked, re-run the same
+   > tag. An exempted item whose files change again after the accepted package stays pending re-check:
+   > cut a test build that includes those changes and update the ledger first. Test tags are not checked.
    > **UPD-13 门禁**：`create-draft` 第一步跑 `tools/check-version-bump.sh` ——
    > 改了 `crates/**` / `apps/desktop/**` / `assets/**` / `Cargo.*` 却没涨
    > `desktop` 号，或改了 `apps/android/**` 却没涨 `android` 号，**直接红**
@@ -119,11 +124,8 @@
      warns — check the body opens with it before publishing
    - the signing status + asset list + E2E live scenarios result (if the
      tag ran one) are consistent with the commit you tagged
-   > **Do not use the local `gh` CLI for this repo** — it is not bound to
-   > this repo's account. Triggering workflows, reading CI results and
-   > publishing releases all happen in the browser; git goes over the
-   > personal SSH remote only. (`gh` *inside* `.github/workflows/` runs on
-   > the runner with `GITHUB_TOKEN` and is unaffected.)
+   > Local `gh` is used by `just start`, `just done`, `just triage`, and `just release-scope`.
+   > `gh` inside `.github/workflows/` runs on the runner with `GITHUB_TOKEN`.
 
 ## 3.5 Update channel (UPD-01) — current scope & known gaps
 
@@ -421,10 +423,12 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
    （tag 名形状、在 main 上、tag 尚不存在）与发版前验证（桌面壳只跑 Windows；Linux 桌面检查
    已随 #1555 永久移除）；全绿之后 `create-draft` 才在被验证的
    提交上建 tag 与 draft Release（三平台资产）。验证红了不会留下 tag。
-   > **发版闸（#1486）**：正式版发版前必须已有标题恰为「[验收] <正式 tag>」的台账 issue（如「[验收] v2026.11.2」，
-   > 出第一个 test 包时用 `just release-scope --ledger <号> --pkg <test 包 tag>` 建）。`plan-builds` 按标题找到它，
+   > **发版闸（#1486）**：正式版发版前必须已有标题恰为「[验收] <正式 tag>」的台账 issue（如「[验收] v2026.11.2」）。
+   > `just release-scope --ledger <号> --pkg <test 包 tag>` 只读写已有 issue，不会新建：先手动建一张标题恰好是
+   > 「[验收] <正式 tag>」的 issue，再用它的号跑这条命令（出第一个 test 包时写入清单）。`plan-builds` 按标题找到它，
    > 调 `tools/flow/release-acceptance.sh <台账号> <本次构建提交>`：没有台账、同名多张、有一项没清零，都在构建之前红，
-   > 不上传 TestFlight、不建 tag 与草稿；修好（验完勾上，或写「结论：免验，理由…」）后用同一个 tag 号重跑。
+   > 不上传 TestFlight、不建 tag 与草稿。修好必须先把该项勾上，免验再在行尾写「结论：免验，理由…」；
+   > 只写理由不勾，门禁照样红。勾上后用同一个 tag 号重跑。
    > 免验的项在验过的包之后相关文件又改过，仍判待重验，要先出含这些改动的 test 包并更新台账。test tag 不查。
    > **构建一次、到处复用（#838）**：正式 tag 上，`plan-builds`
    > （`tools/release/plan-builds.sh`）拿每一端在 `release/versions.json` 的版本号，
@@ -452,10 +456,8 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
    > `--notes-dir release/notes`，且 `release/`（版本号、说明、冻结件）取自被修复的 tag，
    > 修出来的清单与当次发布产出的说明一致。没有任何 workflow 把 release 正文写进 `notes`，
    > `tools/release-notes.test.mjs` 扫全部 workflow 把关。
-   > **本仓不用本机 `gh` CLI**（未绑定本仓账号）：触发 workflow、看 CI
-   > 结论、发 Release 一律在浏览器里做，git 只走个人 SSH remote。
-   > （`.github/workflows/` 里的 `gh` 跑在 runner 上用 `GITHUB_TOKEN`，
-   > 不在此列。）
+   > 本机 `gh` 用于 `just start`、`just done`、`just triage`、`just release-scope`。
+   > `.github/workflows/` 里的 `gh` 跑在 runner 上，用 `GITHUB_TOKEN`。
 
 ## 3.5 更新清单（UPD-01）— 范围
 
@@ -638,7 +640,7 @@ Android 靠 `channelFromVersion()` 读注入的版本串（含 `-test.` 即 test
 
 - 正式产物走 CI：GitHub 网页 Actions → Release → Run workflow，`platforms`
   填 `android,macos`（Android 出签名 APK；macOS 未签名，「右键 → 打开」
-  过 Gatekeeper）。**不用本机 `gh`**，理由同 §3 步骤 5。
+  过 Gatekeeper）。本机 `gh` 的用法同 §3 步骤 5。
 - 调管线只用 workflow_dispatch，不打测试 tag（tag 纪律见 `AGENTS.md`）。
 - **Secrets 实况（2026-08-25 核实）**：`CLOUDFLARE_API_TOKEN` /
   `CLOUDFLARE_ACCOUNT_ID` / `ANDROID_KEYSTORE_*` / `UPDATE_SIGNING_KEY` /
