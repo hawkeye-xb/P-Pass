@@ -134,11 +134,12 @@ DERIVED="$TMP/derived.txt"
 # ① crates/ 里 include_str!/include_bytes! 指向 crates/ 之外的目标（按所在文件解析相对路径）
 (cd "$REPO" && git grep -nE 'include_(str|bytes)!\("[^"]+"\)' -- 'crates/*.rs') |
   python3 -c '
-import os, re, sys
+import posixpath, re, sys
 for line in sys.stdin:
     path = line.split(":", 1)[0]
     for t in re.findall(r"include_(?:str|bytes)!\(\"([^\"]+)\"\)", line):
-        p = os.path.normpath(os.path.join(os.path.dirname(path), t))
+        # git 输出的路径恒为 / 分隔；os.path 在 Windows 上会拼出反斜杠，与后面的 / 比较对不上（#1518）。
+        p = posixpath.normpath(posixpath.join(posixpath.dirname(path), t))
         if not p.startswith("crates/") and not p.startswith(".."):
             print(p)
 ' >>"$DERIVED"
