@@ -13,7 +13,7 @@ fails=0
 fresh() {
   rm -rf "$work/r"
   mkdir -p "$work/r/app" "$work/r/tools"
-  git -C "$work/r" init -q
+  git -C "$work/r" init --template= -q
   cat > "$work/r/app/pnpm-workspace.yaml" <<'YAML'
 # minimumReleaseAgeExclude 只出现在注释里，不算
 allowBuilds:

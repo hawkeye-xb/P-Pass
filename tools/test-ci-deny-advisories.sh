@@ -36,7 +36,7 @@ make_repo() {
   shift
   rm -rf "$repo"
   mkdir -p "$repo/sub"
-  git -C "$repo" init -q
+  git -C "$repo" init --template= -q
   git -C "$repo" config user.email t@t
   git -C "$repo" config user.name t
   git -C "$repo" config core.autocrlf false

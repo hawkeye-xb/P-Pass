@@ -128,8 +128,8 @@ export PPASS_CI_CLAUDE="${TMP}/bin/fake-claude"
 export PPASS_CI_RETRY_SLEEP=0
 export ANTHROPIC_AUTH_TOKEN=test-key
 
-git init -q --bare "${TMP}/origin.git"
-git init -q "${TMP}/main"
+git init --template= -q --bare "${TMP}/origin.git"
+git init --template= -q "${TMP}/main"
 (
   cd "${TMP}/main" || exit 1
   git remote add origin "${TMP}/origin.git"

@@ -116,7 +116,7 @@ jobs:
             tools/ci-paths.sh
 YML
   printf 'candidate\n' >"$fake/apps/android/app/build/outputs/apk/debug/app-debug.apk"
-  git -C "$fake" init -q
+  git -C "$fake" init --template= -q
   git -C "$fake" add -A
   git -C "$fake" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t commit -q -m base
   base="$(git -C "$fake" rev-parse HEAD)"
@@ -348,7 +348,7 @@ if command -v just >/dev/null 2>&1; then
     d="$(cd -P "$(mktemp -d)" && pwd)" || exit 1
     trap 'rm -rf "$d"' EXIT
     mkdir -p "$d/main/sub"
-    git -C "$d/main" init -q
+    git -C "$d/main" init --template= -q
     unset CARGO_TARGET_DIR PPASS_DEV_CACHE_PARENT
     # shellcheck source=e3/lib/dev-cache.sh
     source "$E3/lib/dev-cache.sh"
@@ -432,7 +432,7 @@ STUB
   [ "$(E3_MAC_BASE_TAG=v0.10.1 base_tag)" = v0.10.1 ] || { echo "E3_MAC_BASE_TAG 覆盖不生效"; exit 1; }
 
   export E3_TAG_REPO="$d/repo"
-  git init -q "$E3_TAG_REPO"
+  git init --template= -q "$E3_TAG_REPO"
   mkdir -p "$E3_TAG_REPO/release"
   printf '{\n  "desktop": "0.10.1",\n  "android": "0.10.2"\n}\n' >"$E3_TAG_REPO/release/versions.json"
   git -C "$E3_TAG_REPO" add release/versions.json

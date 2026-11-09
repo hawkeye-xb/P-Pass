@@ -285,7 +285,7 @@ mk_git_root() { # <base 白名单> <当前白名单> → 在 git 仓库里：基
   local r; r="$(sample $F "$SRC_ONE")"
   (
     cd "$r" || exit 1
-    git init -q . && git config user.email t@t && git config user.name t
+    git init --template= -q . && git config user.email t@t && git config user.name t
     printf '%s\n' "$1" >tools/arch-allowlist.txt
     git add -A && git -c core.hooksPath=/dev/null commit -qm base
     printf '%s\n' "$2" >tools/arch-allowlist.txt
@@ -303,7 +303,7 @@ if run_ratchet "$R"; then ok "白名单与基线一致 → 通过"; else bad "�
 R="$(sample $F "$SRC_TWO")"
 (
   cd "$R" || exit 1
-  git init -q . && git config user.email t@t && git config user.name t
+  git init --template= -q . && git config user.email t@t && git config user.name t
   printf '%s\n' "$BASE1" >tools/arch-allowlist.txt
   git add -A && git -c core.hooksPath=/dev/null commit -qm base
   printf '[ratchet]\n%s | G1 | 2 | 偷偷加\n[permanent]\n' "$F" >tools/arch-allowlist.txt
@@ -318,7 +318,7 @@ mkdir -p "$R/apps/desktop/src-tauri/src"
 printf '%s\n' "$SRC_ONE" >"$R/apps/desktop/src-tauri/src/b.rs"
 (
   cd "$R" || exit 1
-  git init -q . && git config user.email t@t && git config user.name t
+  git init --template= -q . && git config user.email t@t && git config user.name t
   printf '%s\n' "$BASE1" >tools/arch-allowlist.txt
   git add -A && git -c core.hooksPath=/dev/null commit -qm base
   printf '[ratchet]\n%s | G1 | 1 | x\napps/desktop/src-tauri/src/b.rs | G1 | 1 | 新条目\n[permanent]\n' "$F" >tools/arch-allowlist.txt
@@ -331,7 +331,7 @@ fi
 R="$(sample "$F" "$SRC_ONE")"
 (
   cd "$R" || exit 1
-  git init -q . && git config user.email t@t && git config user.name t
+  git init --template= -q . && git config user.email t@t && git config user.name t
   printf '[ratchet]\n[permanent]\n' >tools/arch-allowlist.txt
   git add -A && git -c core.hooksPath=/dev/null commit -qm base
   printf '[ratchet]\n[permanent]\n%s | G1 | 想蒙混过关\n' "$F" >tools/arch-allowlist.txt
@@ -344,7 +344,7 @@ fi
 R="$(sample "$F" "$SRC_ONE")"
 (
   cd "$R" || exit 1
-  git init -q . && git config user.email t@t && git config user.name t
+  git init --template= -q . && git config user.email t@t && git config user.name t
   printf '[ratchet]\n%s | G1 | 2 | x\n[permanent]\n' "$F" >tools/arch-allowlist.txt
   git add -A && git -c core.hooksPath=/dev/null commit -qm base
   printf '[ratchet]\n%s | G1 | 1 | x\n[permanent]\n' "$F" >tools/arch-allowlist.txt
@@ -355,7 +355,7 @@ if run_ratchet "$R"; then ok "缩表（计数 2→1）→ 通过"; else bad "缩
 R="$(sample "$F" "$SRC_ONE")"
 (
   cd "$R" || exit 1
-  git init -q . && git config user.email t@t && git config user.name t
+  git init --template= -q . && git config user.email t@t && git config user.name t
   rm tools/arch-allowlist.txt && git add -A && git -c core.hooksPath=/dev/null commit -qm base
   printf '[ratchet]\n%s | G1 | 1 | x\n[permanent]\n' "$F" >tools/arch-allowlist.txt
 )

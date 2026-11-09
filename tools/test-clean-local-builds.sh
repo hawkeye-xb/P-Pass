@@ -51,7 +51,7 @@ done
 remote="$tmp/remote.git"
 repo="$tmp/repo"
 
-git init --bare "$remote" >/dev/null
+git init --template= --bare "$remote" >/dev/null
 # --template= forces an empty hook template. Without it the fixture inherits
 # whatever init.templateDir points at on the developer's machine, and a
 # machine-local identity-allowlist pre-commit hook then rejects the fixture's

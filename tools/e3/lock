@@ -118,7 +118,7 @@ case "${1:-}" in
       fi
       sleep 1
     done
-    for d in "$@"; do echo "设备 $d：$(who_text "$dir/lock-$d.who")；验完 tools/e3/lock release-human $d"; done
+    for d in "$@"; do echo "设备 ${d}：$(who_text "$dir/lock-$d.who")；验完 tools/e3/lock release-human $d"; done
     exit 0
     ;;
   release-human)
@@ -185,7 +185,7 @@ var="E3_LOCKED_$(echo "$dev" | tr a-z A-Z)"
 if [ "${!var:-}" = 1 ]; then exec "$@"; fi
 own="$(owner_of "$dev" || true)"
 if [ -n "$own" ] && [ "$own" != "${PPASS_DEVICE_OWNER:-}" ]; then
-  echo "✗ 设备 $dev 现在归 ${own}（$(cut -f2 "$dir/owner-$dev")起），不装、不点。要用先问它；用完由它 tools/e3/lock release $dev。" >&2
+  echo "✗ 设备 $dev 现在归 ${own}（$(cut -f2 "$dir/owner-$dev")起），不装、不点。要用先问它；用完由它 tools/e3/lock release ${dev}。" >&2
   echo "  （是你的设备：设 PPASS_DEVICE_OWNER=${own} 再跑）" >&2
   exit 75
 fi
