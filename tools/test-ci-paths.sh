@@ -116,6 +116,10 @@ core_is "$PATHS" "$RULES" true "桌面壳权限声明" apps/desktop/src-tauri/ca
 core_is "$PATHS" "$RULES" false "CI workflow 归 owner 定的技术类，不走人控" .github/workflows/ci-rust.yml
 core_is "$PATHS" "$RULES" true "发版 workflow（更新链）" .github/workflows/release.yml
 core_is "$PATHS" "$RULES" true "核心名单自身" .github/core-paths.txt
+core_is "$PATHS" "$RULES" true "服务启停：Windows 平台层（#1585）" crates/platform/src/windows.rs
+core_is "$PATHS" "$RULES" true "服务启停：Windows 服务管理（#1585）" crates/platform/src/windows_service.rs
+core_is "$PATHS" "$RULES" true "服务启停：macOS 平台层（#1585）" crates/platform/src/macos.rs
+core_is "$PATHS" "$RULES" true "服务启停：壳的状态机（#1585）" apps/desktop/src-tauri/src/service_state.rs
 core_is "$PATHS" "$RULES" false "门禁脚本归 owner 定的技术类" tools/ci-paths.sh
 core_is "$PATHS" "$RULES" false "依赖锁不属于人控的五类" Cargo.lock
 core_is "$PATHS" "$RULES" true "更新链脚本" tools/release/plan-builds.sh
