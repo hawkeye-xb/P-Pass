@@ -88,14 +88,22 @@ flow_in_scope() { # flow_in_scope <文件>
   [ "$(printf '%s\n' "$1" | bash "$FLOW_PATHS" hit - "${GLOBS[@]}" 2>/dev/null)" = "true" ]
 }
 
-# 改标签：flow_labels <号> <加> <减>（任一可空，逗号分隔）。先确保 status:review 存在。
-flow_labels() {
+# 改标签，失败返回非 0、不退出：多卡一次处理时，一张失败不能把其余卡撂下。
+flow_try_labels() { # flow_try_labels <号> <加> <减>（任一可空，逗号分隔）
   local n="$1" add="$2" del="$3" args=()
   [ -z "$add" ] || args+=(--add-label "$add")
   [ -z "$del" ] || args+=(--remove-label "$del")
   [ "${#args[@]}" -gt 0 ] || return 0
-  gh issue edit "$n" -R "$REPO" "${args[@]}" >/dev/null 2>&1 ||
-    die "改 #$n 的标签失败（加：${add:-无}；减：${del:-无}）" "手动：gh issue edit $n -R $REPO ${args[*]}"
+  gh issue edit "$n" -R "$REPO" "${args[@]}" >/dev/null 2>&1
+}
+
+# 改标签：flow_labels <号> <加> <减>（任一可空，逗号分隔）。失败就 die。
+flow_labels() {
+  local n="$1" add="${2:-}" del="${3:-}" hint=""
+  [ -z "$add" ] || hint="${hint} --add-label ${add}"
+  [ -z "$del" ] || hint="${hint} --remove-label ${del}"
+  flow_try_labels "$n" "$add" "$del" ||
+    die "改 #$n 的标签失败（加：${add:-无}；减：${del:-无}）" "手动：gh issue edit $n -R $REPO${hint}"
 }
 
 flow_ensure_review_label() {
@@ -103,7 +111,8 @@ flow_ensure_review_label() {
     -d "已交卡，等 PR 的 CI 与放行" -c "5319e7" >/dev/null 2>&1 || true
 }
 
+# 贴评论。失败返回非 0（多卡一次处理时由调用方点名是哪张卡）；内容留在文件里，可手动贴。
 flow_comment() { # flow_comment <号> <正文文件>
   gh issue comment "$1" -R "$REPO" --body-file "$2" >/dev/null 2>&1 ||
-    printf '⚠ 往 #%s 贴评论失败（离线？）：内容见 %s\n' "$1" "$2" >&2
+    { printf '⚠ 往 #%s 贴评论失败（离线？）：内容见 %s\n' "$1" "$2" >&2; return 1; }
 }

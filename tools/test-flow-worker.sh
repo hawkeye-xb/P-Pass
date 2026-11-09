@@ -102,6 +102,7 @@ case "$1 $2" in
     ;;
   "issue edit")
     n="$3"; shift 3
+    [ -e "$G/$n.label_fail" ] && { echo "stub gh: label edit failed for $n" >&2; exit 1; }
     add="" del=""
     while [ $# -gt 0 ]; do
       case "$1" in
@@ -124,6 +125,7 @@ case "$1 $2" in
     ;;
   "issue comment")
     n="$3"; shift 3
+    [ -e "$G/$n.comment_fail" ] && { echo "stub gh: comment failed for $n" >&2; exit 1; }
     while [ $# -gt 0 ]; do
       [ "$1" = "--body-file" ] && { { cat "$2"; echo "-----"; } >>"$G/$n.comments"; }
       shift
@@ -796,6 +798,83 @@ has_lbl 30 "status:blocked" && bad "空原因也打了 blocked" || ok "空原因
 STUCK 30 "命中核心：根因在配对握手；修法 A / 修法 B" >/dev/null 2>&1 && ok "stuck 带原因成功" || bad "stuck 带原因失败"
 has_lbl 30 "status:blocked" && ! has_lbl 30 "status:doing" && ok "stuck 打 status:blocked 并去掉 doing" || bad "stuck 标签不对"
 comments_of 30 | grep -q "命中核心：根因在配对握手" && ok "stuck 评论含原因" || bad "stuck 评论缺原因"
+
+# 多卡分支（#1390）：在卡 worktree 里跑一次 just stuck，这条分支关联的每张卡都要写评论、打 blocked
+stuck_branch_ok() { # <分支 worktree> <号…>：每张卡都有评论与 status:blocked 才返回 0；STUCK_SH 可指定要跑的脚本（反证用）
+  local w="$1" n="$2" c
+  shift 2
+  (cd "$w" && bash "${STUCK_SH:-tools/flow/worker-stuck.sh}" "$n" "多卡同一条分支：命中核心") >/dev/null 2>&1 || return 1
+  for c in "$n" "$@"; do
+    has_lbl "$c" status:blocked || return 1
+    comments_of "$c" | grep -qF "多卡同一条分支：命中核心" || return 1
+  done
+}
+issue 90 "status:ready" "[T-90] stuck multi a" "src/**" "Bug"
+issue 91 "status:ready" "[T-91] stuck multi b" "src/**" "Bug"
+START 90 91 --name "Stuck Multi" >/dev/null 2>&1
+stuck_branch_ok "${PPASS_WT_ROOT}/90-stuck-multi" 90 91 &&
+  ok "多卡分支：一次 just stuck → 两张卡都写评论、都打 status:blocked" ||
+  bad "多卡分支：其余卡没被一起处理（$(labels_of 90) / $(labels_of 91)）"
+has_lbl 90 status:blocked && ! has_lbl 90 status:doing && has_lbl 91 status:blocked && ! has_lbl 91 status:doing &&
+  ok "  两张卡都从 doing 换成 blocked（不用人手补）" || bad "  两张卡的标签不对"
+comments_of 90 | grep -qF "关联卡：#90、#91" && comments_of 91 | grep -qF "关联卡：#90、#91" &&
+  ok "  评论写明关联卡，看一张就知道整条分支都停了" || bad "  评论没写关联卡"
+STUCK 90 "单卡调用不受影响" >/dev/null 2>&1 && comments_of 90 | grep -q "单卡调用不受影响" &&
+  ok "  单卡调用（不在卡 worktree）行为不变" || bad "  单卡调用行为变了"
+
+# 某张卡处理失败：点名是哪张，其余卡照做，退出码非 0
+issue 92 "status:ready" "[T-92] stuck fail a" "src/**" "Bug"
+issue 93 "status:ready" "[T-93] stuck fail b" "src/**" "Bug"
+START 92 93 --name "Stuck Fail" >/dev/null 2>&1
+touch "${FAKE_GH}/92.comment_fail"
+if (cd "${PPASS_WT_ROOT}/92-stuck-fail" && bash tools/flow/worker-stuck.sh 92 "多卡失败：离线") >"${TMP}/o92s" 2>&1; then
+  bad "某张卡写评论失败仍报成功"
+else
+  ok "某张卡写评论失败 → 非 0 退出"
+fi
+grep -q "#92 写评论失败" "${TMP}/o92s" && ok "  报错点名是哪张卡的哪一步" || bad "  报错没点名：$(tail -3 "${TMP}/o92s")"
+body="$(sed -n 's/.*--body-file //p' "${TMP}/o92s" | head -1)"
+[ -n "$body" ] && [ -f "$body" ] && grep -qF "多卡失败：离线" "$body" &&
+  ok "  评论失败时保留正文文件，补做命令直接能用" || bad "  正文文件被删了，补做命令用不了：$body"
+rm -f "$body"
+has_lbl 93 status:blocked && comments_of 93 | grep -qF "多卡失败：离线" &&
+  ok "  其余卡照常写评论、打 blocked（不因一张失败留半截）" || bad "  其余卡没被处理（$(labels_of 93)）"
+has_lbl 92 status:blocked && ok "  评论失败的卡照样打 blocked（两件事互不影响）" || bad "  评论失败连带标签也没打"
+rm -f "${FAKE_GH}/92.comment_fail"
+issue 94 "status:ready" "[T-94] stuck label fail a" "src/**" "Bug"
+issue 95 "status:ready" "[T-95] stuck label fail b" "src/**" "Bug"
+START 94 95 --name "Stuck Label Fail" >/dev/null 2>&1
+touch "${FAKE_GH}/94.label_fail"
+if (cd "${PPASS_WT_ROOT}/94-stuck-label-fail" && bash tools/flow/worker-stuck.sh 94 "多卡失败：标签") >"${TMP}/o94s" 2>&1; then
+  bad "某张卡打标签失败仍报成功"
+else
+  ok "某张卡打 status:blocked 失败 → 非 0 退出（不整批中断）"
+fi
+grep -q "#94 打 status:blocked 失败" "${TMP}/o94s" && ok "  报错点名是哪张卡" || bad "  报错没点名：$(tail -3 "${TMP}/o94s")"
+grep -qF -- "--add-label status:blocked --remove-label status:doing,status:ready,status:review" "${TMP}/o94s" &&
+  ok "  补做的标签命令同时去掉 doing/ready/review" || bad "  补做命令只加 blocked，没去掉旧状态：$(tail -3 "${TMP}/o94s")"
+has_lbl 95 status:blocked && comments_of 94 | grep -qF "多卡失败：标签" &&
+  ok "  后面的卡照常处理，标签失败的卡评论也照写" || bad "  一张失败把整批撂下了（$(labels_of 95)）"
+rm -f "${FAKE_GH}/94.label_fail"
+
+# 反证（#1390）：去掉「读分支配置里的其余卡」这一行 → 同一条多卡断言必须变红
+cp "$M/tools/flow/worker-stuck.sh" "${TMP}/ws-1390.bak"
+if awk 'index($0, "git config --get \"branch.${branch}.ppasscards\"") { print "  rest=\"\""; hit++; next } { print } END { exit (hit == 1 ? 0 : 3) }' \
+  "$M/tools/flow/worker-stuck.sh" >"${TMP}/ws-1390.mut" &&
+  [ "$(wc -l <"${TMP}/ws-1390.mut")" -eq "$(wc -l <"$M/tools/flow/worker-stuck.sh")" ]; then
+  cp "${TMP}/ws-1390.mut" "$M/tools/flow/worker-stuck.sh"
+  issue 96 "status:ready" "[T-96] stuck mut a" "src/**" "Bug"
+  issue 97 "status:ready" "[T-97] stuck mut b" "src/**" "Bug"
+  START 96 97 --name "Stuck Mut" >/dev/null 2>&1
+  if STUCK_SH="$M/tools/flow/worker-stuck.sh" stuck_branch_ok "${PPASS_WT_ROOT}/96-stuck-mut" 96 97; then
+    bad "反证不成立：去掉多卡支持后多卡断言仍通过"
+  else
+    ok "反证：去掉多卡支持 → 多卡断言变红（第二张卡没人处理）"
+  fi
+  cp "${TMP}/ws-1390.bak" "$M/tools/flow/worker-stuck.sh"
+else
+  bad "变异没生效（ppasscards 那行没匹配上）"
+fi
 
 # 协作者模式遇到要写私仓的活：doctor 不通过（拦截解开）时 just stuck 仍必须可用——它是停下的出口
 issue 31 "status:doing" "[T-31] collaborator" "src/**"
