@@ -17,17 +17,22 @@ export const MIRROR_MAC = `${MIRROR_BASE}/P-Pass-latest.dmg`;
 export const MIRROR_ANDROID = `${MIRROR_BASE}/P-Pass-latest.apk`;
 export const MIRROR_WINDOWS = `${MIRROR_BASE}/P-Pass-latest.exe`;
 
-// iPhone is distributed through a TestFlight public link (both languages; in
-// mainland China this stays the long-term channel). Single place to replace.
+// iPhone ships on the App Store. A region-less link follows the visitor's own
+// storefront, which is what we want wherever P-Pass is listed; it is in the
+// US, Hong Kong and UK storefronts, not in mainland China.
+export const APP_STORE_URL = 'https://apps.apple.com/app/id6822143047';
+
+// Mainland China has no App Store listing, so the zh pages keep the TestFlight
+// public link as their iPhone channel. Single place to replace.
 export const TESTFLIGHT_URL = 'https://testflight.apple.com/join/htBATauc';
 
 // Canon copy (Brief §3) — one entry per language, same level.
 export const SITE_TITLE: Record<Lang, string> = {
-  en: 'P-Pass — Automatic family photo backup to your home computer',
-  zh: 'P-Pass — 手机照片自动备份到家里的电脑',
+  en: 'P-Pass — iPhone and Android photo backup to your home computer',
+  zh: 'P-Pass — iPhone 和安卓照片自动备份到家里的电脑',
 };
 
 export const SITE_DESCRIPTION: Record<Lang, string> = {
-  en: 'Photo backup for families: your phone backs up automatically to the computer at home. No account, no cloud storage. Open source and end-to-end encrypted.',
-  zh: '家庭照片备份：手机照片自动备份到家中的电脑，无需注册账号，不使用云存储。开源，端到端加密。',
+  en: 'Photo backup for families: photos from iPhone and Android phones back up automatically to the computer at home. No account, no cloud storage. Open source and end-to-end encrypted.',
+  zh: '家庭照片备份：iPhone 和安卓手机的照片自动备份到家中的电脑，无需注册账号，不使用云存储。开源，端到端加密。',
 };

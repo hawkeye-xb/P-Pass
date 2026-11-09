@@ -3,16 +3,17 @@
  * "Open in your browser" guide for visitors inside WeChat on a phone.
  *
  * WeChat's in-app browser blocks jumps into other apps and APK downloads, so
- * the TestFlight link lands on Apple's page with a "View in TestFlight" button
- * that does nothing, and the Android download is swallowed. WeChat gives web
- * pages no way to hand themselves to the system browser, so the standard
- * answer on Chinese download pages is to stop the click and point at the ···
- * menu in the top-right corner. That is all this does.
+ * a TestFlight link lands on Apple's page with a "View in TestFlight" button
+ * that does nothing, an App Store link cannot open the App Store app, and the
+ * Android download is swallowed. WeChat gives web pages no way to hand
+ * themselves to the system browser, so the standard answer on Chinese
+ * download pages is to stop the click and point at the ··· menu in the
+ * top-right corner. That is all this does.
  *
- * It lives in the base layout because both the landing download block and
- * the FAQ link to TestFlight; the click is matched by href, so any future
- * TestFlight or .apk link is covered without tagging it. Desktop WeChat hands
- * links to the system browser itself and is left alone.
+ * It lives in the base layout because the landing download block and the FAQ
+ * link to both Apple channels; the click is matched by href, so any future
+ * TestFlight, App Store or .apk link is covered without tagging it. Desktop
+ * WeChat hands links to the system browser itself and is left alone.
  */
 import { t, type Lang } from '../i18n/ui';
 
@@ -46,7 +47,7 @@ const { lang } = Astro.props;
       const link = (e.target as Element | null)?.closest?.('a[href]') as HTMLAnchorElement | null;
       if (!link) return;
       const url = new URL(link.href, location.href);
-      if (url.hostname !== 'testflight.apple.com' && !url.pathname.endsWith('.apk')) return;
+      if (url.hostname !== 'testflight.apple.com' && url.hostname !== 'apps.apple.com' && !url.pathname.endsWith('.apk')) return;
       e.preventDefault();
       dialog.showModal();
     });

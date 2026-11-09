@@ -24,7 +24,7 @@ export const GUIDE = {
   zh: {
     title: '不用 NAS、不用 Docker：把手机照片备份回自己家的电脑 — P-Pass',
     metaDescription:
-      '手机照片自动备份到家里的电脑，存原图不压缩，不用注册账号、不使用云存储，开源。电脑支持 Apple 芯片 Mac 与 64 位 Windows，手机支持 Android 8.0 以上，iPhone 版通过 TestFlight 安装。',
+      '手机照片自动备份到家里的电脑，存原图不压缩，不用注册账号、不使用云存储，开源。电脑支持 Apple 芯片 Mac 与 64 位 Windows，手机支持 Android 8.0 以上和 iPhone，iPhone 版在中国大陆通过 TestFlight 安装。',
     h1: '把手机照片备份回自己家的电脑',
     lead: [
       '家里有一台电脑，就能把手机照片备份到这台电脑上：手机连上 Wi-Fi 后，照片自动传进电脑。',
@@ -47,7 +47,7 @@ export const GUIDE = {
       paras: [
         '电脑可以是 Apple 芯片的 Mac（M1 及以后），也可以是 64 位 Windows 电脑。备份时电脑需要开着。电脑关着时照片留在手机里，开机连上后接着传，传过的不会重传。',
         '硬盘剩下不到约 5 GB 的时候，手机会提前提示你。',
-        '手机可以是 Android 8.0 以上的任意牌子，也可以是 iOS 16 及以上的 iPhone；iPhone 版通过 TestFlight 安装，备份在打开 P-Pass 时进行，离开 App 后能否在后台接着传由 iOS 决定。',
+        '手机可以是 Android 8.0 以上的任意牌子，也可以是 iOS 16 及以上的 iPhone；iPhone 版在中国大陆通过 TestFlight 安装，备份在打开 P-Pass 时进行，离开 App 后能否在后台接着传由 iOS 决定。',
       ],
     },
     money: {

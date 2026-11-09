@@ -2,7 +2,7 @@
 
 [English version / 英文版](README.md)
 
-家庭照片备份：手机自动备份到自己家的电脑，全家跨设备浏览。
+家庭照片备份：iPhone 和安卓手机自动备份到自己家的电脑，全家跨设备浏览。
 无云端存储、无账号。原始文件即真相，索引可随时重建。
 
 **里程碑与状态看板：[docs/ROADMAP.md](docs/ROADMAP.md)**
@@ -70,13 +70,16 @@
    release page. Android's "unknown source" warning is normal for a direct
    download; allow it.
 
-   **iPhone（iOS 16 及以上）**：通过 TestFlight 分发。先在 App Store 安装
-   TestFlight，再在 iPhone 上打开 [P-Pass 公开链接](https://testflight.apple.com/join/htBATauc)，
-   点「接受」「安装」。建议在 TestFlight 里为 P-Pass 打开自动更新：每个
+   **iPhone（iOS 16 及以上）**：在 [App Store](https://apps.apple.com/app/id6822143047)
+   下载。中国大陆的 App Store 里没有 P-Pass，先在 App Store 安装 TestFlight，
+   再在 iPhone 上打开 [P-Pass 公开链接](https://testflight.apple.com/join/htBATauc)，
+   点「接受」「安装」，并在 TestFlight 里为 P-Pass 打开自动更新：每个
    TestFlight 版本发布 90 天后无法再打开。
-   **iPhone (iOS 16+)**: distributed through TestFlight. Install TestFlight
-   from the App Store, open the [P-Pass public link](https://testflight.apple.com/join/htBATauc)
-   on the iPhone, then tap Accept and Install. Turn on automatic updates for
+   **iPhone (iOS 16+)**: get it from the
+   [App Store](https://apps.apple.com/app/id6822143047). In mainland China the
+   App Store does not list P-Pass; install TestFlight from the App Store, open
+   the [P-Pass public link](https://testflight.apple.com/join/htBATauc) on the
+   iPhone, then tap Accept and Install, and turn on automatic updates for
    P-Pass in TestFlight: each build stops opening 90 days after it is
    published.
 2. 打开手机上的 P-Pass，扫电脑屏幕上的二维码。手机会显示 6 位验证码，在电脑上
