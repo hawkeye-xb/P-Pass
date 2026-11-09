@@ -15,7 +15,7 @@ new_repo() {
   R="$TMP/repo"
   rm -rf "$R"; mkdir -p "$R/tools"
   printf '%s\n' "$2" >"$R/tools/$1"
-  git -C "$R" init -q
+  git -C "$R" init -q --template=
   git -C "$R" config user.email t@t; git -C "$R" config user.name t
 }
 # put <相对路径> <内容>：写文件并 git add（门禁只看被跟踪的文件）。

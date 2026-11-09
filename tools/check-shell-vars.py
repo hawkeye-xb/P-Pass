@@ -40,6 +40,9 @@ def scanned_files():
         if f.endswith((".sh", ".bash"))
         or (f.startswith(".github/workflows/") and f.endswith((".yml", ".yaml")))
         or f == "justfile"
+        # tools/e3 下无扩展名的脚本（lock/run/verify/dev/restore）也是 bash，
+        # 不在 *.sh 规则里，之前漏扫（#1611 的 lock bug 因此没被 CI 抓到）。
+        or (f.startswith("tools/e3/") and "." not in f.rsplit("/", 1)[-1])
     ]
 
 
