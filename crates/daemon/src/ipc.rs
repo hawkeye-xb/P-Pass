@@ -2082,26 +2082,36 @@ impl IpcServer {
                     // 电脑上点「移除」曾是空操作，行一直停在「已断开」。业主的这次
                     // 操作本身就是要移除——把档案上的离开原因改成 Owner，行归到
                     // 「已移除」。没有档案（marked = 0）时什么都没改，照实回 false。
-                    Ok(None) => match self
-                        .db
-                        .mark_departed(
-                            std::slice::from_ref(&node_id),
-                            storage::DepartedBy::Owner,
-                            (self.now)(),
-                        )
-                        .await
-                    {
-                        Ok(marked) => {
-                            let removed = marked > 0;
-                            if removed {
-                                events::emit(
-                                    &self.events,
-                                    events::DEVICE_CHANGED,
-                                    serde_json::json!({ "node_id": node_hex }),
-                                );
-                            }
-                            Resp::ok(id, serde_json::json!({ "revoked": removed }))
+                    // 已经由 Owner 移除过的档案不重标：保留第一次的离开时间，也不
+                    // 重复发 device.changed。
+                    Ok(None) => match self.db.get_device(&node_id).await {
+                        Ok(Some(row))
+                            if row.profile.departed_by == Some(storage::DepartedBy::Owner) =>
+                        {
+                            Resp::ok(id, serde_json::json!({ "revoked": true }))
                         }
+                        Ok(_) => match self
+                            .db
+                            .mark_departed(
+                                std::slice::from_ref(&node_id),
+                                storage::DepartedBy::Owner,
+                                (self.now)(),
+                            )
+                            .await
+                        {
+                            Ok(marked) => {
+                                let removed = marked > 0;
+                                if removed {
+                                    events::emit(
+                                        &self.events,
+                                        events::DEVICE_CHANGED,
+                                        serde_json::json!({ "node_id": node_hex }),
+                                    );
+                                }
+                                Resp::ok(id, serde_json::json!({ "revoked": removed }))
+                            }
+                            Err(_) => internal(id),
+                        },
                         Err(_) => internal(id),
                     },
                     Err(_) => internal(id),
@@ -2931,5 +2941,23 @@ mod tests {
         );
         assert_eq!(after.profile.departed_by, Some(storage::DepartedBy::Owner));
         assert_eq!(resp.result.unwrap()["revoked"], true);
+
+        // 已经由业主移除过的行，再点一次「移除」是幂等：保留第一次的离开时间。
+        // 反证：去掉 Ok(None) 分支里「已由 Owner 移除」的早退，这里会被改成当下时刻，红。
+        db.mark_departed(&[node.to_vec()], storage::DepartedBy::Owner, 4242)
+            .await
+            .unwrap();
+        let again = server
+            .dispatch(Req {
+                id: "revoke-again".into(),
+                method: "device.revoke".into(),
+                params: serde_json::json!({ "node_id": hex(&node) }),
+                ..Default::default()
+            })
+            .await;
+        assert!(again.ok, "第二次 revoke 失败：{again:?}");
+        assert_eq!(again.result.unwrap()["revoked"], true);
+        let unchanged = db.get_device(&node).await.unwrap().unwrap();
+        assert_eq!(unchanged.profile.departed_at, Some(4242));
     }
 }
