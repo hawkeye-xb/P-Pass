@@ -33,7 +33,13 @@ if(\$t){
   'EXECUTE=' + \$a.Execute
   'ARGUMENTS=' + \$a.Arguments
   'STATE=' + \$t.State
-  'PRINCIPAL=' + \$t.Principal.UserId + '/' + \$t.Principal.LogonType + '/' + \$t.Principal.RunLevel
+  # 判据读任务 XML 的 LogonType/RunLevel：Get-ScheduledTask 对象的显示名是
+  # Interactive/Limited，和 XML 的 InteractiveToken/LeastPrivilege 不是一套（#1602）。
+  # RunLevel 缺省就是 LeastPrivilege。
+  \$xml=[xml](Export-ScheduledTask -TaskName 'P-Pass')
+  \$pr=\$xml.Task.Principals.Principal
+  \$rl=if(\$pr.RunLevel){\$pr.RunLevel}else{'LeastPrivilege'}
+  'PRINCIPAL=' + \$pr.UserId + '/' + \$pr.LogonType + '/' + \$rl
   'TRIGGERS=' + ((\$t.Triggers | ForEach-Object { \$_.CimClass.CimClassName }) -join ',')
   'REPETITION=' + ((\$t.Triggers | Where-Object { \$_.Repetition } | ForEach-Object { \$_.Repetition.Interval }) -join ',')
 } else { 'NO_TASK' }
@@ -50,8 +56,8 @@ judge() {
   local d="$1"
   check "计划任务的 Execute 是安装目录里的 ppf-daemon" grep -Fq "EXECUTE=$WIN_APP_DIR_WIN\\ppf-daemon.exe" "$d/task.txt"
   check "计划任务在运行" grep -q 'STATE=Running' "$d/task.txt"
-  # Get-ScheduledTask 给的是任务 XML 里的枚举名（crates/platform/src/windows.rs:151-152）：
-  # InteractiveToken / LeastPrivilege，不是 PowerCLI 习惯的 Interactive / Limited。
+  # 判据读的是 act() 从任务 XML 取的 LogonType/RunLevel；Get-ScheduledTask 对象的
+  # 显示名是 Interactive/Limited，和 XML 的 InteractiveToken/LeastPrivilege 不是一套（#1602）。
   check "任务主体是交互用户、LeastPrivilege（不弹 UAC）" grep -q 'PRINCIPAL=.*/InteractiveToken/LeastPrivilege' "$d/task.txt"
   check "有登录触发" grep -Eq 'TRIGGERS=.*LogonTrigger' "$d/task.txt"
   check "看门狗每分钟重复触发（PT1M）" grep -Eq 'REPETITION=.*PT1M' "$d/task.txt"

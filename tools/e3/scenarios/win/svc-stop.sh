@@ -49,6 +49,8 @@ phone_disconnect() {
   win_phone_tap_xml "$dump" '存储电脑' || { echo "手机没有存储电脑"; return 1; }
   sleep 1
   win_phone_dump "$dump" || return 1
+  # 反证要用的「断开前」手机屏幕（存储电脑页）；点断开后的 dump 才是欢迎页。
+  win_phone_dump "$d/phone-before-disconnect.xml" || true
   win_phone_tap_xml "$dump" '断开与这台电脑的连接' || { echo "手机没有断开连接"; return 1; }
   sleep 2
   win_phone_dump "$dump" || true
@@ -64,7 +66,7 @@ setup() {
   win_app_running || { echo "桌面 App 没在跑"; return 77; }
   win_daemon_running || { echo "daemon 没在跑"; return 77; }
   win_diag "$EV/main" >/dev/null 2>&1 || true
-  [ "$(win_json_array_len "$EV/main/diag/devices.json")" = 1 ] || { echo "桌面没有 1 台配对设备（先跑 win/pair-backup）"; return 77; }
+  [ "$(paired_count "$EV/main/diag/devices.json")" = 1 ] || { echo "桌面没有 1 台已配对设备（先跑 win/pair-backup）"; return 77; }
   echo "版本：$(win_status_field "$EV/main" version)"
 }
 
@@ -99,8 +101,19 @@ act() {
   } >"$d/restore.txt"
   # 3) R4.1 手机断开
   phone_disconnect || echo "手机断开流程失败"
-  sleep 5
-  win_diag "$d" >/dev/null 2>&1 || true
+  # 桌面识别设备离开要等传输超时（实测约 30s），固定等 5s 会把正确行为判红（#1600）。
+  # 轮询到 paired:false 或 60s 超时，并记录实际等待时间。
+  local waited=0 marked=0
+  while [ "$waited" -lt 60 ]; do
+    sleep 5
+    waited=$((waited + 5))
+    win_diag "$d" >/dev/null 2>&1 || true
+    if grep -q '"paired": false' "$d/diag/devices.json" 2>/dev/null; then
+      marked=1
+      break
+    fi
+  done
+  echo "disconnect_wait=${waited}s marked=${marked}" >"$d/disconnect-wait.txt"
   cp "$d/diag/devices.json" "$d/devices-after-disconnect.json" 2>/dev/null || true
   win_phone_dump "$d/phone-after-disconnect.xml" || true
 }
@@ -135,8 +148,11 @@ counter() {
   done
   win_ui_dump "$d/stop-dialog.txt" || true
   cp "$EV/main/restore.txt" "$d/restore.txt" 2>/dev/null || true
-  cp "$EV/main/devices-after-disconnect.json" "$d/devices-after-disconnect.json" 2>/dev/null || true
-  cp "$EV/main/phone-after-disconnect.xml" "$d/phone-after-disconnect.xml" 2>/dev/null || true
+  # counter 在 act 之后跑，act 已经真的断开了手机；现采只会得到 paired:false。
+  # 反证用主路径「断开前」的样本：恢复后的 devices.json（仍 paired:true）和手机设置页，
+  # 这样两条断开判据都会变红（#1600）。
+  cp "$EV/main/devices-after-restore.json" "$d/devices-after-disconnect.json" 2>/dev/null || true
+  cp "$EV/main/phone-before-disconnect.xml" "$d/phone-after-disconnect.xml" 2>/dev/null || true
 }
 
 teardown() {
@@ -155,6 +171,9 @@ teardown() {
   # 断开后 devices.json 仍可能留着 paired=false 的记录；按 paired=true 的台数判断要不要重配。
   if [ "$(paired_count "$d/diag/devices.json")" != 1 ]; then
     win_app_running || win_start_app >/dev/null 2>&1 || true
+    # 断开后回到总览页；win_pair 自己点「无法扫码？复制配对码」。
+    win_ui_click '总览' >/dev/null 2>&1 || true
+    sleep 1
     win_pair "$d" >/dev/null 2>&1 || true
   fi
   return 0
