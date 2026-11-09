@@ -2032,55 +2032,78 @@ impl IpcServer {
                     (self.now)(),
                 )
                 .await
-                .map(|removed| removed.is_some())
                 {
-                    Ok(revoked) => {
-                        if revoked {
-                            warn_if_audit_failed(
-                                "device.revoked",
-                                self.db
-                                    .append_audit(&storage::AuditEntry::local(
-                                        (self.now)(),
-                                        None, // 本机 owner 经 IPC 操作
-                                        "device.revoked",
-                                        None,
-                                        Some(serde_json::json!({ "nodeId": node_hex }).to_string()),
-                                    ))
-                                    .await,
-                            );
-                            // AUDIT-04 card decision #4: 撤销授权是用户决定，
-                            // 必须落 audit_decision（causal_object_ref = 被撤销
-                            // 设备），不能只靠上面兼容层的 audit_operation 行。
-                            warn_if_audit_failed(
-                                "revoke_authorization",
-                                self.db
-                                    .append_decision(&storage::DecisionEntry {
-                                        decision_id: fresh_audit_id(),
-                                        decision_kind: "revoke_authorization".into(),
-                                        actor: None, // 本机 owner 经 IPC 操作
-                                        causal_operation_id: None,
-                                        causal_object_ref: Some(node_hex.to_string()),
-                                        occurred_at: (self.now)(),
-                                        payload: Some(
-                                            serde_json::json!({ "nodeId": node_hex }).to_string(),
-                                        ),
-                                    })
-                                    .await,
-                            );
-                            // IPC-02: 设备移除——桌面设备行即时消失。
-                            events::emit(
-                                &self.events,
-                                events::DEVICE_CHANGED,
-                                serde_json::json!({ "node_id": node_hex }),
-                            );
-                            events::emit(
-                                &self.events,
-                                events::ACTIVITY_APPENDED,
-                                serde_json::json!({ "action": "device.revoked" }),
-                            );
-                        }
-                        Resp::ok(id, serde_json::json!({ "revoked": revoked }))
+                    Ok(Some(_)) => {
+                        warn_if_audit_failed(
+                            "device.revoked",
+                            self.db
+                                .append_audit(&storage::AuditEntry::local(
+                                    (self.now)(),
+                                    None, // 本机 owner 经 IPC 操作
+                                    "device.revoked",
+                                    None,
+                                    Some(serde_json::json!({ "nodeId": node_hex }).to_string()),
+                                ))
+                                .await,
+                        );
+                        // AUDIT-04 card decision #4: 撤销授权是用户决定，
+                        // 必须落 audit_decision（causal_object_ref = 被撤销
+                        // 设备），不能只靠上面兼容层的 audit_operation 行。
+                        warn_if_audit_failed(
+                            "revoke_authorization",
+                            self.db
+                                .append_decision(&storage::DecisionEntry {
+                                    decision_id: fresh_audit_id(),
+                                    decision_kind: "revoke_authorization".into(),
+                                    actor: None, // 本机 owner 经 IPC 操作
+                                    causal_operation_id: None,
+                                    causal_object_ref: Some(node_hex.to_string()),
+                                    occurred_at: (self.now)(),
+                                    payload: Some(
+                                        serde_json::json!({ "nodeId": node_hex }).to_string(),
+                                    ),
+                                })
+                                .await,
+                        );
+                        // IPC-02: 设备移除——桌面设备行即时消失。
+                        events::emit(
+                            &self.events,
+                            events::DEVICE_CHANGED,
+                            serde_json::json!({ "node_id": node_hex }),
+                        );
+                        events::emit(
+                            &self.events,
+                            events::ACTIVITY_APPENDED,
+                            serde_json::json!({ "action": "device.revoked" }),
+                        );
+                        Resp::ok(id, serde_json::json!({ "revoked": true }))
                     }
+                    // #1402 卡3：手机自己断开后（只剩档案、没有配对记录），业主在
+                    // 电脑上点「移除」曾是空操作，行一直停在「已断开」。业主的这次
+                    // 操作本身就是要移除——把档案上的离开原因改成 Owner，行归到
+                    // 「已移除」。没有档案（marked = 0）时什么都没改，照实回 false。
+                    Ok(None) => match self
+                        .db
+                        .mark_departed(
+                            std::slice::from_ref(&node_id),
+                            storage::DepartedBy::Owner,
+                            (self.now)(),
+                        )
+                        .await
+                    {
+                        Ok(marked) => {
+                            let removed = marked > 0;
+                            if removed {
+                                events::emit(
+                                    &self.events,
+                                    events::DEVICE_CHANGED,
+                                    serde_json::json!({ "node_id": node_hex }),
+                                );
+                            }
+                            Resp::ok(id, serde_json::json!({ "revoked": removed }))
+                        }
+                        Err(_) => internal(id),
+                    },
                     Err(_) => internal(id),
                 }
             }
@@ -2845,5 +2868,68 @@ mod tests {
     fn hex32_roundtrip_and_rejects() {
         assert!(parse_hex32("xyz").is_none());
         assert_eq!(parse_hex32(&"ab".repeat(32)).unwrap(), vec![0xab; 32]);
+    }
+
+    fn test_server(db: &Db, dir: &std::path::Path) -> IpcServer {
+        let (events, _probe) = events::bus();
+        let (pairing, pending_rx) = Pairing::new(db.clone(), transport::NodeId([0xCC; 32]), None);
+        IpcServer::new(
+            db.clone(),
+            pairing.with_events(events.clone()),
+            DiagAgg::new(db.clone()),
+            dir.to_path_buf(),
+            pending_rx,
+            events,
+        )
+    }
+
+    /// #1402 卡3：手机自己断开后（只剩档案、没有配对记录），业主在电脑上点
+    /// 「移除」过去是空操作，行永远停在「已断开」。现在把档案上的离开原因改成
+    /// Owner，行归到「已移除」。
+    /// 反证：去掉 `Ok(None)` 分支里的 mark_departed，removal 仍是 disconnected，红。
+    #[tokio::test]
+    async fn revoke_on_a_disconnected_row_marks_it_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Db::open_in_memory().await.unwrap();
+        let node = [0xBBu8; 32];
+        db.accept_pairing(
+            &node,
+            "自己断开的",
+            &storage::Pairing {
+                id: "pairing-bb".into(),
+                node_id: node.to_vec(),
+                role: storage::Role::Member,
+                paired_at: 1,
+            },
+        )
+        .await
+        .unwrap();
+        db.remove_pairing(&node, None, storage::DepartedBy::Device, 2)
+            .await
+            .unwrap();
+        let before = db.get_device(&node).await.unwrap().unwrap();
+        assert_eq!(
+            crate::device_projection::Removal::of(&before),
+            crate::device_projection::Removal::Disconnected
+        );
+
+        let server = test_server(&db, dir.path());
+        let resp = server
+            .dispatch(Req {
+                id: "revoke".into(),
+                method: "device.revoke".into(),
+                params: serde_json::json!({ "node_id": hex(&node) }),
+                ..Default::default()
+            })
+            .await;
+        assert!(resp.ok, "revoke 失败：{resp:?}");
+
+        let after = db.get_device(&node).await.unwrap().unwrap();
+        assert_eq!(
+            crate::device_projection::Removal::of(&after),
+            crate::device_projection::Removal::Removed
+        );
+        assert_eq!(after.profile.departed_by, Some(storage::DepartedBy::Owner));
+        assert_eq!(resp.result.unwrap()["revoked"], true);
     }
 }
