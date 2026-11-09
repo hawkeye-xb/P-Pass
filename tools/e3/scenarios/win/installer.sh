@@ -224,7 +224,8 @@ snapshot_state() { # snapshot_state <证据目录> <名字>
   } >"$d/$tag.txt"
 }
 
-# 清掉上一轮的 extract 安装（不是被测对象），保留壳数据目录/库供 W5 对照。
+# 清掉上一轮的 extract 安装（不是被测对象）；壳数据目录/库不在这里清，
+# 由 setup 里的 win_reset_desktop_state 清（残留会让首启向导被跳过，见 #1607）。
 clean_extract_install() {
   win_unregister_task >/dev/null 2>&1 || true
   win_stop_all >/dev/null 2>&1 || true
@@ -275,6 +276,11 @@ setup() {
   # 从这里开始动机器；teardown 只在动过之后才补装候选。
   TOUCHED=1
   clean_extract_install
+  # 壳数据目录（config.toml/库位置）也必须清：残留会让 perMachine App 启动时读到
+  # 旧配置、跳过首启向导，服务没有库配置就一直 STOPPED（#1607）。旧照片库一并
+  # 挪走（不硬删），保证「全新机器」语义。清不干净就停下，否则后续 E3 分不清是
+  # 场景没清还是产品没修。
+  win_reset_desktop_state || { echo "清桌面状态失败（壳 config 可能残留）"; return 1; }
 
   # R0.2 从干净环境开始：先卸掉上一轮留下的真实安装，再把旧 ProgramData 移到一边
   # （不删除，留作对照）。不重置的话，旧身份/ACL 会让「首次安装」用例失真。
