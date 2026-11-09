@@ -33,7 +33,13 @@ if(\$t){
   'EXECUTE=' + \$a.Execute
   'ARGUMENTS=' + \$a.Arguments
   'STATE=' + \$t.State
-  'PRINCIPAL=' + \$t.Principal.UserId + '/' + \$t.Principal.LogonType + '/' + \$t.Principal.RunLevel
+  # 判据读任务 XML 的 LogonType/RunLevel：Get-ScheduledTask 对象的显示名是
+  # Interactive/Limited，和 XML 的 InteractiveToken/LeastPrivilege 不是一套（#1602）。
+  # RunLevel 缺省就是 LeastPrivilege。
+  \$xml=[xml](Export-ScheduledTask -TaskName 'P-Pass')
+  \$pr=\$xml.Task.Principals.Principal
+  \$rl=if(\$pr.RunLevel){\$pr.RunLevel}else{'LeastPrivilege'}
+  'PRINCIPAL=' + \$pr.UserId + '/' + \$pr.LogonType + '/' + \$rl
   'TRIGGERS=' + ((\$t.Triggers | ForEach-Object { \$_.CimClass.CimClassName }) -join ',')
   'REPETITION=' + ((\$t.Triggers | Where-Object { \$_.Repetition } | ForEach-Object { \$_.Repetition.Interval }) -join ',')
 } else { 'NO_TASK' }

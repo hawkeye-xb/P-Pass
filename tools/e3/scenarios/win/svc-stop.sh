@@ -99,8 +99,19 @@ act() {
   } >"$d/restore.txt"
   # 3) R4.1 手机断开
   phone_disconnect || echo "手机断开流程失败"
-  sleep 5
-  win_diag "$d" >/dev/null 2>&1 || true
+  # 桌面识别设备离开要等传输超时（实测约 30s），固定等 5s 会把正确行为判红（#1600）。
+  # 轮询到 paired:false 或 60s 超时，并记录实际等待时间。
+  local waited=0 marked=0
+  while [ "$waited" -lt 60 ]; do
+    sleep 5
+    waited=$((waited + 5))
+    win_diag "$d" >/dev/null 2>&1 || true
+    if grep -q '"paired": false' "$d/diag/devices.json" 2>/dev/null; then
+      marked=1
+      break
+    fi
+  done
+  echo "disconnect_wait=${waited}s marked=${marked}" >"$d/disconnect-wait.txt"
   cp "$d/diag/devices.json" "$d/devices-after-disconnect.json" 2>/dev/null || true
   win_phone_dump "$d/phone-after-disconnect.xml" || true
 }

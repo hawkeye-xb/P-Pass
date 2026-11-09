@@ -145,7 +145,9 @@ win_daemon_running() { powershell.exe -NoProfile -Command "if (Get-Process ppf-d
 
 # 经 WMI 起 App（SOP §9.0：不要用 run-outside-package 起 App，它会被常驻进程占住 out.txt）。
 win_start_app() {
-  win_ps "\$r=Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = 'cmd.exe /c start \"\" \"$(cygpath -w "$WIN_DESKTOP_EXE")\"' }; if(\$r.ReturnValue -ne 0){ exit 1 }" >/dev/null
+  # 直接起 GUI exe，不经 `cmd /c start`：cmd 是控制台程序，在 Windows Terminal 作为
+  # 默认终端的机器上会闪一个可见终端窗口，W1 的 watcher 会把它当成产品闪窗（#1601）。
+  win_ps "\$r=Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = '\"$(cygpath -w "$WIN_DESKTOP_EXE")\"' }; if(\$r.ReturnValue -ne 0){ exit 1 }" >/dev/null
   local i
   for i in $(seq 1 30); do win_app_running && return 0; sleep 1; done
   return 1
@@ -166,6 +168,12 @@ win_daemon_pid() {
 
 win_task_state() {
   win_ps "(Get-ScheduledTask -TaskName 'P-Pass' -ErrorAction SilentlyContinue).State" 2>/dev/null | tr -d '[:space:]'
+}
+
+# 任务是「已启用」还是「已禁用」。不能拿 State 判：任务动作就是常驻 daemon，
+# 正在跑的实例会让 State 一直是 Running，Disable-ScheduledTask 也不会停掉它（#1599）。
+win_task_enabled() {
+  win_ps "(Get-ScheduledTask -TaskName 'P-Pass' -ErrorAction SilentlyContinue).Settings.Enabled" 2>/dev/null | tr -d '[:space:]'
 }
 
 win_task_action_path() {

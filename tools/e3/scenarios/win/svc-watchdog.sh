@@ -103,8 +103,10 @@ counter() {
   local d="$OUT" old pid
   # 去掉看门狗这个触发条件：禁用计划任务、关掉壳（壳也会自发拉起 daemon），再杀 daemon。
   win_task_disable
-  if [ "$(win_task_state)" != Disabled ]; then
-    echo "反证：看门狗任务没被禁用（$(win_task_state)）" >&2
+  # 判「已禁用」而不是 State=Disabled：任务动作就是常驻 daemon，正在跑的实例让
+  # State 一直是 Running，禁用触发器不会停掉它（#1599）。
+  if [ "$(win_task_enabled)" != False ]; then
+    echo "反证：看门狗任务没被禁用（enabled=$(win_task_enabled) state=$(win_task_state)）" >&2
     return 1
   fi
   win_stop_app
