@@ -252,8 +252,8 @@ gh release download test-channel -R "$REPO" -D "$WORK/base" -p '*_x64-setup.exe'
 | R0.3 向导 | agent 用 `uia-drive.ps1` 依次点「继续」「继续」「完成」。启动时若已有更新的 test 包，会先弹「发现新版本 …」，基线阶段对它点「取消」。默认库目录是 `图片\P-Pass 家庭照片库`，路径里带中文，正好覆盖非 ASCII 路径；全新机器上这个目录不存在，#871 修好之前首启必失败 | 三步走完，进入主界面 |
 | R1.4 桌面版本 | 读 `HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass` 的 `DisplayVersion`，或者 `p-pass-desktop.exe` 的 `VersionInfo.ProductVersion` | 和 `ipc status` 的 `version`、手机端版本号一致 |
 | R1.6 桌面应用内更新 | 打开候选版桌面端，会弹出系统对话框「发现新版本 …，是否下载并安装？」，人点「确定」即可。人在对话里授权后，agent 也可以给对话框里的「确定」按钮发 `BM_CLICK` 代点。同时跑 W1 盯窗口 | 安装器进度窗出现后桌面端自动重启；`DisplayVersion` 和 `ipc status` 的 `version` 都变成下一跳版本，`pid` 换新（更新后 daemon 换新版，#788 第 4 项） |
-| R3.2 崩溃恢复 | PowerShell：`Stop-Process -Id <ipc status 的 pid> -Force`，分别在桌面壳开着和退出 App 之后各做一次 | 两种情况都由计划任务 `P-Pass` 的每分钟看门狗在 1 分钟内拉起，新进程的父进程是 `svchost.exe`（#957；之前桌面壳没在跑时要等下次登录） |
-| R3.3 / R4.1 停服务 | 用托盘或设置页的「停止后台服务」（键盘操作见 §9.0b）。**不要**只写标记再杀进程：计划任务还在，看门狗一分钟内就会把 daemon 拉回来。等 2 分钟以上确认仍然停着；恢复时点「启动后台服务」 | 停止后计划任务 `P-Pass` 被删除、没有 daemon 进程，2 分钟以上不被拉起，重启电脑后也不起（#957）；启动后任务恢复、daemon 的父进程是 `svchost.exe` |
+| R3.2 崩溃恢复 | PowerShell：`Stop-Process -Id <ipc status 的 pid> -Force`，分别在桌面壳开着和退出 App 之后各做一次 | 两种情况都在 1 分钟内恢复：壳开着时由壳自愈拉起（父进程可能是 `p-pass-desktop`，也可能是 `svchost`）；壳关着时由计划任务 `P-Pass` 的每分钟看门狗拉起（父进程 `svchost.exe`）（#957；之前桌面壳没在跑时要等下次登录） |
+| R3.3 / R4.1 停服务 | 用托盘或设置页的「停止后台服务」（键盘操作见 §9.0b）。**不要**只写标记再杀进程：计划任务还在，看门狗一分钟内就会把 daemon 拉回来。等 2 分钟以上确认仍然停着；恢复时点「启动后台服务」 | 停止后计划任务 `P-Pass` 被删除、没有 daemon 进程，2 分钟以上不被拉起，重启电脑后也不起（#957）；启动后任务恢复，壳开着时 daemon 的父进程可能是 `p-pass-desktop` 或 `svchost.exe`，壳关着时是 `svchost.exe` |
 | R5.1 日志 | `$DAEMON_LOG` 见 §9.2 | 同 macOS |
 | R6.1 照片墙 | 「在 Finder 中显示」换成「在资源管理器中显示」 | 资源管理器打开，并选中原文件 |
 | R6.4 首次打开 | 用浏览器下载候选安装包，双击运行 | 签名接入之前：SmartScreen 弹出「Windows 已保护你的电脑」，点「更多信息 → 仍要运行」后能装上，记进报告。签名接入之后：发布者显示为签名证书的主体，不出现「未知发布者」 |
