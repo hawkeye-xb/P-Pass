@@ -51,7 +51,7 @@ The app is simple, but you can still see what it's doing and step in. There are 
 
 ## Where it is now
 
-P-Pass currently runs on Macs with Apple silicon and Android phones. It's end-to-end encrypted, photos go directly between devices, and a relay only helps out when the two ends can't reach each other. The code is open source and on [GitHub](https://github.com/hawkeye-xb/P-Pass).
+P-Pass runs on Apple silicon Macs, 64-bit Windows PCs and Android phones, and the iPhone app is on the App Store (mainland China installs it through TestFlight). It's end-to-end encrypted, photos go directly between devices, and a relay only helps out when the two ends can't reach each other. The code is open source and on [GitHub](https://github.com/hawkeye-xb/P-Pass).
 
 We wrote this right after the first milestone. Later posts on [this blog](/blog/) will cover the mistakes and trade-offs along the way, such as why the icon took nine rounds and why phone backups ended up running on Android's own job queue.
 
@@ -73,4 +73,4 @@ Yes. The devices connect directly when they can; when they can't, a relay run by
 
 ### Which devices are supported?
 
-A Mac with Apple silicon on the computer side, and Android 8.0 or later on the phone. Once both are installed, scan the QR code on the computer screen with your phone to pair them.
+An Apple silicon Mac or a 64-bit Windows PC on the computer side, and Android 8.0 or later, or an iPhone on iOS 16 or later, on the phone side. Once both are installed, scan the QR code on the computer screen with your phone to pair them.

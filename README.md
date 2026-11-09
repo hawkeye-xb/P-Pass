@@ -81,14 +81,17 @@ The app walks you through it — just click through:
    下载 **P-Pass_<版本>_android.apk**。Android 会提示"未知来源安装"——直接下载
    的正常提示，允许即可。
 
-   **iPhone (iOS 16+)**: the app is distributed through TestFlight. Install
-   TestFlight from the App Store, open the
-   [P-Pass public link](https://testflight.apple.com/join/htBATauc) on the iPhone, then tap
-   Accept and Install. Turn on automatic updates for P-Pass in TestFlight:
-   each TestFlight build stops opening 90 days after it is published.
-   **iPhone（iOS 16 及以上）**：通过 TestFlight 分发。先在 App Store 安装
-   TestFlight，再在 iPhone 上打开 [P-Pass 公开链接](https://testflight.apple.com/join/htBATauc)，
-   点「接受」「安装」。建议在 TestFlight 里为 P-Pass 打开自动更新：每个
+   **iPhone (iOS 16+)**: get it from the
+   [App Store](https://apps.apple.com/app/id6822143047). In mainland China the
+   App Store does not list P-Pass; install TestFlight from the App Store, open
+   the [P-Pass public link](https://testflight.apple.com/join/htBATauc) on the
+   iPhone, then tap Accept and Install, and turn on automatic updates for
+   P-Pass in TestFlight: each TestFlight build stops opening 90 days after it
+   is published.
+   **iPhone（iOS 16 及以上）**：在 [App Store](https://apps.apple.com/app/id6822143047)
+   下载。中国大陆的 App Store 里没有 P-Pass，先在 App Store 安装 TestFlight，
+   再在 iPhone 上打开 [P-Pass 公开链接](https://testflight.apple.com/join/htBATauc)，
+   点「接受」「安装」，并在 TestFlight 里为 P-Pass 打开自动更新：每个
    TestFlight 版本发布 90 天后无法再打开。
 2. Open the P-Pass app on your phone and scan the QR code on your computer
    screen. The phone shows a 6-digit code; enter it on the computer and click

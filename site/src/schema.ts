@@ -4,8 +4,9 @@
  * structured data describing a different product.
  *
  * Only the platforms that actually ship are claimed: macOS, Windows, Android,
- * and iOS (through TestFlight). Adding a platform here before it ships would
- * be a claim about the product that the product cannot back up.
+ * and iOS (App Store, or TestFlight in mainland China). Adding a platform
+ * here before it ships would be a claim about the product that the product
+ * cannot back up.
  */
 import { BLUESKY_URL, GITHUB_URL, RELEASES_URL, SITE_DESCRIPTION, SITE_URL, YOUTUBE_URL } from './consts';
 import { FAQ, FAQ_TITLE } from './i18n/faq';

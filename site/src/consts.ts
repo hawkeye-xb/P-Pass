@@ -17,8 +17,13 @@ export const MIRROR_MAC = `${MIRROR_BASE}/P-Pass-latest.dmg`;
 export const MIRROR_ANDROID = `${MIRROR_BASE}/P-Pass-latest.apk`;
 export const MIRROR_WINDOWS = `${MIRROR_BASE}/P-Pass-latest.exe`;
 
-// iPhone is distributed through a TestFlight public link (both languages; in
-// mainland China this stays the long-term channel). Single place to replace.
+// iPhone ships on the App Store. A region-less link follows the visitor's own
+// storefront, which is what we want wherever P-Pass is listed; it is in the
+// US, Hong Kong and UK storefronts, not in mainland China.
+export const APP_STORE_URL = 'https://apps.apple.com/app/id6822143047';
+
+// Mainland China has no App Store listing, so the zh pages keep the TestFlight
+// public link as their iPhone channel. Single place to replace.
 export const TESTFLIGHT_URL = 'https://testflight.apple.com/join/htBATauc';
 
 // Canon copy (Brief §3) — one entry per language, same level.

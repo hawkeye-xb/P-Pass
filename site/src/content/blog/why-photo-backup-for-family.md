@@ -51,7 +51,7 @@ draft: false
 
 ## 现在的样子
 
-P-Pass 目前是 macOS + Android，端到端加密，照片端到端直传，中继只在双方够不着的时候帮忙转一下。开源，代码在 [GitHub](https://github.com/hawkeye-xb/P-Pass)。
+P-Pass 目前有 Apple 芯片 Mac、64 位 Windows 和 Android 客户端，iPhone 版已在 App Store 上架（中国大陆通过 TestFlight 安装）。端到端加密，照片端到端直传，中继只在双方够不着的时候帮忙转一下。开源，代码在 [GitHub](https://github.com/hawkeye-xb/P-Pass)。
 
 这篇文章写于第一个里程碑收官之后。产品设计的过程、踩过的坑、做的取舍，都会陆续写在[这个博客](/zh/blog/)里。比如图标是怎么迭代了九轮的，比如手机端的备份任务为什么最后交给了系统自带的队列。
 
@@ -73,4 +73,4 @@ P-Pass 目前是 macOS + Android，端到端加密，照片端到端直传，中
 
 ### 支持哪些设备？
 
-电脑端目前是 Apple 芯片的 Mac，手机端是 Android 8.0 及以上的手机。两边装好后，用手机扫一下电脑屏幕上的二维码就能配对。
+电脑端是 Apple 芯片的 Mac 或 64 位 Windows 电脑，手机端是 Android 8.0 以上的手机或 iOS 16 以上的 iPhone。两边装好后，用手机扫一下电脑屏幕上的二维码就能配对。
