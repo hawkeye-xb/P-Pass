@@ -158,8 +158,8 @@ const platforms = [
   /* The Windows note only matters when Windows is offered as the main choice
      or nothing was detected; the iOS note only for iPhone / iPad visitors. */
   .cta-ios { display: none; }
-  /* iPhone / iPad: the TestFlight button is the main one, so it goes above
-     the (now secondary) desktop and Android row. */
+  /* iPhone / iPad: the iPhone button is the main one, so it goes above the
+     (now secondary) desktop and Android row. */
   .dl[data-detected='ios'] { display: flex; flex-direction: column; }
   .dl[data-detected='ios'] .cta-ios { display: block; order: -1; margin-bottom: 0.75rem; }
   /* Nothing in that row installs on the phone in hand, so it shrinks to one
