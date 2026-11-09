@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# #1187：按改动路径做两种判定，给 CI 的 changes job 与核心审批用。
+# #1187：按改动路径做两种判定，给 CI 的 changes job 与 acceptance gate 用。
 #
 #   tools/ci-paths.sh hit  <base-sha|-> <glob>...         改动里有没有文件命中任一 glob
 #   tools/ci-paths.sh core <base-sha|-> [规则文件] [--diff <文件>]
@@ -151,7 +151,7 @@ version_line_re() {
   case "$1" in
     # tools/bump-version.sh：sed "s/\"version\": \"<旧>\"/\"version\": \"<新>\"/"
     # 只认顶层那一行（文件按两个空格缩进）：嵌套对象里的 "version" 键（比如以后 plugins 里加一个）不算版本号行，
-    # 改它仍走核心审批。
+    # 改它仍算核心改动。
     apps/desktop/src-tauri/tauri.conf.json)
       printf '%s' '^  "version": "'"${SEMVER_RE}"'",?[[:space:]]*$'
       ;;

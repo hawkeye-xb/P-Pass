@@ -134,7 +134,7 @@ gate 的 needs 里有 `flow-tests`、触发接线（`changes` 的 `flow` 输出�
 
 `.github/core-paths.txt` 圈住的文件（门禁本身、配对 / 身份 / 加密 / 协议、存储与迁移、
 更新链、依赖锁）改到了，就是 AGENTS.md 里的人控级任务，没有单独的审批 job。三道关把关：
-开工前方案按红线 6 定案（卡上引用已采纳方案）；PR 正文有产品负责人真机验收行（`acceptance gate` 检查）；
+开工前方案按红线 6 定案（卡上引用已采纳方案）；PR 正文引用已采纳方案（`acceptance gate` 检查）；
 独立评审通过（CI 评审 job 的 `review/agent`）。判定逻辑与语法见 `tools/ci-paths.sh` 头注释，
 自测 `tools/test-ci-paths.sh`。
 

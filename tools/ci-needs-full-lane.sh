@@ -78,7 +78,7 @@ set -uo pipefail
 # 2026-11-06（#1467）按依赖面补进两个 lane 共用的清单：
 #   tools/flow/ tools/e3/ tools/hooks/   流程、真机验收、本地钩子脚本
 #   上述目录的自测 tools/test-{flow-*,acceptance-gate,ci-review,e3,local-hooks,release-acceptance}.sh
-#   tools/ci-paths.sh 与其自测             只被 android/ios/docs/core-review lane 与流程脚本调用
+#   tools/ci-paths.sh 与其自测             只被 android/ios/docs lane 与流程脚本调用
 #   release/notes/                         应用内更新说明（由 ci-docs 的 release/** 路径负责）
 #   .github/ISSUE_TEMPLATE/                issue 模板
 #   .coderabbit.yaml                       CodeRabbit 配置。构建、crates/、桌面壳都不读
