@@ -2,7 +2,7 @@
 # 按版本验收（#1471）：验收单位是「候选版相对上一个正式版、用户看得见的改动」，范围从 git 算。
 #
 #   release-scope.sh [--since <tag>] [--to <ref>]
-#       列出验收范围：<since>..<to>（默认：<to> 往前最近的正式 tag .. origin/main）里 squash 合入的 PR，
+#       列出验收范围：<since>..<to>（默认：<to> 往前最近的正式 tag .. origin/main）里 squash 或普通合并的 PR，
 #       逐个用 acceptance-gate.sh classify（带该提交的 diff）判级，ui / core / notes 进范围，每项带关联卡的「验收场景」。
 #       没有 PR 号、却改了用户看得见文件的提交进不了台账，直接红；起点不是 <to> 的祖先也红。
 #       --since 可给任何 tag（例如上一个 test 包，数「自上个 test 包以来用户可见 PR 数」）。

@@ -62,7 +62,7 @@ do_prepare() {
   load_repo
   rm -rf "$STATE"
   mkdir -p "$STATE"
-  # 草稿不评：盯梢、人控级先开草稿、验收后转正式，转正式时（ready_for_review）再评一次。
+  # 草稿不评：三级都直接开正式 PR；开了草稿的，转正式时（ready_for_review）再评一次。
   if [ "$(gh pr view "$pr" -R "$REPO" --json isDraft --jq .isDraft 2>/dev/null | tr -d '\r')" = true ]; then
     : >"${STATE}/skip"
     echo "ci-review: #${pr} 是草稿，不评审（转正式后再评）"
@@ -159,7 +159,7 @@ do_publish() {
 # 「/review-override <理由>」。只认对本仓有 admin 权限的真人账号（仓库属组织，author_association 是 MEMBER，
 # 不能当依据；用 gh api 现查作者与权限，不信事件载荷）；理由不能为空。
 # 通过后贴一条带 agent=OVERRIDE 标记的评论（只对当时的头提交有效，推新提交即作废），
-# 再走一遍 prepare / publish：复用这个结论，不调模型；盯梢、人控级仍要验收行。
+# 再走一遍 prepare / publish：复用这个结论，不调模型；放行只顶替评审结论，用户看得到的改动仍随版本验收、发版前台账清零。
 do_override() {
   local pr="$1" cid="$2" meta login utype url body reason perm sha
   load_repo
@@ -184,7 +184,7 @@ do_override() {
   {
     printf '**独立评审：owner 复核放行**（头提交 `%s`）\n\n' "${sha:0:10}"
     printf '%s 在 %s 复核放行，理由：%s\n\n' "$login" "$url" "$reason"
-    printf '<sub>只对头提交 `%s` 有效，推新提交照常评审；盯梢、人控级仍要验收记录。</sub>\n' "${sha:0:10}"
+    printf '<sub>只对头提交 `%s` 有效，推新提交照常评审；用户看得到的改动仍随版本验收，发版前台账清零。</sub>\n' "${sha:0:10}"
     printf '<!-- ppass-review sha=%s agent=OVERRIDE -->\n' "$sha"
   } >"${STATE}/override.md"
   gh pr comment "$pr" -R "$REPO" --body-file "${STATE}/override.md" >/dev/null 2>&1 ||
