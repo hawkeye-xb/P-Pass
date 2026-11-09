@@ -1,8 +1,11 @@
 # R1.1/R1.2/R1.4：从基线 0.10.1 覆盖升级到候选 0.11.0-test.1（桌面 + 手机），版本一致，
 # 配对、身份、照片库都不丢。
 #
-# 桌面安装器提权才可用；非提权且 E3_WIN_PROVISION=extract 时用候选安装包载荷覆盖
-# %LOCALAPPDATA%\P-Pass 并改 HKCU 卸载登记（安装器路径未验证，报告写明）。
+# 起点是 win/install-baseline 搭好的用户态布局（%LOCALAPPDATA%\P-Pass + HKCU 卸载登记），
+# 覆盖安装沿用同一布局：把候选安装包的载荷解到同一目录并改 HKCU 登记。perMachine 真安装器
+# （Program Files + Windows 服务 + %ProgramData%）由 win/installer 覆盖；两套布局不能混用——
+# 服务一注册，daemon 的配置目录就从 %LOCALAPPDATA% 换成 %ProgramData%
+# （crates/platform/src/windows.rs `daemon_config_dir`），配对与库位置会读不到。
 # 反证：不装候选、直接对升级前快照跑同一套判据 ⇒ 版本判据必须变红（用 setup 里
 # 真实采集的 before 证据，不降级、不动库）。
 DESC="R1.1/R1.2/R1.4：覆盖升级到候选 0.11.0-test.1，桌面/daemon/手机版本一致，配对与照片不丢"
@@ -47,9 +50,9 @@ setup() {
   [ -n "$apk" ] || { echo "缺候选 APK（$WIN_REL_DIR/$WIN_CAND_TAG/*_android.apk）"; return 77; }
   echo "候选安装包：$exe"
   echo "sha256：$(sha256sum "$exe" | awk '{print $1}')"
-  # 装不了就别开始：非提权且没给 extract 时，setup 返回 SKIP，不动机器状态。
-  win_is_elevated || [ "${E3_WIN_PROVISION:-}" = extract ] || {
-    echo "跳过：安装器需要 UAC 提权；提权会话重跑，或设 E3_WIN_PROVISION=extract"
+  # 解包要 7-Zip 完整版；缺了在 setup 就 SKIP，不动机器状态。
+  [ -n "$(ls "$WIN_TOOLS"/7zfull/Files/7-Zip/7z.exe 2>/dev/null | head -1)" ] || {
+    echo "找不到 7z.exe（先按 local-state.md 里的办法解出 7-Zip）"
     return 77
   }
   echo "--- 升级前快照 ---"
@@ -62,24 +65,12 @@ act() {
   snapshot "$d" pre
   exe="$(win_release_file "$WIN_CAND_TAG" '*_x64-setup.exe')"
   # 覆盖安装：先停壳与 daemon（安装器的 PREINSTALL 钩子在 extract 路径下没有，手动做）。
-  # 计划任务：真实安装器保留并重跑；extract 路径的 win_provision_extract 会先 unregister 任务，
-  # 装完后任务不在就手动起 daemon（下面的 schtasks /run 分支跳过）。报告里注明这个 extract 偏差。
-  win_is_elevated || [ "${E3_WIN_PROVISION:-}" = extract ] || {
-    echo "跳过：安装器需要 UAC 提权；提权会话重跑，或设 E3_WIN_PROVISION=extract"
-    return 77
-  }
+  # win_provision_extract 会先 unregister 计划任务，装完后任务不在就手动起 daemon
+  # （下面的 schtasks /run 分支跳过）。
   win_stop_all || { echo "停不掉桌面 App/daemon"; return 1; }
-  if win_is_elevated; then
-    win_install_silent "$exe" || { echo "候选安装器失败"; return 1; }
-    echo "provision=installer" >"$d/provision.txt"
-  elif [ "${E3_WIN_PROVISION:-}" = extract ]; then
-    win_provision_extract "$exe" "$WIN_CAND_VER" || { echo "候选解包安装失败"; return 1; }
-    echo "provision=extract" >"$d/provision.txt"
-    echo "task=removed_by_extract（真实安装器会保留任务）" >"$d/extract-note.txt"
-  else
-    echo "跳过：安装器需要 UAC 提权（requireAdministrator）；提权会话重跑，或设 E3_WIN_PROVISION=extract"
-    return 1
-  fi
+  win_provision_extract "$exe" "$WIN_CAND_VER" || { echo "候选解包安装失败"; return 1; }
+  echo "provision=extract（用户态布局；perMachine 真实安装器见 win/installer）" >"$d/provision.txt"
+  echo "task=removed_by_extract（真实安装器会保留任务）" >"$d/extract-note.txt"
   # 手机覆盖安装候选 APK（保留数据）。
   local apk
   apk="$(win_release_file "$WIN_CAND_TAG" '*_android.apk')"

@@ -363,7 +363,7 @@ win_release_file() { # win_release_file <tag> <匹配模式>
 }
 
 # 从安装包里取出 App 文件并写 HKCU 卸载登记（等价于 NSIS 装出来的位置与登记）。
-# 只在 E3_WIN_PROVISION=extract 时由场景调用；报告里必须写明安装器路径未验证。
+# 用户态布局（win/install-baseline、win/upgrade-candidate）用它；报告里必须写明安装器路径未验证。
 win_provision_extract() { # win_provision_extract <安装包> <版本>
   local exe="$1" ver="$2" seven
   seven="$(ls "$WIN_TOOLS"/7zfull/Files/7-Zip/7z.exe 2>/dev/null | head -1)"

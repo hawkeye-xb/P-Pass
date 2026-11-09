@@ -45,7 +45,9 @@ judge() {
   local d="$1"
   check "计划任务的 Execute 是安装目录里的 ppf-daemon" grep -Fq "EXECUTE=$WIN_APP_DIR_WIN\\ppf-daemon.exe" "$d/task.txt"
   check "计划任务在运行" grep -q 'STATE=Running' "$d/task.txt"
-  check "任务主体是交互用户、Limited（不弹 UAC）" grep -q 'PRINCIPAL=.*/Interactive/Limited' "$d/task.txt"
+  # Get-ScheduledTask 给的是任务 XML 里的枚举名（crates/platform/src/windows.rs:151-152）：
+  # InteractiveToken / LeastPrivilege，不是 PowerCLI 习惯的 Interactive / Limited。
+  check "任务主体是交互用户、LeastPrivilege（不弹 UAC）" grep -q 'PRINCIPAL=.*/InteractiveToken/LeastPrivilege' "$d/task.txt"
   check "有登录触发" grep -Eq 'TRIGGERS=.*LogonTrigger' "$d/task.txt"
   check "看门狗每分钟重复触发（PT1M）" grep -Eq 'REPETITION=.*PT1M' "$d/task.txt"
   check "HKCU Run 下没有 P-Pass 值" eq_file "$d/run-value.txt" "RUN_VALUE_ABSENT"

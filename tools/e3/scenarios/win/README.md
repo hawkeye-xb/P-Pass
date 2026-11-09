@@ -37,8 +37,9 @@
   `ppf-daemon.exe` / `uninstall.exe` 解到 `%LOCALAPPDATA%\P-Pass`，并写 HKCU 卸载登记
   （App 只认安装程序登记的 `InstallLocation`）；与安装器无关的用例都跑这套。解包依赖 7-Zip 完整版
   `7z.exe`（NSIS 格式，本机在 `$E3_STATE/win/tools/7zfull/`）。
-- `win/upgrade-candidate` 在非提权且没设 `E3_WIN_PROVISION=extract` 时 **SKIP**（不改机器状态）；
-  extract 路径会先 unregister 计划任务，装完任务不在就手动起 daemon，报告里注明这个偏差。
+- `win/upgrade-candidate` 与起点同一套用户态布局：把候选安装包载荷解到 `%LOCALAPPDATA%\P-Pass`
+  并改 HKCU 卸载登记（会先 unregister 计划任务，装完任务不在就手动起 daemon，报告里注明这个偏差）。
+  提权与否都走这条路——perMachine 真安装器由 `win/installer` 覆盖，两套布局不混用。
 - `win/installer` 是**真实安装器语义**：每步 `Start-Process -Verb RunAs` 弹 UAC，由人点「是」；
   覆盖 R0.2（干净 ProgramData 装基线）、R1.2/W3（服务运行中覆盖候选）、W5（卸载/重装 + 数据/身份保留）。
   需要提权会话，且跑完会留下 perMachine 候选（Program Files + Windows 服务），建议放在用户态场景之后。
