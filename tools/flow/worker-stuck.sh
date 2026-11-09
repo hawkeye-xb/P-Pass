@@ -42,7 +42,8 @@ CARDS_SHOW=""
 for c in "${CARDS[@]}"; do CARDS_SHOW="${CARDS_SHOW:+${CARDS_SHOW}、}#${c}"; done
 
 tmp="$(mktemp)"
-trap 'rm -f "$tmp"' EXIT
+KEEP_TMP=""
+trap '[ -n "$KEEP_TMP" ] || rm -f "$tmp"' EXIT
 {
   echo "**worker 停下，等 owner 处理**"
   echo
@@ -53,18 +54,25 @@ trap 'rm -f "$tmp"' EXIT
 } >"$tmp"
 
 failed=()
+comment_failed=""
 for c in "${CARDS[@]}"; do
   if ! err="$( ( flow_load_issue "$c" ) 2>&1 )"; then
     failed+=("#${c} 读不到：$(printf '%s' "$err" | sed -n '2s/^✗ //p')")
     continue
   fi
-  flow_comment "$c" "$tmp" || failed+=("#${c} 写评论失败")
+  flow_comment "$c" "$tmp" || { failed+=("#${c} 写评论失败"); comment_failed=1; }
   flow_try_labels "$c" "status:blocked" "status:doing,status:ready,status:review" ||
     failed+=("#${c} 打 status:blocked 失败")
 done
 
 if [ "${#failed[@]}" -gt 0 ]; then
-  die "有 ${#failed[@]} 项没做成，其余卡已处理" "${failed[@]}" \
-    "补做：gh issue comment <号> -R ${REPO} --body-file <文件>；gh issue edit <号> -R ${REPO} --add-label status:blocked"
+  hint=()
+  # 评论贴失败时保留正文文件，下面给的补做命令直接可用。
+  if [ -n "$comment_failed" ]; then
+    KEEP_TMP=1
+    hint+=("补做评论：gh issue comment <号> -R ${REPO} --body-file ${tmp}")
+  fi
+  hint+=("补做标签：gh issue edit <号> -R ${REPO} --add-label status:blocked --remove-label status:doing,status:ready,status:review")
+  die "有 ${#failed[@]} 项没做成，其余卡已处理" "${failed[@]}" "${hint[@]}"
 fi
 echo "已在 ${CARDS_SHOW} 记录原因并打 status:blocked。现在去领下一张卡：just start <下一个 issue号>"

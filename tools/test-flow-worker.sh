@@ -833,6 +833,10 @@ else
   ok "某张卡写评论失败 → 非 0 退出"
 fi
 grep -q "#92 写评论失败" "${TMP}/o92s" && ok "  报错点名是哪张卡的哪一步" || bad "  报错没点名：$(tail -3 "${TMP}/o92s")"
+body="$(sed -n 's/.*--body-file //p' "${TMP}/o92s" | head -1)"
+[ -n "$body" ] && [ -f "$body" ] && grep -qF "多卡失败：离线" "$body" &&
+  ok "  评论失败时保留正文文件，补做命令直接能用" || bad "  正文文件被删了，补做命令用不了：$body"
+rm -f "$body"
 has_lbl 93 status:blocked && comments_of 93 | grep -qF "多卡失败：离线" &&
   ok "  其余卡照常写评论、打 blocked（不因一张失败留半截）" || bad "  其余卡没被处理（$(labels_of 93)）"
 has_lbl 92 status:blocked && ok "  评论失败的卡照样打 blocked（两件事互不影响）" || bad "  评论失败连带标签也没打"
@@ -847,6 +851,8 @@ else
   ok "某张卡打 status:blocked 失败 → 非 0 退出（不整批中断）"
 fi
 grep -q "#94 打 status:blocked 失败" "${TMP}/o94s" && ok "  报错点名是哪张卡" || bad "  报错没点名：$(tail -3 "${TMP}/o94s")"
+grep -qF -- "--add-label status:blocked --remove-label status:doing,status:ready,status:review" "${TMP}/o94s" &&
+  ok "  补做的标签命令同时去掉 doing/ready/review" || bad "  补做命令只加 blocked，没去掉旧状态：$(tail -3 "${TMP}/o94s")"
 has_lbl 95 status:blocked && comments_of 94 | grep -qF "多卡失败：标签" &&
   ok "  后面的卡照常处理，标签失败的卡评论也照写" || bad "  一张失败把整批撂下了（$(labels_of 95)）"
 rm -f "${FAKE_GH}/94.label_fail"
