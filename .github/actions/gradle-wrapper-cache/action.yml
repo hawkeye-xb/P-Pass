@@ -1,0 +1,39 @@
+name: gradle-wrapper-cache
+description: >-
+  缓存 Gradle Wrapper 发行版（~/.gradle/wrapper/dists），GitHub 抖动时不再每次从 services.gradle.org
+  拉 gradle-*-bin.zip 而超时把 PR 卡红（#1589）。键只跟 distributionUrl 走，不受构建文件哈希影响。
+
+  setup-gradle 自带的 wrapper 缓存键会随构建文件变，而且一次下载失败的运行会把它存成空条目、
+  之后再也存不进真内容（#1589 实测 328 B），所以这里单开一条、互不影响。
+  这里只负责还原；保存由调用方在整条 job 成功时另起一步，半截下载不会进缓存。
+
+outputs:
+  key:
+    description: 缓存键（distributionUrl 的哈希）
+    value: ${{ steps.plan.outputs.key }}
+  cache-hit:
+    description: 发行版是否已从缓存还原
+    value: ${{ steps.restore.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - name: 算缓存键
+      id: plan
+      shell: bash
+      run: |
+        set -euo pipefail
+        url=$(sed -n 's/^distributionUrl=//p' apps/android/gradle/wrapper/gradle-wrapper.properties | tr -d '\\\r')
+        [ -n "$url" ] || { echo "::error::gradle-wrapper.properties 里没有 distributionUrl"; exit 1; }
+        if command -v sha256sum >/dev/null 2>&1; then
+          sum=$(printf '%s' "$url" | sha256sum)
+        else
+          sum=$(printf '%s' "$url" | shasum -a 256)
+        fi
+        echo "key=gradle-dist-$(printf '%s' "$sum" | cut -c1-16)" >> "$GITHUB_OUTPUT"
+
+    - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      id: restore
+      with:
+        path: ~/.gradle/wrapper/dists
+        key: ${{ steps.plan.outputs.key }}

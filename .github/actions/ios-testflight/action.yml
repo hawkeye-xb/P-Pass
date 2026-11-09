@@ -56,7 +56,7 @@ runs:
       run: |
         set -euo pipefail
         zip="$RUNNER_TEMP/xcodegen.zip"
-        curl -fsSL --retry 3 -o "$zip" \
+        curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL -o "$zip" \
           "https://github.com/yonaskolb/XcodeGen/releases/download/${XCODEGEN_VERSION}/xcodegen.zip"
         echo "${XCODEGEN_SHA256}  ${zip}" | shasum -a 256 -c -
         unzip -q "$zip" -d "$RUNNER_TEMP/xcodegen-dist"
