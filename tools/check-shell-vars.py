@@ -8,7 +8,8 @@ Linux 的 bash 5 不受影响，所以只在 macOS 上（发布链的 macOS job�
 先崩了，重试没有发生（#772 的重试机制形同虚设）。
 
 规则只有一条：`$` 后面紧跟变量名、再紧跟非 ASCII 字符 = 违规。改成 `${name}` 即可。
-扫描范围：git 跟踪的 *.sh / *.bash、.github/workflows/*.yml、justfile。整行注释不查。
+扫描范围：git 跟踪的 *.sh / *.bash、.github/workflows/*.yml、justfile，以及无扩展名但
+shebang 是 bash/sh 的脚本（tools/e3、tools/hooks、tools/heavy-lock 等）。整行注释不查。
 
 用法：python3 tools/check-shell-vars.py [--self-test]
 """
@@ -30,17 +31,35 @@ def violations(text):
     return out
 
 
+def _is_bash_script(path):
+    """无扩展名文件：shebang 是 bash/sh 才算脚本（读工作区第一行）。"""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            head = fh.readline()
+    except OSError:
+        return False
+    return head.startswith("#!") and (
+        "bash" in head or "/sh" in head or head.rstrip().endswith(" sh")
+    )
+
+
 def scanned_files():
     files = subprocess.run(
         ["git", "ls-files"], capture_output=True, text=True, check=True
     ).stdout.split()
-    return [
-        f
-        for f in files
-        if f.endswith((".sh", ".bash"))
-        or (f.startswith(".github/workflows/") and f.endswith((".yml", ".yaml")))
-        or f == "justfile"
-    ]
+    out = []
+    for f in files:
+        if f.endswith((".sh", ".bash")):
+            out.append(f)
+        elif f.startswith(".github/workflows/") and f.endswith((".yml", ".yaml")):
+            out.append(f)
+        elif f == "justfile":
+            out.append(f)
+        elif "." not in f.rsplit("/", 1)[-1] and _is_bash_script(f):
+            # 无扩展名但 shebang 是 bash/sh 的脚本（tools/e3、tools/hooks、tools/heavy-lock 等），
+            # 不在 *.sh 规则里，之前漏扫（#1611 的 lock bug 因此没被 CI 抓到）。
+            out.append(f)
+    return out
 
 
 def self_test():
@@ -55,6 +74,10 @@ def self_test():
         if violations(s):
             print(f"self-test: 误报 {s!r}")
             ok = False
+    # 扫描范围也必须自测：漏扫无扩展名 bash 脚本是 #1611 没被 CI 抓到的根因。
+    if "tools/e3/lock" not in scanned_files():
+        print("self-test: scanned_files 没覆盖 tools/e3/lock（无扩展名 bash 脚本）")
+        ok = False
     print("ok: self-test" if ok else "self-test FAILED")
     return ok
 
