@@ -3931,6 +3931,33 @@ mod tests {
         }
     }
 
+    /// ProgramData 目录属主必须设为 Administrators：`CreateDirectory` 的属主是提权进程的
+    /// 属主（触发 UAC 的用户），而 daemon 启动核对 `windows_programdata::ProgramDataDir::verify`
+    /// 要求属主是 Administrators 或服务账户——不设的话全新安装后服务直接拒绝启动（#1608）。
+    /// 反证：删掉 installer-hooks.nsh 里的 `/setowner` 行，本测试红。
+    #[test]
+    fn programdata_dir_owner_is_set_to_administrators() {
+        let hooks = include_str!("../windows/installer-hooks.nsh").replace("\r\n", "\n");
+        let start = hooks
+            .find("!macro PPassPrepareDataDir")
+            .expect("缺 PPassPrepareDataDir 宏");
+        let end = hooks[start..]
+            .find("!macroend")
+            .expect("PPassPrepareDataDir 没有结束");
+        let body = &hooks[start..start + end];
+        let create = body
+            .find("CreateDirectory \"${PPASS_DATA}\"")
+            .expect("缺 CreateDirectory");
+        let setowner = body
+            .find(r#""$SYSDIR\icacls.exe" "${PPASS_DATA}" /setowner *S-1-5-32-544"#)
+            .expect("缺 /setowner（#1608：全新安装后服务起不来的根因）");
+        let dacl = body
+            .find(r#""$SYSDIR\icacls.exe" "${PPASS_DATA}" /inheritance:r"#)
+            .expect("缺 /inheritance:r");
+        assert!(create < setowner, "必须先建目录再设属主");
+        assert!(setowner < dacl, "必须先设属主再收紧 DACL");
+    }
+
     /// §5.3：库目录设为私有失败时，库位置**不**提交给 daemon（`config.set_library` /
     /// `library.relocate` 都不调），错误带着原因回到界面。反证：改回 `let _ = grant(..)` 后照常
     /// 提交 ⇒ `submitted` 变真，红。

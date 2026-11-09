@@ -64,6 +64,11 @@ Var PPassDataDir
 ; 先少给、后给服务 SID：icacls 解析 "NT SERVICE\..." 要求服务已经存在。
 !macro PPassPrepareDataDir
   CreateDirectory "${PPASS_DATA}"
+  ; 属主设为 Administrators：CreateDirectory 的属主是提权进程的属主（触发 UAC 的用户），
+  ; 而 daemon 启动核对（windows_programdata::ProgramDataDir::verify）要求属主是
+  ; Administrators 或服务账户——不设的话全新安装后服务直接拒绝启动（#1608）。
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "${PPASS_DATA}" /setowner *S-1-5-32-544'
+  Pop $0
   nsExec::ExecToLog '"$SYSDIR\icacls.exe" "${PPASS_DATA}" /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F"'
   Pop $0
   nsExec::ExecToLog '"$SYSDIR\icacls.exe" "${PPASS_DATA}" /grant "NT SERVICE\${PPASS_SERVICE}:(OI)(CI)F"'
