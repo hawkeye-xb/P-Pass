@@ -28,11 +28,11 @@ export const TESTFLIGHT_URL = 'https://testflight.apple.com/join/htBATauc';
 
 // Canon copy (Brief §3) — one entry per language, same level.
 export const SITE_TITLE: Record<Lang, string> = {
-  en: 'P-Pass — Automatic family photo backup to your home computer',
-  zh: 'P-Pass — 手机照片自动备份到家里的电脑',
+  en: 'P-Pass — iPhone and Android photo backup to your home computer',
+  zh: 'P-Pass — iPhone 和安卓照片自动备份到家里的电脑',
 };
 
 export const SITE_DESCRIPTION: Record<Lang, string> = {
-  en: 'Photo backup for families: your phone backs up automatically to the computer at home. No account, no cloud storage. Open source and end-to-end encrypted.',
-  zh: '家庭照片备份：手机照片自动备份到家中的电脑，无需注册账号，不使用云存储。开源，端到端加密。',
+  en: 'Photo backup for families: photos from any iPhone or Android phone back up automatically to the computer at home. No account, no cloud storage. Open source and end-to-end encrypted.',
+  zh: '家庭照片备份：iPhone 和安卓手机的照片自动备份到家中的电脑，无需注册账号，不使用云存储。开源，端到端加密。',
 };

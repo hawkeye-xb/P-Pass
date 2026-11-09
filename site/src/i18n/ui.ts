@@ -15,8 +15,8 @@ export const ui = {
     'hero.overline': "",
     'hero.h1': "Your family's photos, kept at home.",
     'hero.lede':
-      "Photos from your phone back up automatically to the computer at home. No account, no cloud storage.",
-    'hero.tagline': 'A self-hosted photo backup, without the server setup.',
+      "Every phone in the family — iPhone or Android — backs up automatically to the computer at home. No account, no cloud storage.",
+    'hero.tagline': 'A cross-platform family photo hub, without the server setup.',
     'hero.cta': 'Download P-Pass',
     'hero.cta.badge': 'Beta',
     'hero.cta.sub': "Mac with Apple silicon · 64-bit Windows · Android 8.0+ · iPhone",
@@ -68,8 +68,8 @@ export const ui = {
     'hero.overline': '',
     'hero.h1': '全家的照片，存在自己家里。',
     'hero.lede':
-      '手机照片自动备份到家中的电脑。无需注册账号，不使用云存储。',
-    'hero.tagline': '',
+      'iPhone 和安卓手机拍的照片，都自动备份到家里同一台电脑。无需注册账号，不使用云存储。',
+    'hero.tagline': '跨生态家庭的照片中心，不用自己搭服务器。',
     'hero.cta': '下载 P-Pass',
     'hero.cta.badge': 'Beta',
     'hero.cta.sub': 'Apple 芯片 Mac · 64 位 Windows · Android 8.0+ · iPhone',
