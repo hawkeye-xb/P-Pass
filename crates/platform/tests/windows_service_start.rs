@@ -68,3 +68,13 @@ fn start_and_wait_waits_for_running() {
         "超时上限 10 秒：{body}"
     );
 }
+
+#[test]
+fn start_installed_service_really_calls_start() {
+    let src = include_str!("../src/windows.rs");
+    let body = fn_body(src, "fn start_installed_service");
+    assert!(
+        body.contains("start()?"),
+        "已安装分支必须真的调用 start：{body}"
+    );
+}
