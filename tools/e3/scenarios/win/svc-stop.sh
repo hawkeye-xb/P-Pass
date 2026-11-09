@@ -64,7 +64,7 @@ setup() {
   win_app_running || { echo "桌面 App 没在跑"; return 77; }
   win_daemon_running || { echo "daemon 没在跑"; return 77; }
   win_diag "$EV/main" >/dev/null 2>&1 || true
-  [ "$(win_json_array_len "$EV/main/diag/devices.json")" = 1 ] || { echo "桌面没有 1 台配对设备（先跑 win/pair-backup）"; return 77; }
+  [ "$(paired_count "$EV/main/diag/devices.json")" = 1 ] || { echo "桌面没有 1 台已配对设备（先跑 win/pair-backup）"; return 77; }
   echo "版本：$(win_status_field "$EV/main" version)"
 }
 
@@ -169,6 +169,10 @@ teardown() {
   # 断开后 devices.json 仍可能留着 paired=false 的记录；按 paired=true 的台数判断要不要重配。
   if [ "$(paired_count "$d/diag/devices.json")" != 1 ]; then
     win_app_running || win_start_app >/dev/null 2>&1 || true
+    # 断开后回到设备列表，先点「添加设备」进配对页；win_pair 假定已在配对页。
+    win_ui_click '总览' >/dev/null 2>&1 || true
+    win_ui_click '添加设备' >/dev/null 2>&1 || true
+    sleep 1
     win_pair "$d" >/dev/null 2>&1 || true
   fi
   return 0
