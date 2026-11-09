@@ -59,14 +59,26 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
 
+      # #1589：Gradle 发行版单独缓存，GitHub 抖动时不再现拉 services.gradle.org。
+      - uses: ./.github/actions/gradle-wrapper-cache
+        id: gradle-dist
+
       - name: Resolve Gradle dependencies into a lockfile
         working-directory: apps/android
         run: ./gradlew :app:dependencies --write-locks --init-script ../../.github/osv/gradle-lock.init.gradle >/dev/null
 
+      - name: 保存 Gradle 发行版缓存
+        if: success() && steps.gradle-dist.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        continue-on-error: true
+        with:
+          path: ~/.gradle/wrapper/dists
+          key: ${{ steps.gradle-dist.outputs.key }}
+
       - name: Install osv-scanner (sha256 pinned)
         run: |
           set -euo pipefail
-          curl -fsSL -o "$RUNNER_TEMP/osv-scanner" \
+          curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL -o "$RUNNER_TEMP/osv-scanner" \
             "https://github.com/google/osv-scanner/releases/download/${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
           echo "${OSV_SCANNER_SHA256}  $RUNNER_TEMP/osv-scanner" | sha256sum -c -
           chmod +x "$RUNNER_TEMP/osv-scanner"

@@ -53,16 +53,30 @@ runs:
         path: C:\vcpkg\installed
         key: ${{ steps.plan.outputs.key }}
 
+    # #1589：bootstrap 每次都从 GitHub releases 下载 vcpkg.exe（快照里的旧版不匹配钉住的提交），
+    # 抖动时 504 直接卡红。工具版本只由钉住的提交决定，所以键只含 PIN、不含 ImageVersion。
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      id: tool-cache
+      with:
+        path: C:\vcpkg\vcpkg.exe
+        key: vcpkg-tool-${{ steps.plan.outputs.pin }}-v1
+
     - name: 钉 vcpkg 提交
       shell: bash
       env:
         PIN: ${{ steps.plan.outputs.pin }}
+        TOOL_CACHE_HIT: ${{ steps.tool-cache.outputs.cache-hit }}
       run: |
         set -euo pipefail
         echo "镜像自带：$(git -C /c/vcpkg rev-parse HEAD)"
         git -C /c/vcpkg fetch --depth=1 origin "$PIN"
         git -C /c/vcpkg checkout --force "$PIN"
-        (cd /c/vcpkg && cmd //c bootstrap-vcpkg.bat -disableMetrics)
+        # 缓存里的 exe 跑得起来就用它，跳过 bootstrap 的联网下载；跑不起来（缓存坏了）退回 bootstrap。
+        if [ "$TOOL_CACHE_HIT" = "true" ] && /c/vcpkg/vcpkg.exe version >/dev/null 2>&1; then
+          echo "vcpkg.exe 取自缓存，跳过 bootstrap 的下载"
+        else
+          (cd /c/vcpkg && cmd //c bootstrap-vcpkg.bat -disableMetrics)
+        fi
         echo "vcpkg pinned at $(git -C /c/vcpkg rev-parse HEAD)"
 
     - name: 装 libheif（静态，不带 HEVC 编码器）

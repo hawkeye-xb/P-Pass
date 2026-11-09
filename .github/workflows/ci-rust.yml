@@ -199,7 +199,7 @@ jobs:
       - name: Actionlint (workflow lint)
         run: |
           set -euo pipefail
-          curl -sfL -o /tmp/actionlint.tgz \
+          curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL -o /tmp/actionlint.tgz \
             "https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz"
           echo "023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757  /tmp/actionlint.tgz" | sha256sum -c -
           tar -xzf /tmp/actionlint.tgz -C /tmp actionlint
