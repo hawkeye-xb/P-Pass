@@ -7,7 +7,7 @@
 # 退出码 1。
 DESC="W1：启动/自愈/停启服务不闪控制台窗口（安装器与更新路径见报告）"
 COUNTER=on
-WATCH="${E3_WIN_W1_SECONDS:-75}"
+WATCH="${E3_WIN_W1_SECONDS:-150}"
 
 . "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"
 
@@ -50,8 +50,15 @@ run_window() { # run_window <证据目录> <故障注入 0|1> <秒>
     else
       echo "kill=fail" >>"$d/actions.txt"
     fi
-    sleep 12
-    pid_after="$(win_daemon_pid)"
+    # 强杀后等新 pid：壳自愈/看门狗最长 60s（svc-watchdog 同口径），固定 12s 会误判
+    # （2026-11-09 实测一次 32s 才恢复，连带 stop 找不到按钮）。
+    local waited=0
+    while [ "$waited" -lt 60 ]; do
+      sleep 2
+      waited=$((waited + 2))
+      pid_after="$(win_daemon_pid)"
+      [ -n "$pid_after" ] && [ "$pid_after" != "$pid_before" ] && break
+    done
     if [ -n "$pid_after" ] && [ "$pid_after" != "$pid_before" ]; then
       echo "recover=ok" >>"$d/actions.txt"
     else
