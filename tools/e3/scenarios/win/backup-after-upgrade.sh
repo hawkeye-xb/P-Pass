@@ -78,6 +78,9 @@ act() {
 
 hash_extra() {
   local d="$1" h n missing=0 dup=0
+  # 证据没采到不能当成「没问题」：8 张的哈希清单必须存在、非空且一行不少。
+  [ "$(grep -c . "$d/extra-hashes.txt" 2>/dev/null || true)" = "$EXTRA" ] ||
+    { echo "extra-hashes.txt 不是 $EXTRA 行（缺失、为空或被截断）"; return 1; }
   while read -r h; do
     [ -n "$h" ] || continue
     n="$(grep -c "^$h " "$d/post-library-hashes.txt" 2>/dev/null || true)"

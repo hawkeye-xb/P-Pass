@@ -63,10 +63,13 @@ setup() {
   for i in $(seq 1 30); do win_daemon_running && break; sleep 1; done
   win_daemon_running || { echo "daemon 没起来"; return 1; }
   # 前提：桌面未配对（配过就先跑 install-baseline 重置）。
-  win_diag "$E3_STATE/win/pair-precheck" >/dev/null 2>&1 || true
+  # diag 失败或没有 devices 列表时判断不了配没配对，按 SKIP 处理——不能把「没读到」当成「0 台」。
+  win_diag "$E3_STATE/win/pair-precheck" >/dev/null 2>&1 ||
+    { echo "桌面 daemon 诊断导出失败，判断不了是否已配对"; return 77; }
   local n
   n="$(win_json_array_len "$E3_STATE/win/pair-precheck/diag/devices.json")"
-  [ "${n:-0}" = 0 ] || { echo "桌面已有 ${n} 台配对设备；本场景要求未配对（先跑 win/install-baseline）"; return 77; }
+  [ -n "$n" ] || { echo "诊断包里没有 devices 列表，判断不了是否已配对"; return 77; }
+  [ "$n" = 0 ] || { echo "桌面已有 ${n} 台配对设备；本场景要求未配对（先跑 win/install-baseline）"; return 77; }
 
   # 素材：40 张，缺了就生成；手机端先清空 PPassRegression 再推，保证恰好 40。
   PHOTO_DIR="$E3_STATE/win/photos-$PHOTOS"
