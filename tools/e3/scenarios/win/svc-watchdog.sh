@@ -1,6 +1,7 @@
 # R3.2：强杀 daemon，计划任务 P-Pass 的每分钟看门狗在 1 分钟内把它拉起来；壳开着/关着各做一次。
 #
-# 计划任务由壳登记（RunLevel Limited、Interactive），动作是 %LOCALAPPDATA%\P-Pass\ppf-daemon.exe；
+# 计划任务由壳登记（XML：InteractiveToken，RunLevel 缺省 = LeastPrivilege；
+# Get-ScheduledTask 对象显示为 Interactive/Limited），动作是 %LOCALAPPDATA%\P-Pass\ppf-daemon.exe；
 # 看门狗拉起时父进程应是 svchost（SOP §9.3）。
 # 反证：先 Disable-ScheduledTask 再杀 daemon ⇒ 看门狗窗口内没有新进程，判据变红；teardown 恢复任务。
 DESC="R3.2：kill -9 daemon 后看门狗 1 分钟内拉起（壳开/关各一次，父进程 svchost）"

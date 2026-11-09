@@ -146,7 +146,10 @@ counter() {
   done
   win_ui_dump "$d/stop-dialog.txt" || true
   cp "$EV/main/restore.txt" "$d/restore.txt" 2>/dev/null || true
-  cp "$EV/main/devices-after-disconnect.json" "$d/devices-after-disconnect.json" 2>/dev/null || true
+  # 反证自己采一次「手机仍连着」的 devices.json；不能复制主路径的样本——主路径现在会
+  # 轮询到 paired:false，复制过来会让这条反证永远变绿（#1600）。
+  win_diag "$d" >/dev/null 2>&1 || true
+  cp "$d/diag/devices.json" "$d/devices-after-disconnect.json" 2>/dev/null || true
   cp "$EV/main/phone-after-disconnect.xml" "$d/phone-after-disconnect.xml" 2>/dev/null || true
 }
 
