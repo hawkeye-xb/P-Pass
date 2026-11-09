@@ -12,6 +12,11 @@ setup() {
   # 在改任何状态之前保存用户原有的 Run 值；setup 返回 77 时不保存，teardown 也就不会动它。
   local orig="$E3_STATE/win/w2-run-orig.txt"
   mkdir -p "$(dirname "$orig")"
+  # 上次 teardown 没恢复成功时原值还留着：不能拿现在的注册表（可能是反证写的假值）盖掉它。
+  if [ -s "$orig" ]; then
+    echo "沿用上次未恢复的原 HKCU Run 值（${orig}）"
+    return 0
+  fi
   win_ps "
 \$k=Get-Item -Path 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
 \$v=\$k.GetValue('P-Pass', \$null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)

@@ -23,6 +23,11 @@ setup() {
   [ -n "$exe" ] || { echo "缺基线安装包（$WIN_REL_DIR/$WIN_BASE_TAG/*_x64-setup.exe）"; return 77; }
   echo "基线安装包：$exe"
   echo "sha256：$(sha256sum "$exe" | awk '{print $1}')"
+  # 解包要 7-Zip 完整版；缺了在动手机/桌面之前 SKIP，不把机器改一半。
+  [ -n "$(ls "$WIN_TOOLS"/7zfull/Files/7-Zip/7z.exe 2>/dev/null | head -1)" ] || {
+    echo "找不到 7z.exe（先按 local-state.md 里的办法解出 7-Zip）"
+    return 77
+  }
 
   # R0.1：手机卸载重装基线（清数据，保证首次配对状态）。已经是基线也重装——
   # 上一轮留下的配对/范围会让「首次配对」用例失真。

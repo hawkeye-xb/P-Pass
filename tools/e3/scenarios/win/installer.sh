@@ -272,6 +272,8 @@ setup() {
   [ -n "$WIN_CAND_EXE" ] || { echo "缺候选安装包"; return 77; }
   echo "基线安装包：${WIN_BASE_EXE}（sha256 $(sha256sum "$WIN_BASE_EXE" | awk '{print $1}')）"
   echo "候选安装包：${WIN_CAND_EXE}（sha256 $(sha256sum "$WIN_CAND_EXE" | awk '{print $1}')）"
+  # 从这里开始动机器；teardown 只在动过之后才补装候选。
+  TOUCHED=1
   clean_extract_install
 
   # R0.2 从干净环境开始：先卸掉上一轮留下的真实安装，再把旧 ProgramData 移到一边
@@ -335,10 +337,11 @@ act() {
   wait_uninstalled || echo "卸载后程序目录/服务没消失"
   : >"$d/uninstall-samples.txt"
   local i pid
+  # 先等满 10s 再采，标签与实际时刻一致；最后一个采样落在 70s（窗口末尾）。
   for i in $(seq 10 10 70); do
+    sleep 10
     pid="$(win_daemon_pid)"
     echo "t+${i}s pid=${pid} svc=$(svc_state)" >>"$d/uninstall-samples.txt"
-    sleep 10
   done
   snapshot_state "$d" after-uninstall
 
@@ -445,6 +448,8 @@ counter() {
 }
 
 teardown() {
+  # setup 在返回 77 之前什么都没动：不弹 UAC、不往本场景没碰过的机器上装东西。
+  [ "${TOUCHED:-0}" = 1 ] || return 0
   # 若最后没装回来（counter/失败），重新装候选并等服务恢复。
   if [ ! -f "$INST_EXE" ]; then
     echo "收尾：重新安装候选"
