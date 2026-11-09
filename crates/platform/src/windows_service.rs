@@ -318,6 +318,41 @@ pub fn start(name: &str) -> Result<()> {
     }
 }
 
+/// 启动服务并等到 Running（最多 10 秒）；已经在跑按幂等成功。
+pub fn start_and_wait(name: &str) -> Result<()> {
+    start(name)?;
+    wait_until(
+        name,
+        || status(name),
+        |s| matches!(s, ServiceState::Running),
+        std::time::Duration::from_secs(10),
+    )
+}
+
+/// 等到服务进入 `wanted` 状态。和 [`wait_for`] 的区别：这里「服务消失」是失败
+/// （启动中的服务消失说明它没起来），stop 那边则把「本来就没在跑」当成功。
+fn wait_until(
+    name: &str,
+    mut status: impl FnMut() -> Result<Option<ServiceStatus>>,
+    wanted: impl Fn(ServiceState) -> bool,
+    timeout: std::time::Duration,
+) -> Result<()> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match status()? {
+            None => return Err(failed("wait_service_state", format!("服务不存在：{name}"))),
+            Some(s) if wanted(s.state) => return Ok(()),
+            Some(_) if std::time::Instant::now() >= deadline => {
+                return Err(failed(
+                    "wait_service_state",
+                    format!("等待 {name} 进入 Running 超时"),
+                ));
+            }
+            Some(_) => std::thread::sleep(std::time::Duration::from_millis(100)),
+        }
+    }
+}
+
 /// 停服务并等它真的停下（最多 10 秒）；没在跑也算成功。
 pub fn stop(name: &str) -> Result<()> {
     let Some(service) = Service::open(name, SERVICE_STOP | SERVICE_QUERY_STATUS)? else {
@@ -824,5 +859,66 @@ mod start_type_tests {
         )
         .expect_err("不存在的服务不能改");
         assert!(format!("{err}").contains("服务未安装"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod start_wait_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn snapshot(state: ServiceState) -> Option<ServiceStatus> {
+        Some(ServiceStatus {
+            state,
+            pid: None,
+            exit_code: 0,
+        })
+    }
+
+    #[test]
+    fn waits_until_running() {
+        let mut seq = [
+            ServiceState::StartPending,
+            ServiceState::StartPending,
+            ServiceState::Running,
+        ]
+        .into_iter();
+        wait_until(
+            "P-Pass",
+            || {
+                Ok(seq.next().map(|state| ServiceStatus {
+                    state,
+                    pid: None,
+                    exit_code: 0,
+                }))
+            },
+            |s| matches!(s, ServiceState::Running),
+            Duration::from_millis(500),
+        )
+        .expect("StartPending→Running 应成功");
+    }
+
+    #[test]
+    fn times_out_in_start_pending() {
+        let err = wait_until(
+            "P-Pass",
+            || Ok(snapshot(ServiceState::StartPending)),
+            |s| matches!(s, ServiceState::Running),
+            Duration::from_millis(20),
+        )
+        .expect_err("一直在 StartPending 必须超时");
+        assert!(matches!(err, PlatformError::Failed { .. }), "{err}");
+    }
+
+    #[test]
+    fn disappearing_service_is_an_error() {
+        let err = wait_until(
+            "P-Pass",
+            || Ok(None),
+            |s| matches!(s, ServiceState::Running),
+            Duration::from_millis(500),
+        )
+        .expect_err("启动中服务消失必须报错");
+        assert!(matches!(err, PlatformError::Failed { .. }), "{err}");
     }
 }

@@ -1257,7 +1257,13 @@ impl HostingAdapter for WindowsAdapter {
         // D1：服务已由安装器建好（`start= auto`），壳不再登记计划任务（否则会多一套
         // 自启，互相打架）。**不在这里改启动类型**：那要 `SERVICE_CHANGE_CONFIG`，
         // 而把 `DC` 授给普通用户会破坏 ProgramData 的 D4 保护（见 uninstall_autostart）。
-        if crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)? {
+        //
+        // 服务形态下这里就是用户点「启动」的落点：必须真的 `StartServiceW` 并等到
+        // RUNNING，不能只检查已安装（#1582；macOS 的 launchd 与计划任务分支都会拉起）。
+        let installed = crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)?;
+        if start_installed_service(installed, || {
+            crate::windows_service::start_and_wait(crate::windows_service::SERVICE_NAME)
+        })? {
             return Ok(());
         }
         use windows::core::BSTR;
@@ -1285,6 +1291,15 @@ impl HostingAdapter for WindowsAdapter {
             Ok(())
         })?;
         delete_legacy_run_value()
+    }
+
+    /// 服务形态的登记就是「服务已安装」；对账只纠正登记内容，不改运行状态。
+    /// 拉起只由用户显式「启动」触发（`install_autostart`），对账不负责（#1582 / F7）。
+    fn rewrite_autostart(&self, expected: &Path) -> Result<()> {
+        if crate::windows_service::is_installed(crate::windows_service::SERVICE_NAME)? {
+            return Ok(());
+        }
+        self.install_autostart(expected)
     }
 
     /// 计划任务在，或者老版本的 Run 值还在（还没迁移）。
@@ -3406,5 +3421,61 @@ mod ingest_file_name_tests {
         ] {
             assert_eq!(sanitize_windows_file_name(legal), legal);
         }
+    }
+}
+
+/// 服务形态：已安装就必须真的启动；未安装返回 false，让调用方走计划任务登记。
+/// 抽出来是为了单测能观察 `start` 是否被调用：漏掉这一步就是 #1582。
+fn start_installed_service(installed: bool, start: impl FnOnce() -> Result<()>) -> Result<bool> {
+    if installed {
+        start()?;
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
+#[cfg(test)]
+mod service_start_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    #[test]
+    fn installed_service_is_started() {
+        let called = Cell::new(false);
+        let handled = start_installed_service(true, || {
+            called.set(true);
+            Ok(())
+        })
+        .expect("已安装必须启动成功");
+        assert!(handled);
+        assert!(
+            called.get(),
+            "已安装的服务形态必须调用 start，不能只检查安装"
+        );
+    }
+
+    #[test]
+    fn absent_service_falls_through_to_task() {
+        let called = Cell::new(false);
+        let handled = start_installed_service(false, || {
+            called.set(true);
+            Ok(())
+        })
+        .expect("未安装不是错误");
+        assert!(!handled);
+        assert!(!called.get(), "未安装时不该调 start");
+    }
+
+    #[test]
+    fn start_failure_is_propagated() {
+        let err = start_installed_service(true, || {
+            Err(PlatformError::Failed {
+                action: "start_service",
+                detail: "boom".into(),
+            })
+        })
+        .expect_err("启动失败必须报错，不能静默 Ok");
+        assert!(matches!(err, PlatformError::Failed { .. }));
     }
 }
