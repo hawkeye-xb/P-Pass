@@ -78,6 +78,13 @@
 + apps/ios/Packages/PPassCore/Sources/PPassCore/Storage/DeviceIdentity.swift
 + apps/ios/Packages/PPassCore/Sources/PPassCore/Flow/RejectedPairingCleanup.swift
 
+# ── 服务启停与自启（产品负责人 2026-11-09 定，见 #1585）───────
+# 服务起不来 = IPC 通道断、手机连不上、备份停摆（#1582）。
++ crates/platform/src/windows.rs
++ crates/platform/src/windows_service.rs
++ crates/platform/src/macos.rs
++ apps/desktop/src-tauri/src/service_state.rs
+
 # ── 数据：索引、数据库与迁移、入库去重、备份账本 ────────────────
 + crates/storage/**
 + crates/core-index/**
