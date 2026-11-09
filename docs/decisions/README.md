@@ -17,6 +17,7 @@ ADR，验收人拍板后再拆卡实现。代码注释里出现的 ADR-003、ADR
 | 2026-11-06 | [test 版本号自动补丁与发版路径惰性登记](2026-11-06-release-test-next-patch-and-inert-paths.md) | 已采纳 |
 | 2026-11-06 | [test-channel：写入与收敛分权，收敛单点跑一次、失败只告警](2026-11-06-release-test-channel-single-writer.md) | 已采纳 |
 | 2026-11-09 | [服务启停与自启纳入核心名单](2026-11-09-core-paths-service-lifecycle.md) | 已采纳 |
+| 2026-11-09 | [Windows 服务形态：「启动后台服务」必须真的启动](2026-11-09-windows-service-start.md) | 已采纳 |
 
 ## 写法
 
