@@ -137,7 +137,7 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
           q: 'Will it run on my phone and computer?',
           a: [
             'The computer can be a Mac with an M-series chip or a PC running 64-bit Windows. The phone can be any Android phone on 8.0 or newer, or an iPhone on iOS 16 or newer.',
-            'The iPhone app is on the App Store. In mainland China the App Store does not list it, so it is installed through TestFlight there. On an iPhone, backups run while P-Pass is open; whether iOS lets them continue in the background is up to the system.',
+            'The iPhone app is on the App Store. In mainland China the App Store does not list it, so it is installed through TestFlight there. On an iPhone, backups run while P-Pass is open; whether iOS lets them continue in the background is up to the system. iOS gives third-party apps limited background time, so background backup works differently from Android.',
           ],
           more: [{ label: 'How to install on an iPhone', href: '/faq/#iphone-testflight' }],
         },
@@ -155,7 +155,10 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
             },
             'Each TestFlight build stops opening 90 days after it is published; it must be updated in TestFlight. Photos already on the computer are not deleted.',
           ],
-          more: [{ label: 'P-Pass on the App Store', href: APP_STORE_URL }],
+          more: [
+            { label: 'P-Pass on the App Store', href: APP_STORE_URL },
+            { label: 'P-Pass on TestFlight (mainland China)', href: TESTFLIGHT_URL },
+          ],
         },
         {
           id: 'setup',
@@ -398,7 +401,7 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
           q: '我的手机和电脑能装吗？',
           a: [
             '电脑可以是 M1 及以后的 Mac，也可以是 64 位 Windows 电脑。手机可以是 Android 8.0 以上的任意牌子，也可以是 iOS 16 及以上的 iPhone。',
-            'iPhone 版在中国大陆通过 TestFlight 安装，中国大陆的 App Store 里没有 P-Pass；在中国大陆以外，可以直接从 App Store 下载。iPhone 上的备份在打开 P-Pass 时进行，离开 App 后能否在后台接着传由 iOS 决定。',
+            'iPhone 版在中国大陆通过 TestFlight 安装，中国大陆的 App Store 里没有 P-Pass；在中国大陆以外，可以直接从 App Store 下载。iPhone 上的备份在打开 P-Pass 时进行，离开 App 后能否在后台接着传由 iOS 决定。iOS 给第三方 App 的后台运行时间有限，后台备份体验与 Android 不同。',
           ],
           more: [{ label: 'iPhone 怎么安装', href: '/zh/faq/#iphone-testflight' }],
         },
@@ -416,7 +419,10 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
             },
             '每个 TestFlight 版本自发布起 90 天后无法再打开，需要在 TestFlight 里更新。已经备份到电脑上的照片不会被删除。',
           ],
-          more: [{ label: '在 TestFlight 中打开 P-Pass', href: TESTFLIGHT_URL }],
+          more: [
+            { label: '在 TestFlight 中打开 P-Pass（中国大陆）', href: TESTFLIGHT_URL },
+            { label: '在 App Store 中打开 P-Pass（中国大陆以外）', href: APP_STORE_URL },
+          ],
         },
         {
           id: 'setup',

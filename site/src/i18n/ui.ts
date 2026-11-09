@@ -32,6 +32,7 @@ export const ui = {
     'hero.cta.win.note':
       'The Windows installer is not code-signed. If SmartScreen says "Windows protected your PC", choose More info, then Run anyway.',
     'hero.cta.iphone': 'iPhone (iOS 16 or later): install from the App Store',
+    'hero.cta.iphone.other': 'In mainland China: install through TestFlight',
     'hero.cta.iphone.steps': 'How to install',
     'hero.cta.others': 'Also for:',
     'wechat.title': 'Open this page in your browser',
@@ -85,6 +86,7 @@ export const ui = {
     'hero.cta.win.note':
       'Windows 安装包未做代码签名。安装时如果出现「Windows 已保护你的电脑」，点「更多信息」，再点「仍要运行」。',
     'hero.cta.iphone': 'iPhone（iOS 16 及以上）：中国大陆通过 TestFlight 安装',
+    'hero.cta.iphone.other': '中国大陆以外：在 App Store 下载',
     'hero.cta.iphone.steps': '安装步骤',
     'hero.cta.others': '其他平台：',
     'wechat.title': '请在浏览器中打开本页',

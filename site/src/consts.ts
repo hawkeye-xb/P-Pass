@@ -33,6 +33,6 @@ export const SITE_TITLE: Record<Lang, string> = {
 };
 
 export const SITE_DESCRIPTION: Record<Lang, string> = {
-  en: 'Photo backup for families: photos from any iPhone or Android phone back up automatically to the computer at home. No account, no cloud storage. Open source and end-to-end encrypted.',
+  en: 'Photo backup for families: photos from iPhone and Android phones back up automatically to the computer at home. No account, no cloud storage. Open source and end-to-end encrypted.',
   zh: '家庭照片备份：iPhone 和安卓手机的照片自动备份到家中的电脑，无需注册账号，不使用云存储。开源，端到端加密。',
 };

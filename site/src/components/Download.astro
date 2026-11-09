@@ -29,7 +29,11 @@ interface Props {
 }
 
 const { lang } = Astro.props;
+// The page language picks the main channel, not the visitor's App Store
+// region (we have no reliable way to know it), so the other channel stays
+// one click away with its region spelled out.
 const iphoneUrl = lang === 'zh' ? TESTFLIGHT_URL : APP_STORE_URL;
+const iphoneOtherUrl = lang === 'zh' ? APP_STORE_URL : TESTFLIGHT_URL;
 const iphoneStepsHref = lang === 'zh' ? '/zh/faq/#iphone-testflight' : '/faq/#iphone-testflight';
 const platforms = [
   { os: 'mac', href: MIRROR_MAC, label: 'hero.cta.mac', sub: 'hero.cta.mac.sub', short: 'Mac' },
@@ -65,6 +69,8 @@ const platforms = [
   </div>
   <p class="cta-iphone">
     <a href={iphoneUrl} rel="external">{t(lang, 'hero.cta.iphone')}</a>
+    {' · '}
+    <a href={iphoneOtherUrl} rel="external">{t(lang, 'hero.cta.iphone.other')}</a>
     {' · '}
     <a href={iphoneStepsHref}>{t(lang, 'hero.cta.iphone.steps')}</a>
   </p>
