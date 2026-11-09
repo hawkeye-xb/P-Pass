@@ -21,7 +21,7 @@ g() { git -c core.hooksPath=/dev/null -c user.name=i18n-test -c user.email=i18n@
 REPO="$WORK/repo"
 mkdir -p "$REPO/tools" "$REPO/release"
 cp "$CV_SRC" "$REPO/tools/check-version-bump.sh"
-g -C "$REPO" init -q
+g -C "$REPO" init --template= -q
 printf '{"desktop":"1.0.0","android":"1.0.0","androidVersionCode":1,"ios":"1.0.0"}\n' > "$REPO/release/versions.json"
 g -C "$REPO" add -A && g -C "$REPO" commit -qm base && g -C "$REPO" tag v1.0.0
 

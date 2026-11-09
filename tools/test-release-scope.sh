@@ -57,7 +57,7 @@ chmod +x "${TMP}/bin/gh"
 (
   cd "$R" || exit 1
   export GIT_TEMPLATE_DIR="${TMP}/tpl"
-  git init -q -b main
+  git init --template= -q -b main
   git config user.email t@t
   git config user.name t
   mkdir -p apps/desktop/src core release/notes/android

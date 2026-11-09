@@ -23,7 +23,7 @@ printf '# 方案\n\n- 状态：草稿\n' >"${TMP}/repo/docs/decisions/2026-11-02
 (
   cd "${TMP}/repo" || exit 1
   export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
-  git init -q && git add -A && git -c user.name=t -c user.email=t@example.invalid commit -q -m init &&
+  git init --template= -q && git add -A && git -c user.name=t -c user.email=t@example.invalid commit -q -m init &&
     git update-ref refs/remotes/origin/main HEAD
 ) || { echo "搭临时仓库失败"; exit 1; }
 G="${TMP}/repo/tools/flow/acceptance-gate.sh"

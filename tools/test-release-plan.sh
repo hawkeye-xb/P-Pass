@@ -74,7 +74,7 @@ jq -n --arg p "$(cat "$TMP/stable.key.pub")" '{plugins:{updater:{pubkey:$p}}}' >
 export RELEASE_TAG=v2026.1.2
 # sign_with <密钥> <文件>：用 tauri signer 签，打印 .sig 内容（清单里 signature 字段的值）
 sign_with() { "$HERE/release/signer.sh" sign -f "$1" -p "" "$2" >/dev/null 2>&1; cat "$2.sig"; rm -f "$2.sig"; }
-git -C "$REPO" init -q && git -C "$REPO" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+git -C "$REPO" init --template= -q && git -C "$REPO" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
 
 sha() { python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$1"; }
 mk_apk() { python3 - "$1" "$2" <<'PY'
@@ -183,7 +183,7 @@ REPO_MAIN="$REPO"
 REPO="$TMP/repo-ios"
 mkdir -p "$REPO/tools/release" "$REPO/release"
 cp "$HERE/release/plan-builds.sh" "$HERE/release/rust-impact.py" "$REPO/tools/release/"
-git -C "$REPO" init -q
+git -C "$REPO" init --template= -q
 GI=(git -C "$REPO" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t -c commit.gpgsign=false -c tag.gpgsign=false)
 printf '{"desktop":"2.0.0","android":"1.0.0","ios":"0.1.0"}\n' > "$REPO/release/versions.json"
 "${GI[@]}" add -A && "${GI[@]}" commit -q -m latest && "${GI[@]}" tag v2026.1.1
@@ -351,7 +351,7 @@ crate tools/testclient testclient '[dependencies]
 proto = { path = "../../crates/proto" }
 transport = { path = "../../crates/transport" }'
 ws_toml 0.9.0; lock 0.9.0 1.0.0 aaa 1.0.0
-git -C "$REPO" init -q
+git -C "$REPO" init --template= -q
 G=(git -C "$REPO" -c core.hooksPath=/dev/null -c user.name=t -c user.email=t@t -c commit.gpgsign=false -c tag.gpgsign=false)
 rtag() { "${G[@]}" add -A && "${G[@]}" commit -q -m "$1" && "${G[@]}" tag "$1"; }
 touch_() { local f; for f in "$@"; do mkdir -p "$REPO/$(dirname "$f")"; echo "// $1" >> "$REPO/$f"; done; }

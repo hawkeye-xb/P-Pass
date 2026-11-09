@@ -109,8 +109,8 @@ chmod +x "${TMP}/bin/fake-agent"
 export PPASS_REVIEW_AGENT="${TMP}/bin/fake-agent"
 
 # ── 仓库：裸 origin + 主仓，PR #7 的头提交在 refs/pull/7/head ─────────
-git init -q --bare "${TMP}/origin.git"
-git init -q "${TMP}/main"
+git init --template= -q --bare "${TMP}/origin.git"
+git init --template= -q "${TMP}/main"
 (
   cd "${TMP}/main" || exit 1
   git remote add origin "${TMP}/origin.git"

@@ -30,7 +30,7 @@ g() { git -c core.hooksPath=/dev/null -c user.name=rel11-test -c user.email=rel1
 #   #740：v1.0.0 与 main 各有一份不同的 android 1.1.0 说明，main 另有 2.1.0 的说明——
 #   repair 必须用 tag 那份 release/（说明、冻结件随 tag），并经 main 的 release-version.sh 读号。
 SRC="$SANDBOX/src"
-g init -q -b main "$SRC"
+g init --template= -q -b main "$SRC"
 mkdir -p "$SRC/apps/android" "$SRC/docs" "$SRC/release/notes/android" "$SRC/tools"
 echo a > "$SRC/apps/android/a.txt"
 g -C "$SRC" add -A && g -C "$SRC" commit -qm c1 && g -C "$SRC" tag v0.1.0

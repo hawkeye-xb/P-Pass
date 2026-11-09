@@ -209,9 +209,9 @@ fresh() {
   mkdir -p "$FAKE/issues"
   printf '%s\n' status:inbox status:ready status:doing status:review status:batched status:blocked needs:product core P0 P1 P2 P3 >"$FAKE/labels"
   : >"$FAKE/calls.log"
-  git init -q --bare "$ORIGIN"
+  git init --template= -q --bare "$ORIGIN"
   R="${S}/repo"
-  git init -q "$R"
+  git init --template= -q "$R"
   cd "$R" || exit 1
   git remote add origin "$ORIGIN"
   mkdir -p tools/flow tools/release .github docs/decisions src crates/storage release

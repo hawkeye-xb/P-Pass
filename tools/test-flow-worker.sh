@@ -201,8 +201,8 @@ chmod +x "${BIN}/gh" "${BIN}/just" "${BIN}/cargo" "${BIN}/actionlint" "${BIN}/pn
 export PATH="$BIN${EXTRA_PATH}"
 
 # ── 仓库：裸 origin + 主仓 ─────────────────────────────────────────────
-git init -q --bare "${TMP}/origin.git"
-git init -q "${TMP}/main"
+git init --template= -q --bare "${TMP}/origin.git"
+git init --template= -q "${TMP}/main"
 (
   cd "${TMP}/main" || exit 1
   git remote add origin "${TMP}/origin.git"
