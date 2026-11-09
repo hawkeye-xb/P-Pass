@@ -58,7 +58,10 @@ fn rewrite_autostart_does_not_start_the_service() {
 fn start_and_wait_waits_for_running() {
     let src = include_str!("../src/windows_service.rs");
     let body = fn_body(src, "fn start_and_wait");
-    assert!(body.contains("start(name)?"), "必须先 StartServiceW：{body}");
+    assert!(
+        body.contains("start(name)?"),
+        "必须先 StartServiceW：{body}"
+    );
     assert!(
         body.contains("ServiceState::Running"),
         "必须等到 RUNNING：{body}"
