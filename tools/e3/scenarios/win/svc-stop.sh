@@ -49,6 +49,8 @@ phone_disconnect() {
   win_phone_tap_xml "$dump" '存储电脑' || { echo "手机没有存储电脑"; return 1; }
   sleep 1
   win_phone_dump "$dump" || return 1
+  # 反证要用的「断开前」手机屏幕（存储电脑页）；点断开后的 dump 才是欢迎页。
+  win_phone_dump "$d/phone-before-disconnect.xml" || true
   win_phone_tap_xml "$dump" '断开与这台电脑的连接' || { echo "手机没有断开连接"; return 1; }
   sleep 2
   win_phone_dump "$dump" || true
@@ -150,7 +152,7 @@ counter() {
   # 反证用主路径「断开前」的样本：恢复后的 devices.json（仍 paired:true）和手机设置页，
   # 这样两条断开判据都会变红（#1600）。
   cp "$EV/main/devices-after-restore.json" "$d/devices-after-disconnect.json" 2>/dev/null || true
-  cp "$EV/main/phone-disconnect.xml" "$d/phone-after-disconnect.xml" 2>/dev/null || true
+  cp "$EV/main/phone-before-disconnect.xml" "$d/phone-after-disconnect.xml" 2>/dev/null || true
 }
 
 teardown() {
@@ -169,9 +171,8 @@ teardown() {
   # 断开后 devices.json 仍可能留着 paired=false 的记录；按 paired=true 的台数判断要不要重配。
   if [ "$(paired_count "$d/diag/devices.json")" != 1 ]; then
     win_app_running || win_start_app >/dev/null 2>&1 || true
-    # 断开后回到设备列表，先点「添加设备」进配对页；win_pair 假定已在配对页。
+    # 断开后回到总览页；win_pair 自己点「无法扫码？复制配对码」。
     win_ui_click '总览' >/dev/null 2>&1 || true
-    win_ui_click '添加设备' >/dev/null 2>&1 || true
     sleep 1
     win_pair "$d" >/dev/null 2>&1 || true
   fi
