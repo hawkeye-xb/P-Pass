@@ -87,7 +87,7 @@ PPASS_HOOK_BYPASS=1 PPASS_HOOK_BYPASS_REASON='<为什么必须绕过>' git commi
 ## 已知局限
 
 - `git commit --no-verify` 和改 `core.hooksPath` 都能绕过全部本地检查，这一层只能拦住守规矩的提交。
-  兜底仍然是 PR 上的独立评审与 CI；用户可见或核心改动还有 acceptance gate 的验收行。
+  兜底仍然是 PR 上的独立评审与 CI；核心改动还有 acceptance gate 的已采纳方案引用检查，用户可见改动按版本验收随台账验。
 - 通行证本身挡不住故意绕过的人：任何能编辑 issue 的账号都可以给卡打 `core` 标签、改「范围」。
   这一层防的是忘了规矩，故意绕过的情况仍然要靠 PR 上的独立评审、CI 与 acceptance gate 兜底。
 - 自己开 PR、自己在 GitHub 上操作，本地 hook 管不到。
