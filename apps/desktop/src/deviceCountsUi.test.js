@@ -49,6 +49,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 
 import App from "./App.svelte";
 import { daemonMethodOf } from "./lib/daemonApi.js";
+import { setLocale } from "./lib/i18n.js";
 
 const row = (node, name, removal) => ({
   node_id: node.repeat(64),
@@ -126,6 +127,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  // 英文渲染用例里切过 locale，这里复位，别影响后续用例。
+  setLocale("zh");
 });
 
 describe("断开后总览顶部与备份状态卡一致（#1402 卡1）", () => {
@@ -205,5 +208,20 @@ describe("断开后总览顶部与备份状态卡一致（#1402 卡1）", () => 
 
     expect(text()).toContain("在线");
     expect(text()).not.toContain("很久没联系");
+  });
+
+  it("英文界面渲染分组标题与 15 天提示（en locale）", async () => {
+    setLocale("en");
+    daemon({ paired: 1, disconnected: 1 }, [
+      { ...row("a", "Paired Device", "none"), last_seen: Date.now() - 16 * 86400000 },
+      row("b", "Disconnected Device", "disconnected"),
+    ]);
+    await open("#/devices");
+
+    // 英文分组标题（数据字典存在 ≠ 界面渲染，这里钉住渲染层）。
+    expect(document.querySelector('[data-testid="device-group-paired"]')?.textContent).toContain("Paired");
+    expect(document.querySelector('[data-testid="device-group-disconnected"]')?.textContent).toContain("Disconnected");
+    // 英文 15 天提示
+    expect(text()).toContain("No contact for a while");
   });
 });
