@@ -3,7 +3,7 @@ mod common;
 use std::sync::Arc;
 
 use daemon::events;
-use daemon::flow_delivery::{DeliveryError, FlowDelivery, FlowPathRegistry};
+use daemon::flow_delivery::{DeliveryError, FetchStage, FlowDelivery, FlowPathRegistry};
 use proto::FlowFetchRequest;
 use storage::{Asset, Db, Pairing, Role};
 use tempfile::tempdir;
@@ -1312,6 +1312,94 @@ async fn offer_skips_the_network_fetch_when_content_already_has_a_durable_copy()
     assert_eq!(receipt.content_hash, hex::encode(hash));
     // Nothing was ever pulled into the flow-blobs store for this hash.
     assert_eq!(receiver_blobs.local_bytes(hash).await.unwrap(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_offers_of_the_same_content_share_one_download() {
+    // #1078：两条不同 tuple、同一 content_hash 的记录并发 offer，同一时刻只有
+    // 一路网络拉取；另一条等它完成后经 complete_without_fetch 拿到回执，只入库
+    // 一次。反证：去掉 spawn_fetch_task 里的 claim_hash（同 hash 各起一个任务），
+    // 下面的 verified/ingested 计数会变成 2（各下载一次、各入库一次）。
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let provider_blobs = Arc::new(provider_blobs);
+    // 尺寸够大，两路 loopback fetch 会真实重叠，不靠代码里的定时 sleep。
+    let bytes = vec![0x5a; 8 * 1024 * 1024];
+    let source = root.path().join("large-source.jpg");
+    std::fs::write(&source, &bytes).unwrap();
+    let hash = *blake3::hash(&bytes).as_bytes();
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
+
+    let receiver_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&receiver_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let db = paired_db("epoch-current", provider_transport.node_id()).await;
+    let verified = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let ingested = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (hook_verified, hook_ingested) = (verified.clone(), ingested.clone());
+    let delivery = FlowDelivery::new(db.clone(), receiver_blobs.clone(), root.path())
+        .with_fetch_stage_hook(move |stage| {
+            let verified = hook_verified.clone();
+            let ingested = hook_ingested.clone();
+            Box::pin(async move {
+                match stage {
+                    FetchStage::Verified => {
+                        verified.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    }
+                    FetchStage::Ingested => {
+                        ingested.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
+            })
+        });
+
+    // 两条不同 tuple（不同 queue_sequence）的记录，内容相同。
+    let a = request("epoch-current", "lease-a", hash, ticket.clone());
+    let mut b = request("epoch-current", "lease-b", hash, ticket);
+    b.queue_sequence = 8;
+
+    let (reply_a, reply_b) = tokio::join!(
+        delivery.offer(provider_transport.node_id(), &a),
+        delivery.offer(provider_transport.node_id(), &b),
+    );
+    reply_a.unwrap();
+    reply_b.unwrap();
+
+    // 两条都拿到回执。
+    let receipt_a = common::await_receipt(&delivery, provider_transport.node_id(), &a)
+        .await
+        .unwrap();
+    let receipt_b = common::await_receipt(&delivery, provider_transport.node_id(), &b)
+        .await
+        .unwrap();
+    assert_eq!(receipt_a.content_hash, hex::encode(hash));
+    assert_eq!(receipt_b.content_hash, hex::encode(hash));
+
+    // 同一 hash 只发生一次下载、一次入库。
+    assert_eq!(
+        verified.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "同一 hash 的两条记录并发 offer 只该有一次网络拉取"
+    );
+    assert_eq!(
+        ingested.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "同一 hash 的两条记录只该入库一次"
+    );
+    assert!(db.get_asset(&hash).await.unwrap().is_some());
 }
 
 #[tokio::test(flavor = "multi_thread")]
