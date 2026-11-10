@@ -104,6 +104,27 @@ Var PPassDataDir
   Pop $0
   nsExec::ExecToLog '"$SYSDIR\sc.exe" stop "${PPASS_SERVICE}"'
   Pop $0
+  ; 等它真的到 STOPPED（最多 10 秒）再往下走：还在 STOP_PENDING 时后面的 taskkill
+  ; 会扑空、文件替换又撞上它，清空失败恢复没生效时就会退化成 #1640 的竞态。
+  StrCpy $R2 0
+  ppass_pre_wait_stopped:
+    nsExec::ExecToStack '"$SYSDIR\sc.exe" query "${PPASS_SERVICE}"'
+    Pop $0
+    Pop $1
+    ${If} $0 != 0
+      Goto ppass_pre_wait_stopped_done
+    ${EndIf}
+    ${StrStr} $R7 "$1" "STOPPED"
+    ${If} $R7 != ""
+      Goto ppass_pre_wait_stopped_done
+    ${EndIf}
+    IntOp $R2 $R2 + 1
+    ${If} $R2 >= 20
+      Goto ppass_pre_wait_stopped_done
+    ${EndIf}
+    Sleep 500
+    Goto ppass_pre_wait_stopped
+  ppass_pre_wait_stopped_done:
   ; 旧版本（#957 计划任务）不做迁移，只清残留；失败无害。
   nsExec::ExecToLog '"$SYSDIR\schtasks.exe" /Delete /TN "${PPASS_SERVICE}" /F'
   Pop $0
@@ -166,9 +187,21 @@ Var PPassDataDir
     ppass_wait_stopped_done:
     nsExec::ExecToLog '"$SYSDIR\sc.exe" start "${PPASS_SERVICE}"'
     Pop $0
-    ; #1167：失败标记放在 ProgramData（见 UpdateFailureRecover）；老位置一并清掉。
-    Delete "${PPASS_DATA}\update-failed"
-    Delete "$LOCALAPPDATA\com.hawkeyexb.ppass.desktop\update-failed"
+    ; 起完必须确认真的 RUNNING，再当作安装成功。新 daemon 起来就退出（目录/DACL 之类
+    ; 拒绝启动）、或 start 撞上 STOP_PENDING 返回 1056/1061 时，这里不能默默当成功。
+    Sleep 2000
+    nsExec::ExecToStack '"$SYSDIR\sc.exe" query "${PPASS_SERVICE}"'
+    Pop $0
+    Pop $1
+    ${StrStr} $R7 "$1" "RUNNING"
+    ${If} $R7 == ""
+      ; 没能起来：保留/写失败标记，交给同一条恢复路径（含弹窗与 wanted-state 判断）。
+      Call UpdateFailureRecover
+    ${Else}
+      ; #1167：失败标记放在 ProgramData（见 UpdateFailureRecover）；老位置一并清掉。
+      Delete "${PPASS_DATA}\update-failed"
+      Delete "$LOCALAPPDATA\com.hawkeyexb.ppass.desktop\update-failed"
+    ${EndIf}
   ${EndIf}
 !macroend
 
@@ -233,6 +266,10 @@ Function UpdateFailureRecover
     ${EndIf}
     ${StrStr} $R7 "$R6" "stopped"
     ${If} $R7 == ""
+      ; #1640：PREINSTALL 清空过失败恢复，走失败路径时这里必须补回来——否则安装失败后
+      ; 服务会永久失去崩溃自动重启（SCM 配置是持久的，不是本次进程的状态）。
+      nsExec::ExecToLog '"$SYSDIR\sc.exe" failure "${PPASS_SERVICE}" reset= 86400 actions= restart/5000/restart/5000'
+      Pop $0
       nsExec::ExecToLog '"$SYSDIR\sc.exe" start "${PPASS_SERVICE}"'
       Pop $0
       StrCpy $R9 1
