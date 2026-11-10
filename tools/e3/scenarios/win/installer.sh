@@ -310,7 +310,7 @@ act() {
   snapshot_state "$d" pre
   # R0.2：真实基线安装器（干净 ProgramData）。顺带把 daemon 启动日志拷出来——
   # 服务如果起不来，启动失败的原文就在里面。
-  elev_step "安装基线 P-Pass 0.10.1（perMachine，服务模式）" \
+  elev_step "安装基线 P-Pass ${WIN_BASE_VER}（perMachine，服务模式）" \
     -Installer "$(cygpath -w "$WIN_BASE_EXE")" -InstallerArgs '/S' -WaitServiceSecs 15 \
     -CopyLogsTo "$(cygpath -w "$d/after-baseline-logs")" \
     -Out "$(cygpath -w "$d/after-baseline-install.txt")" || { echo "基线安装失败/取消"; return 1; }
@@ -399,11 +399,11 @@ same_field() { # same_field <证据目录> <字段> <tagA> <tagB>：两边都有
 judge() {
   local d="$1"
   # R0.2
-  check "R0.2 基线 exe 版本 0.10.1" grep -qx 'inst_exe_version=0.10.1' "$d/after-baseline.txt"
-  check "R0.2 HKLM 卸载登记 0.10.1" grep -qx 'hklm_version=0.10.1' "$d/after-baseline.txt"
+  check "R0.2 基线 exe 版本 $WIN_BASE_VER" grep -qx "inst_exe_version=$WIN_BASE_VER" "$d/after-baseline.txt"
+  check "R0.2 HKLM 卸载登记 $WIN_BASE_VER" grep -qx "hklm_version=$WIN_BASE_VER" "$d/after-baseline.txt"
   check "R0.2 服务 P-Pass 在运行" grep -qx 'svc_state=Running' "$d/after-baseline.txt"
   check "R0.2 服务路径指向 Program Files 安装目录" grep -Fq "$INST_DIR_WIN\\ppf-daemon.exe" "$d/after-baseline.txt"
-  check "R0.2 daemon 版本 0.10.1（服务 diag）" eq_file "$d/after-baseline-diag-version.txt" "0.10.1"
+  check "R0.2 daemon 版本 ${WIN_BASE_VER}（服务 diag）" eq_file "$d/after-baseline-diag-version.txt" "$WIN_BASE_VER"
   check "R0.2 ProgramData 已由安装器建立" grep -qx 'pd_dir=present' "$d/after-baseline.txt"
   # R1.2 / W3
   check "W3 覆盖安装前服务是运行中" grep -qx 'svc_state=Running' "$d/pre-candidate-service.txt"
