@@ -423,9 +423,10 @@
         showPairModal = false;
         showConfirmModal = true;
       }
-      // DEV-03: 这一屏要同时渲染「在用/已断开」和折叠的「已移除」，所以要
-      // 全量。不传参 ⇒ daemon 只给主列表的行 ⇒ 下面那个「已移除设备 N 台」
-      // 折叠区**永远是空的、渲染不出来**。
+      // DEV-03 + #1577：主列表要渲染「已配对」与「已断开」两组，而「已断开」的
+      // 行带 departed 状态（departed_by = device/identity），所以用 include_departed
+      // 拿全量；「已移除」（removal === "removed"）的行已随 #1577 不再渲染，由前端
+      // 分组（deviceGroups）时过滤掉。
       try {
         const d = await call("devices.list", { include_departed: true });
         devices = d.devices ?? [];
@@ -519,11 +520,6 @@
     const lastBackupAt = wm?.last_backup_at ?? null;
     const backupTime = humanTime(lastBackupAt, now);
     const backupRight = backupTime ? t("ui.device_last_backup", { time: backupTime }) : t("ui.device_never_backed_up");
-    // #1577（#1402 卡2）：15 天没联系（只对已配对行）→ 很久没联系。优先级高于
-    // 「需要看看」——5 天是备份健康，15 天是这台设备可能已经在手机上断开。
-    if (d.removal === "none" && staleHint(d.last_seen, now)) {
-      return { alert: true, dot: "act", sub: t("ui.device_stale_hint"), right: backupRight };
-    }
     switch (d.row_state) {
       case "disconnected":
         // DEV-03: 不借用「离线」话术，也不参与「几天没备份」告警。
@@ -541,6 +537,12 @@
         if (flow) return { alert: false, dot: flow.dot, sub: flow.sub, right: backupRight };
         break;
       }
+    }
+    // #1577（#1402 卡2）：15 天没联系（只对已配对、且**离线**的行）。放在 5 天
+    // 备份告警（needs_attention）之后——同一台设备同时满足两者时，5 天告警优先，
+    // 15 天档不覆盖它（卡上「现有 5 天告警不动」）；在线/最近在线的行也不提示。
+    if (d.removal === "none" && d.presence === "offline" && staleHint(d.last_seen, now)) {
+      return { alert: true, dot: "act", sub: t("ui.device_stale_hint"), right: backupRight };
     }
     const pres = presenceText(
       d.presence,
@@ -576,8 +578,8 @@
     const paired = devices.filter((d) => d.removal === "none").sort(byActivity);
     const disconnected = devices.filter((d) => d.removal === "disconnected").sort(byActivity);
     return [
-      { title: "ui.devices_group_paired", items: paired },
-      { title: "ui.disconnected", items: disconnected },
+      { key: "paired", title: "ui.devices_group_paired", items: paired },
+      { key: "disconnected", title: "ui.disconnected", items: disconnected },
     ].filter((g) => g.items.length > 0);
   });
   const waterRows = $derived.by(() => {
@@ -1972,7 +1974,7 @@
                 <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.no_devices")}</p>
               {:else}
                 {#each deviceGroups as group}
-                  <h3 class="px-[22px] pt-[14px] pb-[4px] text-[13px] font-semibold text-ink-60">{t(group.title)}</h3>
+                  <h3 data-testid="device-group-{group.key}" class="px-[22px] pt-[14px] pb-[4px] text-[13px] font-semibold text-ink-60">{t(group.title)}</h3>
                   <ul>
                     {#each group.items as d}
                       {@const row = deviceRow(d, nowMs)}

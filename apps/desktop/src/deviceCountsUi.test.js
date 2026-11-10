@@ -170,8 +170,40 @@ describe("断开后总览顶部与备份状态卡一致（#1402 卡1）", () => 
 
     expect(text()).toContain("在用的那台");
     expect(text()).toContain("断开的那台");
+    // 分组标题真的渲染（把 deviceGroups 换成平铺列表，这两条会红）。
+    expect(document.querySelector('[data-testid="device-group-paired"]')?.textContent).toContain("已配对");
+    expect(document.querySelector('[data-testid="device-group-disconnected"]')?.textContent).toContain("已断开");
     // 已移除折叠区隐藏：看不到移除的那台，也看不到「已移除设备 N 台」。
     expect(text()).not.toContain("移除的那台");
     expect(text()).not.toContain("已移除设备");
+  });
+
+  it("15 天提示不覆盖 5 天备份告警（同时满足两者时告警优先）", async () => {
+    daemon({ paired: 1, disconnected: 0 }, [
+      {
+        ...row("a", "在用的那台", "none"),
+        row_state: "needs_attention",
+        last_seen: Date.now() - 16 * 86400000,
+      },
+    ]);
+    await open("#/devices");
+
+    expect(text()).toContain("需要处理");
+    expect(text()).not.toContain("很久没联系");
+  });
+
+  it("当前在线（有活连接）的设备不显示 15 天提示", async () => {
+    daemon({ paired: 1, disconnected: 0 }, [
+      {
+        ...row("a", "在用的那台", "none"),
+        presence: "online",
+        row_state: "online",
+        last_seen: Date.now() - 16 * 86400000,
+      },
+    ]);
+    await open("#/devices");
+
+    expect(text()).toContain("在线");
+    expect(text()).not.toContain("很久没联系");
   });
 });

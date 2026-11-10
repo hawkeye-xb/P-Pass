@@ -186,6 +186,10 @@ msg_keys! {
     UI_PENDING_BANNER_TEXT_KNOWN => "ui.pending_banner_text_known",
     /// 设计稿 v2：设备页副标题——已配对 N 台 + 可改家人叫法的提示。
     UI_DEVICES_PAIRED_LINE => "ui.devices_paired_line",
+    /// #1577（#1402 卡2）：设备页主列表「已配对」分组标题。
+    UI_DEVICES_GROUP_PAIRED => "ui.devices_group_paired",
+    /// #1577（#1402 卡2）：15 天没联系、可能已在手机上断开的提示。
+    UI_DEVICE_STALE_HINT => "ui.device_stale_hint",
 
     // ── MOB-29: 删掉的照片会被传回来——两端各一句告知 ──────────────
     // 定调（2026-08-25）：重传是正确行为，不拦；要做的只是让用户知道，
@@ -604,6 +608,8 @@ mod tests {
             UI_PENDING_BANNER_TEXT,
             UI_PENDING_BANNER_TEXT_KNOWN,
             UI_DEVICES_PAIRED_LINE,
+            UI_DEVICES_GROUP_PAIRED,
+            UI_DEVICE_STALE_HINT,
             UI_LIBRARY_DELETE_WARN,
             UI_LIBRARY_DELETE_WARN_DISMISS,
             UI_DEVICE_OPEN_FOLDER,
@@ -858,7 +864,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 367);
+        assert_eq!(ALL.len(), 369);
     }
 
     #[test]
