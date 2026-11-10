@@ -166,6 +166,8 @@ async fn run() -> anyhow::Result<()> {
     let pinned_data_dir = sandbox.as_ref().map(|sb| sb.root().to_path_buf());
     let data_dir_migration = match pinned_data_dir {
         Some(_) => None,
+        // #881：注入平台目录 = 测试实例，不搬真实数据（与沙盒同一条「不碰本机真实数据」纪律）。
+        None if std::env::var_os("PPF_PLATFORM_DIR").is_some() => None,
         None => {
             use platform::PlatformAdapter as _;
             Some(platform::adapter().migrate_legacy_data_dir())
@@ -287,7 +289,8 @@ async fn run() -> anyhow::Result<()> {
     // with zero configuration must just work (T-042).
     // #881：测试注入点——`PPF_PLATFORM_DIR` 指定平台配置目录（config.toml 所在），
     // 只改「去哪读 config」，不改库位置来源：data_dir 仍来自 config.toml，DESK-46
-    // 的库目录检查照查；`--ephemeral` 沙盒不认它（见 daemon::sandbox::FORBIDDEN_ENV）。
+    // 的库目录检查照查。`--ephemeral` 沙盒不读平台 config（FORBIDDEN_ENV 未含它——在
+    // core 路径，不加）；注入时 store 传 None，不碰真实钥匙串/正本，库位置只读注入目录里的 config.toml。
     let injected_platform_dir = std::env::var_os("PPF_PLATFORM_DIR").map(std::path::PathBuf::from);
     let platform_dir = match &injected_platform_dir {
         Some(dir) => dir.clone(),
@@ -305,15 +308,11 @@ async fn run() -> anyhow::Result<()> {
     };
     // #1115：常驻 daemon 的库位置只认正本（macOS 钥匙串；没有安全存储的平台是 config），
     // config.toml 里的 data_dir 有正本时只给人看。正本里还没有 ⇒ 未配置状态。
-    // #881：注入平台目录时用同一个目录构造 LibraryLocation，库位置读同一份 config。
+    // #881：注入平台目录时用同一个目录构造 LibraryLocation，库位置读同一份 config；
+    // store 传 None——不读真实钥匙串（macOS ad-hoc 签名读不了、有授权环境则读到真库），
+    // resident_library 走 config.toml 的 data_dir，DESK-46 照查。
     let library_location = std::sync::Arc::new(match &injected_platform_dir {
-        Some(dir) => {
-            use platform::PlatformAdapter as _;
-            daemon::library_location::LibraryLocation::with(
-                platform::adapter().library_store(),
-                dir.clone(),
-            )
-        }
+        Some(dir) => daemon::library_location::LibraryLocation::with(None, dir.clone()),
         None => daemon::library_location::LibraryLocation::for_platform(),
     });
     // #1246：窗口程序读 config.toml 的授权会被安装器升级冲掉，启动时补授（未配置 / 沙盒不碰）。
