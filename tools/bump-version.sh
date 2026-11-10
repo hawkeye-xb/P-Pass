@@ -174,8 +174,10 @@ if [ "$PLATFORM" = desktop ] || [ "$PLATFORM" = both ]; then NEW_DESKTOP="$NEW";
 if [ "$PLATFORM" = android ] || [ "$PLATFORM" = both ]; then NEW_ANDROID="$NEW"; fi
 if [ "$PLATFORM" = ios ]; then NEW_IOS="$NEW"; fi
 tmp=$(mktemp)
+# 只改已知的四个键，其余键原样保留：本脚本不认识 `release/versions.json` 里的新键
+# （下一个加进来的端），构造固定对象会把它们静默抹掉（#914）。
 jq --arg d "$NEW_DESKTOP" --arg a "$NEW_ANDROID" --argjson c "$NCODE" --arg i "$NEW_IOS" \
-  '{desktop:$d, android:$a, androidVersionCode:$c, ios:$i}' "$VJSON" > "$tmp"
+  '.desktop = $d | .android = $a | .androidVersionCode = $c | .ios = $i' "$VJSON" > "$tmp"
 mv "$tmp" "$VJSON"
 
 # ── 收尾断言：每个目标都必须到达 NEW（不借用别处读到的值）──────────

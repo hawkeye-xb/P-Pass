@@ -3,19 +3,28 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/p-pass-bump-version.XXXXXX")"
-POSITIVE_SANDBOX=""
+WORKTREES=()
 
 cleanup() {
-  for worktree in "$SANDBOX" "$POSITIVE_SANDBOX"; do
-    [ -n "$worktree" ] || continue
+  local worktree
+  # macOS bash 3.2 在 set -u 下对空数组做 ${a[@]} 会报错，用 +"展开" 兜住。
+  for worktree in ${WORKTREES[@]+"${WORKTREES[@]}"}; do
     git -C "$ROOT" worktree remove --force "$worktree" >/dev/null 2>&1 || true
     rm -rf "$worktree"
   done
 }
 trap cleanup EXIT
 
-git -C "$ROOT" worktree add --detach "$SANDBOX" HEAD >/dev/null
+# new_worktree <名字>：从 HEAD 建一个一次性 worktree，退出时统一清理。
+new_worktree() {
+  local dir
+  dir="$(mktemp -d "${TMPDIR:-/tmp}/p-pass-bump-version-${1}.XXXXXX")"
+  git -C "$ROOT" worktree add --detach "$dir" HEAD >/dev/null
+  WORKTREES+=("$dir")
+  printf '%s\n' "$dir"
+}
+
+SANDBOX="$(new_worktree drift)"
 # Exercise the script under test from the caller's worktree while keeping every
 # version-file mutation isolated in a disposable worktree.
 cp "$ROOT/tools/bump-version.sh" "$SANDBOX/tools/bump-version.sh"
@@ -55,8 +64,7 @@ esac
 
 printf '%s\n' "PASS: drifted desktop Cargo.toml is rejected before bumping"
 
-POSITIVE_SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/p-pass-bump-version-positive.XXXXXX")"
-git -C "$ROOT" worktree add --detach "$POSITIVE_SANDBOX" HEAD >/dev/null
+POSITIVE_SANDBOX="$(new_worktree positive)"
 git -C "$ROOT" diff -- tools/bump-version.sh >"$POSITIVE_SANDBOX/.bump-version.patch"
 if [ -s "$POSITIVE_SANDBOX/.bump-version.patch" ]; then
   git -C "$POSITIVE_SANDBOX" apply .bump-version.patch
@@ -140,10 +148,8 @@ git -C "$POSITIVE_SANDBOX" diff --quiet -- apps/ios/Config/Base.xcconfig \
 printf '%s\n' "PASS: --platform both leaves the iOS line untouched"
 
 # ── iOS 线（#348）：--platform ios 只动 versions.json.ios + Base.xcconfig 的回退值 ──
-IOS_SANDBOX="$(mktemp -d "${TMPDIR:-/tmp}/p-pass-bump-version-ios.XXXXXX")"
-git -C "$ROOT" worktree add --detach "$IOS_SANDBOX" HEAD >/dev/null
+IOS_SANDBOX="$(new_worktree ios)"
 cp "$ROOT/tools/bump-version.sh" "$IOS_SANDBOX/tools/bump-version.sh"
-trap 'for w in "$SANDBOX" "$POSITIVE_SANDBOX" "$IOS_SANDBOX"; do git -C "$ROOT" worktree remove --force "$w" >/dev/null 2>&1 || true; rm -rf "$w"; done' EXIT
 if ! output="$("$IOS_SANDBOX/tools/bump-version.sh" --platform ios 99.0.0-ios 2>&1)"; then
   printf '%s\n' "expected --platform ios to succeed, got:" >&2; printf '%s\n' "$output" >&2; exit 1
 fi
@@ -160,3 +166,35 @@ if "$IOS_SANDBOX/tools/bump-version.sh" --platform ios 0.0.1 >/dev/null 2>&1; th
   echo "FAIL: --platform ios 接受了低于当前的版本" >&2; exit 1
 fi
 printf '%s\n' "PASS: --platform ios rejects a non-increasing version"
+
+# ── 未知键（#914）：脚本不认识的键必须原样保留，不能在下一次 bump 时被抹掉 ──
+# 反证：写回若退回「构造固定四键对象」，下面两处断言必红。
+UNKNOWN_SANDBOX="$(new_worktree unknown-keys)"
+cp "$ROOT/tools/bump-version.sh" "$UNKNOWN_SANDBOX/tools/bump-version.sh"
+python3 - "$UNKNOWN_SANDBOX/release/versions.json" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+data = json.load(open(path))
+data["macos"] = "0.9.0"                  # 以后多出来的一端
+data["channelNotes"] = {"beta": [1, 2]}  # 任意嵌套结构
+open(path, "w").write(json.dumps(data, indent=2) + "\n")
+PY
+
+if ! output="$("$UNKNOWN_SANDBOX/tools/bump-version.sh" --platform ios 99.0.0-unknown 2>&1)"; then
+  printf '%s\n' "expected --platform ios to succeed with unknown versions.json keys, got:" >&2
+  printf '%s\n' "$output" >&2
+  exit 1
+fi
+
+vjson="$UNKNOWN_SANDBOX/release/versions.json"
+[ "$(jq -r .ios "$vjson")" = "99.0.0-unknown" ] \
+  || { echo "FAIL: versions.json.ios 没跟上 bump" >&2; exit 1; }
+[ "$(jq -r .macos "$vjson")" = "0.9.0" ] \
+  || { echo "FAIL: bump 抹掉了未知键 macos（versions.json：$(jq -c . "$vjson")）" >&2; exit 1; }
+[ "$(jq -c .channelNotes "$vjson")" = '{"beta":[1,2]}' ] \
+  || { echo "FAIL: bump 抹掉了未知嵌套键 channelNotes（versions.json：$(jq -c . "$vjson")）" >&2; exit 1; }
+[ "$(jq -r .androidVersionCode "$vjson")" = "$(jq -r .androidVersionCode "$ROOT/release/versions.json")" ] \
+  || { echo "FAIL: --platform ios 改了 androidVersionCode" >&2; exit 1; }
+printf '%s\n' "PASS: unknown versions.json keys survive a bump"
