@@ -196,6 +196,63 @@ list_files() {
     -type f \( "${expr[@]}" \) -print0
 }
 
+# ── B.2 扩展：硬编码平台路径（#402）────────────────────
+#
+# B.2 的 grep 只认 cfg + 平台词，认不出「硬编码平台路径」这种同样是平台分叉的
+# 写法——crates/media-codec/src/quicklook.rs 里的 /usr/bin/qlmanage 就是 macOS
+# 专属路径，功能上就是平台分叉，但那条 grep 看不见它。这里补一条：crates/** 与
+# apps/** 的 Rust 里，硬编码的 Unix 绝对路径 / Windows 路径命中即红，除非命中行
+# 或其上方的注释块里有放行标记（见 PLATFORM_PATH_MARKER）。合法的只有「探测式」
+# 写法（Path::new(...).is_file()/.exists()，不在就 None），但门禁不猜语义、只看
+# 标记——quicklook.rs 文件头的「arch rule B.2」声明就是它的标记（legacy）。
+#
+# 豁免：crates/platform/（平台 crate 本家）、tests/（测试夹具）、注释行、
+# 文件尾部的 #[cfg(test)] mod（与 G4 同口径）。
+#
+# 变异反证见 tools/test-arch-check.sh：ARCH_PLATFORM_PATH_RE 可覆盖正则，测试把
+# 它换成不匹配任何东西的正则，正样例必须漏报——证明「未声明路径必须红」不是恒真式。
+PLATFORM_PATH_RE='"(?:/(?:usr|etc|bin|sbin|opt|Library|System|Applications)/|[A-Za-z]:[\\/])|%(?:APPDATA|LOCALAPPDATA|PROGRAMFILES)%|System32|Program[[:space:]]+Files'
+[ -n "${ARCH_PLATFORM_PATH_RE:-}" ] && PLATFORM_PATH_RE="$ARCH_PLATFORM_PATH_RE"
+PLATFORM_PATH_MARKER='arch-allow:[[:space:]]*platform-path|arch[[:space:]]+rule[[:space:]]+B\.2'
+
+VIOLATIONS_B2_PATHS=$(
+  list_files "$ROOT/crates" "$ROOT/apps" -- '*.rs' \
+    | tr '\0' '\n' | { grep -v '/crates/platform/' || true; } | { grep -v '/tests/' || true; } | tr '\n' '\0' \
+    | xargs -0 perl -0777 -e '
+        my ($re, $marker, $root) = splice(@ARGV, 0, 3);
+        my $qr = qr/$re/m; my $mq = qr/$marker/;
+        for my $f (@ARGV) {
+          open(my $fh, "<", $f) or next;
+          local $/; my $orig = <$fh>; close $fh;
+          my $t = $orig;
+          $t =~ s{^[ \t]*(?://|/\*|\*(?:\s|\z)|\#(?![\[!]))[^\n]*}{}mg;
+          $t =~ s{^\#\[cfg\(test\)\]\s*mod\s+\w+\s*\{.*}{}ms;
+          my @ol = split /\n/, $orig, -1;
+          my %seen;
+          while ($t =~ /$qr/g) {
+            my $ln = (substr($t, 0, $-[0]) =~ tr/\n//) + 1;
+            next if $seen{$ln}++;
+            my $ok = 0;
+            my $lo = $ln - 9; $lo = 0 if $lo < 0;
+            for my $i ($lo .. $ln - 1) {
+              if (($ol[$i] // "") =~ /$mq/) { $ok = 1; last; }
+            }
+            next if $ok;
+            (my $rel = $f) =~ s{^\Q$root\E/}{};
+            print "$rel\t$ln\n";
+          }
+        }
+      ' "$PLATFORM_PATH_RE" "$PLATFORM_PATH_MARKER" "$ROOT"
+)
+
+if [ -n "$VIOLATIONS_B2_PATHS" ]; then
+  echo "❌ B.2 VIOLATION: hardcoded platform path without arch-allow marker:"
+  printf '%s\n' "$VIOLATIONS_B2_PATHS" | awk -F'\t' '{print "     " $1 " 行 " $2}'
+  FAIL=1
+else
+  echo "   ✅ B.2 platform-path: clean"
+fi
+
 # ── B.3: device profiles and audit are never deleted ─────────
 
 echo "==> B.3: device profiles / audit never deleted; pairing records only via device_repo.rs (DEV-02, #1117)"
