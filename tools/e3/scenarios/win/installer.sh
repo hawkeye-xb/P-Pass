@@ -276,15 +276,11 @@ setup() {
   echo "候选安装包：${WIN_CAND_EXE}（sha256 $(sha256sum "$WIN_CAND_EXE" | awk '{print $1}')）"
   # 从这里开始动机器；teardown 只在动过之后才补装候选。
   TOUCHED=1
-  clean_extract_install
-  # 壳数据目录（config.toml/库位置）也必须清：残留会让 perMachine App 启动时读到
-  # 旧配置、跳过首启向导，服务没有库配置就一直 STOPPED（#1607）。旧照片库一并
-  # 挪走（不硬删），保证「全新机器」语义。清不干净就停下，否则后续 E3 分不清是
-  # 场景没清还是产品没修。
-  win_reset_desktop_state || { echo "清桌面状态失败（壳 config 可能残留）"; return 1; }
-
   # R0.2 从干净环境开始：先卸掉上一轮留下的真实安装，再把旧 ProgramData 移到一边
   # （不删除，留作对照）。不重置的话，旧身份/ACL 会让「首次安装」用例失真。
+  # 卸载必须排在最前：clean_extract_install 里的 win_stop_all 会直接杀掉 ppf-daemon，
+  # 而它就是 Windows 服务 P-Pass 的进程；服务配了失败恢复（重启，延迟 5s），被杀后
+  # SCM 会把它拉回来，程序目录一直被占用，卸载器删不掉（#1624）。
   if [ -f "$INST_EXE" ] || [ "$(svc_exists)" = yes ]; then
     if [ -f "$INST_UNINSTALL" ]; then
       elev_step "卸载现有 P-Pass（为 R0.2 准备干净环境）" \
@@ -296,6 +292,12 @@ setup() {
       return 1
     fi
   fi
+  clean_extract_install
+  # 壳数据目录（config.toml/库位置）也必须清：残留会让 perMachine App 启动时读到
+  # 旧配置、跳过首启向导，服务没有库配置就一直 STOPPED（#1607）。旧照片库一并
+  # 挪走（不硬删），保证「全新机器」语义。清不干净就停下，否则后续 E3 分不清是
+  # 场景没清还是产品没修。
+  win_reset_desktop_state || { echo "清桌面状态失败（壳 config 可能残留）"; return 1; }
   if [ -d "$PD_DIR" ]; then
     local pd_old="$PD_DIR_WIN.pre-e3-$(date +%Y%m%d-%H%M%S)"
     elev_step "把旧 ProgramData\\P-Pass 移到一边（R0.2 干净起点，不删除）" \
