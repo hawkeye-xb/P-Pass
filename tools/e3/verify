@@ -74,13 +74,15 @@ copy_cand_bins() { # copy_cand_bins <debug 目录> <拷到哪>：由 build_deskt
   local t="$1" dst="$2" b
   mkdir -p "$dst" || return 1
   for b in daemon testclient; do
-    [ -x "$t/$b" ] || { log "缺候选二进制：$t/$b"; return 1; }
+    # 用 -f 不用 -x：Windows 上 chmod +x 不落执行位，产物是普通文件也照拷；可执行与否由 cargo 保证（#1650）。
+    [ -f "$t/$b" ] || { log "缺候选二进制：$t/$b"; return 1; }
     cp "$t/$b" "$dst/$b" || return 1
   done
 }
 # 场景改读编译时拷出来的副本；显式给的 E3_DAEMON / E3_TESTCLIENT 优先。
 pin_cand_bins() { # pin_cand_bins <副本目录>
-  [ -x "$1/daemon" ] && [ -x "$1/testclient" ] || { log "缺候选二进制副本：$1"; return 1; }
+  # 用 -f 不用 -x：Windows 上 chmod +x 不落执行位（#1650），副本是普通文件也认。
+  [ -f "$1/daemon" ] && [ -f "$1/testclient" ] || { log "缺候选二进制副本：$1"; return 1; }
   [ -n "${E3_DAEMON:-}" ] || export E3_DAEMON="$1/daemon"
   [ -n "${E3_TESTCLIENT:-}" ] || export E3_TESTCLIENT="$1/testclient"
 }

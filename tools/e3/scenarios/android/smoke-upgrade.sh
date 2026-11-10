@@ -95,10 +95,11 @@ judge() {
   verdict
 }
 
-# same_names <桩资产 rel_path 清单> <期望文件名清单>：两边的文件名集合完全一致（期望不能为空）
+# same_names <桩资产 rel_path 清单> <期望文件名清单>：两边的文件名集合完全一致（期望不能为空）。
+# 两边都先剥 \r：Windows 上 git 把 fixture 检出成 CRLF，sort 原样保留 \r，与 sed 侧剥掉 \r 后对不上（#1650）。
 same_names() {
   [ -s "$2" ] || return 1
-  [ "$(sed 's#.*/##' "$1" 2>/dev/null | sort)" = "$(sort "$2")" ]
+  [ "$(sed 's#.*/##' "$1" 2>/dev/null | tr -d '\r' | sort)" = "$(tr -d '\r' <"$2" | sort)" ]
 }
 
 same_nonempty() { [ -n "$2" ] && [ "$1" = "$2" ]; }
