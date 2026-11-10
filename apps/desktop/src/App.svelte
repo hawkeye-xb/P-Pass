@@ -66,6 +66,8 @@
   // disconnected.test.js 钉边界）。
   import { disconnectedRow } from "./lib/disconnected.js";
   import { disconnectedClause, noDevicesText } from "./lib/deviceCounts.js";
+  // #1577（#1402 卡2）：15 天「很久没联系」提示（last_seen 距今 > 15 天）。
+  import { staleHint } from "./lib/staleHint.js";
   import {
     pendingDialogText,
     pendingSubText,
@@ -421,9 +423,10 @@
         showPairModal = false;
         showConfirmModal = true;
       }
-      // DEV-03: 这一屏要同时渲染「在用/已断开」和折叠的「已移除」，所以要
-      // 全量。不传参 ⇒ daemon 只给主列表的行 ⇒ 下面那个「已移除设备 N 台」
-      // 折叠区**永远是空的、渲染不出来**。
+      // DEV-03 + #1577：主列表要渲染「已配对」与「已断开」两组，而「已断开」的
+      // 行带 departed 状态（departed_by = device/identity），所以用 include_departed
+      // 拿全量；「已移除」（removal === "removed"）的行已随 #1577 不再渲染，由前端
+      // 分组（deviceGroups）时过滤掉。
       try {
         const d = await call("devices.list", { include_departed: true });
         devices = d.devices ?? [];
@@ -535,6 +538,12 @@
         break;
       }
     }
+    // #1577（#1402 卡2）：15 天没联系（只对已配对、且**离线**的行）。放在 5 天
+    // 备份告警（needs_attention）之后——同一台设备同时满足两者时，5 天告警优先，
+    // 15 天档不覆盖它（卡上「现有 5 天告警不动」）；在线/最近在线的行也不提示。
+    if (d.removal === "none" && d.presence === "offline" && staleHint(d.last_seen, now)) {
+      return { alert: true, dot: "act", sub: t("ui.device_stale_hint"), right: backupRight };
+    }
     const pres = presenceText(
       d.presence,
       d.connection,
@@ -563,6 +572,16 @@
   const OVERVIEW_ROWS = 3;
   // #1044 B4：最近活跃（max(last_seen, last_backup_at)）与告警判定由 daemon 给出。
   const byActivity = (a, b) => (b.last_activity_at ?? 0) - (a.last_activity_at ?? 0);
+  // #1577（#1402 卡2）：设备页主列表分「已配对」「已断开」两组；「已移除」折叠区
+  // 隐藏（用户看不到移除过哪些设备，恢复靠手机重扫码）。每组按最近活跃倒序。
+  const deviceGroups = $derived.by(() => {
+    const paired = devices.filter((d) => d.removal === "none").sort(byActivity);
+    const disconnected = devices.filter((d) => d.removal === "disconnected").sort(byActivity);
+    return [
+      { key: "paired", title: "ui.devices_group_paired", items: paired },
+      { key: "disconnected", title: "ui.disconnected", items: disconnected },
+    ].filter((g) => g.items.length > 0);
+  });
   const waterRows = $derived.by(() => {
     // 水位卡问的是「在用设备的备份健康度」——已断开/已移除的都不该算进来
     // （比「家人与设备」列表的口径更窄）。已断开的设备催用户「去开 App
@@ -1951,16 +1970,14 @@
                    业主自己点「移除设备」才收进下面的折叠区。
                    判据是 daemon 给的 removal（由档案上的 departed_by 推出）；
                    电脑换了身份的也留在主列表、提示重新扫码（#1117）。 -->
-              {@const activeDevices = devices
-                .filter((d) => d.removal !== "removed")
-                .sort(byActivity)}
-              {@const removedDevices = devices.filter((d) => d.removal === "removed")}
-              {#if activeDevices.length === 0}
+              {#if deviceGroups.length === 0}
                 <p class="m-0 px-[22px] py-[18px] text-[13px] leading-[1.6] text-ink-40">{t("ui.no_devices")}</p>
               {:else}
-                <ul>
-                  {#each activeDevices as d}
-                    {@const row = deviceRow(d, nowMs)}
+                {#each deviceGroups as group}
+                  <h3 data-testid="device-group-{group.key}" class="px-[22px] pt-[14px] pb-[4px] text-[13px] font-semibold text-ink-60">{t(group.title)}</h3>
+                  <ul>
+                    {#each group.items as d}
+                      {@const row = deviceRow(d, nowMs)}
                     <li class="flex items-center gap-[14px] border-b border-divider px-[22px] py-[18px] last:border-b-0">
                       <!-- T-091: 哨兵行 ACT 色 + 「需要看看」；T-092: 连接态点色
                            （direct=safe 绿，relay=wait 琥珀）——语义色仅此四种 -->
@@ -2030,23 +2047,9 @@
                         onclick={() => revoke(d.node_id, d.name)}
                       >{t("ui.remove")}</Button>
                     </li>
-                  {/each}
-                </ul>
-              {/if}
-              {#if removedDevices.length > 0}
-                <!-- T-082: 已移除设备折叠为展开器，展开后用 ink-40 弱化，
-                     不再划线平铺。 -->
-                <details class="mt-[12px] border-t border-divider px-[22px] pt-[12px]">
-                  <summary class="cursor-pointer text-[14px] font-semibold text-ink-40">{t("ui.removed_devices", { n: removedDevices.length })}</summary>
-                  <ul>
-                    {#each removedDevices as d}
-                      <li class="flex items-center gap-[14px] py-[14px]">
-                        <span class="h-[9px] w-[9px] flex-none rounded-full bg-idle"></span>
-                        <span class="flex-1 text-[15px] font-normal text-ink-40">{d.name}</span>
-                      </li>
                     {/each}
                   </ul>
-                </details>
+                {/each}
               {/if}
             {/if}
           </Card>
