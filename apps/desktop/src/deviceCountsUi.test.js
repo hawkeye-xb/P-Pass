@@ -159,4 +159,19 @@ describe("断开后总览顶部与备份状态卡一致（#1402 卡1）", () => 
 
     expect(text()).toContain("已配对设备 0 台（另有 1 台已断开）");
   });
+
+  it("设备页主列表分「已配对」「已断开」，已移除折叠区隐藏（#1402 卡2）", async () => {
+    daemon({ paired: 1, disconnected: 1, removed: 1 }, [
+      row("a", "在用的那台", "none"),
+      row("b", "断开的那台", "disconnected"),
+      row("c", "移除的那台", "removed"),
+    ]);
+    await open("#/devices");
+
+    expect(text()).toContain("在用的那台");
+    expect(text()).toContain("断开的那台");
+    // 已移除折叠区隐藏：看不到移除的那台，也看不到「已移除设备 N 台」。
+    expect(text()).not.toContain("移除的那台");
+    expect(text()).not.toContain("已移除设备");
+  });
 });
