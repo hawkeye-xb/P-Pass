@@ -43,6 +43,8 @@ use crate::thumb_pregen::ThumbPregen;
 
 type PeerFetchLock = Arc<AsyncMutex<()>>;
 type FetchLocks = Arc<Mutex<HashMap<[u8; 32], PeerFetchLock>>>;
+/// #1078: (peer, content hash) → in-flight fetch exit signal.
+type HashFlights = Arc<Mutex<HashMap<([u8; 32], [u8; 32]), HashEntry>>>;
 type Clock = Arc<dyn Fn() -> i64 + Send + Sync>;
 type FreeSpaceProbe = Arc<dyn Fn(&Path) -> Option<u64> + Send + Sync>;
 type StageHook = Arc<
@@ -410,7 +412,7 @@ pub struct FlowTaskRegistry {
     /// independent (suspending one must never touch the other). The value is
     /// the exit signal of the fetch currently pulling that hash; a coalesced
     /// waiter awaits it instead of starting a second fetch.
-    hashes: Arc<Mutex<HashMap<([u8; 32], [u8; 32]), HashEntry>>>,
+    hashes: HashFlights,
     next_generation: Arc<AtomicU64>,
 }
 
@@ -572,7 +574,10 @@ impl FlowTaskRegistry {
     /// re-claimed it).
     fn release_hash(&self, peer: &[u8; 32], hash: &[u8; 32], generation: u64) {
         let mut hashes = self.hashes.lock().expect("flow hash flight lock");
-        if hashes.get(&(*peer, *hash)).is_some_and(|e| e.generation == generation) {
+        if hashes
+            .get(&(*peer, *hash))
+            .is_some_and(|e| e.generation == generation)
+        {
             hashes.remove(&(*peer, *hash));
         }
     }
