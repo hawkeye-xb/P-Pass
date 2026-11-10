@@ -1,0 +1,2 @@
+Disconnected devices are listed separately, and counts are accurate.
+The background service now restarts correctly after you stop it.
