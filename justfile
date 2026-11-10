@@ -310,13 +310,18 @@ i18n-split-check:
 # 已在 ci-docs.yml、ci-identity.yml 的其它 job 里跑，留在 ci-docs 的直接依赖里。
 # justfile 里每个 *-test recipe 要么在这里，要么登记在 tools/test-flow-tests-wired.sh 的例外表里（flow-tests-wired-test 会挡）。
 # heavy-lock-test 依赖 macOS 才有的 lockf，ubuntu 上会 SKIP 假绿，不进这里；登记为例外（#1502），本地 ci / ci-docs 直接依赖它。
-flow-tests: hooks-test flow-worker-test flow-review-test flow-ci-review-test flow-pr-test flow-gate-status-test flow-owner-test macos-runner-test main-red-test flow-tests-wired-test ci-lane-invariants-test
+flow-tests: hooks-test flow-worker-test flow-review-test flow-ci-review-test flow-pr-test flow-gate-status-test flow-owner-test macos-runner-test main-red-test flow-tests-wired-test ci-lane-invariants-test ci-download-resilience-test
   @echo "==> flow-tests: green ✅"
 
 # #1468 的 lane 不变量（#1489）：三个 Windows job 在 PR 上跳过、五条 lane 有 push: branches [main]、
 # push 上 cancel-in-progress 为 false；读 workflow YAML（缺 PyYAML 判红，不 SKIP），带变异反证。
 ci-lane-invariants-test:
   @bash tools/test-ci-lane-invariants.sh
+
+# #1595 的外部下载韧性不变量：跑 Gradle 的每条 workflow 都接发行版缓存且只在成功时保存，
+# fetch-ffmpeg.sh 的下载带重试且 sha256 校验还在；读实际文件，带变异反证。
+ci-download-resilience-test:
+  @bash tools/test-ci-download-resilience.sh
 
 # 元测试：每个 *-test recipe 都接进了 flow-tests 或登记的 lane，ci / ci-docs 都依赖 flow-tests，
 # ci-docs.yml 有写死名字的 flow-tests job 且进了 CI Docs gate；带变异反证（#1493）。

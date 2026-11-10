@@ -851,6 +851,10 @@ jobs:
           java-version-file: .java-version
 
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+      # #1595：与 ci-android 同一条 Gradle 发行版缓存（#1589）。还原在这里、保存见 job 末尾，
+      # 否则每次发版都从 services.gradle.org 现拉 bin.zip，GitHub 抖动时读超时把发版卡住。
+      - uses: ./.github/actions/gradle-wrapper-cache
+        id: gradle-dist
 
       - name: Build Android-native iroh-blobs provider
         run: |
@@ -964,6 +968,15 @@ jobs:
           # UPD-15：名字为 P-Pass_<版本>_android[-unsigned].apk；缺失文件忽略。
           if-no-files-found: ignore
           path: apps/android/app/build/outputs/apk/release/P-Pass_*.apk
+
+      # #1595（同 ci-android，#1589）：只在整条 job 成功时存，下载失败留下的半截发行版不进缓存。
+      - name: 保存 Gradle 发行版缓存
+        if: success() && steps.gradle-dist.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        continue-on-error: true
+        with:
+          path: ~/.gradle/wrapper/dists
+          key: ${{ steps.gradle-dist.outputs.key }}
 
   # ── #1151：构建来源证明（SLSA provenance）──────────────────────────────
   # 所有**本次构建**的发布资产统一在这里生成证明：macOS dmg / .app.tar.gz、Windows 安装包与
