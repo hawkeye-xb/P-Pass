@@ -6,6 +6,14 @@ E3="$ROOT/tools/e3"
 fails=0
 bad() { echo "FAIL: $*"; fails=$((fails + 1)); }
 
+# 与本机 git 配置隔离：脏全局/系统配置（如 commit.gpgsign=true、私有身份白名单 hook）不能影响
+# 自测里临时仓库的提交，结果和 CI 一样（#1392）。口径同 tools/test-local-hooks.sh / tools/test-flow-worker.sh。
+_GIT_TMP="$(mktemp -d)" || exit 1
+export GIT_CONFIG_NOSYSTEM=1
+export GIT_CONFIG_GLOBAL="${_GIT_TMP}/gitconfig"
+: >"$GIT_CONFIG_GLOBAL"
+trap 'rm -rf "$_GIT_TMP"' EXIT
+
 for f in "$E3"/run "$E3"/verify "$E3"/lock "$E3"/dev "$E3"/restore "$E3"/lib/*.sh "$E3"/scenarios/*/*.sh; do
   bash -n "$f" || bad "语法：$f"
 done
