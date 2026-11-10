@@ -7,10 +7,10 @@
 //! 不读真实钥匙串/正本，identity / 库 ID / 单实例 claim 全落在注入的临时目录里，
 //! 不碰本机真实数据。
 //!
-//! macOS 上这条测试跳过（见测试上的 `#[cfg_attr(target_os = "macos", ignore = …)]`）：
-//! cargo 构建的 daemon 是 ad-hoc 签名，读真钥匙串必 -34018，resident_ipc 用本机真实
-//! 数据目录里的 socket、identity 也走真目录，无法无头走通首启；平台行为由 CI 的
-//! `-p platform` 测试覆盖（先例 #1523/#1295）。Windows / Linux 照跑。
+//! macOS 上本测试跳过（见下方函数上的标注）：cargo 构建的 daemon 是 ad-hoc 签名，
+//! 读真钥匙串必 -34018，resident_ipc 用本机真实数据目录里的 socket、identity 也走真
+//! 目录，无法无头走通首启；平台行为由 CI 的 `-p platform` 测试覆盖（先例 #1523/#1295）。
+//! Windows / Linux 照跑。
 
 #![allow(clippy::disallowed_methods)]
 
