@@ -61,7 +61,8 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: windows-latest
-    timeout-minutes: 30
+    # 整轮预算 30 分钟 + 装工具链与 checkout 的余量；本 job 只报不挡，超时变红没有意义。
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -117,7 +118,9 @@ jobs:
         run: |
           set -uo pipefail
 
-          per_script=180 # 单个自测的上限；正常都在几秒内，撞上限的多半是真挂住
+          per_script=300 # 单个自测的上限；正常都在几秒到一两分钟，撞上限的多半是真挂住
+          budget=1800    # 整轮预算：用完就停手并把剩下的标成「未跑」，免得 job 超时变红（第一步恒绿）
+          run_start=$SECONDS
           logs="$RUNNER_TEMP/flow-windows-logs"
           mkdir -p "$logs"
           git config --global user.name flow-windows
@@ -137,7 +140,7 @@ jobs:
           {
             echo "## flow-windows：流程脚本自测在 Windows 上的结果"
             echo
-            echo "每个 \`tools/test-*.sh\` 单独跑，单脚本上限 ${per_script}s；**只报不挡**（#1598 第一步），"
+            echo "每个 \`tools/test-*.sh\` 单独跑，单脚本上限 ${per_script}s、整轮预算 ${budget}s；**只报不挡**（#1598 第一步），"
             echo "失败清单回填到 #1598 作为第二步的输入。"
             echo
             echo "| 脚本 | 结果 | 秒 | 首个可疑行 |"
@@ -148,6 +151,7 @@ jobs:
           passed=0
           failed=0
           skipped=0
+          unrun=0
           failed_list=()
 
           for t in tools/test-*.sh; do
@@ -156,6 +160,11 @@ jobs:
               skipped=$((skipped + 1))
               printf '::notice::%s 跳过：%s\n' "$name" "$why"
               echo "| \`$name\` | 跳过：${why} | - | - |" >>"$summary"
+              continue
+            fi
+            if [ $((SECONDS - run_start)) -ge "$budget" ]; then
+              unrun=$((unrun + 1))
+              echo "| \`$name\` | 未跑：整轮预算 ${budget}s 用完 | - | - |" >>"$summary"
               continue
             fi
             log="${logs}/${name}.log"
@@ -203,7 +212,7 @@ jobs:
 
           {
             echo
-            echo "**合计**：跑 ${total}，绿 ${passed}，红 ${failed}，跳过 ${skipped}。"
+            echo "**合计**：跑 ${total}，绿 ${passed}，红 ${failed}，跳过 ${skipped}，未跑 ${unrun}。"
             if [ "${#failed_list[@]}" -gt 0 ]; then
               echo
               echo "### 红清单（第二步的输入）"
@@ -215,7 +224,7 @@ jobs:
           } >>"$summary"
 
           echo
-          echo "===== 合计：跑 ${total}，绿 ${passed}，红 ${failed}，跳过 ${skipped} ====="
+          echo "===== 合计：跑 ${total}，绿 ${passed}，红 ${failed}，跳过 ${skipped}，未跑 ${unrun} ====="
           # 第一步只报不挡：这里恒退 0，红不挡合入。第二步把这个 exit 0 改成按 $failed 退出，
           # 并补一个名字写死的汇总 job 之后再进必需检查。
           exit 0
