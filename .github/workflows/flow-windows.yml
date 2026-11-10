@@ -1,0 +1,245 @@
+# #1598：流程脚本跨平台问题的固定发现口（第一步：只报不挡）。
+#
+# 背景：`tools/` 的流程脚本在 macOS 上写、macOS 上验。PR 快检不含 Windows，
+# 合入后的 Windows 三个 job 只测 App、不跑流程脚本，于是 `plutil` / `lockf` /
+# `sed -i ''` / Git Bash 路径改写这类写法只能事后由「Windows 上卡住」的 blocked 卡
+# 暴露（#1331、#1420、#1295、#1430）。
+#
+# 本 lane 在 windows-latest 上把 `tools/test-*.sh` 逐个跑一遍，把结果写成一份清单。
+# **第一步只报不挡**：失败的脚本记 `::warning::` 与步骤摘要，job 恒绿，不进必需检查。
+# 第二步（另开卡）按清单修写法，修完再决定是否升成必需检查——那时本文件末尾那行
+# `exit 0` 改成按 `fail` 退出，并补一个名字写死的汇总 job 再设必需检查。
+#
+# 为什么不用 workflow 级 `paths:`：被 paths 过滤掉的 workflow 根本不汇报状态，
+# 而本 lane 要求「每个 PR 都出现一次、无关的秒退」（卡上验收场景），所以路径判定
+# 放在 job 层（.github/actions/changes，与其它 lane 同一份判据）。
+#
+# 为什么触发面里有 `.github/**`：好几份自测读 workflow YAML 与 composite action
+# （test-flow-tests-wired、test-ci-lane-invariants、test-macos-runner、发布链各测试），
+# 它们改了就该跑；本卡自己的 PR 只动 workflow，没有这一条就当不了证据。
+#
+# 只跑 PR：合入 main 的改动都先过 PR，本 lane 在 PR 头提交上已经跑过同一份内容；
+# 再在 push 上跑一遍要白烧一份 Windows 机时，而它此时又不挡任何东西。
+name: CI Flow Windows
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-flow-windows-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: changes (要不要跑 flow-windows)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.c.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - id: c
+        uses: ./.github/actions/changes
+        with:
+          paths: |
+            tools/**
+            justfile
+            .github/**
+
+  # 名字写死（进必需检查时不许现算，见 docs/runbook/ci-lanes.md「job 名」）。
+  # 下游判据写 `!= 'false'`：changes 挂了输出为空时照跑，不 fail-open。
+  flow-windows:
+    name: flow-windows
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
+    runs-on: windows-latest
+    # 整轮预算 60 分钟 + 装工具链与 checkout 的余量；本 job 只报不挡，超时变红没有意义。
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: 工具链准备（just 钉版本 + PyYAML + python3 别名）
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "bash: $(bash --version | head -1)"
+          echo "git: $(git --version)"
+          command -v jq >/dev/null && echo "jq: $(jq --version)" || echo "::warning::jq 不在 PATH 上"
+          command -v node >/dev/null && echo "node: $(node --version)" || echo "::warning::node 不在 PATH 上"
+
+          # 本步骤装出来的工具都放进一个 bin 目录，结束时把它加进 PATH 供后面的步骤用
+          # （与 .github/actions/ios-testflight/action.yml 同一个写法）。
+          bin="$RUNNER_TEMP/bin"
+          mkdir -p "$bin"
+
+          # just：官方 release 二进制 + sha256 钉死（与 ci-rust 里 actionlint 同一写法）。
+          # windows 镜像不带 just，而 test-flow-tests-wired 等自测要真读 justfile。
+          cd "$RUNNER_TEMP" || { echo "::error::进不了 RUNNER_TEMP"; exit 1; }
+          curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL -o just.zip \
+            "https://github.com/casey/just/releases/download/1.57.0/just-1.57.0-x86_64-pc-windows-msvc.zip"
+          echo "4c7391d17cb1d17b758b52004ee6411372b8a13ff37c3c9b9031625cb6026e09  just.zip" | sha256sum -c -
+          unzip -q -o just.zip just.exe -d "$bin"
+          echo "just.exe: $("$bin/just.exe" --version)"
+
+          # python3：镜像上一定有 python，但不一定叫 python3（几个自测里直接写 python3）。
+          # 这属于 runner 的工具名差异，不是被测脚本的跨平台问题，先补齐免得清单里全是噪声。
+          py=""
+          for cand in python3 python; do
+            command -v "$cand" >/dev/null 2>&1 && { py="$cand"; break; }
+          done
+          if [ -z "$py" ]; then
+            echo "::error::runner 上没有 python，流程自测跑不了"
+            exit 1
+          fi
+          echo "python: $("$py" --version 2>&1)"
+          if ! command -v python3 >/dev/null 2>&1; then
+            printf '#!/bin/sh\nexec "%s" "$@"\n' "$(command -v "$py")" >"$bin/python3"
+            chmod +x "$bin/python3"
+          fi
+          "$py" -m pip install --quiet --disable-pip-version-check pyyaml
+          echo "pyyaml: $("$py" -c 'import yaml; print(yaml.__version__)')"
+
+          # 无条件加进 PATH：just 一定要在，python3 补齐时也在这里。
+          echo "$bin" >>"$GITHUB_PATH"
+          echo "加到 PATH 的目录: $bin"
+
+      - name: 跑流程脚本自测（只报不挡）
+        shell: bash
+        env:
+          # 自测在临时仓库里造提交，需要一份固定身份；init.defaultBranch 对齐仓库的 main，
+          # 免得 runner 的默认分支名差异被当成脚本问题。
+          GIT_AUTHOR_NAME: flow-windows
+          GIT_AUTHOR_EMAIL: flow-windows@example.invalid
+          GIT_COMMITTER_NAME: flow-windows
+          GIT_COMMITTER_EMAIL: flow-windows@example.invalid
+        run: |
+          # GitHub 对 `shell: bash` 的步骤强制加 `-e`（日志里是 `bash.EXE -e -o pipefail`），
+          # 这里必须显式关掉：被测脚本失败是常态，`wait` 返回非 0 会在记帐之前把整段中止（#1598 第一次实跑就是这样红的）。
+          set +e
+          set -uo pipefail
+
+          per_script=600 # 单个自测的上限；Windows 起进程慢，实测 test-arch-check.sh 就要 286s，别按 macOS 的秒数量
+          budget=3600    # 整轮预算：用完就停手并把剩下的标成「未跑」，免得 job 超时变红（第一步恒绿）
+          run_start=$SECONDS
+          # 把工具链的实际状态打出来：自测的假红多半来自这里（缺 just / python3 名字不对），
+          # 清单要能自证「红是脚本的问题，不是环境没装好」。
+          echo "just: $(just --version 2>&1)"
+          echo "python3: $(python3 --version 2>&1)"
+          echo "jq: $(jq --version 2>&1)"
+          logs="$RUNNER_TEMP/flow-windows-logs"
+          mkdir -p "$logs"
+          git config --global user.name flow-windows
+          git config --global user.email flow-windows@example.invalid
+          git config --global init.defaultBranch main
+
+          # 排除表：Windows 上确实跑不了的，只收「缺系统能力」这一种，每条都要写清理由。
+          # 能不排除就不排除——排除掉就少一个发现口。
+          skip_reason() {
+            case "$1" in
+              test-heavy-lock.sh) printf '%s' 'tools/heavy-lock 依赖 macOS 的 lockf（#1502）' ;;
+              *) return 1 ;;
+            esac
+          }
+
+          summary="${GITHUB_STEP_SUMMARY:-/dev/null}"
+          {
+            echo "## flow-windows：流程脚本自测在 Windows 上的结果"
+            echo
+            echo "每个 \`tools/test-*.sh\` 单独跑，单脚本上限 ${per_script}s、整轮预算 ${budget}s；**只报不挡**（#1598 第一步），"
+            echo "失败清单回填到 #1598 作为第二步的输入。"
+            echo
+            echo "| 脚本 | 结果 | 秒 | 首个可疑行 |"
+            echo "|---|---|---|---|"
+          } >>"$summary"
+
+          total=0
+          passed=0
+          failed=0
+          skipped=0
+          unrun=0
+          failed_list=()
+
+          for t in tools/test-*.sh; do
+            name="${t#tools/}"
+            if why="$(skip_reason "$name")"; then
+              skipped=$((skipped + 1))
+              printf '::notice::%s 跳过：%s\n' "$name" "$why"
+              echo "| \`$name\` | 跳过：${why} | - | - |" >>"$summary"
+              continue
+            fi
+            if [ $((SECONDS - run_start)) -ge "$budget" ]; then
+              unrun=$((unrun + 1))
+              echo "| \`$name\` | 未跑：整轮预算 ${budget}s 用完 | - | - |" >>"$summary"
+              continue
+            fi
+            log="${logs}/${name}.log"
+            total=$((total + 1))
+            start=$SECONDS
+            bash "$t" >"$log" 2>&1 &
+            pid=$!
+            killed=false
+            while kill -0 "$pid" 2>/dev/null; do
+              if [ $((SECONDS - start)) -ge "$per_script" ]; then
+                killed=true
+                kill -9 "$pid" 2>/dev/null
+                break
+              fi
+              sleep 1
+            done
+            if [ "$killed" = true ]; then
+              wait "$pid" 2>/dev/null
+              rc=124
+              result="❌ 超时 ${per_script}s"
+            else
+              wait "$pid"
+              rc=$?
+              result="❌ exit $rc"
+            fi
+            took=$((SECONDS - start))
+            if [ "$rc" -eq 0 ]; then
+              passed=$((passed + 1))
+              echo "| \`$name\` | ✅ | ${took} | |" >>"$summary"
+              printf '✅ %-36s %4ss\n' "$name" "$took"
+              continue
+            fi
+
+            failed=$((failed + 1))
+            failed_list+=("$name")
+            # 首个可疑行：多数跨平台问题就是这几类，先把它们挑出来，省得人逐份读日志。
+            hint="$(grep -m1 -E "command not found|: not found|No such file|Permission denied|syntax error|unexpected token|cannot execute|bad interpreter" "$log" 2>/dev/null || true)"
+            hint="${hint:0:160}"
+            echo "| \`$name\` | ${result} | ${took} | ${hint//|/\\|} |" >>"$summary"
+            printf '::warning::%s 在 Windows 上%s\n' "$name" "$result"
+            printf '❌ %-36s %4ss  %s\n' "$name" "$took" "$result"
+            echo "   ── 日志末尾（完整见 job 日志）："
+            tail -n 20 "$log" | sed 's/^/      /'
+          done
+
+          {
+            echo
+            echo "**合计**：跑 ${total}，绿 ${passed}，红 ${failed}，跳过 ${skipped}，未跑 ${unrun}。"
+            if [ "${#failed_list[@]}" -gt 0 ]; then
+              echo
+              echo "### 红清单（第二步的输入）"
+              echo
+              for n in "${failed_list[@]}"; do
+                echo "- \`tools/${n}\`"
+              done
+            fi
+          } >>"$summary"
+
+          echo
+          echo "===== 合计：跑 ${total}，绿 ${passed}，红 ${failed}，跳过 ${skipped}，未跑 ${unrun} ====="
+          # 第一步只报不挡：这里恒退 0，红不挡合入。第二步把这个 exit 0 改成按 $failed 退出，
+          # 并补一个名字写死的汇总 job 之后再进必需检查。
+          exit 0
