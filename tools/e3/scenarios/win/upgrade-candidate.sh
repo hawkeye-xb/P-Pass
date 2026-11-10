@@ -1,5 +1,5 @@
-# R1.1/R1.2/R1.4：从基线 0.10.1 覆盖升级到候选 0.11.0-test.1（桌面 + 手机），版本一致，
-# 配对、身份、照片库都不丢。
+# R1.1/R1.2/R1.4：从基线 0.10.1 覆盖升级到候选版本（E3_WIN_CAND_TAG，默认 v0.11.0-test.1；
+# 桌面 + 手机），版本一致，配对、身份、照片库都不丢。
 #
 # 起点是 win/install-baseline 搭好的用户态布局（%LOCALAPPDATA%\P-Pass + HKCU 卸载登记），
 # 覆盖安装沿用同一布局：把候选安装包的载荷解到同一目录并改 HKCU 登记。perMachine 真安装器
@@ -8,7 +8,7 @@
 # （crates/platform/src/windows.rs `daemon_config_dir`），配对与库位置会读不到。
 # 反证：不装候选、直接对升级前快照跑同一套判据 ⇒ 版本判据必须变红（用 setup 里
 # 真实采集的 before 证据，不降级、不动库）。
-DESC="R1.1/R1.2/R1.4：覆盖升级到候选 0.11.0-test.1，桌面/daemon/手机版本一致，配对与照片不丢"
+DESC="R1.1/R1.2/R1.4：覆盖升级到候选版本，桌面/daemon/手机版本一致，配对与照片不丢"
 COUNTER=on
 
 . "$(dirname "${BASH_SOURCE[0]}")/lib/common.sh"

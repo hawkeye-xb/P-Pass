@@ -3,7 +3,8 @@
 # 覆盖：
 #   R0.2  用 Latest v2026.10.7 的真实安装包装 0.10.1（从干净的 ProgramData 开始）：
 #         Program Files 落盘、写 HKLM 卸载登记、注册并启动 Windows 服务 P-Pass。
-#   R1.2  覆盖安装候选 v0.11.0-test.1（daemon 服务运行中，PREINSTALL 先停服务），版本一致。
+#   R1.2  覆盖安装候选（默认 v0.11.0-test.1，可用 E3_WIN_CAND_TAG 换包；daemon 服务运行中，
+#         PREINSTALL 先停服务），版本一致。
 #   W3    就是 R1.2 的安装时 daemon 正在跑：不先手动停服务，安装成功、装完是新版本。
 #   W5    真实卸载：服务/程序被删、旧计划任务残留被清、70s 内没有 daemon；ProgramData
 #         （身份/配对存储 devices.json）、壳数据目录（config.toml）和照片库（originals
@@ -320,7 +321,7 @@ act() {
   # R1.2 + W3：daemon 服务运行中直接覆盖候选（不先停服务）
   echo "svc_state=$(svc_state)" >"$d/pre-candidate-service.txt"
   echo "安装前服务状态：$(svc_state)"
-  elev_step "覆盖安装候选 P-Pass 0.11.0-test.1（服务运行中）" \
+  elev_step "覆盖安装候选 P-Pass $WIN_CAND_VER（服务运行中）" \
     -Installer "$(cygpath -w "$WIN_CAND_EXE")" -InstallerArgs '/S' -WaitServiceSecs 60 \
     -Out "$(cygpath -w "$d/after-candidate-install.txt")" || { echo "候选覆盖安装失败/取消"; return 1; }
   wait_installed "$WIN_CAND_VER" || echo "候选安装后等不到 $WIN_CAND_VER 的 exe"
@@ -352,7 +353,7 @@ act() {
   snapshot_state "$d" after-uninstall
 
   # W5 第二半：重装候选，服务恢复、ProgramData 身份不变
-  elev_step "重装候选 P-Pass 0.11.0-test.1（W5：验证服务恢复、身份保留）" \
+  elev_step "重装候选 P-Pass $WIN_CAND_VER（W5：验证服务恢复、身份保留）" \
     -Installer "$(cygpath -w "$WIN_CAND_EXE")" -InstallerArgs '/S' -WaitServiceSecs 60 \
     -Out "$(cygpath -w "$d/after-reinstall-install.txt")" || { echo "重装失败/取消"; return 1; }
   wait_installed "$WIN_CAND_VER" || echo "重装后等不到 $WIN_CAND_VER 的 exe"
@@ -406,11 +407,11 @@ judge() {
   check "R0.2 ProgramData 已由安装器建立" grep -qx 'pd_dir=present' "$d/after-baseline.txt"
   # R1.2 / W3
   check "W3 覆盖安装前服务是运行中" grep -qx 'svc_state=Running' "$d/pre-candidate-service.txt"
-  check "R1.2 候选 exe 版本 0.11.0-test.1" grep -qx 'inst_exe_version=0.11.0-test.1' "$d/after-candidate.txt"
-  check "R1.2 HKLM 卸载登记 0.11.0-test.1" grep -qx 'hklm_version=0.11.0-test.1' "$d/after-candidate.txt"
+  check "R1.2 候选 exe 版本 $WIN_CAND_VER" grep -qx "inst_exe_version=$WIN_CAND_VER" "$d/after-candidate.txt"
+  check "R1.2 HKLM 卸载登记 $WIN_CAND_VER" grep -qx "hklm_version=$WIN_CAND_VER" "$d/after-candidate.txt"
   check "R1.2 服务仍在运行" grep -qx 'svc_state=Running' "$d/after-candidate.txt"
   check "R1.2 服务路径仍是 Program Files 安装目录" grep -Fq "$INST_DIR_WIN\ppf-daemon.exe" "$d/after-candidate.txt"
-  check "R1.2 daemon 版本 0.11.0-test.1（服务 diag）" eq_file "$d/after-candidate-diag-version.txt" "0.11.0-test.1"
+  check "R1.2 daemon 版本 $WIN_CAND_VER（服务 diag）" eq_file "$d/after-candidate-diag-version.txt" "$WIN_CAND_VER"
   # W5
   check "W5 前置：服务已配置（向导走完，主界面总览）" main_ui_ready "$d/desktop-main.txt"
   check "W5 卸载后程序目录里没有 exe" grep -qx 'inst_exe_present=no' "$d/after-uninstall.txt"
@@ -423,7 +424,7 @@ judge() {
   check "W5 卸载后计划任务已删除（旧任务无残留）" grep -qx 'task=none' "$d/after-uninstall.txt"
   check "W5 卸载前后身份 key 是同一个（读 ProgramData）" identity_present_and_same "$d"
   check "W5 重装后服务在运行" grep -qx 'svc_state=Running' "$d/after-reinstall.txt"
-  check "W5 重装后 daemon 版本 0.11.0-test.1" eq_file "$d/after-reinstall-diag-version.txt" "0.11.0-test.1"
+  check "W5 重装后 daemon 版本 $WIN_CAND_VER" eq_file "$d/after-reinstall-diag-version.txt" "$WIN_CAND_VER"
   check "W5 重装后配对存储 devices.json 不变" same_nonempty "$d/after-configure-devices.json" "$d/after-reinstall-devices.json"
   check "W5 重装后配对台数不变" same_field "$d" devices after-configure after-reinstall
   check "W5 重装后照片数不变（不重传/不重复入库）" same_field "$d" photo_count after-configure after-reinstall
@@ -460,7 +461,7 @@ teardown() {
   if [ ! -f "$INST_EXE" ]; then
     echo "收尾：重新安装候选"
     if [ -f "$WIN_CAND_EXE" ]; then
-      elev_step "收尾重装候选 P-Pass 0.11.0-test.1" \
+      elev_step "收尾重装候选 P-Pass $WIN_CAND_VER" \
         -Installer "$(cygpath -w "$WIN_CAND_EXE")" -InstallerArgs '/S' -WaitServiceSecs 60 \
         -Out "$(cygpath -w "$EV/teardown-install.txt")" || return 0
       wait_installed "$WIN_CAND_VER" || true

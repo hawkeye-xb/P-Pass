@@ -24,11 +24,13 @@ WIN_OUTSIDE_PS="$(cygpath -w "$REPO_ROOT/tools/windows/run-outside-package.ps1")
 WIN_WATCH_PS="$(cygpath -w "$REPO_ROOT/tools/windows/watch-new-windows.ps1")"
 
 # 稳定标签（Latest）与候选标签，场景可用环境变量覆盖。
+# 候选版本号从候选标签推导（去掉 v 前缀）：换 test 包只设 E3_WIN_CAND_TAG，
+# 场景里的版本断言跟着变，不用改脚本。
 WIN_BASE_TAG="${E3_WIN_BASE_TAG:-v2026.10.7}"
 WIN_BASE_VER="${E3_WIN_BASE_VER:-0.10.1}"
 WIN_BASE_PHONE_VER="${E3_WIN_BASE_PHONE_VER:-0.10.2}"
 WIN_CAND_TAG="${E3_WIN_CAND_TAG:-v0.11.0-test.1}"
-WIN_CAND_VER="${E3_WIN_CAND_VER:-0.11.0-test.1}"
+WIN_CAND_VER="${E3_WIN_CAND_VER:-${WIN_CAND_TAG#v}}"
 
 # —— PowerShell / UI ——
 
