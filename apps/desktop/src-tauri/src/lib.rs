@@ -3890,10 +3890,10 @@ mod tests {
     /// POSTINSTALL 只校验磁盘文件版本、`sc start` 对运行中的服务是空操作 →
     /// 用户一直跑旧版本。
     ///
-    /// 反证：把 `sc failure … actions= ""` 挪到 taskkill 之后、或把 POSTINSTALL 退回只
-    /// `sc start`（去掉 stop→STOPPED→start→RUNNING 这条链），本测试红。
+    /// 反证：把 `sc failure … actions= ""` 挪到 taskkill 之后、把 POSTINSTALL 退回只
+    /// `sc start`、或删掉起服务后的 wanted-state + RUNNING 校验，本测试红。
     #[test]
-    fn installer_stops_service_before_touching_files_and_verifies_it_came_back() {
+    fn installer_stops_service_before_touching_files_and_checks_the_restart() {
         let hooks = include_str!("../windows/installer-hooks.nsh").replace("\r\n", "\n");
         let macro_body = |name: &str| -> &str {
             let start = hooks
@@ -3933,6 +3933,24 @@ mod tests {
             .find("sc.exe\" start")
             .expect("POSTINSTALL 没启动服务");
         assert!(stop < stopped && stopped < start, "顺序必须是 stop → 等 STOPPED → start");
+
+        // 起完必须有校验，而且要看 wanted-state：用户停过的机器上 daemon 启动即退出，
+        // 不能把「没在跑」判成失败；其余机器必须起到 RUNNING。
+        let wanted = post
+            .find("wanted-state")
+            .expect("#1640：起完的校验必须先看 wanted-state");
+        let running = post
+            .find("\"RUNNING\"")
+            .expect("#1640：起完没核对服务真的 RUNNING");
+        let delete_marker = post
+            .find("Delete \"${PPASS_DATA}\\update-failed\"")
+            .expect("POSTINSTALL 没有清理失败标记");
+        assert!(start < wanted, "wanted-state 的判断必须在 start 之前拿到");
+        assert!(start < running, "RUNNING 核对必须在 start 之后");
+        assert!(
+            running < delete_marker,
+            "#1640：RUNNING 核对之前不许删失败标记（起不来也当成功就是误放行）"
+        );
     }
 
     /// `sc create` 的 binPath 内层引号必须转义成 `\"`：nsExec 原样交给 CreateProcess，

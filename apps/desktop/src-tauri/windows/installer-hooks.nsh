@@ -187,13 +187,51 @@ Var PPassDataDir
     ppass_wait_stopped_done:
     nsExec::ExecToLog '"$SYSDIR\sc.exe" start "${PPASS_SERVICE}"'
     Pop $0
-    ; 这里**不**断言服务必须 RUNNING：`wanted-state=stopped` 的机器上 daemon 按设计
-    ; 「启动即退出」（crates/daemon/src/main.rs），断言 RUNNING 会把正常状态判成安装失败
-    ; 并弹错误框。「跑起来的是新二进制」由前一环保证：进 POSTINSTALL 之前服务已确认
-    ; STOPPED（STOPPED 期间没有进程持有旧映像），之后 start 只可能装载 $INSTDIR 这份新文件。
-    ; #1167：失败标记放在 ProgramData（见 UpdateFailureRecover）；老位置一并清掉。
-    Delete "${PPASS_DATA}\update-failed"
-    Delete "$LOCALAPPDATA\com.hawkeyexb.ppass.desktop\update-failed"
+    ; 起完的校验分两种机器（#1640）：
+    ;   - 用户主动停过服务（wanted-state=stopped）：daemon 按设计「启动即退出」
+    ;     （crates/daemon/src/main.rs），这时把「服务没在跑」判成安装失败是错的；
+    ;   - 其余机器：必须真的起到 RUNNING，否则 start 可能是空操作（旧进程还在），
+    ;     「文件新、进程旧」就没人兜底了。
+    StrCpy $R3 0
+    ClearErrors
+    FileOpen $2 "${PPASS_DATA}\wanted-state" r
+    ${IfNot} ${Errors}
+      FileRead $2 $R4
+      FileClose $2
+      ${StrStr} $R5 "$R4" "stopped"
+      ${If} $R5 != ""
+        StrCpy $R3 1
+      ${EndIf}
+    ${EndIf}
+    StrCpy $R1 1
+    ${If} $R3 != 1
+      Sleep 500
+      StrCpy $R2 0
+      ppass_post_wait_running:
+        nsExec::ExecToStack '"$SYSDIR\sc.exe" query "${PPASS_SERVICE}"'
+        Pop $0
+        Pop $1
+        ${StrStr} $R7 "$1" "RUNNING"
+        ${If} $R7 != ""
+          Goto ppass_post_wait_running_done
+        ${EndIf}
+        IntOp $R2 $R2 + 1
+        ${If} $R2 >= 20
+          StrCpy $R1 0
+          Goto ppass_post_wait_running_done
+        ${EndIf}
+        Sleep 500
+        Goto ppass_post_wait_running
+      ppass_post_wait_running_done:
+    ${EndIf}
+    ${If} $R1 == 0
+      DetailPrint "New daemon did not reach RUNNING; reporting update failure."
+      Call UpdateFailureRecover
+    ${Else}
+      ; #1167：失败标记放在 ProgramData（见 UpdateFailureRecover）；老位置一并清掉。
+      Delete "${PPASS_DATA}\update-failed"
+      Delete "$LOCALAPPDATA\com.hawkeyexb.ppass.desktop\update-failed"
+    ${EndIf}
   ${EndIf}
 !macroend
 
