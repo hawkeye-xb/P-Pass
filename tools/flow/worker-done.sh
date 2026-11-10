@@ -200,9 +200,10 @@ SELF_REVIEW_BODY="$(grep -v '^[[:space:]]*$' "$SELF_REVIEW" | sed '1d' | scrub)"
 #   assets/i18n/**、strings*.xml → just mobile-static-check
 #   iOS 文案（apps/ios/**/*.strings、*.xcstrings、assets/i18n/**）→ 另加 just ios-test --lang en 与 --lang zh
 #     （本机模拟器多是中文、CI 是英文：写死某一种语言的断言只在另一种语言下红，#1342）
-#   crates/<名>/**             → cargo nextest run -p <包名>
+#   crates/<名>/**             → cargo nextest run -p <包名> + cargo fmt --all -- --check + cargo clippy（与 ci-rust 对齐，#1646）
 #   apps/desktop/src/**        → pnpm -C apps/desktop test（桌面前端 vitest）
-#   apps/desktop/src-tauri/**  → cargo nextest run -p p-pass-desktop（独立 workspace，用 --manifest-path）
+#   apps/desktop/src-tauri/**  → cargo nextest run -p p-pass-desktop + fmt + clippy（独立 workspace，用 --manifest-path；与 desktop-checks 对齐，#1646）
+#   tools/e3/**（非测试脚本）   → bash tools/test-e3.sh（e3 工具链自测；场景脚本是 glob 引用、字面 grep 不到，#1650）
 #   tools/<文件>               → 改动里的 tools/test-*.sh 本身 + 引用到它的 tools/test-*.sh（git grep 找）
 #   .github/workflows/*        → actionlint + just ci-docs（相关 tools/test-ci-*.sh 由 ci-docs 与 tools 规则覆盖）
 #   justfile、.github/ISSUE_TEMPLATE/*、.github/PULL_REQUEST_TEMPLATE.md、.coderabbit.yaml → just ci-docs
@@ -218,6 +219,10 @@ tool_tests() { # tool_tests <tools/下的文件>：打印要跑的测试，一�
   case "$f" in
     tools/test-*.sh)
       [ -f "$f" ] && printf '%s\n' "$f"
+      return 0
+      ;;
+    tools/e3/*)
+      printf '%s\n' tools/test-e3.sh
       return 0
       ;;
   esac
@@ -269,15 +274,22 @@ while IFS= read -r f; do
     assets/i18n/*) add_gate "just mobile-static-check" ;;
     apps/desktop/src-tauri/*)
       # 外壳 Rust 是独立 workspace：nextest 要显式 --manifest-path；跑前补 tauri-build 的 sidecar 占位文件。
+      # fmt/clippy 与 .github/actions/desktop-checks 逐字对齐（CI-03：主 workspace 的 cargo 覆盖不到独立 workspace）。
       desktop_rust_stubs
       add_gate "cargo nextest run --manifest-path apps/desktop/src-tauri/Cargo.toml -p p-pass-desktop"
+      add_gate "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check"
+      add_gate "cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings"
       ;;
     apps/desktop/src/*) add_gate "pnpm -C apps/desktop test" ;;
     crates/*/*)
       crate_dir="${f#crates/}"
       crate_dir="${crate_dir%%/*}"
       pkg="$(sed -n 's/^name *= *"\(.*\)"/\1/p' "crates/${crate_dir}/Cargo.toml" 2>/dev/null | head -1)"
-      if [ -n "$pkg" ]; then add_gate "cargo nextest run -p ${pkg}"; else FULL=1; fi
+      if [ -n "$pkg" ]; then
+        add_gate "cargo nextest run -p ${pkg}"
+        add_gate "cargo fmt --all -- --check"
+        add_gate "cargo clippy --all-targets --all-features -- -D warnings"
+      else FULL=1; fi
       ;;
     tools/*)
       tests="$(tool_tests "$f")"

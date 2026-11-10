@@ -572,6 +572,8 @@ printf '[package]\nname = "foo-pkg"\nversion = "0.1.0"\n' >"$W/crates/foo/Cargo.
 git -C "$W" add -A && git -C "$W" commit -q -s -m "crate"
 DONE "$W" >/dev/null 2>&1
 comments_of 126 | grep -qF "cargo nextest run -p foo-pkg" && ok "改 Rust crate → 跑该 crate 的测试" || bad "Rust crate 门禁不对"
+comments_of 126 | grep -qF "cargo fmt --all -- --check" && ok "改 Rust crate → 同时挑 fmt（与 ci-rust 对齐）" || bad "Rust crate 没挑 fmt"
+comments_of 126 | grep -qF "cargo clippy --all-targets --all-features -- -D warnings" && ok "改 Rust crate → 同时挑 clippy" || bad "Rust crate 没挑 clippy"
 # 桌面端按路径挑（#1530）：apps/desktop/src/** → 前端 vitest；src-tauri/** → 独立 workspace 的 nextest；
 # 两条之外的 apps/desktop/** 仍 fail-closed 退回全量。反证：去掉 worker-done.sh 里对应规则，下面断言会红。
 W="$(card 160 "[T-160] desktop frontend" "apps/desktop/**")"
@@ -591,6 +593,10 @@ C161="$(comments_of 161)"
 printf '%s' "$C161" | grep -qF "cargo nextest run --manifest-path apps/desktop/src-tauri/Cargo.toml -p p-pass-desktop" &&
   ok "只改桌面 Rust → 跑该 crate 的 nextest" || bad "桌面 Rust 门禁不对：$(tail -4 "${TMP}/o161")"
 printf '%s' "$C161" | grep -qF '`just ci`' && bad "只改桌面 Rust 仍跑了全量 just ci" || ok "反证：没有全量 just ci"
+printf '%s' "$C161" | grep -qF "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check" &&
+  ok "只改桌面 Rust → 同时挑 src-tauri fmt（与 desktop-checks 对齐）" || bad "桌面 Rust 没挑 fmt：$(tail -4 "${TMP}/o161")"
+printf '%s' "$C161" | grep -qF "cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings" &&
+  ok "只改桌面 Rust → 同时挑 src-tauri clippy" || bad "桌面 Rust 没挑 clippy：$(tail -4 "${TMP}/o161")"
 ls "$W/apps/desktop/src-tauri/binaries" 2>/dev/null | grep -q '^ppf-daemon-' &&
   ok "  跑前补了 tauri-build 要的 sidecar 占位文件" || bad "  没补 sidecar 占位文件"
 # 反证：两条桌面规则之外的文件仍挑不出来 → fail-closed
@@ -618,6 +624,61 @@ C29="$(comments_of 129)"
 printf '%s' "$C29" | grep -qF "bash tools/test-ref.sh" && ok "改被引用的 tools 脚本 → 跑引用它的测试" || bad "没跑引用它的测试：$(tail -4 "${TMP}/o129")"
 printf '%s' "$C29" | grep -qF '`just ci`' && bad "tools 脚本有引用测试却退回了全量 just ci" || ok "反证：没有全量 just ci"
 printf '%s' "$C29" | grep -qF "test-other.sh" && bad "跑了不相关的测试" || ok "没引用的测试不跑"
+# tools/e3/** 的非测试脚本 → 直接挑 e3 工具链自测（#1650：场景脚本是 glob 引用、字面 grep 不到 → 曾 fail-closed 退回全量）
+W="$(card 163 "[T-163] tools e3" "tools/**")"
+mkdir -p "$W/tools/e3/scenarios/android"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$W/tools/e3/scenarios/android/smoke-upgrade.sh"
+git -C "$W" add -A && git -C "$W" commit -q -s -m "tools e3"
+DONE "$W" >"${TMP}/o163" 2>&1
+C163="$(comments_of 163)"
+printf '%s' "$C163" | grep -qF "bash tools/test-e3.sh" && ok "改 tools/e3/** → 挑 e3 自测 test-e3.sh" || bad "tools/e3 门禁不对：$(tail -4 "${TMP}/o163")"
+printf '%s' "$C163" | grep -qF '`just ci`' && bad "tools/e3 仍退回了全量 just ci" || ok "反证：没有全量 just ci"
+# #1646 变异反证 1：去掉 src-tauri 的 fmt 那步 → 桌面 Rust 的门禁里不再挑 fmt（证明断言真的守着）
+cp "$M/tools/flow/worker-done.sh" "${TMP}/wd-1646f.bak"
+grep -v 'add_gate "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check"' "$M/tools/flow/worker-done.sh" >"${TMP}/wd-1646f.mut"
+if [ "$(wc -l <"$M/tools/flow/worker-done.sh")" -eq "$(( $(wc -l <"${TMP}/wd-1646f.mut") + 1 ))" ]; then
+  cp "${TMP}/wd-1646f.mut" "$M/tools/flow/worker-done.sh"
+  git -C "$M" add tools/flow/worker-done.sh
+  git -C "$M" commit -q -s -m "mutate src-tauri fmt gate"
+  git -C "$M" push -q origin HEAD:refs/heads/main
+  W="$(card 164 "[T-164] desktop rust no fmt" "apps/desktop/**")"
+  mkdir -p "$W/apps/desktop/src-tauri/src"
+  printf 'fn hi() {}\n' >"$W/apps/desktop/src-tauri/src/lib.rs"
+  git -C "$W" add -A && git -C "$W" commit -q -s -m "desktop rust no fmt"
+  DONE "$W" >"${TMP}/o164" 2>&1
+  C164="$(comments_of 164)"
+  printf '%s' "$C164" | grep -qF "cargo fmt --manifest-path" && bad "去掉 fmt 那步后仍挑 fmt（断言没守着）" || ok "变异反证：去掉 fmt 那步后不再挑 fmt"
+  printf '%s' "$C164" | grep -qF "cargo nextest run --manifest-path" && ok "  去掉 fmt 不影响 nextest 照挑" || bad "  去掉 fmt 后 nextest 也没了"
+else
+  bad "src-tauri fmt 行没匹配上，变异没生效"
+fi
+cp "${TMP}/wd-1646f.bak" "$M/tools/flow/worker-done.sh"
+git -C "$M" add tools/flow/worker-done.sh
+git -C "$M" commit -q -s -m "restore src-tauri fmt gate"
+# #1646 变异反证 2：把 tools/e3 映射改坏（e3x 永不匹配）→ tools/e3 改动退回全量 just ci
+cp "$M/tools/flow/worker-done.sh" "${TMP}/wd-1646e.bak"
+while IFS= read -r line; do
+  [ "$line" = '    tools/e3/*)' ] && line='    tools/e3x/*)'
+  printf '%s\n' "$line"
+done <"$M/tools/flow/worker-done.sh" >"${TMP}/wd-1646e.mut"
+cp "${TMP}/wd-1646e.mut" "$M/tools/flow/worker-done.sh"
+if grep -q 'tools/e3x/\*)' "$M/tools/flow/worker-done.sh"; then
+  git -C "$M" add tools/flow/worker-done.sh
+  git -C "$M" commit -q -s -m "mutate e3 mapping"
+  git -C "$M" push -q origin HEAD:refs/heads/main
+  W="$(card 165 "[T-165] tools e3 unmapped" "tools/**")"
+  mkdir -p "$W/tools/e3/scenarios/android"
+  printf '#!/usr/bin/env bash\nexit 0\n' >"$W/tools/e3/scenarios/android/smoke-upgrade.sh"
+  git -C "$W" add -A && git -C "$W" commit -q -s -m "tools e3 unmapped"
+  DONE "$W" >"${TMP}/o165" 2>&1
+  C165="$(comments_of 165)"
+  case "$C165" in *'`just ci`'*) ok "变异反证：e3 映射改坏后 → 退回全量 just ci" ;; *) bad "e3 映射改坏后没退回全量：$(tail -4 "${TMP}/o165")" ;; esac
+else
+  bad "tools/e3 映射变异没生效"
+fi
+cp "${TMP}/wd-1646e.bak" "$M/tools/flow/worker-done.sh"
+git -C "$M" add tools/flow/worker-done.sh
+git -C "$M" commit -q -s -m "restore e3 mapping"
 # 改动里本身就是 tools/test-*.sh → 跑它自己
 W="$(card 130 "[T-130] tools test itself" "tools/**")"
 printf '# touched\n' >>"$W/tools/test-other.sh"
