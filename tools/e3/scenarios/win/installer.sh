@@ -30,6 +30,8 @@ INST_DAEMON="$INST_DIR/ppf-daemon.exe"
 INST_UNINSTALL="$INST_DIR/uninstall.exe"
 PD_DIR_WIN="${ProgramData:-C:\ProgramData}\P-Pass"
 PD_DIR="$(cygpath -u "$PD_DIR_WIN")"
+# 服务模式下 daemon 的 config.toml（含库位置）在 ProgramData，不在用户态数据目录。
+WIN_CONF_DIR="$PD_DIR"
 UA_WAIT="${E3_WIN_UAC_WAIT:-180}"
 
 # 提权辅助脚本：装/卸包 +（可选）搬走 ProgramData + 采身份哈希/日志。
@@ -158,7 +160,7 @@ svc_binpath() { win_ps "(Get-CimInstance Win32_Service -Filter \"Name='P-Pass'\"
 hklm_version() { win_ps "(Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\P-Pass' -ErrorAction SilentlyContinue).DisplayVersion" 2>/dev/null | tr -d '[:space:]'; }
 inst_exe_version() { win_ps "(Get-Item '$INST_DIR_WIN\\p-pass-desktop.exe' -ErrorAction SilentlyContinue).VersionInfo.ProductVersion" 2>/dev/null | tr -d '[:space:]'; }
 pd_wanted() { cat "$PD_DIR/wanted-state" 2>/dev/null | tr -d '\r\n'; }
-config_hash() { sha256sum "$WIN_DATA_DIR/config.toml" 2>/dev/null | awk '{print $1}'; }
+config_hash() { local c; c="$(win_config_file)" || return 0; sha256sum "$c" 2>/dev/null | awk '{print $1}'; }
 
 wait_installed() { # wait_installed <版本>：等安装目录的 exe 出现且版本对上
   local ver="$1" i

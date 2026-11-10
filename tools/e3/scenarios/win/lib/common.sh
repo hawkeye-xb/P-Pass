@@ -13,6 +13,16 @@ WIN_APP_DIR_WIN="${LOCALAPPDATA}\\P-Pass"
 WIN_APP_DIR="$(cygpath -u "$WIN_APP_DIR_WIN" 2>/dev/null || echo "$WIN_APP_DIR_WIN")"
 WIN_DATA_DIR_WIN="${LOCALAPPDATA}\\com.hawkeyexb.ppass.desktop"
 WIN_DATA_DIR="$(cygpath -u "$WIN_DATA_DIR_WIN" 2>/dev/null || echo "$WIN_DATA_DIR_WIN")"
+# 配置文件位置：用户态布局在 WIN_DATA_DIR；perMachine 服务模式下 daemon 的配置
+# （含库位置）在 %ProgramData%\P-Pass，由场景设 WIN_CONF_DIR 指定。
+WIN_CONF_DIR="${WIN_CONF_DIR:-}"
+win_config_file() { # 存在的 config.toml 路径；先看 WIN_CONF_DIR，再回退用户态
+  local c
+  for c in "${WIN_CONF_DIR:+$WIN_CONF_DIR/config.toml}" "$WIN_DATA_DIR/config.toml"; do
+    [ -n "$c" ] && [ -f "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  return 1
+}
 WIN_DESKTOP_EXE="$WIN_APP_DIR/p-pass-desktop.exe"
 WIN_DAEMON_EXE="$WIN_APP_DIR/ppf-daemon.exe"
 WIN_REL_DIR="$E3_STATE/win/releases"
@@ -257,8 +267,8 @@ win_exe_version() {
 
 # 库目录以 config.toml 的 data_dir 为准（TOML 字面串或基本串）。
 win_library_dir_win() {
-  local conf="$WIN_DATA_DIR/config.toml" raw
-  [ -f "$conf" ] || return 1
+  local conf raw
+  conf="$(win_config_file)" || return 1
   raw="$(sed -n "s/^data_dir *= *[\"']\(.*\)[\"']\$/\\1/p" "$conf" | head -1)"
   [ -n "$raw" ] || return 1
   printf '%s' "$raw" | sed 's/\\\\/\\/g'
@@ -277,7 +287,7 @@ win_library_hashes() {
 win_identity_key() {
   local lib key
   lib="$(win_library_dir 2>/dev/null)" || lib=""
-  for key in "$WIN_DATA_DIR/.ppf/identity.key" "${lib:+$lib/.ppf/identity.key}"; do
+  for key in "${WIN_CONF_DIR:+$WIN_CONF_DIR/.ppf/identity.key}" "$WIN_DATA_DIR/.ppf/identity.key" "${lib:+$lib/.ppf/identity.key}"; do
     [ -n "$key" ] && [ -f "$key" ] && { printf '%s' "$key"; return 0; }
   done
   return 1
