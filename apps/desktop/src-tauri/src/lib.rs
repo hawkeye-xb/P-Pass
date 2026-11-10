@@ -3899,9 +3899,7 @@ mod tests {
             let start = hooks
                 .find(&format!("!macro {name}"))
                 .unwrap_or_else(|| panic!("installer-hooks.nsh 缺 {name}"));
-            let end = hooks[start..]
-                .find("!macroend")
-                .expect("宏没有 !macroend");
+            let end = hooks[start..].find("!macroend").expect("宏没有 !macroend");
             &hooks[start..start + end]
         };
 
@@ -3925,14 +3923,17 @@ mod tests {
         // POSTINSTALL：stop → 等 STOPPED → start。不停掉旧进程就 start，
         // 对一个已在运行的服务是空操作，「文件新、进程旧」就留在用户机器上。
         let post = macro_body("NSIS_HOOK_POSTINSTALL");
-        let stop = post.find("sc.exe\" stop").expect("#1640：POSTINSTALL 没先停");
+        let stop = post
+            .find("sc.exe\" stop")
+            .expect("#1640：POSTINSTALL 没先停");
         let stopped = post
             .find("ppass_wait_stopped")
             .expect("#1640：POSTINSTALL 没等 STOPPED");
-        let start = post
-            .find("sc.exe\" start")
-            .expect("POSTINSTALL 没启动服务");
-        assert!(stop < stopped && stopped < start, "顺序必须是 stop → 等 STOPPED → start");
+        let start = post.find("sc.exe\" start").expect("POSTINSTALL 没启动服务");
+        assert!(
+            stop < stopped && stopped < start,
+            "顺序必须是 stop → 等 STOPPED → start"
+        );
 
         // 起完必须有校验，而且要看 wanted-state：用户停过的机器上 daemon 启动即退出，
         // 不能把「没在跑」判成失败；其余机器必须起到 RUNNING。
