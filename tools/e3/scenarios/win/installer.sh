@@ -403,16 +403,16 @@ same_field() { # same_field <证据目录> <字段> <tagA> <tagB>：两边都有
 judge() {
   local d="$1"
   # R0.2
-  check "R0.2 基线 exe 版本 $WIN_BASE_VER" grep -qx "inst_exe_version=$WIN_BASE_VER" "$d/after-baseline.txt"
-  check "R0.2 HKLM 卸载登记 $WIN_BASE_VER" grep -qx "hklm_version=$WIN_BASE_VER" "$d/after-baseline.txt"
+  check "R0.2 基线 exe 版本 $WIN_BASE_VER" grep -Fqx "inst_exe_version=$WIN_BASE_VER" "$d/after-baseline.txt"
+  check "R0.2 HKLM 卸载登记 $WIN_BASE_VER" grep -Fqx "hklm_version=$WIN_BASE_VER" "$d/after-baseline.txt"
   check "R0.2 服务 P-Pass 在运行" grep -qx 'svc_state=Running' "$d/after-baseline.txt"
   check "R0.2 服务路径指向 Program Files 安装目录" grep -Fq "$INST_DIR_WIN\\ppf-daemon.exe" "$d/after-baseline.txt"
   check "R0.2 daemon 版本 ${WIN_BASE_VER}（服务 diag）" eq_file "$d/after-baseline-diag-version.txt" "$WIN_BASE_VER"
   check "R0.2 ProgramData 已由安装器建立" grep -qx 'pd_dir=present' "$d/after-baseline.txt"
   # R1.2 / W3
   check "W3 覆盖安装前服务是运行中" grep -qx 'svc_state=Running' "$d/pre-candidate-service.txt"
-  check "R1.2 候选 exe 版本 $WIN_CAND_VER" grep -qx "inst_exe_version=$WIN_CAND_VER" "$d/after-candidate.txt"
-  check "R1.2 HKLM 卸载登记 $WIN_CAND_VER" grep -qx "hklm_version=$WIN_CAND_VER" "$d/after-candidate.txt"
+  check "R1.2 候选 exe 版本 $WIN_CAND_VER" grep -Fqx "inst_exe_version=$WIN_CAND_VER" "$d/after-candidate.txt"
+  check "R1.2 HKLM 卸载登记 $WIN_CAND_VER" grep -Fqx "hklm_version=$WIN_CAND_VER" "$d/after-candidate.txt"
   check "R1.2 服务仍在运行" grep -qx 'svc_state=Running' "$d/after-candidate.txt"
   check "R1.2 服务路径仍是 Program Files 安装目录" grep -Fq "$INST_DIR_WIN\ppf-daemon.exe" "$d/after-candidate.txt"
   check "R1.2 daemon 版本 ${WIN_CAND_VER}（服务 diag）" eq_file "$d/after-candidate-diag-version.txt" "$WIN_CAND_VER"

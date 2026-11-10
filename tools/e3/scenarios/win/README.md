@@ -27,7 +27,8 @@
 - 安装包缓存：`$E3_STATE/win/releases/<tag>/`（默认 `v2026.10.7` = 基线 0.10.1/0.10.2，
   `v0.11.0-test.1` = 候选）。用 `gh release download` 备好；场景不联网下载。
   换候选 test 包只设 `E3_WIN_CAND_TAG=v<版本>`：场景从 tag 推导候选版本号（去掉 v 前缀），
-  版本断言跟着变，不用改脚本。
+  版本断言跟着变，不用改脚本。显式设了非空的 `E3_WIN_CAND_VER` 时以它为准——换 tag 时
+  记得把旧的 `E3_WIN_CAND_VER` 清掉，否则版本断言还按旧值判。
 - `tools/e3/run` 的 lock 用 `/usr/bin/lockf`；Windows Git Bash 没有时，本机调用加
   `E3_LOCKED_WIN=1` 跳过锁（同一台机器只有一个会话时安全）。
 

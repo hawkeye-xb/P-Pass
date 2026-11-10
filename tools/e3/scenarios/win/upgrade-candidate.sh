@@ -104,10 +104,10 @@ photo_count_unchanged() {
 
 judge() {
   local d="$1"
-  check "桌面 exe 版本 = $WIN_CAND_VER" grep -qx "exe_version=$WIN_CAND_VER" "$d/post-versions.txt"
-  check "安装登记 = $WIN_CAND_VER" grep -qx "install_version=$WIN_CAND_VER" "$d/post-versions.txt"
-  check "daemon 版本 = $WIN_CAND_VER" grep -qx "status_version=$WIN_CAND_VER" "$d/post-versions.txt"
-  check "手机版本 = $WIN_CAND_VER" grep -qx "phone_version=$WIN_CAND_VER" "$d/post-versions.txt"
+  check "桌面 exe 版本 = $WIN_CAND_VER" grep -Fqx "exe_version=$WIN_CAND_VER" "$d/post-versions.txt"
+  check "安装登记 = $WIN_CAND_VER" grep -Fqx "install_version=$WIN_CAND_VER" "$d/post-versions.txt"
+  check "daemon 版本 = $WIN_CAND_VER" grep -Fqx "status_version=$WIN_CAND_VER" "$d/post-versions.txt"
+  check "手机版本 = $WIN_CAND_VER" grep -Fqx "phone_version=$WIN_CAND_VER" "$d/post-versions.txt"
   check "配对设备仍在（1 台）" grep -qx 'devices=1' "$d/post-versions.txt"
   check "身份 key 未变（升级不重配）" same_nonempty "$d/pre-identity.txt" "$d/post-identity.txt"
   check "照片库哈希未变（升级不丢/不重入库）" same_nonempty "$d/pre-library-hashes.txt" "$d/post-library-hashes.txt"
