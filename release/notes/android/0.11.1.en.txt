@@ -1,1 +1,3 @@
-The paired date on the storage screen now follows your language.
+Hand-pick a few photos without auto backup; after pairing choose auto backup or try a few first.
+Wi-Fi-only backup works on Wi-Fi without internet.
+The paired date now follows your language.
