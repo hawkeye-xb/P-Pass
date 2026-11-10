@@ -321,7 +321,7 @@ act() {
   # R1.2 + W3：daemon 服务运行中直接覆盖候选（不先停服务）
   echo "svc_state=$(svc_state)" >"$d/pre-candidate-service.txt"
   echo "安装前服务状态：$(svc_state)"
-  elev_step "覆盖安装候选 P-Pass $WIN_CAND_VER（服务运行中）" \
+  elev_step "覆盖安装候选 P-Pass ${WIN_CAND_VER}（服务运行中）" \
     -Installer "$(cygpath -w "$WIN_CAND_EXE")" -InstallerArgs '/S' -WaitServiceSecs 60 \
     -Out "$(cygpath -w "$d/after-candidate-install.txt")" || { echo "候选覆盖安装失败/取消"; return 1; }
   wait_installed "$WIN_CAND_VER" || echo "候选安装后等不到 $WIN_CAND_VER 的 exe"
@@ -353,7 +353,7 @@ act() {
   snapshot_state "$d" after-uninstall
 
   # W5 第二半：重装候选，服务恢复、ProgramData 身份不变
-  elev_step "重装候选 P-Pass $WIN_CAND_VER（W5：验证服务恢复、身份保留）" \
+  elev_step "重装候选 P-Pass ${WIN_CAND_VER}（W5：验证服务恢复、身份保留）" \
     -Installer "$(cygpath -w "$WIN_CAND_EXE")" -InstallerArgs '/S' -WaitServiceSecs 60 \
     -Out "$(cygpath -w "$d/after-reinstall-install.txt")" || { echo "重装失败/取消"; return 1; }
   wait_installed "$WIN_CAND_VER" || echo "重装后等不到 $WIN_CAND_VER 的 exe"
@@ -411,7 +411,7 @@ judge() {
   check "R1.2 HKLM 卸载登记 $WIN_CAND_VER" grep -qx "hklm_version=$WIN_CAND_VER" "$d/after-candidate.txt"
   check "R1.2 服务仍在运行" grep -qx 'svc_state=Running' "$d/after-candidate.txt"
   check "R1.2 服务路径仍是 Program Files 安装目录" grep -Fq "$INST_DIR_WIN\ppf-daemon.exe" "$d/after-candidate.txt"
-  check "R1.2 daemon 版本 $WIN_CAND_VER（服务 diag）" eq_file "$d/after-candidate-diag-version.txt" "$WIN_CAND_VER"
+  check "R1.2 daemon 版本 ${WIN_CAND_VER}（服务 diag）" eq_file "$d/after-candidate-diag-version.txt" "$WIN_CAND_VER"
   # W5
   check "W5 前置：服务已配置（向导走完，主界面总览）" main_ui_ready "$d/desktop-main.txt"
   check "W5 卸载后程序目录里没有 exe" grep -qx 'inst_exe_present=no' "$d/after-uninstall.txt"
