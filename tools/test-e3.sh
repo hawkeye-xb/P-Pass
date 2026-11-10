@@ -153,6 +153,44 @@ YML
   [ -f "$(base_apk_path)" ] || { echo "非 android 改动，候选包没有拷成基线"; exit 1; }
 ) || bad "ensure_base_apk：android 改动判定"
 
+# #1391 共享 target：verify 用的一定是本卡刚编的那份二进制，不是别的卡随后覆盖到 target/debug 的。
+sha256_of() { openssl dgst -sha256 -r "$1" | cut -d' ' -f1; }
+(
+  d="$(mktemp -d)" || exit 1
+  trap 'rm -rf "$d"' EXIT
+  export E3_STATE="$d/state" CARGO_TARGET_DIR="$d/shared-target"
+  export E3_DAEMON='' E3_TESTCLIENT='' # 清空显式指定，走默认解析
+  mkdir -p "$CARGO_TARGET_DIR/debug" "$d/cand-src"
+  printf '本卡的 daemon\n' >"$d/cand-src/daemon"
+  printf '本卡的 testclient\n' >"$d/cand-src/testclient"
+  cp "$d/cand-src/daemon" "$d/cand-src/testclient" "$CARGO_TARGET_DIR/debug/"
+  chmod +x "$CARGO_TARGET_DIR/debug/"*
+  # shellcheck source=../tools/e3/verify
+  source "$E3/verify" || exit 1
+  # 反证（修复前的情形）：不拷走时 cand_daemon 读共享 target，别的卡一编就换成别人的
+  cp "$d/cand-src/daemon" "$CARGO_TARGET_DIR/debug/daemon"
+  printf '别的卡的 daemon\n' >"$CARGO_TARGET_DIR/debug/daemon"
+  [ "$(cat "$(cand_daemon)")" = '别的卡的 daemon' ] ||
+    { echo "反证不成立：cand_daemon 没读到共享 target 里那份"; exit 1; }
+  # 修复后：本卡编完就拷走，之后别的卡覆盖 target/debug 也不影响
+  cp "$d/cand-src/daemon" "$CARGO_TARGET_DIR/debug/daemon"
+  pin_cand_bins "$d/cand" || { echo "拷候选二进制失败"; exit 1; }
+  printf '别的卡的 daemon\n' >"$CARGO_TARGET_DIR/debug/daemon"
+  printf '别的卡的 testclient\n' >"$CARGO_TARGET_DIR/debug/testclient"
+  [ "$(cand_daemon)" = "$d/cand/daemon" ] || { echo "cand_daemon 没指到副本：$(cand_daemon)"; exit 1; }
+  [ "$(cand_testclient)" = "$d/cand/testclient" ] || { echo "cand_testclient 没指到副本：$(cand_testclient)"; exit 1; }
+  [ "$(sha256_of "$(cand_daemon)")" = "$(sha256_of "$d/cand-src/daemon")" ] || { echo "daemon 用的是别的卡那份"; exit 1; }
+  [ "$(sha256_of "$(cand_testclient)")" = "$(sha256_of "$d/cand-src/testclient")" ] || { echo "testclient 用的是别的卡那份"; exit 1; }
+  # 显式给的二进制优先，不被拷走那步覆盖
+  ( export E3_DAEMON="$d/mine" E3_TESTCLIENT="$d/mine-tc"
+    pin_cand_bins "$d/cand2" >/dev/null 2>&1
+    [ "$E3_DAEMON" = "$d/mine" ] && [ "$E3_TESTCLIENT" = "$d/mine-tc" ] ) ||
+    { echo "显式给的 E3_DAEMON / E3_TESTCLIENT 被覆盖了"; exit 1; }
+  exit 0
+) || bad "共享 target 下 verify 用本卡编的二进制（#1391）"
+# 拷走那一步要在主流程编译之后调；没有它，上面「用本卡编的二进制」就不成立
+grep -q 'pin_cand_bins "$root/cand"' "$E3/verify" || bad "verify 编完没把候选二进制拷走（#1391）"
+
 # #1343 审查补充：MAC_GLOBS 数组里的通配符必须加引号。未加引号时，赋值那一刻 shell 会按
 # 当前目录展开（在仓库根目录 crates/** 会变成一堆具体目录），通配语义和与目录无关性都丢了。
 (

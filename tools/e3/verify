@@ -53,14 +53,29 @@ lane_hit() { # lane_hit <glob…>：改动有没有落在这些路径上（ci-pa
 
 # —— 构建候选 ——
 heavy() { "$REPO_ROOT/tools/heavy-lock" "$@"; } # 可重入（#1308）
+# 不设 CARGO_INCREMENTAL：本仓其余构建路径（just dev mac、dev android）都走默认增量，
+# 单独关掉会让共享 target 里的 crate 在两种设置之间反复失效重编（#1391）。
 build_desktop_bins() {
   log "编候选 daemon + testclient（debug）"
-  (cd "$REPO_ROOT" && CARGO_INCREMENTAL=0 PPF_BUILD_VERSION="$(tools/release-version.sh desktop)" \
+  (cd "$REPO_ROOT" && PPF_BUILD_VERSION="$(tools/release-version.sh desktop)" \
     heavy cargo build -q -p daemon -p testclient) >>"$root/build.log" 2>&1
 }
 build_apk() { # build_apk <源码目录>
   # JDK / NDK 环境用当前仓库的脚本导出：旧基线的代码里可能还没有它
-  (source "$REPO_ROOT/tools/java-home.sh" && cd "$1/apps/android" && CARGO_INCREMENTAL=0 heavy ./gradlew -q :app:assembleDebug) >>"$root/build.log" 2>&1
+  (source "$REPO_ROOT/tools/java-home.sh" && cd "$1/apps/android" && heavy ./gradlew -q :app:assembleDebug) >>"$root/build.log" 2>&1
+}
+# 共享 CARGO_TARGET_DIR 下 target/debug 的产物随时会被别的卡覆盖：heavy-lock 只管编译，
+# 「编完到用上」这一段没锁（#1391）。编完立刻拷到本卡自己的目录，场景改读副本；
+# 显式给的 E3_DAEMON / E3_TESTCLIENT 优先。
+pin_cand_bins() { # pin_cand_bins <目录>
+  local t="${CARGO_TARGET_DIR:-$REPO_ROOT/target}/debug" b
+  mkdir -p "$1" || return 1
+  for b in daemon testclient; do
+    [ -x "$t/$b" ] || { log "缺候选二进制：$t/$b"; return 1; }
+    cp "$t/$b" "$1/$b" || return 1
+  done
+  [ -n "${E3_DAEMON:-}" ] || export E3_DAEMON="$1/daemon"
+  [ -n "${E3_TESTCLIENT:-}" ] || export E3_TESTCLIENT="$1/testclient"
 }
 # 基线包：merge-base 的 debug 包，按 sha 缓存。应用代码没变时直接用候选包（同一份代码）。
 base_apk_path() { echo "$E3_STATE/base/$(git -C "$REPO_ROOT" rev-parse --short "$base")/app-debug.apk"; }
@@ -168,6 +183,8 @@ if [ "$build" = 1 ]; then
     ensure_base_apk || die "基线 APK 编译失败（$root/build.log）"
     ;;
   esac
+  pin_cand_bins "$root/cand" || die "拷候选二进制失败（$root/cand）"
+  log "候选二进制：$(cand_daemon) · $(cand_testclient)"
 fi
 
 # 场景读的基线包与这里的 --base 一致（不给 --base 时就是 merge-base）
