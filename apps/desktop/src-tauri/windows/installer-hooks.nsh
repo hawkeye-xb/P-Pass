@@ -97,8 +97,34 @@ Var PPassDataDir
 ; #1075：先关壳再停 daemon——壳还在时会在两次 taskkill 之间把 daemon 自愈拉起来。
 !macro NSIS_HOOK_PREINSTALL
   DetailPrint "Closing P-Pass app, then stopping its background service..."
+  ; #1640：安装期间先清空失败恢复，装完由 PPassRegisterService 恢复。
+  ; 下面的 taskkill 杀的就是服务自己的进程，SCM 会当成崩溃，按 restart/5000 在 5 秒后
+  ; 把「还没被替换的旧 daemon」拉起来——文件换完它仍在跑，装完就变成「文件新、进程旧」。
+  nsExec::ExecToLog '"$SYSDIR\sc.exe" failure "${PPASS_SERVICE}" reset= 0 actions= ""'
+  Pop $0
   nsExec::ExecToLog '"$SYSDIR\sc.exe" stop "${PPASS_SERVICE}"'
   Pop $0
+  ; 等它真的到 STOPPED（最多 10 秒）再往下走：还在 STOP_PENDING 时后面的 taskkill
+  ; 会扑空、文件替换又撞上它，清空失败恢复没生效时就会退化成 #1640 的竞态。
+  StrCpy $R2 0
+  ppass_pre_wait_stopped:
+    nsExec::ExecToStack '"$SYSDIR\sc.exe" query "${PPASS_SERVICE}"'
+    Pop $0
+    Pop $1
+    ${If} $0 != 0
+      Goto ppass_pre_wait_stopped_done
+    ${EndIf}
+    ${StrStr} $R7 "$1" "STOPPED"
+    ${If} $R7 != ""
+      Goto ppass_pre_wait_stopped_done
+    ${EndIf}
+    IntOp $R2 $R2 + 1
+    ${If} $R2 >= 20
+      Goto ppass_pre_wait_stopped_done
+    ${EndIf}
+    Sleep 500
+    Goto ppass_pre_wait_stopped
+  ppass_pre_wait_stopped_done:
   ; 旧版本（#957 计划任务）不做迁移，只清残留；失败无害。
   nsExec::ExecToLog '"$SYSDIR\schtasks.exe" /Delete /TN "${PPASS_SERVICE}" /F'
   Pop $0
@@ -133,11 +159,79 @@ Var PPassDataDir
     ; 安装日志、不中止安装（daemon 启动时还会核对并记一行）。
     nsExec::ExecToLog '"$INSTDIR\ppf-daemon.exe" library privatize'
     Pop $0
+    ; #1640：不能只 `sc start`——如果服务此刻已经在跑（例如 PREINSTALL 之后被别的路径
+    ; 拉起来了），`start` 对运行中的服务是空操作，用户会一直跑着旧 daemon。
+    ; 显式先停再起，保证跑起来的是 $INSTDIR 下这份新二进制。
+    nsExec::ExecToLog '"$SYSDIR\sc.exe" stop "${PPASS_SERVICE}"'
+    Pop $0
+    ; 等它真的到 STOPPED 再 start（最多 10 秒）：服务还在 stopping 时 start 会失败。
+    StrCpy $R1 0
+    ppass_wait_stopped:
+      nsExec::ExecToStack '"$SYSDIR\sc.exe" query "${PPASS_SERVICE}"'
+      Pop $0
+      Pop $1
+      ${If} $0 != 0
+        Goto ppass_wait_stopped_done
+      ${EndIf}
+      ${StrStr} $R7 "$1" "STOPPED"
+      ${If} $R7 != ""
+        Goto ppass_wait_stopped_done
+      ${EndIf}
+      IntOp $R1 $R1 + 1
+      ${If} $R1 >= 20
+        DetailPrint "Service still not stopped after 10s; starting anyway."
+        Goto ppass_wait_stopped_done
+      ${EndIf}
+      Sleep 500
+      Goto ppass_wait_stopped
+    ppass_wait_stopped_done:
     nsExec::ExecToLog '"$SYSDIR\sc.exe" start "${PPASS_SERVICE}"'
     Pop $0
-    ; #1167：失败标记放在 ProgramData（见 UpdateFailureRecover）；老位置一并清掉。
-    Delete "${PPASS_DATA}\update-failed"
-    Delete "$LOCALAPPDATA\com.hawkeyexb.ppass.desktop\update-failed"
+    ; 起完的校验分两种机器（#1640）：
+    ;   - 用户主动停过服务（wanted-state=stopped）：daemon 按设计「启动即退出」
+    ;     （crates/daemon/src/main.rs），这时把「服务没在跑」判成安装失败是错的；
+    ;   - 其余机器：必须真的起到 RUNNING，否则 start 可能是空操作（旧进程还在），
+    ;     「文件新、进程旧」就没人兜底了。
+    StrCpy $R3 0
+    ClearErrors
+    FileOpen $2 "${PPASS_DATA}\wanted-state" r
+    ${IfNot} ${Errors}
+      FileRead $2 $R4
+      FileClose $2
+      ${StrStr} $R5 "$R4" "stopped"
+      ${If} $R5 != ""
+        StrCpy $R3 1
+      ${EndIf}
+    ${EndIf}
+    StrCpy $R1 1
+    ${If} $R3 != 1
+      Sleep 500
+      StrCpy $R2 0
+      ppass_post_wait_running:
+        nsExec::ExecToStack '"$SYSDIR\sc.exe" query "${PPASS_SERVICE}"'
+        Pop $0
+        Pop $1
+        ${StrStr} $R7 "$1" "RUNNING"
+        ${If} $R7 != ""
+          Goto ppass_post_wait_running_done
+        ${EndIf}
+        IntOp $R2 $R2 + 1
+        ${If} $R2 >= 20
+          StrCpy $R1 0
+          Goto ppass_post_wait_running_done
+        ${EndIf}
+        Sleep 500
+        Goto ppass_post_wait_running
+      ppass_post_wait_running_done:
+    ${EndIf}
+    ${If} $R1 == 0
+      DetailPrint "New daemon did not reach RUNNING; reporting update failure."
+      Call UpdateFailureRecover
+    ${Else}
+      ; #1167：失败标记放在 ProgramData（见 UpdateFailureRecover）；老位置一并清掉。
+      Delete "${PPASS_DATA}\update-failed"
+      Delete "$LOCALAPPDATA\com.hawkeyexb.ppass.desktop\update-failed"
+    ${EndIf}
   ${EndIf}
 !macroend
 
@@ -202,6 +296,10 @@ Function UpdateFailureRecover
     ${EndIf}
     ${StrStr} $R7 "$R6" "stopped"
     ${If} $R7 == ""
+      ; #1640：PREINSTALL 清空过失败恢复，走失败路径时这里必须补回来——否则安装失败后
+      ; 服务会永久失去崩溃自动重启（SCM 配置是持久的，不是本次进程的状态）。
+      nsExec::ExecToLog '"$SYSDIR\sc.exe" failure "${PPASS_SERVICE}" reset= 86400 actions= restart/5000/restart/5000'
+      Pop $0
       nsExec::ExecToLog '"$SYSDIR\sc.exe" start "${PPASS_SERVICE}"'
       Pop $0
       StrCpy $R9 1

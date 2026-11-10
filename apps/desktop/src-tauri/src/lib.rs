@@ -3883,6 +3883,76 @@ mod tests {
         );
     }
 
+    /// #1640：覆盖安装期间不许让 SCM 的失败恢复插进来，装完也不许只 `sc start` 就收工。
+    ///
+    /// 真机上是这么红的：PREINSTALL 的 `taskkill /F` 杀服务自己的进程 → SCM 按
+    /// `restart/5000` 把还没被替换的旧 daemon 拉起来 → 文件换完它还在跑 →
+    /// POSTINSTALL 只校验磁盘文件版本、`sc start` 对运行中的服务是空操作 →
+    /// 用户一直跑旧版本。
+    ///
+    /// 反证：把 `sc failure … actions= ""` 挪到 taskkill 之后、把 POSTINSTALL 退回只
+    /// `sc start`、或删掉起服务后的 wanted-state + RUNNING 校验，本测试红。
+    #[test]
+    fn installer_stops_service_before_touching_files_and_checks_the_restart() {
+        let hooks = include_str!("../windows/installer-hooks.nsh").replace("\r\n", "\n");
+        let macro_body = |name: &str| -> &str {
+            let start = hooks
+                .find(&format!("!macro {name}"))
+                .unwrap_or_else(|| panic!("installer-hooks.nsh 缺 {name}"));
+            let end = hooks[start..]
+                .find("!macroend")
+                .expect("宏没有 !macroend");
+            &hooks[start..start + end]
+        };
+
+        let pre = macro_body("NSIS_HOOK_PREINSTALL");
+        let clear = pre
+            .find("sc.exe\" failure \"${PPASS_SERVICE}\" reset= 0 actions= \"\"")
+            .expect("#1640：PREINSTALL 没清空失败恢复");
+        let pre_stop = pre.find("sc.exe\" stop").expect("PREINSTALL 没停服务");
+        let pre_wait = pre
+            .find("ppass_pre_wait_stopped")
+            .expect("#1640：停完要等真的到 STOPPED 再动文件");
+        let kill = pre
+            .find("taskkill.exe\" /F /IM ppf-daemon.exe")
+            .expect("PREINSTALL 没有 taskkill daemon");
+        // 顺序即保证：先清空失败恢复（taskkill 才不会被 SCM 当成崩溃又拉起来），
+        // 再停服务、等 STOPPED，最后才 taskkill 兜底。
+        assert!(clear < pre_stop, "#1640：清空失败恢复必须在停服务之前");
+        assert!(pre_stop < pre_wait, "#1640：停服务之后要等 STOPPED");
+        assert!(pre_wait < kill, "#1640：等 STOPPED 必须在 taskkill 之前");
+
+        // POSTINSTALL：stop → 等 STOPPED → start。不停掉旧进程就 start，
+        // 对一个已在运行的服务是空操作，「文件新、进程旧」就留在用户机器上。
+        let post = macro_body("NSIS_HOOK_POSTINSTALL");
+        let stop = post.find("sc.exe\" stop").expect("#1640：POSTINSTALL 没先停");
+        let stopped = post
+            .find("ppass_wait_stopped")
+            .expect("#1640：POSTINSTALL 没等 STOPPED");
+        let start = post
+            .find("sc.exe\" start")
+            .expect("POSTINSTALL 没启动服务");
+        assert!(stop < stopped && stopped < start, "顺序必须是 stop → 等 STOPPED → start");
+
+        // 起完必须有校验，而且要看 wanted-state：用户停过的机器上 daemon 启动即退出，
+        // 不能把「没在跑」判成失败；其余机器必须起到 RUNNING。
+        let wanted = post
+            .find("wanted-state")
+            .expect("#1640：起完的校验必须先看 wanted-state");
+        let running = post
+            .find("\"RUNNING\"")
+            .expect("#1640：起完没核对服务真的 RUNNING");
+        let delete_marker = post
+            .find("Delete \"${PPASS_DATA}\\update-failed\"")
+            .expect("POSTINSTALL 没有清理失败标记");
+        assert!(start < wanted, "wanted-state 的判断必须在 start 之前拿到");
+        assert!(start < running, "RUNNING 核对必须在 start 之后");
+        assert!(
+            running < delete_marker,
+            "#1640：RUNNING 核对之前不许删失败标记（起不来也当成功就是误放行）"
+        );
+    }
+
     /// `sc create` 的 binPath 内层引号必须转义成 `\"`：nsExec 原样交给 CreateProcess，
     /// 裸引号会让 `C:\Program Files\...` 在空格处被拆开，sc 返回 1639、服务没建出来（#1167
     /// 真机复现）。反证：换回 `binPath= "$\"$INSTDIR\ppf-daemon.exe$\" --service"`，本测试红。
