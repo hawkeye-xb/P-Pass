@@ -3,7 +3,9 @@
 //!
 //! 过去这些写在桌面 JS（`disconnected.js`、`humanTime.js` 的哨兵、`App.svelte`
 //! 的 `deviceRow`/`lastActivityAt`/`status.devices - status.revoked`），页头
-//! 「已配对 N 台」不含自己断开的设备，列表里却显示它们——口径打架。
+//! 「已配对 N 台」不含自己断开的设备，列表里却显示它们——口径打架（#1402 卡1
+//! 起两者分开计：页头只数 `Removal::None`，已断开的单列在
+//! `status.disconnected_devices`）。
 
 use storage::{DepartedBy, DeviceRow};
 
@@ -40,7 +42,8 @@ impl Removal {
         }
     }
 
-    /// 设备页主列表的一行（含自己断开的）。页头「已配对 N 台」就数这个。
+    /// 设备页主列表的一行（含自己断开的）。只是「列表里有没有」——页头
+    /// 「已配对 N 台」数的是 `Removal::None`，不数这个（#1402 卡1）。
     pub fn is_listed(self) -> bool {
         self != Removal::Removed
     }
@@ -154,7 +157,7 @@ mod tests {
         assert_eq!(Removal::of(&dev(false, None)), Removal::Removed);
         assert!(
             Removal::Disconnected.is_listed(),
-            "自己断开的留在主列表、计入已配对"
+            "自己断开的留在主列表，但不计入「已配对」"
         );
         assert!(!Removal::Removed.is_listed());
     }

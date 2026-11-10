@@ -65,6 +65,7 @@
   // DEV-03: 「自己断开」与「业主移除」的判据 + 已断开行文案（纯函数，
   // disconnected.test.js 钉边界）。
   import { disconnectedRow } from "./lib/disconnected.js";
+  import { disconnectedClause, noDevicesText } from "./lib/deviceCounts.js";
   import {
     pendingDialogText,
     pendingSubText,
@@ -1307,8 +1308,10 @@
   // 状态机默认值，当作徽章文案是假话）。T-081: 徽章落位侧栏底部胶囊，
   // 只说服务状态；连接状态归属每台设备行（daemon 的 devices.list 每行给出
   // presence / connection / flow_connection / row_state）。
-  // #1044 B4：「已配对 N 台」= 设备页列表正常行数（含自己断开的），daemon 给数。
+  // #1044 B4 / #1402 卡1：「已配对 N 台」只数有授权的（手机自己断开的另计），
+  // daemon 给数；总览顶部、备份状态卡、设备页都读这一组，不自己数列表。
   const pairedCount = $derived(status?.paired_devices ?? 0);
+  const disconnectedCount = $derived(status?.disconnected_devices ?? 0);
   // T-092: 磁盘水位（status.disk_free_bytes/disk_total_bytes 可能 null——
   // 拿不到时三个值都是 null，设置页整行隐藏，绝不渲染 undefined/NaN）
   const diskFree = $derived(formatBytes(status?.disk_free_bytes ?? null));
@@ -1700,6 +1703,7 @@
               {:else}
                 {t("ui.paired_count", { n: pairedCount })}{#if photoCount !== null}{` · ${t("ui.overview_library_count", { n: photoCount })}`}{/if}
               {/if}
+              {disconnectedClause(disconnectedCount)}
               {#if status?.removed_devices > 0}{t("ui.revoked_count", { n: status.removed_devices })}{/if}
             </p>
             {/if}
@@ -1840,7 +1844,7 @@
                   <!-- 2026-08-17：等高后空状态垂直居中——不然矮内容顶在
                        卡片顶部，下面一截空白显得像没做完。 -->
                   <div class="flex flex-1 items-center justify-center">
-                    <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{t("ui.no_devices")}</p>
+                    <p class="m-0 text-[13px] leading-[1.6] text-ink-40">{noDevicesText(disconnectedCount)}</p>
                   </div>
                 {:else}
                   <ul class="m-0 list-none p-0">
@@ -1921,7 +1925,7 @@
         <section class="page" data-testid="page-devices">
           <div class="lede">
             <h2 class="m-0 font-serif text-[28px] font-normal leading-[1.3]">{t("ui.nav_devices")}</h2>
-            <p class="mt-[6px] text-[14px] text-ink-40">{t("ui.devices_paired_line", { n: pairedCount })}</p>
+            <p class="mt-[6px] text-[14px] text-ink-40">{t("ui.devices_paired_line", { n: pairedCount })}{disconnectedClause(disconnectedCount)}</p>
           </div>
           <!-- 2026-08-18（用户反馈③）：设备列表在卡内自己滚，标题/副标题和
                底部说明不跟着长——与活动记录页/照片页同一套 min-h-0 flex-1

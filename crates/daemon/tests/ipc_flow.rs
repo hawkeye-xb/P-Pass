@@ -1401,9 +1401,10 @@ async fn devices_list_keeps_self_disconnected_and_hides_owner_removed() {
     assert_eq!(resp.result.unwrap()["devices"].as_array().unwrap().len(), 3);
 }
 
-/// #1044 B4：设备分组、「需要看看」、行状态、最近活跃、页头计数由 daemon
-/// 给结论。【改行为】「已配对 N 台」= 列表正常行数（含自己断开的）；已移除
-/// 单独计。反证：把 `paired_devices` 改回 `devices - revoked`，这里是 1 不是 2。
+/// #1044 B4 / #1402 卡1：设备分组、「需要看看」、行状态、最近活跃、页头计数由
+/// daemon 给结论。「已配对 N 台」= 有授权的（`removal == none`），手机自己断开的
+/// 单列在 `disconnected_devices`，已移除另计；三者互斥、加起来是档案数。
+/// 反证：把 `paired_devices` 改回数主列表行（`Removal::is_listed`），这里变 2。
 #[tokio::test(flavor = "multi_thread")]
 async fn device_rows_carry_daemon_conclusions_and_status_counts_match_the_list() {
     let dir = tempfile::tempdir().unwrap();
@@ -1445,7 +1446,8 @@ async fn device_rows_carry_daemon_conclusions_and_status_counts_match_the_list()
         .await
         .result
         .unwrap();
-    assert_eq!(status["paired_devices"], 2, "含自己断开的");
+    assert_eq!(status["paired_devices"], 1, "只数有授权的，不含自己断开的");
+    assert_eq!(status["disconnected_devices"], 1, "手机自己断开的单独计");
     assert_eq!(status["removed_devices"], 1);
 
     let listed = c

@@ -2522,6 +2522,17 @@ impl IpcServer {
                 None
             }
         };
+        // #1044 B4 / #1402 卡1：三个计数互斥，加起来是档案数。「已配对 N 台」只数有
+        // 授权的（removal == none）；手机自己断开的单独计，界面补「另有 M 台已断开」；
+        // 业主移除的另计。设备页与备份状态卡读同一组数，桌面不再自己数。
+        let (mut paired_devices, mut disconnected_devices, mut removed_devices) = (0, 0, 0);
+        for d in &devices {
+            match crate::device_projection::Removal::of(d) {
+                crate::device_projection::Removal::None => paired_devices += 1,
+                crate::device_projection::Removal::Disconnected => disconnected_devices += 1,
+                crate::device_projection::Removal::Removed => removed_devices += 1,
+            }
+        }
         Ok(serde_json::json!({
             // T-090 data-plane fields (桌面总览卡直接消费).
             "photo_count": photo_count,
@@ -2537,16 +2548,10 @@ impl IpcServer {
             // #1117：档案数（永不删除）与其中没有配对记录的数目。
             "devices": devices.len(),
             "unpaired": devices.iter().filter(|d| d.pairing.is_none()).count(),
-            // #1044 B4：「已配对 N 台」= 设备页主列表行数（含自己断开的）；
-            // 已移除的单独计。桌面不再自己做减法。
-            "paired_devices": devices
-                .iter()
-                .filter(|d| crate::device_projection::Removal::of(d).is_listed())
-                .count(),
-            "removed_devices": devices
-                .iter()
-                .filter(|d| !crate::device_projection::Removal::of(d).is_listed())
-                .count(),
+            // #1044 B4 / #1402：「已配对 N 台」= 有授权的设备数，不含手机自己断开的。
+            "paired_devices": paired_devices,
+            "disconnected_devices": disconnected_devices,
+            "removed_devices": removed_devices,
             "pending_pairs": pending,
             // #1044：是否正有 Flow 传输——任何在用设备有活跃的 blobs 路由。
             // 与设备行「传输中」同一信号；壳（#667 内核对账推迟）只读这个结论。
