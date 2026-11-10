@@ -1,1 +1,3 @@
-Disconnected devices are listed separately, and counts are accurate.
+Index and thumbnails stay on this computer; no going back to older versions.
+Move your library in Settings; photos are not re-uploaded.
+Disconnected devices are listed separately; counts are exact.
