@@ -1,0 +1,1 @@
+Disconnected devices are listed separately, and counts are accurate.
