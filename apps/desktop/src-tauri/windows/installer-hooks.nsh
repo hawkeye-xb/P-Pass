@@ -187,21 +187,13 @@ Var PPassDataDir
     ppass_wait_stopped_done:
     nsExec::ExecToLog '"$SYSDIR\sc.exe" start "${PPASS_SERVICE}"'
     Pop $0
-    ; 起完必须确认真的 RUNNING，再当作安装成功。新 daemon 起来就退出（目录/DACL 之类
-    ; 拒绝启动）、或 start 撞上 STOP_PENDING 返回 1056/1061 时，这里不能默默当成功。
-    Sleep 2000
-    nsExec::ExecToStack '"$SYSDIR\sc.exe" query "${PPASS_SERVICE}"'
-    Pop $0
-    Pop $1
-    ${StrStr} $R7 "$1" "RUNNING"
-    ${If} $R7 == ""
-      ; 没能起来：保留/写失败标记，交给同一条恢复路径（含弹窗与 wanted-state 判断）。
-      Call UpdateFailureRecover
-    ${Else}
-      ; #1167：失败标记放在 ProgramData（见 UpdateFailureRecover）；老位置一并清掉。
-      Delete "${PPASS_DATA}\update-failed"
-      Delete "$LOCALAPPDATA\com.hawkeyexb.ppass.desktop\update-failed"
-    ${EndIf}
+    ; 这里**不**断言服务必须 RUNNING：`wanted-state=stopped` 的机器上 daemon 按设计
+    ; 「启动即退出」（crates/daemon/src/main.rs），断言 RUNNING 会把正常状态判成安装失败
+    ; 并弹错误框。「跑起来的是新二进制」由前一环保证：进 POSTINSTALL 之前服务已确认
+    ; STOPPED（STOPPED 期间没有进程持有旧映像），之后 start 只可能装载 $INSTDIR 这份新文件。
+    ; #1167：失败标记放在 ProgramData（见 UpdateFailureRecover）；老位置一并清掉。
+    Delete "${PPASS_DATA}\update-failed"
+    Delete "$LOCALAPPDATA\com.hawkeyexb.ppass.desktop\update-failed"
   ${EndIf}
 !macroend
 

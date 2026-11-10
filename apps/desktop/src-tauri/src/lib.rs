@@ -3909,17 +3909,21 @@ mod tests {
         let clear = pre
             .find("sc.exe\" failure \"${PPASS_SERVICE}\" reset= 0 actions= \"\"")
             .expect("#1640：PREINSTALL 没清空失败恢复");
+        let pre_stop = pre.find("sc.exe\" stop").expect("PREINSTALL 没停服务");
+        let pre_wait = pre
+            .find("ppass_pre_wait_stopped")
+            .expect("#1640：停完要等真的到 STOPPED 再动文件");
         let kill = pre
             .find("taskkill.exe\" /F /IM ppf-daemon.exe")
             .expect("PREINSTALL 没有 taskkill daemon");
-        assert!(clear < kill, "#1640：清空失败恢复必须在 taskkill 之前");
-        let pre_stop = pre.find("sc.exe\" stop").expect("PREINSTALL 没停服务");
-        assert!(pre_stop < kill, "PREINSTALL 必须先把服务停下来");
-        assert!(
-            pre.contains("ppass_pre_wait_stopped"),
-            "#1640：停完要等真的到 STOPPED 再动文件"
-        );
+        // 顺序即保证：先清空失败恢复（taskkill 才不会被 SCM 当成崩溃又拉起来），
+        // 再停服务、等 STOPPED，最后才 taskkill 兜底。
+        assert!(clear < pre_stop, "#1640：清空失败恢复必须在停服务之前");
+        assert!(pre_stop < pre_wait, "#1640：停服务之后要等 STOPPED");
+        assert!(pre_wait < kill, "#1640：等 STOPPED 必须在 taskkill 之前");
 
+        // POSTINSTALL：stop → 等 STOPPED → start。不停掉旧进程就 start，
+        // 对一个已在运行的服务是空操作，「文件新、进程旧」就留在用户机器上。
         let post = macro_body("NSIS_HOOK_POSTINSTALL");
         let stop = post.find("sc.exe\" stop").expect("#1640：POSTINSTALL 没先停");
         let stopped = post
@@ -3928,19 +3932,7 @@ mod tests {
         let start = post
             .find("sc.exe\" start")
             .expect("POSTINSTALL 没启动服务");
-        let running = post
-            .find("\"RUNNING\"")
-            .expect("#1640：起完没核对服务真的 RUNNING");
         assert!(stop < stopped && stopped < start, "顺序必须是 stop → 等 STOPPED → start");
-        assert!(start < running, "核对 RUNNING 必须在 start 之后");
-        // 失败时不许清掉失败标记：删除只能出现在 RUNNING 判定成功的那一支。
-        let delete_marker = post
-            .find("Delete \"${PPASS_DATA}\\update-failed\"")
-            .expect("POSTINSTALL 没有清理失败标记");
-        assert!(
-            running < delete_marker,
-            "#1640：RUNNING 判定之前不许删失败标记（起不来也当成功就是误放行）"
-        );
     }
 
     /// `sc create` 的 binPath 内层引号必须转义成 `\"`：nsExec 原样交给 CreateProcess，
