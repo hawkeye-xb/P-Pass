@@ -657,7 +657,11 @@ git -C "$M" add tools/flow/worker-done.sh
 git -C "$M" commit -q -s -m "restore src-tauri fmt gate"
 # #1646 变异反证 2：把 tools/e3 映射改坏（e3x 永不匹配）→ tools/e3 改动退回全量 just ci
 cp "$M/tools/flow/worker-done.sh" "${TMP}/wd-1646e.bak"
-sed -i'' 's|^    tools/e3/\*)|    tools/e3x/*)|' "$M/tools/flow/worker-done.sh"
+while IFS= read -r line; do
+  [ "$line" = '    tools/e3/*)' ] && line='    tools/e3x/*)'
+  printf '%s\n' "$line"
+done <"$M/tools/flow/worker-done.sh" >"${TMP}/wd-1646e.mut"
+cp "${TMP}/wd-1646e.mut" "$M/tools/flow/worker-done.sh"
 if grep -q 'tools/e3x/\*)' "$M/tools/flow/worker-done.sh"; then
   git -C "$M" add tools/flow/worker-done.sh
   git -C "$M" commit -q -s -m "mutate e3 mapping"
