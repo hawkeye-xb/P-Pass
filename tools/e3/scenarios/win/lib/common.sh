@@ -13,6 +13,16 @@ WIN_APP_DIR_WIN="${LOCALAPPDATA}\\P-Pass"
 WIN_APP_DIR="$(cygpath -u "$WIN_APP_DIR_WIN" 2>/dev/null || echo "$WIN_APP_DIR_WIN")"
 WIN_DATA_DIR_WIN="${LOCALAPPDATA}\\com.hawkeyexb.ppass.desktop"
 WIN_DATA_DIR="$(cygpath -u "$WIN_DATA_DIR_WIN" 2>/dev/null || echo "$WIN_DATA_DIR_WIN")"
+# 配置文件位置：用户态布局在 WIN_DATA_DIR；perMachine 服务模式下 daemon 的配置
+# （含库位置）在 %ProgramData%\P-Pass，由场景设 WIN_CONF_DIR 指定。
+WIN_CONF_DIR="${WIN_CONF_DIR:-}"
+win_config_file() { # 存在的 config.toml 路径；先看 WIN_CONF_DIR，再回退用户态
+  local c
+  for c in "${WIN_CONF_DIR:+$WIN_CONF_DIR/config.toml}" "$WIN_DATA_DIR/config.toml"; do
+    [ -n "$c" ] && [ -f "$c" ] && { printf '%s' "$c"; return 0; }
+  done
+  return 1
+}
 WIN_DESKTOP_EXE="$WIN_APP_DIR/p-pass-desktop.exe"
 WIN_DAEMON_EXE="$WIN_APP_DIR/ppf-daemon.exe"
 WIN_REL_DIR="$E3_STATE/win/releases"
@@ -24,11 +34,13 @@ WIN_OUTSIDE_PS="$(cygpath -w "$REPO_ROOT/tools/windows/run-outside-package.ps1")
 WIN_WATCH_PS="$(cygpath -w "$REPO_ROOT/tools/windows/watch-new-windows.ps1")"
 
 # 稳定标签（Latest）与候选标签，场景可用环境变量覆盖。
+# 候选版本号从候选标签推导（去掉 v 前缀）：换 test 包只设 E3_WIN_CAND_TAG，
+# 场景里的版本断言跟着变，不用改脚本。
 WIN_BASE_TAG="${E3_WIN_BASE_TAG:-v2026.10.7}"
 WIN_BASE_VER="${E3_WIN_BASE_VER:-0.10.1}"
 WIN_BASE_PHONE_VER="${E3_WIN_BASE_PHONE_VER:-0.10.2}"
 WIN_CAND_TAG="${E3_WIN_CAND_TAG:-v0.11.0-test.1}"
-WIN_CAND_VER="${E3_WIN_CAND_VER:-0.11.0-test.1}"
+WIN_CAND_VER="${E3_WIN_CAND_VER:-${WIN_CAND_TAG#v}}"
 
 # —— PowerShell / UI ——
 
@@ -255,8 +267,8 @@ win_exe_version() {
 
 # 库目录以 config.toml 的 data_dir 为准（TOML 字面串或基本串）。
 win_library_dir_win() {
-  local conf="$WIN_DATA_DIR/config.toml" raw
-  [ -f "$conf" ] || return 1
+  local conf raw
+  conf="$(win_config_file)" || return 1
   raw="$(sed -n "s/^data_dir *= *[\"']\(.*\)[\"']\$/\\1/p" "$conf" | head -1)"
   [ -n "$raw" ] || return 1
   printf '%s' "$raw" | sed 's/\\\\/\\/g'
@@ -271,11 +283,12 @@ win_library_hashes() {
   [ -s "$dir/library-hashes.txt" ]
 }
 
-# 身份私钥：#1260 之前放照片库 .ppf/，之后移到平台数据目录 .ppf/。两处都认。
+# 身份私钥：服务模式在 %ProgramData%\P-Pass 根下；用户态布局在平台数据目录 .ppf/；
+# #1260 之前还放在照片库 .ppf/。三处都认。
 win_identity_key() {
   local lib key
   lib="$(win_library_dir 2>/dev/null)" || lib=""
-  for key in "$WIN_DATA_DIR/.ppf/identity.key" "${lib:+$lib/.ppf/identity.key}"; do
+  for key in "${WIN_CONF_DIR:+$WIN_CONF_DIR/identity.key}" "$WIN_DATA_DIR/.ppf/identity.key" "${lib:+$lib/.ppf/identity.key}"; do
     [ -n "$key" ] && [ -f "$key" ] && { printf '%s' "$key"; return 0; }
   done
   return 1

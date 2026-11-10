@@ -112,7 +112,7 @@ verify_sha256() {
 
 # --retry 只兜网络抖动；它兜不住校验和不符（那是 verify_sha256 的事，且不重试）。
 fetch() {
-  curl -fL --retry 3 --retry-delay 5 --retry-all-errors "$1" -o "$2"
+  curl -fL --retry 5 --retry-delay 2 --retry-all-errors "$1" -o "$2"
 }
 
 # BtbN：下载 asset + 同一个 release 的官方 checksums.sha256，按文件名取期望值

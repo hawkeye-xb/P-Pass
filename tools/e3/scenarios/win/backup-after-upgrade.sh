@@ -100,8 +100,8 @@ judge() {
   check "照片数 = 增量前 + 8" photo_count_matches "$d/backup.txt"
   check "8 张全部增量入库且不重复" hash_extra "$d"
   check "库哈希清单 = 增量前 + 8 行（原有照片仍在、不重复）" [ "$post_n" -eq "$((pre_n + 8))" ]
-  check "两端仍是候选版本" grep -qx "status_version=$WIN_CAND_VER" "$d/post-versions.txt"
-  check "手机仍是候选版本" grep -qx "phone_version=$WIN_CAND_VER" "$d/post-versions.txt"
+  check "两端仍是候选版本" grep -Fqx "status_version=$WIN_CAND_VER" "$d/post-versions.txt"
+  check "手机仍是候选版本" grep -Fqx "phone_version=$WIN_CAND_VER" "$d/post-versions.txt"
   check "daemon 日志无 panic" no_line_panic "$d/post-daemon.log"
   verdict
 }

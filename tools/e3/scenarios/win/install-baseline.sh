@@ -75,19 +75,20 @@ act() {
 }
 
 task_action_is_expected() { # 整条比较，避免 ...\P-Pass-old\ppf-daemon.exe 这种前缀冒充
-  [ "$(sed -n 's/^task_action=//p' "$1" | tr -d '')" = "$WIN_APP_DIR_WIN\ppf-daemon.exe" ]
+  [ "$(sed -n 's/^task_action=//p' "$1" | tr -d '
+')" = "$WIN_APP_DIR_WIN\ppf-daemon.exe" ]
 }
 
 judge() {
   local d="$1"
-  check "daemon 版本 0.10.1（diag status）" grep -qx "status_version=$WIN_BASE_VER" "$d/versions.txt"
-  check "桌面 exe ProductVersion 0.10.1" grep -qx "exe_version=$WIN_BASE_VER" "$d/versions.txt"
-  check "安装登记 DisplayVersion 0.10.1" grep -qx "install_version=$WIN_BASE_VER" "$d/versions.txt"
+  check "daemon 版本 0.10.1（diag status）" grep -Fqx "status_version=$WIN_BASE_VER" "$d/versions.txt"
+  check "桌面 exe ProductVersion 0.10.1" grep -Fqx "exe_version=$WIN_BASE_VER" "$d/versions.txt"
+  check "安装登记 DisplayVersion 0.10.1" grep -Fqx "install_version=$WIN_BASE_VER" "$d/versions.txt"
   check "首启向导走完（主界面「后台服务运行中」）" win_ui_has "$d/desktop-main.txt" '后台服务运行中'
   check "计划任务 P-Pass 在运行" grep -qx 'task_state=Running' "$d/versions.txt"
   check "计划任务指向安装目录里的 daemon" task_action_is_expected "$d/versions.txt"
   check "daemon 进程在" grep -Eq '^daemon_pid=[0-9]+' "$d/versions.txt"
-  check "手机基线版本 $WIN_BASE_PHONE_VER" grep -qx "phone_version=$WIN_BASE_PHONE_VER" "$d/versions.txt"
+  check "手机基线版本 $WIN_BASE_PHONE_VER" grep -Fqx "phone_version=$WIN_BASE_PHONE_VER" "$d/versions.txt"
   check "照片库目录已由向导写入" grep -Eq '^library=.+P-Pass' "$d/versions.txt"
   check "daemon 日志无 panic" no_line_panic "$d/diag/daemon.log"
   verdict
