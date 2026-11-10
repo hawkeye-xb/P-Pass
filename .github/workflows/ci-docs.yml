@@ -125,6 +125,8 @@ jobs:
             justfile
             .github/**
             AGENTS.md
+            # #914：版本真相源改了也要跑 bump 自测（脚本那侧由 tools/** 覆盖）。
+            release/versions.json
 
   # #1471 按版本验收：用户看得到的改动合入时不要验收行（发版前由 just release-scope 的台账清零兜住）；
   # 本 job 只把核心的方案关：碰核心的要正文引用已采纳方案，看不见的核心还要带测试。

@@ -305,12 +305,17 @@ i18n-split-check:
   bash tools/test-version-bump-i18n.sh > /dev/null
   @echo "ok: 文案改动只牵动所在的端（tools/test-version-bump-i18n.sh）"
 
+# 版本号 bump 的自测（#914）：漂移拒绝、各端同步、versions.json 未知键保留（带反证）。
+# 要 Rust —— bump 用 `cargo update -w` 同步两个 workspace 的 lock。
+bump-version-test:
+  @bash tools/test-bump-version.sh
+
 # 流程门禁脚本的自测（#1493）：本地 ci / ci-docs 与 CI（ci-docs.yml 的 flow-tests job）共用这一份清单。
 # 只收别的 lane 都没跑的流程自测；md-check / token-check / shell-vars-check / identity-check / supply-chain-check
 # 已在 ci-docs.yml、ci-identity.yml 的其它 job 里跑，留在 ci-docs 的直接依赖里。
 # justfile 里每个 *-test recipe 要么在这里，要么登记在 tools/test-flow-tests-wired.sh 的例外表里（flow-tests-wired-test 会挡）。
 # heavy-lock-test 依赖 macOS 才有的 lockf，ubuntu 上会 SKIP 假绿，不进这里；登记为例外（#1502），本地 ci / ci-docs 直接依赖它。
-flow-tests: hooks-test flow-worker-test flow-review-test flow-ci-review-test flow-pr-test flow-gate-status-test flow-owner-test macos-runner-test main-red-test flow-tests-wired-test ci-lane-invariants-test ci-download-resilience-test
+flow-tests: hooks-test flow-worker-test flow-review-test flow-ci-review-test flow-pr-test flow-gate-status-test flow-owner-test macos-runner-test main-red-test flow-tests-wired-test ci-lane-invariants-test ci-download-resilience-test bump-version-test
   @echo "==> flow-tests: green ✅"
 
 # #1468 的 lane 不变量（#1489）：三个 Windows job 在 PR 上跳过、五条 lane 有 push: branches [main]、
