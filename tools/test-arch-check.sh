@@ -478,6 +478,31 @@ else
   bad "G3 report 模式应列出命中且通过"; echo "$OUT" | sed 's/^/       /'
 fi
 
+# ── B.2 扩展：硬编码平台路径（#402）────────────────────
+echo "== B.2 platform-path 正样例（漏在豁免区外、未声明，必须报红）"
+B2PP_UNIX='fn f() { let p = std::path::Path::new("/usr/lib/nope"); }'
+B2PP_WIN='fn f() { let p = "C:\\Windows\\System32\\cmd.exe"; }'
+expect_red "B.2 platform-path 未声明 Unix 路径" "$(sample crates/media-codec/src/a.rs "$B2PP_UNIX")" "hardcoded platform path"
+expect_red "B.2 platform-path 未声明 Windows 盘符" "$(sample crates/media-codec/src/a.rs "$B2PP_WIN")" "hardcoded platform path"
+
+echo "== B.2 platform-path 放行 / 豁免（必须不报）"
+expect_green "B.2 platform-path 同行标记放行" "$(sample crates/media-codec/src/a.rs 'fn f() { let p = std::path::Path::new("/usr/lib/nope"); } // arch-allow: platform-path probe-by-existence')"
+expect_green "B.2 platform-path 上方注释块标记放行" "$(sample crates/media-codec/src/a.rs '/// arch-allow: platform-path probe-by-existence
+fn f() { let p = std::path::Path::new("/usr/lib/nope"); }')"
+expect_green "B.2 platform-path legacy 声明放行（arch rule B.2）" "$(sample crates/media-codec/src/a.rs '/// Fixed path, probed by existence (arch rule B.2, same discipline as ffmpeg).
+fn f() { let p = std::path::Path::new("/usr/lib/nope"); }')"
+expect_green "B.2 platform-path crates/platform 豁免" "$(sample crates/platform/src/a.rs "$B2PP_UNIX")"
+expect_green "B.2 platform-path tests/ 豁免" "$(sample crates/media-codec/tests/a.rs "$B2PP_UNIX")"
+expect_green "B.2 platform-path 注释里提到不算" "$(sample crates/media-codec/src/a.rs '// 以前是 /usr/lib/nope，现在没了')"
+expect_green "B.2 platform-path 文件尾测试模块不算" "$(sample crates/media-codec/src/a.rs 'fn product() {}
+#[cfg(test)]
+mod tests { fn t() { let _ = "/usr/lib/nope"; } }')"
+
+echo "== B.2 platform-path 变异反证（断言不是恒真式）"
+# 1) 正样例见上：漏在豁免区外的未声明路径必须红；2) 加标记复绿见上。
+# 3) 把认路径那条正则改坏（换成不匹配任何东西），正样例必须漏报（绿）。
+expect_green "B.2 platform-path 正则改坏后正样例漏报" "$(sample crates/media-codec/src/a.rs "$B2PP_UNIX")" ARCH_PLATFORM_PATH_RE='THIS_MATCHES_NOTHING'
+
 echo
 echo "arch-check 自测：通过 ${PASS}，失败 $FAILED"
 [ "$FAILED" -eq 0 ]
