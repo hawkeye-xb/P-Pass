@@ -193,7 +193,7 @@ if [ "$build" = 1 ]; then
     ensure_base_apk || die "基线 APK 编译失败（$root/build.log）"
     ;;
   esac
-  pin_cand_bins "$cand_dir" || die "候选二进制副本缺失（$cand_dir）"
+  pin_cand_bins "$cand_dir" || die "候选二进制副本缺失（${cand_dir}）"
   log "候选二进制：$(cand_daemon) · $(cand_testclient)"
 fi
 
