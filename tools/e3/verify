@@ -55,25 +55,32 @@ lane_hit() { # lane_hit <glob…>：改动有没有落在这些路径上（ci-pa
 heavy() { "$REPO_ROOT/tools/heavy-lock" "$@"; } # 可重入（#1308）
 # 不设 CARGO_INCREMENTAL：本仓其余构建路径（just dev mac、dev android）都走默认增量，
 # 单独关掉会让共享 target 里的 crate 在两种设置之间反复失效重编（#1391）。
-build_desktop_bins() {
+# 拷走候选二进制必须在这次构建锁里做：锁一放，别的卡就可能覆盖共享 target/debug（#1391）。
+# 构建的工作目录是仓库根，相对的 CARGO_TARGET_DIR 也按它解析，与 cargo 自己一致。
+build_desktop_bins() { # build_desktop_bins <二进制拷到哪>
   log "编候选 daemon + testclient（debug）"
   (cd "$REPO_ROOT" && PPF_BUILD_VERSION="$(tools/release-version.sh desktop)" \
-    heavy cargo build -q -p daemon -p testclient) >>"$root/build.log" 2>&1
+    heavy bash -c 'set -e
+      cargo build -q -p daemon -p testclient
+      source "$1"
+      copy_cand_bins "${CARGO_TARGET_DIR:-target}/debug" "$2"' \
+      bash "$E3_ROOT/verify" "$1") >>"$root/build.log" 2>&1
 }
 build_apk() { # build_apk <源码目录>
   # JDK / NDK 环境用当前仓库的脚本导出：旧基线的代码里可能还没有它
   (source "$REPO_ROOT/tools/java-home.sh" && cd "$1/apps/android" && heavy ./gradlew -q :app:assembleDebug) >>"$root/build.log" 2>&1
 }
-# 共享 CARGO_TARGET_DIR 下 target/debug 的产物随时会被别的卡覆盖：heavy-lock 只管编译，
-# 「编完到用上」这一段没锁（#1391）。编完立刻拷到本卡自己的目录，场景改读副本；
-# 显式给的 E3_DAEMON / E3_TESTCLIENT 优先。
-pin_cand_bins() { # pin_cand_bins <目录>
-  local t="${CARGO_TARGET_DIR:-$REPO_ROOT/target}/debug" b
-  mkdir -p "$1" || return 1
+copy_cand_bins() { # copy_cand_bins <debug 目录> <拷到哪>：由 build_desktop_bins 在构建锁里调用
+  local t="$1" dst="$2" b
+  mkdir -p "$dst" || return 1
   for b in daemon testclient; do
     [ -x "$t/$b" ] || { log "缺候选二进制：$t/$b"; return 1; }
-    cp "$t/$b" "$1/$b" || return 1
+    cp "$t/$b" "$dst/$b" || return 1
   done
+}
+# 场景改读编译时拷出来的副本；显式给的 E3_DAEMON / E3_TESTCLIENT 优先。
+pin_cand_bins() { # pin_cand_bins <副本目录>
+  [ -x "$1/daemon" ] && [ -x "$1/testclient" ] || { log "缺候选二进制副本：$1"; return 1; }
   [ -n "${E3_DAEMON:-}" ] || export E3_DAEMON="$1/daemon"
   [ -n "${E3_TESTCLIENT:-}" ] || export E3_TESTCLIENT="$1/testclient"
 }
@@ -168,7 +175,10 @@ mkdir -p "$root"
 log "涉及的端：${ends}；证据：$root"
 
 if [ "$build" = 1 ]; then
-  build_desktop_bins || die "候选 daemon/testclient 编译失败（$root/build.log）"
+  # 副本只供本次运行，跑完就删：不进证据目录堆盘（#1391）
+  cand_dir="$(mktemp -d "${TMPDIR:-/tmp}/ppass-e3-cand.XXXXXX")" || die "建候选二进制副本目录失败"
+  trap 'rm -rf "$cand_dir"' EXIT
+  build_desktop_bins "$cand_dir" || die "候选 daemon/testclient 编译失败（$root/build.log）"
   case " $ends " in *" mac "*)
     # 候选 = 开发版签名包（just dev mac 同一份构建）；V2 / test 回归可用 E3_MAC_CAND_APP 指向 CI 出的正式签名包
     if [ -z "${E3_MAC_CAND_APP:-}" ]; then
@@ -183,7 +193,7 @@ if [ "$build" = 1 ]; then
     ensure_base_apk || die "基线 APK 编译失败（$root/build.log）"
     ;;
   esac
-  pin_cand_bins "$root/cand" || die "拷候选二进制失败（$root/cand）"
+  pin_cand_bins "$cand_dir" || die "候选二进制副本缺失（$cand_dir）"
   log "候选二进制：$(cand_daemon) · $(cand_testclient)"
 fi
 

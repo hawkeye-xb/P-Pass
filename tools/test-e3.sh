@@ -154,42 +154,57 @@ YML
 ) || bad "ensure_base_apk：android 改动判定"
 
 # #1391 共享 target：verify 用的一定是本卡刚编的那份二进制，不是别的卡随后覆盖到 target/debug 的。
+# 假 cargo 只把二进制写进共享 target；build_desktop_bins 要在同一次构建锁里把它们拷走。
 sha256_of() { openssl dgst -sha256 -r "$1" | cut -d' ' -f1; }
 (
   d="$(mktemp -d)" || exit 1
   trap 'rm -rf "$d"' EXIT
+  fake="$d/repo"
+  mkdir -p "$fake/tools" "$d/bin" "$d/root"
+  cp "$ROOT/tools/heavy-lock" "$fake/tools/heavy-lock"
+  printf '#!/bin/sh\necho 0.0.0\n' >"$fake/tools/release-version.sh"
+  chmod +x "$fake/tools/heavy-lock" "$fake/tools/release-version.sh"
+  cat >"$d/bin/cargo" <<'STUB'
+#!/bin/sh
+mkdir -p "$CARGO_TARGET_DIR/debug"
+printf '本卡的 daemon\n' >"$CARGO_TARGET_DIR/debug/daemon"
+printf '本卡的 testclient\n' >"$CARGO_TARGET_DIR/debug/testclient"
+chmod +x "$CARGO_TARGET_DIR/debug/"*
+STUB
+  chmod +x "$d/bin/cargo"
+  export PATH="$d/bin:$PATH" PPASS_HEAVY_LOCK="$d/heavy.lock"
   export E3_STATE="$d/state" CARGO_TARGET_DIR="$d/shared-target"
   export E3_DAEMON='' E3_TESTCLIENT='' # 清空显式指定，走默认解析
-  mkdir -p "$CARGO_TARGET_DIR/debug" "$d/cand-src"
-  printf '本卡的 daemon\n' >"$d/cand-src/daemon"
-  printf '本卡的 testclient\n' >"$d/cand-src/testclient"
-  cp "$d/cand-src/daemon" "$d/cand-src/testclient" "$CARGO_TARGET_DIR/debug/"
-  chmod +x "$CARGO_TARGET_DIR/debug/"*
   # shellcheck source=../tools/e3/verify
   source "$E3/verify" || exit 1
-  # 反证（修复前的情形）：不拷走时 cand_daemon 读共享 target，别的卡一编就换成别人的
-  cp "$d/cand-src/daemon" "$CARGO_TARGET_DIR/debug/daemon"
-  printf '别的卡的 daemon\n' >"$CARGO_TARGET_DIR/debug/daemon"
-  [ "$(cat "$(cand_daemon)")" = '别的卡的 daemon' ] ||
-    { echo "反证不成立：cand_daemon 没读到共享 target 里那份"; exit 1; }
-  # 修复后：本卡编完就拷走，之后别的卡覆盖 target/debug 也不影响
-  cp "$d/cand-src/daemon" "$CARGO_TARGET_DIR/debug/daemon"
-  pin_cand_bins "$d/cand" || { echo "拷候选二进制失败"; exit 1; }
+  REPO_ROOT="$fake" root="$d/root"
+  build_desktop_bins "$d/cand" || { echo "编候选二进制失败：$(tail -3 "$d/root/build.log")"; exit 1; }
+  [ -f "$d/cand/daemon" ] && [ -f "$d/cand/testclient" ] ||
+    { echo "编完没把二进制拷走（副本目录：$(ls -A "$d/cand" 2>/dev/null | tr '\n' ' '))"; exit 1; }
+  # 别的卡随后覆盖共享 target（锁放开之后）
   printf '别的卡的 daemon\n' >"$CARGO_TARGET_DIR/debug/daemon"
   printf '别的卡的 testclient\n' >"$CARGO_TARGET_DIR/debug/testclient"
+  # 反证（修复前的情形）：不 pin 时 cand_daemon 读到的就是被覆盖的那份
+  [ "$(cat "$(cand_daemon)")" = '别的卡的 daemon' ] ||
+    { echo "反证不成立：cand_daemon 没读到共享 target 里那份"; exit 1; }
+  pin_cand_bins "$d/cand" || { echo "候选二进制副本缺失"; exit 1; }
   [ "$(cand_daemon)" = "$d/cand/daemon" ] || { echo "cand_daemon 没指到副本：$(cand_daemon)"; exit 1; }
   [ "$(cand_testclient)" = "$d/cand/testclient" ] || { echo "cand_testclient 没指到副本：$(cand_testclient)"; exit 1; }
-  [ "$(sha256_of "$(cand_daemon)")" = "$(sha256_of "$d/cand-src/daemon")" ] || { echo "daemon 用的是别的卡那份"; exit 1; }
-  [ "$(sha256_of "$(cand_testclient)")" = "$(sha256_of "$d/cand-src/testclient")" ] || { echo "testclient 用的是别的卡那份"; exit 1; }
-  # 显式给的二进制优先，不被拷走那步覆盖
+  [ "$(sha256_of "$(cand_daemon)")" = "$(sha256_of "$d/cand/daemon")" ] &&
+    [ "$(cat "$(cand_daemon)")" = '本卡的 daemon' ] || { echo "daemon 用的是别的卡那份"; exit 1; }
+  [ "$(cat "$(cand_testclient)")" = '本卡的 testclient' ] || { echo "testclient 用的是别的卡那份"; exit 1; }
+  # 显式给的二进制优先，不被 pin 覆盖
   ( export E3_DAEMON="$d/mine" E3_TESTCLIENT="$d/mine-tc"
-    pin_cand_bins "$d/cand2" >/dev/null 2>&1
+    pin_cand_bins "$d/cand" >/dev/null 2>&1
     [ "$E3_DAEMON" = "$d/mine" ] && [ "$E3_TESTCLIENT" = "$d/mine-tc" ] ) ||
     { echo "显式给的 E3_DAEMON / E3_TESTCLIENT 被覆盖了"; exit 1; }
   exit 0
 ) || bad "共享 target 下 verify 用本卡编的二进制（#1391）"
-# 拷走那一步要在主流程编译之后调；没有它，上面「用本卡编的二进制」就不成立
-grep -q 'pin_cand_bins "$root/cand"' "$E3/verify" || bad "verify 编完没把候选二进制拷走（#1391）"
+# 相对 CARGO_TARGET_DIR 按构建的工作目录（仓库根）解析：拷的是 cargo 刚写的那份
+grep -q 'copy_cand_bins "${CARGO_TARGET_DIR:-target}/debug"' "$E3/verify" ||
+  bad "拷候选二进制没按构建目录解析 CARGO_TARGET_DIR（#1391）"
+# 场景读副本这一步要在主流程里调；没有它，上面「用本卡编的二进制」就不成立
+grep -q 'pin_cand_bins "$cand_dir"' "$E3/verify" || bad "verify 没把场景指到候选二进制副本（#1391）"
 
 # #1343 审查补充：MAC_GLOBS 数组里的通配符必须加引号。未加引号时，赋值那一刻 shell 会按
 # 当前目录展开（在仓库根目录 crates/** 会变成一堆具体目录），通配语义和与目录无关性都丢了。
