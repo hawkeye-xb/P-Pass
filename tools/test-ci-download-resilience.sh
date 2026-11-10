@@ -9,8 +9,8 @@
 #   2. tools/fetch-ffmpeg.sh 的下载必须带 `curl -fL --retry 5 --retry-delay 2 --retry-all-errors`，
 #      且 verify_sha256 校验还在——重试不能换来「校验被绕开」。
 # 反证：把 workflows 与 fetch-ffmpeg.sh 复制到临时目录做变异（删缓存 action / 去掉 success() /
-#       e2e 删缓存 action / 去掉 --retry-all-errors / --retry 5 改 0 / 校验函数改名），
-#       每种都必须判红；原样必须判绿。
+#       e2e 删缓存 action / 去掉 --retry-all-errors / --retry 5 改 0 / 原地删掉校验函数体 /
+#       原地删掉两处校验调用），每种都必须判红；原样必须判绿。
 #
 # 用法: tools/test-ci-download-resilience.sh
 # 退出码: 0 全过 / 1 有失败
@@ -25,7 +25,7 @@ ko() { echo "  ❌ $1"; fail=1; }
 # check <仓库根>：有问题逐条打印到 stdout，退出码 1；全过退出 0、不打印。
 check() {
   python3 -I - "$1" <<'PY'
-import glob, os, sys
+import glob, os, re, sys
 
 root = sys.argv[1]
 bad = []
@@ -55,8 +55,15 @@ fetch = os.path.join(root, "tools", "fetch-ffmpeg.sh")
 text = open(fetch, encoding="utf-8").read()
 if "curl -fL --retry 5 --retry-delay 2 --retry-all-errors" not in text:
     bad.append("tools/fetch-ffmpeg.sh: 下载不是 curl -fL --retry 5 --retry-delay 2 --retry-all-errors")
-if "verify_sha256" not in text:
-    bad.append("tools/fetch-ffmpeg.sh: sha256 校验函数没了（重试不能换掉校验）")
+# 注释里也会出现 verify_sha256 字样，所以按结构判：函数要有定义，且两条下载路径都以
+# 行首命令的形式调用它（#1632）。只留注释、删掉函数体或调用都必须判红。
+lines = text.splitlines()
+defined = any(re.match(r"^verify_sha256\(\)\s*\{", line) for line in lines)
+calls = sum(1 for line in lines if re.match(r"^\s*verify_sha256\s+\S", line))
+if not defined:
+    bad.append("tools/fetch-ffmpeg.sh: sha256 校验函数没有定义（重试不能换掉校验）")
+elif calls < 2:
+    bad.append(f"tools/fetch-ffmpeg.sh: verify_sha256 的调用只有 {calls} 处（两条下载路径都必须校验）")
 
 for b in bad:
     print(b)
@@ -108,8 +115,10 @@ mutant "fetch-ffmpeg.sh 去掉 --retry-all-errors" tools/fetch-ffmpeg.sh \
   "s/ --retry-all-errors//"
 mutant "fetch-ffmpeg.sh 把 --retry 5 改成 0" tools/fetch-ffmpeg.sh \
   "s/--retry 5/--retry 0/"
-mutant "fetch-ffmpeg.sh 去掉 sha256 校验" tools/fetch-ffmpeg.sh \
-  "s/verify_sha256/verify_none/g"
+mutant "fetch-ffmpeg.sh 原地删掉校验函数体（只留注释）" tools/fetch-ffmpeg.sh \
+  "/^verify_sha256\(\) \{/,/^\}/d"
+mutant "fetch-ffmpeg.sh 原地删掉两处校验调用（函数还在）" tools/fetch-ffmpeg.sh \
+  "/^[[:space:]]*verify_sha256[[:space:]]+/d"
 
 if [ "$fail" -eq 0 ]; then
   echo "== ci-download-resilience: green ✅ =="
