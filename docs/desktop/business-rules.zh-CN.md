@@ -116,6 +116,7 @@ daemon 是 `config.toml` 与诊断包的唯一写者：照片库位置只经 IPC
   - `row_state` 优先级：`removed` > `disconnected` > `needs_attention` > `transferring`（`flow_connection` 有值）> presence（`online`/`recent`/`offline`）。
   - `last_activity_at`：`last_seen` 与 `last_backup_at` 取较大者。
 - `devices.list` 一行 = 档案 + 当前配对记录，字段 `paired` / `departed_by` / `departed_at`；默认只给主列表的行（`Removal::is_listed`），`include_departed=true` 连业主移除的也给。
+- `status` 的设备计数与列表同一口径（#1402 卡1）：`paired_devices` 数 `none`（有授权），`disconnected_devices` 数 `disconnected`（手机自己断开），`removed_devices` 数 `removed`；三者互斥，相加等于设备档案数。总览顶部、备份状态卡、设备页都读这一组，壳不自己数列表。
 - 测试：`device_projection::row_state_priority`、`ipc_flow::device_rows_carry_daemon_conclusions_and_status_counts_match_the_list`。
 
 ### 2.8 配对入口按需开放与资源上限（#1122）
@@ -304,8 +305,9 @@ daemon 是 `config.toml` 与诊断包的唯一写者：照片库位置只经 IPC
 
 | 字段 | 含义 |
 |---|---|
-| `paired_devices` | 设备页主列表行数（含自己断开的），即「已配对 N 台」（B4） |
-| `removed_devices` | 业主移除的行数（「已移除」区） |
+| `paired_devices` | 有授权的设备数（`removal == none`），即「已配对 N 台」（B4，#1402 卡1） |
+| `disconnected_devices` | 手机自己断开的行数（`removal == disconnected`），界面补「另有 M 台已断开」 |
+| `removed_devices` | 业主移除的行数（`removal == removed`，「已移除」区） |
 | `devices` / `unpaired` | 设备档案数 / 其中没有配对记录的数目（诊断口径） |
 | `pending_pairs` | 待审批数（不含已撤回） |
 | `transfer_active` | 任一有配对记录的设备 `flow_connection` 有值（与设备行「传输中」同一信号） |
