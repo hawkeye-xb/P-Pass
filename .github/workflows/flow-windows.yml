@@ -61,8 +61,8 @@ jobs:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: windows-latest
-    # 整轮预算 30 分钟 + 装工具链与 checkout 的余量；本 job 只报不挡，超时变红没有意义。
-    timeout-minutes: 50
+    # 整轮预算 60 分钟 + 装工具链与 checkout 的余量；本 job 只报不挡，超时变红没有意义。
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -116,10 +116,13 @@ jobs:
           GIT_COMMITTER_NAME: flow-windows
           GIT_COMMITTER_EMAIL: flow-windows@example.invalid
         run: |
+          # GitHub 对 `shell: bash` 的步骤强制加 `-e`（日志里是 `bash.EXE -e -o pipefail`），
+          # 这里必须显式关掉：被测脚本失败是常态，`wait` 返回非 0 会在记帐之前把整段中止（#1598 第一次实跑就是这样红的）。
+          set +e
           set -uo pipefail
 
-          per_script=300 # 单个自测的上限；正常都在几秒到一两分钟，撞上限的多半是真挂住
-          budget=1800    # 整轮预算：用完就停手并把剩下的标成「未跑」，免得 job 超时变红（第一步恒绿）
+          per_script=600 # 单个自测的上限；Windows 起进程慢，实测 test-arch-check.sh 就要 286s，别按 macOS 的秒数量
+          budget=3600    # 整轮预算：用完就停手并把剩下的标成「未跑」，免得 job 超时变红（第一步恒绿）
           run_start=$SECONDS
           logs="$RUNNER_TEMP/flow-windows-logs"
           mkdir -p "$logs"
