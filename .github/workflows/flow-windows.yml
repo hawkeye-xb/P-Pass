@@ -77,14 +77,19 @@ jobs:
           command -v jq >/dev/null && echo "jq: $(jq --version)" || echo "::warning::jq 不在 PATH 上"
           command -v node >/dev/null && echo "node: $(node --version)" || echo "::warning::node 不在 PATH 上"
 
+          # 本步骤装出来的工具都放进一个 bin 目录，结束时把它加进 PATH 供后面的步骤用
+          # （与 .github/actions/ios-testflight/action.yml 同一个写法）。
+          bin="$RUNNER_TEMP/bin"
+          mkdir -p "$bin"
+
           # just：官方 release 二进制 + sha256 钉死（与 ci-rust 里 actionlint 同一写法）。
           # windows 镜像不带 just，而 test-flow-tests-wired 等自测要真读 justfile。
           cd "$RUNNER_TEMP" || { echo "::error::进不了 RUNNER_TEMP"; exit 1; }
           curl --retry 5 --retry-delay 2 --retry-all-errors -fsSL -o just.zip \
             "https://github.com/casey/just/releases/download/1.57.0/just-1.57.0-x86_64-pc-windows-msvc.zip"
           echo "4c7391d17cb1d17b758b52004ee6411372b8a13ff37c3c9b9031625cb6026e09  just.zip" | sha256sum -c -
-          unzip -q -o just.zip just.exe
-          echo "just.exe: $(./just.exe --version)"
+          unzip -q -o just.zip just.exe -d "$bin"
+          echo "just.exe: $("$bin/just.exe" --version)"
 
           # python3：镜像上一定有 python，但不一定叫 python3（几个自测里直接写 python3）。
           # 这属于 runner 的工具名差异，不是被测脚本的跨平台问题，先补齐免得清单里全是噪声。
@@ -98,13 +103,15 @@ jobs:
           fi
           echo "python: $("$py" --version 2>&1)"
           if ! command -v python3 >/dev/null 2>&1; then
-            mkdir -p "$RUNNER_TEMP/bin"
-            printf '#!/bin/sh\nexec "%s" "$@"\n' "$(command -v "$py")" >"$RUNNER_TEMP/bin/python3"
-            chmod +x "$RUNNER_TEMP/bin/python3"
-            echo "$RUNNER_TEMP/bin" >>"$GITHUB_PATH"
+            printf '#!/bin/sh\nexec "%s" "$@"\n' "$(command -v "$py")" >"$bin/python3"
+            chmod +x "$bin/python3"
           fi
           "$py" -m pip install --quiet --disable-pip-version-check pyyaml
           echo "pyyaml: $("$py" -c 'import yaml; print(yaml.__version__)')"
+
+          # 无条件加进 PATH：just 一定要在，python3 补齐时也在这里。
+          echo "$bin" >>"$GITHUB_PATH"
+          echo "加到 PATH 的目录: $bin"
 
       - name: 跑流程脚本自测（只报不挡）
         shell: bash
@@ -124,6 +131,11 @@ jobs:
           per_script=600 # 单个自测的上限；Windows 起进程慢，实测 test-arch-check.sh 就要 286s，别按 macOS 的秒数量
           budget=3600    # 整轮预算：用完就停手并把剩下的标成「未跑」，免得 job 超时变红（第一步恒绿）
           run_start=$SECONDS
+          # 把工具链的实际状态打出来：自测的假红多半来自这里（缺 just / python3 名字不对），
+          # 清单要能自证「红是脚本的问题，不是环境没装好」。
+          echo "just: $(just --version 2>&1)"
+          echo "python3: $(python3 --version 2>&1)"
+          echo "jq: $(jq --version 2>&1)"
           logs="$RUNNER_TEMP/flow-windows-logs"
           mkdir -p "$logs"
           git config --global user.name flow-windows
