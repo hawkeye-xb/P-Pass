@@ -404,6 +404,13 @@ fn emit_device_changed(events: Option<&EventBus>) {
 #[derive(Clone, Default)]
 pub struct FlowTaskRegistry {
     entries: Arc<Mutex<HashMap<TaskKey, TaskEntry>>>,
+    /// #1078: in-flight fetch keyed by (control peer, content hash) — the
+    /// same phone offering two records with the same content coalesce into
+    /// one download, while two distinct devices keep their transfers
+    /// independent (suspending one must never touch the other). The value is
+    /// the exit signal of the fetch currently pulling that hash; a coalesced
+    /// waiter awaits it instead of starting a second fetch.
+    hashes: Arc<Mutex<HashMap<([u8; 32], [u8; 32]), HashEntry>>>,
     next_generation: Arc<AtomicU64>,
 }
 
@@ -432,6 +439,31 @@ struct TaskEntry {
     /// the task). Cancelling `token` only *asks* the task to stop;
     /// `interrupt*` hand this back so callers wait for the stop to happen.
     exited: CancellationToken,
+}
+
+/// #1078: an entry in the hash-keyed in-flight map. `exited` is the exit
+/// signal of the fetch pulling this hash; `generation` disambiguates a stale
+/// entry left by a finished fetch from a newer claim.
+struct HashEntry {
+    exited: CancellationToken,
+    generation: u64,
+}
+
+/// #1078: a claim on one (peer, hash) in-flight fetch. Dropping it releases
+/// the claim (generation-checked, so an older task's exit never removes a
+/// newer claim), letting the next offer become the fetch owner.
+struct HashFlight {
+    tasks: FlowTaskRegistry,
+    peer: [u8; 32],
+    hash: [u8; 32],
+    generation: u64,
+}
+
+impl Drop for HashFlight {
+    fn drop(&mut self) {
+        self.tasks
+            .release_hash(&self.peer, &self.hash, self.generation);
+    }
 }
 
 /// #1084: the exit signals of interrupted tasks. Awaiting it is the standard
@@ -511,6 +543,38 @@ impl FlowTaskRegistry {
             self.next_generation.fetch_add(1, Ordering::Relaxed),
             CancellationToken::new(),
         )
+    }
+
+    /// #1078: atomically claim (peer, hash) for a fetch, storing its exit
+    /// signal. `Ok(generation)` means this caller is the owner (spawn the
+    /// fetch and hold a [`HashFlight`] for the returned generation);
+    /// `Err(exited)` means a fetch for this peer's hash is already running —
+    /// await it instead of spawning a second download of the same content.
+    fn claim_hash(
+        &self,
+        peer: [u8; 32],
+        hash: [u8; 32],
+        exited: CancellationToken,
+    ) -> Result<u64, CancellationToken> {
+        let mut hashes = self.hashes.lock().expect("flow hash flight lock");
+        match hashes.get(&(peer, hash)) {
+            Some(entry) => Err(entry.exited.clone()),
+            None => {
+                let generation = self.next_generation.fetch_add(1, Ordering::Relaxed);
+                hashes.insert((peer, hash), HashEntry { exited, generation });
+                Ok(generation)
+            }
+        }
+    }
+
+    /// #1078: release a (peer, hash) claim made by [`Self::claim_hash`], but
+    /// only if this generation still owns it (a newer fetch may have
+    /// re-claimed it).
+    fn release_hash(&self, peer: &[u8; 32], hash: &[u8; 32], generation: u64) {
+        let mut hashes = self.hashes.lock().expect("flow hash flight lock");
+        if hashes.get(&(*peer, *hash)).is_some_and(|e| e.generation == generation) {
+            hashes.remove(&(*peer, *hash));
+        }
     }
 
     /// Called by the spawned task itself once it exits (completed, failed,
@@ -1041,7 +1105,26 @@ impl FlowDelivery {
         // NET-06: this is the async-202 trigger — offer's job ends here; the
         // actual transfer runs on its own task, tracked by `self.tasks` so
         // `suspend`/`cancel`/`status` can observe or interrupt it.
-        self.spawn_fetch_task(peer, stored.clone(), request.clone());
+        // #1078: 同 hash 不同 tuple 并发拉取时合并为一次下载——认领不到 hash
+        // 就等正在拉的那一路结束，再按 durable 走 complete_without_fetch（省
+        // 流量、两条记录各自拿到回执、只入库一次）；那一路失败（没有 durable
+        // 副本）就重新认领、自己 spawn。
+        loop {
+            match self.spawn_fetch_task(peer, stored.clone(), request.clone()) {
+                Ok(()) => break,
+                Err(other) => {
+                    other.cancelled().await;
+                    if self
+                        .ingestor
+                        .has_durable_copy(&hash)
+                        .await
+                        .map_err(|e| self.ingest_failure(&e))?
+                    {
+                        return self.complete_without_fetch(peer, &stored).await;
+                    }
+                }
+            }
+        }
         // NET-24: the genuinely-async case, and the only one that still
         // answers "202 — go wait". #1076: `task_running` is queried, not
         // asserted — a re-offer whose task was already running keeps that
@@ -1097,7 +1180,12 @@ impl FlowDelivery {
     /// perspective — completion is observed later via durable state
     /// (`status`), never via this task's
     /// return value directly.
-    fn spawn_fetch_task(&self, peer: NodeId, grant: FlowGrant, request: FlowFetchRequest) {
+    fn spawn_fetch_task(
+        &self,
+        peer: NodeId,
+        grant: FlowGrant,
+        request: FlowFetchRequest,
+    ) -> Result<(), CancellationToken> {
         // NET-15: `try_register` makes the idempotency check atomic — a
         // concurrent `offer`/`status` respawn can no longer both
         // pass the "not running" check and double-spawn for this tuple.
@@ -1105,9 +1193,20 @@ impl FlowDelivery {
         // keeps the running task: the provider is where the bytes come from,
         // not which item this is. A later attempt reads the stored provider.
         let Some((token, generation, exited)) = self.tasks.try_register(peer, &grant) else {
-            return;
+            return Ok(());
         };
         let key = TaskKey::of(peer, &grant);
+        // #1078: 同 hash 不同 tuple 并发拉取时合并为一次下载。认领不到 hash
+        // （别的 tuple 正在拉这份内容）就退回本次 tuple 注册，把正在拉的那
+        // 一路的退出信号交给调用方去等，不重复下载同一份内容。
+        let hash = array32(&grant.content_hash).expect("validated by checked_request");
+        let hash_generation = match self.tasks.claim_hash(peer.0, hash, exited.clone()) {
+            Ok(g) => g,
+            Err(other) => {
+                self.tasks.unregister(&key, generation);
+                return Err(other);
+            }
+        };
         let delivery = self.clone();
         // NET-26: taken only after `try_register` won (the idempotent early
         // return above holds nothing) and moved into the task, so every way
@@ -1123,6 +1222,12 @@ impl FlowDelivery {
                 key,
                 generation,
                 exited,
+            };
+            let _hash = HashFlight {
+                tasks: delivery.tasks.clone(),
+                peer: peer.0,
+                hash,
+                generation: hash_generation,
             };
             let _awake = awake;
             let outcome = tokio::select! {
@@ -1149,6 +1254,7 @@ impl FlowDelivery {
                 }
             }
         });
+        Ok(())
     }
 
     /// NET-14: best-effort push — `self.events` is `None` in tests/single-
@@ -1577,7 +1683,7 @@ impl FlowDelivery {
                 .touch_active_flow_grant(&grant, (self.now)())
                 .await
                 .map_err(storage_error)?;
-            self.spawn_fetch_task(peer, grant.clone(), resume_request(&grant));
+            let _ = self.spawn_fetch_task(peer, grant.clone(), resume_request(&grant));
         }
         self.reply_for_grant(peer, &grant).await
     }
