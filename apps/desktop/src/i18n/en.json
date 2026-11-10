@@ -7,7 +7,7 @@
   "ui.refresh_hint": "The status updates automatically after starting. If nothing changes, quit and reopen the app, then click \"Start background service\" again.",
   "ui.paired_count": "Paired devices: {n}",
   "ui.revoked_count": "({n} more removed)",
-  "ui.disconnected_count": "({n} disconnected)",
+  "ui.disconnected_count": " ({n} disconnected)",
   "ui.pending_banner_text": "“{name}” wants to join",
   "ui.pending_banner_text_known": "“{name}” wants to rejoin",
   "ui.pending_pairs": "{n} pairing request(s) awaiting confirmation",

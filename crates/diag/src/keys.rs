@@ -54,6 +54,8 @@ msg_keys! {
     UI_STARTING => "ui.starting",
     UI_REFRESH_HINT => "ui.refresh_hint",
     UI_PAIRED_COUNT => "ui.paired_count",
+    /// #1402 卡1：有已断开的设备时，计数后面补一句「另有 M 台已断开」。
+    UI_DISCONNECTED_COUNT => "ui.disconnected_count",
     UI_REVOKED_COUNT => "ui.revoked_count",
     UI_PENDING_PAIRS => "ui.pending_pairs",
     UI_ALLOW => "ui.allow",
@@ -68,6 +70,8 @@ msg_keys! {
     UI_GENERATE_QR => "ui.generate_qr",
     UI_QR_FALLBACK => "ui.qr_fallback",
     UI_NO_DEVICES => "ui.no_devices",
+    /// #1402 卡1：0 台在用但有已断开的，空状态说清是几台已断开。
+    UI_NO_DEVICES_DISCONNECTED => "ui.no_devices_disconnected",
     UI_REMOVE => "ui.remove",
     UI_SETTINGS => "ui.settings",
     UI_OPEN_LIBRARY => "ui.open_library",
@@ -499,6 +503,7 @@ mod tests {
             UI_STARTING,
             UI_REFRESH_HINT,
             UI_PAIRED_COUNT,
+            UI_DISCONNECTED_COUNT,
             UI_REVOKED_COUNT,
             UI_PENDING_PAIRS,
             UI_ALLOW,
@@ -508,6 +513,7 @@ mod tests {
             UI_GENERATE_QR,
             UI_QR_FALLBACK,
             UI_NO_DEVICES,
+            UI_NO_DEVICES_DISCONNECTED,
             UI_REMOVE,
             UI_SETTINGS,
             UI_OPEN_LIBRARY,
@@ -852,7 +858,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 365);
+        assert_eq!(ALL.len(), 367);
     }
 
     #[test]

@@ -1840,7 +1840,7 @@
                     {devicesError.text}<span class="mt-[2px] block text-[12px] opacity-80">{errCodeLine(devicesError)}</span>
                   </p>
                 {/if}
-                {#if devices.filter((d) => d.removal === "none").length === 0}
+                {#if pairedCount === 0}
                   <!-- 2026-08-17：等高后空状态垂直居中——不然矮内容顶在
                        卡片顶部，下面一截空白显得像没做完。 -->
                   <div class="flex flex-1 items-center justify-center">
