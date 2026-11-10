@@ -283,11 +283,12 @@ win_library_hashes() {
   [ -s "$dir/library-hashes.txt" ]
 }
 
-# 身份私钥：#1260 之前放照片库 .ppf/，之后移到平台数据目录 .ppf/。两处都认。
+# 身份私钥：服务模式在 %ProgramData%\P-Pass 根下；用户态布局在平台数据目录 .ppf/；
+# #1260 之前还放在照片库 .ppf/。三处都认。
 win_identity_key() {
   local lib key
   lib="$(win_library_dir 2>/dev/null)" || lib=""
-  for key in "${WIN_CONF_DIR:+$WIN_CONF_DIR/.ppf/identity.key}" "$WIN_DATA_DIR/.ppf/identity.key" "${lib:+$lib/.ppf/identity.key}"; do
+  for key in "${WIN_CONF_DIR:+$WIN_CONF_DIR/identity.key}" "$WIN_DATA_DIR/.ppf/identity.key" "${lib:+$lib/.ppf/identity.key}"; do
     [ -n "$key" ] && [ -f "$key" ] && { printf '%s' "$key"; return 0; }
   done
   return 1
