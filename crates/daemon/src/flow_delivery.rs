@@ -468,6 +468,14 @@ impl Drop for HashFlight {
     }
 }
 
+/// #1668: how a background delivery task ended — it pulled the bytes itself,
+/// or it coalesced onto another tuple's in-flight fetch of the same content
+/// and only had to write this tuple's durable receipt.
+enum FetchTaskOutcome {
+    Fetched(FlowCompletionReceipt),
+    Reused,
+}
+
 /// #1084: the exit signals of interrupted tasks. Awaiting it is the standard
 /// cancel-and-await: once it returns, the interrupted fetch tasks have ended
 /// and no longer pull bytes, so the caller may answer "stopped" truthfully
@@ -1110,26 +1118,12 @@ impl FlowDelivery {
         // NET-06: this is the async-202 trigger — offer's job ends here; the
         // actual transfer runs on its own task, tracked by `self.tasks` so
         // `suspend`/`cancel`/`status` can observe or interrupt it.
-        // #1078: 同 hash 不同 tuple 并发拉取时合并为一次下载——认领不到 hash
-        // 就等正在拉的那一路结束，再按 durable 走 complete_without_fetch（省
-        // 流量、两条记录各自拿到回执、只入库一次）；那一路失败（没有 durable
-        // 副本）就重新认领、自己 spawn。
-        loop {
-            match self.spawn_fetch_task(peer, stored.clone(), request.clone()) {
-                Ok(()) => break,
-                Err(other) => {
-                    other.cancelled().await;
-                    if self
-                        .ingestor
-                        .has_durable_copy(&hash)
-                        .await
-                        .map_err(|e| self.ingest_failure(&e))?
-                    {
-                        return self.complete_without_fetch(peer, &stored).await;
-                    }
-                }
-            }
-        }
+        // #1078: 同 hash 不同 tuple 并发拉取时合并为一次下载。
+        // #1668: 认领不到 hash（别的 tuple 正在拉这份内容）时，等待也发生在那个
+        // 后台任务里——它等那一路结束，再按 durable 走 complete_without_fetch
+        // （省流量、两条记录各自拿到回执、只入库一次）；那一路失败（没有 durable
+        // 副本）就自己认领。这里不 await 任何数据面，offer 立刻返回。
+        self.spawn_fetch_task(peer, stored.clone(), request.clone());
         // NET-24: the genuinely-async case, and the only one that still
         // answers "202 — go wait". #1076: `task_running` is queried, not
         // asserted — a re-offer whose task was already running keeps that
@@ -1185,12 +1179,13 @@ impl FlowDelivery {
     /// perspective — completion is observed later via durable state
     /// (`status`), never via this task's
     /// return value directly.
-    fn spawn_fetch_task(
-        &self,
-        peer: NodeId,
-        grant: FlowGrant,
-        request: FlowFetchRequest,
-    ) -> Result<(), CancellationToken> {
+    ///
+    /// #1668: when another tuple of this peer is already fetching the same
+    /// hash, this task does not start a second download — it waits for that
+    /// fetch *inside itself* and reuses its result. That wait used to live in
+    /// `offer`'s call stack, which made the second offer as slow as the whole
+    /// shared download (phones give up after 15s).
+    fn spawn_fetch_task(&self, peer: NodeId, grant: FlowGrant, request: FlowFetchRequest) {
         // NET-15: `try_register` makes the idempotency check atomic — a
         // concurrent `offer`/`status` respawn can no longer both
         // pass the "not running" check and double-spawn for this tuple.
@@ -1198,20 +1193,10 @@ impl FlowDelivery {
         // keeps the running task: the provider is where the bytes come from,
         // not which item this is. A later attempt reads the stored provider.
         let Some((token, generation, exited)) = self.tasks.try_register(peer, &grant) else {
-            return Ok(());
+            return;
         };
         let key = TaskKey::of(peer, &grant);
-        // #1078: 同 hash 不同 tuple 并发拉取时合并为一次下载。认领不到 hash
-        // （别的 tuple 正在拉这份内容）就退回本次 tuple 注册，把正在拉的那
-        // 一路的退出信号交给调用方去等，不重复下载同一份内容。
         let hash = array32(&grant.content_hash).expect("validated by checked_request");
-        let hash_generation = match self.tasks.claim_hash(peer.0, hash, exited.clone()) {
-            Ok(g) => g,
-            Err(other) => {
-                self.tasks.unregister(&key, generation);
-                return Err(other);
-            }
-        };
         let delivery = self.clone();
         // NET-26: taken only after `try_register` won (the idempotent early
         // return above holds nothing) and moved into the task, so every way
@@ -1222,25 +1207,20 @@ impl FlowDelivery {
             // #1084: dropped last, on every way out (including panic and
             // runtime shutdown): unregisters, then fires `exited` — what
             // `Interrupted::exited` waits for.
+            let exit_signal = exited.clone();
             let _exit = TaskExit {
                 tasks: delivery.tasks.clone(),
                 key,
                 generation,
                 exited,
             };
-            let _hash = HashFlight {
-                tasks: delivery.tasks.clone(),
-                peer: peer.0,
-                hash,
-                generation: hash_generation,
-            };
             let _awake = awake;
             let outcome = tokio::select! {
-                result = delivery.run_fetch_body(peer, &grant, &request) => Some(result),
+                result = delivery.fetch_or_join(peer, &grant, &request, hash, exit_signal) => Some(result),
                 _ = token.cancelled() => None,
             };
             match outcome {
-                Some(Ok(receipt)) => {
+                Some(Ok(FetchTaskOutcome::Fetched(receipt))) => {
                     // NET-14: push the completion fact instead of waiting for
                     // the phone's next status() poll to discover it — the
                     // durable receipt was already written inside
@@ -1248,6 +1228,9 @@ impl FlowDelivery {
                     // the phone" notification, never the source of truth.
                     delivery.emit_flow_delivered(peer, &grant, &receipt);
                 }
+                // The coalesced path wrote and pushed its own receipt
+                // (`complete_without_fetch`), same as a dedup hit.
+                Some(Ok(FetchTaskOutcome::Reused)) => {}
                 Some(Err(error)) => {
                     tracing::warn!("flow delivery background task for {peer:?} failed: {error}");
                     delivery.emit_flow_failed(peer, &grant, &error);
@@ -1259,7 +1242,56 @@ impl FlowDelivery {
                 }
             }
         });
-        Ok(())
+    }
+
+    /// #1668: the background task body — fetch this tuple's content, or, when
+    /// another tuple of the same peer is already pulling that hash, wait for
+    /// it here (never in `offer`'s call stack) and reuse its result. Both
+    /// branches end with a durable receipt for THIS tuple, so
+    /// `status`/`suspend`/`cancel`/`task_running` see one task per tuple
+    /// exactly as before.
+    async fn fetch_or_join(
+        &self,
+        peer: NodeId,
+        grant: &FlowGrant,
+        request: &FlowFetchRequest,
+        hash: [u8; 32],
+        exited: CancellationToken,
+    ) -> Result<FetchTaskOutcome, DeliveryError> {
+        // #1078: 同 hash 不同 tuple 并发拉取时合并为一次下载。认领不到 hash
+        // （别的 tuple 正在拉这份内容）就等那一路的退出信号，不重复下载同一
+        // 份内容；它失败（没有 durable 副本）就重新认领、自己拉。
+        loop {
+            match self.tasks.claim_hash(peer.0, hash, exited.clone()) {
+                Ok(generation) => {
+                    let _hash = HashFlight {
+                        tasks: self.tasks.clone(),
+                        peer: peer.0,
+                        hash,
+                        generation,
+                    };
+                    return self
+                        .run_fetch_body(peer, grant, request)
+                        .await
+                        .map(FetchTaskOutcome::Fetched);
+                }
+                Err(other) => {
+                    tracing::debug!(
+                        "flow delivery for {peer:?} joins an in-flight fetch of the same content"
+                    );
+                    other.cancelled().await;
+                    if self
+                        .ingestor
+                        .has_durable_copy(&hash)
+                        .await
+                        .map_err(|e| self.ingest_failure(&e))?
+                    {
+                        self.complete_without_fetch(peer, grant).await?;
+                        return Ok(FetchTaskOutcome::Reused);
+                    }
+                }
+            }
+        }
     }
 
     /// NET-14: best-effort push — `self.events` is `None` in tests/single-
@@ -1688,7 +1720,7 @@ impl FlowDelivery {
                 .touch_active_flow_grant(&grant, (self.now)())
                 .await
                 .map_err(storage_error)?;
-            let _ = self.spawn_fetch_task(peer, grant.clone(), resume_request(&grant));
+            self.spawn_fetch_task(peer, grant.clone(), resume_request(&grant));
         }
         self.reply_for_grant(peer, &grant).await
     }
