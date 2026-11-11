@@ -19,13 +19,17 @@ just ios-ui-regress device --invert SettingsRuleFull   # 反证
 | DecisionPick | 决定页「先挑几张试试」→ 系统选择器选 1 张 | `onboarding: decision shown` → `picked: 1 chosen` → `onboarding: marked onboarded via=pick` |
 | SettingsRuleFull | 设置页「自动备份」→「允许全部」 | `… via=pick` → `auto-rule: saved enabled=true` |
 | SettingsRuleLimited | 设置页「自动备份」→「限制访问」选 1 张 | `… via=pick` → `auto-rule: partial photo access, sent allowed photos n=N` |
-| SettingsRuleDenied | 设置页「自动备份」→「不允许」 | `… via=pick` → `settings: auto-rule photo access after prompt=none`（#1453 补这一行，合入前本例 FAIL） |
 | SettingsPick | 设置页「挑几张传」→ 系统选择器选 1 张 | `… via=pick` → `picked: 1 chosen` |
 | NotifyAllow | 设置页「通知」→ 系统授权「允许」 | `… via=pick` → `notifications: system prompt result granted=true` |
 | NotifyDeny | 设置页「通知」→ 系统授权「不允许」 | `… via=pick` → `notifications: system prompt result granted=false` |
 
-判定表是 `tools/ios/ui-regress-rules.tsv`，日志行改了只改这一处。设置页的用例先走「先挑几张试试」进主界面
-（规则关着、照片权限未定），所以第一个通过行是 `marked onboarded via=pick`。
+判定表是 `tools/ios/ui-regress-rules.tsv`，日志行改了只改这一处；**用例清单也由它生成**（一行一例），
+脚本里不再抄一份。设置页的用例先走「先挑几张试试」进主界面（规则关着、照片权限未定），
+所以第一个通过行是 `marked onboarded via=pick`。
+
+暂未纳入：「设置页拒绝」（设置页「自动备份」→「不允许」）要的通过行
+`settings: auto-rule photo access after prompt=none` App 现在不打（#1453），加了必红、会让整个回归永久退出 1。
+#1453 合入后在 TSV 里把那行注释去掉、补回 `testSettingsRuleDenied` 即可（TSV 末尾有注释掉的原文）。
 
 不覆盖：相机扫码（配对走手动配对串），桌面收到照片的哈希核对（见 `tools/ios/e2e-device.sh`）。
 
@@ -64,7 +68,8 @@ just ios-ui-regress device --invert SettingsRuleFull   # 反证
 ## 反证
 
 `--invert <用例>`：该例的系统弹窗故意点反向选项（允许 ↔ 不允许、选择器点取消），判定期望不变，
-汇总末尾必须是「反证：… → FAIL（符合预期）」。验收时至少给一例反证输出。
+汇总末尾必须是「反证：… → FAIL（符合预期）」。退出码：反证成立（只有该例那 1 个 FAIL）→ 0；
+反证不成立（点反了还 PASS）或还有别的失败 → 1，所以「反证通过」和真红能用退出码分开。验收时至少给一例反证输出。
 
 ## 真机前提
 

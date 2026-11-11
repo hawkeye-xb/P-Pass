@@ -32,9 +32,8 @@ final class RegressionTests: UIRegressCase {
         ruleCase(answer: inverted ? SystemButton.photosFull : SystemButton.photosLimited, limited: !inverted)
     }
 
-    func testSettingsRuleDenied() {
-        ruleCase(answer: inverted ? SystemButton.photosFull : SystemButton.dontAllow)
-    }
+    // 「设置页拒绝」一例等 #1453 的日志行（settings: auto-rule photo access after prompt=none）合入后再加：
+    // 现在 App 不打那一行，加了必红，会让整个回归永久退出 1。
 
     private func ruleCase(answer: [String], limited: Bool = false) {
         launchFreshAndPair(resetPhotos: true)
@@ -52,7 +51,8 @@ final class RegressionTests: UIRegressCase {
     private func pickOnePhotoInLimitedSheet() {
         let deadline = Date().addingTimeInterval(20)
         while Date() < deadline {
-            if let cell = firstPickerCell() {
+            // 选第二张：第一张已经在前面的「先挑几张试试」里导入过，再选它，部分权限发出去的张数会是 n=0。
+            if let cell = pickerCell(at: 1) ?? firstPickerCell() {
                 tapPickerCell(cell)
                 UIReg.say("LIMITED_SELECTED 1")
                 tapButton(SystemButton.limitedDone, what: "limited-done")

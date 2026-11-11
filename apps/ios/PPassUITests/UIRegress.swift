@@ -238,6 +238,15 @@ class UIRegressCase: XCTestCase {
         tapButton(SystemButton.pickerAdd, what: "picker-add")
     }
 
+    /// 第 index 个可选格子（0 = 第一张）。限制访问那一页要选一张「还没被挑过」的，避免重复导入后 n=0。
+    func pickerCell(at index: Int) -> XCUIElement? {
+        let grid = app.images.matching(identifier: "PXGGridLayout-Info").element(boundBy: index)
+        if grid.exists { return grid }
+        let cell = app.collectionViews.cells.element(boundBy: index)
+        if cell.exists { return cell }
+        return nil
+    }
+
     func firstPickerCell() -> XCUIElement? {
         // PHPicker 的照片格子：iOS 17–26 是 identifier 为 PXGGridLayout-Info 的 Image（带「照片, 日期」的 label）。
         // 不能按「scrollView 里的第一个 image」找——选择器顶部还有一张 38×38 的说明图，会先命中它（点它不选中）。

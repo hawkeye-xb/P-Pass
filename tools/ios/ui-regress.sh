@@ -77,7 +77,9 @@ fi
 
 TARGET="${1:-}"
 case "$TARGET" in sim | device) shift ;; *) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;; esac
-CASES="DecisionScopeFull DecisionPick SettingsRuleFull SettingsRuleLimited SettingsRuleDenied SettingsPick NotifyAllow NotifyDeny"
+# 用例清单只从判定表来（一行一例）：新增/停用一例只改 TSV，不在这里再抄一遍。
+CASES="$(sed -n 's/^\([A-Za-z][A-Za-z0-9]*\)	.*/\1/p' "$RULES_DEFAULT" | tr '\n' ' ' | sed 's/ *$//')"
+[ -n "$CASES" ] || { echo "error: 判定表里没有用例：${RULES_DEFAULT}" >&2; exit 2; }
 ONLY=""
 INVERT=""
 SKIP_BUILD=0
@@ -183,7 +185,8 @@ if [ "$BUILD_ONLY" = 1 ]; then
 fi
 DAEMON="${CARGO_TARGET_DIR:-$ROOT/target}/release/daemon"
 # shellcheck disable=SC2012 # 文件名由 xcodebuild 生成，没有特殊字符；取最新的一份
-XCTESTRUN=$(ls -t "$DERIVED"/Build/Products/PPassUI_*"$([ "$TARGET" = sim ] && echo iphonesimulator || echo iphoneos)"*.xctestrun 2>/dev/null | head -1)
+# 末尾的 || true：pipefail 下 ls 找不到文件会让赋值直接失败，set -e 会让脚本静默退出（评审指出）。
+XCTESTRUN=$(ls -t "$DERIVED"/Build/Products/PPassUI_*"$([ "$TARGET" = sim ] && echo iphonesimulator || echo iphoneos)"*.xctestrun 2>/dev/null | head -1 || true)
 # 只有模拟器吃 .xctestrun；真机每例走 xcodebuild test，会自己按需构建。
 if [ "$TARGET" = sim ]; then
   [ -n "$XCTESTRUN" ] || { echo "error: 没有 .xctestrun（先不带 --skip-build 跑一次）" >&2; exit 1; }
@@ -312,12 +315,18 @@ done
 
 N=$(echo "$CASES" | wc -w | tr -d ' ')
 echo "----" | tee -a "$SUMMARY"
+INVERT_BAD=0
+EXPECTED_FAILS=0
 if [ -n "$INVERT" ]; then
   if grep -q "^${INVERT} .* FAIL " "$SUMMARY"; then
     echo "反证：$INVERT 故意点反向选项 → FAIL（符合预期，判据能区分）" | tee -a "$SUMMARY"
+    EXPECTED_FAILS=1
   else
     echo "反证不成立：$INVERT 点了反向选项仍然 PASS（判据区分不了）" | tee -a "$SUMMARY"
+    INVERT_BAD=1
   fi
 fi
 echo "合计 $N 例，FAIL $FAILS 例。证据：$OUT" | tee -a "$SUMMARY"
-[ "$FAILS" = 0 ]
+# 反证模式下，反证用例本身那 1 个 FAIL 是预期结果；「反证不成立」或还有别的失败都算失败。
+# 反证成功要能以退出码 0 区分出来，否则证明成立与真红分不开。
+[ "$FAILS" = "$EXPECTED_FAILS" ] && [ "$INVERT_BAD" = 0 ]
