@@ -6,6 +6,9 @@
 # 发生过的一次越界就来自另一台没装 hook 的机器；服务端是唯一覆盖所有
 # 机器的位置。
 #
+# 白名单只约束本仓库的机器：fork 来的 PR 是外部贡献者，脚本会跳过身份
+# 检查（判据见 tools/check-commit-identity.sh 头注释）。
+#
 # 成本：无编译、无缓存，只有 bash + git，秒级。因此 paths 刻意留空
 # （全量触发），与 ci-docs.yml 的取舍相同——没有审批门也没有副作用。
 name: CI Identity
@@ -31,7 +34,7 @@ jobs:
 
       # 门禁自己的反证：证明判据在该红的时候真的红。
       # 与门禁同生共死——反证挂了就不该相信门禁的绿。
-      - name: 反证（六个变异必须全部符合期望）
+      - name: 反证（八个变异必须全部符合期望）
         run: bash tools/test-commit-identity-gate.sh
 
       - name: 检查本次改动引入的提交身份
@@ -39,6 +42,8 @@ jobs:
           EVENT: ${{ github.event_name }}
           BEFORE: ${{ github.event.before }}
           SHA: ${{ github.sha }}
+          # push 事件下为空；PR 事件下是 fork 的仓库全名（同仓分支时与本仓相同）。
+          PR_HEAD_REPO_FULL_NAME: ${{ github.event.pull_request.head.repo.full_name }}
         run: |
           set -euo pipefail
           ZERO=0000000000000000000000000000000000000000

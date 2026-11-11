@@ -11,6 +11,11 @@
 # 机器。真实发生过的一次越界就来自另一台没装 hook 的机器，本机配置再对
 # 也拦不到。服务端门禁是唯一覆盖所有机器的位置。
 #
+# 白名单只约束本仓库的机器：fork 来的 PR 是外部贡献者，跳过检查。判据是
+# PR 的 head 仓库全名与本仓库是否相同（工作流传入 PR_HEAD_REPO_FULL_NAME
+# 与 GITHUB_REPOSITORY）；head 仓库名为空（如 fork 已删除）时按本仓库处理，
+# 保持 fail-closed。
+#
 # 用法：
 #   tools/check-commit-identity.sh                 # 默认查 origin/main..HEAD
 #   tools/check-commit-identity.sh <range>         # 查指定区间
@@ -19,6 +24,13 @@ set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 ALLOWLIST="${ALLOWLIST:-$ROOT/.github/allowed-identities.txt}"
+
+# fork 来的 PR 不做身份检查：白名单只约束本仓库的机器。
+if [ -n "${PR_HEAD_REPO_FULL_NAME:-}" ] && [ -n "${GITHUB_REPOSITORY:-}" ] \
+   && [ "$PR_HEAD_REPO_FULL_NAME" != "$GITHUB_REPOSITORY" ]; then
+    echo "ok: 外部仓库（${PR_HEAD_REPO_FULL_NAME}）的 PR，跳过身份检查"
+    exit 0
+fi
 
 if [ ! -f "$ALLOWLIST" ]; then
     echo "✗ 白名单文件不存在: $ALLOWLIST" >&2
