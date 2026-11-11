@@ -13,7 +13,8 @@
 # 输出：apps/ios/build/ui-regress/<时间>/，汇总 summary.txt；有 FAIL 退出 1。
 #
 # 做法：起一台隔离配对桩（tools/ios/sandbox-desk.sh，daemon --ephemeral，不碰本机 P-Pass）；
-# build-for-testing 一次，每例 test-without-building -only-testing 跑一次，每次给新配对串（TEST_RUNNER_UIREG_PAIR_LINK）。
+# build-for-testing 一次；模拟器每例 test-without-building、真机每例 xcodebuild test（见 run_case 注释），
+# 每次给新配对串（TEST_RUNNER_UIREG_PAIR_LINK）。
 # App 用 DEBUG 门控键（PPASS_E2E_RESET / PPASS_ROUTE=manual / PPASS_PAIR_CODE）从欢迎页手动配对；测试把界面上的
 # 验证码打成 `UIREG PAIR_CODE=<6 位>`，本脚本据此允许唯一的待确认请求（扮演桌面主人）。
 # 通知授权 iOS 只问一次、没有重置 API：开跑前与 NotifyDeny 之前各卸载重装一次。
@@ -124,30 +125,28 @@ if [ "$TARGET" = sim ]; then
   BUILD_DEST="platform=iOS Simulator,id=$UDID"
   SIGN=()
 else
-  BUILD_DEST="generic/platform=iOS"
   SIGN=(-allowProvisioningUpdates)
-  # --build-only 在锁外编：不碰设备、不要求持锁。
-  if [ "$BUILD_ONLY" = 0 ]; then
-    if [ -z "$DEV" ]; then
-      # 本机 e3.env（tools/e3/lib/common.sh 同一个文件）里的 E3_IOS_UDID。
-      DEV="$(sed -n 's/^E3_IOS_UDID=//p' "${E3_ENV:-$HOME/.config/ppass/e3.env}" 2>/dev/null | tail -1 | tr -d '"'"'"'"' || true)"
-    fi
-    if [ -z "$DEV" ]; then
-      xcrun devicectl list devices --json-output "$OUT/devices.json" >/dev/null 2>&1 || true
-      DEV=$(jq -r '[.result.devices[]? | select(.hardwareProperties.platform == "iOS" and .connectionProperties.tunnelState != "unavailable")] | if length == 1 then .[0].identifier else empty end' "$OUT/devices.json" 2>/dev/null || true)
-    fi
-    [ -n "$DEV" ] || { echo "error: 找不到唯一一台在线 iPhone；用 --device 或 PPASS_DEVICE 指定" >&2; exit 1; }
-    if [ -z "${E3_LOCKED_IOS:-}" ]; then
-      echo "error: 真机要先持设备锁：tools/e3/lock ios $0 device …（just ios-ui-regress device 已带）" >&2
-      exit 1
-    fi
-    # xcodebuild 要硬件 UDID；devicectl 的标识是 CoreDevice UUID，两者都换算一次。
-    xcrun devicectl list devices --json-output "$OUT/devices.json" >/dev/null 2>&1
-    HW_UDID=$(jq -r --arg d "$DEV" '.result.devices[] | select(.identifier == $d or .hardwareProperties.udid == $d or .deviceProperties.name == $d) | .hardwareProperties.udid' "$OUT/devices.json" | head -1)
-    DEV=$(jq -r --arg d "$DEV" '.result.devices[] | select(.identifier == $d or .hardwareProperties.udid == $d or .deviceProperties.name == $d) | .identifier' "$OUT/devices.json" | head -1)
-    [ -n "$HW_UDID" ] || { echo "error: devicectl 里找不到设备 $DEV" >&2; exit 1; }
-    DEST="id=$HW_UDID"
+  if [ -z "$DEV" ]; then
+    # 本机 e3.env（tools/e3/lib/common.sh 同一个文件）里的 E3_IOS_UDID。
+    DEV="$(sed -n 's/^E3_IOS_UDID=//p' "${E3_ENV:-$HOME/.config/ppass/e3.env}" 2>/dev/null | tail -1 | tr -d '"'"'"'"' || true)"
   fi
+  if [ -z "$DEV" ]; then
+    xcrun devicectl list devices --json-output "$OUT/devices.json" >/dev/null 2>&1 || true
+    DEV=$(jq -r '[.result.devices[]? | select(.hardwareProperties.platform == "iOS" and .connectionProperties.tunnelState != "unavailable")] | if length == 1 then .[0].identifier else empty end' "$OUT/devices.json" 2>/dev/null || true)
+  fi
+  [ -n "$DEV" ] || { echo "error: 找不到唯一一台在线 iPhone；用 --device 或 PPASS_DEVICE 指定" >&2; exit 1; }
+  # --build-only 在锁外编：不要求持锁（构建按设备 destination，产出的包才认得出这台手机）。
+  if [ "$BUILD_ONLY" = 0 ] && [ -z "${E3_LOCKED_IOS:-}" ]; then
+    echo "error: 真机要先持设备锁：tools/e3/lock ios $0 device …（just ios-ui-regress device 已带）" >&2
+    exit 1
+  fi
+  # xcodebuild 要硬件 UDID；devicectl 的标识是 CoreDevice UUID，两者都换算一次。
+  xcrun devicectl list devices --json-output "$OUT/devices.json" >/dev/null 2>&1
+  HW_UDID=$(jq -r --arg d "$DEV" '.result.devices[] | select(.identifier == $d or .hardwareProperties.udid == $d or .deviceProperties.name == $d) | .hardwareProperties.udid' "$OUT/devices.json" | head -1)
+  DEV=$(jq -r --arg d "$DEV" '.result.devices[] | select(.identifier == $d or .hardwareProperties.udid == $d or .deviceProperties.name == $d) | .identifier' "$OUT/devices.json" | head -1)
+  [ -n "$HW_UDID" ] || { echo "error: devicectl 里找不到设备 $DEV" >&2; exit 1; }
+  DEST="id=$HW_UDID"
+  BUILD_DEST="id=$HW_UDID"
 fi
 
 DESK="$OUT/desk"
@@ -185,7 +184,10 @@ fi
 DAEMON="${CARGO_TARGET_DIR:-$ROOT/target}/release/daemon"
 # shellcheck disable=SC2012 # 文件名由 xcodebuild 生成，没有特殊字符；取最新的一份
 XCTESTRUN=$(ls -t "$DERIVED"/Build/Products/PPassUI_*"$([ "$TARGET" = sim ] && echo iphonesimulator || echo iphoneos)"*.xctestrun 2>/dev/null | head -1)
-[ -n "$XCTESTRUN" ] || { echo "error: 没有 .xctestrun（先不带 --skip-build 跑一次）" >&2; exit 1; }
+# 只有模拟器吃 .xctestrun；真机每例走 xcodebuild test，会自己按需构建。
+if [ "$TARGET" = sim ]; then
+  [ -n "$XCTESTRUN" ] || { echo "error: 没有 .xctestrun（先不带 --skip-build 跑一次）" >&2; exit 1; }
+fi
 APP_PATH="$DERIVED/Build/Products/Debug-$([ "$TARGET" = sim ] && echo iphonesimulator || echo iphoneos)/PPass.app"
 
 # ---- 设备操作 ----
@@ -219,14 +221,14 @@ reinstall() {
     xcrun devicectl device install app --device "$DEV" "$APP_PATH" >"$OUT/install.log" 2>&1 || { tail -5 "$OUT/install.log"; exit 1; }
   fi
 }
-pull_log() { # $1 目标文件
+pull_log() { # $1 目标文件；拉不到不算脚本错误（判定会报 FAIL「拉不回 App 日志」）
   rm -f "$1"
   if [ "$TARGET" = sim ]; then
     local c
-    c=$(xcrun simctl get_app_container "$UDID" "$BUNDLE_ID" data 2>/dev/null) && cp "$c/Library/Logs/ppass.log" "$1" 2>/dev/null
+    c=$(xcrun simctl get_app_container "$UDID" "$BUNDLE_ID" data 2>/dev/null) && cp "$c/Library/Logs/ppass.log" "$1" 2>/dev/null || true
   else
     xcrun devicectl device copy from --device "$DEV" --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
-      --source Library/Logs/ppass.log --destination "$1" >/dev/null 2>&1
+      --source Library/Logs/ppass.log --destination "$1" >/dev/null 2>&1 || true
   fi
   return 0
 }
@@ -270,10 +272,21 @@ run_case() { # $1 用例
   ALLOW_PID=$!
   echo "==> [$c]$([ "$c" = "$INVERT" ] && echo "（反证：故意点反向选项）")"
   rc=0
-  TEST_RUNNER_UIREG_PAIR_LINK="$PAIR_QR" TEST_RUNNER_UIREG_INVERT="$INVERT" \
-    TEST_RUNNER_UIREG_SETTINGS_TAB="$SETTINGS_TAB" TEST_RUNNER_UIREG_NOTIFY_LABEL="$NOTIFY_LABEL" \
-    xcodebuild test-without-building -xctestrun "$XCTESTRUN" -destination "$DEST" \
-    -only-testing "PPassUITests/RegressionTests/test$c" -resultBundlePath "$OUT/$c.xcresult" >"$xlog" 2>&1 || rc=$?
+  # 真机用 test（不是 test-without-building）：本机实测 iPhone test（iOS 27.3）+ Xcode 26.6 上，
+  # test-without-building 启动被测 App 必报「process identifier ... could not be determined」，
+  # 同一份 xctestrun 换 test 就能起来（2026-11-11）。构建已由 build-for-testing 预热，这里只做增量检查。
+  if [ "$TARGET" = sim ]; then
+    TEST_RUNNER_UIREG_PAIR_LINK="$PAIR_QR" TEST_RUNNER_UIREG_INVERT="$INVERT" \
+      TEST_RUNNER_UIREG_SETTINGS_TAB="$SETTINGS_TAB" TEST_RUNNER_UIREG_NOTIFY_LABEL="$NOTIFY_LABEL" \
+      xcodebuild test-without-building -xctestrun "$XCTESTRUN" -destination "$DEST" \
+      -only-testing "PPassUITests/RegressionTests/test$c" -resultBundlePath "$OUT/$c.xcresult" >"$xlog" 2>&1 || rc=$?
+  else
+    TEST_RUNNER_UIREG_PAIR_LINK="$PAIR_QR" TEST_RUNNER_UIREG_INVERT="$INVERT" \
+      TEST_RUNNER_UIREG_SETTINGS_TAB="$SETTINGS_TAB" TEST_RUNNER_UIREG_NOTIFY_LABEL="$NOTIFY_LABEL" \
+      xcodebuild test -project "$IOS/PPass.xcodeproj" -scheme PPassUI -configuration Debug \
+      -destination "$DEST" -derivedDataPath "$DERIVED" ${SIGN[@]+"${SIGN[@]}"} \
+      -only-testing "PPassUITests/RegressionTests/test$c" -resultBundlePath "$OUT/$c.xcresult" >"$xlog" 2>&1 || rc=$?
+  fi
   kill "$ALLOW_PID" 2>/dev/null || true
   wait "$ALLOW_PID" 2>/dev/null || true
   ALLOW_PID=

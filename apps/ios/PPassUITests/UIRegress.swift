@@ -32,6 +32,9 @@ enum SystemButton {
     static let photosLimited = ["Limit Access", "Select Photos", "限制访问", "选择照片"]
     static let dontAllow = ["Don't Allow", "Don’t Allow", "不允许"]
     static let allow = ["Allow", "允许", "好"]
+    /// 重装后首次联网时的「允许使用无线数据？」（选项是两种 WLAN 口径，不是「允许」）：选只走局域网的那种。
+    static let cellularData = ["仅限无线局域网", "无线局域网与蜂窝网络", "WLAN", "WLAN Only", "Wi-Fi Only",
+                               "WLAN & Cellular Data", "Wi-Fi & Cellular Data", "WLAN and Cellular Data"]
     /// 「限制访问」之后系统选照片页的确认按钮。
     static let limitedDone = ["Done", "Continue", "完成", "继续"]
     /// PHPicker 的确认按钮（selectionLimit > 1 时是「添加」）。
@@ -52,6 +55,8 @@ enum SystemButton {
 class UIRegressCase: XCTestCase {
     let app = XCUIApplication()
     let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+    /// 没匹配上的系统弹窗每个会话只记一次（按钮表要按真机实际标签补）。
+    private static var loggedAlertLabels = Set<String>()
 
     override func setUp() {
         super.setUp()
@@ -96,9 +101,10 @@ class UIRegressCase: XCTestCase {
         let code = app.staticTexts["pairCodeValue"]
         let decision = app.buttons["decisionChooseScope"]
         var reported = ""
-        let deadline = Date().addingTimeInterval(120)
+        var retried = false
+        let deadline = Date().addingTimeInterval(150)
         while Date() < deadline {
-            if let tapped = tapAlertButton(SystemButton.allow, roots: [springboard]) { UIReg.say("SYSTEM_ALERT tapped=\(tapped) (pairing)") }
+            if let tapped = tapAlertButton(SystemButton.allow + SystemButton.cellularData, roots: [springboard, app]) { UIReg.say("SYSTEM_ALERT tapped=\(tapped) (pairing)") }
             if code.exists {
                 let value = code.label.filter(\.isNumber)
                 if value.count == 6, value != reported {
@@ -107,10 +113,61 @@ class UIRegressCase: XCTestCase {
                 }
             }
             if decision.exists { UIReg.say("DECISION_SHOWN"); return }
+            // 刚装好的第一次启动会弹「允许使用无线数据 / 本地网络 / 相机」，弹窗答完之前连接必失败。
+            // 失败页出现就等弹窗答完再配一次（手动配对页会自动提交同一条配对串）。
+            if !retried, app.buttons["重新扫码"].exists || app.buttons["Scan again"].exists {
+                retried = true
+                UIReg.say("PAIR_RETRY")
+                retryPairing()
+            }
             usleep(300_000)
         }
         dump("pairing")
-        XCTFail("120 秒内没进决定页（验证码：\(reported.isEmpty ? "没出现" : reported)）")
+        XCTFail("150 秒内没进决定页（验证码：\(reported.isEmpty ? "没出现" : reported)）")
+    }
+
+    /// 把挡在界面上的系统弹窗（无线数据 / 本地网络 / 相机）依次答「允许」；连续 [idle] 轮没有新弹窗就停。
+    @discardableResult
+    func clearSystemAlerts(_ what: String, maxSeconds: TimeInterval = 15) -> Int {
+        var n = 0
+        var idle = 0
+        let end = Date().addingTimeInterval(maxSeconds)
+        while Date() < end, idle < 6 {
+            if let tapped = tapAlertButton(SystemButton.allow + SystemButton.cellularData, roots: [springboard, app]) {
+                n += 1
+                idle = 0
+                UIReg.say("SYSTEM_ALERT tapped=\(tapped) (\(what))")
+            } else {
+                idle += 1
+            }
+            usleep(300_000)
+        }
+        return n
+    }
+
+    /// 失败页「重新扫码」→ 扫码页「手动输入」→ 手动页按启动环境里那条配对串自动提交。
+    /// 弹窗会吞掉点击（弹窗还挂着时点按钮等于点弹窗），所以每次点之前先把弹窗清干净、确认按钮可点。
+    private func retryPairing() {
+        let retry = app.buttons["重新扫码"].exists ? app.buttons["重新扫码"] : app.buttons["Scan again"]
+        clearSystemAlerts("pairing-retry")
+        for attempt in 1...3 {
+            guard retry.waitForExistence(timeout: 5) else {
+                dump("pair-retry-failure-page")
+                XCTFail("重试配对：找不到失败页的「重新扫码」")
+                return
+            }
+            clearSystemAlerts("pairing-retry-\(attempt)", maxSeconds: 4)
+            if retry.isHittable { retry.tap() } else { retry.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+            let link = app.buttons["manualLink"]
+            if link.waitForExistence(timeout: 10) {
+                clearSystemAlerts("camera", maxSeconds: 4)
+                if link.isHittable { link.tap() } else { link.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+                UIReg.say("PAIR_RETRY_MANUAL")
+                return
+            }
+        }
+        dump("pair-retry-scan")
+        XCTFail("重试配对：点了「重新扫码」仍没进扫码页")
     }
 
     // MARK: 系统弹窗
@@ -122,14 +179,24 @@ class UIRegressCase: XCTestCase {
             let alerts = root.alerts
             guard alerts.count > 0 else { continue }
             for i in 0..<alerts.count {
-                let buttons = alerts.element(boundBy: i).buttons
-                for j in 0..<buttons.count {
+                let alert = alerts.element(boundBy: i)
+                let buttons = alert.buttons
+                let count = buttons.count
+                var labels: [String] = []
+                for j in 0..<count {
                     let b = buttons.element(boundBy: j)
-                    if b.exists, SystemButton.matches(b.label, choices) {
-                        let label = b.label
-                        b.tap()
-                        return label
+                    if b.exists {
+                        labels.append(b.label)
+                        if SystemButton.matches(b.label, choices) {
+                            let label = b.label
+                            b.tap()
+                            return label
+                        }
                     }
+                }
+                if !Self.loggedAlertLabels.contains(alert.label) {
+                    Self.loggedAlertLabels.insert(alert.label)
+                    UIReg.say("ALERT_UNMATCHED label=\(alert.label) buttons=\(labels)")
                 }
             }
         }

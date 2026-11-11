@@ -36,6 +36,9 @@ just ios-ui-regress device --invert SettingsRuleFull   # 反证
   `PPASS_E2E_RESET=1`（清存储根与身份）、`PPASS_ROUTE=manual`、`PPASS_PAIR_CODE=<配对串>`（手动配对页自动提交）。
   测试读界面上的验证码打成 `UIREG PAIR_CODE=<6 位>`，脚本从 xcodebuild 输出里读到后对桩 `pairing.confirm`（扮演桌面主人）。
   不用 `PPASS_E2E_DIR`：它会启动 E2EDriver，整条流程又绕过界面。
+- **重装后的第一次配对**：iOS 会在 App 首次联网时弹「允许“P-Pass”使用无线数据」（真机），弹窗答完之前第一条配对必失败。
+  测试看到失败页「重新扫码」会先把弹窗点掉，再走「重新扫码 → 手动输入」，手动页按启动环境里那条配对串自动重交一次；
+  同一条配对串在连接失败时还没被用掉，重交有效。
 - **系统弹窗**：照片权限、通知授权、本地网络都是 springboard 进程的弹窗，测试用
   `XCUIApplication(bundleIdentifier: "com.apple.springboard")` 按按钮文字点（中英都认，见 `UIRegress.swift` 的 `SystemButton`）。
   点不到就把弹窗现状打进日志并让测试失败，不猜坐标、不点别的。
@@ -68,6 +71,9 @@ just ios-ui-regress device --invert SettingsRuleFull   # 反证
 - 手机解锁、亮屏、开发者模式开着，`just doctor` 能列出它；设备没被别人 claim（`tools/e3/lock status`）。
 - 构建在锁外：配方先跑 `--build-only` 编完，再持 `tools/e3/lock ios` 跑 `--skip-build`。手工调用时也照这个顺序，
   别在持锁状态下等编译（别人要用这台手机时只能干等）。
+- 真机每例走 `xcodebuild test`，模拟器才是 `test-without-building`：本机实测（iPhone 16 / iOS 27.3 / Xcode 26.6）
+  `test-without-building` 启动被测 App 必报 `The process identifier of the launched application could not be determined`，
+  同一份 xctestrun 换 `test` 就能起。构建已由 `--build-only` 预热，每例只做增量检查。
 - **会清掉手机上 P-Pass 的数据并卸载重装**（只在测试机上跑）。跑完 App 配着已退出的配对桩，要配回正式桌面在桌面 App
   里「添加设备」重新扫码。
 - 「允许全部」的用例只判到权限结果和开关，不保存备份范围，不把手机上的真照片传出去；挑照片的用例会把选中的 1 张传给配对桩
