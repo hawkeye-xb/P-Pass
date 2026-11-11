@@ -162,11 +162,15 @@ for n in $CARDS; do
   flow_load_issue "$n"
   flow_parse_scope "$I_BODY"
   accept="$(printf '%s\n' "$I_BODY" | awk '/^\*\*验收场景\*\*|^## .*验收/ { on = 1 } on { print }')"
+  repro="$(printf '%s\n' "$I_BODY" | awk '/^\*\*复现路径\*\*/ { on = 1 } on { print }')"
   CARD_TEXT="${CARD_TEXT}
 ### 卡 #${n}：${I_TITLE}
 
 范围（只许动这些）：
 $(printf '  %s\n' "${GLOBS[@]+"${GLOBS[@]}"}")
+
+复现路径：
+${repro:-（卡上没找到复现路径）}
 
 验收场景：
 ${accept:-（卡上没找到验收场景）}
