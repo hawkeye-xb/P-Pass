@@ -3,7 +3,7 @@
 #
 # 什么时候评（#1470）：草稿 PR 不评；正式 PR（opened 非草稿、ready_for_review、synchronize、reopened）评，与 CI 并行。
 # 推新提交只评增量（上次评到的提交是头提交的祖先时）；edited（只改正文）与只合进 main 的推送复用上次结论、不调模型；
-# 只有阻断级（误放行 / 安全 / 越界 / 错误行为）意见让 review/agent 为 failure。判定都在 tools/flow/review.sh。
+# 只有阻断级（误放行 / 安全 / 越界）意见让 review/agent 为 failure。判定都在 tools/flow/review.sh。
 # owner 复核放行：仓库 owner 在 PR 上评论「/review-override <理由>」，override job 核对作者后把该头提交的
 # review/agent 改为 success（tools/flow/ci-review.sh override）。
 #
