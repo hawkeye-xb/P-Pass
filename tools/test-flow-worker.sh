@@ -573,7 +573,9 @@ git -C "$W" add -A && git -C "$W" commit -q -s -m "crate"
 DONE "$W" >/dev/null 2>&1
 comments_of 126 | grep -qF "cargo nextest run -p foo-pkg" && ok "改 Rust crate → 跑该 crate 的测试" || bad "Rust crate 门禁不对"
 comments_of 126 | grep -qF "cargo fmt --all -- --check" && ok "改 Rust crate → 同时挑 fmt（与 ci-rust 对齐）" || bad "Rust crate 没挑 fmt"
-comments_of 126 | grep -qF "cargo clippy --all-targets --all-features -- -D warnings" && ok "改 Rust crate → 同时挑 clippy" || bad "Rust crate 没挑 clippy"
+comments_of 126 | grep -qF "cargo clippy --all-targets -- -D warnings" && ok "改 Rust crate → 同时挑 clippy（与 justfile 的 lint 一致）" || bad "Rust crate 没挑 clippy"
+# BUILD-06（#174，复发 #1669）：本地 clippy 不许带 --all-features——mobile-ffi 用 std::os::fd，Windows 上必红。
+comments_of 126 | grep -qF -- "--all-features" && bad "本地 clippy 带了 --all-features（Windows 上必红，#174/#1669）" || ok "反证：本地 clippy 不带 --all-features"
 # 桌面端按路径挑（#1530）：apps/desktop/src/** → 前端 vitest；src-tauri/** → 独立 workspace 的 nextest；
 # 两条之外的 apps/desktop/** 仍 fail-closed 退回全量。反证：去掉 worker-done.sh 里对应规则，下面断言会红。
 W="$(card 160 "[T-160] desktop frontend" "apps/desktop/**")"
@@ -679,6 +681,32 @@ fi
 cp "${TMP}/wd-1646e.bak" "$M/tools/flow/worker-done.sh"
 git -C "$M" add tools/flow/worker-done.sh
 git -C "$M" commit -q -s -m "restore e3 mapping"
+# #1669 变异反证：把 --all-features 加回 crate 的 clippy → 上面「不带 --all-features」的判定必须红
+cp "$M/tools/flow/worker-done.sh" "${TMP}/wd-1669.bak"
+while IFS= read -r line; do
+  [ "$line" = '        add_gate "cargo clippy --all-targets -- -D warnings"' ] &&
+    line='        add_gate "cargo clippy --all-targets --all-features -- -D warnings"'
+  printf '%s\n' "$line"
+done <"$M/tools/flow/worker-done.sh" >"${TMP}/wd-1669.mut"
+cp "${TMP}/wd-1669.mut" "$M/tools/flow/worker-done.sh"
+if grep -qF 'add_gate "cargo clippy --all-targets --all-features -- -D warnings"' "$M/tools/flow/worker-done.sh"; then
+  git -C "$M" add tools/flow/worker-done.sh
+  git -C "$M" commit -q -s -m "mutate crate clippy all-features"
+  git -C "$M" push -q origin HEAD:refs/heads/main
+  W="$(card 166 "[T-166] crate clippy all-features" "crates/**")"
+  mkdir -p "$W/crates/foo"
+  printf '[package]\nname = "foo-pkg"\nversion = "0.1.0"\n' >"$W/crates/foo/Cargo.toml"
+  git -C "$W" add -A && git -C "$W" commit -q -s -m "crate clippy all-features"
+  DONE "$W" >"${TMP}/o166" 2>&1
+  C166="$(comments_of 166)"
+  printf '%s' "$C166" | grep -qF -- "--all-features" &&
+    ok "变异反证：clippy 带 --all-features 时「不带 --all-features」判定会红" || bad "变异反证没生效：$(tail -4 "${TMP}/o166")"
+else
+  bad "crate clippy 行的变异没生效"
+fi
+cp "${TMP}/wd-1669.bak" "$M/tools/flow/worker-done.sh"
+git -C "$M" add tools/flow/worker-done.sh
+git -C "$M" commit -q -s -m "restore crate clippy gate"
 # 改动里本身就是 tools/test-*.sh → 跑它自己
 W="$(card 130 "[T-130] tools test itself" "tools/**")"
 printf '# touched\n' >>"$W/tools/test-other.sh"
