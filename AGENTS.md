@@ -161,7 +161,8 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
 - 只改 issue「范围」段列出的路径。确需扩大：先改 issue，再改代码。本地 hook 会挡范围外文件、
   没有范围的卡、主仓工作区里的卡分支，`git commit` 直接被拒，见 `tools/hooks/` 与
   [本地提交拦截](docs/runbook/local-hooks.md)。
-- 每个提交 `git commit -s`（DCO 门禁），提交身份必须在 `.github/allowed-identities.txt` 里。
+- 每个提交 `git commit -s`（DCO 门禁），本仓库的提交身份必须在 `.github/allowed-identities.txt` 里；
+  从 fork 提交的外部贡献者不受此限（白名单只约束本仓库的机器）。
 - 本地分阶段，不在本地跑全量：
   - **迭代期**（产品负责人在真机上看界面、提意见）：改完直接增量打包、覆盖安装（不卸载）、打开到对应页面，**不跑测试**——
     测试结果这时没人用，只会拖慢他看到改动。

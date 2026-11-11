@@ -11,6 +11,8 @@
 #   D name 对、email 不对             → 必须红（证明 email 真的在管）
 #   E email 对、name 不对             → 必须红（证明 name 真的在管）
 #   F 白名单文件为空                  → 必须红（空白名单不得等于放行）
+#   G 外部仓库（fork）的 PR            → 必须绿（白名单只约束本仓库的机器）
+#   H 同仓分支的 PR                    → 必须红（跳过条件只对 fork 生效）
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
@@ -46,12 +48,28 @@ run_check() {
     ( cd "$REPO" && ALLOWLIST="$LIST" bash "$CHECK" "$BASE..HEAD" >/dev/null 2>&1 )
 }
 
+run_check_pr() { # run_check_pr <PR head repo full name>
+    ( cd "$REPO" && ALLOWLIST="$LIST" GITHUB_REPOSITORY="hawkeye-xb/P-Pass" \
+        PR_HEAD_REPO_FULL_NAME="$1" bash "$CHECK" "$BASE..HEAD" >/dev/null 2>&1 )
+}
+
 reset_to_base() { git -C "$REPO" reset -q --hard "$BASE"; }
 
 fail=0
 assert() { # assert <名称> <期望退出码>
     local name="$1" want="$2" got=0
     run_check || got=$?
+    if [ "$got" -eq "$want" ]; then
+        echo "  ✅ ${name}（退出码 ${got}，符合期望）"
+    else
+        echo "  ❌ ${name}：期望退出码 ${want}，实际 ${got}" >&2
+        fail=1
+    fi
+}
+
+assert_pr() { # assert_pr <名称> <期望退出码> <PR head repo full name>
+    local name="$1" want="$2" head="$3" got=0
+    run_check_pr "$head" || got=$?
     if [ "$got" -eq "$want" ]; then
         echo "  ✅ ${name}（退出码 ${got}，符合期望）"
     else
@@ -83,6 +101,14 @@ make_commit "other-name" "allowed@example.com" "other-name" "allowed@example.com
 assert "E email 对 name 错必须红" 1
 
 reset_to_base
+make_commit "intruder" "intruder@example.com" "intruder" "intruder@example.com"
+assert_pr "G fork PR 的越界身份必须绿（白名单只约束本仓库）" 0 "intruder/P-Pass"
+
+reset_to_base
+make_commit "intruder" "intruder@example.com" "intruder" "intruder@example.com"
+assert_pr "H 同仓分支 PR 的越界身份必须红" 1 "hawkeye-xb/P-Pass"
+
+reset_to_base
 make_commit "allowed-user" "allowed@example.com" "allowed-user" "allowed@example.com"
 : > "$LIST"
 assert "F 空白名单必须红（不得等于放行）" 2
@@ -91,4 +117,4 @@ if [ "$fail" -ne 0 ]; then
     echo "✗ 反证未通过：门禁在该红的时候没红" >&2
     exit 1
 fi
-echo "ok: 六个变异全部符合期望，门禁判据有效"
+echo "ok: 八个变异全部符合期望，门禁判据有效"
