@@ -86,10 +86,10 @@ EOF2
 # 取任务卡正文里 **<字段名>**：的值（到下一个 **字段 或 # 标题为止），去掉 HTML 注释与空行。
 flow_field_text() { # flow_field_text <正文> <字段名>
   printf '%s\n' "$1" | awk -v f="$2" '
-    $0 ~ "^\\*\\*" f "\\*\\*[：:]?" { grab = 1; sub(/^\\*\\*[^*]*\\*\\*[：:]?[[:space:]]*/, ""); }
+    index($0, "**" f "**") == 1 { grab = 1; sub(/^[^:：]*[：:]?[[:space:]]*/, ""); }
     grab && /^<!--/ { next }
     grab && /^[[:space:]]*$/ { next }
-    grab && /^\\*\\*[^*]+\\*\\*/ { exit }
+    grab && /^\*\*[^*]+\*\*/ { exit }
     grab && /^#/ { exit }
     grab { print }
   ' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' | grep -v '^$'

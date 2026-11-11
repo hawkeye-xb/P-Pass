@@ -253,6 +253,7 @@ issue() { # issue <号> <标签> <标题> <范围 glob，空格分隔，空=无�
       for g in $scope; do printf '%s\r\n' "$g"; done
       printf '```\r\n'
     fi
+    printf '\r\n**复现路径**：repro-x\r\n'
     printf '\r\n**验收场景**：y\r\n'
     [ -z "$extra" ] || printf '\r\n%s\r\n' "$extra"
   } >"${FAKE_GH}/${n}.body"
@@ -350,6 +351,11 @@ has_lbl 11 "status:ready" && ok "拒绝后仍是 ready" || bad "拒绝后标签�
 issue 12 "status:ready" "[T-12] closed one" "src/**"
 printf 'CLOSED' >"${FAKE_GH}/12.state"
 if START 12 >/dev/null 2>&1; then bad "start 放行了已关闭的卡"; else ok "start 拒绝已关闭的卡"; fi
+
+issue 14 "status:ready" "[T-14] no repro" "src/**" "Bug"
+sed -i.bak 's/复现路径\*\*：repro-x/复现路径\*\*：无/' "${FAKE_GH}/14.body" && rm -f "${FAKE_GH}/14.body.bak"
+if START 14 >/dev/null 2>&1; then bad "start 放行了复现路径写「无」的 Bug 卡"; else ok "start 拒绝 Bug 卡缺复现路径"; fi
+has_lbl 14 "status:ready" && ok "拒绝后仍是 ready" || bad "拒绝后标签被改了"
 
 issue 13 "status:ready" "[T-13] Fix the Thing" "src/**" "Bug"
 OUT="$(START 13 2>&1)"
