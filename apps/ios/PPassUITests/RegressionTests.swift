@@ -52,16 +52,11 @@ final class RegressionTests: UIRegressCase {
     private func pickOnePhotoInLimitedSheet() {
         let deadline = Date().addingTimeInterval(20)
         while Date() < deadline {
-            for root in [app, springboard] {
-                let img = root.scrollViews.otherElements.images.firstMatch
-                let cell = root.collectionViews.cells.firstMatch
-                let target = img.exists ? img : (cell.exists ? cell : nil)
-                if let target, target.isHittable {
-                    target.tap()
-                    UIReg.say("LIMITED_SELECTED 1")
-                    tapButton(SystemButton.limitedDone, what: "limited-done")
-                    return
-                }
+            if let cell = firstPickerCell() {
+                tapPickerCell(cell)
+                UIReg.say("LIMITED_SELECTED 1")
+                tapButton(SystemButton.limitedDone, what: "limited-done")
+                return
             }
             usleep(500_000)
         }
@@ -77,7 +72,7 @@ final class RegressionTests: UIRegressCase {
         reachSettingsViaPick()
         let row = app.buttons["pickPhotosRow"]
         XCTAssertTrue(row.waitForExistence(timeout: 10), "设置页没有「挑几张传」")
-        row.tap()
+        tapWhenVisible(row)
         pickOnePhoto(cancel: inverted)
         settle(5)
     }

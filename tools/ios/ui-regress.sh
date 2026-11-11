@@ -8,6 +8,7 @@
 #   --only A,B        只跑这几例（默认全部，顺序见 CASES）
 #   --invert <用例>   反证：该例的系统弹窗故意点反向选项，判定期望不变 ⇒ 这一例必须 FAIL
 #   --skip-build      复用上次 build-for-testing 的产物
+#   --build-only      只跑 build-for-testing 就退出（真机在锁外先编，见 justfile 的 device 分支）
 #   --device <标识>   真机 devicectl 标识（默认 $PPASS_DEVICE、e3.env 的 E3_IOS_UDID、或唯一一台在线 iPhone）
 # 输出：apps/ios/build/ui-regress/<时间>/，汇总 summary.txt；有 FAIL 退出 1。
 #
@@ -79,12 +80,14 @@ CASES="DecisionScopeFull DecisionPick SettingsRuleFull SettingsRuleLimited Setti
 ONLY=""
 INVERT=""
 SKIP_BUILD=0
+BUILD_ONLY=0
 DEV="${PPASS_DEVICE:-}"
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --only) ONLY="$(echo "${2:?}" | tr ',' ' ')"; shift 2 ;;
     --invert) INVERT="${2:?}"; shift 2 ;;
     --skip-build) SKIP_BUILD=1; shift ;;
+    --build-only) BUILD_ONLY=1; shift ;;
     --device) DEV="${2:?}"; shift 2 ;;
     *) echo "未知参数：$1" >&2; exit 2 ;;
   esac
@@ -121,27 +124,30 @@ if [ "$TARGET" = sim ]; then
   BUILD_DEST="platform=iOS Simulator,id=$UDID"
   SIGN=()
 else
-  if [ -z "$DEV" ]; then
-    # 本机 e3.env（tools/e3/lib/common.sh 同一个文件）里的 E3_IOS_UDID。
-    DEV="$(sed -n 's/^E3_IOS_UDID=//p' "${E3_ENV:-$HOME/.config/ppass/e3.env}" 2>/dev/null | tail -1 | tr -d '"'"'"'"' || true)"
-  fi
-  if [ -z "$DEV" ]; then
-    xcrun devicectl list devices --json-output "$OUT/devices.json" >/dev/null 2>&1 || true
-    DEV=$(jq -r '[.result.devices[]? | select(.hardwareProperties.platform == "iOS" and .connectionProperties.tunnelState != "unavailable")] | if length == 1 then .[0].identifier else empty end' "$OUT/devices.json" 2>/dev/null || true)
-  fi
-  [ -n "$DEV" ] || { echo "error: 找不到唯一一台在线 iPhone；用 --device 或 PPASS_DEVICE 指定" >&2; exit 1; }
-  if [ -z "${E3_LOCKED_IOS:-}" ]; then
-    echo "error: 真机要先持设备锁：tools/e3/lock ios $0 device …（just ios-ui-regress device 已带）" >&2
-    exit 1
-  fi
-  # xcodebuild 要硬件 UDID；devicectl 的标识是 CoreDevice UUID，两者都换算一次。
-  xcrun devicectl list devices --json-output "$OUT/devices.json" >/dev/null 2>&1
-  HW_UDID=$(jq -r --arg d "$DEV" '.result.devices[] | select(.identifier == $d or .hardwareProperties.udid == $d or .deviceProperties.name == $d) | .hardwareProperties.udid' "$OUT/devices.json" | head -1)
-  DEV=$(jq -r --arg d "$DEV" '.result.devices[] | select(.identifier == $d or .hardwareProperties.udid == $d or .deviceProperties.name == $d) | .identifier' "$OUT/devices.json" | head -1)
-  [ -n "$HW_UDID" ] || { echo "error: devicectl 里找不到设备 $DEV" >&2; exit 1; }
-  DEST="id=$HW_UDID"
   BUILD_DEST="generic/platform=iOS"
   SIGN=(-allowProvisioningUpdates)
+  # --build-only 在锁外编：不碰设备、不要求持锁。
+  if [ "$BUILD_ONLY" = 0 ]; then
+    if [ -z "$DEV" ]; then
+      # 本机 e3.env（tools/e3/lib/common.sh 同一个文件）里的 E3_IOS_UDID。
+      DEV="$(sed -n 's/^E3_IOS_UDID=//p' "${E3_ENV:-$HOME/.config/ppass/e3.env}" 2>/dev/null | tail -1 | tr -d '"'"'"'"' || true)"
+    fi
+    if [ -z "$DEV" ]; then
+      xcrun devicectl list devices --json-output "$OUT/devices.json" >/dev/null 2>&1 || true
+      DEV=$(jq -r '[.result.devices[]? | select(.hardwareProperties.platform == "iOS" and .connectionProperties.tunnelState != "unavailable")] | if length == 1 then .[0].identifier else empty end' "$OUT/devices.json" 2>/dev/null || true)
+    fi
+    [ -n "$DEV" ] || { echo "error: 找不到唯一一台在线 iPhone；用 --device 或 PPASS_DEVICE 指定" >&2; exit 1; }
+    if [ -z "${E3_LOCKED_IOS:-}" ]; then
+      echo "error: 真机要先持设备锁：tools/e3/lock ios $0 device …（just ios-ui-regress device 已带）" >&2
+      exit 1
+    fi
+    # xcodebuild 要硬件 UDID；devicectl 的标识是 CoreDevice UUID，两者都换算一次。
+    xcrun devicectl list devices --json-output "$OUT/devices.json" >/dev/null 2>&1
+    HW_UDID=$(jq -r --arg d "$DEV" '.result.devices[] | select(.identifier == $d or .hardwareProperties.udid == $d or .deviceProperties.name == $d) | .hardwareProperties.udid' "$OUT/devices.json" | head -1)
+    DEV=$(jq -r --arg d "$DEV" '.result.devices[] | select(.identifier == $d or .hardwareProperties.udid == $d or .deviceProperties.name == $d) | .identifier' "$OUT/devices.json" | head -1)
+    [ -n "$HW_UDID" ] || { echo "error: devicectl 里找不到设备 $DEV" >&2; exit 1; }
+    DEST="id=$HW_UDID"
+  fi
 fi
 
 DESK="$OUT/desk"
@@ -172,6 +178,10 @@ if [ "$SKIP_BUILD" != 1 ]; then
     -destination "$BUILD_DEST" -derivedDataPath "$DERIVED" ${SIGN[@]+"${SIGN[@]}"} >"$OUT/build.log" 2>&1 \
     || { tail -40 "$OUT/build.log"; echo "FAIL: build-for-testing（见 $OUT/build.log）" | tee -a "$SUMMARY"; exit 1; }
 fi
+if [ "$BUILD_ONLY" = 1 ]; then
+  echo "==> 构建完成（--build-only），没跑用例；接着持锁跑 --skip-build。证据：$OUT"
+  exit 0
+fi
 DAEMON="${CARGO_TARGET_DIR:-$ROOT/target}/release/daemon"
 # shellcheck disable=SC2012 # 文件名由 xcodebuild 生成，没有特殊字符；取最新的一份
 XCTESTRUN=$(ls -t "$DERIVED"/Build/Products/PPassUI_*"$([ "$TARGET" = sim ] && echo iphonesimulator || echo iphoneos)"*.xctestrun 2>/dev/null | head -1)
@@ -179,6 +189,26 @@ XCTESTRUN=$(ls -t "$DERIVED"/Build/Products/PPassUI_*"$([ "$TARGET" = sim ] && e
 APP_PATH="$DERIVED/Build/Products/Debug-$([ "$TARGET" = sim ] && echo iphonesimulator || echo iphoneos)/PPass.app"
 
 # ---- 设备操作 ----
+# 模拟器图库是空的（别人 erase 过）时造一张：选照片的用例不能依赖残留状态。
+ensure_sim_photos() {
+  local dcim="$HOME/Library/Developer/CoreSimulator/Devices/$UDID/data/Media/DCIM"
+  if [ -n "$(find "$dcim" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.heic' -o -iname '*.png' \) 2>/dev/null | head -1)" ]; then
+    return 0
+  fi
+  echo "  模拟器图库是空的：造一张测试照片"
+  python3 -I - "$OUT/seed.png" <<'PY'
+import struct, sys, zlib
+w = h = 64
+raw = b"".join(b"\x00" + bytes([200, 120, 60]) * w for _ in range(h))
+def chunk(tag, data):
+    return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+open(sys.argv[1], "wb").write(png)
+PY
+  xcrun simctl addmedia "$UDID" "$OUT/seed.png"
+  sleep 2
+}
+
 reinstall() {
   echo "  重装 App（清通知授权与数据）"
   if [ "$TARGET" = sim ]; then
@@ -259,6 +289,7 @@ run_case() { # $1 用例
   [ "$verdict" = PASS ] || FAILS=$((FAILS + 1))
 }
 
+if [ "$TARGET" = sim ]; then ensure_sim_photos; fi
 reinstall
 for c in $CASES; do
   # 通知授权只问一次：NotifyDeny 前（且前面跑过 NotifyAllow 时）重装。

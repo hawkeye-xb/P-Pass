@@ -154,47 +154,58 @@ class UIRegressCase: XCTestCase {
 
     /// 选第一张并确认；invert 时点取消。
     func pickOnePhoto(cancel: Bool = false) {
-        let pickerReady = Date().addingTimeInterval(20)
+        let pickerReady = Date().addingTimeInterval(30)
         var cell: XCUIElement?
         while Date() < pickerReady, cell == nil {
             cell = firstPickerCell()
             if cell == nil { usleep(500_000) }
         }
-        guard let cell else { dump("picker"); XCTFail("20 秒内没看到系统照片选择器里的照片"); return }
+        guard let cell else { dump("picker"); XCTFail("30 秒内没看到系统照片选择器里的照片"); return }
         UIReg.say("PICKER_SHOWN")
         if cancel {
             tapButton(SystemButton.pickerCancel, what: "picker-cancel")
             return
         }
-        cell.tap()
+        tapPickerCell(cell)
         UIReg.say("PICKER_SELECTED 1")
         tapButton(SystemButton.pickerAdd, what: "picker-add")
     }
 
-    private func firstPickerCell() -> XCUIElement? {
-        // PHPicker 的照片格子在不同 iOS 上是 image / cell / other；先找带「Photo」「照片」字样的 image。
-        let candidates: [XCUIElementQuery] = [
-            app.scrollViews.otherElements.images,
+    func firstPickerCell() -> XCUIElement? {
+        // PHPicker 的照片格子：iOS 17–26 是 identifier 为 PXGGridLayout-Info 的 Image（带「照片, 日期」的 label）。
+        // 不能按「scrollView 里的第一个 image」找——选择器顶部还有一张 38×38 的说明图，会先命中它（点它不选中）。
+        let queries: [XCUIElementQuery] = [
+            app.images.matching(identifier: "PXGGridLayout-Info"),
+            app.images.matching(NSPredicate(format: "label BEGINSWITH %@ OR label BEGINSWITH %@", "照片, ", "Photo, ")),
+            // 兜底：更早的 iOS 上 PHPicker 是 collectionView 的 cell。
             app.collectionViews.cells,
-            app.images,
         ]
-        for q in candidates {
-            let first = q.firstMatch
-            if first.exists, first.isHittable, first.frame.width > 20 { return first }
+        for q in queries {
+            let el = q.firstMatch
+            // 只判存在：系统选择器跑在别的进程里，格子有时报 isHittable=false，但仍可点（按坐标）。
+            if el.exists { return el }
         }
         return nil
     }
 
+    /// 点选择器格子。系统选择器的格子 isHittable 常为 false，`tap()` 会被拒，改用坐标点。
+    func tapPickerCell(_ cell: XCUIElement) {
+        if cell.isHittable {
+            cell.tap()
+        } else {
+            cell.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        }
+    }
+
     /// 点当前画面上（App 或系统页）按文字匹配的按钮；先 App（PHPicker 在 App 的树里），再 springboard。
-    func tapButton(_ choices: [String], what: String, timeout: TimeInterval = 10) {
+    /// 直接按 label 查，不逐个枚举 `root.buttons`——系统选择器的树有几十个按钮，逐个数一遍比超时还慢。
+    func tapButton(_ choices: [String], what: String, timeout: TimeInterval = 15) {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             for root in [app, springboard] {
-                let buttons = root.buttons
-                for j in 0..<buttons.count {
-                    let b = buttons.element(boundBy: j)
-                    if b.exists, SystemButton.matches(b.label, choices), b.isHittable {
-                        let label = b.label
+                for label in choices {
+                    let b = root.buttons[label]
+                    if b.exists, b.isEnabled, b.isHittable {
                         b.tap()
                         UIReg.say("BUTTON \(what) tapped=\(label)")
                         return
@@ -248,8 +259,23 @@ class UIRegressCase: XCTestCase {
     }
 
     func flip(_ s: XCUIElement) {
-        // SwiftUI Toggle 整行可点，但点右侧开关最稳。
+        // 设置页是 List，开关可能在屏幕外：先滚到可点（最多 4 屏），按坐标点右侧开关本体。
+        var swipes = 0
+        while !s.isHittable, swipes < 4 {
+            app.swipeUp()
+            swipes += 1
+        }
         s.coordinate(withNormalizedOffset: CGVector(dx: 0.93, dy: 0.5)).tap()
+    }
+
+    /// 列表行可能在屏幕外：滚到可点再点。
+    func tapWhenVisible(_ el: XCUIElement) {
+        var swipes = 0
+        while !el.isHittable, swipes < 4 {
+            app.swipeUp()
+            swipes += 1
+        }
+        el.tap()
     }
 
     func settle(_ seconds: UInt32 = 3) { sleep(seconds) }

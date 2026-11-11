@@ -41,7 +41,10 @@ just ios-ui-regress device --invert SettingsRuleFull   # 反证
   点不到就把弹窗现状打进日志并让测试失败，不猜坐标、不点别的。
 - **照片权限每例重置**：`XCUIApplication.resetAuthorizationStatus(for: .photos)`（真机、模拟器都可用）。
 - **通知授权只问一次、没有重置 API**：脚本开跑前卸载重装一次，跑 NotifyDeny 前再卸载重装一次。
-- **系统照片选择器（PHPicker）**：进程外，但它的照片格子和「添加」按钮在宿主 App 的无障碍树里可见，测试直接点。
+- **系统照片选择器（PHPicker）**：进程外，但它的照片格子和「完成」按钮在宿主 App 的无障碍树里可见。格子按
+  identifier `PXGGridLayout-Info` 找（不能按「第一个 image」——选择器顶部还有一张 38×38 的说明图，点它不选中）；
+  这些格子常报 `isHittable=false`，所以按坐标点。确认按钮按 label 直接查（`app.buttons["完成"]`），不逐个枚举——
+  选择器的树有几十个按钮，逐个数一遍比超时还慢。模拟器图库被 erase 清空时，脚本先造一张测试照片再跑。
 - **判定只看日志**：每例跑完拉回 App 容器的 `Library/Logs/ppass.log`，只取本例那次启动（`process start: pid=`，
   时间不早于本例开跑）之后的行，按判定表的通过行顺序匹配。上一例留下的通过行不算（`tools/ios/test-ui-regress-judge.sh` 自测）。
   测试本身（xcodebuild）失败也算 FAIL：说明界面没点通，原因写在汇总行里。
@@ -63,6 +66,8 @@ just ios-ui-regress device --invert SettingsRuleFull   # 反证
 ## 真机前提
 
 - 手机解锁、亮屏、开发者模式开着，`just doctor` 能列出它；设备没被别人 claim（`tools/e3/lock status`）。
+- 构建在锁外：配方先跑 `--build-only` 编完，再持 `tools/e3/lock ios` 跑 `--skip-build`。手工调用时也照这个顺序，
+  别在持锁状态下等编译（别人要用这台手机时只能干等）。
 - **会清掉手机上 P-Pass 的数据并卸载重装**（只在测试机上跑）。跑完 App 配着已退出的配对桩，要配回正式桌面在桌面 App
   里「添加设备」重新扫码。
 - 「允许全部」的用例只判到权限结果和开关，不保存备份范围，不把手机上的真照片传出去；挑照片的用例会把选中的 1 张传给配对桩
