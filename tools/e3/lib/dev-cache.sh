@@ -11,13 +11,6 @@
 
 DEV_CACHE_ENV_NAME=.env.ppass-dev
 
-# Windows（MSYS）上 MSYS2 会把环境变量里长得像路径的值改写（/x → X:/）。dev-cache 管的
-# 这两个路径变量按 MSYS 风格存，测试还拿 /x 当哨兵值验「环境变量优先」，所以别让 MSYS 改写它们（#1650）。
-if command -v cygpath >/dev/null 2>&1; then
-  MSYS2_ENV_CONV_EXCL="CARGO_TARGET_DIR;PPASS_IOS_DERIVED_DATA${MSYS2_ENV_CONV_EXCL:+;$MSYS2_ENV_CONV_EXCL}"
-  export MSYS2_ENV_CONV_EXCL
-fi
-
 # 主副本根：git 公共目录的上一级（在卡目录里跑也指向主副本）。
 dev_cache_main_root() {
   local common
