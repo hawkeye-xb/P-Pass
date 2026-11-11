@@ -1403,6 +1403,120 @@ async fn concurrent_offers_of_the_same_content_share_one_download() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_coalesced_offer_returns_promptly_instead_of_waiting_on_the_shared_download() {
+    // #1668：同 hash 的第一路拉取还在途中时，第二条同 hash 的 offer 必须立刻返回，
+    // 不能在自己的调用栈里等那一路下载完——手机端每次调用总时限 15 秒，大文件会直接
+    // 表现为失败。这里用 Verified 阶段的门把第一路定在途中，让「并发」是确定的。
+    // 反证：把等待放回 offer_inner（原地 `other.cancelled().await`），下面 500ms
+    // 的超时会红；第一路仍由 release 放行，最终两条记录都拿到回执、只入库一次。
+    let root = tempdir().unwrap();
+    let provider_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let mut provider_blobs = Blobs::open(&provider_transport, &root.path().join("provider-store"))
+        .await
+        .unwrap();
+    provider_blobs.serve();
+    let provider_blobs = Arc::new(provider_blobs);
+    let bytes = vec![0x6b; 4 * 1024 * 1024];
+    let source = root.path().join("slow-source.jpg");
+    std::fs::write(&source, &bytes).unwrap();
+    let hash = *blake3::hash(&bytes).as_bytes();
+    let ticket = provider_blobs.push(hash, &source).await.unwrap();
+
+    let receiver_transport =
+        IrohTransport::bind(TransportConfig::loopback(vec![ALPN_BLOBS.into()]))
+            .await
+            .unwrap();
+    let receiver_blobs = Arc::new(
+        Blobs::open(&receiver_transport, &root.path().join("receiver-store"))
+            .await
+            .unwrap(),
+    );
+    let db = paired_db("epoch-current", provider_transport.node_id()).await;
+    let verified = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let ingested = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let in_flight = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let (hook_verified, hook_ingested) = (verified.clone(), ingested.clone());
+    let (hook_in_flight, hook_release) = (in_flight.clone(), release.clone());
+    let delivery = FlowDelivery::new(db.clone(), receiver_blobs.clone(), root.path())
+        .with_fetch_stage_hook(move |stage| {
+            let verified = hook_verified.clone();
+            let ingested = hook_ingested.clone();
+            let in_flight = hook_in_flight.clone();
+            let release = hook_release.clone();
+            Box::pin(async move {
+                match stage {
+                    FetchStage::Verified => {
+                        verified.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        // 第一路停在这里，直到测试放行——它整个期间都握着 hash 认领。
+                        in_flight.notify_one();
+                        release.notified().await;
+                    }
+                    FetchStage::Ingested => {
+                        ingested.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
+            })
+        });
+
+    let a = request("epoch-current", "lease-a", hash, ticket.clone());
+    let mut b = request("epoch-current", "lease-b", hash, ticket);
+    b.queue_sequence = 8;
+    let peer = provider_transport.node_id();
+
+    let reply_a = delivery.offer(peer, &a).await.unwrap();
+    assert_eq!(reply_a.state, "active");
+    tokio::time::timeout(std::time::Duration::from_secs(30), in_flight.notified())
+        .await
+        .expect("the first fetch never reached the paused stage");
+
+    // 第一路还在途中（verified 已到、回执还没落盘），第二条同 hash 的 offer 必须
+    // 毫秒级返回。
+    let started = std::time::Instant::now();
+    let reply_b = tokio::time::timeout(
+        std::time::Duration::from_millis(500),
+        delivery.offer(peer, &b),
+    )
+    .await
+    .expect("#1668: a second offer of the same hash must not wait for the shared download")
+    .unwrap();
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < std::time::Duration::from_millis(500),
+        "the second offer took {elapsed:?} while the first fetch was still in flight"
+    );
+    assert_eq!(
+        reply_b.state, "active",
+        "the coalesced offer keeps reporting the async-202 shape"
+    );
+    assert!(
+        reply_b.task_running,
+        "the wait for the shared download is handed to a background task"
+    );
+
+    // 放行第一路：两条记录最终都拿到回执，同 hash 只下载、入库一次。
+    release.notify_one();
+    let receipt_a = common::await_receipt(&delivery, peer, &a).await.unwrap();
+    let receipt_b = common::await_receipt(&delivery, peer, &b).await.unwrap();
+    assert_eq!(receipt_a.content_hash, hex::encode(hash));
+    assert_eq!(receipt_b.content_hash, hex::encode(hash));
+    assert_eq!(
+        verified.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the coalesced offer must reuse the in-flight download, not pull again"
+    );
+    assert_eq!(
+        ingested.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "the same content is ingested once"
+    );
+    assert!(db.get_asset(&hash).await.unwrap().is_some());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn offer_reply_carries_the_terminal_receipt_when_content_already_exists() {
     // NET-24: the fix itself. NET-20's dedup completes synchronously inside
     // the offer handler, so `emit_flow_delivered` fires before a caller that
