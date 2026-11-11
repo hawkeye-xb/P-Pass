@@ -95,7 +95,7 @@ while [ "$#" -gt 0 ]; do
 done
 [ -z "$ONLY" ] || CASES="$ONLY"
 for c in $CASES $INVERT; do
-  grep -q "^${c}	" "$RULES_DEFAULT" || { echo "未知用例：$c（见 $RULES_DEFAULT）" >&2; exit 2; }
+  grep -q "^${c}	" "$RULES_DEFAULT" || { echo "未知用例：${c}（见 ${RULES_DEFAULT}）" >&2; exit 2; }
 done
 for tool in jq xcodegen python3; do command -v "$tool" >/dev/null || { echo "error: 缺 $tool" >&2; exit 1; }; done
 
@@ -162,7 +162,7 @@ trap cleanup EXIT
 
 HEAD_SHA=$(git rev-parse --short HEAD)
 DIRTY=$(git status --porcelain -- apps/ios | head -1)
-echo "==> iOS 界面回归 $TARGET，代码 ${HEAD_SHA}${DIRTY:+（apps/ios 有未提交改动）}，用例：$CASES${INVERT:+，反证：$INVERT}"
+echo "==> iOS 界面回归 ${TARGET}，代码 ${HEAD_SHA}${DIRTY:+（apps/ios 有未提交改动）}，用例：$CASES${INVERT:+，反证：$INVERT}"
 echo "commit ${HEAD_SHA}${DIRTY:+ dirty} target=$TARGET${INVERT:+ invert=$INVERT}" >>"$SUMMARY"
 
 # ---- 构建 ----
@@ -296,7 +296,7 @@ run_case() { # $1 用例
   if [ "$rc" != 0 ]; then
     local why
     why=$(grep -E "error: -\[|XCTAssert|failed:|: error:" "$xlog" | grep -v '^UIREG' | head -1 | sed 's/^.*error: //' | cut -c1-200)
-    if [ "$verdict" = PASS ]; then verdict=FAIL; reason="日志通过但界面操作失败：${why:-xcodebuild 退出 $rc}"; else reason="$reason；界面操作失败：${why:-xcodebuild 退出 $rc}"; fi
+    if [ "$verdict" = PASS ]; then verdict=FAIL; reason="日志通过但界面操作失败：${why:-xcodebuild 退出 $rc}"; else reason="${reason}；界面操作失败：${why:-xcodebuild 退出 $rc}"; fi
   fi
   printf '%-20s %s  %s\n' "$c" "$verdict" "$reason" | tee -a "$SUMMARY"
   [ "$verdict" = PASS ] || FAILS=$((FAILS + 1))

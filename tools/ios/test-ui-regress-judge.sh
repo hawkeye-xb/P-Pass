@@ -11,7 +11,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 expect() { # $1 期望 PASS|FAIL $2 用例 $3 日志 $4 开跑 epoch $5 说明
   local got
   got=$(bash "$J" judge "$RULES" "$2" "$3" "$4" | cut -f1)
-  [ "$got" = "$1" ] || fail "$5：期望 $1，实际 $got（$(bash "$J" judge "$RULES" "$2" "$3" "$4" | cut -f2)）"
+  [ "$got" = "$1" ] || fail "$5：期望 $1，实际 ${got}（$(bash "$J" judge "$RULES" "$2" "$3" "$4" | cut -f2)）"
   echo "ok  $5 → $1"
 }
 iso() { python3 -I -c 'import datetime, sys; print(datetime.datetime.fromtimestamp(int(sys.argv[1])).astimezone().isoformat(timespec="milliseconds"))' "$1"; }
