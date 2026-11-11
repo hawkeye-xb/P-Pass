@@ -72,7 +72,7 @@ python3 -I -X utf8 - "$PLAN" "$TMPD" <<'PY'
 import re, sys, pathlib
 text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").replace("\r", "")
 out = pathlib.Path(sys.argv[2])
-names = ["做法", "涉及端", "数据", "用户可见行为", "隐私", "风险", "影响", "时间性", "范围", "验收场景", "ADR", "选项一", "选项二", "产品定案", "标准依据", "owner 定案"]
+names = ["做法", "涉及端", "数据", "用户可见行为", "隐私", "风险", "影响", "时间性", "范围", "验收场景", "ADR", "选项一", "选项二", "产品定案", "标准依据", "owner 定案", "复现路径"]
 pat = re.compile(r"^\*\*(" + "|".join(names) + r")\*\*[：:]?[ \t]*", re.M)
 hits = list(pat.finditer(text))
 fields = {}
@@ -179,6 +179,19 @@ if [ "$CORE" != false ]; then
   ADRS="$(adopted_adrs "$(field ADR)")"
   if [ -z "$ADRS" ]; then
     DECISION=blocked
+    REASONS="${REASONS}范围命中核心、没有已采纳 ADR；"
+  fi
+fi
+# Bug 卡：必须有「复现路径」（100% 复现的步骤/命令）。复现不了 → blocked 找人对齐，不自动修。
+ITYPE_TRIAGE="$(gh api "repos/${REPO}/issues/${N}" --jq '.type.name // empty' 2>/dev/null | tr -d '\r')"
+if [ -z "$ITYPE_TRIAGE" ]; then
+  if has_label bug; then ITYPE_TRIAGE="Bug"; else ITYPE_TRIAGE="Task"; fi
+fi
+if [ "$ITYPE_TRIAGE" = "Bug" ]; then
+  repro="$(field 复现路径 | head -1 | tr -d '[:space:]')"
+  if [ -z "$repro" ] || [[ "$repro" =~ ^(无|没有|不涉及|none|无。)$ ]]; then
+    DECISION=blocked
+    REASONS="${REASONS}Bug 卡缺「复现路径」；"
   fi
 fi
 # 产品定案：两种依据——已采纳方案（要写明产品负责人确认），或本仓产品负责人的评论链接。
@@ -380,11 +393,16 @@ def set_field(body, label_re, value, block=False):
     new = m.group(1) + ("\n```\n" + value + "\n```\n\n" if block else value + "\n\n")
     return body[:m.start()] + new + tail
 
-scope, accept = f("范围"), f("验收场景")
+scope, accept, repro = f("范围"), f("验收场景"), f("复现路径")
 extra = []
 b = set_field(body, "范围", scope, block=True)
 if b is None:
     extra.append("**范围（只许动这些）**：\n```\n" + scope + "\n```\n")
+else:
+    body = b
+b = set_field(body, "复现路径", repro)
+if b is None:
+    extra.append("**复现路径**：\n" + repro + "\n")
 else:
     body = b
 b = set_field(body, "验收场景", accept)
@@ -432,7 +450,13 @@ else
 fi
 case "$DECISION" in
   blocked)
-    bash "${FLOW_DIR}/owner-stuck.sh" "范围命中核心（.github/core-paths.txt），方案没有引用 origin/main 上「已采纳」的 ADR。先按 AGENTS.md 红线 6 写 ADR（docs/decisions/）并定案，再重跑 just triage" --issue "$N" ||
+    case "${REASONS}" in
+      *复现路径*)
+        msg="Bug 卡缺「复现路径」（方案里要有 100% 复现的步骤/命令）。复现不了就先补日志/护栏，或转 needs:product 找人对齐，再重跑 just triage" ;;
+      *)
+        msg="范围命中核心（.github/core-paths.txt），方案没有引用 origin/main 上「已采纳」的 ADR。先按 AGENTS.md 红线 6 写 ADR（docs/decisions/）并定案，再重跑 just triage" ;;
+    esac
+    bash "${FLOW_DIR}/owner-stuck.sh" "$msg" --issue "$N" ||
       die_stuck "把 #${N} 打成 status:blocked 失败"
     ;;
   needs:product)

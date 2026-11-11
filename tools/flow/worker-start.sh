@@ -52,6 +52,9 @@ for c in "${CARDS[@]}"; do
   [ "${#GLOBS[@]}" -gt 0 ] || die "#${c} 没有可读的「范围」代码块，不领" \
     "issue 正文要有「**范围（只许动这些）**：」，下面跟一个 \`\`\` 代码块，一行一个路径或 glob。" \
     "让 owner 先补范围，并保持 status:ready。"
+  [ -n "$(flow_field_text "$I_BODY" "验收场景")" ] || die "#${c} 没有可读的「验收场景」，不领" \
+    "issue 正文要有「**验收场景**：」，写成 操作 → 期望 → 日志里哪一行算过。" \
+    "让 owner 先补验收场景，并保持 status:ready。"
   ALL_GLOBS+=("${GLOBS[@]}")
   has_label core && CORE_CARDS+=("$c")
   TITLES+=("#${c} ${I_TITLE}")
@@ -60,6 +63,16 @@ for c in "${CARDS[@]}"; do
   if [ -z "$t" ]; then
     if has_label bug; then t="Bug"; elif has_label enhancement; then t="Feature"; else t="Task"; fi
   fi
+  case "$t " in
+    *"Bug "*)
+      repro="$(flow_field_text "$I_BODY" "复现路径")"
+      if [ -z "$repro" ] || printf '%s\n' "$repro" | head -1 | grep -qiE '^(无|没有|不涉及|none|无。)$'; then
+        die "#${c} 是 Bug 卡，但没有可读的「复现路径」，不领" \
+          "issue 正文要有「**复现路径**：」写稳定复现的步骤/命令；复现不了的只加日志/护栏，转 blocked 找人对齐。" \
+          "让 owner 先补复现路径，或把卡转 status:blocked。"
+      fi
+      ;;
+  esac
   ITYPES="${ITYPES} ${t}"
   [ "$c" = "$N" ] && { FIRST_TITLE="$I_TITLE"; FIRST_BODY="$I_BODY"; }
 done
