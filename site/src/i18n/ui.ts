@@ -44,7 +44,7 @@ export const ui = {
     'video.download': 'Download it (MP4)',
     'pillar1.title': "Set up once, and the whole family is backed up",
     'pillar1.body':
-      "Uses a computer you already have at home. Connect each phone by scanning a code or entering a pairing code, then backups run automatically, with status always visible.",
+      "Uses a computer you already have at home. Connect each phone by scanning a code or entering a pairing code, then backups run automatically, with status always visible. Not ready to back up everything? Pick a few photos to send, without giving photo access.",
     'pillar2.title': "End-to-end encrypted",
     'pillar2.body':
       "Photos are encrypted the whole way from phone to computer, on any network.",
@@ -98,7 +98,7 @@ export const ui = {
     'video.download': '下载观看（MP4）',
     'pillar1.title': '一次设置，全家自动备份',
     'pillar1.body':
-      '用家里已有的电脑。每部手机扫码或输入配对码连接，之后自动备份，状态随时可见。',
+      '用家里已有的电脑。每部手机扫码或输入配对码连接，之后自动备份，状态随时可见。不想一开始就全量备份，可以从相册里挑几张传过去，不用给照片权限。',
     'pillar2.title': '端到端加密',
     'pillar2.body':
       '无论在什么网络下，照片都全程加密传输。',
