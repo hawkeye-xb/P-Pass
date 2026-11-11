@@ -4,9 +4,9 @@
 // App.svelte，daemon 由 invoke mock 扮演（同 deviceNeedsUpdate.test.js）。
 //
 // 反证：把顶部/设备页的计数改回数列表行（含已断开的），第一条里
-// 「已配对设备 0 台」变 1 台、第二条的「另有 1 台已断开」消失；
-// 把卡片空状态判据改回 devices 列表，第一条的空状态文案变回
-// 「还没有配对的设备。」（都是本卡要消除的打架）。
+// 「已配对设备 0 台」变 1 台、第二条的「另有 1 台已断开」消失。
+// 卡片空状态判据由 daemon 计数保证：把 App.svelte 的 pairedCount === 0
+// 改回「数列表里 removal=none 的行」，下面「两次 IPC 之间手机断开」这条用例变红。
 import { cleanup, render } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -153,6 +153,15 @@ describe("断开后总览顶部与备份状态卡一致（#1402 卡1）", () => 
     expect(text()).toContain("已配对设备 1 台");
     expect(text()).toContain("（另有 1 台已断开）");
     expect(text()).toContain("在用的那台");
+    expect(text()).not.toContain("还没有配对的设备");
+  });
+
+  it("两次 IPC 之间手机断开：计数已 1 台但列表无在用行，卡片不报「还没配对」", async () => {
+    daemon({ paired: 1, disconnected: 1 }, [row("b", "断开的那台", "disconnected")]);
+    await open();
+
+    // 判据读 daemon 计数（paired_devices=1），不是数列表里的 removal=none 行；
+    // 改回数列表这里就是 0 台，会误报「还没有配对的设备」。
     expect(text()).not.toContain("还没有配对的设备");
   });
 
