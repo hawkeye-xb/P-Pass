@@ -485,12 +485,38 @@ B2PP_WIN='fn f() { let p = "C:\\Windows\\System32\\cmd.exe"; }'
 expect_red "B.2 platform-path 未声明 Unix 路径" "$(sample crates/media-codec/src/a.rs "$B2PP_UNIX")" "hardcoded platform path"
 expect_red "B.2 platform-path 未声明 Windows 盘符" "$(sample crates/media-codec/src/a.rs "$B2PP_WIN")" "hardcoded platform path"
 
+echo "== B.2 platform-path 路径盲区正样例（#1679，必须报红）"
+B2PP_VOL='fn f() { let p = std::path::Path::new("/Volumes/Data/x"); }'
+B2PP_USERS='fn f() { let p = std::path::Path::new("/Users/alice/x"); }'
+B2PP_PRIVVAR='fn f() { let p = std::path::Path::new("/private/var/db/x"); }'
+B2PP_HOME='fn f() { let p = std::path::Path::new("/home/alice/x"); }'
+B2PP_PROC='fn f() { let p = std::path::Path::new("/proc/self/exe"); }'
+B2PP_DEV='fn f() { let p = std::path::Path::new("/dev/null"); }'
+B2PP_DRIVE='fn f() { let p = "D:\\data"; }'
+B2PP_VERBATIM='fn f() { let p = r"\\?\C:\foo"; }'
+B2PP_REG='fn f() { let p = "HKEY_CURRENT_USER\\Software\\P-Pass\\x"; }'
+for pair in \
+  "Volumes:$B2PP_VOL" "Users:$B2PP_USERS" "private-var:$B2PP_PRIVVAR" "home:$B2PP_HOME" \
+  "proc:$B2PP_PROC" "dev:$B2PP_DEV" "纯盘符:$B2PP_DRIVE" "verbatim:$B2PP_VERBATIM" "注册表:$B2PP_REG"; do
+  expect_red "B.2 platform-path 盲区 ${pair%%:*}" "$(sample crates/media-codec/src/a.rs "${pair#*:}")" "hardcoded platform path"
+done
+
 echo "== B.2 platform-path 放行 / 豁免（必须不报）"
 expect_green "B.2 platform-path 同行标记放行" "$(sample crates/media-codec/src/a.rs 'fn f() { let p = std::path::Path::new("/usr/lib/nope"); } // arch-allow: platform-path probe-by-existence')"
 expect_green "B.2 platform-path 上方注释块标记放行" "$(sample crates/media-codec/src/a.rs '/// arch-allow: platform-path probe-by-existence
 fn f() { let p = std::path::Path::new("/usr/lib/nope"); }')"
 expect_green "B.2 platform-path legacy 声明放行（arch rule B.2）" "$(sample crates/media-codec/src/a.rs '/// Fixed path, probed by existence (arch rule B.2, same discipline as ffmpeg).
 fn f() { let p = std::path::Path::new("/usr/lib/nope"); }')"
+
+echo "== B.2 platform-path 标记收窄（#1679，普通叙述/代码字符串里的标记不放行）"
+expect_red "B.2 platform-path 普通叙述里的 arch rule B.2 不放行" "$(sample crates/media-codec/src/a.rs '//! instead of a `#[cfg]` — arch rule B.2 keeps platform switches out of
+//! this crate.
+fn f() { let p = std::path::Path::new("/usr/lib/nope"); }')" "hardcoded platform path"
+expect_red "B.2 platform-path 代码字符串里的标记不放行" "$(sample crates/media-codec/src/a.rs 'fn f() {
+    let marker = "arch-allow: platform-path";
+    let p = std::path::Path::new("/usr/lib/nope");
+}')" "hardcoded platform path"
+
 expect_green "B.2 platform-path crates/platform 豁免" "$(sample crates/platform/src/a.rs "$B2PP_UNIX")"
 expect_green "B.2 platform-path tests/ 豁免" "$(sample crates/media-codec/tests/a.rs "$B2PP_UNIX")"
 expect_green "B.2 platform-path 注释里提到不算" "$(sample crates/media-codec/src/a.rs '// 以前是 /usr/lib/nope，现在没了')"
