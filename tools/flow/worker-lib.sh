@@ -87,7 +87,8 @@ EOF2
 flow_field_text() { # flow_field_text <正文> <字段名>
   printf '%s\n' "$1" | awk -v f="$2" '
     index($0, "**" f "**") == 1 { grab = 1; sub(/^[^:：]*[：:]?[[:space:]]*/, ""); }
-    grab && /^<!--/ { next }
+    grab && /^<!--/ { incomment = 1; if ($0 ~ /-->/) incomment = 0; next }
+    grab && incomment { if ($0 ~ /-->/) incomment = 0; next }
     grab && /^[[:space:]]*$/ { next }
     grab && /^\*\*[^*]+\*\*/ { exit }
     grab && /^#/ { exit }

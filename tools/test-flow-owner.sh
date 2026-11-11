@@ -549,16 +549,16 @@ tcard 71 status:inbox
 plan "$P" "$UIP" "首页多一张引导" $'**选项一**：做\n**选项二**：不做'
 out="$(bash tools/flow/owner-triage.sh 71 "$P" 2>/dev/null)"
 check "不带 owner 定案：行为不变（needs:product、无 decided:owner）" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 71 needs:product$" && ! grep -q "decided:owner" "$FAKE/issues/71.labels"' _ "$out"
-tcard 90 status:inbox
-printf 'Bug' >"$FAKE/issues/90.type"
+tcard 94 status:inbox
+printf 'Bug' >"$FAKE/issues/94.type"
 plan "$P" "tools/new-thing.sh" "无" $'**复现路径**：无'
-out="$(bash tools/flow/owner-triage.sh 90 "$P" 2>/dev/null)"
-check "Bug 卡复现路径写「无」→ blocked（找人对齐，不自动修）" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 90 blocked$" && grep -q "status:blocked" "$FAKE/issues/90.labels"' _ "$out"
-tcard 91 status:inbox
-printf 'Bug' >"$FAKE/issues/91.type"
+out="$(bash tools/flow/owner-triage.sh 94 "$P" 2>/dev/null)"
+check "Bug 卡复现路径写「无」→ blocked（找人对齐，不自动修）" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 94 blocked$" && grep -q "status:blocked" "$FAKE/issues/94.labels"' _ "$out"
+tcard 95 status:inbox
+printf 'Bug' >"$FAKE/issues/95.type"
 plan "$P" "tools/new-thing.sh" "无" $'**复现路径**：停后台服务 → 点启动 → 日志出现 xxx'
-out="$(bash tools/flow/owner-triage.sh 91 "$P" 2>/dev/null)"
-check "反证：Bug 卡有复现路径 → ready" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 91 ready$" && grep -q "status:ready" "$FAKE/issues/91.labels"' _ "$out"
+out="$(bash tools/flow/owner-triage.sh 95 "$P" 2>/dev/null)"
+check "反证：Bug 卡有复现路径 → ready" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 95 ready$" && grep -q "status:ready" "$FAKE/issues/95.labels"' _ "$out"
 tcard 72 status:inbox
 plan "$P" "$UIP" "首页多一张引导" "**owner 定案**：无"
 bash tools/flow/owner-triage.sh 72 "$P" >/dev/null 2>&1

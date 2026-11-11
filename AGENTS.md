@@ -206,7 +206,7 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
   （会把旧工作区当新内容提交，撤回别人刚合入的改动）。
 - 分拣、出 test 包、停下、记想法的命令见 [owner 流程](docs/runbook/owner.md)：
   `just triage <号> <方案文件>` 给 `status:inbox` 的卡定范围并分流
-  （纯技术非核心 → `status:ready`；碰用户可见行为、隐私、数据 → `needs:product`，除非 `**产品定案**` 引用
+  （纯技术非核心、Bug 卡有「复现路径」→ `status:ready`；Bug 卡缺复现路径 → `status:blocked`；碰用户可见行为、隐私、数据 → `needs:product`，除非 `**产品定案**` 引用
   产品负责人在本仓 issue 的拍板评论或已采纳方案、`**owner 定案**`/`**标准依据**` 成立；核心无已采纳方案 → `status:blocked`）；
   `just release-test <端...>` 出 test 包（端以 plan-builds 判定为准，正式版只由产品负责人发布）；
   `just owner-stuck "<问题>" --product "<选项一>" "<选项二>"` 交产品取向的问题；

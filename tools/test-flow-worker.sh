@@ -357,6 +357,11 @@ sed -i.bak 's/复现路径\*\*：repro-x/复现路径\*\*：无/' "${FAKE_GH}/14
 if START 14 >/dev/null 2>&1; then bad "start 放行了复现路径写「无」的 Bug 卡"; else ok "start 拒绝 Bug 卡缺复现路径"; fi
 has_lbl 14 "status:ready" && ok "拒绝后仍是 ready" || bad "拒绝后标签被改了"
 
+issue 15 "status:ready" "[T-15] no accept" "src/**"
+sed -i.bak 's/\*\*验收场景\*\*：y/**验收场景**：/' "${FAKE_GH}/15.body" && rm -f "${FAKE_GH}/15.body.bak"
+if START 15 >/dev/null 2>&1; then bad "start 放行了没有验收场景的卡"; else ok "start 拒绝无「验收场景」"; fi
+has_lbl 15 "status:ready" && ok "拒绝后仍是 ready" || bad "拒绝后标签被改了"
+
 issue 13 "status:ready" "[T-13] Fix the Thing" "src/**" "Bug"
 OUT="$(START 13 2>&1)"
 rc=$?
