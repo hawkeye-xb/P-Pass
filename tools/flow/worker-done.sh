@@ -200,7 +200,7 @@ SELF_REVIEW_BODY="$(grep -v '^[[:space:]]*$' "$SELF_REVIEW" | sed '1d' | scrub)"
 #   assets/i18n/**、strings*.xml → just mobile-static-check
 #   iOS 文案（apps/ios/**/*.strings、*.xcstrings、assets/i18n/**）→ 另加 just ios-test --lang en 与 --lang zh
 #     （本机模拟器多是中文、CI 是英文：写死某一种语言的断言只在另一种语言下红，#1342）
-#   crates/<名>/**             → cargo nextest run -p <包名> + cargo fmt --all -- --check + cargo clippy（与 ci-rust 对齐，#1646）
+#   crates/<名>/**             → cargo nextest run -p <包名> + cargo fmt --all -- --check + cargo clippy（与 justfile 的 lint 一致、不带 --all-features，#1646/#1669）
 #   apps/desktop/src/**        → pnpm -C apps/desktop test（桌面前端 vitest）
 #   apps/desktop/src-tauri/**  → cargo nextest run -p p-pass-desktop + fmt + clippy（独立 workspace，用 --manifest-path；与 desktop-checks 对齐，#1646）
 #   tools/e3/**（非测试脚本）   → bash tools/test-e3.sh（e3 工具链自测；场景脚本是 glob 引用、字面 grep 不到，#1650）
@@ -288,7 +288,9 @@ while IFS= read -r f; do
       if [ -n "$pkg" ]; then
         add_gate "cargo nextest run -p ${pkg}"
         add_gate "cargo fmt --all -- --check"
-        add_gate "cargo clippy --all-targets --all-features -- -D warnings"
+        # BUILD-06（#174 修过、#1669 复发）：与 justfile 的 `lint` 逐字一致，**不带** --all-features。
+        # transport/mobile-ffi 用 std::os::fd，Windows 上 E0432/E0599 编不过；远端 ci-rust 才带它。
+        add_gate "cargo clippy --all-targets -- -D warnings"
       else FULL=1; fi
       ;;
     tools/*)
