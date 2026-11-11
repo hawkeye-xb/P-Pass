@@ -24,11 +24,81 @@
 #
 # 模拟器选择、"Unable to find a destination" 的处理同 tools/ios/test.sh。
 set -euo pipefail
+
+# ── 端口判定（#1665）────────────────────────────────────────────────────────
+# daemon 启动后约 0.2 s 内会短暂多一个 IPv4 通配 UDP socket，之后才收敛成一个（本机实测）。
+# 取「第一次非空」会落进这个窗口、本机必红。改为收敛判定：同一个端口集合连续 N 次采样一致、
+# 且只剩一个端口，才算拿到；超时没收敛就失败并打印每次采样。这是判据本身变严，不是失败后重试。
+PORT_STABLE_SAMPLES="${PPASS_PORT_STABLE_SAMPLES:-3}"
+PORT_SAMPLE_INTERVAL="${PPASS_PORT_SAMPLE_INTERVAL:-0.2}"
+PORT_WAIT_SECONDS="${PPASS_PORT_WAIT:-10}"
+
+# 一次采样里的端口集合：输入是「每行一个 n*:<端口>」（lsof -Fn），输出空格分隔、去重有序。
+port_set() {
+  printf '%s\n' "$1" | sed -n 's/^n\*:\([0-9][0-9]*\)$/\1/p' | sort -u | tr '\n' ' ' | sed 's/ *$//'
+}
+
+# stdin：每行一次采样（空格分隔的端口列表）。收敛成唯一端口就打印它，否则返回 1。
+converged_port() {
+  local last="" streak=0 line ports n
+  while IFS= read -r line; do
+    ports=$(printf '%s' "$line" | tr -s ' ' '\n' | sed '/^$/d' | sort -u | tr '\n' ' ' | sed 's/ *$//')
+    if [ -n "$ports" ] && [ "$ports" = "$last" ]; then streak=$((streak + 1)); else streak=1; last="$ports"; fi
+    n=$(printf '%s' "$ports" | wc -w | tr -d ' ')
+    if [ "$n" = 1 ] && [ "$streak" -ge "$PORT_STABLE_SAMPLES" ]; then
+      printf '%s\n' "$ports"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# #1665 修之前的规则（第一次非空且只有一个端口就算拿到）——只给 --self-test 当反证用。
+old_first_nonempty_rule() {
+  local line ports
+  while IFS= read -r line; do
+    ports=$(printf '%s' "$line" | tr -s ' ' '\n' | sed '/^$/d' | sort -u | tr '\n' ' ' | sed 's/ *$//')
+    [ -n "$ports" ] || continue
+    [ "$(printf '%s' "$ports" | wc -w | tr -d ' ')" = 1 ] || return 1
+    printf '%s\n' "$ports"
+    return 0
+  done
+  return 1
+}
+
+# 判定逻辑的自测（不需要模拟器 / daemon）：判定本身能认可收敛序列、拒绝不收敛序列，
+# 并且旧规则在同一段真实采样序列上必须红（反证）。
+self_test() {
+  local fails=0 got
+  got=$(printf '%s\n' "51031 56501" "56501" "56501" "56501" | converged_port) || got=FAIL
+  [ "$got" = 56501 ] || { echo "FAIL 首采样两个、随后一个应收敛到 56501（得到 ${got}）"; fails=$((fails + 1)); }
+  if printf '%s\n' "51031 56501" "51031 56501" "51031 56501" "51031 56501" | converged_port >/dev/null; then
+    echo "FAIL 一直两个端口不该收敛"; fails=$((fails + 1))
+  fi
+  got=$(printf '%s\n' "" "" "56501" "56501" "56501" | converged_port) || got=FAIL
+  [ "$got" = 56501 ] || { echo "FAIL 先空后稳定一个应收敛到 56501（得到 ${got}）"; fails=$((fails + 1)); }
+  if printf '%s\n' "56501" "56501" "51031 56501" "51031 56501" | converged_port >/dev/null; then
+    echo "FAIL 端口集合变过、还没稳满 ${PORT_STABLE_SAMPLES} 次不该收敛"; fails=$((fails + 1))
+  fi
+  if printf '%s\n' "51031 56501" "56501" "56501" "56501" | old_first_nonempty_rule >/dev/null; then
+    echo "FAIL 反证：旧规则（第一次非空就判）在同一段真实序列上应当是红的"; fails=$((fails + 1))
+  fi
+  [ "$fails" = 0 ] && echo "PASS: 端口判定自测（收敛判定 + 旧规则反证）"
+  return "$fails"
+}
+
+case "${1:-}" in
+  --self-test) self_test; exit $? ;;
+esac
+
 # 需要 iOS 模拟器（xcrun/xcodebuild）；非 macOS 平台显式跳过，CI 的 macOS lane 照常跑。
 if [ "$(uname -s)" != Darwin ]; then
   echo "跳过：test-transport-ffi.sh 需要 macOS 模拟器（xcrun/xcodebuild）"
   exit 0
 fi
+# 判定逻辑先自测（纯 bash，毫秒级）：收敛序列、不收敛序列、旧规则反证。每次跑（含 CI）都过一遍。
+self_test
+
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 PKG="$ROOT/apps/ios/TransportFFITests"
 cd "$ROOT"
@@ -94,16 +164,20 @@ if [ -z "$NODE_ID" ]; then
   exit 1
 fi
 
-# daemon 只该有一个 IPv4 UDP socket（*:端口）。多于一个就说明假设不成立，宁可失败也不猜。
-PORTS=
-for _ in $(seq 1 50); do
-  PORTS=$(lsof -nP -a -p "$DAEMON_PID" -i4UDP -Fn 2>/dev/null | sed -n 's/^n\*:\([0-9][0-9]*\)$/\1/p' | sort -u)
-  [ -n "$PORTS" ] && break
-  sleep 0.2
+# daemon 最终只该有一个 IPv4 UDP socket（*:端口）；启动瞬间会短暂有两个（#1665），按收敛判定取。
+PORT=
+PORT_SAMPLES="$WORK/port-samples.txt"
+: >"$PORT_SAMPLES"
+PORT_DEADLINE=$(( $(date +%s) + PORT_WAIT_SECONDS ))
+while [ "$(date +%s)" -lt "$PORT_DEADLINE" ]; do
+  printf '%s\n' "$(port_set "$(lsof -nP -a -p "$DAEMON_PID" -i4UDP -Fn 2>/dev/null)")" >>"$PORT_SAMPLES"
+  PORT=$(converged_port <"$PORT_SAMPLES") || PORT=
+  [ -n "$PORT" ] && break
+  sleep "$PORT_SAMPLE_INTERVAL"
 done
-PORT="$PORTS"
-if [ -z "$PORT" ] || [ "$(printf '%s\n' "$PORTS" | wc -l | tr -d ' ')" != 1 ] || [ "$PORT" = 41145 ]; then
-  echo "error: 没拿到 daemon 唯一的 IPv4 UDP 端口（得到「$(printf '%s' "$PORTS" | tr '\n' ' ')」）" >&2
+if [ -z "$PORT" ] || [ "$PORT" = 41145 ]; then
+  echo "error: daemon 的 IPv4 UDP 端口在 ${PORT_WAIT_SECONDS}s 内没收敛成唯一一个（每次采样一行）：" >&2
+  sed 's/^/  [/; s/$/]/' "$PORT_SAMPLES" >&2 || true
   lsof -nP -a -p "$DAEMON_PID" -i >&2 || true
   exit 1
 fi
