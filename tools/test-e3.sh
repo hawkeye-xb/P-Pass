@@ -411,6 +411,11 @@ if command -v just >/dev/null 2>&1; then
     [ "$f" = "$d/.env.ppass-dev" ] || { echo "配置不在主副本旁：$f"; exit 1; }
     got="$(just --justfile "$ROOT/justfile" --working-directory "$d/main/sub" --command printenv CARGO_TARGET_DIR)"
     [ "$got" = "$d/P-Pass-cache/cargo-target" ] || { echo "just 没读到共享 CARGO_TARGET_DIR（得到 ${got:-空}）"; exit 1; }
+    # Windows（MSYS）上 MSYS2 会把环境变量里长得像路径的值改写（/x → X:/）。本测试拿 /x 当哨兵值
+    # 验「环境变量优先」，只在测试进程里挡掉这个改写；不放共享库（会连累 clean-local-builds.sh 的 cargo-sweep，#1650）。
+    if command -v cygpath >/dev/null 2>&1; then
+      export MSYS2_ENV_CONV_EXCL="CARGO_TARGET_DIR${MSYS2_ENV_CONV_EXCL:+;$MSYS2_ENV_CONV_EXCL}"
+    fi
     got="$(CARGO_TARGET_DIR=/x just --justfile "$ROOT/justfile" --working-directory "$d/main/sub" --command printenv CARGO_TARGET_DIR)"
     [ "$got" = /x ] || { echo "环境里已设的 CARGO_TARGET_DIR 被配置覆盖了（得到 ${got}）"; exit 1; }
     echo 'CARGO_TARGET_DIR=/changed' >"$f"

@@ -15,6 +15,10 @@ DEV_CACHE_ENV_NAME=.env.ppass-dev
 dev_cache_main_root() {
   local common
   common="$(git -C "${1:-$PWD}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  # Windows 上 git 给 C:/…，bash 认 /c/…（或 /tmp/…）：cygpath 转回 MSYS 风格；非 MSYS 没有 cygpath，原样保留（#1650）。
+  case "$common" in
+    [A-Za-z]:/*) common="$(cygpath -u "$common" 2>/dev/null || printf '%s' "$common")" ;;
+  esac
   dirname "$common"
 }
 
