@@ -1,0 +1,13 @@
+# iOS 界面回归判定表（#1458）：tools/ios/ui-regress.sh 按它逐例判 PASS/FAIL。
+# 一行一例：用例名<TAB>通过行（Python 正则，按先后顺序都要出现在本例 App 进程的日志里，用 " >> " 分隔）<TAB>说明
+# 只看本例那一次启动（`process start: pid=` 且时间不早于本例开跑）之后的行：上一例留下的通过行不算。
+# 日志行改了（例如 #1453 补行）只改这里。
+DecisionScopeFull	onboarding: decision shown >> onboarding: photo access after prompt=full	决定页「选择备份范围」→ 系统照片权限选「允许全部」
+DecisionPick	onboarding: decision shown >> picked: 1 chosen >> onboarding: marked onboarded via=pick	决定页「先挑几张试试」→ 系统选择器选 1 张 → 进照片页
+SettingsRuleFull	onboarding: marked onboarded via=pick >> auto-rule: saved enabled=true	设置页「自动备份」→ 照片权限「允许全部」→ 开关开
+SettingsRuleLimited	onboarding: marked onboarded via=pick >> auto-rule: partial photo access, sent allowed photos n=[1-9]	设置页「自动备份」→ 照片权限「限制访问」选 1 张 → 开关保持关、允许的照片传一次
+# 待 #1453 合入后启用（App 现在不打这一行，启用会必红；用例清单由此表的非注释行生成）：
+# SettingsRuleDenied	onboarding: marked onboarded via=pick >> settings: auto-rule photo access after prompt=none	设置页「自动备份」→ 照片权限「不允许」→ 开关保持关
+SettingsPick	onboarding: marked onboarded via=pick >> picked: 1 chosen	设置页「挑几张传」→ 系统选择器选 1 张
+NotifyAllow	onboarding: marked onboarded via=pick >> notifications: system prompt result granted=true	设置页「通知」→ 系统授权「允许」
+NotifyDeny	onboarding: marked onboarded via=pick >> notifications: system prompt result granted=false	设置页「通知」→ 系统授权「不允许」

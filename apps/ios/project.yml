@@ -88,7 +88,33 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(PPASS_BUNDLE_ID).tests
         GENERATE_INFOPLIST_FILE: YES
+  # 界面自动化回归（XCUITest，真机 / 模拟器）：系统弹窗（照片、通知、选择器）由测试点，不要人点。
+  # 只由 tools/ios/ui-regress.sh（just ios-ui-regress）跑，不进 PPass scheme 的 test——
+  # just ios-test 与 CI 不跑它（要配对桩、要重置授权，单元测试环境里跑不了）。
+  PPassUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: PPassUITests
+    dependencies:
+      - target: PPass
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: $(PPASS_BUNDLE_ID).uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: PPass
+        EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM[sdk=iphoneos*]: 2WJUWVUJBN
 schemes:
+  PPassUI:
+    build:
+      targets:
+        PPass: all
+        PPassUITests: [test]
+    test:
+      targets:
+        - PPassUITests
   PPass:
     build:
       targets:

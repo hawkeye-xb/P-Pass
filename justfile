@@ -495,6 +495,22 @@ ios-test *args:
     PPASS_DAEMON_PROFILE=dev bash tools/ios/test-transport-ffi.sh
   fi
 
+# iOS 界面回归（#1458）：XCUITest 走真实界面、系统弹窗由测试点，按 App 日志逐例判 PASS/FAIL。
+# just ios-ui-regress sim|device [--only A,B] [--invert <用例>] [--skip-build]；真机自动持 tools/e3/lock ios，
+# 构建在锁外先跑完再持锁（设备锁规矩）。说明见 docs/runbook/ios-ui-regress.md。
+ios-ui-regress target *args:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd "{{ justfile_directory() }}"
+  case "{{target}}" in
+    sim) bash tools/ios/ui-regress.sh sim {{args}} ;;
+    device)
+      bash tools/ios/ui-regress.sh device --build-only {{args}}
+      tools/e3/lock ios bash tools/ios/ui-regress.sh device --skip-build {{args}}
+      ;;
+    *) echo "用法: just ios-ui-regress sim|device [--only A,B] [--invert <用例>] [--skip-build]" >&2; exit 2 ;;
+  esac
+
 # iOS 本地 SwiftPM 包（apps/ios/Packages/*/Package.swift）逐个在模拟器上测（#345）。没有包时直接通过。
 ios-test-packages:
   bash tools/ios/test-packages.sh
