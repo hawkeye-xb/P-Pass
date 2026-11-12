@@ -8,9 +8,12 @@
 #      现拉发行版，GitHub 抖动时把 job / 发版卡住；没有 success() 又会把半截下载存进缓存。
 #   2. tools/fetch-ffmpeg.sh 的下载必须带 `curl -fL --retry 5 --retry-delay 2 --retry-all-errors`，
 #      且 verify_sha256 校验还在——重试不能换来「校验被绕开」。
+#   3. 任何 workflow 都不许用 apt 装 just（#1683）：runner 解析 security.ubuntu.com 抖动时
+#      `apt-get install just` 整步红，flow-tests 与汇总它的 gate 连坐假红。走 install-action
+#      或带重试的二进制下载。
 # 反证：把 workflows 与 fetch-ffmpeg.sh 复制到临时目录做变异（删缓存 action / 去掉 success() /
 #       e2e 删缓存 action / 去掉 --retry-all-errors / --retry 5 改 0 / 原地删掉校验函数体 /
-#       原地删掉两处校验调用），每种都必须判红；原样必须判绿。
+#       原地删掉两处校验调用 / ci-docs 装 just 改回 apt），每种都必须判红；原样必须判绿。
 #
 # 用法: tools/test-ci-download-resilience.sh
 # 退出码: 0 全过 / 1 有失败
@@ -51,6 +54,23 @@ for path in sorted(glob.glob(os.path.join(root, ".github", "workflows", "*.yml")
             "（actions/cache/save + if: success() + steps.gradle-dist.outputs.key）"
         )
 
+# #1683：apt 装 just 会把整个 job 绑在 security.ubuntu.com 上。按命令行判（`\` 续行先并成一行），
+# 只看 apt install 的参数里有没有 just——同一条命令装别的包或之后调用 just 都不算。
+APT_INSTALL = re.compile(r"\bapt(?:-get)?\s+install\b")
+for path in sorted(glob.glob(os.path.join(root, ".github", "workflows", "*.yml"))):
+    name = os.path.basename(path)
+    text = open(path, encoding="utf-8").read().replace("\\\n", " ")
+    for line in text.splitlines():
+        if not APT_INSTALL.search(line):
+            continue
+        args = line.split("install", 1)[1]
+        pkgs = [t.strip("\"'") for t in args.split() if not t.startswith("-")]
+        if "just" in pkgs:
+            bad.append(
+                f"{name}: 用 apt 装 just（runner 解析 security.ubuntu.com 抖动时整步红）"
+                "——换 taiki-e/install-action 或带重试的二进制下载"
+            )
+
 fetch = os.path.join(root, "tools", "fetch-ffmpeg.sh")
 text = open(fetch, encoding="utf-8").read()
 if "curl -fL --retry 5 --retry-delay 2 --retry-all-errors" not in text:
@@ -71,7 +91,7 @@ sys.exit(1 if bad else 0)
 PY
 }
 
-echo "== 原样：Gradle 缓存接线与 fetch-ffmpeg 重试都成立 =="
+echo "== 原样：Gradle 缓存接线、fetch-ffmpeg 重试、just 不走 apt 都成立 =="
 if out="$(check "$ROOT")"; then
   ok "原样判绿"
 else
@@ -119,6 +139,8 @@ mutant "fetch-ffmpeg.sh 原地删掉校验函数体（只留注释）" tools/fet
   "/^verify_sha256\(\) \{/,/^\}/d"
 mutant "fetch-ffmpeg.sh 原地删掉两处校验调用（函数还在）" tools/fetch-ffmpeg.sh \
   "/^[[:space:]]*verify_sha256[[:space:]]+/d"
+mutant "ci-docs.yml 装 just 改回 apt" .github/workflows/ci-docs.yml \
+  "s|uses: taiki-e/install-action@[0-9a-f]+.*|run: sudo apt-get install -y -qq just|"
 
 if [ "$fail" -eq 0 ]; then
   echo "== ci-download-resilience: green ✅ =="

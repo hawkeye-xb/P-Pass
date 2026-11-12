@@ -316,11 +316,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - name: 装 just
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq just
-          just --version
+      # 不走 apt：runner 解析 security.ubuntu.com 失败时 apt 整步红，flow-tests 与 CI Docs gate 连坐假红
+      # （2026-11-11 PR #1681 / #1682）。install-action 取 GitHub Releases 的预编译包，下载自带 10 次重试；
+      # just 钉 1.45.0，即此前 apt 装的那个版本。装完 --version 自检，装错当场在日志里看见。
+      - name: 装 just（install-action，不走 apt）
+        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2 # v2.90.2
+        with:
+          tool: just@1.45.0
+      - name: just --version（自检）
+        run: just --version
       - name: just flow-tests
         run: just flow-tests
 
