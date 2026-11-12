@@ -315,9 +315,7 @@ async fn run() -> anyhow::Result<()> {
     // #1700：注入点只在测试构建生效；发布构建忽略该变量并留一条日志，照常读钥匙串正本。
     let raw_platform_dir = std::env::var_os("PPF_PLATFORM_DIR");
     if !TEST_INJECTION_ENABLED && raw_platform_dir.is_some() {
-        tracing::warn!(
-            "PPF_PLATFORM_DIR 只在开发/测试构建生效，正式版忽略它，照常读系统钥匙串"
-        );
+        tracing::warn!("PPF_PLATFORM_DIR 只在开发/测试构建生效，正式版忽略它，照常读系统钥匙串");
     }
     let injected_platform_dir =
         injected_platform_dir_from(raw_platform_dir, TEST_INJECTION_ENABLED);
