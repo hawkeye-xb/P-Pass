@@ -21,6 +21,20 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
+/**
+ * 系统栏图标的亮度阈值（#112）：背景相对亮度 ≥ 0.5 视为浅色背景，用深色图标。
+ * 抽成纯函数以便 JVM 单测覆盖浅色 / 深色 / 临界三种情况。
+ */
+internal const val SYSTEM_BAR_LIGHT_APPEARANCE_THRESHOLD = 0.5f
+
+/** 背景亮度 → `isAppearanceLightStatusBars` / `isAppearanceLightNavigationBars` 的值。
+ *  true = 图标画成深色（浅色背景），false = 图标画成浅色（深色背景）。 */
+internal fun isAppearanceLightFor(luminance: Float): Boolean =
+    luminance >= SYSTEM_BAR_LIGHT_APPEARANCE_THRESHOLD
+
+internal fun isAppearanceLightFor(background: Color): Boolean =
+    isAppearanceLightFor(background.luminance())
+
 @Composable
 fun PPScreen(
     background: Color = PPColor.Paper,
@@ -31,10 +45,10 @@ fun PPScreen(
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as? Activity)?.window ?: return@SideEffect
-            val lightIcons = background.luminance() < 0.5f
+            val lightAppearance = isAppearanceLightFor(background)
             WindowCompat.getInsetsController(window, view).apply {
-                isAppearanceLightStatusBars = !lightIcons
-                isAppearanceLightNavigationBars = !lightIcons
+                isAppearanceLightStatusBars = lightAppearance
+                isAppearanceLightNavigationBars = lightAppearance
             }
         }
     }
