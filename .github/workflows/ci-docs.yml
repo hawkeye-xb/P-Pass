@@ -325,6 +325,10 @@ jobs:
           tool: just@1.45.0
       - name: just --version（自检）
         run: just --version
+      # tools/test-ci-lane-invariants.sh 缺 PyYAML 直接判红（不假绿）；runner 镜像自带不可依赖，
+      # 照本文件其它 job 的写法显式装一次（#1517）。
+      - name: 装 PyYAML（lane 不变量测试要用）
+        run: python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --quiet pyyaml
       - name: just flow-tests
         run: just flow-tests
 
