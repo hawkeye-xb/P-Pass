@@ -19,6 +19,7 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 # 真实 PATH：下面把 PATH 换成假命令目录跑流程；个别用例要跑真实脚本（#1425）。
 REAL_PATH="$PATH"
+REAL_MKTEMP="$(command -v mktemp)"
 
 PASS=0
 FAIL=0
@@ -933,7 +934,7 @@ else
   ok "某张卡写评论失败 → 非 0 退出"
 fi
 grep -q "#92 写评论失败" "${TMP}/o92s" && ok "  报错点名是哪张卡的哪一步" || bad "  报错没点名：$(tail -3 "${TMP}/o92s")"
-body="$(sed -n 's/.*--body-file //p' "${TMP}/o92s" | head -1)"
+body="$(eval "printf '%s' $(sed -n 's/.*--body-file //p' "${TMP}/o92s" | head -1)")"
 [ -n "$body" ] && [ -f "$body" ] && grep -qF "多卡失败：离线" "$body" &&
   ok "  评论失败时保留正文文件，补做命令直接能用" || bad "  正文文件被删了，补做命令用不了：$body"
 rm -f "$body"
@@ -941,6 +942,27 @@ has_lbl 93 status:blocked && comments_of 93 | grep -qF "多卡失败：离线" &
   ok "  其余卡照常写评论、打 blocked（不因一张失败留半截）" || bad "  其余卡没被处理（$(labels_of 93)）"
 has_lbl 92 status:blocked && ok "  评论失败的卡照样打 blocked（两件事互不影响）" || bad "  评论失败连带标签也没打"
 rm -f "${FAKE_GH}/92.comment_fail"
+
+# 补做命令里的正文路径必须能被 shell 原样解析（#1574）：临时目录含空格时未加引号会被拆成多个参数。
+# macOS 的 mktemp 无参数时不看 TMPDIR，垫一个把 TMPDIR 当模板目录的 mktemp，才能在两边都造出带空格的路径。
+mkdir -p "${TMP}/tmp dir" "${TMP}/mktemp space bin"
+cat >"${TMP}/mktemp space bin/mktemp" <<EOF
+#!/usr/bin/env bash
+exec "${REAL_MKTEMP}" "\${TMPDIR:-/tmp}/tmp.XXXXXXXX"
+EOF
+chmod +x "${TMP}/mktemp space bin/mktemp"
+issue 98 "status:ready" "[T-98] stuck tmpdir space" "src/**" "Bug"
+touch "${FAKE_GH}/98.comment_fail"
+if (export TMPDIR="${TMP}/tmp dir"; export PATH="${TMP}/mktemp space bin:${PATH}"; cd "$M" && bash tools/flow/worker-stuck.sh 98 "TMPDIR 带空格") >"${TMP}/o98s" 2>&1; then
+  bad "TMPDIR 含空格时写评论失败仍报成功"
+else
+  ok "TMPDIR 含空格：写评论失败 → 非 0 退出"
+fi
+body="$(eval "printf '%s' $(sed -n 's/.*--body-file //p' "${TMP}/o98s" | head -1)")"
+[ -n "$body" ] && [ -f "$body" ] && grep -qF "TMPDIR 带空格" "$body" &&
+  ok "  补做命令的正文路径加引号，复制到 shell 即可执行" || bad "  补做命令的路径被空格拆开，文件用不了：$body"
+rm -f "$body"
+rm -f "${FAKE_GH}/98.comment_fail"
 issue 94 "status:ready" "[T-94] stuck label fail a" "src/**" "Bug"
 issue 95 "status:ready" "[T-95] stuck label fail b" "src/**" "Bug"
 START 94 95 --name "Stuck Label Fail" >/dev/null 2>&1
