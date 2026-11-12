@@ -70,7 +70,7 @@ if [ "${#failed[@]}" -gt 0 ]; then
   # 评论贴失败时保留正文文件，下面给的补做命令直接可用。
   if [ -n "$comment_failed" ]; then
     KEEP_TMP=1
-    hint+=("补做评论：gh issue comment <号> -R ${REPO} --body-file ${tmp}")
+    hint+=("补做评论：gh issue comment <号> -R ${REPO} --body-file $(printf '%q' "$tmp")")
   fi
   hint+=("补做标签：gh issue edit <号> -R ${REPO} --add-label status:blocked --remove-label status:doing,status:ready,status:review")
   die "有 ${#failed[@]} 项没做成，其余卡已处理" "${failed[@]}" "${hint[@]}"
