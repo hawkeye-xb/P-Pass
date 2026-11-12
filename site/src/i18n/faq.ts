@@ -181,7 +181,7 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
             'Photos and videos, photo location, camera, notifications, background running, network, and installing updates.',
             {
               list: [
-                'Photos and videos: reading the albums you chose to back up.',
+                'Photos and videos: automatic backup reads the photos in your library. It is not requested right after pairing — the system prompt appears when you turn on Automatic backup. Pick photos to send uses the system picker and needs no photo permission.',
                 'Photo location (Android only): reads the location stored in each photo; the phone\'s real-time location is not accessed.',
                 'Camera: only for scanning the pairing QR code on the computer screen.',
                 'Notifications: alerts when pairing is lost, photo permission changes, or background backup is stopped by the system. Requested when you turn on Notifications in Settings.',
@@ -216,10 +216,10 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
       items: [
         {
           id: 'photo-permission-all',
-          q: 'Why does the photo permission have to be "Allow all"?',
+          q: 'Does automatic backup need access to all photos?',
           a: [
-            'With access limited to some photos, only the selected photos are backed up.',
-            'In system settings, change photo access to "All". The albums to back up are set separately, under "Photos to back up" in the app.',
+            'Backing up the whole library needs photo access set to "Allow All"; with limited access, only the selected photos are backed up.',
+            'To send just a few first, use Pick photos to send and choose them in the system picker — no permission change needed. Which albums are included is set under Backup range.',
           ],
         },
         {
@@ -445,7 +445,7 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
             '照片和视频、照片位置信息、相机、通知、后台运行、网络，以及安装更新包。',
             {
               list: [
-                '照片和视频：读取你要备份的相册。',
+                '照片和视频：自动备份时读取相册里的照片，配对完成后不申请，打开「自动备份」时才弹系统授权。用「挑几张传」时走系统选择器，不需要这项权限。',
                 '照片位置信息（仅 Android）：读取照片里的拍摄位置，不获取手机的实时位置。',
                 '相机：只用来扫电脑屏幕上的配对二维码。',
                 '通知：配对失效、照片权限变化、后台备份被系统停止时提醒你。在设置里打开「通知」时申请。',
@@ -480,10 +480,10 @@ export const FAQ: Record<Lang, FaqGroup[]> = {
       items: [
         {
           id: 'photo-permission-all',
-          q: '相册权限为什么要选「全部」？',
+          q: '自动备份一定要给「全部照片」权限吗？',
           a: [
-            '只允许部分照片时，只有选中的照片会备份。',
-            '在系统设置里把照片权限改为「全部」。备份哪些相册，在 App 的「备份哪些照片」里单独设置。',
+            '开自动备份、备份整个相册时，要把照片权限设为「全部」；只给部分照片时，只有选中的会备份。',
+            '只想先传几张，用「挑几张传」从系统选择器里手选，不用改权限。备份哪些相册，在「备份范围」里设置。',
           ],
         },
         {
