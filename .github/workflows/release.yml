@@ -86,6 +86,13 @@ env:
   RELEASE_TAG: ${{ inputs.tag }}
   BUILD_REF: ${{ inputs.release && github.sha || inputs.tag }}
 
+# #1556：test-channel 是单写者共享资源。所有 test 发布（tag 含 -test.）按固定 key
+# 全局串行排队，cancel-in-progress=false（新 run 等待、不取消正在跑的 run，含收敛）；
+# 正式版用按 tag 的另一个 key，与 test 发布互不阻塞。
+concurrency:
+  group: ${{ contains(inputs.tag, '-test.') && 'test-channel' || format('release-stable-{0}', inputs.tag) }}
+  cancel-in-progress: false
+
 jobs:
   # ══ #838：构建一次、到处复用 ══════════════════════════════════════════
   # 正式 tag 上，某端版本号（release/versions.json）与 Latest 正式版该端清单的 version 相同
