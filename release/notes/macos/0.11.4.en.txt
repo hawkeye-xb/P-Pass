@@ -1,0 +1,3 @@
+Devices are grouped into Paired and Disconnected; removed ones are gone.
+Devices with no contact for a while say they may be disconnected.
+The same photo is downloaded once, not twice.
