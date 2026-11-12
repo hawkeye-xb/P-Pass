@@ -64,6 +64,8 @@ class PPScreenWiringTest {
                 val lines = file.readLines()
                 lines.forEachIndexed { index, line ->
                     if (patterns.none { line.contains(it) }) return@forEachIndexed
+                    // import 只是声明，不是消费——MainActivity 等文件 import 了 safeDrawingPadding 这类扩展也要放行。
+                    if (line.trimStart().startsWith("import ")) return@forEachIndexed
                     when (path) {
                         "ui/PPScreen.kt" -> Unit
                         "MainActivity.kt" -> {
