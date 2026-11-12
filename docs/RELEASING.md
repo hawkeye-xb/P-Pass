@@ -307,8 +307,8 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
 - `ci-android.yml` — `apps/android/** assets/i18n/**` → unit tests + APK.
 - `ci-desktop.yml` — `apps/desktop/** assets/**` → src-tauri lib tests + vite build.
 - The five lanes (`ci-rust` / `ci-desktop` / `ci-android` / `ci-ios` / `ci-docs`)
-  have a `concurrency` group; the other workflows (`ci-identity`, `ci-secrets`,
-  `ci-review`, `e2e`, `release`, `repair-manifests`) do not. Since #1468 the
+  have a `concurrency` group; the other workflows (`ci-identity`, `ci-dco`,
+  `ci-secrets`, `ci-review`, `e2e`, `release`, `repair-manifests`) do not. Since #1468 the
   five lanes put the event name in the group and set `cancel-in-progress` to
   false for `push` to main (a running full run is never cancelled; only the
   newest queued one is kept); other events still cancel older runs.
@@ -584,7 +584,7 @@ Android 靠 `channelFromVersion()` 读注入的版本串（含 `-test.` 即 test
   只剩 `desktop (windows-latest)`：PR 上按 #1468 跳过，push 到 main 与发版调用照跑；cargo-deny 与
   vite build 不再带平台判断，跟着 Windows 跑。
 - 五条 lane（`ci-rust` / `ci-desktop` / `ci-android` / `ci-ios` / `ci-docs`）带 `concurrency`；
-  其余 workflow（`ci-identity`、`ci-secrets`、`ci-review`、`e2e`、`release`、`repair-manifests`）没有。
+  其余 workflow（`ci-identity`、`ci-dco`、`ci-secrets`、`ci-review`、`e2e`、`release`、`repair-manifests`）没有。
   #1468 起这五条的 group 带事件名，`cancel-in-progress` 只对 push 到 main 为 false（正在跑的全量不取消、
   排队只留最新），其余事件照旧取消旧 run。例外：手动触发 ci-ios 且 `testflight_version` 非空时，
   正在跑的 TestFlight 上传也不取消（`cancel-in-progress` 为
