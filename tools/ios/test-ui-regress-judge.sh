@@ -73,7 +73,8 @@ SH
   chmod +x "$d/tools/ios/ui-regress.sh" "$d/tools/e3/lock"
   rendered="$(cd "$ROOT" && just --dry-run ios-ui-regress device "$@" 2>&1)" || { rm -rf "$d"; return 1; }
   # 把配方顶部的 cd "<仓库根>" 换到临时目录，避免跑到真实的 ui-regress.sh。
-  rendered="$(printf '%s\n' "$rendered" | sed '0,/^cd ".*"$/s##cd "'"$d"'"#')"
+  # 用 awk 而非 sed '0,/…/'：macOS 的 BSD sed 不支持 0 起始地址（GNU 扩展），桩会静默失效。
+  rendered="$(printf '%s\n' "$rendered" | awk -v d="$d" '!done && /^cd "/ { print "cd \"" d "\""; done=1; next } { print }')"
   STUB_LOG="$d/log" bash -c "$rendered" || { rm -rf "$d"; return 1; }
   n="$( { grep -o -- '--skip-build' "$d/log" || true; } | wc -l | tr -d ' ')"
   rm -rf "$d"
