@@ -130,8 +130,12 @@ counter() {
   # 去掉触发条件：窗口期内人为开一个可见控制台，watcher 必须报红。
   run_window "$d" 1 15
   # 反证复用主路径的动作证据：反证变红只能因为 watcher 抓到 CONSOLE，不是 actions.txt 缺失。
-  cp "$EV/main/actions.txt" "$d/actions.txt" 2>/dev/null || true
+  cp "$EV/main/actions.txt" "$d/actions.txt" ||
+    { echo "反证：主路径 actions.txt 读不到，反证证据不完整" >&2; return 1; }
   : >"$d/note.txt"
+  # watcher 没就绪或没抓到控制台时，judge 也会红，但红的不是触发条件——那样的反证不算数（#1431）。
+  grep -q 'CONSOLE' "$d/watcher.log" 2>/dev/null ||
+    { echo "反证：窗口期内 watcher 没有抓到 CONSOLE（watcher-ready=$(cat "$d/watcher-ready.txt" 2>/dev/null)），红的原因不对" >&2; return 1; }
 }
 
 teardown() {
