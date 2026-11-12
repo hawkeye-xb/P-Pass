@@ -10,8 +10,10 @@ setup() {
   win_app_running || { echo "桌面 App 没在跑"; return 77; }
   win_daemon_running || { echo "daemon 没在跑"; return 77; }
   # 在改任何状态之前保存用户原有的 Run 值；setup 返回 77 时不保存，teardown 也就不会动它。
-  local orig="$E3_STATE/win/w2-run-orig.txt"
+  local orig="$E3_STATE/win/w2-run-orig.txt" marker="$E3_STATE/win/w2-counter-wrote"
   mkdir -p "$(dirname "$orig")"
+  # 上次 teardown 删除/恢复失败会留下标记；旧标记不能带进这次（teardown 只该认本次 counter 写的）。
+  rm -f "$marker"
   # 上次 teardown 没恢复成功时原值还留着：不能拿现在的注册表（可能是反证写的假值）盖掉它。
   if [ -s "$orig" ]; then
     echo "沿用上次未恢复的原 HKCU Run 值（${orig}）"
@@ -22,6 +24,12 @@ setup() {
 \$v=\$k.GetValue('P-Pass', \$null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
 if(\$null -eq \$v){ 'ABSENT' } else { 'KIND=' + \$k.GetValueKind('P-Pass'); 'VALUE=' + \$v }
 " >"$orig" 2>&1
+  # 上一轮 counter 写的假值可能还留在注册表里：它不是用户原值，按「原本没有」记，
+  # teardown 会删掉它，而不是把测试值当原值恢复（#1431）。
+  if tr -d '\r' <"$orig" | grep -qxF 'VALUE=C:\fake\p-pass-desktop.exe'; then
+    echo "上一轮反证留下的假值还在注册表里，按「原本没有 Run 值」处理"
+    printf 'ABSENT\n' >"$orig"
+  fi
 }
 
 act() {
