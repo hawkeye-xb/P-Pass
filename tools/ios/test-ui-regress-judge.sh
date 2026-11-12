@@ -54,4 +54,33 @@ expect PASS SettingsPick "$T/order.log" "$NOW" "设置页再选一次"
 # 未知用例、日志拉不回 ⇒ FAIL。
 expect FAIL NoSuchCase "$T/ok.log" "$NOW" "判定表里没有的用例"
 expect FAIL DecisionScopeFull "$T/missing.log" "$NOW" "日志拉不回"
+
+# --skip-build 只传一次（#1701/#1709）：把 justfile 渲染出来，在临时目录用桩执行 device 分支，
+# 数 ui-regress 实际收到的 --skip-build 次数。不碰设备、不构建。
+stub_count() { # stub_count [传给 just 的参数…] → 打印 ui-regress 桩收到的 --skip-build 次数
+  local d rendered n
+  d="$(mktemp -d)" || return 1
+  mkdir -p "$d/tools/ios" "$d/tools/e3"
+  cat >"$d/tools/ios/ui-regress.sh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${STUB_LOG:?}"
+SH
+  cat >"$d/tools/e3/lock" <<'SH'
+#!/usr/bin/env bash
+shift 2 # <设备> <命令…>
+exec "$@"
+SH
+  chmod +x "$d/tools/ios/ui-regress.sh" "$d/tools/e3/lock"
+  rendered="$(cd "$ROOT" && just --dry-run ios-ui-regress device "$@" 2>&1)" || { rm -rf "$d"; return 1; }
+  # 把配方顶部的 cd "<仓库根>" 换到临时目录，避免跑到真实的 ui-regress.sh。
+  rendered="$(printf '%s\n' "$rendered" | sed '0,/^cd ".*"$/s##cd "'"$d"'"#')"
+  STUB_LOG="$d/log" bash -c "$rendered" || { rm -rf "$d"; return 1; }
+  n="$( { grep -o -- '--skip-build' "$d/log" || true; } | wc -l | tr -d ' ')"
+  rm -rf "$d"
+  printf '%s' "$n"
+}
+n="$(stub_count --skip-build)" || fail "带 --skip-build 时桩执行失败"
+[ "$n" -eq 1 ] || fail "带 --skip-build 时 ui-regress 收到 ${n} 次 --skip-build"
+n="$(stub_count)" || fail "不带 --skip-build 时桩执行失败"
+[ "$n" -eq 1 ] || fail "不带 --skip-build 时 ui-regress 收到 ${n} 次 --skip-build"
 echo "PASS: ui-regress 判定自测"

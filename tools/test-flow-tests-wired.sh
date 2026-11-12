@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
 # #1493：流程门禁脚本的自测必须真在 CI 上跑——防「新加一个 *-test recipe 却只挂在本地 just ci」再发生。
+# #1709：判据从「justfile 里的 *-test recipe」扩到「tools 下全部 test-*.sh 文件」。
 #
 # 判据（justfile 用 just 自己的解析器读：just --dump --dump-format json）：
-#   1. justfile 里每个名字以 -test 结尾的 recipe，要么是 flow-tests 的依赖，要么登记在下面的例外表里；
-#   2. 例外表的每一行：recipe 在 justfile 里存在、不在 flow-tests 里；登记了 lane 的，该 workflow 的非注释行里必须出现
+#   1. justfile 里每个名字以 -test 结尾的 recipe，要么是 flow-tests 的依赖，要么登记在 recipe 例外表里；
+#   2. tools 下每个 test-*.sh（含 tools/*/test-*.sh）必须至少满足一条：被 flow-tests 依赖闭包的 recipe 运行、
+#      被某个 .github workflow/action 的非注释行引用、或登记在文件例外表里；漏一个就判红；
+#   3. recipe 例外表的每一行：recipe 在 justfile 里存在、不在 flow-tests 里；登记了 lane 的，该 workflow 的非注释行里必须出现
 #      登记的字符串（不信自报，注释里提到不算）；lane 写 `-` 的只许两种：原因以「不是自测」开头，或以「CI 上没有 lane」开头、
 #      带跟进卡号（#数字）且 ci-docs 直接依赖它（至少本地照跑）；原因必填；
-#   3. ci 与 ci-docs 都依赖 flow-tests（本地与 CI 共用一份清单）；
-#   4. ci-docs.yml 有 key 与 name 都写死为 flow-tests 的 job，运行 just flow-tests，且在 CI Docs gate 的 needs 里；
-#   5. 触发接线：flow-tests job 的 if 写 needs.changes.outputs.flow != 'false'，changes 的 flow 输出 push 恒 true、否则取 steps.f，
+#   4. 文件例外表的每一行：文件存在、确实没接线；lane 写 `-` 的，原因须以「产品负责人定只在本地跑」或「不是自测」开头；
+#      登记了 lane 的按 recipe 例外同一套非注释行核对；原因必填；
+#   5. ci 与 ci-docs 都依赖 flow-tests（本地与 CI 共用一份清单）；
+#   6. ci-docs.yml 有 key 与 name 都写死为 flow-tests 的 job，运行 just flow-tests，且在 CI Docs gate 的 needs 里；
+#   7. 触发接线：flow-tests job 的 if 写 needs.changes.outputs.flow != 'false'，changes 的 flow 输出 push 恒 true、否则取 steps.f，
 #      step f 的 paths 含 tools/**、justfile、.github/**（防 job 在 PR 上恒 skipped，而 skipped 对 gate 算通过）。
-# 反证：在临时目录里造变异（从 flow-tests 删一个依赖 / 新增没接线的 *-test / 例外的 workflow 里登记的字符串只剩注释 /
+# 反证：在临时目录里造变异（从 flow-tests 删一个依赖 / 新增没接线的 *-test / 新增没接线的 tools/test-*.sh /
+# 从 flow-tests 删掉 ui-regress-judge-test / 删掉 sandbox 的文件例外 / 例外的 workflow 里登记的字符串只剩注释 /
 # gate 的 needs 里没有 flow-tests / flow 输出写死 false / step f 的 paths 去掉 tools/** / 无 lane 例外不带卡号），
 # 每种都必须判红；原样必须判绿。
 #
@@ -27,6 +33,10 @@ ios-test-packages|ci-ios.yml|tools/ios/test-packages.sh|要 macOS + Xcode 模拟
 release-test|-|-|不是自测：owner 在 origin/main 上打 test tag 出 test 包的命令（见 docs/runbook/owner.md），绝不能在 CI 上跑
 heavy-lock-test|-|-|CI 上没有 lane：tools/heavy-lock 依赖 macOS 才有的 lockf，ubuntu 上自测打印 SKIP 后 exit 0（假绿）；跟进卡 #1502'
 
+# 文件例外表：tools 下的 test-*.sh|workflow 文件（.github/workflows 下；- 表示没有 CI lane）|该 workflow 里必须出现的字符串|原因
+# lane 写 `-` 的，原因必须以「产品负责人定只在本地跑」或「不是自测」开头。
+FILE_EXCEPTIONS='tools/ios/test-sandbox-desk.sh|-|-|产品负责人定只在本地跑：要编 daemon'
+
 fail=0
 ok() { echo "  ✅ $1"; }
 ko() { echo "  ❌ $1"; fail=1; }
@@ -35,9 +45,10 @@ for bin in just jq; do
   command -v "$bin" >/dev/null 2>&1 || { echo "  ❌ 找不到 ${bin}，无法判定"; exit 1; }
 done
 
-# check <justfile> <workflows 目录>：有问题逐条打印到 stdout，退出码 1；全过退出 0、不打印。
+# check <justfile> <workflows 目录> <tools 目录>：有问题逐条打印到 stdout，退出码 1；全过退出 0、不打印。
 check() {
-  local jf="$1" wf="$2" dump bad=0 r lane marker reason
+  local jf="$1" wf="$2" tools="$3" ghdir dump bad=0 r lane marker reason
+  ghdir="$(dirname "$wf")"
   if ! dump="$(just --justfile "$jf" --working-directory "$(dirname "$jf")" --dump --dump-format json 2>&1)"; then
     echo "just 解析 ${jf} 失败：${dump}"
     return 1
@@ -53,7 +64,7 @@ check() {
   local exc_names
   exc_names="$(printf '%s\n' "$EXCEPTIONS" | cut -d'|' -f1)"
 
-  # 判据 3：ci 与 ci-docs 都依赖 flow-tests
+  # 判据 5：ci 与 ci-docs 都依赖 flow-tests
   for r in ci ci-docs; do
     printf '%s' "$dump" | jq -e --arg r "$r" '.recipes[$r].dependencies[]?.recipe | select(. == "flow-tests")' >/dev/null ||
       { echo "${r} 没有依赖 flow-tests（本地清单会和 CI 漂移）"; bad=1; }
@@ -68,7 +79,7 @@ check() {
     bad=1
   done <<<"$recipes"
 
-  # 判据 2：例外表逐行核对
+  # 判据 3：recipe 例外表逐行核对
   while IFS='|' read -r r lane marker reason; do
     [ -n "$r" ] || continue
     [ -n "$reason" ] || { echo "例外 ${r} 没写原因"; bad=1; }
@@ -95,7 +106,77 @@ check() {
     fi
   done <<<"$EXCEPTIONS"
 
-  # 判据 4：ci-docs.yml 的 flow-tests job 与 gate
+  # 判据 2（文件）：tools 下每个 test-*.sh 都要能被跑起来，或登记例外。
+  # flow-tests 依赖的传递闭包一并算（recipe 可以再依赖 recipe）。
+  local flow_all frontier next d f rel base body flow_bodies wired hits
+  flow_all="$flow"
+  frontier="$flow"
+  while [ -n "$frontier" ]; do
+    next=""
+    for r in $frontier; do
+      for d in $(printf '%s' "$dump" | jq -r --arg r "$r" '.recipes[$r].dependencies[]?.recipe' | tr -d '\r'); do
+        printf '%s\n' "$flow_all" | grep -qxF "$d" && continue
+        flow_all="${flow_all}
+${d}"
+        next="${next} ${d}"
+      done
+    done
+    frontier="$next"
+  done
+  flow_bodies=""
+  for r in $flow_all; do
+    body="$(printf '%s' "$dump" | jq -r --arg r "$r" '.recipes[$r].body // [] | flatten | join("\n")' | tr -d '\r')"
+    flow_bodies="${flow_bodies}${body}
+"
+  done
+
+  local file_exc_names
+  file_exc_names="$(printf '%s\n' "$FILE_EXCEPTIONS" | cut -d'|' -f1)"
+  for f in "$tools"/test-*.sh "$tools"/*/test-*.sh; do
+    [ -f "$f" ] || continue
+    rel="tools/${f#"$tools"/}"
+    base="${rel##*/}"
+    wired=0
+    case "$flow_bodies" in
+      *"$rel"* | *"$base"*) wired=1 ;;
+    esac
+    if [ "$wired" = 0 ]; then
+      hits="$(grep -rnF -e "$rel" -e "$base" "$ghdir" 2>/dev/null || true)"
+      if [ -n "$hits" ] && printf '%s\n' "$hits" | grep -vqE ':[[:space:]]*#'; then
+        wired=1
+      fi
+    fi
+    if [ "$wired" = 0 ] && printf '%s\n' "$file_exc_names" | grep -qxF "$rel"; then
+      wired=2
+    fi
+    [ "$wired" != 0 ] && continue
+    echo "自测文件 ${rel} 既没接进 flow-tests、也没被任何 CI workflow 引用，也没登记例外：它没人跑"
+    bad=1
+  done
+
+  # 判据 4（文件例外表）：逐行核对，防登记了却没人跑、或文件已经删了还留着
+  while IFS='|' read -r f lane marker reason; do
+    [ -n "$f" ] || continue
+    [ -n "$reason" ] || { echo "文件例外 ${f} 没写原因"; bad=1; }
+    [ -f "$tools/${f#tools/}" ] || { echo "文件例外 ${f} 不存在：删掉这行"; bad=1; }
+    if [ "$lane" = "-" ]; then
+      case "$reason" in
+        产品负责人定只在本地跑*) ;;
+        不是自测*) ;;
+        *) echo "文件例外 ${f} 没登记 lane，原因既不是「产品负责人定只在本地跑」也不是「不是自测」"; bad=1 ;;
+      esac
+      continue
+    fi
+    if [ ! -f "$wf/$lane" ]; then
+      echo "文件例外 ${f} 登记的 ${lane} 不存在"
+      bad=1
+    elif ! grep -vE '^[[:space:]]*#' "$wf/$lane" | grep -qF -- "$marker"; then
+      echo "文件例外 ${f} 登记在 ${lane} 跑，但那里的非注释行找不到「${marker}」"
+      bad=1
+    fi
+  done <<<"$FILE_EXCEPTIONS"
+
+  # 判据 6/7：ci-docs.yml 的 flow-tests job 与 gate
   local yml="$wf/ci-docs.yml"
   if [ ! -f "$yml" ]; then
     echo "找不到 ci-docs.yml"
@@ -112,7 +193,7 @@ check() {
         { echo "ci-docs.yml 的 flow-tests job 的 name 不是写死的 flow-tests"; bad=1; }
       printf '%s\n' "$job" | grep -qE 'just flow-tests([[:space:]]|$)' ||
         { echo "ci-docs.yml 的 flow-tests job 没有运行 just flow-tests"; bad=1; }
-      # 判据 5：触发接线
+      # 判据 7：触发接线
       printf '%s\n' "$job" | grep -qE "^    if:.*needs\.changes\.outputs\.flow != 'false'" ||
         { echo "flow-tests job 的 if 没写 needs.changes.outputs.flow != 'false'（fail-closed）"; bad=1; }
     fi
@@ -136,18 +217,25 @@ check() {
 
 echo "==> flow-tests 接线元测试（#1493）"
 
-# ── 反证：四种变异都必须判红，原样必须判绿 ──
+# ── 反证：每个变异都必须判红，原样必须判绿 ──
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 fresh() {
   rm -rf "$tmp/r"
-  mkdir -p "$tmp/r/.github"
+  mkdir -p "$tmp/r/tools"
   cp "$ROOT/justfile" "$tmp/r/justfile"
-  cp -R "$ROOT/.github/workflows" "$tmp/r/.github/workflows"
+  cp -R "$ROOT/.github" "$tmp/r/.github"
+  # 只复制自测文件本身：文件扫描只认路径与引用，不读脚本内容。
+  for f in "$ROOT"/tools/test-*.sh "$ROOT"/tools/*/test-*.sh; do
+    [ -f "$f" ] || continue
+    rel="${f#"$ROOT"/}"
+    mkdir -p "$tmp/r/${rel%/*}"
+    cp "$f" "$tmp/r/$rel"
+  done
 }
 expect() { # expect <期望 pass|fail> <说明>
   local out rc
-  out="$(check "$tmp/r/justfile" "$tmp/r/.github/workflows")"
+  out="$(check "$tmp/r/justfile" "$tmp/r/.github/workflows" "$tmp/r/tools")"
   rc=$?
   if [ "$1" = pass ] && [ "$rc" -eq 0 ]; then
     ok "反证：$2 → 判绿"
@@ -177,6 +265,27 @@ expect fail "从 flow-tests 删掉 ${victim}"
 fresh
 printf '\nbogus-wired-test:\n  @true\n' >>"$tmp/r/justfile"
 expect fail "新增没接线的 bogus-wired-test"
+
+fresh
+: >"$tmp/r/tools/test-bogus-unwired.sh"
+expect fail "新增没接线的 tools/test-bogus-unwired.sh"
+
+fresh
+python3 - "$tmp/r/justfile" <<'PY'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+s2 = re.sub(r'(?m)^(flow-tests:.*?) ui-regress-judge-test(?= |$)', r'\1', s, count=1)
+assert s2 != s, "变异没生效"
+open(p, 'w').write(s2)
+PY
+expect fail "flow-tests 漏掉 ui-regress-judge-test（judge 自测没人跑）"
+
+fresh
+FILE_EXCEPTIONS_SAVED="$FILE_EXCEPTIONS"
+FILE_EXCEPTIONS="$(printf '%s\n' "$FILE_EXCEPTIONS" | grep -vF 'tools/ios/test-sandbox-desk.sh' || true)"
+expect fail "sandbox 自测没有登记文件例外"
+FILE_EXCEPTIONS="$FILE_EXCEPTIONS_SAVED"
 
 fresh
 python3 - "$tmp/r/.github/workflows/ci-android.yml" <<'PY'
@@ -254,8 +363,8 @@ PY
 expect fail "无 lane 例外 heavy-lock-test 也不在 ci-docs 里"
 
 # ── 真实检查 ──
-if out="$(check "$ROOT/justfile" "$ROOT/.github/workflows")"; then
-  ok "justfile 的每个 *-test 都接进了 flow-tests 或登记的 lane；ci-docs.yml 的 flow-tests job 在 gate 里"
+if out="$(check "$ROOT/justfile" "$ROOT/.github/workflows" "$ROOT/tools")"; then
+  ok "每个 *-test recipe 与 tools 下每个 test-*.sh 都接进了 flow-tests / CI lane 或登记例外；ci-docs.yml 的 flow-tests job 在 gate 里"
 else
   ko "接线不全："
   printf '%s\n' "$out" | sed 's/^/      /'
