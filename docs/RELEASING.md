@@ -256,6 +256,12 @@ version string (`-test.` ⇒ test):
   failure. Nothing calls the GitHub
   API at client time, so there is no anonymous rate limit and no `GH_TOKEN`
   to manage on devices.
+  **Overlapping Release runs (#1556):** test releases are serialized at the
+  workflow level — every tag containing `-test.` shares the fixed concurrency
+  group `test-channel` with `cancel-in-progress: false`, so a later test run
+  queues until the previous one (including its cleanup) finishes; a stable
+  release uses a different group (`release-stable-<tag>`) and is not blocked by
+  test releases.
   Each client reads its own manifest: Android
   `test-channel/manifest-android.json`; the desktop shell's updater plugin
   `test-channel/manifest-<platform>.json` (endpoint baked at build time by

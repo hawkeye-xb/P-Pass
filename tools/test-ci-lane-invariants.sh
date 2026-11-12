@@ -16,6 +16,9 @@
 #      Node 产物，与 runner 平台无关）；整个 action 不许有按 Linux 分支的步骤，`System deps (tauri v2 on Linux)`
 #      不许回来。两条必需检查名（`desktop (windows-latest)`、`CI Desktop gate`）与 gate 的 `if: always()`
 #      也在断言里（一个字不能改）。
+#   5. #1556：release.yml 有 workflow 级 concurrency——tag 含 `-test.` 的 test 发布固定到
+#      key `test-channel`、cancel-in-progress: false（新 run 排队等前一个跑完，不取消）；
+#      stable 发布用另一个 key。两个 test tag 必须同组，test 与 stable 必须不同组。
 # YAML 1.1 把键 `on` 读成布尔 True，取触发表按 d.get('on', d.get(True)) 两头都认。
 # 缺 PyYAML 一律判红（exit 1），不 SKIP。
 # 反证：在临时目录里复制 workflows 与 desktop-checks action 造变异（去掉 Windows job 的 pull_request 条件 / 某条 lane 的
@@ -51,6 +54,12 @@ LANES = ["ci-rust.yml", "ci-desktop.yml", "ci-android.yml", "ci-ios.yml", "ci-do
 WIN_NAMES = {"test (windows)", "clippy (windows)", "desktop (windows-latest)"}
 CANCEL_RE = re.compile(r"^\$\{\{\s*github\.event_name\s*!=\s*'push'\s*(&&[^|]*)?\}\}$", re.S)
 WIN_IF_RE = re.compile(r"^\$\{\{\s*!cancelled\(\)\s*&&\s*github\.event_name\s*!=\s*'pull_request'\s*&&", re.S)
+# #1556：release.yml workflow 级 concurrency.group 的形态：test → 固定 key，其余 → 另一 key。
+RELEASE_GROUP_RE = re.compile(
+    r"^\$\{\{\s*contains\(inputs\.tag,\s*'-test\.'\)\s*&&\s*'([^']+)'\s*\|\|\s*"
+    r"format\('([^']*)\{0\}',\s*inputs\.tag\)\s*\}\}$",
+    re.S,
+)
 DESKTOP_WIN_NAME = "desktop (windows-latest)"
 DESKTOP_GATE_NAME = "CI Desktop gate"
 # #1555：这四步原来带 `if: runner.os == 'Linux'`，现在跟着 desktop-windows 无条件跑。
@@ -171,13 +180,46 @@ if isinstance(action, dict):
     if absent:
         bad.append("desktop-checks/action.yml: 缺步骤：" + "、".join(sorted(absent)))
 
+# #1556：release.yml 的 workflow 级 concurrency：test 发布全局串行，stable 用不同 key。
+try:
+    with open(os.path.join(wf, "release.yml"), encoding="utf-8") as f:
+        release = yaml.safe_load(f)
+except Exception as e:
+    bad.append(f"release.yml: 读不出 YAML（{e}）")
+    release = None
+if isinstance(release, dict):
+    conc = release.get("concurrency")
+    if not isinstance(conc, dict):
+        bad.append(f"release.yml: 缺 workflow 级 concurrency（test-channel 需要全局串行），实为 {conc!r}")
+    else:
+        if conc.get("cancel-in-progress") is not False:
+            bad.append(
+                f"release.yml: concurrency.cancel-in-progress 必须为 false（排队不取消），实为 {conc.get('cancel-in-progress')!r}"
+            )
+        group = conc.get("group")
+        m = RELEASE_GROUP_RE.match(group.strip()) if isinstance(group, str) else None
+        if not m:
+            bad.append(f"release.yml: concurrency.group 应把 test 发布固定到 test-channel、stable 用另一 key，实为 {group!r}")
+        else:
+            test_key, stable_fmt = m.group(1), m.group(2)
+
+            def release_key(tag):
+                return test_key if "-test." in tag else stable_fmt.replace("{0}", tag)
+
+            if test_key != "test-channel":
+                bad.append(f"release.yml: test 发布的 concurrency key 应为 test-channel，实为 {test_key!r}")
+            if release_key("v1.2.3-test.1") != release_key("v1.2.3-test.2"):
+                bad.append("release.yml: 两个不同 test tag 没有落在同一个 concurrency 组（不会串行）")
+            if release_key("v1.2.3") == release_key("v1.2.3-test.1"):
+                bad.append("release.yml: test 与 stable 落在同一个 concurrency 组（会互相阻塞）")
+
 for b in bad:
     print(b)
 sys.exit(1 if bad else 0)
 PY
 }
 
-echo "== 原样：五条 lane 与桌面 action 的不变量都成立 =="
+echo "== 原样：五条 lane、桌面 action 与 release.yml 的 concurrency 不变量都成立 =="
 if out="$(check "$ROOT")"; then
   ok "原样判绿"
 else
@@ -243,6 +285,15 @@ mutant "CI Desktop gate 去掉 if: always()" .github/workflows/ci-desktop.yml \
   "/^  gate:/,/^    runs-on:/ s/^    if: always\\(\\)\$/    if: false/"
 mutant "CI Desktop gate 改名字" .github/workflows/ci-desktop.yml \
   "s/^    name: CI Desktop gate\$/    name: CI Desktop Gate/"
+
+mutant "release.yml 去掉 workflow 级 concurrency" .github/workflows/release.yml \
+  "/^concurrency:\$/,/^jobs:\$/d"
+mutant "release.yml 的 cancel-in-progress 改成 true" .github/workflows/release.yml \
+  "s/^  cancel-in-progress: false\$/  cancel-in-progress: true/"
+mutant "release.yml 的 test 匹配条件改成 stable" .github/workflows/release.yml \
+  "s/'-test.'/'-stable.'/"
+mutant "release.yml 的 stable 也并进 test-channel 组" .github/workflows/release.yml \
+  "s/format\('release-stable-.*inputs\.tag\)/'test-channel'/"
 
 if [ "$fail" -eq 0 ]; then
   echo "== ci-lane-invariants: green ✅ =="
