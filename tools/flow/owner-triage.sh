@@ -449,6 +449,10 @@ if [ -n "$OLD_P" ]; then
 else
   gh issue edit "$N" -R "$REPO" --add-label "P${PRIO}" >/dev/null || die_stuck "给 #${N} 打优先级标签失败"
 fi
+# 重跑分拣时这次不再靠 owner 定案 / 标准依据，旧的 decided:owner 要摘掉，不然审计会以为还是 owner 定的（#1416）。
+if [ "$USED_OWNER" = 0 ] && [ "$USED_STANDARD" = 0 ] && has_label decided:owner; then
+  gh issue edit "$N" -R "$REPO" --remove-label decided:owner >/dev/null || die_stuck "摘掉 #${N} 的 decided:owner 失败"
+fi
 case "$DECISION" in
   blocked)
     case "${REASONS}" in
