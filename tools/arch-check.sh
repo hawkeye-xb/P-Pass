@@ -202,18 +202,22 @@ list_files() {
 # 写法——crates/media-codec/src/quicklook.rs 里的 /usr/bin/qlmanage 就是 macOS
 # 专属路径，功能上就是平台分叉，但那条 grep 看不见它。这里补一条：crates/** 与
 # apps/** 的 Rust 里，硬编码的 Unix 绝对路径 / Windows 路径命中即红，除非命中行
-# 或其上方的注释块里有放行标记（见 PLATFORM_PATH_MARKER）。合法的只有「探测式」
-# 写法（Path::new(...).is_file()/.exists()，不在就 None），但门禁不猜语义、只看
-# 标记——quicklook.rs 文件头的「arch rule B.2」声明就是它的标记（legacy）。
+# 或其上方 8 行内的 `//` 注释里有放行标记（见 PLATFORM_PATH_MARKER）。合法的只有
+# 「探测式」写法（Path::new(...).is_file()/.exists()，不在就 None），但门禁不猜
+# 语义、只看标记。标记只认注释里的声明、不认代码字符串；legacy 标记收窄到
+# quicklook.rs 文件头那种「(arch rule B.2, …)」声明句式，普通叙述里恰好出现的
+# `arch rule B.2`（如 ffmpeg.rs 模块头解释规则）不算（#1679）。
 #
 # 豁免：crates/platform/（平台 crate 本家）、tests/（测试夹具）、注释行、
 # 文件尾部的 #[cfg(test)] mod（与 G4 同口径）。
 #
 # 变异反证见 tools/test-arch-check.sh：ARCH_PLATFORM_PATH_RE 可覆盖正则，测试把
 # 它换成不匹配任何东西的正则，正样例必须漏报——证明「未声明路径必须红」不是恒真式。
-PLATFORM_PATH_RE='"(?:/(?:usr|etc|bin|sbin|opt|Library|System|Applications)/|[A-Za-z]:[\\/])|%(?:APPDATA|LOCALAPPDATA|PROGRAMFILES)%|System32|Program[[:space:]]+Files'
+PLATFORM_PATH_RE='"(?:/(?:usr|etc|bin|sbin|opt|Library|System|Applications|Volumes|Users|home|proc|dev|private)/|[A-Za-z]:[\\/]|[\\]{2,}[A-Za-z0-9$-][A-Za-z0-9._$-]*[\\])|%(?:APPDATA|LOCALAPPDATA|PROGRAMFILES)%|System32|Program[[:space:]]+Files|[\\]+\?[\\]+(?:[A-Za-z]:|UNC[\\])|HKEY_(?:CURRENT_USER|LOCAL_MACHINE|CLASSES_ROOT|USERS|CURRENT_CONFIG)[\\]'
 [ -n "${ARCH_PLATFORM_PATH_RE:-}" ] && PLATFORM_PATH_RE="$ARCH_PLATFORM_PATH_RE"
-PLATFORM_PATH_MARKER='arch-allow:[[:space:]]*platform-path|arch[[:space:]]+rule[[:space:]]+B\.2'
+# legacy 标记只认声明句式 `(arch rule B.2, …)`：B.2 后必须紧跟逗号，普通引用
+# `// See (arch rule B.2) for details.` 不能当放行标记（#1679 评审）。
+PLATFORM_PATH_MARKER='//[^\n]*(?:arch-allow:[[:space:]]*platform-path|\(arch[[:space:]]+rule[[:space:]]+B\.2,)'
 
 VIOLATIONS_B2_PATHS=$(
   list_files "$ROOT/crates" "$ROOT/apps" -- '*.rs' \
