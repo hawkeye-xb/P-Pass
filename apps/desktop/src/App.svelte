@@ -68,6 +68,8 @@
   import { disconnectedClause, noDevicesText } from "./lib/deviceCounts.js";
   // #1577（#1402 卡2）：15 天「很久没联系」提示（last_seen 距今 > 15 天）。
   import { staleHint } from "./lib/staleHint.js";
+  // #1699：设备页分组——未知/缺失的 removal 值留在列表里（fail-open）。
+  import { deviceGroups as deviceGroupsOf } from "./lib/deviceGroups.js";
   import {
     pendingDialogText,
     pendingSubText,
@@ -574,14 +576,9 @@
   const byActivity = (a, b) => (b.last_activity_at ?? 0) - (a.last_activity_at ?? 0);
   // #1577（#1402 卡2）：设备页主列表分「已配对」「已断开」两组；「已移除」折叠区
   // 隐藏（用户看不到移除过哪些设备，恢复靠手机重扫码）。每组按最近活跃倒序。
-  const deviceGroups = $derived.by(() => {
-    const paired = devices.filter((d) => d.removal === "none").sort(byActivity);
-    const disconnected = devices.filter((d) => d.removal === "disconnected").sort(byActivity);
-    return [
-      { key: "paired", title: "ui.devices_group_paired", items: paired },
-      { key: "disconnected", title: "ui.disconnected", items: disconnected },
-    ].filter((g) => g.items.length > 0);
-  });
+  // #1699：分组在 lib/deviceGroups.js——未知/缺失的 removal 值留在列表里
+  // （fail-open），不能因为对不上字符串让整行消失。
+  const deviceGroups = $derived(deviceGroupsOf(devices, byActivity));
   const waterRows = $derived.by(() => {
     // 水位卡问的是「在用设备的备份健康度」——已断开/已移除的都不该算进来
     // （比「家人与设备」列表的口径更窄）。已断开的设备催用户「去开 App
