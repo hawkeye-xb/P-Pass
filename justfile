@@ -298,12 +298,16 @@ mobile-static-check:
   @for l in en zh; do cmp -s assets/i18n/$l.json apps/android/app/src/main/assets/i18n/$l.json || { echo "✗ apps/android/app/src/main/assets/i18n/$l.json 与 assets/i18n 不一致——从 assets/i18n 复制过去"; exit 1; }; done
   @echo "ok: Android i18n 副本与 assets/i18n 逐字节一致"
 
-# 文案按端拆分（#1302）：key 住对文件、各消费方查得到（含反证自测）；发版判定只牵动文案所在的端。
+# 文案按端拆分（#1302）：key 住对文件、各消费方查得到（含反证自测）。发版判定侧的自测在 version-bump-i18n-test。
 i18n-split-check:
   python3 tools/check-i18n-split.py --self-test > /dev/null
   python3 tools/check-i18n-split.py
-  bash tools/test-version-bump-i18n.sh > /dev/null
-  @echo "ok: 文案改动只牵动所在的端（tools/test-version-bump-i18n.sh）"
+  @echo "ok: 文案 key 按端归属正确"
+
+# #1302 发版判定的自测（#1500）：改一句文案只要求文案所在的那端涨号。放进 flow-tests，
+# 由 CI 的 flow-tests job 一起跑。
+version-bump-i18n-test:
+  @bash tools/test-version-bump-i18n.sh
 
 # 版本号 bump 的自测（#914）：漂移拒绝、各端同步、versions.json 未知键保留（带反证）。
 # 要 Rust —— bump 用 `cargo update -w` 同步两个 workspace 的 lock。
@@ -315,7 +319,7 @@ bump-version-test:
 # 已在 ci-docs.yml、ci-identity.yml 的其它 job 里跑，留在 ci-docs 的直接依赖里。
 # justfile 里每个 *-test recipe 要么在这里，要么登记在 tools/test-flow-tests-wired.sh 的例外表里（flow-tests-wired-test 会挡）。
 # heavy-lock-test 依赖 macOS 才有的 lockf，ubuntu 上会 SKIP 假绿，不进这里；登记为例外（#1502），本地 ci / ci-docs 直接依赖它。
-flow-tests: hooks-test flow-worker-test flow-review-test flow-ci-review-test flow-pr-test flow-gate-status-test flow-owner-test macos-runner-test main-red-test flow-tests-wired-test ci-lane-invariants-test ci-download-resilience-test bump-version-test
+flow-tests: hooks-test flow-worker-test flow-review-test flow-ci-review-test flow-pr-test flow-gate-status-test flow-owner-test macos-runner-test main-red-test flow-tests-wired-test ci-lane-invariants-test ci-download-resilience-test bump-version-test version-bump-i18n-test clean-local-builds-test e3-test
   @echo "==> flow-tests: green ✅"
 
 # #1468 的 lane 不变量（#1489）：三个 Windows job 在 PR 上跳过、五条 lane 有 push: branches [main]、
@@ -332,6 +336,11 @@ ci-download-resilience-test:
 # ci-docs.yml 有写死名字的 flow-tests job 且进了 CI Docs gate；带变异反证（#1493）。
 flow-tests-wired-test:
   @bash tools/test-flow-tests-wired.sh
+
+# tools/e3 的自测（#1500）：脚本语法、场景接口齐全、判定回放（fixtures 的 pass 必须过、fail 必须红），不碰设备。
+# macOS 专有的段（lockf、ditto）在脚本内按平台跳过，其余在 ubuntu 上照跑。
+e3-test:
+  @bash tools/test-e3.sh
 
 # QA-03 文档快车道：只跑文档域的门禁，不编 Rust。
 #
@@ -548,7 +557,7 @@ sync:
     bash tools/clean-local-builds.sh --apply --worktrees
 
 # Safety integration test; it creates and destroys only a temporary Git repository.
-test-cleanup-local:
+clean-local-builds-test:
     bash tools/test-clean-local-builds.sh
 
 # REL-12 (#711): 发布链 dry-run——不花真 tag，用假产物 + stub gh + 临时签名密钥，把
