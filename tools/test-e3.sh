@@ -38,10 +38,10 @@ done
   }
   for v in "../escape" "a b" "a/b" "." ".."; do
     if out="$(album_of "$v")"; then
-      echo "E3_ANDROID_ALBUM=「$v」应被拒绝，却放行了（E3_ALBUM=$out）"
+      echo "E3_ANDROID_ALBUM=「${v}」应被拒绝，却放行了（E3_ALBUM=${out}）"
       exit 1
     fi
-    grep -q 'E3_ANDROID_ALBUM' "$d/err" || { echo "E3_ANDROID_ALBUM=「$v」被拒绝，但提示没点名变量"; exit 1; }
+    grep -q 'E3_ANDROID_ALBUM' "$d/err" || { echo "E3_ANDROID_ALBUM=「${v}」被拒绝，但提示没点名变量"; exit 1; }
   done
   [ "$(album_of "")" = "00-PPassE3" ] || { echo "不设 E3_ANDROID_ALBUM 时没用默认相册 00-PPassE3"; exit 1; }
   [ "$(album_of "custom_album-1.2")" = "custom_album-1.2" ] || { echo "合法的自定义相册名被拒或被改写"; exit 1; }
