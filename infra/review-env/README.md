@@ -143,7 +143,9 @@ https://pair.example.com/?lang=en
 - 日志：`journalctl -u ppass-review -u ppass-pairpage -u cloudflared`
 - 备份到底成没成：看 `flow_delivery.state = completed` 与 `flow.round.finished`（见 `p-pass-file` skill 的四层验收法）
 - 换码：页面上「换一张码」（每次 `pairing.start` 新令牌，10 分钟 TTL）
-- **轮换身份/清库**（每轮审核结束后）：停 `ppass-review` → 删 `/var/lib/ppass-review` 内容 → 起服务（新 NodeId、空库）
+- **轮换身份/清库**（每轮审核结束后）：停 `ppass-review` → 删 `/var/lib/ppass-review` 内容 →
+  跑 `/opt/ppass-review/bin/restore-library-config`（重建 `p-pass/.ppf` 与 `config.toml`；不跑这一步，
+  headless daemon 会停在「未配置」，这台机器没有窗口程序补）→ 起服务（新 NodeId、空库）
 - 审核结束关停：`systemctl stop ppass-review ppass-pairpage cloudflared`，或直接停机器
 
 ## 坑（都实测过）
@@ -162,5 +164,6 @@ https://pair.example.com/?lang=en
 ## 本目录不含（刻意的）
 
 - **一次性口令 / Turnstile**：Basic Auth 之外没有不可替代的收益，只增加输入负担
-- **一键 reset 脚本**：多轮审核时再做；现阶段手工三步够用
+- **一键 reset 脚本**：复位仍按「运维」里的手工步骤做；其中重建库配置那一步已抽成
+  `scripts/restore-library-config.sh`（install.sh 与人工复位共用）
 - **任何账号、密码、令牌、私钥**：只存在于服务器与 App Store Connect

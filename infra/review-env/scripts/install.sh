@@ -46,12 +46,10 @@ install -m 644 "$HERE/pairpage/server.py" "$HERE/pairpage/index.html" "$HERE/pai
 install -d -m 755 /opt/ppass-review/pairpage/samples
 install -m 644 "$HERE"/pairpage/samples/*.jpg /opt/ppass-review/pairpage/samples/
 install -d -m 755 /var/lib/ppass-review
-# #1115：Linux 上库位置的正本是平台 config.toml；没有它 daemon 进「未配置」状态、等窗口程序
-# 配置（无界面机器上没人配）。库仍放平台目录本身（与以前同一位置，ipc.token 路径不变）；
-# 已有就不动。
-mkdir -p /var/lib/ppass-review/p-pass/.ppf  # #1253：库标记，daemon 认它判「库在」
-[ -e /var/lib/ppass-review/p-pass/config.toml ] \
-  || printf 'data_dir = "%s"\n' /var/lib/ppass-review/p-pass > /var/lib/ppass-review/p-pass/config.toml
+# 库标记与库位置配置（#1115 / #1253）：复位时同一份逻辑还要再跑一次，抽成脚本（#1661）。
+install -d -m 755 /opt/ppass-review/bin
+install -m 755 "$HERE/scripts/restore-library-config.sh" /opt/ppass-review/bin/restore-library-config
+/opt/ppass-review/bin/restore-library-config /var/lib/ppass-review
 
 # 3. systemd
 install -m 644 "$HERE/systemd/ppass-review.service" /etc/systemd/system/
