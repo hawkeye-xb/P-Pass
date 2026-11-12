@@ -36,6 +36,37 @@ out="$(PPASS_HEAVY_LOCK_WAIT=1 "$HL" true 2>&1)"; rc=$?
 kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
 [ "$rc" -eq 75 ] && printf '%s' "$out" | grep -q '等重编译锁超过' && ok "等锁超时退出 75 并提示" || bad "超时行为不对（rc=${rc}）：$out"
 
+# 4. #1639：PATH 里没有 lockf，但 macOS 自带的 /usr/bin/lockf 可用 ⇒ 仍必须取锁，不能退化成无锁执行。
+if [ -x /usr/bin/lockf ]; then
+  nol="$tmp/nolock"
+  mkdir -p "$nol"
+  for c in env bash sh; do p="$(command -v "$c")"; [ -z "$p" ] || ln -sf "$p" "$nol/$c"; done
+  /usr/bin/lockf -k "$PPASS_HEAVY_LOCK" sleep 5 &
+  holder=$!
+  sleep 0.3
+  PATH="$nol" PPASS_HEAVY_LOCK_WAIT=1 "$HL" /usr/bin/true >/dev/null 2>&1; rc=$?
+  kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+  [ "$rc" -eq 75 ] && ok "PATH 无 lockf、/usr/bin/lockf 可用 → 仍取锁（超时退出 75）" || bad "PATH 无 lockf 时没取锁（rc=${rc}）"
+
+  # 同一条件下已持锁仍直接执行（不重复找 lockf）
+  start=$(date +%s)
+  PATH="$nol" PPASS_HEAVY_LOCK_HELD=1 PPASS_HEAVY_LOCK_WAIT=1 "$HL" /usr/bin/true; rc=$?
+  [ "$rc" -eq 0 ] && [ $(( $(date +%s) - start )) -lt 5 ] && ok "已持锁时直接执行（PATH 里没有 lockf 也不受影响）" || bad "已持锁仍失败或卡住（rc=${rc}）"
+
+  # 反证：把副本里的 /usr/bin/lockf 回退指向不存在的位置（等价于没有这行回退）⇒
+  # 上面「仍取锁」的场景必须退化为无锁直接执行；同一跑也说明哪里都没有 lockf 时仍是直接执行。
+  sed 's|/usr/bin/lockf|/nonexistent/lockf|' "$HL" >"$tmp/hl-nolock-anywhere"
+  chmod +x "$tmp/hl-nolock-anywhere"
+  /usr/bin/lockf -k "$PPASS_HEAVY_LOCK" sleep 5 &
+  holder=$!
+  sleep 0.3
+  PATH="$nol" PPASS_HEAVY_LOCK_WAIT=1 "$tmp/hl-nolock-anywhere" /usr/bin/true >/dev/null 2>&1; rc=$?
+  kill "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+  [ "$rc" -eq 0 ] && ok "反证：去掉 /usr/bin/lockf 回退 → 退化为无锁直接执行（新用例会红；无 lockf 的回退不变）" || bad "反证失效：去掉回退后仍取了锁（rc=${rc}）"
+else
+  echo "SKIP：本机没有 /usr/bin/lockf（非 macOS），#1639 的绝对路径回退不适用"
+fi
+
 echo
 echo "heavy-lock: ${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ]
