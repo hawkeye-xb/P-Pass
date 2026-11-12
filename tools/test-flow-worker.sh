@@ -73,7 +73,7 @@ fake_cmd() {
 BIN="${TMP}/pathbin"
 mkdir -p "$BIN"
 for c in git bash env sh sed awk tar mktemp cat tr head tail grep rm cp chmod touch sort cmp \
-  basename dirname mkdir mv cut wc ls diff df uname rmdir date; do
+  basename dirname mkdir mv cut wc ls diff df uname rmdir date sleep; do
   fake_cmd "$BIN" "$c" || {
     echo "找不到命令 ${c}，无法搭测试环境"
     exit 1
@@ -407,6 +407,59 @@ issue 17 "status:ready" "[T-17] plain" "src/**" "Bug"
 OUT="$(START 17 2>&1)"
 printf '%s' "$OUT" | grep -q "只写复现" && bad "非核心卡也出了核心提示" || ok "反证：非核心卡不出核心提示"
 
+# ── 门禁预检（#1651）：领卡前按「范围」跑一遍轻门禁，红了就不领 ────────────────
+echo "== 门禁预检 =="
+# 门禁按范围挑：tools/ci-paths.sh 挑出引用它的 tools/test-ref.sh（不在范围里 → 红了要拦）；
+# tools/slow-target.sh 挑出引用它的 tools/test-slow.sh（跑 5 秒，用来验超时）。
+printf '#!/usr/bin/env bash\n# 引用 tools/slow-target.sh\necho FAKE-SLOW-START\nsleep 5\necho FAKE-SLOW-END\n' >"${M}/tools/test-slow.sh"
+printf '#!/usr/bin/env bash\n' >"${M}/tools/slow-target.sh"
+chmod +x "${M}/tools/test-slow.sh" "${M}/tools/slow-target.sh"
+git -C "$M" add tools/test-slow.sh tools/slow-target.sh
+git -C "$M" commit -q -s -m "add precheck gate fixtures"
+git -C "$M" push -q origin HEAD:refs/heads/main
+
+: >"$FAKE_GH/tool_fail"
+issue 81 "status:ready" "[T-81] precheck red" "tools/ci-paths.sh" "Task"
+if START 81 >"${TMP}/p81" 2>&1; then bad "轻门禁在干净基线上红，start 仍领了卡"; else ok "轻门禁干净基线红 → start 不领卡"; fi
+grep -q 'bash tools/test-ref.sh' "${TMP}/p81" && ok "  点名红的门禁命令" || bad "  没点名红项：$(tail -5 "${TMP}/p81")"
+has_lbl 81 "status:blocked" && ! has_lbl 81 "status:doing" && ! has_lbl 81 "status:ready" &&
+  ok "  卡打回 status:blocked（没经过 doing）" || bad "  标签不对：$(labels_of 81)"
+comments_of 81 | grep -qF 'bash tools/test-ref.sh' && ok "  评论里点名红的门禁" || bad "  评论没点名红项"
+comments_of 81 | grep -qF 'PPASS_GATE_PRECHECK=off' && ok "  评论给了强行在本机做的开关" || bad "  评论没给开关"
+[ -z "$(ls -d "${PPASS_WT_ROOT}/81-"* 2>/dev/null)" ] && ok "  临时 worktree 已撤掉" || bad "  临时 worktree 还在"
+[ -z "$(git -C "$M" branch --list 'ci/81-*')" ] && ok "  临时分支已删" || bad "  临时分支还在"
+rm -f "$FAKE_GH/tool_fail"
+printf 'status:ready' >"${FAKE_GH}/81.labels"
+OUT="$(START 81 2>&1)" && ok "反证：门禁改绿 → start 放行" || bad "门禁绿了仍不领卡：$OUT"
+has_lbl 81 "status:doing" && ok "  反证：标签 ready→doing" || bad "  反证：标签没翻：$(labels_of 81)"
+[ -n "$(ls -d "${PPASS_WT_ROOT}/81-"* 2>/dev/null)" ] && ok "  反证：worktree 留下" || bad "  反证：worktree 没留下"
+printf '%s' "$OUT" | grep -q '门禁预检（本机干净基线）' && ok "  打印了预检结论" || bad "  没打印预检结论：$OUT"
+
+# 修门禁的卡：红掉的就是卡范围里的脚本 → 只警告，照常领
+: >"$FAKE_GH/tool_fail"
+issue 82 "status:ready" "[T-82] fix red gate" "tools/test-ref.sh" "Task"
+OUT="$(START 82 2>&1)" && ok "红脚本在卡范围里（修门禁的卡）→ 照常领卡" || bad "修门禁的卡被拦了：$OUT"
+printf '%s' "$OUT" | grep -q '修门禁的卡' && ok "  打印了不拦的理由" || bad "  没打印理由：$OUT"
+rm -f "$FAKE_GH/tool_fail"
+
+# 重门禁（要编译/装依赖）不预检，只在开工提示里列出来
+: >"${FAKE_GH}/just_calls"
+issue 83 "status:ready" "[T-83] heavy gate" "src/**" "Task"
+OUT="$(START 83 2>&1)" && ok "范围挑出 just ci（重门禁）→ 照常领卡" || bad "重门禁的卡被拦了：$OUT"
+printf '%s' "$OUT" | grep -q '未预检' && ok "  列出未预检的重门禁" || bad "  没列未预检：$OUT"
+grep -q '^ci *$' "${FAKE_GH}/just_calls" 2>/dev/null && bad "  重门禁被真跑了" || ok "  重门禁没跑"
+
+# 超时按红处理
+issue 84 "status:ready" "[T-84] slow gate" "tools/slow-target.sh" "Task"
+if (export PPASS_PRECHECK_TIMEOUT=1; cd "$M" && bash tools/flow/worker-start.sh 84) >"${TMP}/p84" 2>&1; then
+  bad "门禁超时仍领了卡"
+else
+  ok "门禁超时 → 不领卡"
+fi
+has_lbl 84 "status:blocked" && ok "  超时打 status:blocked" || bad "  超时没打 blocked：$(labels_of 84)"
+comments_of 84 | grep -q '超时' && ok "  评论写明超时" || bad "  评论没写超时"
+[ -z "$(ls -d "${PPASS_WT_ROOT}/84-"* 2>/dev/null)" ] && ok "  超时的 worktree 也撤掉了" || bad "  超时的 worktree 还在"
+
 # #1423 apps/android/local.properties（git 不跟踪的本机配置）：主副本有 → 拷进卡目录；没有 → 不建、打印提示（反证）
 mkdir -p "${M}/apps/android"
 printf 'sdk.dir=/fake/sdk\n' >"${M}/apps/android/local.properties"
@@ -550,11 +603,11 @@ DONE "$W" >"${TMP}/o158" 2>&1
 C158="$(comments_of 158)"
 printf '%s' "$C158" | grep -qF '`just ci-docs`' && ok "只改 .coderabbit.yaml → just ci-docs" || bad "coderabbit 门禁不对：$(tail -6 "${TMP}/o158")"
 printf '%s' "$C158" | grep -qF '`just ci`' && bad "只改 .coderabbit.yaml 仍跑了全量 just ci" || ok "反证：coderabbit 没有全量 just ci"
-cp "$M/tools/flow/worker-done.sh" "${TMP}/wd-1545.bak"
-grep -v '^[ ]*\.coderabbit\.yaml) add_gate "just ci-docs"' "$M/tools/flow/worker-done.sh" >"${TMP}/wd-1545.mut"
-if [ "$(wc -l <"$M/tools/flow/worker-done.sh")" -eq "$(( $(wc -l <"${TMP}/wd-1545.mut") + 1 ))" ]; then
-  cp "${TMP}/wd-1545.mut" "$M/tools/flow/worker-done.sh"
-  git -C "$M" add tools/flow/worker-done.sh
+cp "$M/tools/flow/worker-lib.sh" "${TMP}/wd-1545.bak"
+grep -v '^[ ]*\.coderabbit\.yaml) flow_gate_add "just ci-docs"' "$M/tools/flow/worker-lib.sh" >"${TMP}/wd-1545.mut"
+if [ "$(wc -l <"$M/tools/flow/worker-lib.sh")" -eq "$(( $(wc -l <"${TMP}/wd-1545.mut") + 1 ))" ]; then
+  cp "${TMP}/wd-1545.mut" "$M/tools/flow/worker-lib.sh"
+  git -C "$M" add tools/flow/worker-lib.sh
   git -C "$M" commit -q -s -m "mutate coderabbit gate"
   git -C "$M" push -q origin HEAD:refs/heads/main
   W="$(card 159 "[T-159] coderabbit unregistered" ".coderabbit.yaml")"
@@ -566,8 +619,8 @@ if [ "$(wc -l <"$M/tools/flow/worker-done.sh")" -eq "$(( $(wc -l <"${TMP}/wd-154
 else
   bad "coderabbit 登记行没匹配上，变异没生效"
 fi
-cp "${TMP}/wd-1545.bak" "$M/tools/flow/worker-done.sh"
-git -C "$M" add tools/flow/worker-done.sh
+cp "${TMP}/wd-1545.bak" "$M/tools/flow/worker-lib.sh"
+git -C "$M" add tools/flow/worker-lib.sh
 git -C "$M" commit -q -s -m "restore coderabbit gate"
 git -C "$M" push -q origin HEAD:refs/heads/main
 
@@ -592,7 +645,7 @@ comments_of 126 | grep -qF "cargo clippy --all-targets -- -D warnings" && ok "�
 # BUILD-06（#174，复发 #1669）：本地 clippy 不许带 --all-features——mobile-ffi 用 std::os::fd，Windows 上必红。
 comments_of 126 | grep -qF -- "--all-features" && bad "本地 clippy 带了 --all-features（Windows 上必红，#174/#1669）" || ok "反证：本地 clippy 不带 --all-features"
 # 桌面端按路径挑（#1530）：apps/desktop/src/** → 前端 vitest；src-tauri/** → 独立 workspace 的 nextest；
-# 两条之外的 apps/desktop/** 仍 fail-closed 退回全量。反证：去掉 worker-done.sh 里对应规则，下面断言会红。
+# 两条之外的 apps/desktop/** 仍 fail-closed 退回全量。反证：去掉 worker-lib.sh 里对应规则，下面断言会红。
 W="$(card 160 "[T-160] desktop frontend" "apps/desktop/**")"
 mkdir -p "$W/apps/desktop/src"
 printf 'let x = 1\n' >"$W/apps/desktop/src/App.svelte"
@@ -672,11 +725,11 @@ cp "${TMP}/test-e3.bak" "${M}/tools/test-e3.sh"
 git -C "$M" add tools/test-e3.sh && git -C "$M" commit -q -s -m "restore e3 self-test"
 git -C "$M" push -q origin HEAD:refs/heads/main
 # #1646 变异反证 1：去掉 src-tauri 的 fmt 那步 → 桌面 Rust 的门禁里不再挑 fmt（证明断言真的守着）
-cp "$M/tools/flow/worker-done.sh" "${TMP}/wd-1646f.bak"
-grep -v 'add_gate "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check"' "$M/tools/flow/worker-done.sh" >"${TMP}/wd-1646f.mut"
-if [ "$(wc -l <"$M/tools/flow/worker-done.sh")" -eq "$(( $(wc -l <"${TMP}/wd-1646f.mut") + 1 ))" ]; then
-  cp "${TMP}/wd-1646f.mut" "$M/tools/flow/worker-done.sh"
-  git -C "$M" add tools/flow/worker-done.sh
+cp "$M/tools/flow/worker-lib.sh" "${TMP}/wd-1646f.bak"
+grep -v 'flow_gate_add "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check"' "$M/tools/flow/worker-lib.sh" >"${TMP}/wd-1646f.mut"
+if [ "$(wc -l <"$M/tools/flow/worker-lib.sh")" -eq "$(( $(wc -l <"${TMP}/wd-1646f.mut") + 1 ))" ]; then
+  cp "${TMP}/wd-1646f.mut" "$M/tools/flow/worker-lib.sh"
+  git -C "$M" add tools/flow/worker-lib.sh
   git -C "$M" commit -q -s -m "mutate src-tauri fmt gate"
   git -C "$M" push -q origin HEAD:refs/heads/main
   W="$(card 164 "[T-164] desktop rust no fmt" "apps/desktop/**")"
@@ -690,18 +743,18 @@ if [ "$(wc -l <"$M/tools/flow/worker-done.sh")" -eq "$(( $(wc -l <"${TMP}/wd-164
 else
   bad "src-tauri fmt 行没匹配上，变异没生效"
 fi
-cp "${TMP}/wd-1646f.bak" "$M/tools/flow/worker-done.sh"
-git -C "$M" add tools/flow/worker-done.sh
+cp "${TMP}/wd-1646f.bak" "$M/tools/flow/worker-lib.sh"
+git -C "$M" add tools/flow/worker-lib.sh
 git -C "$M" commit -q -s -m "restore src-tauri fmt gate"
 # #1646 变异反证 2：把 tools/e3 映射改坏（e3x 永不匹配）→ tools/e3 改动退回全量 just ci
-cp "$M/tools/flow/worker-done.sh" "${TMP}/wd-1646e.bak"
+cp "$M/tools/flow/worker-lib.sh" "${TMP}/wd-1646e.bak"
 while IFS= read -r line; do
   [ "$line" = '    tools/e3/*)' ] && line='    tools/e3x/*)'
   printf '%s\n' "$line"
-done <"$M/tools/flow/worker-done.sh" >"${TMP}/wd-1646e.mut"
-cp "${TMP}/wd-1646e.mut" "$M/tools/flow/worker-done.sh"
-if grep -q 'tools/e3x/\*)' "$M/tools/flow/worker-done.sh"; then
-  git -C "$M" add tools/flow/worker-done.sh
+done <"$M/tools/flow/worker-lib.sh" >"${TMP}/wd-1646e.mut"
+cp "${TMP}/wd-1646e.mut" "$M/tools/flow/worker-lib.sh"
+if grep -q 'tools/e3x/\*)' "$M/tools/flow/worker-lib.sh"; then
+  git -C "$M" add tools/flow/worker-lib.sh
   git -C "$M" commit -q -s -m "mutate e3 mapping"
   git -C "$M" push -q origin HEAD:refs/heads/main
   W="$(card 165 "[T-165] tools e3 unmapped" "tools/**")"
@@ -714,19 +767,19 @@ if grep -q 'tools/e3x/\*)' "$M/tools/flow/worker-done.sh"; then
 else
   bad "tools/e3 映射变异没生效"
 fi
-cp "${TMP}/wd-1646e.bak" "$M/tools/flow/worker-done.sh"
-git -C "$M" add tools/flow/worker-done.sh
+cp "${TMP}/wd-1646e.bak" "$M/tools/flow/worker-lib.sh"
+git -C "$M" add tools/flow/worker-lib.sh
 git -C "$M" commit -q -s -m "restore e3 mapping"
 # #1669 变异反证：把 --all-features 加回 crate 的 clippy → 上面「不带 --all-features」的判定必须红
-cp "$M/tools/flow/worker-done.sh" "${TMP}/wd-1669.bak"
+cp "$M/tools/flow/worker-lib.sh" "${TMP}/wd-1669.bak"
 while IFS= read -r line; do
-  [ "$line" = '        add_gate "cargo clippy --all-targets -- -D warnings"' ] &&
-    line='        add_gate "cargo clippy --all-targets --all-features -- -D warnings"'
+  [ "$line" = '          flow_gate_add "cargo clippy --all-targets -- -D warnings"' ] &&
+    line='          flow_gate_add "cargo clippy --all-targets --all-features -- -D warnings"'
   printf '%s\n' "$line"
-done <"$M/tools/flow/worker-done.sh" >"${TMP}/wd-1669.mut"
-cp "${TMP}/wd-1669.mut" "$M/tools/flow/worker-done.sh"
-if grep -qF 'add_gate "cargo clippy --all-targets --all-features -- -D warnings"' "$M/tools/flow/worker-done.sh"; then
-  git -C "$M" add tools/flow/worker-done.sh
+done <"$M/tools/flow/worker-lib.sh" >"${TMP}/wd-1669.mut"
+cp "${TMP}/wd-1669.mut" "$M/tools/flow/worker-lib.sh"
+if grep -qF 'flow_gate_add "cargo clippy --all-targets --all-features -- -D warnings"' "$M/tools/flow/worker-lib.sh"; then
+  git -C "$M" add tools/flow/worker-lib.sh
   git -C "$M" commit -q -s -m "mutate crate clippy all-features"
   git -C "$M" push -q origin HEAD:refs/heads/main
   W="$(card 166 "[T-166] crate clippy all-features" "crates/**")"
@@ -740,8 +793,8 @@ if grep -qF 'add_gate "cargo clippy --all-targets --all-features -- -D warnings"
 else
   bad "crate clippy 行的变异没生效"
 fi
-cp "${TMP}/wd-1669.bak" "$M/tools/flow/worker-done.sh"
-git -C "$M" add tools/flow/worker-done.sh
+cp "${TMP}/wd-1669.bak" "$M/tools/flow/worker-lib.sh"
+git -C "$M" add tools/flow/worker-lib.sh
 git -C "$M" commit -q -s -m "restore crate clippy gate"
 # 改动里本身就是 tools/test-*.sh → 跑它自己
 W="$(card 130 "[T-130] tools test itself" "tools/**")"
