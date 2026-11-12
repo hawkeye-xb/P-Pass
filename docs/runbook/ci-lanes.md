@@ -77,7 +77,8 @@ stub `gh` 真跑两个脚本，再从 `release.yml` 抽收敛步骤的 run 块�
 
 ## `tools/ci-needs-full-lane.sh` 的判据
 
-- 判据是 **allowlist**：改动**全部**落在无害清单里才跳过，其余一律跑。往清单里加
+- 判据是 **allowlist**：改动**全部**落在无害清单里才跳过，其余一律跑；**例外**是 `tools/` 下
+  没登记的文件——它们不看清单，按下面的引用闭包判。往清单里加
   东西前先确认没有测试或构建脚本读它（`assets/i18n/**` 被 diag 测试消费，**不许加**）。
 - 两个 lane（CI-17 #373），因为 6 个 job 的依赖面不同：
   - **默认** lane（无害 = `docs/`、`.claude/`、`*.md`，以及 #1467 按依赖面补进的
@@ -91,8 +92,10 @@ stub `gh` 真跑两个脚本，再从 `release.yml` 抽收敛步骤的 run 块�
 - 不带 lane 参数 = 默认 lane，这是向后兼容契约；未知 lane 一律判要跑。
 - `tools/` 下**没登记**在清单里的文件按**引用闭包**判（`tools_closure_inert`，两条 lane 共用）：
   用文件主名（basename 去掉扩展名）`git grep -lF` 找全仓引用方，逐个看——引用方自己在无害清单里
-  就不追；在 `tools/` 下就继续往上追它的引用方；是 `ci-rust.yml` / `ci-desktop.yml` / `justfile`
-  则要跑，其它 `.github/workflows/` 不触发；其余不认识的文件一律要跑。文件在 HEAD 不存在（改名或删除）、
+  就不追；在 `tools/` 下就继续往上追它的引用方；判据脚本自身与自测（`tools/ci-needs-full-lane.sh`、
+  `tools/test-ci-needs-full-lane.sh`）不在清单里，但也会被显式跳过、不算引用方；是
+  `ci-rust.yml` / `ci-desktop.yml` 则要跑，`justfile` 与其它 `.github/workflows/` 都不触发；其余不认识的文件
+  一律要跑。文件在 HEAD 不存在（改名或删除）、
   闭包超过 300 个文件、`git grep` 出错、门禁 workflow / action 用通配符或变量拼 `tools/` 路径导致追不全，
   都判「要跑」。清单是这条判定的前置，结果只会更严不会更松；注释与阈值以脚本里
   `tools_closure_inert` 为准。
