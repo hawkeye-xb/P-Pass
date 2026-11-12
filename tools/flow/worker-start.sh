@@ -125,6 +125,146 @@ if [ "${#CARDS[@]}" -gt 1 ]; then
     die "记录关联卡失败：git config branch.${BRANCH}.ppasscards \"${CARDS[*]}\""
 fi
 
+# ── 门禁预检（#1651）：这张卡的门禁在本机干净基线上跑不跑得绿 ──────────────
+# 目的：worker 领卡前就知道这台机器能不能把卡送到合入；别改完才发现门禁必红（#1392 白做 41 turns）。
+# 门禁清单与 just done 共用一份挑选逻辑（flow_pick_gates），这里按卡的「范围」挑：范围里展开得到的文件一起喂进去，
+# 展开不到任何文件的 glob 原样当路径（与 done 的 fail-closed 口径一致，挑不出来就是全量 just ci）。
+# 只预检能在几分钟内跑完的轻门禁（自包含的 bash 测试、just ci-docs、actionlint、just mobile-static-check）；
+# 要编译或先装依赖的（cargo、pnpm、android-test、ios-test、just ci）不预检，只列出来——近三次同族事故
+# （#1392 的 test-e3.sh、#1646 的挑选漏项、#1685 的 test-flow-worker.sh）都落在轻门禁里。
+# 红了：不领卡——撤掉刚建的 worktree 与分支、卡打 status:blocked、issue 里写评论（哪条门禁红、日志末尾、怎么复跑）。
+# 例外：红掉的命令跑的就是卡「范围」里的脚本（修门禁的卡）→ 只警告，照常领卡。
+# PPASS_GATE_PRECHECK=off 关掉预检；PPASS_PRECHECK_TIMEOUT 改单条超时（秒，默认 600）。
+run_bounded() { # <秒> <日志> <命令>：超时就杀掉并返回 124（不用 timeout 命令：Windows 的 timeout.exe 是另一套语义）
+  local secs="$1" log="$2" cmd="$3" pid i=0
+  PPASS_GATE_PRECHECK=off bash -c "$cmd" >>"$log" 2>&1 &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    if [ "$i" -ge "$secs" ]; then
+      kill -TERM "$pid" 2>/dev/null
+      # 门禁是 `bash -c` 起的壳，真正的测试 / just recipe 是它的子进程：一并收掉，
+      # 否则它们会在 worktree 被撤掉后继续跑（Windows 上还会占着目录让删除失败）。
+      if command -v pgrep >/dev/null 2>&1; then
+        for c in $(pgrep -P "$pid" 2>/dev/null); do kill -TERM "$c" 2>/dev/null; done
+      fi
+      sleep 1
+      kill -KILL "$pid" 2>/dev/null
+      wait "$pid" 2>/dev/null
+      return 124
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+  wait "$pid"
+}
+precheck_script_of() { # 命令里引用的仓库路径（bash <路径>）；没有就什么也不打印
+  case "$1" in
+    bash\ *) set -- $1; [ -n "${2:-}" ] && printf '%s\n' "$2" ;;
+  esac
+}
+if [ "${PPASS_GATE_PRECHECK:-on}" != off ]; then
+  PRECHECK_PATHS="$(for g in "${GLOBS[@]}"; do
+    m="$(git -C "$DIR" ls-files -z -- "$g" 2>/dev/null | tr '\0' '\n')"
+    if [ -n "$m" ]; then printf '%s\n' "$m"; else printf '%s\n' "$g"; fi
+  done)"
+  PRECHECK_GATES="$( (cd "$DIR" && flow_pick_gates && printf '%s\n' "${GATES[@]}") <<EOF2
+$PRECHECK_PATHS
+EOF2
+)"
+  PRECHECK_LOG="$(mktemp "${TMPDIR:-/tmp}/ppass-precheck.XXXXXX")"
+  PRECHECK_SECS="${PPASS_PRECHECK_TIMEOUT:-600}"
+  case "$PRECHECK_SECS" in
+    '' | 0 | *[!0-9]*)
+      printf '⚠ PPASS_PRECHECK_TIMEOUT=「%s」不是正整数，按 600 秒算\n' "$PRECHECK_SECS" >&2
+      PRECHECK_SECS=600
+      ;;
+  esac
+  PRECHECK_GREEN=()
+  PRECHECK_RED=()
+  PRECHECK_SKIP=()
+  while IFS= read -r g; do
+    [ -n "$g" ] || continue
+    case "$g" in
+      bash\ * | "just ci-docs" | actionlint | "just mobile-static-check") ;;
+      *) PRECHECK_SKIP+=("$g"); continue ;;
+    esac
+    printf '\n==> %s\n' "$g" >>"$PRECHECK_LOG"
+    (cd "$DIR" && run_bounded "$PRECHECK_SECS" "$PRECHECK_LOG" "$g")
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
+      PRECHECK_GREEN+=("$g")
+    elif [ "$rc" -eq 124 ]; then
+      PRECHECK_RED+=("${g}（超时 ${PRECHECK_SECS}s）")
+    else
+      PRECHECK_RED+=("$g")
+    fi
+  done <<EOF2
+$PRECHECK_GATES
+EOF2
+  PRECHECK_BLOCK=()
+  if [ "${#PRECHECK_RED[@]}" -gt 0 ]; then
+    for r in "${PRECHECK_RED[@]}"; do
+      s="$(precheck_script_of "$r")"
+      if [ -n "$s" ] && flow_in_scope "$s"; then
+        printf '⚠ 预检：%s 在干净基线上红，但它是本卡「范围」里的脚本（修门禁的卡），不拦\n' "$r" >&2
+      else
+        PRECHECK_BLOCK+=("$r")
+      fi
+    done
+  fi
+  if [ "${#PRECHECK_BLOCK[@]}" -gt 0 ]; then
+    REASON="$(mktemp "${TMPDIR:-/tmp}/ppass-precheck-reason.XXXXXX")"
+    {
+      echo "**领卡前门禁预检没通过：本机干净基线红，先别做这张卡**"
+      echo
+      echo "在新建的卡目录（origin/main 干净基线）上按「范围」挑出的门禁跑了一遍，红的："
+      for r in "${PRECHECK_BLOCK[@]}"; do echo "- \`${r}\`"; done
+      echo
+      [ "${#PRECHECK_SKIP[@]}" -eq 0 ] || {
+        echo "没预检的重门禁（要编译或先装依赖，不是它们红的）："
+        for r in "${PRECHECK_SKIP[@]}"; do echo "- \`${r}\`"; done
+        echo
+      }
+      echo "复跑方式：修好本机环境后重新 \`just start ${N}\`（临时目录已撤掉）；或换一台能把这些门禁跑绿的机器做。"
+      echo "确认是本机环境问题、要强行在本机做：\`PPASS_GATE_PRECHECK=off just start ${N}\`。"
+      echo
+      echo "日志末尾（\`${PRECHECK_LOG}\`）："
+      echo '```'
+      tail -n 40 "$PRECHECK_LOG" | scrub
+      echo '```'
+    } >"$REASON"
+    BLOCK_NOTE="已打 status:blocked 并写了评论"
+    for c in "${CARDS[@]}"; do
+      flow_try_labels "$c" "status:blocked" "status:ready" ||
+        BLOCK_NOTE="⚠ 改 #${c} 的标签失败；评论内容见 ${REASON}"
+      flow_comment "$c" "$REASON" ||
+        BLOCK_NOTE="⚠ 往 #${c} 贴评论失败，内容留在 ${REASON}，手动补：gh issue comment ${c} -R ${REPO} --body-file ${REASON}"
+    done
+    # 刚建的 worktree 是干净的、没改动：撤掉，修好环境后能直接重新 just start。
+    if [ -z "$(git -C "$DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
+      git worktree remove --force "$DIR" >/dev/null 2>&1 ||
+        printf '⚠ 撤掉临时 worktree 失败，手动：git worktree remove --force %s\n' "$DIR" >&2
+      git branch -D "$BRANCH" >/dev/null 2>&1 ||
+        printf '⚠ 删临时分支失败，手动：git branch -D %s\n' "$BRANCH" >&2
+    fi
+    [ -f "$REASON" ] && [ "$BLOCK_NOTE" = "已打 status:blocked 并写了评论" ] && rm -f "$REASON"
+    die "门禁预检红：#${N} 的门禁在本机干净基线上跑不绿，先别做这张卡（${BLOCK_NOTE}）" \
+      "红的：$(printf '%s' "${PRECHECK_BLOCK[0]}")$([ "${#PRECHECK_BLOCK[@]}" -gt 1 ] && printf ' 等 %s 条' "$(( ${#PRECHECK_BLOCK[@]} - 1 ))")" \
+      "日志：${PRECHECK_LOG}"
+  fi
+  if [ "${#PRECHECK_GREEN[@]}" -eq 1 ]; then
+    echo "✅ 门禁预检（本机干净基线）：${PRECHECK_GREEN[0]} 全绿"
+  elif [ "${#PRECHECK_GREEN[@]}" -gt 1 ]; then
+    echo "✅ 门禁预检（本机干净基线）：${PRECHECK_GREEN[0]} 等 ${#PRECHECK_GREEN[@]} 条全绿"
+  fi
+  [ "${#PRECHECK_SKIP[@]}" -eq 0 ] || {
+    echo "   未预检（要编译或先装依赖，交卡时才跑）："
+    printf '     %s\n' "${PRECHECK_SKIP[@]}"
+  }
+  # 全绿（没有红项）就不留临时日志；有红的留着，路径在上面打印过。
+  [ "${#PRECHECK_RED[@]}" -gt 0 ] || rm -f "$PRECHECK_LOG"
+fi
+
 for c in "${CARDS[@]}"; do flow_labels "$c" "status:doing" "status:ready"; done
 
 # #1423 apps/android/local.properties 是本机配置（sdk.dir 等），git 不跟踪，新 worktree 里没有：
