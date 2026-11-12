@@ -27,6 +27,27 @@ for f in "$E3"/scenarios/*/*.sh; do
 done
 [ "$("$E3/run" list | wc -l | tr -d ' ')" -ge 8 ] || bad "run list 列不全"
 
+# #1457：E3_ANDROID_ALBUM 会拼进设备端 adb shell 命令，只接受安全的单段目录名，不合规在 source 时拒绝。
+(
+  d="$(mktemp -d)" || exit 1
+  trap 'rm -rf "$d"' EXIT
+  mkdir -p "$d/state"
+  album_of() {
+    E3_STATE="$d/state" E3_ANDROID_ALBUM="$1" \
+      bash -c 'source "$0/lib/common.sh"; source "$0/lib/adb.sh"; printf "%s" "$E3_ALBUM"' "$E3" 2>"$d/err"
+  }
+  for v in "../escape" "a b" "a/b" "." ".."; do
+    if out="$(album_of "$v")"; then
+      echo "E3_ANDROID_ALBUM=「${v}」应被拒绝，却放行了（E3_ALBUM=${out}）"
+      exit 1
+    fi
+    grep -q 'E3_ANDROID_ALBUM' "$d/err" || { echo "E3_ANDROID_ALBUM=「${v}」被拒绝，但提示没点名变量"; exit 1; }
+  done
+  [ "$(album_of "")" = "00-PPassE3" ] || { echo "不设 E3_ANDROID_ALBUM 时没用默认相册 00-PPassE3"; exit 1; }
+  [ "$(album_of "custom_album-1.2")" = "custom_album-1.2" ] || { echo "合法的自定义相册名被拒或被改写"; exit 1; }
+  exit 0
+) || bad "E3_ANDROID_ALBUM 只接受安全的单段目录名"
+
 # 判定回放：fixtures/<场景 id 的 / 换成 ->/{pass,fail}
 for d in "$E3"/fixtures/*/; do
   id="$(basename "$d")"

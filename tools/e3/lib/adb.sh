@@ -96,6 +96,13 @@ is_debuggable() { A shell dumpsys package "$PKG" | grep -m1 'pkgFlags' | grep -q
 # #1412：场景素材只进专用测试相册，不碰相机相册——测试机上当天拍的真实照片不会被算进场景的计数。
 # 相册名以 `00-` 开头：选范围页按名字排序，排在首屏不用滚动。
 E3_ALBUM="${E3_ANDROID_ALBUM:-00-PPassE3}"
+# 名字会拼进设备端 adb shell 命令（mkdir/rm/扫描广播）：只放行单段目录名，避免空格拆参数、
+# `..` 越出 /sdcard/Pictures（#1457）。
+case "$E3_ALBUM" in
+  . | .. | *[!A-Za-z0-9._-]*)
+    die "E3_ANDROID_ALBUM 只接受单段目录名（字母、数字、. _ -，且不能是 . 或 ..）：${E3_ALBUM}"
+    ;;
+esac
 E3_ALBUM_DIR="/sdcard/Pictures/$E3_ALBUM"
 
 # push_photos <本地目录>：推进专用测试相册并通知媒体库（否则 App 查不到）
