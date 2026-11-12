@@ -6,6 +6,7 @@ package com.hawkeyexb.ppass.ui
 
 import com.hawkeyexb.ppass.log.PLog
 import com.hawkeyexb.ppass.backup.MediaAccess
+import android.content.Context
 import android.graphics.Bitmap
 import android.util.Base64
 import android.util.LruCache
@@ -70,7 +71,10 @@ import com.hawkeyexb.ppass.proto.TimelinePage
 import com.hawkeyexb.ppass.proto.TimelineQuery
 import com.hawkeyexb.ppass.transport.DaemonClient
 import com.hawkeyexb.ppass.transport.PeerAddrParts
+import java.io.File
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import me.saket.telephoto.zoomable.rememberZoomableState
 import me.saket.telephoto.zoomable.zoomable
 
@@ -308,6 +312,9 @@ internal fun PhotosScreen(
     // TimelineSubscriptionHolder 持有——App 前台期间（不管显示哪个 tab）
     // 订阅连接保持，本 composable 只渲染这份状态，不再自己创建/销毁订阅。
     val loader = holder.loader
+    // 卡 #124（MOB-73）：取图出口本机优先——来源是本机、账本命中、版本核对一致
+    // 就打开本机相册那份；其它情况全部走老路远端（不报错、不提示降级）。
+    val localMedia = rememberLocalSourceLoader(loader, LocalContext.current)
     val items = holder.items
     val next = holder.next
     val loading = holder.loading
@@ -333,7 +340,7 @@ internal fun PhotosScreen(
         ) {
             viewer = null
         }
-        MediaViewer(loader, currentViewer, localNodeId) { viewer = null }
+        MediaViewer(loader, localMedia, currentViewer, localNodeId) { viewer = null }
         return
     }
 
@@ -496,7 +503,10 @@ internal fun PhotosScreen(
                         )
                     }
                     items(group, key = { it.hash }) { asset ->
-                        ThumbCell(loader, asset) {
+                        ThumbCell(
+                            localMedia, asset,
+                            isMine = localNodeId?.let { asset.sourceDeviceOrNull() == it } == true,
+                        ) {
                             viewer = MediaViewerSession.open(shown, asset.hash)
                         }
                     }
@@ -516,6 +526,32 @@ internal fun PhotosScreen(
     }
 }
 
+/**
+ * 卡 #124（MOB-73）：「本机优先」的取图出口。索引在第一次查找时才从账本读
+ * （只读接口 readCurrentOrders，运行时还没起来就隔 5 秒再试），不落盘、不改账本。
+ * [loader] 还没就绪时远端这一路给 null——那时网格本来也不渲染。
+ */
+@Composable
+private fun rememberLocalSourceLoader(
+    loader: TimelineLoader?,
+    context: Context,
+): LocalFirstLoader<Bitmap> {
+    val app = context.applicationContext
+    val originals = remember(app) {
+        LocalFirstOriginals(
+            reader = AndroidOriginalReader(app),
+            loadIndex = { withContext(Dispatchers.IO) { readLocalSourceIndex() } },
+        )
+    }
+    return remember(loader, originals) {
+        LocalFirstLoader(
+            local = originals,
+            remoteThumb = { hash, size -> loader?.thumb(hash, size) },
+            remoteDownload = { hash, dest -> loader?.download(hash, dest) { _, _ -> } },
+        )
+    }
+}
+
 /** taken_at (ms) → "2026年7月"-style month label using the device locale. */
 private fun groupByMonth(items: List<AssetMeta>): List<Pair<String, List<AssetMeta>>> {
     val fmt = java.text.SimpleDateFormat("yyyy.MM", java.util.Locale.getDefault())
@@ -524,13 +560,20 @@ private fun groupByMonth(items: List<AssetMeta>): List<Pair<String, List<AssetMe
 }
 
 @Composable
-private fun ThumbCell(loader: TimelineLoader, asset: AssetMeta, onOpen: () -> Unit) {
+private fun ThumbCell(
+    localMedia: LocalFirstLoader<Bitmap>,
+    asset: AssetMeta,
+    isMine: Boolean,
+    onOpen: () -> Unit,
+) {
     // LINT-01: ProduceStateDoesNotAssignValue 误报——赋值裹在
     // `if (value == null)` 条件分支里，lint 静态检查看不出（缓存命中时
     // 本来就不该重新赋值，是有意为之）。
     @Suppress("ProduceStateDoesNotAssignValue")
     val bmp by produceState<Bitmap?>(initialValue = thumbCache.get("${asset.hash}/256"), asset.hash) {
-        if (value == null) value = runCatching { loader.thumb(asset.hash, ThumbSize.S256) }.getOrNull()
+        if (value == null) {
+            value = runCatching { localMedia.thumb(asset, ThumbSize.S256, isMine) }.getOrNull()
+        }
     }
     Box(
         Modifier.aspectRatio(1f).clip(RoundedCornerShape(10.dp))
@@ -610,6 +653,7 @@ internal fun dimensionsText(width: Int, height: Int): String? =
 @Composable
 private fun MediaViewer(
     loader: TimelineLoader,
+    localMedia: LocalFirstLoader<Bitmap>,
     session: MediaViewerSession,
     localNodeId: String?,
     onClose: () -> Unit,
@@ -627,15 +671,21 @@ private fun MediaViewer(
         // Wire format is normalized "video"/"photo"; retain the prefix for
         // older daemons that might send a MIME type such as video/mp4.
         if (asset.mediaType.startsWith("video")) {
+            // 卡 #124 范围只到照片四条路；视频仍走原来的远端路径（视频的本机源另卡）。
             VideoScreen(loader, asset, isMine = isMine, onClose = onClose)
         } else {
-            PhotoViewer(loader, asset, isMine = isMine, onClose = onClose)
+            PhotoViewer(localMedia, asset, isMine = isMine, onClose = onClose)
         }
     }
 }
 
 @Composable
-private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, isMine: Boolean, onClose: () -> Unit) {
+private fun PhotoViewer(
+    localMedia: LocalFirstLoader<Bitmap>,
+    asset: AssetMeta,
+    isMine: Boolean,
+    onClose: () -> Unit,
+) {
     // MOB-04 红线③（大图）：当前查看 = 1024 缩略图走内存缓存（见下）；
     // 未来加原图查看时——拉原图只走**临时文件即看即清或纯内存流式**，
     // 绝不建长期原图缓存。手机是减负端不是第二存储端。备忘：
@@ -649,7 +699,8 @@ private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, isMine: Boolea
     var previewMissing by remember(asset.hash) { mutableStateOf(false) }
     @Suppress("ProduceStateDoesNotAssignValue")
     val bmp by produceState<Bitmap?>(initialValue = null, asset.hash) {
-        value = runCatching { loader.thumb(asset.hash, ThumbSize.S1024) }.getOrNull()
+        // 卡 #124：本机那份还在就先读本地，取不到再按老路走远端。
+        value = runCatching { localMedia.thumb(asset, ThumbSize.S1024, isMine) }.getOrNull()
             ?: thumbCache.get("${asset.hash}/256")
         previewMissing = value == null
     }
@@ -706,7 +757,10 @@ private fun PhotoViewer(loader: TimelineLoader, asset: AssetMeta, isMine: Boolea
         notice = null
         scope.launch {
             try {
-                val file = downloadToShare(loader, asset.hash, share)
+                // RET-01：即用即清旧残留（本机命中与远端下载共用同一条）。
+                share.listFiles()?.forEach { it.delete() }
+                // 卡 #124：本机那份还在就复制本机原图，否则按老路下载。
+                val file = localMedia.fetchOriginal(asset, isMine, File(share, "asset-${asset.hash.take(16)}"))
                 when (op) {
                     ViewerOp.Save -> {
                         val saved = saveToGallery(context, file, asset)
