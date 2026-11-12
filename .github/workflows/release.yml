@@ -1338,12 +1338,6 @@ jobs:
           # 草稿 release 不会自己建 git tag，而 tag 是各端构建基线、plan-builds 要解析它，所以显式建。
           SHA="$(git rev-parse HEAD)"
           if [ "${{ inputs.release }}" = "true" ]; then
-            # 发版期间触发用的分支前进了 ⇒ 验证（检出分支当前提交）与本次构建（触发时的提交）可能不是同一份代码，拒绝。
-            HEAD_NOW="$(git ls-remote origin "refs/heads/${GITHUB_REF_NAME}" | cut -f1)"
-            [ "$HEAD_NOW" = "$GITHUB_SHA" ] || {
-              echo "::error::${GITHUB_REF_NAME} 已从 ${GITHUB_SHA} 前进到 ${HEAD_NOW:-（不存在）}：验证与构建不一定是同一份代码，请重新触发（要固定提交，先建一条指向它的分支再在该分支上触发）"
-              exit 1
-            }
             EXIST="$(git ls-remote --tags origin "refs/tags/${TAG}^{}" "refs/tags/${TAG}" | cut -f1 | head -1)"
             if [ -z "$EXIST" ]; then
               git push origin "${SHA}:refs/tags/${TAG}"

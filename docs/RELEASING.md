@@ -434,6 +434,8 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
    （tag 名形状、在 main 上、tag 尚不存在）与发版前验证（桌面壳只跑 Windows；Linux 桌面检查
    已随 #1555 永久移除）；全绿之后 `create-draft` 才在被验证的
    提交上建 tag 与 draft Release（三平台资产）。验证红了不会留下 tag。
+   **发版期间不需要冻结合入**：验证与构建都锚定触发时的提交（`BUILD_REF`），触发后 main 继续合入
+   不改变本次构建的字节；要包含更新的代码，重新触发一次即可。
    > **发版闸（#1486）**：正式版发版前必须已有标题恰为「[验收] <正式 tag>」的台账 issue（如「[验收] v2026.11.2」）。
    > `just release-scope --ledger <号> --pkg <test 包 tag>` 只读写已有 issue，不会新建：先手动建一张标题恰好是
    > 「[验收] <正式 tag>」的 issue，再用它的号跑这条命令（出第一个 test 包时写入清单）。`plan-builds` 按标题找到它，

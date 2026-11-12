@@ -6,6 +6,8 @@
 #   ② tools/release-version.sh：RELEASE_TAG 优先于 GITHUB_REF_NAME
 #      （dispatch 补跑时 GITHUB_REF_NAME=main）；不设 RELEASE_TAG 时行为不变。
 #   ③ tools/check-version-bump.sh：head-ref 不存在 / diff 失败 ⇒ 非零退出，不静默放行。
+#   ④ release.yml 全部 checkout 都检出被补跑的 tag（REL-13）。
+#   ⑤ release.yml create-draft：触发后 main 前进不再拒绝（#1648）；tag 已存在且指向别的提交仍拒绝。
 #
 # ① 直接从 workflow YAML 里按 step 名抽出 run 块来跑——测的是真实 YAML，不是复制品。
 # 全部在临时 git 仓库里造数据（bare origin + 浅克隆），不碰本仓库的 tag / 工作区。
@@ -282,7 +284,7 @@ fi
 # tag。判据：每个 checkout 的 with 块里都有 `ref: ${{ env.BUILD_REF }}`，而 BUILD_REF 恰为
 # `inputs.release && github.sha || inputs.tag`（补跑 = tag，发版 = 触发时的提交，tag 此时还不存在）；
 # 补跑路径上不得用 GITHUB_SHA / github.sha（补跑时它们指向 main）：全文只许出现在 BUILD_REF 定义、
-# 发版入口守卫与 create-draft 的发版分支里（共三处，都带 release 判断）。
+# 发版入口守卫与 create-draft 的发版分支里（都带 release 判断）。
 # RELEASE_YML 可指向另一份文件做反证（例如 origin/main 上修复前的版本）。
 REL_YML="${RELEASE_YML:-$ROOT/.github/workflows/release.yml}"
 # shellcheck disable=SC2016  # 字面量：要匹配 YAML 里的 ${{ }} 原文，不是展开
@@ -319,6 +321,81 @@ if [ "$bad" -eq 0 ]; then
   pass "④ GITHUB_SHA / github.sha 只出现在发版（inputs.release）路径里（$sha_cnt 处）"
 else
   fail "④ release.yml 有 $bad 处在补跑路径上引用 GITHUB_SHA / github.sha"
+fi
+
+# ── ⑤ release.yml create-draft：main 前进不拒绝；tag 已存在且指向别的提交仍拒绝（#1648）──────
+# 按 job/step 名从真实 YAML 抽出 run 块来跑；${{ inputs.release }} 按发版路径替换成 true。
+# 反证：RELEASE_YML 指向修复前的 release.yml 时，「main 前进」用例必须红。
+CD_STEP="$SANDBOX/create-draft-step.sh"
+if ! python3 - "$REL_YML" "$CD_STEP" <<'PY'
+import sys, yaml
+wf, out = sys.argv[1:3]
+job = yaml.safe_load(open(wf, encoding="utf-8"))["jobs"].get("create-draft")
+steps = (job or {}).get("steps") or []
+hit = [s for s in steps if s.get("name") == "Create draft release (幂等)"]
+if not hit:
+    sys.exit("create-draft job 里没有「Create draft release (幂等)」step")
+run = hit[0]["run"].replace("${{ inputs.release }}", "true")
+if "${{" in run:
+    sys.exit("create-draft step 里还有没替换的 ${{ }} 表达式")
+open(out, "w", encoding="utf-8", newline="\n").write(run)
+PY
+then
+  fail "⑤ release.yml 缺少可从 YAML 抽出执行的 Create draft release step"
+else
+  CD="$SANDBOX/create-draft-repo"
+  CD_BARE="$SANDBOX/create-draft-origin.git"
+  CD_BIN="$SANDBOX/create-draft-bin"
+  rm -rf "$CD" "$CD_BARE" "$CD_BIN"
+  g init -q -b main "$CD"
+  # 裸 git（release.yml run 块里的 push）在 $CD 里也要禁用本仓库 hook：
+  # 测试提交用 fixture 身份 rel11-test，会被 pre-push 白名单 hook 拦。
+  g -C "$CD" config core.hooksPath /dev/null
+  echo a > "$CD/a.txt"
+  g -C "$CD" add -A && g -C "$CD" commit -qm a
+  CD_A="$(g -C "$CD" rev-parse HEAD)" # 触发发版时的提交
+  echo b > "$CD/a.txt"
+  g -C "$CD" commit -qam b
+  CD_B="$(g -C "$CD" rev-parse HEAD)" # 触发之后 main 前进到的提交
+  g clone -q --bare "$CD" "$CD_BARE"
+  g -C "$CD" remote add origin "file://$CD_BARE"
+  g -C "$CD" checkout -q "$CD_A"
+  echo notes > "$CD/NOTES.md"
+  mkdir -p "$CD_BIN"
+  cat >"$CD_BIN/gh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"${GH_LOG:?}"
+case "$1 ${2:-}" in
+  "release view") exit 1 ;; # 草稿不存在
+  *) exit 0 ;;
+esac
+SH
+  chmod +x "$CD_BIN/gh"
+  run_cd() { # run_cd <tag> <gh 日志>：在检出 A、main=B 的临时仓库里跑 create-draft 的 run 块
+    (cd "$CD" && PATH="$CD_BIN:$PATH" GH_LOG="$2" TAG="$1" GITHUB_REF_NAME=main \
+      GITHUB_SHA="$CD_A" GITHUB_REPOSITORY=o/r bash -e "$CD_STEP")
+  }
+
+  # ⑤-1 触发后 main 前进：正常建 tag（指向触发时的提交）与草稿。
+  if out=$(run_cd v9.9.8 "$SANDBOX/cd-gh-1.log" 2>&1) \
+     && [ "$(g -C "$CD_BARE" rev-parse -q --verify refs/tags/v9.9.8)" = "$CD_A" ] \
+     && grep -q -- '--draft' "$SANDBOX/cd-gh-1.log" 2>/dev/null; then
+    pass "⑤ 触发后 main 前进仍正常建 tag 与草稿（tag → 触发时的提交）"
+  else
+    fail "⑤ 触发后 main 前进被拒或没建 tag/草稿：$out"
+  fi
+
+  # ⑤-2 tag 已存在且指向别的提交：仍拒绝；不移 tag、不建草稿。
+  g -C "$CD" tag v9.9.9 "$CD_B"
+  g -C "$CD" push -q origin refs/tags/v9.9.9
+  if out=$(run_cd v9.9.9 "$SANDBOX/cd-gh-2.log" 2>&1); then
+    fail "⑤ tag 已存在且指向别的提交仍被放行：$out"
+  elif [ "$(g -C "$CD_BARE" rev-parse -q --verify refs/tags/v9.9.9)" = "$CD_B" ] \
+       && ! grep -q 'release create' "$SANDBOX/cd-gh-2.log" 2>/dev/null; then
+    pass "⑤ tag 已存在且指向别的提交仍拒绝，tag 未移动、未建草稿"
+  else
+    fail "⑤ tag 已存在且指向别的提交：拒绝后 tag 被移动或仍建了草稿"
+  fi
 fi
 
 if [ "$fails" -ne 0 ]; then
