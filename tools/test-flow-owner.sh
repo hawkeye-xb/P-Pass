@@ -802,6 +802,29 @@ else
   bad "摘标签那一行没匹配上，变异没生效"
 fi
 
+echo "── 9g. triage：重跑不再靠 owner 定案时摘掉旧 decided:owner（#1416）"
+tcard 160 "status:inbox,decided:owner"
+plan "$P" "tools/new-thing.sh" "无"
+out="$(bash tools/flow/owner-triage.sh 160 "$P" 2>/dev/null)"
+check "普通方案重跑 → 摘掉旧 decided:owner" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 160 ready$" && ! tr "," "\n" <"$FAKE/issues/160.labels" | grep -qx decided:owner' _ "$out"
+tcard 161 "status:inbox,decided:owner"
+plan "$P" "$UIP" "首页多一张引导" "$STD_ARIA"
+out="$(bash tools/flow/owner-triage.sh 161 "$P" 2>/dev/null)"
+check "反证：重跑仍命中标准依据 → 保留 decided:owner" bash -c 'printf "%s\n" "$1" | grep -q "^TRIAGE 161 ready$" && tr "," "\n" <"$FAKE/issues/161.labels" | grep -qx decided:owner' _ "$out"
+cp tools/flow/owner-triage.sh "${TMP}/triage-1416.bak"
+sed 's/--remove-label decided:owner/--remove-label decided:not-the-label/' tools/flow/owner-triage.sh >"${TMP}/triage-1416.mut"
+if [ "$(grep -c -- '--remove-label decided:not-the-label' "${TMP}/triage-1416.mut")" -eq 1 ] &&
+   [ "$(grep -c -- '--remove-label decided:owner' "${TMP}/triage-1416.mut")" -eq 0 ]; then
+  cp "${TMP}/triage-1416.mut" tools/flow/owner-triage.sh
+  tcard 162 "status:inbox,decided:owner"
+  plan "$P" "tools/new-thing.sh" "无"
+  bash tools/flow/owner-triage.sh 162 "$P" >/dev/null 2>&1
+  check "反证：摘标签指错名字后 decided:owner 还在" bash -c 'tr "," "\n" <"$FAKE/issues/162.labels" | grep -qx decided:owner'
+  cp "${TMP}/triage-1416.bak" tools/flow/owner-triage.sh
+else
+  bad "摘 decided:owner 那一行没匹配上，变异没生效"
+fi
+
 echo
 echo "flow-owner: ${PASS} passed, ${FAIL} failed"
 [ "$FAIL" -eq 0 ]
