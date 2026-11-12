@@ -142,6 +142,11 @@ run_bounded() { # <秒> <日志> <命令>：超时就杀掉并返回 124（不�
   while kill -0 "$pid" 2>/dev/null; do
     if [ "$i" -ge "$secs" ]; then
       kill -TERM "$pid" 2>/dev/null
+      # 门禁是 `bash -c` 起的壳，真正的测试 / just recipe 是它的子进程：一并收掉，
+      # 否则它们会在 worktree 被撤掉后继续跑（Windows 上还会占着目录让删除失败）。
+      if command -v pgrep >/dev/null 2>&1; then
+        for c in $(pgrep -P "$pid" 2>/dev/null); do kill -TERM "$c" 2>/dev/null; done
+      fi
       sleep 1
       kill -KILL "$pid" 2>/dev/null
       wait "$pid" 2>/dev/null
@@ -168,6 +173,12 @@ EOF2
 )"
   PRECHECK_LOG="$(mktemp "${TMPDIR:-/tmp}/ppass-precheck.XXXXXX")"
   PRECHECK_SECS="${PPASS_PRECHECK_TIMEOUT:-600}"
+  case "$PRECHECK_SECS" in
+    '' | 0 | *[!0-9]*)
+      printf '⚠ PPASS_PRECHECK_TIMEOUT=「%s」不是正整数，按 600 秒算\n' "$PRECHECK_SECS" >&2
+      PRECHECK_SECS=600
+      ;;
+  esac
   PRECHECK_GREEN=()
   PRECHECK_RED=()
   PRECHECK_SKIP=()
@@ -222,11 +233,13 @@ EOF2
       tail -n 40 "$PRECHECK_LOG" | scrub
       echo '```'
     } >"$REASON"
+    BLOCK_NOTE="已打 status:blocked 并写了评论"
     for c in "${CARDS[@]}"; do
-      flow_try_labels "$c" "status:blocked" "status:ready" || true
-      flow_comment "$c" "$REASON" || true
+      flow_try_labels "$c" "status:blocked" "status:ready" ||
+        BLOCK_NOTE="⚠ 改 #${c} 的标签失败；评论内容见 ${REASON}"
+      flow_comment "$c" "$REASON" ||
+        BLOCK_NOTE="⚠ 往 #${c} 贴评论失败，内容留在 ${REASON}，手动补：gh issue comment ${c} -R ${REPO} --body-file ${REASON}"
     done
-    rm -f "$REASON"
     # 刚建的 worktree 是干净的、没改动：撤掉，修好环境后能直接重新 just start。
     if [ -z "$(git -C "$DIR" status --porcelain --untracked-files=no 2>/dev/null)" ]; then
       git worktree remove --force "$DIR" >/dev/null 2>&1 ||
@@ -234,7 +247,8 @@ EOF2
       git branch -D "$BRANCH" >/dev/null 2>&1 ||
         printf '⚠ 删临时分支失败，手动：git branch -D %s\n' "$BRANCH" >&2
     fi
-    die "门禁预检红：#${N} 的门禁在本机干净基线上跑不绿，先别做这张卡（已打 status:blocked 并写了评论）" \
+    [ -f "$REASON" ] && [ "$BLOCK_NOTE" = "已打 status:blocked 并写了评论" ] && rm -f "$REASON"
+    die "门禁预检红：#${N} 的门禁在本机干净基线上跑不绿，先别做这张卡（${BLOCK_NOTE}）" \
       "红的：$(printf '%s' "${PRECHECK_BLOCK[0]}")$([ "${#PRECHECK_BLOCK[@]}" -gt 1 ] && printf ' 等 %s 条' "$(( ${#PRECHECK_BLOCK[@]} - 1 ))")" \
       "日志：${PRECHECK_LOG}"
   fi
@@ -247,6 +261,8 @@ EOF2
     echo "   未预检（要编译或先装依赖，交卡时才跑）："
     printf '     %s\n' "${PRECHECK_SKIP[@]}"
   }
+  # 全绿（没有红项）就不留临时日志；有红的留着，路径在上面打印过。
+  [ "${#PRECHECK_RED[@]}" -gt 0 ] || rm -f "$PRECHECK_LOG"
 fi
 
 for c in "${CARDS[@]}"; do flow_labels "$c" "status:doing" "status:ready"; done

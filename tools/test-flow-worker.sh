@@ -51,6 +51,9 @@ export PPASS_NO_LOCK=1
 export PPASS_DOCTOR_MIN_FREE_GB=0
 export PPASS_DOCTOR_SKIP_DEVICES=1
 unset PPASS_HOOK_BYPASS PPASS_HOOK_BYPASS_REASON PPASS_HOOK_ROOT PPASS_WT_ROOT
+# 预检（#1651）跑门禁时会带 PPASS_GATE_PRECHECK=off 防套娃；用例里的 START 必须照常预检，
+# 否则 `bash tools/test-flow-worker.sh` 自己被预检时必红（它既是轻门禁，也会被 just ci-docs 带起）。
+export PPASS_GATE_PRECHECK=on
 
 # 假命令：MSYS/Cygwin（Git Bash）不能执行指向 .exe 的符号链接，改生成 wrapper 脚本；
 # 其他平台保持 symlink。调用方：fake_cmd <目录> <命令名>。
@@ -459,6 +462,21 @@ fi
 has_lbl 84 "status:blocked" && ok "  超时打 status:blocked" || bad "  超时没打 blocked：$(labels_of 84)"
 comments_of 84 | grep -q '超时' && ok "  评论写明超时" || bad "  评论没写超时"
 [ -z "$(ls -d "${PPASS_WT_ROOT}/84-"* 2>/dev/null)" ] && ok "  超时的 worktree 也撤掉了" || bad "  超时的 worktree 还在"
+
+# 超时参数不是正整数：告警并按默认算（5 秒的门禁照常跑完，不误杀）
+issue 85 "status:ready" "[T-85] bad timeout" "tools/slow-target.sh" "Task"
+OUT="$( (export PPASS_PRECHECK_TIMEOUT=abc; cd "$M" && bash tools/flow/worker-start.sh 85) 2>&1 )" || true
+printf '%s' "$OUT" | grep -q '不是正整数' && ok "超时参数不是正整数 → 告警并按默认算" || bad "超时参数没校验：$(printf '%s' "$OUT" | tail -3)"
+has_lbl 85 "status:doing" && ok "  反证：参数坏掉也没误杀，照常领卡" || bad "  参数坏掉误杀了卡：$(labels_of 85)"
+
+# 贴评论失败：不能谎称「已打 status:blocked 并写了评论」，内容要留在文件里
+: >"$FAKE_GH/tool_fail"
+: >"$FAKE_GH/86.comment_fail"
+issue 86 "status:ready" "[T-86] comment fail" "tools/ci-paths.sh" "Task"
+OUT="$(START 86 2>&1)" || true
+printf '%s' "$OUT" | grep -q '贴评论失败' && ok "贴评论失败 → 提示内容留在文件里" || bad "贴评论失败没提示：$(printf '%s' "$OUT" | tail -3)"
+printf '%s' "$OUT" | grep -q '已打 status:blocked 并写了评论' && bad "贴评论失败时仍报「已打 status:blocked 并写了评论」" || ok "  反证：失败时不报成功字样"
+rm -f "$FAKE_GH/86.comment_fail" "$FAKE_GH/tool_fail"
 
 # #1423 apps/android/local.properties（git 不跟踪的本机配置）：主副本有 → 拷进卡目录；没有 → 不建、打印提示（反证）
 mkdir -p "${M}/apps/android"
