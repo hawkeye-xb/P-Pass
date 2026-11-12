@@ -319,7 +319,7 @@ bump-version-test:
 # 已在 ci-docs.yml、ci-identity.yml 的其它 job 里跑，留在 ci-docs 的直接依赖里。
 # justfile 里每个 *-test recipe 要么在这里，要么登记在 tools/test-flow-tests-wired.sh 的例外表里（flow-tests-wired-test 会挡）。
 # heavy-lock-test 依赖 macOS 才有的 lockf，ubuntu 上会 SKIP 假绿，不进这里；登记为例外（#1502），本地 ci / ci-docs 直接依赖它。
-flow-tests: hooks-test flow-worker-test flow-review-test flow-ci-review-test flow-pr-test flow-gate-status-test flow-owner-test macos-runner-test main-red-test flow-tests-wired-test ci-lane-invariants-test ci-download-resilience-test bump-version-test version-bump-i18n-test clean-local-builds-test e3-test
+flow-tests: hooks-test flow-worker-test flow-review-test flow-ci-review-test flow-pr-test flow-gate-status-test flow-owner-test macos-runner-test main-red-test flow-tests-wired-test ci-lane-invariants-test ui-regress-judge-test ci-download-resilience-test bump-version-test version-bump-i18n-test clean-local-builds-test e3-test
   @echo "==> flow-tests: green ✅"
 
 # #1468 的 lane 不变量（#1489）：三个 Windows job 在 PR 上跳过、五条 lane 有 push: branches [main]、
@@ -332,10 +332,15 @@ ci-lane-invariants-test:
 ci-download-resilience-test:
   @bash tools/test-ci-download-resilience.sh
 
-# 元测试：每个 *-test recipe 都接进了 flow-tests 或登记的 lane，ci / ci-docs 都依赖 flow-tests，
-# ci-docs.yml 有写死名字的 flow-tests job 且进了 CI Docs gate；带变异反证（#1493）。
+# 元测试：每个 *-test recipe、tools 下每个 test-*.sh 都接进了 flow-tests / CI lane 或登记的例外，
+# ci / ci-docs 都依赖 flow-tests，ci-docs.yml 有写死名字的 flow-tests job 且进了 CI Docs gate；
+# 带变异反证（#1493、#1709）。
 flow-tests-wired-test:
   @bash tools/test-flow-tests-wired.sh
+
+# iOS 界面回归的判定自测（#1458/#1701）：只认本例日志、通过行按顺序出现；几秒、不要设备。
+ui-regress-judge-test:
+  @bash tools/ios/test-ui-regress-judge.sh
 
 # tools/e3 的自测（#1500）：脚本语法、场景接口齐全、判定回放（fixtures 的 pass 必须过、fail 必须红），不碰设备。
 # macOS 专有的段（lockf、ditto）在脚本内按平台跳过，其余在 ubuntu 上照跑。
@@ -514,8 +519,17 @@ ios-ui-regress target *args:
   case "{{target}}" in
     sim) bash tools/ios/ui-regress.sh sim {{args}} ;;
     device)
-      bash tools/ios/ui-regress.sh device --build-only {{args}}
-      tools/e3/lock ios bash tools/ios/ui-regress.sh device --skip-build {{args}}
+      # --skip-build 只传一次（#1701/#1709）：用户自带时只持锁跑一条；否则锁外 build-only、锁内 skip-build。
+      args='{{args}}'
+      case " $args " in
+        *" --skip-build "*)
+          tools/e3/lock ios bash tools/ios/ui-regress.sh device $args
+          ;;
+        *)
+          bash tools/ios/ui-regress.sh device --build-only $args
+          tools/e3/lock ios bash tools/ios/ui-regress.sh device --skip-build $args
+          ;;
+      esac
       ;;
     *) echo "用法: just ios-ui-regress sim|device [--only A,B] [--invert <用例>] [--skip-build]" >&2; exit 2 ;;
   esac
