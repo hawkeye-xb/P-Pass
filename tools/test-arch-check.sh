@@ -495,9 +495,12 @@ B2PP_DEV='fn f() { let p = std::path::Path::new("/dev/null"); }'
 B2PP_DRIVE='fn f() { let p = "D:\\data"; }'
 B2PP_VERBATIM='fn f() { let p = r"\\?\C:\foo"; }'
 B2PP_REG='fn f() { let p = "HKEY_CURRENT_USER\\Software\\P-Pass\\x"; }'
+B2PP_UNC='fn f() { let p = r"\\server\share\file"; }'
+B2PP_UNC_VERBATIM='fn f() { let p = r"\\?\UNC\server\share\file"; }'
 for pair in \
   "Volumes:$B2PP_VOL" "Users:$B2PP_USERS" "private-var:$B2PP_PRIVVAR" "home:$B2PP_HOME" \
-  "proc:$B2PP_PROC" "dev:$B2PP_DEV" "纯盘符:$B2PP_DRIVE" "verbatim:$B2PP_VERBATIM" "注册表:$B2PP_REG"; do
+  "proc:$B2PP_PROC" "dev:$B2PP_DEV" "纯盘符:$B2PP_DRIVE" "verbatim:$B2PP_VERBATIM" "注册表:$B2PP_REG" \
+  "UNC:$B2PP_UNC" "verbatim-UNC:$B2PP_UNC_VERBATIM"; do
   expect_red "B.2 platform-path 盲区 ${pair%%:*}" "$(sample crates/media-codec/src/a.rs "${pair#*:}")" "hardcoded platform path"
 done
 
@@ -509,6 +512,8 @@ expect_green "B.2 platform-path legacy 声明放行（arch rule B.2）" "$(sampl
 fn f() { let p = std::path::Path::new("/usr/lib/nope"); }')"
 
 echo "== B.2 platform-path 标记收窄（#1679，普通叙述/代码字符串里的标记不放行）"
+expect_red "B.2 platform-path 只写 (arch rule B.2) 的普通引用不放行" "$(sample crates/media-codec/src/a.rs '// See (arch rule B.2) for details.
+fn f() { let p = std::path::Path::new("/usr/lib/nope"); }')" "hardcoded platform path"
 expect_red "B.2 platform-path 普通叙述里的 arch rule B.2 不放行" "$(sample crates/media-codec/src/a.rs '//! instead of a `#[cfg]` — arch rule B.2 keeps platform switches out of
 //! this crate.
 fn f() { let p = std::path::Path::new("/usr/lib/nope"); }')" "hardcoded platform path"
