@@ -163,7 +163,9 @@ jobs:
           fi
           # 搜索结果到了上限（100）就可能截掉第二张同名台账：判不了是不是唯一，直接红（fail-closed）。
           [ "$(jq 'length' <<<"$found")" -lt 100 ] || red "按「${TAG}」搜到的 issue 达到 100 条上限，判不了同名台账是否唯一（fail-closed）"
-          nums="$(jq -r --arg t "$TITLE" '.[] | select(.title == $t) | .number' <<<"$found")" || red "解析 issue 列表失败（fail-closed）"
+          # Windows（Git Bash）上 gh / jq 的行尾是 CRLF，命令替换只剥 \n 不剥 \r：不归一的话
+          # nums 每行尾随 CR，下面拼出来的点名串、传给 release-acceptance.sh 的台账号都带着它。
+          nums="$(jq -r --arg t "$TITLE" '.[] | select(.title == $t) | .number' <<<"$found" | tr -d '\r')" || red "解析 issue 列表失败（fail-closed）"
           n="$(grep -c . <<<"$nums" || true)"
           [ "$n" -ge 1 ] || red "没有标题为「${TITLE}」的验收台账（出第一个 test 包时用 just release-scope --ledger <号> --pkg <test tag> 建；刚建的台账搜索可能有延迟，稍后重跑）"
           [ "$n" -eq 1 ] || red "标题为「${TITLE}」的台账有 ${n} 张（#$(paste -sd ' ' - <<<"$nums" | sed 's/ / #/g')），一个版本只许一张"

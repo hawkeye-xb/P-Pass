@@ -147,6 +147,19 @@ list '[{"number":501,"title":"[验收] v2026.2.0"},{"number":9,"title":"[REL] �
 run "${TMP}/gate.sh" 0 "台账全勾 → 过" v2026.2.0
 has "发版前验收通过（台账 #501" "${TMP}/out" && ok "  判定来自 release-acceptance.sh（台账 #501、候选 = GITHUB_SHA）" || bad "  没跑判定：$(cat "${TMP}/out")"
 cases "${TMP}/gate.sh" gate
+# Windows（Git Bash）：gh / jq 输出行尾带 \r，命令替换只剥 \n 不剥 \r，nums 每行尾随 CR，
+# paste 拼出来的点名串成了「#501\r #502」。在台账号里塞 \r 就是在 Mac 上复现同一份输入，
+# 不需要 Windows 机器；断言按「#501 #502」匹配，输出侧没归一就必须红。
+ledger 502 x
+python3 - "${FAKE}/list.json" <<'PY'
+import json, sys
+open(sys.argv[1], "w", encoding="utf-8").write(json.dumps([
+    {"number": "501\r", "title": "[验收] v2026.2.0"},
+    {"number": "502\r", "title": "[验收] v2026.2.0"},
+]))
+PY
+run "${TMP}/gate.sh" 1 "同名台账两张、台账号尾随 \\r（Windows 换行）→ 红" v2026.2.0
+has "有 2 张（#501 #502）" "${TMP}/out" && ok "  仍按空格点名 #501 与 #502（\\r 已归一）" || bad "  \\r 没归一，点名串对不上：$(cat -v "${TMP}/out")"
 rm -f "${FAKE}/list.json"
 ledger 501 x  # 台账本身全勾：去掉上限判定就会放行，这条才能证明红来自上限判定
 list "$(python3 -c 'import json; print(json.dumps([{"number": 501, "title": "[验收] v2026.2.0"}] + [{"number": 1000 + i, "title": f"[REL] v2026.2.0 第 {i} 张"} for i in range(99)]))')"
