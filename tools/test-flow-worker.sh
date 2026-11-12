@@ -229,6 +229,9 @@ git init --template= -q "${TMP}/main"
   # tools 挑选（#1365）的夹具：test-ref 引用 ci-paths.sh，test-other 不引用
   printf '#!/usr/bin/env bash\n# 引用 tools/ci-paths.sh\necho FAKE-TOOLTEST-REF-RAN\n[ ! -e "$FAKE_GH/tool_fail" ] || { echo FAKE-TOOLTEST-RED; exit 1; }\n' >tools/test-ref.sh
   printf '#!/usr/bin/env bash\necho FAKE-TOOLTEST-OTHER-RAN\n' >tools/test-other.sh
+  # e3 工具链自测的桩（#1678）：夹具里要有 test-e3.sh，让 tools/e3/** 挑的门禁能真跑通。
+  # 原来没这个文件，bash tools/test-e3.sh 实际 exit 127（真失败），但 T-163 断言只 grep 门禁字符串 → 假绿。
+  printf '#!/usr/bin/env bash\necho FAKE-E3-RAN\n' >tools/test-e3.sh
   printf '# A\n\n- 状态：已采纳\n' >docs/decisions/2026-11-01-adopted.md
   printf '# P\n\n- 状态：提议\n' >docs/decisions/2026-11-01-proposed.md
   git add -A
@@ -645,8 +648,29 @@ printf '#!/usr/bin/env bash\nexit 0\n' >"$W/tools/e3/scenarios/android/smoke-upg
 git -C "$W" add -A && git -C "$W" commit -q -s -m "tools e3"
 DONE "$W" >"${TMP}/o163" 2>&1
 C163="$(comments_of 163)"
-printf '%s' "$C163" | grep -qF "bash tools/test-e3.sh" && ok "改 tools/e3/** → 挑 e3 自测 test-e3.sh" || bad "tools/e3 门禁不对：$(tail -4 "${TMP}/o163")"
+# #1678 假绿修：断言认「真跑通」的成功回执，而不是只 grep 门禁字符串。
+# 原来夹具没 test-e3.sh，bash tools/test-e3.sh 实际 exit 127 真失败，但失败评论贴的日志里也含这串字 → 假绿。
+printf '%s' "$C163" | grep -qF '**worker 已交卡**' && ok "改 tools/e3/** → 挑 e3 自测 test-e3.sh 并真跑通" || bad "tools/e3 门禁不对：$(tail -4 "${TMP}/o163")"
+printf '%s' "$C163" | grep -qF 'FAKE-E3-RAN' && ok "  回执贴了 test-e3.sh 的输出（真跑了）" || bad "  回执没贴 test-e3.sh 的输出：$(tail -4 "${TMP}/o163")"
 printf '%s' "$C163" | grep -qF '`just ci`' && bad "tools/e3 仍退回了全量 just ci" || ok "反证：没有全量 just ci"
+# #1678 反证：把夹具里的 test-e3.sh 改坏（exit 1）→ 那步真失败，上面的成功断言必须红（只 grep 字符串会假绿）
+cp "${M}/tools/test-e3.sh" "${TMP}/test-e3.bak"
+printf '#!/usr/bin/env bash\necho FAKE-E3-BROKEN\nexit 1\n' >"${M}/tools/test-e3.sh"
+git -C "$M" add tools/test-e3.sh && git -C "$M" commit -q -s -m "break e3 self-test"
+git -C "$M" push -q origin HEAD:refs/heads/main
+W="$(card 167 "[T-167] tools e3 broken" "tools/**")"
+mkdir -p "$W/tools/e3/scenarios/android"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$W/tools/e3/scenarios/android/smoke-upgrade.sh"
+git -C "$W" add -A && git -C "$W" commit -q -s -m "tools e3 broken"
+if DONE "$W" >"${TMP}/o167" 2>&1; then
+  bad "反证：test-e3.sh 改坏后交卡还成功（假绿没修好）"
+else
+  ok "反证：test-e3.sh 改坏后交卡失败（真失败被拦下）"
+fi
+comments_of 167 | grep -qF '**worker 已交卡**' && bad "反证：失败评论里却含成功回执" || ok "  失败回执没有成功标记"
+cp "${TMP}/test-e3.bak" "${M}/tools/test-e3.sh"
+git -C "$M" add tools/test-e3.sh && git -C "$M" commit -q -s -m "restore e3 self-test"
+git -C "$M" push -q origin HEAD:refs/heads/main
 # #1646 变异反证 1：去掉 src-tauri 的 fmt 那步 → 桌面 Rust 的门禁里不再挑 fmt（证明断言真的守着）
 cp "$M/tools/flow/worker-done.sh" "${TMP}/wd-1646f.bak"
 grep -v 'add_gate "cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml -- --check"' "$M/tools/flow/worker-done.sh" >"${TMP}/wd-1646f.mut"
