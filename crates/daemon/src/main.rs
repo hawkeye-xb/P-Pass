@@ -52,6 +52,26 @@ fn main() -> anyhow::Result<()> {
         .block_on(run())
 }
 
+/// #1700：`PPF_PLATFORM_DIR` 是 #881 给集成测试留的注入点。它会让 daemon 跳过
+/// 系统钥匙串里的照片库位置正本（退回人人可改的 config.toml）并跳过旧数据搬家，
+/// 所以只允许在开发/测试构建里生效，发布构建（用户手上的二进制）恒不认。
+///
+/// 不能用 `cfg(test)`：集成测试经 `CARGO_BIN_EXE_daemon` 拉起的是独立编译的
+/// 二进制，不带 `cfg(test)`；cargo test 默认 profile 打开 debug_assertions、
+/// 发布 profile 关闭，这才是「测试构建 / 发布构建」的分界线。
+const TEST_INJECTION_ENABLED: bool = cfg!(debug_assertions);
+
+/// 注入平台目录：只有测试构建 + 变量存在才生效；发布构建里恒为 `None`。
+fn injected_platform_dir_from(
+    raw: Option<std::ffi::OsString>,
+    test_build: bool,
+) -> Option<std::path::PathBuf> {
+    match raw {
+        Some(dir) if test_build => Some(std::path::PathBuf::from(dir)),
+        _ => None,
+    }
+}
+
 async fn run() -> anyhow::Result<()> {
     // DAE-03 ①：参数解析最先——--help/--version 在任何 daemon 机制
     // （日志/配置/数据库/身份/claim/bind）之前短路退出。8/6 事故：daemon
@@ -167,7 +187,8 @@ async fn run() -> anyhow::Result<()> {
     let data_dir_migration = match pinned_data_dir {
         Some(_) => None,
         // #881：注入平台目录 = 测试实例，不搬真实数据（与沙盒同一条「不碰本机真实数据」纪律）。
-        None if std::env::var_os("PPF_PLATFORM_DIR").is_some() => None,
+        // #1700：只有测试构建才认这个变量；发布构建照常搬。
+        None if TEST_INJECTION_ENABLED && std::env::var_os("PPF_PLATFORM_DIR").is_some() => None,
         None => {
             use platform::PlatformAdapter as _;
             Some(platform::adapter().migrate_legacy_data_dir())
@@ -291,7 +312,15 @@ async fn run() -> anyhow::Result<()> {
     // 只改「去哪读 config」，不改库位置来源：data_dir 仍来自 config.toml，DESK-46
     // 的库目录检查照查。`--ephemeral` 沙盒不读平台 config（FORBIDDEN_ENV 未含它——在
     // core 路径，不加）；注入时 store 传 None，不碰真实钥匙串/正本，库位置只读注入目录里的 config.toml。
-    let injected_platform_dir = std::env::var_os("PPF_PLATFORM_DIR").map(std::path::PathBuf::from);
+    // #1700：注入点只在测试构建生效；发布构建忽略该变量并留一条日志，照常读钥匙串正本。
+    let raw_platform_dir = std::env::var_os("PPF_PLATFORM_DIR");
+    if !TEST_INJECTION_ENABLED && raw_platform_dir.is_some() {
+        tracing::warn!(
+            "PPF_PLATFORM_DIR 只在开发/测试构建生效，正式版忽略它，照常读系统钥匙串"
+        );
+    }
+    let injected_platform_dir =
+        injected_platform_dir_from(raw_platform_dir, TEST_INJECTION_ENABLED);
     let platform_dir = match &injected_platform_dir {
         Some(dir) => dir.clone(),
         None => {
@@ -1514,5 +1543,28 @@ mod tests {
         let msg = library_missing_message(Path::new("/Volumes/My Passport/P-Pass Library"));
         assert!(msg.contains("/Volumes/My Passport/P-Pass Library"), "{msg}");
         assert!(!msg.contains("config.toml"), "{msg}");
+    }
+
+    // #1700：发布构建（test_build=false）里即使 PPF_PLATFORM_DIR 存在也不能生效。
+    // 反证：去掉 `if test_build` 门控（只看变量是否存在），第一条断言变红。
+    #[test]
+    fn i1700_injected_platform_dir_is_test_build_only() {
+        let raw = Some(std::ffi::OsString::from("/tmp/ppf-injected"));
+        assert_eq!(
+            injected_platform_dir_from(raw.clone(), false),
+            None,
+            "发布构建必须忽略 PPF_PLATFORM_DIR"
+        );
+        assert_eq!(
+            injected_platform_dir_from(raw, true),
+            Some(std::path::PathBuf::from("/tmp/ppf-injected"))
+        );
+        assert_eq!(injected_platform_dir_from(None, true), None);
+    }
+
+    // #1700：集成测试靠这个常量走注入点；cargo test 下必须是测试构建。
+    #[test]
+    fn i1700_test_builds_enable_injection() {
+        assert!(TEST_INJECTION_ENABLED, "cargo test 下必须是测试构建");
     }
 }
