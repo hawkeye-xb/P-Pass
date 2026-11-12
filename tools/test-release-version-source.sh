@@ -348,6 +348,9 @@ else
   CD_BIN="$SANDBOX/create-draft-bin"
   rm -rf "$CD" "$CD_BARE" "$CD_BIN"
   g init -q -b main "$CD"
+  # 裸 git（release.yml run 块里的 push）在 $CD 里也要禁用本仓库 hook：
+  # 测试提交用 fixture 身份 rel11-test，会被 pre-push 白名单 hook 拦。
+  g -C "$CD" config core.hooksPath /dev/null
   echo a > "$CD/a.txt"
   g -C "$CD" add -A && g -C "$CD" commit -qm a
   CD_A="$(g -C "$CD" rev-parse HEAD)" # 触发发版时的提交
