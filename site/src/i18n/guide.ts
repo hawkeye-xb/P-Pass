@@ -32,7 +32,7 @@ export const GUIDE = {
     steps: {
       title: '装两个 App，扫一次码',
       paras: [
-        '在电脑上安装并打开 P-Pass，选择存放照片的文件夹，点「显示配对二维码」。在手机上安装 P-Pass，扫电脑上的二维码，或输入配对码。手机显示 6 位验证码，在电脑上输入后点「允许加入」。手机询问照片权限时，选择允许访问全部照片，再选择要备份的相册，以及是否也备份以前的照片。在手机 App 的「设置」里开启后台备份，不打开 App 也能备份新照片。',
+        '在电脑上安装并打开 P-Pass，选择存放照片的文件夹，点「显示配对二维码」。在手机上安装 P-Pass，扫电脑上的二维码，或输入配对码。手机显示 6 位验证码，在电脑上输入后点「允许加入」。配对完成后不会马上要照片权限：想自动备份就点「选择备份范围」，这时才申请照片权限，再选相册和时间范围；只想先传几张就点「先挑几张试试」，从系统选择器里挑，不用给照片权限。在手机 App 的「设置」里打开「自动备份」，不打开 App 也能备份新照片。',
       ],
     },
     after: {
@@ -60,7 +60,7 @@ export const GUIDE = {
     more: {
       title: '还想细看的问题',
       links: [
-        { label: '相册权限为什么要选全部', href: '/zh/faq/#photo-permission-all' },
+        { label: '要不要给「全部照片」权限', href: '/zh/faq/#photo-permission-all' },
         { label: '第一次备份要多久', href: '/zh/faq/#first-backup' },
         { label: '电脑空间满了会怎样', href: '/zh/faq/#disk-full' },
         { label: 'iPhone 怎么安装', href: '/zh/faq/#iphone-testflight' },
