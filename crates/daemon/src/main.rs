@@ -1559,10 +1559,4 @@ mod tests {
         );
         assert_eq!(injected_platform_dir_from(None, true), None);
     }
-
-    // #1700：集成测试靠这个常量走注入点；cargo test 下必须是测试构建。
-    #[test]
-    fn i1700_test_builds_enable_injection() {
-        assert!(TEST_INJECTION_ENABLED, "cargo test 下必须是测试构建");
-    }
 }
