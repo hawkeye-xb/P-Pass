@@ -430,7 +430,8 @@ jobs:
         shell: bash
         run: tools/setup-rust-toolchain.sh
 
-      # ⭐ 本 job 能不能每个 PR 跑，全看这一步：vcpkg 安装树有缓存（冷编约 20min）。
+      # ⭐ 本 job 跑一次要多久，全看这一步：#1468 起 PR 上跳过，只在合入 main 与 Release 调用时跑；
+      # vcpkg 安装树有缓存（冷编约 20min）。
       # 钉住的 vcpkg 提交、特性、缓存键都在 composite action 里（版本来源 tools/codec-deps.env），
       # release / artifacts 的 Windows job 用的是同一个，键相同、共用同一份缓存。
       # main 上每次推送由本 job 把缓存存在 main 上，tag 构建（release.yml）才读得到。

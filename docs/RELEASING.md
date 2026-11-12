@@ -306,11 +306,16 @@ workflows, each gated on its own `paths` (pure docs/cards commits → zero CI):
   nightly + tag gate.
 - `ci-android.yml` — `apps/android/** assets/i18n/**` → unit tests + APK.
 - `ci-desktop.yml` — `apps/desktop/** assets/**` → src-tauri lib tests + vite build.
-- Every workflow has a `concurrency` group. Since #1468 the five lanes
-  (rust / desktop / android / ios / docs) put the event name in the group and
-  set `cancel-in-progress` to false for `push` to main (a running full run is
-  never cancelled; only the newest queued one is kept); other events still
-  cancel older runs. `tools/test-ci-lane-invariants.sh` guards this.
+- The five lanes (`ci-rust` / `ci-desktop` / `ci-android` / `ci-ios` / `ci-docs`)
+  have a `concurrency` group; the other workflows (`ci-identity`, `ci-secrets`,
+  `ci-review`, `e2e`, `release`, `repair-manifests`) do not. Since #1468 the
+  five lanes put the event name in the group and set `cancel-in-progress` to
+  false for `push` to main (a running full run is never cancelled; only the
+  newest queued one is kept); other events still cancel older runs.
+  Exception: a manual `ci-ios` dispatch with `testflight_version` set also
+  leaves the running TestFlight upload alone (`cancel-in-progress` is
+  `github.event_name != 'push' && inputs.testflight_version == ''`), so the new
+  run queues behind it. `tools/test-ci-lane-invariants.sh` guards this.
 - `release.yml` gained a `platforms` dispatch input (`android`/`macos`/
   `windows` comma list; empty = all). Tag pushes build per platform:
   formal tags by version bump (#838; Windows included since #788),
@@ -578,8 +583,12 @@ Android 靠 `channelFromVersion()` 读注入的版本串（含 `-test.` 即 test
   #1555：Linux 桌面检查（`desktop (ubuntu-latest)`）整个移除（P-Pass 不发 Linux 安装包），桌面检查
   只剩 `desktop (windows-latest)`：PR 上按 #1468 跳过，push 到 main 与发版调用照跑；cargo-deny 与
   vite build 不再带平台判断，跟着 Windows 跑。
-- 每个 workflow 带 `concurrency`。#1468 起五条 lane（rust / desktop / android / ios / docs）的 group 带事件名，
-  `cancel-in-progress` 只对 push 到 main 为 false（正在跑的全量不取消、排队只留最新），其余事件照旧取消旧 run；
+- 五条 lane（`ci-rust` / `ci-desktop` / `ci-android` / `ci-ios` / `ci-docs`）带 `concurrency`；
+  其余 workflow（`ci-identity`、`ci-secrets`、`ci-review`、`e2e`、`release`、`repair-manifests`）没有。
+  #1468 起这五条的 group 带事件名，`cancel-in-progress` 只对 push 到 main 为 false（正在跑的全量不取消、
+  排队只留最新），其余事件照旧取消旧 run。例外：手动触发 ci-ios 且 `testflight_version` 非空时，
+  正在跑的 TestFlight 上传也不取消（`cancel-in-progress` 为
+  `github.event_name != 'push' && inputs.testflight_version == ''`），新 run 排队等它。
   由 `tools/test-ci-lane-invariants.sh` 判红。
 - release.yml 加 `platforms` dispatch 输入（android/macos/windows 逗号
   组合，留空=all）；发版（release=true）按端构建：正式 tag 看版本号（#838；#788 起含 Windows），
