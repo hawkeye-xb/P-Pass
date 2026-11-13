@@ -711,6 +711,7 @@ fn without_config_toml_the_resident_daemon_waits_for_the_library_then_restarts()
 /// 在管道上写好库位置后以 75 退出。整个过程里数据目录与库目录都不出现 `ipc.token`。
 /// 别的平台（签名 socket / 令牌）跳过；本机装了 P-Pass 服务（服务停着也算）时管道名是
 /// 服务形态的 `ppf-svc`，本条前提不成立，也跳过（#1523）。
+/// 本机（服务已注册并运行）全量 `just ci` 的 Rust 测试段 1139 passed / 6 skipped（#1523 E2）。
 /// 反证：daemon 退回令牌模式 ⇒ 管道上没人答 / 目录里出现 ipc.token，红。
 #[test]
 fn windows_resident_daemon_serves_on_the_user_pipe_without_any_token_file() {
