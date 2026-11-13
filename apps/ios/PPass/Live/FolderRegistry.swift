@@ -36,6 +36,12 @@ struct FolderRoot {
 }
 
 enum FolderBookmarks {
+    /// stale 重建时生成新书签的实现（产品路径 = 系统 bookmarkData；测试注入以判红）。
+    /// nil = 生成失败（走「保留旧书签、记恢复未验证」）。
+    static var freshBookmark: @Sendable (URL) -> Data? = { url in
+        try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+    }
+
     /// 解析书签 → 根目录。stale 且根仍可用时在当前授权内重建并原子替换；替换失败保留旧书签并记恢复未验证。
     /// 书签不存在 / 损坏 / 解析失败 → 抛 `FolderSourceError`（调用方桥接成 `SourceUnavailable`）。
     /// 根可达性检查留给调用方在 scope 内做（真机 security scope 下 scope 外查不到）。
@@ -52,15 +58,20 @@ enum FolderBookmarks {
             let opened = url.startAccessingSecurityScopedResource()
             defer { if opened { url.stopAccessingSecurityScopedResource() } }
             let accessible = opened || FileManager.default.fileExists(atPath: url.path)
-            if accessible, let fresh = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) {
+            if accessible, let fresh = Self.freshBookmark(url) {
                 updated.bookmark = fresh
                 updated.status = "registered"
-                registry.upsert(updated)
-                logger.log("folder \(record.id): stale bookmark rebuilt and replaced atomically")
+                if registry.upsert(updated) {
+                    logger.log("folder \(record.id): stale bookmark rebuilt and replaced atomically")
+                } else {
+                    // 重建成功但落盘失败：重启后重建会被重复做——不宣称已注册。
+                    updated.status = "recoveryUnverified"
+                    logger.log("folder \(record.id): rebuild ok but persist failed; recovery unverified")
+                }
             } else {
                 // 替换失败：保留旧书签，记恢复未验证，不能先毁掉旧书签。
                 updated.status = "recoveryUnverified"
-                registry.upsert(updated)
+                _ = registry.upsert(updated)
                 logger.log("folder \(record.id): stale bookmark rebuild failed; old bookmark kept, recovery unverified")
             }
         }
@@ -135,10 +146,11 @@ final class FolderRegistry: @unchecked Sendable {
         }
     }
 
-    func upsert(_ record: FolderRecord) {
+    @discardableResult
+    func upsert(_ record: FolderRecord) -> Bool {
         lock.lock(); defer { lock.unlock() }
         sources[record.id] = record
-        persistLocked()
+        return persistLocked()
     }
 
     func record(id: String) -> FolderRecord? {

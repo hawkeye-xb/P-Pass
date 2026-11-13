@@ -112,33 +112,40 @@ final class FolderRegistryTests: XCTestCase {
         XCTAssertEqual(missing.count, 1)
     }
 
-    // stale 书签：stale = true 且根仍可用 → 在当前授权内重建、原子替换（记录换新书签、状态回 registered）。
-    // 反证：去掉重建分支（resolve 收到 stale 只返回不替换）→ 新书签未落盘，断言红。
+    // stale 书签：stale = true 且根仍可用 → 重建（freshBookmark）并原子替换、状态回 registered。
+    // 判红设计：同一 URL 的 bookmarkData 可能逐字节相同，直接断言 NotEqual 判不了「重建发生了」——
+    // 用注入的 freshBookmark 产一份不同的数据；反证：删掉整个重建分支 → 落盘的还是旧书签 ≠ 注入数据 → 红。
     func testStaleBookmarkIsRebuiltAndReplacedAtomically() throws {
         let url = try makeFolder(name: "stale")
         let id = try registry.addFolder(at: url, displayName: "stale")
         let record = registry.record(id: id)!
+        let injected = Data("fresh-bookmark-bytes".utf8)
+        FolderBookmarks.freshBookmark = { _ in injected }
+        defer { FolderBookmarks.freshBookmark = { try? $0.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) } }
+        XCTAssertNotEqual(injected, record.bookmark)
+
         let root = try FolderBookmarks.resolve(record, registry: registry, logger: logger, forceStale: true)
-        XCTAssertEqual(root.record.status, "registered", "重建成功状态回 registered")
-        let persisted = registry.record(id: id)!
-        XCTAssertEqual(persisted.bookmark, root.record.bookmark, "重建的新书签已落盘（同一实例内存与文件一致）")
-        // 书签数据对同一 URL 可能逐字节相同（实现相关）；「替换发生了」的判据是重建分支的落盘写与状态回位。
+        XCTAssertEqual(root.record.bookmark, injected, "重建分支用了新生成的书签")
+        XCTAssertEqual(root.record.status, "registered")
+        XCTAssertEqual(registry.record(id: id)?.bookmark, injected, "替换落了盘（内存与持久层一致）")
     }
 
-    // 替换失败口径（stale 且根不可用 → recoveryUnverified）：本地普通目录删掉后书签解析本身就抛
-    // （bookmark unreadable），到不了「stale 且重建失败」分支；真机 security scope 下（盘未挂载/授权被撤）
-    // 才能构造，红测补在卡 #1744 真机闭环。本条锁「resolve 对损坏书签抛错且不动旧记录」这一层。
-    func testStaleRebuildFailureCannotBeConstructedLocallyKeepsRecord() throws {
+    // 替换失败口径：stale 且根不可用（或重建抛 nil）→ 旧书签保留、状态记 recoveryUnverified。
+    // 反证：删掉 else 分支（不写 recoveryUnverified）→ status 保持 registered → 红。
+    func testStaleRebuildFailureKeepsOldBookmarkAndMarksUnverified() throws {
         let url = try makeFolder(name: "stalefail")
         let id = try registry.addFolder(at: url, displayName: "stalefail")
         let record = registry.record(id: id)!
-        var corrupted = record
-        corrupted.bookmark = Data([0x09])
-        registry.upsert(corrupted)
-        XCTAssertThrowsError(try FolderBookmarks.resolve(corrupted, registry: registry, logger: logger, forceStale: true))
-        XCTAssertEqual(registry.record(id: id), corrupted, "失败不动记录（resolve 不改写持久层）")
-        _ = url
+        FolderBookmarks.freshBookmark = { _ in nil } // 重建失败（盘未挂载/授权被撤的替身）
+        defer { FolderBookmarks.freshBookmark = { try? $0.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) } }
+
+        let root = try FolderBookmarks.resolve(record, registry: registry, logger: logger, forceStale: true)
+        XCTAssertEqual(root.record.status, "recoveryUnverified")
+        XCTAssertEqual(root.record.bookmark, record.bookmark, "旧书签保留（没被毁掉）")
+        XCTAssertEqual(registry.record(id: id)?.status, "recoveryUnverified")
     }
+
+    // 损坏书签：resolve 抛错、旧记录原样保留。
 
     // 非 stale：resolve 不动书签、不动状态。
     func testResolveWithoutStaleKeepsEverything() throws {
