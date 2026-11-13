@@ -353,6 +353,10 @@ e3-test:
 # 而改一个字的卡也要跑一遍——远端 CI 反倒早就按 paths 分好了 lane
 # （纯文档提交只点起 ci-docs）。本地缺的就是同一件事。
 #
+# 门禁挑选（tools/flow/worker-lib.sh 的 flow_pick_gates，#1750）把纯文本改动分到了秒级的
+# `just md-check`；本条是流程文件（tools/**、justfile、workflow、AGENTS.md）改动的聚合入口
+# ——整套流程自测在 tools/test-flow-worker.sh 变异反证下保持全量，一个测试都没删。
+#
 # ⚠️ 只在这次改动**一行 Rust/Kotlin/前端都没动**时用它。碰了代码就跑 `just ci`，
 # 别拿这条快车道当省事的借口——`ci` 的依赖列表一个都没减。
 ci-docs: md-check token-check shell-vars-check identity-check supply-chain-check flow-tests heavy-lock-test

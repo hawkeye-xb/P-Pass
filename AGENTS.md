@@ -171,7 +171,7 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
   - **合入 main 后**：CI 全量（含 Windows）批量跑：同一时间一次、正在跑的不取消、排队只留最新；main 红了只修或回滚元凶 PR，main 不冻结。
   - **发版前**：Release 再验证一遍（桌面壳只跑 Windows；Linux 桌面检查已随 #1555 永久移除，见 [CI lane](docs/runbook/ci-lanes.md)），只从全绿提交切 tag。
 - `just done` 依次：核对范围 → 推送前自查 → 门禁（按改动路径挑：安卓 `just android-test`、iOS `just ios-test`、文案/i18n `just mobile-static-check`、
-  桌面前端 `pnpm -C apps/desktop test`、Rust crate（含桌面 `apps/desktop/src-tauri`）对应 crate 的 `cargo nextest run -p`、纯文档 `just ci-docs`；
+  桌面前端 `pnpm -C apps/desktop test`、Rust crate（含桌面 `apps/desktop/src-tauri`）对应 crate 的 `cargo nextest run -p`、纯文档 `just md-check`（AGENTS.md 与 `.github/**` 是流程文件，仍跑 `just ci-docs`）；
   有一个文件挑不出来才退回全量 `just ci`）→ 推分支 → 在 issue 贴回执（分支、提交、门禁与验收输出末尾、证据等级、证据目录、自查结论）。
   `just verify <号>` 不再默认跑：只有卡上写明 `**真机验证**：需要` 才跑（用户看得到的改动按「按版本验收」随版本验，#1471）。
   任何一步红：不推送、issue 写明停在哪、打 `status:blocked`，修好重跑即可。

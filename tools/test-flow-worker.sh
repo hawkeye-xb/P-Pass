@@ -166,7 +166,7 @@ cat >"${BIN}/just" <<'STUB'
 #!/usr/bin/env bash
 G="$FAKE_GH"
 case "$1" in
-  ci | ci-docs | android-test | ios-test | mobile-static-check)
+  ci | ci-docs | android-test | ios-test | mobile-static-check | md-check)
     echo "$*" >>"$G/just_calls"
     echo "==> just $* running"
     # 回放 #1342：断言写死中文原文，只在英文测试语言下红
@@ -452,6 +452,11 @@ OUT="$(START 83 2>&1)" && ok "范围挑出 just ci（重门禁）→ 照常领�
 printf '%s' "$OUT" | grep -q '未预检' && ok "  列出未预检的重门禁" || bad "  没列未预检：$OUT"
 grep -q '^ci *$' "${FAKE_GH}/just_calls" 2>/dev/null && bad "  重门禁被真跑了" || ok "  重门禁没跑"
 
+# 纯文档卡（#1750）：预检挑出秒级的 just md-check，照常领卡
+issue 89 "status:ready" "[T-89] docs precheck" "docs/**" "Task"
+OUT="$(START 89 2>&1)" && ok "纯文档卡照常领卡" || bad "纯文档卡被拦：$OUT"
+printf '%s' "$OUT" | grep -qF '门禁预检（本机干净基线）：just md-check' && ok "  预检跑了 just md-check" || bad "  没预检 md-check：$OUT"
+
 # 超时按红处理
 issue 84 "status:ready" "[T-84] slow gate" "tools/slow-target.sh" "Task"
 if (export PPASS_PRECHECK_TIMEOUT=1; cd "$M" && bash tools/flow/worker-start.sh 84) >"${TMP}/p84" 2>&1; then
@@ -579,12 +584,49 @@ LC_ALL=C DONE "$W" >"${TMP}/o157" 2>&1 && ok "LC_ALL=C 下卡上写需要真机�
 comments_of 157 | grep -q "FAKE-VERIFY-GREEN" && ok "  LC_ALL=C 下仍识别全角冒号并跑 just verify" || bad "  LC_ALL=C 下没识别出真机验证要求"
 rm -f "${FAKE_GH}/has_verify"
 
-# 纯文档走 ci-docs
+# 纯文档不再聚合 ci-docs（#1750）：只挑秒级的文档域检查 just md-check。
+# 远端 CI Docs lane 与 flow-tests job 都按自己的路径过滤跑，不会因本地变窄而漏跑。
 W="$(card 23 "[T-23] docs only" "docs/**")"
 commit_file "$W" docs/n.md
 DONE "$W" >/dev/null 2>&1
-comments_of 23 | grep -q "just ci-docs" && ok "纯文档改动跑 just ci-docs" || bad "纯文档没走 ci-docs"
+comments_of 23 | grep -qF '`just md-check`' && ok "纯文档改动跑 just md-check" || bad "纯文档没走 md-check"
+comments_of 23 | grep -qF '`just ci-docs`' && bad "纯文档仍聚合了 just ci-docs（整套 flow-tests）" || ok "纯文档不再带起 ci-docs"
 comments_of 20 | grep -q "just ci-docs" && bad "代码改动误走 ci-docs" || ok "反证：代码改动走 just ci"
+# 根目录 *.md 同一档：check-markdown-tables.py 只扫 docs/，但 Markdown 是同一类文本改动（#1736 的 ADR 路径在 docs 下）。
+W="$(card 87 "[T-87] root md" "*.md docs/**")"
+commit_file "$W" README.md
+DONE "$W" >/dev/null 2>&1
+comments_of 87 | grep -qF '`just md-check`' && ok "根目录 .md 改动也走 just md-check" || bad "根目录 .md 没走 md-check"
+comments_of 87 | grep -qF '`just ci`' && bad "根目录 .md 退回全量了" || ok "  根目录 .md 不退回全量"
+# 流程文件例外（与远端 ci-docs.yml flow-tests job 的路径过滤同口径）：流程规矩与模板的改动仍跑全套流程自测。
+W="$(card 168 "[T-168] github md" ".github/** AGENTS.md")"
+commit_file "$W" .github/ISSUE_TEMPLATE/t.md
+commit_file "$W" AGENTS.md
+DONE "$W" >"${TMP}/o168" 2>&1
+C168="$(comments_of 168)"
+printf '%s' "$C168" | grep -qF '`just ci-docs`' && ok "AGENTS.md / issue 模板 → 仍跑 just ci-docs（流程自测）" || bad "流程文件没走 ci-docs：$(tail -4 "${TMP}/o168")"
+printf '%s' "$C168" | grep -qF '`just md-check`' && bad "流程文件误挑了 md-check" || ok "  流程文件不挑 md-check"
+# 变异反证（#1545 同款）：把纯文档的 md-check 默认行改回 ci-docs → 纯文档又聚合整套流程自测，
+# T-23 的「不再带起 ci-docs」断言必须抓到（红）；还原则绿。
+cp "$M/tools/flow/worker-lib.sh" "${TMP}/wd-1750.bak"
+sed 's/GATES=("just md-check")/GATES=("just ci-docs")/' "$M/tools/flow/worker-lib.sh" >"${TMP}/wd-1750.mut"
+if ! cmp -s "$M/tools/flow/worker-lib.sh" "${TMP}/wd-1750.mut"; then
+  cp "${TMP}/wd-1750.mut" "$M/tools/flow/worker-lib.sh"
+  git -C "$M" add tools/flow/worker-lib.sh
+  git -C "$M" commit -q -s -m "mutate docs gate default"
+  git -C "$M" push -q origin HEAD:refs/heads/main
+  W="$(card 170 "[T-170] md gate mutated" "docs/**")"
+  commit_file "$W" docs/m.md
+  DONE "$W" >"${TMP}/o170" 2>&1
+  C170="$(comments_of 170)"
+  printf '%s' "$C170" | grep -qF '`just ci-docs`' && ok "反证：分层改回 ci-docs 后纯文档退回 ci-docs（断言能抓到）" || bad "反证不成立：$(tail -4 "${TMP}/o170")"
+  cp "${TMP}/wd-1750.bak" "$M/tools/flow/worker-lib.sh"
+  git -C "$M" add tools/flow/worker-lib.sh
+  git -C "$M" commit -q -s -m "restore docs gate default"
+  git -C "$M" push -q origin HEAD:refs/heads/main
+else
+  bad "md-check 默认行没匹配上，变异没生效"
+fi
 
 # 流程文件改动不退回全量（#1481）：workflows → actionlint + ci-docs；justfile / issue 模板 → ci-docs；未知 .github 路径仍全量
 W="$(card 150 "[T-150] workflow only" ".github/**")"

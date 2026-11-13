@@ -129,7 +129,7 @@ fi
 # 目的：worker 领卡前就知道这台机器能不能把卡送到合入；别改完才发现门禁必红（#1392 白做 41 turns）。
 # 门禁清单与 just done 共用一份挑选逻辑（flow_pick_gates），这里按卡的「范围」挑：范围里展开得到的文件一起喂进去，
 # 展开不到任何文件的 glob 原样当路径（与 done 的 fail-closed 口径一致，挑不出来就是全量 just ci）。
-# 只预检能在几分钟内跑完的轻门禁（自包含的 bash 测试、just ci-docs、actionlint、just mobile-static-check）；
+# 只预检能在几分钟内跑完的轻门禁（自包含的 bash 测试、just ci-docs、just md-check、actionlint、just mobile-static-check）；
 # 要编译或先装依赖的（cargo、pnpm、android-test、ios-test、just ci）不预检，只列出来——近三次同族事故
 # （#1392 的 test-e3.sh、#1646 的挑选漏项、#1685 的 test-flow-worker.sh）都落在轻门禁里。
 # 红了：不领卡——撤掉刚建的 worktree 与分支、卡打 status:blocked、issue 里写评论（哪条门禁红、日志末尾、怎么复跑）。
@@ -185,7 +185,7 @@ EOF2
   while IFS= read -r g; do
     [ -n "$g" ] || continue
     case "$g" in
-      bash\ * | "just ci-docs" | actionlint | "just mobile-static-check") ;;
+      bash\ * | "just ci-docs" | "just md-check" | actionlint | "just mobile-static-check") ;;
       *) PRECHECK_SKIP+=("$g"); continue ;;
     esac
     printf '\n==> %s\n' "$g" >>"$PRECHECK_LOG"

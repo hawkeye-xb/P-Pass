@@ -24,7 +24,7 @@ job 名必须写死**。理由和细节在这里。
     cargo-deny / advisory / vite build 四步不带任何 `if:`、`System deps` 不再回来，以及两条必需检查名与
     `if: always()` 不变）也由同一脚本判红，带「加回去必须变红」的反证。
 - **推分支不触发 CI**：`push` 限定 `branches: [main]`，只有合入才算。本地快验：
-  纯文档 `just ci-docs`，动了代码 `just ci`。
+  纯文档 `just md-check`（#1750：文档检查与工具自测分层），流程文件（tools/**、justfile、workflow、AGENTS.md）`just ci-docs`，动了代码 `just ci`。
 - **PR 上按路径判跑哪些 job**，分两档：
   - `ci-rust` / `ci-desktop`：workflow 层**不设** `pull_request.paths`（CI-07 #189）。
     它们的检查在 `main` 的必需列表里，而被 paths 跳过的 workflow **根本不汇报状态**，
