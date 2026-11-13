@@ -98,18 +98,25 @@ final class SourceUnavailableEngineTests: XCTestCase {
         let st = try rig.state(1)
         XCTAssertEqual(st, .confirmed)
 
-        // 来源不可用等待中；同一轮里 photo 1 也从照片库消失。
+        // 第二轮：photo 2 的导入抛 SourceUnavailable → 整条 Flow 进等待（此时对账跑过一轮，photo 1 还在库、无事发生）。
         rig.importer.failures.set([SourceUnavailable(reason: "bookmark revoked")])
         rig.photo(2, generation: 2)
-        rig.media.remove(1)
         await rig.trigger(.periodic)
 
         let view = await rig.engine.view
         XCTAssertEqual(view.waitReason, .sourceUnavailable, "photo 2 的导入抛出来，整条 Flow 等待")
-        let st1 = try rig.state(1)
-        XCTAssertEqual(st1, .confirmed, "缺席不再可信，已确认的不动")
 
-        // 恢复后：photo 1 真的没了，下一轮对账把它标上 source_missing（缺席重新可信；状态仍 confirmed，副本不动）。
+        // 等待中 photo 1 从来源消失：缺席此刻不可信（授权失效的「不在」证明不了删除）。
+        // 轮 3 入口仍在 sourceUnavailable 等待：守卫拦截对账，photo 1 不得被标源缺失——
+        // 即使本轮把 photo 2 传完、等待随后清除。反证：去掉 reconcileSourcePresence 的等待守卫 → 红。
+        rig.media.remove(1)
+        await rig.trigger(.periodic)
+
+        let row1 = try rig.store.currentForMedia(mid(1))
+        XCTAssertEqual(row1?.state, .confirmed, "缺席不再可信，已确认的不动")
+        XCTAssertEqual(row1?.sourceMissing, false, "等待中（轮入口）缺席不写源缺失")
+
+        // 恢复后：缺席重新可信，下一轮对账把 photo 1 标上 source_missing（状态仍 confirmed，副本不动）。
         rig.importer.failures.set([])
         await rig.trigger(.periodic)
         let st2 = try rig.store.currentForMedia(mid(1))
