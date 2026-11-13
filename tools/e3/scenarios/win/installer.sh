@@ -210,6 +210,8 @@ snapshot_state() { # snapshot_state <证据目录> <名字>
   {
     echo "inst_exe_version=$(inst_exe_version)"
     echo "hklm_version=$(hklm_version)"
+    # 干净起点断言（#1675）：两处 HKLM 卸载登记都不存在才算「全新机器」。
+    echo "hklm_uninstall_absent=$(win_ps 'if ((Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass") -or (Test-Path "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass")) { "no" } else { "yes" }' 2>/dev/null | tr -d '[:space:]')"
     echo "svc_state=$(svc_state)"
     echo "svc_binpath=$(svc_binpath)"
     echo "pd_dir=$([ -d "$PD_DIR" ] && echo present || echo absent)"
@@ -403,6 +405,7 @@ same_field() { # same_field <证据目录> <字段> <tagA> <tagB>：两边都有
 judge() {
   local d="$1"
   # R0.2
+  check "R0.2 安装前没有残留的 HKLM 卸载登记（#1675）" grep -qx 'hklm_uninstall_absent=yes' "$d/pre.txt"
   check "R0.2 基线 exe 版本 $WIN_BASE_VER" grep -Fqx "inst_exe_version=$WIN_BASE_VER" "$d/after-baseline.txt"
   check "R0.2 HKLM 卸载登记 $WIN_BASE_VER" grep -Fqx "hklm_version=$WIN_BASE_VER" "$d/after-baseline.txt"
   check "R0.2 服务 P-Pass 在运行" grep -qx 'svc_state=Running' "$d/after-baseline.txt"
