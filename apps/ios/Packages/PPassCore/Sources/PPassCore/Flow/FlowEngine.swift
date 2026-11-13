@@ -437,6 +437,8 @@ public actor FlowEngine {
         // 健康探针看不出 `internal`：同「探测报健康的对端失败」，交给退避探测。
         case .notPaired, .disabled, .wifi, .battery, .executionBlocked, .unexpectedError, .originalUnavailable, .localStorageFull,
              .desktopInternal: wake = false
+        // #1731：桌面可达证明不了目录授权恢复——等用户回前台重新授权。
+        case .sourceUnavailable: wake = false
         }
         guard wake else { return }
         log("desktop reachable (foreground heartbeat) while waiting for \(waiting.rawValue): waking the loop")
@@ -568,6 +570,14 @@ public actor FlowEngine {
                 try await prepareAuto(reconcile: reconcile, names: names)
             } catch is CancellationError {
                 throw CancellationError()
+            } catch let e as SourceUnavailable {
+                guard pickedReady else {
+                    // #1731：来源整体不可用——入口读元数据就不该继续；整条 Flow 等待。
+                    log("cycle \(names): media source unavailable at entry; waiting, nothing counted")
+                    return settle(.sourceUnavailable)
+                }
+                log("cycle \(names): media source unavailable (\(e.reason)); transferring picked photos only")
+                autoSkipped = true
             } catch {
                 guard pickedReady else { throw error }
                 log("cycle \(names): photo library side unavailable (\(error)); transferring picked photos only")
@@ -579,7 +589,15 @@ public actor FlowEngine {
             return settle(reason)
         }
         var transferWork = pickedReady
-        if !transferWork && !autoSkipped { transferWork = try await hasWork(reconcile: reconcile, askPresence: reasons.contains(.periodic)) }
+        if !transferWork && !autoSkipped {
+            do {
+                transferWork = try await hasWork(reconcile: reconcile, askPresence: reasons.contains(.periodic))
+            } catch is SourceUnavailable {
+                // #1731：入口计数就碰到来源不可用——不申请租约，整条 Flow 等待。
+                log("cycle \(names): media source unavailable while counting; waiting, nothing counted")
+                return settle(.sourceUnavailable)
+            }
+        }
         guard transferWork else {
             log("cycle \(names): nothing to transfer")
             recovered("nothing left to transfer")
@@ -637,9 +655,17 @@ public actor FlowEngine {
         if !roundVideosDeferred.isEmpty { log("round \(roundId): \(roundVideosDeferred.count) video(s) left for another window (photos only)") }
         closeRound(roundId)
         bump()
-        let exit = (try? result.get()) ?? nil
+        let exit: WaitReason?
+        do {
+            exit = try result.get()
+        } catch let e as SourceUnavailable {
+            // #1731：来源整体不可用（扫描 / 发现 / 取件任何一步抛出）——整条 Flow 等待，不计失败。
+            log("cycle \(names): media source unavailable (\(e.reason)); waiting, nothing counted")
+            exit = .sourceUnavailable
+        } catch {
+            throw error
+        }
         if !control.paused() { settle(exit) } else { setStatus(LoopStatus(phase: .idle)) }
-        let _ = try result.get()
         if exit == nil && !control.paused() { recovered("round finished") }
     }
 
@@ -1006,6 +1032,9 @@ public actor FlowEngine {
                 return (result, reason)
             } catch is CancellationError {
                 throw CancellationError()
+            } catch let e as SourceUnavailable {
+                // #1731：来源整体不可用不是这一张的问题——不当单张失败吞掉，原样上抛让整条 Flow 等待。
+                throw e
             } catch {
                 if Task.isCancelled { throw CancellationError() }
                 reason = "import:\(type(of: error))"
@@ -1017,7 +1046,14 @@ public actor FlowEngine {
 
     private func processFresh(_ snapshot: MediaSnapshot, _ origin: Origin, pairingId: String) async throws -> StepResult {
         let progress = progressOf(snapshot, origin)
-        let details = try await media.lookup(snapshot.mediaId)
+        let details: MediaDetails?
+        do {
+            details = try await media.lookup(snapshot.mediaId)
+        } catch is SourceUnavailable {
+            // #1731：来源整体不可用——不写任何游标/行，整条 Flow 等待。
+            log("media \(LogRedact.id(snapshot.mediaId)): source unavailable; waiting, nothing counted")
+            return .exit(.sourceUnavailable)
+        }
         try Task.checkCancellation()
         guard let details, inScope(details.snapshot.bucketId) else {
             try write(progress)
@@ -1036,7 +1072,15 @@ public actor FlowEngine {
             bump()
             return .next
         }
-        let (imported, failure) = try await importWithRetry(details)
+        let imported: ImportResult?
+        let failure: String
+        do {
+            (imported, failure) = try await importWithRetry(details)
+        } catch is SourceUnavailable {
+            // #1731：来源整体不可用——没建行、没推进游标，整条 Flow 等待（下面各分支都不走）。
+            log("media \(LogRedact.id(snapshot.mediaId)): source unavailable; waiting, nothing counted")
+            return .exit(.sourceUnavailable)
+        }
         switch imported {
         case nil:
             // 读不出来（两次）：记一次失败（有上限），游标照常推进，不在这张上打转。
@@ -1079,7 +1123,14 @@ public actor FlowEngine {
     /// 通过后置为传输中。已有 order 提交时**不推进任何游标**。
     private func processExisting(_ order: Order, pairingId: String) async throws -> StepResult {
         let transferring = order.state == .transferring
-        let details = try await media.lookup(order.mediaId)
+        let details: MediaDetails?
+        do {
+            details = try await media.lookup(order.mediaId)
+        } catch is SourceUnavailable {
+            // #1731：来源整体不可用——在途 order 原样不动，整条 Flow 等待。
+            log("order \(order.id): source unavailable; waiting, nothing counted")
+            return .exit(.sourceUnavailable)
+        }
         try Task.checkCancellation()
         guard let details, details.snapshot.sourceVersion == order.sourceVersion else {
             // 原图没了；或中断期间被编辑成了新版本——这一行描述的版本已不存在，新版本由扫描 / 发现另起一行。
@@ -1099,7 +1150,15 @@ public actor FlowEngine {
             roundVideosDeferred.insert(order.mediaId)
             return .next
         }
-        let (imported, failure) = try await importWithRetry(details)
+        let imported: ImportResult?
+        let failure: String
+        do {
+            (imported, failure) = try await importWithRetry(details)
+        } catch is SourceUnavailable {
+            // #1731：来源整体不可用——行原样不动、不加次数，整条 Flow 等待。
+            log("order \(order.id): source unavailable; waiting, nothing counted")
+            return .exit(.sourceUnavailable)
+        }
         switch imported {
         case nil:
             if try store.transition(order.id, expected: OrderState.open, to: .transferring) { try fail(order, Progress(), failure) }
@@ -1364,6 +1423,11 @@ public actor FlowEngine {
     private func reconcileSourcePresence() async {
         guard mediaAbsenceTrusted() else {
             log("source_missing: media access is not full; absence proves nothing, skipped")
+            return
+        }
+        guard control.waitReason() != .sourceUnavailable else {
+            // #1731：来源不可用等待中——缺席证明不了什么，不写源缺失（恢复后由对账重新判定）。
+            log("source_missing: a source is unavailable; absence proves nothing, skipped")
             return
         }
         let plan: SourcePresencePlan?

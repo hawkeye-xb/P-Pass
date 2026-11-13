@@ -31,6 +31,9 @@ public enum WaitReason: String, CaseIterable, Codable, Sendable {
     /// iOS 新增（#911）：手机自己存储空间不足，取原图的临时文件写不下——不是这张照片的问题（换一张照样写不下），
     /// 不计失败预算，整体等空间释放（与 D4 网络原因同一类处置）。
     case localStorageFull = "LOCAL_STORAGE_FULL"
+    /// iOS 新增（#1731）：一个来源整体不可用（目录授权失效/被撤、根不可达）——整条 Flow 等待重新授权：
+    /// 不推进 G/S、不写源缺失、不计失败、在途 order 原样不动；恢复（回前台重新授权后）下一轮照常。
+    case sourceUnavailable = "SOURCE_UNAVAILABLE"
 }
 
 /// 执行租约受阻的原因（只给 UI 说人话，**不是闸门**）。

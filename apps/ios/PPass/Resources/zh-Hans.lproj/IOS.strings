@@ -54,6 +54,9 @@
 /* PPassCore WaitReason.localStorageFull：手机自己空间不够放临时原图。 */
 "state_waiting_local_storage_full" = "手机存储空间不足。腾出空间后继续备份。";
 
+/* PPassCore WaitReason.sourceUnavailable（#1731）：一个备份来源（如已授权的文件夹）此刻访问不了。 */
+"state_waiting_source_unavailable" = "有备份来源暂时访问不了，恢复访问后继续备份。";
+
 /* #975：iOS 系统授权框只弹一次，被拒后只能去系统设置（Android 会再弹一次申请框）。 */
 "rule_notify_denied_hint" = "通知已在系统设置中关闭。点开关前往设置。";
 
