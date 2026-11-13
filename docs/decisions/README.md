@@ -23,6 +23,7 @@ ADR，验收人拍板后再拆卡实现。代码注释里出现的 ADR-003、ADR
 | 2026-11-12 | [发版不冻结合入：删掉「main 前进就拒绝」的守卫](2026-11-12-release-no-merge-freeze.md) | 已采纳 |
 | 2026-11-12 | [两个 Release run 重叠：test 发布按 test-channel 全局串行排队](2026-11-12-release-test-channel-concurrency.md) | 已采纳 |
 | 2026-11-13 | [本地授权目录作为照片和视频备份来源](2026-11-13-local-folder-media-source.md) | 已采纳 |
+| 2026-11-13 | [Windows 普通 MP4 用独立视频 decoder（Media Foundation）生成真缩略图](2026-11-13-windows-video-decoder.md) | 已采纳 |
 
 ## 写法
 
