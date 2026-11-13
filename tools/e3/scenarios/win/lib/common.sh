@@ -418,7 +418,30 @@ win_install_silent() { # win_install_silent <setup.exe>
 # 覆盖安装（W3 / R1.2）：安装时 daemon 正在跑，不先停服务。
 win_install_overlay() { win_install_silent "$1"; }
 
-# 把整个桌面状态清到「全新机器」：停进程、删任务、删数据目录、把旧库挪走（不硬删）。
+# 清卸载登记（#1675）：对齐 tools/windows/reset-ppass-env.ps1 的 -Uninstall 分支。
+# perMachine 安装器看到残留的 HKLM 登记会认为已经装过，安装/卸载类场景被卡住。
+# 非管理员删不掉时返回非 0；调用方按「清不干净就停下」处理，不静默留残留。
+win_reset_uninstall_registry() {
+  local out
+  out="$(win_ps '
+$keys = @(
+  "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass",
+  "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass",
+  "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass"
+)
+foreach ($k in $keys) { Remove-Item -Path $k -Recurse -Force -ErrorAction SilentlyContinue }
+$left = @($keys | Where-Object { Test-Path $_ })
+if ($left.Count -gt 0) { Write-Output ("left: " + ($left -join ", ")); exit 1 }
+' 2>&1)" || { echo "卸载登记清不掉（需要管理员权限？）：${out}" >&2; return 1; }
+}
+
+# 两处 HKLM 卸载登记都不存在 → yes，否则 no（#1675 的判据）。
+# installer 的 pre 快照与 install-baseline 的安装前快照共用同一口径。
+win_hklm_uninstall_absent() {
+  win_ps 'if ((Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass") -or (Test-Path "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass")) { "no" } else { "yes" }' 2>/dev/null | tr -d '[:space:]'
+}
+
+# 把整个桌面状态清到「全新机器」：停进程、删任务、清卸载登记、删数据目录、把旧库挪走（不硬删）。
 win_reset_desktop_state() {
   local lib dest
   # 先按 config.toml 找到旧库，再删数据目录（删完就读不到了）。config 丢了（半途失败）
@@ -427,6 +450,7 @@ win_reset_desktop_state() {
   [ -n "$lib" ] && [ -d "$lib" ] || lib="$(cygpath -u "${USERPROFILE}\Pictures\P-Pass Library")"
   win_unregister_task
   win_stop_all || true
+  win_reset_uninstall_registry || return 1
   if [ -d "$lib" ]; then
     dest="$E3_STATE/win/old-library-$(date +%Y%m%d-%H%M%S)"
     mkdir -p "$E3_STATE/win"
