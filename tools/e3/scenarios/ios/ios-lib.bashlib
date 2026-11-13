@@ -1,0 +1,196 @@
+# tools/e3/scenarios/ios 共用助手（#1744 目录来源真机 E3；ADR docs/decisions/2026-11-13-local-folder-media-source.md）。
+# 扩展名刻意不用 .sh：tools/test-e3.sh 的 DESC/judge 检查只针对场景文件，这里是库（语法检查在 test-e3.sh 里单独做）。
+# 场景由 tools/e3/run 调起：它已 source lib/common.sh（check / has_line / no_line / jget / verdict 直接可用），
+# 场景再 source 本文件。真机锁由 tools/e3/run 自动持（E3_LOCKED_IOS=1）。
+#
+# 设备：PPASS_DEVICE（devicectl 标识）或本机唯一在线 iPhone；xcodebuild 用换算出的硬件 UDID。
+# 驱动模式与 tools/ios/e3-batch.sh 一致：App 的 DEBUG 钩子（apps/ios/PPass/Debug/BGTestDriver.swift）
+# 经 devicectl 启动环境变量进来，状态写 App 容器 Documents/e2e/status.json，脚本拉回判定。
+# 桌面端用测试沙盒（tools/ios/sandbox-desk.sh，daemon --ephemeral，假 HOME 临时库），不碰本机正式桌面。
+
+IOS_BUNDLE_ID="$(sed -n 's/^PPASS_BUNDLE_ID *= *//p' "$REPO_ROOT/apps/ios/Config/Base.xcconfig" 2>/dev/null | head -1)"
+[ -n "$IOS_BUNDLE_ID" ] || die "读不到 apps/ios/Config/Base.xcconfig 的 PPASS_BUNDLE_ID"
+
+ios_require_tools() {
+  for t in jq sqlite3 ffmpeg; do
+    command -v "$t" >/dev/null || die "缺 $t - iOS E3 场景依赖，与 e3-batch 同一工具单"
+  done
+}
+
+ios_resolve_device() { # 设定 DEV（devicectl 标识）与 IOS_HW_UDID（xcodebuild 用）
+  local out="$E3_STATE/devices.json"
+  mkdir -p "$E3_STATE"
+  xcrun devicectl list devices --json-output "$out" >/dev/null 2>&1 || die "devicectl list devices 失败"
+  DEV="${PPASS_DEVICE:-${E3_IOS_UDID:-}}"
+  if [ -z "$DEV" ]; then
+    DEV=$(jq -r '[.result.devices[] | select(.hardwareProperties.productType | startswith("iPhone"))][0].identifier // empty' "$out")
+    [ "$(jq '[.result.devices[] | select(.hardwareProperties.productType | startswith("iPhone"))] | length' "$out")" = 1 ] \
+      || die "找到多台 iPhone 或一台都没有：用 PPASS_DEVICE 指定（本机 e3.env 可写 E3_IOS_UDID）"
+  fi
+  IOS_HW_UDID=$(jq -r --arg d "$DEV" \
+    '.result.devices[] | select(.identifier == $d or .hardwareProperties.udid == $d or .deviceProperties.name == $d) | .hardwareProperties.udid' \
+    "$out" | head -1)
+  [ -n "$IOS_HW_UDID" ] || die "devicectl 里找不到设备 $DEV"
+  log "iOS E3 设备 $DEV, udid $IOS_HW_UDID"
+}
+
+ios_ensure_installed() { # $1 = OUT；默认构建+安装当前代码，PPASS_SKIP_BUILD=1 跳过（App 已是当前代码的 Debug 包时）
+  local out="$1"
+  if [ "${PPASS_SKIP_BUILD:-0}" != 1 ]; then
+    local ios="$REPO_ROOT/apps/ios"
+    [ -d "$ios/TransportFFITests/Generated/TransportFFI.xcframework" ] \
+      || "$REPO_ROOT/tools/build-ios-transport-xcframework.sh" "$ios/TransportFFITests/Generated" >>"$out/build.log" 2>&1
+    (cd "$ios" && xcodegen generate --quiet) >>"$out/build.log" 2>&1
+    xcodebuild build -project "$ios/PPass.xcodeproj" -scheme PPass -configuration Debug \
+      -destination "generic/platform=iOS" -allowProvisioningUpdates \
+      -derivedDataPath "$ios/build/derived-device" >>"$out/build.log" 2>&1 \
+      || { tail -20 "$out/build.log" >&2; die "App 构建/安装失败（$out/build.log）"; }
+    xcrun devicectl device install app --device "$DEV" \
+      "$ios/build/derived-device/Build/Products/Debug-iphoneos/PPass.app" >>"$out/build.log" 2>&1 \
+      || { tail -5 "$out/build.log" >&2; die "安装到 $DEV 失败（$out/build.log）"; }
+  fi
+  git -C "$REPO_ROOT" rev-parse HEAD >"$out/commit.txt"
+  xcrun devicectl device info apps --device "$DEV" 2>/dev/null | grep -i "$IOS_BUNDLE_ID" >"$out/installed.txt" || true
+}
+
+ios_launch() { # $1 OUT $2 名字 $3 环境变量 JSON（空 = 不带）；APP_PID 记 pid
+  local envargs=()
+  [ -n "$3" ] && envargs=(--environment-variables "$3")
+  xcrun devicectl device process launch --device "$DEV" --terminate-existing ${envargs+"${envargs[@]}"} \
+    --json-output "$1/launch-$2.json" "$IOS_BUNDLE_ID" >"$1/launch-$2.log" 2>&1 || { cat "$1/launch-$2.log" >&2; return 1; }
+  APP_PID=$(jq -r '.result.process.processIdentifier' "$1/launch-$2.json" 2>/dev/null)
+}
+
+ios_copy_from() { # $1 容器内路径 $2 本地目标
+  xcrun devicectl device copy from --device "$DEV" --domain-type appDataContainer --domain-identifier "$IOS_BUNDLE_ID" \
+    --source "$1" --destination "$2" >/dev/null 2>&1
+}
+
+ios_push() { # $1 本地文件 $2 容器内目标路径（含文件名）
+  xcrun devicectl device copy to --device "$DEV" --domain-type appDataContainer --domain-identifier "$IOS_BUNDLE_ID" \
+    --source "$1" --destination "$2" >/dev/null 2>&1
+}
+
+# 轮询容器里的 Documents/e2e/status.json 到 done=$4（或 any）；成功回显 status 路径。
+# $1 前缀 $2 期望 run $3 超时秒 $4 done 期望（true / any）
+ios_wait_status() {
+  local pre="$1" run="$2" timeout="$3" want="${4:-true}" i
+  for i in $(seq 1 $((timeout / 2))); do
+    if ios_copy_from Documents/e2e/status.json "$pre.status.json" \
+       && [ "$(jq -r '.run // ""' "$pre.status.json" 2>/dev/null)" = "$run" ]; then
+      [ "$want" = any ] && { echo "$pre.status.json"; return 0; }
+      [ "$(jq -r '.done // false' "$pre.status.json")" = "$want" ] && { echo "$pre.status.json"; return 0; }
+      jq -r '.step // ""' "$pre.status.json" 2>/dev/null | grep -q '^failed$' && { echo "$pre.status.json"; return 1; }
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+ios_pull_log() { # $1 前缀：ppass.log.1 + ppass.log 拼成 $1（时间顺序）
+  ios_copy_from Library/Logs/ppass.log "$1.cur" || { : >"$1"; return 1; }
+  ios_copy_from Library/Logs/ppass.log.1 "$1.prev" || : >"$1.prev"
+  cat "$1.prev" "$1.cur" >"$1"
+}
+
+ios_reset() { # $1 OUT：PPASS_E2E_RESET=1 启动清存储根（等价全新安装，保留系统授权）
+  ios_launch "$1" reset '{"PPASS_E2E_RESET":"1","PPASS_E2E_DIR":"container"}' || return 1
+  sleep 5
+}
+
+ios_b3() { # 回显独立 BLAKE3 小工具路径（tools/ios/b3sum，Rust blake3 crate，与产品 hash 独立核对）
+  local t="$E3_STATE/b3sum-target"
+  [ -x "$t/release/ppass-b3sum" ] || (cd "$REPO_ROOT/tools/ios/b3sum" && CARGO_TARGET_DIR="$t" cargo build -q --release) >>"$E3_STATE/b3sum-build.log" 2>&1 \
+    || die "编 tools/ios/b3sum 失败（$E3_STATE/b3sum-build.log）"
+  echo "$t/release/ppass-b3sum"
+}
+
+ios_desk_start() { # $1 工作目录：起一台测试沙盒桌面（daemon --ephemeral，release 构建，同 e3-batch）
+  local daemon="${E3_DAEMON:-${CARGO_TARGET_DIR:-$REPO_ROOT/target}/release/daemon}"
+  [ -x "$daemon" ] || { "$REPO_ROOT/tools/heavy-lock" cargo build -q -p daemon --release >&2 || die "daemon 编译失败"; }
+  desk_start "$1" "$daemon" || die "沙盒桌面起不来（$1/daemon.err）"
+}
+
+ios_pair_allow_start() { # $1 OUT $2 桌面工作目录：后台循环 = 拉手机验证码 + 沙盒输码允许（e3-batch 同款）
+  # bash 3.2 的 local 整行先展开后赋值：同行引用前面变量拿到的是空/未绑定（set -u 直接退），必须拆行。
+  local out="$1" desk="$2"
+  local codes="$out/pair_code.txt"
+  (
+    while :; do
+      if ios_copy_from Documents/e2e/pair_code.txt "$codes.tmp"; then mv -f "$codes.tmp" "$codes"; else rm -f "$codes" "$codes.tmp"; fi
+      sleep 1
+    done
+  ) &
+  PAIR_PULLER_PID=$!
+  desk_auto_allow "$desk" "$codes"
+}
+
+ios_pair_allow_stop() { # 收掉拉码循环（输码循环由 desk_stop 收）
+  if [ -n "${PAIR_PULLER_PID:-}" ]; then kill "$PAIR_PULLER_PID" 2>/dev/null || true; wait "$PAIR_PULLER_PID" 2>/dev/null || true; fi
+  PAIR_PULLER_PID=
+}
+
+# ---- 测试素材（全部程序生成；真实可播的 H.264 MP4 与不可压缩噪声图，同 e3-batch 的口径）----
+
+ios_make_bigvideo() { # $1 目标文件 $2 目标大小 MB（按 5Mbps 总码率换算时长）
+  local dur=$((($2 * 8) / 5))
+  ffmpeg -loglevel error -f lavfi -i "testsrc2=size=1280x720:rate=24:duration=$dur" \
+    -f lavfi -i "sine=frequency=440:duration=$dur" \
+    -c:v libx264 -preset veryfast -b:v 4200k -c:a aac -b:a 96k -movflags +faststart -y "$1" >&2
+  [ -s "$1" ] || die "大视频生成失败：$1"
+}
+
+ios_make_noise_jpg() { # $1 目标文件 $2 种子
+  ffmpeg -loglevel error -f lavfi -i "color=c=gray:s=2000x1500,noise=alls=100:allf=u:all_seed=$2" \
+    -frames:v 1 -q:v 2 -y "$1" >&2
+  [ -s "$1" ] || die "测试图生成失败：$1"
+}
+
+# 推一组文件（平铺到容器 stage 目录）：$1 OUT $2 容器内 stage 目录名 $3 本地素材目录
+ios_push_stage() {
+  local out="$1" stage="$2" src="$3" f
+  for f in "$src"/*; do
+    [ -f "$f" ] || continue
+    ios_push "$f" "Documents/$stage/$(basename "$f")" || die "推素材失败：$(basename "$f")"
+  done
+}
+
+# ---- 证据收集（act 末尾调用；judge 只读 $OUT）----
+
+ios_collect_common() { # $1 OUT：容器树、账本、日志、登记清单
+  local out="$1" run="dump-$(date +%s)" pre
+  xcrun devicectl device info files --device "$DEV" --domain-type appDataContainer --domain-identifier "$IOS_BUNDLE_ID" \
+    >"$out/container-tree.txt" 2>&1 || true
+  ios_launch "$out" dump "{\"PPASS_E2E_DIR\":\"container\",\"PPASS_E2E_RUN\":\"$run\",\"PPASS_BGTEST_DUMP\":\"1\"}"
+  ios_wait_status "$out/dump" "$run" 30 true >/dev/null
+  local d="$out/db"; mkdir -p "$d"
+  local f
+  for f in backup-orders.db backup-orders.db-wal backup-orders.db-shm; do
+    ios_copy_from "Documents/e2e/db/$f" "$d/$f" || true
+  done
+  [ -s "$d/backup-orders.db" ] || { echo "账本没拉回（dump 启动没完成）" >&2; return 1; }
+  ios_pull_log "$out/ppass.log"
+  run="list-$(date +%s)"
+  ios_launch "$out" list "{\"PPASS_E2E_DIR\":\"container\",\"PPASS_E2E_RUN\":\"$run\",\"PPASS_BGTEST_FOLDER_LIST\":\"1\"}"
+  pre="$(ios_wait_status "$out/list" "$run" 30 true)" && cp "$pre" "$out/folder-list.json" || true
+}
+
+# 订单表只读导出（本机 sqlite3；db+wal 已拉回）
+ios_orders_sql() { # $1 OUT  $2 SQL
+  sqlite3 -readonly "$1/db/backup-orders.db" "$2" 2>&1
+}
+
+ios_orders_dump() { # $1 OUT $2 输出名：dump 账本 → 导出全部订单状态（media_id|state|source_missing|content_hash）
+  local out="$1" run="dump-$(date +%s)" f
+  local d="$out/db"
+  ios_launch "$out" dump "{\"PPASS_E2E_DIR\":\"container\",\"PPASS_E2E_RUN\":\"$run\",\"PPASS_BGTEST_DUMP\":\"1\"}"
+  ios_wait_status "$out/dump" "$run" 30 true >/dev/null || return 1
+  mkdir -p "$d"
+  for f in backup-orders.db backup-orders.db-wal backup-orders.db-shm; do ios_copy_from "Documents/e2e/db/$f" "$d/$f" || true; done
+  [ -s "$d/backup-orders.db" ] || return 1
+  ios_orders_sql "$out" "SELECT media_id, state, source_missing, content_hash FROM orders ORDER BY id" >"$out/$2"
+}
+
+# 测试沙盒桌面（tools/ios/sandbox-desk.sh）—— desk_start / desk_qr / desk_ipc / desk_stop 等
+# shellcheck source=../../../ios/sandbox-desk.sh
+source "$REPO_ROOT/tools/ios/sandbox-desk.sh"
