@@ -92,7 +92,7 @@ judge() {
   check "源目录占盘不变（实测 $src_dir_bytes 字节，视频 $src_big + 图；只读未动）" bash -c "[ \"${src_dir_bytes:-0}\" -ge $((src_big + 10000)) ]"
   check "手机侧 provider blobs 增长远小于源大小（引用导入不复制字节；$before_blobs → $after_blobs)" bash -c "[ \$(( ${after_blobs:-0} - ${before_blobs:-0} )) -lt $(( src_big / 2 )) ]"
   check "App tmp 备份后基本清空（≤ 源大小 5%，$tmp_before → $tmp_after)" bash -c "[ \"${tmp_after:-0}\" -le $(( src_big / 20 + 1000000 )) ]"
-  check "桌面库 1x：媒体文件字节合计 $desk_bytes ≈ 源 $src_big（±缩略图内浮动）" bash -c "[ \"${desk_bytes:-0}\" -ge $(( src_big / 2 )) ] && [ \"${desk_bytes:-0}\" -le $(( src_big + 5000000 )) ]"
+  check "桌面库 1x：媒体文件字节合计 $desk_bytes ≈ 源 ${src_big}（浮动含图）" bash -c "[ \"${desk_bytes:-0}\" -ge $(( src_big / 2 )) ] && [ \"${desk_bytes:-0}\" -le $(( src_big + 5000000 )) ]"
   check "桌面收到 2 个媒体文件（视频+图）" bash -c "[ \"\$(wc -l <\"$d/desktop-files-after.txt\" | tr -d ' ')\" = 2 ]"
   check "崩溃后 GC 收敛：重启收场后 blobs 不高于基线（崩溃注入的临时产物被回收；$before_blobs → $after_blobs)" bash -c "[ \"${after_blobs:-0}\" -le $(( ${before_blobs:-0} + 1000000 )) ]"
   check "日志有崩溃前传输与重启后续传两个阶段的痕迹" bash -c "grep -q 'process start:' \"$d/ppass.log\" && grep -q 'folder .*: imported' \"$d/ppass.log\""
