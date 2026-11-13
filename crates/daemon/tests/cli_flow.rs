@@ -720,13 +720,14 @@ fn windows_resident_daemon_serves_on_the_user_pipe_without_any_token_file() {
         eprintln!("跳过：本平台常驻 daemon 不走命名管道");
         return;
     };
-    // 管道名由 windows_pipe::service_hosted() 决定：本进程是服务，或**本机装了服务**
-    // （is_installed），就是服务形态的 SERVICE_PIPE_NAME。客户端在服务形态下要求管道属主
-    // 是 NT SERVICE\P-Pass、服务端在会话 0，而这里拉起的是交互会话里的普通 daemon，
-    // 接不上——不是产品坏了，是这条用例的计划任务形态前提不成立（#1523）。
+    // 管道名由 windows_pipe::service_hosted() 决定：本进程是服务、**本机装了服务**
+    // （is_installed），或取不到本用户 SID 时回退成服务形态的 SERVICE_PIPE_NAME。
+    // 客户端在服务形态下要求管道属主是 NT SERVICE\P-Pass、服务端在会话 0，而这里拉起的
+    // 是交互会话里的普通 daemon，接不上——不是产品坏了，是这条用例的计划任务形态前提
+    // 不成立（#1523）。
     if pipe == "ppf-svc" {
         eprintln!(
-            "跳过：{pipe} 是服务形态的管道（本机装了 P-Pass 服务），本条用例测的是计划任务形态"
+            "跳过：{pipe} 是服务形态的管道（本机装了 P-Pass 服务，或取不到本用户 SID 时的回退），本条用例测的是计划任务形态"
         );
         return;
     }
