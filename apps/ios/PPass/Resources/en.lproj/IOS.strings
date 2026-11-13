@@ -52,6 +52,9 @@
 
 "state_waiting_local_storage_full" = "This phone is out of storage. Free up space to resume backup.";
 
+/* PPassCore WaitReason.sourceUnavailable (#1731): a backup source (e.g. an authorized folder) cannot be accessed right now. */
+"state_waiting_source_unavailable" = "A backup source is temporarily unavailable. Backup resumes once it is accessible again.";
+
 /* #975：iOS 系统授权框只弹一次，被拒后只能去系统设置（Android 会再弹一次申请框）。 */
 "rule_notify_denied_hint" = "Notifications are off in system Settings. Tap the switch to open Settings.";
 

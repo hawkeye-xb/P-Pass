@@ -430,8 +430,8 @@ final class FlowEngineIOSTests: XCTestCase {
     func testEveryWaitReasonRegistersTheRightWake() {
         for reason in WaitReason.allCases {
             switch wakePlanOf(reason) {
-            // #1069：手机上的 P-Pass 太旧只能等用户更新。
-            case .awaitsUser: XCTAssertTrue([.notPaired, .disabled, .phoneOutdated].contains(reason), "\(reason)")
+            // #1069：手机上的 P-Pass 太旧只能等用户更新。#1731：来源不可用要用户回到 App 重新授权。
+            case .awaitsUser: XCTAssertTrue([.notPaired, .disabled, .phoneOutdated, .sourceUnavailable].contains(reason), "\(reason)")
             case let .whenConditionsMet(r): XCTAssertEqual(r, reason); XCTAssertTrue([.wifi, .battery].contains(reason))
             case .retryProbes: XCTAssertFalse([.notPaired, .disabled, .wifi, .battery, .phoneOutdated].contains(reason))
             }

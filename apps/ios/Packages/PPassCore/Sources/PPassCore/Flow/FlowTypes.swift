@@ -170,6 +170,9 @@ public func wakePlanOf(_ reason: WaitReason) -> WakePlan {
     case .originalUnavailable: return .retryProbes
     // #911：空间释放没有系统事件可等；探测梯 + 回前台 / 周期兜底接住。
     case .localStorageFull: return .retryProbes
+    // #1731：来源整体不可用（目录授权失效）等的是用户回到 App 重新授权——没有系统事件可等；
+    // 回前台就是一次触发（重新授权后下一轮对账接住）。
+    case .sourceUnavailable: return .awaitsUser
     }
 }
 
@@ -241,6 +244,14 @@ public struct MediaDetails: Equatable, Sendable {
 /// 版本变了」同一条路：G 重置到当前位置、对账扫描置脏，已有照片交给扫描（按内容哈希去重收敛）。
 public struct DiscoveryCursorExpired: Error, Equatable, Sendable {
     public init() {}
+}
+
+/// 一个**来源**此刻整体不可用（目录来源的根授权失效/被撤、根不可达；#1731 ADR）。不是某一张的问题：
+/// 引擎的处置是**整条 Flow 等待**——不推进 G/S、不写 sourceMissing、不计单张失败、在途 order 原样不动。
+/// `reason` 只进日志，不含路径（审计不携带目录结构）。
+public struct SourceUnavailable: Error, Equatable, Sendable {
+    public let reason: String
+    public init(reason: String) { self.reason = reason }
 }
 
 /// 媒体源（只读元数据、不读文件、不联系桌面）。对位 Android `MediaSnapshotSource`。

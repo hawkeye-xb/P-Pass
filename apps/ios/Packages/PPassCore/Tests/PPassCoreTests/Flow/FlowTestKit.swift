@@ -100,7 +100,11 @@ final class FakeMedia: MediaSource, @unchecked Sendable {
         MediaSnapshot(mediaId: p.mediaId, sourceVersion: p.sourceVersion, bucketId: p.bucket, position: position)
     }
 
+    /// #1731：设了就由 inScope 对账扫描抛这个错（枚举中途失败/授权失效）；nil = 照常。
+    let scanThrows = Locked<Error?>(nil)
+
     func inScope(after: String?, limit: Int) async throws -> [MediaSnapshot] {
+        if let e = scanThrows.get() { throw e }
         metadataReads.update { $0 += 1 }
         let s = state.get()
         let rows = s.photos
@@ -129,7 +133,11 @@ final class FakeMedia: MediaSource, @unchecked Sendable {
 
     func libraryIdentity() async throws -> String? { state.get().identity }
 
+    /// #1731：设了就由 lookup 抛这个错（来源整体不可用）；nil = 照常。
+    let lookupThrows = Locked<Error?>(nil)
+
     func lookup(_ mediaId: String) async throws -> MediaDetails? {
+        if let e = lookupThrows.get() { throw e }
         guard let p = state.get().photos.first(where: { MediaOrder.same($0.mediaId, mediaId) }) else { return nil }
         return MediaDetails(snapshot: snapshot(p), fileName: "IMG_\(p.n).HEIC", mimeType: p.video ? "video/quicktime" : "image/heic", sizeBytes: sizeUnknownBeforeImport.get() ? 0 : p.size, captureAtMs: 0)
     }

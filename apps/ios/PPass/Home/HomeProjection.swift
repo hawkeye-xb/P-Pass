@@ -273,6 +273,7 @@ enum HomeProjection {
         case .desktopInternal: return "state_waiting_desktop_internal"
         case .phoneOutdated: return "state_waiting_phone_outdated"
         case .desktopOutdated: return "state_waiting_desktop_outdated"
+        case .sourceUnavailable: return "state_waiting_source_unavailable"
         }
     }
 }
