@@ -1213,6 +1213,8 @@ public actor FlowEngine {
         let settled = try store.transition(order.id, expected: OrderState.open, to: .skippedSourceMissing, countAttempt: false, contentHash: nil, advance: nil, scanTo: nil, audit: record)
         if settled {
             countOutcome(record)
+            // #1731：这一行的内容不再需要（源缺失结案）——放掉导入的引用（#1753：全部出口清理）。
+            if let hash = order.contentHash { importer.release(hash) }
             if discard { await delivery.discardPartial(orderId: order.id, pairingId: order.pairingId) }
             bump()
         }
@@ -1272,6 +1274,9 @@ public actor FlowEngine {
                 if try store.transition(order.id, expected: [.transferring], to: .confirmed, countAttempt: false, contentHash: nil, advance: progress.advance, scanTo: progress.scanTo, audit: record) {
                     countOutcome(record)
                     doneThisRound += 1
+                    // #1731：桌面已收下这份内容（对过 receipt）——放掉导入的引用（#1753：全部出口清理，
+                    // FolderImporter 的安全作用域由这一步关掉；release 幂等，PhotoImporter 的临时文件同样清）。
+                    importer.release(hash)
                     onSettled()
                     recovered("a photo was confirmed")
                 }
