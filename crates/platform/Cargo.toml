@@ -24,6 +24,12 @@ tracing.workspace = true
 tokio = { version = "1", features = ["signal", "rt", "time"] }
 # #1115：IPC 对端身份——接 daemon / 桌面壳手里的 interprocess 连接（同一版本）。
 interprocess = { version = "2", features = ["tokio"] }
+# #1730：视频首帧解码子进程（ppf-video-decoder）与 daemon 共用的线协议在
+# decode-worker；本 crate 只用它的 proto 模块（静态图解码不在本 crate）。
+decode-worker = { path = "../decode-worker" }
+# #1730：视频首帧按 max_edge 缩放（RGBA 缩略图）。只用到核心类型与 thumbnail，
+# 关 default features 去掉编解码器（本 crate 不读不写图片文件）。
+image = { version = "0.25", default-features = false }
 
 # QA-09 迁移（#211）：statvfs（卷容量水位 / DAE-05）。原先这个调用长在
 # crates/daemon 里，libc 也声明在那边；迁进来之后 daemon 不再需要它。
@@ -135,6 +141,10 @@ windows = { version = "0.62", features = [
   "Win32_System_TaskScheduler",
   "Win32_System_Ole",
   "Win32_System_Variant",
+  # #1730：视频首帧解码——IMFSourceReader / IMFMediaBuffer（Media Foundation）。
+  "Win32_Media_MediaFoundation",
+  # #1730：内存字节 → HGLOBAL → IStream（GlobalAlloc/GlobalLock/GlobalUnlock）。
+  "Win32_System_Memory",
 ] }
 
 [dev-dependencies]

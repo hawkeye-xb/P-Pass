@@ -6,13 +6,27 @@
 #![allow(clippy::disallowed_methods)]
 
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use media_codec::{decode_video, CodecError};
+
+/// 串行化对 `PPF_VIDEO_DECODE_WORKER` 的读写：cargo test 默认并行跑，
+/// 一个测试改环境变量会污染另一个测试的 worker 解析（与 sandbox.rs 同款）。
+static ENV: Mutex<()> = Mutex::new(());
 
 fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(name)
+}
+
+/// 本平台没有视频解码能力时跳过（不写 `#[cfg]`，问 platform 的能力接口，B.2）。
+fn skip_if_no_video_decode() -> bool {
+    if platform::video_decode::video_decode_available() {
+        return false;
+    }
+    eprintln!("本平台无视频解码能力（非 Windows），跳过");
+    true
 }
 
 /// 断言像素不是纯色占位块（真实画面至少有不同颜色）。
@@ -25,11 +39,10 @@ fn assert_non_flat(img: &image::DynamicImage) {
 
 #[test]
 fn video_decoder_decodes_first_frame() {
-    #[cfg(not(windows))]
-    {
-        eprintln!("非 Windows：视频 decoder 是桩，跳过");
+    if skip_if_no_video_decode() {
         return;
     }
+    let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
     let img = decode_video(&fixture("tiny.mp4")).expect("视频 decoder 应能解 H.264 MP4 首帧");
     assert_eq!((img.width(), img.height()), (64, 48), "fixture 是 64x48");
     assert_non_flat(&img);
@@ -37,11 +50,10 @@ fn video_decoder_decodes_first_frame() {
 
 #[test]
 fn video_decoder_malformed_input_is_a_file_level_failure() {
-    #[cfg(not(windows))]
-    {
-        eprintln!("非 Windows：视频 decoder 是桩，跳过");
+    if skip_if_no_video_decode() {
         return;
     }
+    let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("bad.mp4");
     std::fs::write(&p, b"this is not an mp4 at all").unwrap();
@@ -51,6 +63,7 @@ fn video_decoder_malformed_input_is_a_file_level_failure() {
 
 #[test]
 fn video_decoder_missing_worker_is_unavailable() {
+    let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("clip.mp4");
     std::fs::write(&p, b"whatever").unwrap();

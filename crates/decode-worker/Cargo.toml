@@ -8,14 +8,11 @@ publish = false
 # 解码子进程 `ppf-decoder` 及其与 daemon 之间的协议。
 # 刻意只依赖 image + libheif-rs：不链 platform / 任何 UI 系统库，
 # 子进程才能在 Windows 上开 win32k lockdown 起得来。
+# 视频首帧解码（ppf-video-decoder）不在这里：它要 Media Foundation，
+# 属平台实现，在 crates/platform/src/video_decode.rs（B.2/G5）。
 [[bin]]
 name = "ppf-decoder"
 path = "src/bin/ppf-decoder.rs"
-
-# 视频首帧解码子进程（仅 Windows 有真实实现，非 Windows 端编译为桩）。
-[[bin]]
-name = "ppf-video-decoder"
-path = "src/bin/ppf-video-decoder.rs"
 
 [features]
 # 从源码编 libheif 进二进制（自包含分发；默认走系统库，开发/CI 构建快）。
@@ -27,17 +24,6 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 libheif-rs = { version = "2", default-features = false, features = ["v1_17"] }
 
 thiserror.workspace = true
-
-# 视频首帧：Media Foundation（高层 COM 绑定，与 platform 同款；windows-sys 裸 FFI
-# 做 COM 要手搓 vtable，成本远高于收益）。只链 Media + COM + 内存，不链 UI。
-[target.'cfg(windows)'.dependencies]
-windows = { version = "0.62", features = [
-  "Win32_Foundation",
-  "Win32_System_Com",
-  "Win32_System_Com_StructuredStorage",
-  "Win32_System_Memory",
-  "Win32_Media_MediaFoundation",
-] }
 
 [dev-dependencies]
 tempfile = "3"

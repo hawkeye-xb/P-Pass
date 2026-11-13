@@ -1,21 +1,115 @@
-//! Windows 视频首帧解码：Media Foundation 从内存字节解 H.264 MP4 的首帧。
+//! 视频首帧解码（Media Foundation，仅 Windows）。
 //!
-//! 只认 H.264/AVC 的 mp4/m4v；输入是内存字节（stdin 已经读进来的），输出是
-//! RGBA 像素。与静态图 `decode.rs` 一样，本模块不碰文件系统、不碰 platform。
+//! 这是 `ppf-video-decoder` 子进程的全部逻辑：从 stdin 读 H.264 MP4 字节，
+//! 用 Media Foundation 解首帧，把按 `max_edge` 缩好的 RGBA 像素写回 stdout。
+//! 线协议与 `ppf-decoder` 共用 `decode_worker::proto`（`KIND_VIDEO`）。
 //!
-//! 为什么用 NV12 而不是直接要 RGB32：本机 MF 对 `SetCurrentMediaType(RGB32)`
-//! 返回 `0xC00D36B4 MF_E_INVALIDMEDIATYPE`（见 #1730 探针 results.md），所以
-//! 请求解码器原生输出的 NV12，再在这里转 RGBA。
+//! 平台分叉只在这里（B.2/G5 的家）：Windows 走 Media Foundation，其它平台
+//! 返回 [`VideoDecodeError::Unsupported`]。调用方（daemon 侧 `media-codec`）
+//! 通过 [`video_decode_available`] 判断本平台有没有这条路，不写 `#[cfg]`。
 
-use crate::decode::DecodeError;
+use std::io::{Read, Write};
 
-fn failed(e: impl ToString) -> DecodeError {
-    DecodeError::Failed(e.to_string())
+use decode_worker::proto::{self, Response, STATUS_DECODE_FAILED, STATUS_REJECTED};
+
+/// 视频首帧解码错误。
+#[derive(Debug, thiserror::Error)]
+pub enum VideoDecodeError {
+    /// 本平台没有视频解码能力（非 Windows）。
+    #[error("video decode unsupported on this platform")]
+    Unsupported,
+    /// 内容解不开（损坏 / 容器或编码不支持）。
+    #[error("decode failed: {0}")]
+    Failed(String),
+    /// 超出尺寸等上限，被主动拒绝。
+    #[error("rejected: {0}")]
+    Rejected(String),
 }
 
-/// 从 MP4 字节解第一帧，返回 (宽, 高, RGBA8)。
-#[cfg(target_os = "windows")]
-pub fn decode_video_frame(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), DecodeError> {
+fn failed(e: impl ToString) -> VideoDecodeError {
+    VideoDecodeError::Failed(e.to_string())
+}
+
+/// 本平台有没有原生视频解码能力（仅 Windows 的 Media Foundation）。
+pub fn video_decode_available() -> bool {
+    cfg!(windows)
+}
+
+/// 从 H.264 MP4 字节解第一帧，返回 (宽, 高, RGBA8)。
+/// 非 Windows 平台返回 [`VideoDecodeError::Unsupported`]。
+pub fn decode_video_frame(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), VideoDecodeError> {
+    #[cfg(windows)]
+    {
+        decode_video_frame_windows(bytes)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = bytes;
+        Err(VideoDecodeError::Unsupported)
+    }
+}
+
+/// `ppf-video-decoder` 的主流程：读一个视频请求，写一个应答。
+/// 与 `decode_worker::run` 的差别只在「解码」这一步换成 Media Foundation。
+pub fn run_video(input: &mut impl Read, output: &mut impl Write) -> Result<(), proto::ProtoError> {
+    let req = proto::read_request_header(input)?;
+    let mut payload = Vec::new();
+    let got = input.take(req.payload_len).read_to_end(&mut payload)?;
+    if got as u64 != req.payload_len {
+        return Err(proto::ProtoError::Bad(
+            "payload shorter than declared".into(),
+        ));
+    }
+    let resp = match decode_video_frame(&payload) {
+        Ok((w, h, rgba)) => {
+            drop(payload);
+            let mut img = image::RgbaImage::from_raw(w, h, rgba)
+                .ok_or_else(|| proto::ProtoError::Bad("pixel buffer rejected".into()))?;
+            if img.width() > req.max_edge || img.height() > req.max_edge {
+                let scaled = image::DynamicImage::ImageRgba8(img)
+                    .thumbnail(req.max_edge, req.max_edge)
+                    .to_rgba8();
+                img = scaled;
+            }
+            Response::Pixels {
+                width: img.width(),
+                height: img.height(),
+                rgba: img.into_raw(),
+            }
+        }
+        Err(VideoDecodeError::Unsupported) => Response::Failed {
+            status: STATUS_DECODE_FAILED,
+            msg: "video decode unsupported on this platform".into(),
+        },
+        Err(VideoDecodeError::Failed(msg)) => Response::Failed {
+            status: STATUS_DECODE_FAILED,
+            msg,
+        },
+        Err(VideoDecodeError::Rejected(msg)) => Response::Failed {
+            status: STATUS_REJECTED,
+            msg,
+        },
+    };
+    proto::write_response(output, &resp)
+}
+
+/// `ppf-video-decoder` 的入口：stdin/stdout 即协议管道。
+pub fn main_stdio() -> i32 {
+    let stdin = std::io::stdin();
+    let stdout = std::io::stdout();
+    match run_video(&mut stdin.lock(), &mut stdout.lock()) {
+        Ok(()) => 0,
+        Err(_) => 2,
+    }
+}
+
+/// Windows 实现：Media Foundation 从内存字节解 H.264 MP4 首帧。
+///
+/// 为什么用 NV12 而不是直接要 RGB32：本机 MF 对 `SetCurrentMediaType(RGB32)`
+/// 返回 `0xC00D36B4 MF_E_INVALIDMEDIATYPE`（见 #1730 探针 results.md），所以
+/// 请求解码器原生输出的 NV12，再在这里转 RGBA。
+#[cfg(windows)]
+fn decode_video_frame_windows(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), VideoDecodeError> {
     use windows::Win32::Media::MediaFoundation::{
         IMFMediaBuffer, IMFMediaType, IMFSourceReader, MFCreateMFByteStreamOnStream,
         MFCreateMediaType, MFCreateSourceReaderFromByteStream, MFMediaType_Video, MFStartup,
@@ -85,7 +179,9 @@ pub fn decode_video_frame(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), DecodeErr
     let w = (fs >> 32) as u32;
     let h = (fs & 0xffff_ffff) as u32;
     if w == 0 || h == 0 || w > 16_384 || h > 16_384 {
-        return Err(DecodeError::Rejected(format!("bad frame size {w}x{h}")));
+        return Err(VideoDecodeError::Rejected(format!(
+            "bad frame size {w}x{h}"
+        )));
     }
     let stride = unsafe { cur.GetUINT32(&MF_MT_DEFAULT_STRIDE) }.unwrap_or(w) as usize;
     let stride = stride.max(w as usize);
@@ -126,7 +222,7 @@ pub fn decode_video_frame(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), DecodeErr
     let need = stride * h + stride * (h / 2);
     if (curlen as usize) < need {
         let _ = unsafe { buffer.Unlock() };
-        return Err(DecodeError::Rejected(format!(
+        return Err(VideoDecodeError::Rejected(format!(
             "NV12 buffer too short: got {curlen}, need {need}"
         )));
     }
@@ -140,14 +236,8 @@ pub fn decode_video_frame(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), DecodeErr
     Ok((w as u32, h as u32, rgba))
 }
 
-/// 非 Windows：视频解码只在 Windows 上实现，桩返回失败。
-#[cfg(not(target_os = "windows"))]
-pub fn decode_video_frame(_bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), DecodeError> {
-    Err(DecodeError::Failed("video decode is Windows-only".into()))
-}
-
 /// NV12 → RGBA（BT.601 有限范围，固定点整数近似）。缩略图用途，精度足够。
-#[cfg(target_os = "windows")]
+#[cfg(windows)]
 fn nv12_to_rgba(y: &[u8], uv: &[u8], stride: usize, w: usize, h: usize) -> Vec<u8> {
     let mut out = vec![0u8; w * h * 4];
     for r in 0..h {
