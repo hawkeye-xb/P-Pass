@@ -24,7 +24,8 @@ pub mod video;
 pub use ffmpeg::{extract_frame, ffmpeg_path};
 pub use pool::{ThumbGenerator, ThumbPool};
 pub use sandbox::{
-    decode_image, decode_image_within, decode_video, decode_video_within, DECODE_MAX_EDGE,
+    decode_image, decode_image_within, decode_video, decode_video_with_limits, decode_video_within,
+    DECODE_MAX_EDGE,
 };
 pub use thumb::{
     make_thumbs, placeholder_jpeg, thumb_paths, ThumbOutcome, ThumbPaths, ThumbResult,

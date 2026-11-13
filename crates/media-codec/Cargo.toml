@@ -37,3 +37,10 @@ thread-priority = "3"
 # Atomic thumb writes (temp file + rename) and ffmpeg frame staging.
 tempfile = "3"
 thiserror.workspace = true
+
+# 视频 decoder 超时 / 内存上限的对抗实测：子进程就是本测试二进制自己（环境变量
+# 分流），所以不用 libtest harness。
+[[test]]
+name = "video_limits"
+path = "tests/video_limits.rs"
+harness = false

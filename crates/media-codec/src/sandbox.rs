@@ -38,6 +38,7 @@ pub fn decode_image(path: &Path) -> Result<DynamicImage> {
         proto::KIND_STILL,
         platform::isolated::decoder_worker_path(),
         true,
+        WORKER_MEMORY,
     )
 }
 
@@ -50,6 +51,7 @@ pub fn decode_image_within(path: &Path, deadline: Duration) -> Result<DynamicIma
         proto::KIND_STILL,
         platform::isolated::decoder_worker_path(),
         true,
+        WORKER_MEMORY,
     )
 }
 
@@ -62,6 +64,7 @@ pub fn decode_video(path: &Path) -> Result<DynamicImage> {
         proto::KIND_VIDEO,
         platform::isolated::video_decoder_worker_path(),
         false,
+        WORKER_MEMORY,
     )
 }
 
@@ -74,6 +77,25 @@ pub fn decode_video_within(path: &Path, deadline: Duration) -> Result<DynamicIma
         proto::KIND_VIDEO,
         platform::isolated::video_decoder_worker_path(),
         false,
+        WORKER_MEMORY,
+    )
+}
+
+/// 同 [`decode_video`]，时限与内存上限都可调（生命周期测试用：证明视频路径受
+/// 同一 watchdog / Job 内存上限约束）。
+#[doc(hidden)]
+pub fn decode_video_with_limits(
+    path: &Path,
+    deadline: Duration,
+    memory_bytes: u64,
+) -> Result<DynamicImage> {
+    decode_with(
+        path,
+        deadline,
+        proto::KIND_VIDEO,
+        platform::isolated::video_decoder_worker_path(),
+        false,
+        memory_bytes,
     )
 }
 
@@ -83,6 +105,7 @@ fn decode_with(
     kind: u8,
     worker_path: Option<std::path::PathBuf>,
     win32k_lockdown: bool,
+    memory_bytes: u64,
 ) -> Result<DynamicImage> {
     let decode_err = |msg: String| CodecError::Decode {
         path: path.to_path_buf(),
@@ -115,7 +138,7 @@ fn decode_with(
     let mut child = platform::isolated::spawn_isolated(
         &worker,
         &platform::isolated::Limits {
-            memory_bytes: WORKER_MEMORY,
+            memory_bytes,
             win32k_lockdown,
         },
     )
