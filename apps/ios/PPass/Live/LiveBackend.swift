@@ -162,10 +162,27 @@ final class LiveBackend: @unchecked Sendable {
         let audit = AuditOutboxDispatcher(
             store: orders, desktop: FlowWiring.auditDesktop(store: pairingStore, desktop: desktop),
             acknowledge: { ids in await engineBox.engine?.acknowledgeAudit(ids) })
+        // #1731：目录来源（ADR 已采纳）——首版不接 UI，没有已登记目录时用 nil 占位（Composite 装配单 PhotoKit 源）。
+        // 有登记目录时经 Composite 装配（统一的取件路径，PhotoKit 行为不回归）；目录发现走 reconcile 轮。
+        let folderSources = FolderRegistry(directory: dir, logger: logger).allRecords()
+        let compositeMedia: MediaSource
+        let compositeImporter: MediaImporter
+        if folderSources.isEmpty {
+            compositeMedia = PhotoMediaSource(selected: scope, since: since, inbox: inbox, log: { logger.log($0) })
+            compositeImporter = PhotoImporter(provider: provider, tempRoot: fm.temporaryDirectory.appendingPathComponent("ppass-originals"),
+                                              pickedRoot: fm.temporaryDirectory.appendingPathComponent(OriginalCachePaths.pickedScratchDirName))
+        } else {
+            let photoSource = PhotoMediaSource(selected: scope, since: since, inbox: inbox, log: { logger.log($0) })
+            let folderSource = FolderMediaSource(registry: FolderRegistry(directory: dir, logger: logger), sourceId: folderSources[0].id, directory: dir, logger: logger)
+            compositeMedia = CompositeMediaSource(library: photoSource, others: [folderSource])
+            let photoImporter = PhotoImporter(provider: provider, tempRoot: fm.temporaryDirectory.appendingPathComponent("ppass-originals"),
+                                              pickedRoot: fm.temporaryDirectory.appendingPathComponent(OriginalCachePaths.pickedScratchDirName))
+            let folderImporter = FolderImporter(registry: FolderRegistry(directory: dir, logger: logger), sourceId: folderSources[0].id, directory: dir, provider: provider, logger: logger)
+            compositeImporter = CompositeImporter(library: photoImporter, others: [folderImporter])
+        }
         engine = FlowEngine(
-            store: orders, media: PhotoMediaSource(selected: scope, since: since, inbox: inbox, log: { logger.log($0) }),
-            importer: PhotoImporter(provider: provider, tempRoot: fm.temporaryDirectory.appendingPathComponent("ppass-originals"),
-                                    pickedRoot: fm.temporaryDirectory.appendingPathComponent(OriginalCachePaths.pickedScratchDirName)),
+            store: orders, media: compositeMedia,
+            importer: compositeImporter,
             delivery: delivery,
             probe: PrewarmingProbe(provider: provider,
                                    inner: ControlPlaneProbe(currentPairingId: pairingId, desktop: desktop, logger: logger, pairingLoss: pairingLoss),
@@ -175,7 +192,12 @@ final class LiveBackend: @unchecked Sendable {
                 Conditions(paired: pairingId() != nil, autoBackupEnabled: autoPrefs.enabled(), wifiOnly: settings.wifiOnly(),
                            onUnmetered: !network.isExpensive, batteryLow: BatteryState.isLow)
             },
-            inScope: { PhotoMediaSource.inScope(bucketId: $0, selected: scope(), since: since()) },
+            inScope: { bucketId in
+                // #1731：目录来源绕过共享 since 时间档（ADR §4：Folder 的范围判断不看 PhotoKit 的时间档）；
+                // PhotoKit 走现有 ScopeKey.inScope。folder:<sourceId> 前缀由 FolderMediaSource.bucketId 生成。
+                if bucketId.hasPrefix("folder:") { return true }
+                return PhotoMediaSource.inScope(bucketId: bucketId, selected: scope(), since: since())
+            },
             mediaAbsenceTrusted: { media.access() == .full },
             pairingId: pairingId, logger: logger,
             afterCycle: FlowWiring.afterCycle(dispatcher: audit),
