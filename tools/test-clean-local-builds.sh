@@ -207,8 +207,15 @@ fi
 
 # …only when asked for explicitly and nobody is inside it (counter-proof that
 # the skips are the new rules, not something else keeping the fixture alive).
+# 无 lsof 时脚本判不了「没人占用」→ 安全拒删，目录必须在、且输出写明拒删原因；
+# 有 lsof 时能判 → 原删除断言不变（CI ubuntu 走这里，不弱化）。
 session_apply=$(cd "$repo" && bash "$cleanup_script" --apply --worktrees --session-worktrees)
-[[ ! -d "$repo/.claude/worktrees/session" ]] || fail "--session-worktrees did not remove the merged session worktree: $session_apply"
+if command -v lsof >/dev/null 2>&1; then
+  [[ ! -d "$repo/.claude/worktrees/session" ]] || fail "--session-worktrees did not remove the merged session worktree: $session_apply"
+else
+  [[ -d "$repo/.claude/worktrees/session" ]] || fail "--session-worktrees removed a session worktree it could not prove unused (no lsof): $session_apply"
+  [[ "$session_apply" == *"cannot tell whether this session worktree is in use"* ]] || fail "safe refusal not reported without lsof: $session_apply"
+fi
 
 if command -v lsof >/dev/null 2>&1; then
   # #1490: a file held open inside the cache (a build using it) blocks the sweep.
