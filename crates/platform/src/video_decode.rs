@@ -115,22 +115,6 @@ fn decode_video_frame_windows(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), Video
             .map_err(|e| failed(format!("SetCurrentMediaType(NV12): {}", e.message())))?;
     }
 
-    // 协商后的解码帧尺寸 / 步长。
-    let cur: IMFMediaType = unsafe { reader.GetCurrentMediaType(FIRST_VIDEO) }
-        .map_err(|e| failed(format!("GetCurrentMediaType: {}", e.message())))?;
-    let fs = unsafe { cur.GetUINT64(&MF_MT_FRAME_SIZE) }.unwrap_or(0);
-    let w = (fs >> 32) as u32;
-    let h = (fs & 0xffff_ffff) as u32;
-    if w == 0 || h == 0 || w > 16_384 || h > 16_384 {
-        return Err(VideoDecodeError::Rejected(format!(
-            "bad frame size {w}x{h}"
-        )));
-    }
-    let stride = unsafe { cur.GetUINT32(&MF_MT_DEFAULT_STRIDE) }.unwrap_or(w) as usize;
-    let stride = stride.max(w as usize);
-    // 手机拍的 MP4 常把旋转存在容器元数据里（MF_MT_VIDEO_ROTATION，0/90/180/270）。
-    let rotation = unsafe { cur.GetUINT32(&MF_MT_VIDEO_ROTATION) }.unwrap_or(0);
-
     // 有界读取：源读取器可能先回「暂无样本」事件，跳过后重试，最多 N 次；超过仍
     // 无帧才失败（daemon 侧还有整体 watchdog 兜底，不会死循环）。
     const MAX_READ_ATTEMPTS: usize = 16;
@@ -164,6 +148,22 @@ fn decode_video_frame_windows(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), Video
     let sample =
         sample.ok_or_else(|| failed(format!("no sample after {MAX_READ_ATTEMPTS} attempts")))?;
 
+    // 首帧实际格式：ReadSample 之后 MF 可能改输出格式（尺寸/stride/旋转），所以这里
+    // **在拿到样本后**再读一次当前媒体类型，后续 need 校验、NV12 布局与旋转都用这一份
+    // 新鲜值，不沿用 SetCurrentMediaType 之前那次协商的旧值。
+    let cur: IMFMediaType = unsafe { reader.GetCurrentMediaType(FIRST_VIDEO) }.map_err(|e| {
+        failed(format!(
+            "GetCurrentMediaType(after sample): {}",
+            e.message()
+        ))
+    })?;
+    let fs = unsafe { cur.GetUINT64(&MF_MT_FRAME_SIZE) }.unwrap_or(0);
+    let stride_raw = unsafe { cur.GetUINT32(&MF_MT_DEFAULT_STRIDE) }.unwrap_or(0);
+    // 手机拍的 MP4 常把旋转存在容器元数据里（MF_MT_VIDEO_ROTATION，0/90/180/270）。
+    let rotation = unsafe { cur.GetUINT32(&MF_MT_VIDEO_ROTATION) }.unwrap_or(0);
+    let (w, h, stride, rotation) = frame_geometry(fs, stride_raw, rotation)
+        .ok_or_else(|| VideoDecodeError::Rejected(format!("bad frame size {fs:#018x}")))?;
+
     let buffer: IMFMediaBuffer = unsafe { sample.GetBufferByIndex(0) }
         .map_err(|e| failed(format!("GetBufferByIndex: {}", e.message())))?;
     let mut pb: *mut u8 = std::ptr::null_mut();
@@ -174,7 +174,6 @@ fn decode_video_frame_windows(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), Video
             .Lock(&mut pb, Some(&mut _maxlen), Some(&mut curlen))
             .map_err(|e| failed(format!("Lock: {}", e.message())))?;
     }
-    let (w, h) = (w as usize, h as usize);
     // NV12 布局：Y 平面在前（stride × h），UV 交错平面在后（同 stride，半高）。
     let need = stride * h + stride * (h / 2);
     if (curlen as usize) < need {
@@ -192,6 +191,19 @@ fn decode_video_frame_windows(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), Video
     drop(sample);
     let (w, h, rgba) = rotate_rgba(w, h, rgba, rotation);
     Ok((w as u32, h as u32, rgba))
+}
+
+/// 从媒体类型的原始值解析解码帧几何：返回 (宽, 高, stride, 旋转)。
+/// `MF_MT_FRAME_SIZE` 高位=宽、低位=高；stride 不足宽时按宽兜底；尺寸非法返回 None。
+#[cfg(windows)]
+fn frame_geometry(fs: u64, stride_raw: u32, rotation: u32) -> Option<(usize, usize, usize, u32)> {
+    let w = (fs >> 32) as u32;
+    let h = (fs & 0xffff_ffff) as u32;
+    if w == 0 || h == 0 || w > 16_384 || h > 16_384 {
+        return None;
+    }
+    let stride = (stride_raw as usize).max(w as usize);
+    Some((w as usize, h as usize, stride, rotation))
 }
 
 /// 按容器旋转元数据（0/90/180/270，顺时针）旋转 RGBA。90/270 会交换宽高。
@@ -261,7 +273,25 @@ fn nv12_to_rgba(y: &[u8], uv: &[u8], stride: usize, w: usize, h: usize) -> Vec<u
 
 #[cfg(all(test, windows))]
 mod tests {
-    use super::rotate_rgba;
+    use super::{frame_geometry, rotate_rgba};
+
+    /// 首帧实际几何：从媒体类型原始值解析尺寸/stride/旋转，非法尺寸拒。
+    #[test]
+    fn frame_geometry_parses_size_stride_rotation() {
+        // MF_MT_FRAME_SIZE 高位=宽、低位=高（64×48 → 0x0040_0030）。
+        let fs = (64u64 << 32) | 48;
+        let (w, h, stride, rot) = frame_geometry(fs, 64, 90).unwrap();
+        assert_eq!((w, h, stride, rot), (64, 48, 64, 90));
+
+        // stride 不足宽 → 按宽兜底。
+        let (w, h, stride, rot) = frame_geometry(fs, 0, 0).unwrap();
+        assert_eq!((w, h, stride, rot), (64, 48, 64, 0));
+
+        // 尺寸为 0 或超上限 → None。
+        assert!(frame_geometry(0, 0, 0).is_none());
+        assert!(frame_geometry((16_385u64 << 32) | 1, 0, 0).is_none());
+        assert!(frame_geometry(64u64 << 32, 0, 0).is_none()); // h=0
+    }
 
     /// 像素 = [R,G,B,A]，用两个明显不同的像素验证旋转方向。
     #[test]
