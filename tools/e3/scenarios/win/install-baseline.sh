@@ -103,9 +103,16 @@ counter() {
   # 故障条件：清场没清掉注册表（去掉清理逻辑时的机器状态，或非管理员会话删不掉）——
   # judge 的「安装前没有残留的 HKLM 卸载登记」必须变红。
   echo "counter: 清场没清掉 HKLM 卸载登记（故障注入）" >"$d/note.txt"
-  COUNTER_REG_INJECTED=1
-  win_ps "New-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass' -Force | Out-Null; New-Item -Path 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass' -Force | Out-Null" >/dev/null 2>&1 ||
-    { echo "注入 HKLM 卸载登记失败（需要管理员权限）"; return 1; }
+  COUNTER_REG_INJECTED=0
+  if win_is_elevated; then
+    win_ps "New-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass' -Force | Out-Null; New-Item -Path 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass' -Force | Out-Null" >/dev/null 2>&1 ||
+      { echo "注入 HKLM 卸载登记失败"; return 1; }
+    COUNTER_REG_INJECTED=1
+  else
+    # 非管理员造不出 HKLM 残留（真残留时 setup 已经按清场失败停下）。
+    # 这条注入只在管理员会话跑；本机仍用「不启动 App」让其它判据变红。
+    echo "counter: 非管理员会话，跳过 HKLM 注入" >>"$d/note.txt"
+  fi
   # 去掉触发条件：不启动 App、daemon 也停掉，向导不会走，判据应全红。
   win_stop_app
   win_ps "Get-Process ppf-daemon -ErrorAction SilentlyContinue | Stop-Process -Force" >/dev/null 2>&1 || true
