@@ -19,6 +19,9 @@ ADR，验收人拍板后再拆卡实现。代码注释里出现的 ADR-003、ADR
 | 2026-11-09 | [服务启停与自启纳入核心名单](2026-11-09-core-paths-service-lifecycle.md) | 已采纳 |
 | 2026-11-09 | [Windows 服务形态：「启动后台服务」必须真的启动](2026-11-09-windows-service-start.md) | 已采纳 |
 | 2026-11-10 | [CI 与发布链外部下载的韧性与缓存](2026-11-10-ci-download-resilience.md) | 已采纳 |
+| 2026-11-12 | [升级 sqlx 0.9 修复 bundled SQLite 的 CVE](2026-11-12-sqlx-0.9-cve.md) | 已采纳 |
+| 2026-11-12 | [发版不冻结合入：删掉「main 前进就拒绝」的守卫](2026-11-12-release-no-merge-freeze.md) | 已采纳 |
+| 2026-11-12 | [两个 Release run 重叠：test 发布按 test-channel 全局串行排队](2026-11-12-release-test-channel-concurrency.md) | 已采纳 |
 | 2026-11-13 | [本地授权目录作为照片和视频备份来源](2026-11-13-local-folder-media-source.md) | 已采纳 |
 
 ## 写法
