@@ -6,7 +6,9 @@ import Foundation
 import PPassCore
 import PPassTransport
 
-final class FolderImporter: MediaImporter, @unchecked Sendable {
+final class FolderImporter: MediaImporter, FolderImportIdentifying, @unchecked Sendable {
+    /// 装配路由用：本来源的 sourceId。
+    let folderSourceId: String
     private let registry: FolderRegistry
     private let sourceId: String
     private let directory: URL
@@ -20,6 +22,7 @@ final class FolderImporter: MediaImporter, @unchecked Sendable {
     init(registry: FolderRegistry, sourceId: String, directory: URL, provider: NativeProvider, logger: CoreLogger) {
         self.registry = registry
         self.sourceId = sourceId
+        self.folderSourceId = sourceId
         self.directory = directory
         self.provider = provider
         self.logger = logger
