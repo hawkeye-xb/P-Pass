@@ -102,8 +102,8 @@ stdin 读图、stdout 写像素，隔离拉起在 `crates/platform/src/isolated*
     `ppf-video-decoder.exe`（否则 dogfood 包里的 daemon 一直报 `SandboxUnavailable`，没法在该包上验证修复）。
   - `tools/release/dry_run.py` 的 cargo 桩只造 ppf-decoder，补 ppf-video-decoder（否则 release dry-run 的
     Windows 拷贝步骤会因缺文件红）。
-- 不新增第三方编解码器依赖（MF 是系统 API，视频解码本身只调它）。bin 落在 `crates/platform`，只经
-  `decode-worker` 取 `proto` 线协议；视频解码不碰 libheif。
+- 不新增第三方编解码器依赖（MF 是系统 API，视频解码本身只调它）。视频 bin 落在 `crates/media-codec`（只经
+  `decode-worker` 取 `proto` 线协议、经 `platform` 取 MF 能力）；`platform` 不反向依赖 `decode-worker`。
 
 ### 5. 能力缺失与错误分类
 

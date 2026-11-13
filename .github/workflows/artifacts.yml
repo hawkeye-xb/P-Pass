@@ -312,6 +312,8 @@ jobs:
           gh release upload dogfood --repo "$GITHUB_REPOSITORY" \
             /tmp/rel/daemon.exe \
             /tmp/rel/testclient.exe \
+            /tmp/rel/ppf-decoder.exe \
+            /tmp/rel/ppf-video-decoder.exe \
             /tmp/rel/win-smoke.ps1 \
             /tmp/rel/SHA256SUMS-win-x64 \
             /tmp/rel/BUILD_INFO-win-x64 \

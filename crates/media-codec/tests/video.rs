@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use media_codec::{decode_video, CodecError};
+use media_codec::{decode_video, make_thumbs, CodecError, ThumbOutcome};
 
 /// 串行化对 `PPF_VIDEO_DECODE_WORKER` 的读写：cargo test 默认并行跑，
 /// 一个测试改环境变量会污染另一个测试的 worker 解析（与 sandbox.rs 同款）。
@@ -72,4 +72,29 @@ fn video_decoder_missing_worker_is_unavailable() {
     let err = decode_video(&p).unwrap_err();
     std::env::remove_var("PPF_VIDEO_DECODE_WORKER");
     assert!(matches!(err, CodecError::SandboxUnavailable(_)), "{err:?}");
+}
+
+/// 根因入口（卡「修复 E3」/ ADR 决定 6 的可判红判据）：无 ffmpeg 的 Windows 上，
+/// `make_thumbs` 经 `thumb.rs::first_frame` 必须走新 video decoder 出真图。
+/// 反证：把 `first_frame` 的 video 分支改回 `Err(FfmpegMissing)` → 本测试红。
+#[test]
+fn make_thumbs_without_ffmpeg_uses_video_decoder() {
+    if skip_if_no_video_decode() {
+        return;
+    }
+    let _g = ENV.lock().unwrap_or_else(|e| e.into_inner());
+    // 把 ffmpeg 摘出 PATH（并清 PPF_FFMPEG），让 ffmpeg_path() 返回 None；只留
+    // System32（不含 ffmpeg）。video decoder 由绝对路径拉起，不依赖 PATH。
+    let saved_path = std::env::var("PATH").unwrap_or_default();
+    std::env::remove_var("PPF_FFMPEG");
+    std::env::set_var("PATH", r"C:\Windows\System32");
+    let dir = tempfile::tempdir().unwrap();
+    let r = make_thumbs(&[0x46; 32], &fixture("tiny.mp4"), &dir.path().join("t"));
+    std::env::set_var("PATH", saved_path);
+    assert_eq!(
+        r.outcome,
+        ThumbOutcome::Generated,
+        "无 ffmpeg 的 Windows 上 mp4 必须经 first_frame 的 video decoder 分支出真图，而不是占位图"
+    );
+    assert_non_flat(&image::open(&r.paths.t256).unwrap());
 }

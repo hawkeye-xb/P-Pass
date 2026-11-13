@@ -50,12 +50,15 @@ pub fn decode_video_frame(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), VideoDeco
 /// 请求解码器原生输出的 NV12，再在这里转 RGBA。
 #[cfg(windows)]
 fn decode_video_frame_windows(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), VideoDecodeError> {
+    use std::time::Duration;
+
     use windows::Win32::Media::MediaFoundation::{
         IMFMediaBuffer, IMFMediaType, IMFSourceReader, MFCreateMFByteStreamOnStream,
         MFCreateMediaType, MFCreateSourceReaderFromByteStream, MFMediaType_Video, MFStartup,
         MFVideoFormat_NV12, MFVideoInterlace_Progressive, MFSTARTUP_NOSOCKET, MF_MT_DEFAULT_STRIDE,
         MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE,
-        MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_VERSION,
+        MF_MT_VIDEO_ROTATION, MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_FIRST_VIDEO_STREAM,
+        MF_VERSION,
     };
     use windows::Win32::System::Com::StructuredStorage::CreateStreamOnHGlobal;
     use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
@@ -125,27 +128,41 @@ fn decode_video_frame_windows(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), Video
     }
     let stride = unsafe { cur.GetUINT32(&MF_MT_DEFAULT_STRIDE) }.unwrap_or(w) as usize;
     let stride = stride.max(w as usize);
+    // 手机拍的 MP4 常把旋转存在容器元数据里（MF_MT_VIDEO_ROTATION，0/90/180/270）。
+    let rotation = unsafe { cur.GetUINT32(&MF_MT_VIDEO_ROTATION) }.unwrap_or(0);
 
-    let mut actual = 0u32;
-    let mut flags = 0u32;
-    let mut ts = 0i64;
+    // 有界读取：源读取器可能先回「暂无样本」事件，跳过后重试，最多 N 次；超过仍
+    // 无帧才失败（daemon 侧还有整体 watchdog 兜底，不会死循环）。
+    const MAX_READ_ATTEMPTS: usize = 16;
     let mut sample: Option<windows::Win32::Media::MediaFoundation::IMFSample> = None;
-    unsafe {
-        reader
-            .ReadSample(
-                FIRST_VIDEO,
-                0,
-                Some(&mut actual),
-                Some(&mut flags),
-                Some(&mut ts),
-                Some(&mut sample),
-            )
-            .map_err(|e| failed(format!("ReadSample: {}", e.message())))?;
+    for _ in 0..MAX_READ_ATTEMPTS {
+        let mut actual = 0u32;
+        let mut flags = 0u32;
+        let mut ts = 0i64;
+        let mut s: Option<windows::Win32::Media::MediaFoundation::IMFSample> = None;
+        unsafe {
+            reader
+                .ReadSample(
+                    FIRST_VIDEO,
+                    0,
+                    Some(&mut actual),
+                    Some(&mut flags),
+                    Some(&mut ts),
+                    Some(&mut s),
+                )
+                .map_err(|e| failed(format!("ReadSample: {}", e.message())))?;
+        }
+        if flags & (MF_SOURCE_READERF_ENDOFSTREAM.0 as u32) != 0 {
+            return Err(failed("end of stream before first frame"));
+        }
+        if s.is_some() {
+            sample = s;
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
-    let sample = sample.ok_or_else(|| failed("no sample from source reader"))?;
-    if flags & (MF_SOURCE_READERF_ENDOFSTREAM.0 as u32) != 0 {
-        return Err(failed("end of stream before first frame"));
-    }
+    let sample =
+        sample.ok_or_else(|| failed(format!("no sample after {MAX_READ_ATTEMPTS} attempts")))?;
 
     let buffer: IMFMediaBuffer = unsafe { sample.GetBufferByIndex(0) }
         .map_err(|e| failed(format!("GetBufferByIndex: {}", e.message())))?;
@@ -173,7 +190,51 @@ fn decode_video_frame_windows(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), Video
     let _ = unsafe { buffer.Unlock() };
     drop(buffer);
     drop(sample);
+    let (w, h, rgba) = rotate_rgba(w, h, rgba, rotation);
     Ok((w as u32, h as u32, rgba))
+}
+
+/// 按容器旋转元数据（0/90/180/270，顺时针）旋转 RGBA。90/270 会交换宽高。
+#[cfg(windows)]
+fn rotate_rgba(w: usize, h: usize, rgba: Vec<u8>, rotation: u32) -> (usize, usize, Vec<u8>) {
+    match rotation {
+        90 => {
+            let (nw, nh) = (h, w);
+            let mut out = vec![0u8; nw * nh * 4];
+            for i in 0..nh {
+                for j in 0..nw {
+                    let src = ((h - 1 - j) * w + i) * 4;
+                    let dst = (i * nw + j) * 4;
+                    out[dst..dst + 4].copy_from_slice(&rgba[src..src + 4]);
+                }
+            }
+            (nw, nh, out)
+        }
+        180 => {
+            let mut out = vec![0u8; w * h * 4];
+            for i in 0..h {
+                for j in 0..w {
+                    let src = ((h - 1 - i) * w + (w - 1 - j)) * 4;
+                    let dst = (i * w + j) * 4;
+                    out[dst..dst + 4].copy_from_slice(&rgba[src..src + 4]);
+                }
+            }
+            (w, h, out)
+        }
+        270 => {
+            let (nw, nh) = (h, w);
+            let mut out = vec![0u8; nw * nh * 4];
+            for i in 0..nh {
+                for j in 0..nw {
+                    let src = (j * w + (w - 1 - i)) * 4;
+                    let dst = (i * nw + j) * 4;
+                    out[dst..dst + 4].copy_from_slice(&rgba[src..src + 4]);
+                }
+            }
+            (nw, nh, out)
+        }
+        _ => (w, h, rgba),
+    }
 }
 
 /// NV12 → RGBA（BT.601 有限范围，固定点整数近似）。缩略图用途，精度足够。
@@ -196,4 +257,59 @@ fn nv12_to_rgba(y: &[u8], uv: &[u8], stride: usize, w: usize, h: usize) -> Vec<u
         }
     }
     out
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::rotate_rgba;
+
+    /// 像素 = [R,G,B,A]，用两个明显不同的像素验证旋转方向。
+    #[test]
+    fn rotate_rgba_maps_pixels_and_swaps_dims() {
+        let a = [255, 0, 0, 255]; // 红
+        let b = [0, 0, 255, 255]; // 蓝
+        let in_2x1 = [a, b].concat(); // 2×1：左红右蓝
+
+        // 0：原样。
+        let (w, h, out) = rotate_rgba(2, 1, in_2x1.clone(), 0);
+        assert_eq!((w, h), (2, 1));
+        assert_eq!(out, in_2x1);
+
+        // 90° 顺时针：1×2，红在上、蓝在下。
+        let (w, h, out) = rotate_rgba(2, 1, in_2x1.clone(), 90);
+        assert_eq!((w, h), (1, 2));
+        assert_eq!(&out[0..4], &a);
+        assert_eq!(&out[4..8], &b);
+
+        // 180°：2×1 左右对调。
+        let (w, h, out) = rotate_rgba(2, 1, in_2x1.clone(), 180);
+        assert_eq!((w, h), (2, 1));
+        assert_eq!(&out[0..4], &b);
+        assert_eq!(&out[4..8], &a);
+
+        // 270°（= 逆时针 90°）：1×2，蓝在上、红在下。
+        let (w, h, out) = rotate_rgba(2, 1, in_2x1.clone(), 270);
+        assert_eq!((w, h), (1, 2));
+        assert_eq!(&out[0..4], &b);
+        assert_eq!(&out[4..8], &a);
+    }
+
+    /// 90° 连续四次应回到原图（方向一致性）。
+    #[test]
+    fn rotate_rgba_four_times_is_identity() {
+        let a = [10, 20, 30, 255];
+        let b = [40, 50, 60, 255];
+        let c = [70, 80, 90, 255];
+        let d = [100, 110, 120, 255];
+        let img = [a, b, c, d].concat(); // 2×2
+        let (mut w, mut h, mut out) = rotate_rgba(2, 2, img.clone(), 90);
+        for _ in 0..3 {
+            let r = rotate_rgba(w, h, out, 90);
+            w = r.0;
+            h = r.1;
+            out = r.2;
+        }
+        assert_eq!((w, h), (2, 2));
+        assert_eq!(out, img);
+    }
 }

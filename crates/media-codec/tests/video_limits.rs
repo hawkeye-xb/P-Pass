@@ -3,7 +3,8 @@
 //!
 //! 子进程就是本测试二进制自己（`PPF_VIDEO_LIMITS_CHILD` 环境变量分流），所以
 //! `harness = false`。受控假 worker：child 读掉请求后要么挂住（超时用例）、要么
-//! 尝试分配 128MB（内存用例，超 Job 上限即失败退出）。
+//! 尝试分配 128MB——分配被 Job 上限拒绝时回一个合法 `Failed` 应答（msg 里带
+//! `alloc rejected`），证明它确实走到了分配那一步、而非启动期就死掉。
 //!
 //! 本文件不写 `#[cfg]`（B.2）：非 Windows 端经 `platform::video_decode::
 //! video_decode_available()` 运行时跳过。
@@ -13,6 +14,7 @@
 use std::io::Read;
 use std::time::{Duration, Instant};
 
+use decode_worker::proto::{self, Response, STATUS_DECODE_FAILED};
 use media_codec::{decode_video_with_limits, decode_video_within, CodecError};
 
 const CHILD_ENV: &str = "PPF_VIDEO_LIMITS_CHILD";
@@ -22,7 +24,8 @@ fn child() {
     let mut buf = Vec::new();
     let _ = std::io::stdin().read_to_end(&mut buf);
     match std::env::var(CHILD_ENV).as_deref() {
-        // 内存用例：分配 128MB。Job 上限更小时这里失败并退出；成功则挂住等 watchdog。
+        // 内存用例：分配 128MB。Job 上限更小时这里失败，回合法 Failed 应答后退出
+        // （证明走到了分配这一步）；成功则挂住等 watchdog。
         Ok("alloc") => {
             let mut v: Vec<u8> = Vec::new();
             match v.try_reserve_exact(128 << 20) {
@@ -30,7 +33,17 @@ fn child() {
                     v.resize(128 << 20, 1);
                     std::thread::sleep(Duration::from_secs(60));
                 }
-                Err(_) => std::process::exit(3),
+                Err(_) => {
+                    let mut so = std::io::stdout().lock();
+                    let _ = proto::write_response(
+                        &mut so,
+                        &Response::Failed {
+                            status: STATUS_DECODE_FAILED,
+                            msg: "alloc rejected".into(),
+                        },
+                    );
+                    std::process::exit(3);
+                }
             }
         }
         _ => {
@@ -77,13 +90,14 @@ fn parent() {
     assert!(t.elapsed() < Duration::from_secs(10), "没有按时强杀");
     assert!(err.to_string().contains("timed out"), "{err}");
 
-    // 内存：worker 想分配 128MB，但 Job 上限只有 64MB → 分配被拒、进程退出，不是超时。
+    // 内存：worker 想分配 128MB，但 Job 上限只有 64MB → 分配被拒，回带
+    // `alloc rejected` 的应答（证明走到了分配那一步，而非启动期死亡）。
     let err = with_worker("alloc", || {
         decode_video_with_limits(&fixture(), Duration::from_secs(10), 64 << 20).unwrap_err()
     });
     assert!(
-        !err.to_string().contains("timed out"),
-        "内存上限被绕过，worker 没被拒: {err}"
+        err.to_string().contains("alloc rejected"),
+        "内存上限没生效（子进程没走到分配即死、或分配被放行）: {err}"
     );
     assert!(matches!(err, CodecError::Decode { .. }), "{err:?}");
 
