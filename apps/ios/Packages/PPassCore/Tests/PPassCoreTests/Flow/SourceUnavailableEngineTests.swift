@@ -154,4 +154,59 @@ final class SourceUnavailableEngineTests: XCTestCase {
     func testRawValueIsStableForPersistence() {
         XCTAssertEqual(WaitReason.sourceUnavailable.rawValue, "SOURCE_UNAVAILABLE")
     }
+
+    // MARK: 全出口清理（#1753 / ADR §5）
+
+    // 确认出口：桌面收下（confirmed）→ importer.release(hash) 被调用（FolderImporter 的安全作用域由此关闭）。
+    // 反证：去掉 confirmed 分支的 release → released 为空 → 红。
+    func testConfirmedPathReleasesTheImport() async throws {
+        let rig = try Rig()
+        rig.photo(1, generation: 1)
+        await rig.start()
+        await rig.trigger()
+
+        XCTAssertEqual(try rig.state(1), .confirmed)
+        XCTAssertEqual(rig.importer.released.get().count, 1, "确认后释放导入")
+        XCTAssertEqual(rig.importer.released.get(), ["blake3:c1"], "释放的是这张的 hash")
+    }
+
+    // offer-已有（桌面按哈希判重、零字节完成）也释放：已在桌面 = 手机侧不再需要。
+    // FakeDelivery 的「已有」= reportsBytes=false（offer 直接给完成，一个字节没发）。
+    // 反证：去掉 deliverOnce confirmed 上的 release（processFresh 路径的 releasingOnAbort 不覆盖成功返回）→ 红。
+    func testAlreadyOnDesktopReleasesTheImport() async throws {
+        let rig = try Rig()
+        let p = rig.photo(1, generation: 1)
+        rig.delivery.reportsBytes.set(false)
+        await rig.start()
+        await rig.trigger(.periodic)
+
+        XCTAssertEqual(try rig.state(1), .confirmed)
+        XCTAssertTrue(rig.importer.released.get().contains("blake3:c1"), "桌面已有也释放")
+    }
+
+    // 源缺失出口：settleSourceMissing 结案 → 释放行里记的旧 hash。
+    // 反证：去掉 settleSourceMissing 的 release → 该 hash 不在 released → 红。
+    func testSourceMissingReleasesTheRecordedHash() async throws {
+        let rig = try Rig()
+        let p = rig.photo(1, generation: 1)
+        try rig.order(p, .pending)
+        rig.media.remove(1)
+        await rig.start()
+        await rig.trigger(.periodic)
+
+        XCTAssertEqual(try rig.state(1), .skippedSourceMissing)
+        XCTAssertTrue(rig.importer.released.get().contains("blake3:c1"), "源缺失结案释放旧 hash")
+    }
+
+    // release 幂等（引擎不重复释放同一张）：确认后下一轮不再次释放。
+    func testReleaseIsCalledOncePerItem() async throws {
+        let rig = try Rig()
+        rig.photo(1, generation: 1)
+        await rig.start()
+        await rig.trigger()
+        await rig.trigger(.periodic)
+
+        XCTAssertEqual(try rig.state(1), .confirmed)
+        XCTAssertEqual(rig.importer.released.get().filter { $0 == "blake3:c1" }.count, 1, "同一张只释放一次（引擎各出口互斥）")
+    }
 }
