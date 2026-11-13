@@ -62,11 +62,37 @@ final class FolderPickerDrive: XCTestCase {
             .replacingOccurrences(of: "’", with: "'").trimmingCharacters(in: .whitespaces).lowercased()
     }
 
-    /// #1744 E3「后台只记录系统实际行为」：App 已由场景脚本经 devicectl 启动并在前台备份；
-    /// 本用例不 launch 任何东西，只按 Home 键把它退到后台（记录系统真实行为，不做任何进度承诺）。
+    /// #1744 E3「后台只记录系统实际行为」：本用例自己带 env 启动 App（配对+备份一轮），
+    /// 启动 UIREG_HOME_WAIT 秒后按 Home 把它退到后台（记录系统真实行为，不做任何进度承诺）。
     /// TEST_RUNNER_UIREG_HOME_WAIT = 按 Home 前等待的秒数（场景脚本用它对齐「进入传输中」）。
+    /// TEST_RUNNER_UIREG_RUN / TEST_RUNNER_UIREG_PAIR_LINK 透传给 App 的 PPASS_E2E_*。
+    /// 卸载重装后相册权限会被重置：启动时若有系统照片权限弹窗，先点「允许完全访问」（UIRegress 同一按钮表）。
     func testPressHome() throws {
-        let wait = Int(ProcessInfo.processInfo.environment["UIREG_HOME_WAIT"] ?? "0") ?? 0
+        let env = ProcessInfo.processInfo.environment
+        let app = XCUIApplication()
+        app.launchEnvironment["PPASS_E2E_DIR"] = "container"
+        app.launchEnvironment["PPASS_E2E_RUN"] = env["UIREG_RUN"] ?? ""
+        app.launchEnvironment["PPASS_E2E_PAIR_LINK"] = env["UIREG_PAIR_LINK"] ?? ""
+        app.launchEnvironment["PPASS_BGTEST_FOLDER_RUN"] = "1"
+        app.launch()
+        // 系统照片权限弹窗（中英）：点了「允许完全访问」后按 Home 前多等几秒，让备份跑起来
+        let photosFull = ["allow full access", "allow access to all photos", "允许完全访问", "允许访问所有照片", "允许访问全部照片"]
+        var granted = false
+        let deadline = Date().addingTimeInterval(20)
+        while Date() < deadline {
+            for label in photosFull {
+                let button = app.buttons[label].firstMatch
+                if button.exists && button.isHittable {
+                    button.tap()
+                    granted = true
+                    break
+                }
+            }
+            if granted { break }
+            sleep(1)
+        }
+        // 没弹窗 = 权限已在。点了权限则等备份启动几秒再按 Home；没弹窗按原时序。
+        let wait = Int(env["UIREG_HOME_WAIT"] ?? "0") ?? 0
         sleep(UInt32(max(0, wait)))
         XCUIDevice.shared.press(XCUIDevice.Button.home)
         sleep(3)
