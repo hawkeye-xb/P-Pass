@@ -86,6 +86,61 @@ final class FolderMediaSourceTests: XCTestCase {
         XCTAssertEqual(details?.captureAtMs, Int64(parts[0]) ?? 0, "captureAtMs = 修改时间")
     }
 
+    // 分页按 mediaId 字节序（ADR §4.1）：全局升序、翻页无跳过。
+    // 反证：按相对路径排序分页 → 路径顺序与随机 opaqueId 无关，第二页出现「id ≤ 游标」的条目 → 红。
+    func testPaginationIsByMediaIdByteOrder() async throws {
+        for n in 0..<12 { try put("file\(n).jpg", content: "c\(n)") }
+        var collected: [String] = []
+        var after: String? = nil
+        while true {
+            let page = try await source.inScope(after: after, limit: 5)
+            if page.isEmpty { break }
+            collected += page.map(\.mediaId)
+            after = page.last!.mediaId
+            if collected.count > 20 { XCTFail("分页打转"); break }
+        }
+        XCTAssertEqual(collected.count, 12, "翻页不漏（12 个全拿到）")
+        for i in 1..<collected.count {
+            XCTAssertTrue(MediaOrder.precedes(collected[i - 1], collected[i]), "全局严格升序")
+        }
+    }
+
+    // 枚举中途失败：抛错（本轮「不知道」），映射不被污染（缺席不判源缺失）。
+    // 反证：errorHandler 吞掉失败继续当完整枚举 → 子目录里的项被误判 source_missing → 红。
+    func testEnumerationFailureMidWayKeepsMappingIntact() async throws {
+        try put("before.jpg")
+        let _ = try await source.inScope(after: nil, limit: 100)
+        let beforeId = try await idOf(rel: "before.jpg")
+
+        // 无权限子目录触发枚举错误（errorHandler 被叫 → failed → 抛错）。
+        let secret = root.appendingPathComponent("secret", isDirectory: true)
+        try FileManager.default.createDirectory(at: secret, withIntermediateDirectories: true)
+        try "hidden".write(to: secret.appendingPathComponent("h.jpg"), atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: secret.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: secret.path) }
+
+        do {
+            _ = try await source.inScope(after: nil, limit: 100)
+            XCTFail("中途失败必须抛（不能当完整枚举判缺席）")
+        } catch {
+            // FolderSourceError（中途失败）——不是假报 0 项
+        }
+        // 失败那轮没有对账：映射原样，before 的 id 不变。
+        XCTAssertEqual(registry.relativePath(sourceId: sourceId, opaqueId: FolderMediaSource.opaqueId(of: beforeId, sourceId: sourceId)!), "before.jpg")
+    }
+
+    // alias 文件跳过（isAliasFileKey；symlink 同上）。
+    func testAliasFilesAreSkipped() async throws {
+        try put("real.jpg")
+        // 造一个 Finder alias 形态的文件：bookmark 数据文件、带媒体扩展名。
+        let aliasURL = root.appendingPathComponent("alias.jpg")
+        let data = try root.appendingPathComponent("real.jpg").bookmarkData()
+        try data.write(to: aliasURL)
+        // alias 判定在实现里按文件头 "book" 字节签名；本地能造这种文件（bookmark 数据 + 媒体扩展名）。
+        let batch = try await source.inScope(after: nil, limit: 100)
+        XCTAssertEqual(batch.count, 1, "alias 文件跳过（按文件头签名识别）")
+    }
+
     // 授权失效口径：书签解析失败 / 根不可达 → SourceUnavailable，不能假报 0 项。
     func testUnresolvableBookmarkThrowsSourceUnavailable() async throws {
         var record = registry.record(id: sourceId)!

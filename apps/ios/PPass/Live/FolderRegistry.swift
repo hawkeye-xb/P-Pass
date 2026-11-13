@@ -38,11 +38,14 @@ struct FolderRoot {
 enum FolderBookmarks {
     /// 解析书签 → 根目录。stale 且根仍可用时在当前授权内重建并原子替换；替换失败保留旧书签并记恢复未验证。
     /// 书签不存在 / 损坏 / 解析失败 → 抛 `FolderSourceError`（调用方桥接成 `SourceUnavailable`）。
-    static func resolve(_ record: FolderRecord, directory: URL, logger: CoreLogger) throws -> FolderRoot {
+    /// 根可达性检查留给调用方在 scope 内做（真机 security scope 下 scope 外查不到）。
+    /// `forceStale` 只为测试注入 stale 判定（产品路径由系统给出）。
+    static func resolve(_ record: FolderRecord, registry: FolderRegistry, logger: CoreLogger, forceStale: Bool = false) throws -> FolderRoot {
         var stale = false
         guard let url = try? URL(resolvingBookmarkData: record.bookmark, options: [], relativeTo: nil, bookmarkDataIsStale: &stale) else {
             throw FolderSourceError(reason: "bookmark unreadable")
         }
+        if forceStale { stale = true }
         var updated = record
         if stale {
             // 重建必须在当前授权内做：start 一次（普通目录 start=false，文件在就当授权在）。
@@ -52,18 +55,14 @@ enum FolderBookmarks {
             if accessible, let fresh = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) {
                 updated.bookmark = fresh
                 updated.status = "registered"
-                FolderRegistry.upsertSync(record: updated, directory: directory, logger: logger)
+                registry.upsert(updated)
                 logger.log("folder \(record.id): stale bookmark rebuilt and replaced atomically")
             } else {
                 // 替换失败：保留旧书签，记恢复未验证，不能先毁掉旧书签。
                 updated.status = "recoveryUnverified"
-                FolderRegistry.upsertSync(record: updated, directory: directory, logger: logger)
+                registry.upsert(updated)
                 logger.log("folder \(record.id): stale bookmark rebuild failed; old bookmark kept, recovery unverified")
             }
-        }
-        var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue else {
-            throw FolderSourceError(reason: "root not accessible")
         }
         return FolderRoot(url: url, record: updated)
     }
@@ -121,15 +120,18 @@ final class FolderRegistry: @unchecked Sendable {
         }
     }
 
-    private func persistLocked() {
+    @discardableResult
+    private func persistLocked() -> Bool {
         do {
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys]
             try encoder.encode(Persisted(sources: sources, removedIds: removedIds)).write(to: fileURL, options: .atomic)
+            return true
         } catch {
-            // 写失败记日志（不静默）；登记方靠返回值/抛错确认，不靠这份文件。
+            // 写失败上报（同类 PairingStore.save 也是 throws）：调用方决定要不要当作成功。
             logger.log("folder registry: persist failed (\(error.localizedDescription))")
+            return false
         }
     }
 
@@ -137,11 +139,6 @@ final class FolderRegistry: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         sources[record.id] = record
         persistLocked()
-    }
-
-    /// 给 FolderBookmarks.resolve 用的无实例写入口（解析过程中替换书签）。
-    static func upsertSync(record: FolderRecord, directory: URL, logger: CoreLogger) {
-        FolderRegistry(directory: directory, logger: logger).upsert(record)
     }
 
     func record(id: String) -> FolderRecord? {
@@ -167,7 +164,13 @@ final class FolderRegistry: @unchecked Sendable {
         lock.lock()
         let id = UUID().uuidString.lowercased()
         sources[id] = FolderRecord(id: id, displayName: displayName, bookmark: bookmark)
-        persistLocked()
+        let persisted = persistLocked()
+        if !persisted {
+            // ADR「书签保存失败：不启用该来源，向调用方报错，不假装登记成功」——撤销内存登记再抛。
+            sources.removeValue(forKey: id)
+            lock.unlock()
+            throw FolderSourceError(reason: "bookmark save failed")
+        }
         lock.unlock()
         return id
     }
@@ -202,19 +205,26 @@ final class FolderRegistry: @unchecked Sendable {
         return opaque
     }
 
-    /// opaque itemId → 相对路径（导入时按映射找到文件）。
+    /// opaque itemId → 相对路径（导入时按映射找到文件）。损坏的持久化文件若带越界路径，这里拒绝（返回 nil 不导入）。
     func relativePath(sourceId: String, opaqueId: String) -> String? {
         lock.lock(); defer { lock.unlock() }
-        return sources[sourceId]?.items[opaqueId]
+        guard let raw = sources[sourceId]?.items[opaqueId] else { return nil }
+        guard let safe = try? FolderPaths.normalize(raw), FolderPaths.same(safe, raw) else {
+            logger.log("folder \(sourceId): refusing unsafe stored path (\(LogRedact.id(opaqueId)))")
+            return nil
+        }
+        return safe
     }
 
     /// 完整枚举成功后的对账：新路径分配 id；返回缺席的 opaqueId 集合（调用方按「源缺失」处理）。
     /// 枚举失败时不要调用（「不知道」≠ 源缺失）。
-    func reconcile(sourceId: String, observedPaths: [String]) -> Set<String> {
+    func reconcile(sourceId: String, observedPaths: [String]) throws -> Set<String> {
         lock.lock(); defer { lock.unlock() }
         guard var record = sources[sourceId] else { return [] }
         var seen: Set<String> = []
-        for path in observedPaths {
+        // 持久化边界兜底：进映射的路径先过规范化（拒绝对路径与 ..；ADR §3）。
+        let normalized = try observedPaths.map { try FolderPaths.normalize($0) }
+        for path in normalized {
             if let (opaque, _) = record.items.first(where: { FolderPaths.same($0.value, path) }) {
                 seen.insert(opaque)
                 continue

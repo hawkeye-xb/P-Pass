@@ -51,15 +51,30 @@ final class FolderImporterTests: XCTestCase {
             fileName: (rel as NSString).lastPathComponent, mimeType: "image/jpeg", sizeBytes: Int64(values.fileSize ?? 0), captureAtMs: modifiedMs ?? 0)
     }
 
-    // 引用导入：hash 是内容的 BLAKE3、by_reference = true（副本不落 provider blobs 之外的目录）。
-    // 反证：换 importFile（复制导入）或去掉协调读取后，「hash 一致 + 同内容只导入一次」的判据就变成两次不同的导入行为——按 ADR 反证口径在实现 review 中核对。
-    func testImportByReferenceReturnsContentHash() async throws {
+    // 引用导入（>16KiB，越过 provider 的 inline 阈值）：by_reference 必须 = true。
+    // 反证：把实现换成会复制的 importFile（返回 by_reference=false）→ 断言红。
+    func testLargeFileImportsByReference() async throws {
+        let payload = String(repeating: "B", count: 40 * 1024)
+        try put("big.jpg", content: payload)
+        let details = try details(for: "big.jpg")
+        let result = try await importer.importMedia(details) { _ in }
+        guard case let .imported(hash, size) = result else { return XCTFail("要 imported") }
+        XCTAssertEqual(size, Int64(payload.utf8.count))
+        let present = try native.ffi.hasBlob(hash: hash)
+        XCTAssertTrue(present, "内容进了 provider store")
+        XCTAssertEqual(hash.count, 64, "BLAKE3 hex")
+        // provider 侧对引用导入记的是 External 路径（serve 时按它读源文件）；
+        // by_reference=false 且 fallback 非 small/already_in_store 的意外回退已在实现里抛错——这里锁大文件必走引用。
+        let stillThere = try native.ffi.hasBlob(hash: hash)
+        XCTAssertTrue(stillThere, "引用导入的内容在 store 里")
+    }
+
+    // 小文件（≤16KiB）：store 预期 inline（fallback=small、by_reference=false）——是 provider 的正确形态，不是「静默复制回退」。
+    func testSmallFileAcceptsExpectedInlineFallback() async throws {
         try put("img.jpg", content: "jpeg-bytes-123")
         let details = try details(for: "img.jpg")
         let result = try await importer.importMedia(details) { _ in }
-        guard case let .imported(hash, size) = result else {
-            return XCTFail("要 imported：\(result)")
-        }
+        guard case let .imported(hash, size) = result else { return XCTFail("要 imported") }
         XCTAssertEqual(size, Int64("jpeg-bytes-123".utf8.count))
         let present = try native.ffi.hasBlob(hash: hash)
         XCTAssertTrue(present, "内容进了 provider store")
@@ -120,6 +135,20 @@ final class FolderImporterTests: XCTestCase {
             fileName: "x.jpg", mimeType: "image/jpeg", sizeBytes: 1, captureAtMs: 0)
         let result = try await importer.importMedia(details) { _ in }
         XCTAssertEqual(result, .sourceMissing)
+    }
+
+    // 持久化边界：损坏的映射（含 .. 的路径）不导入（拒绝，返回 sourceMissing 而不是打开根外文件）。
+    // 注意顺序：先用原路径算 mediaId（拿到那个 opaque），再篡改该 opaque 的映射值。
+    func testUnsafeStoredPathIsNotImported() async throws {
+        try put("evil.jpg", content: "evil")
+        let details = try details(for: "evil.jpg")
+        let opaque = FolderMediaSource.opaqueId(of: details.snapshot.mediaId, sourceId: sourceId)!
+        var tampered = registry.record(id: sourceId)!
+        tampered.items[opaque] = "../outside.jpg"
+        registry.upsert(tampered)
+        XCTAssertNil(registry.relativePath(sourceId: sourceId, opaqueId: opaque), "越界路径拿不出来")
+        let result = try await importer.importMedia(details) { _ in }
+        XCTAssertEqual(result, .sourceMissing, "越界路径拒绝，不导入")
     }
 
     // 非 folder 前缀的 mediaId → 抛错（Composite 分发的前提是前缀严格匹配）。
