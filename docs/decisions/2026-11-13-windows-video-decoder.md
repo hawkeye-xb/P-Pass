@@ -38,14 +38,17 @@ stdin 读图、stdout 写像素，隔离拉起在 `crates/platform/src/isolated*
 
 ### 1. 新增独立子进程 `ppf-video-decoder.exe`（仅 Windows）
 
-- 作为 `crates/decode-worker` 的第二个 bin（`[[bin]] name = "ppf-video-decoder"`），`#[cfg(target_os =
-  "windows")]` 才编译；链 `windows-sys` 的 Media Foundation，不链 `platform`、不链 UI 系统库（MF 是系统
-  API，不是 platform 抽象）。
+- 作为 `crates/decode-worker` 的第二个 bin（`[[bin]] name = "ppf-video-decoder"`），只链 `windows-sys` 的
+  Media Foundation，不链 `platform`、不链 UI 系统库（MF 是系统 API，不是 platform 抽象）。注意 `[[bin]]`
+  目标不能用 `#[cfg(target_os = "windows")]` 整体关闭（会让 macOS 的 `cargo build -p decode-worker` 因缺
+  `main` 失败）：按 `crates/transport/Cargo.toml` 的既有写法，非 Windows 端给一个桩 `main`（或用
+  `required-features`），保证非 Windows 端仍能编出这个 bin。
 - 输入/输出与 `ppf-decoder` 同一套「一次性请求、一次性应答」线协议模型：stdin 收视频字节，stdout 返回
   RGBA 像素或失败报文。可复用 `decode_worker::proto` 并新增 `KIND_VIDEO`，或另立同构的 video 协议；读方
   对每个字段做上限校验，不信对端。
-- 只认 H.264/AVC 编码的 mp4/m4v（mov 容器）。第一帧解出来即返回像素，不做二次缩放编码（缩放仍在 daemon
-  侧的 `write_thumb`，与静态图一致）。
+- 只认 H.264/AVC 编码的 mp4/m4v（mov 容器）。第一帧解出来即返回 RGBA 像素；回包按请求的 `max_edge` 校验
+  （`proto.rs`），所以 worker 要把解出的帧缩到请求给的 `max_edge` 再回（与静态图 `decode_worker::run` 同款
+  行为，避免 1080p/4K 原帧被判「回包不合法」→ 占位图）。daemon 侧仍会在 `write_thumb` 再缩到 256/1024。
 - 入口 `ppf-video-decoder.rs` 与 `ppf-decoder.rs` 同构：`main` 调 `decode_worker` 里一个 `main_stdio`
   式的入口，进程用完即弃。
 
@@ -78,11 +81,23 @@ stdin 读图、stdout 写像素，隔离拉起在 `crates/platform/src/isolated*
 - 打包：把 `target/release/ppf-video-decoder.exe` 复制进 `apps/desktop/src-tauri/binaries/ppf-video-decoder-
   x86_64-pc-windows-msvc.exe`（与现有 `ppf-decoder` 同款的 target-triple 后缀命名），并在
   `apps/desktop/src-tauri/tauri.conf.json` 的 `bundle.externalBin` 加一行 `binaries/ppf-video-decoder`。
-- 签名：新 exe 属于核心服务侧的新二进制，纳入现有 daemon/decoder 的构建、签名与 NSIS 安装包，不新增证书、
-  不新增独立签名流程；安装后与 `ppf-daemon.exe` / `ppf-decoder.exe` 同目录。
+- 签名：新 exe 与 `ppf-daemon.exe` / `ppf-decoder.exe` 同走现有 Windows 发布路径——Windows 侧目前不签
+  Authenticode（release.yml 的 Windows job 即「未签名」，H-02 挂账），新 exe 同样保持未签名、随 NSIS 安装包
+  分发；安装包/更新清单的 minisign 签名与 exe 的 Authenticode 是两回事，本方案不新增证书、不新增独立签名流程。
+  安装后与 `ppf-daemon.exe` / `ppf-decoder.exe` 同目录。
 - 查找：`crates/platform/src/isolated.rs` 新增/参数化 `video_decoder_worker_path()`，与
   `decoder_worker_path()` 同口径按「与自己同目录」找 `ppf-video-decoder.exe`，debug 构建另认环境变量指到
   cargo 产物（`PPF_VIDEO_DECODE_WORKER` 或同类）。
+- 同步点（新 externalBin/新 bin 会让这些地方缺 sidecar 或缺可执行文件，实施时一并改）：
+  - `.github/actions/desktop-checks/action.yml` 与 `tools/flow/worker-lib.sh` 现有 externalBin 占位桩只造
+    `ppf-daemon`/`ppf-decoder`，补 `ppf-video-decoder`（否则 desktop-checks 的 tauri-build 与 `just done`
+    的 sidecar 占位会因缺它报红）。
+  - `.github/workflows/ci-rust.yml` 与 `justfile` 现在只 `cargo build -p decode-worker --bin ppf-decoder`，
+    补 `--bin ppf-video-decoder`（否则新 decoder 的测试在 CI 上拿不到可执行文件）。
+  - `.github/workflows/artifacts.yml` 的 Windows dogfood 只拷 daemon/testclient/ppf-decoder，补
+    `ppf-video-decoder.exe`（否则 dogfood 包里的 daemon 一直报 `SandboxUnavailable`，没法在该包上验证修复）。
+  - `tools/release/dry_run.py` 的 cargo 桩只造 ppf-decoder，补 ppf-video-decoder（否则 release dry-run 的
+    Windows 拷贝步骤会因缺文件红）。
 - 不新增第三方编解码器依赖，不碰 `tools/check-codec-libs.sh` 的 libheif/libde265 检查面；新二进制不链 libheif，
   只链系统 MF。
 
@@ -98,6 +113,25 @@ stdin 读图、stdout 写像素，隔离拉起在 `crates/platform/src/isolated*
   `Decode` → `ThumbOutcome::Placeholder`，不写最终缩略图路径，占位图由内存 `placeholder_jpeg` 给。
 - 超时与内存超限继续由 Job 的 `PROCESS_MEMORY` 上限和 daemon 侧看门狗强杀兜底，强杀后按 `Decode` 归类并
   记录原因，不静默当成成功。
+
+### 6. 验收：测试用例与反证（根因处先写会红的测试，红→绿→撤销回红）
+
+每个场景先在根因处写一个会红的测试/判据，修复后绿，再把修复撤销回红；不靠口头「应该好了」：
+
+- **普通 MP4 真图（E3，Windows 真环境）**：同一 H.264 MP4，修复前 `thumb.get` 返回 `ok=true, placeholder=true`
+  （灰，日志 `ffmpeg not found`）；修复后返回真图（像素统计非灰，占位 WARN 消失）；撤销修复（把 `first_frame`
+  的 video-decoder 分支改回 `Err(FfmpegMissing)`）→ 重新回灰。判据：`thumb.get` 回包的 `placeholder` 字段 +
+  缩略图像素统计非灰。
+- **畸形输入（E2）**：garbage 字节 / 非 H.264 编码的 mp4 → `Decode` → `Placeholder`，日志记录原因，且归为
+  「这个文件的问题」而非 `Unavailable`。反证：把畸形输入当成功（返回真图像素）→ 测试红。
+- **超时（E2）**：慢 decoder（测试用挂起的假 worker）→ daemon 侧看门狗到点强杀 → `Decode`（`timed out`）。
+  反证：去掉强杀 → 子进程活过时限、管道不收尾 → 红。
+- **内存超限（E2）**：让子进程分配超过 Job `PROCESS_MEMORY` 上限 → 被 Job 杀 → `Decode`。反证：去掉内存上限 →
+  不被杀 → 红。
+- **decoder 缺失（E2）**：删掉 `ppf-video-decoder.exe` → `SandboxUnavailable` → `Unavailable`（不记
+  `thumb_state=2`，走重试、先给占位图）。反证：恢复 exe → 正常解码。
+- 这些反证对应「去掉故障条件必须变红」，实现卡的 PR 回执按 红 → 修复 → 绿 → 撤销回红 四步给证据（E1 编译 +
+  `just ci`；E2 contract 测试；E3 Windows 真环境）。
 
 ## 理由
 
