@@ -135,8 +135,12 @@ counter() {
 }
 
 teardown() {
-  # 反证注入的 HKLM 登记只属于本次反证，收尾时清掉（正常路径由 setup 清）。
-  [ "${COUNTER_REG_INJECTED:-0}" = 1 ] && win_reset_uninstall_registry >/dev/null 2>&1 || true
+  # 反证注入的 HKLM 登记只属于本次反证，收尾时只清这两处。
+  # 不能调 win_reset_uninstall_registry：它连 HKCU 一起删，而 HKCU 是 setup 的
+  # win_provision_extract 刚写的正常登记，后续 win/upgrade-candidate 等靠它取版本。
+  if [ "${COUNTER_REG_INJECTED:-0}" = 1 ]; then
+    win_ps '$keys = @("HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass", "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass"); foreach ($k in $keys) { Remove-Item -Path $k -Recurse -Force -ErrorAction SilentlyContinue }' >/dev/null 2>&1 || true
+  fi
   # 只恢复本场景动过的 App；setup SKIP（77）时什么都没停，不能凭空启动一个 App。
   [ "${APP_TOUCHED:-0}" = 1 ] || return 0
   win_app_running || win_start_app >/dev/null 2>&1 || true
