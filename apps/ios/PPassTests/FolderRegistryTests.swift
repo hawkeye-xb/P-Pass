@@ -128,6 +128,31 @@ final class FolderRegistryTests: XCTestCase {
         XCTAssertEqual(root.record.bookmark, injected, "重建分支用了新生成的书签")
         XCTAssertEqual(root.record.status, "registered")
         XCTAssertEqual(registry.record(id: id)?.bookmark, injected, "替换落了盘（内存与持久层一致）")
+        // 「真的落盘」：用同一目录新建实例读回（内存改了没写盘的话这里是旧书签）。
+        let reloaded = FolderRegistry(directory: dir, logger: logger)
+        XCTAssertEqual(reloaded.record(id: id)?.bookmark, injected, "持久层里是重建后的书签")
+    }
+
+    // 重建成功但落盘失败 → 不宣称已注册（状态回 recoveryUnverified，与返回记录一致）。
+    // 反证：忽略 upsert 结果直接打 registered → status 与持久层不一致 → 红。
+    func testRebuildOkButPersistFailedMarksUnverified() throws {
+        let url = try makeFolder(name: "persistfail")
+        let id = try registry.addFolder(at: url, displayName: "persistfail")
+        let record = registry.record(id: id)!
+        let injected = Data("fresh-but-unsaved".utf8)
+        FolderBookmarks.freshBookmark = { _ in injected }
+        defer { FolderBookmarks.freshBookmark = { try? $0.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) } }
+        // 让持久层写失败：把目录换成只读父目录下的新 registry（与 addFolder 失败用例同一构造）。
+        let parent = dir.appendingPathComponent("locked2", isDirectory: true)
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: parent.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: parent.path) }
+        let locked = FolderRegistry(directory: parent.appendingPathComponent("reg"), logger: logger)
+        locked.upsert(record)
+        let root = try FolderBookmarks.resolve(record, registry: locked, logger: logger, forceStale: true)
+        XCTAssertEqual(root.record.status, "recoveryUnverified", "落盘失败不宣称已注册")
+        // 内存里被改成新书记录前先撤销：resolve 落盘失败不应把 locked 的内存置成 registered。
+        XCTAssertEqual(locked.record(id: id)?.status, "recoveryUnverified", "内存状态与返回一致")
     }
 
     // 替换失败口径：stale 且根不可用（或重建抛 nil）→ 旧书签保留、状态记 recoveryUnverified。

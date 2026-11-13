@@ -65,7 +65,9 @@ enum FolderBookmarks {
                     logger.log("folder \(record.id): stale bookmark rebuilt and replaced atomically")
                 } else {
                     // 重建成功但落盘失败：重启后重建会被重复做——不宣称已注册。
+                    // 内存里的登记也回退到 recoveryUnverified（与返回记录一致；不假装写成功了）。
                     updated.status = "recoveryUnverified"
+                    registry.upsert(updated)
                     logger.log("folder \(record.id): rebuild ok but persist failed; recovery unverified")
                 }
             } else {
