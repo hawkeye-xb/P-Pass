@@ -133,7 +133,11 @@ flow_comment() { # flow_comment <号> <正文文件>
 # ── 门禁挑选（#1651）：worker-done 按改动的文件挑、worker-start 按卡的「范围」挑，共用这一份 ──
 # 两边共用是为了让「领卡时预检的门禁」就是「交卡时会跑的门禁」，挑选口径不许分叉。
 # 口径（本地只跑改动涉及的检查；全量 just ci 是 PR 上 CI 的事，不在本地重复跑）：
-#   纯文档                     → just ci-docs
+#   纯文档（docs/**、*.md、release/notes/**；AGENTS.md 与 .github/** 例外——流程文件仍走 just ci-docs）
+#                              → just md-check（#1750：文档检查与工具自测分层。纯文本卡不再串行整套
+#                                flow-tests——Windows 实测约 58 分钟；identity / supply-chain 等不再本地预跑的
+#                                检查由 PR 上远端 CI 兜底，远端 CI Docs lane 与 flow-tests job 各按自己的
+#                                路径过滤跑，不会因本地变窄而漏跑）
 #   apps/android/**            → just android-test
 #   apps/ios/**、tools/ios/**  → just ios-test
 #   assets/i18n/**、strings*.xml → just mobile-static-check
@@ -193,7 +197,13 @@ flow_pick_gates() { # 从 stdin 读路径清单（一行一个），结果放进
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     case "$f" in
-      docs/* | *.md | release/notes/*) continue ;;
+      docs/* | *.md | release/notes/*)
+        # 纯文本不算代码；例外是流程文件（与远端 ci-docs.yml flow-tests job 的路径过滤同口径）：
+        # AGENTS.md 是流程规矩本体、.github/** 是流程模板，改了仍要跑整套流程自测，不进纯文档快检。
+        case "$f" in
+          AGENTS.md | .github/*) flow_gate_add "just ci-docs" ;;
+        esac
+        continue ;;
     esac
     has_code=1
     case "$f" in
@@ -253,7 +263,8 @@ EOF3
     esac
   done
   if [ "$has_code" = 0 ]; then
-    GATES=("just ci-docs")
+    # 纯文档快检（#1750）：只跑文档域检查，不聚合工具/流程自测；上面点过名的流程文件例外（GATES 非空）。
+    [ "${#GATES[@]}" -gt 0 ] || GATES=("just md-check")
   elif [ "$full" = 1 ] || [ "${#GATES[@]}" -eq 0 ]; then
     GATES=("just ci")
   fi
