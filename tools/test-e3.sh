@@ -250,6 +250,53 @@ grep -q 'pin_cand_bins "$cand_dir"' "$E3/verify" || bad "verify 没把场景指�
     { printf 'MAC_GLOBS 有 %s 项，期望 7\n' "${#MAC_GLOBS[@]}"; exit 1; }
 ) || bad "MAC_GLOBS 通配符被 shell 按路径展开"
 
+# #1524：mac 端只能在本机能验时才排进这一轮；别的端不受影响，摘掉时要说原因。
+(
+  E3_STATE="$(mktemp -d)" || exit 1
+  export E3_STATE
+  trap 'rm -rf "$E3_STATE"' EXIT
+  # shellcheck source=../tools/e3/verify
+  source "$E3/verify" || exit 1
+  # 结果读全局（走命令替换就只剩子 shell，主流程拿不到，N/A 汇总会说错）
+  host_ends "mac android" 2>/dev/null
+  if [ "$(uname -s)" = Darwin ]; then
+    [ "$HOST_ENDS" = "mac android" ] || { printf 'macOS 上 host_ends 应原样保留：%s\n' "$HOST_ENDS"; exit 1; }
+    [ -z "$HOST_SKIPPED" ] || { printf 'macOS 上不该摘端：%s\n' "$HOST_SKIPPED"; exit 1; }
+  else
+    [ "$HOST_ENDS" = "android" ] || { printf '非 macOS 上 host_ends 应摘掉 mac：%s\n' "$HOST_ENDS"; exit 1; }
+    [ "$HOST_SKIPPED" = "mac" ] || { printf '摘掉的端要记进 HOST_SKIPPED：%s\n' "$HOST_SKIPPED"; exit 1; }
+    host_ends "mac android" 2>&1 >/dev/null | grep -q '跳过 mac' ||
+      { echo "非 macOS 上摘掉 mac 时没说原因"; exit 1; }
+  fi
+  host_ends "android" 2>/dev/null
+  [ "$HOST_ENDS" = "android" ] || { echo "host_ends 动了 android"; exit 1; }
+  [ -z "$HOST_SKIPPED" ] || { printf '这次没有要摘的端，HOST_SKIPPED 应清空：%s\n' "$HOST_SKIPPED"; exit 1; }
+  host_ends "" 2>/dev/null
+  [ -z "$HOST_ENDS" ] || { echo "空输入应返回空"; exit 1; }
+) || bad "host_ends：按宿主摘掉本机验不了的端"
+
+# #1524 汇总：被摘掉的端必须进 gaps，并因此落到 PASS（不完整）；接线要真的进主流程。
+(
+  E3_STATE="$(mktemp -d)" || exit 1
+  export E3_STATE
+  trap 'rm -rf "$E3_STATE"' EXIT
+  # shellcheck source=../tools/e3/verify
+  source "$E3/verify" || exit 1
+  d="$E3_STATE/ev"
+  mkdir -p "$d/mac-svc"
+  printf 'PASS android/a\nSKIP android/b 本机没条件\n' >"$d/summary.txt"
+  g="$(collect_gaps "$d" "mac")"
+  case "$g" in *'mac（本机验不了）'*) ;; *) printf 'collect_gaps 没记被摘掉的 mac：%s\n' "$g"; exit 1 ;; esac
+  case "$g" in *'android/b'*) ;; *) printf 'collect_gaps 没记 SKIP：%s\n' "$g"; exit 1 ;; esac
+  [ "$(verdict_word 0 "$g")" = 'PASS（不完整）' ] ||
+    { printf '有未覆盖项时结论不是 PASS（不完整）：%s\n' "$(verdict_word 0 "$g")"; exit 1; }
+  [ "$(verdict_word 0 "")" = PASS ] || { echo "全都覆盖时结论不是 PASS"; exit 1; }
+  [ "$(verdict_word 1 "")" = FAIL ] || { echo "失败时结论不是 FAIL"; exit 1; }
+) || bad "汇总：被摘掉的端要进「未覆盖」并落到 PASS（不完整）"
+grep -q 'host_ends "$ends"' "$E3/verify" || bad "verify 主流程没调用 host_ends（#1524）"
+grep -q 'gaps="$(collect_gaps "$root" "$HOST_SKIPPED")"' "$E3/verify" ||
+  bad "verify 汇总没把 HOST_SKIPPED 并进未覆盖（#1524）"
+
 # #1375 just dev 手机：设备被占就拒绝（--no-wait），不排队；反证：释放后同一条命令成功
 if [ "$(uname)" = Darwin ]; then
   lockdir="$(mktemp -d)"
