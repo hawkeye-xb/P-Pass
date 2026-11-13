@@ -72,7 +72,7 @@ judge() {
   photo_count=$(jget "$d/desk-status.json" 'j["result"]["photo_count"]')
   check "第一轮收场（1 项确认）" has_line "$d/status-run1.json" '"ok" *: *true'
   check "五类操作全部执行成功" bash -c "[ \"\$(grep -c '\"ok\" *: *true' \"$d/status-mutate.json\")\" -ge 5 ]"
-  check "对账后登记映射 2 项（1 个在册新项 + 1 个缺席旧项的映射保留，实测 $items）" bash -c "[ \"${items:-x}\" = \"2\" ]"
+  check "对账后登记映射 2 项（1 个在册新项 + 1 个缺席旧项的映射保留，实测 ${items}）" bash -c "[ \"${items:-x}\" = \"2\" ]"
   check "对账日志：完整枚举 items=1 且缺席 1（base.jpg 判源缺失）" has_line "$d/ppass.log" 'folder .*: scan ok items=1 missing=1'
   check "修改过的文件出了新版本并被确认（同一媒体第二条 CONFIRMED 订单）" has_line "$d/orders.txt" 'CONFIRMED'
   check "删除项的订单被标 source_missing=1（桌面副本不动）" has_line "$d/orders.txt" 'CONFIRMED|1'
