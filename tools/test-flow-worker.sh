@@ -599,34 +599,49 @@ DONE "$W" >/dev/null 2>&1
 comments_of 87 | grep -qF '`just md-check`' && ok "根目录 .md 改动也走 just md-check" || bad "根目录 .md 没走 md-check"
 comments_of 87 | grep -qF '`just ci`' && bad "根目录 .md 退回全量了" || ok "  根目录 .md 不退回全量"
 # 流程文件例外（与远端 ci-docs.yml flow-tests job 的路径过滤同口径）：流程规矩与模板的改动仍跑全套流程自测。
-W="$(card 168 "[T-168] github md" ".github/** AGENTS.md")"
-commit_file "$W" .github/ISSUE_TEMPLATE/t.md
+# 两条分开断言（#1751 评审）：AGENTS.md 一条、.github 模板一条——合在一起的话，删掉任一例外
+# 另一条还能把 ci-docs 挑出来，断言照样绿，例外被静默拆掉也发现不了。
+W="$(card 168 "[T-168] agents md" "AGENTS.md")"
 commit_file "$W" AGENTS.md
 DONE "$W" >"${TMP}/o168" 2>&1
 C168="$(comments_of 168)"
-printf '%s' "$C168" | grep -qF '`just ci-docs`' && ok "AGENTS.md / issue 模板 → 仍跑 just ci-docs（流程自测）" || bad "流程文件没走 ci-docs：$(tail -4 "${TMP}/o168")"
-printf '%s' "$C168" | grep -qF '`just md-check`' && bad "流程文件误挑了 md-check" || ok "  流程文件不挑 md-check"
-# 变异反证（#1545 同款）：把纯文档的 md-check 默认行改回 ci-docs → 纯文档又聚合整套流程自测，
-# T-23 的「不再带起 ci-docs」断言必须抓到（红）；还原则绿。
+printf '%s' "$C168" | grep -qF '`just ci-docs`' && ok "只改 AGENTS.md → 仍跑 just ci-docs（流程自测）" || bad "AGENTS.md 没走 ci-docs：$(tail -4 "${TMP}/o168")"
+printf '%s' "$C168" | grep -qF '`just md-check`' && bad "AGENTS.md 误挑了 md-check" || ok "  AGENTS.md 不挑 md-check"
+W="$(card 169 "[T-169] github md" ".github/**")"
+commit_file "$W" .github/ISSUE_TEMPLATE/t.md
+DONE "$W" >"${TMP}/o169" 2>&1
+C169="$(comments_of 169)"
+printf '%s' "$C169" | grep -qF '`just ci-docs`' && ok "只改 .github 模板 → 仍跑 just ci-docs（流程自测）" || bad ".github 模板没走 ci-docs：$(tail -4 "${TMP}/o169")"
+printf '%s' "$C169" | grep -qF '`just md-check`' && bad ".github 模板误挑了 md-check" || ok "  .github 模板不挑 md-check"
+# 变异反证（#1545 同款，两条各自变异、各自必须能抓到）：
+#   甲：把纯文档的 md-check 默认行改回 ci-docs → 纯文档又聚合整套流程自测，T-23 抓到（红）；
+#   乙：删掉流程文件例外里的 .github/* 一档 → .github 模板的 .md 退回 md-check，T-169 抓到（红）。
+# 还原后全绿。
 cp "$M/tools/flow/worker-lib.sh" "${TMP}/wd-1750.bak"
-sed 's/GATES=("just md-check")/GATES=("just ci-docs")/' "$M/tools/flow/worker-lib.sh" >"${TMP}/wd-1750.mut"
-if ! cmp -s "$M/tools/flow/worker-lib.sh" "${TMP}/wd-1750.mut"; then
-  cp "${TMP}/wd-1750.mut" "$M/tools/flow/worker-lib.sh"
+mutate_gate() { # mutate_gate <描述> <sed 表达式> <期望退回的门禁> <T 号> <提交文件>
+  local desc="$1" expr_="$2" expect="$3" t="$4" cfile="$5" mut out cmt
+  mut="${TMP}/wd-1750.mut"
+  sed "$expr_" "$M/tools/flow/worker-lib.sh" >"$mut"
+  if cmp -s "$M/tools/flow/worker-lib.sh" "$mut"; then
+    bad "${desc}：变异没生效（目标行没匹配上）"
+    return 0
+  fi
+  cp "$mut" "$M/tools/flow/worker-lib.sh"
   git -C "$M" add tools/flow/worker-lib.sh
-  git -C "$M" commit -q -s -m "mutate docs gate default"
+  git -C "$M" commit -q -s -m "mutate docs gate"
   git -C "$M" push -q origin HEAD:refs/heads/main
-  W="$(card 170 "[T-170] md gate mutated" "docs/**")"
-  commit_file "$W" docs/m.md
-  DONE "$W" >"${TMP}/o170" 2>&1
-  C170="$(comments_of 170)"
-  printf '%s' "$C170" | grep -qF '`just ci-docs`' && ok "反证：分层改回 ci-docs 后纯文档退回 ci-docs（断言能抓到）" || bad "反证不成立：$(tail -4 "${TMP}/o170")"
+  W="$(card "$t" "[T-$t] gate mutated" "${cfile%%/*}/**")"
+  commit_file "$W" "$cfile"
+  DONE "$W" >"${TMP}/o${t}" 2>&1
+  cmt="$(comments_of "$t")"
+  printf '%s' "$cmt" | grep -qF "\`${expect}\`" && ok "反证：${desc} → 退回 ${expect}（断言能抓到）" || bad "反证不成立（${desc}）：$(tail -4 "${TMP}/o${t}")"
   cp "${TMP}/wd-1750.bak" "$M/tools/flow/worker-lib.sh"
   git -C "$M" add tools/flow/worker-lib.sh
-  git -C "$M" commit -q -s -m "restore docs gate default"
+  git -C "$M" commit -q -s -m "restore docs gate"
   git -C "$M" push -q origin HEAD:refs/heads/main
-else
-  bad "md-check 默认行没匹配上，变异没生效"
-fi
+}
+mutate_gate "分层默认行改回 ci-docs" 's/GATES=("just md-check")/GATES=("just ci-docs")/' "just ci-docs" 170 docs/m.md
+mutate_gate "删掉 .github/* 流程例外" 's/AGENTS\.md | \.github\/\*) flow_gate_add "just ci-docs"/AGENTS.md) flow_gate_add "just ci-docs"/' "just md-check" 171 .github/ISSUE_TEMPLATE/u.md
 
 # 流程文件改动不退回全量（#1481）：workflows → actionlint + ci-docs；justfile / issue 模板 → ci-docs；未知 .github 路径仍全量
 W="$(card 150 "[T-150] workflow only" ".github/**")"
