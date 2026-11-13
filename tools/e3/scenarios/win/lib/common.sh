@@ -435,6 +435,12 @@ if ($left.Count -gt 0) { Write-Output ("left: " + ($left -join ", ")); exit 1 }
 ' 2>&1)" || { echo "卸载登记清不掉（需要管理员权限？）：${out}" >&2; return 1; }
 }
 
+# 两处 HKLM 卸载登记都不存在 → yes，否则 no（#1675 的判据）。
+# installer 的 pre 快照与 install-baseline 的安装前快照共用同一口径。
+win_hklm_uninstall_absent() {
+  win_ps 'if ((Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass") -or (Test-Path "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass")) { "no" } else { "yes" }' 2>/dev/null | tr -d '[:space:]'
+}
+
 # 把整个桌面状态清到「全新机器」：停进程、删任务、清卸载登记、删数据目录、把旧库挪走（不硬删）。
 win_reset_desktop_state() {
   local lib dest

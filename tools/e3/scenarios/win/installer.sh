@@ -211,7 +211,7 @@ snapshot_state() { # snapshot_state <证据目录> <名字>
     echo "inst_exe_version=$(inst_exe_version)"
     echo "hklm_version=$(hklm_version)"
     # 干净起点断言（#1675）：两处 HKLM 卸载登记都不存在才算「全新机器」。
-    echo "hklm_uninstall_absent=$(win_ps 'if ((Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass") -or (Test-Path "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass")) { "no" } else { "yes" }' 2>/dev/null | tr -d '[:space:]')"
+    echo "hklm_uninstall_absent=$(win_hklm_uninstall_absent)"
     echo "svc_state=$(svc_state)"
     echo "svc_binpath=$(svc_binpath)"
     echo "pd_dir=$([ -d "$PD_DIR" ] && echo present || echo absent)"
