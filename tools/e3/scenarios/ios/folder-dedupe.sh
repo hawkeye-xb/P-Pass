@@ -20,21 +20,21 @@ setup() {
   ios_ensure_installed "$EV"
   ios_reset "$EV"
   ffmpeg -loglevel error -f lavfi -i "testsrc=size=1280x720:rate=24" -f lavfi -i "sine=frequency=440" \
-    -t 20 -c:v libx264 -preset veryfast -b:v 3000k -c:a aac -movflags +faststart -y "$WORK/same.mp4" >&2
-  [ -s "$WORK/same.mp4" ] || die "同内容视频生成失败"
-  mkdir -p "$WORK/stage" && cp "$WORK/same.mp4" "$WORK/stage/same.mp4"
+    -t 20 -c:v libx264 -preset veryfast -b:v 3000k -c:a aac -movflags +faststart -y "$WORK/same.mov" >&2
+  [ -s "$WORK/same.mov" ] || die "同内容视频生成失败"
+  mkdir -p "$WORK/stage" && cp "$WORK/same.mov" "$WORK/stage/same.mov"
   ios_push_stage "$EV" "foldere3-stage-$RUN" "$WORK/stage"
-  # 相册种子走 e3-batch 的 seed 通道：Documents/e2e/seed/（seedRun 读它）；go 信号一并先推（seedRun ready 后立刻种）
-  mkdir -p "$WORK/seed" && cp "$WORK/same.mp4" "$WORK/seed/same.mp4" && printf 'go\n' >"$WORK/seed/go"
-  ios_push "$WORK/seed/same.mp4" "Documents/e2e/seed/same.mp4"
+  # 相册种子走 e3-batch 的 seed 通道：Documents/e2e/seed/（seedRun 只认 *.jpg/*.mov）；go 信号一并先推
+  mkdir -p "$WORK/seed" && cp "$WORK/same.mov" "$WORK/seed/same.mov" && printf 'go\n' >"$WORK/seed/go"
+  ios_push "$WORK/seed/same.mov" "Documents/e2e/seed/same.mov"
   ios_push "$WORK/seed/go" "Documents/e2e/seed/go"
   ios_desk_start "$DESK"
   ios_pair_allow_start "$EV" "$DESK"
 }
 
 act() {
-  # 1) 登记目录来源（目录里 same.mp4）
-  local spec="{\"dir\":\"foldere3-$RUN\",\"stage\":\"foldere3-stage-$RUN\",\"manifest\":{\"same.mp4\":\"same.mp4\"},\"display\":\"PPass FolderE3 $RUN\"}"
+  # 1) 登记目录来源（目录里 same.mov）
+  local spec="{\"dir\":\"foldere3-$RUN\",\"stage\":\"foldere3-stage-$RUN\",\"manifest\":{\"same.mov\":\"same.mov\"},\"display\":\"PPass FolderE3 $RUN\"}"
   ios_launch "$OUT" add "$(jq -cn --arg s "$spec" --arg r "$RUN-add" \
     '{PPASS_E2E_DIR:"container",PPASS_E2E_RUN:$r,PPASS_BGTEST_FOLDER_ADD:$s}')" || return 1
   ios_wait_status "$OUT/add" "$RUN-add" 60 true >/dev/null || { ios_copy_from Documents/e2e/status.json "$OUT/add.status.json"; return 1; }
@@ -56,8 +56,8 @@ act() {
   find "$DESK/home" "$(cat "$DESK/sandbox")" -type f \( -iname '*.mp4' -o -iname '*.mov' \) \
     ! -path '*/thumbs/*' ! -path '*/tmp/*' 2>/dev/null | sort >"$OUT/desktop-files.txt"
   local b3; b3="$(ios_b3)"
-  ios_copy_from "Documents/foldere3-$RUN/same.mp4" "$OUT/phone-same.mp4"
-  "$b3" "$OUT/phone-same.mp4" >"$OUT/phone.b3"
+  ios_copy_from "Documents/foldere3-$RUN/same.mov" "$OUT/phone-same.mov"
+  "$b3" "$OUT/phone-same.mov" >"$OUT/phone.b3"
   : >"$OUT/desktop.b3"
   while IFS= read -r f; do "$b3" "$f" >>"$OUT/desktop.b3"; done <"$OUT/desktop-files.txt"
   { echo "== phone =="; cat "$OUT/phone.b3"; echo "== desktop =="; cat "$OUT/desktop.b3"; } >"$OUT/hashes.txt"
@@ -66,12 +66,13 @@ act() {
 }
 
 judge() {
-  local d="$1" folder_ids album_ids
+  local d="$1" photo_count
+  photo_count=$(jget "$d/desk-status.json" 'j["result"]["photo_count"]')
   check "相册种子就位（seeded，1 视频）" has_line "$d/status-seeded.json" '"step" *: *"seeded"'
   check "备份收场（相册+目录两项确认）" has_line "$d/status-run.json" '"ok" *: *true'
   check "相册来源与目录来源各有 CONFIRMED 订单（media_id 形态不同：folder: 前缀 vs PHAsset id）" bash -c "album=\$(grep -cv '^folder:' \"$d/confirmed.txt\"); folder=\$(grep -c '^folder:' \"$d/confirmed.txt\"); [ \"\$album\" -ge 1 ] && [ \"\$folder\" -ge 1 ]"
   check "两条来源订单的 content_hash 相同（同一素材）" bash -c "[ \"\$(awk -F'|' '{print \$3}' \"$d/confirmed.txt\" | sort -u | wc -l | tr -d ' ')\" = 1 ]"
-  check "桌面 photo_count = 1（内容去重）" bash -c "[ \"\$(jget \"$d/desk-status.json\" 'j[\"result\"][\"photo_count\"]')\" = 1 ]"
+  check "桌面 photo_count = 1（内容去重）" bash -c "[ \"${photo_count:-x}\" = \"1\" ]"
   check "桌面库只落 1 个视频文件" bash -c "[ \"\$(wc -l <\"$d/desktop-files.txt\" | tr -d ' ')\" = 1 ]"
   check "手机源 BLAKE3 = 桌面落地文件 BLAKE3" bash -c "h=\$(awk 'NR==1{print \$1}' \"$d/phone.b3\"); grep -q \"^\$h\" \"$d/desktop.b3\""
   verdict

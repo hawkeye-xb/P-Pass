@@ -41,12 +41,12 @@ act() {
   cp "$OUT/run1.status.json" "$OUT/status-run1.json"
   # 2) 对测试目录做五类操作（真实文件操作，路径不进日志）：
   #    增（stage→nest/n2.jpg）、改名（base→base-r）、移（→sub/base-r）、改（nest/n2.jpg 翻一字节）、删（sub/base-r.jpg）
-  local mutate="{\"dir\":\"foldere3-$RUN\",\"stage\":\"foldere3-stage-$RUN\",\"ops\":[" \
-    "{\"op\":\"add\",\"from\":\"n2.jpg\",\"to\":\"nest/n2.jpg\"}," \
-    "{\"op\":\"rename\",\"from\":\"base.jpg\",\"to\":\"base-r.jpg\"}," \
-    "{\"op\":\"move\",\"from\":\"base-r.jpg\",\"to\":\"sub/base-r.jpg\"}," \
-    "{\"op\":\"modify\",\"to\":\"nest/n2.jpg\",\"offset\":120}," \
-    "{\"op\":\"delete\",\"to\":\"sub/base-r.jpg\"}]}"
+  mutate='{"dir":"foldere3-'"$RUN"'","stage":"foldere3-stage-'"$RUN"'","ops":['\
+'{"op":"add","from":"n2.jpg","to":"nest/n2.jpg"},'\
+'{"op":"rename","from":"base.jpg","to":"base-r.jpg"},'\
+'{"op":"move","from":"base-r.jpg","to":"sub/base-r.jpg"},'\
+'{"op":"modify","to":"nest/n2.jpg","offset":120},'\
+'{"op":"delete","to":"sub/base-r.jpg"}]}'
   ios_launch "$OUT" mutate "$(jq -cn --arg s "$mutate" --arg r "$RUN-mutate" \
     '{PPASS_E2E_DIR:"container",PPASS_E2E_RUN:$r,PPASS_BGTEST_FOLDER_MUTATE:$s}')" || return 1
   ios_wait_status "$OUT/mutate" "$RUN-mutate" 60 true >/dev/null || { ios_copy_from Documents/e2e/status.json "$OUT/mutate.status.json"; return 1; }
@@ -67,15 +67,17 @@ act() {
 }
 
 judge() {
-  local d="$1"
+  local d="$1" items photo_count
+  items=$(jget "$d/folder-list-after.json" 'j["sources"][0]["items"]')
+  photo_count=$(jget "$d/desk-status.json" 'j["result"]["photo_count"]')
   check "第一轮收场（1 项确认）" has_line "$d/status-run1.json" '"ok" *: *true'
-  check "五类操作全部执行成功" bash -c "[ \"\$(grep -c '\"ok\": *true' \"$d/status-mutate.json\")\" -ge 5 ]"
-  check "对账后登记映射 2 项（1 个在册新项 + 1 个缺席旧项的映射保留）" bash -c "got=\$(jget \"$d/folder-list-after.json\" 'j[\"sources\"][0][\"items\"]'); [ \"\$got\" = 2 ]"
+  check "五类操作全部执行成功" bash -c "[ \"\$(grep -c '\"ok\" *: *true' \"$d/status-mutate.json\")\" -ge 5 ]"
+  check "对账后登记映射 2 项（1 个在册新项 + 1 个缺席旧项的映射保留，实测 $items）" bash -c "[ \"${items:-x}\" = \"2\" ]"
   check "对账日志：完整枚举 items=1 且缺席 1（base.jpg 判源缺失）" has_line "$d/ppass.log" 'folder .*: scan ok items=1 missing=1'
   check "修改过的文件出了新版本并被确认（同一媒体第二条 CONFIRMED 订单）" has_line "$d/orders.txt" 'CONFIRMED'
   check "删除项的订单被标 source_missing=1（桌面副本不动）" has_line "$d/orders.txt" 'CONFIRMED|1'
   check "确认内容去重后桌面只留两种内容（改前 base 与改后 n2）" bash -c "[ \"\$(tr -d '[:space:]' <\"$d/desktop-content-count.txt\")\" = 2 ]"
   check "桌面库只落 2 个媒体文件（改名/移动换 ID 不重复占盘）" bash -c "[ \"\$(wc -l <\"$d/desktop-files.txt\" | tr -d ' ')\" = 2 ]"
-  check "桌面 photo_count = 2" bash -c "[ \"\$(jget \"$d/desk-status.json\" 'j[\"result\"][\"photo_count\"]')\" = 2 ]"
+  check "桌面 photo_count = 2" bash -c "[ \"${photo_count:-x}\" = \"2\" ]"
   verdict
 }

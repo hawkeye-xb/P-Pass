@@ -60,6 +60,9 @@ enum BGTestDriver {
         let run = env["PPASS_E2E_RUN"] ?? ""
         let link = env["PPASS_E2E_PAIR_LINK"] ?? ""
         let status = StatusFile(url: dir.appendingPathComponent("status.json"), run: run)
+        // 驱动轮会让 App 长时间前台跑备份：别让自动锁屏把它压成后台（真机实测：锁屏后钩子冻结在半程）。
+        // 只在 DEBUG 驱动轮设置，正常使用不受影响。
+        UIApplication.shared.isIdleTimerDisabled = true
         if env["PPASS_BGTEST_SCOPE_EXPORT"] == "1" {
             Task { await exportScope(model: model, status: status) }
         } else if env["PPASS_BGTEST"] == "1" {
@@ -293,9 +296,12 @@ enum BGTestDriver {
     }
 
     /// 空相册范围 + 自动备份开 + 触发一轮带对账的备份：folder: 项全部在范围内（ADR §4），PhotoKit 一张都不进。
+    /// 相册权限：**不主动 requestAccess**（后台启动弹窗无人点会永久卡住；真机实测）。目录来源不依赖 PhotoKit，
+    /// 权限不是 .full 只影响 PhotoKit 侧（mediaAbsenceTrusted=false、相册侧无发现），folder: 项的发现/导入/传输照常。
+    /// 需要相册的场景（dedupe 的 seedRun）自带 requestAccess 路径。
     private static func folderBegin(model: AppModel, link: String, status: StatusFile) async -> Bool {
-        let access = await model.backend.media.requestAccess()
-        guard access == .full else { status.write("failed", ["error": "photo access is \(access), need full", "done": true]); return false }
+        let access = model.backend.media.access()
+        status.write("access", ["level": "\(access)"])
         let alreadyPaired = model.backend.pairing.pairedAtMs() != nil
         if !alreadyPaired {
             guard await ensurePaired(model: model, link: link, dir: status.url.deletingLastPathComponent()) else {
@@ -410,7 +416,8 @@ enum BGTestDriver {
                     status.write("failed", ["error": "stage move failed: \(error.localizedDescription)", "done": true]); return
                 }
             }
-            try? fm.removeItem(at: stage)
+            // stage 目录保留：manifest 之外的文件（如 reconcile 用例后续「增」要用的素材）还在里面，
+            // 由 CLEANUP 钩子按 foldere3- 前缀统一清。
         }
         var isDir: ObjCBool = false
         guard fm.fileExists(atPath: base.path, isDirectory: &isDir), isDir.boolValue else {
@@ -623,12 +630,16 @@ enum BGTestDriver {
     }
 
     /// 完整反证闭环（一次启动内）：等导入 → 注入 → 等「source changed while serving」→ 查订单未确认 → 还原 → 再触发 → 等重新确认。
+    /// spec 的 "display"（可选）指定目标登记记录：反证必须在**尚未备份过**的来源上做——已确认项不会重新导入，
+    /// 等不到新的导入-供数窗口。
     private static func folderIntegrity(model: AppModel, link: String, spec: String, status: StatusFile) async {
         status.write("started")
         guard let spec0 = json(spec), let dirName = spec0["dir"] as? String, safeName(dirName),
               let fileName = spec0["file"] as? String, let rel = try? FolderPaths.normalize(fileName),
               let (registry, rootURL) = try? testRegistry(),
-              let record = registry.allRecords().first(where: { $0.displayName.hasPrefix(folderDisplayPrefix) }) else {
+              let wanted = spec0["display"] as? String,
+              let record = registry.allRecords().first(where: { $0.displayName == wanted })
+                  ?? registry.allRecords().first(where: { $0.displayName.hasPrefix(folderDisplayPrefix) }) else {
             status.write("failed", ["error": "bad spec or no registered folder source", "done": true]); return
         }
         let mode = spec0["mode"] as? String ?? "flip"

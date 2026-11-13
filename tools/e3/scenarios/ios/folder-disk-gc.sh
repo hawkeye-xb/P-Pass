@@ -23,6 +23,7 @@ setup() {
   ios_reset "$EV"
   ios_make_bigvideo "$WORK/big.mp4" "$BIG_MB"
   ios_make_noise_jpg "$WORK/p1.jpg" 66
+  stat -f%z "$WORK/big.mp4" >"$EV/big-size.txt" # judge 读实测源大小（素材会被 mv 进 stage）
   mkdir -p "$WORK/stage" && mv "$WORK/big.mp4" "$WORK/p1.jpg" "$WORK/stage/"
   ios_push_stage "$EV" "foldere3-stage-$RUN" "$WORK/stage"
   ios_desk_start "$DESK"
@@ -72,25 +73,28 @@ act() {
   disk_measure "$OUT" after
   desktop_du "$OUT" after
   ios_collect_common "$OUT"
+  cp "$EV/big-size.txt" "$OUT/big-size.txt" # judge 离线回放也读得到（EV 只在 run_one 里有）
   desk_ipc "$DESK" status >"$OUT/desk-status.json"
 }
 
 judge() {
-  local d="$1" src_big before_blobs after_blobs gc tmp_before tmp_after desk_kb src_dir_bytes
-  src_big=$(stat -f%z "$WORK/big.mp4" 2>/dev/null || echo 0)
+  local d="$1" src_big before_blobs after_blobs tmp_before tmp_after desk_bytes src_dir_bytes
+  src_big=$(tr -d '[:space:]' <"$d/big-size.txt" 2>/dev/null)
+  [ -n "$src_big" ] || src_big=0
   before_blobs=$(jget "$d/before.json" 'j["bytes"]["provider_blobs"]')
   after_blobs=$(jget "$d/after.json" 'j["bytes"]["provider_blobs"]')
   tmp_before=$(jget "$d/before.json" 'j["bytes"]["app_tmp"]')
   tmp_after=$(jget "$d/after.json" 'j["bytes"]["app_tmp"]')
-  desk_kb=$(awk '{s+=$1} END{print s+0}' "$d/desktop-du-after.txt" 2>/dev/null)
+  # 桌面 1x：桌面库里媒体文件字节合计（视频+图，不含缩略图/索引）≈ 源大小
+  desk_bytes=$(while IFS= read -r f; do stat -f%z "$f" 2>/dev/null; done <"$d/desktop-files-after.txt" | awk '{s+=$1} END{print s+0}')
   src_dir_bytes=$(jget "$d/after.json" 'j["bytes"]["test_dir_foldere3-'"$RUN"'"]')
   check "登记与崩溃后续传都收场" has_line "$d/status-resume.json" '"ok" *: *true'
-  check "源目录占盘不变（实测 $src_dir_bytes 字节，视频 $src_big + 图；只读未动）" bash -c "[ -n \"$src_dir_bytes\" ] && [ \"$src_dir_bytes\" -ge $((src_big + 10000)) ]"
-  check "手机侧 provider blobs 增长远小于源大小（引用导入不复制字节；$before_blobs → $after_blobs)" bash -c "grow=\$(( ${after_blobs:-0} - ${before_blobs:-0} )); [ \"\$grow\" -lt $(( src_big / 2 )) ]"
-  check "App tmp 备份后基本清空（≤ 源大小 5%，$tmp_before → $tmp_after)" bash -c "[ \"\${tmp_after:-0}\" -le $(( src_big / 20 + 1000000 )) ]"
-  check "桌面库增长 ≈ 源大小（那份拷贝的 1x；du ${desk_kb}KB）" bash -c "[ \"\${desk_kb:-0}\" -ge $(( src_big / 2048 )) ]"
+  check "源目录占盘不变（实测 $src_dir_bytes 字节，视频 $src_big + 图；只读未动）" bash -c "[ \"${src_dir_bytes:-0}\" -ge $((src_big + 10000)) ]"
+  check "手机侧 provider blobs 增长远小于源大小（引用导入不复制字节；$before_blobs → $after_blobs)" bash -c "[ \$(( ${after_blobs:-0} - ${before_blobs:-0} )) -lt $(( src_big / 2 )) ]"
+  check "App tmp 备份后基本清空（≤ 源大小 5%，$tmp_before → $tmp_after)" bash -c "[ \"${tmp_after:-0}\" -le $(( src_big / 20 + 1000000 )) ]"
+  check "桌面库 1x：媒体文件字节合计 $desk_bytes ≈ 源 $src_big（±缩略图内浮动）" bash -c "[ \"${desk_bytes:-0}\" -ge $(( src_big / 2 )) ] && [ \"${desk_bytes:-0}\" -le $(( src_big + 5000000 )) ]"
   check "桌面收到 2 个媒体文件（视频+图）" bash -c "[ \"\$(wc -l <\"$d/desktop-files-after.txt\" | tr -d ' ')\" = 2 ]"
-  check "崩溃后 GC 收敛：重启收场后 blobs 与 tmp 不再增长（崩溃注入的临时产物被回收）" bash -c "a=\$(jget \"$d/after.json\" 'j[\"bytes\"][\"provider_blobs\"]'); [ -n \"\$a\" ] && [ \"\$a\" -lt $(( src_big * 2 )) ]"
+  check "崩溃后 GC 收敛：重启收场后 blobs 不高于基线（崩溃注入的临时产物被回收；$before_blobs → $after_blobs)" bash -c "[ \"${after_blobs:-0}\" -le $(( ${before_blobs:-0} + 1000000 )) ]"
   check "日志有崩溃前传输与重启后续传两个阶段的痕迹" bash -c "grep -q 'process start:' \"$d/ppass.log\" && grep -q 'folder .*: imported' \"$d/ppass.log\""
   verdict
 }

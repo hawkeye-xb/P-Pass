@@ -40,22 +40,16 @@ act() {
     '{PPASS_E2E_DIR:"container",PPASS_E2E_RUN:$r,PPASS_BGTEST_FOLDER_ADD:$s}')" || return 1
   ios_wait_status "$OUT/add" "$RUN-add" 60 true >/dev/null || { ios_copy_from Documents/e2e/status.json "$OUT/add.status.json"; return 1; }
   cp "$OUT/add.status.json" "$OUT/status-add.json"
+  # App 由 UI 测试自己带 env 启动（配对+备份一轮），启动后 UIREG_HOME_WAIT 秒按 Home 退后台：
+  # devicectl 预先启动的实例会和 automation 会话抢前台（真机实测 automation mode 超时），让 runner 全程管。
   desk_qr "$DESK" # 一次性配对串：desk_qr 设 PAIR_QR，不回显
-  ios_launch "$OUT" run "$(jq -cn --arg l "$PAIR_QR" --arg r "$RUN-run" \
-    '{PPASS_E2E_DIR:"container",PPASS_E2E_RUN:$r,PPASS_E2E_PAIR_LINK:$l,PPASS_BGTEST_FOLDER_RUN:"1"}')" || return 1
-  # 等进入传输中（视频还在传）就按 Home 退后台
-  local i entered=0
-  for i in $(seq 1 120); do
-    ios_copy_from Documents/e2e/status.json "$OUT/mid.status.json" 2>/dev/null || { sleep 2; continue; }
-    if [ "$(jq -r '.step // ""' "$OUT/mid.status.json")" = backing_up ]; then entered=1; break; fi
-    sleep 2
-  done
-  [ "$entered" = 1 ] || { echo "没等到传输中就按 Home 会变成前台间切换；继续（记录仍有价值）" >&2; }
-  echo "home at $(date '+%T'), step=$(jq -r '.step // ""' "$OUT/mid.status.json" 2>/dev/null)" >"$OUT/background-timeline.txt"
+  echo "home planned at +${UIREG_HOME_WAIT:-6}s after launch" >"$OUT/background-timeline.txt"
   xcodebuild test-without-building -project "$REPO_ROOT/apps/ios/PPass.xcodeproj" -scheme PPassUI \
     -destination "id=$IOS_HW_UDID" -only-testing:PPassUITests/FolderPickerDrive/testPressHome \
     -derivedDataPath "$REPO_ROOT/apps/ios/build/derived-device" \
-    TEST_RUNNER_UIREG_HOME_WAIT=2 >"$OUT/home-test.log" 2>&1 || { tail -10 "$OUT/home-test.log" >&2; return 1; }
+    TEST_RUNNER_UIREG_RUN="$RUN-home" TEST_RUNNER_UIREG_PAIR_LINK="$PAIR_QR" \
+    TEST_RUNNER_UIREG_HOME_WAIT="${UIREG_HOME_WAIT:-6}" >"$OUT/home-test.log" 2>&1 \
+    || { tail -10 "$OUT/home-test.log" >&2; return 1; }
   echo "backgrounded at $(date '+%T')" >>"$OUT/background-timeline.txt"
   # 后台期录 30 秒系统行为（无承诺：系统此刻做什么就是什么，全部进日志）
   sleep 30

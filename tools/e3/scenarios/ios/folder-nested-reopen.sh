@@ -78,3 +78,12 @@ judge() {
   check "桌面沙盒日志无 panic" no_line "$d/daemon.err" 'panicked|PANIC'
   verdict
 }
+
+teardown() {
+  # 清本场景的测试目录与登记记录（只认 foldere3- 前缀），不留给后续场景当噪声
+  ios_launch "$EV" cleanup "$(jq -cn --arg s "{\"dirs\":[\"foldere3-$RUN\"]}" --arg r "$RUN-cleanup" \
+    '{PPASS_E2E_DIR:"container",PPASS_E2E_RUN:$r,PPASS_BGTEST_FOLDER_CLEANUP:$s}')" >/dev/null 2>&1 || true
+  ios_pair_allow_stop
+  desk_stop "$DESK" 2>/dev/null || true
+  rm -rf "$WORK" 2>/dev/null || true
+}
