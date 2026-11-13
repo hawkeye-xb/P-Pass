@@ -105,9 +105,10 @@ counter() {
   COUNTER_REG_INJECTED=0
   if win_is_elevated; then
     echo "counter: 清场没清掉 HKLM 卸载登记（故障注入）" >"$d/note.txt"
+    # 先记标志再写：两处里只成功了一处（第二处抛错）时，teardown 也要把已建的那处清掉。
+    COUNTER_REG_INJECTED=1
     win_ps "New-Item -Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass' -Force | Out-Null; New-Item -Path 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\P-Pass' -Force | Out-Null" >/dev/null 2>&1 ||
       { echo "注入 HKLM 卸载登记失败"; return 1; }
-    COUNTER_REG_INJECTED=1
   else
     # 非管理员造不出 HKLM 残留（真残留时 setup 已经按清场失败停下）。
     # 这条注入只在管理员会话跑；本机仍用「不启动 App」让其它判据变红。
