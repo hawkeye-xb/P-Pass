@@ -745,7 +745,7 @@ jobs:
           VCPKG_ROOT: "C:\\vcpkg"
           # DAE-01b blocker②: same version injection as the macOS job（UPD-13）.
           PPF_BUILD_VERSION: ${{ steps.ppf_ver.outputs.name }}
-        run: cargo build --release -p daemon -p testclient -p decode-worker -p platform
+        run: cargo build --release -p daemon -p testclient -p decode-worker -p media-codec
 
       # T7 (H-09): Windows 图形界面——桌面壳 NSIS 安装包（未签名，
       # Authenticode 证书 H-02 挂账；SmartScreen 会警告，如实告知用户）。

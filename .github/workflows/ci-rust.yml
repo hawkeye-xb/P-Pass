@@ -350,7 +350,7 @@ jobs:
       # 「ppf-decoder not found」而红（与 justfile 的 `test` 同一步）。
       # 视频首帧（#1730）同理要 ppf-video-decoder（非 Windows 端是桩，仍能编）。
       - name: Build ppf-decoder (thumbnail tests need it)
-        run: cargo build -p decode-worker --bin ppf-decoder -p platform --bin ppf-video-decoder
+        run: cargo build -p decode-worker --bin ppf-decoder -p media-codec --bin ppf-video-decoder
 
       - name: Disk report (after ppf-decoder)
         if: always()
@@ -522,7 +522,7 @@ jobs:
         shell: bash
         env:
           VCPKG_ROOT: "C:\\vcpkg"
-        run: cargo build -p decode-worker --bin ppf-decoder -p platform --bin ppf-video-decoder
+        run: cargo build -p decode-worker --bin ppf-decoder -p media-codec --bin ppf-video-decoder
 
       # ⚠️⚠️ **刻意不带 `--all-features`** —— 上面那个 Linux job 带，这里不带，
       # 这个差异是有理由的，不是抄漏了：

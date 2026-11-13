@@ -285,7 +285,7 @@ jobs:
           VCPKG_ROOT: "C:\\vcpkg"
         run: |
           set -euo pipefail
-          cargo build --release -p daemon -p testclient -p decode-worker -p platform
+          cargo build --release -p daemon -p testclient -p decode-worker -p media-codec
           outs=()
           for f in target/release/build/libheif-sys-*/output; do outs+=(--link-output "$f"); done
           tools/check-codec-libs.sh windows --vcpkg-installed /c/vcpkg/installed "${outs[@]}" target/release/daemon.exe target/release/ppf-decoder.exe

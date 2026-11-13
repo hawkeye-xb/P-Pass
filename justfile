@@ -142,8 +142,8 @@ lint-mobile:
 test:
   # daemon 的缩略图测试经 platform::decoder_worker_path 找 target/debug/ppf-decoder；
   # cargo 不会替别的包的 bin 构建，干净 target 下不先建它，这些测试会拿到占位图而红。
-  # 视频首帧（#1730）同理要 ppf-video-decoder，它在 crates/platform（B.2/G5）。
-  cargo build -p decode-worker --bin ppf-decoder -p platform --bin ppf-video-decoder
+  # 视频首帧（#1730）同理要 ppf-video-decoder，它在 crates/media-codec（平台无关 bin）。
+  cargo build -p decode-worker --bin ppf-decoder -p media-codec --bin ppf-video-decoder
   @if command -v cargo-nextest >/dev/null 2>&1 && cargo-nextest --version >/dev/null 2>&1; then \
     cargo nextest run; \
   else \

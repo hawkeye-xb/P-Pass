@@ -1,16 +1,9 @@
-//! 视频首帧解码（Media Foundation，仅 Windows）。
+//! 视频首帧解码（Media Foundation，仅 Windows）——平台能力。
 //!
-//! 这是 `ppf-video-decoder` 子进程的全部逻辑：从 stdin 读 H.264 MP4 字节，
-//! 用 Media Foundation 解首帧，把按 `max_edge` 缩好的 RGBA 像素写回 stdout。
-//! 线协议与 `ppf-decoder` 共用 `decode_worker::proto`（`KIND_VIDEO`）。
-//!
-//! 平台分叉只在这里（B.2/G5 的家）：Windows 走 Media Foundation，其它平台
-//! 返回 [`VideoDecodeError::Unsupported`]。调用方（daemon 侧 `media-codec`）
-//! 通过 [`video_decode_available`] 判断本平台有没有这条路，不写 `#[cfg]`。
-
-use std::io::{Read, Write};
-
-use decode_worker::proto::{self, Response, STATUS_DECODE_FAILED, STATUS_REJECTED};
+//! 这里只提供平台能力：`video_decode_available` 判断本平台有没有原生视频解码，
+//! `decode_video_frame` 从 H.264 MP4 字节解出首帧 RGBA。平台分叉只在这里（B.2/G5
+//! 的家）。请求/应答线协议、`max_edge` 缩放与 `ppf-video-decoder` 子进程入口在
+//! `media-codec`（它同时依赖 `decode-worker` 的 proto 与本 crate，天然承载视频 bin）。
 
 /// 视频首帧解码错误。
 #[derive(Debug, thiserror::Error)]
@@ -26,6 +19,7 @@ pub enum VideoDecodeError {
     Rejected(String),
 }
 
+#[cfg(windows)]
 fn failed(e: impl ToString) -> VideoDecodeError {
     VideoDecodeError::Failed(e.to_string())
 }
@@ -46,60 +40,6 @@ pub fn decode_video_frame(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), VideoDeco
     {
         let _ = bytes;
         Err(VideoDecodeError::Unsupported)
-    }
-}
-
-/// `ppf-video-decoder` 的主流程：读一个视频请求，写一个应答。
-/// 与 `decode_worker::run` 的差别只在「解码」这一步换成 Media Foundation。
-pub fn run_video(input: &mut impl Read, output: &mut impl Write) -> Result<(), proto::ProtoError> {
-    let req = proto::read_request_header(input)?;
-    let mut payload = Vec::new();
-    let got = input.take(req.payload_len).read_to_end(&mut payload)?;
-    if got as u64 != req.payload_len {
-        return Err(proto::ProtoError::Bad(
-            "payload shorter than declared".into(),
-        ));
-    }
-    let resp = match decode_video_frame(&payload) {
-        Ok((w, h, rgba)) => {
-            drop(payload);
-            let mut img = image::RgbaImage::from_raw(w, h, rgba)
-                .ok_or_else(|| proto::ProtoError::Bad("pixel buffer rejected".into()))?;
-            if img.width() > req.max_edge || img.height() > req.max_edge {
-                let scaled = image::DynamicImage::ImageRgba8(img)
-                    .thumbnail(req.max_edge, req.max_edge)
-                    .to_rgba8();
-                img = scaled;
-            }
-            Response::Pixels {
-                width: img.width(),
-                height: img.height(),
-                rgba: img.into_raw(),
-            }
-        }
-        Err(VideoDecodeError::Unsupported) => Response::Failed {
-            status: STATUS_DECODE_FAILED,
-            msg: "video decode unsupported on this platform".into(),
-        },
-        Err(VideoDecodeError::Failed(msg)) => Response::Failed {
-            status: STATUS_DECODE_FAILED,
-            msg,
-        },
-        Err(VideoDecodeError::Rejected(msg)) => Response::Failed {
-            status: STATUS_REJECTED,
-            msg,
-        },
-    };
-    proto::write_response(output, &resp)
-}
-
-/// `ppf-video-decoder` 的入口：stdin/stdout 即协议管道。
-pub fn main_stdio() -> i32 {
-    let stdin = std::io::stdin();
-    let stdout = std::io::stdout();
-    match run_video(&mut stdin.lock(), &mut stdout.lock()) {
-        Ok(()) => 0,
-        Err(_) => 2,
     }
 }
 

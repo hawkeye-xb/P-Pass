@@ -18,6 +18,8 @@ mod quicklook;
 // 静态图解码：交给独立的解码子进程（协议见 decode-worker，隔离拉起在 platform）。
 mod sandbox;
 mod thumb;
+// 视频首帧解码子进程（ppf-video-decoder）的平台无关请求/应答与缩放（B.2 之外）。
+pub mod video;
 
 pub use ffmpeg::{extract_frame, ffmpeg_path};
 pub use pool::{ThumbGenerator, ThumbPool};

@@ -38,20 +38,23 @@ stdin 读图、stdout 写像素，隔离拉起在 `crates/platform/src/isolated*
 
 ### 1. 新增独立子进程 `ppf-video-decoder.exe`（仅 Windows）
 
-- 作为 `crates/platform` 的 bin（`[[bin]] name = "ppf-video-decoder"`）：Media Foundation 解码与 `windows`
-  crate 依赖、所有平台 `#[cfg]` 都只落在 `crates/platform/src/video_decode.rs`（红线 B.2/G5——平台实现与平台
-  依赖只在 crates/platform）。`decode-worker` 保持平台无关（只留 `ppf-decoder` 静态图与 `proto` 线协议，
-  platform 只依赖它的 `proto`）。非 Windows 端仍能编出这个 bin，但 `decode_video_frame` 走桩、返回
-  `VideoDecodeError::Unsupported`，`video_decode_available()` 返回 false——Unsupported 行为由 platform 自己
+- Media Foundation 解码与 `windows` crate 依赖、所有平台 `#[cfg]` 只落在 `crates/platform/src/video_decode.rs`
+  （红线 B.2/G5——平台实现与平台依赖只在 crates/platform）：那里只提供 `video_decode_available`、
+  `decode_video_frame`、`VideoDecodeError` 与 Windows MF 实现；非 Windows 的 `Unsupported` 行为也由 platform
   实现，外层不写 cfg。
+- 视频 bin `ppf-video-decoder` 落在 `crates/media-codec`（`[[bin]] name = "ppf-video-decoder"`）：它天然同时
+  依赖 `decode-worker`（proto/image）与 `platform`，承载视频子进程的平台无关部分（请求/应答、`max_edge` 缩放、
+  `main_stdio`）。`decode-worker` 保持平台无关、不反向依赖 platform（静态 `ppf-decoder` 才能继续开 win32k
+  lockdown）；`platform` 不反向依赖 `decode-worker`。
 - 输入/输出与 `ppf-decoder` 同一套「一次性请求、一次性应答」线协议模型：stdin 收视频字节，stdout 返回
   RGBA 像素或失败报文。可复用 `decode_worker::proto` 并新增 `KIND_VIDEO`，或另立同构的 video 协议；读方
   对每个字段做上限校验，不信对端。
 - 只认 H.264/AVC 编码的 mp4/m4v（mov 容器）。第一帧解出来即返回 RGBA 像素；回包按请求的 `max_edge` 校验
   （`proto.rs`），所以 worker 要把解出的帧缩到请求给的 `max_edge` 再回（与静态图 `decode_worker::run` 同款
   行为，避免 1080p/4K 原帧被判「回包不合法」→ 占位图）。daemon 侧仍会在 `write_thumb` 再缩到 256/1024。
-- 入口 `crates/platform/src/bin/ppf-video-decoder.rs`：`main` 调 `platform::video_decode::main_stdio`
-  （读请求、解码、写应答的 `run_video` 也在 `video_decode` 里，与 `decode_worker::run` 同构），进程用完即弃。
+- 入口 `crates/media-codec/src/bin/ppf-video-decoder.rs`：`main` 调 `media_codec::video::main_stdio`（读请求、
+  解码、写应答的 `run_video` 在 `crates/media-codec/src/video.rs`，复用 `decode_worker::proto` 与
+  `platform::video_decode`，与 `decode_worker::run` 同构），进程用完即弃。
 
 ### 2. daemon 侧接上这条新路，不直接解析视频、不退回 ffmpeg
 
@@ -76,9 +79,9 @@ stdin 读图、stdout 写像素，隔离拉起在 `crates/platform/src/isolated*
 
 ### 4. 构建 / 签名 / 安装包接入
 
-- 构建：`cargo build --release -p decode-worker` 产出 `ppf-decoder`，`cargo build --release -p platform`
+- 构建：`cargo build --release -p decode-worker` 产出 `ppf-decoder`，`cargo build --release -p media-codec`
   产出 `ppf-video-decoder`；`.github/workflows/release.yml` 的 Windows 构建步骤由 `cargo build --release -p
-  daemon -p testclient -p decode-worker` 改为再带 `-p platform`（macOS 构建不变，不产出视频 decoder）。
+  daemon -p testclient -p decode-worker` 改为再带 `-p media-codec`（macOS 构建不变，不产出视频 decoder）。
 - 打包：把 `target/release/ppf-video-decoder.exe` 复制进 `apps/desktop/src-tauri/binaries/ppf-video-decoder-
   x86_64-pc-windows-msvc.exe`（与现有 `ppf-decoder` 同款的 target-triple 后缀命名），并在
   `apps/desktop/src-tauri/tauri.conf.json` 的 `bundle.externalBin` 加一行 `binaries/ppf-video-decoder`。
@@ -94,7 +97,7 @@ stdin 读图、stdout 写像素，隔离拉起在 `crates/platform/src/isolated*
     `ppf-daemon`/`ppf-decoder`，补 `ppf-video-decoder`（否则 desktop-checks 的 tauri-build 与 `just done`
     的 sidecar 占位会因缺它报红）。
   - `.github/workflows/ci-rust.yml` 与 `justfile` 现在只 `cargo build -p decode-worker --bin ppf-decoder`，
-    补 `-p platform --bin ppf-video-decoder`（否则新 decoder 的测试在 CI 上拿不到可执行文件）。
+    补 `-p media-codec --bin ppf-video-decoder`（否则新 decoder 的测试在 CI 上拿不到可执行文件）。
   - `.github/workflows/artifacts.yml` 的 Windows dogfood 只拷 daemon/testclient/ppf-decoder，补
     `ppf-video-decoder.exe`（否则 dogfood 包里的 daemon 一直报 `SandboxUnavailable`，没法在该包上验证修复）。
   - `tools/release/dry_run.py` 的 cargo 桩只造 ppf-decoder，补 ppf-video-decoder（否则 release dry-run 的
