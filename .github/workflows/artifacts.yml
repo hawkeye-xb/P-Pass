@@ -297,7 +297,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/rel
-          cp target/release/daemon.exe target/release/testclient.exe target/release/ppf-decoder.exe /tmp/rel/
+          cp target/release/daemon.exe target/release/testclient.exe target/release/ppf-decoder.exe target/release/ppf-video-decoder.exe /tmp/rel/
           # 冒烟脚本是 Win 真机验证的必需件——复制失败必须响（H-09b：不许 || true 吞掉）
           cp tools/win-smoke.ps1 /tmp/rel/
           cd /tmp/rel

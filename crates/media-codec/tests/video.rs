@@ -1,0 +1,62 @@
+//! 视频首帧解码子进程（`ppf-video-decoder`，Windows Media Foundation）的契约：
+//! 真 worker 能解、畸形输入归类 Decode、缺失归类 SandboxUnavailable。
+//!
+//! 只在 Windows 上有真实 worker；非 Windows 端这些测试跳过（worker 是桩）。
+
+#![allow(clippy::disallowed_methods)]
+
+use std::path::{Path, PathBuf};
+
+use media_codec::{decode_video, CodecError};
+
+fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
+}
+
+/// 断言像素不是纯色占位块（真实画面至少有不同颜色）。
+fn assert_non_flat(img: &image::DynamicImage) {
+    let rgba = img.to_rgba8();
+    let first = rgba.get_pixel(0, 0);
+    let distinct = rgba.pixels().any(|p| p != first);
+    assert!(distinct, "解码出的帧必须是真实画面，不是纯色块");
+}
+
+#[test]
+fn video_decoder_decodes_first_frame() {
+    #[cfg(not(windows))]
+    {
+        eprintln!("非 Windows：视频 decoder 是桩，跳过");
+        return;
+    }
+    let img = decode_video(&fixture("tiny.mp4")).expect("视频 decoder 应能解 H.264 MP4 首帧");
+    assert_eq!((img.width(), img.height()), (64, 48), "fixture 是 64x48");
+    assert_non_flat(&img);
+}
+
+#[test]
+fn video_decoder_malformed_input_is_a_file_level_failure() {
+    #[cfg(not(windows))]
+    {
+        eprintln!("非 Windows：视频 decoder 是桩，跳过");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("bad.mp4");
+    std::fs::write(&p, b"this is not an mp4 at all").unwrap();
+    let err = decode_video(&p).unwrap_err();
+    assert!(matches!(err, CodecError::Decode { .. }), "{err:?}");
+}
+
+#[test]
+fn video_decoder_missing_worker_is_unavailable() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("clip.mp4");
+    std::fs::write(&p, b"whatever").unwrap();
+    // debug 构建认环境变量，指向一个不存在的 worker → 拉起失败 = 系统性问题。
+    std::env::set_var("PPF_VIDEO_DECODE_WORKER", dir.path().join("nope"));
+    let err = decode_video(&p).unwrap_err();
+    std::env::remove_var("PPF_VIDEO_DECODE_WORKER");
+    assert!(matches!(err, CodecError::SandboxUnavailable(_)), "{err:?}");
+}

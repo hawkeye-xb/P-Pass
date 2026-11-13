@@ -32,16 +32,58 @@ const WORKER_MEMORY: u64 = 2 * 1024 * 1024 * 1024;
 
 /// 解码一张静态图，返回方向已摆正、最长边不超过 [`DECODE_MAX_EDGE`] 的像素。
 pub fn decode_image(path: &Path) -> Result<DynamicImage> {
-    decode_with(path, DEADLINE)
+    decode_with(
+        path,
+        DEADLINE,
+        proto::KIND_STILL,
+        platform::isolated::decoder_worker_path(),
+        true,
+    )
 }
 
 /// 同 [`decode_image`]，时限可调（生命周期测试用）。
 #[doc(hidden)]
 pub fn decode_image_within(path: &Path, deadline: Duration) -> Result<DynamicImage> {
-    decode_with(path, deadline)
+    decode_with(
+        path,
+        deadline,
+        proto::KIND_STILL,
+        platform::isolated::decoder_worker_path(),
+        true,
+    )
 }
 
-fn decode_with(path: &Path, deadline: Duration) -> Result<DynamicImage> {
+/// 解码一个视频的首帧（Windows 用 `ppf-video-decoder`，Media Foundation）。
+/// 只对 H.264 mp4/m4v 有意义；返回最长边不超过 [`DECODE_MAX_EDGE`] 的像素。
+pub fn decode_video(path: &Path) -> Result<DynamicImage> {
+    decode_with(
+        path,
+        DEADLINE,
+        proto::KIND_VIDEO,
+        platform::isolated::video_decoder_worker_path(),
+        false,
+    )
+}
+
+/// 同 [`decode_video`]，时限可调（生命周期测试用）。
+#[doc(hidden)]
+pub fn decode_video_within(path: &Path, deadline: Duration) -> Result<DynamicImage> {
+    decode_with(
+        path,
+        deadline,
+        proto::KIND_VIDEO,
+        platform::isolated::video_decoder_worker_path(),
+        false,
+    )
+}
+
+fn decode_with(
+    path: &Path,
+    deadline: Duration,
+    kind: u8,
+    worker_path: Option<std::path::PathBuf>,
+    win32k_lockdown: bool,
+) -> Result<DynamicImage> {
     let decode_err = |msg: String| CodecError::Decode {
         path: path.to_path_buf(),
         msg,
@@ -68,12 +110,13 @@ fn decode_with(path: &Path, deadline: Duration) -> Result<DynamicImage> {
         .filter(|e| e.len() <= proto::MAX_EXT_LEN)
         .unwrap_or_default();
 
-    let worker = platform::isolated::decoder_worker_path()
-        .ok_or_else(|| CodecError::SandboxUnavailable("ppf-decoder not found".into()))?;
+    let worker = worker_path
+        .ok_or_else(|| CodecError::SandboxUnavailable("decode worker not found".into()))?;
     let mut child = platform::isolated::spawn_isolated(
         &worker,
         &platform::isolated::Limits {
             memory_bytes: WORKER_MEMORY,
+            win32k_lockdown,
         },
     )
     .map_err(|e| CodecError::SandboxUnavailable(format!("spawn {}: {e}", worker.display())))?;
@@ -96,7 +139,7 @@ fn decode_with(path: &Path, deadline: Duration) -> Result<DynamicImage> {
 
     // 写请求：写失败（子进程已死）不在这里报，读应答时自然得到「没有应答」。
     let sent = (|| -> io::Result<()> {
-        proto::write_request_header(&mut stdin, DECODE_MAX_EDGE, &ext, len)
+        proto::write_request_header(&mut stdin, kind, DECODE_MAX_EDGE, &ext, len)
             .map_err(|e| io::Error::other(e.to_string()))?;
         io::copy(&mut (&mut file).take(len), &mut stdin)?;
         Ok(())

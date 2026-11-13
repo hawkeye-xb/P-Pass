@@ -2,6 +2,7 @@
 
 pub mod decode;
 pub mod proto;
+pub mod video;
 
 use std::io::{self, Read, Write};
 
@@ -48,6 +49,56 @@ pub fn main_stdio() -> i32 {
     let stdin = io::stdin();
     let stdout = io::stdout();
     match run(&mut stdin.lock(), &mut stdout.lock()) {
+        Ok(()) => 0,
+        Err(_) => 2,
+    }
+}
+
+/// 视频子进程（`ppf-video-decoder`）主流程：读一个视频请求，返回首帧像素。
+/// 与 [`run`] 的差别只在「解码」这一步换成 Media Foundation（见 [`video`]）。
+pub fn run_video(input: &mut impl Read, output: &mut impl Write) -> Result<(), proto::ProtoError> {
+    let req = proto::read_request_header(input)?;
+    let mut payload = Vec::new();
+    let got = input.take(req.payload_len).read_to_end(&mut payload)?;
+    if got as u64 != req.payload_len {
+        return Err(proto::ProtoError::Bad(
+            "payload shorter than declared".into(),
+        ));
+    }
+    let resp = match video::decode_video_frame(&payload) {
+        Ok((w, h, rgba)) => {
+            drop(payload);
+            let mut img = image::RgbaImage::from_raw(w, h, rgba)
+                .ok_or_else(|| proto::ProtoError::Bad("pixel buffer rejected".into()))?;
+            if img.width() > req.max_edge || img.height() > req.max_edge {
+                let scaled = image::DynamicImage::ImageRgba8(img)
+                    .thumbnail(req.max_edge, req.max_edge)
+                    .to_rgba8();
+                img = scaled;
+            }
+            Response::Pixels {
+                width: img.width(),
+                height: img.height(),
+                rgba: img.into_raw(),
+            }
+        }
+        Err(decode::DecodeError::Failed(msg)) => Response::Failed {
+            status: STATUS_DECODE_FAILED,
+            msg,
+        },
+        Err(decode::DecodeError::Rejected(msg)) => Response::Failed {
+            status: STATUS_REJECTED,
+            msg,
+        },
+    };
+    proto::write_response(output, &resp)
+}
+
+/// `ppf-video-decoder` 的入口：stdin/stdout 即协议管道。
+pub fn main_stdio_video() -> i32 {
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+    match run_video(&mut stdin.lock(), &mut stdout.lock()) {
         Ok(()) => 0,
         Err(_) => 2,
     }

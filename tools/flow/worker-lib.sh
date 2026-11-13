@@ -184,7 +184,7 @@ flow_gate_desktop_stubs() {
   [ -n "$host" ] || host="x86_64-unknown-linux-gnu"
   case "$host" in *windows*) suffix=".exe" ;; *) suffix="" ;; esac
   mkdir -p apps/desktop/src-tauri/binaries
-  for name in ppf-daemon ppf-decoder; do
+  for name in ppf-daemon ppf-decoder ppf-video-decoder; do
     stub="apps/desktop/src-tauri/binaries/${name}-${host}${suffix}"
     [ -e "$stub" ] || : >"$stub"
     chmod +x "$stub" 2>/dev/null || true
