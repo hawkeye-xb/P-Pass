@@ -71,6 +71,26 @@ final class LiveBackend: @unchecked Sendable {
                                                clearPairing: { try clearPairingBeforeStart(root: dir, logger: logger) }, logger: logger)
     }
 
+    /// #1731：装配 media / importer（ADR §1：首版统一经 Composite，「不另做实施分支」）。
+    /// folderSources 为空 = Composite 只装 PhotoKit（行为与直接装配一致）；有登记 = 全部目录来源逐个装进去。
+    /// 装配规则单一出处：LiveBackend 与 CompositeWiringTests 共用同一份函数（测试核对的就是引擎拿到的产物）。
+    static func assembleMedia(folderSources: [FolderRecord], registry: FolderRegistry, directory: URL,
+                              photoSource: MediaSource, photoImporter: MediaImporter,
+                              provider: NativeProvider, logger: CoreLogger) -> (media: MediaSource, importer: MediaImporter) {
+        let folderMedia = folderSources.map { FolderMediaSource(registry: registry, sourceId: $0.id, directory: directory, logger: logger) }
+        let folderImporters = folderSources.map { FolderImporter(registry: registry, sourceId: $0.id, directory: directory, provider: provider, logger: logger) }
+        return (media: CompositeMediaSource(library: photoSource, others: folderMedia),
+                importer: CompositeImporter(library: photoImporter, others: folderImporters))
+    }
+
+    /// #1731：引擎的 inScope（装配注入三处之一）：folder: 绕过共享 since 时间档（ADR §4：Folder 的范围判断
+    /// 不看 PhotoKit 的时间档）；PhotoKit 走现有 ScopeKey.inScope。folder:<sourceId> 前缀由
+    /// FolderMediaSource.bucketId 生成。与 CompositeWiringTests 共用同一份函数。
+    static func engineInScope(_ bucketId: String, selected: Set<String>, since: BackupSince) -> Bool {
+        if bucketId.hasPrefix("folder:") { return true }
+        return PhotoMediaSource.inScope(bucketId: bucketId, selected: selected, since: since)
+    }
+
     /// 起 App 的第一件事是取身份：读不到钥匙串（开机后还没解锁过）抛 `IdentityStoreError.locked`，
     /// 钥匙串故障抛 `IdentityStoreError` 其余几种——都在碰任何存储之前（AppBoot 据此分流）。
     init(identityStore: IdentitySecretStore = KeychainIdentityStore()) throws {
@@ -162,27 +182,19 @@ final class LiveBackend: @unchecked Sendable {
         let audit = AuditOutboxDispatcher(
             store: orders, desktop: FlowWiring.auditDesktop(store: pairingStore, desktop: desktop),
             acknowledge: { ids in await engineBox.engine?.acknowledgeAudit(ids) })
-        // #1731：目录来源（ADR 已采纳）——首版不接 UI，没有已登记目录时用 nil 占位（Composite 装配单 PhotoKit 源）。
-        // 有登记目录时经 Composite 装配（统一的取件路径，PhotoKit 行为不回归）；目录发现走 reconcile 轮。
-        let folderSources = FolderRegistry(directory: dir, logger: logger).allRecords()
-        let compositeMedia: MediaSource
-        let compositeImporter: MediaImporter
-        if folderSources.isEmpty {
-            compositeMedia = PhotoMediaSource(selected: scope, since: since, inbox: inbox, log: { logger.log($0) })
-            compositeImporter = PhotoImporter(provider: provider, tempRoot: fm.temporaryDirectory.appendingPathComponent("ppass-originals"),
-                                              pickedRoot: fm.temporaryDirectory.appendingPathComponent(OriginalCachePaths.pickedScratchDirName))
-        } else {
-            let photoSource = PhotoMediaSource(selected: scope, since: since, inbox: inbox, log: { logger.log($0) })
-            let folderSource = FolderMediaSource(registry: FolderRegistry(directory: dir, logger: logger), sourceId: folderSources[0].id, directory: dir, logger: logger)
-            compositeMedia = CompositeMediaSource(library: photoSource, others: [folderSource])
-            let photoImporter = PhotoImporter(provider: provider, tempRoot: fm.temporaryDirectory.appendingPathComponent("ppass-originals"),
-                                              pickedRoot: fm.temporaryDirectory.appendingPathComponent(OriginalCachePaths.pickedScratchDirName))
-            let folderImporter = FolderImporter(registry: FolderRegistry(directory: dir, logger: logger), sourceId: folderSources[0].id, directory: dir, provider: provider, logger: logger)
-            compositeImporter = CompositeImporter(library: photoImporter, others: [folderImporter])
-        }
+        // #1731：目录来源（ADR 已采纳）——首版不接 UI；**统一经 Composite 装配**（ADR §1「不另做实施分支」）：
+        // 无登记目录 = Composite 只装 PhotoKit（行为与直接装配一致）；有登记 = 全部目录来源逐个装进去（按 sourceId 路由）。
+        // 一个进程一个 FolderRegistry 实例（FolderRegistry 的类注释），传给扫描与导入两侧（含 FolderBookmarks.resolve）。
+        // 装配规则单一出处：assembleMedia / engineInScope 是 CompositeWiringTests 与这里共用的同一份函数。
+        let folderRegistry = FolderRegistry(directory: dir, logger: logger)
+        let photoSource = PhotoMediaSource(selected: scope, since: since, inbox: inbox, log: { logger.log($0) })
+        let photoImporter = PhotoImporter(provider: provider, tempRoot: fm.temporaryDirectory.appendingPathComponent("ppass-originals"),
+                                          pickedRoot: fm.temporaryDirectory.appendingPathComponent(OriginalCachePaths.pickedScratchDirName))
+        let assembled = Self.assembleMedia(folderSources: folderRegistry.allRecords(), registry: folderRegistry, directory: dir,
+                                           photoSource: photoSource, photoImporter: photoImporter, provider: provider, logger: logger)
         engine = FlowEngine(
-            store: orders, media: compositeMedia,
-            importer: compositeImporter,
+            store: orders, media: assembled.media,
+            importer: assembled.importer,
             delivery: delivery,
             probe: PrewarmingProbe(provider: provider,
                                    inner: ControlPlaneProbe(currentPairingId: pairingId, desktop: desktop, logger: logger, pairingLoss: pairingLoss),
@@ -192,12 +204,7 @@ final class LiveBackend: @unchecked Sendable {
                 Conditions(paired: pairingId() != nil, autoBackupEnabled: autoPrefs.enabled(), wifiOnly: settings.wifiOnly(),
                            onUnmetered: !network.isExpensive, batteryLow: BatteryState.isLow)
             },
-            inScope: { bucketId in
-                // #1731：目录来源绕过共享 since 时间档（ADR §4：Folder 的范围判断不看 PhotoKit 的时间档）；
-                // PhotoKit 走现有 ScopeKey.inScope。folder:<sourceId> 前缀由 FolderMediaSource.bucketId 生成。
-                if bucketId.hasPrefix("folder:") { return true }
-                return PhotoMediaSource.inScope(bucketId: bucketId, selected: scope(), since: since())
-            },
+            inScope: { LiveBackend.engineInScope($0, selected: scope(), since: since()) },
             mediaAbsenceTrusted: { media.access() == .full },
             pairingId: pairingId, logger: logger,
             afterCycle: FlowWiring.afterCycle(dispatcher: audit),

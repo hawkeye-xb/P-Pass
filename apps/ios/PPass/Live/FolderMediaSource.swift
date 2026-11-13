@@ -6,7 +6,9 @@ import Foundation
 import PPassCore
 import UniformTypeIdentifiers
 
-final class FolderMediaSource: MediaSource, @unchecked Sendable {
+final class FolderMediaSource: MediaSource, FolderSourceIdentifying, @unchecked Sendable {
+    /// 装配路由用：本来源的 sourceId（folder:<sourceId>:<opaque> 的第二段）。
+    let folderSourceId: String
     /// Folder 游标占位（仅满足协议；不表示扫描进度，不用于重置判断）。
     static let positionPlaceholder = "folder-v1"
 
@@ -18,6 +20,7 @@ final class FolderMediaSource: MediaSource, @unchecked Sendable {
     init(registry: FolderRegistry, sourceId: String, directory: URL, logger: CoreLogger) {
         self.registry = registry
         self.sourceId = sourceId
+        self.folderSourceId = sourceId
         self.directory = directory
         self.logger = logger
     }

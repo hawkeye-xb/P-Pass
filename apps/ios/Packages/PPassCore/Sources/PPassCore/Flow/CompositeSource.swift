@@ -9,6 +9,20 @@ public enum MediaSourceRouting {
     public static func isFolder(_ mediaId: String) -> Bool {
         mediaId.hasPrefix("folder:")
     }
+
+    /// `folder:<sourceId>:<opaqueItemId>` 的第二段（sourceId）；非 folder id 或段数不对返回 nil。
+    public static func sourceId(of mediaId: String) -> String? {
+        guard isFolder(mediaId) else { return nil }
+        let body = String(mediaId.dropFirst("folder:".count))
+        let parts = body.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else { return nil }
+        return String(parts[0])
+    }
+}
+
+/// FolderMediaSource 自报 sourceId（PPassCore 不知道 app 层类型；装配时向下转型取一次）。
+public protocol FolderSourceIdentifying: MediaSource {
+    var folderSourceId: String { get }
 }
 
 /// 把多个 MediaSource 合成对引擎的一个 MediaSource（ADR §1/§2）。
@@ -19,18 +33,28 @@ public enum MediaSourceRouting {
 public final class CompositeMediaSource: MediaSource, @unchecked Sendable {
     /// PhotoKit 来源（唯一的库身份与游标持有者）。
     private let library: MediaSource
-    /// 其余来源（首版最多一个 FolderMediaSource；按数组顺序扫描）。
+    /// 其余来源（FolderMediaSource；按 mediaId 里的 sourceId 精确路由）。
     private let others: [MediaSource]
+    /// sourceId → 来源（folder:<sourceId>:<opaque> 的第二段；FolderMediaSource 的 id 已核实唯一）。
+    private let bySourceId: [String: MediaSource]
 
     public init(library: MediaSource, others: [MediaSource] = []) {
         self.library = library
         self.others = others
+        var map: [String: MediaSource] = [:]
+        for source in others {
+            if let folder = source as? FolderSourceIdentifying {
+                map[folder.folderSourceId] = source
+            }
+        }
+        self.bySourceId = map
     }
 
-    /// 按前缀路由到对应来源（folder: → others 里的目录来源；其余 → library）。
+    /// 按 mediaId 路由：folder:<sourceId>:<opaque> → 对应 sourceId 的目录来源（没有则 nil，装配与 id 不一致直接暴露）；
+    /// 其余 → library。
     private func route(_ mediaId: String) -> MediaSource? {
         if MediaSourceRouting.isFolder(mediaId) {
-            return others.first
+            return MediaSourceRouting.sourceId(of: mediaId).flatMap { bySourceId[$0] }
         }
         return library
     }
@@ -71,21 +95,27 @@ public final class CompositeMediaSource: MediaSource, @unchecked Sendable {
 
     /// presence 合并（ADR）：任一来源不可信（nil）→ 整体 nil；不得返回部分并集、不得把不可用来源当空集。
     public func existingIds(_ mediaIds: [String]) async throws -> Set<String>? {
-        // 按前缀分组，每组路由到对应来源。
-        // 路由只按前缀分两组：folder → others.first，其余 → library（与 lookup 同一规则）。
-        var folderIds: [String] = []
+        // 按 mediaId 里的 sourceId 分组，每组路由到对应来源（与 lookup / import 同一规则，不只 others.first）；
+        // 非 folder → library。sourceId 在装配里没有的 folder id（来源已移除或 id 不成形）：本组合不认领，视作缺席——
+        // 与 lookup 路由不到返回 nil 同一口径，不会让一个已移除的来源把对账永久卡在「不知道」。
         var libraryIds: [String] = []
+        var folderBySource: [String: [String]] = [:]
         for id in mediaIds {
-            if MediaSourceRouting.isFolder(id) { folderIds.append(id) } else { libraryIds.append(id) }
+            if MediaSourceRouting.isFolder(id) {
+                folderBySource[MediaSourceRouting.sourceId(of: id) ?? "", default: []].append(id)
+            } else {
+                libraryIds.append(id)
+            }
         }
         var present: Set<String> = []
-        if let source = others.first, !folderIds.isEmpty {
-            guard let ids = try await source.existingIds(folderIds) else { return nil }
-            present.formUnion(ids)
-        }
         if !libraryIds.isEmpty {
             guard let ids = try await library.existingIds(libraryIds) else { return nil }
             present.formUnion(ids)
+        }
+        for (sourceId, ids) in folderBySource {
+            guard sourceId != "", let source = bySourceId[sourceId] else { continue } // 装配里没有 → 缺席
+            guard let r = try await source.existingIds(ids) else { return nil }
+            present.formUnion(r)
         }
         return present
     }
@@ -101,15 +131,25 @@ public final class CompositeMediaSource: MediaSource, @unchecked Sendable {
 public final class CompositeImporter: MediaImporter, @unchecked Sendable {
     private let library: MediaImporter
     private let others: [MediaImporter]
+    /// sourceId → 目录导入器（folder:<sourceId>:<opaque> 按第二段精确分发）。
+    private let bySourceId: [String: MediaImporter]
 
     public init(library: MediaImporter, others: [MediaImporter] = []) {
         self.library = library
         self.others = others
+        var map: [String: MediaImporter] = [:]
+        for importer in others {
+            if let folder = importer as? FolderImportIdentifying {
+                map[folder.folderSourceId] = importer
+            }
+        }
+        self.bySourceId = map
     }
 
     public func importMedia(_ details: MediaDetails, onFetch: @escaping @Sendable (OriginalFetchUpdate) -> Void) async throws -> ImportResult {
         if MediaSourceRouting.isFolder(details.snapshot.mediaId) {
-            guard let folder = others.first else {
+            guard let sourceId = MediaSourceRouting.sourceId(of: details.snapshot.mediaId),
+                  let folder = bySourceId[sourceId] else {
                 throw FolderMediaMissing()
             }
             return try await folder.importMedia(details, onFetch: onFetch)
@@ -131,8 +171,13 @@ public final class CompositeImporter: MediaImporter, @unchecked Sendable {
     }
 }
 
-/// Composite 装配里没有目录来源却收到 folder: 的 id——装配错误，直接暴露。
+/// Composite 装配里没有对应目录来源却收到 folder: 的 id——装配错误，直接暴露。
 public struct FolderMediaMissing: Error {
     public init() {}
+}
+
+/// FolderImporter 自报 sourceId（与 FolderSourceIdentifying 同理；PPassCore 不知道 app 层类型）。
+public protocol FolderImportIdentifying: MediaImporter {
+    var folderSourceId: String { get }
 }
 
