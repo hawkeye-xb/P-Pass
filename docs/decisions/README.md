@@ -19,6 +19,7 @@ ADR，验收人拍板后再拆卡实现。代码注释里出现的 ADR-003、ADR
 | 2026-11-09 | [服务启停与自启纳入核心名单](2026-11-09-core-paths-service-lifecycle.md) | 已采纳 |
 | 2026-11-09 | [Windows 服务形态：「启动后台服务」必须真的启动](2026-11-09-windows-service-start.md) | 已采纳 |
 | 2026-11-10 | [CI 与发布链外部下载的韧性与缓存](2026-11-10-ci-download-resilience.md) | 已采纳 |
+| 2026-11-13 | [本地授权目录作为照片和视频备份来源](2026-11-13-local-folder-media-source.md) | 提议 |
 
 ## 写法
 
