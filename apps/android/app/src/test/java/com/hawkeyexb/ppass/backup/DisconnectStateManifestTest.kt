@@ -81,6 +81,10 @@ class DisconnectStateManifestTest {
             DisconnectState.IDENTITY -> IdentityStore(filesDir, FakeIdentityKeyWrapper()).secretKey()
             DisconnectState.IDENTITY_RETIRED_PLAINTEXT -> fake("files/identity.key")
             DisconnectState.ONBOARDED_DESKTOPS -> OnboardedDesktopsStore(filesDir).markOnboarded(nodeId)
+            // #1762：真实 store 写（FolderRegistry 是 files/ JSON，JVM 可跑）。
+            DisconnectState.FOLDER_REGISTRY ->
+                com.hawkeyexb.ppass.backup.folder.FolderRegistry(java.io.File(filesDir, "folder-registry.json"))
+                    .addFolder("content://tree/primary%3ADCIM", "DCIM")
             DisconnectState.BACKUP_SCOPE -> fake("shared_prefs/backup_scope-$nodeId.xml")
             DisconnectState.BACKUP_SCOPE_LEGACY -> fake("shared_prefs/backup_scope.xml")
             DisconnectState.BACKUP_SETTINGS -> BackupSettings(filesDir).save(wifiOnly = false)
@@ -317,6 +321,8 @@ class DisconnectStateManifestTest {
             "视频页的取回状态机，只读写 cacheDir/video-<hash>.mp4，该缓存已登记为 ORIGINAL_VIDEO_CACHE",
         "com.hawkeyexb.ppass.update.UpdateArtifacts" to
             "#719 更新下载产物（cacheDir/update/<身份>/），系统可随时清，不是持久状态；生命周期由更新线自己管",
+        "com.hawkeyexb.ppass.backup.folder.FileFolderTree" to
+            "#1762：JVM 测试用的树访问实现——构造参数里的 File 是被枚举的临时目录（源目录，不是 App 状态）；持久化全部在 FolderRegistry",
     )
 
     private data class ClassInfo(val name: String, val superName: String?, val initDescriptors: List<String>, val utf8: Set<String>)

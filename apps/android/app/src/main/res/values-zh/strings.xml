@@ -86,6 +86,8 @@
     <string name="state_waiting_desktop_library">电脑上的照片库无法使用，请在电脑上查看 P-Pass</string>
     <string name="state_waiting_desktop_error">电脑保存照片时出错，请在电脑上查看 P-Pass</string>
     <string name="state_waiting_unexpected_error">备份出错，稍后自动重试</string>
+    <!-- #1762 素材文件夹：目录授权失效的等待原因（说现状与出路，不提内部组件）。 -->
+    <string name="state_waiting_source_unavailable">素材文件夹需要重新授权，打开 P-Pass 在设置里重新授权</string>
     <string name="desktop_low_space_hint">电脑剩余空间不足 5 GB</string>
     <!-- 2026-09-07 真机反馈：命令处理中禁用按钮，避免连点排队 -->
     <string name="backup_command_processing">处理中…</string>

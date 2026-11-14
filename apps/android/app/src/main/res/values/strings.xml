@@ -90,6 +90,8 @@
     <string name="state_waiting_desktop_library">The photo library on the computer can\'t be used. Check P-Pass on the computer.</string>
     <string name="state_waiting_desktop_error">The computer hit an error saving photos. Check P-Pass on the computer.</string>
     <string name="state_waiting_unexpected_error">Backup hit an error. Will retry later.</string>
+    <!-- #1762 素材文件夹：目录授权失效的等待原因（说现状与出路，不提内部组件）。 -->
+    <string name="state_waiting_source_unavailable">A media folder needs permission again. Open P-Pass and re-authorize it in settings.</string>
     <string name="desktop_low_space_hint">The computer has less than 5 GB free</string>
     <!-- 2026-09-07 real-device feedback: disable the button while a command
          is in flight so repeated taps don't queue behind it. -->

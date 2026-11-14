@@ -82,4 +82,20 @@
     <string name="open_with_app">用其他应用打开</string>
     <string name="no_app_for_file">手机上没有能打开这个文件的应用。</string>
     <string name="share_to">分享到…</string>
+    <!-- #1762 素材文件夹：设置入口 + 最小二级页（添加 / 查看 / 移除 / 重新授权）。只在 Android。 -->
+    <string name="folder_settings_title">素材文件夹</string>
+    <string name="folder_settings_entry_subtitle">添加的文件夹里的照片和视频会自动备份</string>
+    <string name="folder_add">添加文件夹</string>
+    <string name="folder_empty">还没有添加文件夹</string>
+    <string name="folder_status_ok">已授权</string>
+    <string name="folder_status_needs_permission">需要重新授权</string>
+    <string name="folder_reauthorize">重新授权</string>
+    <string name="folder_remove">移除</string>
+    <string name="folder_remove_confirm_title">移除「%1$s」？</string>
+    <string name="folder_remove_confirm_body">只停止备份这个文件夹。手机里的文件和已备份到电脑的照片都不受影响。</string>
+    <string name="folder_remove_confirm_action">移除</string>
+    <string name="folder_cancel">取消</string>
+    <string name="folder_add_failed">没能添加这个文件夹，请重试</string>
+    <string name="folder_reauthorize_failed">重新授权没有完成，请重新选择同一个文件夹再试</string>
+    <string name="folder_boundary_note">系统保护的目录（如 Android/data）无法选择</string>
 </resources>
