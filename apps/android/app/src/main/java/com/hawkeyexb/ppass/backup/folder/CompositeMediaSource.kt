@@ -90,7 +90,7 @@ internal class CompositeMediaImporter(private val primary: MediaImporter) : Medi
         primary.import(mediaId, contentUri, dataPath)
     } catch (failure: SecurityException) {
         if (isFolderId(mediaId)) {
-            throw SourceUnavailableException("folder permission revoked (mediaId bit62): ${failure.message}", failure)
+            throw SourceUnavailableException("folder permission revoked (mediaId bit62): ${failure.javaClass.simpleName}", failure)
         } else {
             throw failure
         }

@@ -97,7 +97,9 @@ class FolderMediaSnapshotSource(
             mimeType = file.mimeType,
             sizeBytes = file.sizeBytes,
             captureAtMs = file.modifiedAtMs,
-            dataPath = null, // SAF 没有真实路径：导入走复制（picked 先例同口径），见 FolderMediaImporter
+            // 引用导入的 dataPath：externalstorage 的 documentId 可推导真实路径；推导不出为 null（回退复制）。
+            // 原生侧校验路径与描述符不一致自动复制——传错只会慢，不会传错数据（#413 §3）。
+            dataPath = tree.filePath(relativePath),
         )
     }
 

@@ -196,6 +196,39 @@ class LOC1762SourceUnavailableTest {
         rig.close()
     }
 
+    // 启动即撤权且扫描脏：start() 的初始 refreshPending 枚举目录抛 → 进 WAITING/sourceUnavailable，
+    // 不从协程逃出（反证：未撤权时同序列正常收尾、无等待）。此前测试显式 advanceUntilIdle 绕开这条路径。
+    @Test
+    fun `a revoked folder during startup with a dirty scan waits instead of crashing`() = runTest {
+        val root = tmp.newFolder("media-root2")
+        val registry = FolderRegistry(File(tmp.root, "registry-start.json"))
+        registry.addFolder("file://tree", "media-root2")
+        File(root, "IMG_1.jpg").writeText("one")
+        val folder = SwitchableFolder(FolderMediaSnapshotSource(registry) { FileFolderTree(root) })
+        val rig = Rig(
+            this,
+            mediaOverride = CompositeMediaSnapshotSource(rigMedia, folder),
+            inScopeOverride = { bucket, _ -> bucket == 7L || isFolderId(bucket) },
+            primaryMedia = rigMedia,
+            folderDiscovery = { compositeFor(folder).readFolderInScope() },
+        )
+        // 撤权 + 置脏发生在构造之后：start() 的初始 refreshPending 协程在 advanceUntilIdle 时才跑，
+        // 那一刻目录已撤权、扫描已脏——正是逃逸窗口。
+        folder.revoked = true
+        rig.store.markScanDirty()
+        advanceUntilIdle()
+        assertEquals(WaitReason.SOURCE_UNAVAILABLE, rig.control.wait)
+
+        // 反证基准：恢复授权 → 触发正常收尾，等待清掉。
+        folder.revoked = false
+        rig.trigger(TriggerReason.APP_FOREGROUND)
+        assertEquals(null, rig.control.wait)
+        rig.close()
+    }
+
+    private fun compositeFor(folder: SwitchableFolder): CompositeMediaSnapshotSource =
+        CompositeMediaSnapshotSource(rigMedia, folder)
+
     private fun Rig.missing(mediaId: Long): Boolean = store.currentForMedia(mediaId)!!.sourceMissing
 
     /** registry 的分配序：addFolder 先拿 bucketId（FLAG|1），第一个文件项 mediaId = FLAG|2。 */

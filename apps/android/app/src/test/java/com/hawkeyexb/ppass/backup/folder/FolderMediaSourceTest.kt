@@ -145,7 +145,8 @@ class FolderMediaSourceTest {
         assertEquals("IMG_1.jpg", details!!.fileName)
         assertEquals("image/jpeg", details.mimeType)
         assertTrue(details.uri.isNotEmpty())
-        assertNull("SAF 没有真实路径：导入走复制（picked 先例同口径）", details.dataPath)
+        // 引用导入的 dataPath：File 实现给绝对路径（SAF 生产实现按 documentId 推导，推导错由原生校验回退复制）。
+        assertEquals(File(root, "IMG_1.jpg").absolutePath, details.dataPath)
 
         File(root, "IMG_1.jpg").delete()
         assertNull("文件没了 = 源缺失（单张），不是来源不可用", src.lookup(mediaId))

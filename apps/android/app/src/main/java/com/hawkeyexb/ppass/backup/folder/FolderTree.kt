@@ -34,4 +34,12 @@ interface FolderTree {
      * 文件不在 → null；授权失效抛 [SourceUnavailableException]（与 [uriOf] 同口径）。
      */
     fun stat(relativePath: String): FolderFile?
+
+    /**
+     * 文件的真实路径（引用导入的 dataPath）。SAF 文档没有「官方」路径；[SafFolderTree] 按
+     * externalstorage provider 的 documentId 约定（`primary:relative` → `/storage/emulated/0/relative`）
+     * 推导——推导错时原生侧校验路径与描述符不一致自动回退复制（传错只会慢，不会传错数据，#413 §3）。
+     * null = 推导不出（该来源交给复制导入）。
+     */
+    fun filePath(relativePath: String): String?
 }

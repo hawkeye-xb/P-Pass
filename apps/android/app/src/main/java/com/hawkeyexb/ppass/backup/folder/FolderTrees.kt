@@ -41,6 +41,11 @@ class FileFolderTree(private val root: File) : FolderTree {
         return resolve(relativePath)?.takeIf { it.isFile }
     }
 
+    override fun filePath(relativePath: String): String? {
+        requireRoot()
+        return resolve(relativePath)?.takeIf { it.isFile }?.absolutePath
+    }
+
     /** 根不可达 = 整个来源不可用（不许混成「单个文件没了」）。 */
     private fun requireRoot() {
         if (!root.isDirectory) throw SourceUnavailableException("folder root is not a directory: ${root.name}")
@@ -155,6 +160,27 @@ class SafFolderTree(context: Context, private val treeUri: Uri) : FolderTree {
         } catch (failure: Exception) {
             throw SourceUnavailableException("tree unreadable: ${failure.javaClass.simpleName}", failure)
         }
+    }
+
+    /**
+     * externalstorage 的 documentId 约定：`<volume>:<relative>`（primary → /storage/emulated/0，
+     * 可插卡 `<UUID>` → /storage/<UUID>）。推导失败返回 null（交给复制导入）。
+     */
+    override fun filePath(relativePath: String): String? = try {
+        val docId = DocumentsContract.getDocumentId(
+            DocumentsContract.buildDocumentUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri)),
+        )
+        val sep = docId.indexOf(':')
+        val volume = if (sep <= 0) "" else docId.substring(0, sep)
+        // docId 的冒号后是**目录本身**的相对段（tree 授权的根），文件路径 = 卷根 + 目录段 + 文件相对路径。
+        val treeRel = if (sep < 0) "" else docId.substring(sep + 1)
+        when {
+            volume == "primary" && treeRel.isNotEmpty() -> "/storage/emulated/0/$treeRel/$relativePath"
+            volume.isNotEmpty() && treeRel.isNotEmpty() -> "/storage/$volume/$treeRel/$relativePath"
+            else -> null
+        }
+    } catch (_: Exception) {
+        null
     }
 
     /** 树 URI 的人类可读名（目录显示名）。拿不到时回退到 URI 最后一段。 */
