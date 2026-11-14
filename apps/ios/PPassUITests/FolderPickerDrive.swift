@@ -22,8 +22,24 @@ final class FolderPickerDrive: XCTestCase {
         tapFirst(in: [app, springboard], labels: ["我的iPhone", "On My iPhone"], what: "我的 iPhone 位置")
         tapFirst(in: [app, springboard], labels: [target], what: "目标目录 \(target)")
         tapFirst(in: [app, springboard], labels: ["打开", "Open", "完成", "Done"], what: "打开确认")
-        // 给 App 的授权回调留点时间写 status（场景脚本按 status.json 判，这里只等登记落盘）。
-        sleep(3)
+        // 等授权回调真的完成再收：登记与取样（拷贝）同步跑在主线程，选择器只在回调返回后才开始
+        // 收起——「打开」类按钮从两棵树里消失（有界 90s）就是完成信号，不用固定 sleep 猜；
+        // 提前返回会让会话收尾杀掉 App，回调半路夭折，status.json 里永远等不到 folder_picked。
+        let confirmGone = Date().addingTimeInterval(90)
+        while Date() < confirmGone {
+            var stillThere = false
+            for application in [app, springboard] {
+                for label in ["打开", "Open"] {
+                    if application.buttons[Self.norm(label)].firstMatch.exists { stillThere = true }
+                    if application.descendants(matching: .any)
+                        .matching(NSPredicate(format: "label CONTAINS[c] %@", label)).firstMatch.exists {
+                        stillThere = true
+                    }
+                }
+            }
+            if !stillThere { return }
+            sleep(1)
+        }
     }
 
     /// 在给定的 app 树里找第一个标签匹配（去省略号/引号、比小写）可命中的元素并点它；30s 内找不到就失败。
@@ -75,10 +91,12 @@ final class FolderPickerDrive: XCTestCase {
         app.launchEnvironment["PPASS_E2E_PAIR_LINK"] = env["UIREG_PAIR_LINK"] ?? ""
         app.launchEnvironment["PPASS_BGTEST_FOLDER_RUN"] = "1"
         app.launch()
-        // 系统照片权限弹窗（中英）：点了「允许完全访问」后按 Home 前多等几秒，让备份跑起来
+        // 系统照片权限弹窗（中英）：弹窗只会出现在启动后一两秒内——轮询 6 秒，点到就处理；
+        // 没弹窗（权限已在）立即走 HOME_WAIT，不再陪等 20 秒把「+45s 按Home」拖成「+65s」，
+        // 否则短备份在按 Home 前就收场，E3-6 的「传输中退后台」窗口就没了。
         let photosFull = ["allow full access", "allow access to all photos", "允许完全访问", "允许访问所有照片", "允许访问全部照片"]
         var granted = false
-        let deadline = Date().addingTimeInterval(20)
+        let deadline = Date().addingTimeInterval(6)
         while Date() < deadline {
             for label in photosFull {
                 let button = app.buttons[label].firstMatch
@@ -91,7 +109,8 @@ final class FolderPickerDrive: XCTestCase {
             if granted { break }
             sleep(1)
         }
-        // 没弹窗 = 权限已在。点了权限则等备份启动几秒再按 Home；没弹窗按原时序。
+        // UIREG_HOME_WAIT = 启动后按 Home 前的等待秒数；点了权限弹窗就先让授权落两拍再计时。
+        if granted { sleep(2) }
         let wait = Int(env["UIREG_HOME_WAIT"] ?? "0") ?? 0
         sleep(UInt32(max(0, wait)))
         XCUIDevice.shared.press(XCUIDevice.Button.home)

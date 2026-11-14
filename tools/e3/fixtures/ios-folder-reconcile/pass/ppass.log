@@ -1,0 +1,9 @@
+2026-11-14 10:00:00 folder src-1: scan ok items=1 missing=0
+2026-11-14 10:01:00 folder src-1: scan ok items=2 missing=0
+2026-11-14 10:02:00 folder src-1: scan ok items=2 missing=1
+2026-11-14 10:03:00 folder src-1: scan ok items=2 missing=1
+2026-11-14 10:04:00 folder src-1: scan ok items=2 missing=1
+2026-11-14 10:05:00 folder src-1: scan ok items=1 missing=3
+2026-11-14 10:05:01 source_missing: marked 1 cleared 0
+2026-11-14 10:05:02 source_missing: marked 1 cleared 0
+2026-11-14 10:05:03 source_missing: marked 1 cleared 0

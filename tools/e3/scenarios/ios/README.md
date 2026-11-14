@@ -14,12 +14,15 @@
 | 场景 | ADR E3 条款 |
 |---|---|
 | `folder-nested-reopen` | 1 本地嵌套测试目录、杀进程重开继续备份 |
-| `folder-reconcile` | 2 增删改移由带对账的备份轮发现（不依赖门铃） |
+| `folder-reconcile` | 2 增删改移由带对账的备份轮发现（不依赖门铃）；需要相册 full 授权（引擎口径 source_missing 只在完整授权下写） |
 | `folder-bigvideo-integrity` | 3 大视频 by_reference + 手机↔桌面 BLAKE3；截断/改一字节反证（供数期注入必须传输失败） |
 | `folder-dedupe` | 4b 同一素材相册+目录 → 桌面只有一份 |
 | `folder-blackmagic` | 4a Blackmagic 实拍素材经真选择器授权后完成真实备份（含同素材双来源去重） |
-| `folder-disk-gc` | 5 源目录/App tmp/provider blobs/桌面库前后实测 + 崩溃重启 GC 收敛 |
+| `folder-disk-gc` | 5 源目录/App tmp/provider blobs/桌面库前后实测 + 崩溃重启 GC 收敛（杀进程前置：驱动报这一张 TRANSFERRING 才杀） |
 | `folder-background` | 6 后台只记录系统实际行为（无进度承诺） |
+
+带反证的场景 judge 按证据目录形态分流：`main` 目录（无 `status-integrity-flip.json`）判主链判据，
+`counter` 目录判反证链条 + 「预期失败」红——链条不齐不算变红，离线回放（`tools/e3/run judge`）同一份逻辑。
 
 跑法：`tools/e3/run ios/folder-nested-reopen …`（自动持设备锁）。第一条场景默认构建+安装当前代码
 （Debug 包，dev 签名）；之后的场景传 `PPASS_SKIP_BUILD=1` 复用同一份安装。素材全部程序生成；

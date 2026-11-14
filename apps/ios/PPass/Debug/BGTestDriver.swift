@@ -81,7 +81,7 @@ enum BGTestDriver {
         } else if env["PPASS_BGTEST_FOLDER_LIST"] == "1" {
             Task { await folderList(status: status) }
         } else if env["PPASS_BGTEST_FOLDER_RUN"] == "1" {
-            Task { await folderRun(model: model, link: link, status: status) }
+            Task { await folderRun(model: model, link: link, env: env, status: status) }
         } else if let spec = env["PPASS_BGTEST_FOLDER_MUTATE"] {
             Task { await folderMutate(spec: spec, status: status) }
         } else if let spec = env["PPASS_BGTEST_FOLDER_CORRUPT"] {
@@ -229,13 +229,28 @@ enum BGTestDriver {
 
         let seed = dir.appendingPathComponent("seed", isDirectory: true)
         try? FileManager.default.createDirectory(at: seed, withIntermediateDirectories: true)
+        // 等 go 信号（有界）：等不到报失败退出，不无限死等占住进程。
+        var waitedForGo: TimeInterval = 0
         while !FileManager.default.fileExists(atPath: seed.appendingPathComponent("go").path) {
+            guard waitedForGo < 300 else {
+                status.write("failed", ["error": "seed go signal never arrived", "done": true]); return
+            }
             try? await Task.sleep(nanoseconds: 300_000_000)
+            waitedForGo += 0.3
         }
+        // 与 pick 暂存（FolderPickBox.mediaExts）同一份格式表：暂存什么就种得进什么——两边不一致时
+        // E3-4 的「相册+目录同内容去重」会静默变成只种进 0 个。
+        let imageExts: Set<String> = ["jpg", "jpeg", "png", "heic"]
+        let videoExts: Set<String> = ["mov", "mp4", "m4v"]
         let files = ((try? FileManager.default.contentsOfDirectory(at: seed, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.lastPathComponent != "go" }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
-        let photos = files.filter { $0.pathExtension.lowercased() == "jpg" }
-        let videos = files.filter { $0.pathExtension.lowercased() == "mov" }
+        let photos = files.filter { imageExts.contains($0.pathExtension.lowercased()) }
+        let videos = files.filter { videoExts.contains($0.pathExtension.lowercased()) }
+        guard !photos.isEmpty || !videos.isEmpty else {
+            status.write("failed", ["error": "no importable media in seed dir", "done": true]); return
+        }
+        var imported = 0
         do {
             try await PHPhotoLibrary.shared().performChanges {
                 guard let album = PHAssetCollection.fetchAssetCollections(withLocalIdentifiers: [albumId], options: nil).firstObject,
@@ -247,10 +262,16 @@ enum BGTestDriver {
                 for url in videos {
                     if let p = PHAssetChangeRequest.creationRequestForAssetFromVideo(atFileURL: url)?.placeholderForCreatedAsset { placeholders.append(p) }
                 }
+                imported = placeholders.count
                 change.addAssets(placeholders as NSArray)
             }
         } catch { status.write("failed", ["error": "seed: \(error)", "done": true]); return }
-        try? FileManager.default.removeItem(at: seed)
+        guard imported > 0 else {
+            status.write("failed", ["error": "seed import created no assets", "done": true]); return
+        }
+        // 只清已导入的素材与 go 信号；其余文件（pick 暂存的 foldere3-dedup.*）留给场景拉回做 BLAKE3 对比。
+        for url in photos + videos { try? FileManager.default.removeItem(at: url) }
+        try? FileManager.default.removeItem(at: seed.appendingPathComponent("go"))
         status.write("seeded", ["photos": photos.count, "videos": videos.count, "done": true, "ok": true])
     }
 
@@ -351,19 +372,46 @@ enum BGTestDriver {
         return out
     }
 
+    /// 当前场景激活态（系统上报的前后台事实，驱动只转述）：E3-6 的「退后台」判据读它，不用脚本自造标记。
+    private static func sceneState() -> String {
+        let scenes = UIApplication.shared.connectedScenes
+        if scenes.contains(where: { $0.activationState == .foregroundActive }) { return "active" }
+        if scenes.contains(where: { $0.activationState == .background }) { return "background" }
+        if scenes.contains(where: { $0.activationState == .foregroundInactive }) { return "inactive" }
+        return "unattached"
+    }
+
     /// 轮询直到收场：账本里 folder: 订单全部 CONFIRMED 且引擎停转（连稳两拍）；超时返回 false。
     /// 不能用 FlowFacts.inScopeTotal 判完成：它只算所选相册的 PhotoKit 项（LiveMediaLibrary.inScopeTotal），
     /// 目录-only 轮恒为 0——目录项的完成事实只能看账本。
-    private static func waitFolderDone(model: AppModel, rootURL: URL, timeoutSecs: Double, status: StatusFile) async -> Bool {
+    /// watchMediaId 非 nil 时每拍顺带报这一张的订单状态（E3-5 崩溃注入用它证明大文件确实 TRANSFERRING
+    /// 中，不是扫描/导入阶段）。场景切换到后台的那一拍把账本状态一并落日志（bgtest: scene=… 行）。
+    private static func waitFolderDone(model: AppModel, rootURL: URL, timeoutSecs: Double,
+                                       watchMediaId: String?, status: StatusFile) async -> Bool {
         let deadline = Date().addingTimeInterval(timeoutSecs)
         var stable = 0
+        var idleEmpty = 0 // 无订单且引擎空闲的连续拍数：独立计数（stable 每拍都会被重置，复用它永远数不满）
+        var lastScene = ""
         while Date() < deadline {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             let f = model.backend.engine.facts()
             let states = folderOrderStates(rootURL: rootURL)
             let unsettled = states.filter { $0 != "CONFIRMED" }
+            let transferring = states.filter { $0 == "TRANSFERRING" }.count
+            var watchExtra: [String: Any] = [:]
+            if let watchMediaId {
+                let s = orderStates(at: rootURL.appendingPathComponent("backup-orders.db"), mediaId: watchMediaId)
+                watchExtra["watch_state"] = s.last ?? "absent"
+            }
+            let scene = sceneState()
             status.write("backing_up", ["folder_orders": states.count, "non_confirmed": unsettled.count,
-                                        "state": "\(f.state)", "wait_reason": "\(String(describing: f.waitReason))"])
+                                        "transferring": transferring, "state": "\(f.state)",
+                                        "wait_reason": "\(String(describing: f.waitReason))", "scene": scene]
+                .merging(watchExtra) { _, new in new })
+            if scene != lastScene {
+                AppLog.log("bgtest: scene=\(scene) orders=\(states.count) non_confirmed=\(unsettled.count) transferring=\(transferring)")
+                lastScene = scene
+            }
             let engineQuiet = f.state != .running
             if !states.isEmpty, unsettled.isEmpty, engineQuiet {
                 stable += 1
@@ -372,20 +420,31 @@ enum BGTestDriver {
                 stable = 0
             }
             // 一张订单都没建、引擎也停了：目录项没被发现（登记丢失 / 枚举为空），别等满超时
-            if states.isEmpty, engineQuiet, stable == 0, f.confirmed == 0, f.unfinished == 0 {
-                // 给对账两拍机会再判死
-                stable -= 1
-                if stable <= -3 { return false }
+            if states.isEmpty, engineQuiet {
+                idleEmpty += 1
+                if idleEmpty >= 3, f.confirmed == 0, f.unfinished == 0 { return false }
+            } else {
+                idleEmpty = 0
             }
         }
         return false
     }
 
-    private static func folderRun(model: AppModel, link: String, status: StatusFile) async {
+    private static func folderRun(model: AppModel, link: String, env: [String: String], status: StatusFile) async {
         status.write("started")
+        // watch（可选）：E3-5 崩溃注入的杀进程前置——按 display + 文件相对路径定位这一张，报告它的订单状态。
+        var watchMediaId: String?
+        if let spec = env["PPASS_BGTEST_FOLDER_RUN_WATCH"], let watch = json(spec),
+           let display = watch["display"] as? String, let file = watch["file"] as? String,
+           let rel = try? FolderPaths.normalize(file),
+           let (registry, rootURL) = try? testRegistry(),
+           let record = registry.allRecords().first(where: { $0.displayName == display }) {
+            watchMediaId = "folder:\(record.id):\(registry.opaqueId(sourceId: record.id, relativePath: rel))"
+        }
         guard await folderBegin(model: model, link: link, status: status) else { return }
         let rootURL = (try? LiveBackend.resolveRoot(logger: NoopLogger()).url) ?? URL(fileURLWithPath: "/nonexistent")
-        guard await waitFolderDone(model: model, rootURL: rootURL, timeoutSecs: 900, status: status) else {
+        guard await waitFolderDone(model: model, rootURL: rootURL, timeoutSecs: 900,
+                                   watchMediaId: watchMediaId, status: status) else {
             status.write("failed", ["error": "folder backup did not finish before timeout", "done": true]); return
         }
         let states = folderOrderStates(rootURL: rootURL)
@@ -502,8 +561,9 @@ enum BGTestDriver {
             case "delete":
                 if let path = rel(op, "to") ?? rel(op, "from"), ((try? fm.removeItem(at: path)) != nil) { ok = true }
             case "modify": // 改一字节：offset 处比特翻转，由对账发现
+                // forUpdating = 读写句柄：read 之后还要 write 回去；forReadingFrom 的只读句柄 write 必失败。
                 if let path = rel(op, "to") ?? rel(op, "from"), let offset = op["offset"] as? Int,
-                   let handle = try? FileHandle(forReadingFrom: path) {
+                   let handle = try? FileHandle(forUpdating: path) {
                     defer { try? handle.close() }
                     do {
                         try handle.seek(toOffset: UInt64(offset))
@@ -543,7 +603,8 @@ enum BGTestDriver {
                 let size = (attr[.size] as? NSNumber)?.int64Value ?? 0
                 guard size > 0 else { throw FolderSourceError(reason: "empty file") }
                 entry["size_before"] = size
-                let handle = try FileHandle(forReadingFrom: target)
+                // forUpdating = 读写句柄：flip 要写回一字节、truncate 要截断；forReadingFrom 的只读句柄必失败。
+                let handle = try FileHandle(forUpdating: target)
                 defer { try? handle.close() }
                 if mode == "flip" {
                     let offset = (spec["offset"] as? Int) ?? Int(size - 1)
@@ -596,12 +657,15 @@ enum BGTestDriver {
     }
 
     /// 只跑反证注入：注入后由脚本拉证据判红（不还原、不等收场）。
+    /// display（可选）精确指定目标登记记录：登记了两条 FolderE3 时按前缀取第一条会改错来源。
     private static func folderCorrupt(spec: String, status: StatusFile) async {
         status.write("started")
         guard let spec0 = json(spec), let dirName = spec0["dir"] as? String, safeName(dirName),
               let fileName = spec0["file"] as? String, let rel = try? FolderPaths.normalize(fileName),
+              let wanted = spec0["display"] as? String,
               let (registry, _) = try? testRegistry(),
-              let record = registry.allRecords().first(where: { $0.displayName.hasPrefix(folderDisplayPrefix) }) else {
+              let record = registry.allRecords().first(where: { $0.displayName == wanted })
+                  ?? registry.allRecords().first(where: { $0.displayName.hasPrefix(folderDisplayPrefix) }) else {
             status.write("failed", ["error": "bad spec or no registered folder source", "done": true]); return
         }
         guard let _ = await corruptFile(record: record, registry: registry, relativePath: rel,
@@ -815,6 +879,10 @@ private final class FolderPickBox: NSObject, UIDocumentPickerDelegate {
 
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
         guard let url = urls.first else { status.write("failed", ["error": "no url picked", "done": true]); return }
+        // 选择器给的 URL 是安全作用域资源：登记（生成书签）、枚举与取样拷贝都必须在作用域内做，
+        // 回调返回作用域即失效——start/stop 严格配对，所有出口经 defer 释放。
+        let opened = url.startAccessingSecurityScopedResource()
+        defer { if opened { url.stopAccessingSecurityScopedResource() } }
         do {
             let root = try LiveBackend.resolveRoot(logger: NoopLogger())
             let registry = FolderRegistry(directory: root.url, logger: NoopLogger())

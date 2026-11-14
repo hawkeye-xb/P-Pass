@@ -47,8 +47,7 @@ act() {
   desk_ipc "$DESK" status >"$OUT/desk-status.json"
   desk_ipc "$DESK" devices.list >"$OUT/desk-devices.json" 2>/dev/null || true
   cp "$DESK/daemon.out" "$OUT/daemon.out" 2>/dev/null; cp "$DESK/daemon.err" "$OUT/daemon.err" 2>/dev/null
-  find "$DESK/home" "$(cat "$DESK/sandbox")" -type f \( -iname '*.jpg' -o -iname '*.mp4' \) \
-    ! -path '*/thumbs/*' ! -path '*/.thumbs/*' ! -path '*/tmp/*' 2>/dev/null | sort >"$OUT/desktop-files.txt"
+  ios_desktop_files "$OUT" desktop-files.txt -iname '*.jpg' -o -iname '*.mp4'
   B3="$(ios_b3)"
   : >"$OUT/desktop.b3"
   while IFS= read -r f; do "$B3" "$f" >>"$OUT/desktop.b3"; done <"$OUT/desktop-files.txt"
@@ -74,7 +73,9 @@ judge() {
   check "引擎看到 3 项嵌套素材（scan ok items=3 missing=0）" has_line "$d/ppass.log" 'folder .*: scan ok items=3 missing=0'
   check "账本里 folder: 前缀订单 ≥3 且全部 CONFIRMED" bash -c "[ \"\$(sqlite3 -readonly \"$d/db/backup-orders.db\" \"SELECT COUNT(*) FROM orders WHERE media_id LIKE 'folder:%' AND state='CONFIRMED'\")\" -ge 3 ]"
   check "桌面库收到 3 个媒体文件" bash -c "[ \"\$(wc -l <\"$d/desktop-files.txt\" | tr -d ' ')\" = 3 ]"
-  check "手机源 3 张 BLAKE3 与桌面库逐一相等" bash -c "comm -23 <(awk '{print \$1}' \"$d/phone.b3\" | sort) <(awk '{print \$1}' \"$d/desktop.b3\" | sort) | grep -q . && exit 1 || exit 0"
+  check "手机源哈希清单齐备（3 条 64 位 hex；拷贝失败留空/缺行在这里判红，不许 comm 空过）" b3_list_ok "$d/phone.b3" 3
+  check "桌面哈希清单齐备（3 条 64 位 hex）" b3_list_ok "$d/desktop.b3" 3
+  check "手机源 3 张 BLAKE3 与桌面库逐一相等（按完整哈希字段比较）" bash -c "comm -23 <(awk '{print \$1}' \"$d/phone.b3\" | sort) <(awk '{print \$1}' \"$d/desktop.b3\" | sort) | grep -q . && exit 1 || exit 0"
   check "桌面沙盒日志无 panic" no_line "$d/daemon.err" 'panicked|PANIC'
   verdict
 }
