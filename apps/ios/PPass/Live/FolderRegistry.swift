@@ -189,12 +189,43 @@ final class FolderRegistry: @unchecked Sendable {
         return id
     }
 
-    /// 移除来源：id 进 removedIds，永不复用。
-    func removeFolder(id: String) {
+    /// 移除来源：id 进 removedIds，永不复用。落盘失败回退内存移除并抛错（与 add / reauthorize 同口径：
+    /// 不假装成功——落盘失败时记录还在盘上，重启会复现，#1763 独立评审建议4）。
+    func removeFolder(id: String) throws {
         lock.lock(); defer { lock.unlock() }
-        _ = sources.removeValue(forKey: id)
+        guard let record = sources.removeValue(forKey: id) else { return }
         removedIds.insert(id)
-        persistLocked()
+        guard persistLocked() else {
+            sources[id] = record
+            removedIds.remove(id)
+            throw FolderSourceError(reason: "remove save failed")
+        }
+    }
+
+    /// 重新授权（#1763 设置页）：在既有记录上原子换书签，保留 sourceId 与 opaque 映射
+    /// （ADR §3「添加时生成稳定 UUID」——换书签不换身份）。书签生成失败或落盘失败都抛错、
+    /// 旧书签原样保留（ADR §5：不能先毁掉旧书签）。调用方持有 url 的安全作用域（选择器授权回调内）。
+    func reauthorize(id: String, at url: URL) throws {
+        let bookmark: Data
+        do {
+            bookmark = try url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil)
+        } catch {
+            logger.log("folder registry: reauth \(LogRedact.id(id)): bookmark creation failed")
+            throw FolderSourceError(reason: "bookmark creation failed")
+        }
+        lock.lock(); defer { lock.unlock() }
+        guard var record = sources[id] else {
+            throw FolderSourceError(reason: "unknown source")
+        }
+        let previous = record
+        record.bookmark = bookmark
+        record.status = "registered"
+        sources[id] = record
+        guard persistLocked() else {
+            // 落盘失败：内存回退到旧书签（盘上本来就还是旧的），向调用方报错，不假装成功。
+            sources[id] = previous
+            throw FolderSourceError(reason: "bookmark save failed")
+        }
     }
 
     func isKnownOrRemoved(_ id: String) -> Bool {

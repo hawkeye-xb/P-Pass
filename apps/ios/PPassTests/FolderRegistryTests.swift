@@ -39,7 +39,7 @@ final class FolderRegistryTests: XCTestCase {
     func testRemovedIdsAreNeverReused() throws {
         let url = try makeFolder(name: "one")
         let first = try registry.addFolder(at: url, displayName: "one")
-        registry.removeFolder(id: first)
+        try registry.removeFolder(id: first)
         XCTAssertNil(registry.record(id: first))
         XCTAssertTrue(registry.isKnownOrRemoved(first), "墓碑保留")
 
@@ -215,5 +215,67 @@ final class FolderRegistryTests: XCTestCase {
             XCTAssertEqual(e.reason, "bookmark save failed")
         }
         XCTAssertTrue(locked.allRecords().isEmpty, "来源未启用")
+    }
+
+    // MARK: #1763 重新授权（设置页）：既有记录上原子换书签，保留 id 与 opaque 映射
+
+    // 换书签成功：id 不变、映射保留、状态回 registered、书签确实是新目录的（换到另一个真实目录）。
+    // 反证：reauthorize 删掉重建（新 id）→ 映射丢失 → 第一条红；只换内存不落盘 → 重建实例读到旧书签 → 第二条红。
+    func testReauthorizeReplacesBookmarkKeepingIdAndMapping() throws {
+        let first = try makeFolder(name: "before")
+        let id = try registry.addFolder(at: first, displayName: "before")
+        let opaque = registry.opaqueId(sourceId: id, relativePath: "deep/a.jpg")
+
+        let second = try makeFolder(name: "after")
+        try registry.reauthorize(id: id, at: second)
+
+        XCTAssertEqual(registry.record(id: id)?.id, id, "id 不变（移除后不复用语义不受影响）")
+        XCTAssertEqual(registry.record(id: id)?.items[opaque], "deep/a.jpg", "opaque 映射保留")
+        XCTAssertEqual(registry.record(id: id)?.status, "registered", "状态回已登记")
+        let reloaded = FolderRegistry(directory: dir, logger: logger)
+        XCTAssertNotNil(reloaded.record(id: id), "落盘（重建实例读得到）")
+        XCTAssertEqual(reloaded.record(id: id)?.items[opaque], "deep/a.jpg", "映射随落盘恢复")
+        // 书签确实指向新目录：解析后路径是 after（普通目录 start=false 也能解析）。
+        let root = try FolderBookmarks.resolve(try XCTUnwrap(reloaded.record(id: id)), registry: reloaded, logger: logger)
+        XCTAssertEqual(root.url.lastPathComponent, "after", "书签换到重新授权的目录")
+    }
+
+    // 书签生成失败（对不存在的路径重新授权）→ 抛错，旧书签原样保留（不先毁后建，ADR §5）。
+    func testReauthorizeFailureKeepsOldBookmark() throws {
+        let url = try makeFolder(name: "keepme")
+        let id = try registry.addFolder(at: url, displayName: "keepme")
+        let before = try XCTUnwrap(registry.record(id: id))
+        XCTAssertThrowsError(try registry.reauthorize(id: id, at: dir.appendingPathComponent("nope-missing"))) { error in
+            guard let e = error as? FolderSourceError else { return XCTFail("错误类型不对：\(type(of: error))") }
+            XCTAssertEqual(e.reason, "bookmark creation failed")
+        }
+        let after = try XCTUnwrap(registry.record(id: id))
+        XCTAssertEqual(after.bookmark, before.bookmark, "旧书签原样保留")
+        XCTAssertEqual(after.items, before.items, "映射原样保留")
+    }
+
+    // 未知的 sourceId 重新授权 → 抛错（不凭空新建记录）。
+    func testReauthorizeUnknownSourceFails() throws {
+        XCTAssertThrowsError(try registry.reauthorize(id: "no-such-source", at: try makeFolder(name: "x")))
+        XCTAssertTrue(registry.allRecords().isEmpty, "不凭空新建")
+    }
+
+    // 移除落盘失败：抛错且内存回退（记录与墓碑都还原，重启不会凭空复活或凭空消失）——与 add/reauthorize
+    // 同口径（#1763 评审建议4）。反证：吞掉写失败 → 记录在内存里没了、盘上还在，重启后目录复活且无提示 → 红。
+    // 先在可写目录登记成功，再把**注册表目录**设只读锁住原子写的临时文件创建（外层目录锁不住已存在目录里的写）。
+    func testRemovePersistFailureRollsBack() throws {
+        let registryDir = dir.appendingPathComponent("locked-rm-registry", isDirectory: true)
+        try FileManager.default.createDirectory(at: registryDir, withIntermediateDirectories: true)
+        let inner = try makeFolder(name: "torm")
+        let locked = FolderRegistry(directory: registryDir, logger: logger)
+        let id = try locked.addFolder(at: inner, displayName: "torm")
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: registryDir.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: registryDir.path) }
+        XCTAssertThrowsError(try locked.removeFolder(id: id)) { error in
+            guard let e = error as? FolderSourceError else { return XCTFail("错误类型不对：\(type(of: error))") }
+            XCTAssertEqual(e.reason, "remove save failed")
+        }
+        XCTAssertNotNil(locked.record(id: id), "内存回退：记录还在")
+        XCTAssertFalse(locked.record(id: id) == nil && locked.isKnownOrRemoved(id), "不留没有记录的墓碑")
     }
 }

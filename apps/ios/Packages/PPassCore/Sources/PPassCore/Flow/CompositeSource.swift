@@ -34,27 +34,46 @@ public final class CompositeMediaSource: MediaSource, @unchecked Sendable {
     /// PhotoKit 来源（唯一的库身份与游标持有者）。
     private let library: MediaSource
     /// 其余来源（FolderMediaSource；按 mediaId 里的 sourceId 精确路由）。
-    private let others: [MediaSource]
+    /// 锁保护：设置页运行时替换（#1763）。读取取快照，替换不中断在飞的扫描。
+    private var others: [MediaSource]
     /// sourceId → 来源（folder:<sourceId>:<opaque> 的第二段；FolderMediaSource 的 id 已核实唯一）。
-    private let bySourceId: [String: MediaSource]
+    private var bySourceId: [String: MediaSource]
+    private let setLock = NSLock()
 
     public init(library: MediaSource, others: [MediaSource] = []) {
         self.library = library
-        self.others = others
+        self.others = []
+        self.bySourceId = [:]
+        replaceFolderSources(others)
+    }
+
+    /// 运行时替换目录来源集合（#1763 设置页添加 / 移除 / 重新授权后；引擎持有 media 为 let，这是
+    /// 新目录进引擎、被移除目录退出引擎的唯一出口）。锁内整体替换：已发起的扫描拿替换前的快照继续。
+    /// 集合里仍按 FolderSourceIdentifying 自报的 sourceId 建路由（与 init 同一规则）。
+    public func replaceFolderSources(_ sources: [MediaSource]) {
+        setLock.lock(); defer { setLock.unlock() }
+        others = sources
         var map: [String: MediaSource] = [:]
-        for source in others {
+        for source in sources {
             if let folder = source as? FolderSourceIdentifying {
                 map[folder.folderSourceId] = source
             }
         }
-        self.bySourceId = map
+        bySourceId = map
+    }
+
+    /// 当前目录集合快照（替换与读取互斥；快照后再替换不影响这次遍历）。
+    private func folderSnapshot() -> (sources: [MediaSource], byId: [String: MediaSource]) {
+        setLock.lock(); defer { setLock.unlock() }
+        return (others, bySourceId)
     }
 
     /// 按 mediaId 路由：folder:<sourceId>:<opaque> → 对应 sourceId 的目录来源（没有则 nil，装配与 id 不一致直接暴露）；
     /// 其余 → library。
     private func route(_ mediaId: String) -> MediaSource? {
         if MediaSourceRouting.isFolder(mediaId) {
-            return MediaSourceRouting.sourceId(of: mediaId).flatMap { bySourceId[$0] }
+            let (_, byId) = folderSnapshot()
+            return MediaSourceRouting.sourceId(of: mediaId).flatMap { byId[$0] }
         }
         return library
     }
@@ -62,7 +81,7 @@ public final class CompositeMediaSource: MediaSource, @unchecked Sendable {
     public func inScope(after: String?, limit: Int) async throws -> [MediaSnapshot] {
         var merged: [MediaSnapshot] = []
         // 每个来源各自拉一页，合并后按 mediaId 字节序排序取 prefix（引擎按 id 严格升序推进游标）。
-        for source in [library] + others {
+        for source in [library] + folderSnapshot().sources {
             merged += try await source.inScope(after: after, limit: limit)
         }
         return Array(merged.sorted { MediaOrder.precedes($0.mediaId, $1.mediaId) }.prefix(limit))
@@ -71,7 +90,7 @@ public final class CompositeMediaSource: MediaSource, @unchecked Sendable {
     /// 合并各来源的增量；目录来源恒空批（ADR），不破坏位置单调性。
     public func changes(after position: DiscoveryPosition, limit: Int) async throws -> [MediaSnapshot] {
         var merged: [MediaSnapshot] = try await library.changes(after: position, limit: limit)
-        for source in others {
+        for source in folderSnapshot().sources {
             merged += try await source.changes(after: position, limit: limit)
         }
         return merged
@@ -113,7 +132,7 @@ public final class CompositeMediaSource: MediaSource, @unchecked Sendable {
             present.formUnion(ids)
         }
         for (sourceId, ids) in folderBySource {
-            guard sourceId != "", let source = bySourceId[sourceId] else { continue } // 装配里没有 → 缺席
+            guard sourceId != "", let source = folderSnapshot().byId[sourceId] else { continue } // 装配里没有 → 缺席
             guard let r = try await source.existingIds(ids) else { return nil }
             present.formUnion(r)
         }
@@ -122,7 +141,7 @@ public final class CompositeMediaSource: MediaSource, @unchecked Sendable {
 
     /// 全部来源都精确才算精确（协议默认 false，目录来源显式 false）。
     public var preciseDiscovery: Bool {
-        ([library] + others).allSatisfy { $0.preciseDiscovery }
+        ([library] + folderSnapshot().sources).allSatisfy { $0.preciseDiscovery }
     }
 }
 
@@ -130,26 +149,45 @@ public final class CompositeMediaSource: MediaSource, @unchecked Sendable {
 /// 不按 contentHash 推断来源（哈希判断不了来源），也不改变导入结果。手选（picked）只可能来自 PhotoKit 路径。
 public final class CompositeImporter: MediaImporter, @unchecked Sendable {
     private let library: MediaImporter
-    private let others: [MediaImporter]
+    /// 锁保护：设置页运行时替换（#1763）。读取取快照，替换不中断在飞的导入。
+    private var others: [MediaImporter]
     /// sourceId → 目录导入器（folder:<sourceId>:<opaque> 按第二段精确分发）。
-    private let bySourceId: [String: MediaImporter]
+    private var bySourceId: [String: MediaImporter]
+    private let setLock = NSLock()
 
     public init(library: MediaImporter, others: [MediaImporter] = []) {
         self.library = library
-        self.others = others
+        self.others = []
+        self.bySourceId = [:]
+        replaceFolderSources(others)
+    }
+
+    /// 运行时替换目录导入器集合（#1763，与 CompositeMediaSource.replaceFolderSources 同一口径：
+    /// 设置页添加 / 移除 / 重新授权后，导入侧按新集合分发）。在飞的导入拿替换前的快照继续；
+    /// 已移除来源的引用与授权由其导入器自身的出口清理（FolderImporter.releaseHeld / deinit，ADR §5），
+    /// 由装配方在退役时调用，不经这里的替换负责。
+    public func replaceFolderSources(_ importers: [MediaImporter]) {
+        setLock.lock(); defer { setLock.unlock() }
+        others = importers
         var map: [String: MediaImporter] = [:]
-        for importer in others {
+        for importer in importers {
             if let folder = importer as? FolderImportIdentifying {
                 map[folder.folderSourceId] = importer
             }
         }
-        self.bySourceId = map
+        bySourceId = map
+    }
+
+    /// 当前目录导入器集合快照。
+    private func folderSnapshot() -> (importers: [MediaImporter], byId: [String: MediaImporter]) {
+        setLock.lock(); defer { setLock.unlock() }
+        return (others, bySourceId)
     }
 
     public func importMedia(_ details: MediaDetails, onFetch: @escaping @Sendable (OriginalFetchUpdate) -> Void) async throws -> ImportResult {
         if MediaSourceRouting.isFolder(details.snapshot.mediaId) {
             guard let sourceId = MediaSourceRouting.sourceId(of: details.snapshot.mediaId),
-                  let folder = bySourceId[sourceId] else {
+                  let folder = folderSnapshot().byId[sourceId] else {
                 throw FolderMediaMissing()
             }
             return try await folder.importMedia(details, onFetch: onFetch)
@@ -165,7 +203,7 @@ public final class CompositeImporter: MediaImporter, @unchecked Sendable {
     /// 广播给全部子导入器（各自幂等）：不做来源推断。
     public func release(_ contentHash: String) {
         library.release(contentHash)
-        for importer in others {
+        for importer in folderSnapshot().importers {
             importer.release(contentHash)
         }
     }

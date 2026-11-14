@@ -255,6 +255,27 @@ protocol BackupEngine: AnyObject {
     func setPendingFullPhotoAccess(_ pending: Bool) throws
     /// 系统「后台 App 刷新」的当前状态（设置页的后台告示据此判定）。
     func backgroundRefresh() -> BackgroundRefreshAvailability
+
+    // MARK: #1763 素材文件夹（最小正式入口）
+
+    /// 设置行值：已登记目录数（不探测可达性，同步返回）。
+    func folderSourceCount() -> Int
+    /// 二级页列表：注册表记录 + 此刻可达性（探测失败一律按「等待重新授权」显示，不误报可用）。
+    func folderSources() async -> [FolderSourceInfo]
+    /// 系统目录选择器授权回调内登记（url 带安全作用域）。失败抛给界面（不假装登记成功）。
+    func addFolderSource(at url: URL, displayName: String) async throws
+    /// 既有记录上原子换书签（保留 id 与 opaque 映射）。失败抛给界面，旧书签保留。
+    func reauthorizeFolderSource(id: String, at url: URL) async throws
+    /// 移除：只删注册表记录，不删手机素材或桌面已确认副本。落盘失败抛给界面（不假装成功）。
+    func removeFolderSource(id: String) throws
+}
+
+/// #1763 素材文件夹二级页一行的投影：不携带书签数据（ADR §2：书签只留 App 私有 Registry）。
+/// available=false =「等待重新授权」（书签不可解析或根不可达）。
+struct FolderSourceInfo: Equatable, Identifiable {
+    let id: String
+    let displayName: String
+    let available: Bool
 }
 
 /// 一次运行用的全部端口。
