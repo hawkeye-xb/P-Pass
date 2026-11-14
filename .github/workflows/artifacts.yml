@@ -285,7 +285,7 @@ jobs:
           VCPKG_ROOT: "C:\\vcpkg"
         run: |
           set -euo pipefail
-          cargo build --release -p daemon -p testclient -p decode-worker
+          cargo build --release -p daemon -p testclient -p decode-worker -p media-codec
           outs=()
           for f in target/release/build/libheif-sys-*/output; do outs+=(--link-output "$f"); done
           tools/check-codec-libs.sh windows --vcpkg-installed /c/vcpkg/installed "${outs[@]}" target/release/daemon.exe target/release/ppf-decoder.exe
@@ -297,7 +297,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/rel
-          cp target/release/daemon.exe target/release/testclient.exe target/release/ppf-decoder.exe /tmp/rel/
+          cp target/release/daemon.exe target/release/testclient.exe target/release/ppf-decoder.exe target/release/ppf-video-decoder.exe /tmp/rel/
           # 冒烟脚本是 Win 真机验证的必需件——复制失败必须响（H-09b：不许 || true 吞掉）
           cp tools/win-smoke.ps1 /tmp/rel/
           cd /tmp/rel
@@ -312,6 +312,8 @@ jobs:
           gh release upload dogfood --repo "$GITHUB_REPOSITORY" \
             /tmp/rel/daemon.exe \
             /tmp/rel/testclient.exe \
+            /tmp/rel/ppf-decoder.exe \
+            /tmp/rel/ppf-video-decoder.exe \
             /tmp/rel/win-smoke.ps1 \
             /tmp/rel/SHA256SUMS-win-x64 \
             /tmp/rel/BUILD_INFO-win-x64 \

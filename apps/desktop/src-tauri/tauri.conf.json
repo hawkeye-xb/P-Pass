@@ -68,7 +68,8 @@
     ],
     "externalBin": [
       "binaries/ppf-daemon",
-      "binaries/ppf-decoder"
+      "binaries/ppf-decoder",
+      "binaries/ppf-video-decoder"
     ],
     "createUpdaterArtifacts": false,
     "macOS": {

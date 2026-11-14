@@ -745,7 +745,7 @@ jobs:
           VCPKG_ROOT: "C:\\vcpkg"
           # DAE-01b blocker②: same version injection as the macOS job（UPD-13）.
           PPF_BUILD_VERSION: ${{ steps.ppf_ver.outputs.name }}
-        run: cargo build --release -p daemon -p testclient -p decode-worker
+        run: cargo build --release -p daemon -p testclient -p decode-worker -p media-codec
 
       # T7 (H-09): Windows 图形界面——桌面壳 NSIS 安装包（未签名，
       # Authenticode 证书 H-02 挂账；SmartScreen 会警告，如实告知用户）。
@@ -773,6 +773,9 @@ jobs:
           # 解码子进程：externalBin 同样按 target-triple 后缀找；安装后与 ppf-daemon.exe 同目录。
           cp target/release/ppf-decoder.exe \
             apps/desktop/src-tauri/binaries/ppf-decoder-x86_64-pc-windows-msvc.exe
+          # 视频首帧解码子进程（#1730）：同款 target-triple 后缀，与 daemon/decoder 同目录。
+          cp target/release/ppf-video-decoder.exe \
+            apps/desktop/src-tauri/binaries/ppf-video-decoder-x86_64-pc-windows-msvc.exe
           # #788②：test 包的应用内更新读 test-channel 里的 Windows 分端清单（正式版读
           # manifest-windows.json，地址在 tauri.windows.conf.json），同一套插件、同一把公钥。
           # #852：--config 由 macOS / Windows 共用的 tools/release/tauri-config.mjs 生成（macOS 在

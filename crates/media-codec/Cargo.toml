@@ -11,6 +11,12 @@ publish = false
 # Default stays on the system library for fast dev/CI builds.
 vendored = ["decode-worker/vendored"]
 
+# 视频首帧解码子进程：线协议复用 decode-worker，解码经 platform（Media Foundation）。
+# 放在 media-codec 是因为它天然同时依赖这两个 crate，platform 不反向依赖 decode-worker。
+[[bin]]
+name = "ppf-video-decoder"
+path = "src/bin/ppf-video-decoder.rs"
+
 [dependencies]
 core-media = { path = "../core-media" }
 # 解码在独立子进程里做：线协议与子进程逻辑在 decode-worker。
@@ -31,3 +37,10 @@ thread-priority = "3"
 # Atomic thumb writes (temp file + rename) and ffmpeg frame staging.
 tempfile = "3"
 thiserror.workspace = true
+
+# 视频 decoder 超时 / 内存上限的对抗实测：子进程就是本测试二进制自己（环境变量
+# 分流），所以不用 libtest harness。
+[[test]]
+name = "video_limits"
+path = "tests/video_limits.rs"
+harness = false

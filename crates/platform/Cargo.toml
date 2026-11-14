@@ -135,6 +135,10 @@ windows = { version = "0.62", features = [
   "Win32_System_TaskScheduler",
   "Win32_System_Ole",
   "Win32_System_Variant",
+  # #1730：视频首帧解码——IMFSourceReader / IMFMediaBuffer（Media Foundation）。
+  "Win32_Media_MediaFoundation",
+  # #1730：内存字节 → HGLOBAL → IStream（GlobalAlloc/GlobalLock/GlobalUnlock）。
+  "Win32_System_Memory",
 ] }
 
 [dev-dependencies]

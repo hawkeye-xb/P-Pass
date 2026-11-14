@@ -220,6 +220,7 @@ mod imp {
             &exe,
             &Limits {
                 memory_bytes: 256 << 20,
+                win32k_lockdown: true,
             },
         )
         .expect("拉起隔离子进程失败");
