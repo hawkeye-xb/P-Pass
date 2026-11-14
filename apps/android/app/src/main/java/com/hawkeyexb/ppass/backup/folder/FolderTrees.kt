@@ -113,7 +113,9 @@ class SafFolderTree(context: Context, private val treeUri: Uri) : FolderTree {
     /** 单文档 query（O(路径深度)），不枚举整棵树。 */
     override fun stat(relativePath: String): FolderFile? = try {
         val doc = find(relativePath) ?: return null
-        resolver.query(
+        // provider 给 null 游标 = 来源不可用（同 childByName）：不许把「查不出」当「文件没了」——
+        // 否则 processExisting 会误标源缺失，provider 的瞬时失败让这张照片永久不再进备份。
+        val rows = resolver.query(
             doc,
             arrayOf(
                 DocumentsContract.Document.COLUMN_DISPLAY_NAME,
@@ -124,12 +126,13 @@ class SafFolderTree(context: Context, private val treeUri: Uri) : FolderTree {
             null,
             null,
             null,
-        )?.use { rows ->
-            if (!rows.moveToFirst()) null else FolderFile(
+        ) ?: throw SourceUnavailableException("stat query returned null (provider down)")
+        rows.use {
+            if (!it.moveToFirst()) null else FolderFile(
                 relativePath = FolderPaths.normalize(relativePath) ?: return@use null,
-                mimeType = rows.getString(1) ?: MIME_UNKNOWN,
-                sizeBytes = rows.getLong(2),
-                modifiedAtMs = rows.getLong(3),
+                mimeType = it.getString(1) ?: MIME_UNKNOWN,
+                sizeBytes = it.getLong(2),
+                modifiedAtMs = it.getLong(3),
             )
         }
     } catch (failure: SourceUnavailableException) {
