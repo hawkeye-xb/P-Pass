@@ -43,6 +43,12 @@ act() {
   ios_copy_from Documents/e2e/status.json "$OUT/status-picked.json" || { echo "状态没拉到（选择器没点成？）" >&2; return 1; }
   jq -r '.step // ""' "$OUT/status-picked.json" | grep -q '^folder_picked$' \
     || { echo "App 侧登记没完成：$(jq -r '.error // .step' "$OUT/status-picked.json")" >&2; return 1; }
+  # 同内容双来源的那份：pick 钩子暂存进 Documents/e2e/seed/ 的最小媒体拷贝（目录素材的字节相同拷贝）。
+  # seedRun 只清它导入的素材，这份文件保留到下面拉回做 BLAKE3。
+  local staged_name
+  staged_name=$(jq -r '.staged.name // ""' "$OUT/status-picked.json")
+  [ -n "$staged_name" ] \
+    || { echo "pick 钩子没有暂存同内容素材（所选目录里没有可导入媒体），同内容去重没法验" >&2; return 1; }
   # 大小护栏：沙盒桌面要接下整个源目录的拷贝；超过上限就停（磁盘红线），报告里写清楚数字
   local run="guard-$(date +%s)" total
   ios_launch "$OUT" list "{\"PPASS_E2E_DIR\":\"container\",\"PPASS_E2E_RUN\":\"$run\",\"PPASS_BGTEST_FOLDER_LIST\":\"1\"}"
@@ -50,8 +56,11 @@ act() {
   total=$(jget "$OUT/folder-list-guard.json" 'j["sources"][0]["total_bytes"]')
   [ "${total:-0}" -le $(( ${PPASS_E3_FOLDER_MAX_MB:-4000} * 1000000 )) ] \
     || { echo "源目录媒体共 $total 字节，超过沙盒桌面护栏 $(( ${PPASS_E3_FOLDER_MAX_MB:-4000} ))MB；请清设备素材或调 PPASS_E3_FOLDER_MAX_MB" >&2; return 1; }
-  # 2) 相册侧：seedRun 把 pick 钩子取出的最小媒体文件拷贝种进测试相册（同一份素材的第二条来源）
+  # 2) 相册侧：seedRun 把暂存的同内容素材种进测试相册（同一份素材的第二条来源）。
+  #    先推 go 信号：seedRun 有界等 Documents/e2e/seed/go，不推它种子步骤只会等到超时。
   desk_qr "$DESK" # 一次性配对串：desk_qr 设 PAIR_QR，不回显
+  printf 'go\n' >"$WORK/go" && ios_push "$WORK/go" "Documents/e2e/seed/go" \
+    || { echo "推 go 信号失败" >&2; return 1; }
   ios_launch "$OUT" seed "$(jq -cn --arg l "$PAIR_QR" --arg r "$RUN-seed" \
     '{PPASS_E2E_DIR:"container",PPASS_E2E_RUN:$r,PPASS_E2E_PAIR_LINK:$l,PPASS_BGTEST:"1"}')" || return 1
   ios_wait_status "$OUT/seed" "$RUN-seed" 180 true >/dev/null || { ios_copy_from Documents/e2e/status.json "$OUT/seed.status.json"; return 1; }
@@ -66,19 +75,13 @@ act() {
   ios_collect_common "$OUT"
   ios_orders_dump "$OUT" orders.txt
   desk_ipc "$DESK" status >"$OUT/desk-status.json"
-  find "$DESK/home" "$(cat "$DESK/sandbox")" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.mov' -o -iname '*.mp4' \) \
-    ! -path '*/thumbs/*' ! -path '*/tmp/*' 2>/dev/null | sort >"$OUT/desktop-files.txt"
-  # 同内容双来源的那份：pick 钩子拷进 seed 的最小媒体文件（目录素材的拷贝，字节相同）
-  ios_copy_from Documents/e2e/seed/foldere3-dedup.mp4 "$OUT/dedup-copy.mp4" || \
-    ios_copy_from Documents/e2e/seed/foldere3-dedup.jpg "$OUT/dedup-copy.jpg" || true
+  ios_desktop_files "$OUT" desktop-files.txt -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \
+    -o -iname '*.heic' -o -iname '*.mov' -o -iname '*.mp4' -o -iname '*.m4v'
+  # 同内容双来源的那份：按 pick 状态里的暂存名拉回（seedRun 只清已导入素材，这份还在 seed 里）
+  ios_copy_from "Documents/e2e/seed/$staged_name" "$OUT/dedup-copy" \
+    || { echo "拉回暂存素材失败：Documents/e2e/seed/$staged_name" >&2; return 1; }
   local b3; b3="$(ios_b3)"
-  local phone_hash=""
-  for f in "$OUT/dedup-copy.mp4" "$OUT/dedup-copy.jpg"; do
-    [ -s "$f" ] || continue
-    phone_hash=$("$b3" "$f" | awk '{print $1}')
-    break
-  done
-  [ -n "$phone_hash" ] && echo "$phone_hash" >"$OUT/phone-dedup.b3" || : >"$OUT/phone-dedup.b3"
+  "$b3" "$OUT/dedup-copy" | awk '{print $1}' >"$OUT/phone-dedup.b3"
   : >"$OUT/desktop.b3"
   while IFS= read -r f; do "$b3" "$f" >>"$OUT/desktop.b3"; done <"$OUT/desktop-files.txt"
   { echo "== phone-dedup =="; cat "$OUT/phone-dedup.b3"; echo "== desktop =="; cat "$OUT/desktop.b3"; } >"$OUT/hashes.txt"
@@ -86,14 +89,21 @@ act() {
 
 judge() {
   local d="$1" items confirmed
+  # 数值在 judge 顶层算好再拼进 bash -c 的字面量（子壳拿不到外层变量，原样传下去只会拿空串比较）。
   items=$(jget "$d/folder-list.json" 'j["sources"][0]["items"]')
   confirmed=$(jget "$d/status-run.json" 'j["confirmed"]')
   check "系统选择器授权成功（folder_picked，display=$TARGET 来源）" has_line "$d/status-picked.json" '"step" *: *"folder_picked"'
-  check "登记清单：来源 registered 且映射项数=$items (Blackmagic 目录里的媒体文件数）" bash -c "[ \"\$items\" -ge 1 ]"
-  check "正式备份链收场 confirmed=$confirmed (相册 1 + 目录 $items)" bash -c "[ \"\$confirmed\" -ge 2 ]"
-  check "目录来源媒体全部确认（folder: 订单 CONFIRMED 数 = $items)" bash -c "[ \"\$(sqlite3 -readonly \"$d/db/backup-orders.db\" \"SELECT COUNT(*) FROM orders WHERE media_id LIKE 'folder:%' AND state='CONFIRMED'\")\" = \"$items\" ]"
-  check "同素材双来源桌面只一份（该内容哈希在桌面库出现次数 = 1）" bash -c "h=\$(awk 'NR==1{print \$1}' \"$d/phone-dedup.b3\"); [ \"\$(grep -c \"^\$h\" \"$d/desktop.b3\")\" = 1 ]"
-  check "同素材 BLAKE3：手机拷贝 = 桌面落地文件" bash -c "h=\$(awk 'NR==1{print \$1}' \"$d/phone-dedup.b3\"); grep -q \"^\$h\" \"$d/desktop.b3\""
+  check "登记清单：来源 registered 且映射项数=${items:-缺失}（Blackmagic 目录里的媒体文件数）" bash -c "[ '${items:-x}' -ge 1 ]"
+  check "正式备份链收场 confirmed=${confirmed:-缺失}（相册 1 + 目录 ${items:-?}）" bash -c "[ '${confirmed:-x}' -ge 2 ]"
+  check "目录来源媒体全部确认（folder: 订单 CONFIRMED 数 = ${items:-缺失}）" \
+    bash -c "[ \"\$(sqlite3 -readonly \"$d/db/backup-orders.db\" \"SELECT COUNT(*) FROM orders WHERE media_id LIKE 'folder:%' AND state='CONFIRMED'\")\" = '${items:-x}' ]"
+  check "手机源暂存素材哈希齐备（1 条 64 位 hex；拷贝/哈希失败留空在这里判红，不许拿空哈希撞桌面清单）" \
+    b3_list_ok "$d/phone-dedup.b3" 1
+  check "桌面哈希清单齐备（≥1 条）" b3_list_ok "$d/desktop.b3" 1
+  check "同素材双来源桌面只一份（该内容哈希在桌面库出现次数 = 1，按完整哈希字段数）" \
+    bash -c "h=\$(awk 'NR==1{print \$1}' \"$d/phone-dedup.b3\"); [ \"\$(awk -v h=\"\$h\" '\$1==h' \"$d/desktop.b3\" | wc -l | tr -d ' ')\" = 1 ]"
+  check "同素材 BLAKE3：手机拷贝 = 桌面落地文件（按完整哈希字段比较）" \
+    bash -c "h=\$(awk 'NR==1{print \$1}' \"$d/phone-dedup.b3\"); awk -v h=\"\$h\" '\$1==h{f=1} END{exit f?0:1}' \"$d/desktop.b3\""
   check "实拍素材按引用导入（≥1MB 的项日志 ref=yes）" has_line "$d/ppass.log" 'folder .*: imported bytes=[0-9]{7,} hash=.* ref=yes'
   check "桌面沙盒日志无 panic" no_line "$d/daemon.err" 'panicked|PANIC'
   verdict

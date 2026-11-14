@@ -7,6 +7,8 @@
 # 再触发对账 → 等重新确认）；截断与改字节各跑一轮。judge 用「日志无供数期源改动」判据：main 绿、counter 红；
 # 反证产物（serve_aborted / orders_after_abort 无 CONFIRMED / 还原后重新确认）留在 counter 证据目录里供报告引用。
 # 注入点故意在远超 64KiB 的偏移（flip 默认 offset=size-16），排除「前 64KiB 探针」式假证（ADR §背景）。
+# judge 按证据目录形态分流：main 判主链判据；counter 判反证链条（注入→观测→查单→还原→重确认全走完）+
+# 「预期失败」红——链条不齐不算变红，离线回放同一份逻辑（详见 judge/judge_main/judge_counter）。
 # shellcheck source=ios-lib.bashlib
 source "$(dirname "${BASH_SOURCE[0]}")/ios-lib.bashlib"
 RUN="e3-$(date +%s)"
@@ -46,8 +48,7 @@ act() {
   cp "$OUT/run.status.json" "$OUT/status-run.json"
   ios_collect_common "$OUT"
   desk_ipc "$DESK" status >"$OUT/desk-status.json"
-  find "$DESK/home" "$(cat "$DESK/sandbox")" -type f -iname '*.mp4' \
-    ! -path '*/thumbs/*' ! -path '*/tmp/*' 2>/dev/null | sort >"$OUT/desktop-files.txt"
+  ios_desktop_files "$OUT" desktop-files.txt -iname '*.mp4'
   local b3; b3="$(ios_b3)"
   ios_copy_from "Documents/foldere3-$RUN/big.mp4" "$OUT/phone-big.mp4"
   "$b3" "$OUT/phone-big.mp4" >"$OUT/phone-big.b3"
@@ -56,7 +57,15 @@ act() {
   { echo "== phone-big =="; cat "$OUT/phone-big.b3"; echo "== desktop =="; cat "$OUT/desktop.b3"; } >"$OUT/hashes.txt"
 }
 
+# 反证证据目录自足：counter() 只产自己的证据（status-add-b / status-integrity-flip / orders-flip /
+# ppass.log），不复用 main 的任何文件。judge 按目录形态分流——两种形态各有完整判据，
+# 离线回放（tools/e3/run judge）读到哪种就判哪种，不再因缺 main 证据整版飘红。
 judge() {
+  local d="$1"
+  if [ -f "$d/status-integrity-flip.json" ]; then judge_counter "$d"; else judge_main "$d"; fi
+}
+
+judge_main() {
   local d="$1" orders confirmed bigsize photo_count
   orders=$(jget "$d/status-run.json" 'j["folder_orders"]')
   confirmed=$(jget "$d/status-run.json" 'j["confirmed"]')
@@ -64,10 +73,39 @@ judge() {
   photo_count=$(jget "$d/desk-status.json" 'j["result"]["photo_count"]')
   check "备份收场：folder 订单 $orders 条全部确认（confirmed=$confirmed)" bash -c "[ ${orders:-0} -ge 2 ] && [ \"${confirmed:-0}\" = \"${orders:-0}\" ]"
   check "大文件按引用导入（日志 ref=yes，bytes=$bigsize 与源大小一致）" has_line "$d/ppass.log" "folder .*: imported bytes=$bigsize hash=.* ref=yes"
-  check "手机源大文件 BLAKE3 与桌面库文件一致" bash -c "h=\$(awk 'NR==1{print \$1}' \"$d/phone-big.b3\"); grep -q \"^\$h\" \"$d/desktop.b3\""
+  check "手机源大文件哈希齐备（1 条 64 位 hex；拉回失败留空在这里判红）" b3_list_ok "$d/phone-big.b3" 1
+  check "桌面哈希清单齐备（≥1 条）" b3_list_ok "$d/desktop.b3" 1
+  check "手机源大文件 BLAKE3 与桌面库文件一致（按完整哈希字段比较）" bash -c "h=\$(awk 'NR==1{print \$1}' \"$d/phone-big.b3\"); awk -v h=\"\$h\" '\$1==h{f=1} END{exit f?0:1}' \"$d/desktop.b3\""
   check "桌面 photo_count = 2" bash -c "[ \"${photo_count:-x}\" = \"2\" ]"
   # 反证判据：干净备份的证据里绝不允许出现「供数期源被改」
   check "日志无供数期源改动（source changed while serving）" no_line "$d/ppass.log" 'source changed while serving'
+  verdict
+}
+
+judge_counter() {
+  local d="$1" old new offset latest
+  old=$(jget "$d/status-integrity-flip.json" 'j["corrupted"]["old_byte"]')
+  new=$(jget "$d/status-integrity-flip.json" 'j["corrupted"]["new_byte"]')
+  offset=$(jget "$d/status-integrity-flip.json" 'j["corrupted"]["offset"]')
+  latest=$(jget "$d/status-integrity-flip.json" 'j["waiting_reconfirm"]["latest"]')
+  # 反证链条（必须全部 ok 才算「预期失败」在场）：注入真实执行 → 供数期源改动被观测 →
+  # 坏内容未确认 → 还原后重新确认。链条不完整时下面不注入预期红，judge 判 0，
+  # 由 run 记「反证没变红」拦下——缺证据不许冒充变红。
+  check "反证闭环收场（注入→观测→查单→还原→重确认全走完，ok=true）" has_line "$d/status-integrity-flip.json" '"ok" *: *true'
+  check "注入已执行（flip：old_byte=${old:-缺失} → new_byte=${new:-缺失}，确实翻了）" bash -c "[ -n '${old:-}' ] && [ '${old:-x}' != '${new:-y}' ]"
+  check "注入偏移远超 64KiB（offset=${offset:-0} ≥ 65536，排除前 64KiB 探针式假证）" bash -c "[ '${offset:-0}' -ge 65536 ]"
+  check "供数期源改动被观测（source changed while serving 在本轮日志里）" has_line "$d/ppass.log" 'source changed while serving'
+  check "注入时该张订单没有坏内容 CONFIRMED（orders_after_abort 无 CONFIRMED）" \
+    bash -c "[ \"\$(jq -r '[.orders_after_abort.states[]? | select(. == \"CONFIRMED\")] | length' \"$d/status-integrity-flip.json\" 2>/dev/null)\" = 0 ]"
+  check "还原后重新确认（waiting_reconfirm.latest=${latest:-缺失} = CONFIRMED）" bash -c "[ '${latest:-x}' = 'CONFIRMED' ]"
+  if [ "$E3_FAILS" -eq 0 ]; then
+    # 预期失败：fault 在场 → 主链不变量「日志无供数期源改动」被打破。这是反证模式的判红点——
+    # 上面链条全 ok 证明红得 attributable，judge 由此判非 0（run 记「反证已变红」）。
+    check "预期失败：供数期源改动在场，主链不变量被打破（本判据在反证模式预期 FAIL）" \
+      no_line "$d/ppass.log" 'source changed while serving'
+  else
+    echo "  FAIL  反证链条不完整（上面有 FAIL）——不算预期失败，judge 判 0，由 run 记「反证没变红」拦下"
+  fi
   verdict
 }
 

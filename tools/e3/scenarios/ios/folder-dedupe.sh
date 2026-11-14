@@ -53,8 +53,7 @@ act() {
   ios_collect_common "$OUT"
   ios_orders_dump "$OUT" orders.txt
   desk_ipc "$DESK" status >"$OUT/desk-status.json"
-  find "$DESK/home" "$(cat "$DESK/sandbox")" -type f \( -iname '*.mp4' -o -iname '*.mov' \) \
-    ! -path '*/thumbs/*' ! -path '*/tmp/*' 2>/dev/null | sort >"$OUT/desktop-files.txt"
+  ios_desktop_files "$OUT" desktop-files.txt -iname '*.mp4' -o -iname '*.mov'
   local b3; b3="$(ios_b3)"
   ios_copy_from "Documents/foldere3-$RUN/same.mov" "$OUT/phone-same.mov"
   "$b3" "$OUT/phone-same.mov" >"$OUT/phone.b3"
@@ -74,6 +73,8 @@ judge() {
   check "两条来源订单的 content_hash 相同（同一素材）" bash -c "[ \"\$(awk -F'|' '{print \$3}' \"$d/confirmed.txt\" | sort -u | wc -l | tr -d ' ')\" = 1 ]"
   check "桌面 photo_count = 1（内容去重）" bash -c "[ \"${photo_count:-x}\" = \"1\" ]"
   check "桌面库只落 1 个视频文件" bash -c "[ \"\$(wc -l <\"$d/desktop-files.txt\" | tr -d ' ')\" = 1 ]"
-  check "手机源 BLAKE3 = 桌面落地文件 BLAKE3" bash -c "h=\$(awk 'NR==1{print \$1}' \"$d/phone.b3\"); grep -q \"^\$h\" \"$d/desktop.b3\""
+  check "手机源哈希清单齐备（1 条 64 位 hex；拷贝失败留空在这里判红）" b3_list_ok "$d/phone.b3" 1
+  check "桌面哈希清单齐备（1 条 64 位 hex）" b3_list_ok "$d/desktop.b3" 1
+  check "手机源 BLAKE3 = 桌面落地文件 BLAKE3（按完整哈希字段比较）" bash -c "h=\$(awk 'NR==1{print \$1}' \"$d/phone.b3\"); awk -v h=\"\$h\" '\$1==h{f=1} END{exit f?0:1}' \"$d/desktop.b3\""
   verdict
 }

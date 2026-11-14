@@ -72,15 +72,18 @@ ios_push() { # $1 本地文件 $2 容器内目标路径（含文件名）
 }
 
 # 轮询容器里的 Documents/e2e/status.json 到 done=$4（或 any）；成功回显 status 路径。
+# 驱动报 failed（step=failed，done 常同拍为 true）必须先于 done 判定返回失败——失败绝不能被当成功。
 # $1 前缀 $2 期望 run $3 超时秒 $4 done 期望（true / any）
 ios_wait_status() {
   local pre="$1" run="$2" timeout="$3" want="${4:-true}" i
   for i in $(seq 1 $((timeout / 2))); do
     if ios_copy_from Documents/e2e/status.json "$pre.status.json" \
        && [ "$(jq -r '.run // ""' "$pre.status.json" 2>/dev/null)" = "$run" ]; then
+      if jq -r '.step // ""' "$pre.status.json" 2>/dev/null | grep -q '^failed$'; then
+        echo "$pre.status.json"; return 1
+      fi
       [ "$want" = any ] && { echo "$pre.status.json"; return 0; }
       [ "$(jq -r '.done // false' "$pre.status.json")" = "$want" ] && { echo "$pre.status.json"; return 0; }
-      jq -r '.step // ""' "$pre.status.json" 2>/dev/null | grep -q '^failed$' && { echo "$pre.status.json"; return 1; }
     fi
     sleep 2
   done
@@ -153,6 +156,31 @@ ios_push_stage() {
     [ -f "$f" ] || continue
     ios_push "$f" "Documents/$stage/$(basename "$f")" || die "推素材失败：$(basename "$f")"
   done
+}
+
+# ---- 判定助手（judge 里用；bash -c 子壳拿不到仓库函数，先在 judge 顶层算好再传字面量）----
+
+# BLAKE3 清单护栏：$1 文件 $2 最少条数。文件在、非空、每行以 64 位 hex 开头、行数达标——
+# 拷贝失败留下的空清单/缺行在这里就判红，不许拿空哈希去撞任意桌面记录（comm/grep 空过）。
+b3_list_ok() {
+  local f="$1" min="$2" n
+  [ -s "$f" ] || return 1
+  n=$(grep -Ec '^[0-9a-f]{64}' "$f") || n=0
+  [ "${n:-0}" -ge "$min" ]
+}
+
+# 桌面库媒体清单：$1 OUT $2 输出名 $3… -iname 模式（模式间的 -o 由调用方写全）。
+# 只按缩略图目录名排 thumbs/.thumbs；不做 '*/tmp/*' 这类祖先路径匹配——TMPDIR=/tmp 时
+# WORK 本身在 /tmp 下，那种写法会把整个桌面库误伤成空清单。
+ios_desktop_files() {
+  local out="$1" name="$2" root
+  shift 2
+  : >"$out/$name"
+  for root in "$DESK/home" "$(cat "$DESK/sandbox")"; do
+    [ -d "$root" ] || continue
+    find "$root" -type f \( "$@" \) ! -path '*/thumbs/*' ! -path '*/.thumbs/*' 2>/dev/null >>"$out/$name"
+  done
+  sort -o "$out/$name" "$out/$name"
 }
 
 # ---- 证据收集（act 末尾调用；judge 只读 $OUT）----
