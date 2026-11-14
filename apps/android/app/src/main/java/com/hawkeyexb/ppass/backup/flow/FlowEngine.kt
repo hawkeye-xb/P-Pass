@@ -234,7 +234,14 @@ internal class FlowEngine(
             log.log("round $abandoned: closing the round a killed process left open")
             store.closeRound(finishedAudit(abandoned, emptyMap()))
         }
-        refreshPending()
+        try {
+            refreshPending()
+        } catch (unavailable: SourceUnavailableException) {
+            // #1762：撤权且扫描脏时启动会在这里枚举目录——进 WAITING/sourceUnavailable（与 drain 同一口径），
+            // 不让异常从 start 的协程逃出。
+            log.log("start: folder source unavailable while counting: ${unavailable.message}")
+            enterWait(WaitReason.SOURCE_UNAVAILABLE, FgsStall.NOT_GRANTED)
+        }
         bump()
     }
 

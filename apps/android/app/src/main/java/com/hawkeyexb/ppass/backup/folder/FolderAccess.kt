@@ -82,8 +82,9 @@ object FolderAccess {
         val registry = registry(app)
         val old = registry.record(sourceId) ?: return false
         val oldUri = Uri.parse(old.treeUri)
+        // tree URI 只有 tree 段：用 getTreeDocumentId（getDocumentId 对它抛 IllegalArgumentException）。
         val sameDirectory = try {
-            DocumentsContract.getDocumentId(newUri) == DocumentsContract.getDocumentId(oldUri)
+            DocumentsContract.getTreeDocumentId(newUri) == DocumentsContract.getTreeDocumentId(oldUri)
         } catch (_: Exception) {
             false
         }
@@ -93,7 +94,8 @@ object FolderAccess {
             releasePersistable(app, newUri)
             return false
         }
-        releasePersistable(app, oldUri)
+        // 用户重选同一目录时新 URI 就是旧 URI：release 会把刚 take 的授权放掉，重授权反而失访。
+        if (newUri.toString() != old.treeUri) releasePersistable(app, oldUri)
         return true
     }
 

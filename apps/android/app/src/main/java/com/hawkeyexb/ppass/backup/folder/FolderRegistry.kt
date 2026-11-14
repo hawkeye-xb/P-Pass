@@ -236,6 +236,9 @@ class FolderRegistry(private val file: File) {
         }
     }
 
+    /** 当前分配过的最大 mediaId（游标过滤用：afterId ≥ 它时目录段不可能还有未扫项，不必再枚举）。 */
+    fun maxMediaId(): Long = synchronized(lock) { FOLDER_ID_FLAG or (nextId - 1) }
+
     /** 这个 bucketId 是不是某个**现存**目录来源的（移除后查不到 → 自动退出范围、不再对账）。 */
     fun hasBucket(bucketId: Long): Boolean = synchronized(lock) {
         if (!isFolderId(bucketId)) return@synchronized false

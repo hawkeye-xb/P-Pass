@@ -68,6 +68,9 @@ class FolderMediaSnapshotSource(
     /** 不报卷：FlowEngine 的「按卷推 G」只遍历 MediaStore 卷。 */
     override fun volumeNames(): List<String> = emptyList()
 
+    /** 游标过滤用：afterId ≥ 当前最大 mediaId 时目录段不可能还有未扫项（见 [FolderRegistry.maxMediaId]）。 */
+    internal fun maxMediaId(): Long = registry.maxMediaId()
+
     override fun volumeVersions(): Map<String, String> = emptyMap()
 
     /** 单文件现状：文件没了 → null；授权失效抛 [SourceUnavailableException]。目录外 ID 返回 null。 */

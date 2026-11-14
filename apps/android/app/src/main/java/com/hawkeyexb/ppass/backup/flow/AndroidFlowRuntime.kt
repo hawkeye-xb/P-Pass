@@ -433,7 +433,8 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         picked = com.hawkeyexb.ppass.backup.picked.PickedUploads.store(app),
         onPickedSettled = { com.hawkeyexb.ppass.backup.picked.PickedUploads.release(app, it.uri) },
         // #1762：reconcile 轮的目录段全集对账（新素材不置脏，只有对账扫得到）。
-        folderDiscovery = { compositeMedia.readFolderInScope() },
+        // ruleOn=false（单张备份模式）时目录段与相册段同一开关：不枚举、不进待办。
+        folderDiscovery = { if (ruleOn()) compositeMedia.readFolderInScope() else emptySequence() },
     )
     FlowForegroundHandoff.control = control
     FlowForegroundHandoff.onLost = { reason -> engine.onForegroundLost(reason) }

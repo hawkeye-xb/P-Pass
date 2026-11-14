@@ -29,7 +29,12 @@ class CompositeMediaSnapshotSource(
 
     override fun <R> readInScope(afterId: Long, block: (Sequence<MediaSnapshot>) -> R): R {
         val folderRows = ArrayList<MediaSnapshot>()
-        folder.readInScope(afterId) { rows -> folderRows += rows }
+        // 目录段没有游标：完整枚举只在「afterId 还没扫进目录命名空间」时做一次。对账扫描每 64 张
+        // 调一次 [readInScope]，游标推进过目录段后再枚举是纯浪费（O(n²)），且 [needsNewOrder] 幂等。
+        val folderMax = (folder as? FolderMediaSnapshotSource)?.maxMediaId() ?: Long.MAX_VALUE
+        if (afterId < folderMax) {
+            folder.readInScope(afterId) { rows -> folderRows += rows }
+        }
         return primary.readInScope(afterId) { rows ->
             block(rows.asSequence() + folderRows.asSequence())
         }
@@ -50,9 +55,11 @@ class CompositeMediaSnapshotSource(
         if (isFolderId(mediaId)) folder.lookup(mediaId) else primary.lookup(mediaId)
 
     override fun existingIds(mediaIds: Collection<Long>): Set<Long>? = try {
-        val folderPart = folder.existingIds(mediaIds)
+        // FolderMediaSnapshotSource 恒返回非 null（授权失效抛 SourceUnavailableException，被下面 catch 成
+        // 整体「不知道」）；null 若真出现（未来实现违反契约）也按 ADR §4 整体「不知道」，不当空集。
+        val folderPart = folder.existingIds(mediaIds) ?: return null
         val primaryPart = primary.existingIds(mediaIds.filter { !isFolderId(it) })
-        if (primaryPart == null) null else primaryPart + (folderPart ?: emptySet())
+        if (primaryPart == null) null else primaryPart + folderPart
     } catch (failure: SourceUnavailableException) {
         // ADR §5：任何相关来源不可信 → 整体「不知道」。folder 侧授权失效只能这样表达。
         null

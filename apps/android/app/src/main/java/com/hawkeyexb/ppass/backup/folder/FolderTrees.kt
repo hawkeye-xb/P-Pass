@@ -94,7 +94,7 @@ class SafFolderTree(context: Context, private val treeUri: Uri) : FolderTree {
         throw failure
     } catch (failure: Exception) {
         // SecurityException（授权被撤销）与其他读失败同样按「来源不可用」：枚举失败不是「没有文件」。
-        throw SourceUnavailableException("enumerate failed: ${failure.javaClass.simpleName}: ${failure.message}", failure)
+        throw SourceUnavailableException("enumerate failed: ${failure.javaClass.simpleName}", failure)
     }
 
     override fun uriOf(relativePath: String): String? = try {
@@ -102,7 +102,7 @@ class SafFolderTree(context: Context, private val treeUri: Uri) : FolderTree {
     } catch (failure: SourceUnavailableException) {
         throw failure
     } catch (failure: Exception) {
-        throw SourceUnavailableException("resolve failed: ${failure.javaClass.simpleName}: ${failure.message}", failure)
+        throw SourceUnavailableException("resolve failed: ${failure.javaClass.simpleName}", failure)
     }
 
     /** 单文档 query（O(路径深度)），不枚举整棵树。 */
@@ -130,7 +130,7 @@ class SafFolderTree(context: Context, private val treeUri: Uri) : FolderTree {
     } catch (failure: SourceUnavailableException) {
         throw failure
     } catch (failure: Exception) {
-        throw SourceUnavailableException("stat failed: ${failure.javaClass.simpleName}: ${failure.message}", failure)
+        throw SourceUnavailableException("stat failed: ${failure.javaClass.simpleName}", failure)
     }
 
     /** 相对路径 → SAF 文档 URI（导入时打开）。文件不在返回 null；授权失效抛 [SourceUnavailableException]。 */
@@ -139,7 +139,7 @@ class SafFolderTree(context: Context, private val treeUri: Uri) : FolderTree {
     } catch (failure: SourceUnavailableException) {
         throw failure
     } catch (failure: Exception) {
-        throw SourceUnavailableException("resolve failed: ${failure.javaClass.simpleName}: ${failure.message}", failure)
+        throw SourceUnavailableException("resolve failed: ${failure.javaClass.simpleName}", failure)
     }
 
     /** 轻量可用性检查：查根目录一层子项。给二级页显示状态用，不递归。 */
@@ -255,9 +255,9 @@ class SafFolderTree(context: Context, private val treeUri: Uri) : FolderTree {
                 context.contentResolver.openInputStream(doc)
                     ?: throw SourceUnavailableException("openInputStream returned null")
             } catch (failure: SecurityException) {
-                throw SourceUnavailableException("permission revoked: ${failure.message}", failure)
+                throw SourceUnavailableException("permission revoked: ${failure.javaClass.simpleName}", failure)
             } catch (failure: java.io.IOException) {
-                throw SourceUnavailableException("open failed: ${failure.message}", failure)
+                throw SourceUnavailableException("open failed: ${failure.javaClass.simpleName}", failure)
             }
         }
     }
