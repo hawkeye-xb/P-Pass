@@ -120,6 +120,7 @@ class W5EngineViewUiTest {
                 "NOT_PAIRED", "DISABLED", "WIFI", "BATTERY", "FGS_BLOCKED",
                 "DESKTOP_UNREACHABLE", "DESKTOP_STORAGE_FULL", "DESKTOP_LIBRARY_UNAVAILABLE", "DESKTOP_STORAGE_ERROR",
                 "UNEXPECTED_ERROR", "DESKTOP_INTERNAL", "PHONE_OUTDATED", "DESKTOP_OUTDATED",
+                "SOURCE_UNAVAILABLE",
             ),
             WaitReason.entries.map { it.name },
         )
@@ -129,7 +130,7 @@ class W5EngineViewUiTest {
             assertNotNull(reason.name, res)
             assertNotEquals("$reason 不能只说「正在等待备份条件满足」", R.string.backup_waiting_constraints, res)
         }
-        assertEquals("十二个原因十二句话", 12, sentences.values.toSet().size)
+        assertEquals("十三个原因十三句话", 13, sentences.values.toSet().size)
         // FGS 受阻再按具体原因细分。
         assertEquals(R.string.state_background_budget_paused, waitReasonTextRes(WaitReason.FGS_BLOCKED, FgsBlockReason.BUDGET_EXHAUSTED))
         assertEquals(R.string.state_background_protection_unknown, waitReasonTextRes(WaitReason.FGS_BLOCKED, FgsBlockReason.START_REFUSED))

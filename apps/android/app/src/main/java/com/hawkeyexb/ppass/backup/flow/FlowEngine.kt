@@ -99,6 +99,15 @@ internal class FlowEngine(
     private val picked: PickedStore? = null,
     /** #1272：一张手选照片结束（送达 / 已有 / 没传成）——释放它的 URI 持久授权。 */
     private val onPickedSettled: (PickedItem) -> Unit = {},
+    /**
+     * #1762：目录来源（素材文件夹）的对账入口。null = 没有目录来源。ADR §4「新素材在下一个
+     * reconcile 轮被发现」：Android 的对账扫描只在脏扫描跑，素材变化不置脏（SAF 目录没有
+     * watcher）——所以「带 reconcile 的轮」（APP_FOREGROUND / PERIODIC 等）在非脏计数时显式问一次
+     * 目录段的全集（[MediaSnapshotSource.readInScope] 的 folder 语义：完整枚举 + registry 对账，
+     * 授权失效抛 [SourceUnavailableException] 整轮等待）。普通轮（MEDIA_CHANGE 等）不问：目录对账
+     * 的成本 = 一次树枚举，不放进每轮。
+     */
+    private val folderDiscovery: (() -> Sequence<MediaSnapshot>)? = null,
 ) {
     // 写 `_status` 就是写原始运行态；要不要刷新通知 / 首页由 [LoopStatusCell] 按「值变了 + 节流」决定。
     private val _status = LoopStatusCell(scope, publish = { foreground.update(it) }, now = monotonicClock)
@@ -494,6 +503,8 @@ internal class FlowEngine(
             WaitReason.BATTERY,
             WaitReason.FGS_BLOCKED,
             WaitReason.UNEXPECTED_ERROR,
+            // #1762：目录授权失效与桌面无关——心跳「连得上桌面」不构成重新授权，不叫醒。
+            WaitReason.SOURCE_UNAVAILABLE,
             -> false
         }
         if (!wake) return@launch
@@ -581,6 +592,12 @@ internal class FlowEngine(
                         runCycle(reasons)
                     } catch (cancelled: CancellationException) {
                         throw cancelled
+                    } catch (unavailable: SourceUnavailableException) {
+                        // #1762：目录来源（素材文件夹）授权失效——**整个来源**暂时不可用，不是某一张的问题：
+                        // 进 WAITING/sourceUnavailable，不推进 G/S、不写 sourceMissing、不计单张失败、
+                        // 不把在途 order 变成失败或源已删除。恢复靠用户在二级页重新授权（新触发自然清掉）。
+                        log.log("cycle $reasons: source unavailable: ${unavailable.message}")
+                        settle(WaitReason.SOURCE_UNAVAILABLE)
                     } catch (failure: Exception) {
                         // 一轮失败（例如本地数据库写入抛错）不能让引擎死掉。#762：进「等待中」（原因可见）并按退避登记唤醒，
                         // 不能只清成空闲——那样既不显示原因，也没有任何唤醒，只能等下一次外部触发。
@@ -630,7 +647,9 @@ internal class FlowEngine(
         val cycleStarted = System.nanoTime()
         prepareCursors(reconcile)
         if (reconcile) reconcileSourcePresence()
-        val todo = withContext(io) { countTodo() }
+        // #1762：目录段全集对账（见 [folderDiscovery]）——新素材建 PENDING 行，交给 retry 取件路径。
+        if (reconcile) folderEnroll(pid)
+        val todo = withContext(io) { countTodo(reconcile) }
         setPending(todo)
         if (todo == 0 && store.scanState().dirty) {
             // 扫描脏时 countTodo 就是全量差集：一张待办都没有 = 扫描也取不到东西，在入口就收掉，不为它申请 FGS。
@@ -1124,6 +1143,9 @@ internal class FlowEngine(
                 return withContext(io) { importer.import(details.snapshot.mediaId, details.uri, details.dataPath) } to reason
             } catch (cancelled: CancellationException) {
                 throw cancelled
+            } catch (unavailable: SourceUnavailableException) {
+                // #1762：目录来源授权失效不是这张照片的失败——不许吞进单张重试，抛给一轮级处理（WAITING/sourceUnavailable）。
+                throw unavailable
             } catch (failure: Exception) {
                 reason = "import:${failure.javaClass.simpleName}"
                 log.log("media ${details.snapshot.mediaId}: import failed (${failure.message})${if (attempt == 0) "; retrying once" else ""}")
@@ -1449,6 +1471,28 @@ internal class FlowEngine(
         return requeued
     }
 
+    // ---------------------------------------------------------------- 对账：目录来源（#1762）
+
+    /**
+     * 目录来源的全集对账（只在带 reconcile 的轮跑）：[folderDiscovery] 完整枚举 + registry 对账
+     * （新项分配 ID、缺席项删除），把「当前目录里、还没有当前版本行」的项建 **PENDING** 行——
+     * 交给现有 retry 取件路径（范围判定 inScope 对目录 bucket 恒真，见装配）。已确认同版本的行不动。
+     * 授权失效时 [folderDiscovery] 抛 [SourceUnavailableException]：整轮进 WAITING，什么都不建。
+     */
+    private suspend fun folderEnroll(pid: PairingId) {
+        val discovery = folderDiscovery ?: return
+        // 枚举（SAF 递归读）放 io；**建行留在写者线程**（order store 单写者，off-writer 直接 IllegalStateException）。
+        val snapshots = withContext(io) { discovery.invoke().toList() }
+        for (snapshot in snapshots) {
+            if (!inScope(snapshot.bucketId, snapshot.dateAddedSec)) continue
+            if (!needsNewOrder(snapshot)) continue
+            // 与脏扫描建行同一判定（needsNewOrder 幂等：同轮扫到也不重复）；PENDING = 还没导入，交给 retry 取件。
+            store.insert(NewOrder(snapshot.mediaId, snapshot.sourceVersion, snapshot.bucketId, null, OrderState.PENDING, pid.value, dateAddedSec = snapshot.dateAddedSec))
+            log.log("folder ${snapshot.mediaId}: enrolled ${snapshot.sourceVersion}")
+        }
+        bump()
+    }
+
     // ---------------------------------------------------------------- 对账：原图还在吗（#459）
 
     /** [sourcePresencePlan] 的结果：要打 / 要清 `source_missing` 的 order id。 */
@@ -1524,9 +1568,9 @@ internal class FlowEngine(
 
     // ---------------------------------------------------------------- 待办（现算）
 
-    /** 在写者上重算待办并发进视图。 */
+    /** 在写者上重算待办并发进视图。非对账语境（收尾 / UI 刷新）：目录段不重枚举，在途行由 order 表覆盖。 */
     private suspend fun refreshPending() {
-        setPending(withContext(io) { countTodo() })
+        setPending(withContext(io) { countTodo(reconcile = false) })
     }
 
     /** 这张（这个版本）是不是待办：不在跳过名单里，且当前行不是同版本的结局。 */
@@ -1539,8 +1583,10 @@ internal class FlowEngine(
      * - 不脏时：G 以下没有漏网的，待办只可能是「新照片（G 之后）」或「当前行还在路上（待传输 / 传输中 / 失败）」——
      *   两部分按 media_id 去重（中断的新照片两边都在），所以互斥、不重复。在路上的那部分只读 order 表（按状态过滤走
      *   `orders_state` 索引，10 万张实测热 1 ms / 冷 44 ms），按行里记的相册判范围，不逐张回查 MediaStore。
+     * - #1762：[reconcile] 为 true 且目录来源在场时，再问一次目录段的全集（见 [folderDiscovery]）——
+     *   MediaStore 的增量发现靠 G 游标，目录没有游标，新素材只有对账扫得到。
      */
-    private fun countTodo(): Int {
+    private fun countTodo(reconcile: Boolean): Int {
         if (store.scanState().dirty) return todoTargets().size
         val todo = HashSet<Long>()
         for (volume in media.volumeNames()) {

@@ -64,6 +64,7 @@
 "state_waiting_desktop_library" = "The photo library on the computer can't be used. Check P-Pass on the computer.";
 "state_waiting_desktop_error" = "The computer hit an error saving photos. Check P-Pass on the computer.";
 "state_waiting_unexpected_error" = "Backup hit an error. Will retry later.";
+"state_waiting_source_unavailable" = "A media folder needs permission again. Open P-Pass and re-authorize it in settings.";
 "desktop_low_space_hint" = "The computer has less than 5 GB free";
 "backup_command_processing" = "Working…";
 "cancel_remaining_confirm_body" = "These photos will be skipped and can be restored in “Skipped photos”. New photos are still backed up.";

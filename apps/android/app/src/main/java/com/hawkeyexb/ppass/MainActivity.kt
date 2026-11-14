@@ -36,6 +36,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import com.hawkeyexb.ppass.ui.FolderUi
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -1112,6 +1113,49 @@ fun PPassApp() {
             // Explicit user intent is separate from whether Android can currently run it.
             val prefs = remember { AutoBackupPrefs(context.filesDir) }
             var userRequestedBackgroundBackup by remember { mutableStateOf(prefs.requested()) }
+            // #1762「素材文件夹」：设置页的真实入口。列表读自 FolderRegistry（进程单例，与引擎同一份），
+            // 授权状态按真实 SAF 可用性现判；目录选择器（SAF ACTION_OPEN_DOCUMENT_TREE）由系统出界面。
+            var mediaFolders by remember { mutableStateOf<List<FolderUi>>(emptyList()) }
+            var folderRevision by remember { mutableStateOf(0) }
+            var foldersError by remember { mutableStateOf<Int?>(null) }
+            var folderToReauthorize by remember { mutableStateOf<String?>(null) }
+            LaunchedEffect(folderRevision) {
+                mediaFolders = withContext(Dispatchers.IO) {
+                    com.hawkeyexb.ppass.backup.folder.FolderAccess.listEntries(context)
+                        .map { FolderUi(it.sourceId, it.name, it.needsPermission) }
+                }
+            }
+            LaunchedEffect(foldersError) {
+                foldersError?.let {
+                    snackbarHostState.showSnackbar(context.getString(it))
+                    foldersError = null
+                }
+            }
+            val folderPicker = rememberLauncherForActivityResult(
+                ActivityResultContracts.OpenDocumentTree(),
+            ) { uri ->
+                if (uri == null) {
+                    folderToReauthorize = null
+                    return@rememberLauncherForActivityResult
+                }
+                val reauth = folderToReauthorize
+                folderToReauthorize = null
+                scope.launch(Dispatchers.IO) {
+                    val changed: Boolean = if (reauth != null) {
+                        val ok = com.hawkeyexb.ppass.backup.folder.FolderAccess.reauthorize(context, reauth, uri)
+                        if (!ok) foldersError = R.string.folder_reauthorize_failed
+                        ok
+                    } else {
+                        val added = com.hawkeyexb.ppass.backup.folder.FolderAccess.addFolder(context, uri)
+                        if (added == null) foldersError = R.string.folder_add_failed
+                        added != null
+                    }
+                    if (changed) {
+                        com.hawkeyexb.ppass.backup.folder.FolderAccess.changed(context)
+                        folderRevision++
+                    }
+                }
+            }
             // #540：生产者此刻是否真的开着。任何线程落盘（含进程启动对账）都会推进 revision，这里跟着重读——
             // 不在各个回调里手动刷新，漏一处就是「开关开、写着自动进行、实际 0 个任务」。
             val autoPrefsRevision by AutoBackupPrefs.revision.collectAsState()
@@ -1514,6 +1558,24 @@ fun PPassApp() {
                         pairingLost = holder.pairingLost.value,
                         onRepair = onRepairPairing,
                         onStorageDetailOpenChange = { storageDetailOpen = it },
+                        // #1762：素材文件夹二级页（tab 栏随二级页隐藏，与存储电脑详情页同口径）。
+                        mediaFolders = mediaFolders,
+                        onFolderAdd = {
+                            folderToReauthorize = null
+                            folderPicker.launch(null)
+                        },
+                        onFolderRemove = { folder ->
+                            scope.launch(Dispatchers.IO) {
+                                com.hawkeyexb.ppass.backup.folder.FolderAccess.removeFolder(context, folder.id)
+                                com.hawkeyexb.ppass.backup.folder.FolderAccess.changed(context)
+                                folderRevision++
+                            }
+                        },
+                        onFolderReauthorize = { folder ->
+                            folderToReauthorize = folder.id
+                            folderPicker.launch(null)
+                        },
+                        onFoldersOpenChange = { storageDetailOpen = it },
                         // T6: 备份范围——「选择相册」与「发起备份」两个动作。
                         // #836：按「已选且当前存在」计数，与选相册页同一口径。
                         selectedBucketCount = selectedBucketCount,

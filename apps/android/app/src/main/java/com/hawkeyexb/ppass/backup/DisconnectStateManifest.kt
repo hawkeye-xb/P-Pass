@@ -151,6 +151,11 @@ enum class DisconnectState(
         "MOB-92（#266）：老的全局范围，一次性认领的来源（adopted_by 记认领者），断开不碰",
         owners = listOf("com.hawkeyexb.ppass.backup.BackupScopeStore"),
     ),
+    FOLDER_REGISTRY(
+        StateLocation.FILES, "folder-registry.json", DisconnectDisposition.KEEP,
+        "#1762：素材文件夹的目录授权（SAF 书签 + opaque 映射）是用户对本机的授权，与配对无关——断开、重连、换桌面都沿用；order 行随账本认领语义走（换桌面由 claimOwner 清，内容按哈希重新备份）",
+        owners = listOf("com.hawkeyexb.ppass.backup.folder.FolderRegistry"),
+    ),
     BACKUP_SETTINGS(
         StateLocation.FILES, "backup-settings.json", DisconnectDisposition.KEEP,
         "#282 验收 4：Wi-Fi / 充电设置仍保留",

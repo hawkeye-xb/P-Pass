@@ -297,7 +297,16 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         DaemonFlowReceiptClient(client, parsePeerAddrToken(p.daemonAddrToken))
     }
     // #413 契约 §4：准备阶段 import（引用优先）拿 hash，建 order 后 serve(lease) 拿 ticket 再 offer。
-    val importer = AndroidMediaImporter.forContentResolver(app, bridge, androidLog)
+    val androidImporter = AndroidMediaImporter.forContentResolver(app, bridge, androidLog)
+    // #1762：组合导入器——folder 文档 URI 的授权失效转 SourceUnavailableException（来源级等待），其余口径不变。
+    val importer: MediaImporter = com.hawkeyexb.ppass.backup.folder.CompositeMediaImporter(androidImporter)
+    // #1762：目录来源（素材文件夹）。registry 存 App 私有容器（树 URI + opaque 映射，跨启动恢复），
+    // 与设置页共用进程级单例（两个实例同时写会互踩）；树访问走 SAF。
+    // 没有目录时 FolderMediaSnapshotSource 枚举空集，零开销直通。
+    val folderRegistry = com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(app)
+    val folderSource = com.hawkeyexb.ppass.backup.folder.FolderMediaSnapshotSource(folderRegistry) { record ->
+        com.hawkeyexb.ppass.backup.folder.SafFolderTree(app, android.net.Uri.parse(record.treeUri))
+    }
     val delivery = NativeFlowDeliveryPort(
         bridge = bridge,
         serve = { lease, _ -> importer.serve(lease) },
@@ -333,6 +342,11 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         }
         ruleCache
     }
+    // #1762：Composite 的构造要等 ruleOn / scopeStore 就位（MediaStore 段的 scope 闭包引用它们）。
+    val compositeMedia = com.hawkeyexb.ppass.backup.folder.CompositeMediaSnapshotSource(
+        primary = ContentResolverMediaSnapshotSource(app, { if (ruleOn()) scopeStore.scope() else null }),
+        folder = folderSource,
+    )
     val control = FlowControlStore(app.filesDir)
     // #1220：换了线路，两个端点都要换上新套接字——provider 经 network_change 重绑；控制面端点没有重绑入口，
     // 空闲时关掉，下一次用到时按新的绑定重建（忙时它连着的那张网断了自会失败重连）。
@@ -359,7 +373,8 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
     engine = FlowEngine(
         store = store,
         // #1272：自动备份规则关着时范围为空——引擎只剩手选这一支。
-        media = ContentResolverMediaSnapshotSource(app, { if (ruleOn()) scopeStore.scope() else null }),
+        // #1762：MediaStore 段 × 目录段经 Composite 拼进同一来源；folder 的授权失效抛 SourceUnavailableException。
+        media = compositeMedia,
         importer = importer,
         delivery = delivery,
         // #434：只有「有东西要传」才会探测桌面——此刻先把 provider 的 endpoint 绑上，它和 hello 并行去连
@@ -388,7 +403,14 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
                 batteryLow = isBatteryLow(app),
             )
         },
-        inScope = { bucket, added -> ruleOn() && scopeStore.scope()?.contains(bucket, added) == true },
+        // #1762：目录条目绕过相册范围与时间档（ADR §4）——只看「这个 bucket 还是现存的目录来源」；
+        // 移除后 hasBucket=false，该来源的行自动退出范围：不再进待办、presence 对账不打不清（不误标源缺失）。
+        inScope = { bucket, added ->
+            ruleOn() && (
+                if (com.hawkeyexb.ppass.backup.folder.isFolderId(bucket)) folderRegistry.hasBucket(bucket)
+                else scopeStore.scope()?.contains(bucket, added) == true
+                )
+        },
         mediaAbsenceTrusted = { mediaAbsenceTrustedNow(app) },
         pairingId = { pairing()?.pairingId?.takeIf { it.isNotBlank() }?.let(::PairingId) },
         scope = scope,
@@ -410,6 +432,8 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         route = route,
         picked = com.hawkeyexb.ppass.backup.picked.PickedUploads.store(app),
         onPickedSettled = { com.hawkeyexb.ppass.backup.picked.PickedUploads.release(app, it.uri) },
+        // #1762：reconcile 轮的目录段全集对账（新素材不置脏，只有对账扫得到）。
+        folderDiscovery = { compositeMedia.readFolderInScope() },
     )
     FlowForegroundHandoff.control = control
     FlowForegroundHandoff.onLost = { reason -> engine.onForegroundLost(reason) }
