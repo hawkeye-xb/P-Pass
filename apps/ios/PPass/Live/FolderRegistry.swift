@@ -189,12 +189,17 @@ final class FolderRegistry: @unchecked Sendable {
         return id
     }
 
-    /// 移除来源：id 进 removedIds，永不复用。
-    func removeFolder(id: String) {
+    /// 移除来源：id 进 removedIds，永不复用。落盘失败回退内存移除并抛错（与 add / reauthorize 同口径：
+    /// 不假装成功——落盘失败时记录还在盘上，重启会复现，#1763 独立评审建议4）。
+    func removeFolder(id: String) throws {
         lock.lock(); defer { lock.unlock() }
-        _ = sources.removeValue(forKey: id)
+        guard let record = sources.removeValue(forKey: id) else { return }
         removedIds.insert(id)
-        persistLocked()
+        guard persistLocked() else {
+            sources[id] = record
+            removedIds.remove(id)
+            throw FolderSourceError(reason: "remove save failed")
+        }
     }
 
     /// 重新授权（#1763 设置页）：在既有记录上原子换书签，保留 sourceId 与 opaque 映射

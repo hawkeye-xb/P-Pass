@@ -72,7 +72,7 @@ final class SettingsFeedbackTests: XCTestCase {
         func folderSources() async -> [FolderSourceInfo] { [] }
         func addFolderSource(at url: URL, displayName: String) async throws {}
         func reauthorizeFolderSource(id: String, at url: URL) async throws {}
-        func removeFolderSource(id: String) {}
+        func removeFolderSource(id: String) throws {}
     }
 
     private final class StubMedia: MediaLibrary {

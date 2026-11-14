@@ -173,13 +173,16 @@ struct SettingsScreen: View {
 
     /// #1763「素材文件夹」行值：已登记目录数（0 = 未添加）。英文单复数按 one/many 双键分流
     /// （IOS.strings 是手写表、没有 stringsdict，不用生成表里的复数机制）。
-    private var folderValue: String {
-        switch app.folderCount {
+    /// 分支映射提成静态函数可测（FolderSettingsTests.testFolderRowValueMapsCountsToKeys 判红）。
+    static func folderValue(count: Int) -> String {
+        switch count {
         case 0: return L.s("folder_sources_none")
         case 1: return L.s("folder_sources_count_one")
-        default: return L.f("folder_sources_count_many", app.folderCount)
+        default: return L.f("folder_sources_count_many", count)
         }
     }
+
+    private var folderValue: String { Self.folderValue(count: app.folderCount) }
 
     /// 「更多」二级页：存储电脑详情（含断开连接）、版本（含检查更新）。
     private var moreScreen: some View {

@@ -39,7 +39,7 @@ final class FolderRegistryTests: XCTestCase {
     func testRemovedIdsAreNeverReused() throws {
         let url = try makeFolder(name: "one")
         let first = try registry.addFolder(at: url, displayName: "one")
-        registry.removeFolder(id: first)
+        try registry.removeFolder(id: first)
         XCTAssertNil(registry.record(id: first))
         XCTAssertTrue(registry.isKnownOrRemoved(first), "墓碑保留")
 
@@ -258,5 +258,24 @@ final class FolderRegistryTests: XCTestCase {
     func testReauthorizeUnknownSourceFails() throws {
         XCTAssertThrowsError(try registry.reauthorize(id: "no-such-source", at: try makeFolder(name: "x")))
         XCTAssertTrue(registry.allRecords().isEmpty, "不凭空新建")
+    }
+
+    // 移除落盘失败：抛错且内存回退（记录与墓碑都还原，重启不会凭空复活或凭空消失）——与 add/reauthorize
+    // 同口径（#1763 评审建议4）。反证：吞掉写失败 → 记录在内存里没了、盘上还在，重启后目录复活且无提示 → 红。
+    // 先在可写目录登记成功，再把**注册表目录**设只读锁住原子写的临时文件创建（外层目录锁不住已存在目录里的写）。
+    func testRemovePersistFailureRollsBack() throws {
+        let registryDir = dir.appendingPathComponent("locked-rm-registry", isDirectory: true)
+        try FileManager.default.createDirectory(at: registryDir, withIntermediateDirectories: true)
+        let inner = try makeFolder(name: "torm")
+        let locked = FolderRegistry(directory: registryDir, logger: logger)
+        let id = try locked.addFolder(at: inner, displayName: "torm")
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: registryDir.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: registryDir.path) }
+        XCTAssertThrowsError(try locked.removeFolder(id: id)) { error in
+            guard let e = error as? FolderSourceError else { return XCTFail("错误类型不对：\(type(of: error))") }
+            XCTAssertEqual(e.reason, "remove save failed")
+        }
+        XCTAssertNotNil(locked.record(id: id), "内存回退：记录还在")
+        XCTAssertFalse(locked.record(id: id) == nil && locked.isKnownOrRemoved(id), "不留没有记录的墓碑")
     }
 }

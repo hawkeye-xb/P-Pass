@@ -1,19 +1,22 @@
-// #1763 素材文件夹设置入口：可达性探测（列表「已授权 / 等待重新授权」的唯一依据）、演示端口、双语文案。
-// 探测与端口契约：探测失败一律按「等待」显示，不误报可用（卡面验收场景最后一条）。
+// #1763 素材文件夹设置入口：可达性探测（列表「已授权 / 等待重新授权」的唯一依据）、演示端口、双语文案、
+// refreshFolderSources 的复用与退役决策。探测失败一律按「等待」显示，不误报可用（卡面验收场景最后一条）。
 import XCTest
 @testable import PPass
 
 final class FolderSettingsTests: XCTestCase {
     private var dir: URL!
     private var registry: FolderRegistry!
+    private var native: NativeProvider!
     private let logger = OSLogger()
 
     override func setUpWithError() throws {
         dir = try FileManager.default.url(for: .itemReplacementDirectory, in: .userDomainMask, appropriateFor: FileManager.default.temporaryDirectory, create: true)
         registry = FolderRegistry(directory: dir, logger: logger)
+        native = try NativeProvider(root: dir)
     }
 
     override func tearDownWithError() throws {
+        native?.ffi.shutdown()
         try? FileManager.default.removeItem(at: dir)
     }
 
@@ -65,10 +68,23 @@ final class FolderSettingsTests: XCTestCase {
         XCTAssertEqual(list.first?.displayName, "Demo")
         XCTAssertEqual(list.first?.available, true, "演示数据一律显示可用")
         XCTAssertEqual(engine.folderSourceCount(), 1)
-        engine.removeFolderSource(id: try XCTUnwrap(list.first?.id))
+        try engine.removeFolderSource(id: XCTUnwrap(list.first?.id))
         XCTAssertEqual(engine.folderSourceCount(), 0)
         let after = await engine.folderSources()
         XCTAssertTrue(after.isEmpty)
+    }
+
+    // 设置行值分支（0 = 未添加 / 1 = 单数键 / N = 复数键）有测试可判红（#1763 评审建议3：
+    // 删掉任一分支这里就红）。对照双语言表逐一断言，改错键名或删分支都跑不掉。
+    func testFolderRowValueMapsCountsToKeys() throws {
+        XCTAssertEqual(SettingsScreen.folderValue(count: 0),
+                       Bundle.main.localizedString(forKey: "folder_sources_none", value: "\u{1}", table: "IOS"))
+        XCTAssertEqual(SettingsScreen.folderValue(count: 1),
+                       Bundle.main.localizedString(forKey: "folder_sources_count_one", value: "\u{1}", table: "IOS"))
+        XCTAssertEqual(SettingsScreen.folderValue(count: 3),
+                       String(format: Bundle.main.localizedString(forKey: "folder_sources_count_many", value: "\u{1}", table: "IOS"), 3))
+        XCTAssertNotEqual(SettingsScreen.folderValue(count: 0), SettingsScreen.folderValue(count: 1))
+        XCTAssertNotEqual(SettingsScreen.folderValue(count: 1), SettingsScreen.folderValue(count: 3))
     }
 
     // 文案：两语言齐全（缺失时 L.s 会 assertionFailure，这里显式把新键都核一遍）。
@@ -86,5 +102,48 @@ final class FolderSettingsTests: XCTestCase {
                 XCTAssertNotEqual(value, "\u{1}", "\(lang) 缺文案 key：\(key)")
             }
         }
+    }
+
+    // MARK: refreshFolderSources 的复用与退役（#1763 评审建议1 判红）
+
+    // 注册表里还在的 id 复用原实例（=== 同一实例——整体重建会在换集合瞬间放掉仍在供数期的根授权，
+    // 别处目录正在供数的大文件会因此失败）；注册表里消失的 id 进 dropped 且不再在装配集合里。
+    // 反证：refresh 全部重建（不复用）→ A 的断言红；退役漏放 dropped → B 的断言红。
+    func testMergedFolderPartsReusesKeptAndDropsRemoved() throws {
+        let dirA = try makeFolder(name: "reuse-a")
+        let idA = try registry.addFolder(at: dirA, displayName: "a")
+        let dirB = try makeFolder(name: "reuse-b")
+        let idB = try registry.addFolder(at: dirB, displayName: "b")
+        let dirC = try makeFolder(name: "reuse-c")
+        let idC = try registry.addFolder(at: dirC, displayName: "c")
+        let prior: [String: (source: FolderMediaSource, importer: FolderImporter)] = [
+            idA: (FolderMediaSource(registry: registry, sourceId: idA, directory: dir, logger: logger),
+                  FolderImporter(registry: registry, sourceId: idA, directory: dir, provider: native!, logger: logger)),
+            idB: (FolderMediaSource(registry: registry, sourceId: idB, directory: dir, logger: logger),
+                  FolderImporter(registry: registry, sourceId: idB, directory: dir, provider: native!, logger: logger)),
+        ]
+        // 场景：B 已从注册表移除（refreshFolderSources 由注册表现值驱动）→ records = A、C。
+        try registry.removeFolder(id: idB)
+        let records = registry.allRecords()
+        let fresh = LiveBackend.folderParts(records: records, registry: registry, directory: dir, provider: native!, logger: logger)
+        let merged = LiveBackend.mergedFolderParts(records: records, fresh: fresh, prior: prior)
+        XCTAssertTrue(merged.sources.contains { $0 === prior[idA]!.source }, "A 复用原来源实例")
+        XCTAssertTrue(merged.importers.contains { $0 === prior[idA]!.importer }, "A 复用原导入器实例")
+        XCTAssertTrue(merged.dropped.contains { $0 === prior[idB]!.importer }, "注册表里消失的 B 进 dropped（退役释放）")
+        XCTAssertFalse(merged.sources.contains { $0 === prior[idB]!.source }, "B 不再在装配集合里")
+        let newC = merged.importers.first { $0.folderSourceId == idC }
+        XCTAssertNotNil(newC, "新来源 C 用新实例")
+        XCTAssertFalse(merged.dropped.contains { $0 === newC }, "新来源不误进 dropped")
+        XCTAssertEqual(merged.sources.count, records.count, "集合形状与注册表一致")
+    }
+
+    // releaseHeld 幂等且可重复调用（退役与 deinit 双路径都要安全）；空持有时调用也无害。
+    func testReleaseHeldIsIdempotent() throws {
+        let dirA = try makeFolder(name: "release-me")
+        let idA = try registry.addFolder(at: dirA, displayName: "a")
+        let importer = FolderImporter(registry: registry, sourceId: idA, directory: dir, provider: native!, logger: logger)
+        importer.releaseHeld()
+        importer.releaseHeld()
+        importer.release("no-such-hash")
     }
 }

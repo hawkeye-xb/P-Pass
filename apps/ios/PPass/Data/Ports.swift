@@ -266,8 +266,8 @@ protocol BackupEngine: AnyObject {
     func addFolderSource(at url: URL, displayName: String) async throws
     /// 既有记录上原子换书签（保留 id 与 opaque 映射）。失败抛给界面，旧书签保留。
     func reauthorizeFolderSource(id: String, at url: URL) async throws
-    /// 移除：只删注册表记录，不删手机素材或桌面已确认副本。
-    func removeFolderSource(id: String)
+    /// 移除：只删注册表记录，不删手机素材或桌面已确认副本。落盘失败抛给界面（不假装成功）。
+    func removeFolderSource(id: String) throws
 }
 
 /// #1763 素材文件夹二级页一行的投影：不携带书签数据（ADR §2：书签只留 App 私有 Registry）。

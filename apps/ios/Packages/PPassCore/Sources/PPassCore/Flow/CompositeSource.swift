@@ -164,7 +164,8 @@ public final class CompositeImporter: MediaImporter, @unchecked Sendable {
 
     /// 运行时替换目录导入器集合（#1763，与 CompositeMediaSource.replaceFolderSources 同一口径：
     /// 设置页添加 / 移除 / 重新授权后，导入侧按新集合分发）。在飞的导入拿替换前的快照继续；
-    /// 已移除来源的引用与授权由其导入器自身的全部出口清理（ADR §5），不经这里的替换负责。
+    /// 已移除来源的引用与授权由其导入器自身的出口清理（FolderImporter.releaseHeld / deinit，ADR §5），
+    /// 由装配方在退役时调用，不经这里的替换负责。
     public func replaceFolderSources(_ importers: [MediaImporter]) {
         setLock.lock(); defer { setLock.unlock() }
         others = importers

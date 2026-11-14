@@ -94,16 +94,12 @@ struct FolderSourcesScreen: View {
         app.refreshFolderCount()
     }
 
+    /// 移除：写盘失败也走统一提示（不假装成功）；成功后刷新列表与设置行值。
     private func remove(_ target: FolderSourceInfo) async {
-        guard !busy else { return }
-        busy = true
-        defer { busy = false }
-        app.backend.engine.removeFolderSource(id: target.id)
-        AppLog.log("folder-remove: ok")
-        await reload()
+        await run("folder-remove") { try app.backend.engine.removeFolderSource(id: target.id) }
     }
 
-    /// 添加 / 重新授权统一执行：互斥、失败提示（沿用全局 notice）、成功后刷新列表与设置行值。
+    /// 添加 / 重新授权 / 移除统一执行：互斥、失败提示（沿用全局 notice）、成功后刷新列表与设置行值。
     /// 选择器取消不进这里（Coordinator 只在真的选了目录时回调）。
     private func run(_ what: String, _ op: () async throws -> Void) async {
         guard !busy else { return }

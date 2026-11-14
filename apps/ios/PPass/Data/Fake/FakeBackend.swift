@@ -214,7 +214,7 @@ final class FakeEngine: BackupEngine {
     func reauthorizeFolderSource(id: String, at url: URL) async throws {
         guard folders.contains(where: { $0.id == id }) else { throw FakeBackendError.demoHasNoLedger }
     }
-    func removeFolderSource(id: String) {
+    func removeFolderSource(id: String) throws {
         folders.removeAll { $0.id == id }
         listeners.forEach { $0() }
     }
