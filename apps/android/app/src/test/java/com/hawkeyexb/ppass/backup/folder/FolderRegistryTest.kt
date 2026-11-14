@@ -52,6 +52,12 @@ class FolderRegistryTest {
         assertTrue("bucketId 必须是正 Long（负 Long 会被 `_id > 0` 的范围查询漏掉）", bucketId > 0)
         assertTrue(mediaId > 0)
         assertFalse("MediaStore 正 ID 不可能带 bit 62", isFolderId(123L))
+        // MediaStore 的 BUCKET_ID 是路径哈希、可为负；负数 bit 62 恒为 1，不许误判成目录命名空间
+        //（误判会让负 bucket 相册的照片全部静默漏备份——CodeRabbit 同款意见，反证）。
+        assertFalse("负 bucket 不许误判为目录 ID", isFolderId(-1L))
+        assertFalse(isFolderId(-4611686018427387905L))
+        val fresh = newRegistry()
+        assertTrue("分配的 ID 恒非负（bit 62 置位、符号位不占）", fresh.bucketIdOf(fresh.addFolder("content://tree/x", "x"))!! > 0)
     }
 
     // 移除防复用：removedIds 记账，同一 sourceId 不再解析出 record / 映射；新来源拿全新 UUID（不复用旧 ID）。

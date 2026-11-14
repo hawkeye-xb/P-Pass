@@ -65,13 +65,23 @@ object FolderAccess {
         }
     }
 
-    /** 移除：只停止后续备份，不删手机素材或桌面副本；持久授权一并释放（授权名额是稀缺系统资源）。 */
+    /** 移除：只停止后续备份，不删手机素材或桌面副本；持久授权一并释放（授权名额是稀缺系统资源）。
+     * registry 落盘失败会抛（假移除会在重启后复活来源）：先撤销内存移除失败的可能，再放授权——
+     * 顺序反过来（先放授权再登记失败）会把来源留在「已登记但失访」的卡死态。
+     */
     fun removeFolder(context: Context, sourceId: String) {
         val app = context.applicationContext
         val record = registry(app).record(sourceId) ?: return
+        try {
+            registry(app).removeFolder(sourceId)
+        } catch (failure: IllegalStateException) {
+            com.hawkeyexb.ppass.log.PLog.w(TAG, "folder remove persist failed; source stays", failure)
+            throw failure
+        }
         releasePersistable(app, Uri.parse(record.treeUri))
-        registry(app).removeFolder(sourceId)
     }
+
+    private const val TAG = "PPassFolder"
 
     /**
      * 重新授权：新 URI 必须指向**同一个目录**（documentId 一致）——用户明确重选；选了别处不算重新授权。
@@ -91,7 +101,8 @@ object FolderAccess {
         if (!sameDirectory) return false
         takePersistable(app, newUri)
         if (!registry.reauthorize(sourceId, newUri.toString())) {
-            releasePersistable(app, newUri)
+            // 失败回滚；同 URI 的重授权（newUri == 旧记录的 treeUri）不许释放——那正是旧授权本身。
+            if (newUri.toString() != old.treeUri) releasePersistable(app, newUri)
             return false
         }
         // 用户重选同一目录时新 URI 就是旧 URI：release 会把刚 take 的授权放掉，重授权反而失访。

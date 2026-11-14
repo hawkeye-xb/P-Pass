@@ -1118,8 +1118,11 @@ fun PPassApp() {
             var mediaFolders by remember { mutableStateOf<List<FolderUi>>(emptyList()) }
             var folderRevision by remember { mutableStateOf(0) }
             var foldersError by remember { mutableStateOf<Int?>(null) }
-            var folderToReauthorize by remember { mutableStateOf<String?>(null) }
-            LaunchedEffect(folderRevision) {
+            // 选择器停留期间 Activity 可能被重建：目标 sourceId 用 rememberSaveable 保住，
+            // 否则结果回调把「重新授权」误当「添加」处理。
+            var folderToReauthorize by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
+            // 授权可能后台失效（SAF 撤销）：回前台（resumeCount）也重读一遍，二级页状态不陈旧。
+            LaunchedEffect(folderRevision, resumeCount) {
                 mediaFolders = withContext(Dispatchers.IO) {
                     com.hawkeyexb.ppass.backup.folder.FolderAccess.listEntries(context)
                         .map { FolderUi(it.sourceId, it.name, it.needsPermission) }

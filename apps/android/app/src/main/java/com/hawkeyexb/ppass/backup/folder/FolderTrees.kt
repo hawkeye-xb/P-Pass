@@ -213,16 +213,18 @@ class SafFolderTree(context: Context, private val treeUri: Uri) : FolderTree {
             treeUri,
             DocumentsContract.getDocumentId(parentDoc),
         )
-        resolver.query(
+        // provider 读失败 / 崩溃给 null 游标 = 来源不可用（不许把「查不出」当「文件没了」，CodeRabbit 同款意见）。
+        val rows = resolver.query(
             childrenUri,
             arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME),
             null,
             null,
             null,
-        )?.use { rows ->
-            while (rows.moveToNext()) {
-                if (rows.getString(1) == name) {
-                    return DocumentsContract.buildDocumentUriUsingTree(treeUri, rows.getString(0))
+        ) ?: throw SourceUnavailableException("children query returned null (provider down)")
+        rows.use {
+            while (it.moveToNext()) {
+                if (it.getString(1) == name) {
+                    return DocumentsContract.buildDocumentUriUsingTree(treeUri, it.getString(0))
                 }
             }
         }

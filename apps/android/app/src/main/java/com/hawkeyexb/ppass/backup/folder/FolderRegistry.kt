@@ -20,8 +20,11 @@ import kotlinx.serialization.json.Json
 /** 目录命名空间标志：bit 62 置位 = 目录来源 / 目录项。 */
 const val FOLDER_ID_FLAG = 0x4000000000000000L
 
-/** 这个 Long 是不是目录命名空间里的 ID（bucketId 或 mediaId）。 */
-fun isFolderId(id: Long): Boolean = (id and FOLDER_ID_FLAG) != 0L
+/**
+ * 这个 Long 是不是目录命名空间里的 ID（bucketId 或 mediaId）。
+ * MediaStore 的 BUCKET_ID 是路径哈希、**可以为负**（负数 bit 62 恒为 1），必须同时要求非负。
+ */
+fun isFolderId(id: Long): Boolean = id >= 0L && (id and FOLDER_ID_FLAG) != 0L
 
 /** 一个已登记的目录来源（持久化形状）。 */
 @Serializable
@@ -129,9 +132,15 @@ class FolderRegistry(private val file: File) {
     /** 移除来源：id 进 removedIds，永不复用。只停止后续备份，不删手机素材或桌面副本。 */
     fun removeFolder(sourceId: String) {
         synchronized(lock) {
-            sources.remove(sourceId)
+            val record = sources[sourceId] ?: return
+            val removed = sources.remove(sourceId)
             removedIds.add(sourceId)
-            persistLocked()
+            // 落盘失败必须回滚并抛：假移除会在重启后复活来源（授权已被调用方释放 → 来源卡死）。
+            if (!persistLocked()) {
+                removed?.let { sources[sourceId] = it }
+                removedIds.remove(sourceId)
+                throw IllegalStateException("folder registry persist failed (remove)")
+            }
         }
     }
 
@@ -157,7 +166,11 @@ class FolderRegistry(private val file: File) {
             val mediaId = allocateId()
             val updated = record.copy(items = record.items + (opaque to FolderItem(relativePath, mediaId)))
             sources[sourceId] = updated
-            persistLocked()
+            // 新映射会进 order 表；落盘失败回滚并抛，不许出现「内存有、重启无」的孤儿映射。
+            if (!persistLocked()) {
+                sources[sourceId] = record
+                throw IllegalStateException("folder registry persist failed (opaqueId)")
+            }
             return opaque
         }
     }
