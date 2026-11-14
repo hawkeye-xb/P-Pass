@@ -99,6 +99,51 @@ final class CompositeWiringTests: XCTestCase {
         XCTAssertEqual(folder.released.get(), ["hash-x", "hash-x"], "广播且幂等：两次调用两次送达")
     }
 
+    // MARK: #1763 运行时目录集合替换（设置页添加 / 移除 / 重新授权后进引擎的唯一出口）
+
+    // 添加：替换后新来源的媒体在 Composite 扫描里出现（引擎不重启也能发现新目录，ADR §1 统一经 Composite）。
+    // 反证：replaceFolderSources 改成 no-op（集合固定在 init）→ inScope 扫不到 → 红。
+    func testReplaceFolderSourcesMakesNewSourceDiscoverable() async throws {
+        let assembled = try assemble(folderSources: [])
+        let id = try addFolder("late-added")
+        let media = try XCTUnwrap(assembled.media as? CompositeMediaSource, "装配产物是 Composite")
+        media.replaceFolderSources([FolderMediaSource(registry: registry, sourceId: id, directory: dir, logger: logger)])
+        let batch = try await assembled.media.inScope(after: nil, limit: 10)
+        XCTAssertNotNil(batch.first(where: { $0.mediaId.hasPrefix("folder:\(id):") }), "替换后新目录的媒体要能被发现")
+    }
+
+    // 移除：替换后旧来源不再被发现、id 不被认领（与「装配里没有 → 缺席」同一口径，ADR §4）。
+    // 反证：替换后仍保留旧来源 → 第一条红；误路由到 library → 第二条红。
+    func testReplaceFolderSourcesDropsRemovedSource() async throws {
+        let s1 = try addFolder("removed-later")
+        let assembled = try assemble(folderSources: registry.allRecords())
+        let media = try XCTUnwrap(assembled.media as? CompositeMediaSource)
+        media.replaceFolderSources([])
+        let batch = try await assembled.media.inScope(after: nil, limit: 10)
+        XCTAssertFalse(batch.contains { $0.mediaId.hasPrefix("folder:\(s1):") }, "移除后不再发现")
+        let routed = try await assembled.media.lookup("folder:\(s1):x")
+        XCTAssertNil(routed, "移除后 id 不被认领（缺席口径）")
+    }
+
+    // 导入侧同步替换：folder id 按新集合分发；集合里没有 → 装配错误直接暴露（不静默吞掉）。
+    // 反证：只替换 media 不替换 importer（或 importer 忽略替换）→ folder id 仍被旧集合认领 → 红。
+    func testReplaceFolderSourcesUpdatesImporterRouting() async throws {
+        let s1 = try addFolder("importer-removed")
+        let assembled = try assemble(folderSources: registry.allRecords())
+        let importer = try XCTUnwrap(assembled.importer as? CompositeImporter, "装配产物是 CompositeImporter")
+        importer.replaceFolderSources([])
+        let details = MediaDetails(snapshot: MediaSnapshot(mediaId: "folder:\(s1):opaque", sourceVersion: "1", bucketId: "folder:\(s1)"),
+                                   fileName: "f.jpg", mimeType: "image/jpeg", sizeBytes: 1, captureAtMs: 0)
+        do {
+            _ = try await assembled.importer.importMedia(details, onFetch: { _ in })
+            XCTFail("移除后 folder id 要暴露装配错误，不被旧集合认领")
+        } catch is FolderMediaMissing {
+            // 期望
+        } catch {
+            XCTFail("错误类型不对：\(type(of: error))")
+        }
+    }
+
     // SourceUnavailable 从装配产物穿透：整条 Flow 等待的口径（引擎侧由 SourceUnavailableEngineTests 覆盖）。
     // 触发用 ADR 异常口径第一行「书签不存在、损坏」：确定性，不依赖模拟器对已删目标的解析行为。
     // 反证：装配层把它吞成 nil / 空集 → 引擎按「没有待办」结束而不是等待 → 红。

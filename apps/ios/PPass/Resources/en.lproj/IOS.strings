@@ -86,3 +86,20 @@
 
 /* 照片页引导卡：iOS 没有「App 关闭也能备份」，靠后台 App 刷新（产品负责人 11-04）。 */
 "photos_guide_background" = "Back up in the background";
+
+/* Media folders (#1763, iOS-only screen; Android gets its own implementation under the same two-platform scope). */
+"folder_sources_row" = "Media Folders";
+"folder_sources_title" = "Media Folders";
+"folder_sources_add" = "Add a Folder";
+"folder_sources_empty_body" = "No folders yet. Pick a local folder and the photos and videos inside it will be backed up automatically.";
+"folder_sources_none" = "None";
+"folder_sources_count_one" = "1 folder";
+"folder_sources_count_many" = "%ld folders";
+"folder_sources_status_ok" = "Authorized";
+"folder_sources_status_wait" = "Re-authorization needed";
+"folder_sources_reauth" = "Re-authorize";
+"folder_sources_remove" = "Remove";
+"folder_sources_remove_confirm_title" = "Remove this folder?";
+"folder_sources_remove_confirm_body" = "P-Pass will stop backing up this folder. Nothing on this phone or already backed up on your computer will be deleted.";
+"folder_sources_footer" = "Only photos and videos in the folder are backed up. Backups happen while you use the app; new items aren't synced instantly.";
+"folder_sources_add_failed" = "Couldn't add the folder. Try again.";

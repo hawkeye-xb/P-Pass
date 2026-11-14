@@ -11,7 +11,7 @@ struct SettingsScreen: View {
     @State private var cancelSnapshot: RemainingSnapshot?
     @State private var asking = false
 
-    enum Route: Hashable { case bucket, storage, diagnostics, more }
+    enum Route: Hashable { case bucket, storage, diagnostics, more, folderSources }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -95,6 +95,7 @@ struct SettingsScreen: View {
                 case .storage: StorageDetailScreen()
                 case .diagnostics: DiagnosticsScreen()
                 case .more: moreScreen
+                case .folderSources: FolderSourcesScreen()
                 }
             }
         }
@@ -163,9 +164,21 @@ struct SettingsScreen: View {
             }
             if app.autoRule { pickRow }
             // 2026-11-03（产品负责人）：不再单独一个 Section，并进上面的设置卡；点进去仍是二级页。
+            // #1763 素材文件夹（最小正式入口）：行值 = 已登记目录数（0 = 未添加）。
+            row(L.s("folder_sources_row"), value: folderValue, route: .folderSources)
             row(L.s("more_label"), value: "", route: .more)
         }
         .ppTinted(PPUI.Surface.settingsCard)
+    }
+
+    /// #1763「素材文件夹」行值：已登记目录数（0 = 未添加）。英文单复数按 one/many 双键分流
+    /// （IOS.strings 是手写表、没有 stringsdict，不用生成表里的复数机制）。
+    private var folderValue: String {
+        switch app.folderCount {
+        case 0: return L.s("folder_sources_none")
+        case 1: return L.s("folder_sources_count_one")
+        default: return L.f("folder_sources_count_many", app.folderCount)
+        }
     }
 
     /// 「更多」二级页：存储电脑详情（含断开连接）、版本（含检查更新）。

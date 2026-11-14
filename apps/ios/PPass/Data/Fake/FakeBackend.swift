@@ -196,6 +196,28 @@ final class FakeEngine: BackupEngine {
     func onboardedCurrent() -> Bool { onboarded }
 
     func backgroundRefresh() -> BackgroundRefreshAvailability { scenario == .notices ? .denied : .available }
+
+    // MARK: #1763 素材文件夹（演示数据：内存登记，不走真注册表；界面壳与截图用）
+    private struct FakeFolder {
+        let id: String
+        let displayName: String
+    }
+    private var folders: [FakeFolder] = []
+    func folderSourceCount() -> Int { folders.count }
+    func folderSources() async -> [FolderSourceInfo] {
+        folders.map { FolderSourceInfo(id: $0.id, displayName: $0.displayName, available: true) }
+    }
+    func addFolderSource(at url: URL, displayName: String) async throws {
+        folders.append(FakeFolder(id: UUID().uuidString.lowercased(), displayName: displayName))
+        listeners.forEach { $0() }
+    }
+    func reauthorizeFolderSource(id: String, at url: URL) async throws {
+        guard folders.contains(where: { $0.id == id }) else { throw FakeBackendError.demoHasNoLedger }
+    }
+    func removeFolderSource(id: String) {
+        folders.removeAll { $0.id == id }
+        listeners.forEach { $0() }
+    }
 }
 
 /// 演示数据没有电脑可订阅：不产生任何信号（页面行为 = 演示数据本身），状态恒为初始。
