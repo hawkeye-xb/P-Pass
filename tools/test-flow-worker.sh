@@ -1322,6 +1322,45 @@ if DONE "$LW3" >"${TMP}/o63" 2>&1; then bad "写死中文的测试在本地没�
 has_lbl 63 "status:blocked" && comments_of 63 | grep -qF "just ios-test --lang en" && ok "  停在 just ios-test --lang en，打了 blocked" || bad "停的位置不对：$(comments_of 63 | head -3)"
 rm -f "${FAKE_GH}/zh_hardcoded"
 
+# #1765：卡面 E1 点名的本地检查必须补齐；只解析白名单，不执行卡面任意 shell。
+echo "== 卡面 E1 门禁对账（#1765）=="
+issue 64 "status:ready" "[T-64] ios requested gate" "apps/ios/**" "Bug" '- 【E1】`just ios-test` + `just mobile-static-check`'
+: >"${FAKE_GH}/just_calls"
+START 64 >"${TMP}/o64" 2>&1 || bad "点名 mobile-static-check 的 iOS 卡领卡失败：$(tail -5 "${TMP}/o64")"
+grep -qx 'mobile-static-check' "${FAKE_GH}/just_calls" &&
+  ok "start 预检包含卡面点名的 mobile-static-check" || bad "start 漏跑卡面点名的 mobile-static-check"
+RW="$(ls -d "${PPASS_WT_ROOT}/64-"*)"
+mkdir -p "$RW/apps/ios/PPass"
+commit_file "$RW" apps/ios/PPass/RequestedGate.swift 'let requested = true'
+: >"${FAKE_GH}/just_calls"
+DONE "$RW" >"${TMP}/o64-done" 2>&1 || bad "点名 mobile-static-check 的 iOS 卡交卡失败：$(tail -5 "${TMP}/o64-done")"
+grep -qx 'mobile-static-check' "${FAKE_GH}/just_calls" &&
+  ok "done 实跑卡面点名的 mobile-static-check" || bad "done 漏跑卡面点名的 mobile-static-check（#1765 复现）"
+
+issue 65 "status:ready" "[T-65] ios no requested gate" "apps/ios/**" "Bug" '- 【E1】`just ios-test`；自查 `git grep mediaAbsenceTrusted` 与 `ES_DISPLAY_REQUIRED`，都不是门禁命令'
+NW65="$(START 65 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/65-"*)"
+commit_file "$NW65" apps/ios/PPass/NoRequestedGate.swift 'let requested = false'
+: >"${FAKE_GH}/just_calls"
+DONE "$NW65" >"${TMP}/o65" 2>&1 || bad "未点名 mobile-static-check 的 iOS 卡交卡失败：$(tail -5 "${TMP}/o65")"
+grep -qx 'mobile-static-check' "${FAKE_GH}/just_calls" &&
+  bad "未点名时额外跑了 mobile-static-check" || ok "反证：未点名时不额外执行"
+
+PWN="${TMP}/1765-injected"
+issue 67 "status:ready" "[T-67] start unknown gate" "apps/ios/**" "Bug" "- 【E1】\`just not-a-real-gate; touch ${PWN}\`"
+if START 67 >"${TMP}/o67" 2>&1; then bad "start 放行了未登记 E1 命令"; else ok "start 拒绝未登记 E1 命令"; fi
+grep -q '未登记' "${TMP}/o67" && ok "start 报错说明命令未登记" || bad "start 未登记命令的报错不清楚：$(tail -5 "${TMP}/o67")"
+[ ! -e "$PWN" ] && ok "start 没执行卡面注入的 shell" || bad "start 执行了卡面注入的 shell"
+
+issue 66 "status:ready" "[T-66] done unknown gate" "apps/ios/**" "Bug" '- 【E1】`just ios-test`'
+UW="$(START 66 >/dev/null 2>&1; ls -d "${PPASS_WT_ROOT}/66-"*)"
+commit_file "$UW" apps/ios/PPass/UnknownGate.swift 'let unknown = true'
+UBR="$(git -C "$UW" symbolic-ref --short HEAD)"
+issue 66 "status:ready" "[T-66] done unknown gate" "apps/ios/**" "Bug" "- 【E1】\`just not-a-real-gate; touch ${PWN}\`"
+if DONE "$UW" >"${TMP}/o66" 2>&1; then bad "done 放行并推送了未登记 E1 命令"; else ok "done 拒绝未登记 E1 命令"; fi
+grep -q '未登记' "${TMP}/o66" && ok "done 报错说明命令未登记" || bad "done 未登记命令的报错不清楚：$(tail -5 "${TMP}/o66")"
+[ ! -e "$PWN" ] && ok "done 没执行卡面注入的 shell" || bad "done 执行了卡面注入的 shell"
+on_origin "$UBR" && bad "未登记命令的分支被推送了" || ok "反证：未登记命令时未推送"
+
 echo
 echo "通过 ${PASS}，失败 ${FAIL}"
 [ "$FAIL" -eq 0 ]

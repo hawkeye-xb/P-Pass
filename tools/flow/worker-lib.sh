@@ -132,6 +132,7 @@ flow_comment() { # flow_comment <号> <正文文件>
 
 # ── 门禁挑选（#1651）：worker-done 按改动的文件挑、worker-start 按卡的「范围」挑，共用这一份 ──
 # 两边共用是为了让「领卡时预检的门禁」就是「交卡时会跑的门禁」，挑选口径不许分叉。
+# 卡面 E1 用反引号点名的本地检查也经同一白名单对账补齐；未登记的检查命令直接拒绝，绝不 eval 卡面文本。
 # 口径（本地只跑改动涉及的检查；全量 just ci 是 PR 上 CI 的事，不在本地重复跑）：
 #   纯文档（docs/**、*.md、release/notes/**；AGENTS.md 与 .github/** 例外——流程文件仍走 just ci-docs）
 #                              → just md-check（#1750：文档检查与工具自测分层。纯文本卡不再串行整套
@@ -155,6 +156,58 @@ flow_gate_add() { # 去重追加
   local g
   for g in ${GATES[@]+"${GATES[@]}"}; do [ "$g" = "$1" ] && return 0; done
   GATES+=("$1")
+}
+flow_gate_registered() { # 卡面 E1 可以点名补跑的本地检查：固定命令，或严格受限的测试路径
+  case "$1" in
+    just\ ci | just\ ci-docs | just\ md-check | just\ arch-check | just\ android-test | just\ ios-test | \
+    just\ ios-test\ --lang\ en | just\ ios-test\ --lang\ zh | just\ ios-ui-regress\ sim | just\ mobile-static-check | \
+    actionlint | pnpm\ -C\ apps/desktop\ test | \
+    cargo\ nextest\ run\ --manifest-path\ apps/desktop/src-tauri/Cargo.toml\ -p\ p-pass-desktop | \
+    cargo\ fmt\ --all\ --\ --check | cargo\ clippy\ --all-targets\ --\ -D\ warnings | \
+    cargo\ fmt\ --manifest-path\ apps/desktop/src-tauri/Cargo.toml\ --\ --check | \
+    cargo\ clippy\ --manifest-path\ apps/desktop/src-tauri/Cargo.toml\ --all-targets\ --\ -D\ warnings) return 0 ;;
+  esac
+  [[ "$1" =~ ^bash[[:space:]]tools/(ios/)?test-[A-Za-z0-9._-]+\.sh$ ]] && return 0
+  [[ "$1" =~ ^cargo[[:space:]]nextest[[:space:]]run[[:space:]]-p[[:space:]][A-Za-z0-9._-]+$ ]]
+}
+flow_requested_gates() { # 从卡面 E1 的反引号命令生成白名单门禁；未知命令拒绝
+  local line rest cmd existing
+  REQUESTED_GATES=()
+  REQUESTED_UNKNOWN=()
+  REQUESTED_ERROR=""
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in *"【E1】"* | *"[E1]"*) ;; *) continue ;; esac
+    rest="$line"
+    while [[ "$rest" == *\`* ]]; do
+      rest="${rest#*\`}"
+      [[ "$rest" == *\`* ]] || break
+      cmd="${rest%%\`*}"
+      rest="${rest#*\`}"
+      [ -n "$cmd" ] || continue
+      case "$cmd" in
+        just\ * | bash\ tools/* | cargo\ * | pnpm\ * | actionlint*) ;;
+        *) continue ;;
+      esac
+      if ! flow_gate_registered "$cmd"; then
+        REQUESTED_UNKNOWN+=("$cmd")
+        continue
+      fi
+      for existing in ${REQUESTED_GATES[@]+"${REQUESTED_GATES[@]}"}; do
+        [ "$existing" = "$cmd" ] && cmd=""
+      done
+      [ -z "$cmd" ] || REQUESTED_GATES+=("$cmd")
+    done
+  done <<EOF2
+${1:-}
+EOF2
+  [ "${#REQUESTED_UNKNOWN[@]}" -eq 0 ] || {
+    printf -v REQUESTED_ERROR '卡面 E1 含未登记的本地检查命令：%s。不会执行任意 shell；请先在 flow_gate_registered 登记并补判红测试。' "$(printf ' `%s` ' "${REQUESTED_UNKNOWN[@]}")"
+    return 1
+  }
+}
+flow_merge_requested_gates() { # flow_requested_gates 成功后，把卡面点名但路径没挑出的检查补齐
+  local g
+  for g in ${REQUESTED_GATES[@]+"${REQUESTED_GATES[@]}"}; do flow_gate_add "$g"; done
 }
 flow_gate_tool_tests() { # flow_gate_tool_tests <tools/下的文件>：打印要跑的测试，一行一个；没有就什么也不打印
   local f="$1" base dir
