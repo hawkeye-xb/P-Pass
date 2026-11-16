@@ -711,9 +711,11 @@ final class FlowEngineIOSTests: XCTestCase {
         XCTAssertFalse(current.sourceMissing)
         XCTAssertEqual(current.state, .confirmed)
         XCTAssertEqual(current.updatedAtMs, order.updatedAtMs)
+        XCTAssertEqual(try rig.store.currentForMedia(item.mediaId)?.id, order.id, "同媒体仍指向原订单，不得新增 REUPLOAD 订单")
         XCTAssertEqual(rig.delivery.requests.get().count, 0)
-        let unrecoverable = try rig.store.pendingAuditAfter(0, limit: 50).map(\.record).filter { $0.payload["disposition"] == "UNRECOVERABLE" }
-        XCTAssertEqual(unrecoverable.count, 0)
+        let audits = try rig.store.pendingAuditAfter(0, limit: 50).map(\.record)
+        XCTAssertEqual(audits.filter { $0.payload["disposition"] == "UNRECOVERABLE" }.count, 0)
+        XCTAssertEqual(audits.filter { $0.payload["disposition"] == "REUPLOAD" }.count, 0)
     }
 
     /// O-11：桌面缺、原图也没了 → 原行保持已确认，只记一次 UNRECOVERABLE 审计，不补传。
