@@ -51,6 +51,19 @@ class UI08BucketScreenTest {
     }
 
     @Test
+    fun needs_permission_folder_keeps_reauthorize_and_remove_actions() {
+        val source = bucketScreenSource()
+        assertTrue("卡片必须支持第二个独立动作", source.contains("secondaryActionLabel: String? = null"))
+        assertTrue(source.contains("onSecondaryAction: (() -> Unit)? = null"))
+        assertTrue("第二个动作必须实际渲染", source.contains("if (secondaryActionLabel != null && onSecondaryAction != null)"))
+        val folderBlock = source.substringBefore("item(key = \"add-folder\")")
+            .substringAfter("items(folderBuckets")
+        assertTrue("失效目录仍显示重新授权", folderBlock.contains("onReauthorizeFolder(folder.key)"))
+        assertTrue("失效目录同时保留移除", folderBlock.contains("if (folder.needsPermission) stringResource(R.string.folder_remove) else null"))
+        assertTrue("失效目录的移除仍进入原确认弹窗", folderBlock.contains("onSecondaryAction = if (folder.needsPermission) { { removing = folder } } else null"))
+    }
+
+    @Test
     fun source_cards_and_add_action_share_grid_geometry_and_type_glyphs() {
         val source = bucketScreenSource()
         assertTrue("相册与文件夹必须有不同类型图标", source.contains("SourceTypeGlyph(isFolder)"))

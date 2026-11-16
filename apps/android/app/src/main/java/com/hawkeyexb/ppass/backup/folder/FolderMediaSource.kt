@@ -49,28 +49,30 @@ class FolderMediaSnapshotSource(
      * 输出按 mediaId 严格升序（ID 全局分配不重复，直接排序）。
      */
     override fun <R> readInScope(afterId: Long, block: (Sequence<MediaSnapshot>) -> R): R {
-        val snapshots = ArrayList<MediaSnapshot>()
         val scope = scopeProvider?.invoke()
-        for (record in registry.allRecords()) {
-            if (scope != null && record.bucketId !in scope.buckets) continue
-            if (scopeProvider != null && scope == null) continue
+        val scans = registry.allRecords().mapNotNull { record ->
+            if (scope != null && record.bucketId !in scope.buckets) return@mapNotNull null
+            if (scopeProvider != null && scope == null) return@mapNotNull null
             val tree = treeFor(record)
-            // 先完整枚举再对账：范围只决定输出，未选时间档的文件也保留稳定 ID 供以后放宽范围。
+            // 枚举与对账必须先完成：授权失效在交给 block 前抛出，不能因消费方不遍历而吞掉。
             val files = tree.enumerate().filter { isMediaMime(it.mimeType) }
             registry.reconcile(record.id, files.map { it.relativePath })
-            val current = registry.record(record.id) ?: continue
             val byPath = files.associateBy { it.relativePath }
-            for ((_, item) in current.items) {
-                val file = byPath[item.relativePath] ?: continue
-                if (item.mediaId > afterId) {
+            Triple(record, tree, byPath)
+        }
+        val snapshots = sequence {
+            for ((record, tree, byPath) in scans) {
+                val current = registry.record(record.id) ?: continue
+                for (item in current.items.values.sortedBy { it.mediaId }) {
+                    if (item.mediaId <= afterId) continue
+                    val file = byPath[item.relativePath] ?: continue
                     val captured = captureAtMs(tree, file)
                     if (scope?.contains(record.bucketId, scopeTimeSecOf(captured ?: 0L, file.modifiedAtMs / 1000)) == false) continue
-                    snapshots += folderSnapshot(item, record.bucketId, file, captured)
+                    yield(folderSnapshot(item, record.bucketId, file, captured))
                 }
             }
         }
-        snapshots.sortBy { it.mediaId }
-        return block(snapshots.asSequence())
+        return block(snapshots)
     }
 
     /** ADR §4：changes 恒返回空批，目录新项不依赖 incremental changes，只在 reconcile（readInScope）轮出现。 */
@@ -173,7 +175,8 @@ class SafFolderCaptureTimeReader(private val context: Context) {
             val exif = ExifInterface(input)
             for (tag in listOf("DateTimeOriginal", "DateTimeDigitized", "DateTime")) {
                 val raw = exif.getAttribute(tag) ?: continue
-                parseDate(raw, "yyyy:MM:dd HH:mm:ss", utc = false)?.let { return it }
+                val offset = exif.getAttribute("OffsetTime${tag.removePrefix("DateTime")}")
+                parseExifDateTime(raw, offset, TimeZone.getDefault())?.let { return it }
             }
         }
         return null
@@ -199,4 +202,14 @@ class SafFolderCaptureTimeReader(private val context: Context) {
         val parsed: Date = format.parse(raw, position) ?: return null
         return if (position.index == raw.length) parsed.time else null
     }
+}
+
+internal fun parseExifDateTime(raw: String, offset: String?, defaultZone: TimeZone): Long? {
+    val format = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US)
+    format.isLenient = false
+    format.timeZone = offset?.let { runCatching { java.time.ZoneId.of(it) }.getOrNull() }
+        ?.let(TimeZone::getTimeZone) ?: defaultZone
+    val position = ParsePosition(0)
+    val parsed: Date = format.parse(raw, position) ?: return null
+    return if (position.index == raw.length) parsed.time else null
 }

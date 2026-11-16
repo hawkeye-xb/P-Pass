@@ -190,6 +190,8 @@ private fun BucketCard(
     isFolder: Boolean,
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
+    secondaryActionLabel: String? = null,
+    onSecondaryAction: (() -> Unit)? = null,
     onToggle: () -> Unit,
 ) {
     Column(
@@ -241,6 +243,13 @@ private fun BucketCard(
                         actionLabel,
                         fontSize = 12.sp, color = PPColor.Act,
                         modifier = Modifier.clickable(onClick = onAction).padding(start = 8.dp),
+                    )
+                }
+                if (secondaryActionLabel != null && onSecondaryAction != null) {
+                    Text(
+                        secondaryActionLabel,
+                        fontSize = 12.sp, color = PPColor.Act,
+                        modifier = Modifier.clickable(onClick = onSecondaryAction).padding(start = 8.dp),
                     )
                 }
             }
@@ -342,6 +351,8 @@ fun BucketScreen(
                             onAction = {
                                 if (folder.needsPermission) onReauthorizeFolder(folder.key) else removing = folder
                             },
+                            secondaryActionLabel = if (folder.needsPermission) stringResource(R.string.folder_remove) else null,
+                            onSecondaryAction = if (folder.needsPermission) { { removing = folder } } else null,
                             onToggle = {
                                 checkedFolders = if (folder.key in checkedFolders) {
                                     checkedFolders - folder.key
