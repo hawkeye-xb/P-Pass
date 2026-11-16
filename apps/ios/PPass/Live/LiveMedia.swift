@@ -9,11 +9,13 @@ import UniformTypeIdentifiers
 final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
     private let auth: PhotoAuthorizationProviding
     private let catalog = AlbumCatalog(library: PhotoKitLibrary())
+    private let albumListing: (() -> [AlbumBucket])?
     private let scopeStore: () -> BackupScopeStore
 
-    init(scopeStore: @escaping () -> BackupScopeStore, auth: PhotoAuthorizationProviding = PhotoKitAuthorization()) {
+    init(scopeStore: @escaping () -> BackupScopeStore, auth: PhotoAuthorizationProviding = PhotoKitAuthorization(), albumListing: (() -> [AlbumBucket])? = nil) {
         self.scopeStore = scopeStore
         self.auth = auth
+        self.albumListing = albumListing
     }
 
     /// 权限三档 → 首页表达（#336：只有完整授权才显示数字、才允许「都存好了」）。没决定过也算拿不到。
@@ -37,7 +39,11 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
     func requestAccess() async -> MediaAccess { Self.map(await auth.requestFullAccess()) }
 
     func albums() async throws -> [AlbumBucket] {
-        guard auth.currentLevel() == .full else { return [] }
+        switch auth.currentLevel() {
+        case .full, .limited: break
+        case .notDetermined, .denied, .restricted: return []
+        }
+        if let albumListing { return albumListing() }
         return catalog.listAlbums().map { AlbumBucket(id: $0.id, name: $0.title, count: $0.count, isCameraAlbum: $0.kind == .library) }
     }
 
@@ -69,7 +75,12 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
     }
 
     func saveScope(_ selected: Set<String>, known: Set<String>, since: BackupSince) async throws {
-        do { try scopeStore().saveScope(selected: selected, allCurrent: known, since: since) } catch {
+        do {
+            let previous = try scopeStore().selectedBucketIds() ?? []
+            // 权限不可见不等于用户取消；只有当前仍可见却未勾选的相册才允许从旧范围移除。
+            let invisibleSavedAlbums = previous.filter { !$0.hasPrefix("folder:") && !known.contains($0) }
+            try scopeStore().saveScope(selected: selected.union(invisibleSavedAlbums), allCurrent: known.union(invisibleSavedAlbums), since: since)
+        } catch {
             AppLog.log("backup-scope: save failed: \(error)")
             throw error
         }

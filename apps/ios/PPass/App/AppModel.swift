@@ -207,7 +207,7 @@ final class AppModel: ObservableObject {
         switch access {
         case .full: return nil
         case .partial: return L.s("auto_backup_rule_partial_hint")
-        case .none: return L.s("auto_backup_rule_none_hint")
+        case .none: return sourceAvailability.showsDeniedPhotoHint ? L.s("auto_backup_rule_none_hint") : nil
         }
     }
 

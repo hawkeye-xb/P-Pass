@@ -24,6 +24,7 @@ struct BucketScreen: View {
     @State private var reauthTarget: FolderSourceInfo?
     @State private var removeTarget: FolderSourceInfo?
     @State private var folderBusy = false
+    @State private var hasLoaded = false
 
     var body: some View {
         content
@@ -96,6 +97,14 @@ struct BucketScreen: View {
     /// 没有照片权限时不给选择（10-30）：时间档、提示句和底部「开始备份 / 保存」都不显示——一张都读不到，选了也没用。
     static func offersChoices(_ notice: AccessNotice) -> Bool { notice != .noAccess }
 
+    /// 授权后的刷新不得覆盖未保存选择；权限不可见的已保存相册也不视为用户取消。
+    static func selectionForReload(current: Set<String>, saved: Set<String>?, availableAlbums: Set<String>, availableFolders: Set<String>) -> Set<String> {
+        current.filter { id in
+            if id.hasPrefix("folder:") { return availableFolders.contains(id) }
+            return availableAlbums.contains(id) || saved?.contains(id) == true
+        }
+    }
+
     /// 相册权限提示只针对相册；文件夹仍可添加和备份。首次点击才申请，拒绝后改去系统设置。
     private var noAccess: some View {
         let presentation = PhotoAccessPresentation.of(PhotoKitAuthorization().currentLevel())
@@ -107,7 +116,10 @@ struct BucketScreen: View {
             case .requestAccess:
                 PPButton(title: L.s("bucket_request_access_action")) {
                     Task {
-                        _ = await app.backend.media.requestAccess()
+                        let granted = await app.backend.media.requestAccess()
+                        if AppModel.decisionLanding(granted) == .registerAllowed {
+                            _ = await app.backend.engine.sendAllowedPhotos()
+                        }
                         app.refreshAccess()
                         await load()
                     }
@@ -307,16 +319,24 @@ struct BucketScreen: View {
             let saved = try app.backend.media.savedScope() // 读失败走下面的 catch（显示错误 + 重试），不当成「从未保存」
             let folderList = await app.backend.engine.folderSources()
             let folderIds = Set(folderList.map { FolderMediaSource.bucketId(sourceId: $0.id) })
-            let selectedAlbums = ScopePolicy.initialSelection(saved: saved, available: Set(list.map(\.id)),
-                                                              cameraAlbum: list.first(where: \.isCameraAlbum)?.id)
-            let selectedFolders = ScopePolicy.initialFolderSelection(saved: saved, known: known, available: folderIds)
-            checked = selectedAlbums.union(selectedFolders)
-            // 时间档：保存过 → 回显；从未保存 → 部分照片「全部」、完整访问「从今天起」。
-            let since = try app.backend.media.savedSince()
-            savedSince = since
-            wantsAll = ScopePolicy.initialWantsAll(saved: since, partialAccess: app.access == .partial)
+            if hasLoaded {
+                checked = Self.selectionForReload(current: checked, saved: saved,
+                                                  availableAlbums: Set(list.map(\.id)), availableFolders: folderIds)
+            } else {
+                let selectedAlbums = ScopePolicy.initialSelection(saved: saved, available: Set(list.map(\.id)),
+                                                                  cameraAlbum: list.first(where: \.isCameraAlbum)?.id)
+                let selectedFolders = ScopePolicy.initialFolderSelection(saved: saved, known: known, available: folderIds)
+                checked = selectedAlbums.union(selectedFolders)
+            }
+            // 时间档只在首次进入时初始化；授权刷新不覆盖用户尚未保存的选择。
+            if !hasLoaded {
+                let since = try app.backend.media.savedSince()
+                savedSince = since
+                wantsAll = ScopePolicy.initialWantsAll(saved: since, partialAccess: app.access == .partial)
+            }
             folders = folderList
             albums = list
+            hasLoaded = true
         } catch {
             self.error = String(describing: error)
         }

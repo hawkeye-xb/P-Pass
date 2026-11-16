@@ -19,6 +19,20 @@ final class SourceAvailabilityTests: XCTestCase {
         XCTAssertFalse(mixed.showsGlobalPhotoBlock, "目录侧仍可继续，相册侧降级由统一英雄区处理")
     }
 
+    func testFolderOnlyDoesNotShowDeniedPhotoHintOrFullAccessRoute() {
+        let folderOnly = SourceAvailability(autoRule: true, photoAccess: .none, hasUsableFolder: true, hasSelectedAlbum: false)
+        XCTAssertFalse(folderOnly.showsDeniedPhotoHint)
+        let partialFolderOnly = SourceAvailability(autoRule: false, photoAccess: .partial, hasUsableFolder: true, hasSelectedAlbum: false)
+        XCTAssertFalse(partialFolderOnly.needsFullPhotoAccessSettings)
+    }
+
+    func testAlbumOnlyKeepsLegacyPhotoPermissionRoute() {
+        let denied = SourceAvailability(autoRule: true, photoAccess: .none, hasUsableFolder: false, hasSelectedAlbum: true)
+        XCTAssertTrue(denied.showsDeniedPhotoHint)
+        let partial = SourceAvailability(autoRule: false, photoAccess: .partial, hasUsableFolder: false, hasSelectedAlbum: true)
+        XCTAssertTrue(partial.needsFullPhotoAccessSettings)
+    }
+
     func testFolderScopeUsesSelectionAndLegacyRegistration() {
         XCTAssertTrue(SourceAvailability.hasUsableFolder(selected: ["folder:a"], known: [], folderCount: 1))
         XCTAssertTrue(SourceAvailability.hasUsableFolder(selected: nil, known: [], folderCount: 1), "旧版目录没有新版勾选存值")
