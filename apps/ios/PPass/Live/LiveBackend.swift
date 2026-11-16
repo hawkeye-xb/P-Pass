@@ -106,6 +106,19 @@ final class LiveBackend: @unchecked Sendable {
         ScopeKey.inScope(bucketId, selected: selected, since: since)
     }
 
+    /// 引擎与目录源共用同一份有效选中集合：旧版目录并入，新版明确取消和待保存目录排除；不改存值。
+    static func engineSelectedScope(saved: Set<String>?, known: Set<String>, records: [FolderRecord]) -> Set<String> {
+        let available = Set(records.filter { $0.status != FolderMediaSource.pendingScopeStatus }
+            .map { FolderMediaSource.bucketId(sourceId: $0.id) })
+        let legacyFolders = ScopePolicy.initialFolderSelection(saved: saved, known: known, available: available)
+        return (saved ?? []).union(legacyFolders)
+    }
+
+    /// 设置状态用：待保存目录仍显示在 folderSources，但不能算「已有有效范围」。
+    static func activeFolderCount(records: [FolderRecord]) -> Int {
+        records.filter { $0.status != FolderMediaSource.pendingScopeStatus }.count
+    }
+
     /// 目录源与 PhotoKit 读取同一份范围存值。known 用来区分旧版目录（本来就在备份）与新版明确取消。
     static func folderScopeProvider(media: LiveMediaLibrary, logger: CoreLogger) -> FolderScopeProvider {
         {
@@ -187,9 +200,12 @@ final class LiveBackend: @unchecked Sendable {
         let media = self.media
         // #1272 B：规则开关没存过值 → 读现状初始化一次（有完整访问权限且已选过备份范围 ⇒ 开，否则 ⇒ 关）。
         autoRule.initIfAbsent(current: media.access() == .full && ((try? media.savedScope()) ?? nil) != nil)
-        // 读盘失败与「从未保存」都给引擎空范围（一张都不备份），但读失败要留日志，不能和从未保存混为一谈（#971）。
+        let folderRegistry = FolderRegistry(directory: dir, logger: logger)
+        // 读盘失败给空范围；旧版目录按当前登记并入，明确取消和 pendingScope 不并入（#971 / #1775）。
         let scope: @Sendable () -> Set<String> = {
-            do { return try media.savedScope() ?? [] } catch {
+            do {
+                return Self.engineSelectedScope(saved: try media.savedScope(), known: media.knownAlbums(), records: folderRegistry.allRecords())
+            } catch {
                 logger.log("backup-scope: unreadable, engine sees an empty scope: \(error)")
                 return []
             }
@@ -215,7 +231,6 @@ final class LiveBackend: @unchecked Sendable {
         // 无登记目录 = Composite 只装 PhotoKit（行为与直接装配一致）；有登记 = 全部目录来源逐个装进去（按 sourceId 路由）。
         // 一个进程一个 FolderRegistry 实例（FolderRegistry 的类注释），传给扫描与导入两侧（含 FolderBookmarks.resolve）。
         // 装配规则单一出处：assembleMedia / engineInScope 是 CompositeWiringTests 与这里共用的同一份函数。
-        let folderRegistry = FolderRegistry(directory: dir, logger: logger)
         let photoSource = PhotoMediaSource(selected: scope, since: since, inbox: inbox, log: { logger.log($0) })
         let photoImporter = PhotoImporter(provider: provider, tempRoot: fm.temporaryDirectory.appendingPathComponent("ppass-originals"),
                                           pickedRoot: fm.temporaryDirectory.appendingPathComponent(OriginalCachePaths.pickedScratchDirName))
@@ -852,7 +867,7 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
 
     // MARK: #1763 素材文件夹（BackupEngine 端口的真实现；失败经 command 记日志后抛给界面）
 
-    func folderSourceCount() -> Int { backend.folders.allRecords().count }
+    func folderSourceCount() -> Int { LiveBackend.activeFolderCount(records: backend.folders.allRecords()) }
     func folderSources() async -> [FolderSourceInfo] { await backend.folderSourceInfos() }
     func addFolderSource(at url: URL, displayName: String) async throws {
         try await command("addFolderSource") { try backend.addFolderSource(at: url, displayName: displayName) }

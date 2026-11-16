@@ -208,14 +208,13 @@ struct BucketScreen: View {
 
     private func addFolder(_ url: URL) async {
         let before = Set(folders.map(\.id))
-        guard await runFolder("folder-add", operation: {
+        _ = await runFolder("folder-add", operation: {
             try await app.backend.engine.addFolderSource(at: url, displayName: url.lastPathComponent)
-        }) else { return }
-        let updated = await app.backend.engine.folderSources()
-        folders = updated
-        if let added = updated.first(where: { !before.contains($0.id) }) {
-            checked.insert(FolderMediaSource.bucketId(sourceId: added.id))
-        }
+        }, apply: { updated in
+            if let added = updated.first(where: { !before.contains($0.id) }) {
+                checked.insert(FolderMediaSource.bucketId(sourceId: added.id))
+            }
+        })
     }
 
     private func reauthorize(_ target: FolderSourceInfo, at url: URL) async {
@@ -223,12 +222,14 @@ struct BucketScreen: View {
     }
 
     private func remove(_ target: FolderSourceInfo) async {
-        guard await runFolder("folder-remove", operation: { try app.backend.engine.removeFolderSource(id: target.id) }) else { return }
-        checked.remove(FolderMediaSource.bucketId(sourceId: target.id))
+        _ = await runFolder("folder-remove", operation: { try app.backend.engine.removeFolderSource(id: target.id) }, apply: { _ in
+            checked.remove(FolderMediaSource.bucketId(sourceId: target.id))
+        })
     }
 
     @discardableResult
-    private func runFolder(_ what: String, operation: () async throws -> Void) async -> Bool {
+    private func runFolder(_ what: String, operation: () async throws -> Void,
+                           apply: ([FolderSourceInfo]) -> Void = { _ in }) async -> Bool {
         guard !folderBusy else { return false }
         folderBusy = true
         defer { folderBusy = false }
@@ -240,7 +241,9 @@ struct BucketScreen: View {
             app.notice = UserNotice(message: L.s("folder_sources_add_failed"))
             return false
         }
-        folders = await app.backend.engine.folderSources()
+        let updated = await app.backend.engine.folderSources()
+        folders = updated
+        apply(updated)
         app.refreshFolderCount()
         return true
     }

@@ -117,7 +117,8 @@ struct SettingsScreen: View {
         Section {
             ruleRow
             if !app.autoRule { pickRow }
-            if app.autoRule { row(L.s("backup_scope"), value: scopeValue, route: .bucket) }
+            // 范围入口常开：关闭自动备份或拒绝照片权限时，也能管理已有目录授权。
+            row(L.s("backup_scope"), value: scopeValue, route: .bucket)
             if let n = app.cancelRemainingCount {
                 Button {
                     Task {

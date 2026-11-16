@@ -93,6 +93,29 @@ final class CompositeWiringTests: XCTestCase {
         XCTAssertTrue(LiveBackend.engineInScope("album-x", selected: ["album-x"], since: .all), "PhotoKit 选中的相册在范围内")
     }
 
+    // 引擎 selected 与目录源使用同一份有效范围：旧版目录并入，pendingScope 和新版明确取消都排除。
+    // 反证：只把 savedScope 原值传给引擎 → legacy 不在 selected，ScopeKey.inScope 判 false。
+    func testEngineSelectedScopeIncludesLegacyFoldersButNotPendingOrUnchecked() throws {
+        let legacy = try addFolder("legacy")
+        let pending = try addFolder("pending")
+        var pendingRecord = try XCTUnwrap(registry.record(id: pending))
+        pendingRecord.status = FolderMediaSource.pendingScopeStatus
+        XCTAssertTrue(registry.upsert(pendingRecord))
+
+        let legacyScope = LiveBackend.engineSelectedScope(saved: ["album"], known: ["album"], records: registry.allRecords())
+        XCTAssertTrue(legacyScope.contains("folder:\(legacy)"), "只保存过相册范围的旧版目录仍并入")
+        XCTAssertFalse(legacyScope.contains("folder:\(pending)"), "待保存目录不能提前并入")
+        XCTAssertEqual(LiveBackend.activeFolderCount(records: registry.allRecords()), 1, "有效范围计数排除 pendingScope")
+        let key = ScopeKey.encode(albums: ["folder:\(legacy)"], capturedAtMs: 123)
+        XCTAssertTrue(LiveBackend.engineInScope(key, selected: legacyScope, since: .all), "引擎不会再跳过旧版目录")
+
+        let neverSaved = LiveBackend.engineSelectedScope(saved: nil, known: [], records: registry.allRecords())
+        XCTAssertTrue(neverSaved.contains("folder:\(legacy)"), "savedScope=nil 的旧目录也保持备份")
+
+        let unchecked = LiveBackend.engineSelectedScope(saved: [], known: ["folder:\(legacy)"], records: registry.allRecords())
+        XCTAssertFalse(unchecked.contains("folder:\(legacy)"), "新版明确取消后不再并入")
+    }
+
     // release 广播经 Composite 走到全部导入器且幂等（装配口径：广播，不按 hash 推断来源）。
     func testWiringReleaseReachesAllImporters() {
         let photo = WiringFakeImporter()
