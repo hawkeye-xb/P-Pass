@@ -1,0 +1,12 @@
+# Tests that read repository source files and must run in the host/CI lane.
+DebugLaunchInputTests
+DesignTokensTests
+DesktopThumbTests
+DiagnosticsClipboardTests
+I18nDriftTests
+ManualPairInputTests
+OnboardingNavigationTests
+PeerClosedPairingLossTests
+UIResourceTests
+VersionStampTests
+VideoOriginalGateTests
