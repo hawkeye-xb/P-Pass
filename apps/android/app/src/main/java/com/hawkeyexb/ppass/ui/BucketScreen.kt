@@ -11,6 +11,7 @@ import android.net.Uri
 import android.os.Build
 import android.util.Size
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -32,7 +33,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -45,7 +45,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -146,10 +148,48 @@ private fun SelectBadge(selected: Boolean, modifier: Modifier = Modifier) {
 }
 
 @Composable
+private fun SourceTypeGlyph(folder: Boolean) {
+    val color = PPColor.Ink40
+    Canvas(Modifier.size(16.dp)) {
+        val stroke = Stroke(width = 1.4.dp.toPx())
+        fun line(path: Path, x1: Float, y1: Float, x2: Float, y2: Float) {
+            path.moveTo(x1.dp.toPx(), y1.dp.toPx())
+            path.lineTo(x2.dp.toPx(), y2.dp.toPx())
+        }
+        if (folder) {
+            val outline = Path()
+            line(outline, 1f, 4f, 6f, 4f)
+            line(outline, 6f, 4f, 8f, 6f)
+            line(outline, 8f, 6f, 15f, 6f)
+            line(outline, 15f, 6f, 15f, 14f)
+            line(outline, 15f, 14f, 1f, 14f)
+            line(outline, 1f, 14f, 1f, 4f)
+            drawPath(outline, color, style = stroke)
+        } else {
+            val back = Path()
+            line(back, 4f, 1f, 15f, 1f)
+            line(back, 15f, 1f, 15f, 12f)
+            line(back, 15f, 12f, 4f, 12f)
+            line(back, 4f, 12f, 4f, 1f)
+            val front = Path()
+            line(front, 1f, 4f, 12f, 4f)
+            line(front, 12f, 4f, 12f, 15f)
+            line(front, 12f, 15f, 1f, 15f)
+            line(front, 1f, 15f, 1f, 4f)
+            drawPath(back, color, style = stroke)
+            drawPath(front, color, style = stroke)
+        }
+    }
+}
+
+@Composable
 private fun BucketCard(
     bucket: MediaScanner.Bucket,
     selected: Boolean,
     isNew: Boolean,
+    isFolder: Boolean,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
     onToggle: () -> Unit,
 ) {
     Column(
@@ -170,13 +210,14 @@ private fun BucketCard(
             )
             SelectBadge(selected, Modifier.align(Alignment.TopEnd).padding(8.dp))
         }
-        Column(Modifier.padding(12.dp, 9.dp, 12.dp, 11.dp)) {
+        Column(Modifier.height(72.dp).padding(12.dp, 9.dp, 12.dp, 11.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
+                SourceTypeGlyph(isFolder)
                 Text(
                     bucket.name ?: stringResource(R.string.bucket_unnamed),
                     fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold,
                     color = PPColor.Ink,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).padding(start = 6.dp),
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
@@ -189,10 +230,20 @@ private fun BucketCard(
                     )
                 }
             }
-            Text(
-                stringResource(R.string.bucket_count, bucket.count),
-                fontSize = 12.5.sp, color = PPColor.Ink40,
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    stringResource(R.string.bucket_count, bucket.count),
+                    fontSize = 12.5.sp, color = PPColor.Ink40,
+                    modifier = Modifier.weight(1f),
+                )
+                if (actionLabel != null && onAction != null) {
+                    Text(
+                        actionLabel,
+                        fontSize = 12.sp, color = PPColor.Act,
+                        modifier = Modifier.clickable(onClick = onAction).padding(start = 8.dp),
+                    )
+                }
+            }
         }
     }
 }
@@ -275,50 +326,53 @@ fun BucketScreen(
                             bucket = b,
                             selected = b.id in checked,
                             isNew = b.id in newIds,
+                            isFolder = false,
                             onToggle = { checked = if (b.id in checked) checked - b.id else checked + b.id },
                         )
                     }
                     items(folderBuckets, key = { "folder:${it.key}" }) { folder ->
-                        Column {
-                            BucketCard(
-                                bucket = folder.bucket,
-                                selected = folder.key in checkedFolders,
-                                isNew = false,
-                                onToggle = {
-                                    checkedFolders = if (folder.key in checkedFolders) {
-                                        checkedFolders - folder.key
-                                    } else {
-                                        checkedFolders + folder.key
-                                    }
-                                },
-                            )
-                            Row(Modifier.padding(start = 8.dp, top = 4.dp)) {
-                                if (folder.needsPermission) {
-                                    Text(
-                                        stringResource(R.string.folder_reauthorize),
-                                        fontSize = 12.sp, color = PPColor.Act,
-                                        modifier = Modifier.clickable { onReauthorizeFolder(folder.key) }.padding(end = 12.dp),
-                                    )
+                        BucketCard(
+                            bucket = folder.bucket,
+                            selected = folder.key in checkedFolders,
+                            isNew = false,
+                            isFolder = true,
+                            actionLabel = stringResource(
+                                if (folder.needsPermission) R.string.folder_reauthorize else R.string.folder_remove,
+                            ),
+                            onAction = {
+                                if (folder.needsPermission) onReauthorizeFolder(folder.key) else removing = folder
+                            },
+                            onToggle = {
+                                checkedFolders = if (folder.key in checkedFolders) {
+                                    checkedFolders - folder.key
+                                } else {
+                                    checkedFolders + folder.key
                                 }
-                                Text(
-                                    stringResource(R.string.folder_remove),
-                                    fontSize = 12.sp, color = PPColor.Act,
-                                    modifier = Modifier.clickable { removing = folder },
-                                )
-                            }
-                        }
+                            },
+                        )
                     }
                     item(key = "add-folder") {
-                        Surface(
-                            color = PPColor.ActBg,
-                            shape = RoundedCornerShape(16.dp),
-                            modifier = Modifier.fillMaxWidth(),
+                        Column(
+                            Modifier
+                                .clip(RoundedCornerShape(16.dp))
+                                .background(PPColor.ActBg)
+                                .border(2.dp, PPColor.Border, RoundedCornerShape(16.dp))
+                                .clickable(enabled = !saving, onClick = onAddFolder),
                         ) {
-                            Text(
-                                stringResource(R.string.folder_add),
-                                fontSize = 16.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
-                                modifier = Modifier.clickable(enabled = !saving, onClick = onAddFolder).padding(18.dp),
-                            )
+                            Box(
+                                Modifier.fillMaxWidth().aspectRatio(1.6f),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text("+", fontSize = 32.sp, fontWeight = FontWeight.Light, color = PPColor.Ink40)
+                            }
+                            Column(Modifier.height(72.dp).padding(12.dp, 9.dp, 12.dp, 11.dp)) {
+                                Text(
+                                    stringResource(R.string.folder_add),
+                                    fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold, color = PPColor.Ink,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                         }
                     }
                 }
