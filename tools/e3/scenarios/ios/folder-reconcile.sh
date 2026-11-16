@@ -39,11 +39,14 @@ setup() {
   ios_pair_allow_start "$EV" "$DESK"
 }
 
-# 一轮带 reconcile 的备份：触发 → 收场 → 拉账本快照（$1 轮号）
+# 一轮带 reconcile 的备份：触发 → 收场 → 拉账本快照（$1 轮号，$2 配对串——只在第 1 轮给）
 reconcile_round() {
-  local n="$1"
-  ios_launch "$OUT" "run$n" "$(jq -cn --arg r "$RUN-run$n" \
-    '{PPASS_E2E_DIR:"container",PPASS_E2E_RUN:$r,PPASS_BGTEST_FOLDER_RUN:"1"}')" || return 1
+  local n="$1" link="${2:-}"
+  # setup 的 ios_reset 清掉了 pairing.json，首轮 ensurePaired 必须拿到配对串，否则 .notACode 直接 failed。
+  # 配对持久化之后的各轮不再带：与 disk-gc 的 resume 同口径，一次性配对串重复用也会失败。
+  ios_launch "$OUT" "run$n" "$(jq -cn --arg l "$link" --arg r "$RUN-run$n" \
+    '{PPASS_E2E_DIR:"container",PPASS_E2E_RUN:$r,PPASS_BGTEST_FOLDER_RUN:"1"}
+     + (if $l == "" then {} else {PPASS_E2E_PAIR_LINK:$l} end)')" || return 1
   ios_wait_status "$OUT/run$n" "$RUN-run$n" 300 true >/dev/null \
     || { ios_copy_from Documents/e2e/status.json "$OUT/status-run$n.json"; return 1; }
   cp "$OUT/run$n.status.json" "$OUT/status-run$n.json"
@@ -71,7 +74,7 @@ act() {
   ios_wait_status "$OUT/add" "$RUN-add" 60 true >/dev/null || { ios_copy_from Documents/e2e/status.json "$OUT/add.status.json"; return 1; }
   cp "$OUT/add.status.json" "$OUT/status-add.json"
   desk_qr "$DESK" # 一次性配对串：desk_qr 设 PAIR_QR，不回显
-  reconcile_round 1 || return 1
+  reconcile_round 1 "$PAIR_QR" || return 1
   # 锚点哈希：base.jpg 在改名前拉回（改名后按新路径就拉不到旧版本了）
   b3="$(ios_b3)"
   ios_copy_from "Documents/foldere3-$RUN/base.jpg" "$OUT/base.jpg" || return 1
