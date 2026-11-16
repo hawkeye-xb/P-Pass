@@ -23,18 +23,20 @@ struct PHAssetPayload: PickedPayload, @unchecked Sendable {
 
 /// #1272 挑几张传：PHPicker 给回的一张。`NSItemProvider` 只在本进程存活期间有效，所以只存句柄、不复制照片；
 /// 轮到这一张时才 `loadFileRepresentation`（系统给的临时文件在回调结束就删，所以在回调里立刻拷到 App 自己的临时目录）。
-struct PHPickedPayload: PickedPayload, @unchecked Sendable {
+struct PHPickedPayload: PickedFilePayload, @unchecked Sendable {
     let provider: NSItemProvider
     let type: UTType
 
-    /// 这张的文件名与 MIME（选择器不给 assetIdentifier，也没有拍摄时间）。不是静态图片（如 Live Photo 的 bundle）= nil。
+    /// 这张的文件名与 MIME（选择器不给 assetIdentifier，也没有拍摄时间）。只接受照片或视频。
     static func describe(_ provider: NSItemProvider, index: Int) -> (name: String, mime: String, payload: PickedPayload)? {
         let types = provider.registeredTypeIdentifiers.compactMap { UTType($0) }
-        guard let type = types.first(where: { $0.conforms(to: .image) }) else { return nil }
-        let base = (provider.suggestedName ?? "").isEmpty ? "IMG_\(index + 1)" : provider.suggestedName!
-        let ext = type.preferredFilenameExtension ?? "jpg"
+        guard let type = types.first(where: { $0.conforms(to: .image) || $0.conforms(to: .movie) }) else { return nil }
+        let isImage = type.conforms(to: .image)
+        let base = (provider.suggestedName ?? "").isEmpty ? "PICK_\(index + 1)" : provider.suggestedName!
+        let ext = type.preferredFilenameExtension ?? (isImage ? "jpg" : "mov")
         let name = base.lowercased().hasSuffix(".\(ext)") ? base : "\(base).\(ext)"
-        return (name, type.preferredMIMEType ?? "image/jpeg", PHPickedPayload(provider: provider, type: type))
+        let fallback = isImage ? "image/jpeg" : "video/quicktime"
+        return (name, type.preferredMIMEType ?? fallback, PHPickedPayload(provider: provider, type: type))
     }
 
     /// 取这一张的原始文件，拷进 [directory] 下一个独立子目录，返回拷贝的路径。响应 Task 取消（停掉系统的加载）。
@@ -62,6 +64,39 @@ struct PHPickedPayload: PickedPayload, @unchecked Sendable {
         }
         if Task.isCancelled { try? fm.removeItem(at: dir); throw CancellationError() }
         return dest
+    }
+}
+
+struct FilePickedPayload: PickedFilePayload, @unchecked Sendable {
+    let url: URL
+    let type: UTType
+    let selectionLimit: Int? = nil
+
+    static func describe(_ url: URL, index: Int) -> (name: String, mime: String, payload: PickedPayload)? {
+        guard let type = UTType(filenameExtension: url.pathExtension),
+              type.conforms(to: .image) || type.conforms(to: .movie) else { return nil }
+        let name = url.lastPathComponent.isEmpty ? "FILE_\(index + 1)" : url.lastPathComponent
+        let fallback = type.conforms(to: .image) ? "image/jpeg" : "video/quicktime"
+        return (name, type.preferredMIMEType ?? fallback, FilePickedPayload(url: url, type: type))
+    }
+
+    /// 只在读取这一张时持有安全作用域；provider 按引用导入后仍使用 App 自己持有的副本。
+    func copy(into directory: URL, fileName: String) async throws -> URL {
+        try Task.checkCancellation()
+        let fm = FileManager.default
+        let dir = directory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dest = dir.appendingPathComponent((fileName as NSString).lastPathComponent)
+        do {
+            let accessing = url.startAccessingSecurityScopedResource()
+            defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+            try fm.copyItem(at: url, to: dest)
+            try Task.checkCancellation()
+            return dest
+        } catch {
+            try? fm.removeItem(at: dir)
+            throw error
+        }
     }
 }
 

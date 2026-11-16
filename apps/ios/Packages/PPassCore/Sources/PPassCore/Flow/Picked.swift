@@ -6,6 +6,16 @@ import Foundation
 /// 手选一张的来源句柄（App 侧是 NSItemProvider 的包装）。PPassCore 不认识它的内容，只原样交给导入器。
 public protocol PickedPayload: Sendable {}
 
+/// 能逐项取原文件的手选句柄。`nil` 数量上限只用于系统文件选择；系统相册选择器仍由 `maxPick` 限制。
+public protocol PickedFilePayload: PickedPayload {
+    var selectionLimit: Int? { get }
+    func copy(into directory: URL, fileName: String) async throws -> URL
+}
+
+public extension PickedFilePayload {
+    var selectionLimit: Int? { PickedQueue.maxPick }
+}
+
 public enum PickedState: String, Codable, Sendable {
     case open, transferring, delivered, alreadyThere, failed
 }
@@ -93,18 +103,30 @@ public final class PickedQueue: PickedStore, @unchecked Sendable {
         lock.lock(); changed = handler; lock.unlock()
     }
 
-    /// 登记新的一批（最多 [maxPick] 张）。旧批的汇总被替换；旧批没传完的句柄丢弃。返回收下的张数。
+    /// 有未结束项时按顺序追加；全部结束后才开始新的一批。系统文件句柄可声明不受相册的 100 张限制。
     @discardableResult
     public func addBatch(_ payloads: [(fileName: String, mimeType: String, payload: PickedPayload)]) -> Int {
-        let taken = Array(payloads.prefix(Self.maxPick))
+        let unlimited = payloads.allSatisfy {
+            guard let file = $0.payload as? PickedFilePayload else { return false }
+            return file.selectionLimit == nil
+        }
+        let taken = unlimited ? payloads : Array(payloads.prefix(Self.maxPick))
         guard !taken.isEmpty else { return 0 }
         lock.lock()
-        entries = taken.map { p in
+        let appending = entries.contains { $0.state == .open || $0.state == .transferring }
+        if !appending { entries = [] }
+        for p in taken {
             let id = ledger.nextId
             ledger.nextId += 1
-            return Entry(item: PickedItem(id: id, fileName: p.fileName, mimeType: p.mimeType, payload: p.payload), state: .open)
+            entries.append(Entry(item: PickedItem(id: id, fileName: p.fileName, mimeType: p.mimeType, payload: p.payload), state: .open))
         }
-        ledger.batch = PickedBatchSummary(total: taken.count, delivered: 0, alreadyThere: 0, failed: 0, interrupted: false)
+        if appending, var batch = ledger.batch {
+            batch.total += taken.count
+            batch.interrupted = false
+            ledger.batch = batch
+        } else {
+            ledger.batch = PickedBatchSummary(total: taken.count, delivered: 0, alreadyThere: 0, failed: 0, interrupted: false)
+        }
         persistLocked()
         let notify = changed
         lock.unlock()

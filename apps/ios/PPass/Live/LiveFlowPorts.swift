@@ -93,7 +93,7 @@ final class PhotoImporter: MediaImporter, @unchecked Sendable {
     /// #1272：把这一张从选择器的临时文件拷出来 → provider 导入（BLAKE3 由 Rust 侧算）。选择器不给字节数，以导入返回的为准。
     func importPicked(_ item: PickedItem) async throws -> ImportResult {
         if let asset = item.payload as? PHAssetPayload { return try await importAsset(asset, item: item) }
-        guard let payload = item.payload as? PHPickedPayload else { throw PickedImportUnsupported() }
+        guard let payload = item.payload as? PickedFilePayload else { throw PickedImportUnsupported() }
         let copy: URL
         do {
             copy = try await payload.copy(into: pickedRoot, fileName: item.fileName)
