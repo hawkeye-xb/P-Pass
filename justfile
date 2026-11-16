@@ -485,9 +485,9 @@ ios-strings *args:
 ios-screenshots *args:
   bash tools/ios/screenshots.sh {{args}}
 
-# iOS 单元测试：生成工程 → 模拟器上 xcodebuild test。模拟器选法见 tools/ios/sim.sh
-# （默认 iPhone 17，IOS_SIM_NAME 可改；不写死 runtime 版本）。
-# 与 ci-ios.yml 同一组：App 测试 → 隐私清单 → TransportFFITests（模拟器 + 本机隔离 daemon，
+# iOS 单元测试：生成工程 → xcodebuild test。本机有真机时优先真机，CI 或无真机时用模拟器。
+# 真机只跳过 tools/ios/host-only-tests.txt 里明确依赖宿主源文件的测试；FFI 的 tool-hosted testing 也明确延期到 CI。
+# 与 ci-ios.yml 同一组：App 测试 → 隐私清单 → TransportFFITests（本机隔离 daemon，
 # daemon 用 debug 构建，与 CI 一致）。少跑 FFI 那步，Rust 侧改了 FFI 字段本地看不出来（11-02 #1304）。
 # #1378：just ios-test --lang en|zh 只跑 App 测试并指定测试语言（本机模拟器多是中文、CI 是英文；
 # 文案改动交卡时 just done 中英各跑一次）。结束时关掉本配方运行期间新开的模拟器（tools/ios/sim.sh shutdown-new）。
@@ -504,6 +504,7 @@ ios-test *args:
     esac
   done
   [ -z "$lang" ] || langargs="$(bash tools/ios/sim.sh lang-args "$lang")"
+  source tools/ios/test-lanes.sh
   before="$(bash tools/ios/sim.sh booted)"
   trap 'bash tools/ios/sim.sh shutdown-new "$before"' EXIT
   if [ -n "$lang" ]; then
@@ -512,7 +513,11 @@ ios-test *args:
   else
     bash tools/ios/test.sh
     bash tools/ios/privacy-manifest-local.sh
-    PPASS_DAEMON_PROFILE=dev bash tools/ios/test-transport-ffi.sh
+    if ios_lane_is_device; then
+      printf 'FFI_DEFERRED=tool-hosted testing requires the host simulator; run in CI\n'
+    else
+      PPASS_DAEMON_PROFILE=dev bash tools/ios/test-transport-ffi.sh
+    fi
   fi
 
 # iOS 界面回归（#1458）：XCUITest 走真实界面、系统弹窗由测试点，按 App 日志逐例判 PASS/FAIL。

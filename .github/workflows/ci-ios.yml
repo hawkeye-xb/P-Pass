@@ -154,6 +154,10 @@ jobs:
       - name: Version stamp rule
         run: tools/ios/test-stamp-version.sh
 
+      # 真机与宿主测试分轨：CI 本身必须保持完整模拟器套件，不继承真机跳过项。
+      - name: iOS test lane contract
+        run: tools/test-ios-lanes.sh
+
       # TestFlight 归档不签名、签名只在导出时走云签名：CI 运行时绝不新建证书（run 40298231858 撞了证书上限）。
       # 文字级门禁 + 反证（--self-test 把几种回退写法丢进去，必须全红）。
       - name: TestFlight signing shape (archive unsigned, cloud signing on export)
