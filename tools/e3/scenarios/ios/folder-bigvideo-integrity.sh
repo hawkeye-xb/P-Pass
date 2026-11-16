@@ -95,8 +95,13 @@ judge_counter() {
   check "注入已执行（flip：old_byte=${old:-缺失} → new_byte=${new:-缺失}，确实翻了）" bash -c "[ -n '${old:-}' ] && [ '${old:-x}' != '${new:-y}' ]"
   check "注入偏移远超 64KiB（offset=${offset:-0} ≥ 65536，排除前 64KiB 探针式假证）" bash -c "[ '${offset:-0}' -ge 65536 ]"
   check "供数期源改动被观测（source changed while serving 在本轮日志里）" has_line "$d/ppass.log" 'source changed while serving'
-  check "注入时该张订单没有坏内容 CONFIRMED（orders_after_abort 无 CONFIRMED）" \
-    bash -c "[ \"\$(jq -r '[.orders_after_abort.states[]? | select(. == \"CONFIRMED\")] | length' \"$d/status-integrity-flip.json\" 2>/dev/null)\" = 0 ]"
+  # 订单状态必须真的读到：states 缺失、为空、或是驱动在账本打不开时写的 <db-unavailable> /
+  # <query-failed> 哨兵，都不算「没有坏内容 CONFIRMED」——那种证据判不了，链条按不完整处理。
+  check "注入时该张订单没有坏内容 CONFIRMED（订单状态非空、无读库哨兵、无 CONFIRMED）" \
+    bash -c "jq -e '(.orders_after_abort.states // []) as \$s
+      | (\$s | length) > 0
+        and all(\$s[]; (type == \"string\") and (. != \"CONFIRMED\") and (startswith(\"<\") | not))' \
+      \"$d/status-integrity-flip.json\" >/dev/null 2>&1"
   check "还原后重新确认（waiting_reconfirm.latest=${latest:-缺失} = CONFIRMED）" bash -c "[ '${latest:-x}' = 'CONFIRMED' ]"
   if [ "$E3_FAILS" -eq 0 ]; then
     # 预期失败：fault 在场 → 主链不变量「日志无供数期源改动」被打破。这是反证模式的判红点——
