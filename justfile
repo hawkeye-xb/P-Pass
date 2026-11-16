@@ -505,6 +505,7 @@ ios-test *args:
   done
   [ -z "$lang" ] || langargs="$(bash tools/ios/sim.sh lang-args "$lang")"
   source tools/ios/lanes.sh
+  ios_lane_select
   before="$(bash tools/ios/sim.sh booted)"
   trap 'bash tools/ios/sim.sh shutdown-new "$before"' EXIT
   if [ -n "$lang" ]; then

@@ -1,21 +1,51 @@
 #!/usr/bin/env bash
 
 ios_lane_real_udid() {
-  if [ -n "${PPASS_IOS_TEST_DEVICE:-}" ]; then
-    printf '%s\n' "$PPASS_IOS_TEST_DEVICE"
+  # xcodebuild 要 hardwareProperties.udid，不是 devicectl 的 CoreDevice identifier。
+  if [ -n "${PPASS_IOS_HARDWARE_UDID:-}" ]; then
+    printf '%s\n' "$PPASS_IOS_HARDWARE_UDID"
     return 0
   fi
-  xcrun devicectl list devices 2>/dev/null | awk '
-    /available \(paired\)|connected/ {
-      for (i = 1; i <= NF; i++) if ($i ~ /^[0-9A-F]+(-[0-9A-F]+)+$/) { print $i; exit }
-    }
-  '
+  local json requested list count
+  json="$(mktemp)" || return 1
+  if ! xcrun devicectl list devices --quiet --json-output "$json" >/dev/null 2>&1; then
+    rm -f "$json"
+    return 1
+  fi
+  requested="${PPASS_IOS_TEST_DEVICE:-}"
+  if [ -n "$requested" ]; then
+    list="$(jq -r --arg d "$requested" '.result.devices[]? | select(.identifier == $d or .hardwareProperties.udid == $d or .deviceProperties.name == $d) | .hardwareProperties.udid // empty' "$json")"
+  else
+    list="$(jq -r '.result.devices[]? | select(.hardwareProperties.platform == "iOS" and .connectionProperties.pairingState == "paired" and .connectionProperties.tunnelState != "unavailable") | .hardwareProperties.udid // empty' "$json")"
+  fi
+  rm -f "$json"
+  count="$(printf '%s\n' "$list" | grep -c . || true)"
+  # 未指定时只接受唯一一台，不能悄悄把测试装到第一台设备。
+  [ "$count" = 1 ] || return 1
+  printf '%s\n' "$list"
+}
+
+ios_lane_select() {
+  local udid
+  # CI 与显式模拟器选择优先，不能继承上一次本机分轨。
+  if [ "${CI:-}" = true ] || [ "${PPASS_IOS_FORCE_SIMULATOR:-0}" = 1 ]; then
+    PPASS_IOS_LANE=simulator
+    PPASS_IOS_HARDWARE_UDID=""
+  elif [ -n "${PPASS_IOS_LANE:-}" ]; then
+    :
+  elif udid="$(ios_lane_real_udid)" && [ -n "$udid" ]; then
+    PPASS_IOS_LANE=device
+    PPASS_IOS_HARDWARE_UDID="$udid"
+  else
+    PPASS_IOS_LANE=simulator
+    PPASS_IOS_HARDWARE_UDID=""
+  fi
+  export PPASS_IOS_LANE PPASS_IOS_HARDWARE_UDID
 }
 
 ios_lane_is_device() {
-  [ "${CI:-}" != true ] || return 1
-  [ "${PPASS_IOS_FORCE_SIMULATOR:-0}" != 1 ] || return 1
-  [ -n "$(ios_lane_real_udid)" ]
+  ios_lane_select
+  [ "$PPASS_IOS_LANE" = device ]
 }
 
 ios_lane_host_test_count() {
