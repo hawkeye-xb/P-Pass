@@ -5,6 +5,11 @@ import XCTest
 
 private struct Stub: PickedPayload {}
 
+private struct UnlimitedFileStub: PickedFilePayload {
+    let selectionLimit: Int? = nil
+    func copy(into directory: URL, fileName: String) async throws -> URL { fatalError() }
+}
+
 /// 没有照片权限：照片库这一侧每个读取都抛错。
 private struct DeniedMedia: MediaSource {
     struct Denied: Error {}
@@ -133,6 +138,39 @@ final class PickedUploadTests: XCTestCase {
         relaunched.addBatch([(fileName: "n.jpg", mimeType: "image/jpeg", payload: Stub())])
         XCTAssertFalse(try XCTUnwrap(relaunched.summary()).interrupted)
         XCTAssertGreaterThan(try XCTUnwrap(relaunched.nextOpen()).id, 12)
+    }
+
+    func testNewSelectionAppendsWithoutReplacingOpenItems() throws {
+        let q = PickedQueue(directory: TempDir().url)
+        q.addBatch(["a.jpg", "b.jpg"].map { (fileName: $0, mimeType: "image/jpeg", payload: Stub()) })
+        q.addBatch(["c.mov", "d.mov", "e.mov"].map { (fileName: $0, mimeType: "video/quicktime", payload: Stub()) })
+
+        XCTAssertEqual(q.summary()?.total, 5)
+        var names: [String] = []
+        while let next = q.nextOpen() {
+            names.append(next.fileName)
+            q.mark(next.id, .delivered)
+        }
+        XCTAssertEqual(names, ["a.jpg", "b.jpg", "c.mov", "d.mov", "e.mov"])
+        XCTAssertEqual(q.summary()?.delivered, 5)
+    }
+
+    func testSelectionAfterEverythingSettledStartsANewBatch() throws {
+        let q = PickedQueue(directory: TempDir().url)
+        q.addBatch(["a.jpg"].map { (fileName: $0, mimeType: "image/jpeg", payload: Stub()) })
+        q.mark(try XCTUnwrap(q.nextOpen()).id, .delivered)
+        q.addBatch(["b.jpg"].map { (fileName: $0, mimeType: "image/jpeg", payload: Stub()) })
+
+        XCTAssertEqual(q.summary(), PickedBatchSummary(total: 1, delivered: 0, alreadyThere: 0, failed: 0, interrupted: false))
+        XCTAssertEqual(q.nextOpen()?.fileName, "b.jpg")
+    }
+
+    func testFileSelectionOverOneHundredIsNotTruncated() {
+        let q = PickedQueue(directory: TempDir().url)
+        let added = q.addBatch((0..<130).map { (fileName: "clip\($0).mp4", mimeType: "video/mp4", payload: UnlimitedFileStub()) })
+
+        XCTAssertEqual(added, 130)
+        XCTAssertEqual(q.summary()?.total, 130)
     }
 
     func testBatchIsCappedAt100() {
