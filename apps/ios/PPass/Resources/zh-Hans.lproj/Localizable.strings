@@ -97,8 +97,8 @@
 "last_hours_ago" = "%1$ld 小时前";
 "rule_notify" = "通知";
 "setting_version" = "版本";
-"bucket_title" = "备份范围";
-"bucket_hint" = "勾选的相册和文件夹会按同一时间范围备份。";
+"bucket_title" = "备份哪些照片";
+"bucket_hint" = "只有勾选的相册会备份。";
 "bucket_empty" = "手机上没有照片或视频。";
 "bucket_loading" = "正在读取相册…";
 "bucket_count" = "%1$ld 张";

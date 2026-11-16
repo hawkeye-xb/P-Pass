@@ -26,7 +26,7 @@ struct BucketScreen: View {
 
     var body: some View {
         content
-            .navigationTitle(L.s("bucket_title"))
+            .navigationTitle(L.s("backup_scope"))
             .ppNavBar()
             .ppScreen()
             .navigationBarTitleDisplayMode(.large)
@@ -59,10 +59,6 @@ struct BucketScreen: View {
         } else if let albums {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    if Self.offersChoices(Self.notice(for: app.access)) {
-                        Text(L.s("bucket_hint")).font(PPFont.sans(14, relativeTo: .subheadline)).foregroundStyle(PPColor.ink40)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
                     timePicker
                     if Self.notice(for: app.access) == .noAccess { noAccess }
                     if albums.isEmpty, folders.isEmpty, Self.notice(for: app.access) != .noAccess {
@@ -251,7 +247,7 @@ struct BucketScreen: View {
 
     /// 时间二选一（M月d日起的照片 / 含以前的照片）：系统分段控件，一行。
     private var timePicker: some View {
-        Picker(L.s("bucket_title"), selection: $wantsAll) {
+        Picker(L.s("backup_scope"), selection: $wantsAll) {
             Text(Self.sinceOptionLabel(savedSince, now: Date())).tag(false)
             Text(L.s("scope_time_all")).tag(true)
         }
