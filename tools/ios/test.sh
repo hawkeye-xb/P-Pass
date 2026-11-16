@@ -6,8 +6,8 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 IOS="$ROOT/apps/ios"
 DERIVED="$IOS/build/DerivedData"
 MANIFEST="$ROOT/tools/ios/host-only-tests.txt"
-# shellcheck source=tools/ios/test-lanes.sh
-source "$ROOT/tools/ios/test-lanes.sh"
+# shellcheck source=tools/ios/lanes.sh
+source "$ROOT/tools/ios/lanes.sh"
 
 command -v xcodegen >/dev/null || { echo "error: 缺 xcodegen（brew install xcodegen）" >&2; exit 1; }
 command -v jq >/dev/null || { echo "error: 缺 jq（brew install jq）" >&2; exit 1; }

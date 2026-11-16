@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# shellcheck source=tools/ios/test-lanes.sh
-source "$ROOT/tools/ios/test-lanes.sh"
+# shellcheck source=tools/ios/lanes.sh
+source "$ROOT/tools/ios/lanes.sh"
 MANIFEST="$ROOT/tools/ios/host-only-tests.txt"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT

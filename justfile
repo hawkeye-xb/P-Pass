@@ -504,7 +504,7 @@ ios-test *args:
     esac
   done
   [ -z "$lang" ] || langargs="$(bash tools/ios/sim.sh lang-args "$lang")"
-  source tools/ios/test-lanes.sh
+  source tools/ios/lanes.sh
   before="$(bash tools/ios/sim.sh booted)"
   trap 'bash tools/ios/sim.sh shutdown-new "$before"' EXIT
   if [ -n "$lang" ]; then
