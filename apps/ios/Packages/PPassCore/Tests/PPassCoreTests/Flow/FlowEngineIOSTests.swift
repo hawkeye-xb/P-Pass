@@ -616,11 +616,11 @@ final class FlowEngineIOSTests: XCTestCase {
         await rig.start()
         rig.media.remove(1)
 
-        rig.fullMediaAccess.set(false)
+        rig.media.absenceTrusted.set(false)
         await rig.trigger(.appForeground)
         XCTAssertEqual(try rig.store.get(o1.id)?.sourceMissing, false, "部分授权：看不见 ≠ 被删")
 
-        rig.fullMediaAccess.set(true)
+        rig.media.absenceTrusted.set(true)
         rig.media.existingIdsUnreadable = true
         await rig.trigger(.appForeground)
         XCTAssertEqual(try rig.store.get(o1.id)?.sourceMissing, false, "读不出来：什么都不写")
@@ -635,6 +635,87 @@ final class FlowEngineIOSTests: XCTestCase {
         rig.media.put(one)
         await rig.trigger(.appForeground)
         XCTAssertEqual(try rig.store.get(o1.id)?.sourceMissing, false)
+    }
+
+    /// 目录-only：相册权限与目录缺席无关；旧 ID 消失覆盖删除与改名，恢复同一路径后清标。
+    /// 反证：恢复 FlowEngine 的全局相册 full 门控，第一项断言回红。
+    func testFolderAbsenceIsReconciledWithoutFullPhotoAccess() async throws {
+        let folderMedia = FakeMedia()
+        let folder = FakeFolderSource("s1", media: folderMedia)
+        let item = FakePhoto(n: 1, modified: 101, size: 11, content: "folder", generation: 1, bucket: "B7", idOverride: "folder:s1:item")
+        folderMedia.put(item)
+        let rig = try Rig(source: { photo in CompositeMediaSource(library: photo, others: [folder]) })
+        let order = try rig.order(item, .confirmed)
+        try rig.advanceG(1)
+        await rig.start()
+        folderMedia.remove(1)
+        rig.media.absenceTrusted.set(false)
+
+        await rig.trigger(.appForeground)
+        let marked = try XCTUnwrap(rig.store.get(order.id))
+        XCTAssertTrue(marked.sourceMissing, "目录完整枚举已证实旧 ID 消失，不能被相册权限门控")
+        XCTAssertEqual(marked.state, .confirmed)
+        XCTAssertEqual(marked.updatedAtMs, order.updatedAtMs)
+        XCTAssertEqual(rig.delivery.requests.get().count, 0, "源缺失不重传、不删除桌面已确认副本")
+
+        folderMedia.put(item)
+        await rig.trigger(.appForeground)
+        XCTAssertEqual(try rig.store.get(order.id)?.sourceMissing, false)
+    }
+
+    /// 混合来源：PhotoKit 不可信时不得只写 Folder 的部分结果；全部可信后才可打标。
+    /// 反证：Composite 把 nil 来源排除后返回部分并集，前两条断言红。
+    func testMixedSourcePresenceDoesNotWritePartialFolderResult() async throws {
+        let folderMedia = FakeMedia()
+        let folder = FakeFolderSource("s1", media: folderMedia)
+        let item = FakePhoto(n: 1, modified: 101, size: 11, content: "folder", generation: 1, bucket: "B7", idOverride: "folder:s1:item")
+        folderMedia.put(item)
+        let rig = try Rig(source: { photo in CompositeMediaSource(library: photo, others: [folder]) })
+        let photo = rig.photo(2, generation: 2)
+        let folderOrder = try rig.order(item, .confirmed)
+        let photoOrder = try rig.order(photo, .confirmed)
+        try rig.advanceG(2)
+        await rig.start()
+        folderMedia.remove(1)
+        rig.media.remove(2)
+        rig.media.absenceTrusted.set(false)
+
+        await rig.trigger(.appForeground)
+        XCTAssertEqual(try rig.store.get(folderOrder.id)?.sourceMissing, false)
+        XCTAssertEqual(try rig.store.get(photoOrder.id)?.sourceMissing, false)
+
+        rig.media.absenceTrusted.set(true)
+        await rig.trigger(.appForeground)
+        XCTAssertEqual(try rig.store.get(folderOrder.id)?.sourceMissing, true)
+        XCTAssertEqual(try rig.store.get(photoOrder.id)?.sourceMissing, true)
+    }
+
+    /// 目录枚举不可信 + 桌面也缺：既不标源缺失，也不能记 UNRECOVERABLE 或补传。
+    /// 反证：把 nil 当空集，sourceMissing 与 UNRECOVERABLE 断言红。
+    func testUnreadableFolderCannotMarkSourceMissingOrUnrecoverable() async throws {
+        let folderMedia = FakeMedia()
+        let folder = FakeFolderSource("s1", media: folderMedia)
+        let item = FakePhoto(n: 1, modified: 101, size: 11, content: "folder", generation: 1, bucket: "B7", idOverride: "folder:s1:item")
+        folderMedia.put(item)
+        let rig = try Rig(source: { photo in CompositeMediaSource(library: photo, others: [folder]) })
+        let order = try rig.order(item, .confirmed)
+        try rig.advanceG(1)
+        await rig.start()
+        folderMedia.remove(1)
+        folderMedia.absenceTrusted.set(false)
+        rig.presence.missingOnDesktop.set([item.hash])
+
+        await rig.trigger(.periodic)
+        await rig.trigger(.periodic)
+        let current = try XCTUnwrap(rig.store.get(order.id))
+        XCTAssertFalse(current.sourceMissing)
+        XCTAssertEqual(current.state, .confirmed)
+        XCTAssertEqual(current.updatedAtMs, order.updatedAtMs)
+        XCTAssertEqual(try rig.store.currentForMedia(item.mediaId)?.id, order.id, "同媒体仍指向原订单，不得新增 REUPLOAD 订单")
+        XCTAssertEqual(rig.delivery.requests.get().count, 0)
+        let audits = try rig.store.pendingAuditAfter(0, limit: 50).map(\.record)
+        XCTAssertEqual(audits.filter { $0.payload["disposition"] == "UNRECOVERABLE" }.count, 0)
+        XCTAssertEqual(audits.filter { $0.payload["disposition"] == "REUPLOAD" }.count, 0)
     }
 
     /// O-11：桌面缺、原图也没了 → 原行保持已确认，只记一次 UNRECOVERABLE 审计，不补传。

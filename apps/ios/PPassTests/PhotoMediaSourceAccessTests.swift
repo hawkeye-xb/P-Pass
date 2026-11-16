@@ -14,13 +14,14 @@ final class PhotoMediaSourceAccessTests: XCTestCase {
         func changes(since token: ChangeToken) throws -> [ChangeRecord] { calls += 1; return [] }
     }
 
-    private func source(decided: Bool, selected: Set<String>) throws -> (PhotoMediaSource, RecordingHistory) {
+    private func source(decided: Bool, fullAccess: Bool = true, selected: Set<String>) throws -> (PhotoMediaSource, RecordingHistory) {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("media-access-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
         let history = RecordingHistory()
         let inbox = try Inbox(path: dir.appendingPathComponent("inbox.db").path, history: history)
-        return (PhotoMediaSource(selected: { selected }, since: { .all }, inbox: inbox, accessDecided: { decided }, log: { _ in }), history)
+        return (PhotoMediaSource(selected: { selected }, since: { .all }, inbox: inbox, accessDecided: { decided },
+                                 absenceTrusted: { fullAccess }, log: { _ in }), history)
     }
 
     func testUndecidedAccessNeverTouchesPhotoKit() async throws {
@@ -41,5 +42,17 @@ final class PhotoMediaSourceAccessTests: XCTestCase {
         let changed = try await media.changes(after: DiscoveryPosition(raw: Inbox.position(of: 0)), limit: 10)
         XCTAssertEqual(changed, [])
         XCTAssertEqual(history.calls, 0)
+    }
+
+    /// limited / denied 都只能看到部分或看不到照片，缺席不能证明删除；full 才返回可信集合。
+    /// 反证：去掉 existingIds 的 absenceTrusted 守卫，limited 返回空集而不是 nil，红。
+    func testExistingIdsAreUnknownWithoutFullPhotoAccess() async throws {
+        let (limited, _) = try source(decided: true, fullAccess: false, selected: ["recents"])
+        let limitedIds = try await limited.existingIds(["photo:1"])
+        XCTAssertNil(limitedIds)
+
+        let (full, _) = try source(decided: true, fullAccess: true, selected: ["recents"])
+        let fullIds = try await full.existingIds([])
+        XCTAssertEqual(fullIds, [])
     }
 }

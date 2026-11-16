@@ -29,8 +29,6 @@ public actor FlowEngine {
     private let control: FlowControl
     private let conditions: @Sendable () -> Conditions
     private let inScope: @Sendable (String) -> Bool
-    /// #459：「照片库里查不到」此刻能不能当「原图被删了」。只有完整相册权限才是 true。**没有默认值**（失败关闭）。
-    private let mediaAbsenceTrusted: @Sendable () -> Bool
     /// 当前配对代号；nil = 未配对。
     private let pairingId: @Sendable () -> String?
     private let logger: CoreLogger
@@ -97,7 +95,6 @@ public actor FlowEngine {
         control: FlowControl,
         conditions: @escaping @Sendable () -> Conditions,
         inScope: @escaping @Sendable (String) -> Bool,
-        mediaAbsenceTrusted: @escaping @Sendable () -> Bool,
         pairingId: @escaping @Sendable () -> String?,
         logger: CoreLogger,
         clock: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) },
@@ -120,7 +117,6 @@ public actor FlowEngine {
         self.control = control
         self.conditions = conditions
         self.inScope = inScope
-        self.mediaAbsenceTrusted = mediaAbsenceTrusted
         self.pairingId = pairingId
         self.logger = logger
         self.clock = clock
@@ -565,9 +561,10 @@ public actor FlowEngine {
         let pickedReady = hasPickedReady()
         // 规则关着：自动备份不跑（没有手选可传就整轮无事）。
         var autoSkipped = !autoRuleEnabled() || (pickedReady && reasons.allSatisfy { $0 == .pickedAdded })
+        var sourcePresenceTrusted = false
         if !autoSkipped {
             do {
-                try await prepareAuto(reconcile: reconcile, names: names)
+                sourcePresenceTrusted = try await prepareAuto(reconcile: reconcile, names: names)
             } catch is CancellationError {
                 throw CancellationError()
             } catch let e as SourceUnavailable {
@@ -643,7 +640,7 @@ public actor FlowEngine {
         roundOutcomes = [:]
         roundVideosDeferred = []
         log("cycle \(names): round \(roundId) open (desktop reachable\(lease.photosOnly ? "; photos only" : ""))")
-        let round = Round(reconcile: reconcile && !autoSkipped, userPresent: userPresent, pickedOnly: autoSkipped)
+        let round = Round(reconcile: reconcile && !autoSkipped, userPresent: userPresent, pickedOnly: autoSkipped, sourcePresenceTrusted: sourcePresenceTrusted)
         let result: Result<WaitReason?, Error>
         do {
             result = .success(try await delivery.session { try await self.loop(round) })
@@ -671,9 +668,9 @@ public actor FlowEngine {
 
     /// AUDIT-07：关掉这一轮。一轮一张都没碰过就不发终态（没有对象、没有证据，不构成一次备份操作）。
     /// 入口里读照片库元数据的那一段（游标、对账、计数）。
-    private func prepareAuto(reconcile: Bool, names: [String]) async throws {
+    private func prepareAuto(reconcile: Bool, names: [String]) async throws -> Bool {
         try await prepareCursors(reconcile: reconcile)
-        if reconcile { await reconcileSourcePresence() }
+        let sourcePresenceTrusted = reconcile ? await reconcileSourcePresence() : false
         let todo = try await countTodo()
         try Task.checkCancellation()
         setPending(todo)
@@ -682,6 +679,7 @@ public actor FlowEngine {
             try store.finishScan()
             log("cycle \(names): reconcile scan has nothing to do (full diff is empty); cleared before the lease")
         }
+        return sourcePresenceTrusted
     }
 
     /// #1272：有手选的照片等着传，且 App 在前台。
@@ -762,11 +760,12 @@ public actor FlowEngine {
         /// #1272：只传手选，不碰照片库（取完手选就结束）。
         let pickedOnly: Bool
 
-        init(reconcile: Bool, userPresent: Bool, pickedOnly: Bool = false) {
+        init(reconcile: Bool, userPresent: Bool, pickedOnly: Bool = false, sourcePresenceTrusted: Bool) {
             self.reconcile = reconcile
             self.userPresent = userPresent
             self.pickedOnly = pickedOnly
-            presenceDone = !reconcile
+            // 缺席不可信 ≠ 原图还在：这一轮不能让桌面缺失触发 REUPLOAD / UNRECOVERABLE。
+            presenceDone = !reconcile || !sourcePresenceTrusted
         }
     }
 
@@ -1424,33 +1423,31 @@ public actor FlowEngine {
         let clear: [Int64]
     }
 
-    /// #459：对账轮入口（只读元数据、不持有租约）按照片库差集写 `source_missing`。不是完整相册权限 → 整步跳过。
-    private func reconcileSourcePresence() async {
-        guard mediaAbsenceTrusted() else {
-            log("source_missing: media access is not full; absence proves nothing, skipped")
-            return
-        }
+    /// #459：对账轮入口（只读元数据、不持有租约）按各来源差集写 `source_missing`。
+    /// 各来源的 existingIds 自己证明缺席是否可信；任一相关来源不可信则整轮不写。
+    private func reconcileSourcePresence() async -> Bool {
         guard control.waitReason() != .sourceUnavailable else {
             // #1731：来源不可用等待中——缺席证明不了什么，不写源缺失（恢复后由对账重新判定）。
             log("source_missing: a source is unavailable; absence proves nothing, skipped")
-            return
+            return false
         }
         let plan: SourcePresencePlan?
         do {
             plan = try await sourcePresencePlan()
         } catch {
-            log("source_missing: photo library read failed (\(error)); nothing written")
-            return
+            log("source_missing: source read failed (\(error)); nothing written")
+            return false
         }
         guard let plan else {
-            log("source_missing: the photo library could not confirm which photos are gone; nothing written")
-            return
+            log("source_missing: a source could not confirm which items are gone; nothing written")
+            return false
         }
         var marked = 0, cleared = 0
         for id in plan.mark where (try? store.setSourceMissing(id, missing: true, audit: nil)) == true { marked += 1 }
         for id in plan.clear where (try? store.setSourceMissing(id, missing: false, audit: nil)) == true { cleared += 1 }
         log("source_missing: marked \(marked) cleared \(cleared)")
         if marked + cleared > 0 { bump() }
+        return true
     }
 
     /// 两路归并：范围内照片（按 id 字节序）× 当前行（按 media_id）；列表里没有的再按 id 回查一次。nil = 读不出来。

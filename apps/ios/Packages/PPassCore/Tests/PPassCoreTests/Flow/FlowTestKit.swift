@@ -64,6 +64,7 @@ final class FakeMedia: MediaSource, @unchecked Sendable {
     let precise = Locked(true)
     var preciseDiscovery: Bool { precise.get() }
     let existingIdsCalls = Locked(0)
+    let absenceTrusted = Locked(true)
 
     var photos: [FakePhoto] { state.get().photos }
     var scope: Set<String>? {
@@ -145,9 +146,27 @@ final class FakeMedia: MediaSource, @unchecked Sendable {
     func existingIds(_ mediaIds: [String]) async throws -> Set<String>? {
         existingIdsCalls.update { $0 += 1 }
         let s = state.get()
-        if s.existingUnreadable { return nil }
+        if !absenceTrusted.get() || s.existingUnreadable { return nil }
         return Set(mediaIds.filter { id in s.photos.contains { MediaOrder.same($0.mediaId, id) } })
     }
+}
+
+final class FakeFolderSource: MediaSource, FolderSourceIdentifying, @unchecked Sendable {
+    let folderSourceId: String
+    let media: FakeMedia
+
+    init(_ sourceId: String, media: FakeMedia) {
+        folderSourceId = sourceId
+        self.media = media
+    }
+
+    func inScope(after: String?, limit: Int) async throws -> [MediaSnapshot] { try await media.inScope(after: after, limit: limit) }
+    func changes(after position: DiscoveryPosition, limit: Int) async throws -> [MediaSnapshot] { try await media.changes(after: position, limit: limit) }
+    func currentPosition() async throws -> DiscoveryPosition { try await media.currentPosition() }
+    func libraryIdentity() async throws -> String? { nil }
+    func lookup(_ mediaId: String) async throws -> MediaDetails? { try await media.lookup(mediaId) }
+    func existingIds(_ mediaIds: [String]) async throws -> Set<String>? { try await media.existingIds(mediaIds) }
+    var preciseDiscovery: Bool { media.preciseDiscovery }
 }
 
 struct FakeImportError: Error {}
@@ -407,7 +426,6 @@ final class Rig: @unchecked Sendable {
     let logger = RecordingLogger()
     let conditions = Locked(Conditions())
     let pairingId = Locked<String?>("e1")
-    let fullMediaAccess = Locked(true)
     let afterCycles = Locked(0)
     /// 收尾（审计冲刷）挂起，直到放行。
     let afterCycleHold = Locked(false)
@@ -459,7 +477,6 @@ final class Rig: @unchecked Sendable {
             lease: leaseOverride ?? lease, scheduler: schedulerOverride ?? scheduler, control: control,
             conditions: { [conditions, conditionsHook] in (try? conditionsHook.get()?()) ?? conditions.get() },
             inScope: { [media] in media.isInScope($0) },
-            mediaAbsenceTrusted: { [fullMediaAccess] in fullMediaAccess.get() },
             pairingId: { [pairingId] in pairingId.get() },
             logger: logger,
             clock: clock.function,
