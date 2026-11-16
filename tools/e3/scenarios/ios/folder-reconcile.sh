@@ -20,7 +20,11 @@ source "$(dirname "${BASH_SOURCE[0]}")/ios-lib.bashlib"
 RUN="e3-$(date +%s)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/ppass-e3-ios.XXXXXX")
 DESK="$WORK/A"
-teardown() { ios_pair_allow_stop; desk_stop "$DESK" 2>/dev/null; rm -rf "$WORK"; }
+teardown() {
+  # 手机侧测试目录与 stage 中转目录都要清：只删宿主机 WORK 会把素材留在设备上（占盘 1x）
+  ios_folder_cleanup "foldere3-$RUN" "foldere3-stage-$RUN"
+  ios_pair_allow_stop; desk_stop "$DESK" 2>/dev/null; rm -rf "$WORK"
+}
 
 DESC="本地目录逐轮增/改名/移/改/删由带对账的备份轮发现：新项确认、旧路径标源缺失、修改出新版本、删除桌面副本不动"
 COUNTER=off
@@ -101,6 +105,9 @@ act() {
   ios_collect_common "$OUT"
   desk_ipc "$DESK" status >"$OUT/desk-status.json"
   ios_desktop_files "$OUT" desktop-files.txt -iname '*.jpg' -o -iname '*.mp4'
+  # judge 要拿桌面文件哈希对账，光列清单不算数：逐个算 BLAKE3，算不出来当场失败
+  : >"$OUT/desktop.b3"
+  while IFS= read -r f; do "$b3" "$f" >>"$OUT/desktop.b3" || return 1; done <"$OUT/desktop-files.txt"
   sqlite3 -readonly "$OUT/db/backup-orders.db" "SELECT COUNT(DISTINCT content_hash) FROM orders WHERE state='CONFIRMED'" >"$OUT/desktop-content-count.txt"
   cp "$OUT/folder-list.json" "$OUT/folder-list-after.json" 2>/dev/null || true
 }

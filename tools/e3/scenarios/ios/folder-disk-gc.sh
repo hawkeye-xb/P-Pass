@@ -11,7 +11,11 @@ RUN="e3-$(date +%s)"
 BIG_MB="${PPASS_E3_FOLDER_BIG_MB:-200}"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/ppass-e3-ios.XXXXXX")
 DESK="$WORK/A"
-teardown() { ios_pair_allow_stop; desk_stop "$DESK" 2>/dev/null; rm -rf "$WORK"; }
+teardown() {
+  # 手机侧测试目录与 stage 中转目录都要清：只删宿主机 WORK 会把素材留在设备上（占盘 1x）
+  ios_folder_cleanup "foldere3-$RUN" "foldere3-stage-$RUN"
+  ios_pair_allow_stop; desk_stop "$DESK" 2>/dev/null; rm -rf "$WORK"
+}
 
 DESC="备份前后实测源目录/App tmp/provider blobs/桌面库占盘；崩溃重启后 GC 收敛、无未登记增长"
 COUNTER=off
@@ -54,6 +58,7 @@ act() {
   # 源目录占盘的前后值当场摘成固定名文件：judge（含离线回放）不再按 test_dir_foldere3-<RUN> 键去
   # after.json 里拼——回放时 RUN 是新值，键对不上必红。
   jget "$OUT/before.json" 'j["bytes"]["test_dir_foldere3-'"$RUN"'"]' >"$OUT/src-dir-bytes-before.txt"
+  desktop_du "$OUT" before # 桌面库占盘基线：judge 要判「总占盘增量」，含非媒体扩展名的额外副本
   # 基线后开始备份（大文件传输需时间；配对在前）。watch 让驱动每拍报 big.mp4 这一张的订单状态。
   desk_qr "$DESK" # 一次性配对串：desk_qr 设 PAIR_QR，不回显
   local watch="{\"display\":\"PPass FolderE3 $RUN\",\"file\":\"big.mp4\"}"
@@ -78,8 +83,13 @@ act() {
     return 1
   fi
   echo "big.mp4 TRANSFERRING observed at $(date '+%T')" >>"$OUT/crash.log"
-  [ -n "$APP_PID" ] && xcrun devicectl device process terminate --device "$DEV" --pid "$APP_PID" --kill >>"$OUT/crash.log" 2>&1
+  # 强杀必须真的成功：杀不掉却仍写「crash injected」的话，后面的续传与 GC 判据验的就不是崩溃恢复。
+  # 没拿到 pid、或 terminate 非 0，都按失败收场，只在成功后留下注入成功的证据行。
+  [ -n "$APP_PID" ] || { echo "拿不到 App pid，无法注入崩溃" >&2; return 1; }
+  xcrun devicectl device process terminate --device "$DEV" --pid "$APP_PID" --kill >>"$OUT/crash.log" 2>&1 \
+    || { echo "terminate --kill 失败（pid=$APP_PID），崩溃未注入" >&2; return 1; }
   echo "crash injected at $(date '+%T')" >>"$OUT/crash.log"
+  echo "crash kill succeeded pid=$APP_PID" >>"$OUT/crash.log"
   sleep 3
   # 重启：崩溃后继续（遗留 TRANSFERRING 单按「遗留续传」最先取）
   ios_launch "$OUT" resume "$(jq -cn --arg r "$RUN-resume" '{PPASS_E2E_DIR:"container",PPASS_E2E_RUN:$r,PPASS_BGTEST_FOLDER_RUN:"1"}')" || return 1
@@ -94,7 +104,9 @@ act() {
 }
 
 judge() {
-  local d="$1" src_big before_blobs after_blobs tmp_before tmp_after desk_bytes src_before src_after
+  local d="$1" src_big before_blobs after_blobs tmp_before tmp_after desk_bytes src_before src_after du_before du_after
+  du_before=$(awk '{s+=$1} END{print s+0}' "$d/desktop-du-before.txt" 2>/dev/null)
+  du_after=$(awk '{s+=$1} END{print s+0}' "$d/desktop-du-after.txt" 2>/dev/null)
   src_big=$(tr -d '[:space:]' <"$d/big-size.txt" 2>/dev/null)
   [ -n "$src_big" ] || src_big=0
   before_blobs=$(jget "$d/before.json" 'j["bytes"]["provider_blobs"]')
@@ -109,12 +121,24 @@ judge() {
   src_after=$(tr -d '[:space:]' <"$d/src-dir-bytes-after.txt" 2>/dev/null)
   check "登记与崩溃后续传都收场" has_line "$d/status-resume.json" '"ok" *: *true'
   check "崩溃注入发生在传输中（crash.log 记了 TRANSFERRING 观测，不是扫描阶段杀的）" has_line "$d/crash.log" 'TRANSFERRING observed'
+  # TRANSFERRING 在强杀前就写好了，光有它证明不了崩溃发生过：必须有强杀成功的证据行
+  check "强杀确实成功（crash.log 记了 kill succeeded，否则续传与 GC 验的不是崩溃恢复）" \
+    has_line "$d/crash.log" 'crash kill succeeded'
+  # 占盘字段缺失不能按 0 算：驱动 resolveRoot 抛错时会省略 provider_blobs，按 0 处理两条判据都空过
+  check "provider blobs 占盘已测得（before=${before_blobs:-缺失} after=${after_blobs:-缺失}）" \
+    bash -c "[[ '${before_blobs:-}' =~ ^[0-9]+$ ]] && [[ '${after_blobs:-}' =~ ^[0-9]+$ ]]"
   check "源目录占盘不变（实测 before=${src_before:-缺失} after=${src_after:-缺失} 字节，视频 $src_big + 图；只读未动）" \
     bash -c "[ -n '${src_before:-}' ] && [ '${src_before:-0}' = '${src_after:-1}' ] && [ '${src_after:-0}' -ge $(( src_big + 10000 )) ]"
   check "手机侧 provider blobs 增长远小于源大小（引用导入不复制字节；$before_blobs → $after_blobs)" bash -c "[ \$(( ${after_blobs:-0} - ${before_blobs:-0} )) -lt $(( src_big / 2 )) ]"
   check "App tmp 备份后基本清空（≤ 源大小 5%，$tmp_before → $tmp_after)" bash -c "[ \"${tmp_after:-0}\" -le $(( src_big / 20 + 1000000 )) ]"
   check "桌面库 1x：媒体文件字节合计 $desk_bytes ≈ 源 ${src_big}（浮动含图）" bash -c "[ \"${desk_bytes:-0}\" -ge $(( src_big / 2 )) ] && [ \"${desk_bytes:-0}\" -le $(( src_big + 5000000 )) ]"
   check "桌面收到 2 个媒体文件（视频+图）" bash -c "[ \"\$(wc -l <\"$d/desktop-files-after.txt\" | tr -d ' ')\" = 2 ]"
+  # 只数媒体扩展名会漏掉 .part 之类的额外完整副本（那份不算进 media bytes，占盘却翻倍）。
+  # 用 du 的总占盘对账：基线与收场都要实测到，增量上限给缩略图/索引留 25% + 50MB 余量。
+  check "桌面库总占盘已实测（du 基线与收场都在）" \
+    bash -c "[ -s \"$d/desktop-du-before.txt\" ] && [ -s \"$d/desktop-du-after.txt\" ] && [ '${du_after:-0}' -gt 0 ]"
+  check "桌面库总占盘增量 ≈ 源大小（含非媒体扩展名的额外副本；${du_before:-缺失} → ${du_after:-缺失} KB）" \
+    bash -c "[ \$(( (${du_after:-0} - ${du_before:-0}) * 1024 )) -le $(( src_big + src_big / 4 + 50000000 )) ]"
   check "崩溃后 GC 收敛：重启收场后 blobs 不高于基线（崩溃注入的临时产物被回收；$before_blobs → $after_blobs)" bash -c "[ \"${after_blobs:-0}\" -le $(( ${before_blobs:-0} + 1000000 )) ]"
   check "日志有崩溃前传输与重启后续传两个阶段的痕迹" bash -c "grep -q 'process start:' \"$d/ppass.log\" && grep -q 'folder .*: imported' \"$d/ppass.log\""
   verdict

@@ -160,12 +160,13 @@ ios_push_stage() {
 
 # ---- 判定助手（judge 里用；bash -c 子壳拿不到仓库函数，先在 judge 顶层算好再传字面量）----
 
-# BLAKE3 清单护栏：$1 文件 $2 最少条数。文件在、非空、每行以 64 位 hex 开头、行数达标——
+# BLAKE3 清单护栏：$1 文件 $2 最少条数。文件在、非空、每行的首字段恰好是 64 位 hex、行数达标——
 # 拷贝失败留下的空清单/缺行在这里就判红，不许拿空哈希去撞任意桌面记录（comm/grep 空过）。
+# 首字段必须完整：'64 位 hex 后面再跟字符'（如 …g）不是合法 BLAKE3，不能只匹配前缀就放行。
 b3_list_ok() {
   local f="$1" min="$2" n
   [ -s "$f" ] || return 1
-  n=$(grep -Ec '^[0-9a-f]{64}' "$f") || n=0
+  n=$(grep -Ec '^[0-9a-f]{64}([[:space:]]|$)' "$f") || n=0
   [ "${n:-0}" -ge "$min" ]
 }
 
@@ -201,7 +202,11 @@ ios_collect_common() { # $1 OUT：容器树、账本、日志、登记清单
   ios_wait_status "$out/dump" "$run" 30 true >/dev/null
   local d="$out/db"; mkdir -p "$d"
   local f
-  for f in backup-orders.db backup-orders.db-wal backup-orders.db-shm; do
+  # 先清旧副本：多轮对账复用同一个 OUT，下载失败时上一轮的库还在，[ -s ] 会空过、SQL 读到旧账本。
+  rm -f "$d/backup-orders.db" "$d/backup-orders.db-wal" "$d/backup-orders.db-shm"
+  ios_copy_from "Documents/e2e/db/backup-orders.db" "$d/backup-orders.db" \
+    || { echo "账本主库下载失败" >&2; return 1; }
+  for f in backup-orders.db-wal backup-orders.db-shm; do
     ios_copy_from "Documents/e2e/db/$f" "$d/$f" || true
   done
   [ -s "$d/backup-orders.db" ] || { echo "账本没拉回（dump 启动没完成）" >&2; return 1; }
@@ -209,6 +214,15 @@ ios_collect_common() { # $1 OUT：容器树、账本、日志、登记清单
   run="list-$(date +%s)"
   ios_launch "$out" list "{\"PPASS_E2E_DIR\":\"container\",\"PPASS_E2E_RUN\":\"$run\",\"PPASS_BGTEST_FOLDER_LIST\":\"1\"}"
   pre="$(ios_wait_status "$out/list" "$run" 30 true)" && cp "$pre" "$out/folder-list.json" || true
+}
+
+# 收场清理手机侧测试目录。folderCleanup 只删 dirs 明列的目录，目标目录与 stage 中转目录都要给全，
+# 否则素材留在设备上（占盘 1x 红线）。成功与失败收场都要跑到；清理本身失败不挡其它收尾步骤。
+ios_folder_cleanup() { # $1… 目录名（Documents/ 下的单段名）
+  local dirs
+  dirs=$(printf '"%s",' "$@")
+  ios_launch "$EV" cleanup "$(jq -cn --arg s "{\"dirs\":[${dirs%,}]}" --arg r "$RUN-cleanup" \
+    '{PPASS_E2E_DIR:"container",PPASS_E2E_RUN:$r,PPASS_BGTEST_FOLDER_CLEANUP:$s}')" >/dev/null 2>&1 || true
 }
 
 # 订单表只读导出（本机 sqlite3；db+wal 已拉回）
@@ -222,7 +236,10 @@ ios_orders_dump() { # $1 OUT $2 输出名：dump 账本 → 导出全部订单�
   ios_launch "$out" dump "{\"PPASS_E2E_DIR\":\"container\",\"PPASS_E2E_RUN\":\"$run\",\"PPASS_BGTEST_DUMP\":\"1\"}"
   ios_wait_status "$out/dump" "$run" 30 true >/dev/null || return 1
   mkdir -p "$d"
-  for f in backup-orders.db backup-orders.db-wal backup-orders.db-shm; do ios_copy_from "Documents/e2e/db/$f" "$d/$f" || true; done
+  # 同 ios_collect_common：先清旧副本，主库拉不到就失败，不许拿上一轮的账本导出订单
+  rm -f "$d/backup-orders.db" "$d/backup-orders.db-wal" "$d/backup-orders.db-shm"
+  ios_copy_from "Documents/e2e/db/backup-orders.db" "$d/backup-orders.db" || return 1
+  for f in backup-orders.db-wal backup-orders.db-shm; do ios_copy_from "Documents/e2e/db/$f" "$d/$f" || true; done
   [ -s "$d/backup-orders.db" ] || return 1
   ios_orders_sql "$out" "SELECT media_id, state, source_missing, content_hash FROM orders ORDER BY id" >"$out/$2"
 }

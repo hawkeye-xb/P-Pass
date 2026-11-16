@@ -139,10 +139,10 @@ counter() {
 }
 
 teardown() {
-  # 清测试目录与登记记录（只认 foldere3- 前缀）；收掉沙盒桌面
+  # 清测试目录与登记记录（只认 foldere3- 前缀）；收掉沙盒桌面。
+  # 两个 stage 中转目录也要列上：setup 推完素材后失败、或登记在搬移前失败时视频还留在 stage 里
   ios_pair_allow_stop
-  ios_launch "$EV" cleanup "$(jq -cn --arg s "{\"dirs\":[\"foldere3-$RUN\",\"foldere3-$RUN-b\"]}" --arg r "$RUN-cleanup" \
-    '{PPASS_E2E_DIR:"container",PPASS_E2E_RUN:$r,PPASS_BGTEST_FOLDER_CLEANUP:$s}')" >/dev/null 2>&1 || true
+  ios_folder_cleanup "foldere3-$RUN" "foldere3-$RUN-b" "foldere3-stage-$RUN" "foldere3-stage-$RUN-b"
   desk_stop "$DESK" 2>/dev/null || true
   rm -rf "$WORK" 2>/dev/null || true
 }
