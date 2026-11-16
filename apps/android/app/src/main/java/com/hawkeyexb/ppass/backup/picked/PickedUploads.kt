@@ -26,15 +26,25 @@ object PickedUploads {
     fun enqueue(context: Context, uris: List<Uri>): Int {
         val app = context.applicationContext
         val resolver = app.contentResolver
-        val items = uris.map { uri ->
-            runCatching { resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-            describe(app, uri)
-        }
-        return enqueueDescribed(store(app), items)
+        return enqueueValues(
+            values = uris,
+            grant = { uri -> runCatching { resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } },
+            describe = { uri -> describe(app, uri) },
+            store = store(app),
+        )
     }
 
-    internal fun enqueueDescribed(store: PickedStore, items: List<NewPicked>): Int {
-        if (items.isEmpty()) return 0
+    internal fun <T> enqueueValues(
+        values: List<T>,
+        grant: (T) -> Unit,
+        describe: (T) -> NewPicked,
+        store: PickedStore,
+    ): Int {
+        if (values.isEmpty()) return 0
+        val items = values.map { value ->
+            grant(value)
+            describe(value)
+        }
         store.addBatch(items)
         return items.size
     }

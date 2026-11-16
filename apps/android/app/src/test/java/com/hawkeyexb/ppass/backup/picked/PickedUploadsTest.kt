@@ -1,9 +1,32 @@
 package com.hawkeyexb.ppass.backup.picked
 
+import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PickedUploadsTest {
+    private val source = run {
+        var dir: File? = File(System.getProperty("user.dir"))
+        val rel = "app/src/main/java/com/hawkeyexb/ppass/backup/picked/PickedUploads.kt"
+        var found: File? = null
+        while (dir != null && found == null) {
+            val direct = File(dir, rel)
+            if (direct.isFile) {
+                found = direct
+                break
+            }
+            val nested = File(dir, "apps/android/$rel")
+            if (nested.isFile) {
+                found = nested
+                break
+            }
+            dir = dir.parentFile
+        }
+        found ?: File(File(System.getProperty("user.dir")), rel)
+    }
+
     private fun pick(n: Int) = NewPicked(
         uri = "content://document/$n",
         fileName = "$n.mp4",
@@ -15,19 +38,31 @@ class PickedUploadsTest {
     @Test
     fun `file selection over one hundred is fully enqueued`() {
         val store = FakePickedStore()
-        val items = (1..137).map(::pick)
+        val uris = uris(1..137)
+        val granted = mutableListOf<String>()
 
-        assertEquals(137, PickedUploads.enqueueDescribed(store, items))
+        assertEquals(137, enqueue(store, uris, granted))
         assertEquals(137, store.rows.size)
-        assertEquals(items.map { it.uri }, store.rows.map { it.item.uri })
+        assertEquals(uris, granted)
+        assertEquals(uris, store.rows.map { it.item.uri })
+    }
+
+    @Test
+    fun `public enqueue forwards the complete uri list to the tested path`() {
+        val text = source.readText()
+        val entry = text.substringAfter("fun enqueue(context: Context, uris: List<Uri>): Int {")
+            .substringBefore("internal fun <T> enqueueValues")
+
+        assertTrue(entry.contains("values = uris"))
+        assertFalse("公开入口不得再次截断 URI 列表", Regex("\\btake\\s*\\(").containsMatchIn(entry))
     }
 
     @Test
     fun `two selections preserve all five in selection order`() {
         val store = FakePickedStore()
 
-        PickedUploads.enqueueDescribed(store, listOf(pick(1), pick(2)))
-        PickedUploads.enqueueDescribed(store, listOf(pick(3), pick(4), pick(5)))
+        enqueue(store, uris(1..2))
+        enqueue(store, uris(3..5))
 
         assertEquals(listOf(1, 2, 3, 4, 5), store.drain().map { it.item.uri.substringAfterLast('/').toInt() })
         assertEquals(2, store.batches)
@@ -37,9 +72,19 @@ class PickedUploadsTest {
     fun `empty selection does not create a batch`() {
         val store = FakePickedStore()
 
-        assertEquals(0, PickedUploads.enqueueDescribed(store, emptyList()))
+        assertEquals(0, enqueue(store, emptyList()))
         assertEquals(0, store.batches)
     }
+
+    private fun uris(range: IntRange): List<String> = range.map { "content://document/$it" }
+
+    private fun enqueue(store: FakePickedStore, values: List<String>, granted: MutableList<String> = mutableListOf()): Int =
+        PickedUploads.enqueueValues(
+            values = values,
+            grant = { granted += it },
+            describe = { value -> pick(value.substringAfterLast('/').toInt()) },
+            store = store,
+        )
 
     private class FakePickedStore : PickedStore {
         data class Row(val id: Long, val batchId: Long, val item: NewPicked, var state: PickedState = PickedState.PENDING)

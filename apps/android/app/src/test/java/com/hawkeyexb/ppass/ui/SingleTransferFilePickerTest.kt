@@ -6,7 +6,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SingleTransferFilePickerTest {
-    private val source = run {
+    private val source = System.getenv("PPASS_PICKER_SOURCE")?.let(::File) ?: run {
         var dir: File? = File(System.getProperty("user.dir"))
         val rel = "app/src/main/java/com/hawkeyexb/ppass/ui/SingleTransferFilePicker.kt"
         var found: File? = null
@@ -32,7 +32,10 @@ class SingleTransferFilePickerTest {
         val text = source.readText()
         assertTrue(text.contains("Intent.ACTION_OPEN_DOCUMENT"))
         assertTrue(text.contains("Intent.CATEGORY_OPENABLE"))
-        assertTrue(text.contains("Intent.EXTRA_ALLOW_MULTIPLE"))
+        assertTrue(
+            "EXTRA_ALLOW_MULTIPLE 必须显式为 true，不能只出现常量名",
+            text.contains("putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)"),
+        )
         assertTrue(text.contains("Intent.EXTRA_MIME_TYPES"))
         assertTrue(text.contains("\"image/*\""))
         assertTrue(text.contains("\"video/*\""))

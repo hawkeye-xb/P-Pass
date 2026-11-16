@@ -116,11 +116,13 @@ class C1272PickedUploadTest {
         rig.close()
     }
 
-    // 前一批还没结束时继续选：2 + 3 全部按选择顺序交付，不能替换或重排。
+    // 第一张已在传输中时继续选：2 + 3 全部按选择顺序交付，不能替换或重排。
     @Test
     fun `later picks append without replacing the five pending items`() = runTest {
         val rig = Rig(this)
         rig.picked.addBatch(listOf(pick("content://picker/1"), pick("content://picker/2")))
+        val inFlight = rig.picked.nextOpen()!!
+        rig.picked.mark(inFlight.id, PickedState.TRANSFERRING)
         rig.picked.addBatch(listOf(pick("content://picker/3"), pick("content://picker/4"), pick("content://picker/5")))
 
         rig.trigger(TriggerReason.PICKED_ADDED)
@@ -130,6 +132,20 @@ class C1272PickedUploadTest {
             listOf("content://picker/1", "content://picker/2", "content://picker/3", "content://picker/4", "content://picker/5"),
             rig.pickedSettled,
         )
+        rig.close()
+    }
+
+    // 视频手选也走同一条 importPicked → FlowEngine 交付链；拍摄时间未知不伪造。
+    @Test
+    fun `a picked video is delivered through the picked flow`() = runTest {
+        val rig = Rig(this)
+        rig.picked.addBatch(listOf(NewPicked("content://picker/video-1", "video-1.mp4", "video/mp4", 20L, 0L)))
+
+        rig.trigger(TriggerReason.PICKED_ADDED)
+
+        assertEquals(FLOW_SOURCE_PICKED, rig.delivery.requests.single().source)
+        assertEquals(listOf("content://picker/video-1"), rig.pickedSettled)
+        assertEquals(1, rig.picked.latestBatch()!!.delivered)
         rig.close()
     }
 }
