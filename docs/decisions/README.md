@@ -24,6 +24,7 @@ ADR，验收人拍板后再拆卡实现。代码注释里出现的 ADR-003、ADR
 | 2026-11-12 | [两个 Release run 重叠：test 发布按 test-channel 全局串行排队](2026-11-12-release-test-channel-concurrency.md) | 已采纳 |
 | 2026-11-13 | [本地授权目录作为照片和视频备份来源](2026-11-13-local-folder-media-source.md) | 已采纳 |
 | 2026-11-13 | [Windows 普通 MP4 用独立视频 decoder（Media Foundation）生成真缩略图](2026-11-13-windows-video-decoder.md) | 已采纳 |
+| 2026-11-16 | [统一自动备份范围：相册与文件夹同源选择、按拍摄时间过滤](2026-11-16-unified-backup-scope.md) | 已采纳 |
 
 ## 写法
 
