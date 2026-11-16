@@ -1352,12 +1352,17 @@ fun PPassApp() {
                         null
                     }
                 }
-                val selected = withContext(Dispatchers.IO) { BackupScopeStore(context).selectedBucketIds() }
+                val effectiveSelected = withContext(Dispatchers.IO) {
+                    val store = BackupScopeStore(context)
+                    val folderIds = com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(context).allRecords()
+                        .mapTo(HashSet()) { it.bucketId }
+                    com.hawkeyexb.ppass.backup.effectiveBackupScope(store.scope(), store.knownBucketIds(), folderIds, store.sinceSec())?.buckets
+                }
                 val folderIds = withContext(Dispatchers.IO) {
                     com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(context).allRecords().mapTo(HashSet()) { it.bucketId }
                 }
-                selectedFolderCount = selected?.count { com.hawkeyexb.ppass.backup.folder.isFolderId(it) && it in folderIds } ?: 0
-                selectedBucketCount = selectedExistingCount(selected, listed?.map { it.id }?.toSet()?.plus(folderIds))
+                selectedFolderCount = effectiveSelected?.count { com.hawkeyexb.ppass.backup.folder.isFolderId(it) && it in folderIds } ?: 0
+                selectedBucketCount = selectedExistingCount(effectiveSelected, listed?.map { it.id }?.toSet()?.plus(folderIds))
             }
             val scope = rememberCoroutineScope()
             // NET-28: bind can now throw (timeout) — an uncaught throw in a
@@ -1815,6 +1820,7 @@ fun PPassApp() {
                             val pendingToAdd = folderKeys.filter { pendingFolderUris.contains(it) }
                             val prepared = withContext(Dispatchers.IO) {
                                 val addedIds = ArrayList<String>()
+                                val idByUri = HashMap<String, String>()
                                 for (raw in pendingToAdd) {
                                     val added = com.hawkeyexb.ppass.backup.folder.FolderAccess.addFolder(context, android.net.Uri.parse(raw))
                                     if (added == null) {
@@ -1822,9 +1828,10 @@ fun PPassApp() {
                                         return@withContext null
                                     }
                                     addedIds += added
+                                    idByUri[raw] = added
                                 }
                                 val current = folderRegistry.allRecords()
-                                val selected = folderKeys.mapNotNull { key -> current.firstOrNull { it.id == key }?.bucketId }.toSet()
+                                val selected = resolveFolderBucketIds(folderKeys, idByUri, current)
                                 Triple(selected, current, addedIds)
                             }
                             if (prepared == null) {
@@ -1863,7 +1870,11 @@ fun PPassApp() {
                             screen = Screen.Home(s.pairing)
                         }
                     },
-                    onCancel = { screen = if (s.firstTime) Screen.Decision(s.pairing) else Screen.Home(s.pairing) },
+                    onCancel = {
+                        if (!scopeSaving) {
+                            screen = if (s.firstTime) Screen.Decision(s.pairing) else Screen.Home(s.pairing)
+                        }
+                    },
                 )
             }
         }
@@ -2033,3 +2044,12 @@ private fun clearLocalPairing(
         }
     }
 }
+
+internal fun resolveFolderBucketIds(
+    folderKeys: Collection<String>,
+    idByUri: Map<String, String>,
+    records: List<com.hawkeyexb.ppass.backup.folder.FolderRecord>,
+): Set<Long> = folderKeys.mapNotNull { key ->
+    val sourceId = idByUri[key] ?: key
+    records.firstOrNull { it.id == sourceId }?.bucketId
+}.toSet()

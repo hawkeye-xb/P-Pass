@@ -94,6 +94,34 @@ class RuleEnableWhenPartialTest {
         assertTrue(photos.contains("actionLabel = stringResource(label)"))
     }
     @Test
+    fun home_counts_use_effective_scope_for_legacy_folders() {
+        val block = main.substringAfter("var selectedBucketCount").substringBefore("val scope = rememberCoroutineScope()")
+        assertTrue("首页必须先按旧目录兼容规则求有效范围", block.contains("effectiveBackupScope"))
+        assertFalse("不能再直接数原始 selected", block.contains("selectedFolderCount = selected?.count"))
+    }
+
+    @Test
+    fun cancel_is_ignored_while_scope_save_is_in_flight() {
+        val cancel = main.substringAfter("onDone = { selectedAlbumIds, folderKeys, time ->")
+            .substringAfter("onCancel = {").take(180)
+        assertTrue(cancel.contains("if (!scopeSaving)"))
+    }
+
+    @Test
+    fun pending_folder_uri_is_mapped_to_the_new_source_id_before_saving_scope() {
+        val record = com.hawkeyexb.ppass.backup.folder.FolderRecord(
+            id = "new-source-id",
+            displayName = "Blackmagic Camera",
+            treeUri = "content://android/externalstorage/documents/tree/DCIM%3ABlackmagic%20Camera",
+            bucketId = com.hawkeyexb.ppass.backup.folder.FOLDER_ID_FLAG + 7,
+        )
+        assertEquals(
+            setOf(record.bucketId),
+            resolveFolderBucketIds(setOf(record.treeUri), mapOf(record.treeUri to record.id), listOf(record)),
+        )
+    }
+
+    @Test
     fun enabling_rule_with_saved_scope_does_not_force_scope_editor() {
         val apply = main.substringAfter("val applyRuleAccess:").substringBefore("MediaAccess.PARTIAL")
         assertTrue(apply.contains("shouldGuideToScopeOnEnable"))

@@ -7,6 +7,7 @@ package com.hawkeyexb.ppass.backup.folder
 import com.hawkeyexb.ppass.backup.BackupScope
 import com.hawkeyexb.ppass.backup.flow.SourceUnavailableException
 import java.io.File
+import java.util.TimeZone
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -248,6 +249,25 @@ class FolderMediaSourceTest {
     }
 
     @Test
+    fun `paged reads only resolve capture metadata for the consumed batch`() {
+        val (root, registry, sourceId) = setup()
+        write(root, "a.jpg", "a")
+        write(root, "b.jpg", "b")
+        write(root, "c.jpg", "c")
+        var captureReads = 0
+        val src = FolderMediaSnapshotSource(
+            registry,
+            scopeProvider = { BackupScope(setOf(registry.bucketIdOf(sourceId)!!), null) },
+            captureAtMs = { _, _ -> captureReads++; 1_000L },
+            treeFor = { FileFolderTree(root) },
+        )
+
+        val firstPage = src.readInScope(0L) { it.take(1).toList() }
+        assertEquals(1, firstPage.size)
+        assertEquals("本页只消费一项，不能预先读完整目录的拍摄时间", 1, captureReads)
+    }
+
+    @Test
     fun `existing ids does not reread capture metadata`() {
         val (root, registry, sourceId) = setup()
         write(root, "IMG_1.jpg", "one")
@@ -265,6 +285,19 @@ class FolderMediaSourceTest {
         captureReads = 0
         assertEquals(setOf(mediaId), src.existingIds(listOf(mediaId)))
         assertEquals("缺席对账只需要路径，不能再次解析每个文件", 0, captureReads)
+    }
+
+    @Test
+    fun `exif offset time determines the capture instant before device timezone fallback`() {
+        val defaultZone = TimeZone.getTimeZone("Asia/Shanghai")
+        val expected = java.util.GregorianCalendar(2026, 10, 15, 15, 30, 0).apply {
+            timeZone = TimeZone.getTimeZone("UTC")
+        }.time.time
+        assertEquals(
+            "00:30 +09:00 在上海是前一天 23:30，不能按手机时区算成当天",
+            expected,
+            parseExifDateTime("2026:11:16 00:30:00", "+09:00", defaultZone),
+        )
     }
 
     private fun fail(message: String) {
