@@ -97,6 +97,13 @@ struct BucketScreen: View {
     /// 没有照片权限时不给选择（10-30）：时间档、提示句和底部「开始备份 / 保存」都不显示——一张都读不到，选了也没用。
     static func offersChoices(_ notice: AccessNotice) -> Bool { notice != .noAccess }
 
+    /// 首次加载也保留不可见的已保存相册，恢复权限后仍可选择；未勾选的新相册不自动加入。
+    static func initialSelectionWithUnavailable(saved: Set<String>?, availableAlbums: Set<String>, cameraAlbum: String?) -> Set<String> {
+        let visible = ScopePolicy.initialSelection(saved: saved, available: availableAlbums, cameraAlbum: cameraAlbum)
+        let invisibleSaved = (saved ?? []).filter { !$0.hasPrefix("folder:") && !availableAlbums.contains($0) }
+        return visible.union(invisibleSaved)
+    }
+
     /// 授权后的刷新不得覆盖未保存选择；权限不可见的已保存相册也不视为用户取消。
     static func selectionForReload(current: Set<String>, saved: Set<String>?, availableAlbums: Set<String>, availableFolders: Set<String>) -> Set<String> {
         current.filter { id in
@@ -323,8 +330,8 @@ struct BucketScreen: View {
                 checked = Self.selectionForReload(current: checked, saved: saved,
                                                   availableAlbums: Set(list.map(\.id)), availableFolders: folderIds)
             } else {
-                let selectedAlbums = ScopePolicy.initialSelection(saved: saved, available: Set(list.map(\.id)),
-                                                                  cameraAlbum: list.first(where: \.isCameraAlbum)?.id)
+                let selectedAlbums = Self.initialSelectionWithUnavailable(saved: saved, availableAlbums: Set(list.map(\.id)),
+                                                                          cameraAlbum: list.first(where: \.isCameraAlbum)?.id)
                 let selectedFolders = ScopePolicy.initialFolderSelection(saved: saved, known: known, available: folderIds)
                 checked = selectedAlbums.union(selectedFolders)
             }

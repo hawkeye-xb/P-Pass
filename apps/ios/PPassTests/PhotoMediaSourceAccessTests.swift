@@ -93,6 +93,13 @@ final class PhotoMediaSourceAccessTests: XCTestCase {
         XCTAssertEqual(auth.requests, 1)
     }
 
+    func testInitialLoadPreservesSavedAlbumsHiddenByPermission() {
+        let selected = BucketScreen.initialSelectionWithUnavailable(saved: ["saved-album"], availableAlbums: [], cameraAlbum: nil)
+        XCTAssertEqual(selected, ["saved-album"], "无权限首次加载也不能先丢失已保存相册")
+        let visible = BucketScreen.initialSelectionWithUnavailable(saved: ["saved-album"], availableAlbums: ["saved-album"], cameraAlbum: nil)
+        XCTAssertEqual(visible, ["saved-album"], "可见相册仍按同一选中语义处理")
+    }
+
     func testReloadKeepsUnsavedFolderSelectionAndInvisibleSavedAlbum() {
         let current: Set<String> = ["folder:draft", "a", "b"]
         let saved: Set<String> = ["a"]
