@@ -35,15 +35,32 @@ final class RegressionTests: UIRegressCase {
     // 现在 App 不打那一行，加了必红，会让整个回归永久退出 1。
 
     private func ruleCase() {
-        launchFreshAndPair(resetPhotos: true)
-        reachSettingsViaPick()
+        prepareScopeAndOpenSettings()
         let rule = toggle(id: "autoBackupRuleToggle")
+        if (rule.value as? String) == "1" {
+            flip(rule)
+        }
         flip(rule)
         if inverted {
             // 反向操作：关闭刚打开的规则，最终不应出现 enabled=true 的通过行。
             flip(rule)
+            // 正向用例要求最终开启；反向关闭后必须让本例失败，不能只看首次保存的 enabled=true。
+            XCTAssertEqual(rule.value as? String, "1", "正向预期是最终开启，反向关闭必须判 FAIL")
         }
         settle(5)
+    }
+
+    /// 先保存一个有效范围，避免首次开启规则时被送进范围编辑页，反向用例才能真实再关一次。
+    private func prepareScopeAndOpenSettings() {
+        launchFreshAndPair(resetPhotos: true)
+        app.buttons["decisionChooseScope"].tap()
+        answerSystemAlert(SystemButton.photosFull, what: "photos")
+        settle(2)
+        let save = app.buttons.matching(NSPredicate(format: "label == %@ OR label == %@", "Start backup", "开始备份")).firstMatch
+        XCTAssertTrue(save.waitForExistence(timeout: 15), "没有找到范围保存按钮")
+        tapWhenVisible(save)
+        settle(5)
+        openSettingsTab()
     }
 
     // MARK: 设置页「挑几张传」
