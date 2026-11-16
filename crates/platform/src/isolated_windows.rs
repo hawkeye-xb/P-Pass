@@ -292,12 +292,14 @@ pub(crate) fn spawn(exe: &Path, limits: &Limits) -> io::Result<IsolatedChild> {
                 4,
                 "attr CHILD_PROCESS_POLICY",
             )?;
-            set(
-                ATTR_MITIGATION_POLICY,
-                (&mut mitigation as *mut u64).cast(),
-                8,
-                "attr MITIGATION_POLICY",
-            )?;
+            if limits.win32k_lockdown {
+                set(
+                    ATTR_MITIGATION_POLICY,
+                    (&mut mitigation as *mut u64).cast(),
+                    8,
+                    "attr MITIGATION_POLICY",
+                )?;
+            }
             set(
                 ATTR_SECURITY_CAPABILITIES,
                 (&mut caps as *mut SECURITY_CAPABILITIES).cast(),

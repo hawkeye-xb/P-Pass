@@ -110,6 +110,21 @@ final class FolderImporter: MediaImporter, FolderImportIdentifying, @unchecked S
         heldLock.unlock()
         if let lease { lease.close() }
     }
+
+    /// 全部出口清理（ADR §5）的「来源被移除 / 实例退役」出口：放掉本导入器持有的全部 provider
+    /// 引用与供数期根授权。幂等；deinit 兜底——在飞导入完成晚于退役登记的，最后也在这里收掉。
+    func releaseHeld() {
+        heldLock.lock()
+        let leases = heldScopes
+        heldScopes = [:]
+        heldLock.unlock()
+        for (hash, lease) in leases {
+            try? provider.ffi.release(hash: hash)
+            lease.close()
+        }
+    }
+
+    deinit { releaseHeld() }
 }
 
 /// 一次 `startAccessingSecurityScopedResource` 的配对令牌（构造时 start、close/deinit 时 stop）。

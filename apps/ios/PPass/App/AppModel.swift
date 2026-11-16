@@ -127,6 +127,8 @@ final class AppModel: ObservableObject {
     private var notificationRequestInFlight = false
     /// 当前这张字节上一次前进的时刻（用来判「N 秒没有新数据」）。
     private(set) var transferMark: (orderId: Int64, bytes: Int64, at: Date)?
+    /// #1763 素材文件夹：已登记目录数（设置行值；不探测可达性）。
+    @Published private(set) var folderCount = 0
 
     init(backend: Backend) {
         self.backend = backend
@@ -399,6 +401,12 @@ final class AppModel: ObservableObject {
         // 系统「后台 App 刷新」的真实状态：回到前台（sceneBecameActive → refresh）时重读，用户在系统设置里改了回来就生效。
         backgroundRefresh = backend.engine.backgroundRefresh()
         backgroundNotice = Self.backgroundNotice(backgroundRefresh, backgroundRequested: autoBackup)
+        folderCount = backend.engine.folderSourceCount()
+    }
+
+    /// #1763：二级页的添加 / 移除 / 重新授权动作之后重读登记数（设置行值跟着变）。
+    func refreshFolderCount() {
+        folderCount = backend.engine.folderSourceCount()
     }
 
     /// 「取消剩余 N 张」行的 N（Android cancelRemainingRowCount）：只在已暂停 / 等待中、配对没失效、确有剩余时出现。

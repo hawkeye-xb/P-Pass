@@ -269,6 +269,17 @@ internal class Rig(
     openRound: String? = null,
     wakes: WakeScheduler? = null,
     separateIo: Boolean = false,
+    /** #1762：替换引擎看到的快照源（例如「目录授权失效」的假源）；导入侧仍读 [media] 的内容。 */
+    mediaOverride: com.hawkeyexb.ppass.backup.order.MediaSnapshotSource? = null,
+    /** #1762：替换范围闭包（folder 测试要放行 bit 62 的目录 bucket）。 */
+    inScopeOverride: ((bucketId: Long, dateAddedSec: Long) -> Boolean)? = null,
+    /** #1762：reconcile 轮的目录段对账入口（对位生产的 Composite.readFolderInScope）。 */
+    folderDiscovery: (() -> Sequence<com.hawkeyexb.ppass.backup.order.MediaSnapshot>)? = null,
+    /**
+     * #1762：注入 primary（MediaStore 段）的 [FakeMedia] 实例——mediaOverride 引用同一个实例时，
+     * 测试要在 Rig 构造前往里放照片（组合源测试用）。
+     */
+    primaryMedia: FakeMedia? = null,
 ) {
     val dispatcher = StandardTestDispatcher(test.testScheduler)
 
@@ -281,7 +292,7 @@ internal class Rig(
     private val testScope = test
     var now = 1_000L
     val store = InMemoryOrderStore { now }
-    val media = FakeMedia()
+    val media = primaryMedia ?: FakeMedia()
     val importer = FakeImporter(media)
     val delivery = FakeDelivery()
     val control = FakeControl()
@@ -339,7 +350,7 @@ internal class Rig(
 
     val engine = FlowEngine(
         store = store,
-        media = media,
+        media = mediaOverride ?: media,
         importer = importer,
         delivery = delivery,
         probe = DesktopProbe {
@@ -353,7 +364,7 @@ internal class Rig(
         scheduler = wakes ?: scheduler,
         control = control,
         conditions = { conditionsHook?.invoke() ?: conditions },
-        inScope = media::inScope,
+        inScope = inScopeOverride ?: media::inScope,
         mediaAbsenceTrusted = { fullMediaAccess },
         pairingId = { pid },
         scope = scope,
@@ -371,6 +382,7 @@ internal class Rig(
         afterCycle = { afterCycles++ },
         picked = picked,
         onPickedSettled = { pickedSettled += it.uri },
+        folderDiscovery = folderDiscovery,
         route = object : NetworkRoute {
             override suspend fun ensure(): Boolean {
                 netEvents += "route"

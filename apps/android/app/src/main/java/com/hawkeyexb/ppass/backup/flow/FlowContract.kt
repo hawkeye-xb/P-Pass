@@ -88,3 +88,10 @@ class SourceChangedException(message: String? = null, cause: Throwable? = null) 
 
 /** provider 端点在限时内没上线（`wait_online` 超时）→ W1 记路径失败（网络问题，不计这张照片的失败）。 */
 class ProviderOfflineException(message: String? = null, cause: Throwable? = null) : Exception(message, cause)
+
+/**
+ * #1762：目录来源的授权失效（SAF 树 URI 被撤销 / 根不可达）。与 [SourceMissingException]（单张原图没了）
+ * 不同：这是**整个来源**暂时不可用，不是某一张照片被删。FlowEngine 捕获后进 WAITING（[WaitReason.SOURCE_UNAVAILABLE]），
+ * 不推进 G/S、不写 sourceMissing、不计单张失败、不把在途 order 变成失败或源已删除。
+ */
+class SourceUnavailableException(message: String? = null, cause: Throwable? = null) : Exception(message, cause)

@@ -51,6 +51,8 @@ class C409WakeInvariantTest {
         WaitReason.DESKTOP_INTERNAL to WakePlan.RetryProbes,
         WaitReason.PHONE_OUTDATED to WakePlan.AwaitsUser,
         WaitReason.DESKTOP_OUTDATED to WakePlan.RetryProbes,
+        // #1762：等用户重新授权（二级页）。
+        WaitReason.SOURCE_UNAVAILABLE to WakePlan.AwaitsUser,
     )
 
     // 反证：把任一个不健康原因映射成 AwaitsUser（#652 的旧行为：settle 后无唤醒）→ 值不等，红；
@@ -62,7 +64,12 @@ class C409WakeInvariantTest {
             assertEquals(reason.name, plan, wakePlanOf(reason) { WakePlan.BudgetReset(-1L) })
         }
         val exceptions = WaitReason.entries.filter { wakePlanOf(it) { WakePlan.RetryProbes } == WakePlan.AwaitsUser }
-        assertEquals("例外只有要用户动手的", listOf(WaitReason.NOT_PAIRED, WaitReason.DISABLED, WaitReason.PHONE_OUTDATED), exceptions)
+        // #1762：目录授权失效同样只能等用户（重新授权），加入例外。
+        assertEquals(
+            "例外只有要用户动手的",
+            listOf(WaitReason.NOT_PAIRED, WaitReason.DISABLED, WaitReason.PHONE_OUTDATED, WaitReason.SOURCE_UNAVAILABLE),
+            exceptions,
+        )
     }
 
     private val grant = BootInstant(bootCount = 3, elapsedMs = 10_000L)
@@ -118,6 +125,8 @@ class C409WakeInvariantTest {
             WaitReason.DESKTOP_INTERNAL -> rig.delivery.script += { DeliveryOutcome.PeerFailure(PeerFailureKind.DESKTOP_INTERNAL, "internal") }
             WaitReason.PHONE_OUTDATED -> rig.probeResult = ProbeResult.NeedsUpdate(com.hawkeyexb.ppass.proto.OutdatedSide.PHONE)
             WaitReason.DESKTOP_OUTDATED -> rig.probeResult = ProbeResult.NeedsUpdate(com.hawkeyexb.ppass.proto.OutdatedSide.DESKTOP)
+            // #1762：目录授权失效——import 阶段抛来源级异常（不许吞成单张失败），引擎进 WAITING。
+            WaitReason.SOURCE_UNAVAILABLE -> rig.importer.failures += SourceUnavailableException("folder permission revoked")
         }
         rig.trigger(TriggerReason.MEDIA_CHANGE)
         assertEquals("$reason: 引擎应停在这个等待上", reason, rig.control.wait)
@@ -140,6 +149,8 @@ class C409WakeInvariantTest {
         WaitReason.DESKTOP_INTERNAL to setOf(Wake.PROBES),
         WaitReason.PHONE_OUTDATED to setOf(Wake.NONE),
         WaitReason.DESKTOP_OUTDATED to setOf(Wake.PROBES),
+        // #1762：等用户重新授权（二级页），不排自动唤醒。
+        WaitReason.SOURCE_UNAVAILABLE to setOf(Wake.NONE),
     )
 
     // 反证（修复前的 main 上实测红）：FGS_BLOCKED（说不清原因的拒绝）与三个不健康原因登记到的是 NONE。

@@ -67,6 +67,12 @@ final class SettingsFeedbackTests: XCTestCase {
         func setPendingFullPhotoAccess(_ pending: Bool) throws { if failWrites { throw Boom() }; pendingAccess = pending }
         var refresh: BackgroundRefreshAvailability = .available
         func backgroundRefresh() -> BackgroundRefreshAvailability { refresh }
+        // #1763 素材文件夹：本测试不涉及，给最小组面。
+        func folderSourceCount() -> Int { 0 }
+        func folderSources() async -> [FolderSourceInfo] { [] }
+        func addFolderSource(at url: URL, displayName: String) async throws {}
+        func reauthorizeFolderSource(id: String, at url: URL) async throws {}
+        func removeFolderSource(id: String) throws {}
     }
 
     private final class StubMedia: MediaLibrary {

@@ -128,8 +128,13 @@ fn first_frame(src: &Path) -> Result<DynamicImage> {
                 let png = quicklook::extract_frame(&ql, src, dir.path())?;
                 return sandbox::decode_image(&png);
             }
-            // 没有系统兜底的平台（Windows）⇒ 只剩 ffmpeg 一条路，而它不在，
-            // 视频给占位图。
+            // Windows：#1730 用 Media Foundation 视频 decoder 解首帧（独立子进程、
+            // stdin 字节进出），不退回 daemon 直接解析、不退回外部 ffmpeg。
+            // 本平台有没有这条路由 platform 的能力接口判，不在这里写 cfg（B.2）。
+            if platform::video_decode::video_decode_available() {
+                return sandbox::decode_video(src);
+            }
+            // 没有系统兜底的其它平台 ⇒ 只剩 ffmpeg 一条路，而它不在，视频给占位图。
             Err(CodecError::FfmpegMissing)
         }
     }

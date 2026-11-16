@@ -137,6 +137,12 @@ enum class WaitReason {
     PHONE_OUTDATED,
     /** #1072：桌面版本过旧（它自己说的，或旧桌面的应答不带 `ver`）——要更新电脑端。不计失败、不动配对。 */
     DESKTOP_OUTDATED,
+    /**
+     * #1762：目录来源（素材文件夹）的授权失效（SAF 树 URI 被撤销 / 根不可达）。**整个来源**暂时不可用：
+     * 不推进 G/S、不写 sourceMissing、不计单张失败、不把在途 order 变成失败或源已删除。与桌面无关，
+     * 心跳不叫醒（[onDesktopReachable]）；恢复只能靠用户重新授权（二级页），那时新触发进来自然清掉。
+     */
+    SOURCE_UNAVAILABLE,
 }
 
 /** #1072：版本不兼容 → 等待原因。 */
@@ -431,6 +437,8 @@ internal fun wakePlanOf(reason: WaitReason, fgsBlocked: () -> WakePlan): WakePla
     // #1072：手机过旧只能等用户更新 App（更新后进程重启）；电脑过旧时电脑端可能自己更新，周期重探，兼容了就续传。
     WaitReason.PHONE_OUTDATED -> WakePlan.AwaitsUser
     WaitReason.DESKTOP_OUTDATED -> WakePlan.RetryProbes
+    // #1762：目录授权失效只能等用户重新授权（二级页）；重新授权 / 移除目录都会立刻发起新触发，不排自动唤醒。
+    WaitReason.SOURCE_UNAVAILABLE -> WakePlan.AwaitsUser
 }
 
 /**

@@ -88,3 +88,20 @@
 
 /* 照片页引导卡：iOS 没有「App 关闭也能备份」，靠后台 App 刷新（产品负责人 11-04）。 */
 "photos_guide_background" = "App 在后台也能备份";
+
+/* 素材文件夹（#1763，iOS 独有界面；Android 同名功能按双端口径后续单独实现）。 */
+"folder_sources_row" = "素材文件夹";
+"folder_sources_title" = "素材文件夹";
+"folder_sources_add" = "添加文件夹";
+"folder_sources_empty_body" = "还没有添加文件夹。选择一个本地文件夹，里面的照片和视频会进入自动备份。";
+"folder_sources_none" = "未添加";
+"folder_sources_count_one" = "1 个文件夹";
+"folder_sources_count_many" = "%ld 个文件夹";
+"folder_sources_status_ok" = "已授权";
+"folder_sources_status_wait" = "等待重新授权";
+"folder_sources_reauth" = "重新授权";
+"folder_sources_remove" = "移除";
+"folder_sources_remove_confirm_title" = "移除这个文件夹？";
+"folder_sources_remove_confirm_body" = "会停止备份这个文件夹。手机上的素材和电脑上已备份的内容都不会删除。";
+"folder_sources_footer" = "只备份文件夹里的照片和视频。备份会在打开 App 时进行，不保证拍完立即同步。";
+"folder_sources_add_failed" = "文件夹没添加成功，请重试。";

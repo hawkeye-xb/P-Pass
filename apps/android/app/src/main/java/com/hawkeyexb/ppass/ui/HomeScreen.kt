@@ -336,6 +336,13 @@ fun HomeScreen(
     onToggleAutoBackupRule: (Boolean) -> Unit = {},
     /** #1272：开关下方一行小字（没有照片权限 / 权限被收回或改成部分）。 */
     autoBackupRuleHintRes: Int? = null,
+    /** #1762「素材文件夹」：已登记的本地目录（状态由调用方按真实 SAF 可用性给）。 */
+    mediaFolders: List<FolderUi> = emptyList(),
+    onFolderAdd: () -> Unit = {},
+    onFolderRemove: (FolderUi) -> Unit = {},
+    onFolderReauthorize: (FolderUi) -> Unit = {},
+    // 素材文件夹二级页打开/关闭时告知调用方（底部 Photos/设置 tab 栏同存储电脑详情页一样整体隐藏）。
+    onFoldersOpenChange: (Boolean) -> Unit = {},
 ) {
     val line = statusLineOf(state, triplet?.k ?: 0L)
     val busy = line is StatusLine.Working
@@ -346,10 +353,21 @@ fun HomeScreen(
     // 折进子页是上一轮自己想当然加的一层，设计稿没有）。
     var showStorageDetail by remember { mutableStateOf(false) }
     var showMore by remember { mutableStateOf(false) }
+    // #1762：素材文件夹二级页（真实设置入口，正式 UX 后置）。
+    var showFolders by remember { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(showFolders) { onFoldersOpenChange(showFolders) }
     androidx.compose.material3.ProvideTextStyle(
         androidx.compose.material3.LocalTextStyle.current.copy(fontFamily = PPFont.Sans),
     ) {
-    if (showStorageDetail) {
+    if (showFolders) {
+        FolderScreen(
+            folders = mediaFolders,
+            onAdd = onFolderAdd,
+            onRemove = onFolderRemove,
+            onReauthorize = onFolderReauthorize,
+            onBack = { showFolders = false },
+        )
+    } else if (showStorageDetail) {
         BackHandler { showStorageDetail = false }
         StorageComputerDetail(
             storageName = storageName,
@@ -802,6 +820,14 @@ fun HomeScreen(
                             } ?: stringResource(R.string.backup_scope_none)
                         },
                         onClick = onOpenBucketPicker,
+                    )
+                    // #1762：「素材文件夹」——与「备份哪些相册」同属「这次备份包含什么」；目录里的照片/视频
+                    // 走同一条备份链路，规则关着时不参与（与相册范围同一开关）。
+                    HorizontalDivider(color = PPColor.Divider)
+                    CellRow(
+                        label = stringResource(R.string.folder_settings_title),
+                        value = if (mediaFolders.isEmpty()) null else mediaFolders.size.toString(),
+                        onClick = { showFolders = true },
                     )
                     HorizontalDivider(color = PPColor.Divider)
                     RuleSwitchRow(

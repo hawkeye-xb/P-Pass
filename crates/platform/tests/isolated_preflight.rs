@@ -26,6 +26,7 @@ fn preflight_separates_not_started_from_started() {
     );
     let lim = Limits {
         memory_bytes: 1 << 30,
+        win32k_lockdown: true,
     };
     let d = tempfile::tempdir().unwrap();
     let killed = script(d.path(), "kill -ABRT $$");

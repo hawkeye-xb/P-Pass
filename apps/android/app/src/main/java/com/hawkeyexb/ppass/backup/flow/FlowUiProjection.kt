@@ -287,6 +287,8 @@ internal fun waitReasonTextRes(reason: WaitReason, fgsBlock: FgsBlockReason?): I
     WaitReason.DESKTOP_INTERNAL -> R.string.state_waiting_desktop_internal
     WaitReason.PHONE_OUTDATED -> R.string.state_waiting_phone_outdated
     WaitReason.DESKTOP_OUTDATED -> R.string.state_waiting_desktop_outdated
+    // #1762：目录来源（素材文件夹）授权失效——说现状与出路，不提内部组件（SAF / URI）。
+    WaitReason.SOURCE_UNAVAILABLE -> R.string.state_waiting_source_unavailable
 }
 
 /**

@@ -8,6 +8,8 @@ publish = false
 # 解码子进程 `ppf-decoder` 及其与 daemon 之间的协议。
 # 刻意只依赖 image + libheif-rs：不链 platform / 任何 UI 系统库，
 # 子进程才能在 Windows 上开 win32k lockdown 起得来。
+# 视频首帧解码（ppf-video-decoder）不在这里：它要 Media Foundation，
+# 属平台实现，在 crates/platform/src/video_decode.rs（B.2/G5）。
 [[bin]]
 name = "ppf-decoder"
 path = "src/bin/ppf-decoder.rs"

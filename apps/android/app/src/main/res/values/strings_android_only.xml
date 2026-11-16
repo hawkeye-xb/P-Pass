@@ -90,4 +90,20 @@
     <string name="open_with_app">Open with…</string>
     <string name="no_app_for_file">No app on this phone can open this file.</string>
     <string name="share_to">Share to…</string>
+    <!-- #1762 素材文件夹：设置入口 + 最小二级页（添加 / 查看 / 移除 / 重新授权）。只在 Android。 -->
+    <string name="folder_settings_title">Media folders</string>
+    <string name="folder_settings_entry_subtitle">Photos and videos in folders you add are backed up automatically</string>
+    <string name="folder_add">Add a folder</string>
+    <string name="folder_empty">No folders added yet</string>
+    <string name="folder_status_ok">Authorized</string>
+    <string name="folder_status_needs_permission">Permission needed</string>
+    <string name="folder_reauthorize">Re-authorize</string>
+    <string name="folder_remove">Remove</string>
+    <string name="folder_remove_confirm_title">Remove \"%1$s\"?</string>
+    <string name="folder_remove_confirm_body">This only stops backing up this folder. Files on this phone and photos already on your computer are not affected.</string>
+    <string name="folder_remove_confirm_action">Remove</string>
+    <string name="folder_cancel">Cancel</string>
+    <string name="folder_add_failed">Couldn\'t add the folder. Try again.</string>
+    <string name="folder_reauthorize_failed">Re-authorize didn\'t finish. Pick the same folder and try again.</string>
+    <string name="folder_boundary_note">Folders that Android protects, such as Android/data, can\'t be selected.</string>
 </resources>

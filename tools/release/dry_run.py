@@ -309,7 +309,7 @@ set -euo pipefail
 v="${PPF_BUILD_VERSION:-}"; v="$(printf '%s' "$v" | tr -d '[:space:]')"; v="${v#v}"
 [ -n "$v" ] || v="__PLACEHOLDER__"
 mkdir -p target/release
-for f in daemon daemon.exe testclient.exe ppf-decoder ppf-decoder.exe; do
+for f in daemon daemon.exe testclient.exe ppf-decoder ppf-decoder.exe ppf-video-decoder ppf-video-decoder.exe; do
   printf '#!/bin/sh\necho "P-Pass daemon %s"\n' "$v" > "target/release/$f"; chmod +x "target/release/$f"
 done
 echo "$v" >> "$DRYRUN_REC/daemon"

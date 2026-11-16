@@ -39,6 +39,11 @@ pub struct Limits {
     /// 子进程内存上限（字节）。Windows 由 Job 强制；macOS 由看门狗轮询物理占用、超限即杀
     /// （Darwin 不执行 RLIMIT_AS）；其他平台暂不强制。
     pub memory_bytes: u64,
+    /// Windows 上是否开 win32k lockdown（`MITIGATION_WIN32K_DISABLE`）。
+    /// 静态图 `ppf-decoder` 保持 `true`；视频 `ppf-video-decoder` 用 Media Foundation，
+    /// 其系统 DLL 在 win32k lockdown 下 `main()` 前即失败（0xC0000142），故传 `false`
+    /// （见 docs/decisions/2026-11-13-windows-video-decoder.md）。非 Windows 平台忽略。
+    pub win32k_lockdown: bool,
 }
 
 /// 可跨线程持有的「强杀」句柄；子进程已结束后调用无副作用。
@@ -90,6 +95,30 @@ pub fn decoder_worker_path() -> Option<PathBuf> {
     };
     #[cfg(debug_assertions)]
     if let Some(p) = std::env::var_os("PPF_DECODE_WORKER") {
+        return Some(PathBuf::from(p));
+    }
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let up = if cfg!(debug_assertions) {
+        dir.parent().map(|u| u.join(name))
+    } else {
+        None
+    };
+    std::iter::once(dir.join(name))
+        .chain(up)
+        .find(|p| p.is_file())
+}
+
+/// 视频解码子进程 `ppf-video-decoder` 的位置：与 `decoder_worker_path` 同口径，
+/// 换名字与 debug 环境变量 `PPF_VIDEO_DECODE_WORKER`。
+pub fn video_decoder_worker_path() -> Option<PathBuf> {
+    let name = if cfg!(windows) {
+        "ppf-video-decoder.exe"
+    } else {
+        "ppf-video-decoder"
+    };
+    #[cfg(debug_assertions)]
+    if let Some(p) = std::env::var_os("PPF_VIDEO_DECODE_WORKER") {
         return Some(PathBuf::from(p));
     }
     let exe = std::env::current_exe().ok()?;

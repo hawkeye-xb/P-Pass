@@ -18,6 +18,8 @@ pub const VERSION: u8 = 1;
 
 /// 静态图片。
 pub const KIND_STILL: u8 = 1;
+/// 视频首帧（H.264 MP4）。
+pub const KIND_VIDEO: u8 = 2;
 
 pub const STATUS_OK: u8 = 0;
 /// 内容解不开（损坏 / 格式不支持）。
@@ -46,6 +48,7 @@ fn bad<T>(msg: impl Into<String>) -> Result<T, ProtoError> {
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Request {
+    pub kind: u8,
     pub max_edge: u32,
     pub ext: String,
     pub payload_len: u64,
@@ -54,10 +57,14 @@ pub struct Request {
 /// 只写请求头；调用方随后把 `payload_len` 个字节流式写到同一个 writer。
 pub fn write_request_header(
     w: &mut impl Write,
+    kind: u8,
     max_edge: u32,
     ext: &str,
     payload_len: u64,
 ) -> Result<(), ProtoError> {
+    if kind != KIND_STILL && kind != KIND_VIDEO {
+        return bad(format!("unsupported request kind {kind}"));
+    }
     if ext.len() > MAX_EXT_LEN {
         return bad("extension too long");
     }
@@ -65,7 +72,7 @@ pub fn write_request_header(
         return bad("payload too large");
     }
     w.write_all(REQ_MAGIC)?;
-    w.write_all(&[VERSION, KIND_STILL])?;
+    w.write_all(&[VERSION, kind])?;
     w.write_all(&max_edge.to_le_bytes())?;
     w.write_all(&[ext.len() as u8])?;
     w.write_all(ext.as_bytes())?;
@@ -85,7 +92,7 @@ pub fn read_request_header(r: &mut impl Read) -> Result<Request, ProtoError> {
         return bad("bad request magic");
     }
     let [ver, kind] = read_arr::<2>(r)?;
-    if ver != VERSION || kind != KIND_STILL {
+    if ver != VERSION || (kind != KIND_STILL && kind != KIND_VIDEO) {
         return bad(format!("unsupported request v{ver} kind {kind}"));
     }
     let max_edge = u32::from_le_bytes(read_arr(r)?);
@@ -104,6 +111,7 @@ pub fn read_request_header(r: &mut impl Read) -> Result<Request, ProtoError> {
         return bad("payload too large");
     }
     Ok(Request {
+        kind,
         max_edge,
         ext,
         payload_len,
@@ -208,30 +216,36 @@ mod tests {
     #[test]
     fn request_header_roundtrip() {
         let mut b = Vec::new();
-        write_request_header(&mut b, 1024, "heic", 77).unwrap();
+        write_request_header(&mut b, KIND_STILL, 1024, "heic", 77).unwrap();
         let req = read_request_header(&mut &b[..]).unwrap();
         assert_eq!(
             req,
             Request {
+                kind: KIND_STILL,
                 max_edge: 1024,
                 ext: "heic".into(),
                 payload_len: 77
             }
         );
+        // 视频 kind 也能往返。
+        let mut b = Vec::new();
+        write_request_header(&mut b, KIND_VIDEO, 1024, "mp4", 77).unwrap();
+        let req = read_request_header(&mut &b[..]).unwrap();
+        assert_eq!(req.kind, KIND_VIDEO);
     }
 
     #[test]
     fn request_limits_are_enforced() {
         let mut b = Vec::new();
-        write_request_header(&mut b, 1024, "jpg", 1).unwrap();
+        write_request_header(&mut b, KIND_STILL, 1024, "jpg", 1).unwrap();
         // payload_len 改成超限
         let n = b.len();
         b[n - 8..].copy_from_slice(&(MAX_PAYLOAD + 1).to_le_bytes());
         assert!(read_request_header(&mut &b[..]).is_err());
         let mut b = Vec::new();
-        write_request_header(&mut b, 0, "jpg", 1).unwrap();
+        write_request_header(&mut b, KIND_STILL, 0, "jpg", 1).unwrap();
         assert!(read_request_header(&mut &b[..]).is_err(), "max_edge 0");
-        assert!(write_request_header(&mut Vec::new(), 8, &"x".repeat(17), 1).is_err());
+        assert!(write_request_header(&mut Vec::new(), KIND_STILL, 8, &"x".repeat(17), 1).is_err());
         assert!(read_request_header(&mut &b"XXXX"[..]).is_err());
     }
 

@@ -23,6 +23,14 @@ final class LiveBackend: @unchecked Sendable {
     let providerParker: ProviderIdleParker
     let orders: SQLiteOrderStore
     let control: FlowControlStore
+    /// #1763：目录来源注册表（一个进程一个实例，见 FolderRegistry 类注释）与 Composite 引用
+    /// （注册表变化后替换 folder 集合的落点，见 refreshFolderSources）。
+    let folders: FolderRegistry
+    private let compositeMedia: CompositeMediaSource
+    private let compositeImporter: CompositeImporter
+    /// 上一次 refreshFolderSources 装配的实例（按 sourceId）；未变化来源复用，见 refreshFolderSources。
+    private let folderPartsLock = NSLock()
+    private var folderPartsCache: [String: (source: FolderMediaSource, importer: FolderImporter)] = [:]
     let settings: BackupSettings
     let autoPrefs: AutoBackupPrefs
     let notifyPrefs: NotifyOnFailurePrefs
@@ -73,14 +81,22 @@ final class LiveBackend: @unchecked Sendable {
 
     /// #1731：装配 media / importer（ADR §1：首版统一经 Composite，「不另做实施分支」）。
     /// folderSources 为空 = Composite 只装 PhotoKit（行为与直接装配一致）；有登记 = 全部目录来源逐个装进去。
-    /// 装配规则单一出处：LiveBackend 与 CompositeWiringTests 共用同一份函数（测试核对的就是引擎拿到的产物）。
+    /// 装配规则单一出处：records → 来源的映射在 folderParts（#1763 运行时替换复用同一份），LiveBackend 与
+    /// CompositeWiringTests 共用同一份函数（测试核对的就是引擎拿到的产物）。
     static func assembleMedia(folderSources: [FolderRecord], registry: FolderRegistry, directory: URL,
                               photoSource: MediaSource, photoImporter: MediaImporter,
-                              provider: NativeProvider, logger: CoreLogger) -> (media: MediaSource, importer: MediaImporter) {
-        let folderMedia = folderSources.map { FolderMediaSource(registry: registry, sourceId: $0.id, directory: directory, logger: logger) }
-        let folderImporters = folderSources.map { FolderImporter(registry: registry, sourceId: $0.id, directory: directory, provider: provider, logger: logger) }
-        return (media: CompositeMediaSource(library: photoSource, others: folderMedia),
-                importer: CompositeImporter(library: photoImporter, others: folderImporters))
+                              provider: NativeProvider, logger: CoreLogger) -> (media: CompositeMediaSource, importer: CompositeImporter) {
+        let parts = folderParts(records: folderSources, registry: registry, directory: directory, provider: provider, logger: logger)
+        return (media: CompositeMediaSource(library: photoSource, others: parts.sources),
+                importer: CompositeImporter(library: photoImporter, others: parts.importers))
+    }
+
+    /// #1763：records → 目录来源 / 导入器。assembleMedia 与 refreshFolderSources 共用的同一份映射——
+    /// 运行时替换与首次装配必须产出一模一样的集合，不另做实施分支。
+    static func folderParts(records: [FolderRecord], registry: FolderRegistry, directory: URL,
+                            provider: NativeProvider, logger: CoreLogger) -> (sources: [FolderMediaSource], importers: [FolderImporter]) {
+        (records.map { FolderMediaSource(registry: registry, sourceId: $0.id, directory: directory, logger: logger) },
+         records.map { FolderImporter(registry: registry, sourceId: $0.id, directory: directory, provider: provider, logger: logger) })
     }
 
     /// #1731：引擎的 inScope（装配注入三处之一）：folder: 绕过共享 since 时间档（ADR §4：Folder 的范围判断
@@ -192,6 +208,11 @@ final class LiveBackend: @unchecked Sendable {
                                           pickedRoot: fm.temporaryDirectory.appendingPathComponent(OriginalCachePaths.pickedScratchDirName))
         let assembled = Self.assembleMedia(folderSources: folderRegistry.allRecords(), registry: folderRegistry, directory: dir,
                                            photoSource: photoSource, photoImporter: photoImporter, provider: provider, logger: logger)
+        // #1763：留存注册表与 Composite 引用——设置页添加 / 移除 / 重新授权后经 refreshFolderSources()
+        // 替换 folder 集合（引擎 media/importer 是 let，这是唯一出口）。
+        folders = folderRegistry
+        compositeMedia = assembled.media
+        compositeImporter = assembled.importer
         engine = FlowEngine(
             store: orders, media: assembled.media,
             importer: assembled.importer,
@@ -284,6 +305,119 @@ final class LiveBackend: @unchecked Sendable {
     /// #981：后台任务跑完、交还系统之前评估一次通知（对位 Android BackupWorker 结束时的评估）。
     func backgroundTarget() -> BackgroundTarget {
         BackgroundTarget(engine: engine, window: window, scheduler: scheduler, afterRun: { [weak self] in await self?.evaluateNotices() })
+    }
+
+    // MARK: #1763 素材文件夹（设置页动作；探测与装配的静态函数由 FolderSettingsTests / CompositeWiringTests 核对）
+
+    /// 复用与退役的纯决策（FolderSettingsTests 判红，#1763 评审建议1）：注册表里还在的 id 一律复用原实例
+    /// （两个类都按 sourceId 读注册表，书签变化不影响实例有效性；整体重建会在换集合的瞬间放掉仍在供数期
+    /// 的根授权 FolderScopeLease.deinit，别处目录正在供数的大文件会因此失败），注册表里已消失的 id 进
+    /// dropped（调用方负责 releaseHeld）。
+    static func mergedFolderParts(records: [FolderRecord], fresh: (sources: [FolderMediaSource], importers: [FolderImporter]),
+                                  prior: [String: (source: FolderMediaSource, importer: FolderImporter)])
+        -> (sources: [FolderMediaSource], importers: [FolderImporter], dropped: [FolderImporter]) {
+        var sources = fresh.sources
+        var importers = fresh.importers
+        var kept: [String: (source: FolderMediaSource, importer: FolderImporter)] = [:]
+        var dropped: [FolderImporter] = []
+        for (index, record) in records.enumerated() {
+            if let p = prior[record.id] {
+                sources[index] = p.source
+                importers[index] = p.importer
+                kept[record.id] = p
+            }
+        }
+        for (id, p) in prior where kept[id] == nil {
+            dropped.append(p.importer)
+        }
+        return (sources, importers, dropped)
+    }
+
+    /// 注册表变化（添加 / 移除 / 重新授权）后重建 folder 集合并替换进 Composite。
+    /// 映射用 folderParts——与首次装配同一份函数，替换与装配产出同一形状的集合（ADR §1 不另做实施分支）；
+    /// 复用与退役决策见 mergedFolderParts。被移除来源的导入器退役时显式 releaseHeld 放掉持有的引用与授权
+    /// （在飞导入晚于退役完成的，由 FolderImporter.deinit 兜底收掉）。
+    func refreshFolderSources() {
+        let records = folders.allRecords()
+        let parts = Self.folderParts(records: records, registry: folders, directory: root.url, provider: provider, logger: logger)
+        folderPartsLock.lock()
+        let prior = folderPartsCache
+        folderPartsLock.unlock()
+        let merged = Self.mergedFolderParts(records: records, fresh: parts, prior: prior)
+        var next: [String: (source: FolderMediaSource, importer: FolderImporter)] = [:]
+        for (index, record) in records.enumerated() {
+            next[record.id] = (merged.sources[index], merged.importers[index])
+        }
+        folderPartsLock.lock()
+        folderPartsCache = next
+        folderPartsLock.unlock()
+        compositeMedia.replaceFolderSources(merged.sources)
+        compositeImporter.replaceFolderSources(merged.importers)
+        for importer in merged.dropped {
+            importer.releaseHeld()
+        }
+    }
+
+    /// 二级页一行：注册表记录 + 此刻可达性（探测失败一律 false = 等待重新授权，不误报可用）。
+    func folderSourceInfos() async -> [FolderSourceInfo] {
+        var out: [FolderSourceInfo] = []
+        for record in folders.allRecords() {
+            let available = await Self.folderSourceAvailable(record: record, registry: folders, logger: logger)
+            out.append(FolderSourceInfo(id: record.id, displayName: record.displayName, available: available))
+        }
+        return out
+    }
+
+    /// 可达性探测：书签可解析且根目录此刻可达。只读；stale 重建沿用 resolve 的既有口径（在当前授权内原子换）。
+    static func folderSourceAvailable(record: FolderRecord, registry: FolderRegistry, logger: CoreLogger) async -> Bool {
+        let root: FolderRoot
+        do {
+            root = try FolderBookmarks.resolve(record, registry: registry, logger: logger)
+        } catch {
+            return false
+        }
+        do {
+            return try await FolderBookmarks.withScope(root.url) { url in
+                var isDir: ObjCBool = false
+                return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) && isDir.boolValue
+            }
+        } catch {
+            return false
+        }
+    }
+
+    /// 添加：系统目录选择器授权回调内调用（url 带安全作用域）。书签在作用域内生成；登记成功才替换进
+    /// Composite 并叫醒一轮带对账的备份（trigger(.scopeAdded) 自带 markScanDirty，新目录在下一轮被发现）。
+    /// 显示名不进日志（用户目录名，ADR §2「不写日志」口径）。
+    func addFolderSource(at url: URL, displayName: String) throws {
+        let opened = url.startAccessingSecurityScopedResource()
+        defer { if opened { url.stopAccessingSecurityScopedResource() } }
+        let id = try folders.addFolder(at: url, displayName: displayName)
+        logger.log("folder \(id): added via settings")
+        refreshFolderSources()
+        Task { _ = await engine.trigger(.scopeAdded) }
+    }
+
+    /// 重新授权：既有记录原子换书签（保留 id 与 opaque 映射）。成功后叫醒一轮——SourceUnavailable 等待中
+    /// 心跳不自醒（FlowEngine.onDesktopReachable 对 sourceUnavailable wake=false），用户刚做完授权动作，用 manual 唤醒。
+    func reauthorizeFolderSource(id: String, at url: URL) throws {
+        let opened = url.startAccessingSecurityScopedResource()
+        defer { if opened { url.stopAccessingSecurityScopedResource() } }
+        try folders.reauthorize(id: id, at: url)
+        logger.log("folder \(id): reauthorized via settings")
+        refreshFolderSources()
+        Task { _ = await engine.trigger(.manual) }
+    }
+
+    /// 移除：只删注册表记录（不删手机素材、不删桌面已确认副本）。落盘失败抛给界面（不假装成功）。
+    /// 替换后该来源 id 按 Composite 既有「装配里没有 → 缺席」口径结案，并叫醒一轮（#1763 评审建议2：
+    /// SourceUnavailable 等待不自醒（onDesktopReachable wake=false），用户移除的目录若正是等待中的来源，
+    /// 不起轮就会一直停在「等待重新授权」；缺席判定也只在带对账的轮里发生）。
+    func removeFolderSource(id: String) throws {
+        try folders.removeFolder(id: id)
+        logger.log("folder \(id): removed via settings")
+        refreshFolderSources()
+        Task { _ = await engine.trigger(.manual) }
     }
 
     /// 这台电脑（按 nodeId 显式读，不按当前已存的配对读——配对那一刻存的可能还是旧电脑）的相册范围非空。读不出来 = 空（宁可多问一次）。
@@ -680,6 +814,21 @@ final class LiveEngineAdapter: BackupEngine, @unchecked Sendable {
 
     func retryFailed() async throws {
         _ = try await command("retryFailed") { try await backend.engine.retryFailed() }
+    }
+
+    // MARK: #1763 素材文件夹（BackupEngine 端口的真实现；失败经 command 记日志后抛给界面）
+
+    func folderSourceCount() -> Int { backend.folders.allRecords().count }
+    func folderSources() async -> [FolderSourceInfo] { await backend.folderSourceInfos() }
+    func addFolderSource(at url: URL, displayName: String) async throws {
+        try await command("addFolderSource") { try backend.addFolderSource(at: url, displayName: displayName) }
+    }
+    func reauthorizeFolderSource(id: String, at url: URL) async throws {
+        try await command("reauthorizeFolderSource") { try backend.reauthorizeFolderSource(id: id, at: url) }
+    }
+    func removeFolderSource(id: String) throws {
+        try backend.removeFolderSource(id: id)
+        backend.logger.log("command removeFolderSource ok")
     }
 }
 

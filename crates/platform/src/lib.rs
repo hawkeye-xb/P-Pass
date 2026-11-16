@@ -71,6 +71,8 @@ pub mod isolated;
 mod isolated_unix;
 #[cfg(windows)]
 mod isolated_windows;
+// #1730：视频首帧解码（Media Foundation，仅 Windows）。平台分叉只在这里（B.2/G5）。
+pub mod video_decode;
 // D1 / brief §5.1：SCM 服务托管（查询、起停、注册/删除、给主人授权）。
 #[cfg(windows)]
 pub mod windows_service;
