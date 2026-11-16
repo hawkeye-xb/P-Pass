@@ -343,6 +343,43 @@ grep -q 'host_ends "$ends"' "$E3/verify" || bad "verify 主流程没调用 host_
 grep -q 'gaps="$(collect_gaps "$root" "$HOST_SKIPPED")"' "$E3/verify" ||
   bad "verify 汇总没把 HOST_SKIPPED 并进未覆盖（#1524）"
 
+# #1728：host_ends 要对称处理 win——非 Windows 宿主摘掉 win（像非 macOS 摘 mac 一样），
+# 摘掉的 win 记进 HOST_SKIPPED、进 collect_gaps、结论 PASS（不完整）。三类宿主经 host_os 桩替断言。
+(
+  E3_STATE="$(mktemp -d)" || exit 1
+  export E3_STATE
+  trap 'rm -rf "$E3_STATE"' EXIT
+  # shellcheck source=../tools/e3/verify
+  source "$E3/verify" || exit 1
+  log() { :; } # 摘端会写日志，这里只看变量与汇总
+  d="$E3_STATE/ev"
+  mkdir -p "$d/mac-svc"
+  printf 'PASS android/a\n' >"$d/summary.txt"
+
+  host_os() { echo Darwin; }
+  host_ends "mac win android"
+  [ "$HOST_ENDS" = "mac android" ] || { printf 'Darwin：win 没被摘（HOST_ENDS=%s）\n' "$HOST_ENDS"; exit 1; }
+  [ "$HOST_SKIPPED" = "win" ] || { printf 'Darwin：HOST_SKIPPED 不是 win（%s）\n' "$HOST_SKIPPED"; exit 1; }
+
+  host_os() { echo Linux; }
+  host_ends "mac win android"
+  [ "$HOST_ENDS" = "android" ] || { printf 'Linux：mac/win 没被摘（HOST_ENDS=%s）\n' "$HOST_ENDS"; exit 1; }
+  [ "$HOST_SKIPPED" = "mac win" ] || { printf 'Linux：HOST_SKIPPED 不是 mac win（%s）\n' "$HOST_SKIPPED"; exit 1; }
+
+  host_os() { echo MINGW64_NT-10.0-26200; }
+  host_ends "mac win android"
+  [ "$HOST_ENDS" = "win android" ] || { printf 'Windows：win 被误摘或 mac 没摘（HOST_ENDS=%s）\n' "$HOST_ENDS"; exit 1; }
+  [ "$HOST_SKIPPED" = "mac" ] || { printf 'Windows：HOST_SKIPPED 不是 mac（%s）\n' "$HOST_SKIPPED"; exit 1; }
+
+  # win 被摘后要进 collect_gaps，结论 PASS（不完整）
+  host_os() { echo Darwin; }
+  host_ends "mac win android"
+  g="$(collect_gaps "$d" "$HOST_SKIPPED")"
+  case "$g" in *'win（本机验不了）'*) ;; *) printf 'collect_gaps 没记被摘掉的 win：%s\n' "$g"; exit 1 ;; esac
+  [ "$(verdict_word 0 "$g")" = 'PASS（不完整）' ] ||
+    { printf 'win 被摘后结论不是 PASS（不完整）：%s\n' "$(verdict_word 0 "$g")"; exit 1; }
+) || bad "host_ends 对称摘 win / collect_gaps / 结论（#1728）"
+
 # #1375 just dev 手机：设备被占就拒绝（--no-wait），不排队；反证：释放后同一条命令成功
 if [ "$(uname)" = Darwin ]; then
   lockdir="$(mktemp -d)"

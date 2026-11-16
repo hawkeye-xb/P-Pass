@@ -51,19 +51,30 @@ lane_hit() { # lane_hit <glob…>：改动有没有落在这些路径上（ci-pa
   [ "$("$REPO_ROOT/tools/ci-paths.sh" hit "$base" "$@" 2>/dev/null)" != false ]
 }
 
-# 端只能在本机上验：mac 的打包、安装、场景都要 macOS（#1524）。按路径判出来的端先过这一道，
-# 本机验不了的摘掉并写明原因（mac 端的 e3 场景目前没有 CI 任务代跑，要在 macOS 上验）。
+# 端只能在本机上验：mac 的打包、安装、场景都要 macOS（#1524），win 的场景要 Windows
+# （cygpath / PowerShell / Windows 服务，见 scenarios/win/lib/common.sh）。按路径判出来的端先过这一道，
+# 本机验不了的摘掉并写明原因（mac 端目前没有 CI 任务代跑，要在 macOS 上验）。
 # 结果写进 HOST_ENDS / HOST_SKIPPED（调用处要读），不走 stdout：命令替换是子 shell，
 # 里面改的变量主流程看不见，N/A 那条汇总就会说得不对。
 HOST_ENDS=""
 HOST_SKIPPED=""
+# 宿主系统：uname -s（Darwin / Linux / MINGW64_NT-* / MSYS_NT-* / CYGWIN_NT-*）。
+# 单独抽成函数，test-e3.sh 才能按宿主类型桩替（#1728 三类宿主断言）。
+host_os() { uname -s; }
+# Windows 宿主判定：Git Bash 的 uname -s 是 MINGW* / MSYS* / CYGWIN*（口径同 tools/test-flow-worker.sh）。
+is_windows_host() { case "$(host_os)" in MINGW* | MSYS* | CYGWIN*) return 0 ;; *) return 1 ;; esac; }
 host_ends() { # host_ends <空格分隔的端>
   local e
   HOST_ENDS=""
   HOST_SKIPPED=""
   for e in $1; do
-    if [ "$e" = mac ] && [ "$(uname -s)" != Darwin ]; then
+    if [ "$e" = mac ] && [ "$(host_os)" != Darwin ]; then
       log "跳过 ${e}：本机不是 macOS（mac 端要在 macOS 上验）"
+      HOST_SKIPPED="${HOST_SKIPPED:+$HOST_SKIPPED }$e"
+      continue
+    fi
+    if [ "$e" = win ] && ! is_windows_host; then
+      log "跳过 ${e}：本机不是 Windows（win 端要在 Windows 上验）"
       HOST_SKIPPED="${HOST_SKIPPED:+$HOST_SKIPPED }$e"
       continue
     fi
