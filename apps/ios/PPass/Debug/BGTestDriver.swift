@@ -842,7 +842,15 @@ enum BGTestDriver {
                 if (try? registry.removeFolder(id: record.id)) != nil { removedRecords += 1 }
             }
         }
-        status.write("cleaned", ["removed_dirs": removedDirs, "removed_records": removedRecords, "done": true])
+        // 暂存的同内容素材也要清：seedRun 现在会保留它，留着会被下一场 seedRun 一起种进测试相册，
+        // 让 folder-dedupe 的确认数与 photo_count 对不上。只按前缀删，不碰 seed 里别的文件。
+        let seed = status.url.deletingLastPathComponent().appendingPathComponent("seed", isDirectory: true)
+        let staged = (try? FileManager.default.contentsOfDirectory(at: seed, includingPropertiesForKeys: nil)) ?? []
+        var removedStaged = 0
+        for url in staged where url.lastPathComponent.hasPrefix(stagedDedupPrefix) {
+            if (try? FileManager.default.removeItem(at: url)) != nil { removedStaged += 1 }
+        }
+        status.write("cleaned", ["removed_dirs": removedDirs, "removed_records": removedRecords, "removed_staged": removedStaged, "done": true])
     }
 
     /// 弹系统目录选择器；授权回调内经真实 addFolder 登记（回调返回后作用域即失效，一切必须在回调内完成）。
@@ -907,6 +915,8 @@ private final class FolderPickBox: NSObject, UIDocumentPickerDelegate {
                     let seedDir = status.url.deletingLastPathComponent().appendingPathComponent("seed", isDirectory: true)
                     try FileManager.default.createDirectory(at: seedDir, withIntermediateDirectories: true)
                     let dest = seedDir.appendingPathComponent("\(BGTestDriver.stagedDedupPrefix)\(smallest.0.pathExtension.lowercased())")
+                    // 同名暂存文件可能来自上一轮：先删再拷，否则 copyItem 直接抛错让 pick 失败
+                    try? FileManager.default.removeItem(at: dest)
                     try FileManager.default.copyItem(at: smallest.0, to: dest)
                     staged = ["name": dest.lastPathComponent, "size": smallest.1]
                 }
