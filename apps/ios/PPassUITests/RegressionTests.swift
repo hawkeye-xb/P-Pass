@@ -22,46 +22,28 @@ final class RegressionTests: UIRegressCase {
         settle(5)
     }
 
-    // MARK: 设置页「自动备份」开关触发照片权限
-
+    // 设置页「自动备份」只写规则，不再主动弹照片权限；反向用例用真实的「再关一次开关」判反证。
     func testSettingsRuleFull() {
-        ruleCase(answer: inverted ? SystemButton.dontAllow : SystemButton.photosFull)
+        ruleCase()
     }
 
     func testSettingsRuleLimited() {
-        ruleCase(answer: inverted ? SystemButton.photosFull : SystemButton.photosLimited, limited: !inverted)
+        ruleCase()
     }
 
     // 「设置页拒绝」一例等 #1453 的日志行（settings: auto-rule photo access after prompt=none）合入后再加：
     // 现在 App 不打那一行，加了必红，会让整个回归永久退出 1。
 
-    private func ruleCase(answer: [String], limited: Bool = false) {
+    private func ruleCase() {
         launchFreshAndPair(resetPhotos: true)
         reachSettingsViaPick()
         let rule = toggle(id: "autoBackupRuleToggle")
         flip(rule)
-        answerSystemAlert(answer, what: "photos")
-        if limited {
-            // 「限制访问」之后系统给一页选照片：选第一张、点完成。
-            pickOnePhotoInLimitedSheet()
+        if inverted {
+            // 反向操作：关闭刚打开的规则，最终不应出现 enabled=true 的通过行。
+            flip(rule)
         }
         settle(5)
-    }
-
-    private func pickOnePhotoInLimitedSheet() {
-        let deadline = Date().addingTimeInterval(20)
-        while Date() < deadline {
-            // 选第二张：第一张已经在前面的「先挑几张试试」里导入过，再选它，部分权限发出去的张数会是 n=0。
-            if let cell = pickerCell(at: 1) ?? firstPickerCell() {
-                tapPickerCell(cell)
-                UIReg.say("LIMITED_SELECTED 1")
-                tapButton(SystemButton.limitedDone, what: "limited-done")
-                return
-            }
-            usleep(500_000)
-        }
-        dump("limited-sheet")
-        XCTFail("20 秒内没看到「限制访问」的选照片页")
     }
 
     // MARK: 设置页「挑几张传」
