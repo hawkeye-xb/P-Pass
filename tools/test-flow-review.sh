@@ -249,7 +249,7 @@ echo "==> #1790：refs 是部分交付，仍能对照关联卡评审"
 reset pass
 printf 'refs #77\n\n本 PR 只交付场景代码，其余验收项保持未完成。\n' >"$FAKE/pr.body"
 REVIEW 7 >/dev/null 2>&1 && has '### 卡 #77' "$FAKE/agent.stdin" && ok "refs #77 → 加载关联卡，不再准备失败" || bad "refs #77 无法评审"
-has '部分交付（refs）' "$FAKE/agent.stdin" && has '不要仅因整卡还有剩余验收项' "$FAKE/agent.stdin" && ok "refs 提示词明确部分交付边界" || bad "refs 提示词没有部分交付边界"
+has '交付口径：部分交付（refs）' "$FAKE/agent.stdin" && ! has '交付口径：整卡交付（closes/fixes/resolves）' "$FAKE/agent.stdin" && has '不要仅因整卡还有剩余验收项' "$FAKE/agent.stdin" && ok "refs 提示词明确部分交付边界" || bad "refs 提示词没有部分交付边界"
 reset fail
 REVIEW 7 >/dev/null 2>&1 && bad "refs 放宽了正确性/范围判定" || ok "refs 下的阻断意见仍判未通过"
 reset pass
@@ -259,6 +259,16 @@ printf 'tools/x.sh\n' >"$FAKE/pr.files"
 reset pass
 printf 'closes #77\n' >"$FAKE/pr.body"
 REVIEW 7 >/dev/null 2>&1 && has '交付口径：整卡交付（closes/fixes/resolves）' "$FAKE/agent.stdin" && ! has '交付口径：部分交付（refs）' "$FAKE/agent.stdin" && ok "closes 保持整卡交付口径" || bad "closes 的整卡口径被改变"
+printf '**范围（只许动这些）**：\n```\ntools/x.sh\n```\n\n**验收场景**：SECOND-CARD 验收。\n' >"$FAKE/issue.78"
+reset pass
+printf 'closes #77\ncloses #78\n' >"$FAKE/pr.body"
+REVIEW 7 >/dev/null 2>&1 && [ "$(grep -c '交付口径：整卡交付（closes/fixes/resolves）' "$FAKE/agent.stdin")" -eq 2 ] && ! has '交付口径：部分交付（refs）' "$FAKE/agent.stdin" && ok "多张 closes 卡都保持整卡交付" || bad "多张 closes 卡被降级为部分交付"
+reset pass
+printf 'closes #77\nrefs #78\n' >"$FAKE/pr.body"
+REVIEW 7 >/dev/null 2>&1 || bad "closes/refs 混合关联无法评审"
+awk '/^### 卡 #77/{on=1} /^### 卡 #78/{on=0} on' "$FAKE/agent.stdin" >"${TMP}/card77"
+awk '/^### 卡 #78/{on=1} on' "$FAKE/agent.stdin" >"${TMP}/card78"
+has '交付口径：整卡交付（closes/fixes/resolves）' "${TMP}/card77" && ! has '交付口径：部分交付（refs）' "${TMP}/card77" && has '交付口径：部分交付（refs）' "${TMP}/card78" && ! has '交付口径：整卡交付（closes/fixes/resolves）' "${TMP}/card78" && ok "closes/refs 混合关联逐卡保留交付口径" || bad "closes/refs 混合关联的交付口径错误"
 printf 'MERGED' >"$FAKE/pr.state"
 reset pass
 REVIEW 7 >/dev/null 2>&1 && bad "已合并的 PR 也评审了" || ok "PR 不是 open → 拒绝"

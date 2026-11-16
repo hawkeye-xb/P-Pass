@@ -167,10 +167,11 @@ for n in $CARDS; do
   flow_parse_scope "$I_BODY"
   accept="$(printf '%s\n' "$I_BODY" | awk '/^\*\*验收场景\*\*|^## .*验收/ { on = 1 } on { print }')"
   repro="$(printf '%s\n' "$I_BODY" | awk '/^\*\*复现路径\*\*/ { on = 1 } on { print }')"
-  case " ${CLOSE_CARDS} " in
-    *" ${n} "*) DELIVERY_NOTE="整卡交付（closes/fixes/resolves）：按整卡验收场景核对。" ;;
-    *) DELIVERY_NOTE="部分交付（refs）：只评本 PR 承诺交付的内容，不要仅因整卡还有剩余验收项就判阻断；把未完成写成完成仍属误放行。" ;;
-  esac
+  if printf '%s\n' "$CLOSE_CARDS" | grep -Fxq "$n"; then
+    DELIVERY_NOTE="整卡交付（closes/fixes/resolves）：按整卡验收场景核对。"
+  else
+    DELIVERY_NOTE="部分交付（refs）：只评本 PR 承诺交付的内容，不要仅因整卡还有剩余验收项就判阻断；把未完成写成完成仍属误放行。"
+  fi
   CARD_TEXT="${CARD_TEXT}
 ### 卡 #${n}：${I_TITLE}
 
