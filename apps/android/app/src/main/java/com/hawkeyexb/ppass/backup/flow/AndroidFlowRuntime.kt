@@ -203,7 +203,7 @@ internal fun liveFlowRuntime(): AndroidFlowRuntime? = synchronized(runtimeLock) 
 
 internal fun flowProjection(context: Context, bucketIds: Set<Long>?, inScopeTotal: Long?, remaining: Long?): FlowProjection? {
     val live = runtimeFor(context.applicationContext) ?: return null
-    return FlowProjection.of(live.store, live.engine.display.value, live.control, bucketIds, inScopeTotal, remaining)
+    return FlowProjection.of(live.store, live.engine.display.value, live.control, bucketIds, inScopeTotal, remaining, live.scopeTimeOf)
 }
 
 // ------------------------------------------------------------------ 生命周期
@@ -218,6 +218,7 @@ internal class AndroidFlowRuntime(
     private val writer: FlowWriter,
     private val scope: CoroutineScope,
     private val sqlite: SqliteOrderStore,
+    val scopeTimeOf: (mediaId: Long, storedSec: Long) -> Long,
     /** #434：运行时没了，引擎自然也不忙了（它的状态收集随 [scope] 一起取消）。 */
     private val onShutdown: () -> Unit = {},
 ) {
@@ -362,6 +363,9 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         }),
         folder = folderSource,
     )
+    val scopeTimeOf = { mediaId: Long, storedSec: Long ->
+        compositeMedia.lookup(mediaId)?.snapshot?.dateAddedSec ?: storedSec
+    }
     val control = FlowControlStore(app.filesDir)
     // #1220：换了线路，两个端点都要换上新套接字——provider 经 network_change 重绑；控制面端点没有重绑入口，
     // 空闲时关掉，下一次用到时按新的绑定重建（忙时它连着的那张网断了自会失败重连）。
@@ -419,11 +423,14 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
             )
         },
         // #1778：目录与相册使用同一来源集合和拍摄时间；旧版已登记目录由 effectiveScope 读现状保留。
-        inScope = { bucket, added ->
-            ruleOn() && (
-                if (com.hawkeyexb.ppass.backup.folder.isFolderId(bucket)) effectiveScope()?.contains(bucket, added) == true
-                else scopeStore.scope()?.contains(bucket, added) == true
-                )
+        // 旧订单查询侧重算：stored 的 date_added_sec 是旧口径（DATE_ADDED），时间门槛按当前来源重算（stored 只作回退）。
+        // 时间条件只在「非全部」范围参判：全部时不做 lookup，别让每张候选都为不需要的时间多读一次来源。
+        inScope = { bucket, added, mediaId ->
+            ruleOn() && run {
+                val effective = if (com.hawkeyexb.ppass.backup.folder.isFolderId(bucket)) effectiveScope() else scopeStore.scope()
+                val effectiveAdded = if (effective?.sinceSec != null) scopeTimeOf(mediaId, added) else added
+                effective?.contains(bucket, effectiveAdded) == true
+            }
         },
         mediaAbsenceTrusted = { mediaAbsenceTrustedNow(app) },
         pairingId = { pairing()?.pairingId?.takeIf { it.isNotBlank() }?.let(::PairingId) },
@@ -455,7 +462,7 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
     // #434：引擎这一轮没结束就不回收 endpoint；一轮结束（含 afterCycle 的审计上报在飞）再由回收器等宽限期。
     scope.launch { engine.status.collect { application.networkIdleReaper.setEngineBusy(it.phase != LoopPhase.IDLE) } }
     engine.start()
-    val built = AndroidFlowRuntime(key, engine, store, control, bridge, route, writer, scope, sqlite) {
+    val built = AndroidFlowRuntime(key, engine, store, control, bridge, route, writer, scope, sqlite, scopeTimeOf) {
         application.networkIdleReaper.setEngineBusy(false)
     }
     synchronized(runtimeLock) {

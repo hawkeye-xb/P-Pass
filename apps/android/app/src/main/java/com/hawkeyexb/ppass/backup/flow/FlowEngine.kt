@@ -65,7 +65,7 @@ internal class FlowEngine(
     private val control: FlowControl,
     private val conditions: () -> Conditions,
     /** #1263：范围 = 相册 + 开始时间（[com.hawkeyexb.ppass.backup.BackupScope.contains]）。 */
-    private val inScope: (bucketId: Long, dateAddedSec: Long) -> Boolean,
+    private val inScope: (bucketId: Long, dateAddedSec: Long, mediaId: Long) -> Boolean,
     /**
      * #459：「MediaStore 里查不到」此刻能不能当「原图被删了」。只有完整相册权限（图片 + 视频）才是 true——
      * 部分授权 / 没授权时看不见的照片同样查不到。**没有默认值**：新的构造点必须想清楚再接（失败关闭）。
@@ -803,11 +803,11 @@ internal class FlowEngine(
         // 传输中不看范围（在飞时相册被移出范围的那一行还要改待传输 + 丢弃半截）；待传输只算范围内的——
         // 否则一行范围外的待传输会让每次触发都空转一次 FGS。
         if (store.currentInStates(setOf(OrderState.TRANSFERRING), limit = 1).isNotEmpty()) return true
-        if (store.currentInStates(setOf(OrderState.PENDING)).any { inScope(it.bucketId, it.dateAddedSec) }) return true
+        if (store.currentInStates(setOf(OrderState.PENDING)).any { inScope(it.bucketId, it.dateAddedSec, it.mediaId) }) return true
         if (store.scanState().dirty) return true
         if (discoveryStep() != null) return true
         if (!reconcile) return false
-        if (store.currentInStates(setOf(OrderState.FAILED)).any { it.attempts < OrderStore.MAX_FAILURES && inScope(it.bucketId, it.dateAddedSec) }) return true
+        if (store.currentInStates(setOf(OrderState.FAILED)).any { it.attempts < OrderStore.MAX_FAILURES && inScope(it.bucketId, it.dateAddedSec, it.mediaId) }) return true
         return askPresence && store.confirmedWithHashAfter(0L, 1).isNotEmpty()
     }
 
@@ -881,7 +881,7 @@ internal class FlowEngine(
                 round.retryAfter = order.id
                 if (order.state == OrderState.FAILED && order.attempts >= OrderStore.MAX_FAILURES) continue
                 // 范围是查询条件：相册被移出范围的待传输 / 失败行不取（相册加回来再取）。
-                if (!inScope(order.bucketId, order.dateAddedSec)) continue
+                if (!inScope(order.bucketId, order.dateAddedSec, order.mediaId)) continue
                 return WorkItem.Existing(order, Origin.RETRY)
             }
             if (batch.isNotEmpty()) continue
@@ -902,7 +902,7 @@ internal class FlowEngine(
         while (true) {
             val page = store.locationRedactedAfter(after, RETRY_BATCH)
             if (page.isEmpty()) return false
-            if (page.any { inScope(it.bucketId, it.dateAddedSec) }) return true
+            if (page.any { inScope(it.bucketId, it.dateAddedSec, it.mediaId) }) return true
             after = page.last().id
         }
     }
@@ -913,7 +913,7 @@ internal class FlowEngine(
             if (page.isEmpty()) return null
             for (order in page) {
                 round.upgradeAfter = order.id
-                if (inScope(order.bucketId, order.dateAddedSec)) return WorkItem.Upgrade(order)
+                if (inScope(order.bucketId, order.dateAddedSec, order.mediaId)) return WorkItem.Upgrade(order)
             }
         }
     }
@@ -1081,7 +1081,7 @@ internal class FlowEngine(
             ?: return endUpgrade(order, LocationVerdict.SOURCE_GONE)
         if (details.snapshot.sourceVersion != order.sourceVersion) return endUpgrade(order, LocationVerdict.VERSION_CHANGED)
         // 范围是查询条件：移出范围的不是待办（[hasUpgradeCandidate] 不数它），相册加回来再补。
-        if (!inScope(details.snapshot.bucketId, details.snapshot.dateAddedSec)) return StepResult.Next
+        if (!inScope(details.snapshot.bucketId, details.snapshot.dateAddedSec, details.snapshot.mediaId)) return StepResult.Next
         val (result, failure) = importWithRetry(details)
         val imported = when (result) {
             is ImportResult.Imported -> result
@@ -1164,7 +1164,7 @@ internal class FlowEngine(
     private suspend fun processFresh(snapshot: MediaSnapshot, origin: Origin, pid: PairingId): StepResult {
         val progress = progressOf(snapshot, origin)
         val details = withContext(io) { media.lookup(snapshot.mediaId) }
-        if (details == null || !inScope(details.snapshot.bucketId, details.snapshot.dateAddedSec)) {
+        if (details == null || !inScope(details.snapshot.bucketId, details.snapshot.dateAddedSec, details.snapshot.mediaId)) {
             progress.write()
             return StepResult.Next
         }
@@ -1219,7 +1219,7 @@ internal class FlowEngine(
             settleSourceMissing(order, if (details == null) "gone" else "version_changed", discard = transferring)
             return StepResult.Next
         }
-        if (!inScope(details.snapshot.bucketId, details.snapshot.dateAddedSec)) {
+        if (!inScope(details.snapshot.bucketId, details.snapshot.dateAddedSec, details.snapshot.mediaId)) {
             // 在途的这张所在相册被移出范围：不续传，丢弃半截（#413 裁定 8）；它从待办里消失（范围是查询条件）。
             if (transferring && store.transition(order.id, setOf(OrderState.TRANSFERRING), OrderState.PENDING)) {
                 delivery.discardPartial(order.id, pid)
@@ -1448,7 +1448,7 @@ internal class FlowEngine(
             }
             for (order in page) {
                 val hash = order.contentHash ?: continue
-                if (hash !in missing || !inScope(order.bucketId, order.dateAddedSec)) continue
+                if (hash !in missing || !inScope(order.bucketId, order.dateAddedSec, order.mediaId)) continue
                 if (order.sourceMissing) {
                     // 桌面缺 + 手机原图也没了（#415 裁决 2；MOB-87 卡面「对账边界」第 6 条：标 UNRECOVERABLE、落审计事实、
                     // **不提示**）：不补传、不建行，所以也不进「无法恢复」横幅。这条审计的读者是我们（查「账本说谎」），
@@ -1491,7 +1491,7 @@ internal class FlowEngine(
         // 枚举（SAF 递归读）放 io；**建行留在写者线程**（order store 单写者，off-writer 直接 IllegalStateException）。
         val snapshots = withContext(io) { discovery.invoke().toList() }
         for (snapshot in snapshots) {
-            if (!inScope(snapshot.bucketId, snapshot.dateAddedSec)) continue
+            if (!inScope(snapshot.bucketId, snapshot.dateAddedSec, snapshot.mediaId)) continue
             if (!needsNewOrder(snapshot)) continue
             // 与脏扫描建行同一判定（needsNewOrder 幂等：同轮扫到也不重复）；PENDING = 还没导入，交给 retry 取件。
             store.insert(NewOrder(snapshot.mediaId, snapshot.sourceVersion, snapshot.bucketId, null, OrderState.PENDING, pid.value, dateAddedSec = snapshot.dateAddedSec))
@@ -1557,7 +1557,7 @@ internal class FlowEngine(
                         if (order.sourceMissing) clear += order.id
                         continue
                     }
-                    if (!inScope(order.bucketId, order.dateAddedSec)) continue
+                    if (!inScope(order.bucketId, order.dateAddedSec, order.mediaId)) continue
                     unlisted += order
                 }
             }
@@ -1603,7 +1603,7 @@ internal class FlowEngine(
             }
         }
         for (order in store.currentInStates(OPEN)) {
-            if (order.mediaId in todo || !inScope(order.bucketId, order.dateAddedSec) || store.isSkipped(order.mediaId)) continue
+            if (order.mediaId in todo || !inScope(order.bucketId, order.dateAddedSec, order.mediaId) || store.isSkipped(order.mediaId)) continue
             todo += order.mediaId
         }
         return todo.size

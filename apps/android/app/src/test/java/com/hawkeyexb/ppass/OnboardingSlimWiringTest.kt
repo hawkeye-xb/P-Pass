@@ -62,6 +62,21 @@ class OnboardingSlimWiringTest {
     }
 
     @Test
+    fun legacy_order_scope_decisions_recalculate_from_the_current_source() {
+        // #1778 旧订单查询侧重算：引擎的范围门槛带 mediaId 走 runtime 的 scopeTimeOf（按当前来源重算、stored 只作回退）；
+        // 首页账目投影同样带上。反证：inScope 退回两参（只用 stored 值）或投影不传 scopeTimeOf → 红。
+        val runtime = File("src/main/java/com/hawkeyexb/ppass/backup/flow/AndroidFlowRuntime.kt").readText()
+        assertTrue("范围门槛带 mediaId（旧订单重算的缝）", runtime.contains("inScope = { bucket, added, mediaId ->"))
+        assertTrue("旧订单按当前来源重算，stored 只作回退", runtime.contains("scopeTimeOf(mediaId, added)"))
+        assertTrue("运行时构造 scopeTimeOf 用组合源 lookup", runtime.contains("compositeMedia.lookup(mediaId)"))
+        val holder = File("src/main/java/com/hawkeyexb/ppass/backup/BackupUiStateHolder.kt").readText()
+        assertTrue("首页账目投影带重算", holder.contains("scopeTimeOf = runtime.scopeTimeOf"))
+        val projection = File("src/main/java/com/hawkeyexb/ppass/backup/flow/FlowUiProjection.kt").readText()
+        assertTrue("计数入口把 scopeTimeOf 传给 countCurrentByState", projection.contains("store.countCurrentByState(bucketIds, sinceSec, scopeTimeOf)"))
+        assertTrue("已备份计数同样带重算", projection.contains("store.countConfirmedPresent(bucketIds, sinceSec, scopeTimeOf)"))
+    }
+
+    @Test
     fun photos_tab_guides_to_the_scope_picker_when_no_album_is_chosen() {
         // #1322：「还没有选择相册」并入引导位第一步（开启范围备份）：开关开着只是没选相册 → 按钮直达选范围页。
         val photos = File("src/main/java/com/hawkeyexb/ppass/ui/PhotosScreen.kt").readText()

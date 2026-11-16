@@ -491,7 +491,7 @@ private class EngineViewGateway(private val runtime: AndroidFlowRuntime) : Engin
     override val revision: Flow<Long> = engine.revision
 
     override fun facts(bucketIds: Set<Long>?, inScopeTotal: Long?, sinceSec: Long?): FlowProjection =
-        FlowProjection.facts(runtime.store, runtime.control, bucketIds, inScopeTotal, view = null, sinceSec = sinceSec)
+        FlowProjection.facts(runtime.store, runtime.control, bucketIds, inScopeTotal, view = null, sinceSec = sinceSec, scopeTimeOf = runtime.scopeTimeOf)
 
     override suspend fun pause() {
         engine.pause().await()
