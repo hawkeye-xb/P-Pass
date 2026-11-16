@@ -13,11 +13,6 @@ ios_lane_select
 command -v xcodegen >/dev/null || { echo "error: 缺 xcodegen（brew install xcodegen）" >&2; exit 1; }
 command -v jq >/dev/null || { echo "error: 缺 jq（brew install jq）" >&2; exit 1; }
 
-if [ "${PPASS_IOS_TEST_PLAN_ONLY:-0}" = 1 ]; then
-  ios_lane_print_plan "$ROOT" "$MANIFEST"
-  exit 0
-fi
-
 if ios_lane_is_device; then
   ios_lane_validate_manifest "$ROOT" "$MANIFEST"
   ios_lane_print_plan "$ROOT" "$MANIFEST"
@@ -28,8 +23,21 @@ if ios_lane_is_device; then
     SKIP_ARGS+=("-skip-testing" "PPassTests/$name")
   done < <(grep -Ev '^[[:space:]]*(#|$)' "$MANIFEST")
 else
-  UDID=$("$ROOT/tools/ios/sim.sh" udid)
+  if [ "${PPASS_IOS_TEST_PLAN_ONLY:-0}" = 1 ]; then
+    UDID=SIMULATOR_UDID
+  else
+    UDID=$("$ROOT/tools/ios/sim.sh" udid)
+  fi
   SKIP_ARGS=()
+fi
+
+# 计划与实际执行共用同一份 destination / SKIP_ARGS，防止计划说没跳过、真实命令却跳过。
+if [ "${PPASS_IOS_TEST_PLAN_ONLY:-0}" = 1 ]; then
+  ios_lane_print_plan "$ROOT" "$MANIFEST"
+  printf 'XCODEBUILD_DESTINATION=id=%s\n' "$UDID"
+  printf 'XCODEBUILD_SKIP_COUNT=%s\n' "${#SKIP_ARGS[@]}"
+  for arg in ${SKIP_ARGS[@]+"${SKIP_ARGS[@]}"}; do printf 'XCODEBUILD_ARG=%s\n' "$arg"; done
+  exit 0
 fi
 
 # App 依赖传输 XCFramework（TransportFFITests/Generated，不入库）：缺就先生成（增量编译，已有则跳过）。
@@ -46,6 +54,8 @@ if ios_lane_is_device; then
     -destination "id=${UDID}" \
     -derivedDataPath "$DERIVED" \
     DEVELOPMENT_TEAM="${DEVELOPMENT_TEAM:-2WJUWVUJBN}" \
+    -allowProvisioningUpdates \
+    -allowProvisioningDeviceRegistration \
     "${SKIP_ARGS[@]}" \
     "$@"
 else

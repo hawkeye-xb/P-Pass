@@ -20,31 +20,41 @@ ios_lane_real_udid() {
   fi
   rm -f "$json"
   count="$(printf '%s\n' "$list" | grep -c . || true)"
-  # 未指定时只接受唯一一台，不能悄悄把测试装到第一台设备。
-  [ "$count" = 1 ] || return 1
-  printf '%s\n' "$list"
+  # 未指定时只接受唯一一台：没有设备与多台设备必须分开，后者不能回退模拟器装错目标。
+  case "$count" in
+    1) printf '%s\n' "$list" ;;
+    0) return 1 ;;
+    *) return 2 ;;
+  esac
 }
 
 ios_lane_select() {
-  local udid
+  local udid rc
   # CI 与显式模拟器选择优先，不能继承上一次本机分轨。
   if [ "${CI:-}" = true ] || [ "${PPASS_IOS_FORCE_SIMULATOR:-0}" = 1 ]; then
     PPASS_IOS_LANE=simulator
     PPASS_IOS_HARDWARE_UDID=""
   elif [ -n "${PPASS_IOS_LANE:-}" ]; then
     :
-  elif udid="$(ios_lane_real_udid)" && [ -n "$udid" ]; then
-    PPASS_IOS_LANE=device
-    PPASS_IOS_HARDWARE_UDID="$udid"
   else
-    PPASS_IOS_LANE=simulator
-    PPASS_IOS_HARDWARE_UDID=""
+    if udid="$(ios_lane_real_udid)" && [ -n "$udid" ]; then
+      PPASS_IOS_LANE=device
+      PPASS_IOS_HARDWARE_UDID="$udid"
+    else
+      rc=$?
+      if [ "$rc" -eq 2 ]; then
+        echo "error: 检测到多台已配对 iOS 设备；用 PPASS_IOS_TEST_DEVICE 显式指定，不能回退模拟器。" >&2
+        return 2
+      fi
+      PPASS_IOS_LANE=simulator
+      PPASS_IOS_HARDWARE_UDID=""
+    fi
   fi
   export PPASS_IOS_LANE PPASS_IOS_HARDWARE_UDID
 }
 
 ios_lane_is_device() {
-  ios_lane_select
+  ios_lane_select || return $?
   [ "$PPASS_IOS_LANE" = device ]
 }
 

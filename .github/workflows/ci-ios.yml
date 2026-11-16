@@ -92,6 +92,7 @@ jobs:
           # 原 workflow 级 paths 原样搬来；依据见文件头「触发路径」。
           paths: |
             .github/workflows/ci-ios.yml
+            justfile
             .github/actions/ios-testflight/**
             apps/ios/**
             tools/ios/**

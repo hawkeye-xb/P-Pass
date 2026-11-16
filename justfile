@@ -505,9 +505,13 @@ ios-test *args:
   done
   [ -z "$lang" ] || langargs="$(bash tools/ios/sim.sh lang-args "$lang")"
   source tools/ios/lanes.sh
+  # 语言测试必须保留 UIResourceTests 的宿主语言断言，不能因真机分轨跳过整类。
+  [ -z "$lang" ] || export PPASS_IOS_FORCE_SIMULATOR=1
   ios_lane_select
-  before="$(bash tools/ios/sim.sh booted)"
-  trap 'bash tools/ios/sim.sh shutdown-new "$before"' EXIT
+  if [ "$PPASS_IOS_LANE" = simulator ]; then
+    before="$(bash tools/ios/sim.sh booted)"
+    trap 'bash tools/ios/sim.sh shutdown-new "$before"' EXIT
+  fi
   if [ -n "$lang" ]; then
     # shellcheck disable=SC2086 # 刻意按空格拆成参数
     bash tools/ios/test.sh $langargs
