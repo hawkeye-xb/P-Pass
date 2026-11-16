@@ -127,19 +127,20 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
         ScopeKey.inScope(bucketId, selected: selected, since: since)
     }
 
-    /// 按拍摄时间（`creationDate`）筛出时间档内的那些 id。「全部」不查库。
-    /// iOS 偏离：Android 按 `DATE_ADDED`（进入相册的时间），PhotoKit 没有公开的对应字段（登记在 tokens.json platforms.ios）。
+    /// 拍摄时间优先，只有 creationDate 缺失才用 modificationDate。预查询必须保留「creationDate 为空」的候选，
+    /// 否则回退项会在 snapshots 之前就被漏掉。
     static func inTime(_ ids: Set<String>, since: BackupSince) -> Set<String> {
         guard case .since(let ms) = since, !ids.isEmpty else { return ids }
         let options = PHFetchOptions()
-        options.predicate = NSPredicate(format: "creationDate >= %@", Date(timeIntervalSince1970: Double(ms) / 1000) as NSDate)
+        let start = Date(timeIntervalSince1970: Double(ms) / 1000) as NSDate
+        options.predicate = NSPredicate(format: "creationDate >= %@ OR (creationDate == nil AND modificationDate >= %@)", start, start)
         var out = Set<String>()
         PHAsset.fetchAssets(withLocalIdentifiers: Array(ids), options: options).enumerateObjects { a, _, _ in out.insert(a.localIdentifier) }
         return out
     }
 
     static func capturedAtMs(_ asset: PHAsset) -> Int64? {
-        asset.creationDate.map { Int64($0.timeIntervalSince1970 * 1000) }
+        (asset.creationDate ?? asset.modificationDate).map { Int64($0.timeIntervalSince1970 * 1000) }
     }
 
     /// 所属可选相册（每张排序）：全量对账用 `all()` 一次拼全表；取件与 lookup 用 `of(ids)` 只反查手里这几张。
@@ -221,7 +222,7 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
         // 大小在取原图之前不可知（公开 API 不给，#1016）：0 = 未知，引擎以导入时的实际字节数为准。
         let size: Int64 = 0
         let mime = res.flatMap { UTType($0.uniformTypeIdentifier)?.preferredMIMEType } ?? "application/octet-stream"
-        let captured = Int64((asset.creationDate ?? .distantPast).timeIntervalSince1970 * 1000)
+        let captured = Int64((asset.creationDate ?? asset.modificationDate ?? .distantPast).timeIntervalSince1970 * 1000)
         return MediaDetails(snapshot: snap, fileName: res?.originalFilename ?? mediaId, mimeType: mime,
                             sizeBytes: size, captureAtMs: max(captured, 0))
     }

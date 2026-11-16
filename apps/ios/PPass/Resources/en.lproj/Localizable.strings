@@ -97,8 +97,8 @@
 "last_hours_ago" = "%1$ld h ago";
 "rule_notify" = "Notifications";
 "setting_version" = "Version";
-"bucket_title" = "Photos to back up";
-"bucket_hint" = "Only checked albums are backed up.";
+"bucket_title" = "Backup sources";
+"bucket_hint" = "Selected albums and folders use the same time range.";
 "bucket_empty" = "No photos or videos on this phone.";
 "bucket_loading" = "Reading albums…";
 "bucket_count" = "%1$ld";

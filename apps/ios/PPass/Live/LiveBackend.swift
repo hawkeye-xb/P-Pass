@@ -85,8 +85,9 @@ final class LiveBackend: @unchecked Sendable {
     /// CompositeWiringTests 共用同一份函数（测试核对的就是引擎拿到的产物）。
     static func assembleMedia(folderSources: [FolderRecord], registry: FolderRegistry, directory: URL,
                               photoSource: MediaSource, photoImporter: MediaImporter,
-                              provider: NativeProvider, logger: CoreLogger) -> (media: CompositeMediaSource, importer: CompositeImporter) {
-        let parts = folderParts(records: folderSources, registry: registry, directory: directory, provider: provider, logger: logger)
+                              provider: NativeProvider, logger: CoreLogger,
+                              folderScope: FolderScopeProvider? = nil) -> (media: CompositeMediaSource, importer: CompositeImporter) {
+        let parts = folderParts(records: folderSources, registry: registry, directory: directory, provider: provider, logger: logger, folderScope: folderScope)
         return (media: CompositeMediaSource(library: photoSource, others: parts.sources),
                 importer: CompositeImporter(library: photoImporter, others: parts.importers))
     }
@@ -94,17 +95,29 @@ final class LiveBackend: @unchecked Sendable {
     /// #1763：records → 目录来源 / 导入器。assembleMedia 与 refreshFolderSources 共用的同一份映射——
     /// 运行时替换与首次装配必须产出一模一样的集合，不另做实施分支。
     static func folderParts(records: [FolderRecord], registry: FolderRegistry, directory: URL,
-                            provider: NativeProvider, logger: CoreLogger) -> (sources: [FolderMediaSource], importers: [FolderImporter]) {
-        (records.map { FolderMediaSource(registry: registry, sourceId: $0.id, directory: directory, logger: logger) },
+                            provider: NativeProvider, logger: CoreLogger,
+                            folderScope: FolderScopeProvider? = nil) -> (sources: [FolderMediaSource], importers: [FolderImporter]) {
+        (records.map { FolderMediaSource(registry: registry, sourceId: $0.id, directory: directory, logger: logger, scope: folderScope) },
          records.map { FolderImporter(registry: registry, sourceId: $0.id, directory: directory, provider: provider, logger: logger) })
     }
 
-    /// #1731：引擎的 inScope（装配注入三处之一）：folder: 绕过共享 since 时间档（ADR §4：Folder 的范围判断
-    /// 不看 PhotoKit 的时间档）；PhotoKit 走现有 ScopeKey.inScope。folder:<sourceId> 前缀由
-    /// FolderMediaSource.bucketId 生成。与 CompositeWiringTests 共用同一份函数。
+    /// 相册与文件夹共用同一个范围键：任一所属来源被选中且有效拍摄时间在档位内。
     static func engineInScope(_ bucketId: String, selected: Set<String>, since: BackupSince) -> Bool {
-        if bucketId.hasPrefix("folder:") { return true }
-        return PhotoMediaSource.inScope(bucketId: bucketId, selected: selected, since: since)
+        ScopeKey.inScope(bucketId, selected: selected, since: since)
+    }
+
+    /// 目录源与 PhotoKit 读取同一份范围存值。known 用来区分旧版目录（本来就在备份）与新版明确取消。
+    static func folderScopeProvider(media: LiveMediaLibrary, logger: CoreLogger) -> FolderScopeProvider {
+        {
+            do {
+                let known = media.knownAlbums()
+                guard let selected = try media.savedScope() else { return ([], known, .all) }
+                return (selected, known, try media.savedSince() ?? .all)
+            } catch {
+                logger.log("backup-scope: folder scope unreadable, engine sees an empty scope: \(error)")
+                return ([], ["folder:"], .all)
+            }
+        }
     }
 
     /// 起 App 的第一件事是取身份：读不到钥匙串（开机后还没解锁过）抛 `IdentityStoreError.locked`，
@@ -207,7 +220,8 @@ final class LiveBackend: @unchecked Sendable {
         let photoImporter = PhotoImporter(provider: provider, tempRoot: fm.temporaryDirectory.appendingPathComponent("ppass-originals"),
                                           pickedRoot: fm.temporaryDirectory.appendingPathComponent(OriginalCachePaths.pickedScratchDirName))
         let assembled = Self.assembleMedia(folderSources: folderRegistry.allRecords(), registry: folderRegistry, directory: dir,
-                                           photoSource: photoSource, photoImporter: photoImporter, provider: provider, logger: logger)
+                                           photoSource: photoSource, photoImporter: photoImporter, provider: provider, logger: logger,
+                                           folderScope: Self.folderScopeProvider(media: media, logger: logger))
         // #1763：留存注册表与 Composite 引用——设置页添加 / 移除 / 重新授权后经 refreshFolderSources()
         // 替换 folder 集合（引擎 media/importer 是 let，这是唯一出口）。
         folders = folderRegistry
@@ -338,7 +352,8 @@ final class LiveBackend: @unchecked Sendable {
     /// （在飞导入晚于退役完成的，由 FolderImporter.deinit 兜底收掉）。
     func refreshFolderSources() {
         let records = folders.allRecords()
-        let parts = Self.folderParts(records: records, registry: folders, directory: root.url, provider: provider, logger: logger)
+        let parts = Self.folderParts(records: records, registry: folders, directory: root.url, provider: provider, logger: logger,
+                                     folderScope: Self.folderScopeProvider(media: media, logger: logger))
         folderPartsLock.lock()
         let prior = folderPartsCache
         folderPartsLock.unlock()
@@ -375,6 +390,12 @@ final class LiveBackend: @unchecked Sendable {
         } catch {
             return false
         }
+        if record.status == FolderMediaSource.pendingScopeStatus, root.record.status != FolderMediaSource.pendingScopeStatus {
+            // 书签 stale 重建只更新授权，不能把待保存目录顺带标成已选。
+            var pending = root.record
+            pending.status = FolderMediaSource.pendingScopeStatus
+            _ = registry.upsert(pending)
+        }
         do {
             return try await FolderBookmarks.withScope(root.url) { url in
                 var isDir: ObjCBool = false
@@ -385,16 +406,23 @@ final class LiveBackend: @unchecked Sendable {
         }
     }
 
-    /// 添加：系统目录选择器授权回调内调用（url 带安全作用域）。书签在作用域内生成；登记成功才替换进
-    /// Composite 并叫醒一轮带对账的备份（trigger(.scopeAdded) 自带 markScanDirty，新目录在下一轮被发现）。
+    /// 添加：系统目录选择器授权回调内调用（url 带安全作用域）。只登记授权并替换进 Composite；
+    /// 不在范围保存前叫醒备份。范围页把新目录默认勾进待保存集合，统一保存时才通过 albumsChosen 唤醒。
     /// 显示名不进日志（用户目录名，ADR §2「不写日志」口径）。
     func addFolderSource(at url: URL, displayName: String) throws {
         let opened = url.startAccessingSecurityScopedResource()
         defer { if opened { url.stopAccessingSecurityScopedResource() } }
         let id = try folders.addFolder(at: url, displayName: displayName)
+        do {
+            guard var record = folders.record(id: id) else { throw FolderSourceError(reason: "folder registration missing") }
+            record.status = FolderMediaSource.pendingScopeStatus
+            guard folders.upsert(record) else { throw FolderSourceError(reason: "pending scope save failed") }
+        } catch {
+            try? folders.removeFolder(id: id)
+            throw error
+        }
         logger.log("folder \(id): added via settings")
         refreshFolderSources()
-        Task { _ = await engine.trigger(.scopeAdded) }
     }
 
     /// 重新授权：既有记录原子换书签（保留 id 与 opaque 映射）。成功后叫醒一轮——SourceUnavailable 等待中
@@ -413,6 +441,13 @@ final class LiveBackend: @unchecked Sendable {
     /// SourceUnavailable 等待不自醒（onDesktopReachable wake=false），用户移除的目录若正是等待中的来源，
     /// 不起轮就会一直停在「等待重新授权」；缺席判定也只在带对账的轮里发生）。
     func removeFolderSource(id: String) throws {
+        let store = BackupScopeStore(directory: root.url, daemonNodeId: pairingStore.load()?.daemonNodeId, logger: logger)
+        if var selected = try store.selectedBucketIds() {
+            let removed = selected.remove(FolderMediaSource.bucketId(sourceId: id)) != nil
+            if removed {
+                try store.saveScope(selected: selected, allCurrent: store.knownBucketIds() ?? [], since: store.since() ?? .all)
+            }
+        }
         try folders.removeFolder(id: id)
         logger.log("folder \(id): removed via settings")
         refreshFolderSources()

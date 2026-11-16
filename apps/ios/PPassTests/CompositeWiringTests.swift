@@ -1,5 +1,5 @@
 // #1731 卡 3：LiveBackend 装配的 wiring 测试——统一经 Composite（无目录也走 Composite，ADR §1「不另做实施分支」）、
-// 按全部 folderSources 装配多来源、folder:<sourceId> 按 mediaId 里的 sourceId 精确路由、inScope 对 folder: 绕过 since。
+// 按全部 folderSources 装配多来源、folder:<sourceId> 按 mediaId 里的 sourceId 精确路由、folder 与相册统一范围和时间过滤。
 // 用装配函数本体核对：LiveBackend 引擎拿到的 media / importer / inScope 就是 assembleMedia / engineInScope 的产物，
 // 不构造 LiveBackend（要真钥匙串 / 控制面）；装配件用与 FolderImporterTests 相同的本地临时目录 + 真 NativeProvider。
 import XCTest
@@ -71,19 +71,24 @@ final class CompositeWiringTests: XCTestCase {
         let id2 = try XCTUnwrap(ids.first { $0.hasPrefix("folder:\(s2):") }, "来源 2 的 id 要出现在装配扫描里（全部来源都装配）")
         // 精确路由：id 只会被自己的来源答出（目录来源对别人前缀的 id 返回 nil），bucketId 带自己的 sourceId。
         let d1 = try await assembled.media.lookup(id1)
-        XCTAssertEqual(try XCTUnwrap(d1).snapshot.bucketId, "folder:\(s1)", "folder:\(s1) 的 id 要路由到来源 1")
+        XCTAssertEqual(ScopeKey.decode(try XCTUnwrap(d1).snapshot.bucketId).albums, ["folder:\(s1)"], "folder:\(s1) 的 id 要路由到来源 1")
         let d2 = try await assembled.media.lookup(id2)
-        XCTAssertEqual(try XCTUnwrap(d2).snapshot.bucketId, "folder:\(s2)", "folder:\(s2) 的 id 要路由到来源 2")
+        XCTAssertEqual(ScopeKey.decode(try XCTUnwrap(d2).snapshot.bucketId).albums, ["folder:\(s2)"], "folder:\(s2) 的 id 要路由到来源 2")
         // 装配里没有的 sourceId：路由不到（不误落 library，也不误落到别的目录来源）。
         let unknown = try await assembled.media.lookup("folder:gone:z")
         XCTAssertNil(unknown)
     }
 
-    // inScope（装配注入三处之一）：folder: 绕过共享 since（ADR §4）；PhotoKit 走现有 ScopeKey 判定。
-    // 反证：去掉 folder: 豁免 → folder bucket 按相册判定，selected 为空判 false → 第一条红。
-    func testEngineInScopeBypassesSinceForFolder() {
-        XCTAssertTrue(LiveBackend.engineInScope("folder:\(UUID().uuidString)", selected: [], since: .since(ms: 123)),
-                      "folder: 绕过共享 since（目录来源不看 PhotoKit 时间档）")
+    // inScope（装配注入三处之一）：folder 与 PhotoKit 共用选中来源和拍摄时间判定。
+    // 反证：恢复 folder: 豁免 → selected=[] 仍返回 true；去掉时间判定 → old 仍返回 true。
+    func testEngineInScopeAppliesSelectionAndCaptureTimeForFolder() {
+        let folder = "folder:source-a"
+        let current = ScopeKey.encode(albums: [folder], capturedAtMs: 124)
+        let old = ScopeKey.encode(albums: [folder], capturedAtMs: 122)
+        XCTAssertTrue(LiveBackend.engineInScope(current, selected: [folder], since: .since(ms: 123)))
+        XCTAssertFalse(LiveBackend.engineInScope(folder, selected: [], since: .all), "旧格式 folder 键也不能绕过取消勾选")
+        XCTAssertFalse(LiveBackend.engineInScope(current, selected: [], since: .all), "取消勾选文件夹后不在范围内")
+        XCTAssertFalse(LiveBackend.engineInScope(old, selected: [folder], since: .since(ms: 123)), "文件夹同样按拍摄时间过滤")
         XCTAssertFalse(LiveBackend.engineInScope("album-x", selected: [], since: .all), "PhotoKit 未选中的相册不在范围内")
         XCTAssertTrue(LiveBackend.engineInScope("album-x", selected: ["album-x"], since: .all), "PhotoKit 选中的相册在范围内")
     }

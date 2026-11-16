@@ -1,5 +1,6 @@
 // #1731 卡 2：FolderMediaSource 的合同测试（游标契约 / 过滤 / 版本 / 授权失效口径）。
 import XCTest
+import ImageIO
 import PPassCore
 @testable import PPass
 
@@ -24,10 +25,11 @@ final class FolderMediaSourceTests: XCTestCase {
         try? FileManager.default.removeItem(at: dir)
     }
 
-    private func put(_ rel: String, content: String = "data") throws {
+    private func put(_ rel: String, content: String = "data", modifiedAt: Date? = nil) throws {
         let url = root.appendingPathComponent(rel)
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try content.write(to: url, atomically: true, encoding: .utf8)
+        if let modifiedAt { try FileManager.default.setAttributes([.modificationDate: modifiedAt], ofItemAtPath: url.path) }
     }
 
     private func putVideo(_ rel: String) throws { try put(rel, content: "video") }
@@ -77,7 +79,8 @@ final class FolderMediaSourceTests: XCTestCase {
         let snap = batch[0]
         let parts = snap.sourceVersion.split(separator: ":")
         XCTAssertEqual(parts.count, 2, "modifiedAtMs:size")
-        XCTAssertEqual(snap.bucketId, "folder:\(sourceId!)")
+        XCTAssertEqual(ScopeKey.decode(snap.bucketId).albums, ["folder:\(sourceId!)"])
+        XCTAssertNotNil(ScopeKey.decode(snap.bucketId).capturedAtMs)
 
         let details = try await source.lookup(snap.mediaId)
         XCTAssertEqual(details?.fileName, "v.jpg")
@@ -172,8 +175,101 @@ final class FolderMediaSourceTests: XCTestCase {
         XCTAssertEqual(existing, [keepId], "完整枚举成功，缺席 = 不在集合")
     }
 
+    // 文件夹与相册共用选中和时间过滤；没有拍摄元数据时才回退修改时间，子目录同规。
+    // 反证：删除选中条件 → 取消勾选后仍有两项；删除时间条件 → old 也进入；只扫当前层 → nested 两项消失。
+    func testSelectionAndModificationFallbackApplyRecursively() async throws {
+        let start: Int64 = 1_800_000_000_000
+        try put("nested/old.jpg", modifiedAt: Date(timeIntervalSince1970: Double(start) / 1000 - 1))
+        try put("nested/new.mov", modifiedAt: Date(timeIntervalSince1970: Double(start) / 1000))
+        let selected = FolderTestBox<Set<String>>(["folder:\(sourceId!)"])
+        let since = FolderTestBox<BackupSince>(.since(ms: start))
+        let sourceBucket = "folder:\(sourceId!)"
+        let scoped = FolderMediaSource(registry: registry, sourceId: sourceId, directory: dir, logger: logger,
+                                       scope: { (selected: selected.get(), known: [sourceBucket], since: since.get()) })
+        var batch = try await scoped.inScope(after: nil, limit: 100)
+        XCTAssertEqual(batch.count, 1, "起点之前的修改时间排除，起点当天包含")
+        let key = try XCTUnwrap(batch.first).bucketId
+        XCTAssertEqual(ScopeKey.decode(key).capturedAtMs, start)
+
+        selected.set([])
+        since.set(.all)
+        batch = try await scoped.inScope(after: nil, limit: 100)
+        XCTAssertTrue(batch.isEmpty, "取消勾选后即使全部时间也不返回该目录")
+    }
+
+    func testUncheckedFolderDoesNotEnumerateOrBlockPresence() async throws {
+        var record = registry.record(id: sourceId)!
+        record.bookmark = Data("broken".utf8)
+        registry.upsert(record)
+        let bucket = FolderMediaSource.bucketId(sourceId: sourceId)
+        let scoped = FolderMediaSource(registry: registry, sourceId: sourceId, directory: dir, logger: logger,
+                                       scope: { (selected: [], known: [bucket], since: .all) })
+        let batch = try await scoped.inScope(after: nil, limit: 10)
+        XCTAssertTrue(batch.isEmpty)
+        let id = "folder:\(sourceId!):opaque"
+        let present = try await scoped.existingIds([id])
+        XCTAssertEqual(present, [id], "取消勾选的目录不做缺席判定，也不能因书签损坏拖住其他来源")
+    }
+
+    func testPendingFolderWaitsForSavedScopeBeforeFirstBackup() async throws {
+        try put("pending.mov")
+        var record = registry.record(id: sourceId)!
+        record.status = FolderMediaSource.pendingScopeStatus
+        XCTAssertTrue(registry.upsert(record))
+        let bucket = FolderMediaSource.bucketId(sourceId: sourceId)
+        let selected = FolderTestBox<Set<String>>([])
+        let scoped = FolderMediaSource(registry: registry, sourceId: sourceId, directory: dir, logger: logger,
+                                       scope: { (selected: selected.get(), known: [], since: .all) })
+        var batch = try await scoped.inScope(after: nil, limit: 10)
+        XCTAssertTrue(batch.isEmpty, "新目录只授权未保存时不能提前备份")
+        selected.set([bucket])
+        batch = try await scoped.inScope(after: nil, limit: 10)
+        XCTAssertEqual(batch.count, 1, "保存范围后同一目录进入备份")
+        XCTAssertEqual(registry.record(id: sourceId)?.status, "registered")
+    }
+
+    func testLegacyScopeKeepsRegisteredFolderActiveBeforeUnifiedSave() async throws {
+        try put("legacy.mov")
+        let scoped = FolderMediaSource(registry: registry, sourceId: sourceId, directory: dir, logger: logger,
+                                       scope: { (selected: [], known: [], since: .all) })
+        let batch = try await scoped.inScope(after: nil, limit: 10)
+        XCTAssertEqual(batch.count, 1, "旧版没有文件夹勾选存值，不能让升级先悄悄停掉目录备份")
+    }
+
+    func testCaptureTimeAlwaysWinsOverModificationTime() {
+        let start: Int64 = 1_700_000_000_000
+        XCTAssertEqual(FolderMediaSource.effectiveCapturedAtMs(capturedAtMs: start, modifiedAtMs: start - 1_000), start)
+        XCTAssertEqual(FolderMediaSource.effectiveCapturedAtMs(capturedAtMs: nil, modifiedAtMs: start), start)
+        let capturedNew = FolderMediaSource.effectiveCapturedAtMs(capturedAtMs: start, modifiedAtMs: start - 1_000)
+        XCTAssertTrue(ScopeKey.inTime(capturedAtMs: capturedNew, since: .since(ms: start)), "拍摄新、修改旧必须按拍摄时间纳入")
+        let capturedOld = FolderMediaSource.effectiveCapturedAtMs(capturedAtMs: start - 1, modifiedAtMs: start + 1_000)
+        XCTAssertFalse(ScopeKey.inTime(capturedAtMs: capturedOld, since: .since(ms: start)), "拍摄旧、今天修改仍排除")
+    }
+
+    func testExifDateTimeOriginalAndOffsetAreParsed() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let properties: [String: Any] = [
+            kCGImagePropertyExifDictionary as String: [
+                kCGImagePropertyExifDateTimeOriginal as String: "2026:11:16 10:00:00",
+                "OffsetTimeOriginal": "+08:00",
+            ],
+        ]
+        let ms = try XCTUnwrap(FolderMediaSource.imageCapturedAtMs(properties: properties, calendar: calendar))
+        let date = Date(timeIntervalSince1970: Double(ms) / 1000)
+        XCTAssertEqual(date.timeIntervalSince1970, 1_794_794_400, accuracy: 0.001)
+    }
+
     private func idOf(rel: String) async throws -> String {
         let opaque = registry.opaqueId(sourceId: sourceId, relativePath: rel)
         return "folder:\(sourceId!):\(opaque)"
     }
+}
+
+private final class FolderTestBox<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: T
+    init(_ value: T) { self.value = value }
+    func get() -> T { lock.lock(); defer { lock.unlock() }; return value }
+    func set(_ value: T) { lock.lock(); self.value = value; lock.unlock() }
 }
