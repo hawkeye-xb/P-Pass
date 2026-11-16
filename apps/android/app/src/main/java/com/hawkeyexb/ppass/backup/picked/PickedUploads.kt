@@ -23,15 +23,29 @@ object PickedUploads {
      * 登记一批。选完不复制原图：对每个 URI 申请持久读授权（重启后仍能读；失败不致命，选择器本身的授权在进程存活期内有效），
      * 元数据读一次存下来。返回批里的张数。
      */
-    fun enqueue(context: Context, uris: List<Uri>, limit: Int = MAX_PICK): Int {
+    fun enqueue(context: Context, uris: List<Uri>): Int {
         val app = context.applicationContext
         val resolver = app.contentResolver
-        val items = uris.take(limit).map { uri ->
-            runCatching { resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-            describe(app, uri)
+        return enqueueValues(
+            values = uris,
+            grant = { uri -> runCatching { resolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) } },
+            describe = { uri -> describe(app, uri) },
+            store = store(app),
+        )
+    }
+
+    internal fun <T> enqueueValues(
+        values: List<T>,
+        grant: (T) -> Unit,
+        describe: (T) -> NewPicked,
+        store: PickedStore,
+    ): Int {
+        if (values.isEmpty()) return 0
+        val items = values.map { value ->
+            grant(value)
+            describe(value)
         }
-        if (items.isEmpty()) return 0
-        store(app).addBatch(items)
+        store.addBatch(items)
         return items.size
     }
 
@@ -54,7 +68,7 @@ object PickedUploads {
                 }
             }
         }.getOrNull().orEmpty()
-        return enqueue(app, uris, limit = Int.MAX_VALUE)
+        return enqueue(app, uris)
     }
 
     /** 这张传完（不论结局）：放掉持久授权。系统对每个 App 最多保留 5000 个，不放会越攒越多。 */
