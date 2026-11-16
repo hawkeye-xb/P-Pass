@@ -23,7 +23,7 @@ setup() {
   ios_reset "$EV"
   ios_make_bigvideo "$WORK/big.mp4" "$BIG_MB"
   ios_make_noise_jpg "$WORK/p1.jpg" 66
-  stat -f%z "$WORK/big.mp4" >"$EV/big-size.txt" # judge 读实测源大小（素材会被 mv 进 stage）
+  ios_file_size "$WORK/big.mp4" >"$EV/big-size.txt" # judge 读实测源大小（素材会被 mv 进 stage）
   mkdir -p "$WORK/stage" && mv "$WORK/big.mp4" "$WORK/p1.jpg" "$WORK/stage/"
   ios_push_stage "$EV" "foldere3-stage-$RUN" "$WORK/stage"
   ios_desk_start "$DESK"
@@ -102,7 +102,7 @@ judge() {
   tmp_before=$(jget "$d/before.json" 'j["bytes"]["app_tmp"]')
   tmp_after=$(jget "$d/after.json" 'j["bytes"]["app_tmp"]')
   # 桌面 1x：桌面库里媒体文件字节合计（视频+图，不含缩略图/索引）≈ 源大小
-  desk_bytes=$(while IFS= read -r f; do stat -f%z "$f" 2>/dev/null; done <"$d/desktop-files-after.txt" | awk '{s+=$1} END{print s+0}')
+  desk_bytes=$(while IFS= read -r f; do ios_file_size "$f"; done <"$d/desktop-files-after.txt" | awk '{s+=$1} END{print s+0}')
   # 源目录占盘：act 当场摘好的固定名文件（离线回放可读），before/after 实对比——只读目录被写入
   # 增量也要判红，不是只查「after 不小于下界」。
   src_before=$(tr -d '[:space:]' <"$d/src-dir-bytes-before.txt" 2>/dev/null)

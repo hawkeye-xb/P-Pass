@@ -32,7 +32,7 @@ setup() {
   ios_reset "$EV"
   ios_make_noise_jpg "$WORK/base.jpg" 7
   ios_make_noise_jpg "$WORK/n2.jpg" 44
-  N2_SIZE=$(stat -f%z "$WORK/n2.jpg") # 修改用的翻转偏移按实际大小取尾部（避开头部/EXIF 结构）
+  N2_SIZE=$(ios_file_size "$WORK/n2.jpg") # 修改用的翻转偏移按实际大小取尾部（避开头部/EXIF 结构）
   mkdir -p "$WORK/stage" && mv "$WORK/base.jpg" "$WORK/n2.jpg" "$WORK/stage/"
   ios_push_stage "$EV" "foldere3-stage-$RUN" "$WORK/stage"
   ios_desk_start "$DESK"

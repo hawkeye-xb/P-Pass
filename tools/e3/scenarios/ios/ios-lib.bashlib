@@ -169,6 +169,14 @@ b3_list_ok() {
   [ "${n:-0}" -ge "$min" ]
 }
 
+# 文件大小（字节）。judge 会在 Linux CI 上离线回放同一份判据，不能用 macOS 专有的 stat -f%z
+# （那边直接报错、拿不到大小，bytes=0 让 pass 证据假红）。取不到大小一律输出 0，由判据判红。
+ios_file_size() {
+  local n
+  n=$(wc -c <"$1" 2>/dev/null | tr -d '[:space:]')
+  case "$n" in ''|*[!0-9]*) echo 0 ;; *) echo "$n" ;; esac
+}
+
 # 桌面库媒体清单：$1 OUT $2 输出名 $3… -iname 模式（模式间的 -o 由调用方写全）。
 # 只按缩略图目录名排 thumbs/.thumbs；不做 '*/tmp/*' 这类祖先路径匹配——TMPDIR=/tmp 时
 # WORK 本身在 /tmp 下，那种写法会把整个桌面库误伤成空清单。

@@ -833,8 +833,8 @@ enum BGTestDriver {
         }
         if let (registry, _) = try? testRegistry() {
             for record in registry.allRecords() where record.displayName.hasPrefix(folderDisplayPrefix) {
-                registry.removeFolder(id: record.id)
-                removedRecords += 1
+                // removeFolder 会抛错（登记落盘失败会回滚）：清理按实际成功计数，不把失败算成已删
+                if (try? registry.removeFolder(id: record.id)) != nil { removedRecords += 1 }
             }
         }
         status.write("cleaned", ["removed_dirs": removedDirs, "removed_records": removedRecords, "done": true])
