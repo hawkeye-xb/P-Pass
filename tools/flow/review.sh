@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # just review <PR号> [--model <模型>]：合入前由一个没参与写代码的 agent 只读评审这个 PR。
 #
-#   取 PR 头提交的改动 + 正文里 closes #N 的卡的「范围」「验收场景」
+#   取 PR 头提交的改动 + 正文里 closes（整卡）或 refs（部分交付）关联卡的「范围」「验收场景」
 #   → 在 PR 头提交的临时只读检出里起一个新 agent（只给 Read / Grep / Glob，不能改文件、不能跑命令）
 #   → 结果写成 PR 评论（「通过」或「未通过 + 问题清单」），并在 PR 头提交上写提交状态 review/agent
 #
@@ -133,14 +133,18 @@ PR_BODY="$(printf '%s\n' "$PR_OUT" | sed '1,4d')"
 [ "$PR_STATE" = "OPEN" ] || die "#${PR} 不是 open 状态（${PR_STATE}），不评审"
 [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || die "读不到 #${PR} 的头提交"
 
-# ── 2. 关联卡：正文里的 closes / fixes / resolves #N ─────────────────
+# ── 2. 关联卡：closes / fixes / resolves 是整卡交付，refs 是部分交付 ──
 # 先认作者：Dependabot 的正文里附带上游 release notes，其中的 fixes #N 指上游仓库，不当本仓的卡。
 PR_AUTHOR="$(gh pr view "$PR" -R "$REPO" --json author --jq .author.login 2>/dev/null | tr -d '\r')" || PR_AUTHOR=""
 IS_DEPENDABOT=0
 case "$PR_AUTHOR" in app/dependabot | dependabot | "dependabot[bot]") IS_DEPENDABOT=1 ;; esac
-CARDS=""
-[ "$IS_DEPENDABOT" = 1 ] ||
-  CARDS="$(printf '%s\n' "$PR_BODY" | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?) +#[0-9]+' | grep -oE '[0-9]+' | sort -un || true)"
+CLOSE_CARDS=""
+REF_CARDS=""
+if [ "$IS_DEPENDABOT" != 1 ]; then
+  CLOSE_CARDS="$(printf '%s\n' "$PR_BODY" | grep -oiE '(close[sd]?|fix(e[sd])?|resolve[sd]?) +#[0-9]+' | grep -oE '[0-9]+' | sort -un || true)"
+  REF_CARDS="$(printf '%s\n' "$PR_BODY" | grep -oiE 'refs +#[0-9]+' | grep -oE '[0-9]+' | sort -un || true)"
+fi
+CARDS="$(printf '%s\n%s\n' "$CLOSE_CARDS" "$REF_CARDS" | sed '/^$/d' | sort -un)"
 CARD_TEXT=""
 if [ -z "$CARDS" ]; then
   # Dependabot 的依赖升级 PR 没有卡：照常评审，对照说明换成「只许改依赖版本与对应的锁文件 / 哈希」。
@@ -154,7 +158,7 @@ if [ -z "$CARDS" ]; then
 验收场景：改动只是版本升级，没有夹带其它改动；升级跨了大版本、或 PR 说明里列出不兼容变更时，写明哪些调用点要核对。
 "
       ;;
-    *) die "#${PR} 正文里没有 closes #N，评审不知道对照哪张卡" "在 PR 正文补上 closes #N 再评审。" ;;
+    *) die "#${PR} 正文里没有 closes 或 refs #N，评审不知道对照哪张卡" "在 PR 正文补上 closes #N（整卡交付）或 refs #N（部分交付）再评审。" ;;
   esac
 fi
 
@@ -163,8 +167,15 @@ for n in $CARDS; do
   flow_parse_scope "$I_BODY"
   accept="$(printf '%s\n' "$I_BODY" | awk '/^\*\*验收场景\*\*|^## .*验收/ { on = 1 } on { print }')"
   repro="$(printf '%s\n' "$I_BODY" | awk '/^\*\*复现路径\*\*/ { on = 1 } on { print }')"
+  if printf '%s\n' "$CLOSE_CARDS" | grep -Fxq "$n"; then
+    DELIVERY_NOTE="整卡交付（closes/fixes/resolves）：按整卡验收场景核对。"
+  else
+    DELIVERY_NOTE="部分交付（refs）：只评本 PR 承诺交付的内容，不要仅因整卡还有剩余验收项就判阻断；把未完成写成完成仍属误放行。"
+  fi
   CARD_TEXT="${CARD_TEXT}
 ### 卡 #${n}：${I_TITLE}
+
+交付口径：${DELIVERY_NOTE}
 
 范围（只许动这些）：
 $(printf '  %s\n' "${GLOBS[@]+"${GLOBS[@]}"}")
