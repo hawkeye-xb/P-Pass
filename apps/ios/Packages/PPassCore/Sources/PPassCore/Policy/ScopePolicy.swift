@@ -1,4 +1,4 @@
-// 相册范围语义（#983），逐条对位 Android，不另起口径。
+// 备份来源范围语义：相册与文件夹共用选中和时间过滤，不另起口径。
 import Foundation
 
 public enum ScopePolicy {
@@ -22,8 +22,7 @@ public enum ScopePolicy {
 /// 「从今天起」存的是**绝对时刻**（选定那天的零点，unix ms），不是每次求值时现算的「今天」——否则窗口每天往后滑，
 /// 昨天还没传完的会被踢出范围。
 ///
-/// iOS 偏离（登记在 tokens.json platforms.ios）：时间按 `PHAsset.creationDate`（拍摄时间）算；Android 按 `DATE_ADDED`
-/// （进入手机相册的时间）。PhotoKit 没有公开的「加入图库时间」，所以「今天才存进手机的老照片」Android 算新的，iOS 算以前的。
+/// 统一时间语义：优先媒体拍摄/创建时间，取不到时才回退文件修改时间。修改时间仍可用于内容版本识别，不与范围过滤混用。
 public enum BackupSince: Equatable, Sendable {
     case all
     case since(ms: Int64)
@@ -63,10 +62,29 @@ extension ScopePolicy {
         guard let saved else { return cameraAlbum.map { available.contains($0) ? [$0] : [] } ?? [] }
         return saved.intersection(available)
     }
+
+    /// 文件夹也进入同一份 selected。旧版已登记目录本来就会备份，第一次打开新页面时按当前真实状态默认选中；
+    /// 新语义保存过以后，known 会记录当时全部文件夹，明确取消的不能被默认勾回。
+    public static func initialFolderSelection(saved: Set<String>?, known: Set<String>, available: Set<String>) -> Set<String> {
+        available.filter { id in
+            if saved?.contains(id) == true { return true }
+            // known 里有、selected 里没有 = 新版明确取消，不能备份。
+            // known 里也没有 = 旧版已授权目录，按当前真实状态保持备份。
+            return !known.contains(id)
+        }
+    }
+
+    /// 是否有可恢复的有效范围。统一保存后只看显式选中；旧版目录没有勾选存值，按当前已登记来源保持备份。
+    public static func hasUsableScope(selected: Set<String>?, known: Set<String>, existingAlbums: Set<String>?, folderCount: Int) -> Bool {
+        if (selectedExistingCount(selected: selected, existing: existingAlbums) ?? 0) > 0 { return true }
+        if selected?.contains(where: { $0.hasPrefix("folder:") }) == true { return true }
+        let unified = known.union(selected ?? []).contains { $0.hasPrefix("folder:") }
+        return !unified && folderCount > 0
+    }
 }
 
 /// 范围键（`MediaSnapshot.bucketId` / `Order.bucketId`）的 iOS 编码：媒体源定义、引擎只经注入的 `inScope` 解释（FlowTypes）。
-/// 内容 = 可选的拍摄时刻一行 `t:<unix ms>` + 所属相册 id 每行一个。时间编在键里，是为了让已经落库的 order 也能按时间档判断
+/// 内容 = 可选的有效拍摄时刻一行 `t:<unix ms>` + 所属来源 id（相册或 folder:<sourceId>）每行一个。时间编在键里，是为了让已经落库的 order 也能按时间档判断
 /// （改回「从今天起」后，没传的以前的照片不再传）。没有时间行（拍摄时间未知 / #1263 之前建的行）在「从今天起」下算范围外。
 public enum ScopeKey {
     static let timePrefix = "t:"

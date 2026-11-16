@@ -96,6 +96,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var since: BackupSince?
     /// 系统里当前实际存在的相册（nil = 没有完整授权，读不到）。「已选相册」只数已选且现存的（#983，Android #836）。
     @Published private(set) var existingAlbums: Set<String>?
+    /// 上次保存时可见的全部来源 id；用来区分旧版目录（无勾选概念）与新版的明确取消。
+    private var knownScopeIds: Set<String> = []
     /// 照片页「选择相册」：请设置页把选范围页推出来（设置 tab 可能还没建，由它出现时消费）。
     @Published var wantsScopeEditor = false
     /// 「后台 App 刷新」不可用、而用户要后台备份时的全局告示（对位 Android `NoticeHost` 的 BACKUP_INTERRUPTED，UI-12）：
@@ -223,7 +225,7 @@ final class AppModel: ObservableObject {
     }
 
     /// 「自动备份」开关（设置页与照片页空状态的主按钮共用）。关：只写偏好。开：此刻才申请照片权限——
-    /// 全部允许 → 开，并总是进选范围页确认范围（#1323，对位 Android：已有范围也不再直接开始）；
+    /// 全部允许 → 开；已有有效范围只恢复备份，无存值才主动进入范围页（#1775）。
     /// 有限访问 → 开关保持关，把允许的照片按手选链路传一次；不允许 → 保持关 + 一行小字。
     func setAutoRule(_ on: Bool) {
         ruleNote = nil
@@ -255,9 +257,8 @@ final class AppModel: ObservableObject {
             do { try backend.engine.setAutoRule(true); autoRule = true } catch { settingWriteFailed("auto-rule", error); return }
             refresh()
             refreshExistingAlbums()
-            openScopeEditor()
-            // 已有范围的用户在选范围页原样「保存」不会触发补扫（没有新增 / 放宽），规则刚打开要叫醒一轮，不然开了也不跑。
-            if !noAlbums { await backend.engine.wake() }
+            // 有已保存的有效范围就只恢复备份；从未配置才主动进入范围页。用户主动编辑仍走 openScopeEditor。
+            if noAlbums { openScopeEditor() } else { await backend.engine.wake() }
         case .partial:
             let n = await backend.engine.sendAllowedPhotos()
             // 不弹「已把你允许的 N 张传到电脑」：弹出时照片还没传，过去时不实；进度看设置页（产品负责人 2026-11-04）。
@@ -387,6 +388,7 @@ final class AppModel: ObservableObject {
         do {
             scope = try backend.media.savedScope()
             since = try backend.media.savedSince()
+            knownScopeIds = backend.media.knownAlbums()
             scopeUnreadable = false
         } catch {
             if !scopeUnreadable { AppLog.log("backup-scope: unreadable: \(error)") }
@@ -499,11 +501,16 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// 「已选相册」个数：已选且当前存在（#983）；从未保存 = nil。
-    var selectedAlbumCount: Int? { ScopePolicy.selectedExistingCount(selected: scope, existing: existingAlbums) }
+    /// 「已选相册」个数：已选且当前存在（#983）；从未保存 = nil。文件夹不再混入相册计数。
+    var selectedAlbumCount: Int? {
+        let albumScope = scope?.filter { !$0.hasPrefix("folder:") }
+        return ScopePolicy.selectedExistingCount(selected: albumScope, existing: existingAlbums)
+    }
 
-    /// 范围从未保存、保存了空集、或所选相册全被删：一张都不在范围内（Android #541 / #836 同口径）。
-    var noAlbums: Bool { (selectedAlbumCount ?? 0) == 0 }
+    /// 范围从未保存、保存了空集、或所有已选来源都不在范围内。旧版目录按当前登记状态保持有效。
+    var noAlbums: Bool {
+        !ScopePolicy.hasUsableScope(selected: scope, known: knownScopeIds, existingAlbums: existingAlbums, folderCount: folderCount)
+    }
 
     // MARK: #1324 照片页引导位与范围内暂无照片的现状（ADR 结论 6、7，对位 Android #1322）
 
@@ -623,7 +630,7 @@ final class AppModel: ObservableObject {
 
     /// 选范围页点「开始备份」（首次）/「保存」（编辑）。范围 = 相册 + 时间档（#1263）。
     /// 首次：保存范围 → 落盘「连过这台电脑」→ 写一次后台意图（关）→ 唤醒引擎 → 直接进首页，没有完成页。
-    func albumsChosen(_ selected: Set<String>, known: Set<String>, wantsAll: Bool, firstTime: Bool) {
+    func albumsChosen(_ selected: Set<String>, known: Set<String>, wantsAll: Bool, firstTime: Bool, onSaved: (() -> Void)? = nil) {
         Task {
             // 必须在 saveScope 覆盖旧集合之前算差集（Android MOB-20）。
             var previous: Set<String>?
@@ -643,11 +650,12 @@ final class AppModel: ObservableObject {
                 notice = UserNotice(message: L.s("scope_save_failed"))
                 return
             }
-            AppLog.log("backup-scope: saved albums=\(selected.count) since=\(since.isAll ? "all" : "today") added=\(added.count) widened=\(widened)")
+            AppLog.log("backup-scope: saved sources=\(selected.count) since=\(since.isAll ? "all" : "today") added=\(added.count) widened=\(widened)")
             if firstTime { finishFirstScope() }
             refresh()
             refreshExistingAlbums()
-            // 新增相册或时间档放宽（从今天起 → 全部）才触发 SCOPE_ADDED 补扫；缩小或原样保存不触发（Android 同口径，#983 / #1263）。
+            onSaved?()
+            // 新增来源或时间档放宽（从今天起 → 全部）才触发 SCOPE_ADDED 补扫；缩小或原样保存不触发（Android 同口径，#983 / #1263）。
             if !added.isEmpty || widened {
                 await backend.engine.wake()
                 refresh()

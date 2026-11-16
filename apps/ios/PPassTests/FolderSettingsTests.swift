@@ -1,5 +1,5 @@
-// #1763 素材文件夹设置入口：可达性探测（列表「已授权 / 等待重新授权」的唯一依据）、演示端口、双语文案、
-// refreshFolderSources 的复用与退役决策。探测失败一律按「等待」显示，不误报可用（卡面验收场景最后一条）。
+// 统一备份范围的目录来源：可达性探测、演示端口、双语文案、refreshFolderSources 的复用与退役决策。
+// 探测失败一律按「等待重新授权」显示，不误报可用。
 import XCTest
 @testable import PPass
 
@@ -74,26 +74,11 @@ final class FolderSettingsTests: XCTestCase {
         XCTAssertTrue(after.isEmpty)
     }
 
-    // 设置行值分支（0 = 未添加 / 1 = 单数键 / N = 复数键）有测试可判红（#1763 评审建议3：
-    // 删掉任一分支这里就红）。对照双语言表逐一断言，改错键名或删分支都跑不掉。
-    func testFolderRowValueMapsCountsToKeys() throws {
-        XCTAssertEqual(SettingsScreen.folderValue(count: 0),
-                       Bundle.main.localizedString(forKey: "folder_sources_none", value: "\u{1}", table: "IOS"))
-        XCTAssertEqual(SettingsScreen.folderValue(count: 1),
-                       Bundle.main.localizedString(forKey: "folder_sources_count_one", value: "\u{1}", table: "IOS"))
-        XCTAssertEqual(SettingsScreen.folderValue(count: 3),
-                       String(format: Bundle.main.localizedString(forKey: "folder_sources_count_many", value: "\u{1}", table: "IOS"), 3))
-        XCTAssertNotEqual(SettingsScreen.folderValue(count: 0), SettingsScreen.folderValue(count: 1))
-        XCTAssertNotEqual(SettingsScreen.folderValue(count: 1), SettingsScreen.folderValue(count: 3))
-    }
-
     // 文案：两语言齐全（缺失时 L.s 会 assertionFailure，这里显式把新键都核一遍）。
     func testFolderStringsPresentInBothLanguages() throws {
-        let keys = ["folder_sources_row", "folder_sources_title", "folder_sources_add", "folder_sources_empty_body",
-                    "folder_sources_none", "folder_sources_count_one", "folder_sources_count_many",
-                    "folder_sources_status_ok", "folder_sources_status_wait",
+        let keys = ["folder_sources_add", "folder_sources_status_ok", "folder_sources_status_wait",
                     "folder_sources_reauth", "folder_sources_remove", "folder_sources_remove_confirm_title",
-                    "folder_sources_remove_confirm_body", "folder_sources_footer", "folder_sources_add_failed"]
+                    "folder_sources_remove_confirm_body", "folder_sources_add_failed"]
         for lang in ["zh-Hans", "en"] {
             let path = try XCTUnwrap(Bundle.main.path(forResource: lang, ofType: "lproj"), "缺 \(lang).lproj")
             let bundle = try XCTUnwrap(Bundle(path: path))

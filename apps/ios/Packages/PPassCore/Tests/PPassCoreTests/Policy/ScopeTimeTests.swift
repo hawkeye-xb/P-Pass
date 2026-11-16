@@ -100,6 +100,39 @@ final class ScopeTimeTests: XCTestCase {
         XCTAssertEqual(ScopePolicy.initialSelection(saved: nil, available: ["wechat"], cameraAlbum: "recents"), [])
     }
 
+    // MARK: 文件夹与相册共用来源和时间规则
+
+    func testFolderSourceUsesTheSameSelectionAndCaptureTimeRule() {
+        let folder = "folder:source-a"
+        let captured = ScopeKey.encode(albums: [folder], capturedAtMs: midnightMs)
+        XCTAssertTrue(ScopeKey.inScope(captured, selected: [folder], since: .since(ms: midnightMs)))
+        XCTAssertFalse(ScopeKey.inScope(captured, selected: [], since: .all), "取消勾选后即使全部时间也不在范围内")
+        let old = ScopeKey.encode(albums: [folder], capturedAtMs: midnightMs - 1)
+        XCTAssertFalse(ScopeKey.inScope(old, selected: [folder], since: .since(ms: midnightMs)))
+    }
+
+    func testLegacyRegisteredFoldersStartSelectedToPreserveExistingBackup() {
+        let available: Set<String> = ["folder:a", "folder:b"]
+        XCTAssertEqual(ScopePolicy.initialFolderSelection(saved: ["recents"], known: ["recents"], available: available), available,
+                       "旧存值没有文件夹勾选概念，按当前已授权且正在备份的来源初始化")
+    }
+
+    func testUnifiedFolderSelectionKeepsAnExplicitlyUncheckedFolder() {
+        let available: Set<String> = ["folder:a", "folder:b"]
+        XCTAssertEqual(ScopePolicy.initialFolderSelection(saved: ["folder:a"], known: ["recents", "folder:a", "folder:b"], available: available), ["folder:a"])
+        XCTAssertEqual(ScopePolicy.initialFolderSelection(saved: [], known: ["folder:a", "folder:b"], available: available), [],
+                       "新语义下明确取消全部文件夹不能又被默认勾回")
+    }
+
+    func testUsableScopeCountsFoldersWithoutCallingThemAlbums() {
+        XCTAssertTrue(ScopePolicy.hasUsableScope(selected: ["folder:a"], known: ["folder:a"], existingAlbums: [], folderCount: 1))
+        XCTAssertFalse(ScopePolicy.hasUsableScope(selected: [], known: ["folder:a"], existingAlbums: [], folderCount: 1),
+                       "统一范围已保存且明确不选文件夹，不算有效范围")
+        XCTAssertTrue(ScopePolicy.hasUsableScope(selected: [], known: [], existingAlbums: [], folderCount: 1),
+                      "旧版目录一直参与备份，没写过统一勾选时按当前状态算有效")
+        XCTAssertFalse(ScopePolicy.hasUsableScope(selected: nil, known: [], existingAlbums: [], folderCount: 0))
+    }
+
     // MARK: 存储
 
     func testStorePersistsTheTimeChoicePerDesktop() throws {

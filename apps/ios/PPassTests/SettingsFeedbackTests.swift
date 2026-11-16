@@ -339,10 +339,12 @@ final class SettingsFeedbackTests: XCTestCase {
         XCTAssertEqual(known.phase, .main)
     }
 
-    /// 打开「自动备份」规则（全部允许）且已有范围：也进选范围页确认范围（#1323，对位 Android），不再直接开始。
-    /// 反证：改回 `if noAlbums { openScopeEditor() } else { wake }`，wantsScopeEditor 断言红。
-    func test_turning_the_rule_on_with_a_scope_still_opens_the_scope_editor() async {
-        let (app, engine, _) = make()
+    /// 已有有效范围：开关只启停备份，不主动跳范围页；绝对起点不因 off/on 重算。
+    /// 反证：恢复无条件 openScopeEditor → wantsScopeEditor 红；重新按今天存日期 → since 断言红。
+    func test_turning_the_rule_on_with_a_scope_resumes_without_opening_the_editor() async {
+        let (app, engine, media) = make()
+        let fixed = BackupSince.since(ms: 1_793_203_200_000)
+        media.since = fixed
         engine.rule = false
         app.refresh()
         app.refreshExistingAlbums()
@@ -351,8 +353,26 @@ final class SettingsFeedbackTests: XCTestCase {
         app.setAutoRule(true)
         await settle()
         XCTAssertTrue(app.autoRule)
+        XCTAssertFalse(app.wantsScopeEditor)
+        XCTAssertTrue(engine.calls.contains("wake"), "已有范围直接唤醒备份")
+        app.setAutoRule(false)
+        app.setAutoRule(true)
+        await settle()
+        XCTAssertEqual(media.since, fixed, "off/on 不重写绝对起点")
+        XCTAssertFalse(app.wantsScopeEditor)
+    }
+
+    /// 从未保存范围才主动引导；主动点设置里的范围页仍走 openScopeEditor，不受这条限制。
+    func test_turning_the_rule_on_without_a_scope_opens_the_editor() async {
+        let (app, _, media) = make()
+        media.disk = nil
+        app.refresh()
+        app.setAutoRule(true)
+        await settle()
         XCTAssertTrue(app.wantsScopeEditor)
-        XCTAssertEqual(app.tab, .settings)
+        app.wantsScopeEditor = false
+        app.openScopeEditor()
+        XCTAssertTrue(app.wantsScopeEditor, "用户主动编辑始终可以进入")
     }
 
     /// 10-29：选范围页读相册时可能刚弹过系统框，`refreshAccess` 让页面按弹框之后的那一档显示（部分 → 页顶说明，拒绝 → 去设置）。
@@ -663,7 +683,7 @@ final class SettingsFeedbackTests: XCTestCase {
     }
 
     /// 部分照片权限下开自动备份（引导卡「开启」/ 设置开关）：iOS 不会再弹授权框，同一意图的做法是去系统设置改成「所有照片」；
-    /// 回来按真实权限现算——改成全部 → 规则开、进选范围页（同 Android 授权成功）；仍是部分（含没改直接回来）→ 传一次允许的照片
+    /// 回来按真实权限现算——改成全部 → 规则开；已有范围直接恢复，无值才进范围页；仍是部分（含没改直接回来）→ 传一次允许的照片
     /// + 瞬时提示、开关保持关。iOS 改照片权限会结束进程，所以「还没走完」的记号落盘，冷启动也接着走。不预写开关。
     /// 反证：去掉「已是部分 → 去设置」那段，settings / requested 断言红；去掉 `sceneBecameActive` 里的接续，回前台两段红；
     /// 去掉 init 里的接续，冷启动那段红。
@@ -691,7 +711,8 @@ final class SettingsFeedbackTests: XCTestCase {
             XCTAssertFalse(engine.pendingAccess, "接过就清")
             XCTAssertEqual(app.autoRule, ruleOn, "\(back)")
             if back == .full {
-                XCTAssertTrue(app.wantsScopeEditor, "改成全部 → 进选范围页")
+                XCTAssertFalse(app.wantsScopeEditor, "已有范围：改成全部后直接恢复，不主动跳范围页")
+                XCTAssertTrue(engine.calls.contains("wake"), "恢复备份要叫醒引擎")
                 XCTAssertNil(app.ruleNote)
             } else {
                 XCTAssertTrue(engine.calls.contains("sendAllowed"), "仍是部分 → 传一次允许的照片")
@@ -704,7 +725,7 @@ final class SettingsFeedbackTests: XCTestCase {
         }
     }
 
-    /// iOS 改照片权限后结束了进程：带着记号冷启动（新的 AppModel）→ 按真实权限接着走，改成全部就进选范围页。
+    /// iOS 改照片权限后结束了进程：带着记号冷启动（新的 AppModel）→ 按真实权限接着走；有范围只恢复备份。
     /// 反证：去掉 init 里的 `resumeAutoRuleAfterSettings()`，本条红。
     func test_pending_full_access_resumes_on_cold_start() async {
         let (_, engine, media) = make()
@@ -716,7 +737,7 @@ final class SettingsFeedbackTests: XCTestCase {
         await settle()
         XCTAssertFalse(engine.pendingAccess)
         XCTAssertTrue(cold.autoRule)
-        XCTAssertTrue(cold.wantsScopeEditor)
+        XCTAssertFalse(cold.wantsScopeEditor, "已有范围：冷启动接续只恢复备份，不主动跳范围页")
     }
 
     /// 还没问过照片权限时开自动备份：系统会弹框（同 Android），选「部分」→ 传一次允许的照片、开关保持关，
@@ -773,7 +794,7 @@ final class SettingsFeedbackTests: XCTestCase {
     }
 
     /// 场景 B：拒绝后挑了照片（单张备份）进了照片页；自己去设置改成全部回来 → 自动备份保持关（不替用户开）；
-    /// 引导卡第一张、按钮是「开启」不是「去设置」；点它 → 不去设置、直接开并进选范围页；不出「自动备份已停止」。
+    /// 引导卡第一张、按钮是「开启」不是「去设置」；点它 → 不去设置、直接开并恢复备份；不出「自动备份已停止」。
     /// 反证：回前台按权限替用户把开关打开，或全部权限下按钮仍是「去设置」，本条红。
     func test_scenario_b_full_access_after_picking_does_not_turn_backup_on_for_the_user() async {
         let (app, engine, media) = make()
@@ -794,7 +815,7 @@ final class SettingsFeedbackTests: XCTestCase {
         await settle()
         XCTAssertEqual(opened, 0, "全部权限：不去设置")
         XCTAssertTrue(app.autoRule)
-        XCTAssertTrue(app.wantsScopeEditor, "直接进选范围页")
+        XCTAssertFalse(app.wantsScopeEditor, "已有范围：直接开启并恢复，不主动跳范围页")
     }
 
     /// 场景 C：自动备份开着时权限被收回（自动备份已停止），用户没点「去设置」而是自己去设置改回全部再回来
