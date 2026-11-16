@@ -33,6 +33,32 @@ class BackupScopeTimeTest {
         assertFalse(all.contains(8L, 0L))
     }
 
+    @Test
+    fun scope_time_prefers_capture_and_falls_back_only_to_modified_time() {
+        assertEquals(2_000L, scopeTimeSecOf(dateTakenMs = 2_000_999L, modifiedAtSec = 3_000L))
+        assertEquals("没有拍摄时间才回退 mtime", 3_000L, scopeTimeSecOf(0L, 3_000L))
+        assertEquals("两级都未知就是未知，不能再回退 DATE_ADDED", 0L, scopeTimeSecOf(0L, 0L))
+    }
+
+    @Test
+    fun legacy_folders_stay_selected_until_a_unified_scope_is_saved() {
+        val folder = 0x4000000000000001L
+        assertEquals(setOf(folder), effectiveBackupScope(null, null, setOf(folder), null)?.buckets)
+        val legacyAlbums = BackupScope(setOf(7L), 100L)
+        assertEquals(setOf(7L, folder), effectiveBackupScope(legacyAlbums, setOf(7L), setOf(folder), 100L)?.buckets)
+        assertEquals("新版保存里取消勾选目录后不能再并回去", setOf(7L), effectiveBackupScope(legacyAlbums, setOf(7L, folder), setOf(folder), 100L)?.buckets)
+        assertEquals("移除授权后，已保存的旧 bucket 也退出范围", setOf(7L), effectiveBackupScope(legacyAlbums, setOf(7L, folder), emptySet(), 100L)?.buckets)
+        assertNull("从未保存且没有目录 = 没有可用来源", effectiveBackupScope(null, null, emptySet(), null))
+    }
+
+    @Test
+    fun toggle_guides_only_when_never_saved_and_no_legacy_folder_exists() {
+        assertTrue(shouldGuideToScopeOnEnable(ScopeRead.NeverSaved, existingFolderCount = 0))
+        assertFalse("已有目录就是已有有效来源", shouldGuideToScopeOnEnable(ScopeRead.NeverSaved, existingFolderCount = 1))
+        assertFalse("保存过空集也是有值，不能强制跳页", shouldGuideToScopeOnEnable(ScopeRead.Saved(emptySet()), existingFolderCount = 0))
+        assertFalse("读不到不是从未保存", shouldGuideToScopeOnEnable(ScopeRead.Unreadable(IllegalStateException("x")), existingFolderCount = 0))
+    }
+
     // ── 「今天」从当天零点算 ──────────────────────────────────
 
     @Test

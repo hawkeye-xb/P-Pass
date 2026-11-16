@@ -4,6 +4,7 @@
 // JVM 走 java.io.File 实现；SAF 实现的可信依赖（DocumentFile 查询、权限撤销）在 E3 真机核。
 package com.hawkeyexb.ppass.backup.folder
 
+import com.hawkeyexb.ppass.backup.BackupScope
 import com.hawkeyexb.ppass.backup.flow.SourceUnavailableException
 import java.io.File
 import org.junit.Assert.assertEquals
@@ -200,6 +201,70 @@ class FolderMediaSourceTest {
             throw AssertionError("expected SourceUnavailableException")
         } catch (expected: SourceUnavailableException) {
         }
+    }
+
+    @Test
+    fun `scope uses capture before mtime and applies recursively`() {
+        val (root, registry, sourceId) = setup()
+        write(root, "old-capture.jpg", "old").setLastModified(5_000_000L)
+        write(root, "nested/new-capture.mp4", "new").setLastModified(1_000L)
+        write(root, "nested/fallback.jpg", "fallback").setLastModified(1_000_000L)
+        val captures = mapOf(
+            "old-capture.jpg" to 500_000L,
+            "nested/new-capture.mp4" to 2_000_000L,
+            "nested/fallback.jpg" to null,
+        )
+        val scope = BackupScope(setOf(registry.bucketIdOf(sourceId)!!), sinceSec = 1_000L)
+        val src = FolderMediaSnapshotSource(
+            registry,
+            scopeProvider = { scope },
+            captureAtMs = { _, file -> captures[file.relativePath] },
+            treeFor = { FileFolderTree(root) },
+        )
+
+        val snapshots = src.readInScope(0L) { it.toList() }
+        val byPath = snapshots.associateBy { registry.relativePath(sourceId, registry.opaqueIdOfMedia(it.mediaId)!!) }
+        assertEquals(setOf("nested/new-capture.mp4", "nested/fallback.jpg"), byPath.keys)
+        assertEquals("拍摄新但 mtime 旧仍纳入", 2_000L, byPath["nested/new-capture.mp4"]!!.dateAddedSec)
+        assertEquals("缺拍摄才回退 mtime", 1_000L, byPath["nested/fallback.jpg"]!!.dateAddedSec)
+        assertTrue("旧拍摄即使 mtime 新也排除", "old-capture.jpg" !in byPath.keys)
+    }
+
+    @Test
+    fun `unselected folder produces no work and does not read capture metadata`() {
+        val (root, registry, sourceId) = setup()
+        write(root, "IMG_1.jpg", "one")
+        var captureReads = 0
+        val src = FolderMediaSnapshotSource(
+            registry,
+            scopeProvider = { BackupScope(emptySet(), null) },
+            captureAtMs = { _, _ -> captureReads++; 1_000L },
+            treeFor = { FileFolderTree(root) },
+        )
+
+        assertTrue(src.readInScope(0L) { it.toList() }.isEmpty())
+        assertEquals(0, captureReads)
+        assertTrue("未选目录的枚举也被跳过", registry.record(sourceId)!!.items.isEmpty())
+    }
+
+    @Test
+    fun `existing ids does not reread capture metadata`() {
+        val (root, registry, sourceId) = setup()
+        write(root, "IMG_1.jpg", "one")
+        var captureReads = 0
+        val scope = BackupScope(setOf(registry.bucketIdOf(sourceId)!!), null)
+        val src = FolderMediaSnapshotSource(
+            registry,
+            scopeProvider = { scope },
+            captureAtMs = { _, _ -> captureReads++; 1_000L },
+            treeFor = { FileFolderTree(root) },
+        )
+        val mediaId = src.readInScope(0L) { it.single().mediaId }
+        assertEquals(1, captureReads)
+
+        captureReads = 0
+        assertEquals(setOf(mediaId), src.existingIds(listOf(mediaId)))
+        assertEquals("缺席对账只需要路径，不能再次解析每个文件", 0, captureReads)
     }
 
     private fun fail(message: String) {

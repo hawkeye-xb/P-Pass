@@ -93,4 +93,12 @@ class RuleEnableWhenPartialTest {
         assertTrue(photos.contains("if (guide == PhotosGuide.EnableScope && goesToSettings) R.string.auto_backup_blocked_action else R.string.photos_guide_enable"))
         assertTrue(photos.contains("actionLabel = stringResource(label)"))
     }
+    @Test
+    fun enabling_rule_with_saved_scope_does_not_force_scope_editor() {
+        val apply = main.substringAfter("val applyRuleAccess:").substringBefore("MediaAccess.PARTIAL")
+        assertTrue(apply.contains("shouldGuideToScopeOnEnable"))
+        assertTrue("已有范围只唤醒备份", apply.contains("requestFlowWake(context, TriggerReason.MANUAL)"))
+        assertFalse("不能无条件打开范围页", apply.contains("screen = Screen.Buckets(pairing, BackupScopeStore(context).selectedBucketIds() ?: emptySet(), false)"))
+    }
+
 }

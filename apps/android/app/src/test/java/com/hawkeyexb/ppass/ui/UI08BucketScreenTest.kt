@@ -39,4 +39,15 @@ class UI08BucketScreenTest {
         assertTrue("a size change must restart the request", source.contains("key2 = displaySize"))
         assertFalse("the old fixed low-resolution request must not return", source.contains("Size(200, 200)"))
     }
+    @Test
+    fun folders_and_alums_share_one_atomic_save() {
+        val source = bucketScreenSource()
+        assertTrue(source.contains("folderBuckets: List<FolderBucketUi>"))
+        assertTrue(source.contains("selectedFolderKeys: Set<String>"))
+        assertTrue("一个保存动作同时提交两类来源", source.contains("onDone(checked, checkedFolders, time)"))
+        assertTrue("保存期间禁止重复提交", source.contains("enabled = !saving"))
+        assertTrue(source.contains("R.string.folder_add"))
+        assertTrue("新目录先默认选中但只进编辑暂存", source.contains("!it.registered && it.key !in seenFolderKeys"))
+    }
+
 }

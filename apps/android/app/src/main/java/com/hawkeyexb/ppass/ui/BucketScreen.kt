@@ -29,10 +29,14 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -193,27 +197,44 @@ private fun BucketCard(
     }
 }
 
+data class FolderBucketUi(
+    val key: String,
+    val bucket: MediaScanner.Bucket,
+    val registered: Boolean,
+    val needsPermission: Boolean = false,
+)
+
 @Composable
 fun BucketScreen(
     buckets: List<MediaScanner.Bucket>,
     selected: Set<Long>,
-    /** #1263：时间那一档的初值。 */
     initialTime: ScopeTime = ScopeTime.SINCE_TODAY,
-    /** #1263：「某天起的照片」那一档的说法，一律写日期（没存过 = 今天，存过 = 存的那天）。 */
     sinceLabel: String,
-    /** onboarding 首次选范围：按钮叫「开始备份」；设置里重选叫「保存」。 */
     firstTime: Boolean,
-    // MOB-02 §六: 新相册判定基准（null = 从未选过范围 = 全量模式，无徽标）。
     knownBuckets: Set<Long>? = null,
-    /** 10-29：只给了部分照片——页顶说明一行，只备份允许的那些。 */
-    onDone: (Set<Long>, ScopeTime) -> Unit,
+    folderBuckets: List<FolderBucketUi> = emptyList(),
+    selectedFolderKeys: Set<String> = emptySet(),
+    saving: Boolean = false,
+    onAddFolder: () -> Unit = {},
+    onRemoveFolder: (String) -> Unit = {},
+    onReauthorizeFolder: (String) -> Unit = {},
+    onDone: (Set<Long>, Set<String>, ScopeTime) -> Unit,
     onCancel: () -> Unit,
 ) {
     var checked by remember { mutableStateOf(selected) }
+    var checkedFolders by remember { mutableStateOf(selectedFolderKeys) }
+    var seenFolderKeys by remember { mutableStateOf(selectedFolderKeys) }
+    var removing by remember { mutableStateOf<FolderBucketUi?>(null) }
     var time by remember { mutableStateOf(initialTime) }
-    // MOB-02 §六: 新出现的相册 = 当前 − 已知；标「新」徽标，默认不勾选
-    // （不在 selected 里）——配合用户「专用目录」用法。
     val newIds = newAlbumIds(buckets.map { it.id }.toSet(), knownBuckets)
+
+    LaunchedEffect(folderBuckets) {
+        val pending = folderBuckets.filter { !it.registered && it.key !in seenFolderKeys }.map { it.key }
+        if (pending.isNotEmpty()) {
+            seenFolderKeys = seenFolderKeys + pending
+            checkedFolders = checkedFolders + pending
+        }
+    }
 
     PPScreen {
         androidx.compose.material3.ProvideTextStyle(
@@ -225,20 +246,9 @@ fun BucketScreen(
                     "‹", fontSize = 24.sp, color = PPColor.Ink,
                     modifier = Modifier.clickable(onClick = onCancel).padding(4.dp, 0.dp, 10.dp, 0.dp),
                 )
-                Column {
-                    Text(
-                        stringResource(R.string.bucket_title),
-                        fontSize = 24.sp, fontFamily = PPFont.Serif, color = PPColor.Ink,
-                    )
-                }
+                Text(stringResource(R.string.backup_scope), fontSize = 24.sp, fontFamily = PPFont.Serif, color = PPColor.Ink)
             }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                stringResource(R.string.bucket_hint),
-                fontSize = 14.sp, lineHeight = 21.sp, color = PPColor.Ink40,
-            )
             Spacer(Modifier.height(12.dp))
-            // #1263：时间二选一。不做自选日期。
             Row(horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)) {
                 PhotoFilterChip(sinceLabel, time == ScopeTime.SINCE_TODAY) { time = ScopeTime.SINCE_TODAY }
                 PhotoFilterChip(stringResource(R.string.scope_time_all), time == ScopeTime.ALL) { time = ScopeTime.ALL }
@@ -246,27 +256,68 @@ fun BucketScreen(
             Spacer(Modifier.height(14.dp))
 
             Box(Modifier.weight(1f)) {
-                if (buckets.isEmpty()) {
-                    Text(
-                        stringResource(R.string.bucket_empty),
-                        fontSize = 15.sp, color = PPColor.Ink40,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth().padding(top = 40.dp),
-                    )
-                } else {
-                    LazyVerticalGrid(
-                        columns = GridCells.Fixed(2),
-                        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
-                        verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
-                    ) {
-                        items(buckets, key = { it.id }) { b ->
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
+                    verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp),
+                ) {
+                    if (buckets.isEmpty() && folderBuckets.isEmpty()) {
+                        item(key = "empty") {
+                            Text(
+                                stringResource(R.string.bucket_empty),
+                                fontSize = 15.sp, color = PPColor.Ink40, textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth().padding(top = 40.dp),
+                            )
+                        }
+                    }
+                    items(buckets, key = { "album:${it.id}" }) { b ->
+                        BucketCard(
+                            bucket = b,
+                            selected = b.id in checked,
+                            isNew = b.id in newIds,
+                            onToggle = { checked = if (b.id in checked) checked - b.id else checked + b.id },
+                        )
+                    }
+                    items(folderBuckets, key = { "folder:${it.key}" }) { folder ->
+                        Column {
                             BucketCard(
-                                bucket = b,
-                                selected = b.id in checked,
-                                isNew = b.id in newIds,
+                                bucket = folder.bucket,
+                                selected = folder.key in checkedFolders,
+                                isNew = false,
                                 onToggle = {
-                                    checked = if (b.id in checked) checked - b.id else checked + b.id
+                                    checkedFolders = if (folder.key in checkedFolders) {
+                                        checkedFolders - folder.key
+                                    } else {
+                                        checkedFolders + folder.key
+                                    }
                                 },
+                            )
+                            Row(Modifier.padding(start = 8.dp, top = 4.dp)) {
+                                if (folder.needsPermission) {
+                                    Text(
+                                        stringResource(R.string.folder_reauthorize),
+                                        fontSize = 12.sp, color = PPColor.Act,
+                                        modifier = Modifier.clickable { onReauthorizeFolder(folder.key) }.padding(end = 12.dp),
+                                    )
+                                }
+                                Text(
+                                    stringResource(R.string.folder_remove),
+                                    fontSize = 12.sp, color = PPColor.Act,
+                                    modifier = Modifier.clickable { removing = folder },
+                                )
+                            }
+                        }
+                    }
+                    item(key = "add-folder") {
+                        Surface(
+                            color = PPColor.ActBg,
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                stringResource(R.string.folder_add),
+                                fontSize = 16.sp, fontWeight = FontWeight.Bold, color = PPColor.Ink,
+                                modifier = Modifier.clickable(enabled = !saving, onClick = onAddFolder).padding(18.dp),
                             )
                         }
                     }
@@ -275,12 +326,11 @@ fun BucketScreen(
 
             Spacer(Modifier.height(14.dp))
             Button(
-                onClick = { onDone(checked, time) },
+                onClick = { onDone(checked, checkedFolders, time) },
+                enabled = !saving,
                 modifier = Modifier.fillMaxWidth().height(60.dp),
                 shape = RoundedCornerShape(PPSize.RadiusControl),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = PPColor.Ink, contentColor = PPColor.Paper
-                ),
+                colors = ButtonDefaults.buttonColors(containerColor = PPColor.Ink, contentColor = PPColor.Paper),
             ) {
                 Text(
                     stringResource(if (firstTime) R.string.bucket_start else R.string.bucket_save),
@@ -289,5 +339,26 @@ fun BucketScreen(
             }
         }
         }
+    }
+
+    removing?.let { folder ->
+        AlertDialog(
+            onDismissRequest = { removing = null },
+            title = { Text(stringResource(R.string.folder_remove_confirm_title, folder.bucket.name.orEmpty())) },
+            text = { Text(stringResource(R.string.folder_remove_confirm_body)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    removing = null
+                    onRemoveFolder(folder.key)
+                    checkedFolders = checkedFolders - folder.key
+                    seenFolderKeys = seenFolderKeys - folder.key
+                }) { Text(stringResource(R.string.folder_remove_confirm_action), color = PPColor.Act) }
+            },
+            dismissButton = {
+                TextButton(onClick = { removing = null }) {
+                    Text(stringResource(R.string.folder_cancel), color = PPColor.Ink)
+                }
+            },
+        )
     }
 }

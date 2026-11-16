@@ -49,12 +49,13 @@ class OnboardingSlimWiringTest {
     @Test
     fun engine_and_counts_use_the_full_scope() {
         val runtime = File("src/main/java/com/hawkeyexb/ppass/backup/flow/AndroidFlowRuntime.kt").readText()
-        // #1762 起装配是 Composite：MediaStore 段仍是同一份范围（engine 与 counts 同口径）；目录段绕过共享
-        // 范围（ADR docs/decisions/2026-11-13-local-folder-media-source.md §4），只看「目录来源现存」——
-        // 有意的、带依据的偏差，断言按两段分别锁。
-        assertTrue(runtime.contains("ContentResolverMediaSnapshotSource(app, { if (ruleOn()) scopeStore.scope() else null })"))
-        assertTrue(runtime.contains("isFolderId(bucket)) folderRegistry.hasBucket(bucket)"))
-        assertTrue(runtime.contains("scopeStore.scope()?.contains(bucket, added) == true"))
+        // #1778：相册段先剔除目录 bucket，目录段统一经 effectiveBackupScope 取得范围；
+        // 旧版目录按现存授权并入，新版未勾选目录不再绕过统一范围。
+        assertTrue(runtime.contains("effectiveBackupScope("))
+        assertTrue(runtime.contains("folderRegistry.allRecords().mapTo(HashSet()) { it.bucketId }"))
+        assertTrue(runtime.contains("scopeProvider = { effectiveScope() }"))
+        assertTrue(runtime.contains("scope.buckets.filterNot { com.hawkeyexb.ppass.backup.folder.isFolderId(it) }.toSet()"))
+        assertFalse("旧目录不得绕过统一范围", runtime.contains("isFolderId(bucket)) folderRegistry.hasBucket(bucket)"))
         val holder = File("src/main/java/com/hawkeyexb/ppass/backup/BackupUiStateHolder.kt").readText()
         assertTrue("首页分母跟着新范围算", holder.contains("countAll(it, sinceSec)"))
         assertTrue(holder.contains("g.facts(bucketIds, total, sinceSec)"))
