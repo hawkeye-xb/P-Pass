@@ -14,7 +14,11 @@ BIG_MB="${PPASS_E3_FOLDER_BIG_MB_BG:-150}"
 UIREG_HOME_WAIT="${UIREG_HOME_WAIT:-45}"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/ppass-e3-ios.XXXXXX")
 DESK="$WORK/A"
-teardown() { ios_pair_allow_stop; desk_stop "$DESK" 2>/dev/null; rm -rf "$WORK"; }
+teardown() {
+  # 手机侧测试目录与 stage 中转目录都要清：只删宿主机 WORK 会把素材留在设备上（占盘 1x）
+  ios_folder_cleanup "foldere3-$RUN" "foldere3-stage-$RUN"
+  ios_pair_allow_stop; desk_stop "$DESK" 2>/dev/null; rm -rf "$WORK"
+}
 
 DESC="备份中退后台只记录系统实际行为（不做进度承诺），回前台后收场；后台期间行为以日志为准"
 COUNTER=off

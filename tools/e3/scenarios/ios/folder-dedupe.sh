@@ -9,7 +9,11 @@ source "$(dirname "${BASH_SOURCE[0]}")/ios-lib.bashlib"
 RUN="e3-$(date +%s)"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/ppass-e3-ios.XXXXXX")
 DESK="$WORK/A"
-teardown() { ios_pair_allow_stop; desk_stop "$DESK" 2>/dev/null; rm -rf "$WORK"; }
+teardown() {
+  # 手机侧测试目录与 stage 中转目录都要清：只删宿主机 WORK 会把素材留在设备上（占盘 1x）
+  ios_folder_cleanup "foldere3-$RUN" "foldere3-stage-$RUN"
+  ios_pair_allow_stop; desk_stop "$DESK" 2>/dev/null; rm -rf "$WORK"
+}
 
 DESC="同一素材同时经相册与目录来源备份：两条订单各自确认、桌面只有一份内容且 BLAKE3 与源一致"
 COUNTER=off

@@ -667,11 +667,17 @@ enum BGTestDriver {
         status.write("started")
         guard let spec0 = json(spec), let dirName = spec0["dir"] as? String, safeName(dirName),
               let fileName = spec0["file"] as? String, let rel = try? FolderPaths.normalize(fileName),
-              let wanted = spec0["display"] as? String,
-              let (registry, _) = try? testRegistry(),
-              let record = registry.allRecords().first(where: { $0.displayName == wanted })
-                  ?? registry.allRecords().first(where: { $0.displayName.hasPrefix(folderDisplayPrefix) }) else {
+              let (registry, _) = try? testRegistry() else {
             status.write("failed", ["error": "bad spec or no registered folder source", "done": true]); return
+        }
+        // 指定了 display 就必须精确命中：登记里没有这条来源时回退到前缀第一条，会把故障注进另一个来源。
+        // 只有没给 display 时才按 FolderE3 前缀取第一条。
+        let wanted = spec0["display"] as? String
+        let record = registry.allRecords().first(where: {
+            wanted != nil ? $0.displayName == wanted : $0.displayName.hasPrefix(folderDisplayPrefix)
+        })
+        guard let record else {
+            status.write("failed", ["error": "no registered folder source matching display=\(wanted ?? "<unspecified>")", "done": true]); return
         }
         guard let _ = await corruptFile(record: record, registry: registry, relativePath: rel,
                                         mode: spec0["mode"] as? String ?? "flip", spec: spec0, status: status) else { return }
@@ -740,7 +746,9 @@ enum BGTestDriver {
         // 3. 注入故障
         guard let (corrupt, backup) = await corruptFile(record: record, registry: registry, relativePath: rel,
                                                         mode: mode, spec: spec0, status: status) else { return }
-        status.write("corrupted", corrupt)
+        // StatusFile.write 是顶层合并：不嵌套一层的话 old_byte/offset 会落在顶层，
+        // 判据读的 j["corrupted"]["old_byte"] 永远为空，真机反证会被误判成链条不完整。
+        status.write("corrupted", ["corrupted": corrupt])
         // 4. 供数期源被改：传输必须放弃（不得确认）
         if await waitLog(pattern: "source changed while serving", fromOffset: logOffset(logPath),
                          timeoutSecs: 240, logPath: logPath) == nil {
@@ -749,7 +757,7 @@ enum BGTestDriver {
         status.write("serve_aborted")
         // 5. 注入那一刻该张的订单历史（不得出现 CONFIRMED 的坏内容版本）
         let statesAfterAbort = orderStates(at: rootURL.appendingPathComponent("backup-orders.db"), mediaId: mediaId)
-        status.write("orders_after_abort", ["states": statesAfterAbort])
+        status.write("orders_after_abort", ["orders_after_abort": ["states": statesAfterAbort] as [String: Any]])
         if statesAfterAbort.contains("CONFIRMED") {
             status.write("failed", ["error": "corrupted content got CONFIRMED", "done": true]); return
         }
@@ -764,7 +772,7 @@ enum BGTestDriver {
         while Date() < deadline {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
             let states = orderStates(at: rootURL.appendingPathComponent("backup-orders.db"), mediaId: mediaId)
-            status.write("waiting_reconfirm", ["latest": states.last ?? "?", "history": states])
+            status.write("waiting_reconfirm", ["waiting_reconfirm": ["latest": states.last ?? "?", "history": states] as [String: Any]])
             if states.last == "CONFIRMED" { confirmed = true; break }
         }
         guard confirmed else { status.write("failed", ["error": "re-import did not confirm", "done": true]); return }

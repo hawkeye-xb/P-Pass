@@ -40,6 +40,9 @@ final class FolderPickerDrive: XCTestCase {
             if !stillThere { return }
             sleep(1)
         }
+        // 90s 后「打开」还在 = 选择器始终没收起，授权回调没完成：必须判失败，
+        // 否则测试会在什么都没确认的情况下报成功。
+        XCTFail("90s 后系统目录选择器仍未收起（打开/Open 按钮还在），授权回调未完成")
     }
 
     /// 在给定的 app 树里找第一个标签匹配（去省略号/引号、比小写）可命中的元素并点它；30s 内找不到就失败。

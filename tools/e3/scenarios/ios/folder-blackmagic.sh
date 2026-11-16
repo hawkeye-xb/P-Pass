@@ -49,12 +49,18 @@ act() {
   staged_name=$(jq -r '.staged.name // ""' "$OUT/status-picked.json")
   [ -n "$staged_name" ] \
     || { echo "pick 钩子没有暂存同内容素材（所选目录里没有可导入媒体），同内容去重没法验" >&2; return 1; }
-  # 大小护栏：沙盒桌面要接下整个源目录的拷贝；超过上限就停（磁盘红线），报告里写清楚数字
+  # 大小护栏：沙盒桌面要接下整个源目录的拷贝；超过上限就停（磁盘红线），报告里写清楚数字。
+  # 取不到大小必须停：jget 对缺失文件输出空串，按 0 处理等于把「未知大小」放进护栏。
   local run="guard-$(date +%s)" total
-  ios_launch "$OUT" list "{\"PPASS_E2E_DIR\":\"container\",\"PPASS_E2E_RUN\":\"$run\",\"PPASS_BGTEST_FOLDER_LIST\":\"1\"}"
-  ios_wait_status "$OUT/list" "$run" 30 true >/dev/null && cp "$OUT/list.status.json" "$OUT/folder-list-guard.json"
+  ios_launch "$OUT" list "{\"PPASS_E2E_DIR\":\"container\",\"PPASS_E2E_RUN\":\"$run\",\"PPASS_BGTEST_FOLDER_LIST\":\"1\"}" \
+    || { echo "源目录清单启动失败，无法估算占盘" >&2; return 1; }
+  ios_wait_status "$OUT/list" "$run" 30 true >/dev/null \
+    || { echo "源目录清单轮询失败，无法估算占盘" >&2; return 1; }
+  cp "$OUT/list.status.json" "$OUT/folder-list-guard.json" \
+    || { echo "源目录清单拷贝失败，无法估算占盘" >&2; return 1; }
   total=$(jget "$OUT/folder-list-guard.json" 'j["sources"][0]["total_bytes"]')
-  [ "${total:-0}" -le $(( ${PPASS_E3_FOLDER_MAX_MB:-4000} * 1000000 )) ] \
+  [[ "$total" =~ ^[0-9]+$ ]] || { echo "源目录大小读不到或不是非负整数：'$total'，拒绝继续备份" >&2; return 1; }
+  [ "$total" -le $(( ${PPASS_E3_FOLDER_MAX_MB:-4000} * 1000000 )) ] \
     || { echo "源目录媒体共 $total 字节，超过沙盒桌面护栏 $(( ${PPASS_E3_FOLDER_MAX_MB:-4000} ))MB；请清设备素材或调 PPASS_E3_FOLDER_MAX_MB" >&2; return 1; }
   # 2) 相册侧：seedRun 把暂存的同内容素材种进测试相册（同一份素材的第二条来源）。
   #    先推 go 信号：seedRun 有界等 Documents/e2e/seed/go，不推它种子步骤只会等到超时。
@@ -94,7 +100,12 @@ judge() {
   confirmed=$(jget "$d/status-run.json" 'j["confirmed"]')
   check "系统选择器授权成功（folder_picked，display=$TARGET 来源）" has_line "$d/status-picked.json" '"step" *: *"folder_picked"'
   check "登记清单：来源 registered 且映射项数=${items:-缺失}（Blackmagic 目录里的媒体文件数）" bash -c "[ '${items:-x}' -ge 1 ]"
-  check "正式备份链收场 confirmed=${confirmed:-缺失}（相册 1 + 目录 ${items:-?}）" bash -c "[ '${confirmed:-x}' -ge 2 ]"
+  # folderRun 的 confirmed 只数 folder: 订单，不含相册订单：目录里只有一个视频时它就是 1，
+  # 拿它跟「相册+目录」的总数比会误判。目录侧与相册侧分开判。
+  check "正式备份链收场：目录订单 confirmed=${confirmed:-缺失} = 目录映射项数 ${items:-缺失}" \
+    bash -c "[ -n '${confirmed:-}' ] && [ '${confirmed:-x}' = '${items:-y}' ]"
+  check "相册侧同内容素材也已确认（非 folder: 订单有 CONFIRMED）" \
+    bash -c "[ \"\$(sqlite3 -readonly \"$d/db/backup-orders.db\" \"SELECT COUNT(*) FROM orders WHERE media_id NOT LIKE 'folder:%' AND state='CONFIRMED'\")\" -ge 1 ]"
   check "目录来源媒体全部确认（folder: 订单 CONFIRMED 数 = ${items:-缺失}）" \
     bash -c "[ \"\$(sqlite3 -readonly \"$d/db/backup-orders.db\" \"SELECT COUNT(*) FROM orders WHERE media_id LIKE 'folder:%' AND state='CONFIRMED'\")\" = '${items:-x}' ]"
   check "手机源暂存素材哈希齐备（1 条 64 位 hex；拷贝/哈希失败留空在这里判红，不许拿空哈希撞桌面清单）" \
