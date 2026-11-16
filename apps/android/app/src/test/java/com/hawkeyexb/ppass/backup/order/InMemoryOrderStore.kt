@@ -9,8 +9,9 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
 
     private data class Skip(val bucketId: Long, val sourceVersion: String, val dateAddedSec: Long = 0L)
 
-    private fun inScope(bucketId: Long, dateAddedSec: Long, bucketIds: Set<Long>?, sinceSec: Long?) =
-        (bucketIds == null || bucketId in bucketIds) && (sinceSec == null || dateAddedSec >= sinceSec)
+    private fun inScope(mediaId: Long, bucketId: Long, dateAddedSec: Long, bucketIds: Set<Long>?, sinceSec: Long?, scopeTimeOf: ScopeTimeOf?) =
+        (bucketIds == null || bucketId in bucketIds) &&
+            (sinceSec == null || (scopeTimeOf?.invoke(mediaId, dateAddedSec) ?: dateAddedSec) >= sinceSec)
 
     private data class State(
         val rows: Map<Long, Order> = emptyMap(),
@@ -178,8 +179,8 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
 
     override fun <R> readSkipList(block: (Sequence<Long>) -> R): R = block(state.skips.keys.sorted().asSequence())
 
-    override fun countSkipped(bucketIds: Set<Long>?, sinceSec: Long?): Long =
-        state.skips.values.count { inScope(it.bucketId, it.dateAddedSec, bucketIds, sinceSec) }.toLong()
+    override fun countSkipped(bucketIds: Set<Long>?, sinceSec: Long?, scopeTimeOf: ScopeTimeOf?): Long =
+        state.skips.entries.count { inScope(it.key, it.value.bucketId, it.value.dateAddedSec, bucketIds, sinceSec, scopeTimeOf) }.toLong()
 
     override fun cancelRemaining(targets: List<SkipTarget>, audit: AuditRecord?): SkipResult = inTransaction {
         val now = clock()
@@ -235,19 +236,19 @@ class InMemoryOrderStore(private val clock: () -> Long = System::currentTimeMill
         failed.size
     }
 
-    override fun countCurrentByState(bucketIds: Set<Long>?, sinceSec: Long?): Map<OrderState, Long> {
+    override fun countCurrentByState(bucketIds: Set<Long>?, sinceSec: Long?, scopeTimeOf: ScopeTimeOf?): Map<OrderState, Long> {
         val out = currentRows()
-            .filter { inScope(it.bucketId, it.dateAddedSec, bucketIds, sinceSec) }
+            .filter { inScope(it.mediaId, it.bucketId, it.dateAddedSec, bucketIds, sinceSec, scopeTimeOf) }
             .filter { it.state != OrderState.SKIPPED_BY_USER }
             .groupingBy { it.state }.eachCount().mapValues { it.value.toLong() }
             .toMutableMap()
-        val skipped = countSkipped(bucketIds, sinceSec)
+        val skipped = countSkipped(bucketIds, sinceSec, scopeTimeOf)
         if (skipped > 0) out[OrderState.SKIPPED_BY_USER] = skipped
         return out
     }
 
-    override fun countConfirmedPresent(bucketIds: Set<Long>?, sinceSec: Long?): Long =
-        currentRows().count { it.state == OrderState.CONFIRMED && !it.sourceMissing && inScope(it.bucketId, it.dateAddedSec, bucketIds, sinceSec) }.toLong()
+    override fun countConfirmedPresent(bucketIds: Set<Long>?, sinceSec: Long?, scopeTimeOf: ScopeTimeOf?): Long =
+        currentRows().count { it.state == OrderState.CONFIRMED && !it.sourceMissing && inScope(it.mediaId, it.bucketId, it.dateAddedSec, bucketIds, sinceSec, scopeTimeOf) }.toLong()
 
     override fun lastConfirmedAtMs(): Long = currentRows().filter { it.state == OrderState.CONFIRMED }.maxOfOrNull { it.updatedAtMs } ?: 0L
 

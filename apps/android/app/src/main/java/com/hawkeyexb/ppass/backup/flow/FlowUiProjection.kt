@@ -12,6 +12,7 @@ import com.hawkeyexb.ppass.R
 import com.hawkeyexb.ppass.backup.BackupTriplet
 import com.hawkeyexb.ppass.backup.order.OrderState
 import com.hawkeyexb.ppass.backup.order.OrderStore
+import com.hawkeyexb.ppass.backup.order.ScopeTimeOf
 import com.hawkeyexb.ppass.backup.tripletOf
 import com.hawkeyexb.ppass.ui.BackupUiState
 
@@ -96,13 +97,14 @@ data class FlowProjection(
             view: EngineView?,
             /** #1263：范围的开始时间（null = 全部）；与 [bucketIds] 一起决定「范围内」的计数。 */
             sinceSec: Long? = null,
+            scopeTimeOf: ScopeTimeOf? = null,
         ): FlowProjection {
-            val scoped = store.countCurrentByState(bucketIds, sinceSec)
+            val scoped = store.countCurrentByState(bucketIds, sinceSec, scopeTimeOf)
             val all = if (bucketIds == null && sinceSec == null) scoped else store.countCurrentByState(null)
             val ackAt = control.missingSourceAckAt()
             return FlowProjection(
                 view = view,
-                confirmed = store.countConfirmedPresent(bucketIds, sinceSec),
+                confirmed = store.countConfirmedPresent(bucketIds, sinceSec, scopeTimeOf),
                 inScopeTotal = inScopeTotal,
                 failed = all[OrderState.FAILED] ?: 0L,
                 unfinished = OrderState.entries.filter { it.isOpen }.sumOf { all[it] ?: 0L },
@@ -126,8 +128,10 @@ data class FlowProjection(
             bucketIds: Set<Long>?,
             inScopeTotal: Long?,
             remaining: Long? = null,
+            scopeTimeOf: ScopeTimeOf? = null,
         ): FlowProjection = facts(
             store, control, bucketIds, inScopeTotal,
+            scopeTimeOf = scopeTimeOf,
             view = remaining?.let {
                 engineViewOf(status, ViewFacts(paused = control.paused(), waitReason = control.waitReason(), pending = it.toInt()))
             },
