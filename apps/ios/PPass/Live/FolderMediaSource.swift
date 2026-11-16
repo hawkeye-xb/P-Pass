@@ -9,7 +9,8 @@ import PPassCore
 import UniformTypeIdentifiers
 
 /// nil = 独立装配的测试/诊断源不做范围过滤；产品装配必须提供实际存值，未保存时返回空范围。
-typealias FolderScopeProvider = @Sendable () -> (selected: Set<String>, known: Set<String>, since: BackupSince)?
+typealias FolderScope = (selected: Set<String>, known: Set<String>, since: BackupSince)
+typealias FolderScopeProvider = @Sendable () -> FolderScope?
 
 final class FolderMediaSource: MediaSource, FolderSourceIdentifying, @unchecked Sendable {
     /// 装配路由用：本来源的 sourceId（folder:<sourceId>:<opaque> 的第二段）。
@@ -44,7 +45,7 @@ final class FolderMediaSource: MediaSource, FolderSourceIdentifying, @unchecked 
     }
 
     /// 递归枚举根目录里的图片 / 视频文件元数据。完整成功返回 (路径集合, 缺席 opaqueId)；中途失败抛错（本轮「不知道」）。
-    private func enumerate(root: FolderRoot) async throws -> (files: [ScannedFile], missing: Set<String>) {
+    private func enumerate(root: FolderRoot, readsCapture: Bool = true) async throws -> (files: [ScannedFile], missing: Set<String>) {
         var scanned: [ScannedFile] = []
         var failed = false
         let fm = FileManager.default
@@ -74,7 +75,7 @@ final class FolderMediaSource: MediaSource, FolderSourceIdentifying, @unchecked 
             let path = try FolderPaths.normalize(String(relative))
             let modifiedMs = values?.contentModificationDate.map { Int64($0.timeIntervalSince1970 * 1000) }
             let size = values?.fileSize.map(Int64.init) ?? values?.totalFileAllocatedSize.map(Int64.init)
-            let capturedMs = await Self.capturedAtMs(url: url, uti: uti)
+            let capturedMs = readsCapture ? await Self.capturedAtMs(url: url, uti: uti) : nil
             scanned.append(ScannedFile(relativePath: path, modifiedAtMs: modifiedMs,
                                        capturedAtMs: Self.effectiveCapturedAtMs(capturedAtMs: capturedMs, modifiedAtMs: modifiedMs), sizeBytes: size))
         }
@@ -129,8 +130,8 @@ final class FolderMediaSource: MediaSource, FolderSourceIdentifying, @unchecked 
     func mediaId(opaqueId: String) -> String { "folder:\(sourceId):\(opaqueId)" }
 
     /// 范围检查必须先于枚举：取消勾选的目录不应被读取，也不应因授权失效拖住其他来源。
-    private func isSourceSelected(_ sourceBucket: String) -> Bool {
-        guard let scope = scopeProvider() else { return true }
+    private func isSourceSelected(_ sourceBucket: String, scope: FolderScope?) -> Bool {
+        guard let scope else { return true }
         if scope.selected.contains(sourceBucket) {
             // 范围已成功保存后才解除待保存状态；在此之前不扫描、不备份。
             if var record = registry.record(id: sourceId), record.status == Self.pendingScopeStatus {
@@ -150,7 +151,8 @@ final class FolderMediaSource: MediaSource, FolderSourceIdentifying, @unchecked 
     /// 按路径分页会把「id ≤ 游标但排在后面」的文件永久跳过——PhotoMediaSource 同一先例）。
     func inScope(after: String?, limit: Int) async throws -> [MediaSnapshot] {
         let sourceBucket = Self.bucketId(sourceId: sourceId)
-        guard isSourceSelected(sourceBucket) else { return [] }
+        let scope = scopeProvider()
+        guard isSourceSelected(sourceBucket, scope: scope) else { return [] }
         let scan = try await self.scan()
         let all: [(id: String, opaque: String)] = scan.paths.map {
             let opaque = registry.opaqueId(sourceId: sourceId, relativePath: $0)
@@ -160,7 +162,7 @@ final class FolderMediaSource: MediaSource, FolderSourceIdentifying, @unchecked 
         for entry in all {
             if let after, !MediaOrder.precedes(after, entry.id) { continue }
             let captured = scan.captures[entry.opaque]
-            if let scope = scopeProvider(), !ScopeKey.inTime(capturedAtMs: captured, since: scope.since) { continue }
+            if let scope, !ScopeKey.inTime(capturedAtMs: captured, since: scope.since) { continue }
             let bucket = ScopeKey.encode(albums: [sourceBucket], capturedAtMs: captured)
             out.append(MediaSnapshot(mediaId: entry.id, sourceVersion: scan.versions[entry.opaque] ?? "", bucketId: bucket))
             if out.count >= limit { break }
@@ -214,7 +216,8 @@ final class FolderMediaSource: MediaSource, FolderSourceIdentifying, @unchecked 
     /// 哪些此刻还在目录里。nil = 读不出来（枚举失败 = 不知道，调用方不许当「全都没了」）。
     func existingIds(_ mediaIds: [String]) async throws -> Set<String>? {
         let sourceBucket = Self.bucketId(sourceId: sourceId)
-        guard isSourceSelected(sourceBucket) else {
+        let scope = scopeProvider()
+        guard isSourceSelected(sourceBucket, scope: scope) else {
             // 已取消的来源不参与本轮缺席判定，不能因根不可达阻塞其他来源，也不能误报源缺失。
             return Set(mediaIds)
         }
@@ -228,7 +231,7 @@ final class FolderMediaSource: MediaSource, FolderSourceIdentifying, @unchecked 
         }
         do {
             return try await FolderBookmarks.withScope(root.url) { _ in
-                let (files, _): ([ScannedFile], Set<String>) = try await self.enumerate(root: root)
+                let (files, _): ([ScannedFile], Set<String>) = try await self.enumerate(root: root, readsCapture: false)
                 let presentOpaque = Set(files.map { self.registry.opaqueId(sourceId: self.sourceId, relativePath: $0.relativePath) })
                 return Set(mediaIds.filter { id in
                     guard let opaque = Self.opaqueId(of: id, sourceId: self.sourceId) else { return false }
