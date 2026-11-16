@@ -69,7 +69,7 @@ judge_main() {
   local d="$1" orders confirmed bigsize photo_count
   orders=$(jget "$d/status-run.json" 'j["folder_orders"]')
   confirmed=$(jget "$d/status-run.json" 'j["confirmed"]')
-  bigsize=$(stat -f%z "$d/phone-big.mp4" 2>/dev/null || echo 0)
+  bigsize=$(ios_file_size "$d/phone-big.mp4")
   photo_count=$(jget "$d/desk-status.json" 'j["result"]["photo_count"]')
   check "备份收场：folder 订单 $orders 条全部确认（confirmed=$confirmed)" bash -c "[ ${orders:-0} -ge 2 ] && [ \"${confirmed:-0}\" = \"${orders:-0}\" ]"
   check "大文件按引用导入（日志 ref=yes，bytes=$bigsize 与源大小一致）" has_line "$d/ppass.log" "folder .*: imported bytes=$bigsize hash=.* ref=yes"
