@@ -16,6 +16,7 @@ import com.hawkeyexb.ppass.PPassApplication
 import com.hawkeyexb.ppass.backup.AutoBackupPrefs
 import com.hawkeyexb.ppass.backup.AutoBackupRulePrefs
 import com.hawkeyexb.ppass.backup.BackupScopeStore
+import com.hawkeyexb.ppass.backup.effectiveBackupScope
 import com.hawkeyexb.ppass.backup.BackupSettings
 import com.hawkeyexb.ppass.backup.WorkManagerWakeScheduler
 import com.hawkeyexb.ppass.backup.mediaAbsenceTrusted
@@ -303,10 +304,21 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
     // #1762：目录来源（素材文件夹）。registry 存 App 私有容器（树 URI + opaque 映射，跨启动恢复），
     // 与设置页共用进程级单例（两个实例同时写会互踩）；树访问走 SAF。
     // 没有目录时 FolderMediaSnapshotSource 枚举空集，零开销直通。
+    val scopeStore = BackupScopeStore(app)
     val folderRegistry = com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(app)
-    val folderSource = com.hawkeyexb.ppass.backup.folder.FolderMediaSnapshotSource(folderRegistry) { record ->
-        com.hawkeyexb.ppass.backup.folder.SafFolderTree(app, android.net.Uri.parse(record.treeUri))
+    val effectiveScope = {
+        effectiveBackupScope(
+            scopeStore.scope(), scopeStore.knownBucketIds(),
+            folderRegistry.allRecords().mapTo(HashSet()) { it.bucketId }, scopeStore.sinceSec(),
+        )
     }
+    val captureTimeReader = com.hawkeyexb.ppass.backup.folder.SafFolderCaptureTimeReader(app)
+    val folderSource = com.hawkeyexb.ppass.backup.folder.FolderMediaSnapshotSource(
+        folderRegistry,
+        treeFor = { record -> com.hawkeyexb.ppass.backup.folder.SafFolderTree(app, android.net.Uri.parse(record.treeUri)) },
+        scopeProvider = { effectiveScope() },
+        captureAtMs = captureTimeReader::read,
+    )
     val delivery = NativeFlowDeliveryPort(
         bridge = bridge,
         serve = { lease, _ -> importer.serve(lease) },
@@ -329,7 +341,6 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
         log = androidLog,
         clock = SystemClock::elapsedRealtime,
     )
-    val scopeStore = BackupScopeStore(app)
     // #1272：自动备份规则开关。inScope 每张都问，读文件按 1 秒缓存（开关翻转后至多 1 秒生效，下一轮触发前早已过去）。
     val rulePrefs = com.hawkeyexb.ppass.backup.autoBackupRulePrefs(app)
     var ruleCache = false
@@ -344,7 +355,11 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
     }
     // #1762：Composite 的构造要等 ruleOn / scopeStore 就位（MediaStore 段的 scope 闭包引用它们）。
     val compositeMedia = com.hawkeyexb.ppass.backup.folder.CompositeMediaSnapshotSource(
-        primary = ContentResolverMediaSnapshotSource(app, { if (ruleOn()) scopeStore.scope() else null }),
+        primary = ContentResolverMediaSnapshotSource(app, {
+            if (ruleOn()) scopeStore.scope()?.let { scope ->
+                scope.copy(buckets = scope.buckets.filterNot { com.hawkeyexb.ppass.backup.folder.isFolderId(it) }.toSet())
+            } else null
+        }),
         folder = folderSource,
     )
     val control = FlowControlStore(app.filesDir)
@@ -403,11 +418,10 @@ private fun buildRuntime(app: Context, key: String): AndroidFlowRuntime {
                 batteryLow = isBatteryLow(app),
             )
         },
-        // #1762：目录条目绕过相册范围与时间档（ADR §4）——只看「这个 bucket 还是现存的目录来源」；
-        // 移除后 hasBucket=false，该来源的行自动退出范围：不再进待办、presence 对账不打不清（不误标源缺失）。
+        // #1778：目录与相册使用同一来源集合和拍摄时间；旧版已登记目录由 effectiveScope 读现状保留。
         inScope = { bucket, added ->
             ruleOn() && (
-                if (com.hawkeyexb.ppass.backup.folder.isFolderId(bucket)) folderRegistry.hasBucket(bucket)
+                if (com.hawkeyexb.ppass.backup.folder.isFolderId(bucket)) effectiveScope()?.contains(bucket, added) == true
                 else scopeStore.scope()?.contains(bucket, added) == true
                 )
         },

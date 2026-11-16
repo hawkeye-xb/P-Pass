@@ -9,10 +9,21 @@
 //   先 readInScope 再 existingIds）。
 package com.hawkeyexb.ppass.backup.folder
 
+import android.content.Context
+import android.media.ExifInterface
+import android.media.MediaMetadataRetriever
+import android.net.Uri
+import com.hawkeyexb.ppass.backup.BackupScope
 import com.hawkeyexb.ppass.backup.flow.sourceVersionOf
 import com.hawkeyexb.ppass.backup.order.MediaDetails
 import com.hawkeyexb.ppass.backup.order.MediaSnapshot
 import com.hawkeyexb.ppass.backup.order.MediaSnapshotSource
+import com.hawkeyexb.ppass.backup.scopeTimeSecOf
+import java.text.ParsePosition
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.TimeZone
 
 /** folder 快照的 volumeName 占位（不进 volumeNames/volumeVersions，只进快照字段）。 */
 const val FOLDER_VOLUME = "folder"
@@ -27,6 +38,8 @@ fun isMediaMime(mimeType: String): Boolean =
  */
 class FolderMediaSnapshotSource(
     private val registry: FolderRegistry,
+    private val scopeProvider: (() -> BackupScope?)? = null,
+    private val captureAtMs: (FolderTree, FolderFile) -> Long? = { _, _ -> null },
     private val treeFor: (FolderRecord) -> FolderTree,
 ) : MediaSnapshotSource {
 
@@ -37,18 +50,22 @@ class FolderMediaSnapshotSource(
      */
     override fun <R> readInScope(afterId: Long, block: (Sequence<MediaSnapshot>) -> R): R {
         val snapshots = ArrayList<MediaSnapshot>()
+        val scope = scopeProvider?.invoke()
         for (record in registry.allRecords()) {
+            if (scope != null && record.bucketId !in scope.buckets) continue
+            if (scopeProvider != null && scope == null) continue
             val tree = treeFor(record)
-            // 完整枚举（失败抛 → 本轮无可信结果）；只收照片/视频（其他类型忽略，不计失败——ADR 异常口径）。
+            // 先完整枚举再对账：范围只决定输出，未选时间档的文件也保留稳定 ID 供以后放宽范围。
             val files = tree.enumerate().filter { isMediaMime(it.mimeType) }
-            // 完整枚举成功才对账：新项分配 ID，缺席项删除（旧 ID 由 existingIds 流程记源缺失）。
             registry.reconcile(record.id, files.map { it.relativePath })
             val current = registry.record(record.id) ?: continue
             val byPath = files.associateBy { it.relativePath }
             for ((_, item) in current.items) {
                 val file = byPath[item.relativePath] ?: continue
                 if (item.mediaId > afterId) {
-                    snapshots += folderSnapshot(item, record.bucketId, file)
+                    val captured = captureAtMs(tree, file)
+                    if (scope?.contains(record.bucketId, scopeTimeSecOf(captured ?: 0L, file.modifiedAtMs / 1000)) == false) continue
+                    snapshots += folderSnapshot(item, record.bucketId, file, captured)
                 }
             }
         }
@@ -82,21 +99,21 @@ class FolderMediaSnapshotSource(
         val tree = treeFor(record)
         val uri = tree.uriOf(relativePath) ?: return null // 文件没了：源缺失（调用方按单张处理）
         val file = tree.stat(relativePath) ?: return null // 元数据取不全：该项目按不可得处理（ADR §3）
+        val captured = captureAtMs(tree, file)
         return MediaDetails(
             snapshot = MediaSnapshot(
                 mediaId = mediaId,
-                // 与 MediaStore 同口径：modifiedAt(秒):size（MOB-98：版本只看内容有没有变）。
                 sourceVersion = sourceVersionOf(file.modifiedAtMs / 1000, file.sizeBytes),
                 bucketId = record.bucketId,
                 generation = 0L,
                 volumeName = FOLDER_VOLUME,
-                dateAddedSec = file.modifiedAtMs / 1000,
+                dateAddedSec = scopeTimeSecOf(captured ?: 0L, file.modifiedAtMs / 1000),
             ),
             uri = uri,
             fileName = relativePath.substringAfterLast('/'),
             mimeType = file.mimeType,
             sizeBytes = file.sizeBytes,
-            captureAtMs = file.modifiedAtMs,
+            captureAtMs = captured ?: file.modifiedAtMs,
             // 引用导入的 dataPath：externalstorage 的 documentId 可推导真实路径；推导不出为 null（回退复制）。
             // 原生侧校验路径与描述符不一致自动复制——传错只会慢，不会传错数据（#413 §3）。
             dataPath = tree.filePath(relativePath),
@@ -128,11 +145,58 @@ class FolderMediaSnapshotSource(
     }
 }
 
-private fun folderSnapshot(item: FolderItem, bucketId: Long, file: FolderFile): MediaSnapshot = MediaSnapshot(
+private fun folderSnapshot(item: FolderItem, bucketId: Long, file: FolderFile, capturedAtMs: Long?): MediaSnapshot = MediaSnapshot(
     mediaId = item.mediaId,
     sourceVersion = sourceVersionOf(file.modifiedAtMs / 1000, file.sizeBytes),
     bucketId = bucketId,
     generation = 0L,
     volumeName = FOLDER_VOLUME,
-    dateAddedSec = file.modifiedAtMs / 1000,
+    dateAddedSec = scopeTimeSecOf(capturedAtMs ?: 0L, file.modifiedAtMs / 1000),
 )
+
+/** SAF 的媒体元数据读取：图片读 EXIF，视频读容器创建时间；失败只表示时间未知，不影响文件是否存在。 */
+class SafFolderCaptureTimeReader(private val context: Context) {
+    fun read(tree: FolderTree, file: FolderFile): Long? {
+        val uri = tree.uriOf(file.relativePath)?.let(Uri::parse) ?: return null
+        return runCatching {
+            when {
+                file.mimeType.startsWith("image/") -> readImageCapture(uri)
+                file.mimeType.startsWith("video/") -> readVideoCapture(uri)
+                else -> null
+            }
+        }.getOrNull()
+    }
+
+    private fun readImageCapture(uri: Uri): Long? {
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            @Suppress("DEPRECATION")
+            val exif = ExifInterface(input)
+            for (tag in listOf("DateTimeOriginal", "DateTimeDigitized", "DateTime")) {
+                val raw = exif.getAttribute(tag) ?: continue
+                parseDate(raw, "yyyy:MM:dd HH:mm:ss", utc = false)?.let { return it }
+            }
+        }
+        return null
+    }
+
+    private fun readVideoCapture(uri: Uri): Long? {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(context, uri)
+            val raw = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DATE) ?: return null
+            parseDate(raw, "yyyyMMdd'T'HHmmss.SSS'Z'", utc = true)
+                ?: parseDate(raw, "yyyyMMdd'T'HHmmss'Z'", utc = true)
+        } finally {
+            retriever.release()
+        }
+    }
+
+    private fun parseDate(raw: String, pattern: String, utc: Boolean): Long? {
+        val format = SimpleDateFormat(pattern, Locale.US)
+        format.isLenient = false
+        if (utc) format.timeZone = TimeZone.getTimeZone("UTC")
+        val position = ParsePosition(0)
+        val parsed: Date = format.parse(raw, position) ?: return null
+        return if (position.index == raw.length) parsed.time else null
+    }
+}

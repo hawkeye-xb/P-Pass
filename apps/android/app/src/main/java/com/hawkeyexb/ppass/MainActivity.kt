@@ -36,6 +36,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import com.hawkeyexb.ppass.ui.FolderBucketUi
 import com.hawkeyexb.ppass.ui.FolderUi
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -734,7 +735,13 @@ fun PPassApp() {
                 rulePrefs.set(true)
                 ruleOn = true
                 ruleHintRes = null
-                screen = Screen.Buckets(pairing, BackupScopeStore(context).selectedBucketIds() ?: emptySet(), false)
+                val scopeStore = BackupScopeStore(context)
+                val folderCount = com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(context).allRecords().size
+                if (com.hawkeyexb.ppass.backup.shouldGuideToScopeOnEnable(scopeStore.readScope(), folderCount)) {
+                    screen = Screen.Buckets(pairing, scopeStore.selectedBucketIds() ?: emptySet(), false)
+                } else {
+                    requestFlowWake(context, TriggerReason.MANUAL)
+                }
             }
             MediaAccess.PARTIAL -> {
                 ruleHintRes = null
@@ -1328,6 +1335,7 @@ fun PPassApp() {
             // #836：「已选相册」按已选且当前存在计数（与选相册页同源：MediaStore 里实际有的相册）。
             // 先用存下的个数占位，IO 上查完相册再校正；照片权限变化、每次回到前台都重算。
             var selectedBucketCount by remember { mutableStateOf(BackupScopeStore(context).selectedBucketIds()?.size) }
+            var selectedFolderCount by remember { mutableStateOf(0) }
             // #1020：存了范围但读不出来——设置行说「读不到已保存的选择」，不说「未选相册」。
             var scopeUnreadable by remember { mutableStateOf(false) }
             // #1263：范围的开始时间（设置行的值「3 个相册 · 10月29日起的照片」）。
@@ -1345,7 +1353,11 @@ fun PPassApp() {
                     }
                 }
                 val selected = withContext(Dispatchers.IO) { BackupScopeStore(context).selectedBucketIds() }
-                selectedBucketCount = selectedExistingCount(selected, listed?.map { it.id }?.toSet())
+                val folderIds = withContext(Dispatchers.IO) {
+                    com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(context).allRecords().mapTo(HashSet()) { it.bucketId }
+                }
+                selectedFolderCount = selected?.count { com.hawkeyexb.ppass.backup.folder.isFolderId(it) && it in folderIds } ?: 0
+                selectedBucketCount = selectedExistingCount(selected, listed?.map { it.id }?.toSet()?.plus(folderIds))
             }
             val scope = rememberCoroutineScope()
             // NET-28: bind can now throw (timeout) — an uncaught throw in a
@@ -1582,6 +1594,7 @@ fun PPassApp() {
                         // T6: 备份范围——「选择相册」与「发起备份」两个动作。
                         // #836：按「已选且当前存在」计数，与选相册页同一口径。
                         selectedBucketCount = selectedBucketCount,
+                        selectedFolderCount = selectedFolderCount,
                         scopeUnreadable = scopeUnreadable,
                         scopeTimeLabel = scopeValueLabel(context, scopeSince),
                         countsReadable = holder.countsReadable.value,
@@ -1681,12 +1694,50 @@ fun PPassApp() {
         // #1263：范围 = 相册 + 开始时间（从今天起 / 全部）；首次选完直接进首页，没有完成页。
         is Screen.Buckets -> {
             val scopeStore = remember { BackupScopeStore(context) }
+            val folderRegistry = remember { com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(context) }
             var buckets by remember { mutableStateOf<List<MediaScanner.Bucket>?>(null) }
-            LaunchedEffect(Unit) {
-                buckets = withContext(Dispatchers.IO) {
-                    MediaScanner(context.contentResolver).listBuckets()
+            var folderEntries by remember { mutableStateOf(emptyList<com.hawkeyexb.ppass.backup.folder.FolderEntry>()) }
+            var folderRevision by remember { mutableStateOf(0) }
+            var pendingFolderUris by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(arrayListOf<String>()) }
+            var folderToReauthorize by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
+            var scopeSaving by remember { mutableStateOf(false) }
+            var foldersError by remember { mutableStateOf<Int?>(null) }
+            LaunchedEffect(foldersError) {
+                foldersError?.let {
+                    snackbarHostState.showSnackbar(context.getString(it))
+                    foldersError = null
                 }
             }
+
+            LaunchedEffect(Unit) {
+                buckets = withContext(Dispatchers.IO) { MediaScanner(context.contentResolver).listBuckets() }
+            }
+            LaunchedEffect(folderRevision, resumeCount) {
+                folderEntries = withContext(Dispatchers.IO) {
+                    com.hawkeyexb.ppass.backup.folder.FolderAccess.listEntries(context)
+                }
+            }
+            val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+                if (uri == null) {
+                    folderToReauthorize = null
+                    return@rememberLauncherForActivityResult
+                }
+                val reauth = folderToReauthorize
+                folderToReauthorize = null
+                if (reauth == null) {
+                    if (!pendingFolderUris.contains(uri.toString())) pendingFolderUris = ArrayList(pendingFolderUris + uri.toString())
+                } else {
+                    scope.launch(Dispatchers.IO) {
+                        val ok = com.hawkeyexb.ppass.backup.folder.FolderAccess.reauthorize(context, reauth, uri)
+                        if (!ok) foldersError = R.string.folder_reauthorize_failed
+                        if (ok) {
+                            com.hawkeyexb.ppass.backup.folder.FolderAccess.changed(context)
+                            folderRevision++
+                        }
+                    }
+                }
+            }
+
             val list = buckets
             if (list == null) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -1695,62 +1746,123 @@ fun PPassApp() {
             } else {
                 val savedRead = remember { scopeStore.readScope() }
                 val savedSince = remember { scopeStore.sinceSec() }
+                val records = folderRegistry.allRecords()
+                val existingFolderBuckets = records.mapTo(HashSet()) { it.bucketId }
+                val knownSources = scopeStore.knownBucketIds()
+                val effective = com.hawkeyexb.ppass.backup.effectiveBackupScope(
+                    scopeStore.scope(), knownSources, existingFolderBuckets, savedSince,
+                )
+                val folderCards = records.map { record ->
+                    val entry = folderEntries.firstOrNull { it.sourceId == record.id }
+                    FolderBucketUi(
+                        key = record.id,
+                        bucket = MediaScanner.Bucket(record.bucketId, record.displayName, record.items.size),
+                        registered = true,
+                        needsPermission = entry?.needsPermission == true,
+                    )
+                } + pendingFolderUris.map { raw ->
+                    val name = android.net.Uri.parse(raw).lastPathSegment
+                        ?.substringAfterLast(':')?.substringAfterLast('/')?.takeIf { it.isNotBlank() }
+                        ?: context.getString(R.string.folder_settings_title)
+                    FolderBucketUi(raw, MediaScanner.Bucket(0L, name, 0), registered = false)
+                }
+                val selectedFolders = records.filter { effective?.buckets?.contains(it.bucketId) == true }
+                    .mapTo(HashSet()) { it.id }
+
                 BucketScreen(
                     buckets = list,
-                    // #1263：首次（这台电脑从没存过范围）默认勾上相机相册，识别不到就不勾。
                     selected = initialSelection(
-                        saved = (savedRead as? ScopeRead.Saved)?.ids,
+                        saved = (savedRead as? ScopeRead.Saved)?.ids
+                            ?.filterNot { com.hawkeyexb.ppass.backup.folder.isFolderId(it) }?.toSet(),
                         firstTime = s.firstTime,
                         cameraBucketIds = list.filter { it.isCamera }.map { it.id }.toSet(),
                     ),
                     initialTime = initialScopeTime(savedRead is ScopeRead.Saved, savedSince, mediaAccess == MediaAccess.PARTIAL),
                     sinceLabel = scopeSinceOptionLabel(context, savedSince.takeIf { savedRead is ScopeRead.Saved }),
                     firstTime = s.firstTime,
-                    // MOB-02 §六: 新相册判定基准（null = 从未选过范围，全量模式）。
-                    knownBuckets = scopeStore.knownBucketIds(),
-                    // 10-29：只给了部分照片也照常保存范围，只备份允许的那些（页顶说明一行）；
-                    // 首页英雄卡仍由部分授权引导卡顶替（MOB-02 §二：不显示假 0/0）。
-                    onDone = { sel, time ->
-                        // MOB-02 §六: 保存范围 + 记录当前全部相册（新相册
-                        // 基准）；新出现的相册默认不包含（不在 sel 里）。
-                        // MOB-20: 必须在 saveScope 覆盖旧集合**之前**算差集。
-                        // #1020：读不出来的旧范围按「从未选过」算（全部新增，宁可多扫），同 iOS。
-                        val prevScope = (BackupScopeStore(context).readScope() as? ScopeRead.Saved)?.ids
-                        val prevSince = if (prevScope != null) scopeStore.sinceSec() else null
-                        // MOB-40: `prevScope == null` = **从未选过范围**——一张都没备过，首次选择就是全部新增。
-                        val added = if (prevScope == null) sel else sel - prevScope
-                        // #1263：「从今天起」= 当天 0 点；原来就是「从某天起」的保留原来那天（不往后滑）。
-                        val since = sinceToSave(time, prevSince, System.currentTimeMillis())
-
-                        // #1020：没存上就不往下走——不进首页、不叫醒引擎，留在选范围页让用户看到提示并能重试。
-                        val saved = settingsWriter.write("backupScope", sel.size, R.string.scope_save_failed) {
-                            scopeStore.saveScope(
-                                selected = sel,
-                                allCurrent = list.map { it.id }.toSet(),
-                                sinceSec = since,
-                            )
-                        }
-                        if (!saved) return@BucketScreen
-                        val settings = BackupSettings(context.filesDir).load()
-                        val constraintsSatisfied = !settings.wifiOnly || isOnUnmetered(context)
-                        if (s.firstTime) {
-                            // #1321：决定页选了范围备份——「自动备份」规则随之打开，「连过这台」在这里落盘（快速重连只认它）。
-                            rulePrefs.set(true)
-                            ruleOn = true
-                            markDecided(s.pairing, "scope")
-                            // #1263：onboarding 里不再问后台备份——新用户默认关，首页卡片引导开启。
-                            // #1039：按「关」把意图再写一次。配对时清旧意图那一步若没写下来，这里补上——否则旧电脑留下的
-                            // 意图会在回到前台时（#540 对账）把新电脑的后台备份悄悄打开。
-                            settingsWriter.write("autoBackup", false) { disableAutoBackup(context) }
-                            requestFlowScopeBackfillAndWake(context, constraintsSatisfied)
-                        } else if (added.isNotEmpty() || sinceWidened(prevSince, since)) {
-                            // REBUILD-05: 范围扩大（新勾的相册，或「从今天起」改成「全部」）走补扫（对账扫描置脏）。
-                            requestFlowScopeBackfillAndWake(context, constraintsSatisfied)
-                        }
-                        triggerUserPresentBackup(context)
-                        screen = Screen.Home(s.pairing)
+                    knownBuckets = knownSources,
+                    folderBuckets = folderCards,
+                    selectedFolderKeys = selectedFolders,
+                    saving = scopeSaving,
+                    onAddFolder = {
+                        folderToReauthorize = null
+                        folderPicker.launch(null)
                     },
-                    // #1321：首次选范围是从决定页进来的，取消回决定页。
+                    onRemoveFolder = { key ->
+                        if (pendingFolderUris.contains(key)) {
+                            pendingFolderUris = ArrayList(pendingFolderUris.filter { it != key })
+                        } else {
+                            scope.launch(Dispatchers.IO) {
+                                runCatching {
+                                    com.hawkeyexb.ppass.backup.folder.FolderAccess.removeFolder(context, key)
+                                }.onFailure { foldersError = R.string.folder_add_failed }
+                                com.hawkeyexb.ppass.backup.folder.FolderAccess.changed(context)
+                                folderRevision++
+                            }
+                        }
+                    },
+                    onReauthorizeFolder = { key ->
+                        folderToReauthorize = key
+                        folderPicker.launch(null)
+                    },
+                    onDone = { selectedAlbumIds, folderKeys, time ->
+                        if (scopeSaving) return@BucketScreen
+                        scopeSaving = true
+                        scope.launch {
+                            val previousEffective = effective?.buckets
+                            val prevSince = if (savedRead is ScopeRead.Saved) savedSince else null
+                            val since = sinceToSave(time, prevSince, System.currentTimeMillis())
+                            val pendingToAdd = folderKeys.filter { pendingFolderUris.contains(it) }
+                            val prepared = withContext(Dispatchers.IO) {
+                                val addedIds = ArrayList<String>()
+                                for (raw in pendingToAdd) {
+                                    val added = com.hawkeyexb.ppass.backup.folder.FolderAccess.addFolder(context, android.net.Uri.parse(raw))
+                                    if (added == null) {
+                                        addedIds.forEach { runCatching { com.hawkeyexb.ppass.backup.folder.FolderAccess.removeFolder(context, it) } }
+                                        return@withContext null
+                                    }
+                                    addedIds += added
+                                }
+                                val current = folderRegistry.allRecords()
+                                val selected = folderKeys.mapNotNull { key -> current.firstOrNull { it.id == key }?.bucketId }.toSet()
+                                Triple(selected, current, addedIds)
+                            }
+                            if (prepared == null) {
+                                foldersError = R.string.folder_add_failed
+                                scopeSaving = false
+                                return@launch
+                            }
+                            val sel = selectedAlbumIds.filterNot { com.hawkeyexb.ppass.backup.folder.isFolderId(it) }.toSet() + prepared.first
+                            val allCurrent = list.map { it.id }.toSet() + prepared.second.map { it.bucketId }
+                            val saved = settingsWriter.write("backupScope", sel.size, R.string.scope_save_failed) {
+                                scopeStore.saveScope(selected = sel, allCurrent = allCurrent, sinceSec = since,)
+                            }
+                            if (!saved) {
+                                withContext(Dispatchers.IO) {
+                                    prepared.third.forEach { runCatching { com.hawkeyexb.ppass.backup.folder.FolderAccess.removeFolder(context, it) } }
+                                }
+                                scopeSaving = false
+                                return@launch
+                            }
+                            val added = if (previousEffective == null) sel else sel - previousEffective
+                            pendingFolderUris = arrayListOf()
+                            folderRevision++
+                            scopeSaving = false
+                            val settings = BackupSettings(context.filesDir).load()
+                            val constraintsSatisfied = !settings.wifiOnly || isOnUnmetered(context)
+                            if (s.firstTime) {
+                                rulePrefs.set(true)
+                                ruleOn = true
+                                markDecided(s.pairing, "scope")
+                                settingsWriter.write("autoBackup", false) { disableAutoBackup(context) }
+                                requestFlowScopeBackfillAndWake(context, constraintsSatisfied)
+                            } else if (added.isNotEmpty() || sinceWidened(prevSince, since)) {
+                                requestFlowScopeBackfillAndWake(context, constraintsSatisfied)
+                            }
+                            triggerUserPresentBackup(context)
+                            screen = Screen.Home(s.pairing)
+                        }
+                    },
                     onCancel = { screen = if (s.firstTime) Screen.Decision(s.pairing) else Screen.Home(s.pairing) },
                 )
             }
