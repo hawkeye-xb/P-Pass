@@ -50,4 +50,15 @@ class UI08BucketScreenTest {
         assertTrue("新目录先默认选中但只进编辑暂存", source.contains("!it.registered && it.key !in seenFolderKeys"))
     }
 
+    @Test
+    fun source_cards_and_add_action_share_grid_geometry_and_type_glyphs() {
+        val source = bucketScreenSource()
+        assertTrue("相册与文件夹必须有不同类型图标", source.contains("SourceTypeGlyph(isFolder)"))
+        assertTrue("相册卡使用相册图标", source.contains("isFolder = false"))
+        assertTrue("文件夹卡使用文件夹图标", source.contains("isFolder = true"))
+        assertTrue("来源卡和添加动作必须同高", source.split("Modifier.height(72.dp)").size >= 3)
+        assertTrue("添加动作也使用同一封面比例", source.contains("Modifier.fillMaxWidth().aspectRatio(1.6f)"))
+        assertFalse("移除不能作为卡片外的一行撑高", source.contains("Row(Modifier.padding(start = 8.dp, top = 4.dp))"))
+    }
+
 }
