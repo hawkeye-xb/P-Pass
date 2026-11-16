@@ -110,6 +110,7 @@ for c in $CARDS; do
 "
 done
 GLOBS=("${ALL_GLOBS[@]}")
+flow_requested_gates "${CARD_TEXT:-}" || fail_blocked "卡面 E1 门禁对账" "" "$REQUESTED_ERROR"
 
 # ── 1. 改动清单只含范围内文件；核心判定 ───────────────────────────────
 FILES="$(git -c core.quotepath=false diff --name-only --no-renames origin/main...HEAD)"
@@ -198,6 +199,7 @@ SELF_REVIEW_BODY="$(grep -v '^[[:space:]]*$' "$SELF_REVIEW" | sed '1d' | scrub)"
 flow_pick_gates <<EOF2
 $FILES
 EOF2
+flow_merge_requested_gates
 
 GATE=""
 for g in "${GATES[@]}"; do GATE="${GATE:+${GATE} + }${g}"; done

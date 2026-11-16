@@ -40,6 +40,7 @@ ALL_GLOBS=()
 ITYPES=""
 CORE_CARDS=()
 TITLES=()
+CARD_TEXT=""
 for c in "${CARDS[@]}"; do
   flow_load_issue "$c"
   [ "$I_STATE" = "OPEN" ] || die "#${c} 不是 open（现在是 ${I_STATE:-未知}），不领"
@@ -75,8 +76,11 @@ for c in "${CARDS[@]}"; do
   esac
   ITYPES="${ITYPES} ${t}"
   [ "$c" = "$N" ] && { FIRST_TITLE="$I_TITLE"; FIRST_BODY="$I_BODY"; }
+  CARD_TEXT="${CARD_TEXT}${I_BODY}
+"
 done
 GLOBS=("${ALL_GLOBS[@]}")
+flow_requested_gates "$CARD_TEXT" || die "卡面 E1 门禁对账失败" "$REQUESTED_ERROR"
 
 # type：issue 类型 Feature→feat、Bug→fix；Task 按范围推（全在文档里→docs，全在测试里→test，其余→ci）。
 # 注意：本地提交拦截只认 feat/fix/docs/test/ci（tools/hooks/pre-commit），所以没有 chore。
@@ -167,7 +171,7 @@ if [ "${PPASS_GATE_PRECHECK:-on}" != off ]; then
     m="$(git -C "$DIR" ls-files -z -- "$g" 2>/dev/null | tr '\0' '\n')"
     if [ -n "$m" ]; then printf '%s\n' "$m"; else printf '%s\n' "$g"; fi
   done)"
-  PRECHECK_GATES="$( (cd "$DIR" && flow_pick_gates && printf '%s\n' "${GATES[@]}") <<EOF2
+  PRECHECK_GATES="$( (cd "$DIR" && flow_pick_gates && flow_merge_requested_gates && printf '%s\n' "${GATES[@]}") <<EOF2
 $PRECHECK_PATHS
 EOF2
 )"
