@@ -29,8 +29,6 @@ public actor FlowEngine {
     private let control: FlowControl
     private let conditions: @Sendable () -> Conditions
     private let inScope: @Sendable (String) -> Bool
-    /// #459：「照片库里查不到」此刻能不能当「原图被删了」。只有完整相册权限才是 true。**没有默认值**（失败关闭）。
-    private let mediaAbsenceTrusted: @Sendable () -> Bool
     /// 当前配对代号；nil = 未配对。
     private let pairingId: @Sendable () -> String?
     private let logger: CoreLogger
@@ -97,7 +95,6 @@ public actor FlowEngine {
         control: FlowControl,
         conditions: @escaping @Sendable () -> Conditions,
         inScope: @escaping @Sendable (String) -> Bool,
-        mediaAbsenceTrusted: @escaping @Sendable () -> Bool,
         pairingId: @escaping @Sendable () -> String?,
         logger: CoreLogger,
         clock: @escaping @Sendable () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) },
@@ -120,7 +117,6 @@ public actor FlowEngine {
         self.control = control
         self.conditions = conditions
         self.inScope = inScope
-        self.mediaAbsenceTrusted = mediaAbsenceTrusted
         self.pairingId = pairingId
         self.logger = logger
         self.clock = clock
@@ -1424,12 +1420,9 @@ public actor FlowEngine {
         let clear: [Int64]
     }
 
-    /// #459：对账轮入口（只读元数据、不持有租约）按照片库差集写 `source_missing`。不是完整相册权限 → 整步跳过。
+    /// #459：对账轮入口（只读元数据、不持有租约）按各来源差集写 `source_missing`。
+    /// 各来源的 existingIds 自己证明缺席是否可信；任一相关来源不可信则整轮不写。
     private func reconcileSourcePresence() async {
-        guard mediaAbsenceTrusted() else {
-            log("source_missing: media access is not full; absence proves nothing, skipped")
-            return
-        }
         guard control.waitReason() != .sourceUnavailable else {
             // #1731：来源不可用等待中——缺席证明不了什么，不写源缺失（恢复后由对账重新判定）。
             log("source_missing: a source is unavailable; absence proves nothing, skipped")
@@ -1439,11 +1432,11 @@ public actor FlowEngine {
         do {
             plan = try await sourcePresencePlan()
         } catch {
-            log("source_missing: photo library read failed (\(error)); nothing written")
+            log("source_missing: source read failed (\(error)); nothing written")
             return
         }
         guard let plan else {
-            log("source_missing: the photo library could not confirm which photos are gone; nothing written")
+            log("source_missing: a source could not confirm which items are gone; nothing written")
             return
         }
         var marked = 0, cleared = 0

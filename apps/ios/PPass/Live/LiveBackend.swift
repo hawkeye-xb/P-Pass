@@ -226,7 +226,6 @@ final class LiveBackend: @unchecked Sendable {
                            onUnmetered: !network.isExpensive, batteryLow: BatteryState.isLow)
             },
             inScope: { LiveBackend.engineInScope($0, selected: scope(), since: since()) },
-            mediaAbsenceTrusted: { media.access() == .full },
             pairingId: pairingId, logger: logger,
             afterCycle: FlowWiring.afterCycle(dispatcher: audit),
             onPairingIdAdvertised: FlowWiring.pairingIdAdvertised(loss: pairingLoss, currentPairingId: pairingId),

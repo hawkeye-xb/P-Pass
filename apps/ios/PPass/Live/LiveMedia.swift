@@ -104,6 +104,7 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
     /// 配对成功后引擎那一轮会在配对页上、在用户没走到选范围页之前就把它弹出来。系统框只该由选范围页读相册列表时弹（`LiveMediaLibrary.albums`）。
     /// 没问过 = 一张照片都读不到，范围内本来就是空的。
     private let accessDecided: @Sendable () -> Bool
+    private let absenceTrusted: @Sendable () -> Bool
     private let library = PhotoKitLibrary()
     private let contents = OriginalContentReader()
     private let inbox: Inbox
@@ -111,10 +112,12 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
 
     init(selected: @escaping @Sendable () -> Set<String>, since: @escaping @Sendable () -> BackupSince, inbox: Inbox,
          accessDecided: @escaping @Sendable () -> Bool = { PhotoKitAuthorization().currentLevel() != .notDetermined },
+         absenceTrusted: @escaping @Sendable () -> Bool = { PhotoKitAuthorization().currentLevel() == .full },
          log: @escaping @Sendable (String) -> Void) {
         self.selected = selected
         self.since = since
         self.accessDecided = accessDecided
+        self.absenceTrusted = absenceTrusted
         self.inbox = inbox
         self.log = log
     }
@@ -224,6 +227,7 @@ final class PhotoMediaSource: MediaSource, @unchecked Sendable {
     }
 
     func existingIds(_ mediaIds: [String]) async throws -> Set<String>? {
+        guard absenceTrusted() else { return nil }
         var out = Set<String>()
         PHAsset.fetchAssets(withLocalIdentifiers: mediaIds, options: nil).enumerateObjects { a, _, _ in out.insert(a.localIdentifier) }
         return out
