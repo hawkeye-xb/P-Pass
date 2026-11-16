@@ -7,11 +7,14 @@ import UniformTypeIdentifiers
 
 /// 手机相册（PPassMedia）：授权三档、相册目录、备份范围（PPassCore `BackupScopeStore`，按电脑分文件）。
 final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
-    private let auth = PhotoKitAuthorization()
+    private let auth: PhotoAuthorizationProviding
     private let catalog = AlbumCatalog(library: PhotoKitLibrary())
     private let scopeStore: () -> BackupScopeStore
 
-    init(scopeStore: @escaping () -> BackupScopeStore) { self.scopeStore = scopeStore }
+    init(scopeStore: @escaping () -> BackupScopeStore, auth: PhotoAuthorizationProviding = PhotoKitAuthorization()) {
+        self.scopeStore = scopeStore
+        self.auth = auth
+    }
 
     /// 权限三档 → 首页表达（#336：只有完整授权才显示数字、才允许「都存好了」）。没决定过也算拿不到。
     func access() -> MediaAccess { Self.map(auth.currentLevel()) }
@@ -34,7 +37,7 @@ final class LiveMediaLibrary: MediaLibrary, @unchecked Sendable {
     func requestAccess() async -> MediaAccess { Self.map(await auth.requestFullAccess()) }
 
     func albums() async throws -> [AlbumBucket] {
-        if auth.currentLevel() == .notDetermined { _ = await auth.requestFullAccess() }
+        guard auth.currentLevel() == .full else { return [] }
         return catalog.listAlbums().map { AlbumBucket(id: $0.id, name: $0.title, count: $0.count, isCameraAlbum: $0.kind == .library) }
     }
 

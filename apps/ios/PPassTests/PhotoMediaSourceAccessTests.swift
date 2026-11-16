@@ -55,4 +55,29 @@ final class PhotoMediaSourceAccessTests: XCTestCase {
         let fullIds = try await full.existingIds([])
         XCTAssertEqual(fullIds, [])
     }
+
+    private final class FakeAuthorization: PhotoAuthorizationProviding {
+        var level: PhotoAccessLevel
+        var requests = 0
+        init(_ level: PhotoAccessLevel) { self.level = level }
+        func currentLevel() -> PhotoAccessLevel { level }
+        func requestFullAccess() async -> PhotoAccessLevel { requests += 1; return level }
+    }
+
+    func testAlbumListingDoesNotRequestAccessOrExposeMetadataWithoutFullAccess() async throws {
+        for level in [PhotoAccessLevel.notDetermined, .denied, .restricted, .limited] {
+            let auth = FakeAuthorization(level)
+            let library = LiveMediaLibrary(scopeStore: { fatalError("本用例不读范围") }, auth: auth)
+            let albums = try await library.albums()
+            XCTAssertEqual(albums, [], "\(level) 不应读取相册名称或数量")
+            XCTAssertEqual(auth.requests, 0, "进入范围页不得主动请求权限：\(level)")
+        }
+    }
+
+    func testExplicitPhotoActionIsTheOnlyAccessRequest() async {
+        let auth = FakeAuthorization(.notDetermined)
+        let library = LiveMediaLibrary(scopeStore: { fatalError("本用例不读范围") }, auth: auth)
+        _ = await library.requestAccess()
+        XCTAssertEqual(auth.requests, 1)
+    }
 }

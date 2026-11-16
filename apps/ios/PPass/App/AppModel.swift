@@ -212,40 +212,41 @@ final class AppModel: ObservableObject {
     }
 
     /// 规则开着、但权限被收回 / 改成部分：自动备份已停止（偏好不动，单独显示成这一种状态）。
-    var autoRuleBlocked: Bool { autoRule && access != .full }
+    var autoRuleBlocked: Bool { sourceAvailability.showsGlobalPhotoBlock }
 
     /// #1353：「自动备份已停止」状态卡带「去设置」——开关开着、照片权限不全（部分 / 全拒）。开关关着是正常状态，不给。
     /// 开关本身不动；回到前台 `refresh` 重读真实权限，变成全部就不再是这张卡（对位 Android `blockedHeroOffersSettings`）。
     nonisolated static func blockedHeroOffersSettings(autoRule: Bool, access: MediaAccess) -> Bool { autoRule && access != .full }
-    var blockedHeroOffersSettings: Bool { Self.blockedHeroOffersSettings(autoRule: autoRule, access: access) }
+    var blockedHeroOffersSettings: Bool { sourceAvailability.showsGlobalPhotoBlock }
 
     @MainActor func openSettingsFromBlockedHero() {
         AppLog.log("auto-rule: blocked (photo access=\(access)), opening app settings")
         openAppSettings()
     }
 
-    /// 「自动备份」开关（设置页与照片页空状态的主按钮共用）。关：只写偏好。开：此刻才申请照片权限——
-    /// 全部允许 → 开；已有有效范围只恢复备份，无存值才主动进入范围页（#1775）。
-    /// 有限访问 → 开关保持关，把允许的照片按手选链路传一次；不允许 → 保持关 + 一行小字。
+    /// 「自动备份」开关表示用户意图，不再以完整照片权限为开启前置。
+    /// 已有有效范围只恢复备份，无存值才主动进入范围页；folder-only 可直接开启，相册-only 的有限授权旧路径不变。
     func setAutoRule(_ on: Bool) {
         ruleNote = nil
         guard on else {
             do { try backend.engine.setAutoRule(false); autoRule = false } catch { settingWriteFailed("auto-rule", error) }
             return
         }
-        // 已经是「部分照片」：iOS 不会再弹授权框（Android 这一步会再弹一次、可当场改成「全部允许」）。同一意图的 iOS 做法是
-        // 带用户去系统设置里本 App 的「照片」项改成「所有照片」；回到前台按真实权限接着走（`sceneBecameActive`）。不预写任何开关。
-        if backend.media.access() == .partial {
-            // 记号落盘：iOS 改照片权限会结束 App 进程，回来可能是冷启动。写不下来照样去设置，只是回来不能自动接着走。
+        if backend.media.access() == .partial && !sourceAvailability.folderOnly {
             do { try backend.engine.setPendingFullPhotoAccess(true) } catch { AppLog.log("auto-rule: pending mark write failed: \(error)") }
             AppLog.log("auto-rule: partial photo access, opening system settings for full access")
             openAppSettings()
             return
         }
-        Task {
-            let granted = await backend.media.requestAccess()
-            await applyAutoRuleAccess(granted)
-        }
+        Task { await enableAutoRuleWithoutPhotoGate() }
+    }
+
+    private func enableAutoRuleWithoutPhotoGate() async {
+        access = backend.media.access()
+        do { try backend.engine.setAutoRule(true); autoRule = true } catch { settingWriteFailed("auto-rule", error); return }
+        refresh()
+        if access == .full { refreshExistingAlbums() }
+        if noAlbums { openScopeEditor() } else { await backend.engine.wake() }
     }
 
     /// 开自动备份时拿到的照片权限档 → 结果（对位 Android 授权回调）：全部 → 开、进选范围页；
@@ -510,6 +511,12 @@ final class AppModel: ObservableObject {
     /// 范围从未保存、保存了空集、或所有已选来源都不在范围内。旧版目录按当前登记状态保持有效。
     var noAlbums: Bool {
         !ScopePolicy.hasUsableScope(selected: scope, known: knownScopeIds, existingAlbums: existingAlbums, folderCount: folderCount)
+    }
+
+    var sourceAvailability: SourceAvailability {
+        SourceAvailability(autoRule: autoRule, photoAccess: access,
+                           hasUsableFolder: SourceAvailability.hasUsableFolder(selected: scope, known: knownScopeIds, folderCount: folderCount),
+                           hasSelectedAlbum: (selectedAlbumCount ?? 0) > 0)
     }
 
     // MARK: #1324 照片页引导位与范围内暂无照片的现状（ADR 结论 6、7，对位 Android #1322）

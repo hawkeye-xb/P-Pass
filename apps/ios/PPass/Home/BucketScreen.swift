@@ -1,5 +1,6 @@
 import SwiftUI
 import PPassCore
+import PPassMedia
 
 /// 统一备份范围：相册与文件夹卡片共用选中表现、同一时间档和同一个保存动作。
 /// 添加文件夹只登记授权并标成待保存；取消勾选保留授权，移除需单独确认且不删原素材。
@@ -95,14 +96,29 @@ struct BucketScreen: View {
     /// 没有照片权限时不给选择（10-30）：时间档、提示句和底部「开始备份 / 保存」都不显示——一张都读不到，选了也没用。
     static func offersChoices(_ notice: AccessNotice) -> Bool { notice != .noAccess }
 
-    /// 没有照片权限：标题 + 一句现状 +「去设置」（打开本 App 的系统设置页）。样式同首页英雄卡的权限卡。
+    /// 相册权限提示只针对相册；文件夹仍可添加和备份。首次点击才申请，拒绝后改去系统设置。
     private var noAccess: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let presentation = PhotoAccessPresentation.of(PhotoKitAuthorization().currentLevel())
+        return VStack(alignment: .leading, spacing: 10) {
             Text(L.s("bucket_no_access_title")).font(PPFont.cardTitle).foregroundStyle(PPColor.act)
             Text(L.s("bucket_no_access_body")).font(PPFont.cardBody).foregroundStyle(PPColor.ink60)
                 .fixedSize(horizontal: false, vertical: true)
-            PPButton(title: L.s("bucket_no_access_action")) { app.openAppSettings() }
-                .accessibilityIdentifier("bucketOpenSettings")
+            switch presentation.notice?.action {
+            case .requestAccess:
+                PPButton(title: L.s("bucket_request_access_action")) {
+                    Task {
+                        _ = await app.backend.media.requestAccess()
+                        app.refreshAccess()
+                        await load()
+                    }
+                }
+                .accessibilityIdentifier("bucketRequestAccess")
+            case .openAppSettings:
+                PPButton(title: L.s("bucket_no_access_action")) { app.openAppSettings() }
+                    .accessibilityIdentifier("bucketOpenSettings")
+            case nil:
+                EmptyView()
+            }
         }
         .padding(.top, 24)
     }
