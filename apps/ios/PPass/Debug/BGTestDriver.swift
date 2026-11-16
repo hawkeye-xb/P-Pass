@@ -54,6 +54,8 @@ enum BGTestDriver {
     /// #1744 测试目录与登记显示名共用的前缀（清理只认它，绝不碰用户素材）。
     static let folderPrefix = "foldere3-"
     static let folderDisplayPrefix = "PPass FolderE3"
+    /// pick 暂存的「同内容双来源」素材文件名前缀：seedRun 要把它种进相册，但不能删——场景随后按名拉回对哈希
+    static let stagedDedupPrefix = "foldere3-dedup."
 
     /// 处理了返回 true（E2EDriver 不再走默认的端到端流程）。
     static func run(model: AppModel, dir: URL, env: [String: String]) -> Bool {
@@ -269,8 +271,11 @@ enum BGTestDriver {
         guard imported > 0 else {
             status.write("failed", ["error": "seed import created no assets", "done": true]); return
         }
-        // 只清已导入的素材与 go 信号；其余文件（pick 暂存的 foldere3-dedup.*）留给场景拉回做 BLAKE3 对比。
-        for url in photos + videos { try? FileManager.default.removeItem(at: url) }
+        // 只清已导入的素材与 go 信号；pick 暂存的 foldere3-dedup.* 同样被种进了相册，但必须留在 seed 里——
+        // folder-blackmagic 随后按 staged.name 拉回它做 BLAKE3 对比，删掉会让那一步必然失败。
+        for url in photos + videos where !url.lastPathComponent.hasPrefix(stagedDedupPrefix) {
+            try? FileManager.default.removeItem(at: url)
+        }
         try? FileManager.default.removeItem(at: seed.appendingPathComponent("go"))
         status.write("seeded", ["photos": photos.count, "videos": videos.count, "done": true, "ok": true])
     }
@@ -901,7 +906,7 @@ private final class FolderPickBox: NSObject, UIDocumentPickerDelegate {
                 if let smallest = files?.min(by: { $0.1 < $1.1 }) {
                     let seedDir = status.url.deletingLastPathComponent().appendingPathComponent("seed", isDirectory: true)
                     try FileManager.default.createDirectory(at: seedDir, withIntermediateDirectories: true)
-                    let dest = seedDir.appendingPathComponent("foldere3-dedup.\(smallest.0.pathExtension.lowercased())")
+                    let dest = seedDir.appendingPathComponent("\(BGTestDriver.stagedDedupPrefix)\(smallest.0.pathExtension.lowercased())")
                     try FileManager.default.copyItem(at: smallest.0, to: dest)
                     staged = ["name": dest.lastPathComponent, "size": smallest.1]
                 }

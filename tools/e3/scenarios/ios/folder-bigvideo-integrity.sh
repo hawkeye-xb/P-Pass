@@ -103,10 +103,14 @@ judge_counter() {
     # 上面链条全 ok 证明红得 attributable，judge 由此判非 0（run 记「反证已变红」）。
     check "预期失败：供数期源改动在场，主链不变量被打破（本判据在反证模式预期 FAIL）" \
       no_line "$d/ppass.log" 'source changed while serving'
+    verdict
   else
-    echo "  FAIL  反证链条不完整（上面有 FAIL）——不算预期失败，judge 判 0，由 run 记「反证没变红」拦下"
+    # 反证模式下 judge 的退出码回答的是「反证有没有按预期变红」：run 把任何非 0 都记成「反证已变红」
+    # 并保持 counter_ok=1。所以链条不完整（注入没执行、证据缺失、没观测到源改动）时必须判 0，
+    # run 才记「反证没变红」并把整轮判 FAIL；这里若跟着 verdict 返回非 0，缺证据反而被当成反证通过。
+    echo "  反证链条不完整（上面有 FAIL）——不算预期失败：judge 判 0，由 run 记「反证没变红」，整轮 FAIL"
+    return 0
   fi
-  verdict
 }
 
 counter() {

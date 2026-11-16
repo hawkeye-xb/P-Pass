@@ -60,6 +60,12 @@ replay() { # replay <附加到失败说明里的后缀>
       [ -d "$f" ] || continue
       "$E3/run" judge "$id" "$f" >/dev/null && bad "${id}：$(basename "$f") fixture 没判红$1"
     done
+    # incomplete-*：反证链条不完整的反证目录。judge 必须判 0（=反证没变红），判非 0 就是把
+    # 「证据缺失」冒充成「反证已变红」——run 对任何非 0 都保持 counter_ok=1，整轮会被误放行。
+    for f in "$d"/incomplete-*; do
+      [ -d "$f" ] || continue
+      "$E3/run" judge "$id" "$f" >/dev/null || bad "${id}：$(basename "$f") 反证链条不完整却判非 0（会冒充反证已变红）$1"
+    done
   done
 }
 replay ""

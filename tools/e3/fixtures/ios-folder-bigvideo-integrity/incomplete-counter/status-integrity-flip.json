@@ -1,0 +1,3 @@
+{"run": "e3-x-flip", "step": "failed", "done": true, "ok": false,
+ "error": "integrity: display 定位失败，注入未执行",
+ "armed": {"size": 172158382, "mode": "flip"}}
