@@ -240,10 +240,25 @@ has "state=success" "$FAKE/statuses" && ok "开自动合入失败时评审状态
 echo "==> 拒绝评审"
 reset pass
 printf 'no card here\n' >"$FAKE/pr.body"
-REVIEW 7 >/dev/null 2>&1 && bad "PR 正文没有 closes #N 却评审了" || ok "正文没有 closes #N → 拒绝"
+REVIEW 7 >/dev/null 2>&1 && bad "PR 正文没有关联卡却评审了" || ok "正文没有 closes / refs #N → 拒绝"
 [ ! -s "$FAKE/comments" ] && [ ! -s "$FAKE/statuses" ] && ok "拒绝时不贴评论、不写状态" || bad "拒绝时仍写了评论或状态"
 printf 'closes #77\n' >"$FAKE/pr.body"
 REVIEW 7 >/dev/null 2>&1 && ok "反证：补上 closes #77 → 评审通过" || bad "补上 closes 仍失败"
+
+echo "==> #1790：refs 是部分交付，仍能对照关联卡评审"
+reset pass
+printf 'refs #77\n\n本 PR 只交付场景代码，其余验收项保持未完成。\n' >"$FAKE/pr.body"
+REVIEW 7 >/dev/null 2>&1 && has '### 卡 #77' "$FAKE/agent.stdin" && ok "refs #77 → 加载关联卡，不再准备失败" || bad "refs #77 无法评审"
+has '部分交付（refs）' "$FAKE/agent.stdin" && has '不要仅因整卡还有剩余验收项' "$FAKE/agent.stdin" && ok "refs 提示词明确部分交付边界" || bad "refs 提示词没有部分交付边界"
+reset fail
+REVIEW 7 >/dev/null 2>&1 && bad "refs 放宽了正确性/范围判定" || ok "refs 下的阻断意见仍判未通过"
+reset pass
+printf 'apps/core/c.kt\n' >"$FAKE/pr.files"
+REVIEW 7 >/dev/null 2>&1 && bad "refs 放宽了核心方案门禁" || ok "refs 下缺已采纳方案仍判未通过"
+printf 'tools/x.sh\n' >"$FAKE/pr.files"
+reset pass
+printf 'closes #77\n' >"$FAKE/pr.body"
+REVIEW 7 >/dev/null 2>&1 && has '交付口径：整卡交付（closes/fixes/resolves）' "$FAKE/agent.stdin" && ! has '交付口径：部分交付（refs）' "$FAKE/agent.stdin" && ok "closes 保持整卡交付口径" || bad "closes 的整卡口径被改变"
 printf 'MERGED' >"$FAKE/pr.state"
 reset pass
 REVIEW 7 >/dev/null 2>&1 && bad "已合并的 PR 也评审了" || ok "PR 不是 open → 拒绝"
