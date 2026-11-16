@@ -71,7 +71,8 @@ run_one() {
     load_scn "$id"
     want_counter="$COUNTER"
     [ "$cmode" = auto ] || want_counter="$cmode"
-    trap 'teardown >>"$ev/run.log" 2>&1' EXIT
+    printf -v ev_log_q '%q' "$ev/run.log"
+    trap 'rc=$?; teardown >>'"$ev_log_q"' 2>&1; exit "$rc"' EXIT
     EV="$ev"
     export EV
     {

@@ -60,6 +60,52 @@ for d in "$E3"/fixtures/*/; do
   done
 done
 
+# #1759：子壳被 set -u 中止时，EXIT trap 仍须清理并保留原始错误；旧写法会再报 ev unbound、跳过 teardown。
+(
+  d="$(mktemp -d)" || exit 1
+  trap 'rm -rf "$d"' EXIT
+  cp -R "$E3" "$d/e3" || exit 1
+  cat >"$d/e3/scenarios/mac/trap-exit.sh" <<'SCN'
+DESC="EXIT trap 清理回归"
+COUNTER=off
+setup() {
+  case "$E3_TEST_MODE" in
+    setup-fail) return 1 ;;
+    skip) return 77 ;;
+  esac
+}
+act() {
+  [ "$E3_TEST_MODE" != unbound ] || printf '%s\n' "$PPASS_E3_UNBOUND"
+}
+judge() { [ "$E3_TEST_MODE" != judge-fail ]; }
+teardown() { printf 'desk_stop called\n' >>"$E3_TEST_MARKER"; }
+SCN
+  run_case() {
+    local mode="$1"
+    case_dir="$d/evidence root '$mode"
+    rm -f "$d/$mode.marker"
+    E3_LOCKED_MAC=1 E3_STATE="$d/state-$mode" E3_TEST_MODE="$mode" E3_TEST_MARKER="$d/$mode.marker" \
+      "$d/e3/run" --evidence "$case_dir" mac/trap-exit >"$d/$mode.out" 2>&1
+    printf '%s' "$?" >"$d/$mode.rc"
+  }
+
+  run_case unbound
+  [ "$(cat "$d/unbound.rc")" -ne 0 ] || { echo "set -u 中止后运行器却成功"; exit 1; }
+  [ -f "$d/unbound.marker" ] || { echo "set -u 中止后 teardown 没执行"; exit 1; }
+  grep -q 'PPASS_E3_UNBOUND: unbound variable' "$case_dir/mac-trap-exit/run.log" ||
+    { echo "原始 unbound 错误被覆盖"; exit 1; }
+  ! grep -q 'ev: unbound variable' "$case_dir/mac-trap-exit/run.log" ||
+    { echo "EXIT trap 仍引用失效的 ev"; exit 1; }
+
+  for spec in 'pass 0 PASS' 'setup-fail 1 FAIL' 'skip 0 SKIP' 'judge-fail 1 FAIL'; do
+    set -- $spec
+    run_case "$1"
+    [ "$(cat "$d/$1.rc")" -eq "$2" ] || { echo "$1 退出码应为 $2"; exit 1; }
+    [ "$(cat "$case_dir/mac-trap-exit/verdict.txt")" = "$3" ] || { echo "$1 结论应为 $3"; exit 1; }
+    [ -f "$d/$1.marker" ] || { echo "$1 的 teardown 没执行"; exit 1; }
+  done
+) || bad "run：set -u 中止后的 EXIT trap 清理与退出码"
+
 # #1311 数据快照：服务在跑不存；存 → 候选改库（新迁移、新文件）→ 恢复后库回到快照，照片原件不动
 # 依赖 macOS 的 ditto；没有它（Windows/Linux）时跳过并说明原因（#1366）。
 if ! command -v ditto >/dev/null 2>&1; then
