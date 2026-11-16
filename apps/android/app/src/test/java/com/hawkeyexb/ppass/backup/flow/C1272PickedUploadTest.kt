@@ -115,4 +115,21 @@ class C1272PickedUploadTest {
         assertNull(rig.pickedSettled.firstOrNull())
         rig.close()
     }
+
+    // 前一批还没结束时继续选：2 + 3 全部按选择顺序交付，不能替换或重排。
+    @Test
+    fun `later picks append without replacing the five pending items`() = runTest {
+        val rig = Rig(this)
+        rig.picked.addBatch(listOf(pick("content://picker/1"), pick("content://picker/2")))
+        rig.picked.addBatch(listOf(pick("content://picker/3"), pick("content://picker/4"), pick("content://picker/5")))
+
+        rig.trigger(TriggerReason.PICKED_ADDED)
+
+        assertEquals(5, rig.delivery.requests.size)
+        assertEquals(
+            listOf("content://picker/1", "content://picker/2", "content://picker/3", "content://picker/4", "content://picker/5"),
+            rig.pickedSettled,
+        )
+        rig.close()
+    }
 }
