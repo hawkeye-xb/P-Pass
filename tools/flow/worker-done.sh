@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # just done：在卡 worktree 里交卡。
-#   核对改动只含范围内文件 → 推送前自查（证据目录里的 self-review.md，#1447）→ 门禁（按改动路径挑）
+#   核对改动只含范围内文件 → 机械漏改提示（不阻断）→ 门禁（按改动路径挑）
 #   → just verify <号>（卡上写明需要真机验证且命令存在才跑）→ 全绿才 git push → 在每张卡贴回执 → status:doing→status:review
 #   → 写好 PR 正文、单独一行打印开 PR 的命令（gh pr create …，由执行者自己运行；脚本不开 PR，见第 6 步）。
 # 代码没变就复用验证（#1423）：门禁与 verify 都通过时记下 HEAD 的树哈希与门禁清单；下次树与清单都没变，
@@ -9,8 +9,9 @@
 # 三级都开正式 PR（#1471 按版本验收）：用户看得到的改动（界面与文案路径、apps 下的非测试文件、看得见的核心、更新说明，
 # 口径见 acceptance-gate.sh classify）正文写一行「随版本验收」，合入不等真机验收，发版前由 just release-scope 的台账兜住；
 # 碰核心的正文写卡上引用的已采纳方案（CI 的 acceptance gate 判）。
-# 任何一步红：不推送，在 issue 写明停在哪并贴错误末尾，打 status:blocked，退出码非 0。
-# 前置不满足（不在卡 worktree、没提交、工作区不干净、与 main 冲突、没写自查）只报错退出，不打 blocked。
+# 范围、核心方案等流程红线：不推送，在 issue 写明原因并打 status:blocked。
+# 本地门禁或 verify 红：同样不推送，但不改卡状态、不刷 issue；修好直接重跑，连红再 just stuck。
+# 前置不满足（不在卡 worktree、没提交、工作区不干净、与 main 冲突）只报错退出，不打 blocked。
 # 分支落后 main 但没有冲突：只提示，照推（PR 上的 CI 测合并后的结果，main 保护不要求跟上最新，#1423）。
 # 环境: PPASS_NO_LOCK=1 不套 lockf；PPASS_HOOK_REPO 覆盖仓库。
 
@@ -96,6 +97,21 @@ fail_blocked() { # fail_blocked <停在哪> <日志文件|空> [补充行]
   exit 1
 }
 
+# 普通验证失败是开发迭代，不是需要别人接手的 blocked：保留本地证据，卡与 issue 都不改。
+fail_local() { # fail_local <停在哪> <日志文件>
+  local step="$1" log="$2" cnt
+  cnt=$(($(cat "$FAILS_FILE" 2>/dev/null || echo 0) + 1))
+  printf '%s' "$cnt" >"$FAILS_FILE"
+  printf '\n✗ 本地验证失败：%s。未推送；不改卡状态，不写 issue。\n' "$step" >&2
+  [ -z "$log" ] || { printf '  日志：%s/%s\n' "$EVID_SHOW" "$(basename "$log")" >&2; tail -n 15 "$log" >&2; }
+  if [ "$cnt" -ge 3 ]; then
+    printf '  已累计失败 %s 次：别再重复同一方法；确实卡住就 just stuck %s "连红 %s 次：%s"。\n' "$cnt" "$N" "$cnt" "$step" >&2
+  else
+    printf '  修好直接重跑 just done；同一树的全绿验证会自动复用。\n' >&2
+  fi
+  exit 1
+}
+
 ALL_GLOBS=()
 IS_CORE=0
 TITLES=()
@@ -134,12 +150,9 @@ if [ "$CORE" != "false" ] && [ "$IS_CORE" = 0 ]; then
   fail_blocked "核心判定" "" "改动命中核心路径（.github/core-paths.txt）而 ${CARDS_SHOW} 都没有 core 标签：只写复现、根因和两个修法，撤回代码改动，just stuck ${N} \"命中核心：…\"。"
 fi
 
-# ── 1b. 推送前自查（#1447）─────────────────────────────────────────────
-# CI 评审的同一份清单前移到推送前：执行者用自己的模型对照清单自查，结论写进证据目录的 self-review.md，
-# 首行「自查对象：<HEAD 的树哈希>」（代码改了就要重新自查）。结论进回执与 PR 正文，CI 评审可对照。
+# ── 1b. 推送前机械提示（不生成自查文档）────────────────────────────────
+# 作者负责看 diff；独立评审在 PR 上复核范围、验收和同类写法。这里只给机械提示，不要求再写一份证明。
 TREE="$(git rev-parse 'HEAD^{tree}')"
-SELF_REVIEW="${EVID_DIR}/self-review.md"
-SELF_REVIEW_SHOW="${EVID_SHOW}/self-review.md"
 # 可能漏改的同类旧写法：diff 里删掉的行，全仓仍出现的位置（只是提示，删掉的行是通用写法时会有噪音）。
 stale_hints() {
   local line hit
@@ -155,43 +168,11 @@ stale_hints() {
       done
     done | head -n 60
 }
-self_review_ok() {
-  [ -s "$SELF_REVIEW" ] || return 1
-  [ "$(grep -v '^[[:space:]]*$' "$SELF_REVIEW" | head -n 1 | tr -d '\r' | sed 's/[[:space:]]*$//')" = "自查对象：${TREE}" ] || return 1
-  grep -q '^## 范围与验收' "$SELF_REVIEW" && grep -q '^## 同类写法' "$SELF_REVIEW"
-}
-if ! self_review_ok; then
-  {
-    echo
-    if [ -s "$SELF_REVIEW" ]; then
-      echo "✗ 推送前自查结论不是当前代码的（或缺段落）：${SELF_REVIEW_SHOW}"
-    else
-      echo "✗ 推送前还没自查：没有 ${SELF_REVIEW_SHOW}"
-    fi
-    echo
-    echo "按 CI 评审的同一份清单（tools/flow/review-prompt.md）对 git diff origin/main...HEAD 自查："
-    sed -n '/^## 你要做的/,/^## 你能用什么/p' "${TOP}/tools/flow/review-prompt.md" | sed '1d;$d' | sed 's/^/  /'
-    echo
-    echo "重点：每个改动的规则、判定、写法、文案，用 git grep 搜全仓同类写法（AGENTS.md、模板、justfile、runbook、"
-    echo "另一端、另一个脚本里的同一份判定），逐条写处理结果。"
-    hints="$(stale_hints)"
-    if [ -n "$hints" ]; then
-      echo
-      echo "机械提示：本分支删掉的行，全仓还有这些地方仍是旧写法（可能漏改；是通用写法就写明不用改）："
-      printf '%s\n' "$hints"
-    fi
-    echo
-    echo "把结论写进 ${SELF_REVIEW}，格式："
-    echo "  自查对象：${TREE}"
-    echo "  ## 范围与验收"
-    echo "  <卡上范围、验收场景逐条：做到没有、证据（测试名）、反证>"
-    echo "  ## 同类写法"
-    echo "  <git grep 了什么、找到哪些、各怎么处理>"
-    echo "写好后重跑 just done。代码再改，树哈希变了，要重新自查。"
-  } >&2
-  exit 1
+hints="$(stale_hints)"
+if [ -n "$hints" ]; then
+  echo "==> 机械提示：本分支删掉的行，全仓还有这些地方仍是旧写法（不阻断，PR 独立评审会复核）："
+  printf '%s\n' "$hints"
 fi
-SELF_REVIEW_BODY="$(grep -v '^[[:space:]]*$' "$SELF_REVIEW" | sed '1d' | scrub)"
 
 # ── 2. 门禁：按改动路径挑，挑不出来才退回全量 just ci ──────────────────
 # 挑选规则与 worker-start 的开工预检共用一份（worker-lib.sh 的 flow_pick_gates）：
@@ -245,14 +226,14 @@ else
   for g in "${GATES[@]}"; do
     printf '\n==> %s\n' "$g" >>"${EVID_DIR}/gate.log"
     # shellcheck disable=SC2086 # 刻意按空格拆成命令与参数
-    run_logged "${EVID_DIR}/gate.log" $g || fail_blocked "${g}" "${EVID_DIR}/gate.log"
+    run_logged "${EVID_DIR}/gate.log" $g || fail_local "${g}" "${EVID_DIR}/gate.log"
   done
   GATE_TAIL="$(tail -n 5 "${EVID_DIR}/gate.log" | scrub)"
 
   # ── 3. 验收场景（卡上写明需要真机验证、且 just verify 存在才跑）────────
   if [ "$DO_VERIFY" = 1 ]; then
     echo "==> just verify ${N}（日志：${EVID_SHOW}/verify.log）"
-    run_logged "${EVID_DIR}/verify.log" just verify "$N" || fail_blocked "just verify ${N}" "${EVID_DIR}/verify.log"
+    run_logged "${EVID_DIR}/verify.log" just verify "$N" || fail_local "just verify ${N}" "${EVID_DIR}/verify.log"
     VERIFY_STATE="passed"
     VERIFY_TAIL="$(tail -n 8 "${EVID_DIR}/verify.log" | scrub)"
   elif [ "$VERIFY_REQUESTED" = 1 ]; then
@@ -330,10 +311,6 @@ tmp="$(mktemp)"
   [ -z "$ACCEPT_LINE" ] || echo "- 真机验收：${ACCEPT_LINE}"
   echo "- 证据等级：${LEVEL}"
   echo "- 证据目录（本机，不进 git）：\`${EVID_SHOW}\`"
-  echo
-  echo "### 自查结论（推送前按 CI 评审清单自查，树 \`${TREE:0:10}\`）"
-  echo
-  printf '%s\n' "$SELF_REVIEW_BODY"
 } >"$tmp"
 for c in $CARDS; do
   flow_comment "$c" "$tmp"

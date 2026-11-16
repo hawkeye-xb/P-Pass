@@ -272,17 +272,8 @@ comments_of() { cat "${FAKE_GH}/$1.comments" 2>/dev/null; }
 on_origin() { git --git-dir="${TMP}/origin.git" rev-parse -q --verify "refs/heads/$1" >/dev/null; }
 START() { (cd "$M" && bash tools/flow/worker-start.sh "$@"); }
 STUCK() { (cd "$M" && bash tools/flow/worker-stuck.sh "$@"); }
-# 推送前自查（#1447）：测试默认替执行者写好当前树的自查结论；NO_SR=1 时不写，用来测没自查的情况。
-write_sr() { # write_sr <卡目录> [树哈希]
-  local d="$1" br n ev tree
-  br="$(git -C "$d" symbolic-ref --short HEAD)"
-  n="$(printf '%s' "$br" | sed -E 's#^[a-z]+/([0-9]+)-.*#\1#')"
-  ev="$(dirname "$d")/.evidence/${n}"
-  tree="${2:-$(git -C "$d" rev-parse 'HEAD^{tree}')}"
-  mkdir -p "$ev"
-  printf '自查对象：%s\n\n## 范围与验收\nSR-SCOPE-OK 逐条核对过。\n\n## 同类写法\nSR-GREP-OK git grep 过，无遗漏。\n' "$tree" >"${ev}/self-review.md"
-}
-DONE() { local d="$1"; shift; [ -n "${NO_SR:-}" ] || write_sr "$d"; (cd "$d" && bash tools/flow/worker-done.sh "$@"); }
+# 交卡不再生成或要求自查文档；测试直接走真实 worker-done。
+DONE() { local d="$1"; shift; (cd "$d" && bash tools/flow/worker-done.sh "$@"); }
 REAL_BASH="$(command -v bash)"
 DOCTOR() { (cd "$M" && "$REAL_BASH" tools/flow/doctor.sh); }
 
@@ -538,25 +529,27 @@ done
 printf '%s' "$C" | grep -qF "$HOME" && bad "回执泄露了本机家目录" || ok "回执不含本机家目录"
 printf '%s' "$C" | grep -q "E3" && printf '%s' "$C" | grep -q "just verify 20" && bad "无 verify 时回执声称了 E3 验证" || ok "无 just verify 时不声称 E3"
 
-# 门禁红 → 不推、blocked、评论贴错误末尾；去掉故障后放行
+# 门禁红 → 不推、卡保持 doing、不刷 issue；错误留在本地输出，去掉故障后放行
 W="$(card 21 "[T-21] ci red" "src/**")"
 commit_file "$W" src/r.txt
 touch "${FAKE_GH}/ci_fail"
 if DONE "$W" >"${TMP}/o21" 2>&1; then bad "门禁红时 done 仍成功"; else ok "门禁红 → done 退出码非 0"; fi
 on_origin "fix/21-ci-red" && bad "门禁红仍推送了" || ok "门禁红时没有推送"
-has_lbl 21 "status:blocked" && ok "门禁红时打 status:blocked" || bad "门禁红时没打 blocked"
-comments_of 21 | grep -q "FAKE-CI-RED" && ok "评论贴了错误末尾（FAKE-CI-RED）" || bad "评论没贴错误末尾"
+has_lbl 21 "status:doing" && ! has_lbl 21 "status:blocked" && ok "门禁红时卡保持 doing，不打 blocked" || bad "门禁红时状态被改写：$(labels_of 21)"
+comments_of 21 | grep -q "交卡失败" && bad "门禁红时刷了 issue 失败评论" || ok "门禁红时不写 issue 失败评论"
+grep -q "FAKE-CI-RED" "${TMP}/o21" && ok "本地输出保留错误末尾（FAKE-CI-RED）" || bad "本地输出没保留错误末尾"
 rm -f "${FAKE_GH}/ci_fail"
 DONE "$W" >/dev/null 2>&1 && on_origin "fix/21-ci-red" && ok "反证：去掉故障后推送" || bad "去掉故障后仍失败"
 
-# verify 存在且红 → blocked；绿 → 回执写 E3。只有卡上写明需要真机验证才跑（#1530）
+# verify 存在且红 → 不改状态、不刷 issue；绿 → 回执写 E3。只有卡上写明需要真机验证才跑（#1530）
 touch "${FAKE_GH}/has_verify"
 W="$(card 22 "[T-22] verify" "src/**" "**真机验证**：需要")"
 commit_file "$W" src/v.txt
 touch "${FAKE_GH}/verify_fail"
 if DONE "$W" >/dev/null 2>&1; then bad "verify 红时 done 仍成功"; else ok "just verify 红 → done 失败"; fi
 on_origin "fix/22-verify" && bad "verify 红仍推送" || ok "verify 红时没有推送"
-comments_of 22 | grep -q "FAKE-VERIFY-RED" && ok "评论贴了 verify 错误末尾" || bad "评论没贴 verify 错误"
+has_lbl 22 "status:doing" && ! has_lbl 22 "status:blocked" && ok "verify 红时卡保持 doing" || bad "verify 红时状态被改写：$(labels_of 22)"
+comments_of 22 | grep -q "交卡失败" && bad "verify 红时刷了 issue 失败评论" || ok "verify 红时不写 issue 失败评论"
 rm -f "${FAKE_GH}/verify_fail"
 DONE "$W" >/dev/null 2>&1 && on_origin "fix/22-verify" && ok "反证：verify 绿后推送" || bad "verify 绿后仍失败"
 comments_of 22 | grep -q "E3" && comments_of 22 | grep -q "FAKE-VERIFY-GREEN" && ok "有 verify 时回执写 E3 并贴输出" || bad "回执缺 E3 / verify 输出"
@@ -908,22 +901,22 @@ DONE "$W" >"${TMP}/o133" 2>&1
 C33="$(comments_of 133)"
 printf '%s' "$C33" | grep -qF "bash tools/ios/test-old.sh" && bad "删除的 ios 测试脚本仍被当门禁" || ok "删除的 ios 测试脚本不跑"
 printf '%s' "$C33" | grep -qF '`just ci`' && ok "反证：删除后没剩可挑的 → 退回 just ci（不是跑不存在的脚本）" || bad "删除后没退回 just ci：$(tail -4 "${TMP}/o133")"
-# 挑出来的测试红 → blocked，不推
+# 挑出来的测试红 → 不改状态、不刷 issue、不推
 W="$(card 131 "[T-131] tools test red" "tools/**")"
 printf '# touched2\n' >>"$W/tools/ci-paths.sh"
 git -C "$W" add -A && git -C "$W" commit -q -s -m "touch ci-paths red"
 touch "${FAKE_GH}/tool_fail"
 DONE "$W" >/dev/null 2>&1 && bad "引用测试红时 done 仍成功" || ok "引用的测试红 → done 失败"
-has_lbl 131 "status:blocked" && ok "tools 测试红 → status:blocked" || bad "tools 测试红没打 blocked"
+has_lbl 131 "status:doing" && ! has_lbl 131 "status:blocked" && ok "tools 测试红 → 卡保持 doing，不打 blocked" || bad "tools 测试红改写了状态：$(labels_of 131)"
 rm -f "${FAKE_GH}/tool_fail"
-# 门禁中任一项红 → blocked，不推
+# 门禁中任一项红 → 不改状态、不刷 issue、不推
 W="$(card 128 "[T-128] android red" "apps/android/**")"
 mkdir -p "$W/apps/android"
 printf 'a\n' >"$W/apps/android/r.kt"
 git -C "$W" add -A && git -C "$W" commit -q -s -m "red"
 touch "${FAKE_GH}/ci_fail"
 DONE "$W" >/dev/null 2>&1 && bad "android-test 红时 done 仍成功" || ok "android-test 红 → done 失败"
-has_lbl 128 "status:blocked" && ok "挑选后的门禁红 → status:blocked" || bad "没打 blocked"
+has_lbl 128 "status:doing" && ! has_lbl 128 "status:blocked" && ok "挑选后的门禁红 → 卡保持 doing，不打 blocked" || bad "挑选后的门禁红改写了状态：$(labels_of 128)"
 rm -f "${FAKE_GH}/ci_fail"
 
 # 核心改动无 core 标签 → blocked；
@@ -1001,22 +994,14 @@ git -C "$W" add -A && git -C "$W" commit -q -s -m "bump plus endpoint"
 if DONE "$W" >"${TMP}/o146" 2>&1; then bad "改了 updater endpoint 仍放行"; else ok "反证：同时改了 updater endpoint → 核心判定拦下"; fi
 grep -q "核心" "${TMP}/o146" && ok "  拦下理由是命中核心" || bad "拦下理由不对：$(tail -4 "${TMP}/o146")"
 
-# 推送前自查（#1447）：没有自查 / 自查是旧代码的 → 不推、不打 blocked，打印清单；写好当前树的 → 推送，结论进回执与 PR 正文
+# 作者仍要自查，但不交 self-review.md：没有文档也照常交卡；回执与 PR 只放可复核证据
 W="$(card 141 "[T-141] self review" "src/**")"
 commit_file "$W" src/s.txt
 rm -f "${PPASS_WT_ROOT}/.evidence/141/self-review.md"
-if NO_SR=1 DONE "$W" >"${TMP}/o141a" 2>&1; then bad "没自查也推送了"; else ok "没有自查结论 → 不推送"; fi
-on_origin "fix/141-self-review" && bad "  没自查仍推送" || ok "  没自查时没有推送"
-has_lbl 141 "status:blocked" && bad "  没自查被打了 blocked" || ok "  没自查不打 blocked"
-grep -q "对照关联卡逐条核对" "${TMP}/o141a" && grep -q "git grep" "${TMP}/o141a" && grep -q "自查对象：$(git -C "$W" rev-parse 'HEAD^{tree}')" "${TMP}/o141a" &&
-  ok "  打印了评审清单、同类写法要求与当前树的自查对象行" || bad "没打印清单：$(tail -8 "${TMP}/o141a")"
-write_sr "$W" "$(git -C "$W" rev-parse 'HEAD~1^{tree}')"
-if NO_SR=1 DONE "$W" >"${TMP}/o141b" 2>&1; then bad "自查对象是旧树也放行了"; else ok "自查对象不是当前树（代码改过）→ 不推送"; fi
-grep -q "不是当前代码的" "${TMP}/o141b" && ok "  点明自查过期" || bad "没点明自查过期"
-write_sr "$W"
-if NO_SR=1 DONE "$W" >"${TMP}/o141c" 2>&1; then ok "反证：自查对象是当前树 → 推送"; else bad "写好自查仍失败：$(tail -5 "${TMP}/o141c")"; fi
-comments_of 141 | grep -q "自查结论" && comments_of 141 | grep -q "SR-GREP-OK" && ok "  回执带自查结论" || bad "回执没带自查结论"
-grep -q "SR-SCOPE-OK" "${PPASS_WT_ROOT}/.evidence/141/pr-body.md" && ok "  PR 正文带自查结论" || bad "PR 正文没带自查结论"
+if DONE "$W" >"${TMP}/o141" 2>&1; then ok "没有 self-review.md → 照常推送"; else bad "没有 self-review.md 仍被拦下：$(tail -5 "${TMP}/o141")"; fi
+on_origin "fix/141-self-review" && ok "  无自查文档的分支已推送" || bad "  无自查文档时没有推送"
+comments_of 141 | grep -q "自查结论" && bad "  回执仍要求自查文档" || ok "  回执不再包含自查文档"
+grep -q "SR-SCOPE-OK\|SR-GREP-OK" "${PPASS_WT_ROOT}/.evidence/141/pr-body.md" && bad "  PR 正文仍带自查文档" || ok "  PR 正文不再带自查文档"
 # 机械提示：删掉的旧写法，全仓别处还有同样一行 → 列出来；别处没有 → 不列
 printf 'OLD_RULE_SPELLING=keep-me-in-sync\n' >"$M/src/a.cfg"
 printf 'OLD_RULE_SPELLING=keep-me-in-sync\n' >"$M/src/b.cfg"
@@ -1029,7 +1014,8 @@ printf 'NEW_RULE_SPELLING=keep-me-in-sync\n' >"$W/src/a.cfg"
 printf 'UNIQUE_SPELLING_CHANGED=1\n' >"$W/src/u.cfg"
 printf 'filler\n    MOVED_SPELLING_STAYS_SAME=1\n' >"$W/src/m.cfg"
 git -C "$W" add -A && git -C "$W" commit -q -s -m "change one place"
-NO_SR=1 DONE "$W" >"${TMP}/o142" 2>&1
+if DONE "$W" >"${TMP}/o142" 2>&1; then ok "机械提示不阻断交卡"; else bad "机械提示仍阻断交卡：$(tail -5 "${TMP}/o142")"; fi
+on_origin "fix/142-stale-hint" && ok "  有同类旧写法提示时仍推送，由 PR 独立评审复核" || bad "  有机械提示时没有推送"
 grep -q "src/b.cfg:1:OLD_RULE_SPELLING" "${TMP}/o142" && ok "机械提示列出别处仍是旧写法的位置（改一处漏一处）" || bad "没列出漏改的同类旧写法：$(tail -12 "${TMP}/o142")"
 grep -q "UNIQUE_SPELLING_ONLY_HERE" "${TMP}/o142" && bad "  别处没有的删除行也被列了" || ok "  反证：别处没有同样写法的删除行不列"
 grep -q "MOVED_SPELLING_STAYS_SAME" "${TMP}/o142" && bad "  挪了位置的行被当成删掉的旧写法" || ok "  同一 diff 里又加回来的行（挪位置、改缩进）不列"
@@ -1319,7 +1305,7 @@ mkdir -p "$LW3/assets/i18n"
 commit_file "$LW3" assets/i18n/zh.json '{}'
 touch "${FAKE_GH}/zh_hardcoded"
 if DONE "$LW3" >"${TMP}/o63" 2>&1; then bad "写死中文的测试在本地没被发现（英文那一轮没跑）"; else ok "回放 #1342：英文那一轮在本地就红，没推送"; fi
-has_lbl 63 "status:blocked" && comments_of 63 | grep -qF "just ios-test --lang en" && ok "  停在 just ios-test --lang en，打了 blocked" || bad "停的位置不对：$(comments_of 63 | head -3)"
+has_lbl 63 "status:doing" && ! has_lbl 63 "status:blocked" && grep -qF "just ios-test --lang en" "${TMP}/o63" && ok "  停在 just ios-test --lang en，卡保持 doing" || bad "停的位置或状态不对：$(labels_of 63)"
 rm -f "${FAKE_GH}/zh_hardcoded"
 
 # #1765：卡面 E1 点名的本地检查必须补齐；只解析白名单，不执行卡面任意 shell。

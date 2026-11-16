@@ -170,15 +170,13 @@ just stuck <号> "<原因>"      卡住：写评论，打 status:blocked，去�
   - **PR 上**：CI 只跑与改动相关的快检（Windows 不在 PR 上跑），是合入门禁。
   - **合入 main 后**：CI 全量（含 Windows）批量跑：同一时间一次、正在跑的不取消、排队只留最新；main 红了只修或回滚元凶 PR，main 不冻结。
   - **发版前**：Release 再验证一遍（桌面壳只跑 Windows；Linux 桌面检查已随 #1555 永久移除，见 [CI lane](docs/runbook/ci-lanes.md)），只从全绿提交切 tag。
-- `just done` 依次：核对范围 → 推送前自查 → 门禁（按改动路径挑：安卓 `just android-test`、iOS `just ios-test`、文案/i18n `just mobile-static-check`、
+- `just done` 依次：核对范围 → 机械漏改提示（不阻断）→ 门禁（按改动路径挑：安卓 `just android-test`、iOS `just ios-test`、文案/i18n `just mobile-static-check`、
   桌面前端 `pnpm -C apps/desktop test`、Rust crate（含桌面 `apps/desktop/src-tauri`）对应 crate 的 `cargo nextest run -p`、纯文档 `just md-check`（AGENTS.md 与 `.github/**` 是流程文件，仍跑 `just ci-docs`）；
-  有一个文件挑不出来才退回全量 `just ci`）→ 推分支 → 在 issue 贴回执（分支、提交、门禁与验收输出末尾、证据等级、证据目录、自查结论）。
+  有一个文件挑不出来才退回全量 `just ci`）→ 推分支 → 在 issue 贴回执（分支、提交、门禁与验收输出末尾、证据等级、证据目录）。
   `just verify <号>` 不再默认跑：只有卡上写明 `**真机验证**：需要` 才跑（用户看得到的改动按「按版本验收」随版本验，#1471）。
-  任何一步红：不推送、issue 写明停在哪、打 `status:blocked`，修好重跑即可。
-  - **推送前自查**：用 CI 评审的同一份清单（`tools/flow/review-prompt.md`）对自己的改动自查，重点是每处改动的规则、判定、
-    写法、文案，`git grep` 全仓同类写法逐条处理（同一规矩在 AGENTS.md、模板、justfile、runbook 里的旧写法，另一端、另一个脚本里的同一份判定）。
-    结论写进证据目录的 `self-review.md`，首行是 `just done` 给出的「自查对象：<树哈希>」；没有或代码改过就不推送，打印清单与漏改提示。
-    结论进回执与 PR 正文，CI 评审可对照。
+  范围、核心方案等流程红线：不推送、issue 写明原因、打 `status:blocked`。本地门禁或 verify 红同样不推送，但不改卡状态、不刷 issue，修好直接重跑；同一处连红 3 次按 `just stuck` 处理。
+  - **作者自查**：推送前对照 `tools/flow/review-prompt.md` 看 diff，并用 `git grep` 核全仓同类写法；这是执行动作，不另写 `self-review.md`，也不进回执与 PR 正文。
+    `just done` 只打印机械漏改提示，不阻断；范围、验收和同类写法由 PR 上的独立评审复核。
   - **代码没变就复用验证**：门禁与 verify 通过后记下树哈希；重跑 `just done` 时树和门禁清单都没变就不重跑，回执写明复用了哪次的验证。
   - **落后 main 不拦**：PR 上的 CI 测的是合并后的结果，main 也不要求分支跟上最新，所以落后只提示、照推；
     和 main 有冲突才停（不打 blocked）：`git rebase origin/main` 解冲突后重跑。推送时的 pre-push hook 同一口径。
