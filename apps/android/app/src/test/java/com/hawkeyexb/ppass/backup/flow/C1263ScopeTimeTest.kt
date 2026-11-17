@@ -357,4 +357,55 @@ class C1263ScopeTimeTest {
         assertEquals(emptyList<Long>(), rig.delivery.deliveredMediaIds)
         rig.close()
     }
+
+    @Test
+    fun `an unselected revoked folder does not lookup legacy order time`() = runTest {
+        val root = tmp.newFolder("media-root-unselected")
+        val registry = FolderRegistry(File(tmp.root, "registry-unselected.json"))
+        registry.addFolder("file://tree-unselected", "media-root-unselected")
+        File(root, "IMG_9.jpg").writeText("nine")
+        val folder = SwitchableFolder(FolderMediaSnapshotSource(registry) { FileFolderTree(root) })
+        val album = com.hawkeyexb.ppass.backup.order.FakeMedia()
+        val composite = CompositeMediaSnapshotSource(album, folder)
+        val bucket = registry.allRecords().single().bucketId
+        // inScopeBuckets 不含 bucket：旧订单已明确取消选择，不应再读取这个目录。
+        val rig = Rig(this, mediaOverride = composite, primaryMedia = album)
+        advanceUntilIdle()
+        rig.store.finishScan()
+        rig.media.since = today
+        val img9 = com.hawkeyexb.ppass.backup.folder.FOLDER_ID_FLAG or 2L
+        oldRow(rig, img9, "v1", bucket, storedDateAddedSec = today)
+
+        folder.revoked = true
+        rig.trigger()
+        assertEquals("未选目录不需要时间查询，不能让整轮等待", null, rig.control.wait)
+        assertEquals(0, rig.pending())
+        assertEquals(OrderState.PENDING, rig.state(img9))
+        rig.close()
+    }
+
+    @Test
+    fun `paused pending refresh waits when a selected folder is revoked`() = runTest {
+        val root = tmp.newFolder("media-root-paused-revoke")
+        val registry = FolderRegistry(File(tmp.root, "registry-paused-revoke.json"))
+        registry.addFolder("file://tree-paused-revoke", "media-root-paused-revoke")
+        File(root, "IMG_9.jpg").writeText("nine")
+        val folder = SwitchableFolder(FolderMediaSnapshotSource(registry) { FileFolderTree(root) })
+        val album = com.hawkeyexb.ppass.backup.order.FakeMedia()
+        val composite = CompositeMediaSnapshotSource(album, folder)
+        val bucket = registry.allRecords().single().bucketId
+        val rig = Rig(this, mediaOverride = composite, primaryMedia = album, inScopeBuckets = setOf(bucket))
+        advanceUntilIdle()
+        rig.store.finishScan()
+        rig.media.since = today
+        val img9 = com.hawkeyexb.ppass.backup.folder.FOLDER_ID_FLAG or 2L
+        oldRow(rig, img9, "v1", bucket, storedDateAddedSec = today)
+
+        folder.revoked = true
+        rig.control.pausedFlag = true
+        rig.trigger()
+        assertEquals("暂停刷新也不能让失权异常逃出协程", WaitReason.SOURCE_UNAVAILABLE, rig.control.wait)
+        assertEquals(OrderState.PENDING, rig.state(img9))
+        rig.close()
+    }
 }

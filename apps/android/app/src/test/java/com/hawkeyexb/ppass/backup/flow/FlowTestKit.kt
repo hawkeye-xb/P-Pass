@@ -377,9 +377,18 @@ internal class Rig(
                 // SourceUnavailable，与生产 AndroidFlowRuntime 的 scopeTimeOf 同口径；stored 只作回退。
                 // [inScopeBuckets] 只放宽相册集合（folder 测试放行 bit 62 的目录 bucket），时间判定仍按当前来源重算。
                 val source = mediaOverride ?: media
-                val effectiveAdded = source.lookup(mediaId)?.snapshot?.dateAddedSec ?: added
                 val scope = media.scope?.let { it + inScopeBuckets } ?: inScopeBuckets
-                com.hawkeyexb.ppass.backup.BackupScope(scope, media.since).contains(bucket, effectiveAdded)
+                val effectiveScope = com.hawkeyexb.ppass.backup.BackupScope(scope, media.since)
+                if (bucket !in effectiveScope.buckets) {
+                    false
+                } else {
+                    val effectiveAdded = if (effectiveScope.sinceSec != null) {
+                        source.lookup(mediaId)?.snapshot?.dateAddedSec ?: added
+                    } else {
+                        added
+                    }
+                    effectiveScope.contains(bucket, effectiveAdded)
+                }
             }
         },
         mediaAbsenceTrusted = { fullMediaAccess },

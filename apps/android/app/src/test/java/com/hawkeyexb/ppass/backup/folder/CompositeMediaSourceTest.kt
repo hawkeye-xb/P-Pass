@@ -70,6 +70,25 @@ class CompositeMediaSourceTest {
         assertTrue(isFolderId(rows[1].mediaId))
     }
 
+    @Test
+    fun `composite resolves capture metadata only for the consumed folder batch`() {
+        val primary = FakeMedia()
+        val root = tmp.newFolder("media-root-lazy-composite")
+        for (name in listOf("a.jpg", "b.jpg", "c.jpg")) File(root, name).writeText(name)
+        val registry = FolderRegistry(File(tmp.root, "registry-lazy-composite.json"))
+        val sourceId = registry.addFolder("file://tree-lazy-composite", "media-root-lazy-composite")
+        var captureReads = 0
+        val folder = FolderMediaSnapshotSource(
+            registry,
+            captureAtMs = { _, _ -> captureReads++; 1_000L },
+        ) { FileFolderTree(root) }
+
+        val firstPage = composite(primary, folder).readInScope(0L) { it.take(1).toList() }
+        assertEquals(1, firstPage.size)
+        assertEquals("Composite 不能把整个目录序列先物化", 1, captureReads)
+        assertEquals(sourceId, registry.sourceIdOfMedia(firstPage.single().mediaId))
+    }
+
     // folder 撤权时 readInScope 抛（整轮等待，不产出半份快照）。
     // 反证：revoked=false 时同一调用正常合并（故障条件在场才红）。
     @Test
