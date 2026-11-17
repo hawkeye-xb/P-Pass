@@ -136,8 +136,9 @@ internal fun selectedExistingCount(selected: Set<Long>?, existing: Set<Long>?): 
 }
 
 /**
- * 顺序同 iOS `HomeProjection.heroRender`：权限 → 账本读不到 → 三元组为 null 时看范围存没存（存了 = 相册数量读不到，
- * 没存 = 未选相册）→ 对不上 → 三元组。[countsReadable] / [scopeSaved] 由 [com.hawkeyexb.ppass.backup.BackupUiStateHolder] 给，
+ * 顺序同 iOS `HomeProjection.heroRender`：权限 → 账本读不到 → 三元组为 null 时看有效范围是否非空
+ * （非空 = 相册数量读不到，空 = 未选定自动备份范围；#1794：已登记目录也算来源）→ 对不上 → 三元组。
+ * [countsReadable] / [scopeSaved] 由 [com.hawkeyexb.ppass.backup.BackupUiStateHolder] 给，
  * HomeScreen 必须把它们传进来（默认值只为旧测试的调用形状）。
  */
 fun heroRenderOf(

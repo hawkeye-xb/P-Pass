@@ -1,6 +1,8 @@
 package com.hawkeyexb.ppass.backup
 
 import com.hawkeyexb.ppass.backup.order.SqliteOrderStore
+import com.hawkeyexb.ppass.ui.HeroRender
+import com.hawkeyexb.ppass.ui.heroRenderOf
 import java.io.File
 import java.nio.file.Files
 import java.time.LocalDateTime
@@ -113,6 +115,50 @@ class BackupScopeTimeTest {
         assertTrue(
             "保存过统一范围且明确不选目录，之后目录仍在 registry 里也不算来源",
             noAlbumsOf(emptySet(), emptySet(), setOf(folder), knownBucketIds = setOf(folder)),
+        )
+    }
+
+    /**
+     * #1794：英雄区判据（不是只看 [noAlbumsOf]）——「有效范围非空（含已登记目录）即不算未选定」。
+     * 从未保存范围、只从设置页加了目录时，引擎会备份该目录、设置行显示「文件夹 1」，
+     * 英雄区也必须是「读不到相册数量」，不能再说「未选定自动备份范围」；目录移除后才回到「未选定」。
+     */
+    @Test
+    fun hero_does_not_say_no_scope_when_a_registered_folder_is_the_only_source() {
+        val folder = 0x4000000000000003L
+        fun render(saved: Set<Long>?, folders: Set<Long>, known: Set<Long>?): HeroRender {
+            val noSources = noAlbumsOf(saved, emptySet(), folders, knownBucketIds = known)
+            return heroRenderOf(
+                MediaAccess.FULL,
+                triplet = null,
+                countsReadable = true,
+                scopeSaved = heroScopeSavedOf(noSources),
+            )
+        }
+        assertEquals(
+            "从未保存范围、只从设置页加了目录：英雄区不能说「未选定自动备份范围」",
+            HeroRender.Unreadable,
+            render(saved = null, folders = setOf(folder), known = null),
+        )
+        assertEquals(
+            "旧相册范围里的相册被删、只加目录：同上",
+            HeroRender.Unreadable,
+            render(saved = setOf(9L), folders = setOf(folder), known = setOf(9L)),
+        )
+        assertEquals(
+            "移除目录后恢复为「未选定自动备份范围」",
+            HeroRender.NoAlbums,
+            render(saved = setOf(9L), folders = emptySet(), known = setOf(9L)),
+        )
+        assertEquals(
+            "从未保存范围、目录也移除了：未选定",
+            HeroRender.NoAlbums,
+            render(saved = null, folders = emptySet(), known = null),
+        )
+        assertEquals(
+            "统一范围明确不选目录：目录仍登记着也不算来源",
+            HeroRender.NoAlbums,
+            render(saved = emptySet(), folders = setOf(folder), known = setOf(folder)),
         )
     }
 

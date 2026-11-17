@@ -121,7 +121,9 @@ class RuleEnableWhenPartialTest {
     /** 存过范围但零来源：首页说「未选定自动备份范围」，不能说成读不到（把 noSources 带进 hero 的 scopeSaved）。 */
     @Test
     fun no_sources_scope_renders_as_not_selected_not_unreadable() {
-        assertTrue(main.contains("scopeSaved = holder.scopeSaved.value && !holder.noSources.value"))
+        assertTrue("holder 的 scopeSaved 以「有效范围非空」为口径（含已登记目录）", main.contains("scopeSaved = holder.scopeSaved.value"))
+        val holder = File("src/main/java/com/hawkeyexb/ppass/backup/BackupUiStateHolder.kt").readText()
+        assertTrue("零来源时 scopeSaved 必为 false", holder.contains("_scopeSaved.value = heroScopeSavedOf(lastNoAlbums)"))
         assertEquals(HeroRender.NoAlbums, heroRenderOf(MediaAccess.FULL, null, scopeSaved = false))
         assertEquals("有来源但三元组暂时读不到：仍说读不到", HeroRender.Unreadable, heroRenderOf(MediaAccess.FULL, null, scopeSaved = true))
     }

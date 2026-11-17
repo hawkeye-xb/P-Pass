@@ -1570,7 +1570,8 @@ fun PPassApp() {
                         scopeUnreadable = scopeUnreadable,
                         scopeTimeLabel = scopeValueLabel(context, scopeSince),
                         countsReadable = holder.countsReadable.value,
-                        scopeSaved = holder.scopeSaved.value && !holder.noSources.value,
+                        // #1794：有效范围非空（含已登记目录）就不算「未选定」——判据在 holder 的 scopeSaved 里。
+                        scopeSaved = holder.scopeSaved.value,
                         // MOB-03: 相册选择入口走完整权限链——MOB-02 删首页手动
                         // 备份按钮时把挂在它身上的权限申请链一起删没了，
                         // 无权限直接进列表 = MediaStore 空查询 = 全白。

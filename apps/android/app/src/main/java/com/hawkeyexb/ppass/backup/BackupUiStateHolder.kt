@@ -138,6 +138,7 @@ class BackupUiStateHolder(
     /**
      * #1038：账本读不读得到（[FlowProjection.countsReadable]）、范围存没存——英雄区据此在「读不到」「未选定自动备份范围」
      * 「相册数量读取失败」之间选（[com.hawkeyexb.ppass.ui.heroRenderOf]）。
+     * #1794：判据是 [heroScopeSavedOf]——有效范围里已有来源（已登记目录也算）就不再是「未选定」。
      */
     private val _countsReadable = mutableStateOf(true)
     val countsReadable: State<Boolean> get() = _countsReadable
@@ -383,7 +384,7 @@ class BackupUiStateHolder(
         _projection.value = p
         _state.value = backupUiStateOf(p, noAlbums = lastNoAlbums)
         _countsReadable.value = p.countsReadable
-        _scopeSaved.value = lastBucketIds != null
+        _scopeSaved.value = heroScopeSavedOf(lastNoAlbums)
         _noSources.value = lastNoAlbums
         _missingSourceNotice.value = flowMissingSourceNotice(p)
         _acknowledgedMissingSourceCount.value = p.missingSourceAcknowledged.toInt()
@@ -588,6 +589,13 @@ internal fun noAlbumsOf(
     val folders = effective.count { isFolderId(it) && it in folderBuckets }
     return albums == 0 && folders == 0
 }
+
+/**
+ * #1794：英雄区「范围存没存」的判据（[com.hawkeyexb.ppass.ui.heroRenderOf] 的 `scopeSaved`）。
+ * 有效范围非空（[noSources] 为 false，已登记目录也算来源）就不说「未选定自动备份范围」；
+ * 只有真正一个来源都没有时才回到「未选定」（从未保存、保存过空集、来源全删）。
+ */
+internal fun heroScopeSavedOf(noSources: Boolean): Boolean = !noSources
 
 /**
  * #1020（对位 iOS `AppModel.runCommand` / `commandFailed`）：执行一条用户命令，成功与出错各记一行日志
