@@ -341,7 +341,9 @@ fun BucketScreen(
                     item(key = "section-albums", span = { GridItemSpan(maxLineSpan) }) {
                         SourceSectionLabel(stringResource(R.string.scope_sources_albums))
                     }
-                    if (buckets.isEmpty()) {
+                    // 整机空文案（「手机上没有照片或视频」）只在两类来源都为空时成立；
+                    // 只有文件夹来源时，相册区不出现这句整机结论。
+                    if (buckets.isEmpty() && folderBuckets.isEmpty()) {
                         item(key = "empty", span = { GridItemSpan(maxLineSpan) }) {
                             Text(
                                 stringResource(R.string.bucket_empty),

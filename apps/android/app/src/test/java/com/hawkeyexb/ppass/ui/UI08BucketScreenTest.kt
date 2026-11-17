@@ -83,16 +83,21 @@ class UI08BucketScreenTest {
     }
 
     @Test
-    fun empty_album_section_keeps_hint_and_folder_entry() {
+    fun whole_phone_empty_copy_only_when_both_sources_empty() {
         val source = bucketScreenSource()
         val albumHeading = source.indexOf("R.string.scope_sources_albums")
         val folderHeading = source.indexOf("R.string.scope_sources_folders")
         val emptyHint = source.indexOf("R.string.bucket_empty")
-        assertTrue("相册区为空时显示现有空状态提示", emptyHint in albumHeading until folderHeading)
-        assertFalse(
-            "文件夹为空也要保留添加动作，不能被整块空状态吞掉",
-            source.contains("buckets.isEmpty() && folderBuckets.isEmpty()"),
+        assertTrue("空状态提示必须落在相册分区内", emptyHint in albumHeading until folderHeading)
+        assertTrue(
+            "整机空文案只在相册与文件夹都为空时显示",
+            source.contains("if (buckets.isEmpty() && folderBuckets.isEmpty())"),
         )
+        assertFalse(
+            "只有文件夹来源时相册区不得声称整机没有照片",
+            source.contains("if (buckets.isEmpty())"),
+        )
+        assertTrue("文件夹为空也要保留添加动作", source.contains("item(key = \"add-folder\")"))
     }
 
     @Test
