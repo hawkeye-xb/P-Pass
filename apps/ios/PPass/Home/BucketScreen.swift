@@ -4,7 +4,8 @@ import PPassMedia
 
 /// 统一备份范围：相册与文件夹卡片共用选中表现、同一时间档和同一个保存动作。
 /// 添加文件夹只登记授权并标成待保存；取消勾选保留授权，移除需单独确认且不删原素材。
-/// 首次默认勾上「最近项目」、时间默认「从今天起」；新相册默认不勾。允许空集 = 一个都不备份。
+/// 首次（从未保存过）不预选任何来源；时间默认「从今天起」；新相册默认不勾。允许空集 = 一个都不备份。
+/// 相册未完整授权时只显示「保存过的相册」供取消，不给新增相册（#1811 评审）。
 /// 底部只有主按钮：首次「开始备份」，编辑「保存」。不显示合计张数与大小（#1263 删掉 bucket_summary；iOS 没有公开的大小接口，#1016）。
 /// 与 Android 的差别只有：标题用系统大标题导航栏；相册是异步读的，所以多了加载中 / 读取失败两种状态。
 struct BucketScreen: View {
@@ -18,6 +19,8 @@ struct BucketScreen: View {
     /// 保存过的时间档（nil = 从未保存）：选项「M月d日起的照片」的日期从这里来。
     @State private var savedSince: BackupSince?
     @State private var known: Set<String> = []
+    /// 保存过的范围（nil = 从未保存）：未完整授权时用来决定哪些相册仍然显示（只供取消）。
+    @State private var savedScope: Set<String>?
     @State private var error: String?
     @State private var folders: [FolderSourceInfo] = []
     @State private var showingAddPicker = false
@@ -68,9 +71,7 @@ struct BucketScreen: View {
                             .multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.top, 40)
                     }
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 2), spacing: 10) {
-                        if Self.offersChoices(Self.notice(for: app.access)) {
-                            ForEach(albums) { album in card(album) }
-                        }
+                        ForEach(Self.visibleAlbums(albums, saved: savedScope, photoAccess: app.access)) { album in card(album) }
                         ForEach(folders) { folder in folderCard(folder) }
                         addFolderCard
                     }
@@ -96,8 +97,13 @@ struct BucketScreen: View {
         access == .full ? .none : .noAccess
     }
 
-    /// 相册未完整授权时不给相册选择：相册不进自动范围，用户挑的几张只走「挑几张传」；文件夹照常。
-    static func offersChoices(_ notice: AccessNotice) -> Bool { notice != .noAccess }
+    /// 相册卡片显示哪些：完整授权显示全部；相册未完整授权只显示「保存过的相册」供取消，不显示新增相册。
+    /// 只负责显示，不参与默认勾选（默认一律不预选，见 `initialSelectionWithUnavailable`）。
+    static func visibleAlbums(_ albums: [AlbumBucket], saved: Set<String>?, photoAccess: MediaAccess) -> [AlbumBucket] {
+        guard photoAccess != .full else { return albums }
+        let savedAlbums = saved ?? []
+        return albums.filter { savedAlbums.contains($0.id) }
+    }
 
     /// 一个来源都没选：明确写「未选择任何来源」。空范围允许保存（= 不自动备份），不替用户补默认。
     /// 相册未完整授权（选择被隐藏）时同样要显示：此时页面上只有文件夹可选，不写清楚会像「已选好了」。
@@ -106,15 +112,13 @@ struct BucketScreen: View {
     }
 
     /// 首次加载：没有存过的范围一律空——显式传 cameraAlbum 也不预选相机相册（#1811）；
-    /// 相册选择隐藏（有限 / 拒绝授权）时只保留保存过的相册，不做任何默认预选。
+    /// 相册未完整授权时同样不做任何默认预选，只保留保存过的相册。
     /// 首次加载也保留不可见的已保存相册，恢复权限后仍可选择；未勾选的新相册不自动加入。
     static func initialSelectionWithUnavailable(saved: Set<String>?, availableAlbums: Set<String>,
-                                                cameraAlbum: String?, offersChoices: Bool) -> Set<String> {
+                                                cameraAlbum: String?) -> Set<String> {
         guard let saved else { return [] }
-        let savedAlbums = saved.filter { !$0.hasPrefix("folder:") }
-        guard offersChoices else { return savedAlbums }
         let visible = ScopePolicy.initialSelection(saved: saved, available: availableAlbums, cameraAlbum: cameraAlbum)
-        let invisibleSaved = savedAlbums.filter { !availableAlbums.contains($0) }
+        let invisibleSaved = saved.filter { !$0.hasPrefix("folder:") && !availableAlbums.contains($0) }
         return visible.union(invisibleSaved)
     }
 
@@ -338,6 +342,7 @@ struct BucketScreen: View {
             app.refreshAccess() // 读相册时可能刚弹过系统照片权限框（时间档初值看这一档，所以要在下面之前）
             known = app.backend.media.knownAlbums()
             let saved = try app.backend.media.savedScope() // 读失败走下面的 catch（显示错误 + 重试），不当成「从未保存」
+            savedScope = saved // 未完整授权时只显示保存过的相册（供取消），不给新增
             let folderList = await app.backend.engine.folderSources()
             let folderIds = Set(folderList.map { FolderMediaSource.bucketId(sourceId: $0.id) })
             if hasLoaded {
@@ -345,8 +350,7 @@ struct BucketScreen: View {
                                                   availableAlbums: Set(list.map(\.id)), availableFolders: folderIds)
             } else {
                 let selectedAlbums = Self.initialSelectionWithUnavailable(saved: saved, availableAlbums: Set(list.map(\.id)),
-                                                                          cameraAlbum: list.first(where: \.isCameraAlbum)?.id,
-                                                                          offersChoices: Self.offersChoices(Self.notice(for: app.access)))
+                                                                          cameraAlbum: list.first(where: \.isCameraAlbum)?.id)
                 let selectedFolders = ScopePolicy.initialFolderSelection(saved: saved, known: known, available: folderIds)
                 checked = selectedAlbums.union(selectedFolders)
             }

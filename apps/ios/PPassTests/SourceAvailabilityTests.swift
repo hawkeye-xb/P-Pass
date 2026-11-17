@@ -83,9 +83,9 @@ final class SourceAvailabilityTests: XCTestCase {
         XCTAssertFalse(AppModel.blockedHeroOffersSettings(autoRule: true, access: .full, hasUsableFolder: false), "全部：不出")
     }
 
-    /// #1811（夜间 owner 复核）：通知侧「还有可用来源」只数登记有效的目录；待保存目录（pendingScope）不能
-    /// 把相册权限降级通知吞掉。
-    /// 反证：LiveBackend 通知侧改回 allRecords().count（把 pendingScope 也算上），第一条断言红。
+    /// #1811 评审：通知侧「还有可用来源」只数登记有效的目录；待保存目录（pendingScope）不能把相册权限
+    /// 降级通知吞掉；范围读失败时即使有有效目录也不抑制降级通知。
+    /// 反证：改回 allRecords().count 第一条红；去掉 `scopeReadFailed` 守卫第三条红。
     func testNoticeUsableSourceIgnoresPendingScopeFolders() {
         let pending = FolderRecord(id: "p", displayName: "draft", bookmark: Data(), status: FolderMediaSource.pendingScopeStatus)
         let active = FolderRecord(id: "a", displayName: "real", bookmark: Data())
@@ -95,5 +95,8 @@ final class SourceAvailabilityTests: XCTestCase {
         XCTAssertTrue(LiveBackend.noticeHasUsableSource(selected: [], knownAlbums: [], folderRecords: [active],
                                                         existingAlbums: nil, photoAccess: .none),
                       "登记有效的目录才是「备份还在继续」")
+        XCTAssertFalse(LiveBackend.noticeHasUsableSource(selected: nil, knownAlbums: [], folderRecords: [active],
+                                                         existingAlbums: nil, photoAccess: .none, scopeReadFailed: true),
+                       "范围读失败 ≠ 没来源，读不到就不能替用户判断备份还在继续")
     }
 }

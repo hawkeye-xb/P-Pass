@@ -1,10 +1,11 @@
+import PPassCore
 import XCTest
 @testable import PPass
 
 /// 10-29：选范围页按照片权限档多说一句。10-30：没有照片权限时不给选择，不说「没有找到照片」。
 /// #1811 起权限两态（产品口径）：完整授权 = 相册可自动备份；有限授权与拒绝统一成「相册未完整授权」，
 /// 相册不进自动范围，文件夹照常，用户挑的几张只走「挑几张传」。
-/// 反证：`BucketScreen.notice(for:)` 把 `.partial` 映射成旧的可选状态（`offersChoices` 为真），本条红。
+/// 反证：`BucketScreen.notice(for:)` 把 `.partial` 映射成旧的可选状态，本条红。
 final class BucketAccessNoticeTests: XCTestCase {
     func test_each_access_tier_has_its_own_notice() {
         XCTAssertEqual(BucketScreen.notice(for: .full), .none)
@@ -12,11 +13,19 @@ final class BucketAccessNoticeTests: XCTestCase {
         XCTAssertEqual(BucketScreen.notice(for: .none), .noAccess)
     }
 
-    /// 10-30（5a）：没有照片权限时不给时间档和「开始备份 / 保存」——一张都读不到，选了也没用。
-    /// 反证：`offersChoices` 恒为 true（回到无权限也能点保存）本条红。
-    func test_no_access_hides_the_choices() {
-        XCTAssertTrue(BucketScreen.offersChoices(.none))
-        XCTAssertFalse(BucketScreen.offersChoices(.noAccess))
+    /// #1811 评审：未完整授权时相册卡片只显示「保存过的相册」供取消，不显示新增相册；完整授权显示全部。
+    /// 反证：`visibleAlbums` 改回「未完整授权一张都不显示」或「不筛直接全显示」，对应断言红。
+    func test_incomplete_access_shows_only_saved_albums_for_cancellation() {
+        let a = AlbumBucket(id: "a", name: "A", count: 3, isCameraAlbum: false)
+        let b = AlbumBucket(id: "b", name: "B", count: 4, isCameraAlbum: false)
+        XCTAssertEqual(BucketScreen.visibleAlbums([a, b], saved: ["a"], photoAccess: .partial).map(\.id), ["a"],
+                       "有限授权：保存过的 a 仍显示（可取消），新增的 b 不显示")
+        XCTAssertEqual(BucketScreen.visibleAlbums([a, b], saved: ["a"], photoAccess: .none).map(\.id), ["a"],
+                       "拒绝授权：同样只给已保存的相册")
+        XCTAssertEqual(BucketScreen.visibleAlbums([a, b], saved: ["a"], photoAccess: .full).map(\.id), ["a", "b"],
+                       "完整授权：全部显示")
+        XCTAssertEqual(BucketScreen.visibleAlbums([a, b], saved: nil, photoAccess: .partial).map(\.id), [],
+                       "从未保存：未完整授权时没有任何相册可显示")
     }
 
     /// 定稿文案中英都在（缺 key 时 bundle 返回占位值）。
