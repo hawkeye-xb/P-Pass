@@ -103,7 +103,7 @@ act() {
   # 没拿到 pid、或 terminate 非 0，都按失败收场，只在成功后留下注入成功的证据行。
   [ -n "$APP_PID" ] || { echo "拿不到 App pid，无法注入崩溃" >&2; return 1; }
   xcrun devicectl device process terminate --device "$DEV" --pid "$APP_PID" --kill >>"$OUT/crash.log" 2>&1 \
-    || { echo "terminate --kill 失败（pid=$APP_PID），崩溃未注入" >&2; return 1; }
+    || { echo "terminate --kill 失败（pid=${APP_PID}），崩溃未注入" >&2; return 1; }
   echo "crash injected at $(date '+%T')" >>"$OUT/crash.log"
   echo "crash kill succeeded pid=$APP_PID" >>"$OUT/crash.log"
   sleep 3
