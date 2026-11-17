@@ -73,7 +73,8 @@ class RuleEnableWhenPartialTest {
 
     /**
      * #1794：「备份范围」入口常驻设置卡——自动备份关着也看得到、进得去（对齐 iOS）。
-     * 反证：把这一行移回 `if (autoBackupRuleOn)`，深度与「仅 Wi-Fi 时备份」那一行不再相同，本条红。
+     * 反证：把这一行移回 `if (autoBackupRuleOn)`（如 origin/main），备份范围行前面就会有一个尚未闭合的
+     * 开关分支，本条红；上一版只看 brace 深度，行只是缩进不同也能过，判不出真假。
      */
     @Test
     fun settings_scope_row_is_always_shown() {
@@ -81,15 +82,30 @@ class RuleEnableWhenPartialTest {
             .substringBefore("R.string.setting_wifi_only")
         val scope = card.indexOf("R.string.backup_scope")
         assertTrue("设置卡里要有备份范围行", scope > 0)
-        assertEquals(
-            "备份范围行与无条件的「仅 Wi-Fi」行同一层，不受自动备份开关影响",
-            braceDepth(card, card.length),
-            braceDepth(card, scope),
-        )
+        val guarded = Regex("""if\s*\(\s*autoBackupRuleOn\s*\)\s*\{""").findAll(card.substring(0, scope))
+            .firstOrNull { open ->
+                val rest = card.substring(open.range.last + 1, scope)
+                rest.count { it == '{' } - rest.count { it == '}' } >= 0
+            }
+        assertTrue("备份范围行不能在 if (autoBackupRuleOn) 分支里，否则开关关着就看不到", guarded == null)
     }
 
-    private fun braceDepth(s: String, index: Int): Int =
-        s.substring(0, index).count { it == '{' } - s.substring(0, index).count { it == '}' }
+    /**
+     * #1794 阻断：无存值用户拨开自动备份 → 进范围页 → 保存回首页，开关必须仍是开的。
+     * ChooseScope 只导航不开开关、范围页保存分支又只在 firstTime 时开，旧实现会留下「开关仍关」。
+     * 反证：撤掉 ChooseScope 里的 `rulePrefs.set(true)`，本条红。
+     */
+    @Test
+    fun choose_scope_turns_the_rule_on_before_opening_the_scope_page() {
+        val toggle = main.substringAfter("val onToggleRule: (Pairing, Boolean) -> Unit").substringBefore("\n    }\n")
+        val choose = toggle.substringAfter("RuleEnableRoute.ChooseScope ->").substringBefore("RuleEnableRoute.Apply")
+        val setOn = choose.indexOf("rulePrefs.set(true)")
+        val open = choose.indexOf("screen = Screen.Buckets(")
+        assertTrue("ChooseScope 必须先打开规则开关，保存回来才不会还是关的", setOn >= 0)
+        assertTrue("开关状态也要同步到界面", choose.contains("ruleOn = true"))
+        assertTrue("先开开关再进范围页", setOn < open)
+        assertTrue("范围页以 firstTime=false 打开，保存分支不会替用户开会关", choose.contains(", false)"))
+    }
 
     /**
      * 场景 C（产品负责人 2026-11-04）：开关开着时权限被收回、用户没点「去设置」而是自己去设置改回全部再回来——
@@ -168,7 +184,7 @@ class RuleEnableWhenPartialTest {
     @Test
     fun enabling_rule_with_saved_scope_does_not_force_scope_editor() {
         val apply = main.substringAfter("val applyRuleAccess:").substringBefore("MediaAccess.PARTIAL")
-        assertTrue(apply.contains("shouldGuideToScopeOnEnable"))
+        assertTrue(apply.contains("scopeHasUsableSource"))
         assertTrue("已有范围只唤醒备份", apply.contains("requestFlowWake(context, TriggerReason.MANUAL)"))
         assertFalse("不能无条件打开范围页", apply.contains("screen = Screen.Buckets(pairing, BackupScopeStore(context).selectedBucketIds() ?: emptySet(), false)"))
     }
