@@ -494,6 +494,9 @@ fn dir_writable(p: &Path) -> bool {
 /// 顺序：库目录 → 平台目录 → 写文件。错误串与壳现行一致：建库失败是
 /// `"<库目录>: <io 错误>"`，其余是 io 错误原文。
 pub fn init_config(platform_dir: &Path, library_dir: &str) -> Result<PathBuf, String> {
+    // #1826：敏感目录（系统 / 用户标准目录 / 同步盘 / 应用自身 / 卷根）直接拒绝，
+    // 且必须排在 `create_dir_all` 之前——命中时磁盘上什么都不留。
+    crate::library_location::check_library_location(library_dir, platform_dir)?;
     std::fs::create_dir_all(library_dir).map_err(|e| format!("{library_dir}: {e}"))?;
     std::fs::create_dir_all(platform_dir).map_err(|e| e.to_string())?;
     let cfg_path = platform_dir.join(CONFIG_FILE_NAME);
@@ -505,6 +508,8 @@ pub fn init_config(platform_dir: &Path, library_dir: &str) -> Result<PathBuf, St
 /// 顺序：先校验（不碰盘），再写入，最后清理旧库里的孤儿 config.toml。
 /// 生效时机不变：daemon 只在启动时读一次 config，重启后台服务后生效。
 pub fn set_library(platform_dir: &Path, library_dir: &str) -> Result<PathBuf, String> {
+    // #1826：敏感目录直接拒绝，排在一切读写之前（config.toml 不动、旧库不动）。
+    crate::library_location::check_library_location(library_dir, platform_dir)?;
     let cfg_path = platform_dir.join(CONFIG_FILE_NAME);
     let current = configured_library_dir(platform_dir);
     let target = Path::new(library_dir);

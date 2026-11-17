@@ -12,7 +12,7 @@
 //!   平台上「正本里没有」= 平台目录里没有 config.toml（两个平台同一口径：首启一次性拉起的
 //!   daemon 不会先在平台目录开库、占端口）。
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::config::{self, Config, CONFIG_FILE_NAME};
 
@@ -38,6 +38,289 @@ pub fn log_library_privacy(dir: &Path, privacy: platform::Result<platform::Libra
             tracing::info!("t2-4: 照片库所在的卷（{file_system}）没有权限可设，不核对")
         }
         Err(e) => tracing::warn!("t2-4: 照片库目录权限核对失败：{e}"),
+    }
+}
+
+// ── #1826：选择照片库位置时直接拒绝敏感目录 ──────────────────────────────
+//
+// 产品定案：命中即拒绝（不做「强提示后允许」）。判据是**解析符号链接后的真实路径**：
+// 选的是 `~/Desktop/photos` 还是链到它的 `~/photos` 都一样挡。判据本身是纯函数
+// （[`sensitive_kind`]），文件系统事实由调用点提供，测试能直接喂假的家目录。
+
+/// #1826：敏感目录的分类。分类只用于日志/测试分辨命中的是哪一类，界面文案同一个。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SensitiveKind {
+    /// 系统根与系统目录：`/`、`/System`、`/Library`、`/Applications`、`/Users`、
+    /// `/private`、`/tmp`、`/var`、Windows 的 `Windows` / `Program Files` / `ProgramData`。
+    SystemDir,
+    /// 可移动卷（含外置盘）的根目录：只允许卷内的专用子目录。
+    VolumeRoot,
+    /// 家目录本身（家目录里的普通子目录不受影响，`~/personal/PPASS_STORAGE` 照常放行）。
+    HomeDir,
+    /// 用户的标准目录（桌面、文稿、下载、图片、影片、音乐、Library）及其内部。
+    UserDir,
+    /// 同步/云盘目录（iCloud Drive、Dropbox、OneDrive、Google Drive 等）及其内部。
+    CloudDir,
+    /// 应用自身：安装目录、本应用的数据目录及其内部。
+    AppDir,
+}
+
+/// #1826：判定所需的本机事实（都按真实路径给）。
+#[derive(Debug, Clone, Default)]
+pub struct LocationEnvironment {
+    /// 家目录；读不到就是 `None`（不做家目录相关的判定）。
+    pub home: Option<PathBuf>,
+    /// 应用自身的目录：数据目录（平台目录）、安装目录。
+    pub app_dirs: Vec<PathBuf>,
+}
+
+impl LocationEnvironment {
+    /// 本机实际环境：家目录取自平台适配器（不自己读环境变量，门禁 G1），应用目录取
+    /// 传入的平台数据目录与正在运行的可执行文件所在目录。
+    pub fn platform(platform_dir: &Path) -> Self {
+        let mut app_dirs = vec![real_path(platform_dir)];
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(parent) = real_path(&exe).parent() {
+                app_dirs.push(parent.to_path_buf());
+            }
+        }
+        use platform::PlatformAdapter as _;
+        Self {
+            home: platform::adapter().home_dir().map(|h| real_path(&h)),
+            app_dirs,
+        }
+    }
+}
+
+/// #1826：家目录下的用户标准目录（小写比较；Windows 的 `Videos` 对应 macOS 的 `Movies`）。
+const USER_DIRS: &[&str] = &[
+    "desktop",
+    "documents",
+    "downloads",
+    "library",
+    "pictures",
+    "movies",
+    "music",
+    "videos",
+];
+
+/// #1826：同步/云盘的目录名（小写比较）。`Library/Mobile Documents`（iCloud Drive）与
+/// `Library/CloudStorage`（文件提供程序接入的 Dropbox/OneDrive/Google Drive）也在这里——
+/// 它们本来就在 `~/Library` 之内，单列出来是为了分类说得清。
+///
+/// 只收名字本身就指明是同步盘的（`box` 这种一个常见单词的名字不收：家目录里叫 `box`
+/// 的普通文件夹比 Box 同步盘常见，误伤正常目录更糟；Box 走 `CloudStorage` 一样挡得住）。
+const CLOUD_DIRS: &[&str] = &[
+    "dropbox",
+    "onedrive",
+    "google drive",
+    "googledrive",
+    "icloud drive",
+    "iclouddrive",
+    "mobile documents",
+    "cloudstorage",
+    "pcloud drive",
+];
+
+/// #1826：把路径解析成真实路径。能 canonicalize 就直接用；目标（或中间段）还不存在时，
+/// 取最深的可解析祖先解析出真实路径，再把剩下的段接回去——判据跑在「建库目录之前」，
+/// 那时目标往往还不存在。
+pub fn real_path(p: &Path) -> PathBuf {
+    if let Ok(real) = p.canonicalize() {
+        return real;
+    }
+    let mut rest: Vec<std::ffi::OsString> = Vec::new();
+    let mut cur = p.to_path_buf();
+    loop {
+        if let Ok(mut base) = cur.canonicalize() {
+            for seg in rest.iter().rev() {
+                base.push(seg);
+            }
+            return base;
+        }
+        match (cur.file_name().map(|s| s.to_os_string()), cur.parent()) {
+            (Some(name), Some(parent)) => {
+                rest.push(name);
+                cur = parent.to_path_buf();
+            }
+            // 到头了（相对路径、根不存在）：原样返回，判据按字面比。
+            _ => return p.to_path_buf(),
+        }
+    }
+}
+
+/// #1826：组件比较的归一（大小写不敏感——macOS / Windows 的文件系统默认如此；Linux 上
+/// 变得更严格，不会放行不该放的）。
+fn norm_component(c: Component<'_>) -> Option<String> {
+    match c {
+        Component::Normal(s) => Some(s.to_string_lossy().to_lowercase()),
+        Component::Prefix(p) => Some(p.as_os_str().to_string_lossy().to_lowercase()),
+        _ => None,
+    }
+}
+
+/// #1826：`real` 等于 `base` 或在它内部 ⇒ 返回相对 `base` 的分量（小写）；否则 `None`。
+fn under(real: &Path, base: &Path) -> Option<Vec<String>> {
+    let mut r = real.components();
+    for b in base.components() {
+        match r.next() {
+            Some(rc) if norm_component(rc) == norm_component(b) => {}
+            _ => return None,
+        }
+    }
+    Some(
+        r.map(|c| c.as_os_str().to_string_lossy().to_lowercase())
+            .collect(),
+    )
+}
+
+/// #1826：路径的普通分量（小写，去掉根与前缀）。
+fn dir_components(p: &Path) -> Vec<String> {
+    p.components().filter_map(norm_component).collect()
+}
+
+/// #1826：可移动卷的根目录。
+///
+/// - Windows：盘符根 `C:\`（只允许盘内的专用子目录）。
+/// - macOS：`/Volumes/<卷>`。Linux：`/mnt/<卷>`、`/media/<卷>`、`/media/<用户>/<卷>`。
+fn is_volume_root(real: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        real.has_root() && real.parent().is_none()
+    }
+    #[cfg(not(windows))]
+    {
+        if !real.has_root() {
+            return false;
+        }
+        if real.parent().is_none() {
+            // "/" 是系统根，由 [`is_system_dir`] 归类。
+            return false;
+        }
+        let c = dir_components(real);
+        match c.as_slice() {
+            [a, _] => a == "volumes" || a == "mnt" || a == "media",
+            [a, _, _] => a == "media",
+            _ => false,
+        }
+    }
+}
+
+/// #1826：系统根与系统目录。列表里的目录**本身**一律拒绝；`/System`、`/Library`、
+/// `/Applications` 连内部一起拒绝（系统装软件的归档处，里面没有用户该放开的东西）。
+///
+/// `/tmp`、`/var`、`/private` 只拒绝目录本身：它们的内部含系统临时目录（macOS 的
+/// `$TMPDIR` 在 `/private/var/folders`），连内部一起拒绝会挡掉正常可选的位置；这些
+/// 位置里用户存得进东西的地方（`/private/tmp` 等）本来就活不过重启，且写入与卷检查
+/// 兜得住。
+fn is_system_dir(real: &Path) -> bool {
+    let c = dir_components(real);
+
+    #[cfg(not(windows))]
+    {
+        if !real.has_root() {
+            return false;
+        }
+        // 空 = "/" 本身。
+        const EXACT: &[&[&str]] = &[
+            &[],
+            &["system"],
+            &["library"],
+            &["applications"],
+            &["users"],
+            &["private"],
+            &["tmp"],
+            &["var"],
+            &["volumes"],
+        ];
+        const TREES: &[&[&str]] = &[&["system"], &["library"], &["applications"]];
+        if EXACT.iter().any(|e| c.as_slice() == *e) {
+            return true;
+        }
+        if TREES
+            .iter()
+            .any(|t| c.len() > t.len() && c[..t.len()] == **t)
+        {
+            return true;
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        const TREES: &[&str] = &[
+            "windows",
+            "program files",
+            "program files (x86)",
+            "programdata",
+            "$recycle.bin",
+            "system volume information",
+        ];
+        const EXACT: &[&str] = &["users"];
+        if let Some(top) = c.first() {
+            if TREES.contains(&top.as_str()) {
+                return true;
+            }
+            if c.len() == 1 && EXACT.contains(&top.as_str()) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+/// #1826：同步/云盘目录名（允许带后缀，如 Windows 的 `OneDrive - Contoso`）。
+fn is_cloud_dir(name: &str) -> bool {
+    CLOUD_DIRS
+        .iter()
+        .any(|n| name == *n || name.starts_with(&format!("{n} ")))
+}
+
+/// #1826：真实路径落在哪一类敏感目录里；普通目录返回 `None`。
+pub fn sensitive_kind(real: &Path, env: &LocationEnvironment) -> Option<SensitiveKind> {
+    if is_volume_root(real) {
+        return Some(SensitiveKind::VolumeRoot);
+    }
+    if is_system_dir(real) {
+        return Some(SensitiveKind::SystemDir);
+    }
+    // 应用自身先判：数据目录在 `~/Library/Application Support` 里，该报「应用自身」。
+    if env.app_dirs.iter().any(|d| under(real, d).is_some()) {
+        return Some(SensitiveKind::AppDir);
+    }
+    let home = env.home.as_deref()?;
+    let rel = under(real, home)?;
+    if rel.is_empty() {
+        return Some(SensitiveKind::HomeDir);
+    }
+    if rel.iter().any(|c| is_cloud_dir(c)) {
+        return Some(SensitiveKind::CloudDir);
+    }
+    if USER_DIRS.contains(&rel[0].as_str()) {
+        return Some(SensitiveKind::UserDir);
+    }
+    None
+}
+
+/// #1826：选择照片库位置的第一道校验——按真实路径判敏感目录，命中直接拒绝。
+/// 在**创建库目录、写 config、搬迁之前**调用（[`config::init_config`] /
+/// [`config::set_library`] 的开头），所以命中时磁盘上什么都不留。
+pub fn check_library_location(target: &str, platform_dir: &Path) -> Result<(), String> {
+    let env = LocationEnvironment::platform(platform_dir);
+    let real = real_path(Path::new(target));
+    match sensitive_kind(&real, &env) {
+        Some(kind) => {
+            tracing::info!(
+                "#1826: 拒绝把照片库放在敏感目录（{kind:?}）：{}（真实路径 {}）",
+                target,
+                real.display()
+            );
+            Err(config::ui_err(
+                "ui.err_library_sensitive",
+                &[("dir", &target)],
+            ))
+        }
+        None => Ok(()),
     }
 }
 
@@ -343,5 +626,225 @@ mod tests {
         });
         assert_eq!(out, Some(Ok(platform::Applied::Done)));
         assert_eq!(calls, vec![platform.join(CONFIG_FILE_NAME)]);
+    }
+
+    // ── #1826：敏感目录直接拒绝 ────────────────────────────────────────
+
+    /// 假的家目录与应用目录（判据是纯函数，不需要真建这些目录）。
+    fn fake_env() -> LocationEnvironment {
+        LocationEnvironment {
+            home: Some(PathBuf::from("/Users/tester")),
+            app_dirs: vec![
+                PathBuf::from("/Users/tester/Library/Application Support/P-Pass"),
+                PathBuf::from("/Users/tester/Applications/P-Pass.app/Contents/MacOS"),
+            ],
+        }
+    }
+
+    fn kind_of(p: &str) -> Option<SensitiveKind> {
+        sensitive_kind(Path::new(p), &fake_env())
+    }
+
+    /// 每一类都点名：系统目录、卷根、家目录、用户标准目录、同步盘、应用自身。
+    /// 反证：删掉 [`sensitive_kind`] 里任一类判断 ⇒ 对应断言变红（`None`）。
+    /// Windows 上不跑：这张表是 UNIX 的目录布局，Windows 的盘符根另有
+    /// [`drive_roots_are_volume_roots_on_windows`]。
+    #[cfg(not(windows))]
+    #[test]
+    fn every_sensitive_category_is_rejected() {
+        use SensitiveKind::*;
+        let cases: &[(&str, SensitiveKind)] = &[
+            // 系统根与系统目录（目录本身 + 系统装软件的归档处内部）。
+            ("/", SystemDir),
+            ("/System", SystemDir),
+            ("/System/Library/Assets", SystemDir),
+            ("/Library", SystemDir),
+            ("/Library/Preferences", SystemDir),
+            ("/Applications", SystemDir),
+            ("/Applications/P-Pass.app/Contents", SystemDir),
+            ("/Users", SystemDir),
+            ("/private", SystemDir),
+            ("/tmp", SystemDir),
+            ("/var", SystemDir),
+            ("/Volumes", SystemDir),
+            // 可移动卷的根目录（只允许卷内专用子目录）。
+            ("/Volumes/Backup", VolumeRoot),
+            ("/Volumes/Backup/", VolumeRoot),
+            ("/mnt/data", VolumeRoot),
+            ("/media/tester/USB", VolumeRoot),
+            ("/media/USB", VolumeRoot),
+            // 家目录本身。
+            ("/Users/tester", HomeDir),
+            ("/Users/Tester/", HomeDir),
+            // 用户标准目录及内部。
+            ("/Users/tester/Desktop", UserDir),
+            ("/Users/tester/Desktop/照片", UserDir),
+            ("/Users/tester/DESKTOP", UserDir),
+            ("/Users/tester/Documents/ppass", UserDir),
+            ("/Users/tester/Downloads", UserDir),
+            ("/Users/tester/Library/Caches/ppass", UserDir),
+            ("/Users/tester/Pictures", UserDir),
+            ("/Users/tester/Movies", UserDir),
+            ("/Users/tester/Music", UserDir),
+            // 同步 / 云盘目录及内部。
+            ("/Users/tester/Dropbox", CloudDir),
+            ("/Users/tester/Dropbox/Photos", CloudDir),
+            ("/Users/tester/OneDrive - Contoso/x", CloudDir),
+            ("/Users/tester/Google Drive/My Drive/x", CloudDir),
+            (
+                "/Users/tester/Library/Mobile Documents/com~apple~CloudDocs/x",
+                CloudDir,
+            ),
+            ("/Users/tester/Library/CloudStorage/Dropbox/x", CloudDir),
+            // 应用自身：数据目录与安装目录。
+            ("/Users/tester/Library/Application Support/P-Pass", AppDir),
+            (
+                "/Users/tester/Library/Application Support/P-Pass/lib",
+                AppDir,
+            ),
+            (
+                "/Users/tester/Applications/P-Pass.app/Contents/MacOS/ppf-daemon",
+                AppDir,
+            ),
+        ];
+        for (path, want) in cases {
+            assert_eq!(kind_of(path), Some(*want), "{path} 应判成 {want:?}");
+        }
+    }
+
+    /// 普通独立目录不受影响：家目录里的普通子目录、卷内的专用子目录、系统位置之外的
+    /// 自定义位置。反证：把 [`sensitive_kind`] 改成「凡在家目录下就拒绝」⇒ 前两条红。
+    #[cfg(not(windows))]
+    #[test]
+    fn ordinary_standalone_folders_are_allowed() {
+        for path in [
+            "/Users/tester/personal/PPASS_STORAGE",
+            "/Users/tester/Photo Library",
+            "/Users/tester/Desktop-old", // 名字像，但不是桌面本身
+            "/Users/tester/Dropbox-old",
+            "/Users/tester/personal/box", // 普通文件夹，不是 Box 同步盘
+            "/Volumes/Backup/PPASS_STORAGE",
+            "/Volumes/Backup/photos",
+            "/opt/ppass",
+            "/srv/ppass",
+            "/private/var/folders/xy/ppass", // 系统临时目录（$TMPDIR）照常放行
+        ] {
+            assert_eq!(kind_of(path), None, "{path} 不该被拒绝");
+        }
+    }
+
+    /// Windows：盘符根是卷根，系统目录按盘内顶层名判。
+    /// 反证：删掉 [`is_volume_root`] 的 Windows 分支 ⇒ 第一条红。
+    #[cfg(windows)]
+    #[test]
+    fn drive_roots_are_volume_roots_on_windows() {
+        let env = LocationEnvironment {
+            home: Some(PathBuf::from(r"C:\Users\tester")),
+            app_dirs: vec![
+                PathBuf::from(r"C:\Users\tester\AppData\Roaming\P-Pass"),
+                PathBuf::from(r"C:\Users\tester\AppData\Local\P-Pass"),
+            ],
+        };
+        let k = |p: &str| sensitive_kind(Path::new(p), &env);
+        assert_eq!(k(r"D:\"), Some(SensitiveKind::VolumeRoot));
+        assert_eq!(k(r"C:\Windows\System32"), Some(SensitiveKind::SystemDir));
+        assert_eq!(
+            k(r"C:\Program Files\P-Pass"),
+            Some(SensitiveKind::SystemDir)
+        );
+        assert_eq!(k(r"C:\Users\tester"), Some(SensitiveKind::HomeDir));
+        assert_eq!(k(r"C:\Users\tester\Desktop"), Some(SensitiveKind::UserDir));
+        assert_eq!(
+            k(r"C:\Users\tester\Downloads\x"),
+            Some(SensitiveKind::UserDir)
+        );
+        assert_eq!(
+            k(r"C:\Users\tester\OneDrive - Contoso"),
+            Some(SensitiveKind::CloudDir)
+        );
+        assert_eq!(
+            k(r"C:\Users\tester\AppData\Roaming\P-Pass"),
+            Some(SensitiveKind::AppDir)
+        );
+        assert_eq!(k(r"D:\PPASS_STORAGE"), None);
+        assert_eq!(k(r"C:\Users\tester\personal\PPASS_STORAGE"), None);
+    }
+
+    /// 判的是**解析符号链接后的真实路径**：链到桌面 / 文稿的入口与直接选它一样挡，
+    /// 链到普通目录的入口照常放行。反证：去掉 [`real_path`] 的 canonicalize ⇒ 前两条红。
+    #[cfg(unix)]
+    #[test]
+    fn symlinks_are_resolved_before_judging() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        std::fs::create_dir_all(home.join("Documents").join("real_lib")).unwrap();
+        std::fs::create_dir_all(home.join("Desktop")).unwrap();
+        std::fs::create_dir_all(home.join("personal").join("PPASS_STORAGE")).unwrap();
+        let env = LocationEnvironment {
+            home: Some(real_path(&home)),
+            app_dirs: vec![],
+        };
+
+        // 普通目录的别名 → 放行。
+        let ok_link = tmp.path().join("storage-link");
+        std::os::unix::fs::symlink(home.join("personal").join("PPASS_STORAGE"), &ok_link).unwrap();
+        assert_eq!(sensitive_kind(&real_path(&ok_link), &env), None);
+
+        // 链到文稿里的目录 → 按真实路径判成用户目录。
+        let bad_link = tmp.path().join("docs-link");
+        std::os::unix::fs::symlink(home.join("Documents").join("real_lib"), &bad_link).unwrap();
+        assert_eq!(
+            sensitive_kind(&real_path(&bad_link), &env),
+            Some(SensitiveKind::UserDir)
+        );
+
+        // 链到桌面本身也挡。
+        let desktop_link = tmp.path().join("desktop-link");
+        std::os::unix::fs::symlink(home.join("Desktop"), &desktop_link).unwrap();
+        assert_eq!(
+            sensitive_kind(&real_path(&desktop_link), &env),
+            Some(SensitiveKind::UserDir)
+        );
+
+        // 目标还不存在时，取最深的可解析祖先：<home>/Desktop/新文件夹 仍判成用户目录。
+        let not_yet = home.join("Desktop").join("新文件夹");
+        assert_eq!(
+            sensitive_kind(&real_path(&not_yet), &env),
+            Some(SensitiveKind::UserDir)
+        );
+    }
+
+    /// 校验入口 run 在**创建库目录、写 config 之前**：命中敏感目录时磁盘上什么都不留，
+    /// 正本不动。反证：把 `init_config` / `set_library` 开头那行 `check_library_location`
+    /// 删掉 ⇒ 这里两条都红（错误变成别的、目录被建出来）。
+    #[test]
+    fn sensitive_targets_are_refused_before_anything_is_written() {
+        use platform::PlatformAdapter as _;
+        let home = platform::adapter().home_dir().expect("测试机有家目录");
+        let target = home.join("Documents").join("ppass-1826-should-not-exist");
+        let tmp = tempfile::tempdir().unwrap();
+        let platform_dir = tmp.path().join("platform");
+
+        // 首启：不建库目录、不写 config.toml。
+        let err = config::init_config(&platform_dir, target.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("ui.err_library_sensitive"), "{err}");
+        assert!(!target.exists(), "命中敏感目录时不许建库目录");
+        assert!(
+            !platform_dir.join(CONFIG_FILE_NAME).exists(),
+            "不许写 config"
+        );
+
+        // 改库：正本与 config.toml 都保持原样。
+        let mem = Mem::default();
+        let loc = LibraryLocation::with(Some(Box::new(mem.clone())), platform_dir.clone());
+        let good = tmp.path().join("good");
+        loc.set(good.to_str().unwrap()).unwrap();
+        let before = mem.0.lock().unwrap().clone();
+        let err = loc
+            .set(home.join("Downloads").to_str().unwrap())
+            .unwrap_err();
+        assert!(err.contains("ui.err_library_sensitive"), "{err}");
+        assert_eq!(mem.0.lock().unwrap().clone(), before, "正本不许改");
+        assert!(!home.join("Downloads").join(LIBRARY_MARKER).exists());
     }
 }
