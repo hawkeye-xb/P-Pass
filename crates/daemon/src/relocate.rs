@@ -1644,7 +1644,9 @@ mod tests {
         let desktop = home.path().join("Desktop");
         std::fs::create_dir_all(&desktop).unwrap();
         // 主人把「文稿」重定向到家目录外的独立目录：按名字判不到，只有 peer 的事实知道。
-        let redirected_documents = local.path().join("PersonalDocs");
+        // 必须在 local_base 之外：否则忽略 peer 时也会命中 AppDir，反证失效。
+        let redirected = tempfile::tempdir().unwrap();
+        let redirected_documents = redirected.path().join("PersonalDocs");
         std::fs::create_dir_all(&redirected_documents).unwrap();
         let p = probes(&|_, _| Some(true), &|_| Some(u64::MAX), &|_| false);
 
