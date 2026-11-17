@@ -680,7 +680,7 @@ fun PPassApp() {
                 ruleHintRes = null
                 val scopeStore = BackupScopeStore(context)
                 val folderCount = com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(context).allRecords().size
-                if (com.hawkeyexb.ppass.backup.shouldGuideToScopeOnEnable(scopeStore.readScope(), folderCount)) {
+                if (!com.hawkeyexb.ppass.backup.scopeHasUsableSource(scopeStore.readScope(), folderCount)) {
                     screen = Screen.Buckets(pairing, scopeStore.selectedBucketIds() ?: emptySet(), false)
                 } else {
                     requestFlowWake(context, TriggerReason.MANUAL)
@@ -727,8 +727,12 @@ fun PPassApp() {
             val routeFolderCount = com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(context).allRecords().size
             when (ruleEnableRoute(mediaAccess(context), canPromptForFullMediaAccess(context), routeScope, routeFolderCount)) {
                 RuleEnableRoute.ChooseScope -> {
-                    // #1794：没有有效来源时进范围页让用户选（不跳系统设置，也不先要相册权限）。
-                    PLog.i("PPassFlow", "auto-rule: no effective scope, opening scope page to choose sources")
+                    // #1794：没有有效来源时先打开规则开关，再进范围页让用户选（不跳系统设置，也不先要相册权限）。
+                    // 范围页以 firstTime=false 打开、保存分支不会替用户开开关，所以必须先在这里落开关，否则保存回来仍是关的。
+                    PLog.i("PPassFlow", "auto-rule: no effective scope, enabling rule then opening scope page to choose sources")
+                    rulePrefs.set(true)
+                    ruleOn = true
+                    ruleHintRes = null
                     screen = Screen.Buckets(pairing, BackupScopeStore(context).selectedBucketIds() ?: emptySet(), false)
                 }
                 RuleEnableRoute.Apply -> applyRuleAccess(pairing, MediaAccess.FULL)
@@ -1886,20 +1890,12 @@ internal fun ruleEnableRoute(
     scope: ScopeRead,
     folderCount: Int,
 ): RuleEnableRoute = when {
-    ruleScopeNeedsChoice(scope, folderCount) -> RuleEnableRoute.ChooseScope
+    // 与「开完开关要不要引导去范围页」共用同一个判据（backup/BackupScopeTime.kt 的 scopeHasUsableSource）。
+    !com.hawkeyexb.ppass.backup.scopeHasUsableSource(scope, folderCount) -> RuleEnableRoute.ChooseScope
     !ruleScopeUsesAlbums(scope) -> RuleEnableRoute.Apply
     access == MediaAccess.FULL -> RuleEnableRoute.Apply
     access == MediaAccess.PARTIAL && !canPrompt -> RuleEnableRoute.Settings
     else -> RuleEnableRoute.Request
-}
-
-/** 没有有效来源——打开开关前先让用户去范围页选来源：没有相册来源、也没有现有的文件夹来源。 */
-internal fun ruleScopeNeedsChoice(scope: ScopeRead, folderCount: Int): Boolean = when (scope) {
-    ScopeRead.NeverSaved -> folderCount == 0
-    // 只存了已失效的文件夹 id（文件夹已被删）时同样没有有效来源。
-    is ScopeRead.Saved -> scope.ids.none { !com.hawkeyexb.ppass.backup.folder.isFolderId(it) } && folderCount == 0
-    // 读不到不是「没有」：按有来源处理，沿用权限链，不把用户推进一个可能空的范围页。
-    is ScopeRead.Unreadable -> false
 }
 
 /** 范围里有没有相册来源（读不到按「有」处理：宁可多申请一次，不悄悄少备份相册）。 */

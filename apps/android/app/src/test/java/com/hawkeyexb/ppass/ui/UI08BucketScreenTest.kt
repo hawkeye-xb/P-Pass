@@ -84,6 +84,19 @@ class UI08BucketScreenTest {
         assertFalse("「添加文件夹」不能被相册权限门控", gated.contains("add-folder"))
     }
 
+    /**
+     * #1794：整机空文案在 2 列网格里必须整行居中，不能和「添加文件夹」卡片并排只占一格。
+     * 反证：去掉 `span = { GridItemSpan(maxLineSpan) }`，本条红。
+     */
+    @Test
+    fun whole_phone_empty_copy_spans_the_whole_row() {
+        val empty = bucketScreenSource().substringAfter("item(key = \"empty\"")
+        assertTrue(
+            "整机空文案必须占满整行",
+            empty.take(80).contains("span = { GridItemSpan(maxLineSpan) }"),
+        )
+    }
+
     /** 没有相册权限时读不到照片，不能把「读不到」说成整机没有照片。 */
     @Test
     fun whole_phone_empty_copy_needs_readable_photo_access() {

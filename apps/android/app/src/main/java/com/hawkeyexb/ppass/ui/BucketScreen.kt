@@ -381,7 +381,7 @@ fun BucketScreen(
                         }
                     }
                     if (bucketScreenEmptyNoticeVisible(buckets.isEmpty(), folderBuckets.isEmpty(), albumAccess)) {
-                        item(key = "empty") {
+                        item(key = "empty", span = { GridItemSpan(maxLineSpan) }) {
                             Text(
                                 stringResource(R.string.bucket_empty),
                                 fontSize = 15.sp, color = PPColor.Ink40, textAlign = TextAlign.Center,

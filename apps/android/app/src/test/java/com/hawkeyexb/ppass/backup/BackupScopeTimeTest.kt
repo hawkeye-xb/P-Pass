@@ -51,12 +51,19 @@ class BackupScopeTimeTest {
         assertNull("从未保存且没有目录 = 没有可用来源", effectiveBackupScope(null, null, emptySet(), null))
     }
 
+    /**
+     * 一套判据（对齐 iOS `hasUsableScope`）：开自动备份前「没有可用来源就去范围页选」，范围页回来「没有可用来源就引导」。
+     * 保存过空集与只剩已删目录都按没有来源算；读取失败按有来源处理。
+     */
     @Test
-    fun toggle_guides_only_when_never_saved_and_no_legacy_folder_exists() {
-        assertTrue(shouldGuideToScopeOnEnable(ScopeRead.NeverSaved, existingFolderCount = 0))
-        assertFalse("已有目录就是已有有效来源", shouldGuideToScopeOnEnable(ScopeRead.NeverSaved, existingFolderCount = 1))
-        assertFalse("保存过空集也是有值，不能强制跳页", shouldGuideToScopeOnEnable(ScopeRead.Saved(emptySet()), existingFolderCount = 0))
-        assertFalse("读不到不是从未保存", shouldGuideToScopeOnEnable(ScopeRead.Unreadable(IllegalStateException("x")), existingFolderCount = 0))
+    fun scope_has_a_usable_source_matching_ios_no_albums() {
+        assertFalse("从未保存且没有目录 = 没有来源", scopeHasUsableSource(ScopeRead.NeverSaved, existingFolderCount = 0))
+        assertTrue("已有目录就是有来源", scopeHasUsableSource(ScopeRead.NeverSaved, existingFolderCount = 1))
+        assertFalse("保存过空集 = 没有来源", scopeHasUsableSource(ScopeRead.Saved(emptySet()), existingFolderCount = 0))
+        assertTrue("保存过相册范围 = 有来源", scopeHasUsableSource(ScopeRead.Saved(setOf(7L)), existingFolderCount = 0))
+        assertFalse("只剩被删目录 = 没有来源", scopeHasUsableSource(ScopeRead.Saved(setOf(0x4000000000000003L)), existingFolderCount = 0))
+        assertTrue("范围是目录且目录还在 = 有来源", scopeHasUsableSource(ScopeRead.Saved(setOf(0x4000000000000003L)), existingFolderCount = 1))
+        assertTrue("读不到按有来源处理，不把用户推进空范围页", scopeHasUsableSource(ScopeRead.Unreadable(IllegalStateException("x")), existingFolderCount = 0))
     }
 
     // ── 「今天」从当天零点算 ──────────────────────────────────

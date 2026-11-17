@@ -40,9 +40,17 @@ fun effectiveBackupScope(
     return saved.copy(buckets = selectedNow)
 }
 
-/** 自动备份开关只在「从未保存且没有既有目录」时主动引导；保存过空集或读取失败都不是无值。 */
-fun shouldGuideToScopeOnEnable(read: ScopeRead, existingFolderCount: Int): Boolean =
-    read is ScopeRead.NeverSaved && existingFolderCount == 0
+/**
+ * 范围里有没有可用来源（对齐 iOS `ScopePolicy.hasUsableScope` / `noAlbums`）：选中的相册、范围里登记的目录、
+ * 或还没保存过统一范围时已有的旧目录都算；保存过空集、只剩被删掉的目录都不算；读取失败按「有」处理。
+ * 开自动备份前先看这里：没有可用来源就去范围页选（ChooseScope），有来源才走权限链 / 直接开。
+ */
+fun scopeHasUsableSource(read: ScopeRead, existingFolderCount: Int): Boolean = when (read) {
+    ScopeRead.NeverSaved -> existingFolderCount > 0
+    is ScopeRead.Saved -> read.ids.any { !isFolderId(it) } || existingFolderCount > 0
+    // 读不到不是「没有」：按有来源处理，不把用户推进一个可能空的范围页。
+    is ScopeRead.Unreadable -> true
+}
 
 /** 选范围页上的两档。 */
 enum class ScopeTime { SINCE_TODAY, ALL }
