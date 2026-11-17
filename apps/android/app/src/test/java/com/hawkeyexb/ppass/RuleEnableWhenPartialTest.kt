@@ -3,6 +3,9 @@ package com.hawkeyexb.ppass
 import com.hawkeyexb.ppass.backup.MediaAccess
 import com.hawkeyexb.ppass.backup.ScopeRead
 import com.hawkeyexb.ppass.backup.folder.FOLDER_ID_FLAG
+import com.hawkeyexb.ppass.ui.HeroRender
+import com.hawkeyexb.ppass.ui.PhotosGuide
+import com.hawkeyexb.ppass.ui.heroRenderOf
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -26,12 +29,13 @@ class RuleEnableWhenPartialTest {
 
     /**
      * #1794：开关按范围实际需不需要相册判断，不再一律要完整相册权限。
-     * 反证：去掉「没有有效范围先去范围页」或「只有文件夹来源直接开」，对应断言红。
+     * 产品口径：只有从未保存过范围才首次引导；保存过任何值（包括空集）都是明确选择，off→on 只开关、不跳页。
+     * 反证：把保存过空集当回 ChooseScope，或允许只读文件夹直接开，对应断言红。
      */
     @Test
     fun scope_decides_whether_album_permission_is_needed_at_all() {
-        assertEquals("没有有效范围：先去范围页选来源", RuleEnableRoute.ChooseScope, ruleEnableRoute(MediaAccess.NONE, canPrompt = false, noScope, folderCount = 0))
-        assertEquals("保存过空集也等于没有有效范围", RuleEnableRoute.ChooseScope, ruleEnableRoute(MediaAccess.FULL, canPrompt = true, ScopeRead.Saved(emptySet()), folderCount = 0))
+        assertEquals("从未保存过范围：首次引导进范围页选来源", RuleEnableRoute.ChooseScope, ruleEnableRoute(MediaAccess.NONE, canPrompt = false, noScope, folderCount = 0))
+        assertEquals("保存过空集是明确选择：只开关，不跳页", RuleEnableRoute.Apply, ruleEnableRoute(MediaAccess.FULL, canPrompt = true, ScopeRead.Saved(emptySet()), folderCount = 0))
         assertEquals("已有文件夹来源（没存过相册范围）：直接开", RuleEnableRoute.Apply, ruleEnableRoute(MediaAccess.NONE, canPrompt = false, noScope, folderCount = 1))
         assertEquals("只有文件夹来源：不需要相册权限", RuleEnableRoute.Apply, ruleEnableRoute(MediaAccess.NONE, canPrompt = false, folderOnlyScope, folderCount = 1))
         assertEquals("已有文件夹 + 相册：仍按权限走", RuleEnableRoute.Request, ruleEnableRoute(MediaAccess.NONE, canPrompt = false, ScopeRead.Saved(setOf(7L)), folderCount = 1))
@@ -88,6 +92,38 @@ class RuleEnableWhenPartialTest {
                 rest.count { it == '{' } - rest.count { it == '}' } >= 0
             }
         assertTrue("备份范围行不能在 if (autoBackupRuleOn) 分支里，否则开关关着就看不到", guarded == null)
+    }
+
+    /**
+     * #1794 产品口径：没有任何来源时统一说「未选定自动备份范围」，不再说「未选相册」（目录来源也是来源）。
+     * 反证：改回「未选相册」，本条红。
+     */
+    @Test
+    fun no_scope_copy_says_the_scope_is_not_selected() {
+        fun value(file: String): String =
+            Regex("""<string name="backup_scope_none">([^<]*)</string>""").find(File(file).readText())!!.groupValues[1]
+        assertEquals("未选定自动备份范围", value("src/main/res/values-zh/strings.xml"))
+        assertEquals("No backup scope selected", value("src/main/res/values/strings.xml"))
+        assertFalse("两种语言都不再说「未选相册」", File("src/main/res/values-zh/strings.xml").readText().contains("未选相册"))
+    }
+
+    /**
+     * #1794 产品口径：只有从未保存过范围才引导一次；保存过空集（明确不选）后不再反复引导。
+     * 反证：让 guideForCurrentScope 无条件放行 EnableScope，空集那条红。
+     */
+    @Test
+    fun scope_guide_only_before_any_scope_is_saved() {
+        assertEquals("从未保存过范围：引导一次", PhotosGuide.EnableScope, guideForCurrentScope(PhotosGuide.EnableScope, firstChoicePending = true))
+        assertEquals("保存过空集：不再引导", PhotosGuide.None, guideForCurrentScope(PhotosGuide.EnableScope, firstChoicePending = false))
+        assertEquals("第二步引导不受影响", PhotosGuide.EnableBackground, guideForCurrentScope(PhotosGuide.EnableBackground, firstChoicePending = false))
+    }
+
+    /** 存过范围但零来源：首页说「未选定自动备份范围」，不能说成读不到（把 noSources 带进 hero 的 scopeSaved）。 */
+    @Test
+    fun no_sources_scope_renders_as_not_selected_not_unreadable() {
+        assertTrue(main.contains("scopeSaved = holder.scopeSaved.value && !holder.noSources.value"))
+        assertEquals(HeroRender.NoAlbums, heroRenderOf(MediaAccess.FULL, null, scopeSaved = false))
+        assertEquals("有来源但三元组暂时读不到：仍说读不到", HeroRender.Unreadable, heroRenderOf(MediaAccess.FULL, null, scopeSaved = true))
     }
 
     /**
@@ -184,7 +220,7 @@ class RuleEnableWhenPartialTest {
     @Test
     fun enabling_rule_with_saved_scope_does_not_force_scope_editor() {
         val apply = main.substringAfter("val applyRuleAccess:").substringBefore("MediaAccess.PARTIAL")
-        assertTrue(apply.contains("scopeHasUsableSource"))
+        assertTrue(apply.contains("scopeNeedsFirstChoice"))
         assertTrue("已有范围只唤醒备份", apply.contains("requestFlowWake(context, TriggerReason.MANUAL)"))
         assertFalse("不能无条件打开范围页", apply.contains("screen = Screen.Buckets(pairing, BackupScopeStore(context).selectedBucketIds() ?: emptySet(), false)"))
     }

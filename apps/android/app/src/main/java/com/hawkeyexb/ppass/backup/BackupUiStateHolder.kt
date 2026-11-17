@@ -15,6 +15,8 @@ import android.os.Looper
 import android.provider.MediaStore
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
+import com.hawkeyexb.ppass.backup.folder.FolderAccess
+import com.hawkeyexb.ppass.backup.folder.isFolderId
 import com.hawkeyexb.ppass.backup.flow.AndroidFlowRuntime
 import com.hawkeyexb.ppass.backup.flow.EngineView
 import com.hawkeyexb.ppass.backup.flow.FlowCommand
@@ -134,13 +136,17 @@ class BackupUiStateHolder(
     val desktopLowSpace: State<Boolean> get() = _desktopLowSpace
 
     /**
-     * #1038：账本读不读得到（[FlowProjection.countsReadable]）、范围存没存——英雄区据此在「读不到」「未选相册」
+     * #1038：账本读不读得到（[FlowProjection.countsReadable]）、范围存没存——英雄区据此在「读不到」「未选定自动备份范围」
      * 「相册数量读取失败」之间选（[com.hawkeyexb.ppass.ui.heroRenderOf]）。
      */
     private val _countsReadable = mutableStateOf(true)
     val countsReadable: State<Boolean> get() = _countsReadable
     private val _scopeSaved = mutableStateOf(true)
     val scopeSaved: State<Boolean> get() = _scopeSaved
+
+    /** #1794：范围里一个来源都没有（相册和目录都空）——首页据此说「未选定自动备份范围」，不说「读不到」。 */
+    private val _noSources = mutableStateOf(false)
+    val noSources: State<Boolean> get() = _noSources
 
     /**
      * #1020：一过性提示（字符串资源 id）——命令执行出错时发；首页收集后交给 UI-12 的 Snackbar。
@@ -158,6 +164,8 @@ class BackupUiStateHolder(
     @Volatile private var inScopeTotal: Long? = null
     /** #1038：当前存在的相册（MediaStore）；null = 读不到（没权限 / 查询失败）。与 n 一起在 recount 时重读。 */
     @Volatile private var existingBuckets: Set<Long>? = null
+    /** 已登记的目录来源 id（SAF）：目录也是来源，判「一个来源都没有」时要一起算。 */
+    @Volatile private var folderBuckets: Set<Long> = emptySet()
     @Volatile private var gateway: EngineGateway? = null
     private var lastBucketIds: Set<Long>? = null
     private var lastNoAlbums = false
@@ -337,6 +345,11 @@ class BackupUiStateHolder(
             } catch (_: Throwable) {
                 null
             }
+            folderBuckets = try {
+                FolderAccess.registry(context).allRecords().mapTo(HashSet()) { it.bucketId }
+            } catch (_: Throwable) {
+                emptySet()
+            }
         }
         val view = accessGate.visible(g.view.value)
         val total = inScopeTotal
@@ -351,12 +364,12 @@ class BackupUiStateHolder(
 
     private suspend fun refresh(recount: Boolean) {
         pairingLostState.syncFrom(flowDeliveryPairingLoss, PairingId(pairing.pairingId))
-        // #1020：读不到的范围与「从未保存」一样不给三元组（英雄区说「未选相册」，设置行另说「读不到」），同 iOS。
+        // #1020：读不到的范围与「从未保存」一样不给三元组（英雄区说「未选定自动备份范围」，设置行另说「读不到」），同 iOS。
         val bucketIds = (withContext(Dispatchers.IO) { scopeStore.readScope() } as? ScopeRead.Saved)?.ids
         val sinceSec = withContext(Dispatchers.IO) { scopeStore.sinceSec() }
         val p = withContext(Dispatchers.IO) { currentFacts(recount, bucketIds, sinceSec) } ?: return
         lastBucketIds = bucketIds
-        lastNoAlbums = noAlbumsOf(bucketIds, existingBuckets)
+        lastNoAlbums = noAlbumsOf(bucketIds, existingBuckets, folderBuckets)
         publish(p)
     }
 
@@ -366,6 +379,7 @@ class BackupUiStateHolder(
         _state.value = backupUiStateOf(p, noAlbums = lastNoAlbums)
         _countsReadable.value = p.countsReadable
         _scopeSaved.value = lastBucketIds != null
+        _noSources.value = lastNoAlbums
         _missingSourceNotice.value = flowMissingSourceNotice(p)
         _acknowledgedMissingSourceCount.value = p.missingSourceAcknowledged.toInt()
         _transferProgress.value = transferPermilleOf(p.current)?.let { it / 1000f }
@@ -545,11 +559,15 @@ internal fun factsOrUnreadable(
     }
 
 /**
- * #1038（对位 iOS `AppModel.noAlbums`）：一张都不在范围内——范围从未保存 / 读不到（[bucketIds] 为 null）、保存了空集、
- * 或选中的相册都已不存在（#836 的「已选且当前存在」口径，[existing] 为 null 时沿用已选个数）。
+ * #1038 / #1794：范围内一个来源都没有——范围从未保存 / 读不到（[bucketIds] 为 null）、保存了空集、
+ * 选中的相册都已不存在（#836 的「已选且当前存在」口径，[existing] 为 null 时沿用已选个数），
+ * 且没有仍登记着的目录来源（[folderBuckets]，产品口径 2026-11-17：目录也是来源）。
  */
-internal fun noAlbumsOf(bucketIds: Set<Long>?, existing: Set<Long>?): Boolean =
-    (selectedExistingCount(bucketIds, existing) ?: 0) == 0
+internal fun noAlbumsOf(bucketIds: Set<Long>?, existing: Set<Long>?, folderBuckets: Set<Long> = emptySet()): Boolean {
+    val albums = selectedExistingCount(bucketIds, existing) ?: 0
+    val folders = bucketIds?.count { isFolderId(it) && it in folderBuckets } ?: 0
+    return albums == 0 && folders == 0
+}
 
 /**
  * #1020（对位 iOS `AppModel.runCommand` / `commandFailed`）：执行一条用户命令，成功与出错各记一行日志

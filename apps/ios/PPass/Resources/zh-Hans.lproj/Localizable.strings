@@ -115,7 +115,7 @@
 "home_empty_albums" = "还没有备份好的照片。备份完成后会显示在这里。";
 "bucket_new" = "新";
 "backup_scope" = "备份范围";
-"backup_scope_none" = "未选相册";
+"backup_scope_none" = "未选定自动备份范围";
 "backup_scope_unreadable" = "读不到已保存的选择";
 "storage_computer" = "存储电脑";
 "setting_wifi_only" = "仅 Wi-Fi 时备份";
