@@ -184,6 +184,7 @@ async fn unconfigured_state_answers_only_status_and_set_library() {
         "1.0.0",
         0,
         &loc,
+        None,
     )
     .await;
     assert!(s.ok);
@@ -197,6 +198,7 @@ async fn unconfigured_state_answers_only_status_and_set_library() {
         "1.0.0",
         0,
         &loc,
+        None,
     )
     .await;
     assert!(sub.ok, "{:?}", sub.error);
@@ -214,6 +216,7 @@ async fn unconfigured_state_answers_only_status_and_set_library() {
             "1.0.0",
             0,
             &loc,
+            None,
         )
         .await;
         assert!(!r.ok, "未配置状态不许答 {m}");
@@ -232,6 +235,7 @@ async fn unconfigured_state_answers_only_status_and_set_library() {
         "1.0.0",
         0,
         &loc,
+        None,
     )
     .await;
     assert!(!by_daemon.ok, "daemon 自身不许写库位置");
@@ -247,6 +251,7 @@ async fn unconfigured_state_answers_only_status_and_set_library() {
         "1.0.0",
         0,
         &loc,
+        None,
     )
     .await;
     assert!(by_shell.ok, "{:?}", by_shell.error);
@@ -254,6 +259,90 @@ async fn unconfigured_state_answers_only_status_and_set_library() {
         store.0.lock().unwrap().as_deref(),
         Some(lib.to_str().unwrap().as_bytes())
     );
+}
+
+/// #1826：未配置状态（首启向导）的 `config.set_library` 拿到的是**这条连接的 peer 目录
+/// 事实**——不是全 `None`：合成 peer 把沙盒「文稿」判成敏感 ⇒ 拒绝、什么都不写；同一条
+/// 链的普通目录照常保存（peer 不只是挡路的）；peer 的事实不齐则按 `ui.err_library_user_dirs`
+/// 拒绝。全程在临时沙盒里，不碰真实用户目录。
+/// 反证：`unconfigured_dispatch` 丢掉 `user`（传 `None`）⇒ 敏感那条变 ok，红。
+#[tokio::test]
+async fn unconfigured_set_library_judges_with_the_peer_facts() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store = MemStore::default();
+    let loc = Arc::new(LibraryLocation::with(
+        Some(Box::new(store.clone())),
+        tmp.path().join("platform"),
+    ));
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    let peer = platform::PeerUser::new(
+        "S-1-5-21-1".into(),
+        platform::UserDirFacts::from_home(daemon::library_location::real_path(&home)),
+    );
+    let documents = home.join("Documents").join("ppass-1826");
+    async fn set(
+        loc: &Arc<LibraryLocation>,
+        library: &std::path::Path,
+        peer: Option<&platform::PeerUser>,
+    ) -> proto::Resp {
+        unconfigured_dispatch(
+            &req(
+                "config.set_library",
+                serde_json::json!({ "library": library.to_str().unwrap() }),
+            ),
+            IpcClient::Shell,
+            "1.0.0",
+            0,
+            loc,
+            peer,
+        )
+        .await
+    }
+
+    // peer 的事实判敏感 ⇒ 拒绝，一个目录都不建、正本不动。
+    let r = set(&loc, &documents, Some(&peer)).await;
+    assert!(!r.ok, "{r:?}");
+    assert!(
+        r.error
+            .as_ref()
+            .unwrap()
+            .params()
+            .get("ui_error")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .contains("ui.err_library_sensitive"),
+        "{r:?}"
+    );
+    assert!(!documents.exists(), "拒绝时不许建目录");
+    assert!(store.0.lock().unwrap().is_none(), "正本不许写");
+
+    // 同一条链、peer 的事实齐：普通目录照常保存（peer 不只是挡路的）。
+    let ordinary = home.join("PPASS_STORAGE");
+    let r = set(&loc, &ordinary, Some(&peer)).await;
+    assert!(r.ok, "{:?}", r.error);
+    assert_eq!(
+        store.0.lock().unwrap().as_deref(),
+        Some(ordinary.to_str().unwrap().as_bytes())
+    );
+
+    // peer 的事实不齐（家目录 / 各标准目录缺一）：按 keyed 错误拒绝，不退回适配器。
+    let blind = platform::PeerUser::new("S-1-5-21-1".into(), platform::UserDirFacts::default());
+    let other = home.join("PPASS_STORAGE-2");
+    let r = set(&loc, &other, Some(&blind)).await;
+    assert!(!r.ok, "{r:?}");
+    assert!(
+        r.error
+            .as_ref()
+            .unwrap()
+            .params()
+            .get("ui_error")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .contains("ui.err_library_user_dirs"),
+        "{r:?}"
+    );
+    assert!(store.0.lock().unwrap().as_deref() == Some(ordinary.to_str().unwrap().as_bytes()));
 }
 
 /// 令牌连接上调 `config.set_library`：测试沙盒（没有 library_location）拒绝；常驻 daemon
@@ -426,15 +515,18 @@ async fn unconfigured_token_endpoint_answers_only_config_methods() {
 /// 反证：status 改回报 unconfigured ⇒ 第一组断言红；放行 config.set_library ⇒ 末组红。
 #[test]
 fn library_missing_state_reports_the_path_and_opens_nothing() {
-    use daemon::ipc::library_missing_dispatch;
+    use daemon::ipc::{library_missing_dispatch, MissingFacts};
     let dir = std::path::Path::new("/Volumes/My Passport/P-Pass Library");
     let s = library_missing_dispatch(
         &req("status", serde_json::json!({})),
         IpcClient::Shell,
         "1.0.0",
         0,
-        dir,
-        dir,
+        MissingFacts {
+            dir,
+            local_base: dir,
+            picked_count: None,
+        },
         None,
     );
     assert!(s.ok);
@@ -448,8 +540,11 @@ fn library_missing_state_reports_the_path_and_opens_nothing() {
         IpcClient::Shell,
         "1.0.0",
         0,
-        dir,
-        dir,
+        MissingFacts {
+            dir,
+            local_base: dir,
+            picked_count: None,
+        },
         None,
     );
     assert!(sub.ok, "{:?}", sub.error);
@@ -465,8 +560,11 @@ fn library_missing_state_reports_the_path_and_opens_nothing() {
             IpcClient::Shell,
             "1.0.0",
             0,
-            dir,
-            dir,
+            MissingFacts {
+                dir,
+                local_base: dir,
+                picked_count: None,
+            },
             None,
         );
         assert!(!r.ok, "{m} 不该在库找不到时被答");
@@ -482,7 +580,7 @@ fn library_missing_state_reports_the_path_and_opens_nothing() {
 /// 只有同名空目录不算回来。反证：判据改成「目录存在」⇒ 第二段红。
 #[test]
 fn library_recheck_answers_from_the_library_marker() {
-    use daemon::ipc::library_missing_dispatch;
+    use daemon::ipc::{library_missing_dispatch, MissingFacts};
     let parent = tempfile::tempdir().unwrap();
     let dir = parent.path().join("lib");
     let recheck = || {
@@ -491,8 +589,11 @@ fn library_recheck_answers_from_the_library_marker() {
             IpcClient::Shell,
             "1.0.0",
             0,
-            &dir,
-            parent.path(),
+            MissingFacts {
+                dir: &dir,
+                local_base: parent.path(),
+                picked_count: None,
+            },
             None,
         );
         assert!(r.ok, "{:?}", r.error);
@@ -561,7 +662,7 @@ fn writes_are_refused_while_relocating() {
 /// 0 / 读不出来都不带这个字段。反证：去掉 `filter(|n| *n > 0)` → 0 也带字段，第二组断言红。
 #[test]
 fn library_missing_status_reports_the_picked_count_only_when_there_is_one() {
-    use daemon::ipc::library_missing_dispatch;
+    use daemon::ipc::{library_missing_dispatch, MissingFacts};
     let dir = std::path::Path::new("/Volumes/My Passport/P-Pass Library");
     let status = |n| {
         library_missing_dispatch(
@@ -569,9 +670,12 @@ fn library_missing_status_reports_the_picked_count_only_when_there_is_one() {
             IpcClient::Shell,
             "1.0.0",
             0,
-            dir,
-            dir,
-            n,
+            MissingFacts {
+                dir,
+                local_base: dir,
+                picked_count: n,
+            },
+            None,
         )
         .result
         .unwrap()

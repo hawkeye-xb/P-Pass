@@ -1272,7 +1272,9 @@ fn relocate_now(
     let result =
         daemon::relocate::move_library(local_base, plan, live, &indexed).and_then(|moved| {
             daemon::relocate::complete(local_base, plan, |to| {
-                location.set(&to.to_string_lossy()).map(|_| ())
+                // #1826：搬迁计划在 `relocate::plan` 时已按连接方（主人）的目录事实校验过；
+                // 重启后提交计划不是一次新的位置选择，不再拿服务账户的目录事实重判。
+                location.commit_relocated(&to.to_string_lossy()).map(|_| ())
             })
             .inspect_err(|_| moved.undo(plan))
         });

@@ -453,6 +453,12 @@ msg_keys! {
     UI_ERR_LIBRARY_TARGET_MISSING => "ui.err_library_target_missing",
     UI_ERR_LIBRARY_TARGET_READONLY => "ui.err_library_target_readonly",
     UI_ERR_LIBRARY_NESTED => "ui.err_library_nested",
+    /// #1826：选的照片库位置落在系统目录、用户标准目录（桌面/文稿/下载等）、同步盘
+    /// 或应用自身的目录里，直接拒绝。
+    UI_ERR_LIBRARY_SENSITIVE => "ui.err_library_sensitive",
+    /// #1826：连接方是主人，但取不到主人的家目录 / 「图片」目录（Windows 服务形态）。
+    /// 拒绝本次设置，不退回服务账户的目录。
+    UI_ERR_LIBRARY_USER_DIRS => "ui.err_library_user_dirs",
     UI_ERR_SET_LIBRARY => "ui.err_set_library",
     /// B13：保存照片库位置时，所选文件夹不能写入。
     UI_ERR_SET_LIBRARY_READONLY => "ui.err_set_library_readonly",
@@ -798,6 +804,8 @@ mod tests {
             UI_ERR_LIBRARY_TARGET_MISSING,
             UI_ERR_LIBRARY_TARGET_READONLY,
             UI_ERR_LIBRARY_NESTED,
+            UI_ERR_LIBRARY_SENSITIVE,
+            UI_ERR_LIBRARY_USER_DIRS,
             UI_ERR_SET_LIBRARY,
             UI_ERR_SET_LIBRARY_READONLY,
             UI_ERR_SET_LIBRARY_DISK_FULL,
@@ -864,7 +872,7 @@ mod tests {
         ] {
             assert!(ALL.contains(&key), "{key} missing from ALL");
         }
-        assert_eq!(ALL.len(), 369);
+        assert_eq!(ALL.len(), 371);
     }
 
     #[test]
