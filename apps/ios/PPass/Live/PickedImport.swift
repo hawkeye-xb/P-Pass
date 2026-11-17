@@ -70,7 +70,23 @@ struct PHPickedPayload: PickedFilePayload, @unchecked Sendable {
 struct FilePickedPayload: PickedFilePayload, @unchecked Sendable {
     let url: URL
     let type: UTType
-    let selectionLimit: Int? = nil
+    let selectionLimit: Int?
+    let coordinateRead: (URL, (URL) -> Void) -> NSError?
+
+    static func coordinateFile(at url: URL, accessor: (URL) -> Void) -> NSError? {
+        var error: NSError?
+        NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &error) { newURL in
+            accessor(newURL)
+        }
+        return error
+    }
+
+    init(url: URL, type: UTType, selectionLimit: Int? = nil, coordinateRead: @escaping (URL, (URL) -> Void) -> NSError? = FilePickedPayload.coordinateFile) {
+        self.url = url
+        self.type = type
+        self.selectionLimit = selectionLimit
+        self.coordinateRead = coordinateRead
+    }
 
     static func describe(_ url: URL, index: Int) -> (name: String, mime: String, payload: PickedPayload)? {
         guard let type = UTType(filenameExtension: url.pathExtension),
@@ -90,7 +106,12 @@ struct FilePickedPayload: PickedFilePayload, @unchecked Sendable {
         do {
             let accessing = url.startAccessingSecurityScopedResource()
             defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-            try fm.copyItem(at: url, to: dest)
+            var copyError: Error?
+            let coordinationError = coordinateRead(url) { coordinatedURL in
+                do { try fm.copyItem(at: coordinatedURL, to: dest) } catch { copyError = error }
+            }
+            if let coordinationError { throw coordinationError }
+            if let copyError { throw copyError }
             try Task.checkCancellation()
             return dest
         } catch {
