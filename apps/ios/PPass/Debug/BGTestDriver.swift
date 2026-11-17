@@ -448,6 +448,24 @@ enum BGTestDriver {
         }
         guard await folderBegin(model: model, link: link, status: status) else { return }
         let rootURL = (try? LiveBackend.resolveRoot(logger: NoopLogger()).url) ?? URL(fileURLWithPath: "/nonexistent")
+        // 退到后台时系统会在挂起前交付 didEnterBackground；这一刻先落一行账本事实，不能只靠 1s 轮询——
+        // 真机实测：App 进后台立即挂起，轮询的下一次 tick 永远不会跑，E3-6 的「后台那一刻 transferring≥1」
+        // 直接缺证据。带 scene 的 App 发的是 UIScene.didEnterBackgroundNotification（UIApplication 那条
+        // 真机实测不送达：只有 engine 的 park 行），两条都挂上，回调里同步查一次账本（只读、很小）。
+        let logBackground = { [rootURL] in
+            let states = folderOrderStates(rootURL: rootURL)
+            AppLog.log("bgtest: scene=background orders=\(states.count)"
+                + " non_confirmed=\(states.filter { $0 != "CONFIRMED" }.count)"
+                + " transferring=\(states.filter { $0 == "TRANSFERRING" }.count)")
+        }
+        let bgToken = NotificationCenter.default.addObserver(
+            forName: UIScene.didEnterBackgroundNotification, object: nil, queue: .main) { _ in logBackground() }
+        let bgTokenLegacy = NotificationCenter.default.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { _ in logBackground() }
+        defer {
+            NotificationCenter.default.removeObserver(bgToken)
+            NotificationCenter.default.removeObserver(bgTokenLegacy)
+        }
         guard await waitFolderDone(model: model, rootURL: rootURL, timeoutSecs: 900,
                                    watchMediaId: watchMediaId, status: status) else {
             status.write("failed", ["error": "folder backup did not finish before timeout", "done": true]); return
@@ -685,6 +703,15 @@ enum BGTestDriver {
     }
 
     private static func orderStates(at dbPath: URL, mediaId: String) -> [String] {
+        orderStates(at: dbPath, sql: "SELECT state FROM orders WHERE media_id = ? ORDER BY id", bind: mediaId)
+    }
+
+    /// 按内容哈希前缀查订单（日志里的导入行只带 hash 前 16 位）；与 registry 实例分配出的 opaqueId 解耦。
+    private static func orderStates(at dbPath: URL, hashPrefix: String) -> [String] {
+        orderStates(at: dbPath, sql: "SELECT state FROM orders WHERE content_hash LIKE ? ORDER BY id", bind: hashPrefix + "%")
+    }
+
+    private static func orderStates(at dbPath: URL, sql: String, bind: String) -> [String] {
         var db: OpaquePointer?
         guard sqlite3_open_v2(dbPath.path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK, db != nil else {
             if let db { sqlite3_close(db) }
@@ -692,16 +719,25 @@ enum BGTestDriver {
         }
         defer { sqlite3_close(db) }
         var stmt: OpaquePointer?
-        guard sqlite3_prepare_v2(db, "SELECT state FROM orders WHERE media_id = ? ORDER BY id", -1, &stmt, nil) == SQLITE_OK else {
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else {
             return ["<query-failed>"]
         }
         defer { sqlite3_finalize(stmt) }
-        sqlite3_bind_text(stmt, 1, mediaId, -1, SQLITE_TRANSIENT)
+        sqlite3_bind_text(stmt, 1, bind, -1, SQLITE_TRANSIENT)
         var out: [String] = []
         while sqlite3_step(stmt) == SQLITE_ROW, let c = sqlite3_column_text(stmt, 0) {
             out.append(String(cString: c))
         }
         return out
+    }
+
+    /// 正则取第一个捕获组（Foundation，无外部依赖）。
+    private static func firstCapture(in text: String, pattern: String) -> String? {
+        guard let re = try? NSRegularExpression(pattern: pattern) else { return nil }
+        let range = NSRange(text.startIndex..., in: text)
+        guard let m = re.firstMatch(in: text, range: range), m.numberOfRanges > 1,
+              let r = Range(m.range(at: 1), in: text) else { return nil }
+        return String(text[r])
     }
 
     /// 完整反证闭环（一次启动内）：等导入 → 注入 → 等「source changed while serving」→ 查订单未确认 → 还原 → 再触发 → 等重新确认。
@@ -723,6 +759,17 @@ enum BGTestDriver {
         do {
             let root = try FolderBookmarks.resolve(record, registry: registry, logger: NoopLogger())
             try await FolderBookmarks.withScope(root.url) { _ in
+                // 可选 seed：把 stage 里的文件在**这次启动内**搬进已登记目录。反证需要「首次导入-供数窗口」，
+                // 若提前用另一个钩子搬文件，那个启动里的自动备份会先把文件导入掉，本钩子的日志基线就永远
+                // 等不到导入行（真机实测 reference import not observed）。搬与导入在同一进程，基线才成立。
+                if let stageName = spec0["seed_stage"] as? String, safeName(stageName),
+                   let from = spec0["seed_from"] as? String, let toRaw = spec0["seed_to"] as? String,
+                   let to = try? FolderPaths.normalize(toRaw) {
+                    let docs = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents")
+                    let dest = root.url.appendingPathComponent(to)
+                    try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try FileManager.default.moveItem(at: docs.appendingPathComponent(stageName).appendingPathComponent(from), to: dest)
+                }
                 let attr = try FileManager.default.attributesOfItem(atPath: root.url.appendingPathComponent(rel).path)
                 size = (attr[.size] as? NSNumber)?.int64Value ?? -1
             }
@@ -730,19 +777,24 @@ enum BGTestDriver {
             status.write("failed", ["error": "stat: \(error.localizedDescription)", "done": true]); return
         }
         guard size > 0 else { status.write("failed", ["error": "empty file", "done": true]); return }
-        let opaque = registry.opaqueId(sourceId: sourceId, relativePath: rel)
-        let mediaId = "folder:\(sourceId):\(opaque)"
+        // 不再按 registry 自建 opaqueId 拼 mediaId：DEBUG 钩子与产品各有一个 FolderRegistry 实例，
+        // 同一路径可能各分配一个 opaqueId，订单的 media_id 与钩子算出来的对不上。改用日志里这条导入行
+        // 的 hash 前缀（AppLog 只打 hash 前 16 位）查订单——内容哈希与实例无关。
         let logPath = NSHomeDirectory() + "/Library/Logs/ppass.log"
         status.write("armed", ["size": size, "mode": mode])
         // 1. 触发一轮带对账的备份（配对、空相册范围、自动备份开）
         let baseline = logOffset(logPath)
         guard await folderBegin(model: model, link: link, status: status) else { return }
-        // 2. 等这个文件的引用导入完成（sourceId 唯一，旧行不会撞上）
-        guard let importedLine = await waitLog(pattern: "folder \(sourceId): imported bytes=\(size) hash=.* ref=yes",
-                                               fromOffset: baseline, timeoutSecs: 300, logPath: logPath) else {
+        // 2. 等这个文件的引用导入完成（sourceId 唯一，旧行不会撞上）。日志里的来源 id 被 LogRedact
+        // 抹成「前 8 位…<masked>」：只按完整 UUID 匹配永远等不到（真机实测 reference import not
+        // observed，导入其实已经发生）。两种形态都认。
+        let maskedId = String(sourceId.prefix(8)) + "…<masked>"
+        guard let importedLine = await waitLog(pattern: "folder (\(sourceId)|\(maskedId)): imported bytes=\(size) hash=.* ref=yes",
+                                               fromOffset: baseline, timeoutSecs: 300, logPath: logPath),
+              let hashPrefix = firstCapture(in: importedLine, pattern: "hash=([0-9a-f]{16})") else {
             status.write("failed", ["error": "reference import not observed", "done": true]); return
         }
-        status.write("imported", ["line": String(importedLine.suffix(80))])
+        status.write("imported", ["line": String(importedLine.suffix(80)), "hash_prefix": hashPrefix])
         // 3. 注入故障
         guard let (corrupt, backup) = await corruptFile(record: record, registry: registry, relativePath: rel,
                                                         mode: mode, spec: spec0, status: status) else { return }
@@ -756,7 +808,7 @@ enum BGTestDriver {
         }
         status.write("serve_aborted")
         // 5. 注入那一刻该张的订单历史（不得出现 CONFIRMED 的坏内容版本）
-        let statesAfterAbort = orderStates(at: rootURL.appendingPathComponent("backup-orders.db"), mediaId: mediaId)
+        let statesAfterAbort = orderStates(at: rootURL.appendingPathComponent("backup-orders.db"), hashPrefix: hashPrefix)
         status.write("orders_after_abort", ["orders_after_abort": ["states": statesAfterAbort] as [String: Any]])
         if statesAfterAbort.contains("CONFIRMED") {
             status.write("failed", ["error": "corrupted content got CONFIRMED", "done": true]); return
@@ -771,7 +823,7 @@ enum BGTestDriver {
         var confirmed = false
         while Date() < deadline {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
-            let states = orderStates(at: rootURL.appendingPathComponent("backup-orders.db"), mediaId: mediaId)
+            let states = orderStates(at: rootURL.appendingPathComponent("backup-orders.db"), hashPrefix: hashPrefix)
             status.write("waiting_reconfirm", ["waiting_reconfirm": ["latest": states.last ?? "?", "history": states] as [String: Any]])
             if states.last == "CONFIRMED" { confirmed = true; break }
         }

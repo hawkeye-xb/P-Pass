@@ -10,8 +10,10 @@
 source "$(dirname "${BASH_SOURCE[0]}")/ios-lib.bashlib"
 RUN="e3-$(date +%s)"
 BIG_MB="${PPASS_E3_FOLDER_BIG_MB_BG:-150}"
-# 按 Home 前的等待：要落在「导入完成、大文件传输中」的窗口里（默认 45s；传输 150MB 远超它）。
-UIREG_HOME_WAIT="${UIREG_HOME_WAIT:-45}"
+# 按 Home 前的等待：要落在「导入完成、大文件传输中」的窗口里。150MB 在本机大约传 45s，
+# 45s 正好卡在传输结束那一拍（真机实测 item end elapsedMs=45275 与按 Home 同时），
+# 退后台时已经收场、观察者也被撤了。取 20s，留足半个传输窗口。
+UIREG_HOME_WAIT="${UIREG_HOME_WAIT:-20}"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/ppass-e3-ios.XXXXXX")
 DESK="$WORK/A"
 teardown() {
@@ -54,11 +56,14 @@ act() {
   # devicectl 预先启动的实例会和 automation 会话抢前台（真机实测 automation mode 超时），让 runner 全程管。
   desk_qr "$DESK" # 一次性配对串：desk_qr 设 PAIR_QR，不回显
   echo "home planned at +${UIREG_HOME_WAIT}s after launch" >"$OUT/background-timeline.txt"
-  xcodebuild test-without-building -project "$REPO_ROOT/apps/ios/PPass.xcodeproj" -scheme PPassUI \
+  # TEST_RUNNER_* 必须是 xcodebuild 的环境变量（去前缀后进测试进程）；写成末尾参数只是 build setting，
+  # 真机实测 UIREG_HOME_WAIT 因此丢失、按 Home 提前到 12s。真机上 test-without-building 起 App 不稳，
+  # 换 test（tools/ios/ui-regress.sh 同一口径）。
+  TEST_RUNNER_UIREG_RUN="$RUN-home" TEST_RUNNER_UIREG_PAIR_LINK="$PAIR_QR" \
+    TEST_RUNNER_UIREG_HOME_WAIT="$UIREG_HOME_WAIT" \
+    xcodebuild test -project "$REPO_ROOT/apps/ios/PPass.xcodeproj" -scheme PPassUI -configuration Debug \
     -destination "id=$IOS_HW_UDID" -only-testing:PPassUITests/FolderPickerDrive/testPressHome \
-    -derivedDataPath "$REPO_ROOT/apps/ios/build/derived-device" \
-    TEST_RUNNER_UIREG_RUN="$RUN-home" TEST_RUNNER_UIREG_PAIR_LINK="$PAIR_QR" \
-    TEST_RUNNER_UIREG_HOME_WAIT="$UIREG_HOME_WAIT" >"$OUT/home-test.log" 2>&1 \
+    -derivedDataPath "$REPO_ROOT/apps/ios/build/derived-device" >"$OUT/home-test.log" 2>&1 \
     || { tail -10 "$OUT/home-test.log" >&2; return 1; }
   echo "backgrounded at $(date '+%T')" >>"$OUT/background-timeline.txt"
   # 后台期录 30 秒系统行为（无承诺：系统此刻做什么就是什么，全部进日志）
@@ -70,6 +75,12 @@ act() {
   ios_wait_status "$OUT/resume" "$RUN-resume" 600 true >/dev/null || { ios_copy_from Documents/e2e/status.json "$OUT/resume.status.json"; return 1; }
   cp "$OUT/resume.status.json" "$OUT/status-resume.json"
   ios_collect_common "$OUT"
+  # 日志只留本轮段（ios-lib 说明）：后台线与主日志都要按本轮 source_id 切——上一轮的 scene/scan
+  # 行不能冒充本轮的后台记录。
+  local sid
+  sid=$(jget "$OUT/status-add.json" 'j["source_id"]')
+  ios_trim_log_to_run "$OUT/ppass.log" "$sid" || return 1
+  ios_trim_log_to_run "$OUT/ppass-background.log" "$sid" || return 1
   cp "$OUT/ppass-background.log" "$OUT/ppass-background-copy.log" 2>/dev/null || true
   desk_ipc "$DESK" status >"$OUT/desk-status.json"
 }

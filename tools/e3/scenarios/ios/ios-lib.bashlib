@@ -244,6 +244,25 @@ ios_orders_dump() { # $1 OUT $2 输出名：dump 账本 → 导出全部订单�
   ios_orders_sql "$out" "SELECT media_id, state, source_missing, content_hash FROM orders ORDER BY id" >"$out/$2"
 }
 
+# 日志只留本轮段。App 的 ppass.log 跨运行/安装一直追加（ios_reset 不清日志），同一台设备上一轮的
+# scan/marked/imported 行会混进证据：按行计数的判据被顶多、no_line 被上一轮的反证行顶成假红、
+# has_line 被上一轮的行顶成假绿。按本轮登记分配的唯一 source_id 前 8 位（日志里 masking 后的形态
+# 「folder <8 位>…<masked>」）切出本轮段；找不到就返回 1——证据不全，不当本轮通过。
+# $1 日志文件 $2 本轮 source_id（来自 status-add/status-add-b/status-picked 的 source_id 字段）
+ios_trim_log_to_run() {
+  local f="$1" sid="$2" pre
+  [ -n "$sid" ] || { echo "缺少 source_id，无法切出本轮日志段" >&2; return 1; }
+  pre="${sid:0:8}"
+  cp "$f" "$f.all" || return 1
+  awk -v pat="folder $pre" '!f && index($0, pat) { f=1 } f' "$f.all" >"$f.run" || return 1
+  if [ ! -s "$f.run" ]; then
+    rm -f "$f.run"
+    echo "本轮日志段为空（找不到 folder $pre）" >&2
+    return 1
+  fi
+  mv "$f.run" "$f"
+}
+
 # 测试沙盒桌面（tools/ios/sandbox-desk.sh）—— desk_start / desk_qr / desk_ipc / desk_stop 等
 # shellcheck source=../../../ios/sandbox-desk.sh
 source "$REPO_ROOT/tools/ios/sandbox-desk.sh"

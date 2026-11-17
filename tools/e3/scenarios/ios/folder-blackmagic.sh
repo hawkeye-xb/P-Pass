@@ -35,10 +35,14 @@ setup() {
 
 act() {
   # 1) 授权登记：启动 App（PPASS_BGTEST_FOLDER_PICK=1 弹选择器）→ UI 测试点「我的 iPhone → <target> → 打开」
-  xcodebuild test-without-building -project "$REPO_ROOT/apps/ios/PPass.xcodeproj" -scheme PPassUI \
+  # TEST_RUNNER_* 必须作为 xcodebuild 的**环境变量**传入（去掉前缀后进测试进程）；写成命令末尾的参数
+  # 只是 build setting，不会进测试进程（真机实测：UIREG_HOME_WAIT 没传进去，按 Home 提前到 12s）。
+  # 真机上 test-without-building 启动被测 App 常报「process identifier could not be determined」，
+  # 同一份 xctestrun 换 test 就能起来（tools/ios/ui-regress.sh 2026-11-11 实测）：这里用 test。
+  TEST_RUNNER_UIREG_RUN="$RUN" TEST_RUNNER_UIREG_TARGET="$TARGET" TEST_RUNNER_UIREG_STAGE=1 \
+    xcodebuild test -project "$REPO_ROOT/apps/ios/PPass.xcodeproj" -scheme PPassUI -configuration Debug \
     -destination "id=$IOS_HW_UDID" -only-testing:PPassUITests/FolderPickerDrive/testPickFolder \
     -derivedDataPath "$REPO_ROOT/apps/ios/build/derived-device" \
-    TEST_RUNNER_UIREG_RUN="$RUN" TEST_RUNNER_UIREG_TARGET="$TARGET" TEST_RUNNER_UIREG_STAGE=1 \
     >"$OUT/pick-test.log" 2>&1 || { tail -20 "$OUT/pick-test.log" >&2; return 1; }
   ios_copy_from Documents/e2e/status.json "$OUT/status-picked.json" || { echo "状态没拉到（选择器没点成？）" >&2; return 1; }
   jq -r '.step // ""' "$OUT/status-picked.json" | grep -q '^folder_picked$' \
@@ -79,6 +83,8 @@ act() {
   cp "$OUT/run.status.json" "$OUT/status-run.json"
   # 4) 证据
   ios_collect_common "$OUT"
+  # 日志只留本轮段（ios-lib 说明）：真选择器登记出的 source_id 唯一，切段找不到 = 证据不全。
+  ios_trim_log_to_run "$OUT/ppass.log" "$(jget "$OUT/status-picked.json" 'j["source_id"]')" || return 1
   ios_orders_dump "$OUT" orders.txt
   desk_ipc "$DESK" status >"$OUT/desk-status.json"
   ios_desktop_files "$OUT" desktop-files.txt -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' \

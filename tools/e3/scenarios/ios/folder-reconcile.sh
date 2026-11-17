@@ -103,6 +103,9 @@ act() {
   reconcile_round 6 || return 1
   # 6) 证据：账本全集、日志、登记清单、桌面库
   ios_collect_common "$OUT"
+  # 日志只留本轮段（ios-lib 说明）：按行计数的判据（marked 1 cleared 0 = 3）不能被上一轮的
+  # scan/marked 行顶多。找不到本轮段就是证据不全，当场失败。
+  ios_trim_log_to_run "$OUT/ppass.log" "$(jget "$OUT/status-add.json" 'j["source_id"]')" || return 1
   desk_ipc "$DESK" status >"$OUT/desk-status.json"
   ios_desktop_files "$OUT" desktop-files.txt -iname '*.jpg' -o -iname '*.mp4'
   # judge 要拿桌面文件哈希对账，光列清单不算数：逐个算 BLAKE3，算不出来当场失败
@@ -133,11 +136,14 @@ judge() {
   check "相册完整授权在场（引擎口径：source_missing 只在 full 下写；缺了先在设备上授权一次再跑）" has_line "$d/status-run1.json" '"level" *: *"full"'
   check "源文件锚点齐备（base / n2 改前 / n2 改后 各 1 条 64 位 hex）" bash -c "[ -n '$h_base' ] && [ -n '$h_n2v1' ] && [ -n '$h_n2v2' ] && [ '$h_n2v1' != '$h_n2v2' ]"
   check "五类操作全部执行成功（mutate 各步 ok）" bash -c "[ \"\$(grep -l '\"ok\" *: *true' \"$d\"/status-mutate-*.json 2>/dev/null | wc -l | tr -d ' ')\" = 5 ]"
-  check "对账后登记映射 2 项（1 个在册新项 + 缺席旧项的映射保留，实测 ${items:-缺失}）" bash -c "[ '${items:-x}' = 2 ]"
+  # 映射按「相对路径 → opaque itemId」逐代保留：改名/移动各分配一个新 opaqueId（账本里 base 内容
+  # 因此有 3 个不同 media_id），旧路径的映射留着供旧订单按源缺失对账，不能删。最终映射数 =
+  # base 的历史路径 3 个（base.jpg / base-r.jpg / sub/base-r.jpg）+ 在册的 nest/n2.jpg 1 个 = 4。
+  check "对账后登记映射 4 项（base 三代路径保留 + 在册 nest/n2.jpg 1 项，实测 ${items:-缺失}）" bash -c "[ '${items:-x}' = 4 ]"
   check "第 1 轮对账日志：items=1 missing=0" has_line "$d/ppass.log" 'folder .*: scan ok items=1 missing=0'
   check "改名/移动/修改轮对账日志：items=2 missing=1（旧路径判缺席）" has_line "$d/ppass.log" 'folder .*: scan ok items=2 missing=1'
   check "删除轮对账日志：items=1 missing=3（完整枚举后判缺席）" has_line "$d/ppass.log" 'folder .*: scan ok items=1 missing=3'
-  check "源缺失判定落账 3 次（marked 1 cleared 0：改名/移动/删除各一轮）" bash -c "[ \"\$(grep -c 'source_missing: marked 1 cleared 0' \"$d/ppass.log\")\" = 3 ]"
+  check "源缺失判定落账 3 次（本轮日志段内 marked 1 cleared 0：改名/移动/删除各一轮）" bash -c "[ \"\$(grep -c 'source_missing: marked 1 cleared 0' \"$d/ppass.log\")\" = 3 ]"
   check "改名与移动分配了新 opaqueId：base 内容在账本里有 3 个不同 media_id（${ids_base}）" bash -c "[ '$ids_base' = 3 ]"
   check "改名/移动/删除的三条旧路径订单全部 CONFIRMED 且 source_missing=1（${dead_base}；桌面副本不动）" bash -c "[ '$dead_base' = 3 ]"
   check "修改产生新版本：n2 改前/改后两个内容同属 1 个 media_id（${versions_media}）" bash -c "[ '$versions_media' = 1 ]"

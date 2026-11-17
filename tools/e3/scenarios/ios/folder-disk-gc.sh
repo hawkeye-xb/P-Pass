@@ -67,18 +67,34 @@ act() {
   # 等大文件确实 TRANSFERRING（订单在建且这一张在传）才强杀——崩溃注入。
   # 只等「backing_up」会在扫描/导入阶段就满足（confirmed/in_scope_total 对目录-only 轮没有意义），
   # 杀掉的就不是传输中断场景；等不到就失败收场，绝不杀一个没在传的进程。
+  # 驱动每 1s 写一次 status；这里也按 1s 取（原来 2s，快网下 172MB 能在两次取样之间传完而漏掉窗口），
+  # 并把每次取样落成 watch-history.txt（step/watch_state/confirmed/transferring），漏窗口时能看出是
+  # 真没进入 TRANSFERRING 还是采样不够密——不带这份历史就判不了根因。
   local i hit=0
-  for i in $(seq 1 150); do
-    ios_copy_from Documents/e2e/status.json "$OUT/mid.status.json" 2>/dev/null || { sleep 2; continue; }
-    if [ "$(jq -r '.step // ""' "$OUT/mid.status.json")" = backing_up ] \
-       && [ "$(jq -r '.watch_state // ""' "$OUT/mid.status.json")" = TRANSFERRING ]; then
-      hit=1
-      break
+  : >"$OUT/watch-history.txt"
+  for i in $(seq 1 300); do
+    if ios_copy_from Documents/e2e/status.json "$OUT/mid.status.json" 2>/dev/null; then
+      {
+        printf '%s step=%s watch=%s confirmed=%s transferring=%s\n' "$i" \
+          "$(jq -r '.step // ""' "$OUT/mid.status.json")" \
+          "$(jq -r '.watch_state // ""' "$OUT/mid.status.json")" \
+          "$(jq -r '.confirmed // ""' "$OUT/mid.status.json")" \
+          "$(jq -r '.transferring // ""' "$OUT/mid.status.json")"
+      } >>"$OUT/watch-history.txt"
+      # 大文件在传即可强杀：这一轮只有 video+图两张，图是毫秒级；transferring≥1 时在传的就是大视频。
+      # 不用 watch_state（DEBUG 钩子与产品实例各有一个 FolderRegistry，同一路径分配出的 opaqueId 不同，
+      # watch 的 media_id 恒 absent——真机实测 watch-history 里 transferring=1 而 watch=absent）。
+      local tr
+      tr=$(jq -r '.transferring // 0' "$OUT/mid.status.json")
+      if [ "$(jq -r '.step // ""' "$OUT/mid.status.json")" = backing_up ] && [ "${tr:-0}" -ge 1 ]; then
+        hit=1
+        break
+      fi
     fi
-    sleep 2
+    sleep 1
   done
   if [ "$hit" != 1 ]; then
-    echo "150 次轮询没等到 big.mp4 的 TRANSFERRING（备份太快要收场或没开始）：崩溃注入不执行，本场景按失败收" >&2
+    echo "300 次轮询（1s 间隔）没等到 big.mp4 的 TRANSFERRING（备份太快要收场或没开始）：崩溃注入不执行，本场景按失败收（watch-history.txt）" >&2
     cp "$OUT/mid.status.json" "$OUT/crash-not-hit.status.json" 2>/dev/null || true
     return 1
   fi
@@ -99,6 +115,8 @@ act() {
   jget "$OUT/after.json" 'j["bytes"]["test_dir_foldere3-'"$RUN"'"]' >"$OUT/src-dir-bytes-after.txt"
   desktop_du "$OUT" after
   ios_collect_common "$OUT"
+  # 日志只留本轮段（ios-lib 说明）：上一轮崩溃续传的 imported/process start 行不能冒充本轮。
+  ios_trim_log_to_run "$OUT/ppass.log" "$(jget "$OUT/status-add.json" 'j["source_id"]')" || return 1
   cp "$EV/big-size.txt" "$OUT/big-size.txt" # judge 离线回放也读得到（EV 只在 run_one 里有）
   desk_ipc "$DESK" status >"$OUT/desk-status.json"
 }

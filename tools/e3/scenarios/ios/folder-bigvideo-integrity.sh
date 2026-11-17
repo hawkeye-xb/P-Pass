@@ -27,10 +27,10 @@ setup() {
   ios_make_bigvideo "$WORK/big.mp4" "$BIG_MB"
   ios_make_bigvideo "$WORK/big2.mp4" "$BIG_MB" 7 # 反证源：内容不同（时长错开），主链不碰它
   ios_make_noise_jpg "$WORK/p1.jpg" 55
-  mkdir -p "$WORK/stage" && mv "$WORK/big.mp4" "$WORK/p1.jpg" "$WORK/stage/"
+  # big2.mp4 与主链素材同放一个 stage：manifest 只搬登记时要用的两件，big2 留在 stage，
+  # 反证轮再用 mutate add 搬进**已登记的**目录（见 counter 的说明：不再另登记第二个来源）。
+  mkdir -p "$WORK/stage" && mv "$WORK/big.mp4" "$WORK/p1.jpg" "$WORK/big2.mp4" "$WORK/stage/"
   ios_push_stage "$EV" "foldere3-stage-$RUN" "$WORK/stage"
-  mkdir -p "$WORK/stage-b" && mv "$WORK/big2.mp4" "$WORK/stage-b/"
-  ios_push_stage "$EV" "foldere3-stage-$RUN-b" "$WORK/stage-b"
   ios_desk_start "$DESK"
   ios_pair_allow_start "$EV" "$DESK"
 }
@@ -47,6 +47,8 @@ act() {
   ios_wait_status "$OUT/run" "$RUN-run" 600 true >/dev/null || { ios_copy_from Documents/e2e/status.json "$OUT/run.status.json"; return 1; }
   cp "$OUT/run.status.json" "$OUT/status-run.json"
   ios_collect_common "$OUT"
+  # 日志只留本轮段（ios-lib 说明）：上一轮的 imported 行不能冒充本轮的引用导入。
+  ios_trim_log_to_run "$OUT/ppass.log" "$(jget "$OUT/status-add.json" 'j["source_id"]')" || return 1
   desk_ipc "$DESK" status >"$OUT/desk-status.json"
   ios_desktop_files "$OUT" desktop-files.txt -iname '*.mp4'
   local b3; b3="$(ios_b3)"
@@ -119,30 +121,37 @@ judge_counter() {
 }
 
 counter() {
-  # 供数期改一字节（offset=size-16，远超 64KiB）。注入对象是**反证专用来源** foldere3-$RUN-b（主链没备份过它，
-  # 首次导入-供数窗口才存在；已确认项不会重新导入，等不到窗口）。钩子一次启动内完成：等导入 ref=yes → 注入 →
-  # 等「source changed while serving」→ 查该张订单不得 CONFIRMED → 还原 → 再触发 → 等重新确认。
+  # 供数期改一字节（offset=size-16，远超 64KiB）。注入对象是主链目录里**新加进来、从未导入过**的
+  # big2.mp4：首次导入-供数窗口才存在（已确认项不会重新导入，等不到窗口）。钩子一次启动内完成：
+  # 等导入 ref=yes → 注入 → 等「source changed while serving」→ 查该张订单不得 CONFIRMED → 还原 →
+  # 再触发 → 等重新确认。
+  # 不再另登记第二个目录来源（DEBUG 钩子与产品实例各持一个 FolderRegistry，登记会被产品扫描时的
+  # 落盘覆盖，真机实测 folder_added 后来源不在文件里）；也不先用另一个钩子把 big2 搬进来——那个启动
+  # 里的自动备份会先导入掉文件，本钩子按日志基线永远等不到导入行（真机实测 reference import not
+  # observed）。改为 seed：由**本钩子启动内**把 stage 里的 big2 搬进已登记目录，搬完立即触发对账。
   # ADR 口径是「截断**或**改一字节」：两者走同一道供数期校验（provider 逐叶校验，源改动 ⇒ SourceFault.changed
   # ⇒ 传输放弃），反证注入取「改一字节」；截断语义的合同测试在 E2（SourceUnavailableEngineTests / 源变化口径）。
-  local spec="{\"dir\":\"foldere3-$RUN-b\",\"stage\":\"foldere3-stage-$RUN-b\",\"manifest\":{\"big2.mp4\":\"big2.mp4\"},\"display\":\"PPass FolderE3 $RUN-b\"}"
-  ios_launch "$OUT" add-b "$(jq -cn --arg s "$spec" --arg r "$RUN-addb" \
-    '{PPASS_E2E_DIR:"container",PPASS_E2E_RUN:$r,PPASS_BGTEST_FOLDER_ADD:$s}')" || return 1
-  ios_wait_status "$OUT/add-b" "$RUN-addb" 60 true >/dev/null || { ios_copy_from Documents/e2e/status.json "$OUT/add-b.status.json"; return 1; }
-  local spec2="{\"dir\":\"foldere3-$RUN-b\",\"file\":\"big2.mp4\",\"mode\":\"flip\",\"display\":\"PPass FolderE3 $RUN-b\"}"
+  local spec2="{\"dir\":\"foldere3-$RUN\",\"file\":\"big2.mp4\",\"mode\":\"flip\",\"display\":\"PPass FolderE3 $RUN\",\"seed_stage\":\"foldere3-stage-$RUN\",\"seed_from\":\"big2.mp4\",\"seed_to\":\"big2.mp4\"}"
   ios_launch "$OUT" integrity-flip "$(jq -cn --arg s "$spec2" --arg r "$RUN-flip" \
     '{PPASS_E2E_DIR:"container",PPASS_E2E_RUN:$r,PPASS_BGTEST_FOLDER_INTEGRITY:$s}')" || return 1
   ios_wait_status "$OUT/integrity-flip" "$RUN-flip" 900 true >/dev/null \
-    || { ios_copy_from Documents/e2e/status.json "$OUT/status-integrity-flip.json"; return 1; }
+    || { ios_copy_from Documents/e2e/status.json "$OUT/status-integrity-flip.json"
+         # 失败也把本轮日志拉回来：没有日志就只能看到「没等到导入」，判不了是没扫到、导入回退还是基线错。
+         ios_pull_log "$OUT/ppass.log.all" || true
+         return 1; }
   ios_copy_from Documents/e2e/status.json "$OUT/status-integrity-flip.json"
   ios_orders_dump "$OUT" orders-flip.txt
   ios_pull_log "$OUT/ppass.log"
+  # 反证证据只看本轮段：上一轮遗留的 source changed 行不能冒充本轮注入。
+  # 来源 id 在主链 main/status-add.json（counter 目录里没有这份），按本次运行的登记来源切段。
+  ios_trim_log_to_run "$OUT/ppass.log" "$(jget "$EV/main/status-add.json" 'j["source_id"]')" || return 1
 }
 
 teardown() {
   # 清测试目录与登记记录（只认 foldere3- 前缀）；收掉沙盒桌面。
-  # 两个 stage 中转目录也要列上：setup 推完素材后失败、或登记在搬移前失败时视频还留在 stage 里
+  # stage 中转目录也要列上：setup 推完素材后失败、或登记在搬移前失败时视频还留在 stage 里
   ios_pair_allow_stop
-  ios_folder_cleanup "foldere3-$RUN" "foldere3-$RUN-b" "foldere3-stage-$RUN" "foldere3-stage-$RUN-b"
+  ios_folder_cleanup "foldere3-$RUN" "foldere3-stage-$RUN"
   desk_stop "$DESK" 2>/dev/null || true
   rm -rf "$WORK" 2>/dev/null || true
 }
