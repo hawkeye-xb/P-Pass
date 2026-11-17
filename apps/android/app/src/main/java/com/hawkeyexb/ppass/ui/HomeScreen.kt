@@ -968,8 +968,15 @@ private fun MorePage(
                         fontSize = 15.sp, color = PPColor.Ink,
                         modifier = Modifier.weight(1f),
                     )
+                    // #1820：本地开发包在版本号后追加构建时间（`MM-DD HH:MM`），方便分辨两个包谁新；
+                    // 正式/CI 构建 BUILD_STAMP 是空串，这一行与原来逐字相同。
+                    val buildStamp = BuildConfig.BUILD_STAMP
                     Text(
-                        "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+                        if (buildStamp.isBlank()) {
+                            "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})"
+                        } else {
+                            "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE}) $buildStamp"
+                        },
                         fontSize = 14.sp, color = PPColor.Ink40,
                     )
                 }

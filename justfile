@@ -275,7 +275,7 @@ dev-daemon:
 # ── CI ──────────────────────────────────────────────
 
 # Full CI pipeline (same as GitHub Actions pr.yml)
-ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check supply-chain-check mobile-static-check i18n-split-check lockfile-check flow-tests heavy-lock-test
+ci: fmt toolchain-check lint lint-cross test arch-check fitness-check md-check token-check shell-vars-check identity-check supply-chain-check mobile-static-check build-stamp-check i18n-split-check lockfile-check flow-tests heavy-lock-test
   @echo "==> CI pipeline: all green ✅"
 
 # 两个 Rust workspace 的 Cargo.lock 都得和实际依赖一致（src-tauri 是独立 workspace，
@@ -298,6 +298,61 @@ mobile-static-check:
   tools/ios/check-no-color-literals.sh
   @for l in en zh; do cmp -s assets/i18n/$l.json apps/android/app/src/main/assets/i18n/$l.json || { echo "✗ apps/android/app/src/main/assets/i18n/$l.json 与 assets/i18n 不一致——从 assets/i18n 复制过去"; exit 1; }; done
   @echo "ok: Android i18n 副本与 assets/i18n 逐字节一致"
+
+# #1820 本地构建时间与设备测试保留 App 的口径自测（纯 shell，几秒；进 ci / ci-docs）。
+# 断言：两端都从 PPF_BUILD_STAMP 取值；stamp 为空时版本行只显示版本号+构建号、非空时追加；
+# 设备测试 recipe 带 leaveApksInstalledAfterRun=true；本地 `just dev` 用 date '+%m-%d %H:%M' 生成时间戳。
+build-stamp-check:
+    #!/usr/bin/env bash
+    set -uo pipefail
+    cd "{{ justfile_directory() }}"
+    fail=0
+    ok() { printf '  ✅ %s\n' "$1"; }
+    ko() { printf '  ❌ %s\n' "$1"; fail=1; }
+    need() { # <file> <literal> <说明>
+      if grep -Fq -- "$2" "$1"; then ok "$3"; else ko "$3（$1 里找不到「$2」）"; fi
+    }
+
+    # 1) 时间戳来源：本地 recipe 用 date 生成，格式能分辨先后（MM-DD HH:MM）。
+    need justfile "PPF_BUILD_STAMP" "just dev 注入 PPF_BUILD_STAMP"
+    need justfile "date '+%m-%d %H:%M'" "just dev 用 date '+%m-%d %H:%M' 生成时间戳"
+    stamp="$(date '+%m-%d %H:%M')"
+    case "$stamp" in
+      [0-9][0-9]-[0-9][0-9]" "[0-9][0-9]:[0-9][0-9]) ok "date 产出 MM-DD HH:MM（${stamp}）" ;;
+      *) ko "date 产出不是 MM-DD HH:MM（${stamp}）" ;;
+    esac
+
+    # 2) Android：构建期读 PPF_BUILD_STAMP 写进 BuildConfig；版本行空/非空两条分支都在。
+    need apps/android/app/build.gradle.kts 'System.getenv("PPF_BUILD_STAMP")' "Android 构建读 PPF_BUILD_STAMP"
+    need apps/android/app/build.gradle.kts 'buildConfigField("String", "BUILD_STAMP"' "Android 写 BuildConfig.BUILD_STAMP"
+    need apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/HomeScreen.kt 'BuildConfig.BUILD_STAMP' "版本行读 BUILD_STAMP"
+    need apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/HomeScreen.kt 'if (buildStamp.isBlank())' "stamp 为空时走不追加时间的分支"
+    need apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/HomeScreen.kt '${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})' "空 stamp 分支只显示版本号+构建号"
+    need apps/android/app/src/main/java/com/hawkeyexb/ppass/ui/HomeScreen.kt '$buildStamp' "非空 stamp 追加到版本行"
+
+    # 3) iOS：构建期只有 PPF_BUILD_STAMP 非空才写 PPassBuildStamp；版本行空/非空两条分支都在。
+    need apps/ios/project.yml 'PPF_BUILD_STAMP' "iOS 构建读 PPF_BUILD_STAMP"
+    need apps/ios/project.yml 'PPassBuildStamp' "iOS 写 Info.plist 的 PPassBuildStamp"
+    need apps/ios/project.yml 'if [ -n "${PPF_BUILD_STAMP:-}" ]' "stamp 为空时不写 PPassBuildStamp"
+    need apps/ios/PPass/Diagnostics/AppVersion.swift 'info["PPassBuildStamp"]' "AppVersion 读 PPassBuildStamp"
+    need apps/ios/PPass/Diagnostics/AppVersion.swift 'let stamp = buildStamp.trimmingCharacters(in: .whitespaces)' "空/空白 stamp 归一处理"
+    need apps/ios/PPass/Diagnostics/AppVersion.swift 'stamp.isEmpty ? base :' "空 stamp 只显示 base、非空追加"
+
+    # 4) 设备测试：保留 App/数据的参数在；just android-test（JVM 单测）语义不变。
+    need justfile 'android.injected.androidTest.leaveApksInstalledAfterRun=true' "设备测试 recipe 带 leaveApksInstalledAfterRun=true"
+    need justfile 'connectedDebugAndroidTest' "设备测试跑 instrumented 用例"
+    if sed -n '/^android-test:/,/^[a-z][a-z0-9-]*[ :]/p' justfile | grep -Fq -- 'connectedDebugAndroidTest'; then
+      ko "just android-test 仍是 JVM 单测，不该跑 connectedDebugAndroidTest"
+    else
+      ok "just android-test 仍是 JVM 单测（未跑 connectedDebugAndroidTest）"
+    fi
+    if sed -n '/^android-instrumented \*args:/,/^[a-z][a-z0-9-]*[ :]/p' justfile | grep -Fq -- 'leaveApksInstalledAfterRun=true'; then
+      ok "keep-apks 参数挂在 android-instrumented 上"
+    else
+      ko "android-instrumented recipe 里没有 keep-apks 参数"
+    fi
+
+    exit "$fail"
 
 # 文案按端拆分（#1302）：key 住对文件、各消费方查得到（含反证自测）。发版判定侧的自测在 version-bump-i18n-test。
 i18n-split-check:
@@ -361,7 +416,7 @@ e3-test:
 #
 # ⚠️ 只在这次改动**一行 Rust/Kotlin/前端都没动**时用它。碰了代码就跑 `just ci`，
 # 别拿这条快车道当省事的借口——`ci` 的依赖列表一个都没减。
-ci-docs: md-check token-check shell-vars-check identity-check supply-chain-check flow-tests heavy-lock-test
+ci-docs: md-check token-check shell-vars-check identity-check supply-chain-check build-stamp-check flow-tests heavy-lock-test
   @echo "==> docs lane: green ✅（注意：本条不含 fmt/lint/test，动了代码必须跑 just ci）"
 
 # T-040 人工验收：自启/防睡眠/密钥仓 真机冒烟（H-09 双平台各跑一次）
@@ -428,8 +483,13 @@ verify *args:
 
 # 研发本地看改动：增量编译 → 取设备锁（手机被占就拒绝）→ 覆盖安装（不卸载）→ 打开。见 docs/runbook/e3.md。
 #   just dev android [页面] [--fresh]   just dev ios [页面] [--fresh]   just dev mac（装回：just restore）
+# #1820：本地构建注入构建时间 PPF_BUILD_STAMP（`MM-DD HH:MM`），版本行后面显示，两个包一眼分出新旧；
+# 正式/CI 构建不经过这条 recipe，没有这个变量，版本行不变。已经显式设置 PPF_BUILD_STAMP 时沿用（测试用）。
 dev *args:
-    tools/e3/dev {{args}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export PPF_BUILD_STAMP="${PPF_BUILD_STAMP:-$(date '+%m-%d %H:%M')}"
+    exec tools/e3/dev {{args}}
 
 # 把测试设备装回指定版本（先取设备锁）：just restore mac <tag> | just restore mac --snapshot
 restore *args:
@@ -442,6 +502,18 @@ android-test:
     source "{{ justfile_directory() }}/tools/java-home.sh"
     cd "{{ justfile_directory() }}/apps/android"
     ./gradlew -q :app:testDebugUnitTest
+
+# #1820：Android 设备测试（instrumented），跑完保留 App 与数据——配对、范围、设置不丢。
+# 默认 Gradle 跑完会卸载测试 APK 和 App；leaveApksInstalledAfterRun=true 让两者留在设备上。
+# 只改设备测试的跑法，不碰 just android-test（JVM 单测）的语义。日常预览走 `just dev`，用 `install -r` 不卸载。
+# 设备/多机选择、额外 Gradle 参数原样转交：just android-instrumented -Pfoo=bar。
+android-instrumented *args:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "{{ justfile_directory() }}/tools/java-home.sh"
+    cd "{{ justfile_directory() }}/apps/android"
+    ./gradlew -q :app:connectedDebugAndroidTest \
+      -Pandroid.injected.androidTest.leaveApksInstalledAfterRun=true {{args}}
 
 # T-051 live check: Kotlin iroh-ffi client speaks hello to a real daemon
 android-hello:
