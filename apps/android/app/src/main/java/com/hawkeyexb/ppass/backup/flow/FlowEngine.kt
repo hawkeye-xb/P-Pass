@@ -276,8 +276,14 @@ internal class FlowEngine(
             return true
         } catch (unavailable: SourceUnavailableException) {
             // 暂停刷新与运行中合并也会重算旧订单时间；失权与 start/drain 同口径进入等待，不让异常逃出触发协程。
+            // 有活动循环时先停掉它再进等待：只 enterWait 的话界面已显示等待，在飞的传输却还在跑，
+            // 跑完还会把等待原因清掉。暂停（没有活动循环）时直接进等待。
             log.log("trigger $reason: folder source unavailable while counting: ${unavailable.message}")
-            enterWait(WaitReason.SOURCE_UNAVAILABLE, FgsStall.NOT_GRANTED)
+            if (cycleJob?.isActive == true) {
+                stopCycle(WaitReason.SOURCE_UNAVAILABLE)
+            } else {
+                enterWait(WaitReason.SOURCE_UNAVAILABLE, FgsStall.NOT_GRANTED)
+            }
             return false
         }
     }
