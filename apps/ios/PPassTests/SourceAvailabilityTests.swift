@@ -83,20 +83,28 @@ final class SourceAvailabilityTests: XCTestCase {
         XCTAssertFalse(AppModel.blockedHeroOffersSettings(autoRule: true, access: .full, hasUsableFolder: false), "全部：不出")
     }
 
-    /// #1811 评审：通知侧「还有可用来源」只数登记有效的目录；待保存目录（pendingScope）不能把相册权限
-    /// 降级通知吞掉；范围读失败时即使有有效目录也不抑制降级通知。
-    /// 反证：改回 allRecords().count 第一条红；去掉 `scopeReadFailed` 守卫第三条红。
-    func testNoticeUsableSourceIgnoresPendingScopeFolders() {
+    /// #1811 评审：通知侧「还有可用来源」的运行时口径（evaluateNotices 实际调用的 `noticeUsableSource`）：
+    /// 待保存目录（pendingScope）不能把降级通知吞掉；范围读失败时即使有有效目录也不抑制通知，且不去查现有相册。
+    /// 反证：改回 allRecords().count 第一条红；把读失败分支改回「当成 nil 继续」，第二条红且 existingAlbumIds 被调用。
+    func testNoticeUsableSourceIgnoresPendingScopeFolders() async {
         let pending = FolderRecord(id: "p", displayName: "draft", bookmark: Data(), status: FolderMediaSource.pendingScopeStatus)
         let active = FolderRecord(id: "a", displayName: "real", bookmark: Data())
-        XCTAssertFalse(LiveBackend.noticeHasUsableSource(selected: [], knownAlbums: [], folderRecords: [pending],
-                                                         existingAlbums: nil, photoAccess: .none),
-                       "待保存目录不算可用来源，降级通知要照发")
-        XCTAssertTrue(LiveBackend.noticeHasUsableSource(selected: [], knownAlbums: [], folderRecords: [active],
-                                                        existingAlbums: nil, photoAccess: .none),
-                      "登记有效的目录才是「备份还在继续」")
-        XCTAssertFalse(LiveBackend.noticeHasUsableSource(selected: nil, knownAlbums: [], folderRecords: [active],
-                                                         existingAlbums: nil, photoAccess: .none, scopeReadFailed: true),
-                       "范围读失败 ≠ 没来源，读不到就不能替用户判断备份还在继续")
+        let noLookup: (Set<String>) async -> Set<String>? = { _ in nil }
+
+        let pendingUsable = await LiveBackend.noticeUsableSource(
+            readScope: { [] }, knownAlbums: [], folderRecords: [pending], photoAccess: .none, existingAlbumIds: noLookup)
+        XCTAssertFalse(pendingUsable, "待保存目录不算可用来源，降级通知要照发")
+        let activeUsable = await LiveBackend.noticeUsableSource(
+            readScope: { [] }, knownAlbums: [], folderRecords: [active], photoAccess: .none, existingAlbumIds: noLookup)
+        XCTAssertTrue(activeUsable, "登记有效的目录才是「备份还在继续」")
+
+        struct Boom: Error {}
+        final class Called: @unchecked Sendable { var count = 0 }
+        let called = Called()
+        let failed = await LiveBackend.noticeUsableSource(
+            readScope: { throw Boom() }, knownAlbums: [], folderRecords: [active], photoAccess: .none,
+            existingAlbumIds: { _ in called.count += 1; return nil })
+        XCTAssertFalse(failed, "范围读失败 ≠ 没来源：读不到不能替用户判断备份还在继续")
+        XCTAssertEqual(called.count, 0, "读失败时不去查现有相册")
     }
 }

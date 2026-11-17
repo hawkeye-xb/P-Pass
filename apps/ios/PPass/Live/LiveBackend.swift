@@ -136,12 +136,23 @@ final class LiveBackend: @unchecked Sendable {
         }
     }
 
-    /// 通知侧「还有可用来源」：目录只数登记有效的（pendingScope 不算），否则待保存目录会吞掉相册权限降级通知。
-    /// [scopeReadFailed]：范围读失败时不猜来源（也不走 knownAlbums / 旧目录回退），返回 false 让降级通知照发。
-    static func noticeHasUsableSource(selected: Set<String>?, knownAlbums: Set<String>, folderRecords: [FolderRecord],
-                                      existingAlbums: Set<String>?, photoAccess: MediaAccess,
-                                      scopeReadFailed: Bool = false) -> Bool {
-        guard !scopeReadFailed else { return false }
+    /// 通知侧「还有可用来源」的运行时口径（`evaluateNotices` 直接走这里）：
+    /// - 范围读失败 ⇒ false（不猜来源，也不走 knownAlbums / 旧目录回退），降级通知照发；
+    /// - 目录只数登记有效的（pendingScope 不算），否则待保存目录会吞掉降级通知；
+    /// - 只有选中了相册才去查现有相册（`existingAlbumIds`，读失败/未选中都不查）。
+    static func noticeUsableSource(readScope: () throws -> Set<String>?, knownAlbums: Set<String>,
+                                   folderRecords: [FolderRecord], photoAccess: MediaAccess,
+                                   existingAlbumIds: (Set<String>) async -> Set<String>?,
+                                   logger: CoreLogger = NoopLogger()) async -> Bool {
+        let selected: Set<String>?
+        do {
+            selected = try readScope()
+        } catch {
+            logger.log("notify: scope unreadable, treating as no usable source: \(error)")
+            return false
+        }
+        let albumSelected = selected?.contains { !$0.hasPrefix("folder:") } ?? false
+        let existingAlbums = albumSelected ? await existingAlbumIds(selected ?? []) : nil
         return SourceAvailability.usableSource(selected: selected, known: knownAlbums,
                                                folderCount: activeFolderCount(records: folderRecords),
                                                existingAlbums: existingAlbums, photoAccess: photoAccess)
@@ -633,23 +644,11 @@ final class LiveBackend: @unchecked Sendable {
         let record = pairingStore.load()
         let pairingId = record.map(\.pairingId).flatMap { $0.isEmpty ? nil : $0 }
         let level = PhotoKitAuthorization().currentLevel()
-        // 读范围失败 ≠ 从未保存过：失败时不猜来源，直接按「没有可用来源」处理（不抑制降级通知）。
-        let selected: Set<String>?
-        let scopeReadFailed: Bool
-        do {
-            selected = try media.savedScope()
-            scopeReadFailed = false
-        } catch {
-            logger.log("notify: scope unreadable, treating as no usable source: \(error)")
-            selected = nil
-            scopeReadFailed = true
-        }
-        // 只有选中了相册才去查现有相册（#1811）；目录来源在这里就足够判断「备份还在继续」。
-        let albumSelected = !scopeReadFailed && (selected?.contains { !$0.hasPrefix("folder:") } ?? false)
-        let existingAlbums = albumSelected ? await media.existingAlbumIds() : nil
-        let hasUsableSource = Self.noticeHasUsableSource(
-            selected: scopeReadFailed ? nil : selected, knownAlbums: media.knownAlbums(), folderRecords: folders.allRecords(),
-            existingAlbums: existingAlbums, photoAccess: LiveMediaLibrary.map(level), scopeReadFailed: scopeReadFailed)
+        // 读范围失败 ≠ 从未保存过：失败时不猜来源，直接按「没有可用来源」处理（不抑制降级通知），见 noticeUsableSource。
+        let hasUsableSource = await Self.noticeUsableSource(
+            readScope: { try media.savedScope() }, knownAlbums: media.knownAlbums(), folderRecords: folders.allRecords(),
+            photoAccess: LiveMediaLibrary.map(level), existingAlbumIds: { _ in await media.existingAlbumIds() },
+            logger: logger)
         let facts = DefinitiveFacts(
             pairingId: pairingId,
             pairingLost: record?.lost == true || (assumeLostPairingId != nil && assumeLostPairingId == pairingId),

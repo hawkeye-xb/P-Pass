@@ -19,8 +19,6 @@ struct BucketScreen: View {
     /// 保存过的时间档（nil = 从未保存）：选项「M月d日起的照片」的日期从这里来。
     @State private var savedSince: BackupSince?
     @State private var known: Set<String> = []
-    /// 保存过的范围（nil = 从未保存）：未完整授权时用来决定哪些相册仍然显示（只供取消）。
-    @State private var savedScope: Set<String>?
     @State private var error: String?
     @State private var folders: [FolderSourceInfo] = []
     @State private var showingAddPicker = false
@@ -71,7 +69,7 @@ struct BucketScreen: View {
                             .multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.top, 40)
                     }
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 2), spacing: 10) {
-                        ForEach(Self.visibleAlbums(albums, saved: savedScope, photoAccess: app.access)) { album in card(album) }
+                        ForEach(Self.visibleAlbums(albums, checked: checked, photoAccess: app.access)) { album in card(album) }
                         ForEach(folders) { folder in folderCard(folder) }
                         addFolderCard
                     }
@@ -97,12 +95,11 @@ struct BucketScreen: View {
         access == .full ? .none : .noAccess
     }
 
-    /// 相册卡片显示哪些：完整授权显示全部；相册未完整授权只显示「保存过的相册」供取消，不显示新增相册。
-    /// 只负责显示，不参与默认勾选（默认一律不预选，见 `initialSelectionWithUnavailable`）。
-    static func visibleAlbums(_ albums: [AlbumBucket], saved: Set<String>?, photoAccess: MediaAccess) -> [AlbumBucket] {
+    /// 相册卡片显示哪些：完整授权显示全部；相册未完整授权只显示「当前编辑态里选中的相册」
+    /// （已保存的 + 本次未保存勾选的），保证 checked 里没有看不见、无法取消的相册（#1811 评审不变量）。
+    static func visibleAlbums(_ albums: [AlbumBucket], checked: Set<String>, photoAccess: MediaAccess) -> [AlbumBucket] {
         guard photoAccess != .full else { return albums }
-        let savedAlbums = saved ?? []
-        return albums.filter { savedAlbums.contains($0.id) }
+        return albums.filter { checked.contains($0.id) }
     }
 
     /// 一个来源都没选：明确写「未选择任何来源」。空范围允许保存（= 不自动备份），不替用户补默认。
@@ -112,21 +109,25 @@ struct BucketScreen: View {
     }
 
     /// 首次加载：没有存过的范围一律空——显式传 cameraAlbum 也不预选相机相册（#1811）；
-    /// 相册未完整授权时同样不做任何默认预选，只保留保存过的相册。
-    /// 首次加载也保留不可见的已保存相册，恢复权限后仍可选择；未勾选的新相册不自动加入。
+    /// 相册未完整授权时同样不做任何默认预选。只保留「可见的已保存相册」，
+    /// 看不见的已保存相册不进编辑态（持久范围由保存端按 known 保留，不在这里替他取消）。
     static func initialSelectionWithUnavailable(saved: Set<String>?, availableAlbums: Set<String>,
                                                 cameraAlbum: String?) -> Set<String> {
         guard let saved else { return [] }
-        let visible = ScopePolicy.initialSelection(saved: saved, available: availableAlbums, cameraAlbum: cameraAlbum)
-        let invisibleSaved = saved.filter { !$0.hasPrefix("folder:") && !availableAlbums.contains($0) }
-        return visible.union(invisibleSaved)
+        return ScopePolicy.initialSelection(saved: saved, available: availableAlbums, cameraAlbum: cameraAlbum)
     }
 
-    /// 授权后的刷新不得覆盖未保存选择；权限不可见的已保存相册也不视为用户取消。
-    static func selectionForReload(current: Set<String>, saved: Set<String>?, availableAlbums: Set<String>, availableFolders: Set<String>) -> Set<String> {
+    /// 授权后的刷新不得覆盖未保存选择，同时编辑态里不能留看不见、无法取消的相册（#1811 不变量）：
+    /// - 目录：仍可用就保留；
+    /// - 相册：完整授权全保留；未完整授权只保留当前列表里能展示的（已保存 + 本次勾选都算），
+    ///   只有 none 且 `albums()` 为空、一张都展示不了时才清空编辑态的相册部分并显示空范围提示。
+    /// 只改编辑态，不写持久 scope：用户点保存后才成为纯文件夹 / 空集。
+    static func selectionForReload(current: Set<String>, availableAlbums: Set<String>, availableFolders: Set<String>,
+                                   photoAccess: MediaAccess) -> Set<String> {
         current.filter { id in
             if id.hasPrefix("folder:") { return availableFolders.contains(id) }
-            return availableAlbums.contains(id) || saved?.contains(id) == true
+            if photoAccess == .full { return true }
+            return availableAlbums.contains(id)
         }
     }
 
@@ -342,12 +343,12 @@ struct BucketScreen: View {
             app.refreshAccess() // 读相册时可能刚弹过系统照片权限框（时间档初值看这一档，所以要在下面之前）
             known = app.backend.media.knownAlbums()
             let saved = try app.backend.media.savedScope() // 读失败走下面的 catch（显示错误 + 重试），不当成「从未保存」
-            savedScope = saved // 未完整授权时只显示保存过的相册（供取消），不给新增
             let folderList = await app.backend.engine.folderSources()
             let folderIds = Set(folderList.map { FolderMediaSource.bucketId(sourceId: $0.id) })
             if hasLoaded {
-                checked = Self.selectionForReload(current: checked, saved: saved,
-                                                  availableAlbums: Set(list.map(\.id)), availableFolders: folderIds)
+                // 编辑态只留看得见的来源（相册必须在当前列表里）；不可见的已保存相册交给保存端按 known 保留，不在后台改。
+                checked = Self.selectionForReload(current: checked, availableAlbums: Set(list.map(\.id)),
+                                                  availableFolders: folderIds, photoAccess: app.access)
             } else {
                 let selectedAlbums = Self.initialSelectionWithUnavailable(saved: saved, availableAlbums: Set(list.map(\.id)),
                                                                           cameraAlbum: list.first(where: \.isCameraAlbum)?.id)
