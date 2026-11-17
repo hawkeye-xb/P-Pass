@@ -17,15 +17,17 @@ just ios-ui-regress device --invert SettingsRuleFull   # 反证
 |---|---|---|
 | DecisionScopeFull | 决定页「选择备份范围」→ 照片权限「允许全部」 | `onboarding: decision shown` → `onboarding: photo access after prompt=full` |
 | DecisionPick | 决定页「先挑几张试试」→ 系统选择器选 1 张 | `onboarding: decision shown` → `picked: 1 chosen` → `onboarding: marked onboarded via=pick` |
-| SettingsRuleFull | 设置页「自动备份」→「允许全部」 | `… via=pick` → `auto-rule: saved enabled=true` |
-| SettingsRuleLimited | 设置页「自动备份」→「限制访问」选 1 张 | `… via=pick` → `auto-rule: partial photo access, sent allowed photos n=N` |
+| SettingsRuleFull | 决定页「选择备份范围」存一个范围（准备，会开一次规则）→ 设置页「自动备份」关一次再开 | `onboarding: marked onboarded via=scope` → `auto-rule: saved enabled=false` → `auto-rule: saved enabled=true` |
+| SettingsRuleLimited | 决定页「选择备份范围」→ 权限「限制访问」选 1 张 → 设置页开「自动备份」→ 随 App 去系统设置再回来（不改权限） | `onboarding: photo access after prompt=partial` → `auto-rule: partial photo access, opening system settings for full access` → `auto-rule: partial photo access, sent allowed photos n=[1-9], rule stays off` |
 | SettingsPick | 设置页「挑几张传」→ 系统选择器选 1 张 | `… via=pick` → `picked: 1 chosen` |
 | NotifyAllow | 设置页「通知」→ 系统授权「允许」 | `… via=pick` → `notifications: system prompt result granted=true` |
 | NotifyDeny | 设置页「通知」→ 系统授权「不允许」 | `… via=pick` → `notifications: system prompt result granted=false` |
 
 判定表是 `tools/ios/ui-regress-rules.tsv`，日志行改了只改这一处；**用例清单也由它生成**（一行一例），
-脚本里不再抄一份。设置页的用例先走「先挑几张试试」进主界面（规则关着、照片权限未定），
-所以第一个通过行是 `marked onboarded via=pick`。
+脚本里不再抄一份。设置页的用例按各自的实际操作分两种准备：「挑几张传」「通知」先走「先挑几张试试」进主界面
+（规则关着、照片权限未定），第一个通过行是 `marked onboarded via=pick`；「自动备份」Full 先存一个范围再操作开关
+（保存范围本身会打一条 `saved enabled=true`，判定只认它之后实际操作阶段的 `false→true`，操作失效必红）；
+Limited 从决定页给有限授权，开规则后随 App 去系统设置再回前台（不改权限），不弹照片权限框、开关保持关。
 
 暂未纳入：「设置页拒绝」（设置页「自动备份」→「不允许」）要的通过行
 `settings: auto-rule photo access after prompt=none` App 现在不打（#1453），加了必红、会让整个回归永久退出 1。
@@ -70,6 +72,8 @@ just ios-ui-regress device --invert SettingsRuleFull   # 反证
 `--invert <用例>`：该例的系统弹窗故意点反向选项（允许 ↔ 不允许、选择器点取消），判定期望不变，
 汇总末尾必须是「反证：… → FAIL（符合预期）」。退出码：反证成立（只有该例那 1 个 FAIL）→ 0；
 反证不成立（点反了还 PASS）或还有别的失败 → 1，所以「反证通过」和真红能用退出码分开。验收时至少给一例反证输出。
+「自动备份」两例的反证：Full 不走弹窗，关掉开关停在关（判据要 false 之后再有一条 enabled=true，缺通过行判 FAIL）；
+Limited 是权限框答「允许全部」（没走有限授权路径，判据缺通过行判 FAIL）。
 
 ## 真机前提
 
@@ -81,8 +85,9 @@ just ios-ui-regress device --invert SettingsRuleFull   # 反证
   同一份 xctestrun 换 `test` 就能起。构建已由 `--build-only` 预热，每例只做增量检查。
 - **会清掉手机上 P-Pass 的数据并卸载重装**（只在测试机上跑）。跑完 App 配着已退出的配对桩，要配回正式桌面在桌面 App
   里「添加设备」重新扫码。
-- 「允许全部」的用例只判到权限结果和开关，不保存备份范围，不把手机上的真照片传出去；挑照片的用例会把选中的 1 张传给配对桩
-  （临时库，跑完即删）。
+- 「允许全部」的用例里 DecisionScopeFull 只判到权限结果，不保存范围；SettingsRuleFull 的准备阶段会保存一个范围并开启规则，
+  范围内已授权的照片可能传给配对桩（临时库，跑完即删）；SettingsRuleLimited 会把系统里允许的那张按手选传一次；
+  挑照片的用例会把选中的 1 张传给配对桩（临时库，跑完即删）。
 - 签名：UI 测试 runner 的 bundle id 是 `<App bundle id>.uitests`，个人团队自动签名（`-allowProvisioningUpdates`）。
 - 设备默认取 `$PPASS_DEVICE`、本机 `e3.env` 的 `E3_IOS_UDID`，或唯一一台在线 iPhone；也可 `--device <标识>`。
 

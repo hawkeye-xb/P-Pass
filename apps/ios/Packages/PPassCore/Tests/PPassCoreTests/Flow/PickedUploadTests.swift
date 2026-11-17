@@ -43,6 +43,18 @@ final class PickedUploadTests: XCTestCase {
         XCTAssertEqual(rig.importer.released.get(), ["picked-hash-a.jpg", "picked-hash-b.jpg"], "传完放掉导入")
     }
 
+    /// 手选没有拍摄时间（PHPicker 不给 assetIdentifier）：请求固定 captureAtMs=0（0=不知道，FlowTypes），
+    /// 不许拿当前时间冒充拍摄时刻（#1812）。反证：把引擎里 picked 的 captureAtMs 改成当前时间，本例必红。
+    func testPickedRequestCarriesNoCaptureTime() async throws {
+        let rig = try Rig(source: { _ in DeniedMedia() })
+        rig.conditions.set(Conditions(autoBackupEnabled: false))
+        await rig.start()
+        pick(rig, ["a.jpg", "b.jpg"])
+        await rig.trigger(.pickedAdded)
+        XCTAssertEqual(rig.delivery.requests.get().map(\.details.captureAtMs), [0, 0],
+                       "手选缺拍摄时间：captureAtMs 必须固定为 0（0=不知道），改成当前时间本例必红")
+    }
+
     /// 手选优先于自动备份：同时有范围内的新照片时，手选先传；自动备份的请求不带 source。
     func testPickedGoesBeforeAutoBackup() async throws {
         let rig = try Rig()
