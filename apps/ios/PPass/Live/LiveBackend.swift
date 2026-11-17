@@ -603,13 +603,22 @@ final class LiveBackend: @unchecked Sendable {
     func evaluateNotices(assumeLostPairingId: String? = nil) async {
         let record = pairingStore.load()
         let pairingId = record.map(\.pairingId).flatMap { $0.isEmpty ? nil : $0 }
+        let level = PhotoKitAuthorization().currentLevel()
+        let selected = (try? media.savedScope()) ?? nil
+        // 只有选中了相册才去查现有相册（#1811）；目录来源在这里就足够判断「备份还在继续」。
+        let albumSelected = selected?.contains { !$0.hasPrefix("folder:") } ?? false
+        let existingAlbums = albumSelected ? await media.existingAlbumIds() : nil
+        let hasUsableSource = SourceAvailability.usableSource(
+            selected: selected, known: media.knownAlbums(), folderCount: folders.allRecords().count,
+            existingAlbums: existingAlbums, photoAccess: LiveMediaLibrary.map(level))
         let facts = DefinitiveFacts(
             pairingId: pairingId,
             pairingLost: record?.lost == true || (assumeLostPairingId != nil && assumeLostPairingId == pairingId),
-            mediaAccess: LiveMediaLibrary.tier(PhotoKitAuthorization().currentLevel()),
+            mediaAccess: LiveMediaLibrary.tier(level),
             backgroundRequested: autoPrefs.requested(),
             backgroundRefresh: await Self.currentBackgroundRefresh(),
-            autoRuleOn: autoRule.stored() ?? false)
+            autoRuleOn: autoRule.stored() ?? false,
+            hasUsableSource: hasUsableSource)
         await FailureNotifier.evaluate(facts: facts, notifyEnabled: notifyPrefs.enabled(), store: noticeStore, logger: logger)
     }
 }

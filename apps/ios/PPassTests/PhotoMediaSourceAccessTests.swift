@@ -111,6 +111,26 @@ final class PhotoMediaSourceAccessTests: XCTestCase {
         XCTAssertEqual(removed, ["a"], "已移除目录不能靠刷新复活")
     }
 
+    /// #1811：首次进范围页没有照片权限、授权回来也不自动补默认；一个来源都没选也能保存（空范围 = 不自动备份），
+    /// 页面上必须明确写「未选择任何来源」，不弹窗。
+    /// 反证：去掉提示（`showsEmptySelectionHint` 恒 false），第一条断言红。
+    func testEmptySelectionIsExplicitAndGetsNoDefault() {
+        XCTAssertTrue(BucketScreen.showsEmptySelectionHint(hasLoaded: true, checked: [], offersChoices: true))
+        XCTAssertFalse(BucketScreen.showsEmptySelectionHint(hasLoaded: false, checked: [], offersChoices: true), "还没加载完不显示")
+        XCTAssertFalse(BucketScreen.showsEmptySelectionHint(hasLoaded: true, checked: ["recents"], offersChoices: true))
+        XCTAssertFalse(BucketScreen.showsEmptySelectionHint(hasLoaded: true, checked: [], offersChoices: false),
+                       "相册未完整授权已有权限提示，不重复")
+    }
+
+    /// #1811：权限两态——有限授权与拒绝在范围页是同一套「相册未完整授权」，相册不进自动范围，文件夹照常。
+    /// 反证：`notice(for:)` 把 `.partial` 当可选项（旧行为），本组红。
+    func testIncompletePhotoAccessUsesOneNoticeState() {
+        XCTAssertEqual(BucketScreen.notice(for: .partial), BucketScreen.notice(for: .none))
+        XCTAssertEqual(BucketScreen.notice(for: .partial), .noAccess)
+        XCTAssertFalse(BucketScreen.offersChoices(BucketScreen.notice(for: .partial)), "有限授权不把相册当自动来源")
+        XCTAssertEqual(BucketScreen.notice(for: .full), .none)
+    }
+
     func testSavingFolderScopeKeepsInvisibleSavedAlbums() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

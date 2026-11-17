@@ -8,11 +8,17 @@
 "notif_background_refresh_off_body" = "Backup now runs only while P-Pass is open. You can turn it back on in Settings › General › Background App Refresh.";
 "notif_background_refresh_restricted_body" = "This iPhone restricts Background App Refresh for P-Pass (possibly Screen Time or device management). Backup now runs only while P-Pass is open.";
 
-/* Scope page: photo access is only needed for system albums. Folder backup remains available; ask only after the user taps. */
-"bucket_no_access_title" = "Photo access is required to select system albums";
-"bucket_no_access_body" = "Albums appear after you grant access. You can also back up folders only.";
+/* Scope page: photo access is only needed for system albums. Folder backup remains available; ask only after the user taps.
+   #1811: limited and denied access share one "photos access incomplete" state; albums are not auto-backup sources. */
+"bucket_no_access_title" = "Photos access is incomplete";
+"bucket_no_access_body" = "Photos won't be backed up automatically. Back up folders only, or send selected photos.";
 "bucket_no_access_action" = "Open Settings";
 "bucket_request_access_action" = "Allow Access";
+"bucket_no_selection" = "No sources selected.";
+
+/* Home status card (#1811): folders are still backing up; only the photos side is incomplete, with one Adjust scope exit. */
+"hero_mixed_album_incomplete" = "Backing up folders · Photos access incomplete";
+"hero_adjust_scope_action" = "Adjust scope";
 
 /* Simulator and devices without a camera. */
 "scan_camera_unavailable" = "Camera unavailable. Enter the pairing code to connect.";

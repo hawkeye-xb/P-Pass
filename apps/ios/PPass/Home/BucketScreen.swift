@@ -74,6 +74,13 @@ struct BucketScreen: View {
                         ForEach(folders) { folder in folderCard(folder) }
                         addFolderCard
                     }
+                    // 一个来源都没选：明确说清楚（空范围 = 不自动备份），不弹窗、不替用户补默认。
+                    if Self.showsEmptySelectionHint(hasLoaded: hasLoaded, checked: checked,
+                                                    offersChoices: Self.offersChoices(Self.notice(for: app.access))) {
+                        Text(L.s("bucket_no_selection")).font(PPFont.sans(15, relativeTo: .subheadline)).foregroundStyle(PPColor.ink40)
+                            .multilineTextAlignment(.center).frame(maxWidth: .infinity)
+                            .accessibilityIdentifier("bucketNoSelection")
+                    }
                 }
                 .padding(.horizontal, 24).padding(.top, 6).padding(.bottom, 14)
             }
@@ -82,20 +89,21 @@ struct BucketScreen: View {
         }
     }
 
-    /// 页面按照片权限档多说的一句（10-29）。
-    enum AccessNotice: Equatable { case none, partial, noAccess }
+    /// 页面按照片权限档多说的一句（10-29；#1811 起权限两态：完整 / 未完整）。
+    enum AccessNotice: Equatable { case none, noAccess }
 
-    /// 只给了部分照片：页顶说明只备份允许的那些；一张都读不到：不说「没有找到照片」（那不是现状），说没有权限并给「去设置」。
+    /// 完整授权才把相册当成自动备份来源；有限授权和拒绝统一成「相册未完整授权」，同一套提示与出口。
     static func notice(for access: MediaAccess) -> AccessNotice {
-        switch access {
-        case .full: return .none
-        case .partial: return .partial
-        case .none: return .noAccess
-        }
+        access == .full ? .none : .noAccess
     }
 
-    /// 没有照片权限时不给选择（10-30）：时间档、提示句和底部「开始备份 / 保存」都不显示——一张都读不到，选了也没用。
+    /// 相册未完整授权时不给相册选择：相册不进自动范围，用户挑的几张只走「挑几张传」；文件夹照常。
     static func offersChoices(_ notice: AccessNotice) -> Bool { notice != .noAccess }
+
+    /// 一个来源都没选：明确写「未选择任何来源」。空范围允许保存（= 不自动备份），不替用户补默认。
+    static func showsEmptySelectionHint(hasLoaded: Bool, checked: Set<String>, offersChoices: Bool) -> Bool {
+        hasLoaded && checked.isEmpty && offersChoices
+    }
 
     /// 首次加载也保留不可见的已保存相册，恢复权限后仍可选择；未勾选的新相册不自动加入。
     static func initialSelectionWithUnavailable(saved: Set<String>?, availableAlbums: Set<String>, cameraAlbum: String?) -> Set<String> {

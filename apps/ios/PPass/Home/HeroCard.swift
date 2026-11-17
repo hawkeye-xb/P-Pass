@@ -9,7 +9,9 @@ struct HeroCard: View {
 
     var body: some View {
         let triplet = app.triplet
-        let render = HomeProjection.heroRender(app.access, triplet, countsReadable: app.facts.countsReadable, scopeSaved: app.scope != nil)
+        let render = HomeProjection.heroRender(app.access, triplet, countsReadable: app.facts.countsReadable, scopeSaved: app.scope != nil,
+                                               hasUsableSource: app.backupAvailability.hasUsableSource,
+                                               mixedAlbumIncomplete: app.showsMixedAlbumIncomplete)
         Section {
             VStack(alignment: .leading, spacing: 0) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -25,6 +27,11 @@ struct HeroCard: View {
                             PPButton(title: L.s("auto_backup_blocked_action"), kind: .quiet) { app.openSettingsFromBlockedHero() }
                                 .accessibilityIdentifier("blockedHeroSettings")
                         }
+                    case .mixedAlbumIncomplete:
+                        // #1811：文件夹备份还在继续，只说相册侧的状态；出口只有一个「调整范围」。
+                        Text(L.s("hero_mixed_album_incomplete")).font(PPFont.cardTitle).foregroundStyle(PPColor.act)
+                        PPButton(title: L.s("hero_adjust_scope_action"), kind: .quiet) { app.adjustScopeFromIncompleteAlbum() }
+                            .accessibilityIdentifier("mixedAlbumAdjustScope")
                     case .countsUnreadable:
                         Text(L.s("hero_counts_unreadable")).font(PPFont.cardBody).foregroundStyle(PPColor.ink60)
                     case .noAlbums:

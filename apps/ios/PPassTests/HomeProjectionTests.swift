@@ -77,6 +77,17 @@ final class HomeProjectionTests: XCTestCase {
         XCTAssertFalse(P.allSafeTextAllowed(.partial, healthy, pairingLost: false, missingSource: 0))
     }
 
+    /// #1811：还有可用来源时权限不全不再压成「自动备份已停止」——纯目录按普通进度渲染；
+    /// 目录 + 相册混合单独出「相册未完整授权」，只给「调整范围」出口。
+    /// 反证：`heroRender` 去掉 `hasUsableSource` / `mixedAlbumIncomplete` 分支，本条红。
+    func test_i_usable_source_keeps_progress_and_mixed_album_incomplete() {
+        XCTAssertEqual(P.heroRender(.partial, healthy, hasUsableSource: true), .triplet, "纯目录：备份照常")
+        XCTAssertEqual(P.heroRender(.none, healthy, hasUsableSource: true), .triplet)
+        XCTAssertEqual(P.heroRender(.none, nil, scopeSaved: false, hasUsableSource: true), .noAlbums)
+        XCTAssertEqual(P.heroRender(.partial, healthy, hasUsableSource: true, mixedAlbumIncomplete: true), .mixedAlbumIncomplete)
+        XCTAssertEqual(P.heroRender(.none, healthy, hasUsableSource: false), .accessBlocked, "纯相册：仍然是已停止")
+    }
+
     func test_rule_s_each_open_fact_vetoes_all_safe_text() {
         XCTAssertFalse(P.allSafeTextAllowed(.full, healthy, pairingLost: true, missingSource: 0))
         XCTAssertFalse(P.allSafeTextAllowed(.full, healthy, pairingLost: false, missingSource: 1))

@@ -106,7 +106,12 @@ enum BackupUiState: Equatable {
 
 enum StatusLine: Equatable { case ready, working, pending(Int64), allSafe, noAlbums, trouble, waiting, paused }
 enum HeroAction: Equatable { case pause, resume }
-enum HeroRender: Equatable { case accessBlocked, countsUnreadable, noAlbums, unreadable, unreconciled, triplet }
+enum HeroRender: Equatable {
+    case accessBlocked
+    /// #1811：文件夹还在备份，相册侧未完整授权（给「调整范围」出口）。
+    case mixedAlbumIncomplete
+    case countsUnreadable, noAlbums, unreadable, unreconciled, triplet
+}
 
 enum LastSuccess: Equatable {
     case never, justNow
@@ -233,8 +238,13 @@ enum HomeProjection {
     }
 
     /// 规则 H：权限不全 → 引导卡顶替整块数字（MOB-02/MOB-94：不显示任何数，就不可能盖「都存好了」的章）。
-    static func heroRender(_ access: MediaAccess, _ t: BackupTriplet?, countsReadable: Bool = true, scopeSaved: Bool = true) -> HeroRender {
-        if access != .full { return .accessBlocked }
+    /// #1811：还有可用来源时（folder-only / 混合里的目录）备份没停——纯目录照常显示进度；混合只把相册侧说成「未完整授权」。
+    static func heroRender(_ access: MediaAccess, _ t: BackupTriplet?, countsReadable: Bool = true, scopeSaved: Bool = true,
+                           hasUsableSource: Bool = false, mixedAlbumIncomplete: Bool = false) -> HeroRender {
+        if access != .full {
+            if mixedAlbumIncomplete { return .mixedAlbumIncomplete }
+            if !hasUsableSource { return .accessBlocked }
+        }
         if !countsReadable { return .countsUnreadable } // #973：账本读失败 ≠ 相册读不到，单独说
         // 范围从未保存时 triplet 必为 nil，但那不是「读不到」——别把没选相册说成读取失败。
         guard let t else { return scopeSaved ? .unreadable : .noAlbums }

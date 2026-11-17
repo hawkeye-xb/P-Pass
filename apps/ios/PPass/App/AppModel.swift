@@ -200,39 +200,56 @@ final class AppModel: ObservableObject {
         notice = UserNotice(message: L.s("command_failed"))
     }
 
-    /// 开关下一行小字：刚做完的动作的说明优先；其次是规则开着时权限被收回 / 改成部分的状态（#1272 B，唯一保留的权限提示）。
+    /// 开关下一行小字：刚做完的动作的说明优先；其次是规则开着、但相册侧真的不能备份时的现状（#1272 B）。
+    /// 有目录来源时（folder-only / 混合）文件夹照常备份，不说「自动备份没开」。
     var ruleHint: String? {
         if let ruleNote { return ruleNote }
         guard autoRule else { return nil }
         switch access {
         case .full: return nil
-        case .partial: return L.s("auto_backup_rule_partial_hint")
+        case .partial: return sourceAvailability.needsFullPhotoAccessSettings ? L.s("auto_backup_rule_partial_hint") : nil
         case .none: return sourceAvailability.showsDeniedPhotoHint ? L.s("auto_backup_rule_none_hint") : nil
         }
     }
 
-    /// 规则开着、但权限被收回 / 改成部分：自动备份已停止（偏好不动，单独显示成这一种状态）。
+    /// 规则开着、纯相册范围、照片权限未完整：自动备份已停止（偏好不动，单独显示成这一种状态）。
     var autoRuleBlocked: Bool { sourceAvailability.showsGlobalPhotoBlock }
 
-    /// #1353：「自动备份已停止」状态卡带「去设置」——开关开着、照片权限不全（部分 / 全拒）。开关关着是正常状态，不给。
+    /// #1811 统一口径：有没有可用来源、此刻是否在传。通知、状态卡与按钮都读这一份。
+    var backupAvailability: BackupAvailability {
+        BackupAvailability(hasUsableSource: sourceAvailability.hasUsableSource,
+                           isTransferring: uiState.isRunning)
+    }
+
+    /// #1353：「自动备份已停止」状态卡带「去设置」——纯相册范围、照片权限不全。开关关着是正常状态，不给。
     /// 开关本身不动；回到前台 `refresh` 重读真实权限，变成全部就不再是这张卡（对位 Android `blockedHeroOffersSettings`）。
     nonisolated static func blockedHeroOffersSettings(autoRule: Bool, access: MediaAccess) -> Bool { autoRule && access != .full }
     var blockedHeroOffersSettings: Bool { sourceAvailability.showsGlobalPhotoBlock }
+
+    /// 混合范围 + 照片权限未完整：文件夹还在传，状态卡给一个「调整范围」出口。
+    var showsMixedAlbumIncomplete: Bool { sourceAvailability.mixedAlbumIncomplete }
 
     @MainActor func openSettingsFromBlockedHero() {
         AppLog.log("auto-rule: blocked (photo access=\(access)), opening app settings")
         openAppSettings()
     }
 
+    /// 「调整范围」：直接进范围页，让用户移除相册（folder-only）或改回完整授权后再勾相册。
+    @MainActor func adjustScopeFromIncompleteAlbum() {
+        AppLog.log("auto-rule: mixed scope, photo access=\(access), opening scope editor")
+        openScopeEditor()
+    }
+
     /// 「自动备份」开关表示用户意图，不再以完整照片权限为开启前置。
-    /// 已有有效范围只恢复备份，无存值才主动进入范围页；folder-only 可直接开启，相册-only 的有限授权旧路径不变。
+    /// 已有有效范围只恢复备份，无存值才主动进入范围页；有可用目录来源（folder-only / 混合）可直接开启，
+    /// 纯相册范围的有限授权才去系统设置改成完整授权（#1811 起按钮名与动作同一口径）。
     func setAutoRule(_ on: Bool) {
         ruleNote = nil
         guard on else {
             do { try backend.engine.setAutoRule(false); autoRule = false } catch { settingWriteFailed("auto-rule", error) }
             return
         }
-        if backend.media.access() == .partial && !sourceAvailability.folderOnly {
+        if backend.media.access() == .partial && !sourceAvailability.hasUsableFolder {
             do { try backend.engine.setPendingFullPhotoAccess(true) } catch { AppLog.log("auto-rule: pending mark write failed: \(error)") }
             AppLog.log("auto-rule: partial photo access, opening system settings for full access")
             openAppSettings()
@@ -551,8 +568,13 @@ final class AppModel: ObservableObject {
     }
 
     /// 第二步卡的按钮名：系统「后台 App 刷新」没开 →「去设置」；系统已放行、只差 App 里的开关 →「开启」。
-    /// 第一步卡的按钮名：已是「部分照片」、规则没开 → 点了会去系统设置改权限，按钮说「去设置」（复用现有词）；否则「开启」。
-    var scopeGuideActionKey: String { !autoRule && access == .partial ? "background_refresh_notice_action" : "photos_guide_enable" }
+    /// 第一步卡的按钮名：有目录来源（folder-only / 混合）→「开启自动备份」，点了真的直接开启；
+    /// 只有纯相册范围、有限授权 → 点了会去系统设置改权限，按钮说「去设置」；其余「开启」。
+    var scopeGuideActionKey: String {
+        if autoRule { return "photos_guide_enable" }
+        if sourceAvailability.hasUsableFolder { return "photos_first_run_enable" }
+        return sourceAvailability.needsFullPhotoAccessSettings ? "background_refresh_notice_action" : "photos_guide_enable"
+    }
 
     var backgroundGuideActionKey: String { backgroundRefresh == .available ? "photos_guide_enable" : "background_refresh_notice_action" }
 

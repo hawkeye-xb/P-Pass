@@ -1,13 +1,14 @@
 import XCTest
 @testable import PPass
 
-/// 10-29：选范围页按照片权限档多说一句。拒绝：说没有权限并给「去设置」，不说「没有找到照片」。
-/// （#1272 起部分授权不再在页顶加说明，改为设置页开关下一行小字；`.partial` 档仍在，只是不配文案。）
-/// 反证：`BucketScreen.notice(for:)` 把 `.none` 映射成 `.none`（回到「没有找到照片」）本条红。
+/// 10-29：选范围页按照片权限档多说一句。10-30：没有照片权限时不给选择，不说「没有找到照片」。
+/// #1811 起权限两态（产品口径）：完整授权 = 相册可自动备份；有限授权与拒绝统一成「相册未完整授权」，
+/// 相册不进自动范围，文件夹照常，用户挑的几张只走「挑几张传」。
+/// 反证：`BucketScreen.notice(for:)` 把 `.partial` 映射成旧的可选状态（`offersChoices` 为真），本条红。
 final class BucketAccessNoticeTests: XCTestCase {
     func test_each_access_tier_has_its_own_notice() {
         XCTAssertEqual(BucketScreen.notice(for: .full), .none)
-        XCTAssertEqual(BucketScreen.notice(for: .partial), .partial)
+        XCTAssertEqual(BucketScreen.notice(for: .partial), .noAccess)
         XCTAssertEqual(BucketScreen.notice(for: .none), .noAccess)
     }
 
@@ -15,7 +16,6 @@ final class BucketAccessNoticeTests: XCTestCase {
     /// 反证：`offersChoices` 恒为 true（回到无权限也能点保存）本条红。
     func test_no_access_hides_the_choices() {
         XCTAssertTrue(BucketScreen.offersChoices(.none))
-        XCTAssertTrue(BucketScreen.offersChoices(.partial))
         XCTAssertFalse(BucketScreen.offersChoices(.noAccess))
     }
 
@@ -23,17 +23,23 @@ final class BucketAccessNoticeTests: XCTestCase {
     func test_copy_exists_in_both_languages() throws {
         let expected: [String: [String: String]] = [
             "en": [
-                "bucket_no_access_title": "Photo access is required to select system albums",
-                "bucket_no_access_body": "Albums appear after you grant access. You can also back up folders only.",
+                "bucket_no_access_title": "Photos access is incomplete",
+                "bucket_no_access_body": "Photos won't be backed up automatically. Back up folders only, or send selected photos.",
                 "bucket_no_access_action": "Open Settings",
                 "bucket_request_access_action": "Allow Access",
+                "bucket_no_selection": "No sources selected.",
+                "hero_mixed_album_incomplete": "Backing up folders · Photos access incomplete",
+                "hero_adjust_scope_action": "Adjust scope",
                 "welcome_scan": "Scan to connect to a computer",
             ],
             "zh-Hans": [
-                "bucket_no_access_title": "选择系统相册需要照片访问权限",
-                "bucket_no_access_body": "授权后才会显示相册。你也可以只添加文件夹进行备份。",
+                "bucket_no_access_title": "相册未完整授权",
+                "bucket_no_access_body": "相册不会自动备份。可以只备份文件夹，或先挑几张传。",
                 "bucket_no_access_action": "去设置",
                 "bucket_request_access_action": "允许访问",
+                "bucket_no_selection": "未选择任何来源。",
+                "hero_mixed_album_incomplete": "文件夹备份中 · 相册未完整授权",
+                "hero_adjust_scope_action": "调整范围",
             ],
         ]
         for (lang, keys) in expected {
