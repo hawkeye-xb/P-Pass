@@ -52,18 +52,26 @@ class BackupScopeTimeTest {
     }
 
     /**
-     * 一套判据（对齐 iOS `hasUsableScope`）：开自动备份前「没有可用来源就去范围页选」，范围页回来「没有可用来源就引导」。
-     * 保存过空集与只剩已删目录都按没有来源算；读取失败按有来源处理。
+     * 产品口径：只有从未保存过范围（且没有既有目录）才第一次引导/强制进范围页。
+     * 保存过任何值（包括空集）都是明确选择——不再跳页、不再反复引导；读取失败按已定过范围处理。
      */
     @Test
-    fun scope_has_a_usable_source_matching_ios_no_albums() {
-        assertFalse("从未保存且没有目录 = 没有来源", scopeHasUsableSource(ScopeRead.NeverSaved, existingFolderCount = 0))
-        assertTrue("已有目录就是有来源", scopeHasUsableSource(ScopeRead.NeverSaved, existingFolderCount = 1))
-        assertFalse("保存过空集 = 没有来源", scopeHasUsableSource(ScopeRead.Saved(emptySet()), existingFolderCount = 0))
-        assertTrue("保存过相册范围 = 有来源", scopeHasUsableSource(ScopeRead.Saved(setOf(7L)), existingFolderCount = 0))
-        assertFalse("只剩被删目录 = 没有来源", scopeHasUsableSource(ScopeRead.Saved(setOf(0x4000000000000003L)), existingFolderCount = 0))
-        assertTrue("范围是目录且目录还在 = 有来源", scopeHasUsableSource(ScopeRead.Saved(setOf(0x4000000000000003L)), existingFolderCount = 1))
-        assertTrue("读不到按有来源处理，不把用户推进空范围页", scopeHasUsableSource(ScopeRead.Unreadable(IllegalStateException("x")), existingFolderCount = 0))
+    fun first_choice_only_before_any_scope_is_saved() {
+        assertTrue("从未保存且没有目录：唯一一次引导", scopeNeedsFirstChoice(ScopeRead.NeverSaved, existingFolderCount = 0))
+        assertFalse("已有目录 = 已经定过来源", scopeNeedsFirstChoice(ScopeRead.NeverSaved, existingFolderCount = 1))
+        assertFalse("保存过空集是明确选择，不再引导", scopeNeedsFirstChoice(ScopeRead.Saved(emptySet()), existingFolderCount = 0))
+        assertFalse("保存过相册范围", scopeNeedsFirstChoice(ScopeRead.Saved(setOf(7L)), existingFolderCount = 0))
+        assertFalse("只剩被删目录也是保存过", scopeNeedsFirstChoice(ScopeRead.Saved(setOf(0x4000000000000003L)), existingFolderCount = 0))
+        assertFalse("读不到不是从未保存", scopeNeedsFirstChoice(ScopeRead.Unreadable(IllegalStateException("x")), existingFolderCount = 0))
+    }
+
+    /** 产品口径：目录也是来源——只有目录时不能判成「没有来源」，首页也不能说「未选相册」。 */
+    @Test
+    fun folder_only_scope_is_a_real_source() {
+        val folder = 0x4000000000000003L
+        assertFalse("只有已登记目录：有来源", noAlbumsOf(setOf(folder), emptySet(), setOf(folder)))
+        assertTrue("目录已移除登记：没有来源", noAlbumsOf(setOf(folder), emptySet(), emptySet()))
+        assertTrue("范围空集：没有来源", noAlbumsOf(emptySet(), emptySet(), setOf(folder)))
     }
 
     // ── 「今天」从当天零点算 ──────────────────────────────────

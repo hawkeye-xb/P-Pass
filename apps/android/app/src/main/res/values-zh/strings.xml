@@ -175,8 +175,9 @@
     <string name="bucket_new">新</string>
     <!-- 2026-11-03（产品负责人）：改回"备份范围"；值写成「N 个相册，10月29日以后」。 -->
     <string name="backup_scope">备份范围</string>
-    <string name="backup_scope_none">未选相册</string>
-    <!-- #1020：存了范围但读不出来，不是「未选相册」。 -->
+    <string name="backup_scope_none">未选定自动备份范围</string>
+    <!-- #1794：一个来源（相册或目录）都没有时统一说「未选定自动备份范围」，不再只提相册（目录也是来源）。 -->
+    <!-- #1020：存了范围但读不出来，不是「未选定自动备份范围」。 -->
     <string name="backup_scope_unreadable">读不到已保存的选择</string>
     <plurals name="backup_scope_n">
         <item quantity="other">%1$d 个相册</item>

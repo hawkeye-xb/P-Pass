@@ -41,16 +41,12 @@ fun effectiveBackupScope(
 }
 
 /**
- * 范围里有没有可用来源（对齐 iOS `ScopePolicy.hasUsableScope` / `noAlbums`）：选中的相册、范围里登记的目录、
- * 或还没保存过统一范围时已有的旧目录都算；保存过空集、只剩被删掉的目录都不算；读取失败按「有」处理。
- * 开自动备份前先看这里：没有可用来源就去范围页选（ChooseScope），有来源才走权限链 / 直接开。
+ * 是不是还没定过备份范围——只有「从未保存且没有既有目录」这一个时机算，也是唯一一次主动引导/强制进范围页。
+ * 产品口径（产品负责人 2026-11-17）：保存过任何值（包括空集）都是明确选择，不再跳页、不再反复引导；
+ * 读取失败同样按已定过范围处理。开完开关要不要引导去范围页、开之前要不要先去选，都用这一个判据。
  */
-fun scopeHasUsableSource(read: ScopeRead, existingFolderCount: Int): Boolean = when (read) {
-    ScopeRead.NeverSaved -> existingFolderCount > 0
-    is ScopeRead.Saved -> read.ids.any { !isFolderId(it) } || existingFolderCount > 0
-    // 读不到不是「没有」：按有来源处理，不把用户推进一个可能空的范围页。
-    is ScopeRead.Unreadable -> true
-}
+fun scopeNeedsFirstChoice(read: ScopeRead, existingFolderCount: Int): Boolean =
+    read is ScopeRead.NeverSaved && existingFolderCount == 0
 
 /** 选范围页上的两档。 */
 enum class ScopeTime { SINCE_TODAY, ALL }

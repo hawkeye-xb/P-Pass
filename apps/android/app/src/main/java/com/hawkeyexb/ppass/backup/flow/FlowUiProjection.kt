@@ -166,7 +166,7 @@ fun backupUiStateOf(p: FlowProjection, noAlbums: Boolean = false): BackupUiState
 
 /**
  * 空闲时的结论。顺序同 iOS `HomeProjection.idleState`：
- * 没选相册（#1038：范围从未保存 / 读不到 / 已选的相册都不存在了）先说「未选相册」；
+ * 没有来源（#1038 / #1794：范围从未保存 / 读不到 / 空集 / 已选来源都不存在了）先说「未选定自动备份范围」；
  * 账本读不到（#1038）只给中性的 Idle——既不据占位 0 出红卡，更不出「都存好了」，英雄区另说「读不到」。
  */
 private fun idleUiStateOf(p: FlowProjection, noAlbums: Boolean): BackupUiState = when {

@@ -680,7 +680,7 @@ fun PPassApp() {
                 ruleHintRes = null
                 val scopeStore = BackupScopeStore(context)
                 val folderCount = com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(context).allRecords().size
-                if (!com.hawkeyexb.ppass.backup.scopeHasUsableSource(scopeStore.readScope(), folderCount)) {
+                if (com.hawkeyexb.ppass.backup.scopeNeedsFirstChoice(scopeStore.readScope(), folderCount)) {
                     screen = Screen.Buckets(pairing, scopeStore.selectedBucketIds() ?: emptySet(), false)
                 } else {
                     requestFlowWake(context, TriggerReason.MANUAL)
@@ -1292,7 +1292,7 @@ fun PPassApp() {
             // 先用存下的个数占位，IO 上查完相册再校正；照片权限变化、每次回到前台都重算。
             var selectedBucketCount by remember { mutableStateOf(BackupScopeStore(context).selectedBucketIds()?.size) }
             var selectedFolderCount by remember { mutableStateOf(0) }
-            // #1020：存了范围但读不出来——设置行说「读不到已保存的选择」，不说「未选相册」。
+            // #1020：存了范围但读不出来——设置行说「读不到已保存的选择」，不说「未选定自动备份范围」。
             var scopeUnreadable by remember { mutableStateOf(false) }
             // #1263：范围的开始时间（设置行的值「3 个相册 · 10月29日起的照片」）。
             var scopeSince by remember { mutableStateOf(BackupScopeStore(context).sinceSec()) }
@@ -1391,6 +1391,12 @@ fun PPassApp() {
                         backgroundOn = userRequestedBackgroundBackup,
                         finished = offerDismissed,
                     )
+                    // 产品口径（2026-11-17）：首次引导只发生一次——只有从未保存过范围才出「开启范围备份」。
+                    val firstChoicePending = com.hawkeyexb.ppass.backup.scopeNeedsFirstChoice(
+                        BackupScopeStore(context).readScope(),
+                        com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(context).allRecords().size,
+                    )
+                    val guide = guideForCurrentScope(photosGuideOf(guideFacts), firstChoicePending)
                     PhotosScreen(
                         timeline,
                         onViewerOpenChange = { photoViewerOpen = it },
@@ -1399,7 +1405,7 @@ fun PPassApp() {
                         daysUnreachable = daysUnreachable,
                         // #1322：引导位按当前开关现算（方案结论 6）；「还没有选择相册」并入「开启范围备份」这一步。
                         // 范围存了但读不出来不算「没选」（设置行另说「读不到」）。
-                        guide = photosGuideOf(guideFacts),
+                        guide = guide,
                         computerName = s.pairing.storageDeviceName,
                         // #1353：开关关着、点了会去系统设置（部分权限且系统不再弹框）→ 按钮说「去设置」。
                         guideActionGoesToSettings = !ruleOn &&
@@ -1411,7 +1417,7 @@ fun PPassApp() {
                             ) == RuleEnableRoute.Settings,
                         onGuideAction = { g ->
                             when (g) {
-                                // 开关开着、只是没选相册 → 直达选范围页；开关关着 → 走开启链路（权限 → 选范围页）。
+                                // 开关开着、只是还没有来源 → 直达选范围页；开关关着 → 走开启链路（权限 → 选范围页）。
                                 PhotosGuide.EnableScope ->
                                     if (ruleOn) enterBucketPicker(s.pairing, firstTime = false) else onToggleRule(s.pairing, true)
                                 PhotosGuide.EnableBackground -> onEnableFromOffer()
@@ -1564,7 +1570,7 @@ fun PPassApp() {
                         scopeUnreadable = scopeUnreadable,
                         scopeTimeLabel = scopeValueLabel(context, scopeSince),
                         countsReadable = holder.countsReadable.value,
-                        scopeSaved = holder.scopeSaved.value,
+                        scopeSaved = holder.scopeSaved.value && !holder.noSources.value,
                         // MOB-03: 相册选择入口走完整权限链——MOB-02 删首页手动
                         // 备份按钮时把挂在它身上的权限申请链一起删没了，
                         // 无权限直接进列表 = MediaStore 空查询 = 全白。
@@ -1874,6 +1880,13 @@ fun PPassApp() {
     }
 }
 
+/**
+ * 产品口径（2026-11-17）：首次引导只发生一次——只有从未保存过范围（[firstChoicePending]）才给「开启范围备份」；
+ * 保存过任何值（包括空集）都是用户的明确选择，不再反复引导。第二步（开启后台备份）不受影响。
+ */
+internal fun guideForCurrentScope(guide: PhotosGuide, firstChoicePending: Boolean): PhotosGuide =
+    if (guide == PhotosGuide.EnableScope && !firstChoicePending) PhotosGuide.None else guide
+
 /** #1353：开自动备份时按当前照片权限走哪条路。#1794 加 ChooseScope：没有有效来源时先去范围页选。 */
 internal enum class RuleEnableRoute { Apply, Request, Settings, ChooseScope }
 
@@ -1890,8 +1903,8 @@ internal fun ruleEnableRoute(
     scope: ScopeRead,
     folderCount: Int,
 ): RuleEnableRoute = when {
-    // 与「开完开关要不要引导去范围页」共用同一个判据（backup/BackupScopeTime.kt 的 scopeHasUsableSource）。
-    !com.hawkeyexb.ppass.backup.scopeHasUsableSource(scope, folderCount) -> RuleEnableRoute.ChooseScope
+    // 与「开完开关要不要引导去范围页」共用同一个判据（backup/BackupScopeTime.kt 的 scopeNeedsFirstChoice）。
+    com.hawkeyexb.ppass.backup.scopeNeedsFirstChoice(scope, folderCount) -> RuleEnableRoute.ChooseScope
     !ruleScopeUsesAlbums(scope) -> RuleEnableRoute.Apply
     access == MediaAccess.FULL -> RuleEnableRoute.Apply
     access == MediaAccess.PARTIAL && !canPrompt -> RuleEnableRoute.Settings

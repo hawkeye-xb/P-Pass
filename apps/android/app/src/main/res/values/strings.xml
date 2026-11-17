@@ -185,8 +185,9 @@
     <!-- MOB-02 §六: 新相册徽标 -->
     <string name="bucket_new">New</string>
     <string name="backup_scope">Backup range</string>
-    <string name="backup_scope_none">None selected</string>
-    <!-- #1020: a scope was saved but can't be read ： not the same as "None selected". -->
+    <string name="backup_scope_none">No backup scope selected</string>
+    <!-- #1794: no source at all (albums or folders) — say the scope isn't selected, never "no albums". -->
+    <!-- #1020: a scope was saved but can't be read ： not the same as "No backup scope selected". -->
     <string name="backup_scope_unreadable">Can’t read the saved selection</string>
     <plurals name="backup_scope_n">
         <item quantity="one">%1$d album</item>
