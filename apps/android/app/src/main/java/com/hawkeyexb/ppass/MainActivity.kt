@@ -252,31 +252,6 @@ internal fun screenAfterPairingCleared(screen: Screen, clearedPairingId: String)
 internal fun isOnboardingScreen(screen: Screen): Boolean =
     screen is Screen.Decision || (screen is Screen.Buckets && screen.firstTime)
 
-/** MOB-03：进选相册页时权限链的第一步。 */
-internal enum class BucketPickerEntry { RequestPermission, Buckets }
-
-/**
- * #1259（10-29 改决定）：缺照片权限就直接弹系统框，前面不加说明屏——Android 的系统框不能自定义。
- * 只给了部分照片时完整权限仍算缺，照样再弹：Android 14+ 的系统框就是用户追加照片或改成「全部」的地方。
- */
-internal fun bucketPickerEntry(permissionsMissing: Boolean): BucketPickerEntry =
-    if (permissionsMissing) BucketPickerEntry.RequestPermission else BucketPickerEntry.Buckets
-
-/** MOB-03：系统照片权限框关掉之后去哪。 */
-internal enum class MediaPermissionLanding { Buckets, HomeWithDeniedDialog }
-
-/**
- * 完整授权、只给了部分照片 → 都进选范围页（10-29：部分授权也要能选范围，只备份允许的那些，
- * 页顶说明一行 `bucket_partial_access_note`；以前直接回首页、范围是空的，用户看不出为什么不传）。
- * 全拒 → 首页（`no_media_access_*` 卡）并弹人话对话框。配对成功后直接弹系统框时界面还停在配对页，
- * 拒绝也必须离开那里，不能把用户留在配对页上。
- */
-internal fun mediaPermissionLanding(allGranted: Boolean, access: MediaAccess): MediaPermissionLanding = when {
-    allGranted && access == MediaAccess.FULL -> MediaPermissionLanding.Buckets
-    access == MediaAccess.PARTIAL -> MediaPermissionLanding.Buckets
-    else -> MediaPermissionLanding.HomeWithDeniedDialog
-}
-
 /**
  * #1263：「只备份某天起的照片」那一档一律写日期（10-29 文案定稿）：没存过 → 今天（保存时落的就是今天 0 点，见
  * [sinceToSave]）；存过 → 存的那一天。几天以后看也还是那一天，不会说成「从今天起」。
@@ -390,15 +365,11 @@ fun PPassApp() {
             }
         }
     }
-    // MOB-03: 相册选择页权限链——「等授权结果后去哪」的落点。设置后由
-    // bucketMediaPermission 回调消费；不进 Buckets 的路径立即清掉。
-    var pendingBucketsPairing by remember { mutableStateOf<Pairing?>(null) }
-    var pendingBucketsFirstTime by remember { mutableStateOf(false) }
     // MOB-03: 媒体权限被拒 → 人话引导（不崩不白屏，说清为什么需要）。
     // #1272：照片权限被拒不再弹对话框，改成「自动备份」开关下方一行小字。
     var ruleHintRes by remember { mutableStateOf<Int?>(null) }
     // MOB-02 §二: 部分授权态（API 34+「部分照片」）——ON_RESUME 一起刷新
-    // （用户去系统设置改完全授权返回后引导卡消失）；bucketMediaPermission
+    // （用户去系统设置改完全授权返回后引导卡消失）；bucketAlbumPermission
     // 回调里也会即时重读。声明提前：launcher 回调需要引用。
     // MOB-94: 三档，不是布尔。全拒那一档此前落进了「正常」分支，
     // 首页因此显示「0 / 0 张已回家 · 照片都存好了」。
@@ -479,35 +450,15 @@ fun PPassApp() {
         ActivityResultContracts.RequestPermission()
     ) { granted -> screen = cameraPermissionResultTarget(granted) }
 
-    // MOB-03: 相册选择页权限链——未授权先弹系统权限，完整授权后才进列表；
-    // 部分授权 → Home 引导卡（MOB-02 §二，不显示假 0/0）；拒绝 → 人话对话框。
-    val bucketMediaPermission = rememberLauncherForActivityResult(
+    // #1794: 范围页的相册权限在页内申请（对齐 iOS：范围页始终能进，没有相册权限也能管理文件夹）。
+    // 回调只按真实权限刷新，不离开范围页——拒绝后文件夹与「添加文件夹」照常可用。
+    val bucketAlbumPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _ ->
-        val pairing = pendingBucketsPairing
-        if (pairing != null) {
-            pendingBucketsPairing = null
-            // 系统弹窗关闭后状态已落定，直接重读（比 ON_RESUME 刷新更及时）。
-            mediaAccess = mediaAccess(context)
-            mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
-            val stillNeeded = requiredMediaPermissions().filter {
-                ContextCompat.checkSelfPermission(context, it) !=
-                    PackageManager.PERMISSION_GRANTED
-            }
-            when (mediaPermissionLanding(stillNeeded.isEmpty(), mediaAccess)) {
-                MediaPermissionLanding.Buckets -> screen = Screen.Buckets(
-                    pairing,
-                    BackupScopeStore(context).selectedBucketIds() ?: emptySet(),
-                    pendingBucketsFirstTime,
-                )
-                MediaPermissionLanding.HomeWithDeniedDialog -> {
-                    screen = Screen.Home(pairing)
-                    ruleHintRes = R.string.auto_backup_rule_denied_hint
-                }
-            }
-        }
+        mediaAccess = mediaAccess(context)
+        mediaLocation = AndroidMediaImporter.canReadMediaLocation(context)
+        PLog.i("PPassFlow", "scope: photo access after prompt=$mediaAccess")
     }
-
 
     // UPD-02: 更新状态机——检查/下载/校验/安装/回执全链状态在
     // UpdateUiController 一处汇合，这里只接线：触发节点 1（冷启动，下方
@@ -703,27 +654,19 @@ fun PPassApp() {
             BackupScopeStore(context, pairing.daemonNodeId).selectedBucketIds()?.isNotEmpty() == true
         }
 
+    // #1794：范围页始终能进——没有相册权限也直接进（对齐 iOS），相册区在页内说明现状并给申请入口，
+    // 文件夹区与「添加文件夹」照常可用；相册权限只在用户点页内申请入口时才申请。
     fun enterBucketPicker(pairing: Pairing, firstTime: Boolean) {
-        val needed = requiredMediaPermissions().filter {
-            ContextCompat.checkSelfPermission(context, it) !=
-                PackageManager.PERMISSION_GRANTED
-        }
-        when (bucketPickerEntry(needed.isNotEmpty())) {
-            BucketPickerEntry.RequestPermission -> {
-                pendingBucketsPairing = pairing
-                pendingBucketsFirstTime = firstTime
-                bucketMediaPermission.launch(withMediaLocation(needed))
-            }
-            BucketPickerEntry.Buckets -> screen = Screen.Buckets(
-                pairing,
-                BackupScopeStore(context).selectedBucketIds() ?: emptySet(),
-                firstTime,
-            )
-        }
+        screen = Screen.Buckets(
+            pairing,
+            BackupScopeStore(context).selectedBucketIds() ?: emptySet(),
+            firstTime,
+        )
     }
 
-    // #1272：「自动备份」规则开关。打开时才申请全部照片权限：全部允许 → 选范围页；有限访问 → 开关不开、把允许的
-    // 照片按手选链路传一次；不允许 → 开关不开、开关下方一行小字。
+    // #1272/#1794：「自动备份」规则开关。按范围实际需不需要相册判断：没有有效来源 → 先进选范围页选来源；
+    // 只有文件夹来源 → 直接开，不申请相册权限；范围含相册才走权限（全部 → 开；有限访问 → 开关不开、把允许的
+    // 照片按手选链路传一次；不允许 → 开关不开、开关下方一行小字）。
     val rulePrefs = remember { com.hawkeyexb.ppass.backup.autoBackupRulePrefs(context) }
     var ruleOn by remember { mutableStateOf(runCatching { rulePrefs.enabled() }.getOrDefault(false)) }
     var pendingRulePairing by remember { mutableStateOf<Pairing?>(null) }
@@ -779,16 +722,25 @@ fun PPassApp() {
             rulePrefs.set(false)
             ruleOn = false
             ruleHintRes = null
-        } else when (ruleEnableRoute(mediaAccess(context), canPromptForFullMediaAccess(context))) {
-            RuleEnableRoute.Apply -> applyRuleAccess(pairing, MediaAccess.FULL)
-            RuleEnableRoute.Settings -> {
-                ruleAwaitingSettings = true
-                PLog.i("PPassFlow", "auto-rule: partial photo access, prompt locked; opening app settings for full access")
-                openAppDetailsSettings(context)
-            }
-            RuleEnableRoute.Request -> {
-                pendingRulePairing = pairing
-                rulePermission.launch(withMediaLocation(requiredMediaPermissions()))
+        } else {
+            val routeScope = BackupScopeStore(context).readScope()
+            val routeFolderCount = com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(context).allRecords().size
+            when (ruleEnableRoute(mediaAccess(context), canPromptForFullMediaAccess(context), routeScope, routeFolderCount)) {
+                RuleEnableRoute.ChooseScope -> {
+                    // #1794：没有有效来源时进范围页让用户选（不跳系统设置，也不先要相册权限）。
+                    PLog.i("PPassFlow", "auto-rule: no effective scope, opening scope page to choose sources")
+                    screen = Screen.Buckets(pairing, BackupScopeStore(context).selectedBucketIds() ?: emptySet(), false)
+                }
+                RuleEnableRoute.Apply -> applyRuleAccess(pairing, MediaAccess.FULL)
+                RuleEnableRoute.Settings -> {
+                    ruleAwaitingSettings = true
+                    PLog.i("PPassFlow", "auto-rule: partial photo access, prompt locked; opening app settings for full access")
+                    openAppDetailsSettings(context)
+                }
+                RuleEnableRoute.Request -> {
+                    pendingRulePairing = pairing
+                    rulePermission.launch(withMediaLocation(requiredMediaPermissions()))
+                }
             }
         }
     }
@@ -1447,7 +1399,12 @@ fun PPassApp() {
                         computerName = s.pairing.storageDeviceName,
                         // #1353：开关关着、点了会去系统设置（部分权限且系统不再弹框）→ 按钮说「去设置」。
                         guideActionGoesToSettings = !ruleOn &&
-                            ruleEnableRoute(mediaAccess, canPromptForFullMediaAccess(context)) == RuleEnableRoute.Settings,
+                            ruleEnableRoute(
+                                mediaAccess,
+                                canPromptForFullMediaAccess(context),
+                                BackupScopeStore(context).readScope(),
+                                com.hawkeyexb.ppass.backup.folder.FolderAccess.registry(context).allRecords().size,
+                            ) == RuleEnableRoute.Settings,
                         onGuideAction = { g ->
                             when (g) {
                                 // 开关开着、只是没选相册 → 直达选范围页；开关关着 → 走开启链路（权限 → 选范围页）。
@@ -1714,8 +1671,13 @@ fun PPassApp() {
                 }
             }
 
-            LaunchedEffect(Unit) {
-                buckets = withContext(Dispatchers.IO) { MediaScanner(context.contentResolver).listBuckets() }
+            // #1794：页内授权后按新权限档重读相册；没有相册权限时读不到，交给页内的现状说明。
+            LaunchedEffect(mediaAccess) {
+                buckets = if (mediaAccess == MediaAccess.NONE) {
+                    emptyList()
+                } else {
+                    withContext(Dispatchers.IO) { MediaScanner(context.contentResolver).listBuckets() }
+                }
             }
             LaunchedEffect(folderRevision, resumeCount) {
                 folderEntries = withContext(Dispatchers.IO) {
@@ -1789,6 +1751,11 @@ fun PPassApp() {
                     folderBuckets = folderCards,
                     selectedFolderKeys = selectedFolders,
                     saving = scopeSaving,
+                    albumAccess = mediaAccess,
+                    onRequestAlbumAccess = {
+                        // #1794：相册权限只在用户点页内入口时才申请（进页不再先弹框）。
+                        bucketAlbumPermission.launch(withMediaLocation(requiredMediaPermissions()))
+                    },
                     onAddFolder = {
                         folderToReauthorize = null
                         folderPicker.launch(null)
@@ -1840,7 +1807,11 @@ fun PPassApp() {
                                 return@launch
                             }
                             val sel = selectedAlbumIds.filterNot { com.hawkeyexb.ppass.backup.folder.isFolderId(it) }.toSet() + prepared.first
-                            val allCurrent = list.map { it.id }.toSet() + prepared.second.map { it.bucketId }
+                            // #1794：范围页可能在没相册权限时保存——这时读不到相册列表，已保存的相册仍是现状的一部分，
+                            // 一并记进「已知相册」基线，免得下次拿到权限后把它们全标成「新相册」。
+                            val allCurrent = (list.map { it.id } +
+                                (savedRead as? ScopeRead.Saved)?.ids.orEmpty().filterNot { com.hawkeyexb.ppass.backup.folder.isFolderId(it) } +
+                                prepared.second.map { it.bucketId }).toSet()
                             val saved = settingsWriter.write("backupScope", sel.size, R.string.scope_save_failed) {
                                 scopeStore.saveScope(selected = sel, allCurrent = allCurrent, sinceSec = since,)
                             }
@@ -1899,18 +1870,43 @@ fun PPassApp() {
     }
 }
 
-/** #1353：开自动备份时按当前照片权限走哪条路。 */
-internal enum class RuleEnableRoute { Apply, Request, Settings }
+/** #1353：开自动备份时按当前照片权限走哪条路。#1794 加 ChooseScope：没有有效来源时先去范围页选。 */
+internal enum class RuleEnableRoute { Apply, Request, Settings, ChooseScope }
 
 /**
- * 全部 → 直接开；部分且系统还肯弹框 → 照旧申请（用户在框里能选「全部允许」）；
- * 部分且系统不再弹（拒过两次被锁，USER_FIXED）→ 去本 App 的系统设置页；没给过 / 拒绝 → 申请（被锁时系统直接回拒绝，落到小字）。
- * 部分态一定问过至少一次，所以这里的 `canPrompt == false` 只可能是被锁（Android 官方：shouldShowRequestPermissionRationale）。
+ * 开自动备份往哪走（#1794 按范围实际需不需要相册判断，不再一律要完整相册权限）：
+ * 没有有效来源 → 去范围页选来源；只有文件夹来源 → 直接开，不碰相册权限；
+ * 范围含相册 → 全部直接开、部分且系统还肯弹框就申请（框里能选「全部允许」）、
+ * 部分且被锁（USER_FIXED）去本 App 系统设置页、没给过 / 拒绝就申请。
+ * 部分态一定问过至少一次，所以 `canPrompt == false` 只可能是被锁（Android 官方：shouldShowRequestPermissionRationale）。
  */
-internal fun ruleEnableRoute(access: MediaAccess, canPrompt: Boolean): RuleEnableRoute = when {
+internal fun ruleEnableRoute(
+    access: MediaAccess,
+    canPrompt: Boolean,
+    scope: ScopeRead,
+    folderCount: Int,
+): RuleEnableRoute = when {
+    ruleScopeNeedsChoice(scope, folderCount) -> RuleEnableRoute.ChooseScope
+    !ruleScopeUsesAlbums(scope) -> RuleEnableRoute.Apply
     access == MediaAccess.FULL -> RuleEnableRoute.Apply
     access == MediaAccess.PARTIAL && !canPrompt -> RuleEnableRoute.Settings
     else -> RuleEnableRoute.Request
+}
+
+/** 没有有效来源——打开开关前先让用户去范围页选来源：没有相册来源、也没有现有的文件夹来源。 */
+internal fun ruleScopeNeedsChoice(scope: ScopeRead, folderCount: Int): Boolean = when (scope) {
+    ScopeRead.NeverSaved -> folderCount == 0
+    // 只存了已失效的文件夹 id（文件夹已被删）时同样没有有效来源。
+    is ScopeRead.Saved -> scope.ids.none { !com.hawkeyexb.ppass.backup.folder.isFolderId(it) } && folderCount == 0
+    // 读不到不是「没有」：按有来源处理，沿用权限链，不把用户推进一个可能空的范围页。
+    is ScopeRead.Unreadable -> false
+}
+
+/** 范围里有没有相册来源（读不到按「有」处理：宁可多申请一次，不悄悄少备份相册）。 */
+internal fun ruleScopeUsesAlbums(scope: ScopeRead): Boolean = when (scope) {
+    ScopeRead.NeverSaved -> false
+    is ScopeRead.Saved -> scope.ids.any { !com.hawkeyexb.ppass.backup.folder.isFolderId(it) }
+    is ScopeRead.Unreadable -> true
 }
 
 /** 系统还会不会为「全部照片」弹框：shouldShowRequestPermissionRationale(READ_MEDIA_IMAGES)。API 33 以下没有部分权限，按会弹算。 */

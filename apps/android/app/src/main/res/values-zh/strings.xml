@@ -153,6 +153,9 @@
     <string name="bucket_title">备份哪些照片</string>
     <string name="bucket_hint">只有勾选的相册会备份。</string>
     <string name="bucket_empty">手机上没有照片或视频。</string>
+    <!-- #1794：范围页始终能进（对齐 iOS）。没有相册权限时相册区说明现状并给申请入口，文件夹区照常可用。 -->
+    <string name="scope_album_no_access_body">无法读取这台手机上的照片，没法备份。</string>
+    <string name="scope_album_no_access_action">允许访问照片</string>
     <!-- 只给了部分照片（Android 14+「选择照片」/ iOS「有限访问」）时，选范围页顶部的一行。 -->
     <string name="bucket_loading">正在读取相册…</string>
     <string name="bucket_count">%1$d 张</string>
@@ -175,10 +178,6 @@
     <string name="backup_scope_none">未选相册</string>
     <!-- #1020：存了范围但读不出来，不是「未选相册」。 -->
     <string name="backup_scope_unreadable">读不到已保存的选择</string>
-    <!-- #1794：范围页来源分类——总标题「备份来源」下分相册与文件夹两个分区。 -->
-    <string name="scope_sources">备份来源</string>
-    <string name="scope_sources_albums">相册</string>
-    <string name="scope_sources_folders">文件夹</string>
     <plurals name="backup_scope_n">
         <item quantity="other">%1$d 个相册</item>
     </plurals>

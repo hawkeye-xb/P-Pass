@@ -808,28 +808,29 @@ fun HomeScreen(
                         onClick = onPickPhotos,
                     )
                 }
-                    HorizontalDivider(color = PPColor.Divider)
-                    CellRow(
-                        label = stringResource(R.string.backup_scope),
-                        value = if (scopeUnreadable) {
-                            stringResource(R.string.backup_scope_unreadable)
-                        } else {
-                            run {
-                                val albumCount = selectedBucketCount?.minus(selectedFolderCount) ?: 0
-                                val albums = backupScopeRowCount(albumCount)?.let {
-                                    pluralStringResource(R.plurals.backup_scope_n, it, it)
-                                }
-                                val folders = if (selectedFolderCount > 0) {
-                                    "${stringResource(R.string.folder_settings_title)} $selectedFolderCount"
-                                } else null
-                                val sources = listOfNotNull(albums, folders).joinToString(" + ")
-                                if (sources.isEmpty()) stringResource(R.string.backup_scope_none)
-                                else if (scopeTimeLabel != null) stringResource(R.string.backup_scope_with_time, sources, scopeTimeLabel)
-                                else sources
+                // #1794：「备份范围」入口常驻（对齐 iOS）——自动备份关着、没有照片权限也进得去管理文件夹。
+                HorizontalDivider(color = PPColor.Divider)
+                CellRow(
+                    label = stringResource(R.string.backup_scope),
+                    value = if (scopeUnreadable) {
+                        stringResource(R.string.backup_scope_unreadable)
+                    } else {
+                        run {
+                            val albumCount = selectedBucketCount?.minus(selectedFolderCount) ?: 0
+                            val albums = backupScopeRowCount(albumCount)?.let {
+                                pluralStringResource(R.plurals.backup_scope_n, it, it)
                             }
-                        },
-                        onClick = onOpenBucketPicker,
-                    )
+                            val folders = if (selectedFolderCount > 0) {
+                                "${stringResource(R.string.folder_settings_title)} $selectedFolderCount"
+                            } else null
+                            val sources = listOfNotNull(albums, folders).joinToString(" + ")
+                            if (sources.isEmpty()) stringResource(R.string.backup_scope_none)
+                            else if (scopeTimeLabel != null) stringResource(R.string.backup_scope_with_time, sources, scopeTimeLabel)
+                            else sources
+                        }
+                    },
+                    onClick = onOpenBucketPicker,
+                )
                 if (autoBackupRuleOn) {
                     HorizontalDivider(color = PPColor.Divider)
                     RuleSwitchRow(

@@ -1,6 +1,8 @@
 package com.hawkeyexb.ppass
 
 import com.hawkeyexb.ppass.backup.MediaAccess
+import com.hawkeyexb.ppass.backup.ScopeRead
+import com.hawkeyexb.ppass.backup.folder.FOLDER_ID_FLAG
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -18,6 +20,23 @@ class RuleEnableWhenPartialTest {
     private val main by lazy { File("src/main/java/com/hawkeyexb/ppass/MainActivity.kt").readText() }
     private val home by lazy { File("src/main/java/com/hawkeyexb/ppass/ui/HomeScreen.kt").readText() }
 
+    private val albumScope = ScopeRead.Saved(setOf(7L, 8L))
+    private val folderOnlyScope = ScopeRead.Saved(setOf(FOLDER_ID_FLAG or 3L))
+    private val noScope = ScopeRead.NeverSaved
+
+    /**
+     * #1794：开关按范围实际需不需要相册判断，不再一律要完整相册权限。
+     * 反证：去掉「没有有效范围先去范围页」或「只有文件夹来源直接开」，对应断言红。
+     */
+    @Test
+    fun scope_decides_whether_album_permission_is_needed_at_all() {
+        assertEquals("没有有效范围：先去范围页选来源", RuleEnableRoute.ChooseScope, ruleEnableRoute(MediaAccess.NONE, canPrompt = false, noScope, folderCount = 0))
+        assertEquals("保存过空集也等于没有有效范围", RuleEnableRoute.ChooseScope, ruleEnableRoute(MediaAccess.FULL, canPrompt = true, ScopeRead.Saved(emptySet()), folderCount = 0))
+        assertEquals("已有文件夹来源（没存过相册范围）：直接开", RuleEnableRoute.Apply, ruleEnableRoute(MediaAccess.NONE, canPrompt = false, noScope, folderCount = 1))
+        assertEquals("只有文件夹来源：不需要相册权限", RuleEnableRoute.Apply, ruleEnableRoute(MediaAccess.NONE, canPrompt = false, folderOnlyScope, folderCount = 1))
+        assertEquals("已有文件夹 + 相册：仍按权限走", RuleEnableRoute.Request, ruleEnableRoute(MediaAccess.NONE, canPrompt = false, ScopeRead.Saved(setOf(7L)), folderCount = 1))
+    }
+
     /**
      * 产品负责人 2026-11-04 改定（Android 官方做法）：部分权限下先看系统还肯不肯弹框——
      * 肯弹（rationale=true）→ 照旧申请，用户在框里能选「全部允许」；被锁（rationale=false）→ 去系统设置。
@@ -25,18 +44,23 @@ class RuleEnableWhenPartialTest {
      */
     @Test
     fun partial_access_requests_while_the_system_still_prompts_and_goes_to_settings_once_locked() {
-        assertEquals(RuleEnableRoute.Request, ruleEnableRoute(MediaAccess.PARTIAL, canPrompt = true))
-        assertEquals(RuleEnableRoute.Settings, ruleEnableRoute(MediaAccess.PARTIAL, canPrompt = false))
-        assertEquals(RuleEnableRoute.Apply, ruleEnableRoute(MediaAccess.FULL, canPrompt = false))
-        assertEquals(RuleEnableRoute.Apply, ruleEnableRoute(MediaAccess.FULL, canPrompt = true))
-        assertEquals("没给过 / 拒绝：申请", RuleEnableRoute.Request, ruleEnableRoute(MediaAccess.NONE, canPrompt = false))
+        assertEquals(RuleEnableRoute.Request, ruleEnableRoute(MediaAccess.PARTIAL, canPrompt = true, albumScope, folderCount = 0))
+        assertEquals(RuleEnableRoute.Settings, ruleEnableRoute(MediaAccess.PARTIAL, canPrompt = false, albumScope, folderCount = 0))
+        assertEquals(RuleEnableRoute.Apply, ruleEnableRoute(MediaAccess.FULL, canPrompt = false, albumScope, folderCount = 0))
+        assertEquals(RuleEnableRoute.Apply, ruleEnableRoute(MediaAccess.FULL, canPrompt = true, albumScope, folderCount = 0))
+        assertEquals("没给过 / 拒绝：申请", RuleEnableRoute.Request, ruleEnableRoute(MediaAccess.NONE, canPrompt = false, albumScope, folderCount = 0))
+        assertEquals("读不到按需要相册权限处理", RuleEnableRoute.Request, ruleEnableRoute(MediaAccess.NONE, canPrompt = false, ScopeRead.Unreadable(IllegalStateException("x")), folderCount = 0))
     }
 
-    /** 接线：Settings 分支只去设置、不申请、不预写开关；Request 分支申请；判断用系统的 rationale。 */
+    /** 接线：判断带上范围与文件夹数；ChooseScope 进范围页、Settings 只去设置、Request 申请；判断用系统的 rationale。 */
     @Test
-    fun routes_are_wired_to_settings_and_request() {
+    fun routes_are_wired_to_scope_settings_and_request() {
         val toggle = main.substringAfter("val onToggleRule: (Pairing, Boolean) -> Unit").substringBefore("\n    }\n")
-        assertTrue(toggle.contains("ruleEnableRoute(mediaAccess(context), canPromptForFullMediaAccess(context))"))
+        assertTrue(toggle.contains("ruleEnableRoute(mediaAccess(context), canPromptForFullMediaAccess(context), routeScope, routeFolderCount)"))
+        assertTrue("判断必须带上已保存范围", toggle.contains("BackupScopeStore(context).readScope()"))
+        assertTrue("判断必须带上已有文件夹来源", toggle.contains("FolderAccess.registry(context).allRecords().size"))
+        val choose = toggle.substringAfter("RuleEnableRoute.ChooseScope ->").substringBefore("RuleEnableRoute.Apply")
+        assertTrue("没有有效范围：进范围页选来源", choose.contains("screen = Screen.Buckets("))
         val settings = toggle.substringAfter("RuleEnableRoute.Settings -> {").substringBefore("RuleEnableRoute.Request")
         assertTrue(settings.contains("openAppDetailsSettings(context)"))
         assertTrue(settings.contains("ruleAwaitingSettings = true"))
@@ -46,6 +70,26 @@ class RuleEnableWhenPartialTest {
         assertTrue(request.contains("rulePermission.launch"))
         assertTrue(main.contains("shouldShowRequestPermissionRationale(activity, Manifest.permission.READ_MEDIA_IMAGES)"))
     }
+
+    /**
+     * #1794：「备份范围」入口常驻设置卡——自动备份关着也看得到、进得去（对齐 iOS）。
+     * 反证：把这一行移回 `if (autoBackupRuleOn)`，深度与「仅 Wi-Fi 时备份」那一行不再相同，本条红。
+     */
+    @Test
+    fun settings_scope_row_is_always_shown() {
+        val card = home.substringAfter("label = stringResource(R.string.auto_backup_rule_label)")
+            .substringBefore("R.string.setting_wifi_only")
+        val scope = card.indexOf("R.string.backup_scope")
+        assertTrue("设置卡里要有备份范围行", scope > 0)
+        assertEquals(
+            "备份范围行与无条件的「仅 Wi-Fi」行同一层，不受自动备份开关影响",
+            braceDepth(card, card.length),
+            braceDepth(card, scope),
+        )
+    }
+
+    private fun braceDepth(s: String, index: Int): Int =
+        s.substring(0, index).count { it == '{' } - s.substring(0, index).count { it == '}' }
 
     /**
      * 场景 C（产品负责人 2026-11-04）：开关开着时权限被收回、用户没点「去设置」而是自己去设置改回全部再回来——
@@ -88,7 +132,7 @@ class RuleEnableWhenPartialTest {
     fun scope_guide_button_says_open_settings_when_enabling_would_go_to_settings() {
         val photos = File("src/main/java/com/hawkeyexb/ppass/ui/PhotosScreen.kt").readText()
         assertTrue(main.contains("guideActionGoesToSettings = !ruleOn &&"))
-        assertTrue(main.contains("ruleEnableRoute(mediaAccess, canPromptForFullMediaAccess(context)) == RuleEnableRoute.Settings"))
+        assertTrue(main.contains(") == RuleEnableRoute.Settings"))
         assertTrue(photos.contains("goesToSettings = guideActionGoesToSettings"))
         assertTrue(photos.contains("if (guide == PhotosGuide.EnableScope && goesToSettings) R.string.auto_backup_blocked_action else R.string.photos_guide_enable"))
         assertTrue(photos.contains("actionLabel = stringResource(label)"))

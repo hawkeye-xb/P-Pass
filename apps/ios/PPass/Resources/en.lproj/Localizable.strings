@@ -100,6 +100,8 @@
 "bucket_title" = "Photos to back up";
 "bucket_hint" = "Only checked albums are backed up.";
 "bucket_empty" = "No photos or videos on this phone.";
+"scope_album_no_access_body" = "P-Pass can’t read photos on this phone, so it can’t back them up.";
+"scope_album_no_access_action" = "Allow access to photos";
 "bucket_loading" = "Reading albums…";
 "bucket_count" = "%1$ld";
 "bucket_unnamed" = "Unnamed";
@@ -115,9 +117,6 @@
 "backup_scope" = "Backup range";
 "backup_scope_none" = "None selected";
 "backup_scope_unreadable" = "Can’t read the saved selection";
-"scope_sources" = "Backup sources";
-"scope_sources_albums" = "Albums";
-"scope_sources_folders" = "Folders";
 "storage_computer" = "Storage computer";
 "setting_wifi_only" = "Back up only on Wi-Fi";
 "wifi_off_confirm_title" = "Back up on mobile data?";
