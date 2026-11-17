@@ -100,6 +100,8 @@
 "bucket_title" = "备份哪些照片";
 "bucket_hint" = "只有勾选的相册会备份。";
 "bucket_empty" = "手机上没有照片或视频。";
+"scope_album_no_access_body" = "无法读取这台手机上的照片，没法备份。";
+"scope_album_no_access_action" = "允许访问照片";
 "bucket_loading" = "正在读取相册…";
 "bucket_count" = "%1$ld 张";
 "bucket_unnamed" = "未命名";
@@ -113,7 +115,7 @@
 "home_empty_albums" = "还没有备份好的照片。备份完成后会显示在这里。";
 "bucket_new" = "新";
 "backup_scope" = "备份范围";
-"backup_scope_none" = "未选相册";
+"backup_scope_none" = "未选定自动备份范围";
 "backup_scope_unreadable" = "读不到已保存的选择";
 "storage_computer" = "存储电脑";
 "setting_wifi_only" = "仅 Wi-Fi 时备份";

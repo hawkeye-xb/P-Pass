@@ -136,8 +136,9 @@ internal fun selectedExistingCount(selected: Set<Long>?, existing: Set<Long>?): 
 }
 
 /**
- * 顺序同 iOS `HomeProjection.heroRender`：权限 → 账本读不到 → 三元组为 null 时看范围存没存（存了 = 相册数量读不到，
- * 没存 = 未选相册）→ 对不上 → 三元组。[countsReadable] / [scopeSaved] 由 [com.hawkeyexb.ppass.backup.BackupUiStateHolder] 给，
+ * 顺序同 iOS `HomeProjection.heroRender`：权限 → 账本读不到 → 三元组为 null 时看有效范围是否非空
+ * （非空 = 相册数量读不到，空 = 未选定自动备份范围；#1794：已登记目录也算来源）→ 对不上 → 三元组。
+ * [countsReadable] / [scopeSaved] 由 [com.hawkeyexb.ppass.backup.BackupUiStateHolder] 给，
  * HomeScreen 必须把它们传进来（默认值只为旧测试的调用形状）。
  */
 fun heroRenderOf(
@@ -270,6 +271,7 @@ fun HomeScreen(
     // T6: 备份范围（选了几个相册）——「选择相册」与「发起备份」分离。null = 从未保存过范围，
     // 引擎按「一个都不在范围内」处理（#541，见 [backupScopeRowCount]）。
     selectedBucketCount: Int? = null,
+    selectedFolderCount: Int = 0,
     // #1020：存了范围但读不出来——设置行说「读不到已保存的选择」，不说「未选相册」。
     scopeUnreadable: Boolean = false,
     // #1263：范围的时间那一档（从今天起 / 从 10月29日 起 / 全部），接在相册数后面。
@@ -807,28 +809,30 @@ fun HomeScreen(
                         onClick = onPickPhotos,
                     )
                 }
+                // #1794：「备份范围」入口常驻（对齐 iOS）——自动备份关着、没有照片权限也进得去管理文件夹。
+                HorizontalDivider(color = PPColor.Divider)
+                CellRow(
+                    label = stringResource(R.string.backup_scope),
+                    value = if (scopeUnreadable) {
+                        stringResource(R.string.backup_scope_unreadable)
+                    } else {
+                        run {
+                            val albumCount = selectedBucketCount?.minus(selectedFolderCount) ?: 0
+                            val albums = backupScopeRowCount(albumCount)?.let {
+                                pluralStringResource(R.plurals.backup_scope_n, it, it)
+                            }
+                            val folders = if (selectedFolderCount > 0) {
+                                "${stringResource(R.string.folder_settings_title)} $selectedFolderCount"
+                            } else null
+                            val sources = listOfNotNull(albums, folders).joinToString(" + ")
+                            if (sources.isEmpty()) stringResource(R.string.backup_scope_none)
+                            else if (scopeTimeLabel != null) stringResource(R.string.backup_scope_with_time, sources, scopeTimeLabel)
+                            else sources
+                        }
+                    },
+                    onClick = onOpenBucketPicker,
+                )
                 if (autoBackupRuleOn) {
-                    HorizontalDivider(color = PPColor.Divider)
-                    CellRow(
-                        label = stringResource(R.string.backup_scope),
-                        value = if (scopeUnreadable) {
-                            stringResource(R.string.backup_scope_unreadable)
-                        } else {
-                            backupScopeRowCount(selectedBucketCount)?.let {
-                                val albums = pluralStringResource(R.plurals.backup_scope_n, it, it)
-                                if (scopeTimeLabel != null) stringResource(R.string.backup_scope_with_time, albums, scopeTimeLabel) else albums
-                            } ?: stringResource(R.string.backup_scope_none)
-                        },
-                        onClick = onOpenBucketPicker,
-                    )
-                    // #1762：「素材文件夹」——与「备份哪些相册」同属「这次备份包含什么」；目录里的照片/视频
-                    // 走同一条备份链路，规则关着时不参与（与相册范围同一开关）。
-                    HorizontalDivider(color = PPColor.Divider)
-                    CellRow(
-                        label = stringResource(R.string.folder_settings_title),
-                        value = if (mediaFolders.isEmpty()) null else mediaFolders.size.toString(),
-                        onClick = { showFolders = true },
-                    )
                     HorizontalDivider(color = PPColor.Divider)
                     RuleSwitchRow(
                         label = stringResource(R.string.auto_backup_pause),

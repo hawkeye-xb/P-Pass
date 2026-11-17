@@ -1,20 +1,52 @@
-// #1263：备份范围 = 选中的相册 + 开始时间。时间只有两档：从今天起（默认）/ 全部，不做自选日期。
-// 范围仍然只是查询条件（#413 裁定 8）：这里只多一个 `DATE_ADDED >= since` 的条件，扩大 / 缩小沿用原有规则。
+// #1263 / #1778：备份范围 = 选中的来源 + 固定起点。时间档只有从今天起 / 全部，起点保存后不滑动。
 package com.hawkeyexb.ppass.backup
 
+import com.hawkeyexb.ppass.backup.folder.isFolderId
 import java.time.Instant
 import java.time.ZoneId
 
+/** 范围时间只有两级：拍摄时间（毫秒）优先，缺失才回退文件修改时间（秒）；不再使用 DATE_ADDED。 */
+fun scopeTimeSecOf(dateTakenMs: Long, modifiedAtSec: Long): Long =
+    if (dateTakenMs > 0L) dateTakenMs / 1000L else modifiedAtSec.coerceAtLeast(0L)
+
 /**
  * 一张照片在不在范围里的判据本体（纯函数，JVM 单测直接跑）。
- *
- * [sinceSec] 为 null = 全部；非 null = 进入手机相册（MediaStore `DATE_ADDED`，秒）不早于它的才算。
- * Android 按 `DATE_ADDED` 算「新」：今天才存进手机的老照片也算今天的（iOS 只有拍摄时间，是登记过的偏离）。
+ * [sinceSec] 为 null = 全部；非 null = 拍摄／创建时间不早于它，缺失拍摄时间时才比较 mtime。
  */
 data class BackupScope(val buckets: Set<Long>, val sinceSec: Long?) {
-    fun contains(bucketId: Long, dateAddedSec: Long): Boolean =
-        bucketId in buckets && (sinceSec == null || dateAddedSec >= sinceSec)
+    fun contains(bucketId: Long, capturedOrModifiedSec: Long): Boolean =
+        bucketId in buckets && (sinceSec == null || capturedOrModifiedSec >= sinceSec)
 }
+
+/**
+ * 旧版目录来源读现状初始化：已有登记目录继续保持选中，直到用户保存过包含目录的新版统一范围。
+ * 不写存值迁移，也不把新版里明确取消勾选的目录重新并回去。
+ */
+fun effectiveBackupScope(
+    saved: BackupScope?,
+    knownSourceIds: Set<Long>?,
+    existingFolderBuckets: Set<Long>,
+    sinceSec: Long?,
+): BackupScope? {
+    if (saved == null) {
+        return if (existingFolderBuckets.isEmpty()) null else BackupScope(existingFolderBuckets, sinceSec)
+    }
+    val unifiedScopeSaved = knownSourceIds?.any(::isFolderId) == true
+    val selectedNow = if (unifiedScopeSaved) {
+        saved.buckets.filter { !isFolderId(it) || it in existingFolderBuckets }.toSet()
+    } else {
+        saved.buckets + existingFolderBuckets
+    }
+    return saved.copy(buckets = selectedNow)
+}
+
+/**
+ * 是不是还没定过备份范围——只有「从未保存且没有既有目录」这一个时机算，也是唯一一次主动引导/强制进范围页。
+ * 产品口径（产品负责人 2026-11-17）：保存过任何值（包括空集）都是明确选择，不再跳页、不再反复引导；
+ * 读取失败同样按已定过范围处理。开完开关要不要引导去范围页、开之前要不要先去选，都用这一个判据。
+ */
+fun scopeNeedsFirstChoice(read: ScopeRead, existingFolderCount: Int): Boolean =
+    read is ScopeRead.NeverSaved && existingFolderCount == 0
 
 /** 选范围页上的两档。 */
 enum class ScopeTime { SINCE_TODAY, ALL }
