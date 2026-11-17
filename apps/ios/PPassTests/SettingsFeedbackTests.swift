@@ -67,9 +67,9 @@ final class SettingsFeedbackTests: XCTestCase {
         func setPendingFullPhotoAccess(_ pending: Bool) throws { if failWrites { throw Boom() }; pendingAccess = pending }
         var refresh: BackgroundRefreshAvailability = .available
         func backgroundRefresh() -> BackgroundRefreshAvailability { refresh }
-        // #1763 素材文件夹：本测试不涉及，给最小组面。
-        func folderSourceCount() -> Int { 0 }
-        func folderSources() async -> [FolderSourceInfo] { [] }
+        var folderInfos: [FolderSourceInfo] = []
+        func folderSourceCount() -> Int { folderInfos.count }
+        func folderSources() async -> [FolderSourceInfo] { folderInfos }
         func addFolderSource(at url: URL, displayName: String) async throws {}
         func reauthorizeFolderSource(id: String, at url: URL) async throws {}
         func removeFolderSource(id: String) throws {}
@@ -373,6 +373,57 @@ final class SettingsFeedbackTests: XCTestCase {
         app.wantsScopeEditor = false
         app.openScopeEditor()
         XCTAssertTrue(app.wantsScopeEditor, "用户主动编辑始终可以进入")
+    }
+
+    func test_folder_only_rule_on_does_not_request_photo_access() async {
+        let (app, engine, media) = make()
+        engine.folderInfos = [FolderSourceInfo(id: "f1", displayName: "Blackmagic Cam", available: true)]
+        media.disk = ["folder:f1"]
+        media.granted = .none
+        engine.rule = false
+        app.refresh()
+        app.setAutoRule(true)
+        await settle()
+        XCTAssertEqual(media.requested, 0, "folder-only 不需要完整照片权限")
+        XCTAssertTrue(app.autoRule)
+        XCTAssertFalse(app.wantsScopeEditor)
+        XCTAssertTrue(engine.calls.contains("wake"))
+        XCTAssertFalse(app.blockedHeroOffersSettings)
+    }
+
+    func test_no_saved_scope_opens_editor_without_requesting_photo_access() async {
+        let (app, _, media) = make()
+        media.disk = nil
+        media.granted = .none
+        app.setAutoRule(true)
+        await settle()
+        XCTAssertEqual(media.requested, 0)
+        XCTAssertTrue(app.wantsScopeEditor)
+    }
+
+    func test_album_only_partial_access_keeps_legacy_settings_route() {
+        let (app, engine, media) = make()
+        media.disk = ["a"]
+        media.granted = .partial
+        engine.rule = false
+        app.refresh()
+        app.setAutoRule(true)
+        XCTAssertFalse(app.autoRule)
+        XCTAssertTrue(engine.pendingAccess, "旧有限授权行为不变：去系统设置申请完整照片权限")
+    }
+
+    func test_folder_only_partial_access_does_not_use_legacy_full_access_route() async {
+        let (app, engine, media) = make()
+        engine.folderInfos = [FolderSourceInfo(id: "f1", displayName: "Blackmagic Cam", available: true)]
+        media.disk = ["folder:f1"]
+        media.granted = .partial
+        engine.rule = false
+        app.refresh()
+        app.setAutoRule(true)
+        await settle()
+        XCTAssertTrue(app.autoRule)
+        XCTAssertFalse(engine.pendingAccess)
+        XCTAssertEqual(media.requested, 0)
     }
 
     /// 10-29：选范围页读相册时可能刚弹过系统框，`refreshAccess` 让页面按弹框之后的那一档显示（部分 → 页顶说明，拒绝 → 去设置）。
@@ -740,26 +791,27 @@ final class SettingsFeedbackTests: XCTestCase {
         XCTAssertFalse(cold.wantsScopeEditor, "已有范围：冷启动接续只恢复备份，不主动跳范围页")
     }
 
-    /// 还没问过照片权限时开自动备份：系统会弹框（同 Android），选「部分」→ 传一次允许的照片、开关保持关，
-    /// 开关下方只说现状（不弹「已传 N 张」：弹出时照片还没传，产品负责人 2026-11-04），不去设置。
-    /// 反证：部分分支改回「已把你允许的 N 张…」，本条红。
-    func test_first_prompt_partial_sends_allowed_without_settings_or_sent_claim() async {
+    /// #1783：还没问过照片权限时开自动备份也不主动弹权限框。无已保存范围只进入编辑，开关保留用户开启意图。
+    /// 旧「首次弹框选部分照片」由明确授权动作触发，不再由开关自动触发。
+    func test_undetermined_scope_toggle_does_not_prompt_for_photo_access() async {
         let (app, engine, media) = make()
         var opened = 0
         app.settingsOpener = { opened += 1 }
         try? engine.setAutoRule(false)
         media.granted = nil
+        media.disk = nil
         media.answer = .partial
         engine.allowedSent = 3
         app.refresh()
         XCTAssertEqual(app.scopeGuideActionKey, "photos_guide_enable")
         app.setAutoRule(true)
         await settle()
-        XCTAssertEqual(media.requested, 1)
+        XCTAssertEqual(media.requested, 0)
         XCTAssertEqual(opened, 0)
-        XCTAssertFalse(app.autoRule)
-        XCTAssertTrue(engine.calls.contains("sendAllowed"))
-        XCTAssertEqual(app.ruleNote, L.s("auto_backup_rule_partial_hint"))
+        XCTAssertTrue(app.autoRule)
+        XCTAssertTrue(app.wantsScopeEditor)
+        XCTAssertFalse(engine.calls.contains("sendAllowed"))
+        XCTAssertNil(app.ruleNote)
     }
 
     // MARK: 拒绝后用户自己去系统设置改成「全部」再回来（产品负责人 2026-11-04 补的场景，两端同一预期）

@@ -55,4 +55,76 @@ final class PhotoMediaSourceAccessTests: XCTestCase {
         let fullIds = try await full.existingIds([])
         XCTAssertEqual(fullIds, [])
     }
+
+    private final class FakeAuthorization: PhotoAuthorizationProviding {
+        var level: PhotoAccessLevel
+        var requests = 0
+        init(_ level: PhotoAccessLevel) { self.level = level }
+        func currentLevel() -> PhotoAccessLevel { level }
+        func requestFullAccess() async -> PhotoAccessLevel { requests += 1; return level }
+    }
+
+    func testAlbumListingDoesNotRequestAccessOrExposeMetadataWithoutFullAccess() async throws {
+        for level in [PhotoAccessLevel.notDetermined, .denied, .restricted] {
+            let auth = FakeAuthorization(level)
+            var reads = 0
+            let library = LiveMediaLibrary(scopeStore: { fatalError("本用例不读范围") }, auth: auth, albumListing: {
+                reads += 1
+                return [AlbumBucket(id: "secret", name: "Secret", count: 1, isCameraAlbum: false)]
+            })
+            let albums = try await library.albums()
+            XCTAssertEqual(albums, [], "\(level) 不应读取相册名称或数量")
+            XCTAssertEqual(reads, 0, "\(level) 不得触碰目录")
+            XCTAssertEqual(auth.requests, 0, "进入范围页不得主动请求权限：\(level)")
+        }
+    }
+
+    func testLimitedAccessStillListsTheAllowedAlbums() async throws {
+        let expected = AlbumBucket(id: "allowed", name: "Allowed", count: 2, isCameraAlbum: false)
+        let library = LiveMediaLibrary(scopeStore: { fatalError("本用例不读范围") }, auth: FakeAuthorization(.limited), albumListing: { [expected] })
+        let albums = try await library.albums()
+        XCTAssertEqual(albums.map(\.id), [expected.id], "部分授权沿用旧可见相册，不能当成无权限")
+    }
+
+    func testExplicitPhotoActionIsTheOnlyAccessRequest() async {
+        let auth = FakeAuthorization(.notDetermined)
+        let library = LiveMediaLibrary(scopeStore: { fatalError("本用例不读范围") }, auth: auth)
+        _ = await library.requestAccess()
+        XCTAssertEqual(auth.requests, 1)
+    }
+
+    func testInitialLoadPreservesSavedAlbumsHiddenByPermission() {
+        let selected = BucketScreen.initialSelectionWithUnavailable(saved: ["saved-album"], availableAlbums: [], cameraAlbum: nil)
+        XCTAssertEqual(selected, ["saved-album"], "无权限首次加载也不能先丢失已保存相册")
+        let visible = BucketScreen.initialSelectionWithUnavailable(saved: ["saved-album"], availableAlbums: ["saved-album"], cameraAlbum: nil)
+        XCTAssertEqual(visible, ["saved-album"], "可见相册仍按同一选中语义处理")
+    }
+
+    func testReloadKeepsUnsavedFolderSelectionAndInvisibleSavedAlbum() {
+        let current: Set<String> = ["folder:draft", "a", "b"]
+        let saved: Set<String> = ["a"]
+        let reloaded = BucketScreen.selectionForReload(current: current, saved: saved,
+                                                        availableAlbums: [], availableFolders: ["folder:draft"])
+        XCTAssertEqual(reloaded, ["folder:draft", "a"], "授权刷新保留未保存目录和不可见的已保存相册")
+        let removed = BucketScreen.selectionForReload(current: current, saved: saved,
+                                                       availableAlbums: [], availableFolders: [])
+        XCTAssertEqual(removed, ["a"], "已移除目录不能靠刷新复活")
+    }
+
+    func testSavingFolderScopeKeepsInvisibleSavedAlbums() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = BackupScopeStore(directory: dir, daemonNodeId: "scope-access")
+        try store.saveScope(selected: ["a", "folder:f1"], allCurrent: ["a", "folder:f1"], since: .all)
+        let library = LiveMediaLibrary(scopeStore: { store }, auth: FakeAuthorization(.limited))
+
+        // 相册不可见时只改文件夹：旧相册不是用户明确取消，必须保留。
+        try await library.saveScope(["folder:f1"], known: ["folder:f1"], since: .all)
+        XCTAssertEqual(try store.selectedBucketIds(), ["a", "folder:f1"])
+
+        // 反证：相册仍在可见来源里、但未勾选，才是明确取消。
+        try await library.saveScope(["folder:f1"], known: ["a", "folder:f1"], since: .all)
+        XCTAssertEqual(try store.selectedBucketIds(), ["folder:f1"])
+    }
 }

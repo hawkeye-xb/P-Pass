@@ -23,15 +23,17 @@ final class BucketAccessNoticeTests: XCTestCase {
     func test_copy_exists_in_both_languages() throws {
         let expected: [String: [String: String]] = [
             "en": [
-                "bucket_no_access_title": "No photo access",
-                "bucket_no_access_body": "P-Pass can't read photos on this phone, so it can't back them up.",
+                "bucket_no_access_title": "Photo access is required to select system albums",
+                "bucket_no_access_body": "Albums appear after you grant access. You can also back up folders only.",
                 "bucket_no_access_action": "Open Settings",
+                "bucket_request_access_action": "Allow Access",
                 "welcome_scan": "Scan to connect to a computer",
             ],
             "zh-Hans": [
-                "bucket_no_access_title": "无照片访问权限",
-                "bucket_no_access_body": "无法读取这台手机上的照片，没法备份。",
+                "bucket_no_access_title": "选择系统相册需要照片访问权限",
+                "bucket_no_access_body": "授权后才会显示相册。你也可以只添加文件夹进行备份。",
                 "bucket_no_access_action": "去设置",
+                "bucket_request_access_action": "允许访问",
             ],
         ]
         for (lang, keys) in expected {

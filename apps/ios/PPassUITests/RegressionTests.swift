@@ -22,46 +22,45 @@ final class RegressionTests: UIRegressCase {
         settle(5)
     }
 
-    // MARK: 设置页「自动备份」开关触发照片权限
-
+    // 设置页「自动备份」只写规则，不再主动弹照片权限；反向用例用真实的「再关一次开关」判反证。
     func testSettingsRuleFull() {
-        ruleCase(answer: inverted ? SystemButton.dontAllow : SystemButton.photosFull)
+        ruleCase()
     }
 
     func testSettingsRuleLimited() {
-        ruleCase(answer: inverted ? SystemButton.photosFull : SystemButton.photosLimited, limited: !inverted)
+        ruleCase()
     }
 
     // 「设置页拒绝」一例等 #1453 的日志行（settings: auto-rule photo access after prompt=none）合入后再加：
     // 现在 App 不打那一行，加了必红，会让整个回归永久退出 1。
 
-    private func ruleCase(answer: [String], limited: Bool = false) {
-        launchFreshAndPair(resetPhotos: true)
-        reachSettingsViaPick()
+    private func ruleCase() {
+        prepareScopeAndOpenSettings()
         let rule = toggle(id: "autoBackupRuleToggle")
+        if (rule.value as? String) == "1" {
+            flip(rule)
+        }
         flip(rule)
-        answerSystemAlert(answer, what: "photos")
-        if limited {
-            // 「限制访问」之后系统给一页选照片：选第一张、点完成。
-            pickOnePhotoInLimitedSheet()
+        if inverted {
+            // 反向操作：关闭刚打开的规则，最终不应出现 enabled=true 的通过行。
+            flip(rule)
+            // 正向用例要求最终开启；反向关闭后必须让本例失败，不能只看首次保存的 enabled=true。
+            XCTAssertEqual(rule.value as? String, "1", "正向预期是最终开启，反向关闭必须判 FAIL")
         }
         settle(5)
     }
 
-    private func pickOnePhotoInLimitedSheet() {
-        let deadline = Date().addingTimeInterval(20)
-        while Date() < deadline {
-            // 选第二张：第一张已经在前面的「先挑几张试试」里导入过，再选它，部分权限发出去的张数会是 n=0。
-            if let cell = pickerCell(at: 1) ?? firstPickerCell() {
-                tapPickerCell(cell)
-                UIReg.say("LIMITED_SELECTED 1")
-                tapButton(SystemButton.limitedDone, what: "limited-done")
-                return
-            }
-            usleep(500_000)
-        }
-        dump("limited-sheet")
-        XCTFail("20 秒内没看到「限制访问」的选照片页")
+    /// 先保存一个有效范围，避免首次开启规则时被送进范围编辑页，反向用例才能真实再关一次。
+    private func prepareScopeAndOpenSettings() {
+        launchFreshAndPair(resetPhotos: true)
+        app.buttons["decisionChooseScope"].tap()
+        answerSystemAlert(SystemButton.photosFull, what: "photos")
+        settle(2)
+        let save = app.buttons.matching(NSPredicate(format: "label == %@ OR label == %@", "Start backup", "开始备份")).firstMatch
+        XCTAssertTrue(save.waitForExistence(timeout: 15), "没有找到范围保存按钮")
+        tapWhenVisible(save)
+        settle(5)
+        openSettingsTab()
     }
 
     // MARK: 设置页「挑几张传」
