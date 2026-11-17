@@ -257,7 +257,7 @@ ios_trim_log_to_run() {
   awk -v pat="folder $pre" '!f && index($0, pat) { f=1 } f' "$f.all" >"$f.run" || return 1
   if [ ! -s "$f.run" ]; then
     rm -f "$f.run"
-    echo "本轮日志段为空（找不到 folder $pre）" >&2
+    echo "本轮日志段为空（找不到 folder ${pre}）" >&2
     return 1
   fi
   mv "$f.run" "$f"
